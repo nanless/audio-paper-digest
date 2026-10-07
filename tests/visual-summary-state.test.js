@@ -34,6 +34,8 @@ const {
     prepareVisualReferenceInputs,
     assertVisualArchiveUniqueness,
     parseArgs,
+    promptSha256,
+    visualSummaryPromptPath,
     main
 } = require('../scripts/visual-summary-state.js');
 
@@ -1375,4 +1377,67 @@ describe('视觉汇总状态', () => {
             fs.rmSync(dir, { recursive: true, force: true });
         }
     });
+});
+
+describe('视觉摘要提示词版本机制', () => {
+    const V1 = 'analysis-prompt-text-v1';
+    const V2 = 'analysis-prompt-text-v2';
+
+    function withDirs(callback) {
+        const originals = {
+            current: Config.CURRENT_DIR,
+            manifest: Config.FILES.visualSummaryManifestDir,
+            asset: Config.FILES.visualSummaryAssetDir
+        };
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'visual-prompt-version-'));
+        try {
+            patchVisualDirs(path.join(dir, 'current'));
+            return callback(dir);
+        } finally {
+            Config.CURRENT_DIR = originals.current;
+            Config.FILES.visualSummaryManifestDir = originals.manifest;
+            Config.FILES.visualSummaryAssetDir = originals.asset;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    }
+
+    it('旧记录缺版本字段时按 v1 复算，新请求走 v2，未登记版本抛错', () => withDirs(dir => {
+        const published = paper();
+        const publication = { ...TEST_PUBLICATION, publishedPapers: [published] };
+        const v1Path = path.join(Config.PROJECT_ROOT, 'prompts', 'visual-summary.md');
+        const v2Path = path.join(Config.PROJECT_ROOT, 'prompts', 'visual-summary-v2.md');
+        assert.strictEqual(visualSummaryPromptPath(V1), v1Path);
+        assert.strictEqual(visualSummaryPromptPath(V2), v2Path);
+        assert.notStrictEqual(promptSha256(v1Path), promptSha256(v2Path));
+
+        // 旧代码写下的记录没有版本字段，令牌按 v1 字节算。
+        const planned = planVisualSummaries({
+            targetDate: '2026-07-13', papers: [published],
+            manifestPath: path.join(dir, 'legacy.json'), promptPath: v1Path
+        });
+        const legacy = structuredClone(planned);
+        delete legacy.promptTextContract;
+        assert.doesNotThrow(() => assertVisualManifestCurrent(legacy, publication, '2026-07-13'));
+        assert.strictEqual(
+            legacy.papers['2607.12345'].cards.infographic.taskToken,
+            planned.papers['2607.12345'].cards.infographic.taskToken
+        );
+        assert.strictEqual(legacy.promptSha256, promptSha256(v1Path));
+
+        // 新请求不传 promptPath，解析到 v2 并把版本写进记录。
+        const fresh = planVisualSummaries({
+            targetDate: '2026-07-13', papers: [published],
+            manifestPath: path.join(dir, 'fresh.json')
+        });
+        assert.strictEqual(fresh.promptTextContract, V2);
+        assert.strictEqual(fresh.promptSha256, promptSha256(v2Path));
+        assert.doesNotThrow(() => assertVisualManifestCurrent(fresh, publication, '2026-07-13'));
+
+        const unknown = structuredClone(fresh);
+        unknown.promptTextContract = 'analysis-prompt-text-v9';
+        assert.throws(
+            () => assertVisualManifestCurrent(unknown, publication, '2026-07-13'),
+            /没有登记/
+        );
+    }));
 });

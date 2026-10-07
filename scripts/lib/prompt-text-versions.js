@@ -24,7 +24,12 @@ const FROZEN_V1_PROMPT_FILES = Object.freeze({
     scoringAudit: 'prompts/scoring-audit.md',
     apiReaderArticle: 'prompts/api-reader-article.md',
     apiReaderRepair: 'prompts/api-reader-repair.md',
-    imageSupplement: 'prompts/image-supplement.md'
+    imageSupplement: 'prompts/image-supplement.md',
+    // 发布后视觉阶段的两份提示词。它们不进 deep-analyzer 的阶段检查点，身份只
+    // 落在视觉 manifest 的 promptSha256 和 taskToken 上，但同样按「记录声明版本」
+    // 选路径，所以登记方式与上面一致。
+    visualSummary: 'prompts/visual-summary.md',
+    digestCover: 'prompts/digest-cover.md'
 });
 
 // 表里登记的是各阶段当前版本。v1 不写在这里，固定由 FROZEN_V1_PROMPT_FILES 给出。
@@ -78,6 +83,14 @@ const PROMPT_FILE_VERSIONS = Object.freeze({
     apiReaderRepair: Object.freeze({
         contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
         path: 'prompts/api-reader-repair-v2.md'
+    }),
+    visualSummary: Object.freeze({
+        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+        path: 'prompts/visual-summary-v2.md'
+    }),
+    digestCover: Object.freeze({
+        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+        path: 'prompts/digest-cover-v2.md'
     })
 });
 

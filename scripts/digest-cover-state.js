@@ -19,6 +19,12 @@ const {
     assertPublishedBlogReceipt, bindPublishedPapersToDate, assertSafeAssetTarget,
     RENDERING_CONTRACT, DEFAULT_SELECTION_LIMIT
 } = require('./visual-summary-state.js');
+const {
+    FROZEN_V1_PROMPT_FILES,
+    PROMPT_FILE_VERSIONS,
+    promptFilePathForContract,
+    currentPromptTextContract
+} = require('./lib/prompt-text-versions.js');
 
 const COVER_MANIFEST_VERSION = 1;
 const COVER_QA_CHECKLIST_VERSION = 'digest-cover-semantic-v1';
@@ -44,12 +50,31 @@ function digestCoverManifestPath(targetDate) {
     return path.join(Config.FILES.digestCoverManifestDir, `${validateDate(targetDate)}.json`);
 }
 
-function digestCoverPromptPath() {
-    return path.join(Config.PROJECT_ROOT, 'prompts', 'digest-cover.md');
+// 汇总封面提示词与论文长图同规则：新任务用当前版本，核验旧记录按声明的
+// promptTextContract 选路径，字段缺失按 v1，未登记的值抛错。
+const DIGEST_COVER_PROMPT_STAGE = 'digestCover';
+
+function digestCoverPromptPath(promptTextContract) {
+    return path.join(
+        Config.PROJECT_ROOT,
+        promptFilePathForContract(DIGEST_COVER_PROMPT_STAGE, promptTextContract)
+    );
 }
 
-function promptSha256(promptPath = digestCoverPromptPath()) {
-    return sha256Buffer(fs.readFileSync(promptPath));
+function digestCoverPromptContractForPath(promptPath) {
+    const relative = path.relative(Config.PROJECT_ROOT, path.resolve(promptPath)).split(path.sep).join('/');
+    const current = PROMPT_FILE_VERSIONS[DIGEST_COVER_PROMPT_STAGE];
+    if (current && relative === current.path) return current.contract;
+    if (relative === FROZEN_V1_PROMPT_FILES[DIGEST_COVER_PROMPT_STAGE]) {
+        return 'analysis-prompt-text-v1';
+    }
+    return null;
+}
+
+function promptSha256(promptPath = null) {
+    return sha256Buffer(fs.readFileSync(
+        promptPath || digestCoverPromptPath(currentPromptTextContract(DIGEST_COVER_PROMPT_STAGE))
+    ));
 }
 
 function digestTitle(targetDate, category = '论文速递') {
@@ -257,7 +282,9 @@ function assertDigestCoverManifestCurrent(manifest, publication, targetDate, pro
     }
     const papers = bindPublishedPapersToDate(publication, targetDate);
     const context = buildCoverContext(papers, targetDate, publication.category);
-    const expectedPromptSha = promptSha256(promptPath || undefined);
+    const expectedPromptSha = promptPath
+        ? promptSha256(promptPath)
+        : promptSha256(digestCoverPromptPath(manifest.promptTextContract));
     const expectedDataSha = coverDataSha256(context);
     const expectedToken = coverTaskToken(expectedDataSha, expectedPromptSha, publication);
     if (manifest.promptSha256 !== expectedPromptSha || manifest.dataSha256 !== expectedDataSha
@@ -290,6 +317,9 @@ function planDigestCover({ targetDate, papers, manifestPath, promptPath, categor
     }
     const context = buildCoverContext(eligible, targetDate, category);
     const currentPromptSha = promptSha256(promptPath);
+    const declaredPromptTextContract = promptPath
+        ? digestCoverPromptContractForPath(promptPath)
+        : currentPromptTextContract(DIGEST_COVER_PROMPT_STAGE);
     const dataSha = coverDataSha256(context);
     const token = coverTaskToken(dataSha, currentPromptSha, publication);
     return updateJsonFileLocked(manifestPath, current => {
@@ -325,6 +355,9 @@ function planDigestCover({ targetDate, papers, manifestPath, promptPath, categor
             batchDate: targetDate,
             dataSha256: dataSha,
             promptSha256: currentPromptSha,
+            ...(declaredPromptTextContract
+                ? { promptTextContract: declaredPromptTextContract }
+                : {}),
             generationContext: context,
             publication: publication ? {
                 publicationCommit: publication.publicationCommit,
@@ -535,6 +568,9 @@ module.exports = {
     coverDataSha256,
     coverTaskToken,
     digestCoverManifestPath,
+    digestCoverPromptPath,
+    digestCoverPromptContractForPath,
+    promptSha256,
     planDigestCover,
     recordDigestCover,
     markDigestCoverFailed,

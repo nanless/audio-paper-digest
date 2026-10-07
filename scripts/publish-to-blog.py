@@ -4852,6 +4852,34 @@ def _validate_png_bytes(raw, label):
     return hashlib.sha256(raw).hexdigest()
 
 
+# 发布后视觉提示词的版本登记在 scripts/lib/prompt-text-versions.js 的 visualSummary
+# 与 digestCover 两项里。下面这两个校验器只用于历史 manifest 取证，所以按记录声明的
+# promptTextContract 选路径：字段缺失按 v1，没登记的值直接报错，不回退到 v1。
+PROMPT_TEXT_V1_CONTRACT = 'analysis-prompt-text-v1'
+PROMPT_TEXT_V2_CONTRACT = 'analysis-prompt-text-v2'
+_VISUAL_PROMPT_TEXT_FILES = {
+    'visual-summary': {
+        PROMPT_TEXT_V1_CONTRACT: 'visual-summary.md',
+        PROMPT_TEXT_V2_CONTRACT: 'visual-summary-v2.md',
+    },
+    'digest-cover': {
+        PROMPT_TEXT_V1_CONTRACT: 'digest-cover.md',
+        PROMPT_TEXT_V2_CONTRACT: 'digest-cover-v2.md',
+    },
+}
+
+
+def _visual_prompt_path(stage, manifest):
+    contract = manifest.get('promptTextContract') or PROMPT_TEXT_V1_CONTRACT
+    filename = _VISUAL_PROMPT_TEXT_FILES[stage].get(contract)
+    if filename is None:
+        raise PublishDataValidationError(
+            f'{stage} manifest 声明的提示词版本是 {contract}，'
+            f'但这里只登记了 {PROMPT_TEXT_V1_CONTRACT} 与 {PROMPT_TEXT_V2_CONTRACT}。'
+        )
+    return PROJECT_ROOT / 'prompts' / filename
+
+
 def load_visual_summary_cards(papers, date_str, manifest_path=None):
     """Legacy verifier retained for data forensics; the blog pipeline never calls it."""
     manifest_path = Path(manifest_path or (VISUAL_SUMMARY_MANIFEST_DIR / f'{date_str}.json'))
@@ -4863,7 +4891,7 @@ def load_visual_summary_cards(papers, date_str, manifest_path=None):
     manifest = _load_json_object(manifest_path, '视觉摘要 manifest')
     if manifest.get('version') != 2 or manifest.get('batchDate') != date_str:
         raise PublishDataValidationError('视觉摘要 manifest 版本或批次日期不匹配')
-    prompt_path = Path(__file__).resolve().parent.parent / 'prompts' / 'visual-summary.md'
+    prompt_path = _visual_prompt_path('visual-summary', manifest)
     prompt_sha = _sha256_file(prompt_path)
     if manifest.get('promptSha256') != prompt_sha:
         raise PublishDataValidationError('视觉摘要 manifest 的 prompt SHA 已失效，请重新 plan')
@@ -4999,7 +5027,7 @@ def load_digest_cover(papers, date_str, manifest_path=None, category='论文速�
     if not manifest_path.is_file():
         raise PublishDataValidationError(f'缺少强制汇总页封面 manifest: {manifest_path}')
     manifest = _load_json_object(manifest_path, '汇总页封面 manifest')
-    prompt_path = Path(__file__).resolve().parent.parent / 'prompts' / 'digest-cover.md'
+    prompt_path = _visual_prompt_path('digest-cover', manifest)
     prompt_sha = _sha256_file(prompt_path)
     context = _digest_cover_context(papers, date_str, category)
     data_sha = _stable_json_sha256(context)

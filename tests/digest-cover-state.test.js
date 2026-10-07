@@ -18,6 +18,8 @@ const {
     archiveLegacyDigestCover,
     assertDigestCoverManifestCurrent,
     compactDigestCoverTask,
+    digestCoverPromptPath,
+    promptSha256,
     parseArgs,
     main
 } = require('../scripts/digest-cover-state.js');
@@ -360,4 +362,67 @@ describe('digest cover 状态', () => {
             fs.rmSync(dir, { recursive: true, force: true });
         }
     });
+});
+
+describe('汇总封面提示词版本机制', () => {
+    const V1 = 'analysis-prompt-text-v1';
+    const V2 = 'analysis-prompt-text-v2';
+
+    function withDirs(callback) {
+        const originals = {
+            current: Config.CURRENT_DIR,
+            manifest: Config.FILES.digestCoverManifestDir,
+            asset: Config.FILES.digestCoverAssetDir
+        };
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cover-prompt-version-'));
+        try {
+            Config.CURRENT_DIR = path.join(dir, 'current');
+            Config.FILES.digestCoverManifestDir = path.join(dir, 'current', 'digest-cover-manifests');
+            Config.FILES.digestCoverAssetDir = path.join(dir, 'archive');
+            return callback(dir);
+        } finally {
+            Config.CURRENT_DIR = originals.current;
+            Config.FILES.digestCoverManifestDir = originals.manifest;
+            Config.FILES.digestCoverAssetDir = originals.asset;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    }
+
+    it('旧记录缺版本字段时按 v1 复算，新请求走 v2，未登记版本抛错', () => withDirs(dir => {
+        const published = paper('2607.12345', 9, '#语音识别', 'Cover paper');
+        const publication = { ...TEST_PUBLICATION, publishedPapers: [published] };
+        const v1Path = path.join(Config.PROJECT_ROOT, 'prompts', 'digest-cover.md');
+        const v2Path = path.join(Config.PROJECT_ROOT, 'prompts', 'digest-cover-v2.md');
+        assert.strictEqual(digestCoverPromptPath(V1), v1Path);
+        assert.strictEqual(digestCoverPromptPath(V2), v2Path);
+        assert.notStrictEqual(promptSha256(v1Path), promptSha256(v2Path));
+
+        const planned = planDigestCover({
+            targetDate: '2026-07-13', papers: [published],
+            manifestPath: path.join(dir, 'legacy.json'), promptPath: v1Path
+        });
+        const legacy = structuredClone(planned);
+        delete legacy.promptTextContract;
+        assert.doesNotThrow(() => assertDigestCoverManifestCurrent(legacy, publication, '2026-07-13'));
+        assert.strictEqual(
+            legacy.cover.taskToken,
+            planned.cover.taskToken
+        );
+        assert.strictEqual(legacy.promptSha256, promptSha256(v1Path));
+
+        const fresh = planDigestCover({
+            targetDate: '2026-07-13', papers: [published],
+            manifestPath: path.join(dir, 'fresh.json')
+        });
+        assert.strictEqual(fresh.promptTextContract, V2);
+        assert.strictEqual(fresh.promptSha256, promptSha256(v2Path));
+        assert.doesNotThrow(() => assertDigestCoverManifestCurrent(fresh, publication, '2026-07-13'));
+
+        const unknown = structuredClone(fresh);
+        unknown.promptTextContract = 'analysis-prompt-text-v9';
+        assert.throws(
+            () => assertDigestCoverManifestCurrent(unknown, publication, '2026-07-13'),
+            /没有登记/
+        );
+    }));
 });

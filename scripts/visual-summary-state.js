@@ -22,6 +22,12 @@ const {
     withFileLockSync,
     readJsonFileStrict
 } = require('./analysis-engine.js');
+const {
+    FROZEN_V1_PROMPT_FILES,
+    PROMPT_FILE_VERSIONS,
+    promptFilePathForContract,
+    currentPromptTextContract
+} = require('./lib/prompt-text-versions.js');
 
 const MANIFEST_VERSION = 3;
 const VISUAL_QA_CHECKLIST_VERSION = 'visual-semantic-v1';
@@ -213,7 +219,7 @@ function assertManualV6ProductionGeneration(generation, publishedPapers) {
             || !/^[a-f0-9]{64}$/.test(String(item?.readerLongformSha256 || ''))
             || !/^[a-f0-9]{64}$/.test(String(item?.readerArticleSha256 || ''))
         ))) {
-        throw new Error('production v6 generation 的逐论文 provenance 不完整或集合不闭环');
+        throw new Error('production v6 generation 的逐论文 provenance 不完整或集合不一致');
     }
     const bindingsFingerprint = stableSha256(bindings);
     const proofFingerprint = stableSha256(proof);
@@ -236,7 +242,7 @@ function assertLlmApiProductionGeneration(generation, publishedPapers) {
         || !Array.isArray(bindings) || bindings.length !== publishedPapers.length
         || proof?.paperCount !== bindings.length
         || !Array.isArray(proof?.paperIds)) {
-        throw new Error('发布后视觉只接受完整 reader/scoring/source 闭环的 LLM API production generation');
+        throw new Error('发布后视觉只接受 reader/scoring/source 完整一致的 LLM API production generation');
     }
     const ids = bindings.map(item => String(item?.paperId || ''));
     const publishedIds = publishedPapers.map(normalizedId).sort();
@@ -260,7 +266,7 @@ function assertLlmApiProductionGeneration(generation, publishedPapers) {
         || JSON.stringify(ids) !== JSON.stringify(publishedIds)
         || JSON.stringify(proof.paperIds) !== JSON.stringify(ids)
         || bindingInvalid) {
-        throw new Error('LLM API production generation 的逐论文 provenance 不完整或集合不闭环');
+        throw new Error('LLM API production generation 的逐论文 provenance 不完整或集合不一致');
     }
     const bindingsFingerprint = stableApiBindingsSha256(bindings);
     const proofFingerprint = stableSha256(proof);
@@ -436,8 +442,33 @@ function paperBatchDate(paper) {
     return validateDate(match[1]);
 }
 
-function promptSha256(promptPath = path.join(Config.PROJECT_ROOT, 'prompts', 'visual-summary.md')) {
-    return sha256Buffer(fs.readFileSync(promptPath));
+// 视觉提示词的版本登记在 prompt-text-versions.js。新任务用当前版本，核验旧记录时
+// 按记录里声明的 promptTextContract 选路径：字段缺失按 v1，未登记的值直接抛错。
+const VISUAL_SUMMARY_PROMPT_STAGE = 'visualSummary';
+
+function visualSummaryPromptPath(promptTextContract) {
+    return path.join(
+        Config.PROJECT_ROOT,
+        promptFilePathForContract(VISUAL_SUMMARY_PROMPT_STAGE, promptTextContract)
+    );
+}
+
+// 显式传入 promptPath 的调用方（测试夹具）可能指向临时文件，此时无法反查版本，
+// 返回 null，让记录不写版本字段；核验方会按 v1 处理。
+function visualSummaryPromptContractForPath(promptPath) {
+    const relative = path.relative(Config.PROJECT_ROOT, path.resolve(promptPath)).split(path.sep).join('/');
+    const current = PROMPT_FILE_VERSIONS[VISUAL_SUMMARY_PROMPT_STAGE];
+    if (current && relative === current.path) return current.contract;
+    if (relative === FROZEN_V1_PROMPT_FILES[VISUAL_SUMMARY_PROMPT_STAGE]) {
+        return 'analysis-prompt-text-v1';
+    }
+    return null;
+}
+
+function promptSha256(promptPath = null) {
+    return sha256Buffer(fs.readFileSync(
+        promptPath || visualSummaryPromptPath(currentPromptTextContract(VISUAL_SUMMARY_PROMPT_STAGE))
+    ));
 }
 
 function referenceFigureRole(caption) {
@@ -1534,7 +1565,9 @@ function assertVisualManifestCurrent(manifest, publication, targetDate, promptPa
         throw new Error('视觉摘要 TOP 10 选择契约已失效，请重新执行发布后规划');
     }
     const selected = selectTopRankedPapers(papers, targetDate, limit);
-    const currentPromptSha = promptSha256(promptPath || undefined);
+    const currentPromptSha = promptPath
+        ? promptSha256(promptPath)
+        : promptSha256(visualSummaryPromptPath(manifest.promptTextContract));
     const expectedIds = selected.map(normalizedId);
     if (manifest.promptSha256 !== currentPromptSha
         || manifest.selection?.type !== 'top_score'
@@ -1686,6 +1719,10 @@ function planVisualSummaries({
         }
     }
     const currentPromptSha = promptSha256(promptPath);
+    // 显式 promptPath 可能指向临时夹具，那时不写版本字段；核验方按 v1 处理。
+    const declaredPromptTextContract = promptPath
+        ? visualSummaryPromptContractForPath(promptPath)
+        : currentPromptTextContract(VISUAL_SUMMARY_PROMPT_STAGE);
     const batchPapers = papers.filter(paper => paperBatchDate(paper) === targetDate);
     const selected = selectTopRankedPapers(papers, targetDate, selectionLimit);
 
@@ -1728,6 +1765,9 @@ function planVisualSummaries({
                 generationManifestSha256: publication.generationManifestSha256
             } : null,
             promptSha256: currentPromptSha,
+            ...(declaredPromptTextContract
+                ? { promptTextContract: declaredPromptTextContract }
+                : {}),
             updatedAt: getBeijingISOString(),
             papers: planned,
             legacyUnrankedAssets: Array.isArray(current?.legacyUnrankedAssets)
@@ -2087,6 +2127,8 @@ module.exports = {
     cardTaskToken,
     legacyCardTaskToken,
     promptSha256,
+    visualSummaryPromptPath,
+    visualSummaryPromptContractForPath,
     planVisualSummaries,
     recordVisualSummaryCard,
     markVisualSummaryCardFailed,
