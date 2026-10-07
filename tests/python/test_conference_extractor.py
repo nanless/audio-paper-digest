@@ -37,7 +37,7 @@ from path_config import CONFERENCE_STAGING_SOURCE_DIR  # noqa: E402
 
 
 def build_pdf(page_lines):
-    """Build a small valid Helvetica PDF without requiring a PDF authoring lib."""
+    """不依赖 PDF 生成库，拼一份小的合法 Helvetica PDF。"""
     objects = {}
     page_ids = []
     next_id = 4

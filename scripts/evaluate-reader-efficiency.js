@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// Explicit, isolated experiment. This runner never calls refresh, generate,
-// review, push, fetch, or image download workflows.
+// 独立的实验入口。这个运行器不调用 refresh、generate、review、push、fetch，
+// 也不下载图片。
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
@@ -197,8 +197,8 @@ async function evaluate(options) {
             report.status = 'offline_replay_complete';
             return report;
         }
-        // Configure the actual runtime before deep-analyzer captures constants.
-        // No environment guard or provider routing is bypassed.
+        // 要在 deep-analyzer 读取常量之前先把运行时配置好。这里不绕过任何环境
+        // 校验，也不改模型路由。
         if (require.cache[require.resolve('./deep-analyzer.js')]) throw new Error('Live evaluation requires a fresh process before loading deep-analyzer');
         Config.ANALYSIS_CONFIG.apiReaderMaxTokens = BUDGETS.fullOutputTokens;
         Config.ANALYSIS_CONFIG.apiReaderRepairMaxTokens = BUDGETS.patchOutputTokens;

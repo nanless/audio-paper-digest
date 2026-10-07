@@ -1,8 +1,7 @@
 'use strict';
 
-// A narrow bridge from a live, production-authorized arXiv source handle to
-// the existing fresh-analysis engine. It creates an isolated canonical run;
-// it never reads or writes the daily canonical analysis.
+// 把线上、已授权用于生产的 arXiv 来源句柄接到现有的新分析引擎上，范围很窄。
+// 它会新建一次隔离的分析运行，既不读也不写日更的正式分析结果。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');

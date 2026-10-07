@@ -1,8 +1,7 @@
 'use strict';
 
-// Durable, source-only authority for assigning one historical page to one
-// canonical paper identity.  Loading always replays the named source files;
-// callers receive only an opaque in-process handle.
+// 把一张历史页面归到唯一论文身份上，只依据来源文件，且结果可长期复算。加载时
+// 总是重新读取指定的来源文件；调用方拿到的只是进程内句柄，看不到内部结构。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');

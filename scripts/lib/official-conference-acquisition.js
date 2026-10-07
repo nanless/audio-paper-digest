@@ -358,7 +358,7 @@ function closestPaper($, element) {
 function doiFrom(container) {
     const href = container.find('a[href*="doi.org/"]').first().attr('href');
     if (href) {
-        try { return decodeURIComponent(new URL(href).pathname.replace(/^\//, '')).trim() || null; } catch { /* fall through */ }
+        try { return decodeURIComponent(new URL(href).pathname.replace(/^\//, '')).trim() || null; } catch { /* 继续往下试 */ }
     }
     const match = container.text().match(/\b10\.\d{4,9}\/[A-Za-z0-9._;()/:+-]+/u);
     return match ? match[0].replace(/[.,;)]+$/u, '') : null;
@@ -1145,7 +1145,7 @@ async function fetchOfficial({ provider, url, kind, maxBytes, timeoutMs = REQUES
                 const location = response.headers?.get?.('location'); if (!location) fail('official redirect has no Location');
                 const next = validateRedirectTarget(provider, current, new URL(location, current).toString(), kind);
                 redirects.push({ from: current, to: next, status: response.status }); current = next;
-                try { await response.body?.cancel?.(); } catch { /* ignore redirect body */ }
+                try { await response.body?.cancel?.(); } catch { /* 忽略重定向响应体 */ }
                 continue;
             }
             if (response.status !== 200) fail(`official ${kind} returned HTTP ${response.status}`);

@@ -1,8 +1,7 @@
 'use strict';
 
-// Seal one authenticated ICML OpenReview PDF into the forum-ID filename used
-// by the local conference source manifest. This module never writes current/
-// or a blog checkout.
+// 把一份通过认证的 ICML OpenReview PDF 保存成本地会议来源清单使用的
+// forum-ID 文件名。这个模块不写 current/，也不写博客检出目录。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');

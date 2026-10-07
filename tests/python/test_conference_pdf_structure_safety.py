@@ -1,4 +1,4 @@
-"""Offline PDF fixtures: no model calls and no production runtime writes."""
+"""离线 PDF 夹具：不调用模型，也不写生产运行时目录。"""
 import base64
 import os
 import sys

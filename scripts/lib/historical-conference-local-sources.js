@@ -1,9 +1,8 @@
 'use strict';
 
-// Collect retained conference crawler inputs without touching historical
-// pages.  This module deliberately does not import the crosswalk, blog, LLM,
-// network, or old-analysis code paths.  It keeps only stable local source
-// coordinates: a conference ID, metadata snapshot position, and PDF bytes.
+// 只收集已保留的会议爬取输入，不碰历史页面。这个模块有意不引入对照表、博客、
+// LLM、网络和旧分析代码。它只保存稳定的本地来源坐标：会议 ID、元数据快照
+// 位置和 PDF 字节。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');

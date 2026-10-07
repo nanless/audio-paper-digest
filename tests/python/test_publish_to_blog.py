@@ -77,7 +77,7 @@ def manual_v5_reader_paper():
 @contextlib.contextmanager
 def manual_v5_fresh_files(paper, date_str, *, official_project_evidence=False,
                           project_root=None):
-    """Attach a real file-backed fresh-authoring receipt to a v5 fixture."""
+    """给 v5 夹具挂上一份真实的、由文件支撑的新撰写凭证。"""
     project_root = Path(ROOT) if project_root is None else Path(project_root)
     with tempfile.TemporaryDirectory() as tmp:
         current = Path(tmp) / 'current'
@@ -205,7 +205,7 @@ def manual_v5_fresh_files(paper, date_str, *, official_project_evidence=False,
 
 
 def resign_manual_v5_fresh_files(paper):
-    """Keep a temporary receipt, quality file and payload mutually consistent."""
+    """让临时凭证、质量文件和载荷三者互相一致。"""
     takeover = paper['analysisManifest']['manualTakeover']
     fresh = takeover['freshAuthoring']
     fresh.pop('receiptSha256', None)
@@ -230,7 +230,7 @@ def resign_manual_v5_fresh_files(paper):
 
 
 def manual_v6_publication_fixture():
-    """Small but complete canonical v6 record using the real cross-runtime hashes."""
+    """一份小但完整的正式 v6 记录，用的是真实的跨语言哈希。"""
     paper_id = '2608.30001'
     matrix = [['系统', 'WER↓'], ['强基线', '8.4%'], ['完整方法', '7.1%']]
     matrix_sha = hashlib.sha256(json.dumps(
@@ -731,7 +731,7 @@ def reseal_llm_api_reader_fixture(paper):
 
 
 def llm_api_ephemeral_figure_fixture():
-    """A sealed daily-style Reader record with evidence but no image asset."""
+    """一条按日更封存样式构造的解读记录：有证据，但没有图片素材。"""
     paper = llm_api_publication_fixture()
     paper_id = paper['arxivId']
     url = f'https://arxiv.org/html/{paper_id}v1/figure-1.png'
@@ -8415,7 +8415,7 @@ body
                     )
 
     def test_review_and_push_reject_fresh_provenance_without_input_source_reference(self):
-        """A claimed fresh source cannot lose its replayable generation input."""
+        """声称来自新抓取来源时，不能丢掉可复算的生成输入。"""
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp, with_remote=True)
             current = Path(tmp) / 'data' / 'current'
@@ -8457,7 +8457,7 @@ body
                 )
 
     def test_git_push_rechecks_schema_v3_input_integrity_before_receipt_or_git_mutation(self):
-        """Direct push callers cannot bypass the schema-v3 fresh-source gate."""
+        """直接调用推送也不能绕过 schema v3 的新来源闸门。"""
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
             current = Path(tmp) / 'data' / 'current'

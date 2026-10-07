@@ -141,7 +141,7 @@ function scopeConferenceEntries({ conferenceManifest, inventory, blogRoot } = {}
         // 保留标题权威。这条证据路径只留给更早的 deep 爬虫和 accepted 快照。
         const titleSources = record.sources.filter(source => source.sourceSet !== 'workspace-icml-official-poster-2026');
         try { sources = conferencePageMappingsApi.selectConferenceSources({ paperId: record.paperId, sources: clone(titleSources) }, sourceCache); }
-        catch { continue; } // No available retained PDF is not a direct local input.
+        catch { continue; } // 没有可用的保留 PDF，就不算直接本地输入。
         const scope = conferenceScopeFor(record.paperId);
         entriesByPaperId.set(record.paperId, { paperId: record.paperId, sources });
         for (const source of sources) for (const fingerprint of source.titleProjectionFingerprintSha256s) {

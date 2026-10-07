@@ -1,8 +1,7 @@
 'use strict';
 
-// Retained conference metadata/PDF belongs to the direct local-source route.
-// This legacy crosswalk writer is intentionally closed; title recovery may be
-// used only by the direct projection contract, never to mutate a crosswalk.
+// 保留下来的会议元数据和 PDF 归直接本地来源路线管。这个旧版对照表写入器已
+// 有意关闭；标题恢复只能由直接投影约定使用，不能用它改对照表。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -56,7 +55,7 @@ async function runConferenceCrawlBatch({ crosswalkRoot, identityRoot, dataRoot, 
     void crosswalkRoot; void identityRoot; void dataRoot; void batchRoot; void blogRoot; void iclrAcceptedRoot;
     void crosswalkId; void owner; void limit; void apply; void concurrency; void recoveryPolicy; void overrides;
     throw new Error('Historical conference crawl batch is retired; use history:conference-local-sources, history:conference-projections, and history:direct-plan');
-    /* c8 ignore next -- retained below as a forensic reference for existing runtime records. */
+    /* c8 ignore next -- 下面这段保留作现有运行记录的取证参照。 */
     const deps = { ...dependencies(), ...overrides }; if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 5) throw new Error('Conference crawl batch concurrency must be an integer from 1 to 5');
     const initial = deps.readCrosswalk({ crosswalkRoot, crosswalkId }); const index = deps.scan({ dataRoot }); const external = iclrAcceptedRoot === null ? { files: [], matches: new Map() } : deps.scanAccepted({ iclrAcceptedRoot, titleFingerprintSha256s: missingIclrTitleFingerprints(initial, blogRoot, index.matches) }); const matches = mergeMatches(index.matches, external.matches); const all = eligibleGroups(initial, matches, { blogRoot }); const maximum = limit === null ? all.length : limit; if (!Number.isSafeInteger(maximum) || maximum < 0) throw new Error('Conference crawl batch limit must be null or a non-negative integer'); const selected = all.slice(0, maximum);
     if (!apply) return { status: 'dry-run', crosswalkId, retainedFiles: index.files.length + external.files.length, retainedIdentities: matches.size, eligibleIdentities: all.length, eligiblePages: all.reduce((n, item) => n + item.pageKeys.length, 0), selectedIdentities: selected.length, selectedPages: selected.reduce((n, item) => n + item.pageKeys.length, 0), concurrency, identities: selected.map(item => ({ externalId: item.externalId, conference: item.match.conference, pageCount: item.pageKeys.length })) };

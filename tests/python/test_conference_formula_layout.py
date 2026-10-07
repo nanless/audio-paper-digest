@@ -1,4 +1,4 @@
-"""Real PDF glyph positioning regressions; no network or model calls."""
+"""真实的 PDF 字形定位回归；不联网，也不调用模型。"""
 import base64
 import hashlib
 import json

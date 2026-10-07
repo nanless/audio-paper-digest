@@ -473,7 +473,7 @@ def shared_blog_repository_lock(blog_repo, *, owner='paper-digest-publisher',
             try:
                 with guard:
                     state['snapshot'] = _renew(state['snapshot'])
-            except Exception as exc:  # fail closed on exit; never release another owner
+            except Exception as exc:  # 退出时按失败处理，绝不释放别人的锁
                 state['error'] = exc
                 return
 

@@ -872,7 +872,7 @@ function writePdfFailurePage(res, error, arxivId) {
     try {
         const identity = parseArxivId(arxivId);
         sourceLink = `<p><a href="https://arxiv.org/pdf/${escape(identity.resolvedId)}.pdf" rel="noreferrer">打开 arXiv 官方 PDF，再使用浏览器保存</a></p>`;
-    } catch (_) { /* Invalid IDs never produce an external link. */ }
+    } catch (_) { /* ID 非法时不生成外链。 */ }
     const html = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>PDF 下载暂未完成</title><body><h1>PDF 下载暂未完成</h1><p>${escape(error.message)}</p>${sourceLink}<p>本机下载需要项目 HTTP CONNECT 代理。检查代理后可重新点击下载；也可使用官方 PDF 链接。</p><p><a href="/ui">检查本机助手</a></p></body></html>`;
     res.writeHead(error.statusCode || 502, {
         'Content-Type': 'text/html; charset=utf-8',

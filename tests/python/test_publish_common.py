@@ -566,7 +566,7 @@ class PublishCommonSanitizerTest(unittest.TestCase):
             _validate_manual_v5_all_rejected_images(inconsistent, decisions, 'fixture')
 
     def test_manual_v5_all_reject_images_accepts_js_specific_visual_anchors(self):
-        """Publish must accept the same specific anchors as the JS record/spec gate."""
+        """发布端必须接受与 JS 记录/规格闸门相同的具体锚点。"""
         anchors = ['系统总览', '矩阵', '分布', '公式', '箭头', '分桶']
         urls = [f'https://example.com/{index}.png' for index in range(len(anchors))]
         paper = {
@@ -664,7 +664,7 @@ class PublishCommonSanitizerTest(unittest.TestCase):
         self.assertIn('悬空连接词', dangling)
 
     def test_manual_v4_quantity_audit_ignores_headings_and_indefinite_one_phrases(self):
-        """Keep the Python publication mirror aligned with editorial-quality.js."""
+        """让 Python 发布端镜像与 editorial-quality.js 保持一致。"""
         safe_cases = (
             '## 核心摘要\n一个好看的示意图不能替代真实实验，正文仍需给出可核对的比较。\n',
             '## 方法概述和架构\n### 冻结之后仍有一段必须学习\n该段说明冻结模块与可训练模块的职责边界。\n',
@@ -820,7 +820,7 @@ title: "Reader page"
         self.assertIn('这是实验段落。\n\n## 局限与问题\n', reader_view)
 
     def test_final_manual_v5_reader_article_replaces_fixed_v4_sections(self):
-        """v5 pages publish a custom readerArticle, not the legacy six-column facade."""
+        """v5 页面发布的是自定义 readerArticle，不是旧版六列表皮。"""
         v5_markdown = '''---
 title: "Reader-first page"
 paper_digest_manual_depth: "full-text-evidence-v5"

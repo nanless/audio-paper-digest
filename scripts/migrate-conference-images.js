@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-/** Move already-published conference PNGs to the dedicated image repository. */
+/** 把已发布的会议 PNG 移到专用的图片仓库。 */
 
 const { requireExternalRuntime, loadEnvFile } = require('./env-loader.js');
 requireExternalRuntime('migrate-conference-images.js');

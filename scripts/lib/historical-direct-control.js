@@ -1,9 +1,8 @@
 'use strict';
 
-// Read-only progress reporting plus explicit pause/resume markers for the
-// long-running direct historical rewrite.  The runner observes the marker
-// only between papers, so an active paper can finish its atomic registry and
-// staging transition before the queue stops accepting more work.
+// 给长时间运行的历史页面直接重写提供只读进度报告，以及显式的暂停/恢复标记。
+// 运行器只在两篇论文之间读取标记，因此当前这篇论文仍能走完它的原子登记和
+// 暂存切换，队列才会停止接收新任务。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -347,7 +346,7 @@ function taskSnapshot({ aggregateProjectionRoot, plan } = {}) {
                 pageCoverage: normalized.pageCoverage || null,
                 expectedTaskKeys: normalized.conferenceTaskPages.map(page => `${page.conferenceKey}-${page.legacyTaskKey}`).sort(),
                 projectionSha256: normalized.projectionSha256 });
-        } catch { /* unrelated or incomplete diagnostic file */ }
+        } catch { /* 与本次无关或内容不完整的诊断文件 */ }
     }
     if (!matches.length) return { projectionPresent: false, total: null, pending: null, publicationReady: false };
     const identities = new Set(matches.map(item => item.projectionSha256));

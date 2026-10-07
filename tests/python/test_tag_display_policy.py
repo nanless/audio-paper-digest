@@ -1,4 +1,4 @@
-"""Offline publisher transactions; public fixtures only, no env/model/main imports."""
+"""离线发布事务测试；只用公开夹具，不加载环境变量、模型或发布主模块。"""
 import ast
 import copy
 import io

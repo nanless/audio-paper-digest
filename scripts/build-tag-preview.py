@@ -183,7 +183,7 @@ def validate_disposition_rows(rows):
                 raise ValueError(f'{tag}: 采用 move_facet 处理方式时，evidence.facet 必须属于九个分类维度之一。')
             if row.get('facet') and target == row['facet']:
                 raise ValueError(f'{tag}: 采用 move_facet 处理方式时，目标分类维度必须与当前维度不同。')
-        else:  # deprecated / out_of_scope
+        else:  # 其余情况：deprecated 或 out_of_scope
             zero = evidence.get('crossConferenceZeroHit')
             if not isinstance(zero, dict) or not isinstance(zero.get('scan'), str) or not zero['scan'].strip():
                 raise ValueError(f'{tag}: 采用 {disposition} 处理方式时，必须提供跨会议扫描未命中的证据：'

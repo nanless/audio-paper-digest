@@ -1,8 +1,7 @@
 'use strict';
 
-// This is an identity authority, not a paper-source authority. It binds a
-// frozen historical arXiv hint to a retained filtered-papers record and never
-// exposes full text, tables, formulas, figures, or Reader capabilities.
+// 这里只管身份，不管论文来源。它把冻结的历史 arXiv 提示绑定到保留的筛选结果
+// 记录上，从不暴露全文、表格、公式、图片或 Reader 能力。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');

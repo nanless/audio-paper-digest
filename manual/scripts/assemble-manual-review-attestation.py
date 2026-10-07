@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble already-completed single-page review shards into Manual v3 attestation."""
+"""把已完成的单页审查分片汇总成 Manual v3 审查凭证。"""
 
 import argparse
 import json

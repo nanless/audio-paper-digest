@@ -1,8 +1,7 @@
 'use strict';
 
-// Recover an ICML forum-ID PDF from a small, code-reviewed allowlist when the
-// canonical OpenReview endpoint is unavailable. The resulting receipt states
-// explicitly that the bytes came from the alternate source, not OpenReview.
+// 当规范 OpenReview 接口不可用时，从一份经代码审查的小白名单里取回 ICML
+// forum-ID 的 PDF。生成的凭证会写明字节来自备用来源，而不是 OpenReview。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');

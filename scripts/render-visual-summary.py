@@ -19,7 +19,7 @@ from runtime_guard import require_external_runtime
 
 try:
     from PIL import Image, ImageChops, ImageDraw, ImageFont, ImageOps
-except ImportError as exc:  # pragma: no cover - exercised only on misconfigured hosts
+except ImportError as exc:  # pragma: no cover - 只有主机配置有误时才会走到
     raise RuntimeError("visual:render:debug 需要 Pillow：python3 -m pip install Pillow") from exc
 
 

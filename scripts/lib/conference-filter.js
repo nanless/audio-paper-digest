@@ -2132,7 +2132,7 @@ async function advanceProductionLlmDecisions({ filterRoot, filterId, discoveryHa
                                 apiKeys: config.apiKeys, accountPoolStateFile: config.accountPoolStateFile, usageContext,
                                 usageSink: event => {
                                     let persisted = false;
-                                    try { persisted = require('./llm-usage.js').writeLlmUsageEvent(event); } catch (_) { /* typed below */ }
+                                    try { persisted = require('./llm-usage.js').writeLlmUsageEvent(event); } catch (_) { /* 下面按类型处理 */ }
                                     usageEvents.push({ event, persisted });
                                 } });
                     } catch (caught) { error = caught; }
@@ -2211,7 +2211,7 @@ async function advanceProductionLlmDecision({ filterRoot, filterId, discoveryHan
                         apiKeys: config.apiKeys, accountPoolStateFile: config.accountPoolStateFile, usageContext,
                         usageSink: event => {
                             let persisted = false;
-                            try { persisted = require('./llm-usage.js').writeLlmUsageEvent(event); } catch (_) { /* typed below */ }
+                            try { persisted = require('./llm-usage.js').writeLlmUsageEvent(event); } catch (_) { /* 下面按类型处理 */ }
                             usageEvents.push({ event, persisted });
                         } });
             } catch (caught) { error = caught; }

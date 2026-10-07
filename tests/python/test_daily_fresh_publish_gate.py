@@ -47,7 +47,7 @@ def _source_artifacts(text_sha):
 
 
 def _daily_payload(root, paper_ids, versioned_source_ids=frozenset()):
-    """Create source-store bytes in the same shape as the Node capture path."""
+    """按 Node 抓取路径的样式在来源库里造出字节。"""
     date = '2026-09-07'
     run_id = '11111111-1111-4111-8111-111111111111'
     batch_id = 'python-publish-gate'

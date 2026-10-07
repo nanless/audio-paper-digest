@@ -1,8 +1,7 @@
 'use strict';
 
-// Identity-only authority for retained local conference crawler snapshots.
-// It never reads historical blog bodies, performs network I/O, or exposes
-// retained analysis/full-text fields to a later writing stage.
+// 只负责保留的本地会议爬取快照的身份。它不读历史博客正文，不做网络 I/O，
+// 也不把保留的分析或全文字段交给后续写作阶段。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');

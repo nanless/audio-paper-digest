@@ -1,4 +1,4 @@
-"""Cross-runtime conformance tests for paper-identity-v1."""
+"""paper-identity-v1 的跨语言一致性测试。"""
 
 from __future__ import annotations
 

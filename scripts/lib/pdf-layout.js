@@ -1,8 +1,7 @@
 'use strict';
 
-// One PDF implementation for every PDF-only route.  PyMuPDF is invoked via
-// the project's pinned Python runtime so Node's old pdf-parse text path cannot
-// silently discard tables, images, equations, or page layout.
+// 所有只处理 PDF 的路线共用这一套实现。PyMuPDF 通过项目固定的 Python 运行时
+// 调用，避免 Node 旧的 pdf-parse 文本路线悄悄丢掉表格、图片、公式和页面排版。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');

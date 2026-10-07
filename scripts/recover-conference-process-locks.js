@@ -39,7 +39,7 @@ function recoverLocks(root = Config.FILES.conferenceProcessDir) {
             const stat = fs.lstatSync(ownerFile);
             if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600) throw new Error('unsafe owner file');
             owner = JSON.parse(fs.readFileSync(ownerFile, 'utf8'));
-        } catch (_error) { /* reported as an unsafe/unrecoverable lock below */ }
+        } catch (_error) { /* 下面会按不安全或无法恢复的锁上报 */ }
         if (!snapshot.reclaimable || snapshot.active || !owner || !pidIsDead(owner.pid)) {
             skipped.push({ processId: path.basename(directory), reason: 'lock is malformed or owner is alive/unknown' });
             continue;

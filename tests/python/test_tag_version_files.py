@@ -1,4 +1,4 @@
-"""Isolated AST fixtures: no .env, API, daily writes or imported publisher main."""
+"""隔离的 AST 夹具：不读 .env，不调 API，不写日更数据，也不引入发布主模块。"""
 import ast
 import base64
 import copy

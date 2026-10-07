@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Record an explicit user waiver for post-publish image generation. */
+/** 记录用户明确放弃发布后生图的声明。 */
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');

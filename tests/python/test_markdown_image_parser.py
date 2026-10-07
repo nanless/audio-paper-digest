@@ -1,4 +1,4 @@
-"""Offline regressions for the publication image parser and unchanged URL gate."""
+"""发布图片解析器与 URL 不变闸门的离线回归。"""
 import importlib.util
 import os
 from pathlib import Path

@@ -1,7 +1,7 @@
 'use strict';
 
-// Pure adapters for fixed 2026 general AI/ML/CV/NLP conference authorities.
-// They parse caller-supplied response bodies only: no network and no writes.
+// 2026 年通用 AI/ML/CV/NLP 会议权威来源的纯适配器。它们只解析调用方传入的响应
+// 体：不联网，也不写文件。
 
 const path = require('node:path');
 const cheerio = require('cheerio');

@@ -409,7 +409,7 @@ function inspectProcessStates(options = {}) {
             try {
                 stateIntegrity.computed = stateDigest(state);
                 stateIntegrity.valid = stateIntegrity.declared === stateIntegrity.computed;
-            } catch (_) { /* classified below */ }
+            } catch (_) { /* 下面统一归类 */ }
         }
         const stateShapeValid = stateIntegrity.valid && validateProcessStateShape(state, entry.name);
         const schemaValid = stateShapeValid && stateIntegrity.valid;

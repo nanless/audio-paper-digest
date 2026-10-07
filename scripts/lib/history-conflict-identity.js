@@ -1,7 +1,7 @@
 'use strict';
 
-// Explicit operator resolution for historical pages whose frozen identity
-// hints are conflict/multiple.  This module never reads page prose or titles.
+// 给冻结身份提示为 conflict 或 multiple 的历史页面提供人工裁定入口。这个模块
+// 不读页面正文，也不读标题。
 
 const crypto = require('node:crypto');
 const authorityApi = require('./paper-source-authority.js');

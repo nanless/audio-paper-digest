@@ -1,8 +1,7 @@
 'use strict';
 
-// Resolve the deliberately narrow primary-paper marker used by legacy daily
-// posts. The historical body is identity evidence only: callers receive byte
-// offsets and hashes, never prose that could leak into a rewrite prompt.
+// 解析旧版每日汇总页里那个范围很窄的主论文标记。历史正文只作身份证据：调用方
+// 拿到的是字节偏移和哈希，绝不拿到可能混进重写提示词的正文。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');

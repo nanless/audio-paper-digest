@@ -75,7 +75,7 @@ def _sha(raw):
 
 
 def _reseal_bundle(root, payload, change):
-    """Recompute outer hashes so negative cases exercise identity checks."""
+    """重算外层哈希，让反例真的走到身份核对那一步。"""
     paper = payload['papers'][0]
     directory = root / payload['dailyFreshSourceRun']['runId'] / 'sources' \
         / paper['arxivId'] / 'generation-000001'
