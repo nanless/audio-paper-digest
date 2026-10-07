@@ -29,4 +29,4 @@ arXiv ID：{arxivId}
 
 ## 调用方式
 
-`deep-analyzer.js` 通过 `loadPrompt()` 替换 `{title}`、`{arxivId}`、`{resultsSection}` 和 `{textForAnalysis}`。它们依次提供论文标题、论文 ID、已有实验结果和本次可用的论文证据。
+`deep-analyzer.js` 通过 `loadPrompt()` 替换 `{title}`、`{arxivId}`、`{resultsSection}` 和 `{textForAnalysis}`。这四项依次是论文标题、论文 ID、已有实验结果和本次可用的论文证据。
