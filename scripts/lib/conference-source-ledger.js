@@ -1,8 +1,7 @@
 'use strict';
 
-// Local-only, immutable source ledger for conference papers.  This is kept
-// deliberately separate from the arXiv fresh-rewrite protocol: a title is
-// useful metadata, but is never an identity or a merge key here.
+// 只在本机使用的会议论文来源 ledger，内容不可变。它有意与 arXiv 的
+// fresh-rewrite 协议分开：标题在这里只是有用的元数据，从不作为身份或合并键。
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -17,12 +16,10 @@ const EVIDENCE_KINDS = new Set(['metadata', 'pdf', 'text', 'artifacts']);
 const STATUS_STATES = new Set(['verified', 'needs-review', 'blocked']);
 const AVAILABILITY_STATES = new Set(['present', 'absent']);
 const SOURCE_KINDS = new Set(['official-metadata', 'official-pdf', 'conference-proceedings', 'openreview', 'local-confirmed-copy', 'legacy-unrecorded']);
-// A raw ledger SHA is only meaningful when it was computed over bytes which
-// this module has just opened and schema-validated.  Do not use a structural
-// object plus a caller-supplied SHA as an authentication boundary: that lets a
-// caller pair arbitrary content with a syntactically valid digest.  Handles
-// are deliberately capability objects backed by this module's private
-// WeakMap.  They have no enumerable data and cannot be cloned or forged.
+// 只有当 SHA 是在本模块刚刚打开并校验过 schema 的字节上算出时，裸 ledger SHA 才有
+// 意义。不要拿一个结构对象加调用方给的 SHA 当认证边界：那等于让调用方把任意内容和
+// 一个格式合法的摘要配在一起。句柄是有意做成能力对象的，背后是本模块私有的
+// WeakMap。它们没有可枚举数据，无法被克隆或伪造。
 const LEDGER_HANDLES = new WeakSet();
 const LEDGER_HANDLE_DATA = new WeakMap();
 
@@ -61,8 +58,8 @@ function assertSha(value, name) {
 
 function assertRelativePath(value, name) {
     nonemptyString(value, name);
-    // Accept one portable ledger spelling only.  Backslashes are rejected so
-    // Windows paths cannot become absolute after a platform change.
+    // 只接受一种可移植的 ledger 路径写法。反斜杠一律拒绝，免得换平台之后 Windows
+    // 路径变成绝对路径。
     if (value.includes('\\') || path.isAbsolute(value) || path.win32.isAbsolute(value)
         || value.startsWith('/') || value.split('/').some(part => !part || part === '.' || part === '..')) {
         throw new Error(`${name} must be a normalized relative path`);
@@ -250,8 +247,8 @@ function validateLedger(ledger) {
     return ledger;
 }
 
-// JSON.parse silently accepts duplicate object keys.  Reject them before
-// schema validation so a signed-looking ledger cannot hide a replacement key.
+// JSON.parse 会默默接受重复的对象键。要在 schema 校验之前拒绝它们，否则一份看起来
+// 已签名的 ledger 可以藏一个替换键。
 function rejectDuplicateJsonKeys(text) {
     const stack = [];
     for (const match of text.matchAll(/"(?:\\[\s\S]|[^"\\])*"|[{}\[\]:,]/g)) {
@@ -347,10 +344,9 @@ function verifyMemberFiles(ledger, root) {
     return true;
 }
 
-// v1 had no runtime ledger when this contract was tightened.  Keep this
-// narrow authoring compatibility only for callers which create an in-memory
-// all-present fixture, then emit the canonical schema rather than accepting
-// an un-auditable legacy object in validateLedger/loadLedger.
+// 收紧这份契约时 v1 还没有运行时 ledger。这条窄的写作兼容只留给那些构造内存中
+// 全在场夹具的调用方，之后一律写出规范 schema，而不是在 validateLedger/loadLedger
+// 里接受一个无法审查的旧对象。
 function upgradeLegacyCreateMember(member) {
     const legacyFields = [
         'identity', 'metadataFile', 'metadataSha256', 'pdfFile', 'pdfSha256',
@@ -421,10 +417,9 @@ function deepFreeze(value) {
 }
 
 /**
- * Load a ledger as a non-forgeable local capability.  Consumers which make
- * executable decisions must accept this handle, never `{ ledger, sha256 }`.
- * The ledger and its raw-byte SHA live in private module state; callers may
- * inspect a defensive snapshot through `ledgerHandleSnapshot` only.
+ * 把 ledger 加载成不可伪造的本地能力对象。要做可执行判断的消费者必须接受这个句柄，
+ * 而不是 `{ ledger, sha256 }`。ledger 和它的原始字节 SHA 存放在模块私有状态里；
+ * 调用方只能通过 `ledgerHandleSnapshot` 查看一份防御性快照。
  */
 function loadLedgerHandle(filename) {
     const loaded = loadLedger(filename);
@@ -443,8 +438,7 @@ function ledgerHandleSnapshot(handle) {
         throw new Error('Conference ledger requires an authenticated loaded handle');
     }
     const data = LEDGER_HANDLE_DATA.get(handle);
-    // JSON clone is intentional: a consumer cannot alter the authoritative
-    // ledger held by the capability after it has been admitted.
+    // 这里有意用 JSON 克隆：ledger 被准入之后，消费者改不动能力对象持有的权威副本。
     return { filename: data.filename, ledger: JSON.parse(JSON.stringify(data.ledger)), ledgerSha256: data.ledgerSha256 };
 }
 

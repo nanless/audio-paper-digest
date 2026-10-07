@@ -1,9 +1,7 @@
 'use strict';
 
-// Offline, manifest-bound ingestion for local conference source material.  A
-// manifest declares the authoritative conference identity and every allowed
-// source filename.  Metadata contents (including titles) are never used as an
-// identity, matching, or cache-key input.
+// 离线、按清单导入本地会议来源素材。清单声明权威的会议身份，以及每个允许的来源
+// 文件名。元数据内容（包括标题）从不参与身份、匹配或缓存键的计算。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -149,12 +147,11 @@ function validateManifest(manifest) {
     exact(manifest, ['contract', 'version', 'conference', 'members', 'memberSetSha256'], 'conference import manifest');
     if (manifest.contract !== CONTRACT || manifest.version !== VERSION) throw fail('unsupported conference import manifest contract');
     exact(manifest.conference, ['id', 'year'], 'manifest conference');
-    // Reuse ledger validation for conference spelling without accepting any
-    // authoring fields beyond this importer contract.
+    // 借用 ledger 的校验来检查会议名称写法，同时不接受这份导入契约之外的任何写作字段。
     const conference = { id: manifest.conference.id, year: manifest.conference.year };
     try { ledgerApi.createLedger(conference, [placeholderMember()]); }
     catch (error) {
-        // placeholder validity is fixed; only reframe the conference failure.
+        // 占位记录的有效性是固定的，这里只重新包装会议相关的报错。
         if (!/conference/.test(error.message)) throw error;
         throw fail(error.message);
     }
@@ -169,8 +166,8 @@ function validateManifest(manifest) {
     return { contract: CONTRACT, version: VERSION, conference, members, memberSetSha256: manifest.memberSetSha256 };
 }
 
-// A fixed valid record lets the ledger contract validate only conference input
-// without weakening the importer to title-based or ad-hoc conference names.
+// 用一条固定有效的记录，让 ledger 契约只校验会议输入，而不必把导入器放宽到按标题
+// 或临时拼的会议名。
 function placeholderMember() {
     const hash = 'a'.repeat(64);
     return {
@@ -221,8 +218,8 @@ function readSource(root, relative, maxBytes, label) {
     const filename = safePath(root, relative, label);
     let fd;
     try {
-        // lstat before open prevents opening a FIFO/device (which can block),
-        // while O_NONBLOCK and the post-open inode check close the TOCTOU gap.
+        // 先 lstat 再 open，避免打开 FIFO 或设备文件（会阻塞）；O_NONBLOCK 和打开后的
+        // inode 复核一起堵住 TOCTOU 窗口。
         const namedBefore = fs.lstatSync(filename);
         if (!namedBefore.isFile() || namedBefore.isSymbolicLink() || namedBefore.nlink !== 1 || namedBefore.size > maxBytes) {
             throw fail(`${label} must be a regular single-link file within its size limit`);
@@ -303,14 +300,13 @@ function cacheStem(conference, identity) {
 function writeAtomicallyOnce(filename, bytes) {
     const parent = path.dirname(filename);
     fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
-    // Re-check each newly-created directory before accepting it as a cache path.
+    // 每个新建目录在当作缓存路径接受之前，都要再检查一次。
     safeDirectory(parent, 'cache destination directory');
     const temporary = path.join(parent, `.${path.basename(filename)}.${crypto.randomUUID()}.tmp`);
     let fd;
     try {
-        // Publish only after the complete bytes have reached a same-directory
-        // temporary inode.  A short write must never reserve the immutable
-        // destination name with corrupt bytes and poison every later retry.
+        // 等完整字节都写进同目录的临时 inode 之后再发布。短写绝不能先用损坏的字节占住
+        // 这个不可变的目标名，否则后续每次重试都会被污染。
         fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
         fs.writeFileSync(fd, bytes); fs.fsyncSync(fd);
         fs.linkSync(temporary, filename);
@@ -400,8 +396,7 @@ function importConferenceSources({ manifest, sourceRoot, cacheRoot, updatedAt, a
 
 function importConferenceSourcesFromStaging({ stagingHandle, sourceRoot, cacheRoot, updatedAt,
     apply = false, replay = true } = {}) {
-    // Lazy loading avoids a module-init cycle: conference-staging deliberately
-    // reuses this module's import-manifest validator.
+    // 延迟加载避免模块初始化环：conference-staging 有意复用本模块的导入清单校验器。
     const stagingApi = require('./conference-staging.js');
     let staged;
     try {

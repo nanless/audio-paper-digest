@@ -141,9 +141,8 @@ function resolveSavedAnalysisBatchDate(payload) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return '';
     const explicit = normalizeCompatibleBatchDate(payload.batchDate);
     if (explicit) return explicit;
-    // Historical envelopes written before batchDate became mandatory still
-    // retain their immutable run-start timestamp.  Never fall back to the
-    // wall clock here: a missing persisted identity must stay fail-closed.
+    // batchDate 变成必填之前写下的历史记录，仍带着当时不可变的运行起始时间戳。
+    // 这里绝不能退回到系统时钟：持久化身份缺失时必须直接失败。
     for (const value of [
         payload.timestamp,
         payload.deepAnalysisCompletedAt,

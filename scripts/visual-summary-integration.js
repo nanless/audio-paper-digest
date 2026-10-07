@@ -37,9 +37,8 @@ function reconcileVisualSummaryTasks({
     }
     category = publication.category;
     const papers = publication.publishedPapers;
-    // generation schema v3 is the authority for what was actually published.
-    // `--all` and conference runs may publish papers fetched on earlier dates, so
-    // visual ranking must bind the entire published snapshot to the blog date.
+    // generation schema v3 才是「实际发布了什么」的依据。`--all` 和会议运行可能
+    // 发布更早日期抓到的论文，所以视觉排序必须把整个已发布快照绑到博客日期上。
     const normalizedPapers = papers.map(paper => ({
         ...paper,
         fetchBatchDate: targetDate,

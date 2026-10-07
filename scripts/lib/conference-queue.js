@@ -1,9 +1,8 @@
 'use strict';
 
-// The queue is deliberately a small coordinator.  It owns ordering and
-// durable intent; process/publisher modules own their evidence and locks.
-// Keeping those boundaries explicit is what lets an interrupted queue resume
-// without turning a successful push into a false "complete" result.
+// 这个队列有意做得很小，只当一个协调者。它管顺序和持久化的意图，证据和锁由
+// process、publisher 模块自己管。边界划清楚，中断的队列才能续跑，也不会把一次
+// 成功的推送记成假的 complete。
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -82,8 +81,7 @@ function writeJsonAtomic(filename, value) {
 }
 
 function cryptoRandom() {
-    // A random suffix is only for the temporary inode.  Queue identity never
-    // depends on it, so tests can replace this function's process safely.
+    // 随机后缀只用于临时 inode。队列身份从不依赖它，所以测试可以安全地换掉这个函数。
     return `${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
 }
 
@@ -247,9 +245,8 @@ function classifyProcessLiveness(status) {
 
 function processProof(result, entry) {
     if (!result || typeof result !== 'object' || result.status !== 'complete') {
-        // Surface the pending `needs_tag_review` papers instead of hiding
-        // them behind a generic "not complete" failure: the reader must see
-        // which papers wait for tag assignment review and why.
+        // 把待处理的 `needs_tag_review` 论文摆出来，不要藏在笼统的「未完成」失败后面：
+        // 读者需要看到哪些论文在等标签分配审查，以及为什么。
         const review = Array.isArray(result?.tagReviewQueue) ? result.tagReviewQueue : [];
         fail(review.length
             ? `conference process for ${entry.conferenceId} is not complete; tag review pending for `
@@ -297,8 +294,8 @@ function validateReceipt(action, receipt, entry, processId) {
             || receipt.urlAcceptance?.contract !== GATE_CONTRACT
             || !Array.isArray(receipt.urlAcceptance?.checks)) fail('publish receipt v2/urlAcceptance contract is invalid');
     } else {
-        // Kuhn's public verify action returns publication_state; the durable
-        // proof remains publish.json v2. Do not invent a second completion file.
+        // Kuhn 的公开 verify 动作返回 publication_state；持久的凭证仍是 publish.json v2。
+        // 不要再造第二个完成文件。
         validateReceipt('push', receipt, entry, processId);
     }
     return receipt;
@@ -329,8 +326,7 @@ function validateLegacyVerification(receipt, entry, processId, publishSha256) {
         || receipt.urlAcceptance?.status !== 'passed' || receipt.urlAcceptance?.contract !== GATE_CONTRACT) {
         fail('legacy verification receipt lacks mechanical HTML/URL acceptance');
     }
-    // The legacy proof intentionally has no mutable process identity fields;
-    // its publish SHA is the immutable v1 identity checked by the caller.
+    // 旧凭证有意不带可变的流程身份字段；它的 publish SHA 就是调用方核对的不可变 v1 身份。
     if (!entry?.conferenceId || !UUID_RE.test(processId)) fail('legacy verification identity is invalid');
     return receipt;
 }
@@ -359,8 +355,7 @@ function loadLegacyVerification(files, entry, processId) {
 
 function publisherReceipt(action, result, deps, entry, processId, context = {}) {
     if (action === 'verify') {
-        // verify returns publication_state, never a receipt.  The durable
-        // proof is loaded separately from the publication directory.
+        // verify 返回的是 publication_state，从来不是凭证。持久凭证另外从发布目录里读取。
         if (context.legacy) {
             return validateLegacyVerification(
                 loadLegacyVerification(deps.files, entry, processId), entry, processId, context.publishSha256);
@@ -431,9 +426,8 @@ function publishedCandidates(files, entry, readProcessState = defaultProcessStat
         catch (error) { if (isMissing(error)) generation = null; else throw error; }
         const processState = readProcessState(files, name);
         if (!generation || !processState) { unresolved = true; continue; }
-        // A publication under this conference is not safe to ignore merely
-        // because it belongs to another plan.  The queue must stop rather
-        // than reanalyze while publication authority is unresolved.
+        // 同一会议下已有发布，不能因为属于另一个 plan 就当作可以忽略。发布授权还没弄清
+        // 之前，队列必须停下，而不是重新分析。
         if (!processAuthorityMatches(processState, entry)) { unresolved = true; continue; }
         if (generation.completionReceiptSha256 !== processState.completionReceiptSha256) {
             fail(`published process completion authority drifted for ${entry.conferenceId}`);
@@ -535,8 +529,8 @@ async function validateCompletedQueue(state, plan, deps) {
         const expected = entryState.receipts.verify?.receiptSha256;
         if (!SHA_RE.test(String(expected || ''))) fail(`complete queue ${entry.conferenceId} has no verify proof`);
         if (!entryState.receipts.push?.receiptSha256) fail(`complete queue ${entry.conferenceId} has no publish proof`);
-        // The default publisher exposes the durable publish.json. Re-read it
-        // on apply so a stale queue state cannot hide publication drift.
+        // 默认发布器会暴露持久的 publish.json。apply 时重新读一遍，避免过期的队列状态
+        // 掩盖发布漂移。
         if (typeof deps.publisher?.findPublished === 'function') {
             const found = await deps.publisher.findPublished(entry, entryState.processId, { readOnly: true });
             if (!found) fail(`published proof disappeared for ${entry.conferenceId}`);
@@ -581,9 +575,8 @@ async function runEntry(state, index, plan, deps, stateFile, options) {
     const discovered = await discoverPublished(deps, entry, entryState.processId);
     if (discovered) {
         if (!discovered.processId) fail(`published ${entry.conferenceId} receipt has no processId`);
-        // A publication receipt proves that process/push happened, not that
-        // this queue run observed the current online state. Both v1 legacy
-        // and v2 publications therefore resume at the real verify entry.
+        // 发布凭证只能证明 process/push 发生过，不能证明本次队列运行看到的是当前线上状态。
+        // 所以 v1 旧凭证和 v2 发布都从真正的 verify 入口续跑。
         entryState = { ...entryState, status: 'running', stage: 'verify', processId: discovered.processId,
             receipts: { ...entryState.receipts, push: { status: discovered.legacy ? 'legacy-published' : 'already-published',
                 receiptSha256: discovered.receipt.publishSha256 } }, legacyPublished: discovered.legacy,
@@ -700,9 +693,8 @@ async function runConferenceQueue(options, overrides = {}) {
                 if (result.kind === 'paused') return { contract: CONTRACT, version: VERSION, mode, queueId,
                     status: 'paused', planSha256: plan.planSha256, entries: summary(state), stateFile };
             } catch (error) {
-                // runEntry persists the next stage before every external
-                // call.  Reload here so a crash in generate/review/push/
-                // verify never gets recorded as a stale process-stage error.
+                // runEntry 在每次外部调用前都会把下一阶段落盘。这里重新读一次，这样
+                // generate/review/push/verify 中途崩溃时，不会被记成过期的流程阶段错误。
                 const latest = readState(stateFile, plan, queueId) || state;
                 const entry = { ...latest.entries[index], status: 'paused',
                     failure: errorRecord(error, latest.entries[index].stage), blocked: null };

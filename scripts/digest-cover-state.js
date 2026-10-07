@@ -360,8 +360,8 @@ function recordDigestCover({ sourcePath, taskToken, targetDate, manifestPath, qa
         } finally {
             if (fs.existsSync(temp)) fs.unlinkSync(temp);
         }
-        // 与论文长图相同：若调用方先把结果复制到归档目录，清理
-        // canonical 封面之外留下的同批次临时别名，避免目录出现两张封面。
+        // 与论文长图相同：若调用方先把结果复制到归档目录，清理正式封面之外留下的
+        // 同批次临时别名，避免目录出现两张封面。
         const source = path.resolve(sourcePath);
         const coverRoot = path.resolve(Config.FILES.digestCoverAssetDir, current.batchDate, 'visual-summaries');
         const relative = path.relative(coverRoot, source);
@@ -483,8 +483,8 @@ function main(argv = process.argv.slice(2)) {
         return;
     }
     if (command === 'archive-legacy') {
-        // Legacy archival validates the completed local asset and its SHA. It
-        // must remain usable for batches created before modern remote receipts.
+        // 历史归档只核对本地已完成的封面图及其 SHA，必须继续支持那些在现代远端
+        // 凭证出现之前创建的批次。
         archiveLegacyDigestCover({ targetDate: options.date, manifestPath: options.manifest });
         console.log('历史汇总封面已按日期归档');
         return;

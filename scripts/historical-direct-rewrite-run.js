@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// This command is intentionally separate from history:direct-scheduler.
-// The latter can prepare source bundles without invoking a model; this one is
-// the explicit analysis/Reader/staging phase and is never used implicitly.
+// 这个命令有意和 history:direct-scheduler 分开。后者只准备来源包，不调用模型；
+// 这个才是显式的分析、Reader 和暂存阶段，绝不会被隐式调用。
 
 const path = require('node:path');
 const { requireExternalRuntime } = require('./env-loader.js');

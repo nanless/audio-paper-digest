@@ -1,8 +1,7 @@
 'use strict';
 
-// Deterministic routing plan for the user-approved retained local inputs.
-// This is intentionally a planner/registry boundary: it neither calls an
-// LLM, fetches arXiv, reads a historical blog body, nor mutates a crosswalk.
+// 用户批准的保留本地输入的确定性路由计划。这里有意只做计划与登记边界：
+// 它不调用 LLM、不抓 arXiv、不读历史博客正文，也不改动 crosswalk。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -65,9 +64,8 @@ function deterministicRunId(catalogFileSha256, paperId) {
 }
 
 function normalizeCurrentCatalog(value) {
-    // The producer owns the complete current v5 contract.  Do not maintain a
-    // second, weaker validator here: legacy v3 collector files used the same
-    // headline version while allowing retained arXiv prose/PDF inputs.
+    // 当前 v5 契约由生产者负责，这里不要再维护一套更弱的校验器：旧 v3 采集文件
+    // 用了同样的主版本号，却允许保留的 arXiv 正文和 PDF 输入。
     try {
         return require('./historical-direct-rewrite-input-catalog.js').normalizeCatalog(value);
     } catch (error) {
@@ -153,9 +151,8 @@ function arxivPageProjections(inventory, knownPaperIds, primaryBindings = []) {
 function sourceRoute(entry) {
     if (entry.paperId.startsWith('arxiv:')) {
         const arxivId = entry.paperId.slice(6);
-        // No local TXT/PDF/crawler record is copied here.  The runner must
-        // freshly fetch the official text and PDF, then keep only temporary
-        // figure pixels for that run.
+        // 这里不复制任何本地 TXT/PDF/爬虫记录。运行器必须重新抓取官方文本和 PDF，
+        // 并且只保留本次运行期间的临时图片像素。
         return { kind: 'arxiv-fresh-fetch', arxivId, writerInputs: [],
             freshFetch: { authority: 'official-arxiv', requiredArtifacts: ['text', 'pdf'],
                 persistArtifacts: ['text', 'pdf'], imagePersistence: 'ephemeral-only' },
@@ -276,9 +273,8 @@ function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, confere
         const projected = isArxiv ? arxivByPaperId.get(entry.paperId) || []
             : conferenceByPaperId.get(entry.paperId)?.pages || [];
         if (!projected.length) {
-            // Retained local material with no frozen historical page is an
-            // audit item, not a candidate for a fresh source request, a
-            // crosswalk mutation, or an LLM run.  It stays outside `queue`.
+            // 没有冻结历史页面投影的保留本地素材属于审查项，不是新来源请求、crosswalk
+            // 改动或 LLM 运行的候选。它留在 `queue` 之外。
             unprojectedCatalogEntries.push({ paperId: entry.paperId, route: route.kind,
                 reason: 'no-frozen-historical-page-projection' });
             continue;
@@ -932,8 +928,8 @@ function directStagingBinding({ plan, registry, paperId, analysisArtifact } = {}
             fail('direct arXiv staging requires analysis from this sealed source generation and manifest');
         }
     }
-    // This packet is the exact page-level input to a direct renderer.  It
-    // deliberately has no crosswalk decision or postprocess-scheduler field.
+    // 这个包是直接渲染器拿到的页面级精确输入。它有意不带 crosswalk decision，
+    // 也不带 postprocess-scheduler 字段。
     const pages = item.pages.map(page => ({ ...clone(page), paperId: item.paperId, runId: item.runId,
         route: item.route.kind, analysisFileSha256: analysisArtifact.analysisFileSha256,
         analysisRecordSha256: analysisArtifact.analysisRecordSha256,
@@ -957,10 +953,8 @@ async function bounded(work, concurrency, shouldPause = () => false, onProgress 
         const output = [];
         while (cursor < work.length) {
             if (await shouldPause()) break;
-            // Another worker may consume the final item while this worker is
-            // suspended in the asynchronous pause check. Re-check before
-            // claiming so queue lengths that are not divisible by concurrency
-            // can never dispatch undefined work.
+            // 在这个 worker 停在异步暂停检查期间，另一个 worker 可能已经取走最后一项。
+            // 认领之前再查一次，这样队列长度不能被并发数整除时，也绝不会派发 undefined 工作。
             if (cursor >= work.length) break;
             const value = work[cursor++];
             const paperId = value?.paperId;
@@ -1000,10 +994,9 @@ async function prepareDirectSources({ plan, queue = 'all', arxivGeneration = 1,
         || new Set(completedPaperIds).size !== completedPaperIds.length) fail('completed source paper IDs are invalid');
     if (!paperIds.length && completedPaperIds.length) {
         const completed = new Set(completedPaperIds);
-        // Conference verification has no separate durable source bundle, so
-        // its locked status checkpoint advances bounded batches.  arXiv ready
-        // entries remain here until the exact four-file generation is replayed
-        // by the existing filter below.
+        // 会议核验没有单独的持久来源包，所以它的加锁状态检查点按有界批次推进。
+        // arXiv 的 ready 条目会一直留在这里，直到下面现有的筛选器重新核对完那组
+        // 恰好四个文件的 generation。
         selected = selected.filter(item => item.route.kind === 'arxiv-fresh-fetch' || !completed.has(item.paperId));
     }
     if (maxPapers !== null) {
@@ -1047,8 +1040,7 @@ async function prepareDirectSources({ plan, queue = 'all', arxivGeneration = 1,
                     || !validSha(captured.sourceManifestSha256)) {
                     fail(`${item.paperId} fresh source adapter returned a mismatched generation`);
                 }
-                // The scheduler record proves the sealed source pair without
-                // serializing either full text or PDF bytes into its checkpoint.
+                // 调度记录足以证明已保存的来源对，不必把全文或 PDF 字节写进检查点。
                 const sourceBinding = normalizeFreshArxivSourceBinding(item, { contract: FRESH_ARXIV_SOURCE_CONTRACT,
                     paperId: item.paperId, arxivId: item.route.arxivId, generation: arxivGeneration,
                     sourceManifestSha256: captured.sourceManifestSha256,
@@ -1058,9 +1050,8 @@ async function prepareDirectSources({ plan, queue = 'all', arxivGeneration = 1,
                     pdfSha256: captured.manifest.pdf.responseSha256, sourceManifestSha256: captured.sourceManifestSha256,
                     sourceBinding, sourceRunIdentitySha256: directSourceRunIdentity(item, sourceBinding) };
             } catch (error) {
-                // This is an immutable handoff, never a crosswalk mutation.
-                // The local conference queue continues in parallel and a later
-                // dedicated crosswalk worker can replay this frozen mapping.
+                // 这是不可变的交接，绝不是 crosswalk 改动。本地会议队列并行继续，
+                // 之后专门的 crosswalk worker 可以重新核对这份冻结映射。
                 const handoff = await writeFailureHandoff({ root: freshArxivFailureHandoffRoot, plan: normalized,
                     paperId: item.paperId, generation: arxivGeneration, error, observedAt });
                 return { outcome: 'crosswalk-handoff', arxivId: item.route.arxivId, generation: arxivGeneration,

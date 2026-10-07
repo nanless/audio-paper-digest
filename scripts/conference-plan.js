@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// Creates a run only through the complete discovery/filter/staging/import
-// receipt chain. All CLI file arguments are direct names in configured roots.
+// 只有在发现、筛选、暂存、导入这条凭证链完整时才创建 run。所有 CLI 文件参数都必须
+// 是配置根目录下的直接文件名。
 
 const { requireExternalRuntime } = require('./env-loader.js');
 const Config = require('./config.js');

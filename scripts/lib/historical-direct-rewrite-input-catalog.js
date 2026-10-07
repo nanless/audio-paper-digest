@@ -1,11 +1,9 @@
 'use strict';
 
-// Builds the scoped v5 catalog for direct historical rewriting. It consumes
-// one approved local content manifest (conference PDF/metadata) and the frozen
-// inventory. arXiv entries come from frozen single hints plus sealed primary
-// score-row bindings for otherwise conflict/multiple daily pages;
-// they deliberately have no retained local writer input because every run must
-// fetch and seal fresh official text/PDF before analysis.
+// 为历史直改构建 scoped v5 目录。输入是一份已批准的本地内容清单（会议 PDF 和元数据）
+// 加上冻结的清单。arXiv 条目来自冻结的单条 hint，以及为冲突或多日更页面保存的
+// primary score-row 绑定；它们有意没有保留的本地写作输入，因为每次运行都必须抓取
+// 并保存全新的官方文本和 PDF，之后才能分析。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -110,9 +108,8 @@ function conferenceScopeFor(paperId) {
 }
 
 function sourcePriority(sourceSet) {
-    // The workspace crawler is preferred. An accepted ICLR record is allowed
-    // only if its exact title binds a frozen page and no workspace record for
-    // the same identity wins this priority rule.
+    // 优先用 workspace 爬虫。只有当某条 accepted ICLR 记录的标题精确绑定到一个冻结页面，
+    // 并且同一身份没有 workspace 记录在这条优先级规则里胜出时，才接受它。
     if (/^workspace-[a-z0-9-]+-\d{4}$/.test(sourceSet)) return 0;
     if (/^accepted-local-iclr-\d{4}$/.test(sourceSet)) return 1;
     return 2;
@@ -140,10 +137,8 @@ function scopeConferenceEntries({ conferenceManifest, inventory, blogRoot } = {}
             fail('approved conference local-source record is malformed');
         }
         let sources;
-        // Poster-snapshot records prove daily-page identity, but their `name`
-        // field is not the retained title authority for the 1,302 conference
-        // pages.  Keep that evidence path exclusively on the earlier deep
-        // crawler/accepted snapshots.
+        // Poster 快照记录能证明日更页面身份，但它们的 `name` 字段不是那 1,302 个会议页面的
+        // 保留标题权威。这条证据路径只留给更早的 deep 爬虫和 accepted 快照。
         const titleSources = record.sources.filter(source => source.sourceSet !== 'workspace-icml-official-poster-2026');
         try { sources = conferencePageMappingsApi.selectConferenceSources({ paperId: record.paperId, sources: clone(titleSources) }, sourceCache); }
         catch { continue; } // No available retained PDF is not a direct local input.
@@ -244,8 +239,8 @@ function arxivEntriesFromFrozenInventory(value, dailyPrimaryArxivBindings = []) 
     const rawPages = new Map(value.pages.filter(page => page?.kind === 'paper').map(page => [page.pageId, page]));
     const paperIds = new Set(); let singlePageCount = 0;
     for (const page of history.pages) {
-        // Conference pages already have their exact retained conference-PDF
-        // route. Routing them through fresh arXiv too would duplicate a page.
+        // 会议页面已经有自己精确的保留会议 PDF 路由。再让它们走一遍新抓 arXiv，
+        // 只会让同一个页面重复。
         if (page.scope.type === 'conference') continue;
         const hints = rawPages.get(page.pageKey)?.identityHints;
         if (hints?.status !== 'single' || !Array.isArray(hints.candidates) || hints.candidates.length !== 1) continue;
@@ -276,10 +271,9 @@ function buildScopedCatalog({ conferenceManifest, inventoryFile, blogRoot } = {}
     const scopedConference = scopeConferenceEntries({ conferenceManifest: conference.value, inventory: inventory.value, blogRoot });
     const dailyIcml = dailyIcmlPosterEntries({ conferenceManifest: conference.value, inventory: inventory.value, blogRoot });
     const conferenceById = new Map(scopedConference.entries.map(entry => [entry.paperId, entry]));
-    // Keep the title-bound retained source for canonicals that already own a
-    // frozen conference page.  The independently sealed poster binding proves
-    // the daily projection; replacing the writer source with miniconf metadata
-    // would make the 1,302 conference-title projections depend on record.name.
+    // 已经拥有冻结会议页面的规范条目，继续使用按标题绑定的保留来源。独立保存的
+    // poster 绑定只证明日更投影；把写作来源换成 miniconf 元数据，会让那 1,302 个
+    // 会议标题投影依赖 record.name。
     for (const entry of dailyIcml.entries) if (!conferenceById.has(entry.paperId)) conferenceById.set(entry.paperId, entry);
     const conferenceEntries = [...conferenceById.values()].sort((a, b) => a.paperId.localeCompare(b.paperId));
     const entries = [...arxiv.entries, ...conferenceEntries].sort((left, right) => left.paperId.localeCompare(right.paperId));

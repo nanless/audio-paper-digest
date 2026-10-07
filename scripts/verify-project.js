@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// This runner deliberately has no analysis/publication imports or network setup.
+// 这个运行器有意不引入分析或发布模块，也不做网络设置。
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -30,7 +30,7 @@ function collectSourceFiles(root = PROJECT_ROOT) {
     const files = { javascript: [], python: [], shell: [] };
     function visit(directory) {
         for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-            // Never traverse external trees, even if a symlink looks like a file.
+            // 绝不跨越到外部目录树，哪怕某个符号链接看起来像普通文件。
             if (entry.isSymbolicLink()) continue;
             const fullPath = path.join(directory, entry.name);
             if (entry.isDirectory()) {

@@ -14,8 +14,7 @@ const HTTP_RECEIPT_CONTRACT = 'official-conference-http-response-v1';
 const CATALOG_RECEIPT_CONTRACT = 'official-conference-catalog-receipt-v1';
 const PDF_RECEIPT_CONTRACT = 'official-conference-pdf-receipt-v1';
 const PARSER_VERSION = 'official-proceedings-cheerio-v1';
-// ACL 2026's official event index contains several thousand records and is
-// larger than 16 MiB. Keep one explicit bounded ceiling for sealed indexes.
+// ACL 2026 的官方事件索引有几千条记录，超过 16 MiB。给已保存的索引留一个明确的大小上限。
 const MAX_INDEX_BYTES = 64 * 1024 * 1024;
 const MAX_PDF_BYTES = 256 * 1024 * 1024;
 const MAX_COMBINED_PDF_BYTES = 512 * 1024 * 1024;
@@ -25,9 +24,8 @@ const SHA_RE = /^[a-f0-9]{64}$/;
 const ID_RE = /^[A-Za-z0-9._-]{1,200}$/;
 const PAPER_FIELDS = ['abstract', 'authors', 'doi', 'id', 'pdfFile', 'pdfUrl', 'recordUrl', 'title', 'track'];
 
-// Volume 40 is published as 48 separate OJS issues. The OJS issue IDs are not
-// contiguous (notably issue 6 is 733 and issue 25 is 707), so deriving them or
-// following /issue/current would silently produce an incomplete catalog.
+// 第 40 卷分成 48 个独立的 OJS issue 发布。OJS 的 issue ID 不连续（issue 6 是 733，
+// issue 25 是 707），靠推算或者跟着 /issue/current 走，都会悄悄生成一份不完整的目录。
 const AAAI_2026_ISSUE_IDS = Object.freeze([
     683, 684, 685, 686, 687, 733, 688, 689, 690, 691, 692, 693,
     694, 695, 696, 697, 698, 699, 700, 701, 702, 703, 704, 705,
@@ -382,9 +380,8 @@ function parseIsca(provider, html) {
         const id = path.posix.basename(parsed.pathname, '.html');
         const card = $(element).closest('.w3-card');
         const heading = card.find('h4').first().text().replace(/\s+/gu, ' ').trim();
-        // ISCA includes keynote abstract pages in the same index. They are not
-        // proceedings papers and deliberately have no PDF, so exclude them at
-        // catalog time instead of inventing a deterministic 404 PDF URL.
+        // ISCA 把主题演讲摘要页也放在同一个索引里。它们不是正式论文，有意不提供 PDF，
+        // 所以在建目录时就排除，而不是编一个固定的 404 PDF 地址。
         if (/keynote/iu.test(heading)) return;
         const container = card.length ? card : closestPaper($, element);
         const titleNode = $(element).find('p').first().clone();
@@ -551,10 +548,9 @@ function parseAaaiIssue(providerOrId, issueOrNumber, html) {
         validateFetchUrl(provider, pdfUrl, 'pdf');
         const pdfParts = new URL(pdfUrl).pathname.split('/').filter(Boolean);
         if (pdfParts.at(-2) !== recordId) fail(`AAAI article ${recordId} PDF identity differs from its official record`);
-        // OJS article 37523 lists the display name "Shuai Wang" twice. The
-        // shared nine-field schema cannot represent two indistinguishable
-        // author strings, so preserve first-seen order while removing exact
-        // display-name duplicates (without using the title as identity).
+        // OJS 文章 37523 把显示名 "Shuai Wang" 列了两次。共用的九字段 schema 无法表达
+        // 两个无法区分的作者字符串，所以保留首次出现的顺序，去掉完全相同的显示名
+        // （不用标题当身份）。
         const authors = [...new Set(container.find('.authors').first().text().replace(/\s+/gu, ' ').trim()
             .split(/\s*,\s*/u).map(item => item.trim()).filter(Boolean))];
         const track = container.closest('.section').find('h2').first().text().replace(/\s+/gu, ' ').trim();
@@ -631,8 +627,7 @@ function parseCvf(provider, html) {
             if (!candidate) return false;
             try { return validateFetchUrl(provider, candidate, 'pdf') === candidate; } catch { return false; }
         }).first();
-        // CVF occasionally omits the visible PDF anchor while retaining the
-        // canonical record and the identity-equivalent PDF endpoint.
+        // CVF 偶尔会漏掉可见的 PDF 链接，但记录本身和身份等价的 PDF 端点还在。
         const pdfUrl = pdfAnchor.length ? hrefUrl(pdfAnchor.attr('href'), provider.indexUrl)
             : `https://${provider.host}/content/CVPR2026/papers/${id}.pdf`;
         validateFetchUrl(provider, pdfUrl, 'pdf');
@@ -1392,9 +1387,8 @@ function replayPdfReceipt(catalog, paper) {
 }
 
 function splitIcmcPapers(catalog, papers) {
-    // macOS commonly exposes /tmp as a symlink.  The acquisition reader
-    // deliberately rejects symlinked parents, so create the scratch directory
-    // beneath the resolved system temporary directory.
+    // macOS 常把 /tmp 暴露成符号链接。获取读取器有意拒绝父目录是符号链接的情况，
+    // 所以临时目录建在解析后的系统临时目录下面。
     const temporaryParent = fs.realpathSync(os.tmpdir());
     const temporaryRoot = fs.mkdtempSync(path.join(temporaryParent, 'audio-paper-digest-icmc-'));
     try {
@@ -1433,9 +1427,8 @@ function icmcDownloadPapers({ providerId, outputRoot, apply = false, limit = nul
         const target = pdfPath(catalog.paths, paper); const receipt = pdfReceiptPath(catalog.paths, paper);
         const targetPresent = fs.existsSync(target); const receiptPresent = fs.existsSync(receipt);
         if (targetPresent && receiptPresent) { replayIcmcPdfReceipt(catalog, paper); return false; }
-        // A derived PDF may survive an interrupted receipt migration.  Recreate
-        // its receipt only after deterministic splitting produces the same
-        // bytes; a receipt without its PDF remains a hard failure.
+        // 中断的凭证迁移之后，派生出的 PDF 可能还在。只有确定性切分重新产出同样的字节，
+        // 才能重建它的凭证；有凭证却没有 PDF 仍然是硬失败。
         if (receiptPresent && !targetPresent) fail(`${paper.id} has a partial ICMC PDF/receipt pair`);
         return true;
     }).slice(0, limit === null ? undefined : limit);

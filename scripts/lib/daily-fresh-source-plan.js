@@ -1,10 +1,8 @@
 'use strict';
 
-// The default API digest selects papers first, then seals an official arXiv
-// HTML/PDF source pair before *any* of those papers enter deep analysis.  This
-// is intentionally separate from historical publication runs and from
-// data/current: a daily source bundle is replayable evidence, not a cache that
-// can be rotated away with the batch checkpoint.
+// 默认 API 日更先筛选论文，然后在任何一篇进入深度分析之前，把官方 arXiv
+// HTML/PDF 来源对核验后保存下来。这套流程与历史发布运行、data/current 都分开：
+// 日更来源包是可以重新核对的证据，不是能随批次检查点一起轮换掉的缓存。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -135,9 +133,8 @@ function createDailyFreshSourcePlan({ batchDate, batchId, papers, rootDir = Conf
     const manifest = { contract: CONTRACT, version: VERSION, runId, batchDate, batchId, paperIds,
         sourceSetSha256, sourceExpectations };
     writePrivateAtomic(path.join(runDir, 'run.json'), manifest);
-    // Re-read the stored bytes through the same strict source-context checker
-    // that deep analysis will use. This blocks an altered/foreign run before
-    // any source request or model call.
+    // 用深度分析将要使用的那个严格来源上下文检查器，重新读取已保存的字节。
+    // 这样在发出任何来源请求或模型调用之前，就能挡住被改动或不属于本次运行的来源。
     const stored = readPrivateJson(path.join(runDir, 'run.json'), 'daily source run manifest');
     if (stableHash(stored) !== stableHash(manifest)) fail('daily source run manifest drifted');
     return { ...clone(manifest), runDir, sourcesDir: path.join(runDir, 'sources'),
@@ -259,11 +256,10 @@ function isPaperBoundToPlan(paper, plan) {
     } catch { return false; }
 }
 
-// Recovery commands deliberately do not create a source run and do not call
-// captureDailyFreshSources().  A recovery is allowed to use only the exact
-// PDF/TXT generation that the daily fetch phase sealed before analysis began.
-// Keeping this check here gives deep-only, reanalyze, batch and Reader refresh
-// one fail-closed definition of a compatible current bundle.
+// 恢复命令有意不创建来源运行，也不调用 captureDailyFreshSources()。恢复只能使用
+// 日更抓取阶段在分析开始前保存的那一组 PDF/TXT generation。把这个检查放在这里，
+// deep-only、reanalyze、batch 和 Reader 刷新就共用同一个「当前来源包是否可用」的
+// 判定，判定不通过就停下。
 function requireDailyFreshSourceRecoveryPlan(payload, { papers = null, label = 'daily recovery' } = {}) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
         fail(`${label} requires a canonical daily object envelope`);
@@ -284,9 +280,9 @@ function requireDailyFreshSourceRecoveryPlan(payload, { papers = null, label = '
         || ids.slice().sort().join('\0') !== plan.paperIds.join('\0')) {
         fail(`${label} papers do not exactly match the sealed daily source run`);
     }
-    // Read every generation now, before any state mutation or LLM/figure
-    // operation. readDailyFreshSource replays the manifest, TXT, PDF and
-    // runtime metadata and rejects missing, altered or incomplete bundles.
+    // 在改动任何状态、调用模型或处理图片之前，先把每个 generation 读一遍。
+    // readDailyFreshSource 会重新核对 manifest、TXT、PDF 和 runtime 元数据；
+    // 文件缺失、内容被改或包不完整都会被拒绝。
     for (const paper of rows) readDailyFreshSource(plan, paper);
     return plan;
 }
@@ -297,9 +293,8 @@ const GENERATED_FIELDS = Object.freeze([
     'imageManifest', 'freshRewriteProvenance', 'sourceSha256', 'sourceTextChars', 'sourceWarnings',
     'analysisSource', 'sourceId', 'sourceVersion', 'usedTextSha256', 'structuredArtifactsSha256', 'fullTextAvailable',
     'fullText', 'pdfText',
-    // These values are generated image-recovery state, not source metadata.
-    // Retaining them would let a new sealed daily source run select a URL from
-    // an earlier current analysis before it examines this run's fresh HTML.
+    // 这些值是图片恢复过程生成的状态，不是来源元数据。留着它们，新一轮已保存的
+    // 日更来源运行就可能在看本次新抓的 HTML 之前，先从上一轮当前分析里挑出一个 URL。
     'analysisRecoveryImageManifest', 'imageUrls', 'selectedImageUrls', 'allImageUrls'
 ]);
 
@@ -365,9 +360,8 @@ async function ephemeralReaderFigures(arxivId, figures, plan, options = {}) {
             }
             materialized.push(...current);
         } catch (error) {
-            // Share the authoritative Reader classification, including an
-            // official Figure that returns 404. Other source figures remain
-            // usable; transient network and server failures still stop here.
+            // 沿用权威的 Reader 分类结果，包括返回 404 的官方 Figure。其他来源图片
+            // 仍然可用；网络抖动和服务器故障依然会在这里中止。
             const permanentFigureError = require('../deep-analyzer.js')
                 .isPermanentApiReaderFigureFailure(error);
             if (!permanentFigureError) throw error;
@@ -427,10 +421,8 @@ function createDailyAnalyzeFn(plan, options = {}) {
     if (typeof analyze !== 'function') fail('daily analyzer is required');
     return async paper => {
         const result = await withDailyFreshPaperSource(plan, paper, () => analyze(paper), options);
-        // The direct context strips byte/path fields before output crosses the
-        // engine persistence boundary.  Keep this assertion immediately next
-        // to the daily integration so a later analyzer change cannot silently
-        // recreate data/current image caches for the default pipeline.
+        // 直改上下文会在输出跨过引擎持久化边界之前剥掉字节和路径字段。这条断言要紧挨着
+        // 日更集成放，这样以后改动分析器时，默认流程不会悄悄重建 data/current 下的图片缓存。
         return result;
     };
 }

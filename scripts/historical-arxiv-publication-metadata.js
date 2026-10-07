@@ -140,9 +140,9 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
                 source: reusable ? 'reused_official_atom' : 'live_official_atom',
                 manifestSha256: sealed.proof.manifestSha256 };
         } catch (error) {
-            // Only a typed, exhausted transient is a per-paper batch outcome.
-            // Integrity/configuration/programming failures still abort the run
-            // instead of being diluted into thousands of misleading failures.
+            // 只有标了 retryable、且已经重试到头的暂时性失败，才记成单篇论文的批次
+            // 结果。完整性、配置或编程错误仍要中断整轮运行，不能被摊薄成几千条误导
+            // 性的失败记录。
             if (error?.retryable !== true) throw error;
             return { paperId: `arxiv:${id}`, status: 'failed', retryable: true,
                 errorCode: String(error.code || 'ARXIV_METADATA_TRANSIENT'),

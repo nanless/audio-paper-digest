@@ -1,10 +1,9 @@
 'use strict';
 
-// Build mappings between frozen historical conference pages and retained local
-// sources using inventory metadata, titles in local metadata records, and title
-// fingerprints from page frontmatter. Daily ICML mappings require the catalog's
-// verified official-poster records. Historical page bodies and previously
-// generated analyses are not used as rewrite inputs.
+// 用清单元数据、本地元数据记录里的标题、以及页面 frontmatter 里的标题指纹，
+// 在冻结的历史会议页面和保留的本地来源之间建立对应关系。日更 ICML 的对应关系
+// 必须依赖目录里已核验的官方 poster 记录。历史页面正文和之前生成的分析结果
+// 都不作为重写输入。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -115,10 +114,9 @@ function readStableJson(filename, label, maxBytes = MAX_JSON_BYTES) {
 }
 
 function normalizeCurrentCatalog(value) {
-    // Use the catalog producer's validator to check the current scoped v5 format.
-    // Earlier collector records can use the same contract and version while
-    // omitting scopeBinding, including two input manifests, or retaining local
-    // arXiv writing sources. Do not accept those records as current catalogs.
+    // 用目录生产者的校验器检查当前的 scoped v5 格式。较早的采集记录可能用了同样的
+    // contract 和 version，却省略 scopeBinding、少带两份输入清单，或者仍然保留本地
+    // arXiv 写作来源。这些记录不能当作当前目录接受。
     let normalized;
     try {
         normalized = require('./historical-direct-rewrite-input-catalog.js').normalizeCatalog(value);
@@ -154,10 +152,9 @@ function normalizeInventory(value) {
     return { pageSetSha256: value.pageSetSha256, ledgerSha256: value.ledgerSha256, pages };
 }
 
-// Some historical Hugo titles omit complete inline TeX expressions, such as
-// `$\\tau$-Voice` becoming `-Voice`. Match either the original title fingerprint
-// or the fingerprint after this specific removal. This is not fuzzy title
-// matching; the caller must reject collisions between paper IDs.
+// 有些历史 Hugo 标题会丢掉完整的内联 TeX 表达式，比如 `$\tau$-Voice` 变成 `-Voice`。
+// 匹配时要么用原标题指纹，要么用按这条规则去掉之后算出的指纹。这不是模糊标题匹配；
+// 调用方必须拒绝论文 ID 之间的冲突。
 function getPageTitleFingerprints(title, label = 'conference metadata title') {
     const exactFingerprint = conference.titleFingerprint(title, label);
     const omittedInlineTex = title.replace(/\$(?:\\[\s\S]|[^$\\])*\$/gu, '');
@@ -254,9 +251,8 @@ function buildConferencePageMappings({ catalog, catalogFileSha256, inventory, bl
             || page.pageContentSha256 !== dailyPosterPageRecord.page.pageContentSha256 || stableHash(page.scope) !== stableHash(dailyPosterPageRecord.page.scope)) {
             fail('The daily ICML poster record does not match the frozen page inventory.');
         }
-        // Keep unavailable-PDF poster records in the catalog, but do not add
-        // them to page mappings or plans. They become eligible only when a
-        // later v2 manifest records the downloaded PDF as available.
+        // PDF 不可得的 poster 记录留在目录里，但不加入页面映射和计划。只有后续 v2 清单
+        // 把下载到的 PDF 记为 available，它们才具备资格。
         if (!knownConferenceIds.has(paperId)) continue;
         const mappedPages = pagesByPaperId.get(paperId) || [];
         if (mappedPages.some(item => item.pageKey === page.pageKey)) fail(`${page.pageKey}: the page has already been assigned to this paper.`);

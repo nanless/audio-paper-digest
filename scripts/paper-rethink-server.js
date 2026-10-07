@@ -2,11 +2,10 @@
 'use strict';
 
 /**
- * Local-only companion for re-reading a paper with the user's LLM account.
+ * 只在本机运行的助手，用调用方自己的 LLM 账号重读一篇论文。
  *
- * The public blog must only open /ui in a new tab. It must not probe this
- * server or obtain the per-process session token. Provider credentials stay
- * in this process for one request and are never persisted or logged here.
+ * 公开博客只允许在新标签页里打开 /ui，不得探测这个服务，也不得拿到本进程的
+ * session token。供应商凭证只在这一个进程里存活一次请求，不落盘，也不写日志。
  */
 
 const crypto = require('node:crypto');
@@ -101,14 +100,13 @@ function hasDotSegment(value) {
 }
 
 /**
- * Canonical endpoint policy:
- * - HTTPS only; credentials, query, fragment, non-443 ports are forbidden.
- * - IP literals and local/single-label hostnames are forbidden.
- * - ambiguous path encodings and dot segments fail closed.
+ * 规范端点地址的规则：
+ * - 只允许 HTTPS；禁止凭证、query、fragment 和非 443 端口。
+ * - 禁止 IP 字面量和本地/单段主机名。
+ * - 路径编码有歧义、含点段时一律拒绝。
  *
- * Production requests are additionally restricted to an exact operator-owned
- * allowlist, so an HTTP caller cannot turn the companion into an intranet/DNS
- * rebinding probe.
+ * 生产请求还要落在运维明确拥有的白名单里，HTTP 调用方就没法把这个助手当成
+ * 探测内网或做 DNS 重绑定的跳板。
  */
 function normalizeCanonicalEndpoint(value) {
     const raw = normalizedString(value, 'endpoint', { maxChars: 2048 });
@@ -259,7 +257,7 @@ function parseUiPrefill(url, { blogOrigin, blogBasePath }) {
     ]);
     for (const key of new Set(url.searchParams.keys())) {
         if (!allowed.has(key) || url.searchParams.getAll(key).length !== 1) {
-            // Never echo an unknown name/value: it may itself contain a key.
+            // 不把未知的参数名或值回显出去：它本身可能就带着密钥。
             fail('UI_PREFILL_INVALID', 'UI query 含未知或重复参数');
         }
     }
@@ -552,8 +550,7 @@ async function loadUiPrefill(url, options) {
             payload
         );
     } catch (_) {
-        // Keep the local UI usable for manual paste without exposing network,
-        // parser or remote response details.
+        // 让本地界面仍能用手动粘贴，同时不泄露网络、解析器或远端响应的细节。
         return finalizeUiPrefill(
             prefill,
             null,
@@ -1258,8 +1255,8 @@ function createPaperRethinkServer(options = {}) {
     let pdfWindowStartedAt = Date.now();
     let pdfRequestsInWindow = 0;
     let activePdfDownloads = 0;
-    // Invalid configured endpoints still fail closed. An absent model setup
-    // must not disable the independent PDF and Zotero workflows.
+    // 配置里的端点不合法时仍然直接失败。没有配置模型，不该连带把独立的 PDF 和
+    // Zotero 流程一起停掉。
     resolveAllowedEndpoints(env, options.allowedEndpoints, { allowEmpty: true });
 
     const server = http.createServer({ maxHeaderSize: 48 * 1024 }, async (req, res) => {
@@ -1269,8 +1266,8 @@ function createPaperRethinkServer(options = {}) {
             if (url.hash || (!queryAllowed && url.search)) {
                 fail('NOT_FOUND', '未找到该路径', 404);
             }
-            // /ui embeds the CSRF token. The public blog may navigate here, but
-            // its scripts must never be able to CORS-fetch and read the HTML.
+            // /ui 内嵌了 CSRF token。公开博客可以跳转到这里，但它加载的脚本绝不能
+            // 通过 CORS 读到这段 HTML。
             if (url.pathname === '/ui' && req.headers.origin
                 && !localUiOrigins.has(req.headers.origin)) {
                 fail('ORIGIN_FORBIDDEN', '只有本机 UI origin 可以读取 UI 文档', 403);
@@ -1500,7 +1497,7 @@ async function main() {
 
 if (require.main === module) {
     main().catch(error => {
-        // Startup errors are configuration-only; never include credentials.
+        // 启动错误只可能来自配置，绝不能把凭证带进去。
         const message = error?.code === 'EADDRINUSE'
             ? `端口 ${DEFAULT_PORT} 已被使用。若助手已启动，请直接打开 http://${DEFAULT_HOST}:${DEFAULT_PORT}/ui；否则检查占用该端口的进程。`
             : publicUpstreamError(error).message;

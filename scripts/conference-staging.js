@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// Creates an immutable, filter-bound import manifest from a reviewed local
-// extraction specification.  It does not import/copy files, use the network,
-// or invoke an LLM.
+// 从一份已审阅的本地提取规格生成不可变、绑定筛选结果的导入清单。它不导入或复制
+// 文件，不用网络，也不调用 LLM。
 
 const { requireExternalRuntime } = require('./env-loader.js');
 const Config = require('./config.js');

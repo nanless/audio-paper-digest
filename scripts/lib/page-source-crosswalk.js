@@ -1,7 +1,7 @@
 'use strict';
 
-// Source-identity crosswalk. Verified assignments require a replayed,
-// authenticated source or identity authority; titles are never identity evidence.
+// 来源身份对应表。verified 分配必须引用重新核对过的、已认证的来源或身份授权；
+// 标题从不作为身份证据。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -91,11 +91,9 @@ const MAX_STATE_BYTES = 64 * 1024 * 1024;
 const MAX_DECISION_BYTES = 1024 * 1024;
 const MAX_LOCK_OWNER_BYTES = 64 * 1024;
 const LOCK_STALE_MS = 2 * 60 * 60 * 1000;
-// Opaque, identity-checked recovery policies.  Only the two retained-local
-// crawler CLIs receive these values; an arbitrary string or a newly created
-// Symbol cannot opt a generic crosswalk mutation into immediate reclaim.
-// They exist solely to clear an interrupted same-host local batch before its
-// normal two-hour lease has elapsed.
+// 不透明、带身份检查的恢复策略。只有两个保留本地爬虫的 CLI 会拿到这些值；
+// 任意字符串或新建的 Symbol 都不能让一次普通 crosswalk 改动获得立即回收的资格。
+// 它们只用于在正常两小时租约到期前，清掉本机中断的本地批次。
 const HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY = Symbol(
     'historical-local-crawl-batch-local-dead-owner-recovery-v1'
 );
@@ -184,8 +182,8 @@ function pythonJson(value, indent = 0) {
 }
 const stableHash = value => sha256(pythonJson(canonical(value)));
 function prettyBytes(value) {
-    // Python json.dumps(sort_keys=True, indent=2, ensure_ascii=False) uses the
-    // same two-space object/array indentation for the JSON values admitted here.
+    // Python 的 json.dumps(sort_keys=True, indent=2, ensure_ascii=False) 对这里接受的
+    // JSON 值也用同样的两空格对象/数组缩进。
     return Buffer.from(`${pythonJson(canonical(value), 2)}\n`, 'utf8');
 }
 function exact(value, fields, label) {
@@ -1316,10 +1314,9 @@ function processLiveness(record) {
 function localCrawlBatchMayImmediatelyReclaim(snapshot, options = {}) {
     if (![HISTORICAL_LOCAL_CRAWL_BATCH_LOCK_RECOVERY,
         HISTORICAL_CONFERENCE_CRAWL_BATCH_LOCK_RECOVERY].includes(options.recoveryPolicy)) return false;
-    // readLockDirectory validates the exact owner contract, canonical bytes,
-    // self-SHA and the lock directory before this capability can take effect.
-    // Immediate recovery is intentionally unavailable for remote, live,
-    // permission-indeterminate, malformed or empty locks.
+    // readLockDirectory 会先校验准确的 owner 契约、规范字节、自哈希和锁目录，
+    // 这个能力对象才可能生效。远端、仍存活、权限不明、格式错误或空的锁，有意
+    // 都不允许立即恢复。
     return snapshot?.record?.hostname === os.hostname()
         && processLiveness(snapshot.record) === 'dead';
 }
@@ -1436,10 +1433,9 @@ function releaseLock(handle) {
     removeVerifiedLockDirectory(snapshot, 'crosswalk operation lock');
     ACTIVE_LOCK_HANDLES.delete(handle); LOCK_HANDLES.delete(handle); LOCK_HANDLE_DATA.delete(handle);
     if (ACTIVE_LOCK_HANDLES.size === 0 && !handlingLockSignal) {
-        // A signal delivered during a synchronous fsync/rename is dispatched
-        // only after the current JS stack unwinds. Keep handlers through one
-        // turn so that the completed atomic write and its finally release are
-        // followed by the expected 128+signal exit instead of losing SIGINT.
+        // 在同步 fsync/rename 期间送达的信号，要等当前 JS 栈退完才会派发。处理函数
+        // 多留一轮，这样已完成的原子写入和它的 finally 释放之后，能按预期以 128+signal
+        // 退出，而不是丢掉 SIGINT。
         setImmediate(() => {
             if (ACTIVE_LOCK_HANDLES.size === 0 && !handlingLockSignal) uninstallLockSignalHandlers();
         });

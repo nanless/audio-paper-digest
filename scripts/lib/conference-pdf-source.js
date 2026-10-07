@@ -1,9 +1,8 @@
 'use strict';
 
-// This module deliberately knows nothing about a conference ledger, an LLM, or
-// a network.  A caller gives it a ledger record that has already been matched
-// and verified; it turns the local, immutable PDF and optional local extraction
-// output into a small descriptor that can be checked again before analysis.
+// 这个模块有意不认识会议 ledger、LLM 和网络。调用方传入一条已经匹配并核验过的
+// ledger 记录，它把本地不可变的 PDF 和可选的本地抽取结果，整理成一个可以在分析前
+// 再核对一次的小描述对象。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -85,8 +84,8 @@ function requireRelativePdfPath(relativePath) {
         || path.isAbsolute(relativePath) || path.win32.isAbsolute(relativePath)) {
         throw fail('PDF path must be a non-empty relative path');
     }
-    // Paths are stored in ledgers using POSIX separators. Refusing both kinds of
-    // dot component also makes a ledger portable across Windows and POSIX hosts.
+    // ledger 里的路径统一用 POSIX 分隔符保存。两种点分量都拒绝，ledger 才能在 Windows
+    // 和 POSIX 主机之间通用。
     if (relativePath.includes('\\') || relativePath.split('/').some(part => !part || part === '.' || part === '..')) {
         throw fail('PDF path cannot contain traversal or ambiguous components');
     }
@@ -176,9 +175,8 @@ function readVerifiedPdf(cacheRoot, relativePath, maxBytes) {
     try {
         try { fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); }
         catch (error) {
-            // The lstat/open pair is intentionally redundant: lstat gives a
-            // useful deterministic error, while O_NOFOLLOW closes the swap
-            // race between it and open.
+            // lstat 与 open 这一对有意重复：lstat 给出确定可复现的错误，O_NOFOLLOW 则
+            // 堵住两者之间被换文件的窗口。
             if (error.code === 'ELOOP') throw fail('PDF must be a regular, non-linked cache file');
             throw error;
         }
@@ -254,8 +252,8 @@ function normalizeExtraction(value) {
             formulaTeX: { available: false, reason: typeof formulaTeX.reason === 'string'
                 ? formulaTeX.reason : 'no-reliable-structured-tex' } };
     }
-    // PDF text is not TeX. A later reader may only render formulae when an
-    // extractor supplied a replayable, explicitly reliable TeX structure.
+    // PDF 文本不是 TeX。只有当抽取器给出了可重新核对、且明确可靠的 TeX 结构时，
+    // 后续 Reader 才可以渲染公式。
     if (formulaTeX.reliability !== 'reliable' || !Array.isArray(formulaTeX.formulas)
         || !formulaTeX.formulas.length || structuredArtifacts === null) {
         throw fail('PDF formula TeX cannot be available without reliable structured TeX artifacts');
@@ -307,10 +305,9 @@ function signedDescriptor(body) {
 }
 
 /**
- * Inspect a verified local-PDF record without writing anything. `extractPdf`,
- * if supplied, is a synchronous local extractor. It receives a copy of bytes
- * and may return text/structured artifacts; absent extractors are valid and
- * result in explicit unavailable fields rather than an invented full text.
+ * 只查看一条已核验的本地 PDF 记录，不写任何东西。`extractPdf` 如果传入，应当是
+ * 同步的本地抽取器；它拿到字节的副本，可以返回文本或结构化产物。不传抽取器也是
+ * 合法的，此时相关字段明确写成不可得，而不是编造一份全文。
  */
 function buildSource({ cacheRoot, record, maxBytes, extractPdf, ledgerBinding = null } = {}) {
     const root = requireSafeDirectory(cacheRoot);
@@ -346,9 +343,8 @@ function resolveVerifiedLedgerMember({ sourceRoot, ledgerHandle, identityKey }) 
     if (member.status.state !== 'verified') throw fail('Conference PDF source requires a verified ledger member');
     const root = requireSafeDirectory(sourceRoot);
     const binding = ledgerBindingForMember(member, ledgerSha256);
-    // Verify all four ledger-bound artifacts at admission/replay time.  The
-    // PDF is also re-read by build/replay below; this deliberate redundancy
-    // closes substitution between the ledger and the adapter descriptor.
+    // 在准入和重新核对时都检查 ledger 绑定的四份产物。下面的 build/replay 还会再读一次
+    // PDF；这处有意重复，堵住 ledger 与适配器描述对象之间被替换的可能。
     readVerifiedArtifact(root, member.metadataFile, member.metadataSha256, 'Conference metadata artifact');
     readVerifiedArtifact(root, member.textFile, member.textSha256, 'Conference text artifact');
     readVerifiedArtifact(root, member.artifactsFile, member.artifactsSha256, 'Conference structured-artifacts file');
@@ -356,9 +352,8 @@ function resolveVerifiedLedgerMember({ sourceRoot, ledgerHandle, identityKey }) 
 }
 
 /**
- * Ledger-only admission bridge.  It never accepts caller-controlled PDF
- * records: the PDF location, identity, and all source hashes come from the
- * supplied already-loaded ledger member.
+ * 只走 ledger 的准入桥。它从不接受调用方自己给的 PDF 记录：PDF 位置、身份和所有
+ * 来源哈希都来自传入的、已加载的 ledger 成员。
  */
 function buildConferencePdfSourceFromLedger({ sourceRoot, ledgerHandle, identityKey, maxBytes, extractPdf } = {}) {
     const checked = resolveVerifiedLedgerMember({ sourceRoot, ledgerHandle, identityKey });
@@ -371,7 +366,7 @@ function buildConferencePdfSourceFromLedger({ sourceRoot, ledgerHandle, identity
     });
 }
 
-/** Re-read the immutable PDF and prove a previously persisted descriptor/artifacts still replay it. */
+/** 重新读取不可变的 PDF，确认之前保存的描述对象和产物仍然能对上。 */
 function validateDescriptorBody(body, expectedLedgerBinding) {
     const baseFields = [
         'contract', 'version', 'kind', 'identity', 'pdfRelativePath', 'pdfSha256', 'pdfBytes',
@@ -441,9 +436,8 @@ function replayConferencePdfSource({ cacheRoot, record, descriptor, text = null,
 }
 
 /**
- * Replay only through the same loaded ledger SHA and canonical identity used
- * for admission.  A ledger-bound descriptor is intentionally not replayable
- * through the record-only API above.
+ * 只按准入时用过的同一份 ledger SHA 和规范身份重新核对。绑定 ledger 的描述对象
+ * 有意不允许走上面那个只认记录对象的 API。
  */
 function replayConferencePdfSourceFromLedger({ sourceRoot, ledgerHandle, identityKey, descriptor, text = null, structuredArtifacts = null, formulaTeX = null, maxBytes } = {}) {
     const checked = resolveVerifiedLedgerMember({ sourceRoot, ledgerHandle, identityKey });
@@ -468,6 +462,6 @@ module.exports = {
     replayConferencePdfSource,
     buildConferencePdfSourceFromLedger,
     replayConferencePdfSourceFromLedger,
-    // Exported for ledger adapters to preflight records without reading a PDF.
+    // 供 ledger 适配器在不读 PDF 的情况下预检记录。
     requireRecord,
 };

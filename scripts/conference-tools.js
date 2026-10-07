@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// Read-only maintenance commands for private conference source state. They
-// intentionally accept only a direct JSON filename below configured runtime
-// roots; importing a PDF or starting analysis is a separate explicit action.
+// 私有会议来源状态的只读维护命令。它们有意只接受配置的运行根目录下的直接 JSON
+// 文件名；导入 PDF 或启动分析是另外的显式操作。
 
 const fs = require('node:fs');
 const path = require('node:path');

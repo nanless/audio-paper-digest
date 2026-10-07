@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// Local source collection only.  This command has no crosswalk, network, LLM,
-// rewriting, publication, or blog-page dependency.
+// 只做本地来源收集。这条命令不依赖来源对照、网络、LLM、重写、发布或博客页面。
 
 const path = require('node:path');
 const { requireExternalRuntime } = require('./env-loader.js');

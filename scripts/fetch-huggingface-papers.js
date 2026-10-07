@@ -334,7 +334,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
 
     console.log(`📥 从 HuggingFace Papers 获取过去 ${days} 天的论文 (>= ${cutoffStr})...`);
 
-    const merged = new Map(); // paper_id -> paper
+    const merged = new Map(); // paper_id -> 论文对象
     const health = {
         source: 'huggingface',
         attempts: 0,

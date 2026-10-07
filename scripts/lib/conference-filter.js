@@ -1,8 +1,7 @@
 'use strict';
 
-// Conference filtering state and authenticated production runner.  It never
-// reads data/current or publishes; model traffic uses the captured common LLM
-// boundary only after a durable intent has been written under the filter lock.
+// 会议筛选的状态和带认证的生产运行器。它从不读取 data/current，也不发布；
+// 只有在筛选锁内写下持久意图之后，模型流量才走已捕获的公共 LLM 边界。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -62,9 +61,8 @@ const KEYWORD_PREFILTER_CHECKPOINT_INTERVAL = 128;
 const MAX_LOCK_OWNER_BYTES = 64 * 1024;
 const LOCK_HANDLES = new WeakSet();
 const LOCK_HANDLE_DATA = new WeakMap();
-// The conference path intentionally uses the exact first fenced block consumed
-// by the daily digest. Keeping the placeholders here makes its SHA independent
-// of a particular paper while every durable request preserves the rendered text.
+// 会议路径有意使用日更 digest 消费的同一个首个围栏块。占位符放在这里，
+// 它的 SHA 就不依赖某一篇具体论文，而每次持久请求仍保留渲染后的文本。
 const LLM_FILTER_PROMPT = utilsApi.loadPrompt('prompts/filter.md', {
     title: '{title}', abstract: '{abstract}', categories: '{categories}'
 });
@@ -119,13 +117,11 @@ function exact(value, fields, label) {
 function sha256(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
 const LLM_FILTER_POLICY_SHA256 = sha256(Buffer.from(LLM_FILTER_POLICY, 'utf8'));
 const LLM_FILTER_PROMPT_SHA256 = sha256(Buffer.from(LLM_FILTER_PROMPT, 'utf8'));
-// The conference fallback map is deliberately included in the policy digest.
-// Keep the policy digest of filters prepared before each conference-label
-// expansion accepted during recovery; their durable state and request
-// envelopes still bind the exact policy they were prepared with. This is a
-// compatibility window, not permission to accept arbitrary policy hashes.
-// '382af440…' = policy before interspeech-2026 was added to the core-audio
-// labels; '11b277a5…' = policy before the original 2026 conference labels.
+// 会议兜底映射表有意算进策略摘要。恢复期间要接受每次会议标签扩充之前准备好的
+// 策略摘要：它们的持久状态和请求外壳仍然绑定当时那份策略。这是一个兼容窗口，
+// 不是允许接受任意策略哈希。
+// '382af440…' = interspeech-2026 加入 core-audio 标签之前的策略；
+// '11b277a5…' = 最初的 2026 会议标签之前的策略。
 const LEGACY_FILTER_POLICY_SHA256_LIST = Object.freeze([
     '382af4406aaf0f4c8e49f22cdacb9ab215c4ab0563903b49930cb3ed8cf9e096',
     '11b277a5fe01498a8b5482365cd86f21bf3ed043900745c2fc7943623c4ed275'
@@ -205,10 +201,9 @@ function catalogFromDiscoveryHandle(handle) {
 function discoveryDocumentToFilterCatalog(value, { documentSha256 } = {}) {
     const discoveryFields = ['contract', 'version', 'adapter', 'conference', 'metadataSnapshot', 'pdfRoot',
         'pdfCatalogSha256', 'pdfCatalog', 'members', 'memberSetSha256'];
-    // New official-proceedings discoveries may carry the immutable acquisition
-    // receipt binding.  loadDiscoveryHandle() has already replayed and
-    // validated that optional field; the filter catalog must preserve the
-    // document hash without rejecting the authenticated extension.
+    // 新抓到的官方论文集可能带不可变的获取凭证绑定。loadDiscoveryHandle() 已经
+    // 重新核对并校验过这个可选字段；筛选目录要保留文档哈希，同时不要拒绝这个
+    // 已认证的扩展。
     if (Object.hasOwn(value, 'acquisitionReceipt')) discoveryFields.push('acquisitionReceipt');
     exact(value, discoveryFields, 'discovery document');
     if (value.contract !== discoveryApi.CONTRACT || value.version !== discoveryApi.VERSION
@@ -611,19 +606,17 @@ function stateDigest(state) {
         attempts: state.attempts.map(({ nextStateSha256: _next, ...attempt }) => attempt) });
 }
 
-// Produces byte-for-byte the same canonical JSON that stateDigest() hashes,
-// while retaining the append-only attempt SHA prefix.  This avoids rebuilding
-// and recursively sorting the complete attempt history at every CAS step.
+// 生成的规范 JSON 与 stateDigest() 哈希的对象逐字节一致，同时保留只追加的尝试
+// SHA 前缀。这样每走一步 CAS 都不用重建并递归排序完整的尝试历史。
 class StateDigestChain {
     constructor(state) {
         this.filterIdJson = stableJson(state.filterId);
         this.createdAtJson = stableJson(state.createdAt);
         this.inputJson = stableJson(state.input);
-        // stableJson() uses the ECMAScript default UTF-16 key ordering.  The
-        // persisted decision object is intentionally localeCompare-sorted for
-        // human iteration, which is not equivalent for mixed case/punctuation
-        // IDs (for example CVPR's DRiffusion vs Demo2Tutorial).  Digest entries
-        // must therefore be independently canonical-sorted here.
+        // stableJson() 按 ECMAScript 默认的 UTF-16 键顺序排列。持久化的 decision
+        // 对象有意用 localeCompare 排序，方便人阅读；对大小写和标点混用的 ID
+        // （例如 CVPR 的 DRiffusion 与 Demo2Tutorial）两者并不等价。所以这里的
+        // 摘要条目必须另外按规范顺序排一遍。
         this.paperIds = Object.keys(state.decisions).sort();
         this.decisionIndex = new Map(this.paperIds.map((paperId, index) => [paperId, index]));
         this.decisionEntries = this.paperIds.map(paperId => this.decisionEntry(paperId, state.decisions[paperId]));
@@ -1208,10 +1201,9 @@ function ensureSelectionReceipt(directory, state) {
 }
 
 
-// Used only while the production runner holds the authenticated operation lock
-// and advances a state that was fully replayed at session start.  Keeping this
-// separate from the public helper prevents a second O(history * candidates)
-// validation at the final item without changing the receipt bytes.
+// 只在生产运行器持有已认证操作锁、并且推进的是会话开始时完整重新核对过的状态时使用。
+// 与公开辅助函数分开，可以在最后一项上省掉一次 O(history * candidates) 的校验，
+// 同时不改动凭证字节。
 function ensureSelectionReceiptFromCheckedState(directory, checked) {
     if (checked.completion.status !== 'complete') return null;
     const receipt = selectionReceiptFromCheckedState(checked);
@@ -1358,8 +1350,7 @@ function parseLlmDecisionText(source) {
     if (typeof source !== 'string' || !source.trim()) fail('LLM response text must contain a decision');
     source = source.trim();
     if (Buffer.byteLength(source, 'utf8') > 64 * 1024) fail('LLM response text exceeds the decision limit');
-    // Preserve the old conference JSON vocabulary for already-paid responses,
-    // then use the daily digest parser for all current responses.
+    // 已经付过费的响应仍按旧的会议 JSON 词表解析；当前所有响应都走日更 digest 的解析器。
     try {
         rejectDuplicateJsonKeys(source, 'LLM response');
         const value = JSON.parse(source);

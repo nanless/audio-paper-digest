@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// Controlled local CLI for preparing, inspecting, and applying already-made
-// conference filter decisions. No command invokes a model or network service.
+// 受控的本地 CLI，用来准备、查看和应用已经做出的会议筛选决定。没有任何命令会调用
+// 模型或网络服务。
 
 const { requireExternalRuntime } = require('./env-loader.js');
 const Config = require('./config.js');

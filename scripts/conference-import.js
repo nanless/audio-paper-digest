@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// Production conference import accepts only a staged manifest plus its
-// authenticated receipt and replays the filter/discovery proof. Low-level
-// manifest import remains a library helper for isolated tests, not a CLI route.
+// 生产环境的会议导入只接受一份暂存清单和它的已核验凭证，并重新核对筛选与发现的
+// 证明。底层的清单导入仍只是给隔离测试用的库函数，不是 CLI 入口。
 
 const fs = require('node:fs');
 const path = require('node:path');

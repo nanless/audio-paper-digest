@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// Deliberately retained as a loud compatibility endpoint. Retained local
-// crawler data is direct-route input, never a production crosswalk authority.
+// 有意保留这个会明确报错的兼容入口。留存的本地爬虫数据是直通路线的输入，绝不作为
+// 生产环境来源对照的依据。
 const { requireExternalRuntime } = require('./env-loader.js');
 const RETIRED_MESSAGE = 'history:archive-crawl-batch is retired: local crawler data must use history:direct-inputs and history:direct-plan; it cannot mutate a crosswalk';
 function parseArgs() { throw new Error(RETIRED_MESSAGE); }

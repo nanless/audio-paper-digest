@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// Explicit, offline candidate discovery. This command never promotes a match
-// to verified. Apply writes only direct names under configured runtime roots.
+// 显式的离线候选发现。这条命令绝不会把匹配结果提升为「已核验」。Apply 只写配置的
+// 运行根目录下的直接文件名。
 
 const fs = require('node:fs');
 const path = require('node:path');

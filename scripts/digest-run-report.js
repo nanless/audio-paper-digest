@@ -189,9 +189,8 @@ function resolveDigestRuntimeSnapshot(
     if (snapshotMatchesDate(current, targetDate, kind)) {
         return { value: current, source: 'current', path: currentPath };
     }
-    // Today's status must describe today's mutable runtime state. Falling back
-    // to a stale archive would conceal a missing, corrupt, or rolled-forward
-    // current file. Future dates are equally ineligible for historical reuse.
+    // 当天的状态必须反映当天可变的运行数据。退回旧归档会把 current 文件缺失、
+    // 损坏或已被滚到后一天的情况掩盖掉。未来日期同样不能拿历史数据来顶。
     if (targetDate >= today) {
         return { value: null, source: 'missing', path: currentPath };
     }

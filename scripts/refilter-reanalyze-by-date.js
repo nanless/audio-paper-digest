@@ -241,9 +241,9 @@ function saveSuccessfulResultsById(resultFile, attemptResults, metadata = {}) {
             .map(item => normalizedId(item))
             .filter(Boolean));
         const allMergedPapers = mergePapersById(existingPapers, validatedResults, { preserveSuccessfulAnalysis: true });
-        // resultFile 是本次重筛批次的 canonical 集合。逐篇运行期间先保留旧
-        // 结果用于失败恢复；只有收尾时才按本轮明确入选的 expectedIds 收敛，
-        // 防止已被重新判为不相关的旧成功论文继续进入博客发布。
+        // resultFile 是本次重筛批次的正式集合。逐篇运行期间先保留旧结果用于失败
+        // 恢复；只有收尾时才按本轮明确入选的 expectedIds 收敛，防止已被重新判为
+        // 不相关的旧成功论文继续进入博客发布。
         const mergedPapers = shouldFinalize
             ? allMergedPapers.filter(paper => expectedIds.has(normalizedId(paper)))
             : allMergedPapers;
@@ -444,7 +444,7 @@ async function main(targetDate, options = {}) {
     });
 
     const allResults = batchResult.results || [];
-    // analyzeBatch 内部 unwrap 了 { success, result, parsed } → 直接返回 paper 对象
+    // analyzeBatch 内部已经把 { success, result, parsed } 拆开了 → 直接返回 paper 对象
     // 成功/失败统计从 stats 获取
     const attemptStatus = getAnalysisRunStatus(batchResult.stats, batchResult.stats?.failed || 0);
     console.log(`${attemptStatus === 'complete' ? '✅' : '⚠️'} 分析状态: ${attemptStatus} | 成功 ${batchResult.stats?.success ?? allResults.length} | 失败 ${batchResult.stats?.failed || 0}`);

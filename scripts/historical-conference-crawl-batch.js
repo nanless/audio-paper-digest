@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// Conference metadata/PDF is direct-route input. A legacy title or metadata
-// matcher must never become a production crosswalk mutation entrypoint.
+// 会议元数据和 PDF 是直通路线的输入。旧的标题或元数据匹配器绝不能变成生产环境
+// 改动来源对照的入口。
 const { requireExternalRuntime } = require('./env-loader.js');
 const RETIRED_MESSAGE = 'history:conference-crawl-batch is retired: use history:conference-local-sources, history:conference-projections, and history:direct-plan; it cannot mutate a crosswalk';
 function parseArgs() { throw new Error(RETIRED_MESSAGE); }

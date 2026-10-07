@@ -1,9 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// Safe operator CLI for a conference execution. Every command replays the
-// complete upstream plan authority; it cannot import sources, invoke a model,
-// write `data/current`, or publish anything.
+// 会议执行的安全运维 CLI。每条命令都会重新核对上游计划的完整授权；它不能导入
+// 来源、调用模型、写 `data/current`，也不能发布任何东西。
 
 const path = require('node:path');
 const { requireExternalRuntime } = require('./env-loader.js');

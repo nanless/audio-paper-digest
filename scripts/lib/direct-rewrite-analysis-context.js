@@ -1,10 +1,9 @@
 'use strict';
 
-// The historical direct runner supplies a source object that was constructed
-// from either the just-captured arXiv generation or a retained conference PDF.
-// It deliberately has a separate AsyncLocalStorage scope from the legacy
-// fresh-run cache: direct runs must not read data/current, an old analysis, or
-// a previously materialized Reader asset.
+// 历史直改的运行器传入的来源对象，要么来自刚抓取的 arXiv generation，要么来自
+// 保留的会议 PDF。它单独占用一个 AsyncLocalStorage 作用域，与旧的 fresh-run
+// 缓存分开：直改运行不得读取 data/current、旧分析结果，也不得读取之前生成过的
+// Reader 素材。
 
 const { AsyncLocalStorage } = require('node:async_hooks');
 const crypto = require('node:crypto');
@@ -15,9 +14,8 @@ const ARXIV = /^arxiv:\d{4}\.\d{4,5}$/;
 const SHA = /^[a-f0-9]{64}$/;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const PROVENANCE_CONTRACT = 'fresh-source-analysis-v1';
-// This contract makes the absence of a stored Figure asset intentional and
-// reviewable.  A renderer must never infer it from a missing cachePath: older
-// Reader records retain their cache-backed publication contract.
+// 这份契约把「没有保存 Figure 素材」写成有意为之、可供审查的状态。渲染器不能
+// 因为 cachePath 缺失就断定素材不存在：较早的 Reader 记录仍沿用带缓存的发布契约。
 const EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT = 'ephemeral-no-persisted-figure-assets-v1';
 const CONFERENCE = /^conference:[a-z0-9]+(?:-[a-z0-9]+)*:\d{4}:[a-z0-9-]+:[^:]+$/;
 
@@ -76,8 +74,8 @@ function withDirectRewriteAnalysisSource(identity, callback) {
     const id = paperId(identity.paperId);
     if (!['arxiv-fresh-fetch', 'conference-local-pdf'].includes(identity.route)) fail('source route is invalid');
     const sourceDetails = validateSource(identity.sourceDetails, id);
-    // Source-scope unit tests may supply a snapshot hash to exercise nested
-    // Reader paths. Only a run ID activates a persistence-capable proof.
+    // 来源作用域的单元测试可以传快照哈希，用来跑通嵌套的 Reader 路径。
+    // 只有带 run ID 时，证明才具备持久化能力。
     const hasRunId = identity.runId !== undefined;
     if (hasRunId && (!UUID.test(String(identity.runId || '')) || !SHA.test(String(identity.sourceSha256 || ''))
         || !SHA.test(String(identity.structuredArtifactsSha256 || ''))
@@ -120,23 +118,19 @@ function withDirectRewriteAnalysisSource(identity, callback) {
     }
     const context = Object.freeze({ paperId: id, sourceDetails: Object.freeze(sourceDetails), readerAttemptsDir,
         materializeReaderFigures: identity.materializeReaderFigures || null,
-        // Historical direct execution persists the completed Reader stage
-        // before retiring a recoverable accepted draft. Daily/legacy callers
-        // keep their existing immediate-retirement behaviour unless they opt
-        // into the same transaction explicitly.
+        // 历史直改会先把完成的 Reader 阶段落盘，再注销可恢复的已接受草稿。
+        // 日更和旧调用方仍按原来的方式立即注销，除非它们显式加入同一事务。
         deferReaderCandidateCommit: identity.deferReaderCandidateCommit === true,
-        // A new outer historical retry after an incomplete analysis gets a
-        // fresh Reader recovery identity. The previous failed candidate is
-        // intentionally retained for audit/replay, but must not exhaust the
-        // new bounded Reader attempt before it sends a request.
+        // 分析不完整后，外层历史重试会拿到一个新的 Reader 恢复身份。上一次失败的
+        // 候选记录有意保留，供审查和重新核对；但它不能在新一轮 Reader 尝试发出
+        // 请求之前，就把这次有界尝试的额度耗光。
         ...(identity.readerRetryEpoch !== undefined
             ? { readerRetryEpoch: identity.readerRetryEpoch } : {}),
-        // Dual-model primary analysis must use this direct-only downloader.
-        // It may return bytes/base64 but can never return data/current cache
-        // paths, and remains scoped to this execution's AsyncLocal context.
+        // 双模型主分析必须走这个直改专用下载器。它可以返回字节或 base64，但绝不会
+        // 返回 data/current 下的缓存路径，并且始终限定在当前执行的 AsyncLocal 作用域内。
         downloadPrimaryImage: identity.downloadPrimaryImage || null,
-        // Raw bytes are held only by this AsyncLocalStorage scope. The runner
-        // strips them before every JSON persistence boundary.
+        // 原始字节只留在这个 AsyncLocalStorage 作用域里。运行器在每次写 JSON 之前
+        // 都会把它们去掉。
         supplementaryReaderImages: Object.freeze(supplementaryImages.map(image => Object.freeze({ ...image, rawBytes: Buffer.from(image.rawBytes) }))),
         sourceSnapshotSha256: String(identity.sourceSnapshotSha256 || ''),
         ...(hasRunId ? { runId: identity.runId, sourceSha256: identity.sourceSha256,
@@ -207,9 +201,8 @@ function attachDirectSourceRecord(paper, manifest, source) {
 
 function stripEphemeralFigureFields(figure) {
     if (!figure || typeof figure !== 'object' || Array.isArray(figure)) fail('Reader figure is malformed');
-    // assetSha256 is an integrity receipt for pixels observed during this
-    // invocation, not a persisted asset locator. Keep it after removing all
-    // paths/bytes, but never persist an unvalidated value under that name.
+    // assetSha256 记录的是本次调用中看到的像素的完整性，不是可持久化的素材定位符。
+    // 删掉所有路径和字节后要保留它，但不能把未校验的值写进这个字段。
     if (figure.assetSha256 !== undefined && !SHA.test(String(figure.assetSha256 || ''))) {
         fail('Reader figure evidence asset SHA is invalid');
     }

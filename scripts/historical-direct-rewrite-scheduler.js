@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// This entrypoint only prepares source queues.  It never invokes analysis,
-// Reader, rendering, crosswalk mutation, blog generation, or publication.
+// 这个入口只准备来源队列。它绝不触发分析、Reader、渲染、来源对照改动、博客生成
+// 或发布。
 const path = require('node:path');
 const { requireExternalRuntime } = require('./env-loader.js');
 const Config = require('./config.js');
