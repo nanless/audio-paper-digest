@@ -54,6 +54,10 @@ const PROMPT_FILE_VERSIONS = Object.freeze({
     tagSelection: Object.freeze({
         contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
         path: 'prompts/tag-repair-v2.md'
+    }),
+    scoringAudit: Object.freeze({
+        contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+        path: 'prompts/scoring-audit-v2.md'
     })
 });
 

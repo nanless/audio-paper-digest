@@ -942,13 +942,14 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', opti
     const evidenceContext = typeof options.evidenceContext === 'string'
         ? options.evidenceContext
         : buildTypeAwareSourceContext(analysis, sourceEvidence);
-    const promptTemplateSha256 = runtimePromptTemplateSha256('prompts/scoring-audit.md');
+    const scoringAuditPromptPath = currentTextStagePromptPath('scoringAudit');
+    const promptTemplateSha256 = runtimePromptTemplateSha256(scoringAuditPromptPath);
     const auditInputAnalysis = prepareScoringAuditAnalysis(analysis);
     const allowedEvidenceIds = new Set(
         [...evidenceContext.matchAll(/^\[([A-Z][A-Z0-9_/-]*)\]/gm)].map(match => match[1])
     );
     for (let attempt = 1; attempt <= 3; attempt++) {
-        const prompt = loadPrompt('prompts/scoring-audit.md', {
+        const prompt = loadPrompt(scoringAuditPromptPath, {
             existingAnalysis: auditInputAnalysis,
             sourceEvidence: evidenceContext,
             validationFeedback
@@ -8226,6 +8227,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         maxResponseBytes: scoringResult.maxResponseBytes,
         temperature: scoringResult.temperature,
         promptTemplateSha256: scoringResult.promptTemplateSha256,
+        promptTextContract: currentPromptTextContract('scoringAudit'),
         scoringInputSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
         coreSummaryInputAnalysisSha256: manifest.stages.coreSummaryRepair?.outputAnalysisSha256 || '',
         inputCoreSummarySha256: crypto.createHash('sha256')
@@ -15043,7 +15045,15 @@ async function analyzePaperDeepInternal(paper) {
         rawTextForAnalysis
     );
     if (isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
-        const currentPromptTemplateSha256 = runtimePromptTemplateSha256('prompts/scoring-audit.md');
+        // 已完成记录按它自己声明的提示词版本选文件重算：缺字段按 v1 冻结路径，
+        // 未知版本由 promptFilePathForContract 直接抛错，不静默退化成不校验。
+        const currentPromptTemplateSha256 = runtimePromptTemplateSha256(
+            promptFilePathForContract(
+                'scoringAudit',
+                typeof scoringStage.promptTextContract === 'string'
+                    ? scoringStage.promptTextContract : ''
+            )
+        );
         const currentEvidenceSha256 = crypto.createHash('sha256')
             .update(scoringEvidenceContext)
             .digest('hex');
@@ -15241,6 +15251,7 @@ async function analyzePaperDeepInternal(paper) {
                 maxResponseBytes: scoringResult.maxResponseBytes,
                 temperature: scoringResult.temperature,
                 promptTemplateSha256: scoringResult.promptTemplateSha256,
+                promptTextContract: currentPromptTextContract('scoringAudit'),
                 scoringInputSha256,
                 coreSummaryInputAnalysisSha256:
                     analysisManifest.stages.coreSummaryRepair.outputAnalysisSha256,
