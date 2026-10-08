@@ -487,9 +487,7 @@ async function main(targetDate, options = {}) {
             saveSuccessfulResultsById(resultFile, [attempted], {
                 date: targetDate,
                 expectedIds,
-                refilterStatus: 'running',
-                refilterSucceeded: attempts.filter(isSuccessfulAnalysisRecord).length,
-                refilterFailed: attempts.filter(item => !isSuccessfulAnalysisRecord(item)).length
+                refilterStatus: 'running'
             });
             digestStatusUpdater([attempted], { batchDate: targetDate });
         },

@@ -425,7 +425,6 @@ function assertPublishedBlogReceipt(targetDate, receiptPath = null) {
         category: generation.category,
         publishedPapers,
         publicationMode: receipt.publicationMode,
-        productionFingerprint: production.proofFingerprint,
         manualV6ProductionFingerprint: receipt.manualV6ProductionFingerprint || null,
         llmApiProductionFingerprint: receipt.llmApiProductionFingerprint || null
     };

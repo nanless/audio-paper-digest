@@ -711,29 +711,6 @@ def _manual_hash(value):
     return hashlib.sha256(_manual_canonical_json(value).encode('utf-8')).hexdigest()
 
 
-_PROMPT_FENCE_RE = re.compile(r'^(`{3,}|~{3,})(?:text)?\r?\n([\s\S]*?)\r?\n\1', re.M)
-
-
-def runtime_prompt_template_sha256(relative_path, contract_version=''):
-    """按 Node 的 runtimePromptTemplateSha256 算提示词首个围栏块的 SHA。
-
-    哈希输入必须与 JS 的 JSON.stringify({runtimePrompt, contractVersion}) 逐字节
-    相同：字典按插入顺序写，不排序；ensure_ascii 必须是 False，默认的 True 会把
-    中文写成 \\uXXXX，两端从此对不上。读文件也要走 bytes：read_text 会做通用换行
-    转换，把 CRLF 折成 LF，而 Node 原样保留 \\r。
-    """
-    content = (PROJECT_ROOT / str(relative_path)).read_bytes().decode('utf-8')
-    block_match = _PROMPT_FENCE_RE.search(content)
-    if block_match is None:
-        raise ValueError(f'Prompt 文件 {relative_path} 中未找到 fenced code block')
-    payload = json.dumps(
-        {'runtimePrompt': block_match.group(2), 'contractVersion': str(contract_version or '')},
-        ensure_ascii=False,
-        separators=(',', ':'),
-    )
-    return hashlib.sha256(payload.encode('utf-8')).hexdigest()
-
-
 _PUBLISH_TAG_CATALOG = load_tag_catalog()
 _PUBLISH_TAG_PROMPT_TEXT_SHA256 = tag_prompt_text_sha256(_PUBLISH_TAG_CATALOG)
 
@@ -6657,26 +6634,3 @@ def build_paper_meta(parsed_analysis, aurl=''):
 
     return ' | '.join(bits)
 
-
-def parse_cli_args(argv, defaults=None):
-    """
-    通用命令行参数解析。
-    返回 dict，包含 data_file、target_date 及自定义参数。
-    """
-    defaults = defaults or {}
-    args = {
-        'data_file': None,
-        'target_date': None,
-    }
-    args.update(defaults)
-
-    i = 1
-    while i < len(argv):
-        arg = argv[i]
-        if arg == '--date' and i + 1 < len(argv):
-            args['target_date'] = argv[i + 1]
-            i += 1
-        elif not arg.startswith('--'):
-            args['data_file'] = arg
-        i += 1
-    return args

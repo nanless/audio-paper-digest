@@ -3918,25 +3918,6 @@ def normalize_digest_index_reader_surface(text):
     return frontmatter + value
 
 
-def compact_index_opensource(parsed_analysis, paper, limit=4):
-    """让汇总页保持可导航；完整来源留在每篇论文页上。"""
-    oss_text = enrich_opensource(parsed_analysis, paper)
-    urls = []
-    for raw in re.findall(
-            r'https://[^\s<>()\[\]{}"\'，。；：！？、一-鿿]+',
-            oss_text):
-        url = raw.rstrip('.,;:)，。；：！？、')
-        if url and url not in urls:
-            urls.append(url)
-        if len(urls) >= limit:
-            break
-    if not urls:
-        return '资源状态、许可边界与复现证据详见单篇分析页。'
-    lines = [f'- [资源 {index}]({url})' for index, url in enumerate(urls, 1)]
-    lines.append('- 完整资源身份、许可边界与缺失项详见单篇分析页。')
-    return '\n'.join(lines)
-
-
 API_READER_DECISION_PROJECTION_CONTRACT = 'api-reader-decision-projection-v2'
 
 

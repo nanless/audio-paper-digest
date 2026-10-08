@@ -58,16 +58,6 @@ def normalize_document_type(value):
     return aliases.get(normalized, '')
 
 
-def now_bj_iso():
-    """返回北京时间 ISO 字符串（带 +08:00 时区标记）"""
-    return datetime.now(BJ_TZ).isoformat()
-
-
-def now_bj_date():
-    """返回北京时间日期字符串 YYYY-MM-DD"""
-    return datetime.now(BJ_TZ).strftime('%Y-%m-%d')
-
-
 def strip_md(t):
     """去除 Markdown 格式标记"""
     if not t:

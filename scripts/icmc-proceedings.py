@@ -57,44 +57,6 @@ def paper_entries(document: fitz.Document) -> list[tuple[int, int, int]]:
     return entries
 
 
-def authors_from_first_page(page: fitz.Page, title: str) -> list[str]:
-    blocks = page.get_text("blocks", sort=True)
-    abstract_top = None
-    for block in blocks:
-        if ABSTRACT.fullmatch(clean(block[4])):
-            abstract_top = block[1]
-            break
-    if abstract_top is None:
-        raise ValueError("paper first page has no exact ABSTRACT heading")
-    candidates: list[str] = []
-    for block in blocks:
-        if block[1] >= abstract_top:
-            break
-        lines = [clean(line) for line in str(block[4]).splitlines() if clean(line)]
-        if not lines:
-            continue
-        first = lines[0]
-        if first == title or EMAIL.search(first):
-            continue
-        # 每个作者块的第一行是作者署名。有些 PDF 把同一行作者拆进独立的
-        # 文本框，这时别把单独成块的机构名当成作者。
-        if re.search(
-            r"\b(?:university|institute|college|school|faculty|department|laboratory|lab|centre|center|academy|conservatory|studio|nkua|calarts|orpheus)\b",
-            first,
-            re.IGNORECASE,
-        ):
-            continue
-        if len(first) <= 160:
-            candidates.append(first)
-    result: list[str] = []
-    for candidate in candidates:
-        if candidate not in result:
-            result.append(candidate)
-    if not result:
-        raise ValueError("paper first page has no author display name")
-    return result
-
-
 def toc_records(document: fitz.Document) -> list[tuple[str, list[str]]]:
     """从论文集印刷目录里读出题目和作者行。
 

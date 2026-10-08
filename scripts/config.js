@@ -230,9 +230,7 @@ const FILES = {
     historicalDirectAggregateProjectionDir: path.join(DATA_DIR, 'runtime', 'historical-direct-aggregate-projections'),
     historicalDirectAggregateDir: path.join(DATA_DIR, 'runtime', 'historical-direct-aggregates'),
     historicalDirectTagSupplementDir: path.join(DATA_DIR, 'runtime', 'historical-direct-tag-supplements'),
-    legacyHistoricalDirectTagSupplementDir: path.join(DATA_DIR, 'runtime', 'historical-direct-taxonomy-supplements'),
     historicalSourceTagAssignmentDir: path.join(DATA_DIR, 'runtime', 'historical-source-tag-classifications'),
-    legacyHistoricalSourceTagAssignmentDir: path.join(DATA_DIR, 'runtime', 'historical-source-taxonomy-classifications'),
     historicalSourceIdentitySupplementDir: path.join(DATA_DIR, 'runtime', 'historical-source-identity-supplements'),
     // 全历史发布凭证刻意与旧 crosswalk 发布原型、日更 schema-v3 状态隔离。
     historicalDirectPublicationDir: path.join(DATA_DIR, 'runtime', 'historical-direct-publications'),
@@ -243,19 +241,15 @@ const FILES = {
     // 也不能当分析来源。
     historicalLocalCrawlIdentityDir: path.join(DATA_DIR, 'runtime', 'historical-local-crawl-identities'),
     historicalLocalCrawlSnapshotDir: path.join(DATA_DIR, 'runtime', 'historical-local-crawl-identity-snapshots'),
-    historicalLocalCrawlBatchDir: path.join(DATA_DIR, 'runtime', 'historical-local-crawl-batches'),
     // 沿用旧名字是为了在重放时保持现有五组归档依据的分配，
     // 以及这些文件固定的位置。
     historicalArchiveCrawlIdentityDir: path.join(DATA_DIR, 'runtime', 'historical-archive-crawl-identities'),
-    historicalArchiveCrawlBatchDir: path.join(DATA_DIR, 'runtime', 'historical-archive-crawl-batches'),
     historicalConferenceCrawlIdentityDir: path.join(DATA_DIR, 'runtime', 'historical-conference-crawl-identities'),
-    historicalConferenceCrawlBatchDir: path.join(DATA_DIR, 'runtime', 'historical-conference-crawl-batches'),
     // 本地会议来源清单只是仅来源重写输入。它们不含历史页面材料，
     // 也不含 crosswalk 归属。
     historicalConferenceLocalSourcesDir: path.join(DATA_DIR, 'runtime', 'historical-conference-local-sources'),
     // 新的 OpenReview PDF 写到 ICML 本地来源收集器本来就期望的 forum-ID
     // 位置；凭证仍隔离在 runtime/。
-    historicalIcmlRetainedPdfRoot: path.join(DATA_DIR, 'pdfs', 'icml2026'),
     historicalIcmlFreshPdfRoot: path.join(DATA_DIR, 'runtime', 'historical-icml-pdf-sources'),
     historicalOpenreviewPdfRoot: path.join(DATA_DIR, 'runtime', 'historical-icml-pdf-sources'),
     historicalOpenreviewPdfSourceDir: path.join(DATA_DIR, 'runtime', 'historical-openreview-pdf-sources'),
@@ -294,7 +288,6 @@ const FILES = {
     manualV6Dir: path.join(CURRENT_DIR, 'manual-v6'),
     // 显式的兼容/审计运行与生产隔离。
     manualV6ShadowDir: path.join(CURRENT_DIR, 'manual-v6-shadow'),
-    manualV6ShadowReportDir: path.join(CURRENT_DIR, 'manual-v6-shadow', 'reports'),
     manualV6MetricsDir: path.join(CURRENT_DIR, 'manual-v6'),
     manualV6ShadowMetricsDir: path.join(CURRENT_DIR, 'manual-v6-shadow'),
     // 旧 v5 只读队列观测和性能快照。
@@ -347,9 +340,7 @@ const HISTORICAL_CONFERENCE_CONFIG = {
 const PUBLISH_CONFIG = {
     blogRepo: BLOG_REPO,
     contentDir: path.join(BLOG_REPO, 'content', 'posts'),
-    basePath: process.env.PAPER_DIGEST_BLOG_BASE_PATH || '/audio-paper-digest-blog',
-    wechatImageCache: '/tmp/wechat-image-cache.json',
-    wechatMaxChars: 48000
+    basePath: process.env.PAPER_DIGEST_BLOG_BASE_PATH || '/audio-paper-digest-blog'
 };
 
 // ═══════════════════════════════════════════════════════

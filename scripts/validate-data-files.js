@@ -1796,7 +1796,6 @@ module.exports = {
     validateSourceHealth,
     validateDailyFreshSourceRun,
     loadBoundManualV4SourceText,
-    validateManualV4CanonicalSourceClosure: loadBoundManualV4SourceText,
     resolveManualPaperIdentityMode,
     hasAnyCurrentDataFiles
 };

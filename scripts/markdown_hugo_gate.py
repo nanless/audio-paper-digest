@@ -98,15 +98,6 @@ def strip_fenced_code_for_format_gate(text):
     )
 
 
-def format_gate_is_tutorial(frontmatter):
-    return (
-        isinstance(frontmatter, dict)
-        and frontmatter.get('paper_digest_tutorial_contract') in {
-            TUTORIAL_FORMAT_CONTRACT, *LEGACY_TUTORIAL_FORMAT_CONTRACTS,
-        }
-    )
-
-
 def format_gate_is_current_tutorial(frontmatter):
     return (
         isinstance(frontmatter, dict)
