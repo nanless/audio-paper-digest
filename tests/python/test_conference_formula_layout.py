@@ -12,6 +12,10 @@ import fitz
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 from conference_extractor import load_pypdf_backend  # noqa: E402
+from project_env_isolation import isolate_module_environment  # noqa: E402
+
+# 本模块的用例会走真实入口，入口经 log_setup 读 .env 并写 os.environ。
+setUpModule, tearDownModule = isolate_module_environment()
 
 
 class FormulaLayoutTest(unittest.TestCase):

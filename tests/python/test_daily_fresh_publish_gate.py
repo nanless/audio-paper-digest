@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from project_env_isolation import project_env_scope
+
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
@@ -16,7 +18,9 @@ SPEC = importlib.util.spec_from_file_location(
     'publish_to_blog_daily_fresh_gate', ROOT / 'scripts' / 'publish-to-blog.py',
 )
 publish_to_blog = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(publish_to_blog)
+# publish-to-blog.py 导入时会读 .env 并写 os.environ，用完还给进程。
+with project_env_scope():
+    SPEC.loader.exec_module(publish_to_blog)
 
 
 def _write_private(path, raw):

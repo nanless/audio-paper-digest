@@ -18,7 +18,13 @@ MANUAL_SCRIPTS = ROOT / 'manual' / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(MANUAL_SCRIPTS))
 
-from project_env_isolation import project_env_scope  # noqa: E402
+from project_env_isolation import (  # noqa: E402
+    isolate_module_environment, project_env_scope,
+)
+
+# 用例会调 generate/review/push 的真实 main()，入口经 log_setup 读 .env 并写
+# os.environ，模块跑完还给进程。
+setUpModule, tearDownModule = isolate_module_environment()
 
 
 def load_script(name, root=SCRIPTS):

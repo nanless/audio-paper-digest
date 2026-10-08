@@ -7,6 +7,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from project_env_isolation import project_env_scope
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / 'scripts'
@@ -20,7 +22,9 @@ def load_script_module(name, filename):
     return module
 
 
-xhs_publisher = load_script_module('xiaohongshu_publisher_test', 'xiaohongshu-publisher.py')
+# xiaohongshu-publisher.py 导入时会读 .env 并写 os.environ，用完还给进程。
+with project_env_scope():
+    xhs_publisher = load_script_module('xiaohongshu_publisher_test', 'xiaohongshu-publisher.py')
 backfill_papers = load_script_module('backfill_papers_test', 'backfill_papers.py')
 
 

@@ -16,7 +16,12 @@ from test_publish_to_blog import (  # noqa: E402
     llm_api_ephemeral_figure_fixture,
     llm_api_publication_fixture,
 )
-from project_env_isolation import restore_environment_after  # noqa: E402
+from project_env_isolation import (  # noqa: E402
+    isolate_module_environment, restore_environment_after,
+)
+
+# 用例会调 historical-page-render 的真实入口，入口经 log_setup 读 .env 并写 os.environ。
+setUpModule, tearDownModule = isolate_module_environment()
 
 SPEC = importlib.util.spec_from_file_location(
     'historical_page_render', os.path.join(ROOT, 'scripts', 'historical-page-render.py'),

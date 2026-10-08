@@ -12,6 +12,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+from project_env_isolation import project_env_scope
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS = ROOT / 'scripts'
@@ -26,7 +28,9 @@ def load_script():
     return module
 
 
-publish_xiaohongshu = load_script()
+# publish-xiaohongshu.py 导入时会读 .env 并写 os.environ，用完还给进程。
+with project_env_scope():
+    publish_xiaohongshu = load_script()
 
 
 class PublishXiaohongshuConcurrencyTest(unittest.TestCase):

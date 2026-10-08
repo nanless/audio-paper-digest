@@ -6,11 +6,15 @@ import sys
 import unittest
 from unittest import mock
 
+from project_env_isolation import project_env_scope
+
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
 SPEC = importlib.util.spec_from_file_location('image_parser_publisher', ROOT / 'scripts/publish-to-blog.py')
 publisher = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(publisher)
+# publish-to-blog.py 导入时会读 .env 并写 os.environ，用完还给进程。
+with project_env_scope():
+    SPEC.loader.exec_module(publisher)
 
 URL = 'https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main/interspeech-2026/78eda30f9f11/figure-2.png'
 ALT = r'原论文 Figure 2：Pitch doubling in \[ph5P\](‘beat’): under structured irregular excitation, trackers may lock to τ/2…'

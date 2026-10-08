@@ -11,7 +11,12 @@ from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[2] / 'scripts' / 'publish-conference.py'
 sys.path.insert(0, str(SCRIPT.parent))
-from project_env_isolation import restore_environment_after  # noqa: E402
+from project_env_isolation import (  # noqa: E402
+    isolate_module_environment, restore_environment_after,
+)
+
+# 用例会调 publish-conference 的真实入口，入口经 log_setup 读 .env 并写 os.environ。
+setUpModule, tearDownModule = isolate_module_environment()
 SPEC = importlib.util.spec_from_file_location('publish_conference_tested', SCRIPT)
 M = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(M)

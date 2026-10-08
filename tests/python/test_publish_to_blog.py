@@ -32,7 +32,13 @@ from publish_common import (  # noqa: E402
 )
 import markdown_hugo_gate  # noqa: E402
 import tutorial_payload_verifier  # noqa: E402
-from project_env_isolation import project_env_scope  # noqa: E402
+from project_env_isolation import (  # noqa: E402
+    isolate_module_environment, project_env_scope,
+)
+
+# 用例会调 publish-to-blog 的真实入口，入口经 log_setup 再读一次 .env 并写
+# os.environ，模块跑完还给进程。
+setUpModule, tearDownModule = isolate_module_environment()
 SPEC = importlib.util.spec_from_file_location('publish_to_blog', MODULE_PATH)
 publish_to_blog = importlib.util.module_from_spec(SPEC)
 # publish-to-blog.py 的第一行就是 load_project_env()，会把仓库 .env 写进
