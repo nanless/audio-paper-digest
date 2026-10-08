@@ -37,11 +37,11 @@ const stableHash = value => crypto.createHash('sha256').update(JSON.stringify(ca
 const prettyBytes = value => Buffer.from(`${JSON.stringify(canonical(value), null, 2)}\n`, 'utf8');
 
 function generationNumber(value) {
-    if (!Number.isSafeInteger(value) || value < 1 || value > 999999999) fail('generation must be a positive safe integer');
+    if (!Number.isSafeInteger(value) || value < 1 || value > 999999999) fail('generation 必须是正的安全整数');
     return value;
 }
 function configuredRoot(value, label, create = false) {
-    if (typeof value !== 'string' || !path.isAbsolute(value)) fail(`${label} must be an absolute path`);
+    if (typeof value !== 'string' || !path.isAbsolute(value)) fail(`${label} 必须是绝对路径`);
     const absolute = path.resolve(value);
     if (!fs.existsSync(absolute)) {
         if (!create) return absolute;
@@ -98,11 +98,11 @@ function normalizeSourceStatus(value, plan, generation) {
             || !Number.isSafeInteger(entry.attempts) || entry.attempts < 0
             || entry.updatedAt !== null && (Number.isNaN(Date.parse(entry.updatedAt)) || new Date(entry.updatedAt).toISOString() !== entry.updatedAt)
             || entry.outcomeSha256 !== null && !SHA_RE.test(entry.outcomeSha256)
-            || entry.error !== null && typeof entry.error !== 'string') fail('source status entry is invalid');
+            || entry.error !== null && typeof entry.error !== 'string') fail('来源状态条目无效');
         seen.add(entry.paperId); return structuredClone(entry);
     });
     if (seen.size !== expected.size || entries.some((entry, index) => entry.paperId !== normalized.queue[index].paperId)
-        || stableHash(entries) !== value.entrySetSha256) fail('source status does not exactly cover the plan queue');
+        || stableHash(entries) !== value.entrySetSha256) fail('来源状态未恰好覆盖计划队列');
     const body = { contract: value.contract, version: value.version, planSha256: value.planSha256,
         generation: value.generation, createdAt: value.createdAt, entries, entrySetSha256: value.entrySetSha256 };
     if (stableHash(body) !== value.statusSha256) fail('source status SHA drifted');
@@ -140,9 +140,9 @@ function loadOrCreateSourceStatus({ sourceRoot, plan, generation = 1, now = new 
 }
 function updateSourceStatus({ sourceRoot, plan, generation = 1, event, now = new Date().toISOString() } = {}) {
     const loaded = readSourceStatus({ sourceRoot, plan, generation });
-    if (!loaded) fail('source status must be created under the scheduler operation lock');
+    if (!loaded) fail('来源状态必须在调度器操作锁下创建');
     const current = loaded.status; const index = current.entries.findIndex(item => item.paperId === event?.paperId);
-    if (index < 0 || !['ready', 'handoff', 'failed'].includes(event?.status)) fail('source progress event is invalid');
+    if (index < 0 || !['ready', 'handoff', 'failed'].includes(event?.status)) fail('来源进度事件无效');
     const entries = current.entries.slice(); const before = entries[index];
     entries[index] = { ...before, status: event.status, attempts: before.attempts + 1, updatedAt: now,
         outcomeSha256: stableHash(event), error: event.status === 'failed' ? String(event.error || 'source failed').slice(0, 2000) : null };
@@ -164,7 +164,7 @@ function sourceStatusCountsByRoute(status, plan) {
     for (const entry of entries) {
         const bucket = entry.route === 'arxiv-fresh-fetch' ? byRoute.arxiv
             : entry.route === 'conference-local-pdf' ? byRoute.conference : null;
-        if (!bucket || !Object.hasOwn(bucket, entry.status)) fail('source status route is invalid');
+        if (!bucket || !Object.hasOwn(bucket, entry.status)) fail('来源状态路由无效');
         bucket[entry.status] += 1;
     }
     return byRoute;
@@ -172,13 +172,13 @@ function sourceStatusCountsByRoute(status, plan) {
 function phasePaths({ phase = 'analysis', registryRoot, sourceRoot, plan, generation = 1 } = {}) {
     if (phase === 'analysis') return controlPaths({ registryRoot, plan, generation });
     if (phase === 'source') return sourceControlPaths({ sourceRoot, plan, generation });
-    fail('control phase must be source or analysis');
+    fail('控制阶段必须是 source 或 analysis');
 }
 
 function pauseRecord(plan, generation, requestedAt, reason) {
     const normalized = planApi.normalizePlan(plan); const checked = generationNumber(generation);
     if (Number.isNaN(Date.parse(requestedAt || '')) || new Date(requestedAt).toISOString() !== requestedAt) {
-        fail('pause request time must be canonical ISO-8601');
+        fail('暂停请求时间必须是规范化的 ISO-8601');
     }
     if (reason !== undefined && (!reason || typeof reason !== 'object'
         || Object.keys(reason).sort().join(',') !== 'code,detail'
@@ -195,7 +195,7 @@ function normalizePauseRecord(value, plan, generation) {
     const expectedKeys = ['contract', 'version', 'planSha256', 'generation', 'requestedAt', 'requestSha256'];
     if (Object.hasOwn(value || {}, 'reason')) expectedKeys.push('reason');
     if (!value || typeof value !== 'object' || Array.isArray(value)
-        || Object.keys(value).sort().join('\0') !== expectedKeys.sort().join('\0')) fail('pause request schema is invalid');
+        || Object.keys(value).sort().join('\0') !== expectedKeys.sort().join('\0')) fail('暂停请求的 schema 无效');
     const expected = pauseRecord(plan, generation, value.requestedAt, value.reason);
     if (value.contract !== expected.contract || value.version !== expected.version
         || value.planSha256 !== expected.planSha256 || value.generation !== expected.generation) fail('pause request is not bound to this plan/generation');
@@ -241,7 +241,7 @@ function resumeRewrite({ phase = 'analysis', registryRoot, sourceRoot, plan, gen
     const replay = readPauseFile(paths.pauseFile, plan, generation);
     const current = fs.lstatSync(paths.pauseFile);
     if (before.dev !== current.dev || before.ino !== current.ino || before.size !== current.size
-        || replay.fileSha256 !== existing.fileSha256) fail('pause request changed before resume');
+        || replay.fileSha256 !== existing.fileSha256) fail('暂停请求在恢复前发生变化');
     fs.unlinkSync(paths.pauseFile);
     return { status: 'resumed', phase, ...paths, removedRequestSha256: existing.record.requestSha256 };
 }
@@ -301,14 +301,14 @@ function aggregateSnapshot({ aggregateRoot, plan, expectedTaskKeys = [] } = {}) 
                 }
                 const stagedPath = value.outputPage?.stagedPath;
                 if (typeof stagedPath !== 'string' || !stagedPath.startsWith('pages/content/posts/')
-                    || !SHA_RE.test(value.outputPage?.contentSha256 || '')) fail('direct aggregate output page binding is invalid');
+                    || !SHA_RE.test(value.outputPage?.contentSha256 || '')) fail('直接汇总输出页面绑定无效');
                 const pageFile = path.resolve(runRoot, ...stagedPath.split('/'));
                 if (!pageFile.startsWith(`${path.resolve(runRoot, 'pages')}${path.sep}`)
                     || conferencePageMappingsApi.readStableFile(pageFile, 'direct aggregate status page').fileSha256 !== value.outputPage.contentSha256) {
                     fail('direct aggregate output page bytes drifted');
                 }
                 const key = `${value.scope}:${value.key}`; const prior = found.get(key);
-                if (prior && prior.manifestSha256 !== manifestSha256) fail(`multiple direct aggregates disagree for ${key}`);
+                if (prior && prior.manifestSha256 !== manifestSha256) fail(`多个直接汇总对 ${key} 的说法不同`);
                 found.set(key, { scope: value.scope, key: value.key, manifestSha256, filename });
             } catch (error) { errors.push({ filename, error: String(error.message).slice(0, 500) }); }
         }
@@ -363,7 +363,7 @@ function taskSnapshot({ aggregateProjectionRoot, plan } = {}) {
     }
     if (!matches.length) return { projectionPresent: false, projectionErrors, total: null, pending: null, publicationReady: false };
     const identities = new Set(matches.map(item => item.projectionSha256));
-    if (identities.size !== 1) fail('multiple aggregate projections disagree for the same direct plan');
+    if (identities.size !== 1) fail('同一直接计划的多个汇总投影彼此不同');
     const coverage = matches[0].coverage; const pageCoverage = matches[0].pageCoverage;
     return { projectionPresent: true, projectionErrors, total: coverage?.total ?? 0, pending: coverage?.pending ?? 0,
         publicationReady: coverage?.publicationReady === true, reason: coverage?.reason ?? null,

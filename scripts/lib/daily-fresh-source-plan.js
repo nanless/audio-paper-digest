@@ -58,7 +58,7 @@ function validDate(value) {
 }
 
 function safeDirectory(value, create = false, label = 'directory') {
-    if (typeof value !== 'string' || !path.isAbsolute(value)) fail(`${label} must be an absolute path`);
+    if (typeof value !== 'string' || !path.isAbsolute(value)) fail(`${label} 必须是绝对路径`);
     const absolute = path.resolve(value); let cursor = path.parse(absolute).root;
     for (const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
         cursor = path.join(cursor, part); let stat;
@@ -87,7 +87,7 @@ function readPrivateJson(filename, label) {
         return JSON.parse(readPrivateBytes(filename, label).toString('utf8'));
     } catch (error) {
         if (error instanceof DailyFreshSourcePlanError) throw error;
-        fail(`${label} is invalid JSON: ${error.message}`);
+        fail(`${label} 不是有效的 JSON：${error.message}`);
     }
 }
 
@@ -97,7 +97,7 @@ function writePrivateAtomic(filename, value) {
     if (fs.existsSync(filename)) {
         const existing = fs.readFileSync(filename);
         if (!existing.equals(bytes) || (fs.lstatSync(filename).mode & 0o777) !== 0o600) {
-            fail(`daily source run manifest differs: ${filename}`);
+            fail(`每日来源运行清单不同：${filename}`);
         }
         return;
     }
@@ -122,10 +122,10 @@ function uuidFromHash(value) {
 }
 
 function sourceIds(papers) {
-    if (!Array.isArray(papers)) fail('papers must be an array');
+    if (!Array.isArray(papers)) fail('papers 必须是数组');
     const ids = papers.map(paper => normalizedId(paper));
-    if (ids.some(id => !ARXIV_ID.test(id))) fail('daily selected paper lacks a normalized arXiv identity');
-    if (new Set(ids).size !== ids.length) fail('daily selected paper set has duplicate arXiv identities');
+    if (ids.some(id => !ARXIV_ID.test(id))) fail('每日入选论文缺少规范化的 arXiv 身份');
+    if (new Set(ids).size !== ids.length) fail('每日入选论文集合含重复的 arXiv 身份');
     return ids.sort();
 }
 
@@ -134,8 +134,8 @@ function sourceRunDirectory(rootDir, runId) {
 }
 
 function createDailyFreshSourcePlan({ batchDate, batchId, papers, rootDir = Config.FILES.dailyFreshSourceRunsDir } = {}) {
-    if (!validDate(batchDate)) fail('batchDate is invalid');
-    if (typeof batchId !== 'string' || !batchId.trim() || batchId.length > 200) fail('batchId is invalid');
+    if (!validDate(batchDate)) fail('batchDate 无效');
+    if (typeof batchId !== 'string' || !batchId.trim() || batchId.length > 200) fail('batchId 无效');
     const paperIds = sourceIds(papers);
     const sourceSetSha256 = stableHash({ batchDate, batchId, paperIds, sourceGeneration: SOURCE_GENERATION });
     const runId = uuidFromHash(`${CONTRACT}\0${sourceSetSha256}`);
@@ -158,7 +158,7 @@ function dailyFreshSourceReference(plan) {
     if (!plan || plan.contract !== CONTRACT || plan.version !== VERSION || !validDate(plan.batchDate)
         || typeof plan.batchId !== 'string' || !SHA.test(String(plan.sourceSetSha256 || ''))
         || !Array.isArray(plan.paperIds) || !plan.paperIds.length || typeof plan.runId !== 'string' || !plan.runId) {
-        fail('daily source plan cannot produce a reference');
+        fail('每日来源计划无法生成引用');
     }
     const manifestFile = path.join(plan.runDir, 'run.json');
     const bytes = readPrivateBytes(manifestFile, 'daily source run manifest');
@@ -183,7 +183,7 @@ function readDailyFreshSourcePlan(reference, { rootDir = Config.FILES.dailyFresh
         || typeof reference.batchId !== 'string' || !reference.batchId
         || reference.sourceGeneration !== SOURCE_GENERATION || !SHA.test(String(reference.sourceSetSha256 || ''))
         || !SHA.test(String(reference.runManifestSha256 || ''))) {
-        fail('daily source reference is invalid');
+        fail('每日来源引用无效');
     }
     const root = safeDirectory(rootDir, false, 'daily source root');
     const runDir = path.join(root, reference.runId); safeDirectory(runDir, false, 'daily source run directory');
@@ -194,7 +194,7 @@ function readDailyFreshSourcePlan(reference, { rootDir = Config.FILES.dailyFresh
     const plan = { ...manifest, runDir, sourcesDir: path.join(runDir, 'sources'),
         readerAttemptsDir: path.join(runDir, 'reader-attempts') };
     const replayed = dailyFreshSourceReference(plan);
-    if (stableHash(replayed) !== stableHash(reference)) fail('daily source reference does not match sealed run');
+    if (stableHash(replayed) !== stableHash(reference)) fail('每日来源引用与封存运行不匹配');
     return plan;
 }
 
@@ -204,7 +204,7 @@ function analysisIdentity(plan) {
 }
 
 function bounded(items, concurrency, callback) {
-    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) fail('concurrency must be between 1 and 8');
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8) fail('concurrency 必须在 1 到 8 之间');
     let cursor = 0;
     const worker = async () => {
         const results = [];
@@ -215,9 +215,9 @@ function bounded(items, concurrency, callback) {
 }
 
 async function captureDailyFreshSources(plan, options = {}) {
-    if (!plan || plan.contract !== CONTRACT || plan.version !== VERSION || !Array.isArray(plan.paperIds)) fail('daily source plan is invalid');
+    if (!plan || plan.contract !== CONTRACT || plan.version !== VERSION || !Array.isArray(plan.paperIds)) fail('每日来源计划无效');
     const capture = options.capture || arxivSource.captureFreshArxivRewriteSource;
-    if (typeof capture !== 'function') fail('source capture function is required');
+    if (typeof capture !== 'function') fail('需要来源捕获函数');
     const concurrency = options.concurrency || Config.ANALYSIS_CONFIG.concurrency;
     const identity = analysisIdentity(plan);
     const results = await bounded(plan.paperIds, concurrency, async arxivId => {
@@ -226,7 +226,7 @@ async function captureDailyFreshSources(plan, options = {}) {
             || !SHA.test(String(captured.sourceManifestSha256 || ''))
             || !SHA.test(String(captured.manifest?.text?.responseSha256 || ''))
             || !SHA.test(String(captured.manifest?.pdf?.responseSha256 || ''))) {
-            fail(`${arxivId} source capture did not return a sealed PDF/TXT manifest`);
+            fail(`${arxivId} 的来源捕获未返回封存的 PDF/TXT 清单`);
         }
         const details = fresh.readFreshSource(plan.runDir, { arxivId }, identity);
         if (!details || details.freshSourceDescriptor?.sourceGeneration !== SOURCE_GENERATION
@@ -241,7 +241,7 @@ async function captureDailyFreshSources(plan, options = {}) {
 
 function readDailyFreshSource(plan, paper) {
     const id = normalizedId(paper);
-    if (!plan.paperIds.includes(id)) fail('paper is outside this daily source plan');
+    if (!plan.paperIds.includes(id)) fail('论文不在该每日来源计划内');
     const details = fresh.readFreshSource(plan.runDir, { arxivId: id }, analysisIdentity(plan));
     if (!details) throw absentSource(`${id} source is not sealed before analysis`);
     return details;
@@ -292,23 +292,23 @@ function paperProvesBinding(paper, plan, details) {
 // 判定，判定不通过就停下。
 function requireDailyFreshSourceRecoveryPlan(payload, { papers = null, label = 'daily recovery' } = {}) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-        fail(`${label} requires a canonical daily object envelope`);
+        fail(`${label} 需要规范化的每日对象信封`);
     }
     const rows = papers === null ? payload.papers : papers;
     if (!Array.isArray(rows) || rows.length === 0) {
-        fail(`${label} requires non-empty canonical papers`);
+        fail(`${label} 需要非空的规范化 papers`);
     }
     const reference = payload.dailyFreshSourceRun;
     if (!reference) fail(`${label} requires current dailyFreshSourceRun`);
     const plan = readDailyFreshSourcePlan(reference);
     if (payload.batchDate !== plan.batchDate) {
-        fail(`${label} batchDate differs from the sealed daily source run`);
+        fail(`${label} 的 batchDate 与封存的每日来源运行不同`);
     }
     const ids = rows.map(normalizedId);
     if (ids.some(id => !ARXIV_ID.test(id)) || new Set(ids).size !== ids.length
         || ids.length !== plan.paperIds.length
         || ids.slice().sort().join('\0') !== plan.paperIds.join('\0')) {
-        fail(`${label} papers do not exactly match the sealed daily source run`);
+        fail(`${label} 的 papers 与封存的每日来源运行不完全吻合`);
     }
     // 在改动任何状态、调用模型或处理图片之前，先把每个 generation 读一遍。
     // readDailyFreshSource 会重新核对 manifest、TXT、PDF 和 runtime 元数据；
@@ -410,7 +410,7 @@ async function ephemeralPrimaryImage(arxivId, url, plan, options = {}) {
 }
 
 async function withDailyFreshPaperSource(plan, paper, callback, options = {}) {
-    if (typeof callback !== 'function') fail('daily recovery callback is required');
+    if (typeof callback !== 'function') fail('需要每日恢复回调');
     const id = normalizedId(paper);
     const sourceDetails = readDailyFreshSource(plan, paper);
     const sourceVersion = sourceDetails.sourceVersion ? clone(sourceDetails.sourceVersion) : null;
@@ -448,7 +448,7 @@ async function withDailyFreshPaperSource(plan, paper, callback, options = {}) {
 
 function createDailyAnalyzeFn(plan, options = {}) {
     const analyze = options.analyze || require('../deep-analyzer.js').analyzePaperDeep;
-    if (typeof analyze !== 'function') fail('daily analyzer is required');
+    if (typeof analyze !== 'function') fail('需要每日分析器');
     return async paper => {
         const result = await withDailyFreshPaperSource(plan, paper, () => analyze(paper), options);
         // 直改上下文会在输出跨过引擎持久化边界之前剥掉字节和路径字段。这条断言要紧挨着

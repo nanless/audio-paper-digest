@@ -38,7 +38,7 @@ const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const stableHash = value => sha256(JSON.stringify(canonical(value)));
 
 function exact(value, fields, label) {
-    if (!plain(value)) fail(`${label} must be an object`);
+    if (!plain(value)) fail(`${label} 必须是对象`);
     const actual = Object.keys(value).sort(); const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
         fail(`${label} has unknown or missing fields`);
@@ -46,9 +46,9 @@ function exact(value, fields, label) {
 }
 
 function safeDirectory(directory, label) {
-    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} must be absolute`);
+    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} 必须是绝对路径`);
     const absolute = path.resolve(directory);
-    if (!fs.existsSync(absolute)) fail(`${label} does not exist`);
+    if (!fs.existsSync(absolute)) fail(`${label} 未找到`);
     let cursor = path.parse(absolute).root;
     for (const segment of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
         cursor = path.join(cursor, segment);
@@ -66,7 +66,7 @@ function readFrozenPage(blogRoot, pagePath) {
         fail('pagePath must be a safe relative path');
     }
     const filename = path.resolve(root, ...pagePath.split('/'));
-    if (!filename.startsWith(`${root}${path.sep}`)) fail('pagePath escapes blogRoot');
+    if (!filename.startsWith(`${root}${path.sep}`)) fail('pagePath 逃出了 blogRoot');
     let fd;
     try {
         fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -77,7 +77,7 @@ function readFrozenPage(blogRoot, pagePath) {
         }
         const bytes = fs.readFileSync(fd); const after = fs.fstatSync(fd);
         if (bytes.length !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino
-            || after.size !== opened.size) fail('frozen daily page changed while read');
+            || after.size !== opened.size) fail('冻结的每日页面在读取期间发生变化');
         return { bytes, sha256: sha256(bytes) };
     } catch (error) {
         if (error instanceof HistoricalDailyPrimaryArxivBindingError) throw error;
@@ -88,9 +88,9 @@ function readFrozenPage(blogRoot, pagePath) {
 function frontmatterArxivId(frontmatter) {
     const declarations = frontmatter.split('\n').filter(line => /^paper_digest_arxiv_id\s*:/u.test(line));
     if (!declarations.length) return null;
-    if (declarations.length !== 1) fail('paper_digest_arxiv_id must not be duplicated');
+    if (declarations.length !== 1) fail('paper_digest_arxiv_id 不得重复');
     const match = declarations[0].match(/^paper_digest_arxiv_id:[ \t]*(?:"(\d{4}\.\d{4,5})"|'(\d{4}\.\d{4,5})'|(\d{4}\.\d{4,5}))[ \t]*$/u);
-    if (!match) fail('paper_digest_arxiv_id is malformed');
+    if (!match) fail('paper_digest_arxiv_id 格式错误');
     return match[1] || match[2] || match[3];
 }
 
@@ -102,7 +102,7 @@ function filenameArxivId(pagePath) {
 function selectedCandidate(identityHints, arxivId) {
     if (!plain(identityHints) || !['conflict', 'multiple'].includes(identityHints.status)
         || !Array.isArray(identityHints.candidates)) {
-        fail('resolver requires raw conflict/multiple identityHints');
+        fail('解析器需要原始的 conflict/multiple identityHints');
     }
     const matches = identityHints.candidates.filter(candidate => plain(candidate)
         && candidate.scheme === 'arxiv' && candidate.value === arxivId);
@@ -139,7 +139,7 @@ function parsePrimaryRow(text, bodyStart) {
 function buildDailyPrimaryArxivBinding({ blogRoot, page, identityHints = page?.identityHints } = {}) {
     if (!plain(page) || !PAGE_KEY_RE.test(String(page.pageKey || '')) || typeof page.pagePath !== 'string'
         || !SHA_RE.test(String(page.pageContentSha256 || '')) || page.scope?.type !== 'daily') {
-        fail('normalized daily inventory page is invalid');
+        fail('规范化后的每日清单页面无效');
     }
     const loaded = readFrozenPage(blogRoot, page.pagePath);
     if (loaded.sha256 !== page.pageContentSha256) fail('frozen page bytes differ from inventory');
@@ -158,7 +158,7 @@ function buildDailyPrimaryArxivBinding({ blogRoot, page, identityHints = page?.i
         fail('frontmatter arXiv evidence is absent from frozen candidate sources');
     }
     if (namedId && !candidateSources.includes('filename')) {
-        fail('filename arXiv evidence is absent from frozen candidate sources');
+        fail('文件名的 arXiv 证据不在冻结候选来源中');
     }
     const body = { contract: CONTRACT, version: VERSION, mapping: MAPPING, pageKey: page.pageKey,
         pagePath: page.pagePath, pageContentSha256: page.pageContentSha256,

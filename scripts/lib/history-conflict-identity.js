@@ -22,7 +22,7 @@ function plain(value) {
 }
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 function exact(value, fields, label) {
-    if (!plain(value)) fail(`${label} must be a plain object`);
+    if (!plain(value)) fail(`${label} 必须是纯对象`);
     const actual = Object.keys(value).sort(); const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
         fail(`${label} has unknown or missing fields`);
@@ -33,7 +33,7 @@ function authorityHint(identity) {
     if (identity.kind === 'conference' && plain(identity.externalId)) {
         return { scheme: identity.externalId.scheme, value: identity.externalId.value };
     }
-    fail('production authority has no supported exact identity');
+    fail('生产 authority 没有受支持的确切身份');
 }
 function authorityReference(snapshot) {
     const authority = snapshot.authority;
@@ -49,7 +49,7 @@ function assertConflictSelection({ state, pageKey, selectedHint } = {}) {
     const checked = crosswalkApi.assertCrosswalkState(state);
     exact(selectedHint, ['scheme', 'value'], 'selectedHint');
     const paper = checked.source.papers.find(item => item.pageKey === pageKey);
-    if (!paper) fail('pageKey is absent from the crosswalk');
+    if (!paper) fail('crosswalk 中没有 pageKey');
     if (!['conflict', 'multiple'].includes(paper.identityHints.status)) {
         fail('explicit resolution is only allowed for conflict/multiple identity hints');
     }
@@ -58,9 +58,9 @@ function assertConflictSelection({ state, pageKey, selectedHint } = {}) {
     if (matches.length !== 1) fail('selected identity is not exactly one existing page hint');
     if (!matches[0].sources.length
         || matches[0].sources.some(source => /(?:^|:)title(?:$|:)/iu.test(source))) {
-        fail('selected identity must be supported only by explicit non-title hints');
+        fail('所选身份只能由显式的非标题提示支持');
     }
-    if (checked.assignments[pageKey].status !== 'pending') fail('only a pending page may be resolved');
+    if (checked.assignments[pageKey].status !== 'pending') fail('只有待处理页面可以消解');
     return { state: checked, paper: clone(paper), selectedHint: clone(selectedHint), candidate: clone(matches[0]) };
 }
 
@@ -69,7 +69,7 @@ function buildConflictVerifiedDecisionArtifact({ state, pageKey, selectedHint, a
     const selected = assertConflictSelection({ state, pageKey, selectedHint });
     let snapshot;
     try { snapshot = authorityApi.authorityHandleSnapshot(authorityHandle); }
-    catch (error) { fail(`authenticated production authority is required: ${error.message}`); }
+    catch (error) { fail(`需要已认证的生产 authority：${error.message}`); }
     if (snapshot.productionAuthorized !== true) fail('production-authorized source authority is required');
     const exactAuthorityHint = authorityHint(snapshot.authority.identity);
     if (exactAuthorityHint.scheme !== selected.selectedHint.scheme
