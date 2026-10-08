@@ -5147,7 +5147,7 @@ title: "Bad table"
             '运行时证据和评估规则来指导编码代理进行验证修复。'
         )
         framework_lead = '架构包含 5 个关键组件，如下图所示。'
-        framework_explanation = '下图展示了 LoopVSR 的总体架构与闭环修复流程。'
+        framework_explanation = '下图展示了 LoopVSR 的总体架构，以及验证失败后重新修复的完整链路。'
         summary = (
             f'{intro_lead}\n\n![错误动机图]({excluded_url})\n\n'
             f'{intro_explanation}\n\n保留的核心摘要。\n\n'
@@ -5275,7 +5275,7 @@ primary_method_tag: #Transformer
     def test_publish_image_exclusion_preserves_unrelated_adjacent_prose(self):
         excluded_url = 'https://arxiv.org/html/2608.13610v1/Fig/intro_1.jpg'
         before = '该方法在多种输入条件下均保持稳定。'
-        after = '消融实验进一步验证了闭环反馈的贡献。'
+        after = '消融实验进一步验证了反馈再修复带来的提升。'
         cleaned = publish_to_blog._remove_publish_image_block(
             f'{before}\n\n![待排除图片]({excluded_url})\n\n{after}', excluded_url,
         )
