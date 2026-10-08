@@ -367,6 +367,26 @@ function visualCount(value) {
     return Number.isInteger(value) ? value : null;
 }
 
+// 分析未完成时该报什么。原来的判别式只看 productionAnalysisComplete，而它用的是粗粒度的
+// llmApiComplete；successful 用的却是逐篇复验（含 validateTagStageProof）。两者错位，会把
+// 「今天拿当前词表复验旧记录不通过」写成「集合未精确覆盖筛选结果」。
+// 实测：归档里 101 个有 deep 快照的日期共 2799 篇失败，2799 篇全部是标签阶段复验没过，
+// 真正计数不匹配只有 5 天。09-25 那天 75 篇全是词表破坏性变更导致复验不过、集合其实精确
+// 覆盖，运维照旧文案会白跑一次 reanalyze（要调模型）。
+// 这里要把「复验不通过」和「集合缺篇」分开，并说明复验不是在评价当时那次运行。
+function analysisFailureMessage({ productionAnalysisComplete, failedCount, failedIds, missing }) {
+    if (!productionAnalysisComplete) {
+        return '当前分析资料既未满足 Manual v6 的完整要求，也未满足 API 正式发布的完整要求。';
+    }
+    if (failedCount > 0) {
+        const sample = (failedIds || []).slice(0, 3).join(', ') || '?';
+        const coverage = missing === 0 ? '集合覆盖精确' : `集合还缺 ${missing} 篇`;
+        return `深度分析有 ${failedCount} 篇未通过逐篇核验（如 ${sample}）；${coverage}。`
+            + '这一项是拿当前词表与契约复验已存记录，不等于当时那次运行失败。';
+    }
+    return '深度分析集合未精确覆盖筛选结果';
+}
+
 function buildDigestRunReport(targetDate, options = {}) {
     const today = options.today || getBeijingISOString().slice(0, 10);
     const snapshotOptions = {
@@ -408,6 +428,7 @@ function buildDigestRunReport(targetDate, options = {}) {
         !isSuccessfulAnalysisRecord(paper) && !analysisWaivedIds.has(normalizedId(paper))
     ));
     const waived = deepBatch.filter(paper => analysisWaivedIds.has(normalizedId(paper)));
+    const failedIds = failed.map(normalizedId).filter(Boolean);
     const rawCount = papersFrom(raw).length;
     const fetchComplete = sourceHealthComplete(raw, targetDate);
     const decisionStats = decisions?.stats || {};
@@ -422,6 +443,9 @@ function buildDigestRunReport(targetDate, options = {}) {
     } catch (_error) {
         publicationVerified = false;
     }
+    // publicationVerified 是「整份凭证通过校验」，它失败的原因可能跟远端无关——实测
+    // data/current 下 62 份 receipt 里有 35 份 OID 明明对得上，却因为别的校验项没过而被
+    // 摘要报成 remoteVerified=false，读的人会以为推送没到远端。两件事分开报。
     const {
         visualCards,
         assetsValid: visualAssetsValid,
@@ -464,6 +488,10 @@ function buildDigestRunReport(targetDate, options = {}) {
         && validateCompletedCover(cover?.cover, cover?.dataSha256, cover?.promptSha256, expectedCoverToken)
         && coverManifestCurrent;
     const reviewComplete = review?.strictReview === true && publicationVerified;
+    // 远端 OID 是否核验，与整份凭证是否有效分开。凭证无效时这一项仍可能是 true，
+    // 那时该说的是「推送到了远端，但凭证别处没过」，而不是「没推到远端」。
+    const remoteOidVerified = Boolean(review?.publicationCommit)
+        && review?.remoteVerifiedOid === review?.publicationCommit;
     const visualsWaived = reviewComplete
         && postPublishVisualWaiverIsValid(
             visualWaiver, targetDate, review, visualPath, coverPath
@@ -476,6 +504,17 @@ function buildDigestRunReport(targetDate, options = {}) {
         && filtered?.status === 'complete'
         && filterSnapshotsComplete
     );
+    // analysis.total 一直只数 deep 集合，于是「筛选出了 N 篇、分析结果里只有 M 篇」这种缺口
+    // 显示不出来：08-25 筛选出 46 篇而 deep 快照缺失时，摘要是 `success=0/0 | failed=0`，
+    // 看着像没有失败项。这两个字段把分母和缺口补齐，total 的含义不动（仍是 deep 集合大小）。
+    const deepIds = new Set(deepBatch.map(normalizedId).filter(Boolean));
+    const analysisExpected = filtered ? filteredBatch.length : null;
+    const analysisMissing = filtered
+        ? filteredBatch.filter(paper => {
+            const id = normalizedId(paper);
+            return !id || !deepIds.has(id);
+        }).length
+        : null;
     const productionV6Complete = deepBatch.length > 0
         && deepBatch.every(productionV6PaperComplete);
     const llmApiComplete = deepBatch.length > 0
@@ -511,11 +550,12 @@ function buildDigestRunReport(targetDate, options = {}) {
     if (analysisWaiver && !analysisWaiverCheck.valid) {
         errors.push(`日更分析 waiver 无效: ${analysisWaiverCheck.issues.join('; ')}`);
     }
-    if (!analysisComplete) errors.push(
-        productionAnalysisComplete
-            ? '深度分析集合未精确覆盖筛选结果'
-            : '当前分析资料既未满足 Manual v6 的完整要求，也未满足 API 正式发布的完整要求。'
-    );
+    if (!analysisComplete) errors.push(analysisFailureMessage({
+        productionAnalysisComplete,
+        failedCount: failed.length,
+        failedIds,
+        missing: analysisMissing
+    }));
     if (llmApiComplete && !dailySourceComplete) {
         errors.push(`日更来源运行记录及封存的 TXT/PDF 不完整：${dailySourceIssues.join('; ') || '缺少 dailyFreshSourceRun'}`);
     }
@@ -538,7 +578,11 @@ function buildDigestRunReport(targetDate, options = {}) {
         Number.isInteger(decidedTotal) && Number.isInteger(decidedCount)
     ) ? Math.max(0, decidedTotal - decidedCount) : null;
     return {
-        version: 1,
+        // 2：这次不只是新增字段，还改了取值域——长图计数可能是 null（未知不再伪装成 0）、
+        // cover.status 不再镜像清单内层说法、分析多了 expected/missing、博客把远端 OID
+        // 核验与凭证有效性分开。旧报告仍是 1 且是旧口径，靠 version 就能分辨，
+        // 不必再去猜某个字段在不在。仓库内没有任何代码读这个 version。
+        version: 2,
         batchDate: targetDate,
         generatedAt: getBeijingISOString(),
         overallStatus: overallComplete ? 'complete' : 'incomplete',
@@ -577,11 +621,13 @@ function buildDigestRunReport(targetDate, options = {}) {
             complete: analysisComplete,
             publicationMode: analysisPublicationMode,
             total: deepBatch.length,
+            expected: analysisExpected,
+            missing: analysisMissing,
             successful: successful.length,
             waived: waived.length,
             waivedIds: waived.map(normalizedId).filter(Boolean),
             failed: failed.length,
-            failedIds: failed.map(normalizedId).filter(Boolean),
+            failedIds,
             waiver: analysisWaiverCheck.valid && analysisWaiver ? {
                 contract: analysisWaiver.contract,
                 reason: analysisWaiver.reason,
@@ -599,6 +645,7 @@ function buildDigestRunReport(targetDate, options = {}) {
             complete: reviewComplete,
             strictReview: review?.strictReview === true,
             publicationVerified,
+            remoteOidVerified,
             publicationCommit: review?.publicationCommit || null,
             remoteVerifiedOid: review?.remoteVerifiedOid || null
         },
@@ -645,11 +692,11 @@ function formatDigestRunSummary(report) {
         `[digest-status] ${report.batchDate} overall=${report.overallStatus} errors=${report.errors.length}`,
         `  抓取 ${state(report.fetch.complete)} | candidates=${report.fetch.rawCandidateCount}`,
         `  筛选 ${state(report.filter.complete)} | selected=${report.filter.selectedCount} | candidates=${report.filter.totalCandidates ?? '?'} | pending=${report.filter.pendingDecisions ?? '?'}`,
-        `  分析 ${state(report.analysis.complete)} | success=${report.analysis.successful}/${report.analysis.total} | waived=${report.analysis.waived || 0} | failed=${report.analysis.failed}`,
+        `  分析 ${state(report.analysis.complete)} | success=${report.analysis.successful}/${report.analysis.total} | expected=${report.analysis.expected ?? '?'} | missing=${report.analysis.missing ?? '?'} | waived=${report.analysis.waived || 0} | failed=${report.analysis.failed}`,
         ...(report.analysis.scoringStabilityUnresolvedIds?.length
             ? [`  评分稳定性 unresolved=${report.analysis.scoringStabilityUnresolvedIds.join(',')}`]
             : []),
-        `  博客 ${state(report.blog.complete)} | strictReview=${report.blog.strictReview} | remoteVerified=${report.blog.publicationVerified}`,
+        `  博客 ${state(report.blog.complete)} | strictReview=${report.blog.strictReview} | remoteOidVerified=${report.blog.remoteOidVerified === true} | receiptValid=${report.blog.publicationVerified}`,
         `  长图 ${report.visuals.waived ? 'waived' : state(report.visuals.gateComplete === true)} | status=${report.visuals.status} | complete=${report.visuals.complete ?? '?'}/${report.visuals.total ?? '?'} | pending=${report.visuals.pending ?? '?'} | failed=${report.visuals.failed ?? '?'}`,
         `  封面 ${report.cover.waived ? 'waived' : state(report.cover.complete)} | status=${printedCoverStatus(report.cover)}`
     ];
@@ -683,5 +730,6 @@ module.exports = {
     productionV6PaperComplete,
     llmApiPaperComplete,
     buildDigestRunReport,
-    formatDigestRunSummary
+    formatDigestRunSummary,
+    analysisFailureMessage
 };

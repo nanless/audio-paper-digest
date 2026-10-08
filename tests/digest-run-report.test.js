@@ -13,7 +13,8 @@ const {
     postPublishVisualWaiverIsValid,
     llmApiPaperComplete,
     buildDigestRunReport,
-    formatDigestRunSummary
+    formatDigestRunSummary,
+    analysisFailureMessage
 } = require('../scripts/digest-run-report.js');
 const Config = require('../scripts/config.js');
 const { autoArchiveCurrentData } = require('../scripts/full-fetch.js');
@@ -829,6 +830,92 @@ describe('日更运行报告', () => {
         } finally {
             fs.rmSync(dir, { recursive: true, force: true });
         }
+    });
+
+    it('分析未完成的文案要区分「复验不通过」与「集合缺篇」', () => {
+        // 复验不通过、但集合覆盖精确：不能说成集合问题。
+        const reverify = analysisFailureMessage({
+            productionAnalysisComplete: true,
+            failedCount: 75,
+            failedIds: ['2609.30083', '2609.29923', '2609.29867'],
+            missing: 0
+        });
+        assert.match(reverify, /75 篇未通过逐篇核验/);
+        assert.match(reverify, /集合覆盖精确/);
+        assert.match(reverify, /不等于当时那次运行失败/);
+        assert.doesNotMatch(reverify, /集合未精确覆盖筛选结果/);
+
+        // 集合真的缺篇时要报缺多少。
+        const missing = analysisFailureMessage({
+            productionAnalysisComplete: true, failedCount: 0, failedIds: [], missing: 3
+        });
+        assert.match(missing, /集合未精确覆盖筛选结果/);
+
+        // 生产契约本身不满足时，报原文案，不去猜是复验还是集合。
+        const notProduction = analysisFailureMessage({
+            productionAnalysisComplete: false, failedCount: 9, failedIds: ['x'], missing: 9
+        });
+        assert.match(notProduction, /既未满足 Manual v6 的完整要求/);
+    });
+
+    it('摘要把远端 OID 核验与凭证有效性分开报', () => {
+        const base = {
+            batchDate: '2026-07-29',
+            overallStatus: 'incomplete',
+            errors: [],
+            fetch: { complete: true, rawCandidateCount: 10 },
+            filter: { complete: true, selectedCount: 10, totalCandidates: 10, pendingDecisions: 0 },
+            analysis: { complete: true, successful: 10, total: 10, expected: 10, missing: 0, failed: 0 },
+            blog: { complete: false, strictReview: true, publicationVerified: false, remoteOidVerified: true },
+            visuals: {
+                gateComplete: true, status: 'complete', complete: 10, total: 10,
+                pending: 0, failed: 0, assetsValid: true, archiveUnique: true
+            },
+            cover: { complete: true, status: 'complete' }
+        };
+        const summary = formatDigestRunSummary(base);
+        assert.match(summary, /remoteOidVerified=true \| receiptValid=false/);
+        // 不能再只打一个 remoteVerified，那会让人以为推送没到远端。
+        assert.doesNotMatch(summary, /remoteVerified=/);
+    });
+
+    it('摘要把分析分母与缺口一起报出来', () => {
+        const summary = formatDigestRunSummary({
+            batchDate: '2026-07-29',
+            overallStatus: 'incomplete',
+            errors: [],
+            fetch: { complete: true, rawCandidateCount: 46 },
+            filter: { complete: true, selectedCount: 46, totalCandidates: 46, pendingDecisions: 0 },
+            analysis: { complete: false, successful: 0, total: 0, expected: 46, missing: 46, failed: 0 },
+            blog: { complete: false, strictReview: false, publicationVerified: false, remoteOidVerified: false },
+            visuals: {
+                gateComplete: false, status: 'pending', complete: 0, total: 10,
+                pending: 10, failed: 0, assetsValid: false, archiveUnique: false
+            },
+            cover: { complete: false, status: 'pending' }
+        });
+        assert.match(summary, /success=0\/0 \| expected=46 \| missing=46/);
+    });
+
+    it('分析缺口的两个数读不到时报 ?，不显示成 0', () => {
+        const summary = formatDigestRunSummary({
+            batchDate: '2026-07-29',
+            overallStatus: 'incomplete',
+            errors: [],
+            fetch: { complete: false, rawCandidateCount: 0 },
+            filter: { complete: false, selectedCount: 0, totalCandidates: null, pendingDecisions: null },
+            analysis: { complete: false, successful: 0, total: 0, expected: null, missing: null, failed: 0 },
+            blog: { complete: false, strictReview: false, publicationVerified: false, remoteOidVerified: false },
+            visuals: {
+                gateComplete: false, status: 'missing', complete: null, total: null,
+                pending: null, failed: null, assetsValid: false, archiveUnique: false
+            },
+            cover: { complete: false, status: 'missing' }
+        });
+        const analysisLine = summary.split('\n').find(line => line.includes('分析 '));
+        assert.match(analysisLine, /expected=\? \| missing=\?/);
+        assert.doesNotMatch(analysisLine, /expected=0/);
+        assert.doesNotMatch(analysisLine, /missing=0/);
     });
 
     it('统一状态门禁与 visual:status 一样严格绑定 canonical 长图路径', () => {

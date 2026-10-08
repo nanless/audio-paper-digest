@@ -141,6 +141,11 @@ npm run digest:status -- --date YYYY-MM-DD
 
 `validate:data --allow-empty` 只用于明确没有运行数据的干净 checkout。状态报告反映读取时的状态，后续推送、登记或取消配图后须重新运行。
 
-`digest:status` 把结果写成 `data/current/digest-run-reports/<日期>.json`。其中 `filter.pendingDecisions` 指的是**还没拿到明确决定的候选数**（候选总数减去已决定数）；早期版本这个字段取的是「已经有决定、但决定本身可重试」的条数，运行在写完全部决定之前被杀时会显示 0，把缺口藏起来。字段名和报告 `version` 都没变，但含义已经改了：要判断「可重试」请看同一节点下的 `filter.retryableDecisions`。
+`digest:status` 把结果写成 `data/current/digest-run-reports/<日期>.json`。这份报告的 `version` 现在是 **2**：**`version: 1` 是旧口径，`version: 2` 才是下面这些说法**。
 
-**读旧报告时注意**：这次口径修正之前的报告仍写着 `version: 1`，却**没有 `retryableDecisions` 字段**，`pendingDecisions` 也还是旧含义。光看 `version` 分辨不出两种口径，得看有没有那个字段：有才是新口径。旧口径下的 `pendingDecisions` 即使报 0，也不代表决定已经覆盖全部候选。
+- `filter.pendingDecisions`：**还没拿到明确决定的候选数**（候选总数减去已决定数）。v1 里它取的是「已经有决定、但决定本身可重试」的条数，运行在写完全部决定之前被杀时会显示 0，把缺口藏起来。要判断「可重试」请看同一节点下的 `filter.retryableDecisions`（v1 没有这个字段）。
+- `analysis.expected` 与 `analysis.missing`：分母是筛选入选集大小，缺口是入选集里没有出现在分析结果中的篇数。`analysis.total` 的含义没变，仍是分析结果本身的条数。
+- `analysis` 未完成时的文案会区分两种情况：**逐篇复验不通过**（拿当前词表与契约复验已存记录，不等于当时那次运行失败）与**集合缺篇**。两者后果不同，前者不需要重跑分析。
+- `blog.remoteOidVerified` 与 `blog.publicationVerified`：前者只说明远端 OID 与发布提交是否一致，后者是整份凭证是否通过校验。v1 把两者合成一个 `remoteVerified`，凭证因为别的原因失效时会被读成「没推到远端」。
+- `visuals.complete/total/pending/failed`：读不到长图清单时是 **`null`**，摘要打印 `?`。v1 用 `|| 0`，把「清单不存在」显示成「一张都没做」。
+- `cover.status`：由门禁派生，门禁不过时不会说 `complete`。v1 直接镜像清单内层说法，出现过「封面 incomplete 但 status=complete」。
