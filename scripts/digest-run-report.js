@@ -43,10 +43,23 @@ function parseDate(argv) {
     return value;
 }
 
-function readJson(filePath) {
+// 读不到 JSON 有两种原因，后果不一样：文件不存在（这一步还没跑）与文件在但解析失败（坏了）。
+// 旧写法两者都返回 null，报告上分不出来，运维会把「损坏」当成「没生成」。
+// 现在把后者记进 readProblems，前者保持安静——文件不存在是正常状态，不是错误。
+function readJson(filePath, readProblems = null) {
+    let text;
     try {
-        return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        text = fs.readFileSync(filePath, 'utf8');
+    } catch (error) {
+        if (error?.code !== 'ENOENT' && readProblems) {
+            readProblems.push({ path: filePath, kind: 'unreadable', code: error?.code || null });
+        }
+        return null;
+    }
+    try {
+        return JSON.parse(text);
     } catch (_error) {
+        if (readProblems) readProblems.push({ path: filePath, kind: 'invalid-json' });
         return null;
     }
 }
@@ -183,9 +196,13 @@ function snapshotMatchesDate(value, targetDate, kind) {
 
 function resolveDigestRuntimeSnapshot(
     currentPath, targetDate, kind,
-    { archiveDir = Config.ARCHIVE_DIR, today = getBeijingISOString().slice(0, 10) } = {}
+    {
+        archiveDir = Config.ARCHIVE_DIR,
+        today = getBeijingISOString().slice(0, 10),
+        readProblems = null
+    } = {}
 ) {
-    const current = readJson(currentPath);
+    const current = readJson(currentPath, readProblems);
     if (snapshotMatchesDate(current, targetDate, kind)) {
         return { value: current, source: 'current', path: currentPath };
     }
@@ -198,7 +215,7 @@ function resolveDigestRuntimeSnapshot(
     if (!fs.existsSync(archivedPath)) {
         return { value: null, source: 'missing', path: archivedPath };
     }
-    const archived = readJson(archivedPath);
+    const archived = readJson(archivedPath, readProblems);
     if (!snapshotMatchesDate(archived, targetDate, kind)) {
         return { value: null, source: 'invalid', path: archivedPath };
     }
@@ -409,9 +426,11 @@ function analysisFailureMessage({
 
 function buildDigestRunReport(targetDate, options = {}) {
     const today = options.today || getBeijingISOString().slice(0, 10);
+    const readProblems = [];
     const snapshotOptions = {
         archiveDir: options.archiveDir || Config.ARCHIVE_DIR,
-        today
+        today,
+        readProblems
     };
     const rawSnapshot = resolveDigestRuntimeSnapshot(
         Config.FILES.rawCandidates, targetDate, 'raw', snapshotOptions
@@ -429,14 +448,16 @@ function buildDigestRunReport(targetDate, options = {}) {
     const filtered = filteredSnapshot.value;
     const decisions = decisionsSnapshot.value;
     const deep = deepSnapshot.value;
-    const review = readJson(path.join(Config.CURRENT_DIR, `blog-review-receipt-${targetDate}.json`));
+    const review = readJson(
+        path.join(Config.CURRENT_DIR, `blog-review-receipt-${targetDate}.json`), readProblems
+    );
     const visualPath = path.join(Config.FILES.visualSummaryManifestDir, `${targetDate}.json`);
     const coverPath = path.join(Config.FILES.digestCoverManifestDir, `${targetDate}.json`);
-    const visual = readJson(visualPath);
-    const cover = readJson(coverPath);
+    const visual = readJson(visualPath, readProblems);
+    const cover = readJson(coverPath, readProblems);
     const visualWaiver = readJson(path.join(
         Config.FILES.postPublishVisualWaiverDir, `${targetDate}.json`
-    ));
+    ), readProblems);
     const analysisWaiver = loadAnalysisWaiver(targetDate, Config.FILES);
     const analysisWaiverCheck = validateAnalysisWaiver(
         analysisWaiver, targetDate, Config.FILES, { deep }
@@ -449,7 +470,10 @@ function buildDigestRunReport(targetDate, options = {}) {
     ));
     const waived = deepBatch.filter(paper => analysisWaivedIds.has(normalizedId(paper)));
     const failedIds = failed.map(normalizedId).filter(Boolean);
-    const rawCount = papersFrom(raw).length;
+    // 候选快照读不到时报 null，不报 0。0 是「快照在、候选就是空」这一种真实取值，
+    // 和「快照根本不在」不是一回事；旧写法两者都是 0，摘要于是出现
+    // `candidates=0` 同屏 `selected=53` 这种不可能的组合。
+    const rawCount = raw ? papersFrom(raw).length : null;
     const fetchComplete = sourceHealthComplete(raw, targetDate);
     const decisionStats = decisions?.stats || {};
     const filterSnapshotsComplete = filterSnapshotsAreConsistent(
@@ -600,11 +624,15 @@ function buildDigestRunReport(targetDate, options = {}) {
         Number.isInteger(decidedTotal) && Number.isInteger(decidedCount)
     ) ? Math.max(0, decidedTotal - decidedCount) : null;
     return {
+        // 3：v2 之后又改了两处取值域，旧报告分不出来，所以再升一档。
+        //   - visuals.status 由门禁派生，门禁不过时不会再出现 status=complete；
+        //   - fetch.rawCandidateCount 读不到快照时是 null，不再伪装成 0；
+        //   - 新增 readProblems，区分「文件不存在」与「文件在但解析失败」。
         // 2：这次不只是新增字段，还改了取值域——长图计数可能是 null（未知不再伪装成 0）、
         // cover.status 不再镜像清单内层说法、分析多了 expected/missing、博客把远端 OID
         // 核验与凭证有效性分开。旧报告仍是 1 且是旧口径，靠 version 就能分辨，
         // 不必再去猜某个字段在不在。仓库内没有任何代码读这个 version。
-        version: 2,
+        version: 3,
         batchDate: targetDate,
         generatedAt: getBeijingISOString(),
         overallStatus: overallComplete ? 'complete' : 'incomplete',
@@ -615,6 +643,8 @@ function buildDigestRunReport(targetDate, options = {}) {
             filterDecisions: decisionsSnapshot.source,
             deepAnalysisResult: deepSnapshot.source
         },
+        // 存在的文件读不出来时列在这里；真·不存在的文件不会出现在这个数组里。
+        readProblems,
         fetch: {
             complete: fetchComplete,
             rawCandidateCount: rawCount,
@@ -673,7 +703,18 @@ function buildDigestRunReport(targetDate, options = {}) {
         },
         visuals: {
             gateComplete: visualGateComplete,
-            status: visualsWaived ? 'waived' : (visual?.overallStatus || 'missing'),
+            // 和封面一样，状态由门禁派生。旧写法直接镜像清单内层的 overallStatus，
+            // 于是清单自称 complete、而资产校验或发布绑定已经失败时，摘要会打出
+            // `长图 incomplete | status=complete | complete=10/10 | pending=0 | failed=0`。
+            // 门禁不过就不替它宣布完成：清单里写的是 pending/partial_failed 就照说，
+            // 清单自称 complete 而门禁不过则说 incomplete，清单根本不在才是 missing。
+            status: visualsWaived
+                ? 'waived'
+                : (visualGateComplete
+                    ? 'complete'
+                    : (visual?.overallStatus && visual.overallStatus !== 'complete'
+                        ? visual.overallStatus
+                        : (visual ? 'incomplete' : 'missing'))),
             waived: visualsWaived,
             // 这几项原来写成 `|| 0`，于是「没有长图清单」和「清单里长图数为 0」显示成
             // 同一个 0。今天的批次就是这样：摘要显示 complete=0/0、pending=0、failed=0，
@@ -710,19 +751,33 @@ function formatDigestRunSummary(report) {
         if (cover?.complete) return 'complete';
         return cover?.status === 'complete' ? 'incomplete' : (cover?.status ?? 'missing');
     };
+    // 长图行同理：门禁不过时不能印 status=complete。构建报告时已经派生过，
+    // 这里再兜一道，免得手工拼的报告或旧 JSON 又把矛盾打出来。
+    const printedVisualStatus = visuals => {
+        if (visuals?.waived) return 'waived';
+        if (visuals?.gateComplete === true) return 'complete';
+        return visuals?.status === 'complete' ? 'incomplete' : (visuals?.status ?? 'missing');
+    };
     const lines = [
         `[digest-status] ${report.batchDate} overall=${report.overallStatus} errors=${report.errors.length}`,
-        `  抓取 ${state(report.fetch.complete)} | candidates=${report.fetch.rawCandidateCount}`,
+        `  抓取 ${state(report.fetch.complete)} | candidates=${report.fetch.rawCandidateCount ?? '?'}`,
         `  筛选 ${state(report.filter.complete)} | selected=${report.filter.selectedCount} | candidates=${report.filter.totalCandidates ?? '?'} | pending=${report.filter.pendingDecisions ?? '?'}`,
         `  分析 ${state(report.analysis.complete)} | success=${report.analysis.successful}/${report.analysis.total} | expected=${report.analysis.expected ?? '?'} | missing=${report.analysis.missing ?? '?'} | waived=${report.analysis.waived || 0} | failed=${report.analysis.failed}`,
         ...(report.analysis.scoringStabilityUnresolvedIds?.length
             ? [`  评分稳定性 unresolved=${report.analysis.scoringStabilityUnresolvedIds.join(',')}`]
             : []),
         `  博客 ${state(report.blog.complete)} | strictReview=${report.blog.strictReview} | remoteOidVerified=${report.blog.remoteOidVerified === true} | receiptValid=${report.blog.publicationVerified}`,
-        `  长图 ${report.visuals.waived ? 'waived' : state(report.visuals.gateComplete === true)} | status=${report.visuals.status} | complete=${report.visuals.complete ?? '?'}/${report.visuals.total ?? '?'} | pending=${report.visuals.pending ?? '?'} | failed=${report.visuals.failed ?? '?'}`,
+        `  长图 ${report.visuals.waived ? 'waived' : state(report.visuals.gateComplete === true)} | status=${printedVisualStatus(report.visuals)} | complete=${report.visuals.complete ?? '?'}/${report.visuals.total ?? '?'} | pending=${report.visuals.pending ?? '?'} | failed=${report.visuals.failed ?? '?'}`,
         `  封面 ${report.cover.waived ? 'waived' : state(report.cover.complete)} | status=${printedCoverStatus(report.cover)}`
     ];
     for (const error of report.errors) lines.push(`  错误: ${error}`);
+    // 文件存在却读不出来时要说出来。文件不存在不会进这个数组，也不该报成错误。
+    for (const problem of report.readProblems || []) {
+        const what = problem?.kind === 'invalid-json'
+            ? '存在，但 JSON 解析失败'
+            : `存在，但无法读取（${problem?.code || '未知错误'}）`;
+        lines.push(`  读取告警: ${problem?.path} ${what}`);
+    }
     return lines.join('\n');
 }
 

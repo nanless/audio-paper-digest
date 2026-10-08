@@ -744,7 +744,11 @@ describe('日更运行报告', () => {
             },
             cover: { complete: true, status: 'complete' }
         });
-        assert.match(summary, /长图 incomplete \| status=complete \| complete=10\/10/);
+        // 门禁不过就不得印 status=complete。改前这里打的是
+        // `长图 incomplete | status=complete | complete=10/10 | pending=0 | failed=0`，
+        // 同一行自相矛盾。
+        assert.match(summary, /长图 incomplete \| status=incomplete \| complete=10\/10/);
+        assert.doesNotMatch(summary, /长图 incomplete \| status=complete/);
         assert.doesNotMatch(summary, /长图 complete \|/);
     });
 
@@ -1049,6 +1053,122 @@ describe('日更运行报告', () => {
             assert.strictEqual(invalid.assetsValid, false);
         } finally {
             Config.FILES.visualSummaryAssetDir = originalAssetDir;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('长图 status 由门禁派生：清单自称 complete 而资产不过时不得说 complete', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-visual-status-'));
+        const originalAssetDir = Config.FILES.visualSummaryAssetDir;
+        const originalWaiverDir = Config.FILES.postPublishVisualWaiverDir;
+        const originalAnalysisWaiverDir = Config.FILES.analysisWaiverDir;
+        try {
+            Config.FILES.visualSummaryAssetDir = path.join(dir, 'archive');
+            Config.FILES.postPublishVisualWaiverDir = path.join(dir, 'waivers');
+            Config.FILES.analysisWaiverDir = path.join(dir, 'analysis-waivers');
+            withDigestPaths(dir, () => {
+                const date = '2026-07-29';
+                fs.mkdirSync(Config.FILES.visualSummaryManifestDir, { recursive: true });
+                const manifestPath = path.join(Config.FILES.visualSummaryManifestDir, `${date}.json`);
+                // 清单自己说 complete、计数也满，但这张卡的资产核验过不了。
+                const manifest = {
+                    batchDate: date,
+                    overallStatus: 'complete',
+                    counts: { totalCards: 1, completeCards: 1, pendingCards: 0, failedCards: 0 },
+                    publication: {
+                        publicationCommit: 'c'.repeat(40),
+                        generationManifestSha256: 'd'.repeat(64)
+                    },
+                    papers: {
+                        '2607.1': {
+                            normalizedArxivId: '2607.1',
+                            title: 'T',
+                            rank: 1,
+                            analysisSha256: 'a'.repeat(64),
+                            promptSha256: 'b'.repeat(64),
+                            cards: { infographic: { status: 'complete' } }
+                        }
+                    }
+                };
+                fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+                const report = buildDigestRunReport(date, { today: date });
+                assert.strictEqual(report.visuals.gateComplete, false);
+                assert.strictEqual(report.visuals.assetsValid, false);
+                assert.strictEqual(report.visuals.status, 'incomplete');
+                const line = formatDigestRunSummary(report).split('\n')
+                    .find(item => item.includes('长图'));
+                assert.match(line, /长图 incomplete \| status=incomplete/);
+                assert.doesNotMatch(line, /status=complete/);
+
+                // 清单自己说 pending 时照说 pending，不要一律压成 incomplete。
+                manifest.overallStatus = 'pending';
+                fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+                const pending = buildDigestRunReport(date, { today: date });
+                assert.strictEqual(pending.visuals.status, 'pending');
+            });
+        } finally {
+            Config.FILES.visualSummaryAssetDir = originalAssetDir;
+            Config.FILES.postPublishVisualWaiverDir = originalWaiverDir;
+            Config.FILES.analysisWaiverDir = originalAnalysisWaiverDir;
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('候选快照不在时 rawCandidateCount 是 null，摘要打 ?；快照在但为空才是 0', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-rawcount-'));
+        try {
+            withDigestPaths(dir, () => {
+                const date = '2026-07-29';
+                // 快照不在：读不到就报 null，不能报 0。
+                const missing = buildDigestRunReport(date, { today: date });
+                assert.strictEqual(missing.fetch.rawCandidateCount, null);
+                assert.match(formatDigestRunSummary(missing), /抓取 incomplete \| candidates=\?/);
+                assert.doesNotMatch(formatDigestRunSummary(missing), /candidates=0/);
+
+                // 快照在、候选确实为空：这时 0 是真值，要照打 0。
+                fs.writeFileSync(Config.FILES.rawCandidates, JSON.stringify({
+                    batchDate: date,
+                    sourceHealth: healthySourceHealth(),
+                    papers: []
+                }));
+                const empty = buildDigestRunReport(date, { today: date });
+                assert.strictEqual(empty.fetch.rawCandidateCount, 0);
+                assert.match(formatDigestRunSummary(empty), /candidates=0/);
+            });
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('文件存在但读不出来时报告给出告警，真·不存在保持安静', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-readproblems-'));
+        try {
+            withDigestPaths(dir, () => {
+                const date = '2026-07-29';
+                // A 真·不存在：不算错误，也不该有告警。
+                const missing = buildDigestRunReport(date, { today: date });
+                assert.deepStrictEqual(missing.readProblems, []);
+                assert.strictEqual(missing.dataSources.rawCandidates, 'missing');
+                assert.doesNotMatch(formatDigestRunSummary(missing), /读取告警/);
+
+                // B 存在但 JSON 坏了：要能看出是「坏了」，不是「没生成」。
+                fs.writeFileSync(Config.FILES.rawCandidates, '{broken');
+                const corrupt = buildDigestRunReport(date, { today: date });
+                assert.deepStrictEqual(corrupt.readProblems, [
+                    { path: Config.FILES.rawCandidates, kind: 'invalid-json' }
+                ]);
+                assert.match(formatDigestRunSummary(corrupt), /存在，但 JSON 解析失败/);
+
+                // C 存在但不是文件：同样要说出来。
+                fs.rmSync(Config.FILES.rawCandidates);
+                fs.mkdirSync(Config.FILES.rawCandidates);
+                const unreadable = buildDigestRunReport(date, { today: date });
+                assert.strictEqual(unreadable.readProblems.length, 1);
+                assert.strictEqual(unreadable.readProblems[0].kind, 'unreadable');
+                assert.strictEqual(unreadable.readProblems[0].code, 'EISDIR');
+                assert.match(formatDigestRunSummary(unreadable), /无法读取（EISDIR）/);
+            });
+        } finally {
             fs.rmSync(dir, { recursive: true, force: true });
         }
     });
