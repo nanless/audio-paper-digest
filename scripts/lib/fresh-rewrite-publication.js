@@ -62,7 +62,7 @@ function readBytes(filename) {
     const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     try {
         const stat = fs.fstatSync(fd);
-        if (!stat.isFile() || stat.nlink !== 1 || stat.size > 256 * 1024 * 1024) throw new Error('备份输入不安全：不是单链接普通文件，或超过 256 MiB');
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size > 256 * 1024 * 1024) throw new Error('Unsafe or oversized backup input');
         return fs.readFileSync(fd);
     } finally { fs.closeSync(fd); }
 }
@@ -166,16 +166,16 @@ function relatedDataFiles(ctx) {
 function addControlledAssets(ctx, blogFiles, relative) {
     const directory = under(ctx.blogRepo, relative);
     try {
-        if (fs.lstatSync(directory).isSymbolicLink()) throw new Error('目标博客资源里出现符号链接，已拒绝继续');
+        if (fs.lstatSync(directory).isSymbolicLink()) throw new Error('Unsafe symlink in target blog assets');
     } catch (error) { if (error.code === 'ENOENT') return; throw error; }
     safeDirectory(directory);
     for (const name of fs.readdirSync(directory)) {
         const child = `${relative}/${name}`; const filename = under(ctx.blogRepo, child);
         const stat = fs.lstatSync(filename);
-        if (stat.isSymbolicLink()) throw new Error('目标博客资源里出现符号链接，已拒绝继续');
+        if (stat.isSymbolicLink()) throw new Error('Unsafe symlink in target blog assets');
         if (stat.isDirectory()) addControlledAssets(ctx, blogFiles, child);
         else if (stat.isFile()) blogFiles.add(validateBlogPath(child, ctx));
-        else throw new Error('目标博客资源既不是普通文件也不是目录');
+        else throw new Error('Unsafe nonregular target blog asset');
     }
 }
 
@@ -202,7 +202,7 @@ function loadBaseline(ctx, descriptor) {
     if (baseline.contract !== BASELINE_CONTRACT || baseline.date !== ctx.date
         || baseline.blog.repo !== ctx.blogRepo || baseline.canonical.path !== ctx.canonicalPath
         || jsonHash(baseline.paperIds) !== jsonHash(ctx.paperIds)
-        || (descriptor && descriptor.sha256 !== hash(raw))) throw new Error('fresh 基线的身份字段或 SHA 与当前状态不符');
+        || (descriptor && descriptor.sha256 !== hash(raw))) throw new Error('Fresh baseline identity or SHA mismatch');
     for (const record of baseline.files) {
         const backup = under(ctx.runDir, record.backupPath);
         if (!record.backupPath.startsWith('baseline-files/') || hash(readBytes(backup)) !== record.sha256

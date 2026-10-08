@@ -1481,7 +1481,7 @@ function applyDecision({ crosswalkRoot, crosswalkId, decisionHandle, owner, now,
             }
             return state;
         }
-        if (artifact.expectedStateSha256 !== state.stateSha256) fail('decision 的 compare-and-swap state SHA 不一致');
+        if (artifact.expectedStateSha256 !== state.stateSha256) fail('decision compare-and-swap state SHA mismatch');
         const current = state.assignments[artifact.pageKey];
         if (!current || current.pagePath !== artifact.pagePath || current.pageContentSha256 !== artifact.pageContentSha256) {
             fail('decision 的页面快照与 crosswalk assignment 不一致');

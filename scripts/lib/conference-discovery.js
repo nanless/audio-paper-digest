@@ -151,7 +151,7 @@ function catalogPdfs(pdfRoot) {
             const stat = fs.lstatSync(filename);
             if (entry.isSymbolicLink() || stat.isSymbolicLink()) throw fail(`pdfRoot contains symbolic link: ${filename}`);
             if (entry.isDirectory()) {
-                if (fs.realpathSync(filename) !== filename) throw fail(`pdfRoot 含不安全的目录：${filename}`);
+                if (fs.realpathSync(filename) !== filename) throw fail(`pdfRoot contains unsafe directory: ${filename}`);
                 visit(filename);
                 continue;
             }

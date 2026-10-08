@@ -652,13 +652,13 @@ function normalizeArxivFreshFailureHandoff(value) {
 function arxivFreshFailureHandoffName(handoff) {
     const normalized = normalizeArxivFreshFailureHandoff(handoff);
     const name = `${ARXIV_FRESH_FAILURE_HANDOFF_PREFIX}${normalized.arxivId}-g${String(normalized.generation).padStart(6, '0')}-${normalized.handoffKey.slice(0, 24)}.json`;
-    if (!SAFE_NAME_RE.test(name)) fail('arXiv 新失败交接的文件名不安全');
+    if (!SAFE_NAME_RE.test(name)) fail('arXiv fresh failure handoff filename is unsafe');
     return name;
 }
 
 function readArxivFreshFailureHandoff({ root, handoffName } = {}) {
     if (!SAFE_NAME_RE.test(String(handoffName || '')) || !handoffName.startsWith(ARXIV_FRESH_FAILURE_HANDOFF_PREFIX)) {
-        fail('arXiv 新失败交接的名称不安全');
+        fail('arXiv fresh failure handoff name is unsafe');
     }
     const directory = conferencePageMappingsApi.safeDirectory(root, 'arXiv fresh failure handoff root');
     const filename = path.resolve(directory, handoffName);
@@ -691,7 +691,7 @@ function writeArxivFreshFailureHandoff({ root, plan, paperId, generation, error,
 }
 
 function writePlan({ root, outputName, plan } = {}) {
-    if (!SAFE_NAME_RE.test(String(outputName || ''))) fail('plan 输出名不安全');
+    if (!SAFE_NAME_RE.test(String(outputName || ''))) fail('plan output name is unsafe');
     const normalized = normalizePlan(plan); const directory = conferencePageMappingsApi.safeDirectory
         ? conferencePageMappingsApi.safeDirectory(root, 'direct rewrite plan root', true)
         : (() => { if (!path.isAbsolute(root)) fail('直接重写计划 root 必须是绝对路径'); fs.mkdirSync(root, { recursive: true, mode: 0o700 }); return root; })();
@@ -750,13 +750,13 @@ function normalizeUnprojectedCatalogReport(value) {
 function unprojectedCatalogReportName(report) {
     const normalized = normalizeUnprojectedCatalogReport(report);
     const name = `${UNPROJECTED_REPORT_PREFIX}${normalized.planSha256.slice(0, 32)}.json`;
-    if (!SAFE_NAME_RE.test(name)) fail('未投影直接重写 catalog 报告的文件名不安全');
+    if (!SAFE_NAME_RE.test(name)) fail('unprojected direct rewrite catalog report filename is unsafe');
     return name;
 }
 
 function readUnprojectedCatalogReport({ root, reportName } = {}) {
     if (!SAFE_NAME_RE.test(String(reportName || '')) || !reportName.startsWith(UNPROJECTED_REPORT_PREFIX)) {
-        fail('未投影直接重写 catalog 报告的名称不安全');
+        fail('unprojected direct rewrite catalog report name is unsafe');
     }
     const directory = conferencePageMappingsApi.safeDirectory(root, 'unprojected direct rewrite catalog report root');
     const filename = path.resolve(directory, reportName);

@@ -746,7 +746,7 @@ function safeDirectory(directory, label, create) {
         fs.mkdirSync(directory, { mode: 0o700 });
     }
     const stat = fs.lstatSync(directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory) fail(`${label} 不安全`);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory) fail(`${label} is unsafe`);
     return directory;
 }
 
@@ -791,7 +791,7 @@ function readStableFile(filename, label, maxBytes) {
         const opened = fs.fstatSync(fd); const named = fs.lstatSync(absolute);
         if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size < 1 || opened.size > maxBytes) {
-            fail(`${label} 不安全或超出大小上限`);
+            fail(`${label} is unsafe or outside its size limit`);
         }
         if (process.platform !== 'win32' && (opened.mode & 0o777) !== 0o600) fail(`${label} permissions must be 0600`);
         const bytes = fs.readFileSync(fd); const after = fs.fstatSync(fd);
@@ -1290,7 +1290,7 @@ async function acquireCatalog({ providerId, outputRoot, apply = false } = {}, de
 }
 
 function pdfReceiptPath(paths, paper) {
-    if (!ID_RE.test(paper.id)) fail('论文 ID 不适合用作 receipt 文件名');
+    if (!ID_RE.test(paper.id)) fail('paper ID is unsafe for a receipt filename');
     return path.join(paths.receipts, `${paper.id}.json`);
 }
 

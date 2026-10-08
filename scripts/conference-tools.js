@@ -38,7 +38,7 @@ function safeRuntimeFile(root, name) {
     const safeRoot = path.resolve(root);
     const stat = fs.lstatSync(safeRoot);
     if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(safeRoot) !== safeRoot) {
-        throw new Error(`会议运行目录不安全：${safeRoot} 不是普通目录，或者是符号链接，或者路径没规范化`);
+        throw new Error(`Unsafe conference runtime directory: ${safeRoot}`);
     }
     const target = path.resolve(safeRoot, name);
     if (path.dirname(target) !== safeRoot) throw new Error(`会议运行文件名越出配置目录：${name} 解析后不在 ${safeRoot} 里`);

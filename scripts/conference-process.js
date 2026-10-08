@@ -56,7 +56,7 @@ function parseArgs(argv) {
 function readSafeJson(filename) {
     const named = fs.lstatSync(filename);
     if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || (named.mode & 0o777) !== 0o600) {
-        throw new Error(`会议进程状态文件不安全：不是单链接普通文件，或权限不是 0600：${filename}`);
+        throw new Error(`unsafe conference process state file: ${filename}`);
     }
     const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     try {

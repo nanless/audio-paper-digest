@@ -1305,7 +1305,7 @@ function applyDecisionLocked({ filterRoot, filterId, decisionHandle, now, lockHa
         ensureSelectionReceipt(directory, current);
         return current;
     }
-    if (normalizedPatch.expectedStateSha256 !== current.stateSha256) fail('apply 的 compare-and-swap state SHA 不一致');
+    if (normalizedPatch.expectedStateSha256 !== current.stateSha256) fail('apply compare-and-swap state SHA mismatch');
     if (!Object.prototype.hasOwnProperty.call(current.decisions, normalizedPatch.paperId)) fail('patch 引用了非候选论文');
     const previous = current.decisions[normalizedPatch.paperId];
     if (artifact.sourceSha256 !== previous.sourceSha256) fail('decision artifact 的 source SHA 与候选不匹配');
@@ -2036,7 +2036,7 @@ function applyProductionDecisionToCheckedState({ directory, state, digestChain, 
     const patch = normalizePatch({ operationId: artifact.operationId,
         expectedStateSha256: artifact.expectedStateSha256, paperId: artifact.paperId, result: artifact.result });
     if (operationIds.has(patch.operationId)) fail('生产 operationId 已应用过');
-    if (patch.expectedStateSha256 !== state.stateSha256) fail('apply 的 compare-and-swap state SHA 不一致');
+    if (patch.expectedStateSha256 !== state.stateSha256) fail('apply compare-and-swap state SHA mismatch');
     if (!Object.hasOwn(state.decisions, patch.paperId)) fail('patch 引用了非候选论文');
     const previous = state.decisions[patch.paperId];
     if (artifact.filterId !== state.filterId || artifact.sourceSha256 !== previous.sourceSha256) {

@@ -37,7 +37,7 @@ function recoverLocks(root = Config.FILES.conferenceProcessDir) {
         let owner = null;
         try {
             const stat = fs.lstatSync(ownerFile);
-            if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600) throw new Error('锁的 owner.json 不安全：要求权限 0600 的单链接普通文件');
+            if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600) throw new Error('unsafe owner file');
             owner = JSON.parse(fs.readFileSync(ownerFile, 'utf8'));
         } catch (_error) { /* 下面会按不安全或无法恢复的锁上报 */ }
         if (!snapshot.reclaimable || snapshot.active || !owner || !pidIsDead(owner.pid)) {

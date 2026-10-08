@@ -60,9 +60,9 @@ function safeDirectory(directory, label, create = false) {
     for (const segment of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
         cursor = path.join(cursor, segment);
         const stat = fs.lstatSync(cursor);
-        if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} 的路径不安全：每一层都必须是目录，且不能是符号链接`);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} has an unsafe path: every component must be a directory and must not be a symbolic link.`);
     }
-    if (fs.realpathSync(absolute) !== absolute) fail(`${label} 的路径不安全：解析后的真实位置与请求的目录不一致`);
+    if (fs.realpathSync(absolute) !== absolute) fail(`${label} has an unsafe path: its resolved location does not match the requested directory.`);
     return absolute;
 }
 
@@ -75,7 +75,7 @@ function readStableFile(filename, label, maxBytes = MAX_JSON_BYTES) {
         const opened = fs.fstatSync(fd); const named = fs.lstatSync(absolute);
         if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size > maxBytes) {
-            fail(`${label} 不能安全读取：它不是单链接普通文件，文件身份与路径不符，或超过大小上限`);
+            fail(`${label} is unsafe to read: it is not a regular file with a single hard link, its file identity does not match the path, or it exceeds the size limit.`);
         }
         const bytes = fs.readFileSync(fd); const after = fs.fstatSync(fd);
         if (bytes.length !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino
@@ -338,7 +338,7 @@ function normalizeConferencePageMappingRecord(value) {
 }
 
 function writeConferencePageMappingRecord({ root, outputName, artifact } = {}) {
-    if (!SAFE_NAME_RE.test(String(outputName || ''))) fail('会议页面映射的输出名不安全：必须符合允许的 JSON 文件名格式');
+    if (!SAFE_NAME_RE.test(String(outputName || ''))) fail('The conference page mapping output name is unsafe: it must match the allowed JSON filename format.');
     const directory = safeDirectory(root, 'conference page mapping output directory', true);
     const normalized = normalizeConferencePageMappingRecord(artifact); const filename = path.join(directory, outputName);
     const bytes = prettyBytes(normalized); let fd;

@@ -87,7 +87,7 @@ function attemptDirectory(root, crosswalkId) {
     try { fs.mkdirSync(directory, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
     const stat = fs.lstatSync(directory);
     if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory) {
-        fail('尝试记录目录不安全：不是目录、是符号链接，或真实路径不一致');
+        fail('attempt-record directory is unsafe');
     }
     return directory;
 }
@@ -123,7 +123,7 @@ function loadSelectedHandoffs({ handoffRoot, handoffNames }, deps) {
         fail('one or more unique named fresh-failure handoffs are required');
     }
     return handoffNames.map(handoffName => {
-        if (!SAFE_NAME_RE.test(String(handoffName || ''))) fail('fresh 抓取失败交接文件名不安全');
+        if (!SAFE_NAME_RE.test(String(handoffName || ''))) fail('fresh-failure handoff name is unsafe');
         const loaded = deps.readFailureHandoff({ root: handoffRoot, handoffName });
         return { handoffName, fileSha256: loaded.fileSha256, handoff: loaded.handoff };
     });
