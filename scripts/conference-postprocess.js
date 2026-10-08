@@ -45,7 +45,7 @@ function configured(files) {
 function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('conference-postprocess.js');
     if (process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE === '1') {
-        throw new Error('New-conference postprocess must use conference:new:process');
+        throw new Error('新会议 postprocess 必须使用 conference:new:process');
     }
     const options = parseArgs(argv); const files = runtime.files || Config.FILES;
     const planHandle = (runtime.loadBoundPlan || executionCli.loadBoundPlan)(files, options); const roots = configured(files);

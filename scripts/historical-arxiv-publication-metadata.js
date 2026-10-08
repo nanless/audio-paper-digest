@@ -46,7 +46,7 @@ function parserFailureIds(sourceRoot, generation, paperIds, runtime = {}) {
     const fresh = runtime.freshSource || require('./lib/fresh-arxiv-rewrite-source.js');
     const runner = runtime.runner || require('./lib/historical-direct-rewrite-runner.js');
     if (!Array.isArray(paperIds) || !paperIds.length || new Set(paperIds).size !== paperIds.length
-        || paperIds.some(id => !/^\d{4}\.\d{4,5}$/.test(id))) throw new Error('plan arXiv paper set is invalid');
+        || paperIds.some(id => !/^\d{4}\.\d{4,5}$/.test(id))) throw new Error('计划的 arXiv 论文集合无效');
     const ids = [];
     for (const id of paperIds.slice().sort()) {
         const source = fresh.readFreshArxivRewriteSource({ rootDir: sourceRoot, arxivId: id, generation });
@@ -88,8 +88,8 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
         ? parserFailureIds(files.freshArxivFetchedSourcesDir, options.generation, planArxivIds, runtime)
         : options.paperIds.slice().sort();
     const unknown = ids.filter(id => !planArxivIds.includes(id));
-    if (unknown.length) throw new Error(`paper IDs are outside the direct rewrite plan: ${unknown.join(',')}`);
-    if (!ids.length) throw new Error('no matching arXiv publication metadata tasks');
+    if (unknown.length) throw new Error(`论文 ID 不在直接重写计划内：${unknown.join(',')}`);
+    if (!ids.length) throw new Error('没有匹配的 arXiv 出版元数据任务');
     const existing = new Map(); const missingIds = [];
     for (const id of ids) {
         const directory = sidecars.sidecarDirectory(files.historicalArxivPublicationMetadataDir, id, options.generation);

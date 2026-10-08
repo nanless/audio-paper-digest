@@ -33,7 +33,7 @@ function parseArgs(argv) {
         if (!values[flag]) throw new Error(`Missing required argument: ${flag}`);
     }
     for (const flag of ['--catalog', '--report', '--spec']) {
-        if (!filter.SAFE_JSON_NAME.test(values[flag])) throw new Error(`${flag} must be a safe direct JSON filename`);
+        if (!filter.SAFE_JSON_NAME.test(values[flag])) throw new Error(`${flag} 必须是安全的直接 JSON 文件名`);
     }
     if (!filter.UUID_RE.test(values['--filter'])) throw new Error('--filter 必须是规范的 UUID v4');
     if (!evidenceApi.UUID_RE.test(values['--evidence-run'])) throw new Error('--evidence-run 必须是规范的 UUID v4');
