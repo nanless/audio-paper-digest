@@ -194,6 +194,8 @@ npm run conference:new:process -- --apply \
   --concurrency 3
 npm run conference:new:process -- --status \
   --catalog odyssey-2026.json --report odyssey-2026-report.json --filter UUID
+npm run conference:new:process -- --status --verify-files \
+  --catalog odyssey-2026.json --report odyssey-2026-report.json --filter UUID
 ```
 
 入口只接受 complete、非空、来自 `official-proceedings` discovery 的选择，每个 included 成员必须是唯一 `exact` PDF。自动来源验收使用 `conference-deterministic-source-seal-v1`，表示程序按官方 metadata 的 `pdfFile` 核验文件，不表示人工审阅。程序内部依次安排提取、暂存、导入和计划，再完成共享深度分析、评分、解读、标签和单篇暂存页。
@@ -207,6 +209,8 @@ npm run conference:new:process -- --status \
 分类未能确定时，程序保存 `tag-review-queue.json` 和具体阻断原因。这是单篇待处理条件，不是服务故障，也不能把未解决标签放进可发布汇总。
 
 只有 `--apply` 取得 process 操作锁，`--dry-run` 和 `--status` 只读且不取写锁。程序返回或抛出异常时在 `finally` 释放锁；进程退出遗留的锁只允许安全回收同机已死亡 owner，未知或仍存活 owner 不能擅自清理。逐篇更新另有状态 SHA 比较，禁止把 complete 回退成 analyzing 或 analysis_partial。最终完成事务在锁内重新确认全部成员及回执。
+
+`--status` 默认只读 `state.json` 和 `completion-receipt.json`，核的是凭证内部自洽，不读磁盘上的分析结果和暂存页；报告里的 `filesVerified` 为 `false` 就表示这次没核文件。要同时确认文件在位，加 `--verify-files`：它按 `analysisProof`、`pageProof` 和 `aggregate` 复算 analysis.json、暂存 page.md／manifest.json、汇总页的 SHA，缺文件或字节不符都列进 `fileVerification.failures`（`paperId`、`artifact`、`detail`），进程退出码为 1。它只遍历该进程已知的 `analysisRunId` 目录，不扫整个暂存根目录。来源封存文件不在这项检查内，它们由 `--apply` 的来源连续性核验和发布前检查负责。
 
 process 只生成私有来源、缓存、检查点及单篇和汇总暂存页，不执行博客生成、审查、推送或远端验证。完成处理后继续下节发布，不把 process complete 当作已上线。
 
@@ -235,6 +239,8 @@ npm run conference:new:publish:status -- --conference-id odyssey-2026 --process-
 
 `generate` 重验来源及暂存页，生成博客文件和本批清单。`review` 对最终页面字节作只读审查，包含正文模型审查、图片多模态、Markdown 及 Hugo 检查；失败不保存通过记录，也不原地改正文。模型通过不等于论文事实已绝对正确，更不代替独立事实或人工视觉检查。
 
+`review` 要求博客检出目录带 Hugo 运行时（`hugo.yaml`/`hugo.yml`/`hugo.toml`/`hugo.json` 任一，加 `layouts`/`assets`/`themes` 任一）。缺运行时就没有可审查的渲染结果，`review` 直接报错，不产出任何审查凭证，也不会跳过正文和图片审查后伪造一份通过记录。审查协议指纹同样按实际算出；算不出来就报错，不替换成替代值。
+
 逐页通过证据只按相对路径和页面内容 SHA 复用。实现、模型、协议或批次记录变化后，未变页面保留通过依据，当前批次仍须重跑确定性检查并生成新审查记录。图片子审查不能脱离整页身份或省略来源检查。
 
 发布正文审查默认并发 5，`PD_BLOG_REVIEW_CONCURRENCY` 范围 1–5。设为 1 时逐页顺序处理，首异常会停止后续页面；默认并发模式会提前提交所有页面任务，异常传播不保证其他已提交页面立即停止请求。不能宣称它与 Node 分析队列具备相同的运行级停止派发能力。
@@ -258,6 +264,8 @@ npm run conference:new:publish:status -- --conference-id odyssey-2026 --process-
 GET 使用项目 HTTP CONNECT，逐跳核验公网地址并限制响应。全链共享 60 秒期限，响应最多 16 MiB；每一跳的瞬时传输最多尝试 6 次。HTTP 状态、哈希和 HTML 不匹配不作为瞬时故障重试。线上尚未符合时保留远端已经推送的事实，继续运行 `verify`，不要重新分析论文。
 
 `status` 报告已保存的线上检查快照；显式 `verify` 会记录一次新的 intent/result 并重新 GET，最新 pending 或失败不能被旧通过掩盖。已有 publish 的重复 `push` 只读 status，不代替新的线上重验。旧 v1 发布通过单独的 `verification-v2.json` 补充核验，原记录字节保留。
+
+读取已发布凭证时，不带 `contentReview` 的 v2 审查记录按旧格式识别：`conference-blog-review-v1` 的 version 2 中途增加过 `contentReview` 要求，早期代码写过不带的 v2 记录，自哈希、文件清单、`generationSha256` 和 HTML 门禁页面集合都对得上，是那段代码的合法产物。当前发布器给每个 v2 generation 都写 `contentReview`，缺字段不可能由当前代码产生，所以只在读取已发布凭证时按旧格式放行。新发布和待推送的凭证仍必须带一份通过的 `contentReview`；带 `contentReview` 但没通过、逐页记录不符、或 HTML 门禁页面集合不闭合的记录一律拒绝。
 
 这里的 complete 范围是 `mechanical-html+remote-oid+online-urls`。该验收不查询 GitHub Pages workflow 的 build/deploy，不另查页面标题，也不执行浏览器中的 MathJax/KaTeX 或人工看图。对用户宣告上线前，还须确认部署对应发布提交或保留已审字节的后续提交，核对全部目标页面的正式地址和标题，并保留部署及页面核验记录。需要的事实、浏览器和视觉审查也须按任务完成；不能把机器字段或模型通过当作这些工作已经完成。
 
@@ -297,7 +305,7 @@ process 会将余额、认证、限流、配置及被分类为系统传输故障
 
 ### 实现变化后的显式迁移
 
-process 的实现指纹来自固定清单，覆盖共享引擎、深度分析、来源上下文、JS/Python 论文身份、Reader 修复及表格和资源处理、会议暂存及渲染，以及实际分析、Reader、评分、开源扫描和修复提示词。
+process 的实现指纹来自固定清单，覆盖共享引擎、深度分析、来源核验与来源上下文、JS/Python 论文身份、Reader 修复及表格和资源处理、会议暂存及渲染，以及实际分析、Reader、评分、开源扫描和修复提示词。来源核验那一组是 `conference-source-ledger.js`、`conference-importer.js`、`conference-extraction-receipt.js`、`conference-pdf-source.js` 和 `conference-source-context.js`；它们只进当前指纹，不写进 v1 冻结清单，所以旧记录仍按当时那份清单复算。
 
 已有进展的任务遇到实现变化时，普通 process 会要求显式迁移，不会静默另建 UUID 并整会重新计费。只有旧任务全为 pending、尝试为 0 且没有来源、分析或页面证明时，才允许新实现建立另一命名空间，旧检查点仍保留。多个已进展任务身份相符却有歧义时停止，不能任意选一个。
 

@@ -111,6 +111,18 @@ const IMPLEMENTATION_FILES = Object.freeze([
 // 只有当前版本清单收录它；v1 冻结清单保持原样，旧记录仍按当时那份清单复算。
 const PROMPT_TEXT_VERSIONS_FILE = 'scripts/lib/prompt-text-versions.js';
 const IMPLEMENTATION_PROMPT_TEXT_VERSIONS = Object.freeze(['v1', 'current']);
+// 来源核验的一组文件：ledger、离线导入、抽取回执、PDF 描述和来源上下文。
+// 它们的字节决定来源是否被正确核验，所以当前指纹必须收录；否则改来源核验逻辑不会
+// 换指纹，同一代际的旧来源、ledger 和导入凭证会被接着复用。
+// 它们不是提示词文本，v1 冻结清单当初也没有收录，加进去会让旧记录的指纹再也
+// 复算不出来，所以只进当前清单，v1 清单保持原样。
+const SOURCE_VERIFICATION_FILES = Object.freeze([
+    'scripts/lib/conference-source-context.js',
+    'scripts/lib/conference-source-ledger.js',
+    'scripts/lib/conference-extraction-receipt.js',
+    'scripts/lib/conference-pdf-source.js',
+    'scripts/lib/conference-importer.js'
+]);
 // 当前实现清单：把已迁移到 v2 的提示词换成 -v2 路径，其余保持冻结路径。
 // 提示词正文本身仍在清单里，所以改正文或改版本映射都会改变指纹。
 function currentImplementationFiles() {
@@ -119,6 +131,7 @@ function currentImplementationFiles() {
         return stage ? promptTextVersions.currentOrFrozenPromptPath(stage) : name;
     });
     files.push(PROMPT_TEXT_VERSIONS_FILE);
+    files.push(...SOURCE_VERIFICATION_FILES);
     return files;
 }
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -1057,6 +1070,6 @@ module.exports = { CONTRACT, LEGACY_CONTRACT, COMPLETION_CONTRACT, LEGACY_COMPLE
     stateDigest, assertState, completionBodyFor, validateCompletionReceipt, buildTagReviewQueue,
     writeTagReviewQueue, buildTagReviewQueueFields, defaultDependencies, loadAuthority,
     namesFor, sourceNames, sealOneSource, prepareShared,
-    IMPLEMENTATION_FILES, IMPLEMENTATION_PROMPT_TEXT_VERSIONS, currentImplementationFiles,
+    IMPLEMENTATION_FILES, IMPLEMENTATION_PROMPT_TEXT_VERSIONS, SOURCE_VERIFICATION_FILES, currentImplementationFiles,
     implementationSha256, processOne, runWorkers, assertSourceContinuity,
     runConferenceProcessLocked, runConferenceProcess, safeProcessDirectory, exactFile };

@@ -19,6 +19,7 @@ const utils = require('../scripts/utils.js');
 const { loadOriginalConferenceProcessApis } = require('./helpers/conference-process-original-fixture.js');
 
 const H = value => processApi.stableHash(value);
+const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 function executionIdentity({ env = {}, limits = {}, secondary = {} } = {}) {
     const analysisConfig = Object.fromEntries(processApi.DEEP_EXECUTION_LIMIT_FIELDS
         .map(field => [field, /Temperature$/.test(field) ? 0.1 : 1000]));
@@ -74,6 +75,42 @@ function success(item) {
     pageProof: { manifestSha256: H(`page:${item.paperId}`), contentSha256: H(`content:${item.paperId}`),
         pagePath: `content/posts/${item.paperId.split(':').at(-1)}.md` } };
 }
+// 写真实的 analysis.json 和 staging page.md/manifest.json，proof 由实际字节算出，
+// 这样 --verify-files 的通过与失败都能用同一套夹具区分。
+function writeConferenceArtifacts(files, item) {
+    const analysisDirectory = path.join(files.conferenceAnalysisDir, item.analysisRunId);
+    fs.mkdirSync(analysisDirectory, { recursive: true, mode: 0o700 });
+    const analysisBytes = Buffer.from(`${JSON.stringify({ status: 'complete', paperId: item.paperId,
+        executionId: item.analysisRunId })}\n`);
+    fs.writeFileSync(path.join(analysisDirectory, 'analysis.json'), analysisBytes, { mode: 0o600 });
+    const stagingDirectory = path.join(files.conferencePageStagingDir, item.analysisRunId, H('registry'), H('implementation'));
+    fs.mkdirSync(stagingDirectory, { recursive: true, mode: 0o700 });
+    const pageBytes = Buffer.from(`---\npaper_digest_paper_id: "${item.paperId}"\n---\n# ${item.paperId}\n`);
+    fs.writeFileSync(path.join(stagingDirectory, 'page.md'), pageBytes, { mode: 0o600 });
+    const body = { contract: 'conference-paper-page-staging-v2', version: 2, status: 'complete',
+        paperId: item.paperId, analysisExecutionId: item.analysisRunId, analysisSha256: sha256(analysisBytes),
+        completionReceiptSha256: H(`analysis-receipt:${item.paperId}`), sourceSnapshotSha256: H(`source:${item.paperId}`),
+        pagePath: `content/posts/${item.paperId.split(':').at(-1)}.md`, contentSha256: sha256(pageBytes) };
+    const manifest = { ...body, manifestSha256: H(body) };
+    fs.writeFileSync(path.join(stagingDirectory, 'manifest.json'), Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`), { mode: 0o600 });
+    return { analysisProof: { analysisSha256: body.analysisSha256,
+            completionReceiptSha256: body.completionReceiptSha256, sourceSnapshotSha256: body.sourceSnapshotSha256 },
+        pageProof: { manifestSha256: manifest.manifestSha256, contentSha256: manifest.contentSha256,
+            pagePath: manifest.pagePath } };
+}
+function writeConferenceAggregate(files, context, ids) {
+    const aggregateId = H(ids).slice(0, 32);
+    const directory = path.join(files.conferenceAggregateDir, context.authority.conferenceId, aggregateId);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const markdown = Buffer.from('# aggregate\n');
+    fs.writeFileSync(path.join(directory, 'aggregate.md'), markdown, { mode: 0o600 });
+    const body = { contract: 'conference-aggregate-staging-v2', version: 2, status: 'complete',
+        aggregateId, conferenceId: context.authority.conferenceId, markdownSha256: sha256(markdown),
+        pagePath: 'content/posts/conference-odyssey-2026.md' };
+    const manifest = { ...body, manifestSha256: H(body) };
+    fs.writeFileSync(path.join(directory, 'manifest.json'), Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`), { mode: 0o600 });
+    return { manifest };
+}
 
 test('单篇模拟端到端把来源、共用分析、页面和汇总收在一份不可变凭证下', async t => {
     const f = fixture(t); let calls = 0;
@@ -112,7 +149,7 @@ test('部分完成的论文用同一个确定性 UUID 续跑，不重跑已完�
     assert.deepEqual(cli.processStatus(options, { dependencies: f.deps }), {
         status: 'partial', processId: first.processId, conferenceId: f.authority.conferenceId,
         stateSha256: partial.stateSha256, papers: { complete: 1, analysis_partial: 1 },
-        completionReceiptSha256: null, tagReview: 0
+        completionReceiptSha256: null, tagReview: 0, filesVerified: false
     });
     const second = await processApi.runConferenceProcess({ ...options, retryFailed: true }, { ...f.deps, processPaper: worker });
     assert.equal(second.status, 'complete');
@@ -157,6 +194,68 @@ test('状态查询和完成凭证拒绝前后矛盾的生命周期声明', async
     assert.doesNotThrow(() => processApi.assertState(validPartial));
     assert.throws(() => processApi.validateCompletionReceipt(validPartial, receipt),
         /completion receipt requires a complete checkpoint/);
+});
+
+test('--status 默认不核磁盘，--verify-files 才区分凭证自洽与文件缺失、损坏', async t => {
+    const f = fixture(t, 2);
+    const root = path.dirname(f.files.conferenceProcessDir);
+    Object.assign(f.files, { conferenceAnalysisDir: path.join(root, 'analysis'),
+        conferencePageStagingDir: path.join(root, 'staging'), conferenceAggregateDir: path.join(root, 'aggregates') });
+    const options = { apply: true, catalogName: 'catalog.json', reportName: 'report.json',
+        filterId: f.authority.filterId, concurrency: 1 };
+    const statusOptions = { catalogName: 'catalog.json', reportName: 'report.json', filterId: f.authority.filterId };
+    const written = new Map();
+    const completed = await processApi.runConferenceProcess(options, { ...f.deps,
+        processPaper: async (_context, _shared, item) => {
+            const proof = writeConferenceArtifacts(f.files, item); written.set(item.paperId, item.analysisRunId); return proof; },
+        aggregate: async (context, _shared, ids) => writeConferenceAggregate(f.files, context, ids) });
+    assert.equal(completed.status, 'complete');
+
+    const blind = cli.processStatus(statusOptions, { dependencies: f.deps });
+    assert.equal(blind.status, 'complete');
+    assert.equal(blind.filesVerified, false);
+    assert.equal(blind.fileVerification, undefined);
+    const verified = cli.processStatus({ ...statusOptions, verifyFiles: true }, { dependencies: f.deps });
+    assert.equal(verified.status, 'complete'); assert.equal(verified.filesVerified, true);
+    assert.deepEqual(verified.fileVerification, { status: 'ok', checkedPapers: 2, failures: [] });
+    assert.equal(cli.statusExitCode(verified), 0);
+
+    const victim = f.members[0].paperId;
+    const runDirectory = path.join(f.files.conferencePageStagingDir, written.get(victim));
+    const [registryName] = fs.readdirSync(runDirectory);
+    const [implementationName] = fs.readdirSync(path.join(runDirectory, registryName));
+    const pageFile = path.join(runDirectory, registryName, implementationName, 'page.md');
+    fs.rmSync(pageFile);
+    // 凭证没动，所以默认 --status 仍报 complete：这正是要修的盲区。
+    assert.equal(cli.processStatus(statusOptions, { dependencies: f.deps }).status, 'complete');
+    const missing = cli.processStatus({ ...statusOptions, verifyFiles: true }, { dependencies: f.deps });
+    assert.equal(missing.fileVerification.status, 'failed');
+    assert.deepEqual(missing.fileVerification.failures.map(item => [item.paperId, item.artifact]),
+        [[victim, 'page']]);
+    assert.match(missing.fileVerification.failures[0].detail, /page\.md/);
+    assert.equal(cli.statusExitCode(missing), 1);
+
+    const tampered = f.members[1].paperId;
+    const analysisFile = path.join(f.files.conferenceAnalysisDir, written.get(tampered), 'analysis.json');
+    fs.writeFileSync(analysisFile, Buffer.from('{"status":"complete","tampered":true}\n'), { mode: 0o600 });
+    const damaged = cli.processStatus({ ...statusOptions, verifyFiles: true }, { dependencies: f.deps });
+    assert.deepEqual(damaged.fileVerification.failures.map(item => [item.paperId, item.artifact]),
+        [[victim, 'page'], [tampered, 'analysis']]);
+    assert.match(damaged.fileVerification.failures[1].detail, /analysis\.json 的 SHA/);
+
+    const aggregateFile = path.join(f.files.conferenceAggregateDir, f.authority.conferenceId,
+        completed.aggregate.aggregateId, 'aggregate.md');
+    fs.rmSync(aggregateFile);
+    const noAggregate = cli.processStatus({ ...statusOptions, verifyFiles: true }, { dependencies: f.deps });
+    assert.deepEqual(noAggregate.fileVerification.failures.map(item => [item.paperId, item.artifact]),
+        [[victim, 'page'], [tampered, 'analysis'], [null, 'aggregate']]);
+
+    assert.equal(cli.parseArgs(['--status', '--catalog', 'catalog.json', '--report', 'report.json',
+        '--filter', f.authority.filterId, '--verify-files']).verifyFiles, true);
+    assert.equal(cli.parseArgs(['--status', '--catalog', 'catalog.json', '--report', 'report.json',
+        '--filter', f.authority.filterId]).verifyFiles, undefined);
+    assert.throws(() => cli.parseArgs(['--apply', '--catalog', 'catalog.json', '--report', 'report.json',
+        '--filter', f.authority.filterId, '--verify-files']), /Use/);
 });
 
 test('调度器把每篇论文的完整生命周期上限设为三', async t => {
@@ -233,6 +332,40 @@ test('会议实现指纹按版本绑定提示词正文，v1 冻结清单仍可�
     assert.equal(fingerprint('v1'), legacy);
     sources.set(mappingName, mapping);
     assert.throws(() => fingerprint('v9'), /没有登记/);
+});
+
+test('会议实现指纹绑定来源核验文件，且不写进 v1 冻结清单', () => {
+    // 这五个名字在测试里单独写死：它们从清单里被删掉时，这条断言必须失败，
+    // 不能靠读被检查的那份清单来自证。
+    const required = [
+        'scripts/lib/conference-source-context.js',
+        'scripts/lib/conference-source-ledger.js',
+        'scripts/lib/conference-extraction-receipt.js',
+        'scripts/lib/conference-pdf-source.js',
+        'scripts/lib/conference-importer.js'
+    ];
+    assert.deepEqual([...processApi.SOURCE_VERIFICATION_FILES], required);
+    const current = new Set(processApi.currentImplementationFiles());
+    for (const name of required) {
+        assert.ok(current.has(name), `${name} 不在当前实现清单里`);
+        assert.equal(fs.statSync(path.join(__dirname, '..', name)).isFile(), true, name);
+        assert.ok(!processApi.IMPLEMENTATION_FILES.includes(name), `${name} 不应进 v1 冻结清单`);
+    }
+    const root = '/virtual/conference-source-verification';
+    const files = [...new Set([...processApi.currentImplementationFiles(), ...processApi.IMPLEMENTATION_FILES])];
+    const sources = new Map(files.map(name => [name, Buffer.from(`source:${name}`)]));
+    const fingerprint = promptTextVersion => processApi.implementationSha256({ root, promptTextVersion,
+        readFileSync: filename => sources.get(path.relative(root, filename)) });
+    const baseline = fingerprint(); const legacy = fingerprint('v1');
+    for (const name of required) {
+        const original = sources.get(name);
+        sources.set(name, Buffer.concat([original, Buffer.from('\nsource verification drift')]));
+        assert.notEqual(fingerprint(), baseline, `${name} 改了字节却没换当前指纹`);
+        assert.equal(fingerprint('v1'), legacy, `${name} 不该出现在 v1 冻结清单`);
+        sources.set(name, original);
+    }
+    assert.equal(fingerprint(), baseline);
+    assert.equal(fingerprint('v1'), legacy);
 });
 
 test('深度执行身份会归一化路由、绑定语义配置，并排除所有密钥', () => {
