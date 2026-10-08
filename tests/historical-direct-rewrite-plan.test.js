@@ -445,12 +445,12 @@ test('直接 arXiv 的登记、分析和暂存绑定同一代已保存并核验�
     assert.equal(staged.sourceBinding.sourceManifestSha256, sourceBinding.sourceManifestSha256);
     assert.equal(staged.pages[0].sourceGeneration, 1);
     assert.throws(() => planner.directStagingBinding({ plan, registry: planner.buildRegistry(plan),
-        paperId: arxiv.paperId, analysisArtifact }), /sealed source generation/);
+        paperId: arxiv.paperId, analysisArtifact }), /本次已保存的来源/);
     const second = await prepare(2); const newerRegistry = planner.buildRegistry(plan, { sourcePreparation: second });
     assert.notEqual(second.arxiv[0].result.sourceManifestSha256, sourceBinding.sourceManifestSha256);
     assert.notEqual(newerRegistry.registrySha256, registry.registrySha256);
     assert.throws(() => planner.directStagingBinding({ plan, registry: newerRegistry,
-        paperId: arxiv.paperId, analysisArtifact }), /sealed source generation/);
+        paperId: arxiv.paperId, analysisArtifact }), /本次已保存的来源/);
 });
 
 test('计划要求完整的显式会议投影产物，命令行保持两条队列分开', t => {

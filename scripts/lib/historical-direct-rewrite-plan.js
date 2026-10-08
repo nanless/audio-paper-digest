@@ -925,7 +925,7 @@ function directStagingBinding({ plan, registry, paperId, analysisArtifact } = {}
             || analysisArtifact.sourceTextSha256 !== binding.textSha256
             || analysisArtifact.sourcePdfSha256 !== binding.pdfSha256
             || analysisArtifact.sourceRunIdentitySha256 !== registered.sourceRunIdentitySha256) {
-            fail('direct arXiv staging requires analysis from this sealed source generation and manifest');
+            fail('arXiv 直接暂存要求分析结果出自本次已保存的来源：generation 与来源清单 SHA 必须一致');
         }
     }
     // 这个包是直接渲染器拿到的页面级精确输入。它有意不带 crosswalk decision，

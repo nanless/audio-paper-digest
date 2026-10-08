@@ -156,7 +156,7 @@ function createAnalysisWaiver({ date, paperIds, reason, files = Config.FILES, no
         const deepPaper = deepById.get(id); const dbPaper = db[id];
         if (!deepPaper || !dbPaper) throw new Error(`paper not found in current artifacts: ${id}`);
         const sourceSha256 = deepPaper.sourceSha256 || deepPaper.analysisManifest?.sourceAcquisition?.sourceSha256;
-        if (!SHA256_RE.test(sourceSha256 || '')) throw new Error(`paper has no sealed source hash: ${id}`);
+        if (!SHA256_RE.test(sourceSha256 || '')) throw new Error(`论文缺少可核验的来源 SHA（深度分析结果里没有 sourceSha256）: ${id}`);
         return { paperId: id, deepPaperSha256: stableSha256(deepPaper), sourceSha256,
             originalDigestStatus: dbPaper.digestStatus?.status ?? null,
             originalLatestAttemptStatus: dbPaper.digestStatus?.latestAttemptStatus ?? null };
