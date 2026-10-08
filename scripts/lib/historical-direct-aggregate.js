@@ -213,8 +213,8 @@ function cohortEntries(plan, scope, key) {
     return { requiredPaperIds: papers.map(item => item.paperId).sort(), requiredPageKeys: pageKeys };
 }
 
-// This reads no post bytes. It reduces the frozen inventory to retained output
-// route/SHA metadata and binds it to the direct plan before execution begins.
+// 这里不读任何正文字节。只把冻结清单压缩成保留输出的
+// 路由/SHA 元数据，动手前绑到直接计划上。
 function buildAggregateProjection({ plan, inventory } = {}) {
     const normalizedPlan = planApi.normalizePlan(plan);
     const pages = normalizeInventoryForAggregateProjection(inventory, normalizedPlan);
@@ -402,8 +402,8 @@ function writeAggregateProjection({ root, outputName, projection, plan } = {}) {
 function exactRegistryEntry(entry, item) {
     exact(entry, ['paperId', 'runId', 'route', 'projectionSha256', 'status', 'source', 'analysis', 'staging',
         'attempts', 'latestError', 'updatedAt', ...(Object.hasOwn(entry || {}, 'analysisRecovery') ? ['analysisRecovery'] : [])], `direct execution registry ${item.paperId}`);
-    // Retained recovery metadata must equal the terminal receipt that
-    // readAnalysis replays from disk; never discard an unknown proof.
+    // 留下的恢复元数据必须和 readAnalysis 从磁盘重放的终局凭证一致；
+    // 看不懂的凭证不许扔。
     if (Object.hasOwn(entry, 'analysisRecovery')) {
         exact(entry.analysisRecovery, ['filename', 'fileSha256', 'recoverySha256', 'recordSha256', 'updatedAt'], `${item.paperId} retained recovery receipt`);
         if (!entry.analysis?.recovery || stableHash(entry.analysisRecovery) !== stableHash(entry.analysis.recovery)) {
@@ -645,8 +645,7 @@ function loadDirectAggregateInputs({ planFile, registryFile, projectionFile, sta
     const members = new Map();
     for (const item of plan.queue) {
         const entry = byId.get(item.paperId); if (!entry) fail(`${item.paperId} is missing from direct execution registry`);
-        // Loading every staged member is intentionally deferred to the selected
-        // cohort so unrelated in-progress work cannot block a finished cohort.
+        // 只在选定分组里再加载已暂存成员；不相干的未完工作挡不住已完工的分组。
         members.set(item.paperId, { item, entry });
     }
     return { plan, planFileSha256: planLoaded.fileSha256, registry, registryFileSha256: registryLoaded.fileSha256,
@@ -840,8 +839,7 @@ function buildDirectAggregates({ inputs, daily = null, conference = null } = {})
             outputPage: projectionOutputPage({ pageKey: task.pageKey, path: task.path, primaryUrl: task.primaryUrl,
                 previousContentSha256: task.previousContentSha256 }, `conference task ${task.pageKey} output page`) }));
     if (!dailyCohorts.length && !conferenceCohorts.length) fail('direct aggregate projection has no selected cohort');
-    // Task pages are written before their conference summary.  The summary is
-    // therefore the completion marker for an atomic, restartable conference run.
+    // 任务页先写，会议汇总后写。汇总落盘了，一次会议运行才算完整写完，重跑能接上。
     return [...dailyCohorts, ...taskCohorts, ...conferenceCohorts].map(cohort => buildCohort(inputs, cohort));
 }
 function aggregateRunIdFor(aggregates) {
