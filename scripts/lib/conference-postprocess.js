@@ -437,7 +437,13 @@ function supersedeBlockedAssignment(directory, assignment) {
     try {
         existing = pageApi.strictJson(pageApi.readRegular(filename, 16 * 1024 * 1024, 'existing conference assignment').bytes,
             'existing conference assignment');
-    } catch { return false; }
+    } catch (error) {
+        // 文件在两次检查之间消失，等于没有旧记录，走下面的新建路径。
+        if (error?.code === 'ENOENT') return false;
+        // 记录还在，但读不出来。这时既不能当成可顶替，也不能把它留给下面那次
+        // 排他写入去报「不能覆盖」——那句话盖掉了真正的原因。
+        fail(`已有的会议标签记录读不出来，无法判断能否顶替：${filename}（${error.message}）`);
+    }
     const body = { ...existing }; const previousSha256 = body.assignmentSha256; delete body.assignmentSha256;
     if (existing.status !== 'blocked' || previousSha256 !== stableHash(body)
         || existing.paperId !== assignment.paperId

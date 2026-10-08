@@ -127,19 +127,38 @@ function getLayout(projectRoot = PROJECT_ROOT) {
 }
 
 function readRetentionDays(value = process.env.PD_STORAGE_RETENTION_DAYS) {
-    const configured = value ?? readProjectEnvValue('PD_STORAGE_RETENTION_DAYS');
+    return resolveRetentionSetting(value).days;
+}
+
+// 保留天数有三种来源：调用方显式传值、环境变量、项目 .env。读 .env 失败
+// 要单独报出来，「文件不在或键没写」和「文件在但读不出来」都会落到默认
+// 天数，但后者是配置问题，得让人看见。
+function resolveRetentionSetting(value = process.env.PD_STORAGE_RETENTION_DAYS, envFile) {
+    let configured = value;
+    let source = configured === undefined || configured === null ? 'default' : 'override';
+    let readError = null;
+    if (configured === undefined || configured === null) {
+        const read = readProjectEnvValue('PD_STORAGE_RETENTION_DAYS', envFile);
+        configured = read.value;
+        readError = read.error || null;
+        if (configured !== undefined) source = 'env';
+    }
     const parsed = Number.parseInt(String(configured ?? ''), 10);
-    return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_RETENTION_DAYS;
+    const days = Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_RETENTION_DAYS;
+    return { days, source, configured: configured ?? null, readError };
 }
 
 // 这里不要调 env-loader：它的兼容加载器会改 .env 的权限。存储状态和诊断必须保持
 // 只读，文件权限已经正确时也不能例外。这个解析器不解释读到的值，原样返回，只用于
-// 读取保留天数。
+// 读取保留天数。返回 error 是给调用方区分「确实没有这一项」和「读不出来」。
 function readProjectEnvValue(key, envFile = path.join(PROJECT_ROOT, '.env')) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(key))) return undefined;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(String(key))) return { value: undefined, error: null };
     let source;
     try { source = fs.readFileSync(envFile, 'utf8'); }
-    catch (_) { return undefined; }
+    catch (error) {
+        if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return { value: undefined, error: null };
+        return { value: undefined, error: { path: String(envFile), code: error?.code || null, message: error?.message || String(error) } };
+    }
     let result;
     for (const line of source.split('\n')) {
         const trimmed = line.trim();
@@ -149,7 +168,7 @@ function readProjectEnvValue(key, envFile = path.join(PROJECT_ROOT, '.env')) {
         if ((result.startsWith('"') && result.endsWith('"'))
             || (result.startsWith("'") && result.endsWith("'"))) result = result.slice(1, -1);
     }
-    return result;
+    return { value: result, error: null };
 }
 
 function commonRuntimeLockPaths(layout) {
@@ -590,7 +609,13 @@ function isReferencedCacheFile(filePath, references) {
 function buildPrunePlan(options = {}) {
     const layout = getLayout(options.projectRoot);
     const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
-    const retentionDays = readRetentionDays(options.retentionDays);
+    const retention = resolveRetentionSetting(options.retentionDays, options.envFile);
+    if (retention.readError) {
+        console.warn(`[storage] 读不出 ${retention.readError.path}`
+            + `（${retention.readError.code || retention.readError.message}），`
+            + `保留天数按默认值 ${retention.days} 天处理`);
+    }
+    const retentionDays = retention.days;
     const cutoffMs = nowMs - retentionDays * DAY_MS;
     const references = scanAuthoritativeReferences(layout);
     const blockers = [...references.blockers, ...activeRuntimeLockBlockers(layout)];
@@ -629,6 +654,8 @@ function buildPrunePlan(options = {}) {
         projectRoot: layout.projectRoot,
         generatedAt: new Date(nowMs).toISOString(),
         retentionDays,
+        retentionSource: retention.source,
+        retentionReadError: retention.readError,
         cutoff: new Date(cutoffMs).toISOString(),
         referenceJsonFiles: references.jsonFiles,
         referenceSnapshotHash: references.snapshotHash,

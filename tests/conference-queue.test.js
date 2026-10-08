@@ -276,7 +276,8 @@ test('对外的发布器子进程边界走 verify，并且只在 publish.json v2
         calls.push({ command, args });
         const value = args[2] === 'verify'
             ? publicationState({ conferenceId: args[4] }, args[6])
-            : { status: args[2] === 'generate' ? 'generated' : args[2] === 'review' ? 'reviewed' : 'complete' };
+            : { status: args[2] === 'generate' ? 'generated' : args[2] === 'review' ? 'reviewed' : 'complete',
+                conferenceId: args[4], processId: args[6] };
         return `${JSON.stringify(value)}\n`;
     } });
     delete deps.publisher.findPublished;
@@ -290,6 +291,57 @@ test('对外的发布器子进程边界走 verify，并且只在 publish.json v2
     assert.deepEqual(calls.map(call => call.args[2]), ['generate', 'review', 'push', 'verify']);
     assert.equal(calls.every(call => call.args.includes('final') === false), true);
     assert.equal(result.entries[0].receipts.verify.receiptSha256, receipts.publish.publishSha256);
+});
+
+test('子进程只打印了一行 JSON 日志时，不能当成发布器结果', async t => {
+    const f = fixture(t, 1); const entry = f.plan.conferences[0]; const processId = processIdFor(entry);
+    const receipts = publisherReceipts(entry, processId);
+    writePublishReceipt(f, entry, processId, receipts.publish);
+    const publication = path.join(f.files.conferencePublicationDir, entry.conferenceId, processId);
+    fs.writeFileSync(path.join(publication, 'generation.json'), `${JSON.stringify(receipts.generation)}\n`, { mode: 0o600 });
+    fs.writeFileSync(path.join(publication, 'review.json'), `${JSON.stringify(receipts.review)}\n`, { mode: 0o600 });
+    // 磁盘上的凭证齐全：旧解析器会把日志行当成结果，于是整条队列静默跑完。
+    const deps = queue.defaultDependencies({ files: f.files, now: f.now, runCommand: () => `${JSON.stringify({
+        time: '2026-09-12T00:00:00.000Z', level: 'info', msg: '构建 Hugo 站点完成'
+    })}\n` });
+    delete deps.publisher.findPublished;
+    deps.process = {
+        status: async () => { const error = new Error('state missing'); error.code = 'ENOENT'; throw error; },
+        apply: async () => ({ status: 'complete', conferenceId: entry.conferenceId, processId,
+            completionReceiptSha256: receipts.generation.completionReceiptSha256 })
+    };
+    const result = await queue.runConferenceQueue({ mode: 'apply', plan: f.plan }, deps);
+    assert.equal(result.status, 'paused');
+    assert.equal(result.entries[0].stage, 'generate');
+    assert.match(result.entries[0].failure.message, /no JSON result/);
+    assert.match(result.entries[0].failure.message, /构建 Hugo 站点完成/);
+});
+
+test('真结果后面跟一行 JSON 日志时，记录下来的仍是真结果', async t => {
+    const f = fixture(t, 1); const entry = f.plan.conferences[0]; const processId = processIdFor(entry);
+    const receipts = publisherReceipts(entry, processId);
+    writePublishReceipt(f, entry, processId, receipts.publish);
+    const publication = path.join(f.files.conferencePublicationDir, entry.conferenceId, processId);
+    fs.writeFileSync(path.join(publication, 'generation.json'), `${JSON.stringify(receipts.generation)}\n`, { mode: 0o600 });
+    fs.writeFileSync(path.join(publication, 'review.json'), `${JSON.stringify(receipts.review)}\n`, { mode: 0o600 });
+    const deps = queue.defaultDependencies({ files: f.files, now: f.now, runCommand: (command, args) => {
+        const value = args[2] === 'verify'
+            ? publicationState({ conferenceId: args[4] }, args[6])
+            : { status: args[2] === 'generate' ? 'generated' : args[2] === 'review' ? 'reviewed' : 'complete',
+                conferenceId: args[4], processId: args[6] };
+        // 结果之后还有一行结构化日志；旧解析器会从后往前先撞上它。
+        return `${JSON.stringify(value)}\n${JSON.stringify({ level: 'info', msg: '清理临时目录' })}\n`;
+    } });
+    delete deps.publisher.findPublished;
+    deps.process = {
+        status: async () => { const error = new Error('state missing'); error.code = 'ENOENT'; throw error; },
+        apply: async () => ({ status: 'complete', conferenceId: entry.conferenceId, processId,
+            completionReceiptSha256: receipts.generation.completionReceiptSha256 })
+    };
+    const result = await queue.runConferenceQueue({ mode: 'apply', plan: f.plan }, deps);
+    assert.equal(result.status, 'complete');
+    assert.equal(result.entries[0].receipts.generate.status, 'generated');
+    assert.equal(result.entries[0].receipts.push.status, 'complete');
 });
 
 test('已发布发现的扫描会跳过过期的 processId，拒绝非计划或有歧义的历史', async t => {

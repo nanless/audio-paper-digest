@@ -348,3 +348,71 @@ describe('运行时存储的引用感知清理', () => {
         }
     });
 });
+
+describe('存储保留天数的来源与读取问题', () => {
+    function withEnvUnset(run) {
+        const saved = process.env.PD_STORAGE_RETENTION_DAYS;
+        delete process.env.PD_STORAGE_RETENTION_DAYS;
+        try { return run(); } finally {
+            if (saved === undefined) delete process.env.PD_STORAGE_RETENTION_DAYS;
+            else process.env.PD_STORAGE_RETENTION_DAYS = saved;
+        }
+    }
+
+    it('.env 里没写这一项时按默认天数，不算读取问题', () => {
+        withEnvUnset(() => {
+            const projectRoot = makeProject();
+            try {
+                const plan = buildPrunePlan({ projectRoot, nowMs: NOW_MS,
+                    envFile: path.join(projectRoot, 'missing.env') });
+                assert.strictEqual(plan.retentionDays, 30);
+                assert.strictEqual(plan.retentionSource, 'default');
+                assert.strictEqual(plan.retentionReadError, null);
+            } finally {
+                fs.rmSync(projectRoot, { recursive: true, force: true });
+            }
+        });
+    });
+
+    it('.env 读得出这一项时照旧用配置值', () => {
+        withEnvUnset(() => {
+            const projectRoot = makeProject();
+            try {
+                const envFile = path.join(projectRoot, 'custom.env');
+                fs.writeFileSync(envFile, 'PD_STORAGE_RETENTION_DAYS=365\n');
+                const plan = buildPrunePlan({ projectRoot, nowMs: NOW_MS, envFile });
+                assert.strictEqual(plan.retentionDays, 365);
+                assert.strictEqual(plan.retentionSource, 'env');
+                assert.strictEqual(plan.retentionReadError, null);
+            } finally {
+                fs.rmSync(projectRoot, { recursive: true, force: true });
+            }
+        });
+    });
+
+    it('.env 存在但读不出时，报告读取问题并告警，不和「没配」混在一起', () => {
+        withEnvUnset(() => {
+            const projectRoot = makeProject();
+            const envFile = path.join(projectRoot, 'locked.env');
+            fs.writeFileSync(envFile, 'PD_STORAGE_RETENTION_DAYS=365\n');
+            fs.chmodSync(envFile, 0o000);
+            const warnings = [];
+            const originalWarn = console.warn;
+            console.warn = message => warnings.push(String(message));
+            try {
+                const plan = buildPrunePlan({ projectRoot, nowMs: NOW_MS, envFile });
+                assert.strictEqual(plan.retentionDays, 30);
+                assert.strictEqual(plan.retentionSource, 'default');
+                assert.strictEqual(plan.retentionReadError.code, 'EACCES');
+                assert.strictEqual(plan.retentionReadError.path, envFile);
+                assert.strictEqual(warnings.length, 1);
+                assert.match(warnings[0], /读不出/);
+                assert.match(warnings[0], /EACCES/);
+            } finally {
+                console.warn = originalWarn;
+                fs.chmodSync(envFile, 0o600);
+                fs.rmSync(projectRoot, { recursive: true, force: true });
+            }
+        });
+    });
+});

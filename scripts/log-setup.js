@@ -139,6 +139,9 @@ function pruneLogFiles(logsDir, options = {}) {
     );
     const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
     const cutoffMs = nowMs - retentionDays * 24 * 60 * 60 * 1000;
+    // 「没有日志可清」和「读不出日志目录」都清不掉东西，但后者要报出来，
+    // 否则调用方看到 removed: 0 会以为日志已经干净了。
+    const problems = [];
     let entries = [];
     try {
         entries = fs.readdirSync(logsDir, { withFileTypes: true }).flatMap(entry => {
@@ -151,12 +154,25 @@ function pruneLogFiles(logsDir, options = {}) {
                     filePath, mtimeMs: stat.mtimeMs, size: stat.size,
                     activeOwner: logOwnerProcessIsAlive(filePath)
                 }];
-            } catch (_) {
+            } catch (error) {
+                // 扫描和 lstat 之间文件被删掉是正常的，别记成问题。
+                if (error?.code !== 'ENOENT') {
+                    problems.push({ path: filePath, code: error?.code || null,
+                        message: `读不出日志文件状态: ${error?.message || error}` });
+                }
                 return [];
             }
         });
-    } catch (_) {
-        return { removed: 0, reclaimedBytes: 0 };
+    } catch (error) {
+        if (error?.code === 'ENOENT') return { removed: 0, reclaimedBytes: 0, problems: [] };
+        const problem = { path: String(logsDir), code: error?.code || null,
+            message: `读不出日志目录: ${error?.message || error}` };
+        console.warn(`[log] ${problem.message}（${problem.path}）`);
+        return { removed: 0, reclaimedBytes: 0, problems: [problem] };
+    }
+    if (problems.length) {
+        console.warn(`[log] 有 ${problems.length} 个日志文件读不出状态，本次没有清理它们：`
+            + problems.map(problem => `${problem.path}（${problem.code || problem.message}）`).join('；'));
     }
 
     const remove = entry => {
@@ -189,7 +205,7 @@ function pruneLogFiles(logsDir, options = {}) {
         removed += 1;
         reclaimedBytes += entry.size;
     }
-    return { removed, reclaimedBytes };
+    return { removed, reclaimedBytes, problems };
 }
 
 function normalizeWriteArgs(chunk, encoding, callback) {

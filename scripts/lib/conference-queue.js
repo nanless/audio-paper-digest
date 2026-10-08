@@ -378,12 +378,35 @@ function publisherProof(action, result, receipt, context = {}) {
             remoteVerifiedOid: receipt.remoteVerifiedOid } : {}) };
 }
 
+// 发布器子进程把最终结果打印在 stdout 的最后一行，前面那些行是进度日志
+// （LLM 请求、Hugo 构建），日志行本身也可能是合法的 JSON。所以不能见到
+// JSON 对象就当结果：结果必须带 status，并且至少带一个发布器结果才有的
+// 字段。真正的结果排在最后，从后往前找；结果后面多出一行普通日志也还能
+// 认出来。
+const PUBLISHER_RESULT_FIELDS = Object.freeze([
+    'conferenceId', 'processId', 'contract', 'generationSha256', 'reviewSha256',
+    'publicationCommit', 'complete', 'nextAction', 'error'
+]);
+
+function isPublisherResult(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    if (typeof value.status !== 'string' || !value.status.trim()) return false;
+    return PUBLISHER_RESULT_FIELDS.some(field => value[field] !== undefined);
+}
+
 function parseChildJson(output, action) {
-    const lines = String(output || '').trim().split(/\r?\n/).reverse();
-    for (const line of lines) {
-        try { const value = JSON.parse(line); if (value && typeof value === 'object') return value; } catch {}
+    const lines = String(output || '').split(/\r?\n/);
+    let lastJsonObject = null;
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+        const line = lines[index].trim();
+        if (!line) continue;
+        let value;
+        try { value = JSON.parse(line); } catch { continue; }
+        if (isPublisherResult(value)) return value;
+        if (lastJsonObject === null && value && typeof value === 'object') lastJsonObject = line;
     }
-    fail(`${action} public publisher entry returned no JSON result`);
+    fail(`${action} public publisher entry returned no JSON result`
+        + (lastJsonObject ? `；最后一条 JSON 日志不是发布器结果: ${lastJsonObject.slice(0, 300)}` : ''));
 }
 
 function defaultProcessState(files, processId) {

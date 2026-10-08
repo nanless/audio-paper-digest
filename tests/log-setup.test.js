@@ -59,11 +59,41 @@ describe('日志初始化', () => {
             const result = pruneLogFiles(dir, {
                 nowMs, retentionDays: 30, maxTotalBytes: 12
             });
-            assert.deepStrictEqual(result, { removed: 2, reclaimedBytes: 12 });
+            assert.deepStrictEqual(result, { removed: 2, reclaimedBytes: 12, problems: [] });
             assert.deepStrictEqual(fs.readdirSync(dir).sort(), [
                 `active-20260101-000000-${process.pid}-0.log`, 'keep.txt', 'newer.log'
             ]);
         } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('没有日志目录是「无可清理」，不报读取问题', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-log-absent-'));
+        try {
+            const missing = path.join(dir, 'never-created');
+            assert.deepStrictEqual(pruneLogFiles(missing, { nowMs: Date.now(), retentionDays: 30 }), {
+                removed: 0, reclaimedBytes: 0, problems: []
+            });
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
+    it('日志目录存在但读不出时，返回读取问题而不是「无可清理」', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-log-unreadable-'));
+        const locked = path.join(dir, 'logs');
+        fs.mkdirSync(locked);
+        fs.writeFileSync(path.join(locked, 'old.log'), 'old');
+        fs.chmodSync(locked, 0o000);
+        try {
+            const result = pruneLogFiles(locked, { nowMs: Date.now(), retentionDays: 30 });
+            assert.strictEqual(result.removed, 0);
+            assert.strictEqual(result.problems.length, 1);
+            assert.strictEqual(result.problems[0].path, locked);
+            assert.strictEqual(result.problems[0].code, 'EACCES');
+        } finally {
+            fs.chmodSync(locked, 0o700);
             fs.rmSync(dir, { recursive: true, force: true });
         }
     });

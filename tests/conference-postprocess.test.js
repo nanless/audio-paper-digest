@@ -796,6 +796,48 @@ test('未解决的主任务会变成审查分配，绝不会变成页面，修�
     staged.manifest.manifestSha256);
 });
 
+test('已存在的 blocked 分配记录读不出时，报出读不出的原因，而不是笼统的「不能覆盖」', t => {
+    const f = fixture(t); const stagingRoot = path.join(f.root, 'unreadable-assignment-staging');
+    const unknownTaskText = validAnalysisText()
+        .replace('primary_task_tag: #语音识别', 'primary_task_tag: #不存在的主任务')
+        .replace('#语音识别 #Transformer #鲁棒性', '#不存在的主任务 #Transformer #鲁棒性')
+        .replace('主任务标签: #语音识别', '主任务标签: #不存在的主任务');
+    f.runs.set(f.one, completed(f.one, 1, unknownTaskText));
+    const args = { analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH, stagingRoot,
+        planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true };
+    api.stagePaper(args, f.dependencies);
+    const registry = tagCatalogApi.loadTagCatalog(TAG_CATALOG_PATH);
+    const registryRoot = path.join(stagingRoot, f.one, registry.registrySha256);
+    const implementationRoot = path.join(registryRoot, fs.readdirSync(registryRoot)[0]);
+    const assignmentPath = path.join(implementationRoot, 'assignment.json');
+    assert.equal(fs.statSync(assignmentPath).mode & 0o777, 0o600);
+    // 权限和链接数都合规，只是字节解析不出来：这时不能把旧记录当成「可以顶替」。
+    fs.writeFileSync(assignmentPath, '{"status": "blocked", "broken"', { mode: 0o600 });
+    f.runs.set(f.one, completed(f.one, 1));
+    assert.throws(() => api.stagePaper(args, f.dependencies), /读不出来/);
+    assert.equal(fs.readFileSync(assignmentPath, 'utf8'), '{"status": "blocked", "broken"');
+});
+
+test('旧记录确实不在时，blocked 分配照旧被顶替', t => {
+    const f = fixture(t); const stagingRoot = path.join(f.root, 'absent-assignment-staging');
+    const unknownTaskText = validAnalysisText()
+        .replace('primary_task_tag: #语音识别', 'primary_task_tag: #不存在的主任务')
+        .replace('#语音识别 #Transformer #鲁棒性', '#不存在的主任务 #Transformer #鲁棒性')
+        .replace('主任务标签: #语音识别', '主任务标签: #不存在的主任务');
+    f.runs.set(f.one, completed(f.one, 1, unknownTaskText));
+    const args = { analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH, stagingRoot,
+        planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true };
+    api.stagePaper(args, f.dependencies);
+    const registry = tagCatalogApi.loadTagCatalog(TAG_CATALOG_PATH);
+    const registryRoot = path.join(stagingRoot, f.one, registry.registrySha256);
+    const implementationRoot = path.join(registryRoot, fs.readdirSync(registryRoot)[0]);
+    fs.unlinkSync(path.join(implementationRoot, 'assignment.json'));
+    f.runs.set(f.one, completed(f.one, 1));
+    const staged = api.stagePaper(args, f.dependencies);
+    assert.equal(staged.status, 'staged');
+    assert.deepEqual(fs.readdirSync(implementationRoot).sort(), ['assignment.json', 'manifest.json', 'page.md']);
+});
+
 test('命令行要求完整授权、已配置的根目录和互不相同的 UUID 选择', () => {
     const authority = executionCli.AUTHORITY_FLAGS.flatMap(flag => [flag, flag === '--filter' ? '33333333-3333-4333-8333-333333333333' : 'proof.json']);
     const parsed = cli.parseArgs(['aggregate', '--dry-run', ...authority,
