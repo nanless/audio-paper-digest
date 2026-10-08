@@ -85,7 +85,7 @@ const plain = value => Boolean(value) && typeof value === 'object' && !Array.isA
 const clone = value => JSON.parse(JSON.stringify(value));
 
 function exact(value, fields, label) {
-    if (!plain(value)) fail(`${label} must be a plain object`);
+    if (!plain(value)) fail(`${label} 必须是纯对象`);
     const actual = Object.keys(value).sort(); const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
         fail(`${label} has unknown or missing fields`);
@@ -94,10 +94,10 @@ function exact(value, fields, label) {
 
 function cleanText(value, label, { allowEmpty = false, max = 20000 } = {}) {
     if (typeof value !== 'string' || value.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)) {
-        fail(`${label} is invalid`);
+        fail(`${label} 无效`);
     }
     const result = value.replace(/\s+/gu, ' ').trim();
-    if (!allowEmpty && !result) fail(`${label} is empty`);
+    if (!allowEmpty && !result) fail(`${label} 为空`);
     return result;
 }
 
@@ -107,14 +107,14 @@ function optionalText(value, label, max = 1000) {
 
 function providerFor(conferenceId) {
     const provider = REGISTRY[String(conferenceId || '')];
-    if (!provider) fail(`conferenceId must be one of: ${Object.keys(REGISTRY).join(', ')}`);
+    if (!provider) fail(`conferenceId 必须是以下之一：${Object.keys(REGISTRY).join(', ')}`);
     return provider;
 }
 
 function canonicalUrl(value, label, provider, pathPattern, { query = false } = {}) {
     const source = cleanText(value, label, { max: 4096 });
     let parsed;
-    try { parsed = new URL(source); } catch { fail(`${label} is not a URL`); }
+    try { parsed = new URL(source); } catch { fail(`${label} 不是 URL`); }
     if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port || parsed.hash
         || parsed.hostname !== provider.host || (!query && parsed.search) || !pathPattern.test(parsed.pathname)
         || parsed.toString() !== source) {
@@ -127,11 +127,11 @@ function canonicalPdfUrl(value, label, provider) {
     if (!provider.pdfAuthorities) return canonicalUrl(value, label, provider, provider.pdfPath);
     const source = cleanText(value, label, { max: 4096 });
     let parsed;
-    try { parsed = new URL(source); } catch { fail(`${label} is not a URL`); }
+    try { parsed = new URL(source); } catch { fail(`${label} 不是 URL`); }
     const authority = provider.pdfAuthorities.find(item => item.host === parsed.hostname && item.path.test(parsed.pathname));
     if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port || parsed.hash
         || parsed.search || !authority || parsed.toString() !== source) {
-        fail(`${label} left the fixed official publication host/path`);
+        fail(`${label} 离开了固定的官方出版主机或路径`);
     }
     return source;
 }
@@ -152,8 +152,8 @@ function firstMeta($, names) {
 
 function uniqueAuthors($) {
     const values = metaValues($, 'citation_author');
-    if (!values.length) fail('record has no official citation_author metadata');
-    if (new Set(values).size !== values.length) fail('record has duplicate official authors');
+    if (!values.length) fail('记录没有官方 citation_author 元数据');
+    if (new Set(values).size !== values.length) fail('记录含重复的官方作者');
     return values.map((value, index) => cleanText(value, `authors[${index}]`, { max: 500 }));
 }
 
@@ -162,16 +162,16 @@ function normalizeDoi(value) {
     let doi = String(value).trim();
     if (/^https:\/\/doi\.org\//iu.test(doi)) doi = decodeURIComponent(new URL(doi).pathname.slice(1));
     doi = cleanText(doi, 'doi', { max: 1000 });
-    if (!/^10\.\d{4,9}\/\S+$/u.test(doi)) fail('DOI metadata is malformed');
+    if (!/^10\.\d{4,9}\/\S+$/u.test(doi)) fail('DOI 元数据格式错误');
     return doi;
 }
 
 function paperRecord({ id, title, authors, abstract = '', pdfUrl = null, recordUrl, doi = null, track }) {
     const normalizedId = cleanText(id, 'paper id', { max: 200 });
-    if (!ID_RE.test(normalizedId)) fail('paper id is not a stable official token');
-    if (!Array.isArray(authors) || !authors.length) fail('paper authors must be nonempty');
+    if (!ID_RE.test(normalizedId)) fail('论文 id 不是稳定的官方标识串');
+    if (!Array.isArray(authors) || !authors.length) fail('论文作者必须非空');
     const normalizedAuthors = authors.map((author, index) => cleanText(author, `paper authors[${index}]`, { max: 500 }));
-    if (new Set(normalizedAuthors).size !== normalizedAuthors.length) fail('paper authors contain duplicates');
+    if (new Set(normalizedAuthors).size !== normalizedAuthors.length) fail('论文作者含重复项');
     const record = {
         id: normalizedId,
         title: cleanText(title, 'paper title', { max: 4000 }),
@@ -202,11 +202,11 @@ function finalize(records) {
 function htmlPayload(provider, payload) {
     exact(payload, ['collection', 'records'], 'HTML provider payload');
     if (!provider.collections.includes(payload.collection)) fail('payload collection differs from the fixed 2026 registry');
-    if (!Array.isArray(payload.records) || !payload.records.length) fail('HTML provider records must be nonempty');
+    if (!Array.isArray(payload.records) || !payload.records.length) fail('HTML provider 记录必须非空');
     return payload.records.map((record, index) => {
         exact(record, ['recordUrl', 'html'], `HTML provider records[${index}]`);
         if (typeof record.html !== 'string' || !record.html || record.html.length > MAX_HTML_CHARS) {
-            fail(`HTML provider records[${index}].html is invalid`);
+            fail(`HTML provider records[${index}].html 无效`);
         }
         return { recordUrl: canonicalUrl(record.recordUrl, `records[${index}].recordUrl`, provider, provider.recordPath),
             html: record.html, collection: payload.collection };
@@ -239,10 +239,10 @@ function invocation(providerOrId, payload, parser, defaultId = null) {
     if (plain(providerOrId) && providerOrId.parser) provider = providerOrId;
     else if (payload !== undefined) provider = providerFor(providerOrId);
     else {
-        if (!defaultId) fail(`${parser} parser requires an explicit conferenceId`);
+        if (!defaultId) fail(`${parser} 解析器需要显式的 conferenceId`);
         payload = providerOrId; provider = providerFor(defaultId);
     }
-    if (provider.parser !== parser) fail(`conference provider does not use ${parser}`);
+    if (provider.parser !== parser) fail(`会议 provider 未使用 ${parser}`);
     return { provider, payload };
 }
 
@@ -250,7 +250,7 @@ function parseAaaiOjs(providerOrPayload, rawPayload) {
     const { provider, payload } = invocation(providerOrPayload, rawPayload, 'aaai-ojs', 'aaai-2026');
     return finalize(htmlPayload(provider, payload).map(input => {
         const $ = cheerio.load(input.html);
-        if (firstMeta($, ['citation_volume']) !== '40') fail('AAAI record is outside fixed proceedings volume 40');
+        if (firstMeta($, ['citation_volume']) !== '40') fail('AAAI 记录不在固定的 proceedings volume 40 内');
         const id = new URL(input.recordUrl).pathname.split('/').at(-1);
         const rawPdf = firstMeta($, ['citation_pdf_url']);
         const pdfUrl = rawPdf ? canonicalUrl(rawPdf, 'AAAI PDF URL', provider, provider.pdfPath) : null;
@@ -278,7 +278,7 @@ function parseCvfOpenAccess(providerOrPayload, rawPayload) {
         const $ = cheerio.load(input.html); const rawPdf = firstMeta($, ['citation_pdf_url']);
         const pdfUrl = rawPdf ? canonicalUrl(rawPdf, 'CVF PDF URL', provider, provider.pdfPath) : null;
         if (pdfUrl && path.posix.basename(new URL(pdfUrl).pathname, '.pdf') !== stem) {
-            fail('CVF record and PDF stable identifiers differ');
+            fail('CVF 记录与 PDF 的稳定标识符不同');
         }
         return htmlCommon(provider, input, stem, pdfUrl, provider.trackByCollection[input.collection]);
     }));
@@ -292,7 +292,7 @@ function parseAclAnthology(providerOrId, rawPayload) {
         const $ = cheerio.load(input.html); const rawPdf = firstMeta($, ['citation_pdf_url']);
         const expected = `https://${provider.host}/${id}.pdf`;
         const pdfUrl = rawPdf ? canonicalUrl(rawPdf, 'ACL Anthology PDF URL', provider, provider.pdfPath) : expected;
-        if (pdfUrl !== expected) fail('ACL Anthology PDF does not bind the record venue ID');
+        if (pdfUrl !== expected) fail('ACL Anthology PDF 未绑定记录的 venue ID');
         const record = htmlCommon(provider, input, id, pdfUrl, provider.trackByCollection[input.collection]);
         if (record.doi === null) record.doi = `10.18653/v1/${id}`;
         return record;
@@ -305,7 +305,7 @@ function parseConferenceRecords(conferenceId, payload) {
     if (provider.parser === 'pmlr') return parsePmlr(provider, payload);
     if (provider.parser === 'cvf-openaccess') return parseCvfOpenAccess(provider, payload);
     if (provider.parser === 'acl-anthology') return parseAclAnthology(provider, payload);
-    fail('fixed registry parser is unsupported');
+    fail('固定注册表中的解析器不受支持');
 }
 
 function parseConferenceSnapshot(conferenceId, payload) {

@@ -31,7 +31,7 @@ function parseArgs(argv) {
         options[names[arg]] = argv[++index];
     }
     for (const name of Object.values(names)) if (!options[name]) throw new Error(`Required option missing: ${name}`);
-    if (!/^\d{4}\.\d{4,5}(?:v\d+)?$/.test(options.paperId)) throw new Error('Invalid arXiv paper ID');
+    if (!/^\d{4}\.\d{4,5}(?:v\d+)?$/.test(options.paperId)) throw new Error('arXiv 论文 ID 无效');
     options.paperId = normalizeId(options.paperId);
     for (const name of ['sourceTextPath', 'artifactsPath', 'snapshotPath', 'outputDir']) options[name] = path.resolve(options[name]);
     return options;
@@ -41,7 +41,7 @@ function readRegular(filename) {
     const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     try {
         const stat = fs.fstatSync(fd);
-        if (!stat.isFile() || stat.size > 64 * 1024 * 1024) throw new Error(`Input must be a bounded regular file: ${filename}`);
+        if (!stat.isFile() || stat.size > 64 * 1024 * 1024) throw new Error(`输入必须是有大小上限的普通文件：${filename}`);
         return fs.readFileSync(fd);
     } finally { fs.closeSync(fd); }
 }
@@ -54,7 +54,7 @@ function loadInputs(options) {
     const artifacts = JSON.parse(artifactBytes.toString('utf8'));
     const paper = JSON.parse(snapshotBytes.toString('utf8'));
     if (!paper || typeof paper !== 'object' || Array.isArray(paper)
-        || normalizeId(paper.arxivId || paper.paper_id || paper.id) !== options.paperId) throw new Error('Snapshot paper ID mismatch');
+        || normalizeId(paper.arxivId || paper.paper_id || paper.id) !== options.paperId) throw new Error('快照论文 ID 不匹配');
     const sourceSha256 = sha(sourceBytes);
     if (!sourceText || paper.sourceSha256 !== sourceSha256
         || (paper.analysisManifest?.sourceAcquisition?.sourceSha256
@@ -77,7 +77,7 @@ function loadInputs(options) {
     if (!expectedArtifactHashes.length || expectedArtifactHashes.some(value => value !== payloadSha256)) {
         throw new Error('Structured artifact payload differs from the signed paper snapshot');
     }
-    if (typeof paper.analysis !== 'string' || !paper.analysis.trim()) throw new Error('Snapshot canonical analysis is missing');
+    if (typeof paper.analysis !== 'string' || !paper.analysis.trim()) throw new Error('缺少快照的规范化分析');
     return { paper, sourceText, artifacts, sourceSha256, artifactSha256: payloadSha256,
         canonicalSha256: sha(paper.analysis), fileHashes: {
             [options.sourceTextPath]: sourceSha256,
@@ -102,12 +102,12 @@ function replaySnapshotPlan(paper, artifacts, sourceText) {
     for (const binding of plan.tableBindings || []) {
         if (binding.sourceType === 'artifact_table') {
             const table = artifacts.tables.find(item => item.ordinal === binding.sourceTableOrdinal);
-            if (!table || table.sourceDomSha256 !== binding.sourceTableDomSha256) throw new Error('Snapshot table DOM identity mismatch');
+            if (!table || table.sourceDomSha256 !== binding.sourceTableDomSha256) throw new Error('快照表格 DOM 身份不匹配');
         } else if (binding.sourceType === 'source_quotes') {
             if (!Array.isArray(binding.sourceQuotes) || !binding.sourceQuotes.length
                 || binding.sourceQuotes.some(item => typeof item.quote !== 'string' || !sourceText.includes(item.quote)
                     || sha(item.quote) !== item.sourceQuoteSha256)) throw new Error('Snapshot table source quote does not replay');
-        } else throw new Error('Unsupported snapshot table binding');
+        } else throw new Error('不支持该快照表格绑定');
     }
     return { status: 'replayed', scope: 'article/plan hashes, original formula identity, table DOM identity and exact source quotes; not semantic review',
         articleSha256: sha(article), planSha256: stableHash(plan),
@@ -117,10 +117,10 @@ function replaySnapshotPlan(paper, artifacts, sourceText) {
 }
 
 function snapshotFigures(paper) {
-    if (!Array.isArray(paper.apiReaderFigures)) throw new Error('Snapshot figure inventory is missing');
+    if (!Array.isArray(paper.apiReaderFigures)) throw new Error('缺少快照图片清单');
     return paper.apiReaderFigures.map(figure => {
         if (!Number.isInteger(figure.ordinal) || typeof figure.cachePath !== 'string'
-            || !/^[a-f0-9]{64}$/.test(String(figure.assetSha256 || ''))) throw new Error('Snapshot figure identity/cache path is incomplete');
+            || !/^[a-f0-9]{64}$/.test(String(figure.assetSha256 || ''))) throw new Error('快照图片身份或缓存路径不完整');
         const bytes = readRegular(figure.cachePath);
         if (sha(bytes) !== figure.assetSha256) throw new Error(`Cached figure ${figure.ordinal} SHA mismatch`);
         return { ...figure, cachePath: path.resolve(figure.cachePath) };
@@ -199,7 +199,7 @@ async function evaluate(options) {
         }
         // 要在 deep-analyzer 读取常量之前先把运行时配置好。这里不绕过任何环境
         // 校验，也不改模型路由。
-        if (require.cache[require.resolve('./deep-analyzer.js')]) throw new Error('Live evaluation requires a fresh process before loading deep-analyzer');
+        if (require.cache[require.resolve('./deep-analyzer.js')]) throw new Error('实时评估需要在加载 deep-analyzer 之前使用全新进程');
         Config.ANALYSIS_CONFIG.apiReaderMaxTokens = BUDGETS.fullOutputTokens;
         Config.ANALYSIS_CONFIG.apiReaderRepairMaxTokens = BUDGETS.patchOutputTokens;
         Config.ANALYSIS_CONFIG.apiMaxRetries = BUDGETS.transportAttemptsPerRequest;
@@ -216,12 +216,12 @@ async function evaluate(options) {
             readerRecordDisposition: event => usage.recordLlmDisposition(event, { directory: usageDirectory }),
             readerMaterializeFigures: async requested => requested.map(item => {
                 const cached = figures.find(figure => figure.ordinal === item.ordinal && figure.url === item.url);
-                if (!cached) throw new Error(`Figure ${item.ordinal} has no verified snapshot cache; evaluation will not download it`);
-                if (sha(readRegular(cached.cachePath)) !== cached.assetSha256) throw new Error('Figure cache changed before model input');
+                if (!cached) throw new Error(`图片 ${item.ordinal} 没有经过核验的快照缓存；评估不会下载它`);
+                if (sha(readRegular(cached.cachePath)) !== cached.assetSha256) throw new Error('图片缓存在送入模型前发生变化');
                 return { ...item, ...cached };
             }),
             readerCallModel: async (messages, tokens, requestOptions) => {
-                if (report.calls.length >= BUDGETS.logicalRequests) throw new Error('Evaluation logical request budget exhausted');
+                if (report.calls.length >= BUDGETS.logicalRequests) throw new Error('评估的逻辑请求预算已耗尽');
                 const kind = requestOptions.usageContext?.stage === 'apiReaderRepair' ? 'patch' : 'full';
                 const expected = kind === 'patch' ? BUDGETS.patchOutputTokens : BUDGETS.fullOutputTokens;
                 if (tokens !== expected) throw new Error('Actual Reader output budget drifted from evaluation budget');

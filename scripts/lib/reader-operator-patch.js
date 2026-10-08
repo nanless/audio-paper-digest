@@ -32,7 +32,7 @@ function syncDirectory(directory) {
 function installImmutable(filename, bytes) {
     try {
         const existing = readPrivate(filename);
-        if (!existing.bytes.equals(bytes)) throw new Error('Operator patch immutable audit bytes changed');
+        if (!existing.bytes.equals(bytes)) throw new Error('operator patch 的不可变审计字节已变化');
         return;
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
     const temporary = path.join(path.dirname(filename), `.${path.basename(filename)}.${crypto.randomUUID()}.tmp`);
@@ -52,7 +52,7 @@ function installImmutable(filename, bytes) {
 
 function patchPath(runDir, name) {
     if (typeof name !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,159}\.json$/.test(name)) {
-        throw new Error('--patch must name a JSON file directly inside this run/patches directory');
+        throw new Error('--patch 必须指向本次运行 run/patches 目录内的 JSON 文件');
     }
     return path.join(runDir, 'patches', name);
 }
@@ -63,10 +63,10 @@ function validateRequest(value, run) {
         || !isSha(value.candidateIdentitySha256) || !isSha(value.sourceSha256)
         || value.sourceSha256 !== run.sourceExpectations[value.paperId]?.sourceSha256
         || typeof value.reason !== 'string' || !value.reason.trim() || value.reason.length > 2000) {
-        throw new Error('Invalid operator patch envelope or run/source scope');
+        throw new Error('operator patch 的信封或运行／来源范围无效');
     }
     if (!Array.isArray(value.patch?.replacements) || value.patch.replacements.length < 1 || value.patch.replacements.length > 8) {
-        throw new Error('Operator patch requires one to eight existing-node replacements');
+        throw new Error('operator patch 需要 1 到 8 处已有节点替换');
     }
     return value;
 }
@@ -90,7 +90,7 @@ function parserOptions(details, identity, payload, deps) {
         || images.some(image => !Number.isInteger(image?.ordinal) || !isSha(image.sha256)
             || !(details.structuredArtifacts.figures || []).some(figure => figure.ordinal === image.ordinal
                 && (figure.images || []).some(source => source.url === image.url && source.url)))) {
-        throw new Error('Operator patch image evidence is missing or outside the original source');
+        throw new Error('operator patch 的图片证据缺失，或不在原始来源内');
     }
     const evidence = deps.buildApiReaderEvidenceContext('', details.text, details.structuredArtifacts, identity.paperId);
     const availableTableCount = [...String(evidence).matchAll(/^TABLE_(\d+):/gm)].length;
@@ -115,7 +115,7 @@ function dependencies(overrides) {
 function validateScratchParent(current, identity, details, run, deps) {
     const { hasValidApiReaderV3Records } = require('../analysis-engine.js');
     if (!current || (current.arxivId || current.paper_id) !== identity.paperId) {
-        throw new Error('Operator patch requires the current same-run analysis record');
+        throw new Error('operator patch 需要当前同一次运行的分析记录');
     }
     if (identity.contentMode === READER_SOURCE_CONTENT_MODE) {
         if (hasValidApiReaderV3Records(current) || deps.isSuccessfulAnalysisRecord(current)) {
@@ -132,7 +132,7 @@ function validateScratchParent(current, identity, details, run, deps) {
     if (current.sourceSha256 !== identity.sourceSha256
         || current.analysisManifest.sourceAcquisition.structuredArtifactsSha256
             !== details.freshSourceDescriptor.structuredArtifactsSha256) {
-        throw new Error('Signed-revision parent Reader has a different source or artifact snapshot');
+        throw new Error('已签名修订的父 Reader 具有不同的来源或产物快照');
     }
 }
 
@@ -141,19 +141,19 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
     const deps = dependencies(overrides);
     const { assertSafeDirectory, stableHash } = require('./fresh-rewrite-run.js');
     const { runDir, run, inputs } = loaded;
-    if (run.status === 'promoted') throw new Error('Promoted fresh run is immutable');
+    if (run.status === 'promoted') throw new Error('已提升的 fresh 运行不可修改');
     if (path.resolve(runDir) !== path.join(path.resolve(deps.rootDir), run.runId)) {
-        throw new Error('Operator patch must use the configured fresh run root');
+        throw new Error('operator patch 必须使用配置好的 fresh 运行根目录');
     }
     assertSafeDirectory(path.join(runDir, 'patches'));
     const filename = patchPath(runDir, patchFile);
     const requestFile = readPrivate(filename);
     const request = validateRequest(requestFile.value, run);
     const paper = inputs.papers.find(item => (item.arxivId || item.paper_id) === request.paperId);
-    if (!paper) throw new Error('Operator patch paper is absent from original run inputs');
+    if (!paper) throw new Error('operator patch 的论文不在原始运行输入中');
     return deps.withPaperAnalysisLock(paper, async () => {
         const details = deps.readFreshSource(runDir, paper, run);
-        if (!details) throw new Error('Operator patch requires the verified original source cache');
+        if (!details) throw new Error('operator patch 需要经过核验的原始来源缓存');
         const directory = assertSafeDirectory(path.join(runDir, 'reader-attempts'));
         const candidateFile = path.join(directory, `${request.candidateIdentitySha256}.json`);
         const before = readPrivate(candidateFile);
@@ -164,7 +164,7 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
             throw new Error('Operator patch candidate identity or run paper-set mismatch');
         }
         const payload = repair.loadFailedCandidate(directory, identity);
-        if (!payload?.draft || !same(payload, before.value.payload)) throw new Error('Operator patch needs an unchanged active failed draft');
+        if (!payload?.draft || !same(payload, before.value.payload)) throw new Error('operator patch 需要未发生变化的活跃失败草稿');
         // 只按哈希命名的文件才是活跃的；已解析或已迁移的审计文件不算。
         for (const name of fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name))) {
             if (name === path.basename(candidateFile)) continue;
@@ -176,7 +176,7 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
         validateScratchParent(deps.readCurrentPaper(runDir, request.paperId), identity, details, run, deps);
         const archiveDir = path.join(runDir, 'patches', 'operator-archive', requestFile.sha256);
         if (payload.operatorPatches !== undefined && !Array.isArray(payload.operatorPatches)) {
-            throw new Error('Operator patch audit history is malformed');
+            throw new Error('operator patch 的审计历史格式错误');
         }
         const auditEntry = (payload.operatorPatches || []).find(entry => entry.patchFileSha256 === requestFile.sha256);
         if (auditEntry) {
@@ -197,7 +197,7 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
         const draft = repair.applyReaderPatch(payload.draft, request.patch, allowedPaths,
             { availableFigureOrdinals: options.availableFigureOrdinals });
         if (!repair.parseRepairableDraft(draft) || repair.hashDraft(draft) === repair.hashDraft(payload.draft)) {
-            throw new Error('Operator patch must change an existing valid draft node');
+            throw new Error('operator patch 必须改动一个已有的有效草稿节点');
         }
         // 生产解析器是唯一的验收闸门。它返回的文章按设计被丢弃：这次操作发不出成功
         // 证明。
@@ -218,10 +218,10 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
         const updated = { ...payload, draft, rawDraft: JSON.stringify(draft), status: 'failed',
             operatorPatches: [...(payload.operatorPatches || []), committedAudit] };
         const expectedIntent = { contract: CONTRACT, audit: committedAudit, afterPayloadSha256: repair.hashDraft(updated) };
-        if (intent && !same(intent, expectedIntent)) throw new Error('Operator patch pending payload changed');
+        if (intent && !same(intent, expectedIntent)) throw new Error('operator patch 的待处理载荷已变化');
         if (Buffer.byteLength(JSON.stringify({ version: repair.REPAIR_VERSION, identity,
             payload: updated, payloadSha256: repair.hashDraft(updated) })) > 20 * 1024 * 1024) {
-            throw new Error('Operator patch exceeds the Reader candidate size budget');
+            throw new Error('operator patch 已超出 Reader 候选大小预算');
         }
         // 完整解析器跑通之前不写任何候选或审计文件。
         assertSafeDirectory(archiveDir, true);
@@ -238,7 +238,7 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
         syncDirectory(directory);
         if (deps.afterSave) await deps.afterSave();
         const saved = repair.loadFailedCandidate(directory, identity);
-        if (!same(saved, updated)) throw new Error('Operator patch save did not replay');
+        if (!same(saved, updated)) throw new Error('operator patch 的保存未能重放');
         return { runId: run.runId, paperId: request.paperId, status: 'failed', operatorPatchApplied: true,
             alreadyApplied: false, draftSha256: committedAudit.afterDraftSha256, patchFileSha256: requestFile.sha256,
             archive: committedAudit.archive };

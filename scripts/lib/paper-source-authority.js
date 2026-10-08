@@ -45,7 +45,7 @@ function plain(value) {
         && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 }
 function exact(value, fields, label) {
-    if (!plain(value)) fail(`${label} must be a plain object`);
+    if (!plain(value)) fail(`${label} 必须是纯对象`);
     const actual = Object.keys(value).sort(); const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
         fail(`${label} has unknown or missing fields`);
@@ -62,18 +62,18 @@ const prettyBytes = value => Buffer.from(`${JSON.stringify(canonical(value), nul
 const isEvidenceKind = value => EVIDENCE_KIND_SET.has(value);
 function sha(value, label) { if (!SHA_RE.test(String(value || ''))) fail(`${label} must be a lowercase SHA-256`); return value; }
 function safeName(value, pattern, label) {
-    if (typeof value !== 'string' || !pattern.test(value)) fail(`${label} must be a safe direct filename`);
+    if (typeof value !== 'string' || !pattern.test(value)) fail(`${label} 必须是安全的直接文件名`);
     return value;
 }
 function safeRoot(root) {
-    if (typeof root !== 'string' || !path.isAbsolute(root)) fail('authorityRoot must be an absolute configured directory');
+    if (typeof root !== 'string' || !path.isAbsolute(root)) fail('authorityRoot 必须是配置好的绝对目录');
     const absolute = path.resolve(root); const info = fs.lstatSync(absolute);
     if (!info.isDirectory() || info.isSymbolicLink() || fs.realpathSync(absolute) !== absolute) fail('authorityRoot is unsafe');
     return absolute;
 }
 function safeDirect(root, name, pattern, label) {
     safeName(name, pattern, label); const filename = path.resolve(root, name);
-    if (path.dirname(filename) !== root) fail(`${label} escapes authorityRoot`);
+    if (path.dirname(filename) !== root) fail(`${label} 逃出了 authorityRoot`);
     const info = fs.lstatSync(filename);
     if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) fail(`${label} must be a regular single-link file`);
     return filename;
@@ -81,12 +81,12 @@ function safeDirect(root, name, pattern, label) {
 function readJson(root, name, label) {
     const filename = safeDirect(root, name, SAFE_JSON_NAME, label); const before = fs.lstatSync(filename);
     const loaded = ledgerApi.readRegularJson(filename);
-    if (!loaded || !plain(loaded.value)) fail(`${label} must contain a JSON object`);
+    if (!loaded || !plain(loaded.value)) fail(`${label} 必须包含 JSON 对象`);
     const bytes = fs.readFileSync(filename); const after = fs.lstatSync(filename);
     if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size
         || !after.isFile() || after.isSymbolicLink() || after.nlink !== 1
         || bytes.length > MAX_JSON_BYTES || loaded.sha256 !== sha256(bytes)) {
-        fail(`${label} exceeds its limit or changed while read`);
+        fail(`${label} 超出上限，或在读取期间发生变化`);
     }
     if (!bytes.equals(prettyBytes(loaded.value))) fail(`${label} bytes must be canonical pretty JSON`);
     return { filename: fs.realpathSync(filename), value: loaded.value, bytes, sha256: loaded.sha256,
@@ -102,12 +102,12 @@ function readText(root, name, label) {
             fail(`${label} changed or is unsafe`);
         }
         const bytes = fs.readFileSync(fd);
-        if (bytes.length !== opened.size) fail(`${label} changed while read`);
+        if (bytes.length !== opened.size) fail(`${label} 在读取期间发生变化`);
         let text;
         try { text = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
-        catch { fail(`${label} must be strict UTF-8`); }
+        catch { fail(`${label} 必须是严格 UTF-8`); }
         let count = 0; for (const character of text) if (!/\s/u.test(character)) count += 1;
-        if (count < MIN_FULLTEXT_CHARACTERS) fail(`${label} is shorter than the full-text gate`);
+        if (count < MIN_FULLTEXT_CHARACTERS) fail(`${label} 短于全文门槛`);
         return { filename: fs.realpathSync(filename), bytes, text, sha256: sha256(bytes),
             dev: opened.dev, ino: opened.ino };
     } finally { if (fd !== undefined) fs.closeSync(fd); }
@@ -122,14 +122,14 @@ function normalizeArxivSnapshot(value) {
     exact(value, ['contract', 'version', 'paperId', 'arxivId', 'officialUrl', 'fulltextSha256', 'snapshotSha256'], 'arXiv snapshot');
     if (value.contract !== ARXIV_SNAPSHOT_CONTRACT || value.version !== VERSION
         || value.paperId !== `arxiv:${value.arxivId}`
-        || value.officialUrl !== `https://arxiv.org/abs/${value.arxivId}`) fail('arXiv snapshot identity/source is invalid');
+        || value.officialUrl !== `https://arxiv.org/abs/${value.arxivId}`) fail('arXiv 快照的身份或来源无效');
     sha(value.fulltextSha256, 'arXiv snapshot fulltextSha256');
     return selfBound(value, 'snapshotSha256', 'arXiv snapshot');
 }
 function normalizeArxivReceipt(value) {
     exact(value, ['contract', 'version', 'snapshotName', 'snapshotFileSha256', 'snapshotSha256',
         'fulltextName', 'fulltextSha256', 'receiptSha256'], 'arXiv receipt');
-    if (value.contract !== ARXIV_RECEIPT_CONTRACT || value.version !== VERSION) fail('arXiv receipt contract/version is invalid');
+    if (value.contract !== ARXIV_RECEIPT_CONTRACT || value.version !== VERSION) fail('arXiv 回执的契约或版本无效');
     safeName(value.snapshotName, SAFE_JSON_NAME, 'arXiv receipt snapshotName');
     safeName(value.fulltextName, SAFE_TEXT_NAME, 'arXiv receipt fulltextName');
     for (const field of ['snapshotFileSha256', 'snapshotSha256', 'fulltextSha256']) sha(value[field], `arXiv receipt ${field}`);
@@ -167,7 +167,7 @@ function normalizeProductionArxivRequest(value) {
         || value.officialHtmlUrl !== `https://arxiv.org/html/${value.arxivId}`
         || value.officialPdfUrl !== `https://arxiv.org/pdf/${value.arxivId}.pdf`
         || value.fetcherContract !== ARXIV_FETCHER_CONTRACT || !identityApi.ARXIV_ID_RE.test(value.arxivId)) {
-        fail('arXiv production request identity/source/fetcher is invalid');
+        fail('arXiv 生产请求的身份、来源或抓取器无效');
     }
     safeName(value.authorityName, SAFE_JSON_NAME, 'arXiv production request authorityName');
     sha(value.identitySha256, 'arXiv production request identitySha256');
@@ -182,7 +182,7 @@ function normalizeProductionArxivObservation(value) {
         || value.sourceUrl !== (value.sourceKind === 'html' ? `https://arxiv.org/html/${value.sourceId}` : `https://arxiv.org/pdf/${value.sourceId}.pdf`)
         || !Number.isSafeInteger(value.htmlAttempts) || value.htmlAttempts < 0 || !Array.isArray(value.warnings)
         || !plain(value.structuredArtifacts) || !Array.isArray(value.structuredArtifacts.tables)
-        || !Array.isArray(value.structuredArtifacts.formulas)) fail('arXiv production observation is invalid');
+        || !Array.isArray(value.structuredArtifacts.formulas)) fail('arXiv 生产观测无效');
     return selfBound(value, 'observationSha256', 'arXiv production observation');
 }
 function normalizeProductionArxivSnapshot(value) {
@@ -191,7 +191,7 @@ function normalizeProductionArxivSnapshot(value) {
         'fulltextSha256', 'snapshotSha256'], 'arXiv production snapshot');
     if (value.contract !== ARXIV_PRODUCTION_SNAPSHOT_CONTRACT || value.version !== VERSION
         || value.paperId !== `arxiv:${value.arxivId}` || value.officialUrl !== `https://arxiv.org/abs/${value.arxivId}`) {
-        fail('arXiv production snapshot identity/source is invalid');
+        fail('arXiv 生产快照的身份或来源无效');
     }
     for (const field of ['requestName', 'observationName']) safeName(value[field], SAFE_JSON_NAME, `arXiv production snapshot ${field}`);
     safeName(value.fulltextName, SAFE_TEXT_NAME, 'arXiv production snapshot fulltextName');
@@ -203,7 +203,7 @@ function normalizeProductionArxivReceipt(value) {
         'snapshotName', 'snapshotFileSha256', 'snapshotSha256', 'observationName', 'observationFileSha256',
         'observationSha256', 'fulltextName', 'fulltextSha256', 'fetcherContract', 'receiptSha256'], 'arXiv production receipt');
     if (value.contract !== ARXIV_PRODUCTION_RECEIPT_CONTRACT || value.version !== VERSION
-        || value.fetcherContract !== ARXIV_FETCHER_CONTRACT) fail('arXiv production receipt contract/version/fetcher is invalid');
+        || value.fetcherContract !== ARXIV_FETCHER_CONTRACT) fail('arXiv 生产回执的契约、版本或抓取器无效');
     for (const field of ['requestName', 'snapshotName', 'observationName']) safeName(value[field], SAFE_JSON_NAME, `arXiv production receipt ${field}`);
     safeName(value.fulltextName, SAFE_TEXT_NAME, 'arXiv production receipt fulltextName');
     for (const [field, item] of Object.entries(value)) if (field.toLowerCase().includes('sha256')) sha(item, `arXiv production receipt ${field}`);
@@ -213,7 +213,7 @@ function normalizeAuthority(value) {
     exact(value, ['contract', 'version', 'paperId', 'identity', 'identitySha256', 'identityRecordSha256',
         'evidenceKind', 'proof', 'authoritySha256'], 'authority');
     if (value.contract !== CONTRACT || value.version !== VERSION || !isEvidenceKind(value.evidenceKind)) {
-        fail('authority contract/version/evidenceKind is invalid');
+        fail('authority 的契约、版本或 evidenceKind 无效');
     }
     let identity;
     try { identity = identityApi.normalizeIdentity(value.identity); }
@@ -227,7 +227,7 @@ function normalizeAuthority(value) {
         fail('authority paperId/identity SHA/record SHA does not bind canonical paper identity');
     }
     if ((value.evidenceKind === 'arxiv-official-fulltext') !== (identity.kind === 'arxiv')) {
-        fail('authority evidenceKind does not match paper identity kind');
+        fail('authority 的 evidenceKind 与论文身份类型不匹配');
     }
     const proof = normalizeProof(value.proof, value.evidenceKind);
     const normalized = { contract: CONTRACT, version: VERSION, paperId: value.paperId, identity,
@@ -299,7 +299,7 @@ function replayConference(root, authority, options) {
     let context;
     try { context = conferenceContextApi.buildConferenceSourceContext({ planHandle: options.conferencePlanHandle,
         paperId: authority.paperId, sourceRoot: options.conferenceSourceRoot }); }
-    catch (error) { fail(`conference source context replay failed: ${error.message}`); }
+    catch (error) { fail(`会议来源上下文重放失败：${error.message}`); }
     if (!loaded.bytes.equals(prettyBytes(context)) || loaded.sha256 !== authority.proof.sourceContextFileSha256
         || stableHash(context) !== authority.proof.sourceContextSha256
         || context.sourceSnapshotSha256 !== authority.proof.sourceSnapshotSha256
@@ -357,7 +357,7 @@ function replayAuthorityHandle(handle, { requireProduction = false } = {}) {
         fail('paper source authority file or replayed evidence changed after handle creation');
     }
     if (requireProduction && current.public.productionAuthorized !== true) {
-        fail('replayed paper source authority is not production-authorized');
+        fail('重放的论文来源 authority 未经生产授权');
     }
     return replayed;
 }

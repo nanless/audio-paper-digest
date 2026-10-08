@@ -31,7 +31,7 @@ function fail(message) {
 
 function paperId(paper) {
     const raw = typeof paper === 'string' ? paper : paper?.arxivId || paper?.paper_id || paper?.id;
-    if (!/^\d{4}\.\d{4,5}(?:v\d+)?$/.test(String(raw || ''))) throw fail('Fresh source requires a normalized arXiv identity');
+    if (!/^\d{4}\.\d{4,5}(?:v\d+)?$/.test(String(raw || ''))) throw fail('fresh 来源需要规范化的 arXiv 身份');
     return raw.replace(/v\d+$/, '');
 }
 
@@ -62,14 +62,14 @@ function readBytes(filename) {
 
 function readJson(filename) {
     try { return JSON.parse(readBytes(filename).toString('utf8')); }
-    catch (error) { if (error.code === 'ENOENT') throw error; throw fail(`Fresh JSON refused: ${error.message}`); }
+    catch (error) { if (error.code === 'ENOENT') throw error; throw fail(`fresh JSON 被拒绝：${error.message}`); }
 }
 
 function validateRun(runDir, identity) {
     const Config = require('../config.js');
     const runId = identity?.runId;
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(String(runId || ''))) {
-        throw fail('Fresh runId must be a UUID');
+        throw fail('fresh runId 必须是 UUID');
     }
     const rewriteRoot = path.resolve(Config.FILES.freshRewriteRunsDir);
     const dailyRoot = path.resolve(Config.FILES.dailyFreshSourceRunsDir || '');
@@ -82,19 +82,19 @@ function validateRun(runDir, identity) {
     if (!matchedRoot) throw fail('Fresh runDir must be the configured root/runId directory');
     safeDirectory(resolvedRunDir);
     const run = readJson(path.join(resolvedRunDir, 'run.json'));
-    if (run.runId !== runId || run.contract !== matchedRoot.contract || run.version !== 1) throw fail('The source run manifest has an invalid format or does not match the requested run.');
+    if (run.runId !== runId || run.contract !== matchedRoot.contract || run.version !== 1) throw fail('来源运行清单格式无效，或与请求的运行不匹配。');
     const expectations = identity?.sourceExpectations;
     if (!expectations || typeof expectations !== 'object' || Array.isArray(expectations)
         || stable(expectations) !== stable(run.sourceExpectations)) throw fail('Fresh source expectations differ from the run manifest');
     const ids = Object.keys(expectations);
     if (!ids.length || !Array.isArray(run.paperIds) || stable(ids.slice().sort()) !== stable(run.paperIds.slice().sort())) {
-        throw fail('Fresh source expectations do not cover the exact run input set');
+        throw fail('fresh 来源预期未覆盖确切的运行输入集合');
     }
     for (const id of ids) {
         const expectation = expectations[id];
         if (paperId(id) !== id || (!isBundleExpectation(expectation)
             && (!validSha(expectation?.sourceSha256) || !validSha(expectation?.structuredArtifactsSha256)))) {
-            throw fail(`The expected source record for ${id} does not provide a valid paper ID and the required source hashes or bundle generation.`);
+            throw fail(`${id} 的预期来源记录未提供有效的论文 ID，以及所需的来源哈希或包代次。`);
         }
         if (expectations[id].sourceId !== undefined && paperId(expectations[id].sourceId) !== id) {
             throw fail(`Fresh sourceId belongs to another paper: ${id}`);
@@ -124,7 +124,7 @@ function withFreshAnalysisContext(identity, callback) {
                     || snapshot.structuredArtifactsSha256 !== expected.structuredArtifactsSha256))
                 || (isBundleExpectation(expected) && (snapshot.sourceGeneration !== expected.sourceGeneration
                     || !validSha(snapshot.sourceManifestSha256)));
-        })) throw fail('Saved-analysis recovery permissions have an invalid format or do not match this run and its expected sources.');
+        })) throw fail('已保存分析的恢复权限格式无效，或与本次运行及其预期来源不匹配。');
     const { withLlmUsageContext } = require('./llm-usage.js');
     const context = Object.freeze({ ...checked,
         refreshReaderDiagnostics: identity.refreshReaderDiagnostics === true,
@@ -152,21 +152,21 @@ function getSavedAnalysisRecoveryPermission(id = getFreshAnalysisContext()?.pape
 function validateSource(details, id, expectation) {
     if (!details || typeof details !== 'object' || Array.isArray(details)
         || Object.keys(details).some(key => /^(?:analysis|parsed$|apiReader|freshRewrite|freshSource)/.test(key))) {
-        throw fail('Source details are missing, have an invalid format, or contain generated analysis, Reader, checkpoint, or source-record fields.');
+        throw fail('来源详情缺失、格式无效，或含生成的分析、Reader、检查点或来源记录字段。');
     }
     const minimum = require('../config.js').ANALYSIS_CONFIG.fullTextMinCharsForFull;
     if (!['html', 'pdf'].includes(details.source) || typeof details.text !== 'string'
         || details.text.length <= minimum || paperId(details.sourceId) !== id
-        || sha(details.text) !== expectation.sourceSha256) throw fail(`Source text for ${id} has an invalid format, is too short, or does not match the expected paper and content hash.`);
+        || sha(details.text) !== expectation.sourceSha256) throw fail(`${id} 的来源文本格式无效、过短，或与预期的论文和内容哈希不匹配。`);
     const artifacts = details.structuredArtifacts;
     if (!artifacts || typeof artifacts !== 'object' || !Array.isArray(artifacts.tables) || !Array.isArray(artifacts.formulas)) {
-        throw fail('Source details must include a structuredArtifacts object with table and formula arrays.');
+        throw fail('来源详情必须包含带 table 与 formula 数组的 structuredArtifacts 对象。');
     }
     const { payloadSha256, ...body } = artifacts;
     if (!validSha(payloadSha256) || sha(JSON.stringify(body)) !== payloadSha256
         || payloadSha256 !== expectation.structuredArtifactsSha256
         || artifacts.flattenedTextSha256 !== expectation.sourceSha256) {
-        throw fail(`Structured artifacts for ${id} have an invalid content hash or do not match the expected artifacts and source text.`);
+        throw fail(`${id} 的结构化产物内容哈希无效，或与预期产物和来源文本不匹配。`);
     }
     return details;
 }
@@ -183,7 +183,7 @@ function buildSourceDetailsFromBundle(stored) {
     if (!runtime || runtime.paperId !== stored.manifest.paperId
         || runtime.text !== stored.text || runtime.source !== stored.manifest.text.source
         || runtime.sourceId !== stored.manifest.text.sourceId) {
-        throw fail('Source bundle runtime metadata is missing or does not match its manifest and text.');
+        throw fail('来源包运行时元数据缺失，或与其清单和文本不匹配。');
     }
     const details = { text: runtime.text, source: runtime.source, sourceId: runtime.sourceId,
         imageInfos: structuredClone(runtime.imageInfos), structuredArtifacts: structuredClone(runtime.structuredArtifacts),
@@ -228,7 +228,7 @@ function readBundleFreshSource(checked, id, expectation) {
     if (source.freshSourceDescriptor.paperId !== id
         || source.freshSourceDescriptor.sourceGeneration !== expectation.sourceGeneration
         || !validSha(source.freshSourceDescriptor.sourceManifestSha256)) {
-        throw fail('The source bundle has an invalid manifest hash or does not match the expected paper and generation.');
+        throw fail('来源包的清单哈希无效，或与预期的论文和代次不匹配。');
     }
     return source;
 }
@@ -237,7 +237,7 @@ function readFreshSource(runDir, paper, identity) {
     const checked = validateRun(runDir, identity);
     const id = paperId(paper);
     const expectation = checked.sourceExpectations[id];
-    if (!expectation) throw fail(`Paper is outside fresh run: ${id}`);
+    if (!expectation) throw fail(`论文不在该 fresh 运行内：${id}`);
     if (isBundleExpectation(expectation)) return readBundleFreshSource(checked, id, expectation);
     const directory = sourceDirectory(checked, id);
     try { safeDirectory(directory); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
@@ -246,9 +246,9 @@ function readFreshSource(runDir, paper, identity) {
     if (descriptor.contract !== CACHE_CONTRACT || descriptor.version !== 1 || descriptor.runId !== checked.runId
         || descriptor.paperId !== id || descriptor.sourceSha256 !== expectation.sourceSha256
         || descriptor.structuredArtifactsSha256 !== expectation.structuredArtifactsSha256
-        || !validSha(descriptor.sourceSnapshotSha256)) throw fail('The source descriptor has an invalid format or does not match this run, paper, and expected source hashes.');
+        || !validSha(descriptor.sourceSnapshotSha256)) throw fail('来源描述符格式无效，或与本次运行、论文及预期来源哈希不匹配。');
     const bytes = readBytes(path.join(directory, 'source-details.json'));
-    if (sha(bytes) !== descriptor.sourceSnapshotSha256) throw fail('Fresh source snapshot bytes changed');
+    if (sha(bytes) !== descriptor.sourceSnapshotSha256) throw fail('fresh 来源快照字节已变化');
     const details = validateSource(JSON.parse(bytes.toString('utf8')), id, expectation);
     if (sha(readBytes(path.join(directory, 'source.txt'))) !== expectation.sourceSha256
         || readBytes(path.join(directory, 'artifacts.json')).toString('utf8') !== JSON.stringify(details.structuredArtifacts)) {
@@ -263,7 +263,7 @@ function writeExact(directory, filename, bytes) {
     try {
         const existing = readBytes(target);
         if (existing.equals(Buffer.from(bytes))) return;
-        throw fail(`Fresh cache refuses to overwrite different bytes: ${filename}`);
+        throw fail(`fresh 缓存拒绝覆盖不同的字节：${filename}`);
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
     const temporary = path.join(directory, `.${filename}.${crypto.randomUUID()}.tmp`);
     let fd;
@@ -296,7 +296,7 @@ async function fetchFreshSource(arxivId, fetchOriginal) {
             await sourceApi.captureFreshArxivRewriteSource({ rootDir: bundleRoot(context), arxivId: id,
                 generation: expectation.sourceGeneration });
             const sourceDetails = readFreshSource(context.runDir, id, context);
-            if (!sourceDetails) throw fail('The captured source files could not be read back as a complete source bundle.');
+            if (!sourceDetails) throw fail('无法把已捕获的来源文件回读为完整的来源包。');
             return sourceDetails;
         }
         const directory = sourceDirectory(context, id);
@@ -338,14 +338,14 @@ function freshAnalysisIdentity(id = getFreshAnalysisContext()?.paperId) {
     const base = { contract: CONTRACT, runId: context.runId, inputSetSha256: context.inputSetSha256 };
     if (!id) return base;
     const source = readFreshSource(context.runDir, id, context);
-    if (!source) throw fail('The source files for this run must be complete before an analysis stage can start.');
+    if (!source) throw fail('分析阶段开始前，本次运行的来源文件必须完整。');
     return { ...base, paperId: paperId(id), ...buildFreshSourceRecord(source) };
 }
 
 function buildFreshSourceRecord(source) {
     const context = getFreshAnalysisContext();
     const descriptor = source?.freshSourceDescriptor;
-    if (!context || descriptor?.runId !== context.runId) throw fail('A source record requires the current run context and its corresponding source descriptor.');
+    if (!context || descriptor?.runId !== context.runId) throw fail('来源记录需要当前运行上下文及其对应的来源描述符。');
     return { contract: CONTRACT, runId: context.runId, sourceSha256: descriptor.sourceSha256,
         structuredArtifactsSha256: descriptor.structuredArtifactsSha256, sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
         ...(descriptor.contract === BUNDLE_CACHE_CONTRACT ? { sourceGeneration: descriptor.sourceGeneration,
@@ -360,7 +360,7 @@ function assertFreshPaper(paper) {
     const context = getFreshAnalysisContext();
     if (!context) return;
     const id = paperId(paper);
-    if (!context.sourceExpectations[id]) throw fail(`Paper is outside fresh run: ${id}`);
+    if (!context.sourceExpectations[id]) throw fail(`论文不在该 fresh 运行内：${id}`);
     if (paper.fullText || paper.pdfText) throw fail('Fresh analysis must use this run source cache, not caller-provided text');
     const generated = Object.keys(paper).filter(key => /^(?:analysis(?:$|Checkpoint|Manifest|Stage|Recovery)|parsed$|apiReader|imageManifest$)/.test(key)
         && paper[key] !== undefined && paper[key] !== null && paper[key] !== '');
