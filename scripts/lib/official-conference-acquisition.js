@@ -229,16 +229,16 @@ const prettyBytes = value => Buffer.from(`${JSON.stringify(canonical(value), nul
 
 function exact(value, keys, label) {
     if (!plain(value) || Object.keys(value).sort().join('\0') !== [...keys].sort().join('\0')) {
-        fail(`${label} schema is invalid`);
+        fail(`${label} 的 schema 无效`);
     }
 }
 
 function cleanText(value, label, { allowEmpty = false, max = 20000 } = {}) {
     if (typeof value !== 'string' || value.length > max || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)) {
-        fail(`${label} is invalid`);
+        fail(`${label} 无效`);
     }
     const normalized = value.replace(/\s+/gu, ' ').trim();
-    if (!allowEmpty && !normalized) fail(`${label} is empty`);
+    if (!allowEmpty && !normalized) fail(`${label} 为空`);
     return normalized;
 }
 
@@ -249,20 +249,20 @@ function cleanOptional(value, label, max = 2048) {
 function canonicalPublicHttps(value, label) {
     const text = cleanText(value, label, { max: 2048 });
     let url;
-    try { url = new URL(text); } catch { fail(`${label} is not a URL`); }
+    try { url = new URL(text); } catch { fail(`${label} 不是 URL`); }
     const host = url.hostname.toLowerCase();
     if (url.protocol !== 'https:' || url.username || url.password || url.port || url.hash
         || net.isIP(host) || host === 'localhost' || !host.includes('.')
         || host.endsWith('.local') || host.endsWith('.localhost')) {
-        fail(`${label} must be canonical public HTTPS`);
+        fail(`${label} 必须是规范的公开 HTTPS 地址`);
     }
-    if (url.toString() !== text) fail(`${label} must use canonical URL spelling`);
+    if (url.toString() !== text) fail(`${label} 必须使用规范 URL 拼写`);
     return text;
 }
 
 function providerFor(providerId) {
     const provider = PROVIDERS[String(providerId || '')];
-    if (!provider) fail(`provider must be one of: ${Object.keys(PROVIDERS).join(', ')}`);
+    if (!provider) fail(`provider 必须是以下之一：${Object.keys(PROVIDERS).join(', ')}`);
     return provider;
 }
 
@@ -284,7 +284,7 @@ function validateFetchUrl(provider, rawUrl, kind) {
         if (url.hostname !== provider.host || url.search || !provider.recordPath || !provider.recordPath.test(url.pathname)) {
             fail('record URL left the official proceedings path');
         }
-    } else fail('unknown URL kind');
+    } else fail('URL 类型未知');
     return value;
 }
 
@@ -522,12 +522,12 @@ function parseDafx(provider, html) {
 
 function parseAaaiIssue(providerOrId, issueOrNumber, html) {
     const provider = typeof providerOrId === 'string' ? providerFor(providerOrId) : providerOrId;
-    if (provider.parser !== 'aaai-multi' || !Array.isArray(provider.issues)) fail('AAAI issue parser requires the fixed multi-issue provider');
+    if (provider.parser !== 'aaai-multi' || !Array.isArray(provider.issues)) fail('AAAI 期号解析器要求固定的多期号 provider');
     const issue = typeof issueOrNumber === 'number'
         ? provider.issues.find(candidate => candidate.number === issueOrNumber)
         : issueOrNumber;
     if (!issue || provider.issues.find(candidate => candidate.number === issue.number) !== issue) {
-        fail('AAAI issue is outside the fixed volume 40 manifest');
+        fail('AAAI 期号不在固定的 volume 40 清单内');
     }
     const source = cleanText(String(html), `AAAI issue ${issue.number} HTML`, { max: MAX_INDEX_BYTES });
     const $ = cheerio.load(source);
@@ -539,11 +539,11 @@ function parseAaaiIssue(providerOrId, issueOrNumber, html) {
         const container = $(element);
         const recordAnchor = container.find('h3.title a[href], .title a[href]').first();
         const recordUrl = hrefUrl(recordAnchor.attr('href'), issue.url);
-        if (!recordUrl) fail(`AAAI issue ${issue.number} article has no official record URL`);
+        if (!recordUrl) fail(`AAAI 期号 ${issue.number} 的文章没有官方 record URL`);
         validateFetchUrl(provider, recordUrl, 'record');
         const recordId = path.posix.basename(new URL(recordUrl).pathname);
         const pdfAnchor = container.find('a.obj_galley_link.pdf[href]').first();
-        if (!pdfAnchor.length) fail(`AAAI article ${recordId} has no proceedings PDF`);
+        if (!pdfAnchor.length) fail(`AAAI 文章 ${recordId} 没有 proceedings PDF`);
         const pdfUrl = hrefUrl(pdfAnchor.attr('href'), issue.url);
         validateFetchUrl(provider, pdfUrl, 'pdf');
         const pdfParts = new URL(pdfUrl).pathname.split('/').filter(Boolean);
@@ -557,7 +557,7 @@ function parseAaaiIssue(providerOrId, issueOrNumber, html) {
         papers.push(makePaper({ id: recordId, title: recordAnchor.text().replace(/\s+/gu, ' ').trim(),
             authors, abstract: '', recordUrl, pdfUrl, doi: null, track: cleanMaybe(track || issue.title) }));
     });
-    if (!papers.length) fail(`AAAI issue ${issue.number} has no proceedings papers`);
+    if (!papers.length) fail(`AAAI 期号 ${issue.number} 没有 proceedings 论文`);
     return papers;
 }
 
@@ -565,11 +565,11 @@ function pmlrPdfIdentity(provider, pdfUrl, expectedId) {
     const parsed = new URL(pdfUrl); const parts = parsed.pathname.split('/').filter(Boolean);
     const basename = path.posix.basename(parsed.pathname, '.pdf');
     const parent = parts.at(-2);
-    if (basename !== expectedId || parent !== expectedId) fail('PMLR PDF identity differs from its official record');
-    if (parsed.hostname === provider.host && parts[0] !== provider.volume) fail('PMLR PDF left its fixed volume');
+    if (basename !== expectedId || parent !== expectedId) fail('PMLR PDF 身份与其官方 record 不一致');
+    if (parsed.hostname === provider.host && parts[0] !== provider.volume) fail('PMLR PDF 离开了其固定 volume');
     if (parsed.hostname === 'raw.githubusercontent.com'
         && (parts[0] !== 'mlresearch' || parts[1] !== provider.volume || parts[2] !== 'main' || parts[3] !== 'assets')) {
-        fail('PMLR raw PDF left its fixed repository path');
+        fail('PMLR 原始 PDF 离开了其固定仓库路径');
     }
 }
 
@@ -590,7 +590,7 @@ function parsePmlr(provider, html) {
             try { validateFetchUrl(provider, candidate, 'pdf'); pmlrPdfIdentity(provider, candidate, id); return true; }
             catch { return false; }
         }).first();
-        if (!pdfAnchor.length) fail(`PMLR record ${id} has no identity-bound proceedings PDF`);
+        if (!pdfAnchor.length) fail(`PMLR record ${id} 没有绑定身份的 proceedings PDF`);
         const title = fieldText(container, ['.title', '.paper-title'])
             || ($(element).attr('data-title') || '').trim();
         let authors = authorsFrom($, container);
@@ -631,7 +631,7 @@ function parseCvf(provider, html) {
         const pdfUrl = pdfAnchor.length ? hrefUrl(pdfAnchor.attr('href'), provider.indexUrl)
             : `https://${provider.host}/content/CVPR2026/papers/${id}.pdf`;
         validateFetchUrl(provider, pdfUrl, 'pdf');
-        if (path.posix.basename(new URL(pdfUrl).pathname, '.pdf') !== id) fail('CVF record and PDF identities differ');
+        if (path.posix.basename(new URL(pdfUrl).pathname, '.pdf') !== id) fail('CVF 的 record 与 PDF 身份不一致');
         let authors = authorsFrom($, details);
         if (!authors.length) authors = cvfAuthorLine($, details);
         papers.push(makePaper({ id, title: $(element).text().trim(), authors, abstract: '', recordUrl, pdfUrl,
@@ -644,7 +644,7 @@ function aclTrack(id, venue) {
     if (id.startsWith(`2026.${venue}-long.`)) return 'Long Papers';
     if (id.startsWith(`2026.${venue}-short.`)) return 'Short Papers';
     if (id.startsWith(`2026.findings-${venue}.`)) return 'Findings';
-    fail('ACL Anthology record left the admitted main-conference volumes');
+    fail('ACL Anthology record 离开了已准入的主会议卷');
 }
 
 function parseAcl(provider, html) {
@@ -676,17 +676,17 @@ function cleanMaybe(value) {
 function normalizePaper(value, provider, index) {
     exact(value, PAPER_FIELDS, `papers[${index}]`);
     const id = cleanText(value.id, `papers[${index}].id`, { max: 200 });
-    if (!ID_RE.test(id)) fail(`papers[${index}].id is invalid`);
-    if (!Array.isArray(value.authors) || !value.authors.length) fail(`papers[${index}].authors must be a non-empty array`);
+    if (!ID_RE.test(id)) fail(`papers[${index}].id 无效`);
+    if (!Array.isArray(value.authors) || !value.authors.length) fail(`papers[${index}].authors 必须是非空数组`);
     const authors = []; const seen = new Set();
     for (const [authorIndex, author] of value.authors.entries()) {
         const normalized = cleanText(author, `papers[${index}].authors[${authorIndex}]`, { max: 500 });
-        if (seen.has(normalized)) fail(`papers[${index}].authors contains duplicates`);
+        if (seen.has(normalized)) fail(`papers[${index}].authors 含重复项`);
         seen.add(normalized); authors.push(normalized);
     }
     const pdfUrl = value.pdfUrl === null ? null : validateFetchUrl(provider, value.pdfUrl, 'pdf');
     const expectedPdfFile = pdfUrl === null ? null : `pdfs/${id}.pdf`;
-    if (value.pdfFile !== expectedPdfFile) fail(`papers[${index}].pdfFile must bind its official ID and PDF URL`);
+    if (value.pdfFile !== expectedPdfFile) fail(`papers[${index}].pdfFile 必须绑定其官方 ID 和 PDF URL`);
     const recordUrl = validateFetchUrl(provider, value.recordUrl, 'record');
     return { id, title: cleanText(value.title, `papers[${index}].title`, { max: 4000 }), authors,
         abstract: cleanText(value.abstract, `papers[${index}].abstract`, { allowEmpty: true }),
@@ -699,13 +699,13 @@ function normalizeMetadata(value, providerOrId) {
     exact(value, ['conference', 'papers'], 'metadata');
     exact(value.conference, ['id', 'year'], 'metadata.conference');
     if (value.conference.id !== provider.conference.id || value.conference.year !== provider.conference.year) {
-        fail('metadata conference identity differs from provider');
+        fail('metadata 的会议身份与 provider 不一致');
     }
-    if (!Array.isArray(value.papers) || !value.papers.length) fail('metadata papers must be a non-empty array');
+    if (!Array.isArray(value.papers) || !value.papers.length) fail('metadata 的 papers 必须是非空数组');
     const papers = value.papers.map((paper, index) => normalizePaper(paper, provider, index))
         .sort((left, right) => left.id.localeCompare(right.id, 'en'));
     for (let index = 1; index < papers.length; index += 1) {
-        if (papers[index - 1].id === papers[index].id) fail(`duplicate official paper ID: ${papers[index].id}`);
+        if (papers[index - 1].id === papers[index].id) fail(`官方论文 ID 重复：${papers[index].id}`);
     }
     return { conference: clone(provider.conference), papers };
 }
@@ -716,7 +716,7 @@ function parseCatalog(providerId, html) {
         fail('AAAI catalog requires all 48 fixed issue snapshots; a single issue cannot represent the proceedings');
     }
     if (provider.parser === 'icmc-combined') {
-        fail('ICMC catalog requires the combined proceedings PDF, not index HTML alone');
+        fail('ICMC catalog 需要合并后的 proceedings PDF，不能只有 index HTML');
     }
     const source = cleanText(String(html), 'official index HTML', { max: MAX_INDEX_BYTES });
     const parsers = { isca: parseIsca, odyssey: parseOdyssey, iwslt: parseIwslt, eusipco: parseEusipco, nime: parseNime, dafx: parseDafx,
@@ -727,10 +727,10 @@ function parseCatalog(providerId, html) {
 
 function plannedRoot(outputRoot) {
     if (typeof outputRoot !== 'string' || !path.isAbsolute(outputRoot) || path.resolve(outputRoot) !== outputRoot
-        || outputRoot === path.parse(outputRoot).root) fail('output-root must be a normalized absolute non-root path');
+        || outputRoot === path.parse(outputRoot).root) fail('output-root 必须是规范化的绝对非根路径');
     let cursor = outputRoot;
     while (!fs.existsSync(cursor)) {
-        const parent = path.dirname(cursor); if (parent === cursor) fail('output-root has no safe existing ancestor'); cursor = parent;
+        const parent = path.dirname(cursor); if (parent === cursor) fail('output-root 没有可安全使用的已有祖先目录'); cursor = parent;
     }
     safeDirectory(cursor, 'output-root existing ancestor', false);
     return outputRoot;
@@ -738,15 +738,15 @@ function plannedRoot(outputRoot) {
 
 function safeDirectory(directory, label, create) {
     if (typeof directory !== 'string' || !path.isAbsolute(directory) || path.resolve(directory) !== directory) {
-        fail(`${label} must be a normalized absolute path`);
+        fail(`${label} 必须是规范化的绝对路径`);
     }
     if (!fs.existsSync(directory)) {
-        if (!create) fail(`${label} does not exist`);
+        if (!create) fail(`${label} 不存在`);
         const parent = path.dirname(directory); safeDirectory(parent, `${label} parent`, false);
         fs.mkdirSync(directory, { mode: 0o700 });
     }
     const stat = fs.lstatSync(directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory) fail(`${label} is unsafe`);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory) fail(`${label} 不安全`);
     return directory;
 }
 
@@ -784,24 +784,24 @@ function issueArtifactPaths(paths, issue, create = false) {
 
 function readStableFile(filename, label, maxBytes) {
     const parent = safeDirectory(path.dirname(filename), `${label} parent`, false); const absolute = path.resolve(filename);
-    if (path.dirname(absolute) !== parent) fail(`${label} path escapes its parent`);
+    if (path.dirname(absolute) !== parent) fail(`${label} 路径超出其父目录`);
     let fd;
     try {
         fd = fs.openSync(absolute, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const opened = fs.fstatSync(fd); const named = fs.lstatSync(absolute);
         if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size < 1 || opened.size > maxBytes) {
-            fail(`${label} is unsafe or outside its size limit`);
+            fail(`${label} 不安全或超出大小上限`);
         }
         if (process.platform !== 'win32' && (opened.mode & 0o777) !== 0o600) fail(`${label} permissions must be 0600`);
         const bytes = fs.readFileSync(fd); const after = fs.fstatSync(fd);
         if (bytes.length !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size) {
-            fail(`${label} changed while read`);
+            fail(`读取时 ${label} 已变化`);
         }
         return { bytes, sha256: sha256(bytes), size: bytes.length };
     } catch (error) {
         if (error instanceof OfficialConferenceAcquisitionError) throw error;
-        fail(`${label} cannot be read: ${error.code || error.message}`);
+        fail(`无法读取 ${label}：${error.code || error.message}`);
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
@@ -816,7 +816,7 @@ function writeExclusiveOrCompare(filename, bytes, label, maxBytes) {
         if (error.code !== 'EEXIST') throw error;
         const existing = readStableFile(filename, label, maxBytes);
         const mode = fs.statSync(filename).mode & 0o777;
-        if (mode !== 0o600 || !existing.bytes.equals(bytes)) fail(`refuses to overwrite different or non-private ${label}`);
+        if (mode !== 0o600 || !existing.bytes.equals(bytes)) fail(`拒绝覆盖内容不同或非私有的 ${label}`);
         return 'recovered';
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
@@ -830,7 +830,7 @@ function rejectDuplicateJsonKeys(text, label) {
         else if (token === '}' || token === ']') stack.pop();
         else if (token === ',' && top?.object) top.expectKey = true;
         else if (token.startsWith('"') && top?.object && top.expectKey) {
-            const key = JSON.parse(token); if (top.keys.has(key)) fail(`${label} has duplicate keys`);
+            const key = JSON.parse(token); if (top.keys.has(key)) fail(`${label} 含重复键`);
             top.keys.add(key); top.expectKey = false;
         }
     }
@@ -843,9 +843,9 @@ function readCanonicalJson(filename, label, maxBytes) {
         rejectDuplicateJsonKeys(text, label); value = JSON.parse(text);
     } catch (error) {
         if (error instanceof OfficialConferenceAcquisitionError) throw error;
-        fail(`${label} is not strict UTF-8 JSON`);
+        fail(`${label} 不是严格的 UTF-8 JSON`);
     }
-    if (!loaded.bytes.equals(prettyBytes(value))) fail(`${label} bytes are not canonical`);
+    if (!loaded.bytes.equals(prettyBytes(value))) fail(`${label} 的字节不规范`);
     return { ...loaded, value };
 }
 
@@ -872,14 +872,14 @@ function pdfReceipt(provider, paper, fetched, metadataSha256) {
 }
 
 function validateRedirects(provider, receipt, kind) {
-    if (!Array.isArray(receipt.redirects) || receipt.redirects.length > MAX_REDIRECTS) fail('receipt redirects are invalid');
+    if (!Array.isArray(receipt.redirects) || receipt.redirects.length > MAX_REDIRECTS) fail('receipt 的重定向无效');
     let current = validateFetchUrl(provider, receipt.requestedUrl, kind);
     for (const item of receipt.redirects) {
         exact(item, ['from', 'status', 'to'], 'redirect');
-        if (![301, 302, 303, 307, 308].includes(item.status) || item.from !== current) fail('redirect chain is not continuous');
+        if (![301, 302, 303, 307, 308].includes(item.status) || item.from !== current) fail('重定向链不连续');
         current = validateRedirectTarget(provider, item.from, item.to, kind);
     }
-    if (receipt.finalUrl !== current) fail('receipt final URL differs from redirect chain');
+    if (receipt.finalUrl !== current) fail('receipt 的最终 URL 与重定向链不一致');
 }
 
 function replayResponseReceipt(provider, responseFile, receiptFile, relativePath, issue = null) {
@@ -894,14 +894,14 @@ function replayResponseReceipt(provider, responseFile, receiptFile, relativePath
         || receipt.responseStatus !== 200 || !/^text\/html(?:\s*;|$)/iu.test(receipt.contentType)
         || !validObservedAt(receipt.observedAt)
         || (issue && (receipt.issueNumber !== issue.number || receipt.issueId !== issue.issueId
-            || receipt.requestedUrl !== issue.url))) fail(`${label} receipt envelope is invalid`);
+            || receipt.requestedUrl !== issue.url))) fail(`${label} 的 receipt envelope 无效`);
     const body = { ...receipt }; delete body.receiptSha256;
     if (!SHA_RE.test(receipt.receiptSha256) || receipt.receiptSha256 !== stableHash(body)) fail(`${label} receipt self-SHA drifted`);
     validateRedirects(provider, receipt, 'index');
     exact(receipt.body, ['bytes', 'relativePath', 'sha256'], `${label} body binding`);
     if (receipt.body.relativePath !== relativePath || !Number.isSafeInteger(receipt.body.bytes)
         || receipt.body.bytes < 1 || receipt.body.bytes > MAX_INDEX_BYTES || !SHA_RE.test(receipt.body.sha256)) {
-        fail(`${label} body binding is invalid`);
+        fail(`${label} 的 body 绑定无效`);
     }
     const index = readStableFile(responseFile, `sealed ${label}`, MAX_INDEX_BYTES);
     if (index.size !== receipt.body.bytes || index.sha256 !== receipt.body.sha256) fail(`sealed ${label} differs from receipt`);
@@ -930,21 +930,21 @@ function replayIcmcCombinedReceipt(provider, paths) {
         || receipt.providerId !== provider.conference.id || receipt.resource !== 'catalog-proceedings-pdf'
         || receipt.responseStatus !== 200 || !validObservedAt(receipt.observedAt)
         || !/^(?:application\/pdf|application\/octet-stream)(?:\s*;|$)/iu.test(receipt.contentType)) {
-        fail('ICMC combined proceedings receipt envelope is invalid');
+        fail('ICMC 合并 proceedings 的 receipt envelope 无效');
     }
     const body = { ...receipt }; delete body.receiptSha256;
     if (!SHA_RE.test(receipt.receiptSha256) || receipt.receiptSha256 !== stableHash(body)) {
-        fail('ICMC combined proceedings receipt self-SHA drifted');
+        fail('ICMC 合并 proceedings 的 receipt 自校验 SHA 已变化');
     }
     validateRedirects(provider, receipt, 'pdf');
     exact(receipt.body, ['bytes', 'relativePath', 'sha256'], 'ICMC combined proceedings byte binding');
     if (receipt.body.relativePath !== 'responses/proceedings.source' || !Number.isSafeInteger(receipt.body.bytes)
         || receipt.body.bytes < 5 || receipt.body.bytes > MAX_COMBINED_PDF_BYTES || !SHA_RE.test(receipt.body.sha256)) {
-        fail('ICMC combined proceedings byte binding is invalid');
+        fail('ICMC 合并 proceedings 的字节绑定无效');
     }
     const pdf = readStableFile(paths.combinedPdfFile, 'sealed ICMC combined proceedings PDF', MAX_COMBINED_PDF_BYTES);
     if (pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-' || pdf.size !== receipt.body.bytes
-        || pdf.sha256 !== receipt.body.sha256) fail('ICMC combined proceedings PDF differs from its receipt');
+        || pdf.sha256 !== receipt.body.sha256) fail('ICMC 合并 proceedings 的 PDF 与其 receipt 不一致');
     return { receipt, receiptFileSha256: loaded.sha256, pdf };
 }
 
@@ -958,29 +958,29 @@ function runIcmcMetadataExtractor(combinedPdfFile, provider) {
     if (result.error || result.status !== 0) {
         const reason = String(result.stderr || result.error?.message || 'metadata extractor failed')
             .replace(/[^A-Za-z0-9_.: -]/g, '').slice(0, 240);
-        fail(`ICMC combined proceedings metadata extraction failed: ${reason}`);
+        fail(`ICMC 合并 proceedings 的元数据提取失败：${reason}`);
     }
     let value;
     try { value = JSON.parse(String(result.stdout || '')); }
-    catch { fail('ICMC combined proceedings metadata extractor returned invalid JSON'); }
+    catch { fail('ICMC 合并 proceedings 的元数据提取器返回了无效 JSON'); }
     exact(value, ['metadata', 'pageMap'], 'ICMC metadata extraction result');
     const metadata = normalizeMetadata(value.metadata, provider);
     exact(value.pageMap, ['contract', 'papers', 'sourcePages', 'version'], 'ICMC page map');
     if (value.pageMap.contract !== 'icmc-combined-proceedings-page-map-v1' || value.pageMap.version !== 1
         || !Number.isSafeInteger(value.pageMap.sourcePages) || value.pageMap.sourcePages < 1
-        || !Array.isArray(value.pageMap.papers)) fail('ICMC page map envelope is invalid');
+        || !Array.isArray(value.pageMap.papers)) fail('ICMC 页码映射的 envelope 无效');
     const expectedIds = metadata.papers.map(paper => paper.id);
     const pageMap = value.pageMap.papers.map((item, index) => {
         exact(item, ['endPage', 'id', 'outlineOrder', 'paperNumber', 'startPage'], `ICMC page map paper[${index}]`);
         if (typeof item.id !== 'string' || !ID_RE.test(item.id) || !Number.isSafeInteger(item.paperNumber)
             || !Number.isSafeInteger(item.outlineOrder) || !Number.isSafeInteger(item.startPage)
             || !Number.isSafeInteger(item.endPage) || item.startPage < 1 || item.startPage > item.endPage
-            || item.endPage > value.pageMap.sourcePages) fail('ICMC page map range is invalid');
+            || item.endPage > value.pageMap.sourcePages) fail('ICMC 页码映射的范围无效');
         return { id: item.id, paperNumber: item.paperNumber, outlineOrder: item.outlineOrder,
             startPage: item.startPage, endPage: item.endPage };
     }).sort((left, right) => left.id.localeCompare(right.id, 'en'));
     if (pageMap.length !== expectedIds.length || pageMap.some((item, index) => item.id !== expectedIds[index])) {
-        fail('ICMC page map does not bind the extracted paper set');
+        fail('ICMC 页码映射与提取出的论文集合不匹配');
     }
     return { metadata, pageMap: { contract: value.pageMap.contract, version: value.pageMap.version,
         sourcePages: value.pageMap.sourcePages, papers: pageMap } };
@@ -1015,11 +1015,11 @@ function catalogReceipt(provider, indexSnapshot, metadataBytes) {
 }
 
 function combineAaaiIssueSnapshots(provider, snapshots) {
-    if (snapshots.length !== provider.issues.length) fail('AAAI catalog does not contain all 48 fixed issues');
+    if (snapshots.length !== provider.issues.length) fail('AAAI catalog 未包含全部 48 份固定期号');
     const papers = []; const owner = new Map(); const issuePaperSets = [];
     for (let index = 0; index < provider.issues.length; index += 1) {
         const issue = provider.issues[index]; const snapshot = snapshots[index];
-        if (snapshot.issue !== issue) fail('AAAI issue snapshot order differs from the fixed manifest');
+        if (snapshot.issue !== issue) fail('AAAI 期号快照顺序与固定清单不一致');
         const issuePapers = parseAaaiIssue(provider, issue,
             new TextDecoder('utf-8', { fatal: true }).decode(snapshot.index.bytes));
         for (const paper of issuePapers) {
@@ -1061,8 +1061,8 @@ function replayIcmcCatalog(provider, paths) {
     const extracted = runIcmcMetadataExtractor(paths.combinedPdfFile, provider);
     const expectedMetadataBytes = prettyBytes(extracted.metadata);
     const expectedPageMapBytes = prettyBytes(extracted.pageMap);
-    if (!metadataLoaded.bytes.equals(expectedMetadataBytes)) fail('ICMC metadata differs from the combined proceedings PDF');
-    if (!pageMapLoaded.bytes.equals(expectedPageMapBytes)) fail('ICMC page map differs from the combined proceedings PDF');
+    if (!metadataLoaded.bytes.equals(expectedMetadataBytes)) fail('ICMC 元数据与合并 proceedings PDF 不一致');
+    if (!pageMapLoaded.bytes.equals(expectedPageMapBytes)) fail('ICMC 页码映射与合并 proceedings PDF 不一致');
     const catalogLoaded = readCanonicalJson(paths.catalogReceiptFile, 'ICMC catalog receipt', 1024 * 1024);
     const receipt = catalogLoaded.value;
     exact(receipt, ['combinedPdfReceiptFileSha256', 'combinedPdfReceiptSha256', 'contract',
@@ -1070,7 +1070,7 @@ function replayIcmcCatalog(provider, paths) {
         'parserVersion', 'providerId', 'receiptSha256', 'version'], 'ICMC catalog receipt');
     const expected = icmcCatalogReceipt(provider, indexSnapshot, combinedSnapshot,
         metadataLoaded.bytes, pageMapLoaded.bytes);
-    if (!catalogLoaded.bytes.equals(prettyBytes(expected))) fail('ICMC catalog receipt differs from its source bundle');
+    if (!catalogLoaded.bytes.equals(prettyBytes(expected))) fail('ICMC catalog receipt 与其来源 bundle 不一致');
     return { provider, paths, metadata: extracted.metadata, pageMap: extracted.pageMap,
         metadataSha256: metadataLoaded.sha256, receipt, combinedSnapshot };
 }
@@ -1082,27 +1082,27 @@ function replayCatalog(providerId, outputRoot) {
         const snapshots = provider.issues.map(issue => replayIssueReceipt(provider, paths, issue));
         const combined = combineAaaiIssueSnapshots(provider, snapshots);
         const metadataLoaded = readCanonicalJson(paths.metadataFile, 'official proceedings metadata', MAX_INDEX_BYTES);
-        if (!metadataLoaded.bytes.equals(prettyBytes(combined.metadata))) fail('metadata differs from replayed complete AAAI issue set');
+        if (!metadataLoaded.bytes.equals(prettyBytes(combined.metadata))) fail('metadata 与重放出的完整 AAAI 期号集合不一致');
         const catalogLoaded = readCanonicalJson(paths.catalogReceiptFile, 'catalog receipt', 1024 * 1024);
         const receipt = catalogLoaded.value;
         exact(receipt, ['contract', 'issueManifestSha256', 'issues', 'metadata', 'paperSetSha256',
             'parserVersion', 'providerId', 'receiptSha256', 'version'], 'multi-issue catalog receipt');
         const expected = multiIssueCatalogReceipt(provider, snapshots, combined.issuePaperSets, metadataLoaded.bytes);
-        if (!catalogLoaded.bytes.equals(prettyBytes(expected))) fail('catalog receipt differs from replayed complete AAAI catalog');
+        if (!catalogLoaded.bytes.equals(prettyBytes(expected))) fail('catalog receipt 与重放出的完整 AAAI catalog 不一致');
         return { provider, paths, metadata: combined.metadata, metadataSha256: metadataLoaded.sha256, receipt };
     }
     const indexSnapshot = replayIndexReceipt(provider, paths);
     const metadataLoaded = readCanonicalJson(paths.metadataFile, 'official proceedings metadata', MAX_INDEX_BYTES);
     const metadata = normalizeMetadata(metadataLoaded.value, provider);
-    if (!metadataLoaded.bytes.equals(prettyBytes(metadata))) fail('metadata bytes differ from normalized schema');
+    if (!metadataLoaded.bytes.equals(prettyBytes(metadata))) fail('metadata 字节与规范化 schema 不一致');
     const replayed = parseCatalog(providerId, new TextDecoder('utf-8', { fatal: true }).decode(indexSnapshot.index.bytes));
-    if (!prettyBytes(replayed).equals(metadataLoaded.bytes)) fail('metadata differs from replayed official index');
+    if (!prettyBytes(replayed).equals(metadataLoaded.bytes)) fail('metadata 与重放出的官方 index 不一致');
     const catalogLoaded = readCanonicalJson(paths.catalogReceiptFile, 'catalog receipt', 1024 * 1024);
     const receipt = catalogLoaded.value;
     exact(receipt, ['contract', 'indexReceiptFileSha256', 'indexReceiptSha256', 'metadata', 'paperSetSha256',
         'parserVersion', 'providerId', 'receiptSha256', 'version'], 'catalog receipt');
     const expected = catalogReceipt(provider, indexSnapshot, metadataLoaded.bytes);
-    if (!catalogLoaded.bytes.equals(prettyBytes(expected))) fail('catalog receipt differs from replayed catalog');
+    if (!catalogLoaded.bytes.equals(prettyBytes(expected))) fail('catalog receipt 与重放出的 catalog 不一致');
     return { provider, paths, metadata, metadataSha256: metadataLoaded.sha256, receipt };
 }
 
@@ -1111,7 +1111,7 @@ async function readResponseBytes(response, maxBytes, label) {
     if (Number.isFinite(declared) && declared > maxBytes) fail(`${label} exceeds the byte limit`);
     if (!response.body || typeof response.body.getReader !== 'function') {
         const bytes = Buffer.from(await response.arrayBuffer());
-        if (!bytes.length || bytes.length > maxBytes) fail(`${label} is empty or exceeds the byte limit`);
+        if (!bytes.length || bytes.length > maxBytes) fail(`${label} 为空或超过字节上限`);
         return bytes;
     }
     const reader = response.body.getReader(); const chunks = []; let total = 0;
@@ -1123,7 +1123,7 @@ async function readResponseBytes(response, maxBytes, label) {
             chunks.push(chunk);
         }
     } finally { reader.releaseLock?.(); }
-    if (!total) fail(`${label} is empty`);
+    if (!total) fail(`${label} 为空`);
     return Buffer.concat(chunks, total);
 }
 
@@ -1132,7 +1132,7 @@ async function fetchOfficial({ provider, url, kind, maxBytes, timeoutMs = REQUES
     if (!proxyUrl) fail('project HTTP CONNECT proxy is required');
     const dispatcher = (dependencies.createDispatcher || createProxyDispatcher)(proxyUrl);
     const fetchImpl = dependencies.fetchImpl || globalThis.fetch;
-    if (typeof fetchImpl !== 'function') fail('fetch is unavailable');
+    if (typeof fetchImpl !== 'function') fail('fetch 不可用');
     const requestedUrl = validateFetchUrl(provider, url, kind); let current = requestedUrl; const redirects = [];
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs); timer.unref?.();
     try {
@@ -1141,8 +1141,8 @@ async function fetchOfficial({ provider, url, kind, maxBytes, timeoutMs = REQUES
                 signal: controller.signal, headers: { Accept: kind === 'pdf' ? 'application/pdf' : 'text/html,application/xhtml+xml',
                     'User-Agent': 'audio-paper-digest-official-conference/1.0' } });
             if ([301, 302, 303, 307, 308].includes(response.status)) {
-                if (count >= MAX_REDIRECTS) fail('official response exceeded the redirect limit');
-                const location = response.headers?.get?.('location'); if (!location) fail('official redirect has no Location');
+                if (count >= MAX_REDIRECTS) fail('官方响应超过重定向上限');
+                const location = response.headers?.get?.('location'); if (!location) fail('官方重定向没有 Location');
                 const next = validateRedirectTarget(provider, current, new URL(location, current).toString(), kind);
                 redirects.push({ from: current, to: next, status: response.status }); current = next;
                 try { await response.body?.cancel?.(); } catch { /* 忽略重定向响应体 */ }
@@ -1152,16 +1152,16 @@ async function fetchOfficial({ provider, url, kind, maxBytes, timeoutMs = REQUES
             const contentType = String(response.headers?.get?.('content-type') || '').trim();
             if (kind === 'pdf' ? !/^(?:application\/pdf|application\/octet-stream)(?:\s*;|$)/iu.test(contentType)
                 : !/^(?:text\/html|application\/xhtml\+xml)(?:\s*;|$)/iu.test(contentType)) {
-                fail(`official ${kind} response has an invalid Content-Type`);
+                fail(`官方 ${kind} 响应的 Content-Type 无效`);
             }
             const bytes = await readResponseBytes(response, maxBytes, `official ${kind} response`);
-            if (kind === 'pdf' && bytes.subarray(0, 5).toString('ascii') !== '%PDF-') fail('official PDF response lacks a PDF header');
+            if (kind === 'pdf' && bytes.subarray(0, 5).toString('ascii') !== '%PDF-') fail('官方 PDF 响应缺少 PDF 文件头');
             const observedAt = (dependencies.now || (() => new Date().toISOString()))();
-            if (!validObservedAt(observedAt)) fail('observedAt is invalid');
+            if (!validObservedAt(observedAt)) fail('observedAt 无效');
             return { bytes, requestedUrl, finalUrl: current, redirects, responseStatus: response.status,
                 contentType, observedAt };
         }
-        fail('official response exceeded the redirect limit');
+        fail('官方响应超过重定向上限');
     } catch (error) {
         if (error instanceof OfficialConferenceAcquisitionError) throw error;
         if (error?.name === 'AbortError') fail(`official ${kind} request timed out`);
@@ -1180,7 +1180,7 @@ async function acquireMultiIssueCatalog(provider, outputRoot, dependencies) {
         const artifacts = issueArtifactPaths(paths, issue, false);
         const rawPresent = fs.existsSync(artifacts.responseFile);
         const receiptPresent = fs.existsSync(artifacts.receiptFile);
-        if (receiptPresent && !rawPresent) fail(`AAAI issue ${issue.number} receipt exists without its response bytes`);
+        if (receiptPresent && !rawPresent) fail(`AAAI 期号 ${issue.number} 的 receipt 存在，却没有对应响应字节`);
         if (rawPresent && receiptPresent) {
             snapshots.push(replayIssueReceipt(provider, paths, issue));
             writes.issueResponsesRecovered += 1; writes.issueReceiptsRecovered += 1;
@@ -1212,7 +1212,7 @@ async function acquireMultiIssueCatalog(provider, outputRoot, dependencies) {
 async function acquireIcmcCatalog(provider, outputRoot, dependencies) {
     const paths = acquisitionPaths(outputRoot, true);
     const rawPresent = fs.existsSync(paths.indexFile); const receiptPresent = fs.existsSync(paths.indexReceiptFile);
-    if (receiptPresent && !rawPresent) fail('ICMC index receipt exists without its response bytes');
+    if (receiptPresent && !rawPresent) fail('ICMC index receipt 存在，却没有对应响应字节');
     let indexSnapshot; let indexStatus = 'recovered'; let receiptStatus = 'recovered';
     if (rawPresent && receiptPresent) indexSnapshot = replayIndexReceipt(provider, paths);
     else {
@@ -1224,7 +1224,7 @@ async function acquireIcmcCatalog(provider, outputRoot, dependencies) {
         indexSnapshot = replayIndexReceipt(provider, paths);
     }
     const combinedPresent = fs.existsSync(paths.combinedPdfFile); const combinedReceiptPresent = fs.existsSync(paths.combinedPdfReceiptFile);
-    if (combinedReceiptPresent && !combinedPresent) fail('ICMC combined proceedings receipt exists without its PDF');
+    if (combinedReceiptPresent && !combinedPresent) fail('ICMC 合并 proceedings receipt 存在，却没有对应 PDF');
     let combinedSnapshot; let combinedStatus = 'recovered'; let combinedReceiptStatus = 'recovered';
     if (combinedPresent && combinedReceiptPresent) combinedSnapshot = replayIcmcCombinedReceipt(provider, paths);
     else {
@@ -1268,7 +1268,7 @@ async function acquireCatalog({ providerId, outputRoot, apply = false } = {}, de
     if (provider.issues) return acquireMultiIssueCatalog(provider, outputRoot, dependencies);
     const paths = acquisitionPaths(outputRoot, true);
     const rawPresent = fs.existsSync(paths.indexFile); const receiptPresent = fs.existsSync(paths.indexReceiptFile);
-    if (receiptPresent && !rawPresent) fail('index receipt exists without its response bytes');
+    if (receiptPresent && !rawPresent) fail('index receipt 存在，却没有对应响应字节');
     let indexSnapshot; let indexStatus = 'recovered'; let receiptStatus = 'recovered';
     if (rawPresent && receiptPresent) indexSnapshot = replayIndexReceipt(provider, paths);
     else {
@@ -1290,22 +1290,22 @@ async function acquireCatalog({ providerId, outputRoot, apply = false } = {}, de
 }
 
 function pdfReceiptPath(paths, paper) {
-    if (!ID_RE.test(paper.id)) fail('paper ID is unsafe for a receipt filename');
+    if (!ID_RE.test(paper.id)) fail('论文 ID 不适合用作 receipt 文件名');
     return path.join(paths.receipts, `${paper.id}.json`);
 }
 
 function pdfPath(paths, paper) {
     const expected = `pdfs/${paper.id}.pdf`;
-    if (paper.pdfFile !== expected) fail('paper PDF path is not canonical');
+    if (paper.pdfFile !== expected) fail('论文 PDF 路径不规范');
     const filename = path.resolve(paths.root, paper.pdfFile);
-    if (path.dirname(filename) !== paths.pdfs) fail('paper PDF path escapes output root');
+    if (path.dirname(filename) !== paths.pdfs) fail('论文 PDF 路径超出 output root');
     return filename;
 }
 
 function icmcPageRange(catalog, paper) {
-    if (!Array.isArray(catalog.pageMap?.papers)) fail(`ICMC page map is missing for ${paper.id}`);
+    if (!Array.isArray(catalog.pageMap?.papers)) fail(`缺少 ${paper.id} 的 ICMC 页码映射`);
     const range = catalog.pageMap.papers.find(item => item.id === paper.id);
-    if (!range) fail(`ICMC page map has no range for ${paper.id}`);
+    if (!range) fail(`${paper.id} 的 ICMC 页码映射没有范围`);
     return range;
 }
 
@@ -1334,14 +1334,14 @@ function replayIcmcPdfReceipt(catalog, paper) {
         || receipt.providerId !== catalog.provider.conference.id || receipt.paperId !== paper.id
         || receipt.metadataSha256 !== catalog.metadataSha256 || receipt.requestedUrl !== paper.pdfUrl
         || receipt.finalUrl !== paper.pdfUrl || receipt.responseStatus !== 200 || !validObservedAt(receipt.observedAt)
-        || receipt.contentType !== 'application/pdf') fail(`${paper.id} ICMC PDF receipt envelope is invalid`);
+        || receipt.contentType !== 'application/pdf') fail(`${paper.id} 的 ICMC PDF receipt envelope 无效`);
     const body = { ...receipt }; delete body.receiptSha256;
-    if (!SHA_RE.test(receipt.receiptSha256) || receipt.receiptSha256 !== stableHash(body)) fail(`${paper.id} ICMC PDF receipt self-SHA drifted`);
+    if (!SHA_RE.test(receipt.receiptSha256) || receipt.receiptSha256 !== stableHash(body)) fail(`${paper.id} 的 ICMC PDF receipt 自校验 SHA 已变化`);
     validateRedirects(catalog.provider, receipt, 'pdf');
     exact(receipt.pdf, ['bytes', 'relativePath', 'sha256'], 'ICMC PDF byte binding');
     if (receipt.pdf.relativePath !== paper.pdfFile || !Number.isSafeInteger(receipt.pdf.bytes)
         || receipt.pdf.bytes < 5 || receipt.pdf.bytes > MAX_PDF_BYTES || !SHA_RE.test(receipt.pdf.sha256)) {
-        fail(`${paper.id} ICMC PDF byte binding is invalid`);
+        fail(`${paper.id} 的 ICMC PDF 字节绑定无效`);
     }
     exact(receipt.derivation, ['contract', 'endPage', 'sourceReceiptSha256', 'sourceRelativePath', 'sourceSha256',
         'startPage', 'version'], 'ICMC PDF derivation');
@@ -1351,11 +1351,11 @@ function replayIcmcPdfReceipt(catalog, paper) {
         || receipt.derivation.sourceRelativePath !== 'responses/proceedings.source'
         || receipt.derivation.sourceSha256 !== combined.receipt.body.sha256
         || receipt.derivation.startPage !== range.startPage || receipt.derivation.endPage !== range.endPage) {
-        fail(`${paper.id} ICMC PDF derivation does not bind the combined source`);
+        fail(`${paper.id} 的 ICMC PDF 派生结果与合并来源不匹配`);
     }
     const pdf = readStableFile(pdfPath(catalog.paths, paper), `${paper.id} sealed ICMC PDF`, MAX_PDF_BYTES);
     if (pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-' || pdf.size !== receipt.pdf.bytes
-        || pdf.sha256 !== receipt.pdf.sha256) fail(`${paper.id} sealed ICMC PDF differs from its receipt`);
+        || pdf.sha256 !== receipt.pdf.sha256) fail(`${paper.id} 已封存的 ICMC PDF 与其 receipt 不一致`);
     return receipt;
 }
 
@@ -1370,15 +1370,15 @@ function replayPdfReceipt(catalog, paper) {
         || receipt.metadataSha256 !== catalog.metadataSha256 || receipt.requestedUrl !== paper.pdfUrl
         || receipt.responseStatus !== 200 || !validObservedAt(receipt.observedAt)
         || !/^(?:application\/pdf|application\/octet-stream)(?:\s*;|$)/iu.test(receipt.contentType)) {
-        fail(`${paper.id} PDF receipt envelope is invalid`);
+        fail(`${paper.id} 的 PDF receipt envelope 无效`);
     }
     const body = { ...receipt }; delete body.receiptSha256;
-    if (!SHA_RE.test(receipt.receiptSha256) || receipt.receiptSha256 !== stableHash(body)) fail(`${paper.id} PDF receipt self-SHA drifted`);
+    if (!SHA_RE.test(receipt.receiptSha256) || receipt.receiptSha256 !== stableHash(body)) fail(`${paper.id} 的 PDF receipt 自校验 SHA 已变化`);
     validateRedirects(catalog.provider, receipt, 'pdf');
     exact(receipt.pdf, ['bytes', 'relativePath', 'sha256'], 'PDF byte binding');
     if (receipt.pdf.relativePath !== paper.pdfFile || !Number.isSafeInteger(receipt.pdf.bytes)
         || receipt.pdf.bytes < 5 || receipt.pdf.bytes > MAX_PDF_BYTES || !SHA_RE.test(receipt.pdf.sha256)) {
-        fail(`${paper.id} PDF byte binding is invalid`);
+        fail(`${paper.id} 的 PDF 字节绑定无效`);
     }
     const pdf = readStableFile(pdfPath(catalog.paths, paper), `${paper.id} sealed PDF`, MAX_PDF_BYTES);
     if (pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-' || pdf.size !== receipt.pdf.bytes
@@ -1401,11 +1401,11 @@ function splitIcmcPapers(catalog, papers) {
         if (result.error || result.status !== 0) {
             const reason = String(result.stderr || result.error?.message || 'ICMC PDF splitter failed')
                 .replace(/[^A-Za-z0-9_.: -]/g, '').slice(0, 240);
-            fail(`ICMC combined proceedings split failed: ${reason}`);
+            fail(`ICMC 合并 proceedings 拆分失败：${reason}`);
         }
         const output = JSON.parse(String(result.stdout || '{}'));
         if (!Array.isArray(output.written) || output.total !== catalog.metadata.papers.length) {
-            fail('ICMC PDF splitter returned an invalid result');
+            fail('ICMC PDF 拆分器返回了无效结果');
         }
         return papers.map(paper => readStableFile(path.join(temporaryRoot, `${paper.id}.pdf`),
             `${paper.id} derived ICMC PDF`, MAX_PDF_BYTES).bytes);
@@ -1416,9 +1416,9 @@ function splitIcmcPapers(catalog, papers) {
 
 function icmcDownloadPapers({ providerId, outputRoot, apply = false, limit = null, concurrency = 1, retries = 0 } = {}) {
     const catalog = replayCatalog(providerId, outputRoot);
-    if (limit !== null && (!Number.isSafeInteger(limit) || limit < 1)) fail('limit must be a positive integer');
-    if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 5) fail('concurrency must be an integer from 1 to 5');
-    if (!Number.isSafeInteger(retries) || retries < 0 || retries > 5) fail('retries must be an integer from 0 to 5');
+    if (limit !== null && (!Number.isSafeInteger(limit) || limit < 1)) fail('limit 必须是正整数');
+    if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 5) fail('concurrency 必须是 1 到 5 的整数');
+    if (!Number.isSafeInteger(retries) || retries < 0 || retries > 5) fail('retries 必须是 0 到 5 的整数');
     const before = acquisitionStatus({ providerId, outputRoot });
     if (!apply) return { command: 'download', mode: 'dry-run', providerId, outputRoot,
         total: catalog.metadata.papers.length, downloaded: before.downloaded, pending: before.missing,
@@ -1429,7 +1429,7 @@ function icmcDownloadPapers({ providerId, outputRoot, apply = false, limit = nul
         if (targetPresent && receiptPresent) { replayIcmcPdfReceipt(catalog, paper); return false; }
         // 中断的凭证迁移之后，派生出的 PDF 可能还在。只有确定性切分重新产出同样的字节，
         // 才能重建它的凭证；有凭证却没有 PDF 仍然是硬失败。
-        if (receiptPresent && !targetPresent) fail(`${paper.id} has a partial ICMC PDF/receipt pair`);
+        if (receiptPresent && !targetPresent) fail(`${paper.id} 的 ICMC PDF 与 receipt 只存在一半`);
         return true;
     }).slice(0, limit === null ? undefined : limit);
     const derived = splitIcmcPapers(catalog, pending);
@@ -1476,9 +1476,9 @@ async function downloadPapers({ providerId, outputRoot, apply = false, limit = n
     if (catalog.provider.parser === 'icmc-combined') {
         return icmcDownloadPapers({ providerId, outputRoot, apply, limit, concurrency, retries });
     }
-    if (limit !== null && (!Number.isSafeInteger(limit) || limit < 1)) fail('limit must be a positive integer');
-    if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 5) fail('concurrency must be an integer from 1 to 5');
-    if (!Number.isSafeInteger(retries) || retries < 0 || retries > 5) fail('retries must be an integer from 0 to 5');
+    if (limit !== null && (!Number.isSafeInteger(limit) || limit < 1)) fail('limit 必须是正整数');
+    if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 5) fail('concurrency 必须是 1 到 5 的整数');
+    if (!Number.isSafeInteger(retries) || retries < 0 || retries > 5) fail('retries 必须是 0 到 5 的整数');
     const downloadable = catalog.metadata.papers.filter(paper => paper.pdfUrl !== null);
     const before = acquisitionStatus({ providerId, outputRoot });
     if (!apply) return { command: 'download', mode: 'dry-run', providerId, outputRoot,
@@ -1487,7 +1487,7 @@ async function downloadPapers({ providerId, outputRoot, apply = false, limit = n
     const processPaper = async paper => {
         const target = pdfPath(catalog.paths, paper); const receiptFile = pdfReceiptPath(catalog.paths, paper);
         const targetPresent = fs.existsSync(target); const receiptPresent = fs.existsSync(receiptFile);
-        if (receiptPresent && !targetPresent) fail(`${paper.id} receipt exists without its PDF`);
+        if (receiptPresent && !targetPresent) fail(`${paper.id} 的 receipt 存在，却没有对应 PDF`);
         if (targetPresent && receiptPresent) { replayPdfReceipt(catalog, paper); recovered += 1; return; }
         if (limit !== null && attempted >= limit) return;
         attempted += 1;
@@ -1568,16 +1568,16 @@ function verifyMultiIssueResponseArtifacts(catalog) {
     }
     const entries = fs.readdirSync(catalog.paths.responses, { withFileTypes: true });
     if (entries.length !== 1 || entries[0].name !== 'issues' || !entries[0].isDirectory() || entries[0].isSymbolicLink()) {
-        fail('AAAI responses directory contains artifacts outside the fixed issue set');
+        fail('AAAI 响应目录含固定期号集合之外的产物');
     }
     const issueDirectory = path.join(catalog.paths.responses, 'issues');
     for (const entry of fs.readdirSync(issueDirectory, { withFileTypes: true })) {
         if (!entry.isFile() || entry.isSymbolicLink() || !expected.has(entry.name)) {
-            fail(`unexpected AAAI issue response artifact: ${entry.name}`);
+            fail(`出现意外的 AAAI 期号响应产物：${entry.name}`);
         }
         expected.delete(entry.name);
     }
-    if (expected.size) fail('AAAI response directory is missing fixed issue artifacts');
+    if (expected.size) fail('AAAI 响应目录缺少固定期号产物');
 }
 
 function verifyAcquisition({ providerId, outputRoot } = {}) {
@@ -1589,12 +1589,12 @@ function verifyAcquisition({ providerId, outputRoot } = {}) {
         const target = pdfPath(catalog.paths, paper); const receipt = pdfReceiptPath(catalog.paths, paper);
         const hasPdf = fs.existsSync(target); const hasReceipt = fs.existsSync(receipt);
         if (!hasPdf && !hasReceipt) { missing.push(paper.id); continue; }
-        if (!hasPdf || !hasReceipt) fail(`${paper.id} has a partial PDF/receipt pair`);
+        if (!hasPdf || !hasReceipt) fail(`${paper.id} 的 PDF 与 receipt 只存在一半`);
         replayPdfReceipt(catalog, paper); verified += 1;
     }
     for (const [directory, expected, label] of [[catalog.paths.pdfs, expectedPdfs, 'PDF'], [catalog.paths.receipts, expectedReceipts, 'receipt']]) {
         for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-            if (!entry.isFile() || entry.isSymbolicLink() || !expected.has(entry.name)) fail(`unexpected ${label} artifact: ${entry.name}`);
+            if (!entry.isFile() || entry.isSymbolicLink() || !expected.has(entry.name)) fail(`出现意外的 ${label} 产物：${entry.name}`);
         }
     }
     return { command: 'verify', providerId, outputRoot, metadataSha256: catalog.metadataSha256,

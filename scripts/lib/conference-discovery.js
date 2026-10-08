@@ -38,7 +38,7 @@ function fail(message) {
 }
 
 function exact(value, fields, name) {
-    if (!plain(value)) throw fail(`${name} must be a plain object`);
+    if (!plain(value)) throw fail(`${name} 必须是普通对象`);
     const actual = Object.keys(value).sort();
     const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
@@ -47,12 +47,12 @@ function exact(value, fields, name) {
 }
 
 function assertSha(value, name) {
-    if (typeof value !== 'string' || !SHA_RE.test(value)) throw fail(`${name} must be a lowercase SHA-256`);
+    if (typeof value !== 'string' || !SHA_RE.test(value)) throw fail(`${name} 必须是小写 SHA-256`);
     return value;
 }
 
 function safeAbsoluteDirectory(directory, name) {
-    if (typeof directory !== 'string' || !path.isAbsolute(directory)) throw fail(`${name} must be an absolute directory`);
+    if (typeof directory !== 'string' || !path.isAbsolute(directory)) throw fail(`${name} 必须是绝对目录`);
     const absolute = path.resolve(directory);
     let cursor = path.parse(absolute).root;
     for (const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
@@ -60,7 +60,7 @@ function safeAbsoluteDirectory(directory, name) {
         const stat = fs.lstatSync(cursor);
         if (!stat.isDirectory() || stat.isSymbolicLink()) throw fail(`${name} contains an unsafe directory: ${cursor}`);
     }
-    if (fs.realpathSync(absolute) !== absolute) throw fail(`${name} must not resolve through a symbolic link`);
+    if (fs.realpathSync(absolute) !== absolute) throw fail(`${name} 不得经由符号链接解析`);
     return absolute;
 }
 
@@ -119,7 +119,7 @@ function readMetadataSnapshot(filename) {
         value = JSON.parse(source);
     } catch (error) {
         if (error?.code === 'CONFERENCE_DISCOVERY_INTEGRITY') throw error;
-        throw fail('metadata snapshot must contain valid strict UTF-8 JSON');
+        throw fail('metadata 快照必须含有效的严格 UTF-8 JSON');
     }
     return {
         value,
@@ -151,7 +151,7 @@ function catalogPdfs(pdfRoot) {
             const stat = fs.lstatSync(filename);
             if (entry.isSymbolicLink() || stat.isSymbolicLink()) throw fail(`pdfRoot contains symbolic link: ${filename}`);
             if (entry.isDirectory()) {
-                if (fs.realpathSync(filename) !== filename) throw fail(`pdfRoot contains unsafe directory: ${filename}`);
+                if (fs.realpathSync(filename) !== filename) throw fail(`pdfRoot 含不安全的目录：${filename}`);
                 visit(filename);
                 continue;
             }
@@ -169,7 +169,7 @@ function catalogPdfs(pdfRoot) {
 
 function text(value, name) {
     if (typeof value !== 'string' || !value.trim() || value !== value.trim() || /[\u0000-\u001f\u007f]/u.test(value)) {
-        throw fail(`${name} must be a non-empty trimmed string without controls`);
+        throw fail(`${name} 必须是无控制字符的非空去空格字符串`);
     }
     return value;
 }
@@ -178,7 +178,7 @@ function optionalText(value, name, { allowEmpty = false, max = 16384 } = {}) {
     if (value === null) return null;
     if (typeof value !== 'string' || value !== value.trim() || value.length > max
         || (!allowEmpty && !value) || /[\u0000-\u001f\u007f]/u.test(value)) {
-        throw fail(`${name} must be ${allowEmpty ? 'a trimmed' : 'a non-empty trimmed'} string without controls or null`);
+        throw fail(`${name} 必须是${allowEmpty ? '去空格的' : '非空去空格的'}、无控制字符的字符串或 null`);
     }
     return value;
 }
@@ -187,12 +187,12 @@ function publicHttpsUrl(value, name, { nullable = false } = {}) {
     if (nullable && value === null) return null;
     text(value, name);
     let parsed;
-    try { parsed = new URL(value); } catch { throw fail(`${name} must be a URL`); }
+    try { parsed = new URL(value); } catch { throw fail(`${name} 必须是 URL`); }
     if (parsed.protocol !== 'https:' || parsed.username || parsed.password || parsed.port || parsed.hash
         || !parsed.hostname.includes('.') || parsed.hostname === 'localhost' || parsed.hostname.endsWith('.localhost')
         || parsed.hostname.includes(':') || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(parsed.hostname)
         || parsed.toString() !== value) {
-        throw fail(`${name} must be a canonical public HTTPS URL without credentials, port, or fragment`);
+        throw fail(`${name} 必须是不含凭证、端口和片段的规范公开 HTTPS URL`);
     }
     return value;
 }
@@ -201,7 +201,7 @@ function officialConference(value, name = 'official metadata conference') {
     exact(value, ['id', 'year'], name);
     let coordinates;
     try { coordinates = paperIdentity.conferenceCoordinates(value); }
-    catch (error) { throw fail(`${name} is invalid: ${error.message}`); }
+    catch (error) { throw fail(`${name} 无效：${error.message}`); }
     return { id: `${coordinates.slug}-${coordinates.year}`, year: coordinates.year };
 }
 
@@ -211,7 +211,7 @@ function officialPdfFile(value, name) {
     try { relative = ledgerApi.assertRelativePath(value, name); }
     catch (error) { throw fail(error.message); }
     if (relative.length > 1024 || path.posix.extname(relative).toLowerCase() !== '.pdf') {
-        throw fail(`${name} must be a normalized relative PDF path or null`);
+        throw fail(`${name} 必须是规范化的相对 PDF 路径或 null`);
     }
     return relative;
 }
@@ -222,27 +222,27 @@ function normalizeOfficialRecord(record, index) {
     try {
         const external = paperIdentity.validateExternalId({ scheme: 'conference-paper-id', value: record.id });
         identity = { type: external.scheme, value: external.value };
-    } catch (error) { throw fail(`metadata[${index}].id is invalid: ${error.message}`); }
+    } catch (error) { throw fail(`metadata[${index}].id 无效：${error.message}`); }
     const title = text(record.title, `metadata[${index}].title`);
     if (!Array.isArray(record.authors) || !record.authors.length || record.authors.length > 1000) {
         throw fail(`metadata[${index}].authors must be a nonempty array of at most 1000 names`);
     }
     const authors = record.authors.map((author, authorIndex) => text(author, `metadata[${index}].authors[${authorIndex}]`));
-    if (new Set(authors).size !== authors.length) throw fail(`metadata[${index}].authors contains duplicates`);
+    if (new Set(authors).size !== authors.length) throw fail(`metadata[${index}].authors 含重复项`);
     const abstract = optionalText(record.abstract, `metadata[${index}].abstract`, { allowEmpty: true, max: 500000 });
-    if (abstract === null) throw fail(`metadata[${index}].abstract must be a string`);
+    if (abstract === null) throw fail(`metadata[${index}].abstract 必须是字符串`);
     const pdfFile = officialPdfFile(record.pdfFile, `metadata[${index}].pdfFile`);
     publicHttpsUrl(record.recordUrl, `metadata[${index}].recordUrl`);
     publicHttpsUrl(record.pdfUrl, `metadata[${index}].pdfUrl`, { nullable: true });
     const doi = optionalText(record.doi, `metadata[${index}].doi`, { max: 1024 });
-    if (doi !== null && !/^10\.\d{4,9}\/\S+$/i.test(doi)) throw fail(`metadata[${index}].doi must be a DOI or null`);
+    if (doi !== null && !/^10\.\d{4,9}\/\S+$/i.test(doi)) throw fail(`metadata[${index}].doi 必须是 DOI 或 null`);
     optionalText(record.track, `metadata[${index}].track`, { max: 1024 });
     return { identity, metadataIndex: index, title, numericAlias: null, pdfFile };
 }
 
 function positiveIntegerString(value, name) {
     if (typeof value === 'number') {
-        if (!Number.isSafeInteger(value) || value < 1) throw fail(`${name} must be a positive safe integer`);
+        if (!Number.isSafeInteger(value) || value < 1) throw fail(`${name} 必须是正的安全整数`);
         value = String(value);
     }
     if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) throw fail(`${name} must be a canonical positive integer string`);
@@ -251,25 +251,25 @@ function positiveIntegerString(value, name) {
 
 function forumId(value, name) {
     text(value, name);
-    if (!/^[A-Za-z0-9_-]{6,128}$/.test(value)) throw fail(`${name} must be a canonical OpenReview forum ID`);
+    if (!/^[A-Za-z0-9_-]{6,128}$/.test(value)) throw fail(`${name} 必须是规范的 OpenReview forum ID`);
     return value;
 }
 
 function extractRecords(adapter, snapshot, expectedConference = null) {
     if (adapter === 'icassp' || adapter === 'iclr') {
-        if (!Array.isArray(snapshot)) throw fail(`${adapter} metadata snapshot must be an array`);
+        if (!Array.isArray(snapshot)) throw fail(`${adapter} 的 metadata 快照必须是数组`);
         return snapshot;
     }
     if (adapter === 'official-proceedings') {
         exact(snapshot, ['conference', 'papers'], 'official-proceedings metadata snapshot');
         const conference = officialConference(snapshot.conference);
         if (expectedConference && (conference.id !== expectedConference.id || conference.year !== expectedConference.year)) {
-            throw fail('official-proceedings metadata conference does not match the requested conference identity');
+            throw fail('official-proceedings 的 metadata 会议与请求的会议身份不一致');
         }
-        if (!Array.isArray(snapshot.papers)) throw fail('official-proceedings metadata snapshot papers must be an array');
+        if (!Array.isArray(snapshot.papers)) throw fail('official-proceedings 的 metadata 快照 papers 必须是数组');
         return snapshot.papers;
     }
-    if (!plain(snapshot) || !Array.isArray(snapshot.papers)) throw fail('icml metadata snapshot must be an object with a papers array');
+    if (!plain(snapshot) || !Array.isArray(snapshot.papers)) throw fail('icml 的 metadata 快照必须是含 papers 数组的对象');
     return snapshot.papers;
 }
 
@@ -284,7 +284,7 @@ function optionalNumericAlias(record, index, includeId = false) {
 }
 
 function normalizeMetadataMember(adapter, record, index) {
-    if (!plain(record)) throw fail(`metadata[${index}] must be a plain object`);
+    if (!plain(record)) throw fail(`metadata[${index}] 必须是普通对象`);
     if (adapter === 'official-proceedings') return normalizeOfficialRecord(record, index);
     const title = text(record.title, `metadata[${index}].title`);
     if (adapter === 'icassp') {
@@ -297,7 +297,7 @@ function normalizeMetadataMember(adapter, record, index) {
     if (adapter === 'icml' && !explicitForum) fields = ['id'];
     const candidates = fields
         .map(field => forumId(record[field], `metadata[${index}].${field}`));
-    if (!candidates.length) throw fail(`metadata[${index}] is missing its OpenReview forum ID`);
+    if (!candidates.length) throw fail(`metadata[${index}] 缺少其 OpenReview forum ID`);
     if (new Set(candidates).size !== 1) throw fail(`metadata[${index}] has conflicting OpenReview forum IDs`);
     if (adapter === 'icml' && explicitForum && record.id !== undefined && record.id !== null
         && !(typeof record.id === 'number' || /^\d+$/.test(String(record.id)))) {
@@ -379,7 +379,7 @@ function validateDescriptor(value, name) {
     catch (error) { throw fail(error.message); }
     assertSha(value.sha256, `${name}.sha256`);
     if (!Number.isSafeInteger(value.size) || value.size < 5 || value.size > MAX_PDF_BYTES) {
-        throw fail(`${name}.size is invalid`);
+        throw fail(`${name}.size 无效`);
     }
     return { path: relative, sha256: value.sha256, size: value.size };
 }
@@ -393,7 +393,7 @@ function validateConferenceForAdapter(adapter, conference) {
     exact(conference, ['id', 'year'], 'candidate manifest conference');
     if (!Number.isInteger(conference.year) || conference.year < 1900 || conference.year > 2100
         || conference.id !== `${adapter}-${conference.year}`) {
-        throw fail('candidate manifest conference identity is inconsistent');
+        throw fail('候选 manifest 的会议身份不一致');
     }
     return { id: conference.id, year: conference.year };
 }
@@ -416,35 +416,35 @@ function validateDiscoveryBundle(candidateManifest, report, { catalogRawBytes, r
     if (Object.hasOwn(candidateManifest, 'acquisitionReceipt')) expectedManifestFields.push('acquisitionReceipt');
     exact(candidateManifest, expectedManifestFields, 'candidate manifest');
     if (candidateManifest.contract !== CONTRACT || candidateManifest.version !== VERSION || !ADAPTERS.has(candidateManifest.adapter)) {
-        throw fail('candidate manifest contract/version/adapter is unsupported');
+        throw fail('候选 manifest 的契约、版本或适配器不受支持');
     }
     validateConferenceForAdapter(candidateManifest.adapter, candidateManifest.conference);
     exact(candidateManifest.metadataSnapshot, ['file', 'sha256', 'size'], 'candidate manifest metadataSnapshot');
     if (typeof candidateManifest.metadataSnapshot.file !== 'string' || !path.isAbsolute(candidateManifest.metadataSnapshot.file)
         || !Number.isSafeInteger(candidateManifest.metadataSnapshot.size) || candidateManifest.metadataSnapshot.size < 1
         || candidateManifest.metadataSnapshot.size > MAX_METADATA_BYTES) {
-        throw fail('candidate manifest metadataSnapshot is malformed');
+        throw fail('候选 manifest 的 metadataSnapshot 格式不正确');
     }
     assertSha(candidateManifest.metadataSnapshot.sha256, 'candidate manifest metadataSnapshot.sha256');
     if (typeof candidateManifest.pdfRoot !== 'string' || !path.isAbsolute(candidateManifest.pdfRoot)) {
-        throw fail('candidate manifest pdfRoot must be absolute');
+        throw fail('候选 manifest 的 pdfRoot 必须是绝对路径');
     }
     if (candidateManifest.acquisitionReceipt !== undefined) {
         validateAcquisitionReceiptBinding(candidateManifest.acquisitionReceipt,
             candidateManifest.conference, candidateManifest.metadataSnapshot, candidateManifest.pdfRoot);
     }
-    if (!Array.isArray(candidateManifest.pdfCatalog)) throw fail('candidate manifest pdfCatalog must be an array');
+    if (!Array.isArray(candidateManifest.pdfCatalog)) throw fail('候选 manifest 的 pdfCatalog 必须是数组');
     const pdfCatalog = candidateManifest.pdfCatalog.map((item, index) => validateDescriptor(item, `pdfCatalog[${index}]`));
     const pdfPaths = pdfCatalog.map(item => item.path);
-    if (new Set(pdfPaths).size !== pdfPaths.length) throw fail('candidate manifest pdfCatalog contains duplicate paths');
+    if (new Set(pdfPaths).size !== pdfPaths.length) throw fail('候选 manifest 的 pdfCatalog 含重复路径');
     const sortedPdfPaths = [...pdfPaths].sort(compare);
-    if (pdfPaths.some((value, index) => value !== sortedPdfPaths[index])) throw fail('candidate manifest pdfCatalog must be sorted by path');
+    if (pdfPaths.some((value, index) => value !== sortedPdfPaths[index])) throw fail('候选 manifest 的 pdfCatalog 必须按路径排序');
     if (assertSha(candidateManifest.pdfCatalogSha256, 'candidate manifest pdfCatalogSha256')
         !== ledgerApi.stableHash(pdfCatalog)) throw fail('candidate manifest pdfCatalog SHA drifted');
     const byPath = new Map(pdfCatalog.map(item => [item.path, item]));
 
     if (!Array.isArray(candidateManifest.members) || !candidateManifest.members.length) {
-        throw fail('candidate manifest members must be nonempty');
+        throw fail('候选 manifest 的 members 不能为空');
     }
     const identities = [];
     const metadataIndexes = new Set();
@@ -453,7 +453,7 @@ function validateDiscoveryBundle(candidateManifest, report, { catalogRawBytes, r
         exact(member, memberFields(candidateManifest.adapter), `member[${index}]`);
         let identity;
         try { identity = ledgerApi.identityKey(member.identity); }
-        catch (error) { throw fail(`member[${index}] identity is invalid: ${error.message}`); }
+        catch (error) { throw fail(`member[${index}] 的身份无效：${error.message}`); }
         const expectedIdentityType = candidateManifest.adapter === 'icassp' ? 'icassp-arnumber'
             : candidateManifest.adapter === 'official-proceedings' ? 'conference-paper-id' : 'openreview-forum-id';
         if (member.identity.type !== expectedIdentityType) {
@@ -461,12 +461,12 @@ function validateDiscoveryBundle(candidateManifest, report, { catalogRawBytes, r
         }
         identities.push(identity);
         if (!Number.isSafeInteger(member.metadataIndex) || member.metadataIndex < 0 || metadataIndexes.has(member.metadataIndex)) {
-            throw fail(`member[${index}] metadataIndex is invalid or duplicated`);
+            throw fail(`member[${index}] 的 metadataIndex 无效或有重复`);
         }
         metadataIndexes.add(member.metadataIndex);
         text(member.title, `member[${index}].title`);
         if (member.numericAlias !== null && (typeof member.numericAlias !== 'string' || !/^[1-9]\d*$/.test(member.numericAlias))) {
-            throw fail(`member[${index}].numericAlias is malformed`);
+            throw fail(`member[${index}].numericAlias 格式不正确`);
         }
         if (candidateManifest.adapter !== 'icml' && member.numericAlias !== null) {
             throw fail(`member[${index}].numericAlias is only supported by the icml adapter`);
@@ -476,7 +476,7 @@ function validateDiscoveryBundle(candidateManifest, report, { catalogRawBytes, r
         }
         exact(member.match, ['kind', 'candidates'], `member[${index}].match`);
         if (!MATCH_KINDS.includes(member.match.kind) || !Array.isArray(member.match.candidates)) {
-            throw fail(`member[${index}].match is malformed`);
+            throw fail(`member[${index}].match 格式不正确`);
         }
         const required = member.match.kind === 'unmatched' ? 0 : member.match.kind === 'ambiguous' ? null : 1;
         if ((required !== null && member.match.candidates.length !== required)
@@ -491,7 +491,7 @@ function validateDiscoveryBundle(candidateManifest, report, { catalogRawBytes, r
             if (!catalogCandidate || !sameDescriptor(candidate, catalogCandidate)) {
                 throw fail(`member[${index}] candidate does not exactly match its PDF catalog descriptor`);
             }
-            if (seenCandidates.has(candidate.path)) throw fail(`member[${index}] contains duplicate candidates`);
+            if (seenCandidates.has(candidate.path)) throw fail(`member[${index}] 含重复候选`);
             seenCandidates.add(candidate.path);
             candidatePaths.push(candidate.path);
             if (['exact', 'normalized'].includes(member.match.kind)) {
@@ -501,16 +501,16 @@ function validateDiscoveryBundle(candidateManifest, report, { catalogRawBytes, r
         }
         const sortedCandidatePaths = [...candidatePaths].sort(compare);
         if (candidatePaths.some((value, candidateIndex) => value !== sortedCandidatePaths[candidateIndex])) {
-            throw fail(`member[${index}] candidates must be sorted by path`);
+            throw fail(`member[${index}] 的候选必须按路径排序`);
         }
     }
-    if (new Set(identities).size !== identities.length) throw fail('candidate manifest contains duplicate primary identities');
+    if (new Set(identities).size !== identities.length) throw fail('候选 manifest 含重复的主身份');
     const sortedIdentities = [...identities].sort(compare);
     if (identities.some((value, index) => value !== sortedIdentities[index])) {
-        throw fail('candidate manifest members must be sorted by canonical identity');
+        throw fail('候选 manifest 的 members 必须按规范身份排序');
     }
     if ([...singleCandidateOwners.values()].some(owners => owners.length > 1)) {
-        throw fail('a single PDF candidate shared by members must be marked ambiguous');
+        throw fail('被多个 member 共用的单个 PDF 候选必须标记为有歧义');
     }
     if (candidateManifest.members.some((_member, index) => !metadataIndexes.has(index))) {
         throw fail('candidate manifest metadata indexes must cover every source record exactly once');
@@ -532,11 +532,11 @@ function validateDiscoveryBundle(candidateManifest, report, { catalogRawBytes, r
     exact(report, ['contract', 'version', 'adapter', 'conference', 'candidateManifestSha256',
         'metadataSnapshotSha256', 'pdfCatalogSha256', 'counts'], 'discovery report');
     if (report.contract !== REPORT_CONTRACT || report.version !== VERSION || report.adapter !== candidateManifest.adapter) {
-        throw fail('discovery report contract/version/adapter does not bind the candidate manifest');
+        throw fail('discovery 报告的契约、版本或适配器与候选 manifest 不匹配');
     }
     exact(report.conference, ['id', 'year'], 'discovery report conference');
     if (report.conference.id !== candidateManifest.conference.id || report.conference.year !== candidateManifest.conference.year) {
-        throw fail('discovery report conference does not bind the candidate manifest');
+        throw fail('discovery 报告的会议与候选 manifest 不匹配');
     }
     const canonicalCatalogBytes = canonicalBytes(candidateManifest);
     const canonicalCatalogSha256 = sha256(canonicalCatalogBytes);
@@ -563,7 +563,7 @@ function validateDiscoveryBundle(candidateManifest, report, { catalogRawBytes, r
     const canonicalReportBytes = canonicalBytes(report);
     if (reportRawBytes !== undefined) {
         const raw = Buffer.isBuffer(reportRawBytes) ? reportRawBytes : Buffer.from(reportRawBytes);
-        if (!raw.equals(canonicalReportBytes)) throw fail('discovery report file is not canonical JSON bytes');
+        if (!raw.equals(canonicalReportBytes)) throw fail('discovery 报告文件不是规范的 JSON 字节');
     }
     return { candidateManifest, report, catalogSha256: canonicalCatalogSha256, reportSha256: sha256(canonicalReportBytes) };
 }
@@ -576,15 +576,15 @@ function parseStrictJsonBytes(bytes, label) {
         return JSON.parse(source);
     } catch (error) {
         if (error?.code === 'CONFERENCE_DISCOVERY_INTEGRITY') throw error;
-        throw fail(`${label} must contain valid strict UTF-8 JSON`);
+        throw fail(`${label} 必须含有效的严格 UTF-8 JSON`);
     }
 }
 
 function directJsonFile(directory, name, label) {
     const root = safeAbsoluteDirectory(directory, `${label} directory`);
-    if (typeof name !== 'string' || !SAFE_JSON_NAME.test(name)) throw fail(`${label} must be a safe direct JSON filename`);
+    if (typeof name !== 'string' || !SAFE_JSON_NAME.test(name)) throw fail(`${label} 必须是安全的直接 JSON 文件名`);
     const filename = path.resolve(root, name);
-    if (path.dirname(filename) !== root) throw fail(`${label} must be directly inside its configured directory`);
+    if (path.dirname(filename) !== root) throw fail(`${label} 必须直接位于其配置目录内`);
     return filename;
 }
 
@@ -600,7 +600,7 @@ function loadDiscoveryHandle(input, reportFilename) {
     let catalogFilename;
     if (typeof input === 'string') {
         catalogFilename = input;
-        if (typeof reportFilename !== 'string') throw fail('report filename is required');
+        if (typeof reportFilename !== 'string') throw fail('报告文件名是必需的');
     } else {
         exact(input, ['catalogDir', 'catalogName', 'reportDir', 'reportName'], 'discovery handle input');
         catalogFilename = directJsonFile(input.catalogDir, input.catalogName, 'catalog');
@@ -615,16 +615,16 @@ function loadDiscoveryHandle(input, reportFilename) {
     const metadata = readMetadataSnapshot(validated.candidateManifest.metadataSnapshot.file);
     if (metadata.descriptor.sha256 !== validated.candidateManifest.metadataSnapshot.sha256
         || metadata.descriptor.size !== validated.candidateManifest.metadataSnapshot.size) {
-        throw fail('metadata snapshot bytes drifted after discovery');
+        throw fail('discovery 之后 metadata 快照字节已变化');
     }
     const records = extractRecords(validated.candidateManifest.adapter, metadata.value, validated.candidateManifest.conference);
-    if (records.length !== validated.candidateManifest.members.length) throw fail('metadata snapshot record set no longer matches discovery');
+    if (records.length !== validated.candidateManifest.members.length) throw fail('metadata 快照的记录集合已不再匹配 discovery');
     for (const member of validated.candidateManifest.members) {
         const normalized = normalizeMetadataMember(validated.candidateManifest.adapter, records[member.metadataIndex], member.metadataIndex);
         if (ledgerApi.identityKey(normalized.identity) !== ledgerApi.identityKey(member.identity)
             || normalized.title !== member.title || normalized.numericAlias !== member.numericAlias
             || (validated.candidateManifest.adapter === 'official-proceedings' && normalized.pdfFile !== member.pdfFile)) {
-            throw fail('metadata snapshot no longer binds the discovered member catalog');
+            throw fail('metadata 快照已不再绑定发现到的 member catalog');
         }
     }
     const handle = Object.freeze(Object.create(null));
@@ -662,21 +662,21 @@ function replayDiscoveryMembers(handle) {
     if (loaded.descriptor.file !== manifest.metadataSnapshot.file
         || loaded.descriptor.sha256 !== manifest.metadataSnapshot.sha256
         || loaded.descriptor.size !== manifest.metadataSnapshot.size) {
-        throw fail('metadata snapshot bytes drifted after discovery');
+        throw fail('discovery 之后 metadata 快照字节已变化');
     }
     const records = extractRecords(manifest.adapter, loaded.value, manifest.conference);
     if (records.length !== manifest.members.length) {
-        throw fail('metadata snapshot record set no longer matches discovery');
+        throw fail('metadata 快照的记录集合已不再匹配 discovery');
     }
     return manifest.members.map(member => {
-        if (member.metadataIndex >= records.length) throw fail('metadata member index escaped the source record set');
+        if (member.metadataIndex >= records.length) throw fail('metadata member 索引超出了来源记录集合');
         const record = records[member.metadataIndex];
         const normalized = normalizeMetadataMember(manifest.adapter, record, member.metadataIndex);
         const sourceIdentity = ledgerApi.identityKey(member.identity);
         if (ledgerApi.identityKey(normalized.identity) !== sourceIdentity || normalized.title !== member.title
             || normalized.numericAlias !== member.numericAlias
             || (manifest.adapter === 'official-proceedings' && normalized.pdfFile !== member.pdfFile)) {
-            throw fail('metadata record no longer binds the discovered member identity');
+            throw fail('metadata 记录已不再绑定发现到的 member 身份');
         }
         return {
             conference: JSON.parse(JSON.stringify(manifest.conference)), adapter: manifest.adapter,
@@ -693,27 +693,27 @@ function replayDiscoveryMember(handle, sourceIdentity) {
     if (!handle || typeof handle !== 'object' || !DISCOVERY_HANDLES.has(handle)) {
         throw fail('an authenticated loaded discovery handle is required');
     }
-    if (typeof sourceIdentity !== 'string' || !sourceIdentity) throw fail('sourceIdentity is required');
+    if (typeof sourceIdentity !== 'string' || !sourceIdentity) throw fail('sourceIdentity 是必需的');
     const data = DISCOVERY_HANDLE_DATA.get(handle);
     const manifest = data.candidateManifest;
     const member = manifest.members.find(item => ledgerApi.identityKey(item.identity) === sourceIdentity);
-    if (!member) throw fail(`source identity is absent from discovery: ${sourceIdentity}`);
+    if (!member) throw fail(`来源身份不在 discovery 中：${sourceIdentity}`);
     const loaded = readMetadataSnapshot(manifest.metadataSnapshot.file);
     if (loaded.descriptor.file !== manifest.metadataSnapshot.file
         || loaded.descriptor.sha256 !== manifest.metadataSnapshot.sha256
         || loaded.descriptor.size !== manifest.metadataSnapshot.size) {
-        throw fail('metadata snapshot bytes drifted after discovery');
+        throw fail('discovery 之后 metadata 快照字节已变化');
     }
     const records = extractRecords(manifest.adapter, loaded.value, manifest.conference);
     if (records.length !== manifest.members.length || member.metadataIndex >= records.length) {
-        throw fail('metadata snapshot record set no longer matches discovery');
+        throw fail('metadata 快照的记录集合已不再匹配 discovery');
     }
     const record = records[member.metadataIndex];
     const normalized = normalizeMetadataMember(manifest.adapter, record, member.metadataIndex);
     if (ledgerApi.identityKey(normalized.identity) !== sourceIdentity || normalized.title !== member.title
         || normalized.numericAlias !== member.numericAlias
         || (manifest.adapter === 'official-proceedings' && normalized.pdfFile !== member.pdfFile)) {
-        throw fail('metadata record no longer binds the discovered member identity');
+        throw fail('metadata 记录已不再绑定发现到的 member 身份');
     }
     return {
         conference: JSON.parse(JSON.stringify(manifest.conference)), adapter: manifest.adapter,
@@ -733,7 +733,7 @@ function validateAcquisitionReceiptBinding(binding, conference, metadataSnapshot
         || binding.metadataFile !== metadataSnapshot.file
         || binding.catalogReceiptFile !== path.join(pdfRoot, 'catalog.receipt.json')
         || binding.metadataSha256 !== metadataSnapshot.sha256) {
-        throw fail('candidate manifest acquisition receipt paths/provider do not bind discovery inputs');
+        throw fail('候选 manifest 的获取 receipt 路径或 provider 与 discovery 输入不匹配');
     }
     assertSha(binding.catalogReceiptFileSha256, 'acquisitionReceipt.catalogReceiptFileSha256');
     assertSha(binding.catalogReceiptSha256, 'acquisitionReceipt.catalogReceiptSha256');
@@ -746,7 +746,7 @@ function validateAcquisitionReceiptBinding(binding, conference, metadataSnapshot
         || replayed.receipt.receiptSha256 !== binding.catalogReceiptSha256
         || officialAcquisition.sha256(fs.readFileSync(binding.catalogReceiptFile)) !== binding.catalogReceiptFileSha256
         || officialAcquisition.stableHash(replayed.metadata.papers) !== binding.paperSetSha256) {
-        throw fail('candidate manifest acquisition receipt does not replay the official bundle');
+        throw fail('候选 manifest 的获取 receipt 无法重放官方 bundle');
     }
     const pdfReceiptSet = replayed.metadata.papers.filter(paper => paper.pdfUrl !== null).map(paper => {
         const receipt = officialAcquisition.replayPdfReceipt(replayed, paper);
@@ -754,7 +754,7 @@ function validateAcquisitionReceiptBinding(binding, conference, metadataSnapshot
             receiptFileSha256: officialAcquisition.sha256(fs.readFileSync(path.join(replayed.paths.receipts, `${paper.id}.json`))) };
     });
     if (officialAcquisition.stableHash(pdfReceiptSet) !== binding.pdfReceiptSetSha256) {
-        throw fail('candidate manifest PDF receipt set drifted');
+        throw fail('候选 manifest 的 PDF receipt 集合已变化');
     }
     return binding;
 }
@@ -762,7 +762,7 @@ function validateAcquisitionReceiptBinding(binding, conference, metadataSnapshot
 function officialAcquisitionBindingFromRoot(conference, metadataSnapshot, root) {
     const replayed = officialAcquisition.replayCatalog(conference.id, root);
     const verified = officialAcquisition.verifyAcquisition({ providerId: conference.id, outputRoot: root });
-    if (!verified.complete) throw fail(`official acquisition is incomplete: ${verified.missing.join(', ')}`);
+    if (!verified.complete) throw fail(`官方获取不完整：${verified.missing.join(', ')}`);
     const receiptFile = path.join(root, 'catalog.receipt.json');
     const pdfReceiptSet = replayed.metadata.papers.filter(paper => paper.pdfUrl !== null).map(paper => {
         const receipt = officialAcquisition.replayPdfReceipt(replayed, paper);
@@ -780,13 +780,13 @@ function officialAcquisitionBindingFromRoot(conference, metadataSnapshot, root) 
 }
 
 function officialAcquisitionBinding(conference, metadata, pdfs, acquisitionRoot) {
-    if (path.resolve(acquisitionRoot) !== pdfs.root) throw fail('acquisitionRoot must equal pdfRoot');
+    if (path.resolve(acquisitionRoot) !== pdfs.root) throw fail('acquisitionRoot 必须等于 pdfRoot');
     return officialAcquisitionBindingFromRoot(conference, metadata.descriptor, pdfs.root);
 }
 
 function discoverConference({ adapter, year, conferenceId = null, metadataFile, pdfRoot, acquisitionRoot = null } = {}) {
-    if (!ADAPTERS.has(adapter)) throw fail('adapter must be one of: icassp, iclr, icml, official-proceedings');
-    if (!Number.isInteger(year) || year < 1900 || year > 2100) throw fail('year must be a supported four-digit integer');
+    if (!ADAPTERS.has(adapter)) throw fail('adapter 必须是以下之一：icassp、iclr、icml、official-proceedings');
+    if (!Number.isInteger(year) || year < 1900 || year > 2100) throw fail('year 必须是受支持的四位整数');
     const metadata = readMetadataSnapshot(metadataFile);
     const pdfs = catalogPdfs(pdfRoot);
     let conference;
@@ -798,10 +798,10 @@ function discoverConference({ adapter, year, conferenceId = null, metadataFile, 
         }
     } else {
         conference = { id: `${adapter}-${year}`, year };
-        if (conferenceId !== null && conferenceId !== conference.id) throw fail('conferenceId is inconsistent with adapter and year');
+        if (conferenceId !== null && conferenceId !== conference.id) throw fail('conferenceId 与 adapter 和 year 不一致');
     }
     const records = extractRecords(adapter, metadata.value, conference);
-    if (!records.length) throw fail('metadata snapshot must contain at least one paper');
+    if (!records.length) throw fail('metadata 快照必须至少含一篇论文');
     const members = records.map((record, index) => normalizeMetadataMember(adapter, record, index));
     const identityKeys = members.map(member => ledgerApi.identityKey(member.identity));
     if (new Set(identityKeys).size !== identityKeys.length) throw fail('metadata snapshot contains duplicate primary identities');
@@ -822,7 +822,7 @@ function discoverConference({ adapter, year, conferenceId = null, metadataFile, 
         memberSetSha256: ledgerApi.memberSetSha256(members)
     };
     if (acquisitionRoot !== null) {
-        if (adapter !== 'official-proceedings') throw fail('acquisitionRoot is only valid for official-proceedings');
+        if (adapter !== 'official-proceedings') throw fail('acquisitionRoot 仅对 official-proceedings 有效');
         manifest.acquisitionReceipt = officialAcquisitionBinding(conference, metadata, pdfs, acquisitionRoot);
     }
     return { manifest, report: buildReport(manifest) };

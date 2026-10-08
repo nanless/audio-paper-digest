@@ -112,7 +112,7 @@ function isPlainObject(value) {
         && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 }
 function exact(value, fields, label) {
-    if (!isPlainObject(value)) fail(`${label} must be a plain object`);
+    if (!isPlainObject(value)) fail(`${label} 必须是普通对象`);
     const actual = Object.keys(value).sort(); const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
         fail(`${label} has unknown or missing fields`);
@@ -151,13 +151,13 @@ function stableHash(value) { return sha256(stableJson(value)); }
 function isAcceptedFilterPolicySha256(value) { return ACCEPTED_FILTER_POLICY_SHA256.has(value); }
 function isAcceptedFilterPromptSha256(value) { return ACCEPTED_LLM_FILTER_PROMPT_SHA256.has(value); }
 function assertSha(value, label) {
-    if (typeof value !== 'string' || !SHA_RE.test(value)) fail(`${label} must be a lowercase SHA-256`);
+    if (typeof value !== 'string' || !SHA_RE.test(value)) fail(`${label} 必须是小写 SHA-256`);
     return value;
 }
 function nonempty(value, label, pattern) {
     if (typeof value !== 'string' || !value.trim() || value !== value.trim()
         || /[\u0000-\u001f\u007f]/u.test(value) || (pattern && !pattern.test(value))) {
-        fail(`${label} is malformed`);
+        fail(`${label} 格式不正确`);
     }
     return value;
 }
@@ -165,12 +165,12 @@ function timestamp(value, label) {
     nonempty(value, label);
     const date = new Date(value);
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
-        || Number.isNaN(date.getTime()) || date.toISOString() !== value) fail(`${label} must be canonical UTC ISO time`);
+        || Number.isNaN(date.getTime()) || date.toISOString() !== value) fail(`${label} 必须是规范的 UTC ISO 时间`);
     return value;
 }
 function nowIso(now) {
     const value = now === undefined ? new Date() : now instanceof Date ? now : new Date(now);
-    if (Number.isNaN(value.getTime())) fail('now is invalid');
+    if (Number.isNaN(value.getTime())) fail('now 无效');
     return value.toISOString();
 }
 
@@ -179,21 +179,21 @@ function normalizeCatalog(value) {
     const contract = nonempty(value.contract, 'catalog.contract', /^[a-z0-9]+(?:-[a-z0-9]+)*-v\d+$/);
     const conferenceId = nonempty(value.conferenceId, 'catalog.conferenceId', /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     const catalogSha256 = assertSha(value.catalogSha256, 'catalog.catalogSha256');
-    if (!Array.isArray(value.members) || !value.members.length) fail('catalog.members must be a nonempty array');
+    if (!Array.isArray(value.members) || !value.members.length) fail('catalog.members 必须是非空数组');
     const members = value.members.map((member, index) => {
         exact(member, ['paperId', 'sourceSha256'], `catalog.members[${index}]`);
         return { paperId: nonempty(member.paperId, `catalog.members[${index}].paperId`, PAPER_ID_RE),
             sourceSha256: assertSha(member.sourceSha256, `catalog.members[${index}].sourceSha256`) };
     }).sort((left, right) => left.paperId.localeCompare(right.paperId));
-    if (new Set(members.map(member => member.paperId)).size !== members.length) fail('catalog contains duplicate paperId values');
+    if (new Set(members.map(member => member.paperId)).size !== members.length) fail('catalog 含重复的 paperId');
     return { contract, conferenceId, catalogSha256, members };
 }
 
 function adaptDiscoveryCatalog(discoveryDocument, { documentSha256, adapter } = {}) {
-    if (typeof adapter !== 'function') fail('a discovery catalog adapter callback is required');
+    if (typeof adapter !== 'function') fail('必须提供 discovery 目录适配器回调');
     assertSha(documentSha256, 'discovery document SHA');
     const catalog = normalizeCatalog(adapter(clone(discoveryDocument), { documentSha256 }));
-    if (catalog.catalogSha256 !== documentSha256) fail('catalog SHA does not bind the discovery document bytes');
+    if (catalog.catalogSha256 !== documentSha256) fail('catalog SHA 与 discovery 文档字节不匹配');
     return catalog;
 }
 
@@ -206,7 +206,7 @@ function catalogFromDiscoveryHandle(handle) {
     const snapshot = trustedDiscovery(handle);
     const catalog = discoveryDocumentToFilterCatalog(snapshot.candidateManifest, { documentSha256: snapshot.catalogSha256 });
     if (snapshot.report.candidateManifestSha256 !== snapshot.catalogSha256) {
-        fail('discovery report does not bind the catalog bytes');
+        fail('discovery 报告与 catalog 字节不匹配');
     }
     return catalog;
 }
@@ -220,38 +220,38 @@ function discoveryDocumentToFilterCatalog(value, { documentSha256 } = {}) {
     if (Object.hasOwn(value, 'acquisitionReceipt')) discoveryFields.push('acquisitionReceipt');
     exact(value, discoveryFields, 'discovery document');
     if (value.contract !== discoveryApi.CONTRACT || value.version !== discoveryApi.VERSION
-        || !discoveryApi.ADAPTERS.has(value.adapter)) fail('discovery document contract/adapter is unsupported');
+        || !discoveryApi.ADAPTERS.has(value.adapter)) fail('discovery 文档的契约或适配器不受支持');
     exact(value.conference, ['id', 'year'], 'discovery conference');
     const conferenceId = nonempty(value.conference.id, 'discovery conference.id', /^[a-z0-9]+(?:-[a-z0-9]+)*$/);
     if (!Number.isInteger(value.conference.year) || value.conference.year < 1900 || value.conference.year > 2100) {
-        fail('discovery conference identity is inconsistent');
+        fail('discovery 的会议身份不一致');
     }
     if (value.adapter === 'official-proceedings') {
         try { paperIdentity.conferenceCoordinates(value.conference); }
-        catch (error) { fail(`discovery conference identity is inconsistent: ${error.message}`); }
+        catch (error) { fail(`discovery 的会议身份不一致：${error.message}`); }
     } else if (conferenceId !== `${value.adapter}-${value.conference.year}`) {
-        fail('discovery conference identity is inconsistent');
+        fail('discovery 的会议身份不一致');
     }
     exact(value.metadataSnapshot, ['file', 'sha256', 'size'], 'discovery metadataSnapshot');
     if (typeof value.metadataSnapshot.file !== 'string' || !path.isAbsolute(value.metadataSnapshot.file)
-        || !Number.isSafeInteger(value.metadataSnapshot.size) || value.metadataSnapshot.size < 1) fail('discovery metadataSnapshot is malformed');
+        || !Number.isSafeInteger(value.metadataSnapshot.size) || value.metadataSnapshot.size < 1) fail('discovery 的 metadataSnapshot 格式不正确');
     assertSha(value.metadataSnapshot.sha256, 'discovery metadataSnapshot.sha256');
-    if (typeof value.pdfRoot !== 'string' || !path.isAbsolute(value.pdfRoot)) fail('discovery pdfRoot must be absolute');
-    if (!Array.isArray(value.pdfCatalog)) fail('discovery pdfCatalog must be an array');
+    if (typeof value.pdfRoot !== 'string' || !path.isAbsolute(value.pdfRoot)) fail('discovery 的 pdfRoot 必须是绝对路径');
+    if (!Array.isArray(value.pdfCatalog)) fail('discovery 的 pdfCatalog 必须是数组');
     const pdfPaths = new Set();
     for (const [index, item] of value.pdfCatalog.entries()) {
         exact(item, ['path', 'sha256', 'size'], `discovery pdfCatalog[${index}]`);
         ledgerApi.assertRelativePath(item.path, `discovery pdfCatalog[${index}].path`);
         assertSha(item.sha256, `discovery pdfCatalog[${index}].sha256`);
-        if (!Number.isSafeInteger(item.size) || item.size < 5 || pdfPaths.has(item.path)) fail('discovery pdfCatalog is malformed or duplicated');
+        if (!Number.isSafeInteger(item.size) || item.size < 5 || pdfPaths.has(item.path)) fail('discovery 的 pdfCatalog 格式不正确或有重复项');
         pdfPaths.add(item.path);
     }
     if (assertSha(value.pdfCatalogSha256, 'discovery pdfCatalogSha256') !== ledgerApi.stableHash(value.pdfCatalog)) {
-        fail('discovery pdfCatalog SHA drifted');
+        fail('discovery 的 pdfCatalog SHA 已变化');
     }
-    if (!Array.isArray(value.members) || !value.members.length) fail('discovery members must be nonempty');
+    if (!Array.isArray(value.members) || !value.members.length) fail('discovery 的 members 不能为空');
     if (assertSha(value.memberSetSha256, 'discovery memberSetSha256') !== ledgerApi.memberSetSha256(value.members)) {
-        fail('discovery member set SHA drifted');
+        fail('discovery 的 member 集合 SHA 已变化');
     }
     const members = value.members.map((member, index) => {
         const memberSchema = value.adapter === 'official-proceedings'
@@ -260,22 +260,22 @@ function discoveryDocumentToFilterCatalog(value, { documentSha256 } = {}) {
         exact(member, memberSchema, `discovery member[${index}]`);
         const sourceIdentity = ledgerApi.identityKey(member.identity);
         if (!Number.isSafeInteger(member.metadataIndex) || member.metadataIndex < 0
-            || typeof member.title !== 'string' || !member.title.trim()) fail(`discovery member[${index}] metadata is malformed`);
+            || typeof member.title !== 'string' || !member.title.trim()) fail(`discovery 的 member[${index}] 元数据格式不正确`);
         if (member.numericAlias !== null && (typeof member.numericAlias !== 'string' || !/^[1-9]\d*$/.test(member.numericAlias))) {
-            fail(`discovery member[${index}] numericAlias is malformed`);
+            fail(`discovery 的 member[${index}] numericAlias 格式不正确`);
         }
         const expectedIdentityType = value.adapter === 'icassp' ? 'icassp-arnumber'
             : value.adapter === 'official-proceedings' ? 'conference-paper-id' : 'openreview-forum-id';
         if (member.identity.type !== expectedIdentityType
             || (value.adapter !== 'icml' && member.numericAlias !== null)) {
-            fail(`discovery member[${index}] identity/alias is inconsistent with adapter`);
+            fail(`discovery 的 member[${index}] 身份或别名与适配器不一致`);
         }
         exact(member.match, ['kind', 'candidates'], `discovery member[${index}].match`);
         if (!['exact', 'normalized', 'ambiguous', 'unmatched'].includes(member.match.kind)
-            || !Array.isArray(member.match.candidates)) fail(`discovery member[${index}] match is malformed`);
+            || !Array.isArray(member.match.candidates)) fail(`discovery 的 member[${index}] match 格式不正确`);
         for (const candidate of member.match.candidates) {
             exact(candidate, ['path', 'sha256', 'size'], `discovery member[${index}] candidate`);
-            if (!pdfPaths.has(candidate.path)) fail(`discovery member[${index}] references a PDF outside the catalog`);
+            if (!pdfPaths.has(candidate.path)) fail(`discovery 的 member[${index}] 引用了 catalog 之外的 PDF`);
             assertSha(candidate.sha256, `discovery member[${index}] candidate SHA`);
         }
         if (value.adapter === 'official-proceedings') {
@@ -286,7 +286,7 @@ function discoveryDocumentToFilterCatalog(value, { documentSha256 } = {}) {
             if (!['exact', 'ambiguous', 'unmatched'].includes(member.match.kind)
                 || (member.match.kind === 'unmatched' ? actualPaths.length !== 0
                     : member.pdfFile === null || actualPaths.length !== 1 || actualPaths[0] !== member.pdfFile)) {
-                fail(`discovery member[${index}] official PDF match is not the exact metadata.pdfFile`);
+                fail(`discovery 的 member[${index}] 官方 PDF 匹配项与 metadata.pdfFile 不完全一致`);
             }
         }
         const paperId = paperIdentity.canonicalConferencePaperId(value.conference, member.identity);
@@ -339,7 +339,7 @@ function normalizeSpec(value) {
         'endpointIdentitySha256', catalogField, 'evidenceCatalogContract', 'discovery',
         'evidence'], 'filter spec');
     const model = nonempty(value.model, 'filter spec model', /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$/);
-    if (!PROTOCOLS.has(value.endpointProtocol)) fail('filter spec endpointProtocol is unsupported');
+    if (!PROTOCOLS.has(value.endpointProtocol)) fail('filter spec 的 endpointProtocol 不受支持');
     exact(value.discovery, ['contract', 'conferenceId', 'catalogSha256', 'reportSha256',
         'candidateSetSha256'], 'filter spec discovery');
     const discovery = {
@@ -393,7 +393,7 @@ function normalizeEvidenceBinding(value, catalog) {
     }
     const locator = normalizeLocatorBinding(value.locator);
     if (catalog && value.memberSetSha256 !== stableHash(normalizeCatalog(catalog).members.map(member => member.paperId))) {
-        fail('filter evidence member set differs from discovery candidates');
+        fail('filter evidence 的 member 集合与 discovery 候选不一致');
     }
     return { ...clone(value), locator };
 }
@@ -401,19 +401,19 @@ function normalizeEvidenceBinding(value, catalog) {
 function evidenceBindingFromHandle(evidenceHandle, catalog) {
     let snapshot;
     try { snapshot = evidenceApi.evidenceHandleSnapshot(evidenceHandle); }
-    catch (error) { fail(`requires a complete authenticated evidence handle: ${error.message}`); }
+    catch (error) { fail(`需要完整且已认证的 evidence 句柄：${error.message}`); }
     const normalizedCatalog = normalizeCatalog(catalog);
     const { catalog: evidenceCatalog, report } = snapshot;
     if (evidenceCatalog.contract !== evidenceApi.CATALOG_CONTRACT
         || evidenceCatalog.binding.conference.id !== normalizedCatalog.conferenceId
         || evidenceCatalog.binding.catalogSha256 !== normalizedCatalog.catalogSha256
         || report.catalogSha256 !== evidenceCatalog.catalogSha256) {
-        fail('evidence catalog/report does not bind the same discovery catalog');
+        fail('evidence 的 catalog 或 report 与同一个 discovery catalog 不匹配');
     }
     const paperIds = evidenceCatalog.members.map(member => member.paperId);
     if (paperIds.length !== normalizedCatalog.members.length
         || paperIds.some((paperId, index) => paperId !== normalizedCatalog.members[index].paperId)) {
-        fail('evidence catalog does not cover the exact discovery candidate set');
+        fail('evidence catalog 未覆盖 discovery 的完整候选集合');
     }
     return normalizeEvidenceBinding({ runId: evidenceCatalog.binding.runId,
         catalogSha256: evidenceCatalog.catalogSha256, reportSha256: report.reportSha256,
@@ -441,22 +441,22 @@ function inputBinding(catalog, spec, evidenceBinding) {
 }
 
 function normalizeUsage(value = {}) {
-    if (!isPlainObject(value)) fail('usage must be a plain object');
+    if (!isPlainObject(value)) fail('usage 必须是普通对象');
     const allowed = ['requests', 'inputTokens', 'outputTokens', 'totalTokens'];
-    if (Object.keys(value).some(key => !allowed.includes(key))) fail('usage has unknown fields');
+    if (Object.keys(value).some(key => !allowed.includes(key))) fail('usage 含未知字段');
     const normalized = {};
     for (const field of allowed) {
         const number = value[field] === undefined ? 0 : value[field];
         if (field !== 'requests' && number === null) { normalized[field] = null; continue; }
-        if (!Number.isSafeInteger(number) || number < 0) fail(`usage.${field} must be a nonnegative safe integer${field === 'requests' ? '' : ' or null'}`);
+        if (!Number.isSafeInteger(number) || number < 0) fail(`usage.${field} 必须是非负安全整数${field === 'requests' ? '' : ' 或 null'}`);
         normalized[field] = number;
     }
     const tokenValues = [normalized.inputTokens, normalized.outputTokens, normalized.totalTokens];
     if (tokenValues.every(Number.isSafeInteger) && normalized.totalTokens !== normalized.inputTokens + normalized.outputTokens) {
-        fail('usage.totalTokens must equal inputTokens + outputTokens');
+        fail('usage.totalTokens 必须等于 inputTokens + outputTokens');
     }
     if (normalized.totalTokens !== null && (normalized.inputTokens === null || normalized.outputTokens === null)) {
-        fail('usage.totalTokens must be null when an input/output token count is unavailable');
+        fail('输入或输出 token 数不可得时，usage.totalTokens 必须为 null');
     }
     return normalized;
 }
@@ -469,15 +469,15 @@ function usageAtLeast(previous, next) {
 }
 function normalizeResult(value, { allowPending = false } = {}) {
     exact(value, ['status', 'reason', 'responseSha256', 'usage'], 'decision result');
-    if (!DECISION_STATUSES.has(value.status) || (!allowPending && value.status === 'pending')) fail('decision status is unsupported');
+    if (!DECISION_STATUSES.has(value.status) || (!allowPending && value.status === 'pending')) fail('decision 的 status 不受支持');
     const usage = normalizeUsage(value.usage);
     if (value.status === 'pending') {
         if (value.reason !== null || value.responseSha256 !== null || Object.values(usage).some(Boolean)) {
-            fail('pending decision cannot contain reason, response, or usage');
+            fail('pending decision 不能含 reason、response 或 usage');
         }
     } else {
         nonempty(value.reason, 'decision reason');
-        if (value.reason.length > 4000) fail('decision reason is too long');
+        if (value.reason.length > 4000) fail('decision 的 reason 过长');
         if (FINAL_STATUSES.has(value.status)) assertSha(value.responseSha256, 'decision responseSha256');
         else if (value.responseSha256 !== null) assertSha(value.responseSha256, 'decision responseSha256');
     }
@@ -486,7 +486,7 @@ function normalizeResult(value, { allowPending = false } = {}) {
 
 function normalizeActor(value) {
     exact(value, ['type', 'id'], 'decision actor');
-    if (!ACTOR_TYPES.has(value.type)) fail('decision actor.type must be llm, manual, or keyword');
+    if (!ACTOR_TYPES.has(value.type)) fail('decision 的 actor.type 必须是 llm、manual 或 keyword');
     return { type: value.type, id: nonempty(value.id, 'decision actor.id', OWNER_RE) };
 }
 
@@ -495,7 +495,7 @@ function normalizeByteRecord(value, label, { nullable = false } = {}) {
     exact(value, ['encoding', 'size', 'sha256', 'data'], label);
     if (value.encoding !== 'base64' || typeof value.data !== 'string'
         || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value.data)) {
-        fail(`${label} must contain canonical base64 bytes`);
+        fail(`${label} 必须含规范的 base64 字节`);
     }
     const bytes = Buffer.from(value.data, 'base64');
     if (!Number.isSafeInteger(value.size) || value.size < 1 || value.size > MAX_DECISION_PAYLOAD_BYTES || bytes.length !== value.size
@@ -506,7 +506,7 @@ function normalizeByteRecord(value, label, { nullable = false } = {}) {
 
 function byteRecord(value, label) {
     const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value, 'utf8');
-    if (!bytes.length) fail(`${label} bytes must be nonempty`);
+    if (!bytes.length) fail(`${label} 的字节不能为空`);
     return { encoding: 'base64', size: bytes.length, sha256: sha256(bytes), data: bytes.toString('base64') };
 }
 
@@ -520,7 +520,7 @@ function normalizeDecisionArtifact(value) {
         'sourceSha256', 'actor', 'model', 'endpointProtocol', 'endpointIdentitySha256',
         'requestEnvelopeSha256', 'transportReceiptSha256', 'request', 'response', 'result', 'createdAt',
         'artifactSha256'], 'decision artifact');
-    if (value.contract !== DECISION_CONTRACT || value.version !== DECISION_VERSION) fail('decision artifact contract/version mismatch');
+    if (value.contract !== DECISION_CONTRACT || value.version !== DECISION_VERSION) fail('decision artifact 的契约或版本不一致');
     nonempty(value.filterId, 'decision artifact filterId', UUID_RE);
     nonempty(value.operationId, 'decision artifact operationId', UUID_RE);
     assertSha(value.expectedStateSha256, 'decision artifact expectedStateSha256');
@@ -533,13 +533,13 @@ function normalizeDecisionArtifact(value) {
     timestamp(value.createdAt, 'decision artifact createdAt');
     if (actor.type === 'llm') {
         nonempty(value.model, 'decision artifact model', /^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,199}$/);
-        if (!PROTOCOLS.has(value.endpointProtocol)) fail('LLM decision endpointProtocol is unsupported');
+        if (!PROTOCOLS.has(value.endpointProtocol)) fail('LLM decision 的 endpointProtocol 不受支持');
         assertSha(value.endpointIdentitySha256, 'decision artifact endpointIdentitySha256');
         assertSha(value.requestEnvelopeSha256, 'decision artifact requestEnvelopeSha256');
         assertSha(value.transportReceiptSha256, 'decision artifact transportReceiptSha256');
-        if (result.usage.requests < 1) fail('LLM decision must record at least one request');
+        if (result.usage.requests < 1) fail('LLM decision 必须至少记录一次请求');
         const parsedRequest = parseLlmRequestBody(Buffer.from(request.data, 'base64'), value.endpointProtocol);
-        if (parsedRequest.body.model !== value.model) fail('LLM decision request model drifted');
+        if (parsedRequest.body.model !== value.model) fail('LLM decision 请求的 model 已变化');
     } else if (value.model !== null || value.endpointProtocol !== (actor.type === 'keyword' ? 'keyword-prefilter' : 'manual')
         || value.endpointIdentitySha256 !== null || value.requestEnvelopeSha256 !== null
         || value.transportReceiptSha256 !== null
@@ -547,13 +547,13 @@ function normalizeDecisionArtifact(value) {
         fail('manual decision must use no LLM transport identity and zero token usage');
     }
     if (FINAL_STATUSES.has(result.status)) {
-        if (!response) fail('final decision requires preserved response bytes');
-        if (result.responseSha256 !== response.sha256) fail('final decision response SHA does not bind preserved bytes');
+        if (!response) fail('final decision 必须保留响应字节');
+        if (result.responseSha256 !== response.sha256) fail('final decision 的 response SHA 与保留字节不匹配');
     } else if (response && result.responseSha256 !== response.sha256) {
-        fail('failed decision response SHA does not bind preserved bytes');
+        fail('failed decision 的 response SHA 与保留字节不匹配');
     }
     assertSha(value.artifactSha256, 'decision artifactSha256');
-    if (value.artifactSha256 !== decisionArtifactDigest(value)) fail('decision artifact SHA drifted');
+    if (value.artifactSha256 !== decisionArtifactDigest(value)) fail('decision artifact 的 SHA 已变化');
     return clone(value);
 }
 
@@ -575,10 +575,10 @@ function buildDecisionArtifactFromCheckedState({ state: checked, paperId, operat
         fail('LLM decision artifacts may only be produced by the authenticated conference filter runner');
     }
     if (actor?.type === 'keyword' && productionAuthority !== KEYWORD_ARTIFACT_AUTHORITY) {
-        fail('keyword decisions may only be produced by the authenticated deterministic prefilter');
+        fail('keyword decision 只能由已认证的确定性预筛器生成');
     }
     nonempty(paperId, 'decision artifact paperId', PAPER_ID_RE);
-    if (!Object.prototype.hasOwnProperty.call(checked.decisions, paperId)) fail('decision artifact references a non-candidate paper');
+    if (!Object.prototype.hasOwnProperty.call(checked.decisions, paperId)) fail('decision artifact 引用了非候选论文');
     const response = responseBytes === null ? null : byteRecord(responseBytes, 'decision response');
     const artifact = { contract: DECISION_CONTRACT, version: DECISION_VERSION, filterId: checked.filterId, operationId,
         expectedStateSha256: checked.stateSha256, paperId,
@@ -609,7 +609,7 @@ function completionFor(decisions) {
 function normalizeCompletion(value, decisions) {
     exact(value, ['total', 'included', 'excluded', 'pending', 'failed', 'status', 'decisionSetSha256'], 'completion');
     const expected = completionFor(decisions);
-    if (stableHash(value) !== stableHash(expected)) fail('completion does not close over the complete candidate set');
+    if (stableHash(value) !== stableHash(expected)) fail('completion 未覆盖完整的候选集合');
     return expected;
 }
 
@@ -652,8 +652,8 @@ class StateDigestChain {
 
     updateDecision(paperId, previousStatus, decision) {
         const index = this.decisionIndex.get(paperId);
-        if (index === undefined) fail('state digest chain references a non-candidate paper');
-        if (this.counts[previousStatus] < 1) fail('state digest chain status count underflow');
+        if (index === undefined) fail('state 摘要链引用了非候选论文');
+        if (this.counts[previousStatus] < 1) fail('state 摘要链的 status 计数下溢');
         this.counts[previousStatus] -= 1; this.counts[decision.status] += 1;
         this.decisionEntries[index] = this.decisionEntry(paperId, decision);
     }
@@ -680,7 +680,7 @@ function normalizePatch(value) {
 function assertFilterState(value) {
     exact(value, ['version', 'contract', 'filterId', 'createdAt', 'input', 'decisions', 'completion', 'attempts', 'stateSha256'], 'filter state');
     const legacy = isLegacyState(value);
-    if (!Array.isArray(value.attempts) || value.attempts.some(attempt => !isPlainObject(attempt))) fail('attempts must be an array of plain objects');
+    if (!Array.isArray(value.attempts) || value.attempts.some(attempt => !isPlainObject(attempt))) fail('attempts 必须是普通对象数组');
     if (assertSha(value.stateSha256, 'stateSha256') !== stateDigest(value)) fail('state SHA drifted');
     const catalogField = tagCatalogField(value.input, legacy, '筛选输入');
     nonempty(value.filterId, 'filterId', UUID_RE); timestamp(value.createdAt, 'createdAt');
@@ -693,21 +693,21 @@ function assertFilterState(value) {
         assertSha(value.input[field], `input.${field}`);
     }
     nonempty(value.input.discoveryContract, 'input.discoveryContract'); nonempty(value.input.conferenceId, 'input.conferenceId');
-    nonempty(value.input.model, 'input.model'); if (!PROTOCOLS.has(value.input.endpointProtocol)) fail('input endpoint protocol is unsupported');
+    nonempty(value.input.model, 'input.model'); if (!PROTOCOLS.has(value.input.endpointProtocol)) fail('input 的 endpoint protocol 不受支持');
     nonempty(value.input.evidenceCatalogContract, 'input.evidenceCatalogContract');
     normalizeEvidenceBinding(value.input.evidence);
     assertSha(value.input.inputSha256, 'input.inputSha256');
-    if (value.input.inputSha256 !== stableHash(inputWithoutSha)) fail('input binding SHA drifted');
-    if (!isPlainObject(value.decisions) || !Object.keys(value.decisions).length) fail('decisions must cover a nonempty candidate set');
+    if (value.input.inputSha256 !== stableHash(inputWithoutSha)) fail('input 绑定 SHA 已变化');
+    if (!isPlainObject(value.decisions) || !Object.keys(value.decisions).length) fail('decisions 必须覆盖非空候选集合');
     const paperIds = Object.keys(value.decisions);
     if (paperIds.some((paperId, index) => !PAPER_ID_RE.test(paperId) || (index > 0 && paperIds[index - 1].localeCompare(paperId) >= 0))) {
-        fail('decision paperIds must be unique and canonically sorted');
+        fail('decision 的 paperId 必须唯一且按规范顺序排列');
     }
     const decisions = Object.fromEntries(paperIds.map(paperId => [paperId, normalizeDecision(value.decisions[paperId], paperId)]));
     if (stableHash(paperIds.map(paperId => ({ paperId, sourceSha256: decisions[paperId].sourceSha256 }))) !== value.input.candidateSetSha256) {
-        fail('decisions do not bind the catalog candidate/source set');
+        fail('decisions 与 catalog 的候选或来源集合不匹配');
     }
-    if (!Array.isArray(value.attempts)) fail('attempts must be an array');
+    if (!Array.isArray(value.attempts)) fail('attempts 必须是数组');
     const initial = Object.fromEntries(paperIds.map(paperId => [paperId, initialDecision(decisions[paperId].sourceSha256)]));
     const replayed = clone(initial); const attempts = []; const operations = new Set();
     const base = { version: value.version, contract: value.contract, filterId: value.filterId, createdAt: value.createdAt,
@@ -720,49 +720,49 @@ function assertFilterState(value) {
             'decisionArtifactName', 'decisionArtifactSha256', 'decisionArtifactFileSha256'], `attempt[${index}]`);
         const patch = normalizePatch(rawAttempt.patch);
         nonempty(rawAttempt.operationId, `attempt[${index}].operationId`, UUID_RE);
-        if (operations.has(rawAttempt.operationId)) fail('attempt operationId is duplicated');
+        if (operations.has(rawAttempt.operationId)) fail('attempt 的 operationId 重复');
         if (patch.operationId !== rawAttempt.operationId || patch.paperId !== rawAttempt.paperId
-            || patch.expectedStateSha256 !== rawAttempt.priorStateSha256) fail('attempt patch does not bind its receipt');
+            || patch.expectedStateSha256 !== rawAttempt.priorStateSha256) fail('attempt 的 patch 与其 receipt 不匹配');
         assertSha(rawAttempt.patchSha256, `attempt[${index}].patchSha256`);
         assertSha(rawAttempt.decisionArtifactSha256, `attempt[${index}].decisionArtifactSha256`);
         assertSha(rawAttempt.decisionArtifactFileSha256, `attempt[${index}].decisionArtifactFileSha256`);
         if (!SAFE_JSON_NAME.test(String(rawAttempt.decisionArtifactName || ''))) fail(`attempt[${index}] decision artifact name is unsafe`);
-        if (rawAttempt.patchSha256 !== stableHash(patch)) fail('attempt patch SHA drifted');
-        if (!Object.prototype.hasOwnProperty.call(replayed, rawAttempt.paperId)) fail('attempt references a non-candidate paper');
-        if (rawAttempt.fromStatus !== replayed[rawAttempt.paperId].status || rawAttempt.toStatus !== patch.result.status) fail('attempt status history is discontinuous');
+        if (rawAttempt.patchSha256 !== stableHash(patch)) fail('attempt 的 patch SHA 已变化');
+        if (!Object.prototype.hasOwnProperty.call(replayed, rawAttempt.paperId)) fail('attempt 引用了非候选论文');
+        if (rawAttempt.fromStatus !== replayed[rawAttempt.paperId].status || rawAttempt.toStatus !== patch.result.status) fail('attempt 的 status 历史不连续');
         if (FINAL_STATUSES.has(rawAttempt.fromStatus)) fail('a final decision cannot be changed');
-        if (!usageAtLeast(replayed[rawAttempt.paperId].usage, patch.result.usage)) fail('attempt usage regresses');
+        if (!usageAtLeast(replayed[rawAttempt.paperId].usage, patch.result.usage)) fail('attempt 的 usage 倒退');
         const receiptResult = normalizeResult({ status: rawAttempt.toStatus, reason: rawAttempt.reason,
             responseSha256: rawAttempt.responseSha256, usage: rawAttempt.usage });
-        if (stableHash(receiptResult) !== stableHash(patch.result)) fail('attempt receipt does not bind the patch result');
+        if (stableHash(receiptResult) !== stableHash(patch.result)) fail('attempt 的 receipt 与 patch 结果不匹配');
         timestamp(rawAttempt.recordedAt, `attempt[${index}].recordedAt`);
-        if (rawAttempt.recordedAt < previousTime) fail('attempt recordedAt moves backwards');
+        if (rawAttempt.recordedAt < previousTime) fail('attempt 的 recordedAt 倒退');
         assertSha(rawAttempt.priorStateSha256, `attempt[${index}].priorStateSha256`);
         assertSha(rawAttempt.nextStateSha256, `attempt[${index}].nextStateSha256`);
-        if (rawAttempt.priorStateSha256 !== previousDigest) fail('attempt compare-and-swap history is discontinuous');
+        if (rawAttempt.priorStateSha256 !== previousDigest) fail('attempt 的 compare-and-swap 历史不连续');
         const previousStatus = replayed[rawAttempt.paperId].status;
         replayed[rawAttempt.paperId] = { sourceSha256: replayed[rawAttempt.paperId].sourceSha256, ...patch.result };
         attempts.push({ ...clone(rawAttempt), patch }); operations.add(rawAttempt.operationId);
         digestChain.updateDecision(rawAttempt.paperId, previousStatus, replayed[rawAttempt.paperId]);
         digestChain.appendAttempt(rawAttempt);
         const nextDigest = digestChain.materialize().stateSha256;
-        if (rawAttempt.nextStateSha256 !== nextDigest) fail('attempt nextStateSha256 does not bind reconstructed state');
+        if (rawAttempt.nextStateSha256 !== nextDigest) fail('attempt 的 nextStateSha256 与重建的 state 不匹配');
         previousDigest = nextDigest; previousTime = rawAttempt.recordedAt;
     }
-    if (stableHash(replayed) !== stableHash(decisions)) fail('decisions do not match append-only attempt history');
+    if (stableHash(replayed) !== stableHash(decisions)) fail('decisions 与只追加的 attempt 历史不一致');
     const completion = normalizeCompletion(value.completion, decisions);
     const rebuilt = { version: value.version, contract: value.contract, filterId: value.filterId, createdAt: value.createdAt,
         input: clone(value.input), decisions, completion, attempts };
     const digest = stateDigest(rebuilt); assertSha(value.stateSha256, 'stateSha256');
     if (value.stateSha256 !== digest) fail('state SHA drifted');
-    if (attempts.length && attempts.at(-1).nextStateSha256 !== digest) fail('last attempt does not bind current state');
+    if (attempts.length && attempts.at(-1).nextStateSha256 !== digest) fail('最后一个 attempt 与当前 state 不匹配');
     return { ...rebuilt, stateSha256: digest };
 }
 
 function assertBoundInputsFromCheckedState(checked, { catalog, spec, evidenceBinding }) {
     if (isLegacyState(checked) !== isLegacySpec(normalizeSpec(spec))) fail('筛选配置与任务记录的格式不一致。');
     const expected = inputBinding(catalog, spec, evidenceBinding);
-    if (stableHash(checked.input) !== stableHash(expected)) fail('catalog, source, prompt, model, protocol, policy, or tag catalog input drifted');
+    if (stableHash(checked.input) !== stableHash(expected)) fail('catalog、source、prompt、model、protocol、policy 或 tag catalog 输入已变化');
     return checked;
 }
 
@@ -771,7 +771,7 @@ function assertBoundInputs(state, bindings) {
 }
 
 function safeDirectory(root, create = false) {
-    if (typeof root !== 'string' || !path.isAbsolute(root)) fail('filter root must be absolute');
+    if (typeof root !== 'string' || !path.isAbsolute(root)) fail('filter root 必须是绝对路径');
     const normalized = path.resolve(root); if (create) fs.mkdirSync(normalized, { recursive: true, mode: 0o700 });
     const stat = fs.lstatSync(normalized);
     if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(normalized) !== normalized) fail('filter root is unsafe');
@@ -779,7 +779,7 @@ function safeDirectory(root, create = false) {
 }
 function filterDirectory(root, filterId, { create = false } = {}) {
     const safeRoot = safeDirectory(root, create); nonempty(filterId, 'filterId', UUID_RE);
-    const target = path.resolve(safeRoot, filterId); if (path.dirname(target) !== safeRoot) fail('filter directory escapes root');
+    const target = path.resolve(safeRoot, filterId); if (path.dirname(target) !== safeRoot) fail('filter 目录超出 root');
     if (create) {
         try { fs.mkdirSync(target, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
     }
@@ -790,7 +790,7 @@ function filterDirectory(root, filterId, { create = false } = {}) {
 function safeDirectJson(directory, name, { mustExist = true } = {}) {
     const root = safeDirectory(directory);
     if (typeof name !== 'string' || !SAFE_JSON_NAME.test(name)) fail('unsafe direct JSON filename');
-    const target = path.resolve(root, name); if (path.dirname(target) !== root) fail('JSON file escapes controlled directory');
+    const target = path.resolve(root, name); if (path.dirname(target) !== root) fail('JSON 文件超出受控目录');
     if (mustExist) {
         const stat = fs.lstatSync(target);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) fail('controlled JSON file is unsafe');
@@ -809,7 +809,7 @@ function writeExclusive(filename, bytes) {
         const current = fs.lstatSync(filename);
         if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1
             || current.dev !== createdIdentity.dev || current.ino !== createdIdentity.ino) {
-            fail('exclusive-write target changed before commit');
+            fail('独占写入目标在提交前已变化');
         }
     } catch (error) {
         if (fd !== undefined) { fs.closeSync(fd); fd = undefined; }
@@ -817,7 +817,7 @@ function writeExclusive(filename, bytes) {
             try {
                 const current = fs.lstatSync(filename);
                 if (current.dev !== createdIdentity.dev || current.ino !== createdIdentity.ino) {
-                    fail('exclusive-write target changed before cleanup');
+                    fail('独占写入目标在清理前已变化');
                 }
                 fs.unlinkSync(filename);
             } catch (cleanupError) { if (cleanupError.code !== 'ENOENT') throw cleanupError; }
@@ -847,16 +847,16 @@ function lockOwnerRecord(owner, now, token = crypto.randomUUID()) {
 function validateLockOwner(value) {
     exact(value, ['contract', 'version', 'owner', 'pid', 'hostname', 'token', 'startedAt', 'heartbeatAt',
         'leaseMs', 'ownerSha256'], 'filter lock owner');
-    if (value.contract !== LOCK_OWNER_CONTRACT || value.version !== LOCK_OWNER_VERSION) fail('filter lock owner contract/version mismatch');
+    if (value.contract !== LOCK_OWNER_CONTRACT || value.version !== LOCK_OWNER_VERSION) fail('filter lock owner 的契约或版本不一致');
     nonempty(value.owner, 'filter lock owner', OWNER_RE);
-    if (!Number.isSafeInteger(value.pid) || value.pid < 1) fail('filter lock PID is malformed');
+    if (!Number.isSafeInteger(value.pid) || value.pid < 1) fail('filter lock 的 PID 格式不正确');
     nonempty(value.hostname, 'filter lock hostname');
-    if (value.hostname.length > 255) fail('filter lock hostname is too long');
+    if (value.hostname.length > 255) fail('filter lock 的 hostname 过长');
     nonempty(value.token, 'filter lock token', UUID_RE);
     timestamp(value.startedAt, 'filter lock startedAt'); timestamp(value.heartbeatAt, 'filter lock heartbeatAt');
-    if (value.heartbeatAt < value.startedAt || value.leaseMs !== LOCK_STALE_MS) fail('filter lock lease is malformed');
+    if (value.heartbeatAt < value.startedAt || value.leaseMs !== LOCK_STALE_MS) fail('filter lock 的 lease 格式不正确');
     const body = clone(value); delete body.ownerSha256;
-    if (assertSha(value.ownerSha256, 'filter lock ownerSha256') !== stableHash(body)) fail('filter lock owner SHA drifted');
+    if (assertSha(value.ownerSha256, 'filter lock ownerSha256') !== stableHash(body)) fail('filter lock owner 的 SHA 已变化');
     return clone(value);
 }
 function readLockDirectory(lockPath, label = 'filter operation lock') {
@@ -869,7 +869,7 @@ function readLockDirectory(lockPath, label = 'filter operation lock') {
         || ownerInfo.size < 1 || ownerInfo.size > MAX_LOCK_OWNER_BYTES) fail(`${label} owner is unsafe`);
     const loaded = readJson(ownerPath, `${label} owner`); const record = validateLockOwner(loaded.value);
     const expectedBytes = Buffer.from(`${JSON.stringify(record, null, 2)}\n`);
-    if (loaded.sha256 !== sha256(expectedBytes)) fail(`${label} owner bytes are not canonical`);
+    if (loaded.sha256 !== sha256(expectedBytes)) fail(`${label} 的 owner 字节不规范`);
     return { lockPath, directoryDev: info.dev, directoryIno: info.ino, directoryMtimeMs: info.mtimeMs,
         ownerDev: ownerInfo.dev, ownerIno: ownerInfo.ino, ownerMtimeMs: ownerInfo.mtimeMs,
         ownerFileSha256: loaded.sha256, record };
@@ -897,7 +897,7 @@ function sameLockSnapshot(left, right) {
 }
 function removeVerifiedLockDirectory(snapshot, label) {
     const current = readLockDirectory(snapshot.lockPath, label);
-    if (!sameLockSnapshot(snapshot, current)) fail(`${label} changed before removal`);
+    if (!sameLockSnapshot(snapshot, current)) fail(`${label} 在移除前已变化`);
     fs.unlinkSync(path.join(snapshot.lockPath, 'owner.json')); fs.rmdirSync(snapshot.lockPath);
 }
 function createLockDirectory(lockPath, owner, now) {
@@ -916,9 +916,9 @@ function clearOrRejectReclaimMarker(reclaimPath) {
     try { snapshot = readLockDirectory(reclaimPath, 'filter lock reclaim marker'); }
     catch (error) { if (error.code === 'ENOENT') return; throw error; }
     const liveness = processLiveness(snapshot.record);
-    if (liveness === 'alive') fail('filter lock reclaim is owned by a live process');
-    if (liveness === 'remote') fail('filter lock reclaim belongs to another host');
-    if (!reclaimableLock(snapshot)) fail('filter lock reclaim marker is not stale');
+    if (liveness === 'alive') fail('filter lock 的回收标记属于存活进程');
+    if (liveness === 'remote') fail('filter lock 的回收标记属于另一台主机');
+    if (!reclaimableLock(snapshot)) fail('filter lock 的回收标记尚未过期');
     removeVerifiedLockDirectory(snapshot, 'filter lock reclaim marker');
 }
 function acquireLock(directory, owner, now) {
@@ -936,8 +936,8 @@ function acquireLock(directory, owner, now) {
         } catch (error) { if (error.code !== 'EEXIST') throw error; }
         const stale = readLockDirectory(lockPath); const liveness = processLiveness(stale.record);
         if (liveness === 'alive') fail('conference filter is locked by a live process');
-        if (liveness === 'remote') fail('conference filter lock belongs to another host');
-        if (!reclaimableLock(stale)) fail('conference filter lock belongs to a dead process but is not stale');
+        if (liveness === 'remote') fail('会议筛选器的锁属于另一台主机');
+        if (!reclaimableLock(stale)) fail('会议筛选器的锁属于已退出进程，但尚未过期');
         let reclaim;
         try { reclaim = createLockDirectory(reclaimPath, owner, now); }
         catch (error) { if (error.code === 'EEXIST') continue; throw error; }
@@ -945,17 +945,17 @@ function acquireLock(directory, owner, now) {
             let current;
             try { current = readLockDirectory(lockPath); }
             catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-            if (!sameLockSnapshot(stale, current) || !reclaimableLock(current)) fail('filter lock changed during stale reclaim');
+            if (!sameLockSnapshot(stale, current) || !reclaimableLock(current)) fail('filter lock 在过期回收期间已变化');
             removeVerifiedLockDirectory(current, 'filter operation lock');
         } finally { removeVerifiedLockDirectory(reclaim, 'filter lock reclaim marker'); }
     }
-    fail('filter lock acquisition exceeded bounded stale-reclaim attempts');
+    fail('获取 filter lock 超过有界过期回收次数');
 }
 function releaseLock(handle) {
-    if (!handle || typeof handle !== 'object' || !LOCK_HANDLES.has(handle)) fail('authenticated filter lock handle required');
+    if (!handle || typeof handle !== 'object' || !LOCK_HANDLES.has(handle)) fail('需要已认证的 filter lock 句柄');
     const expected = LOCK_HANDLE_DATA.get(handle); const snapshot = readLockDirectory(expected.lockPath);
     if (snapshot.record.token !== expected.token || snapshot.record.ownerSha256 !== expected.ownerSha256) {
-        fail('filter operation lock changed while held');
+        fail('filter operation lock 在持有期间已变化');
     }
     removeVerifiedLockDirectory(snapshot, 'filter operation lock');
     LOCK_HANDLES.delete(handle); LOCK_HANDLE_DATA.delete(handle);
@@ -1001,7 +1001,7 @@ function prepareFilter({ filterRoot, discoveryHandle, evidenceHandle, spec, filt
         fs.mkdirSync(path.join(directory, 'llm-intents'), { mode: 0o700 });
         fs.mkdirSync(path.join(directory, 'llm-responses'), { mode: 0o700 });
         writeExclusive(path.join(directory, 'state.json'), `${JSON.stringify(state, null, 2)}\n`);
-    } catch (error) { throw fail(`could not create filter state: ${error.message}`); }
+    } catch (error) { throw fail(`无法创建 filter state：${error.message}`); }
     return applyKeywordPrefilter({ filterRoot: root, filterId, discoveryHandle, evidenceHandle,
         state: assertFilterState(state), now });
 }
@@ -1017,22 +1017,22 @@ function applyKeywordPrefilter({ filterRoot, filterId, discoveryHandle, evidence
         try {
             replays = discoveryApi.replayDiscoveryMembers(discoveryHandle);
             evidenceSnapshots = evidenceApi.evidenceHandleMemberSnapshots(evidenceHandle);
-        } catch (error) { fail(`bulk keyword evidence replay failed: ${error.message}`); }
+        } catch (error) { fail(`批量重放 keyword evidence 失败：${error.message}`); }
         const replayByPaperId = new Map();
         for (const replay of replays) {
             const paperId = paperIdentity.canonicalConferencePaperId(discovery.candidateManifest.conference, replay.identity);
-            if (replayByPaperId.has(paperId)) fail('bulk discovery replay contains duplicate paperId values');
+            if (replayByPaperId.has(paperId)) fail('批量 discovery 重放含重复的 paperId');
             replayByPaperId.set(paperId, replay);
         }
         const evidenceByPaperId = new Map();
         for (const snapshot of evidenceSnapshots) {
-            if (evidenceByPaperId.has(snapshot.member.paperId)) fail('bulk evidence replay contains duplicate paperId values');
+            if (evidenceByPaperId.has(snapshot.member.paperId)) fail('批量 evidence 重放含重复的 paperId');
             evidenceByPaperId.set(snapshot.member.paperId, snapshot);
         }
         const paperIds = Object.keys(current.decisions);
         if (replayByPaperId.size !== paperIds.length || evidenceByPaperId.size !== paperIds.length
             || paperIds.some(paperId => !replayByPaperId.has(paperId) || !evidenceByPaperId.has(paperId))) {
-            fail('bulk keyword evidence replay does not close over the filter candidate set');
+            fail('批量 keyword evidence 重放未覆盖 filter 的候选集合');
         }
         const stateFile = safeDirectJson(directory, 'state.json');
         const operationIds = new Set(current.attempts.map(attempt => attempt.operationId));
@@ -1046,7 +1046,7 @@ function applyKeywordPrefilter({ filterRoot, filterId, discoveryHandle, evidence
                 envelope.discovery.conference.id, envelope.evidence.status);
             if (evaluation.pass) continue;
             const operationId = crypto.randomUUID();
-            if (operationIds.has(operationId)) fail('keyword operationId collided with existing attempt history');
+            if (operationIds.has(operationId)) fail('keyword 的 operationId 与现有 attempt 历史冲突');
             operationIds.add(operationId);
             const evidence = { contract: 'conference-keyword-prefilter-evidence-v2', version: 2,
                 paperId, sourceSha256: current.decisions[paperId].sourceSha256,
@@ -1065,13 +1065,13 @@ function applyKeywordPrefilter({ filterRoot, filterId, discoveryHandle, evidence
                 || trusted.artifact.paperId !== paperId
                 || trusted.artifact.sourceSha256 !== current.decisions[paperId].sourceSha256
                 || trusted.artifact.actor.type !== 'keyword') {
-                fail('preserved keyword artifact drifted before batched apply');
+                fail('保留的 keyword artifact 在批量应用前已变化');
             }
             const previous = current.decisions[paperId];
             const patch = normalizePatch({ operationId, expectedStateSha256: artifact.expectedStateSha256,
                 paperId, result: artifact.result });
             const patchSha256 = stableHash(patch); const recordedAt = nowIso(now);
-            if (artifact.createdAt > recordedAt) fail('keyword artifact creation time is after apply time');
+            if (artifact.createdAt > recordedAt) fail('keyword artifact 的创建时间晚于应用时间');
             current.decisions[paperId] = { sourceSha256: previous.sourceSha256, ...patch.result };
             const attempt = { operationId, paperId, fromStatus: previous.status, toStatus: patch.result.status,
                 reason: patch.result.reason, responseSha256: patch.result.responseSha256,
@@ -1126,13 +1126,13 @@ function readFilter({ filterRoot, filterId } = {}) {
                 || receipt.transportReceiptSha256 !== artifact.transportReceiptSha256
                 || receipt.operationId !== artifact.operationId || receipt.filterId !== filterId
                 || receipt.response?.sha256 !== artifact.response?.sha256) {
-                fail(`attempt[${index}] transport receipt replay drifted`);
+                fail(`attempt[${index}] 的 transport receipt 重放已变化`);
             }
             if (FINAL_STATUSES.has(artifact.result.status)
                 && (receipt.outcome !== 'received' || receipt.statusCode < 200 || receipt.statusCode >= 300
                     || receipt.usage.inputTokens === null || receipt.usage.outputTokens < 1
                     || receipt.usage.totalTokens < 1)) {
-                fail(`attempt[${index}] final decision lacks complete terminal provider usage`);
+                fail(`attempt[${index}] 的 final decision 缺少完整的终态 provider 用量`);
             }
         }
     }
@@ -1141,10 +1141,10 @@ function readFilter({ filterRoot, filterId } = {}) {
 function writeDecisionArtifact({ filterRoot, filterId, decisionName, artifact } = {}) {
     const directory = filterDirectory(filterRoot, filterId);
     const normalized = normalizeDecisionArtifact(artifact);
-    if (normalized.filterId !== filterId) fail('decision artifact belongs to another filter');
+    if (normalized.filterId !== filterId) fail('decision artifact 属于另一个 filter');
     const filename = safeDirectJson(path.join(directory, 'decisions'), decisionName, { mustExist: false });
     try { writeExclusive(filename, `${JSON.stringify(normalized, null, 2)}\n`); }
-    catch (error) { fail(`could not preserve decision artifact exclusively: ${error.message}`); }
+    catch (error) { fail(`无法独占保留 decision artifact：${error.message}`); }
     return filename;
 }
 
@@ -1152,7 +1152,7 @@ function loadDecisionHandleInternal(filename, { allowLlm = false } = {}) {
     const loaded = readJson(filename, 'decision artifact');
     const artifact = normalizeDecisionArtifact(loaded.value);
     if (artifact.actor.type === 'llm' && !allowLlm) {
-        fail('LLM decision artifacts may only be loaded by the authenticated conference filter runner');
+        fail('LLM decision artifact 只能由已认证的会议筛选器运行器加载');
     }
     const handle = Object.freeze(Object.create(null));
     DECISION_HANDLES.add(handle);
@@ -1168,7 +1168,7 @@ function decisionHandleSnapshot(handle) {
 }
 
 function selectionReceiptFromCheckedState(checked) {
-    if (checked.completion.status !== 'complete') fail('selection receipt requires a complete filter');
+    if (checked.completion.status !== 'complete') fail('selection receipt 需要完整的 filter');
     const artifacts = new Map(checked.attempts.map(attempt => [attempt.paperId, attempt.decisionArtifactSha256]));
     const included = Object.entries(checked.decisions).filter(([, decision]) => decision.status === 'included')
         .map(([paperId, decision]) => ({ paperId, sourceSha256: decision.sourceSha256,
@@ -1189,7 +1189,7 @@ function normalizeSelectionReceipt(value, state) {
     exact(value, ['contract', 'version', 'filterId', 'inputSha256', 'stateSha256', 'filterPolicySha256',
         'selectedMemberSetSha256', 'completionSha256', 'included', 'selectionReceiptSha256'], 'selection receipt');
     const expected = selectionReceiptFor(state);
-    if (stableHash(value) !== stableHash(expected)) fail('selection receipt drifted or includes an excluded identity');
+    if (stableHash(value) !== stableHash(expected)) fail('selection receipt 已变化或含被排除的身份');
     return expected;
 }
 
@@ -1225,7 +1225,7 @@ function ensureSelectionReceiptFromCheckedState(directory, checked) {
     catch (error) {
         if (error.code !== 'EEXIST') throw error;
         const loaded = normalizeSelectionReceipt(readJson(receiptFile, 'selection receipt').value, checked);
-        if (stableHash(loaded) !== stableHash(receipt)) fail('selection receipt changed during locked runner completion');
+        if (stableHash(loaded) !== stableHash(receipt)) fail('selection receipt 在锁定的运行器完成期间已变化');
     }
     return receipt;
 }
@@ -1239,17 +1239,17 @@ function loadSelectionHandle(filterRoot, filterId, discoveryHandle) {
         || state.input.conferenceId !== catalog.conferenceId
         || state.input.catalogSha256 !== catalog.catalogSha256
         || state.input.candidateSetSha256 !== expectedCandidates) {
-        fail('selection state does not bind the authenticated discovery snapshot');
+        fail('selection state 与已认证的 discovery 快照不匹配');
     }
     const receipt = readSelectionReceipt({ filterRoot, filterId });
-    if (receipt.stateSha256 !== state.stateSha256) fail('selection state changed while loading its receipt');
+    if (receipt.stateSha256 !== state.stateSha256) fail('加载 receipt 时 selection state 已变化');
     const identities = new Map(discovery.candidateManifest.members.map(member => {
         const sourceIdentity = ledgerApi.identityKey(member.identity);
         return [paperIdentity.canonicalConferencePaperId(discovery.candidateManifest.conference, member.identity), sourceIdentity];
     }));
     const included = receipt.included.map(item => {
         const sourceIdentity = identities.get(item.paperId);
-        if (!sourceIdentity) fail('selection receipt identity is absent from discovery snapshot');
+        if (!sourceIdentity) fail('selection receipt 的身份不在 discovery 快照中');
         return { paperId: item.paperId, sourceIdentity, sourceSha256: item.sourceSha256,
             decisionArtifactSha256: item.decisionArtifactSha256 };
     });
@@ -1272,9 +1272,9 @@ function selectionHandleSnapshot(handle) {
 }
 
 function assertHeldLock(handle, directory) {
-    if (!handle || typeof handle !== 'object' || !LOCK_HANDLES.has(handle)) fail('authenticated filter lock handle required');
+    if (!handle || typeof handle !== 'object' || !LOCK_HANDLES.has(handle)) fail('需要已认证的 filter lock 句柄');
     const expected = LOCK_HANDLE_DATA.get(handle);
-    if (expected.lockPath !== path.join(directory, 'operation.lock')) fail('filter lock belongs to another filter');
+    if (expected.lockPath !== path.join(directory, 'operation.lock')) fail('filter lock 属于另一个 filter');
 }
 function applyDecisionLocked({ filterRoot, filterId, decisionHandle, now, lockHandle } = {}) {
     const directory = filterDirectory(filterRoot, filterId);
@@ -1283,15 +1283,15 @@ function applyDecisionLocked({ filterRoot, filterId, decisionHandle, now, lockHa
     const artifact = trusted.artifact;
     const decisionDirectory = path.join(directory, 'decisions');
     if (path.dirname(path.resolve(trusted.filename)) !== decisionDirectory
-        || !SAFE_JSON_NAME.test(path.basename(trusted.filename))) fail('decision handle was not loaded from this filter decision directory');
-    if (artifact.filterId !== filterId) fail('decision artifact belongs to another filter');
+        || !SAFE_JSON_NAME.test(path.basename(trusted.filename))) fail('decision 句柄并非从本 filter 的 decision 目录加载');
+    if (artifact.filterId !== filterId) fail('decision artifact 属于另一个 filter');
     const normalizedPatch = normalizePatch({ operationId: artifact.operationId,
         expectedStateSha256: artifact.expectedStateSha256, paperId: artifact.paperId, result: artifact.result });
     const patchSha256 = stableHash(normalizedPatch);
     const replayedArtifact = readJson(safeDirectJson(decisionDirectory, path.basename(trusted.filename)), 'decision artifact');
     if (replayedArtifact.sha256 !== trusted.fileSha256
         || stableHash(normalizeDecisionArtifact(replayedArtifact.value)) !== stableHash(artifact)) {
-        fail('decision artifact bytes drifted after handle load');
+        fail('decision artifact 字节在句柄加载后已变化');
     }
     const filename = safeDirectJson(directory, 'state.json');
     const current = assertFilterState(readJson(filename, 'filter state').value);
@@ -1305,22 +1305,22 @@ function applyDecisionLocked({ filterRoot, filterId, decisionHandle, now, lockHa
         ensureSelectionReceipt(directory, current);
         return current;
     }
-    if (normalizedPatch.expectedStateSha256 !== current.stateSha256) fail('apply compare-and-swap state SHA mismatch');
-    if (!Object.prototype.hasOwnProperty.call(current.decisions, normalizedPatch.paperId)) fail('patch references a non-candidate paper');
+    if (normalizedPatch.expectedStateSha256 !== current.stateSha256) fail('apply 的 compare-and-swap state SHA 不一致');
+    if (!Object.prototype.hasOwnProperty.call(current.decisions, normalizedPatch.paperId)) fail('patch 引用了非候选论文');
     const previous = current.decisions[normalizedPatch.paperId];
-    if (artifact.sourceSha256 !== previous.sourceSha256) fail('decision artifact source SHA does not bind candidate');
+    if (artifact.sourceSha256 !== previous.sourceSha256) fail('decision artifact 的 source SHA 与候选不匹配');
     if (artifact.actor.type === 'llm' && (artifact.model !== current.input.model
         || artifact.endpointProtocol !== current.input.endpointProtocol
         || artifact.endpointIdentitySha256 !== current.input.endpointIdentitySha256)) {
-        fail('decision artifact model/protocol/endpoint drifted from filter input');
+        fail('decision artifact 的 model、protocol 或 endpoint 与 filter 输入不一致');
     }
     if (FINAL_STATUSES.has(previous.status)) fail('a final decision cannot be changed');
-    if (!usageAtLeast(previous.usage, normalizedPatch.result.usage)) fail('usage cannot regress');
+    if (!usageAtLeast(previous.usage, normalizedPatch.result.usage)) fail('usage 不能倒退');
     const next = clone(current);
     next.decisions[normalizedPatch.paperId] = { sourceSha256: previous.sourceSha256, ...normalizedPatch.result };
     next.completion = completionFor(next.decisions);
     const recordedAt = nowIso(now);
-    if (artifact.createdAt > recordedAt) fail('decision artifact creation time is after apply time');
+    if (artifact.createdAt > recordedAt) fail('decision artifact 的创建时间晚于应用时间');
     const attempt = { operationId: normalizedPatch.operationId, paperId: normalizedPatch.paperId,
         fromStatus: previous.status, toStatus: normalizedPatch.result.status, reason: normalizedPatch.result.reason,
         responseSha256: normalizedPatch.result.responseSha256, usage: clone(normalizedPatch.result.usage), recordedAt,
@@ -1360,9 +1360,9 @@ function rejectDuplicateJsonKeys(source, label) {
 }
 
 function parseLlmDecisionText(source) {
-    if (typeof source !== 'string' || !source.trim()) fail('LLM response text must contain a decision');
+    if (typeof source !== 'string' || !source.trim()) fail('LLM 响应文本必须含 decision');
     source = source.trim();
-    if (Buffer.byteLength(source, 'utf8') > 64 * 1024) fail('LLM response text exceeds the decision limit');
+    if (Buffer.byteLength(source, 'utf8') > 64 * 1024) fail('LLM 响应文本超过 decision 上限');
     // 已经付过费的响应仍按旧的会议 JSON 词表解析；当前所有响应都走日更 digest 的解析器。
     try {
         rejectDuplicateJsonKeys(source, 'LLM response');
@@ -1370,7 +1370,7 @@ function parseLlmDecisionText(source) {
         if (isPlainObject(value) && FINAL_STATUSES.has(value.decision)) {
             exact(value, ['decision', 'reason'], 'LLM response');
             const reason = nonempty(value.reason, 'LLM response reason');
-            if (reason.length > 4000) fail('LLM response reason is too long');
+            if (reason.length > 4000) fail('LLM 响应的 reason 过长');
             return { status: value.decision, reason, parseSource: 'legacy_conference_json' };
         }
     } catch (error) {
@@ -1379,7 +1379,7 @@ function parseLlmDecisionText(source) {
     const parsed = require('../fetch-papers.js').parseFilterDecisionDetails(source);
     if (parsed.related === null || parsed.retryable) fail('LLM response is not strict JSON and has no structured daily-filter decision');
     const reason = nonempty(parsed.reason || `日更筛选解析：${parsed.parseSource}`, 'LLM response reason');
-    if (reason.length > 4000) fail('LLM response reason is too long');
+    if (reason.length > 4000) fail('LLM 响应的 reason 过长');
     return { status: parsed.related ? 'included' : 'excluded', reason, parseSource: parsed.parseSource };
 }
 
@@ -1440,7 +1440,7 @@ function evidenceFromSnapshot({ state, paperId, snapshot, officialRecord }) {
     if (snapshot.catalogSha256 !== binding.catalogSha256 || snapshot.reportSha256 !== binding.reportSha256
         || snapshot.member.paperId !== paperId || snapshot.member.receiptSha256 !== snapshot.receipt.receiptSha256
         || stableHash(snapshot.receipt.locator) !== stableHash(binding.locator)) {
-        fail('paper evidence does not bind the filter evidence catalog/locator');
+        fail('论文 evidence 与 filter evidence 的 catalog 或 locator 不匹配');
     }
     const metadataRecord = clone(officialRecord);
     if (snapshot.receipt.evidence.status === 'ready') metadataRecord.abstract = snapshot.receipt.evidence.text;
@@ -1456,13 +1456,13 @@ function evidenceFromSnapshot({ state, paperId, snapshot, officialRecord }) {
 
 function requestEnvelopeFromReplay({ state, paperId, discovery, replay, evidenceSnapshot }) {
     const sourceIdentity = ledgerApi.identityKey(replay.identity);
-    if (replay.sourceIdentity !== sourceIdentity) fail('discovery replay identity drifted');
+    if (replay.sourceIdentity !== sourceIdentity) fail('discovery 重放身份已变化');
     const decision = state.decisions[paperId];
-    if (!decision) fail('runner paperId is absent from filter state');
+    if (!decision) fail('运行器的 paperId 不在 filter state 中');
     const projected = evidenceSnapshot
         ? evidenceFromSnapshot({ state, paperId, snapshot: evidenceSnapshot, officialRecord: replay.metadataRecord })
         : null;
-    if (!projected) fail('authenticated evidence snapshot is required');
+    if (!projected) fail('需要已认证的 evidence 快照');
     const legacy = isLegacyState(state);
     const catalogField = tagCatalogField(state.input, legacy, '筛选输入');
     const body = { contract: legacy ? LEGACY_LLM_REQUEST_CONTRACT : LLM_REQUEST_CONTRACT,
@@ -1493,7 +1493,7 @@ function requestEnvelope({ state, paperId, discoveryHandle, evidenceHandle }) {
     const matches = discovery.candidateManifest.members.filter(member => (
         paperIdentity.canonicalConferencePaperId(discovery.candidateManifest.conference, member.identity) === paperId
     ));
-    if (matches.length !== 1) fail('runner paperId is absent or duplicated in authenticated discovery');
+    if (matches.length !== 1) fail('运行器的 paperId 在已认证的 discovery 中缺失或重复');
     const member = matches[0]; const sourceIdentity = ledgerApi.identityKey(member.identity);
     const replay = discoveryApi.replayDiscoveryMember(discoveryHandle, sourceIdentity);
     const evidenceSnapshot = evidenceApi.evidenceHandleSnapshot(evidenceHandle, paperId);
@@ -1546,7 +1546,7 @@ function normalizeRequestEnvelope(value) {
         'discovery', 'evidence', 'filter', 'metadataRecord', 'requestSha256'], 'LLM request envelope');
     const legacy = isLegacyRequest(value);
     const body = clone(value); delete body.requestSha256;
-    if (assertSha(value.requestSha256, 'LLM request requestSha256') !== stableHash(body)) fail('LLM request self-SHA drifted');
+    if (assertSha(value.requestSha256, 'LLM request requestSha256') !== stableHash(body)) fail('LLM 请求的自校验 SHA 已变化');
     const catalogField = tagCatalogField(value.filter, legacy, '请求中的筛选配置');
     nonempty(value.filterId, 'LLM request filterId', UUID_RE);
     assertSha(value.expectedStateSha256, 'LLM request expectedStateSha256');
@@ -1557,13 +1557,13 @@ function normalizeRequestEnvelope(value) {
     assertSha(value.discovery.catalogSha256, 'LLM request discovery catalogSha256');
     exact(value.discovery.conference, ['id', 'year'], 'LLM request conference');
     nonempty(value.discovery.conference.id, 'LLM request conference id');
-    if (!Number.isInteger(value.discovery.conference.year)) fail('LLM request conference year is malformed');
-    if (!discoveryApi.ADAPTERS.has(value.discovery.adapter)) fail('LLM request adapter is unsupported');
+    if (!Number.isInteger(value.discovery.conference.year)) fail('LLM 请求的会议年份格式不正确');
+    if (!discoveryApi.ADAPTERS.has(value.discovery.adapter)) fail('LLM 请求的适配器不受支持');
     const sourceIdentity = ledgerApi.identityKey(value.discovery.identity);
-    if (value.discovery.sourceIdentity !== sourceIdentity) fail('LLM request source identity drifted');
+    if (value.discovery.sourceIdentity !== sourceIdentity) fail('LLM 请求的来源身份已变化');
     assertSha(value.discovery.metadataSnapshotSha256, 'LLM request metadata snapshot SHA');
     if (!Number.isSafeInteger(value.discovery.metadataIndex) || value.discovery.metadataIndex < 0) {
-        fail('LLM request metadata index is malformed');
+        fail('LLM 请求的 metadata index 格式不正确');
     }
     assertSha(value.discovery.metadataRecordSha256, 'LLM request official metadata record SHA');
     exact(value.evidence, ['runId', 'catalogSha256', 'reportSha256', 'stateSha256', 'memberSetSha256',
@@ -1575,10 +1575,10 @@ function normalizeRequestEnvelope(value) {
         assertSha(value.evidence[field], `LLM request evidence.${field}`);
     }
     if (!EVIDENCE_STATUSES.has(value.evidence.status)) {
-        fail('LLM request evidence status is unsupported');
+        fail('LLM 请求的 evidence status 不受支持');
     }
     if (value.evidence.status === 'ready') assertSha(value.evidence.evidenceSha256, 'LLM request evidence SHA');
-    else if (value.evidence.evidenceSha256 !== null) fail('non-ready LLM request evidence cannot have evidence SHA');
+    else if (value.evidence.evidenceSha256 !== null) fail('未就绪的 LLM 请求 evidence 不能带 evidence SHA');
     normalizeLocatorBinding(value.evidence.locator, 'LLM request evidence locator');
     if (value.evidence.effectiveMetadataRecordSha256 !== stableHash(value.metadataRecord)) {
         fail('LLM request effective metadata record SHA drifted');
@@ -1592,15 +1592,15 @@ function normalizeRequestEnvelope(value) {
         assertSha(value.filter[field], `LLM request filter.${field}`);
     }
     nonempty(value.filter.model, 'LLM request model');
-    if (!PROTOCOLS.has(value.filter.endpointProtocol)) fail('LLM request endpoint protocol is unsupported');
+    if (!PROTOCOLS.has(value.filter.endpointProtocol)) fail('LLM 请求的 endpoint protocol 不受支持');
     nonempty(value.filter.evidenceCatalogContract, 'LLM request filter evidenceCatalogContract');
     normalizeLocatorBinding(value.filter.evidenceLocator, 'LLM request filter evidence locator');
     if (stableHash(value.filter.evidenceLocator) !== stableHash(value.evidence.locator)) {
-        fail('LLM request filter/evidence locator binding drifted');
+        fail('LLM 请求的 filter 或 evidence locator 绑定已变化');
     }
     if (value.filter.coreConferenceFallbackVersion !== CORE_CONFERENCE_FALLBACK_VERSION
         || value.filter.conferenceCategoryLabel !== (CORE_AUDIO_CONFERENCE_LABELS[value.discovery.conference.id] || null)) {
-        fail('LLM request conference category fallback mapping drifted');
+        fail('LLM 请求的会议类别回退映射已变化');
     }
     return clone(value);
 }
@@ -1620,49 +1620,49 @@ function parseLlmRequestBody(bytes, protocol) {
     if (protocol === 'openai-responses') {
         const allowed = new Set(['model', 'input', 'max_output_tokens', 'temperature', 'reasoning', 'stream']);
         if (!isPlainObject(body) || Object.keys(body).some(key => !allowed.has(key)) || !Array.isArray(body.input)
-            || body.input.length !== 1) fail('OpenAI Responses request must contain exactly one user message');
+            || body.input.length !== 1) fail('OpenAI Responses 请求必须恰好含一条 user 消息');
         const read = (message, role) => {
             exact(message, ['role', 'content'], `LLM ${role} message`);
-            if (message.role !== role || !Array.isArray(message.content) || message.content.length !== 1) fail(`LLM ${role} message shape drifted`);
+            if (message.role !== role || !Array.isArray(message.content) || message.content.length !== 1) fail(`LLM ${role} 消息结构已变化`);
             exact(message.content[0], ['type', 'text'], `LLM ${role} message content`);
-            if (message.content[0].type !== 'input_text' || typeof message.content[0].text !== 'string') fail(`LLM ${role} message content drifted`);
+            if (message.content[0].type !== 'input_text' || typeof message.content[0].text !== 'string') fail(`LLM ${role} 消息内容已变化`);
             return message.content[0].text;
         };
         user = read(body.input[0], 'user');
         if (!Number.isSafeInteger(body.max_output_tokens) || body.max_output_tokens < 1
-            || !Number.isFinite(body.temperature)) fail('OpenAI Responses request limits are malformed');
+            || !Number.isFinite(body.temperature)) fail('OpenAI Responses 请求的 limits 格式不正确');
         if (body.reasoning !== undefined
             && (!isPlainObject(body.reasoning) || !['low', 'medium', 'high'].includes(body.reasoning.effort)
-                || Object.keys(body.reasoning).length !== 1)) fail('OpenAI Responses reasoning option is malformed');
-        if (body.stream !== undefined && body.stream !== true) fail('OpenAI Responses stream option is malformed');
+                || Object.keys(body.reasoning).length !== 1)) fail('OpenAI Responses 的 reasoning 选项格式不正确');
+        if (body.stream !== undefined && body.stream !== true) fail('OpenAI Responses 的 stream 选项格式不正确');
     } else if (protocol === 'anthropic-messages') {
         const allowed = new Set(['model', 'max_tokens', 'messages', 'temperature']);
         if (!isPlainObject(body) || Object.keys(body).some(key => !allowed.has(key)) || !Array.isArray(body.messages)
             || body.messages.length !== 1 || body.messages[0]?.role !== 'user'
             || typeof body.messages[0]?.content !== 'string') {
-            fail('Anthropic request must contain exactly one user message and no system prompt');
+            fail('Anthropic 请求必须恰好含一条 user 消息，且不得有 system 提示');
         }
         user = body.messages[0].content;
         if (!Number.isSafeInteger(body.max_tokens) || body.max_tokens < 1
-            || !Number.isFinite(body.temperature)) fail('Anthropic request limits are malformed');
+            || !Number.isFinite(body.temperature)) fail('Anthropic 请求的 limits 格式不正确');
     } else {
         exact(body, ['model', 'messages', 'max_tokens', 'temperature'], 'OpenAI chat request');
         if (!Array.isArray(body.messages) || body.messages.length !== 1
             || body.messages[0]?.role !== 'user' || typeof body.messages[0]?.content !== 'string') {
-            fail('OpenAI chat request must contain exactly one user message');
+            fail('OpenAI chat 请求必须恰好含一条 user 消息');
         }
         user = body.messages[0].content;
         if (!Number.isSafeInteger(body.max_tokens) || body.max_tokens < 1
-            || !Number.isFinite(body.temperature)) fail('OpenAI chat request limits are malformed');
+            || !Number.isFinite(body.temperature)) fail('OpenAI chat 请求的 limits 格式不正确');
     }
-    if (body.model === undefined || typeof body.model !== 'string' || !user) fail('LLM request model or user prompt drifted');
+    if (body.model === undefined || typeof body.model !== 'string' || !user) fail('LLM 请求的 model 或 user prompt 已变化');
     return { body, prompt: user };
 }
 
 function assertRequestBinding(request, { state, paperId, discoveryHandle, evidenceHandle, envelope,
     expectedEnvelope = null }) {
     const parsed = parseLlmRequestBody(Buffer.from(request.data, 'base64'), state.input.endpointProtocol);
-    if (parsed.body.model !== state.input.model) fail('preserved LLM request model drifted');
+    if (parsed.body.model !== state.input.model) fail('保留的 LLM 请求 model 已变化');
     const expected = expectedEnvelope === null
         ? requestEnvelope({ state, paperId, discoveryHandle, evidenceHandle })
         : normalizeRequestEnvelope(expectedEnvelope);
@@ -1671,7 +1671,7 @@ function assertRequestBinding(request, { state, paperId, discoveryHandle, eviden
     assertRequestFormatForState(state, expected);
     if (stableHash(preservedEnvelope) !== stableHash(expected)
         || !dailyFilterPromptMatches(parsed.prompt, preservedEnvelope)) {
-        fail('preserved LLM request does not bind current source metadata, filter input, and rendered daily prompt');
+        fail('保留的 LLM 请求与当前来源元数据、filter 输入和渲染后的日更提示不匹配');
     }
     return parsed;
 }
@@ -1686,27 +1686,27 @@ function normalizeLlmIntent(value) {
     exact(value, ['contract', 'version', 'filterId', 'operationId', 'expectedStateSha256', 'paperId',
         'sourceSha256', 'actorId', 'endpointIdentitySha256', 'inputSha256', 'requestEnvelopeSha256',
         'envelope', 'usageContextSha256', 'attemptNumber', 'request', 'createdAt', 'intentSha256'], 'LLM intent');
-    if (value.contract !== LLM_INTENT_CONTRACT || value.version !== 2) fail('LLM intent contract/version mismatch');
-    if (assertSha(value.intentSha256, 'LLM intent self-SHA') !== intentDigest(value)) fail('LLM intent self-SHA drifted');
+    if (value.contract !== LLM_INTENT_CONTRACT || value.version !== 2) fail('LLM intent 的契约或版本不一致');
+    if (assertSha(value.intentSha256, 'LLM intent self-SHA') !== intentDigest(value)) fail('LLM intent 的自校验 SHA 已变化');
     nonempty(value.filterId, 'LLM intent filterId', UUID_RE); nonempty(value.operationId, 'LLM intent operationId', UUID_RE);
     assertSha(value.expectedStateSha256, 'LLM intent expected state SHA'); nonempty(value.paperId, 'LLM intent paperId', PAPER_ID_RE);
     assertSha(value.sourceSha256, 'LLM intent source SHA'); nonempty(value.actorId, 'LLM intent actor', OWNER_RE);
     for (const field of ['endpointIdentitySha256', 'inputSha256', 'requestEnvelopeSha256', 'usageContextSha256']) {
         assertSha(value[field], `LLM intent ${field}`);
     }
-    if (!Number.isSafeInteger(value.attemptNumber) || value.attemptNumber < 1) fail('LLM intent attemptNumber is malformed');
+    if (!Number.isSafeInteger(value.attemptNumber) || value.attemptNumber < 1) fail('LLM intent 的 attemptNumber 格式不正确');
     const envelope = envelopeFromRecord(value.envelope);
     if (envelope.requestSha256 !== value.requestEnvelopeSha256 || envelope.filterId !== value.filterId
         || envelope.expectedStateSha256 !== value.expectedStateSha256 || envelope.paperId !== value.paperId
         || envelope.sourceSha256 !== value.sourceSha256 || envelope.filter.inputSha256 !== value.inputSha256
         || envelope.filter.endpointIdentitySha256 !== value.endpointIdentitySha256) {
-        fail('LLM intent envelope does not bind the intent source/filter identity');
+        fail('LLM intent envelope 与 intent 的来源或 filter 身份不匹配');
     }
     const request = normalizeByteRecord(value.request, 'LLM intent request');
     const parsedRequest = parseLlmRequestBody(Buffer.from(request.data, 'base64'), envelope.filter.endpointProtocol);
     if (parsedRequest.body.model !== envelope.filter.model
         || !dailyFilterPromptMatches(parsedRequest.prompt, envelope)) {
-        fail('LLM intent request is not the single-user daily filter prompt bound by its envelope');
+        fail('LLM intent 请求不是其 envelope 绑定的单用户日更筛选提示');
     }
     timestamp(value.createdAt, 'LLM intent createdAt');
     return clone(value);
@@ -1717,40 +1717,40 @@ function normalizeTransportReceipt(value) {
     exact(value, ['contract', 'version', 'filterId', 'operationId', 'intentSha256', 'endpointIdentitySha256',
         'usageContextSha256', 'usageLedgerBindings', 'outcome', 'statusCode', 'response', 'usage', 'errorCode', 'createdAt',
         'transportReceiptSha256'], 'LLM transport receipt');
-    if (value.contract !== LLM_TRANSPORT_RECEIPT_CONTRACT || value.version !== 1) fail('LLM transport receipt contract/version mismatch');
+    if (value.contract !== LLM_TRANSPORT_RECEIPT_CONTRACT || value.version !== 1) fail('LLM transport receipt 的契约或版本不一致');
     nonempty(value.filterId, 'LLM transport filterId', UUID_RE); nonempty(value.operationId, 'LLM transport operationId', UUID_RE);
     for (const field of ['intentSha256', 'endpointIdentitySha256', 'usageContextSha256']) assertSha(value[field], `LLM transport ${field}`);
-    if (!Array.isArray(value.usageLedgerBindings)) fail('LLM transport usage ledger bindings must be an array');
+    if (!Array.isArray(value.usageLedgerBindings)) fail('LLM transport 的 usage ledger bindings 必须是数组');
     const usageLedgerBindings = value.usageLedgerBindings.map((binding, index) => {
         exact(binding, ['eventId', 'eventSha256', 'contextSha256', 'persistence'], `LLM usage ledger binding[${index}]`);
         nonempty(binding.eventId, `LLM usage ledger binding[${index}].eventId`, UUID_RE);
         const normalized = { eventId: binding.eventId, eventSha256: assertSha(binding.eventSha256,
             `LLM usage ledger binding[${index}].eventSha256`), contextSha256: assertSha(binding.contextSha256,
             `LLM usage ledger binding[${index}].contextSha256`), persistence: binding.persistence };
-        if (!['written', 'unavailable'].includes(normalized.persistence)) fail('LLM usage ledger persistence is malformed');
-        if (normalized.contextSha256 !== value.usageContextSha256) fail('LLM usage ledger event context differs from intent');
+        if (!['written', 'unavailable'].includes(normalized.persistence)) fail('LLM usage ledger 的持久化格式不正确');
+        if (normalized.contextSha256 !== value.usageContextSha256) fail('LLM usage ledger 的事件上下文与 intent 不一致');
         return normalized;
     });
     if (new Set(usageLedgerBindings.map(binding => binding.eventId)).size !== usageLedgerBindings.length) {
-        fail('LLM transport usage ledger bindings contain duplicate events');
+        fail('LLM transport 的 usage ledger bindings 含重复事件');
     }
-    if (!['received', 'unavailable'].includes(value.outcome)) fail('LLM transport outcome is unsupported');
+    if (!['received', 'unavailable'].includes(value.outcome)) fail('LLM transport 的 outcome 不受支持');
     const response = normalizeByteRecord(value.response, 'LLM transport response', { nullable: true });
     const usage = normalizeUsage(value.usage); timestamp(value.createdAt, 'LLM transport createdAt');
     if (usage.requests !== Math.max(1, usageLedgerBindings.length)) {
-        fail('LLM transport usage count does not bind physical request events');
+        fail('LLM transport 的 usage 计数与物理请求事件不匹配');
     }
     if (value.outcome === 'received') {
         if (!Number.isInteger(value.statusCode) || value.statusCode < 100 || value.statusCode > 599 || !response
-            || value.errorCode !== null) fail('received LLM transport evidence is incomplete');
+            || value.errorCode !== null) fail('收到的 LLM transport 证据不完整');
     } else {
         if (value.statusCode !== null || response !== null
             || typeof value.errorCode !== 'string' || !/^[A-Z0-9_:-]{1,120}$/.test(value.errorCode)) {
-            fail('unavailable LLM transport evidence is malformed');
+            fail('不可用的 LLM transport 证据格式不正确');
         }
     }
     if (assertSha(value.transportReceiptSha256, 'LLM transport receipt self-SHA') !== transportReceiptDigest(value)) {
-        fail('LLM transport receipt self-SHA drifted');
+        fail('LLM transport receipt 的自校验 SHA 已变化');
     }
     return { ...clone(value), usageLedgerBindings, response, usage };
 }
@@ -1765,7 +1765,7 @@ function strictTransportBody(raw) {
             if (data.trimStart().startsWith('{')) rejectDuplicateJsonKeys(data, 'LLM SSE event');
         }
         const body = utilsApi.parseSseResponse(source);
-        if (!body) fail('LLM transport response is neither strict JSON nor complete SSE');
+        if (!body) fail('LLM transport 响应既不是严格 JSON，也不是完整的 SSE');
         return body;
     }
 }
@@ -1793,14 +1793,14 @@ function buildTransportReceipt({ intent, response = null, error = null, apiType,
             unitId: entry.event.unitId }), persistence: entry.persisted ? 'written' : 'unavailable' }));
     if (response && Number.isInteger(response.statusCode) && typeof response.raw === 'string' && response.raw.length) {
         const body = strictTransportBody(response.raw);
-        if (stableHash(body) !== stableHash(response.body)) fail('LLM transport raw bytes do not replay parsed body');
+        if (stableHash(body) !== stableHash(response.body)) fail('LLM transport 的原始字节无法重放出解析后的 body');
         const provider = require('./llm-usage.js').normalizeLlmUsage(apiType, body);
         usage = normalizeUsage({ requests: Math.max(1, usageEvents.length), inputTokens: provider.inputTokens,
             outputTokens: provider.outputTokens, totalTokens: provider.totalTokens });
         if (usageEvents.length) {
             const last = usageEvents.at(-1)?.event?.usage || {};
             if (last.inputTokens !== provider.inputTokens || last.outputTokens !== provider.outputTokens
-                || last.totalTokens !== provider.totalTokens) fail('terminal usage ledger event differs from raw response usage');
+                || last.totalTokens !== provider.totalTokens) fail('终态 usage ledger 事件与原始响应的 usage 不一致');
         }
         outcome = 'received'; statusCode = response.statusCode; responseRecord = byteRecord(Buffer.from(response.raw, 'utf8'), 'LLM transport response');
     } else {
@@ -1827,11 +1827,11 @@ function decisionFromTransport({ state, intent, receipt, discoveryHandle, eviden
     if (checkedReceipt.filterId !== checkedIntent.filterId || checkedReceipt.operationId !== checkedIntent.operationId
         || checkedReceipt.intentSha256 !== checkedIntent.intentSha256
         || checkedReceipt.endpointIdentitySha256 !== checkedIntent.endpointIdentitySha256
-        || checkedReceipt.usageContextSha256 !== checkedIntent.usageContextSha256) fail('LLM transport receipt does not bind its intent');
+        || checkedReceipt.usageContextSha256 !== checkedIntent.usageContextSha256) fail('LLM transport receipt 与其 intent 不匹配');
     if (state.stateSha256 !== checkedIntent.expectedStateSha256 || state.filterId !== checkedIntent.filterId
         || state.decisions[checkedIntent.paperId]?.sourceSha256 !== checkedIntent.sourceSha256
         || state.input.inputSha256 !== checkedIntent.inputSha256
-        || state.input.endpointIdentitySha256 !== checkedIntent.endpointIdentitySha256) fail('LLM intent no longer binds filter state');
+        || state.input.endpointIdentitySha256 !== checkedIntent.endpointIdentitySha256) fail('LLM intent 已不再与 filter state 匹配');
     const parsedRequest = assertRequestBinding(checkedIntent.request, { state, paperId: checkedIntent.paperId,
         discoveryHandle, evidenceHandle, envelope: envelopeFromRecord(checkedIntent.envelope), expectedEnvelope });
     let status = 'failed'; let reason; const responseBody = responseBodyFromReceipt(checkedReceipt);
@@ -1884,12 +1884,12 @@ function incompleteIntent(directory, state) {
     for (const name of fs.readdirSync(intents).sort()) {
         if (!SAFE_JSON_NAME.test(name)) fail('LLM intent directory contains an unsafe entry');
         const intent = normalizeLlmIntent(readJson(safeDirectJson(intents, name), 'LLM intent').value);
-        if (name !== `llm-${intent.operationId}.json`) fail('LLM intent filename does not bind operationId');
-        if (intent.filterId !== state.filterId) fail('LLM intent belongs to another filter');
+        if (name !== `llm-${intent.operationId}.json`) fail('LLM intent 文件名与 operationId 不匹配');
+        if (intent.filterId !== state.filterId) fail('LLM intent 属于另一个 filter');
         assertRequestFormatForState(state, envelopeFromRecord(intent.envelope));
         if (!state.attempts.some(attempt => attempt.operationId === intent.operationId)) incomplete.push(intent);
     }
-    if (incomplete.length > 1) fail('multiple incomplete LLM intents require operator review');
+    if (incomplete.length > 1) fail('存在多个未完成的 LLM intent，需要人工复核');
     return incomplete[0] || null;
 }
 
@@ -1905,7 +1905,7 @@ function createIntent({ directory, state, paperId, owner, discoveryHandle, evide
     const attemptMaxTokens = utilsApi.getFilterAttemptMaxTokens(llm.apiType, llm.maxTokens, attemptNumber);
     const requestBody = utilsApi.buildRequestBody(llm.apiType, llm.model, messages, attemptMaxTokens, llm.temperature);
     const requestBytes = Buffer.from(JSON.stringify(requestBody), 'utf8');
-    if (!requestBytes.length || requestBytes.length > MAX_LLM_REQUEST_BYTES) fail('LLM request exceeds the durable evidence limit before transport');
+    if (!requestBytes.length || requestBytes.length > MAX_LLM_REQUEST_BYTES) fail('LLM 请求在传输前已超过持久证据上限');
     const operationId = crypto.randomUUID(); const usageContext = {
         stage: 'conference-filter', unitId: stableHash({ filterId: state.filterId, paperId,
             sourceSha256: state.decisions[paperId].sourceSha256, operationId }) };
@@ -1929,18 +1929,18 @@ function normalizeProductionLlmConfig(value) {
     const endpoint = nonempty(value.endpoint, 'production LLM endpoint');
     const model = nonempty(value.model, 'production LLM model'); const apiType = utilsApi.detectApiType(endpoint, model);
     const apiUrl = new URL(utilsApi.buildApiUrl(apiType, endpoint)).href;
-    if (value.apiType !== apiType || new URL(value.apiUrl).href !== apiUrl) fail('production LLM route identity drifted');
+    if (value.apiType !== apiType || new URL(value.apiUrl).href !== apiUrl) fail('生产 LLM 路由身份已变化');
     if (!Array.isArray(value.apiKeys) || !value.apiKeys.length || value.apiKeys.some(key => typeof key !== 'string' || !key.trim())) {
-        fail('production LLM API key pool is malformed');
+        fail('生产 LLM 的 API key 池格式不正确');
     }
-    if (!isPlainObject(value.headers)) fail('production LLM headers are malformed');
+    if (!isPlainObject(value.headers)) fail('生产 LLM 的 headers 格式不正确');
     const expectedHeaders = utilsApi.buildHeaders(apiType, value.apiKeys[0], '');
-    if (stableHash(value.headers) !== stableHash(expectedHeaders)) fail('production LLM headers differ from the canonical credential boundary');
-    if (typeof value.accountPoolStateFile !== 'string' || !path.isAbsolute(value.accountPoolStateFile)) fail('production account pool path is malformed');
+    if (stableHash(value.headers) !== stableHash(expectedHeaders)) fail('生产 LLM 的 headers 与规范凭证边界不一致');
+    if (typeof value.accountPoolStateFile !== 'string' || !path.isAbsolute(value.accountPoolStateFile)) fail('生产 account pool 的路径格式不正确');
     for (const field of ['timeoutMs', 'maxTokens', 'maxResponseBytes']) {
-        if (!Number.isSafeInteger(value[field]) || value[field] < 1) fail(`production LLM ${field} is malformed`);
+        if (!Number.isSafeInteger(value[field]) || value[field] < 1) fail(`生产 LLM 的 ${field} 格式不正确`);
     }
-    if (!Number.isFinite(value.temperature)) fail('production LLM temperature is malformed');
+    if (!Number.isFinite(value.temperature)) fail('生产 LLM 的 temperature 格式不正确');
     return { ...value, endpoint, model, apiType, apiUrl };
 }
 
@@ -1964,22 +1964,22 @@ function productionReplayContext(state, discoveryHandle, evidenceHandle) {
     try {
         replays = discoveryApi.replayDiscoveryMembers(discoveryHandle);
         evidenceSnapshots = evidenceApi.evidenceHandleMemberSnapshots(evidenceHandle);
-    } catch (error) { fail(`bulk production evidence replay failed: ${error.message}`); }
+    } catch (error) { fail(`批量重放生产 evidence 失败：${error.message}`); }
     const replayByPaperId = new Map();
     for (const replay of replays) {
         const paperId = paperIdentity.canonicalConferencePaperId(discovery.candidateManifest.conference, replay.identity);
-        if (replayByPaperId.has(paperId)) fail('bulk production discovery replay contains duplicate paperId values');
+        if (replayByPaperId.has(paperId)) fail('批量生产 discovery 重放含重复的 paperId');
         replayByPaperId.set(paperId, replay);
     }
     const evidenceByPaperId = new Map();
     for (const snapshot of evidenceSnapshots) {
-        if (evidenceByPaperId.has(snapshot.member.paperId)) fail('bulk production evidence replay contains duplicate paperId values');
+        if (evidenceByPaperId.has(snapshot.member.paperId)) fail('批量生产 evidence 重放含重复的 paperId');
         evidenceByPaperId.set(snapshot.member.paperId, snapshot);
     }
     const paperIds = Object.keys(state.decisions);
     if (replayByPaperId.size !== paperIds.length || evidenceByPaperId.size !== paperIds.length
         || paperIds.some(paperId => !replayByPaperId.has(paperId) || !evidenceByPaperId.has(paperId))) {
-        fail('bulk production evidence replay does not close over the filter candidate set');
+        fail('批量生产 evidence 重放未覆盖 filter 的候选集合');
     }
     return { discovery, replayByPaperId, evidenceByPaperId };
 }
@@ -1994,7 +1994,7 @@ function selectNextCandidateFromCheckedState(checked, { retryFailed = false, max
     retryBackoffMs = 60000, nowMs = Date.now() } = {}) {
     if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 20
         || !Number.isSafeInteger(retryBackoffMs) || retryBackoffMs < 0
-        || !Number.isFinite(nowMs)) fail('runner retry policy is malformed');
+        || !Number.isFinite(nowMs)) fail('运行器的重试策略格式不正确');
     for (const paperId of Object.keys(checked.decisions)) {
         if (checked.decisions[paperId].status === 'pending') return paperId;
     }
@@ -2021,36 +2021,36 @@ function applyProductionDecisionToCheckedState({ directory, state, digestChain, 
     const decisionDirectory = path.join(directory, 'decisions');
     if (path.dirname(path.resolve(trusted.filename)) !== decisionDirectory
         || !SAFE_JSON_NAME.test(path.basename(trusted.filename))) {
-        fail('decision handle was not loaded from this filter decision directory');
+        fail('decision 句柄并非从本 filter 的 decision 目录加载');
     }
     if (stableHash(trusted.artifact) !== stableHash(artifact)
         || trusted.artifact.artifactSha256 !== artifact.artifactSha256) {
-        fail('preserved production decision drifted before locked apply');
+        fail('保留的生产 decision 在锁定应用前已变化');
     }
     const replayedArtifact = readJson(safeDirectJson(decisionDirectory,
         path.basename(trusted.filename)), 'decision artifact');
     if (replayedArtifact.sha256 !== trusted.fileSha256
         || stableHash(normalizeDecisionArtifact(replayedArtifact.value)) !== stableHash(artifact)) {
-        fail('decision artifact bytes drifted after handle load');
+        fail('decision artifact 字节在句柄加载后已变化');
     }
     const patch = normalizePatch({ operationId: artifact.operationId,
         expectedStateSha256: artifact.expectedStateSha256, paperId: artifact.paperId, result: artifact.result });
-    if (operationIds.has(patch.operationId)) fail('production operationId was already applied');
-    if (patch.expectedStateSha256 !== state.stateSha256) fail('apply compare-and-swap state SHA mismatch');
-    if (!Object.hasOwn(state.decisions, patch.paperId)) fail('patch references a non-candidate paper');
+    if (operationIds.has(patch.operationId)) fail('生产 operationId 已应用过');
+    if (patch.expectedStateSha256 !== state.stateSha256) fail('apply 的 compare-and-swap state SHA 不一致');
+    if (!Object.hasOwn(state.decisions, patch.paperId)) fail('patch 引用了非候选论文');
     const previous = state.decisions[patch.paperId];
     if (artifact.filterId !== state.filterId || artifact.sourceSha256 !== previous.sourceSha256) {
-        fail('decision artifact source SHA does not bind candidate');
+        fail('decision artifact 的 source SHA 与候选不匹配');
     }
     if (artifact.actor.type !== 'llm' || artifact.model !== state.input.model
         || artifact.endpointProtocol !== state.input.endpointProtocol
         || artifact.endpointIdentitySha256 !== state.input.endpointIdentitySha256) {
-        fail('decision artifact model/protocol/endpoint drifted from filter input');
+        fail('decision artifact 的 model、protocol 或 endpoint 与 filter 输入不一致');
     }
     if (FINAL_STATUSES.has(previous.status)) fail('a final decision cannot be changed');
-    if (!usageAtLeast(previous.usage, patch.result.usage)) fail('usage cannot regress');
+    if (!usageAtLeast(previous.usage, patch.result.usage)) fail('usage 不能倒退');
     const recordedAt = nowIso(now);
-    if (artifact.createdAt > recordedAt) fail('decision artifact creation time is after apply time');
+    if (artifact.createdAt > recordedAt) fail('decision artifact 的创建时间晚于应用时间');
     state.decisions[patch.paperId] = { sourceSha256: previous.sourceSha256, ...patch.result };
     const attempt = { operationId: patch.operationId, paperId: patch.paperId,
         fromStatus: previous.status, toStatus: patch.result.status, reason: patch.result.reason,
@@ -2069,7 +2069,7 @@ function applyProductionDecisionToCheckedState({ directory, state, digestChain, 
 
 async function advanceProductionLlmDecisions({ filterRoot, filterId, discoveryHandle, evidenceHandle,
     spec, owner, llm, limit = 1, retryFailed = false, maxAttempts = 3, retryBackoffMs = 60000 } = {}) {
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10000) fail('runner limit is malformed');
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10000) fail('运行器的 limit 格式不正确');
     const catalog = catalogFromDiscoveryHandle(discoveryHandle);
     const normalizedSpec = normalizeSpec(spec); const directory = filterDirectory(filterRoot, filterId);
     const evidenceBinding = evidenceBindingFromHandle(evidenceHandle, catalog);
@@ -2100,7 +2100,7 @@ async function advanceProductionLlmDecisions({ filterRoot, filterId, discoveryHa
                     discoveryHandle, evidenceHandle, expectedEnvelope, llm: config }));
             } else {
                 if (intent.expectedStateSha256 !== state.stateSha256) {
-                    fail('incomplete LLM intent state changed before recovery');
+                    fail('未完成的 LLM intent 状态在恢复前已变化');
                 }
                 assertRequestBinding(intent.request, { state, paperId, discoveryHandle, evidenceHandle,
                     envelope: envelopeFromRecord(intent.envelope), expectedEnvelope });
@@ -2110,11 +2110,11 @@ async function advanceProductionLlmDecisions({ filterRoot, filterId, discoveryHa
             if (artifact) {
                 const existingReceipt = readOptional(responseFilename(directory, intent.operationId),
                     'LLM transport receipt', normalizeTransportReceipt);
-                if (!existingReceipt) fail('preserved LLM decision is missing its transport receipt');
+                if (!existingReceipt) fail('保留的 LLM decision 缺少其 transport receipt');
                 const expectedDecision = decisionFromTransport({ state, intent, receipt: existingReceipt,
                     discoveryHandle, evidenceHandle, expectedEnvelope, now: artifact.createdAt });
                 if (stableHash(expectedDecision) !== stableHash(artifact)) {
-                    fail('preserved LLM decision does not replay from its intent and transport receipt');
+                    fail('保留的 LLM decision 无法由其 intent 和 transport receipt 重放');
                 }
             } else {
                 let receipt = readOptional(responseFilename(directory, intent.operationId),
@@ -2174,13 +2174,13 @@ async function advanceProductionLlmDecision({ filterRoot, filterId, discoveryHan
             || endpointSha !== state.input.endpointIdentitySha256) fail('runner model/protocol/endpoint differs from filter state');
         let intent = incompleteIntent(directory, state); let requestBody; let usageContext; let recovered = Boolean(intent);
         if (!intent) {
-            if (!Object.hasOwn(state.decisions, paperId)) fail('runner paperId is not a filter candidate');
+            if (!Object.hasOwn(state.decisions, paperId)) fail('运行器的 paperId 不是 filter 候选');
             if (FINAL_STATUSES.has(state.decisions[paperId].status)) return { state, paperId, recovered: false };
             ({ intent, requestBody, usageContext } = createIntent({ directory, state, paperId, owner,
                 discoveryHandle, evidenceHandle, llm: config }));
         } else {
             paperId = intent.paperId;
-            if (intent.expectedStateSha256 !== state.stateSha256) fail('incomplete LLM intent state changed before recovery');
+            if (intent.expectedStateSha256 !== state.stateSha256) fail('未完成的 LLM intent 状态在恢复前已变化');
             assertRequestBinding(intent.request, { state, paperId, discoveryHandle, evidenceHandle,
                 envelope: envelopeFromRecord(intent.envelope) });
         }
@@ -2188,11 +2188,11 @@ async function advanceProductionLlmDecision({ filterRoot, filterId, discoveryHan
         if (existingDecision) {
             const existingReceipt = readOptional(responseFilename(directory, intent.operationId),
                 'LLM transport receipt', normalizeTransportReceipt);
-            if (!existingReceipt) fail('preserved LLM decision is missing its transport receipt');
+            if (!existingReceipt) fail('保留的 LLM decision 缺少其 transport receipt');
             const expectedDecision = decisionFromTransport({ state, intent, receipt: existingReceipt,
                 discoveryHandle, evidenceHandle, now: existingDecision.createdAt });
             if (stableHash(expectedDecision) !== stableHash(existingDecision)) {
-                fail('preserved LLM decision does not replay from its intent and transport receipt');
+                fail('保留的 LLM decision 无法由其 intent 和 transport receipt 重放');
             }
             const handle = loadDecisionHandleInternal(decisionFilename(directory, intent.operationId), { allowLlm: true });
             state = applyDecisionLocked({ filterRoot, filterId, decisionHandle: handle, lockHandle: lock });

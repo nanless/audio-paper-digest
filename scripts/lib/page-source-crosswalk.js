@@ -155,7 +155,7 @@ function pythonJson(value, indent = 0) {
     function render(item, depth, forceFloat = false) {
         if (item === null || typeof item === 'boolean') return JSON.stringify(item);
         if (typeof item === 'number') {
-            if (!Number.isFinite(item)) fail('JSON evidence contains a non-finite number');
+            if (!Number.isFinite(item)) fail('JSON 证据含非有限数值');
             if (forceFloat && Number.isInteger(item)) return `${item}.0`;
             return pythonNumberText(item);
         }
@@ -167,7 +167,7 @@ function pythonJson(value, indent = 0) {
             const closing = indent ? ' '.repeat(depth * indent) : '';
             return `[${newline}${item.map(value => `${padding}${render(value, depth + 1)}`).join(separator)}${newline}${closing}]`;
         }
-        if (!plain(item)) fail('JSON evidence contains a non-plain object');
+        if (!plain(item)) fail('JSON 证据含非普通对象');
         const keys = Object.keys(item).sort();
         if (!keys.length) return '{}';
         const padding = indent ? ' '.repeat((depth + 1) * indent) : '';
@@ -187,19 +187,19 @@ function prettyBytes(value) {
     return Buffer.from(`${pythonJson(canonical(value), 2)}\n`, 'utf8');
 }
 function exact(value, fields, label) {
-    if (!plain(value)) fail(`${label} must be a plain object`);
+    if (!plain(value)) fail(`${label} 必须是普通对象`);
     const actual = Object.keys(value).sort(); const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
         fail(`${label} has unknown or missing fields`);
     }
 }
 function assertSha(value, label) {
-    if (typeof value !== 'string' || !SHA_RE.test(value)) fail(`${label} must be a lowercase SHA-256`);
+    if (typeof value !== 'string' || !SHA_RE.test(value)) fail(`${label} 必须是小写 SHA-256`);
     return value;
 }
 function text(value, label, maximum = 4096) {
     if (typeof value !== 'string' || !value || value !== value.trim() || value.length > maximum
-        || /[\u0000-\u001f\u007f]/u.test(value)) fail(`${label} must be bounded trimmed text without controls`);
+        || /[\u0000-\u001f\u007f]/u.test(value)) fail(`${label} 必须是无控制字符的有界去空格文本`);
     return value;
 }
 function preservedPublicationString(field, value) {
@@ -213,12 +213,12 @@ function timestamp(value, label) {
     text(value, label);
     const parsed = new Date(value);
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
-        || Number.isNaN(parsed.getTime()) || parsed.toISOString() !== value) fail(`${label} must be canonical UTC time`);
+        || Number.isNaN(parsed.getTime()) || parsed.toISOString() !== value) fail(`${label} 必须是规范的 UTC 时间`);
     return value;
 }
 function nowIso(now) {
     const parsed = now === undefined ? new Date() : now instanceof Date ? now : new Date(now);
-    if (Number.isNaN(parsed.getTime())) fail('now is invalid');
+    if (Number.isNaN(parsed.getTime())) fail('now 无效');
     return parsed.toISOString();
 }
 
@@ -232,7 +232,7 @@ function rejectDuplicateJsonKeys(source, label) {
         else if (token === ',' && top?.object) top.expectKey = true;
         else if (token.startsWith('"') && top?.object && top.expectKey) {
             let key;
-            try { key = JSON.parse(token); } catch { fail(`${label} contains invalid JSON syntax`); }
+            try { key = JSON.parse(token); } catch { fail(`${label} 含无效的 JSON 语法`); }
             if (top.keys.has(key)) fail(`${label} contains duplicate JSON key: ${key}`);
             top.keys.add(key); top.expectKey = false;
         }
@@ -243,16 +243,16 @@ function strictJson(bytes, label) {
         const source = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
         rejectDuplicateJsonKeys(source, label);
         const value = JSON.parse(source);
-        if (!plain(value)) fail(`${label} must contain a JSON object`);
+        if (!plain(value)) fail(`${label} 必须含 JSON 对象`);
         return value;
     } catch (error) {
         if (error instanceof PageSourceCrosswalkError) throw error;
-        fail(`${label} must contain strict UTF-8 JSON`);
+        fail(`${label} 必须含严格的 UTF-8 JSON`);
     }
 }
 
 function safeDirectory(root, { create = false, allowMissing = false } = {}) {
-    if (typeof root !== 'string' || !path.isAbsolute(root)) fail('configured root must be an absolute directory');
+    if (typeof root !== 'string' || !path.isAbsolute(root)) fail('配置的 root 必须是绝对目录');
     const absolute = path.resolve(root); let cursor = path.parse(absolute).root;
     for (const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
         cursor = path.join(cursor, part);
@@ -266,14 +266,14 @@ function safeDirectory(root, { create = false, allowMissing = false } = {}) {
         }
         if (!info.isDirectory() || info.isSymbolicLink()) fail(`configured root contains an unsafe directory: ${cursor}`);
     }
-    if (fs.realpathSync(absolute) !== absolute) fail('configured root must use its canonical non-symlink path');
+    if (fs.realpathSync(absolute) !== absolute) fail('配置的 root 必须使用其规范的非符号链接路径');
     return absolute;
 }
 function safeDirectJson(root, name, { mustExist = true, createRoot = false } = {}) {
-    if (typeof name !== 'string' || !SAFE_JSON_NAME.test(name)) fail('filename must be a safe direct JSON name');
+    if (typeof name !== 'string' || !SAFE_JSON_NAME.test(name)) fail('文件名必须是安全的直接 JSON 名');
     const directory = safeDirectory(root, { create: createRoot, allowMissing: !mustExist });
     const filename = path.resolve(directory, name);
-    if (path.dirname(filename) !== directory) fail('JSON filename escapes its configured root');
+    if (path.dirname(filename) !== directory) fail('JSON 文件名超出配置的 root');
     if (mustExist) {
         const info = fs.lstatSync(filename);
         if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) fail('JSON input must be a regular single-link file');
@@ -285,7 +285,7 @@ function readRegular(filename, maximum, label) {
     try {
         const before = fs.lstatSync(filename);
         if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maximum) {
-            fail(`${label} must be a bounded regular single-link file`);
+            fail(`${label} 必须是有界的常规单链接文件`);
         }
         fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const opened = fs.fstatSync(fd); const named = fs.lstatSync(filename);
@@ -293,12 +293,12 @@ function readRegular(filename, maximum, label) {
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size !== named.size
             || opened.size > maximum) fail(`${label} changed or became unsafe while opening`);
         const bytes = fs.readFileSync(fd);
-        if (bytes.length !== opened.size) fail(`${label} changed while reading`);
+        if (bytes.length !== opened.size) fail(`读取时 ${label} 已变化`);
         return { bytes, sha256: sha256(bytes), value: strictJson(bytes, label),
             dev: opened.dev, ino: opened.ino };
     } catch (error) {
         if (error instanceof PageSourceCrosswalkError) throw error;
-        fail(`${label} cannot be read safely: ${error.message}`);
+        fail(`无法安全读取 ${label}：${error.message}`);
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
@@ -321,40 +321,40 @@ function validateHistoricalPage(page, index, scanFormat) {
         || !page.path.startsWith('content/posts/') || !page.path.endsWith('.md')) fail('historical page path is unsafe');
     if (!PAGE_KEY_RE.test(page.pageId)
         || page.pageId !== `page:${stableHash({ contract: 'historical-page-id-v1', path: page.path, primaryUrl: page.primaryUrl })}`) {
-        fail('historical pageId does not bind path and primary URL');
+        fail('历史页面的 pageId 与路径和主 URL 不匹配');
     }
-    if (!GIT_OID_RE.test(String(page.gitBlobOid || ''))) fail('historical page Git blob OID is invalid');
-    if (!Number.isSafeInteger(page.contentBytes) || page.contentBytes < 1) fail('historical page contentBytes is invalid');
+    if (!GIT_OID_RE.test(String(page.gitBlobOid || ''))) fail('历史页面的 Git blob OID 无效');
+    if (!Number.isSafeInteger(page.contentBytes) || page.contentBytes < 1) fail('历史页面的 contentBytes 无效');
     if (!Number.isSafeInteger(page.frontmatterBytes) || page.frontmatterBytes < 1
         || !Number.isSafeInteger(page.bodyBytes) || page.bodyBytes < 0
         || page.frontmatterBytes + page.bodyBytes !== page.contentBytes) {
-        fail('historical page frontmatter/body byte partition is invalid');
+        fail('历史页面的 frontmatter 与正文分界无效');
     }
     for (const field of ['contentSha256', 'frontmatterSha256', 'bodySha256']) assertSha(page[field], `historical page ${field}`);
     text(page.primaryUrl, 'historical page primaryUrl');
     if (!['paper', 'daily-summary', 'conference-summary', 'conference-task', 'unknown'].includes(page.kind)) {
-        fail('historical page kind is unsupported');
+        fail('历史页面的 kind 不受支持');
     }
     if (!Array.isArray(page.aliases) || page.aliases.some(item => typeof item !== 'string')
         || stableHash(page.aliases) !== stableHash([...new Set(page.aliases)].sort())) {
-        fail('historical page aliases must be a unique sorted string array');
+        fail('历史页面的 aliases 必须是唯一且已排序的字符串数组');
     }
     exact(page.scope, ['type', 'key'], 'historical page scope');
     if (!['daily', 'conference', 'unknown', 'conflict'].includes(page.scope.type)
-        || (page.scope.key !== null && typeof page.scope.key !== 'string')) fail('historical page scope is malformed');
+        || (page.scope.key !== null && typeof page.scope.key !== 'string')) fail('历史页面的 scope 格式不正确');
     for (const field of ['publishedDate', 'cohortDate']) {
         if (typeof page[field] !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(page[field])
-            || Number.isNaN(new Date(`${page[field]}T00:00:00.000Z`).getTime())) fail(`historical page ${field} is invalid`);
+            || Number.isNaN(new Date(`${page[field]}T00:00:00.000Z`).getTime())) fail(`历史页面的 ${field} 无效`);
     }
     if (page.legacyTaskKey !== null && (typeof page.legacyTaskKey !== 'string'
-        || !/^task-[a-z0-9._-]+$/.test(page.legacyTaskKey))) fail('historical legacyTaskKey is invalid');
+        || !/^task-[a-z0-9._-]+$/.test(page.legacyTaskKey))) fail('历史页面的 legacyTaskKey 无效');
     if (typeof page.draft !== 'boolean' || typeof page.published !== 'boolean') {
-        fail('historical page draft/published state is malformed');
+        fail('历史页面的草稿或已发布状态格式不正确');
     }
     exact(page.legacy, ['tags', 'categories', 'marker'], 'historical page legacy');
     for (const field of ['tags', 'categories']) {
         if (!Array.isArray(page.legacy[field]) || page.legacy[field].some(item => typeof item !== 'string' || !item)) {
-            fail(`historical page legacy.${field} must be a string array`);
+            fail(`历史页面的 legacy.${field} 必须是字符串数组`);
         }
     }
     exact(page.legacy.marker, ['pipelineOwned', 'declaredPageType', 'fieldNames', 'fieldsSha256'], 'historical page legacy marker');
@@ -363,11 +363,11 @@ function validateHistoricalPage(page, index, scanFormat) {
         || !Array.isArray(page.legacy.marker.fieldNames)
         || page.legacy.marker.fieldNames.some(item => typeof item !== 'string' || !item.startsWith('paper_digest_'))
         || stableHash(page.legacy.marker.fieldNames) !== stableHash([...new Set(page.legacy.marker.fieldNames)].sort())) {
-        fail('historical page legacy marker is malformed');
+        fail('历史页面的 legacy 标记格式不正确');
     }
     assertSha(page.legacy.marker.fieldsSha256, 'historical page legacy marker fields SHA');
     normalizeIdentityHints(page.identityHints, 'historical page identityHints');
-    if (!Array.isArray(page.outboundPostLinks)) fail('historical outboundPostLinks must be an array');
+    if (!Array.isArray(page.outboundPostLinks)) fail('历史页面的 outboundPostLinks 必须是数组');
     page.outboundPostLinks.forEach((link, linkIndex) => {
         exact(link, ['ordinal', 'linkType', 'sourceByteStart', 'sourceByteEnd', 'targetRawSha256', 'targetUrl',
             'status', 'targetPath', 'targetPageId', 'targetRecordSha256'], 'historical outbound link');
@@ -375,15 +375,15 @@ function validateHistoricalPage(page, index, scanFormat) {
             || !Number.isSafeInteger(link.sourceByteStart) || !Number.isSafeInteger(link.sourceByteEnd)
             || link.sourceByteStart < 0 || link.sourceByteEnd <= link.sourceByteStart
             || link.sourceByteEnd > page.bodyBytes) {
-            fail('historical outbound link occurrence is invalid');
+            fail('历史页面的外链出现记录无效');
         }
         assertSha(link.targetRawSha256, 'historical outbound raw target SHA'); text(link.targetUrl, 'historical outbound target URL');
-        if (!LINK_STATUSES.has(link.status)) fail('historical outbound link status is unsupported');
+        if (!LINK_STATUSES.has(link.status)) fail('历史页面的外链状态不受支持');
         for (const field of ['targetPath', 'targetPageId', 'targetRecordSha256']) {
-            if (link[field] !== null && typeof link[field] !== 'string') fail('historical outbound target binding is malformed');
+            if (link[field] !== null && typeof link[field] !== 'string') fail('历史页面的外链目标绑定格式不正确');
         }
     });
-    if (!Array.isArray(page.publicationEvidenceRefs)) fail('historical publicationEvidenceRefs must be an array');
+    if (!Array.isArray(page.publicationEvidenceRefs)) fail('历史页面的 publicationEvidenceRefs 必须是数组');
     const fieldNames = page.publicationEvidenceRefs.map(evidence => evidence?.field);
     if (PAGE_TAG_FIELDS.some(field => fieldNames.includes(field))
         && LEGACY_PAGE_TAG_FIELDS.some(field => fieldNames.includes(field))) {
@@ -406,26 +406,26 @@ function validateHistoricalPage(page, index, scanFormat) {
                 fail('historical publication strings outside the preserved enum/ID set must be hash-only');
             }
         } else if (['array', 'object'].includes(evidence.valueType) && evidence.value !== null) {
-            fail('structured publication evidence, including sidecars, must remain hash-only');
+            fail('结构化的发布证据（含 sidecar）必须只存哈希');
         } else if (evidence.valueType === 'null' && evidence.value !== null) {
-            fail('null publication evidence must preserve null');
+            fail('为 null 的发布证据必须保留 null');
         } else if (evidence.valueType === 'boolean' && typeof evidence.value !== 'boolean') {
-            fail('boolean publication evidence has the wrong value type');
+            fail('布尔型发布证据的取值类型不对');
         } else if (evidence.valueType === 'integer' && !Number.isSafeInteger(evidence.value)) {
-            fail('integer publication evidence has the wrong value type');
+            fail('整数型发布证据的取值类型不对');
         } else if (evidence.valueType === 'number'
             && (typeof evidence.value !== 'number' || !Number.isFinite(evidence.value) || Number.isInteger(evidence.value))) {
             fail('number publication evidence has the wrong value type');
         }
         if (evidence.value !== null || evidence.valueType === 'null') {
             if (stableHash(evidence.value) !== evidence.valueSha256) {
-                fail(`historical publication evidence preserved value SHA drifted: ${evidence.field}`);
+                fail(`历史页面保留的发布证据取值 SHA 已变化：${evidence.field}`);
             }
         }
         evidenceFields.push(evidence.field);
     }
     if (stableHash(evidenceFields) !== stableHash([...new Set(evidenceFields)].sort())) {
-        fail('historical publication evidence fields must be unique and sorted');
+        fail('历史页面的发布证据字段必须唯一且已排序');
     }
     if (!Array.isArray(page[candidateField])) fail('历史页面的标签链接候选必须为数组。');
     for (const candidate of page[candidateField]) {
@@ -444,26 +444,26 @@ function validateHistoricalPage(page, index, scanFormat) {
     const snapshotBody = clone(page); delete snapshotBody.outboundPostLinks;
     delete snapshotBody.snapshotSha256; delete snapshotBody.recordSha256;
     if (assertSha(page.snapshotSha256, 'historical page snapshotSha256') !== stableHash(snapshotBody)) {
-        fail('historical page snapshot SHA drifted');
+        fail('历史页面的 snapshot SHA 已变化');
     }
     const body = clone(page); delete body.recordSha256;
-    if (assertSha(page.recordSha256, 'historical page recordSha256') !== stableHash(body)) fail('historical page record SHA drifted');
+    if (assertSha(page.recordSha256, 'historical page recordSha256') !== stableHash(body)) fail('历史页面的 record SHA 已变化');
     return clone(page);
 }
 
 function validateHistoricalLedger(value) {
     exact(value, ['contract', 'version', 'source', 'policy', 'pages', 'urlCollisions', 'outboundPostLinks',
         'outboundPostLinksSha256', 'counts', 'pageSetSha256', 'ledgerSha256'], 'historical page ledger');
-    if (value.contract !== LEDGER_CONTRACT || value.version !== VERSION) fail('historical ledger contract/version is unsupported');
+    if (value.contract !== LEDGER_CONTRACT || value.version !== VERSION) fail('历史 ledger 的契约或版本不受支持');
     const ledgerBody = clone(value); delete ledgerBody.ledgerSha256;
     if (assertSha(value.ledgerSha256, 'historical ledgerSha256') !== stableHash(ledgerBody)) fail('historical ledger self-SHA drifted');
     exact(value.source, ['branch', 'head', 'clean', 'statusSha256', 'remoteName', 'remoteIdentitySha256',
         'remoteMain', 'baseUrl', 'hugoConfig', 'contentRoot', 'gitObjectFormat', 'contentTreeOid',
         'trackedPages', 'hugoRuntime'], 'historical ledger source');
     if (value.source.branch !== 'main' || value.source.clean !== true || value.source.contentRoot !== 'content/posts') {
-        fail('crosswalk requires an inventory captured from clean blog branch main');
+        fail('crosswalk 需要一份取自干净博客分支 main 的清单');
     }
-    if (typeof value.source.head !== 'string' || !/^[a-f0-9]{40,64}$/.test(value.source.head)) fail('historical source HEAD is invalid');
+    if (typeof value.source.head !== 'string' || !/^[a-f0-9]{40,64}$/.test(value.source.head)) fail('历史来源的 HEAD 无效');
     for (const field of ['statusSha256', 'remoteIdentitySha256']) assertSha(value.source[field], `historical source ${field}`);
     text(value.source.remoteName, 'historical source remoteName'); text(value.source.baseUrl, 'historical source baseUrl');
     exact(value.source.remoteMain, ['availability', 'oid', 'ref'], 'historical source remoteMain');
@@ -471,20 +471,20 @@ function validateHistoricalLedger(value) {
         || value.source.remoteMain.ref !== `refs/remotes/${value.source.remoteName}/main`
         || (value.source.remoteMain.availability === 'available' && !GIT_OID_RE.test(String(value.source.remoteMain.oid || '')))
         || (value.source.remoteMain.availability === 'unavailable' && value.source.remoteMain.oid !== null)) {
-        fail('historical source remoteMain is malformed');
+        fail('历史来源的 remoteMain 格式不正确');
     }
     if (!['sha1', 'sha256'].includes(value.source.gitObjectFormat)
         || !GIT_OID_RE.test(String(value.source.contentTreeOid || ''))
         || value.source.contentTreeOid.length !== (value.source.gitObjectFormat === 'sha1' ? 40 : 64)) {
-        fail('historical source Git object/tree identity is malformed');
+        fail('历史来源的 Git 对象或树身份格式不正确');
     }
     exact(value.source.trackedPages, ['count', 'setSha256'], 'historical source trackedPages');
     if (!Number.isSafeInteger(value.source.trackedPages.count) || value.source.trackedPages.count < 1) {
-        fail('historical source tracked page count is invalid');
+        fail('历史来源的已跟踪页面数无效');
     }
     assertSha(value.source.trackedPages.setSha256, 'historical source tracked page set SHA');
     exact(value.source.hugoConfig, ['path', 'sha256'], 'historical Hugo config');
-    if (value.source.hugoConfig.path !== 'hugo.yaml') fail('historical Hugo config path is unsupported');
+    if (value.source.hugoConfig.path !== 'hugo.yaml') fail('历史 Hugo 配置路径不受支持');
     assertSha(value.source.hugoConfig.sha256, 'historical Hugo config SHA');
     exact(value.source.hugoRuntime, ['version', 'pageSetSha256', 'publishedPageSetSha256', 'pageCount',
         'publishedPageCount'], 'historical Hugo runtime');
@@ -493,34 +493,34 @@ function validateHistoricalLedger(value) {
     assertSha(value.source.hugoRuntime.publishedPageSetSha256, 'historical Hugo published-page-set SHA');
     for (const field of ['pageCount', 'publishedPageCount']) {
         if (!Number.isSafeInteger(value.source.hugoRuntime[field]) || value.source.hugoRuntime[field] < 0) {
-            fail(`historical Hugo ${field} is invalid`);
+            fail(`历史 Hugo 的 ${field} 无效`);
         }
     }
     const scanFormat = scanFormatFor(value.policy);
     if (!Array.isArray(value.pages) || !value.pages.length
         || !Array.isArray(value.urlCollisions) || !Array.isArray(value.outboundPostLinks) || !plain(value.counts)) {
-        fail('historical ledger collections are malformed');
+        fail('历史 ledger 的集合格式不正确');
     }
     const pages = value.pages.map((page, index) => validateHistoricalPage(page, index, scanFormat));
     const paths = pages.map(page => page.path);
-    if (paths.some((item, index) => index && paths[index - 1] >= item)) fail('historical pages must be unique and path-sorted');
-    if (assertSha(value.pageSetSha256, 'historical pageSetSha256') !== stableHash(pages)) fail('historical page set SHA drifted');
+    if (paths.some((item, index) => index && paths[index - 1] >= item)) fail('历史页面必须唯一且按路径排序');
+    if (assertSha(value.pageSetSha256, 'historical pageSetSha256') !== stableHash(pages)) fail('历史页面集合 SHA 已变化');
     const hugoPages = pages.map(page => ({ path: page.path, permalink: page.primaryUrl }));
     const hugoPublishedPages = hugoPages.filter((_item, index) => pages[index].published);
     if (value.source.hugoRuntime.pageCount !== pages.length
         || value.source.hugoRuntime.publishedPageCount !== hugoPublishedPages.length
         || value.source.hugoRuntime.pageSetSha256 !== stableHash(hugoPages)
         || value.source.hugoRuntime.publishedPageSetSha256 !== stableHash(hugoPublishedPages)) {
-        fail('historical Hugo page proof differs from ledger pages');
+        fail('历史 Hugo 页面证明与 ledger 页面不一致');
     }
     const trackedPages = pages.map(page => ({ path: page.path, blobOid: page.gitBlobOid }));
     if (value.source.trackedPages.count !== trackedPages.length
         || value.source.trackedPages.setSha256 !== stableHash(trackedPages)
         || pages.some(page => page.gitBlobOid.length !== (value.source.gitObjectFormat === 'sha1' ? 40 : 64))) {
-        fail('historical tracked page proof differs from ledger pages');
+        fail('历史已跟踪页面证明与 ledger 页面不一致');
     }
     if (assertSha(value.outboundPostLinksSha256, 'historical outboundPostLinksSha256')
-        !== stableHash(value.outboundPostLinks)) fail('historical outbound link SHA drifted');
+        !== stableHash(value.outboundPostLinks)) fail('历史外链 SHA 已变化');
     const claimsByUrl = new Map();
     for (const page of pages) for (const url of [page.primaryUrl, ...page.aliases]) {
         if (!claimsByUrl.has(url)) claimsByUrl.set(url, new Map());
@@ -529,26 +529,26 @@ function validateHistoricalLedger(value) {
     for (const page of pages) for (const link of page.outboundPostLinks) {
         const targets = claimsByUrl.get(link.targetUrl) || new Map();
         const expectedStatus = targets.size === 1 ? 'resolved' : targets.size ? 'ambiguous' : 'unresolved';
-        if (link.status !== expectedStatus) fail('historical outbound link resolution status drifted');
+        if (link.status !== expectedStatus) fail('历史外链解析状态已变化');
         if (expectedStatus === 'resolved') {
             const target = [...targets.values()][0];
             if (link.targetPath !== target.path || link.targetPageId !== target.pageId
                 || link.targetRecordSha256 !== target.snapshotSha256) fail('historical outbound target binding drifted');
         } else if ([link.targetPath, link.targetPageId, link.targetRecordSha256].some(item => item !== null)) {
-            fail('historical unresolved/ambiguous link claims a target page');
+            fail('未解析或有歧义的历史外链却声明了目标页面');
         }
     }
     const expectedOutbound = pages.flatMap(page => page.outboundPostLinks.map(link => (
         { sourcePageId: page.pageId, sourcePath: page.path, ...link }
     )));
-    if (stableHash(value.outboundPostLinks) !== stableHash(expectedOutbound)) fail('historical aggregate outbound links drifted');
+    if (stableHash(value.outboundPostLinks) !== stableHash(expectedOutbound)) fail('历史汇总的外链已变化');
     const claims = new Map();
     for (const page of pages) for (const url of [page.primaryUrl, ...page.aliases]) {
         if (!claims.has(url)) claims.set(url, new Set()); claims.get(url).add(page.path);
     }
     const expectedCollisions = [...claims.entries()].filter(([, items]) => items.size > 1)
         .map(([url, items]) => ({ url, paths: [...items].sort() })).sort((left, right) => left.url.localeCompare(right.url));
-    if (stableHash(value.urlCollisions) !== stableHash(expectedCollisions)) fail('historical URL collision index drifted');
+    if (stableHash(value.urlCollisions) !== stableHash(expectedCollisions)) fail('历史 URL 冲突索引已变化');
     exact(value.counts, ['pages', 'papers', 'dailySummaries', 'conferenceSummaries', 'conferenceTasks', 'unknown',
         'urlCollisions', 'outboundPostLinks', 'resolvedOutboundPostLinks', 'unresolvedOutboundPostLinks',
         'ambiguousOutboundPostLinks'], 'historical ledger counts');
@@ -561,13 +561,13 @@ function validateHistoricalLedger(value) {
         resolvedOutboundPostLinks: expectedOutbound.filter(link => link.status === 'resolved').length,
         unresolvedOutboundPostLinks: expectedOutbound.filter(link => link.status === 'unresolved').length,
         ambiguousOutboundPostLinks: expectedOutbound.filter(link => link.status === 'ambiguous').length };
-    if (stableHash(value.counts) !== stableHash(expectedCounts)) fail('historical ledger counts drifted');
+    if (stableHash(value.counts) !== stableHash(expectedCounts)) fail('历史 ledger 的计数已变化');
     return { ...clone(value), pages };
 }
 
 function validateHistoricalReceipt(value, ledger, ledgerBytes, ledgerName) {
     exact(value, ['contract', 'version', 'ledger', 'repositorySnapshotSha256', 'receiptSha256'], 'historical receipt');
-    if (value.contract !== LEDGER_RECEIPT_CONTRACT || value.version !== VERSION) fail('historical receipt contract/version is unsupported');
+    if (value.contract !== LEDGER_RECEIPT_CONTRACT || value.version !== VERSION) fail('历史 receipt 的契约或版本不受支持');
     const body = clone(value); delete body.receiptSha256;
     if (assertSha(value.receiptSha256, 'historical receiptSha256') !== stableHash(body)) fail('historical receipt self-SHA drifted');
     exact(value.ledger, ['name', 'fileSha256', 'ledgerSha256', 'pageSetSha256', 'pageCount'], 'historical receipt ledger');
@@ -576,7 +576,7 @@ function validateHistoricalReceipt(value, ledger, ledgerBytes, ledgerName) {
         || value.ledger.pageCount !== ledger.pages.length) fail('historical receipt does not bind the exact ledger');
     for (const field of ['fileSha256', 'ledgerSha256', 'pageSetSha256']) assertSha(value.ledger[field], `receipt ledger ${field}`);
     if (assertSha(value.repositorySnapshotSha256, 'receipt repositorySnapshotSha256') !== stableHash(ledger.source)) {
-        fail('historical receipt repository snapshot drifted');
+        fail('历史 receipt 的仓库快照已变化');
     }
     return clone(value);
 }
@@ -584,16 +584,16 @@ function validateHistoricalReceipt(value, ledger, ledgerBytes, ledgerName) {
 function loadHistoricalInventoryHandle({ inventoryRoot, ledgerName, receiptName } = {}) {
     const ledgerFile = safeDirectJson(inventoryRoot, ledgerName);
     const receiptFile = safeDirectJson(inventoryRoot, receiptName);
-    if (ledgerFile === receiptFile) fail('historical ledger and receipt files must differ');
+    if (ledgerFile === receiptFile) fail('历史 ledger 与 receipt 文件必须不同');
     const ledgerLoaded = readRegular(ledgerFile, MAX_LEDGER_BYTES, 'historical page ledger');
     const receiptLoaded = readRegular(receiptFile, MAX_RECEIPT_BYTES, 'historical page receipt');
     const receiptBody = clone(receiptLoaded.value); delete receiptBody.receiptSha256;
     if (assertSha(receiptLoaded.value.receiptSha256, 'historical receiptSha256') !== stableHash(receiptBody)) fail('historical receipt self-SHA drifted');
     if (receiptLoaded.value.ledger?.fileSha256 !== sha256(ledgerLoaded.bytes)) fail('historical receipt does not bind the exact ledger');
     const ledger = validateHistoricalLedger(ledgerLoaded.value);
-    if (!ledgerLoaded.bytes.equals(prettyBytes(ledger))) fail('historical page ledger bytes are not canonical');
+    if (!ledgerLoaded.bytes.equals(prettyBytes(ledger))) fail('历史页面 ledger 的字节不规范');
     const receipt = validateHistoricalReceipt(receiptLoaded.value, ledger, ledgerLoaded.bytes, ledgerName);
-    if (!receiptLoaded.bytes.equals(prettyBytes(receipt))) fail('historical page receipt bytes are not canonical');
+    if (!receiptLoaded.bytes.equals(prettyBytes(receipt))) fail('历史页面 receipt 的字节不规范');
     const snapshot = { ledger, receipt, ledgerFile: fs.realpathSync(ledgerFile), receiptFile: fs.realpathSync(receiptFile),
         ledgerFileSha256: ledgerLoaded.sha256, receiptFileSha256: receiptLoaded.sha256 };
     const handle = Object.freeze(Object.create(null)); INVENTORY_HANDLES.add(handle);
@@ -607,12 +607,12 @@ function inventoryHandleSnapshot(handle) {
 function normalizeIdentityHints(value, label = 'identityHints') {
     exact(value, ['status', 'candidates'], label);
     if (!['none', 'single', 'multiple', 'conflict'].includes(value.status) || !Array.isArray(value.candidates)) {
-        fail(`${label} is malformed`);
+        fail(`${label} 格式不正确`);
     }
     const candidates = value.candidates.map((candidate, index) => {
         exact(candidate, ['scheme', 'value', 'sources'], `${label}.candidates[${index}]`);
         if (!['arxiv', 'openreview-forum-id', 'icassp-arnumber'].includes(candidate.scheme)) {
-            fail(`${label} candidate scheme is unsupported`);
+            fail(`${label} 候选的 scheme 不受支持`);
         }
         text(candidate.value, `${label} candidate value`, 128);
         const valid = candidate.scheme === 'arxiv' ? /^\d{4}\.\d{4,5}$/.test(candidate.value)
@@ -629,7 +629,7 @@ function normalizeIdentityHints(value, label = 'identityHints') {
     });
     const keys = candidates.map(candidate => `${candidate.scheme}:${candidate.value}`);
     if ([...keys].sort().some((key, index) => key !== keys[index]) || new Set(keys).size !== keys.length) {
-        fail(`${label} candidates must be unique and sorted`);
+        fail(`${label} 候选必须唯一且已排序`);
     }
     const byScheme = new Map();
     for (const candidate of candidates) {
@@ -639,7 +639,7 @@ function normalizeIdentityHints(value, label = 'identityHints') {
     const expectedStatus = !candidates.length ? 'none'
         : [...byScheme.values()].some(values => values.size > 1) ? 'conflict'
             : candidates.length === 1 ? 'single' : 'multiple';
-    if (value.status !== expectedStatus) fail(`${label}.status drifted from its candidates`);
+    if (value.status !== expectedStatus) fail(`${label}.status 与其候选不一致`);
     return { status: value.status, candidates };
 }
 
@@ -650,7 +650,7 @@ function sourceBinding(inventory) {
             pageRecordSha256: page.recordSha256, primaryUrl: page.primaryUrl,
             scope: clone(page.scope), cohortDate: page.cohortDate,
             identityHints: normalizeIdentityHints(page.identityHints, `identity hints for ${page.pageId}`) }));
-    if (!papers.length) fail('historical inventory contains no paper pages');
+    if (!papers.length) fail('历史清单不含论文页面');
     return { ledgerName: path.basename(inventory.ledgerFile), ledgerFileSha256: inventory.ledgerFileSha256,
         ledgerSha256: inventory.ledger.ledgerSha256, receiptName: path.basename(inventory.receiptFile),
         receiptFileSha256: inventory.receiptFileSha256, receiptSha256: inventory.receipt.receiptSha256,
@@ -698,7 +698,7 @@ function replaySourceAuthorityHandle(handle, { requireProduction = false } = {})
             try { return localCrawlIdentityApi.replayAuthorityHandle(handle, { requireProduction }); }
             catch {
                 try { return conferenceIdentityApi.replayAuthorityHandle(handle, { requireProduction }); }
-                catch { fail(`source authority replay failed: ${paperError.message}`); }
+                catch { fail(`来源权威重放失败：${paperError.message}`); }
             }
         }
     }
@@ -757,14 +757,14 @@ function validateAuthorityReference(value, label = 'sourceAuthority') {
             'authoritySha256', 'evidenceKind', 'fulltextSha256', 'sourceSnapshotSha256'], label);
     let identity;
     try { identity = identityApi.normalizeIdentity(value.identity); }
-    catch (error) { fail(`${label}.identity is invalid: ${error.message}`); }
+    catch (error) { fail(`${label}.identity 无效：${error.message}`); }
     if (identity.citation !== null) {
-        fail(`${label}.identity.citation must remain null until an authenticated official-metadata adapter exists`);
+        fail(`${label}.identity.citation 必须保持 null，直到存在已认证的官方元数据适配器`);
     }
     if (value.paperId !== identity.canonicalId
         || value.identitySha256 !== identityApi.identitySha256(identity)
         || value.identityRecordSha256 !== identityApi.recordSha256(identity)) {
-        fail(`${label} paperId/identity/SHA binding is invalid`);
+        fail(`${label} 的 paperId、identity 或 SHA 绑定无效`);
     }
     if ((!archiveIdentity && !localCrawlIdentity && !conferenceIdentity && (value.authorityContract !== authorityApi.CONTRACT || !authorityApi.isEvidenceKind(value.evidenceKind)))
         || (archiveIdentity && (identity.kind !== 'arxiv' || value.evidenceKind !== archiveIdentityApi.EVIDENCE_KIND))
@@ -772,22 +772,22 @@ function validateAuthorityReference(value, label = 'sourceAuthority') {
             || !['archive', 'current'].includes(value.sourceKind)
             || localCrawlIdentityApi.sourceSpec(value.sourceRelativePath).sourceKind !== value.sourceKind))
         || (conferenceIdentity && (identity.kind !== 'conference' || value.evidenceKind !== conferenceIdentityApi.EVIDENCE_KIND))
-        || !SAFE_JSON_NAME.test(value.authorityName)) fail(`${label} contract/name/evidenceKind is invalid`);
+        || !SAFE_JSON_NAME.test(value.authorityName)) fail(`${label} 的 contract、name 或 evidenceKind 无效`);
     if (localCrawlIdentity) {
         exact(value.recordIdentity, ['arxivId', 'paperId'], `${label}.recordIdentity`);
         if (value.recordIdentity.arxivId !== identity.arxivId || value.recordIdentity.paperId !== identity.arxivId) {
-            fail(`${label}.recordIdentity does not bind its canonical arXiv ID`);
+            fail(`${label}.recordIdentity 与其规范 arXiv ID 不匹配`);
         }
         exact(value.recordPointer, ['kind', 'value'], `${label}.recordPointer`);
         if ((value.sourceKind === 'archive' && (value.recordPointer.kind !== 'array-index'
             || !Number.isSafeInteger(value.recordPointer.value) || value.recordPointer.value < 0 || value.currentIdentitySnapshot !== null))
             || (value.sourceKind === 'current' && (value.recordPointer.kind !== 'map-key' || value.recordPointer.value !== identity.arxivId
-                || !plain(value.currentIdentitySnapshot)))) fail(`${label} local crawler pointer/snapshot is invalid`);
+                || !plain(value.currentIdentitySnapshot)))) fail(`${label} 的本地爬虫指针或快照无效`);
         if (value.sourceKind === 'current') {
             exact(value.currentIdentitySnapshot, ['snapshotName', 'snapshotFileSha256', 'snapshotSha256'], `${label}.currentIdentitySnapshot`);
             if (!SAFE_JSON_NAME.test(value.currentIdentitySnapshot.snapshotName)
                 || !value.currentIdentitySnapshot.snapshotName.startsWith(localCrawlIdentityApi.SNAPSHOT_PREFIX)) {
-                fail(`${label}.currentIdentitySnapshot name is invalid`);
+                fail(`${label}.currentIdentitySnapshot 的名称无效`);
             }
             for (const field of ['snapshotFileSha256', 'snapshotSha256']) assertSha(value.currentIdentitySnapshot[field], `${label}.currentIdentitySnapshot.${field}`);
         }
@@ -826,7 +826,7 @@ function identityGroupsFor(assignments) {
     }).sort((left, right) => left.paperId < right.paperId ? -1 : left.paperId > right.paperId ? 1 : 0);
 }
 function normalizeIdentityGroups(value, label = 'identityGroups') {
-    if (!Array.isArray(value)) fail(`${label} must be an array`);
+    if (!Array.isArray(value)) fail(`${label} 必须是数组`);
     const seenPapers = new Set(); const seenPages = new Set(); let previousPaper = null;
     return value.map((group, index) => {
         exact(group, ['paperId', 'identitySha256', 'identityRecordSha256', 'pageKeys', 'groupSha256'], `${label}[${index}]`);
@@ -835,16 +835,16 @@ function normalizeIdentityGroups(value, label = 'identityGroups') {
             assertSha(group[field], `${label}[${index}].${field}`);
         }
         if (seenPapers.has(group.paperId) || (previousPaper !== null && previousPaper >= group.paperId)) {
-            fail(`${label} paperId values must be unique and code-unit sorted`);
+            fail(`${label} 的 paperId 必须唯一且按码元排序`);
         }
-        if (!Array.isArray(group.pageKeys) || !group.pageKeys.length) fail(`${label}[${index}].pageKeys must be non-empty`);
+        if (!Array.isArray(group.pageKeys) || !group.pageKeys.length) fail(`${label}[${index}].pageKeys 不能为空`);
         const pageKeys = group.pageKeys.map((pageKey, pageIndex) => {
-            if (!PAGE_KEY_RE.test(pageKey)) fail(`${label}[${index}].pageKeys[${pageIndex}] is malformed`);
-            if (seenPages.has(pageKey)) fail(`${label} cannot contain a page more than once`);
+            if (!PAGE_KEY_RE.test(pageKey)) fail(`${label}[${index}].pageKeys[${pageIndex}] 格式不正确`);
+            if (seenPages.has(pageKey)) fail(`${label} 不能重复含同一页面`);
             seenPages.add(pageKey); return pageKey;
         });
         if (pageKeys.some((pageKey, pageIndex) => pageIndex > 0 && pageKeys[pageIndex - 1] >= pageKey)) {
-            fail(`${label}[${index}].pageKeys must be unique and code-unit sorted`);
+            fail(`${label}[${index}].pageKeys 必须唯一且按码元排序`);
         }
         const body = { paperId: group.paperId, identitySha256: group.identitySha256,
             identityRecordSha256: group.identityRecordSha256, pageKeys };
@@ -855,79 +855,79 @@ function normalizeIdentityGroups(value, label = 'identityGroups') {
 }
 function validateAssignment(value, pageKey) {
     exact(value, ['pagePath', 'pageContentSha256', 'status', 'reason', 'decisionArtifactSha256', 'sourceAuthority'], `assignment ${pageKey}`);
-    if (!PAGE_KEY_RE.test(pageKey)) fail('assignment page key is malformed');
+    if (!PAGE_KEY_RE.test(pageKey)) fail('assignment 的 page key 格式不正确');
     text(value.pagePath, 'assignment pagePath'); assertSha(value.pageContentSha256, 'assignment page content SHA');
-    if (!ALL_STATUSES.has(value.status)) fail('assignment status is unsupported');
+    if (!ALL_STATUSES.has(value.status)) fail('assignment 的 status 不受支持');
     if (value.status === 'pending') {
         if (value.reason !== null || value.decisionArtifactSha256 !== null || value.sourceAuthority !== null) {
-            fail('pending assignment cannot carry a decision or authority');
+            fail('pending assignment 不能带 decision 或 authority');
         }
     } else {
         text(value.reason, 'assignment reason', 2000); assertSha(value.decisionArtifactSha256, 'assignment decision SHA');
         if (value.status === 'verified') validateAuthorityReference(value.sourceAuthority, `assignment ${pageKey} sourceAuthority`);
-        else if (value.sourceAuthority !== null) fail('review-only assignment cannot carry source authority');
+        else if (value.sourceAuthority !== null) fail('review-only assignment 不能带来源权威');
     }
     return clone(value);
 }
 function validateCompletion(value, assignments) {
     exact(value, ['total', 'pending', 'needsReview', 'blocked', 'conflict', 'verified', 'status', 'assignmentSetSha256'], 'completion');
     const expected = completionFor(assignments);
-    if (stableHash(value) !== stableHash(expected)) fail('completion counts/status drifted');
+    if (stableHash(value) !== stableHash(expected)) fail('completion 的计数或状态已变化');
     return clone(value);
 }
 function validateAttempt(value, index, assignments, priorStateSha256) {
     exact(value, ['operationId', 'decisionName', 'decisionFileSha256', 'decisionArtifactSha256', 'pageKey',
         'fromStatus', 'toStatus', 'reason', 'actorId', 'sourceAuthority', 'recordedAt',
         'priorStateSha256', 'nextStateSha256'], `attempt[${index}]`);
-    if (!UUID_RE.test(value.operationId)) fail('attempt operationId must be UUID v4');
+    if (!UUID_RE.test(value.operationId)) fail('attempt 的 operationId 必须是 UUID v4');
     if (!SAFE_JSON_NAME.test(value.decisionName)) fail('attempt decisionName is unsafe');
     for (const field of ['decisionFileSha256', 'decisionArtifactSha256', 'priorStateSha256', 'nextStateSha256']) {
         assertSha(value[field], `attempt ${field}`);
     }
-    if (!PAGE_KEY_RE.test(value.pageKey) || !Object.hasOwn(assignments, value.pageKey)) fail('attempt pageKey is unknown');
-    if (value.fromStatus !== 'pending' || ![...FINAL_REVIEW_STATUSES, 'verified'].includes(value.toStatus)) fail('attempt transition is unsupported');
+    if (!PAGE_KEY_RE.test(value.pageKey) || !Object.hasOwn(assignments, value.pageKey)) fail('attempt 的 pageKey 未知');
+    if (value.fromStatus !== 'pending' || ![...FINAL_REVIEW_STATUSES, 'verified'].includes(value.toStatus)) fail('attempt 的 transition 不受支持');
     if (value.toStatus === 'verified') validateAuthorityReference(value.sourceAuthority, `attempt[${index}].sourceAuthority`);
-    else if (value.sourceAuthority !== null) fail('review-only attempt cannot carry source authority');
+    else if (value.sourceAuthority !== null) fail('review-only attempt 不能带来源权威');
     text(value.reason, 'attempt reason', 2000); text(value.actorId, 'attempt actorId', 120); timestamp(value.recordedAt, 'attempt recordedAt');
-    if (value.priorStateSha256 !== priorStateSha256) fail('attempt SHA history is discontinuous');
+    if (value.priorStateSha256 !== priorStateSha256) fail('attempt 的 SHA 历史不连续');
     return clone(value);
 }
 function assertCrosswalkState(value) {
     exact(value, ['contract', 'version', 'crosswalkId', 'createdAt', 'source', 'assignments', 'attempts',
         'completion', 'identityGroups', 'identityGroupsSha256', 'stateSha256'], 'crosswalk state');
-    if (value.contract !== CONTRACT || value.version !== VERSION || !UUID_RE.test(value.crosswalkId)) fail('crosswalk contract/version/UUID mismatch');
+    if (value.contract !== CONTRACT || value.version !== VERSION || !UUID_RE.test(value.crosswalkId)) fail('crosswalk 的契约、版本或 UUID 不一致');
     timestamp(value.createdAt, 'createdAt');
     exact(value.source, ['ledgerName', 'ledgerFileSha256', 'ledgerSha256', 'receiptName', 'receiptFileSha256',
         'receiptSha256', 'repositorySnapshotSha256', 'pageSetSha256', 'paperPageSetSha256', 'papers'], 'crosswalk source');
     for (const field of ['ledgerFileSha256', 'ledgerSha256', 'receiptFileSha256', 'receiptSha256',
         'repositorySnapshotSha256', 'pageSetSha256', 'paperPageSetSha256']) assertSha(value.source[field], `source ${field}`);
     for (const field of ['ledgerName', 'receiptName']) if (!SAFE_JSON_NAME.test(value.source[field])) fail(`source ${field} is unsafe`);
-    if (!Array.isArray(value.source.papers) || !value.source.papers.length) fail('source papers must be non-empty');
+    if (!Array.isArray(value.source.papers) || !value.source.papers.length) fail('来源 papers 不能为空');
     const papers = value.source.papers.map(item => {
         exact(item, ['pageKey', 'pagePath', 'pageContentSha256', 'pageRecordSha256', 'primaryUrl', 'scope',
             'cohortDate', 'identityHints'], 'source paper');
-        if (!PAGE_KEY_RE.test(item.pageKey)) fail('source paper pageId is malformed');
+        if (!PAGE_KEY_RE.test(item.pageKey)) fail('来源论文的 pageId 格式不正确');
         text(item.pagePath, 'source paper path'); text(item.primaryUrl, 'source paper primary URL');
         assertSha(item.pageContentSha256, 'source paper content SHA');
         assertSha(item.pageRecordSha256, 'source paper record SHA');
         exact(item.scope, ['type', 'key'], 'source paper scope');
         normalizeIdentityHints(item.identityHints, `source paper ${item.pageKey} identityHints`);
         if (typeof item.cohortDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(item.cohortDate)) {
-            fail('source paper cohortDate is invalid');
+            fail('来源论文的 cohortDate 无效');
         }
         return clone(item);
     });
-    if (stableHash(papers) !== value.source.paperPageSetSha256) fail('source paper set SHA drifted');
-    if (!plain(value.assignments) || Object.keys(value.assignments).length !== papers.length) fail('assignments must exactly cover source papers');
+    if (stableHash(papers) !== value.source.paperPageSetSha256) fail('来源论文集合 SHA 已变化');
+    if (!plain(value.assignments) || Object.keys(value.assignments).length !== papers.length) fail('assignments 必须恰好覆盖来源论文');
     const assignments = Object.fromEntries(Object.keys(value.assignments).sort().map(key => [key, validateAssignment(value.assignments[key], key)]));
     for (const paper of papers) {
         const assignment = assignments[paper.pageKey];
         if (!assignment || assignment.pagePath !== paper.pagePath || assignment.pageContentSha256 !== paper.pageContentSha256) {
-            fail('assignment differs from source paper snapshot');
+            fail('assignment 与来源论文快照不一致');
         }
     }
-    if (!Array.isArray(value.identityGroups)) fail('identityGroups must be an array');
-    if (!Array.isArray(value.attempts)) fail('attempts must be an array');
+    if (!Array.isArray(value.identityGroups)) fail('identityGroups 必须是数组');
+    if (!Array.isArray(value.attempts)) fail('attempts 必须是数组');
     const replayed = Object.fromEntries(papers.map(paper => [paper.pageKey, initialAssignment(paper)]));
     const operations = new Set(); let previousTime = value.createdAt; let expectedPrior = stateDigest({ contract: CONTRACT, version: VERSION,
         crosswalkId: value.crosswalkId, createdAt: value.createdAt, source: clone(value.source), assignments: clone(replayed),
@@ -935,9 +935,9 @@ function assertCrosswalkState(value) {
     const attempts = [];
     for (const [index, raw] of value.attempts.entries()) {
         const attempt = validateAttempt(raw, index, replayed, expectedPrior);
-        if (operations.has(attempt.operationId)) fail('attempt operationId is duplicated');
-        if (attempt.recordedAt < previousTime) fail('attempt time moves backwards');
-        if (replayed[attempt.pageKey].status !== 'pending') fail('attempt repeats a terminal page assignment');
+        if (operations.has(attempt.operationId)) fail('attempt 的 operationId 重复');
+        if (attempt.recordedAt < previousTime) fail('attempt 的时间倒退');
+        if (replayed[attempt.pageKey].status !== 'pending') fail('attempt 重复了已终态的页面 assignment');
         replayed[attempt.pageKey] = { ...replayed[attempt.pageKey], status: attempt.toStatus, reason: attempt.reason,
             decisionArtifactSha256: attempt.decisionArtifactSha256, sourceAuthority: clone(attempt.sourceAuthority) };
         const prefix = { contract: CONTRACT, version: VERSION, crosswalkId: value.crosswalkId, createdAt: value.createdAt,
@@ -945,29 +945,29 @@ function assertCrosswalkState(value) {
             completion: completionFor(replayed), identityGroups: identityGroupsFor(replayed),
             identityGroupsSha256: stableHash(identityGroupsFor(replayed)) };
         const digest = stateDigest(prefix);
-        if (attempt.nextStateSha256 !== digest) fail('attempt nextStateSha256 does not bind replayed state');
+        if (attempt.nextStateSha256 !== digest) fail('attempt 的 nextStateSha256 与重放的 state 不匹配');
         expectedPrior = digest; previousTime = attempt.recordedAt; operations.add(attempt.operationId); attempts.push(attempt);
     }
-    if (stableHash(replayed) !== stableHash(assignments)) fail('assignments do not match append-only attempt history');
+    if (stableHash(replayed) !== stableHash(assignments)) fail('assignments 与只追加的 attempt 历史不一致');
     const completion = validateCompletion(value.completion, assignments);
     const identityGroups = identityGroupsFor(assignments);
     normalizeIdentityGroups(identityGroups);
     if (stableHash(value.identityGroups) !== stableHash(identityGroups)
         || assertSha(value.identityGroupsSha256, 'identityGroupsSha256') !== stableHash(identityGroups)) {
-        fail('identityGroups drifted from verified assignments');
+        fail('identityGroups 与 verified assignments 不一致');
     }
     const rebuilt = { contract: CONTRACT, version: VERSION, crosswalkId: value.crosswalkId, createdAt: value.createdAt,
         source: clone(value.source), assignments, attempts, completion, identityGroups,
         identityGroupsSha256: stableHash(identityGroups) };
     const digest = stateDigest(rebuilt);
-    if (assertSha(value.stateSha256, 'stateSha256') !== digest) fail('crosswalk state SHA drifted');
-    if (attempts.length && attempts.at(-1).nextStateSha256 !== digest) fail('last attempt does not bind current state');
+    if (assertSha(value.stateSha256, 'stateSha256') !== digest) fail('crosswalk state SHA 已变化');
+    if (attempts.length && attempts.at(-1).nextStateSha256 !== digest) fail('最后一个 attempt 与当前 state 不匹配');
     return { ...rebuilt, stateSha256: digest };
 }
 
 function buildInitialState(inventoryHandle, { crosswalkId = crypto.randomUUID(), now } = {}) {
     const inventory = inventoryHandleSnapshot(inventoryHandle);
-    if (!UUID_RE.test(crosswalkId)) fail('crosswalkId must be canonical UUID v4');
+    if (!UUID_RE.test(crosswalkId)) fail('crosswalkId 必须是规范的 UUID v4');
     const source = sourceBinding(inventory);
     const assignments = Object.fromEntries(source.papers.map(paper => [paper.pageKey, initialAssignment(paper)]));
     const body = { contract: CONTRACT, version: VERSION, crosswalkId, createdAt: nowIso(now), source,
@@ -977,13 +977,13 @@ function buildInitialState(inventoryHandle, { crosswalkId = crypto.randomUUID(),
 
 function crosswalkDirectory(root, crosswalkId, { create = false } = {}) {
     const safeRoot = safeDirectory(root, { create });
-    if (!UUID_RE.test(crosswalkId)) fail('crosswalkId must be canonical UUID v4');
+    if (!UUID_RE.test(crosswalkId)) fail('crosswalkId 必须是规范的 UUID v4');
     const directory = path.resolve(safeRoot, crosswalkId);
-    if (path.dirname(directory) !== safeRoot) fail('crosswalk directory escapes root');
+    if (path.dirname(directory) !== safeRoot) fail('crosswalk 目录超出 root');
     if (create) {
         try { fs.mkdirSync(directory, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
     }
-    if (!fs.existsSync(directory)) fail('crosswalk directory does not exist');
+    if (!fs.existsSync(directory)) fail('crosswalk 目录不存在');
     const info = fs.lstatSync(directory);
     if (!info.isDirectory() || info.isSymbolicLink() || fs.realpathSync(directory) !== directory) fail('crosswalk directory is unsafe');
     return directory;
@@ -1023,7 +1023,7 @@ function prepareHook(testHooks, stage) {
     if (!plain(testHooks) || Object.keys(testHooks).some(key => ![
         'afterDirectoryCreate', 'afterDecisionsCreate', 'afterStateWrite'
     ].includes(key)) || Object.values(testHooks).some(hook => typeof hook !== 'function')) {
-        fail('prepare test hooks are malformed');
+        fail('prepare 的测试钩子格式不正确');
     }
     testHooks[stage]?.();
 }
@@ -1038,32 +1038,32 @@ function prepareDirectoryState(directory, expectedState) {
     }
     const hasDecisions = entries.includes('decisions'); const hasState = entries.includes('state.json');
     const hasFinalReceipt = entries.includes('final-receipt.json');
-    if (hasFinalReceipt && (!hasState || !hasDecisions)) fail('finalized crosswalk lacks its state or decision evidence directory');
+    if (hasFinalReceipt && (!hasState || !hasDecisions)) fail('已定稿的 crosswalk 缺少 state 或 decision 证据目录');
     if (hasDecisions) {
         const decisions = safeDirectory(path.join(directory, 'decisions'));
         if (!hasState && fs.readdirSync(decisions).length) {
-            fail('crosswalk prepare decisions directory is nonempty without a state');
+            fail('没有 state 时 crosswalk prepare 的 decisions 目录不能非空');
         }
     }
     if (!hasState) return { hasDecisions, state: null, complete: false };
     const loaded = readRegular(path.join(directory, 'state.json'), MAX_STATE_BYTES, 'crosswalk prepare state');
     const existing = assertCrosswalkState(loaded.value);
-    if (!loaded.bytes.equals(prettyBytes(existing))) fail('crosswalk prepare state bytes are not canonical');
+    if (!loaded.bytes.equals(prettyBytes(existing))) fail('crosswalk prepare 的 state 字节不规范');
     if (existing.crosswalkId !== expectedState.crosswalkId
         || stableHash(existing.source) !== stableHash(expectedState.source)) {
-        fail('existing crosswalkId belongs to another inventory');
+        fail('已有的 crosswalkId 属于另一份清单');
     }
     if (!hasDecisions && existing.attempts.length) {
-        fail('crosswalk prepare state has attempts but no decision evidence directory');
+        fail('crosswalk prepare 的 state 有 attempt，却没有 decision 证据目录');
     }
     if (hasFinalReceipt) {
-        if (existing.completion.status !== 'complete') fail('final receipt cannot accompany an incomplete crosswalk');
+        if (existing.completion.status !== 'complete') fail('crosswalk 未完成时不能附最终 receipt');
         const loadedReceipt = readRegular(path.join(directory, 'final-receipt.json'), MAX_RECEIPT_BYTES,
             'crosswalk prepare final receipt');
         const receipt = normalizeFinalReceipt(loadedReceipt.value);
         if (!loadedReceipt.bytes.equals(prettyBytes(receipt))
             || stableHash(receipt) !== stableHash(finalReceiptFor(existing))) {
-            fail('crosswalk prepare final receipt does not bind the existing state');
+            fail('crosswalk prepare 的最终 receipt 与现有 state 不匹配');
         }
     }
     return { hasDecisions, state: existing, complete: hasDecisions };
@@ -1071,18 +1071,18 @@ function prepareDirectoryState(directory, expectedState) {
 function rollbackPreparedPath(filename, expectedBytes) {
     try { fs.lstatSync(filename); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
     const loaded = readRegular(filename, MAX_STATE_BYTES, 'crosswalk rollback state');
-    if (!loaded.bytes.equals(expectedBytes)) fail('crosswalk rollback refused to remove changed state evidence');
+    if (!loaded.bytes.equals(expectedBytes)) fail('crosswalk 回滚拒绝删除已变化的 state 证据');
     fs.unlinkSync(filename);
 }
 function removeEmptyPrepareDirectory(directory, label) {
     let info;
     try { info = fs.lstatSync(directory); } catch (error) { if (error.code === 'ENOENT') return; throw error; }
     if (!info.isDirectory() || info.isSymbolicLink() || fs.realpathSync(directory) !== directory
-        || fs.readdirSync(directory).length) fail(`${label} changed while rolling back`);
+        || fs.readdirSync(directory).length) fail(`回滚时 ${label} 已变化`);
     fs.rmdirSync(directory);
 }
 function prepareCrosswalk({ crosswalkRoot, inventoryHandle, crosswalkId, now, apply = false, testHooks } = {}) {
-    if (typeof apply !== 'boolean') fail('apply must be boolean');
+    if (typeof apply !== 'boolean') fail('apply 必须是布尔值');
     const state = buildInitialState(inventoryHandle, { crosswalkId, now });
     if (!apply) return state;
     const root = safeDirectory(crosswalkRoot, { create: true });
@@ -1118,7 +1118,7 @@ function prepareCrosswalk({ crosswalkRoot, inventoryHandle, crosswalkId, now, ap
         }
         prepareHook(testHooks, 'afterStateWrite');
         current = prepareDirectoryState(directory, state);
-        if (!current.complete) fail('crosswalk prepare did not produce a complete recoverable directory');
+        if (!current.complete) fail('crosswalk prepare 未产出完整可恢复的目录');
         return current.state;
     } catch (error) {
         let rollbackError = null;
@@ -1136,7 +1136,7 @@ function readCrosswalk({ crosswalkRoot, crosswalkId } = {}) {
     const filename = safeDirectJson(directory, 'state.json');
     const loaded = readRegular(filename, MAX_STATE_BYTES, 'crosswalk state');
     const state = assertCrosswalkState(loaded.value);
-    if (!loaded.bytes.equals(prettyBytes(state))) fail('crosswalk state bytes are not canonical');
+    if (!loaded.bytes.equals(prettyBytes(state))) fail('crosswalk state 字节不规范');
     const decisionDirectory = safeDirectory(path.join(directory, 'decisions'));
     for (const [index, attempt] of state.attempts.entries()) {
         const decisionFile = safeDirectJson(decisionDirectory, attempt.decisionName);
@@ -1162,23 +1162,23 @@ function normalizeDecisionArtifact(value) {
     exact(value, ['contract', 'version', 'crosswalkId', 'operationId', 'expectedStateSha256', 'pageKey',
         'pagePath', 'pageContentSha256', 'actorId', 'result', 'sourceAuthority', 'createdAt', 'artifactSha256'], 'decision artifact');
     if (value.contract !== DECISION_CONTRACT || value.version !== VERSION || !UUID_RE.test(value.crosswalkId)
-        || !UUID_RE.test(value.operationId)) fail('decision contract/version/UUID is invalid');
+        || !UUID_RE.test(value.operationId)) fail('decision 的契约、版本或 UUID 无效');
     assertSha(value.expectedStateSha256, 'decision expectedStateSha256');
-    if (!PAGE_KEY_RE.test(value.pageKey)) fail('decision page key is malformed');
+    if (!PAGE_KEY_RE.test(value.pageKey)) fail('decision 的 page key 格式不正确');
     text(value.pagePath, 'decision pagePath'); assertSha(value.pageContentSha256, 'decision page content SHA');
     text(value.actorId, 'decision actorId', 120); timestamp(value.createdAt, 'decision createdAt');
     exact(value.result, ['status', 'reason'], 'decision result');
-    if (![...FINAL_REVIEW_STATUSES, 'verified'].includes(value.result.status)) fail('decision status is unsupported');
+    if (![...FINAL_REVIEW_STATUSES, 'verified'].includes(value.result.status)) fail('decision 的 status 不受支持');
     if (value.result.status === 'verified') validateAuthorityReference(value.sourceAuthority, 'decision sourceAuthority');
-    else if (value.sourceAuthority !== null) fail('review-only decision cannot carry source authority');
+    else if (value.sourceAuthority !== null) fail('review-only decision 不能带来源权威');
     text(value.result.reason, 'decision reason', 2000);
-    if (assertSha(value.artifactSha256, 'decision artifactSha256') !== decisionDigest(value)) fail('decision artifact self-SHA drifted');
+    if (assertSha(value.artifactSha256, 'decision artifactSha256') !== decisionDigest(value)) fail('decision artifact 的自校验 SHA 已变化');
     return clone(value);
 }
 function buildDecisionArtifact({ state, pageKey, operationId = crypto.randomUUID(), actorId, status, reason, now } = {}) {
     if (status === 'verified') fail('verified decision requires an authenticated paper source authority handle');
     const checked = assertCrosswalkState(state);
-    if (!Object.hasOwn(checked.assignments, pageKey)) fail('decision pageKey is absent from crosswalk');
+    if (!Object.hasOwn(checked.assignments, pageKey)) fail('verified decision 的 pageKey 不在 crosswalk 中');
     const assignment = checked.assignments[pageKey];
     const body = { contract: DECISION_CONTRACT, version: VERSION, crosswalkId: checked.crosswalkId,
         operationId, expectedStateSha256: checked.stateSha256, pageKey, pagePath: assignment.pagePath,
@@ -1189,7 +1189,7 @@ function buildDecisionArtifact({ state, pageKey, operationId = crypto.randomUUID
 function buildVerifiedDecisionArtifact({ state, pageKey, authorityHandle, operationId = crypto.randomUUID(),
     actorId, reason = 'Authenticated source authority exactly matches an explicit page identity hint.', now } = {}) {
     const checked = assertCrosswalkState(state);
-    if (!Object.hasOwn(checked.assignments, pageKey)) fail('verified decision pageKey is absent from crosswalk');
+    if (!Object.hasOwn(checked.assignments, pageKey)) fail('verified decision 的 pageKey 不在 crosswalk 中');
     const source = sourceAuthoritySnapshot(authorityHandle); const snapshot = source.snapshot;
     if (snapshot.productionAuthorized !== true) {
         fail('verified decision requires a production-authorized source authority');
@@ -1215,9 +1215,9 @@ function buildVerifiedDecisionArtifact({ state, pageKey, authorityHandle, operat
             fail('verified authority requires a single unambiguous page identity hint; conflict/multiple requires separate resolution authority');
         }
         if (paper.identityHints.status !== 'single' && !titleBindingMatches.length) {
-            fail('verified authority requires a single unambiguous page identity hint or one replayed title fingerprint binding');
+            fail('verified authority 需要单一且无歧义的页面身份提示，或一条重放的标题指纹绑定');
         }
-        fail('verified authority must match one explicit non-title page identity hint');
+        fail('verified authority 必须匹配一条显式的非标题页面身份提示');
     }
     const body = { contract: DECISION_CONTRACT, version: VERSION, crosswalkId: checked.crosswalkId,
         operationId, expectedStateSha256: checked.stateSha256, pageKey, pagePath: assignment.pagePath,
@@ -1230,26 +1230,26 @@ function writeDecisionArtifact({ crosswalkRoot, crosswalkId, decisionName, artif
     const decisions = safeDirectory(path.join(directory, 'decisions'));
     const filename = safeDirectJson(decisions, decisionName, { mustExist: false });
     const normalized = normalizeDecisionArtifact(artifact);
-    if (normalized.crosswalkId !== crosswalkId) fail('decision belongs to another crosswalk');
+    if (normalized.crosswalkId !== crosswalkId) fail('decision 属于另一个 crosswalk');
     try { writeExclusive(filename, prettyBytes(normalized)); }
-    catch (error) { if (error instanceof PageSourceCrosswalkError) throw error; fail(`could not preserve decision: ${error.message}`); }
+    catch (error) { if (error instanceof PageSourceCrosswalkError) throw error; fail(`无法保留 decision：${error.message}`); }
     return filename;
 }
 function loadDecisionHandle(filename, { authorityHandle = null } = {}) {
     const loaded = readRegular(filename, MAX_DECISION_BYTES, 'crosswalk decision');
     const artifact = normalizeDecisionArtifact(loaded.value);
-    if (!loaded.bytes.equals(prettyBytes(artifact))) fail('decision artifact bytes are not canonical');
+    if (!loaded.bytes.equals(prettyBytes(artifact))) fail('decision artifact 的字节不规范');
     let authorityAuthenticated = false;
     if (artifact.result.status === 'verified') {
         const source = sourceAuthoritySnapshot(authorityHandle); const snapshot = source.snapshot;
         if (stableHash(artifact.sourceAuthority) !== stableHash(authorityReference(source))) {
-            fail('verified decision authority differs from authenticated authority handle');
+            fail('verified decision 的 authority 与已认证的 authority 句柄不一致');
         }
         if (snapshot.productionAuthorized !== true) {
-            fail('verified decision authority is not production-authorized');
+            fail('verified decision 的 authority 未获生产授权');
         }
         authorityAuthenticated = true;
-    } else if (authorityHandle !== null) fail('review-only decision must not receive source authority');
+    } else if (authorityHandle !== null) fail('review-only decision 不得接收来源权威');
     const handle = Object.freeze(Object.create(null)); DECISION_HANDLES.add(handle);
     DECISION_HANDLE_DATA.set(handle, Object.freeze({ artifact, filename: fs.realpathSync(filename),
         fileSha256: loaded.sha256, fileDev: loaded.dev, fileIno: loaded.ino,
@@ -1257,13 +1257,13 @@ function loadDecisionHandle(filename, { authorityHandle = null } = {}) {
     return handle;
 }
 function decisionHandleSnapshot(handle) {
-    if (!handle || typeof handle !== 'object' || !DECISION_HANDLES.has(handle)) fail('authenticated decision handle required');
+    if (!handle || typeof handle !== 'object' || !DECISION_HANDLES.has(handle)) fail('需要已认证的 decision 句柄');
     const { authorityHandle: _authorityHandle, ...snapshot } = DECISION_HANDLE_DATA.get(handle);
     return clone(snapshot);
 }
 function lockOwnerRecord(owner, now, token = crypto.randomUUID()) {
-    if (typeof owner !== 'string' || !OWNER_RE.test(owner)) fail('owner is malformed');
-    if (!UUID_RE.test(token)) fail('lock owner token must be a canonical UUID v4');
+    if (typeof owner !== 'string' || !OWNER_RE.test(owner)) fail('owner 格式不正确');
+    if (!UUID_RE.test(token)) fail('lock owner token 必须是规范的 UUID v4');
     const startedAt = nowIso(now);
     const body = { contract: LOCK_OWNER_CONTRACT, version: VERSION, owner, pid: process.pid,
         hostname: os.hostname(), token, startedAt, heartbeatAt: startedAt, leaseMs: LOCK_STALE_MS };
@@ -1272,14 +1272,14 @@ function lockOwnerRecord(owner, now, token = crypto.randomUUID()) {
 function validateLockOwner(value) {
     exact(value, ['contract', 'version', 'owner', 'pid', 'hostname', 'token', 'startedAt', 'heartbeatAt',
         'leaseMs', 'ownerSha256'], 'crosswalk lock owner');
-    if (value.contract !== LOCK_OWNER_CONTRACT || value.version !== VERSION) fail('crosswalk lock owner contract/version mismatch');
-    if (!OWNER_RE.test(value.owner)) fail('crosswalk lock owner is malformed');
-    if (!Number.isSafeInteger(value.pid) || value.pid < 1) fail('crosswalk lock owner PID is malformed');
+    if (value.contract !== LOCK_OWNER_CONTRACT || value.version !== VERSION) fail('crosswalk lock owner 的契约或版本不一致');
+    if (!OWNER_RE.test(value.owner)) fail('crosswalk lock owner 格式不正确');
+    if (!Number.isSafeInteger(value.pid) || value.pid < 1) fail('crosswalk lock owner 的 PID 格式不正确');
     text(value.hostname, 'crosswalk lock hostname', 255);
-    if (!UUID_RE.test(value.token)) fail('crosswalk lock token is malformed');
+    if (!UUID_RE.test(value.token)) fail('crosswalk lock token 格式不正确');
     timestamp(value.startedAt, 'crosswalk lock startedAt'); timestamp(value.heartbeatAt, 'crosswalk lock heartbeatAt');
-    if (value.heartbeatAt < value.startedAt) fail('crosswalk lock heartbeat precedes start');
-    if (value.leaseMs !== LOCK_STALE_MS) fail('crosswalk lock lease differs from the supported policy');
+    if (value.heartbeatAt < value.startedAt) fail('crosswalk lock 的心跳早于启动时间');
+    if (value.leaseMs !== LOCK_STALE_MS) fail('crosswalk lock 的 lease 与受支持策略不一致');
     const body = clone(value); delete body.ownerSha256;
     if (assertSha(value.ownerSha256, 'crosswalk lock ownerSha256') !== stableHash(body)) {
         fail('crosswalk lock owner self-SHA drifted');
@@ -1296,7 +1296,7 @@ function readLockDirectory(lockPath, label = 'crosswalk operation lock') {
     const ownerPath = path.join(lockPath, 'owner.json');
     const loaded = readRegular(ownerPath, MAX_LOCK_OWNER_BYTES, `${label} owner`);
     const record = validateLockOwner(loaded.value);
-    if (!loaded.bytes.equals(prettyBytes(record))) fail(`${label} owner bytes are not canonical`);
+    if (!loaded.bytes.equals(prettyBytes(record))) fail(`${label} 的 owner 字节不规范`);
     const ownerInfo = fs.lstatSync(ownerPath);
     return { lockPath, directoryDev: info.dev, directoryIno: info.ino, directoryMtimeMs: info.mtimeMs,
         ownerDev: ownerInfo.dev, ownerIno: ownerInfo.ino, ownerMtimeMs: ownerInfo.mtimeMs,
@@ -1336,7 +1336,7 @@ function sameLockSnapshot(left, right) {
 }
 function removeVerifiedLockDirectory(snapshot, label) {
     const current = readLockDirectory(snapshot.lockPath, label);
-    if (!sameLockSnapshot(snapshot, current)) fail(`${label} changed before removal`);
+    if (!sameLockSnapshot(snapshot, current)) fail(`${label} 在移除前已变化`);
     fs.unlinkSync(path.join(snapshot.lockPath, 'owner.json'));
     fs.rmdirSync(snapshot.lockPath);
     syncDirectory(path.dirname(snapshot.lockPath));
@@ -1358,8 +1358,8 @@ function clearOrRejectReclaimMarker(reclaimPath, options = {}) {
     try { snapshot = readLockDirectory(reclaimPath, 'crosswalk lock reclaim marker'); }
     catch (error) { if (error.code === 'ENOENT') return; throw error; }
     const liveness = processLiveness(snapshot.record);
-    if (liveness === 'alive') fail('crosswalk lock reclaim is owned by a live process');
-    if (!reclaimableLock(snapshot, Date.now(), options)) fail('crosswalk lock reclaim marker is not stale');
+    if (liveness === 'alive') fail('crosswalk lock 的回收标记属于存活进程');
+    if (!reclaimableLock(snapshot, Date.now(), options)) fail('crosswalk lock 的回收标记尚未过期');
     removeVerifiedLockDirectory(snapshot, 'crosswalk lock reclaim marker');
 }
 function uninstallLockSignalHandlers() {
@@ -1385,7 +1385,7 @@ function installLockSignalHandlers() {
     lockSignalHandlersInstalled = true;
 }
 function acquireLock(directory, owner, now, options = {}) {
-    if (typeof owner !== 'string' || !OWNER_RE.test(owner)) fail('owner is malformed');
+    if (typeof owner !== 'string' || !OWNER_RE.test(owner)) fail('owner 格式不正确');
     const lockPath = path.join(directory, 'operation.lock');
     const reclaimPath = path.join(directory, 'operation.lock.reclaim');
     for (let attempt = 0; attempt < 8; attempt += 1) {
@@ -1411,24 +1411,24 @@ function acquireLock(directory, owner, now, options = {}) {
             let current;
             try { current = readLockDirectory(lockPath); }
             catch (error) { if (error.code === 'ENOENT') continue; throw error; }
-            if (!sameLockSnapshot(stale, current)) fail('crosswalk operation lock changed during stale reclaim');
-            if (!reclaimableLock(current, Date.now(), options)) fail('crosswalk operation lock ceased to be safely reclaimable');
+            if (!sameLockSnapshot(stale, current)) fail('crosswalk operation lock 在过期回收期间已变化');
+            if (!reclaimableLock(current, Date.now(), options)) fail('crosswalk operation lock 已不再可安全回收');
             removeVerifiedLockDirectory(current, 'crosswalk operation lock');
         } finally {
             removeVerifiedLockDirectory(reclaim, 'crosswalk lock reclaim marker');
         }
     }
-    fail('crosswalk lock acquisition exceeded the bounded reclaim attempts');
+    fail('获取 crosswalk lock 超过有界回收次数');
 }
 function releaseLock(handle) {
-    if (!handle || typeof handle !== 'object' || !LOCK_HANDLES.has(handle)) fail('authenticated crosswalk lock handle required');
+    if (!handle || typeof handle !== 'object' || !LOCK_HANDLES.has(handle)) fail('需要已认证的 crosswalk lock 句柄');
     const expected = LOCK_HANDLE_DATA.get(handle); const snapshot = readLockDirectory(expected.lockPath);
     if (!sameLockSnapshot(expected.snapshot, snapshot)
         || snapshot.record.token !== expected.snapshot.record.token
         || snapshot.record.pid !== process.pid || snapshot.record.pid !== expected.snapshot.record.pid
         || snapshot.record.hostname !== os.hostname()
         || snapshot.record.hostname !== expected.snapshot.record.hostname) {
-        fail('crosswalk operation lock changed while held');
+        fail('crosswalk operation lock 在持有期间已变化');
     }
     removeVerifiedLockDirectory(snapshot, 'crosswalk operation lock');
     ACTIVE_LOCK_HANDLES.delete(handle); LOCK_HANDLES.delete(handle); LOCK_HANDLE_DATA.delete(handle);
@@ -1444,12 +1444,12 @@ function releaseLock(handle) {
 function applyDecision({ crosswalkRoot, crosswalkId, decisionHandle, owner, now, recoveryPolicy = null } = {}) {
     const directory = crosswalkDirectory(crosswalkRoot, crosswalkId);
     if (!decisionHandle || typeof decisionHandle !== 'object' || !DECISION_HANDLES.has(decisionHandle)) {
-        fail('authenticated decision handle required');
+        fail('需要已认证的 decision 句柄');
     }
     const originalDecision = DECISION_HANDLE_DATA.get(decisionHandle);
     const decision = decisionHandleSnapshot(decisionHandle);
     const expectedDirectory = fs.realpathSync(path.join(directory, 'decisions'));
-    if (path.dirname(decision.filename) !== expectedDirectory) fail('decision handle is outside this crosswalk decision directory');
+    if (path.dirname(decision.filename) !== expectedDirectory) fail('decision 句柄不在本 crosswalk 的 decision 目录内');
     const lock = acquireLock(directory, owner, now, { recoveryPolicy });
     try {
         let replayedAuthorityHandle = null;
@@ -1458,7 +1458,7 @@ function applyDecision({ crosswalkRoot, crosswalkId, decisionHandle, owner, now,
                 replayedAuthorityHandle = replaySourceAuthorityHandle(originalDecision.authorityHandle,
                     { requireProduction: true });
             } catch (error) {
-                fail(`verified decision authority replay failed while locked: ${error.message}`);
+                fail(`锁定期间 verified decision 的 authority 重放失败：${error.message}`);
             }
         }
         const currentDecisionHandle = loadDecisionHandle(originalDecision.filename,
@@ -1471,9 +1471,9 @@ function applyDecision({ crosswalkRoot, crosswalkId, decisionHandle, owner, now,
         }
         const state = readCrosswalk({ crosswalkRoot, crosswalkId }); const artifact = decision.artifact;
         if (artifact.result.status === 'verified' && decision.authorityAuthenticated !== true) {
-            fail('verified decision handle lacks authenticated source authority');
+            fail('verified decision 句柄缺少已认证的来源权威');
         }
-        if (artifact.crosswalkId !== crosswalkId) fail('decision belongs to another crosswalk');
+        if (artifact.crosswalkId !== crosswalkId) fail('decision 属于另一个 crosswalk');
         const prior = state.attempts.find(item => item.operationId === artifact.operationId);
         if (prior) {
             if (prior.decisionFileSha256 !== decision.fileSha256 || prior.decisionArtifactSha256 !== artifact.artifactSha256) {
@@ -1481,14 +1481,14 @@ function applyDecision({ crosswalkRoot, crosswalkId, decisionHandle, owner, now,
             }
             return state;
         }
-        if (artifact.expectedStateSha256 !== state.stateSha256) fail('decision compare-and-swap state SHA mismatch');
+        if (artifact.expectedStateSha256 !== state.stateSha256) fail('decision 的 compare-and-swap state SHA 不一致');
         const current = state.assignments[artifact.pageKey];
         if (!current || current.pagePath !== artifact.pagePath || current.pageContentSha256 !== artifact.pageContentSha256) {
-            fail('decision page snapshot differs from crosswalk assignment');
+            fail('decision 的页面快照与 crosswalk assignment 不一致');
         }
-        if (current.status !== 'pending') fail('only pending assignments may receive current review decisions');
+        if (current.status !== 'pending') fail('只有 pending assignment 可以接收当前 review decision');
         const recordedAt = nowIso(now);
-        if (artifact.createdAt > recordedAt) fail('decision artifact cannot be recorded before it was created');
+        if (artifact.createdAt > recordedAt) fail('decision artifact 不能早于其创建时间被记录');
         const next = clone(state);
         next.assignments[artifact.pageKey] = { ...current, status: artifact.result.status,
             reason: artifact.result.reason, decisionArtifactSha256: artifact.artifactSha256,
@@ -1528,22 +1528,22 @@ function normalizeFinalReceipt(value) {
         'ledgerFileSha256', 'historicalReceiptSha256', 'verifiedAssignmentSetSha256', 'identityGroups',
         'identityGroupsSha256', 'verified', 'total', 'receiptSha256'], 'crosswalk final receipt');
     if (value.contract !== FINAL_RECEIPT_CONTRACT || value.version !== VERSION || !UUID_RE.test(value.crosswalkId)) {
-        fail('crosswalk final receipt contract/version/UUID is invalid');
+        fail('crosswalk 最终 receipt 的契约、版本或 UUID 无效');
     }
     for (const field of ['stateSha256', 'stateFileSha256', 'ledgerSha256', 'ledgerFileSha256',
         'historicalReceiptSha256', 'verifiedAssignmentSetSha256', 'identityGroupsSha256']) {
         assertSha(value[field], `crosswalk final receipt ${field}`);
     }
     if (!Number.isSafeInteger(value.verified) || !Number.isSafeInteger(value.total)
-        || value.verified < 1 || value.verified !== value.total) fail('crosswalk final receipt counts are invalid');
+        || value.verified < 1 || value.verified !== value.total) fail('crosswalk 最终 receipt 的计数无效');
     const identityGroups = normalizeIdentityGroups(value.identityGroups, 'crosswalk final receipt identityGroups');
     if (stableHash(identityGroups) !== value.identityGroupsSha256
         || identityGroups.reduce((count, group) => count + group.pageKeys.length, 0) !== value.total) {
-        fail('crosswalk final receipt identity groups drifted');
+        fail('crosswalk 最终 receipt 的 identity group 已变化');
     }
     const body = clone(value); delete body.receiptSha256;
     if (assertSha(value.receiptSha256, 'crosswalk final receipt receiptSha256') !== stableHash(body)) {
-        fail('crosswalk final receipt self-SHA drifted');
+        fail('crosswalk 最终 receipt 的自校验 SHA 已变化');
     }
     return { ...clone(value), identityGroups };
 }
@@ -1570,11 +1570,11 @@ function replaySourceAuthorities(state, authorityRoot, authorityResolver, archiv
             const replayed = replaySourceAuthorityHandle(handle, { requireProduction: true });
             const source = sourceAuthoritySnapshot(replayed);
             if (stableHash(reference) !== stableHash(authorityReference(source))) {
-                fail('finalize source authority differs from verified assignment');
+                fail('finalize 的来源权威与 verified assignment 不一致');
             }
         } catch (error) {
             if (error instanceof PageSourceCrosswalkError) throw error;
-            fail(`finalize could not replay source authority: ${error.message}`);
+            fail(`finalize 无法重放来源权威：${error.message}`);
         }
     }
 }
@@ -1588,7 +1588,7 @@ function readFinalReceipt({ crosswalkRoot, crosswalkId, authorityRoot, authority
     const loaded = readRegular(receiptFile, MAX_RECEIPT_BYTES, 'crosswalk final receipt');
     const receipt = normalizeFinalReceipt(loaded.value); const expected = finalReceiptFor(state);
     if (!loaded.bytes.equals(prettyBytes(receipt)) || stableHash(receipt) !== stableHash(expected)) {
-        fail('crosswalk final receipt does not bind the current complete state');
+        fail('crosswalk 最终 receipt 与当前完整 state 不匹配');
     }
     replaySourceAuthorities(state, authorityRoot, authorityResolver, archiveIdentityRoot, archiveDataRoot,
         localCrawlIdentityRoot, localCrawlSnapshotRoot, localCrawlDataRoot, conferenceIdentityRoot, conferenceDataRoot, conferenceBlogRoot, conferenceIclrAcceptedRoot);
@@ -1603,7 +1603,7 @@ function finalizeCrosswalk({ crosswalkRoot, crosswalkId, authorityRoot, authorit
     try {
         const state = readCrosswalk({ crosswalkRoot, crosswalkId });
         if (state.completion.status !== 'complete' || state.completion.verified !== state.completion.total) {
-            fail('finalize requires every paper to have authenticated verified source authority');
+            fail('finalize 要求每篇论文都有已认证的 verified 来源权威');
         }
         replaySourceAuthorities(state, authorityRoot, authorityResolver, archiveIdentityRoot, archiveDataRoot,
             localCrawlIdentityRoot, localCrawlSnapshotRoot, localCrawlDataRoot, conferenceIdentityRoot, conferenceDataRoot, conferenceBlogRoot, conferenceIclrAcceptedRoot);
@@ -1614,7 +1614,7 @@ function finalizeCrosswalk({ crosswalkRoot, crosswalkId, authorityRoot, authorit
             if (error.code !== 'EEXIST') throw error;
         }
         const current = readCrosswalk({ crosswalkRoot, crosswalkId });
-        if (current.stateSha256 !== state.stateSha256) fail('crosswalk state changed while finalizing');
+        if (current.stateSha256 !== state.stateSha256) fail('定稿时 crosswalk state 已变化');
         replaySourceAuthorities(current, authorityRoot, authorityResolver, archiveIdentityRoot, archiveDataRoot,
             localCrawlIdentityRoot, localCrawlSnapshotRoot, localCrawlDataRoot, conferenceIdentityRoot, conferenceDataRoot, conferenceBlogRoot, conferenceIclrAcceptedRoot);
         return readFinalReceipt({ crosswalkRoot, crosswalkId, authorityRoot, authorityResolver,
