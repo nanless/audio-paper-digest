@@ -169,10 +169,8 @@ const {
 } = ANALYSIS_CONFIG;
 
 const API_READER_REPAIR_TRUNCATION_RETRY_POLICY = 'bounded-patch-truncation-retry-v1';
-// Explicitly versioned recovery epoch: substantive gate fixes may need one
-// further bounded Reader attempt after an earlier implementation allowance was
-// already consumed.  It is part of candidate identity and cannot be changed
-// by ordinary retries.
+// 显式编号的恢复代次。闸门做了实质修正后，此前的实现层配额可能已经用完，这时
+// 需要再给 Reader 一次有上限的尝试。这个代次参与候选项身份，普通重试改变不了它。
 const READER_RECOVERY_EPOCH = 'conference-reader-recovery-epoch-2026-09-12-v2';
 
 function resolveApiReaderBaseRepairMaxTokens(
@@ -197,10 +195,9 @@ function resolveApiReaderRepairRetryMaxTokens(
         throw new Error('Reader full output token budget must be a positive safe integer');
     }
     const base = resolveApiReaderBaseRepairMaxTokens(full, baseRepairMaxTokens);
-    // A truncated local patch may retry with at most one third of the normal
-    // 48000-token Reader budget, capped at the general 16000-token repair
-    // ceiling. The ordinary patch identity remains 8000, so existing paid
-    // candidates can migrate through the implementation-SHA path.
+    // 局部补丁被截断后可以重试，但最多用正常 Reader 预算 48000 token 的三分之一，
+    // 并且不超过通用的 16000 token 修复上限。普通补丁身份仍是 8000，已有的付费
+    // 候选项可以顺着实现 SHA 那条路迁移过来。
     const boundedRetry = Math.min(16000, Math.max(base, Math.floor(full / 3)));
     return Math.min(full, boundedRetry);
 }
@@ -231,10 +228,9 @@ function readerIssuesRequireFullSourceBindingRetry(
             && issue?.code !== 'reader_table_count_insufficient');
     if (blocking.some(issue => classifyTableBindingOrderIssue(issue).actionable)) return false;
     const otherBlocking = blocking.filter(issue => !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair);
-    // A valid draft that merely put every table outside result/ablation needs
-    // a local table move/rebind. TABLE_N appears in the gate only as evidence
-    // inventory; treating it as a broken binding wastes a second 48k full
-    // generation and can hit the unchanged-gate cutoff before any patch runs.
+    // 一份合法草稿只是把所有表格放到了 result/ablation 之外，本地挪一下表格、重新
+    // 绑定就行。TABLE_N 在闸门里只是证据清单；把它当成绑定损坏，会白白再跑一次 48k
+    // 的完整生成，还可能在补丁动手前就撞上「闸门未变化」的截止。
     if (otherBlocking.some(issue => issue?.code === 'reader_result_table_missing'
         || /^读者文章主结果表覆盖不足/.test(String(issue?.message || '')))) return false;
     const weakStructureNeedsFullRetry = Boolean(readerCapabilityPolicy && candidate && fullAttempts < 2
@@ -258,19 +254,16 @@ function readerIssuesRequireFullSourceBindingRetry(
             )
         )));
 }
-// Muse reasoning tokens count against max_output_tokens.  The old 2500-token
-// ceiling could therefore truncate before a 320–600-character summary was
-// emitted.  Respect an operator's lower repair budget while capping this
-// narrowly scoped stage well below the general 16000-token repair default.
+// Muse 的推理 token 也算进 max_output_tokens。旧的 2500 token 上限因此会在
+// 320–600 字的摘要写出来之前就截断。这里既尊重运维方设置的更低修复预算，也把这个
+// 范围很窄的阶段压在通用 16000 token 修复默认值之下。
 const CORE_SUMMARY_REPAIR_MAX_TOKENS = Math.min(REPAIR_MAX_TOKENS, 8000);
 const LEGACY_CORE_SUMMARY_REPAIR_MAX_TOKENS = 2500;
 const IMAGE_CACHE_DIR = path.join(CURRENT_DIR, 'image-cache');
-// Reader carries the largest text+image payload. A transport failure produces
-// no reusable draft, so repeat it only on a later explicit run; all upstream
-// checkpoints remain reusable then.
-// Reader generations are expensive; one same-account retry is cheaper than
-// discarding a full draft because a streamed response missed its terminal
-// event or the provider briefly reset the connection.
+// Reader 的文本加图片负载最大。传输失败不会留下可复用的草稿，所以只留到下一次显式
+// 运行时再重试；那时上游的检查点都还能用。
+// Reader 生成很贵。流式响应丢了终止事件，或者服务方短暂重置连接，同账号重试一次
+// 比丢掉整份草稿便宜。
 const API_READER_TRANSPORT_MAX_RETRIES = 2;
 
 function getArxivFetchDispatcher() {
@@ -435,9 +428,8 @@ function sanitizeModelMessages(messages, options = {}) {
         let text = String(value || '')
             .replace(/[\uD800-\uDFFF]/g, '�')
             .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ');
-        // Only task-specific evidence sanitizers should opt into this lossy
-        // conversion. Keeping prompt instructions and prior model output intact
-        // preserves LaTeX semantics for the main analysis and repair stages.
+        // 只有针对具体任务的证据清洗器才该启用这种有损转换。提示词指令和此前的模型
+        // 输出保持原样，主分析和修复阶段才能保住 LaTeX 语义。
         if (replaceBackslashes) text = text.replace(/\\/g, '⧵');
         return text;
     };
@@ -479,8 +471,8 @@ function buildTypeAwareSourceContext(
         METHOD: new Set(['核心摘要', '方法概述和架构']),
         RESULT: new Set(['核心摘要', '方法概述和架构', '实验结果']),
         STRUCTURE: new Set(sectionDefinitions.map(([, title]) => title)),
-        // Reader facts come only from source evidence, never generated
-        // canonical sections. Canonical remains a separate scoring artifact.
+        // Reader 的事实只来自原文证据，不来自生成出来的规范小节（canonical
+        // sections）。规范小节仍只作为评分用的另一份产物。
         READER: new Set(),
         SCORING: new Set(sectionDefinitions.map(([, title]) => title))
     };
@@ -624,13 +616,10 @@ function parseScoringAuditResult(raw, allowedEvidenceIds = null) {
         if (evidenceProfile.ablationStatus === 'missing') {
             evidenceProfile.ablationStatus = 'none';
         }
-        // The model sometimes reports a concrete ablation status while also
-        // explicitly saying that it made no multi-component causal claim.
-        // Those fields are semantically inconsistent, but the safe
-        // deterministic repair is unambiguous: without such a claim there is
-        // no ablation status to assess.  Keep the converse inconsistency
-        // strict so a claimed multi-component result cannot be silently
-        // downgraded.
+        // 模型有时报了一个具体的消融状态，同时又明说自己没有做多组件的因果断言。
+        // 这两个字段语义上互相矛盾，但可确定的安全修法没有歧义：既然没有那个断言，
+        // 就没有消融状态可评。反过来的矛盾仍按严格处理，免得已经声明多组件结果的
+        // 条目被悄悄降级。
         if (!evidenceProfile.multiComponentClaimed
             && evidenceProfile.ablationStatus !== 'not_applicable') {
             evidenceProfile.ablationStatus = 'not_applicable';
@@ -1059,51 +1048,45 @@ function isAllowedReaderNarrativeNumeralIssue(issue, article = '') {
     if (match === '一对' && Number.isInteger(issue.index)
         && /^一对一(?:分配|匹配|映射|对应|关联|对齐|约束|配对)/u.test(
             articleText.slice(issue.index))) return true;
-    // A third-octave band is a scientific term, not a measured one-fold gain.
-    // Match the exact occurrence, never waive other 一倍 merely because the
-    // term appears elsewhere in the article.
+    // 三分之一倍频程是科学术语，不是量出来的「一倍」增益。只匹配命中的那一处，
+    // 不要因为这个词在文章别处出现过，就把其他「一倍」一并豁免。
     if (match === '一倍' && Number.isInteger(issue.index) && issue.index >= 3
         && articleText.slice(issue.index - 3, issue.index + 4) === '三分之一倍频程') return true;
-    // “million-scale / millions of entries” is an order-of-magnitude claim,
-    // not proof of an exact 1,000,000 count. Preserve Chinese magnitude
-    // adjectives such as 百万级/千万级/亿级 only at the exact diagnosed span;
-    // precise forms such as 百万条、十级评分 remain blocking.
+    // 「百万级 / 数百万条」是量级说法，不构成精确 1,000,000 的证明。像 百万级、
+    // 千万级、亿级 这种中文量级形容词，只在诊断命中的那一处保留；百万条、十级评分
+    // 这类精确说法仍然拦截。
     if (/^[零〇一二两三四五六七八九十百千万亿]*[万亿]级$/u.test(match)
         && Number.isInteger(issue.index) && issue.index >= 0
         && articleText.slice(issue.index, issue.index + match.length) === match) return true;
-    // “另一个方向” uses 一个 as an anaphoric part of “the other”, not as a
-    // standalone exact count. Keep the waiver bound to this exact occurrence.
+    // 「另一个方向」里的「一个」是「the other」的指代成分，不是独立的精确计数。
+    // 豁免只绑定这一处。
     if (match === '一个方向' && Number.isInteger(issue.index) && issue.index >= 1
         && articleText.slice(issue.index - 1, issue.index + match.length) === '另一个方向') return true;
-    // “另一个任务” is the same anaphoric construction; after spacing
-    // normalization the gate can otherwise match the “一个任务” substring.
+    // 「另一个任务」是同样的指代构造；空格归一化之后，闸门本会匹配到里面的
+    // 「一个任务」。
     if (match === '一个任务' && Number.isInteger(issue.index) && issue.index >= 1
         && articleText.slice(issue.index - 1, issue.index + match.length) === '另一个任务') return true;
-    // “一个数据集” is frequently the indefinite article in explanatory prose
-    // (“each paper uses a dataset”), not a claim that an exact dataset count
-    // was measured. Keep the exception exact; “两个数据集”等仍按 exact count
-    // 要求使用阿拉伯数字。
+    // 「一个数据集」在说明性文字里多半是不定冠词（「每篇论文用一个数据集」），不是
+    // 在说量到了确切的数据集数量。例外只限这一处；「两个数据集」这类仍按精确计数
+    // 要求写成阿拉伯数字。
     if (match === '一个数据集') return true;
-    // “一模态” is a modality label (“unimodal”), not an exact count of models
-    // or experiments. Keep the exception exact so “一个模型”等仍按数量门禁处理。
+    // 「一模态」是模态标签（unimodal），不是模型或实验的确切计数。例外只限这一处，
+    // 「一个模型」这类说法仍按数量门禁处理。
     if (match === '一模态') return true;
     return /^(?:一|两)(?:个|条|段|类|层|种|套|路|方面|部分|组|步|轮|半|张|幅)$/.test(match)
         || /^一(?:个)?(?:模型|系统|框架|方法|组件|问题|概念|目标|接口|视角|例子|直觉)$/.test(match);
 }
 
-// A Reader draft occasionally chooses a one-character scientific term even
-// though the same article has already established its unambiguous compound
-// form. Repair only that exact, source-visible expansion; weakening the
-// two-real-terms contract would let arbitrary one-character labels through.
+// Reader 草稿偶尔会挑一个单字术语，可同一篇文章里已经定下了没有歧义的复合写法。
+// 只修这一处原文可见的展开；放宽「两个真实术语」的约定，就会放过任意单字标签。
 function normalizeReaderConceptBridgeTerms(candidate) {
     if (!candidate || !Array.isArray(candidate.conceptBridges)
         || !Array.isArray(candidate.sections)) return false;
     const article = candidate.sections.map(section => String(section?.body || '')).join('\n');
-    // A model can leak the bridge object's own field names into terms, e.g.
-    // ["音素识别", "音位", "sectionKind", "component"]. Do not generally
-    // truncate an overlong array: only remove a trailing, fully-known field /
-    // section-kind suffix after the first two source-visible terms are valid.
-    // Anything else remains a hard schema failure for the Reader repair loop.
+    // 模型会把 bridge 对象自己的字段名漏进术语里，比如
+    // ["音素识别", "音位", "sectionKind", "component"]。不要一律截断过长的数组：
+    // 只在前两个原文可见的术语都合法时，去掉末尾那个完全已知的字段名或 sectionKind
+    // 后缀。其他情况仍按 schema 硬失败，交给 Reader 修复循环。
     const knownLeakedTerms = new Set([
         'sectionKind', 'targetKind', 'marker', 'explanation', 'terms', 'kind',
         'body', 'heading', 'focusPoints', 'tableIndex', 'sourceType',
@@ -1121,12 +1104,10 @@ function normalizeReaderConceptBridgeTerms(candidate) {
             bridge.terms = terms.slice(0, 2);
             changed = true;
         }
-        // A repair model can duplicate the first bridge term as the suffix of
-        // the second one, e.g. ["声音事件定位与检测",
-        // "六自由度声音事件定位与检测"].  Recover only this exact, bounded
-        // shape when the surviving prefix is also visible in the article. It
-        // keeps the bridge grounded in the draft and avoids guessing a term
-        // from a partial substring.
+        // 修复模型会把第一个 bridge 术语重复成第二个的后缀，比如
+        // ["声音事件定位与检测", "六自由度声音事件定位与检测"]。只有剩下的前缀在文章里
+        // 也可见时，才按这个固定的形态恢复。这样 bridge 仍落在草稿上，不用靠半截子串
+        // 去猜术语。
         if (Array.isArray(bridge.terms) && bridge.terms.length === 2) {
             const repairedTerms = bridge.terms.map(term => (
                 typeof term === 'string' ? term.trim() : term
@@ -1161,12 +1142,10 @@ function normalizeReaderConceptBridgeTerms(candidate) {
     return changed;
 }
 
-// A failed Reader patch can duplicate an already-declared bridge marker in a
-// different section while writing a second, unrelated bridge explanation. If
-// the declared occurrence is unique and standalone in its own section, and
-// the extra occurrence is likewise standalone but in a different section
-// kind, remove only that extra marker. The surrounding prose remains authored
-// content and is not silently discarded.
+// Reader 补丁失败时，会在另一个小节里复制一个已经声明过的 bridge 标记，同时写下
+// 另一段无关的 bridge 解释。如果声明过的那处在自己小节里唯一且独立成块，而多出来的
+// 那处同样独立成块、却在另一种小节里，就只删掉多出来的标记。周围的正文仍是作者写的
+// 内容，不会被悄悄丢掉。
 function normalizeDuplicateReaderConceptBridgeMarkers(candidate) {
     if (!candidate || !Array.isArray(candidate.conceptBridges)
         || !Array.isArray(candidate.sections)) return false;
@@ -1191,13 +1170,11 @@ function normalizeDuplicateReaderConceptBridgeMarkers(candidate) {
     return changed;
 }
 
-// A bounded recovery repair for a common model omission: the bridge array
-// starts at CONCEPT_BRIDGE_2 while the prose also contains one unbound
-// CONCEPT_BRIDGE_1 paragraph.  Only repair the unambiguous shifted sequence:
-// every declared marker is unique, standalone, bound to its declared section,
-// and every missing lower ordinal is an equally unique standalone orphan. The
-// orphan marker carries no authored text, so removing it and renumbering the
-// declared marker tokens preserves the explanation and its section exactly.
+// 针对模型常见遗漏的一处有上限的恢复修复：bridge 数组从 CONCEPT_BRIDGE_2 开始，正文
+// 里却还有一段没被绑定的 CONCEPT_BRIDGE_1。只有整段序号明确错位时才修：每个已声明的
+// 标记都唯一、独立成块、绑在它声明的小节上，每个缺失的较小序号也都是同样唯一的独立
+// 孤儿。孤儿标记不带作者正文，删掉它、再把已声明标记的 token 重新编号，解释文字和它
+// 所在的小节都原样保留。
 function normalizeShiftedReaderConceptBridgeMarkers(candidate) {
     if (!Array.isArray(candidate?.conceptBridges) || !Array.isArray(candidate?.sections)
         || candidate.conceptBridges.length < 1) return false;
@@ -1250,11 +1227,9 @@ function normalizeShiftedReaderConceptBridgeMarkers(candidate) {
     return true;
 }
 
-// Only add a unit declaration to the exact sentence reported by the existing
-// comparison gate.  This is useful when the model repeats a source-supported
-// metric without its local label, and avoids rewriting numbers, tables, or
-// formulas.  EER-like values at or below 1 stay explicitly dimensionless;
-// accuracy-like values use the percentage unit already implied by the metric.
+// 只给现有比较闸门报出的那句话补上单位声明。模型复述原文支持过的指标、却漏了局部
+// 单位时用得上，也避免改写数字、表格和公式。EER 这类小于等于 1 的值仍写成明确的
+// 无量纲；准确率这类值用该指标本身已经隐含的百分号。
 function normalizeIssueBoundReaderComparisonUnits(candidate, issues = []) {
     if (!candidate || !Array.isArray(candidate.sections)) return false;
     const excerpts = [];
@@ -1266,10 +1241,9 @@ function normalizeIssueBoundReaderComparisonUnits(candidate, issues = []) {
     }
     let changed = false;
     const repairExcerpt = excerpt => {
-        // Keep this list aligned with the percentage-scale metrics recognized
-        // by editorial-quality. The earlier repair only handled
-        // accuracy-like names, so a source-backed WER comparison such as
-        // “词错误率 64.47 高于 ... 60.20” could never receive a local unit.
+        // 这份列表要与 editorial-quality 认得的百分比类指标保持一致。早先的修复只认
+        // 准确率那一类名字，所以像「词错误率 64.47 高于 ... 60.20」这种有原文支撑的
+        // WER 比较，永远拿不到局部单位。
         const metric = excerpt.match(
             /等错误率|字符错误率|字错误率|词错误率|错误率|准确率|精确率|召回率|正确率|覆盖率|命中率|WER|CER|PER|F-?score|S-BAcc|state-balanced accuracy|step accuracy/iu
         )?.[0] || null;
@@ -1299,11 +1273,9 @@ function normalizeIssueBoundReaderComparisonUnits(candidate, issues = []) {
         }
     };
     for (const excerpt of new Set(excerpts)) repairExcerpt(excerpt);
-    // The same gate reports NFKC-normalized prose.  A previous repair may
-    // have converted the digits in the persisted body to Chinese numerals, so
-    // the original diagnostic excerpt no longer matches byte-for-byte.  Use
-    // the gate's current sentence only under an existing comparison issue;
-    // this remains bounded to sentences the authoritative gate already found.
+    // 同一个闸门报出的是做过 NFKC 归一化的正文。此前的修复可能已经把落盘正文里的
+    // 数字换成了中文数字，原来的诊断片段因此对不上字节。只在确实存在比较问题时采用
+    // 闸门当前的句子；范围仍限于权威闸门已经找出的那些句子。
     if (excerpts.length > 0) {
         for (const section of candidate.sections) {
             for (const finding of findMissingComparisonUnits(String(section?.body || ''))) {
@@ -1312,10 +1284,9 @@ function normalizeIssueBoundReaderComparisonUnits(candidate, issues = []) {
             }
         }
     }
-    // A prior surface pass can convert “两位数” into “2 位数” while the
-    // persisted diagnostic still contains the pre-pass excerpt (or vice
-    // versa).  Keep this narrowly issue-bound and add the local unit
-    // declaration to the matching metric instead of inventing a value.
+    // 之前的表层处理可能把「两位数」变成了「2 位数」，而已落盘的诊断里还是处理前的
+    // 片段（反过来也一样）。这里严格绑定问题本身，给匹配上的指标补局部单位声明，
+    // 不要凭空编一个值。
     if (excerpts.some(excerpt => /位数/u.test(excerpt))) {
         const metricPattern = /((?:[0-9]+|[零〇一二两三四五六七八九十百千万亿]+)\s*位数)(\s*的\s*)(准确率|精确率|召回率|正确率|覆盖率|命中率)(?!\s*[（(][^（）()]{0,30}(?:%|个百分点|点|分|无量纲)\s*[）)])/gu;
         for (const section of candidate.sections) {
@@ -1335,10 +1306,9 @@ function normalizeIssueBoundReaderComparisonUnits(candidate, issues = []) {
     return changed;
 }
 
-// Repair only the exact technical-boundary token reported by the current
-// editorial gate. This is intentionally separate from the broad prose
-// normalizer: source quotes, code, and compiler-owned table cells must remain
-// byte-identical, while a plain Reader paragraph may safely become “prefix 数”.
+// 只修当前编辑闸门报出的那个技术边界 token。这一步刻意与宽泛的正文归一化分开：原文
+// 引文、代码和编译器生成的表格单元必须保持字节一致，而普通 Reader 段落可以安全地
+// 变成「前缀 数」。
 function repairReportedTextSpacing(candidate, issues = []) {
     if (!candidate || !Array.isArray(candidate.sections)) return false;
     const terms = new Set();
@@ -1363,9 +1333,8 @@ function repairReportedTextSpacing(candidate, issues = []) {
             .filter(Number.isInteger)
     );
     const repairSurface = surface => String(surface || '')
-        // Keep the repair issue-bound and spacing-only.  The editorial gate
-        // reports both Han→ASCII and ASCII→Han adhesions; neither direction
-        // may be repaired by changing a token, number, punctuation, or fact.
+        // 修复只绑定问题本身，而且只动空格。编辑闸门会同时报出汉字接 ASCII 和 ASCII
+        // 接汉字两种情况；哪个方向都不能靠改 token、数字、标点或事实来修。
         .replace(/([\p{Script=Han}])(?=[A-Za-z])/gu, '$1 ')
         .replace(/([A-Za-z0-9.%+*)\]~*_])(?=[\p{Script=Han}])/gu, '$1 ');
     const repairTerm = (surface, term) => {
@@ -1379,10 +1348,9 @@ function repairReportedTextSpacing(candidate, issues = []) {
         const hanSuffix = term.slice(asciiPrefix.length);
         const escapedPrefix = asciiPrefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const escapedSuffix = hanSuffix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        // The gate intentionally removes Markdown/tilde formatting before
-        // reporting a boundary. Re-match those harmless separators in the
-        // real draft so names such as “bellplay~环境” become
-        // “bellplay~ 环境” without changing the technical name itself.
+        // 闸门在报边界之前，会先去掉 Markdown 和波浪号格式，这是有意为之。要在真实
+        // 草稿里重新匹配这些无害的分隔符，让「bellplay~环境」变成「bellplay~ 环境」，
+        // 同时不改动技术名称本身。
         return updated.replace(
             new RegExp(`${escapedPrefix}[~*_]*${escapedSuffix}`, 'gu'),
             repairSurface
@@ -1430,9 +1398,8 @@ function repairReportedTextSpacing(candidate, issues = []) {
         if (next !== body) { body = next; changed = true; }
         section.body = body;
     }
-    // A concept bridge explanation is assembled into the Reader article after
-    // it leaves sections.  Repair its exact diagnosed surface as well, while
-    // keeping the bridge terms and all surrounding prose unchanged.
+    // 概念 bridge 的解释离开小节之后，会被拼进 Reader 文章。它被诊断出的那个表层同样
+    // 要修，但 bridge 术语和上下文正文都不动。
     if (Array.isArray(candidate.conceptBridges)) {
         for (const bridge of candidate.conceptBridges) {
             if (typeof bridge?.explanation !== 'string') continue;
@@ -1449,10 +1416,8 @@ function repairReportedTextSpacing(candidate, issues = []) {
     return changed;
 }
 
-// Repair only the exact numeric-typography surfaces reported by the current
-// gate. Source-quotes tables are authored prose and may receive spacing-only
-// repairs; compiler-owned selection tables, quotations, code, and formulas
-// remain byte-identical.
+// 只修当前闸门报出的那些数字排版表层。source-quotes 表格属于作者正文，可以只改空格；
+// 编译器生成的 selection 表格、引文、代码和公式保持字节一致。
 function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
     if (!candidate || !Array.isArray(candidate.sections)) return false;
     const reportedNumericFragments = new Set();
@@ -1479,11 +1444,10 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
         let previousLine = '';
         const next = section.body.split('\n').map(line => {
             const trimmed = line.trimStart();
-            // A TABLE marker occupies a position in the binding stream before
-            // compileReaderTableSelections replaces it with the signed PDF
-            // table. Count it here as well, otherwise a later source-quote
-            // table is mistaken for the selected table and its prose-only
-            // typography defect survives recovery.
+            // compileReaderTableSelections 把 TABLE 标记换成已签名的 PDF 表格之前，
+            // 这个标记在绑定流里占着一个位置。这里也要把它算进去，否则后面某个
+            // source-quote 表格会被误认成被选中的表格，它那点只属于正文的排版缺陷就挺过
+            // 恢复流程了。
             if (/^\[\[TABLE_\d+\]\]$/.test(trimmed)) {
                 tableIndex += 1;
                 previousLine = line;
@@ -1505,11 +1469,9 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
                     let result = match
                         .replace(/([\p{Script=Han}])(?=\d)/gu, '$1 ')
                         .replace(/(\d)(?=[\p{Script=Han}])/gu, '$1 ')
-                        // The editorial gate treats a number immediately
-                        // followed by a Latin measurement unit as one glued
-                        // token (for example `16kHz`).  Repair only the
-                        // explicitly reported surface and only known units;
-                        // scientific notation such as `3e-7` stays intact.
+                        // 编辑闸门把紧跟拉丁计量单位的数字看成一个粘连的 token（例如
+                        // `16kHz`）。只修明确报出的表层，而且只认已知单位；`3e-7` 这类
+                        // 科学记数法保持原样。
                         .replace(/(\d)(?=(?:kHz|MHz|Hz|dB|ms|GB|MB|KB|s|h)\b)/giu, '$1 ');
                     const before = whole[offset - 1] || '';
                     const after = whole[offset + match.length] || '';
@@ -1528,11 +1490,9 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
     return changed;
 }
 
-// A conference Reader draft can compress a source-backed comparison into
-// “strategy | evaluation location | metric | condition”, which is semantically
-// sound but fails the wide-table contract when the sealed PDF exposes three or
-// more tables. Split only this exact, source-visible location field into its
-// dataset and evaluation-task parts. No numeric cell is changed or invented.
+// 会议 Reader 草稿会把有原文支撑的比较压成「策略 | 评测位置 | 指标 | 条件」。语义上
+// 没问题，但当已核验的 PDF 里有三张以上表格时，这样做过不了宽表约定。只把这一处原文
+// 可见的位置字段拆成数据集和评测任务两部分。数值单元不动，也不编。
 function normalizeReaderConferenceNarrowComparisonTable(candidate) {
     if (!candidate || !Array.isArray(candidate.sections)) return false;
     let changed = false;
@@ -1569,11 +1529,9 @@ function normalizeReaderConferenceNarrowComparisonTable(candidate) {
     return changed;
 }
 
-// Editorial spacing is useful for prose but changes exact source cells such
-// as `12-18kHz` into `12-18 kHz`. Selection tables are compiler output whose
-// bytes are already bound to PDF DOM cells, so protect only those tables while
-// normalizing the surrounding article. Source-quote tables remain editable
-// and continue through the ordinary normalization path.
+// 编辑空格对正文有用，但会把 `12-18kHz` 这类精确原文单元改成 `12-18 kHz`。
+// selection 表格是编译器输出，字节已经和 PDF DOM 单元绑定，所以归一化周围文章时只
+// 保护这些表格。source-quote 表格仍可编辑，照常走普通归一化流程。
 function normalizeReaderProsePreservingSelectedTables(
     article, selectionTableIndexes = []
 ) {
@@ -1604,12 +1562,10 @@ function normalizeReaderProsePreservingSelectedTables(
     return normalized;
 }
 
-// Signed artifact-table cells are reproduced from the sealed DOM coordinates.
-// They are evidence, not prose, so editorial typography gates must not reject
-// a source spelling such as `16kHz` after the table has been restored.  A
-// narrow, authenticated LaTeXML display alias may clean only a proven
-// visible/annotation duplicate; the cell binding still records the original
-// source text and DOM SHA. Mask only the table blocks in prose quality checks.
+// artifact 表格单元带着签名绑定，内容按已核验的 DOM 坐标复现。它们是证据，不是正文，
+// 所以表格还原之后，编辑排版闸门不能因为 `16kHz` 这种原文拼写就拒绝。只有经过核验、
+// 范围很窄的 LaTeXML 展示别名，才可以清理确实被证明的可见/注解重复；单元绑定仍记录
+// 原始原文和 DOM SHA。正文质量检查里只屏蔽表格块。
 function omitReaderSelectedTablesForProseCheck(article, selectionTableIndexes = []) {
     const selected = new Set((Array.isArray(selectionTableIndexes)
         ? selectionTableIndexes : []).filter(Number.isSafeInteger));
@@ -1669,11 +1625,9 @@ function restoreReaderSelectedTableBytes(article, tableBindings, structuredArtif
             ...rebuiltRows.slice(1).map(line)
         ].join('\n');
         if (rebuilt !== table.markdown) {
-            // tableIndex is the signed structural locator. Identical
-            // Markdown tables are valid (for example, the same protocol
-            // table can appear in training and results), so replacing by
-            // string occurrence would reject a safe, position-specific
-            // replay. Replace the exact extracted line range instead.
+            // tableIndex 是带签名的结构定位符。两份完全相同的 Markdown 表格是合法的
+            // （同一张协议表可以既出现在训练里也出现在结果里），所以按字符串出现位置替换
+            // 会否掉一次本来安全、只认位置的复现。改成替换精确抽取到的行区间。
             const lines = output.split('\n');
             const current = lines.slice(table.startLine, table.endLine + 1).join('\n');
             if (current !== table.markdown) throw new Error(
@@ -1687,20 +1641,16 @@ function restoreReaderSelectedTableBytes(article, tableBindings, structuredArtif
 }
 
 function normalizeReaderWorkflowLeakageSurface(article) {
-    // Workflow-looking prose is not an editorial surface defect.  In
-    // particular, do not turn an instruction into a factual sentence before
-    // parseApiReaderArticleResult's existing leakage gate runs: doing so both
-    // hides the repair target and can invent figure facts (for example, a
-    // claim that the image contains two curves).
+    // 看起来像操作步骤的正文不算编辑层排版缺陷。尤其是在 parseApiReaderArticleResult
+    // 现有的泄漏闸门跑之前，不要把一句指令改写成陈述句：那样既藏起了修复目标，还可能
+    // 编出图片事实（比如说图里有两根曲线）。
     return String(article || '');
 }
 
 function normalizeReaderFigureMetricUnits(article) {
-    // Figure text is source-bound content, not a place to infer a scale.  A
-    // bare 20 may be a score, an axis tick, or a count; changing it to 20%
-    // changes the reported unit.  Keep this hook deliberately lossless so
-    // figure line/metric facts remain the model's evidence-bound repair
-    // responsibility.
+    // 图里的文字是绑定原文的内容，不是拿来推断刻度的。孤零零一个 20 可能是分数、坐标
+    // 刻度，也可能是计数；改成 20% 就把报出的单位换了。这个钩子刻意做成无损的，图里的
+    // 曲线和指标事实仍由模型按证据去修。
     return String(article || '');
 }
 
@@ -1745,16 +1695,13 @@ function buildApiReaderQualityMetrics(quality, article) {
     };
 }
 
-// arXiv's LaTeXML text projection can place visible math beside its TeX
-// annotation in the same table cell. Keep this recovery deliberately narrow:
-// only the exact learning-rate shape and the signed-decimal duplicate shape
-// observed in sealed source bundles are collapsed. Source DOM bytes remain
-// the evidence authority; this helper only chooses the safe display surface.
+// arXiv 的 LaTeXML 文本投影会把可见公式和它的 TeX 注解放进同一个表格单元。这一步
+// 刻意收得很窄：只合并已核验来源包里确实见到的学习率形态和有符号小数重复形态。证据以
+// 原始 DOM 字节为准，这个辅助函数只负责挑一个安全的显示表层。
 function normalizeReaderSourceDisplayArtifacts(value) {
     let output = String(value ?? '');
-    // LaTeXML can expose the same confidence interval once as visible text and
-    // again as a brace-encoded comma annotation. Keep the visible interval and
-    // drop only an annotation whose endpoints exactly repeat it.
+    // LaTeXML 会把同一个置信区间输出两次：一次是可见文字，一次是花括号编码的逗号注解。
+    // 保留可见的那个区间，只丢弃端点与它完全重复的注解。
     output = output.replace(
         /(\[\s*([+−-]?\d+(?:\.\d+)?)\s*,\s*([+−-]?\d+(?:\.\d+)?)\s*\])\[\s*([+−-]?\d+(?:\.\d+)?)\{\}\{,\}\s*([+−-]?\d+(?:\.\d+)?)\{\}\s*\]/g,
         (whole, visible, low, high, annotatedLow, annotatedHigh) => (
@@ -1763,9 +1710,8 @@ function normalizeReaderSourceDisplayArtifacts(value) {
                 ? visible : whole
         )
     );
-    // A standalone percentage can contain the same leading sign from both
-    // LaTeXML's visible math and its annotation. Never apply this to prose
-    // expressions or a pair of different numeric values.
+    // 一个独立的百分数可能同时带着 LaTeXML 可见公式和注解里的同一个前置符号。正文表述
+    // 和两个不同数值的对比都不适用这条。
     output = output.replace(/^−-(\d+(?:\.\d+)?%)$/, '−$1')
         .replace(/^\+\+(\d+(?:\.\d+)?%)$/, '+$1');
     output = output.replace(
@@ -1811,10 +1757,9 @@ function normalizeReaderSourceCell(value) {
         .trim();
 }
 
-// One sealed arXiv HTML bundle exposes Eq. (3) as a truncated TeX annotation
-// (`S_ctc(y,X)=-`) while the same authenticated MathML text carries the full
-// CTC-loss fraction. Recover only that exact shape; all other formulas remain
-// strict original-TeX injections.
+// 有一个已核验的 arXiv HTML 包里，公式 (3) 的 TeX 注解是截断的（`S_ctc(y,X)=-`），而
+// 同一段经过核验的 MathML 文本带着完整的 CTC 损失分式。只恢复这一个形态；其他公式
+// 一律严格注入原始 TeX。
 function recoverTruncatedReaderFormula(formula) {
     const latex = String(formula?.latex || '').trim();
     const text = String(formula?.text || '');
@@ -1841,16 +1786,14 @@ function readerNumericTokenMatches(value) {
     const sign = '[-+\\uFF0D\\u2212]';
     const dot = '(?:[\\.\\uFF0E])';
     const percent = '(?:\\s*%|\\s*\\uFF05)';
-    // A unit must be a complete token: the next table row's SE, BAK or Model
-    // is not seconds, billions or millions. Preserve legitimate whitespace
-    // between a value and a standalone unit, including line breaks.
+    // 单位必须是一个完整的 token：下一行的 SE、BAK 或 Model 不是秒、十亿或百万。数值和
+    // 独立单位之间的合法空格要保留，换行也算。
     const unit = '(?:seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp)'
         + '(?![A-Za-z0-9_\\uFF21-\\uFF3A\\uFF41-\\uFF5A\\uFF10-\\uFF19])';
     const lookbehind = '(?<![A-Za-z0-9\\uFF21-\\uFF3A\\uFF41-\\uFF5A\\uFF10-\\uFF19])';
-    // A thousands-grouped branch must consume the complete digit run after its
-    // final comma. Without this boundary, `10^-4,2000` was truncated to the
-    // fake token `-4,200` (canonical `-4200`) instead of the two real values
-    // `-4` and `2000`.
+    // 走千位分组的那个分支，必须把它最后一个逗号之后的数字全部吃掉。少了这条边界，
+    // `10^-4,2000` 会被截成假 token `-4,200`（规范形式 `-4200`），而实际上是 `-4` 和
+    // `2000` 两个真实数值。
     const groupedInteger = `(?:${digit}{1,3}(?:[,\\uFF0C]${digit}{3})+(?!${digit})|${digit}+)`;
     // LaTeXML 的 3.093.09 必须一次取到完整双写表面，才能证明半部 3.09。
     // 普通小数模式会先截成 3.093，再截 09；精确重复及右边界避免猜拆非重复串。
@@ -1860,17 +1803,15 @@ function readerNumericTokenMatches(value) {
         `${lookbehind}(?:${doubledDecimal}|${sign}?(?:${groupedInteger}(?:${dot}${digit}+)?|${dot}${digit}+))(?:${percent}|\\s*(?:${unit}))?`,
         'gi'
     );
-    // LaTeXML can flatten an explicit TeX color command into
-    // \\textcolorblue58.62. Mask only standard named-color prefixes immediately
-    // before a number; equal-length spaces preserve source indices and exact
-    // quote bytes. Do not relax the identifier boundary or rewrite units.
+    // LaTeXML 会把显式的 TeX 颜色命令压平成像 \\textcolorblue58.62 的样子。只屏蔽紧挨
+    // 在数字前面的标准颜色名前缀；用等长空格替换，原文下标和引文字节都不变。标识符边界
+    // 不要放宽，单位也不要改写。
     const originalSurface = String(value || '');
     const numericSurface = originalSurface.replace(
         /(\\textcolor(?:black|blue|brown|cyan|darkgray|gray|green|lightgray|lime|magenta|olive|orange|pink|purple|red|teal|violet|white|yellow))([-+\uFF0D\u2212]?[0-9\uFF10-\uFF19][0-9.\uFF10-\uFF19\uFF0E]*)/g,
         (surface, prefix, number, offset) => {
-            // An external sign would become detached by the mask. Fail closed
-            // on this ambiguous surface, including its decimal tail; never
-            // manufacture a positive token or move a sign across source bytes.
+            // 屏蔽之后，外置的符号会和数值脱开。这种有歧义的形态一律按失败处理，包括它的
+            // 小数尾巴；不要造一个正数 token，也不要让符号跨过原文的字节。
             if (/[-+\uFF0D\u2212]\s*$/.test(originalSurface.slice(0, offset))) {
                 return ' '.repeat(surface.length);
             }
@@ -1878,12 +1819,9 @@ function readerNumericTokenMatches(value) {
         }
     );
     const matches = [...numericSurface.matchAll(pattern)];
-    // LaTeXML sometimes flattens the visible math and its TeX annotation next
-    // to each other.  Keep a narrowly proved alias for the two exact forms we
-    // encounter in prose/table text so a trailing unit stays attached to the
-    // value it actually describes.  The original bytes and index remain the
-    // quote authority; a different value, sign, precision or unit creates no
-    // alias.
+    // LaTeXML 有时会把可见公式和它的 TeX 注解紧挨着压平在一起。为正文和表格文本里确实
+    // 见到的两种形态各留一个范围很窄的别名，好让后面的单位仍挂在它真正描述的数值上。
+    // 引文仍以原始字节和下标为准；数值、符号、精度或单位只要有一样不同，就不生成别名。
     const exactNumber = raw => {
         const surface = String(raw || '').normalize('NFKC')
             .replace(/[\u2212\uFF0D]/g, '-');
@@ -1901,25 +1839,22 @@ function readerNumericTokenMatches(value) {
         alias.latexmlExactDuplicateAlias = true;
         matches.push(alias);
     };
-    // LaTeXML may concatenate a visible thousands-grouped integer with the
-    // identical MathML/TeX annotation (500,000500,000). The stricter grouped
-    // integer boundary deliberately refuses to parse either half in-place, so
-    // recover only this exact repeated surface as a narrow source-bound alias.
-    // Unequal adjacent counts and ordinary comma enumerations remain distinct.
+    // LaTeXML 可能把可见的千位分组整数和一模一样的 MathML/TeX 注解连在一起
+    // （500,000500,000）。更严格的千位整数边界刻意拒绝就地解析任何一半，所以只把这一处
+    // 完全重复的表层恢复成范围很窄、绑定原文的别名。相邻计数不相等、逗号普通列举的情况
+    // 仍区分对待。
     const duplicatedGroupedInteger = /(?<![A-Za-z0-9])([+\-\u2212\uFF0D]?[0-9\uFF10-\uFF19]{1,3}(?:[,\uFF0C][0-9\uFF10-\uFF19]{3})+)\1(?![A-Za-z0-9\uFF10-\uFF19,\uFF0C])/g;
     for (const whole of originalSurface.matchAll(duplicatedGroupedInteger)) {
         appendAlias(whole, whole[1], whole[1], '');
     }
-    // Decimal duplicates have no separator in flattened output (10.010.0),
-    // while negative duplicates may use U+2212 for the visible copy and '-'
-    // for the TeX copy (−5.6-5.6).  Scan a bounded numeric run and accept it
-    // only when exactly one split yields byte-equivalent normalized halves.
+    // 压平输出里，重复的小数之间没有分隔符（10.010.0）；带负号的重复还可能可见那份用
+    // U+2212、TeX 那份用 '-'（−5.6-5.6）。扫描一段有上限的数字串，只有当恰好有一种
+    // 切法能让两半归一化后字节相等时才接受。
     const duplicateRun = /(?<![A-Za-z0-9])([+\-\u2212\uFF0D]?[0-9\uFF10-\uFF19.,\uFF0C\uFF0E]+(?:[+\-\u2212\uFF0D][0-9\uFF10-\uFF19.,\uFF0C\uFF0E]+)?)\s*(seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp|[%\uFF05])(?![A-Za-z0-9_])/gi;
     for (const whole of originalSurface.matchAll(duplicateRun)) {
         const run = whole[1];
-        // Plain repeated integers are too easily confused with identifiers or
-        // adjacent counts.  These extraction shadows are only accepted when
-        // a decimal point or an explicit sign makes both copies auditable.
+        // 光秃秃的重复整数太容易和标识符或相邻计数混淆。只有当小数点或显式符号让两份都
+        // 可核查时，才接受这种抽取影子。
         if (!/[.\uFF0E+\-\u2212\uFF0D]/.test(run)) continue;
         const splits = [];
         for (let index = 1; index < run.length; index += 1) {
@@ -1929,19 +1864,17 @@ function readerNumericTokenMatches(value) {
         }
         if (splits.length === 1) appendAlias(whole, splits[0][0], splits[0][1], whole[2]);
     }
-    // A TeX thousands separator is flattened as `{,}` and commonly follows a
-    // literal statistic name, e.g. 4,852\mu=4{,}852 ms.  Recognize only this
-    // exact \mu= bridge and require both numeric spellings to be identical
-    // after removing the TeX braces.
+    // TeX 的千位分隔符会被压平成 `{,}`，通常跟在字面统计量名后面，例如
+    // 4,852\mu=4{,}852 ms。只认这个 \mu= 桥接形态，而且要求去掉 TeX 花括号之后两边的
+    // 数字写法完全相同。
     const texStatistic = /(?<![A-Za-z0-9])([+\-\u2212\uFF0D]?(?:[0-9\uFF10-\uFF19]{1,3}(?:[,\uFF0C][0-9\uFF10-\uFF19]{3})+|[0-9\uFF10-\uFF19]+)(?:[.\uFF0E][0-9\uFF10-\uFF19]+)?)\\mu\s*=\s*([+\-\u2212\uFF0D]?[0-9\uFF10-\uFF19{}.,\uFF0C\uFF0E]+)\s*(seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp|[%\uFF05])(?![A-Za-z0-9_])/gi;
     for (const whole of originalSurface.matchAll(texStatistic)) {
         appendAlias(whole, whole[1], whole[2].replace(/[{}]/g, ''), whole[3]);
     }
-    // LaTeXML also duplicates a complete visible measurement immediately
-    // before its TeX annotation, e.g. 50 Hz50\\text{\\,}\\mathrm{H}\\mathrm{z}.
-    // The digit after Hz correctly blocks the ordinary unit tokenizer. Add
-    // an alias only when BOTH number spellings and the fully decoded unit
-    // agree; the exact original span remains the quote authority.
+    // LaTeXML 还会把一个完整的可见测量值紧接在它的 TeX 注解前面重复一遍，例如
+    // 50 Hz50\\text{\\,}\\mathrm{H}\\mathrm{z}。Hz 后面那个数字正好挡住了普通的单位
+    // 分词器。只有当两处数字写法和完全解码后的单位都一致时才加别名；引文仍以原始的那
+    // 一段为准。
     const texMeasurement = /(?<![A-Za-z0-9])([+\-\u2212\uFF0D]?(?:[0-9\uFF10-\uFF19]{1,3}(?:[,\uFF0C][0-9\uFF10-\uFF19]{3})+|[0-9\uFF10-\uFF19]+)(?:[.\uFF0E][0-9\uFF10-\uFF19]+)?)\s*(seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp)([+\-\u2212\uFF0D]?(?:[0-9\uFF10-\uFF19]{1,3}(?:[,\uFF0C][0-9\uFF10-\uFF19]{3})+|[0-9\uFF10-\uFF19]+)(?:[.\uFF0E][0-9\uFF10-\uFF19]+)?)(?:\s|\\text\{\\[,;!]\}|\\[,;!])*((?:\\(?:mathrm|textrm|text)\{[A-Za-z]+\}){1,8})(?![A-Za-z0-9_]|\\(?:mathrm|textrm|text)\{[A-Za-z])/gi;
     for (const whole of originalSurface.matchAll(texMeasurement)) {
         const texUnit = [...whole[4].matchAll(/\\(?:mathrm|textrm|text)\{([A-Za-z]+)\}/g)]
@@ -2005,7 +1938,7 @@ function readerDoubledHalfToken(surface) {
     const suffix = compact.match(/[%a-zA-Z]+$/)?.[0];
     if (suffix) {
         const half = pickHalf(compact.slice(0, -suffix.length));
-        // The explicit separator also distinguishes seconds from a year plural.
+        // 这个显式分隔符同时也把「秒」和年份复数里那个 s 区分开。
         if (half) return `${half} ${suffix}`;
     }
     return null;
@@ -2066,8 +1999,8 @@ function exactSourceExcerpt(sourceText, index, length, maxChars = 800) {
             index - Math.floor((maxChars - length) / 2), expandedUpper - maxChars
         ))
         : expandedLower;
-    // Preserve indentation, blank lines and original line endings exactly.
-    // trim/join creates a different string that cannot replay as an exact quote.
+    // 缩进、空行和原始行尾都要原样保留。用 trim/join 拼出来的字符串对不上，没法当作
+    // 精确引文复现。
     const expanded = source.slice(expandedStart, Math.min(expandedUpper, expandedStart + maxChars));
     if (expanded.length >= 12 && expanded.includes(source.slice(index, index + length))) {
         return expanded;
@@ -2088,12 +2021,10 @@ function readerSourceQuoteCoversNumericToken(token, quoteCorpus, allowSplitUnit 
     const corpus = String(quoteCorpus || '');
     if (readerNumericTokens(corpus).includes(token)) return true;
     if (!allowSplitUnit) return false;
-    // PDF two-column extraction can place a column fragment between a number
-    // and its unit (for example “-38.1 [right-column text] dB”).  Accept this
-    // only for an exact source quote, only when the numeric part is present,
-    // and only when the matching unit follows without another numeric token.
-    // This is evidence recovery for weak conference PDF text, not a general
-    // unit-relaxation of the reader gate.
+    // PDF 双栏抽取会把一栏的碎片塞进数值和它的单位之间（例如「-38.1 [右栏文字] dB」）。
+    // 只有当它是精确的原文引文、数值部分还在、匹配的单位后面没有别的数字 token 时才
+    // 接受。这是为质量很差的会议 PDF 文本做的证据恢复，不是把 Reader 闸门的单位要求
+    // 普遍放宽。
     const match = String(token || '').match(/^([-+]?\d+(?:\.\d+)?)(db|ms|hz|khz|mhz|gb|mb|kb|pp|%|s|h)$/i);
     if (!match) return false;
     const numberToken = normalizeReaderNumericToken(match[1]);
@@ -2102,9 +2033,8 @@ function readerSourceQuoteCoversNumericToken(token, quoteCorpus, allowSplitUnit 
     const unit = match[2].toLowerCase() === 'db' ? 'dB' : match[2];
     const numericPattern = escapeRegExp(match[1]).replace('-', '[-\\u2212\\uFF0D]?');
     const unitPattern = escapeRegExp(unit);
-    // Citation labels such as “[18]” can sit between the visible number and
-    // its unit after two-column extraction; they are not competing measured
-    // values for this narrow recovery check.
+    // 双栏抽取之后，「[18]」这类引文标注会夹在可见数字和它的单位之间；在这个范围很窄
+    // 的恢复检查里，它们不算与之竞争的其他测量值。
     const citationStrippedCorpus = corpus.replace(/\[\s*\d+(?:\s*[,;]\s*\d+)*\s*\]/g, ' ');
     return new RegExp(
         `${numericPattern}(?:(?![-+\\u2212\\uFF0D]?\\d(?:[\\d.,]*))(?:[\\s\\S])){0,160}?${unitPattern}(?![A-Za-z0-9_])`,
@@ -2138,12 +2068,10 @@ function deriveExactTableSourceQuotes(renderedMarkdown, sourceText, options = {}
         }
     };
     for (const token of [...new Set(readerNumericTokens(renderedMarkdown))]) {
-        // A unit-bearing rendered value is stronger evidence than its bare
-        // scalar.  In weak two-column PDF text the bare scalar may also occur
-        // in a page date/header (for example “1–4 September”), while the
-        // complete “1 kHz” phrase is present later in the body.  Locate that
-        // exact phrase first; the ordinary token replay below remains the
-        // fallback for split units and other extraction quirks.
+        // 带单位的渲染值比光秃秃的标量更有说服力。在质量很差的 PDF 双栏文本里，光秃秃的
+        // 标量可能也出现在页眉的日期里（例如「1–4 September」），而完整的「1 kHz」在
+        // 后面正文里才有。先定位那个完整的短语；下面的普通 token 复现仍作为单位被拆开和
+        // 其他抽取怪癖的兜底。
         addDirectUnitQuote(token);
         // 逐 token best-effort：单个数字在原文找不到时只跳过它，不再让整张表
         // 的自动修复归零；下游 missingNumbers 仍会对跳过的数字报错，门禁不放松。
@@ -2163,11 +2091,9 @@ function deriveExactTableSourceQuotes(renderedMarkdown, sourceText, options = {}
             break;
         }
     }
-    // Numeric replay normally takes the first source occurrence of each scalar.
-    // That is insufficient for a meaningful repeated vector: every scalar can
-    // occur earlier while the exact ordered/multiplicity evidence appears later.
-    // Add only a SHA-bound exact excerpt whose complete normalized vector
-    // sequence matches the rendered vector, including ellipsis and repetitions.
+    // 数字复现通常取每个标量在原文里第一次出现的位置。对一段有意义的重复向量来说这不够：
+    // 每个标量都可能更早出现过，而真正体现顺序和重数的证据在后面。这里只追加一段绑定
+    // SHA 的精确摘录，其归一化后的完整向量序列与渲染出的向量相符，省略号和重复也算在内。
     const sourceVectorsBySequence = new Map();
     for (const vector of bracketedNumericVectors(sourceText)) {
         if (!sourceVectorsBySequence.has(vector.sequence)) {
@@ -2225,12 +2151,9 @@ function pruneUnsupportedSourceQuoteTable(rendered, quoteCorpus) {
     const fullySupportedDataRows = rows.slice(1).filter((_row, index) => (
         missingByCell[index + 1].every(tokens => tokens.length === 0)
     ));
-    // Preserve the table's comparison schema whenever at least one complete
-    // evidence-bound row survives.  Column-first pruning can otherwise remove
-    // every metric/result column merely because several other rows contain
-    // unsupported values, leaving a wide result table as labels only.  This
-    // path remains fail-closed: every numeric token in the retained header and
-    // rows is present in an exact source quote.
+    // 只要还有至少一行完整、绑定证据的数据，就保住这张表的比较结构。否则按列先剪会把
+    // 所有指标列和结果列都删掉——只因为另外几行含有无支撑的值，最后宽表只剩标签。这条
+    // 路径仍按失败关闭：留下的表头和数据行里，每个数字 token 都能在原文引文里找到。
     if (headerSupported && fullySupportedDataRows.length > 0) {
         const markdown = [
             line(rows[0]),
@@ -2297,12 +2220,10 @@ function exactObjectInOrder(value, keys) {
 }
 
 /**
- * Early historical arXiv bundles retained the payload SHA computed over the
- * parser's schema order, while their durable JSON writer recursively sorted
- * object keys. JSON member order is not semantic, but a raw JSON.stringify()
- * replay therefore differs after reload. Rebuild only the exact public v4
- * schema order; unknown/missing fields or any changed value still fail the
- * declared SHA gate.
+ * 早期历史 arXiv 来源包里的 payload SHA 是按解析器的 schema 顺序算的，而它们的
+ * 持久化 JSON 写入器会递归排序对象键。JSON 成员顺序本身没有语义，但因此重新加载
+ * 之后直接用 JSON.stringify() 复现就对不上。这里只重建公开 v4 schema 的顺序；出现
+ * 未知字段、缺失字段，或者任何一个值变了，仍过不了声明的 SHA 闸门。
  */
 function replayPersistedArxivHtmlDomV4PayloadSha(structuredArtifacts) {
     if (structuredArtifacts?.parserVersion !== 'arxiv-html-dom-v4') return '';
@@ -2436,11 +2357,10 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
             || (!String(structuredArtifacts.parserVersion || '').trim() && !sealedLayoutlessText)) {
             throw new Error('Reader source-binding v4 的 structuredArtifacts/fulltext SHA 无法重放');
         }
-        // Keep the sealed runtime object byte-identical. The daily source
-        // manifest authenticates its legacy payload SHA, while this call only
-        // needs a stable in-memory proof for deterministic replay. Mutating
-        // the caller made the later Reader stage record the stable SHA while
-        // sourceAcquisition still recorded the sealed legacy SHA.
+        // 已核验的 runtime 对象要保持字节一致。每日来源清单认证的是它旧格式的 payload
+        // SHA，而这次调用只需要一个稳定的内存证明来做确定性复现。改动调用方传进来的
+        // 对象，会让后面的 Reader 阶段记下稳定 SHA，sourceAcquisition 却仍记着核验过的
+        // 旧 SHA。
         structuredArtifacts = {
             ...structuredArtifacts,
             payloadSha256: replayedArtifactsSha256
@@ -2502,8 +2422,8 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         throw new Error('Reader source-binding v4 formulaBindings 未覆盖正文公式占位符');
     }
 
-    // Never replace unsupported cells with reader-visible diagnostics. The
-    // exact cell/quote gates below throw into the existing Reader repair loop.
+    // 绝不要用读者能看到的诊断文字替代无支撑的表格单元。下面那些精确的单元/引文闸门会
+    // 抛错，交给现有的 Reader 修复循环。
     let renderedTables = extractMarkdownTables(boundArticle);
     const renderedFormulaBlocks = [...boundArticle.matchAll(/\\\[[\s\S]*?\\\]/g)]
         .map(match => match[0]);
@@ -2557,11 +2477,9 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
             + ` 与正文表格数量 ${renderedTables.length} 不一致`
         );
     }
-    // Surface every otherwise well-formed source-quote table that is missing
-    // numeric evidence in one parser pass.  The repair protocol can patch up
-    // to eight independent nodes, so returning only the first table here made
-    // the model spend one request per table even when all deficits were known
-    // deterministically before the first repair.
+    // 一次解析就把所有格式本来没问题、只是缺数字证据的 source-quote 表格都暴露出来。
+    // 修复协议一次能补最多八个独立节点，而这里只返回第一张表，会让模型每张表花一次
+    // 请求——哪怕第一次修复之前，这些缺口就已经确定地知道了。
     const numericEvidenceFailures = [];
     for (let index = 0; index < effectiveTableBindings.length; index += 1) {
         const declared = effectiveTableBindings[index];
@@ -2803,14 +2721,12 @@ function normalizeReaderBridgeTerm(term) {
             value => numeralMap[value])
         .replace(/(对)([一二两三四五六七八九十])/g,
             (_, prefix, value) => `${prefix}${numeralMap[value]}`)
-        // Reader prose sometimes uses the standard synonym “评估” after
-        // declaring the bridge as “评测”.  This is a surface variation, not
-        // a change of the experiment protocol; keep exact signed prose but
-        // make final heading rebinding tolerant to this synonym.
+        // Reader 正文有时把声明为「评测」的 bridge 写成同义词「评估」。这只是表层差异，
+        // 不代表实验协议变了；已签名的正文保持原样，但最后重新绑定标题时要容忍这个
+        // 同义词。
         .replace(/评测/g, '评估')
-        // Chinese/English surface forms for the same named statistic are
-        // interchangeable in a bridge heading; this does not alter the
-        // signed authored explanation or its evidence.
+        // 同一个具名统计量的中英文表层写法，在 bridge 标题里可以互换；已签名的作者解释
+        // 和它的证据都不受影响。
         .replace(/(?:mann[-‐‑–—]?whitney|曼惠特尼)\s*u\s*检验/giu, '曼惠特尼u检验')
         .replace(/(?:带符号|符号)?秩二列效应量?/g, '秩二列效应')
         .replace(/\s+/g, '')
@@ -2844,10 +2760,9 @@ function collapseRepeatedReaderBridgeHeadings(article) {
     }).join('');
 }
 
-// Signed concept-bridge surfaces render as a single bold line “**A × B：** …”.
-// Their bytes are plan-signed: the surface repair never rewrites them and the
-// editorial style gate must not block on numerals that live inside them either
-// (for example the “一位” substring inside the term “下一位置预测预训练”).
+// 已签名的概念 bridge 表层会渲染成一行加粗文字「**A × B：** …」。它们的字节带计划
+// 签名：表层修复从不改写它们，编辑风格闸门也不能因为里面的数字就拦下（比如术语
+// 「下一位置预测预训练」里含的「一位」）。
 function readerBridgeLineRanges(text) {
     const ranges = [];
     const value = String(text || '');
@@ -2864,10 +2779,9 @@ function issueFallsWithinReaderBridgeLine(issue, article, ranges = null) {
     return spans.some(([from, to]) => issue.index >= from && issue.index < to);
 }
 
-// The surface repair deliberately protects blockquote lines (the signed “看图路径”
-// figure guidance renders as “> **看图路径：** …”), so numeral findings on those
-// lines can never be repaired.  The style gate must not demand a fix the repair
-// is designed never to perform — waive exactly the repair-protected zone.
+// 表层修复刻意保护引用行（已签名的「看图路径」插图指引会渲染成「> **看图路径：** …」），
+// 所以这些行上的数字问题永远修不了。风格闸门不能要求一个修复流程本来就设计成不做的事
+// ——正好豁免掉这块被修复保护的区域。
 function issueInProtectedReaderQuote(issue, article) {
     if (!Number.isInteger(issue?.line) || issue.line < 1) return false;
     const line = String(article || '').split('\n')[issue.line - 1];
@@ -2932,11 +2846,9 @@ function makeReaderHeadingSpecific(kind, heading, readerTitle) {
 }
 
 function ensureApiReaderTableNarratives(article) {
-    // Formatting only: a heading followed by existing prose must become two
-    // Markdown blocks so the narrative gate can see the authored explanation.
-    // Never synthesize claims about comparability, uncertainty or missing costs.
-    // Truly absent prose is reported by validateApiReaderTableNarratives and
-    // repaired by the Reader author with the actual paper evidence.
+    // 只动格式：标题后面已经跟着正文时，要拆成两个 Markdown 块，叙述闸门才能看到作者
+    // 写的解释。绝不要编造关于可比性、不确定性或缺失成本的说法。真的没有正文，由
+    // validateApiReaderTableNarratives 报出来，再由 Reader 作者依据论文实际证据补。
     const lines = String(article || '').split('\n');
     const output = [];
     let fence = null;
@@ -3038,25 +2950,23 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         protectedMarkdown.push(value);
         return token;
     };
-    // Literal evidence is not editorial prose. Protect before every surface
-    // rewrite (including currency/spacing), and restore nested spans in reverse.
+    // 字面证据不是编辑正文。每次改写表层之前（包括货币和空格）先保护起来，恢复嵌套片段
+    // 时按相反顺序来。
     const protectedText = String(text || '')
         .replace(/^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]{0,3}\1[`~]*[ \t]*(?=\n|$)/gm, protect)
         .replace(/\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|(?<!\\)\$(?!\$)[^\n$]*?(?<!\\)\$/g, protect)
         .replace(/(`+)[^\n]*?\1/g, protect)
-        // A URL may end in a Unicode path segment such as 45万对. Keep
-        // that whole contiguous token protected; otherwise the second
-        // normalization pass can insert a prose space into the signed URL.
+        // URL 可能以 45万对 这样的 Unicode 路径片段结尾。要把整个连续 token 保护好；
+        // 否则第二遍归一化会往已签名的 URL 里插一个正文空格。
         .replace(/!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)|https:\/\/[^\s<>()\[\]{}"'，。；：！？、]+/g, protect)
         .replace(/^ {0,3}>[^\n]*/gm, protect)
         .replace(/“[^”]*”|「[^」]*」|『[^』]*』|"[^"\n]*"|(?<!\w)'[^'\n]*'(?!\w)/g, protect)
         .replace(/^(?:原文|原句|口语(?:转录|转写|输出)|输入(?:转录)?|Spoken(?:-form)?(?: transcript)?|Transcript|Input)\s*[:：][^\n]*/gmi, protect)
-        // `Spoken-SQuAD` is a dataset name, not an input/transcript label.
-        // Require a delimiter after the label so a result-table cell starting
-        // with that dataset name remains editable for Han/ASCII spacing.
+        // `Spoken-SQuAD` 是数据集名，不是输入/转写标签。要求标签后面有分隔符，这样以该
+        // 数据集名开头的结果表格单元仍可编辑，去做汉字/ASCII 空格处理。
         .replace(/^\s*\|\s*(?:(?:输入|口语输出|Input)[^|\n]*|(?:原文|原句)(?=\s*[|:：])[^|\n]*|Spoken(?:-form)?(?: transcript)?(?=[|\s:：])[^|\n]*)\|[^\n]*/gmi, protect)
-        // Structural one-to-one relations are not measured quantities. Keep
-        // them protected from stale numeral diagnostics as well as spacing.
+        // 结构上的一对一关系不是量出来的数值。它们在空格处理和过期的数字诊断里都要保护
+        // 起来。
         .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))/gu,
             () => protect('一对一'));
     let normalized = protectedText
@@ -3064,9 +2974,8 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         .replace(/([\u3400-\u9fff])([A-Za-z][A-Za-z0-9+.-]*)/g, '$1 $2')
         .replace(/([\u3400-\u9fff])([α-ωΑ-Ω])/g, '$1 $2')
         .replace(/([A-Za-z0-9.%+*)\]~*_α-ωΑ-Ω])([\u3400-\u9fff])/g, '$1 $2')
-        // Paper prompts often spell placeholders as <S> or <True/False>.
-        // Hugo treats those bytes as raw HTML unless the reader article binds
-        // them as inline code before publication.
+        // 论文提示词常把占位符写成 <S> 或 <True/False>。读者文章在发布前若不把它们绑成
+        // 行内代码，Hugo 会把这些字节当成裸 HTML。
         .replace(
             /(?<!`)<([A-Za-z][A-Za-z0-9_./| -]{0,39})>(?!`)/g,
             '`<$1>`'
@@ -3086,7 +2995,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
                     zero = true;
                     continue;
                 }
-                if (digit !== null) return null; // No guessing a digit sequence.
+                if (digit !== null) return null; // 不猜数字序列。
                 digit = numeralMap[char];
                 continue;
             }
@@ -3095,7 +3004,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
             total += (digit ?? 1) * unit;
             lastUnit = unit; digit = null; zero = false;
         }
-        // Colloquial 一百二 may mean 120 or 102; require an explicit place/zero.
+        // 口语里的「一百二」可能是 120，也可能是 102；要求写出明确的位或零。
         if ((digit !== null && total && lastUnit > 10 && !zero) || (zero && digit === null)) return null;
         return total + (digit ?? 0);
     };
@@ -3124,11 +3033,9 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         if (!/^[零〇一二两三四五六七八九]+$/.test(parts[1])) return null;
         return `${sign}${integer}.${[...parts[1]].map(char => numeralMap[char]).join('')}`;
     };
-    // A measured frequency such as “采样率为十六千赫兹” has one exact
-    // editorial rendering. Only enable this after the quality gate has
-    // identified a quantitative issue in the same frequency/parameter
-    // context; mixed forms such as “十六与四十八千赫” remain untouched
-    // because the first coefficient has no explicit unit.
+    // 「采样率为十六千赫兹」这种量出来的频率只有一种精确的编辑写法。只有在质量闸门已经
+    // 指出同一处频率/参数语境下存在定量问题时才启用；「十六与四十八千赫」这类混合形态
+    // 不动，因为第一个系数没有明确的单位。
     const hasFrequencyNumeralIssue = quantitativeIssues.some(issue => (
         issue?.code === 'quantitative_chinese_numeral'
         && /(?:[千兆]赫|赫兹|采样率|频率)/.test(String(issue.match || ''))
@@ -3155,9 +3062,8 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
             }
         );
     }
-    // A diagnostic may name only “万词/万步”, after typography inserted a
-    // space between the Arabic coefficient and its scale. Convert only the
-    // complete, unambiguous coefficient+scale; never replace that suffix alone.
+    // 排版在阿拉伯数字系数和它的量级之间插了空格之后，诊断可能只报出「万词/万步」。只
+    // 转换完整、无歧义的系数加量级；绝不要单独替换那个后缀。
     if (quantitativeIssues.some(issue => issue?.code === 'quantitative_chinese_numeral'
         && /[万亿]/.test(String(issue.match || '')))) {
         const amount = '[+-]?\\d+(?:\\.\\d+)?';
@@ -3176,8 +3082,8 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
             const digits = (integer + fraction).padEnd(integer.length + shift, '0');
             const wholePart = digits.slice(0, integer.length + shift).replace(/^0+(?=\d)/, '');
             const fractionalPart = digits.slice(integer.length + shift).replace(/0+$/, '');
-            // Decimal-point shifting is exact; no Number multiplication or
-            // locale rounding may silently alter a scientific decimal tail.
+            // 小数点移位是精确操作；不能让 Number 乘法或本地化舍入悄悄改动科学计数法的
+            // 小数尾部。
             return sign + wholePart.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
                 + (fractionalPart ? `.${fractionalPart}` : '');
         });
@@ -3187,12 +3093,10 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
             || isAllowedReaderNarrativeNumeralIssue(issue, text)) continue;
         const match = String(issue.match || '').trim();
         if (!match) continue;
-        // Explicit mixed scales were handled as a whole above. Unsupported
-        // compound scales remain visible for the authoritative gate to reject.
+        // 显式的混合量级上面已经整段处理过。不支持的复合量级保持可见，交给权威闸门拒绝。
         if (/\d[ \t]*[万亿]/.test(match)) continue;
-        // “百分之X” has one exact Arabic rendering and is safe to
-        // normalize locally. Other fractions and ambiguous scaled units still
-        // require a semantic repair instead of guessing a display form.
+        // 「百分之X」只有一种精确的阿拉伯数字写法，可以就地安全归一化。其他分数和有歧义
+        // 的带量级单位仍要做语义修复，不能靠猜一个显示形式。
         const percentMatch = match.match(/^百分之([负正零〇一二两三四五六七八九十百千万亿点]+)$/);
         const exactPercent = percentMatch ? chineseNumber(percentMatch[1]) : null;
         if (percentMatch && exactPercent !== null) {
@@ -3250,7 +3154,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         if (!valid) continue;
         normalized = normalized.replaceAll(match, (surface, offset, whole) => {
             const before = whole.slice(0, offset), after = whole.slice(offset + surface.length);
-            // An issue can name only a suffix of a longer number/fraction.
+            // 一个问题可能只指出更长数字或分数当中的一个后缀。
             if (/[零〇一二两三四五六七八九十百千万亿\d]$|分之$/.test(before.trimEnd())
                 || ((/^[零〇一二两三四五六七八九十百千万亿\d]|^点[零〇一二两三四五六七八九\d]/.test(after))
                     && /[零〇一二两三四五六七八九十百千万亿\d]$/.test(surface.trimEnd()))
@@ -3281,12 +3185,11 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         .replace(/([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?=(?:MWh|mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|kbps?|Mbps?|Gbps?|MACs?|tokens?|FPS|bit)\b)/gi, '$1 ')
         .replace(/([\u3400-\u9fff])(\d)/g, '$1 $2')
         .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2')
-        // Frequency/unit replacements happen after the first typography pass
-        // (for example 十六千赫兹 -> 16 kHz). Run the Latin-to-Han boundary
-        // once more so the newly created unit cannot adhere to the next word.
+        // 频率和单位的替换发生在第一遍排版之后（例如 十六千赫兹 -> 16 kHz）。再跑一次
+        // 拉丁字母到汉字的边界处理，免得新生成的单位和下一个词粘在一起。
         .replace(/([A-Za-z0-9.%+*)\]α-ωΑ-Ω])([\u3400-\u9fff])/g, '$1 $2');
-    // Never infer missing %, or copy a later unit onto an earlier value.
-    // Author/source validation, not typography, decides those semantics.
+    // 不要推断缺失的 %，也不要把后面的单位搬到前面的数值上。这些语义由作者和原文校验
+    // 决定，不由排版决定。
     const restored = protectedMarkdown.reduceRight(
         (value, original, index) => value.replace(
             `__PD_READER_PROTECTED_${index}__`, () => original
@@ -3313,11 +3216,9 @@ function getApiReaderFigureInventory(structuredArtifacts, arxivId = '') {
             || !Number.isInteger(figure.ordinal)
             || !recoverySha256(figure.sourceDomSha256)) continue;
         const resources = Array.isArray(figure.images) ? figure.images : [];
-        // arXiv frequently represents a compound figure as several sibling
-        // resources while attaching the full multi-panel caption to the
-        // wrapper.  Selecting only the first child makes the caption claim
-        // panels that are not present in the downloaded bytes.  Keep only
-        // one-resource figures until the pipeline can compose all panels.
+        // arXiv 常把一张复合图表示成几个并列资源，同时把完整的多面板图注挂在外层容器上。
+        // 只取第一个子资源，会让图注声称一些下载到的字节里根本没有的面板。在流水线能拼出
+        // 所有面板之前，只保留单资源的图。
         if (resources.length !== 1) continue;
         const resource = resources[0];
         if (resource?.kind === 'inline_pdf') {
@@ -3366,13 +3267,10 @@ function getApiReaderFigureInventory(structuredArtifacts, arxivId = '') {
     return normalizeApiReaderFigureVisualBindings(inventory, expectedId);
 }
 
-// arXiv 2609.15067's HTML export attaches the Figure 1/2 captions to the
-// opposite PNG files: overview.png visibly contains the controlled-source /
-// pre-training pipeline, while method.png visibly contains the four-panel
-// study overview.  Keep the authenticated source DOM hashes, but bind the
-// durable Reader ordinals/captions to the pixels that readers actually see.
-// This is intentionally a narrow, URL-anchored compatibility repair rather
-// than a general caption inference rule.
+// arXiv 2609.15067 的 HTML 导出把图 1/2 的图注挂到了相反的 PNG 上：overview.png 里
+// 明显是受控来源/预训练流程，method.png 里明显是四面板的研究概览。经过核验的来源 DOM
+// 哈希保持不变，但持久的 Reader 序号和图注要绑到读者真正看到的像素上。这是一处刻意
+// 收窄、按 URL 定位的兼容修复，不是通用的图注推断规则。
 function normalizeApiReaderFigureVisualBindings(inventory, arxivId = '') {
     if (String(arxivId || '').trim().toLowerCase() !== '2609.15067'
         || !Array.isArray(inventory)) return inventory;
@@ -3442,8 +3340,8 @@ function buildApiReaderArtifactEvidence(
         usedChars += value.length + 1;
         return value.length === raw.length;
     };
-    // Figure identity participates in publication provenance, so reserve it
-    // before verbose matrices rather than truncating its ordinal or URL.
+    // 图的身份参与发布溯源，所以要在冗长的矩阵之前先给它留位置，而不是把它的序号或 URL
+    // 截掉。
     for (const figure of getApiReaderFigureInventory(structuredArtifacts, arxivId)) {
         appendLine(`FIGURE_${figure.ordinal}: ${figure.caption}`, 32);
         appendLine(`FIGURE_${figure.ordinal}_URL: ${figure.url}`, 48);
@@ -3457,9 +3355,8 @@ function buildApiReaderArtifactEvidence(
         && allTables.filter(candidate => candidate?.ordinal === table.ordinal).length === 1
         && assessReaderTableSelectionEligibility(table).eligible
     )).map(table => table.ordinal);
-    // A PDF-text fallback can mention several table captions while recovering
-    // no table DOM at all. Make the selectable inventory explicit so the model
-    // cannot infer ordinals from prose and emit an unresolvable TABLE marker.
+    // 走 PDF 文本兜底时，可能提到好几个表格图注却完全恢复不出表格 DOM。把可选清单写
+    // 明确，模型才不会从正文里推断序号，发出一个解不掉的 TABLE 标记。
     appendLine(
         `TABLE_ORDINALS_AVAILABLE: ${JSON.stringify(availableTableOrdinals)}`,
         32
@@ -3493,8 +3390,7 @@ function buildApiReaderArtifactEvidence(
                 role: 'unknown'
             })}`
         ].join('\n');
-        // Header identity is a source property, never inferred from a caption
-        // (an author/affiliation table is not automatically an experiment).
+        // 表头身份是原文属性，绝不从图注推断（作者和单位表不会自动变成实验表）。
         if (!appendLine(tableMetadata, tableMetadata.length)) break;
         const remainingTables = Math.max(1, tables.length - index);
         const matrixBudget = Math.max(
@@ -3692,8 +3588,8 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
                 `${mention.type}:${mention.index}:${mention.end}`
             )) ? index : -1
         )).filter(index => index >= 0));
-        // A repository noun names the shared location in phrases such as
-        // “代码与检查点在公开仓库”, rather than narrowing the claim to code.
+        // 在「代码与检查点在公开仓库」这类说法里，「仓库」指的是共同存放的位置，并没有把
+        // 声明缩窄到代码。
         for (const index of [...selectedIndexes]) {
             if (index < 1) continue;
             const cluster = clusters[index];
@@ -3723,19 +3619,16 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
     const isDataSourceRepositoryAttribution = (segment, type) => type === 'code'
         && (/(?:数据|样本|语料|特征)[^。！？!?；;，,]{0,32}(?:汇聚|汇总|收集|采集|来自|取自|源自)[^。！？!?；;，,]{0,32}(?:公开)?仓库/.test(segment)
             || /(?:数据|样本|语料|特征)[^。！？!?；;，,]{0,32}(?:公开)?仓库[^。！？!?；;，,]{0,24}(?:汇聚|汇总|收集|采集|核对)/.test(segment)
-            // Dataset names often end in “仓库” without saying “数据仓库”.
-            // When the same clause is explicitly a list of datasets and has
-            // no code/repository qualifier, the bare noun must not become a
-            // code availability claim.
+            // 数据集名常以「仓库」结尾，但并不会写成「数据仓库」。如果同一个小句明确是在
+            // 列举数据集，又没有代码或仓库的限定词，这个光杆名词不能算成代码可用的声明。
             || (/(?:数据库|数据集|语料|伪造|欺骗|名人)[^。！？!?；;，,]{0,24}仓库/.test(segment)
                 && !/(?:代码|源代码|github|repository|repo)/i.test(segment)));
     const isSelfOwnedResourceAvailabilityDenial = (segment, type) => type === 'code'
         && /(?:本文|本研究|本工作|该论文|论文作者|作者团队)[^。！？!?；;，,]{0,24}(?:自有)?(?:代码|源代码|代码仓库)[^。！？!?；;，,]{0,32}(?:不(?:作|做)|未(?:在|被)|没有)[^。！？!?；;，,]{0,24}(?:可用|开源|公开)(?:声明|记录|标记)?/.test(segment);
     const isExistingDatasetAttribution = (segment, type) => {
         if (type !== 'dataset') return false;
-        // Established datasets are inputs or comparison material, not a new
-        // paper-owned release. Keep explicit new/self-owned dataset claims
-        // blocking even when the same sentence mentions an old corpus.
+        // 已有数据集是输入或对照材料，不是论文新发布的东西。即使同一句话里提到旧的语料库，
+        // 明确声称新数据集或自有数据集的说法仍要拦截。
         if (/(?:本文|本研究|本工作|我们)[^。！？!?；;，,]{0,32}(?:新建|自建|构建|收集|采集|发布|开源|公开)[^。！？!?；;，,]{0,24}(?:数据集|语料)/.test(segment)) {
             return false;
         }
@@ -3751,9 +3644,8 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
             reproduction: '(?:复现材料|复现工件|资源)'
         }[type];
         if (!noun) return false;
-        // These are status disclaimers, not positive availability claims. Keep
-        // them scoped to one clause so a later contrast such as “但事实上已
-        // 公开” is still handled by the affirmative matcher.
+        // 这些是状态免责说明，不是正面的可用性声明。把它们限制在一个小句内，后面「但事实
+        // 上已公开」这类转折仍会交给肯定匹配器处理。
         if (new RegExp(`${noun}[^。！？!?；;，,]{0,48}(?:不是|并非|未被|没有|尚无|并无)`
             + `[^。！？!?；;，,]{0,24}(?:公开|开源|开放)(?:可下载|可获取|可用)?`, 'i').test(segment)) {
             return true;
@@ -3780,9 +3672,8 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
             reproduction: '(?:复现材料|复现工件|资源)'
         }[type];
         if (!noun || !new RegExp(noun, 'i').test(segment)) return false;
-        // A reported verification failure is an explicit non-claim. This is
-        // deliberately narrower than a generic “不可用” match so that a
-        // positive claim in a later contrast still remains blocking.
+        // 报出校验失败是明确的否认，不是声明。这里刻意比笼统的「不可用」匹配更窄，后面
+        // 转折里出现的正面声明仍然拦截。
         if (new RegExp(`(?:${noun})[^。！？!?；;]{0,96}`
             + `(?:当前不可用|暂时无法访问|本次(?:核验|验证|检查)[^。！？!?；;]{0,48}`
             + `(?:未能确认|无法确认|不可用)|无法据此确认[^。！？!?；;]{0,36}`
@@ -3827,8 +3718,7 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
             .test(segment);
         const verification = /(?:验证|核验|检查|确认|核对|记录|获取|下载)/i.test(segment);
         if (!future || !action || !verification) return false;
-        // A future checklist is not a release claim. Do not waive a later
-        // explicit positive claim about the paper-owned resource.
+        // 将来的待办清单不构成发布声明。后面若明确正面声明论文自有资源，不能因此豁免。
         if (new RegExp(
             `(?:但|然而|不过|事实上)[^。！？!?；;，,]{0,80}`
             + `(?:本文|本论文|本研究|本工作|作者团队)?[^。！？!?；;，,]{0,20}`
@@ -3929,18 +3819,16 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
         if (/(?:本文|本研究|本工作|该论文|论文作者|作者团队|项目团队)[^。！？!?；;，,]{0,40}(?:代码|源代码|代码仓库|仓库|链接)/.test(segment)) {
             return false;
         }
-        // Named upstream models/tools are often written without the words
-        // “第三方” (e.g. “DeepSeek-VL2的仓库链接”, “OpenFace工具包链接”).
-        // Treat only an explicitly named dependency repository/link as
-        // third-party when the verified identity already contains one.
+        // 具名的上游模型和工具常常不写「第三方」三个字（例如「DeepSeek-VL2的仓库链接」
+        // 「OpenFace工具包链接」）。只有当核验过的身份里确实有某个依赖仓库或链接时，才把
+        // 它算作第三方。
         return /(?:\b[A-Z][A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*(?:的)?(?:仓库|链接|地址)|(?:DeepSeek|OpenFace|Whisper|HuBERT|WavLM|Transformers|vLLM)(?:工具包|工具|实现)(?:链接|仓库|地址)?|(?:人脸|音频|语音|视觉)(?:对齐|处理|分析|评估)仓库(?:链接|地址)?)/.test(segment);
     };
     const isGenericModelAvailabilityDistinction = (segment, type) => {
         if (type !== 'model') return false;
         if (/(?:本文|本研究|本工作|该论文|论文作者|作者团队|项目团队)[^。！？!?；;，,]{0,40}(?:模型|权重|检查点)/.test(segment)) {
-            // A sentence that explicitly says the paper trained none of the
-            // evaluated models and is only describing baselines is still a
-            // non-claim, not a self-owned availability assertion.
+            // 一句话明说论文没有训练任何被评测的模型、只是在描述基线，它仍然是否认，不是
+            // 声称自有资源可用。
             if (!/(?:未训练|没有训练|不训练)[^。！？!?；;，,]{0,32}(?:被评测|评测|基线|模型)/.test(segment)) return false;
         }
         return /(?:开放权重模型|公开权重|商业模型|闭源接口|基线|系统|模型)[^。！？!?；;，,]{0,120}(?:不等于|不等同于|不能等同于|不代表|要区分|需区分|必须区分|直接调用|未训练)[^。！？!?；;，,]{0,96}(?:权重|可下载|可获取|接口|系统|模型|基线)/.test(segment)
@@ -3973,10 +3861,8 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
             + `${noun}[^。！？!?；;，,]{0,28}`
             + `(?:已|现已|当前|本次)?(?:开源|公开|开放|可用|可下载|可获取)`, 'i'
         ).test(text);
-        // Verification summaries can mention several public dataset/tool pages
-        // without asserting that the paper's own code is available. Likewise,
-        // a reproduction checklist can enumerate access requirements without
-        // claiming that the paper provides model weights.
+        // 校验摘要可以提到好几个公开数据集或工具页面，但并没有声称论文自己的代码可用。
+        // 复现清单列出一堆获取要求，同样不等于论文提供了模型权重。
         if (!selfOwnedPositive
             && /(?:资源(?:可达|可得|可用)性|本次(?:收到的)?官方验证|正文开源声明涉及的多个链接)/i.test(text)
             && /(?:所列的|多个链接|涉及的多个链接|状态码为二百|可以写当前可用|显示可用)/i.test(text)) {
@@ -4114,8 +4000,8 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
             let localMatchIndex = match.index - segmentStart;
             let localMatchEnd = localMatchIndex + match[0].length;
             let mentions = resourceTypeMentions(segment);
-            // A short status tail such as “，当前可用” inherits only the
-            // immediately preceding bounded resource-location phrase.
+            // 「，当前可用」这种简短状态尾巴，只承接紧挨在它前面那个范围明确的资源位置
+            // 短语。
             if (!mentions.length && commaBefore >= 0 && localMatchIndex <= 12
                 && /^\s*(?:(?:且|并且|并|均|亦)\s*)?$/i.test(segment.slice(0, localMatchIndex))) {
                 const previousChineseComma = value.lastIndexOf('，', commaBefore - 1);
@@ -4440,10 +4326,9 @@ function readerFigureNarrative(figure, target = null) {
     const panelNotice = /^\([a-z]\)$/i.test(String(figure?.caption || '').trim())
         ? `当前资源对应子图 ${String(figure.caption).trim()}；同一编号的其他面板请回原论文核对。`
         : '';
-    // Captions are source text, not Markdown. Literal significance stars in
-    // PDF captions (for example `*` and `***` p-value markers) must be
-    // verbalized because this narrative is wrapped in a single emphasis pair
-    // and Hugo's rendered-HTML gate must not mistake them for bold Markdown.
+    // 图注是原文文字，不是 Markdown。PDF 图注里字面的显著性星号（例如表示 p 值的 `*`
+    // 和 `***`）必须写成文字，因为这段叙述外面套着一对强调符号，Hugo 的渲染 HTML 闸门
+    // 不能把它们误认成 Markdown 加粗。
     const caption = transformReaderFigureCaptionPreservingMathStars(
         truncateReaderFigureCaption(normalizeReaderFigureCaption(figure), 180), value => value
             .replace(/\*{3}/g, '三个星号')
@@ -4477,8 +4362,7 @@ function readerFigureAlt(figure, target = null) {
     }
     if (figure?.url === 'https://arxiv.org/html/2609.35115v1/fdclock_fig1.png'
         && figure?.assetSha256 === 'f175d3b2f3e7b7c4b7cfec22ee41d2b35f3dbd3f99a685391e283edd40b6a00d') {
-        // This exact raster was inspected during publication review. The
-        // truncated caption omits the actual side-by-side contract diagram.
+        // 发布审查时看过这张位图本身。被截断的图注漏掉了真正的并排约定示意图。
         return '原论文 Figure 1：常规运行时与原生时钟契约的状态分配、固定地址缓存和精确形状执行对照。';
     }
     if (figure?.url === 'https://arxiv.org/html/2609.27195v1/fig4_placement_ratio_readable.svg') {
@@ -5275,12 +5159,10 @@ function normalizeDeclaredReaderMarkerParagraphs(value) {
         }
         let target = value.sections.find(section => (!kindBound || section?.kind === declaration.kind)
             && String(section.body || '').split(/\r?\n/).some(line => line.trim() === marker));
-        // A Figure binding occasionally keeps a valid targetKind while the
-        // model places its unique, fully narrated marker in another valid
-        // section.  Aligning the metadata to that already-authored location is
-        // safer than moving prose or inventing a new lead/explanation.  Keep
-        // this fail-closed: only a unique exact marker with both neighbours can
-        // be normalized, and concept/formula semantics are left untouched.
+        // 有时图的绑定保住了合法的 targetKind，模型却把这个唯一、叙述完整的标记放进了
+        // 另一个同样合法的小节。把元数据对齐到那个已经写好的位置，比搬动正文或新编一段
+        // 引导和解释更稳妥。这条路径按失败关闭：只有唯一、精确、前后相邻内容都在的标记
+        // 才能归一化，概念和公式的语义不动。
         if (!target && declaration.type === 'figure') {
             const located = value.sections.filter(section => API_READER_KINDS.includes(section?.kind)
                 && String(section.body || '').split(/\r?\n/).some(line => line.trim() === marker));
@@ -5425,15 +5307,11 @@ function normalizeConferenceMixedTableBindings(draft) {
     };
 }
 
-// A conference Reader draft may accidentally emit source_quotes bindings as
-// TABLE markers. Unlike selection bindings, source_quotes bindings do not
-// have a renderer for a marker, so those markers are redundant declarations
-// for an already-authored Markdown table. Recover only the closed, provable
-// shape: every such marker must be a unique standalone block, every remaining
-// marker must map to a selection binding, and the remaining Markdown tables
-// must match the source_quotes bindings in their existing relative order.
-// This removes declaration noise and reindexes bindings; it never edits table
-// cells, quotes, or authored prose.
+// 会议 Reader 草稿可能把 source_quotes 绑定错发成 TABLE 标记。和 selection 绑定不同，
+// source_quotes 绑定没有对应的标记渲染器，所以这些标记只是对已有 Markdown 表格的多余
+// 声明。只恢复那种封闭、可证明的形态：每个这样的标记都必须是唯一的独立块，剩下的标记
+// 都必须对应一个 selection 绑定，剩下的 Markdown 表格必须按现有相对顺序与 source_quotes
+// 绑定一致。这一步去掉多余的声明并重建绑定下标，绝不改动表格单元、引文或作者正文。
 function normalizeReaderSourceQuoteTableMarkers(draft) {
     if (!Array.isArray(draft?.sections) || !Array.isArray(draft?.tableBindings)
         || draft.tableBindings.length === 0) return null;
@@ -5529,11 +5407,9 @@ function normalizeReaderSourceQuoteTableMarkers(draft) {
     };
 }
 
-// PDF column extraction can split a sentence with an unrelated column between
-// two clauses. When a source_quotes binding is not a contiguous source span,
-// recover the longest exact contiguous phrase from the sealed source text.
-// This changes only evidence metadata and its hash; it never invents or
-// rewrites the rendered table cell.
+// PDF 分栏抽取会在两个小句之间插进无关的一栏，把句子切断。当某个 source_quotes 绑定
+// 不是原文里连续的一段时，从核验过的原文里恢复最长的精确连续短语。这一步只改证据元数据
+// 和它的哈希，绝不编造或改写渲染出来的表格单元。
 function normalizeReaderSourceQuotes(candidate, sourceText) {
     if (!candidate || !Array.isArray(candidate.tableBindings)
         || typeof sourceText !== 'string' || !sourceText) return false;
@@ -5565,11 +5441,9 @@ function normalizeReaderSourceQuotes(candidate, sourceText) {
         const tokens = normalizedQuote.split(' ').filter(Boolean);
         if (tokens.length === 0) return null;
 
-        // Prefer a source excerpt that still carries the quantitative token
-        // from the declared quote. The old prefix-first search could return a
-        // perfectly contiguous but semantically empty fragment (for example
-        // the words before a number in a two-column PDF), silently discarding
-        // the evidence needed by the downstream numeric gate.
+        // 优先选仍然带着声明引文中那个定量 token 的原文片段。旧的从前缀开始搜的做法会
+        // 返回一段完全连续却在语义上空的片段（比如双栏 PDF 里数字前面的那几个词），把
+        // 下游数字闸门需要的证据悄悄丢掉。
         const targetNumbers = new Set(readerNumericTokens(quote));
         const numericCandidates = [];
         if (targetNumbers.size > 0) {
@@ -5663,11 +5537,9 @@ function normalizeReaderSourceQuotes(candidate, sourceText) {
     return changed;
 }
 
-// Quote-derived conference tables are compiler evidence, not authored
-// statistics.  Numeric labels such as “来源句 1” and “量化值 1” otherwise get
-// mistaken for scientific values by the final source-binding gate, even
-// though they are only row/column labels.  Normalize this exact generated
-// surface to Chinese ordinals; never touch ordinary authored tables.
+// 由引文生成的会议表格是编译器证据，不是作者写下的统计数据。「来源句 1」「量化值 1」
+// 这类数字标签本来只是行列表头，却会被最后的原文绑定闸门误当成科学数值。把这一处固定
+// 生成的表层归一化成中文序数；普通作者表格一律不动。
 function normalizeConferenceGeneratedEvidenceTableLabels(candidate) {
     if (!candidate || !Array.isArray(candidate.sections)) return false;
     const ordinals = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '九', '十'];
@@ -5700,14 +5572,11 @@ function normalizeConferenceGeneratedEvidenceTableLabels(candidate) {
     return changed;
 }
 
-// A bounded recovery for a conference-PDF draft that put source_quotes behind
-// TABLE markers.  A source_quotes binding cannot render a marker by itself,
-// but the sealed PDF may contain one uniquely replayable structured result
-// table. Promote that one binding to an authenticated selection and turn the
-// remaining marker-only quote bindings into compact, quote-derived evidence
-// tables. Every displayed number is copied from its own exact quote; if the
-// quote has no recoverable number, leave the draft for the normal Reader
-// repair path instead of inventing a row.
+// 会议 PDF 草稿把 source_quotes 放到了 TABLE 标记后面，这里做一次有上限的恢复。
+// source_quotes 绑定自己渲染不出标记，但核验过的 PDF 里可能有一张唯一可复现的结构化
+// 结果表。把那一个绑定提升为核验过的 selection，其余只有标记的引文绑定则变成紧凑的、
+// 由引文生成的证据表。显示的每个数字都从它自己那条精确引文里抄来；引文里没有可恢复的
+// 数字就留给普通 Reader 修复路径，不要编一行。
 function repairConferenceReaderQuoteTables(draft, sourceText, structuredArtifacts) {
     if (structuredArtifacts?.sourceKind !== 'conference_pdf'
         || !Array.isArray(draft?.sections) || !Array.isArray(draft?.tableBindings)
@@ -5782,8 +5651,8 @@ function repairConferenceReaderQuoteTables(draft, sourceText, structuredArtifact
                 const bindingIndex = work.tableBindings.findIndex(binding => binding?.tableIndex === first.tableIndex);
                 work.tableBindings[bindingIndex] = selection;
             } catch (_error) {
-                // Keep the quote binding if the structured table is not safe
-                // to render under the current artifact eligibility contract.
+                // 按当前的 artifact 资格约定，这张结构化表格渲染不安全时，就保留引文
+                // 绑定。
             }
         }
     }
@@ -5800,12 +5669,9 @@ function repairConferenceReaderQuoteTables(draft, sourceText, structuredArtifact
         }
     }
 
-    // The result-table coverage gate deliberately ignores setup/configuration
-    // tables. If the draft's first (main-result) quote table was authored in
-    // the setup section, relocate that exact generated table to the result
-    // section and rotate the binding indices with it. This is only enabled for
-    // the closed three-table marker shape above; no arbitrary prose/table is
-    // guessed or duplicated.
+    // 结果表覆盖闸门刻意不看设置和配置表。如果草稿的第一张（主结果）引文表写在了设置
+    // 小节里，就把这张生成出来的表格原样挪到结果小节，绑定下标跟着一起转。只对上面那种
+    // 封闭的三表标记形态启用；不猜、不复制任何任意正文或表格。
     if (generatedTables.has(1) && generatedTables.has(2) && generatedTables.has(3)
         && work.tableBindings.length === 3) {
         const destinationSectionIndex = work.sections.findIndex(section => (
@@ -6079,9 +5945,8 @@ function parseApiReaderArticleResult(raw, options = {}) {
         const markerIndex = blocks.indexOf(marker);
         const leadQuote = blocks[markerIndex - 1] || '';
         const explanationQuote = blocks[markerIndex + 1] || '';
-        // Concept markers are replaced with their already-validated prose
-        // before the final Figure quote rebind.  Measure that real paragraph,
-        // not the short placeholder token, when the two markers are adjacent.
+        // 最后重新绑定图片引文之前，概念标记会被替换成已经校验过的正文。两个标记相邻时，
+        // 量的是那一段真实文字，不是那个短短的占位 token。
         const leadNarrative = conceptNarrativeByMarker.get(leadQuote) || leadQuote;
         const explanationNarrative = conceptNarrativeByMarker.get(explanationQuote) || explanationQuote;
         const focusPoints = value.version === 3 ? placement.focusPoints : [];
@@ -6163,9 +6028,8 @@ function parseApiReaderArticleResult(raw, options = {}) {
             `读者文章中文字数必须为 ${minimumChineseChars}-${maximumChineseChars}，当前 ${chineseChars}`
         );
     }
-    // Some papers define an evidence block as their model's output structure.
-    // Only the authoritative source definition permits that domain term;
-    // numbered workflow blocks and actual instructions remain forbidden.
+    // 有些论文把「证据块」定义为模型的输出结构。只有原文里的权威定义才允许使用这个领域
+    // 术语；编号的操作步骤块和真正的指令仍然禁止。
     const sourceDefinesEvidenceBlock = /structured evidence block\s*\(value,\s*comparison,\s*difference,\s*direction\s+per measurement\)/i.test(String(options.sourceText || ''));
     const workflowCheckText = sourceDefinesEvidenceBlock
         ? article.replace(/证据块/g, '声学记录') : article;
@@ -6178,14 +6042,11 @@ function parseApiReaderArticleResult(raw, options = {}) {
         article, compiledTables.selectionTableIndexes
     );
     let quality = validateReaderEditorialQuality(qualityView(), normalizedSections);
-    // Concept-bridge surfaces are plan-signed content whose exact terms must
-    // survive byte-for-byte for the final bridge rebind (findReaderBridgeParagraph).
-    // The numeral repair is issue-triggered but applies GLOBAL pattern rewrites,
-    // so it can rewrite term-internal substrings — for example the “一位” inside
-    // “下一位置预测预训练” becomes “1位”, corrupting the heading and failing the
-    // rebind deterministically for every generation.  The reported issue offsets
-    // cannot scope the rewrite, so mask each signed bridge surface with a
-    // standalone token while the repair runs, then restore it verbatim.
+    // 概念 bridge 的表层是带计划签名的内容，术语必须逐字节保住，最后的 bridge 重新绑定
+    // （findReaderBridgeParagraph）才能对上。数字修复由问题触发，却做的是全局模式替换，
+    // 因此会改写术语内部的子串——比如「下一位置预测预训练」里的「一位」被换成「1位」，
+    // 标题被破坏，每次生成都必然重新绑定失败。报出的问题偏移量圈不住这次改写，所以在
+    // 修复运行期间用独立 token 把每个已签名的 bridge 表层遮住，跑完再原样恢复。
     const withProtectedBridgeSurfaces = (text, issues) => {
         const swaps = [];
         let masked = String(text || '');
@@ -6225,20 +6086,17 @@ function parseApiReaderArticleResult(raw, options = {}) {
         article = withProtectedBridgeSurfaces(article, finalSurfaceIssues);
         quality = validateReaderEditorialQuality(qualityView(), normalizedSections);
     }
-    // Global numeral repairs can also touch a matching phrase in a heading.
-    // Restore the separately normalized plan anchors after the final repair,
-    // before table/figure binding looks up those exact section titles.
+    // 全局数字修复也可能碰到标题里匹配上的短语。最后一次修复做完之后、表格和图绑定去查
+    // 这些确切的小节标题之前，把单独归一化过的计划锚点恢复回来。
     article = restoreReaderSectionHeadings(article, normalizedSections);
     article = ensureApiReaderTableNarratives(article);
     quality = validateReaderEditorialQuality(qualityView(), normalizedSections);
-    // Issue offsets describe this pre-injection view. Original TeX insertion
-    // changes later offsets, so replay context-sensitive exemptions against the
-    // exact text that produced the diagnostics, not the rendered formula copy.
+    // 问题的偏移量描述的是注入之前的样子。注入原始 TeX 会改动后面的偏移，所以那些依赖
+    // 上下文的豁免要对着产生诊断的那份确切文本复现，而不是渲染后的公式副本。
     const qualityArticle = qualityView();
-    // The article has passed all prose/structure cleanup now. Rebind selected
-    // artifact tables at this final pre-source-binding boundary so a late
-    // normalizer cannot alter signed PDF cell bytes; direct bind callers still
-    // remain strict and reject arbitrary tampering.
+    // 文章到这里已经过了所有正文和结构清理。在这个绑定原文之前的最后一道边界上重新绑定
+    // 选中的 artifact 表格，后面的归一化就动不了已签名的 PDF 单元字节；直接调绑定的调用
+    // 方仍保持严格，拒绝任何乱改。
     article = restoreReaderSelectedTableBytes(
         article, value.tableBindings, options.structuredArtifacts
     );
@@ -6261,11 +6119,9 @@ function parseApiReaderArticleResult(raw, options = {}) {
         : null;
     if (sourceBindingResult) article = sourceBindingResult.article;
     const qualityMetrics = buildApiReaderQualityMetrics(quality, qualityArticle);
-    // Concept-bridge surfaces are plan-signed: their bytes must survive for the
-    // final rebind, so the surface repair never rewrites them (see
-    // withProtectedBridgeSurfaces above).  Style findings that fall inside those
-    // signed spans can therefore never be repaired here — exempt them exactly
-    // like the existing narrative-numeral escape, instead of failing forever.
+    // 概念 bridge 表层带计划签名：它们的字节必须留到最后的重新绑定，所以表层修复从不
+    // 改写它们（见上面的 withProtectedBridgeSurfaces）。落在这些已签名区段里的风格问题，
+    // 因此在这里永远修不了——照现有的叙述数字豁免那样精确豁免掉，不要让流程永远失败。
     const blockingQualityIssues = quality.issues.filter(issue => !(
         issueFallsWithinReaderBridgeLine(issue, qualityArticle)
         || issueInProtectedReaderQuote(issue, qualityArticle)
@@ -6308,10 +6164,9 @@ function parseApiReaderArticleResult(raw, options = {}) {
             throw new Error(`读者文章至少需要 ${minimumWideTables} 张 ${requirements.minimumWideColumns} 列以上的宽表，当前 ${wideTableCount} 张`);
         }
     }
-    // A short lead can remain after table/figure normalization even though
-    // the preceding ordinary paragraph is a safe continuation of the same
-    // figure introduction. Merge it before the authoritative rebind so the
-    // final signed quote is measured against the actual article bytes.
+    // 表格和图归一化之后可能只剩下一段很短的引导，而它前面那段普通正文其实正是同一段插图
+    // 引导的自然延续。在权威重新绑定之前合并掉，最后的签名引文才是对着文章的真实字节量
+    // 出来的。
     article = figurePlacements.reduce(
         (value, placement) => mergeShortReaderFigureLead(value, placement.marker),
         article
@@ -6495,9 +6350,8 @@ function repairApiReaderArticleAndPlanBindings(paper, analysisManifest) {
     const repairedHeadings = plan.sections.map((section, index) => {
         const heading = normalizeReaderProseFormatting(String(section?.heading || '').trim());
         if (heading === articleHeadings[index]) return heading;
-        // Earlier Reader repair normalized measured counts in headings while
-        // leaving the plan unchanged. Recover only the same exact typography
-        // transformation; unrelated heading changes still fail closed.
+        // 早先的 Reader 修复把标题里量出来的计数归一化了，计划却没跟着改。只恢复同一个
+        // 精确的排版变换；其他标题改动仍按失败关闭。
         const issues = findQuantitativeChineseNumerals(heading).map(issue => ({
             ...issue, code: 'quantitative_chinese_numeral'
         }));
@@ -6677,10 +6531,8 @@ function deferOrRetireReaderCandidate(result, repair, candidateDirectory, identi
     if (!direct.directReaderCandidateCommitDeferred()) {
         return repair.retireFailedCandidate(candidateDirectory, identity);
     }
-    // An accepted draft is still only a recovery candidate until the caller
-    // persists the complete Reader stage.  Keep it under the existing
-    // fail-closed envelope so a downstream Figure/network failure can replay
-    // the exact draft with zero additional model calls.
+    // 在调用方把整个 Reader 阶段落盘之前，就算草稿已被接受，它也只是恢复候选。让它留在
+    // 现有的失败关闭外层对象里，下游图或网络失败时就能零额外模型调用地复现这份草稿。
     if (payload) repair.saveFailedCandidate(candidateDirectory, identity, payload);
     else if (!repair.loadFailedCandidate(candidateDirectory, identity)) {
         throw new Error('Deferred Reader candidate commit lacks its recovery envelope');
@@ -6738,8 +6590,8 @@ function buildApiReaderValidationFeedback(error) {
     const tableCounts = readTableCountIssue(countIssue);
     const tableCountFailure = !orderDiagnostic.ignoreMessageForRepair
         && countIssue?.diagnosticOnly !== true && tableCounts;
-    // Coded count failures select repairs only from their fields. Their text
-    // remains available to the caller's log, but cannot select another gate.
+    // 带错误码的计数失败只能根据自己的字段来选修复方式。它们的文字仍可供调用方写日志，
+    // 但选不了别的闸门。
     const message = codedCountIssue || orderDiagnostic.ignoreMessageForRepair ? '' : originalMessage;
     const orderFeedback = orderDiagnostic.actionable
         ? '重排正文前，表格与来源记录不能一一对应'
@@ -6970,8 +6822,8 @@ function recoverableStaleReaderRevisionStage(paper, sourceText) {
 
 function prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback) {
     if (!String(reviewFeedback || '').trim()) return null;
-    // Reuse the production byte/provenance validator rather than trusting a
-    // complete flag or accepting a newly supplied draft as an existing Reader.
+    // 复用生产环境的字节和溯源校验器，不要相信一个 complete 标志，也不要把新传进来的
+    // 草稿当成已有的 Reader 接受。
     const { hasValidApiReaderV3Records } = require('./analysis-engine.js');
     const currentReaderValid = !paper?.latestAnalysisAttemptError
         && hasValidApiReaderV3Records(paper);
@@ -7055,16 +6907,14 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const recordDisposition = options.readerRecordDisposition || require('./lib/llm-usage.js').recordLlmDisposition;
     const direct = require('./lib/direct-rewrite-analysis-context.js');
     const directScope = direct.getDirectRewriteAnalysisContext();
-    // Direct historical rewrites and the daily source-first route intentionally
-    // keep figure pixels out of persistent source bundles.  Bind only those
-    // ephemeral pixels to their failed candidates.  Legacy/durable source runs
-    // retain their pre-existing repair semantics and do not acquire this new
-    // gate merely because their Reader code shares this implementation.
+    // 历史直接重写和每日的原文优先路线，刻意不把图片像素放进持久来源包。只把这些临时
+    // 像素绑到各自失败的候选项上。旧格式和持久化的来源运行仍保留原来的修复语义，不会
+    // 因为 Reader 代码共用这份实现就凭空多出这道新闸门。
     const useEphemeralFigureEvidence = Boolean(direct.getDirectRewriteAnalysisContext())
         || fresh.isDailyFreshSourceScope();
-    // A direct historical rewrite supplies its own materializer.  It returns
-    // image bytes in memory after an OS-temporary lifetime, never a path in
-    // data/current/image-cache or data/current/api-reader-assets.
+    // 历史直接重写自带生成器。它在操作系统的临时目录里活一阵子，然后在内存里返回图片
+    // 字节，绝不会返回 data/current/image-cache 或 data/current/api-reader-assets 下的
+    // 路径。
     const materializeFigures = options.readerMaterializeFigures
         || direct.directReaderMaterializer() || materializeApiReaderFigures;
     const directSupplementaryImages = direct.directSupplementaryReaderImages();
@@ -7121,10 +6971,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         // 否则失败草稿的身份会指向一份本次并没有真正读的提示词。
         promptSha256: promptTemplateSha256(currentTextStagePromptPath('apiReaderArticle')),
         repairPromptSha256: promptTemplateSha256(currentTextStagePromptPath('apiReaderRepair')),
-        // The Reader gate also executes the shared analysis contract.  Include
-        // that dependency in the parser fingerprint so a contract fix can
-        // legitimately issue one bounded implementation-repair attempt for an
-        // exhausted candidate instead of silently treating it as unchanged.
+        // Reader 闸门也会执行共享的分析约定。把这个依赖算进解析器指纹，修好约定之后就能
+        // 名正言顺地给已经用尽配额的候选项发一次有上限的实现层修复，而不是悄悄把它当成
+        // 没变化。
         parserImplementationSha256: repair.shaText([
             fs.readFileSync(__filename, 'utf8'),
             fs.readFileSync(path.join(__dirname, 'analysis-contract.js'), 'utf8'),
@@ -7193,10 +7042,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         if (options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy) {
             normalizeReaderConferenceNarrowComparisonTable(candidate);
         }
-        // The model may place a TABLE marker directly adjacent to prose. Make
-        // declared markers standalone before the conference table-order pass;
-        // otherwise a semantically recoverable marker/table permutation looks
-        // like an ambiguous binding and is rejected before normalization.
+        // 模型可能把 TABLE 标记直接贴在正文后面。在会议的表格顺序处理之前，先让已声明的
+        // 标记独立成块；否则一次本来语义上可恢复的标记/表格错位，会被看成绑定有歧义，
+        // 在归一化之前就被拒。
         normalizeDeclaredReaderMarkerParagraphs(candidate);
         if (options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy) {
             normalizeReaderSourceQuotes(candidate, options.sourceText);
@@ -7408,8 +7256,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         structuredArtifacts: options.structuredArtifacts,
         sourceText: options.sourceText
     });
-    // A recovery candidate is revalidated even if an earlier worker labelled
-    // it failed. No persisted success flag can bypass today's full gates.
+    // 恢复候选即使被之前的执行单元标成失败，也要重新校验。没有任何已落盘的成功标志能
+    // 绕过当前这套完整闸门。
     if (candidate) {
         try {
             normalizeCandidate();
@@ -7427,12 +7275,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts
         }); }
     }
-    // An exact base-budget patch truncation purchases one larger response on
-    // the next explicit recovery instead of wasting the remaining ordinary
-    // 8000-token slots on the same reasoning-heavy patch. It cannot repeat after
-    // a retry-budget truncation because shouldEscalate only accepts the base
-    // ceiling.  The persisted content counter remains monotonic and every
-    // returned response still consumes an attempt.
+    // 补丁正好在基础预算处被截断时，下一次显式恢复可以换一次更大的响应，而不是把剩下的
+    // 普通 8000 token 配额继续浪费在同一个重推理的补丁上。重试预算被截断之后不会重复
+    // 升级，因为 shouldEscalate 只认基础上限。落盘的内容计数器保持单调，每次返回的响应
+    // 仍然消耗一次尝试。
     const boundedRecoveryAllowance = implementationRepairAllowanceProof
         || useEscalatedRepairBudget ? 1 : 0;
     const readerRules = readerRequirements({ version: 3, availableTableCount });
@@ -7450,14 +7296,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         throw new Error('Reader failed candidate exhausted its bounded attempts; inspect recovery evidence before changing inputs');
     }
     for (let attempt = completedAttempts + 1; attempt <= attemptLimit; attempt++) {
-        // Apply bounded, issue-bound recovery normalization before constructing
-        // the next prompt.  Without this pass, a model can reintroduce the
-        // same harmless surface defect immediately after the prior catch
-        // recorded the diagnostic, wasting another patch attempt.
-        // A table-stream ambiguity is itself a repairable Reader issue. Keep
-        // the unmodified candidate and route its exact paths through
-        // buildRepairContext instead of allowing normalization to escape the
-        // bounded patch loop before the model can add/rebind the missing table.
+        // 构造下一个提示词之前，先做一次有上限、绑定具体问题的恢复归一化。少了这一遍，
+        // 模型会在上一次捕获记下诊断之后立刻重新引入同一个无害的表层缺陷，又浪费一次补丁
+        // 尝试。
+        // 表格流有歧义本身就是可修的 Reader 问题。保留未修改的候选项，把它确切的路径交给
+        // buildRepairContext，不要让归一化在模型补上或重新绑定缺失表格之前就跳出有上限的
+        // 补丁循环。
         let normalizationError = null;
         try {
             normalizeCandidate();
@@ -7560,9 +7404,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 requestOptions });
             raw = isolated.raw;
             if (requestUsesEscalatedRepairBudget) {
-                // A received 16000-token response consumes the same one-slot
-                // lineage used by implementation recovery. Later parser churn
-                // therefore cannot mint another paid attempt.
+                // 收到一个 16000 token 的响应，就占用了实现层恢复同一条单次配额。后面
+                // 解析器再改动，也变不出另一次付费尝试。
                 useEscalatedRepairBudget = false;
             }
             if (isolated.exclusions.length) {
@@ -7580,9 +7423,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 refreshActiveImageState();
             }
             if (['MODEL_OUTPUT_TRUNCATED', 'MODEL_OUTPUT_INCOMPLETE'].includes(error?.code)) {
-                // The provider returned a terminated output, even though the
-                // public call deliberately did not expose its partial text.
-                // Charge the content budget and retain the last intact draft.
+                // 服务方返回了已终止的输出，尽管公开调用刻意没有暴露它的部分文本。照常
+                // 扣内容预算，保留最后一份完整的草稿。
                 if (!repairContext) fullAttempts += 1;
                 implementationRepairAllowanceProof = null;
                 const implementationRepairAllowanceLineage = requestUsesEscalatedRepairBudget
@@ -7606,9 +7448,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 });
                 throw error;
             }
-            // No content was received: preserve both the candidate and its
-            // content budget. The public request layer already bounds network
-            // retries; this invocation stops here and a later run may resume.
+            // 没有收到任何内容：候选项和它的内容预算都保留。公开请求层已经对网络重试设了
+            // 上限；这次调用到此为止，之后重跑可以接着来。
             transportFailures += 1;
             repair.saveFailedCandidate(candidateDirectory, identity, {
                 status: 'failed', draft: candidate, rawDraft: previousDraft, draftOrderMappings, readerRecoveryRevisions,
@@ -7689,13 +7530,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts
                 });
             const failureSignature = repair.hashRecoveryIssues(currentIssues);
-            // A malformed patch response consumes its bounded content attempt,
-            // but it never mutated the candidate.  Only compare draft hashes
-            // after a patch was parsed and applied; otherwise two distinct
-            // syntax failures would falsely exhaust no-progress before the
-            // remaining paid attempts can run.  Repeated identical failures
-            // are still bounded by failureSignature, and every response is
-            // still bounded by attempts/maxAttempts.
+            // 格式错误的补丁响应会消耗掉它那次有上限的内容尝试，但它从没改过候选项。只有
+            // 在补丁解析并应用之后才比较草稿哈希；否则两次不同的语法失败会在剩下的付费
+            // 尝试跑之前，就误判成毫无进展。重复的相同失败仍由 failureSignature 设上限，
+            // 每个响应也仍受 attempts/maxAttempts 约束。
             noProgress = failureSignature === previousFailureSignature
                 || (patchApplied && candidate && repair.hashDraft(candidate) === priorCandidateSha)
                 ? noProgress + 1 : 0;
@@ -8129,10 +7967,9 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         delete paper.latestAnalysisAttemptErrorCode;
         delete paper.latestAnalysisAttemptRetryable;
     }
-    // Capture the signed parent before resource/scoring synchronization
-    // intentionally changes those bindings.  The new Reader is a revision of
-    // this parent; validating the seed after mutation would reject a valid
-    // transition because the old stage still signs the old resource identity.
+    // 在资源和评分同步有意改动这些绑定之前，先把带签名的父版本抓下来。新的 Reader 是
+    // 这个父版本的一次修订；改动之后再去校验种子，会因为旧阶段签的仍是旧的资源身份而否掉
+    // 一次本来合法的状态转换。
     const readerRevisionSeed = prepareApiReaderRevisionSeed(
         paper, sourceText, options.reviewFeedback || ''
     );
@@ -8354,9 +8191,8 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
         figures,
         materialized
     );
-    // The article was already validated. A figure-only refresh must preserve
-    // its tables and Markdown emphasis; whole-body typography normalization
-    // can turn a caption's opening `*` into a list marker.
+    // 文章已经校验过了。只刷新图片时必须保住它的表格和 Markdown 强调；整篇排版归一化会
+    // 把图注开头的 `*` 变成列表符号。
     const rewrittenArticle = rewriteApiReaderFigureNarratives(prunedArticle, materialized);
     const articleSha256 = crypto.createHash('sha256').update(rewrittenArticle).digest('hex');
     const readerAuthors = resolveApiReaderAuthors(paper, sourceDetails);
@@ -8507,10 +8343,9 @@ const RECOVERY_STAGE_ORDER = Object.freeze([
     'methodRepair', 'structureRepair', 'tagSelection', 'coreSummaryRepair',
     'scoringAudit', 'apiReaderArticle', 'imageSupplement'
 ]);
-// Execution order is not a dependency graph.  In particular the v3 Reader is
-// authored from original source/artifacts, not from canonical analysis or its
-// score.  Keep invalidation edges explicit so a summary/score-only migration
-// cannot accidentally spend another Reader request.
+// 执行顺序不等于依赖关系。特别是 v3 Reader 依据原始来源和 artifact 编写，不依赖规范
+// 分析或它的评分。失效边要写明确，免得一次只改摘要或评分的迁移顺手又花掉一次 Reader
+// 请求。
 const RECOVERY_STAGE_DEPENDENCIES = Object.freeze({
     primaryAnalysis: Object.freeze([
         'openSourceScan', 'revision', 'tableRepair', 'methodRepair',
@@ -8609,10 +8444,9 @@ function promptTemplateSha256(relativePath, contractVersion = '') {
         .digest('hex');
 }
 
-// One-time, exact allowlist for checkpoints produced immediately before the
-// core-summary-detailed-v3 rollout.  Those prompts differ semantically only in
-// the summary contract; all other old prompt bytes must replay exactly or the
-// migration refuses them.  Never broaden this map to "any previous hash".
+// 这个一次性白名单只收 core-summary-detailed-v3 上线前那一刻产生的检查点。那些提示词
+// 在语义上只有摘要约定不同；其他所有旧提示词字节必须精确复现，否则迁移直接拒绝。绝不要
+// 把这张表放宽成「任何以前的哈希」。
 const CORE_SUMMARY_V3_LEGACY_FULL_PROMPT_SHA256 = Object.freeze({
     primaryAnalysis: '9b9197cdbb7c76cc6e2147f778eb425ab549262532dde06a01984cc9d2a9b5f5',
     openSourceScan: '1c043d793104a9c4cb5895dc691a1ce8a14685754ec8524e544b8f400bc0cc09',
@@ -8842,9 +8676,8 @@ function beginTagSelectionStage(paper, manifest) {
 
 function getTextStageInputAnalysis(paper, stage, currentAnalysis) {
     const index = RECOVERY_STAGE_ORDER.indexOf(stage === 'taxonomySeal' ? 'tagSelection' : stage);
-    // Optional stages may be introduced without invalidating historical
-    // manifests. Walk backward to the nearest actual checkpoint rather than
-    // assuming the immediately preceding stage existed in that older run.
+    // 新增可选阶段时，历史清单不能因此失效。要往回找到最近一个真正存在的检查点，不要
+    // 假定紧邻的前一个阶段在那次旧运行里存在。
     for (let candidate = index - 1; candidate >= 0; candidate--) {
         const checkpoint = paper.analysisStageCheckpoints?.[physicalRecoveryStage(paper.analysisManifest, RECOVERY_STAGE_ORDER[candidate], paper.analysisStageCheckpoints)];
         if (typeof checkpoint === 'string') return checkpoint;
@@ -8971,12 +8804,10 @@ function buildApiReaderBaseFingerprint(promptTextContract, repairPromptTextContr
         surfaceRepairVersion: API_READER_SURFACE_REPAIR_VERSION,
         mechanicalContractVersion: READER_MECHANICAL_CONTRACT,
         mechanicalContractImplementationSha256: promptTemplateSha256('scripts/lib/reader-contract.js'),
-        // The stored quality proof (blockingIssueCount) is produced by the
-        // detectors in editorial-quality.js and the waivers/metrics in this
-        // file.  Both implementation bytes must therefore invalidate a
-        // completed reader stage; otherwise a stage sealed under older gate
-        // code keeps its stale proof and can never satisfy the binding check
-        // (the exact deadlock seen with a bridge/quote numeral waiver fix).
+        // 落盘的质量证明（blockingIssueCount）由 editorial-quality.js 里的检测器和
+        // 本文件里的豁免规则、指标共同产生。所以这两处实现的字节都必须让已完成的 reader
+        // 阶段失效；否则用旧闸门代码核验过的阶段会一直留着过期的证明，永远过不了绑定检查
+        // （修 bridge/引文数字豁免时正好撞上过这个死锁）。
         qualityEditorialImplementationSha256: promptTemplateSha256('scripts/editorial-quality.js'),
         qualityPipelineImplementationSha256: promptTemplateSha256('scripts/deep-analyzer.js'),
         tableSelectionContractVersion: READER_TABLE_SELECTION_CONTRACT,
@@ -9142,8 +8973,8 @@ function buildLegacyApiReaderV3ConfigurationFingerprint(arxivId) {
             LEGACY_API_READER_V3_IDENTITY_SHA256.draftOrderImplementationSha256,
         sourceDiagnosticsImplementationSha256:
             LEGACY_API_READER_V3_IDENTITY_SHA256.sourceDiagnosticsImplementationSha256,
-        // This builder replays the pre-policy identity exactly; the current
-        // 16000-token bounded truncation retry belongs only to the new fingerprint.
+        // 这个构造函数精确复现策略变更前的身份；当前 16000 token 的有上限截断重试只属于
+        // 新的指纹。
         repairMaxTokens: 8000,
         repairTemperature: API_READER_REPAIR_TEMPERATURE,
         maximumContentAttempts: 6,
@@ -9161,9 +8992,8 @@ function migrateSourceOnlyApiReaderFingerprint(
     const stage = manifest?.stages?.apiReaderArticle;
     if (!isRecoveryStageComplete(manifest, 'apiReaderArticle')
         || stage.fingerprint !== legacyFingerprint) return false;
-    // This replays every production SHA/source-binding/author/resource proof;
-    // changing only a now-removed artificial analysis dependency is safe only
-    // when the stored Reader itself is still fully publishable.
+    // 这里会复现生产环境的每一项 SHA、原文绑定、作者和资源证明；只有当已保存的 Reader
+    // 本身仍完全可发布时，单纯去掉一个如今已删除的人为分析依赖才是安全的。
     if (!require('./analysis-engine.js').hasValidApiReaderV3Records(paper)) return false;
     const migration = {
         contract: 'api-reader-source-only-fingerprint-migration-v1',
@@ -9207,11 +9037,9 @@ function hasActualAnalysisInputChanged(previousSource, currentSource) {
         .some(field => previousSource?.[field] !== currentSource?.[field]);
 }
 
-// JEP/ICMC may legitimately publish short, camera-ready proceedings papers.
-// Their authenticated extraction receipt already uses the explicit 3000-char
-// proceedings profile. Keep the general full-text threshold unchanged, but
-// allow only those replayable official PDF bundles to use their complete PDF
-// text instead of silently falling back to metadata abstracts.
+// JEP/ICMC 确实会发表篇幅很短的定稿会议论文。它们经过核验的抽取凭证本来就用的是明确的
+// 3000 字会议档位。通用的全文阈值不动，但只允许这些可复现的官方 PDF 包使用完整 PDF
+// 文本，而不是悄悄退回元数据摘要。
 function resolveConferenceTextProfile(paper, sourceDetails, fullText) {
     const text = String(fullText || '');
     if (text.length > FULL_TEXT_MIN_CHARS_FOR_FULL) {
@@ -9284,9 +9112,8 @@ function classifyImageDownloadStatus({
     if (discoveryError) return 'transient_failure';
     if (!isDualModel) return 'skipped';
     if (candidateCount === 0) return 'no_candidates';
-    // A transient miss on one optional candidate must not invalidate images
-    // already downloaded and bound for this run. Retrying the whole paper in
-    // that case needlessly regenerates an otherwise complete Reader article.
+    // 某个可选候选项临时缺席，不能让本次运行已经下载并绑定好的图片失效。那种情况下重跑
+    // 整篇论文，会把一份本来完整的 Reader 文章白白重新生成一遍。
     if (downloadedCount > 0) return 'complete';
     return outcomes.some(item => item?.status === 'transient_failure')
         ? 'transient_failure'
@@ -9901,9 +9728,8 @@ function invalidateApiReaderForResourceCountChange(
     if (!invalidated) {
         throw new Error('Reader resource-count change did not invalidate the stale Reader');
     }
-    // Stage invalidation deletes all Reader-owned fields. Preserve only the
-    // freshly verified identity so the normal generation branch seals it into
-    // the replacement Reader; no stale article/plan/figure/author bytes survive.
+    // 阶段失效会删掉所有属于 Reader 的字段。只保留刚刚核验过的身份，好让正常的生成分支
+    // 把它写进替换后的 Reader；过期的文章、计划、图片和作者字节都不留。
     paper.apiReaderResources = verifiedReaderResources;
     return true;
 }
@@ -10034,15 +9860,13 @@ function isRecoveryStageComplete(manifest, stage) {
 
 function suppressOuterRetryAfterReaderExhaustion(error) {
     const exhausted = error instanceof Error ? error : new Error(String(error || 'Reader stage failed'));
-    // Figure acquisition happens before candidate loading and before any LLM
-    // attempt. A bounded, explicitly typed transport exhaustion must remain
-    // retryable so the historical scheduler can resume it; it is not Reader
-    // content-attempt exhaustion.
+    // 取图发生在加载候选项之前，也在任何 LLM 尝试之前。传输层用尽重试且带明确错误类型、
+    // 又有次数上限时，仍要算可重试，历史调度器才能接着跑；它不等于 Reader 的内容尝试
+    // 次数用尽。
     if (exhausted.ephemeralFigureFetch === true && exhausted.retryable === true) return exhausted;
-    // generateApiReaderArticleDetailed already owns its bounded full/repair
-    // attempts.  Do not restart the complete analysis in analyzePaperWithRetry
-    // during this invocation.  Its non-terminal stage remains checkpointed, so
-    // a later explicit resume still retries Reader normally.
+    // generateApiReaderArticleDetailed 自己管着有上限的完整生成和修复尝试。这次调用
+    // 期间不要在 analyzePaperWithRetry 里重启整篇分析。它未终止的阶段仍留有检查点，
+    // 之后显式恢复时 Reader 照常重试。
     exhausted.retryable = false;
     return exhausted;
 }
@@ -10108,10 +9932,8 @@ function checkpointImageSupplementFailure(paper, analysis, manifest, imageManife
 }
 
 function getPreProvidedImageUrls(paper) {
-    // A direct source scope is supplied by either the daily sealed bundle or
-    // the historical direct runner.  Caller-held recovery URLs may have come
-    // from an earlier analysis/current cache, so only the current source's
-    // image metadata may participate in this run.
+    // 直接来源作用域由每日核验来源包或历史直接运行器提供。调用方手里的恢复 URL 可能来自
+    // 更早的分析或 current 缓存，所以这次运行只允许用当前来源的图片元数据。
     if (require('./lib/direct-rewrite-analysis-context.js').getDirectRewriteAnalysisContext()) return [];
     let restored = normalizeImageInfos((paper?.analysisRecoveryImageManifest || paper?.imageManifest)?.candidates);
     for (const value of [paper?.allImageUrls, paper?.imageUrls]) {
@@ -10178,9 +10000,8 @@ function resolveSecondaryApiKeys(options = {}) {
     }
     if (secondaryKey) return [secondaryKey];
 
-    // A secondary model may inherit the primary account pool only when both
-    // routes are the same canonical OpenCode Go service. Cross-service routes
-    // were rejected above unless they supplied an explicit secondary key.
+    // 只有当两条路由指向同一个 OpenCode Go 服务时，副模型才可以继承主账号池。跨服务的
+    // 路由在上面已经被拒，除非它显式提供了副模型密钥。
     if (sameOpenCodeGoService) {
         return primaryApiKeys;
     }
@@ -10458,10 +10279,9 @@ async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RET
                 }
             }
         }
-        // Preserve the concrete attempt-layer timeout when that deadline is
-        // what settled the request.  MODEL_OVERALL_TIMEOUT is reserved for a
-        // budget exhausted before another attempt/backoff can start.  Timer
-        // scheduling jitter must not randomly relabel the same failed request.
+        // 如果这次请求是被具体的尝试层超时终结的，就保留那个超时。
+        // MODEL_OVERALL_TIMEOUT 留给「下一次尝试或退避还没开始，预算就用完了」的情况。
+        // 定时器调度的抖动不能把同一个失败请求随机归到别的类别里。
         if (lastError?.code === 'MODEL_OVERALL_TIMEOUT') {
             throw createOverallTimeoutError(budget.elapsedMs(), lastError, overallTimeoutMs);
         }
@@ -10737,7 +10557,7 @@ async function readResponseBufferWithLimit(response, maxBytes) {
                 try {
                     await reader.cancel();
                 } catch (e) {
-                    // ignore cancel errors
+                    // 忽略取消导致的错误
                 }
                 const error = new Error(`response body ${(total / 1024 / 1024).toFixed(1)}MB exceeds limit`);
                 error.code = 'RESPONSE_TOO_LARGE';
@@ -10801,11 +10621,10 @@ function assessArxivHtmlFullText($, content) {
 }
 
 const ARXIV_STRUCTURED_ARTIFACT_VERSION = 1;
-// v4 additionally recognizes LaTeXML's semantic span rendering for scaled
-// tabulars (`span.ltx_tabular` / `span.ltx_tr` / `span.ltx_td`) and numbered
-// DOM-native framed figures that intentionally have no image URL. Those nodes
-// are parsed directly from DOM evidence; flattened text is never promoted to a
-// matrix or image. v3's SVG evidence behavior remains unchanged.
+// v4 另外还认 LaTeXML 对缩放表格的语义 span 渲染
+// （`span.ltx_tabular` / `span.ltx_tr` / `span.ltx_td`），以及编号、原生 DOM 的框式
+// 图——这类图本来就没有图片 URL。这些节点直接从 DOM 证据解析；压平后的文字绝不提升成
+// 矩阵或图片。v3 的 SVG 证据行为不变。
 const ARXIV_STRUCTURED_ARTIFACT_PARSER_VERSION = 'arxiv-html-dom-v4';
 const STRUCTURED_ARTIFACT_LIMITS = Object.freeze({
     tables: 256,
@@ -10849,9 +10668,8 @@ function isRecoverableFigureResourceUrl(url, mediaType = '') {
     const value = String(url || '').trim();
     if (!/^https:\/\//i.test(value)) return false;
     if (isSupportedImageUrl(value)) return true;
-    // The trusted arXiv DOM explicitly declares these vector graphics.  Keep
-    // them in the source inventory so the author can use or reject the actual
-    // figure, while the raster-only image downloader continues to reject them.
+    // 受信任的 arXiv DOM 明确声明了这些矢量图。把它们留在来源清单里，作者才能选用或
+    // 否掉真正的图；只认位图的图片下载器仍继续拒绝它们。
     return String(mediaType || '').toLowerCase() === 'image/svg+xml';
 }
 
@@ -10885,8 +10703,7 @@ function extractArxivFigureResources($, wrapper, htmlId, arxivId, ordinal, state
             url,
             alt,
             mediaType,
-            // Only these resources are eligible for the separate, byte- and
-            // MIME-verified image pipeline.  SVG stays source evidence only.
+            // 只有这些资源能进那条单独校验字节和 MIME 的图片流水线。SVG 只作原文证据。
             rasterDownloadEligible: isSupportedImageUrl(url)
         });
     };
@@ -10918,12 +10735,10 @@ function extractArxivFigureResources($, wrapper, htmlId, arxivId, ordinal, state
         });
     });
 
-    // LaTeXML can preserve a genuine numbered Figure as a DOM-native framed
-    // text panel rather than emitting an <img> (for example, a verbatim prompt
-    // suite). This remains non-raster source evidence. Admit only the narrow,
-    // auditable variant: an explicit Figure label, an ltx_framed body with
-    // visible non-caption text, and no table/listing/algorithm DOM. A plain
-    // figure whose source asset is missing therefore remains unrecovered.
+    // LaTeXML 有时不输出 <img>，而是把一张真正编号的图保留成原生 DOM 的框式文本面板
+    // （比如一份逐字记录的提示词套件）。这仍是非位图的原文证据。只接受那种很窄、可核查
+    // 的形态：有明确的 Figure 标签，ltx_framed 正文里有非图注的可见文字，且没有表格、
+    // 列表或算法 DOM。因此源资源缺失的普通图仍然恢复不出来。
     if (resources.size === 0) {
         const label = String(wrapper.find('.ltx_tag_figure, .ltx_tag').first().text() || '')
             .replace(/\s+/g, ' ').trim();
@@ -10975,11 +10790,10 @@ function layoutContainerFor($, element) {
 }
 
 /**
- * LaTeXML can render a caption-only `figure.ltx_table` in one layout cell and
- * place its `table.ltx_tabular` in the next.  Associate only this exact
- * split-layout pattern: same flex/minipage container, the next table DOM, and
- * no visible prose or competing table caption in between.  Never infer a
- * matrix from flattened text or attach an arbitrary later table.
+ * LaTeXML 会把只有图注的 `figure.ltx_table` 放在一个布局单元里，把它的
+ * `table.ltx_tabular` 放到下一个布局单元。只关联这种精确的拆分布局形态：同属一个
+ * flex/minipage 容器、紧接着就是表格 DOM，中间没有可见正文，也没有别的表格图注。
+ * 绝不从压平文本推断矩阵，也不随便挂上后面某张表格。
  */
 function isArxivTabularDom($, element) {
     const node = $(element);
@@ -11031,8 +10845,8 @@ function findSplitTableDom($, wrapper, allElements) {
         const tagName = element.tagName?.toLowerCase() || '';
         if (node.hasClass('ltx_table') || tagName === 'figcaption' || node.hasClass('ltx_caption')
             || /^h[1-6]$/.test(tagName)) return null;
-        // A non-empty leaf here is actual intervening prose, not an empty
-        // layout wrapper introduced by LaTeXML's flex/minipage rendering.
+        // 这里非空的叶子是真正夹在中间的正文，不是 LaTeXML 的 flex/minipage 渲染
+        // 产生的空布局容器。
         if (node.children().length === 0 && node.text().replace(/\s+/g, '').length > 0) return null;
     }
     return followingTable;
@@ -11042,8 +10856,7 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
     const wrapper = $(element);
     const tableElement = options.tableElement || findArxivTabularRoot($, element);
     const table = tableElement ? $(tableElement) : $([]);
-    // The aggregate proof covers the caption wrapper and the separate tabular
-    // fragment; individual cells still retain their own exact DOM SHA.
+    // 整体证明覆盖图注外层容器和拆出去的那段表格；各个单元仍各自保留精确的 DOM SHA。
     const domHtml = [$.html(wrapper), options.tableElement ? $.html(table) : ''].join('\n');
     const caption = compactDomText(
         arxivCaptionText($, wrapper.find('figcaption, .ltx_caption, caption').first()),
@@ -11099,10 +10912,9 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
         )) && cells.some(cell => (
             cell.header === true && cell.row === rowIndex - 1 && Number(cell.colspan || 1) > 1
         ));
-        // A row-label <th> inside a data row must not turn every numeric <td>
-        // into a header.  Conversely, LaTeXML sometimes emits the second tier
-        // of a grouped rowspan/colspan header as <td>; the inherited span is
-        // sufficient DOM evidence to retain that tier as a header row.
+        // 数据行里的行标签 <th> 不能把所有数字 <td> 都变成表头。反过来说，LaTeXML 有时
+        // 把带 rowspan/colspan 的分组表头第二层输出成 <td>；继承来的跨度作为 DOM 证据
+        // 已经够用，可以把那一层留作表头行。
         const isHeaderRow = row.closest('thead').length > 0
             || (directCells.length > 0 && directCells.every(explicitHeaderCell))
             || inheritedGroupedHeader;
@@ -11168,7 +10980,7 @@ function serializeArxivTable($, element, ordinal, state, options = {}) {
     };
 }
 
-/** Preserve structures before the historical `.text()` projection removes them. */
+/** 在历史的 `.text()` 投影把它们抹掉之前，先把结构保留下来。 */
 function parseArxivStructuredArtifactsFromHtml(html, htmlId, arxivId = htmlId) {
     const sourceHtml = String(html || '');
     const $ = cheerio.load(sourceHtml);
@@ -11395,8 +11207,8 @@ function countKnownAuthorNames(value, authorNames) {
 function isReaderResourceAffiliationLabel(value) {
     const text = normalizeReaderIdentityText(value)
         .replace(/^(?:affiliation|institution)\s*[:：]?\s*/i, '');
-    // A removed project URL can leave a plausible-looking nonempty label.
-    // These explicit resource labels are not institutional evidence.
+    // 项目 URL 被删掉之后，可能留下一段看着挺像样的非空标签。这些显式资源标签不是机构
+    // 证据。
     return /^(?:project\s+(?:page|website|webpage)|(?:code|demo|dataset)(?:\s+(?:page|website|url|link))?)(?:\s*[:：]\s*.*|\s*)$/i.test(text);
 }
 
@@ -11468,9 +11280,8 @@ function parseReaderThanksAffiliations($) {
 }
 
 function parseReaderAuthorTable($) {
-    // Some conference styles put the author block in a plain preamble table,
-    // without ltx_authors or citation metadata. Only explicit superscript
-    // associations are admissible; never infer associations from row order.
+    // 有些会议模板把作者块放进普通的导言区表格，既没有 ltx_authors 也没有引文元数据。
+    // 只有明确的上标关联才算数；绝不按行序推断关联。
     const tables = [];
     let reachedSection = false;
     $('table, section, .ltx_section').each((_, node) => {
@@ -11619,9 +11430,8 @@ function parseArxivReaderAuthors($) {
 function resolveApiReaderAuthors(paper, sourceDetails) {
     const parsed = sourceDetails?.readerAuthors;
     const normalizeName = value => String(value || '').replace(/\s+/g, ' ').trim()
-        // Metadata may retain TeX grouping around an already Unicode Latin
-        // accent (Ga{ë}l). Remove only these presentation braces, while the
-        // identity continues to bind the original metadata/DOM SHA.
+        // 元数据里可能留着本该是 Unicode 拉丁重音字符外面的 TeX 分组（Ga{ë}l）。只去掉
+        // 这种纯展示用的花括号，身份仍绑定原始元数据和 DOM SHA。
         .replace(/(?<=[A-Za-z])\{([\u00c0-\u024f])\}(?=[A-Za-z])/gu, '$1');
     const rawAuthors = Array.isArray(paper?.authors) ? paper.authors : [];
     let names = rawAuthors.map(author => (
@@ -11782,11 +11592,9 @@ function extractApiReaderResourceCandidates(analysis) {
 }
 
 /**
- * Conference PDF text can preserve an author-supplied repository as
- * `github.com/owner/repo` without a URI scheme. This extractor is used only
- * after conferenceWeakReaderCapabilityPolicy() has authenticated the sealed
- * weak-text source. Keep the exact source token for quote replay, while the
- * network gate receives a credential-free HTTPS URL.
+ * 会议 PDF 文本里的作者仓库可能写成 `github.com/owner/repo`，不带 URI 协议头。只有
+ * 在 conferenceWeakReaderCapabilityPolicy() 核验过那份弱文本来源之后，才会用这个
+ * 抽取器。原文 token 原样保留用于引文复现，网络闸门拿到的则是不带凭证的 HTTPS URL。
  */
 function extractWeakConferenceSourceResourceCandidates(sourceText) {
     return extractPaperSourceRepositoryCandidates(sourceText);
@@ -12198,9 +12006,8 @@ async function fetchArxivTextDetailed(arxivId) {
     return require('./lib/fresh-analysis-context.js').fetchFreshSource(arxivId, fetchArxivTextDetailedOriginal);
 }
 
-// Source-authority creation must prove a live official fetch even when called
-// from inside a fresh-analysis AsyncLocalStorage scope. Ordinary analysis keeps
-// using the cache-aware function above.
+// 建立来源权威时，即使在 fresh-analysis 的 AsyncLocalStorage 作用域里被调用，也必须
+// 证明真的现场抓过官方来源。普通分析仍用上面那个会看缓存的函数。
 async function fetchArxivTextDetailedUncached(arxivId) {
     return fetchArxivTextDetailedOriginal(arxivId);
 }
@@ -12329,10 +12136,8 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
         }
     }
     if (options.allowPdfFallback === false) {
-        // Fresh rewrite capture owns the only PDF request.  Returning this
-        // HTML-only observation lets its source store extract fallback text
-        // from the exact PDF bytes it will seal, instead of downloading and
-        // then discarding a second PDF here.
+        // 全新重写采集独占这一次 PDF 请求。这里只返回 HTML 观察结果，来源存储就能从它
+        // 将要核验保存的那份 PDF 字节里抽兜底文本，不必在这里再下一份 PDF 然后丢掉。
         return {
             text: '', source: 'unavailable', sourceId: '', imageInfos: [], structuredArtifacts: null,
             htmlAvailability, htmlAttempts, warnings,
@@ -12341,7 +12146,7 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
     }
     console.log(`    [deep] fetchArxivText ${arxivId} 转入 PDF fallback | html_status=${htmlAvailability} | attempts=${htmlAttempts}`);
 
-    // PDF fallback: download PDF and extract text
+    // PDF 兜底：下载 PDF 并抽取文本
     let pdfHadTransientFailure = false;
     let lastTransientFailure = '';
     for (const pdfId of getArxivHtmlIds(arxivId)) {
@@ -12425,9 +12230,8 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
     };
 }
 
-// The fresh source store calls this only with the one raw official PDF it has
-// already persisted.  It contains no network path and therefore cannot fetch
-// a different fallback document behind the manifest's back.
+// 全新来源存储只会用它已经落盘的那一份原始官方 PDF 调这里。这段代码里没有网络路径，
+// 因此不可能绕过清单去抓另一份兜底文档。
 async function extractArxivPdfTextDetailedFromBytes(arxivId, rawBytes, options = {}) {
     const normalized = String(arxivId || '').trim().replace(/v\d+$/i, '');
     if (!/^\d{4}\.\d{4,5}$/.test(normalized)) throw new Error('arXiv PDF extraction requires a normalized modern arXiv ID');
@@ -12464,10 +12268,8 @@ async function fetchArxivText(arxivId) {
     return (await fetchArxivTextDetailed(arxivId)).text;
 }
 
-// Historical fresh-rewrite source capture always keeps a raw official PDF,
-// including on the healthy HTML path.  This deliberately bypasses the normal
-// fresh-source cache and uses the same mandatory arXiv CONNECT dispatcher as
-// the full-text fetcher above.
+// 历史全新重写的来源采集总会留下原始官方 PDF，HTML 路径正常时也一样。这里刻意绕过
+// 普通的全新来源缓存，用和上面全文抓取器相同的、强制走 arXiv CONNECT 的 dispatcher。
 async function fetchArxivPdfUncached(arxivId, options = {}) {
     const normalized = String(arxivId || '').trim().replace(/v\d+$/i, '');
     if (!/^\d{4}\.\d{4,5}$/.test(normalized)) {
@@ -12507,9 +12309,8 @@ async function fetchArxivPdfUncached(arxivId, options = {}) {
     throw new Error(`arXiv PDF ${normalized} download failed: HTTP ${currentPdfStatus || 404}`);
 }
 
-// Figure evidence for a historical fresh rewrite is intentionally not routed
-// through data/current/image-cache. The caller owns an OS-temporary lifetime
-// and must remove it after the active Reader call.
+// 历史全新重写的图片证据有意不走 data/current/image-cache。生命周期归调用方，落在操作
+// 系统临时目录里，当前这次 Reader 调用结束之后必须删掉。
 async function fetchArxivFigureBytesUncached(rawUrl) {
     const parsed = new URL(String(rawUrl || ''));
     if (parsed.protocol !== 'https:' || parsed.hostname !== 'arxiv.org' || parsed.port
@@ -12753,9 +12554,8 @@ async function requestPinnedPublicHttps(rawUrl, options = {}, dependencies = {})
                     body: null,
                     arrayBuffer: bodyUnavailable
                 }, response);
-                // Reachability needs only the authenticated response status
-                // and redirect headers. Do not drain or buffer a potentially
-                // unbounded HTML page after those headers have arrived.
+                // 判断可达性只需要经过核验的响应状态和重定向头。这些头拿到之后，不要再
+                // 去读掉或缓存一个可能无限大的 HTML 页面。
                 return;
             }
             response.on('data', chunk => {
@@ -12814,7 +12614,7 @@ async function fetchPublicImageResponse(imageUrl, maxRedirects = 5, requestImpl 
             try {
                 await response.body.cancel();
             } catch (e) {
-                // Redirect body cleanup failure does not change the validation result.
+                // 清理重定向响应体失败，不影响校验结果。
             }
         }
         if (!location) throw new Error(`图片重定向 ${response.status} 缺少 Location`);
@@ -13049,11 +12849,9 @@ async function downloadImagesSerial(imageUrls, maxCount, maxBase64Chars, maxTota
             }
         } catch (e) {
             if (e.code === 'PROXY_CONFIG_ERROR') throw e;
-            // Direct historical runs supply an ephemeral downloader whose
-            // trusted arXiv byte validator throws on permanent failures (for
-            // example, a declared JPEG whose magic bytes are PNG). Preserve
-            // that fail-closed rejection as a terminal candidate outcome;
-            // transport errors remain retryable and therefore transient.
+            // 历史直接运行会提供一个临时下载器，它那套受信任的 arXiv 字节校验器遇到
+            // 永久性失败就抛错（比如声明是 JPEG，魔数字节却是 PNG）。这种按失败关闭的
+            // 拒绝要保留成候选项的终态结果；传输错误仍可重试，属于临时问题。
             outcomes.push({
                 url,
                 status: isPermanentApiReaderFigureFailure(e)
@@ -13300,10 +13098,9 @@ function buildImageContent(imageUrl, base64, detectedMime = '') {
 }
 
 /**
- * Every Reader image is decoded locally before request assembly, then derived
- * from those exact pixels as a bounded white-background JPEG. The source SHA
- * and request-payload SHA are both retained; no replacement pixels or URLs are
- * introduced when an input cannot be decoded.
+ * Reader 的每张图片都在组装请求之前本地解码，再从这批确切的像素生成一张有大小上限、
+ * 白底的 JPEG。来源 SHA 和请求负载 SHA 都会保留；输入解不开时，不会替换成别的像素或
+ * URL。
  */
 function modelImageSourceBytes(image) {
     if (image?.rawBytes !== undefined) return Buffer.from(image.rawBytes);
@@ -13750,10 +13547,8 @@ function findSectionBounds(analysis, title) {
     const start = match.index + match[1].length;
     const contentStart = start + match[2].length;
     const rest = analysis.slice(contentStart);
-    // A nested ### reader subsection belongs to its surrounding ## fixed
-    // section.  Stop only at a heading of the same or a higher level; the old
-    // #{2,3} boundary silently hid every paragraph after the first ### from
-    // the image-anchor catalog.
+    // 嵌在里面的 ### reader 子小节属于它外面的 ## 固定小节。只在同级或更高级别的标题处
+    // 停下；旧的 #{2,3} 边界会让第一个 ### 之后的每一段都从图片锚点清单里悄悄消失。
     const level = match[3].length;
     const next = new RegExp(`\\n#{2,${level}}\\s`).exec(rest);
     const end = next ? contentStart + next.index : analysis.length;
@@ -14124,9 +13919,8 @@ async function analyzePaperDeepInternal(paper) {
     const analysisManifest = createAnalysisRecoveryManifest(paper);
     console.log(`    [deep] 获取全文: ${arxivId}`);
 
-    // Direct historical runs must only consume the source injected by their
-    // runner.  In particular they never fall through to a caller's old
-    // fullText/pdfText/analysis fields or the legacy arXiv cache.
+    // 历史直接运行只能消费自己运行器注入的来源。它绝不会退回到调用方旧的 fullText、
+    // pdfText、analysis 字段或旧格式的 arXiv 缓存。
     let fullText = directSource?.text || conferenceSource?.text || paper.fullText || paper.pdfText || '';
     let sourceDetails = directSource || conferenceSource || {
         source: fullText ? (paper.fullText ? 'provided_full_text' : 'provided_pdf_text') : 'unavailable',
@@ -14156,10 +13950,9 @@ async function analyzePaperDeepInternal(paper) {
         console.log(`    [deep] 使用预提供全文: ${fullText.length} 字符`);
     }
 
-    // Direct historical executions receive their source proof from the active
-    // direct scope. All other source-only executions retain the fresh-run
-    // source proof. Both paths bind the exact supplied text/artifacts before
-    // any analysis or Reader checkpoint can be persisted.
+    // 历史直接执行从当前生效的直接作用域拿到来源证明。其他只处理来源的执行仍用全新运行
+    // 的来源证明。两条路径都会在分析或 Reader 检查点落盘之前，先绑定传进来的确切文本和
+    // artifact。
     if (directSource) directRewriteContext.attachDirectSourceRecord(paper, analysisManifest, sourceDetails);
     else require('./lib/fresh-analysis-context.js').attachFreshSourceRecord(paper, analysisManifest, sourceDetails);
 
@@ -14405,16 +14198,13 @@ async function analyzePaperDeepInternal(paper) {
         ? (sourceAcquisitionRecord.truncated ? '以下是论文全文节选，请只依据已提供内容分析。' : '以下是论文全文，请仔细阅读所有技术细节。')
         : '以下是论文摘要；由于全文不可用，请降低事实判断和评分置信度，不得声称已经核对全文细节。';
 
-    // Conference PDFs intentionally have no trusted Figure URL. Their page
-    // pixels arrive through the direct supplementary-image scope instead. The
-    // ephemeral primary downloader is required only when this source route
-    // actually discovered URL-based primary image candidates.
+    // 会议 PDF 刻意没有受信任的插图 URL。它们的页面像素改从直接补充图片作用域进来。
+    // 只有这条来源路线确实发现了基于 URL 的主图候选项时，才需要那个临时主下载器。
     if (directSource && isDualModel && candidateImageUrls.length > 0 && !directPrimaryImageDownloader) {
         throw new Error('Direct dual-model analysis requires an ephemeral primary image downloader');
     }
-    // Direct historical analyses never touch the legacy data/current image
-    // cache. Their downloader returns only ephemeral in-memory bytes from the
-    // runner-owned source route; ordinary daily analysis retains its cache.
+    // 历史直接分析绝不碰旧格式的 data/current 图片缓存。它们的下载器只返回来自运行器
+    // 自有来源路线的临时内存字节；普通每日分析仍用自己的缓存。
     const downloadedImages = isDualModel
         ? await downloadImagesSerial(candidateImageUrls, IMAGE_MAX_COUNT, IMAGE_MAX_BASE64_CHARS,
             IMAGE_TOTAL_BASE64_CHARS, directSource ? { downloadImageDetailed: directPrimaryImageDownloader } : {})
@@ -14498,14 +14288,14 @@ async function analyzePaperDeepInternal(paper) {
             ? recoveryFingerprints.primaryAnalysis
             : buildPrimaryAnalysisBaseFingerprint(
                 primaryAnalysisWriteContract, paper, textForAnalysis, arxivId);
-    // Round 1: Main analysis
+    // 第1轮：主分析
     if (analysis) {
         console.log(`    [deep] ↩ 从主分析 checkpoint 恢复 (${analysis.length} chars)`);
     } else if (isDualModel && downloadedImages.length > 0) {
         // ========== 双模型模式 ==========
         console.log(`    [deep] 🧠 双模型模式：主模型(${DEEP_CONFIG.model})先做文本分析，后续由副模型(${SECONDARY_CONFIG.model})最终筛图补充`);
 
-        // Round 1a: Primary model (text-only)
+        // 第1a轮：主模型（只看文本）
         try {
             analysis = await callModelWithConfig(
                 [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
@@ -14633,10 +14423,9 @@ async function analyzePaperDeepInternal(paper) {
                             allOpenSourceLinks.push(...links);
                         } catch (e) {
                             if (e?.code !== 'DEMO_TRANSIENT_FAILURE') throw e;
-                            // Demo availability is supplementary evidence. Keep
-                            // the failure in the stage manifest, but do not turn
-                            // an otherwise complete paper into a permanently
-                            // failing analysis just because its demo is down.
+                            // Demo 是否可用只是补充证据。失败照旧记进阶段清单，但不能
+                            // 因为 demo 挂了，就把一篇本来完整的论文变成永远失败的
+                            // 分析。
                             demoScanFailures.push({ url, error: e.message });
                             console.log(`    [deep] ℹ️  Demo 暂不可达，按 unavailable 记录并继续: ${url}`);
                         }
@@ -15268,10 +15057,8 @@ async function analyzePaperDeepInternal(paper) {
                 };
                 let selectedResult = secondResult;
                 if (resolution.status !== 'resolved') {
-                    // A single second pass can itself be noisy. Take one
-                    // additional independent audit and accept only a pair
-                    // within the original tolerance; if all three disagree,
-                    // preserve the strict rejection.
+                    // 单跑一次第二轮本身也可能有噪声。再独立审一次，只有在原始容差内
+                    // 有两者一致才接受；三次互不相同就维持严格的拒绝结论。
                     console.log(
                         `    [deep] ⚠️  评分二审未收敛，触发第三次独立审计: `
                         + `first=${firstAuditScore.toFixed(1)} | second=${secondScore.toFixed(1)}`
@@ -15398,8 +15185,8 @@ async function analyzePaperDeepInternal(paper) {
     // 保留 13 节 analysis 与评分作为机器兼容层。Reader 在评分后调度，
     // 文章只根据原文证据和实际图片编写，不把主分析正文传给模型。
     // 因此 Reader 身份只绑定真实输入；摘要或评分变化不得触发昂贵重写。
-    // Scoring/Reader invalidation may discard stale paper fields, but must not
-    // discard the resource identity freshly verified for this same execution.
+    // 评分和 Reader 的失效逻辑可以丢掉过期的论文字段，但不能丢掉这次执行中刚刚核验过
+    // 的资源身份。
     paper.apiReaderResources = verifiedReaderResources;
     const readerCapabilityPolicy = validateReaderCapabilityPolicy(
         conferenceAnalysisContext.conferenceWeakReaderCapabilityPolicy(
@@ -15442,10 +15229,9 @@ async function analyzePaperDeepInternal(paper) {
     )) {
         console.log('    [deep] ♻️  Reader 资源集合数量变化，已失效旧 Reader 并进入重建');
     }
-    // A recovered direct/daily Reader may predate the publication-side
-    // persistence marker while already carrying the intentionally stripped
-    // Figure evidence.  Seal the mode before deciding whether its Reader stage
-    // can be reused; this is metadata only and never restores a cache path.
+    // 恢复出来的直接或每日 Reader 可能早于发布侧的持久化标记，却已经带着有意剥掉的图片
+    // 证据。先把这个模式定下来，再决定它的 Reader 阶段能否复用；这只是元数据，绝不会
+    // 恢复出缓存路径。
     const activeDirectReaderContext = require('./lib/direct-rewrite-analysis-context.js');
     if (activeDirectReaderContext.getDirectRewriteAnalysisContext()
         && analysisManifest.contracts?.apiReaderArticle === API_READER_ARTICLE_CONTRACT
@@ -15512,14 +15298,10 @@ async function analyzePaperDeepInternal(paper) {
             );
             const directContext = require('./lib/direct-rewrite-analysis-context.js');
             const directMaterializer = directContext.directReaderMaterializer();
-            // Daily fresh-source runs may discover a Figure whose pixels are
-            // permanently rejected by the bounded downloader (for example a
-            // body larger than the 6 MiB limit).  The Reader prompt correctly
-            // receives no pixels in that case, so the resulting article must
-            // omit that Figure rather than ask the direct evidence sealer to
-            // prove bytes that were never observed. Historical direct runs
-            // remain fail-closed and still require exact evidence for every
-            // declared Figure.
+            // 每日全新来源运行可能发现一张图，它的像素被有上限的下载器永久拒绝（比如
+            // 响应体超过 6 MiB 上限）。这种情况下 Reader 提示词正确地拿不到像素，因此
+            // 生成的文章必须略去这张图，而不是要求直接证据核验流程去证明从未观察到的
+            // 字节。历史直接运行仍按失败关闭，声明的每张图都仍要有确切证据。
             const dailyFigureEvidence = require('./lib/fresh-analysis-context.js').isDailyFreshSourceScope()
                 ? new Set((generatedReaderResult.imageEvidence || [])
                     .filter(item => item?.kind === 'figure' && item.status === 'ready')
@@ -15884,10 +15666,9 @@ async function analyzePaperDeepInternal(paper) {
 }
 
 async function scanOpensource(paper, sourceText, preparedEvidence = null) {
-    // Conference bundles already carry an authenticated PDF/text source. Keep
-    // resource discovery source-bound and deterministic for them: a model is
-    // unnecessary for the six-line inventory, and a malformed one-shot model
-    // response must not strand an otherwise complete conference analysis.
+    // 会议来源包本来就带着经过核验的 PDF 或文本来源。它们的资源发现要保持绑定原文、
+    // 结果确定：这份六行的清单用不着模型，而一次格式错误的单发模型响应不能让一份本来
+    // 完整的会议分析卡住。
     if (paper?.source === 'conference') {
         const candidates = extractPaperSourceRepositoryCandidates(sourceText);
         const values = type => [...new Set(candidates.filter(item => item.type === type)
@@ -15916,11 +15697,9 @@ async function scanOpensource(paper, sourceText, preparedEvidence = null) {
         return await callModel([{ role: 'user', content: prompt }], 8000,
             { usageContext: { stage: 'openSourceScan' } });
     } catch (error) {
-        // A malformed one-shot response must not erase source-grounded URL
-        // evidence.  Fall back only for the response parser failure, and build
-        // the section exclusively from exact repository tokens found in the
-        // sealed paper text. Network failures and other model failures remain
-        // retryable errors so this does not hide an unavailable source.
+        // 一次格式错误的单发响应不能抹掉有原文依据的 URL 证据。只对响应解析失败走兜底，
+        // 而且这一节只能用核验过的论文文本里找到的确切仓库 token 来拼。网络失败和其他
+        // 模型失败仍算可重试错误，免得把来源不可用这件事盖过去。
         if (error?.code !== 'MODEL_INVALID_RESPONSE') throw error;
         const fallback = buildDeterministicOpenSourceScan(sourceText);
         console.warn('    [deep] 开源扫描模型响应无效，使用 sealed source URL 后备');
@@ -15993,10 +15772,9 @@ function extractDemoUrls(analysis) {
 }
 
 /**
- * Hugging Face Daily Papers exposes an author/project supplied projectPage
- * alongside the paper identity.  It is stronger than an LLM-invented URL and
- * is already persisted in the fetched paper record, so let the existing
- * SSRF-safe demo scanner inspect it for official repository/model links.
+ * Hugging Face Daily Papers 会在论文身份之外给出作者或项目提供的 projectPage。它比
+ * LLM 编出来的 URL 可靠，而且已经存在抓取到的论文记录里，所以交给现有的、防 SSRF 的
+ * demo 扫描器去里面找官方仓库和模型链接。
  */
 function resolveDemoPageCandidates(paper, analysis) {
     const urls = extractDemoUrls(analysis);
@@ -16927,12 +16705,10 @@ function analysisNeedsExperimentTableRepair(analysis, textForAnalysis) {
     const hasTableReference = hasExplicitTableReference(resultsSection);
     const sourceHasTables = sourceTextLikelyHasTables(textForAnalysis);
 
-    // Explicit omission language is always repaired. Merely detecting any
-    // table somewhere in the source is not enough: the primary analysis may
-    // already present the relevant numeric evidence in prose, and forcing a
-    // second LLM call to reproduce unrelated source tables wastes substantial
-    // input/output tokens. A missing-table repair is otherwise justified only
-    // when the analysis itself cites a table and the source confirms one.
+    // 明确写出来「缺表」的说法一律修。只是在原文某处检测到表格还不够：主分析可能已经
+    // 在正文里给出了相关数字证据，硬要再叫一次 LLM 去复现无关的原文表格，会白白烧掉
+    // 大量输入输出 token。除此之外，只有分析自己引用了某张表、且原文也确实有这张表时，
+    // 补表才算有理由。
     const depthIssue = validateExperimentTableContract(analysis, {
         contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
         documentType: parseAnalysis(analysis)?.documentType,

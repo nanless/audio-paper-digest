@@ -163,9 +163,9 @@ function normalizedPaper(source) {
 function buildReplayableReaderArtifacts(source) {
     const raw = source.structuredArtifacts;
     const sourceDom = value => stableHash(value);
-    // Legacy sealed PDF artifacts can contain heuristic matrices and plain
-    // text in `tex`. Preserve them at the source, never promote them to DOM
-    // cells or original LaTeX. Hashes attest bytes, not extraction correctness.
+    // 旧版已保存并核验的 PDF 产物里的 `tex` 可能含启发式矩阵和纯文本。
+    // 原样保留它们，绝不要把内容提升为 DOM 单元格或原始 LaTeX。
+    // 哈希只证明字节，不证明提取正确。
     const tables = [];
     const formulas = [];
     const figures = (raw.figures || []).filter(figure => figure.asset && figure.recoveryStatus === 'complete').map(figure => {
@@ -490,9 +490,8 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
                 ...(result.success ? { completedAt: new Date().toISOString() } : {}), papers: [finalPaper] };
             if (!result.success) delete next.completedAt;
             replaceJson(analysisFile, next, currentRecord.sha256);
-            // This callback still runs under the canonical paper lock. Seal
-            // here so the post-batch path does not reacquire the same lock
-            // from this process and wait for itself.
+            // 这个回调仍在规范论文锁下运行。在这里就把结果写下来，
+            // 免得批次后处理路径在本进程里重新申请同一把锁，自己等自己。
             if (result.success) {
                 const completed = loadConferenceAnalysis({ analysisRoot, executionId });
                 sealCompletedRun(completed);

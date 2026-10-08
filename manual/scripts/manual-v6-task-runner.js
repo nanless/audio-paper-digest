@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-/** Persistent, API-free task queue for production or explicit-shadow Manual v6 work. */
+/** 生产或显式影子 Manual v6 工作用的持久、无 API 任务队列。 */
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');

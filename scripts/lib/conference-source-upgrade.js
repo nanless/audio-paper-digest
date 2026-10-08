@@ -404,7 +404,7 @@ async function applySourceUpgrade(options, overrides = {}) {
     }
     const deps = { ...api.defaultDependencies(), ...overrides };
     const loaded = load(options, deps);
-    // Serialize with the original process so the authorized plan cannot drift.
+    // 与原始进程串行，保证已授权的计划不会漂移。
     return deps.engine.withFileLock(path.join(loaded.directory, '.operation'), async () => {
         const current = load(options, deps); const plan = authorizedPlanFor(options, deps, current);
         if (plan.planSha256 !== options.planSha256) throw new Error('Source upgrade plan drifted; inspect and authorize a new plan');

@@ -1,9 +1,8 @@
 'use strict';
 
-// Offline bridge between a completed conference filter and the existing
-// manifest-bound importer.  It does not copy source files or invoke a model.
-// The only identities it can stage are those admitted by an authenticated
-// filter selection handle for the same authenticated discovery snapshot.
+// 已完成的会议筛选与现有按清单绑定的导入器之间的离线桥接。
+// 它不复制来源文件，也不调用模型。它能暂存的只有那些被
+// 同一份已核验发现快照的已核验筛选选择句柄接纳的身份。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -238,10 +237,9 @@ function bindInputs({ selectionHandle, discoveryHandle, extractionManifest, extr
         selected.delete(member.paperId);
     }
     if (selected.size) fail(`reviewed extraction is missing included papers: ${[...selected.keys()].join(', ')}`);
-    // The extraction manifest is ordered by canonical paperId, while the
-    // importer contract is ordered by its ledger identity key.  Those orders
-    // are not interchangeable for conference-paper-id values (CVPR exposes
-    // this whenever author/title prefixes differ from source IDs).
+    // 提取清单按规范 paperId 排序，而导入器约定按它的台账身份键排序。
+    // 对会议论文 ID 来说这两种顺序不能互换（只要作者/标题前缀与来源 ID 不同，
+    // CVPR 就会出现这种情况）。
     importMembers.sort((left, right) => ledgerApi.identityKey(left.identity) < ledgerApi.identityKey(right.identity) ? -1
         : ledgerApi.identityKey(left.identity) > ledgerApi.identityKey(right.identity) ? 1 : 0);
     const importManifestDraft = { contract: importerApi.CONTRACT, version: importerApi.VERSION,

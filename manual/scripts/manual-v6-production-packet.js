@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-/** Materialize one production Manual v6 task packet without calling an LLM/API. */
+/** 生成一个生产用 Manual v6 任务包，不调用 LLM/API。 */
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');

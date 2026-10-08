@@ -79,8 +79,8 @@ function immutable(filename, value) {
         if (prior.sha256 !== sha(bytes)) throw new Error('Signed operator immutable archive drift');
         return prior;
     } catch (error) { if (error.code !== 'ENOENT') throw error; }
-    // A temporary fsynced file plus rename avoids exposing half-written audit
-    // files after a crash. Caller holds the run operation and paper locks.
+    // 临时文件先 fsync 再改名，避免崩溃后留下写了一半的审计文件。
+    // 调用方持有运行操作锁和论文锁。
     const temp = path.join(path.dirname(filename), `.${path.basename(filename)}.${crypto.randomUUID()}.tmp`);
     const fd = fs.openSync(temp, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
     try { fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
@@ -90,8 +90,8 @@ function immutable(filename, value) {
     return readPrivate(filename);
 }
 
-// Called only by the operation-locked runner; acquire the shared paper lock
-// here, and reload the run again inside it. No arbitrary output paths.
+// 只由持有操作锁的 runner 调用；在这里获取共享论文锁，
+// 并在锁内重新读取运行记录。不接受任意输出路径。
 async function applyReaderOperatorPatch({ loaded, patchFile }, deps) {
     require('../env-loader.js').requireExternalRuntime('reader-signed-operator.js');
     const { runDir, run } = loaded;
@@ -126,7 +126,7 @@ async function applyReaderOperatorPatch({ loaded, patchFile }, deps) {
         const parent = current.analysis.papers.find(paper => runner.paperId(paper) === request.paperId);
         if (!intent) {
             checkParent(parent, request);
-            // All content/figure validation must succeed before archiving.
+            // 归档之前，正文和插图的校验必须全部通过。
             output = await prepareReaderOperatorPatchResult({ parent, sourceDetails, run: current.run,
                 request, patchFileSha256: requestFile.sha256, appliedAt: deps.now() });
             before = parent;

@@ -1,7 +1,7 @@
 'use strict';
 
-// Repair hints only. These candidates neither authorize a source binding nor
-// normalize the rendered article. The full source gate remains authoritative.
+// 只是修复提示。这些候选既不能授权来源绑定，也不会把渲染后的正文规范化。
+// 完整的来源闸门仍然是权威。
 const READER_SOURCE_DIAGNOSTICS_VERSION = 'reader-source-diagnostics-v2';
 const clean = value => String(value ?? '').normalize('NFKC').replace(/[\u2212]/g, '-').trim();
 const identity = value => clean(value).toLowerCase().replace(/[*_`]/g, '')
@@ -82,8 +82,8 @@ function sourceContexts(sourceText, candidate) {
     if (!labels.length) return [];
     const result = [];
     for (let index = 0; index < lines.length && result.length < 2; index += 1) {
-        // Never offer a bibliography entry merely because it contains the same
-        // number/model name. Restrict to a short row-local exact source window.
+        // 不要仅因为参考文献条目含相同的编号或模型名就把它拿出来。
+        // 限定在一小段行内、精确匹配的来源窗口里。
         if (/^\s*(?:references|bibliography)\s*$/i.test(lines[index])) break;
         if (/^\s*\[\d+\]/.test(lines[index])) continue;
         if (!labels.some(label => identity(lines[index]).includes(label))) continue;
@@ -107,8 +107,8 @@ function candidateAt(table, row, column, renderedText, basis) {
 }
 
 function locateDeclaredQuote(source, declared) {
-    // Whitespace folding locates a candidate only; return the original slice,
-    // never the folded text. Ambiguous occurrences cannot establish a location.
+    // 折叠空白只用来定位候选；返回原始切片，绝不返回折叠后的文本。
+    // 出现位置有歧义时无法确定位置。
     const needle = declared.replace(/\s+/g, ' ').trim();
     let folded = '';
     const starts = [];
@@ -163,11 +163,10 @@ function tableLevelContexts(tables, renderedRows, failures = []) {
     const strong = contexts.filter(context => context.sharedAnchors.length >= 2);
     if (strong.length) return strong.slice(0, 2);
 
-    // Translated row/column labels can hide every source anchor except the
-    // dataset name. In that case expose a table only when the failed numeric
-    // surface and another distinct numeric surface from the same rendered
-    // table jointly identify one complete DOM table. This remains a repair
-    // hint: it does not create a cell mapping or authorize a source binding.
+    // 翻译过的行/列标签可能把除数据集名以外的所有来源锚点都藏起来。
+    // 这种情况下，只有当失败的数字面和同一张渲染表格里另一个不同的数字面
+    // 一起唯一确定一张完整 DOM 表格时，才给出表格。
+    // 这仍然只是修复提示：它不会建立单元格映射，也不授权来源绑定。
     const failedNumbers = new Set((failures || []).flatMap(failure => (
         failure?.missingTokens || []
     )).flatMap(numericIdentities));
@@ -189,8 +188,8 @@ function declaredQuoteCandidates(binding, renderedText, sourceText, missingToken
     const result = [];
     const renderedTokens = [...String(renderedText).matchAll(/[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*[%a-zA-Z]*/g)]
         .map(match => scalar(match[0])).filter(Boolean);
-    // Canonical missing tokens may discard trailing zeroes. Never replace a
-    // scalar cell's actual precision with that lossy canonical spelling.
+    // 规范化后缺失的 token 可能丢掉末尾的零。绝不能用这种有损的规范写法
+    // 替换标量单元格的实际精度。
     const failedSurfaces = scalar(renderedText) ? [] : missingTokens.filter(token => scalar(token)
         && renderedTokens.some(surface => surface.number === scalar(token).number && surface.unit === scalar(token).unit));
     for (const declared of binding?.sourceQuotes || []) {
@@ -200,8 +199,8 @@ function declaredQuoteCandidates(binding, renderedText, sourceText, missingToken
         const located = locateDeclaredQuote(source, declared);
         if (!located || located.quote.length > 1600) continue;
         const { quote, offset, whitespaceRecovered } = located;
-        // Only the model's explicitly declared source sentence is considered.
-        // Require an attached unit; a naked citation number is never a candidate.
+        // 只考虑模型明确声明的来源句子。要求带单位；
+        // 一个孤零零的引用编号永远不是候选。
         for (const match of quote.matchAll(/[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?\s*(?:%|ms\b|s\b|Hz\b|kHz\b|dB\b)/g)) {
             const compared = [renderedText, ...failedSurfaces].map(surface =>
                 ({ surface, difference: describeDifference(surface, match[0]) })).find(item =>
@@ -238,8 +237,8 @@ function diagnoseReaderTableSource({ binding, bindingIndex, sectionIndex, render
             const table = tables.find(item => item.ordinal === binding.sourceTableOrdinal);
             if (table) candidates.push(candidateAt(table, mapping.sourceRow, mapping.sourceColumn, text, 'declared_dom_coordinate'));
         } else {
-            // Do not look up values globally. Even an identical number is not
-            // evidence without a matching row label and/or explicit column role.
+            // 不要全局查找数值。即使数字相同，没有匹配的行标签或明确的列角色，
+            // 也不构成证据。
             for (const table of tables) {
                 for (let sourceRow = 0; sourceRow < table.matrix.length; sourceRow += 1) {
                     if ((table.headerRows || []).includes(sourceRow)) continue;
@@ -252,8 +251,8 @@ function diagnoseReaderTableSource({ binding, bindingIndex, sectionIndex, render
                         const columnMatches = headersFor(table, sourceColumn)
                             .some(header => sameLabel(renderedRows[0]?.[column], header.text));
                         const difference = describeDifference(text, sourceValues[sourceColumn], headersFor(table, sourceColumn));
-                        // A numeric near-match alone can only refine a known row,
-                        // never discover one; retain ambiguity instead of guessing.
+                        // 只有数字近似匹配时，只能细化一个已知的行，不能发现新行；
+                        // 保留歧义，不要猜。
                         if (!columnMatches && !['percent_in_source_header', 'percent_position_differs',
                             'thousands_separator_differs', 'decimal_spelling_differs', 'possible_rounding',
                             'unit_spelling_differs', 'exact_surface'].includes(difference)) continue;
@@ -288,7 +287,7 @@ function diagnoseReaderTableSource({ binding, bindingIndex, sectionIndex, render
             + `–${candidate.lineEnd}: ${JSON.stringify(candidate.quote)}；原写法=${JSON.stringify(candidate.text)}`
             + ` (${candidate.difference}${candidate.whitespaceRecovered ? '; 所提供引文中的空白已被改写，须复制这里的原始文本' : ''})；`
             + '这句话是否对应当前行的实验，仍须由人工或模型核对').join('');
-        // Attach the bounded table context once, not six times for six cells.
+        // 受限的表格上下文只附加一次，不要为六个单元格附六次。
         const weakUniqueContext = tableContexts.some(context => context.matchBasis
             === 'one_english_anchor_plus_failed_and_sibling_numeric_surfaces_unique_dom_table');
         const contextBasis = weakUniqueContext

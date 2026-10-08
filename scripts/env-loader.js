@@ -34,9 +34,9 @@ const TRANSPORT_ENV_KEYS = Object.freeze([
 
 function isScriptsEntrypoint(scriptPath = process.argv[1]) {
     if (!scriptPath) return false;
-    // Under `node -e`, argv[1] is the first user argument rather than the
-    // executed module.  Treating it as an entrypoint breaks isolated worker
-    // tests and would assign a role to a module that was only imported.
+    // 在 `node -e` 下，argv[1] 是第一个用户参数，不是被执行的模块。
+    // 把它当成入口点会破坏隔离的 worker 测试，
+    // 还会给一个只是被导入的模块分配角色。
     if (process.execArgv.some(arg => arg === '-e' || arg === '--eval' || arg.startsWith('--eval='))) {
         return false;
     }
@@ -66,8 +66,7 @@ function requireExternalRuntime(commandName = path.basename(process.argv[1] || '
         throw new Error(`${commandName} 的固定 workspace role=${inferredRole} 与 wrapper=${wrappedRole} 冲突`);
     }
     const requiredRole = enforceRole ? inferredRole || wrappedRole : null;
-    // workspaceRoot is an internal test injection; production entrypoints
-    // never accept it from CLI or environment.
+    // workspaceRoot 是内部测试注入用的；生产入口从不从 CLI 或环境里接受它。
     if (requiredRole) require('./workspace-role.js').requireWorkspaceRole(
         requiredRole, options.workspaceRoot || PROJECT_ROOT
     );
@@ -128,9 +127,8 @@ function parseEnvFile(envFile) {
         if (key) {
             const lineNumber = index + 1;
             if (firstDefinitionLines.has(key)) {
-                // Never include either value in diagnostics: duplicate keys are
-                // especially likely to contain credentials. Parsing remains
-                // deliberately last-wins for backwards compatibility.
+                // 不要把这两个值写进诊断信息：重复的键尤其可能含有凭据。
+                // 解析仍然有意保持后者覆盖前者，以兼容旧行为。
                 console.warn(`[env-loader] duplicate key ${key} at lines ${firstDefinitionLines.get(key)} and ${lineNumber}; last value wins`);
             } else {
                 firstDefinitionLines.set(key, lineNumber);
@@ -166,7 +164,7 @@ function loadProjectEnv(envFile) {
     return parsed;
 }
 
-// Run only for a direct shared or Manual command entrypoint, never for imports.
+// 只在直接的共享命令或 Manual 命令入口点运行，导入时绝不运行。
 if (isScriptsEntrypoint()) {
     requireExternalRuntime();
 }

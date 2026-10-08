@@ -1,8 +1,7 @@
 'use strict';
 
-// Project policy requires every directly executed scripts/*.js file to fail
-// before doing work in a sandbox.  Importing this module from tests or callers
-// remains side-effect free because env-loader only guards direct entrypoints.
+// 项目规定：scripts/*.js 里每个可直接执行的脚本，都要在沙箱里做任何事之前先失败退出。
+// 测试或其他调用方 import 本模块不产生副作用，因为 env-loader 只拦直接入口。
 require('./env-loader.js');
 const {
     PAPER_EVALUATION_TITLES,
@@ -11,12 +10,11 @@ const {
 } = require('./lib/analysis-section-titles.js');
 
 /**
- * Reader-visible editorial quality gates shared by API and Manual analyses.
+ * API 与 Manual 两条分析流程共用的编辑质量检查，结论会呈现给读者。
  *
- * This module is deliberately pure: it does not read files, mutate analysis
- * text, or attempt to rewrite Chinese numerals.  Callers provide the six core
- * sections (or a complete Markdown string), inspect the returned findings and
- * decide where in their workflow a warning becomes blocking.
+ * 本模块刻意不产生副作用：不读文件、不改分析正文、也不去重写中文数字。
+ * 调用方传入六个核心小节（或整篇 Markdown），读返回的问题清单，
+ * 再自己决定警告在流程的哪一步算硬性失败。
  */
 
 const CORE_SECTION_NAMES = Object.freeze([
@@ -88,16 +86,15 @@ const EMPIRICAL_COUNT_UNITS = [
     '模型', '基准', '数据集', '物种', '会话', '目录', '艺人', '轨迹', '主干',
     'worker', 'workers', 'episode', 'episodes', 'epoch', 'epochs'
 ];
-// These are lexical measurement units, not Chinese-written counts.  Without
-// an explicit exclusion, the large-integer pattern reads the leading 千/兆 in
-// terms such as 千赫兹 or 千字节 as an empirical numeral.
+// 这些是构词用的计量单位，不是中文写法的计数。若不单独排除，
+// 大整数规则会把「千赫兹」「千字节」开头的 千/兆 当成实指数字。
 const LEXICAL_SCALE_UNITS = new Set([
     '千赫', '兆赫', '千赫兹', '兆赫兹', '千字节', '兆字节'
 ]);
-// Units for which an Arabic coefficient followed by 万/亿 is an exact decimal
-// scale, not a Chinese-number phrase. Keep this explicit: arbitrary Han text
-// after 万/亿 may be a compound numeral or lexical phrase and must not be
-// multiplied mechanically.
+// 这些单位前面接阿拉伯数字、后面接 万/亿 时是精确的十进制数量级，
+// 不是中文数词短语，所以逐个列出来。万/亿 后面跟着任意汉字时，
+// 那串汉字可能是合成数词，也可能只是普通词，
+// 不能一律按倍数换算。
 const SCALED_ARABIC_MEASUREMENT_UNITS = Object.freeze([
     '个随机种子', '随机种子', '个时间点', '个卷积块', '名参与者',
     '问答对', '参与者', '数据集', '个组件', '个任务', '个条件', '个类别', '个模型',
@@ -310,15 +307,15 @@ function findQuantitativeChineseNumerals(text) {
     // 下列“一步”都是篇章连接或指代，不是精确的 1 个步骤；用等长空白
     // 屏蔽它们以保持后续 issue index/line 不漂移。
     const value = normalizeNfkc(text)
-        // Reader-facing Markdown headings are prose labels, not result-table
-        // quantities.  Auditing “两种视图如何分账” as if it were an
-        // experimental count produced unnatural titles such as “2 种视图”.
+        // 面向读者的 Markdown 标题是行文标签，不是结果表里的量。
+        // 曾把「两种视图如何分账」当成实验计数来检查，
+        // 结果生成了「2 种视图」这种别扭标题。
         .replace(/^#{1,6}\s+[^\n]*$/gmu, match => ' '.repeat(match.length))
-        // One-to-one assignment/matching names a relation, not one measured
-        // pair. Keep offsets stable and keep ordinary pair counts blocking.
+        // 「一对一分配/匹配」说的是一种关系，不是量到的一对。
+        // 这里保持下标不变，同时让普通的一对计数照旧算问题。
         .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))/gu,
             match => ' '.repeat(match.length))
-        // "The other stream" is an anaphoric phrase, not a measured count.
+        // 「另一路」是承接上文的指代，不是量出来的计数。
         .replace(/另一个流/gu, match => ' '.repeat(match.length))
         .replace(
             /(?:进一步|这一步|下一步|上一步|每一步|一次性|这一类|有趣二分)|(?:同一|统一|唯一|单一)(?=[\p{Script=Han}])|一个(?=(?:好看|漂亮|笼统|粗糙|清晰|完整|简单|直接|孤立|统一))|二分(?=(?:解释|结构|视角|框架|法))/gu,
@@ -360,10 +357,10 @@ function findQuantitativeChineseNumerals(text) {
     const candidates = [];
     for (const [regex, reason] of patterns) {
         for (const finding of collectRegexMatches(value, regex, reason)) {
-            // NFKC turns the full-width colon in an enumerative sentence such
-            // as “问题有三：一是……；二是……” into `三:一`.  That surface is
-            // not a 3:1 measurement.  Keep real ratios (for example “配比为
-            // 三：一”) blocking by requiring the exact “有 N：一是” context.
+            // 枚举句「问题有三：一是……；二是……」经 NFKC 归一化后，
+            // 全角冒号会变成 `三:一`，这并不是 3:1 的配比。
+            // 只有「有 N：一是」这种明确语境才放过；「配比为 三：一」
+            // 这类真实比例照旧算问题。
             if (reason === 'exact_ratio'
                 && /^[二三四五六七八九十]\s*:\s*一$/u.test(finding.match)
                 && /有\s*$/u.test(value.slice(0, finding.index))
@@ -376,12 +373,10 @@ function findQuantitativeChineseNumerals(text) {
                 && /^\s*\d/u.test(value.slice(finding.index + finding.match.length))) {
                 continue;
             }
-            // An Arabic coefficient plus the lexical scale “千” is already a
-            // readable mixed-magnitude quantity (for example “2.7千对”).
-            // The measured-large-integer pattern sees only the suffix “千对”
-            // and used to report a false Chinese-numeral defect. Keep the
-            // pure Chinese form “千对” blocking; only suppress the suffix
-            // when an Arabic coefficient is immediately to its left.
+            // 阿拉伯数字加量级词「千」本来就念得通，属于混合写法的量
+            // （例如「2.7千对」）。大整数规则只看到后缀「千对」，
+            // 曾把它误报成中文数字问题。纯中文写法「千对」仍然算问题；
+            // 只有当左边紧挨阿拉伯数字时，才放过这个后缀。
             if (reason === 'measured_large_integer'
                 && /^千\s*对$/u.test(finding.match)
                 && /(?:\d+(?:\.\d+)?|\d{1,3}(?:,\d{3})+)\s*$/u.test(value.slice(0, finding.index))) {
@@ -398,9 +393,8 @@ function findQuantitativeChineseNumerals(text) {
             candidates.push(finding);
         }
     }
-    // A large form such as “一百六十毫秒” also contains the suffix “十毫秒”.
-    // Report the longest non-overlapping expression once instead of inflating
-    // issue counts with nested matches.
+    // 「一百六十毫秒」这类大写法里也含后缀「十毫秒」。
+    // 只报最长的那个互不重叠的表达，不要让嵌套命中重复计入问题条数。
     const selected = [];
     for (const finding of candidates.sort((a, b) => b.match.length - a.match.length || a.index - b.index)) {
         const end = finding.index + finding.match.length;
@@ -412,11 +406,10 @@ function findQuantitativeChineseNumerals(text) {
         .map(({ end, ...finding }) => finding);
 }
 
-// Recovery may repair a Chinese empirical count only when the persisted
-// authoritative issue names that exact surface.  Keep this deliberately
-// narrower than the general typography normalizer: it handles the unambiguous
-// exact issue-bound “N阶段” and scaled “N万亿 unit” forms and never scans an otherwise clean draft. Literal
-// evidence and Markdown structure remain byte-exact.
+// 只有当已保存的权威问题记录写明那一处具体文字时，修复流程才会动中文实指数。
+// 这里刻意比通用的排版归一化窄：只处理判断明确、并被问题记录精确绑定的
+// 「N阶段」和带量级的「N万亿 单位」，其余干净正文一概不扫。
+// 引用证据和 Markdown 结构保持逐字节不变。
 function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
     const source = String(text || '');
     const requested = new Set();
@@ -444,10 +437,9 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
             if (/^[一二两三四五六七八九]阶段$/u.test(surface)
                 && findQuantitativeChineseNumerals(surface)
                     .some(finding => finding.match === surface)) requested.add(surface);
-            // Convert only the exact persisted issue surface.  This keeps
-            // quoted evidence, Markdown tables and formulas byte-exact while
-            // preventing ordinary counts such as “三分支” from consuming a
-            // model retry on the same unambiguous typography defect.
+            // 只改已保存问题记录里的那一处具体文字。这样引用证据、
+            // Markdown 表格和公式都逐字节不变，同时避免「三分支」这类普通计数
+            // 为同一个判断明确的排版问题反复占用模型重试。
             const simpleMeasured = surface.match(
                 new RegExp(`^([一二两三四五六七八九])\\s*(${simpleMeasuredUnitAlternation})$`, 'iu')
             );
@@ -597,9 +589,8 @@ function findBrokenProse(text) {
             findings.push({ match: trimmed.slice(-80), line: index + 1, reason: 'dangling_connector' });
         }
     });
-    // Markdown tables can legitimately repeat conjunctions across adjacent
-    // cells. Preserve byte offsets while excluding table rows from prose-only
-    // repetition checks.
+    // Markdown 表格相邻单元格里重复出现连接词是正常的。
+    // 这里保持字节下标不变，只在纯行文的重复检查中排除表格行。
     const proseValue = value.replace(/^\s*\|.*\|\s*$/gmu, match => ' '.repeat(match.length));
     for (const regex of [
         /(?:尚尚|只只|分别分别|只有仅有|单单个|能能(?!否|够)|具有有(?:吸引力|优势|价值|能力|作用|意义|效果|潜力|特点|必要性)|更接近区别于|存在也区别于其|无明显退化区别于|却区别于|提高现实性却区别于|2\s*次计算成本)/gu
@@ -864,9 +855,9 @@ function findCrossSectionNumericFactReuse(input, options = {}) {
 function findLongParagraphs(input, options = {}) {
     const warningChars = Number.isInteger(options.warningChars) ? options.warningChars : 180;
     const errorChars = Number.isInteger(options.errorChars) ? options.errorChars : 260;
-    // validateEditorialQuality passes its already-canonical reader section
-    // object here.  Re-coercing it to the six core sections silently dropped
-    // authors/review/scoring/openSource, unlike the Python final-page mirror.
+    // validateEditorialQuality 传进来的是已经整理好的读者小节对象。
+    // 若再把它收成六个核心小节，authors/review/scoring/openSource
+    // 会被悄悄丢掉——Python 的最终页面镜像没有这个问题。
     const sections = typeof input === 'string'
         ? { body: input }
         : Object.fromEntries(Object.entries(input || {}).filter(([, body]) => typeof body === 'string'));
@@ -919,9 +910,9 @@ function stripCodeLinksAndUrls(value) {
         .replace(/`[^`]*`/g, match => ' '.repeat(match.length))
         .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
         .replace(/https?:\/\/[^\s)]+/g, match => ' '.repeat(match.length))
-        // Preserve a single trailing star because it can be part of a named
-        // technical variant such as GatherMOS-ZS*. Markdown bold markers are
-        // still removed so their closing ** cannot hide a Han/ASCII boundary.
+        // 末尾单个星号要保留，它可能是 GatherMOS-ZS* 这类带名字的技术变体。
+        // Markdown 加粗标记照旧去掉，免得它收尾的 **
+        // 把汉字与 ASCII 的边界藏起来。
         .replace(/\*{2,}|[_~]+/g, '');
 }
 
@@ -941,7 +932,7 @@ function findTechnicalTermAdhesions(text) {
 
 function findMissingComparisonUnits(text) {
     const value = stripCodeLinksAndUrls(text)
-        // Otherwise “一对一分配” is read as two values followed by 分.
+        // 否则「一对一分配」会被读成两个数值后面跟一个「分」。
         .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))/gu,
             match => ' '.repeat(match.length));
     const findings = [];
@@ -957,11 +948,10 @@ function findMissingComparisonUnits(text) {
             `(?:\\d+(?:\\.\\d+)?|[${CHINESE_DIGITS}]+点[${CHINESE_DIGITS}]+(?![${CHINESE_DIGITS}])|[${CHINESE_DIGITS}]+(?!点[${CHINESE_DIGITS}]))\\s*(?:%|个百分点|点|分)`,
             'u'
         );
-        // A paper may declare the unit in the metric label and then reuse it
-        // for the following values, e.g. “WER（%）”, “WER（单位为%）” or
-        // “SIM（无量纲）”.
-        // Treat that declaration as an explicit local binding instead of
-        // demanding a fabricated suffix after every comparison number.
+        // 论文可能在指标名里声明单位，后面的数值直接沿用，例如
+        // 「WER（%）」「WER（单位为%）」或「SIM（无量纲）」。
+        // 这种声明算作就地绑定，不再要求每个比较数值后面
+        // 硬写出一个单位。
         const metricUnitDeclaration = new RegExp(
             `(?:${PERCENT_METRICS_RE.source}\\s*[（(][^（）()]{0,30}(?:%|个百分点|点|分|无量纲)\\s*[）)]`
             + `|${PERCENT_METRICS_RE.source}\\s*(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)?\\s*(?:%|个百分点|点|分|无量纲)`
@@ -970,8 +960,7 @@ function findMissingComparisonUnits(text) {
         );
         if (explicitScoreUnit.test(sentence.text)
             || metricUnitDeclaration.test(sentence.text)) continue;
-        // Do not treat digits embedded in model/product names (for example
-        // wav2vec-U or Qwen2-Audio) as bare percentage values.
+        // 模型名或产品名里的数字（例如 wav2vec-U、Qwen2-Audio）不算裸露的百分比数值。
         // 图表编号和“第 2 至 3 位”这类序号不是指标值。先做等长屏蔽，
         // 避免一句定性比较仅因包含图号/排名位置就被误判为缺少单位。
         const numericText = sentence.text
@@ -979,25 +968,22 @@ function findMissingComparisonUnits(text) {
                 new RegExp(`\\d+(?:\\.\\d+)?\\s*(?:或|和|、|至|到|[-–—])\\s*\\d+(?:\\.\\d+)?\\s*${unit}`, 'giu'),
                 match => ' '.repeat(match.length)
             )
-            // ASVspoof names benchmark editions by year (for example
-            // "ASVspoof 2024"). The year is an identity token, not a bare
-            // error-rate value, even when the sentence also reports a
-            // qualitative error-rate direction.
+            // ASVspoof 用年份区分评测版本（例如 "ASVspoof 2024"）。
+            // 这里的年份是版本标识，不是裸露的错误率数值，
+            // 即使同一句还定性描述了错误率的升降。
             .replace(
                 /\bASVspoof\s+(?:19|20)\d{2}\b/giu,
                 match => ' '.repeat(match.length)
             )
-            // Lengths are already unit-bound quantities, not percentage-scale
-            // values. Mask simple values, ranges and dimensions before the
-            // percentage heuristic considers their numeric coefficients.
+            // 长度本身已经带单位，不属于百分比量级。
+            // 百分比规则去看数字之前，先把简单数值、范围和尺寸屏蔽掉。
             .replace(
                 /(?<![A-Za-z0-9_.-])\d+(?:\.\d+)?(?:\s*(?:[x×]|[-–—至到])\s*\d+(?:\.\d+)?)*\s*(?:km|cm|mm|[µμu]m|nm|m)(?:[²³]|\^[23])?(?=$|[^A-Za-z0-9])/giu,
                 match => ' '.repeat(match.length)
             )
-            // Some source tables define dimensionless metrics in the header
-            // and omit a %/point suffix in every cell. An explicitly named
-            // ASCII metric range keeps that source convention and must not be
-            // forced to invent a unit during editorial normalization.
+            // 有些原表在表头里就说明指标无量纲，单元格里不再逐个写 %/点。
+            // 明确写出名字的 ASCII 指标范围沿用原表这个习惯，
+            // 编辑归一化时不能硬给它补一个单位。
             .replace(
                 /\b[A-Za-z][A-Za-z0-9_.-]{1,30}\s+(?:为\s*)?\d+(?:\.\d+)?\s*[-–—至到]\s*\d+(?:\.\d+)?\b/gu,
                 match => ' '.repeat(match.length)
@@ -1006,9 +992,8 @@ function findMissingComparisonUnits(text) {
                 /(?:图|表|公式|式|章节|阶段|步骤|版本|实验|配置|设置|位置|序位)\s*\d+(?:\s*(?:至|到|[-–—])\s*\d+)?/gu,
                 match => ' '.repeat(match.length)
             )
-            // Composite identifiers such as T12's 12-8-3 condition are
-            // experiment/configuration labels, not percentage values. Mask
-            // them before the nearby-metric heuristic sees the first number.
+            // T12 的 12-8-3 这类复合标识是实验或配置标签，不是百分比数值。
+            // 就近指标规则看第一个数字之前，先把它们屏蔽掉。
             .replace(
                 /(?<![A-Za-z0-9_.])\d+(?:\s*[-_/]\s*\d+)+(?![A-Za-z0-9_.])/gu,
                 match => ' '.repeat(match.length)
@@ -1017,8 +1002,7 @@ function findMissingComparisonUnits(text) {
                 /第\s*\d+(?:\s*(?:至|到|[-–—])\s*\d+)?(?=\s*(?:位|项|个|组|层|步|轮|章|节|张|表|图|词|词元|样本|阶段|版本))/gu,
                 match => ' '.repeat(match.length)
             )
-            // A range describing inference/sequence steps is a condition,
-            // not a pair of percentage measurements.
+            // 描述推理步数或序列步数的范围是一种条件，不是成对的百分比测量值。
             .replace(
                 /(?:时间步|步数|迭代步|NFE)\s*(?:从|为|在)?\s*\d+(?:\.\d+)?\s*(?:到|至|[-–—])\s*\d+(?:\.\d+)?/giu,
                 match => ' '.repeat(match.length)
@@ -1191,9 +1175,8 @@ function normalizeNumericLexeme(value) {
 function numericLexemes(value) {
     const normalized = normalizeNfkc(claimFieldText(value))
         .replace(/[\u2212\u2012\u2013\u2014]/gu, '-')
-        // HTML/PDF text extraction can concatenate the visible decimal with its
-        // duplicated MathML/LaTex fallback (for example, 3.73.7 for 3.7).
-        // Only collapse an immediately adjacent *identical* decimal token.
+        // 从 HTML/PDF 提取文本时，可见的小数有时会和重复的 MathML/LaTex 兜底副本连在一起
+        // （例如 3.7 变成 3.73.7）。只有紧挨着且完全相同的小数才合并。
         .replace(/(?<![\d.])(\d+\.\d+)\1(?!\d|\.\d)/gu, '$1');
     const numberWords = Object.keys(ENGLISH_NUMBER_WORDS).join('|');
     const matches = normalized.match(new RegExp(

@@ -1,9 +1,8 @@
 'use strict';
 
-// Cross-runtime identity record for papers that may be sourced from arXiv or
-// conference proceedings.  This deliberately does not import the historic
-// arXiv helpers: consumers must opt into this v1 contract instead of silently
-// changing legacy daily-digest identity behaviour.
+// 跨运行时的论文身份记录，论文可能来自 arXiv 或会议论文集。
+// 它有意不导入历史上的 arXiv 辅助模块：使用方必须显式选择这套 v1 约定，
+// 而不是悄悄改变旧的日更身份行为。
 
 const crypto = require('node:crypto');
 
@@ -59,9 +58,9 @@ function validateExternalId(value) {
 }
 
 function isPublicDnsName(hostname) {
-    // The source URL is a display/provenance pointer, not a network admission
-    // decision.  Still reject literals and special-use local names here so an
-    // identity record cannot smuggle a localhost/private URL into a renderer.
+    // 来源 URL 只是展示和溯源用的指针，不是网络准入决定。
+    // 但这里仍然拒绝字面量和特殊用途的本地名称，
+    // 免得身份记录把 localhost/私有 URL 偷带进渲染器。
     if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost')
         || hostname.includes(':') || /^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname)) return false;
     if (hostname.length > 253 || !hostname.includes('.')) return false;
@@ -76,8 +75,8 @@ function validateOfficialUrl(value, label) {
         || parsed.search || parsed.hash || !isPublicDnsName(parsed.hostname)) {
         fail(`${label} must be a canonical public HTTPS URL without credentials, port, query, or fragment`);
     }
-    // Require a non-root, portable, unambiguous path.  Checking both the raw
-    // spelling and URL form prevents URL() from normalising a traversal away.
+    // 要求非根路径、可移植、无歧义。同时检查原始写法和 URL 形式，
+    // 防止 URL() 把目录穿越规范化掉。
     const rawPath = value.slice(`https://${parsed.host}`.length);
     const pathSegments = parsed.pathname.slice(1).split('/');
     if (pathSegments.at(-1) === '') pathSegments.pop();

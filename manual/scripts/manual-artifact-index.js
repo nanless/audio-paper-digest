@@ -1,12 +1,11 @@
 'use strict';
 
 /**
- * Deterministic, single-paper evidence artifact index for Manual full text.
+ * Manual 全文用的确定性单篇证据产物索引。
  *
- * The index is deliberately a companion to the historical full-text manifest
- * v2.  It never mutates that manifest, so already assembled Manual v5 specs
- * retain their byte identity.  New and resumed full-text runs checkpoint this
- * independently under artifacts/manifest.json.
+ * 这份索引有意作为历史全文清单 v2 的配套。它从不修改那份清单，
+ * 所以已经汇编好的 Manual v5 规范字节保持不变。新的和续跑的全文运行
+ * 在 artifacts/manifest.json 下独立记录检查点。
  */
 
 const fs = require('fs');
@@ -1082,7 +1081,7 @@ function finalizeArtifactManifestLocked(context, sourceEntries) {
         for (const input of context.inputs) {
             const sourceEntry = sourceEntries[input.id];
             let sourceText = '';
-            try { sourceText = sourceEntry ? fs.readFileSync(sourceEntry.path, 'utf8') : ''; } catch (_error) { /* fail below */ }
+            try { sourceText = sourceEntry ? fs.readFileSync(sourceEntry.path, 'utf8') : ''; } catch (_error) { /* 失败在下面计数 */ }
             const reusable = sourceEntry && isReusableArtifactCheckpoint(current.papers?.[input.id], {
                 context, input, sourceEntry, sourceText
             });

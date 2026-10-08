@@ -90,28 +90,21 @@ const EXPERIMENT_TABLE_CONTRACT_VERSIONS = Object.freeze([
 ]);
 const METHOD_DETAIL_CONTRACT_VERSION = 'detailed-v1';
 const EDITORIAL_QUALITY_CONTRACT_VERSION = 'reader-facing-v1';
-// Manual/offline analyses must contain actual full-text evidence in addition
-// to the structural contract used by API analyses.  This is deliberately a
-// separate opt-in contract so old, valid API records remain backward
-// compatible while new manual records cannot silently collapse to an abstract
-// plus generic process commentary.
+// Manual/离线分析除了要满足 API 分析用的结构约定，还必须带真实全文证据。
+// 这里特意做成单独的可选约定：旧的合法 API 记录继续兼容，
+// 新的 manual 记录则不能缩水成摘要加几句泛泛的过程评述。
 const MANUAL_DEPTH_CONTRACT_VERSION = 'full-text-evidence-v1';
-// v2 adds the manual quality gates learned from the 2026-08-20 batch:
-// cross-section self-copying, editorial template sentences, missing
-// open-source URL extraction and anchor-less scoring justifications.
+// v2 补上 2026-08-20 那批暴露的 manual 质量闸：跨章节自我复制、
+// 编辑模板句、开源 URL 漏提取，以及没有锚点的评分理由。
 const MANUAL_DEPTH_CONTRACT_VERSION_V2 = 'full-text-evidence-v2';
-// v3 closes the reader-visible gap found when comparing the 2026-08-25
-// manual batch with the 2026-08-14 API batch.  Length alone is not enough:
-// the final article must read as a technical interpretation, with a real
-// argument in the summary, a multi-step data flow, distinct innovation
-// claims, comparative experiments, reproducibility coverage, dimension-
-// specific scoring reasons and separately labelled evidence/reviewer limits.
+// v3 补的是对比 2026-08-25 manual 批次和 2026-08-14 API 批次时发现的读者
+// 可见差距。只够长不行：成稿要读起来像技术解读——摘要里有真正的论证，
+// 数据流分多步，创新点各自独立，有对比实验和复现信息，评分理由逐维度写，
+// 证据与审查者局限分开标注。
 const MANUAL_DEPTH_CONTRACT_VERSION_V3 = 'full-text-evidence-v3';
-// v4 keeps every v3 prose/evidence requirement and additionally binds the
-// richer experiment-table and context-bound image-narrative contracts. The
-// binding is intentionally versioned:
-// already-published v1-v3 manual records retain their historical table
-// semantics instead of being reinterpreted under a newer quality gate.
+// v4 保留 v3 的全部行文与证据要求，另外绑定更细的实验表格约定和
+// 与上下文绑定的图片讲述约定。这个绑定刻意按版本走：
+// 已发布的 v1–v3 manual 记录沿用当时的表格语义，不用新的质量闸重新解读。
 const MANUAL_DEPTH_CONTRACT_VERSION_V4 = 'full-text-evidence-v4';
 const MANUAL_DEPTH_CONTRACT_VERSION_V5 = 'full-text-evidence-v5';
 const MANUAL_DEPTH_CONTRACT_VERSIONS = Object.freeze([
@@ -130,9 +123,8 @@ const MANUAL_COMPLETE_STATUS = 'manual_complete';
 const MANUAL_COMPLETE_PROVENANCE_VERSION = 2;
 const MANUAL_PROVENANCE_PROTOCOL = 'manual-offline-review-v1';
 const MANUAL_STAGE_EXECUTION_KIND = 'manual_attestation';
-// Records completed through 2026-08-21 predate per-stage prompt/context
-// bindings.  Keep that already-published batch readable, but do not allow a
-// newer record to strip hardened fields and fall back to the legacy profile.
+// 2026-08-21 之前完成的记录还没有逐阶段提示词/上下文绑定。这批已发布的
+// 记录继续可读，但不许新记录删掉加固字段退回旧档案。
 const MANUAL_V2_HARDENED_CUTOFF_DATE = '2026-08-22';
 const MANUAL_AUDIT_CHECKS = Object.freeze([
     'sourceCoverage',
@@ -191,21 +183,18 @@ const CORE_SUMMARY_MAX_SENTENCES = 9;
 const CORE_SUMMARY_RESULT_UNAVAILABLE = '原文未提供可核对的关键定量结果';
 const CORE_SUMMARY_COST_UNAVAILABLE = '原文未披露训练、推理或部署成本';
 const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分))?(?![A-Za-z0-9])/g;
-// English metric names must be complete tokens. Without these shared boundaries,
-// short metrics such as mAP/PAR/PER match prose words including "mapping",
-// "Particle" and "performance", turning section numbers and citations into
-// apparent experimental measurements.
+// 英文指标名必须整词匹配。没有这里的两侧边界，mAP/PAR/PER 这类短指标会命中
+// "mapping"、"Particle"、"performance" 等普通词，把章节号和引用位置误当成
+// 实验测量结果。
 const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|SDR|SNR|EER|PPL|ASR|mAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
-// Conference papers often use domain-specific Chinese names for the metric
-// (for example DAFx's “抖动” and “包络相关”). Keep these explicit rather
-// than treating every result noun as quantitative evidence.
+// 会议论文常用领域内的中文指标名（例如 DAFx 的“抖动”和“包络相关”）。
+// 这里显式列出来，免得把任何结果名词都当成定量证据。
 const CORE_SUMMARY_CONFERENCE_METRIC_PATTERN = /包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差/;
 const CORE_SUMMARY_GENERIC_ENGLISH_METRIC_PATTERN = /(?<![A-Za-z0-9_])(?:scores?|performance|metrics?)(?![A-Za-z0-9_])/i;
 const CORE_SUMMARY_COMPARISON_PATTERN = /(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|degrad(?:e|es|ed|ation)|on par|comparable|从[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|反超|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先|持平|相当|接近)/i;
 const CORE_SUMMARY_COMPARISON_OBJECT_PATTERN = /(?:\bbaseline\b|\bcontrol\b|\breference\b|\bcomparison\b|\b(?:our|ours|proposed|present|this)\s+(?:approach|method|model|system|technique)\b|基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|本方法|所提方法|完整模型|竞品)/i;
-// These quantities describe how a system is operated or configured.  They
-// are useful for the cost paragraph, but without a baseline/comparison they
-// are not empirical result evidence for the core-summary result sentence.
+// 这些量描述系统怎么运行、怎么配置。写成本段落时有用，但没有基线或对照，
+// 它们不算核心摘要结果句所需的实测结果证据。
 const CORE_SUMMARY_OPERATIONAL_PARAMETER_PATTERN = /(?:\b(?:train(?:ing)?|inference|deployment|hardware|gpu|cpu|tpu|npu|parameter(?:s)?|layers?|hidden(?:\s+units?)?|batch(?:\s+size)?|learning\s+rate|epochs?|steps?|iterations?|sampling\s+rate|window(?:\s+size)?|channels?|dimensions?|memory|vram|flops?|macs?|rtf|latency|throughput|fps|runtime|duration|cost|overhead)\b|训练|推理|部署|硬件|显存|内存|参数量|层数|隐藏单元|批量|学习率|轮次|步数|迭代|采样率|窗口|通道|维度|耗时|延迟|吞吐|实时率|计算量|成本|开销)/i;
 const CORE_SUMMARY_DIRECTION_CONNECTOR_PATTERN = /(?:高于|低于|超过|优于|领先)/g;
 const CORE_SUMMARY_BARE_TRANSITION_PATTERN = /(?:升至|降至)/;
@@ -238,25 +227,21 @@ const TABLE_IDENTIFIER_HEADER_RE = /(?:^editing(?: operation)?$|(?:^|\b)(?:metho
 const TABLE_VAGUE_METRIC_HEADER_RE = /^(?:结果|数值|数值变化|观察|观察结果|实际观测|报告结果|主要观察|说明|解释|含义|方向|关键条件|结论|结论边界|证据边界|应如何解读|对照或说明|对照或变化|结果或结论)$/i;
 const TABLE_DIRECTION_MARK_RE = /(?:↑|↓|\\(?:uparrow|downarrow|nearrow|searrow)\b|越高越好|越低越好|higher\s+is\s+better|lower\s+is\s+better|max(?:imize)?|min(?:imize)?)/i;
 const TABLE_DIRECTIONAL_METRIC_RE = /(?:accuracy|precision|recall|f[- ]?score|\bf1\b|\bwer\b|\bcer\b|\bder\b|\bauc\b|\bmap\b|\bmiou\b|\biou\b|\bpesq\b|\bstoi\b|\bsdr\b|\bsisdr\b|\bsnr\b|\bbleu\b|\brouge\b|\bmeteor\b|\bclap\b|\bfad\b|\brmse\b|\bmae\b|\berle\b|\bmos\b|\bl[12]\b|\bmse\b|\bnmse\b|\bmste\b|\bmr[- ]?stft\b|准确率|精确率|召回率|错误率|误差|损失|延迟|耗时|速度|吞吐|内存|显存|功耗|能耗|复杂度|参数量|相关系数|相似度|评分|分数|裁判分)/i;
-// Aggregate/mean columns such as “无条件 AVG ↑” are measurable metrics and must
-// not be mistaken for setting identifiers, but unlike WER/accuracy they do not
-// inherently require an ↑/↓ marker (for example “Avg Total (s)” is a plain
-// duration). Keep them out of TABLE_DIRECTIONAL_METRIC_RE so the direction gate
-// stays unchanged, and consult this list only when a direction marker is already
-// present in isTableIdentifierHeader.
+// “无条件 AVG ↑”这类聚合/均值列是可测量的指标，不能当成设置标识；但与
+// WER/accuracy 不同，它们本身不要求带 ↑/↓ 标记（比如 “Avg Total (s)”
+// 只是个普通时长）。把它们排除在 TABLE_DIRECTIONAL_METRIC_RE 之外，
+// 方向闸的行为就不变；只有在 isTableIdentifierHeader 已经看到方向标记时，
+// 才来查这张表。
 const TABLE_GENERIC_METRIC_HEADER_RE = /(?:\bavg\b|\bmean\b|\baverage\b|均值|平均)/i;
-// Strong identity words keep their identifier meaning even inside an aggregate
-// header: “6 基准平均 ↑” still anchors the row identity established by the
-// benchmark/dataset qualifier, while weak condition words such as “无条件”
-// yield to the metric reading of “无条件 AVG ↑”.
+// 身份词在聚合表头里仍然表示行身份：“6 基准平均 ↑”里的基准/数据集限定词
+// 继续锚定这一行；而“无条件”这类弱条件词会让位给“无条件 AVG ↑”的指标读法。
 const TABLE_STRONG_IDENTITY_HEADER_RE = /基准|数据集|语料|任务|语言|语系|语族|类别|类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|划分|切片|子集|场景|配置|拓扑/;
 const TABLE_NON_DIRECTIONAL_MEASURE_RE = /(?:置信区间|confidence interval|\bci\b|p[- ]?value|p值|显著性|样本数|数量|规模|时长|采样率|方差|标准差|系数|\bbeta\b|\bΔ?AIC\b|复杂度|参数|容量|内存|显存|耗时|延迟|速度|吞吐|功耗|能耗|bytes?|hours?|seconds?|milliseconds?)/i;
 const TABLE_NUMERIC_CELL_RE = /(?:^|[^A-Za-z])[-+]?\d(?:[\d,]*)(?:\.\d+)?(?:\s*(?:%|pp|×|x|ms|s|h|Hz|kHz|MHz|GB|MB|KB|dB|mJ|W))?/i;
 
-// A first column can describe the training condition rather than a metric.
-// Keep this explicit so a table such as “训练损失 × evaluation metrics” is
-// treated as a comparison table without forcing an artificial ↑/↓ marker onto
-// the condition column.
+// 第一列也可能描述训练条件而不是指标。这里显式列出来，
+// 好让“训练损失 × evaluation metrics”这类表格按对比表处理，
+// 又不硬给条件列加上 ↑/↓ 标记。
 const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:训练损失|损失函数|监督目标|训练目标|评估设置|实验设置)$/i;
 function isTableIdentifierHeader(value) {
     const normalized = String(value || '').trim();
@@ -267,12 +252,11 @@ function isTableIdentifierHeader(value) {
         .trim();
     const identifier = !normalized || TABLE_IDENTIFIER_HEADER_RE.test(withoutDirection);
     if (!TABLE_DIRECTION_MARK_RE.test(normalized)) return identifier;
-    // “方法 ↓”“设置 H ↓” and “方法 ↑ 成功率” still describe the row
-    // identity.  A direction marker alone must not turn the first column into
-    // a metric column.  Conversely, a qualifier such as “评估” before a real
-    // metric (for example “评估 L1(...) ↓”) is not an identifier.
-    // This branch only runs when a direction marker is present, so treating
-    // “无条件 AVG ↑” as a metric never forces an arrow onto “Avg Total (s)”.
+    // “方法 ↓”“设置 H ↓”和“方法 ↑ 成功率”说的仍然是行身份。光有方向标记
+    // 不能把第一列变成指标列。反过来，真正的指标前面加个“评估”这样的限定词
+    // （例如“评估 L1(...) ↓”）不算标识。
+    // 这条分支只在出现方向标记时才走，所以把“无条件 AVG ↑”当指标
+    // 不会顺带给“Avg Total (s)”加上箭头。
     if (TABLE_DIRECTIONAL_METRIC_RE.test(withoutDirection)) return false;
     if (TABLE_GENERIC_METRIC_HEADER_RE.test(withoutDirection)
         && !TABLE_STRONG_IDENTITY_HEADER_RE.test(withoutDirection)) return false;
@@ -691,17 +675,15 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     );
     const sourceHasAblation = /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉/i.test(sourceAblationEvidence);
     const resultHasAblation = /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉|不含|排除|无外推/i.test(results)
-        // Some papers label the ablation rows only as `+ L_j`, `+ L_s`, ...
-        // and describe them as a staged/逐级 addition.  That is still an
-        // explicit component comparison when the source contains an ablation.
+        // 有的论文只用 `+ L_j`、`+ L_s` … 标注消融行，正文里说是逐级叠加。
+        // 只要原文确实有消融，这仍然算显式的组件对照。
         || /(?:逐级|逐步|依次)(?:叠加|加入|添加|移除|比较)|(?:组件|约束|模块|损失|监督目标|局部配对|竞争归一化)[^。；\n]{0,24}(?:对照|贡献|差异|是否必要|必要性)/i.test(results)
         || /\+\s*L[_\s]?[A-Za-z](?:\s*\+\s*L[_\s]?[A-Za-z])+/i.test(results);
     if (empirical && sourceHasAblation && !resultHasAblation) {
         return '全文包含消融实验，但实验结果没有保留关键消融或组件对照';
     }
-    // Do not treat an explicit absence of degradation/failure as a negative
-    // result. Papers commonly state that an adaptation "does not degrade"
-    // source performance; the bare `degrad` cue otherwise reverses its meaning.
+    // 原文明确说“没有退化/失败”时，不能当成负面结果。论文常写某个适配
+    // "does not degrade" 源性能；否则光凭 `degrad` 这个词会把意思读反。
     const sourceNegativeEvidence = String(sourceText || '').replace(
         /\b(?:does|do|did)\s+not(?:\s+\w+){0,2}\s+(?:degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?)\b|\bno\s+(?:degrad(?:e|es|ed|ation)|fail(?:ure|ures)?)\b|\bwithout\s+(?:any\s+)?(?:degrad(?:e|es|ed|ation)|fail(?:ure|ures)?)\b|(?:未|没有|并未|无)[^。；\n]{0,12}(?:退化|失败)/gi,
         ' '
@@ -781,11 +763,9 @@ function validateMethodDetailContract(analysis) {
 function validateManualDepthContract(analysis, options = {}) {
     const evaluationIssue = getPaperEvaluationHeadingIssue(analysis);
     if (evaluationIssue) return evaluationIssue;
-    // The old manual gate only checked that the method section was long.  A
-    // template could therefore pass with a short abstract, three generic
-    // innovation bullets and one two-column placeholder table.  The API path
-    // has an explicit full-paper review/repair chain; manual_complete must
-    // meet the same reader-visible quality floor even when no LLM is called.
+    // 旧的 manual 闸只看方法段够不够长，于是模板文也能蒙混过关：摘要很短、
+    // 三条泛泛的创新点、一个两列占位表格。API 那条路有完整的全文审查与修复链；
+    // manual_complete 即使不调用 LLM，也要达到同样的读者可见质量下限。
     const method = extractSection(analysis, '方法概述和架构');
     const results = extractSection(analysis, '实验结果');
     const details = extractSection(analysis, '细节详述');
@@ -850,10 +830,8 @@ function validateManualDepthContract(analysis, options = {}) {
     return null;
 }
 
-// Sections that must carry independent prose.  Duplicate sentences across
-// these sections were the dominant 2026-08-20 manual defect: the same
-// motivation/trade-off paragraph was pasted into 4-5 sections and even into
-// the scoring rationale.
+// 这些章节必须各写各的。2026-08-20 那批 manual 最突出的毛病就是跨章节重复：
+// 同一段动机/取舍文字被贴进 4-5 个章节，连评分理由里也有。
 const MANUAL_DUP_CHECK_SECTIONS = Object.freeze([
     '核心摘要', '方法概述和架构', '核心创新点', '实验结果',
     '细节详述', '评分理由', '局限与问题', '开源详情'
@@ -892,9 +870,9 @@ function findCrossSectionDuplicateSentences(analysis, options = {}) {
     return duplicates.slice(0, limit);
 }
 
-// The 2026-08-20 batch used one fixed editorial template in all 20 papers:
-// "亮点是一是……二是……三是……短板是……" with the "shortboard" restating the
-// authors' own admitted limitations instead of an independent review finding.
+// 2026-08-20 那批 20 篇论文套的是同一个编辑模板：
+// “亮点是一是……二是……三是……短板是……”，而“短板”只是复述作者自己承认的
+// 局限，不是独立审查发现的问题。
 const MANUAL_EDITORIAL_TEMPLATE_PATTERNS = Object.freeze([
     /亮点[：:]?\s*一是/,
     /优点[：:]?\s*一是/,
@@ -1027,8 +1005,8 @@ function isRecoveryStageTerminal(stage, status) {
 
 function stripCoreSummaryNonResultNumerals(text) {
     return String(text || '')
-        // Case matters for short metric acronyms: the prose words "map",
-        // "per" and "most" are not mAP, PER or MOS-T measurements.
+        // 短指标缩写要区分大小写："map"、"per"、"most" 这些普通词
+        // 不是 mAP、PER 或 MOS-T 的测量值。
         .replace(/\b(?:map|Map|per|Per|most|Most|MOST)\b/g, ' ')
         .replace(/\bMel(?=[- ](?:spectrogram|filterbank|QCD|control)\b)/gi, ' ')
         .replace(/\bSTFT(?=[⁡(])/g, ' ')
@@ -1046,8 +1024,8 @@ function stripCoreSummaryNonResultNumerals(text) {
 }
 
 function hasCoreSummaryComparisonDirection(sentence, numbers) {
-    // A diagram's "from inputs to outputs" is a mapping, not a measured
-    // improvement. A numeric transition must name its starting value.
+    // 示意图里的 "from inputs to outputs" 是映射关系，不是实测提升。
+    // 数字上的变化必须写明起始值。
     const directionSurface = sentence.replace(/\bfrom\b([^。！？!?]{0,50})\bto\b/gi,
         (match, between) => /\d/.test(between) ? match : ' ');
     if (CORE_SUMMARY_COMPARISON_PATTERN.test(directionSurface)
@@ -1066,10 +1044,9 @@ function hasCoreSummaryQuantitativeEvidence(text) {
         if (!numbers.length) return false;
         const hasComparisonObject = CORE_SUMMARY_COMPARISON_OBJECT_PATTERN.test(sentence);
         const hasDirection = hasCoreSummaryComparisonDirection(sentence, numbers);
-        // In music papers, "score(s)" normally means notation rather than an
-        // evaluation metric. Likewise, "performance" may describe performed
-        // audio. Treat these generic English words as result metrics only when
-        // the sentence explicitly binds them to a numeric value or direction.
+        // 音乐论文里的 "score(s)" 通常指乐谱而不是评价指标；"performance"
+        // 也可能指实际演奏的音频。这些通用英文词只有在句子明确把它们
+        // 和数值或方向绑在一起时，才算结果指标。
         const withoutGenericEnglishMetrics = sentence.replace(
             new RegExp(CORE_SUMMARY_GENERIC_ENGLISH_METRIC_PATTERN.source, 'gi'), ' '
         );
@@ -1085,12 +1062,10 @@ function hasCoreSummaryQuantitativeEvidence(text) {
         const hasNonOperationalMetric = CORE_SUMMARY_METRIC_PATTERN.test(nonOperationalWithoutGeneric)
             || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(nonOperationalWithoutGeneric)
             || hasExplicitGenericMetric;
-        // A latency/throughput/hardware/training-setting number is not a
-        // result comparison merely because a nearby sentence says
-        // “experiment” or “evaluation”.  It becomes result evidence only
-        // when the source names the compared side or gives an explicit
-        // directional transition.  Do not let an operational detail in the
-        // same sentence hide an independently reported result metric.
+        // 延迟、吞吐、硬件、训练设置的数字不会因为邻近句子出现
+        // “experiment”或“evaluation”就变成结果对比。只有原文点明了对比对象，
+        // 或给出明确的方向变化，它才算结果证据。同一句里的运行细节
+        // 不能掩盖单独报告的结果指标。
         if (CORE_SUMMARY_OPERATIONAL_PARAMETER_PATTERN.test(sentence)
             && !hasComparisonObject && !hasDirection && !hasNonOperationalMetric) return false;
         if (hasSpecificMetric || hasExplicitGenericMetric) return true;
@@ -1116,9 +1091,8 @@ function hasSourceMeasuredLossComparison(sentences) {
         const hasExplicitContrast = /\b(?:while|whereas|versus|vs\.?|compared\s+(?:with|to))\b/i.test(sentence);
         if (!hasNamedSides && !hasExplicitContrast) return false;
         const localContext = values.slice(Math.max(0, index - 2), index + 1).join(' ');
-        // Training-objective numbers alone are operational evidence.  Keep
-        // the special loss-function path only when the surrounding source
-        // binds it to an evaluation/test/benchmark result.
+        // 只有训练目标的数字属于运行证据。loss function 这条特殊分支只在
+        // 上下文把它绑到评测/测试/基准结果上时才保留。
         return /(?:comparative\s+evaluation|evaluation\s+result|benchmark|test\s+set|validation\s+set|dataset|对比评测|评测结果|基准|测试集|验证集|数据集)/i.test(localContext);
     });
 }
@@ -1148,8 +1122,8 @@ function stripDuplicatedLineFootnoteMarkers(text) {
 function coreSummaryQuantitativeResultState(text) {
     const candidates = String(text || '').split(/[。！？!?\n]/).map(rawSentence => {
         const sentence = stripCoreSummaryNonResultNumerals(rawSentence.trim());
-        // CLAP can name either a metric or the comparison model. An explicit
-        // model/baseline label cannot stand in for a missing result metric.
+        // CLAP 既可能指指标，也可能指对照模型。写明 model/baseline
+        // 不能顶替缺失的结果指标。
         const metricText = sentence.replace(/\bCLAP\s*(?:基线|模型|baseline\b|model\b)/giu, '');
         const hasMetric = Boolean(sentence && (
             CORE_SUMMARY_METRIC_PATTERN.test(metricText)
@@ -1158,12 +1132,10 @@ function coreSummaryQuantitativeResultState(text) {
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         const hasDirection = Boolean(sentence
             && hasCoreSummaryComparisonDirection(sentence, numbers));
-        // Conference sources commonly name a concrete split as
-        // “AliMeeting远场集” or “VoxAngeles未见语言集”, which is a real
-        // evaluation setting even though it contains neither the literal
-        // word “数据集” nor an English `test/benchmark` token. Accept only
-        // a named Latin identifier with an explicit setting suffix; the
-        // generic setting vocabulary above remains unchanged.
+        // 会议原文常把具体划分写成“AliMeeting远场集”或“VoxAngeles未见语言集”，
+        // 这算真实的评测设置，尽管里面既没有“数据集”三个字，也没有
+        // `test/benchmark` 这样的英文词。只接受带明确设置后缀的拉丁文命名标识；
+        // 上面那套通用设置词表不变。
         const hasNamedSetting = /(?:[A-Z][A-Za-z0-9._-]{2,}\s*[\u3400-\u9fff]{0,8}(?:集|数据集|语料|任务|基准)|(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}(?:\s*[上中下]))/i.test(sentence);
         const hasSetting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)/i.test(sentence)
             || hasNamedSetting;
@@ -1194,7 +1166,7 @@ function coreSummaryQuantitativeResultState(text) {
 
 function nearestCoreSummaryMetricLabel(segment, fromRight) {
     const candidates = [];
-    // A bare token such as PESQ can name either a metric or a baseline method.
+    // PESQ 这样的裸词既可能是指标，也可能是基线方法。
     // Only an explicit "X分数/X得分/X指标" label is safe to compare here.
     const custom = /(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_-]{1,39})(?=\s*(?:分数|得分|指标))/g;
     for (const match of String(segment || '').matchAll(custom)) {
@@ -1248,22 +1220,19 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         issues.push('缺少 2–4 步方法链的分工与衔接');
     }
     const sourceText = typeof options === 'string' ? options : String(options.sourceText || '');
-    // LaTeXML/PDF extraction can repeat a footnote marker both inline and on
-    // its own next line (including the observed "11\n1" double-rendering of
-    // marker 1). Remove only that exact pair before joining soft lines; a
-    // normal trailing measurement whose next line differs remains evidence.
+    // LaTeXML/PDF 抽取会把脚注标记重复一次：正文里一次，下一行又单独出现一遍
+    // （观察到的 "11\n1" 就是标记 1 的双重渲染）。合并软换行前只删掉完全相同的
+    // 这一对；普通的行尾测量值只要下一行不同，仍然是证据。
     const quantitativeSourceText = stripDuplicatedLineFootnoteMarkers(sourceText)
-        // Strip only the outline number before joining PDF soft wraps. A
-        // heading beside a metric glossary is not a numeric result value.
+        // 合并 PDF 软换行前只剥掉大纲编号。指标词表旁边的标题不是数值结果。
         .replace(/^\s*\d{1,2}(?:\.\d+){0,3}[ \t]+(?=[A-Z][A-Za-z])/gm, '')
         .replace(/([^\n])\r?\n(?!\r?\n)/g, '$1 ');
     const quantitativeSourceSentences = quantitativeSourceText.trim()
         .split(/[。！？!?\n]|\.(?=\s+[A-Z][A-Za-z]|$)/)
         .map(sentence => sentence.trim())
         .filter(Boolean);
-    // PDF soft wraps have already been joined above.  The source classifier
-    // deliberately distinguishes measured result evidence from operational
-    // parameters such as GPUs, steps, latency and compute cost.
+    // 上面已经合并过 PDF 软换行。来源分类器特意把实测结果证据和
+    // GPU 数、步数、延迟、算力开销这类运行参数分开。
     const sourceHasQuantitativeEvidence = classifySourceQuantitativeEvidence(
         sourceText, quantitativeSourceSentences);
     const quantitativeResultState = coreSummaryQuantitativeResultState(summary);
@@ -1621,8 +1590,8 @@ function assertManualHashKeyPremises(value, label) {
     }
 }
 
-// Text evidence is hashed as its exact UTF-8 bytes (without JSON string
-// quoting) so Node and the Python publishing gate bind to the same value.
+// 文本证据按原始 UTF-8 字节计算哈希（不做 JSON 字符串转义），
+// 这样 Node 端和 Python 发布闸绑定到同一个值。
 function manualTextSha256(value) {
     return crypto.createHash('sha256')
         .update(String(value ?? ''), 'utf8')
@@ -1702,9 +1671,9 @@ function validateManualEvidenceLedger(ledger, sourceText = '') {
 
 function validateFreshAuthoringRecordConsistency(manifest, takeover) {
     const marker = manifest?.contracts?.freshAuthoring;
-    // Historical v5 canonical records predate the file-backed fresh-authoring
-    // contract. Keep them readable for validation/migration, while every new
-    // v5 record emitted by manual-deep-analysis carries the explicit marker.
+    // 历史的 v5 正式记录早于 file-backed fresh-authoring 约定。这些记录在
+    // 校验和迁移时继续可读，而 manual-deep-analysis 产出的每条新 v5 记录
+    // 都带这个显式标记。
     if (marker === undefined) return null;
     if (marker !== FRESH_AUTHORING_CONTRACT) {
         return `Manual v5 的 freshAuthoring 格式标识不符合要求：${String(marker)}`;
@@ -1721,8 +1690,7 @@ function validateFreshAuthoringRecordConsistency(manifest, takeover) {
 
 function validateTutorialPayloadRecordConsistency(manifest, takeover) {
     const marker = manifest?.contracts?.tutorialPayload;
-    // Historical v5 records without the marker remain readable only.  The
-    // publisher separately refuses to package them as a new tutorial page.
+    // 没带标记的历史 v5 记录只能读。发布器另外会拒绝把它们打包成新的教程页。
     if (marker === undefined) return null;
     if (marker !== MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT) {
         return `Manual v5 的 tutorialPayload 格式标识不符合要求：${String(marker)}`;

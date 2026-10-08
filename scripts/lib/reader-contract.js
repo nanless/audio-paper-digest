@@ -50,8 +50,8 @@ function buildReaderContractNotice(options = {}) {
     ].join('\n');
 }
 
-// Keep each real Reader section distinct, including repeated kinds such as
-// component. Similar numbers alone are never a duplicate finding.
+// 每个真实的 Reader 分节都要保持独立，包括 component 这类重复出现的类型。
+// 仅数字相近永远不算重复发现。
 function findReaderSectionNearDuplicates(article, sections = []) {
     const headings = [...String(article || '').matchAll(/^###\s+([^\n]+)\n/gm)];
     const paragraphs = [];

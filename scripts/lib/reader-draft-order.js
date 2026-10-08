@@ -10,8 +10,8 @@ const READER_SECTION_KINDS = Object.freeze([
 ]);
 const sha = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
-// Enumerate the actual candidate, not a separately sorted parser copy. The
-// line offsets come from the same Markdown extractor used by production.
+// 枚举的就是真正的候选，而不是另做一份排过序的解析器副本。行偏移
+// 来自生产环境同一个 Markdown 提取器。
 function locateReaderDraftTables(draft) {
     const found = [];
     for (const [sectionIndex, section] of (draft.sections || []).entries()) {
@@ -28,11 +28,10 @@ function locateReaderDraftTables(draft) {
     return found;
 }
 
-// Selection markers are semantic references to tableBindings[ordinal - 1].
-// When every table is a uniquely bound selection marker, a complete marker
-// permutation can therefore be normalized without interpreting prose or table
-// contents.  Any mixed, malformed, duplicate, missing or inline marker set is
-// left untouched for the authoritative parser to reject.
+// 选择 marker 是对 tableBindings[ordinal - 1] 的语义引用。当每张表都是
+// 唯一绑定的选择 marker 时，一整套 marker 排列就可以规范化，不必解读
+// 正文或表格内容。混用、畸形、重复、缺失或行内的 marker 集合一律不动，
+// 留给权威解析器报错。
 function completeSelectionMarkerPermutation(draft, tables) {
     const sections = Array.isArray(draft?.sections) ? draft.sections : [];
     const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
@@ -57,13 +56,11 @@ function completeSelectionMarkerPermutation(draft, tables) {
     return ordinals;
 }
 
-// A bridge marker contains no authored prose; its declaration carries the
-// explanation.  Once sections and bridge ordinals are canonical, a missing or
-// misplaced marker can be placed deterministically only when its declared
-// section kind occurs exactly once and every existing bridge marker is an
-// exact, unique, standalone token. Misplaced markers are moved only from a
-// paragraph-final position, allowing the exact "\n\nMARKER" byte span to be
-// transferred without rewriting any non-marker byte.
+// 桥接 marker 本身不含作者写的正文，解释都在它的声明里。小节和桥接序号
+// 都规范之后，要确定地补上或挪动一个 marker，只有两个条件同时成立才行：
+// 它声明的小节类型恰好出现一次，且现有每个桥接 marker 都是精确、唯一、
+// 独立成行的 token。位置不对的 marker 只从段落末尾搬走，这样 "\n\nMARKER"
+// 这段字节能原样转移，不改动任何非 marker 字节。
 function normalizeConceptBridgeMarkerLocations(draft) {
     const sections = Array.isArray(draft?.sections) ? draft.sections : [];
     const bridges = Array.isArray(draft?.conceptBridges) ? draft.conceptBridges : [];
@@ -79,11 +76,9 @@ function normalizeConceptBridgeMarkerLocations(draft) {
     const spacingChanges = [];
     for (const [sectionIndex, section] of sections.entries()) {
         const before = section.body;
-        // Models sometimes emit several standalone bridge tokens on adjacent
-        // lines.  They are still unambiguous marker identities, but Markdown
-        // treats the run as one paragraph and the downstream binding gate
-        // correctly rejects it.  Insert only the missing blank separator; no
-        // authored prose or marker bytes are changed.
+        // 模型有时会在相邻几行上各放一个独立的桥接 token。它们作为 marker 身份
+        // 仍然唯一，但 Markdown 会把这几行当成一个段落，下游的绑定闸门也确实
+        // 会拒绝它。这里只补上缺的那个空行分隔，作者写的正文和 marker 字节都不动。
         const after = before.replace(
             /(^|\n)([ \t]{0,3}\[\[CONCEPT_BRIDGE_\d+\]\][ \t]*)\n(?=[ \t]{0,3}\[\[CONCEPT_BRIDGE_\d+\]\][ \t]*(?:\n|$))/gm,
             '$1$2\n\n'
@@ -159,24 +154,20 @@ function normalizeConceptBridgeMarkerLocations(draft) {
     return changes;
 }
 
-// A draft can contain an extra handwritten table even though its declared
-// bindings still describe one uniquely ordered table stream.  Selection
-// markers are strong anchors: if there is exactly one order-preserving match
-// from bindings to table nodes, and every unmatched node is an ordinary
-// Markdown table, those unmatched tables are provably unbound.  Remove only
-// that narrow case; multiple possible matches remain parser errors.
+// 草稿里可能多出一张手写的表，而它声明的绑定仍然只描述一条唯一有序的
+// 表格串。选择 marker 是强锚点：如果绑定到表格节点的顺序保持匹配只有
+// 一种，且每个没匹配上的节点都是普通 Markdown 表，那些表就可以证明是
+// 未绑定的。只处理这一种窄情况；存在多种可能的匹配仍然算解析错误。
 function pruneUniquelyUnboundReaderMarkdownTables(input) {
     if (!Array.isArray(input?.sections) || !Array.isArray(input?.tableBindings)) return 0;
     const nodes = locateReaderDraftTables(input);
     const bindings = input.tableBindings;
     if (nodes.length <= bindings.length || bindings.length === 0) return 0;
     const solutions = [];
-    // Conference-PDF extraction can flatten a grouped number such as
-    // `169,221` in the quote while the authored table contains `169221`.
-    // Keep this matcher local to the pruning proof: final source binding still
-    // performs the authoritative numeric replay.  The old matcher split the
-    // grouped source number into `169` and `221`, making an otherwise provable
-    // SounDiT table look unbound.
+    // 会议 PDF 抽取可能把引文里带千分位的数字（如 `169,221`）压平，而作者
+    // 写的表里是 `169221`。这个匹配器只服务于剪除证明：最终的来源绑定仍会
+    // 做权威的数字重放。旧匹配器会把带分组的来源数字拆成 `169` 和 `221`，
+    // 于是一张本来可以证明的 SounDiT 表看起来就成了未绑定。
     const numericTokens = value => String(value || '').match(
         /(?<![A-Za-z0-9])[-+]?(?:\d{1,3}(?:[ ,]\d{3})+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(?:\s*(?:k|m|b|samples?|bins?|epochs?|%|dB|kHz|MHz|Hz|GB|MB|KB|ms|s|h))?(?![A-Za-z0-9])/gi
     ) || [];
@@ -212,14 +203,11 @@ function pruneUniquelyUnboundReaderMarkdownTables(input) {
     };
     visit(0, 0, []);
 
-    // The strict order-preserving proof above remains authoritative for the
-    // ordinary case.  A second, still fail-closed proof handles a mixed draft
-    // where selection markers and authored quote tables were emitted in a
-    // different order.  It is intentionally limited to source_quotes with at
-    // least one quantitative overlap.  A generated `来源证据` table is the
-    // deterministic recovery output for a quote binding; prefer it over an
-    // unbound, richer handwritten duplicate because only the quoted numbers
-    // are authenticated at this stage.
+    // 上面那套严格的顺序保持证明，处理常规情况时仍是权威。第二套证明同样
+    // 失败即停，用来处理选择 marker 和作者写的引文表以不同顺序输出的混排
+    // 草稿。它有意只限于至少有一处数量重叠的 source_quotes。引文绑定生成的
+    // `来源证据` 表是确定性的恢复产物；优先用它，而不是一张未绑定、内容更
+    // 丰富的手写重复表，因为在这个阶段只有被引用的数字经过了核验。
     let selectedIndexes = solutions.length === 1 ? solutions[0] : null;
     let usedRelaxedAssignment = false;
     if (!selectedIndexes) {
@@ -320,10 +308,9 @@ function pruneUniquelyUnboundReaderMarkdownTables(input) {
     }
     const remaining = locateReaderDraftTables(draft);
     if (remaining.length !== bindings.length) return 0;
-    // Relaxed mixed-order assignments are deliberately checked by the
-    // one-to-one score proof above; their node order is normalized by the
-    // subsequent mixed-binding pass.  Reapplying the old positional matcher
-    // here would reject the very marker/table permutation this proof handled.
+    // 放宽后的混排顺序分配，上面那套一一对应的评分证明已经专门核对过；
+    // 它们的节点顺序由后面那道混排绑定流程规范化。在这里重新套用旧的
+    // 位置匹配器，反而会否掉这套证明刚刚处理过的那种 marker/表格排列。
     if (!usedRelaxedAssignment && !remaining.every((node, index) => matches(bindings[index], node))) return 0;
     input.sections = draft.sections;
     return unbound.length;
@@ -371,11 +358,10 @@ function alignMixedBindingsToCurrentTableNodes(draft, tables) {
     return true;
 }
 
-// Unmarked source-quote and artifact-table bindings have no visible ordinal
-// marker. When a model emits sections in a different order, recover the
-// permutation only from unique evidence-backed table assignments. Artifact
-// tables require every rendered cell to replay against its sealed DOM cell.
-// Selection markers remain stronger anchors and are never inferred from prose.
+// 没有 marker 的来源引文绑定和 artifact 表绑定，都没有可见的序号标记。
+// 模型把各节以不同顺序输出时，只能靠唯一且有证据支撑的表格分配来恢复
+// 排列。artifact 表要求每个渲染出来的单元格都能对上它已核验的 DOM
+// 单元格。选择 marker 仍是更强的锚点，绝不从正文里推断。
 function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables, structuredArtifacts = null) {
     const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
     if (!bindings.length || tables.length !== bindings.length
@@ -515,11 +501,10 @@ function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables, structuredAr
     return true;
 }
 
-// Trailing source_quotes declarations with no visible table nodes carry no
-// reader-facing content and cannot be compiled. Remove only that trailing
-// suffix when the entire visible stream is ordinary
-// Markdown, all earlier bindings are sequential source_quotes, and no TABLE
-// marker exists anywhere. The full parser still replays every remaining quote.
+// 末尾那些没有可见表格节点的 source_quotes 声明，不含面向读者的内容，
+// 也编译不出来。只有满足以下条件时才删掉这段末尾后缀：可见的整条表格
+// 串都是普通 Markdown，前面所有绑定都是顺序的 source_quotes，且任何
+// 地方都不存在 TABLE marker。完整解析器仍会重放剩下每一条引文。
 function pruneTrailingUnboundSourceQuoteBindings(draft, tables) {
     const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
     if (!Array.isArray(draft?.sections) || bindings.length <= tables.length
@@ -538,8 +523,8 @@ function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
     const inputSha256 = sha(input);
     const sections = Array.isArray(draft?.sections) ? draft.sections : [];
     const ranked = sections.map((section, index) => ({ section, index }));
-    // Unknown/malformed kinds belong to the parser's shape gate; do not invent
-    // an order or alter indices before it reports them.
+    // 未知或畸形的小节类型归解析器的形状闸门管；在它报出来之前，不要自己
+    // 编一个顺序，也不要改索引。
     const sectionsAreKnown = ranked.every(({ section }) => READER_SECTION_KINDS.includes(section?.kind));
     if (sectionsAreKnown) {
         ranked.sort((a, b) => READER_SECTION_KINDS.indexOf(a.section.kind)
@@ -552,9 +537,8 @@ function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
     let tableMap = originalTables.map(table => ({ rawIndex: table.bindingIndex, canonicalIndex: table.bindingIndex,
         rawSectionIndex: table.sectionIndex, canonicalSectionIndex: table.sectionIndex }));
     if (sectionOrderChanged && Array.isArray(draft.tableBindings)) {
-        // Prefer authenticated evidence over positional order. This also
-        // handles the common case where the positional shape looks valid but
-        // each binding belongs to a different raw section.
+        // 有核验过的证据时优先于位置顺序。这也覆盖了一种常见情况：位置形状
+        // 看着有效，但每个绑定其实属于另一个原始小节。
         const sourceQuoteAligned = alignSourceQuoteBindingsToCurrentTableNodes(
             draft, originalTables, structuredArtifacts
         );
@@ -565,10 +549,9 @@ function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
                     ? originalTables[index]?.markerIndex === index + 1
                         && sections.reduce((n, section) => n + String(section?.body || '').split(`[[TABLE_${index + 1}]]`).length - 1, 0) === 1
                     : !originalTables[index]?.marker));
-        // A mixed stream can be unambiguously realigned before section sorting:
-        // selection bindings are anchored by their unique TABLE ordinal, while
-        // source-quote/artifact bindings keep their existing relative order.
-        // The downstream source-binding parser still replays every cell/quote.
+        // 混排的表格串可以在小节排序之前无歧义地对齐：选择绑定靠它唯一的
+        // TABLE 序号锚定，来源引文和 artifact 绑定保持原有的相对顺序。
+        // 下游的来源绑定解析器仍会重放每一个单元格和每一条引文。
         if (!valid && alignMixedBindingsToCurrentTableNodes(draft, originalTables)) {
             originalTables = locateReaderDraftTables(draft);
             valid = originalTables.length === draft.tableBindings.length
@@ -608,8 +591,8 @@ function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
         const markerMap = new Map(tableMap.filter(item => originalTables[item.rawIndex].marker)
             .map(item => [item.rawIndex + 1, item.canonicalIndex + 1]));
         draft.tableBindings = tableMap.map(item => ({ ...draft.tableBindings[item.rawIndex], tableIndex: item.canonicalIndex + 1 }));
-        // One pass prevents 1→2→1 replacement collisions. No prose/table cell
-        // is edited: only explicitly bound selection markers are renamed.
+        // 一趟替换可以避免 1→2→1 这类连锁改名冲突。正文和表格单元格都不改：
+        // 只重命名显式绑定的选择 marker。
         for (const section of sections) {
             if (typeof section?.body === 'string') section.body = section.body.replace(/\[\[TABLE_(\d+)\]\]/g,
                 (marker, index) => markerMap.has(Number(index)) ? `[[TABLE_${markerMap.get(Number(index))}]]` : marker);
@@ -638,9 +621,8 @@ function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
         }
     }
     if (Array.isArray(draft?.sections)) draft.sections = ranked.map(item => item.section);
-    // Bridge markers are stable IDs, not their order of appearance in prose.
-    // Only a complete, unambiguous 1..N permutation permits reordering. All
-    // malformed sets remain byte-for-byte unchanged for the parser to reject.
+    // 桥接 marker 是稳定 ID，不表示它在正文里出现的先后。只有完整且无歧义的
+    // 1..N 排列才允许重排。凡是畸形的集合，一个字节都不改，留给解析器报错。
     let bridgeMap = [];
     if (Array.isArray(draft?.conceptBridges)) {
         const bridges = draft.conceptBridges.map((bridge, rawIndex) => {

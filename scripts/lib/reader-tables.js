@@ -7,8 +7,8 @@ const sha256 = value => /^[a-f0-9]{64}$/.test(String(value || ''));
 const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
     && Object.keys(value).sort().join(',') === keys.slice().sort().join(',');
 
-// Shared with the final Reader paste gate: selection must not promise exact
-// source-cell replay when later display cleanup would change those bytes.
+// 这段逻辑与 Reader 最终粘贴检查共用：后续显示清理会改动字节时，
+// 选择环节不能承诺与原表单元格逐字节一致。
 function hasExplicitRepeatedScientificMeasurement(cell, context = {}, duplicate = null) {
     const text = String(cell || '');
     const scientific = '[+-]?\\d+(?:\\.\\d+)?[eE][+-]?\\d+';
@@ -24,10 +24,9 @@ function hasExplicitRepeatedScientificMeasurement(cell, context = {}, duplicate 
     const localLabels = /(?:^|[，,；;])\s*(?:s\s*\d+|stage\s*\d+|第?\s*\d+\s*阶段)\s*(?:学习率|lr)?/i.test(text);
     const rowContext = [context.header?.[context.columnIndex], ...(context.row || []).filter(value => value !== cell)]
         .map(value => String(value || '')).join(' ');
-    // Repeated learning rates are meaningful when the row/column explicitly
-    // says they belong to staged training. This exception is deliberately
-    // limited to delimited scientific-notation lists; concatenated extraction
-    // shadows such as 2.222.22 or 5e-55e-5 remain rejected.
+    // 当行或列明确说明属于分阶段训练时，重复的学习率是有意义的。
+    // 这个例外只限用分隔符隔开的科学计数法列表；像 2.222.22
+    // 或 5e-55e-5 这种提取时粘连出来的重复仍然拒绝。
     return localLabels || /(?:训练|阶段|stage|课程).*(?:学习率|learning rate|\blr\b)|(?:学习率|learning rate|\blr\b).*(?:训练|阶段|stage|课程)/i.test(rowContext);
 }
 
@@ -44,9 +43,8 @@ function hasExplicitRepeatedDatasetSplitScale(cell, context = {}) {
         .filter(value => value !== cell)].map(value => String(value || '')).join(' ');
     const explicitThreeWaySplit = /(?:train(?:ing)?|训练)\s*[/、，;；]\s*(?:val(?:id(?:ation|ating)?)?|dev|验证)\s*[/、，;；]\s*(?:test(?:ing)?|测试)/i.test(rowContext);
     const explicitDatasetSplit = /(?:dataset|data|数据集?|语料)(?:\s*(?:set))?\s*(?:split|partition|划分|拆分)|(?:数据|语料)(?:集)?划分/i.test(rowContext);
-    // Only a complete three-value list can use this exception. Concatenated
-    // extraction shadows, a fourth repeated value, or a duplicated whole cell
-    // cannot match the anchored surface even when the row mentions a split.
+    // 只有完整的三值列表能用这个例外。提取粘连出来的重复、多出的第四个值、
+    // 或整个单元格被复制，即使行里提到切分，也匹配不上这里锚定的形式。
     return explicitThreeWaySplit || explicitDatasetSplit;
 }
 
@@ -91,10 +89,9 @@ function hasSourceBoundRepeatedNumericVector(cell, context = {}, duplicate = nul
     if (!candidates.length) return false;
     const sourceSequences = new Set((Array.isArray(context.sourceTexts) ? context.sourceTexts : [])
         .flatMap(bracketedNumericVectors).map(vector => vector.sequence));
-    // The exemption is evidence-bound: compare the complete normalized token
-    // sequence, including order, ellipses, repeated values, and multiplicity.
-    // A mere set-membership match would incorrectly accept a dropped or pasted
-    // repeated layer weight such as four 2s when the source contains five.
+    // 这个豁免必须由证据支撑：要比较完整的归一化 token 序列，
+    // 包括顺序、省略号、重复值和出现次数。只看集合是否包含会误放行——
+    // 原表有五个 2 时，漏掉一个或粘贴出来的四个 2 也会被接受。
     return candidates.some(vector => sourceSequences.has(vector.sequence));
 }
 
@@ -119,8 +116,8 @@ function colonNumericVectors(value) {
 
 function hasSourceBoundRepeatedColonVector(cell, context = {}, duplicate = null) {
     const candidates = colonNumericVectors(cell);
-    // Keep this exception narrow: a duplicated whole ratio produces multiple
-    // vectors and must still fail even if one clean copy exists in the source.
+    // 这个例外要收窄：整个比值被复制会产生多个向量，
+    // 即使原表里有一份干净副本，也仍然算失败。
     if (candidates.length !== 1) return false;
     const candidate = candidates[0];
     if (duplicate && !(duplicate.index >= candidate.index
@@ -143,18 +140,18 @@ function hasSourceBoundRepeatedRangeChain(cell, context = {}, duplicate = null) 
     const sourceChains = (Array.isArray(context.sourceTexts) ? context.sourceTexts : [])
         .map(value => String(value || '').normalize('NFKC')
             .replace(/\s+/g, '').replace(/\\times/gi, '×'));
-    // A repeated range is meaningful in a three-axis room/geometry dimension,
-    // but only when the complete chain occurs in authenticated source text.
-    // Repeated whole cells and dropped/reordered ranges do not match this
-    // exact three-range shape.
+    // 在三轴房间或几何尺寸里，重复的范围是有意义的，
+    // 但前提是完整链条确实出现在已核验的原文中。
+    // 整个单元格被复制、范围被漏掉或顺序被打乱，都不符合
+    // 这个精确的三范围形态。
     return sourceChains.some(source => source.includes(match[1]));
 }
 
 function hasSourceBoundNumericScalar(cell, context = {}, duplicate = null) {
     if (!duplicate) return false;
-    // Repeated digits or thousands groups inside one source-backed number
-    // (1000000 / 1,000,000) are not pasted copies. Compare complete tokens,
-    // so a doubled number absent from the source still fails the gate.
+    // 一个原文里就有的数字内部重复的数字或千位分组（1000000 / 1,000,000）
+    // 不算复制粘贴。这里比较完整的 token，
+    // 因此原文里没有的重复数字仍然通不过检查。
     const scalar = /(?<![\d.+\-−])[+\-−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\d.]|,\d)/g;
     const tokens = value => [...String(value || '').matchAll(scalar)];
     const sourceNumbers = new Set((Array.isArray(context.sourceTexts) ? context.sourceTexts : [])
@@ -177,12 +174,10 @@ function findReaderTablePasteDuplication(cell, context = {}) {
     const doubledSpans = [...compact.matchAll(/(.{3,}?)\1/g)];
     for (const doubled of doubledSpans) {
         if (!/[\d\\=]/.test(doubled[1])) continue;
-        // The non-greedy repeated-span detector can mistake the prefix of
-        // adjacent decimal tokens for a duplicated token, e.g. `0.9,0.95`
-        // becomes `,0.9,0.9` because the second copy is only the prefix of
-        // `0.95`. A real pasted numeric copy ends at a delimiter or at the
-        // end of the cell; do not suppress a duplicate whose second copy is
-        // still inside a longer decimal token.
+        // 非贪婪的重复片段检测器可能把相邻小数 token 的前缀当成重复 token：
+        // 例如 `0.9,0.95` 会变成 `,0.9,0.9`，因为第二份只是 `0.95` 的前缀。
+        // 真正粘贴出来的数字副本会止于分隔符或单元格末尾；
+        // 第二份仍在一个更长的小数 token 里时，不要当作重复放过。
         const secondCopyEnd = doubled.index + doubled[1].length * 2;
         if (/\d$/.test(doubled[1]) && /[\d.]/.test(compact[secondCopyEnd] || '')) continue;
         if (hasSourceBoundNumericScalar(compact, context,
@@ -209,8 +204,8 @@ function unsafeMarkdownCell(text) {
         || /^\s*:?-{3,}:?\s*$/.test(text);
 }
 
-// A conservative source-only trigger, not a scientific classifier. Do not
-// infer an experiment from an author table or a table of training settings.
+// 这是个保守的、只依据原文的触发条件，不是判别论文类型的分类器。
+// 不要因为作者表或训练设置表就推断这里有实验。
 function readerResultTableRequirement(artifacts) {
     const sourceTableOrdinals = (Array.isArray(artifacts?.tables) ? artifacts.tables : []).filter(table => {
         if (!Number.isInteger(table?.ordinal) || table.ordinal < 1
@@ -227,9 +222,9 @@ function readerResultTableRequirement(artifacts) {
                 if (typeof cell !== 'string') return false;
                 const label = headerRows.map(index => rows[index]?.[columnIndex] || '').join(' ');
                 if (/\b(?:year|method|model|reference|citation|version|benchmark)\b|年份|方法名称|模型名称|版本/i.test(label)) return false;
-                // Citation years, model versions and task names are digits,
-                // but they do not make a tag catalog/benchmark directory a
-                // measured-results table. Keep numeric scientific cells.
+                // 引用年份、模型版本和任务名里也有数字，
+                // 但这些数字不能让标签目录或基准目录变成实测结果表。
+                // 数值型的科学单元格照旧保留。
                 const numericSurface = cell.normalize('NFKC')
                     .replace(/\\(?:textbf|mathbf|mathrm|textrm|text)\{|\\bf\b/g, '')
                     .replace(/[{}*$]/g, '').trim();
@@ -251,9 +246,9 @@ function effectiveReaderTableRows(table) {
     if (!Array.isArray(matrix) || matrix.length < 4 || !Number.isInteger(width) || width < 3
         || matrix.some(row => !Array.isArray(row) || row.length !== width)
         || !Array.isArray(cells)) return unchanged;
-    // Some sealed LaTeXML tables classify full-width protocol dividers as
-    // headers while the actual, distinct column labels are plain <td> cells.
-    // Derive their roles only when the original DOM spans prove this shape.
+    // 有些已保存的 LaTeXML 表格把全角分隔线当表头，
+    // 而真正彼此不同的列标签却是普通 <td> 单元格。
+    // 只有原始 DOM 的跨度能证明这种形态时，才据此推断它们的角色。
     const firstCells = cells.filter(cell => cell?.row === 0);
     const protocolDividers = declaredHeaders.length > 0 && declaredHeaders.every(row => {
         const rowCells = cells.filter(cell => cell?.row === row);
@@ -273,11 +268,10 @@ function effectiveReaderTableRows(table) {
         inferenceContract: 'full-width-protocol-divider-header-v1' };
     }
     const dataRows = Array.from({ length: matrix.length - 2 }, (_, index) => index + 2);
-    // Compatibility for the old parser's exact row-header contagion shape:
-    // the top grouped header is explicit, its second tier is the sole declared
-    // body row, and every later model/value row was marked header merely
-    // because its first cell used <th>.  Require both DOM spans and an
-    // unambiguous label-plus-numeric matrix before deriving effective roles.
+    // 兼容旧解析器那种表头传染的固定形态：顶层分组表头是明确的，
+    // 它的第二层是唯一声明的数据行，而后面每个模型或数值行之所以被标成表头，
+    // 只是因为第一个单元格用了 <th>。要推断实际角色，
+    // 必须同时满足 DOM 跨度和一个无歧义的「标签 + 数值」矩阵。
     if (declaredBodies.length !== 1 || declaredBodies[0] !== 1
         || declaredHeaders.length !== dataRows.length + 1
         || !declaredHeaders.includes(0)
@@ -358,11 +352,10 @@ function assessReaderTableSelectionEligibility(table) {
         ...(!reasons.length ? {} : { action: 'Do not use selection. Use source_quotes only with exact full-text quotes and the existing numeric/unit gate; do not invent header names or normalize source evidence.' }) };
 }
 
-// Selection rows are model-authored coordinates, but the source explicitly
-// identifies header rows.  Two mistakes are therefore safe to repair without
-// inventing a cell: move the sole selected header to the front, or prepend the
-// sole declared header when the model selected data rows only.  Multiple
-// possible headers remain ambiguous and must go through a bounded local repair.
+// 选择结果里的行号由模型给出，但哪些是表头行由原文明确。
+// 因此有两种错误可以不凭空造单元格就直接修：把唯一被选中的表头移到最前，
+// 或者模型只选了数据行时把唯一声明的表头补到最前。
+// 可能有多个表头时仍有歧义，必须走有边界的局部修复。
 function putReaderTableHeaderFirst(sourceRows, headerRows) {
     if (!Array.isArray(sourceRows) || !Array.isArray(headerRows)) return sourceRows;
     const headers = new Set(headerRows); const selectedHeaders = sourceRows.filter(row => headers.has(row));
@@ -387,12 +380,10 @@ function effectiveReaderTableHeaderRows(table) {
             })
         ));
         if (derived.length > 0) {
-            // LaTeXML commonly renders the highlighted winning method as a
-            // complete <th> row (for example "Ours" followed by bold metric
-            // values).  It is still a data row.  Older sealed v4 artifacts
-            // also promoted every cell in a row when only its row label was a
-            // <th>.  Keep the first real header, but do not misclassify this
-            // narrow, source-visible method-label pattern as a second header.
+            // LaTeXML 常把高亮的获胜方法渲染成整行 <th>（例如 "Ours" 后面跟加粗的指标值）。
+            // 这仍然是数据行。旧的 v4 归档产物还会在一行的行标签是 <th> 时，
+            // 把该行所有单元格都提升为表头。这里保留第一个真正的表头，
+            // 但不要把这种狭窄、原文可见的方法名形态误判成第二个表头。
             const hasLaterBodyRow = matrix.some((_row, row) => row > derived[0]
                 && !derived.includes(row));
             const semantic = derived.filter((row, index) => !(index > 0 && hasLaterBodyRow
@@ -456,8 +447,8 @@ function renderReaderTableSelection(binding, artifacts) {
             || (renderedRow === 0 && !headerRows.includes(sourceRow))) {
             throw new Error(`${label} row=${sourceRow},column=${sourceColumn} 不能唯一重放到原始 DOM cell`);
         }
-        // Escaping or rewriting arbitrary source markup changes the cell's
-        // identity. Such a table stays on the existing explicitly bound path.
+        // 对任意原文标记做转义或改写会改变单元格的身份。
+        // 这类表格留在现有的显式绑定路径上。
         if (unsafeMarkdownCell(text)) {
             throw new Error(`${label} row=${sourceRow},column=${sourceColumn} 含不能逐字安全渲染的 Markdown`);
         }

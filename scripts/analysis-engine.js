@@ -248,8 +248,8 @@ function strictCurrentFileLockOwner(snapshot) {
         && snapshot.directory?.mode === 0o700
         && snapshot.ownerFile?.mode === 0o600
         && JSON.stringify(owner?.keys) === JSON.stringify(FILE_LOCK_OWNER_KEYS)
-        // readFileLockSnapshot validates the raw owner with exactFileLockOwner
-        // before projecting it and adding the schema-key witness above.
+        // readFileLockSnapshot 先用 exactFileLockOwner 校验原始 owner，
+        // 再投影出上面的值并补上 schema key 见证。
         && Number.isInteger(owner?.pid) && owner.pid > 0
         && typeof owner?.hostname === 'string' && owner.hostname.trim()
         && typeof owner?.token === 'string' && FILE_LOCK_TOKEN_RE.test(owner.token)
@@ -316,9 +316,8 @@ function historicalDirectRemoteLegacyLockMayReclaim(snapshot, nowMs, options = {
 
 function fileLockSnapshotIsReclaimable(snapshot, staleMs, nowMs = Date.now(), options = {}) {
     if (!snapshot?.exists || !snapshot.consistent) return false;
-    // The operation-lock policy does not apply to empty, malformed, legacy,
-    // remote, live, or permission-indeterminate locks.  Those all continue
-    // through the ordinary lease gate below.
+    // operation-lock 策略不适用于空锁、格式损坏的锁、旧锁、远端锁、
+    // 仍有效的锁，以及权限状态不确定的锁。这些一律走下面普通的租约闸。
     if (operationLockMayImmediatelyReclaimLocalDeadOwner(snapshot, options)) return true;
     const ageMs = nowMs - (snapshot.ownerFile?.mtimeMs ?? snapshot.directory.mtimeMs);
     if (historicalDirectRemoteLegacyLockMayReclaim(snapshot, nowMs, options)) return true;
@@ -331,9 +330,8 @@ function fileLockSnapshotIsReclaimable(snapshot, staleMs, nowMs = Date.now(), op
         && snapshot.ownerFile?.mode === 0o600;
     const exactLegacy = exactLegacyFileLockOwner(snapshot);
     if (!strictCurrent && !exactLegacy) return false;
-    // Legacy 0755/0644 locks predate the hardened protocol.  They are accepted
-    // only for this exact local-dead upgrade path; remote/unknown legacy owners
-    // are deliberately never reclaimed.
+    // 0755/0644 的旧锁早于加固协议。只有这条本机已死进程的升级路径接受它们；
+    // 远端或身份不明的旧 owner 一律不回收。
     if (exactLegacy && !ownerIsOnThisMachine(owner)) return false;
     if (owner.hostname !== os.hostname()) return true;
     return localOwnerIsConfirmedDead(owner);
@@ -474,9 +472,8 @@ function reclaimFileLockIfSame(lockPath, staleMs, options = {}) {
             if (typeof finalizeHistoricalAudit !== 'function') {
                 throw new Error('历史论文旧锁的审查回调必须返回同步完成的收尾函数。');
             }
-            // The audit sink is outside the lock directory and is treated as
-            // untrusted. Re-read every inode and marker after it returns so it
-            // cannot make a changed lock look like the snapshot we reclaim.
+            // 审查输出位于锁目录之外，按不可信处理。它返回后要重新读一遍
+            // inode 和标记，免得把已经变化的锁伪装成我们要回收的那份快照。
             const afterAudit = readFileLockSnapshot(lockPath);
             if (!sameFileLockSnapshot(second, afterAudit, { ignoreDirectoryMtime: true })
                 || !sameReclaimMarker(marker, readReclaimMarker(marker.filename))) return false;
@@ -533,9 +530,9 @@ function inspectHistoricalDirectLegacyLockIntent(filePath, intent) {
 }
 
 /**
- * Read-only lock inspection for schedulers.  Unlike the acquisition path this
- * never removes a lock, and it requires both a non-live owner and a full stale
- * interval before declaring an interrupted operation recoverable.
+ * 给调度器用的只读锁检查。与获取路径不同，这里从不删除锁，
+ * 而且要同时满足 owner 已不活跃、且超过完整过期区间，
+ * 才判定中断的操作可以恢复。
  */
 function inspectFileLockState(filePath, options = {}) {
     const staleMs = options.staleMs ?? DEFAULT_STALE_LOCK_MS;
@@ -605,9 +602,9 @@ function createLockRelease(lockPath, ownerToken, acquiredSnapshot) {
                 ignoreDirectoryMtime: true, ignoreLeaseMtime: true
             })
                 || first.owner?.token !== ownerToken || first.owner?.pid !== process.pid
-                // Hostname is descriptive metadata, not the ownership proof.
-                // macOS can refresh it during a long-running process; the
-                // token + PID pair still proves this process owns the lock.
+                // hostname 只是描述性元数据，不是所有权证明。macOS 可能在
+                // 长时间运行的进程里刷新它；token + PID 这一对仍然能证明
+                // 锁属于本进程。
                 || JSON.stringify(first.entryNames) !== JSON.stringify(['owner.json'])) return false;
             const second = readFileLockSnapshot(lockPath);
             if (!sameFileLockSnapshot(first, second)) return false;
@@ -894,9 +891,8 @@ const CORE_SUMMARY_V3_READ_ONLY_COMPATIBILITY_CUTOFF_MS = Date.parse(
 );
 
 /**
- * Narrow compatibility predicate for read-only validation of API results that
- * were complete before core-summary-detailed-v3 existed.  Production analysis,
- * scheduling and skip decisions must continue to use isSuccessfulAnalysisRecord.
+ * 只读校验用的窄兼容判断，针对 core-summary-detailed-v3 出现之前就已完成的
+ * API 结果。生产分析、调度和跳过判断仍然必须用 isSuccessfulAnalysisRecord。
  */
 function isLegacyApiAnalysisSuccessForReadOnlyValidation(paper) {
     const manifest = paper?.analysisManifest;
@@ -1585,7 +1581,7 @@ async function analyzeBatch(papers, options = {}) {
         }
 
         if (onPaperStart) {
-            try { onPaperStart(idx, papers.length, paper); } catch (e) { /* ignore callback error */ }
+            try { onPaperStart(idx, papers.length, paper); } catch (e) { /* 忽略回调错误 */ }
         }
 
         const startTime = Date.now();
@@ -1613,7 +1609,7 @@ async function analyzeBatch(papers, options = {}) {
                 },
                 onAttempt: (att, max) => {
                     if (onAttempt) {
-                        try { onAttempt(att, max, paper); } catch (e) { /* ignore */ }
+                        try { onAttempt(att, max, paper); } catch (e) { /* 忽略 */ }
                     }
                 }
             });

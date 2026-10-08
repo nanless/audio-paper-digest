@@ -480,11 +480,11 @@ function validateCompletionReceipt(state, receipt, planReceiptSha256 = null) {
     return receipt;
 }
 
-// Build a read-only queue for papers whose deterministic tag assignment is blocked.
-// Queue entries keep the batch partial and are excluded from the completion receipt.
-// An unresolved assignment cannot authorize page staging or publication.
-// The queue reports which papers still need a classification decision.
-// It does not convert a pending assignment into a completed classification.
+// 为标签分配被确定性地阻塞的论文建一个只读队列。
+// 队列里的条目让批次保持未完成状态，并且不进完成回执。
+// 未解决的分配不能授权页面暂存或发布。
+// 队列报告哪些论文还需要分类决定。
+// 它不会把待定的分配当成已完成的分类。
 function buildTagReviewQueue(state) {
     const checked = assertState(state);
     const items = Object.values(checked.items)
@@ -632,7 +632,7 @@ function sealOneSource(context, member, deps, createdAt, { replayExisting = true
     const record = { ...replay.metadataRecord, conferenceId: replay.conference.id, year: replay.conference.year,
         identity: clone(replay.identity) };
     const metadataBytes = canonicalBytes(record); const candidate = replay.match.candidates[0];
-    // Prefer the sealed PDF, but rebind its bytes to the live official discovery SHA.
+    // 优先用已保存并核验的 PDF，但把它的字节重新绑定到当前官方的 discovery SHA。
     const sealedPdf = path.join(root, names.pdf);
     const pdfLoaded = deps.discovery.safeAbsoluteFile(fs.existsSync(sealedPdf) ? sealedPdf : path.join(discovery.candidateManifest.pdfRoot, candidate.path),
         `official PDF for ${member.paperId}`, deps.discovery.MAX_PDF_BYTES);
@@ -648,12 +648,10 @@ function sealOneSource(context, member, deps, createdAt, { replayExisting = true
         if (!receiptReady || old.extractor?.version !== extraction.EXTRACTOR_VERSION
             || old.extractor?.backend?.version !== extraction.BACKEND_VERSION
             || old.version !== extraction.VERSION) {
-            // A blocked or obsolete receipt is never accepted as current proof.
-            // Preserve it under its original name, and feed only the
-            // independently authenticated original PDF/metadata into a new
-            // extractor generation. This lets an implementation migration
-            // recover a deterministic PDF-audit bug without deleting failure
-            // evidence or authorizing a new analysis run.
+            // 被阻塞或过期的回执永远不能当作当前证明。保留它原来的文件名，
+            // 只把独立核验过的原始 PDF/元数据交给新的提取器代次。
+            // 这样实现迁移就能修掉一个确定性的 PDF 审计缺陷，
+            // 既不用删掉失败证据，也不用授权新的分析运行。
             upgradedFrom = names.receipt;
             const generation = stableHash({ source: context.authority.implementationSha256,
                 extractor: extraction.EXTRACTOR_VERSION, backend: extraction.BACKEND_VERSION,
@@ -696,8 +694,8 @@ function prepareShared(context, deps, createdAt) {
     const files = context.files;
     const sealed = context.members.map(member => sealOneSource(context, member, deps, createdAt,
         { replayExisting: false }));
-    // Source upgrade creates a separate immutable staging/import/plan namespace.
-    // Existing source bundles and analysis executions are never rewritten here.
+    // 来源升级会另建一套不可变的暂存/导入/计划命名空间。
+    // 已有的来源包和分析执行在这里绝不重写。
     const generationContext = sealed.some(item => item.upgradedFrom) ? { ...context, authority: {
         ...context.authority, implementationSha256: stableHash({ implementation: context.authority.implementationSha256,
             sources: sealed.map(item => ({ paperId: item.paperId, receiptName: item.receiptName,
@@ -868,8 +866,8 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
     if (state.status === 'complete') {
         validateCompletionReceipt(state, JSON.parse(fs.readFileSync(path.join(directory, 'completion-receipt.json'))));
     }
-    // Upgrade old error-only checkpoints before any preparation or model work.
-    // Failed analysis bytes remain untouched; scheduler metadata is additive.
+    // 在做任何准备或模型工作之前，先升级旧的只含错误的检查点。
+    // 失败的分析字节保持原样；调度器元数据只是追加。
     state = deps.engine.updateJsonFileLocked(stateFile, current => {
         const next = clone(assertState(current, expected)); let changed = false;
         for (const item of Object.values(next.items)) {
@@ -893,7 +891,7 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
                 item.retryReleases = [...(item.retryReleases || []), { at: deps.now(), attempts: item.attempts,
                     previousFailure: item.lastFailure || null }];
                 item.retryBudgetStart = item.attempts; item.retryNotBefore = null;
-                // Preserve the failure as evidence, separately record explicit retry permission.
+                // 把失败留作证据，另外记录显式的重试许可。
                 item.retryAuthorizedAtAttempt = item.attempts;
                 if (item.status === 'analyzing') item.status = 'analysis_partial';
                 changed = true;
@@ -961,8 +959,8 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
             if (failure.systemic) stopped = true;
             updateItem(item.paperId, ['analyzing'], current => ({ ...current,
                 status: 'analysis_partial', lastError: failure.message, lastFailure: failure,
-                // A tag assignment review is an explicit, per-paper pending state; it is
-                // reported through the review queue instead of a generic failure.
+                // 标签分配复核是显式的逐篇待定状态，通过复核队列报出，
+                // 而不是报成普通失败。
                 ...(error.tagReview
                     ? { reviewRequired: { ...error.tagReview, classifiedAt: failure.at } }
                     : {}),
@@ -994,8 +992,8 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
                 tagReview: review.tagReview, ...buildTagReviewQueueFields(review, directory) };
         }
     }
-    // Every member is complete: no tag assignment review is pending, so any stale
-    // queue sidecar is removed before the aggregate/completion transaction.
+    // 每个成员都已完成：没有待定的标签分配复核，
+    // 所以任何过期的队列附属文件都会在汇总/完成事务之前删掉。
     publishReviewQueue(state);
     assertRuntimeAuthorityUnchanged(context, deps, 'before aggregate');
     const executionIds = context.members.map(member => state.items[member.paperId].analysisRunId);

@@ -1,7 +1,7 @@
 'use strict';
 
-// Reader candidates are recovery inputs, never production proof. Every merged
-// candidate must still pass the caller's full Reader parser and source gates.
+// Reader 候选只是恢复用的输入，从来不能当作生产凭证。每个合并进来的
+// 候选仍然要通过调用方完整的 Reader 解析器和来源闸门。
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -152,8 +152,8 @@ function readTableCountIssue(issue) {
     if (issue?.code === TABLE_COUNT_ISSUE_CODE) {
         ({ requiredCount, actualCount } = issue);
     } else {
-        // Older saved diagnostics carry counts only in this exact message.
-        // A coded diagnostic must never obtain missing fields from prose.
+        // 早期保存下来的诊断，只在这一段固定消息里带计数。已经带 code 的诊断，
+        // 绝不允许从散文消息里去补缺失字段。
         if (issue?.code !== undefined && issue?.code !== null && issue?.code !== '') return null;
         const match = /至少需要\s*(\d+)\s*张有叙事闭环的\s*Markdown\s*表，当前\s*(\d+)/
             .exec(String(issue?.message || ''));
@@ -172,8 +172,8 @@ function recoveryIssueProjection(issue) {
     if (orderIssue.ignoreMessageForRepair) return projectTableBindingOrderIssue(issue, orderIssue);
     if (issue?.code !== TABLE_COUNT_ISSUE_CODE) return issue;
     const counts = readTableCountIssue(issue);
-    // Keep the comparison input used by saved v1 candidates and v2 failure
-    // signatures. This compatibility text is never the displayed message.
+    // 这里保留的是 v1 候选和 v2 失败签名用到的比较输入。这段兼容文本
+    // 不会作为展示消息。
     const projected = counts
         ? { path: issue.path ?? null,
             message: `读者文章至少需要 ${counts.requiredCount} 张有叙事闭环的 Markdown 表，当前 ${counts.actualCount}` }
@@ -191,14 +191,13 @@ function hashRecoveryIssues(issues) {
 
 function normalizeValidationMessage(message) {
     return String(message || '')
-        // Exact-binding failures carry draft values that may change while the
-        // same row/column remains unbound. Preserve the structural coordinates
-        // and gate name, but remove volatile cell contents and missing values.
+        // exact 绑定失败的草稿取值会变，而同一个行/列可能一直没绑上。结构坐标
+        // 和闸门名要留着，易变的单元格内容和缺失值要去掉。
         .replace(/(关键数字缺少 exact quote\/cell 证据:)\s*[^；]+/giu, '$1 <values>')
         .replace(/\btext="[^"]*"/giu, 'text="<value>"')
         .replace(/\bmissing=[^。；，]+/giu, 'missing=<value>')
-        // Length/count diagnostics should converge even when a repair changes
-        // the amount by a few characters. Required thresholds remain intact.
+        // 篇幅和计数类诊断应当收敛，哪怕一次修复让数量差了几个字符。
+        // 必需的阈值保持原样。
         .replace(/(当前|已有|现有|仍缺|还缺|缺少|不足|多出|超出|超过)\s*\d+(?:\.\d+)?/gu,
             (surface, label) => `${['已有', '现有'].includes(label) ? '当前'
                 : ['还缺', '缺少', '不足'].includes(label) ? '仍缺'
@@ -378,12 +377,10 @@ function parseRepairableDraft(raw) {
     return value;
 }
 
-// Failed Reader responses are not production drafts.  During an explicit
-// implementation migration we may still recover a syntactically complete
-// response that is structurally useful but misses a semantic minimum (for
-// example, three concept bridges instead of four).  Keep this parser strictly
-// bounded and use it only as a recovery input; the authoritative parser must
-// still accept the final draft before publication.
+// 失败的 Reader 响应不算生产草稿。在明确实施迁移期间，我们仍可能从
+// 语法完整、结构上可用、但没达到语义下限的响应里恢复内容（比如只有
+// 三条概念桥接而不是四条）。这个解析器要严格设界，只当恢复输入用；
+// 发布前最终草稿仍然必须过权威解析器。
 function parseRecoveryDraft(raw) {
     let value;
     try {
@@ -405,11 +402,9 @@ function parseRecoveryDraft(raw) {
 function parseReaderPatchJson(raw) {
     const source = String(raw || '').trim();
     try { return JSON.parse(source); } catch (originalError) {
-        // Some providers report a response as completed after emitting a
-        // complete final replacement object but before the enclosing array/root
-        // delimiters. Recover only those two mechanically unambiguous suffixes.
-        // Never close a string, scalar, replacement object, or other nested
-        // value: semantic completeness remains the model's responsibility.
+        // 有些服务商在输出完一个完整的最终替换对象之后就报完成，但外层数组
+        // 或根对象的定界符还没出来。只补这两种机械上唯一确定的后缀。绝不去
+        // 闭合字符串、标量、替换对象或其他嵌套值：语义是否完整是模型的责任。
         const stack = [];
         let inString = false;
         let escaped = false;
@@ -619,7 +614,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
     return merged;
 }
 
-// Independent diagnostics supplement (never replace) the authoritative parser.
+// 这些独立诊断是权威解析器的补充，不是替代。
 function collectDraftIssues(draft, parserError, options = {}) {
     const issues = [];
     const objectIssue = parserError && typeof parserError === 'object' && !(parserError instanceof Error)
@@ -799,12 +794,11 @@ function buildMissingResultTableOperation(draft, issues) {
     const destinationSectionIndex = draft.sections.findIndex(section => (
         ['result', 'ablation'].includes(section?.kind)
     ));
-    // If the model declared a binding but omitted its Markdown table, moving
-    // one existing table cannot close the stream: removing one and adding one
-    // leaves the same table count. Authorize the smallest truthful repair
-    // instead: add the missing source_quotes table in result/ablation and
-    // replace only its already-declared binding. The full parser still checks
-    // every quote and numeric cell; this operation never creates evidence.
+    // 模型声明了绑定却漏掉对应的 Markdown 表时，搬一张现成的表补不上这个
+    // 缺口：去掉一张再加一张，表数没变。这里改为授权最小且不造假的那种修复：
+    // 在 result/ablation 里补上缺失的 source_quotes 表，只替换它已经声明的
+    // 那个绑定。完整解析器仍会核对每条引文和每个数字单元格；这个操作本身
+    // 不造证据。
     if (locatedTables.length < draft.tableBindings.length && destinationSectionIndex >= 0) {
         const missingBindingIndex = locatedTables.length;
         const binding = draft.tableBindings[missingBindingIndex];
@@ -921,7 +915,7 @@ function buildRepairTargets(draft, issues) {
             if (/^\/sections\/\d+\/body$/.test(pointer) && paths.has(pointer.slice(0, -5))) return;
             if (/^\/sections\/\d+$/.test(pointer)) paths.delete(`${pointer}/body`);
             paths.add(pointer);
-        } catch { /* Invalid root shape needs full retry. */ }
+        } catch { /* 根对象形状不对，只能整轮重试。 */ }
     };
     const sectionForBinding = (field, index) => {
         const binding = draft[field]?.[index];
@@ -962,11 +956,9 @@ function buildRepairTargets(draft, issues) {
         }
         return { index, paths: [...new Set(sectionIndexes)].map(sectionIndex => `/sections/${sectionIndex}/body`) };
     };
-    // Source diagnostics explain the authoritative parser failure; they are
-    // not an instruction to rewrite every related table at the same time. If
-    // at least one blocking issue exists, target only blocking issues. This
-    // keeps a local marker/prose repair below the eight-node patch contract and
-    // lets the full parser surface any remaining source problem afterward.
+    // 来源诊断说明的是权威解析器为什么失败，不是让你同时把相关的表全改一遍。
+    // 只要存在阻塞性问题，就只针对阻塞性问题修。这样局部的 marker 和正文
+    // 修复能压在八个节点的补丁上限之内，剩下的来源问题交给完整解析器之后暴露。
     const isCountDiagnostic = issue => issue?.code === TABLE_COUNT_ISSUE_CODE || readTableCountIssue(issue);
     const selectableIssues = issues.filter(issue => {
         const orderIssue = classifyTableBindingOrderIssue(issue);
@@ -983,10 +975,9 @@ function buildRepairTargets(draft, issues) {
     const firstPlacementGroup = classifyTableBindingOrderIssue(firstSubstantiveIssue).ignoreMessageForRepair
         ? null : conceptBridgePlacementGroup(firstSubstantiveIssue);
     if (firstPlacementGroup) {
-        // Bridge placement does not authorize rewriting an otherwise valid
-        // bridge definition. Several duplicated markers may be diagnosed at
-        // once, so collect body groups in stable order but stay inside the
-        // eight-node patch contract. The full parser will surface any remainder.
+        // 桥接位置不对，不等于可以改一个本来有效的桥接定义。一次可能同时诊断出
+        // 好几个重复 marker，所以在稳定顺序下收集正文分组，但仍要守在八个节点
+        // 的补丁上限内。剩下没解决的交给完整解析器暴露。
         const seenBridgeIndexes = new Set();
         for (const issue of actionableIssues) {
             if (classifyTableBindingOrderIssue(issue).ignoreMessageForRepair) continue;
@@ -1033,11 +1024,10 @@ function buildRepairTargets(draft, issues) {
         }
     }
     if (missingNarrativeTableIssue) {
-        // When the draft already declares the missing binding, author exactly
-        // one new table beside the last existing table. The old generic table
-        // branch authorized every experiment section and every binding, which
-        // made a one-table repair large enough to truncate before its JSON
-        // suffix. The full parser will re-check ordering and all source seals.
+        // 草稿已经声明了缺失的绑定时，只在最后一张现成的表旁边新增一张表。
+        // 旧的那条通用表格分支会把每个实验小节、每个绑定都授权出去，结果
+        // 「补一张表」的修复大到在 JSON 后缀之前就被截断。顺序和每一项来源
+        // 核验仍由完整解析器复核。
         const tables = locateReaderDraftTables(draft);
         const missingBindingIndex = tables.length;
         if (missingNarrativeTableOperation) {
@@ -1048,9 +1038,8 @@ function buildRepairTargets(draft, issues) {
             add(`/tableBindings/${missingBindingIndex}`);
             actionableIssues = actionableIssues.filter(issue => issue !== missingNarrativeTableIssue);
         } else {
-            // Preserve the previous count-repair scope when the atomic cases
-            // do not apply. Select nodes from the draft structure, so changing
-            // the diagnostic wording cannot redirect the repair.
+            // 原子化那几种情况不适用时，沿用原来的计数修复范围。选哪些节点看的是
+            // 草稿结构，所以改诊断措辞不会把修复转到别处。
             tables.forEach(table => add(table.path));
             draft.tableBindings.forEach((_binding, index) => add(`/tableBindings/${index}`));
             if (![...paths].some(pointer => pointer.startsWith('/sections/'))) {
@@ -1070,16 +1059,14 @@ function buildRepairTargets(draft, issues) {
     const missingResultTableOperation = buildMissingResultTableOperation(draft, issues);
     if (missingResultTableIssue && missingResultTableOperation) {
         if (missingResultTableOperation.kind === 'add_result_table_v1') {
-            // The candidate has a declared binding with no authored table.
-            // Only the destination body and that binding may change; this
-            // forces the model to supply an evidence-backed result table
-            // instead of relabeling a setup/configuration table.
+            // 这个候选声明了绑定，却没有对应的表。只允许改目标正文和那个绑定；
+            // 这样就逼着模型交出有证据支撑的结果表，而不是把 setup/配置表
+            // 换个标签充数。
             add(missingResultTableOperation.destinationSectionPath);
             add(missingResultTableOperation.bindingPath);
         } else {
-            // Reuse one existing table ordinal only when the table stream is
-            // already closed. Moving/replacing the final experiment-setup
-            // table keeps all later table indexes stable.
+            // 只有表格串已经闭合时，才复用现成的一个表序号。搬动或替换最后一张
+            // 实验设置表，能保住后面所有表的序号不变。
             add(missingResultTableOperation.donorSectionPath);
             add(missingResultTableOperation.destinationSectionPath);
             add(missingResultTableOperation.bindingPath);
@@ -1092,10 +1079,9 @@ function buildRepairTargets(draft, issues) {
     const globalWideTableIssue = blockingIssues.find(issue => !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
         && /宽表/.test(String(issue?.message || '')));
     if (globalWideTableIssue) {
-        // A global minimum-wide-table gate used to authorize every table body
-        // and binding at once. Large five-node patches repeatedly ended before
-        // their JSON suffix. Repair one table pair, then let the authoritative
-        // full parser identify the next deficit on the following attempt.
+        // 过去用一条全局的「宽表数量下限」闸门，一次授权所有表正文和绑定，
+        // 结果五个节点的大补丁反复在 JSON 后缀之前就断掉。现在一次只修一对表，
+        // 下一轮再让权威完整解析器指出下一个缺口。
         const tableSpecific = blockingIssues.filter(issue => (
             !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
             && (/^\/tableBindings\/(?:0|[1-9]\d*)$/.test(String(issue?.path || issue?.bindingPath || ''))
@@ -1161,17 +1147,16 @@ function buildRepairTargets(draft, issues) {
                 }
             });
         }
-        // Never replay or accept a stale patch. Older persisted failures did
-        // not carry a structured path, so recover only the exact authorized
-        // pointer from their error; add() then binds it to today's node SHA.
+        // 绝不放行或接受过期的补丁。早期持久化的失败记录没有带结构化路径，
+        // 所以只能从它们的错误信息里取回那个确切的授权指针；add() 再把它
+        // 绑到今天的节点 SHA 上。
         const stalePatchPath = /Reader patch has stale node SHA: (\/(?:sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/body)?)/.exec(message)?.[1];
         if (stalePatchPath) add(stalePatchPath);
         if (/selection[\s\S]*第一行必须是原表头，其余行必须是数据行/.test(message)) {
             const index = Number(/tableBindings\[(\d+)\]/.exec(message)?.[1]);
             if (Number.isInteger(index)) add(`/tableBindings/${index}`);
-            // The marker and surrounding section are already structurally
-            // valid. Requesting a whole section body here bloats a one-object
-            // repair and was the main source of truncated repair JSON.
+            // marker 和它所在的整节，结构上本来就有效。这里再要一整节正文，会让
+            // 本来只改一个对象的修复变得臃肿，也是修复 JSON 被截断的主要来源。
             continue;
         }
         if (/主结果表覆盖不足/.test(message)) {
@@ -1230,8 +1215,8 @@ function buildRepairTargets(draft, issues) {
             }
         }
     }
-    // Global readability/length errors cannot safely be localized from a regex
-    // message. Keep all body targets reviewable, but cap each patch to 8 nodes.
+    // 全局的可读性和篇幅类错误，没法靠正则消息安全地定位到某处。保留所有
+    // 正文目标供审查，但每个补丁最多八个节点。
     if (!paths.size && (actionableIssues.some(issue => !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair)
         || !issues.length)) {
         draft.sections.forEach((_section, index) => add(`/sections/${index}/body`));
@@ -1252,8 +1237,8 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '') {
             figureOrdinals.add(target.value.figureOrdinal);
         }
     }
-    // Preserve complete evidence when safe narrowing cannot prove semantic
-    // coverage. Output and allowed mutations remain strictly local regardless.
+    // 安全的收窄办法证明不了语义覆盖时，就保留完整证据。无论哪种情况，
+    // 输出和允许的改动都严格限制在局部。
     const evidence = String(sourceEvidence || '');
     const exactQuotes = [...new Set(targets.flatMap(target => target.value?.sourceQuotes || []))]
         .filter(quote => typeof quote === 'string' && String(sourceText).includes(quote));
@@ -1396,8 +1381,8 @@ function saveFailedCandidate(directory, identity, payload) {
 }
 
 function retireFailedCandidate(directory, identity) {
-    // Retire only an independently replayed failure at this exact identity.
-    // There is deliberately no successful-candidate cache to load next time.
+    // 只有在这个确切身份上被独立重放过的失败才会清退。这里有意不做成功
+    // 候选缓存，下一次不加载任何成功结果。
     if (!loadFailedCandidate(directory, identity)) return null;
     const absolute = assertSafeDirectory(directory);
     const filename = candidatePath(absolute, identity);

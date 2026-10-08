@@ -63,9 +63,8 @@ function publicHttps(value, label, { identitySafe = false, conferenceOnly = fals
     }
     let parsed;
     try { parsed = new URL(value); } catch { fail(`${label} 不是有效的网址。`); }
-    // Fragments are client-side anchors (for example, a paper's #demo or
-    // #code section); they are not sent to the network and are safe to keep in
-    // the published clickable resource identity.
+    // 片段是浏览器端的锚点（例如论文页面里的 #demo、#code 小节），
+    // 不会发给网络，因此可以安全地留在对外发布的可点击资源标识里。
     if (parsed.protocol !== 'https:' || parsed.username || parsed.password || !parsed.hostname
         || parsed.port || !parsed.hostname.includes('.')
         || parsed.hostname === 'localhost' || parsed.hostname.endsWith('.localhost')
@@ -115,10 +114,9 @@ function authority(planHandle, dependencies = {}) {
 }
 function planProof(planHandle, dependencies = {}) {
     const authenticated = authority(planHandle, dependencies); const { run, receipt, receiptFileSha256, runFileSha256 } = authenticated.snapshot;
-    // Conference plan/run creation canonicalizes paper IDs with
-    // localeCompare. Replaying the proof with Array#sort() uses a different
-    // ordering for IDs containing uppercase title fragments (for example
-    // CVPR paper identities), producing a false selected-member-set drift.
+    // 创建会议计划和运行时用 localeCompare 规范化论文 ID。
+    // 若改用 Array#sort() 复算这些凭证，含大写标题片段的 ID（例如 CVPR 论文标识）
+    // 排序结果不同，会误报入选成员集合发生漂移。
     const paperIds = run.members.map(item => item.paperId)
         .sort((left, right) => left.localeCompare(right));
     if (!paperIds.length || new Set(paperIds).size !== paperIds.length
@@ -252,9 +250,9 @@ function buildAssignment(loaded, tagCatalog, savedAssignment) {
             reasons.push(`selection:${String(issue).slice(0, 200)}`);
         }
     }
-    // parseAnalysis canonicalizes an unresolvable role label to '', so recover
-    // the raw role line: the review queue must name the label it could not
-    // classify instead of reporting an empty `primary-task:unknown:`.
+    // parseAnalysis 会把认不出的角色标签归一成 ''，所以这里取回原始角色行：
+    // 审查队列要写出它没能归类的那个标签，
+    // 而不是报一个空的 `primary-task:unknown:`。
     const rawRoleTag = role => {
         const match = paper.analysis.match(new RegExp(`${role}\\s*[：:]\\s*(.+)`));
         return match ? String(match[1]).trim() : '';
@@ -292,10 +290,10 @@ function safeStem(loaded) {
     return `conference-${parts[1]}-${parts[2]}-${parts[3]}-${value}-${sha256(loaded.run.paperId).slice(0, 10)}`;
 }
 function render(packet) {
-    // Passing a large Figure-bearing JSON packet through execFileSync's stdin
-    // can leave the Python child waiting for EOF on macOS.  Use an exact,
-    // private temporary file instead; the renderer validates and consumes the
-    // same bytes, while the parent can always close and clean up the input.
+    // 把带图的大 JSON 数据包从 execFileSync 的标准输入传过去，
+    // 在 macOS 上可能让 Python 子进程一直等 EOF。改用一个权限收紧的临时文件，
+    // 里面的字节与渲染器校验和读取的完全一致，
+    // 父进程也总能关掉并清理这个输入。
     const temporaryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'conference-page-render-'));
     const packetFile = path.join(temporaryRoot, 'packet.json');
     try {
@@ -517,9 +515,9 @@ function repairConferenceImageUrls(markdown) {
     );
 }
 function repairCaptionQuotedGlossLinks(markdown) {
-    // Quoted phonetic glosses are source text, not relative link targets.
-    // Keep the original visible text and reserve this repair for generated
-    // Figure caption lines; article links, image labels and formulas stay intact.
+    // 引号里的注音是原文内容，不是相对链接目标。
+    // 保留原本可见的文字，这个修复只用于生成出来的图片说明行；
+    // 文章链接、图片标签和公式都不动。
     let fence = null;
     return String(markdown).split('\n').map(line => {
         const ending = line.endsWith('\r') ? '\r' : '';
@@ -531,8 +529,8 @@ function repairCaptionQuotedGlossLinks(markdown) {
             return line;
         }
         if (fence || !/^\*论文图\s+\d+。[^\n]*\*$/.test(text)) return line;
-        // The new repair is deliberately limited to plain generated captions.
-        // Existing repairs still apply separately; mixed Markdown/TeX is not parsed here.
+        // 新增的修复刻意只处理纯文本的生成图注。
+        // 已有的修复各自照旧生效；这里不解析 Markdown 与 TeX 混写的内容。
         const caption = text.slice(1, -1);
         if (/[\\$`<>*_~]/.test(caption) || caption.includes('![')) return line;
         let depth = 0;
@@ -556,15 +554,15 @@ function repairPreservedPage(markdown) {
             repairCurrencyDollars(repairFormulaDelimiters(repairCaptionQuotedGlossLinks(body)))))));
 }
 function repairCurrencyDollars(markdown) {
-    // Currency markers are literal prose, not Goldmark math delimiters.
-    // Restrict this repair to a dollar immediately followed by a number so
-    // ordinary TeX-like `$x$` expressions remain available to repairDollarMath.
+    // 货币符号是行文里的普通字符，不是 Goldmark 的数学分隔符。
+    // 这个修复只处理紧跟数字的美元符号，
+    // 普通的 `$x$` 这类 TeX 写法仍留给 repairDollarMath 处理。
     return String(markdown).replace(/(?<!\\)\$(?=\s*[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)/g, '\\\$');
 }
 function repairTechnicalNotationAsterisks(markdown) {
-    // Compact notation such as H1*-H2* is scientific text, not Markdown
-    // emphasis.  Escape only a star immediately following a letter/digit
-    // technical token; real ** emphasis markers remain untouched.
+    // H1*-H2* 这种紧凑写法是科技文本，不是 Markdown 强调。
+    // 只转义紧跟在字母或数字技术 token 后面的星号；
+    // 真正的 ** 强调标记不动。
     return String(markdown).replace(/(?<!\\)\b[A-Za-z]+\d+\*(?!\*)/g,
         match => `${match.slice(0, -1)}\\*`);
 }
@@ -588,10 +586,10 @@ function repairUnpairedMarkdownStars(markdown) {
             const next = line[start + 1] || '';
             return (!previous || /\s/.test(previous)) && next !== '' && !/\s/.test(next);
         };
-        // A linguistic marker can contain several opening stars on one line
-        // (for example “*Vː2 ... *mättīsin”) without a closing emphasis star.
-        // Keep genuine *italic* pairs, but escape the whole run when every
-        // single star is an opening marker and there is no plausible closer.
+        // 一个语音学标记可能在一行里出现多个起始星号
+        // （例如 “*Vː2 ... *mättīsin”），却没有收尾的强调星号。
+        // 真正的 *斜体* 成对标记保留；当每个单星号都是起始标记、
+        // 又找不到合理的收尾时，整串都转义。
         const shouldEscape = runs.length === 1 || runs.every(likelyOpening);
         if (!shouldEscape) return line;
         return runs.reduceRight((current, match) => {
@@ -735,10 +733,9 @@ function loadPreservedStage({ stagingRoot, executionId, paperId, pageProof, repa
     return matches[0];
 }
 function md(value) {
-    // Parentheses in aggregate titles/labels are literal text, not inline
-    // TeX delimiters.  HTML entities render identically while avoiding the
-    // `\\(` / `\\)` spelling that the Markdown math gate must reserve for
-    // actual formulas.
+    // 汇总页标题或标签里的括号是普通文字，不是行内 TeX 分隔符。
+    // 换成 HTML 实体渲染结果相同，又能避免写出 `\\(` / `\\)` 这种写法——
+    // Markdown 数学检查要把这种写法留给真正的公式。
     return String(value).replace(/[()]/g, char => char === '(' ? '&#40;' : '&#41;')
         .replace(/([\\`*_\[\]<>|{}#+.!-])/g, '\\$1').replace(/\s+/g, ' ').trim();
 }
@@ -756,19 +753,18 @@ function resourceLine(resource, paperId) {
     const labels = { code: '代码相关资源', model: '模型相关资源', dataset: '数据相关资源', demo: '演示资源',
         reproduction: '复现相关资源', third_party: '第三方资源' };
     const statuses = { available: '链接可访问', unavailable: '链接不可用', temporarily_unreachable: '暂时无法访问' };
-    // Resource identity preserves the exact URL spelling seen in the paper;
-    // the rendered link may use URL.href normalization (for example, adding
-    // the root slash to https://example.org/) without changing that evidence.
+    // 资源标识保留论文里 URL 的原始拼写；
+    // 渲染出来的链接可以按 URL.href 做规范化（例如给 https://example.org/ 补上末尾斜杠），
+    // 但不改动这份证据。
     let original, final;
     try {
         original = publicHttps(resource.originalUrl, `${paperId} resource original URL`, { normalize: true });
         final = publicHttps(resource.finalUrl, `${paperId} resource final URL`, { normalize: true });
     } catch (error) {
-        // A legacy Reader may have sealed an incomplete URL together with an
-        // explicitly unavailable status. It cannot support a positive link
-        // claim, so represent it as an unclickable unavailable record rather
-        // than rejecting the whole conference aggregate. Available resources
-        // remain fail-closed: malformed positive evidence must never publish.
+        // 旧的 Reader 记录可能保存了一个不完整的 URL，同时又明确标为不可获取。
+        // 它不足以支持「链接可用」的结论，所以记成不可点击的不可获取条目，
+        // 而不是否掉整份会议汇总。可获取的资源仍按失败即拒绝处理：
+        // 格式错误的正面证据绝不能发布。
         if (resource?.availability !== 'available') {
             const status = statuses[resource?.availability] || '状态未核实';
             return `- ${labels[resource?.type] || '资源'}：本次 URL 不完整，未作为可点击链接展示 — ${status}`;
@@ -917,9 +913,9 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
         primaryTask: item.tagMetadata.concepts.find(concept => concept.id === item.tagMetadata.primaryTaskId).preferredLabel.zh,
         primaryMethod: item.tagMetadata.concepts.find(concept => concept.id === item.tagMetadata.primaryMethodId).preferredLabel.zh,
         authors: structuredClone(item.manifest.authors),
-        // Conference pages are isolated to the official proceedings identity.
-        // Related arXiv links can still exist in the sealed Reader evidence,
-        // but must not leak into the conference aggregate's public surface.
+        // 会议页面只按正式论文集的身份组织。
+        // 相关的 arXiv 链接在已保存的 Reader 证据里可以存在，
+        // 但不能漏进会议汇总的对外内容。
         resources: structuredClone(item.manifest.resources).filter(resource => !isArxivResource(resource)),
         officialRecordUrl: item.manifest.publication.recordUrl, officialPdfUrl: item.manifest.publication.pdfUrl,
         pagePath: item.manifest.pagePath, url: item.manifest.primaryUrl,
@@ -951,7 +947,7 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
         const tagAssignment = stage.tagMetadata;
         const concept = tagAssignment.concepts.find(item => item.id === tagAssignment.primaryTaskId);
         if (!concept || concept.facet !== 'task') fail('汇总缺少主任务概念，或该概念不属于任务这一分类维度。');
-        // Keys are sorted to match the single-page frontmatter JSON spelling.
+        // 键按排序输出，与单篇页面 frontmatter 里的 JSON 拼写一致。
         const record = { facet: concept.facet, id: concept.id, label: concept.preferredLabel.zh };
         const known = taskConceptByLabel.get(record.label);
         if (known && known.id !== record.id) fail('同一主任务标签对应了多个概念，不能生成汇总。');

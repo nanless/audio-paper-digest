@@ -18,10 +18,9 @@ const fail = message => {
 const MATERIALIZED_KEYS = new Set(['cachePath', 'assetFilename', 'assetMediaType', 'assetSha256',
     'assetBytes', 'assetWidth', 'assetHeight']);
 
-// Pure, synchronous inverse plus production round-trip proof. It does not
-// fetch assets, touch candidates, certify new prose, or recover original API
-// whitespace/selection syntax discarded by the parser. Only an exact legal
-// input representation of the existing signed output can be returned.
+// 纯同步的逆运算，外加生产往返验证。它不抓取资源、不碰候选、不为新正文背书，
+// 也恢复不了解析器丢弃的原始 API 空白/选择语法。
+// 只能返回已有签名输出的某种合法精确输入表示。
 function reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId }) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(runId || '')
         || paper?.latestAnalysisAttemptError || !hasValidApiReaderV3Records(paper)) fail('invalid signed parent or run');
@@ -54,12 +53,9 @@ function reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId
         .every(key => Array.isArray(plan[key]))) fail('signed plan lacks inverse schema arrays');
     let articleWithMarkers = restoreApiReaderInjectionMarkers(paper.apiReaderArticle, plan, paper.apiReaderFigures);
     const bridges = plan.conceptBridges.map((bridge, index) => {
-        // The parser signs the canonical plan after applying the same surface
-        // normalization to terms that it applies to the assembled article
-        // (for example, separating an Arabic numeral from Chinese text).
-        // Rebuild the exact prefix from that canonical surface; using raw
-        // pre-normalized terms makes every otherwise valid signed bridge look
-        // non-reversible.
+        // 解析器先对术语做与拼装后正文相同的表面规范化，再对规范计划签名
+        // （例如把阿拉伯数字与中文分开）。从这个规范表面重建精确前缀；
+        // 用未规范化的原始术语会让每个本来合法的签名桥接都显得不可逆。
         const formattedTerms = (bridge.terms || []).map(term =>
             normalizeReaderProseFormatting(String(term || '').trim())
         );
@@ -78,11 +74,10 @@ function reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId
         const body = hasSingleSpace ? remainder.slice(1) : remainder;
         if (!body || /^\s/.test(body)) fail(`bridge ${index} has ambiguous prefix spacing`);
         articleWithMarkers = articleWithMarkers.replace(bridge.explanation, bridge.marker);
-        // The assembler adds one heading plus a space. A historical no-space
-        // signed bridge can only round-trip by retaining its exact heading:
-        // production's existing duplicate-heading collapse then retains the
-        // original last-heading boundary. Never rewrite the signed paragraph
-        // or waive the final article/plan/figure byte-equality checks below.
+        // 拼装器会加一个标题和一个空格。历史上的无空格签名桥接只有保留
+        // 它精确的标题才能往返：生产环境现有的重复标题合并随后会保留
+        // 原来的末标题边界。不要改写已签名段落，也不要放弃下面
+        // 正文/计划/插图逐字节相等的检查。
         return { ...pick(bridge, ['terms', 'sectionKind', 'marker']),
             explanation: hasSingleSpace ? body : bridge.explanation };
     });
@@ -126,8 +121,8 @@ function reconstructReaderDraftFromVerifiedArticle({ paper, sourceDetails, runId
     const figureCore = paper.apiReaderFigures.map(figure => Object.fromEntries(Object.entries(figure)
         .filter(([key]) => !MATERIALIZED_KEYS.has(key))));
     if (stableHash(roundtrip.figures) !== stableHash(figureCore)) fail('production round-trip figure bindings differ');
-    // Retain the exact already-signed materialization metadata, without any
-    // download or assertion of a fresh pixel inspection.
+    // 保留已签名的那份生成元数据，原样不动，不下载任何东西，
+    // 也不声称重新检查过像素。
     const replayedFigures = roundtrip.figures.map((figure, index) => ({ ...figure,
         ...Object.fromEntries(Object.entries(paper.apiReaderFigures[index]).filter(([key]) => MATERIALIZED_KEYS.has(key))) }));
     const figuresSha256 = stableHash(replayedFigures);

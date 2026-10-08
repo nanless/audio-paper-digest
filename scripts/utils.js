@@ -41,10 +41,9 @@ function writeFileAtomic(filePath, content) {
             const stat = fs.lstatSync(filePath);
             if (stat.isFile()) previousMode = stat.mode & 0o777;
         } catch (error) { if (error.code !== 'ENOENT') throw error; }
-        // Runtime JSON can contain model responses, paper excerpts and recovery
-        // metadata.  New files therefore default to private permissions; an
-        // existing file keeps its exact prior mode for backwards-compatible
-        // replacements.
+        // 运行数据 JSON 里可能含模型响应、论文摘录和恢复用元数据。
+        // 因此新建文件默认用私有权限；替换已有文件时
+        // 保留它原来的权限位不变，以兼容旧文件。
         const targetMode = previousMode ?? 0o600;
         fs.writeFileSync(tmpPath, content, { encoding: 'utf8', mode: targetMode });
         fs.chmodSync(tmpPath, targetMode);
@@ -636,10 +635,9 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature) {
     };
 }
 
-// Keep the filter retry budget identical everywhere that replays the daily
-// filtering contract. Responses models can consume the small first budget in
-// hidden reasoning without emitting text, so every retry gets the same 4096
-// floor used by the daily fetch path.
+// 所有复现日更筛选约定的地方，重试预算必须一致。
+// Responses 模型可能在隐藏推理里用掉第一次的小预算却一个字都不输出，
+// 所以每次重试都用与日更抓取路径相同的 4096 下限。
 function getFilterAttemptMaxTokens(apiType, maxTokens, attemptNumber) {
     if (!Number.isSafeInteger(maxTokens) || maxTokens < 1
         || !Number.isSafeInteger(attemptNumber) || attemptNumber < 1) {
@@ -667,7 +665,7 @@ function getClaudeCodeVersion() {
         const match = output.match(/^(\d+\.\d+\.\d+)/);
         if (match) return match[1];
     } catch {
-        // fall through
+        // 取不到版本号，继续往下走
     }
     return '2.1.108';
 }
@@ -851,8 +849,8 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
                     const json = JSON.parse(raw);
                     finish(resolve, { statusCode: res.statusCode, headers: res.headers, body: json, raw });
                 } catch (err) {
-                    // Preserve a plain-text 401 for the route-aware account
-                    // classifier; do not infer account failure from parse errors.
+                    // 401 的纯文本响应要原样保留，交给按路由判定账号的逻辑；
+                    // 不要从解析错误推断账号失效。
                     if (res.statusCode === 401) {
                         finish(resolve, { statusCode: res.statusCode, headers: res.headers, body: raw, raw });
                         return;
@@ -919,9 +917,9 @@ function withRequestDeadline(requestFactory, timeoutMs) {
             error.code = 'REQUEST_DEADLINE_EXCEEDED';
             finish(reject, error);
         }, timeoutMs);
-        // Keep this timer referenced.  A custom/injected transport may own no
-        // socket or other event-loop handle; the logical request still has to
-        // stay alive long enough to fail closed at its declared deadline.
+        // 这个定时器要保持引用。自定义或注入的传输层可能不持有 socket
+        // 或其他事件循环句柄；但这次逻辑请求仍须活到声明的截止时间，
+        // 到点按失败即拒绝处理。
         Promise.resolve().then(requestFactory).then(
             value => finish(resolve, value),
             error => finish(reject, error)
@@ -972,9 +970,9 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
         );
     }
     try {
-        // Test-only transport seam. It deliberately lives below requestLlmJson's
-        // canonical URL check and account selection/header replacement, so tests
-        // can avoid the network without bypassing either security boundary.
+        // 仅测试用的传输层接口。它刻意放在 requestLlmJson 的 URL 规范化检查
+        // 和账号选择与请求头替换之后，这样测试既能避开网络，
+        // 又不会绕过这两道安全检查。
         const transportRequestFn = typeof options.transportRequestFn === 'function'
             ? options.transportRequestFn : requestJson;
         const started = Date.now();
@@ -991,14 +989,14 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
             failure = error;
             throw error;
         } finally {
-            // Never retain headers, credentials, prompts, response text or URLs
-            // in the cost ledger. Diagnostic failures must not replay an API call.
+            // 用量记录里绝不保留请求头、凭据、提示词、响应正文或 URL。
+            // 诊断性失败不得重新发起 API 调用。
             try {
                 const protocol = detectApiType(endpoint, model);
                 const { recordLlmUsage, buildLlmUsageEvent } = require('./lib/llm-usage.js');
                 let outputText = null;
                 try { outputText = response?.body ? parseResponseText(protocol, response.body) : null; }
-                catch (_) { /* Malformed content must not lose request usage. */ }
+                catch (_) { /* 内容格式错误时，这次请求的用量不能丢。 */ }
                 const input = { protocol, model, request: bodyObj, response: response?.body,
                     statusCode: response?.statusCode, durationMs: Date.now() - started,
                     errorCode: failure?.code || (failure ? 'NETWORK_ERROR' : null),
@@ -1129,9 +1127,9 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
     );
 }
 
-// The raw registry is the sole tag authority.  These compatibility exports
-// remain Sets for existing consumers, but are derived from active preferred
-// Chinese labels rather than copied from a prompt table.
+// 标签的唯一权威来源是原始词表。这几个兼容导出的仍是 Set，
+// 供现有调用方使用，但内容取自当前生效的首选中文标签，
+// 而不是从某个提示词表里照抄。
 const TAG_RULES = require('./lib/tag-rules.js').getDefaultTagRules();
 const ALLOWED_TAGS = TAG_RULES.allowedTags;
 const PRIMARY_TASK_TAGS = TAG_RULES.taskTags;
@@ -1406,10 +1404,9 @@ function parseAnalysis(analysis, options = {}) {
             result.tags = tags.map(tag => {
                 const normalized = _normalizeTag(tag);
                 let concept = _resolveAllowedTag(tag);
-                // A legacy alias may be globally ambiguous (for example
-                // #端到端), but an exact echo of an explicit role line can be
-                // resolved inside that role.  Supplemental tags remain
-                // facet-free and therefore fail closed on ambiguity.
+                // 旧别名在全局层面可能有歧义（例如 #端到端），
+                // 但如果在某个角色行里被原样照抄，就可以在该角色范围内确定。
+                // 补充标签不带分面，因此一旦有歧义就按失败处理。
                 if (!concept && normalized === normalizedTask) {
                     concept = _resolveAllowedTag(tag, 'task');
                 }
@@ -1450,8 +1447,8 @@ function parseAnalysis(analysis, options = {}) {
         return Boolean(_resolveAllowedTag(tag, 'method'));
     }
 
-    // Role lines are authoritative.  Machine-summary echoes are checked by
-    // the contract but never used to invent a missing task/method role.
+    // 角色行是权威来源。机器摘要里的重复出现会按约定校验，
+    // 但绝不用它去补一个缺失的主任务或主方法角色。
     result.primaryTaskTag = _isTaskTag(extractedTaskTag)
         ? getPreferredTagText(extractedTaskTag, 'task') : '';
     result.primaryMethodTag = _isMethodTag(extractedMethodTag)
@@ -1783,11 +1780,10 @@ function loadPublishedIdsFromBlog(blogRepo, options = {}) {
 
         const gitMarker = path.join(blogRepo, '.git');
         if (fs.existsSync(gitMarker)) {
-            // Generation installs pages into the blog worktree before review and
-            // push.  Those bytes are not published yet and must not change the
-            // fetch/filter fingerprint on a same-day retry.  Read the immutable
-            // HEAD tree instead of the mutable worktree; this also ignores staged
-            // but uncommitted pages and local edits to historical posts.
+            // 生成阶段会先把页面写进博客工作树，之后才审查和推送。
+            // 这些字节还没发布，同一天重跑时不能让抓取或筛选指纹发生变化。
+            // 因此读不可变的 HEAD 树，而不是可写的工作树；
+            // 这样也会忽略已暂存但未提交的页面，以及对历史文章的本地改动。
             let committedMatches = '';
             try {
                 committedMatches = execFileSync('git', [
@@ -1804,7 +1800,7 @@ function loadPublishedIdsFromBlog(blogRepo, options = {}) {
                     }
                 });
             } catch (error) {
-                // git grep uses status 1 for a valid tree with no matches.
+                // git grep 在没有匹配项的合法树上返回状态码 1。
                 if (error?.status !== 1) throw error;
                 committedMatches = String(error.stdout || '');
             }

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-/** Official records v4 -> complete Manual spec v6 assembler. */
+/** 把官方记录 v4 汇编成完整 Manual 规范 v6 的汇编器。 */
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');

@@ -25,7 +25,7 @@ function readPrivateJson(filename) {
 }
 
 function classifyFailure(error, now) {
-    // Do not persist credentials, URLs, or provider response bodies in the scheduler.
+    // 调度器里不保存凭据、URL 或服务端响应正文。
     const message = String(error?.message || error || 'analysis failed')
         .replace(/https?:\/\/\S+/gi, '[URL]')
         .replace(/\b(api[_-]?key|authorization|token)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]')
@@ -35,13 +35,12 @@ function classifyFailure(error, now) {
     if (/insufficient.balance|GoUsageLimitError|quota.*exhaust|billing|ACCOUNT_POOL.*EXHAUST/i.test(`${code} ${message}`)) category = 'quota';
     else if (/HTTP\s*(401|403)\b|authentication|invalid.api.key|unauthorized/i.test(message)) category = 'authentication';
     else if (/HTTP\s*429\b|rate.limit/i.test(message)) category = 'rate_limit';
-    // Demo/resource verification is optional evidence for one paper. A dead
-    // demo host must leave that paper retryable, but must not stop the whole
-    // conference batch as if the analyzer transport were unavailable.
+    // Demo/资源核验只是单篇论文的可选证据。某个 demo 主机不可达时，
+    // 这篇论文要能重试，但不能让整个会议批次停下来，
+    // 好像分析器传输层不可用一样。
     else if (code === 'DEMO_TRANSIENT_FAILURE') category = 'paper';
-    // An unresolved tag assignment is a deterministic per-paper review
-    // condition: it neither stops the batch nor retries by itself (the labels
-    // must be fixed first), and it is reported through the review queue.
+    // 未解决的标签分配是确定的逐篇复核条件：它既不会让批次停下，也不会自己重试
+    // （得先修好标签），并且通过复核队列报出。
     else if (code === 'CONFERENCE_TAG_REVIEW_REQUIRED'
         // 旧失败记录仍可读取；当前分类名称统一使用 tag_review。
         || code === 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED') category = 'tag_review';
@@ -58,7 +57,7 @@ function classifyFailure(error, now) {
 
 function eligible(item, now) {
     if (item.status === 'complete') return false;
-    if (item.status === 'analyzing') return false; // Interrupted request: outcome may have been billed.
+    if (item.status === 'analyzing') return false; // 请求被中断：结果可能已经计费。
     if (item.lastFailure?.retryable === false && item.retryAuthorizedAtAttempt !== item.attempts) return false;
     if (item.attempts - (item.retryBudgetStart || 0) >= MAX_ATTEMPTS) return false;
     return !item.retryNotBefore || Date.parse(now) >= Date.parse(item.retryNotBefore);
@@ -107,13 +106,11 @@ function resolveProcess(context, deps, api) {
         if (state.processId !== id) throw new Error('Conference process directory identity mismatch');
         if (api.stableHash(api.authorityForComparison(state.authority, state.version))
             !== api.stableHash(api.authorityForComparison(context.authority, api.PROCESS_VERSION))) {
-            // A process can fail during shared source preparation before any
-            // item is sealed or analyzed. In that narrow no-progress case,
-            // an implementation change cannot invalidate analysis (there is
-            // none to preserve), so let the new implementation derive a new
-            // process namespace while retaining the old checkpoint for audit.
-            // Once any item has progressed, normal explicit migration rules
-            // remain mandatory.
+            // 进程可能在共享来源准备阶段就失败，这时还没有任何条目完成保存与核验，
+            // 也没有分析。在这种没有进展的窄情况下，实现变更不会让分析失效
+            // （本来就没有分析要保留），所以可以让新实现派生新的进程命名空间，
+            // 同时保留旧检查点供审计。
+            // 一旦任何条目有进展，就必须走正常的显式迁移规则。
             const untouched = state.status === 'pending'
                 && Object.values(state.items || {}).every(item => item.status === 'pending'
                     && item.attempts === 0 && !item.sourceProof && !item.analysisProof && !item.pageProof);
@@ -163,12 +160,9 @@ function sourceImplementation(state, directory, api, ancestry = new Set()) {
         const { planSha256, ...plan } = savedPlan;
         if (planSha256 !== api.stableHash(plan) || planSha256 !== promotion.planSha256
             || plan.version !== state.version
-            // A promoted process may subsequently pass through an explicit
-            // implementation migration.  The signed source-upgrade plan
-            // necessarily retains the authority fingerprint from promotion,
-            // while the checkpoint records the current implementation.  The
-            // source/filter/member authority must still be identical; only
-            // this audited implementation field may advance.
+            // 已晋升的进程之后可能走一次显式的实现迁移。来源升级计划本身受签名保护，
+            // 因此必然保留晋升时的权威指纹，而检查点记录的是当前实现。
+            // 来源、筛选、成员的权威必须仍然一致，只有这个经过审计的实现字段可以前进。
             || api.stableHash(withoutImplementation(plan.authority, plan.version))
                 !== api.stableHash(withoutImplementation(state.authority, state.version))
             || plan.fromProcessId !== promotion.originalProcessId
@@ -177,8 +171,8 @@ function sourceImplementation(state, directory, api, ancestry = new Set()) {
             || api.stableHash(plan.papers.map(item => item.paperId).sort()) !== api.stableHash(Object.keys(state.items).sort())) {
             throw new Error('Source upgrade promotion plan integrity failed');
         }
-        // The parent process UUID binds its issued authority, not the newer
-        // registry in a promotion plan. Reopen the exact signed parent state.
+        // 父进程 UUID 绑定的是它发放的权威，而不是晋升计划里更新的那份登记记录。
+        // 重新打开已签名的父状态。
         const parentDirectory = api.safeProcessDirectory(path.dirname(directory), plan.fromProcessId, false);
         const parent = api.assertState(readPrivateJson(path.join(parentDirectory, 'state.json')));
         if (parent.processId !== plan.fromProcessId || parent.stateSha256 !== plan.originalStateSha256

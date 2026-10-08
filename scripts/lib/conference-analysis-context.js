@@ -45,10 +45,9 @@ function withConferenceAnalysisSource(identity, callback) {
     }
     return scope.run(Object.freeze({ executionId: identity.executionId, executionDir: path.resolve(identity.executionDir), paperId: identity.paperId,
         sourceDetails: Object.freeze(clone(identity.sourceDetails)),
-        // An explicit conference --retry-failed release starts a fresh
-        // bounded Reader identity. The old candidate remains immutable audit
-        // evidence, while the new epoch prevents an exhausted candidate from
-        // being rejected before the next model request is attempted.
+        // 显式的会议 --retry-failed 释放会开一个新的受限 Reader 身份。
+        // 旧候选作为不可变的审计证据保留，而新的 epoch 让已耗尽的候选
+        // 不至于在下次模型请求之前就被拒绝。
         ...(identity.readerRetryEpoch !== undefined
             ? { readerRetryEpoch: identity.readerRetryEpoch } : {}) }), callback);
 }
@@ -66,10 +65,9 @@ function conferenceWeakReaderCapabilityPolicy(paper, structuredArtifacts) {
     if (!details) return null;
     const artifacts = details.structuredArtifacts;
     const provided = structuredArtifacts === undefined ? artifacts : structuredArtifacts;
-    // A replayable PDF source uses the normal Reader contracts.  Keep this
-    // function as the compatibility gate for legacy weak bundles, but do not
-    // attach the weak-policy prompt to a source whose authenticated artifact
-    // carries PDF Figure pixels. PDF text is never authenticated original TeX.
+    // 可重放的 PDF 来源走常规 Reader 约定。这个函数继续作为旧版弱包的
+    // 兼容闸门，但不要给一份已核验产物里带 PDF 插图像素的来源
+    // 附加弱策略提示词。PDF 文本永远不是经过核验的原始 TeX。
     if (details.conferenceCapabilities?.fullText === 'full'
         && details.conferenceCapabilities?.tables === 'unavailable'
         && details.conferenceCapabilities?.formulas === 'unavailable'

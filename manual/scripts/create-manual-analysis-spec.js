@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * Assemble a strict manual_complete v4 analysis spec from operator-authored
- * records and the fingerprinted manual-full-text manifest. No API is called.
+ * 从操作者编写的记录和带指纹的 manual-full-text 清单
+ * 汇编出严格的 manual_complete v4 分析规范。不调用任何 API。
  */
 const fs = require('fs');
 const path = require('path');

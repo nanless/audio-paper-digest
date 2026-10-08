@@ -88,9 +88,8 @@ function finishRevisionArchives(directory, identity, payload) {
             try { fs.lstatSync(original); throw new Error('Reader diagnostic revision has duplicate unarchived evidence'); }
             catch (error) { if (error.code !== 'ENOENT') throw error; }
         } else {
-            // Install-new / rename-old is deliberately recoverable. An exact
-            // new candidate is not ready until the old complete bytes are CAS
-            // verified and the missing archival step has been completed.
+            // 先装新文件再改名旧文件，有意做成可恢复的。只有旧文件的完整字节通过 CAS
+            // 校验，并且补上缺失的归档步骤之后，新的候选才算就绪。
             const checked = verify(original);
             if (hashDraft(loadFailedCandidate(directory, checked.envelope.identity)) !== audit.oldPayloadSha256) {
                 throw new Error('Reader diagnostic revision old payload drifted before archive');
@@ -162,8 +161,8 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
         if (!envelope?.identity || name !== `${hashDraft(envelope.identity)}.json`) {
             throw new Error('Corrupt Reader diagnostic revision identity/filename');
         }
-        // The ordinary loader remains the authority for envelope, private file,
-        // JSON safety, payload hash, root shape and persisted counter validation.
+        // 常规加载器仍然是权威：外层对象、私有文件、JSON 安全性、载荷哈希、
+        // 根结构以及持久化计数器的校验都由它负责。
         const payload = loadFailedCandidate(directory, envelope.identity);
         if (!payload || hashDraft(payload) !== envelope.payloadSha256) {
             throw new Error('Reader diagnostic revision candidate changed during audit');
@@ -177,10 +176,9 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     if (!compatible.length) return null;
     const old = compatible[0];
     const updated = structuredClone(old.payload);
-    // Some older failed payloads retained a valid raw JSON response while
-    // leaving draft=null because the strict production-shape parser rejected
-    // it.  Rehydrate only the bounded recovery shape here; the caller still
-    // runs the full Reader parser and source-binding gates before acceptance.
+    // 有些旧的失败载荷保留了合法的原始 JSON 响应，却因为严格的生产形状解析器
+    // 拒绝而把 draft 留成 null。这里只补全受限的恢复形状；调用方在接受之前
+    // 仍要跑完整的 Reader 解析器和来源绑定闸门。
     if (!updated.draft && updated.rawDraft) {
         updated.draft = parseRecoveryDraft(updated.rawDraft);
     }
@@ -203,12 +201,10 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
                     ) : bridge?.explanation
             }));
         }
-        // Conference PDF candidates can contain a deterministic mix of real
-        // Markdown tables and selection markers. Repair that bounded source
-        // binding shape before the generic section-order gate; otherwise the
-        // gate rejects the candidate before deep-analyzer's conference
-        // normalizer gets a chance to prove the order. This lazy import avoids
-        // making the recovery library depend on the analyzer during startup.
+        // 会议 PDF 候选里可能确定性地混有真实 Markdown 表格和选择标记。先修复这个
+        // 受限的来源绑定形状，再交给通用的分节顺序闸门；否则闸门会在
+        // deep-analyzer 的会议归一化器有机会证明顺序之前就拒绝候选。
+        // 这里用惰性导入，避免恢复库在启动时依赖分析器。
         if (conference?.sourceDetails?.structuredArtifacts?.sourceKind === 'conference_pdf') {
             const deepAnalyzer = require('../deep-analyzer.js');
             deepAnalyzer.normalizeReaderConferenceNarrowComparisonTable(updated.draft);
@@ -253,9 +249,8 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     const lineageAlreadyIssued = updated.implementationRepairAllowanceLineage
         === IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT;
     const previousActiveAllowance = updated.implementationRepairAllowanceProof || null;
-    // One lineage receives at most one extra content attempt. An unused proof
-    // may be transferred to a newer implementation identity, but once a model
-    // request consumes it, later implementation churn cannot mint more calls.
+    // 同一条实现谱系最多只能多得到一次正文尝试。尚未使用的证明可以转到更新的
+    // 实现身份上，但一旦某个模型请求用掉它，之后实现再变也不能再生出更多调用。
     const recoveryEpochChanged = old.changedFields.includes('readerRecoveryEpochSha256');
     const grantOrTransferAllowance = diagnosticImplementationChanged
         && (!lineageAlreadyIssued || Boolean(previousActiveAllowance) || recoveryEpochChanged);
@@ -274,8 +269,8 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     if (diagnosticImplementationChanged) {
         updated.noProgress = 0; updated.failureSignature = '';
         updated.validationFailureStreak = 0; updated.validationFailureSignature = '';
-        // Preserve paid counters, but allow exactly one new local repair after
-        // today's full parser discovers a gate introduced by the new code.
+        // 保留已付费的计数器，但在今天的完整解析器发现新代码引入的闸门之后，
+        // 只允许新增一次本地修复。
     }
     updated.readerRecoveryRevisions = [...(updated.readerRecoveryRevisions || []), audit];
     delete updated.implementationRepairAllowance;
@@ -290,8 +285,8 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     }
     updated.implementationRepairAllowanceProof = grantOrTransferAllowance
         ? implementationAllowanceProof(identity, audit) : null;
-    // The normal per-paper lock surrounds the caller. Recheck anyway before
-    // installing: never overwrite an exact newer candidate or stale budgets.
+    // 调用方外面已经有常规的逐篇锁。安装前仍要重新检查：
+    // 绝不覆盖更新的精确候选，也不覆盖过期的预算。
     const racedExact = loadFailedCandidate(directory, identity);
     if (racedExact) { verifyPixels(racedExact); return finishRevisionArchives(directory, identity, racedExact); }
     if (hashDraft(loadFailedCandidate(directory, old.identity)) !== hashDraft(old.payload)) {
@@ -299,7 +294,7 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     }
     saveFailedCandidate(directory, identity, updated);
     finishRevisionArchives(directory, identity, updated);
-    // Still a failed recovery input, never an accepted article or proof.
+    // 仍然是失败的恢复输入，不是已接受的正文，也不是证明。
     return loadFailedCandidate(directory, identity);
 }
 

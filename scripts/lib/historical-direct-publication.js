@@ -1,9 +1,7 @@
 'use strict';
 
-// Fail-closed publication transaction for the direct-local historical rewrite.
-// It deliberately does not share the daily schema-v3 receipts: the historical
-// producer set, retained task pages, and visual exclusion/waiver have different
-// authority and completion semantics.
+// 直接本地历史重写用的失败即关闭发布事务。它有意不复用日更的 schema-v3 回执：
+// 历史生产者集合、保留的任务页以及视觉排除/豁免的权威和完成语义都不一样。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -605,10 +603,9 @@ function defaultHugoGate({ blogRepo, generation }) {
     try {
         const source = path.join(temporary, 'site');
         fs.cpSync(blogRepo, source, { recursive: true, filter: filename => !['.git', 'public', 'resources'].includes(path.basename(filename)) });
-        // The Hugo site enables GitInfo, while the isolated gate deliberately
-        // does not copy the real repository metadata.  Create a disposable
-        // local commit in the gate copy so Hugo validates the same config and
-        // templates without reading or mutating the production repository.
+        // Hugo 站点启用了 GitInfo，而隔离闸门有意不复制真实仓库的元数据。
+        // 在闸门副本里建一个一次性的本地提交，让 Hugo 校验同一套配置和模板，
+        // 既不读也不改生产仓库。
         const git = (args, label) => {
             const result = spawnSync('git', ['-C', source, ...args], {
                 encoding: 'utf8', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' }, maxBuffer: 4 * 1024 * 1024
@@ -649,15 +646,14 @@ function defaultSemanticReview({ loadedPlan, generation, blogRepo, protocol }) {
     const requestPath = path.join(loadedPlan.directory, 'semantic-review-request.json');
     if (!fs.existsSync(requestPath)) writeExact(requestPath, prettyBytes(request));
     else if (!readRegular(requestPath).bytes.equals(prettyBytes(request))) {
-        // Request metadata is batch-scoped.  Replacing it must not delete the
-        // content-addressed page checkpoints underneath this transaction.
+        // 请求元数据按批次划分。替换它不能删掉这次事务下面
+        // 按内容寻址的页面检查点。
         atomicReplace(requestPath, prettyBytes(request));
     }
     const outputPath = path.join(loadedPlan.directory, 'semantic-review.json');
     const checkpointDir = path.join(loadedPlan.directory, 'semantic-review-checkpoints');
-    // Always replay the worker when batch metadata changes. Its page/unit
-    // checkpoints are content-addressed, so unchanged bytes cause zero model
-    // calls while the output envelope is rebound to this request.
+    // 批次元数据变化时总是重放 worker。它的页面/单元检查点按内容寻址，
+    // 所以字节没变就不会发起任何模型调用，而输出外层对象重新绑定到这次请求。
     const result = spawnSync('bash', [path.resolve(__dirname, '../python-runtime.sh'),
         path.resolve(__dirname, '../historical-direct-review.py'), '--request', requestPath,
         '--output', outputPath, '--checkpoint-dir', checkpointDir,
@@ -930,7 +926,7 @@ function defaultPublishGit({ blogRepo, plan, publicationId, message }) {
     const delta = plan.files.filter(item => item.operation !== 'unchanged'); const paths = delta.map(item => item.path);
     const head = runGit(blogRepo, ['rev-parse', 'HEAD']).stdout.toLowerCase();
     if (head === plan.blogBaseline.head) {
-        // Keep each argv well below platform ARG_MAX for four-thousand-page runs.
+        // 每次 argv 都远低于平台的 ARG_MAX，以支持四千页规模的运行。
         for (let index = 0; index < paths.length; index += 200) {
             runGit(blogRepo, ['add', '--', ...paths.slice(index, index + 200)]);
         }

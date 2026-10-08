@@ -1,9 +1,8 @@
 'use strict';
 
-// Execution half of the historical direct-rewrite plan.  Planning deliberately
-// stops at source pointers; this module is the only path that turns one of
-// those pointers into a source-only analysis/Reader execution.  It never
-// reads a historical post, data/current, a crosswalk, or a legacy analysis.
+// 历史直接重写方案里负责执行的那一半。规划阶段有意只走到来源指针为止；
+// 把其中一个指针变成「只基于来源」的分析与 Reader 执行，只有这里这一条路径。
+// 它不读历史文章，不读 data/current，不读对照表，也不读旧分析结果。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -35,10 +34,9 @@ const TRANSITIONS = new Map([
     ['analyzing', new Set(['analysis_partial', 'analysis_complete', 'failed'])],
     ['analysis_partial', new Set(['sourcing', 'analyzing', 'failed'])],
     ['analysis_complete', new Set(['staged', 'analyzing', 'failed'])],
-    // A staged packet is immutable, but it is not safe to accept as
-    // recovered after its retained source has drifted.  Preserve the packet
-    // for diagnosis and make the latest execution state failed so a later
-    // retry cannot silently treat it as current.
+    // 暂存下来的执行包不可改写，但一旦它保留的来源漂移了，就不能再当作
+    // 可恢复。把执行包留着供排查，同时把最新执行状态标成 failed，
+    // 这样后续重试不会悄悄把它当成当前结果。
     ['staged', new Set(['failed'])],
     ['failed', new Set(['sourcing', 'analyzing', 'staged'])]
 ]);
@@ -56,7 +54,7 @@ function canonical(value) {
 }
 const stableHash = value => sha256(JSON.stringify(canonical(value)));
 
-// Preserve the traceback's root cause, but never persist credentials in status.
+// 保留 traceback 的根因，但凭证绝不写进状态文件。
 function safeErrorText(error, maximum = 2000) {
     let text = String(error?.message || error || 'unknown error')
         .replace(/sk-[A-Za-z0-9_-]+/g, '[REDACTED]')
@@ -79,8 +77,8 @@ function globalAccountFailure(...errors) {
         if (code === 'LLM_ACCOUNT_AUTH_ERROR' || scope === 'run' && Number(status) === 401) {
             return 'account-authentication-failed';
         }
-        // Only typed transport/engine errors are authoritative. Paper text and
-        // generic nonretryable validation failures must never stop a run.
+        // 只有带类型的传输层和引擎错误才算数。论文正文问题，以及一般的
+        // 不可重试校验失败，都不该中断整轮运行。
         if (scope === 'run') return 'account-service-unavailable';
         for (const key of ['errorDetails', 'error', 'cause', 'record']) {
             const found = inspect(value[key]); if (found) return found;
@@ -457,9 +455,9 @@ function selectDirectItems(plan, options = {}, registry = null) {
     const completed = new Set(stagedEntries.filter(entry => currentRendererImplementationSha256 === undefined
         || entry.staging?.pageStaging?.rendererImplementationSha256 === currentRendererImplementationSha256)
         .map(entry => entry.paperId));
-    // A bounded implicit batch must advance on resume instead of repeatedly
-    // selecting the same already-staged prefix. Explicit IDs remain replayable
-    // so an operator can deliberately re-verify their sealed artifacts.
+    // 有数量上限的隐式批次在续跑时必须往前走，不能每次都挑同一批已经暂存的
+    // 前缀。显式指定的 paper ID 仍然可以重跑，方便操作者主动复核
+    // 已经核验并保存的产物。
     const candidates = maxPapers !== null && requested.size === 0
         ? scoped.filter(item => !completed.has(item.paperId)) : scoped;
     const items = maxPapers === null ? candidates : candidates.slice(0, maxPapers);
@@ -511,9 +509,8 @@ function transition(registry, plan, paperId, status, changes, now) {
         fail(`${paperId} cannot transition ${before.status} -> ${status}`);
     }
     const updates = clone(changes || {}); const next = { ...before, ...updates, status, updatedAt: now };
-    // An explicit undefined is a controlled field deletion. This is used when
-    // a durable partial-recovery receipt has been consumed by a new attempt so
-    // the terminal staged registry returns to its canonical schema.
+    // 显式传 undefined 表示有意删除字段。新一次尝试消费掉可持久化的
+    // 部分恢复记录之后，用它把已进入终态的暂存 registry 还原成规范字段集。
     for (const [key, value] of Object.entries(updates)) if (value === undefined) delete next[key];
     const entries = current.entries.slice(); entries[index] = next;
     const body = { contract: REGISTRY_CONTRACT, version: 1, planSha256: current.planSha256, createdAt: current.createdAt, entries };
@@ -726,8 +723,8 @@ function fallbackArxivDetails(source) {
         htmlAvailability: 'not_replayed', htmlAttempts: 0, warnings: ['恢复 generation 时没有保留图像索引；本次 Reader 不接收 Figure 像素。'] };
 }
 function directPaper(item, sourceDetails = {}) {
-    // Do not carry catalog source pointers, page titles, historical prose, old
-    // analysis, metadata, or prior Reader fields across this boundary.
+    // 跨过这道边界时，不要带上目录里的来源指针、页面标题、历史正文、旧分析、
+    // 元数据，也不要带上一版 Reader 的字段。
     const title = typeof sourceDetails.title === 'string' ? sourceDetails.title.replace(/\s+/g, ' ').trim() : '';
     if (item.route.kind === 'arxiv-fresh-fetch') {
         const authors = sourceDetails.publicationAuthors;
@@ -820,18 +817,17 @@ function validConferencePdfAuthorName(value) {
 function normalizeConferencePdfAffiliation(value) {
     return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
         .replace(/\s*(?:[|｜]|DOI\s*:).+$/i, '')
-        // PyMuPDF can place a DOI immediately after the last affiliation
-        // token when the PDF line has no whitespace at the column boundary.
+        // PDF 那一行在分栏处没有空白时，PyMuPDF 会把 DOI 直接接在
+        // 机构名最后一个 token 后面。
         .replace(/\s*10\.\d{4,9}\/[\-._;()/:A-Z0-9]+$/i, '')
         .replace(/[.;,]+$/, '').trim();
 }
 
 /**
- * Recover only the author block visibly present in a retained conference PDF.
- * This is deliberately narrower than a general name NER pass: an author line
- * must carry the same superscript marker scheme used by the adjacent
- * affiliation lines. The returned evidence is sealed with the full source
- * text SHA and the exact preamble SHA before it is handed to Reader.
+ * 只从保留下来的会议 PDF 里恢复肉眼可见的那块作者信息。
+ * 它有意比通用的姓名 NER 收得更窄：作者行必须带上与相邻机构行
+ * 相同的那套上标标记。返回的证据在交给 Reader 之前，会连同完整
+ * 来源文本 SHA 和 preamble 的精确 SHA 一起绑定。
  */
 function parseConferencePdfAuthors(text) {
     const sourceText = String(text || '');
@@ -927,9 +923,8 @@ async function extractConferenceSource(item, dependencies = {}) {
         extractedText = String(layout?.text || '');
         pdfVisualAudit = layout?.visualAudit || null;
     } else if (typeof dependencies.extractPdfText === 'function') {
-        // Test-only injection remains text-compatible, but production never
-        // takes this branch.  Real conference PDFs must use the shared
-        // PyMuPDF layout/audit path below.
+        // 仅供测试注入的那条路径保持文本兼容，但生产环境永远不走这个分支。
+        // 真实的会议 PDF 必须走下面共用的 PyMuPDF 版面与审计路径。
         extractedText = String(await dependencies.extractPdfText(pdf.bytes) || '');
     } else {
         const layout = await pdfLayout.extractPdfLayoutFromPath(source.pdf.absolutePath);
@@ -939,10 +934,9 @@ async function extractConferenceSource(item, dependencies = {}) {
     const normalizedText = extractedText.replace(/\r\n?/g, '\n').trim();
     if (normalizedText.length < 100) fail(`${item.paperId} local PDF text is unusably short`);
     const readerAuthors = parseConferencePdfAuthors(normalizedText);
-    // Put the identity warning in the actual text consumed by every primary,
-    // repair, scoring, and Reader request. Merely retaining it as manifest
-    // metadata would not prevent a model from mistaking these bytes for the
-    // differently titled conference camera-ready paper.
+    // 把身份警告放进每一次主分析、修复、评分和 Reader 请求实际消费的正文里。
+    // 只把它留在 manifest 元数据里，挡不住模型把这些字节误认成标题不同的
+    // 会议 camera-ready 论文。
     const text = priorPreprint ? `${priorPreprint.analysisInputNotice}\n\n${normalizedText}` : normalizedText;
     const artifactsBody = { version: 1, source: 'direct_conference_pdf_text', tables: [], formulas: [], figures: [],
         flattenedTextSha256: sha256(Buffer.from(text, 'utf8')) };
@@ -987,10 +981,9 @@ async function ephemeralArxivMaterializer(arxivId, figures, dependencies = {}) {
     return materialized;
 }
 
-// The legacy image downloader reads and writes data/current/image-cache. Direct
-// runs instead use this callback for dual-model image input. It returns only
-// in-memory base64 and is backed by the same OS-temporary lifecycle as Reader
-// figures, so no primary-analysis request can touch the legacy cache.
+// 旧的图片下载器会读写 data/current/image-cache。直接重写改走这个回调
+// 给双模型提供图片输入：它只返回内存里的 base64，生命周期和 Reader 配图
+// 一样落在操作系统临时目录，所以主分析请求碰不到那个旧缓存。
 async function ephemeralArxivPrimaryImageDownloader(arxivId, imageUrl, dependencies = {}) {
     return freshArxiv.withEphemeralArxivFigures({ arxivId, figures: [{ ordinal: 1, url: imageUrl }],
         sourceRoot: dependencies.freshArxivSourceRoot, temporaryRoot: dependencies.temporaryRoot,
@@ -1001,10 +994,9 @@ async function ephemeralArxivPrimaryImageDownloader(arxivId, imageUrl, dependenc
     }, { fetchFigure: dependencies.fetchFigure });
 }
 
-// PDFs can be rendered by a caller-provided extractor.  The default returns no
-// layout figures because a PDF text extraction alone does not make an image
-// URL safe to publish.  If an extractor is supplied, it receives an OS-temp
-// directory and its bytes must be consumed before this function returns.
+// PDF 可以由调用方提供的提取器来渲染。默认不返回版面图，因为只做 PDF
+// 文本提取，并不足以让图片 URL 达到可发布的标准。传了提取器时，它拿到的是
+// 一个操作系统临时目录，其中的字节必须在本次函数返回前用完。
 async function withEphemeralConferenceFigures(source, callback, dependencies = {}) {
     const root = path.resolve(dependencies.temporaryRoot || os.tmpdir());
     const persistentRoots = (dependencies.persistentRoots || []).filter(Boolean).map(value => path.resolve(value));
@@ -1032,17 +1024,15 @@ function selectConferenceVisualPages(visualAudit, pageLimit = CONFERENCE_VISUAL_
             const page = Number(item?.page);
             if (!Number.isSafeInteger(page) || page < 1 || page > pageCount) continue;
             const entry = evidenceByPage.get(page) || { page, score: 0, figures: 0, tables: 0, formulas: 0 };
-            // Count presence strongly, but cap repeated detections on one page.
-            // A page with twenty equation text lines is not twenty times more
-            // useful than a page containing one real Figure caption.
+            // 命中就大量计分，但同一页上的重复命中要封顶。一页有二十行公式文本，
+            // 并不会比一页带一条真正 Figure 图注的内容有用二十倍。
             entry.score += entry[kind] === 0 ? weight : Math.max(1, Math.floor(weight / 10));
             entry[kind] += 1;
             evidenceByPage.set(page, entry);
         }
     };
-    // Captioned Figures are the strongest visual evidence. Tables come next;
-    // formula-only pages are useful for glyph/layout checking but should not
-    // crowd out the paper's actual result/method figures.
+    // 带图注的 Figure 是最强的视觉证据，其次是表格。只有公式的页面适合查
+    // 字形和版面，但不该挤掉论文真正的结果图和方法图。
     add(visualAudit.figureCandidates, 100, 'figures');
     add(visualAudit.tableCandidates, 60, 'tables');
     add(visualAudit.formulaCandidates, 20, 'formulas');
@@ -1092,10 +1082,9 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
         : { ...sourceDetails, publicationAuthors: dependencies.publicationMetadataAuthors };
     const freshPaper = directPaper(item, sourcePaper);
     const recovered = readAnalysisRecovery({ executionDirectory, item, sourceDescriptor, allowMissing: true });
-    // Recovery is accepted only after its envelope has replayed the same
-    // paper/run/source snapshot. The current direct identity wins over all
-    // retained fields, while analysis/Reader checkpoints remain available to
-    // deep-analyzer for fingerprint-based stage reuse.
+    // 只有外层记录重新核对出同一份 paper/run/来源快照，才接受这次恢复。
+    // 当前的直接重写身份覆盖所有保留字段；analysis/Reader 检查点仍然留给
+    // deep-analyzer 按指纹复用阶段。
     const paper = recovered ? { ...recovered.record, ...freshPaper } : freshPaper;
     const refresh = dependencies.refreshApiReaderAuthorsFromSource
         || require('../deep-analyzer.js').refreshApiReaderAuthorsFromSource;
@@ -1104,10 +1093,9 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
     let result = paper;
     const persistRecovery = record => writeAnalysisRecovery({ executionDirectory, item, sourceDescriptor,
         record, updatedAt: (dependencies.now || (() => new Date().toISOString()))() });
-    // The global analysis engine tolerates long-lived interactive contention,
-    // but a bounded historical worker must not occupy one of its queue slots
-    // for four hours when an old canonical paper lock cannot be reclaimed.
-    // Fail closed and let the durable registry/recovery state drive a retry.
+    // 全局分析引擎能容忍长时间的交互式争抢，但历史任务有明确时限，不该
+    // 因为一把旧的规范论文锁收不回来，就占着队列槽位四个小时。这里直接
+    // 失败退出，交给可持久化的 registry 和恢复状态去驱动重试。
     const paperLockTimeoutMs = dependencies.paperLockTimeoutMs ?? 5 * 60 * 1000;
     if (!Number.isInteger(paperLockTimeoutMs) || paperLockTimeoutMs <= 0) {
         fail('paperLockTimeoutMs must be a positive integer');
@@ -1139,9 +1127,9 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
     };
     const active = directContext.getDirectRewriteAnalysisContext();
     if (active) {
-        // runDirectRewrite owns the outer scope so conference PDF page pixels
-        // remain available all the way through Reader generation. Re-entering
-        // AsyncLocalStorage here used to shadow them with an empty context.
+        // runDirectRewrite 持有外层作用域，好让会议 PDF 的页面像素一路
+        // 用到 Reader 生成结束。以前在这里重新进入 AsyncLocalStorage，
+        // 会用空上下文把它们盖掉。
         if (active.paperId !== item.paperId || active.readerAttemptsDir !== readerAttemptsDir
             || active.sourceSnapshotSha256 !== sourceDescriptor.sourceSnapshotSha256) {
             fail('default analysis was called under another direct source scope');
@@ -1169,8 +1157,8 @@ async function bounded(items, concurrency, callback, shouldPause = () => false) 
         try {
             while (cursor < items.length && !failed && !paused) {
                 if (await shouldPause()) { paused = true; break; }
-                // Re-check after the asynchronous pause check: another worker
-                // may have claimed the final item or encountered a fatal error.
+                // 异步暂停检查之后再复查一次：别的 worker 可能已经领走最后一项，
+                // 或者已经撞上致命错误。
                 if (cursor >= items.length || failed || paused) break;
                 const item = items[cursor++];
                 values.push(await callback(item));
@@ -1569,7 +1557,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
         : initialRegistry(plan, clock());
     if (filename !== registryFile) fail('registry path changed after the direct-run operation lock was acquired');
     const { items: selected, selection } = selectDirectItems(plan, options, registry);
-    // Selection and prerequisites share the same locked registry snapshot.
+    // 选片和前置条件检查用的是同一份加锁后的 registry 快照。
     const sourcePrerequisite = sourcePrerequisiteSnapshot({ sourceRoot: options.freshArxivSourceRoot,
         plan, generation: arxivGeneration, selected, required: true });
     const assertMetadataReady = dependencies.assertPublicationMetadataReady || (item => {
@@ -1596,11 +1584,10 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
         const code = globalAccountFailure(...errors);
         if (code) requestPause({ code, detail: code });
     };
-    // Production direct-run is replay-only. The scheduler owns every network
-    // acquisition and failure handoff; this phase may only read the exact
-    // generation it marked ready. The legacy dependency name remains as a
-    // fixture injection point for tests, but the production default cannot
-    // fetch or repair a missing bundle.
+    // 生产上的直接重写只做重放。所有网络抓取和失败交接都归调度器；
+    // 这个阶段只能读调度器标记为 ready 的那个 generation。旧的依赖名
+    // 保留下来，作为测试注入 fixture 的入口；生产默认实现不能再抓取
+    // 或修补缺失的 bundle。
     const readFreshArxivSource = dependencies.captureFreshArxivRewriteSource
         || freshArxiv.readFreshArxivRewriteSource;
     const analyze = dependencies.analyze || defaultAnalyze;
@@ -1727,10 +1714,9 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
         if (active.status === 'staged') {
             try {
                 if (item.route.kind === 'arxiv-fresh-fetch') {
-                    // A staged record is recoverable only from the same sealed
-                    // generation.  The per-generation registry name prevents a
-                    // new generation from selecting it; this replay check also
-                    // catches a deleted or substituted source bundle.
+                    // 暂存记录只有在同一个已核验 generation 下才可恢复。registry 文件名
+                    // 按 generation 区分，新 generation 本来就选不到它；这次重放检查
+                    // 还能发现来源 bundle 被删掉或被换掉。
                     const stored = freshArxiv.readFreshArxivRewriteSource({ rootDir: options.freshArxivSourceRoot,
                         arxivId: item.route.arxivId, generation: arxivGeneration });
                     if (active.source?.generation !== arxivGeneration
@@ -1741,9 +1727,8 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                     }
                 }
                 else {
-                    // Replay both planned local bytes before treating the
-                    // staged analysis as recoverable.  This rehashes metadata
-                    // and every local PDF against the immutable plan values.
+                    // 要把暂存的分析当成可恢复，先重放规划里的两份本地字节：拿元数据
+                    // 和每个本地 PDF，跟不可改的计划值重新算哈希比对。
                     planApi.verifyConferenceWriterInputs(item);
                 }
                 replayDirectPageStaging({ item, active, stagingRoot: options.stagingRoot, executionRoot: options.executionRoot,
@@ -1791,10 +1776,9 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             executionDir = executionDirectory(options.executionRoot, item, descriptor); safeDirectory(executionDir, true, 'paper execution directory');
             const executionDependencies = { ...dependencies, freshArxivSourceRoot: options.freshArxivSourceRoot,
                 ...(publicationMetadataAuthors ? { publicationMetadataAuthors } : {}),
-                // An incomplete historical analysis is an outer retry boundary.
-                // Keep the old Reader candidate, but bind this retry to a new
-                // identity so an exhausted candidate cannot short-circuit the
-                // next bounded model attempt.
+                // 历史分析没做完就构成外层重试边界。旧 Reader 候选保留着，但这次
+                // 重试要绑到一个新身份上，免得已经耗尽的候选把下一次有界的模型
+                // 尝试短路掉。
                 ...(active.status === 'analysis_partial'
                     ? { historicalDirectRetryEpoch: active.attempts + 1 } : {}),
                 persistentRoots: [options.registryRoot, options.executionRoot, options.stagingRoot] };
@@ -1804,11 +1788,10 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 : [];
             const downloadPrimaryImage = item.route.kind === 'arxiv-fresh-fetch'
                 ? (url => ephemeralArxivPrimaryImageDownloader(item.route.arxivId, url, executionDependencies)) : undefined;
-            // Keep the source scope around injected test workers as well as the
-            // production engine. That makes request-capture tests exercise the
-            // same no-old-input boundary as a real model call. Conference PDF
-            // page bytes are injected here and stay visible through all nested
-            // analysis/Reader calls until the OS-temporary renderer cleans up.
+            // 无论是注入的测试 worker 还是生产引擎，都要把来源作用域包在外面。
+            // 这样抓请求的测试才会跟真实模型调用走同一道「不带旧输入」的边界。
+            // 会议 PDF 的页面字节在这里注入，之后一路嵌套的分析和 Reader 调用
+            // 都能看到，直到操作系统临时目录里的渲染结果被清理。
             const invokeAnalysis = supplementaryReaderImages => directContext.withDirectRewriteAnalysisSource({ paperId: item.paperId,
                 runId: item.runId, route: item.route.kind, sourceDetails: clone(sourceDetails),
                 sourceSha256: descriptor.textSha256, structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
@@ -1830,10 +1813,9 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                     invokeAnalysis, executionDependencies)
                 : await invokeAnalysis([]);
             pauseForAccountFailure(analysis);
-            // The final contract is checked before the durable analysis file
-            // as well as inside stageDirectExecution. Failed/partial engine
-            // results remain in the registry error only; no execution record
-            // or staging input is allowed to outlive this attempt.
+            // 最终契约在写可持久化分析文件之前检查一次，stageDirectExecution
+            // 内部也检查一次。引擎返回 failed/partial 时只留在 registry 的错误
+            // 字段里；执行记录和暂存输入都不许活过这次尝试。
             assertDirectAnalysisReadyForStaging({ item, sourceDescriptor: descriptor, analysis });
             const analysisFile = path.join(executionDir, 'analysis.json');
             const analysisFileSha256 = writeAtomic(analysisFile, analysis);
@@ -1900,10 +1882,9 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             registryCounts: counts, pauseRequested: await pauseRequested(), pauseReason,
             updatedAt: clock() };
         if (dependencies.onProgress) await dependencies.onProgress(event);
-        // A progress consumer may create the persistent pause marker.  Refresh
-        // the same event object after the callback so in-process monitors and
-        // tests observe the committed control state, while the CLI emission
-        // still truthfully describes the state at emission time.
+        // 进度消费方可能会创建那个持久化的暂停标记。回调之后再刷新同一个
+        // event 对象，进程内监控和测试才能看到已提交的控制状态；CLI 发出的
+        // 那条信息仍然如实描述发出当时的状态。
         event.pauseRequested = await pauseRequested();
         return result;
     }, pauseRequested);

@@ -8,7 +8,7 @@ const TAG_CATALOG_VERSION = 'paper-tag-catalog-v2';
 const LEGACY_TAG_CATALOG_VERSION = 'paper-taxonomy-v1';
 const CONCEPT_KEYS = ['id', 'facet', 'preferredLabel', 'aliases', 'broaderId', 'definition', 'scopeNote', 'status', 'replacedBy'];
 
-// Keep this deliberately identical to Python: NFKC, strip, one #, ASCII-only lower.
+// 有意与 Python 保持一致：NFKC、strip、一个 #、仅 ASCII 小写。
 function normalizeLabel(value) {
     if (typeof value !== 'string') return '';
     let result = value.normalize('NFKC').trim();
@@ -140,7 +140,7 @@ function loadTagCatalog(filePath) {
 
 function resolveLabel(tagCatalog, label, facet) {
     const matches = resolveLabelCandidates(tagCatalog, label, facet);
-    // Deprecated concepts remain explicit objects; no silent forward migration.
+    // 已废弃的概念仍然是显式对象；不做悄无声息的前向迁移。
     return matches.length === 1 ? matches[0] : null;
 }
 

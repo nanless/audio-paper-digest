@@ -1,11 +1,10 @@
 #!/usr/bin/env node
 /**
- * OpenCode Go account pool shared-state implementation.
+ * OpenCode Go 账号池的共享状态实现。
  *
- * The pool is deliberately sticky: one account remains active until the
- * provider explicitly reports GoUsageLimitError or an exact balance 401. It never
- * round-robins successful traffic and never treats generic 429/5xx/network
- * failures as account exhaustion.
+ * 账号池有意保持粘性：一旦选中某个账号就一直用它，直到服务端明确返回
+ * GoUsageLimitError 或余额不足的 401。它不会在成功请求之间轮流切换账号，
+ * 也不会把普通的 429/5xx/网络故障当成账号耗尽。
  */
 
 const crypto = require('crypto');
@@ -101,9 +100,8 @@ function resolveApiKeyPool(primaryKey, fallbackValue) {
     return rawKeys;
 }
 
-// Keep the ordinary comma-separated fallback setting intact. The optional
-// trailing credential is deliberately appended after it, never load-balanced
-// or promoted ahead of an existing fallback account.
+// 保留原有的逗号分隔备用账号设置。可选的那个尾随凭据有意追加在它后面，
+// 既不参与负载均衡，也不会被提到已有备用账号前面。
 function resolvePrimaryApiKeyPool(primaryKey, fallbackValue, tertiaryFallbackValue = '') {
     return resolveApiKeyPool(primaryKey, [
         ...parseFallbackApiKeys(fallbackValue),
@@ -113,9 +111,8 @@ function resolvePrimaryApiKeyPool(primaryKey, fallbackValue, tertiaryFallbackVal
 
 function normalizeOpenCodeGoService(endpoint) {
     const rawEndpoint = String(endpoint || '');
-    // WHATWG URL parsing removes literal and percent-encoded dot segments.
-    // Inspect the caller-supplied path first so an ambiguous route cannot be
-    // normalized into the trusted /zen/go prefix before validation.
+    // WHATWG URL 解析会去掉字面写法和百分号编码的点段。先检查调用方传来的路径，
+    // 这样含歧义的路由就不会在校验之前被规范化成受信任的 /zen/go 前缀。
     if (rawEndpoint.includes('\\')) return null;
     const rawUrlMatch = rawEndpoint.match(
         /^[A-Za-z][A-Za-z0-9+.-]*:\/\/[^/?#]*(\/[^?#]*)?(?:[?#]|$)/
@@ -130,9 +127,8 @@ function normalizeOpenCodeGoService(endpoint) {
     }
     const hasDotSegment = value => value.split(/[\\/]/).some(segment => segment === '.' || segment === '..');
     if (hasDotSegment(rawPathname) || hasDotSegment(decodedPathname)) return null;
-    // Encoded separators make the route depend on which proxy/server decoding
-    // layer interprets it. Reject them even when they do not currently expose a
-    // dot segment.
+    // 编码后的分隔符会让路由取决于由哪一层代理或服务端解码。
+    // 即使它们当前没有暴露点段，也要拒绝。
     if (/%(?:2f|5c)/i.test(rawPathname)) return null;
     let parsed;
     try {
@@ -304,8 +300,8 @@ function acquireStateLock(stateFile, options = {}) {
                 try {
                     fs.mkdirSync(reclaimPath);
                     ownsReclaim = true;
-                    // Re-check while the reclaim gate prevents a new holder from
-                    // entering between stale observation and removal.
+                    // 在回收闸门生效期间重新检查，避免新的持有者在
+                    // 过期观察与移除之间插入。
                     if (lockIsReclaimable(lockPath, staleMs)) {
                         fs.rmSync(lockPath, { recursive: true, force: true });
                     }
@@ -341,7 +337,7 @@ function writeDurableJson(filePath, value) {
             const dirFd = fs.openSync(dir, 'r');
             try { fs.fsyncSync(dirFd); } finally { fs.closeSync(dirFd); }
         } catch (_) {
-            // Some filesystems do not support directory fsync.
+            // 有些文件系统不支持对目录 fsync。
         }
     } finally {
         if (fd !== undefined) fs.closeSync(fd);
@@ -462,8 +458,8 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
         const service = ensureService(state, identity);
         let group = service.groups[identity.groupId];
         const isNewGroup = !group;
-        // Appending credentials must not reset sticky selection. Legacy v1
-        // groups have no ordered membership, so match exact prefix identities.
+        // 追加凭据不能重置粘性选择。旧版 v1 分组没有有序成员关系，
+        // 所以按精确前缀身份匹配。
         if (!group) {
             for (let length = keys.length - 1; length > 0; length -= 1) {
                 const previous = service.groups[getPoolIdentity(keys.slice(0, length), endpoint).groupId];
@@ -483,8 +479,8 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
             }
             return isNewGroup ? state : undefined;
         }
-        // Old implementations cleared active on quota failure. Recover their
-        // forward cursor from the furthest confirmed failed account.
+        // 旧实现会在配额失败时清空 active。这里从最远的已确认失败账号
+        // 恢复那个只向前推进的游标。
         const floor = activeId ? identity.accountIds.indexOf(activeId) : Math.max(0,
             ...identity.accountIds.map((id, index) => service.accounts[id]?.lastFailureAt ? index : 0));
         const eligibleIds = identity.accountIds.slice(Math.max(0, floor));
@@ -523,7 +519,7 @@ function markQuotaExhausted(selection, quota, stateFile, options = {}) {
             lastFailureAt: new Date(nowMs).toISOString(),
             lastFailureStatus: quota?.type === 'InsufficientBalanceError' ? 401 : 429
         };
-        // Retain active as a forward-only cursor even while it is blocked.
+        // active 只向前推进；即使它被阻塞也保留。
         return state;
     });
     return blockedUntilMs;
@@ -540,9 +536,8 @@ function headerValues(headers, name) {
     for (const [key, value] of Object.entries(headers)) {
         if (key.toLowerCase() === target) append(value);
     }
-    // Support WHATWG/fetch-style Headers in injected transports as well as
-    // Node's plain IncomingHttpHeaders object. Duplicate values in both views
-    // are harmless because the caller only takes their maximum.
+    // 注入的传输层既可能给出 WHATWG/fetch 风格的 Headers，也可能给出 Node 的
+    // 普通 IncomingHttpHeaders 对象。两边出现重复值没有影响，调用方只取最大值。
     if (typeof headers.get === 'function') append(headers.get(name));
     return values;
 }
@@ -557,8 +552,8 @@ function parsePositiveFiniteDelay(value) {
 function parseRetryAfterEvidenceMs(headers, nowMs) {
     const evidence = [];
     for (const raw of headerValues(headers, 'retry-after-ms')) {
-        // retry-after-ms has no date form, so a comma can only delimit values
-        // coalesced by an HTTP implementation.
+        // retry-after-ms 没有日期形式，所以逗号只可能分隔被某个 HTTP 实现
+        // 合并到一起的多个值。
         for (const part of raw.split(',')) {
             const ms = parsePositiveFiniteDelay(part);
             if (ms !== null) evidence.push(ms);
@@ -568,8 +563,8 @@ function parseRetryAfterEvidenceMs(headers, nowMs) {
         const seconds = parsePositiveFiniteDelay(raw);
         if (seconds !== null) evidence.push(seconds * 1000);
 
-        // Multiple numeric Retry-After fields may be coalesced with commas.
-        // Do not generally split dates: IMF-fixdate itself contains a comma.
+        // 多个数字形式的 Retry-After 可能被逗号合并。
+        // 不要一概按逗号拆分日期：IMF-fixdate 本身就含逗号。
         for (const part of raw.split(',')) {
             const coalescedSeconds = parsePositiveFiniteDelay(part);
             if (coalescedSeconds !== null) evidence.push(coalescedSeconds * 1000);
@@ -600,9 +595,8 @@ function parseResetMessageEvidenceMs(message) {
 
 function sanitizeLimitName(value) {
     return String(value || '')
-        // Provider-controlled diagnostics are persisted and may be logged by
-        // callers.  Strip terminal escapes and all control characters first so
-        // a quota response cannot forge a new log line or terminal action.
+        // 由服务端控制的诊断信息会被保存，也可能被调用方写进日志。先去掉终端转义和
+        // 所有控制字符，这样配额响应就无法伪造新的日志行或终端动作。
         .replace(/\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07]*(?:\x07|\x1B\\))/g, '')
         .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
         .replace(/\s+/g, ' ')

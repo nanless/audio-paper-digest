@@ -176,27 +176,25 @@ const FILES = {
     llmAccountPoolState: path.join(DATA_DIR, 'runtime', 'llm-account-pool.json'),
     llmUsageDir: path.join(DATA_DIR, 'runtime', 'llm-usage'),
     freshRewriteRunsDir: path.join(DATA_DIR, 'runtime', 'fresh-rewrites'),
-    // The default daily API path has its own sealed four-file source runs:
-    // source.txt, source.pdf, source-runtime.json, and source-manifest.json.
-    // Keeping them outside current/ prevents archive rotation from discarding
-    // the exact sealed bundle a daily analysis used, and keeps it distinct
-    // from historical fresh-rewrite publications.
+    // 默认日更 API 路线有自己的一套已封存四文件来源：
+    // source.txt、source.pdf、source-runtime.json 和 source-manifest.json。
+    // 放在 current/ 之外，归档轮转就不会丢掉某次日更分析实际用的那份封存包，
+    // 也把它们和历史 fresh-rewrite 发布区分开。
     dailyFreshSourceRunsDir: path.join(DATA_DIR, 'runtime', 'daily-fresh-source-runs'),
-    // Every arXiv rewrite generation obtains a new official four-file bundle:
-    // source.txt, source.pdf, source-runtime.json, and source-manifest.json.
-    // Figures are active-run temporary evidence, never a durable cache.
+    // 每一代 arXiv 重写都重新取一套官方四文件：source.txt、source.pdf、
+    // source-runtime.json 和 source-manifest.json。
+    // 图片只属于当次运行的临时证据，从不做长期缓存。
     freshArxivFetchedSourcesDir: path.join(DATA_DIR, 'runtime', 'fetched-arxiv-sources'),
-    // Publication-only official Atom sidecars required for every direct-plan
-    // historical arXiv source. They bind, but never mutate, the corresponding
-    // fresh arXiv source generation; flattened-text parsing is diagnostic only.
+    // 只给发布用的官方 Atom sidecar，每个直接计划的历史 arXiv 来源都需要。
+    // 它们绑定对应的新一代 arXiv 来源，但绝不改动那份来源；
+    // 扁平文本解析只作诊断。
     historicalArxivPublicationMetadataDir: path.join(DATA_DIR, 'runtime', 'historical-arxiv-publication-metadata'),
-    // A fresh arXiv acquisition failure is recorded here with its exact
-    // frozen page/link map for a later crosswalk worker.  It is not a
-    // crosswalk state directory and cannot mutate page assignments.
+    // 新一代 arXiv 抓取失败会连同当时冻结的页面/链接对应关系记在这里，
+    // 供后续 crosswalk worker 使用。这里不是 crosswalk 状态目录，
+    // 也不能改页面归属。
     historicalArxivFreshFailureHandoffDir: path.join(DATA_DIR, 'runtime', 'historical-arxiv-fresh-failure-handoffs'),
-    // Conference PDFs and their source ledgers are private runtime inputs.
-    // They are isolated from current/ so incomplete imports cannot alter a
-    // daily production batch.
+    // 会议 PDF 和它们的来源台账是运行时的私有输入。它们与 current/ 隔离，
+    // 这样没导完的数据不会影响当天的生产批次。
     officialConferenceAcquisitionDir: path.join(DATA_DIR, 'runtime', 'official-conference-acquisitions'),
     conferenceSourceLedgerDir: path.join(DATA_DIR, 'runtime', 'conference-ledgers'),
     conferenceSourceCacheDir: path.join(DATA_DIR, 'runtime', 'conference-sources'),
@@ -217,17 +215,15 @@ const FILES = {
     conferenceQueueDir: path.join(DATA_DIR, 'runtime', 'conference-queues'),
     conferencePublicationDir: path.join(DATA_DIR, 'runtime', 'conference-publications'),
     historicalPageInventoryDir: path.join(DATA_DIR, 'runtime', 'historical-page-inventories'),
-    // Deterministic, local-only direct-input catalog for the historical rewrite.
-    // It records retained crawler/PDF pointers and hashes, never blog prose.
-    // This configured root is the only historical direct-input catalog root.
+    // 历史重写用的确定性本地直接输入目录。它记录保留的爬虫/PDF 指针和哈希，
+    // 不放博客正文。历史直接输入目录只有这一个配置根。
     historicalDirectRewriteInputCatalogDir: path.join(DATA_DIR, 'runtime', 'direct-local-inputs'),
-    // Frozen retained-local title mappings and the canonical direct-rewrite
-    // queue.  They are independent from legacy crosswalk state.
+    // 冻结的本地留存标题映射和正式直接重写队列。它们与旧 crosswalk 状态无关。
     historicalConferencePageProjectionDir: path.join(DATA_DIR, 'runtime', 'historical-conference-page-projections'),
     historicalDirectRewritePlanDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-plans'),
     historicalDirectRewriteUnprojectedReportDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-unprojected-reports'),
-    // State and artifacts for the source-only direct execution path. They are
-    // separate from legacy fresh-rewrites and never contain image assets.
+    // 仅来源直接执行路径的状态和中间产物。它们与旧的 fresh-rewrites 分开，
+    // 从不含图片资源。
     historicalDirectRewriteRegistryDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-registries'),
     historicalDirectRewriteExecutionDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-executions'),
     historicalDirectRewriteStagingDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-staging'),
@@ -238,28 +234,27 @@ const FILES = {
     historicalSourceTagAssignmentDir: path.join(DATA_DIR, 'runtime', 'historical-source-tag-classifications'),
     legacyHistoricalSourceTagAssignmentDir: path.join(DATA_DIR, 'runtime', 'historical-source-taxonomy-classifications'),
     historicalSourceIdentitySupplementDir: path.join(DATA_DIR, 'runtime', 'historical-source-identity-supplements'),
-    // Full-history publication receipts are intentionally isolated from the
-    // legacy crosswalk publication prototype and from daily schema-v3 state.
+    // 全历史发布凭证刻意与旧 crosswalk 发布原型、日更 schema-v3 状态隔离。
     historicalDirectPublicationDir: path.join(DATA_DIR, 'runtime', 'historical-direct-publications'),
     historicalDirectVisualDispositionDir: path.join(DATA_DIR, 'runtime', 'historical-direct-visual-dispositions'),
     pageSourceCrosswalkDir: path.join(DATA_DIR, 'runtime', 'page-source-crosswalks'),
     historicalArxivBatchDir: path.join(DATA_DIR, 'runtime', 'historical-arxiv-batches'),
-    // Identity-only authorities derived from retained local crawler snapshots.
-    // They cannot be consumed as paper full-text authorities or analysis sources.
+    // 从保留的本地爬虫快照推出的纯身份依据。它们不能当作论文全文依据，
+    // 也不能当分析来源。
     historicalLocalCrawlIdentityDir: path.join(DATA_DIR, 'runtime', 'historical-local-crawl-identities'),
     historicalLocalCrawlSnapshotDir: path.join(DATA_DIR, 'runtime', 'historical-local-crawl-identity-snapshots'),
     historicalLocalCrawlBatchDir: path.join(DATA_DIR, 'runtime', 'historical-local-crawl-batches'),
-    // Legacy names intentionally preserve the existing five archive authority
-    // assignments and their immutable file locations during replay.
+    // 沿用旧名字是为了在重放时保持现有五组归档依据的分配，
+    // 以及这些文件固定的位置。
     historicalArchiveCrawlIdentityDir: path.join(DATA_DIR, 'runtime', 'historical-archive-crawl-identities'),
     historicalArchiveCrawlBatchDir: path.join(DATA_DIR, 'runtime', 'historical-archive-crawl-batches'),
     historicalConferenceCrawlIdentityDir: path.join(DATA_DIR, 'runtime', 'historical-conference-crawl-identities'),
     historicalConferenceCrawlBatchDir: path.join(DATA_DIR, 'runtime', 'historical-conference-crawl-batches'),
-    // Local conference source manifests are source-only rewrite inputs.  They
-    // do not contain historical page material or crosswalk assignments.
+    // 本地会议来源清单只是仅来源重写输入。它们不含历史页面材料，
+    // 也不含 crosswalk 归属。
     historicalConferenceLocalSourcesDir: path.join(DATA_DIR, 'runtime', 'historical-conference-local-sources'),
-    // Fresh OpenReview PDFs are written where the ICML local-source collector
-    // already expects forum-ID files; receipts remain isolated in runtime/.
+    // 新的 OpenReview PDF 写到 ICML 本地来源收集器本来就期望的 forum-ID
+    // 位置；凭证仍隔离在 runtime/。
     historicalIcmlRetainedPdfRoot: path.join(DATA_DIR, 'pdfs', 'icml2026'),
     historicalIcmlFreshPdfRoot: path.join(DATA_DIR, 'runtime', 'historical-icml-pdf-sources'),
     historicalOpenreviewPdfRoot: path.join(DATA_DIR, 'runtime', 'historical-icml-pdf-sources'),
@@ -272,8 +267,8 @@ const FILES = {
     historicalPublicationDir: path.join(DATA_DIR, 'runtime', 'historical-publications'),
     historicalAnalysisSchedulerDir: path.join(DATA_DIR, 'runtime', 'historical-analysis-schedulers'),
     historicalPostprocessSchedulerDir: path.join(DATA_DIR, 'runtime', 'historical-postprocess-schedulers'),
-    // Immutable official-source request/snapshot/fulltext/receipt bundles used
-    // by the historical page crosswalk. Never archive with daily current/.
+    // 历史页面 crosswalk 使用的官方来源请求/快照/全文/凭证包，不可更改。
+    // 绝不和日更 current/ 一起归档。
     paperSourceAuthorityDir: path.join(DATA_DIR, 'runtime', 'paper-source-authorities'),
     apiReaderAttemptsDir: path.join(DATA_DIR, 'runtime', 'reader-attempts'),
     papers: path.join(CURRENT_DIR, 'papers.json'),
@@ -290,27 +285,27 @@ const FILES = {
     // data/archive/<date>/visual-summaries/*.png，论文长图与汇总封面扁平归档。
     visualSummaryAssetDir: ARCHIVE_DIR,
     digestCoverManifestDir: path.join(CURRENT_DIR, 'digest-cover-manifests'),
-    // Explicit operator decisions for an already sealed daily analysis. The
-    // waiver binds exact current artifacts and never edits the analysis.
+    // 对某次已封存日更分析的显式人工决定。豁免绑定当时的 current 产物，
+    // 从不修改分析结果本身。
     analysisWaiverDir: path.join(CURRENT_DIR, 'analysis-waivers'),
     postPublishVisualWaiverDir: path.join(CURRENT_DIR, 'post-publish-visual-waivers'),
     digestRunReportDir: path.join(CURRENT_DIR, 'digest-run-reports'),
-    // Formal Manual v6 workflow state, records/spec and observed metrics.
+    // 正式 Manual v6 工作流状态、记录/规范和观测指标。
     manualV6Dir: path.join(CURRENT_DIR, 'manual-v6'),
-    // Explicit compatibility/audit runs remain isolated from production.
+    // 显式的兼容/审计运行与生产隔离。
     manualV6ShadowDir: path.join(CURRENT_DIR, 'manual-v6-shadow'),
     manualV6ShadowReportDir: path.join(CURRENT_DIR, 'manual-v6-shadow', 'reports'),
     manualV6MetricsDir: path.join(CURRENT_DIR, 'manual-v6'),
     manualV6ShadowMetricsDir: path.join(CURRENT_DIR, 'manual-v6-shadow'),
-    // Legacy v5 read-only queue observations and performance snapshots.
+    // 旧 v5 只读队列观测和性能快照。
     manualV5ObservabilityDir: path.join(CURRENT_DIR, 'manual-v5-observability'),
-    // One deny-by-default, single-paper author packet per date/paper.  These
-    // files are orchestration inputs only and never canonical analysis state.
+    // 每个日期/论文一份默认拒绝的单篇作者包。这些文件只是编排输入，
+    // 从不是正式分析状态。
     manualV5AuthorInputDir: path.join(CURRENT_DIR, 'manual-v5-author-inputs'),
-    // Cross-batch reports are optional, immutable, observed-only summaries.
+    // 跨批次报告是可选的、不可更改的纯观测汇总。
     manualPerformanceReportDir: path.join(CURRENT_DIR, 'manual-performance-reports'),
     digestCoverAssetDir: ARCHIVE_DIR,
-    // Legacy single-file location retained only for callers migrating old state.
+    // 旧单文件位置，只为迁移旧状态的调用方保留。
     visualSummaryManifest: path.join(CURRENT_DIR, 'visual-summary-manifest.json'),
     analyzed: path.join(CURRENT_DIR, 'analyzed.json'),
     analyzedLegacy: path.join(DATA_DIR, 'analyzed.json')
