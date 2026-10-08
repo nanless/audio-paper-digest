@@ -39,10 +39,10 @@ const stableHash = value => sha256(JSON.stringify(canonical(value)));
 const prettyBytes = value => Buffer.from(`${JSON.stringify(canonical(value), null, 2)}\n`, 'utf8');
 
 function safeDirectory(directory, label, create = false) {
-    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} must be absolute`);
+    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} 必须是绝对路径`);
     const absolute = path.resolve(directory);
     if (!fs.existsSync(absolute)) {
-        if (!create) fail(`${label} does not exist`);
+        if (!create) fail(`${label} 不存在`);
         fs.mkdirSync(absolute, { recursive: true, mode: 0o700 });
     }
     let cursor = path.parse(absolute).root;
@@ -54,11 +54,11 @@ function safeDirectory(directory, label, create = false) {
     return absolute;
 }
 function plannedDirectory(directory, label) {
-    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} must be absolute`);
+    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} 必须是绝对路径`);
     const absolute = path.resolve(directory); const missing = []; let cursor = absolute;
     while (!fs.existsSync(cursor)) {
         missing.push(path.basename(cursor)); const parent = path.dirname(cursor);
-        if (parent === cursor) fail(`${label} has no existing ancestor`); cursor = parent;
+        if (parent === cursor) fail(`${label} 没有已存在的上级目录`); cursor = parent;
     }
     safeDirectory(cursor, `${label} existing ancestor`);
     if (missing.some(part => !part || part === '.' || part === '..')) fail(`${label} is unsafe`);
@@ -66,7 +66,7 @@ function plannedDirectory(directory, label) {
 }
 
 function readStableFile(filename, label, maxBytes) {
-    if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail(`${label} must be absolute`);
+    if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail(`${label} 必须是绝对路径`);
     const absolute = path.resolve(filename); safeDirectory(path.dirname(absolute), `${label} parent`); let fd;
     try {
         fd = fs.openSync(absolute, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -75,11 +75,11 @@ function readStableFile(filename, label, maxBytes) {
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size > maxBytes) fail(`${label} is unsafe or too large`);
         const bytes = fs.readFileSync(fd); const after = fs.fstatSync(fd);
         if (bytes.length !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino
-            || after.size !== opened.size) fail(`${label} changed while read`);
+            || after.size !== opened.size) fail(`${label} 在读取过程中发生变化`);
         return { filename: absolute, bytes, sha256: sha256(bytes) };
     } catch (error) {
         if (error instanceof HistoricalOpenreviewPdfSourceError) throw error;
-        fail(`${label} cannot be read: ${error.code || error.message}`);
+        fail(`${label} 无法读取：${error.code || error.message}`);
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
@@ -92,22 +92,22 @@ function rejectDuplicateJsonKeys(text) {
         else if (token === '}' || token === ']') stack.pop();
         else if (token === ',' && top?.object) top.expectKey = true;
         else if (token.startsWith('"') && top?.object && top.expectKey) {
-            const key = JSON.parse(token); if (top.keys.has(key)) fail('receipt JSON has duplicate keys');
+            const key = JSON.parse(token); if (top.keys.has(key)) fail('receipt JSON 含有重复键');
             top.keys.add(key); top.expectKey = false;
         }
     }
 }
 
 function pdfUrlForForum(forumId) {
-    if (!FORUM_ID_RE.test(String(forumId || ''))) fail('forum ID is invalid');
+    if (!FORUM_ID_RE.test(String(forumId || ''))) fail('forum ID 非法');
     return `https://openreview.net/pdf?id=${forumId}`;
 }
 
 function validateDownloadUrl(rawUrl, forumId) {
     let url;
-    try { url = new URL(rawUrl); } catch { fail('OpenReview PDF URL is invalid'); }
+    try { url = new URL(rawUrl); } catch { fail('OpenReview PDF URL 非法'); }
     if (url.protocol !== 'https:' || url.hostname !== 'openreview.net' || url.port || url.username || url.password || url.hash) {
-        fail('OpenReview PDF URL must remain on canonical HTTPS openreview.net');
+        fail('OpenReview PDF URL 必须保持在规范的 HTTPS openreview.net 上');
     }
     const id = url.searchParams.get('id');
     if (!['/pdf', '/attachment'].includes(url.pathname) || id !== forumId
@@ -125,10 +125,10 @@ function validPdfContentType(value) {
 
 async function readResponseBytes(response, maxBytes) {
     const declared = Number(response.headers?.get?.('content-length'));
-    if (Number.isFinite(declared) && declared > maxBytes) fail('OpenReview PDF exceeds the byte limit');
+    if (Number.isFinite(declared) && declared > maxBytes) fail('OpenReview PDF 超出字节上限');
     if (!response.body || typeof response.body.getReader !== 'function') {
         const bytes = Buffer.from(await response.arrayBuffer());
-        if (bytes.length > maxBytes) fail('OpenReview PDF exceeds the byte limit');
+        if (bytes.length > maxBytes) fail('OpenReview PDF 超出字节上限');
         return bytes;
     }
     const reader = response.body.getReader(); const chunks = []; let total = 0;
@@ -136,7 +136,7 @@ async function readResponseBytes(response, maxBytes) {
         while (true) {
             const { done, value } = await reader.read(); if (done) break;
             const chunk = Buffer.from(value); total += chunk.length;
-            if (total > maxBytes) { await reader.cancel(); fail('OpenReview PDF exceeds the byte limit'); }
+            if (total > maxBytes) { await reader.cancel(); fail('OpenReview PDF 超出字节上限'); }
             chunks.push(chunk);
         }
     } finally { reader.releaseLock?.(); }
@@ -149,7 +149,7 @@ async function defaultFetchPdf({ url, forumId, maxBytes = MAX_PDF_BYTES, maxRedi
     const proxyUrl = detectProxy(); if (!proxyUrl) fail('project HTTP CONNECT proxy is required');
     const dispatcher = (dependencies.createDispatcher || createProxyDispatcher)(proxyUrl);
     const fetchImpl = dependencies.fetchImpl || globalThis.fetch;
-    if (typeof fetchImpl !== 'function') fail('fetch is unavailable');
+    if (typeof fetchImpl !== 'function') fail('fetch 不可用');
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs); timer.unref?.();
     const redirects = []; let current = validateDownloadUrl(url, forumId);
     try {
@@ -158,19 +158,19 @@ async function defaultFetchPdf({ url, forumId, maxBytes = MAX_PDF_BYTES, maxRedi
                 signal: controller.signal, headers: { Accept: 'application/pdf',
                     'User-Agent': 'audio-paper-digest-history/1.0' } });
             if ([301, 302, 303, 307, 308].includes(response.status)) {
-                if (count >= maxRedirects) fail('OpenReview PDF exceeded the redirect limit');
-                const location = response.headers?.get?.('location'); if (!location) fail('OpenReview redirect has no Location');
+                if (count >= maxRedirects) fail('OpenReview PDF 超出重定向次数上限');
+                const location = response.headers?.get?.('location'); if (!location) fail('OpenReview 重定向缺少 Location');
                 const next = validateDownloadUrl(new URL(location, current).toString(), forumId);
                 redirects.push({ from: current, to: next, status: response.status }); current = next; continue;
             }
             if (response.status !== 200) fail(`OpenReview PDF returned HTTP ${response.status}`);
             const contentType = String(response.headers?.get?.('content-type') || '');
-            if (!validPdfContentType(contentType)) fail('OpenReview PDF response has an invalid Content-Type');
+            if (!validPdfContentType(contentType)) fail('OpenReview PDF 响应的 Content-Type 非法');
             const bytes = await readResponseBytes(response, maxBytes);
             return { bytes, requestedUrl: url, finalUrl: current, redirects,
                 contentType, responseStatus: response.status };
         }
-        fail('OpenReview PDF exceeded the redirect limit');
+        fail('OpenReview PDF 超出重定向次数上限');
     } catch (error) {
         if (error instanceof HistoricalOpenreviewPdfSourceError) throw error;
         if (error?.name === 'AbortError') fail('OpenReview PDF request timed out');
@@ -185,7 +185,7 @@ function pathsFor({ pdfRoot, receiptRoot, forumId, create = false } = {}) {
         : plannedDirectory(pdfRoot, 'OpenReview PDF root');
     const receiptDirectory = create ? safeDirectory(receiptRoot, 'OpenReview receipt root', true)
         : plannedDirectory(receiptRoot, 'OpenReview receipt root');
-    if (!FORUM_ID_RE.test(String(forumId || ''))) fail('forum ID is invalid');
+    if (!FORUM_ID_RE.test(String(forumId || ''))) fail('forum ID 非法');
     return { pdfFile: path.join(pdfDirectory, `${forumId}.pdf`),
         receiptFile: path.join(receiptDirectory, `openreview-${forumId}.json`) };
 }
@@ -199,12 +199,12 @@ function normalizeReceipt(value) {
         || !Array.isArray(value.redirects) || value.responseStatus !== 200 || !validPdfContentType(value.contentType)
         || !Number.isFinite(Date.parse(value.fetchedAt)) || new Date(value.fetchedAt).toISOString() !== value.fetchedAt
         || !SHA_RE.test(String(value.authoritySha256 || ''))
-        || !SHA_RE.test(String(value.recordBindingSha256 || '')) || !plain(value.pdf)) fail('receipt envelope is invalid');
+        || !SHA_RE.test(String(value.recordBindingSha256 || '')) || !plain(value.pdf)) fail('receipt 外层结构非法');
     validateDownloadUrl(value.requestedUrl, value.forumId); validateDownloadUrl(value.finalUrl, value.forumId);
     if (value.redirects.length > MAX_REDIRECTS || value.redirects.some(item => !plain(item)
         || ![301, 302, 303, 307, 308].includes(item.status)
         || validateDownloadUrl(item.from, value.forumId) !== item.from
-        || validateDownloadUrl(item.to, value.forumId) !== item.to)) fail('receipt redirect chain is invalid');
+        || validateDownloadUrl(item.to, value.forumId) !== item.to)) fail('receipt 重定向链非法');
     if ((!value.redirects.length && value.finalUrl !== value.requestedUrl)
         || (value.redirects.length && (value.redirects[0].from !== value.requestedUrl
             || value.redirects.at(-1).to !== value.finalUrl
@@ -213,9 +213,9 @@ function normalizeReceipt(value) {
     }
     if (Object.keys(value.pdf).sort().join('\0') !== ['absolutePath', 'bytes', 'sha256'].sort().join('\0')
         || !path.isAbsolute(value.pdf.absolutePath) || !Number.isSafeInteger(value.pdf.bytes) || value.pdf.bytes < 5
-        || value.pdf.bytes > MAX_PDF_BYTES || !SHA_RE.test(String(value.pdf.sha256 || ''))) fail('receipt PDF binding is invalid');
+        || value.pdf.bytes > MAX_PDF_BYTES || !SHA_RE.test(String(value.pdf.sha256 || ''))) fail('receipt 的 PDF 绑定非法');
     const body = clone(value); delete body.receiptSha256;
-    if (!SHA_RE.test(String(value.receiptSha256 || '')) || value.receiptSha256 !== stableHash(body)) fail('receipt self-SHA is invalid');
+    if (!SHA_RE.test(String(value.receiptSha256 || '')) || value.receiptSha256 !== stableHash(body)) fail('receipt 的自校验 SHA 非法');
     return clone(value);
 }
 
@@ -223,9 +223,9 @@ function readReceipt(receiptFile) {
     const loaded = readStableFile(receiptFile, 'OpenReview PDF receipt', 1024 * 1024); let value;
     try { const text = new TextDecoder('utf-8', { fatal: true }).decode(loaded.bytes);
         rejectDuplicateJsonKeys(text); value = JSON.parse(text); }
-    catch (error) { if (error instanceof HistoricalOpenreviewPdfSourceError) throw error; fail('receipt is not strict UTF-8 JSON'); }
+    catch (error) { if (error instanceof HistoricalOpenreviewPdfSourceError) throw error; fail('receipt 不是严格的 UTF-8 JSON'); }
     const receipt = normalizeReceipt(value);
-    if (!loaded.bytes.equals(prettyBytes(receipt))) fail('receipt bytes are not canonical');
+    if (!loaded.bytes.equals(prettyBytes(receipt))) fail('receipt 字节不是规范形式');
     return receipt;
 }
 
@@ -236,7 +236,7 @@ function replayReceipt({ receiptFile, pdfFile, record, authoritySha256 } = {}) {
         || receipt.pdf.absolutePath !== pdfFile) fail('receipt differs from authenticated forum authority');
     const pdf = readStableFile(pdfFile, 'sealed OpenReview PDF', MAX_PDF_BYTES);
     if (pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-' || pdf.bytes.length !== receipt.pdf.bytes
-        || pdf.sha256 !== receipt.pdf.sha256) fail('sealed OpenReview PDF differs from receipt');
+        || pdf.sha256 !== receipt.pdf.sha256) fail('封存的 OpenReview PDF 与 receipt 不一致');
     return receipt;
 }
 
@@ -261,7 +261,7 @@ async function sealOpenreviewPdf({ apply = false, snapshotFile, forumId, pdfRoot
     observedAt = null } = {}, dependencies = {}) {
     if (typeof apply !== 'boolean' || !Number.isSafeInteger(maxBytes) || maxBytes < 5 || maxBytes > MAX_PDF_BYTES
         || !Number.isSafeInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > MAX_REDIRECTS
-        || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000) fail('sealer options are invalid');
+        || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000) fail('封存器参数非法');
     const authorityHandle = posterApi.loadPosterAuthority({ snapshotFile });
     const authority = posterApi.authorityHandleSnapshot(authorityHandle);
     const record = posterApi.lookupByForum(authorityHandle, forumId);
@@ -286,7 +286,7 @@ async function sealOpenreviewPdf({ apply = false, snapshotFile, forumId, pdfRoot
     }
     validateDownloadUrl(downloaded.requestedUrl, record.forumId); validateDownloadUrl(downloaded.finalUrl, record.forumId);
     const fetchedAt = observedAt || new Date().toISOString();
-    if (!Number.isFinite(Date.parse(fetchedAt)) || new Date(fetchedAt).toISOString() !== fetchedAt) fail('observedAt is invalid');
+    if (!Number.isFinite(Date.parse(fetchedAt)) || new Date(fetchedAt).toISOString() !== fetchedAt) fail('observedAt 非法');
     const pdfBody = { absolutePath: paths.pdfFile, bytes: downloaded.bytes.length, sha256: sha256(downloaded.bytes) };
     const body = { contract: CONTRACT, version: VERSION, forumId: record.forumId, posterId: record.posterId,
         forumUrl: record.openreviewUrl, requestedUrl: downloaded.requestedUrl, finalUrl: downloaded.finalUrl,

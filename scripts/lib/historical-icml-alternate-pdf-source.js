@@ -91,18 +91,18 @@ const stableHash = value => sha256(JSON.stringify(canonical(value)));
 const prettyBytes = value => Buffer.from(`${JSON.stringify(canonical(value), null, 2)}\n`, 'utf8');
 
 function exact(value, fields, label) {
-    if (!plain(value)) fail(`${label} must be an object`);
+    if (!plain(value)) fail(`${label} 必须是对象`);
     const actual = Object.keys(value).sort(); const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
-        fail(`${label} has unknown or missing fields`);
+        fail(`${label} 含有未知或缺失字段`);
     }
 }
 
 function safeDirectory(directory, label, create = false) {
-    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} must be absolute`);
+    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} 必须是绝对路径`);
     const absolute = path.resolve(directory);
     if (!fs.existsSync(absolute)) {
-        if (!create) fail(`${label} does not exist`);
+        if (!create) fail(`${label} 不存在`);
         fs.mkdirSync(absolute, { recursive: true, mode: 0o700 });
     }
     let cursor = path.parse(absolute).root;
@@ -115,11 +115,11 @@ function safeDirectory(directory, label, create = false) {
 }
 
 function plannedDirectory(directory, label) {
-    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} must be absolute`);
+    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} 必须是绝对路径`);
     const absolute = path.resolve(directory); const missing = []; let cursor = absolute;
     while (!fs.existsSync(cursor)) {
         missing.push(path.basename(cursor)); const parent = path.dirname(cursor);
-        if (parent === cursor) fail(`${label} has no existing ancestor`); cursor = parent;
+        if (parent === cursor) fail(`${label} 没有已存在的上级目录`); cursor = parent;
     }
     safeDirectory(cursor, `${label} existing ancestor`);
     if (missing.some(part => !part || part === '.' || part === '..')) fail(`${label} is unsafe`);
@@ -127,7 +127,7 @@ function plannedDirectory(directory, label) {
 }
 
 function readStableFile(filename, label, maxBytes) {
-    if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail(`${label} must be absolute`);
+    if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail(`${label} 必须是绝对路径`);
     const absolute = path.resolve(filename); safeDirectory(path.dirname(absolute), `${label} parent`); let fd;
     try {
         fd = fs.openSync(absolute, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -138,11 +138,11 @@ function readStableFile(filename, label, maxBytes) {
         }
         const bytes = fs.readFileSync(fd); const after = fs.fstatSync(fd);
         if (bytes.length !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino
-            || after.size !== opened.size) fail(`${label} changed while read`);
+            || after.size !== opened.size) fail(`${label} 在读取过程中发生变化`);
         return { filename: absolute, bytes, sha256: sha256(bytes) };
     } catch (error) {
         if (error instanceof HistoricalIcmlAlternatePdfSourceError) throw error;
-        fail(`${label} cannot be read: ${error.code || error.message}`);
+        fail(`${label} 无法读取：${error.code || error.message}`);
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
@@ -155,14 +155,14 @@ function rejectDuplicateJsonKeys(text, label) {
         else if (token === '}' || token === ']') stack.pop();
         else if (token === ',' && top?.object) top.expectKey = true;
         else if (token.startsWith('"') && top?.object && top.expectKey) {
-            const key = JSON.parse(token); if (top.keys.has(key)) fail(`${label} has duplicate JSON keys`);
+            const key = JSON.parse(token); if (top.keys.has(key)) fail(`${label} 含有重复的 JSON 键`);
             top.keys.add(key); top.expectKey = false;
         }
     }
 }
 
 function profileForForum(forumId) {
-    if (!FORUM_ID_RE.test(String(forumId || ''))) fail('forum ID is invalid');
+    if (!FORUM_ID_RE.test(String(forumId || ''))) fail('forum ID 非法');
     const profile = PROFILE_DEFINITIONS[forumId];
     if (!profile) fail(`forum ID ${forumId} has no code-reviewed alternate source profile`);
     return clone(profile);
@@ -170,7 +170,7 @@ function profileForForum(forumId) {
 
 function validateProfileUrl(rawUrl, profile) {
     let parsed;
-    try { parsed = new URL(rawUrl); } catch { fail('alternate PDF URL is invalid'); }
+    try { parsed = new URL(rawUrl); } catch { fail('备用 PDF URL 非法'); }
     if (parsed.protocol !== 'https:' || parsed.port || parsed.username || parsed.password || parsed.hash
         || !profile.allowedUrls.includes(parsed.toString())) {
         fail('alternate PDF URL left the fixed profile host/path/query allowlist');
@@ -184,17 +184,17 @@ function authenticateSourceIdentity({ snapshotFile, forumId } = {}) {
     const authority = posterApi.authorityHandleSnapshot(authorityHandle);
     const authorityRecord = posterApi.lookupByForum(authorityHandle, forumId);
     if (authorityRecord.forumId !== profile.forumId || authorityRecord.posterId !== profile.posterId) {
-        fail('alternate source profile differs from authenticated poster/forum authority');
+        fail('备用来源配置与已认证的 poster/forum 授权不一致');
     }
     const loaded = readStableFile(authority.snapshot.absolutePath, 'ICML raw poster snapshot', MAX_SNAPSHOT_BYTES);
-    if (loaded.sha256 !== authority.snapshot.sha256) fail('raw snapshot SHA differs from authenticated poster authority');
+    if (loaded.sha256 !== authority.snapshot.sha256) fail('原始快照 SHA 与已认证的 poster 授权不一致');
     let raw;
     try {
         const text = new TextDecoder('utf-8', { fatal: true }).decode(loaded.bytes);
         rejectDuplicateJsonKeys(text, 'ICML raw poster snapshot'); raw = JSON.parse(text);
     } catch (error) {
         if (error instanceof HistoricalIcmlAlternatePdfSourceError) throw error;
-        fail('ICML raw poster snapshot is not strict UTF-8 JSON');
+        fail('ICML 原始 poster 快照不是严格的 UTF-8 JSON');
     }
     const rawRecord = raw?.results?.[authorityRecord.recordIndex];
     const authors = Array.isArray(rawRecord?.authors) ? rawRecord.authors.map(author => author?.fullname) : null;
@@ -225,10 +225,10 @@ function validPdfContentType(value) {
 
 async function readResponseBytes(response, maxBytes) {
     const declared = Number(response.headers?.get?.('content-length'));
-    if (Number.isFinite(declared) && declared > maxBytes) fail('alternate PDF exceeds the byte limit');
+    if (Number.isFinite(declared) && declared > maxBytes) fail('备用 PDF 超出字节上限');
     if (!response.body || typeof response.body.getReader !== 'function') {
         const bytes = Buffer.from(await response.arrayBuffer());
-        if (bytes.length > maxBytes) fail('alternate PDF exceeds the byte limit');
+        if (bytes.length > maxBytes) fail('备用 PDF 超出字节上限');
         return bytes;
     }
     const reader = response.body.getReader(); const chunks = []; let total = 0;
@@ -236,7 +236,7 @@ async function readResponseBytes(response, maxBytes) {
         while (true) {
             const { done, value } = await reader.read(); if (done) break;
             const chunk = Buffer.from(value); total += chunk.length;
-            if (total > maxBytes) { await reader.cancel(); fail('alternate PDF exceeds the byte limit'); }
+            if (total > maxBytes) { await reader.cancel(); fail('备用 PDF 超出字节上限'); }
             chunks.push(chunk);
         }
     } finally { reader.releaseLock?.(); }
@@ -248,15 +248,15 @@ async function defaultFetchPdf({ profile, maxBytes = MAX_PDF_BYTES, maxRedirects
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 5 || maxBytes > MAX_PDF_BYTES
         || !Number.isSafeInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > MAX_REDIRECTS
         || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000) {
-        fail('downloader options are invalid');
+        fail('下载器参数非法');
     }
     const normalizedProfile = profileForForum(profile?.forumId);
-    if (stableHash(profile) !== stableHash(normalizedProfile)) fail('alternate source profile is not the code-reviewed profile');
+    if (stableHash(profile) !== stableHash(normalizedProfile)) fail('备用来源配置不是经过代码评审的那份配置');
     const detectProxy = dependencies.detectProxy || detectHttpConnectProxyUrl;
     const proxyUrl = detectProxy(); if (!proxyUrl) fail('project HTTP CONNECT proxy is required');
     const dispatcher = (dependencies.createDispatcher || createProxyDispatcher)(proxyUrl);
     const fetchImpl = dependencies.fetchImpl || globalThis.fetch;
-    if (typeof fetchImpl !== 'function') fail('fetch is unavailable');
+    if (typeof fetchImpl !== 'function') fail('fetch 不可用');
     const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), timeoutMs); timer.unref?.();
     const requestedUrl = validateProfileUrl(normalizedProfile.requestedUrl, normalizedProfile);
     const redirects = []; let current = requestedUrl;
@@ -266,19 +266,19 @@ async function defaultFetchPdf({ profile, maxBytes = MAX_PDF_BYTES, maxRedirects
                 signal: controller.signal, headers: { Accept: 'application/pdf',
                     'User-Agent': 'audio-paper-digest-history/1.0' } });
             if ([301, 302, 303, 307, 308].includes(response.status)) {
-                if (count >= maxRedirects) fail('alternate PDF exceeded the redirect limit');
+                if (count >= maxRedirects) fail('备用 PDF 超出重定向次数上限');
                 const location = response.headers?.get?.('location');
-                if (!location) fail('alternate PDF redirect has no Location');
+                if (!location) fail('备用 PDF 重定向缺少 Location');
                 const next = validateProfileUrl(new URL(location, current).toString(), normalizedProfile);
                 redirects.push({ from: current, to: next, status: response.status }); current = next; continue;
             }
             if (response.status !== 200) fail(`alternate PDF returned HTTP ${response.status}`);
             const contentType = String(response.headers?.get?.('content-type') || '');
-            if (!validPdfContentType(contentType)) fail('alternate PDF response has an invalid Content-Type');
+            if (!validPdfContentType(contentType)) fail('备用 PDF 响应的 Content-Type 非法');
             const bytes = await readResponseBytes(response, maxBytes);
             return { bytes, requestedUrl, finalUrl: current, redirects, contentType, responseStatus: response.status };
         }
-        fail('alternate PDF exceeded the redirect limit');
+        fail('备用 PDF 超出重定向次数上限');
     } catch (error) {
         if (error instanceof HistoricalIcmlAlternatePdfSourceError) throw error;
         if (error?.name === 'AbortError') fail('alternate PDF request timed out');
@@ -293,7 +293,7 @@ function pathsFor({ pdfRoot, receiptRoot, forumId, create = false } = {}) {
         : plannedDirectory(pdfRoot, 'alternate PDF root');
     const receiptDirectory = create ? safeDirectory(receiptRoot, 'alternate receipt root', true)
         : plannedDirectory(receiptRoot, 'alternate receipt root');
-    if (!FORUM_ID_RE.test(String(forumId || ''))) fail('forum ID is invalid');
+    if (!FORUM_ID_RE.test(String(forumId || ''))) fail('forum ID 非法');
     return { pdfFile: path.join(pdfDirectory, `${forumId}.pdf`),
         receiptFile: path.join(receiptDirectory, `alternate-${forumId}.json`) };
 }
@@ -302,7 +302,7 @@ function validateRedirects(redirects, profile, requestedUrl, finalUrl) {
     if (!Array.isArray(redirects) || redirects.length > MAX_REDIRECTS
         || redirects.some(item => !plain(item) || ![301, 302, 303, 307, 308].includes(item.status)
             || validateProfileUrl(item.from, profile) !== item.from
-            || validateProfileUrl(item.to, profile) !== item.to)) fail('receipt redirect chain is invalid');
+            || validateProfileUrl(item.to, profile) !== item.to)) fail('receipt 重定向链非法');
     if ((!redirects.length && finalUrl !== requestedUrl)
         || (redirects.length && (redirects[0].from !== requestedUrl || redirects.at(-1).to !== finalUrl
             || redirects.some((item, index) => index > 0 && redirects[index - 1].to !== item.from)))) {
@@ -330,19 +330,19 @@ function normalizeReceipt(value) {
         || new Date(value.fetchedAt).toISOString() !== value.fetchedAt
         || !SHA_RE.test(String(value.snapshotSha256 || '')) || !SHA_RE.test(String(value.authoritySha256 || ''))
         || !SHA_RE.test(String(value.recordBindingSha256 || ''))
-        || !SHA_RE.test(String(value.sourceIdentityBindingSha256 || ''))) fail('alternate PDF receipt envelope is invalid');
+        || !SHA_RE.test(String(value.sourceIdentityBindingSha256 || ''))) fail('备用 PDF receipt 外层结构非法');
     const requestedUrl = validateProfileUrl(value.requestedUrl, profile);
     const finalUrl = validateProfileUrl(value.finalUrl, profile);
-    if (requestedUrl !== profile.requestedUrl) fail('receipt did not request the fixed profile URL');
+    if (requestedUrl !== profile.requestedUrl) fail('receipt 请求的不是固定配置的 URL');
     validateRedirects(value.redirects, profile, requestedUrl, finalUrl);
     exact(value.pdf, ['absolutePath', 'bytes', 'sha256'], 'alternate PDF receipt PDF binding');
     if (!path.isAbsolute(value.pdf.absolutePath) || !Number.isSafeInteger(value.pdf.bytes) || value.pdf.bytes < 5
         || value.pdf.bytes > MAX_PDF_BYTES || !SHA_RE.test(String(value.pdf.sha256 || ''))) {
-        fail('alternate PDF receipt PDF binding is invalid');
+        fail('备用 PDF receipt 的 PDF 绑定非法');
     }
     const body = clone(value); delete body.receiptSha256;
     if (!SHA_RE.test(String(value.receiptSha256 || '')) || value.receiptSha256 !== stableHash(body)) {
-        fail('alternate PDF receipt self-SHA is invalid');
+        fail('备用 PDF receipt 的自校验 SHA 非法');
     }
     return clone(value);
 }
@@ -369,7 +369,7 @@ function normalizeImportReceipt(value) {
         || !SHA_RE.test(String(value.snapshotSha256 || '')) || !SHA_RE.test(String(value.authoritySha256 || ''))
         || !SHA_RE.test(String(value.recordBindingSha256 || ''))
         || !SHA_RE.test(String(value.sourceIdentityBindingSha256 || ''))) {
-        fail('imported alternate PDF receipt envelope is invalid');
+        fail('导入的备用 PDF receipt 外层结构非法');
     }
     exact(value.sourceValidation, ['method', 'extractedTextSha256', 'extractedTextChars', 'matchedMarkers'],
         'imported alternate PDF source validation');
@@ -379,16 +379,16 @@ function normalizeImportReceipt(value) {
         || !Number.isSafeInteger(value.sourceValidation.extractedTextChars)
         || value.sourceValidation.extractedTextChars < 1000
         || stableHash(value.sourceValidation.matchedMarkers) !== stableHash(expectedMarkers)) {
-        fail('imported alternate PDF source validation is invalid');
+        fail('导入的备用 PDF 来源校验非法');
     }
     exact(value.pdf, ['absolutePath', 'bytes', 'sha256'], 'imported alternate PDF receipt PDF binding');
     if (!path.isAbsolute(value.pdf.absolutePath) || !Number.isSafeInteger(value.pdf.bytes) || value.pdf.bytes < 5
         || value.pdf.bytes > MAX_PDF_BYTES || !SHA_RE.test(String(value.pdf.sha256 || ''))) {
-        fail('imported alternate PDF receipt PDF binding is invalid');
+        fail('导入的备用 PDF receipt 的 PDF 绑定非法');
     }
     const body = clone(value); delete body.receiptSha256;
     if (!SHA_RE.test(String(value.receiptSha256 || '')) || value.receiptSha256 !== stableHash(body)) {
-        fail('imported alternate PDF receipt self-SHA is invalid');
+        fail('导入的备用 PDF receipt 的自校验 SHA 非法');
     }
     return clone(value);
 }
@@ -400,10 +400,10 @@ function readReceipt(receiptFile) {
         rejectDuplicateJsonKeys(text, 'alternate PDF receipt'); value = JSON.parse(text);
     } catch (error) {
         if (error instanceof HistoricalIcmlAlternatePdfSourceError) throw error;
-        fail('alternate PDF receipt is not strict UTF-8 JSON');
+        fail('备用 PDF receipt 不是严格的 UTF-8 JSON');
     }
     const receipt = normalizeReceipt(value);
-    if (!loaded.bytes.equals(prettyBytes(receipt))) fail('alternate PDF receipt bytes are not canonical');
+    if (!loaded.bytes.equals(prettyBytes(receipt))) fail('备用 PDF receipt 字节不是规范形式');
     return receipt;
 }
 
@@ -416,10 +416,10 @@ function replayReceipt({ receiptFile, pdfFile, identity } = {}) {
         || receipt.authoritySha256 !== identity.authority.authoritySha256
         || receipt.recordBindingSha256 !== identity.authorityRecord.recordBindingSha256
         || receipt.sourceIdentityBindingSha256 !== identity.sourceIdentityBindingSha256
-        || receipt.pdf.absolutePath !== pdfFile) fail('alternate receipt differs from authenticated source identity');
+        || receipt.pdf.absolutePath !== pdfFile) fail('备用 receipt 与已认证的来源身份不一致');
     const pdf = readStableFile(pdfFile, 'sealed alternate PDF', MAX_PDF_BYTES);
     if (pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-' || pdf.bytes.length !== receipt.pdf.bytes
-        || pdf.sha256 !== receipt.pdf.sha256) fail('sealed alternate PDF differs from receipt');
+        || pdf.sha256 !== receipt.pdf.sha256) fail('封存的备用 PDF 与 receipt 不一致');
     return receipt;
 }
 
@@ -447,7 +447,7 @@ async function sealAlternatePdf({ apply = false, snapshotFile, forumId, pdfRoot,
     observedAt = null } = {}, dependencies = {}) {
     if (typeof apply !== 'boolean' || !Number.isSafeInteger(maxBytes) || maxBytes < 5 || maxBytes > MAX_PDF_BYTES
         || !Number.isSafeInteger(maxRedirects) || maxRedirects < 0 || maxRedirects > MAX_REDIRECTS
-        || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000) fail('sealer options are invalid');
+        || !Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 600000) fail('封存器参数非法');
     const identity = authenticateSourceIdentity({ snapshotFile, forumId });
     const paths = pathsFor({ pdfRoot, receiptRoot, forumId, create: apply });
     const plan = { profileId: identity.profile.profileId, forumId: identity.profile.forumId,
@@ -476,10 +476,10 @@ async function sealAlternatePdf({ apply = false, snapshotFile, forumId, pdfRoot,
     }
     const requestedUrl = validateProfileUrl(downloaded.requestedUrl, identity.profile);
     const finalUrl = validateProfileUrl(downloaded.finalUrl, identity.profile);
-    if (requestedUrl !== identity.profile.requestedUrl) fail('download did not request the fixed profile URL');
+    if (requestedUrl !== identity.profile.requestedUrl) fail('下载请求的不是固定配置的 URL');
     validateRedirects(downloaded.redirects || [], identity.profile, requestedUrl, finalUrl);
     const fetchedAt = observedAt || new Date().toISOString();
-    if (!Number.isFinite(Date.parse(fetchedAt)) || new Date(fetchedAt).toISOString() !== fetchedAt) fail('observedAt is invalid');
+    if (!Number.isFinite(Date.parse(fetchedAt)) || new Date(fetchedAt).toISOString() !== fetchedAt) fail('observedAt 非法');
     const pdfBody = { absolutePath: paths.pdfFile, bytes: downloaded.bytes.length, sha256: sha256(downloaded.bytes) };
     const body = { contract: CONTRACT, version: VERSION, profileId: identity.profile.profileId,
         forumId: identity.profile.forumId, posterId: identity.profile.posterId,
@@ -521,8 +521,8 @@ async function validateImportedPdf(bytes, profile, dependencies = {}) {
             : (await pdfLayout.extractPdfLayoutFromBytes(bytes)).text;
         text = String(extracted || '').replace(/\r\n?/g, '\n').trim();
     }
-    catch (error) { fail(`imported PDF text extraction failed: ${error.code || error.message}`); }
-    if (text.length < 1000) fail('imported PDF text is unusably short');
+    catch (error) { fail(`导入 PDF 的文本抽取失败：${error.code || error.message}`); }
+    if (text.length < 1000) fail('导入 PDF 的文本过短，无法使用');
     const searchable = normalizedSearchText(text);
     const markers = clone(profile.importPdfMarkers);
     if (markers.some(marker => !searchable.includes(normalizedSearchText(marker)))) {
@@ -536,7 +536,7 @@ async function sealImportedAlternatePdf({ apply = false, snapshotFile, forumId, 
     maxBytes = MAX_PDF_BYTES, importedAt = null } = {}, dependencies = {}) {
     if (typeof apply !== 'boolean' || typeof importFile !== 'string' || !path.isAbsolute(importFile)
         || !Number.isSafeInteger(maxBytes) || maxBytes < 5 || maxBytes > MAX_PDF_BYTES) {
-        fail('import sealer options are invalid');
+        fail('导入封存器参数非法');
     }
     const identity = authenticateSourceIdentity({ snapshotFile, forumId });
     if (identity.profile.forumId !== 'n1mAjfRDZ6') {
@@ -560,12 +560,12 @@ async function sealImportedAlternatePdf({ apply = false, snapshotFile, forumId, 
     }
     const imported = readStableFile(importFile, 'operator-provided alternate PDF', maxBytes);
     if (imported.bytes.length < 5 || imported.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
-        fail('operator-provided alternate source is not a bounded PDF');
+        fail('人工提供的备用来源不是有界 PDF');
     }
     const sourceValidation = await validateImportedPdf(imported.bytes, identity.profile, dependencies);
     posterApi.authorityHandleSnapshot(identity.authorityHandle);
     const observed = importedAt || new Date().toISOString();
-    if (!Number.isFinite(Date.parse(observed)) || new Date(observed).toISOString() !== observed) fail('importedAt is invalid');
+    if (!Number.isFinite(Date.parse(observed)) || new Date(observed).toISOString() !== observed) fail('importedAt 非法');
     const pdfBody = { absolutePath: paths.pdfFile, bytes: imported.bytes.length, sha256: imported.sha256 };
     const body = { contract: IMPORT_CONTRACT, version: IMPORT_VERSION, profileId: identity.profile.profileId,
         forumId: identity.profile.forumId, posterId: identity.profile.posterId,
