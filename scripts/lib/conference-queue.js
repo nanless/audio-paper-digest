@@ -31,22 +31,22 @@ const nowIso = () => new Date().toISOString();
 
 function fail(message) { throw new Error(message); }
 function assertSha(value, label) {
-    if (!SHA_RE.test(String(value || ''))) fail(`${label} must be a lowercase SHA-256`);
+    if (!SHA_RE.test(String(value || ''))) fail(`${label} 必须是小写 SHA-256`);
     return value;
 }
 function assertUuid(value, label) {
-    if (!UUID_RE.test(String(value || ''))) fail(`${label} must be a UUID v4`);
+    if (!UUID_RE.test(String(value || ''))) fail(`${label} 必须是 UUID v4`);
     return value;
 }
 function assertAbsolute(value, label) {
-    if (typeof value !== 'string' || !path.isAbsolute(value)) fail(`${label} must be an absolute path`);
+    if (typeof value !== 'string' || !path.isAbsolute(value)) fail(`${label} 必须是绝对路径`);
     return value;
 }
 
 function readSafeJson(filename, label = 'JSON') {
     const stat = fs.lstatSync(filename);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600) {
-        fail(`${label} is not a private single-link 0600 file: ${filename}`);
+        fail(`${label} 不是权限为 0600 的单链接私有文件：${filename}`);
     }
     const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     try {
@@ -57,7 +57,7 @@ function readSafeJson(filename, label = 'JSON') {
         if (!before.isFile() || !after.isFile() || before.dev !== after.dev || before.ino !== after.ino
             || before.size !== after.size || named.dev !== before.dev || named.ino !== before.ino
             || named.size !== before.size || named.nlink !== 1) {
-            fail(`${label} changed while being read: ${filename}`);
+            fail(`${label} 在读取过程中发生变化：${filename}`);
         }
         return JSON.parse(bytes.toString('utf8'));
     } finally { fs.closeSync(fd); }
@@ -86,17 +86,17 @@ function cryptoRandom() {
 }
 
 function normalizePlan(input) {
-    if (!input || typeof input !== 'object' || Array.isArray(input)) fail('conference queue plan must be an object');
+    if (!input || typeof input !== 'object' || Array.isArray(input)) fail('会议队列计划必须是对象');
     const body = clone(input);
     const declared = body.planSha256;
     delete body.planSha256;
     if (body.contract !== PLAN_CONTRACT || body.version !== VERSION || !Array.isArray(body.conferences)) {
-        fail('conference queue plan contract/version/conferences is invalid');
+        fail('会议队列计划的 contract/version/conferences 无效');
     }
     const allowedPlanKeys = new Set(['contract', 'version', 'conferences']);
-    if (Object.keys(body).some(key => !allowedPlanKeys.has(key))) fail('conference queue plan has unknown fields');
+    if (Object.keys(body).some(key => !allowedPlanKeys.has(key))) fail('会议队列计划含有未知字段');
     const conferences = body.conferences.map((raw, index) => {
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail(`conference plan entry ${index} is invalid`);
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) fail(`会议计划条目 ${index} 无效`);
         const entry = {
             conferenceId: raw.conferenceId,
             catalogName: raw.catalogName,
@@ -105,22 +105,22 @@ function normalizePlan(input) {
             concurrency: raw.concurrency === undefined ? MAX_CONCURRENCY : raw.concurrency
         };
         if (Object.keys(raw).some(key => !Object.hasOwn(entry, key))) {
-            fail(`conference plan entry ${index} has unknown fields`);
+            fail(`会议计划条目 ${index} 含有未知字段`);
         }
         if (!CONFERENCE_RE.test(String(entry.conferenceId || ''))
             || !NAME_RE.test(String(entry.catalogName || ''))
             || !NAME_RE.test(String(entry.reportName || ''))
             || !UUID_RE.test(String(entry.filterId || ''))
             || !Number.isInteger(entry.concurrency) || entry.concurrency < 1 || entry.concurrency > MAX_CONCURRENCY) {
-            fail(`conference plan entry ${index} contains an invalid selected conference`);
+            fail(`会议计划条目 ${index} 中的已选会议无效`);
         }
         return entry;
     });
     if (new Set(conferences.map(item => item.conferenceId)).size !== conferences.length) {
-        fail('conference queue plan contains duplicate conferenceId');
+        fail('会议队列计划中存在重复的 conferenceId');
     }
     if (new Set(conferences.map(item => item.filterId)).size !== conferences.length) {
-        fail('conference queue plan contains duplicate filterId');
+        fail('会议队列计划中存在重复的 filterId');
     }
     body.conferences = conferences;
     const planSha256 = hash(body);
@@ -143,13 +143,13 @@ function queueDirectory(files, queueId, create) {
     assertUuid(queueId, 'queueId');
     const root = files.conferenceQueueDir;
     if (create) {
-        if (fs.existsSync(root) && fs.lstatSync(root).isSymbolicLink()) fail('conferenceQueueDir cannot be a symlink');
+        if (fs.existsSync(root) && fs.lstatSync(root).isSymbolicLink()) fail('conferenceQueueDir 不能是符号链接');
         fs.mkdirSync(root, { recursive: true, mode: 0o700 });
         fs.chmodSync(root, 0o700);
     }
     const directory = path.join(root, queueId);
     if (create) {
-        if (fs.existsSync(directory) && fs.lstatSync(directory).isSymbolicLink()) fail('queue directory cannot be a symlink');
+        if (fs.existsSync(directory) && fs.lstatSync(directory).isSymbolicLink()) fail('队列目录不能是符号链接');
         fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
         fs.chmodSync(directory, 0o700);
     }
@@ -184,24 +184,24 @@ function assertState(value, plan, queueId) {
         || typeof value.updatedAt !== 'string' || value.stateSha256 !== stateDigest(value)) {
         fail('conference queue state integrity check failed');
     }
-    if (value.entries.length !== plan.conferences.length) fail('conference queue state member count drifted');
+    if (value.entries.length !== plan.conferences.length) fail('会议队列状态的成员数量发生变化');
     value.entries.forEach((entry, index) => {
         const expected = stateEntryInput(plan.conferences[index]);
-        for (const key of Object.keys(expected)) if (entry[key] !== expected[key]) fail(`queue entry ${index} plan binding drifted`);
+        for (const key of Object.keys(expected)) if (entry[key] !== expected[key]) fail(`队列条目 ${index} 的计划绑定发生变化`);
         if (!['pending', 'running', 'paused', 'published'].includes(entry.status)
             || !STAGES.includes(entry.stage) && entry.stage !== 'complete'
             || (entry.processId !== null && !UUID_RE.test(String(entry.processId)))
             || !entry.receipts || typeof entry.receipts !== 'object' || Array.isArray(entry.receipts)
             || typeof entry.legacyPublished !== 'boolean') {
-            fail(`queue entry ${index} lifecycle is invalid`);
+            fail(`队列条目 ${index} 的生命周期无效`);
         }
-        if (entry.status === 'published' && entry.stage !== 'complete') fail(`queue entry ${index} published without complete stage`);
-        if (entry.status === 'published' && !entry.receipts.verify) fail(`queue entry ${index} published without verify proof`);
-        if (entry.status === 'paused' && !entry.failure && !entry.blocked) fail(`queue entry ${index} paused without reason`);
+        if (entry.status === 'published' && entry.stage !== 'complete') fail(`队列条目 ${index} 已发布，但缺少 complete 阶段`);
+        if (entry.status === 'published' && !entry.receipts.verify) fail(`队列条目 ${index} 已发布，但缺少 verify 证明`);
+        if (entry.status === 'paused' && !entry.failure && !entry.blocked) fail(`队列条目 ${index} 已暂停，但没有说明原因`);
     });
     const published = value.entries.every(entry => entry.status === 'published');
-    if (value.status === 'complete' && !published) fail('complete queue has unpublished entries');
-    if (value.status !== 'complete' && published) fail('published entries did not close the queue');
+    if (value.status === 'complete' && !published) fail('complete 状态的队列仍有未发布的条目');
+    if (value.status !== 'complete' && published) fail('已发布的条目没有关闭队列');
     return value;
 }
 
@@ -254,7 +254,7 @@ function processProof(result, entry) {
                     + `${(item.blockedReasons || []).join(', ')}]`).join('; ')}`.slice(0, 2000)
             : `conference process for ${entry.conferenceId} is not complete`);
     }
-    if (result.conferenceId !== entry.conferenceId) fail('conference process conferenceId mismatch');
+    if (result.conferenceId !== entry.conferenceId) fail('会议进程的 conferenceId 不匹配');
     assertUuid(result.processId, 'conference process processId');
     assertSha(result.completionReceiptSha256, 'conference process completionReceiptSha256');
     return { status: result.status, conferenceId: result.conferenceId, processId: result.processId,
@@ -269,21 +269,21 @@ function digestKeyFor(action, receipt, context = {}) {
 }
 
 function validateReceipt(action, receipt, entry, processId) {
-    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) fail(`${action} receipt is missing`);
+    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) fail(`缺少 ${action} receipt`);
     if (receipt.conferenceId !== entry.conferenceId || receipt.processId !== processId) {
-        fail(`${action} receipt identity mismatch`);
+        fail(`${action} 凭证的身份不匹配`);
     }
     const digestKey = digestKeyFor(action, receipt);
-    if (!digestKey || !SHA_RE.test(String(receipt[digestKey] || ''))) fail(`${action} receipt self-SHA is missing`);
+    if (!digestKey || !SHA_RE.test(String(receipt[digestKey] || ''))) fail(`${action} 凭证缺少自身 SHA`);
     const body = clone(receipt); delete body[digestKey];
     if (hash(body) !== receipt[digestKey]) fail(`${action} receipt self-SHA mismatch`);
     if (action === 'generate') {
         if (receipt.contract !== 'conference-blog-generation-v1' || receipt.version !== 2
-            || !SHA_RE.test(String(receipt.completionReceiptSha256 || ''))) fail('generation receipt contract is invalid');
+            || !SHA_RE.test(String(receipt.completionReceiptSha256 || ''))) fail('generation 凭证的 contract 无效');
     } else if (action === 'review') {
         if (receipt.contract !== 'conference-blog-review-v1' || receipt.version !== 2
             || !SHA_RE.test(String(receipt.generationSha256 || ''))
-            || receipt.hugo?.status !== 'passed' || receipt.hugo?.contract !== GATE_CONTRACT) fail('review receipt contract is invalid');
+            || receipt.hugo?.status !== 'passed' || receipt.hugo?.contract !== GATE_CONTRACT) fail('review 凭证的 contract 无效');
     } else if (action === 'push') {
         if (receipt.contract !== 'conference-blog-publish-v1' || receipt.version !== 2
             || !SHA_RE.test(String(receipt.generationSha256 || '')) || !SHA_RE.test(String(receipt.reviewSha256 || ''))
@@ -292,7 +292,7 @@ function validateReceipt(action, receipt, entry, processId) {
             || !HEX40_RE.test(String(receipt.imagePublicationCommit || ''))
             || receipt.urlAcceptance?.status !== 'passed'
             || receipt.urlAcceptance?.contract !== GATE_CONTRACT
-            || !Array.isArray(receipt.urlAcceptance?.checks)) fail('publish receipt v2/urlAcceptance contract is invalid');
+            || !Array.isArray(receipt.urlAcceptance?.checks)) fail('publish 凭证的 v2/urlAcceptance contract 无效');
     } else {
         // Kuhn 的公开 verify 动作返回 publication_state；持久的凭证仍是 publish.json v2。
         // 不要再造第二个完成文件。
@@ -312,22 +312,22 @@ function validatePublicationVerificationResult(result, entry, processId, legacy 
         || result.processingRequired !== false || result.nextAction !== null
         || result.completionScope !== 'mechanical-html+remote-oid+online-urls'
         || !passed || !untouched || (legacy ? result.legacyReverified !== true : result.legacyReverified === true)) {
-        fail(`publisher verify did not return a complete publication_state for ${entry.conferenceId}`);
+        fail(`发布方 verify 未返回 ${entry.conferenceId} 完整的 publication_state`);
     }
     return result;
 }
 
 function validateLegacyVerification(receipt, entry, processId, publishSha256) {
     if (!receipt || receipt.contract !== 'conference-legacy-publication-verification-v2'
-        || receipt.publishSha256 !== publishSha256) fail('legacy verification receipt contract is invalid');
+        || receipt.publishSha256 !== publishSha256) fail('旧版核验凭证的 contract 无效');
     const digest = receipt.verificationSha256; const body = clone(receipt); delete body.verificationSha256;
     if (!SHA_RE.test(String(digest || '')) || hash(body) !== digest) fail('legacy verification receipt self-SHA mismatch');
     if (receipt.hugo?.status !== 'passed' || receipt.hugo?.contract !== GATE_CONTRACT
         || receipt.urlAcceptance?.status !== 'passed' || receipt.urlAcceptance?.contract !== GATE_CONTRACT) {
-        fail('legacy verification receipt lacks mechanical HTML/URL acceptance');
+        fail('旧版核验凭证缺少机械化的 HTML/URL 验收结果');
     }
     // 旧凭证有意不带可变的流程身份字段；它的 publish SHA 就是调用方核对的不可变 v1 身份。
-    if (!entry?.conferenceId || !UUID_RE.test(processId)) fail('legacy verification identity is invalid');
+    if (!entry?.conferenceId || !UUID_RE.test(processId)) fail('旧版核验的身份无效');
     return receipt;
 }
 
@@ -442,7 +442,7 @@ function publishedCandidates(files, entry, readProcessState = defaultProcessStat
         const publishReceipt = loadPublicationReceipt(files, entry, name, 'push');
         if (!publishReceipt) continue;
         if (publishReceipt.conferenceId !== entry.conferenceId || publishReceipt.processId !== name) {
-            fail(`published receipt identity is invalid for ${entry.conferenceId}`);
+            fail(`${entry.conferenceId} 的已发布凭证身份无效`);
         }
         let generation;
         try { generation = loadPublicationReceipt(files, entry, name, 'generate'); }
@@ -511,14 +511,14 @@ function defaultDependencies(overrides = {}) {
 }
 
 function callProcess(deps, method, options) {
-    if (typeof deps.process?.[method] !== 'function') fail(`conference process ${method} entry is unavailable`);
+    if (typeof deps.process?.[method] !== 'function') fail(`会议进程 ${method} 入口不可用`);
     return deps.process[method](options);
 }
 
 async function callPublisher(deps, action, entry, processId) {
     const publisher = deps.publisher || {};
     const method = publisher[action];
-    if (typeof method !== 'function') fail(`publisher ${action} public entry is unavailable`);
+    if (typeof method !== 'function') fail(`发布方 ${action} 公开入口不可用`);
     return method(entry, processId, { action, contract: CONTRACT });
 }
 
@@ -526,7 +526,7 @@ function validateLegacyPublished(receipt, entry, processId) {
     if (!receipt || receipt.contract !== 'conference-blog-publish-v1' || receipt.version !== 1
         || receipt.conferenceId !== entry.conferenceId || receipt.processId !== processId
         || !HEX40_RE.test(String(receipt.publicationCommit || ''))
-        || !HEX40_RE.test(String(receipt.remoteVerifiedOid || ''))) fail('legacy v1 publish receipt is invalid');
+        || !HEX40_RE.test(String(receipt.remoteVerifiedOid || ''))) fail('旧版 v1 发布凭证无效');
     const body = clone(receipt); const digest = body.publishSha256; delete body.publishSha256;
     if (!SHA_RE.test(String(digest || '')) || hash(body) !== digest) fail('legacy v1 publish receipt self-SHA mismatch');
     return receipt;
@@ -548,15 +548,15 @@ async function discoverPublished(deps, entry, processId) {
 async function validateCompletedQueue(state, plan, deps) {
     for (let index = 0; index < state.entries.length; index += 1) {
         const entryState = state.entries[index]; const entry = plan.conferences[index];
-        if (entryState.status !== 'published') fail('complete queue contains an unpublished entry');
+        if (entryState.status !== 'published') fail('complete 状态的队列中存在未发布的条目');
         const expected = entryState.receipts.verify?.receiptSha256;
-        if (!SHA_RE.test(String(expected || ''))) fail(`complete queue ${entry.conferenceId} has no verify proof`);
-        if (!entryState.receipts.push?.receiptSha256) fail(`complete queue ${entry.conferenceId} has no publish proof`);
+        if (!SHA_RE.test(String(expected || ''))) fail(`complete 状态的队列中 ${entry.conferenceId} 缺少 verify 证明`);
+        if (!entryState.receipts.push?.receiptSha256) fail(`complete 状态的队列中 ${entry.conferenceId} 缺少 publish 证明`);
         // 默认发布器会暴露持久的 publish.json。apply 时重新读一遍，避免过期的队列状态
         // 掩盖发布漂移。
         if (typeof deps.publisher?.findPublished === 'function') {
             const found = await deps.publisher.findPublished(entry, entryState.processId, { readOnly: true });
-            if (!found) fail(`published proof disappeared for ${entry.conferenceId}`);
+            if (!found) fail(`${entry.conferenceId} 的已发布证明消失`);
             validatePublishedEvidence(entryState, entry, found, deps);
         }
     }
@@ -569,17 +569,17 @@ function validatePublishedEvidence(entryState, entry, found, deps) {
         ? validateLegacyPublished(receipt, entry, entryState.processId)
         : validateReceipt('push', receipt, entry, entryState.processId);
     if (checked.publishSha256 !== entryState.receipts.push?.receiptSha256) {
-        fail(`published proof drifted for ${entry.conferenceId}`);
+        fail(`${entry.conferenceId} 的已发布证明发生变化`);
     }
     if (entryState.legacyPublished) {
         const verification = found.verificationReceipt
             || loadLegacyVerification(deps.files, entry, entryState.processId);
         const verified = validateLegacyVerification(verification, entry, entryState.processId, checked.publishSha256);
         if (verified.verificationSha256 !== entryState.receipts.verify?.receiptSha256) {
-            fail(`legacy verification proof drifted for ${entry.conferenceId}`);
+            fail(`${entry.conferenceId} 的旧版核验证明发生变化`);
         }
     } else if (checked.publishSha256 !== entryState.receipts.verify?.receiptSha256) {
-        fail(`published proof drifted for ${entry.conferenceId}`);
+        fail(`${entry.conferenceId} 的已发布证明发生变化`);
     }
     return checked;
 }
@@ -590,14 +590,14 @@ async function runEntry(state, index, plan, deps, stateFile, options) {
     if (entryState.status === 'published') {
         if (typeof deps.publisher?.findPublished === 'function') {
             const found = await deps.publisher.findPublished(entry, entryState.processId, { readOnly: true });
-            if (!found) fail(`published proof disappeared for ${entry.conferenceId}`);
+            if (!found) fail(`${entry.conferenceId} 的已发布证明消失`);
             validatePublishedEvidence(entryState, entry, found, deps);
         }
         return { kind: 'published' };
     }
     const discovered = await discoverPublished(deps, entry, entryState.processId);
     if (discovered) {
-        if (!discovered.processId) fail(`published ${entry.conferenceId} receipt has no processId`);
+        if (!discovered.processId) fail(`${entry.conferenceId} 的已发布凭证缺少 processId`);
         // 发布凭证只能证明 process/push 发生过，不能证明本次队列运行看到的是当前线上状态。
         // 所以 v1 旧凭证和 v2 发布都从真正的 verify 入口续跑。
         entryState = { ...entryState, status: 'running', stage: 'verify', processId: discovered.processId,
@@ -626,7 +626,7 @@ async function runEntry(state, index, plan, deps, stateFile, options) {
                 return { kind: 'paused', reason: liveness.reason };
             }
         } else if (status && !['complete', 'partial', 'pending', 'running'].includes(status.status)) {
-            fail(`unknown conference process status: ${status.status}`);
+            fail(`无法识别的会议进程状态：${status.status}`);
         }
         const processResult = status?.status === 'complete' ? status
             : await callProcess(deps, 'apply', processInput);
@@ -639,7 +639,7 @@ async function runEntry(state, index, plan, deps, stateFile, options) {
     for (const action of ['generate', 'review', 'push', 'verify']) {
         if (STAGES.indexOf(action) < STAGES.indexOf(entryState.stage)) continue;
         if (entryState.stage !== action) continue;
-        if (!entryState.processId) fail(`${action} cannot run without processId`);
+        if (!entryState.processId) fail(`${action} 缺少 processId，无法运行`);
         const result = await callPublisher(deps, action, entry, entryState.processId);
         if (action === 'verify') validatePublicationVerificationResult(
             result, entry, entryState.processId, state.entries[index].legacyPublished);
@@ -681,7 +681,7 @@ function inspectQueue(options, plan, deps, directory, queueId, stateFile) {
 
 async function runConferenceQueue(options, overrides = {}) {
     const mode = options?.mode || (options?.statusOnly ? 'status' : options?.apply ? 'apply' : 'dry-run');
-    if (!['dry-run', 'status', 'apply'].includes(mode)) fail('conference queue mode is invalid');
+    if (!['dry-run', 'status', 'apply'].includes(mode)) fail('会议队列 mode 无效');
     const normalizedOptions = { ...options, mode, apply: mode === 'apply', statusOnly: mode === 'status' };
     const deps = defaultDependencies(overrides);
     const plan = options.plan ? normalizePlan(options.plan) : loadPlan(options.planFile);
@@ -691,7 +691,7 @@ async function runConferenceQueue(options, overrides = {}) {
     if (!normalizedOptions.apply) return inspectQueue(normalizedOptions, plan, deps, directory, queueId, stateFile);
     const lockTarget = path.join(directory, '.operation');
     const lock = deps.withQueueLock || deps.engine?.withFileLock;
-    if (typeof lock !== 'function') fail('conference queue requires the shared file-lock entry');
+    if (typeof lock !== 'function') fail('会议队列需要共享的文件锁入口');
     return lock(lockTarget, async () => {
         let state = readState(stateFile, plan, queueId);
         if (!state) {

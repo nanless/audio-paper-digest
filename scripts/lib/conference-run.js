@@ -57,7 +57,7 @@ function fail(message) { throw new Error(`Invalid conference run: ${message}`); 
 function assertPlainObject(value, label) {
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
-        fail(`${label} must be a plain object`);
+        fail(`${label} 必须是普通对象`);
     }
 }
 
@@ -71,17 +71,17 @@ function assertExactFields(value, fields, label) {
 }
 
 function assertSafeId(value, label) {
-    if (typeof value !== 'string' || !ID_RE.test(value)) fail(`${label} is malformed`);
+    if (typeof value !== 'string' || !ID_RE.test(value)) fail(`${label} 格式不正确`);
     return value;
 }
 
 function assertSha(value, label) {
-    if (!isSha(value)) fail(`${label} must be a lowercase SHA-256`);
+    if (!isSha(value)) fail(`${label} 必须是小写 SHA-256`);
     return value;
 }
 
 function normalizeMembers(members, conferenceId = null) {
-    if (!Array.isArray(members) || !members.length) fail('members must be a non-empty array');
+    if (!Array.isArray(members) || !members.length) fail('members 必须是非空数组');
     const normalized = members.map(member => {
         assertExactFields(member, ['paperId', 'sourceIdentity'], 'member');
         const paperId = assertSafeId(member.paperId, 'member paperId');
@@ -89,7 +89,7 @@ function normalizeMembers(members, conferenceId = null) {
         if (conferenceId !== null) {
             const conferenceMatch = String(conferenceId).match(/^([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)-(\d{4})$/);
             const sourceMatch = sourceIdentity.match(/^([^:]+):([^:]+)$/);
-            if (!conferenceMatch || !sourceMatch) fail('member conference/source identity is malformed');
+            if (!conferenceMatch || !sourceMatch) fail('成员的会议/来源身份格式不正确');
             const conference = { id: conferenceId, year: Number(conferenceMatch[2]) };
             const identity = { type: sourceMatch[1], value: sourceMatch[2] };
             if (paperId !== paperIdentity.canonicalConferencePaperId(conference, identity)) {
@@ -98,15 +98,15 @@ function normalizeMembers(members, conferenceId = null) {
         }
         return { paperId, sourceIdentity };
     }).sort((left, right) => left.paperId.localeCompare(right.paperId));
-    if (new Set(normalized.map(member => member.paperId)).size !== normalized.length) fail('members contain duplicate paperId values');
+    if (new Set(normalized.map(member => member.paperId)).size !== normalized.length) fail('members 中存在重复的 paperId');
     if (new Set(normalized.map(member => member.sourceIdentity)).size !== normalized.length) {
-        fail('members contain duplicate sourceIdentity values');
+        fail('members 中存在重复的 sourceIdentity');
     }
     return normalized;
 }
 
 function normalizeShards(shards, paperIds) {
-    if (!Array.isArray(shards) || !shards.length) fail('shards must be a non-empty array');
+    if (!Array.isArray(shards) || !shards.length) fail('shards 必须是非空数组');
     const expected = new Set(paperIds);
     const seen = new Set();
     const normalized = shards.map(shard => {
@@ -114,15 +114,15 @@ function normalizeShards(shards, paperIds) {
         const shardId = assertSafeId(shard.shardId, 'shardId');
         if (!Array.isArray(shard.paperIds) || !shard.paperIds.length) fail(`${shardId} must contain paperIds`);
         const ids = shard.paperIds.map(id => assertSafeId(id, `${shardId} paperId`)).sort();
-        if (new Set(ids).size !== ids.length) fail(`${shardId} contains duplicate paperIds`);
+        if (new Set(ids).size !== ids.length) fail(`${shardId} 中存在重复的 paperId`);
         for (const id of ids) {
-            if (!expected.has(id)) fail(`${shardId} references a non-member paperId`);
+            if (!expected.has(id)) fail(`${shardId} 引用了非成员 paperId`);
             if (seen.has(id)) fail(`paperId ${id} appears in more than one shard`);
             seen.add(id);
         }
         return { shardId, paperIds: ids };
     }).sort((left, right) => left.shardId.localeCompare(right.shardId));
-    if (new Set(normalized.map(shard => shard.shardId)).size !== normalized.length) fail('shards contain duplicate shardId values');
+    if (new Set(normalized.map(shard => shard.shardId)).size !== normalized.length) fail('shards 中存在重复的 shardId');
     if (seen.size !== expected.size) fail('shards do not cover every member exactly once');
     return normalized;
 }
@@ -134,9 +134,9 @@ function normalizeUsage(value = {}) {
         const amount = value[key];
         if (amount === undefined || amount === null) usage[key] = null;
         else if (Number.isSafeInteger(amount) && amount >= 0) usage[key] = amount;
-        else fail(`usage.${key} must be a non-negative safe integer or null`);
+        else fail(`usage.${key} 必须是非负安全整数或 null`);
     }
-    for (const key of Object.keys(value)) if (!USAGE_FIELDS.includes(key)) fail(`usage has unknown field ${key}`);
+    for (const key of Object.keys(value)) if (!USAGE_FIELDS.includes(key)) fail(`usage 含有未知字段 ${key}`);
     return usage;
 }
 
@@ -168,11 +168,11 @@ function getConferencePaperRecordHash(paperRecord) {
 
 function normalizeConferencePaperRecord(value, paperId) {
     assertPlainObject(value, `${paperId} projection`);
-    if (value.projectionSha256 !== getConferencePaperRecordHash(value)) fail(`${paperId} projection SHA does not bind its content`);
+    if (value.projectionSha256 !== getConferencePaperRecordHash(value)) fail(`${paperId} 的 projection SHA 与内容不符`);
     let tagField;
     if (value.contract === PAPER_PROJECTION_CONTRACT) tagField = 'tagMetadataSha256';
     else if (value.contract === LEGACY_PAPER_PROJECTION_CONTRACT) tagField = 'taxonomySha256';
-    else fail(`${paperId} projection identity is malformed`);
+    else fail(`${paperId} 的 projection 身份格式不正确`);
     if (Object.hasOwn(value, 'tagMetadataSha256') && Object.hasOwn(value, 'taxonomySha256')) {
         fail('论文完成记录不能混用新旧标签摘要字段。');
     }
@@ -185,33 +185,33 @@ function normalizeConferencePaperRecord(value, paperId) {
         publicationSha256: value.publicationSha256, summary: value.summary,
         projectionSha256: value.projectionSha256
     };
-    if (paperRecord.paperId !== paperId) fail(`${paperId} projection identity is malformed`);
+    if (paperRecord.paperId !== paperId) fail(`${paperId} 的 projection 身份格式不正确`);
     for (const key of ['sourceSha256', 'readerSha256', tagField, 'scoringSha256', 'publicationSha256', 'projectionSha256']) {
         assertSha(paperRecord[key], `${paperId} projection ${key}`);
     }
     if (!paperRecord.summary || typeof paperRecord.summary !== 'object' || Array.isArray(paperRecord.summary)
         || ![Object.prototype, null].includes(Object.getPrototypeOf(paperRecord.summary))) {
-        fail(`${paperId} projection summary must be an object`);
+        fail(`${paperId} 的 projection summary 必须是对象`);
     }
     return canonical(paperRecord);
 }
 
 function normalizePaperState(value, paperId) {
     assertPlainObject(value, `${paperId} state`);
-    if (!Object.prototype.hasOwnProperty.call(STATUS_TRANSITIONS, value.status)) fail(`${paperId} has an unknown state`);
+    if (!Object.prototype.hasOwnProperty.call(STATUS_TRANSITIONS, value.status)) fail(`${paperId} 的状态无法识别`);
     const allowed = value.status === 'completed' ? ['status', 'usage', 'projection']
         : ['failed', 'blocked'].includes(value.status) ? ['status', 'usage', 'reason'] : ['status', 'usage'];
     for (const key of Object.keys(value)) if (!allowed.includes(key)) fail(`${paperId} state has unknown field ${key}`);
     const state = { status: value.status, usage: normalizeUsage(value.usage) };
     if (state.status === 'completed') {
         state.projection = normalizeConferencePaperRecord(value.projection, paperId);
-        if (value.reason !== undefined) fail(`${paperId} completed state cannot have a reason`);
+        if (value.reason !== undefined) fail(`${paperId} 的 completed 状态不能带 reason`);
     } else {
-        if (value.projection !== undefined && value.projection !== null) fail(`${paperId} incomplete state cannot carry a projection`);
+        if (value.projection !== undefined && value.projection !== null) fail(`${paperId} 的未完成状态不能携带 projection`);
         if (['failed', 'blocked'].includes(state.status)) {
             if (typeof value.reason !== 'string' || !value.reason.trim() || value.reason.length > 2000) fail(`${paperId} ${state.status} state requires a reason`);
             state.reason = value.reason;
-        } else if (value.reason !== undefined) fail(`${paperId} ${state.status} state cannot have a reason`);
+        } else if (value.reason !== undefined) fail(`${paperId} 的 ${state.status} 状态不能带 reason`);
     }
     return state;
 }
@@ -219,7 +219,7 @@ function normalizePaperState(value, paperId) {
 function normalizeStates(states, paperIds) {
     assertPlainObject(states, 'paperStates');
     const keys = Object.keys(states).sort((left, right) => left.localeCompare(right));
-    if (keys.length !== paperIds.length || keys.some((id, index) => id !== paperIds[index])) fail('paperStates do not cover the exact member set');
+    if (keys.length !== paperIds.length || keys.some((id, index) => id !== paperIds[index])) fail('paperStates 未恰好覆盖成员集合');
     return Object.fromEntries(paperIds.map(id => [id, normalizePaperState(states[id], id)]));
 }
 
@@ -255,13 +255,13 @@ function normalizeInitialStates(states, paperIds) {
 function normalizeLedgerBinding(value, members, ledgerSha256, conferenceId) {
     assertExactFields(value, ['contract', 'ledgerSha256', 'ledgerMemberSetSha256', 'conferenceId', 'members', 'bindingSha256'], 'ledgerBinding');
     if (value.contract !== LEDGER_BINDING_CONTRACT || value.ledgerSha256 !== ledgerSha256 || value.conferenceId !== conferenceId) {
-        fail('ledgerBinding identity is malformed');
+        fail('ledgerBinding 的身份格式不正确');
     }
     assertSha(value.ledgerMemberSetSha256, 'ledgerBinding ledgerMemberSetSha256');
     const bindingMembers = normalizeMembers(value.members, conferenceId);
-    if (stableHash(bindingMembers) !== stableHash(members)) fail('ledgerBinding members do not bind run members');
+    if (stableHash(bindingMembers) !== stableHash(members)) fail('ledgerBinding 的 members 与运行成员不符');
     const { bindingSha256, ...bound } = value;
-    if (!isSha(bindingSha256) || bindingSha256 !== stableHash(bound)) fail('ledgerBinding SHA does not bind its content');
+    if (!isSha(bindingSha256) || bindingSha256 !== stableHash(bound)) fail('ledgerBinding 的 SHA 与内容不符');
     return canonical({ ...bound, bindingSha256 });
 }
 
@@ -271,8 +271,8 @@ function createRun(input, { allowInitialStates = false, ledgerBinding = undefine
     const allowedInput = ['conferenceId', 'ledgerSha256', 'membershipSha256', versionField,
         'filterPolicySha256', 'selectionReceiptSha256', 'selectedMemberSetSha256', 'members', 'shards', 'paperStates'];
     for (const key of Object.keys(input)) if (!allowedInput.includes(key)) fail(`input has unknown field ${key}`);
-    if (typeof input.conferenceId !== 'string' || !CONFERENCE_RE.test(input.conferenceId)) fail('conferenceId is malformed');
-    if (typeof input[versionField] !== 'string' || !TAG_CATALOG_VERSION_PATTERN.test(input[versionField])) fail(`${versionField} is malformed`);
+    if (typeof input.conferenceId !== 'string' || !CONFERENCE_RE.test(input.conferenceId)) fail('conferenceId 格式不正确');
+    if (typeof input[versionField] !== 'string' || !TAG_CATALOG_VERSION_PATTERN.test(input[versionField])) fail(`${versionField} 格式不正确`);
     const members = normalizeMembers(input.members, input.conferenceId);
     const paperIds = members.map(member => member.paperId);
     const membershipSha256 = stableHash(members);
@@ -336,13 +336,13 @@ function createConferenceRunFromVerifiedLedger(input) {
     const ledgerSha256 = loaded.ledgerSha256;
     const members = normalizeMembers(input.members);
     if (input.selectedMemberSetSha256 !== stableHash(members.map(member => member.paperId))) {
-        fail('selectedMemberSetSha256 does not bind the canonical selected paper IDs');
+        fail('selectedMemberSetSha256 与规范的已选论文 ID 不符');
     }
     for (const member of members) {
         const source = ledgerMemberByIdentity(ledger, member.sourceIdentity);
-        if (source.status.state !== 'verified') fail(`${member.sourceIdentity} is not verified in the supplied ledger`);
+        if (source.status.state !== 'verified') fail(`传入的台账中 ${member.sourceIdentity} 未通过核验`);
         if (member.paperId !== paperIdentity.canonicalConferencePaperId(ledger.conference, source.identity)) {
-            fail(`${member.paperId} is not the canonical paper-identity-v1 ID for ${member.sourceIdentity}`);
+            fail(`${member.paperId} 不是 ${member.sourceIdentity} 的规范 paper-identity-v1 ID`);
         }
     }
     const provisional = {
@@ -379,7 +379,7 @@ function assertConferenceRun(run) {
         fail(COMPLETION_PROOF_REQUIRED);
     }
     if (run.identitySha256 !== reconstructed.identitySha256) fail('immutable run identity drifted');
-    if (run.stateSha256 !== reconstructed.stateSha256) fail('paper state drifted');
+    if (run.stateSha256 !== reconstructed.stateSha256) fail('论文状态发生变化');
     return clone(reconstructed);
 }
 
@@ -387,16 +387,16 @@ function assertConferenceRunFromVerifiedLedger(run, ledgerHandle) {
     const current = assertConferenceRun(run);
     const { ledger, ledgerSha256 } = trustedLedger(ledgerHandle);
     if (current.ledgerSha256 !== ledgerSha256 || current.conferenceId !== ledger.conference.id) {
-        fail('run is not bound to the supplied ledger identity');
+        fail('运行未绑定到传入的台账身份');
     }
     if (!current.ledgerBinding) fail('run lacks a verified ledger binding');
     const expected = signLedgerBinding(ledgerBindingForRun(current, ledger));
-    if (stableHash(current.ledgerBinding) !== stableHash(expected)) fail('run ledger binding does not rebuild from the supplied ledger');
+    if (stableHash(current.ledgerBinding) !== stableHash(expected)) fail('运行台账绑定无法由传入的台账重建');
     for (const member of current.members) {
         const source = ledgerMemberByIdentity(ledger, member.sourceIdentity);
-        if (source.status.state !== 'verified') fail(`${member.sourceIdentity} is not verified in the supplied ledger`);
+        if (source.status.state !== 'verified') fail(`传入的台账中 ${member.sourceIdentity} 未通过核验`);
         if (member.paperId !== paperIdentity.canonicalConferencePaperId(ledger.conference, source.identity)) {
-            fail(`${member.paperId} is not the canonical paper-identity-v1 ID for ${member.sourceIdentity}`);
+            fail(`${member.paperId} 不是 ${member.sourceIdentity} 的规范 paper-identity-v1 ID`);
         }
     }
     return current;
@@ -405,7 +405,7 @@ function assertConferenceRunFromVerifiedLedger(run, ledgerHandle) {
 function transitionPaperState(run, paperId, nextState) {
     const current = assertConferenceRun(run);
     assertSafeId(paperId, 'paperId');
-    if (!Object.prototype.hasOwnProperty.call(current.paperStates, paperId)) fail('transition references a non-member paperId');
+    if (!Object.prototype.hasOwnProperty.call(current.paperStates, paperId)) fail('状态转换引用了非成员 paperId');
     const oldState = current.paperStates[paperId].status;
     if (nextState?.status === 'completed') fail(COMPLETION_PROOF_REQUIRED);
     const requested = normalizePaperState(nextState, paperId);

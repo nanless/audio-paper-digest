@@ -33,10 +33,10 @@ function plain(value) {
         && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 }
 function exact(value, fields, label) {
-    if (!plain(value)) fail(`${label} must be a plain object`);
+    if (!plain(value)) fail(`${label} 必须是普通对象`);
     const actual = Object.keys(value).sort(); const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
-        fail(`${label} has unknown or missing fields`);
+        fail(`${label} 含有未知字段或缺少必需字段`);
     }
 }
 function canonical(value) {
@@ -46,12 +46,12 @@ function canonical(value) {
 }
 const stableHash = value => sha256(JSON.stringify(canonical(value)));
 const prettyBytes = value => Buffer.from(`${JSON.stringify(canonical(value), null, 2)}\n`, 'utf8');
-function sha(value, label) { if (!SHA_RE.test(String(value || ''))) fail(`${label} must be a SHA-256`); return value; }
+function sha(value, label) { if (!SHA_RE.test(String(value || ''))) fail(`${label} 必须是 SHA-256`); return value; }
 function safeDirectory(directory, label, { create = false } = {}) {
-    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} must be an absolute directory`);
+    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} 必须是绝对目录`);
     const resolved = path.resolve(directory);
     if (!fs.existsSync(resolved)) {
-        if (!create) fail(`${label} does not exist`);
+        if (!create) fail(`${label} 不存在`);
         fs.mkdirSync(resolved, { recursive: true, mode: 0o700 });
     }
     const info = fs.lstatSync(resolved);
@@ -60,11 +60,11 @@ function safeDirectory(directory, label, { create = false } = {}) {
 }
 function safeDataPath(dataRoot, relativePath) {
     if (!/^archive\/\d{4}-\d{2}-\d{2}\/filtered-papers\.json$/.test(String(relativePath || ''))) {
-        fail('archive crawl pointer is not an approved retained filtered snapshot');
+        fail('归档爬虫指针不是已批准的保留筛选快照');
     }
     const root = safeDirectory(dataRoot, 'dataRoot'); const filename = path.resolve(root, relativePath);
     if (!filename.startsWith(`${root}${path.sep}`) || path.dirname(filename) !== path.resolve(root, path.dirname(relativePath))) {
-        fail('archive crawl pointer escapes dataRoot');
+        fail('归档爬虫指针超出 dataRoot 范围');
     }
     const parent = path.dirname(filename);
     if (fs.realpathSync(parent) !== parent) fail('archive crawl pointer parent is unsafe');
@@ -81,12 +81,12 @@ function readRetainedFilteredFile(dataRoot, relativePath) {
         }
         const bytes = fs.readFileSync(fd); const after = fs.fstatSync(fd);
         if (bytes.length !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size) {
-            fail('retained filtered snapshot changed while read');
+            fail('保留的筛选快照在读取过程中发生变化');
         }
         let value;
         try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
-        catch { fail('retained filtered snapshot is not strict UTF-8 JSON'); }
-        if (!plain(value) || !Array.isArray(value.papers)) fail('retained filtered snapshot lacks a papers array');
+        catch { fail('保留的筛选快照不是严格的 UTF-8 JSON'); }
+        if (!plain(value) || !Array.isArray(value.papers)) fail('保留的筛选快照缺少 papers 数组');
         return { relativePath, bytes, fileSha256: sha256(bytes), papers: value.papers };
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
@@ -131,14 +131,14 @@ function authorityNameFor(arxivId, match) {
     if (!identityApi.ARXIV_ID_RE.test(String(arxivId || '')) || !match || match.arxivId !== arxivId
         || !SHA_RE.test(String(match.archiveFileSha256 || '')) || !SHA_RE.test(String(match.recordSha256 || ''))
         || typeof match.archiveRelativePath !== 'string' || !Number.isSafeInteger(match.recordIndex) || match.recordIndex < 0) {
-        fail('arXiv ID and archive record pointer must be normalized');
+        fail('arXiv ID 与归档记录指针必须已规范化');
     }
     const pointerSha256 = stableHash({ archiveRelativePath: match.archiveRelativePath, archiveFileSha256: match.archiveFileSha256,
         recordIndex: match.recordIndex, recordSha256: match.recordSha256 });
     return `${AUTHORITY_PREFIX}${arxivId}-${pointerSha256}.json`;
 }
 function normalizeRecord(record, expectedId) {
-    if (!plain(record) || normalizedArxivId(record) !== expectedId) fail('archive crawl record does not bind the expected arXiv ID');
+    if (!plain(record) || normalizedArxivId(record) !== expectedId) fail('归档爬虫记录未绑定预期的 arXiv ID');
     return clone(record);
 }
 function normalizeAuthority(value) {
@@ -148,17 +148,17 @@ function normalizeAuthority(value) {
     if (value.contract !== CONTRACT || value.version !== VERSION || value.evidenceKind !== EVIDENCE_KIND
         || !Number.isSafeInteger(value.recordIndex) || value.recordIndex < 0
         || !/^archive\/\d{4}-\d{2}-\d{2}\/filtered-papers\.json$/.test(String(value.archiveRelativePath || ''))) {
-        fail('archive crawl identity authority contract is invalid');
+        fail('归档爬虫身份授权凭据的 contract 无效');
     }
     let identity;
     try { identity = identityApi.normalizeIdentity(value.identity); }
     catch (error) { fail(error.message); }
     if (identity.kind !== 'arxiv' || identity.citation !== null || value.paperId !== identity.canonicalId
         || sha(value.identitySha256, 'identitySha256') !== identityApi.identitySha256(identity)
-        || sha(value.identityRecordSha256, 'identityRecordSha256') !== identityApi.recordSha256(identity)) fail('archive crawl identity binding is invalid');
+        || sha(value.identityRecordSha256, 'identityRecordSha256') !== identityApi.recordSha256(identity)) fail('归档爬虫身份绑定无效');
     const record = normalizeRecord(value.record, identity.arxivId);
     if (sha(value.archiveFileSha256, 'archiveFileSha256') !== value.archiveFileSha256
-        || sha(value.recordSha256, 'recordSha256') !== stableHash(record)) fail('archive crawl record SHA binding is invalid');
+        || sha(value.recordSha256, 'recordSha256') !== stableHash(record)) fail('归档爬虫记录的 SHA 绑定无效');
     const body = { ...clone(value), identity, record }; delete body.authoritySha256;
     if (sha(value.authoritySha256, 'authoritySha256') !== stableHash(body)) fail('archive crawl authority self-SHA drifted');
     return { ...body, authoritySha256: value.authoritySha256 };
@@ -166,7 +166,7 @@ function normalizeAuthority(value) {
 function verifyMatchAgainstRetained({ dataRoot, match }) {
     if (!match || typeof match !== 'object' || !identityApi.ARXIV_ID_RE.test(String(match.arxivId || ''))
         || typeof match.archiveRelativePath !== 'string' || !Number.isSafeInteger(match.recordIndex) || match.recordIndex < 0
-        || !SHA_RE.test(String(match.archiveFileSha256 || '')) || !SHA_RE.test(String(match.recordSha256 || ''))) fail('archive crawl match is malformed');
+        || !SHA_RE.test(String(match.archiveFileSha256 || '')) || !SHA_RE.test(String(match.recordSha256 || ''))) fail('归档爬虫匹配记录格式不正确');
     const loaded = readRetainedFilteredFile(dataRoot, match.archiveRelativePath); const record = loaded.papers[match.recordIndex];
     if (loaded.fileSha256 !== match.archiveFileSha256 || normalizedArxivId(record) !== match.arxivId
         || stableHash(record) !== match.recordSha256) fail('retained filtered snapshot no longer matches the selected identity record');
@@ -188,19 +188,19 @@ function authorityFor(match) {
 function readAuthority(identityRoot, authorityName) {
     const root = safeDirectory(identityRoot, 'archiveIdentityRoot');
     if (!SAFE_JSON_NAME.test(String(authorityName || ''))) fail('authorityName is unsafe');
-    const filename = path.resolve(root, authorityName); if (path.dirname(filename) !== root) fail('authorityName escapes archiveIdentityRoot');
+    const filename = path.resolve(root, authorityName); if (path.dirname(filename) !== root) fail('authorityName 超出 archiveIdentityRoot 范围');
     let fd;
     try {
         fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const opened = fs.fstatSync(fd); const named = fs.lstatSync(filename);
         if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1 || opened.dev !== named.dev || opened.ino !== named.ino) fail('archive identity authority is unsafe');
         const bytes = fs.readFileSync(fd); const after = fs.fstatSync(fd);
-        if (bytes.length !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino) fail('archive identity authority changed while read');
+        if (bytes.length !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino) fail('归档身份授权凭据在读取过程中发生变化');
         let value;
         try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
-        catch { fail('archive identity authority is not strict UTF-8 JSON'); }
+        catch { fail('归档身份授权凭据不是严格的 UTF-8 JSON'); }
         const normalized = normalizeAuthority(value);
-        if (!bytes.equals(prettyBytes(normalized))) fail('archive identity authority bytes are not canonical');
+        if (!bytes.equals(prettyBytes(normalized))) fail('归档身份授权凭据的字节不是规范形式');
         return { filename: fs.realpathSync(filename), bytes, sha256: sha256(bytes), authority: normalized, dev: opened.dev, ino: opened.ino };
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
@@ -211,11 +211,11 @@ function writeExact(identityRoot, authorityName, bytes) {
         fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.fchmodSync(fd, 0o600);
     } catch (error) {
         if (error.code !== 'EEXIST') throw error;
-        if (!fs.readFileSync(filename).equals(bytes)) fail(`refuses to overwrite different immutable identity authority: ${authorityName}`);
+        if (!fs.readFileSync(filename).equals(bytes)) fail(`拒绝覆盖内容不同的不可变身份授权凭据：${authorityName}`);
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 function authorityHandleSnapshot(handle) {
-    if (!handle || typeof handle !== 'object' || !HANDLES.has(handle)) fail('authenticated archive crawl identity handle required');
+    if (!handle || typeof handle !== 'object' || !HANDLES.has(handle)) fail('需要已认证的归档爬虫身份句柄');
     return clone(HANDLE_DATA.get(handle).public);
 }
 function loadArchiveCrawlAuthorityHandle({ identityRoot, dataRoot, authorityName } = {}) {
@@ -231,24 +231,24 @@ function loadArchiveCrawlAuthorityHandle({ identityRoot, dataRoot, authorityName
     return handle;
 }
 function replayAuthorityHandle(handle, { requireProduction = false } = {}) {
-    if (!handle || typeof handle !== 'object' || !HANDLES.has(handle)) fail('authenticated archive crawl identity handle required');
+    if (!handle || typeof handle !== 'object' || !HANDLES.has(handle)) fail('需要已认证的归档爬虫身份句柄');
     const original = HANDLE_DATA.get(handle);
-    if (requireProduction && original.public.productionAuthorized !== true) fail('production-authorized archive crawl identity handle required');
+    if (requireProduction && original.public.productionAuthorized !== true) fail('需要已获生产授权的归档爬虫身份句柄');
     const loaded = readAuthority(original.identityRoot, original.public.authorityName);
     verifyMatchAgainstRetained({ dataRoot: original.dataRoot, match: { arxivId: loaded.authority.identity.arxivId,
         archiveRelativePath: loaded.authority.archiveRelativePath, archiveFileSha256: loaded.authority.archiveFileSha256,
         recordIndex: loaded.authority.recordIndex, recordSha256: loaded.authority.recordSha256 } });
     const current = { authority: loaded.authority, authorityName: original.public.authorityName, authorityFile: loaded.filename,
         authorityFileSha256: loaded.sha256, productionAuthorized: true };
-    if (loaded.dev !== original.authorityFileDev || loaded.ino !== original.authorityFileIno || stableHash(current) !== stableHash(original.public)) fail('archive crawl identity authority or retained evidence changed after handle creation');
+    if (loaded.dev !== original.authorityFileDev || loaded.ino !== original.authorityFileIno || stableHash(current) !== stableHash(original.public)) fail('句柄创建后，归档爬虫身份授权凭据或保留证据发生变化');
     return handle;
 }
 function prepareArchiveCrawlAuthority({ identityRoot, dataRoot, arxivId, match, apply = false } = {}) {
-    if (!match || match.arxivId !== arxivId) fail('selected archive match must bind the requested arXiv ID');
+    if (!match || match.arxivId !== arxivId) fail('所选的归档匹配记录必须绑定请求的 arXiv ID');
     const authorityName = authorityNameFor(arxivId, match);
     if (!apply) return { status: 'dry-run', paperId: `arxiv:${arxivId}`, arxivId, authorityName };
     const retained = verifyMatchAgainstRetained({ dataRoot, match });
-    if (retained.arxivId !== arxivId) fail('selected archive record belongs to another arXiv ID');
+    if (retained.arxivId !== arxivId) fail('所选的归档记录属于另一个 arXiv ID');
     const authority = authorityFor(retained); const bytes = prettyBytes(authority); const filename = path.join(path.resolve(identityRoot), authorityName);
     const existed = fs.existsSync(filename); writeExact(identityRoot, authorityName, bytes);
     const loaded = readAuthority(identityRoot, authorityName);

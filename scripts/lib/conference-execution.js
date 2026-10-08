@@ -29,28 +29,28 @@ function isPlainObject(value) {
         && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 }
 function exact(value, fields, label) {
-    if (!isPlainObject(value)) fail(`${label} must be a plain object`);
+    if (!isPlainObject(value)) fail(`${label} 必须是普通对象`);
     const actual = Object.keys(value).sort(); const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
         fail(`${label} has unknown or missing fields`);
     }
 }
 function stableHash(value) { return runApi.stableHash(value); }
-function assertSha(value, label) { if (!SHA_RE.test(String(value || ''))) fail(`${label} must be a lowercase SHA-256`); }
-function assertUuid(value, label = 'executionId') { if (typeof value !== 'string' || !UUID_RE.test(value)) fail(`${label} must be a canonical UUID v4`); return value; }
-function assertOwner(value) { if (typeof value !== 'string' || !OWNER_RE.test(value)) fail('owner is malformed'); return value; }
+function assertSha(value, label) { if (!SHA_RE.test(String(value || ''))) fail(`${label} 必须是小写 SHA-256`); }
+function assertUuid(value, label = 'executionId') { if (typeof value !== 'string' || !UUID_RE.test(value)) fail(`${label} 必须是规范的 UUID v4`); return value; }
+function assertOwner(value) { if (typeof value !== 'string' || !OWNER_RE.test(value)) fail('owner 格式不正确'); return value; }
 function assertTimestamp(value, label) {
     if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)
-        || Number.isNaN(new Date(value).getTime()) || new Date(value).toISOString() !== value) fail(`${label} must be canonical UTC ISO time`);
+        || Number.isNaN(new Date(value).getTime()) || new Date(value).toISOString() !== value) fail(`${label} 必须是规范的 UTC ISO 时间`);
 }
 function nowIso(now) {
     const value = now === undefined ? new Date() : now instanceof Date ? now : new Date(now);
-    if (Number.isNaN(value.getTime())) fail('now is invalid');
+    if (Number.isNaN(value.getTime())) fail('now 无效');
     return value.toISOString();
 }
 
 function safeDirectory(root, create = false) {
-    if (typeof root !== 'string' || !path.isAbsolute(root)) fail('execution root must be absolute');
+    if (typeof root !== 'string' || !path.isAbsolute(root)) fail('执行根目录必须是绝对路径');
     const normalized = path.resolve(root);
     if (create) fs.mkdirSync(normalized, { recursive: true, mode: 0o700 });
     const stat = fs.lstatSync(normalized);
@@ -64,7 +64,7 @@ function executionDirectory(root, executionId, { create = false } = {}) {
     const safeRoot = safeDirectory(root, create);
     assertUuid(executionId);
     const target = path.resolve(safeRoot, executionId);
-    if (path.dirname(target) !== safeRoot) fail('execution directory escapes root');
+    if (path.dirname(target) !== safeRoot) fail('执行目录超出根目录范围');
     if (create) {
         try { fs.mkdirSync(target, { mode: 0o700 }); }
         catch (error) { if (error.code !== 'EEXIST') throw error; }
@@ -77,7 +77,7 @@ function executionDirectory(root, executionId, { create = false } = {}) {
 function ensurePatchDirectory(directory) {
     const safeRoot = safeDirectory(directory);
     const target = path.resolve(safeRoot, 'patches');
-    if (path.dirname(target) !== safeRoot) fail('patch directory escapes execution directory');
+    if (path.dirname(target) !== safeRoot) fail('补丁目录超出执行目录范围');
     let created = false;
     try {
         fs.mkdirSync(target, { mode: 0o700 });
@@ -98,7 +98,7 @@ function safeDirectFile(directory, name, { mustExist = true } = {}) {
     const safeRoot = safeDirectory(directory);
     if (typeof name !== 'string' || !SAFE_JSON_NAME.test(name)) fail('unsafe controlled JSON filename');
     const target = path.resolve(safeRoot, name);
-    if (path.dirname(target) !== safeRoot) fail('controlled JSON path escapes its directory');
+    if (path.dirname(target) !== safeRoot) fail('受控 JSON 路径超出所在目录');
     if (mustExist) {
         const stat = fs.lstatSync(target);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) fail('unsafe controlled JSON file');
@@ -136,7 +136,7 @@ function writeExclusive(filename, bytes) {
     if (collision) return { created: false, descriptor: null };
     const stat = fs.lstatSync(filename);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size !== raw.length) {
-        fail('new exclusive JSON file changed before its creation could be recorded');
+        fail('新建的独占 JSON 文件在记录创建之前已被改动');
     }
     const descriptor = { path: filename, dev: stat.dev, ino: stat.ino,
         size: stat.size, sha256: rawSha256(raw) };
@@ -247,7 +247,7 @@ function runFromState(template, paperStates) {
 function assertInitialRun(run) {
     for (const [paperId, state] of Object.entries(run.paperStates)) {
         if (state.status !== 'pending' || Object.values(state.usage).some(value => value !== null)) {
-            fail(`${paperId} source run must be initial pending state with no usage`);
+            fail(`${paperId} 的来源运行必须是初始 pending 状态且没有用量记录`);
         }
     }
 }
@@ -271,7 +271,7 @@ function normalizeSource(value) {
         'planReceiptSha256', 'planReceiptFileSha256', 'runFileSha256', 'importReceiptSha256',
         'filterPolicySha256', 'selectionReceiptSha256', 'selectedMemberSetSha256'];
     exact(value, fields, 'source');
-    if (typeof value.conferenceId !== 'string' || !value.conferenceId) fail('source conferenceId is malformed');
+    if (typeof value.conferenceId !== 'string' || !value.conferenceId) fail('来源的 conferenceId 格式不正确');
     for (const field of fields.filter(field => field !== 'conferenceId')) assertSha(value[field], `source.${field}`);
     return clone(value);
 }
@@ -282,7 +282,7 @@ function authorityDigest(value) {
 function normalizeAuthority(value) {
     exact(value, ['contract', 'version', 'executionId', 'source', 'runTemplateSha256', 'authoritySha256'],
         'execution authority');
-    if (value.contract !== AUTHORITY_CONTRACT || value.version !== AUTHORITY_VERSION) fail('execution authority contract/version mismatch');
+    if (value.contract !== AUTHORITY_CONTRACT || value.version !== AUTHORITY_VERSION) fail('执行授权凭据的 contract/version 不匹配');
     assertUuid(value.executionId); const source = normalizeSource(value.source);
     assertSha(value.runTemplateSha256, 'execution authority runTemplateSha256');
     if (value.authoritySha256 !== authorityDigest(value)) fail('execution authority SHA drifted');
@@ -311,15 +311,15 @@ function normalizeAttempt(value, paperIds, previousStates, template) {
     assertUuid(value.operationId, 'attempt operationId'); assertSha(value.patchSha256, 'attempt patchSha256');
     const patch = normalizePatch(value.patch);
     if (patch.operationId !== value.operationId || patch.paperId !== value.paperId
-        || patch.expectedStateSha256 !== value.priorStateSha256) fail('attempt patch does not bind its operation receipt');
+        || patch.expectedStateSha256 !== value.priorStateSha256) fail('尝试补丁未绑定其操作凭证');
     if (stableHash(patch) !== value.patchSha256) fail('attempt patch SHA does not bind patch content');
-    if (!paperIds.has(value.paperId)) fail('attempt references non-member paperId');
+    if (!paperIds.has(value.paperId)) fail('尝试记录引用了非成员 paperId');
     if (!Object.prototype.hasOwnProperty.call(runApi.STATUS_TRANSITIONS, value.fromStatus)
         || !Object.prototype.hasOwnProperty.call(runApi.STATUS_TRANSITIONS, value.toStatus)
-        || !runApi.STATUS_TRANSITIONS[value.fromStatus].includes(value.toStatus)) fail('attempt has illegal status transition');
-    if (previousStates[value.paperId].status !== value.fromStatus) fail('attempt status history is discontinuous');
+        || !runApi.STATUS_TRANSITIONS[value.fromStatus].includes(value.toStatus)) fail('尝试记录的状态转换不合法');
+    if (previousStates[value.paperId].status !== value.fromStatus) fail('尝试记录的状态历史不连续');
     const usage = runApi.normalizeUsage(value.usage);
-    if (!usageAtLeast(previousStates[value.paperId].usage, usage)) fail('attempt usage regresses');
+    if (!usageAtLeast(previousStates[value.paperId].usage, usage)) fail('尝试记录的用量出现回退');
     assertTimestamp(value.recordedAt, 'attempt recordedAt'); assertSha(value.priorStateSha256, 'attempt priorStateSha256'); assertSha(value.nextStateSha256, 'attempt nextStateSha256');
     // 必须保存完整的 nextState：只留 status 和用量，就会丢掉 run 协议记录的失败
     // 原因或已完成的 projection。
@@ -327,7 +327,7 @@ function normalizeAttempt(value, paperIds, previousStates, template) {
         runFromState(template, previousStates), patch.paperId, patch.nextState
     ).paperStates[patch.paperId];
     if (boundNext.status !== value.toStatus || !usageEqual(boundNext.usage, usage)) {
-        fail('attempt receipt does not match bound patch nextState');
+        fail('尝试凭证与所绑定补丁的 nextState 不一致');
     }
     previousStates[value.paperId] = boundNext;
     return { ...clone(value), patch, usage };
@@ -339,17 +339,17 @@ function assertConferenceExecution(value) {
     if (value.runTemplate?.version !== format) fail('会议执行记录与运行模板的格式版本不一致。');
     assertUuid(value.executionId); assertTimestamp(value.createdAt, 'createdAt');
     const source = normalizeSource(value.source);
-    if (!Array.isArray(value.attempts)) fail('attempts must be an array');
+    if (!Array.isArray(value.attempts)) fail('attempts 必须是数组');
     if ((isPlainObject(value.paperStates) && Object.values(value.paperStates).some(state => state?.status === 'completed'))
         || value.attempts.some(attempt => attempt?.toStatus === 'completed' || attempt?.patch?.nextState?.status === 'completed')) {
-        fail('completed state requires an authenticated conference completion-proof handle');
+        fail('completed 状态需要已认证的会议完成凭证句柄');
     }
     const baselineStates = runFromState(value.runTemplate, value.paperStates).paperStates;
     const initialStates = initialPaperStates(value.runTemplate);
     const templateRun = runFromState(value.runTemplate, initialStates);
     if (templateRun.conferenceId !== source.conferenceId || templateRun.ledgerSha256 !== source.ledgerSha256
-        || templateRun.identitySha256 !== source.runIdentitySha256 || templateRun.membershipSha256 !== source.membershipSha256) fail('source does not bind run template');
-    if (source.runStateSha256 !== templateRun.stateSha256) fail('source runStateSha256 does not bind the rebuilt initial run state');
+        || templateRun.identitySha256 !== source.runIdentitySha256 || templateRun.membershipSha256 !== source.membershipSha256) fail('来源未绑定运行模板');
+    if (source.runStateSha256 !== templateRun.stateSha256) fail('来源的 runStateSha256 与重建出的初始运行状态不符');
     const paperIds = new Set(Object.keys(baselineStates));
     const history = clone(initialStates);
     const initialExecution = {
@@ -363,23 +363,23 @@ function assertConferenceExecution(value) {
         // 传入这份不可变的 template，只是为了让补丁对 run 状态的完整影响能够复现；
         // 它本身不随尝试一起保存。
         const normalized = normalizeAttempt(attempt, paperIds, history, value.runTemplate);
-        if (operations.has(normalized.operationId)) fail('attempt operationId is duplicated');
-        if (normalized.priorStateSha256 !== expectedPrior) fail('attempt SHA history is discontinuous');
-        if (normalized.recordedAt < previousTime) fail('attempt recordedAt moves backwards in time');
+        if (operations.has(normalized.operationId)) fail('尝试记录的 operationId 重复');
+        if (normalized.priorStateSha256 !== expectedPrior) fail('尝试记录的 SHA 历史不连续');
+        if (normalized.recordedAt < previousTime) fail('尝试记录的 recordedAt 时间倒退');
         operations.add(normalized.operationId);
         const prefix = {
             version: value.version, contract: value.contract, executionId: value.executionId, createdAt: value.createdAt,
             source, runTemplate: clone(value.runTemplate), paperStates: clone(history), attempts: [...attempts, normalized]
         };
         const prefixDigest = stateDigest(prefix);
-        if (normalized.nextStateSha256 !== prefixDigest) fail('attempt nextStateSha256 does not bind its reconstructed state');
+        if (normalized.nextStateSha256 !== prefixDigest) fail('尝试记录的 nextStateSha256 与重建出的状态不符');
         expectedPrior = prefixDigest; previousTime = normalized.recordedAt;
         attempts.push(normalized);
     }
     for (const paperId of paperIds) {
         const finalState = baselineStates[paperId]; const recorded = history[paperId];
         if (stableHash(finalState) !== stableHash(recorded)) {
-            fail('complete paper state does not match append-only attempts');
+            fail('论文的 complete 状态与只追加的尝试记录不一致');
         }
     }
     const rebuilt = {
@@ -388,7 +388,7 @@ function assertConferenceExecution(value) {
     };
     const digest = stateDigest(rebuilt);
     if (value.stateSha256 !== digest) fail('state SHA drifted');
-    if (attempts.length && attempts.at(-1).nextStateSha256 !== digest) fail('last attempt does not bind current state SHA');
+    if (attempts.length && attempts.at(-1).nextStateSha256 !== digest) fail('最后一次尝试记录未绑定当前状态 SHA');
     return { ...rebuilt, stateSha256: digest };
 }
 
@@ -400,7 +400,7 @@ function prepareExecutionFromPlan({ executionRoot, planHandle, executionId = cry
     assertInitialRun(verifiedRun); assertUuid(executionId);
     if (verifiedRun.version === runApi.LEGACY_VERSION) {
         // 旧父计划只能恢复已有执行标识，不能重新创建旧状态。
-        if (typeof executionRoot !== 'string' || !path.isAbsolute(executionRoot)) fail('execution root must be absolute');
+        if (typeof executionRoot !== 'string' || !path.isAbsolute(executionRoot)) fail('执行根目录必须是绝对路径');
         if (!fs.existsSync(path.resolve(executionRoot, executionId))) {
             fail('旧会议计划只能恢复已有执行记录，不能创建新的执行标识。');
         }
@@ -415,7 +415,7 @@ function prepareExecutionFromPlan({ executionRoot, planHandle, executionId = cry
             if (existing.version !== LEGACY_VERSION
                 || stableHash(existing.source) !== stableHash(expectedSource)
                 || stableHash(existing.runTemplate) !== stableHash(expectedTemplate)) {
-                fail('existing executionId is bound to a different source plan');
+                fail('已有 executionId 绑定的是另一个来源计划');
             }
             ensurePatchDirectory(directory);
             return existing;
@@ -457,7 +457,7 @@ function prepareExecutionFromPlan({ executionRoot, planHandle, executionId = cry
         if (error.code !== 'EEXIST') throw error;
         const directoryStat = fs.lstatSync(directory);
         if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || fs.realpathSync(directory) !== directory) {
-            fail('existing execution path is not a safe directory');
+            fail('已有执行路径不是安全的目录');
         }
         const allowed = new Set(['patches', 'authority.json', 'state.json']);
         const entries = fs.readdirSync(directory).sort();
@@ -472,7 +472,7 @@ function prepareExecutionFromPlan({ executionRoot, planHandle, executionId = cry
             const existing = readExecution({ executionRoot: root, executionId, planHandle });
             if (stableHash(existing.source) !== stableHash(state.source)
                 || stableHash(existing.runTemplate) !== stableHash(state.runTemplate)) {
-                fail('existing executionId is bound to a different source plan');
+                fail('已有 executionId 绑定的是另一个来源计划');
             }
             ensurePatchDirectory(directory);
             return existing;
@@ -498,7 +498,7 @@ function prepareExecutionFromPlan({ executionRoot, planHandle, executionId = cry
         ensurePatchDirectory(directory);
         if (!existingState) {
             const recoveredState = writeExclusive(path.join(directory, 'state.json'), `${JSON.stringify(state, null, 2)}\n`);
-            if (!recoveredState.created) fail('execution recovery state appeared concurrently');
+            if (!recoveredState.created) fail('执行恢复状态在并发操作中出现');
         }
         const recoveredAuthority = writeExclusive(path.join(directory, 'authority.json'), `${JSON.stringify(durableAuthority, null, 2)}\n`);
         if (!recoveredAuthority.created) {
@@ -567,14 +567,14 @@ function acquireOperationLock(directory, owner, now) {
 }
 function releaseOperationLock(filename) {
     const stat = fs.lstatSync(filename);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) fail('operation lock changed while held');
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) fail('操作锁在持有期间发生变化');
     fs.unlinkSync(filename);
 }
 function normalizePatch(value) {
     exact(value, ['operationId', 'expectedStateSha256', 'paperId', 'nextState'], 'transition patch');
     assertUuid(value.operationId, 'patch operationId'); assertSha(value.expectedStateSha256, 'patch expectedStateSha256');
-    if (typeof value.paperId !== 'string' || !value.paperId) fail('patch paperId is malformed');
-    if (!isPlainObject(value.nextState)) fail('patch nextState must be an object');
+    if (typeof value.paperId !== 'string' || !value.paperId) fail('补丁的 paperId 格式不正确');
+    if (!isPlainObject(value.nextState)) fail('补丁的 nextState 必须是对象');
     return clone(value);
 }
 

@@ -37,7 +37,7 @@ const clone = value => JSON.parse(JSON.stringify(value));
 function fail(message) { throw new Error(`Conference plan rejected: ${message}`); }
 function plain(value, label) {
     if (!value || typeof value !== 'object' || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
-        fail(`${label} must be a plain object`);
+        fail(`${label} 必须是普通对象`);
     }
 }
 function exact(value, fields, label) {
@@ -50,16 +50,16 @@ function safeName(value, label) {
     return value;
 }
 function id(value, label) {
-    if (typeof value !== 'string' || !ID_RE.test(value)) fail(`${label} is malformed`);
+    if (typeof value !== 'string' || !ID_RE.test(value)) fail(`${label} 格式不正确`);
     return value;
 }
 function sha(value, label) {
-    if (!SHA_RE.test(String(value || ''))) fail(`${label} must be a lowercase SHA-256`);
+    if (!SHA_RE.test(String(value || ''))) fail(`${label} 必须是小写 SHA-256`);
     return value;
 }
 
 function safeRuntimeFile(root, name, { output = false } = {}) {
-    if (typeof root !== 'string' || !path.isAbsolute(root)) fail('configured runtime directory must be absolute');
+    if (typeof root !== 'string' || !path.isAbsolute(root)) fail('配置的运行目录必须是绝对路径');
     safeName(name, 'runtime filename');
     const configuredDirectory = path.resolve(root);
     let stat;
@@ -76,7 +76,7 @@ function safeRuntimeFile(root, name, { output = false } = {}) {
         // 待用的叶子目录。
         const canonicalDirectory = path.join(fs.realpathSync(parent), path.basename(configuredDirectory));
         const filename = path.resolve(canonicalDirectory, name);
-        if (path.dirname(filename) !== canonicalDirectory) fail('runtime filename escapes configured directory');
+        if (path.dirname(filename) !== canonicalDirectory) fail('运行文件名超出配置目录范围');
         return filename;
     }
     if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`unsafe runtime directory: ${configuredDirectory}`);
@@ -84,7 +84,7 @@ function safeRuntimeFile(root, name, { output = false } = {}) {
     // 真实目录，之后所有包含关系检查都用它的规范写法。
     const directory = fs.realpathSync(configuredDirectory);
     const filename = path.resolve(directory, name);
-    if (path.dirname(filename) !== directory) fail('runtime filename escapes configured directory');
+    if (path.dirname(filename) !== directory) fail('运行文件名超出配置目录范围');
     if (!output && !fs.existsSync(filename)) fail(`runtime input does not exist: ${name}`);
     return filename;
 }
@@ -96,45 +96,45 @@ function readRuntimeJson(root, name) {
 }
 
 function normalizeMembers(value) {
-    if (!Array.isArray(value) || !value.length) fail('selection identities must be a non-empty array');
+    if (!Array.isArray(value) || !value.length) fail('selection identities 必须是非空数组');
     const members = value.map(item => {
         exact(item, ['paperId', 'sourceIdentity'], 'selection identity');
         return { paperId: id(item.paperId, 'selection paperId'), sourceIdentity: id(item.sourceIdentity, 'selection sourceIdentity') };
     }).sort((a, b) => a.paperId.localeCompare(b.paperId));
-    if (new Set(members.map(item => item.paperId)).size !== members.length) fail('selection contains duplicate paperId values');
-    if (new Set(members.map(item => item.sourceIdentity)).size !== members.length) fail('selection contains duplicate sourceIdentity values');
+    if (new Set(members.map(item => item.paperId)).size !== members.length) fail('selection 中存在重复的 paperId');
+    if (new Set(members.map(item => item.sourceIdentity)).size !== members.length) fail('selection 中存在重复的 sourceIdentity');
     return members;
 }
 
 function normalizeSelection(value) {
     exact(value, ['contract', 'identities', 'selectedMemberSetSha256'], 'selectionPolicy');
-    if (value.contract !== SELECTION_CONTRACT) fail('selectionPolicy contract is unsupported');
+    if (value.contract !== SELECTION_CONTRACT) fail('不支持该 selectionPolicy contract');
     const identities = normalizeMembers(value.identities);
     const expected = stableHash(identities.map(member => member.paperId));
     if (sha(value.selectedMemberSetSha256, 'selectionPolicy.selectedMemberSetSha256') !== expected) {
-        fail('selectedMemberSetSha256 does not bind explicit canonical paper IDs');
+        fail('selectedMemberSetSha256 与显式给出的规范论文 ID 不符');
     }
     return { contract: value.contract, identities, selectedMemberSetSha256: expected };
 }
 
 function normalizeShards(value, members) {
-    if (!Array.isArray(value) || !value.length) fail('shards must be a non-empty array');
+    if (!Array.isArray(value) || !value.length) fail('shards 必须是非空数组');
     const allowed = new Set(members.map(member => member.paperId)); const seen = new Set();
     const shards = value.map(item => {
         exact(item, ['shardId', 'paperIds'], 'shard');
         const shardId = id(item.shardId, 'shardId');
         if (!Array.isArray(item.paperIds) || !item.paperIds.length) fail(`${shardId} must contain paperIds`);
         const paperIds = item.paperIds.map(paperId => id(paperId, `${shardId} paperId`)).sort();
-        if (new Set(paperIds).size !== paperIds.length) fail(`${shardId} contains duplicate paperIds`);
+        if (new Set(paperIds).size !== paperIds.length) fail(`${shardId} 中存在重复的 paperId`);
         for (const paperId of paperIds) {
-            if (!allowed.has(paperId)) fail(`${shardId} references a paper outside the explicit selection`);
+            if (!allowed.has(paperId)) fail(`${shardId} 引用了显式选择之外的论文`);
             if (seen.has(paperId)) fail(`paperId ${paperId} appears in more than one shard`);
             seen.add(paperId);
         }
         return { shardId, paperIds };
     }).sort((a, b) => a.shardId.localeCompare(b.shardId));
-    if (new Set(shards.map(item => item.shardId)).size !== shards.length) fail('shards contain duplicate shardId values');
-    if (seen.size !== allowed.size) fail('shards do not cover every selected paper exactly once');
+    if (new Set(shards.map(item => item.shardId)).size !== shards.length) fail('shards 中存在重复的 shardId');
+    if (seen.size !== allowed.size) fail('shards 未恰好覆盖每篇已选论文一次');
     return shards;
 }
 
@@ -202,9 +202,9 @@ function receiptNameFor(runName) {
 function serialize(value) { return Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8'); }
 
 function createRunFromImportPlan({ files, importHandle, planName, runName }) {
-    if (!files || typeof files !== 'object') fail('configured files must be an object');
+    if (!files || typeof files !== 'object') fail('configured files 必须是对象');
     for (const field of ['conferenceSourceLedgerDir', 'conferenceRunsDir', 'tagCatalogFile']) {
-        if (typeof files[field] !== 'string') fail(`configured ${field} is required`);
+        if (typeof files[field] !== 'string') fail(`缺少必需的配置项 ${field}`);
     }
     safeName(planName, 'planName'); safeName(runName, 'runName');
     let authority;
@@ -225,19 +225,19 @@ function createRunFromImportPlan({ files, importHandle, planName, runName }) {
     }
     const plan = normalizePlan(loadedPlan.value);
     const ledgerName = path.basename(imported.ledgerFile);
-    if (plan.ledgerName !== ledgerName) fail('plan ledgerName does not match authenticated import ledger');
-    if (!imported.verifiedMembers.length) fail('authenticated import contains no included verified members');
+    if (plan.ledgerName !== ledgerName) fail('计划的 ledgerName 与已认证的导入台账不匹配');
+    if (!imported.verifiedMembers.length) fail('已认证的导入中没有已纳入且通过核验的成员');
     if (stableHash(plan.selectionPolicy.identities) !== stableHash(imported.verifiedMembers)) {
         fail('plan selection must exactly equal the authenticated included/verified import set');
     }
     if (plan.selectionPolicy.selectedMemberSetSha256 !== imported.receipt.selectedMemberSetSha256) {
-        fail('plan selectedMemberSetSha256 does not match authenticated filter selection');
+        fail('计划的 selectedMemberSetSha256 与已认证的筛选结果不匹配');
     }
     for (const member of plan.selectionPolicy.identities) {
         const ledgerMember = imported.ledger.members.find(item => ledgerApi.identityKey(item.identity) === member.sourceIdentity);
         if (!ledgerMember || member.paperId !== paperIdentity.canonicalConferencePaperId(
             imported.ledger.conference, ledgerMember.identity)) {
-            fail(`plan paperId is not canonical for ${member.sourceIdentity}`);
+            fail(`计划的 paperId 不是 ${member.sourceIdentity} 的规范 ID`);
         }
     }
     const tagCatalogFile = readTagCatalogFile(files.tagCatalogFile);
@@ -310,12 +310,12 @@ function loadPlanHandle(runFile, receiptFile, planFile, importHandle, tagCatalog
         loadedRun = ledgerApi.readRegularJson(runFile); loadedReceipt = ledgerApi.readRegularJson(receiptFile);
         loadedPlan = ledgerApi.readRegularJson(planFile);
     }
-    catch (error) { throw fail(`plan bundle cannot be read safely: ${error.message}`); }
+    catch (error) { throw fail(`无法安全读取计划包：${error.message}`); }
     // 先核原凭证摘要及它绑定的原文件字节，再读取格式和标签字段。
     plain(loadedReceipt.value, 'secure plan receipt');
     if (loadedReceipt.value.receiptSha256 !== receiptDigest(loadedReceipt.value)) fail('secure plan receipt SHA drifted');
     const rawReceipt = loadedReceipt.value;
-    if (rawReceipt.run?.name !== path.basename(runFile) || rawReceipt.run?.sha256 !== loadedRun.sha256) fail('plan receipt does not bind exact run file');
+    if (rawReceipt.run?.name !== path.basename(runFile) || rawReceipt.run?.sha256 !== loadedRun.sha256) fail('计划凭证未绑定精确的运行文件');
     if (rawReceipt.planName !== path.basename(planFile) || rawReceipt.planSha256 !== loadedPlan.sha256) fail('plan receipt does not bind exact reviewed plan file');
     const receipt = normalizeSecureReceipt(rawReceipt); const plan = normalizePlan(loadedPlan.value);
     if (plan.version !== receipt.version) fail('会议计划与凭证的格式版本不一致。');
@@ -323,11 +323,11 @@ function loadPlanHandle(runFile, receiptFile, planFile, importHandle, tagCatalog
     const planTags = tagMetadataForPlan(plan);
     const imported = authority.snapshot; const tagCatalogFile = readTagCatalogFile(tagCatalogPath);
     if (receipt.ledger.name !== path.basename(imported.ledgerFile) || receipt.ledger.sha256 !== imported.ledgerSha256
-        || receipt.ledger.memberSetSha256 !== imported.ledger.memberSetSha256) fail('plan receipt does not bind authenticated import ledger');
+        || receipt.ledger.memberSetSha256 !== imported.ledger.memberSetSha256) fail('计划凭证未绑定已认证的导入台账');
     if (receiptTags.sha256 !== tagCatalogFile.sha256) fail('计划凭证中的词表 SHA 与原文件不一致。');
     if (plan.ledgerName !== receipt.ledger.name || stableHash(planTags) !== stableHash(receiptTags)
         || stableHash(plan.selectionPolicy.identities) !== stableHash(receipt.members)
-        || stableHash(plan.shards) !== stableHash(receipt.shards)) fail('reviewed plan content drifted from plan receipt');
+        || stableHash(plan.shards) !== stableHash(receipt.shards)) fail('已审计划的内容与计划凭证不一致');
     const staged = imported.staging.receipt;
     const expectedFilter = { filterId: staged.selection.filterId, catalogSha256: staged.selection.catalogSha256,
         inputSha256: staged.selection.inputSha256, stateSha256: staged.selection.stateSha256,
@@ -342,23 +342,23 @@ function loadPlanHandle(runFile, receiptFile, planFile, importHandle, tagCatalog
         importManifestSha256: imported.receipt.importManifestSha256 };
     if (stableHash(receipt.filter) !== stableHash(expectedFilter)
         || stableHash(receipt.staging) !== stableHash(expectedStaging)
-        || stableHash(receipt.import) !== stableHash(expectedImport)) fail('plan receipt upstream provenance drifted');
+        || stableHash(receipt.import) !== stableHash(expectedImport)) fail('计划凭证的上游来源发生变化');
     const run = runApi.assertConferenceRunFromVerifiedLedger(loadedRun.value, authority.ledgerHandle);
     if (run.version !== plan.version
         || (run.version === runApi.RUN_VERSION && runApi.tagCatalogVersionForRun(run) !== planTags.version)) {
         fail('会议运行记录与已核计划的格式或词表版本不一致。');
     }
     if (run.ledgerSha256 !== imported.ledgerSha256 || run.ledgerSha256 !== receipt.ledger.sha256) {
-        fail('run ledger SHA differs from the authenticated import/plan receipt');
+        fail('运行台账的 SHA 与已认证的导入/计划凭证不一致');
     }
     if (run.identitySha256 !== receipt.run.identitySha256 || run.stateSha256 !== receipt.run.stateSha256
         || stableHash(run.members) !== stableHash(receipt.members) || stableHash(run.shards) !== stableHash(receipt.shards)
         || run.filterPolicySha256 !== receipt.filter.filterPolicySha256
         || run.selectionReceiptSha256 !== receipt.filter.selectionReceiptSha256
         || run.selectedMemberSetSha256 !== receipt.filter.selectedMemberSetSha256) {
-        fail('plan receipt does not bind run identity/membership/selection provenance');
+        fail('计划凭证未绑定运行的 identity/membership/selection 来源信息');
     }
-    if (stableHash(run.members) !== stableHash(imported.verifiedMembers)) fail('run is not the exact included/verified import set');
+    if (stableHash(run.members) !== stableHash(imported.verifiedMembers)) fail('运行不等于已纳入且通过核验的导入集合');
     const handle = Object.freeze(Object.create(null)); PLAN_HANDLES.add(handle);
     PLAN_HANDLE_DATA.set(handle, Object.freeze({ plan: clone(loadedPlan.value), run: clone(run), receipt: clone(receipt),
         receiptFileSha256: loadedReceipt.sha256, runFileSha256: loadedRun.sha256,
@@ -392,13 +392,13 @@ function applyRunPlan(result, io = fs) {
         || result.run?.contract !== runApi.CONTRACT || result.run?.version !== runApi.RUN_VERSION
         || result.receipt?.contract !== SECURE_RECEIPT_CONTRACT || result.receipt?.version !== SECURE_RECEIPT_VERSION) fail('旧计划只能读取或恢复已有文件，不能新建运行文件。');
     const outputDirectory = path.dirname(result.runFile);
-    if (path.dirname(result.receiptFile) !== outputDirectory) fail('run and plan receipt must share one runtime directory');
+    if (path.dirname(result.receiptFile) !== outputDirectory) fail('运行与计划凭证必须位于同一个运行目录');
     let createdDirectory = false;
     try {
         io.mkdirSync(outputDirectory, { mode: 0o700 });
         createdDirectory = true;
     } catch (error) {
-        if (error.code !== 'EEXIST') throw fail(`could not create runtime output directory: ${error.message}`);
+        if (error.code !== 'EEXIST') throw fail(`无法创建运行输出目录：${error.message}`);
     }
     const outputStat = io.lstatSync(outputDirectory);
     if (!outputStat.isDirectory() || outputStat.isSymbolicLink() || io.realpathSync(outputDirectory) !== outputDirectory) {
@@ -407,7 +407,7 @@ function applyRunPlan(result, io = fs) {
     }
     // 预检让常见失败变成原子的：如果选定的 run 或它的不可变 receipt 已经存在，两个
     // 状态文件都不会写。
-    for (const filename of [result.runFile, result.receiptFile]) if (io.existsSync(filename)) fail(`refusing to overwrite existing runtime file: ${path.basename(filename)}`);
+    for (const filename of [result.runFile, result.receiptFile]) if (io.existsSync(filename)) fail(`拒绝覆盖已有的运行文件：${path.basename(filename)}`);
     const specs = [[result.runFile, result.runBytes], [result.receiptFile, result.receiptBytes]]; const opened = [];
     try {
         for (const [filename] of specs) {
