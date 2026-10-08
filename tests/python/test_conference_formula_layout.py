@@ -12,6 +12,9 @@ import fitz
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts"))
 from conference_extractor import load_pypdf_backend  # noqa: E402
+# 从仓库根按点分路径单跑（python -m unittest tests.python.<模块>）时，tests/python
+# 不在 sys.path 上；补一条引导，让三种运行方式都能导入这个平级 helper。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from project_env_isolation import isolate_module_environment  # noqa: E402
 
 # 本模块的用例会走真实入口，入口经 log_setup 读 .env 并写 os.environ。

@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import json
 import pathlib
+from pathlib import Path
 import sys
 import unittest
 
@@ -13,6 +14,9 @@ SPEC = importlib.util.spec_from_file_location('conference_page_render', ROOT / '
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
+# 从仓库根按点分路径单跑（python -m unittest tests.python.<模块>）时，tests/python
+# 不在 sys.path 上；补一条引导，让三种运行方式都能导入这个平级 helper。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from project_env_isolation import isolate_module_environment  # noqa: E402
 
 # 本模块的用例会走真实入口，入口经 log_setup 读 .env 并写 os.environ。

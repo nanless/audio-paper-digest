@@ -14,6 +14,9 @@ from project_env import (  # noqa: E402
     get_required_fetch_proxy, load_project_env, resolve_env_file,
     _is_scripts_entrypoint,
 )
+# 从仓库根按点分路径单跑（python -m unittest tests.python.<模块>）时，tests/python
+# 不在 sys.path 上；补一条引导，让三种运行方式都能导入这个平级 helper。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from project_env_isolation import project_env_scope  # noqa: E402
 
 
