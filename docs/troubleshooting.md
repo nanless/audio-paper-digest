@@ -115,6 +115,8 @@ npm run visual:status -- --date YYYY-MM-DD
 npm run cover:status -- --date YYYY-MM-DD
 ```
 
+任务清单本身缺失或失效时，先重跑 `npm run visual:post-publish -- --date YYYY-MM-DD` 重建任务，再走上面的生图前准备。
+
 只使用本次准备命令输出的绝对参考路径。新日更核对官方图片身份后会返回空引用列表，这是预期行为，不能改用旧缓存。登记须提供当前任务 token、正式分析文件及 `--qa-attested true`，并且已逐图目检。任务清单、发布记录或图片 SHA 变化会使旧完成记录失效。
 
 ## 12. 状态报告与现实不一致

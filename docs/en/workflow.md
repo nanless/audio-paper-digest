@@ -102,9 +102,10 @@ Remote verification proves only that the commit was pushed. Before reporting the
 
 ## 7. Visuals
 
-After remote verification, the system plans infographics for the top 10 papers by final score and one digest cover. Project scripts manage the tasks but never call an image API; Codex must use built-in `image_gen`.
+After remote verification, the system plans infographics for the top 10 papers by final score and one digest cover. Project scripts manage the tasks but never call an image API; Codex must use built-in `image_gen`. Division of labor: `visual:post-publish` idempotently creates both image task types after remote verification (rerun it when tasks are missing or stale); `visual:prepare` emits the currently valid absolute reference paths before each generation.
 
 ```bash
+npm run visual:post-publish -- --date YYYY-MM-DD
 npm run visual:prepare -- --date YYYY-MM-DD
 npm run visual:status -- --date YYYY-MM-DD
 npm run cover:status -- --date YYYY-MM-DD

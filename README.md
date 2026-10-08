@@ -146,7 +146,7 @@ npm run tags:serve
   来源文件，也不读取旧文本或缓存。封存来源缺失或 SHA 不符时，只有目标仍为北京时间当天，才重新运行
   `npm run digest:prepare -- YYYY-MM-DD`；历史日期保留失败记录，按历史维护流程处理。
 - 博客审查或推送失败：修复后运行 `npm run blog:review -- --date YYYY-MM-DD` 或 `npm run blog:push -- --date YYYY-MM-DD`。
-- 视觉任务缺失或失效：运行 `npm run visual:post-publish -- --date YYYY-MM-DD`，不要重发博客。
+- 视觉任务缺失或失效：运行 `npm run visual:post-publish -- --date YYYY-MM-DD`，不要重发博客。分工：`visual:post-publish` 负责（重新）规划两类图片任务；任务已存在时，生图前改用 `visual:prepare` 输出本次参考路径，见[主流程](docs/workflow.md)§7。
 - 不确定失败属于哪一层：先看[排错手册](docs/troubleshooting.md)和
   [主流程](docs/workflow.md)。
 

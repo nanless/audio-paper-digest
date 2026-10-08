@@ -158,7 +158,8 @@ accounts. `data/runtime/llm-account-pool.json` stores selection and stable crede
 not raw keys; it uses `0600` permissions, and corruption stops the run. Before attaching credentials,
 the request checks that its URL exactly matches the API URL derived from the endpoint and model. Primary and secondary models may share the
 account pool only when they belong to the same OpenCode Go service; other services need
-separate keys.
+separate keys (`PAPER_ANALYZER_SECONDARY_API_KEY`, with a dedicated multi-account pool in
+`PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS`).
 
 arXiv metadata, HTML, PDF, and images require project HTTP CONNECT. HuggingFace curl inherits the HTTP(S) proxy and may also use SOCKS `ALL_PROXY`. External image/demo redirects are HTTPS-only and revalidate public destination IPs at every hop.
 

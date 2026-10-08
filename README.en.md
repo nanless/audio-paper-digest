@@ -187,7 +187,7 @@ See the [implementation plan](docs/tag-system-implementation.md) and [tag design
   rerun `npm run digest:prepare -- YYYY-MM-DD` only while the target date is still Beijing today.
   For historical dates, keep the failure records and follow the historical maintenance workflow.
 - Blog review/push failed: resume with `npm run blog:review -- --date YYYY-MM-DD` or `npm run blog:push -- --date YYYY-MM-DD`.
-- Visual tasks are missing or stale: run `npm run visual:post-publish -- --date YYYY-MM-DD`; do not republish the blog.
+- Visual tasks are missing or stale: run `npm run visual:post-publish -- --date YYYY-MM-DD`; do not republish the blog. Division of labor: `visual:post-publish` (re)plans both image task types, while `visual:prepare` emits the current reference paths before generation once tasks exist (see [Workflow](docs/en/workflow.md) §7).
 - Unsure which stage failed: start with [Troubleshooting](docs/en/troubleshooting.md) and
   [Workflow](docs/en/workflow.md).
 

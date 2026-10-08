@@ -120,7 +120,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。默认发布入口要求 Python 3.11+ 
 
 `PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY` 指定排在普通备用账号之后的账号，也支持逗号分隔的第三、第四等顺位。成功账号跨请求、跨 Node/Python、跨日期保持使用，旧账号冷却到期也不自动切回。普通 429、5xx、网络或代理错误、Responses 输出截断和内容校验失败都不切号。
 
-状态保存在 `data/runtime/llm-account-pool.json`，不含原始密钥，但包含稳定凭据指纹，须以 `0600` 权限保护；损坏时停止。在请求中附加认证信息前，核验请求 URL 与 endpoint/model 推导的 API URL 精确相同。主副模型只有属于同一规范 OpenCode Go 服务时才可共享账号池，不同服务必须使用独立密钥。
+状态保存在 `data/runtime/llm-account-pool.json`，不含原始密钥，但包含稳定凭据指纹，须以 `0600` 权限保护；损坏时停止。在请求中附加认证信息前，核验请求 URL 与 endpoint/model 推导的 API URL 精确相同。主副模型只有属于同一规范 OpenCode Go 服务时才可共享账号池，不同服务必须使用独立密钥（`PAPER_ANALYZER_SECONDARY_API_KEY`；副模型自己的多账号池为 `PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS`）。
 
 ### 4.2 默认预算
 

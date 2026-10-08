@@ -115,6 +115,8 @@ npm run visual:status -- --date YYYY-MM-DD
 npm run cover:status -- --date YYYY-MM-DD
 ```
 
+When the task manifest itself is missing or stale, first rebuild it with `npm run visual:post-publish -- --date YYYY-MM-DD`, then follow the pre-generation preparation above.
+
 Use only absolute reference paths emitted by the current prepare command. Modern daily tasks intentionally return an empty list after verifying official figure identity. Do not substitute old caches. Record requires the current task token, the analysis file, and `--qa-attested true` after visual inspection. Manifest, publication, or image SHA changes invalidate older completion records.
 
 ## Stale Status
