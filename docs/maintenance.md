@@ -11,7 +11,7 @@
 | Node 参数与路径 | `scripts/config.js` | 入口脚本、测试、env.example |
 | Python 发布路径 | `scripts/path_config.py` | generate/review/push 与测试 |
 | API 协议或代理 | `scripts/utils.js`、`scripts/publish_common.py` | 筛选、分析、页面审查、API key 测试 |
-| 日更来源的文本与 PDF | `lib/daily-fresh-source-plan.js`、`lib/fresh-arxiv-rewrite-source.js` | full-fetch、四个恢复入口、校验器、Python 发布三阶段、存储工具与文档 |
+| 日更来源的文本与 PDF | `scripts/lib/daily-fresh-source-plan.js`、`scripts/lib/fresh-arxiv-rewrite-source.js` | full-fetch、四个恢复入口、校验器、Python 发布三阶段、存储工具与文档 |
 | 历史直接重写来源及页面对应 | `historical-direct-*`、`historical-conference-*-sources/projections` | 来源目录、计划、队列、执行、汇总、arXiv 失败交接入口及历史文档 |
 | 分析恢复 | `analysis-engine.js`、`deep-analyzer.js` | 所有分析入口与 digest 状态 |
 | 分析结构或评分 | `analysis-contract.js` 与提示词 | Node/Python 解析器和发布器 |

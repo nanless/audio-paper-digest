@@ -11,7 +11,7 @@ This guide is for maintainers changing the default API, shared publication, prom
 | Node settings/paths | `scripts/config.js` | Entry points, tests, env.example |
 | Python publishing paths | `scripts/path_config.py` | generate/review/push and tests |
 | Protocol/proxy | `scripts/utils.js`, `scripts/publish_common.py` | Filtering, analysis, page review, key tests |
-| Daily saved text/PDF | `lib/daily-fresh-source-plan.js`, `lib/fresh-arxiv-rewrite-source.js` | full-fetch, four recovery entries, validators, Python publication, storage, docs |
+| Daily saved text/PDF | `scripts/lib/daily-fresh-source-plan.js`, `scripts/lib/fresh-arxiv-rewrite-source.js` | full-fetch, four recovery entries, validators, Python publication, storage, docs |
 | Historical direct sources/page mappings | `historical-direct-*`, `historical-conference-*-sources/projections` | Catalog, plan, scheduler, runner, aggregate, arXiv failure handoffs, history docs |
 | Recovery | `analysis-engine.js`, `deep-analyzer.js` | All analysis entries and status |
 | Analysis/scoring | `analysis-contract.js` and prompts | Node/Python parsers, publisher |
