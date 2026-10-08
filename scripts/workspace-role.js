@@ -111,9 +111,9 @@ function envFileValue(file, key) {
     let raw;
     try {
         raw = fs.readFileSync(file, 'utf8');
-    } catch (error) {
-        if (error.code === 'ENOENT') return '';
-        throw error;
+    } catch {
+        // 读不到 .env 就当开关关着，保持原来的拒绝行为。
+        return '';
     }
     let value = '';
     for (const line of raw.split('\n')) {

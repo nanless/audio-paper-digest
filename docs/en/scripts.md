@@ -24,6 +24,8 @@ Run `npm run workspace:role -- status` before production commands. Daily `digest
 
 After confirming the checkout's purpose, bind it with `npm run workspace:role -- set daily|history [--force]`. A copied checkout retains a marker bound to the original real path. Force a historical role only after confirming the copy's purpose. The marker is a Git-ignored local file with `0600` permissions.
 
+Cross-role execution is off by default: a `daily` checkout cannot run `history:*`, and the reverse is also refused. The user has decided to run historical work in the current daily checkout, so the local `.env` sets `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`. A value of `1` lets a `daily` checkout run `history` commands and prints a cross-role notice; the reverse direction and the `workspaceRealpath` check still fail. The switch only relaxes the entry check — it does not lift the rule that the two checkouts must never generate, review, or push blogs at the same time; stagger the times yourself.
+
 ## Data Stage
 
 | Command | Behavior |

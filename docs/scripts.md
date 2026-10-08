@@ -16,6 +16,8 @@ npm run workspace:role -- status
 
 首次确认用途后，用 `npm run workspace:role -- set daily|history` 绑定。整库复制后，角色标记仍指向旧真实路径；确认副本用于历史工作后才执行 `npm run workspace:role -- set history --force`。标记是 Git 忽略、权限为 `0600` 的本机文件。
 
+默认不允许跨角色执行：`daily` 工作区跑 `history:*` 会被拒绝，反过来也一样。用户已决定在当前日更目录跑历史功能，所以本机 `.env` 设了 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`。值为 `1` 时放行「daily 工作区执行 history 命令」，脚本会打印一条跨角色提示；反向仍然拒绝，`workspaceRealpath` 与真实路径不符也照旧拒绝。开关只放宽入口检查，不解除两个工作区不得同时生成、审查、推送博客的约束，时间要由使用者自己错开。
+
 ## 日更脚本阶段与最终状态
 
 | 命令 | 用途 |

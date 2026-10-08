@@ -90,7 +90,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/reader-tables.js` | Node 库 | 将 TABLE 标记与原表行列选择展开为 Markdown 和逐格来源记录，保留表头对应关系，拒绝错位和越界。 |
 | `lib/llm-usage.js` | Node 库 | 规范化真实请求用量，按论文和阶段归因；服务没有提供计费用量时，就记为不可得。 |
 | `lib/fresh-rewrite-run.js` | Node 库 | 从白名单中的原始元数据创建独立重写运行，准备同源文件，只恢复本运行的分析，并在完整结果验证通过后更新正式数据。 |
-| `workspace-role.js` | 入口与共享运行检查 | 用不跟踪入 Git、权限为 `0600` 且绑定仓库真实路径的标记区分 `daily` 与 `history`。`set` 原子保存或显式切换角色，`exec` 在 npm 生产入口启动前检查角色；直接 Node/Python 入口再由公共运行检查核验。 |
+| `workspace-role.js` | 入口与共享运行检查 | 用不跟踪入 Git、权限为 `0600` 且绑定仓库真实路径的标记区分 `daily` 与 `history`。`set` 原子保存或显式切换角色，`exec` 在 npm 生产入口启动前检查角色；直接 Node/Python 入口再由公共运行检查核验。`PD_WORKSPACE_ALLOW_CROSS_ROLE=1` 只放行 daily 工作区执行 history 命令（读进程环境或工作区 `.env`，放行时打印提示）；反向和 realpath 不符照旧拒绝。 |
 | `lib/fresh-analysis-context.js` | Node 库 | 隔离全新重写运行的来源文件与深度分析上下文，重新核验来源 SHA；拒绝旧生成正文和其他运行的检查点。 |
 | `lib/fresh-rewrite-publication.js` | Node 库 | 重写前备份当前正式分析结果和博客基线；新结果完整且来源、基线 CAS 均通过后，才替换正式分析结果。 |
 | `lib/conference-source-ledger.js` | Node 库 | 管理会议来源身份、四类文件 SHA 和审查证据；文件不可变保存，读取时重新核验本地来源。标题不能作为论文身份。 |
