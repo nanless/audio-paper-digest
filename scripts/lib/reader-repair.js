@@ -175,9 +175,14 @@ function recoveryIssueProjection(issue) {
     const counts = readTableCountIssue(issue);
     // 这里保留的是 v1 候选和 v2 失败签名用到的比较输入。这段兼容文本
     // 不会作为展示消息。
+    //
+    // 措辞本身是冻结的：它进 gateSha256 和 failureSignature，data/ 下已经有带这段
+    // 旧措辞的失败候选。改字会让那些签名算不出来，续跑同一计数失败时少记一轮
+    // 「无进展」，多花一次修复调用。既然它不展示，去黑话在这里没有收益，别动它。
+    // 下面那条正则是通配的，新旧措辞都能解析，所以将来真要改措辞也不会漏读。
     const projected = counts
         ? { path: issue.path ?? null,
-            message: `读者文章至少需要 ${counts.requiredCount} 张有表前说明和表后解释的 Markdown 表，当前 ${counts.actualCount} 张` }
+            message: `读者文章至少需要 ${counts.requiredCount} 张有叙事闭环的 Markdown 表，当前 ${counts.actualCount}` }
         : { path: issue.path ?? null, code: TABLE_COUNT_ISSUE_CODE,
             message: '表格数量诊断的计数无效' };
     for (const [key, value] of Object.entries(issue)) {

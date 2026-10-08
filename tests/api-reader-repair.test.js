@@ -727,7 +727,7 @@ test('缺失叙述表格的修复只指向最后一个小节和缺失的绑定',
         sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [],
         sourceQuotes: [`source quote ${index} is long enough for binding`] }));
     const targets = buildRepairTargets(draft, [{ path: null,
-        message: '读者文章至少需要 4 张有表前说明和表后解释的 Markdown 表，当前 3 张' }]);
+        message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' }]);
     assert.deepEqual(targets.map(target => target.path), [
         '/sections/8/body', '/tableBindings/3'
     ]);
@@ -746,7 +746,7 @@ test('最小叙述表格修复原子地追加一张表和一条绑定', () => {
         sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [],
         sourceQuotes: [`source quote ${index + 1} is long enough for binding`] }));
     const issues = [{ path: null,
-        message: '读者文章至少需要 4 张有表前说明和表后解释的 Markdown 表，当前 3 张' }];
+        message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' }];
     const context = buildRepairContext(draft, issues, '完整来源');
     assert.equal(context.atomicOperation.kind, 'append_narrative_table_v1');
     assert.deepEqual(context.targets.map(target => target.path), ['/sections/8/body', '/tableBindings']);
@@ -775,7 +775,7 @@ test('最小叙述表格恢复绑定一篇已写好的结尾表格，不改写�
         sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [],
         sourceQuotes: [`source quote ${index + 1} is long enough for binding`] }));
     const context = buildRepairContext(draft, [{ path: null,
-        message: '读者文章至少需要 4 张有表前说明和表后解释的 Markdown 表，当前 3 张' }], '完整来源');
+        message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' }], '完整来源');
     assert.equal(context.atomicOperation.kind, 'bind_trailing_narrative_table_v1');
     assert.deepEqual(context.targets.map(target => target.path), ['/tableBindings']);
     const beforeBody = draft.sections[8].body;
@@ -791,7 +791,7 @@ test('最小叙述表格恢复绑定一篇已写好的结尾表格，不改写�
 
 test('带码的计数诊断保留旧的修复目标，以及两份已保存的失败对比', () => {
     const draft = countRepairFixture();
-    const legacy = { path: null, message: '读者文章至少需要 4 张有表前说明和表后解释的 Markdown 表，当前 3 张' };
+    const legacy = { path: null, message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' };
     const natural = countIssue();
     const misleading = countIssue(3, 'tableBindings[0] source-binding v4 readerTitle 需要重建宽表');
     const original = buildRepairContext(draft, [legacy], '完整来源');
@@ -826,7 +826,7 @@ test('计数进展取决于上报的计数和必需阈值，而不是文案里�
 
 test('格式错误的带码计数不能借用旧数字，也不能授权按文案选出的修复节点', () => {
     const draft = countRepairFixture();
-    const legacyText = '读者文章至少需要 4 张有表前说明和表后解释的 Markdown 表，当前 3 张；tableBindings[0] source-binding v4';
+    const legacyText = '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3；tableBindings[0] source-binding v4';
     const invalid = [
         { requiredCount: undefined }, { actualCount: undefined }, { requiredCount: '4' },
         { actualCount: '3' }, { requiredCount: 4.5 }, { actualCount: -1 },
@@ -851,7 +851,7 @@ test('格式错误的带码计数不能借用旧数字，也不能授权按文�
 test('有效计数保留结构回退目标，只作诊断的计数不选任何目标', () => {
     const draft = countRepairFixture();
     draft.sections[8].kind = 'component';
-    const legacy = { path: null, message: '读者文章至少需要 4 张有表前说明和表后解释的 Markdown 表，当前 3 张' };
+    const legacy = { path: null, message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' };
     const expected = buildRepairTargets(draft, [legacy]);
     assert.ok(expected.length > 0);
     for (const message of ['表格不足', 'tableBindings[0] readerTitle source-binding v4 主结果表覆盖不足']) {
@@ -991,7 +991,7 @@ test('生产的计数反馈和补丁拒绝保留都不读带码诊断的措辞',
 test('旧版恢复字节先核验再谈计数兼容，绝不改写', t => {
     const directory = temporary(t);
     const identity = { version: REPAIR_VERSION, paperId: '2609.99970' };
-    const legacy = { path: null, message: '读者文章至少需要 4 张有表前说明和表后解释的 Markdown 表，当前 3 张' };
+    const legacy = { path: null, message: '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3' };
     const payload = { ...failed(countRepairFixture()), issues: [legacy],
         failureSignature: hashDraft([legacy]), validationFailureSignature: validationFailureSignature([legacy]) };
     const filename = saveFailedCandidate(directory, identity, payload);
