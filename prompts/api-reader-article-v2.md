@@ -95,7 +95,7 @@ arXiv ID：{arxivId}
       "terms": ["术语 A", "术语 B"],
       "sectionKind": "component",
       "marker": "[[CONCEPT_BRIDGE_1]]",
-      "explanation": "[直接解释术语A与术语B的分工、搭配理由和组合机制，不照抄此占位说明]"
+      "explanation": "[直接解释术语 A 与术语 B 的分工、搭配理由和组合机制，不照抄此占位说明]"
     }
   ],
   "figurePlacements": [
