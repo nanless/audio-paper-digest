@@ -17,11 +17,11 @@ const ARXIV_ID_RE = /^\d{4}\.\d{4,5}$/;
 const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 
-function fail(message) { throw new Error(`Historical arXiv failure-handoff batch rejected: ${message}`); }
+function fail(message) { throw new Error(`历史 arXiv 失败交接批次被拒绝：${message}`); }
 function same(value, expected) { return crosswalkApi.stableHash(value) === crosswalkApi.stableHash(expected); }
 
 function assertHandoffMatchesCrosswalk(state, handoff) {
-    if (!state || typeof state !== 'object' || !state.source || !state.assignments) fail('crosswalk state is invalid');
+    if (!state || typeof state !== 'object' || !state.source || !state.assignments) fail('crosswalk 状态不合法：缺少 source 或 assignments');
     if (state.source.ledgerSha256 !== handoff.inventory.ledgerSha256
         || state.source.pageSetSha256 !== handoff.inventory.pageSetSha256) {
         fail(`${handoff.arxivId} handoff is bound to another frozen inventory`);
@@ -31,7 +31,7 @@ function assertHandoffMatchesCrosswalk(state, handoff) {
     for (const binding of handoff.pageBindings) {
         const paper = papers.get(binding.pageKey);
         if (!paper || seen.has(binding.pageKey) || !hasOwn(state.assignments, binding.pageKey)) {
-            fail(`${handoff.arxivId} handoff page is absent from the crosswalk`);
+            fail(`${handoff.arxivId} 的交接页面不在 crosswalk 中`);
         }
         seen.add(binding.pageKey);
         if (paper.pagePath !== binding.pagePath || paper.pageContentSha256 !== binding.pageContentSha256
@@ -44,7 +44,7 @@ function assertHandoffMatchesCrosswalk(state, handoff) {
         if (!candidate || candidate.scheme !== 'arxiv' || candidate.value !== handoff.arxivId
             || !Array.isArray(candidate.sources) || candidate.sources.some(source => /(?:^|:)title(?:$|:)/iu.test(source))
             || !same(candidate.sources.slice().sort(), binding.historicalArxivLink.hintSources)) {
-            fail(`${handoff.arxivId} no longer has the exact frozen non-title arXiv link`);
+            fail(`${handoff.arxivId} 已不再持有那条冻结的非标题 arXiv 链接`);
         }
     }
     return handoff.pageBindings.map(binding => binding.pageKey).sort();
@@ -56,13 +56,13 @@ function selectedGroups(state, handoffs) {
     return handoffs.map(({ handoffName, fileSha256, handoff }) => {
         if (!SAFE_NAME_RE.test(String(handoffName || '')) || !/^[a-f0-9]{64}$/.test(String(fileSha256 || ''))
             || !handoff || typeof handoff !== 'object' || !ARXIV_ID_RE.test(String(handoff.arxivId || ''))) {
-            fail('fresh-failure handoff receipt is invalid');
+            fail('fresh 抓取失败交接凭证不合法：文件名、SHA 或 arxivId 不符');
         }
-        if (arxivIds.has(handoff.arxivId)) fail(`duplicate arXiv failure handoff: ${handoff.arxivId}`);
+        if (arxivIds.has(handoff.arxivId)) fail(`arXiv 抓取失败交接重复：${handoff.arxivId}`);
         arxivIds.add(handoff.arxivId);
         const bindings = assertHandoffMatchesCrosswalk(state, handoff);
         for (const pageKey of bindings) {
-            if (pageKeys.has(pageKey)) fail(`fresh-failure handoffs overlap at ${pageKey}`);
+            if (pageKeys.has(pageKey)) fail(`多份 fresh 抓取失败交接在 ${pageKey} 上重叠`);
             pageKeys.add(pageKey);
         }
         return { arxivId: handoff.arxivId, pageKeys: bindings, handoffName, handoffFileSha256: fileSha256,
@@ -77,7 +77,7 @@ function reusableAuthorityName(state, arxivId) {
             names.add(assignment.sourceAuthority.authorityName);
         }
     }
-    if (names.size > 1) fail(`${arxivId} has conflicting verified authority names`);
+    if (names.size > 1) fail(`${arxivId} 对应多个互相冲突的已核验来源名`);
     return names.size ? [...names][0] : `arxiv-${arxivId}-history.json`;
 }
 
@@ -87,7 +87,7 @@ function attemptDirectory(root, crosswalkId) {
     try { fs.mkdirSync(directory, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
     const stat = fs.lstatSync(directory);
     if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory) {
-        fail('attempt-record directory is unsafe');
+        fail('尝试记录目录不安全：不是目录、是符号链接，或真实路径不一致');
     }
     return directory;
 }
@@ -118,12 +118,12 @@ function defaultDependencies() {
 }
 
 function loadSelectedHandoffs({ handoffRoot, handoffNames }, deps) {
-    if (typeof handoffRoot !== 'string' || !path.isAbsolute(handoffRoot)) fail('fresh-failure handoff root must be absolute');
+    if (typeof handoffRoot !== 'string' || !path.isAbsolute(handoffRoot)) fail('fresh 抓取失败交接根目录必须是绝对路径');
     if (!Array.isArray(handoffNames) || !handoffNames.length || new Set(handoffNames).size !== handoffNames.length) {
         fail('one or more unique named fresh-failure handoffs are required');
     }
     return handoffNames.map(handoffName => {
-        if (!SAFE_NAME_RE.test(String(handoffName || ''))) fail('fresh-failure handoff name is unsafe');
+        if (!SAFE_NAME_RE.test(String(handoffName || ''))) fail('fresh 抓取失败交接文件名不安全');
         const loaded = deps.readFailureHandoff({ root: handoffRoot, handoffName });
         return { handoffName, fileSha256: loaded.fileSha256, handoff: loaded.handoff };
     });
@@ -132,7 +132,7 @@ function loadSelectedHandoffs({ handoffRoot, handoffNames }, deps) {
 async function runSingleHintBatch({ crosswalkRoot, authorityRoot, handoffRoot, handoffNames, batchRoot, crosswalkId, owner,
     apply = true, concurrency = 2 } = {}, overrides = {}) {
     const deps = { ...defaultDependencies(), ...overrides };
-    if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 3) fail('concurrency must be an integer from 1 to 3');
+    if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 3) fail('并发数必须是 1 到 3 之间的整数');
     const initial = deps.readCrosswalk({ crosswalkRoot, crosswalkId });
     const selected = selectedGroups(initial, loadSelectedHandoffs({ handoffRoot, handoffNames }, deps));
     if (!apply) return { status: 'dry-run', crosswalkId, handoffCount: selected.length,

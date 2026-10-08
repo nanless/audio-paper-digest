@@ -18,7 +18,7 @@ const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
 function fail(message) {
-    const error = new Error(`Historical arXiv analysis rejected: ${message}`);
+    const error = new Error(`历史 arXiv 分析被拒绝：${message}`);
     error.code = 'HISTORICAL_ARXIV_ANALYSIS_INTEGRITY';
     error.retryable = false;
     throw error;
@@ -34,19 +34,19 @@ function writeExact(filename, bytes) {
     } catch (error) {
         if (error.code !== 'EEXIST') throw error;
         const existing = fs.readFileSync(filename);
-        if (!existing.equals(payload)) fail(`refuses to overwrite different bytes: ${path.basename(filename)}`);
+        if (!existing.equals(payload)) fail(`拒绝用不同字节覆盖已有文件：${path.basename(filename)}`);
     } finally { if (fd !== undefined) fs.closeSync(fd); }
     return sha256(payload);
 }
 const writeJsonExact = (filename, value) => writeExact(filename, Buffer.from(`${JSON.stringify(value, null, 2)}\n`));
 
 function normalizedMetadata(metadata, expectedId) {
-    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) fail('raw metadata object is required');
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) fail('需要传入原始元数据对象');
     if (Object.keys(metadata).some(key => GENERATED_FIELD_RE.test(key))) fail('old analysis/Reader/checkpoint fields are forbidden');
     const unexpected = Object.keys(metadata).filter(key => !fresh.ORIGINAL_METADATA_FIELDS.includes(key));
     if (unexpected.length) fail(`raw metadata contains non-source fields: ${unexpected.join(', ')}`);
     const clean = fresh.metadataOnly(metadata);
-    if (fresh.paperId(clean) !== expectedId) fail('raw metadata belongs to another paper');
+    if (fresh.paperId(clean) !== expectedId) fail('原始元数据属于另一篇论文');
     return clean;
 }
 
@@ -55,7 +55,7 @@ function normalizedMetadataProof(proof, paper) {
     if (!proof || !acceptedContracts.has(proof.contract) || proof.paperId !== `arxiv:${fresh.paperId(paper)}`
         || !SHA_RE.test(String(proof.fileSha256 || '')) || !SHA_RE.test(String(proof.recordSha256 || ''))
         || proof.recordSha256 !== fresh.stableHash(paper)
-        || typeof proof.sourceName !== 'string' || !proof.sourceName) fail('raw metadata proof is invalid');
+        || typeof proof.sourceName !== 'string' || !proof.sourceName) fail('原始元数据凭证不合法：contract、paperId、SHA 或来源名不符');
     return structuredClone(proof);
 }
 
@@ -64,13 +64,13 @@ function prepareHistoricalArxivRun({ authorityHandle, metadata, metadataProof, m
     const parsedDate = new Date(`${date}T00:00:00.000Z`);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))
         || !Number.isFinite(parsedDate.getTime()) || parsedDate.toISOString().slice(0, 10) !== date) {
-        fail('date must be a valid YYYY-MM-DD');
+        fail('日期必须是真实的 YYYY-MM-DD');
     }
-    if (!UUID_RE.test(String(runId || ''))) fail('runId must be a UUID v4');
+    if (!UUID_RE.test(String(runId || ''))) fail('runId 必须是 UUID v4');
     const replayed = authorityApi.replayAuthorityHandle(authorityHandle, { requireProduction: true });
     const authority = authorityApi.authorityHandleSnapshot(replayed);
     if (authority.authority.evidenceKind !== 'arxiv-official-fulltext'
-        || authority.productionAuthorized !== true) fail('live official arXiv authority is required');
+        || authority.productionAuthorized !== true) fail('需要一份线上、已授权生产的 arXiv 来源句柄');
     const id = authority.authority.identity.arxivId;
     const paper = normalizedMetadata(metadata, id);
     const proof = normalizedMetadataProof(metadataProof, paper);
@@ -79,7 +79,7 @@ function prepareHistoricalArxivRun({ authorityHandle, metadata, metadataProof, m
     const structuredArtifactsSha256 = sourceDetails.structuredArtifacts?.payloadSha256;
     if (sourceSha256 !== authority.fulltextSha256 || !SHA_RE.test(String(structuredArtifactsSha256 || ''))
         || sourceDetails.structuredArtifacts.flattenedTextSha256 !== sourceSha256) {
-        fail('live source details do not bind the authority/source artifact hashes');
+        fail('线上来源详情与来源句柄或结构化产物的哈希对不上');
     }
 
     const absoluteRoot = fresh.assertSafeDirectory(rootDir, true);
@@ -91,7 +91,7 @@ function prepareHistoricalArxivRun({ authorityHandle, metadata, metadataProof, m
             || loaded.run.baseline.authorityFileSha256 !== authority.authorityFileSha256
             || loaded.run.baseline.authoritySha256 !== authority.authority.authoritySha256
             || fresh.stableHash(loaded.inputs.papers[0]) !== fresh.stableHash(paper)) {
-            fail('existing runId belongs to different source, metadata, date, or paper set');
+            fail('已有 runId 的来源、元数据、日期或论文集合与本次不同');
         }
         recoverHistoricalArxivRun({ runId, date, arxivId: id, rootDir: absoluteRoot });
         verifyHistoricalArxivRunAuthority({ runId, rootDir: absoluteRoot, authorityHandle });
@@ -116,7 +116,7 @@ function prepareHistoricalArxivRun({ authorityHandle, metadata, metadataProof, m
         writeExact(path.join(sourceDir, 'source.json'), Buffer.from(JSON.stringify(descriptor)));
         if (metadataArtifact !== null) {
             const artifact = Buffer.from(metadataArtifact);
-            if (sha256(artifact) !== proof.fileSha256) fail('official metadata artifact SHA does not match its proof');
+            if (sha256(artifact) !== proof.fileSha256) fail('官方元数据文件的 SHA 与凭证记录不符');
             writeExact(path.join(runDir, `metadata-${id}.atom.xml`), artifact);
         }
         const sourceExpectations = { [id]: { sourceId: sourceDetails.sourceId, sourceSha256,
@@ -143,26 +143,26 @@ function prepareHistoricalArxivRun({ authorityHandle, metadata, metadataProof, m
         return { runId, runDir, paperId: `arxiv:${id}`, status: 'sources_ready',
             canonicalPath: path.join(runDir, 'analysis.json') };
     } catch (error) {
-        throw new Error(`Historical arXiv run retained for inspection at ${runDir}: ${error.message}`, { cause: error });
+        throw new Error(`历史 arXiv 运行保留在 ${runDir} 供检查：${error.message}`, { cause: error });
     }
 }
 
 function recoverHistoricalArxivRun({ runId, date, arxivId, rootDir, now = new Date().toISOString() } = {}) {
-    if (!UUID_RE.test(String(runId || '')) || !/^\d{4}\.\d{4,5}$/.test(String(arxivId || ''))) fail('valid runId and arxivId are required');
+    if (!UUID_RE.test(String(runId || '')) || !/^\d{4}\.\d{4,5}$/.test(String(arxivId || ''))) fail('需要合法的 runId（UUID v4）和 arxivId（YYMM.NNNNN）');
     const runDir = path.join(path.resolve(rootDir), runId);
     if (!fs.existsSync(path.join(runDir, 'run.json'))) return null;
     const loaded = fresh.loadRun(runId, { rootDir: path.resolve(rootDir) });
     if (loaded.run.date !== date || loaded.run.paperIds.length !== 1 || loaded.run.paperIds[0] !== arxivId
         || loaded.run.baseline.contract !== BASELINE_CONTRACT
-        || loaded.run.baseline.paperId !== `arxiv:${arxivId}`) fail('existing runId belongs to another historical analysis');
+        || loaded.run.baseline.paperId !== `arxiv:${arxivId}`) fail('已有 runId 属于另一次历史分析');
     normalizedMetadataProof(loaded.run.baseline.metadata, loaded.inputs.papers[0]);
     if (loaded.run.baseline.metadata.contract === require('./arxiv-metadata-source.js').CONTRACT) {
         const filename = path.join(runDir, `metadata-${arxivId}.atom.xml`);
         let bytes; let fd;
         try { fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); bytes = fs.readFileSync(fd); }
-        catch (error) { fail(`official metadata artifact cannot be replayed: ${error.message}`); }
+        catch (error) { fail(`无法重放官方元数据文件：${error.message}`); }
         finally { if (fd !== undefined) fs.closeSync(fd); }
-        if (sha256(bytes) !== loaded.run.baseline.metadata.fileSha256) fail('official metadata artifact SHA drifted');
+        if (sha256(bytes) !== loaded.run.baseline.metadata.fileSha256) fail('官方元数据文件的 SHA 已漂移');
     }
     const analysisFile = fresh.readRegularJson(path.join(runDir, 'analysis.json'));
     const storageSealed = loaded.run.status === 'complete';
@@ -188,7 +188,7 @@ function recoverHistoricalArxivRun({ runId, date, arxivId, rootDir, now = new Da
     let operationLock = null;
     if (!currentContractComplete) {
         const nowMs = new Date(now).getTime();
-        if (!Number.isFinite(nowMs)) fail('recovery time must be an ISO timestamp');
+        if (!Number.isFinite(nowMs)) fail('恢复时间必须是合法的 ISO 时间戳');
         operationLock = engine.inspectFileLockState(path.join(runDir, '.operation'), { nowMs });
     }
     const operationBlocked = operationLock?.exists === true
@@ -227,12 +227,12 @@ function verifyHistoricalArxivRunAuthority({ runId, rootDir, authorityHandle } =
         || expected.authorityFileSha256 !== authority.authorityFileSha256
         || expected.authoritySha256 !== authority.authority.authoritySha256
         || expected.authoritySourceSnapshotSha256 !== authority.sourceSnapshotSha256) {
-        fail('live arXiv authority differs from the prepared historical run');
+        fail('线上 arXiv 来源句柄与已准备的历史运行不符');
     }
     const details = arxivApi.readLiveProductionSourceDetails(authorityHandle);
     if (sha256(Buffer.from(details.text, 'utf8')) !== expected.sourceSha256
         || details.structuredArtifacts?.payloadSha256 !== expected.structuredArtifactsSha256) {
-        fail('live arXiv source details differ from the prepared historical run');
+        fail('线上 arXiv 来源详情与已准备的历史运行不符');
     }
     return true;
 }

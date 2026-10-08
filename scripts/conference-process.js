@@ -11,7 +11,7 @@ const recovery = require('./lib/conference-process-recovery.js');
 const USAGE = '--dry-run|--apply|--status|--source-upgrade-plan|--source-upgrade-apply|--source-upgrade-promote --catalog NAME.json --report NAME.json --filter UUID [--concurrency 1|2|3|4|5] [--retry-failed]; --status supports [--verify-files]; source upgrade: --from UUID; apply requires --plan-sha SHA --paper-ids ID,ID --authorize-new-analysis; promote requires --plan-sha SHA [--preserve-original-complete|--prefer-upgrade]; plan/promote support [--page-repair-mode caption-only]';
 function parseArgs(argv) {
     if (argv[0] === '--legacy-disabled') throw new Error('New-conference execution/analyze/postprocess must use conference:new:process');
-    const mode = argv[0]; if (!['--dry-run', '--apply', '--status', '--source-upgrade-plan', '--source-upgrade-apply', '--source-upgrade-promote'].includes(mode)) throw new Error(`Use ${USAGE}`);
+    const mode = argv[0]; if (!['--dry-run', '--apply', '--status', '--source-upgrade-plan', '--source-upgrade-apply', '--source-upgrade-promote'].includes(mode)) throw new Error(`用法：${USAGE}`);
     const upgrade = mode.startsWith('--source-upgrade-');
     const values = {};
     for (let index = 1; index < argv.length; index += 2) {
@@ -27,7 +27,7 @@ function parseArgs(argv) {
         }
         if (![ '--catalog', '--report', '--filter', '--concurrency', ...(upgrade ? ['--from', '--plan-sha', '--paper-ids'] : []),
             ...(['--source-upgrade-plan', '--source-upgrade-promote'].includes(mode) ? ['--page-repair-mode'] : []) ].includes(flag) || !value || Object.hasOwn(values, flag)) {
-            throw new Error(`Use ${USAGE}`);
+            throw new Error(`用法：${USAGE}`);
         }
         values[flag] = value;
     }
@@ -35,11 +35,11 @@ function parseArgs(argv) {
         || !/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(values['--report'] || '')
         || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(values['--filter'] || '')
         || (values['--concurrency'] && !/^[1-5]$/.test(values['--concurrency']))) throw new Error(`Use ${USAGE}`);
-    if (upgrade && !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(values['--from'] || '')) throw new Error(`Use ${USAGE}`);
-    if (mode === '--source-upgrade-plan' && (values['--plan-sha'] || values['--paper-ids'])) throw new Error(`Use ${USAGE}`);
+    if (upgrade && !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(values['--from'] || '')) throw new Error(`用法：${USAGE}`);
+    if (mode === '--source-upgrade-plan' && (values['--plan-sha'] || values['--paper-ids'])) throw new Error(`用法：${USAGE}`);
     if (values['--preserve-original-complete'] && values['--prefer-upgrade']) throw new Error(`Use ${USAGE}`);
-    if (values['--page-repair-mode'] !== undefined && values['--page-repair-mode'] !== 'caption-only') throw new Error(`Use ${USAGE}`);
-    if (mode === '--source-upgrade-promote' && (!/^[a-f0-9]{64}$/.test(values['--plan-sha'] || '') || values['--paper-ids'])) throw new Error(`Use ${USAGE}`);
+    if (values['--page-repair-mode'] !== undefined && values['--page-repair-mode'] !== 'caption-only') throw new Error(`用法：${USAGE}`);
+    if (mode === '--source-upgrade-promote' && (!/^[a-f0-9]{64}$/.test(values['--plan-sha'] || '') || values['--paper-ids'])) throw new Error(`用法：${USAGE}`);
     if (mode === '--source-upgrade-apply' && (!values['--authorize-new-analysis'] || !/^[a-f0-9]{64}$/.test(values['--plan-sha'] || '')
         || !values['--paper-ids'] || values['--paper-ids'].split(',').some(id => !/^conference:[a-z0-9:._-]+$/.test(id)))) throw new Error(`Use ${USAGE}`);
     return { apply: mode === '--apply', statusOnly: mode === '--status', catalogName: values['--catalog'],
@@ -56,7 +56,7 @@ function parseArgs(argv) {
 function readSafeJson(filename) {
     const named = fs.lstatSync(filename);
     if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || (named.mode & 0o777) !== 0o600) {
-        throw new Error(`unsafe conference process state file: ${filename}`);
+        throw new Error(`会议进程状态文件不安全：不是单链接普通文件，或权限不是 0600：${filename}`);
     }
     const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     try {
@@ -66,7 +66,7 @@ function readSafeJson(filename) {
             || after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size
             || finalNamed.dev !== opened.dev || finalNamed.ino !== opened.ino
             || finalNamed.nlink !== 1 || finalNamed.size !== opened.size) {
-            throw new Error(`conference process state changed while reading: ${filename}`);
+            throw new Error(`读取会议进程状态时文件发生变化：${filename}`);
         }
         return JSON.parse(bytes.toString('utf8'));
     } finally { fs.closeSync(fd); }

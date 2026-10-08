@@ -14,12 +14,12 @@ function parseArgs(argv) {
     const [command, ...rest] = argv;
     if (command === 'prepare') {
         const [mode, ...flags] = rest;
-        if (!['--dry-run', '--apply'].includes(mode)) throw new Error('prepare requires --dry-run or --apply');
+        if (!['--dry-run', '--apply'].includes(mode)) throw new Error('prepare 只接受 --dry-run 或 --apply');
         const values = {};
         for (let index = 0; index < flags.length; index += 2) {
             const flag = flags[index]; const value = flags[index + 1];
             if (!['--ledger', '--receipt', '--crosswalk'].includes(flag) || value === undefined || Object.hasOwn(values, flag)) {
-                throw new Error('Use prepare --dry-run|--apply --ledger NAME.json --receipt NAME.json [--crosswalk UUID]');
+                throw new Error('用法：prepare --dry-run|--apply --ledger NAME.json --receipt NAME.json [--crosswalk UUID]');
             }
             values[flag] = value;
         }
@@ -27,7 +27,7 @@ function parseArgs(argv) {
             || !api.SAFE_JSON_NAME.test(String(values['--receipt'] || ''))
             || values['--ledger'] === values['--receipt']
             || (values['--crosswalk'] && !api.UUID_RE.test(values['--crosswalk']))) {
-            throw new Error('prepare requires safe direct ledger/receipt names and optional UUID v4');
+            throw new Error('prepare 要求 ledger 与 receipt 是不带子目录的安全文件名且互不相同；--crosswalk 若给出必须是 UUID v4');
         }
         return { command, apply: mode === '--apply', ledgerName: values['--ledger'], receiptName: values['--receipt'],
             crosswalkId: values['--crosswalk'] };
@@ -47,16 +47,16 @@ function parseArgs(argv) {
         && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(String(rest[7] || ''))) {
         return { command, crosswalkId: rest[1], decisionName: rest[3], authorityName: rest[5], owner: rest[7] };
     }
-    throw new Error('Use prepare, status, apply, apply-verified, or finalize with controlled names/UUIDs');
+    throw new Error('用法：prepare、status、apply、apply-verified 或 finalize，参数需为受控文件名或 UUID');
 }
 
 function requireRoots(roots) {
     for (const field of ['inventoryRoot', 'crosswalkRoot']) {
-        if (typeof roots?.[field] !== 'string' || !path.isAbsolute(roots[field])) throw new Error(`${field} must be configured absolute path`);
+        if (typeof roots?.[field] !== 'string' || !path.isAbsolute(roots[field])) throw new Error(`${field} 必须是配置里的绝对路径`);
     }
     if (roots.authorityRoot !== undefined
         && (typeof roots.authorityRoot !== 'string' || !path.isAbsolute(roots.authorityRoot))) {
-        throw new Error('authorityRoot must be a configured absolute path');
+        throw new Error('authorityRoot 必须是配置里的绝对路径');
     }
     return roots;
 }
@@ -96,7 +96,7 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
             crosswalkId: options.crosswalkId, decisionName: options.decisionName,
             owner: options.owner, now: dependencies.now });
         else {
-            if (!roots.authorityRoot) throw new Error('apply-verified requires configured paperSourceAuthorityDir');
+            if (!roots.authorityRoot) throw new Error('apply-verified 需要先配置 paperSourceAuthorityDir');
             const authorityHandle = authorityApi.loadAuthorityHandle({ authorityRoot: roots.authorityRoot,
                 authorityName: options.authorityName });
             const authoritySnapshot = authorityApi.authorityHandleSnapshot(authorityHandle);
@@ -112,12 +112,12 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
         }
         const output = summary(state, 'updated'); console.log(JSON.stringify(output)); return output;
     }
-    if (!roots.authorityRoot) throw new Error('finalize requires configured paperSourceAuthorityDir');
+    if (!roots.authorityRoot) throw new Error('finalize 需要先配置 paperSourceAuthorityDir');
     const state = api.readCrosswalk({ crosswalkRoot: roots.crosswalkRoot, crosswalkId: options.crosswalkId });
     if (state.completion.status === 'complete') {
         const kinds = new Set(Object.values(state.assignments).map(item => item.sourceAuthority?.evidenceKind));
         if (kinds.has('conference-plan-source-context')) {
-            throw new Error('production conference plan-authority bundle loader is not installed; CLI finalize fails closed');
+            throw new Error('生产环境的会议计划来源包加载器未安装，命令行 finalize 按失败关闭处理');
         }
     }
     const finalized = api.finalizeCrosswalk({ crosswalkRoot: roots.crosswalkRoot, crosswalkId: options.crosswalkId,

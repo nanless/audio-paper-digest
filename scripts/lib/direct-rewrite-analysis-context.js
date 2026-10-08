@@ -20,7 +20,7 @@ const EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT = 'ephemeral-no-persisted-figure-ass
 const CONFERENCE = /^conference:[a-z0-9]+(?:-[a-z0-9]+)*:\d{4}:[a-z0-9-]+:[^:]+$/;
 
 function fail(message) {
-    const error = new Error(`Direct rewrite source context rejected: ${message}`);
+    const error = new Error(`直改来源上下文被拒绝：${message}`);
     error.code = 'HISTORICAL_DIRECT_REWRITE_SOURCE_INTEGRITY';
     error.retryable = false;
     throw error;
@@ -38,16 +38,16 @@ function paperId(paper) {
     const value = typeof paper === 'string' ? paper
         : paper?.directPaperId || paper?.id || paper?.paperId
             || (paper?.arxivId ? `arxiv:${String(paper.arxivId).replace(/v\d+$/i, '')}` : '');
-    if (!ARXIV.test(value) && !CONFERENCE.test(value)) fail('paper identity is invalid');
+    if (!ARXIV.test(value) && !CONFERENCE.test(value)) fail('论文身份不合法：既不是 arxiv:YYMM.NNNNN，也不是 conference:... 格式');
     return value;
 }
 
 function safeReaderAttemptsDirectory(value) {
-    if (typeof value !== 'string' || !path.isAbsolute(value)) fail('Reader attempts directory must be absolute');
+    if (typeof value !== 'string' || !path.isAbsolute(value)) fail('Reader 尝试目录必须是绝对路径');
     const absolute = path.resolve(value);
     if (absolute.includes(`${path.sep}image-cache${path.sep}`)
         || absolute.includes(`${path.sep}api-reader-assets${path.sep}`)) {
-        fail('Reader attempts cannot use an image cache directory');
+        fail('Reader 尝试目录不能落在 image-cache 或 api-reader-assets 下');
     }
     return absolute;
 }
@@ -59,20 +59,20 @@ function validateSource(source, id) {
         || typeof source.sourceId !== 'string' || !source.sourceId
         || !source.structuredArtifacts || typeof source.structuredArtifacts !== 'object'
         || Array.isArray(source.structuredArtifacts)) {
-        fail('source details are incomplete');
+        fail('来源详情不完整：text、source、sourceId 或 structuredArtifacts 缺失');
     }
-    if (source.paperId !== undefined && source.paperId !== id) fail('source details belong to another paper');
+    if (source.paperId !== undefined && source.paperId !== id) fail('来源详情的 paperId 指向另一篇论文');
     const prohibited = Object.keys(source).filter(key => /(?:^|_)(?:analysis|parsed|apiReader|readerArticle|readerPlan)(?:$|_)/i.test(key));
-    if (prohibited.length) fail(`source details carry generated fields: ${prohibited.join(', ')}`);
+    if (prohibited.length) fail(`来源详情里混入了生成字段：${prohibited.join(', ')}`);
     return clone(source);
 }
 
 function withDirectRewriteAnalysisSource(identity, callback) {
     if (!identity || typeof identity !== 'object' || typeof callback !== 'function') {
-        fail('identity and callback are required');
+        fail('需要传入身份对象和回调函数');
     }
     const id = paperId(identity.paperId);
-    if (!['arxiv-fresh-fetch', 'conference-local-pdf'].includes(identity.route)) fail('source route is invalid');
+    if (!['arxiv-fresh-fetch', 'conference-local-pdf'].includes(identity.route)) fail('来源路线不合法：只接受 arxiv-fresh-fetch 或 conference-local-pdf');
     const sourceDetails = validateSource(identity.sourceDetails, id);
     // 来源作用域的单元测试可以传快照哈希，用来跑通嵌套的 Reader 路径。
     // 只有带 run ID 时，证明才具备持久化能力。
@@ -80,41 +80,41 @@ function withDirectRewriteAnalysisSource(identity, callback) {
     if (hasRunId && (!UUID.test(String(identity.runId || '')) || !SHA.test(String(identity.sourceSha256 || ''))
         || !SHA.test(String(identity.structuredArtifactsSha256 || ''))
         || !SHA.test(String(identity.sourceSnapshotSha256 || '')))) {
-        fail('sealed direct source provenance is incomplete');
+        fail('直改来源凭证不完整：runId 或三个 SHA 字段缺失或不合法');
     }
     if (hasRunId && (sha256(sourceDetails.text) !== identity.sourceSha256
         || sourceDetails.structuredArtifacts?.payloadSha256 !== identity.structuredArtifactsSha256)) {
-        fail('direct source provenance does not bind its supplied text/artifacts');
+        fail('直改来源凭证与传入的正文或结构化产物对不上');
     }
     if (hasRunId && identity.route === 'arxiv-fresh-fetch'
         && (!Number.isSafeInteger(identity.sourceGeneration) || identity.sourceGeneration < 1
             || !SHA.test(String(identity.sourceManifestSha256 || '')))) {
-        fail('arXiv direct source provenance lacks its sealed generation/manifest');
+        fail('arXiv 直改来源凭证缺少 generation 或 manifest SHA');
     }
     if (identity.sourceVersionIdentitySha256 !== undefined
         && (identity.route !== 'arxiv-fresh-fetch' || !SHA.test(String(identity.sourceVersionIdentitySha256 || '')))) {
-        fail('direct source version provenance is invalid');
+        fail('直改来源的版本凭证不合法：路线不是 arXiv，或 SHA 格式不对');
     }
     const readerAttemptsDir = safeReaderAttemptsDirectory(identity.readerAttemptsDir);
     if (identity.materializeReaderFigures !== undefined && typeof identity.materializeReaderFigures !== 'function') {
-        fail('Reader figure materializer must be a function');
+        fail('materializeReaderFigures 必须是函数');
     }
     if (identity.downloadPrimaryImage !== undefined && typeof identity.downloadPrimaryImage !== 'function') {
-        fail('primary image downloader must be a function');
+        fail('downloadPrimaryImage 必须是函数');
     }
     if (identity.deferReaderCandidateCommit !== undefined
         && typeof identity.deferReaderCandidateCommit !== 'boolean') {
-        fail('Reader candidate commit policy must be boolean');
+        fail('deferReaderCandidateCommit 必须是布尔值');
     }
     if (identity.readerRetryEpoch !== undefined
         && (!Number.isSafeInteger(identity.readerRetryEpoch) || identity.readerRetryEpoch < 1)) {
-        fail('Reader retry epoch must be a positive safe integer');
+        fail('readerRetryEpoch 必须是大于 0 的安全整数');
     }
     const supplementaryImages = identity.supplementaryReaderImages === undefined ? [] : identity.supplementaryReaderImages;
     if (!Array.isArray(supplementaryImages) || supplementaryImages.some(image => !image || typeof image !== 'object'
         || !Buffer.isBuffer(image.rawBytes) || !/^image\/(?:png|jpeg|webp)$/.test(String(image.mediaType || ''))
         || !/^[a-f0-9]{64}$/.test(String(image.assetSha256 || '')))) {
-        fail('supplementary Reader pixels are malformed');
+        fail('补充 Reader 图像不合法：rawBytes、mediaType 或 assetSha256 不符合要求');
     }
     const context = Object.freeze({ paperId: id, sourceDetails: Object.freeze(sourceDetails), readerAttemptsDir,
         materializeReaderFigures: identity.materializeReaderFigures || null,
@@ -141,7 +141,7 @@ function withDirectRewriteAnalysisSource(identity, callback) {
                     sourceVersionIdentitySha256: identity.sourceVersionIdentitySha256
                 } : {}) } : {}) } : {}),
         route: identity.route === 'arxiv-fresh-fetch' || identity.route === 'conference-local-pdf'
-            ? identity.route : fail('source route is invalid') });
+            ? identity.route : fail('来源路线不合法：只接受 arxiv-fresh-fetch 或 conference-local-pdf') });
     return scope.run(context, callback);
 }
 
@@ -150,7 +150,7 @@ function getDirectRewriteAnalysisContext() { return scope.getStore() || null; }
 function getDirectRewriteSource(paper) {
     const context = scope.getStore();
     if (!context || !context.runId) return null;
-    if (paperId(paper) !== context.paperId) fail('analysis asked for a different paper');
+    if (paperId(paper) !== context.paperId) fail('分析请求的论文与当前来源作用域不是同一篇');
     return clone(context.sourceDetails);
 }
 
@@ -158,7 +158,7 @@ function directReaderAttemptsDirectory(requested = null) {
     const context = scope.getStore();
     if (!context) return requested;
     if (requested && path.resolve(requested) !== context.readerAttemptsDir) {
-        fail('Reader candidate directory differs from direct execution directory');
+        fail('传入的 Reader 候选目录与直改执行目录不一致');
     }
     return context.readerAttemptsDir;
 }
@@ -173,7 +173,7 @@ function directSupplementaryReaderImages() { return scope.getStore()?.supplement
 function getDirectSourceRecord(paper = getDirectRewriteAnalysisContext()?.paperId) {
     const context = scope.getStore();
     if (!context || !context.runId) return null;
-    if (paperId(paper) !== context.paperId) fail('direct provenance was requested for another paper');
+    if (paperId(paper) !== context.paperId) fail('请求的直改凭证属于另一篇论文');
     return { contract: PROVENANCE_CONTRACT, runId: context.runId,
         sourceSha256: context.sourceSha256,
         structuredArtifactsSha256: context.structuredArtifactsSha256,
@@ -189,18 +189,18 @@ function getDirectSourceRecord(paper = getDirectRewriteAnalysisContext()?.paperI
 function attachDirectSourceRecord(paper, manifest, source) {
     const context = scope.getStore();
     if (!context || !context.runId) return;
-    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) fail('direct analysis manifest is invalid');
+    if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) fail('直改分析 manifest 不是普通对象');
     const sourceRecord = getDirectSourceRecord(paper);
     if (sha256(String(source?.text || '')) !== sourceRecord.sourceSha256
         || source?.structuredArtifacts?.payloadSha256 !== sourceRecord.structuredArtifactsSha256) {
-        fail('direct analysis tried to attach provenance from another source');
+        fail('直改分析试图挂上另一份来源的凭证：正文或结构化产物 SHA 不符');
     }
     paper.freshRewriteProvenance = sourceRecord;
     manifest.freshRewriteProvenance = clone(sourceRecord);
 }
 
 function stripEphemeralFigureFields(figure) {
-    if (!figure || typeof figure !== 'object' || Array.isArray(figure)) fail('Reader figure is malformed');
+    if (!figure || typeof figure !== 'object' || Array.isArray(figure)) fail('Reader 插图不是普通对象');
     // assetSha256 记录的是本次调用中看到的像素的完整性，不是可持久化的素材定位符。
     // 删掉所有路径和字节后要保留它，但不能把未校验的值写进这个字段。
     if (figure.assetSha256 !== undefined && !SHA.test(String(figure.assetSha256 || ''))) {
@@ -214,7 +214,7 @@ function stripEphemeralFigureFields(figure) {
 function assertNoPersistentFigureFields(value) {
     const encoded = JSON.stringify(value);
     if (/(?:"(?:cachePath|tempPath|rawBytes|assetFilename|assetBytes|assetWidth|assetHeight|assetMediaType)"|image-cache|api-reader-assets)/.test(encoded)) {
-        fail('direct execution tried to persist an image path or image bytes');
+        fail('直改执行试图把图片路径或图片字节写进持久化结果');
     }
     const validateEvidenceSha = item => {
         if (!item || typeof item !== 'object') return;

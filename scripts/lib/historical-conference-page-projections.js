@@ -21,7 +21,7 @@ const PAGE_KEY_RE = /^page:[a-f0-9]{64}$/;
 
 class HistoricalConferencePageProjectionError extends Error {
     constructor(message) {
-        super(`Historical conference page mapping was rejected: ${message}`);
+        super(`历史会议页面映射被拒绝：${message}`);
         this.name = 'HistoricalConferencePageProjectionError';
         this.code = 'HISTORICAL_CONFERENCE_PAGE_PROJECTION_INTEGRITY';
     }
@@ -42,7 +42,7 @@ const prettyBytes = value => Buffer.from(`${JSON.stringify(sortJsonKeys(value), 
 const validSha = value => SHA_RE.test(String(value || ''));
 
 function exact(value, fields, label) {
-    if (!plain(value)) fail(`${label} must be a plain object.`);
+    if (!plain(value)) fail(`${label} 必须是普通对象`);
     const actual = Object.keys(value).sort(); const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
         fail(`${label} is missing required fields or contains unsupported fields.`);
@@ -50,24 +50,24 @@ function exact(value, fields, label) {
 }
 
 function safeDirectory(directory, label, create = false) {
-    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} must be an absolute directory path.`);
+    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} 必须是绝对目录路径`);
     const absolute = path.resolve(directory);
     if (!fs.existsSync(absolute)) {
-        if (!create) fail(`${label} does not exist.`);
+        if (!create) fail(`${label} 不存在`);
         fs.mkdirSync(absolute, { recursive: true, mode: 0o700 });
     }
     let cursor = path.parse(absolute).root;
     for (const segment of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
         cursor = path.join(cursor, segment);
         const stat = fs.lstatSync(cursor);
-        if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} has an unsafe path: every component must be a directory and must not be a symbolic link.`);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} 的路径不安全：每一层都必须是目录，且不能是符号链接`);
     }
-    if (fs.realpathSync(absolute) !== absolute) fail(`${label} has an unsafe path: its resolved location does not match the requested directory.`);
+    if (fs.realpathSync(absolute) !== absolute) fail(`${label} 的路径不安全：解析后的真实位置与请求的目录不一致`);
     return absolute;
 }
 
 function readStableFile(filename, label, maxBytes = MAX_JSON_BYTES) {
-    if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail(`${label} must be an absolute file path.`);
+    if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail(`${label} 必须是绝对文件路径`);
     const absolute = path.resolve(filename); safeDirectory(path.dirname(absolute), `parent directory of ${label}`);
     let fd;
     try {
@@ -75,11 +75,11 @@ function readStableFile(filename, label, maxBytes = MAX_JSON_BYTES) {
         const opened = fs.fstatSync(fd); const named = fs.lstatSync(absolute);
         if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size > maxBytes) {
-            fail(`${label} is unsafe to read: it is not a regular file with a single hard link, its file identity does not match the path, or it exceeds the size limit.`);
+            fail(`${label} 不能安全读取：它不是单链接普通文件，文件身份与路径不符，或超过大小上限`);
         }
         const bytes = fs.readFileSync(fd); const after = fs.fstatSync(fd);
         if (bytes.length !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino
-            || after.size !== opened.size) fail(`${label} could not be read consistently: the byte count, device, inode, or file size changed.`);
+            || after.size !== opened.size) fail(`${label} 读取期间不一致：字节数、设备号、inode 或文件大小发生了变化`);
         return { filename: absolute, bytes, fileSha256: sha256(bytes) };
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
@@ -94,7 +94,7 @@ function rejectDuplicateJsonKeys(text) {
         else if (token === ',' && top?.object) top.expectKey = true;
         else if (token.startsWith('"') && top?.object && top.expectKey) {
             const key = JSON.parse(token);
-            if (top.keys.has(key)) fail('JSON must not contain duplicate object keys.');
+            if (top.keys.has(key)) fail('JSON 里不允许出现重复的对象键');
             top.keys.add(key); top.expectKey = false;
         }
     }
@@ -109,7 +109,7 @@ function readStableJson(filename, label, maxBytes = MAX_JSON_BYTES) {
         if (error instanceof HistoricalConferencePageProjectionError) throw error;
         fail(`${label} must contain valid UTF-8 JSON.`);
     }
-    if (!plain(value) && !Array.isArray(value)) fail(`${label} must contain a JSON object or array at the top level.`);
+    if (!plain(value) && !Array.isArray(value)) fail(`${label} 的顶层必须是 JSON 对象或数组`);
     return { ...loaded, value };
 }
 
@@ -134,7 +134,7 @@ function normalizeCatalog(value) {
 function normalizeInventory(value) {
     if (!plain(value) || !plain(value.counts) || !Array.isArray(value.pages)
         || !validSha(value.pageSetSha256) || !validSha(value.ledgerSha256)) {
-        fail('The historical page inventory must contain a counts object, a pages array, and valid page-set and ledger SHA values.');
+        fail('历史页面清单必须含有 counts 对象、pages 数组，以及合法的页面集合 SHA 和 ledger SHA');
     }
     const pageKeys = new Set();
     const pages = value.pages.filter(page => page?.kind === 'paper').map((page, index) => {
@@ -142,7 +142,7 @@ function normalizeInventory(value) {
             || !validSha(page.contentSha256) || !plain(page.scope) || typeof page.scope.type !== 'string'
             || typeof page.scope.key !== 'string' || !plain(page.identityHints)
             || !Array.isArray(page.identityHints.candidates) || pageKeys.has(page.pageId)) {
-            fail(`Historical paper page at index ${index} has invalid fields or a duplicate page ID.`);
+            fail(`第 ${index} 个历史论文页面字段不合法，或 page ID 重复`);
         }
         pageKeys.add(page.pageId);
         return { pageKey: page.pageId, pagePath: page.path, primaryUrl: typeof page.primaryUrl === 'string' ? page.primaryUrl : null,
@@ -176,11 +176,11 @@ function getSourceTitleFingerprints(source, paperId, cache) {
         snapshot = readStableJson(metadata.absolutePath, 'conference metadata file', 64 * 1024 * 1024);
         cache.set(metadata.absolutePath, snapshot);
     }
-    if (snapshot.fileSha256 !== metadata.sha256) fail(`${paperId}: the conference metadata file SHA does not match the source record.`);
+    if (snapshot.fileSha256 !== metadata.sha256) fail(`${paperId}：会议元数据文件的 SHA 与来源记录不符`);
     const records = Array.isArray(snapshot.value) ? snapshot.value : snapshot.value?.papers || snapshot.value?.results;
     if (!Array.isArray(records) || !plain(records[metadata.recordIndex])
         || typeof (records[metadata.recordIndex].title || records[metadata.recordIndex].name) !== 'string') {
-        fail(`${paperId}: the metadata file does not contain a record with a string title at the recorded index.`);
+        fail(`${paperId}：元数据文件在记录的索引处没有字符串 title 的记录`);
     }
     const title = records[metadata.recordIndex].title || records[metadata.recordIndex].name;
     return { originalTitleFingerprint: conference.titleFingerprint(title, 'conference metadata title'),
@@ -197,24 +197,24 @@ function selectConferenceSources(entry, cache) {
             titleProjectionFingerprintSha256s: sourceTitleFingerprints.pageTitleFingerprints,
             sourceBindingSha256: source.sourceBindingSha256 });
     }
-    if (!selected.length) fail(`${entry.paperId}: no retained local conference source meets the PDF and metadata requirements.`);
+    if (!selected.length) fail(`${entry.paperId}：没有保留下来的本地会议来源同时满足 PDF 和元数据要求`);
     return selected.sort((left, right) => stableHash(left).localeCompare(stableHash(right)));
 }
 
 function conferenceScopeFor(paperId) {
     const match = String(paperId).match(/^conference:([a-z0-9]+(?:-[a-z0-9]+)*):(\d{4}):/);
-    if (!match) fail(`The conference paper ID has an invalid format: ${paperId}`);
+    if (!match) fail(`会议论文 ID 格式不合法：${paperId}`);
     return { type: 'conference', key: `${match[1]}-${match[2]}` };
 }
 
 function buildConferencePageMappings({ catalog, catalogFileSha256, inventory, blogRoot } = {}) {
-    if (!validSha(catalogFileSha256)) fail('A valid catalog file SHA is required.');
+    if (!validSha(catalogFileSha256)) fail('需要提供合法的目录文件 SHA');
     const currentCatalog = normalizeCurrentCatalog(catalog); const entries = currentCatalog.entries
         .filter(entry => entry.paperId.startsWith('conference:')).map(clone);
     const history = normalizeInventory(inventory);
     if (currentCatalog.scopeBinding.inventoryLedgerSha256 !== history.ledgerSha256
         || currentCatalog.scopeBinding.inventoryPageSetSha256 !== history.pageSetSha256) {
-        fail('The scoped v5 catalog references a different frozen page inventory.');
+        fail('这份 scoped v5 目录引用的是另一份冻结页面清单');
     }
     const cache = new Map(); const candidatesByScopeAndTitle = new Map();
     const sourceByPaperId = new Map();
@@ -249,19 +249,19 @@ function buildConferencePageMappings({ catalog, catalogFileSha256, inventory, bl
         const paperId = `conference:icml:2026:openreview-forum-id:${dailyPosterPageRecord.poster.forumId}`;
         if (!page || page.identityHints?.status !== 'none' || page.pagePath !== dailyPosterPageRecord.page.pagePath
             || page.pageContentSha256 !== dailyPosterPageRecord.page.pageContentSha256 || stableHash(page.scope) !== stableHash(dailyPosterPageRecord.page.scope)) {
-            fail('The daily ICML poster record does not match the frozen page inventory.');
+            fail('日更 ICML poster 记录与冻结页面清单不符');
         }
         // PDF 不可得的 poster 记录留在目录里，但不加入页面映射和计划。只有后续 v2 清单
         // 把下载到的 PDF 记为 available，它们才具备资格。
         if (!knownConferenceIds.has(paperId)) continue;
         const mappedPages = pagesByPaperId.get(paperId) || [];
-        if (mappedPages.some(item => item.pageKey === page.pageKey)) fail(`${page.pageKey}: the page has already been assigned to this paper.`);
+        if (mappedPages.some(item => item.pageKey === page.pageKey)) fail(`${page.pageKey}：该页面已经分配给这篇论文`);
         mappedPages.push({ ...page, titleFingerprintSha256: null, mapping: dailyPosterPageRecord.mapping,
             dailyIcmlBinding: dailyPosterPageRecord }); pagesByPaperId.set(paperId, mappedPages);
     }
     const pageMappings = entries.map(entry => {
         const pages = (pagesByPaperId.get(entry.paperId) || []).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
-        if (!pages.length) fail(`${entry.paperId}: no frozen historical page is assigned to this conference paper.`);
+        if (!pages.length) fail(`${entry.paperId}：没有冻结的历史页面分配给它`);
         return { paperId: entry.paperId, sourceSetSha256: stableHash(sourceByPaperId.get(entry.paperId)),
             pageKeys: pages.map(page => page.pageKey), pages: pages.map(page => ({ pageKey: page.pageKey,
                 pagePath: page.pagePath, primaryUrl: page.primaryUrl, pageContentSha256: page.pageContentSha256,
@@ -282,12 +282,12 @@ function normalizeConferencePageMappingRecord(value) {
         || !plain(value.inventory) || !validSha(value.inventory.ledgerSha256)
         || !validSha(value.inventory.pageSetSha256) || !Array.isArray(value.projections)
         || !Array.isArray(value.unmatchedPages) || !validSha(value.projectionSetSha256)
-        || !validSha(value.artifactSha256)) fail('The conference page mapping record has an invalid contract, version, field type, or SHA value.');
+        || !validSha(value.artifactSha256)) fail('会议页面映射记录的 contract、version、字段类型或 SHA 不合法');
     const seenPages = new Set(); const pageMappings = value.projections.map((item, index) => {
         exact(item, ['paperId', 'sourceSetSha256', 'pageKeys', 'pages'], `projections[${index}]`);
         if (typeof item.paperId !== 'string' || !item.paperId.startsWith('conference:')
             || !validSha(item.sourceSetSha256) || !Array.isArray(item.pageKeys) || !item.pageKeys.length
-            || !Array.isArray(item.pages) || item.pageKeys.length !== item.pages.length) fail('A conference paper mapping has an invalid paper ID or source SHA, or its page lists are empty or inconsistent.');
+            || !Array.isArray(item.pages) || item.pageKeys.length !== item.pages.length) fail('某条会议论文映射的 paper ID 或来源 SHA 不合法，或页面列表为空、前后不一致');
         const pages = item.pages.map((page, pageIndex) => {
             exact(page, ['pageKey', 'pagePath', 'primaryUrl', 'pageContentSha256', 'cohortDate', 'scope',
                 'titleFingerprintSha256', 'mapping', 'dailyIcmlBinding'],
@@ -298,7 +298,7 @@ function normalizeConferencePageMappingRecord(value) {
                 || !(page.titleFingerprintSha256 === null || validSha(page.titleFingerprintSha256)) || seenPages.has(page.pageKey)
                 || !['retained-local-title-fingerprint', icmlPosterApi.DIRECT_PAGE_MAPPING,
                     icmlPosterApi.SUMMARY_SECTION_MAPPING].includes(page.mapping)) {
-                fail('A mapped conference page has invalid fields, an unsupported mapping type, or a duplicate page key.');
+                fail('某条已映射的会议页面字段不合法、映射类型不支持，或 page key 重复');
             }
             if ([icmlPosterApi.DIRECT_PAGE_MAPPING, icmlPosterApi.SUMMARY_SECTION_MAPPING].includes(page.mapping)) {
                 const binding = icmlPosterApi.normalizeDailyPageBinding(page.dailyIcmlBinding);
@@ -306,39 +306,39 @@ function normalizeConferencePageMappingRecord(value) {
                     || page.titleFingerprintSha256 !== null || binding.page.pageKey !== page.pageKey
                     || binding.page.pagePath !== page.pagePath || binding.page.pageContentSha256 !== page.pageContentSha256
                     || item.paperId !== `conference:icml:2026:openreview-forum-id:${binding.poster.forumId}`) {
-                    fail('The daily ICML page mapping does not match its poster record or paper ID.');
+                    fail('日更 ICML 页面映射与 poster 记录或 paper ID 不符');
                 }
             } else if (page.scope.type !== 'conference' || page.dailyIcmlBinding !== null) {
-                fail('A title-based conference mapping must use conference scope and must not contain a daily ICML poster record.');
+                fail('按标题建立的会议映射必须用 conference scope，且不能带日更 ICML poster 记录');
             }
             seenPages.add(page.pageKey); return clone(page);
         }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
-        if (item.pageKeys.join('\0') !== pages.map(page => page.pageKey).join('\0')) fail('The pageKeys list does not match the mapped pages in page-key order.');
+        if (item.pageKeys.join('\0') !== pages.map(page => page.pageKey).join('\0')) fail('pageKeys 列表与按 page key 排序后的映射页面不一致');
         return { paperId: item.paperId, sourceSetSha256: item.sourceSetSha256,
             pageKeys: item.pageKeys.slice(), pages };
     }).sort((left, right) => left.paperId.localeCompare(right.paperId));
     if (new Set(pageMappings.map(item => item.paperId)).size !== pageMappings.length
         || pageMappings.some((item, index) => index && pageMappings[index - 1].paperId.localeCompare(item.paperId) >= 0)) {
-        fail('The conference paper IDs are repeated or are not in increasing order after sorting.');
+        fail('会议论文 ID 有重复，或排序后不是递增顺序');
     }
     const unmatchedPages = value.unmatchedPages.map((page, index) => {
         exact(page, ['pageKey', 'pagePath', 'scope', 'reason'], `unmatchedPages[${index}]`);
         if (!PAGE_KEY_RE.test(page.pageKey) || typeof page.pagePath !== 'string' || !page.pagePath
             || !plain(page.scope) || page.reason !== 'no-retained-local-title-match' || seenPages.has(page.pageKey)) {
-            fail('An unmatched conference page has invalid fields, an unsupported reason, or a duplicate page key.');
+            fail('某条未匹配的会议页面字段不合法、原因不支持，或 page key 重复');
         }
         seenPages.add(page.pageKey); return clone(page);
     }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
     const mappingRecordFields = { contract: CONTRACT, version: VERSION, catalogFileSha256: value.catalogFileSha256,
         inventory: clone(value.inventory), projections: pageMappings, projectionSetSha256: value.projectionSetSha256, unmatchedPages };
     if (stableHash(pageMappings) !== value.projectionSetSha256 || stableHash(mappingRecordFields) !== value.artifactSha256) {
-        fail('The conference page mapping SHA values do not match the normalized mappings or complete record.');
+        fail('会议页面映射的 SHA 与规范化后的映射或完整记录不符');
     }
     return { ...mappingRecordFields, artifactSha256: value.artifactSha256 };
 }
 
 function writeConferencePageMappingRecord({ root, outputName, artifact } = {}) {
-    if (!SAFE_NAME_RE.test(String(outputName || ''))) fail('The conference page mapping output name is unsafe: it must match the allowed JSON filename format.');
+    if (!SAFE_NAME_RE.test(String(outputName || ''))) fail('会议页面映射的输出名不安全：必须符合允许的 JSON 文件名格式');
     const directory = safeDirectory(root, 'conference page mapping output directory', true);
     const normalized = normalizeConferencePageMappingRecord(artifact); const filename = path.join(directory, outputName);
     const bytes = prettyBytes(normalized); let fd;
@@ -350,7 +350,7 @@ function writeConferencePageMappingRecord({ root, outputName, artifact } = {}) {
     } catch (error) {
         if (error.code !== 'EEXIST') throw error;
         if (!readStableFile(filename, 'existing conference page mapping file').bytes.equals(bytes)) {
-            fail(`Refusing to overwrite a conference page mapping file with different bytes: ${outputName}`);
+            fail(`拒绝用不同字节覆盖已有的会议页面映射文件：${outputName}`);
         }
         return { status: 'recovered', filename, artifact: normalized };
     } finally { if (fd !== undefined) fs.closeSync(fd); }
@@ -362,7 +362,7 @@ function buildFromFiles({ catalogFile, inventoryFile, blogRoot } = {}) {
     const currentCatalog = normalizeCurrentCatalog(catalog.value);
     if (currentCatalog.scopeBinding.inventoryPath !== inventory.filename
         || currentCatalog.scopeBinding.inventorySha256 !== inventory.fileSha256) {
-        fail('The inventory file path or SHA does not match the scoped v5 catalog.');
+        fail('清单文件路径或 SHA 与 scoped v5 目录不符');
     }
     return buildConferencePageMappings({ catalog: catalog.value, catalogFileSha256: catalog.fileSha256,
         inventory: inventory.value, blogRoot });

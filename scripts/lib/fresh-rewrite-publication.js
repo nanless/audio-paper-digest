@@ -22,15 +22,15 @@ const idOf = paper => normalizedId(paper);
 
 function checkedDate(value) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value || '')
-        || new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) !== value) throw new Error('Invalid fresh rewrite date');
+        || new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) !== value) throw new Error('fresh rewrite 日期不合法：必须是真实的 YYYY-MM-DD');
     return value;
 }
 
 function checkedIds(values) {
-    if (!Array.isArray(values) || !values.length) throw new Error('Fresh rewrite paper IDs are missing');
+    if (!Array.isArray(values) || !values.length) throw new Error('缺少 fresh rewrite 的论文 ID 列表');
     const ids = values.map(value => idOf({ arxivId: value }));
     if (ids.some((id, index) => !/^\d{4}\.\d{4,5}$/.test(id || '') || values[index] !== id)
-        || new Set(ids).size !== ids.length) throw new Error('Fresh rewrite paper IDs must be unique normalized IDs');
+        || new Set(ids).size !== ids.length) throw new Error('fresh rewrite 的论文 ID 必须是规范且不重复的 arXiv ID');
     return ids.sort();
 }
 
@@ -53,7 +53,7 @@ function under(root, relative) {
         throw new Error('Unsafe relative path or traversal');
     }
     const target = path.resolve(root, relative);
-    if (!target.startsWith(`${path.resolve(root)}${path.sep}`)) throw new Error('Path escaped its scope');
+    if (!target.startsWith(`${path.resolve(root)}${path.sep}`)) throw new Error('解析后的路径超出了允许的根目录范围');
     return target;
 }
 
@@ -62,7 +62,7 @@ function readBytes(filename) {
     const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     try {
         const stat = fs.fstatSync(fd);
-        if (!stat.isFile() || stat.nlink !== 1 || stat.size > 256 * 1024 * 1024) throw new Error('Unsafe or oversized backup input');
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size > 256 * 1024 * 1024) throw new Error('备份输入不安全：不是单链接普通文件，或超过 256 MiB');
         return fs.readFileSync(fd);
     } finally { fs.closeSync(fd); }
 }
@@ -74,7 +74,7 @@ function immutableWrite(filename, bytes) {
     safeDirectory(path.dirname(filename), true);
     if (fs.existsSync(filename)) {
         if (!readBytes(filename).equals(raw) || (fs.lstatSync(filename).mode & 0o777) !== 0o600) {
-            throw new Error(`Immutable baseline backup differs: ${filename}`);
+            throw new Error(`不可变基线备份与已有字节不一致：${filename}（要求内容相同且权限为 0600）`);
         }
         return;
     }
@@ -98,7 +98,7 @@ function context(options) {
     if (path.dirname(runDir) !== rootDir) throw new Error('Fresh rewrite run must be a direct child of the configured root');
     const canonicalPath = path.resolve(options.canonicalPath || Config.FILES.deepAnalysisResult);
     const currentDir = safeDirectory(options.currentDir || path.dirname(canonicalPath));
-    if (path.dirname(canonicalPath) !== currentDir) throw new Error('Canonical path escaped current directory');
+    if (path.dirname(canonicalPath) !== currentDir) throw new Error('正式分析结果路径不在当前批次目录下');
     return { rootDir, runDir, canonicalPath, currentDir,
         blogRepo: safeDirectory(options.blogRepo || Config.PUBLISH_CONFIG.blogRepo),
         date: checkedDate(options.date || options.run?.date),
@@ -117,9 +117,9 @@ function gitState(blogRepo) {
 
 function getSavedAnalysisPapers(payload) {
     if (!payload || Array.isArray(payload) || !Array.isArray(payload.papers)
-        || !Number.isSafeInteger(payload.generation) || payload.generation < 0) throw new Error('Canonical needs papers and a safe generation');
+        || !Number.isSafeInteger(payload.generation) || payload.generation < 0) throw new Error('正式分析结果缺少 papers 数组，或 generation 不是非负安全整数');
     const ids = payload.papers.map(idOf);
-    if (ids.some(id => !id) || new Set(ids).size !== ids.length) throw new Error('Canonical paper IDs are invalid or duplicated');
+    if (ids.some(id => !id) || new Set(ids).size !== ids.length) throw new Error('正式分析结果里的论文 ID 有非法值或重复项');
     return payload.papers;
 }
 
@@ -127,11 +127,11 @@ function paperDate(paper, fallback) { return paper.fetchBatchDate || paper.batch
 
 function targetCoverage(payload, ctx) {
     const papers = getSavedAnalysisPapers(payload);
-    if (payload.batchDate !== ctx.date) throw new Error('Canonical batch date differs from the rewrite baseline');
+    if (payload.batchDate !== ctx.date) throw new Error('正式分析结果的 batchDate 与本次 rewrite 基线不一致');
     const selected = papers.filter(paper => ctx.paperIds.includes(idOf(paper)));
     const dateIds = papers.filter(paper => paperDate(paper, payload.batchDate) === ctx.date).map(idOf).sort();
     if (jsonHash(selected.map(idOf).sort()) !== jsonHash(ctx.paperIds) || jsonHash(dateIds) !== jsonHash(ctx.paperIds)) {
-        throw new Error('Canonical date/paper ID coverage differs from the complete rewrite batch');
+        throw new Error('正式分析结果按日期和论文 ID 取出的集合，与本次完整 rewrite 批次不一致');
     }
     return selected;
 }
@@ -144,7 +144,7 @@ function validateBlogPath(relative, ctx) {
         if (relative.startsWith(`static/images/papers/${id}/`)
             || relative.startsWith(`static/data/papers/${ctx.date}/${id.replace('.', '-')}/`)) return relative;
     }
-    throw new Error(`Manifest path outside fresh rewrite scope: ${relative}`);
+    throw new Error(`清单路径不在 fresh rewrite 的允许范围内：${relative}`);
 }
 
 function relatedDataFiles(ctx) {
@@ -166,16 +166,16 @@ function relatedDataFiles(ctx) {
 function addControlledAssets(ctx, blogFiles, relative) {
     const directory = under(ctx.blogRepo, relative);
     try {
-        if (fs.lstatSync(directory).isSymbolicLink()) throw new Error('Unsafe symlink in target blog assets');
+        if (fs.lstatSync(directory).isSymbolicLink()) throw new Error('目标博客资源里出现符号链接，已拒绝继续');
     } catch (error) { if (error.code === 'ENOENT') return; throw error; }
     safeDirectory(directory);
     for (const name of fs.readdirSync(directory)) {
         const child = `${relative}/${name}`; const filename = under(ctx.blogRepo, child);
         const stat = fs.lstatSync(filename);
-        if (stat.isSymbolicLink()) throw new Error('Unsafe symlink in target blog assets');
+        if (stat.isSymbolicLink()) throw new Error('目标博客资源里出现符号链接，已拒绝继续');
         if (stat.isDirectory()) addControlledAssets(ctx, blogFiles, child);
         else if (stat.isFile()) blogFiles.add(validateBlogPath(child, ctx));
-        else throw new Error('Unsafe nonregular target blog asset');
+        else throw new Error('目标博客资源既不是普通文件也不是目录');
     }
 }
 
@@ -202,7 +202,7 @@ function loadBaseline(ctx, descriptor) {
     if (baseline.contract !== BASELINE_CONTRACT || baseline.date !== ctx.date
         || baseline.blog.repo !== ctx.blogRepo || baseline.canonical.path !== ctx.canonicalPath
         || jsonHash(baseline.paperIds) !== jsonHash(ctx.paperIds)
-        || (descriptor && descriptor.sha256 !== hash(raw))) throw new Error('Fresh baseline identity or SHA mismatch');
+        || (descriptor && descriptor.sha256 !== hash(raw))) throw new Error('fresh 基线的身份字段或 SHA 与当前状态不符');
     for (const record of baseline.files) {
         const backup = under(ctx.runDir, record.backupPath);
         if (!record.backupPath.startsWith('baseline-files/') || hash(readBytes(backup)) !== record.sha256
@@ -239,17 +239,17 @@ function synchronizePapersDatabase(ctx, run, analysis, options) {
         const apply = options.applyDigestStatuses || applyAnalysisDigestStatuses;
         const updatedAt = getBeijingISOString();
         const updated = apply(database, analysis.papers, { batchDate: ctx.date, updatedAt });
-        if (updated !== ctx.paperIds.length) throw new Error('Papers database did not synchronize every fresh paper');
+        if (updated !== ctx.paperIds.length) throw new Error('论文库没有同步全部 fresh 论文：更新条数与论文数不符');
         for (const paper of analysis.papers) {
             const saved = database.papers[idOf(paper)];
             if (saved?.digestStatus?.latestAttemptStatus !== 'analyzed'
                 || saved?.freshRewriteProvenance?.runId !== run.runId
                 || saved.analysis !== paper.analysis || saved.apiReaderArticle !== paper.apiReaderArticle) {
-                throw new Error('Papers database refused fresh production statuses');
+                throw new Error('论文库没有写入预期的 analyzed 状态或 freshRewriteProvenance');
             }
         }
         database.generation = (database.generation || 0) + 1;
-        if (!Number.isSafeInteger(database.generation)) throw new Error('Papers database generation overflow');
+        if (!Number.isSafeInteger(database.generation)) throw new Error('论文库 generation 自增后超出安全整数范围');
         database.lastUpdated = updatedAt;
         replacePrivate(databasePath, Buffer.from(JSON.stringify(database)));
         return { updated, generation: database.generation };
@@ -263,7 +263,7 @@ function prepareBaseline(options) {
         if (fs.existsSync(path.join(ctx.runDir, 'baseline.json'))) {
             const { baseline, raw } = loadBaseline(ctx);
             if (blog.head !== baseline.blog.head || hash(readBytes(ctx.canonicalPath)) !== baseline.canonical.sha256) {
-                throw new Error('Fresh baseline changed after preparation');
+                throw new Error('准备之后 fresh 基线发生变化：博客 HEAD 或正式分析结果字节已不同');
             }
             return baselineDescriptor(baseline, raw);
         }
@@ -277,7 +277,7 @@ function prepareBaseline(options) {
             const structuredSha = source?.structuredArtifactsSha256;
             if (!validSha(paper.sourceSha256) || paper.sourceSha256 !== source?.sourceSha256 || !validSha(structuredSha)
                 || typeof paper.analysis !== 'string' || typeof paper.apiReaderArticle !== 'string') {
-                throw new Error(`Baseline paper lacks old generated text for the difference audit: ${id}`);
+                throw new Error(`基线论文缺少用于差异审计的旧生成文本：${id}`);
             }
             if (source.sourceId !== undefined && (typeof source.sourceId !== 'string'
                 || !/^\d{4}\.\d{4,5}(?:v[1-9]\d*)?$/.test(source.sourceId)
@@ -294,7 +294,7 @@ function prepareBaseline(options) {
         }
         for (const relative of dataFiles.filter(name => path.basename(name).startsWith('blog-generation-manifest-'))) {
             const manifest = readJson(under(ctx.currentDir, relative));
-            if (!Array.isArray(manifest.files)) throw new Error('Existing generation manifest lacks files');
+            if (!Array.isArray(manifest.files)) throw new Error('已有的生成清单里没有 files 数组');
             for (const record of manifest.files) {
                 validateBlogPath(record.path, ctx);
                 if (!record.deleted && fs.existsSync(under(ctx.blogRepo, record.path))) blogFiles.add(record.path);
@@ -307,15 +307,15 @@ function prepareBaseline(options) {
         const pages = [];
         for (const relative of [...blogFiles].filter(name => name.endsWith('.md'))) {
             const raw = readBytes(under(ctx.blogRepo, relative)); const content = raw.toString('utf8');
-            if (!/^paper_digest_pipeline_owned:\s*true\s*$/m.test(content)) throw new Error(`Blog page is not pipeline owned: ${relative}`);
+            if (!/^paper_digest_pipeline_owned:\s*true\s*$/m.test(content)) throw new Error(`博客页面没有 paper_digest_pipeline_owned 标记：${relative}`);
             const id = relative === `content/posts/${ctx.date}.md` ? null
                 : content.match(/^paper_digest_arxiv_id:\s*"?([^"\s]+)"?\s*$/m)?.[1];
-            if (id !== null && !ctx.paperIds.includes(id)) throw new Error('Blog paper ID coverage differs from selected batch');
+            if (id !== null && !ctx.paperIds.includes(id)) throw new Error('博客页面里的 arXiv ID 与本次入选批次不一致');
             const body = content.replace(/^---\r?\n[\s\S]*?\r?\n---\r?\n/, '');
             pages.push({ paperId: id, path: relative, sha256: hash(raw), bodySha256: hash(body) });
         }
         if (pages.length !== ctx.paperIds.length + 1
-            || jsonHash(pages.filter(p => p.paperId).map(p => p.paperId).sort()) !== jsonHash(ctx.paperIds)) throw new Error('Blog needs every paper page and exactly one summary');
+            || jsonHash(pages.filter(p => p.paperId).map(p => p.paperId).sort()) !== jsonHash(ctx.paperIds)) throw new Error('博客必须为每篇论文各有一页，且汇总页恰好一页');
         const files = [];
         for (const [category, root, relatives] of [['data', ctx.currentDir, dataFiles], ['blog', ctx.blogRepo, [...blogFiles].sort()]]) {
             for (const relativePath of relatives) {
@@ -327,7 +327,7 @@ function prepareBaseline(options) {
         }
         if (gitState(ctx.blogRepo).head !== blog.head || hash(readBytes(ctx.canonicalPath)) !== hash(canonicalRaw)
             || files.some(record => hash(readBytes(under(record.category === 'blog' ? ctx.blogRepo : ctx.currentDir, record.relativePath))) !== record.sha256)) {
-            throw new Error('Baseline input changed while backing up; refusing to certify snapshot');
+            throw new Error('备份期间基线输入又变了，因此拒绝为这份快照出凭证');
         }
         const baseline = { version: 1, contract: BASELINE_CONTRACT, date: ctx.date, createdAt: getBeijingISOString(),
             paperIds: ctx.paperIds, blog: { repo: ctx.blogRepo, ...blog },
@@ -364,12 +364,12 @@ function promoteRun(options) {
             || (sourcePlan?.sourceMode === 'sealed-arxiv-bundle-v1' && (provenance.sourceGeneration !== expected.sourceGeneration
                 || provenance.sourceManifestSha256 !== expected.sourceManifestSha256
                 || !validSha(provenance.sourceManifestSha256)))
-            || !validatePaper(paper)) throw new Error(`Incomplete fresh production/source proof: ${id}`);
+            || !validatePaper(paper)) throw new Error(`fresh 生产来源凭证不完整：${id}`);
         if (typeof paper.analysis !== 'string' || !paper.analysis.trim()
             || typeof paper.apiReaderArticle !== 'string' || !paper.apiReaderArticle.trim()
             || hash(paper.analysis) === baseline.oldPaperHashes[id].analysisSha256
             || hash(paper.apiReaderArticle) === baseline.oldPaperHashes[id].readerArticleSha256) {
-            throw new Error(`Every paper needs newly written analysis and Reader text: ${id}`);
+            throw new Error(`每篇论文都要有新写的分析正文和 Reader 正文，${id} 仍为空或与旧字节相同`);
         }
         const descriptor = readSource(ctx.runDir, paper, { runId: run.runId, sourceExpectations: run.sourceExpectations })?.freshSourceDescriptor;
         if (!descriptor || descriptor.runId !== run.runId || descriptor.paperId !== id
@@ -388,7 +388,7 @@ function promoteRun(options) {
         const priorIntent = fs.existsSync(intentPath) ? readJson(intentPath) : null;
         if (priorIntent && (priorIntent.contract !== PROMOTION_CONTRACT || priorIntent.runId !== run.runId
             || priorIntent.baselineSha256 !== run.baseline.sha256 || priorIntent.inputSha256 !== inputSha256)) {
-            throw new Error('Immutable promotion intent differs from this run');
+            throw new Error('已保存的不可变晋升意图与本次运行不符');
         }
         if (priorIntent && hash(canonicalRaw) === priorIntent.canonicalSha256
             && canonical.generation === priorIntent.canonicalGeneration) {
@@ -401,11 +401,11 @@ function promoteRun(options) {
         }
         targetCoverage(canonical, ctx);
         verifyBatchInputBaseline(ctx, baseline);
-        if (gitState(ctx.blogRepo).head !== baseline.blog.head) throw new Error('Blog HEAD changed since the fresh baseline');
+        if (gitState(ctx.blogRepo).head !== baseline.blog.head) throw new Error('博客 HEAD 相对 fresh 基线已变化');
         let nextRaw; let intent = priorIntent;
         if (intent) {
             nextRaw = readBytes(path.join(ctx.runDir, 'promoted-canonical.json'));
-            if (hash(nextRaw) !== intent.canonicalSha256) throw new Error('Promotion recovery payload is corrupt');
+            if (hash(nextRaw) !== intent.canonicalSha256) throw new Error('晋升恢复载荷已损坏：字节与记录的 canonicalSha256 不符');
         } else {
             const replacements = new Map(analysis.papers.map(paper => [idOf(paper), structuredClone(paper)]));
             const stagedPath = path.join(ctx.runDir, 'promoted-canonical.json');
@@ -419,8 +419,8 @@ function promoteRun(options) {
                     successfulExpected: ctx.paperIds.length, remainingFailed: 0, analyzedSuccess: ctx.paperIds.length,
                     analyzedFailed: 0, total: ctx.paperIds.length, success: ctx.paperIds.length, failed: 0, savedAt: promotedAt },
                 freshRewritePromotion: { contract: PROMOTION_CONTRACT, runId: run.runId, baselineSha256: run.baseline.sha256 } };
-            if (!Number.isSafeInteger(next.generation)) throw new Error('Canonical generation overflow');
-            if (staged && jsonHash(staged) !== jsonHash(next)) throw new Error('Promotion recovery payload differs from the fresh batch');
+            if (!Number.isSafeInteger(next.generation)) throw new Error('正式分析结果的 generation 自增后超出安全整数范围');
+            if (staged && jsonHash(staged) !== jsonHash(next)) throw new Error('晋升恢复载荷与本次 fresh 批次不一致');
             nextRaw = staged ? readBytes(stagedPath) : Buffer.from(JSON.stringify(next, null, 2));
             immutableWrite(stagedPath, nextRaw);
             intent = { version: 1, contract: PROMOTION_CONTRACT, status: 'prepared', runId: run.runId,
@@ -429,10 +429,10 @@ function promoteRun(options) {
             immutableWrite(intentPath, JSON.stringify(intent, null, 2));
         }
         // 规范锁还持着；原子替换前立刻重读一次。
-        if (hash(readBytes(ctx.canonicalPath)) !== baseline.canonical.sha256) throw new Error('Canonical CAS drifted before replacement');
+        if (hash(readBytes(ctx.canonicalPath)) !== baseline.canonical.sha256) throw new Error('原子替换前正式分析结果的字节又变了');
         verifyBatchInputBaseline(ctx, baseline);
         replacePrivate(ctx.canonicalPath, nextRaw);
-        if (hash(readBytes(ctx.canonicalPath)) !== intent.canonicalSha256) throw new Error('Canonical post-write verification failed');
+        if (hash(readBytes(ctx.canonicalPath)) !== intent.canonicalSha256) throw new Error('写回后校验失败：正式分析结果的字节与晋升意图记录不符');
         const database = synchronizePapersDatabase(ctx, run, analysis, options);
         return { ...intent, status: 'promoted', papersDatabase: database, alreadyPromoted: false };
     }));
