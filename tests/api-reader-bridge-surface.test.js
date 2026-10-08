@@ -43,7 +43,7 @@ test('只修复已确认的单字熵术语，Reader 事实保持不变', () => {
     assert.equal(normalizeReaderConceptBridgeTerms(candidate), false);
     for (const raw of [
         '该图后解释需要强调辨别好不等于自发可用。',
-        '图后解释必须与图前导读形成闭环且只描述本次实际收到的像素。',
+        '图后解释必须与图前导读呼应，且只描述本次实际收到的像素。',
         '根据当前 prompt 要求改写。'
     ]) {
         assert.equal(normalizeReaderWorkflowLeakageSurface(raw), raw);

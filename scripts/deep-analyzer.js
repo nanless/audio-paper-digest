@@ -112,6 +112,7 @@ const { READER_TABLE_SELECTION_CONTRACT, compileReaderTableSelections,
     validateReaderResultTableCoverage } = require('./lib/reader-tables.js');
 const { TAG_STAGE_RECORD_CONTRACT, readTagStageRecord } = require('./lib/tag-stage-record.js');
 const { getDefaultTagRules } = require('./lib/tag-rules.js');
+const promptHistory = require('./lib/prompt-history.js');
 const {
     ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
     ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
@@ -2956,7 +2957,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         .replace(/^[ \t]{0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^[ \t]{0,3}\1[`~]*[ \t]*(?=\n|$)/gm, protect)
         .replace(/\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|(?<!\\)\$(?!\$)[^\n$]*?(?<!\\)\$/g, protect)
         .replace(/(`+)[^\n]*?\1/g, protect)
-        // URL 可能以 45万对 这样的 Unicode 路径片段结尾。要把整个连续 token 保护好；
+        // URL 可能以 45 万对 这样的 Unicode 路径片段结尾。要把整个连续 token 保护好；
         // 否则第二遍归一化会往已签名的 URL 里插一个正文空格。
         .replace(/!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)|https:\/\/[^\s<>()\[\]{}"'，。；：！？、]+/g, protect)
         .replace(/^ {0,3}>[^\n]*/gm, protect)
@@ -8444,6 +8445,33 @@ function promptTemplateSha256(relativePath, contractVersion = '') {
         .digest('hex');
 }
 
+// 记录声明的提示词 SHA 可能指向只存在于 prompts/history/ 的历史字节：v1 提示词在设计上
+// 要永久冻结，实际被就地改写过。先按声明契约选路径、重算当前文件的首块模板哈希；不符时
+// 只在归档里确实有那份字节、重算哈希也等于声明值时才改用声明值。归档里没有就返回当前值，
+// 与改动前逐字节一致（继续判定指纹变化、清掉阶段重跑）。每次真用上归档都留一行日志，
+// 复用不是无声发生的。
+function resolvedRuntimePromptTemplateSha256(declaredSha256, relativePath, contractVersion = '') {
+    const current = runtimePromptTemplateSha256(relativePath, contractVersion);
+    const declared = String(declaredSha256 || '');
+    if (declared === current) return current;
+    const value = declared.toLowerCase();
+    if (promptHistory.historicalPromptTemplateBytesForSha256(value, contractVersion)) {
+        console.log(`    [deep] ℹ️  提示词 ${relativePath} 按 prompts/history 归档的声明字节核验：${value}`);
+        return declared;
+    }
+    return current;
+}
+
+// declaredSha256 为空（新请求、写回新记录）时就是原来的 promptTemplateSha256(path)，
+// 一字不差。只有核验一份声明了历史 SHA 的旧记录时才走归档解析。
+function readerPromptTemplateSha256(declaredSha256, stage, promptTextContract) {
+    const relativePath = promptFilePathForContract(stage, promptTextContract);
+    if (declaredSha256 === undefined || declaredSha256 === null) {
+        return promptTemplateSha256(relativePath);
+    }
+    return resolvedRuntimePromptTemplateSha256(declaredSha256, relativePath);
+}
+
 // 这个一次性白名单只收 core-summary-detailed-v3 上线前那一刻产生的检查点。那些提示词
 // 在语义上只有摘要约定不同；其他所有旧提示词字节必须精确复现，否则迁移直接拒绝。绝不要
 // 把这张表放宽成「任何以前的哈希」。
@@ -8779,7 +8807,13 @@ function buildImageSupplementBaseFingerprint(promptTextContract) {
 // 读者文章的配置指纹。正文和修复提示词各有自己的版本：新请求按当前版本算，旧记录
 // 按它自己声明的版本算。旧记录没有这两个字段时，哈希输入里也不放它们，与改动前
 // 逐字节一致；不传版本同样按 v1 的历史形状算。
-function buildApiReaderBaseFingerprint(promptTextContract, repairPromptTextContract, arxivId) {
+//
+// declaredPrompt 只在核验旧记录时传入，装的是那份记录自己声明的两个提示词 SHA；声明值
+// 对着 prompts/history/ 归档里确实存在的字节时按声明值算，否则仍按当前文件算。写回新
+// 记录时必须不传，否则核验指纹会把这次并没有读的历史 SHA 带进写出的身份里。
+function buildApiReaderBaseFingerprint(
+    promptTextContract, repairPromptTextContract, arxivId, declaredPrompt = null
+) {
     const freshIdentity = require('./lib/fresh-analysis-context.js').freshAnalysisIdentity(arxivId);
     const declaredPromptTextContract = String(promptTextContract || '');
     const declaredRepairPromptTextContract = String(repairPromptTextContract || '');
@@ -8827,14 +8861,12 @@ function buildApiReaderBaseFingerprint(promptTextContract, repairPromptTextContr
         modelImageTotalBytes: API_READER_MODEL_IMAGE_TOTAL_BYTES,
         modelImageTotalPixels: API_READER_MODEL_IMAGE_TOTAL_PIXELS,
         providerImageExclusionContract: API_READER_PROVIDER_IMAGE_EXCLUSION_CONTRACT,
-        promptTemplateSha256: promptTemplateSha256(
-            promptFilePathForContract('apiReaderArticle',
-                declaredPromptTextContract || ANALYSIS_PROMPT_TEXT_V1_CONTRACT)
-        ),
-        repairPromptSha256: promptTemplateSha256(
-            promptFilePathForContract('apiReaderRepair',
-                declaredRepairPromptTextContract || ANALYSIS_PROMPT_TEXT_V1_CONTRACT)
-        ),
+        promptTemplateSha256: readerPromptTemplateSha256(
+            declaredPrompt?.promptTemplateSha256, 'apiReaderArticle',
+            declaredPromptTextContract || ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
+        repairPromptSha256: readerPromptTemplateSha256(
+            declaredPrompt?.repairPromptTemplateSha256, 'apiReaderRepair',
+            declaredRepairPromptTextContract || ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
         repairImplementationSha256: promptTemplateSha256('scripts/lib/reader-repair.js'),
         draftOrderContract: READER_DRAFT_ORDER_CONTRACT,
         draftOrderImplementationSha256: promptTemplateSha256('scripts/lib/reader-draft-order.js'),
@@ -8866,7 +8898,8 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId, manifest = p
         }),
         apiReaderArticle: buildApiReaderBaseFingerprint(
             textStagePromptTextContract(paper, manifest, 'apiReaderArticle'),
-            textStageRepairPromptTextContract(paper, manifest), arxivId),
+            textStageRepairPromptTextContract(paper, manifest), arxivId,
+            manifest?.stages?.apiReaderArticle || null),
         imageSupplement: buildImageSupplementBaseFingerprint(
             textStagePromptTextContract(paper, manifest, 'imageSupplement'))
     };
@@ -14288,14 +14321,14 @@ async function analyzePaperDeepInternal(paper) {
             ? recoveryFingerprints.primaryAnalysis
             : buildPrimaryAnalysisBaseFingerprint(
                 primaryAnalysisWriteContract, paper, textForAnalysis, arxivId);
-    // 第1轮：主分析
+    // 第 1 轮：主分析
     if (analysis) {
         console.log(`    [deep] ↩ 从主分析 checkpoint 恢复 (${analysis.length} chars)`);
     } else if (isDualModel && downloadedImages.length > 0) {
         // ========== 双模型模式 ==========
         console.log(`    [deep] 🧠 双模型模式：主模型(${DEEP_CONFIG.model})先做文本分析，后续由副模型(${SECONDARY_CONFIG.model})最终筛图补充`);
 
-        // 第1a轮：主模型（只看文本）
+        // 第 1a 轮：主模型（只看文本）
         try {
             analysis = await callModelWithConfig(
                 [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
@@ -14362,7 +14395,7 @@ async function analyzePaperDeepInternal(paper) {
 
     let selectedImageUrls = [...imageManifest.selected];
 
-    // 第2轮：开源扫描
+    // 第 2 轮：开源扫描
     const openSourceStage = prepareTextRecoveryStage(
         paper,
         analysisManifest,
@@ -14416,7 +14449,7 @@ async function analyzePaperDeepInternal(paper) {
                 if (demoUrls.length > 0) {
                     console.log(`    [deep] 🔍 发现 ${demoUrls.length} 个 demo 页面，检查开源链接...`);
                     const allOpenSourceLinks = [...demoFoundLinks];
-                    for (const url of demoUrls.slice(0, 3)) { // 最多检查3个
+                    for (const url of demoUrls.slice(0, 3)) { // 最多检查 3 个
                         try {
                             const links = (await checkDemoPageForOpensource(url))
                                 .filter(link => isMetadataResourceDiscoveryLink(paper, link));
@@ -14464,7 +14497,7 @@ async function analyzePaperDeepInternal(paper) {
         if (demoScanError) throw demoScanError;
     }
 
-    // 第3轮：审校重写（对照原文修正、补充、删减，完全重写前两轮输出）
+    // 第 3 轮：审校重写（对照原文修正、补充、删减，完全重写前两轮输出）
     const revisionStage = prepareTextRecoveryStage(
         paper,
         analysisManifest,
@@ -14938,7 +14971,10 @@ async function analyzePaperDeepInternal(paper) {
     if (isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
         // 已完成记录按它自己声明的提示词版本选文件重算：缺字段按 v1 冻结路径，
         // 未知版本由 promptFilePathForContract 直接抛错，不静默退化成不校验。
-        const currentPromptTemplateSha256 = runtimePromptTemplateSha256(
+        // 声明的模板 SHA 对着 prompts/history/ 归档里也确实存在的字节时按声明值算，
+        // 归档里没有就退回当前文件，跟改动前一样清掉阶段重跑。
+        const currentPromptTemplateSha256 = resolvedRuntimePromptTemplateSha256(
+            scoringStage.promptTemplateSha256,
             promptFilePathForContract(
                 'scoringAudit',
                 typeof scoringStage.promptTextContract === 'string'
@@ -15204,8 +15240,6 @@ async function analyzePaperDeepInternal(paper) {
     // 核验按记录声明的版本重算，写入按当前版本。旧记录没有这个字段，所以核验
     // 指纹里不带 promptTextContract，与改动前逐字节一致；一旦这条记录被失效后
     // 重建，写回的就是当前版本，两个值分开记录才不会互相污染。
-    const apiReaderDeclaredContract = textStagePromptTextContract(
-        paper, analysisManifest, 'apiReaderArticle');
     const apiReaderFingerprint = buildApiReaderExecutionFingerprint(
         recoveryFingerprints.apiReaderArticle,
         apiReaderEvidenceContext,
@@ -15368,24 +15402,19 @@ async function analyzePaperDeepInternal(paper) {
                     : {})
             };
             // 走到这里说明阶段是本次新建的，正文和修复提示词都一定来自当前版本。
-            // 任一版本与记录声明的版本不一致时（例如旧记录被其他改动失效后重建），
-            // 必须按当前版本重算指纹，否则写回旧形状的指纹配新声明，下次运行又会判
-            // 不等——正文和修复提示词要分别比，只比其中一个会让另一个永远对不上。
+            // 写回的身份一律按当前文件重算，不复用上面那枚核验指纹：核验按记录声明的
+            // 历史 SHA 算（可能来自 prompts/history 归档），把它写进新记录就等于声明
+            // 了一份这次并没有读的提示词；下次运行按新记录声明值复算又会判不等，Reader
+            // 会每一轮都被清掉重写。正文和修复提示词要分别按各自当前版本算。
             const apiReaderWriteContract = currentPromptTextContract('apiReaderArticle');
             const apiReaderWriteRepairContract = currentPromptTextContract('apiReaderRepair');
-            const apiReaderDeclaredRepairContract = textStageRepairPromptTextContract(
-                paper, analysisManifest);
-            const apiReaderWriteFingerprint =
-                apiReaderDeclaredContract === apiReaderWriteContract
-                    && apiReaderDeclaredRepairContract === apiReaderWriteRepairContract
-                    ? apiReaderFingerprint
-                    : buildApiReaderExecutionFingerprint(
-                        buildApiReaderBaseFingerprint(
-                            apiReaderWriteContract, apiReaderWriteRepairContract, arxivId),
-                        apiReaderEvidenceContext,
-                        sourceDetails.structuredArtifacts,
-                        readerCapabilityPolicy
-                    );
+            const apiReaderWriteFingerprint = buildApiReaderExecutionFingerprint(
+                buildApiReaderBaseFingerprint(
+                    apiReaderWriteContract, apiReaderWriteRepairContract, arxivId),
+                apiReaderEvidenceContext,
+                sourceDetails.structuredArtifacts,
+                readerCapabilityPolicy
+            );
             markRecoveryStage(analysisManifest, 'apiReaderArticle', 'complete', {
                 fingerprint: apiReaderWriteFingerprint,
                 promptTextContract: apiReaderWriteContract,
@@ -17159,6 +17188,7 @@ module.exports = {
     maskClassificationFields,
     retainFinalTagCheckpoints,
     runtimePromptTemplateSha256,
+    resolvedRuntimePromptTemplateSha256,
     buildLegacyCoreSummaryV2PrimaryFingerprint,
     buildLegacyCoreSummaryV2TextFingerprint,
     buildLegacyCoreSummaryV2EvidenceContext,

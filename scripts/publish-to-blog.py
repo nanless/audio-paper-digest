@@ -4880,6 +4880,34 @@ def _visual_prompt_path(stage, manifest):
     return PROJECT_ROOT / 'prompts' / filename
 
 
+def _historical_prompt_bytes(declared_sha256):
+    """prompts/history/<sha256>.md 是按整文件字节 SHA-256 命名的历史提示词归档。"""
+    value = str(declared_sha256 or '').lower()
+    if not re.fullmatch(r'[0-9a-f]{64}', value):
+        return None
+    path = PROJECT_ROOT / 'prompts' / 'history' / f'{value}.md'
+    if not path.is_file():
+        return None
+    return path.read_bytes()
+
+
+def _resolved_visual_prompt_sha256(stage, manifest, prompt_path):
+    """记录声明的 promptSha256 可能指向 prompts/history/ 归档的历史字节：v1 提示词在设计上
+    要冻结，实际被就地改写过。声明值与当前文件不符时，只有归档里确有这份字节（文件名就是
+    整文件 SHA-256，这里再重算一遍）才按声明值走；归档里没有就返回当前值，保持改动前那句
+    「prompt SHA 已失效」的判定。用上归档会打一行日志，复用不是无声发生的。"""
+    current = _sha256_file(prompt_path)
+    declared = str(manifest.get('promptSha256') or '')
+    if declared == current:
+        return current
+    value = declared.lower()
+    archived = _historical_prompt_bytes(value)
+    if archived is not None and hashlib.sha256(archived).hexdigest() == value:
+        print(f'  ℹ️  {stage} manifest 声明的提示词 SHA 按 prompts/history 归档字节核验：{value}')
+        return declared
+    return current
+
+
 def load_visual_summary_cards(papers, date_str, manifest_path=None):
     """为数据取证保留的旧校验器；博客流水线从不调用它。"""
     manifest_path = Path(manifest_path or (VISUAL_SUMMARY_MANIFEST_DIR / f'{date_str}.json'))
@@ -4892,7 +4920,7 @@ def load_visual_summary_cards(papers, date_str, manifest_path=None):
     if manifest.get('version') != 2 or manifest.get('batchDate') != date_str:
         raise PublishDataValidationError('视觉摘要 manifest 版本或批次日期不匹配')
     prompt_path = _visual_prompt_path('visual-summary', manifest)
-    prompt_sha = _sha256_file(prompt_path)
+    prompt_sha = _resolved_visual_prompt_sha256('visual-summary', manifest, prompt_path)
     if manifest.get('promptSha256') != prompt_sha:
         raise PublishDataValidationError('视觉摘要 manifest 的 prompt SHA 已失效，请重新 plan')
     records = manifest.get('papers')
@@ -5028,7 +5056,7 @@ def load_digest_cover(papers, date_str, manifest_path=None, category='论文速�
         raise PublishDataValidationError(f'缺少强制汇总页封面 manifest: {manifest_path}')
     manifest = _load_json_object(manifest_path, '汇总页封面 manifest')
     prompt_path = _visual_prompt_path('digest-cover', manifest)
-    prompt_sha = _sha256_file(prompt_path)
+    prompt_sha = _resolved_visual_prompt_sha256('digest-cover', manifest, prompt_path)
     context = _digest_cover_context(papers, date_str, category)
     data_sha = _stable_json_sha256(context)
     cover = manifest.get('cover')
@@ -8155,7 +8183,7 @@ def review_all_posts(
     fresh_run_ids = {_paper_fresh_run_id(paper) for paper in paper_map.values()}
     index_run_id = next(iter(fresh_run_ids)) if len(fresh_run_ids) == 1 else None
 
-    # Review 汇总页面（串行，只有1个）
+    # Review 汇总页面（串行，只有 1 个）
     index_file = os.path.join(content_dir, f"{date_str}.md")
     if os.path.exists(index_file) and (
         selected_paths is None or os.path.realpath(index_file) in selected_paths
