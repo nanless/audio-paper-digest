@@ -374,7 +374,9 @@ function visualCount(value) {
 // 真正计数不匹配只有 5 天。09-25 那天 75 篇全是词表破坏性变更导致复验不过、集合其实精确
 // 覆盖，运维照旧文案会白跑一次 reanalyze（要调模型）。
 // 这里要把「复验不通过」和「集合缺篇」分开，并说明复验不是在评价当时那次运行。
-function analysisFailureMessage({ productionAnalysisComplete, failedCount, failedIds, missing }) {
+function analysisFailureMessage({
+    productionAnalysisComplete, failedCount, failedIds, missing, total, expected
+}) {
     if (!productionAnalysisComplete) {
         return '当前分析资料既未满足 Manual v6 的完整要求，也未满足 API 正式发布的完整要求。';
     }
@@ -393,9 +395,14 @@ function analysisFailureMessage({ productionAnalysisComplete, failedCount, faile
     if (!Number.isInteger(missing)) {
         return '深度分析集合未精确覆盖筛选结果，缺口篇数未知';
     }
-    // 篇数对得上却没有精确覆盖，说明是同一批篇数里换了论文，不是缺篇。
+    // 没有缺篇却没精确覆盖，说明成员对不上。**不要写「篇数相同」**：分析结果是筛选入选集
+    // 的超集时 missing 也是 0，而两边篇数并不相等，那样写会和同一份报告里的
+    // total/expected 自相矛盾。把两个数直接摆出来。
     if (missing === 0) {
-        return '深度分析集合与筛选入选集的成员对不上：篇数相同，但论文不是同一批';
+        const counts = Number.isInteger(total) && Number.isInteger(expected)
+            ? `（分析结果 ${total} 篇、筛选入选 ${expected} 篇）`
+            : '';
+        return `深度分析集合没有缺篇，但成员与筛选入选集对不上${counts}`;
     }
     return `深度分析集合未精确覆盖筛选结果：还缺 ${missing} 篇`;
 }
@@ -567,7 +574,9 @@ function buildDigestRunReport(targetDate, options = {}) {
         productionAnalysisComplete,
         failedCount: failed.length,
         failedIds,
-        missing: analysisMissing
+        missing: analysisMissing,
+        total: deepBatch.length,
+        expected: analysisExpected
     }));
     if (llmApiComplete && !dailySourceComplete) {
         errors.push(`日更来源运行记录及封存的 TXT/PDF 不完整：${dailySourceIssues.join('; ') || '缺少 dailyFreshSourceRun'}`);

@@ -888,12 +888,23 @@ describe('日更运行报告', () => {
         assert.match(missing, /集合未精确覆盖筛选结果/);
         assert.match(missing, /还缺 3 篇/);
 
-        // 篇数对得上却没覆盖，是换了论文，不是缺篇——不能报「还缺 0 篇」。
+        // 没有缺篇却没覆盖，是成员对不上，不是缺篇——不能报「还缺 0 篇」，
+        // 也不能断言「篇数相同」：分析结果是入选集超集时篇数并不相等。
         const swapped = analysisFailureMessage({
+            productionAnalysisComplete: true, failedCount: 0, failedIds: [],
+            missing: 0, total: 3, expected: 2
+        });
+        assert.match(swapped, /没有缺篇，但成员与筛选入选集对不上/);
+        assert.match(swapped, /分析结果 3 篇、筛选入选 2 篇/);
+        assert.doesNotMatch(swapped, /还缺 0 篇/);
+        assert.doesNotMatch(swapped, /篇数相同/);
+
+        // 两个数读不到时不要编括号。
+        const swappedUnknownCounts = analysisFailureMessage({
             productionAnalysisComplete: true, failedCount: 0, failedIds: [], missing: 0
         });
-        assert.match(swapped, /篇数相同，但论文不是同一批/);
-        assert.doesNotMatch(swapped, /还缺 0 篇/);
+        assert.match(swappedUnknownCounts, /没有缺篇，但成员与筛选入选集对不上/);
+        assert.doesNotMatch(swappedUnknownCounts, /篇、筛选入选/);
 
         // 缺篇数读不到时不能编一个 0 出来。
         const missingUnknown = analysisFailureMessage({
