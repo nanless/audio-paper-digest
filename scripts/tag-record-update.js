@@ -195,7 +195,7 @@ function readProcessJson(filename) {
     const named = fs.lstatSync(filename);
     if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1
         || (named.mode & 0o777) !== 0o600) {
-        throw new Error(`会议进程文件必须是权限为 0600、只有一个硬链接的普通文件，不能是符号链接：${filename}`);
+        throw new Error(`会议进程文件不安全：必须是权限为 0600、只有一个硬链接的普通文件，不能是符号链接：${filename}`);
     }
     const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     try {

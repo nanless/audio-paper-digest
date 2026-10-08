@@ -102,7 +102,7 @@ function readRegular(filename, maximum, label) {
     let fd;
     try {
         const before = fs.lstatSync(filename);
-        if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maximum) throw new Error(`${label} 必须是没有符号链接、仅有一个硬链接且大小不超过限制的普通文件。`);
+        if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maximum) throw new Error(`${label} 不安全：必须是没有符号链接、仅有一个硬链接且大小不超过限制的普通文件。`);
         fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
         const opened = fs.fstatSync(fd); const named = fs.lstatSync(filename);
         if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
@@ -444,7 +444,7 @@ function stagedFileInventory(runRoot, maximum = 10000) {
             if (stat.isSymbolicLink()) throw new Error(`历史页面生成目录中不能有符号链接：${relative}`);
             if (stat.isDirectory()) walk(target, relative);
             else if (stat.isFile() && stat.nlink === 1) files.push(relative);
-            else throw new Error(`历史页面生成目录中的条目必须是目录或仅有一个硬链接的普通文件：${relative}`);
+            else throw new Error(`历史页面生成目录中存在不安全的条目：必须是目录或仅有一个硬链接的普通文件：${relative}`);
             if (files.length > maximum) throw new Error('历史页面生成目录中的文件数量超过限制。');
         }
     };
@@ -568,7 +568,7 @@ function stageHistoricalPages(options, dependencies = {}) {
         for (const asset of typeof rendered === 'string' ? [] : rendered.assets) {
             if (!asset || typeof asset.path !== 'string' || !/^(?:static\/images\/papers|static\/data\/papers)\/[A-Za-z0-9._\/-]+$/.test(asset.path)
                 || path.posix.normalize(asset.path) !== asset.path || asset.path.split('/').includes('..')
-                || typeof asset.base64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(asset.base64)) throw new Error('页面生成器返回的资源路径或 base64 数据格式无效。');
+                || typeof asset.base64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(asset.base64)) throw new Error('页面生成器返回了不安全的资源：资源路径或 base64 数据格式无效。');
             const bytes = Buffer.from(asset.base64, 'base64'); const digest = sha256(bytes);
             if (preparedAssets.has(asset.path) && preparedAssets.get(asset.path).record.sha256 !== digest) {
                 throw new Error(`页面生成器为同一资源路径返回了不同内容：${asset.path}`);
@@ -578,7 +578,7 @@ function stageHistoricalPages(options, dependencies = {}) {
         }
         if (typeof markdown !== 'string' || !markdown.trim()
             || !/^content\/posts\/[A-Za-z0-9._/-]+\.md$/.test(page.pagePath)
-            || path.posix.normalize(page.pagePath) !== page.pagePath || page.pagePath.split('/').includes('..')) throw new Error('页面正文为空或格式无效，或目标页面路径不符合要求。');
+            || path.posix.normalize(page.pagePath) !== page.pagePath || page.pagePath.split('/').includes('..')) throw new Error('页面正文为空或格式无效，或目标页面路径不安全。');
         const relative = path.posix.join('pages', page.pagePath); const target = path.resolve(runRoot, ...relative.split('/'));
         if (!target.startsWith(`${path.join(runRoot, 'pages')}${path.sep}`)) throw new Error('页面路径越出了当前运行的页面目录。');
         const bytes = Buffer.from(markdown, 'utf8');

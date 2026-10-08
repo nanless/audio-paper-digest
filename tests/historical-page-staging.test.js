@@ -331,7 +331,7 @@ test('分配读取器拒绝重复 JSON 键和符号链接', t => {
     fs.writeFileSync(target, `{"contract":"paper-taxonomy-assignment-v1","version":1,"status":"assigned","status":"blocked","paperId":"arxiv:2604.12527","analysisRunId":"${ANALYSIS_RUN}","registrySha256":"${REGISTRY_SHA}","assignmentSha256":"${'a'.repeat(64)}"}`);
     assert.throws(() => api.readAssignment(target), /JSON 中出现重复字段/);
     const link = path.join(dir, `arxiv-2604.12528.taxonomy.${REGISTRY_SHA}.json`); fs.symlinkSync(target, link);
-    assert.throws(() => api.readAssignment(link), /必须是没有符号链接、仅有一个硬链接且大小不超过限制的普通文件/);
+    assert.throws(() => api.readAssignment(link), /不安全：必须是没有符号链接、仅有一个硬链接且大小不超过限制的普通文件/);
 });
 
 test('页面暂存拒绝素材路径穿越和已存在的符号链接运行目录', t => {
@@ -379,7 +379,7 @@ test('writeExact 在恢复路径上拒绝末端和父级符号链接', t => {
     const f = fixture(t); const outside = path.join(f.root, 'outside.bin'); fs.writeFileSync(outside, 'outside');
     const safe = path.join(f.root, 'safe'); fs.mkdirSync(safe);
     const leaf = path.join(safe, 'leaf.bin'); fs.symlinkSync(outside, leaf);
-    assert.throws(() => api.writeExact(leaf, Buffer.from('fresh')), /必须是没有符号链接、仅有一个硬链接且大小不超过限制的普通文件/);
+    assert.throws(() => api.writeExact(leaf, Buffer.from('fresh')), /不安全：必须是没有符号链接、仅有一个硬链接且大小不超过限制的普通文件/);
     const parent = path.join(f.root, 'linked-parent'); fs.symlinkSync(safe, parent);
     assert.throws(() => api.writeExact(path.join(parent, 'child.bin'), Buffer.from('fresh')), /Unsafe fresh rewrite directory/);
 });

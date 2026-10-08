@@ -154,7 +154,7 @@ function persistRunResult(root, selected, supplement, decisions, failures, stopp
 
 function validateResumeCheckpoint(checkpoint,selection,{planSha256,registrySha256,filename}) {
     if (!checkpoint || path.basename(filename) !== 'checkpoint-' + String(checkpoint.processed).padStart(6,'0') + '-'
-        + runner.stableHash(checkpoint).slice(0,16) + '.json') fail('续跑检查点或原选择记录的格式、身份、数量及文件名不符合要求。');
+        + runner.stableHash(checkpoint).slice(0,16) + '.json') fail('续跑检查点或原选择记录的完整性不符合要求：格式、身份、数量及文件名必须一致。');
     const family = checkpoint.contract === CONTRACT + '-checkpoint' ? CONTRACT
         : checkpoint.contract === LEGACY_CONTRACT + '-checkpoint' ? LEGACY_CONTRACT : null;
     const supplementContract = family === LEGACY_CONTRACT ? supplementApi.LEGACY_CONTRACT : supplementApi.CONTRACT;
@@ -163,7 +163,7 @@ function validateResumeCheckpoint(checkpoint,selection,{planSha256,registrySha25
         ||checkpoint.supplement?.contract!==supplementContract||!checkpoint.supplement.records
         ||selection?.contract!==family+'-selection'||selection.planSha256!==planSha256||selection.registrySha256!==registrySha256
         ||!Array.isArray(selection.paperIds)||checkpoint.processed>selection.paperIds.length
-        ) fail('续跑检查点或原选择记录的格式、身份、数量及文件名不符合要求。');
+        ) fail('续跑检查点或原选择记录的完整性不符合要求：格式、身份、数量及文件名必须一致。');
     const ids=[...checkpoint.decisions,...checkpoint.failures].map(r=>r.paperId);
     const expected=checkpoint.checkpointScheduling==='completion-set-v1'?checkpoint.processedPaperIds:selection.paperIds.slice(0,checkpoint.processed);
     if(!Array.isArray(expected)||expected.length!==checkpoint.processed||expected.some(id=>!selection.paperIds.includes(id))

@@ -44,7 +44,7 @@ function safeDirectory(value, label, create = false) {
         cursor = path.join(cursor, part); let stat;
         try { stat = fs.lstatSync(cursor); }
         catch (error) { if (error.code !== 'ENOENT' || !create) throw error; fs.mkdirSync(cursor, { mode: 0o700 }); stat = fs.lstatSync(cursor); }
-        if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} 的路径必须指向目录，且不能包含符号链接：${cursor}`);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} 的路径不安全：必须指向目录，且不能包含符号链接：${cursor}`);
     }
     return absolute;
 }
@@ -52,7 +52,7 @@ function readFile(filename, maximum, label) {
     let fd;
     try {
         const before = fs.lstatSync(filename);
-        if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maximum) fail(`${label} 必须是没有符号链接、仅有一个硬链接且大小不超过限制的普通文件。`);
+        if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maximum) fail(`${label} 不安全：必须是没有符号链接、仅有一个硬链接且大小不超过限制的普通文件。`);
         fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
         const opened = fs.fstatSync(fd); const named = fs.lstatSync(filename);
         if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
@@ -187,7 +187,7 @@ function normalizeRendererResult(value, page) {
         if (!asset || typeof asset.path !== 'string' || !/^(?:static\/images\/papers|static\/data\/papers)\/[A-Za-z0-9._/-]+$/.test(asset.path)
             || path.posix.normalize(asset.path) !== asset.path || asset.path.split('/').includes('..')
             || typeof asset.base64 !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(asset.base64)) {
-            fail(`页面 ${page.pageKey} 中索引为 ${index} 的资源路径或 base64 数据格式无效。`);
+            fail(`页面 ${page.pageKey} 中索引为 ${index} 的资源路径或 base64 数据不安全：格式无效。`);
         }
         const bytes = Buffer.from(asset.base64, 'base64');
         return { bytes, record: { path: asset.path, sha256: sha256(bytes), size: bytes.length } };

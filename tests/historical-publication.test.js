@@ -216,7 +216,7 @@ test('路径、冲突、符号链接，以及脏的或分叉的远端攻击都�
             pagePath: '../escape.md', cohortDate: DATE, stagedPath: 'pages/escape', contentSha256: '6'.repeat(64), sourcePageContentSha256: '7'.repeat(64) }], assets: [] }, manifestFileSha256: '4'.repeat(64) }))());
     assert.throws(() => api.buildPlan({ planId: PLAN, pageStagingRunIds: [STAGE], blogRepo: f.blogRepo,
         dailyAggregates: [{ aggregateRunId: AGG, date: DATE }] }, { ...f.deps,
-        replayProducerSet: () => ({ staged: [badStage], aggregates: [], proof: f.plan.producerReplay }) }), /发布路径必须是允许范围内的规范相对路径/);
+        replayProducerSet: () => ({ staged: [badStage], aggregates: [], proof: f.plan.producerReplay }) }), /发布路径不安全：必须是允许范围内的规范相对路径/);
     assert.throws(() => api.generateBundle({ outputRoot: f.outputRoot, planId: PLAN, batchId: `daily-${DATE}`,
         blogRepo: f.blogRepo, stagingRoot: f.stagingRoot, aggregateRoot: f.aggregateRoot, apply: false }, {
         ...f.deps, blogState: () => ({ ...f.deps.blogState(), clean: false }) }), /必须是干净的 main 分支/);

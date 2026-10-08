@@ -198,7 +198,7 @@ function normalizeCheckpoint(value, selection, options) {
         report.stopped.paperId !== undefined &&
         !selection.paperIds.includes(report.stopped.paperId)) ||
         path.basename(options.filename) !== 'partial-' + String(report.processed).padStart(6, '0') + '-' + runner.stableHash(value).slice(0, 16) + '.json')
-        fail("部分运行记录未通过核验。请核对字段与记录类型、数量和页面统计、与原选择记录的对应关系、剩余论文列表及停止信息，以及文件名中的已处理数量和内容哈希。");
+        fail("部分运行记录的完整性未通过核验。请核对字段与记录类型、数量和页面统计、与原选择记录的对应关系、剩余论文列表及停止信息，以及文件名中的已处理数量和内容哈希。");
     const done = [...report.decisions, ...report.failures].map(r => r.paperId),
         set = new Set(done);
     const remaining = selection.paperIds.filter(id => !set.has(id));

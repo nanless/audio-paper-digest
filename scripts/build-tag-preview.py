@@ -300,17 +300,17 @@ def page_url(repo, path, frontmatter, base):
     if raw is None:
         slug = frontmatter.get('slug', path.stem)
         if not isinstance(slug, str) or not slug or slug != slug.strip() or re.search(r'[\x00-\x1f\x7f/\\?#]', slug):
-            raise ValueError('页面的 slug 无效，或包含不允许的路径字符。')
+            raise ValueError('页面的 slug 不安全：无效或包含不允许的路径字符。')
         relative = path.parent.relative_to(repo / 'content' / 'posts').as_posix()
         parts = ([] if relative == '.' else relative.split('/')) + [slug]
         raw = root.path + 'posts/' + '/'.join(quote(part, safe='-._~') for part in parts) + '/'
     if not isinstance(raw, str) or not raw or re.search(r'[\x00-\x20\x7f\\]', raw) or raw.startswith('//'):
-        raise ValueError('页面 URL 为空、格式无效，或包含不允许的字符。')
+        raise ValueError('页面 URL 不安全：为空、格式无效，或包含不允许的字符。')
     parsed = urlsplit(raw)
     if parsed.scheme and (parsed.scheme != 'https' or parsed.netloc != root.netloc):
         raise ValueError('页面 URL 必须使用 HTTPS，并属于当前博客站点。')
     if parsed.username or parsed.password or parsed.query or parsed.fragment:
-        raise ValueError('页面 URL 不得包含用户凭据、查询参数或片段。')
+        raise ValueError('页面 URL 不安全：不得包含用户凭据、查询参数或片段。')
     url_path = parsed.path if parsed.path.startswith('/') else root.path + parsed.path
     decoded = url_path
     for _ in range(4):
@@ -328,7 +328,7 @@ def page_url(repo, path, frontmatter, base):
 def paper_metadata(repo, path, raw, base):
     relative = path.relative_to(repo).as_posix()
     if '\\' in relative or any(part in ('.', '..') for part in Path(relative).parts):
-        raise ValueError('来源文件的相对路径包含不允许的路径字符。')
+        raise ValueError('来源文件的相对路径不安全：包含不允许的路径字符。')
     frontmatter, body = parse_frontmatter_content(path, raw.decode('utf-8'))
     kind = frontmatter.get('paper_digest_page_type')
     if (re.fullmatch(r'\d{4}-\d{2}-\d{2}', path.stem)

@@ -58,7 +58,7 @@ function readRegular(filename, maximum, label) {
     let fd;
     try {
         const before = fs.lstatSync(filename);
-        if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maximum) fail(`${label}不是普通文件、存在符号链接、硬链接数量不为 1，或大小超过允许上限。`);
+        if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maximum) fail(`${label}不安全：不是普通文件、存在符号链接、硬链接数量不为 1，或大小超过允许上限。`);
         fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
         const opened = fs.fstatSync(fd); const named = fs.lstatSync(filename);
         if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
@@ -96,7 +96,7 @@ function normalizePageStagingManifest(value, stagingRunId) {
         for (const field of ['sourcePageContentSha256', 'contentSha256', 'analysisFileSha256',
             'analysisRecordSha256', 'analysisSha256']) if (!SHA_RE.test(page[field])) fail(`页面生成清单中的页面项 ${index} 的 ${field} 字段不是有效的 SHA 格式。`);
         let url; try { url = new URL(page.primaryUrl); } catch { fail(`页面生成清单中的页面项 ${index} 的正式网址无法解析。`); }
-        if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) fail(`页面生成清单中的页面项 ${index} 的正式网址必须使用 HTTPS，且不能包含认证信息、查询参数或片段。`);
+        if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash) fail(`页面生成清单中的页面项 ${index} 的正式网址不安全：必须使用 HTTPS，且不能包含认证信息、查询参数或片段。`);
         return clone(page);
     });
     if (new Set(pages.map(item => item.pageKey)).size !== pages.length

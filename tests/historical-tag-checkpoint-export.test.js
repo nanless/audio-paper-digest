@@ -332,7 +332,7 @@ test(
         );
         assert.throws(
             () => api.normalizeCheckpoint(value, selection, { ...options(value), registrySha256: 'another' }),
-            /续跑检查点或原选择记录的格式、身份、数量及文件名不符合要求/
+            /续跑检查点或原选择记录的完整性不符合要求/
         );
     }
 );
@@ -376,7 +376,7 @@ test(
         };
         assert.throws(
             () => api.normalizeCheckpoint(value, changedSelection, options(value)),
-            /部分运行记录未通过核验。请核对字段与记录类型、数量和页面统计、与原选择记录的对应关系、剩余论文列表及停止信息，以及文件名中的已处理数量和内容哈希/
+            /部分运行记录的完整性未通过核验。请核对字段与记录类型、数量和页面统计、与原选择记录的对应关系、剩余论文列表及停止信息，以及文件名中的已处理数量和内容哈希/
         );
     }
 );
@@ -436,7 +436,7 @@ test(
         forged.report.stopped.error = 'implementation-changed';
         assert.throws(
             () => api.normalizeCheckpoint(forged, selection, options(forged)),
-            /部分运行记录未通过核验。请核对字段与记录类型、数量和页面统计、与原选择记录的对应关系、剩余论文列表及停止信息，以及文件名中的已处理数量和内容哈希/
+            /部分运行记录的完整性未通过核验。请核对字段与记录类型、数量和页面统计、与原选择记录的对应关系、剩余论文列表及停止信息，以及文件名中的已处理数量和内容哈希/
         );
         // 导出会保留原始分类记录及其哈希，但不会
         // 授权模型续跑，也不改动已保存的实现指纹。

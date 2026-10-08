@@ -48,7 +48,10 @@ function classifyFailure(error, now) {
     else if (/HTTP\s*5\d\d\b|ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|proxy|CONNECT tunnel/i.test(`${code} ${message}`)) category = 'transport';
     else if (/LLM_ACCOUNT_POOL_|model.*not.found|unsupported.model|missing.*API.key|implementation drifted|deep execution config drifted/i.test(`${code} ${message}`)) category = 'configuration';
     else if (code === 'CONFERENCE_SOURCE_UPGRADE_REBIND_REQUIRED') category = 'source_upgrade';
-    else if (/integrity|SHA.*mismatch|authority.*drift|unsafe|non.canonical/i.test(message)) category = 'integrity';
+    // 失败分类必须同时认英文和中文消息：旧失败记录里存的是英文，当前消息已汉化。
+    // 前半段英文词必须逐字保持原样，否则旧记录的复算结果会变；
+    // 后半段是英文词的对应中文说法（不安全／不一致／完整性／已漂移／非规范／SHA 不符）。
+    else if (/integrity|SHA.*mismatch|authority.*drift|unsafe|non.canonical|不安全|不一致|完整性|已漂移|非规范|SHA\s*不符/i.test(message)) category = 'integrity';
     const systemic = ['quota', 'authentication', 'rate_limit', 'transport', 'configuration'].includes(category);
     return { category, code, message, systemic,
         retryable: !['quota', 'authentication', 'integrity', 'configuration', 'source_upgrade',

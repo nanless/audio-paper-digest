@@ -39,7 +39,7 @@ function strictJson(bytes, label) {
 function safePath(value) {
     if (typeof value !== 'string' || !value || path.isAbsolute(value) || value.includes('\\')
         || path.posix.normalize(value) !== value || value.split('/').some(part => !part || part === '.' || part === '..')
-        || !/^(?:content\/posts\/[A-Za-z0-9._/-]+\.md|static\/(?:images|data)\/papers\/[A-Za-z0-9._/-]+)$/.test(value)) fail(`发布路径必须是允许范围内的规范相对路径，不能含有越界或空目录项：${value}`);
+        || !/^(?:content\/posts\/[A-Za-z0-9._/-]+\.md|static\/(?:images|data)\/papers\/[A-Za-z0-9._/-]+)$/.test(value)) fail(`发布路径不安全：必须是允许范围内的规范相对路径，不能含有越界或空目录项：${value}`);
     return value;
 }
 function directoryIdentity(directory) {
@@ -54,13 +54,13 @@ function sameDirectory(left, right) { return left.absolute === right.absolute &&
 function readRegular(filename, maximum = 128 * 1024 * 1024, dependencies = {}) {
     let fd; const parentBefore = directoryIdentity(path.dirname(filename));
     try { const before = fs.lstatSync(filename, { bigint: true });
-        if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n || before.size > BigInt(maximum)) fail(`来源文件的类型、链接数或大小不符合要求：${filename}`);
+        if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n || before.size > BigInt(maximum)) fail(`来源文件不安全：类型、链接数或大小不符合要求：${filename}`);
         fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); const opened = fs.fstatSync(fd, { bigint: true });
         dependencies.afterOpen?.(filename);
         const named = fs.lstatSync(filename, { bigint: true });
         if (!opened.isFile() || opened.nlink !== 1n || named.isSymbolicLink() || named.nlink !== 1n
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size !== named.size
-            || opened.size > BigInt(maximum)) fail(`打开后来源文件的类型、链接数、大小或身份不符合要求：${filename}`);
+            || opened.size > BigInt(maximum)) fail(`打开后来源文件不安全：类型、链接数、大小或身份不符合要求：${filename}`);
         const bytes = fs.readFileSync(fd);
         const after = fs.fstatSync(fd, { bigint: true }); const namedAfter = fs.lstatSync(filename, { bigint: true });
         if (BigInt(bytes.length) !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino
