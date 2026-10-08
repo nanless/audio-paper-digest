@@ -319,6 +319,90 @@ test('日更来源引用只复核那次精确保存的运行清单', async t => 
     assert.throws(() => daily.readDailyFreshSourcePlan({ ...reference, runManifestSha256: '0'.repeat(64) }), /SHA drifted/);
 });
 
+// root 运行 chmod 000 拦不住读，Windows 上 chmod 也基本无效，这两种环境跳过权限用例。
+const permissionChecksApply = process.platform !== 'win32'
+    && !(typeof process.getuid === 'function' && process.getuid() === 0);
+
+async function capturedPlanWithBoundPaper(t, id, batchId) {
+    fixture(t);
+    const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-09-07', batchId, papers: [{ arxivId: id }] });
+    await daily.captureDailyFreshSources(plan, { concurrency: 1, capture: options => require('../scripts/lib/fresh-arxiv-rewrite-source.js')
+        .captureFreshArxivRewriteSource(options, {
+            fetchText: async requested => sourcePayload(requested),
+            fetchPdf: async requested => ({ bytes: Buffer.from(`%PDF-1.4\n${requested}\n%%EOF\n`),
+                url: `https://arxiv.org/pdf/${requested}.pdf`, fetchedAt: new Date().toISOString() })
+        }) });
+    const descriptor = daily.readDailyFreshSource(plan, { arxivId: id }).freshSourceDescriptor;
+    const proof = { contract: 'fresh-source-analysis-v1', runId: plan.runId, sourceGeneration: 1,
+        sourceManifestSha256: descriptor.sourceManifestSha256, sourceSha256: descriptor.sourceSha256,
+        sourceSnapshotSha256: descriptor.sourceSnapshotSha256, sourceOnly: true, oldGeneratedTextIncluded: false };
+    const bound = { arxivId: id, title: '已完成的论文', analysis: '已完成的整篇分析', parsed: { score: 9 },
+        apiReaderArticle: '已完成的读者文章', sourceSha256: proof.sourceSha256, fullText: '旧全文',
+        imageUrls: ['https://old.example/poison.png'],
+        freshRewriteProvenance: structuredClone(proof),
+        analysisManifest: { freshRewriteProvenance: structuredClone(proof),
+            sourceAcquisition: { sourceSha256: proof.sourceSha256 } } };
+    return { plan, bound, generation: path.join(plan.sourcesDir, id, 'generation-000001') };
+}
+
+test('来源存在但读不出来时，日更绑定判定报错，不把读取失败当成来源换新', async t => {
+    const id = '2609.12351';
+    const { plan, bound, generation } = await capturedPlanWithBoundPaper(t, id, 'read-failure-binding');
+    assert.equal(daily.isPaperBoundToPlan(bound, plan), true);
+    const snapshot = JSON.stringify(bound);
+    const readFailure = error => error.code === 'DAILY_FRESH_SOURCE_PLAN_INTEGRITY'
+        && /封存来源读不出来/.test(error.message);
+
+    // 清单损坏：文件在，JSON 读不出来。
+    const manifestPath = path.join(generation, 'source-manifest.json');
+    const manifestBytes = fs.readFileSync(manifestPath);
+    fs.appendFileSync(manifestPath, 'x');
+    try {
+        assert.throws(() => daily.isPaperBoundToPlan(bound, plan), readFailure);
+        assert.throws(() => daily.prepareDailyPaper(bound, plan), readFailure);
+    } finally { fs.writeFileSync(manifestPath, manifestBytes, { mode: 0o600 }); }
+
+    // 文件存在但权限不足：读不出来，同样不能当成未绑定。
+    if (permissionChecksApply) {
+        const textPath = path.join(generation, 'source.txt');
+        fs.chmodSync(textPath, 0o000);
+        try {
+            assert.throws(() => daily.isPaperBoundToPlan(bound, plan), readFailure);
+            assert.throws(() => daily.prepareDailyPaper(bound, plan), readFailure);
+        } finally { fs.chmodSync(textPath, 0o600); }
+    }
+
+    // 报错之后原记录一个字段都没被删掉，也就不会重新请求模型。
+    assert.equal(JSON.stringify(bound), snapshot);
+    assert.equal(bound.analysis, '已完成的整篇分析');
+    assert.equal(bound.apiReaderArticle, '已完成的读者文章');
+
+    // 真·未绑定：来源可读，只是证明对不上，保持原来的清字段行为。
+    const unbound = { ...structuredClone(bound),
+        freshRewriteProvenance: { ...bound.freshRewriteProvenance, sourceSha256: '0'.repeat(64) } };
+    assert.equal(daily.isPaperBoundToPlan(unbound, plan), false);
+    assert.equal(daily.prepareDailyPaper(unbound, plan).analysis, undefined);
+
+    // 来源目录确实不存在：ENOENT 仍然是未绑定，行为不变。
+    fs.rmSync(path.join(plan.sourcesDir, id), { recursive: true, force: true });
+    assert.equal(daily.isPaperBoundToPlan(bound, plan), false);
+    assert.equal(daily.prepareDailyPaper(bound, plan).analysis, undefined);
+});
+
+test('来源目录权限不足时也算读不出来，existsSync 不吞 EACCES', async t => {
+    if (!permissionChecksApply) return;
+    const id = '2609.12352';
+    const { plan, bound } = await capturedPlanWithBoundPaper(t, id, 'parent-permission-binding');
+    assert.equal(daily.isPaperBoundToPlan(bound, plan), true);
+    const paperDirectory = path.join(plan.sourcesDir, id);
+    fs.chmodSync(paperDirectory, 0o000);
+    try {
+        assert.throws(() => daily.isPaperBoundToPlan(bound, plan),
+            error => error.code === 'DAILY_FRESH_SOURCE_PLAN_INTEGRITY' && /封存来源读不出来/.test(error.message));
+        assert.throws(() => daily.prepareDailyPaper(bound, plan), /封存来源读不出来/);
+    } finally { fs.chmodSync(paperDirectory, 0o700); }
+});
+
 test('即使调用方绕过论文准备，直连日更范围也拒绝调用方自带的旧版图片 URL', () => {
     const direct = require('../scripts/lib/direct-rewrite-analysis-context.js');
     const deep = require('../scripts/deep-analyzer.js');

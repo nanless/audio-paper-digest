@@ -31,6 +31,19 @@ class DailyFreshSourcePlanError extends Error {
     }
 }
 const fail = message => { throw new DailyFreshSourcePlanError(message); };
+
+// 「来源确实不存在」和「来源在、但读不出来」是两种结论。ENOENT 说明这一篇还没有
+// 封存来源，可以按未绑定重做；权限不足、清单被改、JSON 解析失败说明封存来源可能
+// 已经坏了，必须停下——把它当成未绑定，调用方就会删掉整篇分析并重新付一次模型费用。
+function absentSource(message) {
+    const error = new DailyFreshSourcePlanError(message);
+    error.sourceAbsent = true;
+    return error;
+}
+
+function isSourceAbsent(error) {
+    return Boolean(error) && (error.code === 'ENOENT' || error.sourceAbsent === true);
+}
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const clone = value => structuredClone(value);
 const canonical = value => Array.isArray(value) ? value.map(canonical)
@@ -218,7 +231,7 @@ async function captureDailyFreshSources(plan, options = {}) {
         const details = fresh.readFreshSource(plan.runDir, { arxivId }, identity);
         if (!details || details.freshSourceDescriptor?.sourceGeneration !== SOURCE_GENERATION
             || details.freshSourceDescriptor?.sourceManifestSha256 !== captured.sourceManifestSha256) {
-            fail(`${arxivId} sealed source cannot be replayed after capture`);
+            fail(`${arxivId} 抓取后重新读回这组来源失败：来源清单 SHA 与刚抓取的结果不一致`);
         }
         return { arxivId, status: captured.status, sourceManifestSha256: captured.sourceManifestSha256,
             sourceSha256: details.freshSourceDescriptor.sourceSha256 };
@@ -230,13 +243,30 @@ function readDailyFreshSource(plan, paper) {
     const id = normalizedId(paper);
     if (!plan.paperIds.includes(id)) fail('paper is outside this daily source plan');
     const details = fresh.readFreshSource(plan.runDir, { arxivId: id }, analysisIdentity(plan));
-    if (!details) fail(`${id} source is not sealed before analysis`);
+    if (!details) throw absentSource(`${id} source is not sealed before analysis`);
     return details;
 }
 
 function isPaperBoundToPlan(paper, plan) {
+    const id = normalizedId(paper);
+    // 这篇不在计划里就谈不上绑定，保持原来的结论，交给调用方按未绑定处理。
+    if (!plan || !Array.isArray(plan.paperIds) || !plan.paperIds.includes(id)) return false;
+    let details;
     try {
-        const details = readDailyFreshSource(plan, paper);
+        details = readDailyFreshSource(plan, paper);
+    } catch (error) {
+        if (isSourceAbsent(error)) return false;
+        // 来源在，只是读不出来。这里必须抛：返回 false 会让 prepareDailyPaper 删掉
+        // GENERATED_FIELDS，把读取失败伪装成来源换新。
+        fail(`${id} 的封存来源读不出来（${error.message}）；读取失败不等于来源换新，已停止`);
+    }
+    return paperProvesBinding(paper, plan, details);
+}
+
+// 这一步只比内存里的记录。比对本身出错（证明字段缺失、类型不对）说明这篇给不出
+// 绑定证明，按未绑定处理；来源读取失败不走这条路，免得把读不出来当成来源换新。
+function paperProvesBinding(paper, plan, details) {
+    try {
         const proof = paper?.freshRewriteProvenance;
         const versionMatches = details.sourceVersion
             ? Object.hasOwn(paper || {}, 'sourceVersion')

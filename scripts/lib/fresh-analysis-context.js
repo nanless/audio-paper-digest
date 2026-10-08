@@ -205,10 +205,22 @@ function buildSourceDetailsFromBundle(stored) {
         freshSourceDescriptor: descriptor };
 }
 
+// 这一篇的来源目录是不是真的不存在。fs.existsSync 会把权限不足、父目录读不了
+// 也报成 false；用它判断，读取失败就会被当成来源换新，所以要自己只认 ENOENT。
+function sourceGenerationAbsent(sourceApi, root, id, generation) {
+    try {
+        fs.lstatSync(sourceApi.sourceDirectory(root, id, generation));
+        return false;
+    } catch (error) {
+        if (error.code === 'ENOENT') return true;
+        throw error;
+    }
+}
+
 function readBundleFreshSource(checked, id, expectation) {
     const sourceApi = require('./fresh-arxiv-rewrite-source.js');
     const root = bundleRoot(checked);
-    if (!sourceApi.generationExists(root, id, expectation.sourceGeneration)) return null;
+    if (sourceGenerationAbsent(sourceApi, root, id, expectation.sourceGeneration)) return null;
     const stored = sourceApi.readFreshArxivRewriteSource({ rootDir: root, arxivId: id,
         generation: expectation.sourceGeneration });
     const source = buildSourceDetailsFromBundle(stored);
