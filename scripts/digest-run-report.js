@@ -384,7 +384,11 @@ function analysisFailureMessage({ productionAnalysisComplete, failedCount, faile
         return `深度分析有 ${failedCount} 篇未通过逐篇核验（如 ${sample}）；${coverage}。`
             + '这一项是拿当前词表与契约复验已存记录，不等于当时那次运行失败。';
     }
-    return '深度分析集合未精确覆盖筛选结果';
+    // 没有复验失败项，那就是集合本身没覆盖全。缺几篇是已知的，要说出来，
+    // 别只说「未精确覆盖」——读的人得知道差多少。
+    return Number.isInteger(missing)
+        ? `深度分析集合未精确覆盖筛选结果：还缺 ${missing} 篇`
+        : '深度分析集合未精确覆盖筛选结果';
 }
 
 function buildDigestRunReport(targetDate, options = {}) {

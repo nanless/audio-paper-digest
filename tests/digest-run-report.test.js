@@ -845,11 +845,19 @@ describe('日更运行报告', () => {
         assert.match(reverify, /不等于当时那次运行失败/);
         assert.doesNotMatch(reverify, /集合未精确覆盖筛选结果/);
 
-        // 集合真的缺篇时要报缺多少。
+        // 集合真的缺篇时要报缺多少，不能只说「未精确覆盖」。
         const missing = analysisFailureMessage({
             productionAnalysisComplete: true, failedCount: 0, failedIds: [], missing: 3
         });
         assert.match(missing, /集合未精确覆盖筛选结果/);
+        assert.match(missing, /还缺 3 篇/);
+
+        // 缺篇数读不到时不能编一个 0 出来。
+        const missingUnknown = analysisFailureMessage({
+            productionAnalysisComplete: true, failedCount: 0, failedIds: [], missing: null
+        });
+        assert.match(missingUnknown, /集合未精确覆盖筛选结果/);
+        assert.doesNotMatch(missingUnknown, /还缺/);
 
         // 生产契约本身不满足时，报原文案，不去猜是复验还是集合。
         const notProduction = analysisFailureMessage({
