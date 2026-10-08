@@ -795,6 +795,42 @@ describe('日更运行报告', () => {
         assert.doesNotMatch(summary, /封面 incomplete \| status=complete/);
     });
 
+    it('长图清单里的归档路径参数非法时也要出报告，不能抛栈', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-badvisual-'));
+        try {
+            withDigestPaths(dir, () => {
+                const date = '2026-07-29';
+                fs.mkdirSync(Config.FILES.visualSummaryManifestDir, { recursive: true });
+                // rank 超出 1–10 时 visualSummaryAssetPath 会抛「视觉摘要归档路径参数非法」。
+                // 修复前这会让整个 digest:status 抛栈，运维拿不到报告。
+                fs.writeFileSync(
+                    path.join(Config.FILES.visualSummaryManifestDir, `${date}.json`),
+                    JSON.stringify({
+                        batchDate: date,
+                        publication: { publicationCommit: 'c'.repeat(40) },
+                        papers: {
+                            '2607.1': {
+                                normalizedArxivId: '2607.1',
+                                title: 'Bad rank',
+                                rank: 99,
+                                analysisSha256: 'a'.repeat(64),
+                                promptSha256: 'b'.repeat(64),
+                                cards: { infographic: { status: 'complete' } }
+                            }
+                        }
+                    })
+                );
+                const report = buildDigestRunReport(date, { today: date });
+                assert.strictEqual(report.visuals.assetsValid, false);
+                assert.strictEqual(report.visuals.gateComplete, false);
+                // 能打出摘要，就说明没抛栈。
+                assert.match(formatDigestRunSummary(report), /长图 incomplete/);
+            });
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
     it('统一状态门禁与 visual:status 一样严格绑定 canonical 长图路径', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-visual-'));
         const originalAssetDir = Config.FILES.visualSummaryAssetDir;

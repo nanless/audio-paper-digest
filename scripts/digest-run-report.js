@@ -326,8 +326,18 @@ function visualAssetsAreValid(visual) {
     const visualCards = Object.entries(visual?.papers || {})
         .flatMap(([id, paper]) => Object.entries(paper?.cards || {})
             .map(([kind, card]) => ({ id, paper, kind, card })));
-    const assetsValid = visualCards.length > 0 && visualCards.every(({ id, paper, kind, card }) => (
-        validateCompletedCard(
+    const assetsValid = visualCards.length > 0 && visualCards.every(({ id, paper, kind, card }) => {
+        let assetPath;
+        try {
+            assetPath = visualSummaryAssetPath(
+                visual.batchDate, id, kind, paper.rank, paper.title || ''
+            );
+        } catch (_error) {
+            // 清单里的归档路径参数非法时，这张卡本来就不可能核验通过。按无效处理，
+            // 不要让整个状态报告抛栈——运维要的是报告，不是崩溃。
+            return false;
+        }
+        return validateCompletedCard(
             card,
             paper.analysisSha256,
             paper.promptSha256,
@@ -339,11 +349,9 @@ function visualAssetsAreValid(visual) {
                 paper.rank,
                 visual?.publication
             ),
-            visualSummaryAssetPath(
-                visual.batchDate, id, kind, paper.rank, paper.title || ''
-            )
-        )
-    ));
+            assetPath
+        );
+    });
     let archiveUnique = false;
     try {
         archiveUnique = Boolean(visual && assertVisualArchiveUniqueness(visual));
