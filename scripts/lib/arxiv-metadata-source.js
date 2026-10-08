@@ -129,9 +129,8 @@ async function fetchOfficialArxivMetadata(arxivId, dependencies = {}) {
     const url = `https://export.arxiv.org/api/query?id_list=${encodeURIComponent(queryId)}&max_results=1`;
     const fetchPapers = dependencies.fetchPapers || require('../fetch-papers.js');
     const requestFn = dependencies.requestFn || fetchPapers.httpsRequestWithProxy;
-    // Injected test transports remain immediate. Production shares one host
-    // scheduler across every historical run so the arXiv Atom API is not hit
-    // in a tight per-paper loop.
+    // 注入的测试传输保持直行。生产环境所有历史抓取共用一个主机调度器，
+    // 免得在逐篇小循环里反复打 arXiv Atom 接口。
     const scheduler = dependencies.requestScheduler || (dependencies.requestFn
         ? { run: (_host, task) => task() } : SHARED_METADATA_SCHEDULER);
     let response;
