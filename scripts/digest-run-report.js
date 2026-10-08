@@ -516,6 +516,13 @@ function buildDigestRunReport(targetDate, options = {}) {
         && visualGateComplete
         && coverGateComplete
     );
+    // 未决候选数。筛选运行在写完全部决定前被杀时，缺口里没有可重试项，所以只能用
+    // 「候选总数减去已决定数」来算还差多少篇。两个数任缺一个就报 null，不要猜。
+    const decidedTotal = decisions?.stats?.totalCandidates;
+    const decidedCount = decisions?.stats?.decided;
+    const undecidedDecisionCount = (
+        Number.isInteger(decidedTotal) && Number.isInteger(decidedCount)
+    ) ? Math.max(0, decidedTotal - decidedCount) : null;
     return {
         version: 1,
         batchDate: targetDate,
@@ -538,9 +545,15 @@ function buildDigestRunReport(targetDate, options = {}) {
             status: filtered?.status || 'missing',
             selectedCount: filteredBatch.length,
             totalCandidates: decisionStats.totalCandidates ?? null,
+            decided: decisionStats.decided ?? null,
             keywordRejected: decisionStats.keywordRejected ?? null,
             llmCandidates: decisionStats.llmCandidates ?? null,
-            pendingDecisions: decisionStats.retryable ?? null
+            // 未决数必须是「候选总数减去已决定数」，不能取 retryable：后者只数已经
+            // 有决定、但决定本身可重试的条目。运行在写完全部决定之前被杀时，缺口
+            // 里没有任何 retryable 项，取 retryable 会显示 pending=0，把还差多少篇
+            // 没有决定这件事藏起来。
+            pendingDecisions: undecidedDecisionCount,
+            retryableDecisions: decisionStats.retryable ?? null
         },
         analysis: {
             complete: analysisComplete,

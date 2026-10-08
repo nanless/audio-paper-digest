@@ -142,6 +142,43 @@ describe('日更运行报告', () => {
         assert.throws(() => parseDate([]), /用法/);
     });
 
+    it('筛选未跑完时 pending 报未决篇数，不报可重试项数', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-pending-'));
+        try {
+            withDigestPaths(dir, () => {
+                // 255 篇候选，只有 247 篇拿到决定，剩下 8 篇在写决定之前运行就被杀了。
+                // 这 8 篇不属于「可重试」，所以 retryable 是 0。
+                const papers = Array.from({ length: 255 }, (_, i) => ({ arxivId: `2607.${i + 1}` }));
+                fs.writeFileSync(Config.FILES.rawCandidates, JSON.stringify({
+                    batchDate: '2026-07-29',
+                    papers,
+                    stats: { afterBlogSkip: papers.length }
+                }));
+                fs.writeFileSync(Config.FILES.filterDecisions, JSON.stringify({
+                    batchDate: '2026-07-29',
+                    decisions: Object.fromEntries(papers.slice(0, 247).map(paper => [
+                        paper.arxivId, { id: paper.arxivId, related: false }
+                    ])),
+                    stats: { totalCandidates: 255, decided: 247, retryable: 0, related: 0 }
+                }));
+                fs.writeFileSync(Config.FILES.filteredPapers, JSON.stringify({
+                    batchDate: '2026-07-29',
+                    status: 'filtering',
+                    papers: [],
+                    stats: { afterBlogSkip: 255, afterFilter: 0, decisionCount: 247 }
+                }));
+
+                const report = buildDigestRunReport('2026-07-29', { today: '2026-07-29' });
+                assert.strictEqual(report.filter.complete, false);
+                assert.strictEqual(report.filter.pendingDecisions, 8);
+                assert.strictEqual(report.filter.retryableDecisions, 0);
+                assert.match(formatDigestRunSummary(report), /pending=8/);
+            });
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
     it('抓取健康必须覆盖配置中的全部来源', () => {
         const raw = {
             batchDate: '2026-07-29',
