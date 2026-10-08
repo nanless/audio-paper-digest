@@ -140,3 +140,5 @@ npm run digest:status -- --date YYYY-MM-DD
 ```
 
 `validate:data --allow-empty` 只用于明确没有运行数据的干净 checkout。状态报告反映读取时的状态，后续推送、登记或取消配图后须重新运行。
+
+`digest:status` 把结果写成 `data/current/digest-run-reports/<日期>.json`。其中 `filter.pendingDecisions` 指的是**还没拿到明确决定的候选数**（候选总数减去已决定数）；早期版本这个字段取的是「已经有决定、但决定本身可重试」的条数，运行在写完全部决定之前被杀时会显示 0，把缺口藏起来。字段名和报告 `version` 都没变，但含义已经改了：要判断「可重试」请看同一节点下的 `filter.retryableDecisions`。

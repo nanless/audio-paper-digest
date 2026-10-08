@@ -552,6 +552,10 @@ function buildDigestRunReport(targetDate, options = {}) {
             // 有决定、但决定本身可重试的条目。运行在写完全部决定之前被杀时，缺口
             // 里没有任何 retryable 项，取 retryable 会显示 pending=0，把还差多少篇
             // 没有决定这件事藏起来。
+            // 未获明确决定的候选数（总候选数 − 已决定数）。旧版这里报的是
+            // decisions.stats.retryable，只数已经有决定但可重试的条目；运行在
+            // 写完全部决定之前被杀时缺口里没有可重试项，旧版会显示 0，把还差
+            // 多少篇没有决定藏起来。字段名与报告 version 未变，但语义已改。
             pendingDecisions: undecidedDecisionCount,
             retryableDecisions: decisionStats.retryable ?? null
         },
