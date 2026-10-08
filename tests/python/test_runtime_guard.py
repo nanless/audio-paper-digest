@@ -1,5 +1,6 @@
 import os
 import sys
+import shutil
 import subprocess
 import unittest
 from unittest import mock
@@ -86,6 +87,39 @@ class ExternalRuntimeGuardTest(unittest.TestCase):
             with self.assertRaisesRegex(ExternalRuntimeRequired, 'role=history'):
                 require_external_runtime(
                     'history-inventory.py', root, enforce_workspace_role=True)
+
+
+    def test_cross_role_switch_allows_daily_running_history_only(self):
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            marker = root / '.paper-digest-workspace-role.json'
+            marker.write_text(json.dumps({
+                'contract': 'paper-digest-workspace-role-v1',
+                'version': 1,
+                'role': 'daily',
+                'workspaceRealpath': str(root),
+            }), encoding='utf-8')
+            marker.chmod(0o600)
+            with mock.patch.dict(os.environ, {}, clear=True):
+                # ① 不设开关时仍然拒绝
+                with self.assertRaisesRegex(ExternalRuntimeRequired, 'role=history'):
+                    require_workspace_role('history', root)
+                # ② .env 里的开关放行并打印提示
+                (root / '.env').write_text('PD_WORKSPACE_ALLOW_CROSS_ROLE=1\n', encoding='utf-8')
+                with mock.patch('sys.stderr') as stderr:
+                    require_workspace_role('history', root)
+                self.assertIn('跨角色放行', ''.join(
+                    str(call.args[0]) for call in stderr.write.call_args_list))
+                # ③ realpath 不符时即使设了开关也拒绝
+                copy = root / 'copy'
+                copy.mkdir()
+                shutil.copy(marker, copy / '.paper-digest-workspace-role.json')
+                (copy / '.paper-digest-workspace-role.json').chmod(0o600)
+                (copy / '.env').write_text('PD_WORKSPACE_ALLOW_CROSS_ROLE=1\n', encoding='utf-8')
+                with self.assertRaisesRegex(ExternalRuntimeRequired, 'realpath 绑定非法'):
+                    require_workspace_role('history', copy)
 
 
 if __name__ == '__main__':

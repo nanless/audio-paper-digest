@@ -13,6 +13,42 @@ class ExternalRuntimeRequired(RuntimeError):
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 WORKSPACE_ROLE_MARKER = '.paper-digest-workspace-role.json'
+CROSS_ROLE_ENV = 'PD_WORKSPACE_ALLOW_CROSS_ROLE'
+CROSS_ROLE_VALUE = '1'
+
+
+def _env_file_value(env_file, key):
+    """读工作区 .env 里的一个键。开关由本模块自己解析，因为 python 入口
+    在 npm 包装层检查时还没有任何脚本读过 .env。"""
+    try:
+        raw = env_file.read_text(encoding='utf-8')
+    except OSError:
+        return ''
+    value = ''
+    for line in raw.splitlines():
+        trimmed = line.strip()
+        if not trimmed or trimmed.startswith('#'):
+            continue
+        name, sep, rest = trimmed.partition('=')
+        if not sep or name.strip() != key:
+            continue
+        value = rest.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in '"\'':
+            value = value[1:-1]
+    return value
+
+
+def _cross_role_switch(root):
+    from_env = os.environ.get(CROSS_ROLE_ENV, '').strip()
+    if from_env:
+        return from_env
+    return _env_file_value(Path(root) / '.env', CROSS_ROLE_ENV).strip()
+
+
+def _allows_cross_role(actual_role, required_role, root):
+    """只放宽 daily 工作区执行 history 命令；反向仍然拒绝。"""
+    return (actual_role == 'daily' and required_role == 'history'
+            and _cross_role_switch(root) == CROSS_ROLE_VALUE)
 
 
 def required_workspace_role_for_command(command_name):
@@ -72,8 +108,19 @@ def require_workspace_role(required_role, project_root=PROJECT_ROOT):
             or value.get('workspaceRealpath') != str(root)):
         raise ExternalRuntimeRequired('workspace role marker schema、角色或 realpath 绑定非法')
     if value['role'] != required_role:
-        raise ExternalRuntimeRequired(
-            f'当前 workspace role={value["role"]}，该命令只允许 role={required_role}')
+        # realpath 校验在上面已完成；开关不碰它。
+        if not _allows_cross_role(value['role'], required_role, root):
+            reversed_hint = ''
+            if (value['role'] == 'history' and required_role == 'daily'
+                    and _cross_role_switch(root) == CROSS_ROLE_VALUE):
+                reversed_hint = (f'（{CROSS_ROLE_ENV}=1 只放行 daily 工作区执行 history 命令，'
+                                 '反向不放行）')
+            raise ExternalRuntimeRequired(
+                f'当前 workspace role={value["role"]}，该命令只允许 role={required_role}{reversed_hint}')
+        print(f'[workspace-role] 跨角色放行：当前 workspace role={value["role"]}，'
+              f'命令要求 role={required_role}（{CROSS_ROLE_ENV}={CROSS_ROLE_VALUE}）。'
+              '生成、审查和推送仍必须与另一个工作区错开时间：两个工作区不得同时发布。',
+              file=sys.stderr)
     return value
 
 

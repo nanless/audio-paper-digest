@@ -110,6 +110,61 @@ test('daily 与 history 的直接入口守卫拒绝相反的工作区角色', ()
     }
 });
 
+test('跨角色开关只放行 daily 执行 history，默认拒绝且不绕过 realpath 校验', () => {
+    const dir = root();
+    const historyRoot = root();
+    role.writeWorkspaceRole('daily', { root: dir });
+    role.writeWorkspaceRole('history', { root: historyRoot });
+    const previous = process.env[role.CROSS_ROLE_ENV];
+    const previousWarn = console.warn;
+    try {
+        delete process.env[role.CROSS_ROLE_ENV];
+        // ① 不设开关时行为与原来一致
+        assert.throws(() => role.requireWorkspaceRole('history', dir), /只允许 role=history/);
+        // ② 设开关后放行，并打印可见提示
+        process.env[role.CROSS_ROLE_ENV] = '1';
+        const warnings = [];
+        console.warn = (...args) => warnings.push(args.join(' '));
+        assert.equal(role.requireWorkspaceRole('history', dir).role, 'daily');
+        console.warn = previousWarn;
+        assert.equal(warnings.length, 1);
+        assert.match(warnings[0], /跨角色放行/);
+        assert.match(warnings[0], /不得同时发布/);
+        // 反向不放行：history 工作区执行 daily 命令仍然拒绝
+        assert.throws(() => role.requireWorkspaceRole('daily', historyRoot), /只允许 role=daily/);
+        // ③ marker 记录的 realpath 与真实路径不符时，开关也救不了
+        const copy = root();
+        fs.copyFileSync(role.markerPath(dir), role.markerPath(copy));
+        fs.chmodSync(role.markerPath(copy), 0o600);
+        assert.throws(() => role.requireWorkspaceRole('history', copy), /realpath 绑定非法/);
+    } finally {
+        console.warn = previousWarn;
+        if (previous === undefined) delete process.env[role.CROSS_ROLE_ENV];
+        else process.env[role.CROSS_ROLE_ENV] = previous;
+    }
+});
+
+test('跨角色开关可以写在 worktree 的 .env 里，但只认 1', () => {
+    const dir = root();
+    role.writeWorkspaceRole('daily', { root: dir });
+    const previous = process.env[role.CROSS_ROLE_ENV];
+    const previousWarn = console.warn;
+    try {
+        delete process.env[role.CROSS_ROLE_ENV];
+        fs.writeFileSync(path.join(dir, '.env'), 'PD_WORKSPACE_ALLOW_CROSS_ROLE=1\n');
+        console.warn = () => {};
+        assert.equal(role.requireWorkspaceRole('history', dir).role, 'daily');
+        for (const value of ['0', 'true', '']) {
+            fs.writeFileSync(path.join(dir, '.env'), `PD_WORKSPACE_ALLOW_CROSS_ROLE=${value}\n`);
+            assert.throws(() => role.requireWorkspaceRole('history', dir), /只允许 role=history/, value);
+        }
+    } finally {
+        console.warn = previousWarn;
+        if (previous === undefined) delete process.env[role.CROSS_ROLE_ENV];
+        else process.env[role.CROSS_ROLE_ENV] = previous;
+    }
+});
+
 test('new-conference 别名只认显式的包装模式，且仅限 daily', () => {
     const previousMode = process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE;
     const previousRole = process.env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE;

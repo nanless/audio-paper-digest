@@ -9,6 +9,8 @@ const CONTRACT = 'paper-digest-workspace-role-v1';
 const VERSION = 1;
 const ROLES = Object.freeze(['daily', 'history']);
 const MARKER_NAME = '.paper-digest-workspace-role.json';
+const CROSS_ROLE_ENV = 'PD_WORKSPACE_ALLOW_CROSS_ROLE';
+const CROSS_ROLE_VALUE = '1';
 
 function workspaceRoot(value) {
     const root = path.resolve(value === undefined ? path.resolve(__dirname, '..') : value);
@@ -101,11 +103,58 @@ function writeWorkspaceRole(role, options = {}) {
     return readWorkspaceRole(root);
 }
 
+// 开关只放宽「daily 工作区执行 history 命令」这一个方向。反向仍然拒绝：
+// history 工作区是一份副本，让它执行 daily 命令就等于让副本发布博客。
+// 值必须是 1；其他值（包括 0）都按关闭处理。进程环境优先于工作区 .env，
+// 因为 npm 入口由本文件直接检查，此时还没有任何脚本读过 .env。
+function envFileValue(file, key) {
+    let raw;
+    try {
+        raw = fs.readFileSync(file, 'utf8');
+    } catch (error) {
+        if (error.code === 'ENOENT') return '';
+        throw error;
+    }
+    let value = '';
+    for (const line of raw.split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) continue;
+        const eq = trimmed.indexOf('=');
+        if (eq <= 0 || trimmed.slice(0, eq).trim() !== key) continue;
+        value = trimmed.slice(eq + 1).trim();
+        if ((value.startsWith('"') && value.endsWith('"'))
+            || (value.startsWith("'") && value.endsWith("'"))) {
+            value = value.slice(1, -1);
+        }
+    }
+    return value;
+}
+
+function crossRoleSwitchValue(root) {
+    const fromEnv = String(process.env[CROSS_ROLE_ENV] ?? '').trim();
+    if (fromEnv) return fromEnv;
+    return envFileValue(path.join(workspaceRoot(root), '.env'), CROSS_ROLE_ENV).trim();
+}
+
+function allowsCrossRole(actualRole, requiredRole, root) {
+    return actualRole === 'daily' && requiredRole === 'history'
+        && crossRoleSwitchValue(root) === CROSS_ROLE_VALUE;
+}
+
 function requireWorkspaceRole(requiredRole, root = path.resolve(__dirname, '..')) {
     if (!ROLES.includes(requiredRole)) throw new Error(`未知 required workspace role: ${requiredRole}`);
     const marker = readWorkspaceRole(root);
     if (marker.role !== requiredRole) {
-        throw new Error(`当前 workspace role=${marker.role}，该命令只允许 role=${requiredRole}`);
+        // realpath 校验已经在 readWorkspaceRole 里做完；开关不碰它。
+        if (!allowsCrossRole(marker.role, requiredRole, root)) {
+            const reversed = marker.role === 'history' && requiredRole === 'daily'
+                && crossRoleSwitchValue(root) === CROSS_ROLE_VALUE;
+            throw new Error(`当前 workspace role=${marker.role}，该命令只允许 role=${requiredRole}`
+                + (reversed ? `（${CROSS_ROLE_ENV}=1 只放行 daily 工作区执行 history 命令，反向不放行）` : ''));
+        }
+        console.warn(`[workspace-role] 跨角色放行：当前 workspace role=${marker.role}，`
+            + `命令要求 role=${requiredRole}（${CROSS_ROLE_ENV}=${CROSS_ROLE_VALUE}）。`
+            + '生成、审查和推送仍必须与另一个工作区错开时间：两个工作区不得同时发布。');
     }
     return marker;
 }
@@ -161,5 +210,5 @@ if (require.main === module) {
     main().catch(error => { console.error(`[workspace-role] ${error.message}`); process.exitCode = 1; });
 }
 
-module.exports = { CONTRACT, VERSION, ROLES, MARKER_NAME, workspaceRoot, markerPath,
+module.exports = { CONTRACT, VERSION, ROLES, MARKER_NAME, CROSS_ROLE_ENV, workspaceRoot, markerPath,
     validateMarker, readWorkspaceRole, writeWorkspaceRole, requireWorkspaceRole, parseCli, main };
