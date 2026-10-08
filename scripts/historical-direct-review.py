@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Recoverable semantic/multimodal review for one private historical bundle."""
+"""给单个私有历史包做语义/多模态审查，失败能接着跑。"""
 
 import argparse
 import concurrent.futures
@@ -82,11 +82,11 @@ def checkpoint(root, identity, unit, index, input_sha, protocol, runner):
         if value.get('inputSha256') == input_sha:
             raise ValueError('canonical semantic checkpoint may only contain a passing result')
     attempt_prefix = f'{target.stem}.attempt-'
-    # Failed attempts are audit history, never a permanent negative cache.
-    # Each invocation performs at most one review call (whose transport has
-    # its own bounded retries), so a later run can recover after an outage.
-    # Allocate after every existing suffix, including unreadable audit files,
-    # without deleting or overwriting evidence from earlier runs.
+    # 失败的尝试只留作审计，不当作永久的否定缓存。
+    # 每次调用最多做一次审查请求（传输层自带有限重试），
+    # 后面再跑还能从故障里恢复。
+    # 编号接在已有序号后面，读不懂的审计文件也算数，
+    # 以前留下的证据不删不盖。
     attempt_numbers = []
     for candidate in target.parent.glob(f'{attempt_prefix}*.json') if target.parent.exists() else []:
         match = re.fullmatch(re.escape(attempt_prefix) + r'(\d+)\.json', candidate.name)
@@ -172,8 +172,8 @@ def review_page(module, page, staged_repo, checkpoint_root, protocol):
                                               chunk_label=f'{index + 1}/{len(chunks)}')[:2])))
         chunk_results.append(result)
     image_matches = module.parse_markdown_images(content)
-    # The reviewer receives the full article, not just image URLs. Changed
-    # surrounding claims must not reuse a verdict about the old explanation.
+    # 审查器拿到的是全文，不只是图片链接。周围说法变了，
+    # 就不能沿用对旧解释的结论。
     image_input_sha = stable({'pageSha256': actual_sha,
                              'images': [{'alt': item['alt'], 'url': item['url']}
                                         for item in image_matches]})
@@ -229,7 +229,7 @@ def validate_semantic_protocol(value):
 
 
 def review_pages_bounded(module, pages, staged, checkpoints, protocol, concurrency):
-    """Never enqueue the entire history before discovering a service outage."""
+    """别把整个历史一次排完，先让服务故障有机会暴露。"""
     results = []
     remaining = iter(pages)
     with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
@@ -244,8 +244,8 @@ def review_pages_bounded(module, pages, staged, checkpoints, protocol, concurren
         while pending:
             done, pending = concurrent.futures.wait(pending,
                 return_when=concurrent.futures.FIRST_COMPLETED)
-            # Inspect all settled results before replenishing. On a fatal
-            # error, executor shutdown drains only the already-active pages.
+            # 先看完所有已出结果再补新任务。遇到致命错误，
+            # 执行器关闭时只等已经开工的页面。
             completed = [future.result() for future in done]
             for result in completed:
                 results.append(result)

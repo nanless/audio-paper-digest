@@ -1,9 +1,8 @@
 'use strict';
 
-// Independent publication-only metadata sidecars for every historical arXiv
-// source. These files never alter a source generation and never enter the
-// analysis/model input. The raw official Atom response is replayed on every
-// read and is bound to the exact four-file source generation it supplements.
+// 给每份历史 arXiv 来源配的独立发布元数据附件，只和发布有关。
+// 这些文件不改动任何来源 generation，也不进入分析/模型输入。
+// 每次读取都重放原始官方 Atom 响应，并绑定到它补充的那个四文件来源 generation。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -271,10 +270,9 @@ function readPublicationMetadata({ rootDir, sourceRoot, arxivId: value, generati
         || metadata.authors.some(author => typeof author !== 'string' || !author.trim())) {
         fail('publication metadata authors are empty or invalid');
     }
-    // The raw Atom response, canonical metadata bytes, manifest and sealed
-    // source have all replayed above. Older official Atom entries can retain
-    // boundary whitespace inside <name>; normalize only the returned author
-    // view, never the immutable sidecar or its hashes.
+    // 原始 Atom 响应、规范元数据字节、清单和已存来源前面都已重放过。
+    // 旧官方 Atom 条目的 <name> 里可能留有首尾空白；只整理返回的作者视图，
+    // 不碰不可改的附件和它的哈希。
     const authors = metadata.authors.map(author => author.trim());
     return { directory, sourceManifestSha256: manifest.source.sourceManifestSha256,
         sourceSnapshotSha256: manifest.source.sourceSnapshotSha256,
@@ -359,16 +357,16 @@ function reusableOfficialAtomIndex({ freshRewriteRoot, paperIds } = {}) {
                     || proof.sourceName !== parsed.proof.sourceName || proof.fileSha256 !== parsed.proof.fileSha256
                     || proof.recordSha256 !== parsed.proof.recordSha256
                     || freshRun.stableHash(paper) !== freshRun.stableHash(parsed.metadata)) continue;
-                // Legacy run.createdAt is not part of the fresh-run identity.
-                // It may only date an exact immutable vN query; a versionless
-                // candidate needs its own proof-bound observation timestamp.
+                // 旧运行的 createdAt 不算新运行身份的一部分。
+                // 它只能给精确的不可变 vN 查询定时间；无版本候选要用
+                // 凭证绑定的观察时间。
                 const exactVersionQuery = /v[1-9]\d*$/i.test(querySourceId);
                 const observedValue = proof.observedAt || (exactVersionQuery ? run?.createdAt : null);
                 const observed = new Date(observedValue);
                 if (!Number.isFinite(observed.getTime()) || observed.toISOString() !== observedValue) continue;
                 const official = { ...parsed, proof: { ...parsed.proof, observedAt: observedValue } };
                 candidates.get(id).push({ runId: name, official });
-            } catch { /* invalid retained runs are never reuse candidates */ }
+            } catch { /* 无效的保留运行不拿来复用 */ }
         }
     }
     const result = new Map();
