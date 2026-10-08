@@ -54,15 +54,15 @@ const stableHash = value => sha256(JSON.stringify(canonical(value)));
 const validSha = value => SHA_RE.test(String(value || ''));
 
 function exact(value, fields, label) {
-    if (!plain(value)) fail(`${label} must be an object`);
+    if (!plain(value)) fail(`${label} 必须是对象`);
     const actual = Object.keys(value).sort(); const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
-        fail(`${label} has unknown or missing fields`);
+        fail(`${label} 含有未知或缺失字段`);
     }
 }
 
 function safeDirectory(directory, label) {
-    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} must be absolute`);
+    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} 必须是绝对路径`);
     const absolute = path.resolve(directory);
     let cursor = path.parse(absolute).root;
     for (const segment of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
@@ -75,7 +75,7 @@ function safeDirectory(directory, label) {
 }
 
 function readStableFile(filename, label, maxBytes) {
-    if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail(`${label} must be an absolute file`);
+    if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail(`${label} 必须是绝对文件路径`);
     const absolute = path.resolve(filename); safeDirectory(path.dirname(absolute), `${label} parent`); let fd;
     try {
         fd = fs.openSync(absolute, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -86,11 +86,11 @@ function readStableFile(filename, label, maxBytes) {
         }
         const bytes = fs.readFileSync(fd); const after = fs.fstatSync(fd);
         if (bytes.length !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino
-            || after.size !== opened.size) fail(`${label} changed while read`);
+            || after.size !== opened.size) fail(`${label} 在读取过程中发生变化`);
         return { filename: absolute, bytes, sha256: sha256(bytes), dev: opened.dev, ino: opened.ino };
     } catch (error) {
         if (error instanceof HistoricalIcmlPosterAuthorityError) throw error;
-        fail(`${label} cannot be read: ${error.code || error.message}`);
+        fail(`${label} 无法读取：${error.code || error.message}`);
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
@@ -117,7 +117,7 @@ function readStrictJson(filename, label) {
         rejectDuplicateJsonKeys(text); value = JSON.parse(text);
     } catch (error) {
         if (error instanceof HistoricalIcmlPosterAuthorityError) throw error;
-        fail(`${label} is not strict UTF-8 JSON`);
+        fail(`${label} 不是严格的 UTF-8 JSON`);
     }
     return { ...loaded, value };
 }
@@ -131,7 +131,7 @@ function forumIdFromUrl(value) {
 function normalizeRawRecord(record, recordIndex, snapshotSha256) {
     if (!plain(record) || !Number.isSafeInteger(record.id) || record.id < 1
         || String(record.id) !== `${record.id}` || typeof record.name !== 'string' || !record.name.trim()) {
-        fail(`snapshot record ${recordIndex} has an invalid poster identity`);
+        fail(`快照记录 ${recordIndex} 的 poster 身份非法`);
     }
     const posterId = String(record.id); const forumId = forumIdFromUrl(record.paper_url);
     if (!forumId || record.virtualsite_url !== `/virtual/2026/poster/${posterId}`
@@ -170,11 +170,11 @@ function normalizeAuthority(value) {
     exact(value, ['contract', 'version', 'sourceKind', 'snapshot', 'records', 'recordSetSha256',
         'authoritySha256'], 'ICML poster authority');
     if (value.contract !== CONTRACT || value.version !== VERSION || value.sourceKind !== SOURCE_KIND
-        || !plain(value.snapshot) || !Array.isArray(value.records)) fail('ICML poster authority envelope is invalid');
+        || !plain(value.snapshot) || !Array.isArray(value.records)) fail('ICML poster authority 的外层结构非法');
     exact(value.snapshot, ['absolutePath', 'sha256', 'records'], 'ICML poster authority snapshot');
     if (!path.isAbsolute(value.snapshot.absolutePath) || !validSha(value.snapshot.sha256)
         || !Number.isSafeInteger(value.snapshot.records) || value.snapshot.records !== value.records.length) {
-        fail('ICML poster authority snapshot binding is invalid');
+        fail('ICML poster authority 的快照绑定非法');
     }
     const posterIds = new Set(); const forumIds = new Set(); let previous = 0;
     const records = value.records.map((record, index) => {
@@ -189,14 +189,14 @@ function normalizeAuthority(value) {
             || !Number.isSafeInteger(record.recordIndex) || record.recordIndex < 0
             || record.snapshotSha256 !== value.snapshot.sha256 || !validSha(record.recordBindingSha256)
             || stableHash(body) !== record.recordBindingSha256 || posterIds.has(record.posterId)
-            || forumIds.has(record.forumId)) fail('ICML poster authority record binding is invalid');
+            || forumIds.has(record.forumId)) fail('ICML poster authority 的记录绑定非法');
         previous = numericPoster; posterIds.add(record.posterId); forumIds.add(record.forumId); return clone(record);
     });
     const body = { contract: CONTRACT, version: VERSION, sourceKind: SOURCE_KIND,
         snapshot: clone(value.snapshot), records, recordSetSha256: value.recordSetSha256 };
     if (!validSha(value.recordSetSha256) || value.recordSetSha256 !== stableHash(records)
         || !validSha(value.authoritySha256) || value.authoritySha256 !== stableHash(body)) {
-        fail('ICML poster authority self-SHA is invalid');
+        fail('ICML poster authority 的自校验 SHA 非法');
     }
     return { ...body, authoritySha256: value.authoritySha256 };
 }
@@ -231,45 +231,45 @@ function authorityHandleSnapshot(handle) {
 
 function lookupByPoster(handle, posterId) {
     replayPosterAuthority(handle);
-    if (!/^[1-9]\d*$/u.test(String(posterId || ''))) fail('poster ID is invalid');
+    if (!/^[1-9]\d*$/u.test(String(posterId || ''))) fail('poster ID 非法');
     const record = handleData(handle).byPoster.get(String(posterId));
-    if (!record) fail(`poster ID ${posterId} is absent from the authenticated snapshot`);
+    if (!record) fail(`poster ID ${posterId} 不在已认证的快照中`);
     return clone(record);
 }
 
 function lookupByForum(handle, forumId) {
     replayPosterAuthority(handle);
-    if (!FORUM_ID_RE.test(String(forumId || ''))) fail('forum ID is invalid');
+    if (!FORUM_ID_RE.test(String(forumId || ''))) fail('forum ID 非法');
     const record = handleData(handle).byForum.get(String(forumId));
-    if (!record) fail(`forum ID ${forumId} is absent from the authenticated snapshot`);
+    if (!record) fail(`forum ID ${forumId} 不在已认证的快照中`);
     return clone(record);
 }
 
 function normalizePage(page, expectedKind, label) {
-    if (!plain(page)) fail(`${label} is required`);
+    if (!plain(page)) fail(`必须提供 ${label}`);
     const pageKey = page.pageKey ?? page.pageId; const pagePath = page.pagePath ?? page.path;
     const pageContentSha256 = page.pageContentSha256 ?? page.contentSha256;
     if (!PAGE_KEY_RE.test(String(pageKey || '')) || typeof pagePath !== 'string' || !pagePath
         || !validSha(pageContentSha256) || !plain(page.scope) || page.scope.type !== 'daily'
         || typeof page.scope.key !== 'string' || !/^\d{4}-\d{2}-\d{2}$/u.test(page.scope.key)
-        || (expectedKind && page.kind !== undefined && page.kind !== expectedKind)) fail(`${label} is malformed`);
+        || (expectedKind && page.kind !== undefined && page.kind !== expectedKind)) fail(`${label} 格式错误`);
     return { pageKey, pagePath, pageContentSha256, scope: { type: 'daily', key: page.scope.key } };
 }
 
 function readFrozenPage(blogRoot, page, label, maxBytes) {
     const root = safeDirectory(blogRoot, 'blogRoot'); const filename = path.resolve(root, page.pagePath);
-    if (!filename.startsWith(`${root}${path.sep}`)) fail(`${label} escapes blogRoot`);
+    if (!filename.startsWith(`${root}${path.sep}`)) fail(`${label} 逃出了 blogRoot`);
     const loaded = readStableFile(filename, label, maxBytes);
     if (loaded.sha256 !== page.pageContentSha256) fail(`${label} bytes differ from frozen inventory`);
     let text;
     try { text = new TextDecoder('utf-8', { fatal: true }).decode(loaded.bytes); }
-    catch { fail(`${label} is not strict UTF-8`); }
+    catch { fail(`${label} 不是严格的 UTF-8`); }
     return { ...loaded, text };
 }
 
 function bodyAfterFrontmatter(text, label) {
     const match = text.match(/^---\n[\s\S]*?\n---\n/u);
-    if (!match) fail(`${label} lacks strict frontmatter`);
+    if (!match) fail(`${label} 缺少严格的 frontmatter`);
     return text.slice(match[0].length);
 }
 
@@ -278,7 +278,7 @@ function posterIdsInText(text, label) {
     for (const match of text.matchAll(/(?:https?:\/\/)?(?:www\.)?icml\.cc\/virtual\/2026\/poster\/[^\s<>"'\])]+/giu)) {
         occurrences += 1; let url;
         if (!match[0].startsWith('https://icml.cc/')) fail(`${label} contains a non-canonical ICML poster URL`);
-        try { url = new URL(match[0]); } catch { fail(`${label} contains an invalid ICML poster URL`); }
+        try { url = new URL(match[0]); } catch { fail(`${label} 含有非法的 ICML poster URL`); }
         const poster = url.pathname.match(/^\/virtual\/2026\/poster\/([1-9]\d*)\/?$/u);
         if (url.protocol !== 'https:' || url.hostname !== 'icml.cc' || url.port || url.username || url.password
             || url.search || url.hash || !poster) fail(`${label} contains a non-canonical ICML poster URL`);
@@ -291,7 +291,7 @@ function regexEscape(value) { return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'
 
 function summarySectionBinding({ blogRoot, summaryPage, childPage, blogBasePath }) {
     const summary = normalizePage(summaryPage, 'daily-summary', 'frozen daily summary page');
-    if (summary.scope.key !== childPage.scope.key) fail('daily summary and child page belong to different cohorts');
+    if (summary.scope.key !== childPage.scope.key) fail('每日汇总页与子页属于不同的 cohort');
     const loaded = readFrozenPage(blogRoot, summary, 'frozen daily summary page', MAX_SUMMARY_BYTES);
     const body = bodyAfterFrontmatter(loaded.text, 'frozen daily summary page');
     const slug = path.basename(childPage.pagePath, path.extname(childPage.pagePath));
@@ -323,7 +323,7 @@ function summarySectionBinding({ blogRoot, summaryPage, childPage, blogBasePath 
 function normalizeDailyPageBinding(value) {
     exact(value, ['contract', 'version', 'mapping', 'page', 'poster', 'summary', 'bindingSha256'], 'daily ICML binding');
     if (value.contract !== DAILY_BINDING_CONTRACT || value.version !== DAILY_BINDING_VERSION
-        || ![DIRECT_PAGE_MAPPING, SUMMARY_SECTION_MAPPING].includes(value.mapping)) fail('daily ICML binding contract is invalid');
+        || ![DIRECT_PAGE_MAPPING, SUMMARY_SECTION_MAPPING].includes(value.mapping)) fail('每日 ICML 绑定的契约非法');
     exact(value.page, ['pageKey', 'pagePath', 'pageContentSha256', 'scope'], 'daily ICML binding page');
     const page = normalizePage(value.page, null, 'daily ICML binding page');
     exact(value.poster, ['posterId', 'forumId', 'officialUrl', 'openreviewUrl', 'authoritySha256',
@@ -332,28 +332,28 @@ function normalizeDailyPageBinding(value) {
         || value.poster.officialUrl !== `https://icml.cc/virtual/2026/poster/${value.poster.posterId}`
         || value.poster.openreviewUrl !== `https://openreview.net/forum?id=${value.poster.forumId}`
         || !validSha(value.poster.authoritySha256) || !validSha(value.poster.recordBindingSha256)) {
-        fail('daily ICML binding poster is invalid');
+        fail('每日 ICML 绑定的 poster 非法');
     }
     let summary = null;
     if (value.mapping === DIRECT_PAGE_MAPPING) {
-        if (value.summary !== null) fail('direct daily ICML binding cannot include a summary');
+        if (value.summary !== null) fail('直接的每日 ICML 绑定不得包含汇总页');
     } else {
-        if (!plain(value.summary)) fail('summary daily ICML binding requires summary evidence');
+        if (!plain(value.summary)) fail('汇总页的每日 ICML 绑定需要汇总证据');
         exact(value.summary, ['pageKey', 'pagePath', 'pageContentSha256', 'scope', 'section'], 'daily ICML binding summary');
         const normalized = normalizePage(value.summary, null, 'daily ICML binding summary');
-        if (normalized.scope.key !== page.scope.key) fail('daily ICML binding summary belongs to a different cohort');
+        if (normalized.scope.key !== page.scope.key) fail('每日 ICML 绑定的汇总页属于不同的 cohort');
         exact(value.summary.section, ['childUrl', 'startByte', 'endByte', 'sha256'], 'daily ICML binding summary section');
         if (typeof value.summary.section.childUrl !== 'string' || !value.summary.section.childUrl.startsWith('/')
             || !Number.isSafeInteger(value.summary.section.startByte) || value.summary.section.startByte < 0
             || !Number.isSafeInteger(value.summary.section.endByte)
             || value.summary.section.endByte <= value.summary.section.startByte || !validSha(value.summary.section.sha256)) {
-            fail('daily ICML binding summary section is invalid');
+            fail('每日 ICML 绑定的汇总小节非法');
         }
         summary = clone(value.summary);
     }
     const body = { contract: DAILY_BINDING_CONTRACT, version: DAILY_BINDING_VERSION, mapping: value.mapping,
         page, poster: clone(value.poster), summary };
-    if (!validSha(value.bindingSha256) || value.bindingSha256 !== stableHash(body)) fail('daily ICML binding self-SHA is invalid');
+    if (!validSha(value.bindingSha256) || value.bindingSha256 !== stableHash(body)) fail('每日 ICML 绑定的自校验 SHA 非法');
     return { ...body, bindingSha256: value.bindingSha256 };
 }
 
@@ -361,13 +361,13 @@ function bindDailyPage({ authorityHandle, blogRoot, page, summaryPage = null,
     blogBasePath = '/audio-paper-digest-blog' } = {}) {
     replayPosterAuthority(authorityHandle);
     if (typeof blogBasePath !== 'string' || !/^\/[A-Za-z0-9._/-]*[A-Za-z0-9._-]$/u.test(blogBasePath)
-        || blogBasePath.includes('//') || blogBasePath.includes('..')) fail('blogBasePath is invalid');
+        || blogBasePath.includes('//') || blogBasePath.includes('..')) fail('blogBasePath 非法');
     const child = normalizePage(page, 'paper', 'frozen daily child page');
     const loaded = readFrozenPage(blogRoot, child, 'frozen daily child page', MAX_PAGE_BYTES);
     const direct = posterIdsInText(bodyAfterFrontmatter(loaded.text, 'frozen daily child page'), 'daily child page');
     let posterId; let mapping; let summary = null;
     if (direct.ids.length === 1) { [posterId] = direct.ids; mapping = DIRECT_PAGE_MAPPING; }
-    else if (direct.ids.length > 1) fail('daily child page identifies multiple ICML posters');
+    else if (direct.ids.length > 1) fail('每日子页标识了多个 ICML poster');
     else {
         if (!summaryPage) fail('daily child page has no poster and no frozen daily summary evidence');
         const recovered = summarySectionBinding({ blogRoot, summaryPage, childPage: child, blogBasePath });
@@ -385,7 +385,7 @@ function replayDailyPageBinding({ binding, authorityHandle, blogRoot, page, summ
     blogBasePath = '/audio-paper-digest-blog' } = {}) {
     const normalized = normalizeDailyPageBinding(binding);
     const rebuilt = bindDailyPage({ authorityHandle, blogRoot, page, summaryPage, blogBasePath });
-    if (stableHash(rebuilt) !== stableHash(normalized)) fail('daily ICML binding no longer replays');
+    if (stableHash(rebuilt) !== stableHash(normalized)) fail('每日 ICML 绑定无法再重放');
     return normalized;
 }
 
@@ -398,19 +398,19 @@ function normalizePdfDescriptor(value) {
         || !path.isAbsolute(value.absolutePath) || !Number.isSafeInteger(value.bytes) || value.bytes < 5
         || !validSha(value.sha256) || !validSha(value.authoritySha256) || !validSha(value.recordBindingSha256)
         || !validSha(value.descriptorSha256) || stableHash(body) !== value.descriptorSha256) {
-        fail('ICML local PDF descriptor is invalid');
+        fail('ICML 本地 PDF 描述符非法');
     }
     return clone(value);
 }
 
 function verifyLocalForumPdf({ authorityHandle, pdfRoot, posterId = null, forumId = null } = {}) {
     replayPosterAuthority(authorityHandle);
-    if ((posterId === null) === (forumId === null)) fail('provide exactly one posterId or forumId');
+    if ((posterId === null) === (forumId === null)) fail('请恰好提供一个 posterId 或 forumId');
     const record = posterId !== null ? lookupByPoster(authorityHandle, posterId) : lookupByForum(authorityHandle, forumId);
     const root = safeDirectory(pdfRoot, 'ICML local PDF root'); const filename = path.resolve(root, `${record.forumId}.pdf`);
-    if (path.dirname(filename) !== root) fail('ICML local PDF path escapes its root');
+    if (path.dirname(filename) !== root) fail('ICML 本地 PDF 路径逃出了其根目录');
     const loaded = readStableFile(filename, 'ICML local forum PDF', MAX_PDF_BYTES);
-    if (loaded.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') fail('ICML local forum file is not a PDF');
+    if (loaded.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') fail('ICML 本地 forum 文件不是 PDF');
     const authority = handleData(authorityHandle).authority;
     const body = { contract: PDF_DESCRIPTOR_CONTRACT, version: PDF_DESCRIPTOR_VERSION,
         posterId: record.posterId, forumId: record.forumId, absolutePath: filename,

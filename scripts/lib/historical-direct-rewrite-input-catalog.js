@@ -77,7 +77,7 @@ const directEligibleConferenceSource = (source, paperId = null) => source?.pdf?.
 function priorPreprintSourceDisclosure(source, paperId) {
     if (source?.pdf?.acquisition?.versionRelation !== BLOCKED_CROSS_VERSION_RELATION) return null;
     const profile = authorizedPriorPreprintProfile(source, paperId);
-    if (!profile) fail('cross-version prior preprint is not the code-reviewed exception');
+    if (!profile) fail('跨版本预印本不是经过代码评审的例外');
     const body = { contract: PRIOR_PREPRINT_DISCLOSURE_CONTRACT, version: 1, paperId,
         icmlTitle: profile.title, preprintTitle: profile.sourceTitle, doi: profile.sourceDoi,
         versionRelation: profile.versionRelation, sourceKind: profile.sourceKind,
@@ -89,21 +89,21 @@ function priorPreprintSourceDisclosure(source, paperId) {
 }
 
 function exact(value, fields, label) {
-    if (!plain(value)) fail(`${label} must be an object`);
+    if (!plain(value)) fail(`${label} 必须是对象`);
     const actual = Object.keys(value).sort(); const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
-        fail(`${label} has unknown or missing fields`);
+        fail(`${label} 含有未知或缺失字段`);
     }
 }
 
 function readStableJson(filename, label) {
     try { return conferencePageMappingsApi.readStableJson(filename, label, MAX_MANIFEST_BYTES); }
-    catch (error) { fail(`${label} is unreadable: ${error.message}`); }
+    catch (error) { fail(`${label} 无法读取：${error.message}`); }
 }
 
 function conferenceScopeFor(paperId) {
     const match = String(paperId).match(/^conference:([a-z0-9]+(?:-[a-z0-9]+)*):(\d{4}):/);
-    if (!match) fail(`conference manifest paper ID is invalid: ${paperId}`);
+    if (!match) fail(`会议 manifest 的论文 ID 非法：${paperId}`);
     return { type: 'conference', key: `${match[1]}-${match[2]}` };
 }
 
@@ -118,7 +118,7 @@ function sourcePriority(sourceSet) {
 function selectedConferenceSource(sources, pageFingerprints, paperId) {
     const candidates = sources.filter(source => source.titleProjectionFingerprintSha256s
         .some(fingerprint => pageFingerprints.has(fingerprint)));
-    if (!candidates.length) fail(`${paperId} has no title-bound retained local conference source`);
+    if (!candidates.length) fail(`${paperId} 没有按标题绑定的留存本地会议来源`);
     candidates.sort((left, right) => sourcePriority(left.sourceSet) - sourcePriority(right.sourceSet)
         || stableHash(left).localeCompare(stableHash(right)));
     const source = candidates[0];
@@ -128,13 +128,13 @@ function selectedConferenceSource(sources, pageFingerprints, paperId) {
 
 function scopeConferenceEntries({ conferenceManifest, inventory, blogRoot } = {}) {
     try { conferenceManifestApi.assertManifest(conferenceManifest); }
-    catch (error) { fail(`approved conference local-source manifest is invalid: ${error.message}`); }
+    catch (error) { fail(`已批准的会议本地来源 manifest 非法：${error.message}`); }
     const history = conferencePageMappingsApi.normalizeInventory(inventory);
-    if (typeof blogRoot !== 'string' || !path.isAbsolute(blogRoot)) fail('blogRoot must be an absolute path');
+    if (typeof blogRoot !== 'string' || !path.isAbsolute(blogRoot)) fail('blogRoot 必须是绝对路径');
     const sourceCache = new Map(); const candidatesByScopeAndTitle = new Map(); const entriesByPaperId = new Map();
     for (const record of conferenceManifest.records) {
         if (!plain(record) || typeof record.paperId !== 'string' || !Array.isArray(record.sources)) {
-            fail('approved conference local-source record is malformed');
+            fail('已批准的会议本地来源记录格式错误');
         }
         let sources;
         // Poster 快照记录能证明日更页面身份，但它们的 `name` 字段不是那 1,302 个会议页面的
@@ -156,21 +156,21 @@ function scopeConferenceEntries({ conferenceManifest, inventory, blogRoot } = {}
         try {
             binding = conferenceAuthority.pageTitleBinding({ blogRoot, pageKey: page.pageKey,
                 pagePath: page.pagePath, pageContentSha256: page.pageContentSha256 });
-        } catch (error) { fail(`frozen conference title binding is invalid: ${error.message}`); }
+        } catch (error) { fail(`冻结的会议标题绑定非法：${error.message}`); }
         const candidates = candidatesByScopeAndTitle.get(`${page.scope.key}\0${binding.titleFingerprintSha256}`) || new Set();
         if (candidates.size === 0) {
             unresolved.push({ pageKey: page.pageKey, pagePath: page.pagePath, scope: clone(page.scope),
                 reason: 'no-retained-local-title-match' });
             continue;
         }
-        if (candidates.size !== 1) fail(`${page.pageKey} frontmatter title maps to multiple retained conference identities`);
+        if (candidates.size !== 1) fail(`${page.pageKey} 的 frontmatter 标题映射到多个留存会议身份`);
         const paperId = [...candidates][0]; const values = pageFingerprintsByPaperId.get(paperId) || new Set();
         values.add(binding.titleFingerprintSha256); pageFingerprintsByPaperId.set(paperId, values);
     }
-    if (unresolved.length) fail(`approved local conference sources leave ${unresolved.length} frozen conference pages unresolved`);
+    if (unresolved.length) fail(`已批准的本地会议来源仍留下 ${unresolved.length} 个未解析的冻结会议页面`);
     const entries = [...pageFingerprintsByPaperId.entries()].map(([paperId, fingerprints]) => {
         const item = entriesByPaperId.get(paperId);
-        if (!item) fail(`${paperId} selection has no retained source record`);
+        if (!item) fail(`${paperId} 的选择没有留存来源记录`);
         return { paperId, sources: [selectedConferenceSource(item.sources, fingerprints, paperId)] };
     }).sort((left, right) => left.paperId.localeCompare(right.paperId));
     return { entries, conferencePageCount: history.pages.filter(item => item.scope.type === 'conference').length };
@@ -193,17 +193,17 @@ function dailyIcmlPosterEntries({ conferenceManifest, inventory, blogRoot } = {}
     for (const record of conferenceManifest.records) for (const source of record.sources) {
         const poster = source.metadata?.posterBinding;
         if (!poster) continue;
-        if (source.sourceSet !== 'workspace-icml-official-poster-2026') fail('ICML poster binding uses an unexpected source set');
-        if (snapshotFile !== null && snapshotFile !== source.metadata.absolutePath) fail('ICML poster sources use multiple authority snapshots');
-        if (authoritySha256 !== null && authoritySha256 !== poster.authoritySha256) fail('ICML poster sources use multiple authority SHAs');
+        if (source.sourceSet !== 'workspace-icml-official-poster-2026') fail('ICML poster 绑定使用了意外的来源集');
+        if (snapshotFile !== null && snapshotFile !== source.metadata.absolutePath) fail('ICML poster 来源使用了多个 authority 快照');
+        if (authoritySha256 !== null && authoritySha256 !== poster.authoritySha256) fail('ICML poster 来源使用了多个 authority SHA');
         snapshotFile = source.metadata.absolutePath; authoritySha256 = poster.authoritySha256;
-        if (posterSources.has(record.paperId)) fail(`duplicate ICML poster source for ${record.paperId}`);
+        if (posterSources.has(record.paperId)) fail(`${record.paperId} 有重复的 ICML poster 来源`);
         posterSources.set(record.paperId, clone(source));
     }
     if (snapshotFile === null) return { entries: [], bindings: [], routableBindings: [], authoritySha256: null };
     const handle = icmlPosterApi.loadPosterAuthority({ snapshotFile });
     const authority = icmlPosterApi.authorityHandleSnapshot(handle);
-    if (authority.authoritySha256 !== authoritySha256) fail('ICML poster source authority SHA does not replay');
+    if (authority.authoritySha256 !== authoritySha256) fail('ICML poster 来源的 authority SHA 无法重放');
     const history = conferencePageMappingsApi.normalizeInventory(inventory);
     const summaries = new Map(inventory.pages.filter(page => page?.kind === 'daily-summary')
         .map(page => [page.scope?.key, page]));
@@ -248,7 +248,7 @@ function arxivEntriesFromFrozenInventory(value, dailyPrimaryArxivBindings = []) 
         if (hint?.scheme !== 'arxiv' || !ARXIV_ID_RE.test(String(hint.value || ''))) continue;
         if (!Array.isArray(hint.sources) || !hint.sources.length || hint.sources.some(source => typeof source !== 'string' || !source)
             || new Set(hint.sources).size !== hint.sources.length) {
-            fail(`${page.pageKey} frozen arXiv identity hint has no exact source mapping`);
+            fail(`${page.pageKey} 的冻结 arXiv 身份提示没有精确的来源映射`);
         }
         paperIds.add(`arxiv:${hint.value}`); singlePageCount += 1;
     }
@@ -277,7 +277,7 @@ function buildScopedCatalog({ conferenceManifest, inventoryFile, blogRoot } = {}
     for (const entry of dailyIcml.entries) if (!conferenceById.has(entry.paperId)) conferenceById.set(entry.paperId, entry);
     const conferenceEntries = [...conferenceById.values()].sort((a, b) => a.paperId.localeCompare(b.paperId));
     const entries = [...arxiv.entries, ...conferenceEntries].sort((left, right) => left.paperId.localeCompare(right.paperId));
-    if (new Set(entries.map(entry => entry.paperId)).size !== entries.length) fail('scoped local inputs duplicate a canonical paper ID');
+    if (new Set(entries.map(entry => entry.paperId)).size !== entries.length) fail('限域的本地输入重复了同一个规范 paper ID');
     const sourceSets = {};
     for (const entry of conferenceEntries) for (const source of entry.sources) {
         sourceSets[source.sourceSet] = (sourceSets[source.sourceSet] || 0) + 1;
@@ -309,7 +309,7 @@ function buildScopedCatalog({ conferenceManifest, inventoryFile, blogRoot } = {}
 function normalizeCatalog(value) {
     if (!plain(value) || value.contract !== CONTRACT || value.version !== VERSION || value.scope !== SCOPE
         || !plain(value.scopeBinding) || !Array.isArray(value.inputs) || !plain(value.summary) || !Array.isArray(value.entries)) {
-        fail('scoped v5 direct rewrite catalog contract is invalid');
+        fail('限域 v5 直接重写目录的契约非法');
     }
     exact(value, ['contract', 'version', 'scope', 'scopeBinding', 'inputs', 'summary', 'dailyPrimaryArxivBindings',
         'dailyPrimaryArxivBindingSetSha256', 'dailyIcmlPosterBindings', 'dailyIcmlPosterBindingSetSha256',
@@ -326,91 +326,91 @@ function normalizeCatalog(value) {
         || value.scopeBinding.dailyPrimaryArxivBindingCount < 0 || !Number.isSafeInteger(value.scopeBinding.dailyIcmlPosterBindingCount)
         || value.scopeBinding.dailyIcmlPosterBindingCount < 0 || !Number.isSafeInteger(value.scopeBinding.dailyIcmlPosterRoutableBindingCount)
         || value.scopeBinding.dailyIcmlPosterRoutableBindingCount < 0 || !Number.isSafeInteger(value.scopeBinding.conferencePageCount)
-        || value.scopeBinding.conferencePageCount < 0) fail('catalog scope binding is malformed');
+        || value.scopeBinding.conferencePageCount < 0) fail('目录的 scope 绑定格式错误');
     if (!Array.isArray(value.dailyPrimaryArxivBindings) || !validSha(value.dailyPrimaryArxivBindingSetSha256)) {
-        fail('daily primary arXiv binding set is malformed');
+        fail('每日主 arXiv 绑定集格式错误');
     }
     const bindingPageKeys = new Set(); const dailyPrimaryArxivBindings = value.dailyPrimaryArxivBindings.map((binding, index) => {
         let normalized;
         try { normalized = dailyPrimaryArxiv.normalize(binding); }
-        catch (error) { fail(`daily primary arXiv binding ${index} is invalid: ${error.message}`); }
-        if (bindingPageKeys.has(normalized.pageKey)) fail('daily primary arXiv bindings duplicate a frozen page');
+        catch (error) { fail(`每日主 arXiv 绑定 ${index} 非法：${error.message}`); }
+        if (bindingPageKeys.has(normalized.pageKey)) fail('每日主 arXiv 绑定重复了同一个冻结页面');
         bindingPageKeys.add(normalized.pageKey); return normalized;
     }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
     if (value.dailyPrimaryArxivBindings.some((binding, index) => binding.pageKey !== dailyPrimaryArxivBindings[index].pageKey)
         || stableHash(dailyPrimaryArxivBindings) !== value.dailyPrimaryArxivBindingSetSha256) {
-        fail('daily primary arXiv binding set drifted');
+        fail('每日主 arXiv 绑定集发生变化');
     }
     if (!Array.isArray(value.dailyIcmlPosterBindings) || !validSha(value.dailyIcmlPosterBindingSetSha256)
         || !(value.icmlPosterAuthoritySha256 === null || validSha(value.icmlPosterAuthoritySha256))) {
-        fail('daily ICML poster binding set is malformed');
+        fail('每日 ICML poster 绑定集格式错误');
     }
     const icmlPageKeys = new Set(); const dailyIcmlPosterBindings = value.dailyIcmlPosterBindings.map((binding, index) => {
         let normalized;
         try { normalized = icmlPosterApi.normalizeDailyPageBinding(binding); }
-        catch (error) { fail(`daily ICML poster binding ${index} is invalid: ${error.message}`); }
+        catch (error) { fail(`每日 ICML poster 绑定 ${index} 非法：${error.message}`); }
         if (icmlPageKeys.has(normalized.page.pageKey) || normalized.poster.authoritySha256 !== value.icmlPosterAuthoritySha256) {
-            fail('daily ICML poster bindings duplicate a page or authority');
+            fail('每日 ICML poster 绑定重复了同一个页面或 authority');
         }
         icmlPageKeys.add(normalized.page.pageKey); return normalized;
     }).sort((left, right) => left.page.pageKey.localeCompare(right.page.pageKey));
     if (value.dailyIcmlPosterBindings.some((binding, index) => binding.page.pageKey !== dailyIcmlPosterBindings[index].page.pageKey)
         || stableHash(dailyIcmlPosterBindings) !== value.dailyIcmlPosterBindingSetSha256
         || (dailyIcmlPosterBindings.length > 0 && value.icmlPosterAuthoritySha256 === null)) {
-        fail('daily ICML poster binding set drifted');
+        fail('每日 ICML poster 绑定集发生变化');
     }
     if (!Array.isArray(value.dailyIcmlPosterRoutableBindings)
         || !validSha(value.dailyIcmlPosterRoutableBindingSetSha256)) {
-        fail('daily ICML routable poster binding set is malformed');
+        fail('每日 ICML 可路由 poster 绑定集格式错误');
     }
     const allIcmlBindingsByPage = new Map(dailyIcmlPosterBindings.map(binding => [binding.page.pageKey, binding]));
     const routablePageKeys = new Set();
     const dailyIcmlPosterRoutableBindings = value.dailyIcmlPosterRoutableBindings.map((binding, index) => {
         let normalized;
         try { normalized = icmlPosterApi.normalizeDailyPageBinding(binding); }
-        catch (error) { fail(`daily ICML routable poster binding ${index} is invalid: ${error.message}`); }
+        catch (error) { fail(`每日 ICML 可路由 poster 绑定 ${index} 非法：${error.message}`); }
         const sealed = allIcmlBindingsByPage.get(normalized.page.pageKey);
         if (!sealed || stableHash(sealed) !== stableHash(normalized) || routablePageKeys.has(normalized.page.pageKey)) {
-            fail('daily ICML routable poster bindings are not a unique subset of sealed bindings');
+            fail('每日 ICML 可路由 poster 绑定不是封存绑定的唯一子集');
         }
         routablePageKeys.add(normalized.page.pageKey); return normalized;
     }).sort((left, right) => left.page.pageKey.localeCompare(right.page.pageKey));
     if (value.dailyIcmlPosterRoutableBindings.some((binding, index) =>
         binding.page.pageKey !== dailyIcmlPosterRoutableBindings[index].page.pageKey)
         || stableHash(dailyIcmlPosterRoutableBindings) !== value.dailyIcmlPosterRoutableBindingSetSha256) {
-        fail('daily ICML routable poster binding set drifted');
+        fail('每日 ICML 可路由 poster 绑定集发生变化');
     }
     if (value.inputs.length !== 1 || !plain(value.inputs[0]) || typeof value.inputs[0].path !== 'string'
         || !path.isAbsolute(value.inputs[0].path) || !validSha(value.inputs[0].sha256)
         || !Number.isSafeInteger(value.inputs[0].selectedPapers) || value.inputs[0].selectedPapers < 0) {
-        fail('catalog approved conference input descriptor is malformed');
+        fail('目录中已批准会议输入描述符格式错误');
     }
     const paperIds = new Set(); let arxivPapers = 0; let conferencePapers = 0; let arxivPages = 0; const sourceSets = {};
     const entries = value.entries.map((entry, index) => {
         exact(entry, ['paperId', 'sources'], `catalog.entries[${index}]`);
         if (typeof entry.paperId !== 'string' || !Array.isArray(entry.sources) || paperIds.has(entry.paperId)) {
-            fail('catalog entry is malformed or duplicated');
+            fail('目录条目格式错误或重复');
         }
         paperIds.add(entry.paperId);
         if (entry.paperId.startsWith('arxiv:')) {
             if (!ARXIV_ID_RE.test(entry.paperId.slice(6)) || entry.sources.length !== 0) {
-                fail('catalog arXiv entry must have an ID and no retained local source');
+                fail('目录中的 arXiv 条目必须有 ID，且不得带留存本地来源');
             }
             arxivPapers += 1; return { paperId: entry.paperId, sources: [] };
         }
-        if (!entry.paperId.startsWith('conference:') || entry.sources.length !== 1) fail('catalog conference entry is malformed');
+        if (!entry.paperId.startsWith('conference:') || entry.sources.length !== 1) fail('目录中的会议条目格式错误');
         conferencePapers += 1;
         let source;
         try { source = conferenceManifestApi.validateSource(entry.sources[0], entry.paperId); }
-        catch (error) { fail(`catalog conference source binding is invalid: ${error.message}`); }
+        catch (error) { fail(`目录中的会议来源绑定非法：${error.message}`); }
         if (!directEligibleConferenceSource(source, entry.paperId)) {
-            fail('cross-version prior preprint is not an authorized direct writer route');
+            fail('跨版本预印本不是已授权的直接写入路径');
         }
         sourceSets[source.sourceSet] = (sourceSets[source.sourceSet] || 0) + 1;
         return { paperId: entry.paperId, sources: [{ sourceSet: source.sourceSet, provenance: source.provenance,
             metadata: clone(source.metadata), pdf: clone(source.pdf), sourceBindingSha256: source.sourceBindingSha256 }] };
     }).sort((left, right) => left.paperId.localeCompare(right.paperId));
-    if (value.entries.some((entry, index) => entry.paperId !== entries[index].paperId)) fail('catalog entries are unordered');
+    if (value.entries.some((entry, index) => entry.paperId !== entries[index].paperId)) fail('目录条目顺序不对');
     arxivPages = value.scopeBinding.arxivPageCount;
     const expectedSummary = { arxivPapers, arxivPages, singleArxivPages: value.scopeBinding.singleArxivPageCount,
         dailyPrimaryArxivBindings: dailyPrimaryArxivBindings.length,
@@ -419,7 +419,7 @@ function normalizeCatalog(value) {
         conferencePapers, canonicalRecords: entries.length,
         sourceRecords: conferencePapers,
         conferenceSourceSets: Object.fromEntries(Object.entries(sourceSets).sort(([left], [right]) => left.localeCompare(right))) };
-    if (JSON.stringify(canonical(value.summary)) !== JSON.stringify(canonical(expectedSummary))) fail('catalog summary drifted');
+    if (JSON.stringify(canonical(value.summary)) !== JSON.stringify(canonical(expectedSummary))) fail('目录摘要发生变化');
     const arxivPaperIds = new Set(entries.filter(entry => entry.paperId.startsWith('arxiv:')).map(entry => entry.paperId));
     const conferencePaperIds = new Set(entries.filter(entry => entry.paperId.startsWith('conference:')).map(entry => entry.paperId));
     const expectedIcmlRoutableBindings = dailyIcmlPosterRoutableBindings.filter(binding => conferencePaperIds.has(
@@ -431,7 +431,7 @@ function normalizeCatalog(value) {
         || value.scopeBinding.dailyIcmlPosterBindingCount !== dailyIcmlPosterBindings.length
         || value.scopeBinding.dailyIcmlPosterRoutableBindingCount !== expectedIcmlRoutableBindings
         || value.scopeBinding.arxivPageCount !== value.scopeBinding.singleArxivPageCount + dailyPrimaryArxivBindings.length) {
-        fail('catalog scope counts drifted');
+        fail('目录的 scope 计数发生变化');
     }
     return { contract: CONTRACT, version: VERSION, scope: SCOPE, scopeBinding: clone(value.scopeBinding),
         inputs: [clone(value.inputs[0])], summary: expectedSummary, dailyPrimaryArxivBindings,
@@ -443,10 +443,10 @@ function normalizeCatalog(value) {
 }
 
 function safeDirectory(directory, label, create = false) {
-    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} must be absolute`);
+    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} 必须是绝对路径`);
     const absolute = path.resolve(directory);
     if (!fs.existsSync(absolute)) {
-        if (!create) fail(`${label} does not exist`);
+        if (!create) fail(`${label} 不存在`);
         fs.mkdirSync(absolute, { recursive: true, mode: 0o700 });
     }
     const info = fs.lstatSync(absolute);
@@ -465,14 +465,14 @@ function writeCatalog({ catalogRoot, name, catalog } = {}) {
     } catch (error) {
         if (error.code !== 'EEXIST') throw error;
         const existing = conferencePageMappingsApi.readStableFile(filename, 'existing direct v5 catalog');
-        if (!existing.bytes.equals(bytes)) fail(`refuses to overwrite a different scoped local input catalog: ${name}`);
+        if (!existing.bytes.equals(bytes)) fail(`拒绝覆盖不同的限域本地输入目录：${name}`);
         return { status: 'recovered', filename, fileSha256: sha256(bytes), catalog: normalized };
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
 function writeCurrentCatalogPointer({ catalogRoot, catalogName, fileSha256 } = {}) {
     if (!SAFE_NAME_RE.test(String(catalogName || '')) || !validSha(fileSha256)) {
-        fail('current catalog pointer requires a safe v5 catalog name and file SHA');
+        fail('当前目录指针需要安全的 v5 目录名和文件 SHA');
     }
     const root = safeDirectory(catalogRoot, 'catalogRoot', true);
     const target = path.join(root, 'current.json');
@@ -500,7 +500,7 @@ function writeCurrentCatalogPointer({ catalogRoot, catalogName, fileSha256 } = {
 function buildAndWrite(options, overrides = {}) {
     if (!options || typeof options.conferenceManifest !== 'string' || typeof options.inventoryFile !== 'string'
         || typeof options.blogRoot !== 'string') {
-        fail('approved conference manifest, frozen inventory, and blog root are required');
+        fail('必须提供已批准的会议 manifest、冻结清单和 blog 根目录');
     }
     const files = overrides.files || require('../config.js').FILES;
     const catalog = buildScopedCatalog(options);

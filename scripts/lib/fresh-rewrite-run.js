@@ -72,7 +72,7 @@ function consumeSavedAnalysisRecoveryPermission(handle, expected = {}) {
 function paperId(paper) {
     const value = typeof paper === 'string' ? paper : paper?.arxivId || paper?.paper_id || paper?.id;
     const match = String(value || '').match(/^(\d{4}\.\d{4,5})(?:v\d+)?$/);
-    if (!match) throw new Error('Fresh rewrite requires a normalized modern arXiv paper ID');
+    if (!match) throw new Error('新论文重写需要规范化的现代 arXiv 论文 ID');
     return match[1];
 }
 
@@ -85,7 +85,7 @@ function validDate(value) {
 function validateAnalysisIds(ids) {
     if (!Array.isArray(ids) || ids.length === 0 || new Set(ids).size !== ids.length
         || ids.some(id => typeof id !== 'string' || !/^\d{4}\.\d{4,5}$/.test(id))) {
-        throw new Error('--ids requires a non-empty, duplicate-free list of normalized arXiv IDs');
+        throw new Error('--ids 需要一份非空且无重复的规范化 arXiv ID 列表');
     }
     return ids;
 }
@@ -93,7 +93,7 @@ function validateAnalysisIds(ids) {
 function parseRewriteArgs(args) {
     const action = args[0];
     if (!['prepare', 'sources', 'analyze', 'status', 'promote', 'patch', 'signed-patch'].includes(action)) {
-        throw new Error('Use prepare --date DATE, sources|analyze|status|promote --run-id UUID, or patch --run-id UUID --patch NAME.json');
+        throw new Error('用法：prepare --date DATE、sources|analyze|status|promote --run-id UUID，或 patch --run-id UUID --patch NAME.json');
     }
     const options = { action };
     const seen = new Set();
@@ -109,7 +109,7 @@ function parseRewriteArgs(args) {
             continue;
         }
         const value = args[++index];
-        if (!value || value.startsWith('--')) throw new Error(`Missing value for ${flag}`);
+        if (!value || value.startsWith('--')) throw new Error(`${flag} 缺少取值`);
         if (flag === '--date') options.date = value;
         else if (flag === '--run-id') options.runId = value;
         else if (flag === '--patch') options.patchFile = value;
@@ -118,24 +118,24 @@ function parseRewriteArgs(args) {
             options.ids = validateAnalysisIds(value.split(','));
         }
         else {
-            if (!/^[1-5]$/.test(value)) throw new Error('--concurrency must be an integer from 1 to 5');
+            if (!/^[1-5]$/.test(value)) throw new Error('--concurrency 必须是 1 到 5 之间的整数');
             options.concurrency = Number(value);
         }
     }
     if (action === 'prepare') {
-        if (!validDate(options.date) || options.runId || options.concurrency) throw new Error('prepare only accepts --date YYYY-MM-DD');
+        if (!validDate(options.date) || options.runId || options.concurrency) throw new Error('prepare 只接受 --date YYYY-MM-DD');
     } else {
-        if (!UUID_RE.test(options.runId || '') || options.date) throw new Error(`${action} requires --run-id UUID and cannot change the date`);
-        if (options.concurrency && !['sources', 'analyze'].includes(action)) throw new Error(`${action} does not accept --concurrency`);
+        if (!UUID_RE.test(options.runId || '') || options.date) throw new Error(`${action} 需要 --run-id UUID，且不能更改日期`);
+        if (options.concurrency && !['sources', 'analyze'].includes(action)) throw new Error(`${action} 不接受 --concurrency`);
     }
     if (['patch', 'signed-patch'].includes(action)) {
         require('./reader-operator-patch.js').patchPath('/unused-run', options.patchFile);
-    } else if (options.patchFile) throw new Error('Only patch or signed-patch accepts --patch');
+    } else if (options.patchFile) throw new Error('只有 patch 或 signed-patch 接受 --patch');
     return options;
 }
 
 function assertSafeDirectory(directory, create = false) {
-    if (!path.isAbsolute(directory)) throw new Error('Fresh rewrite root must be absolute');
+    if (!path.isAbsolute(directory)) throw new Error('新论文重写根目录必须是绝对路径');
     const absolute = path.resolve(directory);
     let cursor = path.parse(absolute).root;
     for (const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
@@ -153,7 +153,7 @@ function assertSafeDirectory(directory, create = false) {
 }
 
 function runDirectory(rootDir, runId) {
-    if (!UUID_RE.test(runId || '')) throw new Error('Invalid fresh rewrite run ID');
+    if (!UUID_RE.test(runId || '')) throw new Error('新论文重写的 run ID 非法');
     return path.join(path.resolve(rootDir), runId);
 }
 
@@ -187,15 +187,15 @@ function metadataOnly(paper) {
         if (typeof value === 'string') clean[key] = value;
         else if (['authors', 'categories', 'sources'].includes(key) && Array.isArray(value)
             && value.every(item => typeof item === 'string')) clean[key] = value.slice();
-        else throw new Error(`${id} original metadata field ${key} is malformed`);
+        else throw new Error(`${id} 的原始元数据字段 ${key} 格式错误`);
     }
     return clean;
 }
 
 function sortedIds(papers) {
-    if (!Array.isArray(papers) || papers.length === 0) throw new Error('Fresh rewrite paper set must be non-empty');
+    if (!Array.isArray(papers) || papers.length === 0) throw new Error('新论文重写的论文集不能为空');
     const ids = papers.map(paperId);
-    if (new Set(ids).size !== ids.length) throw new Error('Fresh rewrite paper set contains duplicate IDs');
+    if (new Set(ids).size !== ids.length) throw new Error('新论文重写的论文集含有重复 ID');
     return ids.sort();
 }
 
@@ -227,13 +227,13 @@ function dependencies(overrides = {}) {
 
 function assertSourceExpectations(expectations, ids) {
     if (!expectations || stableHash(Object.keys(expectations).sort()) !== stableHash(ids)) {
-        throw new Error('Fresh rewrite source expectations do not cover the exact paper set');
+        throw new Error('新论文重写的来源预期未覆盖确切的论文集');
     }
     for (const id of ids) {
         const expectation = expectations[id];
         if (!isBundleExpectation(expectation)
             && (!SHA_RE.test(expectation?.sourceSha256 || '') || !SHA_RE.test(expectation?.structuredArtifactsSha256 || ''))) {
-            throw new Error(`${id} has no valid expected source hashes or source-bundle generation for this rewrite.`);
+            throw new Error(`${id} 没有本次重写所需的合法预期来源哈希或来源包代际。`);
         }
     }
 }
@@ -241,12 +241,12 @@ function assertSourceExpectations(expectations, ids) {
 function assertAnalysisEnvelope(analysis, run, inputs) {
     if (!analysis || analysis.contract !== ANALYSIS_CONTRACT || analysis.runId !== run.runId
         || analysis.batchDate !== run.date || stableHash(sortedIds(analysis.papers)) !== run.paperSetSha256) {
-        throw new Error('The analysis record has an invalid format or does not match this rewrite run, date, and paper set.');
+        throw new Error('分析记录的格式非法，或与本次重写运行、日期和论文集不匹配。');
     }
     const originals = new Map(inputs.papers.map(paper => [paperId(paper), paper]));
     for (const paper of analysis.papers) {
         const id = paperId(paper);
-        if (stableHash(metadataOnly(paper)) !== stableHash(originals.get(id))) throw new Error(`The original metadata for ${id} differs from the saved rewrite input.`);
+        if (stableHash(metadataOnly(paper)) !== stableHash(originals.get(id))) throw new Error(`${id} 的原始元数据与已保存的重写输入不一致。`);
         const hasGeneratedText = Boolean(paper.analysis || paper.analysisCheckpoint || paper.apiReaderArticle || paper.apiReaderPlan
             || Object.values(paper.analysisStageCheckpoints || {}).some(Boolean));
         if (hasGeneratedText) assertFreshSourceRecordMatchesRun(paper, run);
@@ -279,7 +279,7 @@ function loadRun(runId, deps) {
     const run = readRegularJson(path.join(runDir, 'run.json')).value;
     if (run?.version !== 1 || run.contract !== RUN_CONTRACT || run.runId !== runId || !validDate(run.date)
         || !Array.isArray(run.paperIds) || stableHash(sortedIds(run.paperIds)) !== run.paperSetSha256
-        || run.identitySha256 !== identityHash(run)) throw new Error('The rewrite run has an invalid format or inconsistent run, date, paper-set, or record hashes.');
+        || run.identitySha256 !== identityHash(run)) throw new Error('重写运行的格式非法，或其运行、日期、论文集或记录哈希不一致。');
     assertSourceExpectations(run.sourceExpectations, run.paperIds);
     const inputFile = readRegularJson(path.join(runDir, 'inputs.json'));
     const inputs = inputFile.value;
@@ -288,7 +288,7 @@ function loadRun(runId, deps) {
         throw new Error('Saved rewrite inputs have an invalid format or do not match this run, date, paper set, or input file hash.');
     }
     for (const paper of inputs.papers) {
-        if (Object.keys(paper).some(key => !ORIGINAL_METADATA_FIELDS.includes(key))) throw new Error('Rewrite inputs may contain only original paper metadata fields.');
+        if (Object.keys(paper).some(key => !ORIGINAL_METADATA_FIELDS.includes(key))) throw new Error('重写输入只能包含原始论文元数据字段。');
         metadataOnly(paper);
     }
     const analysisFile = readRegularJson(path.join(runDir, 'analysis.json'));
@@ -298,7 +298,7 @@ function loadRun(runId, deps) {
 }
 
 async function prepareRewrite(options, overrides = {}) {
-    if (!validDate(options.date)) throw new Error('Fresh rewrite prepare requires a valid date');
+    if (!validDate(options.date)) throw new Error('新论文重写 prepare 需要合法的日期');
     const deps = dependencies(overrides);
     const issues = deps.validateData(deps.files);
     if (issues.length) throw new Error(`Current data must pass read-only validation before prepare: ${issues.join('; ')}`);
@@ -311,11 +311,11 @@ async function prepareRewrite(options, overrides = {}) {
     if (filtered?.status !== 'complete' || filtered.batchDate !== options.date || raw?.batchDate !== options.date
         || analysisPayload?.batchDate !== options.date) throw new Error('Raw candidates, filtered papers, or saved analysis do not match the requested date, or filtering is not complete.');
     const ids = sortedIds(filtered.papers);
-    if (stableHash(sortedIds(analysisPayload.papers)) !== stableHash(ids)) throw new Error('The saved analysis and filtered results contain different paper sets.');
+    if (stableHash(sortedIds(analysisPayload.papers)) !== stableHash(ids)) throw new Error('已保存分析与筛选结果的论文集不一致。');
     sortedIds(raw.papers);
     const rawById = new Map(raw.papers.map(paper => [paperId(paper), paper]));
     const papers = ids.map(id => {
-        if (!rawById.has(id)) throw new Error(`${id} selected paper is absent from original raw candidates`);
+        if (!rawById.has(id)) throw new Error(`${id} 选中的论文不在原始候选中`);
         return metadataOnly(rawById.get(id));
     });
     const runId = deps.uuid();
@@ -355,11 +355,11 @@ function sourceState(loaded, deps) {
         const id = paperId(paper);
         const details = deps.readFreshSource(loaded.runDir, paper, loaded.run);
         if (!details) {
-            if (loaded.run.sourceRecords?.[id]) throw new Error(`${id} accepted source cache is missing; refusing an implicit replacement fetch`);
+            if (loaded.run.sourceRecords?.[id]) throw new Error(`${id} 已接受的来源缓存缺失；拒绝隐式重新抓取替代`);
             missing.push(id); continue;
         }
         const descriptor = details.freshSourceDescriptor;
-        if (!descriptor || !SHA_RE.test(descriptor.sourceSnapshotSha256 || '')) throw new Error(`${id} source cache lacks a verified snapshot descriptor`);
+        if (!descriptor || !SHA_RE.test(descriptor.sourceSnapshotSha256 || '')) throw new Error(`${id} 的来源缓存缺少已核验的快照描述符`);
         if (loaded.run.sourceRecords?.[id] && stableHash(loaded.run.sourceRecords[id]) !== stableHash(descriptor)) {
             throw new Error(`${id} source cache changed after being accepted into the fresh run`);
         }
@@ -371,7 +371,7 @@ function sourceState(loaded, deps) {
 function updateRun(loaded, changes, deps) {
     return deps.updateJsonFileLocked(path.join(loaded.runDir, 'run.json'), current => {
         if (current.identitySha256 !== loaded.run.identitySha256 || identityHash(current) !== current.identitySha256) {
-            throw new Error('Fresh run identity changed while a phase was active');
+            throw new Error('某个阶段进行期间新抓运行的身份发生变化');
         }
         return { ...current, ...(typeof changes === 'function' ? changes(current) : changes), updatedAt: deps.now() };
     });
@@ -406,7 +406,7 @@ async function collectRewriteSources(options, overrides = {}) {
                 const id = existing.missing[cursor++];
                 try {
                     const details = await deps.resolveFreshSource(loaded.runDir, byId.get(id), loaded.run);
-                    if (!SHA_RE.test(details?.freshSourceDescriptor?.sourceSnapshotSha256 || '')) throw new Error('Source resolver returned no verified descriptor');
+                    if (!SHA_RE.test(details?.freshSourceDescriptor?.sourceSnapshotSha256 || '')) throw new Error('来源解析器未返回已核验的描述符');
                     records[id] = details.freshSourceDescriptor;
                     updateRun(loaded, { sourceRecords: { ...records } }, deps);
                 } catch (error) { failures.push({ paperId: id, error: String(error.message).slice(0, 1000) }); }
@@ -429,7 +429,7 @@ async function analyzeRewrite(options, overrides = {}) {
         if (loaded.run.status === 'promoted') throw new Error('Promoted fresh run is immutable');
         const selectedIds = options.ids === undefined ? loaded.run.paperIds.slice() : validateAnalysisIds(options.ids).slice();
         if (selectedIds.some(id => !loaded.run.paperIds.includes(id))) {
-            throw new Error('--ids contains a paper outside the fixed fresh run paper set');
+            throw new Error('--ids 含有固定新抓运行论文集之外的论文');
         }
         const selectedSet = new Set(selectedIds);
         const selectedPapers = loaded.analysis.papers.filter(paper => selectedSet.has(paperId(paper)));
@@ -466,7 +466,7 @@ async function analyzeRewrite(options, overrides = {}) {
                             const entries = current.diagnostics?.outerAnalysisEntries || {};
                             const previous = entries[id] || { count: 0 };
                             if (!Number.isSafeInteger(previous.count) || previous.count < 0
-                                || previous.count >= Number.MAX_SAFE_INTEGER) throw new Error('Outer-attempt diagnostic count is invalid');
+                                || previous.count >= Number.MAX_SAFE_INTEGER) throw new Error('外层尝试的诊断计数非法');
                             return { diagnostics: { ...(current.diagnostics || {}), outerAnalysisEntries: {
                                 ...entries, [id]: { count: previous.count + 1, firstAt: previous.firstAt || deps.now(),
                                     lastAt: deps.now(), lastInvocationAttempt: attempt + 1, maxRetriesPerInvocation: maxRetries }
@@ -480,7 +480,7 @@ async function analyzeRewrite(options, overrides = {}) {
                     const current = readRegularJson(analysisPath).value;
                     assertAnalysisEnvelope(current, loaded.run, loaded.inputs);
                     const latest = current.papers.find(item => paperId(item) === paperId(paper));
-                    if (!latest) throw new Error('Fresh run paper disappeared while waiting for its analysis lock');
+                    if (!latest) throw new Error('等待分析锁期间新抓运行的论文消失了');
                     return { paper: { ...latest }, skip: complete(latest) };
                 },
                 onPaperResultLocked: async (paper, result) => {
@@ -535,13 +535,13 @@ async function promoteRewrite(options, overrides = {}) {
         const sources = sourceState(loaded, deps);
         if (sources.missing.length || loaded.analysis.status !== 'complete') throw new Error('Fresh rewrite promotion requires all sources and analysis to be complete');
         if (loaded.analysis.papers.some(paper => paper.readerFactReview?.status === 'pending')) {
-            throw new Error('Operator revised Reader still requires explicit fact review');
+            throw new Error('人工修订过的 Reader 仍需显式的事实复核');
         }
         for (const paper of loaded.analysis.papers) {
-            if (!deps.isSuccessfulAnalysisRecord(paper)) throw new Error(`${paperId(paper)} is not a complete analysis`);
+            if (!deps.isSuccessfulAnalysisRecord(paper)) throw new Error(`${paperId(paper)} 不是完整的分析`);
             assertFreshSourceRecordMatchesRun(paper, loaded.run, sources.records[paperId(paper)]);
         }
-        if (loaded.run.analysisSha256 !== readRegularJson(path.join(loaded.runDir, 'analysis.json')).sha256) throw new Error('Fresh analysis bytes changed after completion');
+        if (loaded.run.analysisSha256 !== readRegularJson(path.join(loaded.runDir, 'analysis.json')).sha256) throw new Error('新抓分析字节在完成之后发生变化');
         const promoted = await deps.promoteRun({ runDir: loaded.runDir, run: loaded.run, analysis: loaded.analysis });
         updateRun(loaded, { status: 'promoted', promotion: promoted }, deps);
         return { runId: loaded.run.runId, ...promoted };

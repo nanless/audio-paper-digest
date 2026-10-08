@@ -50,7 +50,7 @@ function sortJsonKeys(value) {
 }
 const nowIso = value => {
     const date = value === undefined ? new Date() : new Date(value);
-    if (!Number.isFinite(date.getTime())) fail('timestamp is invalid');
+    if (!Number.isFinite(date.getTime())) fail('timestamp 非法');
     return date.toISOString();
 };
 
@@ -68,7 +68,7 @@ function namesFor(authorityName, arxivId) {
         fulltextName: `${stem}-fulltext.txt`, snapshotName: `${stem}-snapshot.json`, receiptName: `${stem}-receipt.json` };
 }
 function safeRoot(root, create = false) {
-    if (typeof root !== 'string' || !path.isAbsolute(root)) fail('authorityRoot must be an absolute configured path');
+    if (typeof root !== 'string' || !path.isAbsolute(root)) fail('authorityRoot 必须是配置好的绝对路径');
     const absolute = path.resolve(root);
     if (!fs.existsSync(absolute)) {
         if (!create) return absolute;
@@ -86,7 +86,7 @@ function readBytes(filename, max = 64 * 1024 * 1024) {
         if (!stat.isFile() || stat.nlink !== 1 || named.isSymbolicLink() || named.dev !== stat.dev
             || named.ino !== stat.ino || stat.size > max) fail(`unsafe or oversized artifact: ${path.basename(filename)}`);
         const bytes = fs.readFileSync(fd);
-        if (bytes.length !== stat.size) fail(`artifact changed while read: ${path.basename(filename)}`);
+        if (bytes.length !== stat.size) fail(`构件在读取过程中发生变化：${path.basename(filename)}`);
         return bytes;
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
@@ -101,7 +101,7 @@ function writeExact(filename, bytes) {
         fs.writeFileSync(fd, payload); fs.fsyncSync(fd);
     } catch (error) {
         if (error.code !== 'EEXIST') throw error;
-        if (!readBytes(filename).equals(payload)) fail(`refuses to overwrite different artifact: ${path.basename(filename)}`);
+        if (!readBytes(filename).equals(payload)) fail(`拒绝覆盖不同的构件：${path.basename(filename)}`);
     } finally { if (fd !== undefined) fs.closeSync(fd); }
     try { fs.chmodSync(filename, 0o600); } catch (error) { if (process.platform !== 'win32') throw error; }
     return sha256(payload);
@@ -110,13 +110,13 @@ function seal(body, field) { return { ...body, [field]: stableHash(body) }; }
 function readCanonicalJson(filename) {
     const bytes = readBytes(filename); let value;
     try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
-    catch (error) { fail(`${path.basename(filename)} is not strict JSON/UTF-8: ${error.message}`); }
-    if (!bytes.equals(prettyBytes(value))) fail(`${path.basename(filename)} is not canonical pretty JSON`);
+    catch (error) { fail(`${path.basename(filename)} 不是严格的 JSON/UTF-8：${error.message}`); }
+    if (!bytes.equals(prettyBytes(value))) fail(`${path.basename(filename)} 不是规范化的美化 JSON`);
     return { value, bytes, sha256: sha256(bytes) };
 }
 function requestFor({ arxivId, authorityName, operationId, now }) {
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(String(operationId || ''))) {
-        fail('operationId must be a UUID v4');
+        fail('operationId 必须是 UUID v4');
     }
     const identity = identityFor(arxivId); const names = namesFor(authorityName, arxivId);
     const body = { contract: REQUEST_CONTRACT, version: VERSION, operationId, paperId: identity.canonicalId,
@@ -129,31 +129,31 @@ function requestFor({ arxivId, authorityName, operationId, now }) {
 function validateRequest(value, expected = {}) {
     const rebuilt = requestFor({ arxivId: value?.arxivId, authorityName: value?.authorityName,
         operationId: value?.operationId, now: value?.requestedAt });
-    if (stableHash(value) !== stableHash(rebuilt) || value.requestSha256 !== rebuilt.requestSha256) fail('request contract or self-SHA drifted');
-    if (expected.arxivId && value.arxivId !== expected.arxivId) fail('request belongs to another arXiv ID');
-    if (expected.authorityName && value.authorityName !== expected.authorityName) fail('request belongs to another authority name');
+    if (stableHash(value) !== stableHash(rebuilt) || value.requestSha256 !== rebuilt.requestSha256) fail('request 的契约或自校验 SHA 发生变化');
+    if (expected.arxivId && value.arxivId !== expected.arxivId) fail('request 属于另一个 arXiv ID');
+    if (expected.authorityName && value.authorityName !== expected.authorityName) fail('request 属于另一个 authority 名称');
     return rebuilt;
 }
 function normalizeFetchedSource(details, arxivId, fetchedAt) {
-    if (!details || typeof details !== 'object' || Array.isArray(details)) fail('official fetch returned no source object');
+    if (!details || typeof details !== 'object' || Array.isArray(details)) fail('官方抓取未返回 source 对象');
     if (Object.keys(details).some(key => /^(?:analysis|parsed$|apiReader|freshRewrite|freshSource)/.test(key))) {
         fail('official source adapter rejects generated analysis or Reader fields');
     }
-    if (!['html', 'pdf'].includes(details.source) || typeof details.text !== 'string') fail('official fetch did not return HTML/PDF full text');
+    if (!['html', 'pdf'].includes(details.source) || typeof details.text !== 'string') fail('官方抓取未返回 HTML/PDF 全文');
     const sourceId = String(details.sourceId || '');
     if (sourceId.replace(/v\d+$/i, '') !== arxivId) fail('official fetch sourceId belongs to another paper');
     let nonWhitespace = 0; for (const character of details.text) if (!/\s/u.test(character)) nonWhitespace += 1;
-    if (nonWhitespace < authorityApi.MIN_FULLTEXT_CHARACTERS) fail('official fetch result is shorter than the authority full-text gate');
+    if (nonWhitespace < authorityApi.MIN_FULLTEXT_CHARACTERS) fail('官方抓取结果短于 authority 全文门槛');
     const structuredArtifacts = details.structuredArtifacts;
     if (!structuredArtifacts || typeof structuredArtifacts !== 'object' || Array.isArray(structuredArtifacts)
         || !Array.isArray(structuredArtifacts.tables) || !Array.isArray(structuredArtifacts.formulas)) {
-        fail('official fetch lacks the public structured source contract');
+        fail('官方抓取缺少公开的结构化来源契约');
     }
     const { payloadSha256, ...artifactBody } = structuredArtifacts;
     if (!/^[a-f0-9]{64}$/.test(String(payloadSha256 || ''))
         || payloadSha256 !== sha256(JSON.stringify(artifactBody))
         || structuredArtifacts.flattenedTextSha256 !== sha256(details.text)) {
-        fail('official fetch structured source hashes do not bind the full text');
+        fail('官方抓取的结构化来源哈希未绑定全文');
     }
     // 规范 JSON 会对键排序；排序之后再按同样的公开来源载荷封存一次，后续按字节复算
     // 时才能核对。
@@ -176,13 +176,13 @@ function normalizeFetchedSource(details, arxivId, fetchedAt) {
             ...(details.readerAuthors === undefined ? {} : { readerAuthors: details.readerAuthors })
         });
     } catch (error) {
-        fail(`official fetch returned non-JSON source metadata: ${error.message}`);
+        fail(`官方抓取返回了非 JSON 的来源元数据：${error.message}`);
     }
     if (!Array.isArray(optional.imageInfos)
         || (optional.readerAuthors !== undefined
             && (!optional.readerAuthors || typeof optional.readerAuthors !== 'object'
                 || (Array.isArray(optional.readerAuthors) && optional.readerAuthors.length !== 0)))) {
-        fail('official fetch returned malformed image/author source metadata');
+        fail('官方抓取返回的图片／作者来源元数据格式错误');
     }
     if (Array.isArray(optional.readerAuthors)) delete optional.readerAuthors;
     const sourceDetails = {
@@ -199,9 +199,9 @@ function normalizeFetchedSource(details, arxivId, fetchedAt) {
     return { text: details.text, observation, sourceDetails };
 }
 function lockOwnerRecord(arxivId, token = crypto.randomUUID()) {
-    if (!identityApi.ARXIV_ID_RE.test(String(arxivId || ''))) fail('lock arxivId must be normalized');
+    if (!identityApi.ARXIV_ID_RE.test(String(arxivId || ''))) fail('锁的 arxivId 必须已规范化');
     if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(token)) {
-        fail('lock token must be a UUID v4');
+        fail('锁 token 必须是 UUID v4');
     }
     const startedAt = new Date().toISOString();
     const body = { contract: LOCK_OWNER_CONTRACT, version: VERSION, arxivId, pid: process.pid,
@@ -220,7 +220,7 @@ function validateLockOwner(value, arxivId) {
         || Number.isNaN(Date.parse(value.startedAt || ''))
         || new Date(value.startedAt).toISOString() !== value.startedAt
         || value.leaseMs !== LOCK_STALE_MS || value.ownerSha256 !== stableHash(body)) {
-        fail('source lock owner evidence is invalid');
+        fail('来源锁持有者证据非法');
     }
     return value;
 }
@@ -230,7 +230,7 @@ function inspectLockDirectory(lockPath, arxivId, label = 'source operation lock'
         fail(`${label} is not a canonical directory`);
     }
     if (process.platform !== 'win32' && (directory.mode & 0o777) !== 0o700) {
-        fail(`${label} permissions must be 0700`);
+        fail(`${label} 权限必须是 0700`);
     }
     const entries = fs.readdirSync(lockPath).sort();
     if (entries.length > 1 || entries.length === 1 && entries[0] !== 'owner.json') {
@@ -250,7 +250,7 @@ function inspectLockDirectory(lockPath, arxivId, label = 'source operation lock'
         bytes = readBytes(ownerPath, 64 * 1024);
         const decoded = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
         const parsed = JSON.parse(decoded);
-        if (!bytes.equals(prettyBytes(parsed))) fail('source lock owner bytes are not canonical');
+        if (!bytes.equals(prettyBytes(parsed))) fail('来源锁持有者字节不是规范形式');
         record = validateLockOwner(parsed, arxivId);
     } catch (error) {
         if (error instanceof ArxivSourceAuthorityError) {
@@ -303,7 +303,7 @@ function removeExactLockDirectory(snapshot, label, options = {}) {
     }
     if (options.requireReclaimable === true
         && !lockSnapshotIsReclaimable(current, options.dependencies || {})) {
-        fail(`${label} renewed or has a live local owner before removal`);
+        fail(`${label} 在删除前已被续期或仍有活跃的本地持有者`);
     }
     if (current.entries.length === 1) fs.unlinkSync(path.join(current.lockPath, 'owner.json'));
     fs.rmdirSync(current.lockPath); syncDirectory(path.dirname(current.lockPath));
@@ -316,7 +316,7 @@ function writeLockOwner(ownerPath, bytes, dependencies = {}) {
         while (offset < payload.length) {
             const written = io.writeSync(fd, payload, offset, payload.length - offset, offset);
             if (!Number.isSafeInteger(written) || written <= 0 || written > payload.length - offset) {
-                fail('short source lock owner write');
+                fail('来源锁持有者写入不完整');
             }
             offset += written;
         }
@@ -415,7 +415,7 @@ function acquireLock(root, arxivId, dependencies = {}) {
             catch (error) { if (error.code === 'ENOENT') continue; throw error; }
             if (!sameLockSnapshot(stale, current, { includeLeaseMtime: true })
                 || !lockSnapshotIsReclaimable(current, dependencies)) {
-                fail('source operation lock changed during stale reclaim');
+                fail('来源操作锁在过期回收期间发生变化');
             }
             removeExactLockDirectory(current, 'source operation lock', {
                 includeLeaseMtime: true,
@@ -425,7 +425,7 @@ function acquireLock(root, arxivId, dependencies = {}) {
             });
         } finally { removeExactLockDirectory(reclaim, 'source lock reclaim marker'); }
     }
-    fail(`source lock acquisition exceeded bounded reclaim attempts: ${arxivId}`);
+    fail(`来源锁获取超出有界回收尝试次数：${arxivId}`);
 }
 function beginLockOperation(handle) {
     if (!handle || typeof handle !== 'object' || !LOCK_HANDLES.has(handle)) {
@@ -436,7 +436,7 @@ function beginLockOperation(handle) {
 function assertLockWritable(handle) {
     if (STOPPING_LOCK_HANDLES.has(handle)) fail('source operation is stopping after process signal');
     if (!handle || typeof handle !== 'object' || !LOCK_HANDLES.has(handle)) {
-        fail('source operation lock is no longer held');
+        fail('来源操作锁已不再持有');
     }
 }
 function releaseLock(handle) {
@@ -461,7 +461,7 @@ function liveProductionHandle(genericHandle, sourceDetails) {
     if (sha256(Buffer.from(details.text, 'utf8')) !== publicSnapshot.fulltextSha256
         || details.structuredArtifacts?.flattenedTextSha256 !== publicSnapshot.fulltextSha256
         || details.sourceId.replace(/v\d+$/i, '') !== publicSnapshot.authority.identity.arxivId) {
-        fail('live official source details do not replay the authority evidence');
+        fail('实时官方来源详情无法重放 authority 证据');
     }
     PRODUCTION_HANDLES.add(handle); PRODUCTION_HANDLE_DATA.set(handle,
         Object.freeze({ genericHandle, publicSnapshot, sourceDetails: Object.freeze(details) }));
@@ -477,7 +477,7 @@ function replayProductionAuthorityHandle(handle) {
     const replayed = authorityApi.replayAuthorityHandle(stored.genericHandle);
     const current = authorityApi.authorityHandleSnapshot(replayed);
     const expected = { ...clone(stored.publicSnapshot), productionAuthorized: false };
-    if (stableHash(current) !== stableHash(expected)) fail('live official authority evidence changed after fetch');
+    if (stableHash(current) !== stableHash(expected)) fail('实时官方 authority 证据在抓取后发生变化');
     return handle;
 }
 
@@ -487,7 +487,7 @@ function readLiveProductionSourceDetails(handle) {
     const details = clone(stored.sourceDetails);
     if (sha256(Buffer.from(details.text, 'utf8')) !== stored.publicSnapshot.fulltextSha256
         || details.structuredArtifacts?.flattenedTextSha256 !== stored.publicSnapshot.fulltextSha256) {
-        fail('live source details changed after official fetch');
+        fail('实时来源详情在官方抓取后发生变化');
     }
     return details;
 }
@@ -510,7 +510,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
         if (fs.existsSync(authorityFile)) {
             const generic = authorityApi.loadAuthorityHandle({ authorityRoot: root, authorityName });
             const snapshot = authorityApi.authorityHandleSnapshot(generic);
-            if (snapshot.authority.paperId !== planned.paperId) fail('existing authority belongs to another arXiv source');
+            if (snapshot.authority.paperId !== planned.paperId) fail('已存在的 authority 属于另一个 arXiv 来源');
             if (!requireLiveAuthorization) return { ...planned, status: 'recovered', authorityHandle: generic, authority: snapshot };
             const fetched = normalizeFetchedSource(
                 await require('../deep-analyzer.js').fetchArxivTextDetailedUncached(arxivId), arxivId, now);
@@ -520,7 +520,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
             const comparable = value => { const copy = clone(value); delete copy.fetchedAt; delete copy.observationSha256; return copy; };
             if (!persistedText.equals(Buffer.from(fetched.text, 'utf8'))
                 || stableHash(comparable(persistedObservation)) !== stableHash(comparable(fetched.observation))) {
-                fail('live official refetch differs from the durable source bundle; create a separately named authority after review');
+                fail('实时官方重新抓取与持久化来源包不一致；请评审后用另一个名称新建 authority');
             }
             const handle = liveProductionHandle(generic, fetched.sourceDetails);
             return { ...planned, status: 'live-verified', authorityHandle: handle,
@@ -537,7 +537,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
         if (fs.existsSync(observationFile) || fs.existsSync(fulltextFile)) {
             if (!fs.existsSync(observationFile) || !fs.existsSync(fulltextFile)) fail('partial source evidence requires operator review');
             observation = readCanonicalJson(observationFile).value; text = new TextDecoder('utf-8', { fatal: true }).decode(readBytes(fulltextFile));
-            if (observation.paperId !== planned.paperId || observation.observationSha256 !== stableHash((({ observationSha256: _, ...body }) => body)(observation))) fail('cached source observation drifted');
+            if (observation.paperId !== planned.paperId || observation.observationSha256 !== stableHash((({ observationSha256: _, ...body }) => body)(observation))) fail('缓存的来源观测发生变化');
         } else {
             const fetched = normalizeFetchedSource(
                 await require('../deep-analyzer.js').fetchArxivTextDetailedUncached(arxivId), arxivId, now);
@@ -548,7 +548,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
         }
         const requestRead = readCanonicalJson(requestFile); const observationRead = readCanonicalJson(observationFile);
         const fulltextBytes = readBytes(fulltextFile); const fulltextSha256 = sha256(fulltextBytes);
-        if (fulltextBytes.toString('utf8') !== text) fail('full text is not stable UTF-8');
+        if (fulltextBytes.toString('utf8') !== text) fail('全文不是稳定的 UTF-8');
         const snapshotBody = { contract: SNAPSHOT_CONTRACT, version: VERSION, paperId: planned.paperId, arxivId,
             officialUrl: planned.officialUrl, requestName: names.requestName, requestFileSha256: requestRead.sha256,
             requestSha256: request.requestSha256, observationName: names.observationName,
@@ -583,7 +583,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
             const comparable = value => { const copy = clone(value); delete copy.fetchedAt; delete copy.observationSha256; return copy; };
             if (!fulltextBytes.equals(Buffer.from(fetched.text, 'utf8'))
                 || stableHash(comparable(observation)) !== stableHash(comparable(fetched.observation))) {
-                fail('live official refetch differs from the recovered durable source bundle');
+                fail('实时官方重新抓取与恢复出的持久化来源包不一致');
             }
             liveSourceDetails = fetched.sourceDetails;
         }
