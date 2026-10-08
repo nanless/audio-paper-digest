@@ -119,7 +119,7 @@ npm run rewrite:source -- analyze --run-id "$rewrite_run_id" --ids 2609.03107 --
 {
   "paperId": "2609.03107",
   "candidateIdentitySha256": "活动候选文件名中的64位identity SHA",
-  "sourceSha256": "本run封存的原文SHA",
+  "sourceSha256": "本运行封存的原文SHA",
   "reason": "指出审查依据、原文位置及修正原因",
   "patch": {
     "version": 1,

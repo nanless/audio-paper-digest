@@ -89,7 +89,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/reader-contract.js` | Node 库 | 规定读者文章的格式要求，按本次证据向模型说明写作要求，并检查不同小节的内容是否近似重复。 |
 | `lib/reader-tables.js` | Node 库 | 将 TABLE 标记与原表行列选择展开为 Markdown 和逐格来源记录，保留表头对应关系，拒绝错位和越界。 |
 | `lib/llm-usage.js` | Node 库 | 规范化真实请求用量，按论文和阶段归因；服务没有提供计费用量时，就记为不可得。 |
-| `lib/fresh-rewrite-run.js` | Node 库 | 从白名单中的原始元数据创建独立重写 run，准备同源文件，只恢复本 run 的分析，并在完整结果验证通过后更新正式数据。 |
+| `lib/fresh-rewrite-run.js` | Node 库 | 从白名单中的原始元数据创建独立重写 run，准备同源文件，只恢复本运行的分析，并在完整结果验证通过后更新正式数据。 |
 | `workspace-role.js` | 入口与共享运行检查 | 用不跟踪入 Git、权限为 `0600` 且绑定仓库真实路径的标记区分 `daily` 与 `history`。`set` 原子保存或显式切换角色，`exec` 在 npm 生产入口启动前检查角色；直接 Node/Python 入口再由公共运行检查核验。 |
 | `lib/fresh-analysis-context.js` | Node 库 | 隔离全新重写 run 的来源文件与深度分析上下文，重新核验来源 SHA；拒绝旧生成正文和其他 run 的检查点。 |
 | `lib/fresh-rewrite-publication.js` | Node 库 | 重写前备份当前正式分析结果和博客基线；新结果完整且来源、基线 CAS 均通过后，才替换正式分析结果。 |
@@ -226,7 +226,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `verify-project.js` | 沙箱外完整离线验证：固定 Hugo、全仓语法、默认/Manual JS 与 Python、只读数据检查；`--quick` 仅语法与数据，不是完整验收。 |
 | `llm-usage-report.js` | 只读汇总真实请求用量，区分服务提供的 usage、不可得状态和字符估算，不推算未经证实的费用。 |
 | `evaluate-reader-efficiency.js` | 在隔离目录中按明确限额开展单篇 Reader 效率实验。默认只预检，`--live` 才调用模型；不覆盖正式分析结果或发布博客。 |
-| `rewrite-from-source.js` | 通过 `prepare/sources/analyze/status/patch/signed-patch/promote` 显式运行同源重写。`patch` 修复失败候选，`signed-patch` 局部修订本 run 的成功 Reader 并要求事实复核；两种补丁都不调用 API，也不接受任意路径。 |
+| `rewrite-from-source.js` | 通过 `prepare/sources/analyze/status/patch/signed-patch/promote` 显式运行同源重写。`patch` 修复失败候选，`signed-patch` 局部修订本运行的成功 Reader 并要求事实复核；两种补丁都不调用 API，也不接受任意路径。 |
 | `paper-rethink-server.js` | 历史独立维护工具；博客已取消本机助手集成，不应为阅读、引用或复制 AI 提问启动此服务。旧接口实现仍保留供历史维护。 |
 | `validate-data-files.js` | 只读核验当前数据、跨文件论文集合、评分及兼容结果的来源记录。 |
 | `build-prompt-history-archive.js` | 从 git 历史抽取存量数据引用过的历史提示词字节，落到 `prompts/history/<sha256>.md`。默认只报告，`--write` 才落盘，可重复运行。 |
@@ -260,7 +260,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | 文件 | 类型 | 职责 |
 |---|---|---|
 | `generate-blog.py` | Python 入口 | 只生成并安装 Hugo Markdown。 |
-| `activate-fresh-publication.js` | Node 入口 | 显式接替同日已提升重写结果的旧发布，持有本 run 操作锁后调用 Python 归档旧凭证；不生成内容或推送。 |
+| `activate-fresh-publication.js` | Node 入口 | 显式接替同日已提升重写结果的旧发布，持有本运行操作锁后调用 Python 归档旧凭证；不生成内容或推送。 |
 | `publication_activation.py` | Python 入口/共享库 | 核验旧提交、博客基线和实时远端，归档六个精确状态文件。pending 状态阻断发布三阶段，支持中断恢复，不修改已提升的论文分析。 |
 | `review-blog.py` | Python 入口 | 审查本批最终页面，执行确定性检查、LLM、图片和 Hugo 审查，通过后生成 receipt。 |
 | `push-blog.py` | Python 入口 | 核验 receipt，提交并推送其允许的改动，确认远端 OID 后规划视觉任务。 |
@@ -306,7 +306,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 
 显式全量原文重写已达到 `promoted`，需要接替同日旧发布时，先运行
 `npm run blog:activate-fresh -- --run-id UUID --dry-run` 查看结果，再去掉 `--dry-run` 执行。
-此入口只处理基线中一个整批和一个单篇旧发布，精确归档其 6 个清单、凭证与通过记录文件到该 run 的
+此入口只处理基线中一个整批和一个单篇旧发布，精确归档其 6 个清单、凭证与通过记录文件到该运行的
 `publication-archive/`。它不修改论文分析、博客页面或图片证据，不调用模型，也不推送。
 
 执行前会核验旧凭证各自的原提交、当前 Hugo 仓库干净 HEAD、实时远端 OID 与身份、基线字节及已提升的
