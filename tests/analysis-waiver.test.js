@@ -9,6 +9,9 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+
+const PROJECT = path.join(__dirname, '..');
 
 const Config = require('../scripts/config.js');
 const waiver = require('../scripts/analysis-waiver.js');
@@ -367,5 +370,60 @@ describe('digest:waive-analysis 入口', () => {
             for (const key of Object.keys(f.files)) Config.FILES[key] = originals[key];
             fs.rmSync(f.directory, { recursive: true, force: true });
         }
+    });
+});
+
+describe('digest:waive-analysis 入口的进程级契约', () => {
+    function useFixtureFiles(f) {
+        const originals = {};
+        for (const key of Object.keys(f.files)) {
+            originals[key] = Config.FILES[key];
+            Config.FILES[key] = f.files[key];
+        }
+        return () => {
+            for (const key of Object.keys(f.files)) Config.FILES[key] = originals[key];
+        };
+    }
+
+    it('理由按 trim 后的长度判定：恰好 10 个字符写入的是 trim 后的文本', () => {
+        const f = fixture();
+        const restore = useFixtureFiles(f);
+        try {
+            // 两侧各两个空格，trim 后正好 10 个字符，正落在门槛上。
+            const payload = cli.main(['--date', DATE, '--paper-id', PAPER, '--reason', '  1234567890  ']);
+            assert.equal(payload.reason, '1234567890');
+            const output = path.join(f.files.analysisWaiverDir, `${DATE}.json`);
+            const onDisk = JSON.parse(fs.readFileSync(output, 'utf8'));
+            assert.equal(onDisk.reason, '1234567890');
+            // 存的是 trim 后的理由，所以 SHA 也必须是按 trim 后重算的那个。
+            const body = { ...onDisk };
+            delete body.waiverSha256;
+            assert.equal(onDisk.waiverSha256, waiver.stableSha256(body));
+
+            // 少一个字符（trim 后 9 个）必须在写盘前就被拦下，目录里仍是刚才那一份。
+            assert.throws(() => cli.main(['--date', DATE, '--paper-id', PAPER, '--reason', '  123456789  ']),
+                /用法: --date YYYY-MM-DD/);
+            assert.deepEqual(fs.readdirSync(f.files.analysisWaiverDir), [`${DATE}.json`]);
+        } finally {
+            restore();
+            fs.rmSync(f.directory, { recursive: true, force: true });
+        }
+    });
+
+    it('参数非法时进程退出码 1、stderr 带入口前缀、不写任何豁免文件', () => {
+        const probeDate = '1999-01-01';
+        const target = path.join(Config.FILES.analysisWaiverDir, `${probeDate}.json`);
+        assert.equal(fs.existsSync(target), false, `测试前置：${target} 不该存在`);
+        const env = { ...process.env };
+        delete env.CODEX_SANDBOX;
+        const result = spawnSync(process.execPath,
+            [path.join(PROJECT, 'scripts', 'waive-analysis-failures.js'),
+                '--date', probeDate, '--paper-id', PAPER, '--reason', '太短'],
+            { cwd: PROJECT, env, encoding: 'utf8' });
+        assert.equal(result.status, 1, `期望退出码 1，实际 ${result.status}：${result.stderr}`);
+        assert.match(result.stderr, /^\[waive-analysis-failures\] /);
+        assert.match(result.stderr, /用法: --date YYYY-MM-DD/);
+        assert.equal(result.stdout, '', '失败时 stdout 不该有成功输出');
+        assert.equal(fs.existsSync(target), false, '失败时留下了豁免文件');
     });
 });

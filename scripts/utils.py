@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Paper Digest 公共工具模块 (Python)
-统一封装：Markdown 处理、分析文本解析、时间处理
+统一封装：Markdown 处理与分析文本解析
 """
 
 import math
