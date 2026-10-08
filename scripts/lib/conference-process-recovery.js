@@ -33,7 +33,12 @@ function classifyFailure(error, now) {
     const code = typeof error?.code === 'string' && /^[A-Z0-9_]{1,100}$/.test(error.code) ? error.code : null;
     let category = 'paper';
     if (/insufficient.balance|GoUsageLimitError|quota.*exhaust|billing|ACCOUNT_POOL.*EXHAUST/i.test(`${code} ${message}`)) category = 'quota';
-    else if (/HTTP\s*(401|403)\b|authentication|invalid.api.key|unauthorized/i.test(message)) category = 'authentication';
+    // 认证失败同样必须同时认中英文：旧记录存英文，当前消息已汉化。
+    // 前半段英文词逐字保持原样，后半段只加「authentication」的对应中文说法「认证失败」。
+    // 有意不加「未授权」（unauthorized 的直译）：它出现在 deep-analyzer 的修复指引正文里，
+    // 那段正文会被拼进「上一次输出被代码拒绝」这条错误消息，加进去会把单篇拒稿误判成
+    // 整批停机的 authentication。
+    else if (/HTTP\s*(401|403)\b|authentication|invalid.api.key|unauthorized|认证失败/i.test(message)) category = 'authentication';
     else if (/HTTP\s*429\b|rate.limit/i.test(message)) category = 'rate_limit';
     // Demo/资源核验只是单篇论文的可选证据。某个 demo 主机不可达时，
     // 这篇论文要能重试，但不能让整个会议批次停下来，
@@ -45,7 +50,11 @@ function classifyFailure(error, now) {
         // 旧失败记录仍可读取；当前分类名称统一使用 tag_review。
         || code === 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED') category = 'tag_review';
     else if (/^(?:ECONNRESET|ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|ETIMEDOUT|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|UND_ERR_HEADERS_TIMEOUT|REQUEST_DEADLINE_EXCEEDED|REQUEST_SOCKET_TIMEOUT)$/.test(code)) category = 'paper';
-    else if (/HTTP\s*5\d\d\b|ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|proxy|CONNECT tunnel/i.test(`${code} ${message}`)) category = 'transport';
+    // 失败分类必须同时认英文和中文消息：旧失败记录里存的是英文，当前消息已汉化。
+    // 前半段英文词必须逐字保持原样，否则旧记录的复算结果会变；
+    // 后半段是英文词的对应中文说法（代理＝proxy，隧道＝CONNECT tunnel）。
+    // 「代理」不能裸写：中文「代理项」指 Unicode surrogate，与 proxy 无关，故用 (?!项) 排除。
+    else if (/HTTP\s*5\d\d\b|ECONNREFUSED|ECONNRESET|ENOTFOUND|ETIMEDOUT|proxy|CONNECT tunnel|代理(?!项)|隧道/i.test(`${code} ${message}`)) category = 'transport';
     else if (/LLM_ACCOUNT_POOL_|model.*not.found|unsupported.model|missing.*API.key|implementation drifted|deep execution config drifted/i.test(`${code} ${message}`)) category = 'configuration';
     else if (code === 'CONFERENCE_SOURCE_UPGRADE_REBIND_REQUIRED') category = 'source_upgrade';
     // 失败分类必须同时认英文和中文消息：旧失败记录里存的是英文，当前消息已汉化。
