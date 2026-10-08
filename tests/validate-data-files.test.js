@@ -6,7 +6,6 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const Config = require('../scripts/config.js');
-const { buildFilterInputSha256 } = require('../scripts/lib/filter-input-contract.js');
 const { parseAnalysis } = require('../scripts/utils.js');
 const {
     EXPERIMENT_TABLE_CONTRACT_VERSION,
@@ -48,9 +47,16 @@ function papersSha256(papers) {
     return crypto.createHash('sha256').update(JSON.stringify(normalize(papers))).digest('hex');
 }
 
-function filterInputSha256(paper) {
-    return buildFilterInputSha256(paper);
-}
+// 冻结的筛选输入 SHA-256，和 tests/filter-input-contract.test.js 里的同名常量一致。
+// 期望值按契约独立算好后写死，故意不调用 buildFilterInputSha256：夹具若调用被测函数，
+// 就会和实现一起漂移，把「只按标题复用筛选决策」这类回归放过去。
+const FROZEN_FILTER_INPUT_SHA256 = Object.freeze({
+    // 这些候选只有 arxivId（有的再加 sources），title/abstract/categories 都是空
+    emptyInput: '6d1dd72f35f609e7ac3be4f1c845dc4b3a3ec6650394bf1fc63123ee52a1e2af',
+    // { arxivId:'2607.00999', title:'Retryable speech paper',
+    //   abstract:'speech recognition benchmark', categories:['cs.SD'] }
+    retryablePaper: 'b7eca888c3985539c04239a18e5c96f5c96f18924d69b1d4bfbfb8118c7ce8be'
+});
 
 // manualSha256 / _manual_hash 都按排序后的键序列化，而 JS 的 Object.keys().sort() 比
 // UTF-16 码元、Python 的 sort_keys=True 比码点。非 BMP 键会让两边排出不同顺序，哈希
@@ -367,7 +373,7 @@ function writeMinimalCurrentBatch(dir) {
         timestamp: TIMESTAMP, ...fingerprints, ...integrity, filterModel: 'model-a', filterPromptHash: 'hash-a',
         filterConfigFingerprint: FILTER_FP,
         stats: { totalCandidates: 1, decided: 1, related: 1, complete: true },
-        decisions: { '2607.00001': { related: true, inputSha256: filterInputSha256(rawPapers[0]) } }
+        decisions: { '2607.00001': { related: true, inputSha256: FROZEN_FILTER_INPUT_SHA256.emptyInput } }
     }));
     fs.writeFileSync(filteredPapers, JSON.stringify({
         timestamp: TIMESTAMP, ...fingerprints, ...integrity, filterModel: 'model-a', filterPromptHash: 'hash-a',
@@ -1214,9 +1220,9 @@ describe('validate-data-files', () => {
                 complete: true
             },
             decisions: {
-                '2607.00001': { id: '2607.00001', related: true, reason: 'audio', parseSource: 'conclusion_line', inputSha256: filterInputSha256(rawPapers[0]) },
-                '2607.00002': { id: '2607.00002', related: true, reason: 'audio', parseSource: 'conclusion_line', inputSha256: filterInputSha256(rawPapers[1]) },
-                '2607.00003': { id: '2607.00003', related: false, reason: 'irrelevant', parseSource: 'conclusion_line', inputSha256: filterInputSha256(rawPapers[2]) }
+                '2607.00001': { id: '2607.00001', related: true, reason: 'audio', parseSource: 'conclusion_line', inputSha256: FROZEN_FILTER_INPUT_SHA256.emptyInput },
+                '2607.00002': { id: '2607.00002', related: true, reason: 'audio', parseSource: 'conclusion_line', inputSha256: FROZEN_FILTER_INPUT_SHA256.emptyInput },
+                '2607.00003': { id: '2607.00003', related: false, reason: 'irrelevant', parseSource: 'conclusion_line', inputSha256: FROZEN_FILTER_INPUT_SHA256.emptyInput }
             }
         }));
 
@@ -1420,7 +1426,7 @@ describe('validate-data-files', () => {
             fallback: true,
             retryable: true,
             decidedAt: TIMESTAMP,
-            inputSha256: filterInputSha256(paper),
+            inputSha256: FROZEN_FILTER_INPUT_SHA256.retryablePaper,
             filterModel: 'model-a',
             filterPromptHash: 'hash-a'
         };

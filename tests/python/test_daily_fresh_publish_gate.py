@@ -162,6 +162,38 @@ class DailyFreshPublishGateTest(unittest.TestCase):
         data_file.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
         return data_file
 
+    def test_canonical_json_bytes_are_frozen(self):
+        """规范形式的字节写死，避免夹具只用被测函数自产自销。
+
+        上面的 _canonical_bytes 会用被测函数写夹具、再用被测函数核对，
+        键序不再排序也测不出来；这里把「排序后的嵌套键序」和两种序列化
+        结果固定成字面量，改动 _daily_fresh_canonical 会立刻失败。
+        """
+        value = {'b': 1, 'a': [2, {'d': 4, 'c': 3}], 's': '中文'}
+        self.assertEqual(list(publish_to_blog._daily_fresh_canonical(value)), ['a', 'b', 's'])
+        self.assertEqual(
+            publish_to_blog._daily_fresh_canonical_json_bytes(value),
+            (
+                '{\n'
+                '  "a": [\n'
+                '    2,\n'
+                '    {\n'
+                '      "c": 3,\n'
+                '      "d": 4\n'
+                '    }\n'
+                '  ],\n'
+                '  "b": 1,\n'
+                '  "s": "中文"\n'
+                '}\n'
+            ).encode('utf-8'),
+        )
+        self.assertEqual(
+            publish_to_blog._daily_fresh_compact_json_bytes(
+                {'b': 1, 'a': [2, {'d': 4, 'c': 3}]},
+            ),
+            b'{"b":1,"a":[2,{"d":4,"c":3}]}',
+        )
+
     def test_runtime_accepts_manifest_authenticated_legacy_artifact_signature(self):
         text = b'legacy sealed full text'
         text_sha = hashlib.sha256(text).hexdigest()
