@@ -23,8 +23,6 @@ from runtime_guard import require_external_runtime
 
 
 PAPER_TOC = re.compile(r"^\s*(\d+)\s+Paper\s+(\d+)\s*$", re.IGNORECASE)
-ABSTRACT = re.compile(r"^\s*ABSTRACT\s*$", re.IGNORECASE)
-EMAIL = re.compile(r"@")
 TOC_RECORD = re.compile(r"^(?P<body>.+?)(?:\s*|\.)?(?P<page>\d{1,3})\s+(?P<authors>[A-ZÀ-ÖØ-Ý].+)$")
 
 

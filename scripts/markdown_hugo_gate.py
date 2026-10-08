@@ -27,9 +27,6 @@ from tutorial_payload_verifier import (
 )
 
 
-LEGACY_TUTORIAL_FORMAT_CONTRACTS = frozenset({
-    'graduate-researcher-tutorial-quality-v1',
-})
 TUTORIAL_SCORE_DIMENSIONS = (
     ('创新', '2'),
     ('技术严谨', '1.5'),

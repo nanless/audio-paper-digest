@@ -126,10 +126,6 @@ function getLayout(projectRoot = PROJECT_ROOT) {
     return { projectRoot: root, current, archive, runtime, logs, controlled, protectedRuntime };
 }
 
-function readRetentionDays(value = process.env.PD_STORAGE_RETENTION_DAYS) {
-    return resolveRetentionSetting(value).days;
-}
-
 // 保留天数有三种来源：调用方显式传值、环境变量、项目 .env。读 .env 失败
 // 要单独报出来，「文件不在或键没写」和「文件在但读不出来」都会落到默认
 // 天数，但后者是配置问题，得让人看见。

@@ -8,7 +8,6 @@ import math
 import re
 import os
 from decimal import Decimal, ROUND_HALF_UP
-from datetime import datetime, timezone, timedelta
 
 from analysis_sections import evaluation_heading_issue, extract_evaluation_section
 
@@ -17,7 +16,6 @@ from tag_catalog import (LABEL_MODE_LEGACY,
                             prune_ancestors, resolve_label_candidates,
                             _validate_tag_catalog_content)
 
-BJ_TZ = timezone(timedelta(hours=8))
 SCORING_RUBRIC_VERSION = 'type-aware-v1'
 DOCUMENT_TYPES = (
     '方法研究',
