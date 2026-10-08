@@ -115,6 +115,15 @@ def build_llm_usage_event(*, protocol, model, request, response=None, status_cod
 
 
 def write_llm_usage_event(event, directory=None):
+    """把一次用量事件写成一份全新的文件，不替换任何已有文件。
+
+    这段写入不能改成公共的「原子替换」helper，语义和前置校验都不同：
+    - 目录链逐级创建为 0700，并逐级反符号链接：任何一级不是真目录就报错。
+      公共 helper 只 `mkdir -p`，不检查中间目录是不是链接。
+    - 文件名是新的 uuid4，属于「只新增、不替换」。用量事件一旦写下就不该被
+      覆盖，公共 helper 的改名替换语义正好相反。
+    - 临时文件以 O_EXCL|O_NOFOLLOW 创建，写完 fsync 再改名。
+    """
     target_dir = Path(directory or LLM_USAGE_DIR).absolute()
     current = Path(target_dir.anchor)
     for part in target_dir.parts[1:]:

@@ -15,6 +15,7 @@ import tempfile
 from pathlib import Path
 
 from log_setup import setup_script_logging
+from path_config import atomic_write_bytes
 from runtime_guard import require_external_runtime
 
 try:
@@ -858,8 +859,11 @@ def save_optimized_png(image, output_path):
             if check.size != (CANVAS_WIDTH, CANVAS_HEIGHT) or check.format != "PNG":
                 raise SpecError("输出 PNG 尺寸或格式门禁失败")
             check.verify()
-        os.chmod(temp_path, 0o600)
-        os.replace(temp_path, output_path)
+        # 改走 path_config 的公共 helper：同目录临时文件 + fsync + 原子改名 +
+        # 目录 fsync。这里原先是裸的 os.replace，写完既不 fsync 文件也不 fsync
+        # 目录，崩溃后可能留下零字节或半截的正式 PNG；替换语义与原来一致，
+        # 权限仍固定 0o600（不继承目标原有权限位）。
+        atomic_write_bytes(output_path, temp_path.read_bytes(), mode=0o600)
     finally:
         temp_path.unlink(missing_ok=True)
     return output_path

@@ -7,6 +7,7 @@ from pathlib import Path
 import json
 import shutil
 import socket
+import stat
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 SCRIPTS = os.path.join(ROOT, 'scripts')
@@ -23,6 +24,7 @@ from path_config import (  # noqa: E402
     PROJECT_ROOT,
     VISUAL_SUMMARY_ASSET_DIR,
     VISUAL_SUMMARY_MANIFEST_DIR,
+    atomic_write_bytes,
     atomic_write_json,
     atomic_write_text,
     backfill_result_path,
@@ -107,6 +109,71 @@ class PathConfigTest(unittest.TestCase):
                 '2026-07-14', current, legacy, archive,
             ), current)
 
+    def test_resolve_publish_input_falls_back_only_when_current_is_absent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            current = root / 'current.json'
+            legacy = root / 'legacy.json'
+            archive = root / 'archive'
+            archived = archive / '2026-07-13' / 'deep-analysis-result.json'
+            archived.parent.mkdir(parents=True)
+            archived.write_text(json.dumps({'papers': [{
+                'arxivId': '2607.00001', 'fetchBatchDate': '2026-07-13',
+            }]}), encoding='utf-8')
+
+            # 当前文件真的不在，才回退到同日归档。
+            self.assertEqual(resolve_deep_analysis_result_for_date(
+                '2026-07-13', current, legacy, archive,
+            ), archived)
+
+    def test_resolve_publish_input_refuses_to_replace_a_corrupt_current_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            current = root / 'current.json'
+            legacy = root / 'legacy.json'
+            archive = root / 'archive'
+            archived = archive / '2026-07-13' / 'deep-analysis-result.json'
+            archived.parent.mkdir(parents=True)
+            archived.write_text(json.dumps({'papers': [{
+                'arxivId': '2607.00001', 'fetchBatchDate': '2026-07-13',
+            }]}), encoding='utf-8')
+
+            # 当前文件在，但坏得读不出来：不能拿归档顶替，否则发布的字节属于归档。
+            current.write_text('{"papers": [', encoding='utf-8')
+            with self.assertRaises(ValueError) as caught:
+                resolve_deep_analysis_result_for_date('2026-07-13', current, legacy, archive)
+            self.assertIn('读不出来', str(caught.exception))
+
+            # 当前文件在、能解析，但批次日期不合法：同样不能顶替。
+            current.write_text(json.dumps({'papers': [{
+                'arxivId': '2607.00009', 'fetchBatchDate': '2026-02-30',
+            }]}), encoding='utf-8')
+            with self.assertRaises(ValueError) as caught:
+                resolve_deep_analysis_result_for_date('2026-07-13', current, legacy, archive)
+            self.assertIn('2607.00009', str(caught.exception))
+
+            # papers 不是数组说明这份记录已经坏了。
+            current.write_text(json.dumps({'papers': {'2607.00009': {}}}), encoding='utf-8')
+            with self.assertRaises(ValueError) as caught:
+                resolve_deep_analysis_result_for_date('2026-07-13', current, legacy, archive)
+            self.assertIn('papers 不是数组', str(caught.exception))
+
+    def test_resolve_publish_input_refuses_a_directory_masquerading_as_current(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            current = root / 'current.json'
+            legacy = root / 'legacy.json'
+            archive = root / 'archive'
+            archived = archive / '2026-07-13' / 'deep-analysis-result.json'
+            archived.parent.mkdir(parents=True)
+            archived.write_text(json.dumps({'papers': [{
+                'arxivId': '2607.00001', 'fetchBatchDate': '2026-07-13',
+            }]}), encoding='utf-8')
+            current.mkdir()
+            with self.assertRaises(ValueError) as caught:
+                resolve_deep_analysis_result_for_date('2026-07-13', current, legacy, archive)
+            self.assertIn('不是文件', str(caught.exception))
+
     def test_atomic_write_replaces_content_and_preserves_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / 'config.env'
@@ -116,6 +183,59 @@ class PathConfigTest(unittest.TestCase):
             self.assertEqual(target.read_text(encoding='utf-8'), 'NEW=2\n')
             self.assertEqual(target.stat().st_mode & 0o777, 0o640)
             self.assertEqual(list(Path(tmp).glob('.config.env.*.tmp')), [])
+
+    def test_atomic_write_bytes_fsyncs_file_and_directory_and_forces_mode(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'cover.png'
+            target.write_bytes(b'OLD')
+            target.chmod(0o644)
+            raw = b'\x89PNG\r\n\x1a\nREST'
+            fsync_kinds = []
+            real_fsync = os.fsync
+
+            def recording_fsync(fd):
+                # 在 fsync 当时判断 fd 指向文件还是目录；返回后 fd 就被关掉了。
+                fsync_kinds.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+                return real_fsync(fd)
+
+            with mock.patch('path_config.os.fsync', side_effect=recording_fsync):
+                atomic_write_bytes(target, raw, mode=0o600)
+
+            self.assertEqual(target.read_bytes(), raw)
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            # 既 fsync 了文件也 fsync 了目录。这条不是恒真：删掉
+            # atomic_write_bytes 里的任何一处 os.fsync 调用都会失败。
+            self.assertIn(False, fsync_kinds)
+            self.assertIn(True, fsync_kinds)
+            self.assertEqual(list(Path(tmp).glob('.cover.png.*.tmp')), [])
+
+    def test_atomic_write_bytes_inherits_mode_without_mode_argument(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'state.bin'
+            target.write_bytes(b'A')
+            target.chmod(0o640)
+            atomic_write_bytes(target, b'B')
+            self.assertEqual(target.read_bytes(), b'B')
+            self.assertEqual(target.stat().st_mode & 0o777, 0o640)
+
+    def test_atomic_write_dir_mode_only_applies_to_new_directories(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / 'fresh' / 'nested' / 'state.bin'
+            atomic_write_bytes(target, b'X', dir_mode=0o700)
+            self.assertEqual(target.read_bytes(), b'X')
+            self.assertEqual((root / 'fresh' / 'nested').stat().st_mode & 0o777, 0o700)
+
+            # 已存在的目录不动：默认行为与加 dir_mode 之前一致。
+            os.chmod(root / 'fresh', 0o755)
+            atomic_write_bytes(target, b'Y', dir_mode=0o700)
+            self.assertEqual((root / 'fresh').stat().st_mode & 0o777, 0o755)
+
+            # 不传 dir_mode 时沿用原来的 mkdir(parents=True) 行为。
+            plain = root / 'plain' / 'state.bin'
+            atomic_write_text(plain, 'A=1\n')
+            self.assertEqual(plain.read_text(encoding='utf-8'), 'A=1\n')
+            self.assertEqual(list(Path(tmp).glob('plain/.state.bin.*.tmp')), [])
 
     def test_atomic_write_failure_keeps_original_and_cleans_temp(self):
         with tempfile.TemporaryDirectory() as tmp:

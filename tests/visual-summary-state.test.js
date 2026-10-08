@@ -1316,6 +1316,14 @@ describe('视觉汇总状态', () => {
                 arxivId: '2607.12345', kind: 'infographic', sourcePath, taskToken: newToken, manifestPath
             });
             assert.strictEqual(complete.papers['2607.12345'].cards.infographic.status, 'complete');
+            // 统一到 writeFileAtomic 后行为不变：资产字节与源 PNG 一致、权限仍是
+            // 强制 0600，且只在同目录改名，不留临时文件。
+            const cardAssetPath = path.resolve(
+                Config.PROJECT_ROOT, complete.papers['2607.12345'].cards.infographic.assetPath);
+            assert.deepStrictEqual(fs.readFileSync(cardAssetPath), fs.readFileSync(sourcePath));
+            if (process.platform !== 'win32') assert.strictEqual(fs.statSync(cardAssetPath).mode & 0o777, 0o600);
+            assert.deepStrictEqual(
+                fs.readdirSync(path.dirname(cardAssetPath)).filter(name => name.endsWith('.tmp')), []);
             assert.throws(() => markVisualSummaryCardFailed({
                 arxivId: '2607.12345', kind: 'infographic', error: 'late failure', taskToken: newToken, manifestPath
             }), /拒绝旧失败回写/);

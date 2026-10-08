@@ -1894,14 +1894,9 @@ function recordVisualSummaryCard({
             Config.FILES.visualSummaryAssetDir
         );
         const relative = path.relative(Config.PROJECT_ROOT, target);
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
-        try {
-            fs.writeFileSync(temp, asset.raw, { mode: 0o600 });
-            fs.renameSync(temp, target);
-        } finally {
-            if (fs.existsSync(temp)) fs.unlinkSync(temp);
-        }
+        // 上面刚拒绝 complete 卡，目标必为新建；强制 0600 与原来手写的
+        // 「同目录临时文件 + rename」完全等价，公共 helper 也只做同目录改名。
+        writeFileAtomic(target, asset.raw, { mode: 0o600 });
         cleanupGeneratedArchiveSource(sourcePath, target, {
             targetDate: current.batchDate,
             rank: paper.rank,

@@ -29,7 +29,14 @@ const {
 // 文件操作
 // ═══════════════════════════════════════════════════════
 
-function writeFileAtomic(filePath, content) {
+// 同目录临时文件 + rename，替换是原子的：读到的要么是旧内容，要么是新内容。
+// 只处理「替换型」写入。带封锁性保证的写入不能走这里：
+// - 要求目标必须是普通单链接非符号链接文件（绑 0644，依赖 os.replace 的替换语义）
+// - 要求逐级目录反符号链接、按 uuid4 追加新文件而不替换
+// 这两类契约见 publish-conference.py 的 replace_exact 与 llm_usage.py 的
+// write_llm_usage_event，各自都需要临时名以外的前置校验。
+function writeFileAtomic(filePath, content, options = {}) {
+    const { mode } = options;
     const dir = path.dirname(filePath);
     if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -44,7 +51,10 @@ function writeFileAtomic(filePath, content) {
         // 运行数据 JSON 里可能含模型响应、论文摘录和恢复用元数据。
         // 因此新建文件默认用私有权限；替换已有文件时
         // 保留它原来的权限位不变，以兼容旧文件。
-        const targetMode = previousMode ?? 0o600;
+        // 传了 mode 就强制用它，不管目标原来是什么权限。视觉资产两类调用用
+        // 这个选项保留原来「一律 0600」的约定：目标通常不存在，但残留的
+        // 中间文件不该把它的权限位带进来。
+        const targetMode = mode ?? previousMode ?? 0o600;
         fs.writeFileSync(tmpPath, content, { encoding: 'utf8', mode: targetMode });
         fs.chmodSync(tmpPath, targetMode);
         fs.renameSync(tmpPath, filePath);

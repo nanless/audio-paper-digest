@@ -12,7 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const Config = require('./config.js');
-const { getBeijingISOString, normalizedId } = require('./utils.js');
+const { getBeijingISOString, normalizedId, writeFileAtomic } = require('./utils.js');
 const { updateJsonFileLocked, readJsonFileStrict, isSuccessfulAnalysisRecord } = require('./analysis-engine.js');
 const {
     validatePngBuffer, extractGeneratedImagePathFromHint, paperBatchDate, validateDate,
@@ -398,14 +398,9 @@ function recordDigestCover({ sourcePath, taskToken, targetDate, manifestPath, qa
             digestCoverAssetPath(current.batchDate),
             Config.FILES.digestCoverAssetDir
         );
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
-        try {
-            fs.writeFileSync(temp, raw, { mode: 0o600 });
-            fs.renameSync(temp, target);
-        } finally {
-            if (fs.existsSync(temp)) fs.unlinkSync(temp);
-        }
+        // 上面刚拒绝 complete 封面，目标必为新建；强制 0600 与原来手写的
+        // 「同目录临时文件 + rename」完全等价，公共 helper 也只做同目录改名。
+        writeFileAtomic(target, raw, { mode: 0o600 });
         // 与论文长图相同：若调用方先把结果复制到归档目录，清理正式封面之外留下的
         // 同批次临时别名，避免目录出现两张封面。
         const source = path.resolve(sourcePath);

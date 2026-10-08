@@ -1,10 +1,12 @@
 import importlib.util
 import os
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from PIL import Image, ImageDraw
 
@@ -227,6 +229,38 @@ class RenderVisualSummaryTests(unittest.TestCase):
         out_of_order["ranking"][5]["rank"] = 9
         with self.assertRaisesRegex(renderer.SpecError, "降序顺序一致"):
             renderer.validate_spec(out_of_order)
+
+    def test_save_optimized_png_delegates_to_atomic_write_bytes_with_fsync(self):
+        seen = []
+        real_write = renderer.atomic_write_bytes
+
+        def spy(path, content, *, mode=None, dir_mode=None):
+            seen.append((Path(path), mode, len(content)))
+            return real_write(path, content, mode=mode, dir_mode=dir_mode)
+
+        fsync_kinds = []
+        real_fsync = os.fsync
+
+        def recording_fsync(fd):
+            fsync_kinds.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+            return real_fsync(fd)
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "render.png"
+            with mock.patch.object(renderer, "CANVAS_WIDTH", 96), \
+                    mock.patch.object(renderer, "CANVAS_HEIGHT", 64), \
+                    mock.patch.object(renderer, "atomic_write_bytes", side_effect=spy), \
+                    mock.patch("path_config.os.fsync", side_effect=recording_fsync):
+                renderer.save_optimized_png(Image.new("RGB", (96, 64), "white"), output)
+            self.assertEqual([(str(path), mode) for path, mode, _ in seen],
+                             [(str(output), 0o600)])
+            # 不是恒真：把 save_optimized_png 里那行改回裸 os.replace，
+            # 这里一次 fsync 都收不到。原来手写的写入完全没有 fsync。
+            self.assertIn(False, fsync_kinds)
+            self.assertIn(True, fsync_kinds)
+            self.assertEqual(output.read_bytes()[:8], b"\x89PNG\r\n\x1a\n")
+            self.assertEqual(output.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(list(Path(directory).glob(".*.tmp")), [])
 
 
 if __name__ == "__main__":

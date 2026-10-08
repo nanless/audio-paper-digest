@@ -108,6 +108,24 @@ class HistoricalDirectReviewTests(unittest.TestCase):
             self.assertEqual(old.read_text(), 'unreadable retained audit')
             self.assertTrue(target.with_name(f'{target.stem}.attempt-008.json').exists())
 
+    def test_atomic_json_dir_mode_defaults_to_private_and_only_touches_new_dirs(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / 'fresh'
+            target = root / 'nested' / 'checkpoint.json'
+            MODULE.atomic_json(target, {'a': 1})
+            self.assertEqual(json.loads(target.read_text(encoding='utf-8')), {'a': 1})
+            self.assertEqual(target.stat().st_mode & 0o777, 0o600)
+            self.assertEqual((root / 'nested').stat().st_mode & 0o777, 0o700)
+
+            # 显式 dir_mode 只影响新建目录；默认值不变，已有目录不动。
+            os.chmod(root, 0o755)
+            other = Path(temporary) / 'other' / 'nested' / 'checkpoint.json'
+            MODULE.atomic_json(other, {'b': 2}, dir_mode=0o755)
+            self.assertEqual(json.loads(other.read_text(encoding='utf-8')), {'b': 2})
+            self.assertEqual((Path(temporary) / 'other' / 'nested').stat().st_mode & 0o777, 0o755)
+            MODULE.atomic_json(target, {'c': 3})
+            self.assertEqual((root).stat().st_mode & 0o777, 0o755)
+
     def test_blocking_issue_cannot_be_cached_as_passed(self):
         with tempfile.TemporaryDirectory() as temporary:
             result = MODULE.checkpoint(temporary, 'page.md', 'text', 0, 'b' * 64, {},

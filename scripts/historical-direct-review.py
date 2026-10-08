@@ -32,9 +32,16 @@ def read_json(path):
     return value
 
 
-def atomic_json(path, value):
+def atomic_json(path, value, *, dir_mode=0o700):
+    """原子写检查点 JSON：临时文件 + fsync + 改名。
+
+    dir_mode 只作用于新建的父目录链，默认 0700，已存在的目录不动，默认行为
+    与加参数前一致。这里刻意保留本地实现而不并到 path_config 的
+    atomic_write_json：检查点必须固定 0600（公共 helper 对新建文件只沿用
+    umask 权限），临时文件也要用 O_EXCL 独占创建。
+    """
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    target.parent.mkdir(parents=True, exist_ok=True, mode=dir_mode)
     raw = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + '\n').encode()
     temporary = target.with_name(f'.{target.name}.{os.getpid()}.tmp')
     with temporary.open('xb') as handle:

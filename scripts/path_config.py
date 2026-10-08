@@ -69,32 +69,47 @@ def resolve_deep_analysis_result_for_date(
     当前/旧版数据只有在恰好是单日期批次时才使用。若它已经翻到别的批次
     或混合批次，则优先用受控的日期归档。没有归档时返回常规的当前/旧版
     路径，让调用方按既有的数据校验逻辑按失败处理。
+
+    只有「文件不在」才回退到归档。文件在却读不出来、或者里面的批次日期
+    不合法，说明这份当前结果已经坏了；此时直接报错，不拿同日归档顶替。
+    顶替的后果是发布器把归档里的旧字节当成目标日期的输入发出去，读文件的
+    人无从察觉。
     """
     target_date = validate_date_component(target_date)
     current = Path(resolve_deep_analysis_result_path(Path(current_path), Path(legacy_path)))
+    if current.exists() and not current.is_file():
+        raise ValueError(f'当前分析结果路径存在但不是文件: {current}')
     if current.is_file():
         try:
             raw = json.loads(current.read_text(encoding="utf-8"))
-            papers = raw.get("papers") if isinstance(raw, dict) else raw
-            dates = set()
-            if isinstance(papers, list):
-                for paper in papers:
-                    if not isinstance(paper, dict):
-                        continue
-                    value = paper.get("fetchBatchDate") or paper.get("batchDate")
-                    if value is None and isinstance(paper.get("fetchedAt"), str):
-                        match = re.fullmatch(
-                            r"(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d"
-                            r"(?:\.\d{3})?\+08:00",
-                            paper["fetchedAt"],
-                        )
-                        value = match.group(1) if match else None
-                    if value is not None:
-                        dates.add(validate_date_component(value))
-            if papers and dates == {target_date}:
-                return current
-        except (OSError, UnicodeError, json.JSONDecodeError, ValueError):
-            pass
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError(f'当前分析结果存在但读不出来: {current}（{exc}）') from exc
+        papers = raw.get("papers") if isinstance(raw, dict) else raw
+        if papers is not None and not isinstance(papers, list):
+            raise ValueError(f'当前分析结果的 papers 不是数组: {current}')
+        dates = set()
+        for paper in papers or []:
+            if not isinstance(paper, dict):
+                continue
+            value = paper.get("fetchBatchDate") or paper.get("batchDate")
+            if value is None and isinstance(paper.get("fetchedAt"), str):
+                match = re.fullmatch(
+                    r"(\d{4}-\d{2}-\d{2})T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d"
+                    r"(?:\.\d{3})?\+08:00",
+                    paper["fetchedAt"],
+                )
+                value = match.group(1) if match else None
+            if value is None:
+                continue
+            try:
+                dates.add(validate_date_component(value))
+            except ValueError as exc:
+                label = paper.get("arxivId") or paper.get("id") or '<未知论文>'
+                raise ValueError(
+                    f'当前分析结果里 {label} 的批次日期不合法: {value!r}（{current}）'
+                ) from exc
+        if papers and dates == {target_date}:
+            return current
     archived = Path(archive_dir) / target_date / "deep-analysis-result.json"
     if archived.is_file():
         return archived
@@ -132,24 +147,38 @@ def backfill_result_path():
     return DATA_DIR / "backfill-result.json"
 
 
-def atomic_write_text(path, content, encoding="utf-8", mode=None):
-    """可靠地替换文本文件，不暴露写了一半的目标文件。"""
+def atomic_write_bytes(path, content, *, mode=None, dir_mode=None):
+    """可靠地替换二进制文件，不暴露写了一半的目标文件。
+
+    只承担「替换型」写入：同目录临时文件 + fsync + 原子改名 + 目录 fsync。
+    带封锁性保证的写入不能走这里，各有独有前置契约，见
+    publish-conference.py 的 replace_exact（目标必须是普通单链接非符号链接、
+    固定 0644）与 llm_usage.py 的 write_llm_usage_event（逐级目录反符号链接、
+    按 uuid4 只新增不替换）。
+
+    mode 为 None 时继承目标原有权限位；新建文件不额外 chmod，沿用进程 umask
+    下的默认权限。dir_mode 只在需要给新建父目录限定权限时传入。
+    """
     target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
+    if dir_mode is None:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        # 只影响新建目录，已存在的目录不动。
+        target.parent.mkdir(parents=True, exist_ok=True, mode=dir_mode)
     existing_mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
     final_mode = mode if mode is not None else existing_mode
+    raw = bytes(content) if isinstance(content, (bytearray, memoryview)) else content
     temp_path = None
     try:
         with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding=encoding,
+            mode="wb",
             dir=target.parent,
             prefix=f".{target.name}.",
             suffix=".tmp",
             delete=False,
         ) as handle:
             temp_path = Path(handle.name)
-            handle.write(content)
+            handle.write(raw)
             handle.flush()
             os.fsync(handle.fileno())
         if final_mode is not None:
@@ -168,6 +197,11 @@ def atomic_write_text(path, content, encoding="utf-8", mode=None):
     finally:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)
+
+
+def atomic_write_text(path, content, encoding="utf-8", mode=None, dir_mode=None):
+    """可靠地替换文本文件，不暴露写了一半的目标文件。"""
+    atomic_write_bytes(path, content.encode(encoding), mode=mode, dir_mode=dir_mode)
 
 
 def atomic_write_json(path, data, *, ensure_ascii=False, indent=2, mode=None):

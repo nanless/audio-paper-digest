@@ -91,6 +91,48 @@ describe('writeFileAtomic', () => {
             fs.rmSync(directory, { recursive: true, force: true });
         }
     });
+
+    it('模式覆盖默认继承，强制成传入的权限位，二进制内容原样落盘', () => {
+        // 视觉资产登记原来手写 writeFileSync(..., { mode: 0o600 }) + rename，
+        // 统一到 helper 后必须继续「一律 0600」，不能继承目标残留下的权限位。
+        // 这条断言不是恒真的：没有 mode 选项时下面两次都会保持 0o644。
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-atomic-mode-'));
+        const filename = path.join(directory, 'cover.png');
+        const raw = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff, 0x10]);
+        try {
+            fs.writeFileSync(filename, Buffer.from([0x00]));
+            fs.chmodSync(filename, 0o644);
+            writeFileAtomic(filename, raw, { mode: 0o600 });
+            assert.deepStrictEqual(fs.readFileSync(filename), raw);
+            if (process.platform !== 'win32') assert.strictEqual(fs.statSync(filename).mode & 0o777, 0o600);
+            // 目标不存在时也强制 0600，而不是退回家进程 umask 的默认权限。
+            const fresh = path.join(directory, 'fresh.png');
+            const previous = process.umask(0o022);
+            try {
+                writeFileAtomic(fresh, raw, { mode: 0o600 });
+            } finally {
+                process.umask(previous);
+            }
+            if (process.platform !== 'win32') assert.strictEqual(fs.statSync(fresh).mode & 0o777, 0o600);
+            // helper 只在同目录改名，不留临时文件。
+            assert.deepStrictEqual(fs.readdirSync(directory).filter(name => name.endsWith('.tmp')), []);
+        } finally {
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+
+    it('不传 mode 时不覆盖已有权限位（默认行为不变）', () => {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-atomic-inherit-'));
+        const filename = path.join(directory, 'state.json');
+        try {
+            fs.writeFileSync(filename, '{"generation":1}\n');
+            fs.chmodSync(filename, 0o644);
+            writeFileAtomic(filename, '{"generation":2}\n');
+            if (process.platform !== 'win32') assert.strictEqual(fs.statSync(filename).mode & 0o777, 0o644);
+        } finally {
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
 });
 
 describe('stripMd', () => {
