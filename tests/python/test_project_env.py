@@ -14,34 +14,7 @@ from project_env import (  # noqa: E402
     get_required_fetch_proxy, load_project_env, resolve_env_file,
     _is_scripts_entrypoint,
 )
-
-
-PROJECT_KEYS = (
-    "PAPER_ANALYZER_API_KEY",
-    "PAPER_ANALYZER_FALLBACK_API_KEYS",
-    "PAPER_ANALYZER_MODEL",
-    "PAPER_ANALYZER_ENDPOINT",
-    "PAPER_DIGEST_TEST_ENV_FILE",
-    "PD_ANALYSIS_CONCURRENCY",
-    "KIMI_API_KEY",
-    "HTTP_PROXY",
-    "HTTPS_PROXY",
-    "http_proxy",
-    "https_proxy",
-)
-
-
-class SavedEnvironment:
-    def __enter__(self):
-        self.saved = {key: os.environ.get(key) for key in PROJECT_KEYS}
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        for key, value in self.saved.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+from project_env_isolation import project_env_scope  # noqa: E402
 
 
 class ProjectEnvTest(unittest.TestCase):
@@ -57,14 +30,14 @@ class ProjectEnvTest(unittest.TestCase):
             self.assertFalse(_is_scripts_entrypoint())
 
     def test_default_path_ignores_inherited_test_env_file(self):
-        with SavedEnvironment(), tempfile.TemporaryDirectory() as tmp:
+        with project_env_scope(), tempfile.TemporaryDirectory() as tmp:
             untrusted = Path(tmp) / ".env"
             untrusted.write_text("PAPER_ANALYZER_API_KEY=untrusted\n", encoding="utf-8")
             os.environ["PAPER_DIGEST_TEST_ENV_FILE"] = str(untrusted)
             self.assertEqual(resolve_env_file(), DEFAULT_ENV_FILE)
 
     def test_explicit_env_path_replaces_and_clears_inherited_project_values(self):
-        with SavedEnvironment(), tempfile.TemporaryDirectory() as tmp:
+        with project_env_scope(), tempfile.TemporaryDirectory() as tmp:
             explicit = Path(tmp) / ".env"
             explicit.write_text(
                 "PAPER_ANALYZER_API_KEY=inner-key\n"
@@ -88,7 +61,7 @@ class ProjectEnvTest(unittest.TestCase):
             self.assertNotIn("PAPER_DIGEST_TEST_ENV_FILE", os.environ)
 
     def test_proxy_is_project_scoped_and_child_env_excludes_credentials(self):
-        with SavedEnvironment(), tempfile.TemporaryDirectory() as tmp:
+        with project_env_scope(), tempfile.TemporaryDirectory() as tmp:
             explicit = Path(tmp) / ".env"
             explicit.write_text(
                 "HTTPS_PROXY=http://project-proxy.invalid\n"
@@ -110,7 +83,7 @@ class ProjectEnvTest(unittest.TestCase):
             self.assertNotIn("SSH_AUTH_SOCK", child_env)
 
     def test_fetch_proxy_requires_project_http_connect_url(self):
-        with SavedEnvironment():
+        with project_env_scope():
             os.environ.pop("HTTPS_PROXY", None)
             os.environ.pop("HTTP_PROXY", None)
             os.environ.pop("https_proxy", None)
@@ -128,7 +101,7 @@ class ProjectEnvTest(unittest.TestCase):
             })
 
     def test_fetch_proxy_accepts_lowercase_project_variable(self):
-        with SavedEnvironment():
+        with project_env_scope():
             os.environ.pop("HTTPS_PROXY", None)
             os.environ.pop("HTTP_PROXY", None)
             os.environ["https_proxy"] = "http://127.0.0.1:7897"

@@ -16,6 +16,7 @@ from test_publish_to_blog import (  # noqa: E402
     llm_api_ephemeral_figure_fixture,
     llm_api_publication_fixture,
 )
+from project_env_isolation import restore_environment_after  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location(
     'historical_page_render', os.path.join(ROOT, 'scripts', 'historical-page-render.py'),
@@ -68,6 +69,8 @@ class HistoricalPageRenderTests(unittest.TestCase):
                 ])
 
     def test_real_publish_helpers_render_reader_formula_and_sidecars(self):
+        # renderer.load_publish_to_blog() 会导入 publish-to-blog.py，读 .env 并写 os.environ。
+        restore_environment_after(self)
         paper = llm_api_publication_fixture()
         sealed_summary = paper['parsed']['summary']
         paper['parsed']['summary'] = 'STALE PARSED SUMMARY'
@@ -138,6 +141,7 @@ class HistoricalPageRenderTests(unittest.TestCase):
         self.assertEqual(result['assets'], [])
 
     def test_direct_arxiv_renderer_keeps_ephemeral_figure_evidence_without_staging_pixels(self):
+        restore_environment_after(self)  # renderer.load_publish_to_blog() 会把 .env 写进 os.environ
         paper = llm_api_ephemeral_figure_fixture()
         figure_url = paper['apiReaderFigures'][0]['url']
         paper['directPaperId'] = f'arxiv:{paper["arxivId"]}'

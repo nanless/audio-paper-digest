@@ -11,6 +11,7 @@ from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[2] / 'scripts' / 'publish-conference.py'
 sys.path.insert(0, str(SCRIPT.parent))
+from project_env_isolation import restore_environment_after  # noqa: E402
 SPEC = importlib.util.spec_from_file_location('publish_conference_tested', SCRIPT)
 M = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(M)
@@ -383,6 +384,9 @@ class ConferencePublishTests(unittest.TestCase):
 
     def test_real_reviewers_propagate_run_account_errors_without_next_page_or_fallback(self):
         from llm_account_pool import LlmAccountAuthError, LlmAccountPoolExhaustedError
+        # M.load_publish_to_blog() 用来取真实的共用审查器，它导入时会读 .env 并写
+        # os.environ；本用例另外设了 PD_BLOG_REVIEW_CONCURRENCY，用完一起还原。
+        restore_environment_after(self)
         # 本用例断言严格的逐页时序（text 错误→零 image 调用 / image 错误→恰一次）——
         # 固定顺序执行；生产默认 PD_BLOG_REVIEW_CONCURRENCY=5 并行（顺序语义不变，
         # 只是页间并发），其余用例不受影响。
@@ -713,6 +717,7 @@ class PreContentReviewV2ReceiptTest(ConferencePublishTests):
 
     def test_v2_receipt_with_failed_content_review_stays_rejected(self):
         # 有 contentReview 但没通过、或逐页记录不符的凭证，任何时候都不放行。
+        restore_environment_after(self)  # M.load_publish_to_blog() 会把 .env 写进 os.environ
         generation = self.v2_generation()
         failed = {'status': 'failed', 'protocol': 'p', 'pages': []}
         with self.assertRaisesRegex(M.ConferencePublicationError, '语义 review'):

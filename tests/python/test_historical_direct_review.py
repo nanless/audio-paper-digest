@@ -10,6 +10,8 @@ from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[2] / 'scripts' / 'historical-direct-review.py'
 sys.path.insert(0, str(SCRIPT.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from project_env_isolation import restore_environment_after  # noqa: E402
 SPEC = importlib.util.spec_from_file_location('historical_direct_review', SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
@@ -42,6 +44,8 @@ class FakePublisher:
 
 class HistoricalDirectReviewTests(unittest.TestCase):
     def test_real_publish_config_error_stops_review_before_second_page(self):
+        # load_publish_to_blog() 导入 publish-to-blog.py 时会读 .env 并写 os.environ。
+        restore_environment_after(self)
         publisher = MODULE.load_publish_to_blog()
         from publish_common import LlmAccountPoolConfigError
         with tempfile.TemporaryDirectory() as temporary:

@@ -14,7 +14,9 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'scripts'))
-import conference_publication_gate as gate
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import conference_publication_gate as gate  # noqa: E402
+from project_env_isolation import restore_environment_after  # noqa: E402
 
 spec = importlib.util.spec_from_file_location('conference_publisher_test', ROOT / 'scripts/publish-conference.py')
 publisher = importlib.util.module_from_spec(spec)
@@ -234,6 +236,9 @@ class GitPublicationTest(unittest.TestCase):
             publisher.export_baseline(self.blog, missing_base, output)
 
     def prepare_flow(self):
+        # publisher.load_publish_to_blog() 导入 publish-to-blog.py 时会读 .env 并写
+        # os.environ；调用方是真实用例，用完还给进程原来的环境。
+        restore_environment_after(self)
         self.cid, self.pid = 'test-2026', '11111111-1111-4111-8111-111111111111'
         source = self.root / 'source.md'
         source.write_bytes(b'approved')

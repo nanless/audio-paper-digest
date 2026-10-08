@@ -8,7 +8,8 @@ from types import SimpleNamespace
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
-import publication_activation as activation
+import publication_activation as activation  # noqa: E402
+from project_env_isolation import restore_environment_after  # noqa: E402
 
 
 class ActivationTransactionTest(unittest.TestCase):
@@ -134,6 +135,10 @@ class ActivationTransactionTest(unittest.TestCase):
             with self.assertRaises(ValueError): activation.assert_no_pending(current, intent['date'], run.parent)
 
     def test_shared_publication_lock_blocks_all_stage_bodies(self):
+        # publish-to-blog.py 在导入时就调用 load_project_env()，会把仓库 .env
+        # 写进 os.environ。这个用例是进程内加载它，用完必须还原，否则
+        # PD_WORKSPACE_ALLOW_CROSS_ROLE 之类的开关会漏给后面的用例。
+        restore_environment_after(self)
         from blog_entry_loader import load_publish_to_blog
         module = load_publish_to_blog()
         with tempfile.TemporaryDirectory() as tmp:

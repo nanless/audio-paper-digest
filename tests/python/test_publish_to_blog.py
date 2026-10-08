@@ -32,9 +32,13 @@ from publish_common import (  # noqa: E402
 )
 import markdown_hugo_gate  # noqa: E402
 import tutorial_payload_verifier  # noqa: E402
+from project_env_isolation import project_env_scope  # noqa: E402
 SPEC = importlib.util.spec_from_file_location('publish_to_blog', MODULE_PATH)
 publish_to_blog = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(publish_to_blog)
+# publish-to-blog.py 的第一行就是 load_project_env()，会把仓库 .env 写进
+# os.environ。用例需要它按 .env 初始化，但 .env 不该留在进程环境里。
+with project_env_scope():
+    SPEC.loader.exec_module(publish_to_blog)
 REVIEW_SPEC = importlib.util.spec_from_file_location(
     'review_blog_for_publish_test', os.path.join(ROOT, 'scripts', 'review-blog.py'),
 )

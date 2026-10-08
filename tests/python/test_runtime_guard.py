@@ -81,12 +81,15 @@ class ExternalRuntimeGuardTest(unittest.TestCase):
                 'workspaceRealpath': str(root),
             }), encoding='utf-8')
             marker.chmod(0o600)
-            require_workspace_role('daily', root)
-            with self.assertRaisesRegex(ExternalRuntimeRequired, 'role=history'):
-                require_workspace_role('history', root)
-            with self.assertRaisesRegex(ExternalRuntimeRequired, 'role=history'):
-                require_external_runtime(
-                    'history-inventory.py', root, enforce_workspace_role=True)
+            # 这个临时工作区没有 .env，跨角色开关只能来自进程环境。清干净，
+            # 免得别的用例（哪怕是同进程里跑过的）留下的 PD_* 变量改变判断。
+            with mock.patch.dict(os.environ, {}, clear=True):
+                require_workspace_role('daily', root)
+                with self.assertRaisesRegex(ExternalRuntimeRequired, 'role=history'):
+                    require_workspace_role('history', root)
+                with self.assertRaisesRegex(ExternalRuntimeRequired, 'role=history'):
+                    require_external_runtime(
+                        'history-inventory.py', root, enforce_workspace_role=True)
 
 
     def test_cross_role_switch_allows_daily_running_history_only(self):

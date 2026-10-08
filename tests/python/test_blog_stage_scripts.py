@@ -18,6 +18,8 @@ MANUAL_SCRIPTS = ROOT / 'manual' / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(MANUAL_SCRIPTS))
 
+from project_env_isolation import project_env_scope  # noqa: E402
+
 
 def load_script(name, root=SCRIPTS):
     path = root / name
@@ -34,7 +36,10 @@ plan_visuals = load_script('plan-post-publish-visuals.py')
 assemble_manual_review = load_script(
     'assemble-manual-review-attestation.py', MANUAL_SCRIPTS,
 )
-publish_module = load_script('publish-to-blog.py')
+# publish-to-blog.py 导入时会把仓库 .env 灌进 os.environ；这里只是借它的实现，
+# 不要把 .env 留在进程环境里给后面的用例。
+with project_env_scope():
+    publish_module = load_script('publish-to-blog.py')
 
 
 class BlogStageEntryTest(unittest.TestCase):
