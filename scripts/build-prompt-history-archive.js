@@ -166,18 +166,59 @@ function readExisting(file) {
     }
 }
 
-function writeArchive(entries) {
-    fs.mkdirSync(HISTORY_DIR, { recursive: true });
+// 归档文件名就是内容 SHA，写到一半被中断会留下一个文件名与内容不符的 <sha>.md。
+// 所以先写临时文件并 fsync，再 rename 到位；目录也 fsync 一次，让改名在断电后还在。
+// 替换已有文件时保留它原来的权限位（归档现在是 0644），新文件用 0600。
+function writeArchiveFile(file, bytes) {
+    const directory = path.dirname(file);
+    const temporary = path.join(directory,
+        `.${path.basename(file)}.${process.pid}.${crypto.randomUUID()}.tmp`);
+    let mode = 0o600;
+    try {
+        const stat = fs.lstatSync(file);
+        if (stat.isFile()) mode = stat.mode & 0o777;
+    } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+    }
+    try {
+        const fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT
+            | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, mode);
+        try {
+            fs.writeFileSync(fd, bytes);
+            fs.fsyncSync(fd);
+        } finally {
+            fs.closeSync(fd);
+        }
+        fs.renameSync(temporary, file);
+    } catch (error) {
+        fs.rmSync(temporary, { force: true });
+        throw error;
+    }
+    try {
+        const directoryFd = fs.openSync(directory, fs.constants.O_RDONLY);
+        try {
+            fs.fsyncSync(directoryFd);
+        } finally {
+            fs.closeSync(directoryFd);
+        }
+    } catch (error) {
+        // 目录 fsync 在少数文件系统上不被支持，但文件已经 rename 到位了。
+        if (!['EINVAL', 'EPERM', 'EISDIR'].includes(error.code)) throw error;
+    }
+}
+
+function writeArchive(entries, directory = HISTORY_DIR) {
+    fs.mkdirSync(directory, { recursive: true });
     let written = 0;
     let unchanged = 0;
     for (const entry of entries) {
-        const file = path.join(HISTORY_DIR, `${entry.sha256}.md`);
+        const file = path.join(directory, `${entry.sha256}.md`);
         const existing = readExisting(file);
         if (existing && existing.equals(entry.bytes)) {
             unchanged += 1;
             continue;
         }
-        fs.writeFileSync(file, entry.bytes);
+        writeArchiveFile(file, entry.bytes);
         written += 1;
     }
     return { written, unchanged };
@@ -226,4 +267,4 @@ if (require.main === module) {
     main();
 }
 
-module.exports = { main, collectArchiveEntries, HISTORY_DIR };
+module.exports = { main, collectArchiveEntries, writeArchive, writeArchiveFile, HISTORY_DIR };

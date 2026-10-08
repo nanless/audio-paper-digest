@@ -6,6 +6,10 @@
 //
 // 这是纯加法：只有当声明的 SHA 与当前文件（含 -v2）都不符时才会查归档；查不到就返回
 // null，调用方保持原行为。归档本身不进任何哈希清单，文件名就是整文件字节的 SHA-256。
+//
+// 文件名和内容必须对得上才认。写归档时被中断会留下内容不全、却仍顶着那个 SHA 名字的
+// <sha>.md；只看文件名就会把半截内容当成历史提示词发出去。所以每次读取都重算一遍 SHA，
+// 不符就当作没有这份归档，返回 null 让调用方走原来的兜底。
 
 const fs = require('fs');
 const path = require('path');
@@ -35,56 +39,62 @@ function promptTemplateSha256(text, contractVersion = '') {
         .digest('hex');
 }
 
-let wholeFileIndex = null;
+const wholeFileIndexes = new Map();
 const templateIndex = new Map();
 
-function historyFileIndex() {
-    if (wholeFileIndex) return wholeFileIndex;
+// directory 默认是 prompts/history/。测试把它指到临时目录，就不用往真归档里塞坏文件。
+function historyFileIndex(directory = HISTORY_DIR) {
+    const cached = wholeFileIndexes.get(directory);
+    if (cached) return cached;
     const index = new Map();
     let names = [];
     try {
-        names = fs.readdirSync(HISTORY_DIR);
+        names = fs.readdirSync(directory);
     } catch (_error) {
         names = [];
     }
     for (const name of names) {
         const match = HISTORY_FILE_RE.exec(name);
-        if (match) index.set(match[1], path.join(HISTORY_DIR, name));
+        if (match) index.set(match[1], path.join(directory, name));
     }
-    wholeFileIndex = index;
+    wholeFileIndexes.set(directory, index);
     return index;
 }
 
-// 按整文件字节 SHA 取归档字节（文件名即该 SHA）。
-function historicalPromptBytesForSha256(sha256) {
-    const value = String(sha256 || '').toLowerCase();
-    if (!SHA256_RE.test(value)) return null;
-    const file = historyFileIndex().get(value);
-    if (!file) return null;
+// 读一份归档并核对其整文件 SHA。文件名声明什么，内容就必须是什么。
+function archivedBytes(file, expectedSha256) {
+    let bytes;
     try {
-        return fs.readFileSync(file);
+        bytes = fs.readFileSync(file);
     } catch (_error) {
         return null;
     }
+    return sha256Buffer(bytes) === expectedSha256 ? bytes : null;
+}
+
+// 按整文件字节 SHA 取归档字节（文件名即该 SHA，且要复核）。
+function historicalPromptBytesForSha256(sha256, directory = HISTORY_DIR) {
+    const value = String(sha256 || '').toLowerCase();
+    if (!SHA256_RE.test(value)) return null;
+    const file = historyFileIndex(directory).get(value);
+    if (!file) return null;
+    return archivedBytes(file, value);
 }
 
 // 按首块模板 SHA 取归档字节。模板哈希取决于记录声明的版本号，所以这里逐份归档文件
-// 重算首块模板哈希；命中即返回那份原始字节。
-function historicalPromptTemplateBytesForSha256(sha256, contractVersion = '') {
+// 重算首块模板哈希；命中即返回那份原始字节。整文件 SHA 对不上的文件直接跳过——首块
+// 模板哈希只覆盖第一个围栏块，文件被截掉尾巴时它照样能对上。
+function historicalPromptTemplateBytesForSha256(sha256, contractVersion = '', directory = HISTORY_DIR) {
     const value = String(sha256 || '').toLowerCase();
     if (!SHA256_RE.test(value)) return null;
-    const cacheKey = `${value}:${String(contractVersion || '')}`;
+    const cacheKey = `${directory}:${value}:${String(contractVersion || '')}`;
     if (templateIndex.has(cacheKey)) return templateIndex.get(cacheKey);
     let found = null;
-    for (const file of historyFileIndex().values()) {
-        let text;
-        try {
-            text = fs.readFileSync(file, 'utf8');
-        } catch (_error) {
-            continue;
-        }
-        if (promptTemplateSha256(text, contractVersion) === value) {
-            found = fs.readFileSync(file);
+    for (const [wholeSha256, file] of historyFileIndex(directory)) {
+        const bytes = archivedBytes(file, wholeSha256);
+        if (!bytes) continue;
+        if (promptTemplateSha256(bytes.toString('utf8'), contractVersion) === value) {
+            found = bytes;
             break;
         }
     }
@@ -94,7 +104,7 @@ function historicalPromptTemplateBytesForSha256(sha256, contractVersion = '') {
 
 // 统一的入口：先看当前路径与同阶段的 -v2 路径的字节是否就是声明的 SHA，都不是再到
 // 归档里取。stage 只用于解析当前路径，取不到就返回 null。
-function promptBytesForSha256(stage, sha256) {
+function promptBytesForSha256(stage, sha256, directory = HISTORY_DIR) {
     const value = String(sha256 || '').toLowerCase();
     if (!SHA256_RE.test(value)) return null;
     let promptFilePathForContract = null;
@@ -120,11 +130,13 @@ function promptBytesForSha256(stage, sha256) {
             if (sha256Buffer(bytes) === value) return bytes;
         } catch (_error) { /* 路径不存在 */ }
     }
-    return historicalPromptBytesForSha256(value);
+    // 归档里只有整文件 SHA 复核通过的文件才会返回；复核不过就是 null，
+    // 调用方照原样判定「声明的字节已经不存在」。
+    return historicalPromptBytesForSha256(value, directory);
 }
 
 function resetCache() {
-    wholeFileIndex = null;
+    wholeFileIndexes.clear();
     templateIndex.clear();
 }
 
