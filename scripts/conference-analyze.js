@@ -14,7 +14,7 @@ function pairs(rest, allowed) {
     const values = {};
     for (let index = 0; index < rest.length; index += 2) {
         if (!allowed.includes(rest[index]) || rest[index + 1] === undefined || Object.hasOwn(values, rest[index])) {
-            throw new Error('Invalid conference analysis arguments');
+            throw new Error('会议分析参数不合法：只接受成对的已知选项，同一个选项也不能重复');
         }
         values[rest[index]] = rest[index + 1];
     }
@@ -44,16 +44,16 @@ function parseArgs(argv) {
             '--execution', values['--analysis-run']]);
         return { action, ...authority, analysisRunId: values['--analysis-run'], concurrency: Number(values['--concurrency'] || 1) };
     }
-    throw new Error('Use conference:analyze prepare|analyze|status');
+    throw new Error('用法：conference:analyze prepare|analyze|status');
 }
 async function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('conference-analyze.js');
     if (process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE === '1') {
-        throw new Error('New-conference analysis must use conference:new:process');
+        throw new Error('新建会议的分析要走 conference:new:process');
     }
     const options = parseArgs(argv); const files = runtime.files || Config.FILES;
     for (const key of ['conferenceAnalysisDir', 'conferenceSourceCacheDir']) {
-        if (typeof files[key] !== 'string' || !path.isAbsolute(files[key])) throw new Error(`${key} must be configured absolute path`);
+        if (typeof files[key] !== 'string' || !path.isAbsolute(files[key])) throw new Error(`配置项 ${key} 必须是绝对路径`);
     }
     const api = runtime.adapter || adapter; let result;
     if (options.action === 'prepare') {

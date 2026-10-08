@@ -16,32 +16,32 @@ const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 function parseArgs(args) {
     const [command, ...rest] = args;
     if (!['validate-ledger', 'verify-ledger', 'validate-run'].includes(command)) {
-        throw new Error('Use validate-ledger|verify-ledger --ledger NAME.json, or validate-run --run NAME.json --ledger NAME.json');
+        throw new Error('命令写法不对：validate-ledger 和 verify-ledger 要接 --ledger NAME.json，validate-run 还要接 --run NAME.json');
     }
     if (command !== 'validate-run') {
         if (rest.length !== 2 || rest[0] !== '--ledger' || !SAFE_JSON_NAME.test(String(rest[1] || ''))) {
-            throw new Error('Use validate-ledger|verify-ledger --ledger NAME.json');
+            throw new Error('命令写法不对：validate-ledger 和 verify-ledger 只接 --ledger NAME.json，且名字得是配置目录下的直接 JSON 文件名');
         }
         return { command, ledgerName: rest[1] };
     }
     if (rest.length !== 4 || rest[0] !== '--run' || rest[2] !== '--ledger'
         || !SAFE_JSON_NAME.test(String(rest[1] || '')) || !SAFE_JSON_NAME.test(String(rest[3] || ''))) {
-        throw new Error('Use validate-run --run NAME.json --ledger NAME.json');
+        throw new Error('命令写法不对：validate-run 要接 --run NAME.json --ledger NAME.json，两个名字都得是配置目录下的直接 JSON 文件名');
     }
     return { command, runName: rest[1], ledgerName: rest[3] };
 }
 
 function safeRuntimeFile(root, name) {
     if (typeof root !== 'string' || !path.isAbsolute(root) || !SAFE_JSON_NAME.test(String(name || ''))) {
-        throw new Error('Conference runtime file selection is invalid');
+        throw new Error('会议运行目录和文件名不合法：目录要写成绝对路径，文件名要是不带子目录的 JSON 名');
     }
     const safeRoot = path.resolve(root);
     const stat = fs.lstatSync(safeRoot);
     if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(safeRoot) !== safeRoot) {
-        throw new Error(`Unsafe conference runtime directory: ${safeRoot}`);
+        throw new Error(`会议运行目录不安全：${safeRoot} 不是普通目录，或者是符号链接，或者路径没规范化`);
     }
     const target = path.resolve(safeRoot, name);
-    if (path.dirname(target) !== safeRoot) throw new Error('Conference runtime file escapes its configured directory');
+    if (path.dirname(target) !== safeRoot) throw new Error(`会议运行文件名越出配置目录：${name} 解析后不在 ${safeRoot} 里`);
     return target;
 }
 

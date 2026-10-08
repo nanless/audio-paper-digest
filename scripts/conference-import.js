@@ -17,7 +17,7 @@ const USAGE = '--dry-run|--apply --import NAME.json --receipt NAME.json --filter
 
 function parseCommand(argv) {
     const [mode, ...rest] = argv;
-    if (!['--dry-run', '--apply'].includes(mode)) throw new Error(`First argument must be --dry-run or --apply. ${USAGE}`);
+    if (!['--dry-run', '--apply'].includes(mode)) throw new Error(`第一个参数只能是 --dry-run 或 --apply。用法：${USAGE}`);
     const options = {};
     for (let index = 0; index < rest.length; index += 2) {
         const flag = rest[index]; const value = rest[index + 1];
@@ -26,16 +26,16 @@ function parseCommand(argv) {
         options[flag] = value;
     }
     for (const flag of ['--import', '--receipt', '--filter', '--catalog', '--report', '--updated-at', '--ledger-output']) {
-        if (!options[flag]) throw new Error(`Missing required argument: ${flag}`);
+        if (!options[flag]) throw new Error(`缺少必需参数：${flag}`);
     }
     for (const flag of ['--import', '--receipt', '--catalog', '--report', '--ledger-output']) {
-        if (!stagingApi.SAFE_JSON_NAME.test(options[flag])) throw new Error(`${flag} must be a safe direct JSON filename`);
+        if (!stagingApi.SAFE_JSON_NAME.test(options[flag])) throw new Error(`${flag} 必须是不带子目录的 JSON 文件名`);
     }
-    if (!filterApi.UUID_RE.test(options['--filter'])) throw new Error('--filter must be a canonical UUID v4');
+    if (!filterApi.UUID_RE.test(options['--filter'])) throw new Error('--filter 必须是规范的 UUID v4');
     const date = new Date(options['--updated-at']);
     if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(options['--updated-at'])
         || Number.isNaN(date.getTime()) || date.toISOString() !== options['--updated-at']) {
-        throw new Error('--updated-at must be canonical UTC ISO time');
+        throw new Error('--updated-at 必须是规范 UTC 时间，例如 2026-09-06T00:00:00.000Z');
     }
     return { apply: mode === '--apply', importName: options['--import'], receiptName: options['--receipt'],
         filterId: options['--filter'], catalogName: options['--catalog'], reportName: options['--report'],
@@ -46,21 +46,21 @@ function requireFiles(files) {
     for (const field of ['conferenceStagingDir', 'conferenceStagingSourceDir', 'conferenceDiscoveryCatalogDir',
         'conferenceDiscoveryReportDir', 'conferenceFiltersDir', 'conferenceSourceCacheDir', 'conferenceSourceLedgerDir']) {
         if (typeof files?.[field] !== 'string' || !path.isAbsolute(files[field])) {
-            throw new Error(`Configured ${field} must be an absolute directory`);
+            throw new Error(`配置项 ${field} 必须是绝对路径目录`);
         }
     }
     return files;
 }
 
 function importReceiptNameFor(ledgerName) {
-    if (!stagingApi.SAFE_JSON_NAME.test(String(ledgerName || ''))) throw new Error('ledgerName must be a safe direct JSON filename');
+    if (!stagingApi.SAFE_JSON_NAME.test(String(ledgerName || ''))) throw new Error('ledgerName 必须是不带子目录的 JSON 文件名');
     return ledgerName.replace(/\.json$/, '.import-receipt.json');
 }
 
 function reserveOutputPair(ledgerDir, ledgerName, ledgerBytes, receipt, receiptName) {
     const ledgerFile = stagingApi.safeDirectJson(ledgerDir, ledgerName, { output: true });
     const receiptFile = stagingApi.safeDirectJson(ledgerDir, receiptName, { output: true });
-    if (ledgerFile === receiptFile) throw new Error('ledger and import receipt outputs must differ');
+    if (ledgerFile === receiptFile) throw new Error('账目文件和导入凭证不能写成同一个文件');
     const receiptBytes = Buffer.from(`${JSON.stringify(receipt, null, 2)}\n`, 'utf8');
     const specs = [[ledgerFile, ledgerBytes], [receiptFile, receiptBytes]]; const opened = [];
     try {

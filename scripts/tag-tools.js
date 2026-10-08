@@ -31,24 +31,24 @@ function previewCatalogVersion(value, format) {
 
 function parseArgs(args) {
     const [command, ...rest] = args;
-    if (!['validate', 'serve'].includes(command)) throw new Error('Use tags:validate or tags:serve [--port 8766]');
+    if (!['validate', 'serve'].includes(command)) throw new Error('用法：tags:validate，或 tags:serve [--port 8766]');
     let port = 8766;
     if (rest.length) {
         if (command !== 'serve' || rest.length !== 2 || rest[0] !== '--port'
-            || !/^[1-9]\d*$/.test(rest[1])) throw new Error('Only serve --port INTEGER is supported');
+            || !/^[1-9]\d*$/.test(rest[1])) throw new Error('serve 只接受 --port 加一个正整数');
         port = Number(rest[1]);
     }
-    if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new Error('Port must be between 1024 and 65535');
+    if (!Number.isSafeInteger(port) || port < 1024 || port > 65535) throw new Error('端口要在 1024 到 65535 之间');
     return { command, port };
 }
 
 function readSafeFile(filename, limit = 32 * 1024 * 1024) {
     const absolute = path.resolve(filename);
-    if (fs.realpathSync(absolute) !== absolute) throw new Error('Preview files must not traverse symlinks');
+    if (fs.realpathSync(absolute) !== absolute) throw new Error(`预览文件不能经过符号链接：${absolute} 不是它的真实路径`);
     const fd = fs.openSync(absolute, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     try {
         const stat = fs.fstatSync(fd);
-        if (!stat.isFile() || stat.nlink !== 1 || stat.size > limit) throw new Error('Invalid preview asset');
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size > limit) throw new Error('预览文件不合法：只接受单链接的普通文件，且不超过大小上限');
         return fs.readFileSync(fd);
     } finally { fs.closeSync(fd); }
 }
@@ -69,7 +69,7 @@ function readPreviewBundle(indexPath, tagCatalog) {
         if (actual !== manifest.files[name]) throw new Error(`Preview bundle drift: ${name}; rebuild preview`);
         files.set(name, bytes);
     }
-    if (!readSafeFile(manifestPath).equals(manifestBytes)) throw new Error('Preview bundle changed while reading');
+    if (!readSafeFile(manifestPath).equals(manifestBytes)) throw new Error('预览文件在读取过程中被改写');
     const format = manifest.version === PREVIEW_FORMAT.bundle ? PREVIEW_FORMAT
         : manifest.version === LEGACY_PREVIEW_FORMAT.bundle ? LEGACY_PREVIEW_FORMAT : null;
     if (!format) throw new Error('预览文件清单的格式版本不受支持。');
@@ -152,7 +152,7 @@ function main(argv = process.argv.slice(2)) {
     const assets = loadAssets({ indexPath: path.join(Config.FILES.tagPreviewDir, 'index.json'),
         assetDir: Config.FILES.tagExplorerAssets, tagCatalog });
     const server = createPreviewServer(assets);
-    server.on('error', error => { console.error(`Preview failed: ${error.message}`); process.exitCode = 1; });
+    server.on('error', error => { console.error(`预览服务启动失败：${error.message}`); process.exitCode = 1; });
     server.listen(options.port, '127.0.0.1', () => {
         console.log(`标签预览：http://127.0.0.1:${options.port}/`);
         console.log('此预览只核对已有标签，不会重新给论文分类。按 Ctrl+C 停止。');
