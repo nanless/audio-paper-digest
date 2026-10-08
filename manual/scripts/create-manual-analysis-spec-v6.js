@@ -482,7 +482,7 @@ function buildSpecV6(options = {}) {
             || !officialArtifactBytes.equals(evidence.artifactFile.bytes)
             || evidence.artifactIndex.outputSha256 !== artifactEntry.artifactIndexSha256
             || evidence.record.sourceSnapshot.artifactIndexFileSha256 !== artifactEntry.outputSha256) {
-            throw new Error(`${id} records 工件中的 ArtifactIndex copy 未与 complete official checkpoint 字节闭环`);
+            throw new Error(`${id} 的 records 工件里，ArtifactIndex copy 的字节与 complete official checkpoint 不一致`);
         }
         const recordProvenance = {
             sealedRecordSha256: evidence.record.sealedRecordSha256,

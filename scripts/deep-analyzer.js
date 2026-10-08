@@ -4515,7 +4515,7 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
     }
     const orderedFigures = orderApiReaderFiguresByArticle(article, used);
     if (!orderedFigures) {
-        throw new Error('论文图正文顺序无法与结构化 figure 绑定闭环');
+        throw new Error('正文里论文图的先后顺序与结构化 figure 对不上，无法按 figure 顺序重排');
     }
     return { ...readerResult, article, figures: orderedFigures };
 }
@@ -4626,7 +4626,7 @@ function pruneUnmaterializedApiReaderFigureBlocks(article, plannedFigures, mater
         const before = output;
         output = output.replace(pattern, '');
         if (output === before) {
-            throw new Error(`无法精确移除未物化论文图 ${figure.ordinal} 的正文块`);
+            throw new Error(`论文图 ${figure.ordinal} 没有取到原图像素，正文里对应的图块无法按预期删除`);
         }
     }
     return output.replace(/\n{3,}/g, '\n\n').trim();
@@ -4743,7 +4743,7 @@ async function materializeApiReaderFigures(figures, arxivId = '') {
                     rawBytes: undefined });
             } catch (error) {
                 if (!isPermanentApiReaderFigureFailure(error)) throw error;
-                console.log(`    [deep] ⚠️  跳过无法物化的会议论文图 ${figure.ordinal}: ${error.message}`);
+                console.log(`    [deep] ⚠️  跳过没有取到原图像素的会议论文图 ${figure.ordinal}: ${error.message}`);
             }
         }
         return materialized;
@@ -4794,7 +4794,7 @@ async function materializeApiReaderFigures(figures, arxivId = '') {
             });
         } catch (error) {
             if (!isPermanentApiReaderFigureFailure(error)) throw error;
-            console.log(`    [deep] ⚠️  跳过无法物化的论文图 ${figure.ordinal}: ${error.message}`);
+            console.log(`    [deep] ⚠️  跳过没有取到原图像素的论文图 ${figure.ordinal}: ${error.message}`);
         }
     }
     return materialized;
@@ -8171,7 +8171,7 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
         || stage?.status !== 'complete'
         || sourceSha256 !== paper.sourceSha256
         || sourceSha256 !== manifest.sourceAcquisition?.sourceSha256) {
-        throw new Error('论文图刷新只接受来源闭环的 v3 canonical');
+        throw new Error('论文图刷新只接受 apiReaderArticle 契约、阶段状态和来源 SHA 都一致的 v3 canonical');
     }
     const figures = Array.isArray(paper.apiReaderFigures) ? paper.apiReaderFigures : [];
     const currentInventory = getApiReaderFigureInventory(

@@ -279,7 +279,7 @@ function validateTableClosures(value, tableById, sections) {
         }
         seen.add(id);
     }
-    for (const id of tableById.keys()) if (!seen.has(id)) throw new Error(`tableClosures 漏少表格闭环: ${id}`);
+    for (const id of tableById.keys()) if (!seen.has(id)) throw new Error(`tableClosures 必须覆盖每张表，但缺少表格 ${id} 的条目`);
 }
 
 function validateCausalBridges(value, sections) {

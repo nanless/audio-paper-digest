@@ -170,7 +170,7 @@ function validateState(state) {
                 }
             }
             if (task.packetSha256 && (!task.packetPath || !task.artifactRoot || !task.packetFileSha256)) {
-                throw new Error(`${id}.${role} packet 字段不闭环`);
+                throw new Error(`${id}.${role} 已记录 packetSha256，但 packetPath、artifactRoot 或 packetFileSha256 有缺失`);
             }
             if (task.status === 'validated' && (!task.outputPath || !task.receiptPath
                 || !task.outputFileSha256 || !task.outputSemanticSha256

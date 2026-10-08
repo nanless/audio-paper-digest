@@ -152,10 +152,11 @@ function readTableCountIssue(issue) {
     if (issue?.code === TABLE_COUNT_ISSUE_CODE) {
         ({ requiredCount, actualCount } = issue);
     } else {
-        // 早期保存下来的诊断，只在这一段固定消息里带计数。已经带 code 的诊断，
-        // 绝不允许从散文消息里去补缺失字段。
+        // 早期保存下来的诊断，只在这一段固定消息里带计数；这句措辞改过一次，
+        // 所以新旧两种说法都要认。已经带 code 的诊断，绝不允许从散文消息里
+        // 去补缺失字段。
         if (issue?.code !== undefined && issue?.code !== null && issue?.code !== '') return null;
-        const match = /至少需要\s*(\d+)\s*张有叙事闭环的\s*Markdown\s*表，当前\s*(\d+)/
+        const match = /至少需要\s*(\d+)\s*张[^，\s]{2,16}的\s*Markdown\s*表，当前\s*(\d+)/
             .exec(String(issue?.message || ''));
         if (!match) return null;
         requiredCount = Number(match[1]);
@@ -176,7 +177,7 @@ function recoveryIssueProjection(issue) {
     // 不会作为展示消息。
     const projected = counts
         ? { path: issue.path ?? null,
-            message: `读者文章至少需要 ${counts.requiredCount} 张有叙事闭环的 Markdown 表，当前 ${counts.actualCount}` }
+            message: `读者文章至少需要 ${counts.requiredCount} 张有表前说明和表后解释的 Markdown 表，当前 ${counts.actualCount} 张` }
         : { path: issue.path ?? null, code: TABLE_COUNT_ISSUE_CODE,
             message: '表格数量诊断的计数无效' };
     for (const [key, value] of Object.entries(issue)) {

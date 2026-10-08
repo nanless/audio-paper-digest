@@ -766,7 +766,7 @@ describe('deep-analyzer 的小节辅助函数', () => {
                 path: null, code: error.code, requiredCount: 4, actualCount: 3, message: error.message
             }]), false);
         }
-        const legacy = '读者文章至少需要 4 张有叙事闭环的 Markdown 表，当前 3';
+        const legacy = '读者文章至少需要 4 张有表前说明和表后解释的 Markdown 表，当前 3 张';
         assert.strictEqual(buildApiReaderValidationFeedback(legacy),
             buildApiReaderValidationFeedback(new Error(legacy)));
         assert.match(buildApiReaderValidationFeedback(legacy), /保留已有合格表并补足要求数量/);
