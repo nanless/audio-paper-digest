@@ -1021,6 +1021,32 @@ test('标签审查分类接受旧错误码，但不授权盲目重试', () => {
     }
 });
 
+test('失败分类器认中文的代理/隧道/认证失败，但不把代理项和未授权算进来', () => {
+    const recovery = require('../scripts/lib/conference-process-recovery.js');
+    const classify = message => recovery.classifyFailure(new Error(message), '2026-09-09T00:00:00Z');
+    // 中文消息必须和它们的英文原文同判：proxy/CONNECT tunnel 属 systemic 的 transport。
+    for (const message of [
+        '缺少项目代理配置',
+        '当前 Node arXiv 抓取只支持 HTTP CONNECT 代理，收到不兼容协议: socks5:',
+        'GitHub 的 raw 节点偶尔会重置 CONNECT 隧道'
+    ]) {
+        const failure = classify(message);
+        assert.equal(failure.category, 'transport');
+        assert.equal(failure.systemic, true);
+    }
+    // 「代理项」是 Unicode surrogate，与 proxy 无关；「未授权」会出现在修复指引正文里，
+    // 而那段正文会被拼进单篇拒稿消息。两者都不能触发整批停机的 transport/authentication。
+    assert.equal(classify('对象键包含非法 Unicode 代理项').category, 'paper');
+    assert.equal(classify('不要试图改动未授权的另一张表').category, 'paper');
+    // authentication：中文「认证失败」与英文 authentication 同判，且不可重试。
+    const auth = classify('OpenCode Go 认证失败，已停止请求；未切换账号');
+    assert.equal(auth.category, 'authentication');
+    assert.equal(auth.systemic, true); assert.equal(auth.retryable, false);
+    // 英文词逐字未动：旧失败记录里的英文消息分类不变。
+    assert.equal(classify('missing project proxy').category, 'transport');
+    assert.equal(classify('HTTP 401 Unauthorized').category, 'authentication');
+});
+
 test('标签队列替换在重命名失败时保留旧缓存，空队列则把两个名字都清掉', t => {
     const f = fixture(t); const directory = f.root;
     const legacyFile = path.join(directory, 'taxonomy-review-queue.json');
