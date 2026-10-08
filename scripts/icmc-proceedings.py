@@ -43,17 +43,17 @@ def paper_entries(document: fitz.Document) -> list[tuple[int, int, int]]:
         order, paper_number = (int(match.group(1)), int(match.group(2)))
         start_page = row[2]
         if start_page < 1 or start_page > document.page_count:
-            raise ValueError(f"outline page is outside the document: {start_page}")
+            raise ValueError(f"目录里的起始页超出 PDF 总页数：{start_page}")
         entries.append((order, paper_number, start_page))
     if not entries:
-        raise ValueError("official ICMC PDF has no Paper entries in its outline")
+        raise ValueError("官方 ICMC PDF 的目录里没有 Paper 条目")
     entries.sort(key=lambda item: item[0])
     if [item[0] for item in entries] != list(range(1, len(entries) + 1)):
-        raise ValueError("ICMC PDF outline paper order is not contiguous")
+        raise ValueError("ICMC PDF 目录里的论文序号不连续")
     if len({item[1] for item in entries}) != len(entries):
-        raise ValueError("ICMC PDF outline contains duplicate paper numbers")
+        raise ValueError("ICMC PDF 目录里有重复的论文编号")
     if any(left[2] >= right[2] for left, right in zip(entries, entries[1:])):
-        raise ValueError("ICMC PDF outline page ranges are not increasing")
+        raise ValueError("ICMC PDF 目录里的起始页没有递增")
     return entries
 
 
@@ -76,7 +76,7 @@ def toc_records(document: fitz.Document) -> list[tuple[str, list[str]]]:
             title = re.sub(r"(?:\s*\.\s*)+$", "", clean(match.group("body")))
             authors = [clean(value) for value in re.split(r"\s*,\s*|\s+and\s+", match.group("authors")) if clean(value)]
             if not title or not authors:
-                raise ValueError(f"invalid ICMC table-of-contents row: {raw[:200]}")
+                raise ValueError(f"ICMC 印刷目录里有读不出题目和作者的行：{raw[:200]}")
             records.append((title, authors))
     return records
 
@@ -87,7 +87,7 @@ def extract_metadata(source: Path, index_url: str, combined_pdf_url: str) -> dic
         entries = paper_entries(document)
         toc = toc_records(document)
         if len(toc) != len(entries):
-            raise ValueError(f"ICMC table of contents has {len(toc)} papers; outline has {len(entries)}")
+            raise ValueError(f"ICMC 印刷目录读出 {len(toc)} 篇，PDF 书签只有 {len(entries)} 篇，两者对不上")
         papers = []
         page_ranges = []
         for index, (order, paper_number, start_page) in enumerate(entries):
@@ -132,7 +132,7 @@ def split_papers(source: Path, page_map_file: Path, output_dir: Path) -> dict:
     page_map = json.loads(page_map_file.read_text(encoding="utf-8"))
     ranges = page_map.get("papers")
     if not isinstance(ranges, list) or not ranges:
-        raise ValueError("page map has no paper ranges")
+        raise ValueError("页码映射里没有 papers 区间")
     output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     document = fitz.open(source)
     try:
@@ -145,7 +145,7 @@ def split_papers(source: Path, page_map_file: Path, output_dir: Path) -> dict:
             if target.exists():
                 continue
             if not (1 <= start_page <= end_page <= document.page_count):
-                raise ValueError(f"invalid page range for {paper_id}")
+                raise ValueError(f"{paper_id} 的页码范围不合法：起止页要落在 1 到 PDF 总页数之间，且起始页不大于结束页")
             # 这里必须用 MuPDF：源文件的页面树声称末尾还有两页，而 pypdf
             # 数不出来。随后再用 pypdf 重写这一段，好让派生出的字节在每次
             # 重跑时都有稳定的文档 ID 和元数据。

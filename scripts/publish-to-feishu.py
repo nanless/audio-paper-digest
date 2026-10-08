@@ -52,7 +52,7 @@ def feishu_request(url, headers=None, data=None, method='GET'):
         with urllib.request.urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read().decode('utf-8'))
         if result.get('code', 0) != 0:
-            raise Exception(f"Feishu API error: {result.get('msg', 'unknown')}")
+            raise Exception(f"飞书接口报错：{result.get('msg', 'unknown')}")
         return result.get('data', result)
     except urllib.error.HTTPError as e:
         err_body = e.read().decode('utf-8', errors='replace')

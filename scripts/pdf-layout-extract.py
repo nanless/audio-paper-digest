@@ -46,21 +46,21 @@ def sha256(value: bytes) -> str:
 
 def read_pdf(path: Path) -> bytes:
     if not path.is_absolute():
-        fail("PDF path must be absolute")
+        fail("PDF 路径必须是绝对路径")
     try:
         info = path.lstat()
     except OSError as exc:
-        fail(f"PDF cannot be inspected: {exc}")
+        fail(f"读不到 PDF 的文件状态：{exc}")
     if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1:
-        fail("PDF must be a regular non-symlink single-link file")
+        fail("PDF 必须是普通文件、不是符号链接、硬链接数为 1")
     if info.st_size > MAX_PDF_BYTES:
-        fail(f"PDF exceeds {MAX_PDF_BYTES} bytes")
+        fail(f"PDF 超过体积上限 {MAX_PDF_BYTES} 字节")
     try:
         data = path.read_bytes()
     except OSError as exc:
-        fail(f"PDF cannot be read: {exc}")
+        fail(f"PDF 读不出来：{exc}")
     if len(data) != info.st_size or not data.startswith(b"%PDF-"):
-        fail("PDF changed while reading or has an invalid header")
+        fail("读 PDF 的过程中文件被改过，或者文件头不是 %PDF-")
     return data
 
 
@@ -97,13 +97,13 @@ def extract(path: Path) -> dict:
 
 def safe_output_directory(path: Path) -> Path:
     if not path.is_absolute():
-        fail("output directory must be absolute")
+        fail("输出目录必须是绝对路径")
     try:
         info = path.lstat()
     except OSError as exc:
-        fail(f"output directory cannot be inspected: {exc}")
+        fail(f"读不到输出目录的文件状态：{exc}")
     if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode):
-        fail("output directory must be a real directory")
+        fail("输出目录必须是真实目录，不能是符号链接")
     return path
 
 
@@ -111,14 +111,14 @@ def render(path: Path, directory: Path, pages: list[int], dpi: int) -> dict:
     data = read_pdf(path)
     output = safe_output_directory(directory)
     if not pages or any(page < 1 for page in pages):
-        fail("render page list must contain positive page numbers")
+        fail("要渲染的页码必须都是正整数")
     with contextlib.redirect_stdout(sys.stderr):
         document = fitz.open(stream=data, filetype="pdf")
         try:
             if document.needs_pass:
-                fail("encrypted PDFs are unsupported")
+                fail("不支持加密的 PDF")
             if any(page > len(document) for page in pages):
-                fail("render page is outside the PDF")
+                fail("要渲染的页码超出 PDF 总页数")
             files = []
             for index, page_number in enumerate(pages, start=1):
                 pixmap = document[page_number - 1].get_pixmap(dpi=dpi, alpha=False)
@@ -129,7 +129,7 @@ def render(path: Path, directory: Path, pages: list[int], dpi: int) -> dict:
                     payload = pixmap.tobytes("png")
                     written = os.write(fd, payload)
                     if written != len(payload):
-                        fail("short PNG write")
+                        fail("写 PNG 时没有写全")
                     os.fsync(fd)
                 finally:
                     os.close(fd)
@@ -164,7 +164,7 @@ def main() -> None:
         try:
             pages = [int(item) for item in args.pages.split(",") if item]
         except ValueError:
-            fail("--pages must be a comma-separated integer list")
+            fail("--pages 必须是逗号分隔的整数列表")
         result = render(args.pdf, args.directory, pages, args.dpi)
     print(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
 

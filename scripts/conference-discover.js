@@ -10,7 +10,7 @@ const { requireExternalRuntime } = require('./env-loader.js');
 const Config = require('./config.js');
 const discovery = require('./lib/conference-discovery.js');
 
-const USAGE = 'Use --dry-run|--apply --adapter icassp|iclr|icml|official-proceedings --year YYYY [--conference-id SLUG-YYYY] --metadata ABS.json --pdf-root ABS [--acquisition-root ABS] [--candidate-output NAME.json --report-output NAME.json]';
+const USAGE = '用法：--dry-run|--apply --adapter icassp|iclr|icml|official-proceedings --year YYYY [--conference-id SLUG-YYYY] --metadata ABS.json --pdf-root ABS [--acquisition-root ABS] [--candidate-output NAME.json --report-output NAME.json]';
 
 function parseArgs(args) {
     const options = {};
@@ -19,7 +19,7 @@ function parseArgs(args) {
         if (!['--adapter', '--year', '--conference-id', '--metadata', '--pdf-root', '--acquisition-root', '--candidate-output', '--report-output'].includes(flag) || value === undefined) {
             throw new Error(USAGE);
         }
-        if (Object.hasOwn(options, flag)) throw new Error(`Duplicate argument: ${flag}`);
+        if (Object.hasOwn(options, flag)) throw new Error(`参数重复：${flag}`);
         options[flag] = value;
     }
     return options;
@@ -28,7 +28,7 @@ function parseArgs(args) {
 function requireFiles(files) {
     for (const field of ['conferenceDiscoveryCatalogDir', 'conferenceDiscoveryReportDir']) {
         if (typeof files?.[field] !== 'string' || !path.isAbsolute(files[field])) {
-            throw new Error(`Configured ${field} must be an absolute directory`);
+            throw new Error(`配置项 ${field} 必须是绝对路径目录`);
         }
     }
     return files;
@@ -45,22 +45,22 @@ function ensureConfiguredDirectory(directory, name) {
 
 function safeOutput(directory, filename, name) {
     if (typeof filename !== 'string' || !discovery.SAFE_JSON_NAME.test(filename)) {
-        throw new Error(`${name} must be a safe direct .json filename`);
+        throw new Error(`${name} 必须是不带子目录的 .json 文件名`);
     }
     const root = ensureConfiguredDirectory(directory, `${name} directory`);
     const absolute = path.resolve(root, filename);
-    if (path.dirname(absolute) !== root) throw new Error(`${name} must be directly inside its configured directory`);
+    if (path.dirname(absolute) !== root) throw new Error(`${name} 必须直接放在配置目录下，不能带子目录`);
     return absolute;
 }
 
 function parseCommand(argv) {
     const [mode, ...rest] = argv;
-    if (!['--dry-run', '--apply'].includes(mode)) throw new Error(`First argument must be --dry-run or --apply. ${USAGE}`);
+    if (!['--dry-run', '--apply'].includes(mode)) throw new Error(`第一个参数只能是 --dry-run 或 --apply。用法：${USAGE}`);
     const options = parseArgs(rest);
     for (const field of ['--adapter', '--year', '--metadata', '--pdf-root']) {
-        if (!options[field]) throw new Error(`Missing required argument: ${field}`);
+        if (!options[field]) throw new Error(`缺少必需参数：${field}`);
     }
-    if (!/^\d{4}$/.test(options['--year'])) throw new Error('--year must be four digits');
+    if (!/^\d{4}$/.test(options['--year'])) throw new Error(`--year 必须是四位年份：当前是 ${options['--year']}`);
     if (options['--adapter'] === 'official-proceedings' && !options['--conference-id']) {
         throw new Error('official-proceedings requires --conference-id');
     }
@@ -71,10 +71,10 @@ function parseCommand(argv) {
         throw new Error('--conference-id must end with the exact --year');
     }
     if (options['--acquisition-root'] !== undefined && !path.isAbsolute(options['--acquisition-root'])) {
-        throw new Error('--acquisition-root must be absolute');
+        throw new Error('--acquisition-root 必须是绝对路径');
     }
     if (options['--acquisition-root'] !== undefined && options['--adapter'] !== 'official-proceedings') {
-        throw new Error('--acquisition-root is only valid for official-proceedings');
+        throw new Error('--acquisition-root 只对 official-proceedings 有效');
     }
     const outputs = [options['--candidate-output'], options['--report-output']];
     if (mode === '--dry-run' && outputs.some(Boolean)) throw new Error('--dry-run must not specify output files');
@@ -94,7 +94,7 @@ function writeOutputsOnce({ catalogDir, catalogName, candidate, reportDir, repor
     discovery.validateDiscoveryBundle(candidate, report);
     const candidateOutput = safeOutput(catalogDir, catalogName, 'candidate output');
     const reportOutput = safeOutput(reportDir, reportName, 'report output');
-    if (candidateOutput === reportOutput) throw new Error('candidate output and report output must be different files');
+    if (candidateOutput === reportOutput) throw new Error('候选输出和报告输出不能是同一个文件');
     if ([candidateOutput, reportOutput].some(output => output === forbiddenRoot || output.startsWith(`${forbiddenRoot}${path.sep}`))) {
         throw new Error('discovery outputs must not be inside pdfRoot');
     }
@@ -125,7 +125,7 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
     const args = parseCommand(argv);
     if (process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE === '1'
         && args.adapter === 'official-proceedings' && !args.acquisitionRoot) {
-        throw new Error('new-conference discovery requires --acquisition-root and official catalog.receipt.json');
+        throw new Error('新会议发现需要 --acquisition-root，并且要带上官方 catalog.receipt.json');
     }
     const files = requireFiles(dependencies.files || Config.FILES);
     const result = discovery.discoverConference(args);

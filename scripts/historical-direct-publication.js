@@ -17,7 +17,7 @@ function parsePairs(argv, allowed) {
     const values = {};
     for (let index = 0; index < argv.length; index += 2) {
         const flag = argv[index]; const value = argv[index + 1];
-        if (!allowed.includes(flag) || value === undefined || Object.hasOwn(values, flag)) throw new Error(`Use ${USAGE}`);
+        if (!allowed.includes(flag) || value === undefined || Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
         values[flag] = value;
     }
     return values;
@@ -25,7 +25,7 @@ function parsePairs(argv, allowed) {
 function parsePaperIds(value) {
     if (value === undefined) return [];
     const ids = String(value).split(',').map(item => item.trim()).filter(Boolean);
-    if (!ids.length || new Set(ids).size !== ids.length) throw new Error(`Use ${USAGE}`);
+    if (!ids.length || new Set(ids).size !== ids.length) throw new Error(`命令写法不对，用法：${USAGE}`);
     return ids;
 }
 function absolute(value) { return typeof value === 'string' && path.isAbsolute(value) && !value.includes('\0'); }
@@ -34,29 +34,29 @@ function parseArgs(argv) {
     if (action === 'status') {
         const values = parsePairs([mode, ...rest].filter(value => value !== undefined), ['--publication-id', '--live-remote']);
         if (!api.UUID_RE.test(values['--publication-id'] || '') || values['--live-remote'] !== undefined
-            && !['true', 'false'].includes(values['--live-remote'])) throw new Error(`Use ${USAGE}`);
+            && !['true', 'false'].includes(values['--live-remote'])) throw new Error(`命令写法不对，用法：${USAGE}`);
         return { action, publicationId: values['--publication-id'],
             liveRemote: values['--live-remote'] === undefined ? true : values['--live-remote'] === 'true' };
     }
     if (action === 'visual-disposition') {
-        if (mode !== '--apply') throw new Error(`Use ${USAGE}`);
+        if (mode !== '--apply') throw new Error(`命令写法不对，用法：${USAGE}`);
         const values = parsePairs(rest, ['--plan-file', '--mode', '--scope', '--reason', '--output']);
         if (!absolute(values['--plan-file']) || !absolute(values['--output']) || !['excluded', 'waived'].includes(values['--mode'])
             || !['full-history-publication', 'selected-sample-publication'].includes(values['--scope'] || 'full-history-publication')
-            || String(values['--reason'] || '').trim().length < 10) throw new Error(`Use ${USAGE}`);
+            || String(values['--reason'] || '').trim().length < 10) throw new Error(`命令写法不对，用法：${USAGE}`);
         return { action, apply: true, planFile: values['--plan-file'], dispositionMode: values['--mode'],
             dispositionScope: values['--scope'] || 'full-history-publication', reason: values['--reason'], output: values['--output'] };
     }
     if (!['plan', 'generate', 'review', 'activate', 'publish'].includes(action)
-        || !['--dry-run', '--apply'].includes(mode)) throw new Error(`Use ${USAGE}`);
+        || !['--dry-run', '--apply'].includes(mode)) throw new Error(`命令写法不对，用法：${USAGE}`);
     const stageNeedsAuthority = ['plan', 'generate'].includes(action);
     const values = parsePairs(rest, stageNeedsAuthority
         ? ['--publication-id', '--plan-file', '--registry-file', '--projection-file', '--visual-disposition', '--paper-ids', '--blog-repo']
         : ['--publication-id', '--message', '--blog-repo']);
-    if (!api.UUID_RE.test(values['--publication-id'] || '')) throw new Error(`Use ${USAGE}`);
+    if (!api.UUID_RE.test(values['--publication-id'] || '')) throw new Error(`命令写法不对，用法：${USAGE}`);
     if (stageNeedsAuthority && ['--plan-file', '--registry-file', '--projection-file', '--visual-disposition']
-        .some(flag => !absolute(values[flag]))) throw new Error(`Use ${USAGE}`);
-    if (values['--blog-repo'] !== undefined && !absolute(values['--blog-repo'])) throw new Error(`Use ${USAGE}`);
+        .some(flag => !absolute(values[flag]))) throw new Error(`命令写法不对，用法：${USAGE}`);
+    if (values['--blog-repo'] !== undefined && !absolute(values['--blog-repo'])) throw new Error(`命令写法不对，用法：${USAGE}`);
     return { action, apply: mode === '--apply', publicationId: values['--publication-id'], planFile: values['--plan-file'],
         registryFile: values['--registry-file'], projectionFile: values['--projection-file'],
         visualDispositionFile: values['--visual-disposition'],
@@ -78,7 +78,7 @@ function buildPublicationInputOptions(options, Config) {
         ...roots(Config) };
 }
 function writeArtifact(filename, value) {
-    if (path.extname(filename) !== '.json') throw new Error('output must end in .json');
+    if (path.extname(filename) !== '.json') throw new Error('输出文件名必须以 .json 结尾');
     const parent = path.dirname(filename);
     require('node:fs').mkdirSync(parent, { recursive: true, mode: 0o700 });
     const parentStat = require('node:fs').lstatSync(parent);
@@ -90,7 +90,7 @@ function writeArtifact(filename, value) {
     }
     const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
     if (require('node:fs').existsSync(filename)) {
-        if (!require('node:fs').readFileSync(filename).equals(bytes)) throw new Error('refuses to overwrite different disposition bytes');
+        if (!require('node:fs').readFileSync(filename).equals(bytes)) throw new Error('已有处置文件的字节不同，不能覆盖');
     } else {
         const fd = require('node:fs').openSync(filename, require('node:fs').constants.O_WRONLY | require('node:fs').constants.O_CREAT
             | require('node:fs').constants.O_EXCL | require('node:fs').constants.O_NOFOLLOW, 0o600);
@@ -107,7 +107,7 @@ function main(argv = process.argv.slice(2), runtime = {}) {
         const value = api.buildVisualDisposition({ plan, mode: options.dispositionMode, scope: options.dispositionScope, reason: options.reason });
         const allowedRoot = path.resolve(Config.FILES.historicalDirectVisualDispositionDir);
         const parent = path.resolve(path.dirname(options.output));
-        if (parent !== allowedRoot) throw new Error(`visual disposition output must be directly under ${allowedRoot}`);
+        if (parent !== allowedRoot) throw new Error(`视觉处置输出必须直接放在 ${allowedRoot} 下，不能带子目录`);
         require('node:fs').mkdirSync(allowedRoot, { recursive: true, mode: 0o700 });
         const allowedStat = require('node:fs').lstatSync(allowedRoot);
         if (!allowedStat.isDirectory() || allowedStat.isSymbolicLink()

@@ -29,13 +29,13 @@ def parse_args(argv: list[str]) -> dict[str, object]:
             and argv[3] == "--receipt" and SAFE_JSON_NAME.fullmatch(argv[2] or "")
             and SAFE_JSON_NAME.fullmatch(argv[4] or "") and argv[2] != argv[4]):
         return {"apply": True, "ledgerName": argv[2], "receiptName": argv[4]}
-    raise HistoricalPageInventoryError(f"usage: {USAGE}")
+    raise HistoricalPageInventoryError(f"用法：{USAGE}")
 
 
 def _configured_blog_repo() -> Path:
     value = os.environ.get("PAPER_DIGEST_BLOG_REPO")
     if not value:
-        raise HistoricalPageInventoryError("PAPER_DIGEST_BLOG_REPO is required")
+        raise HistoricalPageInventoryError("必须设置 PAPER_DIGEST_BLOG_REPO 环境变量")
     return Path(value).expanduser().absolute()
 
 

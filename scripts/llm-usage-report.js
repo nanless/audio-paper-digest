@@ -10,7 +10,7 @@ const { summarizeLlmUsage, VERSION } = require('./lib/llm-usage.js');
 function readUsageEvents(directory) {
     if (!fs.existsSync(directory)) return [];
     const root = fs.lstatSync(directory);
-    if (!root.isDirectory() || root.isSymbolicLink()) throw new Error('Usage directory must be a real directory');
+    if (!root.isDirectory() || root.isSymbolicLink()) throw new Error('用量事件目录必须是真实目录，不能是符号链接');
     const events = [];
     for (const name of fs.readdirSync(directory).sort()) {
         if (!name.endsWith('.json')) continue;
@@ -18,7 +18,7 @@ function readUsageEvents(directory) {
         const stat = fs.lstatSync(file);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 32768) throw new Error('Unsafe usage event');
         const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-        if (value?.version !== VERSION || !['request', 'disposition'].includes(value.kind)) throw new Error('Invalid usage event schema');
+        if (value?.version !== VERSION || !['request', 'disposition'].includes(value.kind)) throw new Error('用量事件格式不对：version 或 kind 不是这个版本认识的取值');
         events.push(value);
     }
     return events;
@@ -29,10 +29,10 @@ function main(args = process.argv.slice(2)) {
     for (let i = 0; i < args.length; i += 2) {
         const name = args[i];
         if (!['--dir', '--paper', '--stage', '--date', '--run'].includes(name) || !args[i + 1]
-            || args[i + 1].startsWith('--') || options[name]) throw new Error('Usage: usage:report [--paper ID] [--stage NAME] [--date YYYY-MM-DD] [--run UUID] [--dir DIR]');
+            || args[i + 1].startsWith('--') || options[name]) throw new Error('用法：usage:report [--paper ID] [--stage NAME] [--date YYYY-MM-DD] [--run UUID] [--dir DIR]');
         options[name] = args[i + 1];
     }
-    if (options['--paper'] && !/^\d{4}\.\d{4,5}(?:v\d+)?$/.test(options['--paper'])) throw new Error('Invalid paper ID');
+    if (options['--paper'] && !/^\d{4}\.\d{4,5}(?:v\d+)?$/.test(options['--paper'])) throw new Error('论文 ID 不合法：要用 2501.00001 或 2501.00001v2 这种形式');
     if (options['--run'] && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(options['--run'])) throw new Error('Invalid run ID');
     if (options['--date']) {
         const date = options['--date'];

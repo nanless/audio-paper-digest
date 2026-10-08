@@ -46,13 +46,13 @@ def _strict_json(data, label):
         result = {}
         for key, value in items:
             if key in result:
-                raise BlogRepositoryLockError(f'{label} contains duplicate key: {key}')
+                raise BlogRepositoryLockError(f'{label} 里有重复的 JSON 键：{key}')
             result[key] = value
         return result
     try:
         return json.loads(data.decode('utf-8'), object_pairs_hook=pairs)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise BlogRepositoryLockError(f'{label} is not strict UTF-8 JSON') from exc
+        raise BlogRepositoryLockError(f'{label} 不是严格的 UTF-8 JSON') from exc
 
 
 def _sync_directory(path):
@@ -67,18 +67,18 @@ def _sync_directory(path):
 def _git_common_dir(blog_repo):
     repo = Path(blog_repo).expanduser().resolve(strict=True)
     if not repo.is_dir():
-        raise BlogRepositoryLockError('blog repository must be an existing directory')
+        raise BlogRepositoryLockError(f'博客仓库路径不是已存在的目录：{blog_repo}')
     env = build_child_process_env(allowed_keys=VCS_CHILD_ENV_KEYS)
     result = subprocess.run(
         ['git', '-C', str(repo), 'rev-parse', '--path-format=absolute', '--git-common-dir'],
         check=False, capture_output=True, text=True, env=env,
     )
     if result.returncode != 0 or not result.stdout.strip():
-        raise BlogRepositoryLockError('blog repository has no verifiable Git common directory')
+        raise BlogRepositoryLockError(f'博客仓库没有可核验的 Git common 目录，git rev-parse --git-common-dir 没给出结果：{blog_repo}')
     common = Path(result.stdout.strip()).resolve(strict=True)
     info = common.lstat()
     if not stat.S_ISDIR(info.st_mode) or common.is_symlink():
-        raise BlogRepositoryLockError('Git common directory must be a real directory')
+        raise BlogRepositoryLockError(f'Git common 目录必须是真实目录，不能是符号链接：{common}')
     return repo, common
 
 
@@ -92,11 +92,11 @@ def shared_lock_root(blog_repo, *, create=True):
         pass
     info = root.lstat()
     if root.is_symlink() or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid():
-        raise BlogRepositoryLockError('shared blog lock root is not a private owned directory')
+        raise BlogRepositoryLockError(f'共享博客锁根目录不是本人拥有的普通目录：{root}')
     if stat.S_IMODE(info.st_mode) != 0o700:
-        raise BlogRepositoryLockError('shared blog lock root permissions must be 0700')
+        raise BlogRepositoryLockError(f'共享博客锁根目录权限必须是 0700：{root} 当前是 {oct(stat.S_IMODE(info.st_mode))}')
     if root.parent.resolve() != common:
-        raise BlogRepositoryLockError('shared blog lock root escaped Git common directory')
+        raise BlogRepositoryLockError(f'共享博客锁根目录跑到 Git common 目录之外了：{root} 解析后不在 {common} 里')
     return root
 
 
@@ -123,7 +123,7 @@ def _validate_owner(data):
         'startedAt', 'heartbeatAt', 'leaseSeconds', 'ownerSha256',
     }
     if not isinstance(value, dict) or set(value) != expected:
-        raise BlogRepositoryLockError('blog lock owner schema is invalid')
+        raise BlogRepositoryLockError('博客锁 owner 记录的字段集合不对')
     body = dict(value)
     declared = body.pop('ownerSha256')
     if value['contract'] != CONTRACT or value['version'] != 1 \
@@ -134,12 +134,12 @@ def _validate_owner(data):
             or not isinstance(value['leaseSeconds'], (int, float)) \
             or value['leaseSeconds'] <= 0 or value['leaseSeconds'] > 24 * 60 * 60 \
             or declared != _sha(_stable_bytes(body)):
-        raise BlogRepositoryLockError('blog lock owner identity or self-hash is invalid')
+        raise BlogRepositoryLockError('博客锁 owner 记录的身份字段或自校验哈希不对')
     for field in ('startedAt', 'heartbeatAt'):
         try:
             datetime.fromisoformat(value[field])
         except (TypeError, ValueError) as exc:
-            raise BlogRepositoryLockError(f'blog lock owner {field} is invalid') from exc
+            raise BlogRepositoryLockError(f'博客锁 owner 的 {field} 不是合法时间') from exc
     return value
 
 
@@ -152,7 +152,7 @@ def _read_owner_raw_at(directory_fd, name='owner.json'):
         if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 \
                 or stat.S_IMODE(opened.st_mode) != 0o600 \
                 or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino):
-            raise BlogRepositoryLockError('blog lock owner must be one ordinary, singly-linked file')
+            raise BlogRepositoryLockError('博客锁 owner 必须是普通文件、硬链接数为 1、权限 0600，且路径上的 inode 与打开的句柄一致')
         chunks = []
         remaining = MAX_OWNER_BYTES + 1
         while remaining:
@@ -163,11 +163,11 @@ def _read_owner_raw_at(directory_fd, name='owner.json'):
             remaining -= len(chunk)
         data = b''.join(chunks)
         if len(data) > MAX_OWNER_BYTES:
-            raise BlogRepositoryLockError('blog lock owner byte length is invalid')
+            raise BlogRepositoryLockError(f'博客锁 owner 文件太大，超过 {MAX_OWNER_BYTES} 字节')
         after = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
         if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != \
                 (named.st_dev, named.st_ino, named.st_size, named.st_mtime_ns):
-            raise BlogRepositoryLockError('blog lock owner changed while reading')
+            raise BlogRepositoryLockError('读博客锁 owner 的过程中文件被改过')
         return {
             'identity': (opened.st_dev, opened.st_ino),
             'size': opened.st_size,
@@ -189,16 +189,16 @@ def _snapshot(lock_path, *, allow_invalid_owner=False):
     info = lock_path.lstat()
     if lock_path.is_symlink() or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() \
             or stat.S_IMODE(info.st_mode) != 0o700:
-        raise BlogRepositoryLockError('blog lock path must be a real owned directory')
+        raise BlogRepositoryLockError(f'博客锁目录必须是本人拥有的真实目录、权限 0700：{lock_path}')
     flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
     directory_fd = os.open(lock_path, flags)
     try:
         opened = os.fstat(directory_fd)
         if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
-            raise BlogRepositoryLockError('blog lock directory changed while opening')
+            raise BlogRepositoryLockError(f'打开博客锁目录时 inode 变了：{lock_path}')
         entries = sorted(os.listdir(directory_fd))
         if entries not in ([], ['owner.json']):
-            raise BlogRepositoryLockError('blog lock contains unexpected entries')
+            raise BlogRepositoryLockError(f'博客锁目录里有预期之外的文件：{entries}')
         owner = None
         owner_error = None
         if entries:
@@ -268,19 +268,19 @@ def _reclaimable(snapshot, configured_lease, now=None):
 def _remove_exact(snapshot):
     current = _snapshot(snapshot['path'], allow_invalid_owner=True)
     if not _same_snapshot(snapshot, current):
-        raise BlogRepositoryLockError('blog lock changed before exact removal')
+        raise BlogRepositoryLockError('删除前发现博客锁已变化')
     flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
     directory_fd = os.open(snapshot['path'], flags)
     try:
         opened = os.fstat(directory_fd)
         if (opened.st_dev, opened.st_ino) != snapshot['directoryIdentity']:
-            raise BlogRepositoryLockError('blog lock directory inode changed before removal')
+            raise BlogRepositoryLockError('删除前发现博客锁目录 inode 变了')
         if snapshot['entries']:
             owner = _read_owner_raw_at(directory_fd)
             expected = snapshot['owner']
             if expected is None or any(owner[field] != expected[field]
                                        for field in ('identity', 'size', 'mtimeNs', 'bytesSha256')):
-                raise BlogRepositoryLockError('blog lock owner changed before removal')
+                raise BlogRepositoryLockError('删除前发现博客锁 owner 文件变了')
             os.unlink('owner.json', dir_fd=directory_fd)
         os.fsync(directory_fd)
     finally:
@@ -293,7 +293,7 @@ def _write_all(fd, data):
     while offset < len(data):
         written = os.write(fd, data[offset:])
         if written <= 0:
-            raise OSError('short write while creating blog lock owner')
+            raise OSError('写博客锁 owner 文件时没有写全')
         offset += written
 
 
@@ -304,7 +304,7 @@ def _rmdir_exact(directory, expected_identity):
         named = os.stat(directory.name, dir_fd=parent_fd, follow_symlinks=False)
         if not stat.S_ISDIR(named.st_mode) \
                 or (named.st_dev, named.st_ino) != expected_identity:
-            raise BlogRepositoryLockError('blog lock directory inode changed before rmdir')
+            raise BlogRepositoryLockError('rmdir 前发现博客锁目录 inode 变了')
         os.rmdir(directory.name, dir_fd=parent_fd)
         os.fsync(parent_fd)
     finally:
@@ -318,16 +318,16 @@ def _cleanup_created_directory(lock_path, directory_identity, owner_identity):
     try:
         opened = os.fstat(directory_fd)
         if (opened.st_dev, opened.st_ino) != directory_identity:
-            raise BlogRepositoryLockError('created blog lock directory inode was replaced')
+            raise BlogRepositoryLockError('刚创建的博客锁目录 inode 被换掉了')
         entries = sorted(os.listdir(directory_fd))
         if entries == ['owner.json']:
             named = os.stat('owner.json', dir_fd=directory_fd, follow_symlinks=False)
             if owner_identity is None or (named.st_dev, named.st_ino) != owner_identity \
                     or not stat.S_ISREG(named.st_mode) or named.st_nlink != 1:
-                raise BlogRepositoryLockError('created blog lock owner inode was replaced')
+                raise BlogRepositoryLockError('刚创建的博客锁 owner inode 被换掉了')
             os.unlink('owner.json', dir_fd=directory_fd)
         elif entries:
-            raise BlogRepositoryLockError('created blog lock gained unexpected entries')
+            raise BlogRepositoryLockError(f'刚创建的博客锁目录里多出了预期之外的文件：{entries}')
         os.fsync(directory_fd)
     finally:
         os.close(directory_fd)
@@ -372,7 +372,7 @@ def _create_lock_directory(lock_path, owner, lease_seconds):
     if snapshot['directoryIdentity'] != created_identity \
             or snapshot['owner']['record']['token'] != token:
         _cleanup_created_directory(lock_path, created_identity, owner_identity)
-        raise BlogRepositoryLockError('new blog lock identity could not be replayed')
+        raise BlogRepositoryLockError('新建的博客锁身份复核对不上：目录 inode 或 owner token 与刚写入的不一致')
     return snapshot
 
 
@@ -380,7 +380,7 @@ def _renew(snapshot):
     lock_path = snapshot['path']
     current = _snapshot(lock_path)
     if not _same_snapshot(snapshot, current):
-        raise BlogRepositoryLockError('blog lock changed before heartbeat')
+        raise BlogRepositoryLockError('续租前发现博客锁已变化')
     record = dict(current['owner']['record'])
     record['heartbeatAt'] = _now_iso()
     body = dict(record)
@@ -394,7 +394,7 @@ def _renew(snapshot):
         try:
             opened = os.fstat(fd)
             if (opened.st_dev, opened.st_ino) != current['owner']['identity']:
-                raise BlogRepositoryLockError('blog lock owner inode changed before heartbeat')
+                raise BlogRepositoryLockError('续租前发现博客锁 owner inode 变了')
             os.lseek(fd, 0, os.SEEK_SET)
             _write_all(fd, data)
             os.ftruncate(fd, len(data))
@@ -406,7 +406,7 @@ def _renew(snapshot):
         os.close(directory_fd)
     renewed = _snapshot(lock_path)
     if renewed['owner']['record']['token'] != record['token']:
-        raise BlogRepositoryLockError('blog lock heartbeat lost ownership')
+        raise BlogRepositoryLockError('博客锁续租时已失去所有权')
     return renewed
 
 
@@ -440,7 +440,7 @@ def _acquire(lock_path, owner, timeout_seconds, stale_seconds):
                 marker = _create_lock_directory(reclaim_path, f'{owner}:reclaimer', stale_seconds)
                 current = _snapshot(lock_path, allow_invalid_owner=True)
                 if not _same_snapshot(stale, current) or not _reclaimable(current, stale_seconds):
-                    raise BlogRepositoryLockError('blog lock changed during stale reclaim')
+                    raise BlogRepositoryLockError('回收过期博客锁的过程中锁被改过')
                 _remove_exact(current)
             except FileExistsError:
                 pass
@@ -483,7 +483,7 @@ def shared_blog_repository_lock(blog_repo, *, owner='paper-digest-publisher',
     try:
         yield lock_path
         if state['error'] is not None:
-            raise BlogRepositoryLockError('shared blog lock heartbeat failed') from state['error']
+            raise BlogRepositoryLockError('共享博客锁的续租线程失败') from state['error']
     finally:
         stop.set()
         thread.join(timeout=max(1.0, interval * 2))

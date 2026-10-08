@@ -36,7 +36,7 @@ function paperList(value) {
 
 function waiverPath(date, files = Config.FILES) {
     if (!DATE_RE.test(String(date || '')) || !path.isAbsolute(files.analysisWaiverDir)) {
-        throw new Error('analysis waiver date/directory is invalid');
+        throw new Error('分析豁免的日期或目录不合法：日期要写成 YYYY-MM-DD，目录要是绝对路径');
     }
     return path.join(files.analysisWaiverDir, `${date}.json`);
 }
@@ -143,18 +143,18 @@ function validateAnalysisWaiver(waiver, date, files = Config.FILES, snapshots = 
 }
 
 function createAnalysisWaiver({ date, paperIds, reason, files = Config.FILES, now = getBeijingISOString }) {
-    if (!DATE_RE.test(String(date || ''))) throw new Error('date is invalid');
-    if (!Array.isArray(paperIds) || paperIds.length === 0) throw new Error('paperIds must be non-empty');
+    if (!DATE_RE.test(String(date || ''))) throw new Error(`日期不合法：期望 YYYY-MM-DD，当前是 ${date}`);
+    if (!Array.isArray(paperIds) || paperIds.length === 0) throw new Error('paperIds 不能为空，至少要给一篇论文');
     const ids = [...new Set(paperIds.map(normalizedId).filter(Boolean))].sort();
-    if (ids.length !== paperIds.length) throw new Error('paperIds must be normalized and unique');
-    if (String(reason || '').trim().length < 10) throw new Error('reason must be at least 10 characters');
+    if (ids.length !== paperIds.length) throw new Error('paperIds 必须是规范化且不重复的论文 ID');
+    if (String(reason || '').trim().length < 10) throw new Error('reason 至少要 10 个字符，否则说明不了豁免理由');
     const deep = JSON.parse(fs.readFileSync(files.deepAnalysisResult, 'utf8'));
     const papers = JSON.parse(fs.readFileSync(files.papers, 'utf8'));
     const deepById = new Map(paperList(deep).map(paper => [normalizedId(paper), paper]).filter(([id]) => id));
     const db = papers.papers || {};
     const entries = ids.map(id => {
         const deepPaper = deepById.get(id); const dbPaper = db[id];
-        if (!deepPaper || !dbPaper) throw new Error(`paper not found in current artifacts: ${id}`);
+        if (!deepPaper || !dbPaper) throw new Error(`当前产物里找不到这篇论文：${id}`);
         const sourceSha256 = deepPaper.sourceSha256 || deepPaper.analysisManifest?.sourceAcquisition?.sourceSha256;
         if (!SHA256_RE.test(sourceSha256 || '')) throw new Error(`论文缺少可核验的来源 SHA（深度分析结果里没有 sourceSha256）: ${id}`);
         return { paperId: id, deepPaperSha256: stableSha256(deepPaper), sourceSha256,

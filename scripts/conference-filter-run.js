@@ -35,11 +35,11 @@ function parseArgs(argv) {
     for (const flag of ['--catalog', '--report', '--spec']) {
         if (!filter.SAFE_JSON_NAME.test(values[flag])) throw new Error(`${flag} must be a safe direct JSON filename`);
     }
-    if (!filter.UUID_RE.test(values['--filter'])) throw new Error('--filter must be a canonical UUID v4');
-    if (!evidenceApi.UUID_RE.test(values['--evidence-run'])) throw new Error('--evidence-run must be a canonical UUID v4');
-    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(values['--owner'])) throw new Error('--owner is malformed');
+    if (!filter.UUID_RE.test(values['--filter'])) throw new Error('--filter 必须是规范的 UUID v4');
+    if (!evidenceApi.UUID_RE.test(values['--evidence-run'])) throw new Error('--evidence-run 必须是规范的 UUID v4');
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(values['--owner'])) throw new Error('--owner 格式不对：只能用字母、数字和 . _ : -，并且要字母或数字开头');
     const limit = values['--limit'] === undefined ? 10000 : Number(values['--limit']);
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10000) throw new Error('--limit must be an integer from 1 to 10000');
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 10000) throw new Error(`--limit 必须是 1 到 10000 的整数：当前是 ${values['--limit']}`);
     return { catalogName: values['--catalog'], reportName: values['--report'], evidenceRunId: values['--evidence-run'],
         specName: values['--spec'],
         filterId: values['--filter'], owner: values['--owner'], limit, retryFailed: values['--retry-failed'] === true };
@@ -49,7 +49,7 @@ function requireFiles(files) {
     for (const field of ['conferenceDiscoveryCatalogDir', 'conferenceDiscoveryReportDir', 'conferenceFilterSpecsDir',
         'conferenceFilterEvidenceRunsDir', 'conferenceFiltersDir', 'tagCatalogFile', 'llmAccountPoolState']) {
         if (typeof files?.[field] !== 'string' || !path.isAbsolute(files[field])) {
-            throw new Error(`Configured ${field} must be an absolute path`);
+            throw new Error(`配置项 ${field} 必须是绝对路径`);
         }
     }
     return files;
@@ -62,7 +62,7 @@ function productionLlmConfig(env, files) {
     const apiKeys = resolvePrimaryApiKeyPool(primaryKey,
         env.PAPER_ANALYZER_FALLBACK_API_KEYS || '', env.PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY || '');
     if (!endpoint || !model || !primaryKey || !apiKeys.length) {
-        throw new Error('PAPER_ANALYZER_ENDPOINT/API_KEY/MODEL are required for conference filter runner');
+        throw new Error('会议筛选器要求 PAPER_ANALYZER_ENDPOINT、PAPER_ANALYZER_API_KEY、PAPER_ANALYZER_MODEL 三项都配好');
     }
     const apiType = utils.detectApiType(endpoint, model); const apiUrl = utils.buildApiUrl(apiType, endpoint);
     return { endpoint, model, apiUrl, apiType, apiKeys,

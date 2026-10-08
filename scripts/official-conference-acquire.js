@@ -21,17 +21,17 @@ function parseArgs(argv, { acquisitionRoot = FILES.officialConferenceAcquisition
     for (let index = 0; index < tokens.length; index += 1) {
         const token = tokens[index];
         if (token === '--dry-run' || token === '--apply') {
-            if (mode) throw new Error('Specify exactly one execution mode');
+            if (mode) throw new Error('--dry-run 和 --apply 只能给一个');
             mode = token;
             continue;
         }
         if (!['--provider', '--conference-id', '--year', '--limit', '--concurrency', '--retries'].includes(token)
             || index + 1 >= tokens.length || tokens[index + 1].startsWith('--')) throw new Error(USAGE);
-        if (values.has(token)) throw new Error(`Duplicate argument: ${token}`);
+        if (values.has(token)) throw new Error(`参数重复：${token}`);
         values.set(token, tokens[index + 1]); index += 1;
     }
     for (const name of ['--provider', '--conference-id', '--year']) {
-        if (!values.has(name)) throw new Error(`Missing required argument: ${name}`);
+        if (!values.has(name)) throw new Error(`缺少必需参数：${name}`);
     }
     const provider = acquisition.providerFor(values.get('--provider'));
     const conferenceId = values.get('--conference-id');
@@ -45,29 +45,29 @@ function parseArgs(argv, { acquisitionRoot = FILES.officialConferenceAcquisition
     }
     const outputRoot = path.join(acquisitionRoot, provider.conference.id);
     const mutating = command === 'catalog' || command === 'download';
-    if (mutating && !mode) throw new Error(`${command} requires exactly one of --dry-run or --apply`);
+    if (mutating && !mode) throw new Error(`${command} 必须显式给出 --dry-run 或 --apply 中的一个`);
     if (!mutating && mode) throw new Error(`${command} does not accept --dry-run or --apply`);
     if (command !== 'download' && (values.has('--limit') || values.has('--concurrency') || values.has('--retries'))) {
-        throw new Error('--limit/--concurrency/--retries are only valid for download');
+        throw new Error('--limit、--concurrency、--retries 只对 download 有效');
     }
     let limit = null;
     if (values.has('--limit')) {
         const text = values.get('--limit');
         if (!/^[1-9]\d*$/u.test(text) || !Number.isSafeInteger(Number(text))) {
-            throw new Error('--limit must be a positive safe integer');
+            throw new Error(`--limit 必须是正整数：当前是 ${text}`);
         }
         limit = Number(text);
     }
     let concurrency = 1;
     if (values.has('--concurrency')) {
         const text = values.get('--concurrency');
-        if (!/^[1-5]$/u.test(text)) throw new Error('--concurrency must be an integer from 1 to 5');
+        if (!/^[1-5]$/u.test(text)) throw new Error(`--concurrency 必须是 1 到 5 的整数：当前是 ${text}`);
         concurrency = Number(text);
     }
     let retries = 0;
     if (values.has('--retries')) {
         const text = values.get('--retries');
-        if (!/^[0-5]$/u.test(text)) throw new Error('--retries must be an integer from 0 to 5');
+        if (!/^[0-5]$/u.test(text)) throw new Error(`--retries 必须是 0 到 5 的整数：当前是 ${text}`);
         retries = Number(text);
     }
     return { command, providerId: provider.conference.id, conferenceId, year: provider.conference.year,

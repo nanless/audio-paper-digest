@@ -15,23 +15,23 @@ const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --fr
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 
 function parseArgs(argv) {
-    if (argv[0] !== '--apply') throw new Error(`Use ${USAGE}`);
+    if (argv[0] !== '--apply') throw new Error(`命令写法不对，用法：${USAGE}`);
     const values = {};
     for (let index = 1; index < argv.length;) {
         const flag = argv[index]; const value = argv[index + 1];
         if (flag === '--reuse-complete-pages' || flag === '--retry-failed') {
-            if (Object.hasOwn(values, flag)) throw new Error(`Use ${USAGE}`);
+            if (Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
             values[flag] = true; index += 1; continue;
         }
         if (!['--catalog', '--report', '--filter', '--from', '--concurrency'].includes(flag)
-            || !value || Object.hasOwn(values, flag)) throw new Error(`Use ${USAGE}`);
+            || !value || Object.hasOwn(values, flag)) throw new Error(`命令写法不对，用法：${USAGE}`);
         values[flag] = value; index += 2;
     }
     if (!/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(values['--catalog'] || '')
         || !/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(values['--report'] || '')
         || !UUID_RE.test(values['--filter'] || '') || !UUID_RE.test(values['--from'] || '')
         || (values['--concurrency'] && !/^[1-5]$/.test(values['--concurrency']))) {
-        throw new Error(`Use ${USAGE}`);
+        throw new Error(`命令写法不对，用法：${USAGE}`);
     }
     return { apply: true, statusOnly: false, catalogName: values['--catalog'],
         reportName: values['--report'], filterId: values['--filter'],
@@ -56,11 +56,11 @@ function archiveStaleCompletionReceipt(directory, state) {
     if (fs.existsSync(archived)) {
         const existing = fs.readFileSync(archived);
         if (!existing.equals(bytes)) {
-            throw new Error('stale completion receipt archive collides with different bytes');
+            throw new Error(`旧的完成凭证归档字节不同，不能覆盖：${archived}`);
         }
         archived = path.join(directory, `completion-receipt-${digest}-${state.generation}.json`);
         if (fs.existsSync(archived) && !fs.readFileSync(archived).equals(bytes)) {
-            throw new Error('stale completion receipt archive generation collides with different bytes');
+            throw new Error(`旧的完成凭证归档（第 ${state.generation} 代）字节不同，不能覆盖：${archived}`);
         }
     }
     fs.renameSync(filename, archived);
@@ -85,7 +85,7 @@ function migrateAndRun(options, runtime = {}) {
         }
         if (processApi.stableHash(Object.keys(state.items).sort())
             !== processApi.stableHash(expectedPaperIds)) {
-            throw new Error('selected member set differs; refusing implementation migration');
+            throw new Error('选中的论文集合与检查点不一致，停止实现迁移');
         }
         const currentImplementation = context.authority.implementationSha256;
         const migrationFiles = fs.readdirSync(directory).filter(name => (
@@ -130,11 +130,11 @@ function migrateAndRun(options, runtime = {}) {
                     apply: true
                 });
                 if (staged.status !== 'staged') {
-                    throw new Error(`existing complete paper failed current postprocess: ${item.paperId}`);
+                    throw new Error(`已完成的论文用当前后处理代码跑不过：${item.paperId}`);
                 }
                 if (options.reuseCompletePages && (staged.manifest.contentSha256 !== item.pageProof?.contentSha256
                     || staged.manifest.pagePath !== item.pageProof?.pagePath)) {
-                    throw new Error(`existing complete page changed during authenticated replay: ${item.paperId}`);
+                    throw new Error(`按凭证重放时已完成的页面变了：${item.paperId}`);
                 }
                 stagedProofs.set(item.paperId, {
                     manifestSha256: staged.manifest.manifestSha256,
@@ -150,10 +150,10 @@ function migrateAndRun(options, runtime = {}) {
                     const checked = processApi.assertState(current);
                     if (processApi.stableHash(withoutImplementation(checked.authority, checked.version))
                         !== processApi.stableHash(withoutImplementation(context.authority))) {
-                        throw new Error('checkpoint authority changed during implementation migration');
+                        throw new Error('实现迁移期间检查点的授权信息被改过');
                     }
                     if (checked.stateSha256 !== beforeStateSha256) {
-                        throw new Error('checkpoint changed during implementation migration');
+                        throw new Error('实现迁移期间检查点被改过');
                     }
                     const next = structuredClone(checked);
                     next.authority = processApi.authorityForExistingState(checked, context.authority);
