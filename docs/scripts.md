@@ -39,8 +39,8 @@ npm run workspace:role -- status
 | `npm run batch` | 批量处理正式分析结果中未完成的论文 |
 | `npm run batch -- --retry-failed-readers` | 归档并停用未完成论文的失败 Reader 候选后续跑，不影响已完成论文 |
 | `npm run reanalyze -- --concurrency N` | 归档并停用全部旧失败 Reader 候选，清空 Reader/图片补充状态，再用绑定来源强制重分析 |
-| `node scripts/reanalyze-selected.js ID...` | 重分析指定集合 |
-| `node scripts/refilter-reanalyze-by-date.js DATE` | 受控的历史日期重筛与重分析 |
+| `node scripts/reanalyze-selected.js ID...` | 重分析指定集合；统计口径实现见 `scripts/lib/reanalysis-helpers.js` |
+| `node scripts/refilter-reanalyze-by-date.js DATE` | 受控的历史日期重筛与重分析；实现见 `scripts/lib/reanalysis-helpers.js` |
 | `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | 从绑定来源批量刷新评分和 Reader，图片只为本次调用临时准备 |
 | `npm run validate:data` | 只读核验当前数据 |
 | `npm run keyword:recall` | 按金标准重跑关键词预筛 |

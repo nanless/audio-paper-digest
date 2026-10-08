@@ -2340,7 +2340,7 @@ describe('分析运行状态', () => {
 
 describe('选中重分析的统计', () => {
     it('只把旧评分契约恢复为当前契约的论文计入恢复数', () => {
-        const { updateReanalysisStats } = require('../scripts/reanalyze-selected.js');
+        const { updateReanalysisStats } = require('../scripts/lib/reanalysis-helpers.js');
         const data = {
             papers: [{ arxivId: 'a' }, { arxivId: 'b' }, { arxivId: 'c' }],
             stats: { reanalyzed: 1, reanalyzeFailed: 2 }

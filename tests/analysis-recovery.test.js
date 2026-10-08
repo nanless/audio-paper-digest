@@ -29,7 +29,7 @@ const {
     loadRefilterDecisions,
     saveRefilterDecisions,
     promoteRefilterArtifacts
-} = require('../scripts/refilter-reanalyze-by-date.js');
+} = require('../scripts/lib/reanalysis-helpers.js');
 const {
     parseTargetDate,
     validateCompleteFilteredForToday,

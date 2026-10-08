@@ -7,6 +7,7 @@ const path = require('path');
 /**
  * 重新分析指定论文
  * 用法: node scripts/reanalyze-selected.js <arxivId1> [arxivId2] ...
+ * 恢复统计口径实现见 `./lib/reanalysis-helpers.js`（本文件仅保留 CLI 流程）。
  */
 
 const {
@@ -26,57 +27,12 @@ const {
     getAnalysisExitCode
 } = require('./analysis-engine.js');
 const { updateAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./digest-status.js');
+const { resetReaderForSelectedReanalysis, updateReanalysisStats } = require('./lib/reanalysis-helpers.js');
 const Config = require('./config.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 const readerRepair = require('./lib/reader-repair.js');
 
 const RESULT_FILE = Config.FILES.deepAnalysisResult;
-
-function resetReaderForSelectedReanalysis(paper) {
-    const next = structuredClone(paper);
-    const manifest = next.analysisManifest;
-    if (manifest?.stages) {
-        delete manifest.stages.apiReaderArticle;
-        delete manifest.stages.imageSupplement;
-    }
-    if (manifest?.contracts) {
-        delete manifest.contracts.apiReaderArticle;
-        delete manifest.contracts.imageNarrative;
-        if (Object.keys(manifest.contracts).length === 0) delete manifest.contracts;
-    }
-    if (next.analysisStageCheckpoints) {
-        delete next.analysisStageCheckpoints.apiReaderArticle;
-        delete next.analysisStageCheckpoints.imageSupplement;
-    }
-    for (const key of ['analysis', 'parsed', 'error', 'apiReaderArticle', 'apiReaderPlan',
-        'apiReaderFigures', 'apiReaderAuthors', 'apiReaderResources', 'apiReaderArticleSha256',
-        'apiReaderPlanSha256']) delete next[key];
-    return next;
-}
-
-function updateReanalysisStats(data, analyzedResults, previousCurrentRubricIds, runStats, updatedAt) {
-    const recoveredCount = analyzedResults.filter(result => {
-        const key = normalizedId(result);
-        return key && !previousCurrentRubricIds.has(key)
-            && result.parsed?.scoringRubricVersion === SCORING_RUBRIC_VERSION;
-    }).length;
-
-    data.stats = { ...(data.stats || {}) };
-    if (Number.isFinite(Number(data.stats.reanalyzed))) {
-        data.stats.reanalyzed = Math.min(
-            Array.isArray(data.papers) ? data.papers.length : Number.MAX_SAFE_INTEGER,
-            Number(data.stats.reanalyzed) + recoveredCount
-        );
-    }
-    if (Number.isFinite(Number(data.stats.reanalyzeFailed))) {
-        data.stats.reanalyzeFailed = Math.max(0, Number(data.stats.reanalyzeFailed) - recoveredCount);
-    }
-    data.stats.reanalyzeAt = updatedAt;
-    data.stats.selectedReanalyzed = runStats.success;
-    data.stats.selectedReanalyzeFailed = runStats.failed;
-    data.stats.selectedReanalyzeAt = updatedAt;
-    return recoveredCount;
-}
 
 async function reanalyzeSelected(ids) {
     console.log(`=== 重新分析 ${ids.length} 篇论文 ===\n`);

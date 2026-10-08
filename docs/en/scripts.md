@@ -33,8 +33,8 @@ After confirming the checkout's purpose, bind it with `npm run workspace:role --
 | `npm run batch` | Analyze unfinished papers in accepted analysis records |
 | `npm run batch -- --retry-failed-readers` | Archive and disable failed Reader candidates for unfinished papers, then resume |
 | `npm run reanalyze -- --concurrency N` | Archive and disable all old failed Reader candidates, clear Reader/image-supplement state, and force reanalysis from bound sources |
-| `node scripts/reanalyze-selected.js ID...` | Reanalyze selected IDs |
-| `node scripts/refilter-reanalyze-by-date.js DATE` | Controlled historical refilter/reanalysis |
+| `node scripts/reanalyze-selected.js ID...` | Reanalyze selected IDs; counters live in `scripts/lib/reanalysis-helpers.js` |
+| `node scripts/refilter-reanalyze-by-date.js DATE` | Controlled historical refilter/reanalysis; implementation in `scripts/lib/reanalysis-helpers.js` |
 | `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | Refresh scores/Reader from bound sources; prepare figures only for the active call |
 | `npm run validate:data` | Read-only current data validation |
 | `npm run keyword:recall` | Recheck keyword-filter gold data |
