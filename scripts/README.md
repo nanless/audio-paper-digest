@@ -41,7 +41,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 会议恢复与发布维护：
 
 - `conference-queue.js`、`lib/conference-queue.js`：会议总队列，由显式计划驱动并持久保存；逐个会议推进处理、发布和验收，另有只读的计划与状态查询。
-- `conference-workspace.js`：只读诊断工作区状态，Git 未提交改动、进程是否存活、旧运行状态分别判断；检查配置时不输出密钥。
+- `conference-workspace.js`：只读诊断工作区状态，分别判断 Git 未提交改动、进程是否存活和旧运行状态；检查配置时不输出密钥。
 - `lib/conference-process-recovery.js`：查找可恢复的会议进程，核验原身份、失败原因、等待时间和重试条件；即使实现变了，普通入口也不会跳过已有进展重做分析。
 - `lib/conference-source-upgrade.js`：生成来源升级计划并执行已授权的论文分析。新计划使用 v2 和当前词表字段；已有计划先核对原授权和完整对应关系，再保留原来源、分析和尝试记录。
 - `conference_publication_gate.py`：只检查最终 HTML 和已部署 URL，不做语义判断，也不替人做视觉确认。
@@ -306,7 +306,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 
 显式全量原文重写已达到 `promoted`，需要接替同日旧发布时，先运行
 `npm run blog:activate-fresh -- --run-id UUID --dry-run` 查看结果，再去掉 `--dry-run` 执行。
-此入口只处理基线中一个整批和一个单篇旧发布，精确归档其 6 个 manifest/receipt/pass 文件到该 run 的
+此入口只处理基线中一个整批和一个单篇旧发布，精确归档其 6 个清单、凭证与通过记录文件到该 run 的
 `publication-archive/`。它不修改论文分析、博客页面或图片证据，不调用模型，也不推送。
 
 执行前会核验旧凭证各自的原提交、当前 Hugo 仓库干净 HEAD、实时远端 OID 与身份、基线字节及已提升的
@@ -341,20 +341,20 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 正式发布仍会重新解析原正文：标签、阶段和来源核验都要重做，人工评分覆盖过的检查也一样。
 
 标签更新工具的只读检查不迁移旧缓存。注记模式沿缓存原字段更新词表版本和 SHA；显式重新生成模式才在新输出副本中迁移标签字段，
-并保留缓存中的其余内容和评分覆盖。解析结果的字段名与正式阶段记录的保存格式分别核验。
+并保留缓存中的其余内容和评分覆盖。解析结果的字段名与正式阶段记录的保存格式要分别核验。
 
 新的 API 标签阶段与正文检查点都使用 `tagSelection`。`contracts.tagSelectionRecord` 保存独立格式版本
 `paper-tag-stage-record-v2`，阶段内另保存实际使用的标签选择协议。`tagSectionAndPrimaryTagsSha256` 记录标签章节
 与机器摘要中主任务、主方法标签文本的哈希。
 
 `lib/tag-stage-record.js` 与 `tag_stage_record.py` 按明确格式读取记录。旧记录继续使用原阶段名、检查点、格式声明字段
-和十三字段绑定；新绑定只替换标签内容哈希的字段名，其余十二项和顺序保持。字段名参与绑定哈希，因此两种格式
+和十三字段绑定；新绑定只替换标签内容哈希的字段名，其余十二项和顺序保持不变。字段名参与绑定哈希，因此两种格式
 分别按自己的原字段计算。同一记录的阶段、合同、检查点或哈希字段混用两种格式时会被拒绝，即使值相同或为空。
 读取器不改写输入，保留原格式及内容哈希；完整正文、词表、前后阶段和检查点仍须通过原检查。
 
 正常新执行或真正的显式重新生成写新格式。只读检查、同词表的 `already-current` 结果和注记模式保留原格式；
 `reproject` 不会自动迁移全部同词表旧记录。新执行的标签指纹包含新保存格式及读取器源码身份，旧检查点仍按原失效规则处理。
-人工流程的十一项阶段集合、提示身份和审查凭证保持。
+人工流程的十一项阶段集合、提示身份和审查凭证保持不变。
 显式重新生成前，还须核对原格式的十三项哈希绑定和原阶段的格式声明。原哈希或声明不一致时，该篇论文返回阻断结果，不能通过重新计算哈希掩盖旧错误；正文、检查点、所选概念和词表升级情况仍须完整检查。
 
 结构修复在标签段缺失或主标签字段为空时，使用“待选择主任务”“待选择主方法”和“待选择补充标签”标出待处理项。
@@ -373,13 +373,13 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 新页面的标签格式为 `paper-tag-flat-tags-v2`。新上下文文件使用 `paper-research-context-v2`、`schemaVersion=2`，标签信息保存在 `assessment.tagMetadata`。旧 `researcher-sidecars-v1`、`schemaVersion=1` 的 `assessment.taxonomy` 仍按原格式读取。搜索输出已使用新的标签字段，当前显示词表资产也已迁移；它们各自保留旧格式的读取边界。
 新上下文的页面附属文件记录带有明确的 `contract`；旧记录缺少这一标识时，核验器按旧格式重建原字节，不根据标签协议猜上下文格式。三个引用文件不因这项改名改变格式或内容。
 
-直接来源历史汇总在内部也用 `tagMetadata` 传递分析所用的标签词表信息，汇总渲染和标签补充读取同一字段。这个临时对象不写入成员记录或补充证明，原分析文件和页面正文保持。
+直接来源历史汇总在内部也用 `tagMetadata` 传递分析所用的标签词表信息，汇总渲染和标签补充读取同一字段。这个临时对象不写入成员记录或补充证明，原分析文件和页面正文保持不变。
 
 历史页面的标签补充集合使用 `historical-direct-tag-supplement-v2`，分析补充、来源分类和检查点导出均保存为 `tag-history.json`。原 `historical-direct-taxonomy-supplement-v1` 和 `taxonomy-history.json` 按原格式读取，旧文件及逐页证明不会因读取而修改。分析补充与来源分类的新默认目录分别为 `historical-direct-tag-supplements`、`historical-source-tag-classifications`；原目录保留，自定义输出及显式旧检查点路径仍只使用指定位置。
 
-新的来源分类记录使用 `historical-source-tag-classification-v2`，选择、尝试、审核、检查点及报告使用对应格式。新页面证据类型为 `source-only-tags`；词表没有适用类别时，模型返回 `not-covered-by-current-tag-catalog`。程序仍根据片段编号填入原文引文，并独立审核分类。旧分类及审核须按对应的原版本完整核验，旧响应、引文和证明保持。导出旧检查点时，新集合可以收录已核验的旧逐页记录；恢复旧导出报告则按其原格式重新核对全部内容。
+新的来源分类记录使用 `historical-source-tag-classification-v2`，选择、尝试、审核、检查点及报告使用对应格式。新页面证据类型为 `source-only-tags`；词表没有适用类别时，模型返回 `not-covered-by-current-tag-catalog`。程序仍根据片段编号填入原文引文，并独立审核分类。旧分类及审核须按对应的原版本完整核验，旧响应、引文和证明保持不变。导出旧检查点时，新集合可以收录已核验的旧逐页记录；恢复旧导出报告则按其原格式重新核对全部内容。
 
-新会议汇总使用 `conference-aggregate-staging-v2`、`version=2`，标签信息和层级统计分别保存在 `tagMetadata`、`tagHierarchy`，成员的标签分配 SHA 为 `tagAssignmentSha256`。层级格式为 `conference-tag-hierarchy-v2`。Python 发布器先核对汇总记录的规范对象 SHA、完成记录和 Markdown 原字节，再按明确版本读取字段；旧 v1 汇总按原字段读取，新旧字段混用会被拒绝。汇总版本与子论文页、标签分配的版本分别管理，旧证明和已保存的阶段文件保持。
+新会议汇总使用 `conference-aggregate-staging-v2`、`version=2`，标签信息和层级统计分别保存在 `tagMetadata`、`tagHierarchy`，成员的标签分配 SHA 为 `tagAssignmentSha256`。层级格式为 `conference-tag-hierarchy-v2`。Python 发布器先核对汇总记录的规范对象 SHA、完成记录和 Markdown 原字节，再按明确版本读取字段；旧 v1 汇总按原字段读取，新旧字段混用会被拒绝。汇总版本与子论文页、标签分配的版本分别管理，旧证明和已保存的阶段文件保持不变。
 
 页面的标签字段有六项：`contract`、`selection_contract`、`registry_version`、`registry_sha256`、`concepts` 和 `scope`。
 同一页只能使用 `paper_digest_tags_*` 或旧 `paper_digest_taxonomy_*` 中的一组，混用会被拒绝，即使值相同或为空。
@@ -389,7 +389,7 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 旧 `paper-taxonomy-flat-tags-compat-v1` 记录按原声明读取。新字段族可能包含上一批已保存的旧协议，读取时不改写；新生成只使用 `paper-tag-flat-tags-v2`。两版标签含义相同，未知协议不能通过已核验标签判断。会议汇总可以读取两版合法成员，但新汇总页面明确写新版，不沿用首篇成员的旧协议。
 旧页面审查按页面声明的协议重建预期标签和附属资料字节；原页面、资料及来源 SHA 仍逐项核验。
 新的历史扫描策略为 `historical-page-scan-policy-v5`。页面用 `legacyTagRouteCandidates` 保存旧标签的候选链接，候选中的 `routeGroup` 区分 tags 和 categories；这些链接还没核验，不能当作分类已通过的依据。`tagRoutes` 为 `unverified-candidates-v3`，发布证据仍使用原 v4 字段范围。
-旧 v3、v4 清单按各自完整原策略和原字段读取，原摘要与配对凭证保持。新旧候选字段混用、格式不对应或未知策略会被拒绝。新扫描生成新的结果和凭证，不覆盖旧文件；总文件、凭证及页面编号的独立版本不变。
+旧 v3、v4 清单按各自完整原策略和原字段读取，原摘要与配对凭证保持不变。新旧候选字段混用、格式不对应或未知策略会被拒绝。新扫描生成新的结果和凭证，不覆盖旧文件；总文件、凭证及页面编号的独立版本不变。
 
 分析的当前指纹分别用 `tagCatalogVersion`、`tagCatalogSha256`、`tagPromptContract`、`tagPromptSha256` 和 `tagSelectionContract`
 记录词表、提示与选择规则。字段迁移会改变主分析、修订、结构修复和标签选择的输入指纹，旧检查点按原规则失效。
@@ -397,7 +397,7 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 分配和页面清单仍使用各自原版本。升级后生成新的实现目录，原页面和原证明保留，不通过改写旧字段来沿用旧指纹。
 发布器的模板指纹用 `tagCatalogSha256` 记录词表内容摘要；临时文件许可用 `controlledTagFiles` 标明已核验的词表文件。
 
-博客新生成的词表归档保存在 `data/tag-catalog-history/<SHA>.json` 和 `static/data/tag-catalog-history/<SHA>.json`，两份文件须逐字节相同。原 `taxonomy-snapshots` 只供读取和恢复，保留原路径；已有安装记录先核对完整文件 SHA，再按其保存的文件集合恢复，不调用新生成器补目录。快照对象、来源 SHA、概念顺序及展示策略的六个字段保持，所选归档仍核对批准的原文件字节。详见 [展示词表说明](../docs/tag-display-policy.md)。
+博客新生成的词表归档保存在 `data/tag-catalog-history/<SHA>.json` 和 `static/data/tag-catalog-history/<SHA>.json`，两份文件须逐字节相同。原 `taxonomy-snapshots` 只供读取和恢复，保留原路径；已有安装记录先核对完整文件 SHA，再按其保存的文件集合恢复，不调用新生成器补目录。快照对象、来源 SHA、概念顺序及展示策略的六个字段保持不变，所选归档仍核对批准的原文件字节。详见 [展示词表说明](../docs/tag-display-policy.md)。
 
 当前标签阶段和选择元数据写入 `paper-tag-selection-v2`。读取旧记录时仍接受明确的 `paper-taxonomy-selection-v1`，
 但须按记录原字段和值核验全部绑定；新旧保存格式都可能包含旧选择协议，不能仅凭阶段格式判断选择协议。
@@ -410,7 +410,7 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 
 新模型请求使用 `paper-tag-prompt-text-v2` 标签提示。Node 的 `buildTagPromptText(tagCatalog, promptTextContract)`
 和 Python 的 `build_tag_prompt_text(tag_catalog, prompt_text_contract)` 默认使用新版；只有核验旧记录时才显式选择
-`paper-taxonomy-prompt-projection-v1`。这次变化只改提示协议行和中文说明，词表、概念选择规则及输出字段保持。
+`paper-taxonomy-prompt-projection-v1`。这次变化只改提示协议行和中文说明，词表、概念选择规则及输出字段不变。
 
 词表 SHA 相同时，读取器按记录保存的提示版本精确核对全文 SHA。词表升级后，新版还须按旧词表快照核对提示 SHA，
 并通过原有升级检查。旧版跨词表记录保留原兼容范围：Node 不单独核对提示 SHA，Python 只检查其格式；
@@ -462,12 +462,12 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 `data/current/deep-analysis-result.json` 的逐篇标签记录，以及新旧历史分配目录。
 默认读取 `historical-tag-assignments` 和保留的 `historical-taxonomy-assignments`，按词表 SHA 汇总数量、示例论文编号和与当前词表的差异。每份目录的统计与条目保留实际来源，不能因来源名称相同而覆盖计数。
 它不删除、改写、重新验证或调用模型。格式混用须明确报告为不可读，不能取其中一套字段继续统计。
-当前盘点输出使用 `paper-tag-record-inventory-v2`；原分组、计数和退出码保持。
+当前盘点输出使用 `paper-tag-record-inventory-v2`；原分组、计数和退出码保持不变。
 测试样例可用 `--executions/--deep/--assignments/--registry` 显式指定路径；传入 `--assignments` 时只扫描指定目录。
 
 新版历史标签分配使用 `paper-tag-assignment-v2`、`version=2`，保存到 `data/runtime/historical-tag-assignments`，文件名使用 `.tags.`。旧 v1 的两种 `.taxonomy.` 文件名及原目录保留，不能覆写或移走。当前生成优先读取与预期结果对应的新版文件，文件无效时直接拒绝；已有页面恢复则先核对原页面清单，再用其中保存的分配对象 SHA 和文件 SHA 选择原记录。这样，即使旁边已有新版分配或排版不同的旧副本，也不会替换页面的原证据。同一论文多页保存的这两项 SHA 必须一致。
 
-历史单篇页面、页面输入记录、每日汇总和调度检查点使用各自的 v2 格式。页面和调度记录用 `tagAssignmentSha256` 表示标签分配记录的 SHA，用 `tagAssignmentFileSha256` 表示原文件的 SHA；每日汇总的词表 SHA 保存在 `tagCatalogSha256`。旧 v1 文件仍按原字段核验，读取时不改写。页面对应记录 `selectedBindings` 没有改名，其内容和 SHA 保持。
+历史单篇页面、页面输入记录、每日汇总和调度检查点使用各自的 v2 格式。页面和调度记录用 `tagAssignmentSha256` 表示标签分配记录的 SHA，用 `tagAssignmentFileSha256` 表示原文件的 SHA；每日汇总的词表 SHA 保存在 `tagCatalogSha256`。旧 v1 文件仍按原字段核验，读取时不改写。页面对应记录 `selectedBindings` 没有改名，其内容和 SHA 保持不变。
 
 历史发布计划使用 `historical-publication-plan-v2`、`version=2`，列出实际读取的页面和汇总格式；生成记录和输入记录仍使用各自原有的 v1 格式。恢复旧计划时，程序按原格式重建并比较完整证明，不把旧证明转换成新版。生成器源码变化会产生新的实现指纹；原本因实现不一致而不能恢复的页面，仍须重新生成。
 

@@ -343,7 +343,7 @@ npm run conference:new:process -- --source-upgrade-promote \
 
 ## 旧会议来源和隔离执行的维护
 
-本节命令均属于 history 工作区，用于维护已有独立会议链。它们不替代新会议 process，也不自动映射历史页面清单的旧 URL 和任务页。旧会议汇总未接入 `history:publication` 的限制只属于该旧入口，不能据此说当前历史直接发布没有会议能力。
+以下命令均属于 history 工作区，用于维护已有独立会议链。它们不替代新会议 process，也不自动映射历史页面清单的旧 URL 和任务页。旧会议汇总未接入 `history:publication` 的限制只属于该旧入口，不能据此说当前历史直接发布没有会议能力。
 
 一份本机 PDF 的文件名、相似题目或旧博客题目不足以证明论文身份。旧链先固定官方主身份、PDF 字节和匹配依据，再依次发现、筛选、提取、复核、导入、计划及隔离执行。
 
@@ -551,7 +551,7 @@ npm run conference:execution -- prepare \
 
 并发进程已创建相同 `authority.json` 时，失败方只重验完整文件组，不回滚共享文件。其他创建错误只清理由本进程记录、且当前 dev/ino/size/SHA 仍与写入描述符一致的文件或目录。操作锁、状态 SHA 比较及受控补丁保证可恢复，不能删除记录绕过检查。
 
-transition 只读 execution `patches/` 直属 JSON。`expectedStateSha256` 使用当前 status 对应值，`operationId` 不可复用于不同字节。来源就绪补丁如下；没有完成证明包（completion-proof bundle）时手写 completed 一定拒绝：
+transition 只读 execution `patches/` 直属 JSON。`expectedStateSha256` 使用当前 status 对应值，`operationId` 不可复用于不同字节。来源就绪补丁如下；没有完成证明包（completion-proof bundle）时，手写 completed 一定被拒绝：
 
 ```json
 {
@@ -598,4 +598,4 @@ ICML/OpenReview 替代 PDF 默认拒绝，不能以相似题目替换来源。�
 
 当前历史直接发布已有计划、生成、独立审查和精确发布入口，维护旧 URL、会议汇总和任务页。旧 `history:publication` 的私有输出不能代替它；独立 `activate --apply` 已禁用，`publish --apply` 在共享锁内完成交接、提交、推送和远端核验。具体参数及中断恢复见[历史直接发布](history-direct-publication.md)，不据旧分支的未完成说明跳过当前流程。
 
-每篇仍只允许一个写入者，请求用量和检查点保留；来源、Reader 或标签规则变化按实际指纹及迁移要求处理，不无限复用旧通过。每次直接重写的质量审查都是正常阶段，不能当作可省略的试点。发布范围是否排除视觉或允许豁免取决用户明确要求，命令示例不能代替用户授权或决定；Git 到达远端仍不能替代部署和页面核验。
+每篇仍只允许一个写入者，请求用量和检查点保留；来源、Reader 或标签规则变化按实际指纹及迁移要求处理，不无限复用旧通过。每次直接重写的质量审查都是正常阶段，不能当作可省略的试点。发布范围是否排除视觉或允许豁免取决于用户明确要求，命令示例不能代替用户授权或决定；Git 到达远端仍不能替代部署和页面核验。

@@ -299,4 +299,4 @@ plan/generate 核验 `selectedBindings`、crosswalk/inventory、封存分析来�
 
 `oldGeneratedTextIncluded:false` 表示旧正文不进入创作或新产物，事务仍会短暂读取旧 Git/工作树字节计算基线 SHA。旧入口不支持会议汇总，非空会议引用（`conference refs`）被拒绝；这项限制不适用于当前独立历史发布。私有文件完整不等于已允许改写博客或已发布。
 
-当前历史发布按相对路径与最终内容 SHA 复用逐页通过记录；模型、代码、Hugo、协议或 manifest 元数据变化仍须重做当前批次检查并生成新 receipt。只有内容 SHA 改变才重审页面，基线及远端校验不放宽。完整发布与上线验收见[历史发布说明](history-direct-publication.md)。
+当前历史发布按相对路径与最终内容 SHA 复用逐页通过记录；模型、代码、Hugo、审查协议或生成清单元数据变化仍须重做当前批次检查并生成新的审查凭证。只有内容 SHA 改变才重审页面，基线及远端校验不放宽。完整发布与上线验收见[历史发布说明](history-direct-publication.md)。

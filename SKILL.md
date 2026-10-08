@@ -176,7 +176,7 @@ npm run deep -- --date YYYY-MM-DD
 # 只续正式分析结果中未完成的论文
 npm run batch
 
-# 只归档并停用当前未完成论文的失败 Reader 候选后续跑
+# 只归档并停用当前未完成论文的失败 Reader 候选，然后续跑
 npm run batch -- --retry-failed-readers
 
 # 强制重分析
