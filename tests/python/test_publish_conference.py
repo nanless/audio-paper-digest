@@ -228,12 +228,48 @@ class ConferencePublishTests(unittest.TestCase):
                 mock.patch.object(M, 'image_repo', return_value=self.repo), \
                 mock.patch.object(M, 'validate_generation', return_value=(generation, {}, {})), \
                 mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
+                mock.patch.object(M, 'require_content_review_runtime'), \
                 mock.patch.object(M, 'run_hugo', return_value={'status': 'passed'}) as hugo, \
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
             with self.assertRaisesRegex(M.ConferencePublicationError, '语义 review'):
                 M.review('icassp-2026', 'f4e4a4e4-a4e4-44e4-a4e4-a4e4a4e4a4e4')
             hugo.assert_not_called()
         self.assertFalse(list((self.root / 'receipts').rglob('review.json')))
+
+    def test_review_without_hugo_runtime_refuses_to_seal_a_pass(self):
+        # 缺 Hugo 运行时的检出目录跑不了正文/图片审查。这条路径过去会伪造一份
+        # status=passed 的 contentReview 并落盘；现在必须在落任何凭证之前停下。
+        r = self.record()
+        body = {'contract': 'conference-blog-generation-v1', 'version': 2,
+                'conferenceId': 'icassp-2026',
+                'processId': 'f4e4a4e4-a4e4-44e4-a4e4-a4e4a4e4a4e4',
+                'baseHead': self.base['head'], 'remoteMainBefore': self.base['remoteMain'],
+                'remoteIdentitySha256': self.base['remoteIdentitySha256'],
+                'files': [r], 'imageFiles': [], 'imageBaseHead': self.base['head'],
+                'imageRemoteMainBefore': self.base['remoteMain'],
+                'imageRemoteIdentitySha256': self.base['remoteIdentitySha256']}
+        generation = {**body, 'generationSha256': M.stable(body)}
+        with mock.patch.object(M, 'blog_repo', return_value=self.repo), \
+                mock.patch.object(M, 'image_repo', return_value=self.repo), \
+                mock.patch.object(M, 'validate_generation', return_value=(generation, {}, {})), \
+                mock.patch.object(M, 'run_hugo', return_value={'status': 'passed'}) as hugo, \
+                mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
+            self.assertFalse(M.blog_runtime_present(self.repo))
+            with self.assertRaisesRegex(M.ConferencePublicationError, 'Hugo 运行时'):
+                M.review('icassp-2026', 'f4e4a4e4-a4e4-44e4-a4e4-a4e4a4e4a4e4')
+            hugo.assert_not_called()
+        self.assertFalse(list((self.root / 'receipts').rglob('review.json')))
+
+    def test_content_review_protocol_never_substitutes_a_fixture(self):
+        # 指纹算不出来时必须原样抛出，不能换成任何替代协议让凭证自洽。
+        reviewer = FakeReviewer()
+
+        def broken():
+            raise RuntimeError('blog runtime fingerprint unavailable')
+
+        reviewer.review_protocol_fingerprint = broken
+        with self.assertRaisesRegex(RuntimeError, 'fingerprint unavailable'):
+            M.content_review_protocol(reviewer)
 
     def test_review_path_byte_cache_survives_protocol_change(self):
         r = self.record(data='---\ntitle: test\n---\n正文\n![图](https://example.invalid/a.png)\n'.encode())
@@ -396,15 +432,21 @@ class ConferencePublishTests(unittest.TestCase):
             if args[0] == 'push':
                 raise M.ConferencePublicationError('offline')
             return original(repo, *args, **kwargs)
+        content_review = {'status': 'passed', 'protocol': 'offline-protocol',
+                          'pages': [{'path': r['path'], 'sha256': r['sourceSha256'],
+                                     'passed': True, 'issues': [], 'imageCount': 0,
+                                     'protocol': 'offline-protocol'}]}
         with mock.patch.object(M, 'blog_repo', return_value=self.repo), \
                 mock.patch.object(M, 'image_repo', return_value=images), \
                 mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
+                mock.patch.object(M, 'require_content_review_runtime'), \
+                mock.patch.object(M, 'review_pages', return_value=content_review), \
                 mock.patch.object(M, 'run_hugo', return_value={'status': 'passed'}) as hugo, \
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
             M.review(conference_id, process_id)
             reviewer.protocol = 'new-gate'
             M.review(conference_id, process_id)
-            self.assertEqual(reviewer.calls, 1)
+            self.assertEqual(reviewer.calls, 0)
             self.assertEqual(hugo.call_count, 2)
             with mock.patch.object(M, 'git', side_effect=fail_push):
                 with self.assertRaisesRegex(M.ConferencePublicationError, 'offline'):
@@ -486,7 +528,9 @@ class ConferencePublishTests(unittest.TestCase):
         M.write_exact(directory / 'generation.json', M.json_bytes(old))
         reviewer = FakeReviewer()
         gate = {'status': 'passed', 'contract': M.GATE_CONTRACT,
-                'implementationSha256': M.gate_fingerprint()}
+                'implementationSha256': M.gate_fingerprint(),
+                'pages': [{'path': record['path'], 'sourceSha256': record['sourceSha256']}
+                          for record in previous['files']]}
         with mock.patch.object(M, 'blog_repo', return_value=self.repo), \
                 mock.patch.object(M, 'image_repo', return_value=images), \
                 mock.patch.object(M, 'process_bundle', return_value={
@@ -621,6 +665,63 @@ class ConferencePublishTests(unittest.TestCase):
         self.record()
         with self.assertRaisesRegex(M.ConferencePublicationError, '迁移期间发生字节变化'):
             self.check_rebase(images, previous)
+
+
+class PreContentReviewV2ReceiptTest(ConferencePublishTests):
+    """已发布 v2 凭证的旧格式识别，以及识别边界。"""
+
+    def v2_generation(self):
+        page = self.record()
+        body = {'version': 2, 'conferenceId': 'uai-2026',
+                'processId': '2d881273-2bbb-4c38-a56f-465daa8a5a43',
+                'baseHead': self.base['head'], 'files': [page], 'imageFiles': []}
+        return {**body, 'generationSha256': M.stable(body)}
+
+    def v2_receipt(self, generation, *, content_review='absent', pages='closed'):
+        gate = {'status': 'passed', 'contract': M.GATE_CONTRACT,
+                'implementationSha256': M.gate_fingerprint()}
+        if pages == 'closed':
+            gate['pages'] = [{'path': r['path'], 'sourceSha256': r['sourceSha256']}
+                             for r in generation['files']]
+        body = {'contract': 'conference-blog-review-v1', 'version': 2,
+                'conferenceId': generation['conferenceId'],
+                'processId': generation['processId'],
+                'generationSha256': generation['generationSha256'], 'baseHead': generation['baseHead'],
+                'files': generation['files'], 'imageFiles': generation['imageFiles'],
+                'hugo': gate}
+        if content_review != 'absent':
+            body['contentReview'] = content_review
+        return {**body, 'reviewSha256': M.stable(body)}
+
+    def test_published_v2_without_content_review_is_recognized_as_old_format(self):
+        # 早期 v2 凭证不写 contentReview，当时的校验也不要求它；读取已发布凭证
+        # （current=False）时按旧格式识别，不重开一条发布链。
+        generation = self.v2_generation()
+        M.validate_review(generation, self.v2_receipt(generation), current=False)
+        # 但当前代码写不出这种凭证：待推送的凭证仍必须带一份通过的 contentReview。
+        with self.assertRaisesRegex(M.ConferencePublicationError, '语义 review'):
+            M.validate_review(generation, self.v2_receipt(generation), current=True)
+
+    def test_v2_receipt_with_failed_content_review_stays_rejected(self):
+        # 有 contentReview 但没通过、或逐页记录不符的凭证，任何时候都不放行。
+        generation = self.v2_generation()
+        failed = {'status': 'failed', 'protocol': 'p', 'pages': []}
+        with self.assertRaisesRegex(M.ConferencePublicationError, '语义 review'):
+            M.validate_review(generation, self.v2_receipt(generation, content_review=failed),
+                              current=False)
+        mismatched = {'status': 'passed', 'pages': [],
+                      'protocol': M.content_review_protocol(M.load_publish_to_blog())}
+        with self.assertRaisesRegex(M.ConferencePublicationError, '逐页内容 review'):
+            M.validate_review(generation, self.v2_receipt(generation, content_review=mismatched),
+                              current=False)
+
+    def test_v2_receipt_without_html_page_set_is_rejected_even_when_reading(self):
+        # 旧格式豁免只覆盖 contentReview 字段；HTML 门禁页面集合对每个 v2
+        # 凭证都必须闭合，缺了它不能靠 current=False 蒙过去。
+        generation = self.v2_generation()
+        with self.assertRaisesRegex(M.ConferencePublicationError, '页面集合不闭合'):
+            M.validate_review(generation, self.v2_receipt(generation, pages='missing'),
+                              current=False)
 
 
 class FindManifestIndexTest(unittest.TestCase):

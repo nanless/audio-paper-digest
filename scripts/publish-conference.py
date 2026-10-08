@@ -674,6 +674,15 @@ def target_bytes(repo, record):
 
 
 def replace_exact(filename, data):
+    """原地替换一个已存在、且已核实为普通单链接文件的博客目标，并绑 0644。
+
+    这段写入不能改成公共的「临时文件 + rename」helper，它有独有的前置契约：
+    - 目标必须已存在、是普通文件、不是符号链接、硬链接数为 1。`os.replace`
+      作用于路径本身：目标是符号链接时替换掉的是链接，不是它指向的文件；
+      公共 helper 没有这层校验，直接套用会改错文件。
+    - 目标权限固定 0644，不继承目标原权限位（公共 helper 默认继承）。
+    - 写完后先 fsync 文件再 fsync 目录，保证替换后的目录项落盘。
+    """
     filename = Path(filename)
     info = filename.lstat()
     if not filename.is_file() or filename.is_symlink() or info.st_nlink != 1:
@@ -1265,18 +1274,30 @@ def blog_runtime_present(repo):
     return config and render_tree
 
 
-def content_review_protocol(module, repo=None):
-    try:
-        fingerprint = module.review_protocol_fingerprint()
-    except Exception:
-        # 离线单元测试用的仓库有意只放一个 Git 工作区和一个暂存页面。真正的博客
-        # 检出目录有 Hugo 配置和模板，只有它才能产出生产协议指纹。没有传仓库
-        # 上下文时，直接调用 review_pages 的调用方仍会拿到原来的异常。
-        if repo is None or blog_runtime_present(repo):
-            raise
-        fingerprint = 'conference-review-fixture-no-runtime-v1'
-    return stable({'publisher': fingerprint,
+def content_review_protocol(module):
+    """内容审查协议指纹。算不出来就照原样抛出，不替换成任何替代协议。
+
+    这里曾经在异常时把指纹换成 `conference-review-fixture-no-runtime-v1`，
+    让「没有 Hugo 运行时」的仓库也能产出一份自洽的通过凭证。指纹代表的是
+    审查代码、模型和 Hugo 运行时的真实组合；它算不出来的时候，任何替代值
+    都只是让凭证看起来成立，等于给未做的审查盖章。
+    """
+    return stable({'publisher': module.review_protocol_fingerprint(),
                    'conferencePublisherSha256': sha_bytes(read_bytes(Path(__file__)))})
+
+
+def require_content_review_runtime(repo):
+    """没有 Hugo 运行时的检出目录不能做内容审查，也不能出通过凭证。
+
+    正文与图片审查都建立在真实渲染结果上：没有 Hugo 配置或模板，就没有
+    可审查的 HTML，也没有可绑定的审查协议。这条路径过去会跳过全部审查并
+    伪造一份 passed 凭证，现在直接停下。
+    """
+    if blog_runtime_present(repo):
+        return
+    raise ConferencePublicationError(
+        f'review 需要博客仓库里的 Hugo 运行时（hugo.yaml/hugo.yml/hugo.toml/hugo.json '
+        f'任一，加 layouts/assets/themes 任一），当前检出目录没有: {repo}')
 
 
 def raise_content_review_failure(record, digest, protocol, stage, findings, message, **details):
@@ -1307,7 +1328,7 @@ def review_pages(repo, records, workers=None):
     module = load_publish_to_blog()
     module.BLOG_REPO = str(repo)
     module.CONTENT_DIR = str(repo / 'content' / 'posts')
-    protocol = content_review_protocol(module, repo)
+    protocol = content_review_protocol(module)
 
     # 会议侧逐页 review 原为串行（~70s/页 × 1355 页 ≈ 26 小时）——按日更同款
     # PD_BLOG_REVIEW_CONCURRENCY（1–5，默认 5）并行化。逐页函数保持“首个坏页即抛”
@@ -1398,21 +1419,8 @@ def review(conference_id, process_id):
         images = image_repo()
         generation, _, _ = validate_generation(
             conference_id, process_id, repo, images, allow_committed=True)
-        reviewer = load_publish_to_blog()
-        if hasattr(reviewer, 'BLOG_REPO') and not blog_runtime_present(repo):
-            # 只有一个裸 Git 夹具跑不了真正的 Hugo/LLM 审查。这条隔离的兼容
-            # 路径留一份确定的 review 凭证；生产仓库都有 Hugo 运行时，
-            # 会走下面的 review_pages()。
-            protocol = content_review_protocol(reviewer, repo)
-            content_review = {
-                'status': 'passed', 'protocol': protocol,
-                'pages': [{'path': safe_relative(record['path'], 'review 页面'),
-                           'sha256': record['sourceSha256'], 'passed': True,
-                           'issues': [], 'imageCount': 0, 'protocol': protocol}
-                          for record in generation['files']],
-            }
-        else:
-            content_review = review_pages(repo, generation['files'])
+        require_content_review_runtime(repo)
+        content_review = review_pages(repo, generation['files'])
         # 按已认证的 generation 重建 Hugo，跑完语义与多模态 review 之后再封凭证。
         # 整个 review 对博客仓库和图片仓库都是只读的。
         hugo = run_hugo(repo, generation)
@@ -1453,14 +1461,24 @@ def validate_review(generation, receipt, *, current=True):
                                 or (current and gate.get('implementationSha256') != gate_fingerprint()))):
         raise ConferencePublicationError('review receipt 无效或门禁实现变化，请重新 review')
     pages = gate.get('pages')
-    if pages is not None and (not isinstance(pages, list) or len(pages) != len(generation['files']) \
+    if not legacy and (pages is None or not isinstance(pages, list) or len(pages) != len(generation['files']) \
             or {(p.get('path'), p.get('sourceSha256')) for p in pages} != {
                 (r['path'], r['sourceSha256']) for r in generation['files']}):
         raise ConferencePublicationError('review HTML 页面集合不闭合')
     if not legacy:
-        content = receipt.get('contentReview') or {}
+        content = receipt.get('contentReview')
+        if content is None and not current:
+            # v2 凭证的含义中途变过：早期版本写 version 2 但不写 contentReview，
+            # 当时的 validate_review 也不要求它。这 15 份已发布凭证的自哈希、
+            # files/imageFiles、generationSha256 和 HTML 门禁页面集合都对得上，
+            # 是那段代码的合法产物，不是缺陷产物；现在的发布器给每个 v2
+            # generation 都写 contentReview，缺这个字段不可能由当前代码产生。
+            # 所以只在读取已发布凭证（current=False）时按旧格式识别，新发布
+            # 和待推送的凭证照旧必须带一份通过的 contentReview。
+            return
+        content = content or {}
         if content.get('status') != 'passed' \
-                or content.get('protocol') != content_review_protocol(load_publish_to_blog(), blog_repo()):
+                or content.get('protocol') != content_review_protocol(load_publish_to_blog()):
             raise ConferencePublicationError('会议页面语义 review 凭证无效')
         reviewed = content.get('pages')
         if [(p.get('path'), p.get('sha256'), p.get('passed')) for p in reviewed or []] != [

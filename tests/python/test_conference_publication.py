@@ -256,6 +256,20 @@ class GitPublicationTest(unittest.TestCase):
                            'checks': [{'url': page['url']}, {'url': publisher.IMAGE_BASE_URL + '/' + asset['path']}]}
         self.gate = {'status': 'passed', 'contract': gate.GATE_CONTRACT, 'pages': [page],
                      'implementationSha256': publisher.gate_fingerprint()}
+        # review() 的内容审查要求真实 Hugo 运行时和带 frontmatter 的页面；这些
+        # 用例只验证发布流程，内容审查本身由 test_publish_conference.py 覆盖。
+        protocol = publisher.content_review_protocol(publisher.load_publish_to_blog())
+        self.content_review = {
+            'status': 'passed', 'protocol': protocol,
+            'pages': [{'path': record['path'], 'sha256': record['sourceSha256'],
+                       'passed': True, 'issues': [], 'imageCount': 0,
+                       'protocol': protocol}]}
+        review_pages = mock.patch.object(publisher, 'review_pages', return_value=self.content_review)
+        review_pages.start()
+        self.addCleanup(review_pages.stop)
+        runtime = mock.patch.object(publisher, 'require_content_review_runtime')
+        runtime.start()
+        self.addCleanup(runtime.stop)
         return record, asset
 
     def test_generate_repeated_never_pushes_then_failed_urls_remain_pending(self):
