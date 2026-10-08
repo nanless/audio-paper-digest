@@ -125,7 +125,7 @@ function recordLlmUsage(input, options = {}) {
 
 function recordLlmDisposition(input, options = {}) {
     if (!['accepted', 'rejected'].includes(input?.disposition) || !digest(input.outputTextSha256)) {
-        throw new Error('Invalid LLM disposition');
+        throw new Error('LLM disposition 无效');
     }
     const event = { version: VERSION, kind: 'disposition', eventId: crypto.randomUUID(),
         at: new Date().toISOString(), runtime: 'node', ...usageContext(input),

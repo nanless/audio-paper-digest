@@ -64,12 +64,12 @@ async function runLocalCrawlBatch({ crosswalkRoot, identityRoot, snapshotRoot, d
     fail('local crawler crosswalk mutation is retired; use history:direct-inputs and history:direct-plan');
     /* c8 ignore next -- 保留在下面，作为既有运行时记录的事后取证参考。 */
     const deps = { ...dependencies(), ...overrides };
-    if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 5) fail('concurrency must be an integer from 1 to 5');
+    if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 5) fail('concurrency 必须是 1 到 5 的整数');
     const initial = deps.readCrosswalk({ crosswalkRoot, crosswalkId }); const index = deps.scan({ dataRoot });
     const matches = index.matches;
     const all = eligiblePages(initial).map(page => ({ ...page, match: selectMatch(matches.get(page.arxivId) || [], page.cohortDate) }));
     const matched = all.filter(item => item.match); const maximum = limit === null ? matched.length : limit;
-    if (!Number.isSafeInteger(maximum) || maximum < 0) fail('limit must be null or a non-negative integer');
+    if (!Number.isSafeInteger(maximum) || maximum < 0) fail('limit 必须是 null 或非负整数');
     const selected = matched.slice(0, maximum);
     if (!apply) return { status: 'dry-run', crosswalkId, localCrawlFiles: index.files.length,
         eligiblePages: all.length, matchedPages: matched.length, unmatchedPages: all.length - matched.length,

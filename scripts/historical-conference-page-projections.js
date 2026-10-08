@@ -32,7 +32,7 @@ function main(argv = process.argv.slice(2), runtime = {}) {
     const blogRoot = runtime.blogRoot || Config.PUBLISH_CONFIG.blogRepo;
     if (typeof files.historicalConferencePageProjectionDir !== 'string'
         || !path.isAbsolute(files.historicalConferencePageProjectionDir) || !path.isAbsolute(blogRoot)) {
-        throw new Error('configured conference projection root and blog root must be absolute');
+        throw new Error('配置的会议投影根目录和博客根目录必须是绝对路径');
     }
     const artifact = api.buildFromFiles({ ...options, blogRoot });
     if (!options.apply) return { status: 'dry-run', projections: artifact.projections.length,

@@ -51,7 +51,7 @@ function assertHandoffMatchesCrosswalk(state, handoff) {
 }
 
 function selectedGroups(state, handoffs) {
-    if (!Array.isArray(handoffs) || !handoffs.length) fail('at least one named fresh-failure handoff is required');
+    if (!Array.isArray(handoffs) || !handoffs.length) fail('至少需要一个具名的 fresh 失败交接单');
     const arxivIds = new Set(); const pageKeys = new Set();
     return handoffs.map(({ handoffName, fileSha256, handoff }) => {
         if (!SAFE_NAME_RE.test(String(handoffName || '')) || !/^[a-f0-9]{64}$/.test(String(fileSha256 || ''))

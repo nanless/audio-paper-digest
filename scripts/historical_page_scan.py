@@ -1323,7 +1323,7 @@ def _strict_json(raw: bytes, label: str) -> dict[str, Any]:
             result = {}
             for key, value in pairs:
                 if key in result:
-                    raise ValueError(f"duplicate key: {key}")
+                    raise ValueError(f"重复的键：{key}")
                 result[key] = value
             return result
 
@@ -1360,7 +1360,7 @@ def write_inventory_pair(output_dir: Path, ledger_name: str, receipt_name: str,
             while written < len(payload):
                 count = os.write(fd, payload[written:])
                 if count <= 0:
-                    raise OSError("short write")
+                    raise OSError("写入不完整")
                 written += count
             os.fsync(fd); os.fchmod(fd, 0o600)
         _assert_repository_snapshot(checked_repo, ledger, remote_name)

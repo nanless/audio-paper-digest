@@ -56,7 +56,7 @@ def feishu_request(url, headers=None, data=None, method='GET'):
         return result.get('data', result)
     except urllib.error.HTTPError as e:
         err_body = e.read().decode('utf-8', errors='replace')
-        raise Exception(f"HTTP {e.code}: {err_body[:200]}")
+        raise Exception(f"HTTP {e.code}：{err_body[:200]}")
 
 
 def get_tenant_token(app_id, app_secret):

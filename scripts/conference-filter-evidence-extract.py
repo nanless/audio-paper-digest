@@ -17,7 +17,7 @@ def parse_args(argv):
             "usage: --apply|--verify --manifest NAME.json --source-root ABS")
     root = Path(argv[4])
     if not root.is_absolute():
-        raise ConferenceExtractionError("source root must be absolute")
+        raise ConferenceExtractionError("来源根目录必须是绝对路径")
     return argv[0][2:], argv[2], root
 
 
