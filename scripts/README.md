@@ -111,7 +111,6 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/conference-filter.js` | Node 库 | 固定候选、已核验的证据文件、逐篇凭证、日更提示词、关键词策略、会议领域标签，以及模型、接口地址和词表的指纹。状态为 `ready` 的摘要进入关键词和提示词筛选；其他项交给模型。程序保存意图、请求凭证和决定，并在写入前核对原状态。生产凭证只能由固定公共 LLM 路由生成，不接受请求实现注入；恢复时先核验旧锁和已有记录，避免重复执行。 |
 | `lib/conference-process.js` | Node 库 | 对会议完整入选集合封存官方 PDF、导入来源，调用公共引擎分析，生成读者文章、评分、分类页面和汇总。整批默认并发 1，可设为 1–5；每篇内部并发固定为 1。新进程及完成凭证使用各自 v2 格式，词表身份写入 `tagCatalogVersion`、`tagCatalogSha256`；旧记录完整核验后沿原 UUID 恢复。 |
 | `migrate-conference-process.js` | CLI | 显式更新会议处理实现指纹，重新核验完成页面，归档旧完成凭证，再继续未完成论文。保留原 UUID、记录格式、词表创建值及已有尝试，完成论文不重新请求模型。 |
-| `migrate-conference-images.js` | CLI | 将已发布 AISTATS/UAI 页面的本地 Figure 复制到专用图片仓库并更新链接；拒绝覆盖不同图片字节，不自动提交或推送。 |
 | `publish-conference.py` | CLI | 按会议处理凭证执行 generate/review/push/status/verify。generate 只安装文件；push 核验实际 Git index 和 commit blob，先发布图床再发布博客；verify 检查线上 URL。以上都是机械检查，语义审查和浏览器里的视觉效果仍要人工确认。 |
 | `waive-analysis-failures.js` | CLI | 记录用户明确同意跳过的当前日更分析失败项，保存对应现有文件的豁免记录；不覆盖失败尝试。 |
 | `lib/conference-extraction-receipt.js` | Node 库 | 核验请求、来源和提取文件；每次加载时由固定 Python/PyMuPDF 临时重新提取并比较结果。视觉审计含逐页 PNG、内嵌图片、表格、Figure、公式候选和 SHA；无原始 TeX 时禁止绑定公式文本。 |
@@ -219,7 +218,6 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `batch-analyze.js` | 用当前正式分析结果绑定的日更 PDF/TXT 批量分析未完成论文。`--retry-failed-readers` 仅归档并停用这些论文的失败 Reader 候选；没有对应来源记录时停止。 |
 | `reanalyze.js` | 归档并停用全部旧失败 Reader 候选，清空 Reader 和图片补充状态后强制全量重分析。仍只读取正式分析结果精确绑定的日更 PDF/TXT，不恢复旧分析、正文或缓存。 |
 | `reanalyze-selected.js` | 只重分析指定 arXiv ID，并同步恢复统计。 |
-| `analyze-single-paper.js` | 从论文库选择一篇论文分析，并合并回正式分析结果。 |
 | `refilter-reanalyze-by-date.js` | 对历史日期重新筛选、分析并写入受控日期快照。 |
 | `refresh-api-reader.js` | 刷新指定论文或日期批次的 Reader、评分、作者和图片阶段。只读取封存 PDF/TXT；图片只为本次调用在系统临时目录中准备。 |
 | `evaluate-keyword-prefilter.js` | 只读回放金标准与历史正样本，报告关键词召回。 |

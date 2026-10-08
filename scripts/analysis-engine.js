@@ -2,7 +2,7 @@
 /**
  * Paper Digest 统一分析引擎
  * 封装：单篇分析(重试+解析)、批量分析、增量保存
- * 消除 full-fetch.js / deep-analysis-only.js / batch-analyze.js / reanalyze.js / analyze-single-paper.js 的重复逻辑
+ * 消除 full-fetch.js / deep-analysis-only.js / batch-analyze.js / reanalyze.js 的重复逻辑
  */
 
 const fs = require('fs');

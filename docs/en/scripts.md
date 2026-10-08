@@ -33,7 +33,6 @@ After confirming the checkout's purpose, bind it with `npm run workspace:role --
 | `npm run batch` | Analyze unfinished papers in accepted analysis records |
 | `npm run batch -- --retry-failed-readers` | Archive and disable failed Reader candidates for unfinished papers, then resume |
 | `npm run reanalyze -- --concurrency N` | Archive and disable all old failed Reader candidates, clear Reader/image-supplement state, and force reanalysis from bound sources |
-| `node scripts/analyze-single-paper.js ID --force` | Analyze one paper |
 | `node scripts/reanalyze-selected.js ID...` | Reanalyze selected IDs |
 | `node scripts/refilter-reanalyze-by-date.js DATE` | Controlled historical refilter/reanalysis |
 | `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | Refresh scores/Reader from bound sources; prepare figures only for the active call |
