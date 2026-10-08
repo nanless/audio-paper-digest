@@ -138,8 +138,9 @@ function fsyncDirectory(directory) {
     let fd;
     try { fd = fs.openSync(directory, fs.constants.O_RDONLY); fs.fsyncSync(fd); }
     catch (error) {
-        // 少数平台不支持目录 fsync。单个文件 fsync 加上同目录改名，
-        // 原子性仍然成立；别把别处真正的文件系统错误吞掉。
+        // 少数平台不支持目录 fsync。
+        // 单个文件 fsync 加上同目录改名，原子性仍然成立；
+        // 别把别处真正的文件系统错误吞掉。
         if (!['EINVAL', 'EPERM', 'EISDIR'].includes(error.code)) throw error;
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
@@ -253,8 +254,9 @@ function normalizeHistoricalVersionIdentity(value, arxivId) {
     return { ...sealed, identitySha256: value.identitySha256 };
 }
 
-// 结构化来源证据只以 JSON 元数据的形式长期保存。它可以带表格/公式的
-// DOM 绑定和图片链接，但不能带图片像素、缓存路径、base64 或临时文件名。
+// 结构化来源证据只以 JSON 元数据的形式长期保存。
+// 它可以带表格/公式的 DOM 绑定和图片链接，
+// 但不能带图片像素、缓存路径、base64 或临时文件名。
 // 每次直接分析/Reader 都重新把像素取到系统临时目录的回调里。
 function fallbackArtifacts(text) {
     const body = { version: 1, source: 'fresh_arxiv_text_without_layout',
@@ -266,8 +268,9 @@ function sourceTitle(value, fallbackText = '') {
         .map(item => item.replace(/\s+/g, ' ').trim()).find(Boolean)
         || String(fallbackText || '').replace(/\r\n?/g, '\n').split('\n')
             .map(item => item.replace(/\s+/g, ' ').trim()).find(Boolean) || '';
-    // 这是来源元数据，不是模型标题也不是旧页面标题。保存前截断长度，
-    // 防止走形的 HTML 首行把每个运行时来源包撑大。标题缺失就明确写无，不猜。
+    // 这是来源元数据，不是模型标题也不是旧页面标题。
+    // 保存前截断长度，防止走形的 HTML 首行把每个运行时来源包撑大。
+    // 标题缺失就明确写无，不猜。
     return candidate.slice(0, 2000);
 }
 function assertNoPersistentImageBytes(value, label = 'runtime metadata') {
@@ -461,8 +464,9 @@ function generationExists(rootDir, arxivId, generation) {
 }
 
 function defaultFetchText(arxivId) {
-    // 别让正文适配器自己去下备用 PDF。抓取只发一次原始 PDF 请求，
-    // 把拿到的字节原样存好；HTML 不可用时，把这份字节交给提取器。
+    // 别让正文适配器自己去下备用 PDF。
+    // 抓取只发一次原始 PDF 请求，把拿到的字节原样存好；
+    // HTML 不可用时，把这份字节交给提取器。
     return require('../deep-analyzer.js').fetchArxivHtmlTextDetailedUncached(arxivId);
 }
 function defaultFetchPdf(arxivId) {
@@ -543,7 +547,8 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
     let temporary = null;
     try {
         // 先解析 HTML，这样 PDF 回退时能优先用选定的官方版本。
-        // 无版本当前稿 PDF 仍先探一次，版本回退才有可重放的 HTTP 404 记录。
+        // 无版本当前稿 PDF 仍先探一次，
+        // 版本回退才有可重放的 HTTP 404 记录。
         const rawText = await fetchText(id);
         const preferredSourceId = rawText?.source === 'html' ? rawText.sourceId : null;
         const rawPdf = await fetchPdf(id, { preferredSourceId });
@@ -554,8 +559,9 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
         if (rawText?.source === 'html' && !sourceVersion) {
             text = validateTextResponse(rawText, id, capturedAt, extractorVersion);
         } else {
-            // fetchText 如果返回 PDF 文本，说明适配器丢掉了 PDF 字节，
-            // 或自己另下了一份。只有一种回退是允许的：从 `pdf.bytes` 提取，
+            // fetchText 如果返回 PDF 文本，
+            // 说明适配器丢掉了 PDF 字节，或自己另下了一份。
+            // 只有一种回退是允许的：从 `pdf.bytes` 提取，
             // 也就是下面存起来的那一份响应。
             if (rawText?.source === 'pdf') fail('HTML text adapter must not fetch an independent PDF fallback');
             const extracted = await extractPdfText(id, pdf.bytes, {
@@ -570,8 +576,9 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
             text = validateTextResponse({ ...extracted, text: `${versionNotice}${String(extracted?.text || '')}`,
                 source: 'pdf', sourceId: pdf.sourceId,
                 url: pdf.url, fetchedAt: pdf.fetchedAt }, id, capturedAt, extractorVersion);
-            // 有匹配的历史版本 HTML 就用它的标题，不然从去掉警告前缀的
-            // PDF 文本里取。强制加的警告前缀绝不能变成标题。
+            // 有匹配的历史版本 HTML 就用它的标题，
+            // 不然从去掉警告前缀的 PDF 文本里取。
+            // 强制加的警告前缀绝不能变成标题。
             const versionTitle = rawText?.sourceId === pdf.sourceId && rawText?.title
                 ? rawText.title : (extracted?.title || sourceTitle('', extracted?.text));
             runtimeSource = { title: versionTitle, source: 'pdf', sourceId: pdf.sourceId,
@@ -683,7 +690,8 @@ async function withEphemeralArxivFigures(options = {}, callback, overrides = {})
             materialized.push(Object.freeze({ ordinal: figure.ordinal, mediaType: response.mediaType,
                 sha256: sha256(response.bytes), bytes: response.bytes.length, tempPath: path.join(directory, filename) }));
         }
-        // 链接只留在这个调用栈里用来取图。回调拿到的是按序号绑定的字节/路径，
+        // 链接只留在这个调用栈里用来取图。
+        // 回调拿到的是按序号绑定的字节/路径，
         // 不会顺着来源层的结果把链接写出去。
         return await callback(Object.freeze({ arxivId: id, temporaryDirectory: directory,
             figures: Object.freeze(materialized) }));

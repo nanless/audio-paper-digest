@@ -1,7 +1,8 @@
 'use strict';
 
 // 给每份历史 arXiv 来源配的独立发布元数据附件，只和发布有关。
-// 这些文件不改动任何来源 generation，也不进入分析/模型输入。
+// 这些文件不改动任何来源 generation，
+// 也不进入分析/模型输入。
 // 每次读取都重放原始官方 Atom 响应，并绑定到它补充的那个四文件来源 generation。
 
 const crypto = require('node:crypto');
@@ -270,8 +271,9 @@ function readPublicationMetadata({ rootDir, sourceRoot, arxivId: value, generati
         || metadata.authors.some(author => typeof author !== 'string' || !author.trim())) {
         fail('publication metadata authors are empty or invalid');
     }
-    // 原始 Atom 响应、规范元数据字节、清单和已存来源前面都已重放过。
-    // 旧官方 Atom 条目的 <name> 里可能留有首尾空白；只整理返回的作者视图，
+    // 原始 Atom 响应、规范元数据字节、清单和已存来源，前面都已重放过。
+    // 旧官方 Atom 条目的 <name> 里可能留有首尾空白；
+    // 只整理返回的作者视图，
     // 不碰不可改的附件和它的哈希。
     const authors = metadata.authors.map(author => author.trim());
     return { directory, sourceManifestSha256: manifest.source.sourceManifestSha256,
