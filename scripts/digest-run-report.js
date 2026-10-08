@@ -378,17 +378,26 @@ function analysisFailureMessage({ productionAnalysisComplete, failedCount, faile
     if (!productionAnalysisComplete) {
         return '当前分析资料既未满足 Manual v6 的完整要求，也未满足 API 正式发布的完整要求。';
     }
+    // 缺口篇数读不到时说「未知」，不要把它拼成「还缺 null 篇」——这个组合是可达的
+    // （归档里有分析结果、而当天筛选快照已经不在 data/current）。
+    const coverage = Number.isInteger(missing)
+        ? (missing === 0 ? '集合覆盖精确' : `集合还缺 ${missing} 篇`)
+        : '集合缺口未知';
     if (failedCount > 0) {
         const sample = (failedIds || []).slice(0, 3).join(', ') || '?';
-        const coverage = missing === 0 ? '集合覆盖精确' : `集合还缺 ${missing} 篇`;
+        // 尾句只能限定「未通过核验」这一项。集合缺篇是另一件事，不能被这句话一起带过去，
+        // 否则真的缺篇会被读成「反正不是运行失败」。
         return `深度分析有 ${failedCount} 篇未通过逐篇核验（如 ${sample}）；${coverage}。`
-            + '这一项是拿当前词表与契约复验已存记录，不等于当时那次运行失败。';
+            + '未通过核验的这部分是拿当前词表与契约复验已存记录，不等于当时那次运行失败。';
     }
-    // 没有复验失败项，那就是集合本身没覆盖全。缺几篇是已知的，要说出来，
-    // 别只说「未精确覆盖」——读的人得知道差多少。
-    return Number.isInteger(missing)
-        ? `深度分析集合未精确覆盖筛选结果：还缺 ${missing} 篇`
-        : '深度分析集合未精确覆盖筛选结果';
+    if (!Number.isInteger(missing)) {
+        return '深度分析集合未精确覆盖筛选结果，缺口篇数未知';
+    }
+    // 篇数对得上却没有精确覆盖，说明是同一批篇数里换了论文，不是缺篇。
+    if (missing === 0) {
+        return '深度分析集合与筛选入选集的成员对不上：篇数相同，但论文不是同一批';
+    }
+    return `深度分析集合未精确覆盖筛选结果：还缺 ${missing} 篇`;
 }
 
 function buildDigestRunReport(targetDate, options = {}) {

@@ -245,7 +245,7 @@ rerun the current batch's deterministic/Hugo checks and create a new review rece
 Git baseline, remote name, push-URL identity, or receipt still blocks push. Review workers never
 modify reviewed files; findings go back to generation or repair.
 
-The remote OID and `remoteVerified` prove that Git publication reached the remote. Before reporting
+The remote OID and `remoteOidVerified` in `digest:status` prove that Git publication reached the remote. Before reporting
 that the site is live or the task is complete, separately verify a successful GitHub Pages build and
 deploy for the publication commit, or for a later commit that preserves the reviewed page bytes. Check
 HTTP 200, the official address, and the title of every target digest and paper page by hand, and save

@@ -796,6 +796,28 @@ describe('日更运行报告', () => {
         assert.doesNotMatch(summary, /封面 incomplete \| status=complete/);
     });
 
+    it('没有长图清单时 build 出来的计数是 null，不是 0', () => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-novisual-'));
+        try {
+            withDigestPaths(dir, () => {
+                const date = '2026-07-29';
+                // 什么清单都不放：visualSummaryManifestDir 是空的。
+                const report = buildDigestRunReport(date, { today: date });
+                // 必须是 null 而不是 0——0 是「清单在、一张都没做」，与「清单不存在」不同。
+                assert.strictEqual(report.visuals.complete, null);
+                assert.strictEqual(report.visuals.total, null);
+                assert.strictEqual(report.visuals.pending, null);
+                assert.strictEqual(report.visuals.failed, null);
+                assert.strictEqual(report.visuals.status, 'missing');
+                const visualLine = formatDigestRunSummary(report).split('\n')
+                    .find(line => line.includes('长图'));
+                assert.match(visualLine, /complete=\?\/\? \| pending=\? \| failed=\?/);
+            });
+        } finally {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
     it('长图清单里的归档路径参数非法时也要出报告，不能抛栈', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-badvisual-'));
         try {
@@ -842,8 +864,22 @@ describe('日更运行报告', () => {
         });
         assert.match(reverify, /75 篇未通过逐篇核验/);
         assert.match(reverify, /集合覆盖精确/);
-        assert.match(reverify, /不等于当时那次运行失败/);
+        assert.match(reverify, /未通过核验的这部分/);
         assert.doesNotMatch(reverify, /集合未精确覆盖筛选结果/);
+
+        // 缺口篇数读不到时（归档里有分析结果、当天筛选快照已不在）不能拼出「还缺 null 篇」。
+        const unknownGap = analysisFailureMessage({
+            productionAnalysisComplete: true, failedCount: 75, failedIds: ['x'], missing: null
+        });
+        assert.match(unknownGap, /集合缺口未知/);
+        assert.doesNotMatch(unknownGap, /null/);
+
+        // 复验失败与真缺口同时存在时，尾句不能把真缺口一起带过去。
+        const both = analysisFailureMessage({
+            productionAnalysisComplete: true, failedCount: 5, failedIds: ['a'], missing: 3
+        });
+        assert.match(both, /集合还缺 3 篇/);
+        assert.match(both, /未通过核验的这部分/);
 
         // 集合真的缺篇时要报缺多少，不能只说「未精确覆盖」。
         const missing = analysisFailureMessage({
@@ -852,11 +888,19 @@ describe('日更运行报告', () => {
         assert.match(missing, /集合未精确覆盖筛选结果/);
         assert.match(missing, /还缺 3 篇/);
 
+        // 篇数对得上却没覆盖，是换了论文，不是缺篇——不能报「还缺 0 篇」。
+        const swapped = analysisFailureMessage({
+            productionAnalysisComplete: true, failedCount: 0, failedIds: [], missing: 0
+        });
+        assert.match(swapped, /篇数相同，但论文不是同一批/);
+        assert.doesNotMatch(swapped, /还缺 0 篇/);
+
         // 缺篇数读不到时不能编一个 0 出来。
         const missingUnknown = analysisFailureMessage({
             productionAnalysisComplete: true, failedCount: 0, failedIds: [], missing: null
         });
         assert.match(missingUnknown, /集合未精确覆盖筛选结果/);
+        assert.match(missingUnknown, /缺口篇数未知/);
         assert.doesNotMatch(missingUnknown, /还缺/);
 
         // 生产契约本身不满足时，报原文案，不去猜是复验还是集合。
