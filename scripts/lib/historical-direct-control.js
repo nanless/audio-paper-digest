@@ -334,25 +334,38 @@ function aggregateSnapshot({ aggregateRoot, plan, expectedTaskKeys = [] } = {}) 
 }
 
 function taskSnapshot({ aggregateProjectionRoot, plan } = {}) {
-    const matches = [];
+    const matches = []; const projectionErrors = [];
     for (const entry of safeChildren(aggregateProjectionRoot).filter(item => item.isFile() && item.name.endsWith('.json'))) {
         const filename = path.join(aggregateProjectionRoot, entry.name);
-        try {
-            const loaded = conferencePageMappingsApi.readStableJson(filename, 'direct aggregate projection status input'); const value = loaded.value;
-            if (value?.contract !== aggregateApi.PROJECTION_CONTRACT || value?.version !== aggregateApi.PROJECTION_VERSION
-                || value?.planSha256 !== plan.planSha256) continue;
-            const normalized = aggregateApi.normalizeAggregateProjection(value, plan);
-            matches.push({ filename, coverage: normalized.conferenceTaskCoverage || null,
-                pageCoverage: normalized.pageCoverage || null,
-                expectedTaskKeys: normalized.conferenceTaskPages.map(page => `${page.conferenceKey}-${page.legacyTaskKey}`).sort(),
-                projectionSha256: normalized.projectionSha256 });
-        } catch { /* 与本次无关或内容不完整的诊断文件 */ }
+        let loaded;
+        try { loaded = conferencePageMappingsApi.readStableJson(filename, 'direct aggregate projection status input'); }
+        catch (error) {
+            // 读不出内容就无法判断属于哪个计划，只能单独记下来。它可能是别的计划的产物，
+            // 也可能就是本计划那份坏掉的投影；无论哪种，都不能当作「还没生成」。
+            projectionErrors.push({ filename, stage: 'read', error: String(error.message).slice(0, 500) });
+            continue;
+        }
+        const value = loaded.value;
+        // contract、version 或 planSha 不符的文件属于别的计划或别的诊断产物，跳过不算损坏。
+        if (value?.contract !== aggregateApi.PROJECTION_CONTRACT || value?.version !== aggregateApi.PROJECTION_VERSION
+            || value?.planSha256 !== plan.planSha256) continue;
+        let normalized;
+        try { normalized = aggregateApi.normalizeAggregateProjection(value, plan); }
+        catch (error) {
+            // 已声明属于本计划的投影却通不过校验，就是损坏，必须让运维看到，而不是显示成未就绪。
+            projectionErrors.push({ filename, stage: 'normalize', error: String(error.message).slice(0, 500) });
+            continue;
+        }
+        matches.push({ filename, coverage: normalized.conferenceTaskCoverage || null,
+            pageCoverage: normalized.pageCoverage || null,
+            expectedTaskKeys: normalized.conferenceTaskPages.map(page => `${page.conferenceKey}-${page.legacyTaskKey}`).sort(),
+            projectionSha256: normalized.projectionSha256 });
     }
-    if (!matches.length) return { projectionPresent: false, total: null, pending: null, publicationReady: false };
+    if (!matches.length) return { projectionPresent: false, projectionErrors, total: null, pending: null, publicationReady: false };
     const identities = new Set(matches.map(item => item.projectionSha256));
     if (identities.size !== 1) fail('multiple aggregate projections disagree for the same direct plan');
     const coverage = matches[0].coverage; const pageCoverage = matches[0].pageCoverage;
-    return { projectionPresent: true, total: coverage?.total ?? 0, pending: coverage?.pending ?? 0,
+    return { projectionPresent: true, projectionErrors, total: coverage?.total ?? 0, pending: coverage?.pending ?? 0,
         publicationReady: coverage?.publicationReady === true, reason: coverage?.reason ?? null,
         expectedTaskKeys: matches[0].expectedTaskKeys, pageCoverage,
         projectionFile: matches[0].filename };
@@ -465,7 +478,15 @@ function buildStatus({ planFile, generation = 1, registryRoot, aggregateRoot, ag
         if (execution.staleStagedCount > 0) blockers.push({ code: 'stale-staged-renderer', count: execution.staleStagedCount });
         if (staged !== total) blockers.push({ code: 'papers-not-staged', count: total - staged });
     }
-    if (!tasks.projectionPresent) blockers.push({ code: 'aggregate-projection-missing' });
+    const corruptProjections = (tasks.projectionErrors || []).filter(item => item.stage === 'normalize');
+    const unreadableProjections = (tasks.projectionErrors || []).filter(item => item.stage === 'read');
+    if (!tasks.projectionPresent && corruptProjections.length) {
+        blockers.push({ code: 'aggregate-projection-corrupt', count: corruptProjections.length,
+            filename: corruptProjections[0].filename, error: corruptProjections[0].error });
+    } else if (!tasks.projectionPresent && unreadableProjections.length) {
+        blockers.push({ code: 'aggregate-projection-unreadable', count: unreadableProjections.length,
+            filename: unreadableProjections[0].filename, error: unreadableProjections[0].error });
+    } else if (!tasks.projectionPresent) blockers.push({ code: 'aggregate-projection-missing' });
     else if (tasks.pageCoverage?.publicationReady !== true || tasks.pageCoverage?.uncoveredPageKeys?.length !== 0
         || tasks.pageCoverage?.coveredPageCount !== tasks.pageCoverage?.inventoryPageCount) {
         blockers.push({ code: 'aggregate-page-coverage-incomplete',

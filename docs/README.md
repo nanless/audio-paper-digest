@@ -16,7 +16,7 @@
 | 执行离线验证或排查故障恢复 | [验证矩阵](maintenance.md#验证矩阵) | `npm run verify` |
 | 根据原文重写一个已有日批次 | [从原文完整重写](fresh-rewrite.md) | `npm run rewrite:source` 的分阶段入口 |
 | 重写全部历史论文与汇总页 | [历史重写流程](history-rewrite.md) | 本地会议来源、论文计划、来源准备和逐篇重写命令 |
-| 审查并发布历史重写结果 | [历史发布流程](history-direct-publication.md) | `history:direct-publication` 的生成、审查、发布和状态查询 |
+| 审查并发布历史重写结果 | [历史发布流程](history-direct-publication.md) | 先记录本次视觉范围（`visual-disposition`），再走 `history:direct-publication` 的生成、审查、发布和状态查询 |
 | 查找 2026-09-07 的历史运行记录 | [归档交接记录](historical-rewrite-handoff-2026-09-07.md) | 只供定位当时文件；不能按旧命令启动当前任务 |
 | 改进解读写法，比较重写前后的文章 | [解读写作与比较](reader-writing.md) | [维护约定](maintenance.md) |
 | 设计标签、检查历史标签映射或分类显示 | [标签体系设计](tag-system-design.md) | [实施计划](tag-system-implementation.md)、[显示规则](tag-display-policy.md)和 `npm run tags:preview` |

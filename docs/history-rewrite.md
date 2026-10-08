@@ -144,6 +144,28 @@ npm run history:direct-run -- --apply --plan /absolute/path/direct-rewrite-plan-
 
 每次阶段断点记录（checkpoint）都原子写入 execution 目录的 `analysis-recovery.json`，绑定论文 ID、run ID 和来源快照 SHA。失败后若仍有 `analysisManifest`、`analysisCheckpoint`、`analysisStageCheckpoints` 或 `analysisRecoveryImageManifest`，执行记录进入 `analysis_partial` 并记录恢复文件 SHA，不写暂存页。同来源续跑按文件与阶段指纹恢复；来源身份或自哈希漂移会拒绝。
 
+### 补充旧页面的标签和来源身份
+
+已经发布的历史页面正文里没有标签元数据时，用下面四个入口生成补充记录。它们只读计划、执行登记、博客快照和已暂存的分析结果，产出独立记录，不改写页面正文，也不改变正式发布状态。
+
+```bash
+npm run history:tag-supplement -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID [--limit N]
+npm run history:source-tags -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID \
+  [--concurrency 1|2|3] [--only-paper-ids ID,...] [--include-paper-ids ID,...] \
+  [--resume-after-checkpoint ABS --resume-after-export ABS]
+npm run history:source-identity -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID
+npm run history:tag-checkpoint-export -- --plan ABS --registry ABS --blog ABS --snapshot ABS --run-id UUID \
+  --checkpoint ABS [--exclude-paper-ids ID,...]
+```
+
+`history:tag-supplement` 对已由当前渲染实现暂存、且页面缺少标签元数据的论文，从已核验的分析记录和当前词表确定性分类，不请求模型；按运行标识写入 `historical-direct-tag-supplement-v2` 的 `tag-history.json` 和 `report.json`，文件不可覆盖。
+
+`history:source-tags` 是没有可用正式分析记录时按来源证据请求模型的分类入口，也是这四个入口里唯一调用模型的。它保存论文选择集合、标签选择响应、独立审核和分类决策的检查点，写入 `historical-source-tag-classification-v2`；同一运行标识可续跑，`--concurrency` 只接受 1–3，默认 1。`partial` 部分运行记录不能当作续跑检查点；要从正规检查点开始新的论文集合，须同时给出 `--resume-after-checkpoint` 和 `--resume-after-export`。特殊来源重做须换新的运行标识，并显式给出 `--only-paper-ids`。
+
+`history:source-identity` 只核验来源身份，写入 `historical-source-identity-supplement-v2`，不请求模型。重跑同一运行标识时，若已有完整总文件和报告，会先核对原摘要、来源、页面、正文和计划再按原格式复算，全部字节一致才复用；缺少完整输出、只有旧格式的部分检查点或校验失败时命令停止，保留原文件并换新的运行标识。
+
+`history:tag-checkpoint-export` 读取并核验分类检查点或部分运行记录，核验已接受的分类缓存后导出页面分类记录，同样不请求模型；报告同时保留失败项和未处理论文。
+
 ### 本次调用使用的论文图
 
 图像像素只在当前调用的系统临时目录准备，不写来源目录或 runtime。arXiv Reader 的某张可选图若明确永久失败，例如响应超硬字节上限、不可重试 4xx、格式或尺寸检查失败，只排除该图并保留同篇其余成功图片。socket、DNS、超时、408/425/429/5xx 等暂时失败仍使本次执行失败，不能当成“没有图继续写”。成功或排除之后都不能把像素或临时路径写入持久运行记录。
@@ -261,6 +283,23 @@ npm run history:postprocess -- --apply --crosswalk UUID --date YYYY-MM-DD --conc
 
 渲染先在内存完成，复核实现身份后原子写入；若写文件后、保存 manifest 前中断，同一写入计划（intent）及分析任务只能续用逐字一致的部分文件，未知或漂移文件会拒绝。每日汇总要求全部成员使用同一渲染 SHA，且该日期全部历史论文页已核验暂存；它合并逐篇 manifest，只写受保护 runtime。后处理 checkpoint 按 crosswalk 及注册表 SHA 隔离并自哈希，注册表升级不能覆盖旧审计记录。
 
+### 旧 crosswalk 标签、暂存与日汇总
+
+旧后处理链上的三个入口也可以手工分步运行。它们只写私有 runtime，不发布博客：
+
+```bash
+npm run history:tags -- assign --dry-run --analysis-run UUID [--paper-id arxiv:YYMM.NNNNN]
+npm run history:tags -- assign --apply --analysis-run UUID [--paper-id arxiv:YYMM.NNNNN]
+npm run history:stage -- --dry-run --crosswalk UUID --analysis-run UUID [--limit pilot|N]
+npm run history:stage -- --apply --crosswalk UUID --analysis-run UUID --run-id UUID [--limit pilot|N]
+npm run history:aggregate -- --dry-run --staging-runs UUID[,UUID...] [--date YYYY-MM-DD]
+npm run history:aggregate -- --apply --staging-runs UUID[,UUID...] [--date YYYY-MM-DD]
+```
+
+`history:tags assign` 从已完成的历史分析按当前词表逐篇或批量生成独立标签分配记录；dry-run 不写文件，apply 只保存分类结果，不调用模型。`history:stage` 按指定的分析运行和词表 SHA 选取标签记录，再依据已核验的页面对应表生成私有单篇页面。`history:aggregate` 读取一份或多份已生成的暂存结果，重建每日汇总及清单并保留原路径与网址，默认只检查，加 `--apply` 才写入私有目录。
+
+`history:tags` 当前只实现 `assign`。[实施路线图](history-rewrite-roadmap.md) 7.3 节列出的 `snapshot-routes`、`prepare`、`classify`、`review`、`status` 和 `finalize` 属于那份已废止的 crosswalk 方案，不是现在的入口，不能照抄执行。
+
 ### 页面身份与写入限制
 
 `page-source-crosswalk-v1` 核验原清单/凭证字节及自哈希，以本进程受控对象为每个 `kind=paper` 页面建立独立、可恢复的 `pending` 状态。页面分配记录（`assignment`）只保存页面路径与整页 SHA，不保存标题、标签或旧正文。受控修改记录（`decision`）与写前一致性检查（CAS）可记录 `needs-review`、`blocked` 或 `conflict`；只有核验 `paper-source-authority-v1` 的受控来源对象后才可记 `verified`。
@@ -281,7 +320,7 @@ npm run history:postprocess -- --apply --crosswalk UUID --date YYYY-MM-DD --conc
 
 单篇历史分析另有范围很窄、不能序列化的恢复权限：只在已有封存分析任务和来源的当前单篇上下文中，处理超过 24 小时、hostname 已改变、严格保持旧 `0755/0644` 四字段格式的论文锁。回收逐次检查目录及 owner 的 inode、SHA、mtime、硬链接、符号链接、额外项及 reclaim marker，事件原子保存到该篇 execution 目录并绑定 paper/run/source SHA。先按锁 inode 与 owner SHA 追加不可变 intent，回收后再追加 completion；后者保存中断时，下一次同来源任务只有在公共锁快照证明原 owner 已离开规范路径后才补写记录，不能覆盖旧事件或猜测仍存在的 owner 已回收。近期旧锁、当前 `0700/0600` 锁和普通论文分析调用均无此权限。
 
-`history:local-crawl-batch`、其 `archive-crawl-batch` 别名和 `history:conference-crawl-batch` 已停用并拒绝写入，不启用旧本地/会议爬虫的特殊锁恢复能力。通用 crosswalk CLI 也不能猜测删除远程、活 PID、权限不明、空或畸形锁；前述受控 lease 恢复和特殊单篇权限不能扩大到这些调用。
+`history:local-crawl-batch` 是 `history:archive-crawl-batch` 的别名，两者在 `package.json` 里各有一个入口，调用同一个已停用的实现。它们和 `history:conference-crawl-batch` 都已停用并拒绝写入，不启用旧本地/会议爬虫的特殊锁恢复能力。通用 crosswalk CLI 也不能猜测删除远程、活 PID、权限不明、空或畸形锁；前述受控 lease 恢复和特殊单篇权限不能扩大到这些调用。
 
 ## 旧私有发布文件
 

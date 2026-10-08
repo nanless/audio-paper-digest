@@ -184,6 +184,41 @@ test('汇总快照报告精确的普通任务和会议任务总数', t => {
     assert.deepEqual(snapshot.missing.conferenceTask, ['icassp-2026-asr', 'iclr-2026-audio']);
 });
 
+test('投影文件损坏与尚未生成在状态里可区分', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-projection-damage-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const plan = minimalPlan(); const planFile = path.join(root, 'plan.json');
+    fs.writeFileSync(planFile, `${JSON.stringify(plan, null, 2)}\n`);
+    const roots = Object.fromEntries(['registryRoot', 'sourceRoot', 'aggregateRoot', 'aggregateProjectionRoot']
+        .map(name => [name, path.join(root, name)]));
+    for (const value of Object.values(roots)) fs.mkdirSync(value);
+    const blockersFor = () => control.buildStatus({ planFile, ...roots, observedAt: '2026-09-07T00:00:01.000Z' })
+        .completion.blockers.filter(item => item.code.startsWith('aggregate-projection'));
+
+    // 目录为空是真正的「还没生成」，不能报成损坏。
+    assert.deepEqual(blockersFor().map(item => item.code), ['aggregate-projection-missing']);
+    // 读不出内容（截断的 JSON）与声称属于本计划却校验失败，都要给出各自的文件和原因。
+    const broken = path.join(roots.aggregateProjectionRoot, 'broken.json');
+    fs.writeFileSync(broken, '{"contract":"historical-direct-aggregate-projection-v3","ver');
+    const unreadable = blockersFor();
+    assert.equal(unreadable.length, 1); assert.equal(unreadable[0].code, 'aggregate-projection-unreadable');
+    assert.equal(unreadable[0].filename, broken); assert.match(unreadable[0].error, /valid UTF-8 JSON/);
+    fs.rmSync(broken);
+    const corrupt = path.join(roots.aggregateProjectionRoot, 'corrupt.json');
+    fs.writeFileSync(corrupt, `${JSON.stringify({ contract: aggregateApi.PROJECTION_CONTRACT,
+        version: aggregateApi.PROJECTION_VERSION, planSha256: plan.planSha256,
+        inventory: { ledgerSha256: 'x'.repeat(64), pageSetSha256: 'y'.repeat(64) } })}\n`);
+    const damaged = blockersFor();
+    assert.equal(damaged.length, 1); assert.equal(damaged[0].code, 'aggregate-projection-corrupt');
+    assert.equal(damaged[0].filename, corrupt); assert.match(damaged[0].error, /direct aggregate projection/);
+    // 别的计划的投影不归本计划，不能算成损坏。
+    fs.rmSync(corrupt);
+    fs.writeFileSync(path.join(roots.aggregateProjectionRoot, 'other-plan.json'),
+        `${JSON.stringify({ contract: aggregateApi.PROJECTION_CONTRACT, version: aggregateApi.PROJECTION_VERSION,
+            planSha256: 'f'.repeat(64) })}\n`);
+    assert.deepEqual(blockersFor().map(item => item.code), ['aggregate-projection-missing']);
+});
+
 test('状态报告为暂停中，直到每个请求的阶段释放自己的操作锁', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-status-pausing-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
