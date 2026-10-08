@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Project-scoped environment loader.
+"""项目内环境变量加载器。
 
-Project scripts must use the current repository's .env for Paper Digest
-configuration so inherited Trae/Codex/shell variables cannot be mixed with it.
+项目脚本读取 Paper Digest 配置时必须用当前仓库的 .env，避免混入从
+Trae/Codex/shell 继承来的变量。
 """
 
 import os
@@ -104,7 +104,7 @@ def build_child_process_env(extra=None, allowed_keys=()):
 
 
 def get_required_fetch_proxy():
-    """Return the project-scoped HTTP CONNECT proxy required for arXiv/HF fetches."""
+    """返回 arXiv/HF 抓取所需的项目内 HTTP CONNECT 代理。"""
     proxy = (
         os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY")
         or os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY")
@@ -118,13 +118,13 @@ def get_required_fetch_proxy():
 
 
 def build_fetch_proxies():
-    """Build explicit requests proxies without reading inherited process settings."""
+    """显式构造 requests 代理，不读取继承来的进程设置。"""
     proxy = get_required_fetch_proxy()
     return {'http': proxy, 'https': proxy}
 
 
 def build_fetch_url_opener():
-    """Build an explicit urllib opener for arXiv/HuggingFace assets only."""
+    """只为 arXiv/HuggingFace 资源构造显式的 urllib opener。"""
     import urllib.request
     proxy = get_required_fetch_proxy()
     return urllib.request.build_opener(urllib.request.ProxyHandler({'http': proxy, 'https': proxy}))
@@ -145,6 +145,6 @@ def _is_scripts_entrypoint():
     return entry.parent in entry_roots and entry.suffix == '.py'
 
 
-# Run only for a direct shared or Manual command entrypoint, never for imports.
+# 仅在直接执行共享脚本或 Manual 命令入口时运行，被 import 时不执行。
 if _is_scripts_entrypoint():
     require_external_runtime(Path(sys.argv[0]).name)

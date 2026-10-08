@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strictly review an existing generated blog manifest and save a hash receipt."""
+"""严格审查已生成的博客清单，并保存哈希核验记录。"""
 
 import argparse
 import json
@@ -13,7 +13,7 @@ from runtime_guard import require_external_runtime
 
 
 def _is_api_reader_asset_path(module, path):
-    """Keep the stage wrapper compatible with injected/legacy publisher modules."""
+    """让阶段包装器兼容注入的或旧版的发布器模块。"""
     checker = getattr(module, 'is_api_reader_asset_path', None)
     return bool(checker(path)) if checker else False
 
@@ -119,7 +119,7 @@ def read_generated_pages(
 def validate_reused_pages(
     module, date_str, paths, prior_results, page_artifacts, authoritative_papers=None,
 ):
-    """Re-run current deterministic, canonical-aware gates for cached passes."""
+    """对缓存命中的页面重跑当前确定性闸，并按规范视图判断。"""
     normalize_id = getattr(module, 'normalize_publish_arxiv_id', lambda value: str(value or ''))
     authoritative_by_id = {
         normalize_id(paper.get('arxivId')): paper
@@ -159,7 +159,7 @@ def preflight_generated_pages(
     module, date_str, blog_repo, content_dir, paths, page_artifacts,
     authoritative_by_filename, manifest_path,
 ):
-    """Collect independent page defects before any paid review request."""
+    """在发起任何付费审查请求之前，先收集各页面的独立缺陷。"""
     issues = []
     for page in paths:
         page = Path(page).resolve()
@@ -219,8 +219,8 @@ def _run_review(module, date_str):
             raise module.PublishDataValidationError('生成清单必须是对象')
         replay_generation_source = getattr(module, 'validate_generation_input_source_reference', None)
         if replay_generation_source:
-            # Never substitute current canonical data here. The manifest binds
-            # the exact archive / --data-file selected at generate time.
+            # 这里绝不能替换成当前的规范数据。清单绑定的是生成时选定的那份
+            # 归档 / --data-file。
             replay_generation_source(generation, date_str)
         base_head = module.validate_git_publish_branch()
         published_reusable = module.reusable_verified_publication_review(
@@ -278,10 +278,9 @@ def _run_review(module, date_str):
         plan = module.plan_incremental_review(
             date_str, paths, manifest_path, base_head,
         )
-        # The batch preflight below replays current deterministic gates for
-        # both cached and pending pages, collecting independent defects once.
-        # Planning may migrate exact per-file passes from the older receipt.
-        # The batch-level receipt itself is invalid once this attempt starts.
+        # 下面的批次预检会为缓存命中和待审查的页面重跑当前的确定性闸，
+        # 一次性收集各页面的独立缺陷。规划阶段可以把旧核验记录里逐文件的
+        # 通过结果迁移过来。本次尝试一开始，批次级核验记录本身就作废了。
         module.review_receipt_path(date_str).unlink(missing_ok=True)
         print(f'📋 读取生成清单: {manifest_path}')
         if plan['mode'] == 'incremental':
@@ -296,8 +295,8 @@ def _run_review(module, date_str):
             print(f'🔍 开始严格全量 review: {len(paper_slugs)} 篇论文')
         combined_results = dict(plan['priorResults'])
         manifest_sha256 = module._sha256_file(manifest_path)
-        # Persist pending work before the first LLM call. A crash or API outage
-        # can then resume only unfinished/transient files on the next run.
+        # 在第一次 LLM 调用之前先把待办落盘。这样崩溃或 API 中断后，
+        # 下一次运行只会续跑未完成或暂时失败的页面。
         module.save_review_failure_state(
             date_str, paths, manifest_path, base_head, combined_results,
         )
@@ -308,8 +307,8 @@ def _run_review(module, date_str):
                 authoritative_by_filename, manifest_path,
             )
         except module.PublishDataValidationError as exc:
-            # Persist actionable details without treating preflight as semantic
-            # review evidence or replacing successful per-page checkpoints.
+            # 保存可操作的细节，但不把预检当作语义审查证据，也不覆盖已成功
+            # 的逐页检查点。
             module.save_review_failure_state(
                 date_str, paths, manifest_path, base_head, combined_results,
                 batch_issues=getattr(exc, 'review_issues', [{
@@ -321,8 +320,8 @@ def _run_review(module, date_str):
         def checkpoint(path, result):
             resolved = Path(path).resolve()
             if hasattr(module, 'review_protocol_fingerprint'):
-                # Protocol is audit metadata.  The pass itself belongs to the
-                # exact page bytes and remains reusable across protocol drift.
+                # 协议只是审计元数据。通过与否取决于确切的页面字节，协议变化后
+                # 仍然可以复用。
                 result['reviewProtocolFingerprint'] = module.review_protocol_fingerprint()
             module.save_review_page_checkpoint(
                 date_str, resolved, result, manifest_path, base_head,
@@ -372,8 +371,8 @@ def _run_review(module, date_str):
                 date_str, paths, manifest_path, combined_results,
             )
         except Exception:
-            # A site-wide deterministic/Hugo failure invalidates the batch
-            # checkpoint, while exact per-file passes remain durably reusable.
+            # 整站范围的确定性/Hugo 失败会让批次检查点作废，而逐文件的通过
+            # 结果依然可以持久复用。
             module.review_failure_path(date_str).unlink(missing_ok=True)
             raise
         receipt = module.save_review_receipt(

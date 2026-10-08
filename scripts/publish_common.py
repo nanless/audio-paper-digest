@@ -72,11 +72,11 @@ BEIJING_TIMESTAMP_RE = re.compile(
 
 
 class PublishLLMUnavailable(RuntimeError):
-    """Raised when a required publish-time LLM review cannot run."""
+    """发布时必需的一次 LLM 审查无法执行时抛出。"""
 
 
 class PublishDataValidationError(ValueError):
-    """Raised when analysis data is unsafe or inconsistent for publishing."""
+    """分析数据不适合或不一致、不能发布时抛出。"""
 
 
 SCORING_RUBRIC_VERSION = 'type-aware-v1'
@@ -195,17 +195,15 @@ TABLE_DIRECTIONAL_METRIC_RE = re.compile(
     r'(?:accuracy|precision|recall|f[- ]?score|\bf1\b|\bwer\b|\bcer\b|\bder\b|\bauc\b|\bmap\b|\bmiou\b|\biou\b|\bpesq\b|\bstoi\b|\bsdr\b|\bsisdr\b|\bsnr\b|\bbleu\b|\brouge\b|\bmeteor\b|\bclap\b|\bfad\b|\brmse\b|\bmae\b|\berle\b|\bmos\b|准确率|精确率|召回率|错误率|误差|损失|延迟|耗时|速度|吞吐|内存|显存|功耗|能耗|复杂度|参数量|相关系数|相似度)',
     flags=re.IGNORECASE,
 )
-# Aggregate columns such as “无条件 AVG ↑” are measurable metrics, but unlike
-# WER/accuracy they do not inherently require ↑/↓ (for example “Avg Total (s)”).
-# Used only by the identifier classifier when a direction marker is present.
+# “无条件 AVG ↑”这类汇总列是可测量的指标，但与 WER、准确率不同，它本身
+# 不需要 ↑/↓（例如“Avg Total (s)”）。只在出现方向标记时供识别符分类器使用。
 TABLE_GENERIC_METRIC_HEADER_RE = re.compile(
     r'(?:\bavg\b|\bmean\b|\baverage\b|均值|平均)',
     flags=re.IGNORECASE,
 )
-# Strong identity words keep their identifier meaning even inside an aggregate
-# header: “6 基准平均 ↑” still anchors the row identity established by the
-# benchmark/dataset qualifier, while weak condition words such as “无条件”
-# yield to the metric reading of “无条件 AVG ↑”.
+# 强识别词即使出现在汇总表头里也保持识别符含义：“6 基准平均 ↑”依旧以
+# 基准/数据集限定词确定行身份，而“无条件”这类弱条件词则让位于
+# “无条件 AVG ↑”的指标读法。
 TABLE_STRONG_IDENTITY_HEADER_RE = re.compile(
     r'基准|数据集|语料|任务|语言|语系|语族|类别|类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|划分|切片|子集|场景|配置|拓扑'
 )
@@ -220,9 +218,9 @@ TABLE_NUMERIC_CELL_RE = re.compile(
 
 
 def _is_table_identifier_header(value):
-    """Mirror Node handling of directional metric headers."""
+    """与 Node 对带方向指标表头的处理保持一致。"""
     normalized = str(value or '').strip()
-    # Match Node's explicit training-condition identifiers.
+    # 与 Node 显式列出的训练条件识别符保持一致。
     if re.fullmatch(r'(?:训练损失|损失函数|监督目标|训练目标|评估设置|实验设置)', normalized, flags=re.IGNORECASE):
         return True
     if not normalized:
@@ -232,10 +230,9 @@ def _is_table_identifier_header(value):
     identifier = bool(TABLE_IDENTIFIER_HEADER_RE.search(without_direction))
     if not TABLE_DIRECTION_MARK_RE.search(normalized):
         return identifier
-    # “OGI 测试 WER ↓ (%)” contains a setting qualifier and a metric. The
-    # direction marker makes it a measurable column, not an identifier.
-    # This branch only runs when a direction marker is present, so treating
-    # “无条件 AVG ↑” as a metric never forces an arrow onto “Avg Total (s)”.
+    # “OGI 测试 WER ↓ (%)”同时含设置限定词和指标，方向标记说明它是可测量列，
+    # 而不是识别符。这个分支只在有方向标记时执行，所以把“无条件 AVG ↑”
+    # 当作指标，不会反过来给“Avg Total (s)”强行加箭头。
     if TABLE_DIRECTIONAL_METRIC_RE.search(without_direction):
         return False
     if (TABLE_GENERIC_METRIC_HEADER_RE.search(without_direction)
@@ -277,7 +274,7 @@ def _validate_image_narrative_pair(lead, explanation):
 
 
 def validate_image_narrative_contract(paper):
-    """Validate exact plan-to-canonical adjacency for context-bound image prose."""
+    """校验绑定上下文的图片正文是否与插图计划严格相邻。"""
     analysis = str(paper.get('analysis') or '')
     image_manifest = paper.get('imageManifest') or {}
     supplement = image_manifest.get('supplement') or {}
@@ -348,9 +345,9 @@ def validate_image_narrative_contract(paper):
         image_number = plan.get('imageNumber') if isinstance(plan, dict) else None
         if not isinstance(image_number, int) or image_number < 1:
             return None
-        # Manual v2 manifests persist the final selected URL together with its
-        # canonical image index.  API manifests historically kept selected as
-        # strings, while imageNumber indexed the downloaded candidate array.
+        # Manual v2 清单把最终选中的 URL 和它的规范图片序号一起保存。API 清单
+        # 历史上把 selected 存成字符串，而 imageNumber 指向的是已下载候选数组
+        # 的下标。
         for position, item in enumerate(selected_manifest):
             if not isinstance(item, dict):
                 continue
@@ -385,10 +382,9 @@ def validate_image_narrative_contract(paper):
             return f'{url} {issue}'
         plan = plans_by_url.get(url)
         if plan is None and not strict_plan_binding:
-            # Compatibility for old unversioned API manifests that did not
-            # retain the downloaded-candidate index needed to reconstruct the
-            # URL -> imageNumber mapping.  New/versioned manifests never use
-            # this prose-only fallback.
+            # 兼容旧的无版本号 API 清单：它们没有保存重建 URL -> imageNumber
+            # 映射所需的下载候选下标。带版本号的新清单不再走这条只比对正文的
+            # 兜底路径。
             matched_index = next((position for position, candidate in enumerate(unresolved_plans)
                                   if _normalize_image_narrative_text(candidate.get('lead')) == lead
                                   and _normalize_image_narrative_text(candidate.get('explanation')) == explanation), None)
@@ -408,14 +404,13 @@ def validate_image_narrative_contract(paper):
 
 
 def _validate_manual_v5_all_rejected_images(paper, decisions, paper_label):
-    """Allow zero Manual v5 images only after a complete, specific all-reject review.
+    """只有在完整、具体的全拒审查之后，Manual v5 才允许零张图片。
 
-    Keep this deliberately isomorphic with
-    ``validateManualAllRejectedImageException`` in manual-research-contract.js.
-    The record/spec gate has already established the researcher's figure review;
-    publish must not add a different (and narrower) requirement such as a
-    mobile-resolution defect or a caption token.  A paper-specific visual or
-    technical anchor plus its stated editorial consequence is enough.
+    这里刻意与 manual-research-contract.js 里的
+    ``validateManualAllRejectedImageException`` 保持同构。记录/规格闸
+    已经确认研究者审过图；发布阶段不应再提一套不同（而且更窄）的要求，
+    比如移动端分辨率缺陷或图注里必须出现某个词。只要有一个针对该论文的
+    视觉或技术锚点，并写明由此得出的编辑结论，就足够了。
     """
     image_manifest = paper.get('imageManifest') or {}
     candidates = image_manifest.get('candidates') or []
@@ -471,7 +466,7 @@ def _validate_manual_v5_all_rejected_images(paper, decisions, paper_label):
 
 
 def _validate_publish_image_exclusion_view(paper, paper_label):
-    """Validate the explicit reader-facing view derived from image exclusions."""
+    """校验由图片排除项得出的、给读者看的显式视图。"""
     exclusions = paper.get('publishImageExclusions')
     view = paper.get('publishImageExclusionView')
     if not isinstance(exclusions, list) or not exclusions:
@@ -1538,13 +1533,12 @@ MANUAL_V6_SIGNATURE_CONTRACT = 'stable-json-ascii-keys-exact-ieee754-nfkc-text-v
 
 
 def _prepare_manual_v6_json_hash_input(value, label='manual-v6-signature'):
-    """Canonical v6 signature input shared with manual-signature-contract.js.
+    """与 manual-signature-contract.js 共用的 v6 规范签名输入。
 
-    Object keys are deliberately restricted to visible ASCII. Safe integers
-    remain ordinary JSON integers; finite floats are serialized later from
-    their IEEE-754 bits as exact decimal JSON numbers. Unicode remains fully
-    supported in string values; NFKC text normalization is explicit in
-    ``_manual_v6_text`` rather than an invisible mutation of signed JSON.
+    对象 key 刻意限制为可见 ASCII。安全整数保持普通 JSON 整数；有限浮
+    点数稍后按 IEEE-754 位模式写成精确的十进制 JSON 数字。字符串值仍
+    然完整支持 Unicode；NFKC 文本归一化在 ``_manual_v6_text`` 里显式
+    进行，而不是对签名 JSON 做看不见的改写。
     """
     if value is None or isinstance(value, bool):
         return value
@@ -1677,8 +1671,8 @@ def _manual_v6_article_uses_term(article, value):
 
 
 def _manual_v6_text_sha(value):
-    # manual-longform-contract.js hashes String(value) bytes directly.  Object
-    # identities (ArtifactIndex/workflow) use stable JSON via ``_manual_hash``.
+    # manual-longform-contract.js 直接对 String(value) 的字节取哈希。对象身份
+    # （ArtifactIndex/workflow）改用 ``_manual_hash`` 的稳定 JSON。
     return hashlib.sha256(str(value or '').encode('utf-8')).hexdigest()
 
 
@@ -1811,11 +1805,10 @@ def _manual_v6_inventory_ids(index, field):
 
 
 def validate_manual_v6_payload(paper):
-    """Validate and deterministically replay a canonical Manual v6 article.
+    """校验并确定性地重放一篇规范的 Manual v6 文章。
 
-    The returned article is built exclusively from controlled longform blocks.
-    A legacy ``manualTakeover.readerArticle`` is only an optional equality
-    witness and is never a rendering input.
+    返回的文章只由受控的 longform 块组成。旧的
+    ``manualTakeover.readerArticle`` 只用于比对内容是否一致，绝不参与渲染。
     """
     if not isinstance(paper, dict):
         raise PublishDataValidationError('Manual v6 的正式论文记录必须是 JSON 对象。')
@@ -2118,9 +2111,9 @@ def validate_manual_v6_payload(paper):
     related = bundle.get('relatedWorks')
     if not isinstance(related, list):
         raise PublishDataValidationError(f'{paper_label} v6 relatedWorks 缺失')
-    # relatedWorks binds bibliography identities.  Structured arXiv sources may
-    # expose these as references while leaving the in-text citations projection
-    # empty, so validate against the union of both content-addressed inventories.
+    # relatedWorks 绑定参考文献身份。结构化 arXiv 来源可能把它们放进
+    # references，而正文引用投影为空，所以校验时取两份按内容寻址清单的
+    # 并集。
     related_inventory = _manual_v6_inventory_ids(artifact, 'references')
     related_inventory.update(inventory['citations'])
     handled_related = set()
@@ -2220,12 +2213,10 @@ def _normalize_manual_numeric_lexeme(value):
 def _manual_numeric_lexemes(value):
     normalized = unicodedata.normalize('NFKC', _manual_claim_field_text(value))
     normalized = re.sub(r'[\u2212\u2012\u2013\u2014]', '-', normalized)
-    # HTML/PDF extraction can concatenate a visible decimal and an identical
-    # MathML/LaTeX fallback (for example, ``3.73.7`` for ``3.7``).  Keep the
-    # source quote untouched, but mirror the Node editorial gate when reading
-    # numeric evidence: collapse exactly one immediately-adjacent, identical
-    # decimal pair.  The boundary checks deliberately leave normal adjacent
-    # numbers and non-identical decimal text alone.
+    # HTML/PDF 提取可能把一个可见小数和它相同的 MathML/LaTeX 副本拼在一起
+    # （例如 ``3.7`` 变成 ``3.73.7``）。来源引文保持原样，但读取数字证据时
+    # 要跟 Node 编辑闸一样，只合并一对紧邻且完全相同的小数。边界检查有意
+    # 放过正常的相邻数字和内容不同的小数文本。
     normalized = re.sub(
         r'(?<![\d.])(\d+\.\d+)\1(?!\d|\.\d)',
         r'\1',
@@ -2399,14 +2390,13 @@ def _manual_result_claim_source_text(paper):
 
 def _validate_manual_v4_result_claims(
         takeover, analysis, paper_label, *, reader_section='实验结果'):
-    """Mirror the source-bound Manual v4 result-claim shape at publish time.
+    """在发布阶段复刻来源绑定的 Manual v4 结果主张结构。
 
-    The controlled full text is intentionally not embedded in publication data,
-    so its original membership check remains an ingestion responsibility.  This
-    mirror still rejects weakened/self-consistent payloads: ordinary papers need
-    three unique claims, exceptions are type-gated, every semantic field binds
-    an exact local source and reader fragment, and empirical papers retain a
-    source-bound numeric claim in one reader-visible experiment evidence block.
+    受控全文刻意不写入发布数据，所以它原本的成员校验仍由摄入阶段负责。
+    这个复刻版本依然拒绝被削弱或自洽的载荷：普通论文需要三条互不相同
+    的主张，例外按文档类型设闸，每个语义字段都绑定一个确切的本地来源
+    和读者片段，实证论文还要在一个读者可见的实验证据块里保留一条来源
+    绑定的数值主张。
     """
     claims = takeover.get('resultClaims')
     exception = takeover.get('resultClaimsException')
@@ -2565,10 +2555,9 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
             f'{paper_label} Manual v6 的兼容标记、版本、运行模式或来源记录不符合要求，或相关记录缺失。'
         )
     if signed_v6_compatibility:
-        # Production V6 replaces the legacy V4/V5 resultClaims, stageReviews,
-        # evidenceLedger and figureReview projections with the content-addressed
-        # ArtifactIndex, reader-longform-v2 and four independent task receipts.
-        # Always replay the complete V6 validator before accepting that override.
+        # 生产 V6 用按内容寻址的 ArtifactIndex、reader-longform-v2 和四份独立的
+        # 任务核验记录，取代旧的 V4/V5 resultClaims、stageReviews、evidenceLedger
+        # 和 figureReview 投影。接受这个覆盖前必须完整重跑 V6 校验器。
         validate_manual_v6_payload(paper)
         return
     if takeover.get('version') == MANUAL_COMPLETE_PROVENANCE_VERSION:
@@ -3139,7 +3128,7 @@ def extract_markdown_tables(text):
 
 
 def _source_experiment_evidence(source_text):
-    """Mirror Node's bounded experiment-section evidence selection."""
+    """复刻 Node 对实验章节证据的有界选取逻辑。"""
     source = str(source_text or '')
     start = re.search(
         r'(?:^|\n)\s*(?:\d+(?:\.\d+)*\s+)?'
@@ -3375,11 +3364,10 @@ def validate_method_detail_contract(analysis):
 
 
 def validate_manual_depth_contract(analysis):
-    """Fail closed on newly ingested manual text that is only an abstract.
+    """新摄入的人工流程文本如果只是摘要，直接按失败处理。
 
-    This mirrors the Node ingestion gate.  It deliberately applies only when
-    a manifest opts into ``full-text-evidence-v1`` so historical API records
-    and older manual receipts remain compatible.
+    这与 Node 摄入闸一致，并且只在清单显式声明 ``full-text-evidence-v1``
+    时生效，好让历史 API 记录和更早的人工核验记录继续可读。
     """
     heading_issue = evaluation_heading_issue(analysis)
     if heading_issue:
@@ -3443,11 +3431,10 @@ def find_cross_section_duplicate_sentences(analysis, limit=3):
 
 
 def validate_manual_depth_contract_v2(analysis):
-    """Mirror of the Node full-text-evidence-v2 quality gates.
+    """复刻 Node 的 full-text-evidence-v2 质量闸。
 
-    The open-source URL gate needs the source full text, which is not part of
-    the canonical publish record; that gate is enforced at Node ingestion time
-    only.  Everything else is checked here as a publish-time fallback.
+    开源 URL 闸需要来源全文，而全文不在规范发布记录里；该闸只在 Node
+    摄入阶段执行。其余检查在这里作为发布阶段的兜底再做一遍。
     """
     heading_issue = evaluation_heading_issue(analysis)
     if heading_issue:
@@ -3490,15 +3477,13 @@ def _manual_prose_paragraphs(value):
 
 
 def _manual_editorial_prose_paragraphs(value):
-    """Mirror editorial-quality.js/proseParagraphs for the v4 reader gate.
+    """复刻 editorial-quality.js/proseParagraphs，用于 v4 读者闸。
 
-    The older helper above intentionally serves several legacy depth checks and
-    counts a Markdown heading as part of its surrounding blank-line block.
-    The Node editorial gate instead treats headings, tables, images and return
-    links as paragraph boundaries, strips list markers, and evaluates only
-    reader prose.  Keep this narrow helper separate so the publish-time v4
-    mirror cannot reject a canonical article solely because it tokenizes a
-    paragraph differently from its ingestion-time counterpart.
+    上面那个旧辅助函数有意服务于若干历史深度检查，会把 Markdown 标题算
+    进它所在的空行块。Node 编辑闸则把标题、表格、图片和返回链接都当作
+    段落边界，去掉列表标记，只评估读者正文。把这个窄用途的辅助函数单独
+    留出来，发布阶段的 v4 复刻才不会仅因为分段方式与摄入阶段不同就否掉
+    一篇规范文章。
     """
     paragraphs = []
     pending = []
@@ -3527,22 +3512,21 @@ def _manual_editorial_prose_paragraphs(value):
 
 
 def _manual_han_character_count(value):
-    """Count Han script characters as editorial-quality.js does.
+    """按 editorial-quality.js 的做法统计汉字字符。
 
-    `_manual_chinese_count` is a legacy length heuristic that also counts CJK
-    punctuation.  Paragraph overload is a reader-prose parity gate, where
-    punctuation has its own sentence-mark threshold, so including it here
-    creates false hard failures near the 260-character boundary.
+    `_manual_chinese_count` 是旧的长度启发式，会把 CJK 标点也算进去。
+    段落超载是读者正文的对等闸，标点另有自己的句子长度阈值；把它算进来
+    会在 260 字符边界附近误报硬失败。
     """
     return len(re.findall(r'[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]', str(value or '')))
 
 
 def validate_manual_depth_contract_v3(analysis):
-    """Publish-time mirror of the reader-visible Manual v3 quality floor.
+    """发布阶段复刻读者可见的 Manual v3 质量下限。
 
-    Source-bound ledger and numeric-density checks already run during Node
-    ingestion.  Publishing repeats every check that can be recomputed from the
-    canonical article so a stale or hand-edited record cannot bypass v3.
+    来源绑定的核对清单和数字密度检查已在 Node 摄入阶段跑过。发布阶段
+    重跑所有能从规范文章重算的检查，这样过期或手工改过的记录也无法
+    绕过 v3。
     """
     v2_issue = validate_manual_depth_contract_v2(analysis)
     if v2_issue:
@@ -3647,11 +3631,10 @@ def validate_manual_depth_contract_v3(analysis):
 
 
 def validate_manual_editorial_quality_v4(analysis):
-    """Publish-time high-confidence mirror of the Manual v4 reader gate.
+    """发布阶段对 Manual v4 读者闸做高置信度复刻。
 
-    The complete near-duplicate and result-source checks run in Node while the
-    controlled full text is available.  Python repeats reader-visible checks
-    that remain exactly recomputable from the canonical Markdown.
+    完整的近似重复和结果来源检查在 Node 侧、受控全文可用时执行。Python
+    重跑那些能从规范 Markdown 精确重算的读者可见检查。
     """
     heading_issue = evaluation_heading_issue(analysis)
     if heading_issue:
@@ -3787,21 +3770,18 @@ def validate_manual_editorial_quality_v4(analysis):
             lambda match: ' ' * len(match.group(0)),
             body,
         )
-        # Keep this normalization isomorphic with
-        # editorial-quality.js/findQuantitativeChineseNumerals.  Markdown
-        # headings are reader-facing labels rather than empirical claims (for
-        # example, “从 306 通道到一个词标签”), and a small set of idiomatic
-        # “一个 + adjective” phrases is not a measured count.  Replace with
-        # equal-length blanks so later matching cannot drift into adjacent
-        # text.
+        # 这段归一化要与 editorial-quality.js/findQuantitativeChineseNumerals 保持
+        # 一致。Markdown 标题是给读者看的标签，不是实证结论（例如“从 306 通道
+        # 到一个词标签”），“一个 + 形容词”这类固定说法也不是可测量的计数。
+        # 替换成等长空白，后续匹配就不会漂到相邻文本上。
         quantity_body = re.sub(
             r'^#{1,6}\s+[^\n]*$',
             lambda match: ' ' * len(match.group(0)),
             body,
             flags=re.M,
         )
-        # Match the Node gate: one-to-one is a structural relation, not a
-        # measured pair count. Preserve diagnostic offsets with equal blanks.
+        # 与 Node 闸一致：一对一是一种结构关系，不是可测量的配对数量。
+        # 用等长空白保留诊断偏移。
         quantity_body = re.sub(
             r'(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))',
             lambda match: ' ' * len(match.group(0)),
@@ -3892,10 +3872,9 @@ FINAL_MANUAL_SECTION_HEADINGS = (
     '作者与机构', EVALUATION_TITLE, LEGACY_EVALUATION_TITLE, '核心摘要', '方法概述和架构',
     '核心创新点', '实验结果', '细节详述', '评分理由',
     '局限与问题', '开源详情', '补充信息',
-    # Manual v5 reader-first pages replace the fixed v4 method/innovation/
-    # result/detail/limit facade with a single paper-specific reader article.
-    # Normalizing this generated H3 to the reader-view H2 is necessary for
-    # final-page evidence checks to address it deterministically.
+    # Manual v5 的读者优先页面用一个针对具体论文的解读文章，取代 v4 固定的
+    # 方法/创新/结果/细节/局限这套栏目结构。把生成的这个 H3 归一化成读者视图的 H2，
+    # 最终页面的证据检查才能稳定地定位到它。
     '深度解读', '开源与复现资源', '评分依据与证据（展开查看）',
 )
 
@@ -3933,7 +3912,7 @@ def _final_manual_depth_contract(markdown, paper=None):
 
 
 def _is_final_manual_v4(markdown, paper=None):
-    """Backward-compatible predicate for Manual reader-quality pages (v4/v5)."""
+    """向后兼容的判断函数：是否为 Manual 读者质量页面（v4/v5）。"""
     return _final_manual_depth_contract(markdown, paper) is not None
 
 
@@ -3949,10 +3928,9 @@ def _final_markdown_image_occurrences(markdown):
             r'\[!\[(?:\\.|[^\]\\])*\]\((https://[^)\s]+)\)\]\((https://[^)\s]+)\)',
             block,
         )
-        # Publication sanitization wraps remote images in a self-link.  Check
-        # that outer form first: its inner `![](...)` is also a valid prefix
-        # for the bare-image pattern, which otherwise counted the same image
-        # twice and broke selectedImageUrls ordering.
+        # 发布清理会把远程图片包成自链接。先检查外层形式：它内部的 `![](...)`
+        # 同样匹配裸图片模式，否则同一张图会被数两次，破坏 selectedImageUrls
+        # 的顺序。
         if linked and linked.group(1) == linked.group(2):
             occurrences.append((index, linked.group(1), blocks))
         elif bare:
@@ -4148,11 +4126,9 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
             reader_view,
             contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,
             document_type=document_type,
-            # Node already binds the evidence-rich source gates to the controlled
-            # full-text experiment slice.  At final-page time only the canonical
-            # experiment section is authoritative: using the whole analysis here
-            # lets words such as "消融" or "退化" in methods/limits create false
-            # source obligations that never existed in the experiment evidence.
+            # Node 已经把证据充分的来源闸绑定到受控全文的实验切片上。到最终页面
+            # 阶段，只有规范实验章节是权威依据：这里用整篇分析，会让方法/局限里
+            # 出现的“消融”“退化”等词产生实验证据里根本不存在的来源义务。
             source_text=saved_results_section,
         )
         if table_issue:
@@ -4179,11 +4155,10 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
 
 
 def validate_digest_index_reader_quality(markdown, required=False):
-    """Validate exact generated index prose while preserving old unmarked pages.
+    """校验生成的索引正文是否精确，同时保留旧的未标记页面。
 
-    New generation explicitly marks the index protocol.  Historical indexes
-    predate this reader gate and remain readable unless a caller explicitly
-    requests the new contract.
+    新生成流程会显式标记索引协议。历史索引早于这个读者闸，只要调用方
+    没有显式要求新契约，它们仍然可读。
     """
     text = str(markdown or '')
     marker = re.search(
@@ -4258,9 +4233,8 @@ def validate_digest_index_reader_quality(markdown, required=False):
         index_owned_body,
         flags=re.MULTILINE,
     )
-    # Keep the complete page in one synthetic section: otherwise its own H2
-    # headings would make the generic Manual reader validator inspect only the
-    # title preamble.
+    # 把整页放进一个合成章节：否则它自己的 H2 标题会让通用 Manual 读者
+    # 校验器只检查标题前的引言部分。
     synthetic = '## 核心摘要\n' + re.sub(
         r'^##\s+', '### ', index_owned_body, flags=re.MULTILINE,
     )
@@ -4309,7 +4283,7 @@ def validate_publish_parsed(
     require_reason_dimensions=False,
     validate_tags=True,
 ):
-    """Validate and normalize the complete type-aware scoring contract."""
+    """校验并归一化完整的、按文档类型区分的评分契约。"""
     if not isinstance(parsed, dict):
         raise PublishDataValidationError(f'{source} 必须是对象')
 
@@ -4441,7 +4415,7 @@ def _validate_manual_override(paper, mismatches, paper_label):
 
 
 def resolve_publish_parsed(paper):
-    """Return publish-safe parsed data after cross-checking its analysis source."""
+    """交叉核对分析来源后，返回可安全发布的结构化数据。"""
     if not isinstance(paper, dict):
         raise PublishDataValidationError('论文记录必须是对象')
     paper_label = paper.get('arxivId') or paper.get('title') or '<unknown paper>'
@@ -4484,8 +4458,7 @@ def resolve_publish_parsed(paper):
     else:
         override_fields = []
 
-    # analysis is always the publication baseline. The cache can contribute only
-    # explicitly declared, validated manual scoring overrides.
+    # analysis 始终是发布基线。缓存只能提供显式声明并通过校验的人工评分覆盖。
     resolved = dict(analysis_parsed)
     for field in override_fields:
         resolved[field] = cached_parsed[field]
@@ -4550,7 +4523,7 @@ def _validate_current_analysis_tags(analysis, parsed, paper_label):
 
 
 def normalize_publish_arxiv_id(arxiv_id):
-    """Normalize an arXiv ID for duplicate checks and stable filenames."""
+    """归一化 arXiv ID，用于查重和稳定文件名。"""
     value = str(arxiv_id or '').strip().lower()
     value = re.sub(r'^https?://arxiv\.org/(?:abs|pdf)/', '', value)
     value = re.sub(r'^arxiv:', '', value)
@@ -4564,14 +4537,12 @@ def normalize_publish_arxiv_id(arxiv_id):
 
 
 def parse_publish_arxiv_identity(arxiv_id):
-    """Return a base arXiv ID plus only an explicitly supplied version.
+    """返回基础 arXiv ID，只保留显式给出的版本号。
 
-    Publication metadata must not turn an unversioned identifier into ``v1``:
-    an arXiv ``abs``/``pdf`` URL without a suffix follows the moving current
-    version, while a suffixed identifier is an immutable version reference.
-    This parser intentionally shares the accepted wrappers with
-    :func:`normalize_publish_arxiv_id` and then preserves the suffix only when
-    it was present in the authoritative input.
+    发布元数据不能把没有版本号的标识符变成 ``v1``：arXiv 的 ``abs``/``pdf``
+    链接不带后缀时跟随不断更新的当前版本，带后缀的标识符才是不变的版本
+    引用。这个解析器有意与 :func:`normalize_publish_arxiv_id` 共用可接受
+    的包装形式，并且只在权威输入本身带后缀时才保留后缀。
     """
     raw = str(arxiv_id or '').strip().lower()
     raw = re.sub(r'^https?://arxiv\.org/(?:abs|pdf)/', '', raw)
@@ -4605,12 +4576,11 @@ def parse_publish_arxiv_identity(arxiv_id):
 
 
 def validate_papers_for_publish(papers, *, validate_manual_stage_records=True):
-    """Validate every paper before creating any publish artifact.
+    """在生成任何发布产物之前校验每一篇论文。
 
-    ``validate_manual_stage_records=False`` is reserved for the derived
-    publication-image-exclusion view.  Its canonical provenance was validated
-    immediately before derivation; all reader-visible contracts are still
-    rerun against the modified analysis.
+    ``validate_manual_stage_records=False`` 只留给派生的发布图片排除视图。
+    它的规范来源在派生之前刚刚校验过；所有读者可见的契约仍会针对改过的
+    分析重跑一遍。
     """
     if not isinstance(papers, list):
         raise PublishDataValidationError('待发布论文必须是数组')
@@ -4832,7 +4802,7 @@ def validate_papers_for_publish(papers, *, validate_manual_stage_records=True):
 
 
 def get_claude_code_version():
-    """Return local Claude CLI version for Anthropic-compatible User-Agent."""
+    """返回本地 Claude CLI 版本，用于 Anthropic 兼容的 User-Agent。"""
     try:
         result = subprocess.run(
             ['claude', '--version'],
@@ -4883,7 +4853,7 @@ def validate_publish_api_endpoint_url(endpoint):
     """只允许 HTTPS；明文 HTTP 仅供 loopback 本地测试服务。"""
     try:
         parsed = urllib.parse.urlsplit(endpoint)
-        # Accessing these properties also rejects malformed brackets and ports.
+        # 访问这些属性同时会拒绝格式错误的方括号和端口。
         hostname = parsed.hostname
         _ = parsed.port
         username = parsed.username
@@ -4928,7 +4898,7 @@ def build_publish_api_url(api_type, endpoint):
 
 
 def _canonical_publish_request_url(url):
-    """Canonicalize a validated request URL without changing its route."""
+    """把已校验的请求 URL 规范化，同时不改动它的路径。"""
     parsed = validate_publish_api_endpoint_url(str(url or ''))
     scheme = parsed.scheme.lower()
     hostname = (parsed.hostname or '').lower()
@@ -4947,7 +4917,7 @@ def _canonical_publish_request_url(url):
 
 
 def _canonical_publish_service_endpoint(url):
-    """Canonical endpoint identity for safe same-provider key inheritance."""
+    """同一服务商内安全继承 key 时使用的规范端点身份。"""
     canonical = urllib.parse.urlsplit(_canonical_publish_request_url(url))
     return urllib.parse.urlunsplit((
         canonical.scheme,
@@ -4969,9 +4939,8 @@ def build_publish_headers(api_type, api_key, claude_version=None):
         }
     return {
         'Authorization': f'Bearer {api_key}',
-        # urllib's default Python-urllib/* identifier is rejected by some
-        # OpenAI-compatible gateways (including OpenCode Go). Use an honest,
-        # stable project identifier instead of impersonating a vendor SDK.
+        # urllib 默认的 Python-urllib/* 标识会被部分 OpenAI 兼容网关（含 OpenCode Go）
+        # 拒绝。这里用诚实、稳定的项目标识，不冒充厂商 SDK。
         'User-Agent': 'audio-paper-digest/1.0',
         'Content-Type': 'application/json'
     }
@@ -5106,7 +5075,7 @@ def _open_publish_json_with_account_pool(
     *, api_url, endpoint, model, api_type, api_keys, payload, opener, timeout,
     state_file=None, usage_sink=None, usage_directory=None,
 ):
-    """Replay confirmed Go quota/balance failures strictly towards later keys."""
+    """已确认的 Go 配额/余额失败只按顺序向更靠后的 key 重试。"""
     try:
         expected_api_type = detect_publish_api_type(endpoint, model)
         expected_api_url = build_publish_api_url(expected_api_type, endpoint)
@@ -5299,9 +5268,8 @@ def call_publish_llm_api(
                     )
                 api_keys = primary_api_keys
             elif same_endpoint_service:
-                # A non-Go secondary model may reuse one key only when it stays
-                # on the exact same canonical provider endpoint. It never
-                # inherits the primary fallback pool.
+                # 非 Go 的副模型只有在完全同一个规范服务端点时才复用一把 key，
+                # 绝不继承主模型的备用账号池。
                 api_keys = [api_key]
             else:
                 raise LlmAccountPoolConfigError(
@@ -5352,12 +5320,10 @@ def call_publish_llm_api(
         return None
     last_error = None
     current_max_tokens = max(1, int(max_tokens))
-    # Strict review responses are tiny JSON objects. Reasoning models may spend
-    # the whole budget in hidden reasoning and return no final text; allowing
-    # those calls to grow to 16K repeatedly wastes quota without improving the
-    # protocol response. Keep generic publishing calls backward compatible,
-    # while one structured recovery is capped at 8K unless the caller
-    # explicitly configured a larger initial budget.
+    # 严格审查的响应只是很小的 JSON 对象。推理模型可能把预算全花在隐藏推理上，
+    # 最后不返回正文；任由这类调用反复涨到 16K，只会浪费配额，协议响应并不会
+    # 变好。通用发布调用保持向后兼容，只有一次结构化恢复被限制在 8K，除非
+    # 调用方显式配置了更大的初始预算。
     adaptive_max_tokens = (
         max(current_max_tokens, 8000) if structured_output else 16000
     )
@@ -5530,9 +5496,8 @@ def call_publish_llm_api(
                     retry_after = float(raw_retry_after)
                 except (TypeError, ValueError):
                     retry_after = None
-            # A malformed or extremely large Retry-After must not stall the
-            # whole review batch indefinitely. Formal review retries remain
-            # bounded while still respecting normal provider guidance.
+            # 格式错误或异常大的 Retry-After 不能把整批审查无限期卡住。正式审查重试
+            # 仍保持有界，同时遵守服务端给出的正常等待建议。
             base_delay = min(retry_after if retry_after is not None else 2 ** attempt, 60.0)
             time.sleep(max(0.0, base_delay) + random.uniform(0.0, 0.5))
 
@@ -5558,7 +5523,7 @@ def count_blocking_review_issues(issues):
 
 
 def review_protocol_failure(context, message):
-    """Build a blocking issue for malformed or indeterminate review output."""
+    """为格式错误或无法判定的审查输出构造阻断问题。"""
     return False, [{
         'severity': 'error',
         'description': f'{context} 协议校验失败：{message}',
@@ -5566,7 +5531,7 @@ def review_protocol_failure(context, message):
 
 
 def validate_review_payload(review, *, required=False, context='LLM review', issue_fields=()):
-    """Validate structured review output; required mode fails closed."""
+    """校验结构化审查输出；required 模式下按失败处理。"""
     if not isinstance(review, dict):
         if required:
             return review_protocol_failure(context, '顶层必须是 JSON 对象')
@@ -5704,7 +5669,7 @@ def get_today_bj(target_date=None):
 
 
 def paper_batch_date(paper):
-    """Use the immutable fetch batch date, with strict Beijing fetchedAt fallback."""
+    """使用不可变的抓取批次日期，严格回退到北京时间的 fetchedAt。"""
     explicit = paper.get('fetchBatchDate') or paper.get('batchDate')
     if explicit:
         explicit = str(explicit)
@@ -5726,7 +5691,7 @@ def paper_batch_date(paper):
 
 
 def select_blog_published_snapshot(papers, date_str, manifest_path=None, receipt_path=None):
-    """Bind downstream channel content to the exact remotely verified blog snapshot."""
+    """把下游渠道内容绑定到远端已核验的那份博客快照。"""
     if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', str(date_str or '')):
         raise PublishDataValidationError(f'无效发布日期: {date_str!r}')
     try:
@@ -5821,7 +5786,7 @@ def format_medal(index):
 
 
 def is_publish_currency_literal(value):
-    """A whole cell containing one explicit dollar amount, never dollar math."""
+    """整个单元格只有一个明确的美元金额，绝不算作公式。"""
     return bool(re.fullmatch(
         r'\s*\$\d+(?:,\d{3})*(?:\.\d+)?'
         r'(?:\s*/\s*(?:[1-9]\d*|[A-Za-z][A-Za-z0-9_-]*))?\s*',
@@ -5830,11 +5795,11 @@ def is_publish_currency_literal(value):
 
 
 def publish_table_currency_spans(text):
-    """Exact lone dollar amounts in established Markdown table cells only.
+    """只在既有的 Markdown 表格单元格里匹配单独出现的美元金额。
 
-    MathJax pairs delimiters within one HTML parent. Each accepted cell has
-    exactly one dollar and becomes its own td; prose is deliberately excluded.
-    Return byte-preserving character ranges, shared by renderer and format gate.
+    MathJax 只在同一个 HTML 父元素内配对定界符。被接受的单元格恰好含
+    一个美元符号，并且自身就是一个 td；正文被刻意排除。返回保持字节
+    不变的字符区间，供渲染器和格式闸共用。
     """
     spans = []
     offset = 0
@@ -5859,14 +5824,12 @@ def publish_table_currency_spans(text):
 
 
 def normalize_markdown_table_inr_currency(text):
-    """Normalize mixed INR/USD table cells without guessing at equations.
+    """归一化 INR/USD 混用的表格单元格，不去猜公式。
 
-    A source-bound table may contain a note such as ``INR 6,499 / $74.49``.
-    That cell is not eligible for the exact single-currency waiver above, but
-    the dollar amount is still plainly currency because the same cell names
-    INR.  Restrict this repair to real Markdown table cells and to dollar
-    amounts followed by a cell boundary or punctuation; prose and math-like
-    expressions remain untouched and therefore fail closed.
+    来源绑定的表格可能出现 ``INR 6,499 / $74.49`` 这样的备注。这个单元格
+    不适用上面那条例外（只允许单一币种），但同一格已经写了 INR，美元金额
+    显然是货币。只对真正的 Markdown 表格单元格、以及后面紧跟单元格边界或
+    标点的美元金额做修复；正文和疑似公式的表达式不动，因此按失败处理。
     """
     output = []
     fence = None
@@ -5906,13 +5869,13 @@ def fix_latex_delimiters(text):
     r"""转换明确的数学定界符；不把金额、代码或跨表格单元格内容当公式。"""
     if not text:
         return text
-    # LaTeXML serializes literal braces inside \\text as private macros;
-    # decode only those known markers to their standard TeX equivalents.
+    # LaTeXML 会把 \\text 里的字面花括号序列化成私有宏；只解码这些已知标记，
+    # 还原成标准 TeX 写法。
     text = text.replace(r'\lx@text@lbrace', r'\{')
     text = text.replace(r'\lx@text@rbrace', r'\}')
     text = normalize_markdown_table_inr_currency(text)
-    # These are literal source bytes, not prose eligible for math rewriting.
-    # An unclosed fenced block is conservatively protected through EOF.
+    # 这些是来源中的字面字节，不是可以改写成公式的正文。未闭合的围栏块
+    # 保守地一直保护到文件末尾。
     protected = re.compile(
         r'^[ \t]{0,3}(?P<fence>`{3,}|~{3,})[^\n]*(?:\n|$).*?'
         r'(?:^[ \t]{0,3}(?P=fence)(?![`~])[ \t]*(?:\n|$)|\Z)'
@@ -5924,13 +5887,11 @@ def fix_latex_delimiters(text):
     def convert_prose(prose):
         prose = re.sub(r'(\^|_)\{<([a-zA-Z])\}', r'\1{\\lt \2}', prose)
         prose = re.sub(r'(?<!\\)\$\$(.+?)\$\$', r'\\[\1\\]', prose, flags=re.DOTALL)
-        # Readers sometimes write a prose price range as ``$100-200 USD``.
-        # Unlike a standalone dollar amount in a dedicated table cell, this
-        # is not a valid Markdown currency literal: the format gate quite
-        # correctly treats the dollar as a possible math delimiter. Keep the
-        # amount readable while making the currency unambiguous. Requiring
-        # an explicit USD marker keeps expressions such as ``$5 + 2``
-        # fail-closed instead of guessing that they are money.
+        # 读者有时会把价格区间写成 ``$100-200 USD``。它与表格单元格里单独出现
+        # 的美元金额不同，不是合法的 Markdown 货币写法：格式闸把它当成可能的
+        # 公式定界符，这是对的。这里让金额保持可读，同时把币种写明确。要求
+        # 带显式的 USD 标记，是为了让 ``$5 + 2`` 这类表达式按失败处理，而不是
+        # 猜成金额。
         prose = re.sub(
             r'(?<![\\$])\$(\d+(?:,\d{3})*(?:\.\d+)?)(?:\s*[-–]\s*\$?(\d+(?:,\d{3})*(?:\.\d+)?))?'
             r'\s*(USD|US dollars?)\b',
@@ -5942,11 +5903,10 @@ def fix_latex_delimiters(text):
             prose,
             flags=re.IGNORECASE,
         )
-        # Some readers omit the currency suffix but use a decimal amount in
-        # prose (for example ``$113.54，高于 $93.80``). Treat only amounts
-        # with at least two integer digits and a decimal part as currency;
-        # the narrow shape leaves expressions such as ``$5 + 2`` and the
-        # ambiguous ``$20, $30 and $40`` fail-closed.
+        # 有些读者省略币种后缀，但正文里用的是带小数的金额（例如
+        # ``$113.54，高于 $93.80``）。只把整数部分至少两位、且带小数部分的金额
+        # 当货币；这个狭窄的形态会让 ``$5 + 2`` 和有歧义的 ``$20, $30 and $40``
+        # 按失败处理。
         prose = re.sub(
             r'(?<![\\$])\$(\d{2,}(?:,\d{3})*\.\d+)'
             r'(?=\s*(?:[，。；：、,.!?！？)\]]|$|[\u3400-\u9fff]))',
@@ -5959,25 +5919,23 @@ def fix_latex_delimiters(text):
             line_start = prose.rfind('\n', 0, match.start()) + 1
             line_end = prose.find('\n', match.end())
             line = prose[line_start:line_end if line_end >= 0 else len(prose)]
-            # An unescaped pipe in a Markdown table is a cell boundary, not
-            # permission to pair dollars in separate cells. Outside tables,
-            # ordinary conditional-probability math keeps its existing syntax.
+            # Markdown 表格里未转义的竖线是单元格边界，不能据此把两个单元格里的
+            # 美元符号配成一对。表格之外，普通条件概率公式沿用原有写法。
             if line.lstrip().startswith('|') and re.search(r'(?<!\\)\|', body):
                 return match.group(0)
             return r'\(' + body + r'\)'
 
-        # A closing dollar must follow non-whitespace and cannot open the next
-        # numeric amount. Inline math cannot span lines. Thus $0.2 | $1.0/1000
-        # remains exact, while $x$, $5$ and same-cell formulas still convert.
+        # 收尾的美元符号必须紧跟非空白字符，且不能开启下一个数字金额。行内公式
+        # 不能跨行。因此 $0.2 | $1.0/1000 保持原样，而 $x$、$5$ 和同单元格内的
+        # 公式仍然会转换。
         converted = re.sub(
             r'(?<![\\$])\$(?!\$)([^\s$](?:[^$\n]*?[^\s$])?)\$(?![\d$])',
             inline_math,
             prose,
         )
-        # A few arXiv figure captions contain a TeX opening delimiter but
-        # omit its closing ``$`` before a unit (for example ``f_s=$16\\,kHz``).
-        # This narrow numeric + TeX thin-space + unit shape is unambiguous math,
-        # not a currency amount; preserve its meaning as plain caption text.
+        # 少数 arXiv 图注有 TeX 起始定界符，却在单位前漏掉收尾的 ``$``（例如
+        # ``f_s=$16\,kHz``）。这种“数字 + TeX 细空格 + 单位”的窄形态是明确的
+        # 公式，不是金额；按普通图注文本保留原意。
         return re.sub(
             r'(?<![\\$])\$(\d+(?:\.\d+)?)(?:\\+,)([A-Za-z][A-Za-z0-9]*)\b',
             r'\1 \2',
@@ -6002,22 +5960,19 @@ def escape_html_like_tags(text):
     r"""转义论文中可能被 Hugo 解析为 HTML 的标记。"""
     if not text:
         return text
-    # Reader prose often quotes mini-language tokens such as ``<1 2>`` or
-    # ``<a b c>``. They are not tags, but CommonMark still hands them to the
-    # HTML parser; an unmatched or attribute-like token can then corrupt the
-    # rendered nesting. Escape only angle-bracket spans containing
-    # whitespace, leaving ordinary URLs and explicit tag handling unchanged.
+    # 读者正文里常引用 ``<1 2>``、``<a b c>`` 这类迷你语言记号。它们不是标签，
+    # 但 CommonMark 仍会交给 HTML 解析器；不匹配的记号或带属性的记号会破坏
+    # 渲染出来的嵌套结构。只转义含空白的尖括号片段，普通 URL 和显式标签
+    # 的处理保持不变。
     text = re.sub(
         r'(?<![A-Za-z0-9`])<([^>\n]*\s[^>\n]*)>',
         lambda match: f'&lt;{match.group(1)}&gt;',
         text,
     )
-    # A model may accidentally nest an inline control token inside a code
-    # span, for example `` `turn off `<EOT>``.  The middle backtick closes the
-    # span, so the generic tag pass would normally miss ``<EOT>`` because it
-    # is immediately preceded by a backtick.  Repair only this unambiguous
-    # doubled-closing-backtick shape; the entity keeps the token literal while
-    # remaining readable as ``<EOT>`` in the rendered code span.
+    # 模型可能把行内控制记号误套进代码段，例如 `` `turn off `<EOT>``。中间
+    # 那个反引号提前关闭了代码段，而 ``<EOT>`` 前面紧跟反引号，通用标签处理
+    # 会漏掉它。只修复这种明确的“双反引号收尾”形态；实体化后记号保持字面，
+    # 在渲染出的代码段里仍显示为 ``<EOT>``。
     text = re.sub(
         r'`([^`\n]*)`<([A-Za-z][A-Za-z0-9_†-]{0,40})>``',
         lambda match: f'`{match.group(1)}&lt;{match.group(2)}&gt;`',
@@ -6029,17 +5984,14 @@ def escape_html_like_tags(text):
         protected_code.append(match.group(0))
         return f'PD_PROTECTED_INLINE_CODE_{len(protected_code) - 1}'
 
-    # Protect complete single-line inline-code spans before looking for raw
-    # HTML-like tags. Otherwise a valid span such as `` `turn off <EOT>` ``
-    # is mistaken for prose and the tag pass inserts a second pair of
-    # backticks, producing the invalid `` `turn off `<EOT>`` shape.
+    # 先保护完整的单行行内代码段，再去找原始 HTML 式标签。否则像
+    # `` `turn off <EOT>` `` 这样的合法代码段会被当成正文，标签处理再插一对
+    # 反引号，得到非法的 `` `turn off `<EOT>`` 形态。
     text = re.sub(r'(?<!`)(`+)(?!`)([^`\n]*?)\1(?!`)', protect_inline_code, text)
-    # ``publish-to-blog.py`` deliberately emits these two exact, attribute-free
-    # container tags for the collapsible scoring section.  Protect them before
-    # the generic paper-token escaping below; otherwise the final catch-all
-    # turns our own UI markup into inline code (``<details>``) and the section
-    # no longer collapses.  Attribute-bearing/user-authored variants remain
-    # subject to the normal sanitizer.
+    # ``publish-to-blog.py`` 为可折叠的评分区刻意输出这两个不含属性的容器
+    # 标签。要在下面通用的论文记号转义之前保护它们；否则最后的兜底会把
+    # 我们自己的 UI 标记（``<details>``）变成行内代码，评分区不再折叠。
+    # 带属性的和用户自己写的变体仍走常规清理。
     safe_containers = []
 
     def protect_safe_container(match):
@@ -6212,9 +6164,8 @@ def link_remote_images_to_original(text):
     if not text:
         return text
     return re.sub(
-        # Alt text may contain escaped Markdown brackets (for example
-        # ``\[5\]`` from a paper caption).  Treat an escaped character as one
-        # alt-text atom instead of stopping at its closing bracket.
+        # alt 文本里可能含转义的 Markdown 方括号（例如论文图注来的 ``\[5\]``）。
+        # 把转义字符当作 alt 文本的一个原子，而不是在它的收尾方括号处停下。
         r'(?<!\[)(!\[(?:\\.|[^\]\\\n])*\]\((https://[^)\s]+)\))',
         lambda match: f'[{match.group(1)}]({match.group(2)})',
         text,
@@ -6254,7 +6205,7 @@ def fix_yaml_unbalanced_quotes(text):
 
 
 def strip_internal_scoring_anchors(text):
-    """Strip reader-facing scoring provenance tags from a derived text view."""
+    """从派生文本视图里去掉读者可见的评分来源标记。"""
     value = str(text or '')
     frontmatter = ''
     frontmatter_match = re.match(
@@ -6290,11 +6241,11 @@ def strip_internal_scoring_anchors(text):
 
 
 def linkify_bare_https_urls(text):
-    """Turn reader-visible bare HTTPS URLs into Markdown autolinks.
+    """把读者可见的裸 HTTPS URL 变成 Markdown 自动链接。
 
-    Frontmatter, fenced code, inline code, existing Markdown links/images and
-    existing autolinks remain byte-stable.  This keeps canonical URLs exact
-    while ensuring every displayed resource can be clicked in Hugo.
+    frontmatter、围栏代码、行内代码、已有的 Markdown 链接/图片和已有的
+    自动链接都保持字节不变。这样规范 URL 仍然精确，同时每个展示出来的
+    资源在 Hugo 里都能点开。
     """
     value = str(text or '')
     invalid_url_suffix = re.compile(
@@ -6377,13 +6328,12 @@ def linkify_bare_https_urls(text):
 
 
 def escape_symbolic_markdown_table_cells(text):
-    """Escape literal ``*`` runs used as sequence symbols inside table cells.
+    """转义表格单元格里用作序列符号的字面 ``*`` 串。
 
-    Acoustic/biological sequence tables may encode events as ``*******___``.
-    Leaving those source symbols bare lets Markdown reinterpret them as an odd
-    number of emphasis delimiters.  Only cells made entirely of ``*``/``_``
-    are touched, so ordinary prose emphasis and mixed-content cells retain
-    their authored Markdown semantics.
+    声学/生物序列表格会用 ``*******___`` 表示事件。这些符号留在源码里，
+    Markdown 会把它们重新解读为奇数个强调定界符。只处理完全由 ``*``/``_``
+    构成的单元格，普通正文强调和混合内容单元格仍保留作者写的 Markdown
+    语义。
     """
     output = []
     fence = None
@@ -6423,14 +6373,12 @@ _TECHNICAL_NOTATION_ASTERISK = re.compile(
 
 
 def escape_technical_notation_asterisks(text):
-    """Escape literal stars in compact technical notation such as ``H1*``.
+    """转义 ``H1*`` 这类紧凑技术记号里的字面星号。
 
-    Acoustic notation uses stars as part of names (for example ``H1*-H2*``),
-    not as Markdown emphasis.  Escaping only a letter/digit token ending in a
-    star preserves authored emphasis while preventing CommonMark from pairing
-    the notation with surrounding bold markers.  YAML frontmatter is kept
-    byte-stable because a backslash in a double-quoted YAML scalar changes its
-    meaning.  The operation is idempotent.
+    声学记号把星号当作名称的一部分（例如 ``H1*-H2*``），不是 Markdown 强调。
+    只转义以星号结尾的字母/数字记号，既保留作者写的强调，也避免 CommonMark
+    把这个记号与周围的粗体标记配成一对。YAML frontmatter 保持字节不变，
+    因为双引号 YAML 标量里的反斜杠会改变含义。这个操作是幂等的。
     """
     frontmatter_match = re.match(r'^---\n.*?\n---\n', str(text or ''), flags=re.DOTALL)
     prefix = frontmatter_match.group(0) if frontmatter_match else ''
@@ -6454,14 +6402,12 @@ def escape_technical_notation_asterisks(text):
 
 
 def escape_statistical_significance_stars(text):
-    """Escape literal significance stars after p-values.
+    """转义 p 值后面的字面显著性星号。
 
-    Tables often use ``p = 0.00908**`` or ``p < 2.2e-16***`` to encode
-    significance levels.  CommonMark interprets the bare stars as emphasis
-    delimiters, so the published page can fail the Markdown gate even though
-    the source fact is valid.  Restrict the repair to an unescaped p-value
-    followed by a complete star run; ordinary emphasis and code are left
-    untouched.  The operation is idempotent.
+    表格常用 ``p = 0.00908**`` 或 ``p < 2.2e-16***`` 表示显著性水平。
+    CommonMark 会把裸星号当作强调定界符，于是来源事实本身没问题，发布
+    页面却过不了 Markdown 闸。修复只针对未转义的 p 值加上完整的星号串；
+    普通强调和代码不动。这个操作是幂等的。
     """
     output = []
     fence = None
@@ -6497,9 +6443,9 @@ def sanitize_markdown_for_publish(text):
     latex_body = text[len(latex_prefix):]
     latex_body = normalize_arxiv_math_double_extraction(latex_body)
     latex_body = fix_latex_delimiters(latex_body)
-    # Paper control markers inside nested TeX braces can look like Hugo
-    # shortcodes (e.g. \text{{<tts_start>}}). Hugo's literal shortcode escape
-    # restores the original bytes before Markdown/math rendering.
+    # 嵌套 TeX 花括号里的论文控制记号可能看起来像 Hugo shortcode（如
+    # \text{{<tts_start>}}）。Hugo 的字面 shortcode 转义会在 Markdown/公式
+    # 渲染之前还原原始字节。
     def escape_literal_shortcode(match):
         opening, body, closing = match.groups()
         if (opening, closing) not in {('<', '>'), ('%', '%')}:
@@ -6516,16 +6462,14 @@ def sanitize_markdown_for_publish(text):
         r'\1',
         latex_body,
     )
-    # Reader concept bridges occasionally emit ``** label：**``.  CommonMark
-    # treats whitespace immediately after the opening delimiter as literal
-    # text, so Hugo preserves both markers.  Restrict the deterministic repair
-    # to a line-opening delimiter; closing delimiters and source-bound tables
-    # remain byte-stable.
+    # 读者向的概念桥接偶尔会写出 ``** label：**``。CommonMark 把起始定界符
+    # 后面的空白当字面文本，于是 Hugo 会同时保留两个标记。这个确定性修复只
+    # 针对行首定界符；收尾定界符和来源绑定的表格保持字节不变。
     latex_body = re.sub(
         r'(?m)^([ \t]*(?:>\s*)?)\*\*[ \t]+(?=\S)', r'\1**', latex_body,
     )
-    # A duplicated Chinese MOS label was observed in a signed core summary.
-    # Repair only this prose prefix; source quotes and table cells are untouched.
+    # 核心摘要里曾观察到重复的中文 MOS 标签。只修复这个正文前缀，
+    # 来源引文和表格单元格不动。
     latex_body = re.sub(
         r'(?m)^(语音质量评估输入待测语音、输出与人耳一致的)'
         r'平均意见分平均意见分（Mean Opinion Score, MOS）',

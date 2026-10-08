@@ -1,4 +1,4 @@
-"""Strict cross-runtime paper identity contract (paper-identity-v1)."""
+"""跨运行时严格一致的论文身份契约（paper-identity-v1）。"""
 
 from __future__ import annotations
 
@@ -228,7 +228,7 @@ __all__ = ["CONTRACT", "ARXIV_ID_RE", "SCHEMES", "canonical_conference_id", "con
 
 
 if __name__ == '__main__':
-    # Every top-level Python script has the same external-runtime boundary,
-    # even when this file normally serves only as an importable shared module.
+    # 每个顶层 Python 脚本都有相同的外部运行时边界，这个文件平时只作为
+    # 可导入的共享模块也一样。
     from runtime_guard import require_external_runtime
     require_external_runtime('paper_identity.py')

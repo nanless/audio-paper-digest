@@ -157,8 +157,8 @@ LLM_API_READER_STRUCTURED_CONTRACTS = {
 LLM_API_READER_SOURCE_BINDING_CONTRACT = 'api-reader-source-bindings-v4'
 LLM_API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1'
 LLM_API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1'
-# Its presence makes the lack of a stored Figure asset intentional and
-# reviewable.  Older Reader records remain cache-backed when this is absent.
+# 这条契约标记一旦出现，就表示没有保存配图资产是有意为之、
+# 可以复核的。这个字段缺席时，旧的 Reader 记录仍然由缓存提供。
 EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT = 'ephemeral-no-persisted-figure-assets-v1'
 LLM_API_SCORING_CONTRACT = 'api-scoring-audit-v2'
 CORE_SUMMARY_DETAILED_CONTRACT = 'core-summary-detailed-v3'
@@ -197,10 +197,10 @@ RESEARCHER_SIDECAR_MAX_BYTES = 256 * 1024
 MANUAL_REVIEW_SUBAGENT_MODEL = 'gpt-5.6-terra'
 MANUAL_REVIEW_SUBAGENT_REASONING = 'high'
 
-# Single-paper gray releases keep generation/review/push evidence beside, not
-# on top of, the already remote-verified batch evidence for the same date.
-# Entry points set this only inside ``publication_scope``; ordinary batch calls
-# and existing direct function callers retain the historical date-only paths.
+# 单篇论文灰度发布时，把生成、审查、推送凭证与同一天已经完成远端核验的批次凭证并列存放，
+# 不覆盖后者。
+# 只有入口点在 ``publication_scope`` 里才设置它；普通批次调用
+# 和已有的直接函数调用方仍然沿用过去只按日期定位的路径。
 _ACTIVE_PUBLICATION_INCLUDE_ID = None
 
 
@@ -301,9 +301,9 @@ def _manual_review_record_error(receipt, *, date_str=None,
     review_file_details = manual_review_record.get('files')
     receipt_files = receipt.get('files')
     if legacy_v1:
-        # v1 never carried per-page attestations. It is accepted only as
-        # immutable historical publication evidence, never as a new/pending
-        # receipt that could authorize another push under today's protocol.
+        # v1 从不携带逐页证明。它只能作为
+        # 不可变的历史发布证据被接受，不能当作新的或待处理的
+        # 凭证，去授权在当前协议下再推送一次。
         if not all(receipt.get(field) for field in (
             'publicationCommit', 'remoteVerifiedOid', 'remoteVerifiedAt',
             'remoteIdentitySha256',
@@ -488,7 +488,7 @@ def _manual_review_record_error(receipt, *, date_str=None,
 
 
 def blog_transaction_lock(date_str, *, timeout_seconds=30):
-    """Serialize generation, review, and push for the same publication date."""
+    """对同一天发布的生成、审查和推送做串行化。"""
     date_str = validate_publish_date(date_str)
     return file_lock(
         CURRENT_DIR / f'blog-publication-{date_str}.transaction',
@@ -497,7 +497,7 @@ def blog_transaction_lock(date_str, *, timeout_seconds=30):
 
 
 def blog_repository_lock(*, timeout_seconds=30):
-    """Serialize writers through the blog repository's shared Git common-dir."""
+    """借助博客仓库共享的 Git common-dir 串行化各写入方。"""
     return shared_blog_repository_lock(
         BLOG_REPO,
         owner=f'paper-digest-blog-stage:{os.getpid()}',
@@ -507,7 +507,7 @@ def blog_repository_lock(*, timeout_seconds=30):
 
 @contextmanager
 def blog_publication_lock(date_str, *, timeout_seconds=30):
-    """Acquire locks in one global order: repository first, publication date second."""
+    """按统一顺序获取锁：先仓库，后发布日期。"""
     date_str = validate_publish_date(date_str)
     with blog_repository_lock(timeout_seconds=timeout_seconds):
         with blog_transaction_lock(date_str, timeout_seconds=timeout_seconds):
@@ -520,7 +520,7 @@ def blog_publication_lock(date_str, *, timeout_seconds=30):
 
 
 def get_blog_review_concurrency():
-    """Return the project-scoped concurrency for independent post reviews."""
+    """返回项目级并发数，用于相互独立的文章审查。"""
     raw = os.environ.get("PD_BLOG_REVIEW_CONCURRENCY", "5").strip()
     try:
         value = int(raw)
@@ -538,7 +538,7 @@ def current_image_review_mode():
 
 
 def get_blog_review_chunk_chars():
-    """Bound text-review chunks to reduce repeated prompt overhead safely."""
+    """限定文本审查的分块大小，在安全的前提下减少重复的提示词开销。"""
     raw = os.environ.get("PD_BLOG_REVIEW_CHUNK_CHARS", "8000").strip()
     try:
         value = int(raw)
@@ -548,7 +548,7 @@ def get_blog_review_chunk_chars():
 
 
 def get_blog_review_max_tokens():
-    """Return the output budget for one strict blog review call."""
+    """返回一次严格博客审查调用的输出上限。"""
     raw = os.environ.get("PD_BLOG_REVIEW_MAX_TOKENS", "4000").strip()
     try:
         value = int(raw)
@@ -586,7 +586,7 @@ def call_llm_api(
 
 @contextmanager
 def review_unit_cache(date_str, page_path, *, required, paper_id=None, run_id=None):
-    """Enable request-level recovery only within a strict publication review."""
+    """只在严格的发布审查内部启用请求级恢复。"""
     context = None
     if required:
         context = {
@@ -604,7 +604,7 @@ def review_unit_cache(date_str, page_path, *, required, paper_id=None, run_id=No
 
 
 def review_cached_unit(kind, inputs, run):
-    """Reuse only exact successful request evidence; retain failed issues for diagnosis."""
+    """只复用完全一致的请求成功证据；失败问题保留下来供诊断。"""
     context = _REVIEW_UNIT_CONTEXT.get()
     if context is None:
         return run()
@@ -616,8 +616,8 @@ def review_cached_unit(kind, inputs, run):
     key = _stable_json_sha256(identity)
     directory = context['directory']
     checkpoint = directory / f'{key}.json'
-    # Never follow a cache symlink; malformed checkpoints simply cannot attest
-    # a successful request. No prompt, page body or image bytes are persisted.
+    # 绝不跟随缓存里的符号链接；格式损坏的检查点本来就不能作为
+    # 请求成功的证明。提示词、页面正文和图片字节都不落盘。
     current_root = Path(CURRENT_DIR)
     for component in (checkpoint, directory, *directory.parents):
         if component.is_symlink():
@@ -650,7 +650,7 @@ def review_cached_unit(kind, inputs, run):
         }):
             passed, issues = run()
     except Exception as exc:
-        # The caller keeps the original exception/retry semantics.
+        # 调用方仍保留原来的异常与重试语义。
         result = {'passed': False, 'issues': [{
             'severity': 'error', 'type': 'infrastructure',
             'description': f'review request failed ({type(exc).__name__})',
@@ -665,7 +665,7 @@ def review_cached_unit(kind, inputs, run):
 
 
 def validate_publish_date(value):
-    """Return a canonical real Gregorian date in strict YYYY-MM-DD form."""
+    """返回严格 YYYY-MM-DD 形式的真实公历规范日期。"""
     if not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}', value):
         raise PublishDataValidationError('博客日期必须严格使用 YYYY-MM-DD 格式')
     try:
@@ -690,7 +690,7 @@ def paper_batch_date(paper):
 
 
 def validate_publish_target(blog_repo=None, content_dir=None):
-    """Constrain publication writes to <blog repo>/content/posts."""
+    """把发布写入限制在 <blog repo>/content/posts 下。"""
     blog_repo = BLOG_REPO if blog_repo is None else blog_repo
     content_dir = CONTENT_DIR if content_dir is None else content_dir
     repo = Path(blog_repo).expanduser().resolve()
@@ -710,7 +710,7 @@ def validate_publish_target(blog_repo=None, content_dir=None):
 
 
 def split_review_content(content, limit=4000):
-    """Split at Markdown block boundaries without cutting fences/tables/links."""
+    """在 Markdown 块边界处切分，不切断围栏、表格和链接。"""
     if not content:
         return ['']
     lines = content.splitlines(keepends=True)
@@ -757,13 +757,13 @@ def split_review_content(content, limit=4000):
         if current and len(current) + len(block) > limit:
             chunks.append(current)
             current = ''
-        # A single semantic block may exceed the soft limit. Keeping it intact
-        # is safer than manufacturing an unclosed fence/table/link context.
+        # 单个语义块可能超过软上限。保留它原样，
+        # 比切出一个未闭合的围栏、表格或链接上下文更安全。
         if not current and len(block) > limit and block_kind == 'protected':
             chunks.append(block)
         elif not current and len(block) > limit:
-            # Long plain paragraphs have no Markdown block state to preserve.
-            # Prefer a line boundary so short semantic tokens are not split.
+            # 较长的普通段落没有需要保留的 Markdown 块状态。
+            # 优先在行边界处切分，避免切断较短的语义片段。
             remaining = block
             while len(remaining) > limit:
                 boundary = remaining.rfind('\n', 0, limit + 1)
@@ -791,7 +791,7 @@ def has_unconverted_dollar_math(content):
 
 
 def markdown_table_shapes_are_valid(content):
-    """Replay explicit Markdown table column counts for LLM false-positive filtering."""
+    """重放显式的 Markdown 表格列数，用于过滤 LLM 误报。"""
     lines = str(content or '').splitlines()
     for index, line in enumerate(lines):
         if not re.match(r'^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$', line):
@@ -885,7 +885,7 @@ def filter_false_positive_review_issues(content, issues):
 
 
 def parse_review_json(text):
-    """Parse a JSON response even when the model adds a short prose wrapper."""
+    """即使模型在 JSON 外面加了一小段说明文字，也要把它解析出来。"""
     cleaned = (text or '').strip()
     cleaned = re.sub(r'^```(?:json)?\s*|\s*```$', '', cleaned, flags=re.IGNORECASE).strip()
     try:
@@ -906,7 +906,7 @@ def repair_review_payload(
     retry_prompt=None,
     retry_images=None,
 ):
-    """Convert a malformed review response to the strict review JSON contract once."""
+    """把格式错误的审查响应转换一次，使其符合严格的审查 JSON 契约。"""
     raw_response = raw_response or ''
     original_retry_attempted = False
     if retry_prompt and len(raw_response.strip()) < 32:
@@ -976,9 +976,9 @@ def repair_review_payload(
     except (PublishLLMUnavailable, json.JSONDecodeError, TypeError, ValueError) as exc:
         repair_error = exc
 
-    # A format-repair response can itself be truncated or malformed. In that
-    # case, retry the actual review once so text and image evidence remain in
-    # scope instead of repeatedly asking a model to repair broken JSON.
+    # 格式修复的响应本身也可能被截断或格式错误。遇到这种情况，
+    # 就把真正的审查重试一次，让文字和图片证据都留在处理范围内，
+    # 而不是反复让模型去修一段坏掉的 JSON。
     if retry_prompt and not original_retry_attempted:
         try:
             retried = call_llm_api(
@@ -1009,7 +1009,7 @@ def repair_review_payload(
 
 
 def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1'):
-    """Review one bounded chunk of a post."""
+    """审查一篇文章里一个有长度上限的分块。"""
     title = plain_title_for_publish(title) if title else title
     prompt = f"""你是一个 Hugo 静态站点博客内容质量审查专家。
 
@@ -1116,9 +1116,9 @@ def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1')
         )
         issues = filter_false_positive_review_issues(content, issues)
         if passed is False and not issues:
-            # All model-reported blockers were deterministically disproved
-            # against these exact page bytes. A raw false-without-reason still
-            # blocks because validate_review_payload injects a protocol issue.
+            # 模型报告的所有阻断项都已经对照这些确切的页面字节
+            # 逐条排除。但只要出现没有说明理由的 false，
+            # 审查仍然阻断，因为 validate_review_payload 会补一条协议问题。
             passed = True
         # 自动应用可修复的问题
         fixed_content = apply_llm_fixes(content, issues)
@@ -1152,7 +1152,7 @@ def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1')
 
 
 def llm_review_post(content, title="", required=False):
-    """Review every chunk of a post and return merged issues and fixes."""
+    """审查文章的所有分块，返回合并后的问题与修正建议。"""
     chunks = split_review_content(content, get_blog_review_chunk_chars())
     all_issues = []
     passed = True
@@ -1168,9 +1168,9 @@ def llm_review_post(content, title="", required=False):
         )
         return passed, issues, chunks[index]
 
-    # The large daily index is otherwise the serial bottleneck. Paper pages are
-    # already parallelized by review_all_posts, so keep their chunks sequential
-    # to avoid multiplying page concurrency by chunk concurrency.
+    # 否则体量大的每日汇总页会成为串行瓶颈。论文页已经由
+    # review_all_posts 并行处理，所以它们的文本块保持串行，
+    # 避免把页面并发和分块并发叠乘起来。
     if title == "汇总页" and len(chunks) > 1:
         workers = min(get_blog_review_concurrency(), len(chunks))
         print(f"    🔀 汇总页文本分块 review 并发度: {workers}")
@@ -1188,10 +1188,10 @@ def llm_review_post(content, title="", required=False):
     for chunk_passed, issues, _unused in chunk_results:
         passed = passed and chunk_passed
         all_issues.extend(issues)
-    # A chunk reviewer can only see its bounded slice and may claim that a
-    # document-level construct (most commonly YAML frontmatter) is unclosed.
-    # Replay deterministic false-positive checks once more against the exact
-    # full page bytes before the merged verdict is signed.
+    # 分块审查只能看到自己那一小段，可能误判某个
+    # 整篇文档级的结构（最常见的是 YAML frontmatter）没有闭合。
+    # 在合并结论落定之前，再对照完整的页面字节
+    # 重放一次确定性的误报检查。
     all_issues = filter_false_positive_review_issues(content, all_issues)
     fixed_content = apply_llm_fixes(content, all_issues)
     passed = count_blocking_review_issues(all_issues) == 0
@@ -1233,7 +1233,7 @@ def _validate_public_image_url(url):
 
 
 def _response_peer_ip(response):
-    """Extract the connected peer from requests/urllib3 without trusting DNS twice."""
+    """从 requests/urllib3 取出已连接的对端，不再重复依赖 DNS 结果。"""
     raw = getattr(response, 'raw', None)
     candidates = [
         getattr(getattr(response, '_connection', None), 'sock', None),
@@ -1261,7 +1261,7 @@ def _validate_response_peer(response, resolved_addresses):
 
 
 def _resolve_proxy_addresses(proxy):
-    """Resolve the explicitly configured CONNECT proxy, which is a trusted transport hop."""
+    """解析显式配置的 CONNECT 代理，它是受信任的传输跳点。"""
     parsed = urlparse(proxy)
     if parsed.scheme not in {'http', 'https'} or not parsed.hostname:
         raise PublishDataValidationError('图片 review 代理必须是 HTTP CONNECT 地址')
@@ -1291,7 +1291,7 @@ def _remaining_deadline_seconds(deadline, label):
 
 
 def _pinned_https_url(parsed, address):
-    """Replace only the transport authority; Host and TLS SNI stay original."""
+    """只替换传输层 authority；Host 和 TLS SNI 保持原样。"""
     normalized = str(ipaddress.ip_address(address))
     host = f'[{normalized}]' if ':' in normalized else normalized
     if parsed.port and parsed.port != 443:
@@ -1302,7 +1302,7 @@ def _pinned_https_url(parsed, address):
 def _read_pinned_review_image(
     current, resolved_addresses, proxy, proxy_addresses, deadline, target_address=None,
 ):
-    """Fetch one HTTPS hop through CONNECT pinned to a prevalidated public IP."""
+    """经 CONNECT 取一跳 HTTPS，并固定到预先校验过的公网 IP。"""
     import urllib3
 
     parsed = urlparse(current)
@@ -1391,9 +1391,9 @@ def _read_pinned_review_image(
 
 def _validate_response_peer_with_transport(response, resolved_addresses, proxy_addresses=None):
     peer = _response_peer_ip(response)
-    # With an explicit HTTP CONNECT proxy the socket peer is the configured proxy
-    # (often 127.0.0.1), not the remote image host. The URL is still DNS-checked
-    # before every hop; validate the transport peer against the configured proxy.
+    # 使用显式 HTTP CONNECT 代理时，socket 对端是配置的代理
+    # （通常是 127.0.0.1），不是远端图片主机。每一跳之前仍然会做 DNS 检查；
+    # 这里要对照配置的代理校验传输层对端。
     if proxy_addresses is not None:
         if peer not in proxy_addresses:
             raise PublishDataValidationError(
@@ -1410,7 +1410,7 @@ def _validate_response_peer_with_transport(response, resolved_addresses, proxy_a
 
 
 def _download_review_image(url):
-    """Download through CONNECT pinned to the locally prevalidated public IP."""
+    """经 CONNECT 下载，并固定到本地预先校验过的公网 IP。"""
     proxy = get_required_fetch_proxy()
     proxy_addresses = _resolve_proxy_addresses(proxy)
     deadline_seconds = _bounded_positive_seconds(
@@ -1437,10 +1437,10 @@ def _download_review_image(url):
                         )
                         break
                     except Exception as exc:
-                        # Only transport-layer failures may retry the same
-                        # already DNS-validated address or move to another
-                        # validated address. Content/security failures remain
-                        # fail-closed and are never silently bypassed.
+                        # 只有传输层失败才可以重试同一个
+                        # 已经通过 DNS 校验的地址，或者换到另一个
+                        # 通过校验的地址。内容与安全类失败
+                        # 一律按失败关闭处理，绝不静默绕过。
                         import urllib3
                         if isinstance(exc, (OSError, urllib3.exceptions.HTTPError)):
                             transient_error = exc
@@ -1503,12 +1503,12 @@ def _validate_image_signature(media_type, raw):
 
 
 def _sanitize_svg_xml_for_review(raw):
-    """Drop only XML-invalid character references from trusted arXiv SVG.
+    """只从可信的 arXiv SVG 里删掉 XML 非法的字符引用。
 
-    arXiv occasionally emits numeric references to control characters.  They
-    are not renderable XML, but rejecting the entire figure would diverge from
-    the Node sanitizer and needlessly block an otherwise safe paper figure.
-    Active content is still rejected by ``_rasterize_svg_for_review`` below.
+    arXiv 偶尔会输出指向控制字符的数字引用。这些引用
+    在 XML 里渲染不出来，但因此拒掉整张图就和
+    Node 清理器不一致，也会白白挡掉一张本来安全的论文图。
+    活动内容仍然由下面的 ``_rasterize_svg_for_review`` 拒绝。
     """
     try:
         text = raw.decode('utf-8-sig')
@@ -1534,7 +1534,7 @@ def _sanitize_svg_xml_for_review(raw):
 
 
 def _prepare_raster_for_review(media_type, raw):
-    """Bound decoded raster dimensions before sending bytes to the reviewer."""
+    """在把字节发给审查方之前，先限制解码后的位图尺寸。"""
     if media_type == 'image/svg+xml':
         return media_type, raw
     try:
@@ -1548,9 +1548,9 @@ def _prepare_raster_for_review(media_type, raw):
                 rgba = source.convert('RGBA')
                 if rgba.getchannel('A').getextrema()[0] == 255:
                     return media_type, raw
-                # Review on the same white surface as the reader page. A
-                # transparent PNG with black text otherwise appears blank
-                # when the model decodes transparency against black.
+                # 用和读者页面相同的白色底来审查。否则一张带黑字的
+                # 透明 PNG，在模型把透明通道解码成黑色时
+                # 会看起来是一片空白。
                 background = Image.new('RGB', rgba.size, 'white')
                 background.paste(rgba, mask=rgba.getchannel('A'))
                 output = io.BytesIO()
@@ -1590,7 +1590,7 @@ def _prepare_raster_for_review(media_type, raw):
 
 
 def _rasterize_svg_for_review(raw):
-    """Rasterize an untrusted SVG in an isolated, network-blocked browser page."""
+    """在隔离且禁网的浏览器页面里栅格化不受信任的 SVG。"""
     if not raw or len(raw) > REVIEW_IMAGE_MAX_BYTES:
         raise PublishDataValidationError('SVG 为空或超过 8 MiB review 上限')
     raw = _sanitize_svg_xml_for_review(raw)
@@ -1672,15 +1672,15 @@ _IMAGE_REPO_SUFFIX_MIME = {
 
 
 def _load_review_image_from_local_repo(url):
-    """Read our own pre-push image-repository URL from the local worktree.
+    """从本地工作树里读取我们自己推送前的图片仓库 URL。
 
-    Conference review runs before push: generate stages figure bytes into the
-    image repository working tree without committing them, while the rendered
-    Markdown already cites the canonical raw.githubusercontent main URL.
-    Resolving that exact path locally keeps review read-only for both
-    repositories and lets the later push commit the very bytes that passed
-    review.  Paths outside the image repository (or not staged locally) return
-    None so the caller falls back to the pinned remote download.
+    会议审查发生在推送之前：生成阶段把图片字节放进
+    图片仓库工作树但不提交，而渲染出的 Markdown
+    已经引用规范的 raw.githubusercontent main URL。
+    在本地解析这个确切路径，能让两个仓库的审查都保持只读，
+    也让之后的推送恰好提交通过审查的那批字节。
+    图片仓库之外的路径（或本地未暂存的路径）返回
+    None，调用方据此回退到固定 IP 的远端下载。
     """
     match = re.fullmatch(r'https://raw\.githubusercontent\.com/[^/]+/([^/]+)/main/([^?#]+)', url)
     if not match:
@@ -1789,12 +1789,12 @@ def _digest_cover_review_expectation(url):
 
 
 def parse_markdown_images(content):
-    """Scan inline images with balanced labels and destinations.
+    """扫描行内图片，同时检查标签和目标地址的括号配对。
 
-    Only paragraph code spans and top-level fences are excluded; indented
-    code and container fences are not generalized here. Quoted titles may contain
-    unmatched parentheses; only destination parentheses affect URL balance.
-    Broken inline images fail closed; reference labels remain out of scope.
+    这里只排除段落里的代码段和顶层围栏；缩进代码
+    与容器围栏不做一般化处理。引号标题里可能有
+    不配对的圆括号；只有目标地址的圆括号影响 URL 配对。
+    破损的行内图片按失败关闭处理；引用式标签不在处理范围内。
     """
     def is_escaped(position):
         previous = position
@@ -1807,9 +1807,9 @@ def parse_markdown_images(content):
             f'图片 Markdown {detail}（字符位置 {position}）'
         )
 
-    # CommonMark top-level fences: <=3 leading spaces, >=3 matching marks;
-    # backticks cannot occur in a backtick fence's info string. An unclosed
-    # fence consumes the rest of the document as code, including literal ![.
+    # CommonMark 顶层围栏：前导空格 ≤3 个，标记 ≥3 个且同类；
+    # 反引号不能出现在反引号围栏的信息串里。未闭合的
+    # 围栏会把文档剩余部分都当作代码，包括字面的 ![。
     fenced_ranges = []
     fence = None
     offset = 0
@@ -1837,9 +1837,9 @@ def parse_markdown_images(content):
         if fenced:
             cursor = fenced[1]
             continue
-        # Locate code spans only before the next image marker. Once an image
-        # is parsed, its complete label/URL/title is consumed, so backticks in
-        # those fields cannot accidentally open a code span over later images.
+        # 只在下一个图片标记之前查找代码段。图片一旦解析完，
+        # 它的标签、URL、标题就整体被消费掉，因此这些字段里的反引号
+        # 不会误在后面的图片上开启代码段。
         tick = content.find('`', cursor, start)
         if tick >= 0:
             fenced = next((span for span in fenced_ranges if span[0] <= tick < span[1]), None)
@@ -1884,8 +1884,8 @@ def parse_markdown_images(content):
             elif char == '\\':
                 escaped = True
             elif char == '`':
-                # Matching code spans are literal label content: brackets
-                # inside them do not alter the enclosing image label depth.
+                # 配对成功的代码段属于字面标签内容：
+                # 其中的方括号不会改变外层图片标签的嵌套深度。
                 tick_end = alt_end + 1
                 while tick_end < len(content) and content[tick_end] == '`':
                     tick_end += 1
@@ -1898,8 +1898,8 @@ def parse_markdown_images(content):
                 if closing:
                     alt_end = tick_end + closing.end()
                     continue
-                # An unmatched delimiter remains literal; its brackets are
-                # still parsed normally rather than silently hiding an image.
+                # 未配对的定界符保持字面含义；其中的方括号
+                # 仍照常解析，不会悄悄藏住一张图片。
                 alt_end = tick_end
                 continue
             elif char == '[':
@@ -1959,9 +1959,9 @@ def parse_markdown_images(content):
                 invalid('title 后存在非法内容', start)
             url = content[alt_end + 2:title_start].strip()
         else:
-            # Preserve the previous raw-destination behavior for non-title
-            # content, including legacy truncated data URIs. The unchanged
-            # loader must still reject invalid bytes/schemes/addresses.
+            # 非标题内容保持之前的原始目标地址行为，
+            # 包括旧版被截断的 data URI。未改动的加载器
+            # 仍然必须拒绝非法字节、协议和地址。
             url = content[alt_end + 2:end].strip()
         if url.startswith('<') and url.endswith('>'):
             url = url[1:-1].strip()
@@ -1977,22 +1977,22 @@ def parse_markdown_images(content):
 
 
 def _linked_image_source_url(content, image_end):
-    """Return the outer link target for ``[![alt](local)](official-url)``."""
+    """返回 ``[![alt](local)](official-url)`` 这种结构里外层链接的目标地址。"""
     suffix = str(content or '')[image_end:]
     match = re.match(r'^\]\((https://[^)]+)\)', suffix)
     return match.group(1).strip() if match else ''
 
 
 def multimodal_review_images(content, title="", required=False):
-    """Send actual image bytes to the routed multimodal publish API."""
+    """把真实的图片字节发给路由后的多模态发布 API。"""
     title = plain_title_for_publish(title) if title else title
     image_matches = parse_markdown_images(content)
 
     if not image_matches:
         return True, []
-    # Blog image review follows the same primary model as text review.  This
-    # prevents a stale optional analysis-secondary route from silently moving
-    # publication review to a different provider or quota.
+    # 博客图片审查和文字审查使用同一个主模型。这样可以
+    # 避免一个过期的可选 analysis-secondary 路由把
+    # 发布审查悄悄挪到别的服务商或配额上。
     if not os.environ.get('PAPER_ANALYZER_MODEL', '').strip():
         return True, []
 
@@ -2012,11 +2012,11 @@ def multimodal_review_images(content, title="", required=False):
         try:
             image_payload = _load_review_image(url)
         except PublishDataValidationError as exc:
-            # Fresh-source production pages may intentionally omit persisted
-            # Figure assets while retaining the exact official HTTPS target
-            # in the surrounding Markdown link.  Review that bound source
-            # instead of treating the absent local projection as a content
-            # failure; all HTTPS source gates still apply in _load_review_image.
+            # 使用最新来源生成的生产页可能有意不保存配图资产，
+            # 但外层 Markdown 链接里仍保留确切的官方 HTTPS 地址。
+            # 这时应审查这个有绑定关系的来源，
+            # 而不是把本地投影缺失当成内容失败；
+            # _load_review_image 里的所有 HTTPS 来源闸门照常生效。
             image_payload = None
             fallback_url = _linked_image_source_url(content, match['end'])
             if fallback_url:
@@ -2034,8 +2034,8 @@ def multimodal_review_images(content, title="", required=False):
                     'description': f'无法加载图片内容用于多模态 review: {exc}',
                 })
                 continue
-        # Keep prompt metadata and attached bytes in the same append path.
-        # A failed download must not shift later images onto earlier contexts.
+        # 让提示词元数据和附带的字节走同一条追加路径。
+        # 下载失败不能让后面的图片顶到前面图片的上下文上。
         image_payloads.append(image_payload)
         cover_expectation = _digest_cover_review_expectation(url)
         img_summary.append(
@@ -2146,8 +2146,8 @@ def multimodal_review_images(content, title="", required=False):
 
     passed_all = True
     all_issues = list(load_issues)
-    # One image per request keeps the configured proxy upload bounded while
-    # preserving exact image/context alignment and full per-page coverage.
+    # 每次请求只带一张图片，能让经代理的上传量可控，
+    # 同时保持图片与上下文严格对应，并覆盖到页面里的每一张。
     for index, (summary, image_payload) in enumerate(zip(img_summary, image_payloads), 1):
         batch_prompt = prompt.replace(summary_blob, summary, 1)
         passed, issues = review_cached_unit(
@@ -2217,12 +2217,12 @@ def slugify(text, max_length=50):
 
 
 def normalize_arxiv_id(arxiv_id):
-    """Normalize an arXiv identifier for stable, traversal-safe filenames."""
+    """归一化 arXiv 标识符，得到稳定且不会路径穿越的文件名。"""
     return normalize_publish_arxiv_id(arxiv_id)
 
 
 def _validate_publish_image_exclusion(entry, label='发布图片排除项'):
-    """Validate and canonicalize one publication-only image exclusion."""
+    """校验并规范化一条只作用于发布的图片排除项。"""
     if not isinstance(entry, dict) or set(entry) != {
         'normalizedArxivId', 'url', 'reason',
     }:
@@ -2263,7 +2263,7 @@ def _validate_publish_image_exclusion(entry, label='发布图片排除项'):
 
 
 def load_publish_image_exclusions(config_path=None):
-    """Load the narrow, checked-in publication image override contract."""
+    """加载仓库内那份范围很窄的发布图片覆盖契约。"""
     path = Path(config_path or PUBLISH_IMAGE_EXCLUSIONS_PATH)
     payload = _load_json_object(path, '发布图片排除配置')
     if set(payload) != {'schemaVersion', 'exclusions'}:
@@ -2286,7 +2286,7 @@ def load_publish_image_exclusions(config_path=None):
 
 
 def _is_plain_publish_image_paragraph(paragraph, max_length):
-    """Return a short prose paragraph only; never admit Markdown structure."""
+    """只返回一个简短的普通段落；绝不容纳 Markdown 结构。"""
     value = str(paragraph or '').strip()
     return bool(
         value
@@ -2296,7 +2296,7 @@ def _is_plain_publish_image_paragraph(paragraph, max_length):
 
 
 def _is_publish_image_lead_paragraph(paragraph):
-    """Recognize only an explicit, sentence-final pointer to the following figure."""
+    """只识别明确出现在句末、指向下一张图的引导语。"""
     value = str(paragraph or '').strip()
     if not _is_plain_publish_image_paragraph(value, 500):
         return False
@@ -2309,7 +2309,7 @@ def _is_publish_image_lead_paragraph(paragraph):
 
 
 def _is_publish_image_explanation_paragraph(paragraph):
-    """Recognize only a deictic explanation that explicitly describes that figure."""
+    """只识别明确描述那张图的指示性解释。"""
     value = str(paragraph or '').strip()
     if not _is_plain_publish_image_paragraph(value, 1000):
         return False
@@ -2322,7 +2322,7 @@ def _is_publish_image_explanation_paragraph(paragraph):
 
 
 def _strip_publish_image_lead_context(paragraph):
-    """Remove a bridge lead while preserving an immediately preceding heading."""
+    """删掉过渡引导句，同时保留紧挨在它前面的标题。"""
     value = str(paragraph or '').strip()
     if _is_publish_image_lead_paragraph(value):
         return ''
@@ -2336,7 +2336,7 @@ def _strip_publish_image_lead_context(paragraph):
 
 
 def _remove_publish_image_block(content, exact_url, insertion_plan=None):
-    """Remove one exact image and only high-confidence adjacent bridge prose."""
+    """删掉一张确切的图片，以及紧邻且高置信度的过渡文字。"""
     if not isinstance(content, str) or exact_url not in content:
         return content
     paragraphs = re.split(r'\n(?:[ \t]*\n)+', content.strip())
@@ -2389,7 +2389,7 @@ def _remove_publish_image_block(content, exact_url, insertion_plan=None):
 
 
 def _remove_api_reader_figure_block(content, exact_url):
-    """Remove one reader image, its v3 focus path, and generated caption."""
+    """删掉一张读者图片、它的 v3 focus 路径和生成的图注。"""
     paragraphs = re.split(r'\n(?:[ \t]*\n)+', str(content or '').strip())
     image_pattern = re.compile(
         rf'^[ \t]*!\[(?:\\.|[^\]\\\n])*\]\({re.escape(exact_url)}\)[ \t]*$'
@@ -2417,13 +2417,13 @@ def _remove_api_reader_figure_block(content, exact_url):
 
 
 def apply_publish_image_exclusions(papers, exclusions=None):
-    """Attach overrides and sanitize one derived analysis/parsed publication view.
+    """给一份派生出来的 analysis/parsed 发布视图套上覆盖项并做清理。
 
-    ``score_and_sort()`` deliberately reparses ``analysis`` instead of trusting a
-    cached ``parsed`` object.  The publication-only analysis copy therefore has
-    to be cleaned together with its parsed projection; otherwise the summary
-    page reparses the original image back into the rendered output while the
-    single-paper page uses the cleaned cache.
+    ``score_and_sort()`` 有意重新解析 ``analysis``，而不信任
+    缓存的 ``parsed`` 对象。所以只用于发布的那份 analysis 副本
+    必须和它的 parsed 投影一起清理；否则汇总页
+    会重新解析出原始图片并写回渲染结果，而单篇论文页
+    用的却是清理过的缓存。
     """
     exclusions = load_publish_image_exclusions() if exclusions is None else [
         _validate_publish_image_exclusion(item)
@@ -2634,8 +2634,8 @@ def _validated_workbench_text(
         raise PublishDataValidationError(f'{label} 必须是字符串')
     if '\r' in value:
         raise PublishDataValidationError(f'{label} 禁止 CR/CRLF；只允许规范 LF')
-    # The abstract sidecar is evidence: keep its exact Unicode code points and
-    # LF layout. Short presentation fields are normalized to stable NFC.
+    # 摘要伴随文件是证据：保留它确切的 Unicode 码点和
+    # LF 换行布局。较短的展示字段才归一化成稳定的 NFC。
     value = value if preserve_newlines else unicodedata.normalize('NFC', value)
     for character in value:
         category = unicodedata.category(character)
@@ -2946,7 +2946,7 @@ def _select_tag_display_version(repo, current, versions, *, legacy=False, approv
     relatives = [f'data/{filename}', f'static/data/{filename}']
     def read_regular(relative):
         target = repo / relative
-        # Reject even a dangling link and links to another in-repo location.
+        # 即使是悬空链接、以及指向仓库内其他位置的链接，也要拒绝。
         for item in [target, *target.parents]:
             if item == repo:
                 break
@@ -3288,9 +3288,9 @@ def prepare_tag_catalog_staged_files(stage_root, blog_repo=None, *, single_page=
     repo = Path(BLOG_REPO if blog_repo is None else blog_repo).expanduser().resolve()
     stage = Path(stage_root).resolve()
     if installation is not None:
-        # The target repo may be between data/static replacements after a crash.
-        # Reuse only the journal-bound complete staging set, never derive a new
-        # version catalogue from that partially installed worktree.
+        # 崩溃后目标仓库可能卡在 data 与 static 目录替换的中间状态。
+        # 只复用与日志绑定、且完整的暂存集合，绝不要从这个
+        # 只安装了一半的工作树里推导出新的版本目录。
         records = installation.get('files') if isinstance(installation, dict) else None
         if not isinstance(records, list):
             raise PublishDataValidationError('标签词表安装记录缺少有效的文件列表。')
@@ -3577,7 +3577,7 @@ def build_researcher_workbench_bundle(
 
 
 def _workbench_display_original_title(title):
-    """Convert inline-math dollar delimiters in the YAML display title."""
+    """转换 YAML 展示标题里的行内数学美元定界符。"""
     if not isinstance(title, str):
         return title
     title = re.sub(r'AS\$\^2\$D', 'AS²D', title, flags=re.IGNORECASE)
@@ -3764,7 +3764,7 @@ def compact_title_for_ranking(title, max_length=55):
 
 
 def format_complete_score_line(parsed):
-    """Render total plus all eight dimensions; zero is a real score, not missing."""
+    """渲染总分和全部八个维度；零是真实评分，不是缺失。"""
     if not isinstance(parsed, dict) or parsed.get('score') is None:
         return ''
     dimensions = (
@@ -3786,16 +3786,16 @@ def format_complete_score_line(parsed):
 
 
 def normalize_digest_index_reader_surface(text):
-    """Normalize quantitative prose copied from canonical into the daily index."""
+    """归一化从 canonical 复制到每日汇总页的定量文字。"""
     value = str(text or '')
     frontmatter = ''
     frontmatter_match = re.match(
         r'\A---\r?\n[\s\S]*?\r?\n---(?:\r?\n|\Z)', value,
     )
     if frontmatter_match:
-        # Quantitative typography owns reader prose only.  In particular,
-        # case-insensitive unit suffixes such as B/D must never split a signed
-        # hexadecimal digest stored in YAML frontmatter.
+        # 数值排版只处理读者正文。尤其是 B、D 这类
+        # 不区分大小写的单位后缀，绝不能把 YAML frontmatter 里
+        # 带符号的十六进制摘要拆开。
         frontmatter = frontmatter_match.group(0)
         value = value[len(frontmatter):]
     protected_markdown_links = []
@@ -3806,10 +3806,10 @@ def normalize_digest_index_reader_surface(text):
         protected_markdown_links.append(match.group(0))
         return f'__PD_MARKDOWN_LINK_{len(protected_markdown_links) - 1}__'
 
-    # Quantitative typography is only for prose.  Preserve both the label and
-    # destination of inline links/images byte-for-byte: a unit-like paper token
-    # such as ``3D`` must not become ``3 D``, and the same rewrite inside a
-    # relative post URL would silently create a broken digest-index link.
+    # 数值排版只用于正文。行内链接和图片的标签与目标地址
+    # 必须逐字节保留：像 ``3D`` 这样形似单位的论文词
+    # 不能变成 ``3 D``；同样的改写如果落在相对文章 URL 里，
+    # 会悄悄产生一个坏掉的汇总页链接。
     value = re.sub(
         r'!?\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)',
         stash_markdown_link,
@@ -3919,7 +3919,7 @@ def normalize_digest_index_reader_surface(text):
 
 
 def compact_index_opensource(parsed_analysis, paper, limit=4):
-    """Keep the digest index navigable; full provenance remains on each paper page."""
+    """让汇总页保持可导航；完整来源留在每篇论文页上。"""
     oss_text = enrich_opensource(parsed_analysis, paper)
     urls = []
     for raw in re.findall(
@@ -3952,8 +3952,8 @@ def _analysis_sha256_ignoring_core_summary_body(analysis):
 
 
 def _nearest_core_summary_metric_label(segment, from_right):
-    # A bare token such as PESQ can name either a metric or a baseline method.
-    # Only an explicit "X分数/X得分/X指标" label is safe to compare here.
+    # 像 PESQ 这样的裸词，可能指指标，也可能指基线方法。
+    # 这里只有明确的 "X分数/X得分/X指标" 标签才可以安全比较。
     candidates = []
     custom = re.compile(
         r'(?<![A-Za-z0-9_])([A-Za-z][A-Za-z0-9_-]{1,39})(?=\s*(?:分数|得分|指标))'
@@ -4030,10 +4030,10 @@ def _detailed_core_summary_semantic_issue(summary):
     )
     if not has_numbered_method_chain and len(tier_role_stages) < 2:
         issues.append('缺少 2–4 步方法链的分工与衔接')
-    # Keep this allow-list in lockstep with scripts/analysis-contract.js.
-    # The publisher replays the same v3 contract after the Node analysis
-    # stages, so a metric accepted upstream must not be rejected here merely
-    # because it uses a newer alias (for example PPL or compression rate).
+    # 这份白名单要和 scripts/analysis-contract.js 保持同步。
+    # 发布器在 Node 分析阶段之后重放同一份 v3 契约，
+    # 所以上游已经接受的指标，不能仅仅因为它用了
+    # 更新的别名（例如 PPL 或压缩率）就在这里被拒。
     metric = re.compile(
         r'(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|SDR|SNR|EER|PPL|ASR|mAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)',
         re.IGNORECASE,
@@ -4051,8 +4051,8 @@ def _detailed_core_summary_semantic_issue(summary):
         r'[^。！？!?\n]{0,50}(?:升至|降至)\s*[-+]?\d',
     )
     number = re.compile(r'(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分))?(?![A-Za-z0-9])')
-    # Match English setting labels beside Chinese text the same way JavaScript
-    # does: Python treats Han characters as `\w`, while JS `\b` does not.
+    # 处理紧挨中文的英文设置项标签时，要和 JavaScript 一致：
+    # Python 把汉字当作 `\w`，而 JS 的 `\b` 不这么认为。
     setting = re.compile(r'(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|(?<![A-Za-z0-9_])(?:on|test|benchmark|evaluation)(?![A-Za-z0-9_]))', re.IGNORECASE)
     named_setting = re.compile(
         r'(?:[A-Z][A-Za-z0-9._-]{2,}\s*[\u3400-\u9fff]{0,8}(?:集|数据集|语料|任务|基准)'
@@ -4062,10 +4062,10 @@ def _detailed_core_summary_semantic_issue(summary):
     has_complete_result = False
     for sentence in re.split(r'[。！？!?\n]', summary):
         result_sentence = _strip_core_summary_non_result_numerals(sentence)
-        # A numeric metric qualifier such as R@0.9 or F1 identifies the
-        # metric; it is not one endpoint of an experimental transition.
-        # CLAP may be the comparison model rather than the measured metric;
-        # mirror the Node contract's explicit baseline/model exclusion.
+        # R@0.9 或 F1 这样的数值指标限定词是在指明
+        # 指标本身，不是某次实验变化的一个端点。
+        # CLAP 可能是用来对比的模型，而不是被测量的指标；
+        # 这里照搬 Node 契约里明确的基线/模型排除规则。
         metric_sentence = re.sub(
             r'\bCLAP\s*(?:基线|模型|baseline\b|model\b)',
             '', result_sentence, flags=re.IGNORECASE,
@@ -4270,7 +4270,7 @@ def _build_api_reader_display_fields(paper, payload=None):
     resources = payload['resourceIdentityProof']['resources']
     lines = []
     for resource in resources:
-        # Keep source URLs clickable without permitting Markdown/HTML escapes.
+        # 保持来源 URL 可点击，同时不允许 Markdown/HTML 转义。
         def link(url):
             return '<' + re.sub(r'[<>"\\\s]', lambda m: quote(m.group(0), safe=''), url) + '>'
         url_text = link(resource['originalUrl'])
@@ -4401,7 +4401,7 @@ def normalize_digest_index_preserving_decision_blocks(markdown):
 
 
 def format_display_tags(tags):
-    """Flatten compound hashtag strings into one stable, deduplicated tag row."""
+    """把复合话题标签串压平成一行稳定且去重后的标签。"""
     values = [tags] if isinstance(tags, str) else list(tags or [])
     flattened = []
     for value in values:
@@ -4414,7 +4414,7 @@ def format_display_tags(tags):
 
 
 def build_index_context_line(parsed_analysis, aurl=''):
-    """Render non-duplicated ranking/source metadata below the score row."""
+    """在评分行下面渲染不重复的排名与来源元数据。"""
     bits = []
     if isinstance(parsed_analysis, dict) and parsed_analysis.get('rankBucket'):
         bits.append(f'排名：{parsed_analysis["rankBucket"]}')
@@ -4546,11 +4546,11 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
     )
 
     def index_figure_preview(paper, reader_article):
-        """Project the first source-bound paper figure as an index thumbnail.
+        """把第一张与来源绑定的论文图投影成汇总页缩略图。
 
-        The signed Reader article remains the source of truth.  Reusing its
-        complete Markdown image line keeps the alt text and arXiv URL bound to
-        the same evidence while Hugo's image hook serves the local mirror.
+        已签名的 Reader 文章仍然是权威来源。复用它完整的
+        Markdown 图片行，能让替代文本和 arXiv URL 绑定到
+        同一份证据，同时由 Hugo 的图片钩子提供本地镜像。
         """
         if not isinstance(reader_article, str):
             return ''
@@ -4575,11 +4575,11 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
                 return ''
             extension = '.svg' if urlparse(source_url).path.lower().endswith('.svg') else '.png'
             digest = hashlib.sha256(source_url.encode('utf-8')).hexdigest()[:16]
-            # API Reader v3 figures are ephemeral: their pixels may be
-            # materialized only for the current call and must not be written
-            # into the blog repository.  Keep the official HTTPS source in
-            # the digest index for that contract; only persistent Reader
-            # assets may be projected to a local mirror URL.
+            # API Reader v3 的图片是临时的：它们的像素只能在
+            # 当次调用中生成，绝不写进
+            # 博客仓库。该契约的官方 HTTPS 来源要留在
+            # 汇总页里；只有持久化的 Reader
+            # 资产才可以投影成本地镜像 URL。
             if figure is not None and figure.get('cachePath'):
                 local_url = (
                     f'{BASE_PATH}/images/papers/{normalize_arxiv_id(paper.get("arxivId"))}/'
@@ -4789,7 +4789,7 @@ def enrich_opensource(parsed_analysis, paper):
 
 
 def _visual_summary_analysis_sha256(paper):
-    """Mirror visual-summary-state.js analysisSha256 exactly."""
+    """与 visual-summary-state.js 的 analysisSha256 完全一致。"""
     manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
     stages = manifest.get('stages') if isinstance(manifest.get('stages'), dict) else {}
     payload = {
@@ -4881,7 +4881,7 @@ def _visual_prompt_path(stage, manifest):
 
 
 def load_visual_summary_cards(papers, date_str, manifest_path=None):
-    """Legacy verifier retained for data forensics; the blog pipeline never calls it."""
+    """为数据取证保留的旧校验器；博客流水线从不调用它。"""
     manifest_path = Path(manifest_path or (VISUAL_SUMMARY_MANIFEST_DIR / f'{date_str}.json'))
     if not manifest_path.is_file():
         raise PublishDataValidationError(
@@ -5022,7 +5022,7 @@ def _digest_cover_context(papers, date_str, category='论文速递'):
 
 
 def load_digest_cover(papers, date_str, manifest_path=None, category='论文速递'):
-    """Legacy verifier retained for data forensics; the blog pipeline never calls it."""
+    """为数据取证保留的旧校验器；博客流水线从不调用它。"""
     manifest_path = Path(manifest_path or (DIGEST_COVER_MANIFEST_DIR / f'{date_str}.json'))
     if not manifest_path.is_file():
         raise PublishDataValidationError(f'缺少强制汇总页封面 manifest: {manifest_path}')
@@ -5095,7 +5095,7 @@ def _atomic_write_bytes(path, content, mode=None):
 
 
 def stage_visual_summary_assets(assets, staged_posts):
-    """Legacy staging helper; production generation always passes an empty asset list."""
+    """旧的暂存辅助函数；生产生成总是传入空的资产列表。"""
     stage_root = Path(staged_posts).parent
     staged = []
     for asset in assets:
@@ -5114,7 +5114,7 @@ def stage_visual_summary_assets(assets, staged_posts):
 
 
 def _manual_reader_editorial_plan(paper):
-    """Return the opt-in v2 reader facade without changing canonical analysis."""
+    """返回按需启用的 v2 reader 接口，不改动规范分析。"""
     manifest = paper.get('analysisManifest') if isinstance(paper.get('analysisManifest'), dict) else {}
     contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
     takeover = manifest.get('manualTakeover') if isinstance(manifest.get('manualTakeover'), dict) else {}
@@ -5135,7 +5135,7 @@ def _manual_reader_editorial_plan(paper):
 
 
 def _manual_v6_reader_payload(paper):
-    """Return the strict canonical v6 rendering payload, never a fallback."""
+    """返回严格的规范 v6 渲染载荷，绝不回退到别的版本。"""
     manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
     contracts = contracts if isinstance(contracts, dict) else {}
@@ -5152,7 +5152,7 @@ def _manual_v6_reader_payload(paper):
 
 
 def _api_reader_article_image_urls(article):
-    """Return HTTPS Markdown image URLs while honoring escaped alt-text chars."""
+    """返回 HTTPS 的 Markdown 图片 URL，同时尊重已转义的替代文本字符。"""
     return re.findall(
         r'!\[(?:\\.|[^\]\\])*\]\((https://[^\s)]+)\)',
         article,
@@ -5160,7 +5160,7 @@ def _api_reader_article_image_urls(article):
 
 
 def _api_reader_display_formula_blocks(article):
-    """Count display math in prose, never escaped citations inside image alt text."""
+    """只统计正文里的展示数学，不统计图片替代文本里转义过的引用。"""
     visible = re.sub(
         r'!\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)',
         '',
@@ -5170,7 +5170,7 @@ def _api_reader_display_formula_blocks(article):
 
 
 def _api_reader_markdown_tables(article):
-    """Replay Node's table extractor while preserving the exact hashed bytes."""
+    """重放 Node 的表格提取器，同时保留参与哈希的确切字节。"""
     lines = str(article or '').split('\n')
     fence = None
     visible_lines = []
@@ -5181,10 +5181,10 @@ def _api_reader_markdown_tables(article):
                 fence = (match.group(1)[0], len(match.group(1)))
                 visible_lines.append('')
             else:
-                # Publication escapes literal acoustic/biological sequence
-                # symbols (for example ``*******___``) so Markdown does not
-                # parse them as emphasis.  Reconstruct the canonical source
-                # bytes before replaying the signed table hash and cell map.
+                # 发布环节会转义字面的声学/生物序列符号
+                # （例如 ``*******___``），免得 Markdown
+                # 把它们解析成强调标记。重放已签名的表格哈希和单元格映射之前，
+                # 先还原出规范的来源字节。
                 visible_lines.append(re.sub(
                     r'(?<=\|)([ \t]*)((?:\\[*_]|[*_])+)([ \t]*)(?=\|)',
                     lambda cell: cell.group(1)
@@ -5263,11 +5263,11 @@ def _normalize_api_reader_source_cell(value):
         else match[0], value,
     )
     value = re.sub(r'<br\s*/?>', ' ', value, flags=re.IGNORECASE)
-    # arXiv's LaTeXML text flattening can paste a TeX superscript rendering
-    # beside its plain-text counterpart (for example
-    # ``lr=2e−4lr=2e^{-4}``) or repeat a signed decimal as ``−22.9-22.9``.
-    # The Reader post-processor applies the same narrow display cleanup; keep
-    # the publication-side equivalence check in lockstep with that cleanup.
+    # arXiv 的 LaTeXML 文本扁平化会把 TeX 上标的渲染结果
+    # 贴在对应的纯文本旁边（例如
+    # ``lr=2e−4lr=2e^{-4}``），或者把带符号小数重复成 ``−22.9-22.9``。
+    # Reader 后处理器执行同样范围的显示清理；
+    # 发布侧的等价性检查要和这个清理保持一致。
     value = value.replace('\u200b', '')
     scalar = r'[+−-]?\d+(?:\.\d+)?'
     value = re.sub(
@@ -5277,8 +5277,8 @@ def _normalize_api_reader_source_cell(value):
         if all(match[i].replace('−', '-') == match[i + 3].replace('−', '-')
                for i in (1, 2, 3)) else match[0], value,
     )
-    # Exact visible power + identical TeX annotation; preserve the raw DOM
-    # cell binding while mirroring Node's unambiguous display cleanup.
+    # 可见的幂次完全一致、TeX 注解也相同；在照搬 Node 明确无歧义的
+    # 显示清理时，保留原始的 DOM 单元格绑定。
     value = re.sub(
         r'(?<![A-Za-z0-9])([1-9]\d*)([−+-])(\d+)\1\^\{([−+-])\3\}(?![A-Za-z0-9])',
         lambda match: ('\\(' + match[1] + '^{' + match[2].replace('−', '-')
@@ -5359,24 +5359,24 @@ def _reader_doubled_half_token(surface):
 
 
 def _api_reader_numeric_tokens(value):
-    # Require a thousands-grouped branch to consume the complete post-comma
-    # digit run. Otherwise ``10^-4,2000`` is truncated to the fabricated token
-    # ``-4,200`` / ``-4200`` instead of replaying ``-4`` and ``2000``.
+    # 千位分组分支必须吃掉逗号之后的整段数字。
+    # 否则 ``10^-4,2000`` 会被截成一个凭空造出的词元
+    # ``-4,200`` / ``-4200``，而不是重放出 ``-4`` 和 ``2000``。
     grouped_integer = r'(?:\d{1,3}(?:,\d{3})+(?!\d)|\d+)'
     pattern = re.compile(
-        # Consume an exact repeated decimal as one surface before half-token
-        # replay; otherwise 3.093.09 is incorrectly split into 3.093 and 09.
+        # 完全重复的小数要整体消费掉，再做半词元
+        # 重放；否则 3.093.09 会被错误地拆成 3.093 和 09。
         rf'(?<![A-Za-z0-9])(?:(\d+\.\d+)\1(?!\d|\.\d)|[-+−－]?(?:{grouped_integer}(?:\.\d+)?|\.\d+))'
         r'(?:\s*%|\s*(?:seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp)(?![A-Za-z0-9_]))?',
         flags=re.IGNORECASE,
     )
-    # Match Node's narrow LaTeXML named-color replay without changing quotes,
-    # numeric signs, units, or the ordinary identifier boundary.
+    # 和 Node 一样，只在窄范围内重放 LaTeXML 具名颜色，不改引号、
+    # 数字符号、单位，也不动普通标识符的边界。
     original_surface = str(value or '')
 
     def mask_color(match):
-        # A sign outside the command must not become a detached positive value
-        # (or expose a decimal tail). Leave this ambiguous form unindexed.
+        # 命令之外的符号不能变成一个脱落的正值
+        # （也不能露出小数尾巴）。这种有歧义的形式不进索引。
         if re.search(r'[-+－−]\s*$', original_surface[:match.start()]):
             return ' ' * len(match.group(0))
         return ' ' * len(match.group(1)) + match.group(2)
@@ -5397,10 +5397,10 @@ def _api_reader_numeric_tokens(value):
             if half_token != normalized_numeric_token:
                 tokens.append(half_token)
 
-    # LaTeXML can concatenate a visible thousands-grouped integer with its
-    # identical annotation (``500,000500,000``). The normal grouped-number
-    # branch must keep its strict trailing boundary for ``10^-4,2000``; add
-    # only the exact repeated grouped surface as an auditable half-value alias.
+    # LaTeXML 会把可见的千位分组整数和它一模一样的
+    # 注解拼在一起（``500,000500,000``）。常规的千位分组数字
+    # 分支必须为 ``10^-4,2000`` 保留严格的尾部边界；只把
+    # 完全重复的那种分组形式加进去，作为可核对的半值别名。
     duplicated_grouped_integer = re.compile(
         r'(?<![A-Za-z0-9])'
         r'([+\-−－]?[0-9０-９]{1,3}(?:[,，][0-9０-９]{3})+)\1'
@@ -5409,12 +5409,12 @@ def _api_reader_numeric_tokens(value):
     for match in duplicated_grouped_integer.finditer(original_surface):
         tokens.append(_normalize_api_reader_numeric_token(match.group(1)))
 
-    # Match Node's exact LaTeXML statistic alias. The HTML text extractor may
-    # flatten one displayed thousands-grouped value and its TeX annotation as
-    # `4,852\mu=4{,}852 ms`. Only identical numeric spellings across that exact
-    # bridge inherit the trailing unit; a different value, sign, precision,
-    # bridge, or unit produces no alias. This operates solely inside the
-    # already SHA-bound sourceQuote bytes, never via a fuzzy full-text search.
+    # 和 Node 的 LaTeXML 统计别名完全一致。HTML 文本提取器可能
+    # 把一个显示出来的千位分组值连同它的 TeX 注解扁平化成
+    # `4,852\mu=4{,}852 ms`。只有跨过这道确切桥梁、且数字写法完全相同的情况
+    # 才继承尾部的单位；数值、符号、精度、
+    # 桥梁或单位任一不同，都不产生别名。这个判断只在
+    # 已经受 SHA 约束的 sourceQuote 字节内进行，绝不靠模糊全文搜索。
     tex_statistic = re.compile(
         r'(?<![A-Za-z0-9])'
         r'([+\-−－]?(?:[0-9０-９]{1,3}(?:[,，][0-9０-９]{3})+|[0-9０-９]+)(?:[.．][0-9０-９]+)?)'
@@ -5433,11 +5433,11 @@ def _api_reader_numeric_tokens(value):
             return None
         return surface
 
-    # Keep parity with Node's exact LaTeXML duplicate-run alias. Visible math
-    # and its TeX annotation can be flattened as ``−20-20 dB``. Accept only a
-    # bounded run with exactly one split whose normalized signed numbers are
-    # byte-equivalent; unequal values and unsigned adjacent integers remain
-    # unsupported.
+    # 和 Node 的 LaTeXML 重复串别名保持一致。可见的数学式
+    # 和它的 TeX 注解可能被扁平化成 ``−20-20 dB``。只接受
+    # 长度有限、恰好一处拆分、并且归一化后的带符号数字
+    # 逐字节相等的串；数值不等的情况和无符号相邻整数
+    # 仍然不支持。
     duplicate_run = re.compile(
         r'(?<![A-Za-z0-9])'
         r'([+\-−－]?[0-9０-９.,，．]+(?:[+\-−－][0-9０-９.,，．]+)?)\s*'
@@ -5469,8 +5469,8 @@ def _api_reader_numeric_tokens(value):
             f'{match.group(1)} {match.group(3)}'
         )
         tokens.append(alias)
-    # Mirror Node's exact visible-measurement + TeX annotation alias.
-    # Both numbers and decoded units must agree inside the SHA-bound quote.
+    # 照搬 Node 明确的「可见测量值 + TeX 注解」别名规则。
+    # 在受 SHA 约束的引文里，两侧的数字和解码后的单位都必须一致。
     number_surface = r'[+\-−－]?(?:[0-9０-９]{1,3}(?:[,，][0-9０-９]{3})+|[0-9０-９]+)(?:[.．][0-9０-９]+)?'
     tex_measurement = re.compile(
         rf'(?<![A-Za-z0-9])({number_surface})\s*'
@@ -6648,14 +6648,14 @@ def _manual_reader_article(paper, plan, date_str=None):
 
 
 def _nest_reader_headings(content, minimum_level=4):
-    """Keep author-written reader subheads below the generated page section."""
+    """把作者写的读者小标题放在生成的页面小节之下。"""
     def replace(match):
         return '#' * max(len(match.group(1)), minimum_level) + match.group(2)
     return re.sub(r'^(#{1,6})(\s+)', replace, content, flags=re.MULTILINE)
 
 
 def _reader_first_image_plans_by_url(paper):
-    """Resolve Manual insertion plans to their selected URL without guessing."""
+    """把 Manual 插入计划解析到选定的 URL，不做猜测。"""
     manifest = paper.get('imageManifest') if isinstance(paper.get('imageManifest'), dict) else {}
     selected = manifest.get('selected') if isinstance(manifest.get('selected'), list) else []
     selected_by_number = {
@@ -6676,16 +6676,13 @@ def _reader_first_image_plans_by_url(paper):
 
 
 def _strip_non_reader_article_images(content, image_plans_by_url):
-    """Remove only a complete, exact legacy duplicate of a Manual v5 image group.
+    """只删除 Manual v5 图片组里完整、逐字重复的那一份旧副本。
 
-    A reader-first page renders compact compatibility fields *and* the
-    separately attested reader article.  A selected figure may therefore still
-    be present in a legacy field.  Deleting only its image leaves orphaned
-    “如下图” / “图中” prose; guessing from those phrases is equally unsafe.
-    Remove the three-block group only when the canonical insertion plan proves
-    that the immediately adjacent blocks are the exact lead and explanation.
-    Any partial or unbound occurrence is deliberately retained so the final
-    image-order gate fails closed instead of damaging reader prose.
+    面向读者的页面会同时渲染精简的兼容字段和单独取证的读者文章，所以被选中的图
+    可能仍留在兼容字段里。只把图删掉会留下孤立的“如下图”“图中”这类正文；靠这些
+    措辞去猜同样不安全。只有当规范插入计划证明紧邻的块恰好是导语和解释时，才删
+    除这组三块。任何不完整或未绑定的出现都刻意保留，让最终的图片顺序闸门直接失
+    败，而不是破坏读者正文。
     """
     if not isinstance(content, str) or not image_plans_by_url:
         return content
@@ -6716,7 +6713,7 @@ def generate_paper_page(paper, date_str, category='论文速递'):
     heading_issue = evaluation_heading_issue(paper.get('analysis'))
     if heading_issue:
         raise PublishDataValidationError(heading_issue)
-    # main() replaces parsed with the validated analysis baseline before generation.
+    # main() 在生成之前，用通过校验的分析基线替换 parsed。
     parsed_analysis = dict(paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {})
     try:
         read_tag_validation(parsed_analysis)
@@ -6827,10 +6824,10 @@ def generate_paper_page(paper, date_str, category='论文速递'):
         and api_reader_payload.get('contract') in LLM_API_READER_STRUCTURED_CONTRACTS
     )
     reader_display_fields = _build_api_reader_display_fields(paper, api_reader_payload)
-    # Modern Manual pages must never be reconstructed from the legacy fixed
-    # canonical sections.  A missing, partial or tampered reader payload is a
-    # hard failure: silently falling back would turn an old analysis into a
-    # newly generated blog page and bypass fresh authoring.
+    # 新版 Manual 页面绝不能从旧的固定
+    # canonical 章节重建。reader payload 缺失、不完整或被篡改
+    # 都是硬失败：悄悄回退会把一篇旧分析变成
+    # 新生成的博客页面，绕过重新撰写。
     if manual_depth in {
             MANUAL_DEPTH_CONTRACT_VERSION_V5,
             MANUAL_DEPTH_CONTRACT_VERSION_V6,
@@ -6892,10 +6889,10 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
 """
     if reader_first:
         paper_link = f'[{display_title}]({aurl})' if aurl else display_title
-        # Keep the Chinese reader title in the H1, then expose the paper's
-        # original English title and canonical link explicitly.  Calling this
-        # merely “论文” made the reader-first identity block ambiguous and
-        # broke the same title/link contract used by the daily index.
+        # 把中文读者标题留在 H1 里，然后明确给出论文的
+        # 英文原题和规范链接。只写成「论文」会让
+        # reader-first 身份区块产生歧义，也会破坏
+        # 每日汇总页在用的同一份标题与链接契约。
         md += f'> 英文题目：*{paper_link}*\n\n' if reader_display_fields is not None else (
             f'> 英文题目：*{paper_link}*\n>\n> 一句话：**{reader_plan["oneSentenceThesis"].strip()}**\n\n'
         )
@@ -6958,9 +6955,9 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                 ('💬 论文评价', 'roast'),
                 ('📌 核心摘要', 'summary'),
                 ('🔗 开源与复现资源', 'opensource', opensource_content),
-                # The decision-facing blocks come first.  The long reader
-                # article follows the resource status, then the score ledger
-                # closes the page as auditable evidence.
+                # 供读者决策的区块放在最前面。接着是资源状态，
+                # 然后是长篇读者文章，最后用评分台账
+                # 收尾，作为可核对的证据。
                 ('🧭 深度解读', 'readerArticle', reader_article),
                 ('⚖️ 评分理由', 'scoringReason'),
             ] if reader_article else [
@@ -6989,30 +6986,30 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                     if cutoff:
                         content = content[:cutoff.start()].strip()
                 # 清理内容开头可能残留的 Markdown 标题（如 LLM 输出自带了 ## 开源详情）。
-                # Manual v5 reader-plan v2 deliberately owns its paper-specific
-                # headings, so preserve and nest them instead of flattening them.
+                # Manual v5 的 reader-plan v2 有意自带针对每篇论文的
+                # 小节标题，所以要保留并嵌套它们，不要压平。
                 if reader_first:
                     if key != 'readerArticle':
                         content = _strip_non_reader_article_images(
                             content, reader_first_image_plans,
                         )
                     content = _nest_reader_headings(
-                        # API v2 exposes its teaching path at H3. Historical
-                        # Manual/API contracts retain their sealed H4 nesting.
+                        # API v2 在 H3 展开它的讲解路径。历史上的
+                        # Manual/API 契约仍然保留已核验保存的 H4 嵌套。
                         content.strip(), minimum_level=3 if api_reader_v2 else 4
                     )
                 else:
                     content = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', content.strip(), count=1)
-                # Numbered source sections in legacy prose are formatting noise,
-                # but numbered headings in the canonical API Reader article are
-                # source-bound bytes and must survive final-page replay intact.
+                # 旧正文里带编号的来源小节只是格式噪声，
+                # 但规范 API Reader 文章里的编号标题是与来源
+                # 绑定的字节，最终页面重放时必须原样保留。
                 if key != 'readerArticle':
                     content = re.sub(r'^###\s*\d+\.\s*[^\n]+\n', '', content, flags=re.MULTILINE)
                 content = re.sub(r'^\d+\.\s*\*\*([^*]+)\*\*\s*$', r'\1', content, flags=re.MULTILINE)
                 if key == 'scoringReason':
                     if reader_first:
-                        # Reader-first pages show the score at the top, but leave
-                        # its evidence trail at the end, after the argument and limits.
+                        # Reader 优先的页面把评分放在开头，
+                        # 但把评分的证据留在结尾，排在论证和局限之后。
                         scoring_evidence = content
                     else:
                         md += (
@@ -7063,9 +7060,9 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
         content = cleaned_anchors
         issues.append(f"发现并清理 {removed_count} 个内部评分证据锚点")
 
-    # Exact long-prose duplication is deterministic and safe to remove before
-    # spending LLM review calls. Tables, lists, headings, code and images are
-    # excluded so grouped table continuation rows remain untouched.
+    # 完全重复的长段落可以确定地识别出来，在花掉 LLM 审查调用之前先删掉是安全的。
+    # 表格、列表、标题、代码和图片不参与比较，
+    # 这样表格里归组的续行不会被误动。
     frontmatter_match = re.match(r'^---\n.*?\n---\n', content, flags=re.DOTALL)
     prose_prefix = frontmatter_match.group(0) if frontmatter_match else ''
     prose_body = content[len(prose_prefix):]
@@ -7107,7 +7104,7 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
     near_duplicate_count = 0
 
     def extract_number_url_negation_tokens(text):
-        """Keep tiny but material factual differences out of fuzzy deletion."""
+        """把细小但影响事实的差异排除在模糊删除之外。"""
         numbers = tuple(re.findall(r'(?<![A-Za-z])[-+]?\d+(?:\.\d+)?%?', text))
         urls = tuple(re.findall(r'https?://\S+', text, flags=re.IGNORECASE))
         negations = tuple(re.findall(
@@ -7247,9 +7244,9 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
         issues.append(f"发现 {len(broken_links)} 个空链接，已修复")
         content = fix_empty_markdown_links(content)
 
-    # Deterministic Markdown table shape validation. This only checks tables
-    # with an explicit separator row and never treats an empty leading group
-    # cell as a heading or removes legal continuation rows.
+    # 确定性的 Markdown 表格形状校验。它只检查
+    # 带有明确分隔行的表格，绝不把开头的空分组
+    # 单元格当作标题，也不删除合法的续行。
     table_lines = content.splitlines()
     for index, line in enumerate(table_lines):
         if not re.match(r'^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$', line):
@@ -7271,12 +7268,12 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
             detail = ', '.join(f'第{row}行={columns}列' for row, columns in malformed)
             issues.append(f"Markdown 表格列数不一致：期望 {expected_columns} 列，{detail}")
 
-    # Long captions can be cut by the upstream model at a word boundary. Keep
-    # a concise, sentence-aligned alt so the page remains accessible and the
-    # vision reviewer does not receive a misleading half-sentence.  A complete
-    # caption already bound to the authoritative image manifest must remain
-    # byte-stable: an English source caption may legitimately omit the final
-    # period and still end in a complete word such as ``respectively``.
+    # 上游模型可能从词边界处截断长图注。
+    # 要保留一段简洁、与句子对齐的替代文本，让页面保持可访问，
+    # 也不让视觉审查收到有误导的半句话。已经绑定到权威图片清单的
+    # 完整图注必须逐字节稳定：英文来源图注
+    # 可能本来就省略结尾的句号，
+    # 并且仍以 ``respectively`` 这样的完整单词收尾。
     authoritative_captions_by_url = {}
     image_manifest = paper.get('imageManifest') if isinstance(paper, dict) else None
     if isinstance(image_manifest, dict):
@@ -7299,9 +7296,9 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
             r'^(?:fig(?:ure)?\.?\s*)\d+[a-z]?(?:\s*[:.\-–—]\s*|\s+)',
             '', text, flags=re.IGNORECASE,
         )
-        # The Node image assembler escapes backslashes and square brackets for
-        # Markdown alt text.  Undo only those deterministic escapes before the
-        # provenance comparison; do not otherwise rewrite the reader text.
+        # Node 图片组装器会为 Markdown 替代文本转义反斜杠和方括号。
+        # 在比较来源之前只还原这些确定性的转义；
+        # 除此之外不要改写读者正文。
         while '\\\\' in text:
             text = text.replace('\\\\', '\\')
         text = text.replace('\\[', '[').replace('\\]', ']')
@@ -7411,7 +7408,7 @@ def review_and_fix_post(file_path, paper=None, *, dry_run=False, source_content=
 
 
 def classify_review_failure(issues):
-    """Separate retryable review infrastructure/protocol failures from content defects."""
+    """把可重试的审查基础设施与协议失败，和内容缺陷区分开。"""
     blocking = [issue for issue in (issues or []) if is_blocking_review_issue(issue)]
     if not blocking:
         return None
@@ -7442,13 +7439,13 @@ GENERATION_INPUT_SOURCE_REFERENCE_CONTRACT = 'generation-input-source-reference-
 
 
 def build_generation_input_source_reference(data_file):
-    """Describe the exact canonical/archived JSON selected for generation.
+    """描述为生成选中的确切 canonical 或归档 JSON。
 
-    This is deliberately a file reference, rather than an inferred `current`
-    location: review runs later and must replay the same input that generation
-    selected after `--date` / `--data-file` resolution. A missing file returns
-    ``None`` only for injected legacy/unit-test callers; the normal loader then
-    remains responsible for rejecting the absent input before generation.
+    这里有意采用文件引用，而不是推断出来的 `current`
+    位置：审查稍后才运行，必须重放生成阶段在解析
+    `--date` / `--data-file` 之后选中的同一份输入。文件缺失时
+    只有注入的旧版或单元测试调用方会拿到 ``None``；
+    正常加载器仍然负责在生成之前拒绝缺失的输入。
     """
     if data_file is None:
         return None
@@ -7475,12 +7472,12 @@ def build_generation_input_source_reference(data_file):
 
 
 def validate_generation_input_source_reference(manifest, target_date):
-    """Replay a generation manifest's exact input file before review/push.
+    """在审查和推送之前，重放生成清单指定的确切输入文件。
 
-    Older manifests legitimately have no file reference. A newly generated
-    manifest carries the reference and cannot silently fall back to
-    ``DEEP_ANALYSIS_RESULT_FILE`` when the selected archive or `--data-file`
-    differs from current.
+    旧清单确实可以没有文件引用。新生成的清单带有引用，
+    当选中的归档或 `--data-file` 与 current 不一致时，
+    它不能悄悄回退到
+    ``DEEP_ANALYSIS_RESULT_FILE``。
     """
     if not isinstance(manifest, dict):
         raise PublishDataValidationError('生成清单必须是对象，才能读取其中的输入来源记录。')
@@ -7571,7 +7568,7 @@ def _daily_fresh_canonical_json_bytes(value):
 
 
 def _daily_fresh_compact_json_bytes(value):
-    """Mirror JSON.stringify for sealed objects already canonicalized by Node."""
+    """对已经由 Node 规范化定稿的对象，复刻 JSON.stringify 的序列化结果。"""
     try:
         return json.dumps(
             value, ensure_ascii=False, separators=(',', ':'), allow_nan=False,
@@ -7591,7 +7588,7 @@ def _daily_fresh_safe_directory(directory, label):
 
 
 def _daily_fresh_read_private_file(filename, label, maximum_bytes):
-    """Use the source store's private-file semantics for publish-time replay."""
+    """发布时重放沿用来源存储的私有文件语义。"""
     flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
     descriptor = None
     try:
@@ -7655,7 +7652,7 @@ def _daily_fresh_normalized_paper_id(paper):
 
 
 def _daily_fresh_official_url(value, kind, paper_id, source_id=None):
-    """Check the same official source URLs accepted by the Node source store."""
+    """核对 Node 来源存储所接受的同一批官方来源 URL。"""
     if not isinstance(value, str) or not value.strip():
         raise PublishDataValidationError(f'{paper_id} 来源网址为空或不是字符串')
     try:
@@ -7793,13 +7790,13 @@ def _daily_fresh_validate_runtime(runtime, manifest, text, paper_id):
     if (
             not _daily_fresh_is_sha256(payload_sha)
             or artifacts.get('flattenedTextSha256') != _daily_fresh_sha256(text)
-            # Early sealed v4 runtimes signed the artifact before canonical
-            # object-key ordering. The source manifest still authenticates the
-            # exact runtime bytes, and the canonical paper proof binds that
-            # declared SHA. Mirror Reader's compatibility rule: accept this
-            # historical signature only when a parser identity (or the
-            # explicit layoutless-text shape) is present and the sealed TXT
-            # hash itself matches exactly.
+            # 早期已核验保存的 v4 运行时在规范化对象键排序之前就签了产物。
+            # 来源清单仍能认证确切的运行时字节，规范论文证明也绑定了
+            # 其中声明的 SHA。照搬 Reader 的兼容规则：
+            # 这种历史签名只在解析器身份（或
+            # 明确的 layoutless-text 形状）存在，
+            # 并且已核验保存的 TXT 哈希本身
+            # 完全匹配时才接受。
             or (replayed_payload_sha != payload_sha
                 and not str(artifacts.get('parserVersion') or '').strip()
                 and not has_text_only_source_record)
@@ -7912,14 +7909,14 @@ def _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper):
 
 
 def validate_daily_fresh_sources_for_publish(data_file, target_date):
-    """Replay every claimed daily source generation before generate/review/push.
+    """在生成、审查和推送之前，重放每一次声称的每日来源生成。
 
-    A daily run is all-or-nothing: its run reference and every paper's exact
-    provenance must replay.  A legacy paper cannot be mixed into a batch that
-    advertises a sealed daily run, even if a later publish filter would omit it.
+    每日运行是全有或全无：它的运行引用和每篇论文的确切
+    来源都必须能重放。声称使用已核验保存的每日运行的批次，
+    不能混入旧格式论文，即使之后的发布过滤器会把它略过也不行。
     """
-    # Generation's existing loader remains authoritative for an absent explicit
-    # input.  The normal publication path always supplies a real source file.
+    # 显式输入缺席时，仍以 Generation 现有加载器为准。
+    # 正常的发布路径总会提供一个真实的来源文件。
     source_path = Path(data_file)
     if not source_path.is_file():
         return
@@ -8354,7 +8351,7 @@ def review_all_posts(
 
 
 def _parse_frontmatter_content(path, content):
-    """Parse frontmatter from already-read UTF-8 text without touching disk."""
+    """从已经读入的 UTF-8 文本解析 frontmatter，不再访问磁盘。"""
     return _parse_frontmatter_content_impl(path, content)
 
 
@@ -8363,23 +8360,23 @@ def _load_frontmatter(path):
 
 
 def validate_markdown_format_gate(path, frontmatter, body):
-    """Validate reader-visible Markdown before Hugo gets a chance to hide defects.
+    """在 Hugo 有机会掩盖缺陷之前，先校验读者可见的 Markdown。
 
-    The strict tutorial presentation has a deliberately stronger contract: its
-    figures/tables are complete source artifacts and its top score must expose
-    all eight auditable dimensions. Other historical pages retain the generic
-    syntax checks without being retroactively relabelled as tutorials.
+    严格教程展示采用有意更强的契约：它的图片和表格
+    必须是完整的来源产物，顶级评分必须展示
+    全部八个可核对维度。其他历史页面仍然只做通用
+    语法检查，不会事后被当成教程重新标注。
     """
     return _validate_markdown_format_gate_impl(path, frontmatter, body)
 
 
 def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
-    """Check the actual Hugo HTML for each strict tutorial source page.
+    """检查每个严格教程来源页面实际渲染出的 Hugo HTML。
 
-    Markdown validation alone cannot catch a theme/renderer regression that
-    discards images/tables or leaks literal Markdown markers into the page.
-    We bind a rendered page by its source title, then check only article-level
-    lower bounds so theme icons never create false positives.
+    只校验 Markdown 无法发现主题或渲染器回归：
+    这类回归会丢掉图片、表格，或把字面的 Markdown 标记泄漏到页面里。
+    我们按来源标题把渲染页面绑定起来，然后只检查文章级的
+    数量下限，这样主题图标不会造成误报。
     """
     issues = list(_validate_hugo_rendered_html_gate_impl(output_dir, source_artifacts))
     for artifact in source_artifacts:
@@ -8405,12 +8402,12 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
             output_dir, frontmatter.get('title'), artifact.get('path'),
         )
         if len(candidates) != 1:
-            continue  # The shared Hugo gate already reports this binding failure.
+            continue  # 共用的 Hugo 闸门已经会报告这个绑定失败。
         rendered_fragment = html.unescape(_rendered_article_fragment(candidates[0][1]))
         for formula_index, block in enumerate(source_blocks, 1):
-            # Hugo restores its explicit literal-shortcode escapes before
-            # rendering. Compare that exact surface while retaining the
-            # original source formula SHA and the unique-occurrence gate.
+            # Hugo 在渲染前会还原它写入的字面短代码转义。
+            # 比较时就比较这个确切的表层，
+            # 同时保留原始来源公式的 SHA 和唯一性检查。
             rendered_block = re.sub(
                 r'\{\{(<|%)/\*(.*?)\*/(>|%)\}\}',
                 lambda match: ('{{' + match[1] + match[2] + match[3] + '}}')
@@ -8418,10 +8415,10 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
                 else match[0],
                 block, flags=re.DOTALL,
             )
-            # Published TeX can contain HTML character references so Markdown
-            # does not interpret angle-bracket operators as raw HTML. Hugo
-            # emits their decoded text in the article; compare that exact TeX
-            # surface after decoding the source block once as well.
+            # 发布出去的 TeX 可能含有 HTML 字符引用，这样 Markdown
+            # 就不会把尖括号运算符当成原始 HTML。Hugo 在文章里输出的
+            # 是解码后的文本；把来源块也解码一次之后，
+            # 再比较这个确切的 TeX 表层。
             rendered_block = html.unescape(rendered_block)
             if rendered_fragment.count(rendered_block) != 1:
                 issues.append(
@@ -8432,10 +8429,10 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
 
 
 def build_final_page_artifact(path, paper=None):
-    """Read and parse one immutable final page exactly once.
+    """把一份不可变的最终页面恰好读取并解析一次。
 
-    The returned artifact binds every derived validation result to the exact
-    byte SHA. Callers may reuse it only while that SHA remains authoritative.
+    返回的产物把每一项派生校验结果绑定到确切的字节 SHA。
+    只有在这个 SHA 仍然有效时，调用方才可以复用它。
     """
     path = Path(path).resolve()
     raw = path.read_bytes()
@@ -8462,7 +8459,7 @@ def validate_staged_posts(
     staged_posts_dir, date_str, date_only=False, artifact_cache=None,
     publish_paths=None, authoritative_papers=None,
 ):
-    """Deterministically validate YAML and generated Markdown structure."""
+    """以确定的方式校验 YAML 和生成的 Markdown 结构。"""
     date_str = validate_publish_date(date_str)
     staged = Path(staged_posts_dir)
     files = (
@@ -8533,7 +8530,7 @@ def validate_staged_posts(
 
 
 def _mirror_hugo_assets(blog_repo, asset_dir):
-    """Copy only regular in-repo assets through no-follow directory handles."""
+    """只通过不跟随符号链接的目录句柄复制仓库内的常规资产。"""
     if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
         raise PublishDataValidationError('Hugo assets 隔离镜像需要 no-follow 文件系统支持')
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
@@ -8583,7 +8580,7 @@ def _mirror_hugo_assets(blog_repo, asset_dir):
 
 
 def run_hugo_gate(blog_repo, staged_posts_dir, required=False, source_paths=None):
-    """Build staged content with Hugo, then gate source Markdown and rendered HTML."""
+    """先用 Hugo 构建暂存内容，再对来源 Markdown 和渲染出的 HTML 做检查。"""
     hugo = shutil.which('hugo')
     if not hugo:
         if required:
@@ -8711,7 +8708,7 @@ def _run_bounded_subprocess(
     max_output_bytes=SUBPROCESS_SEMANTIC_OUTPUT_MAX_BYTES,
     combine_output=False, tail_output=False,
 ):
-    """Run one child with a hard deadline, bounded output and process-group cleanup."""
+    """运行一个子进程，设硬性超时、限制输出，并清理整个进程组。"""
     with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
         process = subprocess.Popen(
             command,
@@ -8772,7 +8769,7 @@ def _run_bounded_subprocess(
 
 
 def _is_pipeline_owned_paper(path, date_str):
-    """Only explicit pipeline-owned paper pages are eligible for stale deletion."""
+    """只有流水线明确拥有的论文页才可以被当作过期文件删除。"""
     try:
         frontmatter, _body = _load_frontmatter(path)
     except (OSError, UnicodeError, PublishDataValidationError):
@@ -8833,7 +8830,7 @@ def prepare_api_reader_staged_assets(papers, stage_root):
 
 
 def prepare_researcher_workbench_staged_assets(papers, date_str, stage_root):
-    """Materialize deterministic citation/context sidecars inside staging."""
+    """在暂存目录里生成确定性的引用与上下文伴随文件。"""
     stage_root = Path(stage_root).resolve()
     staged = []
     seen = set()
@@ -8897,7 +8894,7 @@ def _git_tracked_reader_asset_paths():
 
 
 def prior_api_reader_manifest_assets(date_str):
-    """Return reader assets explicitly owned by prior same-date manifests."""
+    """返回此前同一天清单明确拥有的读者资产。"""
     validated_date = validate_publish_date(date_str)
     current_dir = Path(CURRENT_DIR)
     candidates = [current_dir / f'blog-generation-manifest-{validated_date}.json']
@@ -8949,7 +8946,7 @@ def prior_api_reader_manifest_assets(date_str):
 def publish_manifest_paths(
     staged_posts_dir, content_dir, date_str, staged_assets=None, single_page=False,
 ):
-    """Return every generated path plus explicitly owned stale deletion candidate."""
+    """返回每一个生成路径，以及明确拥有的过期删除候选。"""
     staged = Path(staged_posts_dir)
     target = Path(content_dir)
     generated_names = {path.name for path in staged.glob('*.md')}
@@ -9005,7 +9002,7 @@ def publish_manifest_paths(
 
 
 def install_staged_posts(staged_posts_dir, content_dir, date_str):
-    """Install the reviewed manifest atomically, rolling back on local failure."""
+    """以原子方式安装已审查的清单，本地失败时回滚。"""
     staged = Path(staged_posts_dir)
     target = Path(content_dir)
     changes = planned_publish_paths(staged, target, date_str)
@@ -9083,7 +9080,7 @@ def _run_git(args, *, text=False, check=False, timeout_kind='local'):
 
 
 def validate_git_publish_branch():
-    """Formal publication is only allowed from the blog repository's main branch."""
+    """只有博客仓库的 main 分支才允许正式发布。"""
     branch = _run_git(
         ['symbolic-ref', '--quiet', '--short', 'HEAD'], text=True,
     )
@@ -9101,14 +9098,14 @@ def validate_git_publish_branch():
 
 
 def validate_manifest_clean_against_head(paths, allow_exact_pipeline_untracked=None):
-    """Reject edits except exact bytes from the prior pipeline manifest.
+    """除上一份流水线清单里的确切字节之外，其他改动一律拒绝。
 
-    A completed generation can legitimately leave tracked files modified but
-    not yet committed while a later content repair requires regeneration.  The
-    prior manifest is a byte-level ownership receipt for that state, so an
-    unstaged `` M`` entry is safe only when its current SHA and ownership marker
-    still match that receipt.  Staged entries remain forbidden because staging
-    is external state that generation must never adopt implicitly.
+    一次完成的生成确实可能留下已修改但尚未提交的受跟踪文件，
+    而之后的内容修复又需要重新生成。上一份清单就是这种状态下
+    按字节的所有权凭证，所以一条未暂存的 `` M`` 记录只有在
+    当前 SHA 和所有权标记仍然与该凭证匹配时才安全。
+    已暂存的记录仍然禁止，因为暂存区属于外部状态，
+    生成阶段绝不能隐式采纳。
     """
     manifest = _git_relative_manifest(paths)
     if not manifest:
@@ -9200,7 +9197,7 @@ def validate_manifest_clean_against_head(paths, allow_exact_pipeline_untracked=N
 
 
 def capture_git_publish_state(paths):
-    """Capture the pre-install Git/index/worktree state for add/commit rollback."""
+    """记录安装前的 Git、索引和工作树状态，供 add 与 commit 回滚。"""
     manifest = _git_relative_manifest(paths)
     head = validate_git_publish_branch()
     index_tree = _run_git(
@@ -9222,7 +9219,7 @@ def capture_git_publish_state(paths):
 
 
 def restore_git_publish_state(state):
-    """Restore HEAD (if needed), the complete index, and manifest worktree files."""
+    """按需恢复 HEAD、完整索引，以及清单涉及的工作树文件。"""
     if not state:
         return
     current = _run_git(
@@ -9257,7 +9254,7 @@ def validate_git_index(paths):
 
 
 def validate_single_publication_worktree(paths):
-    """Require one paper page plus only its bound figures/sidecars to be dirty."""
+    """要求只有一篇论文页和它绑定的图片、伴随文件处于改动状态。"""
     allowed = set(_git_relative_manifest(paths))
     pages = {item for item in allowed if item.startswith('content/posts/') and item.endswith('.md')}
     assets = {
@@ -9272,8 +9269,8 @@ def validate_single_publication_worktree(paths):
     unrelated = []
     for raw in (item for item in result.stdout.split(b'\0') if item):
         entry = raw.decode('utf-8', errors='replace')
-        # Rename/copy records carry a second NUL-delimited path and are never a
-        # valid shape for replacing one already reviewed page.
+        # 改名和复制记录会带上第二个以 NUL 分隔的路径，
+        # 这种形状永远不能用来替换已经审查过的页面。
         if len(entry) < 4 or entry[2] != ' ':
             unrelated.append(entry)
             continue
@@ -9288,7 +9285,7 @@ def validate_single_publication_worktree(paths):
 
 
 def validate_git_index_against_review_receipt(receipt, paths):
-    """Verify staged blobs/deletions exactly match the signed review receipt."""
+    """校验已暂存的二进制对象和删除记录与已签名审查凭证完全一致。"""
     manifest = set(_git_relative_manifest(paths))
     records = receipt.get('files') if isinstance(receipt, dict) else None
     if not isinstance(records, list):
@@ -9325,7 +9322,7 @@ def validate_git_index_against_review_receipt(receipt, paths):
 
 
 def _expected_commit_delta_paths(receipt, base_head):
-    """Derive the exact reviewed delta against the immutable review baseline."""
+    """对照不可变的审查基线，算出确切的已审查差异。"""
     expected = set()
     for record in receipt.get('files') or []:
         relative = record['path']
@@ -9344,7 +9341,7 @@ def _expected_commit_delta_paths(receipt, base_head):
 
 
 def validate_git_commit_against_review_receipt(receipt, paths, commit='HEAD'):
-    """Verify parent, exact delta and immutable blobs, closing all hook/race windows."""
+    """校验父提交、确切差异和不可变二进制对象，堵住所有钩子与竞态窗口。"""
     manifest = set(_git_relative_manifest(paths))
     records = receipt.get('files') if isinstance(receipt, dict) else None
     if not isinstance(records, list):
@@ -9408,11 +9405,11 @@ def _remote_main_oid():
 
 
 def _remote_identity_sha256():
-    """Bind a verified publication to the configured remote's exact push URL.
+    """把一次已验证的发布绑定到配置远端确切的推送 URL。
 
-    The URL itself is not persisted because it may contain credentials.  Hashing
-    the remote name and exact Git-resolved push URL still makes changing
-    ``origin`` to an unrelated repository invalidate old publication evidence.
+    URL 本身不落盘，因为里面可能带凭据。对远端名
+    和 Git 解析出的确切推送 URL 求哈希，仍然能让
+    把 ``origin`` 换成一个无关仓库的操作作废旧发布证据。
     """
     result = _run_git(
         ['remote', 'get-url', '--push', GITHUB_REMOTE], text=True,
@@ -9450,14 +9447,14 @@ def _load_push_receipt(date_str):
 
 
 def _validate_push_generation_input_integrity(date_str):
-    """Replay schema-v3 generation input proof before a push mutates Git.
+    """在推送改动 Git 之前，重放 schema-v3 的生成输入证明。
 
-    ``load_verified_review_receipt`` performs the complete receipt check, but
-    ``git_push`` is also called directly by recovery and maintenance entry
-    points.  Keep this narrow replay here so those callers cannot bypass the
-    source-input contract by substituting or stubbing receipt loading.  Older
-    manifests intentionally keep their legacy behavior; their receipt checks
-    remain unchanged.
+    ``load_verified_review_receipt`` 会完成整套凭证检查，但
+    ``git_push`` 也会被恢复和维护入口直接调用。在这里保留这段
+    小范围重放，那些调用方就没法通过替换或打桩凭证加载
+    来绕过来源输入契约。较早的清单
+    有意保留原有的旧行为；
+    它们的凭证检查不变。
     """
     manifest_path = generation_manifest_path(date_str)
     try:
@@ -9473,15 +9470,15 @@ def _validate_push_generation_input_integrity(date_str):
 
 
 def git_push(date_str, publish_paths, rollback_state=None):
-    """Commit, push HEAD explicitly to main, and verify the remote object ID."""
+    """提交，把 HEAD 显式推送到 main，并核验远端对象 ID。"""
     manifest = _git_relative_manifest(publish_paths)
     state = rollback_state
     try:
         verified_paths, _verified_receipt_path = load_verified_review_receipt(date_str)
-        # This must remain before validate_git_publish_branch, index capture,
-        # add, commit, receipt adoption, or any remote operation.  Receipt
-        # validation is intentionally repeated below as part of its own
-        # immutable-evidence contract.
+        # 这段必须留在 validate_git_publish_branch、索引抓取、
+        # add、commit、凭证采纳以及任何远端操作之前。凭证校验
+        # 在下面有意重复一次，
+        # 作为它自己的不可变证据契约的一部分。
         _validate_push_generation_input_integrity(date_str)
         if _git_relative_manifest(verified_paths) != manifest:
             raise PublishDataValidationError('git push 路径与已验证审查凭证不一致')
@@ -9563,8 +9560,8 @@ def git_push(date_str, publish_paths, rollback_state=None):
         if retrying_existing_commit:
             local_head = current_head
         elif staged is not None and staged.returncode == 1:
-            # Keep this immediately adjacent to commit so a worktree/index race
-            # cannot turn an already-reviewed path set into unreviewed bytes.
+            # 把这段紧贴在 commit 旁边，这样工作树与索引之间的竞态
+            # 就没法把已经审查过的路径集合变成未审查的字节。
             validate_git_index(publish_paths)
             validate_git_index_against_review_receipt(receipt, publish_paths)
             review_description = (
@@ -9704,7 +9701,7 @@ def _file_fingerprint(path):
 
 
 def _javascript_json_utf8(value):
-    """Encode canonical JSON like well-formed JavaScript JSON.stringify()."""
+    """按格式良好的 JavaScript JSON.stringify() 来编码规范 JSON。"""
     serialized = json.dumps(
         value, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
     )
@@ -9731,7 +9728,7 @@ def _javascript_json_utf8(value):
 
 
 def _javascript_string_utf8(value):
-    """Encode a Python string like Node Buffer.from(value, 'utf8')."""
+    """按 Node 的 Buffer.from(value, 'utf8') 来编码 Python 字符串。"""
     normalized = []
     index = 0
     while index < len(value):
@@ -9776,7 +9773,7 @@ def _reader_record_sha256(value, label):
 
 
 def _javascript_utf16_sort_key(value, label):
-    """Match JavaScript Array#sort string ordering by UTF-16 code units."""
+    """按 UTF-16 码元复刻 JavaScript Array#sort 的字符串排序顺序。"""
     try:
         encoded = value.encode('utf-16-be')
     except UnicodeEncodeError as exc:
@@ -9785,7 +9782,7 @@ def _javascript_utf16_sort_key(value, label):
 
 
 def _portable_fingerprint_value(value, label='publishedPapers'):
-    """Encode JSON data identically in Python and Node, including numeric values."""
+    """让 Python 和 Node 编码出的 JSON 数据完全一致，数值也一样。"""
     if value is None:
         return ['null']
     if isinstance(value, bool):
@@ -9824,7 +9821,7 @@ def _portable_fingerprint_value(value, label='publishedPapers'):
 
 
 def published_papers_fingerprint(published_papers):
-    """Return the cross-runtime integrity fingerprint for the publication snapshot."""
+    """返回发布快照的跨运行时完整性指纹。"""
     if not isinstance(published_papers, list) or not published_papers:
         raise PublishDataValidationError('正式 generation manifest 缺少已发布论文权威快照')
     return _stable_json_sha256(_portable_fingerprint_value(published_papers))
@@ -9860,7 +9857,7 @@ def _assert_llm_api_binding_premises(bindings):
 
 
 def manual_v6_publication_bindings(published_papers):
-    """Build explicit v6 proof bindings instead of relying on an outer snapshot hash."""
+    """建立显式的 v6 证明绑定，而不是依赖外层快照哈希。"""
     bindings = []
     for paper in published_papers:
         manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
@@ -10136,7 +10133,7 @@ def generation_input_fingerprint(
     papers, date_str, category, publish_all, include_id=None,
     input_source_reference=None,
 ):
-    """Bind resumable generation to the exact publication inputs and options."""
+    """把可续跑的生成绑定到确切的发布输入和选项。"""
     image_exclusions = []
     seen_exclusions = set()
     for paper in papers:
@@ -10196,10 +10193,10 @@ def _validate_generation_input_integrity(manifest, date_str):
     actual_input = str(manifest.get('inputFingerprint') or '')
     scope = _validate_publication_scope(manifest, published_papers)
     input_source_reference = manifest.get('inputSourceReference')
-    # A schema-v3 snapshot that advertises fresh-source analysis must retain
-    # the exact JSON input from which that provenance can be replayed.  Without
-    # it, review/push could accept a manifest whose claimed fresh bundle cannot
-    # be located or checked after `data/current` advances.
+    # 声称使用最新来源分析的 schema-v3 快照，必须保留
+    # 可以用来重放这份来源的确切 JSON 输入。缺少它，
+    # 审查和推送就可能接受一份清单，而它声称的最新来源包
+    # 在 `data/current` 前移之后再也找不到、也核对不了。
     if (
             any(
                 isinstance(paper, dict)
@@ -10212,8 +10209,8 @@ def _validate_generation_input_integrity(manifest, date_str):
             '使用新来源重写的论文缺少生成输入的来源文件记录。'
         )
     if input_source_reference is not None:
-        # Check source bytes before fingerprint replay, so a changed archive or
-        # --data-file reports source drift rather than a generic mismatch.
+        # 先核对来源字节，再重放指纹，这样归档或 --data-file 有变化时
+        # 报告的是来源漂移，而不是笼统的不匹配。
         validate_generation_input_source_reference(manifest, date_str)
     expected_input = generation_input_fingerprint(
         published_papers, date_str, category, publish_all,
@@ -10232,9 +10229,9 @@ def _validate_generation_input_integrity(manifest, date_str):
         raise PublishDataValidationError('正式生成清单中的论文快照指纹与实际快照不一致。')
     expected_v6 = manual_v6_publication_bindings(published_papers)
     actual_v6 = manifest.get('manualV6Bindings')
-    # Historical v5-only schema-v3 generations predate the explicit field.
-    # They remain readable; a manifest containing any v6 paper never gets this
-    # exception and must carry the complete explicit proof map.
+    # 历史上的 v5-only schema-v3 生成早于这个显式字段。
+    # 它们仍然可以读取；只要清单里含有一篇 v6 论文，就不适用这个
+    # 例外，必须携带完整的显式证明映射。
     historical_v5_without_bindings = actual_v6 is None and not expected_v6
     if not historical_v5_without_bindings:
         if actual_v6 != expected_v6:
@@ -10279,8 +10276,8 @@ def _validate_generation_input_integrity(manifest, date_str):
         if scope is None or production_proof is not None or api_proof is not None:
             raise PublishDataValidationError('教程预览模式缺少单篇发布范围，或包含不允许的正式发布证明。')
     elif publication_mode is None and not expected_v6 and not expected_api:
-        # Immutable schema-v3 history from before the production-mode field is
-        # readable only as legacy maintenance.  It can never enter visuals.
+        # production-mode 字段出现之前的不可变 schema-v3 历史，
+        # 只能作为旧格式维护来读取，绝不能进入视觉环节。
         pass
     else:
         raise PublishDataValidationError('生成清单的发布模式缺失或不符合要求。')
@@ -10301,10 +10298,10 @@ def _expected_post_publish_visuals(manifest, publication_scope_value=None):
 
 
 def generation_template_fingerprint():
-    """Fingerprint generation inputs so generate rerenders after code changes.
+    """为生成输入取指纹，让代码变化后 generate 会重新渲染。
 
-    This fingerprint controls generation reuse only.  Review accepts an older
-    well-formed fingerprint and decides per-page reuse from the rendered bytes.
+    这个指纹只控制生成结果的复用。审查可以接受
+    较早但格式正确的指纹，并按渲染出的字节逐页决定是否复用。
     """
     script_dir = Path(__file__).resolve().parent
     dependency_paths = {
@@ -10345,12 +10342,12 @@ def validate_current_generation_template(manifest):
 
 
 def blog_runtime_fingerprint(blog_repo=None):
-    """Hash the Hugo runtime that turns reviewed Markdown into public HTML.
+    """为把已审查 Markdown 变成公开 HTML 的 Hugo 运行时求哈希。
 
-    Generation deliberately stays independent from the blog theme: templates do
-    not alter the Markdown bytes. Review and push are different—their evidence
-    is only reusable while the Hugo config, layouts, data and executable web
-    assets remain byte-for-byte identical.
+    生成阶段有意与博客主题解耦：模板不会改变
+    Markdown 字节。审查和推送不同——它们的证据
+    只有在 Hugo 配置、layouts、data 和可执行 Web
+    资产都逐字节不变时才能复用。
     """
     repo = Path(blog_repo or BLOG_REPO).expanduser().resolve()
     config_names = (
@@ -10358,9 +10355,9 @@ def blog_runtime_fingerprint(blog_repo=None):
     )
     candidates = [repo / name for name in config_names if (repo / name).is_file()]
 
-    # These trees are direct Hugo render inputs. Hash every regular file rather
-    # than maintaining a fragile suffix list: i18n/config may use TOML/YAML/JSON,
-    # while assets and layouts may legitimately contain SVG, templates or fonts.
+    # 这些目录树是 Hugo 渲染的直接输入。要对每个常规文件求哈希，
+    # 而不是维护一份脆弱的后缀名清单：i18n 和配置可能是 TOML/YAML/JSON，
+    # 而 assets 和 layouts 里出现 SVG、模板或字体都是正常的。
     render_roots = [
         repo / name for name in ('layouts', 'assets', 'data', 'i18n', 'config')
     ]
@@ -10387,10 +10384,10 @@ def blog_runtime_fingerprint(blog_repo=None):
             if path.is_file():
                 candidates.append(path)
 
-    # Top-level static is potentially hundreds of MiB. Only executable or
-    # browser-consumed runtime files belong here. Generated paper sidecars and
-    # media are already individually bound by generation/review receipts and
-    # must not invalidate the global review protocol on every new paper.
+    # 顶层 static 可能有几百 MiB。只有可执行文件或
+    # 浏览器运行时要读取的文件才属于这里。生成的论文伴随文件和
+    # 媒体已经分别由生成、审查凭证绑定，
+    # 不能因为每来一篇新论文就让全局审查协议失效。
     static_root = repo / 'static'
     static_runtime_suffixes = {
         '.css', '.html', '.js', '.mjs', '.json', '.svg', '.wasm',
@@ -10431,7 +10428,7 @@ def blog_runtime_fingerprint(blog_repo=None):
 
 
 def review_protocol_fingerprint():
-    """Bind reusable review evidence to code, prompts/models and Hugo runtime."""
+    """把可复用的审查证据绑定到代码、提示词与模型以及 Hugo 运行时。"""
     script_dir = Path(__file__).resolve().parent
     dependency_paths = {
         'publish-to-blog.py': script_dir / 'publish-to-blog.py',
@@ -10525,7 +10522,7 @@ def prepare_generation_journal(
     date_str, papers, category, publish_all, input_fingerprint,
     template_fingerprint, base_head, include_id=None,
 ):
-    """Create or validate a persistent per-page generation checkpoint."""
+    """创建或校验一份持久的逐页生成检查点。"""
     journal_path = generation_journal_path(date_str)
     stage = generation_stage_path(date_str)
     planned = []
@@ -10562,10 +10559,10 @@ def prepare_generation_journal(
             or journal.get('publicationScope') != publication_scope_value
         )
         if journal_mismatch:
-            # No target path has been snapshotted or installed yet, so this is
-            # only derived staging state.  A record/template repair may safely
-            # restart it from scratch.  Once installation begins we still fail
-            # closed because the journal is then the rollback authority.
+            # 还没有对任何目标路径做快照或安装，所以这只是
+            # 推导出来的暂存状态。记录或模板修复可以安全地
+            # 从这里重来。安装一旦开始，我们仍然按失败关闭处理，
+            # 因为那时日志才是回滚的依据。
             if journal.get('installation') is not None:
                 raise PublishDataValidationError(
                     f'未完成 generation 的输入、模板、博客基线或论文集合已变化；'
@@ -10609,7 +10606,7 @@ def prepare_generation_journal(
 def prepare_generation_installation(
     journal, journal_path, staged_posts, content_dir, date_str, staged_assets=None,
 ):
-    """Snapshot the exact pre-install state before any target path is changed."""
+    """在任何目标路径被改动之前，快照确切的安装前状态。"""
     if journal.get('installation') is not None:
         return journal['installation']['files']
     # Review/receipt 必须覆盖本批所有生成页和受控删除，而不只是当前有字节差异的页面。
@@ -10669,7 +10666,7 @@ def prepare_generation_installation(
 
 
 def resume_generation_installation(journal, journal_path, staged_posts):
-    """Idempotently finish a journalled install, including crash-after-replace cases."""
+    """幂等地完成带日志的安装，包括替换后崩溃的情况。"""
     repo = Path(BLOG_REPO).expanduser().resolve()
     installed_paths = []
     for record in journal.get('installation', {}).get('files', []):
@@ -10688,8 +10685,8 @@ def resume_generation_installation(journal, journal_path, staged_posts):
             installed_paths.append(target)
             continue
         if current == expected:
-            # The process may have died after os.replace/unlink but before the
-            # journal bit was flushed. Adopt only the exact expected bytes.
+            # 进程可能在 os.replace 或 unlink 之后、日志标记落盘之前
+            # 就退出了。只采纳完全符合预期的字节。
             record['installed'] = True
             _save_generation_journal(journal_path, journal)
             installed_paths.append(target)
@@ -10761,7 +10758,7 @@ def _manifest_record(path, repo):
 
 
 def is_visual_summary_asset_path(path, date_str=None):
-    """Return whether a path is a controlled visual-summary asset for this batch."""
+    """判断某个路径是否是本批次受控的视觉汇总资产。"""
     repo = Path(BLOG_REPO).expanduser().resolve()
     try:
         _target, relative = _manifest_record(path, repo)
@@ -10846,7 +10843,7 @@ def save_generation_manifest(
     published_papers=None, publish_all=False, include_id=None,
     publication_mode=None, input_source_reference=None,
 ):
-    """Save the exact generated/removed path list for the separate review step."""
+    """保存确切的生成与删除路径清单，供单独的审查步骤使用。"""
     _require_active_publication_request(include_id)
     existing_receipt_path = review_receipt_path(date_str)
     if existing_receipt_path.exists():
@@ -10863,9 +10860,9 @@ def save_generation_manifest(
             raise PublishDataValidationError(
                 '同日期已有远端发布证据；generation manifest 与 receipt 必须保持只读'
             )
-    # Migrate every historical per-file pass before replacing batch-level
-    # evidence. Reuse remains safe because the durable cache is keyed by the
-    # exact repository-relative path and reviewed SHA-256, not by this manifest.
+    # 在替换批次级证据之前，先把历史里的逐文件通过记录迁移过来。
+    # 复用仍然安全，因为持久缓存是按确切的仓库相对路径
+    # 和已审查的 SHA-256 索引的，不依赖这份清单。
     save_review_pass_cache(date_str)
     repo = Path(BLOG_REPO).expanduser().resolve()
     records = []
@@ -10976,15 +10973,15 @@ def save_generation_manifest(
         _validate_generation_input_integrity(manifest, validated_date)
     path = generation_manifest_path(date_str)
     atomic_write_json(path, manifest, ensure_ascii=False, indent=2)
-    # A new generation invalidates only batch-level evidence. Exact per-file
-    # pass evidence survives in review_pass_cache_path(date_str).
+    # 新一代生成只会让批次级证据失效。逐文件的确切
+    # 通过证据保留在 review_pass_cache_path(date_str) 里。
     review_receipt_path(date_str).unlink(missing_ok=True)
     review_failure_path(date_str).unlink(missing_ok=True)
     return path
 
 
 def plan_post_publish_visual_assets(date_str):
-    """After remote publication succeeds, create TOP 10 infographic and digest-image tasks."""
+    """远端发布成功后，创建 TOP 10 信息图和汇总页图片任务。"""
     date_str = validate_publish_date(date_str)
     manifest = _load_json_object(generation_manifest_path(date_str), '生成清单')
     category = str(manifest.get('category') or '论文速递')
@@ -11024,12 +11021,12 @@ def plan_post_publish_visual_assets(date_str):
 
 
 def preflight_post_publish_visual_capability(date_str, *, require_visual_plan=False):
-    """Decide whether this reviewed generation can enter the modern visual stage.
+    """判断这次通过审查的生成能否进入现代视觉阶段。
 
-    Historical schema v1/v2 manifests remain publishable for explicit maintenance,
-    but they do not contain the authoritative paper snapshot needed by the modern
-    post-publication visual contract.  Daily mode must reject them before Git is
-    mutated instead of discovering the incompatibility after a remote push.
+    历史上的 schema v1/v2 清单在显式维护时仍可发布，
+    但它们不含现代发布后视觉契约所需的权威论文快照。
+    每日模式必须在改动 Git 之前就拒掉它们，
+    而不是等远端推送之后才发现不兼容。
     """
     date_str = validate_publish_date(date_str)
     manifest_path = generation_manifest_path(date_str)
@@ -11069,7 +11066,7 @@ def preflight_post_publish_visual_capability(date_str, *, require_visual_plan=Fa
 
 
 def validate_generation_visual_contract(manifest, date_str, repo=None):
-    """Ensure post-publication visuals cannot leak into the blog publication commit."""
+    """确保发布后的视觉产物不会混进博客发布提交。"""
     if manifest.get('visualSummaryRequired') is not False:
         raise PublishDataValidationError('生成清单仍使用旧版发布前视觉摘要契约，请重新运行 generate-blog.py')
     if manifest.get('digestCoverRequired') is not False:
@@ -11326,7 +11323,7 @@ def validate_generation_manifest_file_bytes(manifest_path, date_str):
 
 
 def attest_visual_summary_assets(date_str, publish_paths, manifest_path, file_results):
-    """Legacy attestation helper; review-blog no longer admits post-publication assets."""
+    """旧的证明辅助函数；review-blog 不再接受发布后资产。"""
     manifest = _load_json_object(manifest_path, '生成清单')
     records = manifest.get('files')
     if not isinstance(records, list):
@@ -11390,7 +11387,7 @@ def attest_visual_summary_assets(date_str, publish_paths, manifest_path, file_re
                 'reviewedSha256': expected_sha,
             })
         else:
-            # The referencing page already accounts for the blocking failure.
+            # 引用它的页面已经把这次阻断失败算进去了。
             result.update({'failureKind': 'transient'})
         file_results[str(asset)] = result
     return blocking
@@ -11439,7 +11436,7 @@ def review_tag_catalog_files(date_str, publish_paths, manifest_path, file_result
 
 
 def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_results, *, preflight_only=False):
-    """Bind every paper figure/sidecar to an exact reviewed page and byte record."""
+    """把每张论文图和伴随文件绑定到确切的已审查页面与字节记录。"""
     manifest = _load_json_object(manifest_path, '生成清单')
     records = manifest.get('files')
     if not isinstance(records, list):
@@ -11635,7 +11632,7 @@ def validate_reviewed_file_hashes(date_str, publish_paths, manifest_path, file_r
 def reusable_generation_manifest(
     date_str, input_fingerprint, template_fingerprint, base_head,
 ):
-    """Return an identical completed generation without invalidating review state."""
+    """返回一次完全相同的已完成生成，同时不让审查状态失效。"""
     path = generation_manifest_path(date_str)
     if not path.is_file():
         return None
@@ -11692,14 +11689,14 @@ def reusable_generation_manifest(
 def reusable_verified_publication_generation(
     date_str, input_fingerprint, template_fingerprint, current_head,
 ):
-    """Reuse an exact already-published generation without destroying its receipt.
+    """复用一次完全一致的已发布生成，同时不破坏它的凭证。
 
-    The generation manifest records pre-review bytes, while the remote-verified
-    receipt records the bytes that actually passed review and were committed.
-    Consequently this check intentionally validates current files against the
-    receipt, then validates the immutable publication commit against that same
-    receipt.  It does not accept a changed input/template, a dirty manifest path,
-    an unrelated commit, or a merely local/unverified review receipt.
+    生成清单记录的是审查前的字节，而经过远端核验的
+    凭证记录的是真正通过审查并已提交的字节。
+    因此这项检查有意先对照凭证校验当前文件，
+    再对照同一份凭证校验不可变的发布提交。
+    它不接受改动过的输入或模板、处于改动状态的清单路径、
+    无关的提交，以及仅仅存在于本地或未经核验的审查凭证。
     """
     manifest_path = generation_manifest_path(date_str)
     receipt_path = review_receipt_path(date_str)
@@ -11823,7 +11820,7 @@ def reusable_verified_publication_generation(
 
 
 def reusable_verified_publication_review(date_str, current_head):
-    """Return a still-current remote publication receipt for review idempotence."""
+    """返回仍然有效的远端发布凭证，用于审查的幂等判断。"""
     manifest_path = generation_manifest_path(date_str)
     try:
         manifest = _load_json_object(manifest_path, '生成清单')
@@ -11843,12 +11840,12 @@ def reusable_verified_publication_review(date_str, current_head):
 def has_publication_evidence_for_generation(
     date_str, input_fingerprint=None, template_fingerprint=None,
 ):
-    """Detect publication evidence that must never be silently overwritten.
+    """发现绝不能被悄悄覆盖的发布证据。
 
-    This deliberately treats an unreadable same-date receipt as evidence when
-    the generation itself still matches.  A network outage, changed remote, or
-    damaged receipt must stop the stage and preserve the only possible remote
-    attestation for operator inspection.
+    当生成本身仍然匹配时，这里有意把同一天不可读的凭证
+    也当作证据。网络中断、远端变化或
+    凭证损坏都必须让当前阶段停下，并保留这份唯一可能的远端
+    证明，交给运维人员检查。
     """
     manifest_path = generation_manifest_path(date_str)
     receipt_path = review_receipt_path(date_str)
@@ -11857,15 +11854,15 @@ def has_publication_evidence_for_generation(
     try:
         receipt = _load_json_object(receipt_path, '审查凭证')
     except (OSError, UnicodeError, PublishDataValidationError):
-        # An unreadable same-date receipt may be the only surviving publication
-        # attestation. Never erase it from a generation path.
+        # 同一天不可读的凭证，可能是仅存的发布
+        # 证明。生成路径绝不能抹掉它。
         return True
     if any(receipt.get(field) for field in (
         'publicationCommit', 'remoteVerifiedOid', 'remoteVerifiedAt',
         'remoteIdentitySha256',
     )):
-        # Published v1/v2/v3 evidence is immutable history. Exact modern v3
-        # reuse is handled earlier; every other same-date generation must stop.
+        # 已发布的 v1/v2/v3 证据是不可变历史。现代 v3 的精确
+        # 复用在前面的分支里处理；其他任何同一天的生成都必须停下。
         return True
     try:
         manifest = _load_json_object(manifest_path, '生成清单')
@@ -11892,9 +11889,9 @@ def save_review_receipt(
     current_protocol = review_protocol_fingerprint()
     for result in reviewed_results.values():
         if result.get('passed') is True:
-            # A page pass is content-addressed, not protocol-addressed.  The
-            # current batch receipt records the current protocol while exact
-            # unchanged bytes retain their prior pass.
+            # 页面是否通过是按内容寻址的，不是按协议。
+            # 当前批次的凭证记录当前协议，
+            # 而字节完全没变的页面仍然沿用之前那次通过。
             result['reviewProtocolFingerprint'] = current_protocol
     validate_generation_manifest_file_bytes(generation_manifest, date_str)
     save_review_pass_cache(date_str, publish_paths, reviewed_results)
@@ -11995,10 +11992,10 @@ def save_review_receipt(
             generation_payload.get('inputSourceReference')
             if generation_schema == 3 else None
         ),
-        # Explicitly bind whether this reviewed generation can enter the modern
-        # post-publication visual state machine. The generation SHA remains the
-        # cryptographic source of truth; this field makes maintenance intent
-        # visible to push/status tooling.
+        # 明确绑定这次通过审查的生成能否进入现代发布后视觉状态机。
+        # 生成 SHA 仍然是密码学意义上的权威依据；
+        # 这个字段只是把维护意图
+        # 暴露给 push 和 status 工具。
         'postPublishVisuals': post_publish_visuals,
         'publicationMode': publication_mode,
         'manualV6ProductionFingerprint': generation_payload.get(
@@ -12035,7 +12032,7 @@ def save_review_receipt(
 
 
 def _valid_review_pass_record(record, repo, date_str, default_protocol=None, default_time=None):
-    """Normalize one historical file-level pass without trusting batch metadata."""
+    """归一化一条历史里的文件级通过记录，不信任批次元数据。"""
     if not isinstance(record, dict) or not isinstance(record.get('path'), str):
         return None
     sha256 = record.get('reviewedSha256') or record.get('sha256')
@@ -12066,7 +12063,7 @@ def _valid_review_pass_record(record, repo, date_str, default_protocol=None, def
 
 
 def _collect_review_pass_records(date_str):
-    """Collect passes by path plus exact bytes, preferring the durable cache."""
+    """按路径和确切字节收集通过记录，优先采用持久缓存。"""
     date_str = validate_publish_date(date_str)
     repo = Path(BLOG_REPO).expanduser().resolve()
     collected = {}
@@ -12102,9 +12099,9 @@ def _collect_review_pass_records(date_str):
                 default_time=default_time,
             )
             if record is not None:
-                # The dedicated cache is first and may contain metadata rebound
-                # for the current batch.  Older receipt/failure snapshots must
-                # not overwrite that record for the same content address.
+                # 专用缓存排在最前，它可能含有为当前批次
+                # 重新绑定的元数据。针对同一个内容地址，
+                # 旧的凭证或失败快照不得覆盖这条记录。
                 collected.setdefault((record['path'], record['sha256']), record)
     return collected
 
@@ -12113,7 +12110,7 @@ def save_review_page_checkpoint(
     date_str, page_path, result, manifest_path, base_head,
     manifest_sha256=None,
 ):
-    """Persist one worker result without scanning or rewriting the whole batch."""
+    """只持久化一个工作单元的结果，不扫描也不重写整个批次。"""
     date_str = validate_publish_date(date_str)
     repo = Path(BLOG_REPO).expanduser().resolve()
     page, relative = _manifest_record(Path(page_path).expanduser().resolve(), repo)
@@ -12174,7 +12171,7 @@ def save_review_page_checkpoint(
 
 
 def _collect_review_page_checkpoints(date_str):
-    """Load valid per-page checkpoints once; stale bytes are filtered by planner."""
+    """一次载入有效的逐页检查点；过期字节由规划器过滤掉。"""
     date_str = validate_publish_date(date_str)
     repo = Path(BLOG_REPO).expanduser().resolve()
     directory = review_page_checkpoint_dir(date_str)
@@ -12219,7 +12216,7 @@ def _collect_review_page_checkpoints(date_str):
 
 
 def clear_review_page_checkpoints(date_str):
-    """Remove only this date's completed transient worker shards."""
+    """只删除本日期已完成运行的临时工作分片。"""
     directory = review_page_checkpoint_dir(date_str)
     if not directory.is_dir():
         return
@@ -12232,7 +12229,7 @@ def clear_review_page_checkpoints(date_str):
 
 
 def save_review_pass_cache(date_str, publish_paths=(), file_results=None):
-    """Persist successful per-file review evidence independently of batch changes."""
+    """把成功的逐文件审查证据单独持久化，不受批次变化影响。"""
     date_str = validate_publish_date(date_str)
     records = _collect_review_pass_records(date_str)
     file_results = file_results or {}
@@ -12290,7 +12287,7 @@ def save_review_failure_state(
     file_results,
     *, batch_issues=None,
 ):
-    """Persist per-file failed-review evidence for a safe incremental retry."""
+    """持久化逐文件的审查失败证据，便于安全地增量重试。"""
     save_review_pass_cache(date_str, publish_paths, file_results)
     repo = Path(BLOG_REPO).expanduser().resolve()
     records = []
@@ -12349,7 +12346,7 @@ def save_review_failure_state(
 
 
 def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
-    """Reuse exact passed bytes and select only new, changed, or failed pages."""
+    """复用完全一致且已通过的字节，只挑出新增、变化或失败的页面。"""
     state_path = review_failure_path(date_str)
     repo = Path(BLOG_REPO).expanduser().resolve()
     ordered_paths = sorted({Path(value).expanduser().resolve() for value in publish_paths})
@@ -12442,9 +12439,9 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
                 prior_results[key] = {
                     'passed': True, 'completed': True, 'failureKind': None,
                     'reviewedSha256': current['sha256'],
-                    # Review evidence is permanently content-addressed.  A
-                    # batch manifest or implementation fingerprint change
-                    # must not invalidate unchanged file bytes.
+                    # 审查证据永久按内容寻址。
+                    # 批次清单或实现指纹变化，
+                    # 都不能让没变过的文件字节失效。
                     'reviewProtocolFingerprint': current_protocol,
                     'imageReviewMode': cached.get('imageReviewMode', 'deterministic_only'),
                 }
@@ -12468,10 +12465,10 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
                 'content' if record.get('completed', True) else 'pending'
             )
             if failure_kind == 'content':
-                # Older checkpoints classified absolute image-download
-                # deadlines as content failures. Re-evaluate their recorded
-                # issue with the current classifier so unchanged page bytes
-                # can retry the transport failure without inventing an edit.
+                # 旧检查点把图片下载的绝对超时判成了内容失败。
+                # 用当前的分类器重新判定它们记录的问题，
+                # 这样没变过的页面字节就能重试这次传输失败，
+                # 而不必硬造出一处修改。
                 if classify_review_failure(record.get('issues') or []) == 'transient':
                     failure_kind = 'transient'
             if (
@@ -12640,7 +12637,7 @@ def load_verified_review_receipt(date_str):
 
 
 def exclude_papers_for_publish(papers, excluded_ids):
-    """Exclude explicitly named papers while failing closed on typos or stale IDs."""
+    """排除明确点名的论文，遇到拼写错误或过期 ID 时按失败关闭处理。"""
     normalized_excluded = {
         normalize_publish_arxiv_id(value) for value in (excluded_ids or [])
     }
@@ -12664,7 +12661,7 @@ def exclude_papers_for_publish(papers, excluded_ids):
 
 
 def include_single_paper_for_publish(papers, include_id):
-    """Select exactly one paper and reject aliases that collide after normalization."""
+    """只选出一篇论文，并拒绝归一化后相互冲突的别名。"""
     if include_id is None:
         return list(papers), None
     normalized_include = normalize_publish_arxiv_id(include_id)
@@ -12685,11 +12682,11 @@ def include_single_paper_for_publish(papers, include_id):
 
 
 def parse_generation_args(argv=None):
-    """Strictly parse generation-only CLI arguments.
+    """严格解析只用于生成的 CLI 参数。
 
-    Single-value flags use ``append`` so duplicate values cannot silently let
-    the last spelling win. ``--exclude-id`` is intentionally repeatable;
-    ``--include-id`` uses append only to detect and reject duplicate spellings.
+    单值参数使用 ``append``，这样重复取值不会悄悄让
+    最后一种写法生效。``--exclude-id`` 有意允许重复；
+    ``--include-id`` 使用 append 只是为了发现并拒绝重复写法。
     """
     parser = argparse.ArgumentParser(
         prog=Path(sys.argv[0]).name,
@@ -12749,12 +12746,12 @@ def parse_generation_args(argv=None):
 
 def select_generation_data_file(
         data_file, target_date, publish_all=False, legacy_v5_maintenance=False):
-    """Resolve production v6 by default; archive fallback is legacy-only."""
+    """默认解析生产环境的 v6；归档回退只用于旧格式。"""
     if data_file is not None:
         return data_file
     if not legacy_v5_maintenance:
-        # Production v6 is promoted into the one standard canonical.  Never
-        # infer a production input from a stale archive or data/ legacy file.
+        # 生产环境的 v6 统一并入唯一的规范版本。绝不
+        # 从过期的归档或 data/ 旧文件里推断生产输入。
         return str(DEEP_ANALYSIS_RESULT_FILE)
     if publish_all or not target_date:
         return str(resolve_deep_analysis_result_path())
@@ -12770,8 +12767,8 @@ def select_generation_data_file(
             if papers and paper_dates == {target_date}:
                 return str(current)
         except (OSError, UnicodeError, json.JSONDecodeError):
-            # Preserve the existing loader's fail-closed error when no exact
-            # archived batch is available.
+            # 没有确切的归档批次可用时，保留现有加载器
+            # 按失败关闭的报错行为。
             pass
     archived = ARCHIVE_DIR / validate_publish_date(target_date) / 'deep-analysis-result.json'
     if archived.is_file():
@@ -12781,7 +12778,7 @@ def select_generation_data_file(
 
 
 def has_verified_publication_receipt(date_str):
-    """Return true only for a receipt already verified against remote main."""
+    """只有已经对照远端 main 核验过的凭证才返回 true。"""
     path = review_receipt_path(date_str)
     try:
         receipt = json.loads(path.read_text(encoding='utf-8'))
@@ -12840,9 +12837,9 @@ def generate_main(options=None):
             data_file, today, publish_all, legacy_v5_maintenance,
         )
         input_source_reference = build_generation_input_source_reference(data_file)
-        # This preflight is intentionally before paper filtering and Markdown
-        # generation: a daily API record that claims fresh provenance must
-        # prove the full sealed selected set, not only a later subset.
+        # 这个前置检查有意放在论文筛选和 Markdown 生成之前：
+        # 每日 API 记录如果声称使用最新来源，就必须
+        # 证明已核验保存的完整入选集合，而不只是后面的某个子集。
         validate_daily_fresh_sources_for_publish(data_file, today)
         papers = load_papers(data_file)
         # 优先使用抓取器写入的不可变 fetchBatchDate，旧数据才回退严格北京 fetchedAt。
@@ -12873,9 +12870,9 @@ def generate_main(options=None):
                 f'目标批次 {today} 已有远端验证发布凭证，但当前输入没有论文；'
                 '已保留既有 generation/review/push 证据'
             )
-        # A failed empty generation must not leave a same-date manifest or
-        # review/publication receipt that a separately invoked later stage
-        # could mistake for this run's output.
+        # 失败的空生成不能留下同一天的清单或
+        # 审查、发布凭证，否则之后单独调起的阶段
+        # 可能把它误当成这次运行的产物。
         generation_manifest_path(today).unlink(missing_ok=True)
         review_receipt_path(today).unlink(missing_ok=True)
         review_failure_path(today).unlink(missing_ok=True)
@@ -12896,9 +12893,9 @@ def generate_main(options=None):
             print(f"\n❌ 发布数据预检失败，未生成任何博客文件：\n{exc}")
             sys.exit(1)
     if tutorial_preview is not None:
-        # A single-page sealed release has no digest index to rank.  Its score
-        # is already rendered and hash-bound inside post.md; reparsing a
-        # canonical analysis here would violate the cold-start boundary.
+        # 单页已核验保存的发布没有需要排名的汇总页。它的评分
+        # 已经渲染并绑定哈希到 post.md 里；在这里重新解析
+        # 规范分析会破坏冷启动边界。
         scored, unscored = [], list(papers)
     else:
         scored, unscored = score_and_sort(papers)
@@ -13104,7 +13101,7 @@ def generate_main(options=None):
 
 
 def main():
-    """Compatibility generation entry point; review and push live in separate scripts."""
+    """兼容用的生成入口；审查和推送在各自独立的脚本里。"""
     options = parse_generation_args()
     try:
         date_str = validate_publish_date(get_today_bj(options['target_date']))

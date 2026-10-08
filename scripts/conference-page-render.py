@@ -325,7 +325,7 @@ def scoring_stability_is_resolved(stage):
 
 
 def render_formula_image_section(evidence, paper_id, conference_id, pdf_url):
-    """Project authenticated PDF crops as visible images, never display TeX."""
+    """把经过认证的 PDF 裁剪区域投影成可见图片，绝不直接展示 TeX。"""
     if evidence is None:
         return [], []
     body = {key: value for key, value in evidence.items() if key != 'evidenceSha256'}
@@ -372,8 +372,8 @@ def render_formula_image_section(evidence, paper_id, conference_id, pdf_url):
         total_bytes += len(raw)
         if total_bytes > 8 * 1024 * 1024:
             raise ValueError('conference formula image budget exceeded')
-        # Reuse the existing immutable image asset transport without changing
-        # the publisher: formula images have their own content-bound directory.
+        # 复用现有的不可变图片资产传输方式，不改动
+        # 发布器：公式图片有自己按内容绑定的目录。
         relative = f'{conference_id}/{directory}/figure-{index}.png'
         url = f'{CONFERENCE_IMAGE_BASE_URL}/{relative}'
         assets.append({'path': f'static/images/conference/{relative}', 'base64': crop['base64']})
@@ -386,7 +386,7 @@ def render_formula_image_section(evidence, paper_id, conference_id, pdf_url):
 
 
 def repair_caption_quoted_gloss_links(markdown):
-    """Keep quoted phonetic glosses literal in generated Figure captions."""
+    """在生成的图片图注里保留带引号的注音原样。"""
     output = []
     fence = None
     pattern = re.compile(r"(?<![\\!])\[([^\[\]\n]+)\]\((‘[^‘’\n]*’|“[^“”\n]*”|'[^'\n]*'|\"[^\"\n]*\")\)")
@@ -401,8 +401,8 @@ def repair_caption_quoted_gloss_links(markdown):
             ending = '\r' if line.endswith('\r') else ''
             text = line[:-1] if ending else line
             if re.fullmatch(r'\*论文图\s+\d+。[^\n]*\*', text):
-                # Only the new quoted-gloss repair skips complex caption lines.
-                # The unchanged existing render repairs may still act on them.
+                # 只有新增的带引号注音修复会跳过复杂的图注行。
+                # 未改动的既有渲染修复仍然可能处理这些行。
                 caption = text[1:-1]
                 complex_line = any(marker in caption for marker in ('\\', '$', '`', '<', '>', '*', '_', '~', '!['))
                 depth = 0
@@ -420,7 +420,7 @@ def repair_caption_quoted_gloss_links(markdown):
 
 
 def repair_reader_figure_caption_emphasis(markdown):
-    """Verbalize literal stars inside the generated italic Figure caption line."""
+    """把生成的斜体图片图注行里字面的星号用文字表达出来。"""
     pattern = re.compile(r'^\*论文图\s+(\d+)。([^\n]*)\*$', re.MULTILINE)
 
     def replace(match):
@@ -433,25 +433,25 @@ def repair_reader_figure_caption_emphasis(markdown):
 
 
 def repair_formula_delimiters(markdown):
-    """Keep TeX delimiters and generated Figure captions Markdown-safe."""
+    """让 TeX 定界符和生成的图片图注保持对 Markdown 安全。"""
     markdown = repair_reader_figure_caption_emphasis(repair_caption_quoted_gloss_links(markdown))
-    # A model can nest an inline control token inside a code span, for example
-    # `` `turn off `<EOT>``. Repair this exact doubled-closing-backtick shape
-    # here as well as in the shared publisher sanitizer: the conference
-    # renderer may be loaded with a different Python module search path, and
-    # the staged page must be safe before it is sealed.
+    # 模型可能把行内控制词元嵌进代码段里，例如
+    # `` `turn off `<EOT>``。这种双反引号结尾的形态要在这里
+    # 修掉，在共用的发布器清理器里也要修：会议渲染器
+    # 可能在另一条 Python 模块搜索路径下被加载，
+    # 而暂存页面在被核验保存之前必须已经安全。
     markdown = re.sub(
         r'`([^`\n]*)`<([A-Za-z][A-Za-z0-9_†-]{0,40})>``',
         lambda match: f'`{match.group(1)}&lt;{match.group(2)}&gt;`',
         str(markdown),
     )
-    # A PDF figure caption can contain literal brackets, such as ``f[k]`` or
-    # ``s = [1, 0, ...]``. The closing bracket is also Markdown image syntax,
-    # so every bracket that is not already escaped must remain escaped in the
-    # alt text. The publication gate masks the complete image label while
-    # checking TeX, because these bytes are caption text rather than math.
-    # The closing delimiter is the ``]`` immediately followed by ``(``;
-    # captions themselves may contain ordinary ``[``/``]`` characters.
+    # PDF 图片图注里可能有字面方括号，例如 ``f[k]`` 或
+    # ``s = [1, 0, ...]``。右方括号同时也是 Markdown 图片语法，
+    # 所以替代文本里凡是尚未转义的方括号都必须保持转义。
+    # 检查 TeX 时发布闸门会遮住完整的图片标签，
+    # 因为这些字节属于图注文字而不是数学公式。
+    # 结束定界符是紧跟 ``(`` 的那个 ``]``；
+    # 图注本身可能含有普通的 ``[`` 和 ``]`` 字符。
     image = re.compile(r'!\[([^\n]*?)\]\(([^)\n]+)\)')
 
     def image_alt(match):
@@ -511,11 +511,11 @@ def render_packet(packet):
             if hashlib.sha256(raw).hexdigest() != item['assetSha256'] or item['url'] in asset_by_url:
                 raise ValueError('conference Figure asset packet SHA or identity is invalid')
             asset_by_url[item['url']] = item
-        # The old path was derived only from the paper ID.  That made a
-        # corrected crop collide with an already published PNG, while the
-        # conference publisher intentionally refuses to overwrite existing
-        # binary assets.  Bind the public directory to the complete Figure
-        # pixel set so a changed crop gets a new immutable path.
+        # 旧路径只根据论文 ID 推导。这样一来，
+        # 修正后的裁剪区域会与已经发布的 PNG 冲突，
+        # 而会议发布器有意拒绝覆盖现有的
+        # 二进制资产。把公开目录绑定到完整的图片
+        # 像素集合，裁剪一变就会得到新的不可变路径。
         figure_set = [
             {'ordinal': int(figure.get('ordinal')), 'assetSha256': asset_by_url[figure.get('url')]['assetSha256']}
             for figure in paper.get('apiReaderFigures') or []
@@ -530,20 +530,20 @@ def render_packet(packet):
             if not packet_asset:
                 raise ValueError(f'conference Figure {figure.get("ordinal")} lacks publishable pixel asset')
             path = f'static/images/conference/{conference["id"]}/{figure_hash}/figure-{int(figure["ordinal"])}.png'
-            # Conference Figures live in the dedicated GitHub Pages image
-            # repository, just like the existing daily-post images.  Keep the
-            # staging path as the logical source identity; publication maps it
-            # into the image repository and commits the bytes there.
+            # 会议图片和现有的每日文章图片一样，
+            # 存放在专用的 GitHub Pages 图片仓库里。把暂存路径
+            # 当作逻辑上的来源身份；发布时把它映射进
+            # 图片仓库，并把字节提交到那里。
             public_url = f'{CONFERENCE_IMAGE_BASE_URL}/{conference["id"]}/{figure_hash}/figure-{int(figure["ordinal"])}.png'
-            # Figure ordinals share a prefix (Figure 1 is a prefix of Figure
-            # 11).  A plain string replacement would turn the latter into
-            # ``figure-1.png1``.  Replace only a complete custom URL token.
+            # 图片序号共享前缀（图片 1 是图片 11 的前缀）。
+            # 直接做字符串替换会把后者变成
+            # ``figure-1.png1``。只替换完整的自定义 URL 词元。
             article = re.sub(re.escape(str(source_url)) + r'(?!\d)', public_url, article)
-            # Older Reader drafts already contained the local Hugo asset URL
-            # (`/images/conference/...`) instead of the Figure source URL.
-            # Rewrite that deterministic path too, otherwise the page passes
-            # staging but points at a non-existent blog-local asset after the
-            # bytes are committed to the dedicated image repository.
+            # 较早的 Reader 草稿里已经是本地 Hugo 资产 URL
+            # （`/images/conference/...`），而不是图片来源 URL。
+            # 这个确定性路径也要改写，否则页面在暂存阶段能过，
+            # 等字节提交到专用图片仓库之后，
+            # 却指向一个并不存在的博客本地资产。
             local_pattern = (
                 rf'(?<![A-Za-z0-9])(?:/static)?/images/conference/'
                 rf'{re.escape(conference["id"])}/[a-f0-9]{{12}}/'

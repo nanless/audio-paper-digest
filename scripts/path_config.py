@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared Python-side project paths and durable file-write helpers."""
+"""Python 侧共用的项目路径，以及可靠落盘的文件写入辅助函数。"""
 
 import json
 import os
@@ -27,8 +27,8 @@ DAILY_FRESH_SOURCE_RUNS_DIR = DATA_DIR / "runtime" / "daily-fresh-source-runs"
 HISTORICAL_PAGE_INVENTORY_DIR = DATA_DIR / "runtime" / "historical-page-inventories"
 CONFERENCE_STAGING_SOURCE_DIR = DATA_DIR / "runtime" / "conference-staging-sources"
 PUBLICATION_ACTIVATION_DIRNAME = 'blog-publication-activations'
-# Repository-relative Hugo publication root. The publisher joins this only to
-# its already validated blog repo or transaction staging root.
+# 相对仓库根目录的 Hugo 发布根。发布器只把它拼到已经校验过的
+# 博客仓库或事务暂存根上。
 RESEARCHER_SIDECAR_RELATIVE_ROOT = Path("static") / "data" / "papers"
 
 PAPERS_FILE = CURRENT_DIR / "papers.json"
@@ -38,9 +38,9 @@ FILTER_DECISIONS_FILE = CURRENT_DIR / "filter-decisions.json"
 FILTERED_PAPERS_FILE = CURRENT_DIR / "filtered-papers.json"
 DEEP_ANALYSIS_RESULT_FILE = CURRENT_DIR / "deep-analysis-result.json"
 DEEP_ANALYSIS_RESULT_LEGACY_FILE = DATA_DIR / "deep-analysis-result.json"
-# Formal Manual v6 workflow evidence is date-isolated here.  The publisher
-# still consumes the standard canonical file above; this root is the durable
-# source of the spec-v6 / records-v4 evidence referenced by that canonical.
+# 正式 Manual v6 流程证据按日期隔离存放在这里。发布器读取的仍是上面
+# 的标准文件；那个文件引用的 spec-v6 / records-v4 证据，持久来源在
+# 这个根目录。
 MANUAL_V6_PRODUCTION_DIR = CURRENT_DIR / "manual-v6"
 VISUAL_SUMMARY_MANIFEST_DIR = CURRENT_DIR / "visual-summary-manifests"
 # 发布后视觉资产按批次日期直接归档。调用方必须继续拼接
@@ -64,12 +64,11 @@ def resolve_deep_analysis_result_for_date(
     legacy_path=DEEP_ANALYSIS_RESULT_LEGACY_FILE,
     archive_dir=ARCHIVE_DIR,
 ):
-    """Resolve a default publish input while preferring an exact dated archive.
+    """解析默认的发布输入路径，优先使用日期精确的归档。
 
-    Current/legacy data is used when it is an exact single-date batch.  When it
-    has already rolled to another or mixed batch, the controlled dated archive
-    is preferred.  If no archive exists, the normal current/legacy path is
-    returned so the caller can fail closed with its ordinary data validation.
+    当前/旧版数据只有在恰好是单日期批次时才使用。若它已经翻到别的批次
+    或混合批次，则优先用受控的日期归档。没有归档时返回常规的当前/旧版
+    路径，让调用方按既有的数据校验逻辑按失败处理。
     """
     target_date = validate_date_component(target_date)
     current = Path(resolve_deep_analysis_result_path(Path(current_path), Path(legacy_path)))
@@ -134,7 +133,7 @@ def backfill_result_path():
 
 
 def atomic_write_text(path, content, encoding="utf-8", mode=None):
-    """Durably replace a text file without exposing a partially written target."""
+    """可靠地替换文本文件，不暴露写了一半的目标文件。"""
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     existing_mode = stat.S_IMODE(target.stat().st_mode) if target.exists() else None
@@ -164,7 +163,7 @@ def atomic_write_text(path, content, encoding="utf-8", mode=None):
             finally:
                 os.close(directory_fd)
         except OSError:
-            # Some filesystems do not support fsync on directories.
+            # 有些文件系统不支持对目录做 fsync。
             pass
     finally:
         if temp_path is not None:
@@ -172,7 +171,7 @@ def atomic_write_text(path, content, encoding="utf-8", mode=None):
 
 
 def atomic_write_json(path, data, *, ensure_ascii=False, indent=2, mode=None):
-    """Serialize JSON and atomically replace the destination file."""
+    """序列化 JSON，并原子替换目标文件。"""
     content = json.dumps(data, ensure_ascii=ensure_ascii, indent=indent) + "\n"
     atomic_write_text(path, content, mode=mode)
 

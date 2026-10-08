@@ -1,8 +1,7 @@
-"""Deterministic Markdown and rendered-Hugo gates for tutorial pages.
+"""教程页面的确定性 Markdown 闸和 Hugo 渲染闸。
 
-The functions are intentionally read-only.  They validate exact source or
-rendered bytes and never repair content, so review remains an immutable
-attestation step rather than another rewriting path.
+这些函数有意只读：它们校验确切的源码或渲染字节，从不修改内容，所以审查
+始终是一步不可变的核验，而不是又一条改写路径。
 """
 
 import html
@@ -44,7 +43,7 @@ TUTORIAL_SCORE_DIMENSIONS = (
 
 
 def parse_frontmatter_content(path, content):
-    """Parse frontmatter from already-read UTF-8 text without touching disk."""
+    """从已读入的 UTF-8 文本解析 frontmatter，不碰磁盘。"""
     path = Path(path)
     try:
         import yaml
@@ -92,7 +91,7 @@ def load_frontmatter(path):
 
 
 def strip_fenced_code_for_format_gate(text):
-    """Exclude fenced code: its delimiters are literal examples, not syntax."""
+    """排除围栏代码：其中的定界符是字面示例，不是语法。"""
     return re.sub(
         r'(^|\n)(?:```|~~~).*?(?:\n(?:```|~~~)(?=\n|$)|\Z)',
         r'\1', text, flags=re.DOTALL,
@@ -125,10 +124,10 @@ def format_gate_is_current_api_reader(frontmatter):
 
 
 def markdown_table_count(text):
-    """Count contiguous Markdown table blocks as Goldmark renders them.
+    """按 Goldmark 的渲染方式统计连续的 Markdown 表格块。
 
-    A repeated separator inside one uninterrupted pipe block remains part of
-    the same table in Hugo; counting each separator overstates expected HTML.
+    在一段不中断的管道块里重复出现分隔行，在 Hugo 中仍属于同一张表；
+    逐个分隔行计数会高估应有的 HTML。
     """
     count = 0
     in_table_block = False
@@ -154,7 +153,7 @@ def markdown_image_count(text):
 
 
 def heading_figure_table_number_issues(text, label):
-    """Figures/tables belong in captions, never in a reader-section heading."""
+    """图/表应放在图注里，绝不能出现在读者章节标题中。"""
     issues = []
     heading_re = re.compile(r'^#{1,6}\s+(.+?)\s*#*\s*$', re.MULTILINE)
     marker_re = re.compile(
@@ -171,11 +170,10 @@ def heading_figure_table_number_issues(text, label):
 
 
 def _rendered_currency_dollar_positions(text):
-    """Keep HTML td/th parent identity instead of treating cells as prose.
+    """保留 HTML td/th 的父元素身份，不把单元格当正文。
 
-    Only direct plain text in a real table row qualifies. Nested markup,
-    comments, equations and multiple dollars do not inherit a currency waiver.
-    This produces a read-only diagnostic view, never changes rendered bytes.
+    只有真实表格行里的直接纯文本才算数。嵌套标记、注释、公式和多个美元
+    符号都不继承货币例外。这里产出的是只读诊断视图，绝不改动渲染字节。
     """
     offsets = [0]
     for line in text.splitlines(keepends=True):
@@ -232,15 +230,14 @@ def _rendered_currency_dollar_positions(text):
 
 
 def math_and_emphasis_issues(text, label, *, rendered_html=False):
-    """Fail closed on syntax Hugo may otherwise render as broken plain text."""
+    """Hugo 可能把语法渲染成破碎的纯文本时，这里按失败处理。"""
     clean = strip_fenced_code_for_format_gate(text)
     issues = []
     for opening, closing, name in (
             (r'\(', r'\)', r'\(…\)'), (r'\[', r'\]', r'\[…\]')):
-        # A real delimiter may follow an even-length TeX escape run, for
-        # example a display formula ending in ``\\`` immediately before
-        # ``\]``.  Count delimiters whose complete backslash run is odd;
-        # the old one-character lookbehind incorrectly rejected that case.
+        # 真正的定界符可能跟在偶数长度的 TeX 转义串后面，例如以 ``\\`` 结尾的
+        # 行间公式紧挨着 ``\]``。这里统计完整反斜杠串为奇数个的定界符；
+        # 旧实现只看前一个字符，会误判这种情况。
         delimiter_prefix = r'(?<!\\)(?:\\\\)*'
         opens = len(re.findall(delimiter_prefix + re.escape(opening), clean))
         closes = len(re.findall(delimiter_prefix + re.escape(closing), clean))
@@ -277,13 +274,12 @@ def math_and_emphasis_issues(text, label, *, rendered_html=False):
 
 
 def mask_rendered_symbolic_table_cells(text):
-    """Hide validated literal sequence glyphs from the rendered Markdown scan.
+    """在渲染后的 Markdown 扫描中隐藏已校验的序列字面字形。
 
-    Reader tables can intentionally contain cells such as ``*******___``.
-    Their source asterisks are backslash-escaped, but Hugo correctly emits
-    literal ``*`` bytes in the HTML text node.  Those bytes are data rather
-    than residual Markdown, so only complete plain ``th``/``td`` cells made
-    exclusively from sequence glyphs are masked for the HTML-only gate.
+    读者表格可以有意包含 ``*******___`` 这样的单元格。它们源码里的星号
+    已做反斜杠转义，但 Hugo 会在 HTML 文本节点里如实输出字面的 ``*`` 字节。
+    这些字节是数据，不是残留的 Markdown，所以只有完全由序列字形构成的
+    纯 ``th``/``td`` 单元格会在纯 HTML 闸里被遮住。
     """
     text = re.sub(
         r'(?P<prefix>\bp\s*(?:=|&lt;|&gt;|≤|≥)\s*'
@@ -317,7 +313,7 @@ def tutorial_score_issues(text, label):
 
 
 def validate_markdown_format_gate(path, frontmatter, body):
-    """Validate reader-visible Markdown before Hugo can hide defects."""
+    """在 Hugo 掩盖缺陷之前，先校验读者可见的 Markdown。"""
     label = Path(path).name
     issues = math_and_emphasis_issues(body, label)
     is_manual_v5 = (
@@ -364,7 +360,7 @@ def html_to_text(value):
 
 
 def rendered_page_candidates(output_dir, title, source_path=None):
-    """Bind by deterministic post slug first, title scan only as fallback."""
+    """优先按确定性的文章 slug 绑定，标题扫描只作兜底。"""
     if source_path:
         direct = Path(output_dir) / 'posts' / Path(source_path).stem / 'index.html'
         if direct.is_file():
@@ -387,13 +383,12 @@ def rendered_page_candidates(output_dir, title, source_path=None):
 
 
 def rendered_article_fragment(rendered):
-    """Avoid theme JavaScript/CSS when validating reader-visible HTML."""
-    # PaperMod wraps the actual Markdown body in ``.post-content`` and may keep
-    # related-post cards inside the outer ``article``.  Those cards quote old
-    # posts and can legitimately contain truncated legacy Markdown (for
-    # example ``**S``), which must not be attributed to the page under review.
-    # Prefer the narrow body wrapper; retain article/main/body fallbacks for
-    # themes and test fixtures that do not expose it.
+    """校验读者可见 HTML 时避开主题的 JavaScript/CSS。"""
+    # PaperMod 把真正的 Markdown 正文包在 ``.post-content`` 里，相关文章卡片
+    # 可能留在外层 ``article`` 内。那些卡片引用旧文章，可以合法地包含被截断
+    # 的旧版 Markdown（例如 ``**S``），不能算到正在审查的页面上。
+    # 优先用较窄的正文包装元素；对不提供它的主题和测试夹具，保留
+    # article/main/body 兜底。
     post_content = re.search(
         r'<div\b(?=[^>]*\bclass\s*=\s*["\'][^"\']*\bpost-content\b[^"\']*["\'])'
         r'[^>]*>(.*?)</div>',
@@ -417,7 +412,7 @@ def rendered_article_fragment(rendered):
 
 
 def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
-    """Validate tutorial artifacts in Hugo's actual rendered HTML."""
+    """在 Hugo 实际渲染出的 HTML 里校验教程产物。"""
     issues = []
     for artifact in source_artifacts:
         frontmatter = artifact['frontmatter']

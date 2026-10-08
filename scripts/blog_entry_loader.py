@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Load publish-to-blog.py as a shared implementation module."""
+"""以共享实现模块的方式加载 publish-to-blog.py。"""
 
 import importlib.util
 from pathlib import Path

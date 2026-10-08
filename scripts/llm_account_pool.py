@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-process OpenCode Go sticky account pool for Python callers."""
+"""Python 调用方使用的跨进程 OpenCode Go 固定账号池。"""
 
 import hashlib
 import json
@@ -27,7 +27,7 @@ MAX_SAFE_INTEGER = (1 << 53) - 1
 
 
 class LlmAccountPoolExhaustedError(RuntimeError):
-    """All configured OpenCode Go accounts have a confirmed active quota block."""
+    """所有已配置的 OpenCode Go 账号都已被确认处于配额封禁状态。"""
 
     code = 'LLM_ACCOUNT_POOL_EXHAUSTED'
     retryable = False
@@ -51,7 +51,7 @@ class LlmAccountAuthError(RuntimeError):
 
 
 class LlmAccountPoolStateError(RuntimeError):
-    """Persistent pool state or its lock cannot be trusted."""
+    """持久化的账号池状态或其锁不可信。"""
 
     code = 'LLM_ACCOUNT_POOL_STATE_ERROR'
     retryable = False
@@ -60,7 +60,7 @@ class LlmAccountPoolStateError(RuntimeError):
 
 
 class LlmAccountPoolConfigError(ValueError):
-    """Account-pool configuration is ambiguous or unsafe."""
+    """账号池配置存在歧义或不安全。"""
 
     code = 'LLM_ACCOUNT_POOL_CONFIG_ERROR'
     retryable = False
@@ -69,7 +69,7 @@ class LlmAccountPoolConfigError(ValueError):
 
 
 class LlmAccountPoolLockTimeoutError(TimeoutError):
-    """A short account-state critical section remained busy unexpectedly."""
+    """账号状态的短临界区意外持续占用。"""
 
     code = 'LLM_ACCOUNT_POOL_LOCK_TIMEOUT'
     retryable = True
@@ -113,7 +113,7 @@ def resolve_api_key_pool(primary_key, fallback_value):
 
 
 def resolve_primary_api_key_pool(primary_key, fallback_value, tertiary_fallback_value=''):
-    """Append an explicitly configured third account after normal fallbacks."""
+    """在常规备用账号之后追加一个显式配置的第三账号。"""
     return resolve_api_key_pool(
         primary_key,
         [*parse_fallback_api_keys(fallback_value), *parse_fallback_api_keys(tertiary_fallback_value)],
@@ -128,10 +128,10 @@ def normalize_opencode_go_service(endpoint):
     except (TypeError, ValueError):
         return None
     raw_path = parsed.path
-    # Python's urlsplit preserves dot segments while WHATWG URL parsers may
-    # normalize them away.  Reject both their raw and once-percent-decoded
-    # forms before service identity is derived so every runtime binds the same
-    # caller-supplied route, rather than trusting a server/proxy normalization.
+    # Python 的 urlsplit 保留点号路径段，而 WHATWG URL 解析器可能把它
+    # 归一化掉。推导服务身份之前，原始形式和一次百分号解码后的形式都要
+    # 拒绝，这样每个运行时绑定的都是调用方给出的同一条路径，而不依赖
+    # 服务端或代理的归一化结果。
     decoded_path = unquote(raw_path)
     if any(segment in {'.', '..'} for path_value in (raw_path, decoded_path)
            for segment in path_value.split('/')):
@@ -515,7 +515,7 @@ def mark_quota_exhausted(selection, quota, state_file=LLM_ACCOUNT_POOL_STATE_FIL
             'lastFailureAt': datetime.fromtimestamp(now_ms / 1000, tz=timezone.utc).isoformat(),
             'lastFailureStatus': 401 if (quota or {}).get('type') == 'InsufficientBalanceError' else 429,
         }
-        # Keep active as the forward-only cursor while blocked.
+        # 被封禁期间，active 只作单向前进的游标。
         return state
 
     _update_state(state_file, updater)

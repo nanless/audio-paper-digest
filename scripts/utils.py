@@ -612,7 +612,7 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
     if detail_block:
         block = detail_block.group(1)
     else:
-        # Fallback: 在整个文本中搜索子 section（兼容 gap-fill 直接输出 ## 标题的格式）
+        # 兜底：在整个文本中搜索子 section（兼容 gap-fill 直接输出 ## 标题的格式）
         block = analysis
 
     # 解析详细分析的各个子 section（支持 ### 01.xxx、## 01.xxx、### xxx、## xxx 四种格式）
@@ -642,7 +642,7 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
     # 只有八维评分完整、唯一且分母/范围合法时才覆盖 LLM 给出的总分。
     scoring_text = r.get('scoringReason', '')
     if not scoring_text:
-        # fallback: 在整个分析文本中搜索
+        # 兜底：在整个分析文本中搜索
         m = re.search(r'#+\s*(?:\d+[.\s]+)?评分理由.*?\n([\s\S]*?)(?=\n#+\s*(?:\d+[.\s]+)?(?:方法概述和架构|核心创新点|实验结果|细节详述)|\n##\s|$)', analysis)
         if m:
             scoring_text = m.group(1).strip()

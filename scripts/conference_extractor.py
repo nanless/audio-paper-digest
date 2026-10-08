@@ -1229,7 +1229,7 @@ def load_pypdf_backend() -> ExtractionBackend:
                     else:
                         visual = pymupdf.Rect(min(rect.x0 for rect in rects), min(rect.y0 for rect in rects),
                                               max(rect.x1 for rect in rects), max(rect.y1 for rect in rects))
-                        # "Lookup Embedding"、"Patch + Position Embedding"
+                        # “Lookup Embedding”、“Patch + Position Embedding”
                         # 这类文字标签不属于绘图或图片块，只按视觉图元求并集会
                         # 偏窄。这些标签的横向安全范围就是图注所在栏的边界。
                         visual = pymupdf.Rect(region_x0, max(previous_y, visual.y0 - 5),
