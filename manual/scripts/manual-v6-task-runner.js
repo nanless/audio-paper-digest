@@ -181,7 +181,7 @@ function validateState(state) {
                 if (seenTaskNames.has(task.taskName)) throw new Error(`state taskName 重复: ${task.taskName}`);
                 seenTaskNames.add(task.taskName);
                 const owner = state.taskNames?.[task.taskName];
-                if (!owner || owner.paperId !== id || owner.role !== role) throw new Error(`state taskName owner 不闭环: ${task.taskName}`);
+                if (!owner || owner.paperId !== id || owner.role !== role) throw new Error(`state.taskNames 的 owner 与当前任务不一致: ${task.taskName}`);
             }
         }
     }
@@ -193,7 +193,7 @@ function validateState(state) {
             throw new Error(`state taskNames.${taskName} 非法`);
         }
         if (!owner.retired && state.papers[owner.paperId].tasks[owner.role].taskName !== taskName) {
-            throw new Error(`state taskNames.${taskName} active owner 不闭环`);
+            throw new Error(`state.taskNames.${taskName} 仍标为活动，但它记的 owner 与当前任务不一致`);
         }
     }
     return state;
@@ -649,7 +649,7 @@ function validateProductionRevisionOutput(output, receipt, task, paperId, depend
         || audit.taskName !== auditRef.taskName || normalizedId(audit.paperId) !== paperId
         || audit.contract !== 'manual-v6-independent-revision-audit-v1'
         || audit.finalPassed !== true) {
-        throw new Error('production revision independent audit 字节、身份或最终状态不闭环');
+        throw new Error('production revision 的独立复核未通过：文件字节、任务身份或最终状态对不上');
     }
     if (!Array.isArray(output.resolvedFindingSha256s)
         || output.resolvedFindingSha256s.some(value => !SHA_RE.test(String(value || '')))
