@@ -1,6 +1,6 @@
 # Default LLM/API architecture
 
-This page explains what each component reads and writes, how per-paper analysis resumes, and how publication checks page files and Git state. See [Scripts](scripts.md) for commands, [Data formats](data-format.md) for saved fields, and the [Manual subsystem](../../manual/README.md) only for explicitly requested human processing.
+Each component's job, where per-paper analysis resumes, and what publication verifies in page files and Git state. Commands are in [Scripts](scripts.md) and saved fields in [Data formats](data-format.md). The [Manual subsystem](../../manual/README.md) applies only to explicitly requested human processing.
 
 ## Components
 

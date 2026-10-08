@@ -2,7 +2,7 @@
 
 ## How to Use This Page
 
-This page lists commands by task. File responsibilities live in [scripts/README.md](../../scripts/README.md), and `package.json` defines the aliases. Manual commands are in [manual/README.md](../../manual/README.md). DATE, ID, UUID, and uppercase paths are placeholders. Brackets mark optional arguments, and a vertical bar separates alternatives.
+Commands are grouped by task. File responsibilities live in [scripts/README.md](../../scripts/README.md), and `package.json` defines the aliases. Manual commands are in [manual/README.md](../../manual/README.md). DATE, ID, UUID, and uppercase paths are placeholders. Brackets mark optional arguments, and a vertical bar separates alternatives.
 
 ## Complete Daily Run
 

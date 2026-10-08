@@ -2,7 +2,7 @@
 
 ## Audience
 
-Use this guide to install the default LLM/API daily workflow, or to investigate configuration that the scripts cannot read. See [Workflow](workflow.md) for execution and [env.example](../../env.example) for configuration variables.
+Install the default LLM/API daily workflow, or work out why the scripts cannot read your configuration. Execution order is in [Workflow](workflow.md) and the variable reference in [env.example](../../env.example).
 
 ## Shortest Setup
 

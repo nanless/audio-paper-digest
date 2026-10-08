@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This page explains what each file contains, which records must agree, and when recovery is safe. The validators define the exact field checks. See the [Manual entry](../../manual/README.md) for the separate manual workflow.
+What each file contains, which records must agree, and when recovery is safe. The validators define the exact field checks. The [Manual entry](../../manual/README.md) covers the separate manual workflow.
 
 ## Data Classes
 

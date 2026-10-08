@@ -69,7 +69,7 @@ Use HTTPS for external resources, except loopback tests. Revalidate DNS/IP on ex
 
 ## Runtime storage
 
-`npm run storage:status` reports size and file counts, including protected daily sources, historical sources/plans/private pages, and conference evidence. These are inputs and recovery evidence, not disposable caches, and prune never removes them.
+`npm run storage:status` reports size and file counts, including protected daily sources, historical sources/plans/private pages, and conference evidence. These are inputs and recovery evidence, so prune never removes them.
 
 `npm run storage:prune` scans references and prints a deletion preview. Status and previews can run while tasks are active. Before deleting anything, check the preview and stop all fetching, filtering, analysis, blog generation/review/push, and visual writers:
 

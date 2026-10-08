@@ -2,9 +2,10 @@
 
 ## 1. Audience, Goal, and Entry Point
 
-This guide covers running, resuming, publishing, and maintaining the default LLM/API digest. See
-[AGENTS.md](AGENTS.md) for operational constraints, [docs/README.md](docs/README.md) to find a guide by task,
-and [scripts/README.md](scripts/README.md) for module responsibilities.
+This guide is for the operations side of the default LLM/API digest: running it, resuming after a failure,
+publishing, and maintaining it. Operational constraints are in [AGENTS.md](AGENTS.md),
+[docs/README.md](docs/README.md) finds a guide by task, and [scripts/README.md](scripts/README.md) lists
+module responsibilities.
 
 A dated digest means the complete default route:
 
