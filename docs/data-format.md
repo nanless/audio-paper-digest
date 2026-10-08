@@ -149,6 +149,6 @@ npm run digest:status -- --date YYYY-MM-DD
 - `blog.remoteOidVerified` 与 `blog.publicationVerified`：前者只说明远端 OID 与发布提交是否一致，后者是整份凭证是否通过校验。v1 把两者合成一个 `remoteVerified`，凭证因为别的原因失效时会被读成「没推到远端」。
 - `visuals.complete/total/pending/failed`：读不到长图清单时是 **`null`**，摘要打印 `?`。v1 用 `|| 0`，把「清单不存在」显示成「一张都没做」。
 - `cover.status`：由门禁派生，门禁不过时不会说 `complete`。v1 直接镜像清单内层说法，出现过「封面 incomplete 但 status=complete」。
-- `visuals.status`：同样由门禁派生（v3 起）。清单自称 `complete` 而资产校验或发布绑定已经失败时，这里说 `incomplete`；清单自己写的是 `pending`／`partial_failed` 就照说；清单根本不在才是 `missing`。v2 直接镜像清单内层的 `overallStatus`，111 个归档日期里有 29 天打出过 `长图 incomplete | status=complete | complete=10/10 | pending=0 | failed=0`。
+- `visuals.status`：同样由门禁派生（v3 起）。清单自称 `complete` 而资产校验或发布绑定已经失败时，这里说 `incomplete`；清单自己写的是 `pending`／`partial_failed` 就照说；清单根本不在才是 `missing`。v2 直接镜像清单内层的 `overallStatus`，当时的归档日期里有 29 天打出过 `长图 incomplete | status=complete | complete=10/10 | pending=0 | failed=0`（归档随日更增长，这里不写死当时的日期总数）。
 - `fetch.rawCandidateCount`：候选快照读不到时是 **`null`**，摘要打印 `?`（v3 起）。快照在、候选确实为空才是 `0`。v2 把两种情形都写成 `0`，于是出现过 `candidates=0` 同屏 `selected=53`。
 - `readProblems`：列出「文件存在但读不出来」的项，`kind` 为 `invalid-json` 或 `unreadable`（后者带 `code`，例如 `EISDIR`）。文件不存在不会进这个数组，也不算错误——那只是这一步还没跑。v2 把损坏与不存在都返回 `null`，运维分不出该重跑还是该修文件。
