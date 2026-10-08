@@ -428,10 +428,11 @@ for (const [base, prefix] of [['::', 128], ['::1', 128], ['fc00::', 7], ['fe80::
 // 公网 DNS 里查不到的域名后缀。home.arpa 由 RFC 8375 为家庭网络保留，
 // test / example / invalid 由 RFC 2606 保留且永不解析，internal 由 ICANN 在
 // 2024 年从根区永久保留给内部使用（2024.07.29.06 号决议）。
-// lan / corp / home 没有 RFC 或 ICANN 的正式保留，但三者从未委派过，corp 与 home
-// 还被 ICANN 挡在委派之外（2012 轮申请不予推进，2025 年 10 月再次确认），
-// 公网同样解析不到。它们只是事实标准，若哪天真的委派了，这几项必须删掉。
-const LOCAL_HOST_SUFFIXES = ['home.arpa', 'internal', 'test', 'example', 'invalid', 'lan', 'corp', 'home'];
+// lan / corp / home / mail 都不在 IANA 的 special-use 登记表里，但同样从未委派：
+// corp / home / mail 是 2012 轮申请里仅有的三个被判为 name collision 高风险的字符串，
+// ICANN 董事会 2025 年 10 月 30 日再次确认 2012 轮那几份申请不予推进（2025.10.30.11–12
+// 号决议的理由段），三者至今不在根区。它们只是事实标准，若哪天真的委派了，这几项必须删掉。
+const LOCAL_HOST_SUFFIXES = ['home.arpa', 'internal', 'test', 'example', 'invalid', 'lan', 'corp', 'home', 'mail'];
 
 function isPrivateOrLocalHostname(hostname) {
     let host = String(hostname || '').toLowerCase();

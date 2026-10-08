@@ -7,6 +7,11 @@
 // 这里断言的是语义一致（同一阶段的 v1 路径、当前契约名、当前路径相同），
 // 不是两份文件文本相同——后者会因为排版差异而变脆。数据从两个真实源头读：
 // JS 侧直接 require，Python 侧通过解释器读出来，都不在测试里重新手抄。
+//
+// 一致性要查两个方向。第一条按 Python 表里的阶段逐项比对，管的是「Python 有的
+// 阶段两端对不对得上」；它发现不了 Python 漏登记某个阶段。最后一条从 JS 表出发，
+// 要求每个阶段要么在 Python 副本里，要么在 JS_STAGES_PYTHON_DOES_NOT_READ 里
+// 写明 Python 不读它——JS 新增阶段时那张清单不会自动放行。
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
@@ -130,4 +135,38 @@ test('Python 版本表对没登记的契约名报错，不退化成 v1', () => {
         '未登记的契约名没有报错，Python 退化成了 v1');
     assert.match(output, /analysis-prompt-text-v9/,
         `报错消息里要带上那个没登记的契约名，实际是 ${output}`);
+});
+
+// JS 表里 Python 明确不读的阶段。Python 的副本只服务发布后视觉 manifest，
+// 这些阶段的正文由 deep-analyzer、读者阶段和 manual 在 Node 侧打开，Python
+// 发布器碰不到。清单写死在测试里、不参与比对范围推导，所以它不会跟着 JS 表
+// 自动变长：JS 新增阶段时它既不在 Python 副本里、也不在这张清单里，下面这条
+// 测试就会报错，逼作者决定 Python 要不要跟。
+const JS_STAGES_PYTHON_DOES_NOT_READ = Object.freeze([
+    'primaryAnalysis', 'openSourceScan', 'revision', 'tableRepair', 'methodRepair',
+    'coreSummaryRepair', 'structureRepair', 'tagSelection', 'scoringAudit',
+    'imageSupplement', 'apiReaderArticle', 'apiReaderRepair'
+]);
+
+test('JS 表里的每个阶段都在 Python 副本里，或声明了 Python 不读它', () => {
+    const py = pythonRegistry();
+    const pythonStages = new Set(Object.keys(py.files).map(toCamel));
+    const jsStages = Object.keys(PROMPT_FILE_VERSIONS).sort();
+
+    const unaccounted = jsStages.filter(stage =>
+        !pythonStages.has(stage) && !JS_STAGES_PYTHON_DOES_NOT_READ.includes(stage));
+    assert.deepEqual(unaccounted, [],
+        `JS 的 PROMPT_FILE_VERSIONS 有 Python 副本没登记、也没声明 Python 不读的阶段：${unaccounted.join('、')}。`
+        + '要么在 publish-to-blog.py 的 _VISUAL_PROMPT_TEXT_FILES 里补上，'
+        + '要么加进本测试的 JS_STAGES_PYTHON_DOES_NOT_READ 并写明 Python 为什么不读');
+
+    // 清单和 Python 副本重叠，或者清单里留着 JS 已经不存在的阶段，都说明它过期了，
+    // 会掩盖真实的镜像关系。
+    const onBothSides = JS_STAGES_PYTHON_DOES_NOT_READ.filter(stage => pythonStages.has(stage));
+    assert.deepEqual(onBothSides, [],
+        `这些阶段同时出现在 Python 副本和 JS_STAGES_PYTHON_DOES_NOT_READ 里：${onBothSides.join('、')}`);
+    const goneFromJs = JS_STAGES_PYTHON_DOES_NOT_READ.filter(stage => !jsStages.includes(stage));
+    assert.deepEqual(goneFromJs, [],
+        `JS_STAGES_PYTHON_DOES_NOT_READ 里这些阶段在 JS 的 PROMPT_FILE_VERSIONS 里已经不存在：`
+        + `${goneFromJs.join('、')}；阶段改名或删除后要同步这张清单`);
 });

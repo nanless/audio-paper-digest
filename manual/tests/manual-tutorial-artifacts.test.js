@@ -133,7 +133,8 @@ describe('Manual 教程产物的汇总', () => {
             'https://nas.home.arpa/figure1.png', 'https://home.arpa/figure1.png', 'https://wiki.internal/figure1.png',
             'https://paper.test/figure1.png', 'https://host.example/figure1.png',
             'https://stale.invalid/figure1.png', 'https://fileserver.lan/figure1.png',
-            'https://intranet.corp/figure1.png', 'https://srv.home/figure1.png'
+            'https://intranet.corp/figure1.png', 'https://srv.home/figure1.png',
+            'https://smtp.mail/figure1.png'
         ]) {
             const decision = classifyFigureCandidate({ id: 'IMG0001', url, caption: '图 1', figureOrdinal: 1 });
             assert.equal(decision.eligible, false, url);
@@ -143,7 +144,7 @@ describe('Manual 教程产物的汇总', () => {
             'https://example.com/figure1.png', 'https://arxiv.org/figure1.png',
             'https://huggingface.co/figure1.png', 'https://github.com/figure1.png',
             'https://sub.example.com/figure1.png', 'https://[2001:db8::1]/figure1.png',
-            'https://8.8.8.8/figure1.png'
+            'https://8.8.8.8/figure1.png', 'https://gmail.com/figure1.png', 'https://mail.google.com/figure1.png'
         ]) {
             const decision = classifyFigureCandidate({ id: 'IMG0001', url, caption: '图 1', figureOrdinal: 1 });
             assert.equal(decision.eligible, true, url);
