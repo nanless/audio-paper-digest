@@ -4,10 +4,15 @@ from __future__ import annotations
 
 import copy
 import json
+import sys
 import unittest
 from pathlib import Path
 
-from scripts import paper_identity as identity
+# 从 tests/python 目录内单跑（cd tests/python && python -m unittest <模块>）时，
+# 仓库根不在 sys.path 上；补一条引导，让三种运行方式都能导入 scripts 包。
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts import paper_identity as identity  # noqa: E402
 
 
 VECTORS = json.loads((Path(__file__).resolve().parents[2] / "config" / "paper-identity-v1-vectors.json").read_text("utf-8"))
