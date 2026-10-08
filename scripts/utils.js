@@ -514,10 +514,25 @@ function buildApiUrl(apiType, endpoint) {
  * 构建请求体
  * OpenAI: {model, messages, max_tokens, temperature}
  * Anthropic: {model, messages, max_tokens, temperature?, system?} (system 是顶级字段)
+ *
+ * 服务端推理信封类型（reasoning / thinking / redacted_thinking）：Responses 的
+ * reasoning 项带签发方绑定的 encrypted_content，Anthropic 的 thinking 类带签名，
+ * 原样回传会被网关以 400 拒绝（reasoning `encrypted_content` was not issued to
+ * this caller）。出站请求里只保留正文与图片，这三类一律丢弃（连其中的 summary
+ * 文本也不转发明文，那是模型内部推理，不是答复正文）。
  */
+const PROVIDER_REASONING_BLOCK_TYPES = new Set(['reasoning', 'thinking', 'redacted_thinking']);
+
+function isProviderReasoningEnvelope(block) {
+    return Boolean(block) && typeof block === 'object'
+        && PROVIDER_REASONING_BLOCK_TYPES.has(block.type);
+}
+
 function normalizeAnthropicContent(content) {
     if (!Array.isArray(content)) return content;
-    return content.map(block => {
+    return content
+        .filter(block => !isProviderReasoningEnvelope(block))
+        .map(block => {
         if (!block || typeof block !== 'object') return block;
         if (block.type !== 'image_url') return block;
 
@@ -548,18 +563,19 @@ function normalizeAnthropicContent(content) {
 
 function normalizeOpenAIContent(content) {
     if (!Array.isArray(content)) return content;
-    if (content.length === 1) {
-        const only = content[0];
+    const kept = content.filter(block => !isProviderReasoningEnvelope(block));
+    if (kept.length === 1) {
+        const only = kept[0];
         if (only && only.type === 'text' && typeof only.text === 'string') {
             return only.text;
         }
     }
-    return content;
+    return kept;
 }
 
 function normalizeResponsesContent(content) {
     const blocks = Array.isArray(content) ? content : [{ type: 'text', text: String(content || '') }];
-    return blocks.map(block => {
+    return blocks.filter(block => !isProviderReasoningEnvelope(block)).map(block => {
         if (!block || typeof block !== 'object') {
             return { type: 'input_text', text: String(block || '') };
         }

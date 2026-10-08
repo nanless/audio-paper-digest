@@ -695,6 +695,46 @@ describe('buildRequestBody', () => {
             else process.env.PD_OPENAI_RESPONSES_STREAM = previous;
         }
     });
+
+    it('服务端推理信封不得进入出站请求（reasoning encrypted_content 防 400）', () => {
+        const reasoningItem = {
+            type: 'reasoning',
+            id: 'rs_abc',
+            encrypted_content: 'gAAAAABm...',
+            summary: [{ type: 'summary_text', text: '内部推理摘要' }]
+        };
+        const thinkingItem = { type: 'thinking', thinking: '内部思考', signature: 'sig...' };
+        const redactedItem = { type: 'redacted_thinking', data: 'enc...' };
+
+        const responsesBody = buildRequestBody('openai_responses', 'muse-spark-1.2-contributor', [
+            { role: 'user', content: [{ type: 'text', text: 'hello' }, reasoningItem] }
+        ], 1200, 0.2);
+        assert.deepStrictEqual(responsesBody.input[0].content, [
+            { type: 'input_text', text: 'hello' }
+        ]);
+        assert.ok(!JSON.stringify(responsesBody).includes('encrypted_content'));
+
+        const openaiBody = buildRequestBody('openai', 'deepseek-v4-pro', [
+            { role: 'user', content: [{ type: 'text', text: 'hello' }, reasoningItem] }
+        ], 1000, 0.5);
+        assert.strictEqual(openaiBody.messages[0].content, 'hello');
+        assert.ok(!JSON.stringify(openaiBody).includes('encrypted_content'));
+
+        const anthropicBody = buildRequestBody('anthropic', 'mimo', [
+            {
+                role: 'user',
+                content: [
+                    { type: 'text', text: '请分析图片' },
+                    { type: 'image_url', image_url: { url: 'data:image/png;base64,abc123' } },
+                    thinkingItem,
+                    redactedItem
+                ]
+            }
+        ], 1000, 0.5);
+        assert.strictEqual(anthropicBody.messages[0].content.length, 2);
+        assert.deepStrictEqual(anthropicBody.messages[0].content[0], { type: 'text', text: '请分析图片' });
+        assert.ok(!JSON.stringify(anthropicBody).includes('signature'));
+    });
 });
 
 describe('buildHeaders', () => {
