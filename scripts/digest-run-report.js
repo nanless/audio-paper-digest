@@ -353,6 +353,12 @@ function visualAssetsAreValid(visual) {
     return { visualCards, assetsValid, archiveUnique };
 }
 
+// 长图计数读不到时返回 null 而不是 0：0 是一个真实可能的取值（清单在、但一张都没做），
+// 和「清单根本不存在」是两件事，不能显示成同一个数。
+function visualCount(value) {
+    return Number.isInteger(value) ? value : null;
+}
+
 function buildDigestRunReport(targetDate, options = {}) {
     const today = options.today || getBeijingISOString().slice(0, 10);
     const snapshotOptions = {
@@ -592,15 +598,26 @@ function buildDigestRunReport(targetDate, options = {}) {
             gateComplete: visualGateComplete,
             status: visualsWaived ? 'waived' : (visual?.overallStatus || 'missing'),
             waived: visualsWaived,
-            complete: visual?.counts?.completeCards || 0,
-            total: visual?.counts?.totalCards || 0,
-            pending: visual?.counts?.pendingCards || 0,
-            failed: visual?.counts?.failedCards || 0,
+            // 这几项原来写成 `|| 0`，于是「没有长图清单」和「清单里长图数为 0」显示成
+            // 同一个 0。今天的批次就是这样：摘要显示 complete=0/0、pending=0、failed=0，
+            // 看着像全做完了，而真实状态是 missing。读不到计数就报 null，让摘要打印 `?`。
+            complete: visualCount(visual?.counts?.completeCards),
+            total: visualCount(visual?.counts?.totalCards),
+            pending: visualCount(visual?.counts?.pendingCards),
+            failed: visualCount(visual?.counts?.failedCards),
             assetsValid: visualAssetsValid,
             archiveUnique: visualArchiveUnique
         },
         cover: {
-            status: visualsWaived ? 'waived' : (cover?.cover?.status || 'missing'),
+            // 原来直接取清单内层的 cover.cover.status，于是出现过「封面 incomplete 但
+            // status=complete」这种自相矛盾的摘要。状态由门禁派生，内层说法只在门禁
+            // 通过时才采纳；门禁不过时最多说「未完成」，不会替它宣布完成。
+            status: visualsWaived
+                ? 'waived'
+                : (coverGateComplete
+                    ? 'complete'
+                    : (cover?.cover?.status && cover.cover.status !== 'complete'
+                        ? cover.cover.status : 'incomplete')),
             complete: coverGateComplete,
             waived: visualsWaived
         }
@@ -609,6 +626,13 @@ function buildDigestRunReport(targetDate, options = {}) {
 
 function formatDigestRunSummary(report) {
     const state = value => value ? 'complete' : 'incomplete';
+    // 摘要不要在同一个「封面」行里既说 incomplete 又说 status=complete。构建报告时
+    // 已经按门禁派生过状态，这里再兜一道：门禁不过就不打印 complete。
+    const printedCoverStatus = cover => {
+        if (cover?.waived) return 'waived';
+        if (cover?.complete) return 'complete';
+        return cover?.status === 'complete' ? 'incomplete' : (cover?.status ?? 'missing');
+    };
     const lines = [
         `[digest-status] ${report.batchDate} overall=${report.overallStatus} errors=${report.errors.length}`,
         `  抓取 ${state(report.fetch.complete)} | candidates=${report.fetch.rawCandidateCount}`,
@@ -618,8 +642,8 @@ function formatDigestRunSummary(report) {
             ? [`  评分稳定性 unresolved=${report.analysis.scoringStabilityUnresolvedIds.join(',')}`]
             : []),
         `  博客 ${state(report.blog.complete)} | strictReview=${report.blog.strictReview} | remoteVerified=${report.blog.publicationVerified}`,
-        `  长图 ${report.visuals.waived ? 'waived' : state(report.visuals.gateComplete === true)} | complete=${report.visuals.complete}/${report.visuals.total} | pending=${report.visuals.pending} | failed=${report.visuals.failed}`,
-        `  封面 ${report.cover.waived ? 'waived' : state(report.cover.complete)} | status=${report.cover.status}`
+        `  长图 ${report.visuals.waived ? 'waived' : state(report.visuals.gateComplete === true)} | status=${report.visuals.status} | complete=${report.visuals.complete ?? '?'}/${report.visuals.total ?? '?'} | pending=${report.visuals.pending ?? '?'} | failed=${report.visuals.failed ?? '?'}`,
+        `  封面 ${report.cover.waived ? 'waived' : state(report.cover.complete)} | status=${printedCoverStatus(report.cover)}`
     ];
     for (const error of report.errors) lines.push(`  错误: ${error}`);
     return lines.join('\n');

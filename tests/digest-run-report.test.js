@@ -743,8 +743,56 @@ describe('日更运行报告', () => {
             },
             cover: { complete: true, status: 'complete' }
         });
-        assert.match(summary, /长图 incomplete \| complete=10\/10/);
+        assert.match(summary, /长图 incomplete \| status=complete \| complete=10\/10/);
         assert.doesNotMatch(summary, /长图 complete \|/);
+    });
+
+    it('长图清单不存在时摘要报 ? 与 status，不把未知显示成 0', () => {
+        const summary = formatDigestRunSummary({
+            batchDate: '2026-07-29',
+            overallStatus: 'incomplete',
+            errors: ['TOP 10 论文长图状态或资产校验未完成'],
+            fetch: { complete: true, rawCandidateCount: 10 },
+            filter: { complete: true, selectedCount: 10, totalCandidates: 10, pendingDecisions: 0 },
+            analysis: { complete: true, successful: 10, total: 10, failed: 0 },
+            blog: { complete: true, strictReview: true, publicationVerified: true },
+            visuals: {
+                gateComplete: false,
+                status: 'missing',
+                complete: null,
+                total: null,
+                pending: null,
+                failed: null,
+                assetsValid: false,
+                archiveUnique: false
+            },
+            cover: { complete: false, status: 'incomplete' }
+        });
+        // 关键：不能出现 complete=0/0 | pending=0 | failed=0 —— 那看着像已经全做完。
+        const visualLine = summary.split('\n').find(line => line.includes('长图'));
+        assert.match(visualLine, /长图 incomplete \| status=missing \| complete=\?\/\? \| pending=\? \| failed=\?/);
+        assert.doesNotMatch(visualLine, /complete=0\/0/);
+        assert.doesNotMatch(visualLine, /pending=0/);
+        assert.doesNotMatch(visualLine, /failed=0/);
+    });
+
+    it('封面门禁不过时摘要不得显示 status=complete', () => {
+        const summary = formatDigestRunSummary({
+            batchDate: '2026-07-29',
+            overallStatus: 'incomplete',
+            errors: ['汇总封面状态或资产校验未完成'],
+            fetch: { complete: true, rawCandidateCount: 10 },
+            filter: { complete: true, selectedCount: 10, totalCandidates: 10, pendingDecisions: 0 },
+            analysis: { complete: true, successful: 10, total: 10, failed: 0 },
+            blog: { complete: true, strictReview: true, publicationVerified: true },
+            visuals: {
+                gateComplete: true, status: 'complete', complete: 10, total: 10,
+                pending: 0, failed: 0, assetsValid: true, archiveUnique: true
+            },
+            cover: { complete: false, status: 'complete' }
+        });
+        assert.match(summary, /封面 incomplete \| status=incomplete/);
+        assert.doesNotMatch(summary, /封面 incomplete \| status=complete/);
     });
 
     it('统一状态门禁与 visual:status 一样严格绑定 canonical 长图路径', () => {
