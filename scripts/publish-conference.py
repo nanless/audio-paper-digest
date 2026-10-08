@@ -1465,25 +1465,37 @@ def validate_review(generation, receipt, *, current=True):
             or {(p.get('path'), p.get('sourceSha256')) for p in pages} != {
                 (r['path'], r['sourceSha256']) for r in generation['files']}):
         raise ConferencePublicationError('review HTML 页面集合不闭合')
-    if not legacy:
-        content = receipt.get('contentReview')
-        if content is None and not current:
-            # v2 凭证的含义中途变过：早期版本写 version 2 但不写 contentReview，
-            # 当时的 validate_review 也不要求它。这 15 份已发布凭证的自哈希、
-            # files/imageFiles、generationSha256 和 HTML 门禁页面集合都对得上，
-            # 是那段代码的合法产物，不是缺陷产物；现在的发布器给每个 v2
-            # generation 都写 contentReview，缺这个字段不可能由当前代码产生。
-            # 所以只在读取已发布凭证（current=False）时按旧格式识别，新发布
-            # 和待推送的凭证照旧必须带一份通过的 contentReview。
-            return
-        content = content or {}
-        if content.get('status') != 'passed' \
-                or content.get('protocol') != content_review_protocol(load_publish_to_blog()):
+    if legacy:
+        return
+    content = receipt.get('contentReview')
+    if content is None:
+        # v2 凭证的含义中途变过：早期版本写 version 2 但不写 contentReview，
+        # 当时的 validate_review 也不要求它。那些已发布凭证的自哈希、
+        # files/imageFiles、generationSha256 和 HTML 门禁页面集合都对得上，
+        # 是那段代码的合法产物，不是缺陷产物——但它们只证明 HTML 门禁，
+        # 没有做过正文与图片审查。所以只对已发布凭证（current=False）按旧格式
+        # 识别；待推送的凭证照旧必须带一份通过的 contentReview。
+        if current:
+            raise ConferencePublicationError('会议页面语义 review 凭证缺失，必须重新 review')
+        return
+    if not isinstance(content, dict) or content.get('status') != 'passed':
+        raise ConferencePublicationError('会议页面语义 review 凭证无效')
+    reviewed = content.get('pages')
+    if [(p.get('path'), p.get('sha256'), p.get('passed')) for p in reviewed or []] != [
+            (r['path'], r['sourceSha256'], True) for r in generation['files']]:
+        raise ConferencePublicationError('逐页内容 review 与 generation 不一致')
+    protocol = content.get('protocol')
+    if current:
+        if protocol != content_review_protocol(load_publish_to_blog()):
             raise ConferencePublicationError('会议页面语义 review 凭证无效')
-        reviewed = content.get('pages')
-        if [(p.get('path'), p.get('sha256'), p.get('passed')) for p in reviewed or []] != [
-                (r['path'], r['sourceSha256'], True) for r in generation['files']]:
-            raise ConferencePublicationError('逐页内容 review 与 generation 不一致')
+    elif not isinstance(protocol, str) or not protocol \
+            or any(p.get('protocol') != protocol for p in reviewed):
+        # 已发布凭证的协议指纹绑定的是当时的审查代码、模型和 Hugo 运行时，
+        # 当前发布器已经算不出那个值。拿当前哈希去比，会让每一次发布器改动
+        # 都把已发布的会议判成无效，等于把历史凭证绑死在最新代码上。
+        # 这里只要求协议字段自身闭合：汇总协议与逐页记录一致；页面与
+        # generation 的绑定仍由上面的逐页核对保证。
+        raise ConferencePublicationError('会议页面语义 review 协议字段不闭合')
 
 
 def accept_publication(conference_id, process_id, generation, receipt, commit, image_commit, remote):

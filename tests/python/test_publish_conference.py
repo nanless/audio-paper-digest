@@ -271,6 +271,15 @@ class ConferencePublishTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'fingerprint unavailable'):
             M.content_review_protocol(reviewer)
 
+    def test_hugo_runtime_check_is_not_always_rejecting(self):
+        # 非恒真：没有运行时必须停，有运行时必须放行。否则把这条检查写成
+        # 「永远抛」也能让上面的用例通过，实际却再也发不出任何会议。
+        with self.assertRaisesRegex(M.ConferencePublicationError, 'Hugo 运行时'):
+            M.require_content_review_runtime(self.repo)
+        (self.repo / 'hugo.toml').write_text('title = "offline"\n')
+        (self.repo / 'layouts').mkdir()
+        self.assertIsNone(M.require_content_review_runtime(self.repo))
+
     def test_review_path_byte_cache_survives_protocol_change(self):
         r = self.record(data='---\ntitle: test\n---\n正文\n![图](https://example.invalid/a.png)\n'.encode())
         reviewer = FakeReviewer()
@@ -721,6 +730,51 @@ class PreContentReviewV2ReceiptTest(ConferencePublishTests):
         generation = self.v2_generation()
         with self.assertRaisesRegex(M.ConferencePublicationError, '页面集合不闭合'):
             M.validate_review(generation, self.v2_receipt(generation, pages='missing'),
+                              current=False)
+
+    def closed_content_review(self, generation, protocol, *, page_protocol=None):
+        return {'status': 'passed', 'protocol': protocol,
+                'pages': [{'path': r['path'], 'sha256': r['sourceSha256'], 'passed': True,
+                           'issues': [], 'imageCount': 3,
+                           'protocol': protocol if page_protocol is None else page_protocol}
+                          for r in generation['files']]}
+
+    def test_published_v2_with_older_review_protocol_stays_readable(self):
+        # 已发布凭证的正文审查协议指纹绑定的是当时的审查代码、模型与 Hugo 运行时，
+        # 当前发布器算不出那个值。读取已发布凭证时不能拿当前哈希去比，否则发布器
+        # 每改一次，全部已发布会议又变成 exit 1。
+        generation = self.v2_generation()
+        content = self.closed_content_review(generation, 'review-protocol-from-an-older-publisher')
+        M.validate_review(generation, self.v2_receipt(generation, content_review=content),
+                          current=False)
+
+    def test_older_review_protocol_is_still_rejected_for_an_unpushed_receipt(self):
+        # 同一条历史协议只在「读已发布凭证」时放行；待推送的新凭证仍必须由
+        # 当前发布器算出的协议签名，不能让旧协议借 current 参数混进发布链。
+        generation = self.v2_generation()
+        content = self.closed_content_review(generation, 'review-protocol-from-an-older-publisher')
+        with self.assertRaisesRegex(M.ConferencePublicationError, '语义 review'):
+            M.validate_review(generation, self.v2_receipt(generation, content_review=content),
+                              current=True)
+
+    def test_published_v2_with_inconsistent_page_protocol_is_rejected(self):
+        # 不比对当前哈希不等于不看协议：汇总协议与逐页记录必须一致。
+        generation = self.v2_generation()
+        content = self.closed_content_review(generation, 'review-protocol-a',
+                                            page_protocol='review-protocol-b')
+        with self.assertRaisesRegex(M.ConferencePublicationError, '协议字段不闭合'):
+            M.validate_review(generation, self.v2_receipt(generation, content_review=content),
+                              current=False)
+
+    def test_published_v2_without_review_protocol_is_rejected(self):
+        # 缺协议字段的凭证同样不放行，豁免的只是「等于当前哈希」这一条。
+        generation = self.v2_generation()
+        content = self.closed_content_review(generation, 'review-protocol-a')
+        content.pop('protocol')
+        for page in content['pages']:
+            page.pop('protocol')
+        with self.assertRaisesRegex(M.ConferencePublicationError, '协议字段不闭合'):
+            M.validate_review(generation, self.v2_receipt(generation, content_review=content),
                               current=False)
 
 
