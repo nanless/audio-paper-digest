@@ -448,7 +448,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
 
     console.log(`  daily_papers 共获取: ${merged.size} 篇`);
 
-    // ====== 2. 获取 papers API（补充最近1-2天的新论文）======
+    // ====== 2. 获取 papers API（补充最近 1-2 天的新论文）======
     console.log(`\n  📰 获取 papers API（最新论文补充）...`);
     let papersPage = 0;
     let papersComplete = false;

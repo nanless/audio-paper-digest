@@ -234,7 +234,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
         # 点击首页的"发布图文笔记"大按钮
         clicked = False
         try:
-            # 策略1: 用 get_by_text 精确匹配并点击
+            # 策略 1: 用 get_by_text 精确匹配并点击
             pic_btn = page.get_by_text("发布图文笔记", exact=False)
             if await pic_btn.count() > 0:
                 # 找第一个可见的
@@ -246,7 +246,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                         clicked = True
                         break
             if not clicked:
-                # 策略2: mouse.click 强制点击
+                # 策略 2: mouse.click 强制点击
                 loc = page.locator('text=发布图文笔记').first
                 if await loc.count() > 0:
                     box = await loc.bounding_box()
@@ -258,7 +258,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
             print(f"[xhs] 点击图文按钮异常: {e}")
 
         if not clicked:
-            # 策略3: evaluate 找可点击祖先
+            # 策略 3: evaluate 找可点击祖先
             try:
                 result = await page.evaluate('''() => {
                     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
@@ -325,7 +325,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
             images = images[:18]
             uploaded = False
             try:
-                # 策略1: 先点击"上传图片"按钮，再处理文件选择器
+                # 策略 1: 先点击"上传图片"按钮，再处理文件选择器
                 upload_btn = await page.wait_for_selector('button:has-text("上传图片"), div:has-text("上传图片"), span:has-text("上传图片")', timeout=5000)
                 if upload_btn:
                     # 使用 filechooser 事件来处理文件上传
@@ -338,7 +338,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
             except Exception as e:
                 print(f"[xhs] ⚠️ 文件选择器上传失败: {e}")
 
-            # 策略2: 直接找 input[type="file"]
+            # 策略 2: 直接找 input[type="file"]
             if not uploaded:
                 try:
                     file_input = await page.wait_for_selector('input[type="file"]', timeout=5000)
@@ -541,7 +541,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                 # 在另一个线程等待输入，不阻塞事件循环
                 await asyncio.to_thread(input, "[xhs] 按回车键继续发布...")
             else:
-                # 非交互式环境，等待30秒后自动继续
+                # 非交互式环境，等待 30 秒后自动继续
                 print("[xhs] 非交互式环境，30秒后自动继续...")
                 await asyncio.sleep(30)
         except (EOFError, OSError):

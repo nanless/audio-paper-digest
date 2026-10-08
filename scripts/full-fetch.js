@@ -1142,7 +1142,7 @@ function cleanOldData(filePath, name, today, options = {}) {
 
 /**
  * 从归档目录加载已分析论文的规范化 ID 集合
- * 用于跳过之前已经成功分析过的论文（避免 HF 论文在7天窗口内重复出现）
+ * 用于跳过之前已经成功分析过的论文（避免 HF 论文在 7 天窗口内重复出现）
  */
 function loadAnalyzedIdsFromArchive() {
     const analyzedIds = new Set();
@@ -1714,7 +1714,7 @@ async function runFullFetch() {
     const outputFile = RESULT_FILE;
     const successfulAnalysisIds = loadCurrentSuccessfulAnalysisIds(outputFile, today);
 
-    // ========== 第4.8步：保存所有爬到论文到 papers.json（提前保存，防止后续中断丢失）==========
+    // ========== 第 4.8 步：保存所有爬到论文到 papers.json（提前保存，防止后续中断丢失）==========
     console.log('\n💾 保存所有爬取论文到 papers.json 去重数据库');
     let newPaperCount = 0;
     let pendingPaperCount = 0;
