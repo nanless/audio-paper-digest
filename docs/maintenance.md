@@ -15,7 +15,7 @@
 | 历史直接重写来源及页面对应 | `historical-direct-*`、`historical-conference-*-sources/projections` | 来源目录、计划、队列、执行、汇总、arXiv 失败交接入口及历史文档 |
 | 分析恢复 | `analysis-engine.js`、`deep-analyzer.js` | 所有分析入口与 digest 状态 |
 | 分析结构或评分 | `analysis-contract.js` 与提示词 | Node/Python 解析器和发布器 |
-| Reader 写作、图表或修复 | `api-reader-article.md`、`api-reader-repair.md`、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
+| Reader 写作、图表或修复 | `api-reader-article-v2.md`、`api-reader-repair-v2.md`（当前生效；v1 冻结在无后缀的同名文件）、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
 | 博客事务 | `publish-to-blog.py` | 三个独立入口与审查凭证测试 |
 | 视觉状态 | 两个 state JS 与 integration | 规划、status 与 record |
 | 命令别名 | `package.json` | README、AGENTS、SKILL 与 docs |
@@ -44,7 +44,7 @@
 5. 重试反馈能定位问题并限制修改范围，不使整篇内容无故变化。
 6. 读者正文没有模板句、证据 ID 或流程说明。
 
-提示词正文按版本分文件，登记表在 `scripts/lib/prompt-text-versions.js`：v1 永久冻结在原路径（上表列出的提示词就是 v1），当前版本是带 -v2 后缀的同名文件。改文字只新增版本文件，不动冻结的 v1。旧记录按自己声明的版本取对应路径复算：字段缺失按 v1 处理，未知版本直接报错。升级版本后要同步核对阶段指纹，以及会议和 manual 的提示词清单。
+提示词正文按版本分文件，登记表在 `scripts/lib/prompt-text-versions.js`：v1 永久冻结在原路径（不带 -v2 后缀的同名文件），当前版本是带 -v2 后缀的同名文件，上表 Reader 一行列的就是当前版本。改文字只新增版本文件，不动冻结的 v1。旧记录按自己声明的版本取对应路径复算：字段缺失按 v1 处理，未知版本直接报错。升级版本后要同步核对阶段指纹，以及会议和 manual 的提示词清单。
 
 评分提示词还须保留八维顺序、范围、开源固定锚点、证据 ID 和代码计算的上限。Reader 提示词须抽检术语组合的解释、表格前后的说明和相邻图文，并保留未传入像素时不能猜图的限制。
 

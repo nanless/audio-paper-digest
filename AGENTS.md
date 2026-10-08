@@ -8,7 +8,7 @@
 
 ### 工作区分工（必须先核对 `pwd`）
 
-- `/Users/francis7999/code/github_repos/audio-paper-digest` 专用于新论文筛选、日更博客生成、审查和推送；不在这个工作区运行长时间全历史重写。
+- `/Users/francis7999/code/github_repos/audio-paper-digest` 专用于新论文筛选、日更博客生成、审查和推送。用户已决定历史功能也在当前目录跑：本机 `.env` 设了 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`，`history:*` 入口会跨角色放行并打印提示。这个开关只放宽「daily 工作区执行 history 命令」，history 工作区执行 daily 命令仍然拒绝；它不改变下一条的发布时间约束。
 - `/Users/francis7999/code/github_repos/audio-paper-digest-rewrite-all` 专用于全历史论文页、每日汇总和会议汇总的来源核验、重写、重新分类、私有页面生成和历史发布。
 - 两个工作区不得同时生成、审查、推送博客，或修改同一远端 `main`。历史工作区发布前，必须停止日更发布，同步代码仓库和博客仓库的最新远端 `main`，再基于最新 Git 基线重新生成发布凭证。
 - 长期历史任务的运行数据只保存在 `audio-paper-digest-rewrite-all/data/runtime/`；不把检查点复制回日更工作区，也不手工合并两边的运行数据 JSON。
@@ -90,7 +90,7 @@ npm run digest:prepare -- YYYY-MM-DD
 | API Reader 输出 | 48000 tokens | `PD_API_READER_MAX_TOKENS` |
 | Reader 证据 / 总上下文 | 180000 / 240000 字符 | 对应 `PD_API_READER_*_MAX_CHARS` |
 | Reader 重阶段并发 | 5，范围 1–5 | `PD_API_READER_CONCURRENCY` |
-| 独立博客页 review 并发 | 5，范围 1–5 | `PD_BLOG_REVIEW_CONCURRENCY` |
+| 独立博客页审查并发 | 5，范围 1–5 | `PD_BLOG_REVIEW_CONCURRENCY` |
 
 主分析最多使用 200000 字符，并从全文均衡取样；后处理只接收任务相关证据。阶段指纹包含预算和证据选择版本。OpenAI Responses 只有 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE，`PD_OPENAI_RESPONSES_STREAM` 与 `PD_OPENAI_RESPONSES_REASONING_EFFORT` 对 Chat Completions 请求无效；`incomplete/max_output_tokens` 必须记为截断失败，不得接受半截 JSON。
 

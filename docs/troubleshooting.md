@@ -21,7 +21,7 @@ npm run workspace:role -- status
 
 Muse 每次请求使用独立的 CONNECT 代理连接对象，用完关闭，不能改成直连。`incomplete/max_output_tokens` 表示输出被截断；调整证据、输出预算或提示词后重试，不能接受半截 JSON。
 
-配置备用账号后，可查看 `data/runtime/llm-account-pool.json` 中的 `activeAccountId`、`limitClass` 和 `blockedUntil`。它不含原始密钥，但稳定凭据指纹仍属敏感记录，须保持 `0600` 权限，不上传或归档。
+配置备用账号后，可查看 `data/runtime/llm-account-pool.json` 中的 `activeAccountId`、`limitName` 和 `blockedUntil`。它不含原始密钥，但稳定凭据指纹仍属敏感记录，须保持 `0600` 权限，不上传或归档。
 
 只有当前账号返回明确 `GoUsageLimitError` 或 `Insufficient balance` 时，系统才切换到后续账号。普通认证 401 会停止本次运行，普通 429 按原有限流规则退避，不切账号。不要为切回主账号删除或修改状态；冷却到期也不会自动切回。状态损坏、版本计数不合法或路径不安全时，程序会在网络请求前停止。
 

@@ -42,7 +42,7 @@ Candidates are merged by normalized arXiv ID, deduplicated against published blo
 
 The keyword layer keeps papers that might be relevant. The model makes the final call:
 
-- Papers in the core categories `eess.AS` and `cs.SD` always reach the model.
+- The keyword prefilter's core audio categories are only `eess.AS` and `cs.SD` (`CORE_AUDIO_CATEGORIES` in `scripts/lib/keyword-prefilter.js`); papers in either always reach the model. The fetch config in `scripts/config.js` separately marks `eess.SP` as `priority: 'core'`, which only affects fetch order and cross-category deduplication, not the keyword prefilter.
 - An abstract under 80 characters cannot be rejected on keywords alone.
 - Matches for audio, speech, music, acoustics, multimodal speech, and common models or datasets reach the model.
 - In supplementary categories, only complete abstracts with no clear match may be rejected by keyword rules.

@@ -15,7 +15,7 @@ This guide is for maintainers changing the default API, shared publication, prom
 | Historical direct sources/page mappings | `historical-direct-*`, `historical-conference-*-sources/projections` | Catalog, plan, scheduler, runner, aggregate, arXiv failure handoffs, history docs |
 | Recovery | `analysis-engine.js`, `deep-analyzer.js` | All analysis entries and status |
 | Analysis/scoring | `analysis-contract.js` and prompts | Node/Python parsers, publisher |
-| Reader writing/tables/repair | `api-reader-article.md`, `api-reader-repair.md`, `lib/reader-contract.js`, `lib/reader-tables.js`, `lib/reader-repair.js` | Validators, candidates and stage fingerprints, blog review |
+| Reader writing/tables/repair | `api-reader-article-v2.md`, `api-reader-repair-v2.md` (current versions; v1 stays frozen in the same names without the suffix), `lib/reader-contract.js`, `lib/reader-tables.js`, `lib/reader-repair.js` | Validators, candidates and stage fingerprints, blog review |
 | Blog transaction | `publish-to-blog.py` | Three entry points and receipt tests |
 | Visual state | State modules and integration | Planner, status, record |
 | Command alias | `package.json` | User and Agent documentation |
@@ -37,7 +37,7 @@ This guide is for maintainers changing the default API, shared publication, prom
 
 `loadPrompt()` reads the first fenced block. Check that placeholders match the caller, the output matches the parser, inner examples do not break the outer fence, and the prompt SHA belongs to the correct stage fingerprint. Retry feedback has to locate the problem and limit what changes. Reader prose must contain no template sentences, evidence IDs, or workflow commentary.
 
-Prompt text is versioned by file and registered in `scripts/lib/prompt-text-versions.js`: v1 stays frozen at its original path (the prompt files in the table above are v1), and the current version is the same name with a -v2 suffix. New wording goes into a new version file; never edit the frozen v1. An older record is recomputed from the version it declares: a missing field means v1, and an unknown version is an error. After upgrading a version, recheck stage fingerprints and the conference and manual prompt lists.
+Prompt text is versioned by file and registered in `scripts/lib/prompt-text-versions.js`: v1 stays frozen at its original path (the same file names without the -v2 suffix), and the current version is the same name with a -v2 suffix; the Reader row in the table above lists the current versions. New wording goes into a new version file; never edit the frozen v1. An older record is recomputed from the version it declares: a missing field means v1, and an unknown version is an error. After upgrading a version, recheck stage fingerprints and the conference and manual prompt lists.
 
 Scoring changes must preserve dimension order and ranges, Open Source anchors, evidence IDs, and code-calculated caps. Sample Reader output for term bridges, table explanations, adjacent figure discussion, and limits on descriptions without pixels.
 

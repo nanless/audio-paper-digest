@@ -21,7 +21,7 @@ Check that the model name matches project configuration and that the command run
 
 Muse uses a separate CONNECT proxy connection object for each request and destroys it afterward. Do not switch it to direct access. `incomplete/max_output_tokens` means truncation: adjust evidence, output budgets, or the prompt and retry. Never accept partial JSON.
 
-With fallback accounts configured, inspect `activeAccountId`, `limitClass`, and `blockedUntil` in `data/runtime/llm-account-pool.json`. It contains no raw key, but the credential fingerprints are still sensitive: keep permissions at `0600` and do not upload or archive it.
+With fallback accounts configured, inspect `activeAccountId`, `limitName`, and `blockedUntil` in `data/runtime/llm-account-pool.json`. It contains no raw key, but the credential fingerprints are still sensitive: keep permissions at `0600` and do not upload or archive it.
 
 Only an explicit `GoUsageLimitError` or `Insufficient balance` on the current account switches to a later account. Other authentication 401 responses stop the run, while a generic 429 keeps the account and follows rate-limit backoff. Do not delete or edit state to force a return to the primary account. A cooldown expiring does not switch back automatically. Corrupt state, an invalid generation counter, or an unsafe path stops requests before any network I/O.
 

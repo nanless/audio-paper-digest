@@ -33,6 +33,8 @@ cp env.example .env
 
 先确认当前工作区用途，再运行 `npm run workspace:role -- status`。日更目录必须是 `daily`，全历史目录必须是 `history`。角色标记缺失或真实路径不符时先停止，确认用途后才用 `npm run workspace:role -- set daily|history [--force]` 绑定；不要无条件强制设置。
 
+本机日更目录已在 `.env` 设 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`：`history:*` 入口会跨角色放行并打印提示。这个开关只放宽「daily 工作区执行 history 命令」，反向仍拒绝，也不解除「两个工作区不得同时发布」。
+
 在 `.env` 至少配置以下字段。仓库文档当前推荐模型为 `mimo-v2.6-flash`，实际模型由项目配置指定：
 
 ```dotenv
@@ -72,7 +74,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。默认发布入口要求 Python 3.11+ 
 
 `scripts/full-fetch.js` 先按日期归档当前数据，再抓取 7 个 arXiv 类别与 HuggingFace Papers。每个必需来源都须有完整检查点、候选数量和稳定内容 SHA，缺少其中任何一项都不能算抓取完成。arXiv/HF 均强制使用项目代理。
 
-`raw-candidates.json` 保存合并且博客去重后的全集。关键词预筛只对摘要完整且明显未命中音频词族的补充类别判为不相关；核心类别、短摘要和词族命中项必须进入 LLM。筛选结果只有在 `filter-decisions.json` 完整覆盖 raw，且 `filtered-papers.json` 精确等于相关决定中的论文减去显式排除项时才算完成。
+`raw-candidates.json` 保存合并且博客去重后的全集。关键词预筛只对摘要完整且明显未命中音频词族的补充类别判为不相关；`eess.AS` 和 `cs.SD` 这两个核心音频类别（`CORE_AUDIO_CATEGORIES`）、短摘要和词族命中项必须进入 LLM。抓取配置 `scripts/config.js` 的 `priority: 'core'` 还包含 `eess.SP`，那是抓取侧优先级，不豁免关键词预筛。筛选结果只有在 `filter-decisions.json` 完整覆盖 raw，且 `filtered-papers.json` 精确等于相关决定中的论文减去显式排除项时才算完成。
 
 ### 3.2 全文分析与 Reader
 
