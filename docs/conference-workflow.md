@@ -361,7 +361,7 @@ npm run conference:verify-ledger -- --ledger icassp-2026.json
 npm run conference:validate-run -- --run icassp-2026-pilot.json --ledger icassp-2026.json
 ```
 
-这些只读命令只接收私有运行目录直属 `.json` 文件名，不导入、不联网、不调用模型。`verify-ledger` 重验 metadata、PDF、文本及结构化证据原字节 SHA；run 校验还核对指定账本的 SHA、会议身份和成员，手写 `ledgerSha256` 不能代替实际重验。
+这些只读命令只接收私有运行目录直属 `.json` 文件名，不导入、不联网、不调用模型。`verify-ledger` 重验 metadata、PDF、文本及结构化证据原字节 SHA；运行校验还核对指定账本的 SHA、会议身份和成员，手写 `ledgerSha256` 不能代替实际重验。
 
 ### 发现、提取与人工复核
 
@@ -517,7 +517,7 @@ npm run conference:import -- --dry-run \
 }
 ```
 
-创建 run 仍核验全部上游记录：
+创建运行仍核验全部上游记录：
 
 ```bash
 npm run conference:plan -- --dry-run \

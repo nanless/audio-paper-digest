@@ -156,7 +156,7 @@ npm run rewrite:source -- signed-patch --run-id "$rewrite_run_id" --patch review
 ```json
 {
   "version": 1,
-  "runId": "原 run UUID",
+  "runId": "原运行 UUID",
   "paperId": "2609.xxxxx",
   "parentPaperSha256": "stableHash(当前完整 paper)",
   "parentArticleSha256": "当前 apiReaderArticleSha256",
@@ -184,7 +184,7 @@ npm run rewrite:source -- signed-patch --run-id "$rewrite_run_id" --patch review
   runId, paperId,
   parentPaperSha256, // stableHash(当前待审 operator 完整 paper)
   articleSha256, planSha256, sourceSha256,
-  reportFile,       // 同 run source-audits/ 直属 .md 文件名
+  reportFile,       // 同一次运行的 source-audits/ 直属 .md 文件名
   reportSha256,     // 独立报告的原始文件字节 SHA256
   reviewer, verdict: 'pass'
 }

@@ -160,7 +160,7 @@ npm run history:direct-aggregate -- aggregate --apply --plan-file /abs/direct-re
   (--daily YYYY-MM-DD|--conference conference-key)
 ```
 
-projection v3 按冻结的 `outboundPostLinks` 将会议任务页对应到论文成员，并保存逐页来源 SHA 和完整覆盖记录。选择会议汇总时，任务页与会议总页在同一 run 生成，任务页先写，总页最后写。没有论文成员的日汇总明确标为 `retain-unchanged`，仍纳入覆盖检查。
+projection v3 按冻结的 `outboundPostLinks` 将会议任务页对应到论文成员，并保存逐页来源 SHA 和完整覆盖记录。选择会议汇总时，任务页与会议总页在同一运行生成，任务页先写，总页最后写。没有论文成员的日汇总明确标为 `retain-unchanged`，仍纳入覆盖检查。
 
 实际发布使用 `history:direct-publication`，依次 plan、generate、review、publish、status。逐页通过记录只按路径与内容 SHA 复用，本批仍执行确定性/Hugo 检查并生成审查凭证。`activate --apply` 被禁用；`publish --apply` 在共享博客锁内处理激活、提交、推送和远端 OID。精确参数与视觉处置见[独立历史发布](history-direct-publication.md)。旧 `history:publication` 只提供 plan/generate 私有文件，不能用来真正发布。
 
