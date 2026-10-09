@@ -1,4 +1,6 @@
+import copy
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -89,6 +91,27 @@ class ActivationTransactionTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 activation.assert_no_pending(current, '2026-09-04')
 
+    def test_fifo_pending_marker_fails_without_waiting_for_a_writer(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            current = Path(tmp).resolve()
+            marker = activation.marker_path(current, '2026-09-04')
+            marker.parent.mkdir()
+            os.mkfifo(marker, 0o600)
+            before = marker.lstat()
+            script = (
+                'import sys; sys.path.insert(0, sys.argv[1]); '
+                'import publication_activation as activation; '
+                'activation.assert_no_pending(sys.argv[2], "2026-09-04")'
+            )
+            result = subprocess.run(
+                [sys.executable, '-c', script, str(Path(activation.__file__).parent), str(current)],
+                capture_output=True, text=True, timeout=3,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('Unsafe activation file', result.stderr)
+            self.assertEqual(marker.lstat().st_ino, before.st_ino)
+            self.assertEqual(marker.lstat().st_mode, before.st_mode)
+
     def test_completed_marker_must_bind_intent_final_run_and_archive(self):
         for drift in ('intent', 'final', 'run', 'archive'):
             with self.subTest(drift=drift), tempfile.TemporaryDirectory() as tmp:
@@ -163,14 +186,14 @@ class ActivationTransactionTest(unittest.TestCase):
 
 
 class ActivationPreflightTest(unittest.TestCase):
-    def fixture(self, root):
+    def fixture(self, root, outside=None):
         root = root.resolve(); current = root / 'current'; current.mkdir()
         repo = root / 'blog'; repo.mkdir()
         run = root / 'run-id'; run.mkdir()
         date = '2026-09-04'; head = 'b' * 40; old = 'a' * 40
         page = repo / 'page.md'; page.write_text('current single page')
         ids = ['2609.03622']
-        canonical = {'generation': 831, 'papers': [{'arxivId': ids[0]}],
+        canonical = {'batchDate': date, 'generation': 831, 'papers': [{'arxivId': ids[0]}] + (outside or []),
                      'freshRewritePromotion': {'runId': run.name}}
         canonical_raw = activation.encoded(canonical)
         (current / 'deep-analysis-result.json').write_bytes(canonical_raw)
@@ -181,6 +204,12 @@ class ActivationPreflightTest(unittest.TestCase):
             activation.write(run / relative, raw)
             baseline['files'].append({'category': category, 'relativePath': name,
                 'backupPath': relative, 'sha256': activation.sha(raw)})
+        old_canonical = copy.deepcopy(canonical)
+        old_canonical['generation'] = 830
+        old_canonical.pop('freshRewritePromotion')
+        old_raw = activation.encoded(old_canonical)
+        backup('data', 'deep-analysis-result.json', old_raw)
+        baseline['canonical'] = {'sha256': activation.sha(old_raw), 'generation': 830}
         backup('blog', 'page.md', page.read_bytes())
         for scope, commit in [('', old), ('-single-2609-03622-fixture', head)]:
             stem = date + scope
@@ -220,6 +249,53 @@ class ActivationPreflightTest(unittest.TestCase):
             self.assertEqual([c.kwargs['commit'] for c in module.validate_git_commit_against_review_receipt.call_args_list],
                              ['b' * 40, 'a' * 40])
             self.assertEqual(before, {str(p): p.read_bytes() for p in Path(tmp).rglob('*') if p.is_file()})
+
+    def test_preflight_accepts_exactly_preserved_other_date_papers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            outside = [{'arxivId': '2608.99999', 'fetchBatchDate': '2026-08-31',
+                        'analysis': '原有分析正文', 'metadata': {'title': 'Unchanged'}}]
+            module, run, current, repo = self.fixture(Path(tmp), outside=outside)
+            before = {str(path): path.read_bytes() for path in Path(tmp).rglob('*') if path.is_file()}
+            intent = activation.prepare_intent(module, run)
+            self.assertEqual(intent['paperIds'], ['2609.03622'])
+            self.assertEqual(before, {str(path): path.read_bytes() for path in Path(tmp).rglob('*') if path.is_file()})
+
+    def test_preflight_rejects_changed_scope_even_with_recomputed_promotion_sha(self):
+        for change in ('outside-content', 'outside-delete', 'outside-add', 'extra-target',
+                       'missing-target', 'duplicate-id', 'target-date', 'missing-backup', 'backup-bytes'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
+                outside = [{'arxivId': '2608.99999', 'fetchBatchDate': '2026-08-31', 'analysis': '保留正文'}]
+                module, run, current, repo = self.fixture(Path(tmp), outside=outside)
+                target = current / 'deep-analysis-result.json'
+                canonical = json.loads(target.read_bytes())
+                if change == 'outside-content':
+                    canonical['papers'][1]['analysis'] = '另一份正文'
+                elif change == 'outside-delete':
+                    canonical['papers'].pop()
+                elif change == 'outside-add':
+                    canonical['papers'].append({'arxivId': '2608.88888', 'fetchBatchDate': '2026-08-31'})
+                elif change == 'extra-target':
+                    canonical['papers'].append({'arxivId': '2609.11111', 'fetchBatchDate': '2026-09-04'})
+                elif change == 'missing-target':
+                    canonical['papers'].pop(0)
+                elif change == 'duplicate-id':
+                    canonical['papers'].append(copy.deepcopy(canonical['papers'][0]))
+                elif change == 'target-date':
+                    canonical['papers'][0]['fetchBatchDate'] = '2026-08-31'
+                elif change == 'missing-backup':
+                    (run / 'baseline-files/data/deep-analysis-result.json').unlink()
+                elif change == 'backup-bytes':
+                    (run / 'baseline-files/data/deep-analysis-result.json').write_text('{}')
+                raw = activation.encoded(canonical)
+                target.write_bytes(raw)
+                promotion_path = run / 'promotion.json'
+                promotion = json.loads(promotion_path.read_bytes())
+                promotion['canonicalSha256'] = activation.sha(raw)
+                promotion_path.write_bytes(activation.encoded(promotion))
+                before = {str(path): path.read_bytes() for path in Path(tmp).rglob('*') if path.is_file()}
+                with self.assertRaises((ValueError, OSError)):
+                    activation.prepare_intent(module, run)
+                self.assertEqual(before, {str(path): path.read_bytes() for path in Path(tmp).rglob('*') if path.is_file()})
 
     def test_preflight_rejects_canonical_blog_remote_and_receipt_drift(self):
         for drift in ('canonical', 'blog', 'remote', 'identity', 'receipt', 'extra'):

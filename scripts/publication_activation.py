@@ -43,7 +43,7 @@ def safe_dir(path, create=False):
 def read(path):
     path = Path(path)
     safe_dir(path.parent)
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | getattr(os, 'O_NONBLOCK', 0))
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink not in (1, 2) or info.st_size > 256 * 1024 * 1024:
@@ -224,6 +224,55 @@ def retire_files(current, run_dir, intent, after_move=lambda _index: None, valid
     return completion
 
 
+def verify_paper_scope(run_dir, run, baseline, analysis):
+    """本批论文必须完整；其他日期记录须与已封存的旧正式结果相同。"""
+    expected = run.get('paperIds')
+    if not isinstance(expected, list) or not expected or any(
+            not isinstance(value, str) or not value for value in expected
+    ) or len(set(expected)) != len(expected):
+        raise ValueError('激活运行的论文集合无效或重复')
+    expected = set(expected)
+
+    def split_papers(payload):
+        if not isinstance(payload, dict) or not isinstance(payload.get('papers'), list):
+            raise ValueError('激活正式结果缺少论文列表')
+        by_id = {}
+        for paper in payload['papers']:
+            paper_id = paper.get('arxivId') if isinstance(paper, dict) else None
+            if not isinstance(paper_id, str) or not paper_id or paper_id in by_id:
+                raise ValueError('激活正式结果包含无效或重复论文 ID')
+            by_id[paper_id] = paper
+        target_date_ids = set()
+        for paper_id, paper in by_id.items():
+            fetched_at = paper.get('fetchedAt') or ''
+            if not isinstance(fetched_at, str):
+                raise ValueError('激活论文的抓取时间不是字符串')
+            date = (paper.get('fetchBatchDate') or paper.get('batchDate')
+                    or fetched_at[:10] or payload.get('batchDate'))
+            if date == run['date']:
+                target_date_ids.add(paper_id)
+        if target_date_ids != expected or not expected.issubset(by_id):
+            raise ValueError('激活日期的论文集合与运行不一致')
+        return {paper_id: paper for paper_id, paper in by_id.items() if paper_id not in expected}
+
+    current_outside = split_papers(analysis)
+    records = [record for record in baseline.get('files', [])
+               if record.get('category') == 'data'
+               and record.get('relativePath') == 'deep-analysis-result.json']
+    if len(records) != 1:
+        raise ValueError('激活基线缺少唯一的旧正式结果备份，无法核验其他日期论文')
+    record = records[0]
+    backup_path = record.get('backupPath')
+    if not isinstance(backup_path, str) or not backup_path.startswith('baseline-files/'):
+        raise ValueError('旧正式结果备份路径不在激活基线内')
+    raw = read(child(run_dir, backup_path))
+    if sha(raw) != record.get('sha256') or sha(raw) != baseline.get('canonical', {}).get('sha256'):
+        raise ValueError('旧正式结果备份与激活基线的 SHA 不一致')
+    old_outside = split_papers(json.loads(raw))
+    if encoded(old_outside) != encoded(current_outside):
+        raise ValueError('其他日期论文相对基线发生了新增、删除或内容变更')
+
+
 def prepare_intent(module, run_dir):
     """只读预检，包括到各自原始提交上读取旧的发布凭证。"""
     run_dir = safe_dir(run_dir)
@@ -241,9 +290,9 @@ def prepare_intent(module, run_dir):
             or promotion.get('baselineSha256') != sha(baseline_raw) \
             or sha(analysis_result_bytes) != promotion.get('canonicalSha256') \
             or analysis_result.get('generation') != promotion.get('canonicalGeneration') \
-            or analysis_result.get('freshRewritePromotion', {}).get('runId') != run['runId'] \
-            or sorted(p.get('arxivId', '') for p in analysis_result.get('papers', [])) != sorted(run['paperIds']):
+            or analysis_result.get('freshRewritePromotion', {}).get('runId') != run['runId']:
         raise ValueError('已晋升运行、基线与正式分析结果之间对不上')
+    verify_paper_scope(run_dir, run, baseline, analysis_result)
     git = lambda args: module._run_git(args, text=True, check=True).stdout.strip()
     head = git(['rev-parse', 'HEAD'])
     if head != baseline['blog']['head'] or git(['branch', '--show-current']) != 'main' \
