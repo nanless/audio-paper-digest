@@ -13,7 +13,7 @@ const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.
     && Object.keys(value).sort().join(',') === keys.slice().sort().join(',');
 
 function readPrivate(filename) {
-    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600 || stat.size > 20 * 1024 * 1024) {

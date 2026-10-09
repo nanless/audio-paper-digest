@@ -53,7 +53,7 @@ function safeDirectory(directory, create = false) {
 function readBytes(filename) {
     let fd;
     try {
-        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.nlink !== 1 || stat.size > 64 * 1024 * 1024) throw fail('Unsafe or oversized fresh cache file');
         return fs.readFileSync(fd);

@@ -74,7 +74,7 @@ function safeDirectory(value, create = false, label = 'directory') {
 }
 
 function readPrivateBytes(filename, label, maximum = 4 * 1024 * 1024) {
-    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.nlink !== 1 || stat.size > maximum
@@ -96,7 +96,7 @@ function writePrivateAtomic(filename, value) {
     const bytes = Buffer.from(`${JSON.stringify(canonical(value), null, 2)}\n`, 'utf8');
     const directory = safeDirectory(path.dirname(filename), true, 'daily source run directory');
     if (fs.existsSync(filename)) {
-        const existing = fs.readFileSync(filename);
+        const existing = readPrivateBytes(filename, 'daily source run manifest');
         if (!existing.equals(bytes) || (fs.lstatSync(filename).mode & 0o777) !== 0o600) {
             fail(`每日来源运行清单不同：${filename}`);
         }
@@ -109,7 +109,7 @@ function writePrivateAtomic(filename, value) {
     try { fs.linkSync(temporary, filename); }
     catch (error) {
         if (error.code !== 'EEXIST') throw error;
-        const existing = fs.readFileSync(filename);
+        const existing = readPrivateBytes(filename, 'daily source run manifest');
         if (!existing.equals(bytes)) throw error;
     } finally { fs.unlinkSync(temporary); }
 }
