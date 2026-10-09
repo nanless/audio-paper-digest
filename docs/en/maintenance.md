@@ -65,9 +65,13 @@ Use atomic JSON writes. A read-modify-write operation acquires the shared locks,
 
 Long tasks use heartbeats and leases, and only the implementation's owner and lease checks may authorize recovery. Node analysis stops claiming papers after a run-level failure. Python page review and channel summaries use `run_bounded_llm_tasks()` to limit submitted work, stop new submissions after a run-level failure, and wait for in-flight saves before reporting the original error. Concurrent save failures are retained too; ordinary paper failures follow the caller’s policy.
 
+Python `path_config.file_lock()` retains its directory and owner format. Reclaimers coordinate through a separate marker and recheck directory identity, owner-file identity, and bytes before removal. Creation cleanup and release preserve replacement owners and unknown files. A heartbeat failure is reported on normal exit from the critical section; an exception from the operation itself still propagates. Neither outcome rolls back writes already performed. This protocol is separate from the blog Git lock.
+
 ## Security and Logs
 
 Use HTTPS for external resources, except loopback tests. Revalidate DNS/IP on external redirects. Every nonempty physical log line uses a millisecond Beijing timestamp. Logs and `.env` use `0600` permissions. Redact authentication headers, cookies, tokens, secrets, passwords, configured key values, and URL userinfo. Never commit `data/`, `logs/`, `.env`, backups, or caches.
+
+Python log pruning records directory-read, file-inspection, and deletion errors in `problems` and prints a redacted warning. It does not retry a failed deletion during the same pass. A missing log directory is still a valid empty result; pruning diagnostics do not change model-request results.
 
 ## Runtime storage
 
