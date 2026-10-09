@@ -122,6 +122,54 @@ test('发布事务能沿计划、生成、审查、激活和远端凭证一路�
         assert.equal(status.visual.complete, false);
         assert.equal(status.visual.audited, true);
 
+        // 先构造真正走完各阶段的事务，再逐项破坏上游记录并重新计算自哈希。
+        // 自哈希完整不能代替记录之间的对应关系，也不能绕过已发布重放的核验。
+        const checkedPlan = api.loadPlan({ outputRoot, publicationId });
+        const rejectedChanges = [
+            ['generation/manifest.json', 'generationSha256', value => { value.files = []; value.fileSetSha256 = api.stableHash([]); }],
+            ['generation/manifest.json', 'generationSha256', value => { value.authorityProofSha256 = hash('0'); }],
+            ['generation/manifest.json', 'generationSha256', value => { value.remoteMainOid = oid('0'); }],
+            ['review.json', 'reviewSha256', value => { value.generationSha256 = hash('0'); }],
+            ['review.json', 'reviewSha256', value => { value.generationFileSha256 = hash('0'); }],
+            ['review.json', 'reviewSha256', value => { value.hugoGate = { status: 'failed' }; }],
+            ['review.json', 'reviewSha256', value => { value.remoteIdentitySha256 = hash('0'); }],
+            ['review.json', 'reviewSha256', value => { value.reviewedAt = 'not-a-date'; }],
+            ['activation/receipt.json', 'activationSha256', value => { value.reviewSha256 = hash('0'); }],
+            ['activation/receipt.json', 'activationSha256', value => { value.generationSha256 = hash('0'); }],
+            ['commit.json', 'commitSha256', value => { value.reviewSha256 = hash('0'); }],
+            ['commit.json', 'commitSha256', value => { value.activationSha256 = hash('0'); }],
+            ['commit.json', 'commitSha256', value => { value.publicationCommit = oid('0'); }],
+            ['publication.json', 'publicationSha256', value => { value.reviewSha256 = hash('0'); }],
+            ['publication.json', 'publicationSha256', value => { value.activationSha256 = hash('0'); }],
+            ['publication.json', 'publicationSha256', value => { value.commitSha256 = hash('0'); }],
+            ['publication.json', 'publicationSha256', value => { value.exactDeltaSha256 = hash('0'); }],
+            ['publication.json', 'publicationSha256', value => { value.remoteName = 'another-remote'; }],
+            ['publication.json', 'publicationSha256', value => { value.remoteIdentitySha256 = hash('0'); }]
+        ];
+        for (const [relative, hashKey, alter] of rejectedChanges) {
+            const filename = path.join(checkedPlan.directory, relative);
+            const original = fs.readFileSync(filename);
+            const changed = JSON.parse(original);
+            alter(changed); delete changed[hashKey]; changed[hashKey] = api.stableHash(changed);
+            fs.writeFileSync(filename, JSON.stringify(changed));
+            try {
+                assert.equal(api.status({ outputRoot, publicationId, blogRepo, liveRemote: true }, deps).complete,
+                    false, `损坏的 ${relative} 不得报完成`);
+                assert.throws(() => api.publish({ outputRoot, publicationId, blogRepo, apply: true }, deps),
+                    undefined, `损坏的 ${relative} 不得重放为已发布`);
+            } finally { fs.writeFileSync(filename, original); }
+        }
+        const commitFilename = path.join(checkedPlan.directory, 'commit.json');
+        const originalCommit = fs.readFileSync(commitFilename);
+        fs.unlinkSync(commitFilename);
+        try {
+            assert.equal(api.status({ outputRoot, publicationId, blogRepo, liveRemote: true }, deps).complete, false);
+            assert.throws(() => api.publish({ outputRoot, publicationId, blogRepo, apply: true }, deps));
+        } finally { fs.writeFileSync(commitFilename, originalCommit); }
+        assert.equal(api.status({ outputRoot, publicationId, blogRepo, liveRemote: true }, deps).complete, true);
+        assert.equal(api.publish({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'already-published');
+
+
         const secondPublicationId = '22345678-1234-4123-8123-123456789abc';
         assert.notEqual(secondPublicationId, publicationId);
         const secondRoot = path.join(root, 'cli-transaction');

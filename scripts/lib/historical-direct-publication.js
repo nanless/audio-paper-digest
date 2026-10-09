@@ -487,9 +487,17 @@ function loadGeneration(loadedPlan) {
     const root = safeRoot(generationDirectory(loadedPlan.directory), 'generation directory');
     const loaded = strictJsonFile(path.join(root, 'manifest.json'), 'generation manifest'); const value = loaded.value;
     const body = clone(value); delete body.generationSha256;
+    const expectedFiles = loadedPlan.plan.files.map(({ path, operation, baselineSha256, sha256 }) =>
+        ({ path, operation, baselineSha256, sha256 }));
     if (value.contract !== GENERATION_CONTRACT || value.version !== VERSION || value.publicationId !== loadedPlan.plan.publicationId
         || value.planSha256 !== loadedPlan.plan.planSha256 || value.planFileSha256 !== loadedPlan.fileSha256
         || value.generationSha256 !== stableHash(body) || value.fileSetSha256 !== stableHash(value.files)
+        || !Array.isArray(value.files) || stableHash(value.files) !== stableHash(expectedFiles)
+        || value.authorityProofSha256 !== loadedPlan.plan.authorityProofSha256
+        || value.baseHead !== loadedPlan.plan.blogBaseline.head
+        || value.remoteName !== loadedPlan.plan.blogBaseline.remoteName
+        || value.remoteIdentitySha256 !== loadedPlan.plan.blogBaseline.remoteIdentitySha256
+        || value.remoteMainOid !== loadedPlan.plan.blogBaseline.remoteOid
         || value.exactDeltaSha256 !== loadedPlan.plan.exactDeltaSha256) fail('generation manifest drifted');
     for (const record of value.files) if (readRegular(inside(root, path.posix.join('bundle', record.path), 'generation bundle')).sha256 !== record.sha256) fail(`generation bundle drifted: ${record.path}`);
     return { root, manifest: value, fileSha256: loaded.fileSha256 };
@@ -733,8 +741,16 @@ function loadReview(loadedPlan) {
         || value.planSha256 !== loadedPlan.plan.planSha256 || value.strictReview !== true || value.reviewSha256 !== stableHash(body)
         || value.reviewMode !== 'historical-semantic-multimodal-v1'
         || value.fileSetSha256 !== stableHash(value.files) || value.baseHead !== loadedPlan.plan.blogBaseline.head
+        || value.generationSha256 !== generation.manifest.generationSha256
+        || value.generationFileSha256 !== generation.fileSha256
+        || value.remoteName !== loadedPlan.plan.blogBaseline.remoteName
+        || value.remoteIdentitySha256 !== loadedPlan.plan.blogBaseline.remoteIdentitySha256
+        || value.remoteMainOid !== loadedPlan.plan.blogBaseline.remoteOid
+        || value.hugoGate?.status !== 'passed' || !iso(value.reviewedAt)
+        || !SHA_RE.test(value.reviewProtocolFingerprint || '')
         || !Array.isArray(value.files)
         || value.files.length !== generation.manifest.files.length
+        || new Set(value.files.map(item => item?.path)).size !== value.files.length
         || value.files.some(item => generationByPath.get(item.path)?.sha256 !== item.sha256)
         || !semantic || !SHA_RE.test(semantic.semanticReviewSha256 || '')
         || !SHA_RE.test(semantic.semanticReviewFileSha256 || '')
@@ -1038,10 +1054,25 @@ function activateAndPublish(options = {}, dependencies = {}) {
 function loadPublication(loadedPlan) {
     const loaded = strictJsonFile(path.join(loadedPlan.directory, 'publication.json'), 'remote publication receipt'); const value = loaded.value;
     const body = clone(value); delete body.publicationSha256;
+    const generation = loadGeneration(loadedPlan).manifest;
+    const review = loadReview(loadedPlan).receipt;
+    const activation = loadActivation(loadedPlan).receipt;
+    const commit = loadCommit(loadedPlan).receipt;
     if (value.contract !== PUBLICATION_CONTRACT || value.version !== VERSION || value.publicationId !== loadedPlan.plan.publicationId
         || value.planSha256 !== loadedPlan.plan.planSha256 || value.remoteVerifiedOid !== value.publicationCommit
         || !GIT_OID_RE.test(value.publicationCommit || '') || !SHA_RE.test(value.remoteIdentitySha256 || '')
-        || !iso(value.remoteVerifiedAt) || value.publicationSha256 !== stableHash(body)) fail('remote publication receipt drifted');
+        || value.exactDeltaSha256 !== loadedPlan.plan.exactDeltaSha256
+        || value.remoteName !== loadedPlan.plan.blogBaseline.remoteName
+        || value.remoteIdentitySha256 !== loadedPlan.plan.blogBaseline.remoteIdentitySha256
+        || activation.generationSha256 !== generation.generationSha256
+        || activation.reviewSha256 !== review.reviewSha256
+        || commit.reviewSha256 !== review.reviewSha256
+        || commit.activationSha256 !== activation.activationSha256
+        || value.reviewSha256 !== review.reviewSha256
+        || value.activationSha256 !== activation.activationSha256
+        || value.commitSha256 !== commit.commitSha256
+        || value.publicationCommit !== commit.publicationCommit
+        || !iso(value.remoteVerifiedAt) || value.publicationSha256 !== stableHash(body)) fail('历史发布凭证与生成、审查、激活或提交记录不一致');
     return { receipt: value, fileSha256: loaded.fileSha256 };
 }
 function status({ outputRoot, publicationId, liveRemote = true, blogRepo = null, remoteName = 'origin' } = {}, dependencies = {}) {
