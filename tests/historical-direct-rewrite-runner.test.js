@@ -1393,9 +1393,9 @@ test('arXiv Reader 像素只在操作系统临时回调期间存在，返回的�
     assert.equal(persisted.assetSha256, sha(rendered[0].rawBytes));
     context.assertNoPersistentFigureFields({ figures: [persisted] });
     assert.throws(() => context.stripEphemeralFigureFields({ ...rendered[0], assetSha256: 'bad' }),
-        /evidence asset SHA is invalid/);
+        /Reader 图片证据的 assetSha256 格式无效/);
     assert.throws(() => context.assertNoPersistentFigureFields({ figures: [{ assetSha256: 'bad' }] }),
-        /evidence asset SHA is invalid/);
+        /保存的 Reader 图片证据的 assetSha256 格式无效/);
 });
 
 test('arXiv Reader 的图片生成器跳过一张始终超大的可选图，保留另一张', async t => {

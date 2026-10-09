@@ -49,11 +49,11 @@ function loadAnalysisWaiver(date, files = Config.FILES) {
 
 function fileBinding(filePath, label, issues) {
     if (!filePath || !fs.existsSync(filePath)) {
-        issues.push(`${label} missing`);
+        issues.push(`未指定 ${label} 文件，或该文件不存在`);
         return null;
     }
     try { return sha256File(filePath); }
-    catch (error) { issues.push(`${label} unreadable: ${error.message}`); return null; }
+    catch (error) { issues.push(`无法读取 ${label} 文件或计算其 SHA-256： ${error.message}`); return null; }
 }
 
 function validateAnalysisWaiver(waiver, date, files = Config.FILES, snapshots = {}) {
@@ -82,62 +82,62 @@ function validateAnalysisWaiver(waiver, date, files = Config.FILES, snapshots = 
     for (const entry of entries) {
         if (!entry || typeof entry !== 'object' || Array.isArray(entry)
             || JSON.stringify(Object.keys(entry).sort()) !== JSON.stringify(entryKeys)) {
-            issues.push('waiver paper entry has unknown or missing fields'); continue;
+            issues.push('豁免的逐论文记录不是对象、是数组，或含有未知字段或缺少必需字段'); continue;
         }
         const id = normalizedId(entry.paperId);
-        if (!id || id !== entry.paperId) issues.push('waiver paperId is not normalized');
+        if (!id || id !== entry.paperId) issues.push('豁免记录的 paperId 不是标准论文 ID 格式');
         ids.push(id);
         if (!SHA256_RE.test(entry.deepPaperSha256 || '') || !SHA256_RE.test(entry.sourceSha256 || '')) {
-            issues.push(`waiver paper hashes invalid: ${entry.paperId}`);
+            issues.push(`豁免记录的 deepPaperSha256 或 sourceSha256 不是 64 位小写十六进制 SHA-256： ${entry.paperId}`);
         }
         if (entry.originalDigestStatus !== null && typeof entry.originalDigestStatus !== 'string') {
-            issues.push(`waiver original digest status invalid: ${entry.paperId}`);
+            issues.push(`豁免记录的 originalDigestStatus 必须为字符串或 null： ${entry.paperId}`);
         }
         if (entry.originalLatestAttemptStatus !== null && typeof entry.originalLatestAttemptStatus !== 'string') {
-            issues.push(`waiver original latest attempt status invalid: ${entry.paperId}`);
+            issues.push(`豁免记录的 originalLatestAttemptStatus 必须为字符串或 null： ${entry.paperId}`);
         }
     }
     const uniqueIds = [...new Set(ids)].sort();
     if (uniqueIds.length !== ids.length || JSON.stringify(uniqueIds) !== JSON.stringify(ids)) {
-        issues.push('waiver paper IDs must be unique and sorted');
+        issues.push('豁免记录的论文 ID 必须排序且不能重复');
     }
 
     const source = waiver.source;
     const sourceKeys = ['deepAnalysisResultSha256', 'filteredPapersSha256', 'papersDatabaseSha256'].sort();
     if (!source || typeof source !== 'object' || Array.isArray(source)
         || JSON.stringify(Object.keys(source).sort()) !== JSON.stringify(sourceKeys)
-        || sourceKeys.some(key => !SHA256_RE.test(source[key] || ''))) issues.push('waiver source binding is invalid');
+        || sourceKeys.some(key => !SHA256_RE.test(source[key] || ''))) issues.push('豁免记录的 source 必须是只含 deepAnalysisResultSha256、filteredPapersSha256 和 papersDatabaseSha256 的对象，三项均须为 64 位小写十六进制 SHA-256');
     const body = { ...waiver }; delete body.waiverSha256;
-    if (!SHA256_RE.test(waiver.waiverSha256 || '') || waiver.waiverSha256 !== stableSha256(body)) issues.push('waiver SHA mismatch');
+    if (!SHA256_RE.test(waiver.waiverSha256 || '') || waiver.waiverSha256 !== stableSha256(body)) issues.push('豁免记录的 waiverSha256 格式无效，或与记录内容重新计算的 SHA-256 不一致');
 
     const actualDeepSha = fileBinding(files.deepAnalysisResult, 'deep-analysis-result.json', issues);
     const actualFilteredSha = fileBinding(files.filteredPapers, 'filtered-papers.json', issues);
     const actualPapersSha = fileBinding(files.papers, 'papers.json', issues);
-    if (source?.deepAnalysisResultSha256 !== actualDeepSha) issues.push('deep analysis artifact drifted');
-    if (source?.filteredPapersSha256 !== actualFilteredSha) issues.push('filtered artifact drifted');
-    if (source?.papersDatabaseSha256 !== actualPapersSha) issues.push('papers database drifted');
+    if (source?.deepAnalysisResultSha256 !== actualDeepSha) issues.push('无法确认 deep-analysis-result.json 与豁免记录中的 source.deepAnalysisResultSha256 相符');
+    if (source?.filteredPapersSha256 !== actualFilteredSha) issues.push('无法确认 filtered-papers.json 与豁免记录中的 source.filteredPapersSha256 相符');
+    if (source?.papersDatabaseSha256 !== actualPapersSha) issues.push('无法确认 papers.json 与豁免记录中的 source.papersDatabaseSha256 相符');
 
     let deep = snapshots.deep;
     let papers = snapshots.papers;
     if (!deep && files.deepAnalysisResult && fs.existsSync(files.deepAnalysisResult)) {
-        try { deep = JSON.parse(fs.readFileSync(files.deepAnalysisResult, 'utf8')); } catch { issues.push('deep analysis artifact is not JSON'); }
+        try { deep = JSON.parse(fs.readFileSync(files.deepAnalysisResult, 'utf8')); } catch { issues.push('无法读取 deep-analysis-result.json 或将其解析为 JSON'); }
     }
     if (!papers && files.papers && fs.existsSync(files.papers)) {
-        try { papers = JSON.parse(fs.readFileSync(files.papers, 'utf8')); } catch { issues.push('papers artifact is not JSON'); }
+        try { papers = JSON.parse(fs.readFileSync(files.papers, 'utf8')); } catch { issues.push('无法读取 papers.json 或将其解析为 JSON'); }
     }
-    if (deep?.batchDate && deep.batchDate !== date) issues.push('deep analysis batchDate drifted');
+    if (deep?.batchDate && deep.batchDate !== date) issues.push('分析结果的 batchDate 与目标日期不一致');
     const deepById = new Map(paperList(deep).map(paper => [normalizedId(paper), paper]).filter(([id]) => id));
     const database = papers?.papers && typeof papers.papers === 'object' ? papers.papers : {};
     for (const entry of entries) {
         const id = normalizedId(entry.paperId); const deepPaper = deepById.get(id);
-        if (!deepPaper) { issues.push(`waiver paper is absent from deep analysis: ${id}`); continue; }
-        if (stableSha256(deepPaper) !== entry.deepPaperSha256) issues.push(`deep paper drifted: ${id}`);
+        if (!deepPaper) { issues.push(`分析结果中找不到豁免记录指定的论文： ${id}`); continue; }
+        if (stableSha256(deepPaper) !== entry.deepPaperSha256) issues.push(`分析结果中的论文记录与 deepPaperSha256 不一致： ${id}`);
         const actualSourceSha = deepPaper.sourceSha256 || deepPaper.analysisManifest?.sourceAcquisition?.sourceSha256;
-        if (actualSourceSha !== entry.sourceSha256) issues.push(`source binding drifted: ${id}`);
+        if (actualSourceSha !== entry.sourceSha256) issues.push(`分析结果中的论文来源 SHA 与 sourceSha256 不一致： ${id}`);
         const dbPaper = database[id];
-        if (!dbPaper) issues.push(`waiver paper is absent from papers database: ${id}`);
-        if (dbPaper && entry.originalDigestStatus !== (dbPaper.digestStatus?.status ?? null)) issues.push(`original digest status drifted: ${id}`);
-        if (dbPaper && entry.originalLatestAttemptStatus !== (dbPaper.digestStatus?.latestAttemptStatus ?? null)) issues.push(`original latest attempt status drifted: ${id}`);
+        if (!dbPaper) issues.push(`论文库中找不到豁免记录指定的论文： ${id}`);
+        if (dbPaper && entry.originalDigestStatus !== (dbPaper.digestStatus?.status ?? null)) issues.push(`论文库当前的 digestStatus.status 与 originalDigestStatus 不一致： ${id}`);
+        if (dbPaper && entry.originalLatestAttemptStatus !== (dbPaper.digestStatus?.latestAttemptStatus ?? null)) issues.push(`论文库当前的 digestStatus.latestAttemptStatus 与 originalLatestAttemptStatus 不一致： ${id}`);
     }
     return { valid: issues.length === 0, issues, paperIds: new Set(uniqueIds) };
 }

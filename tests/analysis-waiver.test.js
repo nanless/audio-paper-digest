@@ -1,7 +1,7 @@
 'use strict';
 
 // 分析豁免允许跳过分析检查，因此这里既检查豁免记录的字段是否对应，
-// 也检查读取时是否拒绝各类篡改和产物变化。全部在临时目录里做，不碰 data/current。
+// 也检查读取时是否拒绝各类篡改和保存文件的变化。全部在临时目录里做，不碰 data/current。
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -123,7 +123,7 @@ describe('分析豁免契约', () => {
             payload.papers.reverse();
             delete payload.waiverSha256;
             payload.waiverSha256 = waiver.stableSha256(payload);
-            issueOf(payload, f, 'waiver paper IDs must be unique and sorted');
+            issueOf(payload, f, '豁免记录的论文 ID 必须排序且不能重复');
         } finally {
             fs.rmSync(f.directory, { recursive: true, force: true });
         }
@@ -225,84 +225,84 @@ describe('分析豁免契约', () => {
 
             const badEntry = clone();
             badEntry.papers[0].extra = 1;
-            issueOf(badEntry, f, 'waiver paper entry has unknown or missing fields');
+            issueOf(badEntry, f, '豁免的逐论文记录不是对象、是数组，或含有未知字段或缺少必需字段');
 
             const unnormalized = clone();
             unnormalized.papers[0].paperId = `${PAPER}v2`;
-            issueOf(unnormalized, f, 'waiver paperId is not normalized');
+            issueOf(unnormalized, f, '豁免记录的 paperId 不是标准论文 ID 格式');
 
             const badHash = clone();
             badHash.papers[0].deepPaperSha256 = 'zz';
-            issueOf(badHash, f, `waiver paper hashes invalid: ${PAPER}`);
+            issueOf(badHash, f, `豁免记录的 deepPaperSha256 或 sourceSha256 不是 64 位小写十六进制 SHA-256： ${PAPER}`);
 
             const badDigestStatus = clone();
             badDigestStatus.papers[0].originalDigestStatus = 7;
-            issueOf(badDigestStatus, f, `waiver original digest status invalid: ${PAPER}`);
+            issueOf(badDigestStatus, f, `豁免记录的 originalDigestStatus 必须为字符串或 null： ${PAPER}`);
 
             const badAttemptStatus = clone();
             badAttemptStatus.papers[0].originalLatestAttemptStatus = {};
-            issueOf(badAttemptStatus, f, `waiver original latest attempt status invalid: ${PAPER}`);
+            issueOf(badAttemptStatus, f, `豁免记录的 originalLatestAttemptStatus 必须为字符串或 null： ${PAPER}`);
 
             const duplicated = clone();
             duplicated.papers.push(JSON.parse(JSON.stringify(duplicated.papers[0])));
-            issueOf(duplicated, f, 'waiver paper IDs must be unique and sorted');
+            issueOf(duplicated, f, '豁免记录的论文 ID 必须排序且不能重复');
 
             const badSource = clone();
             delete badSource.source.filteredPapersSha256;
-            issueOf(badSource, f, 'waiver source binding is invalid');
+            issueOf(badSource, f, '豁免记录的 source 必须是只含 deepAnalysisResultSha256、filteredPapersSha256 和 papersDatabaseSha256 的对象，三项均须为 64 位小写十六进制 SHA-256');
 
             const badSourceHash = clone();
             badSourceHash.source.papersDatabaseSha256 = 'not-a-sha';
-            issueOf(badSourceHash, f, 'waiver source binding is invalid');
+            issueOf(badSourceHash, f, '豁免记录的 source 必须是只含 deepAnalysisResultSha256、filteredPapersSha256 和 papersDatabaseSha256 的对象，三项均须为 64 位小写十六进制 SHA-256');
 
             const badSha = clone();
             badSha.waiverSha256 = 'b'.repeat(64);
-            issueOf(badSha, f, 'waiver SHA mismatch');
+            issueOf(badSha, f, '豁免记录的 waiverSha256 格式无效，或与记录内容重新计算的 SHA-256 不一致');
         } finally {
             fs.rmSync(f.directory, { recursive: true, force: true });
         }
     });
 
-    it('读取侧比对磁盘产物与论文正文，任何漂移都拒绝', () => {
+    it('读取时核对保存文件与论文记录，内容不一致即拒绝', () => {
         const f = fixture();
         try {
             const { payload } = create(f);
 
-            // 产物文件被改写：文件 SHA 和论文正文两层都要报。
+            // 保存文件被改写：文件 SHA 和论文记录内容两项都要报。
             f.deep.papers[0].analysis = '被改写过的正文';
             fs.writeFileSync(f.files.deepAnalysisResult, JSON.stringify(f.deep));
             const result = waiver.validateAnalysisWaiver(payload, DATE, f.files,
                 { deep: f.deep, papers: f.papers });
             assert.equal(result.valid, false);
-            assert.ok(result.issues.includes('deep analysis artifact drifted'));
-            assert.ok(result.issues.includes(`deep paper drifted: ${PAPER}`));
+            assert.ok(result.issues.includes('无法确认 deep-analysis-result.json 与豁免记录中的 source.deepAnalysisResultSha256 相符'));
+            assert.ok(result.issues.includes(`分析结果中的论文记录与 deepPaperSha256 不一致： ${PAPER}`));
         } finally {
             fs.rmSync(f.directory, { recursive: true, force: true });
         }
     });
 
-    it('读取侧还会发现来源绑定、批次日期与 digest 状态漂移', () => {
+    it('读取时核对论文来源 SHA、批次日期和论文库状态', () => {
         const f = fixture();
         try {
             const { payload } = create(f);
 
             const sourceDrift = JSON.parse(JSON.stringify(payload));
             sourceDrift.papers[0].sourceSha256 = 'c'.repeat(64);
-            issueOf(sourceDrift, f, `source binding drifted: ${PAPER}`);
+            issueOf(sourceDrift, f, `分析结果中的论文来源 SHA 与 sourceSha256 不一致： ${PAPER}`);
 
-            // 豁免记录仍指向本批次，但 deep 产物自己写的是别的日期。
+            // 豁免记录仍指向本批次，但分析结果自己写的是别的日期。
             const wrongDate = waiver.validateAnalysisWaiver(payload, DATE, f.files,
                 { deep: { ...f.deep, batchDate: '2026-09-05' }, papers: f.papers });
             assert.equal(wrongDate.valid, false);
-            assert.ok(wrongDate.issues.includes('deep analysis batchDate drifted'));
+            assert.ok(wrongDate.issues.includes('分析结果的 batchDate 与目标日期不一致'));
 
             const digestDrift = JSON.parse(JSON.stringify(payload));
             digestDrift.papers[0].originalDigestStatus = 'complete';
-            issueOf(digestDrift, f, `original digest status drifted: ${PAPER}`);
+            issueOf(digestDrift, f, `论文库当前的 digestStatus.status 与 originalDigestStatus 不一致： ${PAPER}`);
 
             const attemptDrift = JSON.parse(JSON.stringify(payload));
             attemptDrift.papers[0].originalLatestAttemptStatus = 'ok';
-            issueOf(attemptDrift, f, `original latest attempt status drifted: ${PAPER}`);
+            issueOf(attemptDrift, f, `论文库当前的 digestStatus.latestAttemptStatus 与 originalLatestAttemptStatus 不一致： ${PAPER}`);
 
             const missingPaper = JSON.parse(JSON.stringify(payload));
             missingPaper.papers[0].paperId = '2609.00009';
@@ -310,7 +310,7 @@ describe('分析豁免契约', () => {
             const missing = waiver.validateAnalysisWaiver(missingPaper, DATE, f.files,
                 { deep: f.deep, papers: f.papers });
             assert.equal(missing.valid, false);
-            assert.ok(missing.issues.includes('waiver paper is absent from deep analysis: 2609.00009'));
+            assert.ok(missing.issues.includes('分析结果中找不到豁免记录指定的论文： 2609.00009'));
         } finally {
             fs.rmSync(f.directory, { recursive: true, force: true });
         }

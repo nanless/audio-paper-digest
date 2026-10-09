@@ -150,14 +150,14 @@ function recordLlmUsage(input, options = {}) {
 
 function recordLlmDisposition(input, options = {}) {
     if (!['accepted', 'rejected'].includes(input?.disposition) || !digest(input.outputTextSha256)) {
-        throw new Error('模型产物采用记录不合法');
+        throw new Error('模型结果的接受或拒绝记录不合法：disposition 必须为 accepted 或 rejected，outputTextSha256 必须为 64 位小写十六进制 SHA-256');
     }
     const event = { version: VERSION, kind: 'disposition', eventId: crypto.randomUUID(),
         at: new Date().toISOString(), runtime: 'node', ...usageContext(input),
         outputTextSha256: input.outputTextSha256, disposition: input.disposition,
         errorCode: label(input.errorCode) };
     try { writeLlmUsageEvent(event, options); } catch (_) {
-        if (!warned) { console.warn('[llm-usage] 产物采用状态未能持久化；统计不完整'); warned = true; }
+        if (!warned) { console.warn('[llm-usage] 模型结果是否被接受的记录未能保存；统计不完整'); warned = true; }
     }
     return event;
 }

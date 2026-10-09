@@ -163,7 +163,7 @@ function normalizedPaper(source) {
 function buildReplayableReaderArtifacts(source) {
     const raw = source.structuredArtifacts;
     const sourceDom = value => stableHash(value);
-    // 旧版已保存并核验的 PDF 产物里的 `tex` 可能含启发式矩阵和纯文本。
+    // 旧版已保存并核验的 PDF 结构化提取记录里的 `tex` 可能含启发式矩阵和纯文本。
     // 原样保留它们，绝不要把内容提升为 DOM 单元格或原始 LaTeX。
     // 哈希只证明字节，不证明提取正确。
     const tables = [];

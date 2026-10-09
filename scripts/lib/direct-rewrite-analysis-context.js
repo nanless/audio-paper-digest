@@ -14,8 +14,8 @@ const ARXIV = /^arxiv:\d{4}\.\d{4,5}$/;
 const SHA = /^[a-f0-9]{64}$/;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const PROVENANCE_CONTRACT = 'fresh-source-analysis-v1';
-// 这份契约把「没有保存 Figure 素材」写成有意为之、可供审查的状态。渲染器不能
-// 因为 cachePath 缺失就断定素材不存在：较早的 Reader 记录仍沿用带缓存的发布契约。
+// 这个格式标记明确说明「没有保存论文图文件」是有意为之、可供审查的状态。渲染器不能
+// 因为 cachePath 缺失就断定素材不存在：较早的 Reader 记录仍按保存图片缓存的发布规则核验。
 const EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT = 'ephemeral-no-persisted-figure-assets-v1';
 const CONFERENCE = /^conference:[a-z0-9]+(?:-[a-z0-9]+)*:\d{4}:[a-z0-9-]+:[^:]+$/;
 
@@ -84,7 +84,7 @@ function withDirectRewriteAnalysisSource(identity, callback) {
     }
     if (hasRunId && (sha256(sourceDetails.text) !== identity.sourceSha256
         || sourceDetails.structuredArtifacts?.payloadSha256 !== identity.structuredArtifactsSha256)) {
-        fail('直改来源凭证与传入的正文或结构化产物对不上');
+        fail('直改来源凭证与传入的正文或结构化提取结果不一致');
     }
     if (hasRunId && identity.route === 'arxiv-fresh-fetch'
         && (!Number.isSafeInteger(identity.sourceGeneration) || identity.sourceGeneration < 1
@@ -193,7 +193,7 @@ function attachDirectSourceRecord(paper, manifest, source) {
     const sourceRecord = getDirectSourceRecord(paper);
     if (sha256(String(source?.text || '')) !== sourceRecord.sourceSha256
         || source?.structuredArtifacts?.payloadSha256 !== sourceRecord.structuredArtifactsSha256) {
-        fail('直改分析试图挂上另一份来源的凭证：正文或结构化产物 SHA 不符');
+        fail('直改分析的来源凭证与正文或结构化提取结果的 SHA 不一致');
     }
     paper.freshRewriteProvenance = sourceRecord;
     manifest.freshRewriteProvenance = clone(sourceRecord);
@@ -204,7 +204,7 @@ function stripEphemeralFigureFields(figure) {
     // assetSha256 记录的是本次调用中看到的像素的完整性，不是可持久化的素材定位符。
     // 删掉所有路径和字节后要保留它，但不能把未校验的值写进这个字段。
     if (figure.assetSha256 !== undefined && !SHA.test(String(figure.assetSha256 || ''))) {
-        fail('Reader figure evidence asset SHA is invalid');
+        fail('Reader 图片证据的 assetSha256 格式无效');
     }
     const forbidden = new Set(['cachePath', 'tempPath', 'path', 'bytes', 'rawBytes', 'buffer', 'assetFilename',
         'assetBytes', 'assetWidth', 'assetHeight', 'assetMediaType']);
@@ -220,7 +220,7 @@ function assertNoPersistentFigureFields(value) {
         if (!item || typeof item !== 'object') return;
         if (!Array.isArray(item) && Object.prototype.hasOwnProperty.call(item, 'assetSha256')
             && !SHA.test(String(item.assetSha256 || ''))) {
-            fail('persisted Reader figure evidence asset SHA is invalid');
+            fail('保存的 Reader 图片证据的 assetSha256 格式无效');
         }
         Object.values(item).forEach(validateEvidenceSha);
     };
