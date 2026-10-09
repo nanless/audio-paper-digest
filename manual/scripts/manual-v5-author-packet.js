@@ -15,6 +15,7 @@ const path = require('path');
 const crypto = require('crypto');
 if (require.main === module) require('../../scripts/env-loader.js').requireExternalRuntime('manual-v5-author-packet.js');
 const Config = require('../../scripts/config.js');
+const { getRequestedArxivId } = require('./manual-fetch-fulltext.js');
 const { normalizedId, writeFileAtomic, getBeijingISOString } = require('../../scripts/utils.js');
 const {
     AUTHORING_PROMPT_PATH,
@@ -79,22 +80,8 @@ function assertPaperId(value) {
     return paperId;
 }
 
-function requestedArxivId(paper) {
-    const parsed = [paper?.arxivId, paper?.paper_id, paper?.id]
-        .map(value => String(value || '').trim())
-        .filter(Boolean)
-        .map(raw => raw.match(/(?:arxiv:\s*|arxiv\.org\/(?:abs|pdf)\/)?(\d{4}\.\d{4,5}(?:v\d+)?)(?:\.pdf)?$/i)?.[1]?.toLowerCase())
-        .filter(Boolean);
-    if (!parsed.length || new Set(parsed.map(normalizedId)).size !== 1) {
-        throw new Error('filtered paper 缺少唯一可验证的 arXiv ID');
-    }
-    const versioned = [...new Set(parsed.filter(value => /v\d+$/i.test(value)))];
-    if (versioned.length > 1) throw new Error('filtered paper 包含冲突 arXiv 版本');
-    return versioned[0] || parsed[0];
-}
-
 function expectedPaperInput(paper, filteredBatchSha256) {
-    const requested = requestedArxivId(paper);
+    const requested = getRequestedArxivId(paper);
     const paperMetadataSha256 = stableSha256(paper);
     return {
         filteredBatchSha256,

@@ -375,3 +375,41 @@ it('直接 Manual raw 入口在归档或网络请求之前拒绝历史日期，�
         require.cache[modulePath] = previous;
     }
 });
+
+it('全文请求统一旧式与现代身份，拒绝跨论文、跨版本和路径伪装', () => {
+    for (const [input, expected] of [
+        [{ arxivId: 'hep-th/9901001v2', paper_id: 'hep-th/9901001' }, 'hep-th/9901001v2'],
+        [{ arxivId: 'https://arxiv.org/pdf/math.GT/0309136v1.pdf', paper_id: 'math.gt/0309136' }, 'math.GT/0309136v1'],
+        [{ arxivId: 'arXiv:2608.00001V3' }, '2608.00001v3']
+    ]) assert.equal(getRequestedArxivId(input), expected);
+    for (const input of [
+        { arxivId: 'hep-th/9901001v1', paper_id: 'hep-th/9901001v2' },
+        { arxivId: 'hep-th/9901001', paper_id: '2608.00001' },
+        { arxivId: '../hep-th/9901001' }, { arxivId: 'x2608.00001' },
+        { arxivId: 'https://evil.example/arxiv.org/abs/hep-th/9901001' },
+        { arxivId: 'math.GT-extra/0309136' }, { arxivId: '' }
+    ]) assert.throws(() => getRequestedArxivId(input));
+});
+
+it('旧式全文请求保留官方分类大小写，写入检查点仍按原规范绑定版本', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-old-arxiv-source-'));
+    try {
+        const context = buildManifestContext({
+            status: 'complete', batchDate: '2026-10-09',
+            papers: [{ arxivId: 'math.GT/0309136v1', paper_id: 'math.gt/0309136', title: 'Older source' }]
+        }, '2026-10-09', directory);
+        const input = context.inputs[0];
+        const body = Buffer.from('Complete original text evidence. '.repeat(100));
+        fs.mkdirSync(path.dirname(input.filePath), { recursive: true });
+        fs.writeFileSync(input.filePath, body);
+        const fetched = await fetchFullTextForInput(input, async requested => {
+            assert.equal(requested, 'math.GT/0309136v1');
+            return { source: 'pdf', sourceId: requested, text: body.toString('utf8') };
+        });
+        const entry = buildCompleteEntry(input, fetched, body);
+        assert.equal(entry.requestedArxivId, 'math.GT/0309136v1');
+        assert.equal(entry.sourceId, 'math.gt/0309136v1');
+        assert.equal(isReusableFullTextCheckpoint(entry, input.filePath, input), true);
+        assert.throws(() => buildCompleteEntry(input, { ...fetched, sourceId: 'math.GT/0309136v2' }, body));
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});

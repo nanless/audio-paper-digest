@@ -38,14 +38,14 @@ function write(filePath, value) {
     return filePath;
 }
 
-function fixture() {
+function fixture(paperId = ID, requestedId = paperId) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v5-author-packet-'));
     const current = path.join(root, 'data', 'current');
     const fulltextDir = path.join(current, 'manual-full-text', DATE);
     const artifactDir = path.join(fulltextDir, 'artifacts');
     const paper = {
-        paper_id: ID,
-        arxivId: ID,
+        paper_id: requestedId,
+        arxivId: requestedId,
         title: 'An isolated packet fixture',
         authors: ['A. Author'],
         abstract: 'Current-paper evidence only.',
@@ -64,7 +64,7 @@ function fixture() {
         paperInputSha256: input.paperInputSha256,
         filteredBatchSha256,
         source: 'arxiv_html',
-        sourceId: `https://arxiv.org/html/${ID}`,
+        sourceId: `https://arxiv.org/html/${paperId}`,
         bytes: fs.statSync(input.filePath).size,
         sourceSha256: sha(input.filePath),
         imageInfos: [],
@@ -80,10 +80,10 @@ function fixture() {
         date: DATE,
         filteredBatchSha256,
         status: 'complete',
-        papers: { [ID]: sourceEntry }
+        papers: { [paperId]: sourceEntry }
     });
     const artifactIndex = {
-        paperId: ID,
+        paperId,
         inputIdentity: {
             sourceSha256: sourceEntry.sourceSha256,
             sourceIdentitySha256: sourceEntry.sourceIdentitySha256,
@@ -93,10 +93,10 @@ function fixture() {
         artifactIndexSha256: 'e'.repeat(64),
         tables: [], figures: [], formulas: []
     };
-    const artifactPath = write(path.join(artifactDir, `${ID}.json`), artifactIndex);
+    const artifactPath = write(path.join(artifactDir, `${paperId}.json`), artifactIndex);
     const artifactEntry = {
         status: 'complete',
-        paperId: ID,
+        paperId,
         parserVersion: 'manual-artifact-parser-v2-structured',
         path: artifactPath,
         paperInputSha256: sourceEntry.paperInputSha256,
@@ -116,17 +116,17 @@ function fixture() {
         date: DATE,
         filteredBatchSha256,
         status: 'complete',
-        papers: { [ID]: artifactEntry }
+        papers: { [paperId]: artifactEntry }
     });
     const authoringPromptPath = write(path.join(root, 'prompts', 'manual-tutorial-article.md'), 'fresh prompt');
     const editorialContractPath = write(path.join(root, 'docs', 'manual-editorial-reference-contract.md'), 'editorial contract');
     const blankSchemaPath = write(path.join(root, 'scripts', 'blank-schema.js'), 'module.exports = {};');
     const blogRepo = path.join(root, 'blog');
     fs.mkdirSync(blogRepo, { recursive: true });
-    const packetPaths = defaultAuthorPacketPaths(current, DATE, ID);
+    const packetPaths = defaultAuthorPacketPaths(current, DATE, paperId);
     const options = {
         date: DATE,
-        paperId: ID,
+        paperId,
         projectRoot: root,
         currentDir: current,
         filteredPath,
@@ -252,4 +252,26 @@ describe('Manual v5 冷启动作者包', () => {
             fs.readFileSync = originalRead;
         }
     });
+});
+
+it('旧式 arXiv 身份通过全文清单、作者包物化与重验，保留请求版本和分类大小写', () => {
+    for (const [paperId, requestedId] of [
+        ['hep-th/9901001', 'hep-th/9901001v2'],
+        ['math.gt/0309136', 'math.GT/0309136v1'],
+        ['2608.29999', '2608.29999v3']
+    ]) {
+        const fx = fixture(paperId, requestedId);
+        try {
+            const built = materializeAuthorPacket(fx.options);
+            assert.equal(built.packet.paperId, paperId);
+            assert.equal(built.packet.sourceEntry.requestedArxivId, requestedId);
+            assert.equal(built.packet.paperInputSha256, fx.input.paperInputSha256);
+            assert.doesNotThrow(() => validateAuthorPacket(built.packet, {
+                ...fx.options, requireMaterialized: true
+            }));
+            const changed = structuredClone(built.packet);
+            changed.sourceEntry.requestedArxivId = 'hep-th/9901002v2';
+            assert.throws(() => validateAuthorPacket(changed, { ...fx.options, requireMaterialized: true }));
+        } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
+    }
 });

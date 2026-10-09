@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const Config = require('../../scripts/config.js');
+const { normalizeUsagePaperId } = require('../../scripts/lib/llm-usage.js');
 const { normalizedId, writeFileAtomic, getBeijingISOString } = require('../../scripts/utils.js');
 const {
     fetchArxivTextDetailed,
@@ -50,8 +51,14 @@ function getRequestedArxivId(paper) {
         .map(value => String(value || '').trim())
         .filter(Boolean);
     const parsed = rawValues.map(raw => {
-        const match = raw.match(/(?:arxiv:\s*|arxiv\.org\/(?:abs|pdf)\/)?(\d{4}\.\d{4,5}(?:v\d+)?)(?:\.pdf)?$/i);
-        return match ? match[1].toLowerCase() : '';
+        const candidate = raw.replace(/^arxiv:\s*/i, '')
+            .replace(/^https?:\/\/(?:www\.)?arxiv\.org\/(?:abs|pdf)\//i, '')
+            .replace(/\.pdf$/i, '')
+            .replace(/V([0-9]+)$/, 'v$1')
+            .replace(/^([a-z-]+)(?:\.([a-z]{2}))?\//i, (_match, archive, subject) =>
+                `${archive.toLowerCase()}${subject ? `.${subject.toUpperCase()}` : ''}/`);
+        const id = normalizeUsagePaperId(candidate);
+        return id && !id.startsWith('conference:') ? id : '';
     }).filter(Boolean);
     if (parsed.length === 0) {
         throw new Error(`filtered paper 缺少可抓取的 arXiv ID: ${rawValues.join(' / ') || '(missing)'}`);
@@ -230,7 +237,7 @@ function buildCompleteEntry(input, result, sourceBuffer) {
     const sourceId = String(result.sourceId || '').trim().toLowerCase();
     if (!['html', 'pdf'].includes(result.source) || !sourceId
         || normalizedId(sourceId) !== input.id
-        || (/v\d+$/i.test(input.requestedArxivId) && sourceId !== input.requestedArxivId)) {
+        || (/v\d+$/i.test(input.requestedArxivId) && sourceId !== input.requestedArxivId.toLowerCase())) {
         throw new Error(`${input.id} 全文来源身份与指定版本不一致: requested=${input.requestedArxivId} source=${result.source || '-'}:${sourceId || '-'}`);
     }
     const entry = {
