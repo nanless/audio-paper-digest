@@ -85,7 +85,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/conference-postprocess.js` | Node 库 | 只接受已认证的会议计划，逐篇核验计划、来源、完成结果、当前分类和页面渲染。单篇目录包含词表与渲染实现指纹，代码升级不覆盖旧页面；只有执行记录精确覆盖完整入选集时才生成私有会议汇总。 |
 | `lib/historical-publication.js` | Node 库 | 核验旧路线的论文页与日汇总来源链，固定干净 main、远端、Hugo、Git 基线和阶段依赖，再生成不可变私有文件；此入口不写博客、不审查，也不提交或推送。 |
 | `lib/keyword-prefilter.js` | Node 库 | 音频关键词预筛，追求高召回，按版本管理。 |
-| `lib/reader-repair.js` | Node 库 | 保存失败 Reader 草稿，核验节点 SHA，应用有界局部补丁并检测无进展。表数量诊断使用结构字段选择修复，草稿不等于可以发布。 |
+| `lib/reader-repair.js` | Node 库 | 保存未通过检查的文章草稿，核对允许修改字段的 SHA，并应用经校验的局部修改。表格数量预估仅供参考；修复范围仍按错误码和字段位置核对，最终文章须通过完整解析检查。 |
 | `lib/reader-operator-patch.js` | Node 库 | 显式应用同一全新重写运行的人工局部补丁，核验来源、节点 SHA 和完整 Reader 解析结果。只保存失败候选，保留预算、原始字节归档和重复执行记录，不生成任何成功正文凭证。 |
 | `lib/reader-signed-draft.js` | Node 库 | 把本次同源、已核验的 Reader 还原成与输入完全等价的版本。只有真正解析并注入原图之后，正文、计划、图片 SHA 全部相同才返回；不写文件、不调用模型，也不把恢复稿当作原始 API JSON。 |
 | `lib/reader-signed-operator.js` | Node 库 | 显式修订同一运行的已核验 Reader，检查完整父稿 CAS，再还原、解析并按共同流程封存结果；恢复输出时依赖不可变的意图记录。只写隔离分析并要求事实复核，不调用 API。 |
@@ -247,6 +247,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `env-loader.js` | 从项目 `.env` 建立受控运行环境，检查直接 Node 和 Manual 入口的运行条件。 |
 | `utils.js` | 提供 Node 原子文件写入、时间、ID、分析解析、提示词、LLM 协议和代理工具；`readTagValidation` 读取新旧解析结果中的标签检查对象，拒绝混用字段。 |
 | `lib/analysis-section-titles.js` | 识别分析章节及代码围栏，读取唯一的论文评价章节，并兼容旧标题而不改写原文。 |
+| `lib/analysis-terminal-summary.js` | 为分析结束时的状态、文本来源和计数提供中文显示，未知值显示原值。 |
 | `llm-account-pool.js` | 管理 Node OpenCode Go 账号池，持续使用成功账号，识别额度错误，并保存跨进程账号状态。 |
 | `log-setup.js` | 记录 Node 终端和文件日志，加时间戳，并对敏感信息脱敏。 |
 | `runtime-storage.js` | 只读统计运行存储，按文件引用关系预览受控缓存或日志清理；只有显式 `--apply` 才清理。 |

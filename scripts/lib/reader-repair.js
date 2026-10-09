@@ -696,12 +696,12 @@ function collectDraftIssues(draft, parserError, options = {}) {
     const chineseChars = (countText.match(/[\u3400-\u9fff]/g) || []).length;
     if (chineseChars < READER_LIMITS.minimumChineseChars || chineseChars > READER_LIMITS.maximumChineseChars) {
         issues.push({ path: null, code: 'reader_length_preflight', diagnosticOnly: true,
-            message: `Reader 篇幅预估为 ${chineseChars} 个汉字（标题、正文和术语桥；不含绑定JSON），`
-                + `最终门禁为 ${READER_LIMITS.minimumChineseChars}–${READER_LIMITS.maximumChineseChars}；`
+            message: `读者文章篇幅预估为 ${chineseChars} 个汉字（标题、正文和术语组合解释；不含来源对应记录），`
+                + `完整文章要求 ${READER_LIMITS.minimumChineseChars}–${READER_LIMITS.maximumChineseChars} 个汉字；`
                 + (chineseChars < READER_LIMITS.minimumChineseChars
                     ? `目前估计至少还需 ${READER_LIMITS.minimumChineseChars - chineseChars} 字。修复表格时同时扩写已有方法、执行顺序或实验比较段落，保留正确事实。`
                     : '压缩重复段落，保留正确事实。')
-                + '此项仅预检提示，最终中文字数以完整parser组装后为准。' });
+                + '此项仅供预检参考，最终中文字数以解析器组装完整文章后的统计为准。' });
     }
     return issues;
 }
@@ -752,7 +752,7 @@ function collectTableBindingIssues(draft, options = {}) {
                         || (typeof options.sourceText === 'string' && !options.sourceText.includes(quote)) ? [quoteIndex] : []
                 ));
                 if (invalid.length) add(index, `sourceQuotes 中以下数组项不是全文中12–4000字符的连续原句：${invalid.slice(0, 12).join(', ')}；`
-                    + '不要只摘独立数值或把引文写成对象。原文双写数值可留在引文中，正文写法仍须通过既有来源门禁。',
+                    + '不要只摘独立数值或把引文写成对象。原文双写数值可留在引文中，正文写法仍须通过原有的来源检查。',
                 { diagnosticOnly: true });
             }
         } else if (binding.sourceType === 'artifact_table') {
@@ -783,9 +783,9 @@ function collectTableBindingIssues(draft, options = {}) {
     const selectionCount = draft.tableBindings.filter(binding => binding?.selection).length;
     if (tables.length + selectionCount !== draft.tableBindings.length) {
         issues.push({ path: null, diagnosticOnly: true,
-            message: `Reader 表格清单尚未闭合：正文实际Markdown表 ${tables.length} 张、selection ${selectionCount} 项、`
-                + `tableBindings ${draft.tableBindings.length} 项。source_quotes/artifact_table 都必须有对应的实际Markdown；`
-                + '由完整parser决定现有确定性quote补绑定能否恢复。' });
+            message: `读者文章中的表格与来源对应记录数量不一致：正文有 ${tables.length} 张 Markdown 表、selection 有 ${selectionCount} 项、`
+                + `tableBindings 有 ${draft.tableBindings.length} 项。source_quotes/artifact_table 都必须对应正文中的实际 Markdown 表；`
+                + '能否用已有的原文引文自动补齐来源对应记录，仍由完整文章解析器检查。' });
     }
     return issues;
 }

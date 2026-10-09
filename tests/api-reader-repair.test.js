@@ -332,7 +332,7 @@ test('所有格式错误的引用绑定、只有标记的表格和长度不足�
         assert.ok(issues.some(issue => issue.path === `/tableBindings/${index}` && /cellBindings 必须是 \[\]/.test(issue.message)));
         assert.ok(issues.some(issue => issue.path === `/tableBindings/${index}` && /sourceQuotes 中以下数组项/.test(issue.message)));
     }
-    assert.ok(issues.some(issue => /实际Markdown表 0 张/.test(issue.message)));
+    assert.ok(issues.some(issue => /正文有 0 张 Markdown 表、selection 有 0 项、tableBindings 有 2 项/.test(issue.message)));
     assert.ok(issues.some(issue => issue.code === 'reader_length_preflight' && issue.diagnosticOnly));
     const targets = buildRepairTargets(draft, issues);
     for (const pointer of ['/tableBindings/0', '/tableBindings/1', '/sections/7/body', '/sections/8/body']) {
@@ -2657,6 +2657,41 @@ function storedReaderFailure(directory) {
     return { filename, ...envelope };
 }
 
+// 保留上方旧输出的原字节；这里只明确列出当前动态预检说明的展示变化。
+function currentPreviewMessage(message) {
+    return message
+        .replace('Reader 篇幅预估为 ', '读者文章篇幅预估为 ')
+        .replace('（标题、正文和术语桥；不含绑定JSON），最终门禁为 ', '（标题、正文和术语组合解释；不含来源对应记录），完整文章要求 ')
+        .replace(/(完整文章要求 \d+–\d+)；/, '$1 个汉字；')
+        .replace('此项仅预检提示，最终中文字数以完整parser组装后为准。', '此项仅供预检参考，最终中文字数以解析器组装完整文章后的统计为准。')
+        .replace('正文写法仍须通过既有来源门禁。', '正文写法仍须通过原有的来源检查。')
+        .replace(/Reader 表格清单尚未闭合：正文实际Markdown表 (\d+) 张、selection (\d+) 项、tableBindings (\d+) 项。source_quotes\/artifact_table 都必须有对应的实际Markdown；由完整parser决定现有确定性quote补绑定能否恢复。/,
+            '读者文章中的表格与来源对应记录数量不一致：正文有 $1 张 Markdown 表、selection 有 $2 项、tableBindings 有 $3 项。source_quotes/artifact_table 都必须对应正文中的实际 Markdown 表；能否用已有的原文引文自动补齐来源对应记录，仍由完整文章解析器检查。');
+}
+
+const currentPreviewChecks = {
+    "missing-binding": {
+        "hash": "db1b0231808fc3613afa384645d4b19bd946700b8c12e24afbedbe858ded4c8e",
+        "signature": "reader-validation-v2:{\"gateSha256\":\"9874dfa458270cdc5bc3f7b318fdbb6f893846a8b0fe3847052807ae70e37356\",\"deficits\":[]}"
+    },
+    "extra-table": {
+        "hash": "3a8ad6559fa7f2dede642aae624dc4ee6179c7bd176805206016ca0d1c6b278f",
+        "signature": "reader-validation-v2:{\"gateSha256\":\"d1cda6ba01760f39d4e917b86667ce2d963bb31adfec739bd8ebe8d43023014f\",\"deficits\":[]}"
+    },
+    "equal-count-marker-ambiguity": {
+        "hash": "fff71a6f583b02c956c4e4a942ea2e2e0e13a78a07f599291e0235861265628b",
+        "signature": "reader-validation-v2:{\"gateSha256\":\"5513f9ec192463f4ef190458b56714e7d5851cdeade58213a98853d50ba14f85\",\"deficits\":[]}"
+    },
+    "same-section-duplicate-path": {
+        "hash": "526adced087087456a3da680bc7e5c7e7107128bc65fb688a1fefaa21eb4c7d0",
+        "signature": "reader-validation-v2:{\"gateSha256\":\"3a780c6181997ddf885629b5245b266c5f9cad0a2fc12bb05721a55b66e5a901\",\"deficits\":[]}"
+    },
+    "missing-table-selection-binding": {
+        "hash": "6dbaa5499862c7f4c046e253b3296a38bd50400c03d7a0ac23e85c0e81489bcb",
+        "signature": "reader-validation-v2:{\"gateSha256\":\"1c9faacd7ba9b1a0b40290811ca66fb8934bec844a0131a119132c5e2fa3e30a\",\"deficits\":[]}"
+    }
+};
+
 test('真实排序异常保留五组旧完整诊断的顺序、重复路径、比较值与修复节点', async t => {
     const { normalizeReaderDraftOrder } = require('../scripts/lib/reader-draft-order.js');
     for (const row of tableOrderCases) {
@@ -2671,10 +2706,15 @@ test('真实排序异常保留五组旧完整诊断的顺序、重复路径、�
             const issues = collectDraftIssues(draft, error);
             // 只有这句固定的旧生产文案会同时得到新的展示字段和带类型的 code。
             const expected = row.issues.map(issue => issue.message === oldTableOrderMessage
-                ? { ...issue, message: newTableOrderMessage, code: tableOrderCode } : issue);
+                ? { ...issue, message: newTableOrderMessage, code: tableOrderCode }
+                : { ...issue, message: currentPreviewMessage(issue.message) });
             assert.equal(JSON.stringify(issues), JSON.stringify(expected));
-            assert.equal(hashRecoveryIssues(issues), row.hash);
-            assert.equal(validationFailureSignature(issues), row.signature);
+            const historicalIssues = row.issues.map(issue => issue.message === oldTableOrderMessage
+                ? { ...issue, message: newTableOrderMessage, code: tableOrderCode } : issue);
+            assert.equal(hashRecoveryIssues(historicalIssues), row.hash);
+            assert.equal(validationFailureSignature(historicalIssues), row.signature);
+            assert.equal(hashRecoveryIssues(issues), currentPreviewChecks[row.name].hash);
+            assert.equal(validationFailureSignature(issues), currentPreviewChecks[row.name].signature);
             assert.equal(JSON.stringify(buildRepairTargets(draft, issues)), JSON.stringify(row.targets));
             assert.equal(JSON.stringify(draft), original);
         });

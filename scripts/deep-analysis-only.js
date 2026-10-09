@@ -8,6 +8,7 @@ setupScriptLogging(__filename);
  */
 
 const fs = require('fs');
+const { formatAnalysisStatus, formatAnalysisCount, formatAnalysisSources } = require('./lib/analysis-terminal-summary.js');
 const { loadEnvFile, getBeijingISOString, getBeijingDateString, getRecordDate, normalizedId } = require('./utils.js');
 const {
     analyzeBatch,
@@ -296,13 +297,13 @@ async function runDeepAnalysis(options = {}) {
     });
     const { remaining, status } = getAnalysisRunSummary(finalPayload.papers);
 
-    console.log(`\n${status === 'complete' ? '✅' : '⚠️'} 深度分析状态: ${status}`);
+    console.log(`\n${status === 'complete' ? '✅' : '⚠️'} 深度分析状态: ${formatAnalysisStatus(status)}`);
     console.log(`📊 统计:`);
     console.log(`  - 总计: ${papers.length} 篇`);
-    console.log(`  - 成功: ${stats.success} 篇`);
-    console.log(`  - 失败: ${stats.failed} 篇`);
-    console.log(`  - 跳过: ${stats.skipped} 篇`);
-    const sourceSummary = Object.entries(stats.sourceCounts || {}).map(([key, count]) => `${key}=${count}`).join(' | ');
+    console.log(`  - 本次分析成功: ${formatAnalysisCount(stats.success)} 篇`);
+    console.log(`  - 本次分析失败: ${formatAnalysisCount(stats.failed)} 篇`);
+    console.log(`  - 本次跳过: ${formatAnalysisCount(stats.skipped)} 篇`);
+    const sourceSummary = formatAnalysisSources(stats.sourceCounts);
     if (sourceSummary) console.log(`  - 文本来源: ${sourceSummary}`);
     console.log(`💾 结果已保存到: ${resultPath}`);
     return { status, exitCode: getAnalysisExitCode(status), stats, remaining };

@@ -7,6 +7,7 @@ setupScriptLogging(__filename);
  */
 
 const fs = require('fs');
+const { formatAnalysisStatus, formatAnalysisCount, formatAnalysisSources } = require('./lib/analysis-terminal-summary.js');
 const path = require('path');
 const crypto = require('crypto');
 const { fetchCategoryPapers, filterPapersWithLLM, buildFilterInputSha256 } = require('./fetch-papers.js');
@@ -1928,12 +1929,12 @@ async function runFullFetch() {
     result = persistPipelineStats(outputFile, {
         pipelineStatus: result.stats.pipelineStatus
     });
-    console.log(`\n${finalStatus === 'complete' ? '✅' : '❌'} 分析状态: ${finalStatus}`);
+    console.log(`\n${finalStatus === 'complete' ? '✅' : '❌'} 分析状态: ${formatAnalysisStatus(finalStatus)}`);
     console.log(`📊 统计:`);
-    console.log(`  - arxiv 抓取: ${arxivFetchedCount} 篇`);
+    console.log(`  - arXiv 抓取: ${arxivFetchedCount} 篇`);
     console.log(`  - HuggingFace 抓取: ${hfFetchedCount} 篇`);
     console.log(`  - 合并去重: ${allPapers.length} 篇`);
-    console.log(`  - LLM 筛选: ${filtered.length} 篇`);
+    console.log(`  - 模型筛选后入选: ${filtered.length} 篇`);
     if (skippedCount > 0) console.log(`  - 归档去重: -${skippedCount} 篇`);
     if (blogSkippedCount > 0) console.log(`  - 博客去重: -${blogSkippedCount} 篇`);
     console.log(`  - 本次分析成功: ${analyzedPapers.filter(isSuccessfulAnalysisRecord).length} 篇`);
@@ -1942,8 +1943,8 @@ async function runFullFetch() {
     if (result.stats.remainingFailed > 0) console.log(`  - 尚未完成: ${result.stats.remainingFailed} 篇`);
     if (analysisStats) {
         const avgSec = analysisStats.durationTotal > 0 ? (analysisStats.durationTotal / 1000 / (analysisStats.success + analysisStats.failed)).toFixed(1) : '0';
-        console.log(`  - 分析引擎: 成功 ${analysisStats.success} | 失败 ${analysisStats.failed} | 跳过 ${analysisStats.skipped} | 平均 ${avgSec}s/篇`);
-        const sourceSummary = Object.entries(analysisStats.sourceCounts || {}).map(([key, count]) => `${key}=${count}`).join(' | ');
+        console.log(`  - 本次分析统计: 成功 ${formatAnalysisCount(analysisStats.success)} 篇 | 失败 ${formatAnalysisCount(analysisStats.failed)} 篇 | 跳过 ${formatAnalysisCount(analysisStats.skipped)} 篇 | 平均 ${avgSec} 秒/篇`);
+        const sourceSummary = formatAnalysisSources(analysisStats.sourceCounts);
         if (sourceSummary) console.log(`  - 文本来源: ${sourceSummary}`);
     }
     console.log(`\n💾 结果已保存到: ${outputFile}`);
