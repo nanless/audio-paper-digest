@@ -1449,3 +1449,120 @@ describe('视觉摘要提示词版本机制', () => {
         );
     }));
 });
+
+describe('正式长图状态与受控旧路径迁移', () => {
+    const { spawnSync } = require('node:child_process');
+    const targetDate = '2026-07-13';
+    const paperId = '2607.12345';
+
+    function withCompletedVisual(callback) {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'visual-card-file-'));
+        const originalCurrent = Config.CURRENT_DIR;
+        const originalAssets = Config.FILES.visualSummaryAssetDir;
+        try {
+            Config.CURRENT_DIR = directory;
+            Config.FILES.visualSummaryAssetDir = path.join(directory, 'archive');
+            const published = paper();
+            const receiptPath = writePublishedReceipt(directory, targetDate, [published]);
+            const publication = assertPublishedBlogReceipt(targetDate, receiptPath);
+            const manifestPath = path.join(directory, 'visual.json');
+            const planned = planVisualSummariesImpl({
+                targetDate,
+                papers: publication.publishedPapers,
+                manifestPath,
+                publication
+            });
+            const source = path.join(directory, 'generated.png');
+            fs.writeFileSync(source, PNG);
+            const completed = recordVisualSummaryCardImpl({
+                arxivId: paperId,
+                kind: 'infographic',
+                sourcePath: source,
+                taskToken: planned.papers[paperId].cards.infographic.taskToken,
+                targetDate,
+                manifestPath,
+                qaAttested: true
+            });
+            const asset = path.resolve(Config.PROJECT_ROOT, completed.papers[paperId].cards.infographic.assetPath);
+            const run = command => spawnSync(process.execPath, ['-e', `
+                const path = require('node:path');
+                const Config = require('./scripts/config.js');
+                Config.CURRENT_DIR = process.argv[1];
+                Config.FILES.visualSummaryAssetDir = path.join(process.argv[1], 'archive');
+                require('./scripts/visual-summary-state.js').main([
+                    process.argv[2], '--date', process.argv[3],
+                    '--manifest', process.argv[4], '--receipt', process.argv[5]
+                ]);
+            `, directory, command, targetDate, manifestPath, receiptPath], {
+                cwd: path.join(__dirname, '..'),
+                encoding: 'utf8',
+                timeout: 2500
+            });
+            callback({ directory, manifestPath, completed, source, asset, run });
+        } finally {
+            Config.CURRENT_DIR = originalCurrent;
+            Config.FILES.visualSummaryAssetDir = originalAssets;
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    }
+
+    for (const replacement of ['symlink', 'fifo', 'damaged']) {
+        it(`真实status拒绝${replacement}长图，原PNG和只读清单保持合法`, () => {
+            withCompletedVisual(({ manifestPath, source, asset, run }) => {
+                const original = run('status');
+                assert.ifError(original.error);
+                assert.equal(original.status, 0, original.stderr);
+                assert.match(original.stdout, /完成 1\/1 张/);
+                const manifestBytes = fs.readFileSync(manifestPath);
+                fs.unlinkSync(asset);
+                if (replacement === 'symlink') fs.symlinkSync(source, asset);
+                else if (replacement === 'fifo') assert.equal(spawnSync('mkfifo', [asset]).status, 0);
+                else fs.writeFileSync(asset, 'damaged PNG');
+                const inode = fs.lstatSync(asset).ino;
+                const rejected = run('status');
+                assert.ifError(rejected.error);
+                assert.equal(rejected.status, 1, rejected.stderr);
+                assert.match(rejected.stdout, /完成 0\/1 张/);
+                assert.equal(fs.lstatSync(asset).ino, inode);
+                assert.deepEqual(fs.readFileSync(manifestPath), manifestBytes);
+            });
+        });
+    }
+
+    for (const replacement of ['symlink', 'fifo', 'damaged', 'valid']) {
+        it(`真实plan迁移旧路径${replacement}长图，保留原QA和发布绑定`, () => {
+            withCompletedVisual(({ directory, manifestPath, completed, source, asset, run }) => {
+                const legacy = path.join(directory, 'visual-summaries', targetDate, paperId, 'infographic.png');
+                fs.mkdirSync(path.dirname(legacy), { recursive: true });
+                fs.unlinkSync(asset);
+                if (replacement === 'symlink') fs.symlinkSync(source, legacy);
+                else if (replacement === 'fifo') assert.equal(spawnSync('mkfifo', [legacy]).status, 0);
+                else fs.writeFileSync(legacy, replacement === 'valid' ? PNG : Buffer.from('damaged PNG'));
+                completed.papers[paperId].cards.infographic.assetPath = path.relative(Config.PROJECT_ROOT, legacy);
+                fs.writeFileSync(manifestPath, JSON.stringify(completed));
+                const manifestBytes = fs.readFileSync(manifestPath);
+                const inode = fs.lstatSync(legacy).ino;
+                const result = run('plan');
+                assert.ifError(result.error);
+                if (replacement === 'valid') {
+                    assert.equal(result.status, 0, result.stderr);
+                    assert.equal(fs.existsSync(legacy), false);
+                    assert.deepEqual(fs.readFileSync(asset), PNG);
+                    const next = JSON.parse(fs.readFileSync(manifestPath));
+                    assert.deepEqual(next.publication, completed.publication);
+                    const oldCard = completed.papers[paperId].cards.infographic;
+                    const card = next.papers[paperId].cards.infographic;
+                    assert.equal(card.status, 'complete');
+                    assert.equal(card.taskToken, oldCard.taskToken);
+                    assert.deepEqual(card.qaAttestation, oldCard.qaAttestation);
+                    assert.equal(run('status').status, 0);
+                } else {
+                    assert.equal(result.status, 1, result.stderr);
+                    assert.equal(fs.lstatSync(legacy).ino, inode);
+                    assert.equal(fs.existsSync(asset), false);
+                    assert.deepEqual(fs.readFileSync(manifestPath), manifestBytes);
+                }
+            });
+        });
+    }
+});

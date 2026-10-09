@@ -989,6 +989,39 @@ function pendingCard(id, kind, expectedAnalysisSha, expectedPromptSha, rank, pub
     };
 }
 
+// 已登记长图只读取受控普通文件；文件描述符与当前路径必须始终对应。
+function readControlledVisualPng(filename, root) {
+    assertSafeAssetTarget(filename, root);
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    try {
+        const before = fs.fstatSync(fd);
+        if (!before.isFile() || before.size > RENDERING_CONTRACT.maxPngBytes) {
+            throw new Error(`视觉摘要PNG不是普通文件或超过大小限制：${filename}`);
+        }
+        const raw = Buffer.alloc(before.size + 1);
+        let length = 0;
+        while (length < raw.length) {
+            const read = fs.readSync(fd, raw, length, raw.length - length, length);
+            if (read === 0) break;
+            length += read;
+        }
+        const after = fs.fstatSync(fd);
+        assertSafeAssetTarget(filename, root);
+        const named = fs.lstatSync(filename);
+        if (!named.isFile() || length !== before.size
+            || [after, named].some(stat => stat.dev !== before.dev || stat.ino !== before.ino
+                || stat.size !== before.size || stat.mtimeMs !== before.mtimeMs
+                || stat.ctimeMs !== before.ctimeMs)) {
+            throw new Error(`视觉摘要PNG在读取期间发生变化：${filename}`);
+        }
+        const bytes = raw.subarray(0, length);
+        validatePngBuffer(bytes);
+        return bytes;
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
 function validateCompletedCard(card, expectedAnalysisSha, expectedPromptSha, expectedTaskToken = null, expectedPath = null) {
     if (!card || card.status !== 'complete') return false;
     if (card.qaAttestation?.attested !== true
@@ -1004,8 +1037,7 @@ function validateCompletedCard(card, expectedAnalysisSha, expectedPromptSha, exp
     if (absolute !== allowedRoot && !absolute.startsWith(`${allowedRoot}${path.sep}`)) return false;
     if (expectedPath && absolute !== path.resolve(expectedPath)) return false;
     try {
-        const raw = fs.readFileSync(absolute);
-        validatePngBuffer(raw);
+        const raw = readControlledVisualPng(absolute, Config.FILES.visualSummaryAssetDir);
         return sha256Buffer(raw) === card.assetSha256;
     } catch (_error) {
         return false;
@@ -1262,8 +1294,8 @@ function migrateLegacyCompletedCard(
     const source = [legacy, unnumberedArchive, rankedArchive, target]
         .find(candidate => fs.existsSync(candidate)) || null;
     if (!source) return card;
-    const raw = fs.readFileSync(source);
-    validatePngBuffer(raw);
+    const raw = readControlledVisualPng(source,
+        source === legacy ? Config.CURRENT_DIR : Config.FILES.visualSummaryAssetDir);
     if (sha256Buffer(raw) !== card.assetSha256) return card;
 
     assertSafeAssetTarget(target, Config.FILES.visualSummaryAssetDir);
@@ -1271,8 +1303,7 @@ function migrateLegacyCompletedCard(
     if (source !== target) {
         const oldParent = path.dirname(source);
         if (fs.existsSync(target)) {
-            const existing = fs.readFileSync(target);
-            validatePngBuffer(existing);
+            const existing = readControlledVisualPng(target, Config.FILES.visualSummaryAssetDir);
             if (sha256Buffer(existing) !== card.assetSha256) {
                 throw new Error(`视觉摘要归档目标已存在但内容不一致: ${target}`);
             }
