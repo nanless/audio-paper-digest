@@ -171,7 +171,7 @@ test('弱会议提取复用多 facet 和安全的换行仓库绑定', () => {
         === 'https://github.com/yophis/partial-yarn'));
 
     const hyphenWrappedBenchmark = deep.extractWeakConferenceSourceResourceCandidates(
-        'LISTEN benchmark is avail-\nable at: https://huggingface.co/datasets/\n'
+        'Our LISTEN benchmark is avail-\nable at: https://huggingface.co/datasets/\n'
         + 'VibeCheck1/LISTEN_full. Code is available at https://github.com/example/listen.'
     );
     assert.deepEqual(hyphenWrappedBenchmark.map(candidate => candidate.type), ['dataset', 'code']);
@@ -254,8 +254,8 @@ test('Reader 拿到的是已核验的不可得状态，不能把来源 URL 当�
         context.WEAK_READER_CAPABILITY_POLICY, identity
     );
     assert.match(evidence, /availability=unavailable; status=404/);
-    assert.match(evidence, /available 才可写“当前可用\/已公开”/);
-    assert.match(evidence, /unavailable 必须写链接当前不可用/);
+    assert.match(evidence, /作者资源且 availability=available，才可写“作者资源当前可用\/已公开”/);
+    assert.match(evidence, /unavailable 只说明链接当前不可用/);
 
     const conflictingDraft = {
         readerTitle: '不可达资源声明测试',
@@ -726,8 +726,8 @@ test('Reader 拿到的是已核验的不可得状态，不能把来源 URL 当�
     );
 
     const twoCodeText = [
-        'Code: https://github.com/example/unavailable-a.',
-        'Code: https://github.com/example/unavailable-b.'
+        'Our code is available at https://github.com/example/unavailable-a.',
+        'Our code is available at https://github.com/example/unavailable-b.'
     ].join('\n');
     const twoCodeDetails = weakDetails(paperId, twoCodeText);
     const twoCodeIdentity = await context.withConferenceAnalysisSource({
@@ -810,11 +810,11 @@ test('Reader 拿到的是已核验的不可得状态，不能把来源 URL 当�
 
 test('正式的开源明细行会逐条呈现已核验状态，并保留未核验的行', async () => {
     const sourceText = [
-        'Code: https://github.com/example/code.',
-        'Model weights: https://huggingface.co/example/model.',
-        'Dataset: https://huggingface.co/datasets/example/data.',
-        'Demo: https://example.org/demo.',
-        'Reproduction materials: https://example.org/reproduce.'
+        'Our code is available at https://github.com/example/code.',
+        'Our model weights are available at https://huggingface.co/example/model.',
+        'Our dataset is available at https://huggingface.co/datasets/example/data.',
+        'Our demo is available at https://example.org/demo.',
+        'Our reproduction materials are available at https://example.org/reproduce.'
     ].join('\n');
     const analysis = [
         '## 机器摘要',
@@ -1131,4 +1131,42 @@ test('第二轮审查有噪声时，多轮评分的共识仍然可以复核', ()
     assert.equal(deep.scoringStabilityResolutionIsValid(stage), true);
     stage.stabilityResolution.scoreDifference = 0.4;
     assert.equal(deep.scoringStabilityResolutionIsValid(stage), false);
+});
+
+test('作者逗号枚举的代码、权重和数据集都保留，完整跨行原句可重放', async () => {
+    const url = 'https://github.com/example/shared-assets';
+    for (const text of [
+        `Our code, dataset, and model weights are available at ${url}.`,
+        `Our code, dataset, and model weights\nare available at ${url}.`,
+        `Our code, dataset, and model weights are available at ${url}, while the baseline code is available at https://github.com/other/baseline.`
+    ]) {
+        const candidates = binding.extractPaperSourceRepositoryCandidates(text).filter(item => item.url === url);
+        assert.deepEqual(candidates.map(item => item.type), ['code', 'model', 'dataset'], text);
+        const analysis = '## 机器摘要\nhas_code: 否\nhas_model: 否\nhas_dataset: 否\n'
+            + deep.buildDeterministicOpenSourceScan(text);
+        const identity = await deep.buildApiReaderResourceIdentity(analysis, text, {}, network(200));
+        const authored = identity.resources.filter(item => item.originalUrl === url);
+        assert.deepEqual(authored.map(item => item.type).sort(), ['code','dataset','model']);
+        assert.ok(authored.every(item => text.includes(item.sourceQuote)
+            && item.sourceQuote.startsWith('Our code, dataset, and model weights')
+            && binding.paperSourceQuoteBindsOriginalUrl(item)));
+        assert.doesNotThrow(() => deep.replayVerifiedReaderResourceIdentity(identity, text));
+        const projected = deep.applyApiReaderResourceAvailability(analysis, identity);
+        for (const key of ['has_code', 'has_model', 'has_dataset']) assert.match(projected, new RegExp(`^${key}: 是$`, 'm'));
+        assert.ok(identity.resources.filter(item => item.originalUrl.includes('/other/'))
+            .every(item => item.type === 'third_party'));
+    }
+});
+
+test('命名基准须有作者归属，枚举中的未来计划仍不能成为开放证据', () => {
+    for (const text of [
+        'LISTEN benchmark is available at https://huggingface.co/datasets/example/listen.',
+        'Our code, dataset, and model weights will be released at https://github.com/example/shared.'
+    ]) {
+        assert.deepEqual([...new Set(binding.extractPaperSourceRepositoryCandidates(text).map(item => item.type))],
+            ['third_party']);
+    }
+    assert.deepEqual(binding.extractPaperSourceRepositoryCandidates(
+        'Our LISTEN benchmark is available at https://huggingface.co/datasets/example/listen.'
+    ).map(item => item.type), ['dataset']);
 });

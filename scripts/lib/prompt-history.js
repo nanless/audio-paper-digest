@@ -39,13 +39,10 @@ function promptTemplateSha256(text, contractVersion = '') {
         .digest('hex');
 }
 
-const wholeFileIndexes = new Map();
 const templateIndex = new Map();
 
 // directory 默认是 prompts/history/。测试把它指到临时目录，就不用往真归档里塞坏文件。
 function historyFileIndex(directory = HISTORY_DIR) {
-    const cached = wholeFileIndexes.get(directory);
-    if (cached) return cached;
     const index = new Map();
     let names = [];
     try {
@@ -57,7 +54,6 @@ function historyFileIndex(directory = HISTORY_DIR) {
         const match = HISTORY_FILE_RE.exec(name);
         if (match) index.set(match[1], path.join(directory, name));
     }
-    wholeFileIndexes.set(directory, index);
     return index;
 }
 
@@ -76,9 +72,7 @@ function archivedBytes(file, expectedSha256) {
 function historicalPromptBytesForSha256(sha256, directory = HISTORY_DIR) {
     const value = String(sha256 || '').toLowerCase();
     if (!SHA256_RE.test(value)) return null;
-    const file = historyFileIndex(directory).get(value);
-    if (!file) return null;
-    return archivedBytes(file, value);
+    return archivedBytes(path.join(directory, `${value}.md`), value);
 }
 
 // 按首块模板 SHA 取归档字节。模板哈希取决于记录声明的版本号，所以这里逐份归档文件
@@ -88,18 +82,22 @@ function historicalPromptTemplateBytesForSha256(sha256, contractVersion = '', di
     const value = String(sha256 || '').toLowerCase();
     if (!SHA256_RE.test(value)) return null;
     const cacheKey = `${directory}:${value}:${String(contractVersion || '')}`;
-    if (templateIndex.has(cacheKey)) return templateIndex.get(cacheKey);
-    let found = null;
+    const cached = templateIndex.get(cacheKey);
+    if (cached) {
+        const bytes = archivedBytes(cached.file, cached.wholeSha256);
+        if (bytes) return bytes;
+        templateIndex.delete(cacheKey);
+    }
     for (const [wholeSha256, file] of historyFileIndex(directory)) {
         const bytes = archivedBytes(file, wholeSha256);
         if (!bytes) continue;
         if (promptTemplateSha256(bytes.toString('utf8'), contractVersion) === value) {
-            found = bytes;
-            break;
+            // 只缓存查找位置；字节始终从当前文件读取并核验，调用方也不会共享 Buffer。
+            templateIndex.set(cacheKey, { file, wholeSha256 });
+            return bytes;
         }
     }
-    templateIndex.set(cacheKey, found);
-    return found;
+    return null;
 }
 
 // 统一的入口：先看当前路径与同阶段的 -v2 路径的字节是否就是声明的 SHA，都不是再到
@@ -136,7 +134,6 @@ function promptBytesForSha256(stage, sha256, directory = HISTORY_DIR) {
 }
 
 function resetCache() {
-    wholeFileIndexes.clear();
     templateIndex.clear();
 }
 

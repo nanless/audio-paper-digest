@@ -105,7 +105,9 @@ const {
 const {
     extractPaperSourceRepositoryCandidates,
     normalizedSourceUrlBinding,
-    paperSourceQuoteBindsOriginalUrl
+    paperSourceQuoteBindsOriginalUrl,
+    paperSourceResourceFacets,
+    paperSourceResourceQuote
 } = require('./lib/reader-resource-binding.js');
 const { READER_TABLE_SELECTION_CONTRACT, compileReaderTableSelections,
     assessReaderTableSelectionEligibility, bracketedNumericVectors,
@@ -3415,7 +3417,7 @@ function buildApiReaderResourceEvidence(identity) {
     }
     const lines = [
         `[READER_VERIFIED_RESOURCES] ${identity.contract} sha256=${identitySha256}`,
-        '资源状态是正文开源声明的唯一依据：available 才可写“当前可用/已公开”；unavailable 必须写链接当前不可用；temporarily_unreachable 必须写本次未能确认可达。'
+        '只有归属明确的作者资源且 availability=available，才可写“作者资源当前可用/已公开”；third_party 只证明论文提到该链接，不证明作者已开源。unavailable 只说明链接当前不可用；temporarily_unreachable 只说明本次未能确认可达。来源未确认不是论文技术缺陷。'
     ];
     if (identity.resources.length === 0) {
         lines.push('NONE: 未发现来源绑定且完成 HTTPS 状态验证的资源；不得声称代码、模型或数据已公开。');
@@ -7624,6 +7626,8 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         && existingReaderResources.contract === API_READER_RESOURCE_IDENTITY_CONTRACT
         && existingReaderResources.sourceTextSha256 === sourceSha256
         && Array.isArray(existingReaderResources.resources)
+        && existingReaderResources.resources.every(resource => resource.origin !== 'paper_source'
+            || paperSourceQuoteBindsOriginalUrl(resource))
         && existingReaderResources.identitySha256 === stableFingerprint(existingReaderResourceBody)
         ? structuredClone(existingReaderResources)
         : await buildApiReaderResourceIdentity(
@@ -7817,6 +7821,8 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
         && existingReaderResources.contract === API_READER_RESOURCE_IDENTITY_CONTRACT
         && existingReaderResources.sourceTextSha256 === sourceSha256
         && Array.isArray(existingReaderResources.resources)
+        && existingReaderResources.resources.every(resource => resource.origin !== 'paper_source'
+            || paperSourceQuoteBindsOriginalUrl(resource))
         && existingReaderResources.identitySha256 === stableFingerprint(existingReaderResourceBody)
         ? existingReaderResources : null;
     const readerResources = options.readerResources
@@ -11643,7 +11649,7 @@ function extractApiReaderResourceCandidates(analysis) {
     const section = extractSectionByTitle(analysis, '开源详情');
     const typeByLabel = {
         '代码': 'code', '模型权重': 'model', '数据集': 'dataset',
-        'Demo': 'demo', '复现材料': 'reproduction', '论文中引用的开源项目': 'third_party'
+        'Demo': 'demo', '复现材料': 'reproduction', '论文中引用的开源项目': 'third_party', '其他资源链接': 'third_party'
     };
     const candidates = [];
     for (const line of String(section || '').split('\n')) {
@@ -11889,7 +11895,10 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
         );
         const origin = sourceLine ? 'paper_source' : demoLinks.has(candidate.url)
             ? 'validated_demo' : null;
-        return { ...candidate, sourceLine, origin };
+        const type = origin === 'paper_source'
+            && !paperSourceResourceFacets(sourceText, candidate.sourceToken || candidate.url).includes(candidate.type)
+            ? 'third_party' : candidate.type;
+        return { ...candidate, type, sourceLine, origin };
     }).filter(candidate => candidate.origin);
     const candidates = boundCandidates.slice(0, 12);
     if (boundCandidates.length > candidates.length) {
@@ -11967,12 +11976,15 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
                 verifiedByUrl.set(candidate.url, verified);
             }
         }
+        const sourceQuote = origin === 'paper_source'
+            ? paperSourceResourceQuote(sourceText, candidate.sourceToken || candidate.url)
+            : sourceLine?.trim() || candidate.line;
         resources.push({
             type: candidate.type,
             origin,
-            sourceQuote: sourceLine?.trim() || candidate.line,
+            sourceQuote,
             sourceQuoteSha256: crypto.createHash('sha256')
-                .update(sourceLine?.trim() || candidate.line).digest('hex'),
+                .update(sourceQuote).digest('hex'),
             ...(origin === 'paper_source'
                 ? normalizedSourceUrlBinding(candidate.sourceToken || candidate.url, candidate.url)
                 : {}),
@@ -11990,7 +12002,9 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
 
 function applyApiReaderResourceAvailability(analysis, identity) {
     if (identity?.contract !== API_READER_RESOURCE_IDENTITY_CONTRACT || !Array.isArray(identity.resources)
-        || !recoverySha256(identity.identitySha256)) {
+        || !recoverySha256(identity.identitySha256)
+        || identity.resources.some(resource => resource.origin === 'paper_source'
+            && !paperSourceQuoteBindsOriginalUrl(resource))) {
         throw new Error('同步资源状态需要符合格式的资源核验记录；记录缺失时，不能按空资源列表处理。');
     }
     let updated = String(analysis || '');
@@ -12013,7 +12027,8 @@ function applyApiReaderResourceAvailability(analysis, identity) {
         ['model', '模型权重'],
         ['dataset', '数据集'],
         ['demo', 'Demo'],
-        ['reproduction', '复现材料']
+        ['reproduction', '复现材料'],
+        ['third_party', '其他资源链接']
     ];
     const resourceDescription = resource => {
         const status = Number.isInteger(resource.status) ? `，HTTP ${resource.status}` : '';
@@ -12036,13 +12051,21 @@ function applyApiReaderResourceAvailability(analysis, identity) {
         )).join('；');
     const section = extractSectionByTitle(updated, '开源详情');
     let cleaned = String(section || '').replace(/^[-*]\s*资源可达性验证[：:].*$/gm, '').trim();
+    cleaned = cleaned.split('\n').map(line => {
+        const candidates = extractApiReaderResourceCandidates(`## 开源详情\n${line}`);
+        return candidates.some(candidate => candidate.type !== 'third_party'
+            && !identity.resources.some(resource => resource.originalUrl === candidate.url
+                && resource.type === candidate.type))
+            ? '- 其他资源链接：来源未确认属于作者已开放的资源；不据此判断技术缺陷。' : line;
+    }).join('\n');
     for (const [type, label] of resourceLines) {
         const resources = identity.resources.filter(resource => resource.type === type);
         // 本循环没有某类资源记录时，保留“开源详情”中对应的原说明。有该类记录时，
         // 按记录中的地址和可达状态更新说明。这个规则只处理本节文字，
         // 机器摘要的资源标记已在上方另行更新。
         if (!resources.length) continue;
-        const projected = `- ${label}：${resources.map(resourceDescription).join('；')}`;
+        const projected = `- ${label}：${resources.map(resourceDescription).join('；')}`
+            + (type === 'third_party' ? '（未据此确认作者已开放资源）' : '');
         const lines = cleaned.split('\n');
         const pattern = new RegExp(
             `^\\s*(?:[-*]\\s*)?(?:\\*\\*)?${escapeRegExp(label)}(?:\\*\\*)?\\s*[：:]`
@@ -15750,7 +15773,7 @@ async function scanOpensource(paper, sourceText, preparedEvidence = null) {
             `- 数据集：${value('dataset', '论文中未提及')}`,
             `- Demo：${value('demo', '论文中未提及')}`,
             `- 复现材料：${value('reproduction', '论文中未提及')}`,
-            `- 论文中引用的开源项目：${thirdParty.join('；') || '未提及'}`
+            `- 其他资源链接：${thirdParty.join('；') || '未提及'}（不代表作者资源已开放）`
         ].join('\n');
     }
     const evidence = typeof preparedEvidence === 'string'
@@ -15794,7 +15817,7 @@ function buildDeterministicOpenSourceScan(sourceText) {
         `- 数据集：${value('dataset', '论文中未提及')}`,
         `- Demo：${value('demo', '论文中未提及')}`,
         `- 复现材料：${value('reproduction', '论文中未提及')}`,
-        `- 论文中引用的开源项目：${thirdParty.join('；') || '未提及'}`
+        `- 其他资源链接：${thirdParty.join('；') || '未提及'}（不代表作者资源已开放）`
     ].join('\n');
 }
 

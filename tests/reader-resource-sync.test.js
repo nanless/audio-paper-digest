@@ -9,7 +9,7 @@ const {synchronizeReaderResourceAvailability:sync}=require('../scripts/lib/reade
 const binding=require('../scripts/lib/reader-resource-binding.js');
 
 function fixture(type='demo',availability='temporarily_unreachable') {
-    const text='Demo: https://example.org/demo\nThis is the original source evidence.';
+    const text=`Our ${type} is available at https://example.org/demo\nThis is the original source evidence.`;
     const identity={contract:'api-reader-resource-identity-v1',sourceTextSha256:sha(text),resources:[{
         type,origin:'paper_source',sourceQuote:text.split('\n')[0],sourceQuoteSha256:sha(text.split('\n')[0]),
         originalUrl:'https://example.org/demo',finalUrl:'https://example.org/demo',redirects:[],
@@ -194,7 +194,7 @@ test('Reader 资源身份重绑拒绝已签名字节、审计记录或资源数�
 test('论文来源的裸仓库令牌经资源同步复核',()=>{
     const f=fixture();
     const token='github.com/example/demo';
-    f.sourceDetails.text=`Demo: ${token}\nThis is the original source evidence.`;
+    f.sourceDetails.text=`Our demo is available at ${token}\nThis is the original source evidence.`;
     const resource=f.resources.resources[0];
     resource.sourceQuote=f.sourceDetails.text.split('\n')[0];
     resource.sourceQuoteSha256=sha(resource.sourceQuote);
@@ -218,7 +218,8 @@ test('论文来源提取为一个官方 URL 保留每一个显式类型化维度
     for(const [text,expected] of [
         ['Data and code are available at https://github.com/example/project.', ['code','dataset']],
         ['Code and checkpoints are available at github.com/example/project.', ['code','model']],
-        ['Code and model are available at https://gitlab.com/example/project.', ['code','model']]
+        ['Code and model are available at https://gitlab.com/example/project.', ['code','model']],
+        ['Our PyTorch training code is available at https://github.com/example/project.', ['code']]
     ]) {
         const candidates=binding.extractPaperSourceRepositoryCandidates(text);
         assert.deepEqual(candidates.map(item=>item.type),expected,text);
@@ -283,4 +284,91 @@ test('论文来源折行恢复拒绝跨段落和不安全的仓库令牌',()=>{
         'github.com/example/\nproject?token=secret',
         '127.0.0.1/example/project'
     ]) assert.equal(binding.normalizePaperSourceRepositoryToken(token),null,token);
+});
+
+test('原文否定、未来计划、第三方和不明归属，即使 URL 可达也不投影为作者已开源', async()=>{
+    const examples = [
+        'Our code is not available at https://github.com/acme/paper.',
+        'Our code will be released at https://github.com/acme/paper.',
+        'The baseline code is available at https://github.com/other/baseline.',
+        'TensorFlow source code is publicly available at https://github.com/tensorflow/tensorflow.',
+        'The TensorFlow source code is publicly available at https://github.com/tensorflow/tensorflow.',
+        'We use the publicly available code at https://github.com/other/baseline.',
+        'Our model checkpoints are not publicly released at https://huggingface.co/acme/model.',
+        '代码尚未开源，地址为 https://github.com/acme/paper。',
+        '代码将开源于 https://github.com/acme/paper。',
+        '项目资料 https://github.com/acme/paper。'
+    ];
+    for (const source of examples) {
+        const scan=deep.buildDeterministicOpenSourceScan(source);
+        const analysis=`## 机器摘要\nhas_code: 否\nhas_model: 否\nhas_dataset: 否\n${scan}`;
+        let requests=0;
+        const identity=await deep.buildApiReaderResourceIdentity(analysis,source,{}, {
+            validateUrlImpl:async url=>new URL(url),
+            requestImpl:async()=>{requests++;return {status:200,headers:{get:()=>null}};}
+        });
+        assert.equal(requests,1,source);
+        assert.ok(identity.resources.every(resource=>resource.type==='third_party'),source);
+        const projected=deep.applyApiReaderResourceAvailability(analysis,identity);
+        for(const key of ['has_code','has_model','has_dataset']) assert.match(projected,new RegExp(`${key}: 否`),source);
+        assert.match(projected,/未据此确认作者已开放资源/,source);
+    }
+});
+
+test('模型把 URL 归错作者资源时，来源绑定重新核对归属；同句另一作者资源保留', async()=>{
+    const source='Our code is available at https://github.com/acme/code, while the baseline code is available at https://github.com/other/baseline and our model will be released at https://huggingface.co/acme/model.';
+    const analysis='## 机器摘要\nhas_code: 否\nhas_model: 否\nhas_dataset: 否\n## 开源详情\n'
+        +'- 代码：https://github.com/acme/code\n- 代码：https://github.com/other/baseline\n- 模型权重：https://huggingface.co/acme/model';
+    const identity=await deep.buildApiReaderResourceIdentity(analysis,source,{}, {
+        validateUrlImpl:async url=>new URL(url),requestImpl:async()=>({status:200,headers:{get:()=>null}})
+    });
+    assert.deepEqual(identity.resources.map(resource=>[resource.originalUrl,resource.type]),[
+        ['https://github.com/acme/code','code'],['https://github.com/other/baseline','third_party'],
+        ['https://huggingface.co/acme/model','third_party']]);
+    const projected=deep.applyApiReaderResourceAvailability(analysis,identity);
+    assert.match(projected,/has_code: 是/);assert.match(projected,/has_model: 否/);
+    assert.doesNotMatch(projected,/- 代码：[^\n]*other\/baseline/);
+    assert.doesNotMatch(projected,/- 模型权重：[^\n]*huggingface/);
+});
+
+test('受影响旧资源缓存即使完整重算自身 SHA，也不能继续通过 Reader、证据或投影核验',()=>{
+    const f=fixture('code','available');
+    const denied='Our code is not available at https://example.org/demo';
+    f.sourceDetails.text+='\n\n'+denied;
+    f.paper.sourceSha256=sha(f.sourceDetails.text);
+    f.paper.analysisManifest.sourceAcquisition.sourceSha256=f.paper.sourceSha256;
+    f.resources.sourceTextSha256=f.paper.sourceSha256;
+    delete f.resources.identitySha256;f.resources.identitySha256=hash(f.resources);
+    f.paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256=f.resources.identitySha256;
+    sealReader(f.paper);
+    assert.equal(engine.hasValidApiReaderV3Records(f.paper),true);
+    f.resources.resources[0].sourceQuote=denied;
+    f.resources.resources[0].sourceQuoteSha256=sha(denied);
+    delete f.resources.identitySha256;f.resources.identitySha256=hash(f.resources);
+    f.paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256=f.resources.identitySha256;
+    f.paper.analysisManifest.stages.apiReaderArticle.resourceIdentitySha256=f.resources.identitySha256;
+    assert.equal(engine.hasValidApiReaderV3Records(f.paper),false);
+    assert.throws(()=>deep.replayVerifiedReaderResourceIdentity(f.resources,f.sourceDetails.text),/不符合要求/);
+    assert.throws(()=>deep.applyApiReaderResourceAvailability(f.paper.analysis,f.resources),/资源核验记录/);
+    assert.throws(()=>sync(f.paper,f.sourceDetails),/同步前检查/);
+});
+
+test('已有肯定机器标记和解析值遇到其他归属或不可达的新资源后被明确清除', async()=>{
+    for (const [source,status,expectedType] of [
+        ['Our code will be released at https://github.com/acme/code.',200,'third_party'],
+        ['Our code is available at https://github.com/acme/code.',404,'code']
+    ]) {
+        const analysis='## 机器摘要\nhas_code: 是\nhas_model: 否\nhas_dataset: 否\n## 开源详情\n- 代码：https://github.com/acme/code（作者已开源）';
+        assert.equal(parseAnalysis(analysis).hasCode,'是');
+        const identity=await deep.buildApiReaderResourceIdentity(analysis,source,{}, {
+            validateUrlImpl:async url=>new URL(url),requestImpl:async()=>({status,headers:{get:()=>null}})
+        });
+        assert.equal(identity.resources[0].type,expectedType);
+        const projected=deep.applyApiReaderResourceAvailability(analysis,identity);
+        assert.match(projected,/has_code: 否/);
+        assert.equal(parseAnalysis(projected).hasCode,'否');
+        assert.doesNotMatch(projected,/作者已开源/);
+        if(status===404) assert.match(projected,/当前不可用/);
+        else assert.doesNotMatch(projected,/- 代码：[^\n]*github/);
+    }
 });

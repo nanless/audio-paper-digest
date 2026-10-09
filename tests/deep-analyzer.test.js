@@ -21,7 +21,7 @@ describe('会议来源绑定的开源清单', () => {
                 + 'The paper uses the third-party toolkit https://github.com/example/tool.git.'
         );
         assert.match(result, /- 数据集：https:\/\/huggingface\.co\/datasets\/example\/corpus/);
-        assert.match(result, /- 论文中引用的开源项目：https:\/\/github\.com\/example\/tool/);
+        assert.match(result, /- 其他资源链接：https:\/\/github\.com\/example\/tool/);
         assert.doesNotMatch(result, /arXiv/);
     });
 

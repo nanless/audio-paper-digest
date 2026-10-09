@@ -634,8 +634,13 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
                 return `实验结果第 ${index + 1} 张表指标“${normalized}”缺少 ↑/↓ 方向`;
             }
         }
+        const metricIndexes = table.header.flatMap((header, index) => (
+            isTableIdentifierHeader(header.replace(/<br\s*\/?>/gi, ' ').replace(/[*_`]/g, '').trim())
+                ? [] : [index]
+        ));
         for (const row of table.rows) {
-            for (const cell of row.slice(Math.min(table.identifierColumns, row.length))) {
+            for (const columnIndex of metricIndexes) {
+                const cell = row[columnIndex];
                 const normalized = String(cell || '').replace(/[*_`]/g, '').trim();
                 if (TABLE_NUMERIC_CELL_RE.test(normalized)) numericCells += 1;
                 if (/−|％|(?:^|[<>=±+\-\[(,;/]\s*)\.\d|\d\s+%/.test(normalized)) {
