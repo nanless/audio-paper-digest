@@ -583,3 +583,127 @@ test('命令行要求显式的来源身份和年份，只用配置的运行时�
     assert.throws(() => cli.parseArgs(['download', '--provider', 'odyssey-2026', '--conference-id', 'odyssey-2026',
         '--year', '2026', '--apply', '--retries', '6'], { acquisitionRoot: root }), /retries/u);
 });
+
+
+test('官方目录四种不可变文件短写后均可重新抓取或重放恢复', async t => {
+    for (let failAt = 1; failAt <= 4; failAt += 1) {
+        const { outputRoot } = temporaryRoot(t);
+        const deps = dependencies(async () => httpResponse(ODYSSEY_FIXTURE, 'text/html'));
+        const originalWrite = fs.writeFileSync; let writes = 0;
+        const injected = t.mock.method(fs, 'writeFileSync', (fd, bytes, ...args) => {
+            if (typeof fd === 'number' && ++writes === failAt) {
+                originalWrite(fd, Buffer.from(bytes).subarray(0, 10), ...args);
+                const error = new Error('模拟短写 EIO'); error.code = 'EIO'; throw error;
+            }
+            return originalWrite(fd, bytes, ...args);
+        });
+        try {
+            await assert.rejects(acquisition.acquireCatalog({ providerId: 'odyssey-2026', outputRoot, apply: true }, deps), /EIO/);
+        } finally { injected.mock.restore(); }
+        const retry = await acquisition.acquireCatalog({ providerId: 'odyssey-2026', outputRoot, apply: true }, deps);
+        assert.equal(retry.papers, 1);
+        assert.equal(acquisition.replayCatalog('odyssey-2026', outputRoot).metadata.papers.length, 1);
+    }
+});
+
+test('PDF及其凭证短写后续跑可恢复且完成状态重新验证字节', async t => {
+    for (let failAt = 1; failAt <= 2; failAt += 1) {
+        const { outputRoot } = temporaryRoot(t);
+        const deps = dependencies(async url => url.endsWith('.pdf')
+            ? httpResponse('%PDF-1.4\ncomplete-paper\n%%EOF', 'application/pdf')
+            : httpResponse(ODYSSEY_FIXTURE, 'text/html'));
+        await acquisition.acquireCatalog({ providerId: 'odyssey-2026', outputRoot, apply: true }, deps);
+        const originalWrite = fs.writeFileSync; let writes = 0;
+        const injected = t.mock.method(fs, 'writeFileSync', (fd, bytes, ...args) => {
+            if (typeof fd === 'number' && ++writes === failAt) {
+                originalWrite(fd, Buffer.from(bytes).subarray(0, 10), ...args);
+                const error = new Error('模拟 PDF 短写 EIO'); error.code = 'EIO'; throw error;
+            }
+            return originalWrite(fd, bytes, ...args);
+        });
+        try {
+            await assert.rejects(acquisition.downloadPapers({ providerId: 'odyssey-2026', outputRoot, apply: true }, deps), /EIO/);
+        } finally { injected.mock.restore(); }
+        assert.equal((await acquisition.downloadPapers({ providerId: 'odyssey-2026', outputRoot, apply: true }, deps)).complete, true);
+        assert.equal(acquisition.verifyAcquisition({ providerId: 'odyssey-2026', outputRoot }).complete, true);
+    }
+});
+
+test('官方XHTML目录可封存及离线重放，仍拒绝非HTML内容', async t => {
+    const { outputRoot } = temporaryRoot(t);
+    const result = await acquisition.acquireCatalog({ providerId: 'odyssey-2026', outputRoot, apply: true },
+        dependencies(async () => httpResponse(ODYSSEY_FIXTURE, 'application/xhtml+xml; charset=utf-8')));
+    assert.equal(result.papers, 1);
+    const replay = await acquisition.acquireCatalog({ providerId: 'odyssey-2026', outputRoot, apply: true },
+        dependencies(async () => { throw new Error('已有封存不应再次请求'); }));
+    assert.equal(replay.papers, 1);
+    const other = temporaryRoot(t);
+    await assert.rejects(acquisition.acquireCatalog({ providerId: 'odyssey-2026', outputRoot: other.outputRoot, apply: true },
+        dependencies(async () => httpResponse(ODYSSEY_FIXTURE, 'application/json'))), /Content-Type/);
+});
+
+test('普通会议状态不把损坏PDF或损坏凭证计为完成', async t => {
+    const { outputRoot } = temporaryRoot(t);
+    const args = { providerId: 'odyssey-2026', outputRoot, apply: true };
+    const deps = dependencies(async url => url.endsWith('.pdf')
+        ? httpResponse('%PDF-1.4\ncomplete-paper\n%%EOF', 'application/pdf')
+        : httpResponse(ODYSSEY_FIXTURE, 'text/html'));
+    await acquisition.acquireCatalog(args, deps); await acquisition.downloadPapers(args, deps);
+    assert.equal(acquisition.acquisitionStatus(args).complete, true);
+    const target = path.join(outputRoot, 'pdfs/alpha26_odyssey.pdf');
+    const original = fs.readFileSync(target);
+    fs.writeFileSync(target, Buffer.from(original.toString().replace('complete', 'modified')));
+    assert.throws(() => acquisition.acquisitionStatus(args), /differs from receipt/);
+    fs.writeFileSync(target, original);
+    const receipt = path.join(outputRoot, 'receipts/alpha26_odyssey.json');
+    fs.writeFileSync(receipt, '{}\n');
+    assert.throws(() => acquisition.acquisitionStatus(args), /schema/);
+});
+
+
+test('真实子进程在正式硬链接后中断，apply可恢复目录和PDF而只读状态不清理', async t => {
+    const { spawnSync } = require('node:child_process');
+    for (const relative of ['responses/index.html', 'responses/index.receipt.json', 'metadata.json',
+        'catalog.receipt.json', 'pdfs/alpha26_odyssey.pdf', 'receipts/alpha26_odyssey.json']) {
+        const { outputRoot } = temporaryRoot(t);
+        const args = { providerId: 'odyssey-2026', outputRoot, apply: true };
+        const deps = dependencies(async url => url.endsWith('.pdf')
+            ? httpResponse('%PDF-1.4\ncomplete-paper\n%%EOF', 'application/pdf')
+            : httpResponse(ODYSSEY_FIXTURE, 'text/html'));
+        const download = relative.startsWith('pdfs/') || relative.startsWith('receipts/');
+        if (download) await acquisition.acquireCatalog(args, deps);
+        const target = path.join(outputRoot, relative);
+        const script = `const fs=require('node:fs'); const api=require(${JSON.stringify(require.resolve('../scripts/lib/official-conference-acquisition.js'))});
+const original=fs.linkSync; fs.linkSync=(source,destination)=>{ const result=original(source,destination); if(destination===${JSON.stringify(target)})process.kill(process.pid,'SIGKILL'); return result; };
+const deps={detectProxy:()=> 'http://127.0.0.1:9',createDispatcher:()=>({}),now:()=> '2026-09-09T00:00:00.000Z',fetchImpl:async url=> new Response(url.endsWith('.pdf')?'%PDF-1.4\\ncomplete-paper\\n%%EOF':${JSON.stringify(ODYSSEY_FIXTURE)},{status:200,headers:{'content-type':url.endsWith('.pdf')?'application/pdf':'text/html'}})};
+api.${download ? 'downloadPapers' : 'acquireCatalog'}(${JSON.stringify(args)},deps).catch(error=>{console.error(error);process.exitCode=1;});`;
+        const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', timeout: 10000 });
+        assert.equal(child.signal, 'SIGKILL', child.stderr);
+        assert.equal(fs.statSync(target).nlink, 2);
+        try { acquisition.acquisitionStatus(args); } catch (error) { assert.equal(error.code, 'OFFICIAL_CONFERENCE_ACQUISITION_INTEGRITY'); }
+        assert.equal(fs.statSync(target).nlink, 2);
+        if (download) await acquisition.downloadPapers(args, deps);
+        else await acquisition.acquireCatalog(args, deps);
+        assert.equal(fs.statSync(target).nlink, 1);
+        if (download) assert.equal(acquisition.verifyAcquisition(args).complete, true);
+        else assert.equal(acquisition.replayCatalog(args.providerId, outputRoot).metadata.papers.length, 1);
+    }
+});
+
+test('正式链接前中断留下的临时文件明确报告路径，不能自动删除或宣称完成', async t => {
+    const { spawnSync } = require('node:child_process');
+    const { outputRoot } = temporaryRoot(t);
+    const args = { providerId: 'odyssey-2026', outputRoot, apply: true };
+    const script = `const fs=require('node:fs'); const api=require(${JSON.stringify(require.resolve('../scripts/lib/official-conference-acquisition.js'))});
+fs.linkSync=()=>process.kill(process.pid,'SIGKILL');
+api.acquireCatalog(${JSON.stringify(args)}, {detectProxy:()=> 'http://127.0.0.1:9',createDispatcher:()=>({}),now:()=> '2026-09-09T00:00:00.000Z',fetchImpl:async()=>new Response(${JSON.stringify(ODYSSEY_FIXTURE)},{status:200,headers:{'content-type':'text/html'}})});`;
+    const child = spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(child.signal, 'SIGKILL', child.stderr);
+    const responses = path.join(outputRoot, 'responses');
+    const [name] = fs.readdirSync(responses); const temporary = path.join(responses, name);
+    assert.match(name, /\.tmp$/);
+    await assert.rejects(acquisition.acquireCatalog(args, dependencies(async()=>{throw new Error('诊断前不得发请求');})),
+        error => error.message.includes(temporary) && /请先核验.*再单独清理/.test(error.message));
+    assert.equal(fs.existsSync(temporary), true);
+    assert.equal(fs.existsSync(path.join(responses, 'index.html')), false);
+});

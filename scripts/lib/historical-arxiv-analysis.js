@@ -9,6 +9,7 @@ const path = require('node:path');
 const authorityApi = require('./paper-source-authority.js');
 const arxivApi = require('./arxiv-source-authority.js');
 const fresh = require('./fresh-rewrite-run.js');
+const { writeImmutableFile, recoverImmutableFileLink } = require('./immutable-file.js');
 
 const BASELINE_CONTRACT = 'historical-arxiv-authority-baseline-v1';
 const METADATA_CONTRACT = 'historical-raw-metadata-proof-v1';
@@ -26,16 +27,7 @@ function fail(message) {
 
 function writeExact(filename, bytes) {
     const payload = Buffer.from(bytes);
-    let fd;
-    try {
-        fd = fs.openSync(filename,
-            fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-        fs.writeFileSync(fd, payload); fs.fsyncSync(fd);
-    } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        const existing = fs.readFileSync(filename);
-        if (!existing.equals(payload)) fail(`拒绝用不同字节覆盖已有文件：${path.basename(filename)}`);
-    } finally { if (fd !== undefined) fs.closeSync(fd); }
+    writeImmutableFile(filename, payload, fail);
     return sha256(payload);
 }
 const writeJsonExact = (filename, value) => writeExact(filename, Buffer.from(`${JSON.stringify(value, null, 2)}\n`));
@@ -57,6 +49,12 @@ function normalizedMetadataProof(proof, paper) {
         || proof.recordSha256 !== fresh.stableHash(paper)
         || typeof proof.sourceName !== 'string' || !proof.sourceName) fail('原始元数据凭证不合法：contract、paperId、SHA 或来源名不符');
     return structuredClone(proof);
+}
+
+function recoverSourceFiles(sourceDir) {
+    for (const filename of ['source.txt', 'artifacts.json', 'source-details.json', 'source.json']) {
+        recoverImmutableFileLink(path.join(sourceDir, filename), fail, 64 * 1024 * 1024);
+    }
 }
 
 function prepareHistoricalArxivRun({ authorityHandle, metadata, metadataProof, metadataArtifact = null, date, rootDir,
@@ -83,7 +81,10 @@ function prepareHistoricalArxivRun({ authorityHandle, metadata, metadataProof, m
     }
 
     const absoluteRoot = fresh.assertSafeDirectory(rootDir, true);
-    const runDir = path.join(absoluteRoot, runId);
+    const runDir = fresh.assertSafeDirectory(path.join(absoluteRoot, runId), true);
+    for (const filename of ['inputs.json', 'analysis.json', 'run.json', `metadata-${id}.atom.xml`]) {
+        recoverImmutableFileLink(path.join(runDir, filename), fail, 64 * 1024 * 1024);
+    }
     if (fs.existsSync(path.join(runDir, 'run.json'))) {
         const loaded = fresh.loadRun(runId, { rootDir: absoluteRoot });
         if (loaded.run.date !== date || fresh.paperId(loaded.inputs.papers[0]) !== id
@@ -93,20 +94,21 @@ function prepareHistoricalArxivRun({ authorityHandle, metadata, metadataProof, m
             || fresh.stableHash(loaded.inputs.papers[0]) !== fresh.stableHash(paper)) {
             fail('已有 runId 的来源、元数据、日期或论文集合与本次不同');
         }
+        const sourceDir = fresh.assertSafeDirectory(path.join(runDir, 'sources', id));
+        recoverSourceFiles(sourceDir);
         recoverHistoricalArxivRun({ runId, date, arxivId: id, rootDir: absoluteRoot });
         verifyHistoricalArxivRunAuthority({ runId, rootDir: absoluteRoot, authorityHandle });
         return { runId, runDir, paperId: `arxiv:${id}`, status: 'recovered',
             canonicalPath: path.join(runDir, 'analysis.json') };
     }
-    fs.mkdirSync(runDir, { recursive: true, mode: 0o700 });
-    const sourceDir = path.join(runDir, 'sources', id);
-    fs.mkdirSync(sourceDir, { recursive: true, mode: 0o700 });
     try {
         const inputs = { version: 1, contract: fresh.INPUT_CONTRACT, runId, date, papers: [paper] };
         const inputsSha256 = writeJsonExact(path.join(runDir, 'inputs.json'), inputs);
         writeJsonExact(path.join(runDir, 'analysis.json'), { version: 1,
             contract: fresh.ANALYSIS_CONTRACT, runId, batchDate: date, status: 'pending', generation: 0,
             papers: [paper] });
+        const sourceDir = fresh.assertSafeDirectory(path.join(runDir, 'sources', id), true);
+        recoverSourceFiles(sourceDir);
         const sourceBytes = Buffer.from(JSON.stringify(sourceDetails));
         const descriptor = { version: 1, contract: 'fresh-source-cache-v1', runId, paperId: id,
             sourceSha256, structuredArtifactsSha256, sourceSnapshotSha256: sha256(sourceBytes) };

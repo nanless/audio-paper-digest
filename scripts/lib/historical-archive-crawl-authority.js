@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const identityApi = require('./paper-identity.js');
+const { writeImmutableFile } = require('./immutable-file.js');
 
 const CONTRACT = 'historical-archive-crawl-identity-authority-v1';
 const VERSION = 1;
@@ -205,14 +206,8 @@ function readAuthority(identityRoot, authorityName) {
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 function writeExact(identityRoot, authorityName, bytes) {
-    const root = safeDirectory(identityRoot, 'archiveIdentityRoot', { create: true }); const filename = path.join(root, authorityName); let fd;
-    try {
-        fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-        fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.fchmodSync(fd, 0o600);
-    } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        if (!fs.readFileSync(filename).equals(bytes)) fail(`拒绝覆盖内容不同的不可变身份授权凭据：${authorityName}`);
-    } finally { if (fd !== undefined) fs.closeSync(fd); }
+    const root = safeDirectory(identityRoot, 'archiveIdentityRoot', { create: true });
+    writeImmutableFile(path.join(root, authorityName), bytes, fail);
 }
 function authorityHandleSnapshot(handle) {
     if (!handle || typeof handle !== 'object' || !HANDLES.has(handle)) fail('需要已认证的归档爬虫身份句柄');

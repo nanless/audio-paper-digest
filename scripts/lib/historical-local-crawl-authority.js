@@ -7,6 +7,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const identityApi = require('./paper-identity.js');
+const { writeImmutableFile } = require('./immutable-file.js');
 const legacyArchiveApi = require('./historical-archive-crawl-authority.js');
 
 const CONTRACT = 'historical-local-crawl-identity-authority-v1';
@@ -188,10 +189,8 @@ function readSnapshot(snapshotRoot, snapshotName) {
     return { filename: fs.realpathSync(filename), fileSha256: loaded.fileSha256, snapshot };
 }
 function writeExact(root, name, bytes, label) {
-    const directory = safeDirectory(root, label, { create: true }); const filename = path.join(directory, name); let fd;
-    try { fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600); fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.fchmodSync(fd, 0o600); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; if (!fs.readFileSync(filename).equals(bytes)) fail(`拒绝覆盖内容不同的不可变 ${label}：${name}`); }
-    finally { if (fd !== undefined) fs.closeSync(fd); }
+    const directory = safeDirectory(root, label, { create: true });
+    writeImmutableFile(path.join(directory, name), bytes, fail);
 }
 function prepareCurrentIdentitySnapshot({ snapshotRoot, loaded } = {}) {
     const body = snapshotBody(loaded); const name = snapshotNameFor(loaded.fileSha256); const bytes = prettyBytes(body);

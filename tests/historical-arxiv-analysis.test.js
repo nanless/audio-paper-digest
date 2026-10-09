@@ -254,3 +254,85 @@ test('冻结的 2602 中断恢复会阻塞仍在运行的操作属主，只接�
     assert.equal(recovered.status, 'analysis_partial');
     assert.equal(fs.existsSync(lockPath), true, 'read-only recovery must never delete the stale lock');
 });
+
+test('历史分析初始化七类文件短写后可用原运行 ID 续跑', async t => {
+    const root = fixture(t), authorityRoot = path.join(root, 'authority'); fs.mkdirSync(authorityRoot);
+    const originalFetch = deep.fetchArxivTextDetailedUncached;
+    deep.fetchArxivTextDetailedUncached = async () => source();
+    t.after(() => { deep.fetchArxivTextDetailedUncached = originalFetch; });
+    const prepared = await arxiv.prepareArxivSourceAuthority({ authorityRoot, arxivId: '2609.03622',
+        authorityName: 'arxiv-2609.03622.json', apply: true, now: '2026-09-07T00:00:00Z' });
+    const metadata = { arxivId: '2609.03622', paper_id: '2609.03622', title: 'Official title',
+        abstract: 'Official abstract', authors: ['Author'], categories: ['cs.SD'], source: 'arxiv', sources: ['arxiv'] };
+    const metadataProof = { contract: history.METADATA_CONTRACT, paperId: 'arxiv:2609.03622',
+        sourceName: 'fixture.json', fileSha256: 'b'.repeat(64), recordSha256: fresh.stableHash(metadata) };
+    for (let failAt = 1; failAt <= 7; failAt++) {
+        const runRoot = path.join(root, `runs-${failAt}`);
+        const prepare = () => history.prepareHistoricalArxivRun({ authorityHandle: prepared.authorityHandle,
+            metadata, metadataProof, date: '2026-09-04', rootDir: runRoot, runId: RUN_ID });
+        const originalWrite = fs.writeFileSync; let writes = 0;
+        fs.writeFileSync = (target, bytes, ...rest) => {
+            if (typeof target === 'number' && ++writes === failAt) {
+                fs.writeSync(target, Buffer.from(bytes).subarray(0, 10));
+                throw Object.assign(new Error('模拟来源写入失败'), { code: 'EIO' });
+            }
+            return originalWrite(target, bytes, ...rest);
+        };
+        try { assert.throws(prepare, /模拟来源写入失败/); }
+        finally { fs.writeFileSync = originalWrite; }
+        assert.equal(prepare().status, 'sources_ready', `第 ${failAt} 类文件应能恢复`);
+        assert.equal(prepare().status, 'recovered');
+        assert.equal(fresh.loadRun(RUN_ID, { rootDir: runRoot }).run.status, 'sources_ready');
+    }
+});
+
+test('真实进程在运行信封链接后被杀，准备入口在读取旧信封前恢复', async t => {
+    const root=fixture(t), authorityRoot=path.join(root,'authority'), runRoot=path.join(root,'runs');fs.mkdirSync(authorityRoot);
+    const metadata={arxivId:'2609.03622',paper_id:'2609.03622',title:'Official title',abstract:'Official abstract',authors:['Author'],categories:['cs.SD'],source:'arxiv',sources:['arxiv']};
+    const metadataProof={contract:history.METADATA_CONTRACT,paperId:'arxiv:2609.03622',sourceName:'fixture.json',fileSha256:'b'.repeat(64),recordSha256:fresh.stableHash(metadata)};
+    const authorityArgs={authorityRoot,arxivId:'2609.03622',authorityName:'arxiv-2609.03622.json',apply:true,now:'2026-09-07T00:00:00Z'};
+    const runArgs={metadata,metadataProof,date:'2026-09-04',rootDir:runRoot,runId:RUN_ID};
+    const script=`const fs=require('node:fs'),crypto=require('node:crypto');
+const deep=require(${JSON.stringify(require.resolve('../scripts/deep-analyzer.js'))});deep.fetchArxivTextDetailedUncached=async()=>(${source.toString()})();
+const arxiv=require(${JSON.stringify(require.resolve('../scripts/lib/arxiv-source-authority.js'))});
+const history=require(${JSON.stringify(require.resolve('../scripts/lib/historical-arxiv-analysis.js'))});
+const original=fs.linkSync;fs.linkSync=(from,to)=>{original(from,to);if(to===${JSON.stringify(path.join(runRoot,RUN_ID,'run.json'))})process.kill(process.pid,'SIGKILL');};
+arxiv.prepareArxivSourceAuthority(${JSON.stringify(authorityArgs)}).then(prepared=>history.prepareHistoricalArxivRun({...${JSON.stringify(runArgs)},authorityHandle:prepared.authorityHandle})).catch(error=>{console.error(error);process.exitCode=1;});`;
+    const child=require('node:child_process').spawnSync(process.execPath,['-e',script],{encoding:'utf8',timeout:10000});
+    assert.equal(child.signal,'SIGKILL',child.stderr);
+    const runFile=path.join(runRoot,RUN_ID,'run.json');assert.equal(fs.statSync(runFile).nlink,2);
+    const originalFetch=deep.fetchArxivTextDetailedUncached;deep.fetchArxivTextDetailedUncached=async()=>source();
+    t.after(()=>{deep.fetchArxivTextDetailedUncached=originalFetch;});
+    const prepared=await arxiv.prepareArxivSourceAuthority({...authorityArgs,requireLiveAuthorization:true});
+    assert.equal(history.prepareHistoricalArxivRun({...runArgs,authorityHandle:prepared.authorityHandle}).status,'recovered');
+    assert.equal(fs.statSync(runFile).nlink,1);
+});
+
+test('已有运行拒绝另一论文或日期时不创建来源目录也不改文件', async t => {
+    const root = fixture(t), authorityRoot = path.join(root, 'authority'), runRoot = path.join(root, 'runs');
+    fs.mkdirSync(authorityRoot);
+    const originalFetch = deep.fetchArxivTextDetailedUncached;
+    deep.fetchArxivTextDetailedUncached = async id => ({ ...source(), sourceId: `${id}v1` });
+    t.after(() => { deep.fetchArxivTextDetailedUncached = originalFetch; });
+    const args = async id => {
+        const prepared = await arxiv.prepareArxivSourceAuthority({ authorityRoot, arxivId: id,
+            authorityName: `arxiv-${id}.json`, apply: true, now: '2026-09-07T00:00:00Z' });
+        const metadata = { arxivId: id, paper_id: id, title: 'Official title', abstract: 'Official abstract',
+            authors: ['Author'], categories: ['cs.SD'], source: 'arxiv', sources: ['arxiv'] };
+        return { authorityHandle: prepared.authorityHandle, metadata,
+            metadataProof: { contract: history.METADATA_CONTRACT, paperId: `arxiv:${id}`,
+                sourceName: 'fixture.json', fileSha256: 'b'.repeat(64), recordSha256: fresh.stableHash(metadata) },
+            date: '2026-09-04', rootDir: runRoot, runId: RUN_ID };
+    };
+    const first = await args('2609.03622'), other = await args('2609.03623');
+    history.prepareHistoricalArxivRun(first);
+    const snapshot = directory => fs.readdirSync(directory).sort().map(name => {
+        const filename = path.join(directory, name), stat = fs.lstatSync(filename);
+        return [name, stat.isDirectory() ? snapshot(filename) : fs.readFileSync(filename).toString('base64')];
+    });
+    const before = snapshot(runRoot);
+    assert.throws(() => history.prepareHistoricalArxivRun(other), /已有 runId.*不同/);
+    assert.deepEqual(snapshot(runRoot), before);
+    assert.throws(() => history.prepareHistoricalArxivRun({ ...first, date: '2026-09-05' }), /已有 runId.*不同/);
+    assert.deepEqual(snapshot(runRoot), before);
+});

@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const cheerio = require('cheerio');
+const { writeImmutableFile, recoverImmutableFileLink } = require('./immutable-file.js');
 const { detectHttpConnectProxyUrl, createProxyDispatcher } = require('../utils.js');
 
 const VERSION = 1;
@@ -806,19 +807,25 @@ function readStableFile(filename, label, maxBytes) {
 }
 
 function writeExclusiveOrCompare(filename, bytes, label, maxBytes) {
-    let fd;
-    try {
-        fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
-            | fs.constants.O_NOFOLLOW, 0o600);
-        fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.fchmodSync(fd, 0o600);
-        return 'created';
-    } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        const existing = readStableFile(filename, label, maxBytes);
-        const mode = fs.statSync(filename).mode & 0o777;
-        if (mode !== 0o600 || !existing.bytes.equals(bytes)) fail(`拒绝覆盖内容不同或非私有的 ${label}`);
-        return 'recovered';
-    } finally { if (fd !== undefined) fs.closeSync(fd); }
+    const status = writeImmutableFile(filename, bytes, fail);
+    // 写入公共层负责原子性；获取侧继续执行原有长度、权限和字节约束。
+    const stored = readStableFile(filename, label, maxBytes);
+    if (!stored.bytes.equals(Buffer.from(bytes))) fail(`拒绝覆盖内容不同的 ${label}`);
+    return status;
+}
+
+function recoverCatalogFiles(provider, outputRoot, create = false) {
+    const paths = acquisitionPaths(outputRoot, create);
+    const files = [[paths.metadataFile, MAX_INDEX_BYTES], [paths.catalogReceiptFile, 1024 * 1024]];
+    if (provider.issues) for (const issue of provider.issues) {
+        const artifacts = issueArtifactPaths(paths, issue, false);
+        files.push([artifacts.responseFile, MAX_INDEX_BYTES], [artifacts.receiptFile, 1024 * 1024]);
+    }
+    else files.push([paths.indexFile, MAX_INDEX_BYTES], [paths.indexReceiptFile, 1024 * 1024]);
+    if (provider.parser === 'icmc-combined') files.push([paths.combinedPdfFile, MAX_COMBINED_PDF_BYTES],
+        [paths.combinedPdfReceiptFile, 1024 * 1024], [paths.pageMapFile, MAX_INDEX_BYTES]);
+    for (const [filename, maximum] of files) recoverImmutableFileLink(filename, fail, maximum);
+    rejectInterruptedTemporaryFiles([paths.root, paths.responses, path.join(paths.responses, 'issues')]);
 }
 
 function rejectDuplicateJsonKeys(text, label) {
@@ -891,7 +898,7 @@ function replayResponseReceipt(provider, responseFile, receiptFile, relativePath
     exact(receipt, keys, `${label} receipt`);
     if (receipt.contract !== HTTP_RECEIPT_CONTRACT || receipt.version !== VERSION
         || receipt.providerId !== provider.conference.id || receipt.resource !== (issue ? 'catalog-issue' : 'catalog-index')
-        || receipt.responseStatus !== 200 || !/^text\/html(?:\s*;|$)/iu.test(receipt.contentType)
+        || receipt.responseStatus !== 200 || !/^(?:text\/html|application\/xhtml\+xml)(?:\s*;|$)/iu.test(receipt.contentType)
         || !validObservedAt(receipt.observedAt)
         || (issue && (receipt.issueNumber !== issue.number || receipt.issueId !== issue.issueId
             || receipt.requestedUrl !== issue.url))) fail(`${label} 的 receipt envelope 无效`);
@@ -1264,6 +1271,7 @@ async function acquireCatalog({ providerId, outputRoot, apply = false } = {}, de
     if (!apply) return { command: 'catalog', mode: 'dry-run', providerId, outputRoot,
         indexUrl: provider.indexUrl, writes: ['responses/index.html', 'responses/index.receipt.json',
             'metadata.json', 'catalog.receipt.json'] };
+    recoverCatalogFiles(provider, outputRoot, true);
     if (provider.parser === 'icmc-combined') return acquireIcmcCatalog(provider, outputRoot, dependencies);
     if (provider.issues) return acquireMultiIssueCatalog(provider, outputRoot, dependencies);
     const paths = acquisitionPaths(outputRoot, true);
@@ -1472,7 +1480,13 @@ function icmcAcquisitionStatus(provider, outputRoot) {
 }
 
 async function downloadPapers({ providerId, outputRoot, apply = false, limit = null, concurrency = 1, retries = 0 } = {}, dependencies = {}) {
+    if (apply) recoverCatalogFiles(providerFor(providerId), outputRoot);
     const catalog = replayCatalog(providerId, outputRoot);
+    if (apply) for (const paper of catalog.metadata.papers.filter(item => item.pdfUrl !== null)) {
+        recoverImmutableFileLink(pdfPath(catalog.paths, paper), fail, MAX_PDF_BYTES);
+        recoverImmutableFileLink(pdfReceiptPath(catalog.paths, paper), fail, 1024 * 1024);
+    }
+    if (apply) rejectInterruptedTemporaryFiles([catalog.paths.pdfs, catalog.paths.receipts]);
     if (catalog.provider.parser === 'icmc-combined') {
         return icmcDownloadPapers({ providerId, outputRoot, apply, limit, concurrency, retries });
     }
@@ -1549,7 +1563,7 @@ function acquisitionStatus({ providerId, outputRoot } = {}) {
     let downloaded = 0; let partial = 0; let missing = 0;
     for (const paper of catalog.metadata.papers.filter(item => item.pdfUrl !== null)) {
         const hasPdf = fs.existsSync(pdfPath(paths, paper)); const hasReceipt = fs.existsSync(pdfReceiptPath(paths, paper));
-        if (hasPdf && hasReceipt) downloaded += 1;
+        if (hasPdf && hasReceipt) { replayPdfReceipt(catalog, paper); downloaded += 1; }
         else if (hasPdf || hasReceipt) partial += 1;
         else missing += 1;
     }
@@ -1557,6 +1571,24 @@ function acquisitionStatus({ providerId, outputRoot } = {}) {
         downloadable: catalog.metadata.papers.filter(item => item.pdfUrl !== null).length,
         downloaded, missing, partial, complete: missing === 0 && partial === 0,
         ...(provider.issues ? { issuesExpected: provider.issues.length, issuesSealed: provider.issues.length } : {}) };
+}
+
+function rejectInterruptedTemporaryFiles(directories) {
+    for (const directory of directories) {
+        if (!fs.existsSync(directory)) continue;
+        safeDirectory(directory, '获取产物目录', false);
+        for (const entry of fs.readdirSync(directory)) {
+            if (/^\..+\.[a-f0-9]{16}\.[1-9]\d*\.[a-f0-9-]{36}\.tmp$/.test(entry)) {
+                fail(unexpectedArtifactMessage(path.join(directory, entry), '未完成写入'));
+            }
+        }
+    }
+}
+
+function unexpectedArtifactMessage(filename, label) {
+    const detail = /^\..+\.[a-f0-9]{16}\.[1-9]\d*\.[a-f0-9-]{36}\.tmp$/.test(path.basename(filename))
+        ? '；这可能是发布正式文件前中断留下的临时文件。请先核验写入进程已经退出、文件归属及正式凭证，再单独清理；本命令不会自动删除。' : '';
+    return `出现意外的 ${label} 产物：${filename}${detail}`;
 }
 
 function verifyMultiIssueResponseArtifacts(catalog) {
@@ -1573,7 +1605,7 @@ function verifyMultiIssueResponseArtifacts(catalog) {
     const issueDirectory = path.join(catalog.paths.responses, 'issues');
     for (const entry of fs.readdirSync(issueDirectory, { withFileTypes: true })) {
         if (!entry.isFile() || entry.isSymbolicLink() || !expected.has(entry.name)) {
-            fail(`出现意外的 AAAI 期号响应产物：${entry.name}`);
+            fail(unexpectedArtifactMessage(path.join(issueDirectory, entry.name), 'AAAI 期号响应'));
         }
         expected.delete(entry.name);
     }
@@ -1582,6 +1614,8 @@ function verifyMultiIssueResponseArtifacts(catalog) {
 
 function verifyAcquisition({ providerId, outputRoot } = {}) {
     const catalog = replayCatalog(providerId, outputRoot); const expectedPdfs = new Set(); const expectedReceipts = new Set();
+    rejectInterruptedTemporaryFiles([catalog.paths.root, catalog.paths.responses, catalog.paths.pdfs,
+        catalog.paths.receipts, path.join(catalog.paths.responses, 'issues')]);
     verifyMultiIssueResponseArtifacts(catalog);
     let verified = 0; const missing = [];
     for (const paper of catalog.metadata.papers.filter(item => item.pdfUrl !== null)) {
@@ -1594,7 +1628,7 @@ function verifyAcquisition({ providerId, outputRoot } = {}) {
     }
     for (const [directory, expected, label] of [[catalog.paths.pdfs, expectedPdfs, 'PDF'], [catalog.paths.receipts, expectedReceipts, 'receipt']]) {
         for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-            if (!entry.isFile() || entry.isSymbolicLink() || !expected.has(entry.name)) fail(`出现意外的 ${label} 产物：${entry.name}`);
+            if (!entry.isFile() || entry.isSymbolicLink() || !expected.has(entry.name)) fail(unexpectedArtifactMessage(path.join(directory, entry.name), label));
         }
     }
     return { command: 'verify', providerId, outputRoot, metadataSha256: catalog.metadataSha256,
