@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { detectHttpConnectProxyUrl, createProxyDispatcher } = require('../utils.js');
 const posterApi = require('./historical-icml-poster-authority.js');
+const { writeImmutableFile, recoverImmutableFileLink } = require('./immutable-file.js');
 
 const CONTRACT = 'historical-openreview-pdf-source-v1';
 const VERSION = 1;
@@ -65,13 +66,14 @@ function plannedDirectory(directory, label) {
     return absolute;
 }
 
-function readStableFile(filename, label, maxBytes) {
+function readStableFile(filename, label, maxBytes, allowRecoveryLink = false) {
     if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail(`${label} 必须是绝对路径`);
     const absolute = path.resolve(filename); safeDirectory(path.dirname(absolute), `${label} parent`); let fd;
     try {
         fd = fs.openSync(absolute, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const opened = fs.fstatSync(fd); const named = fs.lstatSync(absolute);
-        if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
+        const allowedLinks = allowRecoveryLink ? [1, 2] : [1];
+        if (!opened.isFile() || !allowedLinks.includes(opened.nlink) || named.isSymbolicLink() || named.nlink !== opened.nlink
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size > maxBytes) fail(`${label} is unsafe or too large`);
         const bytes = fs.readFileSync(fd); const after = fs.fstatSync(fd);
         if (bytes.length !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino
@@ -111,6 +113,8 @@ function validateDownloadUrl(rawUrl, forumId) {
     }
     const id = url.searchParams.get('id');
     if (!['/pdf', '/attachment'].includes(url.pathname) || id !== forumId
+        || url.searchParams.getAll('id').length !== 1
+        || url.searchParams.getAll('name').length > 1
         || [...url.searchParams.keys()].some(key => !['id', 'name'].includes(key))
         || (url.pathname === '/attachment' && url.searchParams.get('name') !== 'pdf')
         || (url.pathname === '/pdf' && url.searchParams.has('name'))) {
@@ -219,8 +223,8 @@ function normalizeReceipt(value) {
     return clone(value);
 }
 
-function readReceipt(receiptFile) {
-    const loaded = readStableFile(receiptFile, 'OpenReview PDF receipt', 1024 * 1024); let value;
+function readReceipt(receiptFile, allowRecoveryLink = false) {
+    const loaded = readStableFile(receiptFile, 'OpenReview PDF receipt', 1024 * 1024, allowRecoveryLink); let value;
     try { const text = new TextDecoder('utf-8', { fatal: true }).decode(loaded.bytes);
         rejectDuplicateJsonKeys(text); value = JSON.parse(text); }
     catch (error) { if (error instanceof HistoricalOpenreviewPdfSourceError) throw error; fail('receipt 不是严格的 UTF-8 JSON'); }
@@ -229,31 +233,27 @@ function readReceipt(receiptFile) {
     return receipt;
 }
 
-function replayReceipt({ receiptFile, pdfFile, record, authoritySha256 } = {}) {
-    const receipt = readReceipt(receiptFile);
+function replayReceipt({ receiptFile, pdfFile, record, authoritySha256, allowRecoveryLinks = false } = {}) {
+    const receipt = readReceipt(receiptFile, allowRecoveryLinks);
     if (receipt.forumId !== record.forumId || receipt.posterId !== record.posterId
         || receipt.authoritySha256 !== authoritySha256 || receipt.recordBindingSha256 !== record.recordBindingSha256
         || receipt.pdf.absolutePath !== pdfFile) fail('receipt differs from authenticated forum authority');
-    const pdf = readStableFile(pdfFile, 'sealed OpenReview PDF', MAX_PDF_BYTES);
+    const pdf = readStableFile(pdfFile, 'sealed OpenReview PDF', MAX_PDF_BYTES, allowRecoveryLinks);
     if (pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-' || pdf.bytes.length !== receipt.pdf.bytes
         || pdf.sha256 !== receipt.pdf.sha256) fail('封存的 OpenReview PDF 与 receipt 不一致');
     return receipt;
 }
 
-function writeExclusive(filename, bytes) {
-    let fd;
-    try { fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
-        | fs.constants.O_NOFOLLOW, 0o600); fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.fchmodSync(fd, 0o600); }
-    finally { if (fd !== undefined) fs.closeSync(fd); }
+function rejectImmutable(message, options = {}) {
+    const error = new HistoricalOpenreviewPdfSourceError(message);
+    if (options.code) error.code = options.code;
+    throw error;
 }
 function writeOrCompare(filename, bytes, label, maxBytes) {
-    try { writeExclusive(filename, bytes); return 'created'; }
-    catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        const existing = readStableFile(filename, label, maxBytes);
-        if (!existing.bytes.equals(bytes)) fail(`refuses to overwrite a different ${label}`);
-        return 'recovered';
-    }
+    const status = writeImmutableFile(filename, bytes, rejectImmutable);
+    const existing = readStableFile(filename, label, maxBytes);
+    if (!existing.bytes.equals(bytes)) fail(`${label} 写入后核验失败`);
+    return status;
 }
 
 async function sealOpenreviewPdf({ apply = false, snapshotFile, forumId, pdfRoot, receiptRoot,
@@ -272,6 +272,11 @@ async function sealOpenreviewPdf({ apply = false, snapshotFile, forumId, pdfRoot
         authoritySha256: authority.authoritySha256, recordBindingSha256: record.recordBindingSha256 };
     if (!apply) return { status: 'dry-run', ...plan };
     if (fs.existsSync(paths.receiptFile)) {
+        // 先验证原凭证的论坛、authority 和完整 PDF 字节，再清理已退出写者的临时硬链接。
+        // 普通读取仍要求单链接；未知或存活写者的链接不能自动接纳。
+        replayReceipt({ ...paths, record, authoritySha256: authority.authoritySha256, allowRecoveryLinks: true });
+        recoverImmutableFileLink(paths.receiptFile, rejectImmutable, 1024 * 1024);
+        recoverImmutableFileLink(paths.pdfFile, rejectImmutable, MAX_PDF_BYTES);
         return { status: 'recovered', ...plan, receipt: replayReceipt({ ...paths, record,
             authoritySha256: authority.authoritySha256 }) };
     }
@@ -296,8 +301,12 @@ async function sealOpenreviewPdf({ apply = false, snapshotFile, forumId, pdfRoot
     const receipt = normalizeReceipt({ ...body, receiptSha256: stableHash(body) });
     const pdfStatus = writeOrCompare(paths.pdfFile, downloaded.bytes, 'existing OpenReview PDF', MAX_PDF_BYTES);
     let receiptStatus = 'created';
-    try { writeExclusive(paths.receiptFile, prettyBytes(receipt)); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; receiptStatus = 'recovered'; }
+    try { receiptStatus = writeOrCompare(paths.receiptFile, prettyBytes(receipt), 'OpenReview 来源凭证', 1024 * 1024); }
+    catch (error) {
+        // 并发获取的时间戳可不同；只接纳随后完整重放仍与当前授权、PDF 对应的胜者。
+        if (error.code !== 'IMMUTABLE_FILE_CONTENT_CONFLICT') throw error;
+        receiptStatus = 'recovered';
+    }
     const replayed = replayReceipt({ ...paths, record, authoritySha256: authority.authoritySha256 });
     return { status: pdfStatus === 'recovered' && receiptStatus === 'recovered' ? 'recovered' : 'created',
         ...plan, receipt: replayed };

@@ -69,7 +69,7 @@ test('孤儿 PDF 只有新观测到的字节完全一致时才被接受', async 
     const other = fixture(t); fs.mkdirSync(other.pdfRoot);
     fs.writeFileSync(path.join(other.pdfRoot, `${other.forumId}.pdf`), '%PDF-1.4\ndifferent\n');
     await assert.rejects(api.sealOpenreviewPdf({ ...options, snapshotFile: other.snapshotFile,
-        pdfRoot: other.pdfRoot, receiptRoot: other.receiptRoot }, { fetchPdf: async () => download(other) }), /refuses to overwrite/);
+        pdfRoot: other.pdfRoot, receiptRoot: other.receiptRoot }, { fetchPdf: async () => download(other) }), /拒绝覆盖/);
 });
 
 test('默认下载器要求 HTTP CONNECT，且只跟随连续的固定论坛重定向链', async t => {
@@ -121,4 +121,134 @@ test('命令行校验显式的身份和来源参数，根目录仍可覆写', t 
         '--forum-id', f.forumId, '--pdf-root', f.pdfRoot, '--receipt-root', f.receiptRoot]);
     assert.equal(parsed.apply, true); assert.equal(parsed.forumId, f.forumId);
     assert.throws(() => cli.parseArgs(['--apply', '--snapshot', 'relative.json', '--forum-id', f.forumId]), /Use/);
+});
+
+
+test('下载和凭证核验拒绝重复身份或附件名称参数', async t => {
+    const f = fixture(t); const canonical = api.pdfUrlForForum(f.forumId);
+    const urls = [
+        canonical + '&id=another1', canonical + '&id=' + f.forumId,
+        canonical + '&%69d=another1',
+        'https://openreview.net/attachment?id=' + f.forumId + '&name=pdf&name=other',
+        'https://openreview.net/attachment?id=' + f.forumId + '&name=pdf&name=pdf',
+    ];
+    const created = await api.sealOpenreviewPdf({ apply: true, snapshotFile: f.snapshotFile,
+        forumId: f.forumId, pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot }, {
+        fetchPdf: async () => download(f),
+    });
+    for (const url of urls) {
+        assert.throws(() => api.validateDownloadUrl(url, f.forumId), /changed the authenticated forum/);
+        let calls = 0;
+        await assert.rejects(api.defaultFetchPdf({ url: canonical, forumId: f.forumId }, {
+            detectProxy: () => 'http://127.0.0.1:7890', createDispatcher: () => ({}),
+            fetchImpl: async () => { calls += 1; return { status: 302,
+                headers: { get: key => key === 'location' ? url : null } }; },
+        }), /changed the authenticated forum/);
+        assert.equal(calls, 1, '有歧义的重定向不得发送第二次请求');
+        const receipt = structuredClone(created.receipt);
+        receipt.requestedUrl = url; receipt.finalUrl = url;
+        delete receipt.receiptSha256; receipt.receiptSha256 = api.stableHash(receipt);
+        assert.throws(() => api.normalizeReceipt(receipt), /changed the authenticated forum/);
+    }
+    assert.equal(api.validateDownloadUrl(canonical, f.forumId), canonical);
+    const attachment = 'https://openreview.net/attachment?name=pdf&id=' + f.forumId;
+    assert.equal(api.validateDownloadUrl(attachment, f.forumId), attachment);
+});
+
+for (const target of ['pdf', 'receipt']) {
+    test(`公开封存的 ${target} 短写不留正式半文件，同参数可重试`, async t => {
+        const f = fixture(t);
+        const options = { apply: true, ...f, observedAt: '2026-09-07T00:00:00.000Z' };
+        const filename = target === 'pdf' ? path.join(f.pdfRoot, `${f.forumId}.pdf`)
+            : path.join(f.receiptRoot, `openreview-${f.forumId}.json`);
+        const originalOpen = fs.openSync;
+        const originalWrite = fs.writeFileSync;
+        const targets = new Set();
+        fs.openSync = (name, ...args) => {
+            const fd = originalOpen(name, ...args);
+            if (name === filename || path.basename(String(name)).startsWith(`.${path.basename(filename)}.`)) targets.add(fd);
+            return fd;
+        };
+        fs.writeFileSync = (fd, bytes, ...args) => {
+            if (targets.delete(fd)) {
+                fs.writeSync(fd, Buffer.from(bytes).subarray(0, 3));
+                throw Object.assign(new Error('模拟来源存储短写'), { code: 'EIO' });
+            }
+            return originalWrite(fd, bytes, ...args);
+        };
+        try {
+            await assert.rejects(api.sealOpenreviewPdf(options, { fetchPdf: async () => download(f) }), /模拟来源存储短写/);
+        } finally {
+            fs.openSync = originalOpen;
+            fs.writeFileSync = originalWrite;
+        }
+        assert.equal(fs.existsSync(filename), false);
+        const recovered = await api.sealOpenreviewPdf(options, { fetchPdf: async () => download(f) });
+        assert.deepEqual(fs.readFileSync(recovered.pdfFile), PDF);
+        assert.equal(api.readReceipt(recovered.receiptFile).receiptSha256, recovered.receipt.receiptSha256);
+    });
+}
+
+for (const target of ['pdf', 'receipt']) {
+    test(`公开封存 ${target} 链接后进程退出可续跑，保留原凭证观测时间`, async t => {
+        const f = fixture(t);
+        const options = { apply: true, ...f, observedAt: '2026-09-07T00:00:00.000Z' };
+        const filename = target === 'pdf' ? path.join(f.pdfRoot, `${f.forumId}.pdf`)
+            : path.join(f.receiptRoot, `openreview-${f.forumId}.json`);
+        const child = require('node:child_process').spawnSync(process.execPath, ['-e', `
+            const fs = require('node:fs');
+            const api = require(process.argv[1]);
+            const options = JSON.parse(process.argv[2]);
+            const downloaded = JSON.parse(process.argv[3]);
+            downloaded.bytes = Buffer.from(downloaded.bytes.data);
+            const original = fs.linkSync;
+            fs.linkSync = (from, to) => {
+                original(from, to);
+                if (to === process.argv[4]) process.kill(process.pid, 'SIGKILL');
+            };
+            api.sealOpenreviewPdf(options, { fetchPdf: async () => downloaded })
+                .catch(error => { console.error(error); process.exitCode = 1; });
+        `, require.resolve('../scripts/lib/historical-openreview-pdf-source.js'),
+        JSON.stringify(options), JSON.stringify(download(f)), filename], { encoding: 'utf8', timeout: 10000 });
+        assert.equal(child.error, undefined);
+        assert.equal(child.signal, 'SIGKILL', child.stderr);
+        assert.equal(fs.statSync(filename).nlink, 2);
+        let calls = 0;
+        const recovered = await api.sealOpenreviewPdf({ ...options, observedAt: '2026-10-01T00:00:00.000Z' }, {
+            fetchPdf: async () => { calls++; return download(f); }
+        });
+        assert.equal(calls, target === 'pdf' ? 1 : 0);
+        assert.equal(fs.statSync(filename).nlink, 1);
+        assert.equal(recovered.receipt.fetchedAt, target === 'pdf' ? '2026-10-01T00:00:00.000Z' : options.observedAt);
+        assert.deepEqual(fs.readFileSync(recovered.pdfFile), PDF);
+    });
+}
+
+test('未知 PDF 外链与并发不同字节胜者均保留，不能当成可恢复来源', async t => {
+    const f = fixture(t);
+    const options = { apply: true, ...f };
+    const created = await api.sealOpenreviewPdf(options, { fetchPdf: async () => download(f) });
+    const unknown = path.join(f.pdfRoot, 'unknown.pdf');
+    fs.linkSync(created.pdfFile, unknown);
+    const before = fs.statSync(created.pdfFile);
+    await assert.rejects(api.sealOpenreviewPdf(options, {
+        fetchPdf: async () => { throw new Error('不得请求'); }
+    }), /单链接/);
+    assert.equal(fs.statSync(unknown).ino, before.ino);
+    assert.equal(fs.statSync(created.pdfFile).nlink, 2);
+    const other = fixture(t);
+    const winnerFile = path.join(other.pdfRoot, `${other.forumId}.pdf`);
+    const winner = Buffer.from('%PDF-1.7\n另一下载者的内容\n');
+    const originalLink = fs.linkSync;
+    fs.linkSync = (from, to) => {
+        if (to === winnerFile) fs.writeFileSync(to, winner, { flag: 'wx' });
+        return originalLink(from, to);
+    };
+    try {
+        await assert.rejects(api.sealOpenreviewPdf({ apply: true, ...other }, {
+            fetchPdf: async () => download(other)
+        }), /拒绝覆盖/);
+    } finally { fs.linkSync = originalLink; }
+    assert.deepEqual(fs.readFileSync(winnerFile), winner);
+    assert.equal(fs.existsSync(path.join(other.receiptRoot, `openreview-${other.forumId}.json`)), false);
 });
