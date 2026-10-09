@@ -1025,8 +1025,11 @@ function parseRecentPageHTML(html, categoryId, existingIds = null) {
         const $dt = $(dt);
         const $dd = $dt.next('dd');
         const href = $dt.find('a[href^="/abs/"]').first().attr('href') || '';
-        const idMatch = href.match(/\/abs\/([^/?#]+)/);
-        if (!idMatch || !$dd.length) return;
+        const idMatch = href.match(/^\/abs\/((?:[0-9]{4}\.[0-9]{4,5}|[a-z-]+(?:\.[A-Z]{2})?\/[0-9]{7})(?:v[1-9][0-9]*)?)$/);
+        const title = $dd.find('.list-title').first().clone()
+            .find('.descriptor').remove().end()
+            .text().replace(/\s+/g, ' ').trim();
+        if (!idMatch || !$dd.length || !title) return;
         validItems++;
 
         const arxivId = idMatch[1].replace(/v\d+$/, '');
@@ -1036,9 +1039,6 @@ function parseRecentPageHTML(html, categoryId, existingIds = null) {
         }
         newCount++;
 
-        const title = $dd.find('.list-title').first().clone()
-            .find('.descriptor').remove().end()
-            .text().replace(/\s+/g, ' ').trim();
         const authors = $dd.find('.list-authors a').map((__, a) =>
             $(a).text().replace(/\s+/g, ' ').trim()
         ).get().filter(Boolean);
@@ -1489,21 +1489,53 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
 function parseArxivXML(xml, categoryId, existingIds = null, options = {}) {
     const { stopAtConsecutiveExisting = true } = options;
     const papers = [];
-    const entryRegex = /<entry>([\s\S]*?)<\/entry>/g;
-    let match;
+    const { spawnSync } = require('node:child_process');
+    const input = Buffer.from(String(xml || ''), 'utf8');
+    const maxBytes = 16 * 1024 * 1024;
+    if (input.length > maxBytes) throw new Error(`Atom 响应超过 ${maxBytes} 字节上限`);
+    const parsed = spawnSync('bash', [path.join(__dirname, 'python-runtime.sh'),
+        path.join(__dirname, 'parse-arxiv-atom.py')], {
+        input, cwd: path.join(__dirname, '..'), encoding: 'utf8',
+        timeout: 30000, maxBuffer: maxBytes
+    });
+    if (parsed.error || parsed.status !== 0) {
+        throw new Error(`Atom XML 解析失败：${parsed.error?.message || parsed.stderr?.trim() || `退出码 ${parsed.status}`}`,
+            { cause: parsed.error || undefined });
+    }
+    let entries = JSON.parse(parsed.stdout);
+    if (options.metadataProjection === 'official-arxiv-atom-metadata-v1') {
+        // v1 的已封存记录保留原 XML 字段字节。结构和身份先由严格解析器核验。
+        const rawEntries = [...String(xml).matchAll(/<entry>([\s\S]*?)<\/entry>/g)];
+        if (rawEntries.length !== entries.length) {
+            throw new Error('Atom v1 字段投影不支持这组 entry 命名空间或属性写法');
+        }
+        entries = entries.map((entry, index) => {
+            const raw = rawEntries[index][1];
+            const id = raw.match(/<id>(.*?)<\/id>/);
+            const title = raw.match(/<title>([\s\S]*?)<\/title>/);
+            const summary = raw.match(/<summary>([\s\S]*?)<\/summary>/);
+            const published = raw.match(/<published>(.*?)<\/published>/);
+            const authors = [...raw.matchAll(/<author>\s*<name>(.*?)<\/name>/g)].map(match => match[1]);
+            const categories = [...raw.matchAll(/<category term="(.*?)"/g)].map(match => match[1]);
+            if (!id || id[1].split('/abs/').pop() !== entry.arxivId || !title || !summary
+                || !published || authors.length !== entry.authors.length
+                || categories.length !== entry.categories.length) {
+                throw new Error('Atom v1 字段投影无法完整重放已校验的条目');
+            }
+            return { ...entry, title: title[1].replace(/\n/g, ' ').trim(),
+                abstract: summary[1].replace(/\n/g, ' ').trim(), authors, categories,
+                published: published[1] };
+        });
+    }
     let consecutiveExisting = 0;
     let entryCount = 0;
     let legalEntryCount = 0;
     let stoppedAtConsecutive = false;
 
-    while ((match = entryRegex.exec(xml)) !== null) {
-        const entry = match[1];
+    for (const entry of entries) {
         entryCount++;
-
-        const idMatch = entry.match(/<id>(.*?)<\/id>/);
-        if (!idMatch) continue;
         legalEntryCount++;
-        const arxivId = idMatch[1].split('/abs/').pop();
+        const { arxivId } = entry;
 
         if (existingIds && existingIds.has(normalizedId(arxivId))) {
             consecutiveExisting++;
@@ -1517,28 +1549,8 @@ function parseArxivXML(xml, categoryId, existingIds = null, options = {}) {
 
         consecutiveExisting = 0;
 
-        const titleMatch = entry.match(/<title>([\s\S]*?)<\/title>/);
-        const title = titleMatch ? titleMatch[1].replace(/\n/g, ' ').trim() : 'Unknown';
-
-        const summaryMatch = entry.match(/<summary>([\s\S]*?)<\/summary>/);
-        const abstract = summaryMatch ? summaryMatch[1].replace(/\n/g, ' ').trim() : '';
-
-        const authors = [];
-        const authorRegex = /<author>\s*<name>(.*?)<\/name>/g;
-        let authorMatch;
-        while ((authorMatch = authorRegex.exec(entry)) !== null) {
-            authors.push(authorMatch[1]);
-        }
-
-        const publishedMatch = entry.match(/<published>(.*?)<\/published>/);
-        const published = publishedMatch ? normalizeToBeijingISOString(publishedMatch[1]) : '';
-
-        const categories = [];
-        const categoryRegex = /<category term="(.*?)"/g;
-        let catMatch;
-        while ((catMatch = categoryRegex.exec(entry)) !== null) {
-            categories.push(catMatch[1]);
-        }
+        const { title, abstract, authors, categories } = entry;
+        const published = entry.published ? normalizeToBeijingISOString(entry.published) : '';
 
         papers.push({
             arxivId,

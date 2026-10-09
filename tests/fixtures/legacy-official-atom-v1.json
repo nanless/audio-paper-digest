@@ -1,0 +1,32 @@
+{
+  "raw": "<?xml version=\"1.0\"?><feed xmlns=\"http://www.w3.org/2005/Atom\" xmlns:opensearch=\"http://a9.com/-/spec/opensearch/1.1/\"><opensearch:totalResults>1</opensearch:totalResults><entry><id>http://arxiv.org/abs/2601.00001v1</id><updated>2026-01-02T00:00:00Z</updated><published>2026-01-01T00:00:00Z</published><title>Official &amp; &#65; title\ncontinued</title><summary>Exact &lt;source&gt; &#x42; abstract\nwith details.</summary><author><name>  Author &amp; &#67;  </name></author><category term=\"cs.SD&amp;test\"/></entry></feed>",
+  "metadata": {
+    "arxivId": "2601.00001",
+    "paper_id": "2601.00001",
+    "title": "Official &amp; &#65; title continued",
+    "authors": [
+      "  Author &amp; &#67;  "
+    ],
+    "abstract": "Exact &lt;source&gt; &#x42; abstract with details.",
+    "categories": [
+      "cs.SD&amp;test"
+    ],
+    "source": "arxiv-api",
+    "sources": [
+      "arxiv"
+    ],
+    "fetchedAt": "2026-01-01T08:00:00.000+08:00"
+  },
+  "proof": {
+    "contract": "official-arxiv-atom-metadata-v1",
+    "paperId": "arxiv:2601.00001",
+    "sourceName": "https://export.arxiv.org/api/query?id_list=2601.00001&max_results=1",
+    "querySourceId": "2601.00001",
+    "fileSha256": "8304b97b1ec6efc5ef8f24e7dd050daf98bb38722a4a58666dbb3fd7eb27c091",
+    "recordSha256": "2c26938eda712994dcc72d866f365b0a5b72a0417e10ca58cc27e259d2dd191a",
+    "entryVersion": 1,
+    "entryUpdatedAt": "2026-01-02T00:00:00.000Z",
+    "publishedAt": "2026-01-01T00:00:00.000Z",
+    "observedAt": "2026-01-04T00:00:00.000Z"
+  }
+}

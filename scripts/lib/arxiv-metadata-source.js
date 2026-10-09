@@ -91,7 +91,7 @@ function parseOfficialArxivMetadataResponse(arxivId, responseData, dependencies 
         fail('Atom response signature is missing');
     }
     const parsed = (dependencies.parseXml || fetchPapers.parseArxivXML)(responseData, 'official-id-list', null,
-        { stopAtConsecutiveExisting: false });
+        { stopAtConsecutiveExisting: false, metadataProjection: CONTRACT });
     if (parsed?._meta?.entryCount !== 1 || parsed._meta.legalEntryCount !== 1 || parsed.length !== 1) {
         fail('Atom response must contain exactly one legal entry');
     }

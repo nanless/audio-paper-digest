@@ -371,3 +371,56 @@ test('出版元数据批次保留瞬时失败、保存并核验同伴、以部�
         fetchOfficialArxivMetadata: async () => { throw new TypeError('implementation bug'); } }),
     /implementation bug/, 'unexpected implementation failures remain fail-closed');
 });
+
+test('旧解析器封存的实体和空白按 v1 原字节重放，默认新抓取仍解码', async t => {
+    // 夹具来自严格解析改造前的生产解析器，不能用当前解析结果生成预期 SHA。
+    const saved = require('./fixtures/legacy-official-atom-v1.json');
+    const officialResult = { metadata: saved.metadata, proof: saved.proof,
+        rawBytes: Buffer.from(saved.raw, 'utf8') };
+    const f = await fixture(t, 'legacy-entities');
+    const sealed = sidecars.sealPublicationMetadata({ rootDir: f.sidecarRoot,
+        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult,
+        now: '2026-01-04T00:00:00.000Z' });
+    assert.deepEqual(sealed.metadata, saved.metadata);
+    assert.equal(sealed.proof.metadataRecordSha256, saved.proof.recordSha256);
+    const files = [sidecars.ATOM_NAME, sidecars.METADATA_NAME, sidecars.MANIFEST_NAME];
+    const before = files.map(name => fs.readFileSync(path.join(sealed.directory, name)));
+    const replayed = sidecars.readPublicationMetadata({ rootDir: f.sidecarRoot,
+        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1 });
+    assert.deepEqual(replayed.metadata, saved.metadata);
+    assert.deepEqual(files.map(name => fs.readFileSync(path.join(sealed.directory, name))), before);
+
+    const runs = path.join(f.root, 'runs');
+    const runId = '11111111-1111-4111-8111-111111111111';
+    const directory = path.join(runs, runId);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(directory, `metadata-${ID}.atom.xml`), saved.raw, { mode: 0o600 });
+    fs.writeFileSync(path.join(directory, 'inputs.json'), JSON.stringify({ papers: [saved.metadata] }), { mode: 0o600 });
+    fs.writeFileSync(path.join(directory, 'run.json'), JSON.stringify({
+        metadataSources: { historicalRawMetadata: saved.proof }
+    }), { mode: 0o600 });
+    const reused = sidecars.findReusableOfficialAtom({ freshRewriteRoot: runs, arxivId: ID });
+    assert.equal(reused.reusedFromRunId, runId);
+    assert.deepEqual(reused.metadata, saved.metadata);
+    assert.equal(reused.proof.recordSha256, saved.proof.recordSha256);
+
+    const parsed = require('../scripts/fetch-papers.js').parseArxivXML(saved.raw, 'cs.SD')[0];
+    assert.equal(parsed.title, 'Official & A title continued');
+    assert.equal(parsed.abstract, 'Exact <source> B abstract with details.');
+    assert.deepEqual(parsed.authors, ['Author & C']);
+    assert.deepEqual(parsed.categories, ['cs.SD&test']);
+});
+
+test('v1 字段投影先核 XML 结构，并明确拒绝不能按旧字节规则提取的合法新写法', () => {
+    const raw = require('./fixtures/legacy-official-atom-v1.json').raw;
+    const parse = source => metadataApi.parseOfficialArxivMetadataResponse(ID, source);
+    assert.throws(() => parse(raw.slice(0, -7)), /Atom XML 解析失败/);
+    for (const changed of [
+        raw.replace('<entry>', '<atom:entry xmlns:atom="http://www.w3.org/2005/Atom">').replace('</entry>', '</atom:entry>'),
+        raw.replace('<author><name>', '<author><name xml:lang="en">'),
+        raw.replace('<category term="cs.SD&amp;test"/>', "<category term='cs.SD&amp;test'/>")
+    ]) {
+        assert.equal(require('../scripts/fetch-papers.js').parseArxivXML(changed, 'cs.SD').length, 1);
+        assert.throws(() => parse(changed), /v1 字段投影/);
+    }
+});
