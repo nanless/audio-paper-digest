@@ -160,7 +160,7 @@ describe('env-loader', () => {
                 assert.strictEqual(process.env.PAPER_ANALYZER_API_KEY, 'second-secret-value');
             } finally { console.warn = originalWarn; }
             assert.deepStrictEqual(warnings, [
-                '[env-loader] duplicate key PAPER_ANALYZER_API_KEY at lines 1 and 4; last value wins'
+                '[env-loader] 第 1 行和第 4 行重复定义 PAPER_ANALYZER_API_KEY；采用后一项的值'
             ]);
             assert.doesNotMatch(warnings.join('\n'), /first-secret-value|second-secret-value|model-one/);
         }));

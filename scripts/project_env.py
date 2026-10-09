@@ -2,7 +2,7 @@
 """项目内环境变量加载器。
 
 项目脚本读取 Paper Digest 配置时必须用当前仓库的 .env，避免混入从
-Trae/Codex/shell 继承来的变量。
+启动程序或终端继承来的变量。
 """
 
 import os
@@ -118,13 +118,13 @@ def get_required_fetch_proxy():
 
 
 def build_fetch_proxies():
-    """显式构造 requests 代理，不读取继承来的进程设置。"""
+    """把当前配置的 HTTP CONNECT 代理分别用于 requests 的 HTTP 和 HTTPS 请求。"""
     proxy = get_required_fetch_proxy()
     return {'http': proxy, 'https': proxy}
 
 
 def build_fetch_url_opener():
-    """只为 arXiv/HuggingFace 资源构造显式的 urllib opener。"""
+    """为 arXiv/HuggingFace 资源创建明确使用 HTTP CONNECT 代理的 urllib 请求对象。"""
     import urllib.request
     proxy = get_required_fetch_proxy()
     return urllib.request.build_opener(urllib.request.ProxyHandler({'http': proxy, 'https': proxy}))

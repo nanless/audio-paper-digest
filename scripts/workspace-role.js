@@ -149,10 +149,10 @@ function requireWorkspaceRole(requiredRole, root = path.resolve(__dirname, '..')
         if (!allowsCrossRole(marker.role, requiredRole, root)) {
             const reversed = marker.role === 'history' && requiredRole === 'daily'
                 && crossRoleSwitchValue(root) === CROSS_ROLE_VALUE;
-            throw new Error(`当前 workspace role=${marker.role}，该命令只允许 role=${requiredRole}`
+            throw new Error(`当前工作区 role=${marker.role}，该命令只允许 role=${requiredRole}`
                 + (reversed ? `（${CROSS_ROLE_ENV}=1 只放行 daily 工作区执行 history 命令，反向不放行）` : ''));
         }
-        console.warn(`[workspace-role] 跨角色放行：当前 workspace role=${marker.role}，`
+        console.warn(`[workspace-role] 跨角色放行：当前工作区 role=${marker.role}，`
             + `命令要求 role=${requiredRole}（${CROSS_ROLE_ENV}=${CROSS_ROLE_VALUE}）。`
             + '日更、会议和历史任务的生成、审查和推送必须错峰，不得同时发布；旧历史工作区已废弃。');
     }

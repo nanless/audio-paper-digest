@@ -35,7 +35,7 @@ const TRANSPORT_ENV_KEYS = Object.freeze([
 function isScriptsEntrypoint(scriptPath = process.argv[1]) {
     if (!scriptPath) return false;
     // 在 `node -e` 下，argv[1] 是第一个用户参数，不是被执行的模块。
-    // 把它当成入口点会破坏隔离的 worker 测试，
+    // 把它当成入口点会影响单独运行的工作进程测试，
     // 还会给一个只是被导入的模块分配角色。
     if (process.execArgv.some(arg => arg === '-e' || arg === '--eval' || arg.startsWith('--eval='))) {
         return false;
@@ -63,7 +63,7 @@ function requireExternalRuntime(commandName = path.basename(process.argv[1] || '
     const enforceRole = Boolean(wrappedRole) || isScriptsEntrypoint()
         || options.enforceWorkspaceRole === true;
     if (enforceRole && wrappedRole && inferredRole && wrappedRole !== inferredRole) {
-        throw new Error(`${commandName} 的固定 workspace role=${inferredRole} 与 wrapper=${wrappedRole} 冲突`);
+        throw new Error(`${commandName} 固定要求 role=${inferredRole}，当前环境指定 wrapper=${wrappedRole}，两者不一致`);
     }
     const requiredRole = enforceRole ? inferredRole || wrappedRole : null;
     // workspaceRoot 是内部测试注入用的；生产入口从不从 CLI 或环境里接受它。
@@ -129,7 +129,7 @@ function parseEnvFile(envFile) {
             if (firstDefinitionLines.has(key)) {
                 // 不要把这两个值写进诊断信息：重复的键尤其可能含有凭据。
                 // 解析仍然有意保持后者覆盖前者，以兼容旧行为。
-                console.warn(`[env-loader] duplicate key ${key} at lines ${firstDefinitionLines.get(key)} and ${lineNumber}; last value wins`);
+                console.warn(`[env-loader] 第 ${firstDefinitionLines.get(key)} 行和第 ${lineNumber} 行重复定义 ${key}；采用后一项的值`);
             } else {
                 firstDefinitionLines.set(key, lineNumber);
             }

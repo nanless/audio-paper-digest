@@ -116,8 +116,8 @@ def require_workspace_role(required_role, project_root=PROJECT_ROOT):
                 reversed_hint = (f'（{CROSS_ROLE_ENV}=1 只放行 daily 工作区执行 history 命令，'
                                  '反向不放行）')
             raise ExternalRuntimeRequired(
-                f'当前 workspace role={value["role"]}，该命令只允许 role={required_role}{reversed_hint}')
-        print(f'[workspace-role] 跨角色放行：当前 workspace role={value["role"]}，'
+                f'当前工作区 role={value["role"]}，该命令只允许 role={required_role}{reversed_hint}')
+        print(f'[workspace-role] 跨角色放行：当前工作区 role={value["role"]}，'
               f'命令要求 role={required_role}（{CROSS_ROLE_ENV}={CROSS_ROLE_VALUE}）。'
               '日更、会议和历史任务的生成、审查和推送必须错峰，不得同时发布；旧历史工作区已废弃。',
               file=sys.stderr)

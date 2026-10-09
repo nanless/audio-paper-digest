@@ -277,7 +277,7 @@ function fixture() {
 }
 
 describe('Manual v6 长文约定', () => {
-    it('接受可逐字重放并完整处置表图公式的教学正文', () => {
+    it('教学正文可从保存的分块逐字还原，并说明每个表格、图片和公式的使用情况', () => {
         const { article, artifactIndex, bundle } = fixture();
         const result = validateManualLongformBundle(bundle, article, artifactIndex, {
             paperId: '2608.12345'
@@ -316,7 +316,7 @@ describe('Manual v6 长文约定', () => {
         );
     });
 
-    it('revision submit 可在未注入 receipt 时完整重放 longform，但拒绝提前伪造 receipt', () => {
+    it('修订提交前可检查正文分块与文章是否一致，但拒绝提前加入作者提交凭证', () => {
         const { article, artifactIndex, bundle } = fixture();
         delete bundle.authorReceipt;
         delete bundle.finalRevisionAuthorReceipt;
@@ -366,7 +366,7 @@ describe('Manual v6 长文约定', () => {
         }));
     });
 
-    it('拒绝正文重放漂移、漏处置图片和内部 schema 泄露', () => {
+    it('正文分块还原结果与提供的文章不一致、漏掉图片使用说明或暴露内部字段时拒绝', () => {
         const { article, artifactIndex, bundle } = fixture();
         assert.throws(() => validateManualLongformBundle(bundle, `${article}\n额外文本`, artifactIndex), /逐字重放/);
         const missingFigure = structuredClone(bundle);

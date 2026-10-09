@@ -188,7 +188,7 @@ npm run history:crosswalk -- finalize --crosswalk UUID
 
 arXiv 适配器拟复用 `fetchArxivTextDetailed`、代理、HTML/PDF 和结构提取，但输入改为核验过的 `paper-identity-v1` 与来源授权凭证，不读日更当前数据。会议适配器只接受 `conference-source-context-v2` 的已核验并登记的计划对象；当时 weak PDF 可用于长文分析，表格、公式和图像仍为 unavailable，须由后续独立提取凭证证明相应能力才能开放。
 
-每篇论文只缓存一份来源，多个历史页引用同一来源文件组的 SHA。旧来源归档只供查找，须逐字节按来源协议重放；当时 82 个来源归档没有完整的现代五段来源文件，不能凭文件存在跳过恢复。默认禁止 abstract-only 发布：没有全文时保持 blocked，显式降级须另获用户同意，并且不纳入“全部深度重写”的 complete。
+每篇论文只缓存一份来源，多个历史页引用同一来源文件组的 SHA。旧来源归档只供查找，须按来源格式要求重新读取，并逐字节核验；当时 82 个来源归档没有完整的现代五段来源文件，不能凭文件存在跳过恢复。默认禁止 abstract-only 发布：没有全文时保持 blocked，显式降级须另获用户同意，并且不纳入“全部深度重写”的 complete。
 
 ### 5.3 CLI
 
@@ -204,7 +204,7 @@ planned history:sources finalize --run-id UUID
 
 ### 5.4 P1 验收
 
-来源身份集合须恰好等于 P0 的 U，每份缓存能在断网状态从来源描述文件重放；缺失或改变一个字节即失败。元数据须对应论文身份，会议 `paperId` 不能与 `sourceIdentity` 混用。
+来源身份集合须恰好等于 P0 的 U，每份缓存能在断网状态下，根据来源描述文件重新读取并核验保存的来源；缺失或改变一个字节即失败。元数据须对应论文身份，会议 `paperId` 不能与 `sourceIdentity` 混用。
 
 测试拟覆盖非空白全文、UTF-8、PDF、JSON 重复键、符号链接、父路径和最大字节限制，使用真实来源授权测试数据并断言具体原因码，不能只依靠外层 SHA 失败冒充语义覆盖。此来源获取阶段消耗零 LLM Token，但网络请求及失败原因仍须记录。
 
@@ -423,7 +423,7 @@ Hugo 页数、published 集合、旧 URL/redirect、标签路由和 14,743 条�
 | 试点 | 最小样本 | 必含场景 | 扩大运行的条件 |
 |---|---:|---|---|
 | Identity A | 40 页面 | 日更的单一、缺失、冲突和多条线索；三个会议；跨日期重复；ICLR 两批次 | 40/40 已核验，人工复核没有错配 |
-| Source B | 12 篇唯一论文 | arXiv HTML、备用 PDF、长文、表/公式/图；ICASSP/ICLR/ICML 当时的 weak PDF；短文或损坏 PDF 须阻断 | 来源字节和每项能力均可重放 |
+| Source B | 12 篇唯一论文 | arXiv HTML、备用 PDF、长文、表/公式/图；ICASSP/ICLR/ICML 当时的 weak PDF；短文或损坏 PDF 须阻断 | 保存的来源字节和每项能力均可再次核验 |
 | Analysis C | 12 篇唯一论文 | 方法、数据集、理论、系统报告；资源有/无；机构有/无；结构能力不同 | 解析器通过率为 100%，首轮事实通过率达到预设阈值 |
 | 标签分类 D | 30 篇唯一论文 | ASR/AV-ASR、PEFT/LoRA、增强子任务、非任务科学主题、跨模态、数据集与基准 | 双人或独立审查一致率达到门槛 |
 | Projection E | 1 日更 + 3 会议切片 | 重复页、ICASSP 任务页、ICLR 双批次、ICML 无任务页；嵌套方括号链接 | 页面、链接和 Hugo 检查全通过，addition=0 |
