@@ -214,7 +214,7 @@ npm run blog:push -- --date YYYY-MM-DD
 
 逐页审查通过记录按“相对路径 + 内容 SHA”持久复用，只有该文件的内容 SHA 变化才重审。发布器代码变化时仍要重新渲染页面，以发现真实字节变化。新的页面清单、发布资格证明、模型、发布器代码、审查协议指纹或 Hugo 运行时变化，只要求重跑当前批次的确定性/Hugo 检查并生成新的审查凭证，不得让字节未变的文件重审。博客基线、远端名称、推送 URL 身份或凭证与当前批次不符时，仍须阻断推送。审查不能修改已审页面；修正须回到生成阶段。
 
-单篇 `--include-id`、排除 `--exclude-id` 和历史封存预览属于显式维护功能，参数必须在三阶段保持一致；单篇发布不能作为整批发布或整批视觉完成的依据。
+单篇 `--include-id` 与排除 `--exclude-id` 属于显式维护功能，参数必须在适用阶段保持一致；单篇发布不能作为整批发布或整批视觉完成的依据。旧 `sealed_tutorial_preview` 仅保留材料只读检查，新生成、审查声明与推送均已停用。
 
 ## 历史直接重写
 
@@ -229,7 +229,7 @@ npm run blog:push -- --date YYYY-MM-DD
 
 每轮 arXiv 重写都会重新获取官方文本、PDF、运行元数据和清单，保存在 `data/runtime/fetched-arxiv-sources/` 下。保留的 arXiv 文本、PDF、图片、旧分析和旧博客正文都不进入写作输入。会议论文只有在 SHA 核验通过后，才使用保留的元数据和 PDF。同一篇论文只分析一次，再据此生成对应的全部历史页面。
 
-`crosswalk` 只是新一轮 arXiv 获取失败后的备用路线，只接收命名且不可变的交接文件。保留的会议来源不可用或损坏时，这条直接路线在该论文上停止，既不进入 `crosswalk`，也不影响队列中其余论文。独立发布入口要求来源和页面覆盖完整、审查通过、Git 基线与远端检查有效。`activate --apply` 已被禁用；激活、提交、推送和 OID 核验统一由 `publish --apply` 在共享博客锁内完成。入口存在不代表某次全历史重写或发布已经完成。参数细节见[历史重写](docs/history-rewrite.md)与[独立历史发布](docs/history-direct-publication.md)。
+备用 `history:arxiv-batch` 只接收新一轮 arXiv 获取失败后生成的命名且不可变交接文件。`history:crosswalk` 仍支持旧来源对照记录的显式维护，须经过来源授权和 CAS 检查。保留的会议来源不可用或损坏时，直接路线只在该论文上停止，不进入 arXiv 备用路线，也不影响队列中其余论文。独立发布入口要求来源和页面覆盖完整、审查通过、Git 基线与远端检查有效。`activate --apply` 已被禁用；激活、提交、推送和 OID 核验统一由 `publish --apply` 在共享博客锁内完成。入口存在不代表某次全历史重写或发布已经完成。参数细节见[历史重写](docs/history-rewrite.md)与[独立历史发布](docs/history-direct-publication.md)。
 
 ICML/OpenReview 的替代 PDF 默认一律拒绝。唯一经用户授权的跨标题例外是 `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`：代码白名单必须核对它的 poster/forum、固定 SSRN 标题、作者、DOI、PDF、获取凭证和来源 SHA。浏览器下载只能通过 `--import-file` 导入，并记录 `networkResponseObserved: false`。计划、模型输入和最终页面都必须写明这不是 camera-ready，该例外不得推广到其他论文。
 

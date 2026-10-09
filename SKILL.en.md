@@ -262,9 +262,10 @@ each tag's `{id, facet, label}`, and the explicit `paper_digest_primary_task` an
 `paper_digest_primary_method`. Existing pages and tag URLs stay unchanged. Aggregate “popular directions”
 count only explicit primary tasks; the site-wide tag list must explain that it mixes old and new labels.
 
-Single-paper `--include-id`, exclusions through `--exclude-id`, and historical saved previews are
-explicit maintenance scopes. Their IDs must stay identical across all applicable stages; a
-single-paper publication does not amount to full-batch publication or visual completion.
+Single-paper `--include-id` and exclusions through `--exclude-id` are explicit maintenance scopes.
+Their IDs must stay identical across all applicable stages; a single-paper publication does not amount
+to full-batch publication or visual completion. The retired `sealed_tutorial_preview` supports only
+read-only material checks; new generation, review receipts, and push reject that mode.
 
 ## Historical direct rewrite
 
@@ -283,9 +284,10 @@ Each arXiv generation fetches and saves new official text, PDF, runtime metadata
 are excluded from writing input. Conference entries use their retained metadata/PDF only after SHA
 verification. Each paper is analyzed once, and that analysis generates its corresponding historical pages.
 
-The `crosswalk` fallback accepts only named, immutable handoff files from failed fresh arXiv
-acquisitions. An unavailable or damaged retained conference source stops its own direct route; it
-does not enter the crosswalk or block the remaining direct queue. The independent publication entry
+The fallback `history:arxiv-batch` accepts only named, immutable handoffs from failed fresh arXiv acquisition.
+`history:crosswalk` still supports explicit maintenance of older records after source authorization and CAS checks.
+An unavailable or damaged retained conference source stops its own direct route; it never enters the arXiv fallback
+or blocks the remaining direct queue. The independent publication entry
 requires complete source and page coverage, passed reviews, and valid baseline and remote checks.
 `activate --apply` is disabled; activation, commit, push, and OID verification run together through
 `publish --apply` under the shared blog lock. These capabilities do not mean a full-history

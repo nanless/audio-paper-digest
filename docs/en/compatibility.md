@@ -28,6 +28,8 @@ An old prompt or editorial-contract copy inside a Manual packet does not authori
 
 An independent historical publisher exists, but a complete plan or staging directory does not mean the full-history task was published. See [Historical rewriting](../history-rewrite.md) and [Historical publication](../history-direct-publication.md). Operator patches for an existing-batch rewrite have additional legacy-run restrictions described in [Rewriting from source](../fresh-rewrite.md). Do not insert missing hashes to bypass them.
 
+The retired `sealed_tutorial_preview` remains available only for reading saved material. New page generation, review receipts, and push reject that mode. Its older loader checks only part of the saved evidence and cannot establish full article, source, or current publication eligibility.
+
 ## Migration Rules
 
 1. Current writers emit current formats, and never rewrite older files so they look like the new version.

@@ -127,9 +127,10 @@ frozen historical arXiv links ─────────┘                    
   arXiv text, PDF, figures, old posts, old analyses, or old Reader prose as writing input.
 - The conference route rechecks the retained local metadata/PDF SHA selected by the frozen-page
   projection. One paper is analyzed once and then projected to every frozen historical page.
-- A crosswalk is a strict arXiv-failure-only fallback: it accepts only a named immutable arXiv
-  fresh-acquisition handoff. An unavailable or damaged retained conference source fails its direct route closed;
-  it never enters a crosswalk and does not gate the remaining direct queue.
+- The fallback `history:arxiv-batch` accepts only named immutable handoffs from failed fresh arXiv acquisition.
+  `history:crosswalk` still permits explicit maintenance of older records after source authorization and CAS checks.
+  An unavailable or damaged retained conference source stops its own direct route, never enters the arXiv fallback,
+  and does not block the remaining direct queue.
 - Long tasks can be run in batches, inspected, paused safely, and resumed.
 - Analysis first produces private source, analysis, page, and aggregate files. The independent
   `history:direct-publication` entry provides `plan → generate → review → publish → status`. It requires

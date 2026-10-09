@@ -42,8 +42,8 @@ OpenReview 不可达时，默认停止，不自行改用其他来源。唯一由
 `n1mAjfRDZ6` 可导入作者发布在 SSRN 的早期预印本，但分析输入、页面顶部和 staging manifest 都必须明示
 “非 camera-ready”，并记录可核验的来源标题、DOI、获取凭证和来源 SHA。
 
-同一篇论文只重写一次，再生成对应历史 URL 的页面。`crosswalk` 备用路线仅接收新一轮 arXiv 获取失败后
-生成的命名交接文件。长任务可分批处理、查看状态、安全暂停和续跑。来源准备按 `direct-inputs` →
+同一篇论文只重写一次，再生成对应历史 URL 的页面。备用 `history:arxiv-batch` 仅接收新一轮 arXiv 获取失败后
+生成的命名且不可变交接文件；`history:crosswalk` 仍支持显式维护旧来源对照记录，必须通过来源授权和 CAS 核验。长任务可分批处理、查看状态、安全暂停和续跑。来源准备按 `direct-inputs` →
 `conference-projections` → `direct-plan` → `direct-scheduler` → `direct-run` 依次完成，产出私有页面和
 `direct-aggregate` 汇总，再由 `history:direct-publication` 按 `plan → generate → review → publish → status`
 发布；全部来源、页面覆盖、审查、Git 基线与远端检查通过前不得覆盖博客。入口存在不代表全历史已处理或
@@ -69,7 +69,7 @@ cp env.example .env
 npm run workspace:role -- status
 ```
 
-日更目录应为 `daily`，全历史目录应为 `history`。标记缺失或路径不匹配时先停止；确认用途后才用
+当前目录保持 `daily`，历史命令通过上述跨角色开关运行，不再使用旧历史目录。标记缺失或路径不匹配时先停止；确认用途后才用
 `npm run workspace:role -- set daily|history [--force]` 绑定角色，不要直接强制改成日更目录。
 
 ```bash

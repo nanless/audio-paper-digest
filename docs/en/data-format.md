@@ -92,6 +92,14 @@ The 13 Chinese top-level headings in `analysis` are parser anchors. `parsed` is 
 
 Reader v3 governs article structure; `api-reader-source-bindings-v4` governs table and formula sources. They serve different checks and need not share a version number. New publication also requires author and resource identity v1. Reader v1/v2, and v3 missing any current source requirement, are for historical reading only. Abstract-only analysis is blocked by default.
 
+In `source_quotes` tables, a column-header unit is also a factual claim. A bare cell number needs an explicit unit for the same metric in the same local clause; a unit from another metric, sentence, or negated claim is not enough. Explicit cell units still follow the numeric-quote checks. Shared headers that cannot be tied to each value require corrected evidence or explicit cell units, not automatic number conversion. Node recovery and Python publication recheck saved bindings as well. `artifact_table` continues to use original DOM cells.
+
+A narrow legacy table rewrite used to replace an unspecified `validation set` with `TidyVoice`. That old table shape now needs a direct source quote establishing the relationship; a training dataset, an unrelated sentence, or a longer dataset name does not establish it. New generation no longer guesses dataset names or adds prose percentages from metric names. Historical prose unit evidence has not been fully migrated, so this does not establish that every old article is corrected.
+
+A formula whose original TeX ends after the equals sign is not completed from its name or visible text. Omit that display formula and explain from complete source evidence. For the known legacy CTC formula and hardcoded figure captions for `2609.15067`, a matching new result retains `structuredSourcePayload`, the original structured JSON bound to the existing source SHA. Recovery and publication check full-text SHA, formula or figure location, DOM SHA, and original content. Output hashes and boolean claims are not source proof. Only these compatibility cases add the full payload. Unsupported fixed descriptions of pixels in old `2609.27195` results require removal and revalidation.
+
+Affected cached results cannot be reused directly. Rebuild Reader from the captured source and regenerate and review pages through the normal path. Preserve source bytes; do not insert replacement hashes into an old plan or refetch a historical daily batch to bypass these checks.
+
 Modern daily images exist only during the call, so a pixel hash in `apiReaderFigures` does not point to a reusable cache file. Legacy structured evidence must pass source-manifest and full-text SHA checks. Rechecking earlier key-order hashes also needs a recorded parser version, or an implementation-recognized no-layout source whose table, formula, and figure arrays are empty. Arbitrary layout declarations are not enough. Never rewrite saved files to manufacture hashes.
 
 ## Blog Generation Manifest

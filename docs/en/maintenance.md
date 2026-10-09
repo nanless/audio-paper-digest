@@ -39,6 +39,8 @@ This guide is for maintainers changing the default API, shared publication, prom
 
 Prompt text is versioned by file and registered in `scripts/lib/prompt-text-versions.js`: v1 stays frozen at its original path (the same file names without the -v2 suffix), and the current version is the same name with a -v2 suffix; the Reader row in the table above lists the current versions. Never edit frozen v1. Before changing current v2 text, save the original whole-file bytes as `prompts/history/<sha256>.md`. Older records use their declared version; where historical lookup is supported, a differing SHA can reuse only archived bytes that pass verification again. A well-formed SHA alone proves nothing. A missing version means v1, and an unknown version is an error. After upgrading a version, recheck stage fingerprints and the conference and manual prompt lists.
 
+Prompt-history collection treats only search exit code 1 as no matches. Tool failures, corrupt candidate JSON, and failures reading an existing archive stop with the original error; they cannot be skipped and reported as a complete archive. Only a genuinely missing file follows the new-file path.
+
 Scoring changes must preserve dimension order and ranges, Open Source anchors, evidence IDs, and code-calculated caps. Sample Reader output for term bridges, table explanations, adjacent figure discussion, and limits on descriptions without pixels.
 
 Table-count diagnostics use a stable `code`, `requiredCount`, and `actualCount`. Changes must cover production, collection, repair, feedback, and recovery signatures. A new typed diagnostic must not fall back to parsing prose. See [Data formats](data-format.md) and [Reader writing](../reader-writing.md) for fields and bounded legacy compatibility.
