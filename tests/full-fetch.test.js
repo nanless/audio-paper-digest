@@ -891,7 +891,7 @@ describe('full-fetch 辅助函数', () => {
             papers: [{ arxivId: '2607.70003' }]
         }));
 
-        autoArchiveCurrentData('2026-07-13', { targets: [current], archiveDir });
+        assert.throws(() => autoArchiveCurrentData('2026-07-13', { targets: [current], archiveDir }), /归档更新或校验失败/);
 
         assert.strictEqual(fs.existsSync(current), true);
         assert.strictEqual(fs.statSync(storedAnalysisFile).isDirectory(), true);

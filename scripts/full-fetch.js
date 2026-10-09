@@ -228,9 +228,9 @@ function hasValidFetchSourceIntegrity(entry) {
 
 function getSourceConfigFingerprint() {
     return stableHash({
-        // v4: recent 抓取即使短页也必须请求配置范围内的后续 offset；
-        // 确定性结构失败快速转入严格 search/API，避免重复请求同一坏页面。
-        sourceContractVersion: 4,
+        // v5: Atom 使用严格 XML 与完整论文条目校验，recent 空标题不再算成功。
+        // 旧抓取记录不能证明未漏掉被截断的条目，需重新抓取对应来源。
+        sourceContractVersion: 5,
         arxivCategories: Config.ARXIV_CATEGORIES.map(({ id, priority }) => ({ id, priority })),
         arxiv: {
             maxResultsPerCategory: Config.ARXIV_CONFIG.maxResultsPerCategory,
@@ -962,8 +962,7 @@ function autoArchiveCurrentData(batchDate = getBeijingDateString(), options = {}
                         console.log(`  [归档] 当前文件内容已写入归档，原归档另存为 ${path.basename(backupPath)}`);
                     }
                 } catch (e) {
-                    console.log(`  [归档] 校验已有归档失败 ${path.basename(filePath)}: ${e.message}`);
-                    return;
+                    throw new Error(`归档更新或校验失败，已停止新批次：${filePath}：${e.message}`, { cause: e });
                 }
             } else {
                 try {
@@ -972,8 +971,7 @@ function autoArchiveCurrentData(batchDate = getBeijingDateString(), options = {}
                     archived++;
                     console.log(`  [归档] ${path.basename(filePath)} -> ${recordDate}/${path.basename(filePath)}`);
                 } catch (e) {
-                    console.log(`  [归档] 复制失败 ${path.basename(filePath)}: ${e.message}`);
-                    return;
+                    throw new Error(`归档复制失败，已停止新批次：${filePath}：${e.message}`, { cause: e });
                 }
             }
 
@@ -982,7 +980,7 @@ function autoArchiveCurrentData(batchDate = getBeijingDateString(), options = {}
                 removed++;
                 console.log(`  [移走] 已清空 ${path.basename(filePath)}`);
             } catch (e) {
-                console.log(`  [移走] 删除失败 ${path.basename(filePath)}: ${e.message}`);
+                throw new Error(`归档后无法移走当前文件，已停止新批次：${filePath}：${e.message}`, { cause: e });
             }
         });
     }
