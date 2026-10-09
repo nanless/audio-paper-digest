@@ -226,3 +226,25 @@ test('显式的全量模式要求已核验的总数，并在一次调用里跑�
     assert.equal(result.counts.ready, 3);
     assert.equal(result.counts.pending, 0);
 });
+
+
+test('证据运行公开入口在建目录、加锁或读取路径前拒绝非法运行 ID', t => {
+    const site = workspace();
+    t.after(() => fs.rmSync(site.root, { recursive: true, force: true }));
+    const before = fs.readdirSync(site.root).sort();
+    const valid = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    for (const runId of ['../escaped', '../' + valid, valid.toUpperCase(), '', null,
+        [valid], { toString: () => valid }]) {
+        const options = { evidenceRunsRoot: site.runs, runId, discoveryHandle: site.handle };
+        for (const invoke of [
+            () => api.prepareEvidence({ ...options, apply: true }),
+            () => api.prepareEvidence({ ...options, apply: false }),
+            () => api.inspectEvidence(options),
+            () => api.loadEvidenceHandle(options)
+        ]) {
+            assert.throws(invoke, /UUID v4/);
+            assert.deepEqual(fs.readdirSync(site.root).sort(), before);
+            assert.equal(fs.existsSync(site.runs), false);
+        }
+    }
+});

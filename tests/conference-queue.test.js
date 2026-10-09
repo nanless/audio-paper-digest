@@ -388,3 +388,58 @@ test('命令行要求显式的绝对路径计划，并且只提供只读模式�
     assert.throws(() => cli.parseArgs(['--apply']), /用法：/);
     assert.throws(() => cli.parseArgs(['--status', '--plan', 'relative.json']), /用法：/);
 });
+
+
+for (const change of ['missing', 'changed', 'none']) {
+    test(`续跑先核已发布会议的凭证（${change}），不重复发布完整会议`, async t => {
+        const f = fixture(t, 2); const events = []; let stopSecond = true;
+        const receiptFile = entry => path.join(f.files.conferencePublicationDir,
+            entry.conferenceId, processIdFor(entry), 'publish.json');
+        const deps = dependencies(f, events, {
+            apply: async entry => {
+                if (entry.conferenceId === 'odyssey-2027' && stopSecond) {
+                    stopSecond = false; throw new Error('第二个会议暂时中断');
+                }
+                const processId = processIdFor(entry);
+                return { status: 'complete', conferenceId: entry.conferenceId,
+                    processId, completionReceiptSha256: sha(`completion:${processId}`) };
+            },
+            findPublished: entry => fs.existsSync(receiptFile(entry))
+                ? JSON.parse(fs.readFileSync(receiptFile(entry), 'utf8')) : null
+        });
+        const first = await queue.runConferenceQueue({ mode: 'apply', plan: f.plan }, deps);
+        assert.equal(first.status, 'paused');
+        assert.equal(first.entries[0].status, 'published');
+        const firstFile = receiptFile(f.plan.conferences[0]);
+        const originalBytes = fs.readFileSync(firstFile);
+        if (change === 'missing') fs.unlinkSync(firstFile);
+        if (change === 'changed') {
+            const { publishSha256, ...body } = JSON.parse(originalBytes);
+            body.remoteVerifiedOid = 'b'.repeat(40);
+            fs.writeFileSync(firstFile, JSON.stringify({ ...body, publishSha256: sha(body) }), { mode: 0o600 });
+        }
+        events.length = 0;
+        const second = await queue.runConferenceQueue({ mode: 'apply', plan: f.plan, retryFailed: true }, deps);
+        if (change === 'none') {
+            assert.equal(second.status, 'complete');
+            assert.equal(events.some(event => event.endsWith(':odyssey-2026')), false);
+            assert.equal(events.includes('push:odyssey-2027'), true);
+        } else {
+            assert.equal(second.status, 'paused');
+            assert.match(second.entries[0].failure.message, /已发布证明(?:消失|发生变化)/);
+            assert.deepEqual(events, [], '发现旧凭证无效后，不能启动第二个会议');
+            const stillBroken = await queue.runConferenceQueue({ mode: 'apply', plan: f.plan, retryFailed: true }, deps);
+            assert.equal(stillBroken.status, 'paused');
+            assert.match(stillBroken.entries[0].failure.message, /已发布证明(?:消失|发生变化)/);
+            assert.equal(stillBroken.entries[0].receipts.verify.receiptSha256,
+                first.entries[0].receipts.verify.receiptSha256, '失败后不能改绑原验证凭证');
+            assert.deepEqual(events, [], '再次续跑仍须停在未恢复的凭证上');
+            fs.writeFileSync(firstFile, originalBytes, { mode: 0o600 });
+            const recovered = await queue.runConferenceQueue({ mode: 'apply', plan: f.plan, retryFailed: true }, deps);
+            assert.equal(recovered.status, 'complete');
+            assert.equal(events.includes('push:odyssey-2027'), true);
+            assert.equal(events.includes('push:odyssey-2026'), false);
+            assert.equal(events.includes('generate:odyssey-2026'), false);
+        }
+    });
+}

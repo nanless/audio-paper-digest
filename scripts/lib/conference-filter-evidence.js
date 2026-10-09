@@ -245,8 +245,12 @@ function discoverySnapshot(handle) {
     try { return discoveryApi.discoveryHandleSnapshot(handle); }
     catch (error) { fail(`authenticated discovery handle required: ${error.message}`); }
 }
+function assertRunId(runId) {
+    if (typeof runId !== 'string' || !UUID_RE.test(runId)) fail('运行 ID 必须是规范的小写 UUID v4');
+    return runId;
+}
 function runBinding(snapshot, runId) {
-    if (!UUID_RE.test(String(runId || ''))) fail('runId must be a canonical UUID v4');
+    assertRunId(runId);
     return { runId, conference: clone(snapshot.candidateManifest.conference), catalogSha256: snapshot.catalogSha256,
         reportSha256: snapshot.reportSha256, metadataSnapshotSha256: snapshot.candidateManifest.metadataSnapshot.sha256,
         pdfCatalogSha256: snapshot.candidateManifest.pdfCatalogSha256,
@@ -674,6 +678,7 @@ function prepareEvidenceLocked({ evidenceRunsRoot, runId, discoveryHandle, apply
 }
 
 function prepareEvidence(options = {}) {
+    assertRunId(options.runId);
     if (options.apply !== true) return prepareEvidenceLocked(options);
     if (options.all === true && options.expectedTotal !== undefined) {
         const expected = discoverySnapshot(options.discoveryHandle).candidateManifest.members.length;
@@ -691,6 +696,7 @@ function prepareEvidence(options = {}) {
         });
 }
 function inspectEvidence({ evidenceRunsRoot, runId, discoveryHandle, deep = false, limit = null, extractLoader } = {}) {
+    assertRunId(runId);
     const snapshot = discoverySnapshot(discoveryHandle); const root = safeDirectory(evidenceRunsRoot);
     const runRoot = safeDirectory(path.join(root, runId));
     const state = normalizeState(readJson(direct(runRoot, 'state.json'), 'run state').value, snapshot, runId);

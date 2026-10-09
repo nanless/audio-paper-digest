@@ -587,11 +587,16 @@ function validatePublishedEvidence(entryState, entry, found, deps) {
 async function runEntry(state, index, plan, deps, stateFile, options) {
     let entryState = state.entries[index];
     const entry = plan.conferences[index];
-    if (entryState.status === 'published') {
+    if (entryState.status === 'published' || entryState.stage === 'complete') {
         if (typeof deps.publisher?.findPublished === 'function') {
             const found = await deps.publisher.findPublished(entry, entryState.processId, { readOnly: true });
             if (!found) fail(`${entry.conferenceId} 的已发布证明消失`);
             validatePublishedEvidence(entryState, entry, found, deps);
+        }
+        if (entryState.status !== 'published') {
+            state.entries[index] = { ...entryState, status: 'published', failure: null, blocked: null };
+            state.status = state.entries.every(item => item.status === 'published') ? 'complete' : 'running';
+            saveState(stateFile, state, deps);
         }
         return { kind: 'published' };
     }
@@ -709,7 +714,6 @@ async function runConferenceQueue(options, overrides = {}) {
         }
         state.status = 'running'; state = saveState(stateFile, state, deps);
         for (let index = 0; index < plan.conferences.length; index += 1) {
-            if (state.entries[index].status === 'published') continue;
             try {
                 const result = await runEntry(state, index, plan, deps, stateFile, normalizedOptions);
                 state = readState(stateFile, plan, queueId);
