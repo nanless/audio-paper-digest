@@ -1,11 +1,9 @@
 #!/usr/bin/env python3
-"""论文速递视觉图的本地合成器，输出确定，供调试和离线兜底使用。
+"""按固定布局生成本地调试预览。
 
-正式的成图流程走内置整图生成；这个 Pillow 渲染器只在测试、排查问题和断网
-兜底时使用。导入它不会产生副作用。
+正式论文长图与封面必须使用内置 image_gen 生成并逐图目检；本工具的预览
+不能登记为正式视觉任务的完成结果。
 """
-
-from project_env import load_project_env
 
 import argparse
 import json
@@ -82,7 +80,7 @@ def resolve_cjk_font():
     )
 
 
-def load_font(font_path, size, *, bold=False):
+def load_font(font_path, size):
     # 苹方和黑体的字体集合在索引 0 上就有可用的常规字面；与其逐个猜 TTC
     # 索引，直接放大常规字面更稳妥。
     return ImageFont.truetype(str(font_path), int(size), index=0)
@@ -320,7 +318,7 @@ def _rounded_panel(draw, box, fill, *, outline=PALETTE["line"], radius=42, width
 
 
 def _add_paper_texture(canvas, *, seed=20260714):
-    """铺一层固定的细纤维纹理，又不让整页显得脏。"""
+    """使用固定种子生成低对比度的纸张纹理。"""
     draw = ImageDraw.Draw(canvas)
     state = seed & 0x7FFFFFFF
 
@@ -342,7 +340,7 @@ def _add_paper_texture(canvas, *, seed=20260714):
 
 
 def _paper_panel(draw, box, fill, *, radius=42, tape=None, deckle=True):
-    """画一张干净的编辑风格纸卡，带一点克制的文具味装饰。"""
+    """绘制带阴影、可选胶带和不规则下边缘的卡片。"""
     x0, y0, x1, y1 = map(int, box)
     draw.rounded_rectangle(
         (x0 + 16, y0 + 20, x1 + 16, y1 + 20),
@@ -383,7 +381,7 @@ def _paper_panel(draw, box, fill, *, radius=42, tape=None, deckle=True):
 
 
 def _draw_paper_cut_decor(draw):
-    """空白边角放几块安静的剪纸形状，撑起视觉节奏。"""
+    """在页边空白处绘制固定装饰。"""
     draw.ellipse((-90, 160, 215, 465), fill="#E3ECE3")
     draw.polygon(((1980, 290), (2160, 170), (2160, 520), (2025, 455)), fill="#F0DCD4")
     draw.arc((60, 4200, 410, 4520), 195, 350, fill="#C9D9D7", width=16)
@@ -623,7 +621,6 @@ def _fonts(font_path):
     return {
         "title": load_font(font_path, 102),
         "cover_title": load_font(font_path, 138),
-        "hero_number": load_font(font_path, 238),
         "subtitle": load_font(font_path, 54),
         "chapter": load_font(font_path, 58),
         "body": load_font(font_path, 39),
@@ -893,7 +890,7 @@ def render_visual(spec, output_path, *, illustration=None, reference=None, resul
 
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description="本地调试/离线兜底：确定性合成论文长图或批次封面")
+    parser = argparse.ArgumentParser(description="按固定布局生成本地调试预览；不替代正式 image_gen 生图与目检")
     parser.add_argument("--spec", required=True, help="JSON spec 路径")
     parser.add_argument("--output", required=True, help="输出 PNG 路径")
     parser.add_argument("--illustration", help="可选的无字调试插画")
@@ -921,7 +918,7 @@ def main(argv=None):
         print(f"视觉合成失败: {exc}")
         return 2
     size = output.stat().st_size
-    print(f"视觉合成完成: {output} ({CANVAS_WIDTH}x{CANVAS_HEIGHT}, {size} bytes)")
+    print(f"视觉合成完成: {output} ({CANVAS_WIDTH}x{CANVAS_HEIGHT}, {size} 字节)")
     return 0
 
 
