@@ -106,7 +106,7 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
             self.assertEqual(publish_xiaohongshu.get_oneliner_concurrency(), 5)
 
     def test_empty_batch_does_not_create_executor_or_call_api(self):
-        with mock.patch.object(publish_xiaohongshu.concurrent.futures, 'ThreadPoolExecutor') as executor, \
+        with mock.patch('publish_common.concurrent.futures.ThreadPoolExecutor') as executor, \
                 mock.patch.object(publish_xiaohongshu, 'call_llm_for_oneliner') as call:
             self.assertEqual(publish_xiaohongshu.generate_llm_oneliners([]), {})
         executor.assert_not_called()

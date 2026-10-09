@@ -25,7 +25,7 @@ import copy
 import contextvars
 import difflib
 import html
-import json, re, sys, os, subprocess, datetime, base64, concurrent.futures, hashlib, math, io
+import json, re, sys, os, subprocess, datetime, base64, hashlib, math, io
 import ipaddress, shutil, socket, tempfile, stat, struct, zlib, unicodedata, time, signal
 from contextlib import contextmanager
 from pathlib import Path
@@ -45,7 +45,7 @@ from publish_common import (
     truncate_base64_datauri, fix_yaml_double_commas, strip_raw_inline_html,
     fix_empty_markdown_links, dedupe_image_alts, fix_yaml_unbalanced_quotes,
     sanitize_markdown_for_publish, strip_internal_scoring_anchors,
-    call_publish_llm_api, PublishLLMUnavailable,
+    call_publish_llm_api, PublishLLMUnavailable, run_bounded_llm_tasks,
     PublishDataValidationError, count_blocking_review_issues, is_blocking_review_issue,
     normalize_publish_arxiv_id, parse_publish_arxiv_identity, review_protocol_failure,
     validate_papers_for_publish, validate_review_payload,
@@ -930,7 +930,9 @@ def repair_review_payload(
                 context=context,
                 issue_fields=issue_fields,
             )
-        except (PublishLLMUnavailable, json.JSONDecodeError, TypeError, ValueError):
+        except (PublishLLMUnavailable, json.JSONDecodeError, TypeError, ValueError) as exc:
+            if getattr(exc, 'scope', None) == 'run':
+                raise
             raw_response = retried if 'retried' in locals() else raw_response
 
     prompt = f"""你只负责修复审查响应的输出格式，不得新增、删除或改变审查结论。
@@ -974,6 +976,8 @@ def repair_review_payload(
             issue_fields=issue_fields,
         )
     except (PublishLLMUnavailable, json.JSONDecodeError, TypeError, ValueError) as exc:
+        if getattr(exc, 'scope', None) == 'run':
+            raise
         repair_error = exc
 
     # 格式修复的响应本身也可能被截断或格式错误。遇到这种情况，
@@ -1000,6 +1004,8 @@ def repair_review_payload(
                 issue_fields=issue_fields,
             )
         except (PublishLLMUnavailable, json.JSONDecodeError, TypeError, ValueError) as retry_exc:
+            if getattr(retry_exc, 'scope', None) == 'run':
+                raise
             return review_protocol_failure(
                 context,
                 f'响应不是可解析的 JSON，格式修复失败：{repair_error}；协议重试失败：{retry_exc}',
@@ -1174,13 +1180,7 @@ def llm_review_post(content, title="", required=False):
     if title == "汇总页" and len(chunks) > 1:
         workers = min(get_blog_review_concurrency(), len(chunks))
         print(f"    🔀 汇总页文本分块 review 并发度: {workers}")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(contextvars.copy_context().run, review_chunk, index): index
-                for index in range(len(chunks))
-            }
-            for future in concurrent.futures.as_completed(futures):
-                chunk_results[futures[future]] = future.result()
+        chunk_results = run_bounded_llm_tasks(range(len(chunks)), review_chunk, workers)
     else:
         for index in range(len(chunks)):
             chunk_results[index] = review_chunk(index)
@@ -8294,58 +8294,58 @@ def review_all_posts(
     if paper_args:
         review_concurrency = min(get_blog_review_concurrency(), len(paper_args))
         print(f"\n  🔀 论文页 review 并发度: {review_concurrency}")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=review_concurrency) as executor:
-            futures = {
-                executor.submit(_review_single_paper, args): args
-                for args in paper_args
-            }
-            for future in concurrent.futures.as_completed(futures):
-                args = futures[future]
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    (_arxiv_id, slug, _date, title, _required,
-                     worker_content_dir, _paper, _page_artifact) = args
-                    path = os.path.realpath(os.path.join(
-                        worker_content_dir, f'{date_str}-{slug}.md',
-                    ))
-                    print(f"\n  📄 {title[:50]}...")
-                    print(f'    ⚠️ review worker 基础设施异常（{type(exc).__name__}），保留为可重试失败')
-                    total_blocking_issues += 1
-                    file_results[path] = {
-                        'passed': False,
-                        'blockingCount': 1,
-                        'completed': True,
-                        'failureKind': 'transient',
-                        'issues': [{'severity': 'error', 'type': 'infrastructure',
-                                    'description': f'review worker failed ({type(exc).__name__})'}],
-                    }
-                    if result_callback:
-                        result_callback(path, file_results[path])
-                    continue
-                if result is None:
-                    continue
-                (
-                    path, title, fixed_count, blocking_count, advisory_count,
-                    lines, failure_kind, reviewed_sha256,
-                ) = result[:8]
+        def record_paper_result(args, future):
+            nonlocal total_fixed, total_blocking_issues, total_advisory_issues
+            try:
+                result = future.result()
+            except Exception as exc:
+                (_arxiv_id, slug, _date, title, _required,
+                 worker_content_dir, _paper, _page_artifact) = args
+                path = os.path.realpath(os.path.join(
+                    worker_content_dir, f'{date_str}-{slug}.md',
+                ))
                 print(f"\n  📄 {title[:50]}...")
-                for line in lines:
-                    print(line)
-                total_fixed += fixed_count
-                total_blocking_issues += blocking_count
-                total_advisory_issues += advisory_count
+                if getattr(exc, 'scope', None) == 'run':
+                    print(f'    ⛔ 页面审查遇到运行级错误（{type(exc).__name__}），已停止派发新任务')
+                else:
+                    print(f'    ⚠️ review worker 基础设施异常（{type(exc).__name__}），保留为可重试失败')
+                total_blocking_issues += 1
                 file_results[path] = {
-                    'passed': blocking_count == 0,
-                    'blockingCount': blocking_count,
+                    'passed': False,
+                    'blockingCount': 1,
                     'completed': True,
-                    'failureKind': failure_kind,
-                    'reviewedSha256': reviewed_sha256,
-                    'imageReviewMode': current_image_review_mode(),
-                    'issues': result[8] if len(result) > 8 else [],
+                    'failureKind': 'transient',
+                    'issues': [{'severity': 'error', 'type': 'infrastructure',
+                                'description': f'review worker failed ({type(exc).__name__})'}],
                 }
                 if result_callback:
                     result_callback(path, file_results[path])
+                return
+            if result is None:
+                return
+            (
+                path, title, fixed_count, blocking_count, advisory_count,
+                lines, failure_kind, reviewed_sha256,
+            ) = result[:8]
+            print(f"\n  📄 {title[:50]}...")
+            for line in lines:
+                print(line)
+            total_fixed += fixed_count
+            total_blocking_issues += blocking_count
+            total_advisory_issues += advisory_count
+            file_results[path] = {
+                'passed': blocking_count == 0,
+                'blockingCount': blocking_count,
+                'completed': True,
+                'failureKind': failure_kind,
+                'reviewedSha256': reviewed_sha256,
+                'imageReviewMode': current_image_review_mode(),
+                'issues': result[8] if len(result) > 8 else [],
+            }
+            if result_callback:
+                result_callback(path, file_results[path])
+        run_bounded_llm_tasks(paper_args, _review_single_paper, review_concurrency,
+                              on_result=record_paper_result)
     elif selected_paths is not None:
         print("\n  ℹ️ 本轮没有需要复审的论文页")
 

@@ -5,6 +5,9 @@ Paper Digest 发布公共模块 (Python)
 消除 publish-to-blog.py / publish-wechat-full.py / publish-xiaohongshu.py 的重复逻辑
 """
 
+import concurrent.futures
+import contextvars
+import threading
 import json
 import hashlib
 import math
@@ -77,6 +80,78 @@ class PublishLLMUnavailable(RuntimeError):
 
 class PublishDataValidationError(ValueError):
     """分析数据不适合或不一致、不能发布时抛出。"""
+
+
+def run_bounded_llm_tasks(items, worker, max_workers, on_result=None):
+    """逐个补派模型任务；运行级故障后只等在途任务保存，不再启动新任务。"""
+    if not isinstance(max_workers, int) or max_workers < 1:
+        raise ValueError('模型任务并发数必须是正整数')
+    items = list(items)
+    if not items:
+        return []
+    stopped = threading.Event()
+    failure_lock = threading.Lock()
+    run_errors = []
+    skipped = object()
+    results = [None] * len(items)
+
+    def invoke(item):
+        if stopped.is_set():
+            return skipped
+        try:
+            return worker(item)
+        except BaseException as exc:
+            if getattr(exc, 'scope', None) == 'run':
+                with failure_lock:
+                    if not run_errors:
+                        run_errors.append(exc)
+                    stopped.set()
+            raise
+
+    cursor = 0
+    fatal_errors = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        pending = {}
+
+        def submit_next():
+            nonlocal cursor
+            if stopped.is_set() or cursor >= len(items):
+                return
+            index = cursor
+            cursor += 1
+            context = contextvars.copy_context()
+            pending[executor.submit(context.run, invoke, items[index])] = index
+
+        for _ in range(min(max_workers, len(items))):
+            submit_next()
+        while pending:
+            done, _ = concurrent.futures.wait(pending,
+                return_when=concurrent.futures.FIRST_COMPLETED)
+            # 已完成的异常和保存回调先处理完，再补任务，避免错误与补派竞争。
+            for future in sorted(done, key=pending.get):
+                index = pending.pop(future)
+                if future.exception() is None and future.result() is skipped:
+                    continue
+                try:
+                    if on_result is None:
+                        results[index] = future.result()
+                    else:
+                        on_result(items[index], future)
+                except BaseException as exc:
+                    stopped.set()
+                    fatal_errors.append(exc)
+            for _ in done:
+                submit_next()
+    if run_errors:
+        other_errors = [error for error in fatal_errors if error is not run_errors[0]]
+        if other_errors:
+            cause = other_errors[0] if len(other_errors) == 1 else BaseExceptionGroup(
+                '停止运行时还有结果处理或保存失败', other_errors)
+            raise run_errors[0] from cause
+        raise run_errors[0]
+    if fatal_errors:
+        raise fatal_errors[0]
+    return results
 
 
 SCORING_RUBRIC_VERSION = 'type-aware-v1'

@@ -14,13 +14,13 @@ setup_script_logging(__file__)
     python3 publish-xiaohongshu.py --top 7        # 指定 TOP N
     python3 publish-xiaohongshu.py --date 2026-04-22
 """
-import argparse, json, re, sys, os, datetime, concurrent.futures, hashlib
+import argparse, json, re, sys, os, datetime, hashlib
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from publish_common import (
     load_papers_for_publication_date, get_today_bj, score_and_sort, extract_top_tags,
-    score_emoji, format_medal, extract_one_liner, call_publish_llm_api,
+    score_emoji, format_medal, extract_one_liner, call_publish_llm_api, run_bounded_llm_tasks,
     validate_papers_for_publish, normalize_publish_arxiv_id,
     PublishDataValidationError,
     select_blog_published_snapshot as select_verified_blog_published_snapshot,
@@ -345,27 +345,27 @@ def generate_llm_oneliners(top_papers, date_str=None, cache_path=None):
         return idx, result, cache_saved
 
     statuses = {}
-    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        future_to_pending = {executor.submit(worker, item): item for item in pending}
-        for future in concurrent.futures.as_completed(future_to_pending):
-            idx, _item, paper_id, fingerprint, expected_entry = future_to_pending[future]
-            try:
-                _returned_idx, result, cache_saved = future.result()
-                if result:
-                    results[idx] = result
-                    statuses[idx] = 'success' if cache_saved else 'success_cache_failed'
-                else:
-                    statuses[idx] = 'fallback' if cache_saved else 'fallback_cache_failed'
-            except Exception:
-                statuses[idx] = 'error'
-                if use_cache:
-                    try:
-                        _save_oneliner_cache_entry(
-                            cache_path, date_str, paper_id, fingerprint, 'error', None,
-                            expected_entry=expected_entry,
-                        )
-                    except Exception:
-                        pass
+    def record_result(pending_item, future):
+        idx, _item, paper_id, fingerprint, expected_entry = pending_item
+        try:
+            _returned_idx, result, cache_saved = future.result()
+            if result:
+                results[idx] = result
+                statuses[idx] = 'success' if cache_saved else 'success_cache_failed'
+            else:
+                statuses[idx] = 'fallback' if cache_saved else 'fallback_cache_failed'
+        except Exception:
+            statuses[idx] = 'error'
+            if use_cache:
+                try:
+                    _save_oneliner_cache_entry(
+                        cache_path, date_str, paper_id, fingerprint, 'error', None,
+                        expected_entry=expected_entry,
+                    )
+                except Exception:
+                    pass
+
+    run_bounded_llm_tasks(pending, worker, workers, on_result=record_result)
 
     for idx, _item, _paper_id, _fingerprint, _expected_entry in pending:
         if statuses.get(idx) == 'success':

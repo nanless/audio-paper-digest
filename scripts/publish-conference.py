@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 
 from blog_repository_lock import shared_blog_repository_lock
 from blog_entry_loader import load_publish_to_blog
+from publish_common import run_bounded_llm_tasks
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env
 from runtime_guard import require_external_runtime, require_workspace_role
 from conference_publication_gate import inspect_html, verify_publication_urls, validate_png, GATE_CONTRACT
@@ -1311,9 +1312,8 @@ def raise_content_review_failure(record, digest, protocol, stage, findings, mess
 def review_pages(repo, records, workers=None):
     """只复用「路径 + 字节」都通过的证据；确定性检查每次都要重跑。
 
-    派发是串行的，这里不要捕获审查器异常。尤其是 scope=run 的账号失败，
-    必须带着原类型和错误码抛出，不能等到后续分块、图片或页面发出请求、
-    或写入了通过记录之后才处理。
+    只补派已完成任务空出的并发位置；运行级账号错误立即停止新任务。
+    在途页面仍可保存自己的通过记录，然后将原错误交回调用方。
     """
     from markdown_hugo_gate import parse_frontmatter_content, validate_markdown_format_gate
     module = load_publish_to_blog()
@@ -1321,9 +1321,7 @@ def review_pages(repo, records, workers=None):
     module.CONTENT_DIR = str(repo / 'content' / 'posts')
     protocol = content_review_protocol(module)
 
-    # 会议侧逐页 review 原为串行（~70s/页 × 1355 页 ≈ 26 小时）——按日更同款
-    # PD_BLOG_REVIEW_CONCURRENCY（1–5，默认 5）并行化。逐页函数保持“首个坏页即抛”
-    # 的 fail-fast 语义（按记录顺序取结果，坏页之前的通过页已各自持久化 pass-cache）。
+    # 会议页与日更使用相同的 1–5 并发范围，每页自行保存内容审查记录。
     def _review_one(record):
         relative = safe_relative(record['path'], 'review 页面')
         raw = target_bytes(repo, record)
@@ -1391,12 +1389,7 @@ def review_pages(repo, records, workers=None):
         workers = 5
     # 遵循独立博客页 review 的明确 1–5 并发范围；默认保持 5。
     workers = max(1, min(int(workers), 5))
-    import concurrent.futures
-    if workers == 1:
-        results = [_review_one(record) for record in records]
-    else:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-            results = list(executor.map(_review_one, records))
+    results = run_bounded_llm_tasks(records, _review_one, workers)
     return {'status': 'passed', 'protocol': protocol, 'pages': results}
 
 
