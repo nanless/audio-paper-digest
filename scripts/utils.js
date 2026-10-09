@@ -68,7 +68,13 @@ function writeFileAtomic(filePath, content, options = {}) {
 
 function readJsonSafe(filePath, defaultValue = null) {
     try {
-        return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+        const fd = fs.openSync(filePath, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+        try {
+            if (!fs.fstatSync(fd).isFile()) throw new Error('JSON 输入不是普通文件');
+            return JSON.parse(fs.readFileSync(fd, 'utf8'));
+        } finally {
+            fs.closeSync(fd);
+        }
     } catch (err) {
         if (err.code !== 'ENOENT') {
             console.error(`[readJsonSafe] 读取失败 ${filePath}: ${err.message}`);
