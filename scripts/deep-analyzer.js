@@ -91,7 +91,6 @@ const {
 const {
     validateEditorialQuality,
     findDuplicateLongSentences,
-    findMissingComparisonUnits,
     findQuantitativeChineseNumerals,
     normalizeDanglingReaderConnectors,
     normalizeIssueBoundReaderQuantitativeNumerals,
@@ -1232,85 +1231,6 @@ function normalizeShiftedReaderConceptBridgeMarkers(candidate) {
     return true;
 }
 
-// 只给现有比较闸门报出的那句话补上单位声明。模型复述原文支持过的指标、却漏了局部
-// 单位时用得上，也避免改写数字、表格和公式。EER 这类小于等于 1 的值仍写成明确的
-// 无量纲；准确率这类值用该指标本身已经隐含的百分号。
-function normalizeIssueBoundReaderComparisonUnits(candidate, issues = []) {
-    if (!candidate || !Array.isArray(candidate.sections)) return false;
-    const excerpts = [];
-    for (const issue of Array.isArray(issues) ? issues : []) {
-        for (const match of String(issue?.message || '')
-            .matchAll(/comparison_unit_missing:([^；\n]+)/gu)) {
-            if (match[1].trim()) excerpts.push(match[1].trim());
-        }
-    }
-    let changed = false;
-    const repairExcerpt = excerpt => {
-        // 这份列表要与 editorial-quality 认得的百分比类指标保持一致。早先的修复只认
-        // 准确率那一类名字，所以像「词错误率 64.47 高于 ... 60.20」这种有原文支撑的
-        // WER 比较，永远拿不到局部单位。
-        const metric = excerpt.match(
-            /等错误率|字符错误率|字错误率|词错误率|错误率|准确率|精确率|召回率|正确率|覆盖率|命中率|WER|CER|PER|F-?score|S-BAcc|state-balanced accuracy|step accuracy/iu
-        )?.[0] || null;
-        if (!metric) return;
-        const metricValues = metric === '等错误率'
-            ? [...excerpt.matchAll(/等错误率(?:约|低于|高于|为|是|达到|接近)?\s*(?:约|大约|低于|高于)?\s*(\d+(?:\.\d+)?)/gu)]
-                .map(match => Number(match[1])).filter(Number.isFinite)
-            : [];
-        const unit = metric === '等错误率' && metricValues.length > 0
-            && metricValues.every(value => value <= 1) ? '无量纲' : '%';
-        const declaration = `${metric}（${unit}）`;
-        let updatedExcerpt = excerpt.replace(
-            new RegExp(`${metric}(?!\\s*[（(][^（）()]{0,30}(?:%|百分点|点|分|无量纲)\\s*[）)])`, 'u'),
-            declaration
-        );
-        const numeralIssues = findQuantitativeChineseNumerals(updatedExcerpt)
-            .map(finding => ({ code: 'quantitative_chinese_numeral', match: finding.match,
-                index: finding.index }));
-        if (numeralIssues.length) {
-            updatedExcerpt = normalizeReaderProseFormatting(updatedExcerpt, numeralIssues);
-        }
-        if (updatedExcerpt === excerpt) return;
-        for (const section of candidate.sections) {
-            if (typeof section.body !== 'string' || !section.body.includes(excerpt)) continue;
-            section.body = section.body.replace(excerpt, updatedExcerpt);
-            changed = true;
-        }
-    };
-    for (const excerpt of new Set(excerpts)) repairExcerpt(excerpt);
-    // 同一个闸门报出的是做过 NFKC 归一化的正文。此前的修复可能已经把落盘正文里的
-    // 数字换成了中文数字，原来的诊断片段因此对不上字节。只在确实存在比较问题时采用
-    // 闸门当前的句子；范围仍限于权威闸门已经找出的那些句子。
-    if (excerpts.length > 0) {
-        for (const section of candidate.sections) {
-            for (const finding of findMissingComparisonUnits(String(section?.body || ''))) {
-                if (finding.reason !== 'percentage_metric_delta_without_unit') continue;
-                repairExcerpt(finding.match);
-            }
-        }
-    }
-    // 之前的表层处理可能把「两位数」变成了「2 位数」，而已落盘的诊断里还是处理前的
-    // 片段（反过来也一样）。这里严格绑定问题本身，给匹配上的指标补局部单位声明，
-    // 不要凭空编一个值。
-    if (excerpts.some(excerpt => /位数/u.test(excerpt))) {
-        const metricPattern = /((?:[0-9]+|[零〇一二两三四五六七八九十百千万亿]+)\s*位数)(\s*的\s*)(准确率|精确率|召回率|正确率|覆盖率|命中率)(?!\s*[（(][^（）()]{0,30}(?:%|个百分点|点|分|无量纲)\s*[）)])/gu;
-        for (const section of candidate.sections) {
-            if (typeof section?.body !== 'string' || !metricPattern.test(section.body)) {
-                metricPattern.lastIndex = 0;
-                continue;
-            }
-            metricPattern.lastIndex = 0;
-            const updated = section.body.replace(metricPattern, '$1$2$3（%）');
-            metricPattern.lastIndex = 0;
-            if (updated !== section.body) {
-                section.body = updated;
-                changed = true;
-            }
-        }
-    }
-    return changed;
-}
-
 // 只修当前编辑闸门报出的那个技术边界 token。这一步刻意与宽泛的正文归一化分开：原文
 // 引文、代码和编译器生成的表格单元必须保持字节一致，而普通 Reader 段落可以安全地
 // 变成「前缀 数」。
@@ -1513,12 +1433,9 @@ function normalizeReaderConferenceNarrowComparisonTable(candidate) {
                 const cells = lines[end].trim().split('|').slice(1, -1).map(cell => cell.trim());
                 if (cells.length !== 4) return section;
                 const location = cells[1];
-                const match = location.match(/^(tv26)\s+(eval-[AU])$/i)
-                    || (location === 'validation set' ? ['validation set', 'validation set', 'validation set'] : null);
+                const match = location.match(/^(tv26)\s+(eval-[AU])$/i);
                 if (!match) return section;
-                rows.push(match[0] === 'validation set'
-                    ? [cells[0], 'TidyVoice', cells[1], cells[2], cells[3]]
-                    : [cells[0], match[1], match[2], cells[2], cells[3]]);
+                rows.push([cells[0], match[1], match[2], cells[2], cells[3]]);
                 end += 1;
             }
             if (rows.length === 0) return section;
@@ -2040,6 +1957,49 @@ function readerSourceQuoteCoversNumericToken(token, quoteCorpus, allowSplitUnit 
     ));
 }
 
+// 列头单位也是数值含义的一部分。只有单元格里出现数值、原文却没有对应单位时，
+// 不能因数字相同就把比率显示成百分数，或把秒显示成毫秒。
+function readerTableHeaderUnitEvidenceFailures(table, sourceQuotes) {
+    const quotes = sourceQuotes.map(item => typeof item === 'string' ? item : item?.quote)
+        .filter(value => typeof value === 'string');
+    const surface = value => String(value || '').normalize('NFKC').toLowerCase()
+        .replace(/[`*_↑↓]/g, '').replace(/\s+/g, ' ').trim();
+    const compact = value => surface(value).replace(/\s+/g, '');
+    const failures = [];
+    for (let column = 0; column < (table?.header || []).length; column++) {
+        const header = surface(table.header[column]);
+        const match = header.match(/^(.*?)(?:\(\s*(%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp)\s*\)|\[\s*(%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp)\s*\]|\s+(%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp))$/i);
+        if (!match) continue;
+        const unit = (match[2] || match[3] || match[4]).toLowerCase();
+        const metric = compact(match[1]);
+        const declaration = header.replace(/\s*([([])/g, ' $1').replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*');
+        const declaredUnit = new RegExp(`(?<![a-z0-9_])${declaration}(?![a-z0-9_])`, 'g');
+        for (let row = 0; row < (table.rows || []).length; row++) {
+            const tokens = readerNumericTokens(table.rows[row]?.[column]);
+            for (const token of tokens) {
+                const number = token.match(/^([-+]?\d+(?:\.\d+)?)([a-z%]*)$/i);
+                if (!number) continue;
+                const unitConsistent = !number[2] || number[2].toLowerCase() === unit;
+                // 已显式写单位的单元格继续由既有数字引文规则核验；这里不改变其 PDF 拆单位兼容。
+                // 裸值只认可同句中指标单位声明后的第一个数值，不能跨句借另一方法或指标的单位。
+                const covered = unitConsistent && (Boolean(number[2]) || (metric && quotes.some(quote => (
+                    String(quote).normalize('NFKC').split(/(?<!\d)[.!?;。！？；\n]|[.!?](?!\d)/).some(sentence => {
+                        const text = surface(sentence);
+                        return [...text.matchAll(declaredUnit)].some(declared => {
+                            const clause = text.slice(declared.index + declared[0].length)
+                                .split(/\b(?:and|while|but|whereas)\b|[,，]/)[0];
+                            if (/\b(?:not|no|never|unavailable|unknown|missing)\b|未报告|未提供|不可得|未知|没有/.test(clause)) return false;
+                            return readerNumericTokens(clause)[0] === token;
+                        });
+                    })
+                ))));
+                if (!covered) failures.push({ row: row + 1, column, token, unit });
+            }
+        }
+    }
+    return failures;
+}
+
 function deriveExactTableSourceQuotes(renderedMarkdown, sourceText, options = {}) {
     const allowSplitUnit = options.allowSplitUnit === true;
     const sourceMatches = readerNumericTokenMatches(sourceText);
@@ -2349,6 +2309,42 @@ function readerFormulaSourcePayloadValid(binding, payload, structuredSha, source
         && typeof formulas[0].latex === 'string' && formulas[0].latex.trim() === binding.latex.trim();
 }
 
+// 旧窄表修复曾把未知 validation set 写成 TidyVoice。只重核这一个确切旧表形状，
+// 并要求原引文直接说明数据集与验证集的关系，不能拿另一个句子的同名数据集补证据。
+function readerLegacyDatasetQuoteSupportsClaim(quote) {
+    // 汉字可以直接引出说明；其余字母、组合字符、数字与连字符仍属于名称。
+    // 先屏蔽更长的数据集名，避免 JS 与 Python 的 \b 对 Unicode 字符解释不同。
+    const extendsName = character => character && !/[\u3400-\u9fff]/u.test(character)
+        && /[\p{L}\p{M}\p{N}_-]/u.test(character);
+    const normalized = String(quote || '').normalize('NFKC').replace(/TidyVoice/gi, (name, offset, text) => {
+        const before = [...text.slice(0, offset)].pop() || '';
+        const after = [...text.slice(offset + name.length)][0] || '';
+        return extendsName(before) || extendsName(after) ? '其他数据集' : name;
+    });
+    return normalized.split(/[。！？.!?;；\n]+/).some(sentence => {
+        if (/\b(?:not|no|never|neither|without|except|rather than)\b|不是|并非|不属于|并不|未用|未使用/i.test(sentence)) return false;
+        return /TidyVoice(?:['’]s)?\s+(?:validation|development)\s+(?:set|split|partition)\b/i.test(sentence)
+            || /\b(?:validation|development)\s+(?:set|split|partition)\s+(?:(?:is|was)\s+)?(?:from|of|for)\s+TidyVoice/i.test(sentence)
+            || /\b(?:validation|development)\s+(?:set|split|partition)\s+(?:is|was|=)\s+TidyVoice/i.test(sentence)
+            || /TidyVoice\s*(?:的\s*)?验证(?:集|集合)/i.test(sentence)
+            || /验证(?:集|集合)\s*(?:来自|取自|使用|采用|为|是)\s*TidyVoice/i.test(sentence);
+    });
+}
+function readerLegacyDatasetClaimsValid(article, tableBindings) {
+    const tables = extractMarkdownTables(article);
+    return tables.every((table, index) => {
+        const header = table.header.map(cell => String(cell).trim());
+        const oldShape = JSON.stringify(header) === JSON.stringify(['策略', '数据集', '评测任务', 'EER (%)', '运行条件']);
+        if (!oldShape || !table.rows.some(row => String(row[1]).trim() === 'TidyVoice'
+            && String(row[2]).trim() === 'validation set')) return true;
+        const binding = tableBindings?.[index];
+        if (binding?.sourceType !== 'source_quotes') return true; // 原表单元仍由 DOM 绑定逐格核验。
+        return Array.isArray(binding.sourceQuotes) && binding.sourceQuotes.some(item => (
+            readerLegacyDatasetQuoteSupportsClaim(typeof item === 'string' ? item : item?.quote)
+        ));
+    });
+}
+
 function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFormulaBindings, options = {}) {
     let structuredArtifacts = options.structuredArtifacts;
     const sourceText = String(options.sourceText || '');
@@ -2548,6 +2544,11 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                 token, quoteCorpus, structuredArtifacts.sourceKind === 'conference_pdf'
             )
         ));
+        const missingHeaderUnits = readerTableHeaderUnitEvidenceFailures(rendered, exactQuotes);
+        if (missingHeaderUnits.length) numericEvidenceFailures.push(
+            `tableBindings[${index}] 列头单位缺少对应原文证据：` + missingHeaderUnits
+                .map(item => `row=${item.row},column=${item.column} value=${item.token} unit=${item.unit}`).join('；')
+        );
         if (!missingNumbers.length) continue;
         const missingSet = new Set(missingNumbers);
         const affectedCells = renderedRows.flatMap((row, rowIndex) => row.map((cell, columnIndex) => {
@@ -2702,6 +2703,11 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
             };
         });
         const quoteCorpus = sourceQuotes.map(item => item.quote).join('\n');
+        const missingHeaderUnits = readerTableHeaderUnitEvidenceFailures(rendered, sourceQuotes);
+        if (missingHeaderUnits.length) throw new Error(
+            `tableBindings[${index}] 列头单位缺少对应原文证据：` + missingHeaderUnits
+                .map(item => `row=${item.row},column=${item.column} value=${item.token} unit=${item.unit}`).join('；')
+        );
         const missingNumbers = readerNumericTokens(rendered.markdown).filter(token => (
             !readerSourceQuoteCoversNumericToken(
                 token, quoteCorpus, structuredArtifacts.sourceKind === 'conference_pdf'
@@ -2737,6 +2743,9 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
             sourceQuotes
         };
     });
+    if (!readerLegacyDatasetClaimsValid(boundArticle, tableBindings)) {
+        throw new Error('读者文章的 TidyVoice/validation set 对应关系缺少逐字原文依据；请按原文修复数据集及其表格来源记录');
+    }
     return {
         article: boundArticle,
         tableBindings,
@@ -7054,7 +7063,6 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         normalizeReaderConceptBridgeTerms(candidate);
         normalizeShiftedReaderConceptBridgeMarkers(candidate);
         normalizeDuplicateReaderConceptBridgeMarkers(candidate);
-        normalizeIssueBoundReaderComparisonUnits(candidate, normalizationIssues);
         repairReportedTextSpacing(candidate, normalizationIssues);
         normalizeIssueBoundReaderNumericTypography(candidate, normalizationIssues);
         candidate.sections = candidate.sections.map(section => ({
@@ -15397,6 +15405,12 @@ async function analyzePaperDeepInternal(paper) {
             || planSha !== readerStage.planSha256
             || paper.apiReaderArticleSha256 !== articleSha
             || paper.apiReaderPlanSha256 !== planSha
+            || !readerLegacyDatasetClaimsValid(paper.apiReaderArticle, paper.apiReaderPlan?.tableBindings)
+            || extractMarkdownTables(paper.apiReaderArticle).some((table, index) => {
+                const binding = paper.apiReaderPlan?.tableBindings?.[index];
+                return binding?.sourceType === 'source_quotes'
+                    && readerTableHeaderUnitEvidenceFailures(table, binding.sourceQuotes || []).length > 0;
+            })
             || !readerFigureSourcePayloadValid(paper, sourceDetails.structuredArtifacts?.payloadSha256,
                 crypto.createHash('sha256').update(rawTextForAnalysis).digest('hex'))
             || (paper.apiReaderPlan?.formulaBindings || []).some(binding => (
@@ -17179,7 +17193,6 @@ module.exports = {
     normalizeReaderConceptBridgeTerms,
     normalizeShiftedReaderConceptBridgeMarkers,
     normalizeDuplicateReaderConceptBridgeMarkers,
-    normalizeIssueBoundReaderComparisonUnits,
     normalizeReaderConferenceNarrowComparisonTable,
     repairReportedTextSpacing,
     normalizeIssueBoundReaderNumericTypography,
@@ -17192,6 +17205,8 @@ module.exports = {
     normalizeConferenceGeneratedEvidenceTableLabels,
     normalizeReaderSourceQuotes,
     readerSourceQuoteCoversNumericToken,
+    readerTableHeaderUnitEvidenceFailures,
+    readerLegacyDatasetClaimsValid,
     readerFormulaNeedsSourcePayload,
     readerFigureNeedsSourcePayload,
     readerFigureSourcePayloadValid,

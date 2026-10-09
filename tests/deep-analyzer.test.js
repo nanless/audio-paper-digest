@@ -4000,13 +4000,11 @@ primary_task_tag: #音视频生成
             '| 策略 | 评测位置 | EER (%) | 运行条件 |',
             '| --- | --- | --- | --- |',
             '| 基线 | tv26 eval-A | 8.27 | 可运行 |',
-            '| 完整方法 | tv26 eval-U | 4.35 | 需校准 |',
-            '| 扩展 | validation set | 1.64 | 可运行 |'
+            '| 完整方法 | tv26 eval-U | 4.35 | 需校准 |'
         ].join('\n') }] };
         assert.strictEqual(normalizeReaderConferenceNarrowComparisonTable(candidate), true);
         assert.match(candidate.sections[0].body, /\| 策略 \| 数据集 \| 评测任务 \| EER \(\%\) \| 运行条件 \|/);
         assert.match(candidate.sections[0].body, /\| 基线 \| tv26 \| eval-A \| 8\.27 \| 可运行 \|/);
-        assert.match(candidate.sections[0].body, /\| 扩展 \| TidyVoice \| validation set \| 1\.64 \| 可运行 \|/);
         assert.strictEqual(normalizeReaderConferenceNarrowComparisonTable(candidate), false);
     });
 
@@ -4031,17 +4029,6 @@ primary_task_tag: #音视频生成
             { code: 'numeric_typography', match: '16kHz' }
         ]), true);
         assert.match(withSelectionMarker.sections[0].body, /\| 原文 \| 16 kHz \|/);
-    });
-
-    it('比较单位修复兼容已被表面规范化的“两位数”诊断', () => {
-        const { normalizeIssueBoundReaderComparisonUnits } = require('../scripts/deep-analyzer.js');
-        const candidate = { sections: [{ kind: 'result', body:
-            '本方法在匹配任务上相对基线有最高达两位数的准确率提升。' }] };
-        assert.strictEqual(normalizeIssueBoundReaderComparisonUnits(candidate, [
-            { message: '读者文章文风校验失败: comparison_unit_missing:本方法在匹配任务上相对基线有最高达 2 位数的准确率提升；' }
-        ]), true);
-        assert.equal(candidate.sections[0].body,
-            '本方法在匹配任务上相对基线有最高达两位数的准确率（%）提升。');
     });
 
     it('编辑质量投影会跳过已签名原表但保留表外散文检查', () => {

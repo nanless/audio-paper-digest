@@ -1127,6 +1127,8 @@ function hasValidApiReaderV3Records(paper) {
                         && item.sourceQuoteSha256 === crypto.createHash('sha256')
                             .update(String(item?.quote || '')).digest('hex')
                     ))
+                    && require('./deep-analyzer.js').readerTableHeaderUnitEvidenceFailures(
+                        renderedTables[index], binding.sourceQuotes).length === 0
                     // 旧记录也重核数字对应关系；保留已有会议 PDF 拆单位的窄兼容。
                     && require('./deep-analyzer.js').readerNumericTokens(renderedTables[index].markdown).every(token => (
                         require('./deep-analyzer.js').readerSourceQuoteCoversNumericToken(token,
@@ -1144,7 +1146,8 @@ function hasValidApiReaderV3Records(paper) {
                 && require('./deep-analyzer.js').readerFormulaSourcePayloadValid(binding,
                     plan.structuredSourcePayload, manifest.sourceAcquisition?.structuredArtifactsSha256,
                     paper.sourceSha256);
-        });
+        })
+        && require('./deep-analyzer.js').readerLegacyDatasetClaimsValid(article, tableBindings);
     const figureSourceValid = require('./deep-analyzer.js').readerFigureSourcePayloadValid(paper,
         manifest.sourceAcquisition?.structuredArtifactsSha256, paper.sourceSha256);
     const figurePersistence = manifest?.contracts?.apiReaderFigurePersistence;

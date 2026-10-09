@@ -47,7 +47,7 @@ from publish_common import (
     sanitize_markdown_for_publish, strip_internal_scoring_anchors,
     call_publish_llm_api, PublishLLMUnavailable, run_bounded_llm_tasks,
     PublishDataValidationError, count_blocking_review_issues, is_blocking_review_issue,
-    normalize_publish_arxiv_id, parse_publish_arxiv_identity, review_protocol_failure,
+    normalize_publish_arxiv_id, parse_publish_arxiv_identity, is_canonical_publish_arxiv_id, review_protocol_failure,
     validate_papers_for_publish, validate_review_payload,
     validate_final_manual_v4_markdown, MANUAL_DEPTH_CONTRACT_VERSION_V4,
     MANUAL_DEPTH_CONTRACT_VERSION_V5, MANUAL_DEPTH_CONTRACT_VERSION_V6,
@@ -106,7 +106,6 @@ from markdown_hugo_gate import (
     rendered_page_candidates as _rendered_page_candidates,
     rendered_article_fragment as _rendered_article_fragment,
 )
-from sealed_tutorial_preview import load_verified_tutorial_preview
 
 BLOG_REPO = os.path.expanduser(
     os.environ.get("PAPER_DIGEST_BLOG_REPO", "~/code/github_repos/audio-paper-digest-blog")
@@ -164,6 +163,10 @@ LLM_API_SCORING_CONTRACT = 'api-scoring-audit-v2'
 CORE_SUMMARY_DETAILED_CONTRACT = 'core-summary-detailed-v3'
 LEGACY_V5_MAINTENANCE_MODE = 'legacy_v5_maintenance'
 SEALED_TUTORIAL_PREVIEW_MODE = 'sealed_tutorial_preview'
+RETIRED_TUTORIAL_PREVIEW_MESSAGE = (
+    '封存教程预览仅供只读检查，已停用生成、签发新审查凭证和推送；'
+    '旧预览不具备完整来源与质量证明，请通过正式 Manual 流程重新生成。'
+)
 MANUAL_REVIEW_MODE = 'manual_complete'
 FINAL_PAGE_ARTIFACT_VERSION = 1
 RESEARCHER_WORKBENCH_CONTRACT = 'researcher-workbench-v1'
@@ -435,7 +438,7 @@ def _manual_review_record_error(receipt, *, date_str=None,
                 return f'论文页的审查说明缺少本页的 arXiv ID：{path}'
             if current_v3 and arxiv_match:
                 paper_id = subagent.get('paperId')
-                if not re.fullmatch(r'\d{4}\.\d{5}', str(paper_id or '')):
+                if not is_canonical_publish_arxiv_id(paper_id):
                     return f'论文页审查任务中的 paperId 缺失或不是规范的 arXiv ID：{path}'
                 if normalize_publish_arxiv_id(paper_id) != \
                         normalize_publish_arxiv_id(arxiv_match.group(1)):
@@ -5341,6 +5344,44 @@ def _normalize_api_reader_numeric_token(raw):
     return f'{number_text}{suffix}'
 
 
+def _reader_table_header_unit_evidence_failures(table, quotes):
+    # 列头的单位同样改变数字含义，不能只凭同一个裸数值认可百分数或时长。
+    def surface(value):
+        text = unicodedata.normalize('NFKC', str(value or '')).lower()
+        return re.sub(r'\s+', ' ', re.sub(r'[`*_↑↓]', '', text)).strip()
+    failures = []
+    unit_pattern = r'%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp'
+    for column, original_header in enumerate(table.get('header', [])):
+        header = surface(original_header)
+        match = re.fullmatch(rf'(.*?)(?:\(\s*({unit_pattern})\s*\)|\[\s*({unit_pattern})\s*\]|\s+({unit_pattern}))', header)
+        if not match:
+            continue
+        unit = next(value for value in match.groups()[1:] if value)
+        metric = match.group(1).strip()
+        declaration = re.escape(re.sub(r'\s*([([])', r' \1', header)).replace(r'\ ', r'\s*')
+        declared_unit = re.compile(rf'(?<![a-z0-9_])' + declaration + r'(?![a-z0-9_])')
+        for row, cells in enumerate(table.get('rows', [])):
+            for token in _api_reader_numeric_tokens(cells[column] if column < len(cells) else ''):
+                number = re.fullmatch(r'([-+]?\d+(?:\.\d+)?)([a-z%]*)', token, re.I)
+                if not number:
+                    continue
+                consistent = not number.group(2) or number.group(2).lower() == unit
+                def directly_declared(quote):
+                    for sentence in re.split(r'(?<!\d)[.!?;。！？；\n]|[.!?](?!\d)', unicodedata.normalize('NFKC', quote)):
+                        text = surface(sentence)
+                        for declared in declared_unit.finditer(text):
+                            clause = re.split(r'\b(?:and|while|but|whereas)\b|[,，]', text[declared.end():])[0]
+                            if re.search(r'\b(?:not|no|never|unavailable|unknown|missing)\b|未报告|未提供|不可得|未知|没有', clause):
+                                continue
+                            if (_api_reader_numeric_tokens(clause) or [None])[0] == token:
+                                return True
+                    return False
+                covered = consistent and (bool(number.group(2)) or (metric and any(directly_declared(quote) for quote in quotes)))
+                if not covered:
+                    failures.append((row + 1, column, token, unit))
+    return failures
+
+
 def _reader_doubled_half_token(surface):
     """双写粘连半部提取，与 Node 端 readerDoubledHalfToken 同一规则。"""
     def pick_half(compact):
@@ -5578,6 +5619,45 @@ def _validate_legacy_reader_figure_source(paper, plan, article, structured_sha, 
             raise PublishDataValidationError('旧论文图的图号、图注或 DOM SHA 与原始来源不一致；请重建 Reader。')
 
 
+def _validate_legacy_reader_dataset_claims(tables, table_bindings):
+    for index, table in enumerate(tables):
+        if ([str(cell).strip() for cell in table['header']]
+                != ['策略', '数据集', '评测任务', 'EER (%)', '运行条件']
+                or not any(len(row) >= 3 and str(row[1]).strip() == 'TidyVoice'
+                           and str(row[2]).strip() == 'validation set' for row in table['rows'])):
+            continue
+        binding = table_bindings[index]
+        if binding.get('sourceType') != 'source_quotes':
+            continue
+        supported = False
+        for item in binding.get('sourceQuotes', []):
+            normalized = unicodedata.normalize('NFKC', str(item.get('quote') or ''))
+
+            def extends_name(character):
+                return bool(character) and not '\u3400' <= character <= '\u9fff' and (
+                    unicodedata.category(character)[0] in 'LMN' or character in '_-'
+                )
+
+            def exact_dataset_name(match):
+                before = normalized[match.start() - 1] if match.start() else ''
+                after = normalized[match.end()] if match.end() < len(normalized) else ''
+                return '其他数据集' if extends_name(before) or extends_name(after) else match.group()
+
+            normalized = re.sub(r'TidyVoice', exact_dataset_name, normalized, flags=re.I)
+            for sentence in re.split(r'[。！？.!?;；\n]+', normalized):
+                if re.search(r'\b(?:not|no|never|neither|without|except|rather than)\b|不是|并非|不属于|并不|未用|未使用', sentence, re.I):
+                    continue
+                if any(re.search(pattern, sentence, re.I) for pattern in (
+                        r'TidyVoice(?:[\'’]s)?\s+(?:validation|development)\s+(?:set|split|partition)\b',
+                        r'\b(?:validation|development)\s+(?:set|split|partition)\s+(?:(?:is|was)\s+)?(?:from|of|for)\s+TidyVoice',
+                        r'\b(?:validation|development)\s+(?:set|split|partition)\s+(?:is|was|=)\s+TidyVoice',
+                        r'TidyVoice\s*(?:的\s*)?验证(?:集|集合)',
+                        r'验证(?:集|集合)\s*(?:来自|取自|使用|采用|为|是)\s*TidyVoice')):
+                    supported = True
+        if not supported:
+            raise PublishDataValidationError('旧 TidyVoice/validation set 对应关系缺少逐字原文依据；请根据封存来源重建 Reader。')
+
+
 def _validate_api_reader_source_bindings(paper, article=None):
     """按 v4 来源记录核对读者文章中的表格和公式，并返回核验结果。"""
     manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
@@ -5709,6 +5789,8 @@ def _validate_api_reader_source_bindings(paper, article=None):
                         f'第 {index} 个表格的引文记录 sourceQuotes[{quote_index}] 字段、长度或 SHA 不符合要求。'
                     )
                 quote_corpus.append(quote_binding['quote'])
+            if _reader_table_header_unit_evidence_failures(rendered, quote_corpus):
+                raise PublishDataValidationError(f'第 {index} 个表格的列头单位缺少对应原文证据。')
             quote_tokens = set(_api_reader_numeric_tokens('\n'.join(quote_corpus)))
             missing = set(_api_reader_numeric_tokens(rendered['markdown'])) - quote_tokens
             if missing:
@@ -5718,6 +5800,7 @@ def _validate_api_reader_source_bindings(paper, article=None):
         else:
             raise PublishDataValidationError(f'第 {index} 个表格的来源类型不符合要求。')
 
+    _validate_legacy_reader_dataset_claims(rendered_tables, table_bindings)
     display_blocks = _api_reader_display_formula_blocks(article)
     if len(display_blocks) != len(formula_bindings):
         raise PublishDataValidationError('读者文章中的展示公式数量与公式来源记录条数不一致。')
@@ -9554,6 +9637,8 @@ def _validate_push_generation_input_integrity(date_str):
         ) from exc
     if not isinstance(manifest, dict):
         raise PublishDataValidationError('推送前 generation manifest 必须是对象')
+    if manifest.get('publicationMode') == SEALED_TUTORIAL_PREVIEW_MODE:
+        raise PublishDataValidationError(RETIRED_TUTORIAL_PREVIEW_MESSAGE)
     if manifest.get('schemaVersion') == 3:
         _validate_generation_input_integrity(manifest, date_str)
 
@@ -10165,7 +10250,7 @@ def validate_generation_publication_mode(papers, publication_mode):
             )
         return None
     if publication_mode == SEALED_TUTORIAL_PREVIEW_MODE:
-        return None
+        raise PublishDataValidationError(RETIRED_TUTORIAL_PREVIEW_MESSAGE)
     raise PublishDataValidationError(f'未知发布数据模式: {publication_mode!r}')
 
 
@@ -11975,6 +12060,8 @@ def save_review_receipt(
         raise PublishDataValidationError('签发审查凭证时必须提供本次生成清单。')
     if reviewed_results is None:
         raise PublishDataValidationError('签发审查凭证时必须提供各文件的审查结果及已审内容哈希。')
+    if _load_json_object(generation_manifest, '生成清单').get('publicationMode') == SEALED_TUTORIAL_PREVIEW_MODE:
+        raise PublishDataValidationError(RETIRED_TUTORIAL_PREVIEW_MESSAGE)
     current_protocol = review_protocol_fingerprint()
     for result in reviewed_results.values():
         if result.get('passed') is True:
@@ -12788,7 +12875,7 @@ def parse_generation_args(argv=None):
     parser.add_argument('--exclude-id', action='append', default=[], metavar='ARXIV_ID')
     parser.add_argument('--include-id', action='append', default=[], metavar='ARXIV_ID')
     parser.add_argument('--sealed-tutorial-preview', action='count', default=0,
-                        help='只把通过核验的单篇教程预览包中的 post.md 按原始字节写入博客。')
+                        help='已停用；旧教程预览仅供只读检查，不能用于发布。')
     parser.add_argument('--legacy-v5-maintenance', action='count', default=0,
                         help='显式读取旧 v5 分析记录进行维护。本开关不用于默认日更，生成过程仍会写入博客文件。')
     parser.add_argument('--all', action='count', default=0)
@@ -12805,8 +12892,8 @@ def parse_generation_args(argv=None):
         parser.error('--all 只能指定一次')
     if args.skip_push > 1:
         parser.error('--skip-push 只能指定一次')
-    if args.sealed_tutorial_preview > 1:
-        parser.error('--sealed-tutorial-preview 只能指定一次')
+    if args.sealed_tutorial_preview:
+        parser.error(RETIRED_TUTORIAL_PREVIEW_MESSAGE)
     if args.legacy_v5_maintenance > 1:
         parser.error('--legacy-v5-maintenance 只能指定一次')
     if args.push:
@@ -12815,12 +12902,6 @@ def parse_generation_args(argv=None):
         parser.error('--include-id 只能指定一次')
     if args.include_id and (args.exclude_id or args.all):
         parser.error('--include-id 与 --exclude-id/--all 互斥')
-    if args.sealed_tutorial_preview and not args.include_id:
-        parser.error('--sealed-tutorial-preview 必须与 --include-id 一起使用')
-    if args.sealed_tutorial_preview and (args.data_file or args.exclude_id or args.all):
-        parser.error('--sealed-tutorial-preview 禁止 data_file、--exclude-id 或 --all')
-    if args.sealed_tutorial_preview and args.legacy_v5_maintenance:
-        parser.error('--sealed-tutorial-preview 与 --legacy-v5-maintenance 互斥')
     return {
         'data_file': args.data_file,
         'target_date': args.date[0] if args.date else None,
@@ -12828,7 +12909,6 @@ def parse_generation_args(argv=None):
         'publish_all': bool(args.all),
         'excluded_ids': list(args.exclude_id),
         'include_id': args.include_id[0] if args.include_id else None,
-        'sealed_tutorial_preview': bool(args.sealed_tutorial_preview),
         'legacy_v5_maintenance': bool(args.legacy_v5_maintenance),
     }
 
@@ -12894,7 +12974,8 @@ def generate_main(options=None):
     publish_all = options['publish_all']
     excluded_ids = options['excluded_ids']
     include_id = options.get('include_id')
-    use_tutorial_preview = bool(options.get('sealed_tutorial_preview'))
+    if options.get('sealed_tutorial_preview'):
+        raise PublishDataValidationError(RETIRED_TUTORIAL_PREVIEW_MESSAGE)
     legacy_v5_maintenance = bool(options.get('legacy_v5_maintenance'))
 
     try:
@@ -12904,46 +12985,29 @@ def generate_main(options=None):
         print(f"\n❌ 发布目标校验失败: {exc}")
         sys.exit(1)
     print(f"📅 博客日期: {today}")
-    tutorial_preview = None
-    input_source_reference = None
-    if use_tutorial_preview:
-        publication_mode = SEALED_TUTORIAL_PREVIEW_MODE
-        normalized_include = normalize_publish_arxiv_id(include_id)
-        try:
-            tutorial_preview = load_verified_tutorial_preview(today, normalized_include)
-        except PublishDataValidationError as exc:
-            print(f"\n❌ 教程预览检查失败，未读取正式分析记录，也未写入博客页面：{exc}")
-            sys.exit(1)
-        papers = [tutorial_preview['snapshot']]
-        normalized_excluded = []
-        print(
-            f'🔒 单篇教程预览：{normalized_include}；'
-            '将按 post.md 的原始字节写入博客页面，不读取正式分析记录、不清洗正文，也不生成汇总页。'
-        )
+    publication_mode = LEGACY_V5_MAINTENANCE_MODE if legacy_v5_maintenance else None
+    data_file = select_generation_data_file(
+        data_file, today, publish_all, legacy_v5_maintenance,
+    )
+    input_source_reference = build_generation_input_source_reference(data_file)
+    # 这个前置检查有意放在论文筛选和 Markdown 生成之前：
+    # 每日 API 记录如果声称使用最新来源，就必须
+    # 证明已核验保存的完整入选集合，而不只是后面的某个子集。
+    validate_daily_fresh_sources_for_publish(data_file, today)
+    papers = load_papers(data_file)
+    # 优先使用抓取器写入的不可变 fetchBatchDate，旧数据才回退严格北京 fetchedAt。
+    if not publish_all:
+        papers = [p for p in papers if paper_batch_date(p) == today]
     else:
-        publication_mode = LEGACY_V5_MAINTENANCE_MODE if legacy_v5_maintenance else None
-        data_file = select_generation_data_file(
-            data_file, today, publish_all, legacy_v5_maintenance,
-        )
-        input_source_reference = build_generation_input_source_reference(data_file)
-        # 这个前置检查有意放在论文筛选和 Markdown 生成之前：
-        # 每日 API 记录如果声称使用最新来源，就必须
-        # 证明已核验保存的完整入选集合，而不只是后面的某个子集。
-        validate_daily_fresh_sources_for_publish(data_file, today)
-        papers = load_papers(data_file)
-        # 优先使用抓取器写入的不可变 fetchBatchDate，旧数据才回退严格北京 fetchedAt。
-        if not publish_all:
-            papers = [p for p in papers if paper_batch_date(p) == today]
-        else:
-            print("📦 --all: 跳过批次日期过滤，发布输入文件中的全部论文")
-        filter_note = '全部论文' if publish_all else f'fetchBatchDate={today}'
-        print(f"📄 过滤后: {len(papers)} 篇论文 ({filter_note})")
-        try:
-            papers, normalized_include = include_single_paper_for_publish(papers, include_id)
-            papers, normalized_excluded = exclude_papers_for_publish(papers, excluded_ids)
-        except PublishDataValidationError as exc:
-            print(f"\n❌ 发布排除项校验失败，未生成任何博客文件：{exc}")
-            sys.exit(1)
+        print("📦 --all: 跳过批次日期过滤，发布输入文件中的全部论文")
+    filter_note = '全部论文' if publish_all else f'fetchBatchDate={today}'
+    print(f"📄 过滤后: {len(papers)} 篇论文 ({filter_note})")
+    try:
+        papers, normalized_include = include_single_paper_for_publish(papers, include_id)
+        papers, normalized_excluded = exclude_papers_for_publish(papers, excluded_ids)
+    except PublishDataValidationError as exc:
+        print(f"\n❌ 发布排除项校验失败，未生成任何博客文件：{exc}")
+        sys.exit(1)
     if normalized_excluded:
         print(
             f"🚫 本次明确排除 {len(normalized_excluded)} 篇: "
@@ -12971,25 +13035,17 @@ def generate_main(options=None):
             f'目标批次 {today} 没有论文可生成；已阻止复用该日期的旧 generation/review/push 证据'
         )
 
-    if tutorial_preview is None:
-        try:
-            papers = validate_papers_for_publish(papers)
-            papers = apply_publish_image_exclusions(papers)
-            papers = validate_papers_for_publish(
-                papers, validate_manual_stage_records=False,
-            )
-        except PublishDataValidationError as exc:
-            print(f"\n❌ 发布数据预检失败，未生成任何博客文件：\n{exc}")
-            sys.exit(1)
-    if tutorial_preview is not None:
-        # 单页已核验保存的发布没有需要排名的汇总页。它的评分
-        # 已经渲染并绑定哈希到 post.md 里；在这里重新解析
-        # 规范分析会破坏冷启动边界。
-        scored, unscored = [], list(papers)
-    else:
-        scored, unscored = score_and_sort(papers)
-    baseline_label = 'sealed tutorial preview' if tutorial_preview else 'analysis 重解析结果'
-    print(f"✅ 发布数据预检通过: {len(papers)} 篇论文以 {baseline_label} 为发布基线")
+    try:
+        papers = validate_papers_for_publish(papers)
+        papers = apply_publish_image_exclusions(papers)
+        papers = validate_papers_for_publish(
+            papers, validate_manual_stage_records=False,
+        )
+    except PublishDataValidationError as exc:
+        print(f"\n❌ 发布数据预检失败，未生成任何博客文件：\n{exc}")
+        sys.exit(1)
+    scored, unscored = score_and_sort(papers)
+    print(f"✅ 发布数据预检通过: {len(papers)} 篇论文以 analysis 重解析结果为发布基线")
 
     input_fingerprint = generation_input_fingerprint(
         papers, today, category, publish_all, normalized_include,
@@ -13018,14 +13074,13 @@ def generate_main(options=None):
             '无法全部复核；已保留既有 generation/receipt，拒绝重新生成覆盖。'
             '请先恢复网络与原 remote，或人工核查证据漂移'
         )
-    if tutorial_preview is None:
-        try:
-            if publication_mode is None:
-                publication_mode = infer_generation_publication_mode(papers)
-            validate_generation_publication_mode(papers, publication_mode)
-        except PublishDataValidationError as exc:
-            print(f"\n❌ 发布 production 契约预检失败，未生成任何博客文件：\n{exc}")
-            sys.exit(1)
+    try:
+        if publication_mode is None:
+            publication_mode = infer_generation_publication_mode(papers)
+        validate_generation_publication_mode(papers, publication_mode)
+    except PublishDataValidationError as exc:
+        print(f"\n❌ 发布 production 契约预检失败，未生成任何博客文件：\n{exc}")
+        sys.exit(1)
     reusable = reusable_generation_manifest(
         today, input_fingerprint, template_fingerprint, base_head,
     )
@@ -13068,18 +13123,14 @@ def generate_main(options=None):
             slug = record['filename'][len(today) + 1:-3]
             paper_slugs[paper.get('arxivId', '')] = slug
             if record.get('status') != 'generated':
-                if tutorial_preview is not None:
-                    paper_md = tutorial_preview['postText']
-                    slug = paper_slug(paper.get('title', ''), paper.get('arxivId', ''))
-                else:
-                    paper_md, slug = generate_paper_page(paper, today, category)
-                    paper_md = sanitize_markdown_for_publish(paper_md)
-                    manual_v4_issue = validate_final_manual_v4_markdown(paper_md, paper)
-                    if manual_v4_issue:
-                        raise PublishDataValidationError(
-                            f'{paper.get("arxivId", "unknown")} sanitize/render 后 '
-                            f'Manual v4 最终 Markdown 无效: {manual_v4_issue}'
-                        )
+                paper_md, slug = generate_paper_page(paper, today, category)
+                paper_md = sanitize_markdown_for_publish(paper_md)
+                manual_v4_issue = validate_final_manual_v4_markdown(paper_md, paper)
+                if manual_v4_issue:
+                    raise PublishDataValidationError(
+                        f'{paper.get("arxivId", "unknown")} sanitize/render 后 '
+                        f'Manual v4 最终 Markdown 无效: {manual_v4_issue}'
+                    )
                 paper_file = staged_posts / record['filename']
                 if record['filename'] != f'{today}-{slug}.md':
                     raise PublishDataValidationError(
@@ -13096,21 +13147,14 @@ def generate_main(options=None):
                     raise PublishDataValidationError(
                         f'论文页 generation checkpoint 损坏: {record["filename"]}'
                     )
-                if tutorial_preview is not None:
-                    if paper_file.read_text(encoding='utf-8') != tutorial_preview['postText']:
-                        raise PublishDataValidationError(
-                            f'{paper.get("arxivId", "unknown")} sealed generation checkpoint '
-                            '不再逐字等于 post.md'
-                        )
-                else:
-                    manual_v4_issue = validate_final_manual_v4_markdown(
-                        paper_file.read_text(encoding='utf-8'), paper,
+                manual_v4_issue = validate_final_manual_v4_markdown(
+                    paper_file.read_text(encoding='utf-8'), paper,
+                )
+                if manual_v4_issue:
+                    raise PublishDataValidationError(
+                        f'{paper.get("arxivId", "unknown")} 复用 generation checkpoint 前 '
+                        f'Manual v4 最终 Markdown 无效: {manual_v4_issue}'
                     )
-                    if manual_v4_issue:
-                        raise PublishDataValidationError(
-                            f'{paper.get("arxivId", "unknown")} 复用 generation checkpoint 前 '
-                            f'Manual v4 最终 Markdown 无效: {manual_v4_issue}'
-                        )
                 print(f'♻️ 跳过已生成论文页: {record["filename"]}')
 
         print(f"📄 staging 已具备 {len(paper_slugs)} 篇论文独立页面")

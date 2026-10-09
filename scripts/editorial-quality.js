@@ -953,9 +953,9 @@ function findMissingComparisonUnits(text) {
         // 这种声明算作就地绑定，不再要求每个比较数值后面
         // 硬写出一个单位。
         const metricUnitDeclaration = new RegExp(
-            `(?:${PERCENT_METRICS_RE.source}\\s*[（(][^（）()]{0,30}(?:%|个百分点|点|分|无量纲)\\s*[）)]`
-            + `|${PERCENT_METRICS_RE.source}\\s*(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)?\\s*(?:%|个百分点|点|分|无量纲)`
-            + `|${PERCENT_METRICS_RE.source}[^。！？\\n]{0,120}?(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)\\s*(?:%|个百分点|点|分|无量纲))`,
+            `(?:${PERCENT_METRICS_RE.source}\\s*[（(][^（）()]{0,30}(?:%|个百分点|点|分|无量纲|比率|比例)\\s*[）)]`
+            + `|${PERCENT_METRICS_RE.source}\\s*(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)?\\s*(?:%|个百分点|点|分|无量纲|比率|比例)`
+            + `|${PERCENT_METRICS_RE.source}[^。！？\\n]{0,120}?(?:表头|列名|指标)?\\s*(?:单位|unit)\\s*(?:为|是|=|:)\\s*(?:%|个百分点|点|分|无量纲|比率|比例))`,
             'iu'
         );
         if (explicitScoreUnit.test(sentence.text)

@@ -2583,11 +2583,12 @@ class PublishToBlogReviewTest(unittest.TestCase):
             '--date', '2026-07-10', '--include-id', 'arXiv:2607.00001v2',
         ])
         self.assertEqual(included['include_id'], 'arXiv:2607.00001v2')
-        sealed_preview = publish_to_blog.parse_generation_args([
-            '--date', '2026-07-10', '--include-id', '2607.00001',
-            '--sealed-tutorial-preview',
-        ])
-        self.assertTrue(sealed_preview['sealed_tutorial_preview'])
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+            publish_to_blog.parse_generation_args([
+                '--date', '2026-07-10', '--include-id', '2607.00001',
+                '--sealed-tutorial-preview',
+            ])
+        self.assertEqual(caught.exception.code, 2)
 
     def test_empty_generation_invalidates_same_date_stale_stage_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
