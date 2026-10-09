@@ -13,7 +13,7 @@ setup_script_logging(__file__)
     python3 publish-wechat-full.py [data_file]
     python3 publish-wechat-full.py --dry-run [data_file]  # 只生成本地预览，不调用微信接口
 """
-import argparse, urllib.request, json, time, sys, re, datetime, hashlib, os, html, tempfile, base64
+import argparse, urllib.request, json, sys, re, hashlib, os, html, tempfile, base64
 from functools import lru_cache
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -33,8 +33,6 @@ APP_SECRET = os.environ.get('WECHAT_APP_SECRET', '')
 
 # 封面图素材 ID（永久素材），支持项目 .env 覆写
 THUMB_MEDIA_ID = os.environ.get('WECHAT_THUMB_MEDIA_ID', '')
-
-BJ_TZ = datetime.timezone(datetime.timedelta(hours=8))
 
 TAG_METADATA_FALLBACK_NOTICE = (
     '⚠️ 该批次未携带受控标签元数据，以下为旧式扁平标签计数，'
@@ -84,7 +82,7 @@ def build_overview(scored, unscored):
 
     overview = '<h2>⚡ 今日概览</h2>\n'
     total = len(scored) + len(unscored)
-    overview += f'<p>📥 抓取 {total} 篇 → 🔬 深度分析完成</p>\n'
+    overview += f'<p>📄 本期收录 {total} 篇论文</p>\n'
     if has_invalid_tag_metadata:
         # 降级声明必须出现在扁平标签计数之前，而不是静默替换统计口径。
         overview += f'<p>{html.escape(TAG_METADATA_FALLBACK_NOTICE)}</p>\n'
@@ -243,7 +241,7 @@ def main():
         print("🧪 dry-run: 跳过微信 Token 获取、图片上传和草稿创建")
     else:
         token = get_token()
-        print(f"🔑 Token OK")
+        print(f"🔑 微信访问凭证已取得")
 
     def extract_markdown_image_urls(text):
         if not text:
@@ -287,7 +285,7 @@ def main():
         if heading_issue:
             raise ValueError(heading_issue)
         parsed_analysis = paper.get('parsed') or parse_analysis(paper.get('analysis',''))
-        title = paper.get('title','Unknown')
+        title = paper.get('title','未提供标题')
         aid = paper.get('arxivId','')
         aurl = f'https://arxiv.org/abs/{aid}' if aid else ''
 
@@ -389,7 +387,7 @@ def main():
     overview = build_overview(scored, unscored)
     total = len(scored) + len(unscored)
 
-    footer = '<hr/>\n<p style="text-align:center;color:#aaa;font-size:12px;">由 AI 自动生成 · Paper Digest</p>\n'
+    footer = '<hr/>\n<p style="text-align:center;color:#aaa;font-size:12px;">Paper Digest · 论文速递</p>\n'
 
     HEADER_OVERHEAD = 300
     SEPARATOR = '<hr/>\n'
@@ -412,9 +410,9 @@ def main():
         parts.append(current_part)
 
     total_parts = len(parts)
-    print(f"\n📑 分为 {total_parts} 个 part（每篇上限 {MAX_CHARS} 字符）")
+    print(f"\n📑 分为 {total_parts} 部分（每篇上限 {MAX_CHARS} 字符）")
     for pi, part_indices in enumerate(parts):
-        print(f"  Part {pi+1}: 第 {part_indices[0]+1}-{part_indices[-1]+1} 篇 ({len(part_indices)} 篇)")
+        print(f"  第 {pi+1} 部分： 第 {part_indices[0]+1}-{part_indices[-1]+1} 篇 ({len(part_indices)} 篇)")
 
     thumb_id = THUMB_MEDIA_ID
     draft_url = f'https://api.weixin.qq.com/cgi-bin/draft/add?access_token={token}'
@@ -428,7 +426,7 @@ def main():
         if total_parts == 1:
             part_title = f"语音/音乐/音频论文速递 {today} | {total}篇论文"
         else:
-            part_title = f"语音/音乐/音频论文速递 {today} | part {part_num} | {part_paper_count}篇论文"
+            part_title = f"语音/音乐/音频论文速递 {today} | 第 {part_num} 部分 | {part_paper_count}篇论文"
 
         article_html = f'<h2 style="text-align:center;">{part_title}</h2>\n'
         if total_parts > 1:
@@ -447,10 +445,10 @@ def main():
         article_html += footer
 
         if dry_run:
-            print(f"\n🧪 dry-run: 跳过创建草稿 Part {part_num} ({len(article_html)} chars)")
+            print(f"\n🧪 dry-run: 跳过创建第 {part_num} 部分草稿 ({len(article_html)} 字符)")
             continue
 
-        print(f"\n📝 创建草稿 Part {part_num}... ({len(article_html)} chars)")
+        print(f"\n📝 创建第 {part_num} 部分草稿... ({len(article_html)} 字符)")
 
         payload = json.dumps({
             "articles": [{
@@ -471,13 +469,13 @@ def main():
                 resp = json.loads(response.read())
 
             if 'media_id' in resp:
-                print(f"  ✅ Part {part_num} 草稿成功！")
+                print(f"  ✅ 第 {part_num} 部分草稿成功！")
                 created_parts.append({'part': part_num, 'media_id': resp['media_id']})
             else:
-                print(f"  ❌ Part {part_num} 失败: {json.dumps(resp, ensure_ascii=False)}")
+                print(f"  ❌ 第 {part_num} 部分失败: {json.dumps(resp, ensure_ascii=False)}")
                 failed_parts.append({'part': part_num, 'error': json.dumps(resp, ensure_ascii=False)[:500]})
         except urllib.error.HTTPError as e:
-            print(f"  ❌ Part {part_num} HTTP 错误: {e.code} {e.reason}")
+            print(f"  ❌ 第 {part_num} 部分 HTTP 错误: {e.code} {e.reason}")
             failed_parts.append({'part': part_num, 'error': f'HTTP {e.code} {e.reason}'})
             try:
                 err_body = e.read().decode('utf-8', errors='replace')
@@ -485,7 +483,7 @@ def main():
             except Exception:
                 pass
         except Exception as e:
-            print(f"  ❌ Part {part_num} 请求异常: {e}")
+            print(f"  ❌ 第 {part_num} 部分请求异常: {e}")
             failed_parts.append({'part': part_num, 'error': str(e)})
 
     preview_path = wechat_preview_path(today)
@@ -501,7 +499,7 @@ def main():
         print(f"\n🎉 dry-run 完成！本地预览已生成，未创建微信草稿")
         return True
     if failed_parts:
-        print(f"\n❌ 微信草稿未完整创建：成功 {len(created_parts)}/{total_parts}，失败 part: {', '.join(str(item['part']) for item in failed_parts)}")
+        print(f"\n❌ 微信草稿未完整创建：成功 {len(created_parts)}/{total_parts}，失败部分： {', '.join(str(item['part']) for item in failed_parts)}")
         print(f"   成功 media_id: {', '.join(item['media_id'] for item in created_parts) or '无'}")
         return False
     else:
