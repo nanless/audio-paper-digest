@@ -432,27 +432,52 @@ function buildConferencePageArtifacts(loaded, tagCatalog, renderFn, implementati
 // 其他已有文件仍按原规则保留，不能覆盖不同内容。
 function supersedeBlockedAssignment(directory, assignment) {
     const filename = path.join(directory, 'assignment.json');
-    if (!fs.existsSync(filename)) return false;
-    const stat = fs.lstatSync(filename);
-    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600) return false;
-    if (fs.existsSync(path.join(directory, 'page.md')) || fs.existsSync(path.join(directory, 'manifest.json'))) return false;
-    let existing;
+    let fd;
     try {
-        existing = pageApi.strictJson(pageApi.readRegular(filename, 16 * 1024 * 1024, 'existing conference assignment').bytes,
-            'existing conference assignment');
+        const parent = fs.lstatSync(directory);
+        let before;
+        try { before = fs.lstatSync(filename); }
+        catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+        if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1
+            || (before.mode & 0o777) !== 0o600) return false;
+        if (fs.existsSync(path.join(directory, 'page.md')) || fs.existsSync(path.join(directory, 'manifest.json'))) return false;
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== before.dev || opened.ino !== before.ino
+            || opened.size > 16 * 1024 * 1024 || (opened.mode & 0o777) !== 0o600) {
+            fail('已有的会议标签记录在打开前已变化，不能顶替。');
+        }
+        const bytes = fs.readFileSync(fd);
+        const existing = pageApi.strictJson(bytes, 'existing conference assignment');
+        const body = { ...existing };
+        const previousSha256 = body.assignmentSha256;
+        delete body.assignmentSha256;
+        if (existing.status !== 'blocked' || previousSha256 !== stableHash(body)
+            || existing.paperId !== assignment.paperId
+            || existing.analysisExecutionId !== assignment.analysisExecutionId) return false;
+        // 描述符保留到删除之后；锁约束本入口的并发写入，路径重核拒绝期间的外部换主。
+        const current = fs.lstatSync(filename);
+        const after = fs.fstatSync(fd);
+        const parentAfter = fs.lstatSync(directory);
+        if (!parentAfter.isDirectory() || parentAfter.isSymbolicLink()
+            || parentAfter.dev !== parent.dev || parentAfter.ino !== parent.ino
+            || !current.isFile() || current.isSymbolicLink() || current.nlink !== 1
+            || current.dev !== opened.dev || current.ino !== opened.ino
+            || after.nlink !== 1 || after.size !== opened.size || bytes.length !== opened.size
+            || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs
+            || current.size !== after.size || current.mtimeMs !== after.mtimeMs || current.ctimeMs !== after.ctimeMs) {
+            fail('已有的会议标签记录或目录在删除前已变化，不能顶替。');
+        }
+        if (fs.existsSync(path.join(directory, 'page.md')) || fs.existsSync(path.join(directory, 'manifest.json'))) return false;
+        fs.unlinkSync(filename);
+        return true;
     } catch (error) {
-        // 文件在两次检查之间消失，等于没有旧记录，走下面的新建路径。
-        if (error?.code === 'ENOENT') return false;
-        // 记录还在，但读不出来。这时既不能当成可顶替，也不能把它留给下面那次
-        // 排他写入去报「不能覆盖」——那句话盖掉了真正的原因。
-        fail(`已有的会议标签记录读不出来，无法判断能否顶替：${filename}（${error.message}）`);
+        const failure = new Error(`已有的会议标签记录读不出来或无法安全顶替：${filename}（${error.message}）`, { cause: error });
+        failure.code = 'CONFERENCE_POSTPROCESS_INTEGRITY';
+        throw failure;
+    } finally {
+        if (fd !== undefined) fs.closeSync(fd);
     }
-    const body = { ...existing }; const previousSha256 = body.assignmentSha256; delete body.assignmentSha256;
-    if (existing.status !== 'blocked' || previousSha256 !== stableHash(body)
-        || existing.paperId !== assignment.paperId
-        || existing.analysisExecutionId !== assignment.analysisExecutionId) return false;
-    fs.unlinkSync(filename);
-    return true;
 }
 function stageDirectory(stagingRoot, executionId, registrySha256, implementationSha256, create = false) {    const root = fresh.assertSafeDirectory(stagingRoot, create); const run = fresh.assertSafeDirectory(path.join(root, executionId), create);
     const registry = fresh.assertSafeDirectory(path.join(run, registrySha256), create);
@@ -467,20 +492,24 @@ function stagePaper({ analysisRoot, executionId, tagCatalogPath, stagingRoot, pl
     const implementation = fingerprint(dependencies); const projected = buildConferencePageArtifacts(loaded, tagCatalog, dependencies.render || render, implementation);
     if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('生成会议页面期间，相关实现指纹发生变化。');
     if (apply) {
-        const directory = stageDirectory(stagingRoot, executionId, tagCatalog.registrySha256, implementation.implementationSha256, true);
-        rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);
-        supersedeBlockedAssignment(directory, projected.assignment);
-        pageApi.writeExact(path.join(directory, 'assignment.json'), projected.assignmentBytes || canonicalBytes(projected.assignment));
-        if (projected.assignment.status === 'assigned') {
-            pageApi.writeExact(path.join(directory, 'page.md'), projected.pageBytes);
-            for (const asset of projected.assetFiles || []) {
-                const target = path.resolve(directory, 'assets', ...asset.path.split('/'));
-                if (!target.startsWith(`${path.join(directory, 'assets')}${path.sep}`)) fail('conference asset escapes staging directory');
-                pageApi.writeExact(target, asset.bytes);
-            }
-            pageApi.writeExact(path.join(directory, 'manifest.json'), canonicalBytes(projected.manifest));
+        const lockRoot = fresh.assertSafeDirectory(path.join(fresh.assertSafeDirectory(stagingRoot, true), '.stage-locks'), true);
+        const lockTarget = path.join(lockRoot, `${executionId}-${tagCatalog.registrySha256}-${implementation.implementationSha256}`);
+        analysisEngine.withFileLockSync(lockTarget, () => {
+            const directory = stageDirectory(stagingRoot, executionId, tagCatalog.registrySha256, implementation.implementationSha256, true);
             rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);
-        }
+            supersedeBlockedAssignment(directory, projected.assignment);
+            pageApi.writeExact(path.join(directory, 'assignment.json'), projected.assignmentBytes || canonicalBytes(projected.assignment));
+            if (projected.assignment.status === 'assigned') {
+                pageApi.writeExact(path.join(directory, 'page.md'), projected.pageBytes);
+                for (const asset of projected.assetFiles || []) {
+                    const target = path.resolve(directory, 'assets', ...asset.path.split('/'));
+                    if (!target.startsWith(`${path.join(directory, 'assets')}${path.sep}`)) fail('conference asset escapes staging directory');
+                    pageApi.writeExact(target, asset.bytes);
+                }
+                pageApi.writeExact(path.join(directory, 'manifest.json'), canonicalBytes(projected.manifest));
+                rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);
+            }
+        });
     }
     if (projected.assignment.status !== 'assigned') return { status: 'blocked', assignment: projected.assignment };
     return { status: apply ? 'staged' : 'dry-run', manifest: projected.manifest, markdown: projected.pageBytes.toString('utf8') };

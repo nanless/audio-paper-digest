@@ -852,7 +852,6 @@ test('命令行要求完整授权、已配置的根目录和互不相同的 UUID
     assert.throws(() => cli.configured({ conferenceAnalysisDir: 'relative' }), /configured absolute path/);
 });
 
-
 test('会议缓存兼容旧标签字段，但不能混用新旧字段', () => {
     const current = completed('88888888-8888-4888-8888-888888888888').analysis.papers[0];
     const expected = api.getConsistentPublicationFields(current);
@@ -936,4 +935,156 @@ test('会议后处理在生成页面前拒绝旧清洗可能损坏的来源，�
     assert.equal(fs.existsSync(stagingRoot), false);
     record.source.sourceDetails.text = 'Source defines x = y + 1.';
     assert.equal(api.stagePaper(options, f.dependencies).status, 'staged');
+});
+
+for (const replacementKind of ['file', 'symlink', 'directory']) test(`blocked 分配读取后换主为 ${replacementKind} 时保留竞争者`, t => {
+    const f = fixture(t);
+    const stagingRoot = path.join(f.root, 'replacement-proof');
+    const bad = validAnalysisText()
+        .replace('primary_task_tag: #语音识别', 'primary_task_tag: #不存在的主任务')
+        .replace('#语音识别 #Transformer #鲁棒性', '#不存在的主任务 #Transformer #鲁棒性')
+        .replace('主任务标签: #语音识别', '主任务标签: #不存在的主任务');
+    f.runs.set(f.one, completed(f.one, 1, bad));
+    const args = {
+        analysisRoot: 'ignored',
+        executionId: f.one,
+        tagCatalogPath: TAG_CATALOG_PATH,
+        stagingRoot,
+        planHandle: f.planHandle,
+        sourceRoot: f.sourceRoot,
+        apply: true
+    };
+    api.stagePaper(args, f.dependencies);
+    const registryRoot = path.join(stagingRoot, f.one, tagCatalogApi.loadTagCatalog(TAG_CATALOG_PATH).registrySha256);
+    const assignmentPath = path.join(registryRoot, fs.readdirSync(registryRoot)[0], 'assignment.json');
+    const winner = 'concurrent owner record';
+    const externalFile = path.join(f.root, 'external-winner.json');
+    fs.writeFileSync(externalFile, winner);
+    let winnerInode;
+    const strictJson = pageApi.strictJson;
+    let swapped = false;
+    t.mock.method(pageApi, 'strictJson', (bytes, label) => {
+        const result = strictJson(bytes, label);
+        if (label === 'existing conference assignment') {
+            if (replacementKind === 'directory') {
+                const directory = path.dirname(assignmentPath);
+                fs.renameSync(directory, directory + '.previous');
+                fs.mkdirSync(directory);
+            } else {
+                fs.renameSync(assignmentPath, assignmentPath + '.previous');
+            }
+            if (replacementKind !== 'symlink') {
+                fs.writeFileSync(assignmentPath, winner, { mode: 0o600, flag: 'wx' });
+            } else {
+                fs.symlinkSync(externalFile, assignmentPath);
+            }
+            winnerInode = fs.lstatSync(assignmentPath).ino;
+            if (replacementKind !== 'directory') fs.unlinkSync(assignmentPath + '.previous');
+            swapped = true;
+        }
+        return result;
+    });
+    f.runs.set(f.one, completed(f.one, 1));
+    let error;
+    try { api.stagePaper(args, f.dependencies); } catch (cause) { error = cause; }
+    assert.equal(swapped, true);
+    assert.equal(fs.readFileSync(assignmentPath, 'utf8'), winner);
+    assert.match(error?.message || '', /删除前已变化/);
+    assert.equal(fs.lstatSync(assignmentPath).ino, winnerInode);
+    assert.equal(fs.existsSync(path.join(path.dirname(assignmentPath), 'manifest.json')), false);
+    assert.equal(fs.existsSync(path.join(path.dirname(assignmentPath), 'page.md')), false);
+});
+
+test('会议暂存写入实际等待同一公共操作锁，持锁者释放前不写页面', async t => {
+    const { spawn } = require('node:child_process');
+    const f = fixture(t);
+    const stagingRoot = path.join(f.root, 'serialized-stage');
+    const registry = tagCatalogApi.loadTagCatalog(TAG_CATALOG_PATH);
+    const implementation = api.implementationFingerprint();
+    const lockRoot = path.join(stagingRoot, '.stage-locks');
+    fs.mkdirSync(lockRoot, { recursive: true });
+    const target = path.join(lockRoot, `${f.one}-${registry.registrySha256}-${implementation.implementationSha256}`);
+    const ready = path.join(f.root, 'lock-ready');
+    const completedWait = path.join(f.root, 'lock-wait-completed');
+    const program = `
+        const fs = require('node:fs');
+        const engine = require(process.argv[1]);
+        engine.withFileLockSync(process.argv[2], () => {
+            fs.writeFileSync(process.argv[3], 'ready');
+            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1000);
+            fs.writeFileSync(process.argv[4], 'completed-held-wait');
+        });
+    `;
+    const child = spawn(process.execPath, ['-e', program,
+        path.resolve(__dirname, '../scripts/analysis-engine.js'), target, ready, completedWait], { stdio: 'pipe' });
+    t.after(() => { if (child.exitCode === null) child.kill('SIGKILL'); });
+    const completion = new Promise((resolve, reject) => {
+        child.once('error', reject);
+        child.once('exit', code => resolve(code));
+    });
+    const deadline = Date.now() + 5000;
+    while (!fs.existsSync(ready) && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.equal(fs.existsSync(ready), true);
+    assert.equal(fs.existsSync(completedWait), false);
+    const result = api.stagePaper({
+        analysisRoot: 'ignored',
+        executionId: f.one,
+        tagCatalogPath: TAG_CATALOG_PATH,
+        stagingRoot,
+        planHandle: f.planHandle,
+        sourceRoot: f.sourceRoot,
+        apply: true
+    }, f.dependencies);
+    assert.equal(result.status, 'staged');
+    assert.equal(fs.existsSync(completedWait), true);
+    assert.equal(await completion, 0);
+    assert.equal(fs.existsSync(`${target}.lock`), false);
+});
+
+test('blocked 分配读取故障保留原 EIO，不删除记录或生成页面', t => {
+    const f = fixture(t);
+    const stagingRoot = path.join(f.root, 'assignment-read-failure');
+    const bad = validAnalysisText()
+        .replace('primary_task_tag: #语音识别', 'primary_task_tag: #不存在的主任务')
+        .replace('#语音识别 #Transformer #鲁棒性', '#不存在的主任务 #Transformer #鲁棒性')
+        .replace('主任务标签: #语音识别', '主任务标签: #不存在的主任务');
+    f.runs.set(f.one, completed(f.one, 1, bad));
+    const args = {
+        analysisRoot: 'ignored',
+        executionId: f.one,
+        tagCatalogPath: TAG_CATALOG_PATH,
+        stagingRoot,
+        planHandle: f.planHandle,
+        sourceRoot: f.sourceRoot,
+        apply: true
+    };
+    api.stagePaper(args, f.dependencies);
+    const registryRoot = path.join(stagingRoot, f.one, tagCatalogApi.loadTagCatalog(TAG_CATALOG_PATH).registrySha256);
+    const directory = path.join(registryRoot, fs.readdirSync(registryRoot)[0]);
+    const filename = path.join(directory, 'assignment.json');
+    const original = fs.readFileSync(filename);
+    const identity = fs.statSync(filename);
+    const cause = Object.assign(new Error('受控读取故障'), { code: 'EIO' });
+    const readFile = fs.readFileSync;
+    let injected = false;
+    const hook = t.mock.method(fs, 'readFileSync', (file, ...options) => {
+        if (typeof file === 'number') {
+            const stat = fs.fstatSync(file);
+            if (stat.dev === identity.dev && stat.ino === identity.ino) {
+                injected = true;
+                throw cause;
+            }
+        }
+        return readFile(file, ...options);
+    });
+    f.runs.set(f.one, completed(f.one, 1));
+    assert.throws(() => api.stagePaper(args, f.dependencies), error => error.cause === cause);
+    hook.mock.restore();
+    assert.equal(injected, true);
+    assert.deepEqual(fs.readFileSync(filename), original);
+    assert.equal(fs.statSync(filename).ino, identity.ino);
+    assert.equal(fs.existsSync(path.join(directory, 'page.md')), false);
+    assert.equal(fs.existsSync(path.join(directory, 'manifest.json')), false);
 });
