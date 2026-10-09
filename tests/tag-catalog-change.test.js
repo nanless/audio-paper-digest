@@ -896,7 +896,9 @@ test('只有快照、明确确认、升级说明和原概念均通过核验，�
 
 
 test('已知的目录改名迁移会保留各项检查，藏不住破坏性改动', () => {
-    const current = tagCatalogApi.loadTagCatalog(CURRENT);
+    // 固定原迁移的目的词表；后续语义修正由独立升级测试覆盖。
+    const current = tagCatalogApi.loadTagCatalog(path.join(HISTORY,
+        '85ed9e5a7cde6f58c3cb97b10d61401641dd2e39592680d2c343137bc7669d3a.json'));
     const previous = tagCatalogApi.loadTagCatalog(path.join(HISTORY,
         'a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d.json'));
     const saved = JSON.stringify(previous);
