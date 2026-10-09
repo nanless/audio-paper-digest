@@ -3,6 +3,8 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { spawnSync } = require('node:child_process');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 const { loadTagCatalog, resolveLabel, ancestors, pruneAncestors } = require('../scripts/lib/tag-catalog');
 const { getDefaultTagRules, buildTagPromptText, TAG_PROMPT_TEXT_CONTRACT,
     LEGACY_TAG_PROMPT_TEXT_CONTRACT, TAG_SELECTION_CONTRACT,
@@ -10,6 +12,27 @@ const { getDefaultTagRules, buildTagPromptText, TAG_PROMPT_TEXT_CONTRACT,
 const crypto = require('node:crypto');
 const { hashTagSectionAndPrimaryTags } = require('../scripts/analysis-contract');
 const { parseAnalysis } = require('../scripts/utils');
+
+// 用普通文件提供确定的 EOF；保留原 JSON 字节、Python 读取方式和各用例超时。
+function runPythonWithJson(script, input, options) {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tag-cross-runtime-input-'));
+    const filename = path.join(directory, 'input.json');
+    let inputFd;
+    try {
+        fs.writeFileSync(filename, input, { mode: 0o600, flag: 'wx' });
+        inputFd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        return spawnSync('bash', ['scripts/python-runtime.sh', '-c', script], {
+            ...options,
+            stdio: [inputFd, 'pipe', 'pipe']
+        });
+    } finally {
+        try {
+            if (inputFd !== undefined) fs.closeSync(inputFd);
+        } finally {
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    }
+}
 
 test('两端共用的词表标签、别名和祖先链在 Node 与 Python 下一致', () => {
     const tagCatalog=loadTagCatalog();
@@ -55,8 +78,8 @@ test('两端共用的词表标签、别名和祖先链在 Node 与 Python 下一
         'print(json.dumps(r,ensure_ascii=False))',
         'faulthandler.cancel_dump_traceback_later()'
     ].join('\n');
-    const result=spawnSync('bash',['scripts/python-runtime.sh','-c',script],{
-        cwd:path.resolve(__dirname,'..'),input:JSON.stringify(input),encoding:'utf8',maxBuffer:16*1024*1024,timeout:120000
+    const result=runPythonWithJson(script, JSON.stringify(input), {
+        cwd:path.resolve(__dirname,'..'),encoding:'utf8',maxBuffer:16*1024*1024,timeout:120000
     });
     const diagnostics=JSON.stringify({errorCode:result.error?.code||null,
         errorMessage:result.error?.message||null,signal:result.signal,status:result.status,stderr:result.stderr});
@@ -141,8 +164,8 @@ ${method === undefined ? '' : `主方法标签: ${method}`}
         '    out.append({**{key:parsed[key] for key in keys},"taxonomySurfaceSha256":_hash_tag_section_and_primary_tags(item["text"])})',
         'print(json.dumps(out,ensure_ascii=False))'
     ].join('\n');
-    const result = spawnSync('bash', ['scripts/python-runtime.sh', '-c', script], {
-        cwd: project, input: JSON.stringify(fixtures), encoding: 'utf8',
+    const result = runPythonWithJson(script, JSON.stringify(fixtures), {
+        cwd: project, encoding: 'utf8',
         maxBuffer: 16 * 1024 * 1024, timeout: 30000
     });
     assert.equal(result.status, 0, result.stderr);
@@ -189,8 +212,8 @@ test('评价标题的围栏、Unicode 空白、CRLF 和重复判别在两端一�
         'inputs=json.load(sys.stdin)',
         'print(json.dumps([{"headings":analysis_heading_titles(text),"duplicate":bool(evaluation_heading_issue(text)),"evaluation":extract_evaluation_section(text)} for text in inputs],ensure_ascii=False))'
     ].join('\n');
-    const result = spawnSync('bash', ['scripts/python-runtime.sh', '-c', script], {
-        cwd: path.resolve(__dirname, '..'), input: JSON.stringify(inputs), encoding: 'utf8', timeout: 120000
+    const result = runPythonWithJson(script, JSON.stringify(inputs), {
+        cwd: path.resolve(__dirname, '..'), encoding: 'utf8', timeout: 120000
     });
     assert.equal(result.error, undefined, String(result.error));
     assert.equal(result.status, 0, result.stderr);
@@ -222,8 +245,8 @@ test('新旧标签缓存的字段冲突和缺失读取在两端一致', () => {
         '    except ValueError as error: out.append({"value":None,"error":str(error)})',
         'print(json.dumps(out,ensure_ascii=False))'
     ].join('\n');
-    const result = spawnSync('bash', ['scripts/python-runtime.sh', '-c', script], {
-        cwd: path.resolve(__dirname, '..'), input: JSON.stringify(inputs), encoding: 'utf8',
+    const result = runPythonWithJson(script, JSON.stringify(inputs), {
+        cwd: path.resolve(__dirname, '..'), encoding: 'utf8',
         maxBuffer: 16 * 1024 * 1024, timeout: 30000
     });
     assert.equal(result.status, 0, result.stderr);
@@ -330,8 +353,8 @@ test('标签阶段的旧新完整绑定、只读结果和拒绝边界在两端�
         '    out.append({"record":record,"binding":binding,"bindingSha256":_manual_hash(binding) if binding is not None else None,"error":error,"accepted":accepted})',
         'print(json.dumps(out,ensure_ascii=False))'
     ].join('\n');
-    const result = spawnSync('bash', ['scripts/python-runtime.sh', '-c', script], {
-        cwd: path.resolve(__dirname, '..'), input: JSON.stringify(fixtures), encoding: 'utf8',
+    const result = runPythonWithJson(script, JSON.stringify(fixtures), {
+        cwd: path.resolve(__dirname, '..'), encoding: 'utf8',
         maxBuffer: 16 * 1024 * 1024, timeout: 30000
     });
     assert.equal(result.error, undefined, String(result.error));
