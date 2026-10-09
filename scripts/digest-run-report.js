@@ -468,7 +468,11 @@ function buildDigestRunReport(targetDate, options = {}) {
     const failed = deepBatch.filter(paper => (
         !isSuccessfulAnalysisRecord(paper) && !analysisWaivedIds.has(normalizedId(paper))
     ));
-    const waived = deepBatch.filter(paper => analysisWaivedIds.has(normalizedId(paper)));
+    // 成功结果继续按成功核验；豁免只覆盖失败结果，避免同一篇同时计入两组。
+    const waived = deepBatch.filter(paper => analysisWaivedIds.has(normalizedId(paper))
+        && !isSuccessfulAnalysisRecord(paper));
+    const waivedPaperIds = new Set(waived.map(normalizedId));
+    const requiredAnalysis = deepBatch.filter(paper => !waivedPaperIds.has(normalizedId(paper)));
     const failedIds = failed.map(normalizedId).filter(Boolean);
     // 候选快照读不到时报 null，不报 0。0 是「快照在、候选就是空」这一种真实取值，
     // 和「快照根本不在」不是一回事；旧写法两者都是 0，摘要于是出现
@@ -561,8 +565,9 @@ function buildDigestRunReport(targetDate, options = {}) {
         : null;
     const productionV6Complete = deepBatch.length > 0
         && deepBatch.every(productionV6PaperComplete);
-    const llmApiComplete = deepBatch.length > 0
-        && deepBatch.every(llmApiPaperComplete);
+    // 至少有一篇可发布的分析；豁免不会把全失败批次变成空内容发布。
+    const llmApiComplete = requiredAnalysis.length > 0
+        && requiredAnalysis.every(llmApiPaperComplete);
     const dailySourceIssues = [];
     if (deep && !Array.isArray(deep)) {
         validateDailyFreshSourceRun(deepSnapshot.path || Config.FILES.deepAnalysisResult, deep, deepBatch, dailySourceIssues);
@@ -575,12 +580,13 @@ function buildDigestRunReport(targetDate, options = {}) {
             ? (waived.length ? 'llm_api_production_with_operator_waiver' : 'llm_api_production')
             : 'invalid_or_legacy');
     const productionAnalysisComplete = productionV6Complete || (llmApiComplete && dailySourceComplete);
-    const unresolvedScoringIds = deepBatch.filter(paper => {
+    const unresolvedScoringIds = requiredAnalysis.filter(paper => {
         const scoring = paper?.analysisManifest?.stages?.scoringAudit;
         return scoring?.scoringContract === 'api-scoring-audit-v2'
             && !scoringStabilityIsResolved(scoring);
     }).map(normalizedId).filter(Boolean);
-    const analysisComplete = Boolean(deep && filtered) && productionAnalysisComplete && (
+    const analysisComplete = Boolean(deep && filtered) && analysisWaiverCheck.valid
+        && productionAnalysisComplete && (
         failed.length === 0
         && successful.length + waived.length === filteredBatch.length
         && samePaperIds([...successful, ...waived], filteredBatch)

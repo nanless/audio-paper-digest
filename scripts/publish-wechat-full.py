@@ -13,7 +13,8 @@ setup_script_logging(__file__)
     python3 publish-wechat-full.py [data_file]
     python3 publish-wechat-full.py --dry-run [data_file]  # 只生成本地预览，不调用微信接口
 """
-import argparse, urllib.request, json, time, sys, re, datetime, hashlib, os, html, tempfile
+import argparse, urllib.request, json, time, sys, re, datetime, hashlib, os, html, tempfile, base64
+from functools import lru_cache
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from publish_common import (
@@ -25,7 +26,7 @@ from path_config import atomic_write_json, atomic_write_text, wechat_preview_pat
 from tag_catalog import load_tag_catalog
 from analysis_sections import evaluation_heading_issue
 from utils import parse_analysis, read_tag_validation
-from project_env import build_fetch_url_opener
+from blog_entry_loader import load_publish_to_blog
 
 APP_ID = os.environ.get('WECHAT_APP_ID', '')
 APP_SECRET = os.environ.get('WECHAT_APP_SECRET', '')
@@ -119,17 +120,26 @@ def get_token():
         sys.exit(1)
 
 
-def download_image(url, timeout=15):
-    """从 URL 下载图片，成功返回字节，失败返回 None"""
+@lru_cache(maxsize=1)
+def _image_downloader():
+    return load_publish_to_blog()._download_review_image
+
+
+def download_image(url):
+    """复用博客图片的 HTTPS、地址固定、重定向、体积及图片格式校验。"""
     try:
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-        with build_fetch_url_opener().open(req, timeout=timeout) as resp:
-            data = resp.read()
-        if len(data) < 100:
-            return None
+        prepared = _image_downloader()(url)
+        data = base64.b64decode(prepared['data'], validate=True)
+        if prepared['media_type'] not in {'image/png', 'image/jpeg'}:
+            from io import BytesIO
+            from PIL import Image
+            with Image.open(BytesIO(data)) as source:
+                output = BytesIO()
+                source.convert('RGB').save(output, format='PNG')
+                data = output.getvalue()
         return data
-    except Exception as e:
-        print(f"  ⚠️ 下载失败: {url[:60]}... ({e})")
+    except Exception as error:
+        print(f"  ⚠️ 图片下载或校验失败: {url[:60]}... ({error})")
         return None
 
 
@@ -178,7 +188,7 @@ def get_wechat_image_url(token, arxiv_url):
     if not img_data:
         return None
 
-    ext = 'png' if arxiv_url.endswith('.png') else 'jpg'
+    ext = 'png' if img_data.startswith(b'\x89PNG\r\n\x1a\n') else 'jpg'
     cdn_url = upload_to_wechat(token, img_data, f'fig.{ext}')
 
     if cdn_url:

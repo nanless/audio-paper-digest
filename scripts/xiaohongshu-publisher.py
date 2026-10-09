@@ -407,7 +407,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
         # 策略 B: 通过 evaluate 直接操作 DOM（兜底）
         if not title_filled:
             try:
-                await page.evaluate(f'''
+                fill_result = await page.evaluate(f'''
                     (title) => {{
                         // 方法1: 找 placeholder 含"标题"的 input/textarea
                         const inputs = document.querySelectorAll('input, textarea');
@@ -437,8 +437,9 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                         return 'not found';
                     }}
                 ''', title[:MAX_TITLE_LEN])
-                print(f"[xhs] 标题已通过 DOM evaluate 填写")
-                title_filled = True
+                title_filled = fill_result in {'found by placeholder', 'found by maxlength', 'found first text input'}
+                if title_filled:
+                    print("[xhs] 标题已通过 DOM 填写")
             except Exception as e2:
                 print(f"[xhs] ⚠️ DOM evaluate 填写标题也失败: {e2}")
 
@@ -481,7 +482,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
         # 策略 B: DOM evaluate 兜底
         if not body_filled:
             try:
-                await page.evaluate(f'''
+                fill_result = await page.evaluate(f'''
                     (text) => {{
                         // 方法1: contenteditable
                         const eds = document.querySelectorAll('div[contenteditable]');
@@ -513,8 +514,9 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                         return 'not found';
                     }}
                 ''', body[:MAX_BODY_LEN])
-                print(f"[xhs] 正文已通过 DOM evaluate 填写")
-                body_filled = True
+                body_filled = fill_result in {'found contenteditable', 'found role=textbox', 'found textarea'}
+                if body_filled:
+                    print("[xhs] 正文已通过 DOM 填写")
             except Exception as e2:
                 print(f"[xhs] ⚠️ DOM evaluate 填写正文也失败: {e2}")
 
@@ -525,6 +527,9 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
             print(f"【标题】{title[:MAX_TITLE_LEN]}")
             print(f"【正文】\n{body[:MAX_BODY_LEN]}")
             print("=" * 40)
+            print("[xhs] 标题或正文未确认填入，已停止自动发布。")
+            await browser.close()
+            return False
 
         # ── 4. 暂停等待用户手动上传图片 ──
         print("\n" + "=" * 50)
@@ -549,6 +554,13 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
             await asyncio.sleep(30)
 
         # ── 5. 点击发布 ──
+        success_notice = page.get_by_text("发布成功", exact=True)
+        try:
+            await success_notice.wait_for(state="hidden", timeout=3000)
+        except PWTimeout:
+            print("[xhs] 页面仍有上一次发布的成功提示，已停止操作，请先核对后台记录。")
+            await browser.close()
+            return False
         publish_clicked = False
         try:
             publish_selectors = [
@@ -573,7 +585,6 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                 await publish_btn.click()
                 print("[xhs] ✅ 已点击发布")
                 publish_clicked = True
-                await page.wait_for_timeout(5000)
             else:
                 print("[xhs] ⚠️ 未找到发布按钮（CSS 选择器）")
         except Exception as e:
@@ -595,7 +606,6 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                 if result == 'clicked':
                     print("[xhs] ✅ 已通过 DOM evaluate 点击发布")
                     publish_clicked = True
-                    await page.wait_for_timeout(5000)
                 else:
                     print("[xhs] ❌ 未找到发布按钮")
                     await browser.close()
@@ -604,6 +614,15 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
                 print(f"[xhs] ❌ 发布彻底失败: {e2}")
                 await browser.close()
                 return False
+
+        # 点击按钮只证明发起了操作，平台明确确认后才报告成功。
+        try:
+            await success_notice.wait_for(state="visible", timeout=15000)
+        except PWTimeout:
+            print("[xhs] 尚未收到发布成功确认，结果未知；请先在创作后台核对，避免重复发布。")
+            await browser.close()
+            return False
+        print("[xhs] ✅ 平台已确认发布成功")
 
         # 保存可能更新的 Cookie
         await save_cookies(context)
