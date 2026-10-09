@@ -40,10 +40,10 @@ function sixSections(overrides = {}) {
 }
 
 describe('Manual v4 编辑质量的基础函数', () => {
-    it('只合并紧挨着重复的小数提取片段', () => {
+    it('裸重复小数保留完整表面，分隔开的合法值保持独立', () => {
         assert.deepEqual(
             numericLexemes('MRR rises by 3.73.7, 2.82.8, and 0.50.5.'),
-            ['3.7', '2.8', '0.5']
+            ['3.73.7', '2.82.8', '0.50.5']
         );
         assert.deepEqual(
             numericLexemes('Separate reported values are 3.7 and 3.7; the range also includes 2.8.'),
@@ -863,5 +863,18 @@ describe('论文评价的编辑质量检查', () => {
         assert.equal(duplicate[0].count, 2);
         assert.equal(validateEditorialQuality(text).issues.some(item => item.code === 'duplicate_generated_heading'), true);
         assert.deepEqual(findDuplicateGeneratedHeadings('```text\n## 毒舌点评\n```\n## 论文评价\n有效评价。'), []);
+    });
+});
+
+
+describe('已记录数词问题的完整边界', () => {
+    it('普通数词只更正独立数量，较长中文和混合数量保持原文', () => {
+        const source = '三层；十三层；二十三层；一百三层；零点三层；负三层；3三层；三阶段；十三阶段；千层；一千层。';
+        const issues = ['三层', '三阶段', '千层'].map(match => ({
+            code: 'quantitative_chinese_numeral', match
+        }));
+        assert.equal(normalizeIssueBoundReaderQuantitativeNumerals(source, issues),
+            '3 层；十三层；二十三层；一百三层；零点三层；负三层；3三层；3 个阶段；十三阶段；1,000 层；一千层。');
+        assert.equal(normalizeIssueBoundReaderQuantitativeNumerals(source, []), source);
     });
 });

@@ -606,3 +606,26 @@ test('精确候选重入时拒绝归档路径穿越和归档符号链接', t => 
     const tampered = structuredClone(migrated); tampered.readerRecoveryRevisions[0].archivedName = '../outside.json';
     assert.throws(() => saveFailedCandidate(f.directory, f.identity, tampered), /allowance lacks a valid recovery-revision proof|ELOOP|symbolic/i);
 });
+
+
+test('真实失败候选恢复只更正完整数词，不改较长数词内的相同后缀', t => {
+    const f = fixture(t);
+    const original = '训练采用三阶段课程。对照采用十三阶段课程，网络包含十三层。另一个模型使用三层。';
+    f.payload.draft.sections[0].body = original;
+    f.payload.issues = [
+        { path: null, message: 'quantitative_chinese_numeral:三阶段' },
+        { path: null, message: 'quantitative_chinese_numeral:三层' }
+    ];
+    f.payload.rawDraft = JSON.stringify(f.payload.draft);
+    saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
+    const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity, {
+        pixelEvidenceSha256: hashDraft(f.payload.imageEvidence)
+    }));
+    assert.equal(migrated.draft.sections[0].body,
+        '训练采用 3 个阶段课程。对照采用十三阶段课程，网络包含十三层。另一个模型使用 3 层。');
+    assert.equal(migrated.status, 'failed');
+    assert.equal(migrated.attempts, f.payload.attempts);
+    const archived = JSON.parse(fs.readFileSync(path.join(f.directory,
+        migrated.readerRecoveryRevisions[0].archivedName), 'utf8'));
+    assert.equal(archived.payload.draft.sections[0].body, original);
+});

@@ -509,10 +509,19 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
             (_surface, gap) => `${expandDecimalScale(coefficient, scale === '亿' ? 8 : 4)}${gap || ' '}`
         );
     }
+    // 问题文字可能也是较长数词的后缀，例如“三层”位于“十三层”内。
+    // 只替换完整数词，避免修复一处时改坏另一处数量。
+    const replaceCompleteNumeral = (value, surface, replacement) => value.replaceAll(
+        surface, (match, offset, whole) => {
+            const before = whole.slice(0, offset);
+            if (new RegExp(`[${CHINESE_DIGITS}点负正\\d.,+−-]$`, 'u').test(before)) return match;
+            return replacement(match, offset, whole);
+        }
+    );
     const digits = Object.freeze({ 一: 1, 二: 2, 两: 2, 三: 3, 四: 4,
         五: 5, 六: 6, 七: 7, 八: 8, 九: 9 });
     for (const surface of requested) {
-        normalized = normalized.replaceAll(surface, (_match, offset, whole) => (
+        normalized = replaceCompleteNumeral(normalized, surface, (_match, offset, whole) => (
             `${/[\u3400-\u9fff]$/u.test(whole.slice(0, offset)) ? ' ' : ''}`
             + `${digits[surface[0]]} 个阶段`
         ));
@@ -522,13 +531,13 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
             new RegExp(`^([一二两三四五六七八九])\\s*(${simpleMeasuredUnitAlternation})$`, 'iu')
         );
         if (!match) continue;
-        normalized = normalized.replaceAll(surface, (_match, offset, whole) => (
+        normalized = replaceCompleteNumeral(normalized, surface, (_match, offset, whole) => (
             `${/[\u3400-\u9fff]$/u.test(whole.slice(0, offset)) ? ' ' : ''}`
             + `${digits[match[1]]} ${match[2]}`
         ));
     }
     for (const [surface, measured] of requestedPowerMeasured) {
-        normalized = normalized.replaceAll(surface, (_match, offset, whole) => (
+        normalized = replaceCompleteNumeral(normalized, surface, (_match, offset, whole) => (
             `${/[\u3400-\u9fff]$/u.test(whole.slice(0, offset)) ? ' ' : ''}`
             + `${String(measured.value).replace(/\B(?=(\d{3})+(?!\d))/g, ',')} ${measured.unit}`
         ));
@@ -1174,13 +1183,14 @@ function normalizeNumericLexeme(value) {
 
 function numericLexemes(value) {
     const normalized = normalizeNfkc(claimFieldText(value))
-        .replace(/[\u2212\u2012\u2013\u2014]/gu, '-')
-        // 从 HTML/PDF 提取文本时，可见的小数有时会和重复的 MathML/LaTex 兜底副本连在一起
-        // （例如 3.7 变成 3.73.7）。只有紧挨着且完全相同的小数才合并。
-        .replace(/(?<![\d.])(\d+\.\d+)\1(?!\d|\.\d)/gu, '$1');
+        .replace(/[\u2212\u2012\u2013\u2014]/gu, '-');
+    // 裸重复小数没有 TeX 结构证明，保留完整表面供声明校验拒绝，不能取其中半值。
+    const decimal = String.raw`(?:\d*\.\d+)`;
+    const repeated = String.raw`(?:\+(${decimal})\+\1|-(${decimal})-\2|[-+]?(${decimal})\3)`;
+    const number = String.raw`[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d+)(?:[eE][-+]?\d+)?|[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:[eE][-+]?\d+)?`;
     const numberWords = Object.keys(ENGLISH_NUMBER_WORDS).join('|');
     const matches = normalized.match(new RegExp(
-        `[-+]?(?:\\d{1,3}(?:,\\d{3})+|\\d+)?(?:\\.\\d+)(?:[eE][-+]?\\d+)?|[-+]?(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:[eE][-+]?\\d+)?|\\b(?:${numberWords})\\b`,
+        String.raw`(?<![\d.])(?:${repeated}|[-+]?\d*\.\d+(?:\.\d+)+|${number})(?!\d|\.\d)|\b(?:${numberWords})\b`,
         'gi'
     )) || [];
     return matches.map(normalizeNumericLexeme);
@@ -1430,8 +1440,9 @@ function validateResultClaims(claims, sourceText, options = {}) {
         }
         if (!isNotReported(claim.value)) {
             const expectedNumbers = numericLexemes(claim.value);
-            if (expectedNumbers.length === 0) {
-                errors.push(`${prefix}.value 必须包含可核对数字，缺失值应使用带理由的 notReported 对象`);
+            if (expectedNumbers.length === 0
+                || expectedNumbers.some(number => !Number.isFinite(Number(number)))) {
+                errors.push(`${prefix}.value 必须包含可核对的完整数字，不得包含无法解析的拼接数值；缺失值应使用带理由的 notReported 对象`);
             } else {
                 numericClaimCount += 1;
             }

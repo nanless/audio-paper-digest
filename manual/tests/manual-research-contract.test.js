@@ -441,3 +441,38 @@ describe('Manual v5 音频研究者约定', () => {
         }), /未知证据 ID/);
     });
 });
+
+
+describe('Manual v5 结果声明的原数值', () => {
+    it('四条独立比较及叙述均合格时，仍拒绝从重复小数来源猜半值', () => {
+        const claims = ['甲', '乙', '丙', '丁'].map((name, index) => {
+            const method = `主方法${name}`;
+            const narrative = `在公开测试集的英语 RP 项上，${method}的 ACC 为 3.7%，指标越高越好且高于强基线的 2.1%，但这一比较只覆盖论文报告的评测协议。`;
+            const binding = {
+                datasetOrSetting: '公开测试集', splitOrCondition: '英语 RP',
+                method, baseline: '强基线', metric: 'ACC', value: '3.7',
+                unit: '%', direction: '越高越好'
+            };
+            return {
+                ...binding, sourceQuote: narrative, sourceBindings: { ...binding },
+                readerBindings: { ...binding }, readerNarrative: narrative,
+                evidenceScope: 'target_domain', baselineType: 'external_strong',
+                sourceGroup: `table-${Math.floor(index / 2) + 1}`
+            };
+        });
+        const readerResultsText = claims.map(claim => claim.readerNarrative).join('\n\n');
+        assert.doesNotThrow(() => validateResultClaimCoverageV5(claims, { documentType: '方法研究' }));
+        assert.equal(validateResultClaims(claims, readerResultsText, {
+            documentType: '方法研究', readerResultsText, requireReaderNarrative: true
+        }).valid, true);
+        claims[0].sourceQuote = claims[0].sourceQuote.replace('3.7%', '3.73.7%');
+        claims[0].sourceBindings.value = '3.73.7';
+        const sourceText = claims.map(claim => claim.sourceQuote).join('\n');
+        assert.doesNotThrow(() => validateResultClaimCoverageV5(claims, { documentType: '方法研究' }));
+        const result = validateResultClaims(claims, sourceText, {
+            documentType: '方法研究', readerResultsText, requireReaderNarrative: true
+        });
+        assert.equal(result.valid, false);
+        assert.match(result.errors.join('；'), /未覆盖.*3.7|数值 3.7 未出现/);
+    });
+});

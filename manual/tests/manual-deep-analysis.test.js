@@ -1198,3 +1198,61 @@ describe('旧人工评价记录的读取兼容', () => {
         }), /论文评价章节重复/);
     });
 });
+
+
+describe('旧 Manual 正式声明的完整数值依据', () => {
+    const vectors = [
+        ['3.73.7', '3.7'], ['.119.119', '.119'],
+        ['+0.15+0.15', '+0.15'], ['−5.6-5.6', '-5.6'],
+        ['０.１５0.15', '0.15'], ['130130', '130'],
+        ['3.73.7', '3.73.7'], ['.119.119', '.119.119'],
+        ['+0.15+0.15', '+0.15+0.15'],
+        ['3.73.7 and 2.1', '3.73.7 and 2.1'],
+        ['3.734.65 and 2.1', '3.734.65 and 2.1']
+    ];
+    function completeManifest(t, sourceValue, claimedValue) {
+        const claims = [1, 2, 3].map(index => {
+            const sourceQuote = `fixture-${index} condition-${index} 完整方法与同预算基线的 WER 为 ${sourceValue}%，越低越好。`;
+            const bindings = {
+                datasetOrSetting: `fixture-${index}`, splitOrCondition: `condition-${index}`,
+                method: '完整方法', baseline: '同预算基线', metric: 'WER',
+                value: sourceValue, unit: '%', direction: '越低越好'
+            };
+            return {
+                datasetOrSetting: `fixture-${index}`, splitOrCondition: `condition-${index}`,
+                method: '完整方法', baseline: '同预算基线', metric: 'WER',
+                value: claimedValue, unit: '%', direction: 'lower_is_better', sourceQuote,
+                sourceBindings: bindings,
+                readerBindings: { ...bindings, value: claimedValue }
+            };
+        });
+        const fixture = buildReusableRecord({
+            sourceSuffix: '\n' + claims.map(claim => claim.sourceQuote).join('\n')
+        });
+        t.after(() => fs.rmSync(fixture.dir, { recursive: true, force: true }));
+        const promoted = promoteReusableRecordToV4(fixture.record);
+        const manifest = promoted.analysisManifest;
+        manifest.manualTakeover.resultClaims = claims;
+        manifest.manualTakeover.resultClaimsSha256 = manualSha256({ claims, exception: null });
+        return { ...fixture, sourceSha256: fixture.spec.sourceSha256, manifest };
+    }
+    it('来源与三个完整声明均自洽时，正式接替校验仍拒绝猜半值', t => {
+        for (const [sourceValue, claimedValue] of vectors) {
+            const fixture = completeManifest(t, sourceValue, claimedValue);
+            assert.match(validateManualTakeoverManifest(fixture.manifest, fixture.sourceSha256, {
+                sourceText: fixture.sourceText
+            }), /结果声明.*(?:数值|未覆盖)/, sourceValue);
+        }
+    });
+    it('正式接替继续接受完整整数、分开的重复值及明确 TeX 数值', t => {
+        for (const [sourceValue, claimedValue] of [
+            ['130130', '130130'], ['3.7 3.7', '3.7'],
+            [String.raw`\mathrm{3.7}`, '3.7'], ['.119', '.119'], ['−5.6', '-5.6']
+        ]) {
+            const fixture = completeManifest(t, sourceValue, claimedValue);
+            assert.equal(validateManualTakeoverManifest(fixture.manifest, fixture.sourceSha256, {
+                sourceText: fixture.sourceText
+            }), null, sourceValue);
+        }
+    });
+});

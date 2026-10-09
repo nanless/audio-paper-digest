@@ -2265,24 +2265,20 @@ def _normalize_manual_numeric_lexeme(value):
 def _manual_numeric_lexemes(value):
     normalized = unicodedata.normalize('NFKC', _manual_claim_field_text(value))
     normalized = re.sub(r'[\u2212\u2012\u2013\u2014]', '-', normalized)
-    # HTML/PDF 提取可能把一个可见小数和它相同的 MathML/LaTeX 副本拼在一起
-    # （例如 ``3.7`` 变成 ``3.73.7``）。来源引文保持原样，但读取数字证据时
-    # 要跟 Node 编辑闸一样，只合并一对紧邻且完全相同的小数。边界检查有意
-    # 放过正常的相邻数字和内容不同的小数文本。
-    normalized = re.sub(
-        r'(?<![\d.])(\d+\.\d+)\1(?!\d|\.\d)',
-        r'\1',
-        normalized,
+    # 与 Node 一致：保留裸重复小数的完整表面供声明校验拒绝，不猜测其中半值。
+    decimal = r'(?:\d*\.\d+)'
+    repeated = rf'(?:\+({decimal})\+\1|-({decimal})-\2|[-+]?({decimal})\3)'
+    number = (
+        r'[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)?(?:\.\d+)(?:[eE][-+]?\d+)?'
+        r'|[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:[eE][-+]?\d+)?'
     )
     number_words = '|'.join(MANUAL_ENGLISH_NUMBER_WORDS)
-    matches = re.findall(
-        rf'[-+]?(?:\d{{1,3}}(?:,\d{{3}})+|\d+)?(?:\.\d+)(?:[eE][-+]?\d+)?'
-        rf'|[-+]?(?:\d{{1,3}}(?:,\d{{3}})+|\d+)(?:[eE][-+]?\d+)?'
-        rf'|\b(?:{number_words})\b',
+    matches = re.finditer(
+        rf'(?<![\d.])(?:{repeated}|[-+]?\d*\.\d+(?:\.\d+)+|{number})(?!\d|\.\d)|\b(?:{number_words})\b',
         normalized,
         flags=re.I,
     )
-    return [_normalize_manual_numeric_lexeme(item) for item in matches]
+    return [_normalize_manual_numeric_lexeme(item.group(0)) for item in matches]
 
 
 def _manual_normalized_semantic_text(value):
@@ -2535,9 +2531,14 @@ def _validate_manual_v4_result_claims(
             raise PublishDataValidationError(binding_issue)
         if not _manual_claim_not_reported(claim.get('value')):
             value_numbers = _manual_numeric_lexemes(claim.get('value'))
-            if not value_numbers:
+            try:
+                valid_numbers = bool(value_numbers) and all(
+                    math.isfinite(float(number)) for number in value_numbers)
+            except ValueError:
+                valid_numbers = False
+            if not valid_numbers:
                 raise PublishDataValidationError(
-                    f'{prefix}.value 必须包含可核对数字，'
+                    f'{prefix}.value 必须包含可核对的完整数字，不得包含无法解析的拼接数值；'
                     '缺失值应使用带理由的 notReported 对象'
                 )
             numeric_claim_count += 1

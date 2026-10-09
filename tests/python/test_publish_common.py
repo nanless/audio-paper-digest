@@ -496,29 +496,18 @@ class PublishCommonSanitizerTest(unittest.TestCase):
                 'paperSourceIdentity': 'manual-paper-source-identity-v0',
             })
 
-    def test_manual_numeric_lexemes_collapse_only_adjacent_duplicate_decimals(self):
-        # PDF/HTML 的 MathML 回退可能把同一个小数重复渲染两遍而没有分隔符。
-        # 原文引用要按原样保留作为证据；
-        # 只有数值比较才会看到归一化之后的那个数。
-        self.assertEqual(_manual_numeric_lexemes('raw 3.73.7'), ['3.7'])
-        self.assertEqual(_manual_numeric_lexemes('raw 4.644.64 / 1.751.75'), [
-            '4.64', '1.75',
-        ])
-
-        # 带分隔符的普通重复值不要合并，
-        # 只是长得像的相邻小数序列也不要合并。
+    def test_manual_numeric_lexemes_preserve_unsupported_duplicate_decimals(self):
+        self.assertEqual(_manual_numeric_lexemes('raw 3.73.7'), ['3.73.7'])
+        self.assertEqual(_manual_numeric_lexemes('raw 4.644.64 / 1.751.75'), ['4.644.64', '1.751.75'])
         self.assertEqual(_manual_numeric_lexemes('3.7 3.7'), ['3.7', '3.7'])
-        self.assertNotEqual(_manual_numeric_lexemes('4.644.65'), ['4.64'])
+        self.assertNotIn('4.64', _manual_numeric_lexemes('4.644.65'))
 
-    def test_manual_result_claim_accepts_raw_duplicate_decimal_source_quote(self):
+    def test_manual_result_claim_rejects_unsupported_duplicate_decimal_source_quote(self):
         claim = manual_result_claim_fixture('3.7')
         claim['sourceQuote'] = claim['sourceQuote'].replace('3.7', '3.73.7')
         claim['sourceBindings']['value'] = '3.73.7'
-
-        # 原始原文引用必须保持可核对，同时绑定和结论比较
-        # 要能认出重复渲染出来的就是同一个 3.7。
         self.assertIn('3.73.7', claim['sourceQuote'])
-        self.assertIsNone(_validate_manual_result_claim_bindings(
+        self.assertIn('未覆盖', _validate_manual_result_claim_bindings(
             claim, 'sourceBindings', claim['sourceQuote'], 'fixture',
         ))
 
@@ -1248,6 +1237,54 @@ paper_digest_manual_depth: "full-text-evidence-v4"
         ))
         self.assertIn('图前导读或图后解释与已审查插图计划不一致',
                       validate_image_narrative_contract(swapped_prose))
+
+    def test_manual_publication_rejects_half_values_with_three_complete_claims(self):
+        vectors = [
+            ('3.73.7', '3.7'), ('.119.119', '.119'),
+            ('+0.15+0.15', '+0.15'), ('−5.6-5.6', '-5.6'),
+            ('０.１５0.15', '0.15'), ('130130', '130'),
+            ('3.73.7', '3.73.7'), ('.119.119', '.119.119'),
+            ('+0.15+0.15', '+0.15+0.15'),
+            ('3.73.7 and 2.1', '3.73.7 and 2.1'),
+            ('3.734.65 and 2.1', '3.734.65 and 2.1'),
+        ]
+        for source_value, claimed_value in vectors:
+            with self.subTest(source_value=source_value):
+                claims = []
+                lines = []
+                for index in range(3):
+                    method = f'完整方法{index}'
+                    claim = manual_result_claim_fixture(claimed_value, method=method)
+                    claim['sourceQuote'] = claim['sourceQuote'].replace(
+                        f'WER {claimed_value} percent', f'WER {source_value} percent')
+                    claim['sourceBindings']['value'] = source_value
+                    claims.append(claim)
+                    lines.append(f'LibriSpeech test-clean {method}相对强基线的 WER 为 '
+                                 f'{claimed_value}%，越低越好。')
+                with self.assertRaisesRegex(PublishDataValidationError, '数值|未覆盖'):
+                    _validate_manual_v4_result_claims(
+                        {'documentType': '方法研究', 'resultClaims': claims},
+                        '## 实验结果\n' + '\n'.join(lines), 'fixture')
+
+    def test_manual_publication_preserves_exact_numbers_and_tex_values(self):
+        for source_value, claimed_value in [
+                ('130130', '130130'), ('3.7 3.7', '3.7'),
+                (r'\mathrm{3.7}', '3.7'), ('.119', '.119'), ('−5.6', '-5.6')]:
+            with self.subTest(source_value=source_value):
+                claims = []
+                lines = []
+                for index in range(3):
+                    method = f'完整方法{index}'
+                    claim = manual_result_claim_fixture(claimed_value, method=method)
+                    claim['sourceQuote'] = claim['sourceQuote'].replace(
+                        f'WER {claimed_value} percent', f'WER {source_value} percent')
+                    claim['sourceBindings']['value'] = source_value
+                    claims.append(claim)
+                    lines.append(f'LibriSpeech test-clean {method}相对强基线的 WER 为 '
+                                 f'{claimed_value}%，越低越好。')
+                self.assertEqual(_validate_manual_v4_result_claims(
+                    {'documentType': '方法研究', 'resultClaims': claims},
+                    '## 实验结果\n' + '\n'.join(lines), 'fixture'), claims)
 
     def test_manual_v4_publish_result_claims_require_three_nonempty_source_bound_numbers(self):
         analysis = '''## 实验结果
