@@ -4627,6 +4627,17 @@ def parse_publish_arxiv_identity(arxiv_id):
     }
 
 
+def is_canonical_publish_arxiv_id(value):
+    """审查记录只接受规范基础 ID；允许现代四/五位编号及旧类目编号。"""
+    if not isinstance(value, str):
+        return False
+    try:
+        identity = parse_publish_arxiv_identity(value)
+    except PublishDataValidationError:
+        return False
+    return identity['version'] is None and identity['baseId'] == value
+
+
 def validate_papers_for_publish(papers, *, validate_manual_stage_records=True):
     """在生成任何发布产物之前校验每一篇论文。
 

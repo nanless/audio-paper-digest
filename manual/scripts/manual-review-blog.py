@@ -21,6 +21,7 @@ if str(SHARED_SCRIPTS) not in sys.path:
 
 from blog_entry_loader import load_publish_to_blog
 from runtime_guard import require_external_runtime
+from publish_common import is_canonical_publish_arxiv_id
 
 REQUIRED_REVIEW_MODEL = 'gpt-5.6-terra'
 REQUIRED_REVIEW_REASONING = 'high'
@@ -156,7 +157,7 @@ def _load_review_statement(path):
             seen_subagent_tasks.add(task_name)
             is_index = bool(re.fullmatch(r'\d{4}-\d{2}-\d{2}\.md', Path(rel_path).name))
             if not deleted and not is_index \
-                    and not re.fullmatch(r'\d{4}\.\d{5}', str(subagent.get('paperId') or '')):
+                    and not is_canonical_publish_arxiv_id(subagent.get('paperId')):
                 raise ValueError(
                     f'文件审查记录 files[{index}] 中的论文页审查任务必须在 paperId 中填写规范的 arXiv ID。'
                 )

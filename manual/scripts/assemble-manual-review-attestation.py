@@ -14,6 +14,7 @@ if str(SHARED_SCRIPTS) not in sys.path:
 from path_config import atomic_write_json, validate_date_component
 from blog_entry_loader import load_publish_to_blog
 from runtime_guard import require_external_runtime
+from publish_common import is_canonical_publish_arxiv_id
 
 FILE_CHECKS = {
     'titleAndMetadata', 'technicalNarrative', 'factualClaims',
@@ -59,7 +60,7 @@ def valid_review_shard(relative, expected_item, item):
         return False
     is_index = bool(re.fullmatch(r'\d{4}-\d{2}-\d{2}\.md', Path(relative).name))
     if not deleted and not is_index \
-            and not re.fullmatch(r'\d{4}\.\d{5}', str(subagent.get('paperId') or '')):
+            and not is_canonical_publish_arxiv_id(subagent.get('paperId')):
         return False
     return True
 
