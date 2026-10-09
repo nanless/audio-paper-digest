@@ -1143,6 +1143,7 @@ function readCrosswalk({ crosswalkRoot, crosswalkId } = {}) {
     const filename = safeDirectJson(directory, 'state.json');
     const loaded = readRegular(filename, MAX_STATE_BYTES, 'crosswalk state');
     const state = assertCrosswalkState(loaded.value);
+    if (state.crosswalkId !== crosswalkId) fail('crosswalk 状态身份与请求目录不一致');
     if (!loaded.bytes.equals(prettyBytes(state))) fail('crosswalk state 字节不规范');
     const decisionDirectory = safeDirectory(path.join(directory, 'decisions'));
     for (const [index, attempt] of state.attempts.entries()) {

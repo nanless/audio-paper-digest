@@ -1447,3 +1447,78 @@ test('主评分行决定落盘后应用前再次重核原页，拒绝替换且�
         decisionHandle: handle, owner: 'primary.test' }), /frozen page bytes differ/);
     assert.equal(api.readCrosswalk(f.options).assignments[f.binding.pageKey].status, 'pending');
 });
+
+function completedCrosswalkForDirectoryCheck(t) {
+    const f = fixture(t);
+    useConferenceHint(f);
+    const authorityRoot = path.join(f.root, 'authorities');
+    const production = writeConferenceAuthority(t, authorityRoot);
+    const state = api.prepareCrosswalk({
+        crosswalkRoot: f.crosswalk,
+        inventoryHandle: load(f),
+        crosswalkId: ids[0],
+        now: stamp,
+        apply: true
+    });
+    const pageKey = Object.keys(state.assignments)[0];
+    const artifact = api.buildVerifiedDecisionArtifact({
+        state,
+        pageKey,
+        authorityHandle: production.handle,
+        operationId: ids[2],
+        actorId: 'directory.check',
+        now: stamp
+    });
+    const decisionFile = api.writeDecisionArtifact({
+        crosswalkRoot: f.crosswalk,
+        crosswalkId: ids[0],
+        decisionName: 'verified.json',
+        artifact
+    });
+    api.applyDecision({
+        crosswalkRoot: f.crosswalk,
+        crosswalkId: ids[0],
+        decisionHandle: api.loadDecisionHandle(decisionFile, { authorityHandle: production.handle }),
+        owner: 'directory.check',
+        now: stamp
+    });
+    const options = {
+        crosswalkRoot: f.crosswalk,
+        crosswalkId: ids[0],
+        authorityRoot,
+        authorityResolver: production.resolver
+    };
+    const finalized = api.finalizeCrosswalk(options);
+    assert.equal(finalized.state.completion.status, 'complete');
+    return { f, options, finalized };
+}
+
+for (const consumer of ['status', 'readFinalReceipt', 'finalizeCrosswalk']) {
+    test(`crosswalk 目录身份：${consumer} 拒绝其他 UUID 的完整合法状态`, t => {
+        const { f, options, finalized } = completedCrosswalkForDirectoryCheck(t);
+        const originalDirectory = path.join(f.crosswalk, ids[0]);
+        const copiedDirectory = path.join(f.crosswalk, ids[1]);
+        fs.cpSync(originalDirectory, copiedDirectory, { recursive: true });
+        const saved = ['state.json', 'final-receipt.json', 'decisions/verified.json'].map(name => ({
+            name,
+            bytes: fs.readFileSync(path.join(copiedDirectory, name)),
+            inode: fs.lstatSync(path.join(copiedDirectory, name)).ino
+        }));
+        const wrongOptions = { ...options, crosswalkId: ids[1] };
+        const action = consumer === 'status'
+            ? () => cli.main(['status', '--crosswalk', ids[1]], {
+                roots: { crosswalkRoot: f.crosswalk, inventoryRoot: f.inventory }
+            })
+            : () => api[consumer](wrongOptions);
+        assert.throws(action, /crosswalk 状态身份与请求目录不一致/);
+        for (const item of saved) {
+            assert.deepEqual(fs.readFileSync(path.join(copiedDirectory, item.name)), item.bytes);
+            assert.equal(fs.lstatSync(path.join(copiedDirectory, item.name)).ino, item.inode);
+        }
+        assert.equal(fs.existsSync(path.join(copiedDirectory, 'operation.lock')), false);
+        const original = api.readFinalReceipt(options);
+        assert.equal(original.receipt.receiptSha256, finalized.receipt.receiptSha256);
+        assert.equal(original.state.crosswalkId, ids[0]);
+        assert.deepEqual(original.state.source.papers, finalized.state.source.papers);
+    });
+}
