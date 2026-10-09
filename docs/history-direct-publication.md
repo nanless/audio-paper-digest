@@ -40,7 +40,7 @@ npm run history:direct-publication -- visual-disposition --apply \
   --output /absolute/project/data/runtime/historical-direct-visual-dispositions/full-history.json
 ```
 
-输出必须直接位于配置的 `historical-direct-visual-dispositions` 目录，已有不同字节不可覆盖。下面 plan/generate 的 `--visual-disposition` 使用同一个实际输出文件。
+输出必须直接位于配置的 `historical-direct-visual-dispositions` 目录。先写私有临时文件，再以不可覆盖链接保存；同一命令重跑时，先复验已有凭证的自哈希及计划、范围、模式、原因和声明来源，全部一致才保留原创建时间与字节。恢复只清理由已退出的同机写者留下、与已验证正式文件对应的临时硬链接；旧半截文件、未知链接或不同请求都保留并拒绝，不能因此推断新增视觉授权。下面 plan/generate 的 `--visual-disposition` 使用同一个实际输出文件。
 
 ## 生成、审查与发布命令
 

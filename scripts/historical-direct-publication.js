@@ -2,6 +2,8 @@
 'use strict';
 
 const path = require('node:path');
+const fs = require('node:fs');
+const { writeImmutableFile } = require('./lib/immutable-file.js');
 const { requireExternalRuntime } = require('./env-loader.js');
 const api = require('./lib/historical-direct-publication.js');
 
@@ -77,26 +79,60 @@ function buildPublicationInputOptions(options, Config) {
         selectedPaperIds: options.paperIds || [],
         ...roots(Config) };
 }
+function rejectDisposition(message, details = {}) {
+    throw Object.assign(new Error(message), details);
+}
 function writeArtifact(filename, value) {
     if (path.extname(filename) !== '.json') throw new Error('输出文件名必须以 .json 结尾');
     const parent = path.dirname(filename);
-    require('node:fs').mkdirSync(parent, { recursive: true, mode: 0o700 });
-    const parentStat = require('node:fs').lstatSync(parent);
+    fs.mkdirSync(parent, { recursive: true, mode: 0o700 });
+    const parentStat = fs.lstatSync(parent);
     if (!parentStat.isDirectory() || parentStat.isSymbolicLink()
-        || require('node:fs').realpathSync(parent) !== path.resolve(parent)) throw new Error('disposition output directory is unsafe');
-    const targetStat = require('node:fs').lstatSync(filename, { throwIfNoEntry: false });
-    if (targetStat && (!targetStat.isFile() || targetStat.isSymbolicLink() || targetStat.nlink !== 1)) {
-        throw new Error('disposition output target is unsafe');
-    }
+        || fs.realpathSync(parent) !== path.resolve(parent)) throw new Error('视觉处置输出目录不安全');
     const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
-    if (require('node:fs').existsSync(filename)) {
-        if (!require('node:fs').readFileSync(filename).equals(bytes)) throw new Error('已有处置文件的字节不同，不能覆盖');
-    } else {
-        const fd = require('node:fs').openSync(filename, require('node:fs').constants.O_WRONLY | require('node:fs').constants.O_CREAT
-            | require('node:fs').constants.O_EXCL | require('node:fs').constants.O_NOFOLLOW, 0o600);
-        try { require('node:fs').writeFileSync(fd, bytes); require('node:fs').fsyncSync(fd); } finally { require('node:fs').closeSync(fd); }
-    }
+    writeImmutableFile(filename, bytes, rejectDisposition);
     return filename;
+}
+function existingDisposition(filename, expected) {
+    const named = fs.lstatSync(filename, { throwIfNoEntry: false });
+    if (!named) return null;
+    // 双链接只供后续核验并恢复已退出写者；这里不删除任何文件。
+    if (!named.isFile() || named.isSymbolicLink() || ![1, 2].includes(named.nlink)
+        || named.size < 1 || named.size > 1024 * 1024) throw new Error('视觉处置文件类型、链接数或大小不符合要求');
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    let bytes;
+    try {
+        const opened = fs.fstatSync(fd);
+        if (opened.dev !== named.dev || opened.ino !== named.ino || opened.size !== named.size
+            || opened.nlink !== named.nlink) throw new Error('视觉处置文件在打开时发生变化');
+        bytes = fs.readFileSync(fd);
+        const after = fs.fstatSync(fd); const current = fs.lstatSync(filename);
+        if (bytes.length !== opened.size || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs
+            || after.ctimeMs !== opened.ctimeMs || current.dev !== opened.dev || current.ino !== opened.ino
+            || current.nlink !== opened.nlink || current.isSymbolicLink()) throw new Error('视觉处置文件在读取时发生变化');
+    } finally { fs.closeSync(fd); }
+    const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    // 原入口只输出这种 JSON 字节；逐字重建同时拒绝重复键和额外尾部内容。
+    if (!bytes.equals(Buffer.from(`${JSON.stringify(value, null, 2)}\n`, 'utf8'))) {
+        throw new Error('视觉处置文件不是原入口生成的完整 JSON 字节');
+    }
+    const stored = api.normalizeVisualDisposition(value, { planSha256: expected.planSha256 });
+    for (const field of ['contract', 'version', 'planSha256', 'scope', 'mode', 'reason', 'requestedBy']) {
+        if (stored[field] !== expected[field]) throw new Error(`已有视觉处置的 ${field} 与本次请求不同，不能覆盖`);
+    }
+    return stored;
+}
+function writeDisposition(filename, expected) {
+    let value = existingDisposition(filename, expected) || expected;
+    try { writeArtifact(filename, value); }
+    catch (error) {
+        if (error.code !== 'IMMUTABLE_FILE_CONTENT_CONFLICT') throw error;
+        // 并发胜者只允许创建时间不同；必须重新核验完整凭证和本次显式范围。
+        value = existingDisposition(filename, expected);
+        if (!value) throw error;
+        writeArtifact(filename, value);
+    }
+    return value;
 }
 function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('historical-direct-publication.js');
@@ -104,7 +140,7 @@ function main(argv = process.argv.slice(2), runtime = {}) {
     if (options.action === 'visual-disposition') {
         const plan = require('./lib/historical-direct-rewrite-plan.js').normalizePlan(
             require('./lib/historical-conference-page-projections.js').readStableJson(options.planFile, 'publication visual plan').value);
-        const value = api.buildVisualDisposition({ plan, mode: options.dispositionMode, scope: options.dispositionScope, reason: options.reason });
+        let value = api.buildVisualDisposition({ plan, mode: options.dispositionMode, scope: options.dispositionScope, reason: options.reason });
         const allowedRoot = path.resolve(Config.FILES.historicalDirectVisualDispositionDir);
         const parent = path.resolve(path.dirname(options.output));
         if (parent !== allowedRoot) throw new Error(`视觉处置输出必须直接放在 ${allowedRoot} 下，不能带子目录`);
@@ -112,7 +148,7 @@ function main(argv = process.argv.slice(2), runtime = {}) {
         const allowedStat = require('node:fs').lstatSync(allowedRoot);
         if (!allowedStat.isDirectory() || allowedStat.isSymbolicLink()
             || require('node:fs').realpathSync(allowedRoot) !== allowedRoot) throw new Error('configured visual disposition root is unsafe');
-        writeArtifact(options.output, value); console.log(JSON.stringify({ status: 'written', output: options.output,
+        value = writeDisposition(options.output, value); console.log(JSON.stringify({ status: 'written', output: options.output,
             dispositionSha256: value.dispositionSha256, mode: value.mode })); return value;
     }
     const common = { outputRoot: Config.FILES.historicalDirectPublicationDir, publicationId: options.publicationId,
