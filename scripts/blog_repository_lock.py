@@ -144,7 +144,7 @@ def _validate_owner(data):
 
 
 def _read_owner_raw_at(directory_fd, name='owner.json'):
-    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+    flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
     fd = os.open(name, flags, dir_fd=directory_fd)
     try:
         opened = os.fstat(fd)
@@ -390,11 +390,16 @@ def _renew(snapshot):
     directory_fd = os.open(lock_path, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
                            | getattr(os, 'O_NOFOLLOW', 0))
     try:
-        fd = os.open('owner.json', os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0), dir_fd=directory_fd)
+        fd = os.open('owner.json', os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0)
+                     | getattr(os, 'O_NONBLOCK', 0), dir_fd=directory_fd)
         try:
             opened = os.fstat(fd)
-            if (opened.st_dev, opened.st_ino) != current['owner']['identity']:
-                raise BlogRepositoryLockError('续租前发现博客锁 owner inode 变了')
+            named = os.stat('owner.json', dir_fd=directory_fd, follow_symlinks=False)
+            if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 \
+                    or stat.S_IMODE(opened.st_mode) != 0o600 \
+                    or (opened.st_dev, opened.st_ino) != current['owner']['identity'] \
+                    or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino):
+                raise BlogRepositoryLockError('续租前发现博客锁 owner 的文件类型、权限或 inode 变了')
             os.lseek(fd, 0, os.SEEK_SET)
             _write_all(fd, data)
             os.ftruncate(fd, len(data))
