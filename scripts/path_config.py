@@ -228,97 +228,286 @@ def read_json_strict(path, *, allow_missing=False):
     return data
 
 
+def _lock_identity(info):
+    return info.st_dev, info.st_ino
+
+
+def _lock_open_directory(path):
+    fd = os.open(path, os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0)
+                 | getattr(os, 'O_NOFOLLOW', 0))
+    try:
+        opened = os.fstat(fd)
+        named = path.lstat()
+        if not stat.S_ISDIR(opened.st_mode) or not stat.S_ISDIR(named.st_mode) \
+                or opened.st_uid != os.getuid() or _lock_identity(opened) != _lock_identity(named):
+            raise RuntimeError(f'文件锁目录身份发生变化：{path}')
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _lock_read_owner(directory_fd):
+    fd = os.open('owner.json', os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+                 | getattr(os, 'O_NONBLOCK', 0), dir_fd=directory_fd)
+    try:
+        opened = os.fstat(fd)
+        named = os.stat('owner.json', dir_fd=directory_fd, follow_symlinks=False)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1 \
+                or opened.st_uid != os.getuid() or _lock_identity(opened) != _lock_identity(named):
+            raise RuntimeError('文件锁持有人记录不是本人拥有的普通单链接文件')
+        data = bytearray()
+        while len(data) <= 16384:
+            chunk = os.read(fd, min(4096, 16385 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+        after = os.fstat(fd)
+        named = os.stat('owner.json', dir_fd=directory_fd, follow_symlinks=False)
+        signature = lambda info: (_lock_identity(info), info.st_size, info.st_mtime_ns,
+                                  info.st_ctime_ns, info.st_nlink)
+        if len(data) > 16384 or signature(opened) != signature(after) \
+                or signature(after) != signature(named) or len(data) != after.st_size:
+            raise RuntimeError('读取文件锁持有人记录时，文件变化或超过大小上限')
+        try:
+            record = json.loads(data)
+        except (ValueError, UnicodeError):
+            record = None
+        named = os.stat('owner.json', dir_fd=directory_fd, follow_symlinks=False)
+        if signature(after) != signature(named):
+            raise RuntimeError('解析文件锁持有人记录时，路径对应的文件发生变化')
+        return {'identity': _lock_identity(opened), 'mtime': opened.st_mtime_ns,
+                'ctime': opened.st_ctime_ns, 'bytes': bytes(data),
+                'record': record if isinstance(record, dict) else None}
+    finally:
+        os.close(fd)
+
+
+def _lock_snapshot(lock_path):
+    fd = _lock_open_directory(lock_path)
+    try:
+        info = os.fstat(fd)
+        entries = sorted(os.listdir(fd))
+        if entries not in ([], ['owner.json']):
+            raise RuntimeError(f'文件锁目录含未知文件，已保留：{lock_path}：{entries}')
+        owner = _lock_read_owner(fd) if entries else None
+        after = os.fstat(fd)
+        if info.st_mtime_ns != after.st_mtime_ns \
+                or _lock_identity(lock_path.lstat()) != _lock_identity(info):
+            raise RuntimeError(f'读取文件锁期间目录发生变化：{lock_path}')
+        return {'path': lock_path, 'identity': _lock_identity(info),
+                'mtime': info.st_mtime_ns, 'entries': entries, 'owner': owner}
+    finally:
+        os.close(fd)
+
+
+def _lock_snapshot_reclaimable(snapshot, stale_seconds):
+    owner = snapshot['owner']
+    record = (owner or {}).get('record') or {}
+    newest = max(snapshot['mtime'], (owner or {}).get('mtime', 0))
+    pid = record.get('pid')
+    if record.get('hostname') == socket.gethostname() and type(pid) is int and pid > 0:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            return False
+        return False
+    return time.time() - newest / 1_000_000_000 > stale_seconds
+
+
 def _lock_reclaimable(lock_path, stale_seconds):
     try:
-        owner_path = lock_path / "owner.json"
-        mtimes = [lock_path.stat().st_mtime]
-        if owner_path.exists():
-            mtimes.append(owner_path.stat().st_mtime)
-        age = time.time() - max(mtimes)
+        return _lock_snapshot_reclaimable(_lock_snapshot(lock_path), stale_seconds)
     except FileNotFoundError:
         return True
+
+
+def _lock_remove(snapshot):
+    """只删除同一目录和同一持有人记录；替换文件、额外文件都保留。"""
+    path = snapshot['path']
     try:
-        owner = json.loads((lock_path / "owner.json").read_text(encoding="utf-8"))
-        if owner.get("hostname") == socket.gethostname() and isinstance(owner.get("pid"), int):
-            try:
-                os.kill(owner["pid"], 0)
-            except ProcessLookupError:
-                return True
-            except PermissionError:
-                return False
+        if _lock_snapshot(path) != snapshot:
             return False
-        if owner.get("hostname"):
-            # 远端 PID 无法判活；以持续续期的 lease 为准，避免永久死锁。
-            return age > stale_seconds
-    except (FileNotFoundError, OSError, json.JSONDecodeError):
-        pass
-    return age > stale_seconds
+        fd = _lock_open_directory(path)
+    except FileNotFoundError:
+        return False
+    try:
+        if _lock_identity(os.fstat(fd)) != snapshot['identity'] \
+                or sorted(os.listdir(fd)) != snapshot['entries']:
+            return False
+        if snapshot['owner'] is not None:
+            if _lock_read_owner(fd) != snapshot['owner']:
+                return False
+            os.unlink('owner.json', dir_fd=fd)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    try:
+        if _lock_identity(path.lstat()) != snapshot['identity']:
+            return False
+        path.rmdir()
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _lock_write_all(fd, data):
+    offset = 0
+    while offset < len(data):
+        written = os.write(fd, data[offset:])
+        if written <= 0:
+            raise OSError('文件锁持有人记录没有完整写入')
+        offset += written
+
+
+def _lock_create(lock_path, stale_seconds):
+    lock_path.mkdir(mode=0o700)
+    created = _lock_identity(lock_path.lstat())
+    fd = None
+    owner_identity = None
+    try:
+        fd = _lock_open_directory(lock_path)
+        if _lock_identity(os.fstat(fd)) != created:
+            raise RuntimeError(f'新建文件锁目录被替换：{lock_path}')
+        os.fchmod(fd, 0o700)
+        owner_fd = os.open('owner.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL
+                           | getattr(os, 'O_NOFOLLOW', 0), 0o600, dir_fd=fd)
+        try:
+            owner_identity = _lock_identity(os.fstat(owner_fd))
+            os.fchmod(owner_fd, 0o600)
+            acquired_at = datetime_now_iso()
+            record = {'pid': os.getpid(), 'hostname': socket.gethostname(),
+                      'token': uuid.uuid4().hex, 'acquiredAt': acquired_at,
+                      'heartbeatAt': acquired_at, 'leaseSeconds': stale_seconds}
+            data = (json.dumps(record, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+            _lock_write_all(owner_fd, data)
+            os.fsync(owner_fd)
+        finally:
+            os.close(owner_fd)
+        os.fsync(fd)
+        snapshot = _lock_snapshot(lock_path)
+        if snapshot['identity'] != created or snapshot['owner']['identity'] != owner_identity \
+                or snapshot['owner']['bytes'] != data:
+            raise RuntimeError(f'新建文件锁持有人记录发生变化：{lock_path}')
+        return snapshot
+    except BaseException as original:
+        # 创建失败也不能按路径递归删锁：目录可能已被别的进程替换。
+        try:
+            snapshot = _lock_snapshot(lock_path)
+            if snapshot['identity'] == created and (snapshot['owner'] is None
+                    or snapshot['owner']['identity'] == owner_identity):
+                _lock_remove(snapshot)
+        except FileNotFoundError:
+            pass
+        except Exception as cleanup_error:
+            raise original from cleanup_error
+        raise
+    finally:
+        if fd is not None:
+            os.close(fd)
+
+
+def _lock_renew(snapshot):
+    path = snapshot['path']
+    if _lock_snapshot(path) != snapshot:
+        raise RuntimeError(f'文件锁续租前已失去所有权：{path}')
+    directory_fd = _lock_open_directory(path)
+    try:
+        if _lock_identity(os.fstat(directory_fd)) != snapshot['identity']:
+            raise RuntimeError(f'文件锁续租前目录被替换：{path}')
+        fd = os.open('owner.json', os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0)
+                     | getattr(os, 'O_NONBLOCK', 0), dir_fd=directory_fd)
+        try:
+            if _lock_identity(os.fstat(fd)) != snapshot['owner']['identity'] \
+                    or _lock_read_owner(directory_fd) != snapshot['owner']:
+                raise RuntimeError(f'文件锁续租前持有人记录被替换：{path}')
+            record = dict(snapshot['owner']['record'])
+            record['heartbeatAt'] = datetime_now_iso()
+            data = (json.dumps(record, ensure_ascii=False, indent=2) + '\n').encode('utf-8')
+            _lock_write_all(fd, data)
+            os.ftruncate(fd, len(data))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(directory_fd)
+    renewed = _lock_snapshot(path)
+    if renewed['identity'] != snapshot['identity'] \
+            or renewed['owner']['identity'] != snapshot['owner']['identity'] \
+            or renewed['owner']['bytes'] != data:
+        raise RuntimeError(f'文件锁续租期间已失去所有权：{path}')
+    return renewed
+
+
+def _lock_acquire(lock_path, timeout_seconds, stale_seconds):
+    started = time.monotonic()
+    reclaim_path = lock_path.with_name(f'{lock_path.name}.reclaim')
+    while True:
+        try:
+            marker = _lock_snapshot(reclaim_path)
+        except FileNotFoundError:
+            marker = None
+        if marker is not None:
+            if _lock_snapshot_reclaimable(marker, stale_seconds):
+                _lock_remove(marker)
+                continue
+        else:
+            try:
+                return _lock_create(lock_path, stale_seconds)
+            except FileExistsError:
+                pass
+            try:
+                stale = _lock_snapshot(lock_path)
+            except FileNotFoundError:
+                continue
+            if _lock_snapshot_reclaimable(stale, stale_seconds):
+                guard = None
+                try:
+                    guard = _lock_create(reclaim_path, stale_seconds)
+                    current = _lock_snapshot(lock_path)
+                    if current == stale and _lock_snapshot_reclaimable(current, stale_seconds):
+                        _lock_remove(current)
+                except (FileExistsError, FileNotFoundError):
+                    pass
+                finally:
+                    if guard is not None:
+                        _lock_remove(guard)
+                continue
+        if time.monotonic() - started >= timeout_seconds:
+            raise TimeoutError(f'等待文件锁超时：{lock_path}')
+        time.sleep(0.05)
 
 
 @contextmanager
 def file_lock(path, *, timeout_seconds=30, stale_seconds=2 * 60 * 60):
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    lock_path = Path(f"{target}.lock")
-    owner_token = uuid.uuid4().hex
-    acquired_at = datetime_now_iso()
-    heartbeat_stop = threading.Event()
-    heartbeat_thread = None
-    started = time.monotonic()
-    while True:
-        try:
-            lock_path.mkdir()
-            atomic_write_json(lock_path / "owner.json", {
-                "pid": os.getpid(),
-                "hostname": socket.gethostname(),
-                "token": owner_token,
-                "acquiredAt": acquired_at,
-                "heartbeatAt": acquired_at,
-                "leaseSeconds": stale_seconds,
-            }, mode=0o600)
-            break
-        except FileExistsError:
-            if _lock_reclaimable(lock_path, stale_seconds):
-                shutil.rmtree(lock_path, ignore_errors=True)
-                continue
-            if time.monotonic() - started >= timeout_seconds:
-                raise TimeoutError(f"等待文件锁超时: {lock_path}")
-            time.sleep(0.05)
-        except Exception:
-            shutil.rmtree(lock_path, ignore_errors=True)
-            raise
-
-    heartbeat_interval = max(0.05, min(30.0, stale_seconds / 3.0))
+    lock_path = Path(f'{target}.lock')
+    snapshot = _lock_acquire(lock_path, timeout_seconds, stale_seconds)
+    stop = threading.Event()
+    state = {'snapshot': snapshot, 'error': None}
+    interval = max(0.05, min(30.0, stale_seconds / 3.0))
 
     def renew_lease():
-        while not heartbeat_stop.wait(heartbeat_interval):
+        while not stop.wait(interval):
             try:
-                owner_path = lock_path / "owner.json"
-                owner = json.loads(owner_path.read_text(encoding="utf-8"))
-                if owner.get("token") != owner_token:
-                    return
-                owner["heartbeatAt"] = datetime_now_iso()
-                atomic_write_json(owner_path, owner, mode=0o600)
-            except (FileNotFoundError, OSError, json.JSONDecodeError):
+                state['snapshot'] = _lock_renew(state['snapshot'])
+            except Exception as exc:
+                state['error'] = exc
                 return
 
-    heartbeat_thread = threading.Thread(
-        target=renew_lease,
-        name=f"file-lock-heartbeat-{owner_token[:8]}",
-        daemon=True,
-    )
-    heartbeat_thread.start()
+    thread = threading.Thread(target=renew_lease, name=f'file-lock-heartbeat-{os.getpid()}', daemon=True)
+    thread.start()
     try:
         yield
     finally:
-        heartbeat_stop.set()
-        heartbeat_thread.join(timeout=max(1.0, heartbeat_interval * 2))
-        try:
-            owner = json.loads((lock_path / "owner.json").read_text(encoding="utf-8"))
-            if owner.get("token") == owner_token:
-                shutil.rmtree(lock_path, ignore_errors=True)
-        except (FileNotFoundError, OSError, json.JSONDecodeError):
-            pass
+        stop.set()
+        thread.join()
+        _lock_remove(state['snapshot'])
+    if state['error'] is not None:
+        raise RuntimeError(f'文件锁续租失败：{lock_path}') from state['error']
 
 
 def datetime_now_iso():

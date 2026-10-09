@@ -362,6 +362,211 @@ class PathConfigTest(unittest.TestCase):
                         self.assertFalse(_lock_reclaimable(lock_path, 0.15))
 
 
+class FileLockRaceTest(unittest.TestCase):
+    def test_two_reclaimers_do_not_enter_while_replacement_owner_is_alive(self):
+        import subprocess
+        import path_config
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'state.json'
+            lock = Path(f'{target}.lock')
+            lock.mkdir()
+            dead = subprocess.Popen([sys.executable, '-c', 'pass'])
+            dead.wait(timeout=5)
+            (lock / 'owner.json').write_text(json.dumps({
+                'pid': dead.pid, 'hostname': socket.gethostname(), 'token': 'old',
+            }))
+            hook = '_lock_snapshot_reclaimable' if hasattr(path_config, '_lock_snapshot_reclaimable') else '_lock_reclaimable'
+            original = getattr(path_config, hook)
+            child = None
+            child_owner = None
+            def checked_then_replaced(*args):
+                nonlocal child, child_owner
+                answer = original(*args)
+                if answer and child is None:
+                    code = '''
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from path_config import file_lock
+with file_lock(sys.argv[2]):
+    print(Path(sys.argv[2] + '.lock/owner.json').read_text().replace('\\n', ''), flush=True)
+    sys.stdin.readline()
+'''
+                    child = subprocess.Popen([sys.executable, '-c', code, SCRIPTS, str(target)],
+                                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+                    child_owner = json.loads(child.stdout.readline())
+                return answer
+            try:
+                with mock.patch.object(path_config, hook, side_effect=checked_then_replaced):
+                    with self.assertRaises(TimeoutError):
+                        with file_lock(target, timeout_seconds=0.15):
+                            self.fail('另一个进程持锁期间仍进入了临界区')
+                self.assertIsNone(child.poll())
+                self.assertEqual(json.loads((lock / 'owner.json').read_text())['token'], child_owner['token'])
+            finally:
+                if child is not None:
+                    child.communicate('\n', timeout=5)
+                    self.assertEqual(child.returncode, 0)
+
+    def test_creation_failure_preserves_replacement_directory(self):
+        import path_config
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'state.json'
+            lock = Path(f'{target}.lock')
+            replacement = b'{"token":"replacement"}'
+            def fail_and_replace(*_args, **_kwargs):
+                shutil.rmtree(lock)
+                lock.mkdir()
+                (lock / 'owner.json').write_bytes(replacement)
+                raise OSError(errno.EIO, '创建故障')
+            hook = '_lock_write_all' if hasattr(path_config, '_lock_write_all') else 'atomic_write_json'
+            with mock.patch.object(path_config, hook, side_effect=fail_and_replace):
+                with self.assertRaises(OSError):
+                    with file_lock(target):
+                        self.fail('创建失败后仍进入临界区')
+            self.assertEqual((lock / 'owner.json').read_bytes(), replacement)
+
+    def test_failed_owner_write_cleans_only_created_inode_and_can_retry(self):
+        import path_config
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'state.json'
+            lock = Path(f'{target}.lock')
+            original = path_config.os.write
+            def short_then_fail(fd, data):
+                original(fd, data[:3])
+                raise OSError(errno.EIO, '模拟短写')
+            def legacy_short_then_fail(filename, *_args, **_kwargs):
+                Path(filename).write_bytes(b'{\"p')
+                raise OSError(errno.EIO, '模拟短写')
+            failure_patch = (mock.patch.object(path_config.os, 'write', side_effect=short_then_fail)
+                             if hasattr(path_config, '_lock_write_all') else
+                             mock.patch.object(path_config, 'atomic_write_json', side_effect=legacy_short_then_fail))
+            with failure_patch:
+                with self.assertRaises(OSError):
+                    with file_lock(target):
+                        self.fail('短写后仍进入临界区')
+            self.assertFalse(lock.exists())
+            with file_lock(target):
+                self.assertTrue(lock.exists())
+            self.assertFalse(lock.exists())
+
+    def test_release_cannot_delete_owner_replaced_after_read(self):
+        import path_config
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'state.json'
+            lock = Path(f'{target}.lock')
+            context = file_lock(target)
+            context.__enter__()
+            owner = (lock / 'owner.json').read_bytes()
+            original = path_config.json.loads
+            replaced = False
+            def parse_then_replace(*args, **kwargs):
+                nonlocal replaced
+                value = original(*args, **kwargs)
+                if not replaced:
+                    replaced = True
+                    shutil.rmtree(lock)
+                    lock.mkdir()
+                    (lock / 'owner.json').write_bytes(owner)
+                return value
+            with mock.patch.object(path_config.json, 'loads', side_effect=parse_then_replace):
+                try:
+                    context.__exit__(None, None, None)
+                except RuntimeError:
+                    pass
+            self.assertTrue(replaced)
+            self.assertEqual((lock / 'owner.json').read_bytes(), owner)
+
+    def test_unknown_files_are_preserved_in_stale_lock(self):
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'state.json'
+            lock = Path(f'{target}.lock')
+            lock.mkdir()
+            dead = subprocess.Popen([sys.executable, '-c', 'pass'])
+            dead.wait(timeout=5)
+            (lock / 'owner.json').write_text(json.dumps({
+                'pid': dead.pid, 'hostname': socket.gethostname(), 'token': 'old',
+            }))
+            extra = lock / 'unrecognized.json'
+            extra.write_bytes(b'preserve')
+            with self.assertRaises(RuntimeError):
+                with file_lock(target, timeout_seconds=0.1):
+                    self.fail('有未知文件的锁不应被回收')
+            self.assertEqual(extra.read_bytes(), b'preserve')
+
+    def test_heartbeat_failure_is_reported_and_does_not_replace_new_owner(self):
+        import time
+        import path_config
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'state.json'
+            lock = Path(f'{target}.lock')
+            context = file_lock(target, stale_seconds=0.15)
+            context.__enter__()
+            replacement = json.dumps({'pid': os.getpid(), 'hostname': socket.gethostname(),
+                                      'token': 'other-owner'}).encode()
+            shutil.rmtree(lock)
+            lock.mkdir()
+            (lock / 'owner.json').write_bytes(replacement)
+            time.sleep(0.15)
+            with self.assertRaisesRegex(RuntimeError, '续租失败'):
+                context.__exit__(None, None, None)
+            self.assertEqual((lock / 'owner.json').read_bytes(), replacement)
+
+
+    def test_release_preserves_owner_replaced_during_final_record_parse(self):
+        import path_config
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'state.json'
+            lock = Path(f'{target}.lock')
+            context = file_lock(target)
+            context.__enter__()
+            original = path_config.json.loads
+            replacement = b'{"token":"replacement-owner"}'
+            calls = 0
+            def parse_then_replace(*args, **kwargs):
+                nonlocal calls
+                value = original(*args, **kwargs)
+                calls += 1
+                if calls == 2:
+                    temporary = Path(tmp) / 'new-owner.json'
+                    temporary.write_bytes(replacement)
+                    os.replace(temporary, lock / 'owner.json')
+                return value
+            with mock.patch.object(path_config.json, 'loads', side_effect=parse_then_replace):
+                with self.assertRaises(RuntimeError):
+                    context.__exit__(None, None, None)
+            self.assertEqual((lock / 'owner.json').read_bytes(), replacement)
+
+    def test_heartbeat_failure_during_exit_is_reported(self):
+        import threading
+        import path_config
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'state.json'
+            entered = threading.Event()
+            finish = threading.Event()
+            error = OSError(errno.EIO, '退出时心跳写入失败')
+            def delayed_failure(_snapshot):
+                entered.set()
+                if not finish.wait(5):
+                    raise AssertionError('测试未释放心跳线程')
+                raise error
+            with mock.patch.object(path_config, '_lock_renew', side_effect=delayed_failure):
+                context = file_lock(target, stale_seconds=0.15)
+                context.__enter__()
+                self.assertTrue(entered.wait(5))
+                timer = threading.Timer(0.05, finish.set)
+                timer.start()
+                try:
+                    with self.assertRaisesRegex(RuntimeError, '续租失败') as caught:
+                        context.__exit__(None, None, None)
+                    self.assertIs(caught.exception.__cause__, error)
+                finally:
+                    finish.set()
+                    timer.join()
+            self.assertFalse(Path(f'{target}.lock').exists())
+
+
 def read_json_strict_for_test(path):
     with Path(path).open('r', encoding='utf-8') as handle:
         return json.load(handle)
