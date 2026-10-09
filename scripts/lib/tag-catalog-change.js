@@ -313,7 +313,7 @@ function destructiveReasons(changeDetail) {
 }
 
 function destructiveReasonsHash(changeDetail) {
-    const serializedReasons = destructiveReasons(changeDetail).map(serializeDestructiveReason).sort();
+    const serializedReasons = destructiveReasons(changeDetail).map(serializeDestructiveReason).sort(codePointCompare);
     return crypto.createHash('sha256').update(serializedReasons.join('\n')).digest('hex');
 }
 

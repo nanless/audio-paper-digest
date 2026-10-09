@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { afterEach, test } = require('node:test');
+const { spawnSync, execFileSync } = require('node:child_process');
 
 const source = require('../scripts/lib/conference-pdf-source.js');
 const ledgerApi = require('../scripts/lib/conference-source-ledger.js');
@@ -228,3 +229,53 @@ test('账目复核拒绝跨成员、跨账目、来源漂移，以及重算描�
         sourceRoot: f.root, ledgerHandle: f.ledgerHandle, identityKey: firstKey, descriptor: result.descriptor,
     }), /metadata artifact SHA-256 differs/);
 });
+
+
+for (const entry of ['ledger-json', 'pdf', 'ledger-artifact', 'ledger-artifact-replaced']) {
+    test(`公开 ${entry} 入口遇到 FIFO 应拒绝，不能阻塞在打开文件上`, () => {
+        const f = ledgerFixture();
+        const target = entry === 'ledger-json' ? path.join(f.root, 'ledger.json')
+            : entry === 'pdf' ? f.filename : path.join(f.root, f.first.metadataFile);
+        if (entry !== 'ledger-artifact-replaced') {
+            fs.unlinkSync(target); execFileSync('mkfifo', [target]);
+        }
+        const code = `
+            const fs = require('node:fs'); const path = require('node:path');
+            const { execFileSync } = require('node:child_process');
+            const source = require(process.argv[1]); const ledger = require(process.argv[2]);
+            const [entry, root, target, recordText] = process.argv.slice(3);
+            try {
+                if (entry === 'ledger-json') {
+                    require(path.join(path.dirname(process.argv[1]), '..', 'conference-tools.js'))
+                        .validateLedgerFile({ ledgerDirectory: root, ledgerName: 'ledger.json' });
+                } else if (entry === 'pdf') {
+                    source.buildConferencePdfSource({ cacheRoot: root, record: JSON.parse(recordText) });
+                } else {
+                    const handle = ledger.loadLedgerHandle(path.join(root, 'ledger.json'));
+                    if (entry === 'ledger-artifact-replaced') {
+                        const originalOpen = fs.openSync;
+                        fs.openSync = (filename, ...args) => {
+                            if (filename === target) {
+                                fs.openSync = originalOpen; fs.unlinkSync(target); execFileSync('mkfifo', [target]);
+                            }
+                            return originalOpen(filename, ...args);
+                        };
+                        ledger.verifyMemberFiles(ledger.ledgerHandleSnapshot(handle).ledger, root);
+                    } else {
+                        source.buildConferencePdfSourceFromLedger({ sourceRoot: root, ledgerHandle: handle,
+                            identityKey: 'icassp-arnumber:1001' });
+                    }
+                }
+                process.exitCode = 2;
+            } catch (error) { console.error(error.message); process.exitCode = 1; }
+        `;
+        const result = spawnSync(process.execPath, ['-e', code,
+            require.resolve('../scripts/lib/conference-pdf-source.js'),
+            require.resolve('../scripts/lib/conference-source-ledger.js'),
+            entry, f.root, target, JSON.stringify(f.record)], { encoding: 'utf8', timeout: 2000 });
+        assert.equal(result.error, undefined, result.error?.message);
+        assert.equal(result.status, 1, result.stderr);
+        assert.match(result.stderr, /Unsafe ledger|regular, non-linked/);
+        assert.equal(fs.lstatSync(target).isFIFO(), true);
+    });
+}

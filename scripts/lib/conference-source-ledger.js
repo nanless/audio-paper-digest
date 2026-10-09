@@ -271,7 +271,7 @@ function readRegularJson(filename) {
     if (typeof filename !== 'string' || !path.isAbsolute(filename)) throw new Error('Ledger JSON filename must be absolute');
     const directory = path.dirname(filename);
     if (fs.realpathSync(directory) !== directory) throw new Error(`Unsafe ledger JSON directory: ${directory}`);
-    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_JSON_BYTES) throw new Error(`Unsafe ledger JSON file: ${filename}`);
@@ -283,7 +283,7 @@ function readRegularJson(filename) {
 }
 
 function readRegularBytes(filename) {
-    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.nlink !== 1) throw new Error(`Unsafe ledger artifact file: ${filename}`);

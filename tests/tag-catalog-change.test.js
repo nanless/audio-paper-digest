@@ -598,7 +598,13 @@ test('面对同一份固定数据，Node 与 Python 的词表升级检查结论�
         path.join(HISTORY, `${fixture.currentRegistrySha256}.json`));
     assert.deepEqual(Object.keys(CROSS_END_DISPLAY_EXPECTATIONS).sort(),
         fixture.cases.map(item => item.name).sort());
+    const unicodeCollisionRegistry = raw();
+    for (const facet of ['task', 'method']) {
+        unicodeCollisionRegistry.concepts.find(concept => concept.facet === facet && concept.status === 'active')
+            .aliases.push('\ufffd', '😀');
+    }
     const classificationInputs = [
+        { name: 'non-bmp-collision-reasons', from: raw(), to: unicodeCollisionRegistry },
         { name: 'alias-removal-to-current',
             from: JSON.parse(fs.readFileSync(OLD_ALIAS_REMOVAL, 'utf8')), to: raw() },
         { name: 'seed-to-current',

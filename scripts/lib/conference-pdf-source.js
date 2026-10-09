@@ -173,7 +173,7 @@ function readVerifiedPdf(cacheRoot, relativePath, maxBytes) {
     if (beforeOpen.isSymbolicLink()) throw fail('PDF must be a regular, non-linked cache file');
     let fd;
     try {
-        try { fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); }
+        try { fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); }
         catch (error) {
             // lstat 与 open 这一对有意重复：lstat 给出确定可复现的错误，O_NOFOLLOW 则
             // 堵住两者之间被换文件的窗口。
@@ -201,7 +201,7 @@ function readVerifiedArtifact(cacheRoot, relativePath, expectedSha256, label) {
     const filename = safePdfFilename(cacheRoot, relativePath);
     let fd;
     try {
-        try { fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); }
+        try { fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); }
         catch (error) {
             if (error.code === 'ELOOP') throw fail(`${label} must be a regular, non-linked cache file`);
             throw error;
