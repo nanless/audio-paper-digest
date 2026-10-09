@@ -68,6 +68,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/tag-catalog-change.js` | Node 库 | 比较两份词表，给出 `none/additive/destructive` 分类和理由；按 SHA 读取旧快照，核验 `registryUpgradeFrom`。沿用与确认条件见本页的分类词表维护说明。 |
 | `lib/tag-stage-record.js` | Node 库 | 只读识别新旧标签阶段格式，返回原阶段及实际字段名；两种格式混用时拒绝，也不会改写或补签旧记录。 |
 | `lib/prompt-text-versions.js` | Node 库 | 登记每个分析阶段当前使用的提示词正文路径和版本标识。旧记录按自己声明的版本取冻结的 v1 路径复算，未知版本直接报错；深度分析按它选正文，会议与 manual 的指纹也按它决定要哈希哪份文件。 |
+| `lib/prompt-rendering-contract.js` | Node 库 | 识别旧提示词替换可能改写的输入，仅使受影响论文的旧阶段失效；正常输入继续沿用原指纹和恢复记录。 |
 | `lib/prompt-history.js` | Node 库 | 按记录声明的 SHA 从 `prompts/history/` 取历史提示词字节。先看当前文件（含 `-v2`）是否就是那份字节，不符才查归档，查不到返回 `null` 让调用方维持原行为。 |
 | `lib/tag-record-update.js` | Node 库 | 更新或核验分析中的标签阶段记录，所选概念 ID 必须仍与原记录一致；无法核验时拒绝并说明原因。另外可只读盘点旧分类文件，不调用模型。 |
 | `lib/historical-tag-assignment.js` | Node 库 | 根据已完成且来源核验通过的历史分析结果选择标签，记录概念 ID 并去除上级重复标签。新版分配文件的名称包含词表 SHA 和分配 SHA；旧记录按原格式完整复算后读取，已有页面则按保存的对象及文件 SHA 找回原证据。 |
@@ -229,7 +230,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `paper-rethink-server.js` | 历史独立维护工具；博客已取消本机助手集成，不应为阅读、引用或复制 AI 提问启动此服务。旧接口实现仍保留供历史维护。 |
 | `validate-data-files.js` | 只读核验当前数据、跨文件论文集合、评分及兼容结果的来源记录。 |
 | `build-prompt-history-archive.js` | 从 git 历史抽取存量数据引用过的历史提示词字节，落到 `prompts/history/<sha256>.md`。默认只报告，`--write` 才落盘，可重复运行。 |
-| `backfill_papers.py` | 只补录历史论文 ID，不执行深度分析。 |
+| `backfill_papers.py` | 补录近期论文元数据，不执行深度分析；任一来源抓取失败时停止，不写成功报告。 |
 
 ## 配置、环境与通用工具
 
@@ -287,7 +288,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | 文件 | 职责 |
 |---|---|
 | `publish-wechat-full.py` | 生成或发布微信公众号内容。 |
-| `publish-to-feishu.py` | 生成飞书文档。 |
+| `publish-to-feishu.py` | 生成飞书文档；保留表格和行内 Markdown 原文，仅在接口明确返回成功时登记写入。 |
 | `publish-xiaohongshu.py` | 生成小红书文案与汇总内容。 |
 | `xiaohongshu-publisher.py` | 登录小红书，并用浏览器自动发布。 |
 

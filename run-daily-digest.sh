@@ -2,7 +2,7 @@
 # Codex 默认“某日论文速递”的入口脚本。默认使用 LLM/API；Manual v6 须显式 --manual。
 #
 # 本脚本负责项目脚本能自动跑完的所有阶段：
-# 抓取/筛选/深度分析 → 博客生成 → review → push → 发布后视觉任务规划与参考图准备。
+# 抓取/筛选/深度分析 → 博客生成 → 审查 → 推送 → 发布后视觉任务规划与参考图准备。
 # 最后的论文长图与汇总封面必须由 Codex 内置 image_gen 生成，项目脚本不得调用图像 API。
 
 set -eu
@@ -12,14 +12,15 @@ usage() {
 用法:
   ./run-daily-digest.sh YYYY-MM-DD [--from fetch|tasks|spec|analyze|generate|review|push|visual] [--api|--manual]
 
-默认运行 LLM/API 自动抓取、筛选、深度分析和博客 review。只有显式 --manual
-才切换 production Manual v6，并在需要逐论文人工产物的边界停下。
+默认运行 LLM/API 自动抓取、筛选、深度分析和博客审查。只有显式 --manual
+才切换正式人工流程 Manual v6，并在需要逐篇人工记录时停下。
 某一阶段失败后，修复问题并用 --from 从该阶段续跑：
   ./run-daily-digest.sh 2026-07-23 --from review
 
-脚本成功结束表示发布已完成且视觉输入已准备好；Codex 必须继续使用内置
+脚本成功结束表示博客已推送且视觉输入已准备好；Codex 必须继续使用内置
 image_gen 生成并登记 TOP 10 论文长图和汇总封面，直到 visual:status 和
-cover:status 均为 complete。
+cover:status 均为 complete。还须确认对应提交的 GitHub Pages 构建和部署成功，
+逐页检查正式地址、HTTP 200 与标题，再重新读取 digest:status。
 EOF
 }
 
@@ -111,10 +112,9 @@ case "$start_stage" in
     ;;
 esac
 
-# full-fetch.js deliberately binds a fresh crawl to its Beijing start date and
-# has no historical-date override. Reject a mismatched fetch before it can
-# archive or overwrite current runtime data. Historical batches may still
-# resume safely from tasks/spec/analyze/generate/review/push/visual.
+# full-fetch.js 将新抓取绑定到启动时的北京时间日期，不能指定历史日期。
+# 在归档或覆盖当前运行数据前拒绝日期不符的请求。历史批次可从已有数据续跑；
+# tasks/spec/analyze 只属于人工流程，API 流程仅允许后面的生成和发布阶段。
 if [ "$start_index" -eq 1 ]; then
   beijing_today="$(TZ=Asia/Shanghai date +%Y-%m-%d)"
   if [ "$target_date" != "$beijing_today" ]; then
@@ -207,3 +207,6 @@ echo "==> Codex 现在必须继续生成、目检并登记 TOP 10 论文长图�
 echo "==> 若用户明确取消视觉，改运行 digest:waive-visuals，禁止调用 image_gen 或伪造 complete。"
 echo "==> 最终门禁: npm run visual:status -- --date ${target_date}"
 echo "==> 最终门禁: npm run cover:status -- --date ${target_date}"
+
+echo "==> 还须确认对应提交的 GitHub Pages 构建、部署成功，并逐页核对正式地址、HTTP 200 与标题。"
+echo "==> 完成图片登记或后续推送后重新读取: npm run digest:status -- --date ${target_date}"

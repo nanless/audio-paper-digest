@@ -39,7 +39,7 @@ Cross-role execution is off by default: a `daily` checkout cannot run `history:*
 | `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | Refresh scores/Reader from bound sources; prepare figures only for the active call |
 | `npm run validate:data` | Read-only current data validation |
 | `npm run keyword:recall` | Recheck keyword-filter gold data |
-| `npm run backfill` | Backfill historical IDs only |
+| `npm run backfill` | Backfill recent paper metadata; stop on source failures without running historical analysis or publishing pages |
 | `npm run paper:rethink` | Historical maintenance tool; no longer integrated into the blog or needed by readers; see the [archived interface documentation](../paper-rethink-companion.md) |
 
 `full-fetch.js` fetches only the Beijing date on which it starts. Background data-only work may call `node scripts/full-fetch.js` directly to avoid npm/TTY wrapper issues. The same environment, role, and outside-sandbox requirements still apply.

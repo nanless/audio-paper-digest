@@ -45,7 +45,7 @@ npm run workspace:role -- status
 | `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | 从绑定来源批量刷新评分和 Reader，图片只为本次调用临时准备 |
 | `npm run validate:data` | 只读核验当前数据 |
 | `npm run keyword:recall` | 按金标准重跑关键词预筛 |
-| `npm run backfill` | 只补录历史论文 ID |
+| `npm run backfill` | 补录近期论文元数据，不执行历史全文分析或页面发布；来源抓取失败时停止 |
 | `npm run paper:rethink` | 历史独立维护工具，博客已取消集成，读者无需启动；见[历史说明](paper-rethink-companion.md) |
 
 `full-fetch.js` 只抓取其启动时的北京时间当天。后台只处理数据时可直接运行 `node scripts/full-fetch.js`，避免 npm/TTY 包装干扰；仍须遵守相同环境、角色和沙箱外运行要求。
@@ -210,6 +210,8 @@ projection v3 按冻结的 `outboundPostLinks` 将会议任务页对应到论文
 ## 可选渠道
 
 `npm run wechat`、`npm run xiaohongshu`、`npm run xhs-login`、`npm run xhs-publish` 和 `bash scripts/python-runtime.sh scripts/publish-to-feishu.py` 不属于默认日更。只有用户明确要求时才执行真实渠道写入。
+
+飞书转换保留表格的原始 Markdown、链接地址与公式符号；目前不将表格和行内 Markdown 转为原生富文本。HTTP 请求成功还不够，接口必须明确返回成功结果码，才计为写入成功。
 
 ## 测试
 
