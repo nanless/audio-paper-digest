@@ -59,13 +59,21 @@ function parserFailureIds(sourceRoot, generation, paperIds, runtime = {}) {
     return ids;
 }
 async function mapConcurrent(items, concurrency, worker) {
-    const results = new Array(items.length); let cursor = 0;
+    const results = new Array(items.length); let cursor = 0; let stopped = false; const failures = [];
     const run = async () => {
-        while (cursor < items.length) {
-            const index = cursor++; results[index] = await worker(items[index]);
+        while (!stopped && cursor < items.length) {
+            const index = cursor++;
+            try { results[index] = await worker(items[index]); }
+            catch (error) {
+                stopped = true; failures.push(error);
+            }
         }
     };
+    // 单篇可重试来源错误已由 worker 转成结果；外抛错误才中止派发。
+    // 等待已在途的来源完成封存，再将全部运行异常交还调用方。
     await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, run));
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, '多个在途出版元数据任务失败', { cause: failures[0] });
     return results;
 }
 function partialExitCode(output) {

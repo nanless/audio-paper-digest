@@ -424,3 +424,89 @@ test('v1 字段投影先核 XML 结构，并明确拒绝不能按旧字节规则
         assert.throws(() => parse(changed), /v1 字段投影/);
     }
 });
+
+for (const [retryable, peerFails] of [[false, false], [true, false], [false, true]]) {
+    test(`真实出版元数据入口在${retryable ? '单篇暂时失败后继续' : peerFails ? '两个运行故障后保留全部原异常' : '运行故障后停派并等待在途保存'}`, async t => {
+        const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'metadata-dispatch-stop-'));
+        t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+        const ids = ['2601.00001', '2601.00002', '2601.00003', '2601.00004'];
+        const plan = { queue: ids.map(arxivId => ({ paperId: `arxiv:${arxivId}`,
+            route: { kind: 'arxiv-fresh-fetch', arxivId } })) };
+        const files = {
+            freshArxivFetchedSourcesDir: path.join(root, 'sources'),
+            historicalArxivPublicationMetadataDir: path.join(root, 'sidecars'),
+            freshRewriteRunsDir: path.join(root, 'runs')
+        };
+        for (const directory of Object.values(files)) fs.mkdirSync(directory);
+        const cause = new Error('原始存储故障');
+        const failure = Object.assign(new Error('封存失败', { cause }), {
+            code: retryable ? 'ARXIV_METADATA_NETWORK_TRANSIENT' : 'EIO', retryable
+        });
+        const peerCause = new Error('同伴原始存储故障');
+        const peerFailure = new Error('同伴封存失败', { cause: peerCause });
+        let releasePeer;
+        const pendingPeer = new Promise(resolve => { releasePeer = resolve; });
+        const called = [], saved = [];
+        const originalLog = console.log;
+        console.log = () => {};
+        t.after(() => { console.log = originalLog; });
+        let settled = false;
+        const running = cli.main(['--apply', '--plan', path.join(root, 'plan.json'), '--generation', '1',
+            '--concurrency', '2'], {
+            files, config: { FILES: files }, projections: { readStableJson: () => ({ value: plan }) },
+            planApi: { normalizePlan: value => value }, metadata: {},
+            sidecars: {
+                sidecarDirectory: (_root, id) => path.join(files.historicalArxivPublicationMetadataDir, id),
+                findReusableOfficialAtom: () => null,
+                querySourceIdForSource: ({ arxivId }) => arxivId,
+                sealPublicationMetadata: ({ arxivId }) => {
+                    const filename = path.join(files.historicalArxivPublicationMetadataDir, `${arxivId}.json`);
+                    fs.writeFileSync(filename, JSON.stringify({ arxivId }));
+                    saved.push(arxivId);
+                    return { status: 'sealed', proof: { manifestSha256: sha(arxivId) } };
+                }
+            },
+            fetchOfficialArxivMetadata: async id => {
+                called.push(id);
+                if (id === ids[0]) throw failure;
+                if (id === ids[1]) {
+                    await pendingPeer;
+                    if (peerFails) throw peerFailure;
+                }
+                return { official: id };
+            }
+        });
+        const completion = running.then(value => { settled = true; return { value }; },
+            error => { settled = true; return { error }; });
+        try {
+            await new Promise(resolve => setImmediate(resolve));
+            assert.equal(settled, false, '入口必须等待已在途来源完成封存');
+            if (!retryable) assert.deepEqual(called, ids.slice(0, 2));
+        } finally { releasePeer(); }
+        const outcome = await completion;
+        if (retryable) {
+            assert.equal(outcome.error, undefined);
+            assert.equal(outcome.value.status, 'partial');
+            assert.equal(outcome.value.failed, 1);
+            assert.deepEqual(called, ids);
+            assert.deepEqual(saved.slice().sort(), ids.slice(1));
+        } else {
+            if (peerFails) {
+                assert.ok(outcome.error instanceof AggregateError);
+                assert.deepEqual(outcome.error.errors, [failure, peerFailure]);
+                assert.equal(outcome.error.cause, failure);
+                assert.equal(outcome.error.errors[0].cause, cause);
+                assert.equal(outcome.error.errors[1].cause, peerCause);
+            } else {
+                assert.equal(outcome.error, failure);
+                assert.equal(outcome.error.cause, cause);
+            }
+            assert.deepEqual(called, ids.slice(0, 2));
+            assert.deepEqual(saved, peerFails ? [] : [ids[1]]);
+        }
+        if (!peerFails) {
+            assert.equal(JSON.parse(fs.readFileSync(path.join(files.historicalArxivPublicationMetadataDir,
+                `${ids[1]}.json`))).arxivId, ids[1]);
+        }
+    });
+}
