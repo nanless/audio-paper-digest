@@ -35,7 +35,7 @@ function classifyFailure(error, now) {
     // 来源和后处理校验器有明确错误码，分类不受诊断措辞、语言或引用文本影响。
     if (['CONFERENCE_POSTPROCESS_INTEGRITY', 'CONFERENCE_SOURCE_CONTEXT_INTEGRITY',
         'CONFERENCE_EXTRACTION_RECEIPT_INTEGRITY', 'ARXIV_SOURCE_AUTHORITY_INTEGRITY',
-        'FRESH_ANALYSIS_INTEGRITY'].includes(code)) category = 'integrity';
+        'FRESH_ANALYSIS_INTEGRITY', 'READER_IMAGE_SOURCE_INTEGRITY'].includes(code)) category = 'integrity';
     else if (/insufficient.balance|GoUsageLimitError|quota.*exhaust|billing|ACCOUNT_POOL.*EXHAUST/i.test(`${code} ${message}`)) category = 'quota';
     // 认证失败同样必须同时认中英文：旧记录存英文，当前消息已汉化。
     // 前半段英文词逐字保持原样，后半段只加「authentication」的对应中文说法「认证失败」。
@@ -74,9 +74,10 @@ function classifyFailure(error, now) {
 function eligible(item, now) {
     if (item.status === 'complete') return false;
     if (item.status === 'analyzing') return false; // 请求被中断：结果可能已经计费。
-    // 旧抽取凭证失败可能曾被记为可重试；按稳定错误码检查，不改写旧失败记录。
+    // 旧抽取凭证或 Reader 图片来源失败可能曾被记为可重试；按确切错误码检查，不改写旧失败记录。
     if ((item.lastFailure?.retryable === false
-        || item.lastFailure?.code === 'CONFERENCE_EXTRACTION_RECEIPT_INTEGRITY')
+        || item.lastFailure?.code === 'CONFERENCE_EXTRACTION_RECEIPT_INTEGRITY'
+        || item.lastFailure?.code === 'READER_IMAGE_SOURCE_INTEGRITY')
         && item.retryAuthorizedAtAttempt !== item.attempts) return false;
     if (item.attempts - (item.retryBudgetStart || 0) >= MAX_ATTEMPTS) return false;
     return !item.retryNotBefore || Date.parse(now) >= Date.parse(item.retryNotBefore);

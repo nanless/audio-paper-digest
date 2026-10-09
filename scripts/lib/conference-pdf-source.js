@@ -306,7 +306,7 @@ function signedDescriptor(body) {
 
 /**
  * 只查看一条已核验的本地 PDF 记录，不写任何东西。`extractPdf` 如果传入，应当是
- * 同步的本地抽取器；它拿到字节的副本，可以返回文本或结构化产物。不传抽取器也是
+ * 同步的本地抽取器；它拿到 PDF 字节的副本，可以返回文本或结构化提取结果。不传抽取器也是
  * 合法的，此时相关字段明确写成不可得，而不是编造一份全文。
  */
 function buildSource({ cacheRoot, record, maxBytes, extractPdf, ledgerBinding = null } = {}) {
@@ -343,8 +343,8 @@ function resolveVerifiedLedgerMember({ sourceRoot, ledgerHandle, identityKey }) 
     if (member.status.state !== 'verified') throw fail('Conference PDF source requires a verified ledger member');
     const root = requireSafeDirectory(sourceRoot);
     const binding = ledgerBindingForMember(member, ledgerSha256);
-    // 在准入和重新核对时都检查 ledger 绑定的四份产物。下面的 build/replay 还会再读一次
-    // PDF；这处有意重复，堵住 ledger 与适配器描述对象之间被替换的可能。
+    // 首次读取和再次核验时，先检查来源清单绑定的元数据、文本与结构化提取文件。
+    // 下方的构建或重新核验函数另行读取 PDF，避免直接信任先前保存的描述对象。
     readVerifiedArtifact(root, member.metadataFile, member.metadataSha256, 'Conference metadata artifact');
     readVerifiedArtifact(root, member.textFile, member.textSha256, 'Conference text artifact');
     readVerifiedArtifact(root, member.artifactsFile, member.artifactsSha256, 'Conference structured-artifacts file');
@@ -352,8 +352,8 @@ function resolveVerifiedLedgerMember({ sourceRoot, ledgerHandle, identityKey }) 
 }
 
 /**
- * 只走 ledger 的准入桥。它从不接受调用方自己给的 PDF 记录：PDF 位置、身份和所有
- * 来源哈希都来自传入的、已加载的 ledger 成员。
+ * 只从已加载并核验的来源清单读取 PDF 位置、身份与来源哈希；
+ * 不接受调用方另行提供的 PDF 记录。
  */
 function buildConferencePdfSourceFromLedger({ sourceRoot, ledgerHandle, identityKey, maxBytes, extractPdf } = {}) {
     const checked = resolveVerifiedLedgerMember({ sourceRoot, ledgerHandle, identityKey });
@@ -366,7 +366,7 @@ function buildConferencePdfSourceFromLedger({ sourceRoot, ledgerHandle, identity
     });
 }
 
-/** 重新读取不可变的 PDF，确认之前保存的描述对象和产物仍然能对上。 */
+/** 核对 PDF 描述对象的字段、哈希格式、可用状态，以及预期的来源清单绑定。 */
 function validateDescriptorBody(body, expectedLedgerBinding) {
     const baseFields = [
         'contract', 'version', 'kind', 'identity', 'pdfRelativePath', 'pdfSha256', 'pdfBytes',

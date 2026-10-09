@@ -374,7 +374,7 @@ has_dataset: 否
         assert.strictEqual(r.rankBucket, '前10%');
     });
 
-    it('评分维度缺失时保留正文总分并返回契约错误', () => {
+    it('评分维度缺失时保留正文总分，同时报告评分检查失败', () => {
         const analysis = scoringAnalysis({ dimensions: [
             '创新性：2/2，理由充分。',
             '技术严谨性：1.5/1.5，理由充分。'
@@ -875,7 +875,7 @@ describe('OpenAI Responses 输出截断', () => {
 });
 
 describe('OpenAI Responses SSE 解析', () => {
-    it('优先重放 completed response', () => {
+    it('优先读取 completed 事件中的完整响应', () => {
         const completed = parseSseResponse([
             'event: response.output_text.delta',
             'data: {"type":"response.output_text.delta","delta":"hel"}',

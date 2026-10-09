@@ -12,6 +12,7 @@ const change = require('../scripts/lib/tag-catalog-change.js');
 const root = path.resolve(__dirname, '..');
 const oldPath = path.join(root, 'config/tag-catalog-history/85ed9e5a7cde6f58c3cb97b10d61401641dd2e39592680d2c343137bc7669d3a.json');
 const currentPath = path.join(root, 'config/tag-catalog.json');
+const correctedItnPath = path.join(root, 'config/tag-catalog-history/bb94d9a8d3b651e32d9f64c2eed96f2907cd3eeb4c4f5cbb681f3997a79e8ac5.json');
 const old = catalog.loadTagCatalog(oldPath);
 const current = catalog.loadTagCatalog(currentPath);
 const id = 'task.inverse-text-normalization';
@@ -32,10 +33,14 @@ test('ITN 正式分析输入说明口语识别输出到书面形式，并排除�
     assert.doesNotMatch(line, /把数字、日期与符号转写为可朗读形式/);
 });
 
-test('原词表档案 SHA 精确对应原字节；本次只修改 ITN 两个语义字段', () => {
-    assert.equal(crypto.createHash('sha256').update(fs.readFileSync(oldPath)).digest('hex'), old.registrySha256);
+test('ITN 方向修正前后的历史词表原字节保持，仅两个语义字段变化', () => {
+    assert.equal(crypto.createHash('sha256').update(fs.readFileSync(oldPath)).digest('hex'),
+        '85ed9e5a7cde6f58c3cb97b10d61401641dd2e39592680d2c343137bc7669d3a');
+    assert.equal(crypto.createHash('sha256').update(fs.readFileSync(correctedItnPath)).digest('hex'),
+        'bb94d9a8d3b651e32d9f64c2eed96f2907cd3eeb4c4f5cbb681f3997a79e8ac5');
     const before = JSON.parse(fs.readFileSync(oldPath));
-    const after = JSON.parse(fs.readFileSync(currentPath));
+    // 比较当时修正 ITN 后的固定快照；当前词表新增六处说明由 tag-catalog-change 测试另行核验。
+    const after = JSON.parse(fs.readFileSync(correctedItnPath));
     const term = after.concepts.find(concept => concept.id === id);
     const prior = before.concepts.find(concept => concept.id === id);
     assert.notEqual(term.definition, prior.definition);

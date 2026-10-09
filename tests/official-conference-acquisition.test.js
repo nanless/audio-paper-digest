@@ -310,7 +310,7 @@ test('HTTPS 来源白名单拒绝镜像站、HTTP、带查询串和不相干的�
     ]) assert.throws(() => acquisition.validateFetchUrl(provider, value, 'pdf'), /rejected/u);
 });
 
-test('目录预演只规划产物，不建输出目录，也不需要代理', async t => {
+test('目录预演只列出计划保存的文件，不创建输出目录', async t => {
     const { outputRoot } = temporaryRoot(t);
     const result = await acquisition.acquireCatalog({ providerId: 'odyssey-2026', outputRoot, apply: false });
     assert.equal(result.mode, 'dry-run');

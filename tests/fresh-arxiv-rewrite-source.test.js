@@ -172,7 +172,7 @@ test('每个新代次都重新抓取文本和 PDF 配对，同代次续跑则只
     assert.deepEqual({ textCalls, pdfCalls }, { textCalls: 2, pdfCalls: 2 });
 });
 
-test('抓取中断不会留下半成品代次，重试时重新抓取再保存两份产物', async t => {
+test('抓取中断后清除未完成目录，重试时重新获取并保存文本与 PDF', async t => {
     const f = fixture(t); const id = '2403.14817'; let textCalls = 0; let pdfCalls = 0;
     const options = { rootDir: f.sourceRoot, arxivId: id, generation: 1, now: '2026-09-07T00:00:00.000Z' };
     const fetchers = {

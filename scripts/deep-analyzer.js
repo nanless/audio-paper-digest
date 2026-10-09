@@ -12820,12 +12820,14 @@ function modelImageSourceBytes(image) {
     if (!encoded || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
         const error = new Error('图片 base64 为空或不规范');
         error.code = 'READER_IMAGE_SOURCE_INTEGRITY';
+        error.retryable = false;
         throw error;
     }
     const bytes = Buffer.from(encoded, 'base64');
     if (bytes.toString('base64') !== encoded) {
         const error = new Error('图片 base64 不可精确重放');
         error.code = 'READER_IMAGE_SOURCE_INTEGRITY';
+        error.retryable = false;
         throw error;
     }
     return bytes;
@@ -12837,6 +12839,7 @@ async function prepareApiReaderModelImagePayload(image) {
     if (source.length === 0 || source.length > API_READER_FIGURE_MAX_BYTES) {
         const error = new Error('Reader 图片源字节为空或超限');
         error.code = 'READER_IMAGE_SOURCE_INTEGRITY';
+        error.retryable = false;
         throw error;
     }
     const sourceSha256 = crypto.createHash('sha256').update(source).digest('hex');
@@ -12844,6 +12847,7 @@ async function prepareApiReaderModelImagePayload(image) {
     if (declaredSha256 && declaredSha256 !== sourceSha256) {
         const error = new Error('Reader 图片源字节与声明 SHA 不一致');
         error.code = 'READER_IMAGE_SOURCE_INTEGRITY';
+        error.retryable = false;
         throw error;
     }
     let decoded;

@@ -230,7 +230,7 @@ npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v5.json --ge
 
 `history:status` 只读运行记录，报告全部执行状态、完成百分比、最近失败、暂停与锁、各类汇总缺口、会议任务页及发布阻断。普通或 watch 查询对会议来源只检查路径、普通文件和 PDF 大小；单次 `--verify-sources true` 才重算全部论文信息及 PDF SHA，不能与 watch 同用。
 
-完成数量由当前计划和页面对应文件推导，不能拿某次计划的 4490 页、107 个日汇总、3 个会议汇总或 193 个任务页作通用门槛。完整任务要求来源状态全 `ready`、全部封存/本地来源仍有效、计划论文全部由当前实现暂存、精确的每日/会议/任务汇总集合齐全，以及 `pageCoverage` 覆盖每个冻结页面。额外或缺失任务、页面丢失/漂移、未覆盖页面均阻断；`staged`、汇总 `complete` 或私有文件存在不足以说明全历史已发布。
+完成数量由当前计划和页面对应文件推导，不能拿某次计划的 4490 页、107 个日汇总、3 个会议汇总或 193 个任务页作通用门槛。完整任务要求来源状态全 `ready`、全部封存/本地来源仍有效、计划论文全部由当前实现暂存、精确的每日/会议/任务汇总集合齐全，以及 `pageCoverage` 覆盖每个冻结页面。额外或缺失任务、页面丢失或内容变化、未覆盖页面均阻断；`staged`、汇总 `complete` 或私有文件存在不足以说明全历史已发布。
 
 不传 `--publication-id` 时，不读取发布事务或访问远端，状态不会把未选择发布的任务算作完整发布。指定后深核全部来源，要求发布计划 SHA 对应当前历史计划，默认实时核验远端身份及 OID；发布终验不能与 watch 同用。`--live-remote false` 仅作离线诊断，不能产生完整发布状态。
 
@@ -289,7 +289,7 @@ npm run history:postprocess -- --apply --crosswalk UUID --date YYYY-MM-DD --conc
 
 每篇先按当前标签注册表生成以 SHA 命名的标签分配记录；`blocked` 记录保留供审计，不能写入页面。暂存 run ID 由 crosswalk、分析任务、注册表、调度项及渲染实现 SHA 稳定推导，后者包括页面渲染、发布页面对应关系、标签生成、每日汇总和直接配置。实现改变会建立新的不可变暂存文件和 checkpoint，旧文件保留，但不能当作当前结果。
 
-渲染先在内存完成，复核实现身份后原子写入；若写文件后、保存 manifest 前中断，同一写入计划（intent）及分析任务只能续用逐字一致的部分文件，未知或漂移文件会拒绝。每日汇总要求全部成员使用同一渲染 SHA，且该日期全部历史论文页已核验暂存；它合并逐篇 manifest，只写受保护 runtime。后处理 checkpoint 按 crosswalk 及注册表 SHA 隔离并自哈希，注册表升级不能覆盖旧审计记录。
+渲染先在内存完成，复核实现身份后原子写入；若写文件后、保存 manifest 前中断，同一写入计划（intent）及分析任务只能续用逐字一致的部分文件，未知文件或内容与写入计划不一致的文件会拒绝。每日汇总要求全部成员使用同一渲染 SHA，且该日期全部历史论文页已核验暂存；它合并逐篇 manifest，只写受保护 runtime。后处理 checkpoint 按 crosswalk 及注册表 SHA 隔离并自哈希，注册表升级不能覆盖旧审计记录。
 
 暂存文件先完整写入临时文件并同步，再以不可覆盖的硬链接建立正式路径。显式续跑先核对原输入、来源、页面集合和完整 SHA，才可清理同机已退出写者留下的已知同 inode 临时硬链接；只读检查、未知链接和活写者链接仍拒绝。正式路径建立前留下的未知临时文件保留并阻断续跑；运行目录顶层的未知条目会报告绝对路径，不能自动删除；此次实现变化正常进入渲染指纹，旧页面须按正常路径重新生成。
 
@@ -318,19 +318,19 @@ npm run history:aggregate -- --apply --staging-runs UUID[,UUID...] [--date YYYY-
 
 `history:crosswalk prepare --apply`、`apply`、`apply-verified` 和 `finalize` 仍可显式维护旧状态，均受来源授权与一致性检查限制。decision 只能位于 `data/runtime/page-source-crosswalks/<UUID>/decisions/`，authority 及其直接命名证明文件只能位于 `data/runtime/paper-source-authorities/`。CLI 不接受任意路径或序列化伪授权对象，普通 `apply` 拒绝 `verified`。
 
-通用 `apply-verified` 从磁盘重载 arXiv 来源时得到 `productionAuthorized=false`，不能以旧测试文件或自行构造的新磁盘链取得生产权限。会议来源还须本进程内已核验的 plan 对象，CLI 不能凭文件恢复这项能力，相应写入或 finalize 会拒绝。旧流程所需页面 decision 必须精确绑定，不能按标题自动确认。
+通用 `apply-verified` 从磁盘重载 arXiv 来源时得到 `productionAuthorized=false`，不能以旧测试文件或自行构造的新磁盘链取得生产权限。会议来源还须本进程内已核验的 plan 对象，CLI 不能仅凭保存文件恢复这项生产授权，相应写入或 finalize 会拒绝。旧流程所需页面 decision 必须精确绑定，不能按标题自动确认。
 
-同论文的多个页面按 `paperId`、`pageKey` 排序形成 `identityGroups`，只有全部页面通过授权核验且为 `verified` 才算完整。`finalize` 逐项核对来源，独占创建不可变 `page-source-crosswalk-final-receipt-v1`；证明缺失、替换或 SHA 漂移均拒绝。会议来源在命令行下无法核验时直接拒绝：用于加载会议计划授权文件的生产代码还没有接入，只要完成状态里出现会议来源上下文（`conference-plan-source-context`），`finalize` 就直接报错退出，不会写出最终凭证。后续使用最终凭证（`final receipt`）仍须当前生产授权解析器/对象再次核验，只持有状态和凭证文件不构成持久生产授权。
+同论文的多个页面按 `paperId`、`pageKey` 排序形成 `identityGroups`，只有全部页面通过授权核验且为 `verified` 才算完整。`finalize` 逐项核对来源，独占创建不可变 `page-source-crosswalk-final-receipt-v1`；证明缺失、被替换或 SHA 不一致均拒绝。会议来源在命令行下无法核验时直接拒绝：用于加载会议计划授权文件的生产代码还没有接入，只要完成状态里出现会议来源上下文（`conference-plan-source-context`），`finalize` 就直接报错退出，不会写出最终凭证。后续使用最终凭证（`final receipt`）仍须当前生产授权解析器/对象再次核验，只持有状态和凭证文件不构成持久生产授权。
 
 ### 锁与中断恢复
 
 `prepare --apply` 只可自动恢复三种已核实中断状态：安全空目录、只有空 `decisions/` 的目录、或只有初始规范 `state.json` 的目录。额外文件、非空孤立 decision、符号链接及不可核验状态均拒绝。
 
-旧修改记录写入使用目录锁和规范 `owner.json`，记录持锁者（`owner`）、PID、主机名（`hostname`）、UUID token、开始/心跳时间、租期（`lease`）与自哈希。活 PID 永不抢占；同机死 PID 只有在证据完整、文件时间和心跳都超过 lease 时，才在独占 reclaim marker 下回收。远主机不能用本机 PID 探测，但也要求完整 owner、心跳与 mtime 均过期，再以 marker、inode 和 SHA 的 CAS 检查回收。新建、心跳新鲜、篡改或多余内容的锁不能猜测删除。SIGINT/SIGTERM 释放锁时须 token、PID、hostname、锁目录/owner inode 和 owner SHA 仍属于本进程，换主或漂移则拒绝删除；不得手工删除旧死锁。
+旧修改记录写入使用目录锁和规范 `owner.json`，记录持锁者（`owner`）、PID、主机名（`hostname`）、UUID token、开始和定时更新时间、有效期限（`lease`），以及按记录内容计算的 SHA。活 PID 永不抢占；同机死 PID 只有在证据完整、文件时间和心跳都超过 lease 时，才在独占 reclaim marker 下回收。远主机不能用本机 PID 探测，但也要求完整 owner、心跳与 mtime 均过期，先独占取得回收标记，再确认锁目录与 owner 文件的 inode 和 SHA 仍与先前读取一致后回收。新建、心跳新鲜、篡改或多余内容的锁不能猜测删除。SIGINT/SIGTERM 释放锁时须 token、PID、hostname、锁目录/owner inode 和 owner SHA 仍属于本进程，持锁者或锁内容变化则拒绝删除；不得手工删除旧死锁。
 
 单篇历史分析另有范围很窄、不能序列化的恢复权限：只在已有封存分析任务和来源的当前单篇上下文中，处理超过 24 小时、hostname 已改变、严格保持旧 `0755/0644` 四字段格式的论文锁。回收逐次检查目录及 owner 的 inode、SHA、mtime、硬链接、符号链接、额外项及 reclaim marker，事件原子保存到该篇 execution 目录并绑定 paper/run/source SHA。先按锁 inode 与 owner SHA 追加不可变 intent，回收后再追加 completion；后者保存中断时，下一次同来源任务只有在公共锁快照证明原 owner 已离开规范路径后才补写记录，不能覆盖旧事件或猜测仍存在的 owner 已回收。近期旧锁、当前 `0700/0600` 锁和普通论文分析调用均无此权限。
 
-`history:local-crawl-batch` 是 `history:archive-crawl-batch` 的别名，两者在 `package.json` 里各有一个入口，调用同一个已停用的实现。它们和 `history:conference-crawl-batch` 都已停用并拒绝写入，不启用旧本地/会议爬虫的特殊锁恢复能力。通用 crosswalk CLI 也不能猜测删除远程、活 PID、权限不明、空或畸形锁；前述受控 lease 恢复和特殊单篇权限不能扩大到这些调用。
+`history:local-crawl-batch` 是 `history:archive-crawl-batch` 的别名，两者在 `package.json` 里各有一个入口，调用同一个已停用的实现。它们和 `history:conference-crawl-batch` 都已停用并拒绝写入，不启用旧本地/会议爬虫的特殊锁恢复能力。通用 crosswalk CLI 也不能猜测删除远程、活 PID、权限不明、空或畸形锁；前述按有效期限检查的锁恢复和特殊单篇权限不能扩大到这些调用。
 
 ## 旧私有发布文件
 

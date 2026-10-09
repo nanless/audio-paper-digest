@@ -2,9 +2,9 @@ const crypto = require('crypto');
 const { PROMPT_RENDERING_CONTRACT, sequentialSubstitutionChangesInput } = require('./prompt-rendering-contract.js');
 
 /**
- * 筛选决定绑定的最小输入契约。
+ * 计算筛选决定所对应的标题、摘要与分类输入 SHA。
  *
- * 字段及序列化顺序属于持久化格式的一部分：filter-decisions.json 会保存
+ * 字段及序列化顺序属于已保存记录的格式：filter-decisions.json 会保存
  * 此函数产生的 SHA-256，生成、断点复用与数据校验必须共同调用本实现。
  */
 function buildFilterInputSha256(paper) {

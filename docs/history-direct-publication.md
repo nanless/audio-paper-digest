@@ -88,7 +88,7 @@ npm run history:direct-publication -- status --publication-id UUID
 
 如果新审查凭证对应的页面字节未变、页面已写入但尚未推送，activation intent/receipt 可重新绑定新 review SHA；已有提交凭证也可重新绑定新 review/activation SHA。恢复仍严格核对博客 `main`、工作区角色、基线 HEAD、路径白名单、逐文件 SHA、Git 精确差异、远端身份和 OID，不能通过更新凭证间的对应关系，掩盖来源或文件内容已经变化的事实。
 
-重绑定也属于写入操作。内部激活接口以 `apply: false` 预览时只返回拟用的意图，不改写已有意图或凭证；独立激活 CLI 的禁用规则不变。
+重绑定也属于写入操作。内部激活接口以 `apply: false` 预览时只返回拟保存的激活记录，不改写已有激活记录或凭证；独立激活 CLI 的禁用规则不变。
 
 ## 远端与网页验收
 

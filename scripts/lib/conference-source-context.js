@@ -1,8 +1,8 @@
 'use strict';
 
-// 从一个已核验的 plan 句柄和它 ledger 里指定的本地产物，构建不可变的纯来源分析
-// 上下文。另有一个名字不同、层级更低的构建器，只给孤立的 ledger/run 测试用。本模块
-// 没有 arXiv、网络、生成博客或 LLM 兜底。
+// 从当前进程核验过的会议计划及来源清单指定的本地文件，构建只包含来源资料的分析上下文。
+// 生产入口先检查计划，再由内部辅助函数核验来源清单和运行记录。
+// 本模块不获取 arXiv 来源、不联网、不生成博客，也不调用模型补充缺失来源。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -24,8 +24,8 @@ const OFFSET_UNIT = 'utf8-byte';
 const SOURCE_SNAPSHOT_BINDING_CONTRACT = 'conference-source-snapshot-binding-v2';
 const OBSERVATION_BINDING_CONTRACT = 'conference-source-observation-binding-v2';
 const PLAN_AUTHORITY_BINDING_CONTRACT = 'conference-source-plan-authority-binding-v2';
-// 预留给以后能复算 PDF 抽取器 receipt 的适配器。ledger 里的来源说明字符串，或产物
-// 自己声明的 structured-artifact 档案，按设计都不算这样的 receipt。
+// 此格式为能重新提取并核验结果的 PDF 提取凭证预留；来源清单中的说明文字，
+// 或结构化提取结果自行声明的格式，都不能代替这份凭证。
 const PDF_EXTRACTION_RECEIPT_CONTRACT = 'conference-pdf-extraction-receipt-v2';
 const NO_REPLAYABLE_RECEIPT = 'replayable-pdf-extraction-receipt-unavailable';
 const MIN_TEXT_CHARS = 1000;

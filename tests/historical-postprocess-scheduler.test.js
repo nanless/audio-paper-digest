@@ -165,7 +165,7 @@ test('试运行处理不会汇总同一日期下过时且未入选的兄弟记�
         'the old sibling staging proof must not reach the aggregate loader');
 });
 
-test('暂存期间分析从 A 漂移到 B 时，在把 A 记为已暂存之前就失败', async t => {
+test('暂存期间分析与标签分配的 SHA 改变时，拒绝将原记录标为已暂存', async t => {
     const f = fixture(t); const originalBuild = f.deps.buildAssignments;
     const originalStage = f.deps.stagePages; let drifted = false;
     f.deps.buildAssignments = args => originalBuild(args).map(assignment => drifted
@@ -289,7 +289,7 @@ test('未保存核验的分析运行记为失败，绝不进入暂存', async t 
     assert.equal(result.processed[0].status, 'failed'); assert.equal(f.stageCalls.length, 0);
 });
 
-test('被阻塞的确定性标签分配作为审计产物保留，但绝不暂存', async t => {
+test('受阻的标签分配保存为复核记录，不生成暂存页面', async t => {
     const f = fixture(t, 'pending'); const build = f.deps.buildAssignments;
     f.deps.buildAssignments = options => build(options).map(item => ({ ...item, status: 'blocked',
         blockedReasons: ['primary-task:unknown:#不存在的主任务'] }));

@@ -147,7 +147,7 @@ function validateManifest(manifest) {
     exact(manifest, ['contract', 'version', 'conference', 'members', 'memberSetSha256'], 'conference import manifest');
     if (manifest.contract !== CONTRACT || manifest.version !== VERSION) throw fail('unsupported conference import manifest contract');
     exact(manifest.conference, ['id', 'year'], 'manifest conference');
-    // 借用 ledger 的校验来检查会议名称写法，同时不接受这份导入契约之外的任何写作字段。
+    // 借用来源清单的校验检查会议名称；导入清单仍只接受上方列出的字段。
     const conference = { id: manifest.conference.id, year: manifest.conference.year };
     try { ledgerApi.createLedger(conference, [placeholderMember()]); }
     catch (error) {
@@ -166,8 +166,8 @@ function validateManifest(manifest) {
     return { contract: CONTRACT, version: VERSION, conference, members, memberSetSha256: manifest.memberSetSha256 };
 }
 
-// 用一条固定有效的记录，让 ledger 契约只校验会议输入，而不必把导入器放宽到按标题
-// 或临时拼的会议名。
+// 使用固定有效的占位记录调用来源清单校验，让本次检查只判断会议输入是否有效。
+// 不因缺少真实论文记录而放宽会议名称要求。
 function placeholderMember() {
     const hash = 'a'.repeat(64);
     return {

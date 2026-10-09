@@ -1,0 +1,12 @@
+{
+  "status": "partial",
+  "attempts": 1,
+  "lastFailure": {
+    "category": "paper",
+    "code": "READER_IMAGE_SOURCE_INTEGRITY",
+    "message": "图片 base64 为空或不规范",
+    "systemic": false,
+    "retryable": true,
+    "at": "2026-10-10T00:00:00.000Z"
+  }
+}

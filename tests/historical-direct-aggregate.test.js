@@ -395,7 +395,7 @@ test('直接汇总接受完整的当日分组，并生成绑定来源代次的 M
     assert.match(fs.readFileSync(output[0].pageFilename, 'utf8'), /\[Fresh arxiv:2608\.00001\]\(\/arxiv-one\/\)/);
 });
 
-test('直接汇总拒绝缺失、多出或来源漂移的发布证明', async t => {
+test('直接汇总拒绝发布来源记录缺失、多出字段或来源文本 SHA 不符', async t => {
     const f = await fixture(t); const registry = JSON.parse(fs.readFileSync(f.firstRegistry, 'utf8'));
     const entry = registry.entries.find(value => value.paperId === 'arxiv:2608.00001');
     const filename = path.join(entry.staging.directory, 'staging-input.json');
@@ -426,7 +426,7 @@ test('直接汇总复核官方元数据旁路授权，拒绝随后的原始字�
     assert.throws(() => direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE }), /raw Atom sidecar drifted/);
 });
 
-test('直接汇总让已保存并核验的历史 arXiv 版本可见，并拒绝身份告警漂移', async t => {
+test('直接汇总展示已核验的历史 arXiv 版本，拒绝版本警告被改动或版本记录被删除', async t => {
     const f = await fixture(t, { historicalVersion: true });
     const [aggregate] = direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE });
     const versioned = aggregate.members.find(member => member.paperId === 'arxiv:2608.00001');

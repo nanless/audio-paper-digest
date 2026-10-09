@@ -317,7 +317,7 @@ test('请求之后崩溃，恢复时不会产生第二次计费调用', async t 
         assert.equal(service.calls.length, 1); assert.equal(state.decisions[pid('100')].status, 'failed');
         assert.match(state.decisions[pid('100')].reason, /^LLM_TRANSPORT_UNAVAILABLE:INTERRUPTED_/);
     });
-    await t.test('产物写入失败时，复用已保留的回复', async t => {
+    await t.test('筛选决定文件保存失败后，复用已保存的回复', async t => {
         const service = await serverFixture(t); const f = fixture(t, service.endpoint);
         const original = fs.openSync; let injected = false;
         fs.openSync = function (filename, ...rest) {
@@ -330,7 +330,7 @@ test('请求之后崩溃，恢复时不会产生第二次计费调用', async t 
         assert.equal(service.calls.length, 1);
         assert.equal(filter.readFilter({ filterRoot: f.dirs.filters, filterId }).decisions[pid('100')].status, 'included');
     });
-    await t.test('状态 CAS 写入失败时，直接应用已保留的产物', async t => {
+    await t.test('状态文件保存失败后，直接应用已保存的筛选决定', async t => {
         const service = await serverFixture(t); const f = fixture(t, service.endpoint);
         const original = fs.renameSync; let injected = false;
         fs.renameSync = function (source, target) {
@@ -355,7 +355,7 @@ test('并发的活跃 runner 不能抢跑一次已付费请求', async t => {
     await first; assert.equal(service.calls.length, 1);
 });
 
-test('端点和请求漂移会在第二次传输之前就失败', async t => {
+test('请求端点不符或已保存的来源元数据被改动时，拒绝继续请求', async t => {
     const service = await serverFixture(t); const other = await serverFixture(t); const f = fixture(t, service.endpoint);
     await assert.rejects(() => runner.main(args(['--limit', '1']), { files: f.files,
         env: { ...f.env, PAPER_ANALYZER_ENDPOINT: other.endpoint } }), /endpoint differs/);

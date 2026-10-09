@@ -3428,37 +3428,44 @@ primary_method_tag: #基准测试
         from_sha = '85ed9e5a7cde6f58c3cb97b10d61401641dd2e39592680d2c343137bc7669d3a'
         snapshot = load_tag_catalog(
             Path(ROOT) / 'config' / 'tag-catalog-history' / (from_sha + '.json'))
-        classified = _classify_registry_change(snapshot, _PUBLISH_TAG_CATALOG)
-        self.assertEqual(classified['changeLevel'], 'additive')
-        self.assertEqual(
-            {reason['code'] for reason in classified['detail']['reasons']},
-            {'definition-updated', 'scope-note-updated'})
-        annotation = {
-            'contract': 'paper-tag-catalog-upgrade-v2', 'version': 2,
-            'fromRegistrySha256': from_sha,
-            'fromRegistryVersion': snapshot['version'],
-            'toRegistrySha256': _PUBLISH_TAG_CATALOG['registrySha256'],
-            'toRegistryVersion': _PUBLISH_TAG_CATALOG['version'],
-            'changeLevel': 'additive',
-            'reasons': ['definition-updated', 'scope-note-updated'],
-            'note': '明确确认 ITN 从口语识别结果恢复为书面文本的定义修正。',
-        }
-        paper = complete_paper()
-        manifest = {'version': 1}
-        stage = attach_tag_stage_record(paper, manifest)
-        rebind_tag_stage_record(
-            stage, registry_sha256=from_sha, annotation=annotation,
-            projection_sha256=tag_prompt_text_sha256(snapshot))
-        saved = copy.deepcopy((paper, manifest))
-        self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
-        self.assertEqual((paper, manifest), saved)
-        rebind_tag_stage_record(stage, drop_annotation=True)
-        with self.assertRaisesRegex(PublishDataValidationError, 'reason=annotation-invalid'):
-            _validate_tag_stage_record(paper, manifest, paper['arxivId'])
-        wrong_target = {**annotation, 'toRegistrySha256': '0' * 64}
-        rebind_tag_stage_record(stage, annotation=wrong_target)
-        with self.assertRaisesRegex(PublishDataValidationError, 'reason=annotation-invalid'):
-            _validate_tag_stage_record(paper, manifest, paper['arxivId'])
+        corrected_sha = 'bb94d9a8d3b651e32d9f64c2eed96f2907cd3eeb4c4f5cbb681f3997a79e8ac5'
+        corrected_path = Path(ROOT) / 'config' / 'tag-catalog-history' / (corrected_sha + '.json')
+        self.assertEqual(hashlib.sha256(corrected_path.read_bytes()).hexdigest(), corrected_sha)
+        corrected_catalog = load_tag_catalog(corrected_path)
+        # 本例核验历史 ITN 两字段修正；当前六处说明文字的升级另有独立测试。
+        with mock.patch('publish_common._PUBLISH_TAG_CATALOG', corrected_catalog), \
+                mock.patch.dict(globals(), {'_PUBLISH_TAG_CATALOG': corrected_catalog}):
+            classified = _classify_registry_change(snapshot, _PUBLISH_TAG_CATALOG)
+            self.assertEqual(classified['changeLevel'], 'additive')
+            self.assertEqual(
+                {reason['code'] for reason in classified['detail']['reasons']},
+                {'definition-updated', 'scope-note-updated'})
+            annotation = {
+                'contract': 'paper-tag-catalog-upgrade-v2', 'version': 2,
+                'fromRegistrySha256': from_sha,
+                'fromRegistryVersion': snapshot['version'],
+                'toRegistrySha256': _PUBLISH_TAG_CATALOG['registrySha256'],
+                'toRegistryVersion': _PUBLISH_TAG_CATALOG['version'],
+                'changeLevel': 'additive',
+                'reasons': ['definition-updated', 'scope-note-updated'],
+                'note': '明确确认 ITN 从口语识别结果恢复为书面文本的定义修正。',
+            }
+            paper = complete_paper()
+            manifest = {'version': 1}
+            stage = attach_tag_stage_record(paper, manifest)
+            rebind_tag_stage_record(
+                stage, registry_sha256=from_sha, annotation=annotation,
+                projection_sha256=tag_prompt_text_sha256(snapshot))
+            saved = copy.deepcopy((paper, manifest))
+            self.assertIsNone(_validate_tag_stage_record(paper, manifest, paper['arxivId']))
+            self.assertEqual((paper, manifest), saved)
+            rebind_tag_stage_record(stage, drop_annotation=True)
+            with self.assertRaisesRegex(PublishDataValidationError, 'reason=annotation-invalid'):
+                _validate_tag_stage_record(paper, manifest, paper['arxivId'])
+            wrong_target = {**annotation, 'toRegistrySha256': '0' * 64}
+            rebind_tag_stage_record(stage, annotation=wrong_target)
+            with self.assertRaisesRegex(PublishDataValidationError, 'reason=annotation-invalid'):
+                _validate_tag_stage_record(paper, manifest, paper['arxivId'])
 
     def test_tag_stage_current_catalog_requires_matching_versions_and_hashes(self):
         paper = complete_paper()
