@@ -472,6 +472,67 @@ def _validate_paper_tag_format(manifest):
             f'期望 64 位小写十六进制。')
 
 
+def verify_process_author_sources(state, completion):
+    module = load_publish_to_blog()
+    payload = json.dumps({'runtimeRoot': str(RUNTIME), 'state': state, 'completion': completion},
+                         ensure_ascii=False).encode('utf-8')
+    if len(payload) > 64 * 1024 * 1024:
+        raise ConferencePublicationError('会议作者来源核验输入超过上限')
+    node = shutil.which('node')
+    if not node:
+        raise ConferencePublicationError('会议作者来源核验需要 Node.js')
+    with tempfile.TemporaryFile() as source_file:
+        source_file.write(payload)
+        source_file.flush()
+        source_file.seek(0)
+        result = module._run_bounded_subprocess(
+            [node, str(ROOT / 'scripts/lib/conference-publication-author-replay-cli.js'), str(source_file.fileno())],
+            cwd=str(ROOT), env={key: value for key, value in os.environ.items()
+                                if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
+            timeout_seconds=60, max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),),
+        )
+    if result.returncode != 0 or result.timed_out or result.output_truncated:
+        raise ConferencePublicationError('会议作者来源未由官方元数据与已有封存全文重放，请先刷新作者/Reader：' + str(result.stderr[-2000:]))
+    try:
+        proof = json.loads(result.stdout)
+    except (ValueError, TypeError) as error:
+        raise ConferencePublicationError('会议作者来源核验响应无效') from error
+    if proof.get('verified') is not True or not isinstance(proof.get('papers'), list):
+        raise ConferencePublicationError('会议作者来源核验失败')
+    papers = {paper['paperId']: paper for paper in proof['papers']}
+    if set(papers) != set(state['items']) or len(papers) != len(proof['papers']):
+        raise ConferencePublicationError('会议作者来源没有完整覆盖论文集合')
+    return papers
+
+
+def validate_staged_authors(manifest, content, proof):
+    if any(manifest.get(key) != proof[key] for key in
+           ('analysisSha256', 'completionReceiptSha256', 'sourceSnapshotSha256', 'authors')):
+        raise ConferencePublicationError('会议暂存页面作者或分析来源与已重放记录不一致')
+    headings = list(re.finditer(r'^##\s+👥 作者与机构\s*$', content, flags=re.MULTILINE))
+    if len(headings) != 1:
+        raise ConferencePublicationError('会议页面必须恰好有一个完整作者机构区块')
+    # 正式 renderer 的作者区块是首个二级标题；只接纳其标准纯 Markdown 前缀。
+    # 不解析任意 Markdown/HTML：人工包装、代码围栏和 HTML 必须回到生成阶段修复。
+    prefix = content[:headings[0].start()]
+    frontmatter = re.match(r'\A---\r?\n[\s\S]*?\r?\n---(?:\r?\n|\Z)', prefix)
+    if frontmatter is None:
+        raise ConferencePublicationError('会议页面作者区块前必须有完整的标准 frontmatter')
+    prefix = prefix[frontmatter.end():]
+    if re.search(r'<(?:[!?]|/?[A-Za-z])', prefix) or re.search(r'^\s*(?:`{3,}|~{3,})', prefix, re.MULTILINE):
+        raise ConferencePublicationError('会议页面作者区块前不可有 HTML 包装、代码或注释')
+    if re.search(r'^##\s+', prefix, re.MULTILINE):
+        raise ConferencePublicationError('会议页面作者区块必须是标准布局的首个二级标题')
+    start = headings[0].end()
+    following = re.search(r'^##\s+', content[start:], flags=re.MULTILINE)
+    actual = content[start:start + following.start() if following else len(content)].strip()
+    expected = load_publish_to_blog().sanitize_markdown_for_publish('\n'.join(
+        f'- {author["name"]}：{"；".join(author["affiliations"])}' for author in proof['authors']
+    )).strip()
+    if actual != expected:
+        raise ConferencePublicationError('会议页面可见作者机构与已重放来源不一致')
+
+
 def process_bundle(conference_id, process_id):
     safe_uuid(process_id, 'processId')
     if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,80}', conference_id or ''):
@@ -493,6 +554,8 @@ def process_bundle(conference_id, process_id):
             or completion.get('authority', {}).get('conferenceId') != conference_id \
             or state.get('completionReceiptSha256') != declared:
         raise ConferencePublicationError('completion receipt 与 process state 不闭合')
+
+    author_proofs = verify_process_author_sources(state, completion)
 
     aggregate_proof = state.get('aggregate')
     if not isinstance(aggregate_proof, dict):
@@ -538,6 +601,7 @@ def process_bundle(conference_id, process_id):
             raise ConferencePublicationError(f'论文暂存记录与进程凭证不一致：{paper_id}')
         _validate_paper_tag_format(manifest)
         text = page_bytes.decode('utf-8')
+        validate_staged_authors(manifest, text, author_proofs[paper_id])
         required = [f'paper_digest_paper_id: "{paper_id}"',
                     'paper_digest_source_kind: conference',
                     f'paper_digest_conference_id: "{conference_id}"']
@@ -1059,7 +1123,7 @@ def generate(conference_id, process_id):
 
 def validate_generation(conference_id, process_id, repo, images, *,
                         allow_owned_target_drift=False, allow_committed=False,
-                        new_image_source_sha=None, new_source_sha=None):
+                        new_image_source_sha=None, new_source_sha=None, verify_author_sources=True):
     generation = load_generation(conference_id, process_id)
     body = dict(generation)
     declared = body.pop('generationSha256', None)
@@ -1073,6 +1137,14 @@ def validate_generation(conference_id, process_id, repo, images, *,
     if generation['baseHead'] != generation['remoteMainBefore'] \
             or generation['imageBaseHead'] != generation['imageRemoteMainBefore']:
         raise ConferencePublicationError('generation 基线未与远端闭合')
+    if verify_author_sources:
+        bundle = process_bundle(conference_id, process_id)
+        if generation.get('completionReceiptSha256') != bundle['completion']['receiptSha256'] \
+                or {record['path']: record['sourceSha256'] for record in generation['files']} != \
+                   {record['path']: record['sourceSha256'] for record in bundle['files']} \
+                or {record['path']: record['sourceSha256'] for record in generation['imageFiles']} != \
+                   {record['path']: record['sourceSha256'] for record in bundle['imageFiles']}:
+            raise ConferencePublicationError('会议 generation 与当前已核验来源和暂存页面不一致')
     if allow_committed:
         snapshot = remote_snapshot(repo)
         if snapshot['remoteIdentitySha256'] != generation['remoteIdentitySha256'] \
@@ -1730,7 +1802,7 @@ def publication_state(conference_id, process_id, *, verify_urls=False):
         return published_state(conference_id, process_id, repo, images, result, verify_urls=verify_urls)
     if not (publication_dir(conference_id, process_id) / 'generation.json').exists():
         return result
-    generation, snapshot, image_snapshot = validate_generation(conference_id, process_id, repo, images)
+    generation, snapshot, image_snapshot = validate_generation(conference_id, process_id, repo, images, verify_author_sources=False)
     if not (publication_dir(conference_id, process_id) / 'review.json').exists():
         result['nextAction'] = 'review'
         return result
@@ -1756,7 +1828,7 @@ def publication_state(conference_id, process_id, *, verify_urls=False):
     if verify_urls:
         # 让凭证创建与 push 串行化，跨多个工作区也一样。
         with shared_blog_repository_lock(repo, owner=f'conference-verify:{conference_id}'):
-            generation, current, current_images = validate_generation(conference_id, process_id, repo, images)
+            generation, current, current_images = validate_generation(conference_id, process_id, repo, images, verify_author_sources=False)
             if current != snapshot or current_images != image_snapshot:
                 raise ConferencePublicationError('verify 期间远端状态变化，请重试')
             accept_publication(conference_id, process_id, generation, receipt,

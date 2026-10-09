@@ -181,8 +181,9 @@ function recoverHistoricalArxivRun({ runId, date, arxivId, rootDir, now = new Da
         try {
             currentContractComplete = fresh.assertFreshSourceRecordMatchesRun(
                 paper, loaded.run, loaded.run.sourceRecords?.[arxivId]
-            ) === true && require('./model-text-sanitization.js').canReuseModelTextInputs(paper,
-                require('./fresh-analysis-context.js').readFreshSource(runDir, paper, loaded.run));
+            ) === true && (require('./model-text-sanitization.js').canReuseModelTextInputs(paper,
+                require('./fresh-analysis-context.js').readFreshSource(runDir, paper, loaded.run)) && require('./reader-author-source.js').canReuseReaderAuthorInputs(paper,
+                require('./fresh-analysis-context.js').readFreshSource(runDir, paper, loaded.run)));
         } catch {
             currentContractComplete = false;
         }

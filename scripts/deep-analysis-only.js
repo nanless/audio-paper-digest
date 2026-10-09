@@ -148,14 +148,14 @@ async function runDeepAnalysis(options = {}) {
     const papers = Array.isArray(existingData) ? existingData : (existingData.papers || []);
     const analyzedCount = papers.filter(paper => (
         isSuccessfulAnalysisRecord(paper)
-        && dailyFreshSources.isPaperBoundToPlan(paper, dailySourcePlan)
+        && dailyFreshSources.isPaperReusableForAnalysis(paper, dailySourcePlan)
     )).length;
     console.log(`📊 读取到 ${papers.length} 篇筛选后的论文，其中 ${analyzedCount} 篇已有与当前封存来源对应的成功分析\n`);
 
     const freshById = new Map(filteredData.papers.map(paper => [normalizedId(paper), paper]));
     const notAnalyzed = papers
         .filter(p => !isSuccessfulAnalysisRecord(p)
-            || !dailyFreshSources.isPaperBoundToPlan(p, dailySourcePlan))
+            || !dailyFreshSources.isPaperReusableForAnalysis(p, dailySourcePlan))
         .map(storedAnalysisRecord => mergeStoredAnalysisState(
             freshById.get(normalizedId(storedAnalysisRecord)) || storedAnalysisRecord,
             storedAnalysisRecord
@@ -203,7 +203,7 @@ async function runDeepAnalysis(options = {}) {
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
             if (isSuccessfulAnalysisRecord(latest)
-                && dailyFreshSources.isPaperBoundToPlan(latest, dailySourcePlan)) {
+                && dailyFreshSources.isPaperReusableForAnalysis(latest, dailySourcePlan)) {
                 return { paper: latest, skip: true };
             }
             return {

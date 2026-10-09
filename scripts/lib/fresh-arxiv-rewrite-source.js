@@ -316,6 +316,14 @@ function runtimeMetadataFromDetails(details, text, arxivId) {
         htmlAvailability: String(details.htmlAvailability || ''), htmlAttempts: details.htmlAttempts,
         warnings: Array.isArray(details.warnings) ? details.warnings.map(String) : [],
         ...(details.sourceVersion ? { sourceVersion: normalizeHistoricalVersionIdentity(details.sourceVersion, arxivId) } : {}) };
+    // 可重放原 HTML 是本地作者证据。总运行元数据预算不够时不封存它，
+    // 后续只能明确说明机构不可得，不能用旧解析数组替代原文。
+    if (metadata.readerAuthors?.sourceHtml
+        && (!require('./reader-author-parser.js').canRetainAuthorSourceHtml(metadata.readerAuthors.sourceHtml)
+            || Buffer.byteLength(canonicalJson(metadata), 'utf8') > MAX_TEXT_BYTES)) {
+        delete metadata.readerAuthors.sourceHtml;
+    }
+    if (Buffer.byteLength(canonicalJson(metadata), 'utf8') > MAX_TEXT_BYTES) fail('runtime metadata exceeds 64 MiB');
     return assertNoPersistentImageBytes(metadata);
 }
 function validateRuntimeMetadata(metadata, text, arxivId) {

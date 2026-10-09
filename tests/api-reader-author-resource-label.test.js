@@ -56,15 +56,17 @@ describe('Reader 资源标签不是作者机构', () => {
             .replace(/<a href="https:\/\/dsb-ifeval.github.io"[^>]*>.*?<\/a>/, '');
         assert.equal(parseArxivReaderAuthors(cheerio.load(html)).authors[1].affiliations[0], 'Project Research Institute');
     });
-    it('只刷新作者时，绑定证明会变，Reader、计划、评分和来源不变', () => {
+    it('旧来源无完整HTML时作者刷新明确机构不可得，Reader、计划、评分和来源不变', () => {
         const source = { text: 'Immutable full source', readerAuthors: structuredClone(oldParsed) };
         const sourceSha256 = crypto.createHash('sha256').update(source.text).digest('hex');
         const paper = { authors: expected.map(a => a.name), sourceSha256,
             apiReaderArticle: 'signed Reader bytes', apiReaderPlan: { signed: true }, score: 8,
             analysisManifest: { contracts: { apiReaderArticle: 'beginner-researcher-v3' },
                 sourceAcquisition: { sourceSha256 }, stages: { apiReaderArticle: { status: 'complete' } } } };
+        const sourceBefore = JSON.stringify(source);
         refreshApiReaderAuthorsFromSource(paper, source);
-        assert.deepEqual(paper.apiReaderAuthors.authors, expected);
+        assert.deepEqual(paper.apiReaderAuthors.authors, expected.map(author => ({ name: author.name, affiliations: [unavailable] })));
+        assert.equal(JSON.stringify(source), sourceBefore);
         assert.equal(paper.apiReaderArticle, 'signed Reader bytes');
         assert.deepEqual(paper.apiReaderPlan, { signed: true });
         assert.equal(paper.score, 8);

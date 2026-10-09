@@ -264,6 +264,11 @@ function isPaperBoundToPlan(paper, plan) {
     return paperProvesBinding(paper, plan, details);
 }
 
+function isPaperReusableForAnalysis(paper, plan) {
+    return isPaperBoundToPlan(paper, plan)
+        && require('./reader-author-source.js').canReuseReaderAuthorInputs(paper, readDailyFreshSource(plan, paper));
+}
+
 // 这一步只比内存里的记录。比对本身出错（证明字段缺失、类型不对）说明这篇给不出
 // 绑定证明，按未绑定处理；来源读取失败不走这条路，免得把读不出来当成来源换新。
 function paperProvesBinding(paper, plan, details) {
@@ -471,7 +476,7 @@ function withDailyFreshAnalysisContext(plan, callback) {
 }
 
 module.exports = { CONTRACT, VERSION, SOURCE_GENERATION, REFERENCE_CONTRACT, REFERENCE_VERSION, DailyFreshSourcePlanError, stableHash,
-    createDailyFreshSourcePlan, captureDailyFreshSources, readDailyFreshSource, isPaperBoundToPlan,
+    createDailyFreshSourcePlan, captureDailyFreshSources, readDailyFreshSource, isPaperBoundToPlan, isPaperReusableForAnalysis,
     prepareDailyPaper, createDailyAnalyzeFn, withDailyFreshAnalysisContext,
     dailyFreshSourceReference, readDailyFreshSourcePlan, requireDailyFreshSourceRecoveryPlan,
     withDailyFreshPaperSource, ephemeralReaderFigures, ephemeralPrimaryImage };

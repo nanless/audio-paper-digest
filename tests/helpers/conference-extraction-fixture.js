@@ -37,7 +37,7 @@ function buildPdf(label, lines = 120) {
     return Buffer.concat(chunks);
 }
 
-function runProductionExtraction({ sourceRoot, value, discoveryBinding, pdfBytes, stamp }) {
+function runProductionExtraction({ sourceRoot, value, discoveryBinding, pdfBytes, stamp, authors = null }) {
     const sourceRecord = { type: 'icassp-arnumber', value };
     const paperId = paperIdentity.canonicalConferencePaperId({ id: 'icassp-2026', year: 2026 }, sourceRecord);
     const sourceIdentity = `icassp-arnumber:${value}`;
@@ -47,7 +47,7 @@ function runProductionExtraction({ sourceRoot, value, discoveryBinding, pdfBytes
         try { fs.unlinkSync(path.join(sourceRoot, name)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     }
     const metadata = Buffer.from(JSON.stringify({ conferenceId: 'icassp-2026', year: 2026,
-        identity: { type: 'icassp-arnumber', value }, title: `Paper ${value}` }));
+        identity: { type: 'icassp-arnumber', value }, title: `Paper ${value}`, ...(authors ? { authors } : {}) }));
     const identityEvidence = { conferenceIdPointer: '/conferenceId', conferenceYearPointer: '/year',
         identityTypePointer: '/identity/type', identityValuePointer: '/identity/value' };
     const request = { contract: extraction.REQUEST_CONTRACT, version: extraction.VERSION, paperId, sourceIdentity,

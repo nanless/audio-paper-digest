@@ -102,7 +102,7 @@ async function main(options = {}) {
     console.log(`总论文数: ${papers.length}`);
 
     const notAnalyzed = papers.filter(p => !isSuccessfulAnalysisRecord(p)
-        || !dailyFreshSources.isPaperBoundToPlan(p, dailySourcePlan));
+        || !dailyFreshSources.isPaperReusableForAnalysis(p, dailySourcePlan));
     console.log(`未分析论文: ${notAnalyzed.length}`);
 
     if (RETRY_FAILED_READERS) {
@@ -155,7 +155,7 @@ async function main(options = {}) {
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
             if (isSuccessfulAnalysisRecord(latest)
-                && dailyFreshSources.isPaperBoundToPlan(latest, dailySourcePlan)) {
+                && dailyFreshSources.isPaperReusableForAnalysis(latest, dailySourcePlan)) {
                 return { paper: latest, skip: true };
             }
             return { paper: dailyFreshSources.prepareDailyPaper(latest || paper, dailySourcePlan), skip: false };

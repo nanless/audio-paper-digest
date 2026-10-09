@@ -442,8 +442,9 @@ async function analyzeRewrite(options, overrides = {}) {
         const complete = paper => {
             if (!deps.isSuccessfulAnalysisRecord(paper)) return false;
             assertFreshSourceRecordMatchesRun(paper, loaded.run, sources.records[paperId(paper)]);
-            return require('./model-text-sanitization.js').canReuseModelTextInputs(paper,
-                deps.readFreshSource(loaded.runDir, paper, loaded.run));
+            return (require('./model-text-sanitization.js').canReuseModelTextInputs(paper,
+                deps.readFreshSource(loaded.runDir, paper, loaded.run)) && require('./reader-author-source.js').canReuseReaderAuthorInputs(paper,
+                deps.readFreshSource(loaded.runDir, paper, loaded.run)));
         };
         let fatal = null;
         try {
@@ -540,8 +541,9 @@ async function promoteRewrite(options, overrides = {}) {
         }
         for (const paper of loaded.analysis.papers) {
             if (!deps.isSuccessfulAnalysisRecord(paper)) throw new Error(`${paperId(paper)} 不是完整的分析`);
-            if (!require('./model-text-sanitization.js').canReuseModelTextInputs(paper,
-                deps.readFreshSource(loaded.runDir, paper, loaded.run))) {
+            if (!(require('./model-text-sanitization.js').canReuseModelTextInputs(paper,
+                deps.readFreshSource(loaded.runDir, paper, loaded.run)) && require('./reader-author-source.js').canReuseReaderAuthorInputs(paper,
+                deps.readFreshSource(loaded.runDir, paper, loaded.run)))) {
                 throw new Error(`${paperId(paper)} 的旧 Unicode 模型输入需重新分析，不能提升为正式结果`);
             }
             assertFreshSourceRecordMatchesRun(paper, loaded.run, sources.records[paperId(paper)]);

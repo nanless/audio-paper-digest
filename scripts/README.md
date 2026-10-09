@@ -71,6 +71,11 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/prompt-text-versions.js` | Node 库 | 登记每个分析阶段当前使用的提示词正文路径和版本标识。旧记录按自己声明的版本取冻结的 v1 路径复算，未知版本直接报错；深度分析按它选正文，会议与 manual 的指纹也按它决定要哈希哪份文件。 |
 | `lib/prompt-rendering-contract.js` | Node 库 | 识别旧提示词替换可能改写的输入，仅使受影响论文的旧阶段失效；正常输入继续沿用原指纹和恢复记录。 |
 | `lib/model-text-sanitization.js` | Node 库 | 记录保留合法 Unicode 字符的请求清洗版本；生产恢复、提升和暂存核验当前来源，旧受影响输入须重分析，缺少受控来源不能推定可复用。旧成功结构和已发布只读状态不改。 |
+| `lib/reader-author-parser.js` | Node 库 | 纯作者解析与来源重放：校验完整原 HTML、结构产物及全文 SHA，或重放会议 PDF 上标；原文不可得时只使用元数据姓名和明确不可得机构。不会加载配置或请求模型。 |
+| `lib/reader-author-source.js` | Node 库 | 当前生产 Reader 作者复用资格；分析快跳、历史/会议恢复和发布前必须使用已核验来源重放，保留旧成功结构与只读统计。 |
+| `lib/reader-author-replay-cli.js` | Node 子进程入口 | Python 发布器通过有界私有文件描述符调用的纯作者重放桥接，限制输入字节并只输出布尔核验结果。 |
+| `lib/conference-publication-author-source.js` | Node 库 | 只读重放官方元数据、PDF、已有抽取来源与分析凭证，核完整姓名及作者机构；不新建来源、不重抽 PDF 或请求模型。 |
+| `lib/conference-publication-author-replay-cli.js` | Node 子进程入口 | 会议发布器通过私有文件描述符调用的离线来源桥；输出逐篇已核验作者及分析、完成凭证、来源快照 SHA，禁止网络与配置加载。 |
 | `lib/prompt-history.js` | Node 库 | 按记录声明的 SHA 从 `prompts/history/` 取历史提示词字节。先看当前文件（含 `-v2`）是否就是那份字节，不符才查归档，查不到返回 `null` 让调用方维持原行为。 |
 | `lib/tag-record-update.js` | Node 库 | 更新或核验分析中的标签阶段记录，所选概念 ID 必须仍与原记录一致；无法核验时拒绝并说明原因。另外可只读盘点旧分类文件，不调用模型。 |
 | `lib/historical-tag-assignment.js` | Node 库 | 根据已完成且来源核验通过的历史分析结果选择标签，记录概念 ID 并去除上级重复标签。新版分配文件的名称包含词表 SHA 和分配 SHA；旧记录按原格式完整复算后读取，已有页面则按保存的对象及文件 SHA 找回原证据。 |

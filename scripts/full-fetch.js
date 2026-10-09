@@ -1770,7 +1770,7 @@ async function runFullFetch() {
     const skippedAlreadyAnalyzed = dailySourcePlan
         ? filteredNew.filter(paper => {
             const storedAnalysisRecord = loadStoredAnalysisRecord(outputFile, paper);
-            return isSuccessfulAnalysisRecord(storedAnalysisRecord) && dailyFreshSources.isPaperBoundToPlan(storedAnalysisRecord, dailySourcePlan);
+            return isSuccessfulAnalysisRecord(storedAnalysisRecord) && dailyFreshSources.isPaperReusableForAnalysis(storedAnalysisRecord, dailySourcePlan);
         }).length
         : 0;
     if (skippedAlreadyAnalyzed > 0) {
@@ -1804,7 +1804,7 @@ async function runFullFetch() {
         preparePaperLocked: paper => {
             const storedAnalysisRecord = loadStoredAnalysisRecord(outputFile, paper);
             if (dailySourcePlan && isSuccessfulAnalysisRecord(storedAnalysisRecord)
-                && dailyFreshSources.isPaperBoundToPlan(storedAnalysisRecord, dailySourcePlan)) {
+                && dailyFreshSources.isPaperReusableForAnalysis(storedAnalysisRecord, dailySourcePlan)) {
                 return { paper: storedAnalysisRecord, skip: true, reason: '该论文已由其他进程完成' };
             }
             const merged = mergeStoredAnalysisState(paper, storedAnalysisRecord);

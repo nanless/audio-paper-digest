@@ -125,7 +125,7 @@ async function fixture(t, { mixedDailyConference = false, historicalVersion = fa
             '[paper](https://icml.cc/virtual/2026/poster/60946)', { status: 'none', candidates: [] })
     );
     const inventory = { counts: {}, ledgerSha256: sha('inventory-ledger'), pageSetSha256: planApi.stableHash(pages), pages };
-    const metadataSha = writeJson(metadata, { papers: [{ arnumber: '100', title: 'Conference fresh title' }] });
+    const metadataSha = writeJson(metadata, { papers: [{ arnumber: '100', title: 'Conference fresh title', authors: ['Author'] }] });
     const pdfSha = write(pdf, '%PDF-1.4\nconference bytes\n%%EOF\n');
     const icmlMetadataSha = mixedDailyConference ? writeJson(icmlMetadata, { count: 1, next: null, previous: null,
         results: [{ id: 60946, name: 'ICML daily title', virtualsite_url: '/virtual/2026/poster/60946',

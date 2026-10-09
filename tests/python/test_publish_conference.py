@@ -439,7 +439,7 @@ class ConferencePublishTests(unittest.TestCase):
                 'conferenceId': conference_id, 'processId': process_id,
                 'baseHead': self.base['head'], 'remoteMainBefore': self.base['remoteMain'],
                 'remoteIdentitySha256': self.base['remoteIdentitySha256'],
-                'files': [r], 'imageFiles': [],
+                'files': [r], 'imageFiles': [], 'completionReceiptSha256': 'a' * 64,
                 'imageBaseHead': image_snapshot['head'],
                 'imageRemoteMainBefore': image_snapshot['remoteMain'],
                 'imageRemoteIdentitySha256': image_snapshot['remoteIdentitySha256'],
@@ -459,6 +459,8 @@ class ConferencePublishTests(unittest.TestCase):
                                      'protocol': 'offline-protocol'}]}
         with mock.patch.object(M, 'blog_repo', return_value=self.repo), \
                 mock.patch.object(M, 'image_repo', return_value=images), \
+                mock.patch.object(M, 'process_bundle', return_value={'files': [r], 'imageFiles': [],
+                    'completion': {'receiptSha256': 'a' * 64}}), \
                 mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
                 mock.patch.object(M, 'require_content_review_runtime'), \
                 mock.patch.object(M, 'review_pages', return_value=content_review), \

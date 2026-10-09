@@ -22,7 +22,9 @@ function fixture(t) {
     const paper = { arxivId:id,authors:['Source Author'], sourceSha256:sha(text),
         apiReaderArticle:result.article, apiReaderPlan:result.plan, apiReaderFigures:result.figures,
         analysisManifest:{contracts:{apiReaderArticle:deep.API_READER_ARTICLE_CONTRACT},
-            sourceAcquisition:{sourceSha256:sha(text)},stages:{apiReaderArticle:{status:'complete'}}} };
+            sourceAcquisition:{sourceSha256:sha(text),structuredArtifactsSha256:source.structuredArtifacts.payloadSha256},
+            stages:{apiReaderArticle:{status:'complete',structuredArtifactsSha256:source.structuredArtifacts.payloadSha256}}} };
+    deep.refreshApiReaderAuthorsFromSource(paper,source);
     return { source, paper, directory };
 }
 function invoke(f, onMaterialize) {

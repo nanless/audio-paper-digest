@@ -407,6 +407,9 @@ function promoteRun(options) {
         if (!require('./model-text-sanitization.js').canReuseModelTextInputs(paper, sourceDetails)) {
             throw new Error(`旧 Unicode 模型输入需重新分析，不能提升正式记录：${id}`);
         }
+        if (!require('./reader-author-source.js').canReuseReaderAuthorInputs(paper, sourceDetails)) {
+            throw new Error(`作者来源需从封存全文重新核验，不能提升正式记录：${id}`);
+        }
     });
     const inputSha256 = jsonHash(analysis);
     return withBatchPaperLocks(ctx, options, () => withFileLockSync(ctx.canonicalPath, () => {

@@ -46,4 +46,4 @@ function canReuseModelTextInputs(paper, sourceDetails = null) {
 }
 
 module.exports = { MODEL_TEXT_SANITIZATION_CONTRACT, containsSupplementaryCharacter,
-    modelTextFingerprintFields, legacyModelTextNeedsReplay, canReuseModelTextInputs };
+    modelTextFingerprintFields, legacyModelTextNeedsReplay, canReuseModelTextInputs, currentModelInputSource };

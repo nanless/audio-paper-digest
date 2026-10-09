@@ -50,6 +50,9 @@ function loadCompletedHistoricalAnalysisRun({ analysisRoot, runId } = {}, depend
         if (!require('./model-text-sanitization.js').canReuseModelTextInputs(paper, source)) {
             fail(`${paperIdOf(paper)} 的旧 Unicode 模型输入需重分析，不能直接复用标签。`);
         }
+        if (!require('./reader-author-source.js').canReuseReaderAuthorInputs(paper, source)) {
+            fail(`${paperIdOf(paper)} 的作者来源需从封存全文重新核验，不能直接复用标签。`);
+        }
     }
     const handle = Object.freeze(Object.create(null)); HANDLES.add(handle);
     HANDLE_DATA.set(handle, Object.freeze({ runId, analysisFile, analysisFileSha256: current.sha256,

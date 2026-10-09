@@ -2943,9 +2943,9 @@ primary_task_tag: #音视频生成
         );
         const parsedVocalAuthors = parseArxivReaderAuthors(malformedVocalAuthors);
         assert.deepStrictEqual(parsedVocalAuthors.authors, [
-            { name: 'Luc Debaupte', affiliations: ['Besimple AI, San Mateo, CA'] },
+            { name: 'Luc Debaupte', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] },
             { name: 'Tyler Baumgartner', affiliations: ['Besimple AI, San Mateo, CA'] },
-            { name: 'Brandon Tai', affiliations: ['Besimple AI, San Mateo, CA'] }
+            { name: 'Brandon Tai', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] }
         ]);
         const resolvedVocalAuthors = resolveApiReaderAuthors(
             {
@@ -2959,14 +2959,18 @@ primary_task_tag: #音视频生成
         assert.deepStrictEqual(
             resolvedVocalAuthors.authors.map(author => author.name),
             [
-                'Luc Debaupte', 'Tyler Baumgartner', 'Brandon Tai',
+                'Models Luc Debaupte', 'Tyler Baumgartner', 'Brandon Tai',
                 'Candice Fan', 'Bill Wang', 'Yi Zhong'
             ]
         );
-        assert.ok(resolvedVocalAuthors.authors.every(author => (
-            author.affiliations.length === 1
-            && author.affiliations[0] === 'Besimple AI, San Mateo, CA'
-        )));
+        assert.deepStrictEqual(resolvedVocalAuthors.authors.map(author => author.affiliations), [
+            ['机构信息未在 arXiv HTML 中可靠披露'],
+            ['Besimple AI, San Mateo, CA'],
+            ['机构信息未在 arXiv HTML 中可靠披露'],
+            ['机构信息未在 arXiv HTML 中可靠披露'],
+            ['机构信息未在 arXiv HTML 中可靠披露'],
+            ['机构信息未在 arXiv HTML 中可靠披露']
+        ]);
         const underwaterHtml = institution => (
             '<h1 class="ltx_title ltx_title_document">Title'
             + '<span class="ltx_pubnote ltx_role_thanks"><span class="ltx_note_name">Thanks: </span>'
@@ -3073,7 +3077,7 @@ primary_task_tag: #音视频生成
         );
         assert.deepStrictEqual(completedAuthors.authors, [
             { name: '戊', affiliations: ['机构 D'] },
-            { name: '己', affiliations: ['机构 D'] }
+            { name: '己', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] }
         ]);
         const noAffiliationUnionLeak = resolveApiReaderAuthors(
             { authors: ['Author One', 'Author Two', 'Author Three'] },

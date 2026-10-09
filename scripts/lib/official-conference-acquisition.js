@@ -8,7 +8,6 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const cheerio = require('cheerio');
 const { writeImmutableFile, recoverImmutableFileLink } = require('./immutable-file.js');
-const { detectHttpConnectProxyUrl, createProxyDispatcher } = require('../utils.js');
 
 const VERSION = 1;
 const HTTP_RECEIPT_CONTRACT = 'official-conference-http-response-v1';
@@ -1135,9 +1134,9 @@ async function readResponseBytes(response, maxBytes, label) {
 }
 
 async function fetchOfficial({ provider, url, kind, maxBytes, timeoutMs = REQUEST_TIMEOUT_MS }, dependencies = {}) {
-    const proxyUrl = (dependencies.detectProxy || detectHttpConnectProxyUrl)();
+    const proxyUrl = (dependencies.detectProxy || require('../utils.js').detectHttpConnectProxyUrl)();
     if (!proxyUrl) fail('project HTTP CONNECT proxy is required');
-    const dispatcher = (dependencies.createDispatcher || createProxyDispatcher)(proxyUrl);
+    const dispatcher = (dependencies.createDispatcher || require('../utils.js').createProxyDispatcher)(proxyUrl);
     const fetchImpl = dependencies.fetchImpl || globalThis.fetch;
     if (typeof fetchImpl !== 'function') fail('fetch 不可用');
     const requestedUrl = validateFetchUrl(provider, url, kind); let current = requestedUrl; const redirects = [];

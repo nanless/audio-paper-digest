@@ -186,7 +186,7 @@ function fixture(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-direct-runner-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const blog = path.join(root, 'blog'); const metadata = path.join(root, 'metadata.json'); const pdf = path.join(root, 'conference.pdf');
-    const metadataSha256 = json(metadata, { papers: [{ arnumber: '100', title: 'POISON_METADATA_TITLE' }] });
+    const metadataSha256 = json(metadata, { papers: [{ arnumber: '100', title: 'POISON_METADATA_TITLE', authors: ['Author'] }] });
     write(pdf, '%PDF-1.4\nconference bytes\n%%EOF\n'); const pdfSha256 = sha(fs.readFileSync(pdf));
     const pages = [
         page(blog, 'content/posts/arxiv.md', 'ArXiv page', { type: 'daily', key: '2026-01-01' }, { status: 'single', candidates: [{ scheme: 'arxiv', value: '2601.00001', sources: ['body:arxiv-link'] }] }),

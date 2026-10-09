@@ -45,6 +45,10 @@ function canonical(index) {
 function completed(executionId, index = 0, analysisText) {
     const paperId = `conference:icassp:2026:icassp-arnumber:${100 + index}`;
     const base = validAnalysisPaper(`2609.${String(10000 + index).slice(-5)}`, {}, analysisText);
+    const sourceText = 'Original conference PDF text';
+    base.sourceSha256 = sha256(sourceText);
+    const artifactBody = { tables: [], formulas: [], figures: [], flattenedTextSha256: base.sourceSha256 };
+    const structuredArtifacts = { ...artifactBody, payloadSha256: sha256(JSON.stringify(artifactBody)) };
     const analysis = analysisText || canonical(index);
     const parsed = require('../scripts/utils.js').parseAnalysis(analysis);
     const article = `会议 Reader 全新正文 ${index}。`; const articleSha = sha256(article);
@@ -77,7 +81,7 @@ function completed(executionId, index = 0, analysisText) {
     delete paper.arxivId;
     paper.sourceSha256 = paper.sourceSha256 || '1'.repeat(64);
     paper.analysisManifest.sourceAcquisition = { sourceSha256: paper.sourceSha256,
-        structuredArtifactsSha256: '2'.repeat(64), analysisSource: 'conference_pdf_text',
+        structuredArtifactsSha256: structuredArtifacts.payloadSha256, analysisSource: 'conference_pdf_text',
         fullTextAvailable: true };
     Object.assign(paper.analysisManifest.contracts, { apiReaderArticle: 'beginner-researcher-v3',
         apiReaderSourceBindings: 'api-reader-source-bindings-v4',
@@ -97,7 +101,7 @@ function completed(executionId, index = 0, analysisText) {
             contract: 'api-reader-quality-metrics-v2', rawIssueCount: 0, waivedIssueCount: 0, blockingIssueCount: 0, warningCount: 0 },
         sourceBindingsContractVersion: 'api-reader-source-bindings-v4', sourceBindingsSha256: plan.sourceBindingsSha256,
         sourceBindingsSourceTextSha256: paper.sourceSha256, tableBindingCount: 0, formulaBindingCount: 0,
-        structuredArtifactsSha256: '2'.repeat(64) };
+        structuredArtifactsSha256: structuredArtifacts.payloadSha256 };
     const analysisRecord = { status: 'complete', papers: [paper] };
     const analysisFileSha256 = sha256(JSON.stringify(analysisRecord)); const completedAt = '2026-09-07T00:00:00.000Z';
     const receiptBody = { contract: 'conference-analysis-completion-receipt-v1', version: 1, executionId,
@@ -105,8 +109,25 @@ function completed(executionId, index = 0, analysisText) {
     const completionReceipt = { ...receiptBody, receiptSha256: api.stableHash(receiptBody) };
     return { planKey: 'a', analysis: analysisRecord, analysisFileSha256, run: { status: 'complete', executionId, paperId,
         conference: { id: 'icassp-2026', year: 2026 }, capabilities: WEAK, sourceSnapshotSha256: 'b'.repeat(64),
-        analysisSha256: analysisFileSha256, completionReceipt }, source: { sourceDetails: { text: 'Original conference PDF text', structuredArtifacts: {
-            tables: [], formulas: [], figures: [] } } } };
+        analysisSha256: analysisFileSha256, completionReceipt }, source: { sourceDetails: { source: 'conference_pdf_text', text: sourceText, structuredArtifacts } } };
+}
+
+function bindFixtureSource(paper, details) {
+    paper.sourceSha256 = sha256(details.text);
+    Object.assign(paper.analysisManifest.sourceAcquisition, {
+        sourceSha256: paper.sourceSha256, structuredArtifactsSha256: details.structuredArtifacts.payloadSha256
+    });
+    const stage = paper.analysisManifest.stages.apiReaderArticle;
+    Object.assign(stage, { structuredArtifactsSha256: details.structuredArtifacts.payloadSha256,
+        sourceBindingsSourceTextSha256: paper.sourceSha256 });
+    paper.apiReaderAuthors = require('../scripts/lib/reader-author-parser.js').resolveVerifiedReaderAuthors(paper, details);
+    stage.readerAuthorsSha256 = api.stableHash(paper.apiReaderAuthors);
+    stage.readerAuthorIdentitySha256 = paper.apiReaderAuthors.identitySha256;
+    paper.apiReaderResources.sourceTextSha256 = paper.sourceSha256;
+    const { identitySha256, ...resourceBody } = paper.apiReaderResources;
+    paper.apiReaderResources.identitySha256 = api.stableHash(resourceBody);
+    stage.resourceIdentitySha256 = paper.apiReaderResources.identitySha256;
+    paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256 = paper.apiReaderResources.identitySha256;
 }
 
 function fixture(t, extraRuns = []) {
@@ -701,7 +722,7 @@ test('页面生成程序升级后，使用新的暂存身份，不覆盖原文�
 });
 
 test('真实计划授权、来源复核和已保存并核验的分析，可以暂存一篇会议论文', async t => {
-    const fixture = productionPlanFixture(t); const executionId = '99999999-9999-4999-8999-999999999999';
+    const fixture = productionPlanFixture(t, { authors: ['作者'] }); const executionId = '99999999-9999-4999-8999-999999999999';
     const analysisRoot = path.join(fixture.root, 'analysis'); const stagingRoot = path.join(fixture.root, 'page-staging');
     adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
         sourceRoot: fixture.sourceRoot, analysisRoot, executionId, now: '2026-09-07T00:00:00.000Z' });
@@ -710,6 +731,8 @@ test('真实计划授权、来源复核和已保存并核验的分析，可以�
         title: loaded.analysis.papers[0].title, conference: loaded.analysis.papers[0].conference,
         externalId: loaded.analysis.papers[0].externalId };
     delete paper.arxivId;
+    paper.authors = loaded.analysis.papers[0].authors;
+    bindFixtureSource(paper, loaded.source.sourceDetails);
     const analysis = { ...loaded.analysis, status: 'complete', completedAt: '2026-09-07T01:00:00.000Z', papers: [paper] };
     fs.writeFileSync(path.join(analysisRoot, executionId, 'analysis.json'), `${JSON.stringify(analysis, null, 2)}\n`);
     adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId }));
@@ -852,6 +875,7 @@ test('命令行要求完整授权、已配置的根目录和互不相同的 UUID
     assert.throws(() => cli.configured({ conferenceAnalysisDir: 'relative' }), /configured absolute path/);
 });
 
+
 test('会议缓存兼容旧标签字段，但不能混用新旧字段', () => {
     const current = completed('88888888-8888-4888-8888-888888888888').analysis.papers[0];
     const expected = api.getConsistentPublicationFields(current);
@@ -934,9 +958,9 @@ test('会议后处理在生成页面前拒绝旧清洗可能损坏的来源，�
     assert.equal(renders, 0);
     assert.equal(fs.existsSync(stagingRoot), false);
     record.source.sourceDetails.text = 'Source defines x = y + 1.';
+    bindFixtureSource(record.analysis.papers[0], record.source.sourceDetails);
     assert.equal(api.stagePaper(options, f.dependencies).status, 'staged');
 });
-
 for (const replacementKind of ['file', 'symlink', 'directory']) test(`blocked 分配读取后换主为 ${replacementKind} 时保留竞争者`, t => {
     const f = fixture(t);
     const stagingRoot = path.join(f.root, 'replacement-proof');

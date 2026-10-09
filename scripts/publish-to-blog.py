@@ -1726,13 +1726,30 @@ def _load_review_image_from_local_repo(url):
         os.environ.get('PAPER_DIGEST_IMAGE_REPO',
                        str(Path.home() / 'code' / 'github_repos' / 'audio-paper-digest-images'))
     ).expanduser().resolve()
-    target = (image_repo / relative).resolve()
-    if not target.is_relative_to(image_repo) or target.is_symlink() or not target.is_file():
+    target = image_repo / relative
+    if any(part in ('', '.', '..') for part in relative.split('/')):
+        return None
+    node = target
+    while node != image_repo:
+        if node.is_symlink():
+            return None
+        node = node.parent
+    if not target.is_file():
         return None
     media_type = _IMAGE_REPO_SUFFIX_MIME.get(target.suffix.lower())
     if media_type not in REVIEW_IMAGE_MIME_TYPES:
         return None
-    raw = target.read_bytes()
+    try:
+        descriptor = os.open(target, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    with os.fdopen(descriptor, 'rb') as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        if info.st_size > REVIEW_IMAGE_MAX_BYTES:
+            raise PublishDataValidationError('本地图片仓图片为空或超过 8 MiB review 上限')
+        raw = source.read(REVIEW_IMAGE_MAX_BYTES + 1)
     if not raw or len(raw) > REVIEW_IMAGE_MAX_BYTES:
         raise PublishDataValidationError('本地图片仓图片为空或超过 8 MiB review 上限')
     _validate_image_signature(media_type, raw)
@@ -3875,26 +3892,70 @@ def normalize_digest_index_reader_surface(text):
     }
 
     def chinese_integer(raw):
-        section = digit = total = 0
+        if not raw:
+            return None
+        if all(char in digits for char in raw):
+            return str(int(''.join(str(digits[char]) for char in raw)))
+        for large_char, large_unit in [('亿', 100000000), ('万', 10000)]:
+            if large_char in raw:
+                if raw.count(large_char) != 1:
+                    return None
+                left, right = raw.split(large_char)
+                if not left:
+                    return None
+                # 大单位后的单个低位数字可能是口语省略，不猜其位值。
+                if right and all(char in digits for char in right) and right[0] not in ('零', '〇'):
+                    return None
+                left_number = chinese_integer(left)
+                right_number = chinese_integer(right) if right else '0'
+                if left_number is None or right_number is None:
+                    return None
+                if int(right_number) >= large_unit:
+                    return None
+                return str(int(left_number) * large_unit + int(right_number))
+        total = 0
+        pending = None
+        previous_unit = 10000
+        explicit_zero_gap = False
         for char in raw:
             if char in digits:
-                digit = digits[char]
+                if pending is not None and pending != 0:
+                    return None
+                pending = digits[char]
+                if pending == 0 and total:
+                    explicit_zero_gap = True
                 continue
-            unit = {'十': 10, '百': 100, '千': 1000, '万': 10000, '亿': 100000000}.get(char)
-            if not unit:
-                return raw
-            if unit < 10000:
-                section += (digit or 1) * unit
-            else:
-                total += (section + digit or 1) * unit
-                section = digit = 0
-            digit = 0
-        return str(total + section + digit)
+            unit = {'十': 10, '百': 100, '千': 1000}.get(char)
+            if unit is None or unit >= previous_unit or pending == 0:
+                return None
+            if pending is None:
+                if total != 0:
+                    return None
+                pending = 1
+            total += pending * unit
+            pending = None
+            previous_unit = unit
+            explicit_zero_gap = False
+        # 百、千之后直接跟非零个位时，也可能省略了十位或百位。
+        if pending and previous_unit > 10 and total and not explicit_zero_gap:
+            return None
+        return str(total + (pending or 0))
+
+    def fraction(match):
+        denominator = chinese_integer(match.group(1))
+        numerator = chinese_integer(match.group(2))
+        if denominator is None or numerator is None or denominator == '0':
+            return match.group(0)
+        return f'{numerator}/{denominator}'
+
+    def quantity(match):
+        number = chinese_integer(match.group(1))
+        return match.group(0) if number is None else f'{number} {match.group(2)}'
 
     chars = '零〇一二两三四五六七八九十百千万亿'
     value = re.sub(
-        rf'([{chars}]+)分之([{chars}]+)',
-        lambda match: f'{chinese_integer(match.group(2))}/{chinese_integer(match.group(1))}',
+        rf'(?<![{chars}])([{chars}]+)分之([{chars}]+)(?![{chars}])',
+        fraction,
         value,
     )
     value = re.sub(r'一半', '1/2', value)
@@ -3912,8 +3973,8 @@ def normalize_digest_index_reader_surface(text):
         '时间点|方向|卷积块|动作|片段|关键词|文件|刺激|参与者|病例|录音|场景|组合|候选|折'
     )
     value = re.sub(
-        rf'(?<!第)([{chars}]+)\s*({count_units})',
-        lambda match: f'{chinese_integer(match.group(1))} {match.group(2)}',
+        rf'(?<![第{chars}])([{chars}]+)\s*({count_units})',
+        quantity,
         value,
     )
     value = re.sub(
@@ -8047,8 +8108,39 @@ def _contains_supplementary_model_character(value):
     return False
 
 
+def _validate_reader_author_source_replay(paper, source_details, paper_id):
+    contracts = paper.get('analysisManifest', {}).get('contracts', {})
+    if contracts.get('apiReaderArticle') not in {'beginner-researcher-v2', 'beginner-researcher-v3'}:
+        return
+    # 已核验封存来源通过私有 FD 交给纯解析器；不加载项目配置或模型请求模块。
+    payload = _daily_fresh_compact_json_bytes({'paper': paper, 'sourceDetails': source_details})
+    if len(payload) > 128 * 1024 * 1024:
+        raise PublishDataValidationError(f'{paper_id} 作者来源重放输入超过上限')
+    node = shutil.which('node')
+    if not node:
+        raise PublishDataValidationError('作者来源重放需要 Node.js')
+    with tempfile.TemporaryFile() as source_file:
+        source_file.write(payload)
+        source_file.flush()
+        source_file.seek(0)
+        result = _run_bounded_subprocess(
+            [node, str(SHARED_SCRIPTS_DIR / 'lib' / 'reader-author-replay-cli.js'), str(source_file.fileno())],
+            cwd=str(SHARED_SCRIPTS_DIR.parent),
+            env={key: value for key, value in os.environ.items()
+                 if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
+            timeout_seconds=30, max_output_bytes=1024 * 1024,
+            pass_fds=(source_file.fileno(),),
+        )
+    if result.returncode != 0 or result.timed_out or result.output_truncated \
+            or result.stdout.strip() != '{"verified":true}':
+        raise PublishDataValidationError(
+            f'{paper_id} 作者姓名或机构未由当前封存全文和原始来源重放验证；请刷新作者/Reader后再发布'
+        )
+
+
 def _validate_current_model_text_reuse_for_publish(paper, source_details, paper_id):
     # 只用于当前生产发布，旧记录的只读结构、状态和封存 SHA 保持原样。
+    _validate_reader_author_source_replay(paper, source_details, paper_id)
     acquisition = paper.get('analysisManifest', {}).get('sourceAcquisition', {})
     if acquisition.get('modelTextSanitizationContract') == 'model-text-unicode-scalars-v1':
         return
@@ -8877,7 +8969,7 @@ def _read_bounded_process_output(handle, maximum, *, tail=False):
 def _run_bounded_subprocess(
     command, *, cwd, env, timeout_seconds, text=True, check=False,
     max_output_bytes=SUBPROCESS_SEMANTIC_OUTPUT_MAX_BYTES,
-    combine_output=False, tail_output=False,
+    combine_output=False, tail_output=False, pass_fds=(),
 ):
     """运行一个子进程，设硬性超时、限制输出，并清理整个进程组。"""
     with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
@@ -8889,6 +8981,7 @@ def _run_bounded_subprocess(
             stderr=subprocess.STDOUT if combine_output else stderr_file,
             env=env,
             start_new_session=(os.name != 'nt'),
+            pass_fds=pass_fds,
         )
         timed_out = False
         try:

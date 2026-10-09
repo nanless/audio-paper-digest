@@ -57,7 +57,7 @@ function safeRoot(root, create = false) {
     return absolute;
 }
 function readJsonRecord(filename) {
-    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
         const stat = fs.fstatSync(fd); if (!stat.isFile() || stat.nlink !== 1 || stat.size > 64 * 1024 * 1024) throw new Error('unsafe conference analysis file');
         const bytes = fs.readFileSync(fd); if (bytes.length !== stat.size) throw new Error('conference analysis file changed while reading');
@@ -466,6 +466,9 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
         if (!require('./model-text-sanitization.js').canReuseModelTextInputs(
             loaded.analysis.papers[0], loaded.source.sourceDetails)) {
             fail('旧会议模型输入清洗可能损坏 Unicode 字符，必须按已核验来源重新分析后再复用');
+        }
+        if (!require('./reader-author-source.js').canReuseReaderAuthorInputs(loaded.analysis.papers[0], loaded.source.sourceDetails)) {
+            fail('旧会议作者来源未通过封存全文重放，请先刷新作者或 Reader 后再复用');
         }
         const run = loaded.run.status === 'complete' && loaded.analysis.stats?.analysisStatus === 'complete'
             ? loaded.run : await sealCompletedRunLocked({

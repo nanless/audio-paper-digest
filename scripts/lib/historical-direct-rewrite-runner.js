@@ -799,85 +799,22 @@ function titleFromConferenceMetadata(source, item) {
     return title;
 }
 
-const CONFERENCE_PDF_AFFILIATION_HINT = /(?:univ(?:ersity)?|institute|research|school|college|department|laboratory|laborator(?:y|ies)|key laboratory|academy|centre|center|adobe|northwestern|xian|xi['’]an|france|china|usa|san francisco|evanston|lannion|vannes|lemans)/i;
-
-function normalizeConferencePdfAuthorName(value) {
-    return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
-        .replace(/c¸/g, 'ç').replace(/C¸/g, 'Ç')
-        .replace(/c´ı/g, 'cí').replace(/C´ı/g, 'Cí');
+function controlledConferenceMetadataAuthors(item) {
+    planApi.verifyConferenceWriterInputs(item);
+    const source = item.route.writerInputs[0];
+    const metadata = readRegular(source.metadata.absolutePath, 64 * 1024 * 1024);
+    if (metadata.sha256 !== source.metadata.sha256) fail(`${item.paperId} conference metadata SHA changed`);
+    const value = JSON.parse(metadata.bytes.toString('utf8'));
+    const records = Array.isArray(value) ? value : value.papers || value.items || value.results;
+    const record = records?.[source.metadata.recordIndex];
+    const raw = record?.authors || record?.author;
+    const names = Array.isArray(raw) ? raw.map(value => typeof value === 'string' ? value : value?.name)
+        : typeof raw === 'string' ? raw.split(/\s*;\s*/).filter(Boolean) : [];
+    return names.length && names.every(value => typeof value === 'string' && value.trim() && value === value.trim())
+        ? names : [];
 }
 
-function validConferencePdfAuthorName(value) {
-    const name = normalizeConferencePdfAuthorName(value);
-    const tokens = name.split(/\s+/).filter(Boolean);
-    return tokens.length >= 2 && tokens.length <= 8
-        && tokens.every(token => /^[\p{L}\p{M}][\p{L}\p{M}'’.'-]*$/u.test(token));
-}
-
-function normalizeConferencePdfAffiliation(value) {
-    return String(value || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim()
-        .replace(/\s*(?:[|｜]|DOI\s*:).+$/i, '')
-        // PDF 那一行在分栏处没有空白时，PyMuPDF 会把 DOI 直接接在
-        // 机构名最后一个 token 后面。
-        .replace(/\s*10\.\d{4,9}\/[\-._;()/:A-Z0-9]+$/i, '')
-        .replace(/[.;,]+$/, '').trim();
-}
-
-/**
- * 只从保留下来的会议 PDF 里恢复肉眼可见的那块作者信息。
- * 它有意比通用的姓名 NER 收得更窄：作者行必须带上与相邻机构行
- * 相同的那套上标标记。返回的证据在交给 Reader 之前，会连同完整
- * 来源文本 SHA 和 preamble 的精确 SHA 一起绑定。
- */
-function parseConferencePdfAuthors(text) {
-    const sourceText = String(text || '');
-    const abstractIndex = sourceText.search(/\n\s*ABSTRACT\b/i);
-    const preamble = abstractIndex >= 0 ? sourceText.slice(0, abstractIndex) : sourceText.slice(0, 12000);
-    const rawLines = preamble.split(/\n/);
-    const lines = rawLines.map(line => line.replace(/\s+/g, ' ').trim()).filter(Boolean);
-    const symbolAuthors = [];
-    const numericAuthors = [];
-    for (const line of lines) {
-        if (CONFERENCE_PDF_AFFILIATION_HINT.test(line) || /@|DOI\s*:/i.test(line)) continue;
-        const symbolMatches = [...line.matchAll(/([^,]+?)([†‡∗⋆*](?:\s*,\s*[†‡∗⋆*])*)(?=\s*,|\s*$)/gu)]
-            .map(match => ({ name: normalizeConferencePdfAuthorName(match[1]), markers: [...match[2].matchAll(/[†‡∗⋆*]/gu)].map(marker => marker[0]) }))
-            .filter(item => validConferencePdfAuthorName(item.name));
-        const numericMatches = [...line.matchAll(/([^,\d]+?)(\d{1,3}(?:,\d{1,3})*)(?=\s*(?:,|$))/gu)]
-            .map(match => ({ name: normalizeConferencePdfAuthorName(match[1]), markers: match[2].split(',') }))
-            .filter(item => validConferencePdfAuthorName(item.name));
-        if (symbolMatches.length) symbolAuthors.push(...symbolMatches);
-        else if (numericMatches.length) numericAuthors.push(...numericMatches);
-    }
-    const authors = symbolAuthors.length ? symbolAuthors : numericAuthors;
-    if (!authors.length) return null;
-    const markerSet = new Set(authors.flatMap(item => item.markers));
-    const affiliations = new Map();
-    for (const line of lines) {
-        if (!CONFERENCE_PDF_AFFILIATION_HINT.test(line)) continue;
-        for (const match of line.matchAll(/([†‡∗⋆*])\s*([^†‡∗⋆*]+?)(?=[†‡∗⋆*]|$)/gu)) {
-            const value = normalizeConferencePdfAffiliation(match[2]);
-            if (markerSet.has(match[1]) && value && !/@|DOI\s*:/i.test(value)) affiliations.set(match[1], value);
-        }
-        for (const match of line.matchAll(/(?:^|\s)([1-9]\d{0,2})\s+(.+?)(?=\s+[1-9]\d{0,2}\s+|$)/gu)) {
-            const value = normalizeConferencePdfAffiliation(match[2]);
-            if (markerSet.has(match[1]) && value && !/@|DOI\s*:/i.test(value)) affiliations.set(match[1], value);
-        }
-    }
-    const normalizedAuthors = authors.map(author => ({
-        name: author.name,
-        affiliations: [...new Set(author.markers.map(marker => affiliations.get(marker)).filter(Boolean))]
-    }));
-    const evidence = preamble.trim();
-    const sourceTextSha256 = sha256(Buffer.from(sourceText, 'utf8'));
-    return {
-        contract: 'conference-pdf-author-evidence-v1',
-        authors: normalizedAuthors,
-        sourceTextSha256,
-        sourceEvidence: evidence,
-        sourceEvidenceSha256: sha256(Buffer.from(evidence, 'utf8')),
-        sourceDomSha256: sha256(Buffer.from(evidence, 'utf8'))
-    };
-}
+const { parseConferencePdfAuthors } = require('./reader-author-parser.js');
 
 function priorPreprintAnalysisDisclosure(source, item) {
     const acquisition = source?.pdf?.acquisition;
@@ -1415,6 +1352,15 @@ function assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis,
     }
     if (!require('./model-text-sanitization.js').canReuseModelTextInputs(analysis, sourceDetails)) {
         fail(`${item.paperId} 旧模型输入缺少 Unicode 清洗证明，须核验来源并重新分析后再暂存`);
+    }
+    const authorsReusable = sourceDetails
+        ? require('./reader-author-source.js').canReuseReaderAuthorInputs(analysis, sourceDetails)
+        : item.route.kind === 'conference-local-pdf'
+            && require('./reader-author-parser.js').readerAuthorUnavailableIdentityMatches(analysis, {
+                sourceSha256: expected.sourceSha256, metadataAuthors: controlledConferenceMetadataAuthors(item)
+            });
+    if (!authorsReusable) {
+        fail(`${item.paperId} 作者来源未由封存全文重放核验，请刷新作者或 Reader 后再暂存`);
     }
     return expected;
 }

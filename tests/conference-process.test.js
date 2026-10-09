@@ -1277,7 +1277,7 @@ function sourceUpgradeFixture(t, count = 3, original = null) {
 
 test('来源升级只授权显式子集，并保留未选中的和原始的结果', async t => {
     const upgrade = require('../scripts/lib/conference-source-upgrade.js');
-    const h = sourceUpgradeFixture(t, 3); const f = h; const deps = h.deps;
+    const h = require('./helpers/conference-upgrade-publication-fixture.cjs').bindUpgradePublicationFixture(sourceUpgradeFixture(t, 3)); const f = h; const deps = h.deps;
     const original = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, deps);
     const originalFile = path.join(f.files.conferenceProcessDir, original.processId, 'state.json'), originalBytes = fs.readFileSync(originalFile);
     h.rememberOriginal(originalFile);
@@ -1314,7 +1314,7 @@ test('来源升级只授权显式子集，并保留未选中的和原始的结�
     assert.equal((await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, deps)).processId, promoted.processId);
     assert.equal((await upgrade.promoteSourceUpgrade({ ...options, planSha256: plan.planSha256 }, deps)).processId, promoted.processId);
     assert.equal(h.control.calls.length, beforePromotionCalls); assert.deepEqual(fs.readFileSync(originalFile), originalBytes);
-    const code = `import importlib.util,sys,json\nfrom pathlib import Path\nsys.path.insert(0,sys.argv[1])\nspec=importlib.util.spec_from_file_location('publisher_readonly',Path(sys.argv[1])/'publish-conference.py')\np=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(p)\np.PROCESS_ROOT=Path(sys.argv[2]);p.PAGE_ROOT=Path(sys.argv[3]);p.AGGREGATE_ROOT=Path(sys.argv[4])\nb=p.process_bundle('odyssey-2026',sys.argv[5])\nprint(json.dumps({'files':len(b['files']),'status':b['state']['status']}))`;
+    const code = `import importlib.util,sys,json\nfrom pathlib import Path\nsys.path.insert(0,sys.argv[1])\nspec=importlib.util.spec_from_file_location('publisher_readonly',Path(sys.argv[1])/'publish-conference.py')\np=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(p)\np.RUNTIME=Path(sys.argv[2]).parent;p.PROCESS_ROOT=Path(sys.argv[2]);p.PAGE_ROOT=Path(sys.argv[3]);p.AGGREGATE_ROOT=Path(sys.argv[4])\nb=p.process_bundle('odyssey-2026',sys.argv[5])\nprint(json.dumps({'files':len(b['files']),'status':b['state']['status']}))`;
     const publisherRead = childProcess.execFileSync('bash', [path.join(__dirname, '..', 'scripts', 'python-runtime.sh'), '-c', code,
         path.join(__dirname, '..', 'scripts'), f.files.conferenceProcessDir, f.files.conferencePageStagingDir,
         f.files.conferenceAggregateDir, promoted.processId], { encoding: 'utf8' });
@@ -1418,7 +1418,7 @@ test('来源升级只授权显式子集，并保留未选中的和原始的结�
         fs.writeFileSync(path.join(aggregate, 'manifest.json'), JSON.stringify(manifest));
         fs.writeFileSync(path.join(aggregate, 'aggregate.md'), legacyBody.markdown);
     }
-    const formatCode = `import importlib.util,sys,json\nfrom pathlib import Path\nsys.path.insert(0,sys.argv[1])\nspec=importlib.util.spec_from_file_location('publisher_formats',Path(sys.argv[1])/'publish-conference.py')\np=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(p)\nroot=Path(sys.argv[3]);results={}\nfor folder in sorted(root.iterdir()):\n p.PAGE_ROOT=folder/'pages';p.PROCESS_ROOT=folder/'processes';p.AGGREGATE_ROOT=folder/'aggregates'\n try:\n  b=p.process_bundle('odyssey-2026',sys.argv[4]);results[folder.name]={'files':len(b['files']),'status':b['state']['status']}\n except p.ConferencePublicationError as error:\n  results[folder.name]={'error':str(error)}\nprint(json.dumps(results))`;
+    const formatCode = `import importlib.util,sys,json\nfrom pathlib import Path\nsys.path.insert(0,sys.argv[1])\nspec=importlib.util.spec_from_file_location('publisher_formats',Path(sys.argv[1])/'publish-conference.py')\np=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(p)\nroot=Path(sys.argv[3]);p.RUNTIME=root.parent;results={}\nfor folder in sorted(root.iterdir()):\n p.PAGE_ROOT=folder/'pages';p.PROCESS_ROOT=folder/'processes';p.AGGREGATE_ROOT=folder/'aggregates'\n try:\n  b=p.process_bundle('odyssey-2026',sys.argv[4]);results[folder.name]={'files':len(b['files']),'status':b['state']['status']}\n except p.ConferencePublicationError as error:\n  results[folder.name]={'error':str(error)}\nprint(json.dumps(results))`;
     const formats = JSON.parse(childProcess.execFileSync('bash', [path.join(__dirname, '..', 'scripts', 'python-runtime.sh'),
         '-c', formatCode, path.join(__dirname, '..', 'scripts'), f.files.conferencePageStagingDir,
         formatRoot, promoted.processId], { encoding: 'utf8' }));

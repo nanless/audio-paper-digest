@@ -182,6 +182,9 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
     if (!require('./model-text-sanitization.js').canReuseModelTextInputs(sourcePaper, loaded.source.sourceDetails)) {
         fail('会议论文的旧 Unicode 模型输入需重新分析，不能直接复用正式输出。');
     }
+    if (!require('./reader-author-source.js').canReuseReaderAuthorInputs(sourcePaper, loaded.source.sourceDetails)) {
+        fail('会议论文的作者来源未由当前封存全文重放核验，请刷新作者或 Reader 后再继续。');
+    }
     const coordinates = identityApi.conferenceCoordinates(loaded.run.conference);
     const identity = identityApi.normalizeIdentity({ contract: identityApi.CONTRACT, kind: 'conference',
         canonicalId: loaded.run.paperId, arxivId: null, conference: coordinates,

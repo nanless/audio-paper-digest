@@ -17,7 +17,7 @@ const evidenceFixture = require('./conference-filter-evidence-fixture.js');
 const NOW = '2026-09-06T12:00:00.000Z';
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
-function productionPlanFixture(t, { value = '100', pdfLines = 120, planApi = plan } = {}) {
+function productionPlanFixture(t, { value = '100', pdfLines = 120, planApi = plan, authors = null } = {}) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-plan-authority-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const roots = Object.fromEntries(['source', 'cache', 'ledgers', 'catalogs', 'reports', 'filters', 'staging', 'runs']
@@ -25,7 +25,7 @@ function productionPlanFixture(t, { value = '100', pdfLines = 120, planApi = pla
     for (const directory of Object.values(roots)) fs.mkdirSync(directory, { mode: 0o700 });
     const pdfRoot = path.join(root, 'pdfs'); fs.mkdirSync(pdfRoot, { mode: 0o700 });
     const metadataFile = path.join(root, 'metadata.json'); const title = `Paper ${value}`;
-    fs.writeFileSync(metadataFile, JSON.stringify([{ arnumber: value, title }]), { mode: 0o600 });
+    fs.writeFileSync(metadataFile, JSON.stringify([{ arnumber: value, title, ...(authors ? { authors } : {}) }]), { mode: 0o600 });
     fs.writeFileSync(path.join(pdfRoot, `${title}.pdf`), extractionFixture.buildPdf(title, pdfLines), { mode: 0o600 });
 
     const discovered = discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile, pdfRoot });
@@ -53,7 +53,7 @@ function productionPlanFixture(t, { value = '100', pdfLines = 120, planApi = pla
     const sourceIdentity = `icassp-arnumber:${value}`;
     const replay = discovery.replayDiscoveryMember(discoveryHandle, sourceIdentity);
     const pdfBytes = fs.readFileSync(path.join(pdfRoot, replay.match.candidates[0].path));
-    const generated = extractionFixture.runProductionExtraction({ sourceRoot: roots.source, value, pdfBytes, stamp: NOW,
+    const generated = extractionFixture.runProductionExtraction({ sourceRoot: roots.source, value, pdfBytes, stamp: NOW, authors,
         discoveryBinding: { catalogSha256: replay.catalogSha256, metadataSnapshotSha256: replay.metadataSnapshotSha256,
             metadataIndex: replay.metadataIndex, metadataRecordSha256: replay.metadataRecordSha256 } });
     const members = [{ paperId, sourceIdentity, receiptName: generated.receiptName }];

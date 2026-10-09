@@ -1,0 +1,20 @@
+{
+  "originalPublisherRawSha256": "364f6471ecace656258e5fe280cbbb83ad6e9ac0a57e10592779383b09251daa",
+  "functions": {
+    "process_bundle": {
+      "start": 475,
+      "end": 606,
+      "sha256": "be5348c549fd930a05935bbec3b3fc5391db0c1241d9ab91b72541086a41e6d3"
+    },
+    "generate": {
+      "start": 948,
+      "end": 1057,
+      "sha256": "c9aa5c951e4ef8e0f78597281440220a9d77d0c42ef61760c1bf76f48f071d45"
+    },
+    "validate_generation": {
+      "start": 1060,
+      "end": 1118,
+      "sha256": "33a8db6b890f468aa623a73398433aa9c26ffbb6f8e0e94a8c5e1a06fcc3fa0a"
+    }
+  }
+}
