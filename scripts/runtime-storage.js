@@ -426,7 +426,7 @@ function getPdfDuplicateReport(options = {}) {
                 actualHash = hashFileBytes(record.path);
                 hashSource = 'bytes';
                 byteVerified = true;
-                declaredHashMismatch = declaredHashes.length > 0 && !declaredHashes.includes(actualHash);
+                declaredHashMismatch = declaredHashes.some(hash => hash !== actualHash);
             } catch (error) {
                 blockers.push({ type: 'io', path: record.path, message: `PDF SHA 计算失败: ${error.message}` });
             }

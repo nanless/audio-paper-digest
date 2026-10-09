@@ -19,6 +19,7 @@ const { fetchHuggingFacePapers, mergeAndDeduplicate } = require('../../scripts/f
 const {
     writeFileAtomic,
     getBeijingISOString,
+    getBeijingDateString,
     normalizedId,
     loadPublishedIdsFromBlog,
     readJsonSafe
@@ -69,7 +70,16 @@ function getManualRunLockTarget(date, options = {}) {
 
 function readManualRunLockOwner(lockTarget) {
     try {
-        return JSON.parse(fs.readFileSync(path.join(`${lockTarget}.lock`, 'owner.json'), 'utf8'));
+        const owner = JSON.parse(fs.readFileSync(path.join(`${lockTarget}.lock`, 'owner.json'), 'utf8'));
+        // 阶段只是诊断信息，另存于锁目录之外；不能改写公共锁的持有人记录。
+        try {
+            const details = JSON.parse(fs.readFileSync(`${lockTarget}.manual-stage.json`, 'utf8'));
+            if (details.token === owner.token && details.pid === owner.pid
+                && details.hostname === owner.hostname) {
+                return { ...owner, date: details.date, stage: details.stage };
+            }
+        } catch { /* 诊断文件缺失或损坏，不影响真实锁持有人信息。 */ }
+        return owner;
     } catch {
         return null;
     }
@@ -96,10 +106,11 @@ async function acquireManualRunLock(date, stage, options = {}) {
         throw locked;
     }
 
-    const ownerPath = path.join(`${lockTarget}.lock`, 'owner.json');
     const owner = readManualRunLockOwner(lockTarget) || {};
     try {
-        writeFileAtomic(ownerPath, JSON.stringify({ ...owner, date, stage }));
+        writeFileAtomic(`${lockTarget}.manual-stage.json`, JSON.stringify({
+            token: owner.token, pid: owner.pid, hostname: owner.hostname, date, stage
+        }));
     } catch (error) {
         release();
         throw error;
@@ -245,6 +256,10 @@ function makeBatchMeta(date, timestamp, candidateFingerprint) {
 }
 
 async function fetchRaw(date) {
+    const today = getBeijingDateString();
+    if (date !== today) {
+        throw new Error(`抓取阶段只允许北京时间当天（今天 ${today}，请求 ${date}）。历史日期请使用已有来源继续人工筛选或分析。`);
+    }
     const rawStartedNs = process.hrtime.bigint();
     let timestamp = getBeijingISOString();
     autoArchiveCurrentData(date);

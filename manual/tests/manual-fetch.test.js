@@ -314,3 +314,64 @@ describe('Manual 抓取的数据一致性辅助函数', () => {
         assert.equal(manifest.papers['2608.00012'].error, 'writer-1');
     });
 });
+
+it('Manual 阶段诊断不改变公共锁身份，心跳、释放及后续 select 均正常', async t => {
+    const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'manual-lock-lifecycle-'));
+    const lockTarget = path.join(dir, 'run');
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    let heartbeat;
+    const timer = t.mock.method(global, 'setInterval', callback => {
+        heartbeat = callback;
+        return { unref() {} };
+    });
+    const release = await acquireManualRunLock('2026-10-09', 'raw', { lockTarget });
+    timer.mock.restore();
+    const ownerPath = path.join(`${lockTarget}.lock`, 'owner.json');
+    const original = fs.readFileSync(ownerPath);
+    const inode = fs.statSync(ownerPath).ino;
+    const touched = t.mock.method(fs, 'utimesSync');
+    heartbeat();
+    assert.equal(touched.mock.callCount(), 1, '心跳须仍能更新原持有人文件');
+    assert.equal(fs.statSync(ownerPath).ino, inode);
+    assert.deepEqual(fs.readFileSync(ownerPath), original);
+    touched.mock.restore();
+    assert.equal(require('../scripts/manual-fetch.js').readManualRunLockOwner(lockTarget).stage, 'raw');
+    assert.equal(release(), true);
+    assert.equal(fs.existsSync(`${lockTarget}.lock`), false);
+    const releaseSelect = await acquireManualRunLock('2026-10-09', 'select', { lockTarget, timeoutMs: 0 });
+    assert.equal(require('../scripts/manual-fetch.js').readManualRunLockOwner(lockTarget).stage, 'select');
+    assert.equal(releaseSelect(), true);
+});
+
+it('过期阶段诊断不能覆盖新持有人身份，也不能阻止释放', async t => {
+    const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'manual-lock-diagnostic-'));
+    const lockTarget = path.join(dir, 'run');
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const release = await acquireManualRunLock('2026-10-09', 'fulltext', { lockTarget });
+    fs.writeFileSync(`${lockTarget}.manual-stage.json`, JSON.stringify({ token: 'stale', pid: process.pid,
+        hostname: os.hostname(), stage: 'raw' }));
+    const owner = require('../scripts/manual-fetch.js').readManualRunLockOwner(lockTarget);
+    assert.equal(owner.pid, process.pid);
+    assert.equal(owner.stage, undefined);
+    assert.equal(release(), true);
+});
+
+it('直接 Manual raw 入口在归档或网络请求之前拒绝历史日期，当天仍可继续', async t => {
+    const fullFetch = require('../../scripts/full-fetch.js');
+    const original = fullFetch.autoArchiveCurrentData;
+    const modulePath = require.resolve('../scripts/manual-fetch.js');
+    const previous = require.cache[modulePath];
+    let archiveCalls = 0;
+    fullFetch.autoArchiveCurrentData = () => { archiveCalls++; throw new Error('已到达归档边界，测试阻止后续请求'); };
+    delete require.cache[modulePath];
+    try {
+        const isolated = require('../scripts/manual-fetch.js');
+        await assert.rejects(isolated.fetchRaw('2000-01-01'), /抓取阶段只允许北京时间当天/);
+        assert.equal(archiveCalls, 0);
+        await assert.rejects(isolated.fetchRaw(require('../../scripts/utils.js').getBeijingDateString()), /已到达归档边界/);
+        assert.equal(archiveCalls, 1);
+    } finally {
+        fullFetch.autoArchiveCurrentData = original;
+        require.cache[modulePath] = previous;
+    }
+});

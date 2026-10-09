@@ -416,3 +416,26 @@ describe('存储保留天数的来源与读取问题', () => {
         });
     });
 });
+
+
+for (const badIndex of [null, 0, 2]) {
+    it(`逐字节核验同一 PDF 的全部来源声明：冲突位置 ${badIndex ?? '无'}`, () => {
+        const projectRoot = makeProject();
+        try {
+            const bytes = '%PDF-multiple-receipts';
+            const actual = crypto.createHash('sha256').update(bytes).digest('hex');
+            const pdf = writeFile(projectRoot, 'data/runtime/multiple-sources/paper.pdf', bytes);
+            for (let index = 0; index < 3; index++) {
+                fs.writeFileSync(path.join(path.dirname(pdf), `${index}-extraction-receipt.json`),
+                    JSON.stringify({ source: { pdf: { file: 'paper.pdf', sha256: index === badIndex ? '0'.repeat(64) : actual } } }));
+            }
+            const record = getPdfDuplicateReport({ projectRoot, hashBytes: true, nowMs: NOW_MS })
+                .pdfFiles.find(item => item.path === pdf);
+            assert.equal(record.receiptClaims.length, 3);
+            assert.equal(record.hash, actual);
+            assert.equal(record.byteVerified, true);
+            assert.equal(record.declaredHashMismatch, badIndex !== null);
+            assert.equal(fs.readFileSync(pdf, 'utf8'), bytes);
+        } finally { fs.rmSync(projectRoot, { recursive: true, force: true }); }
+    });
+}
