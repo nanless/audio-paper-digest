@@ -629,14 +629,14 @@ describe('buildApiUrl', () => {
         );
     });
 
-    it('本地测试 HTTP 只允许 loopback 地址', () => {
+    it('本地测试 HTTP 只允许本机回环地址', () => {
         assert.strictEqual(
             buildApiUrl('openai', 'http://127.0.0.1:8080/v1'),
             'http://127.0.0.1:8080/v1/chat/completions'
         );
         assert.strictEqual(validateApiEndpointUrl('http://localhost:8080/v1').hostname, 'localhost');
         assert.strictEqual(validateApiEndpointUrl('http://[::1]:8080/v1').hostname, '[::1]');
-        assert.throws(() => validateApiEndpointUrl('http://0.0.0.0:8080/v1'), /仅允许 loopback/);
+        assert.throws(() => validateApiEndpointUrl('http://0.0.0.0:8080/v1'), /仅允许本机回环地址/);
     });
 });
 
@@ -1124,7 +1124,7 @@ describe('createProxyAgent', () => {
                 }, resolve);
                 request.once('error', reject);
                 request.end();
-            }), /Proxy CONNECT failed/);
+            }), /代理 CONNECT 连接失败/);
             assert.match(connectRequest, /^CONNECT 203\.0\.113\.7:443 HTTP\/1\.1\r\n/);
         } finally {
             await new Promise(resolve => proxy.close(resolve));

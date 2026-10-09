@@ -137,22 +137,22 @@ function verifyWorkQueueMetric(metric, queue, options = {}) {
         || !DATE_RE.test(String(metric.date || ''))
         || metric.timestampDifferencesUsed !== false
         || metric.taskTimingRule !== 'only_explicit_orchestrator_monotonic_measurements_are_known') {
-        throw new Error('Manual v5 work queue metrics 契约非法');
+        throw new Error('Manual v5 工作队列指标的版本、模式、协议名称、日期或计时规则无效');
     }
     if (!queue || queue.version !== WORK_QUEUE_VERSION || queue.mode !== WORK_QUEUE_MODE
         || queue.date !== metric.date || queue.performance?.timestampDifferencesUsed !== false
         || queue.performance?.taskTimingRule !== metric.taskTimingRule) {
-        throw new Error('Manual v5 work queue snapshot 契约或日期不匹配');
+        throw new Error('Manual v5 工作队列快照的版本、模式、日期或计时规则与指标记录不匹配');
     }
     safeMeasurement(metric.scanWallMs, 'work queue scanWallMs', 'observer_scan_monotonic_v1');
     if (JSON.stringify(metric.scanWallMs) !== JSON.stringify(queue.performance.scanWallMs)
         || JSON.stringify(metric.counts) !== JSON.stringify(queue.summary)
         || metric.sourceFingerprint !== queue.sourceFingerprint) {
-        throw new Error('Manual v5 work queue metrics 与 snapshot 汇总不一致');
+        throw new Error('Manual v5 工作队列指标与快照中的扫描耗时、任务数量或来源指纹不一致');
     }
     const sources = verifyFileDescriptors(queue.sourceFiles, options, 'work queue sourceFiles');
     if (stableSha256(sources) !== queue.sourceFingerprint) {
-        throw new Error('Manual v5 work queue sourceFingerprint 不可回放');
+        throw new Error('Manual v5 工作队列 sourceFingerprint 与重新核验的来源文件列表不一致');
     }
     const expectedTasks = [];
     for (const [paperId, paper] of Object.entries(queue.papers || {}).sort(([left], [right]) => left.localeCompare(right))) {

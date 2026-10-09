@@ -249,7 +249,7 @@ function strictCurrentFileLockOwner(snapshot) {
         && snapshot.ownerFile?.mode === 0o600
         && JSON.stringify(owner?.keys) === JSON.stringify(FILE_LOCK_OWNER_KEYS)
         // readFileLockSnapshot 先用 exactFileLockOwner 校验原始 owner，
-        // 再投影出上面的值并补上 schema key 见证。
+        // 再提取上面的值，并保存原始对象的字段名列表供后续核对。
         && Number.isInteger(owner?.pid) && owner.pid > 0
         && typeof owner?.hostname === 'string' && owner.hostname.trim()
         && typeof owner?.token === 'string' && FILE_LOCK_TOKEN_RE.test(owner.token)
@@ -316,8 +316,7 @@ function historicalDirectRemoteLegacyLockMayReclaim(snapshot, nowMs, options = {
 
 function fileLockSnapshotIsReclaimable(snapshot, staleMs, nowMs = Date.now(), options = {}) {
     if (!snapshot?.exists || !snapshot.consistent) return false;
-    // operation-lock 策略不适用于空锁、格式损坏的锁、旧锁、远端锁、
-    // 仍有效的锁，以及权限状态不确定的锁。这些一律走下面普通的租约闸。
+    // 未满足已退出进程的操作锁恢复条件时，继续按下面的锁过期规则判断。
     if (operationLockMayImmediatelyReclaimLocalDeadOwner(snapshot, options)) return true;
     const ageMs = nowMs - (snapshot.ownerFile?.mtimeMs ?? snapshot.directory.mtimeMs);
     if (historicalDirectRemoteLegacyLockMayReclaim(snapshot, nowMs, options)) return true;
@@ -476,7 +475,7 @@ function reclaimFileLockIfSame(lockPath, staleMs, options = {}) {
                 throw new Error('历史论文旧锁的审查回调必须返回同步完成的收尾函数。');
             }
             // 审查输出位于锁目录之外，按不可信处理。它返回后要重新读一遍
-            // inode 和标记，免得把已经变化的锁伪装成我们要回收的那份快照。
+            // 文件节点编号（inode）和回收标记，确认锁仍与准备回收时的记录一致。
             const afterAudit = readFileLockSnapshot(lockPath);
             if (!sameFileLockSnapshot(second, afterAudit, { ignoreDirectoryMtime: true })
                 || !sameReclaimMarker(marker, readReclaimMarker(marker.filename))) return false;

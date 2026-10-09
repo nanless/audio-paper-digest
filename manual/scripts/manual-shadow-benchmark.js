@@ -74,22 +74,22 @@ function embeddedInputFingerprint(report) {
 }
 
 function aggregateShadowReports(reports, options = {}) {
-    if (!Array.isArray(reports) || reports.length < 1) throw new Error('benchmark 至少需要一份 shadow report');
+    if (!Array.isArray(reports) || reports.length < 1) throw new Error('性能对照至少需要一份隔离审计报告');
     const dates = new Set();
     for (const report of reports) {
         if (report?.version !== SHADOW_REPORT_VERSION || report?.mode !== 'manual_v6_shadow_audit') {
-            throw new Error('benchmark 输入不是受支持的 Manual shadow report');
+            throw new Error('性能对照只接受受支持版本的 Manual 隔离审计报告');
         }
         if (report.contractFingerprint !== SHADOW_CONTRACT_FINGERPRINT) {
-            throw new Error('benchmark 输入 shadow contractFingerprint 不匹配当前协议');
+            throw new Error('性能对照输入报告的 contractFingerprint 与当前协议不匹配');
         }
         if (!/^\d{4}-\d{2}-\d{2}$/.test(report.date || '') || dates.has(report.date)) {
-            throw new Error('benchmark 日期非法或重复');
+            throw new Error('性能对照报告的日期格式无效或重复');
         }
         if (!Array.isArray(report.paperSet?.ids)
             || report.paperSet.sha256 !== stableSha256(report.paperSet.ids)
             || report.inputFingerprint !== embeddedInputFingerprint(report)) {
-            throw new Error('benchmark 输入的 paperSet/inputFingerprint 不可复算');
+            throw new Error('性能对照输入报告的 paperSet 或 inputFingerprint 无法根据所列论文及文件记录重新核对');
         }
         if (!Array.isArray(report.inputs) || report.inputs.some(input => (
             !input || typeof input.role !== 'string' || !input.role
@@ -97,7 +97,7 @@ function aggregateShadowReports(reports, options = {}) {
             || !Number.isInteger(input.bytes) || input.bytes < 0
             || !/^[a-f0-9]{64}$/.test(input.sha256 || '')
         ))) {
-            throw new Error('benchmark 输入的 inputs 文件身份契约非法');
+            throw new Error('性能对照 inputs 中的文件用途、路径、字节数或 SHA-256 格式无效');
         }
         dates.add(report.date);
     }
@@ -161,13 +161,13 @@ function isPathInside(root, target) {
 function loadVerifiedShadowReport(filePath, options = {}) {
     const projectRoot = fs.realpathSync(options.projectRoot || Config.PROJECT_ROOT);
     const shadowRootPath = options.shadowRoot || Config.FILES.manualV6ShadowDir;
-    if (fs.lstatSync(shadowRootPath).isSymbolicLink()) throw new Error('Manual shadow 根目录不得为 symlink');
+    if (fs.lstatSync(shadowRootPath).isSymbolicLink()) throw new Error('Manual 隔离审计根目录不得是符号链接');
     const shadowRoot = fs.realpathSync(shadowRootPath);
     if (fs.lstatSync(filePath).isSymbolicLink()) {
-        throw new Error('benchmark 输入报告不得为 symlink');
+        throw new Error('性能对照输入报告不得是符号链接');
     }
     const realReport = fs.realpathSync(filePath);
-    if (!isPathInside(shadowRoot, realReport)) throw new Error('benchmark 输入报告必须位于 Manual shadow 隔离目录');
+    if (!isPathInside(shadowRoot, realReport)) throw new Error('性能对照输入报告必须位于 Manual 隔离审计目录');
     const bytes = fs.readFileSync(realReport);
     const report = JSON.parse(bytes.toString('utf8'));
     const allowedRoots = (options.allowedInputRoots || [Config.CURRENT_DIR, Config.ARCHIVE_DIR, Config.FILES.manualV6ShadowDir])
@@ -176,11 +176,11 @@ function loadVerifiedShadowReport(filePath, options = {}) {
         const candidate = path.isAbsolute(input.path) ? input.path : path.join(projectRoot, input.path);
         const realInput = fs.realpathSync(candidate);
         if (!allowedRoots.some(root => isPathInside(root, realInput))) {
-            throw new Error(`benchmark shadow input realpath 逃逸: ${input.path}`);
+            throw new Error(`性能对照输入文件的实际路径超出允许目录： ${input.path}`);
         }
         const stat = fs.statSync(realInput);
         if (!stat.isFile() || stat.size !== input.bytes || sha256File(realInput) !== input.sha256) {
-            throw new Error(`benchmark shadow input 文件 SHA/bytes 已变化: ${input.path}`);
+            throw new Error(`性能对照输入文件的 SHA 或字节数与原记录不同： ${input.path}`);
         }
     }
     // 这一步同时校验当前约定和报告里嵌入的输入指纹。
@@ -210,14 +210,14 @@ function parseArgs(argv) {
 
 function assertShadowOutputPath(filePath, options = {}) {
     const rootPath = options.shadowRoot || Config.FILES.manualV6ShadowDir;
-    if (fs.lstatSync(rootPath).isSymbolicLink()) throw new Error('Manual shadow 根目录不得为 symlink');
+    if (fs.lstatSync(rootPath).isSymbolicLink()) throw new Error('Manual 隔离审计根目录不得是符号链接');
     const root = fs.realpathSync(rootPath);
     const resolved = path.resolve(filePath);
     let targetStat = null;
     try { targetStat = fs.lstatSync(resolved); } catch (error) {
         if (error.code !== 'ENOENT') throw error;
     }
-    if (targetStat?.isSymbolicLink()) throw new Error('benchmark 输出不得覆盖 symlink');
+    if (targetStat?.isSymbolicLink()) throw new Error('性能对照输出不得覆盖符号链接');
     let ancestor = targetStat ? resolved : path.dirname(resolved);
     while (true) {
         try {
@@ -227,11 +227,11 @@ function assertShadowOutputPath(filePath, options = {}) {
             if (error.code !== 'ENOENT') throw error;
         }
         const parent = path.dirname(ancestor);
-        if (parent === ancestor) throw new Error('benchmark 输出路径没有安全父目录');
+        if (parent === ancestor) throw new Error('性能对照输出路径找不到现有父目录');
         ancestor = parent;
     }
     const realAncestor = fs.realpathSync(ancestor);
-    if (!isPathInside(root, realAncestor)) throw new Error('benchmark 输出必须位于 Manual shadow 隔离目录');
+    if (!isPathInside(root, realAncestor)) throw new Error('性能对照输出必须位于 Manual 隔离审计目录');
     return resolved;
 }
 
@@ -254,7 +254,7 @@ function main() {
 
 if (require.main === module) {
     try { main(); } catch (error) {
-        console.error(`❌ Manual shadow benchmark 失败: ${error.message}`);
+        console.error(`❌ Manual 隔离审计性能对照失败： ${error.message}`);
         process.exitCode = 1;
     }
 }

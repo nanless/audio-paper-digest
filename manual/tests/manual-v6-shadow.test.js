@@ -338,7 +338,7 @@ describe('Manual 影子基准', () => {
         fs.writeFileSync(sourcePath, '{"status":"tampered"}\n');
         assert.throws(() => loadVerifiedShadowReport(reportPath, {
             projectRoot, shadowRoot, allowedInputRoots: [currentDir, archiveDir, shadowRoot]
-        }), /SHA\/bytes 已变化/);
+        }), /SHA 或字节数与原记录不同/);
     });
 
     it('性能对照的输入报告或输出路径使用符号链接时，均被拒绝', () => {
@@ -355,10 +355,10 @@ describe('Manual 影子基准', () => {
         fs.symlinkSync(reportPath, inputLink);
         assert.throws(() => loadVerifiedShadowReport(inputLink, {
             projectRoot, shadowRoot, allowedInputRoots: [currentDir, archiveDir, shadowRoot]
-        }), /不得为 symlink/);
+        }), /不得是符号链接/);
 
         const outputLink = path.join(shadowRoot, 'output-link.json');
         fs.symlinkSync(path.join(outside, 'output.json'), outputLink);
-        assert.throws(() => assertShadowOutputPath(outputLink, { shadowRoot }), /输出必须位于|不得覆盖 symlink/);
+        assert.throws(() => assertShadowOutputPath(outputLink, { shadowRoot }), /输出必须位于|不得覆盖符号链接/);
     });
 });

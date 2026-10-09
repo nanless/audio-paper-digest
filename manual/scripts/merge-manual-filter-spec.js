@@ -44,7 +44,7 @@ function mergeParts(raw, parts, options) {
                 || typeof decision.reason !== 'string' || decision.reason.trim().length < 20
                 || !Array.isArray(decision.reviewedFields)
                 || !['title', 'abstract', 'categories', 'sources'].every(field => decision.reviewedFields.includes(field))) {
-                throw new Error(`${id} 分片决定不满足 Manual filter 契约`);
+                throw new Error(`${id} 的人工筛选决定必须包含布尔值 related、至少 20 字符的 reason，以及对 title、abstract、categories、sources 的审查记录`);
             }
             decisions[id] = {
                 related: decision.related,
@@ -72,18 +72,18 @@ function mergeParts(raw, parts, options) {
 function run(argv = process.argv.slice(2)) {
     const options = parseArgs(argv);
     const raw = readJson(Config.FILES.rawCandidates, 'raw-candidates');
-    const parts = options.parts.map(value => readJson(path.resolve(value), 'manual filter part'));
+    const parts = options.parts.map(value => readJson(path.resolve(value), '人工筛选分片'));
     const spec = mergeParts(raw, parts, options);
     const output = path.resolve(options.output || path.join(Config.CURRENT_DIR, `manual-filter-spec-${options.date}.json`));
     writeFileAtomic(output, JSON.stringify(spec, null, 2));
-    console.log(`已合并 Manual filter：${Object.keys(spec.decisions).length} 篇，related=${Object.values(spec.decisions).filter(item => item.related).length}`);
+    console.log(`已合并人工筛选结果：${Object.keys(spec.decisions).length} 篇，判为相关的论文数=${Object.values(spec.decisions).filter(item => item.related).length}`);
     console.log(output);
     return { output, spec };
 }
 
 if (require.main === module) {
     require('../../scripts/env-loader.js').requireExternalRuntime('merge-manual-filter-spec.js');
-    try { run(); } catch (error) { console.error(`manual filter merge 失败: ${error.message}`); process.exitCode = 1; }
+    try { run(); } catch (error) { console.error(`人工筛选分片合并失败： ${error.message}`); process.exitCode = 1; }
 }
 
 module.exports = { parseArgs, mergeParts, run };

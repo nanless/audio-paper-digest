@@ -739,7 +739,8 @@ function formatDigestRunSummary(report) {
             : []),
         `  博客 ${state(report.blog.complete)} | strictReview=${report.blog.strictReview} | remoteOidVerified=${report.blog.remoteOidVerified === true} | receiptValid=${report.blog.publicationVerified}`,
         `  长图 ${report.visuals.waived ? 'waived' : state(report.visuals.gateComplete === true)} | status=${printedVisualStatus(report.visuals)} | complete=${report.visuals.complete ?? '?'}/${report.visuals.total ?? '?'} | pending=${report.visuals.pending ?? '?'} | failed=${report.visuals.failed ?? '?'}`,
-        `  封面 ${report.cover.waived ? 'waived' : state(report.cover.complete)} | status=${printedCoverStatus(report.cover)}`
+        `  封面 ${report.cover.waived ? 'waived' : state(report.cover.complete)} | status=${printedCoverStatus(report.cover)}`,
+        '  本报告未核验网站上线：还须检查对应提交的构建和部署结果，以及全部目标网页的正式地址、HTTP 200 和标题；complete 不表示网站已上线。'
     ];
     for (const error of report.errors) lines.push(`  错误: ${error}`);
     // 文件存在却读不出来时要说出来。文件不存在不会进这个数组，也不该报成错误。

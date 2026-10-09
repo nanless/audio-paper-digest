@@ -30,10 +30,10 @@ const {
 // ═══════════════════════════════════════════════════════
 
 // 同目录临时文件 + rename，替换是原子的：读到的要么是旧内容，要么是新内容。
-// 只处理「替换型」写入。带封锁性保证的写入不能走这里：
-// - 要求目标必须是普通单链接非符号链接文件（绑 0644，依赖 os.replace 的替换语义）
-// - 要求逐级目录反符号链接、按 uuid4 追加新文件而不替换
-// 这两类契约见 publish-conference.py 的 replace_exact 与 llm_usage.py 的
+// 只用于替换目标文件。需要额外核验目标文件或目录的写入不能使用此函数：
+// - 要求目标是普通文件、只有一个硬链接、不是符号链接，且权限为 0644（使用 os.replace 替换）
+// - 要求逐级确认目录不是符号链接，以 uuid4 生成新文件名，不能替换已有文件
+// 这两类写入规则见 publish-conference.py 的 replace_exact 与 llm_usage.py 的
 // write_llm_usage_event，各自都需要临时名以外的前置校验。
 function writeFileAtomic(filePath, content, options = {}) {
     const { mode } = options;
@@ -417,14 +417,14 @@ function parseMachineSummary(analysis) {
 }
 
 // ═══════════════════════════════════════════════════════
-// API 路由与协议适配（MiMo/Kimi Token Plan 伪装支持）
+// API 路由与协议适配（MiMo/Kimi Token Plan 的客户端请求头设置）
 // ═══════════════════════════════════════════════════════
 
 /**
  * 检测 API 协议类型：'openai'、'openai_responses' 或 'anthropic'
  * 
  * 规则：
- * 1. MiMo/Kimi Token Plan / Coding Plan → Anthropic（需伪装 Claude Code）
+ * 1. MiMo/Kimi Token Plan / Coding Plan → Anthropic（请求头使用 Claude Code 客户端标识）
  * 2. 端点路径含 /anthropic 且非 DeepSeek → Anthropic
  * 3. DeepSeek 及其他 → OpenAI
  */
@@ -476,21 +476,21 @@ function isLoopbackHostname(hostname) {
 }
 
 /**
- * LLM 凭据只允许发送到 HTTPS；明文 HTTP 仅供 loopback 上的本地测试服务。
+ * LLM 凭据只允许发送到 HTTPS；明文 HTTP 仅供本机回环地址上的测试服务。
  */
 function validateApiEndpointUrl(endpoint) {
     let url;
     try {
         url = new URL(endpoint);
     } catch {
-        throw new Error('LLM endpoint 必须是完整的 HTTPS URL（本地测试可用 loopback HTTP）');
+        throw new Error('LLM endpoint 必须是完整的 HTTPS 地址（本机回环地址的测试服务可使用 HTTP）');
     }
     if (url.username || url.password) {
-        throw new Error('LLM endpoint 禁止包含 URL userinfo 凭据');
+        throw new Error('LLM endpoint 地址禁止包含用户名或密码');
     }
     if (url.protocol === 'https:') return url;
     if (url.protocol === 'http:' && isLoopbackHostname(url.hostname)) return url;
-    throw new Error(`LLM endpoint 禁止使用公网明文 ${url.protocol || '协议'}；请改用 HTTPS，本地 HTTP 仅允许 loopback 地址`);
+    throw new Error(`LLM endpoint 禁止使用公网明文 ${url.protocol || '协议'}；请改用 HTTPS，本地 HTTP 仅允许本机回环地址`);
 }
 
 /**
@@ -531,7 +531,7 @@ function buildApiUrl(apiType, endpoint) {
  * OpenAI: {model, messages, max_tokens, temperature}
  * Anthropic: {model, messages, max_tokens, temperature?, system?} (system 是顶级字段)
  *
- * 服务端推理信封类型（reasoning / thinking / redacted_thinking）：Responses 的
+ * 服务端返回的推理数据块类型（reasoning / thinking / redacted_thinking）：Responses 的
  * reasoning 项带签发方绑定的 encrypted_content，Anthropic 的 thinking 类带签名，
  * 原样回传会被网关以 400 拒绝（reasoning `encrypted_content` was not issued to
  * this caller）。出站请求里只保留正文与图片，这三类一律丢弃（连其中的 summary
@@ -673,7 +673,7 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature) {
 function getFilterAttemptMaxTokens(apiType, maxTokens, attemptNumber) {
     if (!Number.isSafeInteger(maxTokens) || maxTokens < 1
         || !Number.isSafeInteger(attemptNumber) || attemptNumber < 1) {
-        throw new Error('Filter attempt token policy received malformed input');
+        throw new Error('筛选请求的 maxTokens 和 attemptNumber 必须是大于零且可精确表示的整数');
     }
     return apiType === 'openai_responses' && attemptNumber > 1
         ? Math.max(maxTokens, 4096)
@@ -681,7 +681,7 @@ function getFilterAttemptMaxTokens(apiType, maxTokens, attemptNumber) {
 }
 
 /**
- * 获取本地 Claude Code 版本号（用于伪装 User-Agent）
+ * 获取本地 Claude Code 版本号（用于设置 User-Agent 客户端标识）
  * 通过 `claude --version` 动态获取，失败则回退到默认值
  */
 function getClaudeCodeVersion() {
@@ -864,7 +864,7 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
             res.on('data', chunk => {
                 responseBytes += chunk.length;
                 if (responseBytes > maxResponseBytes) {
-                    const error = new Error(`Response exceeds ${maxResponseBytes} byte limit`);
+                    const error = new Error(`响应大小超过 ${maxResponseBytes} 字节的上限`);
                     error.code = 'RESPONSE_TOO_LARGE';
                     res.destroy(error);
                     req.destroy(error);
@@ -901,7 +901,7 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
                             raw
                         });
                     } else {
-                        finish(reject, new Error(`JSON/SSE parse error (HTTP ${res.statusCode}): ${err.message}; body=${raw.substring(0, 300)}`));
+                        finish(reject, new Error(`响应无法解析为 JSON 或 SSE（HTTP ${res.statusCode}）：${err.message}; body=${raw.substring(0, 300)}`));
                     }
                 }
             });
@@ -909,7 +909,7 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
         });
 
         deadlineTimer = setTimeout(() => {
-            const error = new Error(`Request deadline exceeded after ${timeoutMs}ms`);
+            const error = new Error(`请求超过 ${timeoutMs}ms 的总等待时间`);
             error.code = 'REQUEST_DEADLINE_EXCEEDED';
             req.destroy(error);
             finish(reject, error);
@@ -918,7 +918,7 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
 
         req.on('error', error => finish(reject, error));
         req.on('timeout', () => {
-            const error = new Error(`Request socket timeout after ${timeoutMs}ms`);
+            const error = new Error(`连接在 ${timeoutMs}ms 内没有数据传输，已超时`);
             error.code = 'REQUEST_SOCKET_TIMEOUT';
             req.destroy(error);
             finish(reject, error);
@@ -930,7 +930,7 @@ function requestJson(urlString, bodyObj, headers, options = {}) {
 
 function withRequestDeadline(requestFactory, timeoutMs) {
     if (typeof requestFactory !== 'function') {
-        throw new TypeError('requestFactory must be a function');
+        throw new TypeError('requestFactory 必须是函数');
     }
     if (!Number.isInteger(timeoutMs) || timeoutMs <= 0) {
         throw new Error(`timeoutMs 必须是正整数，收到: ${timeoutMs}`);
@@ -944,7 +944,7 @@ function withRequestDeadline(requestFactory, timeoutMs) {
             handler(value);
         };
         const timer = setTimeout(() => {
-            const error = new Error(`Request deadline exceeded after ${timeoutMs}ms`);
+            const error = new Error(`请求超过 ${timeoutMs}ms 的总等待时间`);
             error.code = 'REQUEST_DEADLINE_EXCEEDED';
             finish(reject, error);
         }, timeoutMs);
@@ -1047,7 +1047,7 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
 /**
  * LLM 默认保持 agent:false 直连；OpenCode Go Muse Spark Contributor
  * 因地区限制必须使用项目 .env 的 HTTP CONNECT 代理。
- * 每次请求创建并销毁独立 Agent，不影响 MiMo/Kimi 的直连语义。
+ * 每次请求创建并销毁独立的 HTTP 连接对象；MiMo/Kimi 仍使用直连。
  */
 async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options = {}) {
     let expectedApiUrl;
@@ -1121,7 +1121,7 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
     for (let accountAttempt = 0; accountAttempt < apiKeys.length; accountAttempt += 1) {
         const remainingMs = totalTimeoutMs - (Date.now() - startedAt);
         if (remainingMs <= 0) {
-            const error = new Error(`Request deadline exceeded after ${totalTimeoutMs}ms`);
+            const error = new Error(`请求超过 ${totalTimeoutMs}ms 的总等待时间`);
             error.code = 'REQUEST_DEADLINE_EXCEEDED';
             throw error;
         }
@@ -1347,7 +1347,7 @@ function parseAnalysis(analysis, options = {}) {
 
     function _isBadTaskTag(tag) {
         if (!tag) return true;
-        // snake_case
+        // 以英文单词和下划线开头的标签
         if (/^#[a-z]+_[a-z]+/i.test(tag)) return true;
         // arXiv 类别
         if (/^#cs\.[A-Z]{2}$/i.test(tag)) return true;
@@ -1497,7 +1497,7 @@ function parseAnalysis(analysis, options = {}) {
     result.hasModel = machineSummary.hasModel;
     result.hasDataset = machineSummary.hasDataset;
 
-    // 作者与机构（使用任意下一节 ## 作为终止，容忍 LLM 标题 typo）
+    // 作者与机构：遇到下一节二级标题（##）时结束，不要求下一节使用特定标题。
     m = analysis.match(/##\s*作者与机构\s*\n([\s\S]*?)(?=\n##\s|$)/);
     if (m) result.authors = stripMd(m[1]);
 
@@ -1660,7 +1660,7 @@ function normalizeTlsServername(value) {
 }
 
 /**
- * 创建 HTTP CONNECT 代理 Agent（纯 Node 内置模块，无需外部依赖）
+ * 创建通过 HTTP CONNECT 代理建立连接的 HTTP 连接对象（只使用 Node 内置模块）
  * @param {string} proxyUrl - 代理 URL，如 http://127.0.0.1:7897
  * @param {string} targetHost - CONNECT 目标主机名或已验证 IP
  * @param {number} targetPort - 目标端口（默认 443）
@@ -1697,7 +1697,7 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443, tlsServername 
             callback(error, connectedSocket);
         };
         connectTimer = setTimeout(() => {
-            const error = new Error('Proxy CONNECT/TLS handshake timeout after 60000ms');
+            const error = new Error('代理 CONNECT 连接或 TLS 握手超过 60000ms，已超时');
             error.code = 'PROXY_CONNECT_TIMEOUT';
             socket?.destroy(error);
             done(error);
@@ -1725,7 +1725,7 @@ function createProxyAgent(proxyUrl, targetHost, targetPort = 443, tlsServername 
                     const statusLine = buffer.slice(0, buffer.indexOf('\r\n'));
                     if (!/^HTTP\/1\.[01]\s+200(?:\s|$)/.test(statusLine)) {
                         socket.destroy();
-                        done(new Error(`Proxy CONNECT failed: ${statusLine}`));
+                        done(new Error(`代理 CONNECT 连接失败：${statusLine}`));
                         return;
                     }
                     const tlsSocket = tls.connect({
@@ -1874,14 +1874,14 @@ function loadPublishedIdsFromBlog(blogRepo, options = {}) {
 
 /**
  * 从 markdown 文件加载 prompt
- * 读取文件后，提取第一个 fenced code block 内的内容，并替换占位符
+ * 读取文件后，提取第一个围栏代码块（由连续反引号或波浪号包围的文本），并替换占位符
  * @param {string} mdPath - markdown 文件路径（相对项目根目录或绝对路径）
  * @param {Object} vars - 占位符替换映射，如 { title: '...', abstract: '...' }
  * @returns {string} 处理后的 prompt 文本
  */
 function loadPrompt(mdPath, vars = {}) {
     const projectRoot = path.resolve(path.join(__dirname, '..'));
-    // 统一解析到 projectRoot 下，防止路径遍历（拒绝绝对路径和 ../ 逃逸）
+    // 将路径解析到 projectRoot 下，拒绝通过 ../ 等方式指向项目目录之外
     const resolved = path.resolve(path.join(projectRoot, mdPath));
     if (!resolved.startsWith(projectRoot + path.sep)) {
         throw new Error(`Prompt 路径不安全，必须在项目目录内: ${mdPath}`);
@@ -1894,10 +1894,10 @@ function loadPrompt(mdPath, vars = {}) {
 
     const content = fs.readFileSync(fullPath, 'utf8');
 
-    // 提取第一个 fenced code block 内的内容（兼容 CRLF 和更长 fence）
+    // 提取第一个围栏代码块内的内容（兼容 CRLF 换行和更长的围栏标记）
     const blockMatch = content.match(/^(`{3,}|~{3,})(?:text)?\r?\n([\s\S]*?)\r?\n\1/m);
     if (!blockMatch) {
-        throw new Error(`Prompt 文件 ${mdPath} 中未找到 fenced code block`);
+        throw new Error(`提示词文件 ${mdPath} 中未找到由连续反引号或波浪号包围的代码块`);
     }
 
     // 只扫描原模板一次；论文原文、草稿和反馈中的花括号不能被当作新的占位符。

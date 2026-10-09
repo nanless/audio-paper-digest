@@ -2049,3 +2049,26 @@ test('抽取凭证的稳定错误码优先于被引用的认证、网络及普�
     assert.equal(network.category, 'transport');
     assert.equal(network.systemic, true);
 });
+
+test('旧可重试的抽取凭证失败须显式授权，原失败记录保持原样', () => {
+    const recovery = require('../scripts/lib/conference-process-recovery.js');
+    const now = '2026-10-10T00:00:00.000Z';
+    const item = { status: 'failed', attempts: 1,
+        lastFailure: { code: 'CONFERENCE_EXTRACTION_RECEIPT_INTEGRITY', category: 'paper',
+            retryable: true, systemic: false, message: 'Extraction receipt shape invalid' } };
+    const before = structuredClone(item);
+    assert.equal(recovery.eligible(item, now), false);
+    assert.deepEqual(item, before);
+    assert.equal(recovery.eligible({ ...item, retryAuthorizedAtAttempt: 0 }, now), false);
+    assert.equal(recovery.eligible({ ...item, retryAuthorizedAtAttempt: 1 }, now), true);
+    assert.equal(recovery.eligible({ ...item, attempts: 2, retryAuthorizedAtAttempt: 1 }, now), false);
+    assert.equal(recovery.eligible({ ...item, retryAuthorizedAtAttempt: 1,
+        retryNotBefore: '2026-10-10T00:15:00.000Z' }, now), false);
+    assert.equal(recovery.eligible({ ...item, status: 'complete', retryAuthorizedAtAttempt: 1 }, now), false);
+    assert.equal(recovery.eligible({ ...item, status: 'analyzing', retryAuthorizedAtAttempt: 1 }, now), false);
+    assert.equal(recovery.eligible({ ...item, attempts: 3, retryAuthorizedAtAttempt: 3 }, now), false);
+    const ordinary = { ...item, lastFailure: { ...item.lastFailure, code: 'REQUEST_SOCKET_TIMEOUT' } };
+    assert.equal(recovery.eligible(ordinary, now), true);
+    assert.equal(recovery.eligible({ ...ordinary,
+        lastFailure: { ...ordinary.lastFailure, retryable: false } }, now), false);
+});

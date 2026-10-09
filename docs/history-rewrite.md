@@ -67,7 +67,7 @@ npm run history:direct-plan -- --apply \
 
 `history:conference-projections` 记录论文与历史会议页面的对应关系。它核对冻结页面、论文信息和 PDF 的 SHA；如果完整 inline TeX 曾被 Hugo 确定性省略，还会检查论文信息中对应省略形式的指纹。任一形式对应多个会议论文身份时都会拒绝，不能用标题相似度选择。这种页面对应关系不赋予旧 crosswalk 身份确认权限。
 
-`history:direct-plan` 生成 `historical-direct-rewrite-plan-v5`。页面对应关系和计划都使用来源清单生产者的完整严格校验，v3 及更旧清单会被拒绝。v5 对部分 `conflict/multiple` 日汇总页，只使用唯一严格评分行中的主 arXiv 链接，并记录字节区间和 SHA。计划重新核对该记录的自哈希、页面 SHA、原身份状态及候选集合，不能按候选优先级猜测。
+`history:direct-plan` 生成 `historical-direct-rewrite-plan-v5`。页面对应关系和计划都使用生成来源清单时使用的完整严格校验，v3 及更旧清单会被拒绝。v5 对部分 `conflict/multiple` 日汇总页，只使用唯一严格评分行中的主 arXiv 链接，并记录字节区间和 SHA。计划重新核对该记录的自哈希、页面 SHA、原身份状态及候选集合，不能按候选优先级猜测。
 
 主评分行路线抓取失败时写入 v2 交接，附完整评分行绑定；原单提示路线仍使用原字节格式的 v1 交接。备用 `history:arxiv-batch` 在新请求前读取当前配置下的冻结清单与凭证，核对 crosswalk 的完整候选集合，再按原页面 SHA 和评分行字节重建绑定。只有这些检查全部通过，才生成携带该绑定的 v2 crosswalk 决策，并在锁内应用前再次重核；普通多候选页面仍须走显式身份裁定。缺少冻结清单、原页或证明时明确停止，不按候选优先级选择论文。
 
@@ -89,7 +89,7 @@ ICML Daily 页使用 catalog v5 保存的 poster 对应记录。冻结单篇页�
 
 优先通过官方 OpenReview 来源程序获取 PDF。公开端点被浏览器挑战页阻断时，`history:icml-alternate-pdf-source` 只允许代码已审查的固定 poster、forum 和来源 URL 组合：`jfpkqjhex4` 对应同标题、同作者的官方 arXiv v3；`n1mAjfRDZ6` 对应作者在 SSRN 发布的早期预印本。后者凭证须保留两个标题、作者显示名差异、DOI 和 `author-prior-preprint-cross-version`，不能声称 PDF 来自 OpenReview 响应或是 ICML 会议终稿（camera-ready）。
 
-不同标题的作者早期预印本默认不能进入写作队列。唯一例外是用户已明确授权、代码精确列入白名单的 `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`。来源必须重新核对 poster/forum、凭证、PDF SHA、固定预印本标题、作者、DOI 及来源绑定，计划须包含带自哈希的 `sourceDisclosure`。分析执行器把“并非会议终稿”的警告放入所有模型读取的全文前缀，暂存页在 Hugo front matter 后第一位置放入同样的醒目中文说明。披露和最终页面字节都进入 manifest、`pageSet` 及其 SHA。任一字段缺失或漂移都会拒绝，其他 forum 不得套用例外。
+不同标题的作者早期预印本默认不能进入写作队列。唯一例外是用户已明确授权、代码精确列入白名单的 `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`。来源必须重新核对 poster/forum、凭证、PDF SHA、固定预印本标题、作者、DOI 及来源绑定，计划须包含带自哈希的 `sourceDisclosure`。分析执行器把“并非会议终稿”的警告放入所有模型读取的全文前缀，暂存页在 Hugo front matter 后第一位置放入同样的醒目中文说明。披露和最终页面字节都进入 manifest、`pageSet` 及其 SHA。任一字段缺失或与原记录不同都会拒绝，其他 forum 不得套用例外。
 
 如果 SSRN 自动下载被 Cloudflare 阻断，但浏览器能够下载 PDF，可通过 `--import-file ABSOLUTE.pdf` 导入。该入口仅对 `n1mAjfRDZ6` 开放，会重新提取 PDF 文本，要求固定来源标题、作者、预印本日期及多个跨页特征文本全部匹配。PDF 自身不含 DOI，因此 SSRN DOI 由固定来源记录绑定。导入凭证记录 `operator-browser-download` 和 `networkResponseObserved: false`，不能伪造网络响应状态。原网络下载凭证与普通 plan v5 来源仍按既有方式核验，暂停、状态查询和恢复要求不变。
 
@@ -104,7 +104,7 @@ npm run history:direct-scheduler -- --apply --plan /absolute/path/direct-rewrite
   --queue all --generation 1 --max-papers 100 --arxiv-concurrency 3 --conference-concurrency 5
 ```
 
-arXiv 来源并发默认 3，会议来源并发默认 5，各可设为 1–8。未显式选择 ID 的限量续跑会严格核验并跳过同一获取序号已有的 arXiv 四文件，会议项按稳定计划顺序继续检查。本地会议文件缺失或损坏只使对应项失败，不能进入 arXiv 备用获取或写入 crosswalk。只有新 arXiv 获取失败、由 scheduler/run 保存的命名不可变交接文件可进入后文备用流程，其余会议来源继续处理。
+arXiv 来源并发默认 3，会议来源并发默认 5，各可设为 1–8。未显式选择 ID 的限量续跑会严格核验并跳过同一获取序号已有的 arXiv 四文件，会议项按稳定计划顺序继续检查。本地会议文件缺失或损坏只使对应项失败，不能进入 arXiv 备用获取或写入 crosswalk。只有新 arXiv 获取失败、由 scheduler/run 保存的有固定名称、保存后不再改写的交接文件可进入后文备用流程，其余会议来源继续处理。
 
 每项结果在同一调度锁内更新带自哈希的 `historical-direct-source-status-v1`，另一进程的 `history:status` 可查看会议核验和 arXiv 文件状态。该记录也是分析的必需前提：`history:direct-run --apply` 在任何来源抓取、PDF 提取或模型调用前，要求选中论文在同一计划及获取序号中均为 `ready`。缺记录、`handoff` 或 `failed` 都拒绝；后续仍核对实际来源字节，不能只信状态记录。
 
@@ -133,9 +133,9 @@ socket、DNS、超时和 HTTP 408/425/429/5xx 在共享主机调度器内最多�
 
 普通无版本号来源要求 Atom `entryUpdatedAt` 不晚于来源最早捕获时间，响应 `observedAt` 不早于来源最晚捕获时间。历史 `vN` 来源须用同一 `vN` 查询并匹配 Atom 条目的论文修订号，另要求 `publishedAt <= entryUpdatedAt`。附属文件位于 `data/runtime/historical-arxiv-publication-metadata/<arxivId>/generation-000001/`，包含原始 Atom 响应、正式论文信息和 manifest，绑定原来源获取序号、来源 manifest 与快照 SHA、全文 SHA、查询/source ID、条目论文修订号及 published/updated/observed 时间、响应、论文信息及摘要 SHA；不增加或改写原来源目录四文件。
 
-`direct-run` 在分析前预检、暂存时再次读取这些文件。已暂存任务恢复、汇总及最终发布也重新读取并校验原始 Atom 响应；缺失、额外文件、权限不符、硬链接、ID、获取序号或 SHA 漂移均拒绝。
+`direct-run` 在分析前预检、暂存时再次读取这些文件。已暂存任务恢复、汇总及最终发布也重新读取并校验原始 Atom 响应；缺失、额外文件、权限不符、硬链接、ID、获取序号或 SHA 与原记录不同均拒绝。
 
-现行 `official-arxiv-atom-metadata-v1` 的字段投影保留原 XML 实体写法及作者空白，避免改变已封存记录的 SHA。解析仍先严格核验完整 XML 与论文身份；不能按既有字段规则重放的命名空间或属性写法明确拒绝。正常日更抓取使用解码后的 XML 字段；若更改官方元数据投影语义，须另立协议版本并保留 v1 读取，不能直接重算旧记录证明。
+现行 `official-arxiv-atom-metadata-v1` 的字段投影保留原 XML 实体写法及作者空白，避免改变已封存记录的 SHA。解析仍先严格核验完整 XML 与论文身份；命名空间或属性写法无法按既有字段规则重新解析并得到原记录时，明确拒绝。正常日更抓取使用解码后的 XML 字段；若更改官方元数据投影语义，须另立协议版本并保留 v1 读取，不能直接重算旧记录证明。
 
 ### 分析与暂存页面
 
@@ -146,9 +146,9 @@ npm run history:direct-run -- --apply --plan /absolute/path/direct-rewrite-plan-
 
 分析并发默认 3，范围 1–8，每篇内部分析引擎并发为 1。正式分析、API Reader 和来源证明全部完成且对应同一来源快照后，论文才标为 `staged`。暂存目录的 `historical-direct-paper-page-staging-v1` 为每个冻结单篇路径记录新 Markdown、逐页 SHA，以及来源、分析、Reader、页面对应关系和渲染实现的绑定。它不读取旧 crosswalk、旧隔离分析任务、旧标签分配或旧博客正文作为创作输入。
 
-暂存目录按 `runId/sourceIdentity/renderer-<renderer SHA>/` 隔离。Reader SHA、历史页面对应关系或单页字节漂移阻止恢复。已 `staged` 但渲染 SHA 不是当前实现的项，在状态中不计为当前完成，并重新进入无显式 ID 的限量队列。执行器核验已封存来源和分析后重新生成页面，不重复调用模型、不增加分析尝试次数，也不覆盖或删除旧渲染目录。汇总读取页面时再次要求全部成员使用当前渲染实现。
+暂存目录按 `runId/sourceIdentity/renderer-<renderer SHA>/` 隔离。Reader SHA、历史页面对应关系或单页内容与原记录不同，都会阻止恢复。已 `staged` 但渲染 SHA 不是当前实现的项，在状态中不计为当前完成，并重新进入无显式 ID 的限量队列。执行器核验已封存来源和分析后重新生成页面，不重复调用模型、不增加分析尝试次数，也不覆盖或删除旧渲染目录。汇总读取页面时再次要求全部成员使用当前渲染实现。
 
-每次阶段断点记录（checkpoint）都原子写入 execution 目录的 `analysis-recovery.json`，绑定论文 ID、run ID 和来源快照 SHA。失败后若仍有 `analysisManifest`、`analysisCheckpoint`、`analysisStageCheckpoints` 或 `analysisRecoveryImageManifest`，执行记录进入 `analysis_partial` 并记录恢复文件 SHA，不写暂存页。同来源续跑按文件与阶段指纹恢复；来源身份或自哈希漂移会拒绝。
+每次阶段断点记录（checkpoint）都原子写入 execution 目录的 `analysis-recovery.json`，绑定论文 ID、run ID 和来源快照 SHA。失败后若仍有 `analysisManifest`、`analysisCheckpoint`、`analysisStageCheckpoints` 或 `analysisRecoveryImageManifest`，执行记录进入 `analysis_partial` 并记录恢复文件 SHA，不写暂存页。同来源续跑按文件与阶段指纹恢复；来源身份或记录自身的 SHA 与原记录不同，会拒绝恢复。
 
 ### 补充旧页面的标签和来源身份
 

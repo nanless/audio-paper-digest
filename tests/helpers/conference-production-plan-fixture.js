@@ -83,7 +83,7 @@ function productionPlanFixture(t, { value = '100', pdfLines = 120, planApi = pla
     fs.writeFileSync(tagCatalogPath, `${JSON.stringify({ version: tagCatalogVersion })}\n`, { mode: 0o600 });
     files.tagCatalogFile = tagCatalogPath;
     const identities = importer.importHandleSnapshot(importHandle).verifiedMembers;
-    // 原源码实例使用它自己的旧格式生成样本；不从新版对象换字段或重签。
+    // 原源码实例按其旧格式生成样本；不修改新版对象的字段，也不重新计算其 SHA 来冒充旧记录。
     const runPlan = planApi.normalizePlan({ contract: planApi.PLAN_CONTRACT, version: planApi.VERSION, ledgerName: 'ledger.json',
         [tagField]: { version: tagCatalogVersion, sha256: sha256(fs.readFileSync(tagCatalogPath)) },
         selectionPolicy: { contract: planApi.SELECTION_CONTRACT, identities,

@@ -41,7 +41,7 @@ npm run manual:fetch -- --date YYYY-MM-DD --select FILTER_SPEC.json
 
 筛选文件必须恰好覆盖原始候选全集，既包含选中项，也包含明确排除项。缺失、未知或重复 ID，日期不一致、理由不足都会失败；标题关键词脚本不能冒充逐篇人工决定。
 
-多人分片筛选时，由确定性合并器检查和合并至少两份 `--part`：
+多人分片筛选时，由合并程序检查和合并至少两份 `--part`：
 
 ```bash
 npm run manual:filter-merge -- --date YYYY-MM-DD --reviewer REVIEWER_ID \
@@ -58,9 +58,9 @@ npm run manual:fulltext -- YYYY-MM-DD
 
 提取器在转成纯文本之前保存表格矩阵及合并单元格关系、MathML/TeX、图片、章节、正文引用和参考文献，并为每篇建立 `ArtifactIndex` 来源索引。
 
-每篇入选论文须达到 `inventoryHealth.status=complete`。受支持的结构化来源需核对表格、公式、图片、引用的检测和恢复计数，且无截断、未解决的解析问题；表格还须有可重放矩阵。PDF 或纯文本回退仍是 `incomplete`，没有解析到条目不能证明论文没有这些内容。
+每篇入选论文须达到 `inventoryHealth.status=complete`。受支持的结构化来源需核对表格、公式、图片、引用的检测和恢复计数，且无截断、未解决的解析问题；表格还须有能够按原始记录重新构建的单元格矩阵。PDF 或纯文本回退仍是 `incomplete`，没有解析到条目不能证明论文没有这些内容。
 
-单篇失败时保留其他论文的健康 checkpoint，修复对应来源再续跑。不要删除整个日期目录或手改 `incomplete` 为 `complete`。
+单篇失败时保留其他论文仍可继续使用的阶段检查点，修复对应来源再续跑。不要删除整个日期目录或手改 `incomplete` 为 `complete`。
 
 ## 三、初始化单篇任务
 
@@ -174,7 +174,7 @@ npm run manual:tasks -- retry --date YYYY-MM-DD \
 npm run manual:bind-revision -- --date YYYY-MM-DD \
   --paper ARXIV_ID --prepare
 
-# 只在内存重放完整单篇记录和正文来源检查
+# 只在内存重新构建完整单篇记录，并检查正文来源
 npm run manual:bind-revision -- --date YYYY-MM-DD \
   --paper ARXIV_ID --preflight
 ```
@@ -316,6 +316,6 @@ npm run manual:performance-report -- \
 | `manual:v5:promote-draft` | `--date --paper-id --source-dir --technical-review --readability-review --figure-review`；可选 `--author-packet` |
 | `manual:v5:work-queue` | `--date`；可选 `--observations`、`--output-dir`、`--no-sidecar` |
 
-这些入口不能生成新正式模式的 v6 证明、混入 v6 批次或建立新视觉任务。Python v5 写作来源及既有封存预览仍核当前固定路径和字节 SHA；保存旧提示词或编辑要求副本不保证可复验。预览中 `editorialContract` 绑定提示词，`referenceContract` 绑定编辑要求，不能混用。预览没有新写入口。
+这些入口不能生成新正式模式的 v6 证明、混入 v6 批次或建立新视觉任务。Python v5 写作来源及既有封存预览仍核当前固定路径和字节 SHA；仅保存旧提示词或编辑要求副本，不保证旧预览能重新通过检查。预览中 `editorialContract` 绑定提示词，`referenceContract` 绑定编辑要求，不能混用。预览没有新写入口。
 
-静态旧文章的阅读、旧任务恢复、预览复验和重新发布各有边界，不能由某个包的失败推断全部历史文章不可读。具体消费者范围见[历史兼容边界](architecture.md#历史兼容边界)。
+静态旧文章的阅读、旧任务恢复、预览复验和重新发布各有边界，不能由某个包的失败推断全部历史文章不可读。哪些程序读取这些旧记录，以及各自允许什么操作，见[历史兼容边界](architecture.md#历史兼容边界)。

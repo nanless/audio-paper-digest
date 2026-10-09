@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { fixture, sign } = require('./reader-signed-draft-fixture.js');
 const { reconstructReaderDraftFromVerifiedArticle } = require('../scripts/lib/reader-signed-draft.js');
 
-test('已签名的 Reader 原样往返桥接、标题、原文引文、公式和已生成的图片绑定，不做改动',()=>{
+test('根据已核验的 Reader 文章重建草稿时，保留术语解释、标题、原文引文、公式及图片对应记录',()=>{
     const f=fixture(),before=JSON.stringify(f),result=reconstructReaderDraftFromVerifiedArticle(f);
     assert.equal(JSON.stringify(f),before);assert.equal(result.proof.articleSha256,f.paper.apiReaderArticleSha256);
     assert.equal(result.proof.planSha256,f.paper.apiReaderPlanSha256);assert.equal(result.proof.apiGenerated,false);
@@ -26,7 +26,7 @@ test('产物表格坐标绑定先剥掉派生的单元格证明，再精确重�
     assert.equal(result.proof.planSha256,f.paper.apiReaderPlanSha256);
 });
 
-test('04102 精确历史桥接前缀在零个或一个空格下往返，不改动已签名字节',()=>{
+test('04102 历史术语解释的固定前缀后有零个或一个空格时，重建草稿不改原记录字节',()=>{
     for (const spacing of ['', ' ']) {
         const f=fixture(),bridge=f.paper.apiReaderPlan.conceptBridges[0];
         const old=bridge.explanation;
@@ -56,7 +56,7 @@ test('桥接逆操作遇到多空格或制表符边界、以及重复的完全�
     assert.throws(()=>reconstructReaderDraftFromVerifiedArticle(f),/unique exact paragraph/);
 });
 
-test('已签名文本被截短到当前桥接门槛以下时直接失败，而不是补齐',()=>{
+test('已计算校验值的文本被截短、术语解释不足时，重建草稿会拒绝，不补写内容',()=>{
     const f=fixture(),bridge=f.paper.apiReaderPlan.conceptBridges[0];
     const shortened=`**${bridge.terms[0]} × ${bridge.terms[1]}：** 原文解释过短。`;
     f.paper.apiReaderArticle=f.paper.apiReaderArticle.replace(bridge.explanation,shortened);
@@ -66,7 +66,7 @@ test('已签名文本被截短到当前桥接门槛以下时直接失败，而�
     assert.equal(JSON.stringify(f),before);
 });
 
-test('来源快照、运行和已签名父级的篡改一律拒绝',()=>{
+test('来源快照、运行身份或原文章记录被篡改时，重建草稿会拒绝',()=>{
     for(const mutate of [f=>{f.runId='22222222-2222-4222-8222-222222222222';},
         f=>{f.sourceDetails.text+='x';},f=>{f.sourceDetails.structuredArtifacts.formulas[0].latex='z=x.';},
         f=>{f.paper.freshRewriteProvenance.sourceSnapshotSha256='0'.repeat(64);},
@@ -75,7 +75,7 @@ test('来源快照、运行和已签名父级的篡改一律拒绝',()=>{
     }
 });
 
-test('即使重新签名，歧义和往返漂移也不会去编造或归一化内容',()=>{
+test('即使重新计算 SHA，段落匹配不唯一或无法按原字节还原时，也不会编造或改写内容',()=>{
     for(const mutate of [
         f=>{f.paper.apiReaderPlan.sections[1].heading=f.paper.apiReaderPlan.sections[0].heading;},
         f=>{f.paper.apiReaderArticle+='\n\n'+f.paper.apiReaderPlan.conceptBridges[0].explanation;},

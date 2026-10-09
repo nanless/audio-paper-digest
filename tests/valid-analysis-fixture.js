@@ -1,5 +1,6 @@
 const crypto = require('node:crypto');
 
+// 构造符合格式要求的测试正文；其中的论文方法和数字是测试数据，不能证明真实论文已经通过来源核验或发布。
 function validAnalysisText() {
     const summary = [
         '本文解决噪声语音输入到文字输出时声学线索受损的问题，难点是局部干扰与长程语义错误会彼此放大。',

@@ -1173,3 +1173,24 @@ describe('日更运行报告', () => {
         }
     });
 });
+
+
+describe('状态报告的上线核验范围', () => {
+    it('已有 Git 发布和视觉完成状态仍须明确提示未检查网站上线', () => {
+        const summary = formatDigestRunSummary({
+            batchDate: '2026-10-10', overallStatus: 'complete', errors: [],
+            fetch: { complete: true, rawCandidateCount: 1 },
+            filter: { complete: true, selectedCount: 1, totalCandidates: 1, pendingDecisions: 0 },
+            analysis: { complete: true, successful: 1, total: 1, expected: 1, missing: 0, failed: 0 },
+            blog: { complete: true, strictReview: true, publicationVerified: true, remoteOidVerified: true },
+            visuals: { gateComplete: true, status: 'complete', complete: 1, total: 1, pending: 0, failed: 0 },
+            cover: { complete: true, status: 'complete' }
+        });
+        assert.match(summary, /overall=complete/);
+        assert.match(summary, /remoteOidVerified=true/);
+        assert.match(summary, /本报告未核验网站上线/);
+        assert.match(summary, /对应提交的构建和部署结果/);
+        assert.match(summary, /全部目标网页的正式地址、HTTP 200 和标题/);
+        assert.match(summary, /complete 不表示网站已上线/);
+    });
+});
