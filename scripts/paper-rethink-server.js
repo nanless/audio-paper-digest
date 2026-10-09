@@ -758,35 +758,42 @@ async function downloadArxivPdf(arxivId, options = {}) {
         } catch (_) {
             fail('PDF_UPSTREAM_UNAVAILABLE', '暂时无法读取 arXiv PDF', 502);
         }
-        if ([301, 302, 303, 307, 308].includes(response.status)) {
-            if (redirects >= MAX_PDF_REDIRECTS) {
-                fail('PDF_UPSTREAM_INVALID', 'arXiv PDF 重定向次数过多', 502);
+        try {
+            if ([301, 302, 303, 307, 308].includes(response.status)) {
+                if (redirects >= MAX_PDF_REDIRECTS) {
+                    fail('PDF_UPSTREAM_INVALID', 'arXiv PDF 重定向次数过多', 502);
+                }
+                const location = response.headers?.get?.('location');
+                if (!location) fail('PDF_UPSTREAM_INVALID', 'arXiv PDF 重定向缺少位置', 502);
+                url = normalizeArxivPdfRedirect(location, url, identity.resolvedId);
+                continue;
             }
-            const location = response.headers?.get?.('location');
-            if (!location) fail('PDF_UPSTREAM_INVALID', 'arXiv PDF 重定向缺少位置', 502);
-            url = normalizeArxivPdfRedirect(location, url, identity.resolvedId);
-            continue;
-        }
-        if (!response.ok) {
-            const status = Number(response.status || 0);
-            fail(
-                status === 404 ? 'PDF_NOT_FOUND' : 'PDF_UPSTREAM_UNAVAILABLE',
-                status === 404 ? 'arXiv PDF 不存在' : 'arXiv PDF 暂时不可用',
-                status === 404 ? 404 : 502
+            if (!response.ok) {
+                const status = Number(response.status || 0);
+                fail(
+                    status === 404 ? 'PDF_NOT_FOUND' : 'PDF_UPSTREAM_UNAVAILABLE',
+                    status === 404 ? 'arXiv PDF 不存在' : 'arXiv PDF 暂时不可用',
+                    status === 404 ? 404 : 502
+                );
+            }
+            const contentType = String(response.headers?.get?.('content-type') || '').toLowerCase();
+            if (!contentType.includes('application/pdf') && !contentType.includes('application/octet-stream')) {
+                fail('PDF_UPSTREAM_INVALID', 'arXiv 返回的内容不是 PDF', 502);
+            }
+            const buffer = await readFetchBufferWithLimit(
+                response, options.maxBytes || MAX_PDF_BYTES
             );
+            if (buffer.length < 5 || buffer.subarray(0, 5).toString('ascii') !== '%PDF-') {
+                buffer.fill(0);
+                fail('PDF_UPSTREAM_INVALID', 'arXiv 返回的文件头不是 PDF', 502);
+            }
+            return { buffer, identity, sourceUrl: url };
+        } finally {
+            // 提前拒绝或重定向时只释放本次响应体，连接对象仍由公共缓存管理。
+            if (!response.bodyUsed && typeof response.body?.cancel === 'function') {
+                await response.body.cancel().catch(() => {});
+            }
         }
-        const contentType = String(response.headers?.get?.('content-type') || '').toLowerCase();
-        if (!contentType.includes('application/pdf') && !contentType.includes('application/octet-stream')) {
-            fail('PDF_UPSTREAM_INVALID', 'arXiv 返回的内容不是 PDF', 502);
-        }
-        const buffer = await readFetchBufferWithLimit(
-            response, options.maxBytes || MAX_PDF_BYTES
-        );
-        if (buffer.length < 5 || buffer.subarray(0, 5).toString('ascii') !== '%PDF-') {
-            buffer.fill(0);
-            fail('PDF_UPSTREAM_INVALID', 'arXiv 返回的文件头不是 PDF', 502);
-        }
-        return { buffer, identity, sourceUrl: url };
     }
     fail('PDF_UPSTREAM_INVALID', 'arXiv PDF 重定向无法收敛', 502);
 }
@@ -1033,7 +1040,7 @@ function extractCompletedText(apiType, body, maxOutputTokens) {
     if (apiType === 'openai_responses') {
         const truncation = getResponsesOutputTruncationError(body, maxOutputTokens);
         if (truncation) fail('OUTPUT_INCOMPLETE', '模型输出达到 token 上限，未作为完整结果接受', 502);
-        if (body.status && body.status !== 'completed') {
+        if (body.status !== undefined && body.status !== 'completed') {
             fail('OUTPUT_INCOMPLETE', 'Responses 请求未达到 completed 终态', 502);
         }
         const text = parseResponseText(apiType, body);

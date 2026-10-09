@@ -1433,3 +1433,123 @@ describe('paper rethink 的 HTTP 边界', () => {
         assert.match(response.text, /UPSTREAM_ERROR/);
     });
 });
+
+
+describe('本机助手的 Responses 终态', () => {
+    function requestWithStatus(status, includeStatus = true) {
+        let calls = 0;
+        const request = performRethink(basePayload({
+            protocol: 'openai_responses',
+            endpoint: 'https://opencode.ai/zen/go/v1',
+            model: 'muse-spark-test'
+        }), {
+            env: TEST_ENV,
+            allowedEndpoints: ['https://opencode.ai/zen/go/v1'],
+            requestFn: async () => {
+                calls += 1;
+                return {
+                    statusCode: 200,
+                    body: {
+                        ...(includeStatus ? { status } : {}),
+                        output_text: '完整外观的文本'
+                    }
+                };
+            }
+        });
+        return { request, calls: () => calls };
+    }
+
+    it('显式非完成状态即使带完整文本也不能成功', async () => {
+        for (const status of [null, '', false, 0, 'queued', 'in_progress', 'failed', 'cancelled']) {
+            const attempt = requestWithStatus(status);
+            await assert.rejects(attempt.request, error => error.code === 'OUTPUT_INCOMPLETE');
+            assert.strictEqual(attempt.calls(), 1);
+        }
+    });
+
+    it('保留完成状态与旧服务省略状态字段的兼容', async () => {
+        for (const [status, includeStatus] of [['completed', true], [undefined, false]]) {
+            const attempt = requestWithStatus(status, includeStatus);
+            const result = await attempt.request;
+            assert.strictEqual(result.text, '完整外观的文本');
+            assert.strictEqual(attempt.calls(), 1);
+        }
+    });
+});
+
+
+describe('本机助手 PDF 响应体释放', () => {
+    it('拒绝响应与重定向后取消未消费的原生响应流，不关闭共享连接', async () => {
+        const cases = [
+            {
+                status: 503,
+                headers: { 'content-type': 'application/pdf' },
+                code: 'PDF_UPSTREAM_UNAVAILABLE'
+            },
+            {
+                status: 200,
+                headers: { 'content-type': 'text/html' },
+                code: 'PDF_UPSTREAM_INVALID'
+            },
+            {
+                status: 200,
+                headers: { 'content-type': 'application/pdf', 'content-length': '100' },
+                code: 'PDF_TOO_LARGE'
+            },
+            {
+                status: 302,
+                headers: { location: 'https://export.arxiv.org/pdf/2601.12345.pdf' }
+            }
+        ];
+        for (const scenario of cases) {
+            let cancellations = 0;
+            let requests = 0;
+            let closed = 0;
+            const response = new Response(new ReadableStream({
+                pull(controller) {
+                    controller.enqueue(new Uint8Array([65]));
+                },
+                cancel() {
+                    cancellations += 1;
+                }
+            }), scenario);
+            const attempt = downloadArxivPdf('2601.12345', {
+                dispatcher: { close: () => { closed += 1; } },
+                maxBytes: 8,
+                fetchImpl: async () => {
+                    requests += 1;
+                    return requests === 1 ? response : new Response('%PDF-ok', {
+                        headers: { 'content-type': 'application/pdf' }
+                    });
+                }
+            });
+            try {
+                if (scenario.code) {
+                    await assert.rejects(attempt, error => error.code === scenario.code);
+                } else {
+                    assert.strictEqual((await attempt).buffer.toString(), '%PDF-ok');
+                }
+                assert.strictEqual(cancellations, 1);
+                assert.strictEqual(requests, scenario.code ? 1 : 2);
+                assert.strictEqual(closed, 0);
+            } finally {
+                await response.body.cancel().catch(() => {});
+            }
+        }
+    });
+
+    it('取消响应流失败时保留原来的 HTTP 错误', async () => {
+        let cancellations = 0;
+        const response = new Response(new ReadableStream({
+            cancel() {
+                cancellations += 1;
+                throw new Error('响应流取消失败');
+            }
+        }), { status: 404 });
+        await assert.rejects(downloadArxivPdf('2601.12345', {
+            dispatcher: {},
+            fetchImpl: async () => response
+        }), error => error.code === 'PDF_NOT_FOUND');
+        assert.strictEqual(cancellations, 1);
+    });
+});
