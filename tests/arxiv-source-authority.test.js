@@ -323,3 +323,137 @@ test('来源名称必须绑定完整 arXiv ID，错误名称在预演和创建�
         }
     }
 });
+
+test('来源各不可变文件短写不留下正式半截文件，配对记录允许无网络补齐', async t => {
+    const names = api.namesFor('arxiv-2601.00001.json', '2601.00001');
+    const pairName = '.arxiv-2601.00001.source-pair.json';
+    for (const targetName of [...Object.values(names), pairName]) {
+        const root = fixture(t); let calls = 0;
+        const originalFetcher = deep.fetchArxivTextDetailedUncached;
+        deep.fetchArxivTextDetailedUncached = async id => { calls++; return source(id); };
+        const originalOpen = fs.openSync;
+        const originalWrite = fs.writeFileSync;
+        const descriptors = new Map(); let injected = false;
+        const opened = t.mock.method(fs, 'openSync', (filename, ...args) => {
+            const fd = originalOpen(filename, ...args);
+            descriptors.set(fd, String(filename)); return fd;
+        });
+        const written = t.mock.method(fs, 'writeFileSync', (fd, bytes, ...args) => {
+            const filename = descriptors.get(fd);
+            if (!injected && typeof fd === 'number' && filename
+                && (path.basename(filename) === targetName || path.basename(filename).startsWith(`.${targetName}.`))) {
+                injected = true;
+                fs.writeSync(fd, Buffer.from(bytes), 0, 3, 0);
+                throw Object.assign(new Error('测试来源文件短写'), { code: 'EIO' });
+            }
+            return originalWrite(fd, bytes, ...args);
+        });
+        const options = { authorityRoot: root, arxivId: '2601.00001', authorityName: names.authorityName,
+            apply: true, now: stamp, operationId };
+        try {
+            await assert.rejects(api.prepareArxivSourceAuthority(options), /测试来源文件短写/);
+        } finally { opened.mock.restore(); written.mock.restore(); }
+        assert.equal(injected, true, targetName);
+        assert.equal(fs.existsSync(path.join(root, targetName)), false, targetName);
+        const beforeRetry = calls;
+        if (fs.existsSync(path.join(root, pairName))) {
+            deep.fetchArxivTextDetailedUncached = async () => { throw new Error('封存配对后不应重新抓取'); };
+        }
+        try {
+            const result = await api.prepareArxivSourceAuthority(options);
+            assert.equal(result.status, 'created');
+            assert.equal(authorityApi.authorityHandleSnapshot(result.authorityHandle).fulltextSha256,
+                crypto.createHash('sha256').update(source().text).digest('hex'));
+            if (beforeRetry === 1 && targetName !== pairName) assert.equal(calls, 1);
+        } finally { deep.fetchArxivTextDetailedUncached = originalFetcher; }
+    }
+});
+
+test('来源配对写入后被终止，公开入口恢复全部已知双链接并补齐原文件', async t => {
+    const names = api.namesFor('arxiv-2601.00001.json', '2601.00001');
+    const pairName = '.arxiv-2601.00001.source-pair.json';
+    for (const targetName of [names.requestName, pairName, names.observationName, names.fulltextName,
+        names.snapshotName, names.receiptName, names.authorityName]) {
+        const root = fixture(t);
+        const options = { authorityRoot: root, arxivId: '2601.00001', authorityName: names.authorityName,
+            apply: true, now: stamp, operationId };
+        const script = `
+            const fs = require('node:fs');
+            const api = require(process.argv[1]);
+            const deep = require(process.argv[2]);
+            deep.fetchArxivTextDetailedUncached = async () => (${JSON.stringify(source())});
+            const original = fs.linkSync;
+            fs.linkSync = (from, to) => {
+                original(from, to);
+                if (to === process.argv[3]) process.kill(process.pid, 'SIGKILL');
+            };
+            api.prepareArxivSourceAuthority(${JSON.stringify(options)}).catch(error => {
+                console.error(error); process.exitCode = 2;
+            });
+        `;
+        const child = spawn(process.execPath, ['-e', script, require.resolve('../scripts/lib/arxiv-source-authority.js'),
+            require.resolve('../scripts/deep-analyzer.js'), path.join(root, targetName)],
+        { stdio: ['ignore', 'pipe', 'pipe'] });
+        let stderr = '';
+        child.stderr.on('data', value => { stderr += value; });
+        const [code, signal] = await once(child, 'exit');
+        assert.equal(code, null, stderr);
+        assert.equal(signal, 'SIGKILL', stderr);
+        assert.equal(fs.statSync(path.join(root, targetName)).nlink, 2);
+        // 仅模拟原锁租约自然到期，不改持有人身份；已退出子进程仍由生产锁自行核验。
+        const old = new Date(Date.now() - api.LOCK_STALE_MS - 5000);
+        fs.utimesSync(path.join(lockPath(root), 'owner.json'), old, old);
+        fs.utimesSync(lockPath(root), old, old);
+        const originalFetcher = deep.fetchArxivTextDetailedUncached; let calls = 0;
+        deep.fetchArxivTextDetailedUncached = async () => {
+            calls++;
+            if (targetName !== names.requestName) throw new Error('已有来源配对不可再次抓取');
+            return source();
+        };
+        try {
+            const result = await api.prepareArxivSourceAuthority(options);
+            assert.ok(['created', 'recovered'].includes(result.status));
+            assert.equal(calls, targetName === names.requestName ? 1 : 0);
+            assert.equal(fs.statSync(path.join(root, targetName)).nlink, 1);
+            assert.equal(fs.readdirSync(root).some(name => name.endsWith('.tmp')), false);
+            assert.equal(authorityApi.authorityHandleSnapshot(result.authorityHandle).authority.paperId, 'arxiv:2601.00001');
+        } finally { deep.fetchArxivTextDetailedUncached = originalFetcher; }
+    }
+});
+
+test('来源配对记录必须绑定原请求，损坏记录和竞争正式文件均保持原字节', async t => {
+    const root = fixture(t); const names = api.namesFor('arxiv-2601.00001.json', '2601.00001');
+    const options = { authorityRoot: root, arxivId: '2601.00001', authorityName: names.authorityName,
+        apply: true, now: stamp, operationId };
+    let calls = 0;
+    mockOfficialFetcher(t, async () => { calls++; return source(); });
+    const originalLink = fs.linkSync;
+    const blocked = t.mock.method(fs, 'linkSync', (from, to) => {
+        if (to === path.join(root, names.observationName)) throw Object.assign(new Error('测试配对后的中断'), { code: 'EIO' });
+        return originalLink(from, to);
+    });
+    try { await assert.rejects(api.prepareArxivSourceAuthority(options), /测试配对后的中断/); }
+    finally { blocked.mock.restore(); }
+    const pairFile = path.join(root, '.arxiv-2601.00001.source-pair.json');
+    const pairBytes = fs.readFileSync(pairFile);
+    const pair = JSON.parse(pairBytes);
+    pair.requestSha256 = '0'.repeat(64);
+    delete pair.pairSha256; pair.pairSha256 = authorityApi.stableHash(pair);
+    const changed = authorityApi.prettyBytes(pair);
+    fs.writeFileSync(pairFile, changed);
+    await assert.rejects(api.prepareArxivSourceAuthority(options), /不属于当前请求/);
+    assert.equal(calls, 1);
+    assert.deepEqual(fs.readFileSync(pairFile), changed);
+    assert.equal(fs.existsSync(path.join(root, names.observationName)), false);
+    fs.writeFileSync(pairFile, pairBytes);
+    const winner = Buffer.from('其他写入者保留的完整字节');
+    const competitor = t.mock.method(fs, 'linkSync', (from, to) => {
+        if (to === path.join(root, names.observationName)) fs.writeFileSync(to, winner, { flag: 'wx', mode: 0o600 });
+        return originalLink(from, to);
+    });
+    try { await assert.rejects(api.prepareArxivSourceAuthority(options), /不可变文件/); }
+    finally { competitor.mock.restore(); }
+    assert.deepEqual(fs.readFileSync(path.join(root, names.observationName)), winner);
+    assert.deepEqual(fs.readFileSync(pairFile), pairBytes);
+    assert.equal(calls, 1);
+});

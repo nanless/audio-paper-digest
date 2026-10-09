@@ -9,6 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const identityApi = require('./paper-identity.js');
 const authorityApi = require('./paper-source-authority.js');
+const { writeImmutableFile, recoverImmutableFileLink } = require('./immutable-file.js');
 
 const REQUEST_CONTRACT = 'arxiv-paper-source-request-v1';
 const SNAPSHOT_CONTRACT = 'arxiv-paper-source-production-snapshot-v1';
@@ -99,15 +100,10 @@ function syncDirectory(directory) {
     try { fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
 }
 function writeExact(filename, bytes) {
-    const payload = Buffer.from(bytes); let fd;
-    try {
-        fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-        fs.writeFileSync(fd, payload); fs.fsyncSync(fd);
-    } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        if (!readBytes(filename).equals(payload)) fail(`拒绝覆盖不同的构件：${path.basename(filename)}`);
-    } finally { if (fd !== undefined) fs.closeSync(fd); }
-    try { fs.chmodSync(filename, 0o600); } catch (error) { if (process.platform !== 'win32') throw error; }
+    const payload = Buffer.from(bytes);
+    if (payload.length > 64 * 1024 * 1024) fail('不可变来源文件超过 64 MiB 上限');
+    writeImmutableFile(filename, payload, fail);
+    if (!readBytes(filename).equals(payload)) fail(`来源文件写入后的字节与预期不一致：${filename}`);
     return sha256(payload);
 }
 function seal(body, field) { return { ...body, [field]: stableHash(body) }; }
@@ -496,6 +492,31 @@ function readLiveProductionSourceDetails(handle) {
     return details;
 }
 
+function sourcePairName(authorityName) {
+    return `.${authorityName.slice(0, -5)}.source-pair.json`;
+}
+function readSourcePair(filename, request) {
+    const loaded = readCanonicalJson(filename); const value = loaded.value;
+    const keys = ['contract', 'version', 'requestSha256', 'observation', 'text', 'pairSha256'];
+    if (!value || typeof value !== 'object' || Array.isArray(value)
+        || Object.keys(value).sort().join('\0') !== keys.sort().join('\0')
+        || value.contract !== 'arxiv-paper-source-pair-v1' || value.version !== 1
+        || value.requestSha256 !== request.requestSha256 || typeof value.text !== 'string') {
+        fail('来源配对记录不属于当前请求，保留现场');
+    }
+    const { pairSha256, ...body } = value;
+    if (pairSha256 !== stableHash(body)) fail('来源配对记录的自校验 SHA 不一致');
+    const observation = value.observation;
+    const fetched = normalizeFetchedSource({ text: value.text, source: observation?.sourceKind,
+        sourceId: observation?.sourceId, htmlAvailability: observation?.htmlAvailability,
+        htmlAttempts: observation?.htmlAttempts, warnings: observation?.warnings,
+        structuredArtifacts: observation?.structuredArtifacts }, request.arxivId, observation?.fetchedAt);
+    if (stableHash(fetched.observation) !== stableHash(observation)) {
+        fail('来源配对记录的观测、全文或论文身份不一致');
+    }
+    return { observation, text: value.text };
+}
+
 async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityName,
     apply = false, now, operationId, requireLiveAuthorization = false } = {}) {
     const names = namesFor(authorityName, arxivId); const root = safeRoot(authorityRoot, apply);
@@ -511,6 +532,26 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
     try {
         assertLockWritable(lock);
         const authorityFile = path.join(root, authorityName);
+        const requestFile = path.join(root, names.requestName);
+        if (fs.existsSync(authorityFile) && !fs.existsSync(requestFile)) {
+            fail('已有授权缺少原始来源请求，保留现场');
+        }
+        const recoverKnown = filename => {
+            assertLockWritable(lock);
+            if (fs.existsSync(filename)) recoverImmutableFileLink(filename, fail, 64 * 1024 * 1024);
+        };
+        recoverKnown(requestFile);
+        let request;
+        if (fs.existsSync(requestFile)) request = validateRequest(readCanonicalJson(requestFile).value, { arxivId, authorityName });
+        else {
+            request = requestFor({ arxivId, authorityName, operationId: operationId || crypto.randomUUID(), now });
+            writeArtifact(requestFile, prettyBytes(request));
+        }
+        const pairFile = path.join(root, sourcePairName(authorityName));
+        recoverKnown(pairFile);
+        let sourcePair = fs.existsSync(pairFile) ? readSourcePair(pairFile, request) : null;
+        for (const name of [names.observationName, names.fulltextName, names.snapshotName,
+            names.receiptName, authorityName]) recoverKnown(path.join(root, name));
         if (fs.existsSync(authorityFile)) {
             const generic = authorityApi.loadAuthorityHandle({ authorityRoot: root, authorityName });
             const snapshot = authorityApi.authorityHandleSnapshot(generic);
@@ -530,15 +571,13 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
             return { ...planned, status: 'live-verified', authorityHandle: handle,
                 authority: authorityApi.authorityHandleSnapshot(handle) };
         }
-        const requestFile = path.join(root, names.requestName); let request;
-        if (fs.existsSync(requestFile)) request = validateRequest(readCanonicalJson(requestFile).value, { arxivId, authorityName });
-        else {
-            request = requestFor({ arxivId, authorityName, operationId: operationId || crypto.randomUUID(), now });
-            writeArtifact(requestFile, prettyBytes(request));
-        }
         const observationFile = path.join(root, names.observationName); const fulltextFile = path.join(root, names.fulltextName);
         let observation; let text; let liveSourceDetails = null;
-        if (fs.existsSync(observationFile) || fs.existsSync(fulltextFile)) {
+        if (sourcePair) {
+            observation = sourcePair.observation; text = sourcePair.text;
+            writeArtifact(observationFile, prettyBytes(observation));
+            writeArtifact(fulltextFile, Buffer.from(text, 'utf8'));
+        } else if (fs.existsSync(observationFile) || fs.existsSync(fulltextFile)) {
             if (!fs.existsSync(observationFile) || !fs.existsSync(fulltextFile)) fail('partial source evidence requires operator review');
             observation = readCanonicalJson(observationFile).value; text = new TextDecoder('utf-8', { fatal: true }).decode(readBytes(fulltextFile));
             if (observation.paperId !== planned.paperId || observation.observationSha256 !== stableHash((({ observationSha256: _, ...body }) => body)(observation))) fail('缓存的来源观测发生变化');
@@ -547,6 +586,11 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
                 await require('../deep-analyzer.js').fetchArxivTextDetailedUncached(arxivId), arxivId, now);
             assertLockWritable(lock);
             observation = fetched.observation; text = fetched.text; liveSourceDetails = fetched.sourceDetails;
+            // 配对记录先落盘，恢复只消费原请求的完整来源字节，不重新抓取补猜。
+            const pair = seal({ contract: 'arxiv-paper-source-pair-v1', version: 1,
+                requestSha256: request.requestSha256, observation, text }, 'pairSha256');
+            writeArtifact(pairFile, prettyBytes(pair));
+            sourcePair = readSourcePair(pairFile, request);
             writeArtifact(observationFile, prettyBytes(observation));
             writeArtifact(fulltextFile, Buffer.from(text, 'utf8'));
         }
