@@ -33,6 +33,25 @@ def _digest(value):
     return hashlib.sha256(value.encode('utf-8')).hexdigest()
 
 
+def normalize_usage_paper_id(value):
+    if not isinstance(value, str):
+        return None
+    arxiv = value.removeprefix('arxiv:')
+    if re.fullmatch(r'(?:[0-9]{4}\.[0-9]{4,5}|[a-z-]+(?:\.[A-Z]{2})?/[0-9]{7})(?:v[0-9]+)?', arxiv):
+        return arxiv
+    parts = value.split(':')
+    if len(parts) != 5 or parts[0] != 'conference' or not re.fullmatch(r'[A-Za-z0-9:._-]+', value):
+        return None
+    try:
+        from paper_identity import canonical_conference_paper_id
+        canonical = canonical_conference_paper_id(
+            {'id': f'{parts[1]}-{parts[2]}', 'year': int(parts[2])},
+            {'type': parts[3], 'value': parts[4]})
+        return value if canonical == value else None
+    except (ValueError, TypeError):
+        return None
+
+
 def normalize_llm_usage(protocol, body):
     usage = body.get('usage') if isinstance(body, dict) else None
     usage = usage if isinstance(usage, dict) else {}
@@ -86,11 +105,18 @@ def build_llm_usage_event(*, protocol, model, request, response=None, status_cod
         or any(isinstance(choice, dict) and choice.get('finish_reason') == 'length'
                for choice in choices)
     response_status = body.get('status') if protocol == 'openai_responses' else None
+    chat_terminal_failed = protocol in {'openai', 'openai_chat'} and any(
+        isinstance(choice, dict) and choice.get('finish_reason') is not None
+        and choice.get('finish_reason') not in ('stop', 'length') for choice in choices)
+    anthropic_terminal_failed = protocol == 'anthropic' and body.get('stop_reason') is not None \
+        and body.get('stop_reason') not in ('end_turn', 'stop_sequence', 'max_tokens')
     if error_code:
         outcome = 'transport_error'
     elif not isinstance(status_code, int) or not 200 <= status_code < 300:
         outcome = 'http_error'
     elif response_status is not None and response_status not in ('completed', 'incomplete'):
+        outcome = 'provider_error'
+    elif chat_terminal_failed or anthropic_terminal_failed:
         outcome = 'provider_error'
     elif incomplete:
         outcome = 'incomplete'
@@ -101,7 +127,7 @@ def build_llm_usage_event(*, protocol, model, request, response=None, status_cod
         'version': VERSION, 'kind': 'request', 'eventId': str(uuid.uuid4()),
         'at': datetime.now(timezone.utc).isoformat(), 'runtime': 'python',
         'runId': context.get('runId') if re.fullmatch(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}', str(context.get('runId') or '')) else None,
-        'paperId': paper_id if isinstance(paper_id, str) and re.fullmatch(r'\d{4}\.\d{4,5}(?:v\d+)?', paper_id) else None,
+        'paperId': normalize_usage_paper_id(paper_id),
         'stage': _label(context.get('stage')) or 'unknown',
         'unitId': context.get('unitId') if re.fullmatch(r'[a-f0-9]{64}', str(context.get('unitId') or '')) else None,
         'contentAttempt': _count(context.get('contentAttempt')), 'transportAttempt': _count(context.get('transportAttempt')),

@@ -14,6 +14,25 @@ const count = value => Number.isSafeInteger(value) && value >= 0 ? value : null;
 const label = value => typeof value === 'string' && /^[A-Za-z0-9_.:/-]{1,200}$/.test(value) ? value : null;
 const digest = value => /^[a-f0-9]{64}$/.test(String(value || '')) ? value : null;
 
+function normalizeUsagePaperId(value) {
+    if (typeof value !== 'string') return null;
+    const arxiv = value.replace(/^arxiv:/, '');
+    if (/^(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?\/\d{7})(?:v\d+)?$/.test(arxiv)) return arxiv;
+    const parts = value.split(':');
+    if (parts.length !== 5 || parts[0] !== 'conference' || !/^[A-Za-z0-9:._-]+$/.test(value)) return null;
+    try {
+        const canonical = require('./paper-identity.js').canonicalConferencePaperId(
+            { id: `${parts[1]}-${parts[2]}`, year: Number(parts[2]) },
+            { type: parts[3], value: parts[4] });
+        return canonical === value ? value : null;
+    } catch { return null; }
+}
+
+function usagePaperKey(value) {
+    const id = normalizeUsagePaperId(value);
+    return id && !id.startsWith('conference:') ? id.replace(/v\d+$/, '') : id;
+}
+
 function normalizeLlmUsage(protocol, body) {
     const usage = body?.usage && typeof body.usage === 'object' && !Array.isArray(body.usage) ? body.usage : {};
     const input = protocol === 'openai' || protocol === 'openai_chat'
@@ -40,7 +59,7 @@ function usageContext(context = {}) {
     const value = { ...(scope.getStore() || {}), ...context };
     return {
         runId: /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(String(value.runId || '')) ? value.runId : null,
-        paperId: /^\d{4}\.\d{4,5}(?:v\d+)?$/.test(String(value.paperId || '')) ? value.paperId : null,
+        paperId: normalizeUsagePaperId(value.paperId),
         stage: label(value.stage) || 'unknown', unitId: digest(value.unitId),
         contentAttempt: count(value.contentAttempt), transportAttempt: count(value.transportAttempt)
     };
@@ -65,10 +84,16 @@ function buildLlmUsageEvent({ protocol, model, request, response, statusCode, du
     const terminal = response?.status === 'incomplete' || response?.stop_reason === 'max_tokens'
         || (Array.isArray(response?.choices) && response.choices.some(choice => choice?.finish_reason === 'length'));
     const responseStatus = protocol === 'openai_responses' ? response?.status : null;
+    const chatTerminalFailed = ['openai', 'openai_chat'].includes(protocol)
+        && Array.isArray(response?.choices) && response.choices.some(choice =>
+            choice?.finish_reason != null && !['stop', 'length'].includes(choice.finish_reason));
+    const anthropicTerminalFailed = protocol === 'anthropic' && response?.stop_reason != null
+        && !['end_turn', 'stop_sequence', 'max_tokens'].includes(response.stop_reason);
     let outcome;
     if (errorCode) outcome = 'transport_error';
     else if (!Number.isInteger(statusCode) || statusCode < 200 || statusCode >= 300) outcome = 'http_error';
     else if (responseStatus != null && !['completed', 'incomplete'].includes(responseStatus)) outcome = 'provider_error';
+    else if (chatTerminalFailed || anthropicTerminalFailed) outcome = 'provider_error';
     else if (terminal) outcome = 'incomplete';
     else outcome = 'completed';
     return {
@@ -180,5 +205,5 @@ function summarizeLlmUsage(events) {
             .map(([name, value]) => [name, { ...value, sum: value.reportedRequests ? value.sum : null }])) })) };
 }
 
-module.exports = { VERSION, normalizeLlmUsage, withLlmUsageContext, usageContext, inputStatistics,
+module.exports = { VERSION, normalizeUsagePaperId, usagePaperKey, normalizeLlmUsage, withLlmUsageContext, usageContext, inputStatistics,
     buildLlmUsageEvent, writeLlmUsageEvent, recordLlmUsage, recordLlmDisposition, summarizeLlmUsage };

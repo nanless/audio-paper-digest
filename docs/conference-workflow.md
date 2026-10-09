@@ -249,7 +249,7 @@ npm run conference:new:publish:status -- --conference-id odyssey-2026 --process-
 
 逐页通过证据只按相对路径和页面内容 SHA 复用。实现、模型、协议或批次记录变化后，未变页面保留通过依据，当前批次仍须重跑确定性检查并生成新审查记录。图片子审查不能脱离整页身份或省略来源检查。
 
-发布正文审查默认并发 5，`PD_BLOG_REVIEW_CONCURRENCY` 范围 1–5。设为 1 时逐页顺序处理，首异常会停止后续页面；默认并发模式会提前提交所有页面任务，异常传播不保证其他已提交页面立即停止请求。不能宣称它与 Node 分析队列具备相同的运行级停止派发能力。
+发布正文审查默认并发 5，`PD_BLOG_REVIEW_CONCURRENCY` 范围 1–5。程序只按空出的并发位置补派任务；运行级故障停止新页面，在途页面完成保存后交回原错误。普通页面审查异常也会使本轮停止补派并失败，不能保存整批通过记录。并发设为 1 时逐页顺序处理。
 
 `push` 逐文件核验 Git 暂存区及提交内文件字节，核对本次允许变动的文件集合、父提交、推送身份和远端 OID，不只看工作区文件。博客与图床分别处理受控提交；图床完整资产清单和本次 Git 变动分开，相同已发布图片可零差异复用。自身提交后断网或重复发布，仅在父提交、文件集合、内容和远端身份精确一致时恢复。
 
@@ -357,7 +357,7 @@ npm run conference:new:process -- --source-upgrade-promote \
 
 ## 旧会议来源和隔离执行的维护
 
-以下命令均属于 history 工作区，用于维护已有独立会议链。它们不替代新会议 process，也不自动映射历史页面清单的旧 URL 和任务页。旧会议汇总未接入 `history:publication` 的限制只属于该旧入口，不能据此说当前历史直接发布没有会议能力。
+以下命令保留 history 角色入口，在当前 daily 工作区通过项目的 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` 运行，用于维护已有独立会议链。它们不替代新会议 process，也不自动映射历史页面清单的旧 URL 和任务页。旧会议汇总未接入 `history:publication` 的限制只属于该旧入口，不能据此说当前历史直接发布没有会议能力。
 
 一份本机 PDF 的文件名、相似题目或旧博客题目不足以证明论文身份。旧链先固定官方主身份、PDF 字节和匹配依据，再依次发现、筛选、提取、复核、导入、计划及隔离执行。
 
@@ -394,7 +394,7 @@ npm run conference:discover -- --apply --adapter icassp --year 2026 \
   --candidate-output icassp-2026.json --report-output icassp-2026-report.json
 ```
 
-旧运行仍须满足前述筛选和完整证据要求，不能拿旧 v4 配置继续混跑。旧 `conference:filter` 和 `conference:filter:run` 只在 history 工作区使用。每篇 included PDF 必须在固定的暂存来源根提取，人工复核清单只引用 `paperId`、`sourceIdentity` 和提取回执文件名；暂存重验请求、metadata、PDF、文本、结构化证据和回执的全部字节，不接受手写路径或哈希替代提取。
+旧运行仍须满足前述筛选和完整证据要求，不能拿旧 v4 配置继续混跑。旧 `conference:filter` 和 `conference:filter:run` 在当前工作区通过上述跨角色开关使用。每篇 included PDF 必须在固定的暂存来源根提取，人工复核清单只引用 `paperId`、`sourceIdentity` 和提取回执文件名；暂存重验请求、metadata、PDF、文本、结构化证据和回执的全部字节，不接受手写路径或哈希替代提取。
 
 ```bash
 npm run conference:extract -- --dry-run --manifest PAPER-extract.json

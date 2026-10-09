@@ -7,6 +7,32 @@ const path = require('node:path');
 const { normalizeLlmUsage, withLlmUsageContext, buildLlmUsageEvent,
     writeLlmUsageEvent, summarizeLlmUsage } = require('../scripts/lib/llm-usage.js');
 
+test('会议与旧式 arXiv 用量保留论文身份，报告不会合并不同会议论文', t => {
+    const ids = ['conference:icassp:2026:icassp-arnumber:10910001',
+        'conference:icml:2026:openreview-forum-id:PaperAv2',
+        'conference:icml:2026:openreview-forum-id:PaperAv3', 'hep-th/9901001v2'];
+    const events = ids.map(paperId => buildLlmUsageEvent({ protocol: 'openai', request: {},
+        statusCode: 200, context: { paperId, stage: 'analysis' } }));
+    assert.deepEqual(events.map(event => event.paperId), ids);
+    assert.equal(summarizeLlmUsage(events).groups.length, ids.length);
+    const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'usage-paper-ids-')));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    for (const event of events) writeLlmUsageEvent(event, { directory });
+    const { main } = require('../scripts/llm-usage-report.js');
+    const original = console.log; console.log = () => {};
+    try {
+        assert.deepEqual(main(['--dir', directory, '--paper', ids[1]]).groups.map(group => group.paperId), [ids[1]]);
+        assert.deepEqual(main(['--dir', directory, '--paper', 'hep-th/9901001']).groups.map(group => group.paperId), [ids[3]]);
+        for (const value of ['conference:icml:026:openreview-forum-id:PaperAv2', '../secret',
+            'conference:icassp:2026:icassp-arnumber:1٢', 'conference:icassp:2026:icassp-arnumber:1２',
+            'conference:icml:2026:unknown:PaperAv2', 'conference:icml:2026:openreview-forum-id:bad/path']) {
+            assert.equal(buildLlmUsageEvent({ request: {}, context: { paperId: value } }).paperId, null);
+            assert.throws(() => main(['--dir', directory, '--paper', value]), /论文 ID 不合法/);
+        }
+    } finally { console.log = original; }
+    assert.equal(buildLlmUsageEvent({ request: {}, context: { paperId: 'arxiv:2609.03622' } }).paperId, '2609.03622');
+});
+
 test('供应商用量保留未知值，绝不把子项重复计入总数', () => {
     const response = normalizeLlmUsage('openai_responses', { usage: {
         input_tokens: 100, output_tokens: 20, total_tokens: 120,
@@ -147,4 +173,28 @@ test('传输层记录格式错误的响应和网络错误，但不改变它们�
     assert.equal(events[1].usage.status, 'unavailable');
     assert.equal(events[2].outcome, 'transport_error');
     assert.doesNotMatch(JSON.stringify(events), /TOP_SECRET|sensitive/);
+});
+
+
+test('Chat 和 Anthropic 非成功终态保留用量但计入失败调用', () => {
+    const events = [];
+    for (const protocol of ['openai', 'openai_chat', 'anthropic']) {
+        const cases = protocol === 'anthropic'
+            ? [['end_turn','completed'],['stop_sequence','completed'],['max_tokens','incomplete'],
+                ['tool_use','provider_error'],['pause_turn','provider_error'],['refusal','provider_error']]
+            : [['stop','completed'],['length','incomplete'],['content_filter','provider_error'],
+                ['tool_calls','provider_error'],['function_call','provider_error']];
+        for (const [reason, expected] of cases) {
+            const response = protocol === 'anthropic'
+                ? { stop_reason: reason, usage: { input_tokens: 3, output_tokens: 2 } }
+                : { choices: [{ finish_reason: reason }], usage: { prompt_tokens: 3, completion_tokens: 2 } };
+            const event = buildLlmUsageEvent({ protocol, model: 'test', request: {}, response, statusCode: 200 });
+            assert.equal(event.outcome, expected, `${protocol}/${reason}`);
+            assert.equal(event.usage.inputTokens, 3); events.push(event);
+        }
+    }
+    const report = summarizeLlmUsage(events).groups[0];
+    assert.equal(report.requests, 16);
+    assert.equal(report.unsuccessfulRequests, 12);
+    assert.equal(report.usage.inputTokens.sum, 48);
 });

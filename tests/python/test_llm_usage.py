@@ -15,6 +15,19 @@ import publish_common
 
 
 class UsageTests(unittest.TestCase):
+    def test_conference_and_legacy_arxiv_identity_is_preserved(self):
+        for paper_id in ('conference:icassp:2026:icassp-arnumber:10910001',
+                         'conference:icml:2026:openreview-forum-id:PaperAv2', 'hep-th/9901001v2'):
+            event = llm_usage.build_llm_usage_event(protocol='openai', model='test', request={},
+                status_code=200, context={'paperId': paper_id})
+            self.assertEqual(event['paperId'], paper_id)
+        for paper_id in ('conference:icml:026:openreview-forum-id:PaperAv2', '../secret',
+                         'conference:icassp:2026:icassp-arnumber:1٢', 'conference:icassp:2026:icassp-arnumber:1２',
+                         'conference:icml:2026:unknown:PaperAv2',
+                         'conference:icml:2026:openreview-forum-id:bad/path'):
+            self.assertIsNone(llm_usage.normalize_usage_paper_id(paper_id))
+        self.assertEqual(llm_usage.normalize_usage_paper_id('arxiv:2609.03622'), '2609.03622')
+
     def test_provider_usage_unknown_zero_and_subtotals(self):
         result = llm_usage.normalize_llm_usage('openai_responses', {'usage': {
             'input_tokens': 100, 'output_tokens': 20, 'total_tokens': 120,
@@ -81,6 +94,22 @@ class UsageTests(unittest.TestCase):
                     error_code=error_code,
                 )
                 self.assertEqual(event['outcome'], expected_outcome)
+
+    def test_chat_and_anthropic_unsuccessful_terminal_preserves_usage(self):
+        for protocol in ('openai', 'openai_chat', 'anthropic'):
+            cases = [('end_turn', 'completed'), ('stop_sequence', 'completed'), ('max_tokens', 'incomplete'),
+                     ('tool_use', 'provider_error'), ('pause_turn', 'provider_error'), ('refusal', 'provider_error')] \
+                if protocol == 'anthropic' else [('stop', 'completed'), ('length', 'incomplete'),
+                    ('content_filter', 'provider_error'), ('tool_calls', 'provider_error'), ('function_call', 'provider_error')]
+            for reason, expected in cases:
+                with self.subTest(protocol=protocol, reason=reason):
+                    body = {'stop_reason': reason, 'usage': {'input_tokens': 3, 'output_tokens': 2}} \
+                        if protocol == 'anthropic' else {'choices': [{'finish_reason': reason}],
+                            'usage': {'prompt_tokens': 3, 'completion_tokens': 2}}
+                    event = llm_usage.build_llm_usage_event(protocol=protocol, model='test', request={},
+                        response=body, status_code=200)
+                    self.assertEqual(event['outcome'], expected)
+                    self.assertEqual(event['usage']['inputTokens'], 3)
 
     def test_private_ledger_and_link_rejection(self):
         with tempfile.TemporaryDirectory() as tmp:

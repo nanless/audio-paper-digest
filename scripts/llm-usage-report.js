@@ -5,7 +5,7 @@ requireExternalRuntime('llm-usage-report');
 const fs = require('node:fs');
 const path = require('node:path');
 const Config = require('./config.js');
-const { summarizeLlmUsage, VERSION } = require('./lib/llm-usage.js');
+const { summarizeLlmUsage, usagePaperKey, VERSION } = require('./lib/llm-usage.js');
 
 function readUsageEvents(directory) {
     if (!fs.existsSync(directory)) return [];
@@ -32,7 +32,7 @@ function main(args = process.argv.slice(2)) {
             || args[i + 1].startsWith('--') || options[name]) throw new Error('用法：usage:report [--paper ID] [--stage NAME] [--date YYYY-MM-DD] [--run UUID] [--dir DIR]');
         options[name] = args[i + 1];
     }
-    if (options['--paper'] && !/^\d{4}\.\d{4,5}(?:v\d+)?$/.test(options['--paper'])) throw new Error('论文 ID 不合法：要用 2501.00001 或 2501.00001v2 这种形式');
+    if (options['--paper'] && !usagePaperKey(options['--paper'])) throw new Error('论文 ID 不合法：请使用 arXiv ID 或完整会议论文 ID');
     if (options['--run'] && !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(options['--run'])) throw new Error('Invalid run ID');
     if (options['--date']) {
         const date = options['--date'];
@@ -42,7 +42,7 @@ function main(args = process.argv.slice(2)) {
     }
     const events = readUsageEvents(path.resolve(options['--dir'] || Config.FILES.llmUsageDir)).filter(event => {
         if (options['--run'] && event.runId !== options['--run']) return false;
-        if (options['--paper'] && String(event.paperId || '').replace(/v\d+$/, '') !== options['--paper'].replace(/v\d+$/, '')) return false;
+        if (options['--paper'] && usagePaperKey(event.paperId) !== usagePaperKey(options['--paper'])) return false;
         if (options['--stage'] && event.stage !== options['--stage']) return false;
         if (options['--date']) {
             const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(event.at));

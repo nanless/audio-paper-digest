@@ -5445,6 +5445,9 @@ def call_publish_llm_api(
             unsuccessful_status = (
                 response_status is not None and response_status != 'completed'
             )
+            if api_type in {'openai', 'openai_chat', 'anthropic'} and finish_reason is not None:
+                successful_reasons = ('end_turn', 'stop_sequence') if api_type == 'anthropic' else ('stop',)
+                unsuccessful_status = finish_reason not in successful_reasons
             output_truncated = finish_reason in {'length', 'max_tokens', 'max_output_tokens'}
             if content and not unsuccessful_status and not output_truncated:
                 print(

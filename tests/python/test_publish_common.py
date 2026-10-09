@@ -2166,6 +2166,12 @@ primary_method_tag: #基准测试
                 'stop_reason': 'max_tokens',
             }, 'max_tokens'),
         ]
+        for finish in ('content_filter', 'tool_calls', 'function_call', 'unexpected_terminal'):
+            cases.append(('openai', {'choices': [{'message': {'content': review_json},
+                'finish_reason': finish}]}, finish))
+        for finish in ('tool_use', 'pause_turn', 'refusal', 'unexpected_terminal'):
+            cases.append(('anthropic', {'content': [{'type': 'text', 'text': review_json}],
+                'stop_reason': finish}, finish))
         for response_status in ('incomplete', 'failed', 'cancelled', 'in_progress', 'queued'):
             cases.append(('openai_responses', {
                 'status': response_status,
@@ -2215,6 +2221,10 @@ primary_method_tag: #基准测试
             ('https://api.kimi.com/coding/v1', 'kimi-k2', {
                 'content': [{'type': 'text', 'text': review_json}],
                 'stop_reason': 'end_turn',
+            }),
+            ('https://api.kimi.com/coding/v1', 'kimi-k2', {
+                'content': [{'type': 'text', 'text': review_json}],
+                'stop_reason': 'stop_sequence',
             }),
             ('https://api.kimi.com/coding/v1', 'kimi-k2', {
                 'content': [{'type': 'text', 'text': review_json}],
