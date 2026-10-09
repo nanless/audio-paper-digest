@@ -70,6 +70,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/tag-stage-record.js` | Node 库 | 只读识别新旧标签阶段格式，返回原阶段及实际字段名；两种格式混用时拒绝，也不会改写或补签旧记录。 |
 | `lib/prompt-text-versions.js` | Node 库 | 登记每个分析阶段当前使用的提示词正文路径和版本标识。旧记录按自己声明的版本取冻结的 v1 路径复算，未知版本直接报错；深度分析按它选正文，会议与 manual 的指纹也按它决定要哈希哪份文件。 |
 | `lib/prompt-rendering-contract.js` | Node 库 | 识别旧提示词替换可能改写的输入，仅使受影响论文的旧阶段失效；正常输入继续沿用原指纹和恢复记录。 |
+| `lib/model-text-sanitization.js` | Node 库 | 记录保留合法 Unicode 字符的请求清洗版本；生产恢复、提升和暂存核验当前来源，旧受影响输入须重分析，缺少受控来源不能推定可复用。旧成功结构和已发布只读状态不改。 |
 | `lib/prompt-history.js` | Node 库 | 按记录声明的 SHA 从 `prompts/history/` 取历史提示词字节。先看当前文件（含 `-v2`）是否就是那份字节，不符才查归档，查不到返回 `null` 让调用方维持原行为。 |
 | `lib/tag-record-update.js` | Node 库 | 更新或核验分析中的标签阶段记录，所选概念 ID 必须仍与原记录一致；无法核验时拒绝并说明原因。另外可只读盘点旧分类文件，不调用模型。 |
 | `lib/historical-tag-assignment.js` | Node 库 | 根据已完成且来源核验通过的历史分析结果选择标签，记录概念 ID 并去除上级重复标签。新版分配文件的名称包含词表 SHA 和分配 SHA；旧记录按原格式完整复算后读取，已有页面则按保存的对象及文件 SHA 找回原证据。 |
@@ -109,7 +110,6 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `recover-conference-process-locks.js` | CLI | 只在操作者确认本工作区、且锁的持有进程 PID 已经退出时，按文件锁协议恢复旧操作锁；活锁和不完整的锁一律跳过。 |
 | `lib/conference-filter-evidence.js` | Node 库 | 从认证候选记录批量核验官方精确 PDF，由固定 PyMuPDF 提取页文本、视觉审计和原文摘要定位证据。保存可恢复的证据运行、候选及报告；非 ready 项一律交给 LLM，不能直接排除。 |
 | `lib/official-conference-acquisition.js` | Node 库 | 按固定 2026 官方 index/record/PDF 白名单抓取会议元数据与 PDF，`PROVIDERS` 是来源清单的唯一依据。AAAI volume 40 用固定 48-issue 清单，核验逐 issue 响应凭证、SHA 和跨 issue article ID 唯一性；其他来源用单索引。索引和逐篇下载以 `0600`、`O_EXCL` 保存，恢复时完整核验。 |
-| `lib/official-conference-general-providers.js` | Node 库 | 解析通用 AI/ML/CV/NLP 官方单篇记录并核验身份；无网络、无写入，供来源适配和测试样例审查。 |
 | `lib/conference-source-context.js` | Node 库 | 生产入口只能从已认证、不可伪造的计划句柄核验完整上游证明并读取会议全文；不导出 ledger/run 测试捷径。 |
 | `lib/conference-filter.js` | Node 库 | 固定候选、已核验的证据文件、逐篇凭证、日更提示词、关键词策略、会议领域标签，以及模型、接口地址和词表的指纹。状态为 `ready` 的摘要进入关键词和提示词筛选；其他项交给模型。程序保存意图、请求凭证和决定，并在写入前核对原状态。生产凭证只能由固定公共 LLM 路由生成，不接受请求实现注入；恢复时先核验旧锁和已有记录，避免重复执行。 |
 | `lib/conference-process.js` | Node 库 | 对会议完整入选集合封存官方 PDF、导入来源，调用公共引擎分析，生成读者文章、评分、分类页面和汇总。整批默认并发 1，可设为 1–5；每篇内部并发固定为 1。新进程及完成凭证使用各自 v2 格式，词表身份写入 `tagCatalogVersion`、`tagCatalogSha256`；旧记录完整核验后沿原 UUID 恢复。 |
