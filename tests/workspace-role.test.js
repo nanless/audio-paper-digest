@@ -236,6 +236,6 @@ test('命令行解析器拒绝格式错误的角色命令', () => {
         action: 'exec', role: 'daily', command: 'node', args: ['--version']
     });
     for (const argv of [[], ['set', 'other'], ['exec', 'daily', 'node'], ['status', 'extra']]) {
-        assert.throws(() => role.parseCli(argv), /Use:/);
+        assert.throws(() => role.parseCli(argv), /用法:/);
     }
 });

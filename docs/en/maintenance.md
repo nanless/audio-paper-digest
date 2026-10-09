@@ -104,6 +104,8 @@ Original-table selection supports only tables that can be rendered verbatim safe
 
 Page reviews are reused permanently by relative path and content SHA. Publisher changes still require rerendering; code, model, protocol, or Hugo changes require current batch checks and a new receipt. Only an actual page content SHA change triggers another page review. Deployment and live pages still need manual verification.
 
+Daily source-plan reads, source reads, and both Reader operator-patch entry points open inputs without blocking before checking regular-file, link, and permission requirements. A named pipe therefore cannot leave recovery waiting indefinitely. Rejection does not repair the source. Python atomic replacement propagates real directory-sync I/O and permission errors; the rename may already have completed, so an error does not imply that old bytes remain. Only explicitly unsupported directory syncing retains compatibility.
+
 ## Before Commit
 
 - [ ] Commands match `package.json`.

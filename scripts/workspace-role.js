@@ -169,7 +169,7 @@ function parseCli(argv) {
     if (action === 'exec' && ROLES.includes(value) && rest[0] === '--' && rest.length > 1) {
         return { action, role: value, command: rest[1], args: rest.slice(2) };
     }
-    throw new Error('Use: status | set daily|history [--force] | exec daily|history -- COMMAND [ARGS...]');
+    throw new Error('用法: status | set daily|history [--force] | exec daily|history -- COMMAND [ARGS...]');
 }
 
 async function main(argv = process.argv.slice(2)) {
