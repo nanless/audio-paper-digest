@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 'use strict';
 
-/** 按固定规则，把 Terra 写出的最终文章和精简语义映射绑定到 V6 修订产物上。 */
+const { CURRENT_MODEL_POLICY, assertCurrentModelPolicy, versionedModelPolicy,
+    assertAgentIdentity, boundModelPolicy } = require('./manual-agent-policy.js');
+
+/** 按固定规则，把作者的最终文章和修改说明绑定到 V6 修订结果上。 */
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -378,9 +381,10 @@ function revisionBasePayloadPath(root) {
 }
 
 function bindIndependentRevisionAudit(payload, audit, context) {
-    if (audit?.version !== 1 || audit.contract !== 'manual-v6-independent-revision-audit-v1'
-        || normalizedId(audit.paperId) !== context.paperId || audit.model !== 'gpt-5.6-terra'
-        || audit.reasoningEffort !== 'high' || audit.singlePaperOnly !== true
+    assertAgentIdentity(audit, CURRENT_MODEL_POLICY, '独立修订审查');
+    boundModelPolicy(payload, CURRENT_MODEL_POLICY, '修订记录');
+    if (audit?.version !== 2 || audit.contract !== 'manual-v6-independent-revision-audit-v2'
+        || normalizedId(audit.paperId) !== context.paperId || audit.singlePaperOnly !== true
         || audit.isolatedContext !== true || audit.finalPassed !== true
         || !String(audit.taskName || '').startsWith('/root/')) {
         throw new Error('independent revision audit 身份、模型或最终状态非法');
@@ -389,6 +393,11 @@ function bindIndependentRevisionAudit(payload, audit, context) {
         || audit.mapFileSha256 !== context.mapFileSha256) {
         throw new Error('independent revision audit 未绑定当前 article/map 字节');
     }
+    return applyAuditPasses(payload, audit.passes);
+}
+
+function applyAuditPasses(payload, passes, options = {}) {
+    const audit = { passes };
     if (!Array.isArray(audit.passes) || audit.passes.length < 2) {
         throw new Error('independent revision audit 必须包含至少两轮真实 passes');
     }
@@ -453,8 +462,9 @@ function bindIndependentRevisionAudit(payload, audit, context) {
                 .map(normalizedText);
             const decision = repaired ? 'repaired' : (notNeeded ? 'not_needed' : 'manual_verified');
             const issues = repaired ? findings : [];
-            const conclusion = findings[0]
-                || `独立 revision audit 已对 ${stage} 完成 ${attempts} 轮复核并确认当前最终字节通过。`;
+            const conclusion = options.preflight === true
+                ? '临时结构预检查使用的占位记录，不代表模型复核，不得保存为正式审查凭证。'
+                : (findings[0] || `独立修订审查已对 ${stage} 完成 ${attempts} 轮复核并确认当前最终字节通过。`);
             return [stage, {
                 decision, attempts, evidenceIds: [evidenceId], sourceQuotes: [sourceQuote],
                 issues, conclusion
@@ -655,6 +665,7 @@ function bindRevision(options) {
     if (!paperId) throw new Error('--paper 必须是合法 arXiv ID');
     const paths = runnerPaths(options.date, options.workflowRoot || Config.FILES.manualV6Dir);
     const state = verifyBoundInputs(readJson(paths.statePath, 'runner state').value);
+    assertCurrentModelPolicy(versionedModelPolicy(state, 1, 2, '任务队列'), '修订正文');
     const task = state.papers?.[paperId]?.tasks?.author_revision;
     if (!task || task.status !== 'running' || !task.taskName) throw new Error(`${paperId}.author_revision 必须处于 running`);
     const root = fs.realpathSync(task.artifactRoot);
@@ -670,7 +681,9 @@ function bindRevision(options) {
     const sourceText = assertInside(root, path.join(root, 'evidence', 'fulltext.txt'), 'fulltext')
         .bytes.toString('utf8');
     const basePayload = readJson(basePayloadPath, 'revision base payload').value;
+    boundModelPolicy(basePayload, CURRENT_MODEL_POLICY, '原作者记录');
     const { article, bundle } = buildLongform(articleFile.bytes.toString('utf8'), map, artifactIndex);
+    bundle.modelPolicy = CURRENT_MODEL_POLICY;
     const articleBytes = Buffer.from(`${article}\n`, 'utf8');
     if (options.prepare === true) {
         if (!articleFile.bytes.equals(articleBytes)) writeFileAtomic(articlePath, articleBytes);
@@ -696,22 +709,13 @@ function bindRevision(options) {
         const preflightStages = Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => [
             stage, { status: 'pass', findings: [] }
         ]));
-        const structuralAudit = {
-            version: 1, contract: 'manual-v6-independent-revision-audit-v1', paperId,
-            taskName: `/root/revision_preflight_${paperId.replace('.', '_')}`,
-            model: 'gpt-5.6-terra', reasoningEffort: 'high',
-            singlePaperOnly: true, isolatedContext: true, finalPassed: true,
-            articleFileSha256: sha256Bytes(articleFile.bytes), mapFileSha256: sha256Bytes(mapFile.bytes),
-            passes: [1, 2].map(iteration => ({
-                iteration, status: 'pass', stages: structuredClone(preflightStages), issues: []
-            }))
-        };
-        const preflightPayload = buildPatchedPayload(bindIndependentRevisionAudit(
+        const structuralPasses = [1, 2].map(iteration => ({
+            iteration, status: 'pass', stages: structuredClone(preflightStages), issues: []
+        }));
+        const preflightPayload = buildPatchedPayload(applyAuditPasses(
             applyReviewDecisionsAndRevisionPatches(
                 basePayload, map, technicalReview, pedagogyReview, { sourceText }
-            ),
-            structuralAudit,
-            { paperId, articleFileSha256: sha256Bytes(articleFile.bytes), mapFileSha256: sha256Bytes(mapFile.bytes) }
+            ), structuralPasses, { preflight: true }
         ));
         preflightPayload.version = 4;
         preflightPayload.manualDepth = 'full-text-evidence-v6';
@@ -724,7 +728,7 @@ function bindRevision(options) {
             ...preflightPayload.editorial, readerArticle: article, longformBundle: bundle
         };
         validateRecord(preflightPayload, paperId, 'revision payload preflight', {
-            recordsVersion: RECORDS_VERSION
+            recordsVersion: RECORDS_VERSION, expectedModelPolicy: CURRENT_MODEL_POLICY
         });
         return {
             paperId, preflight: true, articleSha256: bundle.articleSha256,
@@ -751,7 +755,7 @@ function bindRevision(options) {
     delete payload.sealedRecordSha256; delete payload.reviewReceipts; delete payload.reviewResolution;
     payload.editorial = { ...payload.editorial, readerArticle: article, longformBundle: bundle };
     validateRecord(payload, paperId, 'revision payload before signature', {
-        recordsVersion: RECORDS_VERSION
+        recordsVersion: RECORDS_VERSION, expectedModelPolicy: CURRENT_MODEL_POLICY
     });
     const payloadBytes = jsonBytes(payload);
     writeFileAtomic(articlePath, articleBytes);
@@ -786,7 +790,8 @@ function bindRevision(options) {
     const receipt = {
         role: 'author_revision', paperId, taskName: task.taskName,
         singlePaperOnly: true, isolatedContext: true,
-        model: 'gpt-5.6-terra', reasoningEffort: 'high',
+        version: 2, modelPolicy: CURRENT_MODEL_POLICY,
+        model: task.model, reasoningEffort: task.reasoningEffort,
         inputPacketSha256: task.packetSha256, consumedPacketSha256: task.packetSha256,
         outputSha256, articleSha256: bundle.articleSha256, finalArticleSha256: bundle.articleSha256,
         queuedAt: task.claimedAt, startedAt: task.startedAt,

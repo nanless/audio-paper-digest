@@ -1,5 +1,7 @@
 'use strict';
 
+const { boundModelPolicy } = require('./manual-agent-policy.js');
+
 /** 检查作者填写的文档类型和标签字段，并整理为统一格式。 */
 const {
     ALLOWED_TAGS,
@@ -84,7 +86,8 @@ function normalizeAuthorOwnedBaseFields(record, label = 'author record') {
     };
 }
 
-function validateAuthorOwnedRecordDraft(record, label = 'author record draft') {
+function validateAuthorOwnedRecordDraft(record, label = 'author record draft', options = {}) {
+    boundModelPolicy(record, options.expectedModelPolicy, label);
     const normalized = normalizeAuthorOwnedBaseFields(record, label);
     const missing = AUTHOR_OWNED_REQUIRED_FIELDS.filter(field => (
         !Object.prototype.hasOwnProperty.call(record, field)

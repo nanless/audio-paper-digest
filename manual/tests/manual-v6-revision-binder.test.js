@@ -12,6 +12,7 @@ const {
 } = require('../scripts/manual-v6-revision-binder.js');
 const { renderArtifactTableMarkdown } = require('../scripts/manual-longform-contract.js');
 const { validateOpenSourceEvidence } = require('../scripts/manual-research-contract.js');
+const { CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY } = require('../scripts/manual-agent-policy.js');
 const { REQUIRED_RECOVERY_STAGES } = require('../../scripts/analysis-contract.js');
 
 function paragraph(heading) {
@@ -127,9 +128,9 @@ describe('Manual v6 确定性修订绑定器', () => {
         }
     });
 
-    it('只从绑定当前字节的独立 Terra-high 两轮审计派生 manualAudit', () => {
+    it('只从绑定当前字节的独立 Sol/high 两轮审查生成当前 manualAudit', () => {
         const base = {
-            title: 'paper', manualAudit: { version: 0 },
+            title: 'paper', modelPolicy: CURRENT_MODEL_POLICY, manualAudit: { version: 0 },
             evidenceLedger: [{ id: 'E01' }],
             researchBrief: { centralQuestion: { sourceQuote: '这是绑定全文的连续原句，长度足够用于测试审计来源。' } }
         };
@@ -137,9 +138,9 @@ describe('Manual v6 确定性修订绑定器', () => {
             REQUIRED_RECOVERY_STAGES.map(stage => [stage, { status, findings }])
         );
         const audit = {
-            version: 1, contract: 'manual-v6-independent-revision-audit-v1',
+            version: 2, modelPolicy: CURRENT_MODEL_POLICY, contract: 'manual-v6-independent-revision-audit-v2',
             paperId: '2608.12345', taskName: '/root/audit_revision_2608_12345',
-            model: 'gpt-5.6-terra', reasoningEffort: 'high',
+            model: 'gpt-6.1-sol', reasoningEffort: 'high',
             singlePaperOnly: true, isolatedContext: true, finalPassed: true,
             articleFileSha256: 'a'.repeat(64), mapFileSha256: 'b'.repeat(64),
             passes: [
@@ -161,6 +162,25 @@ describe('Manual v6 确定性修订绑定器', () => {
             paperId: '2608.12345', articleFileSha256: 'c'.repeat(64), mapFileSha256: 'b'.repeat(64)
         }), /未绑定当前 article\/map 字节/);
 
+        const baseBytes = JSON.stringify(base);
+        const auditBytes = JSON.stringify(audit);
+        for (const change of [
+            { model: 'gpt-5.6-terra' }, { reasoningEffort: 'low' },
+            { modelPolicy: LEGACY_MODEL_POLICY }, { modelPolicy: 'unknown-policy' },
+            { version: 1 }, { contract: 'manual-v6-independent-revision-audit-v1' },
+            { singlePaperOnly: false }, { isolatedContext: false }
+        ]) {
+            assert.throws(() => bindIndependentRevisionAudit(base, { ...audit, ...change }, {
+                paperId: '2608.12345', articleFileSha256: 'a'.repeat(64), mapFileSha256: 'b'.repeat(64)
+            }), /gpt-6\.1-sol\/high|模型|规则|身份/);
+            assert.equal(JSON.stringify(base), baseBytes);
+            assert.equal(JSON.stringify(audit), auditBytes);
+        }
+        for (const modelPolicy of [LEGACY_MODEL_POLICY, 'unknown-policy']) {
+            assert.throws(() => bindIndependentRevisionAudit({ ...base, modelPolicy }, audit, {
+                paperId: '2608.12345', articleFileSha256: 'a'.repeat(64), mapFileSha256: 'b'.repeat(64)
+            }), /模型规则/);
+        }
         const missingSummary = structuredClone(audit);
         delete missingSummary.passes[0].stages.coreSummaryRepair;
         assert.throws(() => bindIndependentRevisionAudit(base, missingSummary, {

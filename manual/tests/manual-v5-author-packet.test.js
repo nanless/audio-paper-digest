@@ -144,10 +144,29 @@ function fixture(paperId = ID, requestedId = paperId) {
     };
 }
 
-describe('Manual v5 冷启动作者包', () => {
-    it('生成精确的单篇白名单，并锁定工作队列输入 SHA', () => {
+// 这里只保存只读构造器返回的旧格式测试样例，不调用已关闭的生产写入入口。
+function savedPacketSample(options) {
+    const built = buildAuthorPacket(options);
+    fs.mkdirSync(built.packetPaths.root, { recursive: true });
+    fs.writeFileSync(built.packetPaths.metadataPath, built.metadataBytes);
+    write(built.packetPaths.packetPath, `${JSON.stringify(built.packet, null, 2)}\n`);
+    return built;
+}
+function treeHashes(root) {
+    const result = {};
+    for (const name of fs.readdirSync(root).sort()) {
+        const file = path.join(root, name), info = fs.lstatSync(file);
+        if (info.isDirectory()) {
+            for (const [key, value] of Object.entries(treeHashes(file))) result[`${name}/${key}`] = value;
+        } else result[name] = info.isSymbolicLink() ? `link:${fs.readlinkSync(file)}` : sha(file);
+    }
+    return result;
+}
+
+describe('Manual v5 旧作者包只读核验', () => {
+    it('只读构造旧单篇白名单，原格式样例与观测工作队列输入 SHA 对应', () => {
         const fx = fixture();
-        const built = materializeAuthorPacket(fx.options);
+        const built = savedPacketSample(fx.options);
         assert.equal(built.packet.contract, PACKET_CONTRACT);
         assert.equal(built.packet.inputContract, AUTHOR_TASK_INPUT_CONTRACT);
         assert.deepEqual(
@@ -191,7 +210,8 @@ describe('Manual v5 冷启动作者包', () => {
         fs.mkdirSync(elsewhere);
         fs.mkdirSync(path.dirname(fx2.packetPaths.root), { recursive: true });
         fs.symlinkSync(elsewhere, fx2.packetPaths.root);
-        assert.throws(() => materializeAuthorPacket(fx2.options), /symlink|父路径/);
+        const built = buildAuthorPacket(fx2.options);
+        assert.throws(() => validateAuthorPacket(built.packet, { ...fx2.options, requireMaterialized: true }), /symlink|父路径/);
     });
 
     it('拒绝路径逃逸、白名单外的条目和多余的目录输入', () => {
@@ -205,7 +225,7 @@ describe('Manual v5 冷启动作者包', () => {
             }
         }), /受控单篇 input 目录|输出目录必须位于 data\/current/);
 
-        const built = materializeAuthorPacket(fx.options);
+        const built = savedPacketSample(fx.options);
         const injected = structuredClone(built.packet);
         injected.allowedInputs.push({
             kind: 'historical_article', authority: 'renamed_file',
@@ -213,7 +233,7 @@ describe('Manual v5 冷启动作者包', () => {
         });
         assert.throws(() => validateAuthorPacket(injected, fx.options), /exact allowlist|不一致/);
         write(path.join(fx.packetPaths.root, 'old-post.md'), 'old prose');
-        assert.throws(() => materializeAuthorPacket(fx.options), /额外输入/);
+        assert.throws(() => validateAuthorPacket(built.packet, { ...fx.options, requireMaterialized: true }), /额外输入/);
     });
 
     it('全文或 ArtifactIndex 身份漂移时直接失败', () => {
@@ -254,7 +274,7 @@ describe('Manual v5 冷启动作者包', () => {
     });
 });
 
-it('旧式 arXiv 身份通过全文清单、作者包物化与重验，保留请求版本和分类大小写', () => {
+it('旧式 arXiv 身份通过全文清单与旧格式作者包核验，保留请求版本和分类大小写', () => {
     for (const [paperId, requestedId] of [
         ['hep-th/9901001', 'hep-th/9901001v2'],
         ['math.gt/0309136', 'math.GT/0309136v1'],
@@ -262,7 +282,7 @@ it('旧式 arXiv 身份通过全文清单、作者包物化与重验，保留请
     ]) {
         const fx = fixture(paperId, requestedId);
         try {
-            const built = materializeAuthorPacket(fx.options);
+            const built = savedPacketSample(fx.options);
             assert.equal(built.packet.paperId, paperId);
             assert.equal(built.packet.sourceEntry.requestedArxivId, requestedId);
             assert.equal(built.packet.paperInputSha256, fx.input.paperInputSha256);
@@ -274,4 +294,15 @@ it('旧式 arXiv 身份通过全文清单、作者包物化与重验，保留请
             assert.throws(() => validateAuthorPacket(changed, { ...fx.options, requireMaterialized: true }));
         } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
     }
+});
+
+it('已关闭的旧作者包写入入口拒绝正常输入，保留整个原文件树', () => {
+    const fx = fixture();
+    try {
+        const before = treeHashes(fx.root);
+        assert.throws(() => materializeAuthorPacket(fx.options), /旧 v5.*仅保留读取与核验/);
+        assert.deepEqual(treeHashes(fx.root), before);
+        assert.equal(fs.existsSync(fx.packetPaths.packetPath), false);
+        assert.equal(fs.existsSync(fx.packetPaths.metadataPath), false);
+    } finally { fs.rmSync(fx.root, { recursive: true, force: true }); }
 });

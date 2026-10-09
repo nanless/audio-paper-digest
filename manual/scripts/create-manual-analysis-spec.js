@@ -4,6 +4,7 @@
  * 汇编出严格的 manual_complete v4 分析规范。不调用任何 API。
  */
 const fs = require('fs');
+const { boundModelPolicy, CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY, modelPolicyRules, assertAgentIdentity } = require('./manual-agent-policy.js');
 const path = require('path');
 const crypto = require('crypto');
 if (require.main === module) {
@@ -266,6 +267,10 @@ function validateStageAttempts(value, audit, label = 'stageReviewAttemptsByStage
 
 function validateRecord(record, id, label = `papers.${id}`, options = {}) {
     const recordsVersion = options.recordsVersion ?? LEGACY_RECORDS_VERSION;
+    const policy = boundModelPolicy(record, options.expectedModelPolicy, label);
+    if (policy === CURRENT_MODEL_POLICY) {
+        assertAgentIdentity(record.readabilityRubric, policy, `${label}.readabilityRubric`, { receipt: false });
+    }
     if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error(`${label} 必须是对象`);
     const recordId = normalizedId(record.arxivId || id);
     if (!recordId || recordId !== id) throw new Error(`${label}.arxivId 与对象键不一致`);
@@ -362,6 +367,7 @@ function validateRecord(record, id, label = `papers.${id}`, options = {}) {
     const researchBrief = recordsVersion === RECORDS_VERSION
         ? (validateResearchBrief(record.researchBrief, {
             paperId: id,
+            expectedModelPolicy: policy,
             documentType: record.type,
             requireBindings: false
         }), JSON.parse(JSON.stringify(record.researchBrief)))
@@ -377,6 +383,7 @@ function validateRecord(record, id, label = `papers.${id}`, options = {}) {
     const scoringCalibration = recordsVersion === RECORDS_VERSION
         ? (validateScoringCalibration(record.scoringCalibration, {
             evidenceLedger: record.evidenceLedger,
+            expectedModelPolicy: policy,
             paperSubagentTask: record.researchBrief?.paperSubagent?.taskName,
             label: `${label}.scoringCalibration`
         }), JSON.parse(JSON.stringify(record.scoringCalibration)))
@@ -588,6 +595,10 @@ function resolveManualImageInsertions(analysis, insertions, selectedImageUrls, l
 }
 
 function validateRecordsEnvelope(document, filePath, expectedDate) {
+    const modelPolicy = boundModelPolicy(document, undefined, '分析记录集合');
+    if (document.version === LEGACY_RECORDS_VERSION && modelPolicy === CURRENT_MODEL_POLICY) {
+        throw new Error('历史记录格式不能借用当前模型规则');
+    }
     if (![LEGACY_RECORDS_VERSION, RECORDS_VERSION].includes(document.version)
         || document.mode !== RECORDS_MODE) {
         throw new Error(`${filePath} 必须是历史 version=${LEGACY_RECORDS_VERSION} 或当前 version=${RECORDS_VERSION}、mode=${RECORDS_MODE}`);
@@ -611,7 +622,7 @@ function validateRecordsEnvelope(document, filePath, expectedDate) {
         if (!id || id !== rawId) throw new Error(`${filePath}.papers 键必须是规范化 arXiv ID: ${rawId}`);
         if (papers[id]) throw new Error(`${filePath}.papers 含重复 ID: ${id}`);
         papers[id] = validateRecord(record, id, `${filePath}.papers.${id}`, {
-            recordsVersion: document.version
+            recordsVersion: document.version, expectedModelPolicy: modelPolicy
         });
     }
     if (tutorialPayloadContract) {
@@ -624,6 +635,7 @@ function validateRecordsEnvelope(document, filePath, expectedDate) {
     }
     return {
         version: document.version, mode: RECORDS_MODE, date: expectedDate,
+        ...(modelPolicy === CURRENT_MODEL_POLICY ? { modelPolicy } : {}),
         agent, reviewProtocol, tutorialPayloadContract: tutorialPayloadContract || null, papers
     };
 }
@@ -713,6 +725,7 @@ function mergeRecordsEnvelopes(inputs, expectedDate) {
     let reviewProtocol;
     let recordsVersion;
     let tutorialPayloadContract;
+    let modelPolicy;
     const sourceAgents = new Set();
     const sourceReviewProtocols = new Set();
     const papers = {};
@@ -724,6 +737,11 @@ function mergeRecordsEnvelopes(inputs, expectedDate) {
             throw new Error(`records 文件内容与已读取对象不一致: ${filePath}`);
         }
         const envelope = validateRecordsEnvelope(input.document, filePath, expectedDate);
+        const envelopePolicy = boundModelPolicy(envelope, undefined, '分析记录集合');
+        if (modelPolicy !== undefined && envelopePolicy !== modelPolicy) {
+            throw new Error('同一批分析记录不能混用新旧模型规则');
+        }
+        modelPolicy = envelopePolicy;
         if (recordsVersion !== undefined && envelope.version !== recordsVersion) {
             throw new Error(`records version 不一致，禁止把历史 v2 与当前 v3 shard 混成同一批: ${filePath}`);
         }
@@ -773,6 +791,7 @@ function mergeRecordsEnvelopes(inputs, expectedDate) {
     assertNoCrossPaperTemplateReuse(papers);
     return {
         date: expectedDate,
+        ...(modelPolicy === CURRENT_MODEL_POLICY ? { modelPolicy } : {}),
         agent: recordsVersion === RECORDS_VERSION && sourceAgents.size > 1
             ? 'Codex-multi-paper-subagents'
             : agent,
@@ -1239,11 +1258,28 @@ function validateFullTextManifest(filtered, manifest, date, manifestPath) {
     return context;
 }
 
+const V6_ASSEMBLY_CONTEXT = Symbol('manual-v6-assembly');
+
 function buildSpec(options) {
+    return buildSpecInternal(options);
+}
+
+// 仅供 v6 组装器核对和复用中间分析对象；不写入配置或启动任务。
+function buildV6AssemblyBase(options) {
+    return buildSpecInternal(options, V6_ASSEMBLY_CONTEXT);
+}
+
+function buildSpecInternal(options, assemblyContext) {
     const {
         date, filtered, filteredPath, manifest, manifestPath, mergedRecords,
         generatedAt = getBeijingISOString()
     } = options;
+    const modelPolicy = boundModelPolicy(mergedRecords, options.expectedModelPolicy, '分析记录集合');
+    if (modelPolicy === CURRENT_MODEL_POLICY && assemblyContext !== V6_ASSEMBLY_CONTEXT) {
+        throw new Error('当前模型规则只能组装 v6 正式配置；旧 v4/v5 组装接口仅用于核验旧记录');
+    }
+    const authoringPromptPath = modelPolicyRules(modelPolicy).analysisRecordPath;
+    const authoringPromptFile = path.join(Config.PROJECT_ROOT, authoringPromptPath);
     const manifestBuffer = fs.readFileSync(manifestPath);
     const manifestSha256 = sha256Buffer(manifestBuffer);
     let manifestOnDisk;
@@ -1293,6 +1329,7 @@ function buildSpec(options) {
     for (const paper of filtered.papers) {
         const id = normalizedId(paper);
         const record = mergedRecords.papers[id];
+        boundModelPolicy(record, modelPolicy, `${id} 分析记录`);
         const entry = manifest.papers[id];
         const sourceBuffer = fs.readFileSync(entry.path);
         if (sourceBuffer.length !== entry.bytes || sha256Buffer(sourceBuffer) !== entry.sourceSha256) {
@@ -1393,6 +1430,7 @@ function buildSpec(options) {
             }
             if (!validatedV6Records) {
                 validateResearchBrief(record.researchBrief, {
+                    expectedModelPolicy: modelPolicy,
                     paperId: id,
                     documentType: record.type,
                     sourceText,
@@ -1448,6 +1486,7 @@ function buildSpec(options) {
                 record.editorial?.readerArticle,
                 record.evidenceLedger,
                 {
+                    expectedModelPolicy: modelPolicy,
                     label: `${id}.editorial.readerArticle`, sourceText,
                     externalEvidence: record.openSourceEvidence?.sourceQuotes || [],
                     boundEvidence: [
@@ -1547,12 +1586,13 @@ function buildSpec(options) {
             paperMetadataSha256: entry.paperMetadataSha256,
             paperInputSha256: entry.paperInputSha256,
             filteredBatchSha256: entry.filteredBatchSha256,
+            ...(modelPolicy === CURRENT_MODEL_POLICY ? { modelPolicy } : {}),
             analysis,
             imageInfos,
             selectedImageUrls,
             imageInsertions,
             imageSelectionMode: explicitSelection ? 'manual_explicit' : 'manual_no_eligible_images',
-            manualAuthoringPromptSha256: sha256Buffer(fs.readFileSync(MANUAL_AUTHORING_PROMPT)),
+            manualAuthoringPromptSha256: sha256Buffer(fs.readFileSync(authoringPromptFile)),
             evidenceLedger,
             resultClaims: JSON.parse(JSON.stringify(record.resultClaims)),
             ...(record.resultClaimsException
@@ -1616,12 +1656,13 @@ function buildSpec(options) {
     return {
         version: mergedRecords.recordsVersion === RECORDS_VERSION ? SPEC_VERSION : LEGACY_SPEC_VERSION,
         mode: SPEC_MODE,
+        ...(modelPolicy === CURRENT_MODEL_POLICY ? { modelPolicy } : {}),
         date,
         agent: mergedRecords.agent,
         promptPath: promptBindings.primaryAnalysis.source,
         promptSha256: promptBindings.primaryAnalysis.sha256,
-        manualAuthoringPromptPath: 'manual/prompts/manual-analysis-record.md',
-        manualAuthoringPromptSha256: sha256Buffer(fs.readFileSync(MANUAL_AUTHORING_PROMPT)),
+        manualAuthoringPromptPath: authoringPromptPath,
+        manualAuthoringPromptSha256: sha256Buffer(fs.readFileSync(authoringPromptFile)),
         stagePromptSha256: Object.fromEntries(Object.entries(promptBindings).map(([stage, binding]) => [stage, binding.sha256])),
         reviewProtocol: mergedRecords.reviewProtocol,
         recordsVersion: mergedRecords.recordsVersion,
@@ -1653,28 +1694,8 @@ function buildSpec(options) {
     };
 }
 
-function run(argv = process.argv.slice(2)) {
-    const args = parseArgs(argv);
-    const recordInputs = args.records.map(value => {
-        const filePath = path.resolve(Config.PROJECT_ROOT, value);
-        return { path: filePath, document: readJson(filePath, 'manual analysis records') };
-    });
-    const mergedRecords = mergeRecordsEnvelopes(recordInputs, args.date);
-    const filtered = readJson(Config.FILES.filteredPapers, 'filtered-papers');
-    const manifestPath = path.join(Config.CURRENT_DIR, 'manual-full-text', args.date, 'manifest.json');
-    const manifest = readJson(manifestPath, 'manual full-text manifest');
-    const spec = buildSpec({
-        date: args.date,
-        filtered,
-        filteredPath: Config.FILES.filteredPapers,
-        manifest,
-        manifestPath,
-        mergedRecords
-    });
-    const outputPath = path.join(Config.CURRENT_DIR, `manual-analysis-spec-${args.date}.json`);
-    writeFileAtomic(outputPath, JSON.stringify(spec, null, 2));
-    console.log(`✅ 已原子写入 manual_complete v${spec.version} spec：${outputPath}（${Object.keys(spec.papers).length} 篇，API 调用 0）`);
-    return { outputPath, spec };
+function run() {
+    throw new Error('旧 v4/v5 配置入口仅保留读取与核验；新任务请使用 v6 组装入口');
 }
 
 if (require.main === module) {
@@ -1713,6 +1734,7 @@ module.exports = {
     validateFullTextManifest,
     resolveManualImageInsertions,
     buildSpec,
+    buildV6AssemblyBase,
     run,
     stagePromptBindings,
     currentStagePromptBindings,

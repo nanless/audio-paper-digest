@@ -1089,7 +1089,7 @@ describe('严格可复用的 Manual v4 spec 组装器', () => {
         }), /filtered 完整批次指纹不一致/);
     });
 
-    it('旧 v2 配置通过实际入口重新组装，进入录入前停止且保留原字节', async () => {
+    it('旧 v2 配置可按原字节重新核验，但正式录入明确拒绝', async () => {
         const { expectedFrozenV2Bindings } = require('./helpers/frozen-v2-prompt-bindings.cjs');
         const frozen = expectedFrozenV2Bindings(), f = fixture();
         try {
@@ -1116,11 +1116,14 @@ describe('严格可复用的 Manual v4 spec 组装器', () => {
             const previousResult = Object.getOwnPropertyDescriptor(Config.FILES, 'deepAnalysisResult');
             const previousArgv = process.argv;
             const stop = new Error('CONTROLLED_STOP_AFTER_REAL_ASSEMBLY_BEFORE_WORKERS');
+            let canonicalRead = false;
             try {
                 Config.CURRENT_DIR = f.root; Config.FILES.filteredPapers = f.filteredPath;
-                Object.defineProperty(Config.FILES, 'deepAnalysisResult', { configurable: true, get() { throw stop; } });
+                Object.defineProperty(Config.FILES, 'deepAnalysisResult', { configurable: true, get() { canonicalRead = true; throw stop; } });
                 process.argv = ['node', 'manual-deep-analysis.js', '--date', DATE, '--spec', specPath];
-                await assert.rejects(require('../scripts/manual-deep-analysis.js').run(), error => error === stop);
+                await assert.rejects(require('../scripts/manual-deep-analysis.js').run(),
+                    /旧模型配置仅保留读取与核验；新录入须使用当前模型规则的 v6 配置/);
+                assert.equal(canonicalRead, false, '拒绝旧配置后不能读取或写入正式结果');
             } finally {
                 Config.CURRENT_DIR = previousCurrent; Config.FILES.filteredPapers = previousFiltered;
                 if (previousResult) Object.defineProperty(Config.FILES, 'deepAnalysisResult', previousResult);

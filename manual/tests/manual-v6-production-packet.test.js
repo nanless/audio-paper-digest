@@ -19,6 +19,7 @@ const {
 } = require('../scripts/manual-v6-production-packet.js');
 const { taskOutputContract } = require('../scripts/manual-v6-workflow.js');
 const { stableSha256 } = require('../scripts/manual-v6-workflow.js');
+const { CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY } = require('../scripts/manual-agent-policy.js');
 
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
@@ -45,7 +46,7 @@ function populateAuthorMinimums(draft) {
 }
 
 describe('Manual v6 生产包生成器', () => {
-    it('新 packet 内联角色输出 schema 与稳定签名算法，旧 packet 仍可兼容校验', () => {
+    it('新任务内联角色输出格式与 SHA-256 算法，要求当前模型身份', () => {
         const technical = taskOutputContract('technical_scoring');
         assert.equal(technical.fixedOutputPath, 'reviews/technical-scoring.json');
         assert.equal(technical.fixedReceiptPath, 'receipts/technical-scoring.json');
@@ -79,14 +80,19 @@ describe('Manual v6 生产包生成器', () => {
         assert.ok(blank.authorOwnedRequiredFields.includes('manualAudit'));
         assert.ok(blank.authorOwnedRequiredFields.includes('editorial'));
         assert.equal(blank.fixedPaths.authorArticle, 'draft/author-article.md');
-        assert.equal(blank.authorReceipt.requiredIdentity.model, 'gpt-5.6-terra');
+        assert.equal(blank.authorReceipt.requiredIdentity.model, 'gpt-6.1-sol');
+        assert.equal(blank.authorReceipt.requiredIdentity.modelPolicy, CURRENT_MODEL_POLICY);
+        assert.equal(blank.authorReceipt.requiredIdentity.reasoningEffort, 'high');
+        assert.equal(blank.recordSkeleton.modelPolicy, CURRENT_MODEL_POLICY);
+        assert.equal(blank.recordSkeleton.researchBrief.paperSubagent.version, 2);
+        assert.equal(blank.recordSkeleton.editorial.longformBundle.modelPolicy, CURRENT_MODEL_POLICY);
         assert.ok(blank.fields.editorial.longformBundle.required.includes('blocks'));
         assert.ok(blank.fields.editorial.longformBundle.required.includes('tables'));
         assert.ok(blank.fields.editorial.longformBundle.required.includes('relatedWorks'));
         assert.ok(!blank.fields.editorial.longformBundle.required.includes('tableCoverage'));
         assert.deepEqual(Object.keys(blank.recordSkeleton.editorial.longformBundle).sort(), [
             'articleSha256', 'artifactIndexSha256', 'blocks', 'contract', 'figures',
-            'formulas', 'paperId', 'relatedWorks', 'tables', 'terms', 'version'
+            'formulas', 'modelPolicy', 'paperId', 'relatedWorks', 'tables', 'terms', 'version'
         ]);
         assert.ok(blank.fields.authorDraftForbidden.includes('sealedRecordSha256'));
         assert.ok(blank.roleOwnership.deterministic_sealer.includes('reviewResolution'));
@@ -131,14 +137,25 @@ describe('Manual v6 生产包生成器', () => {
             }
         };
         assert.doesNotThrow(() => validateAuthorOutputDescriptor(output, root, {
-            paperId: '2608.12345', taskName: 'author-task-12345'
+            paperId: '2608.12345', taskName: 'author-task-12345',
+            expectedModelPolicy: CURRENT_MODEL_POLICY
         }));
+        const originalDraftBytes = fs.readFileSync(path.join(root, 'draft', 'author-record.json'));
+        const originalOutput = JSON.stringify(output);
+        for (const expectedModelPolicy of [LEGACY_MODEL_POLICY, 'unknown-policy', null, false, '']) {
+            assert.throws(() => validateAuthorOutputDescriptor(output, root, {
+                paperId: '2608.12345', taskName: 'author-task-12345', expectedModelPolicy
+            }), /模型规则/);
+            assert.ok(originalDraftBytes.equals(fs.readFileSync(path.join(root, 'draft', 'author-record.json'))));
+            assert.equal(JSON.stringify(output), originalOutput);
+        }
         draft.sealedRecordSha256 = 'a'.repeat(64);
         fs.writeFileSync(path.join(root, 'draft', 'author-record.json'), JSON.stringify(draft));
         output.recordDraft.fileSha256 = sha(fs.readFileSync(path.join(root, 'draft', 'author-record.json')));
         output.recordDraft.semanticSha256 = stableSha256(draft);
         assert.throws(() => validateAuthorOutputDescriptor(output, root, {
-            paperId: '2608.12345', taskName: 'author-task-12345'
+            paperId: '2608.12345', taskName: 'author-task-12345',
+            expectedModelPolicy: CURRENT_MODEL_POLICY
         }), /不能带有 sealedRecordSha256/);
         fs.rmSync(root, { recursive: true, force: true });
     });

@@ -4,10 +4,11 @@
 /**
  * production v6 里显式的单篇元数据更正约定。
  *
- * 它不是归一化器。更正内容和核验记录必须由 Terra/high 这一层写出来。批次清单
+ * 它不是归一化器。新更正内容和核验记录必须由 gpt-6.1-sol/high 助手如实写出。批次清单
  * 会把原来的修订产物和 payload 字节、更正字节，以及一棵排序后的 Merkle 根绑在
  * 一起；做完这些，记录封装器才能应用那四个允许修改的字段。
  */
+const { CURRENT_MODEL_POLICY, modelPolicyRules, versionedModelPolicy, assertCurrentModelPolicy, assertAgentIdentity, boundModelPolicy } = require('./manual-agent-policy.js');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -31,12 +32,29 @@ const CORRECTION_MANIFEST_CONTRACT = 'manual-v6-metadata-correction-manifest-v1'
 const CORRECTION_MERKLE_CONTRACT = 'manual-v6-metadata-correction-merkle-v1';
 const CORRECTION_PROOF_CONTRACT = 'manual-v6-metadata-correction-proof-v1';
 const CORRECTION_ROLE = 'metadata_correction';
-const CORRECTION_STATE_VERSION = 1;
+const CORRECTION_STATE_VERSION = 2;
 const CORRECTION_STATE_MODE = 'manual_v6_metadata_correction_runner';
 const CORRECTION_ACTIVE_LIMIT = 3;
 const MUTABLE_FIELDS = Object.freeze(['/primaryMethodTag', '/tags', '/task', '/type']);
 const SHA_RE = /^[a-f0-9]{64}$/;
 const TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?\+08:00$/;
+
+function correctionPolicy(value, expectedPolicy, label) {
+    const policy = versionedModelPolicy(value, 1, 2, label);
+    if (expectedPolicy !== undefined) {
+        modelPolicyRules(expectedPolicy);
+        if (policy !== expectedPolicy) throw new Error(`${label} 与指定模型规则不一致`);
+    }
+    return policy;
+}
+
+function correctionContract(legacyContract, policy) {
+    return policy === CURRENT_MODEL_POLICY ? legacyContract.replace(/-v1$/, '-v2') : legacyContract;
+}
+
+function requireCurrentCorrectionState(state) {
+    assertCurrentModelPolicy(correctionPolicy(state, undefined, '元数据更正队列'), '修改元数据更正任务');
+}
 
 function stableSha256(value) {
     return stableSignatureSha256(value, 'manual-v6-metadata-correction');
@@ -172,12 +190,13 @@ function manifestSemantic(manifest) {
 
 function validatePacket(packet, options = {}) {
     const value = assertObject(packet, 'metadata correction packet');
+    const policy = correctionPolicy(value, options.expectedModelPolicy, '元数据更正任务');
     assertExactKeys(value, [
         'version', 'contract', 'date', 'paperId', 'role', 'singlePaperOnly',
         'isolatedContext', 'mutableFields', 'allowedDocumentTypes', 'allowedTags',
-        'revisionOutput', 'recordPayload', 'packetSha256'
+        'revisionOutput', 'recordPayload', 'packetSha256', ...(policy === CURRENT_MODEL_POLICY ? ['modelPolicy'] : [])
     ], 'metadata correction packet');
-    if (value.version !== 1 || value.contract !== CORRECTION_PACKET_CONTRACT
+    if (value.contract !== correctionContract(CORRECTION_PACKET_CONTRACT, policy)
         || value.role !== CORRECTION_ROLE || value.singlePaperOnly !== true
         || value.isolatedContext !== true || value.date !== options.date
         || normalizedId(value.paperId) !== options.paperId || value.paperId !== options.paperId) {
@@ -212,6 +231,7 @@ function validatePacket(packet, options = {}) {
             path.join(options.dateRoot, value.recordPayload.path),
             'metadata correction packet record payload', options.dateRoot
         );
+        boundModelPolicy(payload.value, policy, '更正任务原记录');
         for (const [label, actual, ref] of [
             ['revision output', output, value.revisionOutput],
             ['record payload', payload, value.recordPayload]
@@ -233,20 +253,22 @@ function validatePacket(packet, options = {}) {
 
 function validateCorrection(correction, packet, payload, options = {}) {
     const value = assertObject(correction, 'metadata correction output');
+    const policy = correctionPolicy(packet, options.expectedModelPolicy, '元数据更正任务');
+    correctionPolicy(value, policy, '元数据更正结果');
+    assertAgentIdentity(value, policy, '元数据更正身份');
     assertExactKeys(value, [
         'version', 'contract', 'date', 'paperId', 'role', 'taskName', 'passed',
         'singlePaperOnly', 'isolatedContext', 'model', 'reasoningEffort',
-        'packetSha256', 'originalRecordPayload', 'changes', 'changedFields', 'rationale'
+        'packetSha256', 'originalRecordPayload', 'changes', 'changedFields', 'rationale', ...(policy === CURRENT_MODEL_POLICY ? ['modelPolicy'] : [])
     ], 'metadata correction output');
-    if (value.version !== 1 || value.contract !== CORRECTION_OUTPUT_CONTRACT
+    if (value.contract !== correctionContract(CORRECTION_OUTPUT_CONTRACT, policy)
         || value.role !== CORRECTION_ROLE || value.date !== packet.date
         || value.paperId !== packet.paperId || value.packetSha256 !== packet.packetSha256
         || value.singlePaperOnly !== true || value.isolatedContext !== true
-        || value.model !== 'gpt-5.6-terra' || value.reasoningEffort !== 'high'
         || value.passed !== true || typeof value.taskName !== 'string'
         || value.taskName.trim().length < 4 || typeof value.rationale !== 'string'
         || value.rationale.trim().length < 20) {
-        throw new Error('metadata correction output 身份、Terra-high provenance 或说明非法');
+        throw new Error('元数据更正结果的任务身份、模型声明或说明无效');
     }
     assertExactKeys(
         value.changes,
@@ -254,6 +276,7 @@ function validateCorrection(correction, packet, payload, options = {}) {
         'metadata correction output.changes'
     );
     validateExactMetadataFields(value.changes, 'metadata correction output.changes');
+    boundModelPolicy(payload, policy, '原更正记录');
     const original = assertObject(value.originalRecordPayload, 'metadata correction output.originalRecordPayload');
     assertExactKeys(original, ['fileSha256', 'semanticSha256'], 'metadata correction output.originalRecordPayload');
     if (original.fileSha256 !== packet.recordPayload.fileSha256
@@ -273,7 +296,7 @@ function validateCorrection(correction, packet, payload, options = {}) {
     if (options.fullPreflight !== false) {
         try {
             validateRecord(candidate, packet.paperId, `metadata correction candidate ${packet.paperId}`, {
-                recordsVersion: RECORDS_VERSION
+                recordsVersion: RECORDS_VERSION, expectedModelPolicy: policy
             });
         } catch (error) {
             throw new Error(`metadata correction 不是纯四字段可修复记录: ${error.message}`);
@@ -284,17 +307,19 @@ function validateCorrection(correction, packet, payload, options = {}) {
 
 function validateReceipt(receipt, packet, correction, options = {}) {
     const value = assertObject(receipt, 'metadata correction receipt');
+    const policy = correctionPolicy(packet, options.expectedModelPolicy, '元数据更正任务');
+    correctionPolicy(value, policy, '元数据更正结果');
+    assertAgentIdentity(value, policy, '元数据更正身份');
     assertExactKeys(value, [
         'version', 'contract', 'date', 'paperId', 'role', 'taskName',
         'singlePaperOnly', 'isolatedContext', 'model', 'reasoningEffort',
         'consumedPacketSha256', 'correctionSha256', 'queuedAt', 'startedAt',
-        'completedAt', 'revision'
+        'completedAt', 'revision', ...(policy === CURRENT_MODEL_POLICY ? ['modelPolicy'] : [])
     ], 'metadata correction receipt');
-    if (value.version !== 1 || value.contract !== CORRECTION_RECEIPT_CONTRACT
+    if (value.contract !== correctionContract(CORRECTION_RECEIPT_CONTRACT, policy)
         || value.role !== CORRECTION_ROLE || value.date !== packet.date
         || value.paperId !== packet.paperId || value.taskName !== correction.taskName
         || value.singlePaperOnly !== true || value.isolatedContext !== true
-        || value.model !== 'gpt-5.6-terra' || value.reasoningEffort !== 'high'
         || value.consumedPacketSha256 !== packet.packetSha256
         || value.correctionSha256 !== stableSha256(correction)
         || !Number.isInteger(value.revision) || value.revision < 1) {
@@ -318,6 +343,8 @@ function validateReceipt(receipt, packet, correction, options = {}) {
     if (options.taskName !== undefined && value.taskName !== options.taskName) {
         throw new Error('metadata correction receipt.taskName 未绑定 persistent task state');
     }
+    if (options.model !== undefined && value.model !== options.model) throw new Error('更正回执模型与实际开始记录不一致');
+    if (options.reasoningEffort !== undefined && value.reasoningEffort !== options.reasoningEffort) throw new Error('更正回执推理设置与实际开始记录不一致');
     return value;
 }
 
@@ -375,10 +402,13 @@ function currentCorrectionSets(date, currentDir = Config.CURRENT_DIR) {
 
 function initializeCorrectionState(date, currentDir = Config.CURRENT_DIR, now = getBeijingISOString()) {
     if (!TIMESTAMP_RE.test(String(now || ''))) throw new Error('metadata correction createdAt 必须是北京时间');
+    const productionState = readJsonFile(runnerStatePath(date, currentDir), 'production runner state').value;
+    assertCurrentModelPolicy(versionedModelPolicy(productionState, 1, 2, '任务队列'), '创建元数据更正队列');
     const { expectedPaperIds, requiredPaperIds, pendingProductionPaperIds } =
         currentCorrectionSets(date, currentDir);
     return {
         version: CORRECTION_STATE_VERSION,
+        modelPolicy: CURRENT_MODEL_POLICY,
         mode: CORRECTION_STATE_MODE,
         date,
         generation: 0,
@@ -395,7 +425,8 @@ function initializeCorrectionState(date, currentDir = Config.CURRENT_DIR, now = 
 
 function validateCorrectionState(state) {
     const value = assertObject(state, 'metadata correction state');
-    if (value.version !== CORRECTION_STATE_VERSION || value.mode !== CORRECTION_STATE_MODE
+    const policy = correctionPolicy(value, undefined, '元数据更正队列');
+    if (value.mode !== CORRECTION_STATE_MODE
         || !/^\d{4}-\d{2}-\d{2}$/.test(String(value.date || ''))
         || !Number.isInteger(value.generation) || value.generation < 0
         || value.activeLimit !== CORRECTION_ACTIVE_LIMIT
@@ -449,6 +480,9 @@ function validateCorrectionState(state) {
         }
         if (task.startedAt && (!task.queuedAt || Date.parse(task.startedAt) < Date.parse(task.queuedAt))) {
             throw new Error(`${paperId} metadata correction startedAt 早于 queuedAt`);
+        }
+        if (policy === CURRENT_MODEL_POLICY && ['running', 'validated'].includes(task.status)) {
+            assertAgentIdentity({ modelPolicy: policy, model: task.model, reasoningEffort: task.reasoningEffort }, policy, '更正任务开始记录', { receipt: false });
         }
         if (task.status === 'validated'
             && (!TIMESTAMP_RE.test(String(task.completedAt || '')) || !task.outputPath
@@ -508,18 +542,22 @@ function loadRevisionBinding(date, paperId, currentDir = Config.CURRENT_DIR) {
         || normalizedId(payload.value.paperId || payload.value.arxivId) !== paperId) {
         throw new Error(`${paperId}.revision record payload 绑定非法`);
     }
-    return { paths, state, task, revision, payload };
+    const policy = versionedModelPolicy(state, 1, 2, '任务队列');
+    boundModelPolicy(payload.value, policy, '原修订记录');
+    return { paths, state, task, revision, payload, modelPolicy: policy };
 }
 
 function createPacketArtifact(options = {}) {
     const { date, paperId, currentDir = Config.CURRENT_DIR, force = false } = options;
     const binding = loadRevisionBinding(date, paperId, currentDir);
+    assertCurrentModelPolicy(binding.modelPolicy, '创建元数据更正任务');
     if (!needsMetadataCorrection(binding.payload.value)) {
         throw new Error(`${paperId} 的 revision payload 已使用合法 metadata，不得创建 orphan correction`);
     }
     const packet = {
-        version: 1,
-        contract: CORRECTION_PACKET_CONTRACT,
+        version: 2,
+        modelPolicy: CURRENT_MODEL_POLICY,
+        contract: correctionContract(CORRECTION_PACKET_CONTRACT, CURRENT_MODEL_POLICY),
         date,
         paperId,
         role: CORRECTION_ROLE,
@@ -582,6 +620,7 @@ function readCorrectionState(date, currentDir = Config.CURRENT_DIR) {
 }
 
 function reconcileCorrectionState(state, date, currentDir = Config.CURRENT_DIR) {
+    requireCurrentCorrectionState(state);
     validateCorrectionState(state);
     const snapshot = currentCorrectionSets(date, currentDir);
     if (stableSha256(snapshot.expectedPaperIds) !== stableSha256(state.expectedPaperIds)) {
@@ -625,7 +664,7 @@ function verifyCorrectionState(state, date, currentDir = Config.CURRENT_DIR, opt
             throw new Error(`${paperId} metadata correction state packet 路径不是受控固定路径`);
         }
         const packetFile = readJsonFile(packetPath, `${paperId}.metadata packet`, expectedPaths.artifactRoot);
-        const packet = validatePacket(packetFile.value, { date, paperId, dateRoot });
+        const packet = validatePacket(packetFile.value, { date, paperId, dateRoot, expectedModelPolicy: correctionPolicy(state, undefined, '元数据更正队列') });
         if (packetFile.fileSha256 !== task.packetFileSha256 || packet.packetSha256 !== task.packetSha256) {
             throw new Error(`${paperId} metadata correction packet 已偏离 persistent state`);
         }
@@ -643,7 +682,8 @@ function verifyCorrectionState(state, date, currentDir = Config.CURRENT_DIR, opt
             fullPreflight: options.fullPreflight !== false
         });
         validateReceipt(receiptFile.value, packet, correction, {
-            queuedAt: task.queuedAt, startedAt: task.startedAt, taskName: task.taskName
+            queuedAt: task.queuedAt, startedAt: task.startedAt, taskName: task.taskName,
+            model: task.model, reasoningEffort: task.reasoningEffort
         });
         if (correction.taskName !== task.taskName
             || correctionFile.fileSha256 !== task.outputFileSha256
@@ -677,11 +717,12 @@ function resetCorrectionTask(state, paperId, status = 'pending', error = null) {
 }
 
 function registerCorrectionPacket(state, date, paperId, currentDir = Config.CURRENT_DIR) {
+    requireCurrentCorrectionState(state);
     validateCorrectionState(state);
     if (!state.tasks[paperId]) throw new Error(`${paperId} 不在 metadata correction required 集合`);
     const paths = correctionPaths(date, paperId, currentDir);
     const packetFile = readJsonFile(paths.packetPath, `${paperId}.metadata packet`, paths.artifactRoot);
-    const packet = validatePacket(packetFile.value, { date, paperId, dateRoot: paths.dateRoot });
+    const packet = validatePacket(packetFile.value, { date, paperId, dateRoot: paths.dateRoot, expectedModelPolicy: CURRENT_MODEL_POLICY });
     const task = state.tasks[paperId];
     const relativePath = stateRelativePath(paths.dateRoot, packetFile.path, `${paperId}.metadata packet`);
     if (task.packetFileSha256 === packetFile.fileSha256 && task.packetSha256 === packet.packetSha256) {
@@ -701,6 +742,7 @@ function registerCorrectionPacket(state, date, paperId, currentDir = Config.CURR
 }
 
 function claimCorrectionTasks(state, options = {}) {
+    requireCurrentCorrectionState(state);
     validateCorrectionState(state);
     const limit = options.limit ?? CORRECTION_ACTIVE_LIMIT;
     const now = options.now || getBeijingISOString();
@@ -737,7 +779,9 @@ function findCorrectionClaim(state, claimId) {
     throw new Error(`未知 metadata correction claimId: ${claimId}`);
 }
 
-function startCorrectionTask(state, claimId, taskName, now = getBeijingISOString()) {
+function startCorrectionTask(state, claimId, taskName, now = getBeijingISOString(), identity = {}) {
+    requireCurrentCorrectionState(state);
+    assertAgentIdentity(identity, CURRENT_MODEL_POLICY, '更正任务开始记录', { receipt: false });
     const { paperId, task } = findCorrectionClaim(state, claimId);
     if (task.status !== 'claimed') throw new Error('只有 claimed metadata correction 可 start');
     if (typeof taskName !== 'string' || taskName.trim().length < 4 || state.taskNames[taskName]) {
@@ -749,6 +793,7 @@ function startCorrectionTask(state, claimId, taskName, now = getBeijingISOString
     task.status = 'running';
     task.taskName = taskName;
     task.startedAt = now;
+    task.model = identity.model; task.reasoningEffort = identity.reasoningEffort;
     state.taskNames[taskName] = { paperId, claimId, retired: false };
     return {
         paperId, claimId, taskName, queuedAt: task.queuedAt, startedAt: task.startedAt,
@@ -757,6 +802,7 @@ function startCorrectionTask(state, claimId, taskName, now = getBeijingISOString
 }
 
 function submitCorrectionTask(state, claimId, date, currentDir = Config.CURRENT_DIR, options = {}) {
+    requireCurrentCorrectionState(state);
     const { paperId, task } = findCorrectionClaim(state, claimId);
     if (task.status !== 'running') throw new Error('只有 running metadata correction 可 submit');
     const binding = loadRevisionBinding(date, paperId, currentDir);
@@ -772,7 +818,8 @@ function submitCorrectionTask(state, claimId, date, currentDir = Config.CURRENT_
         fullPreflight: options.fullPreflight !== false
     });
     const receipt = validateReceipt(receiptFile.value, packet, correction, {
-        queuedAt: task.queuedAt, startedAt: task.startedAt, taskName: task.taskName
+        queuedAt: task.queuedAt, startedAt: task.startedAt, taskName: task.taskName,
+            model: task.model, reasoningEffort: task.reasoningEffort
     });
     if (correction.taskName !== task.taskName) {
         throw new Error('metadata correction output.taskName 未绑定 persistent task state');
@@ -797,6 +844,7 @@ function submitCorrectionTask(state, claimId, date, currentDir = Config.CURRENT_
 }
 
 function abandonCorrectionTask(state, claimId, reason, now = getBeijingISOString()) {
+    requireCurrentCorrectionState(state);
     const { paperId, task } = findCorrectionClaim(state, claimId);
     if (!['claimed', 'running'].includes(task.status)) throw new Error('只有活动 metadata correction claim 可 abandon');
     const explanation = String(reason || '').trim();
@@ -810,6 +858,7 @@ function abandonCorrectionTask(state, claimId, reason, now = getBeijingISOString
 }
 
 function retryCorrectionTask(state, paperIdValue) {
+    requireCurrentCorrectionState(state);
     const paperId = normalizedId(paperIdValue);
     const task = state.tasks[paperId];
     if (!task) throw new Error('metadata correction retry 论文不在 required 集合');
@@ -844,6 +893,8 @@ function correctionStateSummary(state, manifestPath = null) {
 
 function updateCorrectionState(date, currentDir, callback, options = {}) {
     const paths = correctionPaths(date, '2608.00000', currentDir);
+    const prior = fs.lstatSync(paths.statePath, { throwIfNoEntry: false });
+    if (prior) requireCurrentCorrectionState(readJsonFile(paths.statePath, '元数据更正队列').value);
     fs.mkdirSync(paths.stateRoot, { recursive: true });
     return withFileLockSync(paths.statePath, () => {
         const existing = fs.lstatSync(paths.statePath, { throwIfNoEntry: false });
@@ -870,6 +921,10 @@ function reconcilePersistedCorrectionState(date, currentDir = Config.CURRENT_DIR
     return withFileLockSync(paths.statePath, () => {
         const item = readJsonFile(paths.statePath, 'metadata correction persistent state', paths.dateRoot);
         const state = validateCorrectionState(item.value);
+        if (correctionPolicy(state, undefined, '元数据更正队列') !== CURRENT_MODEL_POLICY) {
+            verifyCorrectionState(state, date, currentDir);
+            return { paths, state };
+        }
         const before = stableSha256(state);
         reconcileCorrectionState(state, date, currentDir);
         verifyCorrectionState(state, date, currentDir);
@@ -902,7 +957,7 @@ function registerExistingPacket(options = {}) {
 function loadValidatedCorrection(date, paperId, currentDir = Config.CURRENT_DIR, options = {}) {
     const binding = loadRevisionBinding(date, paperId, currentDir);
     const packetFile = readJsonFile(binding.paths.packetPath, `${paperId}.metadata packet`, binding.paths.artifactRoot);
-    const packet = validatePacket(packetFile.value, { date, paperId, dateRoot: binding.paths.dateRoot });
+    const packet = validatePacket(packetFile.value, { date, paperId, dateRoot: binding.paths.dateRoot, expectedModelPolicy: binding.modelPolicy });
     const correctionFile = readJsonFile(
         binding.paths.correctionPath, `${paperId}.metadata correction`, binding.paths.artifactRoot
     );
@@ -943,6 +998,7 @@ function correctionLeaf(item, dateRoot) {
 function buildManifest(options = {}) {
     const { date, currentDir = Config.CURRENT_DIR } = options;
     const correctionState = readCorrectionState(date, currentDir);
+    requireCurrentCorrectionState(correctionState.state);
     verifyCorrectionState(correctionState.state, date, currentDir);
     const expectedIds = [...correctionState.state.expectedPaperIds];
     if (correctionState.state.pendingProductionPaperIds.length) {
@@ -968,8 +1024,9 @@ function buildManifest(options = {}) {
     const dateRoot = path.resolve(currentDir, 'manual-v6', date);
     const leaves = corrections.map(item => correctionLeaf(item, dateRoot)).sort((a, b) => a.paperId.localeCompare(b.paperId));
     const manifest = {
-        version: 1,
-        contract: CORRECTION_MANIFEST_CONTRACT,
+        version: 2,
+        modelPolicy: CURRENT_MODEL_POLICY,
+        contract: correctionContract(CORRECTION_MANIFEST_CONTRACT, CURRENT_MODEL_POLICY),
         date,
         expectedPaperIds: expectedIds,
         correctedPaperIds: leaves.map(item => item.paperId),
@@ -981,7 +1038,7 @@ function buildManifest(options = {}) {
             generation: correctionState.state.generation
         },
         merkleRoot: stableSha256({
-            contract: CORRECTION_MERKLE_CONTRACT,
+            contract: correctionContract(CORRECTION_MERKLE_CONTRACT, CURRENT_MODEL_POLICY),
             orderedLeaves: leaves.map(item => stableSha256(item))
         })
     };
@@ -996,9 +1053,11 @@ function writeManifest(options = {}) {
     if (!dateRootStat?.isDirectory() || dateRootStat.isSymbolicLink()) {
         throw new Error('metadata correction production 日期根必须是真实目录且不得为 symlink');
     }
+    requireCurrentCorrectionState(readJsonFile(paths.statePath, 'metadata correction persistent state', paths.dateRoot).value);
     return withFileLockSync(paths.statePath, () => {
         const stateFile = readJsonFile(paths.statePath, 'metadata correction persistent state', paths.dateRoot);
         const state = validateCorrectionState(stateFile.value);
+        requireCurrentCorrectionState(state);
         const before = stableSha256(state);
         reconcileCorrectionState(state, date, currentDir);
         verifyCorrectionState(state, date, currentDir);
@@ -1025,7 +1084,8 @@ function writeManifest(options = {}) {
 
 function validateManifestObject(manifest, options = {}) {
     const value = assertObject(manifest, 'metadata correction manifest');
-    if (value.version !== 1 || value.contract !== CORRECTION_MANIFEST_CONTRACT
+    const policy = correctionPolicy(value, options.expectedModelPolicy, '更正批次清单');
+    if (value.contract !== correctionContract(CORRECTION_MANIFEST_CONTRACT, policy)
         || value.date !== options.date || !Array.isArray(value.expectedPaperIds)
         || !Array.isArray(value.correctedPaperIds) || !Array.isArray(value.corrections)
         || !value.correctionTaskState || typeof value.correctionTaskState !== 'object'
@@ -1070,7 +1130,7 @@ function validateManifestObject(manifest, options = {}) {
         return leaf;
     });
     const merkleRoot = stableSha256({
-        contract: CORRECTION_MERKLE_CONTRACT,
+        contract: correctionContract(CORRECTION_MERKLE_CONTRACT, policy),
         orderedLeaves: leaves.map(item => stableSha256(item))
     });
     if (value.merkleRoot !== merkleRoot || value.manifestSha256 !== stableSha256(manifestSemantic(value))) {
@@ -1088,6 +1148,8 @@ function loadValidatedManifest(manifestPath, options = {}) {
         'metadata correction manifest persistent state', dateRoot
     );
     const state = validateCorrectionState(stateFile.value);
+    const policy = correctionPolicy(manifest, options.expectedModelPolicy, '更正批次清单');
+    correctionPolicy(state, policy, '元数据更正队列');
     if (stateFile.fileSha256 !== manifest.correctionTaskState.fileSha256
         || stateFile.semanticSha256 !== manifest.correctionTaskState.semanticSha256
         || state.generation !== manifest.correctionTaskState.generation
@@ -1113,7 +1175,7 @@ function loadValidatedManifest(manifestPath, options = {}) {
             files[field] = file;
         }
         const packet = validatePacket(files.packet.value, {
-            date: options.date, paperId: leaf.paperId, dateRoot
+            date: options.date, paperId: leaf.paperId, dateRoot, expectedModelPolicy: policy
         });
         const payloadFile = readJsonFile(
             path.join(dateRoot, packet.recordPayload.path), `${leaf.paperId}.original payload`, dateRoot
@@ -1150,9 +1212,13 @@ function loadValidatedManifest(manifestPath, options = {}) {
 }
 
 function buildCorrectionProof(context) {
+    const policy = correctionPolicy(context.packet, undefined, '更正任务');
+    correctionPolicy(context.correction, policy, '更正结果');
+    correctionPolicy(context.receipt, policy, '更正回执');
     return {
-        version: 1,
-        contract: CORRECTION_PROOF_CONTRACT,
+        version: policy === CURRENT_MODEL_POLICY ? 2 : 1,
+        ...(policy === CURRENT_MODEL_POLICY ? { modelPolicy: policy } : {}),
+        contract: correctionContract(CORRECTION_PROOF_CONTRACT, policy),
         manifestSha256: context.manifestSha256,
         manifestFileSha256: context.manifestFileSha256,
         merkleRoot: context.merkleRoot,
@@ -1180,14 +1246,15 @@ function parseArgs(argv) {
             options.force = true;
             continue;
         }
-        if (!['--date', '--paper', '--claim', '--task-name', '--limit', '--reason'].includes(arg)) {
+        if (!['--date', '--paper', '--claim', '--task-name', '--limit', '--reason', '--model', '--reasoning-effort'].includes(arg)) {
             throw new Error(`未知参数: ${arg}`);
         }
         const value = argv[++index];
         if (!value || value.startsWith('--')) throw new Error(`${arg} 缺少值`);
         const key = ({
             '--date': 'date', '--paper': 'paperId', '--claim': 'claimId',
-            '--task-name': 'taskName', '--limit': 'limit', '--reason': 'reason'
+            '--task-name': 'taskName', '--limit': 'limit', '--reason': 'reason',
+            '--model': 'model', '--reasoning-effort': 'reasoningEffort'
         })[arg];
         if (seen.has(key)) throw new Error(`${arg} 重复`);
         seen.add(key);
@@ -1199,7 +1266,7 @@ function parseArgs(argv) {
         if (!options.paperId) throw new Error('--paper 非法');
     }
     const required = {
-        packet: ['paperId'], register: ['paperId'], start: ['claimId', 'taskName'],
+        packet: ['paperId'], register: ['paperId'], start: ['claimId', 'taskName', 'model', 'reasoningEffort'],
         submit: ['claimId'], retry: ['paperId'], abandon: ['claimId', 'reason']
     }[action] || [];
     const missing = required.filter(key => options[key] === undefined);
@@ -1211,6 +1278,7 @@ function parseArgs(argv) {
     if (!['start', 'submit', 'abandon'].includes(action) && options.claimId !== undefined) {
         throw new Error(`${action} 不接受 --claim`);
     }
+    if (action !== 'start' && (options.model !== undefined || options.reasoningEffort !== undefined)) throw new Error('只有 start 可声明实际模型与推理设置');
     if (action !== 'start' && options.taskName !== undefined) throw new Error(`${action} 不接受 --task-name`);
     if (action !== 'abandon' && options.reason !== undefined) throw new Error(`${action} 不接受 --reason`);
     if (action === 'claim') options.limit ??= CORRECTION_ACTIVE_LIMIT;
@@ -1238,7 +1306,9 @@ function run(argv = process.argv.slice(2), overrides = {}) {
         result = { action: options.action, ...item.result };
     } else if (options.action === 'start') {
         const item = updateCorrectionState(options.date, currentDir, state =>
-            startCorrectionTask(state, options.claimId, options.taskName));
+            startCorrectionTask(state, options.claimId, options.taskName, getBeijingISOString(), {
+                modelPolicy: CURRENT_MODEL_POLICY, model: options.model, reasoningEffort: options.reasoningEffort
+            }));
         result = { action: options.action, ...item.result };
     } else if (options.action === 'submit') {
         const item = updateCorrectionState(options.date, currentDir, state =>

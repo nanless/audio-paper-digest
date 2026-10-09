@@ -116,7 +116,7 @@ npm run verify
 git diff --check
 ```
 
-完整 `verify` 必须在沙箱外运行，先检查与博客部署一致的 Hugo **0.160.1**，再检查全仓 JS/Python/shell 语法、运行一次 `npm test`（含默认与 Manual JS）、两处 Python 单测和只读 `validate:data`。任何步骤失败都非零退出。Hugo 资源管线样例必须真正构建，缺少 Hugo 不能算完整通过。遍历排除 `node_modules`、`.venv`、`data`、`logs`、`.git` 等产物目录，不跟随符号链接；Python 字节码写入独立临时目录。
+完整 `verify` 必须在沙箱外运行，先检查与博客部署一致的 Hugo **0.160.1**，再检查全仓 JS/Python/shell 语法、运行一次 `npm test`（含默认与 Manual JS）、两处 Python 单测和只读 `validate:data`。任何步骤失败都非零退出。Hugo 资源管线样例必须真正构建，缺少 Hugo 不能算完整通过。遍历排除 `node_modules`、`.venv`、`data`、`logs`、`.git` 等依赖、运行数据和 Git 记录目录，不跟随符号链接；Python 字节码写入独立临时目录。
 
 只有 CI 或无数据的干净检出仓库才显式使用 `npm run verify -- --allow-empty`。普通维护默认复验已有数据。`npm run verify -- --quick` 仅检查语法和数据，不运行单测或 Hugo，不能代替完整验收。定向调试可单独运行 `test:default`、`test:manual` 或选定测试；完整验证通过后无须重复这些子集。
 

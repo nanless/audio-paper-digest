@@ -2,6 +2,7 @@
 'use strict';
 
 /** 把官方记录 v4 汇编成完整 Manual 规范 v6 的汇编器。 */
+const { CURRENT_MODEL_POLICY, boundModelPolicy } = require('./manual-agent-policy.js');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -156,6 +157,7 @@ function validateV4EnvelopeHeader(document, envelopePath, expectedDate) {
 }
 
 function loadPaperEvidence(envelope, envelopePath, rawId, descriptor, occupiedPaths, options = {}) {
+    const modelPolicy = boundModelPolicy(envelope, options.expectedModelPolicy, '正式记录集合');
     const paperId = normalizedId(rawId);
     if (!paperId || rawId !== paperId || !descriptor || typeof descriptor !== 'object' || Array.isArray(descriptor)) {
         throw new Error(`${envelopePath}.papers 键/descriptor 非法: ${rawId}`);
@@ -186,6 +188,7 @@ function loadPaperEvidence(envelope, envelopePath, rawId, descriptor, occupiedPa
         }
     }
     const record = recordFile.value;
+    boundModelPolicy(record, modelPolicy, `${paperId} 正式记录`);
     if (record.version !== MANUAL_RECORD_VERSION_V4 || normalizedId(record.paperId || record.arxivId) !== paperId) {
         throw new Error(`${paperId}.record 不是当前论文 records v4`);
     }
@@ -201,7 +204,7 @@ function loadPaperEvidence(envelope, envelopePath, rawId, descriptor, occupiedPa
         authorRevision: groups.reviewOutputs.authorRevision.value
     };
     for (const [key, packet] of Object.entries(packets)) {
-        validateTaskPacket(packet, { paperId, artifactRoot: root, requireFiles: true });
+        validateTaskPacket(packet, { paperId, artifactRoot: root, requireFiles: true, expectedModelPolicy: modelPolicy });
         if (packet.role !== ROLE_BY_KEY[key]) throw new Error(`${paperId}.taskPackets.${key}.role 非法`);
     }
     for (const key of ['author', 'technicalScoring', 'pedagogyReadability', 'authorRevision']) {
@@ -237,6 +240,7 @@ function loadPaperEvidence(envelope, envelopePath, rawId, descriptor, occupiedPa
         }
     }
     validateManualRecordV4(record, artifactFile.value, {
+        expectedModelPolicy: modelPolicy,
         runtimeMode: options.runtimeMode || MANUAL_V6_RUNTIME_MODE_PRODUCTION,
         artifactRoot: root,
         artifactIndexBytes: artifactFile.bytes,
@@ -307,6 +311,7 @@ function loadRecordsV4Envelopes(inputs, date, options = {}) {
     const taskOwners = new Map();
     const agents = new Set();
     const protocols = new Set();
+    const modelPolicies = new Set();
     for (const rawPath of inputs) {
         const envelopePath = path.resolve(rawPath);
         if (!fs.statSync(envelopePath, { throwIfNoEntry: false })?.isFile()
@@ -316,6 +321,8 @@ function loadRecordsV4Envelopes(inputs, date, options = {}) {
         const bytes = fs.readFileSync(envelopePath);
         const document = readJsonBuffer(bytes, `records v4 envelope ${envelopePath}`);
         validateV4EnvelopeHeader(document, envelopePath, date);
+        modelPolicies.add(boundModelPolicy(document, options.expectedModelPolicy, '正式记录集合'));
+        if (modelPolicies.size !== 1) throw new Error('同一批记录不能混用新旧模型规则');
         const envelopeRoot = fs.realpathSync(path.dirname(envelopePath));
         const manifestRef = document.metadataCorrectionManifest;
         let correctionManifest = { byPaper: {} };
@@ -370,6 +377,7 @@ function loadRecordsV4Envelopes(inputs, date, options = {}) {
     }
     return {
         date,
+        ...([...modelPolicies][0] === CURRENT_MODEL_POLICY ? { modelPolicy: CURRENT_MODEL_POLICY } : {}),
         agent: agents.size === 1 ? [...agents][0] : 'Codex-multi-paper-subagents-v6',
         reviewProtocol: protocols.size === 1 ? [...protocols][0] : 'manual-v6-multi-paper-review-v1',
         papers,
@@ -407,6 +415,8 @@ function assemblerProtocolSha256() {
 }
 
 function buildSpecV6(options = {}) {
+    const modelPolicy = boundModelPolicy(options.records, options.expectedModelPolicy, '待组装正式记录');
+    const policyFields = modelPolicy === CURRENT_MODEL_POLICY ? { modelPolicy } : {};
     const { date, filtered, filteredPath, fullTextManifest, fullTextManifestPath,
         artifactManifest, artifactManifestPath, records, recordsEnvelope, runtimeMode,
         generatedAt = getBeijingISOString(), promptBindings } = options;
@@ -444,6 +454,7 @@ function buildSpecV6(options = {}) {
     }
     exactSet('ArtifactIndex manifest', ids, Object.keys(artifactManifest.papers || {}));
     const mergedRecords = {
+        ...policyFields,
         date,
         agent: records.agent,
         reviewProtocol: records.reviewProtocol,
@@ -451,10 +462,11 @@ function buildSpecV6(options = {}) {
         papers: Object.fromEntries(Object.entries(records.papers).map(([id, item]) => [id, item.record])),
         sources: records.sources
     };
-    const base = v5Assembler.buildSpec({
+    const base = v5Assembler.buildV6AssemblyBase({
         date, filtered, filteredPath, manifest: fullTextManifest,
         manifestPath: fullTextManifestPath, mergedRecords, generatedAt,
         validatedV6Records: options.allowSignedV6CompatibilityOverride === true,
+        expectedModelPolicy: modelPolicy,
         ...(promptBindings ? { promptBindings } : {})
     });
     const protocolSha256 = assemblerProtocolSha256();
@@ -508,6 +520,7 @@ function buildSpecV6(options = {}) {
         };
         const paperPayloadSha256 = stableSha256(paperPayload);
         const shard = buildPaperSpecShard({
+            ...policyFields,
             paperId: id,
             ...recordProvenance,
             paperInputSha256: input.paperInputSha256,
@@ -519,11 +532,13 @@ function buildSpecV6(options = {}) {
         shards.push(shard);
     }
     const batch = buildBatchSpecV6({
+        ...policyFields,
         date, runtimeMode, filteredBatchSha256: fullContext.filteredBatchSha256,
         expectedPaperIds: ids, paperShards: shards
     });
     if (batch.status !== 'complete') throw new Error('spec v6 shard 未完整覆盖 filtered');
     const spec = {
+        ...policyFields,
         version: MANUAL_SPEC_VERSION_V6,
         mode: SPEC_MODE,
         status: 'complete',
@@ -634,6 +649,7 @@ function run(argv = process.argv.slice(2)) {
         const records = loadRecordsV4Envelopes(recordsPaths, args.date, {
             runtimeMode: args.runtimeMode
         });
+        boundModelPolicy(records, CURRENT_MODEL_POLICY, '新写入的 v6 正式记录集合');
         const recordsEnvelope = args.runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION
             ? {
                 path: recordsPaths[0],

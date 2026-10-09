@@ -8,6 +8,7 @@ const os = require('os');
 const path = require('path');
 const { stableSha256 } = require('../scripts/manual-v6-workflow.js');
 const { renderLongformBlocks } = require('../scripts/manual-longform-contract.js');
+const { CURRENT_MODEL_POLICY } = require('../scripts/manual-agent-policy.js');
 const { submitTask } = require('../scripts/manual-v6-task-runner.js');
 const {
     parseArgs,
@@ -45,7 +46,7 @@ function minimalUnsealedLongform(paperId) {
         article,
         artifactIndex,
         bundle: {
-            version: 2, contract: 'reader-longform-v2', paperId,
+            version: 2, modelPolicy: CURRENT_MODEL_POLICY, contract: 'reader-longform-v2', paperId,
             artifactIndexSha256: artifactIndex.outputSha256,
             articleSha256: sha(Buffer.from(article, 'utf8')),
             blocks, tables: [], figures: [], formulas: [], terms: [], relatedWorks: []
@@ -125,10 +126,10 @@ describe('Manual v6 生产 records 外层对象组装器', () => {
         fs.mkdirSync(path.dirname(finalPath)); fs.writeFileSync(finalPath, `${finalText}\n`);
         const finalSha = sha(Buffer.from(finalText));
         const payload = {
-            version: 4, manualDepth: 'full-text-evidence-v6', paperId: id,
+            version: 4, modelPolicy: CURRENT_MODEL_POLICY, manualDepth: 'full-text-evidence-v6', paperId: id,
             editorial: {
                 readerArticle: finalText,
-                longformBundle: { version: 2, contract: 'reader-longform-v2', articleSha256: finalSha }
+                longformBundle: { version: 2, modelPolicy: CURRENT_MODEL_POLICY, contract: 'reader-longform-v2', articleSha256: finalSha }
             }
         };
         const payloadFile = writeJson(path.join(root, 'draft', 'revision-record-payload.json'), payload);
@@ -138,8 +139,9 @@ describe('Manual v6 生产 records 外层对象组装器', () => {
         const technicalOutputFile = writeJson(path.join(root, 'reviews', 'technical-scoring.json'), technicalOutput);
         const readabilityOutputFile = writeJson(path.join(root, 'reviews', 'pedagogy-readability.json'), readabilityOutput);
         const independentAudit = {
-            version: 1,
-            contract: 'manual-v6-independent-revision-audit-v1',
+            version: 2, modelPolicy: CURRENT_MODEL_POLICY,
+            model: 'gpt-6.1-sol', reasoningEffort: 'high', singlePaperOnly: true, isolatedContext: true,
+            contract: 'manual-v6-independent-revision-audit-v2',
             paperId: id,
             taskName: 'revision-audit-task',
             finalPassed: true
@@ -148,10 +150,20 @@ describe('Manual v6 生产 records 外层对象组装器', () => {
             path.join(root, 'reviews', 'revision-independent-audit.json'),
             independentAudit
         );
-        const technicalReceipt = { taskName: 'technical-task', outputSha256: stableSha256(technicalOutput) };
-        const readabilityReceipt = { taskName: 'readability-task', outputSha256: stableSha256(readabilityOutput) };
-        const authorReceipt = { taskName: 'author-task', articleSha256: 'a'.repeat(64) };
+        // 这份最小数据仅测试封印文件与队列对应关系，不代表正文已通过全文质量检查。
+        const receiptIdentity = (role, taskName) => ({
+            version: 2, modelPolicy: CURRENT_MODEL_POLICY,
+            model: 'gpt-6.1-sol', reasoningEffort: 'high', singlePaperOnly: true, isolatedContext: true,
+            paperId: id, role, taskName,
+            consumedPacketSha256: stableSha256({ paperId: id, role }),
+            queuedAt: '2026-08-29T08:00:00.000+08:00', startedAt: '2026-08-29T08:01:00.000+08:00',
+            completedAt: '2026-08-29T08:10:00.000+08:00', revision: 1
+        });
+        const technicalReceipt = { ...receiptIdentity('technical_scoring', 'technical-task'), outputSha256: stableSha256(technicalOutput) };
+        const readabilityReceipt = { ...receiptIdentity('pedagogy_readability', 'readability-task'), outputSha256: stableSha256(readabilityOutput) };
+        const authorReceipt = { ...receiptIdentity('author', 'author-task'), articleSha256: 'a'.repeat(64) };
         const authorOutput = { version: 2, contract: 'manual-v6-author-output-v2', paperId: id };
+        authorReceipt.outputSha256 = stableSha256(authorOutput);
         const authorOutputFile = writeJson(path.join(root, 'outputs', 'author.json'), authorOutput);
         const revisionOutput = {
             version: 2, contract: 'manual-v6-author-revision-output-v2', role: 'author_revision',
@@ -175,10 +187,13 @@ describe('Manual v6 生产 records 外层对象组装器', () => {
         };
         const revisionOutputFile = writeJson(path.join(root, 'outputs', 'author-revision.json'), revisionOutput);
         const revisionReceipt = {
-            taskName: 'revision-task', outputSha256: stableSha256(revisionOutput), articleSha256: finalSha
+            ...receiptIdentity('author_revision', 'revision-task'), outputSha256: stableSha256(revisionOutput), articleSha256: finalSha
         };
         const task = (receiptPath, outputPath, outputSemanticSha256) => ({
             artifactRoot: root, receiptPath, outputPath, outputSemanticSha256,
+            taskName: JSON.parse(fs.readFileSync(receiptPath)).taskName,
+            model: 'gpt-6.1-sol', reasoningEffort: 'high',
+            claimedAt: '2026-08-29T08:00:00.000+08:00', startedAt: '2026-08-29T08:01:00.000+08:00',
             outputFileSha256: sha(fs.readFileSync(outputPath)),
             receiptFileSha256: sha(fs.readFileSync(receiptPath)),
             receiptSemanticSha256: stableSha256(JSON.parse(fs.readFileSync(receiptPath, 'utf8')))
@@ -187,7 +202,7 @@ describe('Manual v6 生产 records 外层对象组装器', () => {
         const technicalReceiptFile = writeJson(path.join(root, 'receipts', 'technical.json'), technicalReceipt);
         const readabilityReceiptFile = writeJson(path.join(root, 'receipts', 'readability.json'), readabilityReceipt);
         const revisionReceiptFile = writeJson(path.join(root, 'receipts', 'revision.json'), revisionReceipt);
-        const state = { papers: { [id]: { tasks: {
+        const state = { version: 2, modelPolicy: CURRENT_MODEL_POLICY, papers: { [id]: { tasks: {
             author: task(authorReceiptFile.path, authorOutputFile.path, stableSha256(authorOutput)),
             technical_scoring: task(technicalReceiptFile.path, technicalOutputFile.path, stableSha256(technicalOutput)),
             pedagogy_readability: task(readabilityReceiptFile.path, readabilityOutputFile.path, stableSha256(readabilityOutput)),
@@ -210,6 +225,17 @@ describe('Manual v6 生产 records 外层对象组装器', () => {
         const recordHashInput = structuredClone(reviewRecordResult.record); delete recordHashInput.sealedRecordSha256;
         assert.equal(reviewRecordResult.record.sealedRecordSha256, stableSha256(recordHashInput));
         const firstBytes = fs.readFileSync(reviewRecordResult.sealedPath);
+        // 旧队列只读保留；不能用原版本或自报旧规则重新签发正式记录。
+        const originalState = JSON.stringify(state);
+        for (const change of [{ version: 1, modelPolicy: undefined },
+            { modelPolicy: 'manual-agents-terra-high-v1' }, { modelPolicy: 'unknown-policy' }]) {
+            const rejectedState = { ...state, ...change };
+            if (change.modelPolicy === undefined) delete rejectedState.modelPolicy;
+            assert.throws(() => writeVerifiedManualReviewRecord(rejectedState, id, root), /只能读取旧任务|模型规则/);
+            assert.equal(JSON.stringify(state), originalState);
+            assert.ok(firstBytes.equals(fs.readFileSync(reviewRecordResult.sealedPath)));
+        }
+
         writeVerifiedManualReviewRecord(state, id, root);
         assert.ok(firstBytes.equals(fs.readFileSync(reviewRecordResult.sealedPath)));
         fs.appendFileSync(technicalReceiptFile.path, ' ');
@@ -217,7 +243,7 @@ describe('Manual v6 生产 records 外层对象组装器', () => {
         fs.rmSync(root, { recursive: true, force: true });
     });
 
-    it('production runner 拒绝 revision v1，并在 v2 签名边界重放 records-v3 基础完整性', () => {
+    it('当前生产队列拒绝旧修订输出，并在当前模型上下文中检查正文缺失的评分字段', () => {
         const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-revision-submit-')));
         const id = '2608.12345';
         const claimedAt = '2026-08-29T08:00:00.000+08:00';
@@ -227,6 +253,7 @@ describe('Manual v6 生产 records 外层对象组装器', () => {
         const technicalSha = 'b'.repeat(64);
         const readabilitySha = 'c'.repeat(64);
         const revisionTask = {
+            model: 'gpt-6.1-sol', reasoningEffort: 'high',
             status: 'running', claimId: 'revision-claim', taskName: 'revision-production-task',
             artifactRoot: root, packetSha256: packetSha, claimedAt, startedAt,
             packetFileSha256: 'd'.repeat(64), attempt: 1, error: null
@@ -239,7 +266,7 @@ describe('Manual v6 生产 records 外层对象组装器', () => {
                 { role: 'pedagogy_readability', outputSemanticSha256: readabilitySha }
             ]
         });
-        const state = { executionScope: 'production', expectedPaperIds: [id], papers: { [id]: { tasks: {
+        const state = { version: 2, modelPolicy: CURRENT_MODEL_POLICY, executionScope: 'production', expectedPaperIds: [id], papers: { [id]: { tasks: {
             author: {},
             author_revision: revisionTask,
             technical_scoring: { outputSemanticSha256: technicalSha },
@@ -255,19 +282,23 @@ describe('Manual v6 生产 records 外层对象组装器', () => {
         writeJson(receiptPath, {
             role: 'author_revision', paperId: id, taskName: revisionTask.taskName,
             singlePaperOnly: true, isolatedContext: true,
-            model: 'gpt-5.6-terra', reasoningEffort: 'high',
+            version: 2, modelPolicy: CURRENT_MODEL_POLICY, model: 'gpt-6.1-sol', reasoningEffort: 'high',
             consumedPacketSha256: packetSha, outputSha256: stableSha256(legacy),
             articleSha256: 'e'.repeat(64), queuedAt: claimedAt, startedAt, completedAt, revision: 1
         });
+        const stateBeforeSubmission = JSON.stringify(state);
         assert.throws(() => submitTask(state, 'revision-claim', { outputPath, receiptPath }), /revision-output-v2/);
+        assert.equal(JSON.stringify(state), stateBeforeSubmission);
         const { article: text, artifactIndex, bundle } = minimalUnsealedLongform(id);
         const finalPath = path.join(root, 'draft', 'final-article.md');
         fs.mkdirSync(path.dirname(finalPath)); fs.writeFileSync(finalPath, `${text}\n`);
         const finalSha = sha(Buffer.from(text));
         writeJson(path.join(root, 'evidence', 'artifact-index.json'), artifactIndex);
         const payload = {
-            version: 4, manualDepth: 'full-text-evidence-v6', paperId: id,
+            version: 4, modelPolicy: CURRENT_MODEL_POLICY, manualDepth: 'full-text-evidence-v6', paperId: id,
             arxivId: id, type: '方法研究', task: '#语音识别', primaryMethodTag: '#Transformer',
+            readabilityRubric: { modelPolicy: CURRENT_MODEL_POLICY, model: 'gpt-6.1-sol',
+                reasoningEffort: 'high', singlePaperOnly: true, isolatedContext: true },
             tags: '#语音识别 #Transformer #鲁棒性',
             editorial: {
                 readerArticle: text,
@@ -292,13 +323,14 @@ describe('Manual v6 生产 records 外层对象组装器', () => {
         writeJson(receiptPath, {
             role: 'author_revision', paperId: id, taskName: revisionTask.taskName,
             singlePaperOnly: true, isolatedContext: true,
-            model: 'gpt-5.6-terra', reasoningEffort: 'high',
+            version: 2, modelPolicy: CURRENT_MODEL_POLICY, model: 'gpt-6.1-sol', reasoningEffort: 'high',
             consumedPacketSha256: packetSha, outputSha256: stableSha256(output),
             articleSha256: finalSha, queuedAt: claimedAt, startedAt, completedAt, revision: 1
         });
         assert.throws(() => submitTask(
             state, 'revision-claim', { outputPath, receiptPath }
         ), /dims/);
+        assert.equal(JSON.stringify(state), stateBeforeSubmission);
         fs.rmSync(root, { recursive: true, force: true });
     });
 });

@@ -273,6 +273,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `review-blog.py` | Python 入口 | 审查本批最终页面，执行确定性检查、LLM、图片和 Hugo 审查，通过后生成 receipt。 |
 | `push-blog.py` | Python 入口 | 核验 receipt，提交并推送其允许的改动，确认远端 OID 后规划视觉任务。 |
 | `publish-to-blog.py` | Python 核心 | 实现三个发布阶段共用的页面模板、标签兼容映射、Git 事务、批次凭证及发布证明。`researcher-workbench-v1` 规定页面元数据、引用和论文再思考附属资料；逐页审查永久按“相对路径 + 内容 SHA”复用。发布器代码变化会重新渲染页面，但最终字节未变的页面不重新审查。 |
+| `manual_agent_policy.py` | Python 共享 | 按可信外层规则核对 Manual 新旧模型身份；当前声明要求 Sol/high 与对应版本，旧记录保留原身份，新声明不能借旧模型规则绕过检查。只验证记录字段，不证明远端模型实际执行。 |
 | `publish_common.py` | Python 共享 | 提供发布数据、评分、Manual/API 来源核验及 LLM 审查的共用规则。 |
 | `blog_entry_loader.py` | Python 桥 | 以固定路径加载文件名含连字符的 `publish-to-blog.py`。 |
 | `markdown_hugo_gate.py` | Python 共享 | 检查 Markdown、页面元数据、公式和图片，并运行 Hugo 渲染检查。 |

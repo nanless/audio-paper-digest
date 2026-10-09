@@ -23,6 +23,7 @@ const A = 'a'.repeat(64);
 const B = 'b'.repeat(64);
 const C = 'c'.repeat(64);
 const D = 'd'.repeat(64);
+const CURRENT_POLICY = 'manual-agents-sol-high-v2';
 
 function freshArtifacts() {
     return [
@@ -88,7 +89,11 @@ describe('Manual v6 工作流与 Merkle spec', () => {
             paperInputSha256: A, sourceIdentitySha256: B, contractSha256: C,
             allowedArtifacts: freshArtifacts()
         });
-        assert.equal(author.version, 3);
+        assert.equal(author.version, 4);
+        assert.equal(author.modelPolicy, CURRENT_POLICY);
+        assert.equal(author.outputContract.receipt.version, 2);
+        assert.equal(author.outputContract.receipt.model, 'gpt-6.1-sol');
+        assert.equal(author.outputContract.receipt.reasoningEffort, 'high');
         assert.equal(author.authoringMode, 'fresh_from_evidence');
         assert.throws(() => buildTaskPacket({
             role: 'author', paperId: '2608.12345',
@@ -157,6 +162,7 @@ describe('Manual v6 工作流与 Merkle spec', () => {
 
     it('batch spec 始终列出完整 expected IDs，缺 shard 时只能 running', () => {
         const shard = buildPaperSpecShard({
+            modelPolicy: CURRENT_POLICY,
             paperId: '2608.12345', sealedRecordSha256: A, paperInputSha256: B,
             recordFileSha256: B, recordsEnvelopeFileSha256: C,
             sourceIdentitySha256: C, artifactIndexSha256: D,
@@ -165,6 +171,7 @@ describe('Manual v6 工作流与 Merkle spec', () => {
             assemblerProtocolSha256: A
         });
         const partial = buildBatchSpecV6({
+            modelPolicy: CURRENT_POLICY,
             date: '2026-08-28', runtimeMode: 'shadow', filteredBatchSha256: B,
             expectedPaperIds: ['2608.12345', '2608.54321'], paperShards: [shard]
         });
@@ -172,6 +179,7 @@ describe('Manual v6 工作流与 Merkle spec', () => {
         assert.equal(partial.rootSha256, null);
         assert.equal(partial.paperIndex['2608.54321'].status, 'pending');
         const second = buildPaperSpecShard({
+            modelPolicy: CURRENT_POLICY,
             paperId: '2608.54321', sealedRecordSha256: B, paperInputSha256: C,
             recordFileSha256: C, recordsEnvelopeFileSha256: D,
             sourceIdentitySha256: D, artifactIndexSha256: A,
@@ -180,17 +188,22 @@ describe('Manual v6 工作流与 Merkle spec', () => {
             assemblerProtocolSha256: A
         });
         const complete = buildBatchSpecV6({
+            modelPolicy: CURRENT_POLICY,
             date: '2026-08-28', runtimeMode: 'production', filteredBatchSha256: B,
             expectedPaperIds: ['2608.54321', '2608.12345'], paperShards: [second, shard]
         });
         assert.equal(complete.status, 'complete');
+        assert.equal(complete.modelPolicy, CURRENT_POLICY);
+        assert.equal(shard.modelPolicy, CURRENT_POLICY);
         assert.match(complete.rootSha256, /^[a-f0-9]{64}$/);
         const shadowComplete = buildBatchSpecV6({
+            modelPolicy: CURRENT_POLICY,
             date: '2026-08-28', runtimeMode: 'shadow', filteredBatchSha256: B,
             expectedPaperIds: ['2608.54321', '2608.12345'], paperShards: [second, shard]
         });
         assert.notEqual(complete.rootSha256, shadowComplete.rootSha256);
         assert.throws(() => buildBatchSpecV6({
+            modelPolicy: CURRENT_POLICY,
             date: '2026-08-28', runtimeMode: 'production', filteredBatchSha256: B,
             expectedPaperIds: ['2608.12345'], paperShards: [shard, shard]
         }), /重复论文/);
@@ -198,6 +211,7 @@ describe('Manual v6 工作流与 Merkle spec', () => {
 
     it('paper shard 拒绝缺少真实文件 SHA 的语义-only provenance', () => {
         assert.throws(() => buildPaperSpecShard({
+            modelPolicy: CURRENT_POLICY,
             paperId: '2608.12345', sealedRecordSha256: A,
             paperInputSha256: B, sourceIdentitySha256: C,
             artifactIndexSha256: D, readerLongformSha256: A,

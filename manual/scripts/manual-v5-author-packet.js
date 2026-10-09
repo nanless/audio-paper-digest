@@ -480,14 +480,7 @@ function validateAuthorPacket(packet, options = {}) {
 }
 
 function materializeAuthorPacket(options = {}) {
-    const built = buildAuthorPacket(options);
-    assertExactPacketDirectory(built.packetPaths, true);
-    writeFileAtomic(built.packetPaths.metadataPath, built.metadataBytes);
-    writeFileAtomic(built.packetPaths.packetPath, `${JSON.stringify(built.packet, null, 2)}\n`);
-    fs.chmodSync(built.packetPaths.metadataPath, 0o600);
-    fs.chmodSync(built.packetPaths.packetPath, 0o600);
-    validateAuthorPacket(built.packet, { ...options, requireMaterialized: true });
-    return built;
+    throw new Error('旧 v5 作者任务材料仅保留读取与核验；新任务请使用当前模型规则的 v6 入口');
 }
 
 function parseArgs(argv) {

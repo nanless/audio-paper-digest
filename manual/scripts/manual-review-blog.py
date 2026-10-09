@@ -23,8 +23,9 @@ from blog_entry_loader import load_publish_to_blog
 from runtime_guard import require_external_runtime
 from publish_common import is_canonical_publish_arxiv_id
 
-REQUIRED_REVIEW_MODEL = 'gpt-5.6-terra'
-REQUIRED_REVIEW_REASONING = 'high'
+from manual_agent_policy import (
+    review_model_policy, require_current_review_policy, review_subagent_identity_error,
+)
 
 
 BJ = timezone(timedelta(hours=8))
@@ -71,9 +72,10 @@ def _load_review_statement(path):
         raise ValueError(f'无法读取或解析人工审查声明：{path}') from exc
     if not isinstance(payload, dict):
         raise ValueError('人工审查声明必须是 JSON 对象。')
-    if payload.get('version') not in (2, 3) or payload.get('mode') != 'manual_complete':
-        raise ValueError('人工审查声明必须采用 v2 或 v3 版本，并标明人工审查方式。')
-    current_v3 = payload.get('version') == 3
+    if payload.get('mode') != 'manual_complete':
+        raise ValueError('人工审查声明必须标明人工审查方式。')
+    expected_policy = review_model_policy(payload)
+    requires_subagent_review = payload['version'] in (3, 4)
     if not isinstance(payload.get('agent'), str) or not payload['agent'].strip():
         raise ValueError('人工审查声明必须填写非空的审查者名称。')
     if payload.get('basis') != 'deterministic_and_manual_semantic_review':
@@ -107,7 +109,11 @@ def _load_review_statement(path):
         deleted = item.get('deleted') is True
         allowed = {'path', 'sha256', 'checks', 'notes', 'deleted'}
         required_fields = {'path', 'sha256', 'checks', 'notes'}
-        if current_v3:
+        cached_review = payload.get('version') == 4 and 'cacheReuse' in item
+        if cached_review:
+            allowed.add('cacheReuse')
+            required_fields.add('cacheReuse')
+        elif requires_subagent_review:
             allowed.update({'reviewSubagent', 'imageFindings'})
             required_fields.update({'reviewSubagent', 'imageFindings'})
         if not required_fields.issubset(item) or not set(item).issubset(allowed):
@@ -138,19 +144,26 @@ def _load_review_statement(path):
                 raise ValueError(f'文件审查记录 files[{index}] 必须完整列出规定的检查项，且每项结果均为 true。')
         if not isinstance(item.get('notes'), str) or len(item['notes'].strip()) < 20:
             raise ValueError(f'文件审查记录 files[{index}] 中的审查说明必须是至少 20 个字符的非空文字。')
+        if cached_review:
+            reuse = item['cacheReuse']
+            if (deleted or not isinstance(reuse, dict)
+                    or set(reuse) != {'version', 'record', 'recordSha256'}
+                    or type(reuse.get('version')) is not int or reuse['version'] != 1
+                    or not isinstance(reuse.get('record'), dict)
+                    or not re.fullmatch(r'[a-f0-9]{64}', str(reuse.get('recordSha256') or ''))):
+                raise ValueError('逐页复用记录的结构无效。')
+            continue
         subagent = item.get('reviewSubagent')
-        if current_v3 and (not isinstance(subagent, dict) or subagent.get('version') != 1
+        if requires_subagent_review and (review_subagent_identity_error(subagent, expected_policy) is not None
                 or not isinstance(subagent.get('taskName'), str)
                 or len(subagent['taskName'].strip()) < 4
                 or subagent.get('singleFileOnly') is not True
-                or subagent.get('isolatedContext') is not True
-                or subagent.get('model') != REQUIRED_REVIEW_MODEL
-                or subagent.get('reasoningEffort') != REQUIRED_REVIEW_REASONING):
+                or subagent.get('isolatedContext') is not True):
             raise ValueError(
-                f'文件审查记录 files[{index}] 必须注明独立单页任务及规定的模型和推理等级：'
-                f'{REQUIRED_REVIEW_MODEL}/{REQUIRED_REVIEW_REASONING}。'
+                f'文件审查记录 files[{index}] 必须注明独立单页任务、隔离上下文和真实身份：'
+                f'{review_subagent_identity_error(subagent, expected_policy) or "单页任务信息不完整。"}'
             )
-        if current_v3:
+        if requires_subagent_review:
             task_name = subagent['taskName'].strip()
             if task_name in seen_subagent_tasks:
                 raise ValueError('各页面的审查任务名称必须逐页唯一，不能跨页面复用。')
@@ -161,7 +174,7 @@ def _load_review_statement(path):
                 raise ValueError(
                     f'文件审查记录 files[{index}] 中的论文页审查任务必须在 paperId 中填写规范的 arXiv ID。'
                 )
-        if current_v3 and not isinstance(item.get('imageFindings'), list):
+        if requires_subagent_review and not isinstance(item.get('imageFindings'), list):
             raise ValueError(f'文件审查记录 files[{index}] 中的逐图检查结果必须是数组。')
         for finding_index, finding in enumerate(item.get('imageFindings', [])):
             if (not isinstance(finding, dict)
@@ -219,6 +232,9 @@ def _validate_file_specific_notes(module, review_file_records_by_path, actual_pa
         seen_semantic_notes.add(key)
 
     for relative, resolved in actual_paths.items():
+        if 'cacheReuse' in review_file_records_by_path[relative]:
+            module.validate_manual_cache_reuse(review_file_records_by_path[relative], date_str)
+            continue
         item = review_file_records_by_path[relative]
         notes = item['notes']
         if deletions[relative]:
@@ -272,18 +288,10 @@ def _validate_file_specific_notes(module, review_file_records_by_path, actual_pa
 
 
 def _require_current_review_statement_version(module, generation_payload, review_statement):
-    if generation_payload.get('schemaVersion') != 3:
-        return
-    requires_v3 = any(
-        isinstance(paper, dict)
-        and (((paper.get('analysisManifest') or {}).get('contracts') or {}).get('manualDepth')
-             in {'full-text-evidence-v5', 'full-text-evidence-v6'})
-        for paper in generation_payload.get('publishedPapers') or []
-    )
-    if requires_v3 and review_statement.get('version') != 3:
-        raise module.PublishDataValidationError(
-            'Manual v5/v6 新页面必须使用 v3 人工审查声明；历史 v2 声明不能替代独立单页任务和逐图审查记录。'
-        )
+    try:
+        require_current_review_policy(review_statement)
+    except ValueError as exc:
+        raise module.PublishDataValidationError(str(exc)) from exc
 
 
 def _validate_review_statement_scope(module, generation_payload, review_statement):
@@ -295,9 +303,10 @@ def _validate_review_statement_scope(module, generation_payload, review_statemen
         )
     if generation_scope is not None:
         module._validate_active_publication_scope(generation_payload)
-        if review_statement.get('version') != 3 or len(review_statement.get('files') or []) != 1:
+        _require_current_review_statement_version(module, generation_payload, review_statement)
+        if len(review_statement.get('files') or []) != 1:
             raise module.PublishDataValidationError(
-                '单篇试发布必须使用 v3 人工审查声明，且声明中只能包含一个页面。'
+                '单篇试发布必须使用 v4 人工审查声明，且声明中只能包含一个页面。'
             )
     return generation_scope
 
@@ -366,9 +375,9 @@ def _run(module, date_str, review_statement_path):
         generation_payload = json.loads(Path(manifest_path).read_text(encoding='utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise module.PublishDataValidationError('生成清单无法解析。') from exc
+    _require_current_review_statement_version(module, generation_payload, review_statement)
     authoritative_by_id = {}
     if generation_payload.get('schemaVersion') == 3:
-        _require_current_review_statement_version(module, generation_payload, review_statement)
         _validate_review_statement_scope(module, generation_payload, review_statement)
         for paper in generation_payload.get('publishedPapers') or []:
             if not isinstance(paper, dict):
@@ -400,6 +409,8 @@ def _run(module, date_str, review_statement_path):
             f'人工审查声明中的文件集合与生成清单不一致：缺少 {missing or "-"}；多出 {extra or "-"}'
         )
     for relative, resolved in actual_paths.items():
+        if 'cacheReuse' in expected_attested[relative]:
+            module.validate_manual_cache_reuse(expected_attested[relative], date_str)
         deleted = deletion_expectations.get(relative)
         if deleted is None:
             raise module.PublishDataValidationError(
@@ -420,7 +431,7 @@ def _run(module, date_str, review_statement_path):
             raise module.PublishDataValidationError(f'文件内容 SHA 与人工审查声明不一致：{relative}')
     _validate_file_specific_notes(
         module, expected_attested, actual_paths, deletion_expectations, date_str,
-        require_subagent_images=review_statement.get('version') == 3,
+        require_subagent_images=review_statement.get('version') in (3, 4),
     )
 
     # 人工审查只核对已审文件，不改写页面。预演检查若发现页面需要自动修正，
@@ -481,7 +492,8 @@ def _run(module, date_str, review_statement_path):
             'failureKind': None,
             'reviewedSha256': module._sha256_file(path),
             'reviewProtocolFingerprint': protocol,
-            'imageReviewMode': 'manual_semantic',
+            'imageReviewMode': (expected_attested[path.relative_to(Path(blog_repo).resolve()).as_posix()]
+                .get('cacheReuse', {}).get('record', {}).get('imageReviewMode', 'manual_semantic')),
         }
     if len(reviewed) != len([path for path in paths if Path(path).is_file()]):
         raise module.PublishDataValidationError('已审文件数量在凭证签发前发生变化。')

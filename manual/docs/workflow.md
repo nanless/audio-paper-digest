@@ -1,8 +1,8 @@
 # Manual v6 运行手册
 
-[返回入口](../README.md) · [文档地图](README.md) · [架构说明](architecture.md) · [编辑要求](editorial-reference-contract.md)
+[返回入口](../README.md) · [文档地图](README.md) · [架构说明](architecture.md) · [编辑要求](editorial-reference-contract-v2.md)
 
-主助手负责创建实际运行的单篇助手、登记任务并汇总整批结果。本手册按执行顺序说明每步读取和生成什么，以及失败后怎样恢复。文件身份和 SHA 算法见[架构说明](architecture.md)，正文质量要求见[编辑说明](editorial-reference-contract.md)。
+主助手负责创建实际运行的单篇助手、登记任务并汇总整批结果。本手册按执行顺序说明每步读取和生成什么，以及失败后怎样恢复。文件身份和 SHA 算法见[架构说明](architecture.md)，正文质量要求见[编辑说明](editorial-reference-contract-v2.md)。
 
 ## 开始前确认工作区和日期
 
@@ -119,10 +119,11 @@ npm run manual:tasks -- claim --date YYYY-MM-DD --limit 3
 
 ```bash
 npm run manual:tasks -- start --date YYYY-MM-DD \
-  --claim CLAIM_ID --task-name TASK_NAME
+  --claim CLAIM_ID --task-name TASK_NAME \
+  --model gpt-6.1-sol --reasoning-effort high
 ```
 
-不能提前 start，也不能用虚构任务名占位。四个正文角色均使用 `gpt-5.6-terra` 和 `high`；按输入包的实际要求创建任务，不能以其他模型运行后填同一凭证。
+不能提前 start，也不能用虚构任务名占位。开始时必须如实声明模型和推理等级，管理器保存这份声明，组合器据此填写凭证；字段核对不能单凭记录证明远端平台实际使用了该模型。主助手及四个正文角色均使用 `gpt-6.1-sol/high`。新输入包版本 4、管理器状态版本 2 和提交凭证版本 2 都必须带 `manual-agents-sol-high-v2`；凭证必须填写真实模型、推理等级和任务信息，不能以其他模型运行后借用当前标识。旧状态、输入包和凭证只按原模型规则读取，不继续新领取、启动、提交或重试。
 
 ### 提交结果与凭证
 
@@ -179,7 +180,7 @@ npm run manual:bind-revision -- --date YYYY-MM-DD \
   --paper ARXIV_ID --preflight
 ```
 
-映射不在默认位置时可加 `--map PATH`；`--prepare` 与 `--preflight` 互斥。预检通过后，由独立的 `gpt-5.6-terra/high` 审计任务核对当前文章和映射 SHA 及完整语义要求，至少记录两轮真实检查，最终无遗留问题，并将审计写入输入包规定位置。
+映射不在默认位置时可加 `--map PATH`；`--prepare` 与 `--preflight` 互斥。预检通过后，由独立的 `gpt-6.1-sol/high` 审计任务核对当前文章和映射 SHA 及完整语义要求，至少记录两轮真实检查，最终无遗留问题，并将审计写入输入包规定位置。新审计使用版本 2、`manual-v6-independent-revision-audit-v2` 和当前 `modelPolicy`，如实记录模型与任务信息。四个正文角色的实际提交结果、开始记录中的模型声明及独立修订审计须分别核对，不能用构造的审计样例代替真实审查。预检的内部结构占位不是模型审查，不能保存为正式审计凭证。
 
 最后不带模式参数运行组合器：
 
@@ -189,7 +190,7 @@ npm run manual:bind-revision -- --date YYYY-MM-DD --paper ARXIV_ID
 
 它将已完成的文章、映射、审查与审计组合成规定结果和凭证，不替作者写正文。随后按第四节执行修订角色的 `submit`。
 
-教程写作通常要求 8–18 个论文特有三级标题；当前 v2 编辑计划的 4–8 个锚点、输入包说明的 2400–24000 字符和 `reader-longform-v2` 的 6–32 个内容块是不同对象。V6 单篇记录检查至少 2400 字符，其他独立教程质量检查另有 6000 字符与 8–18 节要求；不能据某个检查通过宣布全部满足。具体适用范围见[正文结构说明](editorial-reference-contract.md#正文顺序跟随理解需要)。
+教程写作通常要求 8–18 个论文特有三级标题；当前 v2 编辑计划的 4–8 个锚点、输入包说明的 2400–24000 字符和 `reader-longform-v2` 的 6–32 个内容块是不同对象。V6 单篇记录检查至少 2400 字符，其他独立教程质量检查另有 6000 字符与 8–18 节要求；不能据某个检查通过宣布全部满足。具体适用范围见[正文结构说明](editorial-reference-contract-v2.md#正文顺序跟随理解需要)。
 
 ## 七、纠正论文元数据
 
@@ -200,7 +201,8 @@ npm run manual:correction -- packet --date YYYY-MM-DD --paper ARXIV_ID
 npm run manual:correction -- register --date YYYY-MM-DD --paper ARXIV_ID
 npm run manual:correction -- claim --date YYYY-MM-DD [--paper ARXIV_ID] [--limit N]
 npm run manual:correction -- start --date YYYY-MM-DD \
-  --claim CLAIM_ID --task-name TASK_NAME
+  --claim CLAIM_ID --task-name TASK_NAME \
+  --model gpt-6.1-sol --reasoning-effort high
 npm run manual:correction -- submit --date YYYY-MM-DD --claim CLAIM_ID
 npm run manual:correction -- manifest --date YYYY-MM-DD
 npm run manual:correction -- status --date YYYY-MM-DD
@@ -228,7 +230,7 @@ npm run manual:analyze -- --date YYYY-MM-DD \
   --spec data/current/manual-v6/YYYY-MM-DD/spec.json
 ```
 
-`manual:records` 重读每篇输入包、结果及凭证，生成单篇记录和整批文件。`manual:spec` 重验论文全集、来源索引、records、任务证据和正文映射，生成每篇发布输入及 batch Merkle root。`manual:analyze` 再次验证 spec，写标准 `data/current/deep-analysis-result.json`。
+`manual:records` 重读每篇输入包、结果及凭证，生成单篇记录和整批文件。新记录、整批 records、spec 和正文分块文件 `manualReaderLongform` 必须保存当前 `modelPolicy` 并纳入 SHA；records 4、spec 6 和正文分块格式 `reader-longform` 2 的格式数字保持不变。旧缺标识记录只按原规则读取，不自动补字段或重算旧 SHA。`manual:spec` 重验论文全集、来源索引、records、任务证据和正文映射，生成每篇发布输入及 batch Merkle root。`manual:analyze` 再次验证 spec，写标准 `data/current/deep-analysis-result.json`。
 
 `manual:records` 支持显式 `--force`；`manual:spec` 和 `manual:analyze` 也支持在已有输出变化时显式覆盖。它只允许覆盖目标文件，不跳过任何校验。集合、路径、SHA、来源身份或 Merkle 不符仍会失败，四角色完成也不等于已发布。
 
@@ -239,9 +241,9 @@ npm run blog:generate -- --date YYYY-MM-DD
 npm run blog:manual-plan -- --date YYYY-MM-DD
 ```
 
-计划输出逐页审查文件及批次审查声明（`attestation`）的受控路径。每个最终页面由独立的 `gpt-5.6-terra/high` 助手逐页审查，并登记逐页唯一的真实任务名。审查者只读当前不可变页面；需要修改时回到生成或修订阶段，产生新 SHA 后重审该页。
+计划输出需要新审查的页面、可复用的逐页通过记录，以及批次审查声明（`attestation`）的保存路径。逐页通过记录按相对路径和正文 SHA 永久复用；页面字节未变时，模型或批次规则变化不要求重审。新增、内容变化或尚未通过的页面由独立的 `gpt-6.1-sol/high` 助手审查，并登记真实任务名。审查者只读页面；需要修改时回到生成或修订阶段，产生新 SHA 后重审该页。
 
-Manual v5 和 v6 新页面都必须使用 v3 审查声明，包含独立单页任务和逐图审查记录；历史 v2 声明不能用于新的发布。已发布历史凭证仍按原格式核验，不补改其版本或内容。
+新签发的人工审查声明使用版本 4 和当前 `manual-agents-sol-high-v2`。新审页面的身份使用版本 2，记录真实 `gpt-6.1-sol/high`、隔离上下文、任务名和逐图审查结果；复用页明确保存 `cacheReuse` 原证据，由程序核验实际缓存中的路径、正文 SHA 和原身份，不能伪装成本次模型审查。原记录没有模型信息时明确写未记录，不补填 Sol；已有原身份不得覆盖。缓存元数据可以更新，但原证据副本继续保留。读取新凭证时须再次核验原缓存证据，当前批次的 Git、生成清单和 Hugo 检查仍须通过。旧版本 2、3 声明及原整批有效凭证按原身份读取，不自动改写版本、模型或 SHA。
 
 论文页审查任务的 `paperId` 填写无版本号的规范 arXiv 基础编号，支持 `2608.12345`、`0704.0001` 和 `hep-th/9901001`。这里不接受网址、`arxiv:` 前缀或 `vN`，并须与本页的论文身份一致。
 
@@ -306,9 +308,9 @@ npm run manual:performance-report -- \
 | `manual:shadow -- --init-shadow` | 另需 `--workspace` | 只允许北京时间当天的新批次 |
 | `manual:shadow:benchmark` | 至少一个可重复 `--report`；可选 `--output` | 少于 3 个真实批次不计算性能分位数 |
 
-旧 v5 入口仅用于已有文件的显式维护：
+旧 v5 文件只供读取和核验，以下旧写入命令不再执行。新任务使用当前模型规则的 v6 入口；工作队列只输出已有记录与观察统计：
 
-| 入口 | 必需参数 |
+| 旧入口 | 原参数（不构成新写入许可） |
 |---|---|
 | `manual:v5:spec` | `--date`、至少一个可重复 `--records` |
 | `manual:v5:analyze` | `--date --spec`，可选 `--force` |
@@ -316,6 +318,6 @@ npm run manual:performance-report -- \
 | `manual:v5:promote-draft` | `--date --paper-id --source-dir --technical-review --readability-review --figure-review`；可选 `--author-packet` |
 | `manual:v5:work-queue` | `--date`；可选 `--observations`、`--output-dir`、`--no-sidecar` |
 
-这些入口不能生成新正式模式的 v6 证明、混入 v6 批次或建立新视觉任务。Python v5 写作来源及既有封存预览仍核当前固定路径和字节 SHA；仅保存旧提示词或编辑要求副本，不保证旧预览能重新通过检查。预览中 `editorialContract` 绑定提示词，`referenceContract` 绑定编辑要求，不能混用。预览没有新写入口。
+旧 spec、analyze、author-packet 和 promote-draft 的新写入已关闭。work-queue 可保留观察统计附属文件，不生成新的作者材料或正文。这些入口不能生成新正式模式的 v6 证明、混入 v6 批次或建立新视觉任务。Python v5 写作来源及既有封存预览仍核当前固定路径和字节 SHA；仅保存旧提示词或编辑要求副本，不保证旧预览能重新通过检查。预览中 `editorialContract` 绑定提示词，`referenceContract` 绑定编辑要求，不能混用。预览没有新写入口。
 
 静态旧文章的阅读、旧任务恢复、预览复验和重新发布各有边界，不能由某个包的失败推断全部历史文章不可读。哪些程序读取这些旧记录，以及各自允许什么操作，见[历史兼容边界](architecture.md#历史兼容边界)。

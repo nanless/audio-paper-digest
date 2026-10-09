@@ -1,5 +1,8 @@
 'use strict';
 
+const { CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY, modelPolicyRules, versionedModelPolicy,
+    assertCurrentModelPolicy, assertAgentIdentity, boundModelPolicy } = require('./manual-agent-policy.js');
+
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -31,7 +34,8 @@ const MANUAL_V6_RUNTIME_MODE_PRODUCTION = 'production';
 const MANUAL_V6_RUNTIME_MODE_SHADOW = 'shadow';
 const MANUAL_V6_AUTHOR_LINEAGE_CONTRACT = 'original-author-final-revision-v1';
 const MANUAL_V6_REVISION_OUTPUT_CONTRACT = 'manual-v6-author-revision-output-v2';
-const TASK_PACKET_VERSION = 3;
+const TASK_PACKET_VERSION = 4;
+const LEGACY_TASK_PACKET_VERSION = 3;
 const WORKFLOW_STATE_VERSION = 1;
 const SHA256_RE = /^[a-f0-9]{64}$/;
 const BEIJING_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d{3})?\+08:00$/;
@@ -92,7 +96,8 @@ function stableSha256(value) {
     return stableSignatureSha256(value, 'manual-v6-signature');
 }
 
-function taskOutputContract(role) {
+function taskOutputContract(role, policy = CURRENT_MODEL_POLICY) {
+    const rules = modelPolicyRules(policy);
     if (!TASK_ROLES.has(role)) throw new Error('task output contract role 非法');
     const commonReceipt = {
         version: 1,
@@ -101,10 +106,15 @@ function taskOutputContract(role) {
             'model', 'reasoningEffort', 'queuedAt', 'startedAt', 'completedAt',
             'revision', 'outputSha256'
         ],
-        model: 'gpt-5.6-terra',
-        reasoningEffort: 'high',
+        model: rules.model,
+        reasoningEffort: rules.reasoningEffort,
         semanticShaAlgorithm: MANUAL_SIGNATURE_CONTRACT
     };
+    if (policy === CURRENT_MODEL_POLICY) {
+        commonReceipt.version = 2;
+        commonReceipt.modelPolicy = policy;
+        commonReceipt.requiredFields.push('version', 'modelPolicy');
+    }
     if (role === 'technical_scoring') return {
         version: 1,
         fixedOutputPath: 'reviews/technical-scoring.json',
@@ -123,7 +133,8 @@ function taskOutputContract(role) {
         },
         scoringCalibration: {
             requiredDimensionKeys: [...TECHNICAL_SCORING_DIMENSIONS],
-            independentTerraHigh: true,
+            ...(policy === LEGACY_MODEL_POLICY ? { independentTerraHigh: true }
+                : { modelPolicy: policy, model: rules.model, reasoningEffort: rules.reasoningEffort }),
             crossDimensionChecked: true,
             batchScaleChecked: true
         },
@@ -138,7 +149,8 @@ function taskOutputContract(role) {
             'findings', 'evidenceChecks', 'readabilityRubric'
         ],
         readabilityRubric: {
-            independentTerraHigh: true,
+            ...(policy === LEGACY_MODEL_POLICY ? { independentTerraHigh: true }
+                : { modelPolicy: policy, model: rules.model, reasoningEffort: rules.reasoningEffort }),
             dimensions: [
                 'paragraphLogic', 'interParagraphContinuity', 'sectionResponsibility',
                 'factLocality', 'terminologyAndPerspective', 'sentenceRhythm',
@@ -360,7 +372,10 @@ function validateFreshAuthorityFiles(packet, files, options = {}) {
     } else if (structured) {
         throw new Error('ArtifactIndex 未声明结构化输入，不得额外塞入 structured_fulltext');
     }
-    for (const [kind, repositoryPath] of Object.entries(REPOSITORY_AUTHORITY_FILES)) {
+    const policy = versionedModelPolicy(packet, LEGACY_TASK_PACKET_VERSION, TASK_PACKET_VERSION, '任务数据包');
+    const authorityFiles = { ...REPOSITORY_AUTHORITY_FILES, editorial_contract:
+        path.resolve(__dirname, '../..', modelPolicyRules(policy).editorialContractPath) };
+    for (const [kind, repositoryPath] of Object.entries(authorityFiles)) {
         if (byKind.get(kind).artifact.sha256 !== fileSha256(repositoryPath)) {
             throw new Error(`${kind} 不是仓库当前固定权威文件`);
         }
@@ -386,13 +401,13 @@ function validateFreshAuthorityFiles(packet, files, options = {}) {
     }
 }
 
-function validateTaskReceipt(value, role, paperId, label) {
+function validateTaskReceipt(value, role, paperId, label, options = {}) {
     const receipt = assertObject(value, label);
+    assertAgentIdentity(receipt, options.expectedModelPolicy === undefined ? LEGACY_MODEL_POLICY : options.expectedModelPolicy, label);
     if (receipt.role !== role || !TASK_ROLES.has(role)) throw new Error(`${label}.role 非法`);
     assertPaperId(receipt.paperId, paperId, `${label}.paperId`);
-    if (receipt.singlePaperOnly !== true || receipt.isolatedContext !== true
-        || receipt.model !== 'gpt-5.6-terra' || receipt.reasoningEffort !== 'high') {
-        throw new Error(`${label} 必须绑定单篇隔离的 gpt-5.6-terra/high task`);
+    if (receipt.singlePaperOnly !== true || receipt.isolatedContext !== true) {
+        throw new Error(`${label} 必须对应单篇隔离任务，singlePaperOnly 和 isolatedContext 都须为 true`);
     }
     assertText(receipt.taskName, `${label}.taskName`, 4);
     // 早期的生产运行器回执用 inputPacketSha256 表示同一个内容寻址的数据包
@@ -408,6 +423,15 @@ function validateTaskReceipt(value, role, paperId, label) {
 }
 
 function buildTaskPacket(options = {}) {
+    const policy = options.version === undefined && options.modelPolicy === undefined
+        ? CURRENT_MODEL_POLICY
+        : versionedModelPolicy(options, LEGACY_TASK_PACKET_VERSION, TASK_PACKET_VERSION, '任务数据包');
+    assertCurrentModelPolicy(policy, '新任务数据包');
+    return rebuildTaskPacket(options, policy);
+}
+
+// 旧数据包只在读取核验时按原规则重建，不能通过公开创建入口新发旧模型任务。
+function rebuildTaskPacket(options, policy) {
     const role = options.role;
     if (!TASK_ROLES.has(role)) throw new Error('task packet role 非法');
     const paperId = assertPaperId(options.paperId, null, 'task packet');
@@ -433,7 +457,8 @@ function buildTaskPacket(options = {}) {
     }
     validateFreshAuthoringArtifacts(role, allowedArtifacts);
     const packet = {
-        version: TASK_PACKET_VERSION,
+        version: policy === LEGACY_MODEL_POLICY ? LEGACY_TASK_PACKET_VERSION : TASK_PACKET_VERSION,
+        ...(policy === CURRENT_MODEL_POLICY ? { modelPolicy: policy } : {}),
         role,
         ...(role === 'author' ? { authoringMode: 'fresh_from_evidence' } : {}),
         ...(role === 'author_revision' ? {
@@ -445,12 +470,12 @@ function buildTaskPacket(options = {}) {
         allowedArtifacts,
         contractSha256: assertSha(options.contractSha256, 'task packet.contractSha256')
     };
-    // 这个可选字段缺失时，旧的 production-v6 数据包仍可核验。新生成的
-    // 数据包都会带上规范的 role 契约，所以叶子节点不需要额外的 schema
-    // 或哈希配方。
-    if (options.outputContract !== undefined) {
-        const expectedOutputContract = taskOutputContract(role);
-        if (stableSha256(options.outputContract) !== stableSha256(expectedOutputContract)) {
+    // 旧数据包缺少输出规则时仍按原内容核验；新数据包必须记录当前角色的
+    // 完整输出要求，并把模型规则一起纳入数据包 SHA。
+    if (options.outputContract !== undefined || policy === CURRENT_MODEL_POLICY) {
+        const expectedOutputContract = taskOutputContract(role, policy);
+        if (options.outputContract !== undefined
+            && stableSha256(options.outputContract) !== stableSha256(expectedOutputContract)) {
             throw new Error('task packet.outputContract 与当前角色正式契约不一致');
         }
         packet.outputContract = expectedOutputContract;
@@ -460,8 +485,14 @@ function buildTaskPacket(options = {}) {
 }
 
 function validateTaskPacket(packet, options = {}) {
-    const rebuilt = buildTaskPacket(packet);
-    if (packet.version !== TASK_PACKET_VERSION || packet.packetSha256 !== rebuilt.packetSha256) {
+    const policy = versionedModelPolicy(packet, LEGACY_TASK_PACKET_VERSION, TASK_PACKET_VERSION, '任务数据包');
+    if (policy === CURRENT_MODEL_POLICY && !packet.outputContract) throw new Error('新任务数据包缺少输出规则');
+    if (options.expectedModelPolicy !== undefined) {
+        modelPolicyRules(options.expectedModelPolicy);
+        if (policy !== options.expectedModelPolicy) throw new Error('任务数据包与队列模型规则不一致');
+    }
+    const rebuilt = rebuildTaskPacket(packet, policy);
+    if (packet.version !== rebuilt.version || packet.packetSha256 !== rebuilt.packetSha256) {
         throw new Error('task packet SHA 或版本不匹配');
     }
     if (options.paperId) assertPaperId(packet.paperId, options.paperId, 'task packet.paperId');
@@ -542,8 +573,11 @@ function validateAuthorRevisionArtifactLineage(authorPacket, revisionPacket, rev
     return revision;
 }
 
-function validateReviewOutput(output, role, paperId, receipt, label) {
+function validateReviewOutput(output, role, paperId, receipt, label, options = {}) {
     const value = assertObject(output, label);
+    const policy = options.expectedModelPolicy === undefined ? LEGACY_MODEL_POLICY : options.expectedModelPolicy;
+    assertAgentIdentity(receipt, policy, `${label}.receipt`);
+    const rules = modelPolicyRules(policy);
     if (value.version !== 1 || value.role !== role) throw new Error(`${label} 版本或 role 非法`);
     assertPaperId(value.paperId, paperId, `${label}.paperId`);
     if (value.taskName !== receipt.taskName) throw new Error(`${label}.taskName 与 receipt 不一致`);
@@ -620,12 +654,13 @@ function validateReviewOutput(output, role, paperId, receipt, label) {
         const calibration = assertObject(value.scoringCalibration, `${label}.scoringCalibration`);
         if (calibration.version !== 1 || calibration.independentReview !== true
             || calibration.reviewerTaskName !== value.taskName
-            || calibration.model !== 'gpt-5.6-terra'
+            || calibration.model !== rules.model
             || calibration.reasoningEffort !== 'high'
             || calibration.crossDimensionChecked !== true
             || calibration.batchScaleChecked !== true) {
-            throw new Error(`${label}.scoringCalibration 必须绑定当前独立 Terra-high reviewer 与完整校准动作`);
+            throw new Error(`${label}.scoringCalibration 必须对应 ${rules.model}/high 独立评分任务并完成全部校准检查`);
         }
+        assertAgentIdentity(calibration, policy, `${label}.scoringCalibration`, { receipt: false });
         assertText(calibration.calibrationNotes, `${label}.scoringCalibration.calibrationNotes`, 40);
         const byDimension = assertObject(
             calibration.evidenceIdsByDimension,
@@ -656,10 +691,11 @@ function validateReviewOutput(output, role, paperId, receipt, label) {
         assertPaperId(rubric.paperId, paperId, `${label}.readabilityRubric.paperId`);
         if (rubric.independentReview !== true
             || rubric.reviewerTaskName !== value.taskName
-            || rubric.model !== 'gpt-5.6-terra'
+            || rubric.model !== rules.model
             || rubric.reasoningEffort !== 'high') {
-            throw new Error(`${label}.readabilityRubric 必须绑定当前独立 Terra-high reviewer`);
+            throw new Error(`${label}.readabilityRubric 必须对应 ${rules.model}/high 独立可读性审查任务`);
         }
+        assertAgentIdentity(rubric, policy, `${label}.readabilityRubric`, { receipt: false });
         const validation = validateReadabilityRubric(rubric, { minimumTotal: 12 });
         if (!validation.valid || !validation.passing) {
             throw new Error(`${label}.readabilityRubric 未通过 7 项可读性检查: ${validation.errors.join('; ') || `total=${validation.total}`}`);
@@ -813,6 +849,7 @@ function normalizeLegacyArtifactIndexBinding(record, artifactIndex, artifactInde
 
 function validateManualRecordV4(record, artifactIndex, verificationContext = {}) {
     const value = assertObject(record, 'manual record v4');
+    const policy = boundModelPolicy(value, verificationContext.expectedModelPolicy, 'manual record');
     if (value.version !== MANUAL_RECORD_VERSION_V4 || value.manualDepth !== MANUAL_DEPTH_V6) {
         throw new Error('manual record 必须是 records v4 / full-text-evidence-v6');
     }
@@ -831,7 +868,7 @@ function validateManualRecordV4(record, artifactIndex, verificationContext = {})
     }
     // records v4/spec v6 的正式检查以 records v3 校验函数为基础，
     // 标题、作者、八维评分、证据记录、结果说明、开源资源、图片和可读性都必须检查。
-    validateRecord(value, paperId, `manual record ${paperId}`, { recordsVersion: RECORDS_VERSION });
+    validateRecord(value, paperId, `manual record ${paperId}`, { recordsVersion: RECORDS_VERSION, expectedModelPolicy: policy });
     const source = assertObject(value.sourceSnapshot, 'manual record.sourceSnapshot');
     assertSha(source.paperInputSha256, 'manual record.sourceSnapshot.paperInputSha256');
     assertSha(source.sourceIdentitySha256, 'manual record.sourceSnapshot.sourceIdentitySha256');
@@ -854,7 +891,7 @@ function validateManualRecordV4(record, artifactIndex, verificationContext = {})
     }
     const article = assertText(editorial.readerArticle, 'manual record.editorial.readerArticle', 2400);
     validateManualTutorialLongformBundle(editorial.longformBundle, article, artifactIndex, {
-        paperId, runtimeMode,
+        paperId, runtimeMode, expectedModelPolicy: policy,
         // 有些 Production V6 记录里的表格片段，是在一次确定性渲染器重构之前
         // 由修订回执签名的。数字单元格覆盖率、源矩阵 SHA、块包含关系和
         // 片段 SHA 仍然必须满足；只对那一段已签名的片段放宽「与今天的渲染器
@@ -864,15 +901,15 @@ function validateManualRecordV4(record, artifactIndex, verificationContext = {})
     const receipts = assertObject(value.reviewReceipts, 'manual record.reviewReceipts');
     const technical = validateTaskReceipt(
         receipts.technicalScoring, 'technical_scoring', paperId,
-        'manual record.reviewReceipts.technicalScoring'
+        'manual record.reviewReceipts.technicalScoring', { expectedModelPolicy: policy }
     );
     const readability = validateTaskReceipt(
         receipts.pedagogyReadability, 'pedagogy_readability', paperId,
-        'manual record.reviewReceipts.pedagogyReadability'
+        'manual record.reviewReceipts.pedagogyReadability', { expectedModelPolicy: policy }
     );
     const revision = validateTaskReceipt(
         receipts.authorRevision, 'author_revision', paperId,
-        'manual record.reviewReceipts.authorRevision'
+        'manual record.reviewReceipts.authorRevision', { expectedModelPolicy: policy }
     );
     if (runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION) {
         if (!editorial.longformBundle.finalRevisionAuthorReceipt
@@ -889,7 +926,8 @@ function validateManualRecordV4(record, artifactIndex, verificationContext = {})
     }
     const packets = assertObject(verificationContext.taskPackets, 'manual record verificationContext.taskPackets');
     const outputs = assertObject(verificationContext.reviewOutputs, 'manual record verificationContext.reviewOutputs');
-    const packetOptions = { paperId, artifactRoot: verificationContext.artifactRoot, requireFiles: true };
+    const packetOptions = { paperId, artifactRoot: verificationContext.artifactRoot, requireFiles: true,
+        expectedModelPolicy: policy };
     const authorPacket = validateTaskPacket(packets.author, packetOptions);
     const technicalPacket = validateTaskPacket(packets.technicalScoring, packetOptions);
     const readabilityPacket = validateTaskPacket(packets.pedagogyReadability, packetOptions);
@@ -914,11 +952,11 @@ function validateManualRecordV4(record, artifactIndex, verificationContext = {})
     }
     const technicalOutput = validateReviewOutput(
         outputs.technicalScoring, 'technical_scoring', paperId, technical,
-        'manual record reviewOutputs.technicalScoring'
+        'manual record reviewOutputs.technicalScoring', { expectedModelPolicy: policy }
     );
     const readabilityOutput = validateReviewOutput(
         outputs.pedagogyReadability, 'pedagogy_readability', paperId, readability,
-        'manual record reviewOutputs.pedagogyReadability'
+        'manual record reviewOutputs.pedagogyReadability', { expectedModelPolicy: policy }
     );
     const resolution = assertObject(value.reviewResolution, 'manual record.reviewResolution');
     const revisionTaskName = assertText(
@@ -999,9 +1037,11 @@ function validateManualRecordV4(record, artifactIndex, verificationContext = {})
 }
 
 function buildPaperSpecShard(options = {}) {
+    const policy = boundModelPolicy(options, undefined, '单篇分析规范');
     const shard = {
         version: MANUAL_SPEC_VERSION_V6,
         kind: 'manual_paper_spec_shard',
+        ...(policy === CURRENT_MODEL_POLICY ? { modelPolicy: policy } : {}),
         paperId: assertPaperId(options.paperId, null, 'paper spec shard.paperId'),
         sealedRecordSha256: assertSha(options.sealedRecordSha256, 'paper spec shard.sealedRecordSha256'),
         recordFileSha256: assertSha(options.recordFileSha256, 'paper spec shard.recordFileSha256'),
@@ -1022,6 +1062,7 @@ function buildPaperSpecShard(options = {}) {
 }
 
 function buildBatchSpecV6(options = {}) {
+    const policy = boundModelPolicy(options, undefined, '批次分析规范');
     const date = String(options.date || '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('batch spec date 非法');
     const runtimeMode = options.runtimeMode;
@@ -1039,6 +1080,7 @@ function buildBatchSpecV6(options = {}) {
         throw new Error('batch spec.paperShards 含重复论文，禁止后写覆盖');
     }
     const shards = new Map(shardList.map(shard => {
+        boundModelPolicy(shard, policy, '批次单篇分析规范');
         const rebuilt = buildPaperSpecShard(shard);
         if (shard.paperSpecSha256 !== rebuilt.paperSpecSha256) throw new Error(`paper spec shard SHA 不匹配: ${shard.paperId}`);
         return [rebuilt.paperId, rebuilt];
@@ -1054,6 +1096,7 @@ function buildBatchSpecV6(options = {}) {
     if (unknown.length) throw new Error(`batch spec 含批次外 shard: ${unknown.join(', ')}`);
     const complete = Object.values(paperIndex).every(item => item.status === 'complete');
     const rootPayload = {
+        ...(policy === CURRENT_MODEL_POLICY ? { modelPolicy: policy } : {}),
         version: MANUAL_SPEC_VERSION_V6,
         mode: 'manual_complete',
         signatureContract: MANUAL_SIGNATURE_CONTRACT,
@@ -1146,7 +1189,7 @@ module.exports = {
     MANUAL_V6_RUNTIME_MODE_SHADOW,
     MANUAL_V6_AUTHOR_LINEAGE_CONTRACT,
     MANUAL_V6_REVISION_OUTPUT_CONTRACT,
-    TASK_PACKET_VERSION,
+    TASK_PACKET_VERSION, LEGACY_TASK_PACKET_VERSION,
     WORKFLOW_STATE_VERSION,
     WORKFLOW_STAGES,
     WORKFLOW_DEPENDENCIES,

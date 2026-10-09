@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from test_manual_review_blog import ROOT, attestation, manual_review_blog
+from test_manual_review_blog import ROOT, current_attestation, manual_review_blog
 from blog_entry_loader import load_publish_to_blog
 
 SPEC = importlib.util.spec_from_file_location(
@@ -28,7 +28,7 @@ INVALID_IDS = (None, 1234, '0704.0001v1', 'hep-th/9901001v2',
 
 
 def statement(paper_id):
-    payload = attestation()
+    payload = current_attestation()
     item = payload['files'][0]
     item['reviewSubagent']['paperId'] = paper_id
     item['notes'] = f'{paper_id}：核对方法数据流、WER 7.1% 实验数字、开源范围与局限边界。'
@@ -70,6 +70,7 @@ class ManualReviewArxivIdentityTest(unittest.TestCase):
             manual_review_page_dir=lambda _date: shard_dir,
             manual_review_statement_path=lambda _date: output,
             _validate_active_publication_scope=lambda _manifest: None,
+            manual_cache_reuse_for_file=lambda *_args: None,
         )
         with mock.patch.object(assembler, 'load_publish_to_blog', return_value=module), \
                 mock.patch.object(sys, 'argv', ['assemble', '--date', '2026-08-25']), \

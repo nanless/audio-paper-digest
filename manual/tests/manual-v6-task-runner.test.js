@@ -19,6 +19,13 @@ const {
     runnerPaths, recordsEnvelopeStatus, validateProductionAuthorOutput, parseArgs
 } = require('../scripts/manual-v6-task-runner.js');
 
+const CURRENT_MODEL_POLICY = 'manual-agents-sol-high-v2';
+const currentIdentity = { modelPolicy: CURRENT_MODEL_POLICY, model: 'gpt-6.1-sol', reasoningEffort: 'high' };
+
+function startCurrentTask(state, claimId, taskName, now) {
+    return startTask(state, claimId, taskName, now, currentIdentity);
+}
+
 const A = 'a'.repeat(64);
 const B = 'b'.repeat(64);
 const C = 'c'.repeat(64);
@@ -31,7 +38,7 @@ function bytesSha(filePath) {
 }
 
 function withUpdatedEditorialContract(context, check) {
-    const repositoryPath = path.resolve(__dirname, '..', 'docs', 'editorial-reference-contract.md');
+    const repositoryPath = path.resolve(__dirname, '..', 'docs', 'editorial-reference-contract-v2.md');
     const readFileSync = fs.readFileSync;
     const updatedBytes = Buffer.concat([
         readFileSync(repositoryPath), Buffer.from('\n测试中的下一版编辑要求。\n')
@@ -106,7 +113,7 @@ function fixture(ids = ['2608.12345'], executionScope = 'shadow') {
         const promptPath = path.join(paperRoot, 'instructions', 'manual-tutorial-article.md');
         const contractPath = path.join(paperRoot, 'instructions', 'manual-editorial-reference-contract.md');
         fs.copyFileSync(path.resolve(__dirname, '..', 'prompts', 'manual-tutorial-article.md'), promptPath);
-        fs.copyFileSync(path.resolve(__dirname, '..', 'docs', 'editorial-reference-contract.md'), contractPath);
+        fs.copyFileSync(path.resolve(__dirname, '..', 'docs', 'editorial-reference-contract-v2.md'), contractPath);
         const templatePath = path.join(paperRoot, 'schema', 'blank-record.json');
         fs.writeFileSync(templatePath, JSON.stringify({
             version: 1, mode: 'manual_v6_blank_record_schema', paperId: id,
@@ -158,14 +165,14 @@ function freshEvidenceFor(paper) {
 
 function validateAuthor(fx, id = '2608.12345', taskName = 'author-2608-12345') {
     const claimed = claimTasks(fx.state, 1, queuedAt).claimed[0];
-    startTask(fx.state, claimed.claimId, taskName, startedAt);
+    startCurrentTask(fx.state, claimed.claimId, taskName, startedAt);
     const task = fx.state.papers[id].tasks.author;
     const articleSha256 = 'd'.repeat(64);
     const output = { version: 1, role: 'author', paperId: id, taskName, passed: true, articleSha256 };
     const receipt = {
-        paperId: id, taskName, singlePaperOnly: true, isolatedContext: true,
-        model: 'gpt-5.6-terra', reasoningEffort: 'high', inputPacketSha256: task.packetSha256,
-        articleSha256, queuedAt, startedAt, completedAt, revision: 1
+        role: 'author', paperId: id, taskName, singlePaperOnly: true, isolatedContext: true,
+        version: 2, modelPolicy: CURRENT_MODEL_POLICY, model: 'gpt-6.1-sol', reasoningEffort: 'high', inputPacketSha256: task.packetSha256,
+        articleSha256, outputSha256: stableSha256(output), queuedAt, startedAt, completedAt, revision: 1
     };
     const outputPath = path.join(fx.papers[id].root, 'author-output.json');
     const receiptPath = path.join(fx.papers[id].root, 'author-receipt.json');
@@ -181,6 +188,7 @@ function markValidated(state, task, root, paperId, role, name, semanticSha) {
     fs.writeFileSync(receiptPath, JSON.stringify({ cached: `${name}-receipt` }));
     Object.assign(task, {
         status: 'validated', outputPath, receiptPath, taskName: name,
+        model: currentIdentity.model, reasoningEffort: currentIdentity.reasoningEffort,
         claimId: `${name}-claim`, claimedAt: queuedAt, startedAt, completedAt,
         outputFileSha256: bytesSha(outputPath), outputSemanticSha256: semanticSha,
         receiptFileSha256: bytesSha(receiptPath),
@@ -192,7 +200,7 @@ function markValidated(state, task, root, paperId, role, name, semanticSha) {
 function submitReview(fx, role, taskName) {
     const claim = claimTasks(fx.state, 1, queuedAt).claimed[0];
     assert.equal(claim.role, role);
-    startTask(fx.state, claim.claimId, taskName, startedAt);
+    startCurrentTask(fx.state, claim.claimId, taskName, startedAt);
     const output = {
         version: 1, role, paperId: claim.paperId, taskName, passed: true, issues: [],
         findings: [
@@ -209,7 +217,7 @@ function submitReview(fx, role, taskName) {
             paperId: claim.paperId,
             independentReview: true,
             reviewerTaskName: taskName,
-            model: 'gpt-5.6-terra',
+            modelPolicy: CURRENT_MODEL_POLICY, model: 'gpt-6.1-sol',
             reasoningEffort: 'high',
             dimensions: Object.fromEntries([
                 'paragraphLogic', 'interParagraphContinuity', 'sectionResponsibility',
@@ -229,7 +237,7 @@ function submitReview(fx, role, taskName) {
         ));
         output.scoringCalibration = {
             version: 1, independentReview: true, reviewerTaskName: taskName,
-            model: 'gpt-5.6-terra', reasoningEffort: 'high',
+            modelPolicy: CURRENT_MODEL_POLICY, model: 'gpt-6.1-sol', reasoningEffort: 'high',
             crossDimensionChecked: true, batchScaleChecked: true,
             calibrationNotes: '八个评分维度已经逐项回到本篇局部证据，并检查维度间重复计分、未报告信息和全批次尺度一致性。',
             evidenceIdsByDimension: Object.fromEntries([
@@ -246,7 +254,7 @@ function submitReview(fx, role, taskName) {
     fs.writeFileSync(outputPath, JSON.stringify(output));
     fs.writeFileSync(receiptPath, JSON.stringify({
         role, paperId: claim.paperId, taskName, singlePaperOnly: true, isolatedContext: true,
-        model: 'gpt-5.6-terra', reasoningEffort: 'high',
+        version: 2, modelPolicy: CURRENT_MODEL_POLICY, model: 'gpt-6.1-sol', reasoningEffort: 'high',
         consumedPacketSha256: fx.state.papers[claim.paperId].tasks[role].packetSha256,
         outputSha256: stableSha256(output), queuedAt, startedAt, completedAt, revision: 1
     }));
@@ -254,6 +262,27 @@ function submitReview(fx, role, taskName) {
 }
 
 describe('Manual v6 持久任务执行器', () => {
+    it('新任务开始必须记录当前规则和真实声明的 Sol/high，缺失或旧身份不会改变队列', () => {
+        const fx = fixture();
+        register(fx, '2608.12345', 'author');
+        const claim = claimTasks(fx.state, 1, queuedAt).claimed[0];
+        const before = JSON.stringify(fx.state);
+        for (const identity of [
+            {}, { ...currentIdentity, model: 'gpt-5.6-terra' },
+            { ...currentIdentity, reasoningEffort: 'low' },
+            { ...currentIdentity, modelPolicy: 'manual-agents-terra-high-v1' },
+            { ...currentIdentity, modelPolicy: 'unknown' }
+        ]) {
+            assert.throws(() => startTask(fx.state, claim.claimId, 'identity-check', startedAt, identity));
+            assert.equal(JSON.stringify(fx.state), before);
+        }
+        const started = startCurrentTask(fx.state, claim.claimId, 'identity-check', startedAt);
+        assert.equal(started.model, 'gpt-6.1-sol');
+        assert.equal(started.reasoningEffort, 'high');
+        assert.equal(started.modelPolicy, CURRENT_MODEL_POLICY);
+        fs.rmSync(fx.root, { recursive: true, force: true });
+    });
+
     it('正式写作提交入口接收带校验信息的草稿时，检查 type/task/primaryMethodTag/tags', () => {
         const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-author-base-')));
         fs.mkdirSync(path.join(root, 'draft'));
@@ -327,9 +356,9 @@ describe('Manual v6 持久任务执行器', () => {
                 { claim: '方法限制与论文原文证据边界一致', evidenceId: 'E2', verified: true }
             ]
         };
-        let receipt = { taskName, outputSha256: stableSha256(output) };
+        let receipt = { version: 2, ...currentIdentity, taskName, outputSha256: stableSha256(output) };
         assert.throws(() => validateReviewOutput(
-            output, 'technical_scoring', paperId, receipt, 'review'
+            output, 'technical_scoring', paperId, receipt, 'review', { expectedModelPolicy: CURRENT_MODEL_POLICY }
         ), /dims/);
         Object.assign(output, {
             dims: [1.5, 1.2, 1.1, 0.8, 1.0, 0.5, 0.3, 1.0],
@@ -339,7 +368,7 @@ describe('Manual v6 持久任务执行器', () => {
             )),
             scoringCalibration: {
                 version: 1, independentReview: true, reviewerTaskName: taskName,
-                model: 'gpt-5.6-terra', reasoningEffort: 'high',
+                modelPolicy: CURRENT_MODEL_POLICY, model: 'gpt-6.1-sol', reasoningEffort: 'high',
                 crossDimensionChecked: true, batchScaleChecked: true,
                 calibrationNotes: '八个维度已经逐项回到本篇证据，并检查维度间重复计分、未报告信息和全批次尺度的一致性。',
                 evidenceIdsByDimension: Object.fromEntries([
@@ -348,18 +377,18 @@ describe('Manual v6 持久任务执行器', () => {
                 ].map(key => [key, ['E1']]))
             }
         });
-        receipt = { taskName, outputSha256: stableSha256(output) };
+        receipt = { version: 2, ...currentIdentity, taskName, outputSha256: stableSha256(output) };
         assert.doesNotThrow(() => validateReviewOutput(
-            output, 'technical_scoring', paperId, receipt, 'review'
+            output, 'technical_scoring', paperId, receipt, 'review', { expectedModelPolicy: CURRENT_MODEL_POLICY }
         ));
         output.dims[5] = 0.7;
         receipt.outputSha256 = stableSha256(output);
         assert.throws(() => validateReviewOutput(
-            output, 'technical_scoring', paperId, receipt, 'review'
+            output, 'technical_scoring', paperId, receipt, 'review', { expectedModelPolicy: CURRENT_MODEL_POLICY }
         ), /开源评分锚点/);
     });
 
-    it('pedagogy review 强制绑定 canonical 7 维 Terra-high 独立量表', () => {
+    it('可读性审查必须绑定 Sol/high 独立完成的七项量表', () => {
         const paperId = '2608.12345';
         const taskName = 'pedagogy-schema-review';
         const output = {
@@ -374,13 +403,13 @@ describe('Manual v6 持久任务执行器', () => {
                 { claim: '方法边界与正文局部证据保持一致', evidenceId: 'SEC0002', verified: true }
             ]
         };
-        let receipt = { taskName, outputSha256: stableSha256(output) };
+        let receipt = { version: 2, ...currentIdentity, taskName, outputSha256: stableSha256(output) };
         assert.throws(() => validateReviewOutput(
-            output, 'pedagogy_readability', paperId, receipt, 'review'
+            output, 'pedagogy_readability', paperId, receipt, 'review', { expectedModelPolicy: CURRENT_MODEL_POLICY }
         ), /readabilityRubric/);
         output.readabilityRubric = {
             paperId, independentReview: true, reviewerTaskName: taskName,
-            model: 'gpt-5.6-terra', reasoningEffort: 'high',
+            modelPolicy: CURRENT_MODEL_POLICY, model: 'gpt-6.1-sol', reasoningEffort: 'high',
             dimensions: Object.fromEntries([
                 'paragraphLogic', 'interParagraphContinuity', 'sectionResponsibility',
                 'factLocality', 'terminologyAndPerspective', 'sentenceRhythm',
@@ -391,9 +420,9 @@ describe('Manual v6 持久任务执行器', () => {
                 evidence: ['SEC0002']
             }]))
         };
-        receipt = { taskName, outputSha256: stableSha256(output) };
+        receipt = { version: 2, ...currentIdentity, taskName, outputSha256: stableSha256(output) };
         assert.doesNotThrow(() => validateReviewOutput(
-            output, 'pedagogy_readability', paperId, receipt, 'review'
+            output, 'pedagogy_readability', paperId, receipt, 'review', { expectedModelPolicy: CURRENT_MODEL_POLICY }
         ));
     });
 
@@ -401,7 +430,7 @@ describe('Manual v6 持久任务执行器', () => {
         const fx = fixture(['2608.12345'], 'production');
         register(fx, '2608.12345', 'author');
         const claim = claimTasks(fx.state, 1, queuedAt).claimed[0];
-        startTask(fx.state, claim.claimId, 'production-author-2608-12345', startedAt);
+        startCurrentTask(fx.state, claim.claimId, 'production-author-2608-12345', startedAt);
         const task = fx.state.papers['2608.12345'].tasks.author;
         const outputPath = path.join(fx.papers['2608.12345'].root, 'outputs', 'author.json');
         const receiptPath = path.join(fx.papers['2608.12345'].root, 'receipts', 'author.json');
@@ -411,9 +440,10 @@ describe('Manual v6 持久任务执行器', () => {
             passed: true, articleSha256: A
         }));
         fs.writeFileSync(receiptPath, JSON.stringify({
-            paperId: '2608.12345', taskName: task.taskName, singlePaperOnly: true,
-            isolatedContext: true, model: 'gpt-5.6-terra', reasoningEffort: 'high',
+            role: 'author', paperId: '2608.12345', taskName: task.taskName, singlePaperOnly: true,
+            isolatedContext: true, version: 2, modelPolicy: CURRENT_MODEL_POLICY, model: 'gpt-6.1-sol', reasoningEffort: 'high',
             inputPacketSha256: task.packetSha256, articleSha256: A,
+            outputSha256: stableSha256(JSON.parse(fs.readFileSync(outputPath))),
             queuedAt, startedAt, completedAt, revision: 1
         }));
         assert.throws(() => submitTask(fx.state, claim.claimId, { outputPath, receiptPath }), /output-v2/);
@@ -489,14 +519,14 @@ describe('Manual v6 持久任务执行器', () => {
         fs.rmSync(fx.root, { recursive: true, force: true });
     });
 
-    it('提交任务时检查 Terra-high 凭证、taskName 和输出内容 SHA，任一不符合要求就拒绝', () => {
+    it('提交任务时检查 Sol/high 凭证、taskName 和输出内容 SHA，任一不符合要求就拒绝', () => {
         const fx = fixture();
         register(fx, '2608.12345', 'author');
         validateAuthor(fx);
         register(fx, '2608.12345', 'technical_scoring');
         const claim = claimTasks(fx.state, 1, queuedAt).claimed[0];
-        startTask(fx.state, claim.claimId, 'technical-2608-12345', startedAt);
-        assert.throws(() => startTask(fx.state, claim.claimId, 'duplicate', startedAt), /claimed/);
+        startCurrentTask(fx.state, claim.claimId, 'technical-2608-12345', startedAt);
+        assert.throws(() => startCurrentTask(fx.state, claim.claimId, 'duplicate', startedAt), /claimed/);
         const output = {
             version: 1, role: 'technical_scoring', paperId: '2608.12345',
             taskName: 'technical-2608-12345', passed: true, issues: [],
@@ -517,7 +547,7 @@ describe('Manual v6 持久任务执行器', () => {
             )),
             scoringCalibration: {
                 version: 1, independentReview: true, reviewerTaskName: 'technical-2608-12345',
-                model: 'gpt-5.6-terra', reasoningEffort: 'high',
+                modelPolicy: CURRENT_MODEL_POLICY, model: 'gpt-6.1-sol', reasoningEffort: 'high',
                 crossDimensionChecked: true, batchScaleChecked: true,
                 calibrationNotes: '八个评分维度已经逐项回到本篇局部证据，并检查维度间重复计分、未报告信息和全批次尺度一致性。',
                 evidenceIdsByDimension: Object.fromEntries([
@@ -531,13 +561,13 @@ describe('Manual v6 持久任务执行器', () => {
         fs.writeFileSync(outputPath, JSON.stringify(output));
         const receipt = {
             role: 'technical_scoring', paperId: '2608.12345', taskName: output.taskName,
-            singlePaperOnly: true, isolatedContext: true, model: 'gpt-5.6-sol', reasoningEffort: 'high',
+            version: 2, modelPolicy: CURRENT_MODEL_POLICY, singlePaperOnly: true, isolatedContext: true, model: 'gpt-5.6-sol', reasoningEffort: 'high',
             consumedPacketSha256: fx.state.papers['2608.12345'].tasks.technical_scoring.packetSha256,
             outputSha256: stableSha256(output), queuedAt, startedAt, completedAt, revision: 1
         };
         fs.writeFileSync(receiptPath, JSON.stringify(receipt));
-        assert.throws(() => submitTask(fx.state, claim.claimId, { outputPath, receiptPath }), /Terra-high/);
-        receipt.model = 'gpt-5.6-terra'; receipt.outputSha256 = A;
+        assert.throws(() => submitTask(fx.state, claim.claimId, { outputPath, receiptPath }), /gpt-6\.1-sol\/high/);
+        receipt.model = 'gpt-6.1-sol'; receipt.outputSha256 = A;
         fs.writeFileSync(receiptPath, JSON.stringify(receipt));
         assert.throws(() => submitTask(fx.state, claim.claimId, { outputPath, receiptPath }), /语义 SHA/);
         receipt.outputSha256 = stableSha256(output); delete receipt.queuedAt;
@@ -669,12 +699,12 @@ describe('Manual v6 持久任务执行器', () => {
     it('失败 checkpoint 必须显式 retry，旧 taskName 永久保留防止批次复用', () => {
         const fx = fixture(); register(fx, '2608.12345', 'author');
         const claim = claimTasks(fx.state, 1, queuedAt).claimed[0];
-        startTask(fx.state, claim.claimId, 'author-crashed-task', startedAt);
+        startCurrentTask(fx.state, claim.claimId, 'author-crashed-task', startedAt);
         failTask(fx.state, claim.claimId, 'subagent context crashed before submission', completedAt);
         assert.equal(claimTasks(fx.state, 1, queuedAt).claimed.length, 0);
         retryTask(fx.state, '2608.12345', 'author');
         const retry = claimTasks(fx.state, 1, queuedAt).claimed[0];
-        assert.throws(() => startTask(fx.state, retry.claimId, 'author-crashed-task', startedAt), /已在批次使用/);
+        assert.throws(() => startCurrentTask(fx.state, retry.claimId, 'author-crashed-task', startedAt), /已在批次使用/);
         assert.match(stateSummary(fx.state).tasks.find(item => item.role === 'author').status, /claimed/);
         fs.rmSync(fx.root, { recursive: true, force: true });
     });
@@ -682,10 +712,10 @@ describe('Manual v6 持久任务执行器', () => {
     it('显式 abandon 恢复悬挂 claim，并退休已启动 taskName', () => {
         const fx = fixture(); register(fx, '2608.12345', 'author');
         const claim = claimTasks(fx.state, 1, queuedAt).claimed[0];
-        startTask(fx.state, claim.claimId, 'abandoned-author-task', startedAt);
+        startCurrentTask(fx.state, claim.claimId, 'abandoned-author-task', startedAt);
         abandonTask(fx.state, claim.claimId, '平台确认该 subagent 已经终止，不再可能提交');
         const retry = claimTasks(fx.state, 1, queuedAt).claimed[0];
-        assert.throws(() => startTask(fx.state, retry.claimId, 'abandoned-author-task', startedAt), /已在批次使用/);
+        assert.throws(() => startCurrentTask(fx.state, retry.claimId, 'abandoned-author-task', startedAt), /已在批次使用/);
         fs.rmSync(fx.root, { recursive: true, force: true });
     });
 

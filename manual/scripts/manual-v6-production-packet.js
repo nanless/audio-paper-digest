@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
+const { CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY, modelPolicyRules, versionedModelPolicy,
+    assertCurrentModelPolicy } = require('./manual-agent-policy.js');
+
 /** 生成一个生产用 Manual v6 任务包，不调用 LLM/API。 */
 const crypto = require('crypto');
 const fs = require('fs');
@@ -113,6 +116,7 @@ function buildBlankRecordSkeleton(paperId) {
     ];
     return {
         version: 4,
+        modelPolicy: CURRENT_MODEL_POLICY,
         manualDepth: 'full-text-evidence-v6',
         paperId,
         arxivId: paperId,
@@ -131,11 +135,12 @@ function buildBlankRecordSkeleton(paperId) {
         }],
         researchBrief: {
             version: 1,
+            modelPolicy: CURRENT_MODEL_POLICY,
             contract: 'audio-researcher-v1',
             audience: 'audio_researcher',
             paperSubagent: {
-                version: 1, taskName: '', paperId, singlePaperOnly: true,
-                isolatedContext: true, model: 'gpt-5.6-terra', reasoningEffort: 'high', completedAt: ''
+                version: 2, taskName: '', paperId, singlePaperOnly: true,
+                isolatedContext: true, model: 'gpt-6.1-sol', modelPolicy: CURRENT_MODEL_POLICY, reasoningEffort: 'high', completedAt: ''
             },
             editorialPlan: {
                 version: 2,
@@ -160,14 +165,14 @@ function buildBlankRecordSkeleton(paperId) {
         },
         scoringCalibration: {
             version: 1, independentReview: true, reviewerTaskName: '',
-            model: 'gpt-5.6-terra', reasoningEffort: 'high',
+            model: 'gpt-6.1-sol', modelPolicy: CURRENT_MODEL_POLICY, reasoningEffort: 'high',
             crossDimensionChecked: true, batchScaleChecked: true,
             calibrationNotes: '', evidenceIdsByDimension: {}
         },
         openSourceEvidence: { version: 1, state: '', urls: [], sourceQuotes: [] },
         readabilityRubric: {
             paperId, independentReview: true, reviewerTaskName: '',
-            model: 'gpt-5.6-terra', reasoningEffort: 'high',
+            model: 'gpt-6.1-sol', modelPolicy: CURRENT_MODEL_POLICY, reasoningEffort: 'high',
             dimensions: Object.fromEntries(readabilityDimensions.map(name => [name, {
                 score: null, reason: '', evidence: []
             }]))
@@ -182,7 +187,7 @@ function buildBlankRecordSkeleton(paperId) {
             summary: '', method: '', innovations: '', results: '', details: '', limits: '',
             open: '', review: '', readerArticle: '',
             longformBundle: {
-                version: 2, contract: 'reader-longform-v2', articleSha256: '',
+                version: 2, modelPolicy: CURRENT_MODEL_POLICY, contract: 'reader-longform-v2', articleSha256: '',
                 paperId, artifactIndexSha256: '', blocks: [], tables: [],
                 figures: [], formulas: [], terms: [], relatedWorks: []
             }
@@ -278,9 +283,10 @@ function buildBlankRecordSchema(paperId) {
         },
         authorReceipt: {
             requiredIdentity: {
+                version: 2,
                 role: 'author', paperId, taskName: 'RUNNER_BOUND_TASK_NAME',
                 singlePaperOnly: true, isolatedContext: true,
-                model: 'gpt-5.6-terra', reasoningEffort: 'high'
+                model: 'gpt-6.1-sol', modelPolicy: CURRENT_MODEL_POLICY, reasoningEffort: 'high'
             },
             requiredBindings: [
                 'inputPacketSha256', 'outputSha256', 'articleSha256',
@@ -319,7 +325,7 @@ function buildBlankRecordSchema(paperId) {
                     scoringCalibration: {
                         version: 1, independentReview: true,
                         reviewerTaskName: 'RUNNER_BOUND_TASK_NAME',
-                        model: 'gpt-5.6-terra', reasoningEffort: 'high',
+                        model: 'gpt-6.1-sol', modelPolicy: CURRENT_MODEL_POLICY, reasoningEffort: 'high',
                         crossDimensionChecked: true, batchScaleChecked: true,
                         calibrationNotes: 'at least 40 characters',
                         evidenceIdsByDimension: 'exactly the 8 dims-order keys, each referencing real evidenceLedger IDs'
@@ -334,7 +340,7 @@ function buildBlankRecordSchema(paperId) {
                     paperId,
                     independentReview: true,
                     reviewerTaskName: 'RUNNER_BOUND_TASK_NAME',
-                    model: 'gpt-5.6-terra',
+                    model: 'gpt-6.1-sol', modelPolicy: CURRENT_MODEL_POLICY,
                     reasoningEffort: 'high',
                     scoreRange: [0, 2],
                     minimumTotal: 12,
@@ -351,9 +357,10 @@ function buildBlankRecordSchema(paperId) {
         },
         reviewReceipt: {
             requiredIdentity: {
+                version: 2,
                 paperId, role: 'RUNNER_BOUND_REVIEW_ROLE', taskName: 'RUNNER_BOUND_TASK_NAME',
                 singlePaperOnly: true, isolatedContext: true,
-                model: 'gpt-5.6-terra', reasoningEffort: 'high'
+                model: 'gpt-6.1-sol', modelPolicy: CURRENT_MODEL_POLICY, reasoningEffort: 'high'
             },
             requiredBindings: [
                 'consumedPacketSha256', 'outputSha256', 'queuedAt', 'startedAt',
@@ -659,7 +666,7 @@ function materializeAuthorEvidence(context, artifactRoot) {
             path.resolve(__dirname, '..', 'prompts', 'manual-tutorial-article.md'), 'authoring prompt'
         ).bytes, 'authoring_prompt'],
         ['instructions/manual-editorial-reference-contract.md', readOrdinaryFile(
-            path.resolve(__dirname, '..', 'docs', 'editorial-reference-contract.md'), 'editorial contract'
+            path.resolve(__dirname, '../..', modelPolicyRules(CURRENT_MODEL_POLICY).editorialContractPath), 'editorial contract'
         ).bytes, 'editorial_contract'],
         ['schema/blank-record.json', jsonBytes(buildBlankRecordSchema(context.input.id)), 'record_template']
     ];
@@ -731,7 +738,8 @@ function validateAuthorOutputDescriptor(output, artifactRoot, expected = {}) {
         draftForValidation,
         expected.metadataCorrection
             ? 'author record draft（显式 metadata correction 后）'
-            : 'author record draft'
+            : 'author record draft',
+        { expectedModelPolicy: expected.expectedModelPolicy === undefined ? LEGACY_MODEL_POLICY : expected.expectedModelPolicy }
     ) };
 }
 
@@ -752,6 +760,7 @@ function buildReviewPacket(role, paperId, sourceIdentity, artifactRoot, state) {
     }
     const output = readJsonBytes(outputFile.bytes, 'validated author output');
     const authorArtifacts = validateAuthorOutputDescriptor(output, artifactRoot, {
+        expectedModelPolicy: CURRENT_MODEL_POLICY,
         paperId, taskName: authorTask.taskName
     });
     const artifacts = [
@@ -822,6 +831,7 @@ function materializePacket(options = {}) {
     }
     const currentDir = path.resolve(options.currentDir || Config.CURRENT_DIR);
     const { paths, state } = loadRunnerState(currentDir, date);
+    assertCurrentModelPolicy(versionedModelPolicy(state, 1, 2, '任务队列'), '生成任务材料');
     if (!state.papers[paperId]) throw new Error(`${paperId} 不在生产运行器批次的论文集合内`);
     const artifactRoot = path.join(paths.taskRoot, paperId);
     const rootStat = fs.lstatSync(artifactRoot, { throwIfNoEntry: false });

@@ -64,6 +64,15 @@ def attestation():
     }
 
 
+def current_attestation():
+    payload = attestation()
+    payload['version'] = 4
+    payload['modelPolicy'] = 'manual-agents-sol-high-v2'
+    subagent = payload['files'][0]['reviewSubagent']
+    subagent.update(version=2, modelPolicy=payload['modelPolicy'], model='gpt-6.1-sol')
+    return payload
+
+
 class ManualReviewAttestationTest(unittest.TestCase):
     def write_payload(self, directory, payload):
         path = Path(directory) / 'attestation.json'
@@ -105,12 +114,12 @@ class ManualReviewAttestationTest(unittest.TestCase):
         generation = {
             'publicationScope': {'mode': 'single-paper', 'includeId': '2608.12345'},
         }
-        exact = attestation()
+        exact = current_attestation()
         exact['publicationScope'] = generation['publicationScope']
         manual_review_blog._validate_review_statement_scope(
             Module, generation, exact,
         )
-        mismatched = attestation()
+        mismatched = current_attestation()
         with self.assertRaisesRegex(Module.PublishDataValidationError, '发布范围与生成清单不一致'):
             manual_review_blog._validate_review_statement_scope(
                 Module, generation, mismatched,
@@ -139,40 +148,29 @@ class ManualReviewAttestationTest(unittest.TestCase):
             module.reusable_verified_publication_review.return_value = None
             module.has_publication_evidence_for_generation.return_value = False
             module.normalize_publish_arxiv_id.side_effect = AssertionError('旧版错误地继续处理 v2 声明')
-            with self.assertRaisesRegex(ValueError, 'v5/v6.*v3'):
+            with self.assertRaisesRegex(ValueError, '新人工审查.*v4.*gpt-6.1-sol/high'):
                 manual_review_blog._run(module, '2026-08-25', statement)
             module.review_and_fix_post.assert_not_called()
             module.run_hugo_gate.assert_not_called()
             module.save_review_receipt.assert_not_called()
 
-    def test_v6_v3_and_existing_nonmanual_v2_version_scope_is_preserved(self):
+    def test_all_fresh_generation_versions_require_current_sol_statement(self):
         class Module:
             PublishDataValidationError = ValueError
-        for depth, version in [('full-text-evidence-v6', 3), ('full-text-evidence-v5', 3), (None, 2)]:
-            manual_review_blog._require_current_review_statement_version(Module, {
-                'schemaVersion': 3, 'publishedPapers': [{'analysisManifest': {'contracts': {'manualDepth': depth}}}],
-            }, {'version': version})
-
-    def test_fresh_manual_v5_generation_rejects_legacy_v2_attestation(self):
-        class Module:
-            class PublishDataValidationError(ValueError):
-                pass
-
-        generation = {
-            'schemaVersion': 3,
-            'publishedPapers': [{
-                'analysisManifest': {
-                    'contracts': {'manualDepth': 'full-text-evidence-v5'},
-                },
-            }],
-        }
-        with self.assertRaisesRegex(Module.PublishDataValidationError, '必须使用 v3 人工审查声明'):
-            manual_review_blog._require_current_review_statement_version(
-                Module, generation, {'version': 2},
-            )
-        manual_review_blog._require_current_review_statement_version(
-            Module, generation, {'version': 3},
-        )
+        for schema in (2, 3):
+            for depth in ('full-text-evidence-v6', 'full-text-evidence-v5', None):
+                generation = {'schemaVersion': schema, 'publishedPapers': [
+                    {'analysisManifest': {'contracts': {'manualDepth': depth}}},
+                ]}
+                for version in (2, 3):
+                    with self.subTest(schema=schema, depth=depth, version=version):
+                        with self.assertRaisesRegex(ValueError, '新人工审查.*v4'):
+                            manual_review_blog._require_current_review_statement_version(
+                                Module, generation, {'version': version},
+                            )
+                manual_review_blog._require_current_review_statement_version(
+                    Module, generation, current_attestation(),
+                )
 
     def test_rejects_legacy_batch_only_or_incomplete_file_checks(self):
         cases = []

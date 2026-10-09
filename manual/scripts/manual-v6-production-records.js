@@ -2,6 +2,7 @@
 'use strict';
 
 /** 装配唯一一份受控的 production records-v4 描述外层对象。这里不生成任何正文。 */
+const { CURRENT_MODEL_POLICY, assertCurrentModelPolicy, versionedModelPolicy, boundModelPolicy, assertAgentIdentity } = require('./manual-agent-policy.js');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -17,7 +18,7 @@ const {
 } = require('./manual-v6-workflow.js');
 const {
     runnerPaths,
-    verifyBoundInputs
+    verifyBoundInputs, validateCurrentTaskReceipt
 } = require('./manual-v6-task-runner.js');
 const {
     AUTHOR_OUTPUT_CONTRACT,
@@ -92,7 +93,12 @@ function parseArgs(argv) {
     return options;
 }
 
+function requireCurrentProductionState(state) {
+    assertCurrentModelPolicy(versionedModelPolicy(state, 1, 2, '任务队列'), '生成正式记录');
+}
+
 function assertValidatedProductionState(state) {
+    requireCurrentProductionState(state);
     verifyBoundInputs(state);
     for (const paperId of state.expectedPaperIds) {
         for (const role of ['author', 'technical_scoring', 'pedagogy_readability', 'author_revision']) {
@@ -112,7 +118,7 @@ function assertProductionAuthorClosure(state, paperId, artifactRoot, correctionC
         throw new Error(`${paperId}.author output 不是 runner 绑定的 production v2 descriptor`);
     }
     validateAuthorOutputDescriptor(output.value, artifactRoot, {
-        paperId, taskName: task.taskName,
+        paperId, taskName: task.taskName, expectedModelPolicy: CURRENT_MODEL_POLICY,
         ...(correctionContext ? { metadataCorrection: correctionContext.correction.changes } : {})
     });
 }
@@ -165,13 +171,21 @@ function assertProductionRevisionClosure(state, paperId, artifactRoot) {
         || auditFile.value.paperId !== paperId || auditFile.value.finalPassed !== true) {
         throw new Error(`${paperId}.revision independent audit 未绑定 runner validated closure`);
     }
+    boundModelPolicy(payloadFile.value, CURRENT_MODEL_POLICY, '修订正文记录');
+    assertAgentIdentity(auditFile.value, CURRENT_MODEL_POLICY, '独立修订审查');
+    if (auditFile.value.contract !== 'manual-v6-independent-revision-audit-v2') {
+        throw new Error('独立修订审查必须使用当前版本');
+    }
     return { output, receipt: receiptFile.value, payload: payloadFile.value };
 }
 
 function verifyTaskArtifactsAgainstState(state, paperId) {
+    requireCurrentProductionState(state);
     const tasks = state.papers[paperId].tasks;
     for (const role of ['author', 'technical_scoring', 'pedagogy_readability', 'author_revision']) {
         const task = tasks[role];
+        const receipt = readJsonFile(task.receiptPath, `${paperId}.${role} receipt`).value;
+        validateCurrentTaskReceipt(receipt, task, paperId, role, task.outputSemanticSha256);
         for (const [kind, pathField, fileShaField, semanticShaField] of [
             ['packet', 'packetPath', 'packetFileSha256', null],
             ['output', 'outputPath', 'outputFileSha256', 'outputSemanticSha256'],
@@ -199,6 +213,7 @@ function hashManualReviewRecord(record) {
 }
 
 function writeVerifiedManualReviewRecord(state, paperId, artifactRoot, options = {}) {
+    requireCurrentProductionState(state);
     const tasks = state.papers[paperId].tasks;
     verifyTaskArtifactsAgainstState(state, paperId);
     const closure = assertProductionRevisionClosure(state, paperId, artifactRoot);
@@ -264,6 +279,7 @@ function writeVerifiedManualReviewRecord(state, paperId, artifactRoot, options =
 }
 
 function buildPaperDescriptor(state, paperId, expectedRoot, options = {}) {
+    requireCurrentProductionState(state);
     const tasks = state.papers[paperId].tasks;
     const roots = new Set(Object.values(tasks).map(task => task.artifactRoot));
     if (roots.size !== 1 || !roots.has(expectedRoot)) {
@@ -356,6 +372,7 @@ function buildRecordsEnvelope(state, options = {}) {
     }
     return {
         version: 4,
+        modelPolicy: CURRENT_MODEL_POLICY,
         mode: RECORDS_MODE,
         date: state.date,
         agent: 'Codex-v6-production-orchestrator',
@@ -380,6 +397,7 @@ function assembleRecordsEnvelope(options = {}) {
     const dateRoot = path.join(currentDir, 'manual-v6', date);
     const paths = runnerPaths(date, path.join(currentDir, 'manual-v6'));
     const outputPath = path.join(dateRoot, 'records-v4.json');
+    requireCurrentProductionState(readJsonFile(paths.statePath, 'production runner state').value);
     fs.mkdirSync(dateRoot, { recursive: true });
     return withFileLockSync(path.join(dateRoot, '.records-v4'), () => {
         const state = readJsonFile(paths.statePath, 'production runner state').value;

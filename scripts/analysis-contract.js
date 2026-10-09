@@ -1,3 +1,4 @@
+const { CURRENT_MODEL_POLICY, boundModelPolicy, assertAgentIdentity } = require('../manual/scripts/manual-agent-policy.js');
 const crypto = require('crypto');
 const { TAG_STAGE_RECORD_CONTRACT, readTagStageRecord } = require('./lib/tag-stage-record.js');
 const {
@@ -1713,6 +1714,14 @@ function validateTutorialPayloadRecordConsistency(manifest, takeover) {
 }
 
 function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options = {}) {
+    let modelPolicy;
+    try {
+        modelPolicy = boundModelPolicy(manifest, options.expectedModelPolicy, '分析清单');
+        boundModelPolicy(takeover, modelPolicy, '人工分析结果');
+        if (modelPolicy === CURRENT_MODEL_POLICY) {
+            assertAgentIdentity(takeover.readabilityRubric, modelPolicy, '可读性审查', { receipt: false });
+        }
+    } catch (error) { return error.message; }
     if (takeover.version !== MANUAL_COMPLETE_PROVENANCE_VERSION
         || takeover.mode !== MANUAL_COMPLETE_STATUS) {
         return '人工分析记录的 version 必须为 2，mode 必须为 manual_complete。';
@@ -1834,6 +1843,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
         if (tutorialPayloadIssue) return tutorialPayloadIssue;
         try {
             validateResearchBrief(takeover.researchBrief, {
+                expectedModelPolicy: modelPolicy,
                 paperId: manifest?.sourceAcquisition?.sourceId,
                 documentType: takeover.documentType,
                 sourceText: options.sourceText || '',
@@ -1848,6 +1858,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
                 label: 'manualTakeover.stageReviews'
             });
             validateScoringCalibration(takeover.scoringCalibration, {
+                expectedModelPolicy: modelPolicy,
                 evidenceLedger: takeover.evidenceLedger,
                 paperSubagentTask: takeover.researchBrief?.paperSubagent?.taskName,
                 label: 'manualTakeover.scoringCalibration'
@@ -1873,6 +1884,7 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
             });
             if (takeover.researchBrief?.editorialPlan?.version === 2) {
                 validateManualTutorialReaderBundle(takeover.researchBrief.editorialPlan, takeover.readerArticle, takeover.evidenceLedger, {
+                    expectedModelPolicy: modelPolicy,
                     label: 'manualTakeover.readerArticle', sourceText: options.sourceText || '',
                     boundEvidence: [
                         ...(takeover.resultClaims || []).map(claim => claim.sourceQuote),
@@ -2097,6 +2109,21 @@ function validateManualV2Takeover(manifest, takeover, sourceSha256 = '', options
 }
 
 function validateManualTakeoverManifest(manifest, sourceSha256 = '', options = {}) {
+    // v6 正文沿用 v5 的离线阶段输入和质量规则，只调整本次核验视图，不改保存的记录。
+    if (manifest?.contracts?.manualDepth === 'full-text-evidence-v6') {
+        if (!manifest.manualTakeover || typeof manifest.manualTakeover !== 'object'
+            || Array.isArray(manifest.manualTakeover)) {
+            return 'v6 人工分析结果缺少有效的 manualTakeover 记录';
+        }
+        try {
+            const policy = boundModelPolicy(manifest, options.expectedModelPolicy, '分析清单');
+            boundModelPolicy(manifest.manualTakeover, policy, '人工分析结果');
+        } catch (error) { return error.message; }
+        return validateManualTakeoverManifest({
+            ...manifest,
+            contracts: { ...manifest.contracts, manualDepth: MANUAL_DEPTH_CONTRACT_VERSION_V5 }
+        }, sourceSha256, options);
+    }
     const manualStatuses = Object.values(manifest?.stages || {})
         .some(stage => stage?.status === MANUAL_COMPLETE_STATUS);
     if (!manualStatuses && manifest?.manualTakeover === undefined) return null;
@@ -2122,6 +2149,13 @@ function validateManualTakeoverManifest(manifest, sourceSha256 = '', options = {
     if (!takeover || typeof takeover !== 'object' || Array.isArray(takeover)) {
         return '人工分析的 manualTakeover 记录缺失或格式无效。';
     }
+    try {
+        const policy = boundModelPolicy(manifest, options.expectedModelPolicy, '分析清单');
+        boundModelPolicy(takeover, policy, '人工分析结果');
+        if (takeover.version === 1 && policy === CURRENT_MODEL_POLICY) {
+            return '历史 v1 人工分析结果不能借用当前模型规则';
+        }
+    } catch (error) { return error.message; }
     if (takeover.version === MANUAL_COMPLETE_PROVENANCE_VERSION) {
         return validateManualV2Takeover(manifest, takeover, sourceSha256, options);
     }

@@ -7,6 +7,7 @@
  * 失败只留下可续跑的录入检查点，不会写成能发布的 manual_complete 内容。
  */
 
+const { CURRENT_MODEL_POLICY, modelPolicyRules, boundModelPolicy } = require('./manual-agent-policy.js');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -261,10 +262,15 @@ function resolveManualSpecPromptBindings(spec, currentBindings = buildStagePromp
         && spec.version !== MANUAL_SPEC_VERSION_V6)) {
         throw new Error('人工分析提示文件的对应记录只支持历史 v3、兼容 v4/v5，以及明确选择正式或影子模式的 v6 配置。');
     }
-    if (spec.manualAuthoringPromptPath !== 'manual/prompts/manual-analysis-record.md') {
+    const modelPolicy = boundModelPolicy(spec, undefined, '分析配置');
+    if (spec.version === 3 && modelPolicy === CURRENT_MODEL_POLICY) {
+        throw new Error('历史 v3 分析配置不能借用当前模型规则');
+    }
+    const authoringPromptPath = modelPolicyRules(modelPolicy).analysisRecordPath;
+    if (spec.manualAuthoringPromptPath !== authoringPromptPath) {
         throw new Error('人工分析配置必须引用指定的 Manual 成稿规范文件。');
     }
-    const currentAuthoringSha256 = sha256File(MANUAL_AUTHORING_PROMPT_PATH);
+    const currentAuthoringSha256 = sha256File(path.join(Config.PROJECT_ROOT, authoringPromptPath));
     if (CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version) || spec.version === MANUAL_SPEC_VERSION_V6) {
         // 只按配置保存的整组 SHA 选择已发布版本，不改写旧配置或其凭证。
         const { version, bindings } = selectManualSpecPromptBindings(spec, currentBindings, legacyBindings);
@@ -273,7 +279,7 @@ function resolveManualSpecPromptBindings(spec, currentBindings = buildStagePromp
             throw new Error('人工分析配置的 promptSha256 与当前主分析提示文件的 SHA 不一致。');
         }
         if (spec.manualAuthoringPromptSha256 !== currentAuthoringSha256) {
-            throw new Error('人工分析配置中的成稿规范 SHA 与当前 manual/prompts/manual-analysis-record.md 文件不一致。');
+            throw new Error('人工分析配置中的成稿规范 SHA 与该模型规则指定的规范文件不一致。');
         }
         if (spec.stagePromptSha256 !== undefined) {
             if (!spec.stagePromptSha256 || typeof spec.stagePromptSha256 !== 'object'
@@ -447,6 +453,7 @@ function validateManualV4AssemblyInputs(spec, options = {}) {
         manifest,
         manifestPath: expectedManifestPath,
         mergedRecords,
+        expectedModelPolicy: boundModelPolicy(spec, undefined, '分析配置'),
         generatedAt: spec.generatedAt,
         promptBindings: options.promptBindings || buildStagePromptBindings()
     });
@@ -495,7 +502,7 @@ function validateManualV6AssemblyInputs(spec, options = {}) {
     }
     const assembler = require('./create-manual-analysis-spec-v6.js');
     const records = assembler.loadRecordsV4Envelopes(
-        (spec.recordsSources || []).map(source => source.path), date, { runtimeMode }
+        (spec.recordsSources || []).map(source => source.path), date, { runtimeMode, expectedModelPolicy: boundModelPolicy(spec, undefined, '分析配置') }
     );
     const recordsEnvelope = spec.recordsEnvelope || null;
     if (runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION) {
@@ -521,6 +528,7 @@ function validateManualV6AssemblyInputs(spec, options = {}) {
         artifactManifest: readJson(artifactManifestPath, 'ArtifactIndex manifest'),
         artifactManifestPath,
         records,
+        expectedModelPolicy: boundModelPolicy(spec, undefined, '分析配置'),
         runtimeMode,
         allowSignedV6CompatibilityOverride: runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION
             && spec.v5BridgeMode === 'signed-v6-task-evidence-override-v1',
@@ -909,9 +917,19 @@ function normalizeManualV4ImageArtifacts({
 }
 
 function buildManualRecord(paper, spec, date, promptInput, options = {}) {
+    const modelPolicy = boundModelPolicy(spec, options.expectedModelPolicy, '单篇分析配置');
+    const policyFields = modelPolicy === CURRENT_MODEL_POLICY ? { modelPolicy } : {};
+    if (modelPolicy === CURRENT_MODEL_POLICY) {
+        for (const key of ['researchBrief', 'scoringCalibration', 'readabilityRubric', 'readerLongform']) {
+            boundModelPolicy(spec[key], modelPolicy, `单篇分析配置 ${key}`);
+        }
+    }
     const manualDepthContractVersion = options.manualDepthContractVersion
         || MANUAL_DEPTH_CONTRACT_VERSION_V4;
     const isManualV6 = manualDepthContractVersion === MANUAL_DEPTH_V6;
+    if (modelPolicy === CURRENT_MODEL_POLICY && !isManualV6) {
+        throw new Error('当前模型规则只允许生成 v6 正式分析记录');
+    }
     const validationDepthContractVersion = isManualV6
         ? MANUAL_DEPTH_CONTRACT_VERSION_V5
         : manualDepthContractVersion;
@@ -1145,6 +1163,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         : null;
     const readerArticle = signedV6ReaderArticle || (isManualV5Plus && spec.researchBrief?.editorialPlan?.version === 2
         ? validateManualTutorialReaderBundle(spec.researchBrief.editorialPlan, spec.readerArticle, spec.evidenceLedger, {
+            expectedModelPolicy: modelPolicy,
             label: `${normalizedId(paper)}.readerArticle`, sourceText,
             externalEvidence: spec.openSourceEvidence?.sourceQuotes || [],
             boundEvidence: [
@@ -1296,6 +1315,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         }
     }
     const takeover = {
+        ...policyFields,
         version: 2,
         mode: MANUAL_COMPLETE_STATUS,
         agent: spec.agent || 'Codex',
@@ -1336,8 +1356,9 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
                 editorialReview,
                 editorialReviewSha256: manualTextSha256(editorialReview)
             } : {}),
-            stageReviews: { version: 2, stages: spec.stageReviews },
-            stageReviewsSha256: manualSha256({ version: 2, stages: spec.stageReviews }),
+            stageReviews: isManualV6 ? spec.stageReviews : { version: 2, stages: spec.stageReviews },
+            stageReviewsSha256: manualSha256(isManualV6
+                ? spec.stageReviews : { version: 2, stages: spec.stageReviews }),
             scoringCalibration: spec.scoringCalibration,
             scoringCalibrationSha256: manualSha256(spec.scoringCalibration),
             openSourceEvidence: spec.openSourceEvidence,
@@ -1385,6 +1406,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
         })
     }]));
     const analysisManifest = {
+        ...policyFields,
         version: 1,
         contracts: {
             experimentTables: experimentTableContractVersion,
@@ -1396,7 +1418,7 @@ function buildManualRecord(paper, spec, date, promptInput, options = {}) {
             } : {}),
             ...(isManualV5Plus ? {
                 researcherFocus: MANUAL_RESEARCH_CONTRACT_VERSION,
-                perPaperSubagent: 'isolated-single-paper-v1',
+                perPaperSubagent: modelPolicy === CURRENT_MODEL_POLICY ? 'isolated-single-paper-v2' : 'isolated-single-paper-v1',
                 ...(isManualV5 ? {
                     freshAuthoring: FRESH_AUTHORING_CONTRACT,
                     paperSourceIdentity: MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT
@@ -1925,6 +1947,10 @@ async function run() {
         : (CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version)
             ? validateManualV4AssemblyInputs(spec, { date, promptBindings: assemblyPromptBindings })
             : null);
+    if (boundModelPolicy(spec, undefined, '分析配置') !== CURRENT_MODEL_POLICY
+        || spec.version !== MANUAL_SPEC_VERSION_V6) {
+        throw new Error('旧模型配置仅保留读取与核验；新录入须使用当前模型规则的 v6 配置');
+    }
     const analysisFilePath = v6RuntimeMode
         ? resolveManualV6RuntimePaths(Config.CURRENT_DIR, date, v6RuntimeMode).canonicalPath
         : Config.FILES.deepAnalysisResult;

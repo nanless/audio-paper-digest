@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
+const { CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY, modelPolicyRules, versionedModelPolicy,
+    assertCurrentModelPolicy, assertAgentIdentity, boundModelPolicy } = require('./manual-agent-policy.js');
+
 /** 生产或显式影子 Manual v6 工作用的持久、无 API 任务队列。 */
 const fs = require('fs');
 const path = require('path');
@@ -29,7 +32,8 @@ const {
     validateRecord
 } = require('./create-manual-analysis-spec.js');
 
-const STATE_VERSION = 1;
+const STATE_VERSION = 2;
+const LEGACY_STATE_VERSION = 1;
 const MODE = 'manual_v6_task_runner';
 const ROLES = Object.freeze(['author', 'technical_scoring', 'pedagogy_readability', 'author_revision']);
 const DEPENDENCIES = Object.freeze({
@@ -117,7 +121,7 @@ function initializeState(date, paperIds, generatedAt = getBeijingISOString(), fi
         throw new Error('task runner executionScope 必须是 production 或 shadow');
     }
     return {
-        version: STATE_VERSION, mode: MODE, date: assertDate(date), generation: 0,
+        version: STATE_VERSION, modelPolicy: CURRENT_MODEL_POLICY, mode: MODE, date: assertDate(date), generation: 0,
         executionScope,
         createdAt: generatedAt, updatedAt: generatedAt, activeLimit: ACTIVE_LIMIT,
         filteredInput: {
@@ -133,7 +137,8 @@ function initializeState(date, paperIds, generatedAt = getBeijingISOString(), fi
 }
 
 function validateState(state) {
-    if (!state || state.version !== STATE_VERSION || state.mode !== MODE) throw new Error('task runner state 版本非法');
+    const policy = versionedModelPolicy(state, LEGACY_STATE_VERSION, STATE_VERSION, '任务队列');
+    if (!state || state.mode !== MODE) throw new Error('task runner state 版本非法');
     assertDate(state.date);
     if (!['production', 'shadow'].includes(state.executionScope)) {
         throw new Error('task runner executionScope 非法');
@@ -169,6 +174,10 @@ function validateState(state) {
             if (['running', 'submitted', 'validated'].includes(task.status)
                 && (!task.taskName || !BEIJING_RE.test(String(task.startedAt || '')))) {
                 throw new Error(`${id}.${role} started/taskName 字段不完整`);
+            }
+            if (policy === CURRENT_MODEL_POLICY && ['running', 'submitted', 'validated'].includes(task.status)) {
+                assertAgentIdentity({ modelPolicy: policy, model: task.model, reasoningEffort: task.reasoningEffort },
+                    policy, `${id}.${role} 开始记录`, { receipt: false });
             }
             if (task.status === 'validated' && !BEIJING_RE.test(String(task.completedAt || ''))) {
                 throw new Error(`${id}.${role}.completedAt 非法`);
@@ -246,6 +255,7 @@ function invalidateFrom(state, paperId, role, reason) {
 }
 
 function refreshReadiness(state) {
+    if (versionedModelPolicy(state, LEGACY_STATE_VERSION, STATE_VERSION, '任务队列') === LEGACY_MODEL_POLICY) return state;
     for (const id of state.expectedPaperIds) {
         for (const role of ROLES) {
             const task = state.papers[id].tasks[role];
@@ -264,7 +274,14 @@ function refreshReadiness(state) {
     return state;
 }
 
+function requireCurrentState(state) {
+    const policy = versionedModelPolicy(state, LEGACY_STATE_VERSION, STATE_VERSION, '任务队列');
+    assertCurrentModelPolicy(policy, '任务队列');
+    return policy;
+}
+
 function registerPacket(state, options) {
+    requireCurrentState(state);
     validateState(state);
     const paperId = normalizedId(options.paperId);
     const role = assertRole(options.role);
@@ -296,7 +313,8 @@ function registerPacket(state, options) {
         expectedPaperMetadata, buildFilteredBatchFingerprint(filtered), artifactRoot
     ).paperInputSha256;
     validateTaskPacket(packet, {
-        paperId, artifactRoot, requireFiles: true, expectedPaperMetadata, expectedPaperInputSha256
+        paperId, artifactRoot, requireFiles: true, expectedPaperMetadata, expectedPaperInputSha256,
+        expectedModelPolicy: CURRENT_MODEL_POLICY
     });
     if (packet.role !== role) throw new Error('task packet role 与注册 role 不一致');
     if (role === 'author_revision') {
@@ -338,6 +356,7 @@ function activeCount(state) {
 }
 
 function claimTasks(state, limit = ACTIVE_LIMIT, now = getBeijingISOString()) {
+    requireCurrentState(state);
     validateState(state); refreshReadiness(state);
     if (!BEIJING_RE.test(String(now || ''))) throw new Error('claimedAt 必须是北京时间');
     if (!Number.isInteger(limit) || limit < 1 || limit > ACTIVE_LIMIT) {
@@ -367,7 +386,9 @@ function findClaim(state, claimId) {
     throw new Error(`未知 claimId: ${claimId}`);
 }
 
-function startTask(state, claimId, taskName, now = getBeijingISOString()) {
+function startTask(state, claimId, taskName, now = getBeijingISOString(), identity = {}) {
+    requireCurrentState(state);
+    assertAgentIdentity(identity, CURRENT_MODEL_POLICY, '任务开始记录', { receipt: false });
     const { paperId, role, task } = findClaim(state, claimId);
     if (task.status !== 'claimed') throw new Error('只有 claimed 任务可以开始');
     if (typeof taskName !== 'string' || taskName.trim().length < 4 || state.taskNames[taskName]) {
@@ -377,8 +398,10 @@ function startTask(state, claimId, taskName, now = getBeijingISOString()) {
         throw new Error('startedAt 必须是 claim 之后的北京时间');
     }
     task.status = 'running'; task.taskName = taskName; task.startedAt = now;
+    task.model = identity.model; task.reasoningEffort = identity.reasoningEffort;
     state.taskNames[taskName] = { paperId, role, claimId, retired: false };
-    return { paperId, role, claimId, taskName, claimedAt: task.claimedAt, startedAt: now,
+    return { paperId, role, claimId, taskName, model: task.model, reasoningEffort: task.reasoningEffort,
+        modelPolicy: CURRENT_MODEL_POLICY, claimedAt: task.claimedAt, startedAt: now,
         packetPath: task.packetPath, packetSha256: task.packetSha256 };
 }
 
@@ -428,7 +451,8 @@ function verifyPersistedTaskFiles(state, options = {}) {
                 ).paperInputSha256;
                 validateTaskPacket(packet.value, {
                     paperId, artifactRoot: task.artifactRoot, requireFiles: true,
-                    expectedPaperMetadata, expectedPaperInputSha256
+                    expectedPaperMetadata, expectedPaperInputSha256,
+                    expectedModelPolicy: versionedModelPolicy(state, LEGACY_STATE_VERSION, STATE_VERSION, '任务队列')
                 });
             }
             for (const [pathField, fileField, semanticField, label] of [
@@ -478,16 +502,19 @@ function verifyBoundInputs(state, options = {}) {
     validateState(state); verifyFilteredInput(state); verifyPersistedTaskFiles(state, options); return state;
 }
 
-function validateTerraReceipt(receipt, task, paperId, role, outputSemanticSha256) {
+function validateCurrentTaskReceipt(receipt, task, paperId, role, outputSemanticSha256) {
+    assertAgentIdentity(receipt, CURRENT_MODEL_POLICY, '任务回执');
+    if (receipt.model !== task.model || receipt.reasoningEffort !== task.reasoningEffort) {
+        throw new Error('回执的模型与推理设置必须等于真实开始记录');
+    }
     if (!receipt || normalizedId(receipt.paperId) !== paperId || receipt.taskName !== task.taskName
-        || receipt.model !== 'gpt-5.6-terra' || receipt.reasoningEffort !== 'high'
         || receipt.singlePaperOnly !== true || receipt.isolatedContext !== true) {
-        throw new Error('receipt 必须绑定当前单篇隔离 Terra-high task');
+        throw new Error('回执必须对应当前单篇隔离 Sol/high 任务');
     }
     const consumed = receipt.consumedPacketSha256 || receipt.inputPacketSha256;
     if (consumed !== task.packetSha256) throw new Error('receipt 未绑定实际 packet SHA');
-    if (role !== 'author' && receipt.role !== role) throw new Error('receipt.role 与当前任务不一致');
-    if (role !== 'author' && receipt.outputSha256 !== outputSemanticSha256) {
+    if (receipt.role !== role) throw new Error('receipt.role 与当前任务不一致');
+    if (receipt.outputSha256 !== outputSemanticSha256) {
         throw new Error('receipt.outputSha256 未绑定真实 output 语义 SHA');
     }
     if (receipt.queuedAt !== task.claimedAt
@@ -542,7 +569,7 @@ function validateProductionAuthorOutput(output, receipt, task, paperId, outputSe
                 || stableSha256(draft) !== ref.semanticSha256) {
                 throw new Error('production author record draft 身份、语义 SHA 或未封印状态非法');
             }
-            validateAuthorOwnedRecordDraft(draft, 'production author record draft');
+            validateAuthorOwnedRecordDraft(draft, 'production author record draft', { expectedModelPolicy: CURRENT_MODEL_POLICY });
             const ledger = draft.evidenceLedger;
             if (!Array.isArray(ledger) || ledger.length < 1) {
                 throw new Error('production author record draft 缺少 evidenceLedger');
@@ -602,6 +629,7 @@ function validateProductionRevisionOutput(output, receipt, task, paperId, depend
                 throw new Error('production revision output.recordPayload 缺少语义 SHA');
             }
             payload = JSON.parse(bytes.toString('utf8'));
+            boundModelPolicy(payload, CURRENT_MODEL_POLICY, '当前修订任务的正文记录');
             const longform = payload?.editorial?.longformBundle;
             if (payload?.version !== 4 || payload.manualDepth !== 'full-text-evidence-v6'
                 || normalizedId(payload.paperId) !== paperId
@@ -635,10 +663,11 @@ function validateProductionRevisionOutput(output, receipt, task, paperId, depend
                 paperId,
                 runtimeMode: 'production',
                 unsealedRevision: true,
-                label: 'production revision payload.editorial.longformBundle'
+                label: 'production revision payload.editorial.longformBundle',
+                expectedModelPolicy: CURRENT_MODEL_POLICY
             });
             validateRecord(payload, paperId, 'production revision record payload', {
-                recordsVersion: RECORDS_VERSION
+                recordsVersion: RECORDS_VERSION, expectedModelPolicy: CURRENT_MODEL_POLICY
             });
         }
     }
@@ -655,10 +684,11 @@ function validateProductionRevisionOutput(output, receipt, task, paperId, depend
     );
     const auditBytes = fs.readFileSync(auditPath);
     const audit = JSON.parse(auditBytes.toString('utf8'));
+    assertAgentIdentity(audit, CURRENT_MODEL_POLICY, '独立修订审查');
     if (sha256Bytes(auditBytes) !== auditRef.fileSha256
         || stableSha256(audit) !== auditRef.semanticSha256
         || audit.taskName !== auditRef.taskName || normalizedId(audit.paperId) !== paperId
-        || audit.contract !== 'manual-v6-independent-revision-audit-v1'
+        || audit.contract !== 'manual-v6-independent-revision-audit-v2'
         || audit.finalPassed !== true) {
         throw new Error('production revision 的独立复核未通过：文件字节、任务身份或最终状态对不上');
     }
@@ -677,11 +707,12 @@ function validateProductionRevisionOutput(output, receipt, task, paperId, depend
 }
 
 function submitTask(state, claimId, options) {
+    requireCurrentState(state);
     const { paperId, role, task } = findClaim(state, claimId);
     if (task.status !== 'running') throw new Error('只有 running 任务可以提交');
     const output = readSubmissionFile(task.artifactRoot, options.outputPath, 'task output');
     const receiptFile = readSubmissionFile(task.artifactRoot, options.receiptPath, 'task receipt');
-    validateTerraReceipt(receiptFile.value, task, paperId, role, output.semanticSha256);
+    validateCurrentTaskReceipt(receiptFile.value, task, paperId, role, output.semanticSha256);
     if (role === 'technical_scoring' || role === 'pedagogy_readability') {
         const expectedOutputName = role === 'technical_scoring'
             ? 'reviews/technical-scoring.json'
@@ -690,7 +721,9 @@ function submitTask(state, claimId, options) {
         if (output.path !== expectedOutputPath) {
             throw new Error(`${role} output 必须写入受控固定路径 ${expectedOutputName}`);
         }
-        validateReviewOutput(output.value, role, paperId, receiptFile.value, 'task output');
+        validateReviewOutput(output.value, role, paperId, receiptFile.value, 'task output', {
+            expectedModelPolicy: CURRENT_MODEL_POLICY
+        });
     } else if (role === 'author_revision' && state.executionScope === 'production') {
         if (output.path !== path.resolve(task.artifactRoot, 'outputs', 'author-revision.json')
             || receiptFile.path !== path.resolve(task.artifactRoot, 'receipts', 'author-revision.json')) {
@@ -739,6 +772,7 @@ function submitTask(state, claimId, options) {
 }
 
 function failTask(state, claimId, reason, now = getBeijingISOString()) {
+    requireCurrentState(state);
     const { paperId, role, task } = findClaim(state, claimId);
     if (!['claimed', 'running', 'submitted'].includes(task.status)) throw new Error('只有活动任务可以标记失败');
     const error = String(reason || '').trim();
@@ -749,6 +783,7 @@ function failTask(state, claimId, reason, now = getBeijingISOString()) {
 }
 
 function retryTask(state, paperIdValue, roleValue) {
+    requireCurrentState(state);
     const paperId = normalizedId(paperIdValue); const role = assertRole(roleValue);
     if (!state.papers[paperId]) throw new Error('批次外论文');
     const task = state.papers[paperId].tasks[role];
@@ -758,6 +793,7 @@ function retryTask(state, paperIdValue, roleValue) {
 }
 
 function abandonTask(state, claimId, reason) {
+    requireCurrentState(state);
     const { paperId, role, task } = findClaim(state, claimId);
     if (!['claimed', 'running', 'submitted'].includes(task.status)) throw new Error('只有活动 claim 可以显式 abandon');
     const explanation = String(reason || '').trim();
@@ -767,6 +803,8 @@ function abandonTask(state, claimId, reason) {
 }
 
 function stateSummary(state, options = {}) {
+    const policy = versionedModelPolicy(state, LEGACY_STATE_VERSION, STATE_VERSION, '任务队列');
+    state = structuredClone(state);
     refreshReadiness(state);
     const tasks = [];
     for (const paperId of state.expectedPaperIds) for (const role of ROLES) {
@@ -795,9 +833,13 @@ function stateSummary(state, options = {}) {
         orchestrationBoundary: {
             createsSubagents: false,
             claimOnly: true,
-            requiredModel: 'gpt-5.6-terra',
+            modelPolicy: policy,
+            readonlyLegacy: policy === LEGACY_MODEL_POLICY,
+            requiredModel: modelPolicyRules(policy).model,
             requiredReasoningEffort: 'high',
-            nextAction: awaitingPackets > 0
+            nextAction: policy === LEGACY_MODEL_POLICY
+                ? '旧队列仅供核对原记录；执行新任务须另建 Sol/high 队列'
+                : awaitingPackets > 0
                 ? 'main Agent must materialize and register exact per-role packets'
                 : (!allTasksValidated
                     ? 'main Agent must claim and create each real single-paper subagent'
@@ -861,7 +903,8 @@ function parseArgs(argv) {
         const key = ({ '--date': 'date', '--papers': 'papersPath', '--paper': 'paperId', '--role': 'role',
             '--artifact-root': 'artifactRoot', '--packet': 'packetPath', '--limit': 'limit',
             '--claim': 'claimId', '--task-name': 'taskName', '--receipt': 'receiptPath',
-            '--output': 'outputPath', '--reason': 'reason' })[arg];
+            '--output': 'outputPath', '--reason': 'reason',
+            '--model': 'model', '--reasoning-effort': 'reasoningEffort' })[arg];
         if (!key) throw new Error(`未知参数: ${arg}`);
         if (seen.has(key)) throw new Error(`参数重复: ${arg}`);
         seen.add(key);
@@ -870,7 +913,7 @@ function parseArgs(argv) {
     assertDate(options.date);
     const required = {
         register: ['paperId', 'role', 'artifactRoot', 'packetPath'],
-        start: ['claimId', 'taskName'], submit: ['claimId', 'receiptPath', 'outputPath'],
+        start: ['claimId', 'taskName', 'model', 'reasoningEffort'], submit: ['claimId', 'receiptPath', 'outputPath'],
         fail: ['claimId', 'reason'], retry: ['paperId', 'role'], abandon: ['claimId', 'reason']
     }[options.command] || [];
     const missing = required.filter(key => !options[key]);
@@ -904,7 +947,7 @@ function run(argv = process.argv.slice(2), overrides = {}) {
             paperSetSha256: stableSha256(ids)
         };
         result = updateState(paths, current => {
-            if (current) { verifyBoundInputs(current); return current; }
+            if (current) { requireCurrentState(current); verifyBoundInputs(current); return current; }
             return initializeState(args.date, ids, getBeijingISOString(), binding, executionScope);
         });
     } else if (args.command === 'status') {
@@ -923,7 +966,9 @@ function run(argv = process.argv.slice(2), overrides = {}) {
                 return registerPacket(state, { ...args, controlledTaskRoot: paths.taskRoot });
             }
             if (args.command === 'claim') return claimTasks(state, Number(args.limit));
-            if (args.command === 'start') return { state, started: startTask(state, args.claimId, args.taskName) };
+            if (args.command === 'start') return { state, started: startTask(state, args.claimId, args.taskName, getBeijingISOString(), {
+                modelPolicy: CURRENT_MODEL_POLICY, model: args.model, reasoningEffort: args.reasoningEffort
+            }) };
             if (args.command === 'submit') return { state, submitted: submitTask(state, args.claimId, args) };
             if (args.command === 'fail') return { state, failed: failTask(state, args.claimId, args.reason) };
             if (args.command === 'retry') return retryTask(state, args.paperId, args.role);
@@ -949,11 +994,11 @@ if (require.main === module) {
 }
 
 module.exports = {
-    STATE_VERSION, MODE, ROLES, DEPENDENCIES, DOWNSTREAM, ACTIVE_LIMIT,
+    STATE_VERSION, LEGACY_STATE_VERSION, MODE, ROLES, DEPENDENCIES, DOWNSTREAM, ACTIVE_LIMIT,
     AUTHOR_OUTPUT_CONTRACT, REVISION_OUTPUT_CONTRACT,
     runnerPaths, initializeState, validateState, dependencyInputKey, invalidateFrom,
     refreshReadiness, registerPacket, activeCount, claimTasks, startTask, submitTask,
     failTask, retryTask, abandonTask, verifyBoundInputs, stateSummary, recordsEnvelopeStatus,
-    validateProductionAuthorOutput, validateProductionRevisionOutput,
+    validateProductionAuthorOutput, validateProductionRevisionOutput, validateCurrentTaskReceipt,
     parseArgs, run
 };

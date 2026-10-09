@@ -76,6 +76,10 @@ from path_config import (
 from blog_repository_lock import shared_blog_repository_lock
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env, get_required_fetch_proxy
 from runtime_guard import require_external_runtime
+from manual_agent_policy import (
+    CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY,
+    review_model_policy, require_current_review_policy, review_subagent_identity_error,
+)
 from llm_usage import with_llm_usage_context
 from utils import strip_md, parse_analysis, read_tag_validation
 from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, read_tag_stage_record
@@ -198,8 +202,6 @@ RESEARCHER_SIDECAR_FILENAMES = (
     'citation.json', 'citation.bib', 'citation.ris', 'rethink-context.json',
 )
 RESEARCHER_SIDECAR_MAX_BYTES = 256 * 1024
-MANUAL_REVIEW_SUBAGENT_MODEL = 'gpt-5.6-terra'
-MANUAL_REVIEW_SUBAGENT_REASONING = 'high'
 
 # 单篇论文灰度发布时，把生成、审查、推送凭证与同一天已经完成远端核验的批次凭证并列存放，
 # 不覆盖后者。
@@ -264,10 +266,14 @@ def _manual_review_record_error(receipt, *, date_str=None,
     manual_review_record = receipt.get('reviewProvenance')
     if not isinstance(manual_review_record, dict):
         return '发布凭证缺少有效的人工审查记录。'
-    if manual_review_record.get('version') not in (1, 2, 3) or manual_review_record.get('mode') != MANUAL_REVIEW_MODE:
+    if manual_review_record.get('mode') != MANUAL_REVIEW_MODE:
         return '人工审查记录的版本或审查方式不符合要求。'
+    try:
+        expected_policy = review_model_policy(manual_review_record, legacy_versions=(1, 2, 3))
+    except ValueError as exc:
+        return str(exc)
     legacy_v1 = manual_review_record.get('version') == 1
-    current_v3 = manual_review_record.get('version') == 3
+    requires_subagent_review = manual_review_record.get('version') in (3, 4)
     if not isinstance(manual_review_record.get('agent'), str) or not manual_review_record['agent'].strip():
         return '人工审查记录必须填写非空的审查者名称。'
     if manual_review_record.get('basis') != 'deterministic_and_manual_semantic_review':
@@ -364,7 +370,11 @@ def _manual_review_record_error(receipt, *, date_str=None,
             return '人工审查记录中的每条文件明细必须是对象。'
         allowed_fields = {'path', 'sha256', 'checks', 'notes', 'deleted'}
         required_fields = {'path', 'sha256', 'checks', 'notes'}
-        if current_v3:
+        cached_review = manual_review_record.get('version') == 4 and 'cacheReuse' in item
+        if cached_review:
+            allowed_fields.add('cacheReuse')
+            required_fields.add('cacheReuse')
+        elif requires_subagent_review:
             allowed_fields.update({'reviewSubagent', 'imageFindings'})
             required_fields.update({'reviewSubagent', 'imageFindings'})
         if not required_fields.issubset(item) \
@@ -393,18 +403,22 @@ def _manual_review_record_error(receipt, *, date_str=None,
             return f'文件审查记录必须完整列出规定的检查项，并将每项结果标为 true：{path}'
         if not isinstance(item.get('notes'), str) or len(item['notes'].strip()) < 20:
             return f'文件审查说明必须是至少 20 个字符的非空文字：{path}'
+        if cached_review:
+            try:
+                validate_manual_cache_reuse(item, date_str)
+            except (ValueError, TypeError) as exc:
+                return str(exc)
+            continue
         subagent = item.get('reviewSubagent')
-        if current_v3 and (not isinstance(subagent, dict) or subagent.get('version') != 1
+        if requires_subagent_review and (review_subagent_identity_error(subagent, expected_policy) is not None
                 or not isinstance(subagent.get('taskName'), str)
                 or len(subagent['taskName'].strip()) < 4
                 or subagent.get('singleFileOnly') is not True
-                or subagent.get('isolatedContext') is not True
-                or subagent.get('model') != MANUAL_REVIEW_SUBAGENT_MODEL
-                or subagent.get('reasoningEffort') != MANUAL_REVIEW_SUBAGENT_REASONING):
+                or subagent.get('isolatedContext') is not True):
             return f'文件审查记录未按规定记录独立单页审查任务、模型及推理等级：{path}'
-        if current_v3 and not isinstance(item.get('imageFindings'), list):
+        if requires_subagent_review and not isinstance(item.get('imageFindings'), list):
             return f'文件审查记录中的逐图检查结果必须是数组：{path}'
-        if current_v3:
+        if requires_subagent_review:
             task_name = subagent['taskName'].strip()
             if task_name in seen_review_tasks:
                 return '各页面的独立审查任务名称必须全局唯一，不能跨页面复用。'
@@ -437,7 +451,7 @@ def _manual_review_record_error(receipt, *, date_str=None,
             )
             if arxiv_match and arxiv_match.group(1) not in item['notes']:
                 return f'论文页的审查说明缺少本页的 arXiv ID：{path}'
-            if current_v3 and arxiv_match:
+            if requires_subagent_review and arxiv_match:
                 paper_id = subagent.get('paperId')
                 if not is_canonical_publish_arxiv_id(paper_id):
                     return f'论文页审查任务中的 paperId 缺失或不是规范的 arXiv ID：{path}'
@@ -446,9 +460,9 @@ def _manual_review_record_error(receipt, *, date_str=None,
                     return f'审查任务中的 paperId 与页面的论文 ID 不一致：{path}'
             image_urls = [image.get('url') for image in parse_markdown_images(content)]
             findings = item.get('imageFindings')
-            if current_v3 and [finding.get('url') for finding in findings if isinstance(finding, dict)] != image_urls:
+            if requires_subagent_review and [finding.get('url') for finding in findings if isinstance(finding, dict)] != image_urls:
                 return f'逐图审查记录未按正文顺序完整覆盖页面中的图片：{path}'
-            for finding in findings if current_v3 else []:
+            for finding in findings if requires_subagent_review else []:
                 if (not isinstance(finding, dict)
                         or set(finding) != {
                             'url', 'captionVerified', 'adjacentNarrativeVerified',
@@ -489,6 +503,29 @@ def _manual_review_record_error(receipt, *, date_str=None,
     if not re.fullmatch(r'[0-9a-f]{64}', str(protocol or '')):
         return '人工审查记录中的审查规则指纹缺失或格式无效。'
     return None
+
+
+def _validated_current_manual_review_record(manual_record, receipt, date_str):
+    """核对新人工记录和文件集合；调用前不能写入通过缓存。"""
+    try:
+        require_current_review_policy(manual_record)
+    except ValueError as exc:
+        raise PublishDataValidationError(str(exc)) from exc
+    record = dict(manual_record)
+    record.setdefault('generationManifestSha256', receipt['generationManifestSha256'])
+    record.setdefault('baseHead', receipt['baseHead'])
+    record.setdefault('fileCount', len(receipt['files']))
+    record.setdefault('reviewedPathSetSha256', _reviewed_path_set_sha256(receipt['files']))
+    record.setdefault('reviewProtocolFingerprint', receipt['reviewProtocolFingerprint'])
+    error = _manual_review_record_error(
+        {**receipt, 'reviewMode': MANUAL_REVIEW_MODE, 'reviewProvenance': record},
+        date_str=date_str,
+        generation_manifest_sha256=receipt['generationManifestSha256'],
+        expected_base_head=receipt['baseHead'],
+    )
+    if error:
+        raise PublishDataValidationError(error)
+    return record
 
 
 def blog_transaction_lock(date_str, *, timeout_seconds=30):
@@ -10718,6 +10755,7 @@ def review_protocol_fingerprint():
         'markdown_hugo_gate.py': script_dir / 'markdown_hugo_gate.py',
         'manual/tutorial_payload_verifier.py': MANUAL_SCRIPTS_DIR / 'tutorial_payload_verifier.py',
         'publish_common.py': script_dir / 'publish_common.py',
+        'manual_agent_policy.py': script_dir / 'manual_agent_policy.py',
         'llm_account_pool.py': script_dir / 'llm_account_pool.py',
         'utils.py': script_dir / 'utils.py',
         'analysis_sections.py': script_dir / 'analysis_sections.py',
@@ -12163,6 +12201,11 @@ def save_review_receipt(
     generation_manifest=None, reviewed_results=None, manual_review_record=None,
 ):
     """保存已审文件及本次生成清单的对应记录，供后续推送核验。"""
+    if manual_review_record is not None:
+        try:
+            require_current_review_policy(manual_review_record)
+        except ValueError as exc:
+            raise PublishDataValidationError(str(exc)) from exc
     if generation_manifest is None:
         raise PublishDataValidationError('签发审查凭证时必须提供本次生成清单。')
     if reviewed_results is None:
@@ -12170,14 +12213,29 @@ def save_review_receipt(
     if _load_json_object(generation_manifest, '生成清单').get('publicationMode') == SEALED_TUTORIAL_PREVIEW_MODE:
         raise PublishDataValidationError(RETIRED_TUTORIAL_PREVIEW_MESSAGE)
     current_protocol = review_protocol_fingerprint()
+    validate_generation_manifest_file_bytes(generation_manifest, date_str)
+    if manual_review_record is not None:
+        manifest_payload = _load_json_object(generation_manifest, '生成清单')
+        prospective_files = [{
+            'path': item['path'],
+            'deleted': item.get('deleted') is True,
+            'sha256': None if item.get('deleted') is True else item.get('sha256'),
+        } for item in manifest_payload['files']]
+        _validated_current_manual_review_record(manual_review_record, {
+            'files': prospective_files,
+            'baseHead': validate_git_publish_branch(),
+            'generationManifestSha256': _sha256_file(generation_manifest),
+            'reviewProtocolFingerprint': current_protocol,
+        }, date_str)
     for result in reviewed_results.values():
         if result.get('passed') is True:
-            # 页面是否通过是按内容寻址的，不是按协议。
-            # 当前批次的凭证记录当前协议，
-            # 而字节完全没变的页面仍然沿用之前那次通过。
+            # 页面通过记录按内容 SHA 复用；本批凭证另记当前审查规则。
             result['reviewProtocolFingerprint'] = current_protocol
-    validate_generation_manifest_file_bytes(generation_manifest, date_str)
-    save_review_pass_cache(date_str, publish_paths, reviewed_results)
+    if manual_review_record is None:
+        save_review_pass_cache(date_str, publish_paths, reviewed_results)
+    else:
+        save_review_pass_cache(date_str, publish_paths, reviewed_results,
+            manual_review_record=manual_review_record, generation_manifest=generation_manifest)
     pass_records = _collect_review_pass_records(date_str)
     validate_reviewed_file_hashes(
         date_str, publish_paths, generation_manifest, reviewed_results,
@@ -12291,27 +12349,93 @@ def save_review_receipt(
         'files': files,
     }
     if manual_review_record is not None:
-        if not isinstance(manual_review_record, dict):
-            raise PublishDataValidationError('人工审查记录必须是对象。')
-        manual_review_record_copy = dict(manual_review_record)
-        manual_review_record_copy.setdefault('generationManifestSha256', receipt['generationManifestSha256'])
-        manual_review_record_copy.setdefault('baseHead', current_head)
-        manual_review_record_copy.setdefault('fileCount', len(files))
-        manual_review_record_copy.setdefault('reviewedPathSetSha256', _reviewed_path_set_sha256(files))
-        manual_review_record_copy.setdefault('reviewProtocolFingerprint', receipt['reviewProtocolFingerprint'])
         receipt['reviewMode'] = MANUAL_REVIEW_MODE
-        receipt['reviewProvenance'] = manual_review_record_copy
-        manual_review_error = _manual_review_record_error(
-            receipt,
-            date_str=date_str,
-            generation_manifest_sha256=receipt['generationManifestSha256'],
-            expected_base_head=current_head,
+        # 缓存写入前已核验身份和声明；签发前再核对最终文件及最新 Git 基线。
+        receipt['reviewProvenance'] = _validated_current_manual_review_record(
+            manual_review_record, receipt, date_str,
         )
-        if manual_review_error:
-            raise PublishDataValidationError(manual_review_error)
     path = review_receipt_path(date_str)
     atomic_write_json(path, receipt, ensure_ascii=False, indent=2)
     return path
+
+
+def _validate_original_cache_identity(identity):
+    if not isinstance(identity, dict) or identity.get('status') not in {'recorded', 'not_recorded'}:
+        raise ValueError('原逐页审查身份的记录方式未知。')
+    if identity['status'] == 'not_recorded':
+        if set(identity) != {'status'}:
+            raise ValueError('未记录模型身份时不能夹带模型声明。')
+        return
+    if set(identity) != {'status', 'reviewSubagent'}:
+        raise ValueError('原模型身份记录含有未知字段。')
+    subagent = identity['reviewSubagent']
+    expected = CURRENT_MODEL_POLICY if isinstance(subagent, dict) and subagent.get('version') == 2 else LEGACY_MODEL_POLICY
+    error = review_subagent_identity_error(subagent, expected)
+    if error:
+        raise ValueError(error)
+
+
+def _original_review_cache_evidence(record):
+    """保留实际读到的原逐页通过记录，不把旧身份改成当前模型。"""
+    saved = record.get('originalReviewEvidence')
+    if saved is not None:
+        if (not isinstance(saved, dict) or set(saved) != {'version', 'record', 'recordSha256'}
+                or type(saved.get('version')) is not int or saved['version'] != 1
+                or not isinstance(saved.get('record'), dict)
+                or _stable_json_sha256(saved['record']) != saved.get('recordSha256')):
+            raise ValueError('原逐页通过记录的副本或 SHA 无效。')
+        original = saved['record']
+        if (set(original) != {'path', 'sha256', 'reviewedAt', 'reviewProtocolFingerprint',
+                              'imageReviewMode', 'modelIdentity'}
+                or original['path'] != record['path'] or original['sha256'] != record['sha256']):
+            raise ValueError('原逐页通过记录与缓存的路径或正文 SHA 不一致。')
+        identity = original['modelIdentity']
+        if (not isinstance(identity, dict) or identity.get('status') not in {'recorded', 'not_recorded'}
+                or (identity['status'] == 'not_recorded' and set(identity) != {'status'})
+                or (identity['status'] == 'recorded' and (set(identity) != {'status', 'reviewSubagent'}
+                    or not isinstance(identity['reviewSubagent'], dict)))):
+            raise ValueError('原逐页审查身份的记录方式无效。')
+        _validate_original_cache_identity(identity)
+        return json.loads(json.dumps(saved))
+    identity = record.get('reviewIdentity')
+    if identity is None:
+        identity = {'status': 'not_recorded'}
+    elif not isinstance(identity, dict):
+        raise ValueError('原逐页审查身份必须为对象。')
+    _validate_original_cache_identity(identity)
+    original = {key: record.get(key) for key in (
+        'path', 'sha256', 'reviewedAt', 'reviewProtocolFingerprint', 'imageReviewMode')}
+    original['modelIdentity'] = identity
+    return {'version': 1, 'record': original, 'recordSha256': _stable_json_sha256(original)}
+
+
+def manual_cache_reuse_for_file(date_str, relative_path, body_sha256):
+    """只从真实通过缓存取证，并核对当前页面仍是相同字节。"""
+    record = _collect_review_pass_records(date_str).get((relative_path, body_sha256))
+    if record is None:
+        return None
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    target = (repo / relative_path).resolve()
+    if _validate_manifest_path_date(target, repo, date_str) != relative_path \
+            or not target.is_file() or _sha256_file(target) != body_sha256:
+        return None
+    return _original_review_cache_evidence(record)
+
+
+def validate_manual_cache_reuse(item, date_str):
+    evidence = item.get('cacheReuse')
+    if (item.get('deleted') is True or 'reviewSubagent' in item or 'imageFindings' in item
+            or not isinstance(evidence, dict)):
+        raise PublishDataValidationError('旧逐页复用不得混入新模型收据或删除记录。')
+    try:
+        _original_review_cache_evidence({'path': item.get('path'), 'sha256': item.get('sha256'),
+                                         'originalReviewEvidence': evidence})
+    except (ValueError, TypeError) as exc:
+        raise PublishDataValidationError(str(exc)) from exc
+    actual = manual_cache_reuse_for_file(date_str, item.get('path'), item.get('sha256'))
+    if actual is None or evidence != actual:
+        raise PublishDataValidationError('逐页复用没有对应的真实原通过记录，或原证据不一致。')
+    return actual
 
 
 def _valid_review_pass_record(record, repo, date_str, default_protocol=None, default_time=None):
@@ -12336,13 +12460,22 @@ def _valid_review_pass_record(record, repo, date_str, default_protocol=None, def
     image_review_mode = record.get('imageReviewMode')
     if image_review_mode not in {'multimodal', 'deterministic_only', 'manual_semantic'}:
         image_review_mode = 'deterministic_only'
-    return {
+    result = {
         'path': normalized,
         'sha256': str(sha256),
         'reviewedAt': reviewed_at if isinstance(reviewed_at, str) else None,
         'reviewProtocolFingerprint': protocol,
         'imageReviewMode': image_review_mode,
     }
+    if 'originalReviewEvidence' in record:
+        result['originalReviewEvidence'] = record['originalReviewEvidence']
+    if 'reviewIdentity' in record:
+        result['reviewIdentity'] = record['reviewIdentity']
+    try:
+        result['originalReviewEvidence'] = _original_review_cache_evidence(result)
+    except ValueError:
+        return None
+    return result
 
 
 def _collect_review_pass_records(date_str):
@@ -12371,11 +12504,19 @@ def _collect_review_pass_records(date_str):
             continue
         default_protocol = payload.get('reviewProtocolFingerprint')
         default_time = payload.get(time_field) if time_field else payload.get('updatedAt')
+        provenance = payload.get('reviewProvenance')
+        details = provenance.get('files', []) if isinstance(provenance, dict) else []
+        original_details = {item.get('path'): item for item in
+            details if isinstance(item, dict)}
         for raw_record in payload['files']:
             if not isinstance(raw_record, dict):
                 continue
             if source_path == review_failure_path(date_str) and raw_record.get('passed') is not True:
                 continue
+            raw_record = dict(raw_record)
+            original_subagent = original_details.get(raw_record.get('path'), {}).get('reviewSubagent')
+            if isinstance(original_subagent, dict) and 'originalReviewEvidence' not in raw_record:
+                raw_record['reviewIdentity'] = {'status': 'recorded', 'reviewSubagent': original_subagent}
             record = _valid_review_pass_record(
                 raw_record, repo, date_str,
                 default_protocol=default_protocol,
@@ -12511,9 +12652,26 @@ def clear_review_page_checkpoints(date_str):
         pass
 
 
-def save_review_pass_cache(date_str, publish_paths=(), file_results=None):
+def save_review_pass_cache(date_str, publish_paths=(), file_results=None, *,
+                           manual_review_record=None, generation_manifest=None):
     """把成功的逐文件审查证据单独持久化，不受批次变化影响。"""
     date_str = validate_publish_date(date_str)
+    manual_entries = {}
+    if manual_review_record is not None:
+        if generation_manifest is None:
+            raise PublishDataValidationError('保存人工审查身份时必须提供本次生成清单。')
+        validate_generation_manifest_file_bytes(generation_manifest, date_str)
+        manifest_payload = _load_json_object(generation_manifest, '生成清单')
+        prospective_files = [{
+            'path': item['path'], 'deleted': item.get('deleted') is True,
+            'sha256': None if item.get('deleted') is True else item.get('sha256'),
+        } for item in manifest_payload['files']]
+        validated = _validated_current_manual_review_record(manual_review_record, {
+            'files': prospective_files, 'baseHead': validate_git_publish_branch(),
+            'generationManifestSha256': _sha256_file(generation_manifest),
+            'reviewProtocolFingerprint': review_protocol_fingerprint(),
+        }, date_str)
+        manual_entries = {item['path']: item for item in validated['files']}
     records = _collect_review_pass_records(date_str)
     file_results = file_results or {}
     repo = Path(BLOG_REPO).expanduser().resolve()
@@ -12548,6 +12706,13 @@ def save_review_pass_cache(date_str, publish_paths=(), file_results=None):
                 else current_image_review_mode()
             ),
         }
+        prior = records.get((relative, reviewed_sha))
+        entry = manual_entries.get(relative)
+        # 相同内容已有原证据时保留其原身份；新内容只记录完整核验过的真实声明。
+        if prior is None and entry is not None and 'cacheReuse' not in entry:
+            record['reviewIdentity'] = {'status': 'recorded',
+                'reviewSubagent': copy.deepcopy(entry['reviewSubagent'])}
+        record['originalReviewEvidence'] = _original_review_cache_evidence(prior or record)
         records[(relative, reviewed_sha)] = record
     if not records:
         return None

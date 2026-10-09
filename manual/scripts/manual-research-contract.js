@@ -1,5 +1,8 @@
 'use strict';
 
+const { CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY, modelPolicyRules, assertAgentIdentity,
+    boundModelPolicy } = require('./manual-agent-policy.js');
+
 const { normalizedId } = require('../../scripts/utils.js');
 const { validateManualLongformBundle } = require('./manual-longform-contract.js');
 
@@ -107,9 +110,12 @@ function extractSection(analysis, title) {
     return String(analysis || '').match(new RegExp(`(?:^|\\n)##\\s+${escaped}\\s*\\n([\\s\\S]*?)(?=\\n##\\s+|$)`))?.[1]?.trim() || '';
 }
 
-function validatePaperSubagent(value, paperId, label = 'paperSubagent') {
-    if (!value || typeof value !== 'object' || Array.isArray(value) || value.version !== 1) {
-        throw new Error(`${label} 必须是 version=1 对象`);
+function validatePaperSubagent(value, paperId, label = 'paperSubagent', options = {}) {
+    const policy = options.expectedModelPolicy === undefined ? LEGACY_MODEL_POLICY : options.expectedModelPolicy;
+    const current = policy === CURRENT_MODEL_POLICY;
+    modelPolicyRules(policy);
+    if (!value || typeof value !== 'object' || Array.isArray(value) || value.version !== (current ? 2 : 1)) {
+        throw new Error(`${label} 必须使用 ${current ? 2 : 1} 版单篇任务记录`);
     }
     const taskName = assertText(value.taskName, `${label}.taskName`, 4);
     const isolatedId = normalizedId(value.paperId);
@@ -122,14 +128,17 @@ function validatePaperSubagent(value, paperId, label = 'paperSubagent') {
     if (!BEIJING_TIMESTAMP_RE.test(String(value.completedAt || ''))) {
         throw new Error(`${label}.completedAt 必须是北京时间 ISO 时间戳`);
     }
-    if (value.model !== undefined && value.model !== 'gpt-5.6-terra') {
-        throw new Error(`${label}.model 新论文理解任务必须是 gpt-5.6-terra`);
+    if (current) assertAgentIdentity(value, policy, label);
+    else if (value.modelPolicy !== undefined) throw new Error(`${label} 旧任务不能声明新模型规则`);
+    if (!current && value.model !== undefined && value.model !== 'gpt-5.6-terra') {
+        throw new Error(`${label}.model 必须保留旧任务真实使用的 gpt-5.6-terra`);
     }
     if (value.reasoningEffort !== undefined && value.reasoningEffort !== 'high') {
-        throw new Error(`${label}.reasoningEffort 新论文理解任务必须是 high`);
+        throw new Error(`${label}.reasoningEffort 必须是 high`);
     }
     return {
-        version: 1,
+        version: current ? 2 : 1,
+        ...(current ? { modelPolicy: policy } : {}),
         taskName,
         paperId: isolatedId,
         singlePaperOnly: true,
@@ -564,6 +573,7 @@ function validateEditorialReview(review, readerArticle, options = {}) {
 function validateResearchBrief(brief, options = {}) {
     const { paperId = '', documentType = '', sourceText = '', analysis = '', requireBindings = false } = options;
     const label = `${paperId || 'paper'}.researchBrief`;
+    const policy = boundModelPolicy(brief, options.expectedModelPolicy, label);
     if (!brief || typeof brief !== 'object' || Array.isArray(brief)
         || brief.version !== 1 || brief.contract !== MANUAL_RESEARCH_CONTRACT_VERSION) {
         throw new Error(`${label} 必须是 ${MANUAL_RESEARCH_CONTRACT_VERSION} version=1 对象`);
@@ -571,7 +581,7 @@ function validateResearchBrief(brief, options = {}) {
     if (brief.audience !== 'audio_researcher') {
         throw new Error(`${label}.audience 必须是 audio_researcher`);
     }
-    const paperSubagent = validatePaperSubagent(brief.paperSubagent, paperId, `${label}.paperSubagent`);
+    const paperSubagent = validatePaperSubagent(brief.paperSubagent, paperId, `${label}.paperSubagent`, { expectedModelPolicy: policy });
     if (brief.editorialPlan !== undefined) {
         validateEditorialPlan(brief.editorialPlan, `${label}.editorialPlan`);
     }
@@ -847,6 +857,15 @@ function validateManualAllRejectedImageException(options = {}) {
 
 function validateScoringCalibration(calibration, options = {}) {
     const { evidenceLedger = [], paperSubagentTask = '', label = 'scoringCalibration' } = options;
+    const policy = options.expectedModelPolicy === undefined ? LEGACY_MODEL_POLICY : options.expectedModelPolicy;
+    modelPolicyRules(policy);
+    if (policy === CURRENT_MODEL_POLICY) assertAgentIdentity(calibration, policy, label, { receipt: false });
+    else if (calibration?.modelPolicy !== undefined) throw new Error(`${label} 旧记录不能声明新模型规则`);
+    if (policy === LEGACY_MODEL_POLICY && ((calibration?.model !== undefined
+            && calibration.model !== modelPolicyRules(policy).model)
+        || (calibration?.reasoningEffort !== undefined && calibration.reasoningEffort !== 'high'))) {
+        throw new Error(`${label} 已声明的旧模型与推理设置不符合原任务规则`);
+    }
     if (!calibration || typeof calibration !== 'object' || Array.isArray(calibration)
         || calibration.version !== 1 || calibration.independentReview !== true) {
         throw new Error(`${label} 必须是 version=1 且 independentReview=true 的对象`);

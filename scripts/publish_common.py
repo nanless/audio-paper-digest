@@ -38,6 +38,8 @@ from path_config import (
     resolve_deep_analysis_result_for_date,
     resolve_deep_analysis_result_path,
 )
+from manual_agent_policy import (CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY,
+    bound_analysis_model_policy, analysis_identity_error)
 from project_env import build_child_process_env, get_required_fetch_proxy
 from llm_account_pool import (
     LlmAccountPoolExhaustedError,
@@ -1856,6 +1858,75 @@ def _manual_v6_inventory_ids(index, field):
     return result
 
 
+def _manual_analysis_model_context(manifest, takeover, paper_label):
+    """先确定外层身份，防止旧分支提前返回时接受新标识。"""
+    try:
+        policy = bound_analysis_model_policy(manifest)
+        bound_analysis_model_policy(takeover, policy)
+        contracts = manifest.get('contracts')
+        if contracts and not isinstance(contracts, dict):
+            raise ValueError('人工分析的格式约定必须为 JSON 对象。')
+        contracts = contracts if isinstance(contracts, dict) else {}
+        if policy == CURRENT_MODEL_POLICY:
+            if (contracts.get('manualDepth') != MANUAL_DEPTH_CONTRACT_VERSION_V6
+                    or contracts.get('perPaperSubagent') != 'isolated-single-paper-v2'
+                    or type(takeover.get('version')) is not int or takeover['version'] != 2):
+                raise ValueError('当前模型规则只适用于带版本 2 接管证明的新 Manual v6。')
+        elif contracts.get('perPaperSubagent') == 'isolated-single-paper-v2':
+            raise ValueError('旧模型上下文不能冒用新的单篇任务格式。')
+        for key in ('researchBrief', 'scoringCalibration', 'readabilityRubric'):
+            value = takeover.get(key)
+            if policy == CURRENT_MODEL_POLICY or isinstance(value, dict):
+                bound_analysis_model_policy(value, policy)
+        if policy == LEGACY_MODEL_POLICY:
+            brief = takeover.get('researchBrief')
+            brief = brief if isinstance(brief, dict) else {}
+            subagent = brief.get('paperSubagent') if isinstance(brief, dict) else None
+            for value in (subagent, takeover.get('scoringCalibration'), takeover.get('readabilityRubric')):
+                if isinstance(value, dict):
+                    error = analysis_identity_error(value, policy, legacy_optional=True)
+                    if error:
+                        raise ValueError(error)
+            if isinstance(subagent, dict) and 'version' in subagent and (type(subagent['version']) is not int or subagent['version'] != 1):
+                raise ValueError('旧研究说明不能冒用新单篇任务版本。')
+        return policy
+    except ValueError as exc:
+        raise PublishDataValidationError(f'{paper_label} {exc}') from exc
+
+
+def _require_manual_analysis_identity(value, policy, label, **options):
+    error = analysis_identity_error(value, policy, **options)
+    if error:
+        raise PublishDataValidationError(f'{label} {error}')
+
+
+def _validate_current_manual_research_identity(takeover, policy, paper_id, task_names):
+    brief = takeover['researchBrief']
+    if brief.get('contract') != MANUAL_RESEARCH_CONTRACT_VERSION or brief.get('audience') != 'audio_researcher':
+        raise PublishDataValidationError('新研究说明必须保留原研究者正文格式和读者身份。')
+    subagent = brief.get('paperSubagent')
+    _require_manual_analysis_identity(subagent, policy, 'researchBrief.paperSubagent', receipt=True)
+    if (subagent.get('singlePaperOnly') is not True or subagent.get('isolatedContext') is not True
+            or normalize_publish_arxiv_id(subagent.get('paperId')) != paper_id
+            or subagent.get('taskName') != task_names['author']
+            or not BEIJING_TIMESTAMP_RE.fullmatch(str(subagent.get('completedAt') or ''))):
+        raise PublishDataValidationError('研究说明必须对应真实初稿作者的独立单篇任务。')
+    for field, task in (('scoringCalibration', 'technicalScoring'),
+                        ('readabilityRubric', 'pedagogyReadability')):
+        value = takeover[field]
+        _require_manual_analysis_identity(value, policy, field)
+        if (value.get('independentReview') is not True
+                or value.get('reviewerTaskName') != task_names[task]):
+            raise PublishDataValidationError(f'{field} 必须对应四角色记录中的独立审查任务。')
+        if field == 'scoringCalibration' and (type(value.get('version')) is not int or value['version'] != 1):
+            raise PublishDataValidationError('评分校准仍须采用原版本 1。')
+        if field == 'readabilityRubric' and normalize_publish_arxiv_id(value.get('paperId')) != paper_id:
+            raise PublishDataValidationError('可读性审查必须属于当前论文。')
+    for field in ('researchBrief', 'scoringCalibration', 'readabilityRubric'):
+        if takeover.get(field + 'Sha256') != _manual_hash(takeover[field]):
+            raise PublishDataValidationError(f'{field} 的模型身份及内容未绑定原对应 SHA。')
+
+
 def validate_manual_v6_payload(paper):
     """校验并确定性地重放一篇规范的 Manual v6 文章。
 
@@ -1870,12 +1941,15 @@ def validate_manual_v6_payload(paper):
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
     if not isinstance(contracts, dict) or contracts.get('manualDepth') != MANUAL_DEPTH_CONTRACT_VERSION_V6:
         raise PublishDataValidationError(f'{paper_label} 未声明 Manual v6')
+    takeover = manifest.get('manualTakeover')
+    policy = _manual_analysis_model_context(manifest, takeover, paper_label)
     required_contracts = {
         'readerLongform': MANUAL_LONGFORM_CONTRACT_VERSION_V2,
         'artifactIndex': MANUAL_ARTIFACT_PARSER_VERSION_V2,
         'experimentTables': EXPERIMENT_TABLE_CONTRACT_VERSION,
         'researcherFocus': MANUAL_RESEARCH_CONTRACT_VERSION,
-        'perPaperSubagent': 'isolated-single-paper-v1',
+        'perPaperSubagent': ('isolated-single-paper-v2' if policy == CURRENT_MODEL_POLICY
+                             else 'isolated-single-paper-v1'),
         'authorLineage': 'original-author-final-revision-v1',
     }
     for key, expected in required_contracts.items():
@@ -1953,6 +2027,10 @@ def validate_manual_v6_payload(paper):
             or normalize_publish_arxiv_id(bundle.get('paperId')) != paper_id
             or bundle.get('artifactIndexSha256') != artifact_sha):
         raise PublishDataValidationError(f'{paper_label} reader-longform-v2 身份绑定非法')
+    try:
+        bound_analysis_model_policy(bundle, policy)
+    except ValueError as exc:
+        raise PublishDataValidationError(str(exc)) from exc
     bundle_sha = _manual_v6_hash(bundle)
     if (v6_record.get('readerLongformSha256') != bundle_sha
             or acquisition.get('readerLongformSha256') != bundle_sha):
@@ -2016,11 +2094,14 @@ def validate_manual_v6_payload(paper):
     receipt = bundle.get('authorReceipt')
     if (not isinstance(receipt, dict) or normalize_publish_arxiv_id(receipt.get('paperId')) != paper_id
             or receipt.get('singlePaperOnly') is not True or receipt.get('isolatedContext') is not True
-            or receipt.get('model') != 'gpt-5.6-terra' or receipt.get('reasoningEffort') != 'high'
+            or analysis_identity_error(receipt, policy, receipt=True) is not None
             or not re.fullmatch(r'[a-f0-9]{64}', str(receipt.get('articleSha256') or ''))
             or not re.fullmatch(r'[a-f0-9]{64}', str(receipt.get('inputPacketSha256') or ''))
             or not isinstance(receipt.get('revision'), int) or receipt['revision'] < 1):
-        raise PublishDataValidationError(f'{paper_label} v6 authorReceipt 未绑定 Terra-high 单篇初稿')
+        raise PublishDataValidationError(f'{paper_label} v6 authorReceipt 未绑定对应模型规则的单篇初稿')
+    if policy == CURRENT_MODEL_POLICY and (receipt.get('role') != 'author'
+            or not re.fullmatch(r'[a-f0-9]{64}', str(receipt.get('outputSha256') or ''))):
+        raise PublishDataValidationError('新初稿凭证必须明确 author 角色和交付结果 SHA。')
     _manual_v6_require_text(receipt.get('taskName'), f'{paper_label}.authorReceipt.taskName', 4)
     final_receipt = bundle.get('finalRevisionAuthorReceipt')
     if (not isinstance(final_receipt, dict)
@@ -2028,8 +2109,7 @@ def validate_manual_v6_payload(paper):
             or normalize_publish_arxiv_id(final_receipt.get('paperId')) != paper_id
             or final_receipt.get('singlePaperOnly') is not True
             or final_receipt.get('isolatedContext') is not True
-            or final_receipt.get('model') != 'gpt-5.6-terra'
-            or final_receipt.get('reasoningEffort') != 'high'
+            or analysis_identity_error(final_receipt, policy, receipt=True) is not None
             or final_receipt.get('articleSha256') != article_sha
             or not re.fullmatch(r'[a-f0-9]{64}', str(final_receipt.get('consumedPacketSha256') or ''))
             or not re.fullmatch(r'[a-f0-9]{64}', str(final_receipt.get('outputSha256') or ''))
@@ -2062,6 +2142,22 @@ def validate_manual_v6_payload(paper):
             or task_names.get('author') != receipt.get('taskName')
             or task_names.get('authorRevision') != final_receipt.get('taskName')):
         raise PublishDataValidationError(f'{paper_label} Manual v6 的四项任务名称记录格式不符合要求、名称不唯一，或作者名称与初稿及修订稿凭证不一致。')
+
+    if policy == CURRENT_MODEL_POLICY:
+        for role, task_name in task_names.items():
+            _manual_v6_require_text(task_name, f'{paper_label}.taskNames.{role}', 4)
+        _validate_current_manual_research_identity(takeover, policy, paper_id, task_names)
+    else:
+        # 旧完整样本不要求补齐后来增加的研究/审查字段，但拒绝内层自选新身份。
+        brief = takeover.get('researchBrief')
+        brief = brief if isinstance(brief, dict) else {}
+        for value in (brief.get('paperSubagent'), takeover.get('scoringCalibration'),
+                      takeover.get('readabilityRubric')):
+            if isinstance(value, dict):
+                _require_manual_analysis_identity(value, policy, '旧研究或审查身份', legacy_optional=True)
+        subagent = brief.get('paperSubagent')
+        if isinstance(subagent, dict) and 'version' in subagent and (type(subagent['version']) is not int or subagent['version'] != 1):
+            raise PublishDataValidationError('旧研究说明不能冒用新单篇任务版本。')
 
     table_dispositions = bundle.get('tables')
     if not isinstance(table_dispositions, list):
@@ -2584,6 +2680,8 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
         for stage in (stages or {}).values()
     )
     if not uses_manual and manifest.get('manualTakeover') is None:
+        if 'modelPolicy' in manifest:
+            _manual_analysis_model_context(manifest, None, paper_label)
         return
     contracts = manifest.get('contracts') if isinstance(manifest.get('contracts'), dict) else {}
     if contracts.get('manualDepth') in MANUAL_READER_QUALITY_VERSIONS \
@@ -2602,6 +2700,7 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
     if not isinstance(takeover, dict):
         raise PublishDataValidationError(f'{paper_label} manual_complete 缺少 manualTakeover provenance')
     manual_depth = contracts.get('manualDepth')
+    model_policy = _manual_analysis_model_context(manifest, takeover, paper_label)
     signed_v6_compatibility = _manual_v6_signed_compatibility(paper, manifest)
     if paper.get('manualV6CompatibilityMode') is not None and not signed_v6_compatibility:
         raise PublishDataValidationError(
@@ -2714,7 +2813,8 @@ def _validate_manual_takeover_manifest(paper, manifest, paper_label):
                 MANUAL_DEPTH_CONTRACT_VERSION_V6,
         }:
             if contracts.get('researcherFocus') != MANUAL_RESEARCH_CONTRACT_VERSION \
-                    or contracts.get('perPaperSubagent') != 'isolated-single-paper-v1':
+                    or contracts.get('perPaperSubagent') != ('isolated-single-paper-v2'
+                        if model_policy == CURRENT_MODEL_POLICY else 'isolated-single-paper-v1'):
                 raise PublishDataValidationError(
                     f'{paper_label} manual v5 缺少 researcherFocus/perPaperSubagent 契约'
                 )

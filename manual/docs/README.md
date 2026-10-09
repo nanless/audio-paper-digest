@@ -6,7 +6,7 @@ Manual 只在用户明确选择人工流程时使用；默认 LLM/API 主线不�
 |---|---|---|
 | 第一次运行或续跑一个批次 | [workflow.md](workflow.md) | 当前阶段、下一条命令、需要创建哪个单篇助手、失败后从哪里恢复 |
 | 修改任务管理、任务包、结果汇总或发布检查 | [architecture.md](architecture.md) | 各组件负责什么、文件之间如何核验、路径与 SHA 限制及历史兼容范围 |
-| 撰写或复核一篇研究生入门教程 | [editorial-reference-contract.md](editorial-reference-contract.md) | 如何组织问题、方法、训练、数据、图表、实验与限制 |
+| 撰写或复核一篇研究生入门教程 | [editorial-reference-contract-v2.md](editorial-reference-contract-v2.md) | 如何组织问题、方法、训练、数据、图表、实验与限制 |
 | 只想确认 Manual 是否适用 | [目录入口](../README.md) | 进入条件、最短路径和不可混用的模式 |
 
 ## 必要术语
@@ -21,12 +21,12 @@ Manual 只在用户明确选择人工流程时使用；默认 LLM/API 主线不�
 | `canonical` | 博客生成器读取的正式分析结果；必须能据此重新核验 Manual 内容的来源与任务证据。 |
 | `stale` | 某个已注册任务的输入或协议已变化，必须从该任务及其下游重新验证。 |
 | `shadow` | 与正式结果隔离的审计或比较模式，不能发布。 |
-| `legacy v5` | 仅用于维护和重新验证历史文件，不能用于新批次跳过正式流程。 |
+| `legacy v5` | 原文件只读核验；旧写入入口已关闭，工作队列可输出观察统计，不能跳过新任务的正式流程。 |
 
 ## 文档与 Prompt 的边界
 
 - [manual-tutorial-article.md](../prompts/manual-tutorial-article.md) 是正式写作任务包的主要提示词。
-- [manual-analysis-record.md](../prompts/manual-analysis-record.md) 是旧版基础兼容输入，不是默认 API 提示词，也不能替代正式写作任务的提示词。
-- `editorial-reference-contract.md` 和两个提示词文件都会按实际 SHA 核验。修改它们会影响任务包和下游指纹；当前校验还会比较仓库固定文件的 SHA，旧任务包或预览可能被拒绝。保留旧证据，按正常流程从失效任务重新处理，不能修改旧 records 或 JSON 来补出新的 SHA。
+- [manual-analysis-record-v2.md](../prompts/manual-analysis-record-v2.md) 和 [editorial-reference-contract-v2.md](editorial-reference-contract-v2.md) 用于当前 Sol 模型规则，并按真实文件 SHA 绑定任务。它们不替代正式 v6 的主要教程提示词。
+- [manual-analysis-record.md](../prompts/manual-analysis-record.md) 和 [editorial-reference-contract.md](editorial-reference-contract.md) 保留旧原字节，供旧记录按原身份只读核验。读取程序依据任务所属规则选择路径与 SHA，不从凭证自报规则取得授权，也不能重算旧 records 或 JSON 的 SHA 来冒充当前任务。
 
 代码与文档冲突时，遵守当前任务管理器、校验器和发布器的检查结果；检查未通过就停止，并同步修正文档。不能用文档描述绕过实际检查。

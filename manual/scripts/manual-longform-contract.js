@@ -1,5 +1,7 @@
 'use strict';
 
+const { CURRENT_MODEL_POLICY, LEGACY_MODEL_POLICY, assertAgentIdentity, boundModelPolicy } = require('./manual-agent-policy.js');
+
 const crypto = require('crypto');
 const { normalizedId } = require('../../scripts/utils.js');
 
@@ -527,8 +529,11 @@ function validateAuthorReceipt(receipt, paperId, articleSha256, label, options =
         || value.isolatedContext !== true) {
         throw new Error(`${label}.authorReceipt 必须绑定当前单篇隔离任务`);
     }
-    if (value.model !== 'gpt-5.6-terra' || value.reasoningEffort !== 'high') {
-        throw new Error(`${label}.authorReceipt 必须绑定 gpt-5.6-terra/high`);
+    const policy = options.expectedModelPolicy === undefined ? LEGACY_MODEL_POLICY : options.expectedModelPolicy;
+    assertAgentIdentity(value, policy, `${label}.authorReceipt`);
+    if (policy === CURRENT_MODEL_POLICY) {
+        if (value.role !== 'author') throw new Error(`${label}.authorReceipt 必须对应作者任务`);
+        assertSha(value.outputSha256, `${label}.authorReceipt.outputSha256`);
     }
     assertText(value.taskName, `${label}.authorReceipt.taskName`, 4);
     assertSha(value.inputPacketSha256, `${label}.authorReceipt.inputPacketSha256`);
@@ -551,16 +556,14 @@ function validateAuthorReceipt(receipt, paperId, articleSha256, label, options =
     }
 }
 
-function validateFinalRevisionAuthorReceipt(receipt, paperId, articleSha256, label) {
+function validateFinalRevisionAuthorReceipt(receipt, paperId, articleSha256, label, options = {}) {
     const receiptLabel = `${label}.finalRevisionAuthorReceipt`;
     const value = assertObject(receipt, receiptLabel);
     if (value.role !== 'author_revision' || normalizedId(value.paperId) !== paperId
         || value.singlePaperOnly !== true || value.isolatedContext !== true) {
         throw new Error(`${receiptLabel} 必须绑定当前单篇 author_revision 任务`);
     }
-    if (value.model !== 'gpt-5.6-terra' || value.reasoningEffort !== 'high') {
-        throw new Error(`${receiptLabel} 必须绑定 gpt-5.6-terra/high`);
-    }
+    assertAgentIdentity(value, options.expectedModelPolicy === undefined ? LEGACY_MODEL_POLICY : options.expectedModelPolicy, receiptLabel);
     assertText(value.taskName, `${receiptLabel}.taskName`, 4);
     assertSha(value.consumedPacketSha256, `${receiptLabel}.consumedPacketSha256`);
     assertSha(value.outputSha256, `${receiptLabel}.outputSha256`);
@@ -586,6 +589,7 @@ function validateFinalRevisionAuthorReceipt(receipt, paperId, articleSha256, lab
 function validateManualLongformBundle(bundle, article, artifactIndex, options = {}) {
     const label = options.label || 'longformBundle';
     const value = assertObject(bundle, label);
+    const policy = boundModelPolicy(value, options.expectedModelPolicy, label);
     const index = assertObject(artifactIndex, `${label}.artifactIndex`);
     if (value.version !== MANUAL_LONGFORM_BUNDLE_VERSION
         || value.contract !== MANUAL_LONGFORM_CONTRACT_VERSION) {
@@ -650,11 +654,12 @@ function validateManualLongformBundle(bundle, article, artifactIndex, options = 
         }
     } else {
         validateAuthorReceipt(value.authorReceipt, paperId, value.articleSha256, label, {
+            expectedModelPolicy: policy,
             legacyFinalBinding: legacyLineage && !value.finalRevisionAuthorReceipt
         });
         if (value.finalRevisionAuthorReceipt) {
             const finalReceipt = validateFinalRevisionAuthorReceipt(
-                value.finalRevisionAuthorReceipt, paperId, value.articleSha256, label
+                value.finalRevisionAuthorReceipt, paperId, value.articleSha256, label, { expectedModelPolicy: policy }
             );
             if (finalReceipt.taskName === value.authorReceipt.taskName) {
                 throw new Error(`${label} 初稿 author 与最终 author_revision 必须是不同 task`);

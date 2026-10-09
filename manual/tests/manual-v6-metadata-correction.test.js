@@ -36,6 +36,13 @@ const {
     parseArgs
 } = require('../scripts/manual-v6-metadata-correction.js');
 
+const CURRENT_MODEL_POLICY = 'manual-agents-sol-high-v2';
+const currentIdentity = { modelPolicy: CURRENT_MODEL_POLICY, model: 'gpt-6.1-sol', reasoningEffort: 'high' };
+
+function startCurrentCorrection(state, claimId, taskName, now) {
+    return startCorrectionTask(state, claimId, taskName, now, currentIdentity);
+}
+
 const ID = '2608.12345';
 const DATE = '2026-08-29';
 const SHA = 'a'.repeat(64);
@@ -59,7 +66,8 @@ function setupMinimalProduction(currentDir, ids = [ID]) {
     for (const paperId of ids) {
         const artifactRoot = path.join(dateRoot, 'task-runner', 'tasks', paperId);
         const payloadPath = path.join(artifactRoot, 'draft', 'revision-record-payload.json');
-        const payload = { paperId, type: 'free text', task: 'speech', tags: ['speech'] };
+        // 有意不完整的协议测试输入；下列队列测试关闭正文预检，不能代替正式四角色交付。
+        const payload = { modelPolicy: CURRENT_MODEL_POLICY, paperId, type: 'free text', task: 'speech', tags: ['speech'] };
         const payloadHash = writeJson(payloadPath, payload);
         const revisionPath = path.join(artifactRoot, 'outputs', 'author-revision.json');
         const revision = {
@@ -85,7 +93,7 @@ function setupMinimalProduction(currentDir, ids = [ID]) {
         };
     }
     writeJson(path.join(dateRoot, 'task-runner', 'state.json'), {
-        expectedPaperIds: [...ids].sort(), papers
+        version: 2, modelPolicy: CURRENT_MODEL_POLICY, expectedPaperIds: [...ids].sort(), papers
     });
     return dateRoot;
 }
@@ -111,8 +119,9 @@ function packetFixture() {
 
 function correctionFixture(packet) {
     return {
-        version: 1,
-        contract: CORRECTION_OUTPUT_CONTRACT,
+        version: packet.version,
+        ...(packet.modelPolicy ? { modelPolicy: packet.modelPolicy } : {}),
+        contract: packet.version === 2 ? CORRECTION_OUTPUT_CONTRACT.replace(/v1$/, 'v2') : CORRECTION_OUTPUT_CONTRACT,
         date: DATE,
         paperId: ID,
         role: 'metadata_correction',
@@ -120,7 +129,7 @@ function correctionFixture(packet) {
         passed: true,
         singlePaperOnly: true,
         isolatedContext: true,
-        model: 'gpt-5.6-terra',
+        model: packet.version === 2 ? 'gpt-6.1-sol' : 'gpt-5.6-terra',
         reasoningEffort: 'high',
         packetSha256: packet.packetSha256,
         originalRecordPayload: { fileSha256: SHA, semanticSha256: SHA },
@@ -137,15 +146,16 @@ function correctionFixture(packet) {
 
 function receiptFixture(packet, correction) {
     return {
-        version: 1,
-        contract: CORRECTION_RECEIPT_CONTRACT,
+        version: packet.version,
+        ...(packet.modelPolicy ? { modelPolicy: packet.modelPolicy } : {}),
+        contract: packet.version === 2 ? CORRECTION_RECEIPT_CONTRACT.replace(/v1$/, 'v2') : CORRECTION_RECEIPT_CONTRACT,
         date: DATE,
         paperId: ID,
         role: 'metadata_correction',
         taskName: correction.taskName,
         singlePaperOnly: true,
         isolatedContext: true,
-        model: 'gpt-5.6-terra',
+        model: packet.version === 2 ? 'gpt-6.1-sol' : 'gpt-5.6-terra',
         reasoningEffort: 'high',
         consumedPacketSha256: packet.packetSha256,
         correctionSha256: stableSha256(correction),
@@ -157,6 +167,21 @@ function receiptFixture(packet, correction) {
 }
 
 describe('Manual v6 显式元数据更正协议', () => {
+    it('旧版更正材料仅按原规则读取，不得混入当前或未知规则', () => {
+        const packet = packetFixture();
+        const correction = correctionFixture(packet);
+        const receipt = receiptFixture(packet, correction);
+        const original = JSON.stringify({ packet, correction, receipt });
+        validatePacket(packet, { date: DATE, paperId: ID });
+        validateReceipt(receipt, packet, correction);
+        assert.equal(JSON.stringify({ packet, correction, receipt }), original);
+        for (const modelPolicy of [CURRENT_MODEL_POLICY, 'unknown']) {
+            const mixed = { ...packet, modelPolicy };
+            assert.throws(() => validatePacket(mixed, { date: DATE, paperId: ID }));
+        }
+        assert.equal(JSON.stringify({ packet, correction, receipt }), original);
+    });
+
     it('只接受规定的文档类型、明确的主任务和主方法，以及规范的 3–5 标签字符串', () => {
         assert.deepEqual(validateExactMetadataFields({
             type: '方法研究', task: '#语音识别', primaryMethodTag: '#Transformer',
@@ -199,7 +224,7 @@ describe('Manual v6 显式元数据更正协议', () => {
             /并列出 task 和 primaryMethodTag/
         );
         const badReceipt = { ...receiptFixture(packet, correction), model: 'gpt-5.6-sol' };
-        assert.throws(() => validateReceipt(badReceipt, packet, correction), /provenance/);
+        assert.throws(() => validateReceipt(badReceipt, packet, correction), /元数据更正身份/);
     });
 
     it('写作助手负责的基础字段仍不完整或不合法时，预检拒绝只修正四个元数据字段', () => {
@@ -249,9 +274,9 @@ describe('Manual v6 显式元数据更正协议', () => {
         assert.equal(first.claimed.length, 3);
         assert.equal(first.active, 3);
         assert.equal(claimCorrectionTasks(state, { limit: 3, now: QUEUED_AT }).claimed.length, 0);
-        startCorrectionTask(state, first.claimed[0].claimId, 'metadata-correction-unique-a', STARTED_AT);
+        startCurrentCorrection(state, first.claimed[0].claimId, 'metadata-correction-unique-a', STARTED_AT);
         assert.throws(
-            () => startCorrectionTask(state, first.claimed[1].claimId, 'metadata-correction-unique-a', STARTED_AT),
+            () => startCurrentCorrection(state, first.claimed[1].claimId, 'metadata-correction-unique-a', STARTED_AT),
             /重复|复用/
         );
         abandonCorrectionTask(
@@ -261,7 +286,7 @@ describe('Manual v6 显式元数据更正协议', () => {
         retryCorrectionTask(state, ids[0]);
         const reclaimed = claimCorrectionTasks(state, { paperId: ids[0], limit: 1, now: QUEUED_AT });
         assert.throws(
-            () => startCorrectionTask(state, reclaimed.claimed[0].claimId, 'metadata-correction-unique-a', STARTED_AT),
+            () => startCurrentCorrection(state, reclaimed.claimed[0].claimId, 'metadata-correction-unique-a', STARTED_AT),
             /重复|复用/
         );
         assert.equal(validateCorrectionState(state).activeLimit, 3);
@@ -279,7 +304,7 @@ describe('Manual v6 显式元数据更正协议', () => {
             () => submitCorrectionTask(state, claim.claimId, DATE, root, { fullPreflight: false }),
             /running/
         );
-        startCorrectionTask(state, claim.claimId, 'metadata-correction-stateful', STARTED_AT);
+        startCurrentCorrection(state, claim.claimId, 'metadata-correction-stateful', STARTED_AT);
         const correction = correctionFixture(packetItem.packet);
         correction.taskName = 'metadata-correction-stateful';
         correction.originalRecordPayload = {

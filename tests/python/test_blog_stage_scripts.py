@@ -193,8 +193,9 @@ class BlogStageEntryTest(unittest.TestCase):
                 __import__('json').dumps(manifest), encoding='utf-8',
             )
             common_subagent = {
-                'version': 1, 'singleFileOnly': True, 'isolatedContext': True,
-                'model': 'gpt-5.6-terra', 'reasoningEffort': 'high',
+                'version': 2, 'modelPolicy': 'manual-agents-sol-high-v2',
+                'singleFileOnly': True, 'isolatedContext': True,
+                'model': 'gpt-6.1-sol', 'reasoningEffort': 'high',
             }
             (shard_dir / 'index.json').write_text(__import__('json').dumps({
                 'path': 'content/posts/2026-07-10.md',
@@ -229,6 +230,8 @@ class BlogStageEntryTest(unittest.TestCase):
                     encoding='utf-8',
                 )
             )
+            self.assertEqual(output['version'], 4)
+            self.assertEqual(output['modelPolicy'], 'manual-agents-sol-high-v2')
             deleted = next(item for item in output['files'] if item.get('deleted'))
             self.assertIsNone(deleted['sha256'])
             self.assertEqual(deleted['checks'], {'deletionVerified': True})
@@ -261,9 +264,10 @@ class BlogStageEntryTest(unittest.TestCase):
                 'notes': '2607.00001：核对 Conformer 方法、WER 7.1% 结果和公开测试边界。',
                 'issues': [],
                 'reviewSubagent': {
-                    'version': 1, 'taskName': 'single-review-2607-00001',
+                    'version': 2, 'modelPolicy': 'manual-agents-sol-high-v2',
+                    'taskName': 'single-review-2607-00001',
                     'paperId': paper_id, 'singleFileOnly': True,
-                    'isolatedContext': True, 'model': 'gpt-5.6-terra',
+                    'isolatedContext': True, 'model': 'gpt-6.1-sol',
                     'reasoningEffort': 'high',
                 },
                 'imageFindings': [],
@@ -280,6 +284,8 @@ class BlogStageEntryTest(unittest.TestCase):
                     ]), contextlib.redirect_stdout(io.StringIO()):
                 assemble_manual_review.main()
             payload = __import__('json').loads(output_path.read_text(encoding='utf-8'))
+            self.assertEqual(payload['version'], 4)
+            self.assertEqual(payload['modelPolicy'], 'manual-agents-sol-high-v2')
             self.assertEqual(payload['publicationScope'], scope)
             self.assertEqual(len(payload['files']), 1)
             self.assertEqual(batch_output.read_text(encoding='utf-8'), '{"batch":"untouched"}')

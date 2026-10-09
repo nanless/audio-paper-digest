@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""把已完成的单页审查分片汇总成 Manual v3 审查凭证。"""
+"""把已完成的单页审查记录汇总成 Manual v4 审查凭证。"""
 
 import argparse
 import json
@@ -21,23 +21,21 @@ FILE_CHECKS = {
     'experimentComparisons', 'reproducibility', 'limitations',
     'scoring', 'images',
 }
-REQUIRED_REVIEW_MODEL = 'gpt-5.6-terra'
-REQUIRED_REVIEW_REASONING = 'high'
+from manual_agent_policy import CURRENT_MODEL_POLICY, review_subagent_identity_error
 
 
 def valid_review_subagent(subagent):
     return (
         isinstance(subagent, dict)
-        and subagent.get('version') == 1
+        and review_subagent_identity_error(subagent, CURRENT_MODEL_POLICY) is None
         and subagent.get('singleFileOnly') is True
         and subagent.get('isolatedContext') is True
-        and bool(str(subagent.get('taskName') or '').strip())
-        and subagent.get('model') == REQUIRED_REVIEW_MODEL
-        and subagent.get('reasoningEffort') == REQUIRED_REVIEW_REASONING
+        and isinstance(subagent.get('taskName'), str)
+        and len(subagent['taskName'].strip()) >= 4
     )
 
 
-def valid_review_shard(relative, expected_item, item):
+def valid_review_shard(relative, expected_item, item, module=None, date=None):
     """按生成清单核对单页审查记录，包括已删除文件的记录。"""
     if not isinstance(item, dict) or item.get('issues'):
         return False
@@ -55,6 +53,14 @@ def valid_review_shard(relative, expected_item, item):
         or any(checks.get(key) is not True for key in FILE_CHECKS)
     ):
         return False
+    if 'cacheReuse' in item:
+        if module is None or date is None:
+            return False
+        try:
+            module.validate_manual_cache_reuse(item, date)
+        except (ValueError, TypeError):
+            return False
+        return True
     subagent = item.get('reviewSubagent') or {}
     if not valid_review_subagent(subagent) or not isinstance(item.get('imageFindings'), list):
         return False
@@ -94,6 +100,17 @@ def main():
                 if relative in shards:
                     raise SystemExit(f'单页审查记录包含重复的文件路径：{relative}')
                 shards[relative] = item
+        for relative, expected_item in expected.items():
+            if expected_item.get('deleted') is True:
+                continue
+            reuse = module.manual_cache_reuse_for_file(date, relative, expected_item.get('sha256'))
+            if reuse is not None:
+                shards[relative] = {
+                    'path': relative, 'sha256': expected_item['sha256'],
+                    'checks': {key: True for key in FILE_CHECKS},
+                    'notes': f'复用 {relative} 原有的逐页审查通过记录；正文 SHA 未改变，不表示本次重新执行模型审查。',
+                    'cacheReuse': reuse,
+                }
     missing = sorted(set(expected) - set(shards))
     if args.plan:
         states = {'pass': [], 'missing': [], 'stale': [], 'failed': []}
@@ -108,11 +125,11 @@ def main():
             ):
                 states['stale'].append(relative)
             else:
-                valid = valid_review_shard(relative, expected_item, item)
+                valid = valid_review_shard(relative, expected_item, item, module, date)
                 task_name = str((item.get('reviewSubagent') or {}).get('taskName') or '').strip()
-                if valid and task_name in seen_tasks:
+                if valid and 'cacheReuse' not in item and task_name in seen_tasks:
                     valid = False
-                if valid:
+                if valid and 'cacheReuse' not in item:
                     seen_tasks.add(task_name)
                 states['pass' if valid else 'failed'].append(relative)
         print(json.dumps({
@@ -138,12 +155,13 @@ def main():
         ):
             raise SystemExit(f'单页审查记录中的文件 SHA 或删除标记与生成清单不一致：{relative}')
         subagent = item.get('reviewSubagent') or {}
-        if not valid_review_shard(relative, expected_item, item):
+        if not valid_review_shard(relative, expected_item, item, module, date):
             raise SystemExit(f'单页审查记录未通过核验：{relative}')
-        task_name = subagent['taskName'].strip()
-        if task_name in seen_tasks:
+        task_name = subagent.get('taskName', '').strip()
+        if 'cacheReuse' not in item and task_name in seen_tasks:
             raise SystemExit(f'不同文件复用了同一个独立审查任务名称：{task_name}')
-        seen_tasks.add(task_name)
+        if 'cacheReuse' not in item:
+            seen_tasks.add(task_name)
         notes = item['notes']
         paper_id_match = re.search(r'(\d{4}[.-]\d{5})(?=\.md$)', relative)
         if paper_id_match:
@@ -155,18 +173,22 @@ def main():
             'sha256': sha256,
             'checks': item['checks'],
             'notes': notes,
-            'reviewSubagent': item['reviewSubagent'],
-            'imageFindings': item.get('imageFindings', []),
         }
+        if 'cacheReuse' in item:
+            output_item['cacheReuse'] = item['cacheReuse']
+        else:
+            output_item['reviewSubagent'] = item['reviewSubagent']
+            output_item['imageFindings'] = item.get('imageFindings', [])
         if deleted:
             output_item['deleted'] = True
         files.append(output_item)
     payload = {
-        'version': 3,
+        'version': 4,
+        'modelPolicy': CURRENT_MODEL_POLICY,
         'mode': 'manual_complete',
-        'agent': 'Codex multi-subagent manual review',
+        'agent': 'Codex 独立单页人工审查',
         'basis': 'deterministic_and_manual_semantic_review',
-        'reason': '每个最终博客文件均由独立单页子代理完成语义与图片审查，并绑定当前 generation SHA。',
+        'reason': '逐页核对本次生成清单；相同字节复用原通过记录，新增或变化页面由当前模型的独立单页助手完成语义与图片审查。',
         'checks': {
             'generationManifestVerified': True,
             'baseHeadVerified': True,
