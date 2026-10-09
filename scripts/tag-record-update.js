@@ -15,6 +15,7 @@ const Config = require('./config.js');
 const registryChange = require('./lib/tag-catalog-change.js');
 const { readTagStageRecord } = require('./lib/tag-stage-record.js');
 const tagRecordUpdate = require('./lib/tag-record-update.js');
+const { writeImmutableFile } = require('./lib/immutable-file.js');
 
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const REPORT_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
@@ -506,25 +507,27 @@ function archiveRegistrySnapshot({ sourceFile, historyDir }) {
     }
     const result = { command: 'archive-snapshot', registrySha256: contentSha256,
         source, historyDir: directory, target, bytes: bytes.length };
-    if (fs.existsSync(target)) {
-        const existing = fs.readFileSync(target);
-        if (!existing.equals(bytes) || sha256(existing) !== contentSha256) {
-            throw new Error(`已存在同名归档但字节与文件名内容 SHA 不一致，拒绝覆盖: ${target}`);
+    // 系统临时目录可能带 /var 等别名；保留原返回路径，写入绑定其已核验的真实目录。
+    const realDirectory = fs.realpathSync(directory);
+    const verifyDirectory = () => {
+        const current = fs.lstatSync(directory);
+        const real = fs.lstatSync(realDirectory);
+        if (!current.isDirectory() || current.isSymbolicLink()
+            || current.dev !== directoryStat.dev || current.ino !== directoryStat.ino
+            || !real.isDirectory() || real.isSymbolicLink()
+            || real.dev !== directoryStat.dev || real.ino !== directoryStat.ino
+            || fs.realpathSync(directory) !== realDirectory) {
+            throw new Error('词表快照目录在归档期间发生变化，拒绝继续。');
         }
+    };
+    verifyDirectory();
+    const written = writeImmutableFile(path.join(realDirectory, path.basename(target)), bytes, (message, details = {}) => {
+        throw Object.assign(new Error(`词表快照归档失败：${message}（${target}）`), details);
+    });
+    verifyDirectory();
+    if (written === 'recovered') {
         return { ...result, status: 'already-archived', idempotent: true, written: false,
             message: '已存在内容相同的词表快照，无需再次写入。' };
-    }
-    const fd = fs.openSync(target, 'wx', 0o600);
-    try {
-        fs.writeFileSync(fd, bytes);
-        fs.fsyncSync(fd);
-    } finally {
-        fs.closeSync(fd);
-    }
-    const written = fs.readFileSync(target);
-    if (!written.equals(bytes) || sha256(written) !== contentSha256) {
-        fs.unlinkSync(target);
-        throw new Error('归档复核失败：落盘字节与文件名内容 SHA 不一致，已撤销写入');
     }
     return { ...result, status: 'archived', idempotent: false, written: true,
         message: '当前词表字节已归档' };
