@@ -34,7 +34,7 @@ function classifyFailure(error, now) {
     let category = 'paper';
     // 来源和后处理校验器有明确错误码，分类不受诊断措辞、语言或引用文本影响。
     if (['CONFERENCE_POSTPROCESS_INTEGRITY', 'CONFERENCE_SOURCE_CONTEXT_INTEGRITY',
-        'CONFERENCE_EXTRACTION_RECEIPT_INTEGRITY'].includes(code)) category = 'integrity';
+        'CONFERENCE_EXTRACTION_RECEIPT_INTEGRITY', 'ARXIV_SOURCE_AUTHORITY_INTEGRITY'].includes(code)) category = 'integrity';
     else if (/insufficient.balance|GoUsageLimitError|quota.*exhaust|billing|ACCOUNT_POOL.*EXHAUST/i.test(`${code} ${message}`)) category = 'quota';
     // 认证失败同样必须同时认中英文：旧记录存英文，当前消息已汉化。
     // 前半段英文词逐字保持原样，后半段只加「authentication」的对应中文说法「认证失败」。

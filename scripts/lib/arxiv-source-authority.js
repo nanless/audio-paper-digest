@@ -1,6 +1,6 @@
 'use strict';
 
-// 把现有的官方 arXiv 抓取器接到历史 paper-source-authority 协议上的持久适配层。
+// 保存官方 arXiv 抓取结果，供历史 paper-source-authority 来源核验读取。
 // 模型生成的正文在这里一律不接受。
 
 const crypto = require('node:crypto');
@@ -129,7 +129,7 @@ function requestFor({ arxivId, authorityName, operationId, now }) {
 function validateRequest(value, expected = {}) {
     const rebuilt = requestFor({ arxivId: value?.arxivId, authorityName: value?.authorityName,
         operationId: value?.operationId, now: value?.requestedAt });
-    if (stableHash(value) !== stableHash(rebuilt) || value.requestSha256 !== rebuilt.requestSha256) fail('request 的契约或自校验 SHA 发生变化');
+    if (stableHash(value) !== stableHash(rebuilt) || value.requestSha256 !== rebuilt.requestSha256) fail('请求格式或按记录内容计算的 SHA 不一致');
     if (expected.arxivId && value.arxivId !== expected.arxivId) fail('request 属于另一个 arXiv ID');
     if (expected.authorityName && value.authorityName !== expected.authorityName) fail('request 属于另一个 authority 名称');
     return rebuilt;
@@ -143,11 +143,11 @@ function normalizeFetchedSource(details, arxivId, fetchedAt) {
     const sourceId = String(details.sourceId || '');
     if (sourceId.replace(/v\d+$/i, '') !== arxivId) fail('official fetch sourceId belongs to another paper');
     let nonWhitespace = 0; for (const character of details.text) if (!/\s/u.test(character)) nonWhitespace += 1;
-    if (nonWhitespace < authorityApi.MIN_FULLTEXT_CHARACTERS) fail('官方抓取结果短于 authority 全文门槛');
+    if (nonWhitespace < authorityApi.MIN_FULLTEXT_CHARACTERS) fail('官方抓取的全文短于来源核验要求的最低长度');
     const structuredArtifacts = details.structuredArtifacts;
     if (!structuredArtifacts || typeof structuredArtifacts !== 'object' || Array.isArray(structuredArtifacts)
         || !Array.isArray(structuredArtifacts.tables) || !Array.isArray(structuredArtifacts.formulas)) {
-        fail('官方抓取缺少公开的结构化来源契约');
+        fail('官方抓取缺少表格或公式来源清单，或清单格式无效');
     }
     const { payloadSha256, ...artifactBody } = structuredArtifacts;
     if (!/^[a-f0-9]{64}$/.test(String(payloadSha256 || ''))
@@ -155,8 +155,7 @@ function normalizeFetchedSource(details, arxivId, fetchedAt) {
         || structuredArtifacts.flattenedTextSha256 !== sha256(details.text)) {
         fail('官方抓取的结构化来源哈希未绑定全文');
     }
-    // 规范 JSON 会对键排序；排序之后再按同样的公开来源载荷封存一次，后续按字节复算
-    // 时才能核对。
+    // 先按规范对 JSON 的键排序，再保存来源对象；后续须按相同字节重新计算 SHA。
     const durableArtifactBody = sortJsonKeys(artifactBody);
     const durableStructuredArtifacts = { ...durableArtifactBody,
         payloadSha256: sha256(JSON.stringify(durableArtifactBody)) };
@@ -364,11 +363,11 @@ function handleLockSignal(signal) {
     for (const handle of [...ACTIVE_LOCK_HANDLES]) {
         STOPPING_LOCK_HANDLES.add(handle);
         const state = LOCK_HANDLE_DATA.get(handle);
-        // 调用方自带 handler 时，异步 fetch 可能在这个回调之后还在跑。要等这次操作
-        // 看到停止标志并退栈再释放锁；空闲或裸句柄现在就可以放。
+        // 调用方注册了信号处理函数时，异步抓取可能仍在执行。要等本次操作
+        // 发现停止标志并结束后再释放锁；没有执行中的操作时可立即释放。
         if (otherListeners.length && state?.operationActive) continue;
         try { releaseLock(handle); }
-        catch (error) { try { process.stderr.write(`[arxiv-source-lock] ${signal} cleanup refused: ${error.message}\n`); } catch {} }
+        catch (error) { try { process.stderr.write(`[arxiv-source-lock] ${signal} 清理被拒绝： ${error.message}\n`); } catch {} }
     }
     uninstallLockSignalHandlers(); handlingLockSignal = false;
     if (!otherListeners.length) setImmediate(() => process.kill(process.pid, signal));
@@ -461,7 +460,7 @@ function liveProductionHandle(genericHandle, sourceDetails) {
     if (sha256(Buffer.from(details.text, 'utf8')) !== publicSnapshot.fulltextSha256
         || details.structuredArtifacts?.flattenedTextSha256 !== publicSnapshot.fulltextSha256
         || details.sourceId.replace(/v\d+$/i, '') !== publicSnapshot.authority.identity.arxivId) {
-        fail('实时官方来源详情无法重放 authority 证据');
+        fail('官方来源详情与授权记录中的全文 SHA 或论文身份不一致');
     }
     PRODUCTION_HANDLES.add(handle); PRODUCTION_HANDLE_DATA.set(handle,
         Object.freeze({ genericHandle, publicSnapshot, sourceDetails: Object.freeze(details) }));
@@ -586,7 +585,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
                 await require('../deep-analyzer.js').fetchArxivTextDetailedUncached(arxivId), arxivId, now);
             assertLockWritable(lock);
             observation = fetched.observation; text = fetched.text; liveSourceDetails = fetched.sourceDetails;
-            // 配对记录先落盘，恢复只消费原请求的完整来源字节，不重新抓取补猜。
+            // 先保存配对记录。恢复时只读取原请求的完整来源字节，不重新抓取或猜补。
             const pair = seal({ contract: 'arxiv-paper-source-pair-v1', version: 1,
                 requestSha256: request.requestSha256, observation, text }, 'pairSha256');
             writeArtifact(pairFile, prettyBytes(pair));

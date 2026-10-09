@@ -700,7 +700,7 @@ function httpsRequestWithProxy(
             timeout: timeoutMs,
         };
 
-        // 如果有代理，使用代理 agent
+        // 配置了代理时，使用对应的 HTTP 连接对象
         if (proxyUrl) {
             options.agent = proxyAgentFactory(proxyUrl, urlObj.hostname, 443);
         }
@@ -1077,8 +1077,8 @@ async function fetchAbstracts(papers, concurrency = 1, options = {}) {
     const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     const maxRetries = options.maxRetries ?? ARXIV_CONFIG.fetchMaxRetries;
     const abstractCache = options.abstractCache instanceof Map ? options.abstractCache : new Map();
-    // 真正开 socket 的那一步由调度器把关。公开的并发参数只管 CPU 和记账上的并行度；
-    // 对 arxiv.org 来说，一批里同时在飞的摘要请求始终只有一个。
+    // 调度器限制实际网络连接。并发参数只控制数据处理和任务统计；
+    // 同一批对 arxiv.org 的摘要请求始终逐个发送。
     const requestScheduler = options.requestScheduler || createHostTaskScheduler();
     const rateLimitBudget = createRateLimitBudget(options);
     const initialRateLimitWaitMs = rateLimitBudget.waitedMs;
@@ -1507,7 +1507,7 @@ function parseArxivXML(xml, categoryId, existingIds = null, options = {}) {
         // v1 的已封存记录保留原 XML 字段字节。结构和身份先由严格解析器核验。
         const rawEntries = [...String(xml).matchAll(/<entry>([\s\S]*?)<\/entry>/g)];
         if (rawEntries.length !== entries.length) {
-            throw new Error('Atom v1 字段投影不支持这组 entry 命名空间或属性写法');
+            throw new Error('Atom v1 字段读取规则不支持这组 entry 命名空间或属性写法');
         }
         entries = entries.map((entry, index) => {
             const raw = rawEntries[index][1];
@@ -1520,7 +1520,7 @@ function parseArxivXML(xml, categoryId, existingIds = null, options = {}) {
             if (!id || id[1].split('/abs/').pop() !== entry.arxivId || !title || !summary
                 || !published || authors.length !== entry.authors.length
                 || categories.length !== entry.categories.length) {
-                throw new Error('Atom v1 字段投影无法完整重放已校验的条目');
+                throw new Error('Atom v1 字段读取规则无法还原已校验的完整条目');
             }
             return { ...entry, title: title[1].replace(/\n/g, ' ').trim(),
                 abstract: summary[1].replace(/\n/g, ' ').trim(), authors, categories,
@@ -1785,7 +1785,7 @@ async function isSpeechAudioRelated(paper) {
 }
 
 function getEffectiveFilterBatchSize(configuredBatchSize, model = FILTER_CONFIG.model) {
-    // 2026-09-03: 用户要求 Muse 亦支持并发 5，原先强制串行 1 已放宽；保留 probe 首批 1 的
+    // 2026-09-03: 用户要求 Muse 亦支持并发 5，原先强制串行 1 已放宽；保留首批只处理 1 篇的
     // 健康检查，其余批次直接使用配置并发度（默认 5，可经 PD_FILTER_BATCH_SIZE 覆写）
     return configuredBatchSize;
 }
@@ -1897,8 +1897,8 @@ async function filterPapersWithLLM(papers, options = {}) {
     const batches = [];
 
     let batchStart = 0;
-    // 默认运输先用一篇做认证/endpoint 健康探针。这样 401/403/404/400
-    // 不会因配置并发度而同时打到多个候选；探针通过后仍恢复配置并发。
+    // 默认请求先处理一篇，检查账号认证和接口是否可用。这样 401/403/404/400
+    // 不会在多个候选上同时发生；检查通过后恢复配置的并发数。
     if (decisionFn === getSpeechAudioDecision && papersNeedingDecision.length > 0) {
         batches.push([papersNeedingDecision[0]]);
         batchStart = 1;

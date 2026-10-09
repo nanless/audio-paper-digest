@@ -411,7 +411,7 @@ test('旧解析器封存的实体和空白按 v1 原字节重放，默认新抓�
     assert.deepEqual(parsed.categories, ['cs.SD&test']);
 });
 
-test('v1 字段投影先核 XML 结构，并明确拒绝不能按旧字节规则提取的合法新写法', () => {
+test('v1 字段读取规则先核 XML 结构，并明确拒绝不能按旧字节规则提取的合法新写法', () => {
     const raw = require('./fixtures/legacy-official-atom-v1.json').raw;
     const parse = source => metadataApi.parseOfficialArxivMetadataResponse(ID, source);
     assert.throws(() => parse(raw.slice(0, -7)), /Atom XML 解析失败/);
@@ -421,7 +421,7 @@ test('v1 字段投影先核 XML 结构，并明确拒绝不能按旧字节规则
         raw.replace('<category term="cs.SD&amp;test"/>', "<category term='cs.SD&amp;test'/>")
     ]) {
         assert.equal(require('../scripts/fetch-papers.js').parseArxivXML(changed, 'cs.SD').length, 1);
-        assert.throws(() => parse(changed), /v1 字段投影/);
+        assert.throws(() => parse(changed), /v1 字段读取规则/);
     }
 });
 

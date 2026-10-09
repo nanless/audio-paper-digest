@@ -169,7 +169,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。npm 中的 Python 命令要求 Python 
 # 同日完整续跑
 npm run digest:prepare -- YYYY-MM-DD
 
-# 从指定编排阶段恢复
+# 从指定阶段继续执行
 ./run-daily-digest.sh YYYY-MM-DD --from review
 
 # 只续分析

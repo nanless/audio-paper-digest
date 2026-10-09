@@ -251,7 +251,7 @@ class ConferencePageRenderTest(unittest.TestCase):
         self.assertIn('paper_digest_paper_id: "conference:icassp:2026:icassp-arnumber:100"', result['markdown'])
         self.assertNotIn('paper_digest_arxiv_id', result['markdown'])
         self.assertNotIn('arxiv.org', result['markdown'].lower())
-        self.assertIn('表格、公式与 Figure 均不可用', result['markdown'])
+        self.assertIn('表格、公式和论文图片均不可用', result['markdown'])
         self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags-v2"', result['markdown'])
         self.assertIn('paper_digest_api_reader_contract: "beginner-researcher-v3"', result['markdown'])
         self.assertIn('paper_digest_api_reader_source_binding_contract: "api-reader-source-bindings-v4"', result['markdown'])
@@ -272,7 +272,7 @@ class ConferencePageRenderTest(unittest.TestCase):
             'analysisConfidence': 'short_proceedings',
         })
         result = MODULE.render_packet(packet)
-        self.assertIn('短篇 proceedings PDF', result['markdown'])
+        self.assertIn('会议论文集中的短篇 PDF', result['markdown'])
         self.assertIn('完整 PDF 文本，未降级为摘要', result['markdown'])
 
     def test_escaped_formula_brackets_in_image_alt_are_not_published_as_math(self):

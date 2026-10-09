@@ -194,6 +194,6 @@ CI 还运行 Python 单测、JS/Python/shell 语法检查和空数据结构校�
 - [历史重写](docs/history-rewrite.md)：历史输入、重新获取的 arXiv 来源、会议 PDF 与备用路线。
 - [脚本说明](docs/scripts.md)：命令参数和运行语义。
 - [数据格式](docs/data-format.md)：检查点、正式分析结果和发布凭证。
-- [契约兼容矩阵](docs/compatibility.md)：当前写入格式、历史读取与允许发布的条件。
+- [新旧格式兼容说明](docs/compatibility.md)：当前写入格式、历史读取与允许发布的条件。
 - [排错手册](docs/troubleshooting.md)：API、代理、分析、发布和视觉问题。
 - [Manual 子系统](manual/README.md)：显式人工流程。

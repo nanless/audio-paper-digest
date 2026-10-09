@@ -165,7 +165,7 @@ projection v3 按冻结的 `outboundPostLinks` 将会议任务页对应到论文
 
 实际发布使用 `history:direct-publication`，依次 plan、generate、review、publish、status。逐页通过记录只按路径与内容 SHA 复用，本批仍执行确定性/Hugo 检查并生成审查凭证。`activate --apply` 被禁用；`publish --apply` 在共享博客锁内处理激活、提交、推送和远端 OID。精确参数与视觉处置见[独立历史发布](history-direct-publication.md)。旧 `history:publication` 只提供 plan/generate 私有文件，不能用来真正发布。
 
-正常 direct 任务不依赖来源对照表。`history:crosswalk` 仍可显式维护旧来源对照表：`prepare --apply`、`apply`、`apply-verified` 和 `finalize` 可以按来源授权及 CAS 检查写入状态或凭证，并非全部只读。备用 `history:arxiv-batch` 必须给出 `--handoffs NAME.json[,NAME.json...]`，只接受 scheduler/run 保存的命名、不可变的新 arXiv 获取失败交接文件，不枚举 pending 页面。会议本地来源缺失或损坏只使该项失败，不进入这条备用批处理。`history:local-crawl-batch`、`archive-crawl-batch` 和 `history:conference-crawl-batch` 已停用，不能写状态记录。详见[历史重写底座](history-rewrite.md)。
+正常 direct 任务不依赖来源对照表。`history:crosswalk` 仍可显式维护旧来源对照表：`prepare --apply`、`apply`、`apply-verified` 和 `finalize` 可以按来源授权及 CAS 检查写入状态或凭证，并非全部只读。备用 `history:arxiv-batch` 必须给出 `--handoffs NAME.json[,NAME.json...]`，只接受 scheduler/run 保存的命名、不可变的新 arXiv 获取失败交接文件，不枚举 pending 页面。会议本地来源缺失或损坏只使该项失败，不进入这条备用批处理。`history:local-crawl-batch`、`archive-crawl-batch` 和 `history:conference-crawl-batch` 已停用，不能写状态记录。详见[历史重写说明](history-rewrite.md)。
 
 ## 视觉任务状态
 

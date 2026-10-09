@@ -312,7 +312,7 @@ test('生产 Node 阶段调用通用 Python 渲染器，不带 arXiv 身份', t 
     const result = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, dependencies);
     assert.match(result.markdown, /paper_digest_paper_id: "conference:icassp:2026:icassp-arnumber:101"/);
-    assert.match(result.markdown, /表格、公式与 Figure 均不可用/);
+    assert.match(result.markdown, /表格、公式和论文图片均不可用/);
     assert.match(result.markdown, /paper_digest_tags_contract: "paper-tag-flat-tags-v2"/);
     assert.doesNotMatch(result.markdown, /^paper_digest_taxonomy_/m);
     assert.match(result.markdown, /paper_digest_api_reader_contract: "beginner-researcher-v3"/);

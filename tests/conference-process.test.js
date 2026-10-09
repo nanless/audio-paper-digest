@@ -2084,3 +2084,35 @@ test('旧可重试的抽取凭证失败须显式授权，原失败记录保持�
     assert.equal(recovery.eligible({ ...ordinary,
         lastFailure: { ...ordinary.lastFailure, retryable: false } }, now), false);
 });
+
+
+test('arXiv 来源校验错误按明确错误码分类，不依赖新旧说明或引用文字', () => {
+    const recovery = require('../scripts/lib/conference-process-recovery.js');
+    const { ArxivSourceAuthorityError } = require('../scripts/lib/arxiv-source-authority.js');
+    const now = '2026-10-10T00:00:00.000Z';
+    for (const message of [
+        'request 的契约或自校验 SHA 发生变化',
+        '请求格式或按记录内容计算的 SHA 不一致',
+        '记录中引用 HTTP 401 proxy，并不表示本次请求认证失败'
+    ]) {
+        const error = new ArxivSourceAuthorityError(message);
+        const failure = recovery.classifyFailure(error, now);
+        assert.equal(failure.code, 'ARXIV_SOURCE_AUTHORITY_INTEGRITY');
+        assert.equal(failure.category, 'integrity');
+        assert.equal(failure.retryable, false);
+        assert.equal(failure.systemic, false);
+        assert.equal(recovery.eligible({ status: 'failed', attempts: 1, lastFailure: failure }, now), false);
+    }
+    const saved = { status: 'failed', attempts: 1, lastFailure: {
+        code: 'ARXIV_SOURCE_AUTHORITY_INTEGRITY', category: 'paper', retryable: false,
+        systemic: false, message: 'request 的契约或自校验 SHA 发生变化'
+    } };
+    const original = structuredClone(saved);
+    assert.equal(recovery.eligible(saved, now), false);
+    assert.deepEqual(saved, original);
+    assert.equal(recovery.classifyFailure(new Error('HTTP 401 Unauthorized'), now).category, 'authentication');
+    assert.equal(recovery.classifyFailure(new Error('HTTP 503 upstream'), now).category, 'transport');
+    assert.equal(recovery.classifyFailure(Object.assign(new Error('普通失败'), {
+        code: 'UNKNOWN_INTEGRITY'
+    }), now).category, 'paper');
+});
