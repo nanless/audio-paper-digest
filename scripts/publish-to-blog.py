@@ -5500,6 +5500,84 @@ def _api_reader_numeric_tokens(value):
     return tokens
 
 
+# 与 Node 的窄迁移一致：仅旧实现猜补的整式须携带完整的原始结构化内容。
+_LEGACY_GUESSED_READER_FORMULA = r'\displaystyle S_{\text{ctc}}(y,X)=-\frac{\mathrm{CTCLoss}\big(\log p_{\text{ctc}}(X),\,\mathrm{tok}(y)\big)}{\max(|\mathrm{tok}(y)|,\,5)}'
+
+
+def _reader_source_payload_artifacts(payload, structured_sha, source_sha):
+    if (not isinstance(payload, str)
+            or _javascript_string_sha256(payload) != structured_sha
+            or not re.fullmatch(r'[0-9a-f]{64}', str(source_sha or ''))):
+        return None
+    try:
+        artifacts = json.loads(payload)
+    except (ValueError, TypeError):
+        return None
+    return artifacts if (isinstance(artifacts, dict)
+                         and artifacts.get('flattenedTextSha256') == source_sha) else None
+
+
+def _validate_legacy_reader_formula_source(binding, plan, structured_sha, source_sha):
+    if str(binding.get('latex') or '').strip() != _LEGACY_GUESSED_READER_FORMULA:
+        return
+    artifacts = _reader_source_payload_artifacts(plan.get('structuredSourcePayload'), structured_sha, source_sha)
+    if artifacts is None or not isinstance(artifacts.get('formulas'), list):
+        raise PublishDataValidationError('旧公式缺少与既有来源 SHA 对应的原始结构化内容；请重建 Reader。')
+    formulas = [formula for formula in artifacts['formulas'] if isinstance(formula, dict)
+                and type(formula.get('ordinal')) is int
+                and formula['ordinal'] == binding['formulaOrdinal']]
+    if (len(formulas) != 1 or formulas[0].get('sourceDomSha256') != binding['sourceDomSha256']
+            or not isinstance(formulas[0].get('latex'), str)
+            or formulas[0]['latex'].strip() != binding['latex'].strip()):
+        raise PublishDataValidationError('旧公式与原始 TeX、公式位置或 DOM SHA 不一致；不能接受猜补结果。')
+
+
+# 仅旧 URL 硬编码图注须证明原始来源；像素断言不能靠原文字符串或自声明代替。
+_LEGACY_READER_FIGURE_CAPTIONS = {'method.png': 'Figure 1: Overview of the study.', 'overview.png': 'Figure 2: Controlled procedural source and pre-training pipeline. FormulaBank separates formula-class coverage C from rendering diversity I, with N(C,I)=C\\times I clips.'}
+_LEGACY_READER_PIXEL_NARRATIVES = ['官方 HTML 将此资源标为 Figure 3，图注称七种声音在语音或停顿中的放置比例相近；但绑定 URL 的实际像素对应 Figure 4，左侧显示四个语料上表示漂移比与任务损伤比随信噪比变化，右侧显示停顿位移后的语音帧漂移随距离衰减。图注与像素错配，本段按绑定图像说明，不把原图注当成图像事实。', '绑定图像：四个语料的表示漂移比与任务损伤比随信噪比变化；右侧为停顿位移后的语音帧漂移随距离衰减。原 HTML 图注与像素错配。']
+
+
+def _validate_legacy_reader_figure_source(paper, plan, article, structured_sha, source_sha):
+    paper_id = normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
+    figures = paper.get('apiReaderFigures') or []
+    if not isinstance(figures, list):
+        return  # 完整图片列表校验由正式 Reader 发布门禁负责。
+    if (paper_id == '2609.27195'
+            and any(isinstance(item, dict) and item.get('url') == 'https://arxiv.org/html/2609.27195v1/fig4_placement_ratio_readable.svg' for item in figures)
+            and any(text in article for text in _LEGACY_READER_PIXEL_NARRATIVES)):
+        raise PublishDataValidationError('旧论文图仍含无像素证据的固定叙述；请根据封存来源重建 Reader。')
+    if paper_id != '2609.15067':
+        return
+    for figure in figures:
+        if not isinstance(figure, dict):
+            continue
+        match = re.fullmatch(r'https://(?:www\.)?arxiv\.org/html/2609\.15067(?:v\d+)?/(method\.png|overview\.png)', str(figure.get('url') or ''), re.I)
+        if not match or figure.get('caption') != _LEGACY_READER_FIGURE_CAPTIONS[match.group(1).lower()]:
+            continue
+        artifacts = _reader_source_payload_artifacts(plan.get('structuredSourcePayload'), structured_sha, source_sha)
+        if not artifacts or not isinstance(artifacts.get('figures'), list):
+            raise PublishDataValidationError('旧论文图缺少与既有来源 SHA 对应的原始结构化内容；请重建 Reader。')
+        candidates = []
+        for source in artifacts['figures']:
+            if (not isinstance(source, dict) or source.get('recoveryStatus') != 'complete'
+                    or type(source.get('ordinal')) is not int
+                    or not re.fullmatch(r'[0-9a-f]{64}', str(source.get('sourceDomSha256') or ''))):
+                continue
+            images = source.get('images')
+            if (isinstance(images, list) and len(images) == 1 and isinstance(images[0], dict)
+                    and images[0].get('kind') == 'external_url' and images[0].get('url') == figure.get('url')):
+                candidates.append(source)
+        if len(candidates) != 1:
+            raise PublishDataValidationError('旧论文图的 URL 未唯一对应原始来源；请重建 Reader。')
+        source = candidates[0]
+        # 与 Node 的来源图片清单规范化保持一致。
+        expected = {'ordinal': source.get('ordinal'), 'sourceDomSha256': source.get('sourceDomSha256'),
+                    'label': re.sub(r'\s+', ' ', str(source.get('label') or f"Figure {source.get('ordinal')}" )).strip(),
+                    'caption': re.sub(r'\s+', ' ', str(source.get('caption') or '')).strip()[:1200]}
+        if any(figure.get(key) != value for key, value in expected.items()):
+            raise PublishDataValidationError('旧论文图的图号、图注或 DOM SHA 与原始来源不一致；请重建 Reader。')
+
+
 def _validate_api_reader_source_bindings(paper, article=None):
     """按 v4 来源记录核对读者文章中的表格和公式，并返回核验结果。"""
     manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
@@ -5679,7 +5757,9 @@ def _validate_api_reader_source_bindings(paper, article=None):
                 or formula_occurrences != 1 \
                 or binding['marker'] in article:
             raise PublishDataValidationError(f'第 {index + 1} 个公式的来源记录或正文显示内容不符合要求。')
+        _validate_legacy_reader_formula_source(binding, plan, structured_sha, paper.get('sourceSha256'))
         seen_ordinals.add(ordinal)
+    _validate_legacy_reader_figure_source(paper, plan, article, structured_sha, paper.get('sourceSha256'))
     return {
         'contract': LLM_API_READER_SOURCE_BINDING_CONTRACT,
         'sha256': bindings_sha,

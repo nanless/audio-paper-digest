@@ -1140,8 +1140,13 @@ function hasValidApiReaderV3Records(paper) {
                 && /^[a-f0-9]{64}$/.test(String(binding?.sourceDomSha256 || ''))
                 && binding?.renderedBlockSha256 === crypto.createHash('sha256')
                     .update(block).digest('hex')
-                && article.split(block).length === 2;
+                && article.split(block).length === 2
+                && require('./deep-analyzer.js').readerFormulaSourcePayloadValid(binding,
+                    plan.structuredSourcePayload, manifest.sourceAcquisition?.structuredArtifactsSha256,
+                    paper.sourceSha256);
         });
+    const figureSourceValid = require('./deep-analyzer.js').readerFigureSourcePayloadValid(paper,
+        manifest.sourceAcquisition?.structuredArtifactsSha256, paper.sourceSha256);
     const figurePersistence = manifest?.contracts?.apiReaderFigurePersistence;
     const ephemeralFiguresValid = figurePersistence !== EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT
         || figures.every(figure => figure && typeof figure === 'object' && !Array.isArray(figure)
@@ -1191,6 +1196,7 @@ function hasValidApiReaderV3Records(paper) {
             && stage.formulaBindingCount === formulaBindings?.length
             && sourceBindingsBindArticle,
         figure_persistence: figurePersistenceValid && ephemeralFiguresValid,
+        figure_source: figureSourceValid,
         structured_artifacts: /^[a-f0-9]{64}$/.test(String(stage.structuredArtifactsSha256 || ''))
             && stage.structuredArtifactsSha256 === manifest?.sourceAcquisition?.structuredArtifactsSha256,
         placements: Boolean(placements)
@@ -1239,6 +1245,7 @@ function hasValidApiReaderV3Records(paper) {
         && stage.sourceBindingsContractVersion === API_READER_SOURCE_BINDING_CONTRACT
         && figurePersistenceValid
         && ephemeralFiguresValid
+        && figureSourceValid
         && stage.sourceBindingsSha256 === sourceBindingsSha256
         && stage.sourceBindingsSourceTextSha256 === paper.sourceSha256
         && stage.sourceBindingsSourceTextSha256 === manifest?.sourceAcquisition?.sourceSha256

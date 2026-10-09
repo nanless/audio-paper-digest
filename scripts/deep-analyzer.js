@@ -1762,17 +1762,6 @@ function normalizeReaderSourceCell(value) {
         .trim();
 }
 
-// 有一个已核验的 arXiv HTML 包里，公式 (3) 的 TeX 注解是截断的（`S_ctc(y,X)=-`），而
-// 同一段经过核验的 MathML 文本带着完整的 CTC 损失分式。只恢复这一个形态；其他公式
-// 一律严格注入原始 TeX。
-function recoverTruncatedReaderFormula(formula) {
-    const latex = String(formula?.latex || '').trim();
-    const text = String(formula?.text || '');
-    if (!/S_\{\\text\{ctc\}\}\(y,X\)=-$/.test(latex)
-        || !/CTCLoss/i.test(text) || !/max/i.test(text)) return latex;
-    return String.raw`\displaystyle S_{\text{ctc}}(y,X)=-\frac{\mathrm{CTCLoss}\big(\log p_{\text{ctc}}(X),\,\mathrm{tok}(y)\big)}{\max(|\mathrm{tok}(y)|,\,5)}`;
-}
-
 function findStructuredTableCell(table, row, column) {
     return (table?.cells || []).find(cell => (
         Number.isInteger(cell?.row) && Number.isInteger(cell?.column)
@@ -2234,7 +2223,7 @@ function exactObjectInOrder(value, keys) {
  * 之后直接用 JSON.stringify() 复现就对不上。这里只重建公开 v4 schema 的顺序；出现
  * 未知字段、缺失字段，或者任何一个值变了，仍过不了声明的 SHA 闸门。
  */
-function replayPersistedArxivHtmlDomV4PayloadSha(structuredArtifacts) {
+function replayPersistedArxivHtmlDomV4PayloadSha(structuredArtifacts, returnPayload = false) {
     if (structuredArtifacts?.parserVersion !== 'arxiv-html-dom-v4') return '';
     const artifact = exactObjectInOrder(structuredArtifacts, [
         'version', 'parserVersion', 'sourceKind', 'sourceId', 'paperId',
@@ -2302,7 +2291,8 @@ function replayPersistedArxivHtmlDomV4PayloadSha(structuredArtifacts) {
         health: { ...health, detected, recovered },
         flattenedTextSha256: artifact.flattenedTextSha256
     };
-    return crypto.createHash('sha256').update(JSON.stringify(body)).digest('hex');
+    const payload = JSON.stringify(body);
+    return returnPayload ? payload : crypto.createHash('sha256').update(payload).digest('hex');
 }
 
 function replayPersistedUnstructuredArxivPayloadSha(structuredArtifacts) {
@@ -2323,6 +2313,40 @@ function replayPersistedUnstructuredArxivPayloadSha(structuredArtifacts) {
         flattenedTextSha256: artifact.flattenedTextSha256
     };
     return crypto.createHash('sha256').update(JSON.stringify(body)).digest('hex');
+}
+
+// 旧实现曾凭 CTCLoss/max 两个词猜补这条完整公式。仅它需要补存原始来源内容，
+// 让旧缓存不能用输出自身的哈希代替原始 TeX；其他公式沿用既有来源协议。
+const LEGACY_GUESSED_READER_FORMULA = String.raw`\displaystyle S_{\text{ctc}}(y,X)=-\frac{\mathrm{CTCLoss}\big(\log p_{\text{ctc}}(X),\,\mathrm{tok}(y)\big)}{\max(|\mathrm{tok}(y)|,\,5)}`;
+function readerFormulaNeedsSourcePayload(latex) {
+    return String(latex || '').trim() === LEGACY_GUESSED_READER_FORMULA;
+}
+function readerStructuredSourcePayload(artifacts) {
+    const { payloadSha256, ...body } = artifacts;
+    const ordered = value => Array.isArray(value) ? value.map(ordered)
+        : value && typeof value === 'object'
+            ? Object.fromEntries(Object.keys(value).sort().map(key => [key, ordered(value[key])])) : value;
+    const candidates = [JSON.stringify(ordered(body)), JSON.stringify(body),
+        replayPersistedArxivHtmlDomV4PayloadSha(artifacts, true)];
+    const payload = candidates.find(value => value && crypto.createHash('sha256').update(value).digest('hex') === payloadSha256);
+    if (!payload) throw new Error('旧公式的完整结构化来源内容不能重放既有来源 SHA；请恢复原始来源后重建 Reader');
+    return payload;
+}
+function readerSourcePayloadArtifacts(payload, structuredSha, sourceSha) {
+    if (typeof payload !== 'string' || !recoverySha256(structuredSha) || !recoverySha256(sourceSha)
+        || crypto.createHash('sha256').update(payload).digest('hex') !== structuredSha) return null;
+    let artifacts;
+    try { artifacts = JSON.parse(payload); } catch { return null; }
+    return artifacts && typeof artifacts === 'object' && !Array.isArray(artifacts)
+        && artifacts.flattenedTextSha256 === sourceSha ? artifacts : null;
+}
+function readerFormulaSourcePayloadValid(binding, payload, structuredSha, sourceSha) {
+    if (!readerFormulaNeedsSourcePayload(binding?.latex)) return true;
+    const artifacts = readerSourcePayloadArtifacts(payload, structuredSha, sourceSha);
+    if (!Array.isArray(artifacts?.formulas)) return false;
+    const formulas = artifacts.formulas.filter(formula => formula?.ordinal === binding.formulaOrdinal);
+    return formulas.length === 1 && formulas[0].sourceDomSha256 === binding.sourceDomSha256
+        && typeof formulas[0].latex === 'string' && formulas[0].latex.trim() === binding.latex.trim();
 }
 
 function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFormulaBindings, options = {}) {
@@ -2410,7 +2434,10 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         if (markerMatches !== 1 || !markerBlock || !targetSection) {
             throw new Error(`读者文章 formulaBindings[${index}] marker 必须在正文独占且仅出现一次`);
         }
-        const latex = recoverTruncatedReaderFormula(formula);
+        const latex = String(formula.latex || '').trim();
+        if (/=\s*[-+−]?\s*$/.test(latex)) {
+            throw new Error(`读者文章 formulaBindings[${index}] 原始 TeX 在等号后截断；不能猜补公式，请删除该公式绑定及 marker，依据完整原文解释其含义`);
+        }
         if (!latex || !recoverySha256(formula.sourceDomSha256)) {
             throw new Error(`读者文章 formulaBindings[${index}] 原始公式缺少 TeX/DOM SHA`);
         }
@@ -2714,6 +2741,8 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         article: boundArticle,
         tableBindings,
         formulaBindings,
+        ...(formulaBindings.some(binding => readerFormulaNeedsSourcePayload(binding.latex))
+            ? { structuredSourcePayload: readerStructuredSourcePayload(options.structuredArtifacts) } : {}),
         sourceBindingsSha256: stableFingerprint({ tableBindings, formulaBindings })
     };
 }
@@ -3273,35 +3302,31 @@ function getApiReaderFigureInventory(structuredArtifacts, arxivId = '') {
         });
         if (inventory.length >= API_READER_FIGURE_LIMIT) break;
     }
-    return normalizeApiReaderFigureVisualBindings(inventory, expectedId);
+    return inventory;
 }
 
-// arXiv 2609.15067 的 HTML 导出把图 1/2 的图注挂到了相反的 PNG 上：overview.png 里
-// 明显是受控来源/预训练流程，method.png 里明显是四面板的研究概览。经过核验的来源 DOM
-// 哈希保持不变，但持久的 Reader 序号和图注要绑到读者真正看到的像素上。这是一处刻意
-// 收窄、按 URL 定位的兼容修复，不是通用的图注推断规则。
-function normalizeApiReaderFigureVisualBindings(inventory, arxivId = '') {
-    if (String(arxivId || '').trim().toLowerCase() !== '2609.15067'
-        || !Array.isArray(inventory)) return inventory;
-    const method = inventory.find(item => /\/method\.png$/i.test(String(item?.url || '')));
-    const overview = inventory.find(item => /\/overview\.png$/i.test(String(item?.url || '')));
-    if (!method || !overview) return inventory;
-    const remapped = inventory.map(item => {
-        if (item === method) return {
-            ...item,
-            ordinal: 1,
-            label: 'Figure 1:',
-            caption: 'Figure 1: Overview of the study.'
-        };
-        if (item === overview) return {
-            ...item,
-            ordinal: 2,
-            label: 'Figure 2:',
-            caption: 'Figure 2: Controlled procedural source and pre-training pipeline. FormulaBank separates formula-class coverage C from rendering diversity I, with N(C,I)=C\\times I clips.'
-        };
-        return item;
+// 只迁移旧实现曾按 URL 写死的图注；其他论文和正常来源图注不受影响。
+const LEGACY_READER_FIGURE_CAPTIONS = {"method.png": "Figure 1: Overview of the study.", "overview.png": "Figure 2: Controlled procedural source and pre-training pipeline. FormulaBank separates formula-class coverage C from rendering diversity I, with N(C,I)=C\\times I clips."};
+const LEGACY_READER_PIXEL_NARRATIVES = ["官方 HTML 将此资源标为 Figure 3，图注称七种声音在语音或停顿中的放置比例相近；但绑定 URL 的实际像素对应 Figure 4，左侧显示四个语料上表示漂移比与任务损伤比随信噪比变化，右侧显示停顿位移后的语音帧漂移随距离衰减。图注与像素错配，本段按绑定图像说明，不把原图注当成图像事实。", "绑定图像：四个语料的表示漂移比与任务损伤比随信噪比变化；右侧为停顿位移后的语音帧漂移随距离衰减。原 HTML 图注与像素错配。"];
+function readerFigureNeedsSourcePayload(figure, paperId) {
+    if (String(paperId || '').trim().toLowerCase().replace(/^arxiv:/, '').replace(/v\d+$/i, '') !== '2609.15067') return false;
+    const name = String(figure?.url || '').match(/^https:\/\/(?:www\.)?arxiv\.org\/html\/2609\.15067(?:v\d+)?\/(method\.png|overview\.png)$/i)?.[1]?.toLowerCase();
+    return Boolean(name && figure.caption === LEGACY_READER_FIGURE_CAPTIONS[name]);
+}
+function readerFigureSourcePayloadValid(paper, structuredSha, sourceSha) {
+    const paperId = getPaperArxivId(paper), figures = paper?.apiReaderFigures || [];
+    const id = String(paperId).trim().toLowerCase().replace(/^arxiv:/, '').replace(/v\d+$/i, '');
+    if (id === '2609.27195' && figures.some(figure => figure?.url === 'https://arxiv.org/html/2609.27195v1/fig4_placement_ratio_readable.svg')
+        && LEGACY_READER_PIXEL_NARRATIVES.some(text => String(paper?.apiReaderArticle || '').includes(text))) return false;
+    const affected = figures.filter(figure => readerFigureNeedsSourcePayload(figure, paperId));
+    if (!affected.length) return true;
+    const artifacts = readerSourcePayloadArtifacts(paper?.apiReaderPlan?.structuredSourcePayload, structuredSha, sourceSha);
+    if (!artifacts) return false;
+    const inventory = getApiReaderFigureInventory(artifacts, id);
+    return affected.every(figure => {
+        const matches = inventory.filter(source => source.url === figure.url);
+        return matches.length === 1 && ['ordinal', 'label', 'caption', 'sourceDomSha256'].every(key => matches[0][key] === figure[key]);
     });
-    return remapped.sort((left, right) => left.ordinal - right.ordinal);
 }
 
 function recoverySha256(value) {
@@ -3374,6 +3399,7 @@ function buildApiReaderArtifactEvidence(
         formula?.recoveryStatus === 'complete'
         && Number.isInteger(formula?.ordinal)
         && String(formula?.latex || '').trim()
+        && !/=\s*[-+−]?\s*$/.test(String(formula.latex))
     )).slice(0, 12);
     appendLine(
         `FORMULA_ORDINALS_AVAILABLE: ${JSON.stringify(availableFormulas.map(formula => formula.ordinal))}`,
@@ -4329,9 +4355,7 @@ function readerFigureNarrative(figure, target = null) {
         && figure?.assetSha256 === '7f175a62e5beb2a32b116b1250ddffc57dbf934d56eb17935e5dae522c9fe470') {
         return '绑定原图顶部为英文源句 The train was delayed because of heavy rain.，时长预算为 3s；三条路线的输出分别为 1s、5s、3s，DuraS2ST 的显式规划路线满足预算。官方 HTML 图注使用“你说得对”的另一例子，与该图像像素不一致；正文中的译法例子来自图注，不能当作图中可见文字。';
     }
-    if (figure?.url === 'https://arxiv.org/html/2609.27195v1/fig4_placement_ratio_readable.svg') {
-        return '官方 HTML 将此资源标为 Figure 3，图注称七种声音在语音或停顿中的放置比例相近；但绑定 URL 的实际像素对应 Figure 4，左侧显示四个语料上表示漂移比与任务损伤比随信噪比变化，右侧显示停顿位移后的语音帧漂移随距离衰减。图注与像素错配，本段按绑定图像说明，不把原图注当成图像事实。';
-    }
+
     const panelNotice = /^\([a-z]\)$/i.test(String(figure?.caption || '').trim())
         ? `当前资源对应子图 ${String(figure.caption).trim()}；同一编号的其他面板请回原论文核对。`
         : '';
@@ -4374,12 +4398,7 @@ function readerFigureAlt(figure, target = null) {
         // 发布审查时看过这张位图本身。被截断的图注漏掉了真正的并排约定示意图。
         return '原论文 Figure 1：常规运行时与原生时钟契约的状态分配、固定地址缓存和精确形状执行对照。';
     }
-    if (figure?.url === 'https://arxiv.org/html/2609.27195v1/fig4_placement_ratio_readable.svg') {
-        return truncateReaderFigureCaption(
-            '绑定图像：四个语料的表示漂移比与任务损伤比随信噪比变化；右侧为停顿位移后的语音帧漂移随距离衰减。原 HTML 图注与像素错配。',
-            112
-        );
-    }
+
     const label = String(figure?.label || `Figure ${figure?.ordinal || ''}`)
         .replace(/[:：]\s*$/, '').replace(/\s+/g, ' ').trim();
     const caption = truncateReaderFigureCaption(normalizeReaderFigureCaption(figure));
@@ -4525,7 +4544,9 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
     if (!orderedFigures) {
         throw new Error('正文里论文图的先后顺序与结构化 figure 对不上，无法按 figure 顺序重排');
     }
-    return { ...readerResult, article, figures: orderedFigures };
+    return { ...readerResult, article, figures: orderedFigures,
+        ...(used.some(figure => readerFigureNeedsSourcePayload(figure, arxivId))
+            ? { plan: { ...readerResult.plan, structuredSourcePayload: readerStructuredSourcePayload(structuredArtifacts) } } : {}) };
 }
 
 function rewriteApiReaderFigureNarratives(article, figures) {
@@ -6207,6 +6228,8 @@ function parseApiReaderArticleResult(raw, options = {}) {
             ...(sourceBindingResult ? {
                 tableBindings: sourceBindingResult.tableBindings,
                 formulaBindings: sourceBindingResult.formulaBindings,
+                ...(sourceBindingResult.structuredSourcePayload
+                    ? { structuredSourcePayload: sourceBindingResult.structuredSourcePayload } : {}),
                 sourceBindingsContract: API_READER_SOURCE_BINDING_CONTRACT,
                 sourceBindingsSha256: sourceBindingResult.sourceBindingsSha256
             } : {}),
@@ -8194,6 +8217,20 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
     );
     const allowedUrls = new Set(currentInventory.map(item => item.url));
     const retainedFigures = figures.filter(item => allowedUrls.has(item?.url));
+    // 旧版曾只按文件名交换这篇论文的图号并覆写图注。不能把旧正文中的图号直接
+    // 换回来，否则引用与看图说明可能指向另一张图；有来源冲突时必须重新生成 Reader。
+    if (String(getPaperArxivId(paper)).trim().toLowerCase().replace(/v\d+$/i, '') === '2609.15067') {
+        for (const figure of retainedFigures) {
+            if (!/\/(?:method|overview)\.png$/i.test(figure.url)) continue;
+            const sourceFigure = currentInventory.find(item => item.url === figure.url);
+            if (figure.ordinal !== sourceFigure.ordinal || figure.label !== sourceFigure.label
+                || figure.caption !== sourceFigure.caption || figure.sourceDomSha256 !== sourceFigure.sourceDomSha256) {
+                const error = new Error('旧论文图记录与封存来源的图号或图注不一致；仅刷新图片不能安全修复正文引用，请根据封存来源重新生成 Reader。');
+                error.code = 'API_READER_FIGURE_SOURCE_MISMATCH';
+                throw error;
+            }
+        }
+    }
     const directContext = require('./lib/direct-rewrite-analysis-context.js');
     const materialized = await (directContext.directReaderMaterializer() || materializeApiReaderFigures)(
         retainedFigures,
@@ -15359,7 +15396,14 @@ async function analyzePaperDeepInternal(paper) {
             || articleSha !== readerStage.articleSha256
             || planSha !== readerStage.planSha256
             || paper.apiReaderArticleSha256 !== articleSha
-            || paper.apiReaderPlanSha256 !== planSha) {
+            || paper.apiReaderPlanSha256 !== planSha
+            || !readerFigureSourcePayloadValid(paper, sourceDetails.structuredArtifacts?.payloadSha256,
+                crypto.createHash('sha256').update(rawTextForAnalysis).digest('hex'))
+            || (paper.apiReaderPlan?.formulaBindings || []).some(binding => (
+                !readerFormulaSourcePayloadValid(binding, paper.apiReaderPlan.structuredSourcePayload,
+                    sourceDetails.structuredArtifacts?.payloadSha256,
+                    crypto.createHash('sha256').update(rawTextForAnalysis).digest('hex'))
+            ))) {
             delete analysisManifest.stages.apiReaderArticle;
             delete analysisManifest.stages.imageSupplement;
             delete paper.apiReaderArticle;
@@ -17148,6 +17192,12 @@ module.exports = {
     normalizeConferenceGeneratedEvidenceTableLabels,
     normalizeReaderSourceQuotes,
     readerSourceQuoteCoversNumericToken,
+    readerFormulaNeedsSourcePayload,
+    readerFigureNeedsSourcePayload,
+    readerFigureSourcePayloadValid,
+    readerStructuredSourcePayload,
+    readerSourcePayloadArtifacts,
+    readerFormulaSourcePayloadValid,
     normalizeConferenceMixedTableBindings,
     validateApiReaderTableNarratives,
     validateReaderEditorialQuality,
