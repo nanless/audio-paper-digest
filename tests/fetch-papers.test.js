@@ -55,6 +55,81 @@ describe('Responses 筛选的终态', () => {
     });
 });
 
+
+describe('三种 API 的筛选响应完整性', () => {
+    const partial = '理由：论文研究语音识别。\n结论：相关';
+    const cases = [
+        { api: 'openai', model: 'test-chat', body: {
+            choices: [{ finish_reason: 'length', message: { content: partial } }]
+        }, code: 'MODEL_OUTPUT_TRUNCATED' },
+        { api: 'anthropic', model: 'test-anthropic', endpoint: 'https://filter.example/anthropic', body: {
+            stop_reason: 'max_tokens', content: [{ type: 'text', text: partial }]
+        }, code: 'MODEL_OUTPUT_TRUNCATED' },
+        ...['failed', 'cancelled'].map(status => ({
+            api: 'openai_responses', model: 'test-responses', endpoint: 'https://filter.example/v1/responses',
+            body: { status, output_text: partial }, code: 'MODEL_RESPONSE_FAILED'
+        })),
+        ...['content_filter', 'tool_calls', 'unknown', null].map(finish_reason => ({
+            api: 'openai', model: 'test-chat', body: {
+                choices: [{ finish_reason, message: { content: partial } }]
+            }, code: 'MODEL_OUTPUT_INCOMPLETE'
+        })),
+        ...['pause_turn', 'refusal', 'tool_use', 'unknown', null].map(stop_reason => ({
+            api: 'anthropic', model: 'test-anthropic', endpoint: 'https://filter.example/anthropic',
+            body: { stop_reason, content: [{ type: 'text', text: partial }] }, code: 'MODEL_OUTPUT_INCOMPLETE'
+        })),
+        ...['queued', 'in_progress', 'unknown', null].map(status => ({
+            api: 'openai_responses', model: 'test-responses', endpoint: 'https://filter.example/v1/responses',
+            body: { status, output_text: partial }, code: 'MODEL_OUTPUT_INCOMPLETE'
+        }))
+    ];
+    for (const entry of cases) {
+        it(`${entry.api} 的 ${String(entry.body.status ?? entry.body.stop_reason ?? entry.body.choices?.[0]?.finish_reason)} 不能因含明确结论而通过`, async () => {
+            assert.throws(() => extractFilterResponseContent(entry.api, entry.body, 1000),
+                error => error.code === entry.code);
+            let checkpoint;
+            const result = await filterPapersWithLLM([{
+                arxivId: '2609.99999', title: '语音识别研究', abstract: 'speech recognition'
+            }], {
+                useKeywordPreFilter: false,
+                decisionOptions: {
+                    filterConfig: { endpoint: entry.endpoint || 'https://filter.example/v1',
+                        model: entry.model, key: 'test-key' },
+                    maxRetries: 1,
+                    requestFn: async () => ({ statusCode: 200, headers: {}, body: entry.body })
+                },
+                onBatchComplete: value => { checkpoint = value; }
+            });
+            assert.strictEqual(result.length, 0);
+            assert.strictEqual(result._filterStats.complete, false);
+            assert.strictEqual(result._filterStats.decided, 0);
+            assert.strictEqual(result._filterStats.retryable, 1);
+            assert.strictEqual(Object.keys(checkpoint.decisions).length, 0);
+            assert.strictEqual(checkpoint.retryableDecisions['2609.99999'].related, null);
+        });
+    }
+    it('完整终态保留正常筛选正文', () => {
+        assert.strictEqual(extractFilterResponseContent('openai', {
+            choices: [{ finish_reason: 'stop', message: { content: partial } }]
+        }, 1000), partial);
+        assert.strictEqual(extractFilterResponseContent('anthropic', {
+            stop_reason: 'end_turn', content: [{ type: 'text', text: partial }]
+        }, 1000), partial);
+        assert.strictEqual(extractFilterResponseContent('openai_responses', {
+            status: 'completed', output_text: partial
+        }, 1000), partial);
+        assert.strictEqual(extractFilterResponseContent('anthropic', {
+            stop_reason: 'stop_sequence', content: [{ type: 'text', text: partial }]
+        }, 1000), partial);
+        for (const [api, body] of [
+            ['openai', { choices: [{ message: { content: partial } }] }],
+            ['anthropic', { content: [{ type: 'text', text: partial }] }],
+            ['openai_responses', { output_text: partial }]
+        ]) assert.strictEqual(extractFilterResponseContent(api, body, 1000), partial);
+
+    });
+});
+
 describe('筛选请求的重试分类与熔断', () => {
     const filterConfig = {
         endpoint: 'https://filter.example/v1',

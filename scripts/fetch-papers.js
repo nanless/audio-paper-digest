@@ -241,6 +241,27 @@ function extractFilterResponseContent(apiType, body, maxOutputTokens) {
             error.code = 'MODEL_OUTPUT_INCOMPLETE';
             throw error;
         }
+        if (body?.status === 'failed' || body?.status === 'cancelled') {
+            const error = new Error(`OpenAI Responses 筛选响应已${body.status === 'failed' ? '失败' : '取消'}，不能采用部分正文`);
+            error.code = 'MODEL_RESPONSE_FAILED';
+            throw error;
+        }
+    }
+    if ((apiType === 'anthropic' && body?.stop_reason === 'max_tokens')
+        || (apiType === 'openai' && body?.choices?.[0]?.finish_reason === 'length')) {
+        const error = new Error(`筛选响应被 max_tokens=${maxOutputTokens} 截断，不能采用部分正文`);
+        error.code = 'MODEL_OUTPUT_TRUNCATED';
+        throw error;
+    }
+    const terminal = apiType === 'openai_responses' ? body?.status
+        : apiType === 'anthropic' ? body?.stop_reason : body?.choices?.[0]?.finish_reason;
+    const accepted = apiType === 'openai_responses' ? ['completed']
+        : apiType === 'anthropic' ? ['end_turn', 'stop_sequence'] : ['stop'];
+    // 兼容未提供终态字段的旧网关；明示尚未完成、拒绝或工具调用的响应不能成为筛选决定。
+    if (terminal !== undefined && !accepted.includes(terminal)) {
+        const error = new Error(`筛选响应未正常完成（${apiType}: ${String(terminal)}），不能采用部分正文`);
+        error.code = 'MODEL_OUTPUT_INCOMPLETE';
+        throw error;
     }
     if (body?.error) {
         throw new Error(body.error.message || JSON.stringify(body.error));
@@ -400,7 +421,7 @@ function classifyFilterRequestError(sourceError, context = {}) {
         });
     }
 
-    if (['MODEL_OUTPUT_TRUNCATED', 'MODEL_OUTPUT_INCOMPLETE'].includes(originalCode)) {
+    if (['MODEL_OUTPUT_TRUNCATED', 'MODEL_OUTPUT_INCOMPLETE', 'MODEL_RESPONSE_FAILED'].includes(originalCode)) {
         return makeFilterRequestError(message, {
             ...common,
             code: originalCode,
