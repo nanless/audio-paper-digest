@@ -388,6 +388,10 @@ def parse_scoring_dimensions(scoring_text):
                 match = pattern.search(rest)
                 if not match:
                     continue
+                # 没有闭括号的写法必须读完最后一个数值，不能把剩余数字当评分理由。
+                if index in (1, 2, 3, 5) and re.match(
+                        r'^(?:[\d.]|[eE][+-]?\d|\s*/)', rest[match.end():]):
+                    continue
                 item['matchedFormat'] = True
                 item['reason'] = re.sub(r'^[\s:：—–-]+', '', rest[match.end():]).strip()
                 if index <= 1:

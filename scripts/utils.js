@@ -1213,6 +1213,9 @@ function parseScoringDimensions(scoringText) {
             for (let index = 0; index < patterns.length; index++) {
                 const match = rest.match(patterns[index]);
                 if (!match) continue;
+                // 没有闭括号的写法必须读完最后一个数值，不能把剩余数字当评分理由。
+                if ([1, 2, 3, 5].includes(index)
+                    && /^(?:[\d.]|[eE][+-]?\d|\s*\/)/.test(rest.slice(match[0].length))) continue;
                 matchedFormat = true;
                 matchedToken = match[0];
                 if (index <= 1) {
