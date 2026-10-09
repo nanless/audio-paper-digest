@@ -811,34 +811,92 @@ function blogCommonDirectory(blogRepo) {
     const resolved = path.resolve(raw);
     return safeRoot(resolved, 'blog Git common directory');
 }
+function waitForSharedBlogLock(blogRepo, timeoutMs) {
+    // 回收交给日更同用的 Python 锁，复用活进程、租期、inode 与自哈希核验。
+    // 此处只等待锁可用；Python 释放后仍须由本进程独占创建，不能视为已持锁。
+    const script = [
+        'import sys',
+        'sys.path.insert(0, sys.argv[1])',
+        'from blog_repository_lock import shared_blog_repository_lock',
+        'with shared_blog_repository_lock(sys.argv[2], owner="historical-publication-recovery", timeout_seconds=float(sys.argv[3])):',
+        '    pass'
+    ].join('\n');
+    const scripts = path.resolve(__dirname, '..');
+    const result = spawnSync('bash', [path.join(scripts, 'python-runtime.sh'), '-c', script,
+        scripts, blogRepo, String(timeoutMs / 1000)], {
+        cwd: path.resolve(scripts, '..'), encoding: 'utf8', env: process.env,
+        timeout: timeoutMs + 5000, maxBuffer: 1024 * 1024
+    });
+    if (result.error || result.signal || result.status !== 0) {
+        fail(`共享博客锁等待或回收失败：${result.error?.message || result.signal || String(result.stderr).trim()}`);
+    }
+}
+function cleanupCreatedBlogLock(lock, lockIdentity, ownerIdentity) {
+    const current = fs.lstatSync(lock);
+    if (!current.isDirectory() || current.isSymbolicLink()
+        || current.dev !== lockIdentity.dev || current.ino !== lockIdentity.ino) {
+        fail('创建博客锁失败后目录已被替换，保留现场');
+    }
+    const entries = fs.readdirSync(lock).sort();
+    if (entries.length === 1 && entries[0] === 'owner.json') {
+        const ownerPath = path.join(lock, 'owner.json'); const owner = fs.lstatSync(ownerPath);
+        if (!ownerIdentity || !owner.isFile() || owner.isSymbolicLink() || owner.nlink !== 1
+            || owner.dev !== ownerIdentity.dev || owner.ino !== ownerIdentity.ino) {
+            fail('创建博客锁失败后持锁记录已被替换，保留现场');
+        }
+        fs.unlinkSync(ownerPath);
+    } else if (entries.length) fail('创建博客锁失败后出现未知文件，保留现场');
+    const closing = fs.lstatSync(lock);
+    if (closing.dev !== lockIdentity.dev || closing.ino !== lockIdentity.ino) fail('清理博客锁时目录被替换，保留现场');
+    fs.rmdirSync(lock);
+}
 function withBlogPublicationLock(blogRepo, callback, dependencies = {}) {
     if (dependencies.withBlogPublicationLock) return dependencies.withBlogPublicationLock(callback);
     const common = blogCommonDirectory(blogRepo); const root = path.join(common, '.paper-digest-locks');
-    if (!fs.existsSync(root)) fs.mkdirSync(root, { mode: 0o700 });
+    try { fs.mkdirSync(root, { mode: 0o700 }); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
     const rootStat = fs.lstatSync(root);
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || (rootStat.mode & 0o777) !== 0o700
         || typeof process.getuid === 'function' && rootStat.uid !== process.getuid()) fail('shared blog lock root is not private/owned');
+    const timeoutMs = dependencies.lockTimeoutMs ?? 30000;
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000) fail('共享博客锁等待时间必须为 1–30000 毫秒');
     const lock = path.join(root, 'blog-publication.lock'); const token = crypto.randomUUID(); const started = Date.now();
     while (true) {
-        try { fs.mkdirSync(lock, { mode: 0o700 }); break; }
-        catch (error) {
-            if (error.code !== 'EEXIST') throw error;
-            if (Date.now() - started >= 30000) fail(`waiting for shared blog lock timed out: ${lock}`);
-            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 50);
+        if (!fs.lstatSync(`${lock}.reclaim`, { throwIfNoEntry: false })) {
+            try { fs.mkdirSync(lock, { mode: 0o700 }); break; }
+            catch (error) { if (error.code !== 'EEXIST') throw error; }
         }
+        const remaining = timeoutMs - (Date.now() - started);
+        if (remaining <= 0) fail(`等待共享博客锁超时：${lock}`);
+        waitForSharedBlogLock(blogRepo, remaining);
     }
+    const lockIdentity = fs.lstatSync(lock);
     const ownerPath = path.join(lock, 'owner.json'); const timestamp = new Date().toISOString();
     const body = { contract: 'paper-digest-blog-repository-lock-v1', version: 1,
         owner: `historical-direct-publication:${process.pid}`, pid: process.pid,
         hostname: os.hostname(), token, startedAt: timestamp, heartbeatAt: timestamp, leaseSeconds: 7200 };
     const owner = { ...body, ownerSha256: sha256(Buffer.from(`${JSON.stringify(canonical(body))}\n`, 'utf8')) };
-    const fd = fs.openSync(ownerPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-    try { fs.writeFileSync(fd, `${JSON.stringify(canonical(owner))}\n`); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    const ownerBytes = Buffer.from(`${JSON.stringify(canonical(owner))}\n`);
+    let fd; let ownerIdentity;
+    try {
+        fd = fs.openSync(ownerPath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
+        ownerIdentity = fs.fstatSync(fd);
+        fs.writeFileSync(fd, ownerBytes); fs.fsyncSync(fd);
+    } catch (error) {
+        if (fd !== undefined) { fs.closeSync(fd); fd = undefined; }
+        try { cleanupCreatedBlogLock(lock, lockIdentity, ownerIdentity); }
+        catch (cleanupError) { throw new AggregateError([error, cleanupError], `博客锁创建失败且不能安全清理：${cleanupError.message}`); }
+        throw error;
+    } finally { if (fd !== undefined) fs.closeSync(fd); }
     try { return callback(); }
     finally {
-        const current = strictJsonFile(ownerPath, 'shared blog lock owner').value;
-        if (current.token !== token || current.pid !== process.pid || current.hostname !== os.hostname()
-            || fs.readdirSync(lock).sort().join('\0') !== 'owner.json') fail('shared blog lock ownership changed before release');
+        const namedLock = fs.lstatSync(lock); const namedOwner = fs.lstatSync(ownerPath);
+        const current = strictJsonFile(ownerPath, 'shared blog lock owner');
+        if (namedLock.dev !== lockIdentity.dev || namedLock.ino !== lockIdentity.ino
+            || namedOwner.dev !== ownerIdentity.dev || namedOwner.ino !== ownerIdentity.ino
+            || !current.bytes.equals(ownerBytes)
+            || current.value.token !== token || current.value.pid !== process.pid || current.value.hostname !== os.hostname()
+            || fs.readdirSync(lock).sort().join('\0') !== 'owner.json') fail('共享博客锁在释放前已换主或文件身份发生变化');
         fs.unlinkSync(ownerPath); fs.rmdirSync(lock);
     }
 }

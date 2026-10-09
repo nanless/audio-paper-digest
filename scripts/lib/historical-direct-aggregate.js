@@ -674,7 +674,7 @@ function renderAggregate(scope, key, members, options = {}) {
     if (!classificationMetadata || members.some(item => stableHash(item.canonical.tagMetadata) !== stableHash(classificationMetadata))) {
         fail(`汇总 ${scope}:${key} 的标签元数据缺失，或各篇论文的标签元数据不一致。`);
     }
-    let output = `---\ntitle: "${display}"\ndraft: false\n`;
+    let output = `---\ntitle: ${JSON.stringify(display)}\ndraft: false\n`;
     output += `tags: ${JSON.stringify(tags)}\ncategories: ["论文速递"]\npaper_digest_pipeline_owned: true\npaper_digest_page_type: index\n`;
     output += 'paper_digest_reader_quality: "reader-facing-v3"\n';
     output += `paper_digest_tags_contract: "${tagRules.flatCompatContract}"\n`;

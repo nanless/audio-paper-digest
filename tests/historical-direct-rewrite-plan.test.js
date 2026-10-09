@@ -432,6 +432,7 @@ test('直接 arXiv 的登记、分析和暂存绑定同一代已保存并核验�
     });
     const first = await prepare(1); const arxiv = plan.queue.find(item => item.paperId.startsWith('arxiv:'));
     const skipped = await planner.prepareDirectSources({ plan, apply: true, queue: 'arxiv', maxPapers: 1,
+        completedPaperIds: first.arxiv.filter(item => item.status === 'ready').map(item => item.paperId),
         freshArxivSourceRoot: sourceRoot, freshArxivFailureHandoffRoot: handoffRoot, arxivGeneration: 1 });
     assert.equal(skipped.selectedCount, 0); assert.equal(skipped.processedCount, 0);
     const registry = planner.buildRegistry(plan, { sourcePreparation: first });
@@ -600,4 +601,60 @@ test('实际冻结清单和 v5 目录把每个保留的会议正式记录恰好�
     assert.equal(plan.paperPageCoverage.frozenPaperPages, inventory.value.counts.papers);
     assert.equal(plan.paperPageCoverage.projectedPaperPages, plan.projectedPages.length);
     assert.equal(plan.paperPageCoverage.uncoveredFrozenPaperPages, plan.uncoveredFrozenPaperPages.length);
+});
+
+
+test('分来源续跑接受同计划另一队列的就绪检查点，但不接受未知论文', async t => {
+    const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
+    const mapping = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog,
+        catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
+    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
+        inventory: f.inventory, conferencePageProjections: mapping });
+    const arxivId = plan.queue.find(item => item.route.kind === 'arxiv-fresh-fetch').paperId;
+    const conferenceIds = plan.queue.filter(item => item.route.kind === 'conference-local-pdf').map(item => item.paperId);
+    const conference = await planner.prepareDirectSources({ plan, queue: 'conference', apply: false,
+        completedPaperIds: [arxivId, conferenceIds[0]] });
+    assert.deepEqual(conference.selectedPaperIds, [conferenceIds[1]]);
+    const arxiv = await planner.prepareDirectSources({ plan, queue: 'arxiv', apply: false,
+        completedPaperIds: conferenceIds });
+    assert.deepEqual(arxiv.selectedPaperIds, [arxivId]);
+    await assert.rejects(planner.prepareDirectSources({ plan, queue: 'conference', apply: false,
+        completedPaperIds: ['arxiv:9999.99999'] }), /已完成的来源 paper ID 无效/);
+    await assert.rejects(planner.prepareDirectSources({ plan, queue: 'conference', apply: false,
+        paperIds: [arxivId] }), /不在 queue=conference 内/);
+});
+
+
+test('封存来源已写入但进度未登记时，有界续跑补齐就绪状态且不重新抓取', async t => {
+    const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
+    const mapping = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog,
+        catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
+    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
+        inventory: f.inventory, conferencePageProjections: mapping });
+    const planFile = path.join(f.root, 'direct-plan.json'); writeJson(planFile, plan);
+    const sourceRoot = path.join(f.root, 'fetched-arxiv-sources');
+    const handoffRoot = path.join(f.root, 'handoffs');
+    const arxiv = plan.queue.find(item => item.route.kind === 'arxiv-fresh-fetch');
+    await freshSource.captureFreshArxivRewriteSource({ rootDir: sourceRoot, arxivId: arxiv.route.arxivId, generation: 1 }, {
+        fetchText: async id => ({ text: `Fresh source for ${id}`, source: 'html', sourceId: id,
+            url: `https://arxiv.org/html/${id}`, fetchedAt: '2026-09-07T00:00:01.000Z' }),
+        fetchPdf: async id => ({ bytes: Buffer.from('%PDF-1.4\n%%EOF\n'), url: `https://arxiv.org/pdf/${id}.pdf`,
+            fetchedAt: '2026-09-07T00:00:02.000Z' })
+    });
+    let networkCalls = 0;
+    const run = () => schedulerCli.main(['--apply', '--plan', planFile, '--queue', 'arxiv', '--max-papers', '1'], {
+        files: { freshArxivFetchedSourcesDir: sourceRoot, historicalArxivFreshFailureHandoffDir: handoffRoot },
+        dependencies: { captureFreshArxivRewriteSource: options => freshSource.captureFreshArxivRewriteSource(options, {
+            fetchText: async () => { networkCalls++; throw Error('不应重新抓取'); },
+            fetchPdf: async () => { networkCalls++; throw Error('不应重新抓取'); }
+        }) }
+    });
+    const recovered = await run();
+    assert.equal(recovered.processedCount, 1);
+    assert.equal(recovered.arxiv[0].result.status, 'recovered');
+    assert.equal(directControl.readSourceStatus({ sourceRoot, plan, generation: 1 }).status.entries
+        .find(item => item.paperId === arxiv.paperId).status, 'ready');
+    const skipped = await run();
+    assert.equal(skipped.processedCount, 0);
+    assert.equal(networkCalls, 0);
 });

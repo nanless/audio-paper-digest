@@ -990,10 +990,12 @@ async function prepareDirectSources({ plan, queue = 'all', arxivGeneration = 1,
     const known = new Set(selected.map(item => item.paperId)); const unknown = paperIds.filter(id => !known.has(id));
     if (unknown.length) fail(`来源 paper ID 未知或不在 queue=${queue} 内：${unknown.join(', ')}`);
     if (paperIds.length) { const requested = new Set(paperIds); selected = selected.filter(item => requested.has(item.paperId)); }
-    if (!Array.isArray(completedPaperIds) || completedPaperIds.some(id => !known.has(id))
+    // 检查点覆盖整个计划；切换队列时仍须接受另一来源已完成的论文。
+    const plannedPaperIds = new Set(normalized.queue.map(item => item.paperId));
+    if (!Array.isArray(completedPaperIds) || completedPaperIds.some(id => !plannedPaperIds.has(id))
         || new Set(completedPaperIds).size !== completedPaperIds.length) fail('已完成的来源 paper ID 无效');
+    const completed = new Set(completedPaperIds);
     if (!paperIds.length && completedPaperIds.length) {
-        const completed = new Set(completedPaperIds);
         // 会议核验没有单独的持久来源包，所以它的加锁状态检查点按有界批次推进。
         // arXiv 的 ready 条目会一直留在这里，直到下面现有的筛选器重新核对完那组
         // 恰好四个文件的 generation。
@@ -1004,7 +1006,8 @@ async function prepareDirectSources({ plan, queue = 'all', arxivGeneration = 1,
         if (!paperIds.length && typeof freshArxivSourceRoot === 'string' && fs.existsSync(freshArxivSourceRoot)) {
             const fresh = require('./fresh-arxiv-rewrite-source.js');
             selected = selected.filter(item => {
-                if (item.route.kind !== 'arxiv-fresh-fetch'
+                // 封存成功后可能尚未来得及保存进度；这类条目须重放来源并补登记。
+                if (item.route.kind !== 'arxiv-fresh-fetch' || !completed.has(item.paperId)
                     || !fresh.generationExists(freshArxivSourceRoot, item.route.arxivId, arxivGeneration)) return true;
                 fresh.readFreshArxivRewriteSource({ rootDir: freshArxivSourceRoot,
                     arxivId: item.route.arxivId, generation: arxivGeneration });

@@ -561,3 +561,23 @@ test('直接汇总生成完整的本地留存会议汇总', async t => {
     assert.deepEqual(output.map(item => item.scope), ['conference-task', 'conference']);
     assert.match(fs.readFileSync(output[0].pageFilename, 'utf8'), /英文题目/);
 });
+
+
+test('会议任务标题的引号、反斜杠和换行按 YAML 字符串保存', () => {
+    const yaml = require('yaml');
+    const member = {
+        rank: 1, item: { paperId: 'conference:icassp:2026:icassp-arnumber:100', route: { kind: 'conference-local-pdf' } },
+        source: {}, renderedPages: [{ primaryUrl: 'https://example.test/paper/' }],
+        canonical: { labels: ['语音识别'], primaryTaskLabel: '语音识别', primaryMethodLabel: '神经网络',
+            tagMetadata: { selectionContract: 'fixture', registryVersion: 'v1', registrySha256: 'a'.repeat(64) },
+            readerTitle: '测试论文', title: 'Example paper', score: 8, scoreDimensions: [], authors: [], resources: [],
+            rankBucket: 'A', documentType: '研究', summary: '测试摘要' }
+    };
+    for (const displayLabel of ['语音识别', '语音 "识别"', String.raw`C:\audio\new`, '语音\n识别']) {
+        const markdown = direct.renderAggregate('conference-task', 'task-001', [member],
+            { conferenceKey: 'icassp-2026', displayLabel });
+        const frontMatter = yaml.parse(markdown.split('---\n')[1]);
+        assert.equal(frontMatter.title, `ICASSP-2026 · ${displayLabel}`);
+        assert.equal(frontMatter.draft, false);
+    }
+});
