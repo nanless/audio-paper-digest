@@ -8,9 +8,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const recovery = require('./conference-process-recovery.js');
+const { writeImmutableFile } = require('./immutable-file.js');
 const promptTextVersions = require('./prompt-text-versions.js');
 
 const CONTRACT = 'conference-process-v2';
+const PROCESS_OPERATION_LOCK_HELD = Symbol('conference-process-operation-lock-held');
 const LEGACY_CONTRACT = 'conference-process-v1';
 const COMPLETION_CONTRACT = 'conference-process-completion-receipt-v2';
 const LEGACY_COMPLETION_CONTRACT = 'conference-process-completion-receipt-v1';
@@ -132,6 +134,8 @@ function currentImplementationFiles() {
     });
     files.push(PROMPT_TEXT_VERSIONS_FILE);
     files.push('scripts/lib/prompt-rendering-contract.js');
+    files.push('scripts/lib/immutable-file.js');
+    files.push('scripts/lib/model-text-sanitization.js');
     files.push(...SOURCE_VERIFICATION_FILES);
     return files;
 }
@@ -262,18 +266,14 @@ function deterministicUuid(...parts) {
 }
 function stateDigest(value) { const body = clone(value); delete body.stateSha256; return stableHash(body); }
 function exactFile(filename, bytes) {
-    const payload = Buffer.from(bytes); fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
-    try {
-        const fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-        try { fs.writeFileSync(fd, payload); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        const stat = fs.lstatSync(filename);
-        if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1
-            || (stat.mode & 0o777) !== 0o600 || !fs.readFileSync(filename).equals(payload)) {
-            throw new Error(`Conference process refuses to overwrite different bytes: ${filename}`);
-        }
+    fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
+    const existing = fs.lstatSync(filename, { throwIfNoEntry: false });
+    if (existing && (existing.mode & 0o777) !== 0o600) {
+        throw new Error(`会议进程不可变文件权限必须为 0600：${filename}`);
     }
+    writeImmutableFile(filename, bytes, (message, details = {}) => {
+        throw Object.assign(new Error(`会议进程不可变文件写入失败：${message}：${filename}`), details);
+    });
     return filename;
 }
 function safeProcessDirectory(root, processId, create = false) {
@@ -648,6 +648,14 @@ function sealOneSource(context, member, deps, createdAt, { replayExisting = true
     const metadataBytes = canonicalBytes(record); const candidate = replay.match.candidates[0];
     // 优先用已保存并核验的 PDF，但把它的字节重新绑定到当前官方的 discovery SHA。
     const sealedPdf = path.join(root, names.pdf);
+    const sealedStat = fs.lstatSync(sealedPdf, { throwIfNoEntry: false });
+    if (sealedStat?.isFile() && !sealedStat.isSymbolicLink() && sealedStat.nlink === 2) {
+        // 只有重新核验官方原 PDF 后，才允许恢复同字节的已退出写者链接。
+        const official = deps.discovery.safeAbsoluteFile(path.join(discovery.candidateManifest.pdfRoot, candidate.path),
+            `official PDF for ${member.paperId}`, deps.discovery.MAX_PDF_BYTES);
+        if (sha256(official.bytes) !== candidate.sha256) throw new Error(`论文 ${member.paperId} 的官方 PDF 哈希与发现记录不一致。`);
+        exactFile(sealedPdf, official.bytes);
+    }
     const pdfLoaded = deps.discovery.safeAbsoluteFile(fs.existsSync(sealedPdf) ? sealedPdf : path.join(discovery.candidateManifest.pdfRoot, candidate.path),
         `official PDF for ${member.paperId}`, deps.discovery.MAX_PDF_BYTES);
     if (sha256(pdfLoaded.bytes) !== candidate.sha256) throw new Error(`论文 ${member.paperId} 的官方 PDF 哈希与发现记录不一致。`);
@@ -777,6 +785,11 @@ function prepareShared(context, deps, createdAt) {
         }
     } else {
         if (fs.existsSync(planFile)) {
+            const planStat = fs.lstatSync(planFile);
+            if (planStat.isFile() && !planStat.isSymbolicLink() && planStat.nlink === 2) {
+                // 当前计划由已重放的来源、导入凭证、词表和完整成员集合推导。
+                exactFile(planFile, canonicalBytes(planDoc));
+            }
             const savedPlan = deps.plan.normalizePlan(deps.plan.readRuntimeJson(files.conferenceSourceLedgerDir, names.plan).value);
             if (savedPlan.version === deps.plan.LEGACY_VERSION) throw new Error('旧会议计划缺少完整运行文件和凭证，请保留原文件并使用新的运行标识。');
         }
@@ -863,14 +876,16 @@ function assertSourceContinuity(state, shared) {
     }
 }
 
-async function runConferenceProcessLocked(options, deps, context, processId, directory) {
+async function runConferenceProcessLocked(options, deps, context, processId, directory, operationLockProof) {
     assertRuntimeAuthorityUnchanged(context, deps, 'before shared preparation');
     const stateFile = path.join(directory, 'state.json');
     const expected = { authority: context.authority, paperIds: context.members.map(item => item.paperId).sort() };
+    // 只有本模块外层持锁回调的私有证明允许首次更新恢复同机已退出进程的内部状态锁。
     let state = deps.engine.updateJsonFileLocked(stateFile, current => {
         if (current) { assertState(current, expected); return undefined; }
         return initialState(context.authority, context.members, processId, deps.now());
-    }, { allowMissing: true });
+    }, { allowMissing: true, ...(operationLockProof === PROCESS_OPERATION_LOCK_HELD
+        ? { recoveryPolicy: deps.engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY } : {}) });
     state = assertState(state || JSON.parse(fs.readFileSync(stateFile)), expected);
     const publishReviewQueue = current => {
         const queue = buildTagReviewQueue(current);
@@ -1056,7 +1071,7 @@ async function runConferenceProcess(options, overrides = {}) {
     const withProcessLock = deps.withProcessLock
         || ((target, callback, lockOptions) => deps.engine.withFileLock(target, callback, lockOptions));
     return withProcessLock(path.join(directory, '.operation'), () => (
-        runConferenceProcessLocked(options, deps, context, processId, directory)
+        runConferenceProcessLocked(options, deps, context, processId, directory, PROCESS_OPERATION_LOCK_HELD)
     ), { recoveryPolicy: deps.engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
 }
 
