@@ -48,7 +48,7 @@ function fixture(t) {
         instance.paths = Module._nodeModulePaths(path.dirname(filename));
         const normalRequire = instance.require.bind(instance);
         instance.require = request => {
-            if (request === './historical-direct-rewrite-plan.js') return { verifyConferenceWriterInputs: () => ({ sources: 1 }) };
+            if (request === './historical-direct-rewrite-plan.js') return { ...normalRequire(request), verifyConferenceWriterInputs: () => ({ sources: 1 }) };
             if (request === './historical-direct-rewrite-runner.js') return {
                 stableHash: io.stableHash, sourcePrerequisiteSnapshot: () => ({ status: 'ready' }) };
             if (request === './historical-direct-tag-supplement.js') return {

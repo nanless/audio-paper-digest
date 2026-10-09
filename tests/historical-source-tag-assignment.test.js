@@ -453,3 +453,30 @@ test('真实文件导出与续跑保留旧分类、子证明及原报告字节�
     await assert.rejects(fixture.exportApi.exportCheckpoint(options), /读取页面的 SHA 与计划不一致/);
     assert.equal(fixture.calls.length, 0);
 });
+
+test('旧计划的错误正文身份不能进入新标签请求', async t => {
+    let f;
+    f = await sourceClassificationFixture(t, call => call.maxTokens === 3000 ? '{"accepted":true,"issues":[]}' : f.normalResponse);
+    const page=f.item.pages[0];
+    page.mapping='frozen-single-arxiv-identity-hint';
+    page.historicalArxivLink={hintSources:['body:arxiv-link']};
+    const bad='---\ntitle: Historical paper\n---\nhttps://arxiv.org/abs/2601.000019\n';
+    f.fs.writeFileSync(f.path.join(f.options.blogRoot,f.pagePath),bad);page.pageContentSha256=f.sha(bad);
+    await assert.rejects(f.run(),/旧截断提示/);
+    assert.equal(f.calls.length,0);assert.equal(f.fs.existsSync(f.options.outputDirectory),false);
+});
+
+test('既有分类缓存导出也会重新核验旧计划的正文身份', async t => {
+    let f;
+    f=await sourceClassificationFixture(t,call=>call.maxTokens===3000?'{"accepted":true,"issues":[]}':f.normalResponse);
+    const result=await f.run();
+    const checkpoint={contract:f.api.CONTRACT+'-checkpoint',processed:1,decisions:result.report.decisions,
+        failures:result.report.failures,supplement:result.supplement};
+    const checkpointName='checkpoint-000001-'+require('../scripts/lib/historical-direct-rewrite-runner.js').stableHash(checkpoint).slice(0,16)+'.json';
+    f.fs.writeFileSync(f.path.join(f.options.outputDirectory,checkpointName),JSON.stringify(checkpoint),{mode:0o600});
+    const page=f.item.pages[0];page.mapping='frozen-single-arxiv-identity-hint';
+    page.historicalArxivLink={hintSources:['body:arxiv-link']};
+    const calls=f.calls.length;
+    await assert.rejects(f.exportApi.exportCheckpoint({...f.options,checkpointFile:f.path.join(f.options.outputDirectory,checkpointName)}),/旧截断提示/);
+    assert.equal(f.calls.length,calls);
+});

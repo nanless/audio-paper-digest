@@ -51,7 +51,7 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
     const signalHandlers = new Map(['SIGINT', 'SIGTERM'].map(signal => [signal, () => onSignal(signal)]));
     for (const [signal, handler] of signalHandlers) process.on(signal, handler);
     try {
-        const result = await (runtime.run || runner.runDirectRewrite)({ ...options, plan,
+        const result = await (runtime.run || runner.runDirectRewrite)({ ...options, plan, blogRoot: runtime.blogRoot || Config.PUBLISH_CONFIG.blogRepo,
             registryRoot: files.historicalDirectRewriteRegistryDir,
             executionRoot: files.historicalDirectRewriteExecutionDir,
             stagingRoot: files.historicalDirectRewriteStagingDir,

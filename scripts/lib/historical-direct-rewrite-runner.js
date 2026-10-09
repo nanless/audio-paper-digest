@@ -1937,6 +1937,7 @@ async function runDirectRewrite(options = {}, dependencies = {}) {
     if (options.apply !== true) return { status: 'dry-run', planSha256: plan.planSha256, arxivGeneration,
         paperCount: selected.length, paperIds: selected.map(item => item.paperId), selection, pauseFile, operationLockTarget: lockTarget,
         operationLockPath: lockTarget === null ? null : `${lockTarget}.lock`, sourcePrerequisite };
+    planApi.verifySelectedHistoricalIdentityLinks(selected, options.blogRoot);
     for (const key of ['registryRoot', 'executionRoot', 'stagingRoot', 'freshArxivSourceRoot', 'publicationMetadataRoot']) {
         if (typeof options[key] !== 'string' || !path.isAbsolute(options[key])) fail(`${key} is required`);
     }

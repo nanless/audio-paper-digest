@@ -33,7 +33,7 @@ function main(argv = process.argv.slice(2), runtime = {}) {
         || !path.isAbsolute(files.historicalDirectRewriteUnprojectedReportDir)) {
         throw new Error('historicalDirectRewritePlanDir 和 historicalDirectRewriteUnprojectedReportDir 必须是已配置的绝对路径');
     }
-    const plan = api.buildFromFiles(options); const queues = api.splitQueues(plan);
+    const plan = api.buildFromFiles({ ...options, blogRoot: runtime.blogRoot || Config.PUBLISH_CONFIG.blogRepo }); const queues = api.splitQueues(plan);
     const result = { status: options.apply ? null : 'dry-run', arxivFreshFetch: queues.arxiv.length,
         conferenceLocalPdf: queues.conference.length, canonicalPapers: plan.queue.length,
         projectedPages: plan.projectedPages.length, unprojectedCatalogEntries: plan.unprojectedCatalogEntries.length,

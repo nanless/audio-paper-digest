@@ -496,8 +496,17 @@ test('真实 Python 新扫描和原实现两版扫描经配对凭证进入 Node�
         assert.equal(snapshot.ledger.pageSetSha256, api.stableHash(prior.pages));
         assert.deepEqual(fs.readFileSync(ledgerFile), ledgerRaw);
         assert.deepEqual(fs.readFileSync(receiptFile), receiptRaw);
+        if (label === 'current') {
+            const oldV5 = structuredClone(prior);
+            oldV5.policy.contract = 'historical-page-scan-policy-v5';
+            oldV5.policy.identityHints = 'frontmatter-filename-explicit-links-v1';
+            rehashLedger(oldV5);
+            const unchanged = JSON.stringify(oldV5);
+            assert.deepEqual(api.validateHistoricalLedger(oldV5), oldV5);
+            assert.equal(JSON.stringify(oldV5), unchanged);
+        }
         const newFormat = label === 'current';
-        assert.equal(prior.policy.contract, 'historical-page-scan-policy-' + (newFormat ? 'v5' : label));
+        assert.equal(prior.policy.contract, 'historical-page-scan-policy-' + (newFormat ? 'v6' : label));
         for (const page of prior.pages) {
             assert.equal(page.contentSha256, sha(fs.readFileSync(path.join(output, 'fixture-blog', page.path))));
             assert.equal(Object.hasOwn(page, 'legacyTagRouteCandidates'), newFormat);

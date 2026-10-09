@@ -162,3 +162,35 @@ test('归一化器拒绝篡改和未知字段', t => {
     assert.throws(() => api.normalize({ ...binding, arxivId: '2605.00001' }), /binding is invalid/);
     assert.throws(() => api.normalize({ ...binding, unexpected: true }), /unknown or missing fields/);
 });
+
+test('正文单一身份重核拒绝过长 OpenReview ID，保留完整旧链接且不修改清单', t => {
+    const root = fixture(t), relative = 'content/posts/old-review.md';
+    const id = 'a'.repeat(128);
+    const build = suffix => {
+        const raw = `---\ntitle: 旧论文\n---\n[来源](https://openreview.net/forum?id=${id}${suffix})\n`;
+        writePage(root, relative, raw);
+        return { pages: [{ kind: 'paper', path: relative, contentSha256: hash(raw),
+            identityHints: { status: 'single', candidates: [{ scheme: 'openreview-forum-id', value: id,
+                sources: ['body:openreview-link'] }] } }] };
+    };
+    api.verifyBodyOnlyIdentityHints({ inventory: build('.'), blogRoot: root });
+    assert.throws(() => api.verifyBodyOnlyIdentityHints({ inventory: build('.evil'), blogRoot: root }), /旧截断提示/);
+    const good = build('&noteId=reply'), frozen = JSON.stringify(good);
+    api.verifyBodyOnlyIdentityHints({ inventory: good, blogRoot: root });
+    assert.equal(JSON.stringify(good), frozen);
+    assert.throws(() => api.verifyBodyOnlyIdentityHints({ inventory: build('b'), blogRoot: root }), /旧截断提示/);
+    const missing = build(''); fs.unlinkSync(path.join(root, relative));
+    assert.throws(() => api.verifyBodyOnlyIdentityHints({ inventory: missing, blogRoot: root }), /cannot read/);
+});
+
+test('正文 arXiv 链接容许句末句点，不能把扩展后缀当作句末', t => {
+    const root = fixture(t), relative = 'content/posts/old-arxiv.md';
+    for (const [suffix, accepted] of [['.', true], ['v2.pdf.', true], ['.evil', false], ['.pdf123', false]]) {
+        const raw = `---\ntitle: 旧论文\n---\n原文见 https://arxiv.org/abs/2601.12345${suffix} 后续说明。\n`;
+        writePage(root, relative, raw);
+        const inventory = { pages: [{ kind: 'paper', path: relative, contentSha256: hash(raw),
+            identityHints: { status: 'single', candidates: [{ scheme: 'arxiv', value: '2601.12345', sources: ['body:arxiv-link'] }] } }] };
+        const check = () => api.verifyBodyOnlyIdentityHints({ inventory, blogRoot: root });
+        if (accepted) check(); else assert.throws(check, /旧截断提示/);
+    }
+});

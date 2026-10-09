@@ -167,7 +167,7 @@ class HistoricalPageScanTest(unittest.TestCase):
                             and route["status"] == "unverified"
                             for route in paper["legacyTagRouteCandidates"]))
         self.assertNotIn("legacyTaxonomyCandidates", paper)
-        self.assertEqual(ledger["policy"]["contract"], "historical-page-scan-policy-v5")
+        self.assertEqual(ledger["policy"]["contract"], "historical-page-scan-policy-v6")
         self.assertEqual(ledger["policy"]["tagRoutes"], "unverified-candidates-v3")
         self.assertRegex(paper["pageId"], r"^page:[a-f0-9]{64}$")
         self.assertEqual(paper["publishedDate"], "2026-01-01")
@@ -233,7 +233,7 @@ class HistoricalPageScanTest(unittest.TestCase):
         run_git(self.repo, 'commit', '-m', 'current tag frontmatter')
         current = scan_historical_pages(self.repo, require_clean_main=True)
         self.assertEqual(current['policy'], page_scan.SCAN_POLICY)
-        self.assertEqual(current['policy']['contract'], 'historical-page-scan-policy-v5')
+        self.assertEqual(current['policy']['contract'], 'historical-page-scan-policy-v6')
         self.assertIn('tagRoutes', current['policy'])
         self.assertNotIn('taxonomyRoutes', current['policy'])
         paper = next(page for page in current['pages'] if page['path'].endswith('paper-2601-00001.md'))
@@ -332,6 +332,38 @@ class HistoricalPageScanTest(unittest.TestCase):
         self.assertFalse((reserved / "reserved.json").exists())
         self.assertFalse((reserved / "reserved.receipt.json").exists())
         run_git(self.repo, "checkout", "--", ".")
+
+    def test_identity_urls_never_truncate_an_illegal_identifier(self):
+        for url in ("https://arxiv.org/abs/2601.123456", "https://arxiv.org/pdf/2601.12345v0",
+                    "https://arxiv.org/abs/2601.12345/extra", "https://arxiv.org/abs/2601.12345.evil",
+                    "https://arxiv.org/pdf/2601.12345.pdf123", "https://arxiv.org/abs/2601.12345garbage",
+                    "https://openreview.net/forum?id=" + "a" * 129,
+                    "https://openreview.net/pdf?id=valid_123/extra"):
+            with self.subTest(url=url):
+                self.assertEqual(page_scan._identity_hints(Path("plain.md"), {}, url)["status"], "none")
+        for url, value in (("https://arxiv.org/abs/0704.0001", "0704.0001"),
+                           ("https://arxiv.org/abs/2601.12345.", "2601.12345"),
+                           ("https://arxiv.org/pdf/2601.12345v12.pdf.", "2601.12345"),
+                           ("https://openreview.net/forum?id=valid_123.", "valid_123"),
+                           ("https://arxiv.org/pdf/2601.12345v12.pdf", "2601.12345"),
+                           ("https://openreview.net/forum?id=valid_123&noteId=abc", "valid_123")):
+            with self.subTest(url=url):
+                hints = page_scan._identity_hints(Path("plain.md"), {}, "[论文](" + url + ")")
+                self.assertEqual(hints["candidates"][0]["value"], value)
+
+    def test_prior_v5_ledger_is_read_only_without_resigning(self):
+        current = scan_historical_pages(self.repo, require_clean_main=True)
+        prior = copy.deepcopy(current)
+        prior["policy"] = copy.deepcopy(page_scan.LEGACY_SCAN_POLICY_V5)
+        prior["ledgerSha256"] = page_scan.stable_hash({key: value for key, value in prior.items() if key != "ledgerSha256"})
+        # fixture 页面链接均完整，v5/v6 页面内容与摘要完全相同；这里只还原旧策略信封。
+        raw, receipt, receipt_raw = page_scan.build_receipt(prior, "v5.json")
+        output = self.root / "prior-v5"; output.mkdir()
+        ledger_path = output / "v5.json"; receipt_path = output / "v5.receipt.json"
+        ledger_path.write_bytes(raw); receipt_path.write_bytes(receipt_raw)
+        loaded, loaded_receipt = load_inventory_pair(ledger_path, receipt_path)
+        self.assertEqual(loaded, prior); self.assertEqual(loaded_receipt, receipt)
+        self.assertEqual(ledger_path.read_bytes(), raw); self.assertEqual(receipt_path.read_bytes(), receipt_raw)
 
     def test_failed_reservation_keeps_replacement_and_cleans_only_owned_file(self):
         ledger = scan_historical_pages(self.repo, require_clean_main=True)

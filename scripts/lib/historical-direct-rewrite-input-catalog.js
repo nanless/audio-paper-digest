@@ -266,6 +266,7 @@ function buildScopedCatalog({ conferenceManifest, inventoryFile, blogRoot } = {}
     const conference = typeof conferenceManifest?.filename === 'string' ? conferenceManifest : readStableJson(conferenceManifest, 'approved conference local-source manifest');
     const inventory = typeof inventoryFile?.filename === 'string' ? inventoryFile : readStableJson(inventoryFile, 'frozen historical inventory');
     const normalizedInventory = conferencePageMappingsApi.normalizeInventory(inventory.value);
+    dailyPrimaryArxiv.verifyBodyOnlyIdentityHints({ inventory: inventory.value, blogRoot });
     const dailyPrimaryArxivBindings = dailyPrimaryArxivBindingsFromFrozenInventory(inventory.value, blogRoot);
     const arxiv = arxivEntriesFromFrozenInventory(inventory.value, dailyPrimaryArxivBindings);
     const scopedConference = scopeConferenceEntries({ conferenceManifest: conference.value, inventory: inventory.value, blogRoot });

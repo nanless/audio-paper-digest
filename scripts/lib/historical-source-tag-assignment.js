@@ -235,6 +235,7 @@ async function classifyRun(options) {
         selected=selected.filter(i=>options.onlyPaperIds.includes(i.paperId));
     }
     selected=selected.slice(0,options.limit||plan.queue.length);
+    planApi.verifySelectedHistoricalIdentityLinks(selected, options.blogRoot);
     runner.sourcePrerequisiteSnapshot({ sourceRoot: config.FILES.freshArxivFetchedSourcesDir, plan, generation: 1, selected, required: true });
     const root = options.outputDirectory;
     supplementApi.writeImmutable(root,'selection.json',{contract:CONTRACT+'-selection',planSha256:plan.planSha256,

@@ -177,7 +177,8 @@ const pageKey = value => `page:${sha(value)}`;
 function write(filename, value) { fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 }); fs.writeFileSync(filename, value, { mode: 0o600 }); return sha(Buffer.from(value)); }
 function json(filename, value) { const bytes = Buffer.from(JSON.stringify(value)); write(filename, bytes); return sha(bytes); }
 function page(root, relative, title, scope, hint = { status: 'none', candidates: [] }) {
-    const content = `---\ntitle: ${title}\ndate: 2026-01-01\n---\nPOISON_OLD_BLOG_BODY\n`;
+    const identityLink = hint.status === 'single' && hint.candidates[0]?.scheme === 'arxiv' ? `\n[arXiv](https://arxiv.org/abs/${hint.candidates[0].value})` : '';
+    const content = `---\ntitle: ${title}\ndate: 2026-01-01\n---\nPOISON_OLD_BLOG_BODY${identityLink}\n`;
     return { pageId: pageKey(relative), path: relative, contentSha256: write(path.join(root, relative), content), primaryUrl: 'https://example.test/page',
         cohortDate: '2026-01-01', kind: 'paper', scope, identityHints: hint };
 }
@@ -233,7 +234,7 @@ function fixture(t) {
     ] };
     const catalogSha = sha(Buffer.from(JSON.stringify(catalog)));
     const conferencePageProjections = conferencePageMappingsApi.buildConferencePageMappings({ catalog, catalogFileSha256: catalogSha, inventory, blogRoot: blog });
-    const plan = planner.buildDirectRewritePlan({ catalog, catalogFileSha256: catalogSha, inventory, conferencePageProjections });
+    const plan = planner.buildDirectRewritePlan({ blogRoot: blog, catalog, catalogFileSha256: catalogSha, inventory, conferencePageProjections });
     // 大多数 runner 测试关心的是分析行为，所以都从
     // 模拟成功的调度阶段之后开始。下面另有专门的前置条件测试，
     // 会显式删掉或改动这个参与自哈希的状态。
@@ -247,7 +248,7 @@ function fixture(t) {
     }
     return { root, plan };
 }
-function files(root) { return { registryRoot: path.join(root, 'runtime', 'registry'), executionRoot: path.join(root, 'runtime', 'executions'),
+function files(root) { return { blogRoot: path.join(root, 'blog'), registryRoot: path.join(root, 'runtime', 'registry'), executionRoot: path.join(root, 'runtime', 'executions'),
     stagingRoot: path.join(root, 'runtime', 'staging'), freshArxivSourceRoot: path.join(root, 'runtime', 'fetched-arxiv'),
     freshArxivFailureHandoffRoot: path.join(root, 'runtime', 'arxiv-failure-handoffs') }; }
 function allFiles(root) {

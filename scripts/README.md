@@ -127,6 +127,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/historical-arxiv-analysis.js` | Node 库 | 将现场核验的 arXiv 全文和官方 Atom 元数据用于可恢复的独立原文分析运行，不读取旧生成正文。 |
 | `lib/historical-arxiv-analysis-scheduler.js` | Node 库 | 仅用于旧备用路线：从 crosswalk 中 verified 的唯一 arXiv 身份组生成稳定 run ID；不调度正常 direct-local 历史重写。 |
 | `lib/historical-arxiv-batch.js` | Node 库 | 备用路线只读取命名、不可变的新 arXiv 获取失败交接文件。核验其中的历史清单、页面 SHA 和非标题链接后，仅对其列出页面执行 CAS；不扫描 pending hint。 |
+| `lib/immutable-file.js` | Node 库 | 原子保存不可变文件；只回收同机已退出写者留下且 inode 与正式文件一致的临时硬链接，拒绝覆盖或清理其他文件。 |
 | `lib/historical-archive-crawl-authority.js` | Node 库 | 用已有归档抓取记录的稳定 arXiv ID 和输入 SHA 提供身份依据，不提供正文、图片或旧分析。 |
 | `lib/historical-local-crawl-authority.js` | Node 库 | 汇总归档与当前本地抓取记录中的稳定 arXiv 身份；不联网，不读取正文。 |
 | `lib/historical-archive-crawl-batch.js` | Node 库 | 只读审查已有归档抓取记录。旧 crosswalk 写入功能已停用，调用时直接拒绝。 |
@@ -388,7 +389,7 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 
 旧 `paper-taxonomy-flat-tags-compat-v1` 记录按原声明读取。新字段族可能包含上一批已保存的旧协议，读取时不改写；新生成只使用 `paper-tag-flat-tags-v2`。两版标签含义相同，未知协议不能通过已核验标签判断。会议汇总可以读取两版合法成员，但新汇总页面明确写新版，不沿用首篇成员的旧协议。
 旧页面审查按页面声明的协议重建预期标签和附属资料字节；原页面、资料及来源 SHA 仍逐项核验。
-新的历史扫描策略为 `historical-page-scan-policy-v5`。页面用 `legacyTagRouteCandidates` 保存旧标签的候选链接，候选中的 `routeGroup` 区分 tags 和 categories；这些链接还没核验，不能当作分类已通过的依据。`tagRoutes` 为 `unverified-candidates-v3`，发布证据仍使用原 v4 字段范围。
+新的历史扫描策略为 `historical-page-scan-policy-v6`，只接受完整的来源 ID，不会截短过长 URL 中的 arXiv 或 OpenReview 标识。旧 v3/v4/v5 清单仍按原字节只读核验；新建来源目录和直接重写计划，以及旧计划开始新的抓取或分析前，只有正文链接支撑的单一身份提示须对照 SHA 一致的原页面重新核验，缺少页面或链接不完整时停止，不重签旧清单。页面用 `legacyTagRouteCandidates` 保存旧标签的候选链接，候选中的 `routeGroup` 区分 tags 和 categories；这些链接还没核验，不能当作分类已通过的依据。`tagRoutes` 为 `unverified-candidates-v3`，发布证据仍使用原 v4 字段范围。
 旧 v3、v4 清单按各自完整原策略和原字段读取，原摘要与配对凭证保持不变。新旧候选字段混用、格式不对应或未知策略会被拒绝。新扫描生成新的结果和凭证，不覆盖旧文件；总文件、凭证及页面编号的独立版本不变。
 
 分析的当前指纹分别用 `tagCatalogVersion`、`tagCatalogSha256`、`tagPromptContract`、`tagPromptSha256` 和 `tagSelectionContract`

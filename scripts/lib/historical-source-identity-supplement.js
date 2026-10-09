@@ -224,6 +224,7 @@ async function buildIdentitySupplement(options) {
         ...plan.queue.filter(i => i.route.kind === 'arxiv-fresh-fetch' && byId.get(i.paperId).status !== 'staged').slice(0,25),
         ...plan.queue.filter(i => i.route.kind === 'conference-local-pdf').slice(0,25)
     ]; else if (options.limit) selected = selected.slice(0,options.limit);
+    planApi.verifySelectedHistoricalIdentityLinks(selected, options.blogRoot);
     const saved = savedIdentityFor(options, config, plan, planFileSha256);
     const contract = saved ? saved.contract : CONTRACT;
     const checkpoints = new Map();

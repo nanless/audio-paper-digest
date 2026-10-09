@@ -34,7 +34,7 @@ SAFE_JSON_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,159}\.json$")
 SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 GIT_OID_RE = re.compile(r"^[a-f0-9]{40,64}$")
 ARXIV_RE = re.compile(r"(?<!\d)(\d{4}\.\d{4,5})(?:v([1-9]\d*))?(?!\d)", re.I)
-OPENREVIEW_RE = re.compile(r"https://openreview\.net/(?:forum|pdf)\?id=([A-Za-z0-9_-]{6,128})", re.I)
+OPENREVIEW_RE = re.compile(r"https://openreview\.net/(?:forum|pdf)\?id=([A-Za-z0-9_-]{6,128})(?![A-Za-z0-9_/%+-]|\.[A-Za-z0-9_./%+-])", re.I)
 IEEE_RE = re.compile(r"https://ieeexplore\.ieee\.org/(?:document|abstract/document)/(\d+)", re.I)
 FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)
 MARKDOWN_DESTINATION_RE = re.compile(
@@ -94,9 +94,12 @@ LEGACY_SCAN_POLICY_V4.update({
     "publicationEvidence": "schema-checked-hash-default-whitelist-v4",
 })
 
-SCAN_POLICY = {**LEGACY_SCAN_POLICY_V4,
+LEGACY_SCAN_POLICY_V5 = {**LEGACY_SCAN_POLICY_V4,
                "contract": "historical-page-scan-policy-v5",
                "tagRoutes": "unverified-candidates-v3"}
+
+SCAN_POLICY = {**LEGACY_SCAN_POLICY_V5, "contract": "historical-page-scan-policy-v6",
+               "identityHints": "frontmatter-filename-exact-explicit-links-v2"}
 
 
 def _scan_fields(policy: Any) -> tuple[str, str, set[str]]:
@@ -104,7 +107,7 @@ def _scan_fields(policy: Any) -> tuple[str, str, set[str]]:
         return "legacyTaxonomyCandidates", "taxonomy", LEGACY_PUBLICATION_EVIDENCE_FIELDS
     if policy == LEGACY_SCAN_POLICY_V4:
         return "legacyTaxonomyCandidates", "taxonomy", PUBLICATION_EVIDENCE_FIELDS
-    if policy == SCAN_POLICY:
+    if policy == LEGACY_SCAN_POLICY_V5 or policy == SCAN_POLICY:
         return "legacyTagRouteCandidates", "routeGroup", PUBLICATION_EVIDENCE_FIELDS
     raise HistoricalPageInventoryError("历史页面标签链接候选被拒绝：扫描策略不是受支持的完整格式。")
 
@@ -565,7 +568,7 @@ def _identity_hints(path: Path, frontmatter: dict[str, Any], body: str) -> dict[
     filename = re.search(r"-(\d{4})-(\d{4,5})(?:v[1-9]\d*)?$", path.stem)
     if filename:
         add("arxiv", f"{filename.group(1)}.{filename.group(2)}", "filename")
-    for match in re.finditer(r"https://arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})(?:v[1-9]\d*)?(?:\.pdf)?", body, re.I):
+    for match in re.finditer(r"https://arxiv\.org/(?:abs|pdf)/(\d{4}\.\d{4,5})(?:v[1-9]\d*)?(?:\.pdf)?(?![A-Za-z0-9_/%+-]|\.[A-Za-z0-9_./%+-])", body, re.I):
         add("arxiv", match.group(1), "body:arxiv-link")
     for match in OPENREVIEW_RE.finditer(body):
         add("openreview-forum-id", match.group(1), "body:openreview-link")
@@ -864,7 +867,7 @@ def scan_historical_pages(blog_repo: Path, *, require_clean_main: bool = False,
                           remote_name: str = "origin",
                           after_scan_hook: Callable[[], None] | None = None) -> dict[str, Any]:
     """构建并自检一份不可变快照，不写任何输出。"""
-    if SCAN_POLICY["contract"] != "historical-page-scan-policy-v5" or SCAN_POLICY["tagRoutes"] != "unverified-candidates-v3":
+    if SCAN_POLICY["contract"] != "historical-page-scan-policy-v6" or SCAN_POLICY["tagRoutes"] != "unverified-candidates-v3":
         raise HistoricalPageInventoryError("历史页面标签链接候选被拒绝：新的扫描只能使用当前标签链接候选格式。")
     repo = _safe_directory(Path(blog_repo))
     before = _git_snapshot(repo, remote_name)

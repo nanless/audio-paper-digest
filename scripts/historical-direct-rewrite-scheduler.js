@@ -60,7 +60,7 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
         sourceStatus = control.loadOrCreateSourceStatus({ sourceRoot: files.freshArxivFetchedSourcesDir,
             plan, generation: options.arxivGeneration, apply: options.apply });
         const completedPaperIds = sourceStatus?.status.entries.filter(item => item.status === 'ready').map(item => item.paperId) || [];
-        return (runtime.prepare || planApi.prepareDirectSources)({ ...options, plan, pauseFile, completedPaperIds,
+        return (runtime.prepare || planApi.prepareDirectSources)({ ...options, plan, pauseFile, completedPaperIds, blogRoot: runtime.blogRoot || Config.PUBLISH_CONFIG.blogRepo,
         freshArxivSourceRoot: files.freshArxivFetchedSourcesDir,
         freshArxivFailureHandoffRoot: files.historicalArxivFreshFailureHandoffDir,
         shouldPause: pauseRequested, onProgress: event => { sourceStatus = control.updateSourceStatus({

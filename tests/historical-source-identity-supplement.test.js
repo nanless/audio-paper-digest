@@ -171,3 +171,15 @@ test('恢复先核原记录、来源、页面和正文摘要，错误不能被�
  await assert.rejects(badReport.load().buildIdentitySupplement(badReport.options),/报告与原身份总文件的内容摘要不一致/);
  assert.deepEqual(badReport.savedBytes(),reportBefore);
 });
+
+test('新身份补充不能把旧计划中的截断链接标为身份已核验', async t => {
+ const f=identityFixture(t), item=f.plan.queue[0];
+ item.paperId='arxiv:2601.12345';item.route={kind:'arxiv-fresh-fetch',arxivId:'2601.12345'};
+ item.pages[0].mapping='frozen-single-arxiv-identity-hint';
+ item.pages[0].historicalArxivLink={hintSources:['body:arxiv-link']};
+ const bytes=Buffer.from('---\ntitle: Wrong old hint\n---\nhttps://arxiv.org/abs/2601.123456\n');
+ fs.writeFileSync(f.pageFile,bytes);item.pages[0].pageContentSha256=f.digest(bytes);
+ let progress=0;
+ await assert.rejects(f.load().buildIdentitySupplement({...f.options,onProgress:()=>progress++}),/旧截断提示/);
+ assert.equal(progress,0);assert.equal(fs.existsSync(f.directory),false);
+});

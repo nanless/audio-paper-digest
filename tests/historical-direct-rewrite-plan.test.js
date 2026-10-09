@@ -142,7 +142,7 @@ function fixture(t, { icasspPages = 898, iclrPages = 267, uncoveredDailyPages = 
     dailyIcmlPages.forEach((item, index) => pages.push(inventoryPage({ blog,
         relativePath: `content/posts/icml-daily-${index}.md`, title: item.title,
         scope: { type: 'daily', key: '2026-05-23' }, number: `icml-daily-${index}`, body: item.body })));
-    pages.push(inventoryPage({ blog, relativePath: 'content/posts/arxiv.md', title: 'ArXiv historical page',
+    pages.push(inventoryPage({ blog, relativePath: 'content/posts/arxiv.md', title: 'ArXiv historical page', body: '[arXiv](https://arxiv.org/abs/2601.00001)',
         scope: { type: 'daily', key: '2026-01-01' }, number: 'a', hint: { status: 'single', candidates: [{
             scheme: 'arxiv', value: '2601.00001', sources: ['body:arxiv-link'] }] } }));
     for (let index = 0; index < uncoveredDailyPages; index++) pages.push(inventoryPage({ blog,
@@ -177,7 +177,7 @@ test('会议标题投影覆盖全部 898 个 ICASSP 和 267 个 ICLR 页面，�
     assert.equal(artifact.projections.find(item => item.paperId.includes(':icassp:')).pages.length, 898);
     assert.equal(artifact.projections.find(item => item.paperId.includes(':iclr:')).pages.length, 267);
     assert.doesNotMatch(JSON.stringify(artifact), /old body must never reach/i);
-    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
+    const plan = planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
         inventory: f.inventory, conferencePageProjections: artifact });
     assert.equal(plan.queue.length, 3); assert.equal(plan.projectedPages.length, 1 + 898 + 267);
     const arxiv = plan.queue.find(item => item.paperId.startsWith('arxiv:'));
@@ -202,10 +202,10 @@ test('会议标题投影覆盖全部 898 个 ICASSP 和 267 个 ICLR 页面，�
 test('直接来源调度器使用新的 arXiv 来源存储，并把 arXiv 本地记录排除在写入器输入之外', async t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 2 }); const artifact = conferencePageMappingsApi.buildConferencePageMappings({
         catalog: f.catalog, catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
-    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
+    const plan = planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
         inventory: f.inventory, conferencePageProjections: artifact });
     const sourceRoot = path.join(f.root, 'fetched-arxiv-sources'); const handoffRoot = path.join(f.root, 'handoffs'); const verified = [];
-    const result = await planner.prepareDirectSources({ plan, apply: true, freshArxivSourceRoot: sourceRoot,
+    const result = await planner.prepareDirectSources({ blogRoot: f.blog, plan, apply: true, freshArxivSourceRoot: sourceRoot,
         freshArxivFailureHandoffRoot: handoffRoot, arxivGeneration: 1, arxivConcurrency: 2, conferenceConcurrency: 2 }, {
         captureFreshArxivRewriteSource: options => freshSource.captureFreshArxivRewriteSource(options, {
             fetchText: async id => ({ text: `Fresh text for ${id}`, source: 'html', sourceId: id,
@@ -220,7 +220,7 @@ test('直接来源调度器使用新的 arXiv 来源存储，并把 arXiv 本地
     const stored = freshSource.readFreshArxivRewriteSource({ rootDir: sourceRoot, arxivId: '2601.00001', generation: 1 });
     assert.equal(stored.manifest.paperId, 'arxiv:2601.00001');
     assert.equal(fs.existsSync(path.join(sourceRoot, '2601.00001', 'generation-000001', 'source.pdf')), true);
-    const resumed = await planner.prepareDirectSources({ plan, apply: true, freshArxivSourceRoot: sourceRoot,
+    const resumed = await planner.prepareDirectSources({ blogRoot: f.blog, plan, apply: true, freshArxivSourceRoot: sourceRoot,
         freshArxivFailureHandoffRoot: handoffRoot, arxivGeneration: 1 }, {
         captureFreshArxivRewriteSource: options => freshSource.captureFreshArxivRewriteSource(options, {
             fetchText: async () => { throw new Error('sealed generation must not refetch text'); },
@@ -229,14 +229,14 @@ test('直接来源调度器使用新的 arXiv 来源存储，并把 arXiv 本地
     });
     assert.equal(resumed.arxiv[0].result.status, 'recovered');
     let captures = 0;
-    const dry = await planner.prepareDirectSources({ plan, apply: false, freshArxivSourceRoot: sourceRoot }, {
+    const dry = await planner.prepareDirectSources({ blogRoot: f.blog, plan, apply: false, freshArxivSourceRoot: sourceRoot }, {
         captureFreshArxivRewriteSource: async () => { captures++; throw new Error('dry-run cannot capture'); }
     });
     assert.equal(captures, 0);
     assert.equal(dry.arxiv.length, 1); assert.equal(dry.arxiv[0].arxivId, '2601.00001');
     const conferenceIds = plan.queue.filter(item => item.route.kind === 'conference-local-pdf').map(item => item.paperId);
     const advanced = [];
-    const nextConference = await planner.prepareDirectSources({ plan, apply: true, queue: 'conference',
+    const nextConference = await planner.prepareDirectSources({ blogRoot: f.blog, plan, apply: true, queue: 'conference',
         completedPaperIds: [conferenceIds[0]], maxPapers: 1 }, {
         verifyConferenceSource: async item => { advanced.push(item.paperId); return { sources: 1 }; }
     });
@@ -248,7 +248,7 @@ test('来源工作池在队列尾部除不尽时，异步暂停检查之后会�
     const f = fixture(t, { icasspPages: 1, iclrPages: 1, includeIcml: true });
     const artifact = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog,
         catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
-    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog,
+    const plan = planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog,
         catalogFileSha256: f.catalogFileSha256, inventory: f.inventory,
         conferencePageProjections: artifact });
     const observed = []; let pauseChecks = 0; let releaseTail;
@@ -262,7 +262,7 @@ test('来源工作池在队列尾部除不尽时，异步暂停检查之后会�
         }
         return false;
     };
-    const result = await planner.prepareDirectSources({ plan, apply: true, queue: 'conference',
+    const result = await planner.prepareDirectSources({ blogRoot: f.blog, plan, apply: true, queue: 'conference',
         conferenceConcurrency: 2, shouldPause }, {
         verifyConferenceSource: async item => { observed.push(item.paperId); return { sourceCount: 1 }; }
     });
@@ -277,7 +277,7 @@ test('来源工作池在队列尾部除不尽时，异步暂停检查之后会�
 test('来源调度器命令行保存进度，并把就绪成员交给下一轮有界选择', async t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 }); const artifact = conferencePageMappingsApi.buildConferencePageMappings({
         catalog: f.catalog, catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
-    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
+    const plan = planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
         inventory: f.inventory, conferencePageProjections: artifact });
     const planFile = path.join(f.root, 'direct-plan.json'); fs.writeFileSync(planFile, `${JSON.stringify(plan, null, 2)}\n`);
     const sourceRoot = path.join(f.root, 'source-root'); const handoffRoot = path.join(f.root, 'handoff-root');
@@ -302,7 +302,7 @@ test('来源调度器只接受绑定其计划和 generation 的已签名暂停�
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
     const artifact = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog,
         catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
-    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
+    const plan = planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
         inventory: f.inventory, conferencePageProjections: artifact });
     const planFile = path.join(f.root, 'direct-plan-pause.json');
     fs.writeFileSync(planFile, `${JSON.stringify(plan, null, 2)}\n`);
@@ -326,11 +326,11 @@ test('来源调度器只接受绑定其计划和 generation 的已签名暂停�
 test('全新 arXiv 获取失败只写一份不可变的冻结链接与页面交接，绝不阻塞会议直接来源', async t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 }); const artifact = conferencePageMappingsApi.buildConferencePageMappings({
         catalog: f.catalog, catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
-    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
+    const plan = planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
         inventory: f.inventory, conferencePageProjections: artifact });
     const sourceRoot = path.join(f.root, 'fetched-arxiv-sources'); const handoffRoot = path.join(f.root, 'handoffs');
     const conferenceRuns = [];
-    const run = observedAt => planner.prepareDirectSources({ plan, apply: true, freshArxivSourceRoot: sourceRoot,
+    const run = observedAt => planner.prepareDirectSources({ blogRoot: f.blog, plan, apply: true, freshArxivSourceRoot: sourceRoot,
         freshArxivFailureHandoffRoot: handoffRoot, observedAt }, {
         captureFreshArxivRewriteSource: async () => {
             const error = new Error('simulated official arXiv transport failure'); error.code = 'ARXIV_TRANSPORT'; throw error;
@@ -354,7 +354,7 @@ test('全新 arXiv 获取失败只写一份不可变的冻结链接与页面交�
     assert.equal(second.arxiv[0].result.handoff.status, 'recovered');
     assert.equal(fs.readdirSync(handoffRoot).length, 1, 'the same failure handoff is immutable and idempotent');
     let captures = 0;
-    const conferenceOnly = await planner.prepareDirectSources({ plan, apply: true, queue: 'conference' }, {
+    const conferenceOnly = await planner.prepareDirectSources({ blogRoot: f.blog, plan, apply: true, queue: 'conference' }, {
         captureFreshArxivRewriteSource: async () => { captures++; throw new Error('conference queue must not acquire arXiv'); },
         verifyConferenceSource: async () => ({ sources: 1 })
     });
@@ -365,7 +365,7 @@ test('计划为每个没有直接来源路线的冻结论文页面保存并核�
     const f = fixture(t, { icasspPages: 1, iclrPages: 1, uncoveredDailyPages: 2 });
     const artifact = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
         inventory: f.inventory, blogRoot: f.blog });
-    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256, inventory: f.inventory,
+    const plan = planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog, catalogFileSha256: f.catalogFileSha256, inventory: f.inventory,
         conferencePageProjections: artifact });
     assert.equal(plan.queue.length, 3); assert.equal(planner.splitQueues(plan).arxiv.length, 1);
     assert.equal(plan.unprojectedCatalogEntries.length, 0);
@@ -404,7 +404,7 @@ test('计划用多个线索复核目录主绑定，并通过全新 arXiv 路线�
     const catalogFileSha256 = sha(JSON.stringify(catalog));
     const artifact = conferencePageMappingsApi.buildConferencePageMappings({ catalog, catalogFileSha256,
         inventory: f.inventory, blogRoot: f.blog });
-    const plan = planner.buildDirectRewritePlan({ catalog, catalogFileSha256, inventory: f.inventory,
+    const plan = planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog, catalogFileSha256, inventory: f.inventory,
         conferencePageProjections: artifact });
     const projected = plan.projectedPages.find(item => item.pageKey === page.pageId);
     assert.equal(projected.paperId, 'arxiv:2605.28508');
@@ -418,10 +418,10 @@ test('计划用多个线索复核目录主绑定，并通过全新 arXiv 路线�
 test('直接 arXiv 的登记、分析和暂存绑定同一代已保存并核验的来源，拒绝更新的一代', async t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 }); const artifact = conferencePageMappingsApi.buildConferencePageMappings({
         catalog: f.catalog, catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
-    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
+    const plan = planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
         inventory: f.inventory, conferencePageProjections: artifact });
     const sourceRoot = path.join(f.root, 'fetched-arxiv-sources'); const handoffRoot = path.join(f.root, 'handoffs');
-    const prepare = generation => planner.prepareDirectSources({ plan, apply: true, queue: 'arxiv',
+    const prepare = generation => planner.prepareDirectSources({ blogRoot: f.blog, plan, apply: true, queue: 'arxiv',
         freshArxivSourceRoot: sourceRoot, freshArxivFailureHandoffRoot: handoffRoot, arxivGeneration: generation }, {
         captureFreshArxivRewriteSource: options => freshSource.captureFreshArxivRewriteSource(options, {
             fetchText: async id => ({ text: `fresh generation ${generation} for ${id}. `.repeat(100), source: 'html',
@@ -431,7 +431,7 @@ test('直接 arXiv 的登记、分析和暂存绑定同一代已保存并核验�
         })
     });
     const first = await prepare(1); const arxiv = plan.queue.find(item => item.paperId.startsWith('arxiv:'));
-    const skipped = await planner.prepareDirectSources({ plan, apply: true, queue: 'arxiv', maxPapers: 1,
+    const skipped = await planner.prepareDirectSources({ blogRoot: f.blog, plan, apply: true, queue: 'arxiv', maxPapers: 1,
         completedPaperIds: first.arxiv.filter(item => item.status === 'ready').map(item => item.paperId),
         freshArxivSourceRoot: sourceRoot, freshArxivFailureHandoffRoot: handoffRoot, arxivGeneration: 1 });
     assert.equal(skipped.selectedCount, 0); assert.equal(skipped.processedCount, 0);
@@ -456,7 +456,7 @@ test('直接 arXiv 的登记、分析和暂存绑定同一代已保存并核验�
 
 test('计划要求完整的显式会议投影产物，命令行保持两条队列分开', t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
-    assert.throws(() => planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
+    assert.throws(() => planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
         inventory: f.inventory, conferencePageProjections: {} }), /conference page mapping record is missing required fields or contains unsupported fields/);
     const parsed = schedulerCli.parseArgs(['--dry-run', '--plan', f.catalogPath, '--queue', 'conference',
         '--generation', '2', '--arxiv-concurrency', '3', '--conference-concurrency', '5',
@@ -474,7 +474,7 @@ test('计划要求完整的显式会议投影产物，命令行保持两条队�
 test('会议来源适配器在标记直接来源就绪之前，复核计划中的元数据和 PDF 哈希', t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 }); const artifact = conferencePageMappingsApi.buildConferencePageMappings({
         catalog: f.catalog, catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
-    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
+    const plan = planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
         inventory: f.inventory, conferencePageProjections: artifact });
     const icassp = plan.queue.find(item => item.paperId.includes(':icassp:'));
     assert.equal(planner.verifyConferenceWriterInputs(icassp).sources, 1);
@@ -496,7 +496,7 @@ test('目录和计划复核内部来源绑定，不轻信形状像哈希的字�
     }
     const artifact = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog,
         catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
-    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
+    const plan = planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
         inventory: f.inventory, conferencePageProjections: artifact });
     const drifted = structuredClone(plan); const item = drifted.queue.find(entry => entry.paperId.includes(':icassp:'));
     item.route.writerInputs[0].metadata.recordIndex += 1;
@@ -545,7 +545,7 @@ test('日更 ICML 投影消费已保存并核验的海报授权绑定，不做�
     assert.equal(daily.mapping, icmlPosterApi.DIRECT_PAGE_MAPPING);
     assert.equal(daily.dailyIcmlBinding.poster.officialUrl, 'https://icml.cc/virtual/2026/poster/60946');
     assert.equal(conferencePageMappingsApi.normalizeConferencePageMappingRecord(artifact).artifactSha256, artifact.artifactSha256);
-    const plan = planner.buildDirectRewritePlan({ catalog, catalogFileSha256,
+    const plan = planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog, catalogFileSha256,
         inventory: f.inventory, conferencePageProjections: artifact });
     assert.equal(plan.projectedPages.filter(page => page.mapping === icmlPosterApi.DIRECT_PAGE_MAPPING).length, 1);
     assert.equal(plan.uncoveredFrozenPaperPages.length, 2);
@@ -592,7 +592,7 @@ test('实际冻结清单和 v5 目录把每个保留的会议正式记录恰好�
     const projectedPageKeys = artifact.projections.flatMap(row => row.pageKeys);
     assert.equal(new Set(projectedPageKeys).size, projectedPageKeys.length, 'a frozen page cannot project to two canonicals');
     const inventory = conferencePageMappingsApi.readStableJson(inventoryFile, 'frozen historical inventory');
-    const plan = planner.buildDirectRewritePlan({ catalog: catalog.value, catalogFileSha256: catalog.fileSha256,
+    const plan = planner.buildDirectRewritePlan({ blogRoot, catalog: catalog.value, catalogFileSha256: catalog.fileSha256,
         inventory: inventory.value, conferencePageProjections: artifact });
     const queues = planner.splitQueues(plan);
     assert.equal(plan.queue.length, queues.arxiv.length + queues.conference.length);
@@ -608,19 +608,19 @@ test('分来源续跑接受同计划另一队列的就绪检查点，但不接�
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
     const mapping = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog,
         catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
-    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
+    const plan = planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
         inventory: f.inventory, conferencePageProjections: mapping });
     const arxivId = plan.queue.find(item => item.route.kind === 'arxiv-fresh-fetch').paperId;
     const conferenceIds = plan.queue.filter(item => item.route.kind === 'conference-local-pdf').map(item => item.paperId);
-    const conference = await planner.prepareDirectSources({ plan, queue: 'conference', apply: false,
+    const conference = await planner.prepareDirectSources({ blogRoot: f.blog, plan, queue: 'conference', apply: false,
         completedPaperIds: [arxivId, conferenceIds[0]] });
     assert.deepEqual(conference.selectedPaperIds, [conferenceIds[1]]);
-    const arxiv = await planner.prepareDirectSources({ plan, queue: 'arxiv', apply: false,
+    const arxiv = await planner.prepareDirectSources({ blogRoot: f.blog, plan, queue: 'arxiv', apply: false,
         completedPaperIds: conferenceIds });
     assert.deepEqual(arxiv.selectedPaperIds, [arxivId]);
-    await assert.rejects(planner.prepareDirectSources({ plan, queue: 'conference', apply: false,
+    await assert.rejects(planner.prepareDirectSources({ blogRoot: f.blog, plan, queue: 'conference', apply: false,
         completedPaperIds: ['arxiv:9999.99999'] }), /已完成的来源 paper ID 无效/);
-    await assert.rejects(planner.prepareDirectSources({ plan, queue: 'conference', apply: false,
+    await assert.rejects(planner.prepareDirectSources({ blogRoot: f.blog, plan, queue: 'conference', apply: false,
         paperIds: [arxivId] }), /不在 queue=conference 内/);
 });
 
@@ -629,7 +629,7 @@ test('封存来源已写入但进度未登记时，有界续跑补齐就绪状�
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
     const mapping = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog,
         catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
-    const plan = planner.buildDirectRewritePlan({ catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
+    const plan = planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
         inventory: f.inventory, conferencePageProjections: mapping });
     const planFile = path.join(f.root, 'direct-plan.json'); writeJson(planFile, plan);
     const sourceRoot = path.join(f.root, 'fetched-arxiv-sources');
@@ -643,7 +643,7 @@ test('封存来源已写入但进度未登记时，有界续跑补齐就绪状�
     });
     let networkCalls = 0;
     const run = () => schedulerCli.main(['--apply', '--plan', planFile, '--queue', 'arxiv', '--max-papers', '1'], {
-        files: { freshArxivFetchedSourcesDir: sourceRoot, historicalArxivFreshFailureHandoffDir: handoffRoot },
+        blogRoot: f.blog, files: { freshArxivFetchedSourcesDir: sourceRoot, historicalArxivFreshFailureHandoffDir: handoffRoot },
         dependencies: { captureFreshArxivRewriteSource: options => freshSource.captureFreshArxivRewriteSource(options, {
             fetchText: async () => { networkCalls++; throw Error('不应重新抓取'); },
             fetchPdf: async () => { networkCalls++; throw Error('不应重新抓取'); }
@@ -657,4 +657,47 @@ test('封存来源已写入但进度未登记时，有界续跑补齐就绪状�
     const skipped = await run();
     assert.equal(skipped.processedCount, 0);
     assert.equal(networkCalls, 0);
+});
+
+test('新计划拒绝旧清单中由截断 URL 生成的正文身份提示，正常旧页无需重签', t => {
+    const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
+    const build = () => {
+        const artifact = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog,
+            catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
+        return planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog,
+            catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, conferencePageProjections: artifact });
+    };
+    const before = JSON.stringify(f.inventory);
+    assert.ok(build().queue.some(item => item.paperId === 'arxiv:2601.00001'));
+    assert.equal(JSON.stringify(f.inventory), before);
+    const page = f.inventory.pages.find(item => item.path === 'content/posts/arxiv.md');
+    page.contentSha256 = writePage(f.blog, page.path, '旧页面', '[arXiv](https://arxiv.org/abs/2601.000019)');
+    assert.throws(build, /完整匹配.*拒绝使用旧截断提示/);
+    fs.unlinkSync(path.join(f.blog, page.path));
+    assert.throws(build, /cannot read frozen daily page/);
+});
+
+test('旧计划仍可只读核验，但错误正文身份在新抓取和分析前停止', async t => {
+    const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
+    const artifact = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog,
+        catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
+    const plan = planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog,
+        catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, conferencePageProjections: artifact });
+    const old = structuredClone(plan);
+    const arxiv = old.queue.find(item => item.route.kind === 'arxiv-fresh-fetch');
+    const contentSha = writePage(f.blog, arxiv.pages[0].pagePath, '旧页面', '[arXiv](https://arxiv.org/abs/2601.000019)');
+    arxiv.pages[0].pageContentSha256 = contentSha; arxiv.projectionSha256 = planner.stableHash(arxiv.pages);
+    old.queueSha256 = planner.stableHash(old.queue);
+    old.projectedPages.find(page => page.pageKey === arxiv.pages[0].pageKey).pageContentSha256 = contentSha;
+    old.projectedPageSetSha256 = planner.stableHash(old.projectedPages);
+    delete old.planSha256; old.planSha256 = planner.stableHash(old);
+    assert.deepEqual(planner.normalizePlan(old), old);
+    let calls = 0;
+    await assert.rejects(planner.prepareDirectSources({ plan: old, blogRoot: f.blog, queue: 'arxiv', apply: true,
+        freshArxivSourceRoot: path.join(f.root, 'source'), freshArxivFailureHandoffRoot: path.join(f.root, 'handoff') },
+    { captureFreshArxivRewriteSource: async () => { calls++; } }), /旧截断提示/);
+    await assert.rejects(require('../scripts/lib/historical-direct-rewrite-runner.js').runDirectRewrite({
+        plan: old, blogRoot: f.blog, queue: 'arxiv', apply: true },
+    { analyze: async () => { calls++; } }), /旧截断提示/);
+    assert.equal(calls, 0);
 });

@@ -300,6 +300,7 @@ async function buildCheckpointExport(options, reportFamily) {
             continue;
         const item = planItemsByPaperId.get(id),
             record = acceptedClassificationsByPaperId.get(id);
+        require('./historical-direct-rewrite-plan.js').verifySelectedHistoricalIdentityLinks([item], options.blogRoot);
         for (const page of item.pages) {
             const loaded = io.readStableFile(path.join(options.blogRoot, page.pagePath), '原标签分类对应的冻结页面');
             if (loaded.fileSha256 !== page.pageContentSha256)

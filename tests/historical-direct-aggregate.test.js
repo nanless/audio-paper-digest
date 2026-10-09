@@ -31,7 +31,8 @@ function write(filename, value) {
 }
 function writeJson(filename, value) { return write(filename, `${JSON.stringify(value, null, 2)}\n`); }
 function page(root, relative, title, kind, scope, cohortDate, body = `POISON_OLD_BODY_${title}`, identityHints = null) {
-    const content = `---\ntitle: ${title}\ndate: ${cohortDate}\n---\n${body}\n`;
+    const identityLink = kind === 'paper' && scope.type === 'daily' && !identityHints ? `\n[arXiv](https://arxiv.org/abs/${title.replace('arXiv ', '')})` : '';
+    const content = `---\ntitle: ${title}\ndate: ${cohortDate}\n---\n${body}${identityLink}\n`;
     return { pageId: pageKey(relative), path: relative, primaryUrl: `https://example.test/${path.basename(relative, '.md')}/`,
         contentSha256: write(path.join(root, relative), content), kind, scope, cohortDate,
         identityHints: identityHints || (kind === 'paper' && scope.type === 'daily'
@@ -180,7 +181,7 @@ async function fixture(t, { mixedDailyConference = false, historicalVersion = fa
         sources: [icmlSource] }] : []) });
     const catalogSha = jsonSha(catalog);
     const conference = conferencePageMappingsApi.buildConferencePageMappings({ catalog, catalogFileSha256: catalogSha, inventory, blogRoot: blog });
-    const plan = planApi.buildDirectRewritePlan({ catalog, catalogFileSha256: catalogSha, inventory, conferencePageProjections: conference });
+    const plan = planApi.buildDirectRewritePlan({ blogRoot: blog, catalog, catalogFileSha256: catalogSha, inventory, conferencePageProjections: conference });
     const projection = direct.buildAggregateProjection({ plan, inventory });
     const paths = { planFile: path.join(root, 'plan.json'), projectionFile: path.join(root, 'aggregate-projection.json'),
         registryRoot: path.join(root, 'registries'), executionRoot: path.join(root, 'executions'), stagingRoot: path.join(root, 'staging'),
@@ -248,7 +249,7 @@ async function fixture(t, { mixedDailyConference = false, historicalVersion = fa
         return { abstract, authors: ['Author One'], proof, sourceManifestSha256: source.sourceManifestSha256,
             sourceSnapshotSha256: snapshot, sourceTextSha256: sha(source.runtimeDetails.text) };
     };
-    const options = { apply: true, plan, registryRoot: paths.registryRoot, executionRoot: paths.executionRoot,
+    const options = { apply: true, plan, blogRoot: blog, registryRoot: paths.registryRoot, executionRoot: paths.executionRoot,
         stagingRoot: paths.stagingRoot, freshArxivSourceRoot: paths.sourceRoot,
         publicationMetadataRoot: paths.publicationRoot,
         freshArxivFailureHandoffRoot: paths.failureRoot, concurrency: 3 };

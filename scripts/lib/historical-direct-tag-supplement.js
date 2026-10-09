@@ -73,6 +73,7 @@ async function buildSupplement(options) {
         if (options.limit && attempted >= options.limit) break;
         attempted++;
         try {
+            planApi.verifySelectedHistoricalIdentityLinks([item], options.blogRoot);
             const completed = await runner.replayCompletedAnalysisForStaging({ item, active: entry,
                 generation: options.generation, executionRoot: options.executionRoot,
                 freshArxivSourceRoot: options.freshArxivSourceRoot, readFreshArxivSource: fresh.readFreshArxivRewriteSource });

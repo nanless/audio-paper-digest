@@ -67,6 +67,7 @@ function readFrozenPage(blogRoot, pagePath) {
     }
     const filename = path.resolve(root, ...pagePath.split('/'));
     if (!filename.startsWith(`${root}${path.sep}`)) fail('pagePath 逃出了 blogRoot');
+    safeDirectory(path.dirname(filename), '历史页面父目录');
     let fd;
     try {
         fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -83,6 +84,31 @@ function readFrozenPage(blogRoot, pagePath) {
         if (error instanceof HistoricalDailyPrimaryArxivBindingError) throw error;
         fail(`cannot read frozen daily page: ${error.message}`);
     } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+// 旧扫描器可能把过长 URL 截成另一个合法 ID。新建目录或计划时重核只靠正文的提示，
+// 原页面仍只作身份证据，不把正文写进计划；已保存的清单与计划格式不变。
+function verifyBodyOnlyIdentityHints({ inventory, blogRoot } = {}) {
+    for (const page of inventory?.pages || []) {
+        const hints = page.identityHints;
+        if (page.kind !== 'paper' || hints?.status !== 'single' || hints.candidates?.length !== 1) continue;
+        const hint = hints.candidates[0];
+        if (!Array.isArray(hint.sources) || !hint.sources.length || !hint.sources.every(source => String(source).startsWith('body:'))) continue;
+        const read = readFrozenPage(blogRoot, page.path);
+        if (read.sha256 !== page.contentSha256) fail('正文身份提示所绑定的历史页面 SHA 已变化');
+        const text = new TextDecoder('utf-8', { fatal: true }).decode(read.bytes);
+        const frontmatter = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n/u);
+        if (!frontmatter) fail('正文身份提示缺少可分离的历史页面正文');
+        const body = text.slice(frontmatter[0].length);
+        const expressions = {
+            arxiv: /https:\/\/arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})(?:v[1-9]\d*)?(?:\.pdf)?(?![A-Za-z0-9_/%+-]|\.[A-Za-z0-9_./%+-])/gi,
+            'openreview-forum-id': /https:\/\/openreview\.net\/(?:forum|pdf)\?id=([A-Za-z0-9_-]{6,128})(?![A-Za-z0-9_/%+-]|\.[A-Za-z0-9_./%+-])/gi,
+            'icassp-arnumber': /https:\/\/ieeexplore\.ieee\.org\/(?:document|abstract\/document)\/([1-9]\d*)(?![A-Za-z0-9_/%+-]|\.[A-Za-z0-9_./%+-])/gi
+        };
+        const expression = expressions[hint.scheme];
+        const values = expression ? [...body.matchAll(expression)].map(match => match[1]) : [];
+        if (!values.includes(hint.value)) fail(`历史正文没有完整匹配的 ${hint.scheme} 身份链接，拒绝使用旧截断提示`);
+    }
 }
 
 function frontmatterArxivId(frontmatter) {
@@ -200,7 +226,7 @@ function normalizeDailyPrimaryArxivBinding(value) {
 }
 
 module.exports = {
-    CONTRACT, VERSION, MAPPING,
+    CONTRACT, VERSION, MAPPING, verifyBodyOnlyIdentityHints,
     contract: CONTRACT, mapping: MAPPING,
     HistoricalDailyPrimaryArxivBindingError,
     build: buildDailyPrimaryArxivBinding,

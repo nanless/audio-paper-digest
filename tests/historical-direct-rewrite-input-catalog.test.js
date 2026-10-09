@@ -99,7 +99,7 @@ function fixture(t) {
     const conferenceManifest = write(path.join(root, 'conference-local-sources.json'), conference);
     const pages = [];
     const addPage = ({ name, title, scope, identityHints = { status: 'none', candidates: [] } }) => {
-        const relative = `content/posts/${name}.md`; const bytes = frontmatter(title); const filename = path.join(blog, relative);
+        const relative = `content/posts/${name}.md`; const bytes = Buffer.concat([frontmatter(title), Buffer.from(identityHints.status === 'single' && identityHints.candidates[0]?.scheme === 'arxiv' ? `\n[arXiv](https://arxiv.org/abs/${identityHints.candidates[0].value})\n` : '')]); const filename = path.join(blog, relative);
         fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 }); fs.writeFileSync(filename, bytes, { mode: 0o600 });
         pages.push({ pageId: pageId(name), kind: 'paper', path: relative, primaryUrl: `https://example.test/${name}/`, contentSha256: sha(bytes),
             scope, cohortDate: '2026-05-01', identityHints });
@@ -159,7 +159,7 @@ test('命令行生成限定范围的 v5 目录，其投影到计划的预演通�
     const projectionFile = path.join(f.projectionRoot, 'conference-page-projections-v3.json');
     require('../scripts/lib/historical-conference-page-projections.js').writeConferencePageMappingRecord({ root: f.projectionRoot, outputName: 'conference-page-projections-v3.json', artifact: projectionArtifact });
     const plan = planCli.main(['--dry-run', '--catalog', written.filename, '--inventory', f.inventoryFile, '--conference-projections', projectionFile], {
-        files: { historicalDirectRewritePlanDir: f.planRoot, historicalDirectRewriteUnprojectedReportDir: f.reportRoot }
+        blogRoot: f.blog, files: { historicalDirectRewritePlanDir: f.planRoot, historicalDirectRewriteUnprojectedReportDir: f.reportRoot }
     });
     assert.deepEqual({ arxiv: plan.arxivFreshFetch, conference: plan.conferenceLocalPdf, canonicals: plan.canonicalPapers, pages: plan.projectedPages, unprojected: plan.unprojectedCatalogEntries }, { arxiv: 1, conference: 4, canonicals: 5, pages: 7, unprojected: 0 });
     assert.deepEqual({ frozen: plan.frozenPaperPages, uncovered: plan.uncoveredFrozenPaperPages,
@@ -224,4 +224,20 @@ test('目录保存并核验合格的多线索 arXiv 主绑定，并在没有本�
     assert.deepEqual(value.entries.find(entry => entry.paperId === 'arxiv:2605.28508').sources, []);
     assert.equal(JSON.stringify(value).includes('POISON_OLD_BODY'), false);
     assert.deepEqual(catalog.normalizeCatalog(value), value);
+});
+
+test('新来源目录拒绝旧正文的截断 ID 与变化的页面 SHA，不覆盖原清单', t => {
+    const f = fixture(t);
+    const inventory = JSON.parse(fs.readFileSync(f.inventoryFile));
+    const page = inventory.pages.find(item => item.path === 'content/posts/arxiv.md');
+    const filename = path.join(f.blog, page.path);
+    const bytes = Buffer.from('---\ntitle: 旧页面\ndate: 2026-05-01\n---\n[arXiv](https://arxiv.org/abs/2601.000019)\n');
+    fs.writeFileSync(filename, bytes);
+    const build = () => catalog.buildScopedCatalog({ conferenceManifest: f.conferenceManifest,
+        inventoryFile: f.inventoryFile, blogRoot: f.blog });
+    assert.throws(build, /页面 SHA 已变化/);
+    page.contentSha256 = sha(bytes); write(f.inventoryFile, inventory);
+    const frozen = fs.readFileSync(f.inventoryFile);
+    assert.throws(build, /完整匹配.*拒绝使用旧截断提示/);
+    assert.ok(fs.readFileSync(f.inventoryFile).equals(frozen));
 });

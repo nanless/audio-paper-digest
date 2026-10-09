@@ -1,7 +1,7 @@
 'use strict';
 
 // 用户批准的保留本地输入的确定性路由计划。这里有意只做计划与登记边界：
-// 它不调用 LLM、不抓 arXiv、不读历史博客正文，也不改动 crosswalk。
+// 它不调用 LLM、不抓 arXiv；历史正文只用于重核身份链接，不写入计划，也不改动 crosswalk。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -253,7 +253,7 @@ function coverageSummary(projectedPages, uncoveredPages) {
             .map(item => ({ status: item.key, count: item.count })) };
 }
 
-function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, conferencePageProjections } = {}) {
+function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, conferencePageProjections, blogRoot = require('../config.js').PUBLISH_CONFIG.blogRepo } = {}) {
     if (!validSha(catalogFileSha256)) fail('catalog 文件 SHA 是必需的');
     const currentCatalog = normalizeCurrentCatalog(catalog); const entries = currentCatalog.entries;
     const history = normalizeInventory(inventory);
@@ -265,6 +265,7 @@ function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, confere
         catalogFileSha256, inventory: history
     });
     const conferenceByPaperId = new Map(conferenceArtifact.projections.map(item => [item.paperId, item]));
+    dailyPrimaryArxiv.verifyBodyOnlyIdentityHints({ inventory, blogRoot });
     const knownArxiv = new Set(entries.filter(item => item.paperId.startsWith('arxiv:')).map(item => item.paperId));
     const arxivByPaperId = arxivPageProjections(history, knownArxiv, currentCatalog.dailyPrimaryArxivBindings);
     const allPageKeys = new Set(); const queue = []; const unprojectedCatalogEntries = [];
@@ -788,7 +789,7 @@ function writeUnprojectedCatalogReport({ root, plan } = {}) {
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
-function buildFromFiles({ catalogFile, inventoryFile, conferenceProjectionFile } = {}) {
+function buildFromFiles({ catalogFile, inventoryFile, conferenceProjectionFile, blogRoot } = {}) {
     const catalog = conferencePageMappingsApi.readStableJson(catalogFile, 'local source catalog');
     const inventory = conferencePageMappingsApi.readStableJson(inventoryFile, 'historical inventory');
     const projection = conferencePageMappingsApi.readStableJson(conferenceProjectionFile, 'conference page projection');
@@ -798,7 +799,7 @@ function buildFromFiles({ catalogFile, inventoryFile, conferenceProjectionFile }
         fail('当前作用域 v5 catalog 的清单文件绑定已变化');
     }
     return buildDirectRewritePlan({ catalog: catalog.value, catalogFileSha256: catalog.fileSha256,
-        inventory: inventory.value, conferencePageProjections: projection.value });
+        inventory: inventory.value, conferencePageProjections: projection.value, blogRoot });
 }
 
 function splitQueues(plan) {
@@ -976,10 +977,20 @@ async function bounded(work, concurrency, shouldPause = () => false, onProgress 
     return groups.flat();
 }
 
+function verifySelectedHistoricalIdentityLinks(items, blogRoot = require('../config.js').PUBLISH_CONFIG.blogRepo) {
+    const pages = items.filter(item => item.route.kind === 'arxiv-fresh-fetch').flatMap(item =>
+        item.pages.filter(page => page.mapping === 'frozen-single-arxiv-identity-hint').map(page => ({
+            kind: 'paper', path: page.pagePath, contentSha256: page.pageContentSha256,
+            identityHints: { status: 'single', candidates: [{ scheme: 'arxiv', value: item.route.arxivId,
+                sources: page.historicalArxivLink.hintSources }] }
+        })));
+    dailyPrimaryArxiv.verifyBodyOnlyIdentityHints({ inventory: { pages }, blogRoot });
+}
+
 async function prepareDirectSources({ plan, queue = 'all', arxivGeneration = 1,
     arxivConcurrency = 3, conferenceConcurrency = 5, apply = false, freshArxivSourceRoot,
     freshArxivFailureHandoffRoot, observedAt, paperIds = [], maxPapers = null, completedPaperIds = [],
-    shouldPause = () => false, onProgress = null } = {}, overrides = {}) {
+    shouldPause = () => false, onProgress = null, blogRoot } = {}, overrides = {}) {
     const normalized = normalizePlan(plan);
     if (!['all', 'arxiv', 'conference'].includes(queue) || !Number.isSafeInteger(arxivGeneration)
         || arxivGeneration < 1) fail('直接来源队列或代次无效');
@@ -1022,6 +1033,7 @@ async function prepareDirectSources({ plan, queue = 'all', arxivGeneration = 1,
         arxivId: item.route.arxivId, generation: arxivGeneration, sourceRoot: freshArxivSourceRoot || null })),
     conference: conferences.map(item => ({ paperId: item.paperId, runId: item.runId,
         localPdfSources: item.route.writerInputs.length, projectedPages: item.pageKeys.length })) };
+    verifySelectedHistoricalIdentityLinks(arxiv, blogRoot);
     if (arxiv.length && (typeof freshArxivSourceRoot !== 'string' || !path.isAbsolute(freshArxivSourceRoot)
         || typeof freshArxivFailureHandoffRoot !== 'string' || !path.isAbsolute(freshArxivFailureHandoffRoot))) {
         fail('arXiv 直接来源准备需要 freshArxivSourceRoot 和 freshArxivFailureHandoffRoot');
@@ -1079,7 +1091,7 @@ async function prepareDirectSources({ plan, queue = 'all', arxivGeneration = 1,
 module.exports = { CONTRACT, VERSION, CATALOG_CONTRACT, SAFE_NAME_RE, HistoricalDirectRewritePlanError,
     stableHash, deterministicRunId, normalizeCatalog, normalizeInventory, arxivPageProjections, sourceRoute,
     conferenceSourceDisclosure, normalizeConferenceSourceDisclosure,
-    normalizeHistoricalArxivLink, buildDirectRewritePlan, normalizePlan, writePlan,
+    normalizeHistoricalArxivLink, buildDirectRewritePlan, normalizePlan, writePlan, verifySelectedHistoricalIdentityLinks,
     UNPROJECTED_REPORT_CONTRACT, UNPROJECTED_REPORT_VERSION, UNPROJECTED_REPORT_PREFIX,
     buildUnprojectedCatalogReport, normalizeUnprojectedCatalogReport, unprojectedCatalogReportName,
     readUnprojectedCatalogReport, writeUnprojectedCatalogReport, buildFromFiles, splitQueues,

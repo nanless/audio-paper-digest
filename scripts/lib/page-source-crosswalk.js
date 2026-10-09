@@ -65,8 +65,11 @@ const PREVIOUS_SCAN_POLICY = Object.freeze({ contract: 'historical-page-scan-pol
     linkOffsetUnit: 'utf8-byte-body-relative',
     tagRoutes: 'unverified-candidates-v2', publicationEvidence: 'schema-checked-hash-default-whitelist-v4',
     targetRecordBinding: 'target-page-snapshot-sha256-v1' });
-const SCAN_POLICY = Object.freeze({ ...PREVIOUS_SCAN_POLICY,
+const SCAN_POLICY_V5 = Object.freeze({ ...PREVIOUS_SCAN_POLICY,
     contract: 'historical-page-scan-policy-v5', tagRoutes: 'unverified-candidates-v3' });
+
+const SCAN_POLICY = Object.freeze({ ...SCAN_POLICY_V5, contract: 'historical-page-scan-policy-v6',
+    identityHints: 'frontmatter-filename-exact-explicit-links-v2' });
 
 function scanFormatFor(policy) {
     // 策略只选择对应字段；页面和来源仍按原完整对象核验，不转换旧记录。
@@ -75,6 +78,8 @@ function scanFormatFor(policy) {
             candidateField: 'legacyTaxonomyCandidates', groupField: 'taxonomy' },
         { policy: PREVIOUS_SCAN_POLICY, evidenceFields: CURRENT_PUBLICATION_EVIDENCE_FIELDS,
             candidateField: 'legacyTaxonomyCandidates', groupField: 'taxonomy' },
+        { policy: SCAN_POLICY_V5, evidenceFields: CURRENT_PUBLICATION_EVIDENCE_FIELDS,
+            candidateField: 'legacyTagRouteCandidates', groupField: 'routeGroup' },
         { policy: SCAN_POLICY, evidenceFields: CURRENT_PUBLICATION_EVIDENCE_FIELDS,
             candidateField: 'legacyTagRouteCandidates', groupField: 'routeGroup' }
     ];
