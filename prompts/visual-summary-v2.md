@@ -1,56 +1,56 @@
 # 论文视觉摘要
 
 ```text
-Create a high-resolution portrait infographic that explains one research paper.
+生成一张解释单篇研究论文的高分辨率纵向长图。
 
-Use the built-in tool to generate the full image. It renders the whole poster in one pass: the exact English title, the Simplified-Chinese explanations, the supplied numbers, the diagrams, the captions, and the paper-collage artwork all come out as a single composition. Do not send the result through the legacy deterministic text-card compositor. Prefer the highest available portrait resolution and a tall approximately 1:2 composition. After generation, visually check every title, Chinese statement, technical label, arrow relationship, metric direction, and supplied value; regenerate any asset whose text is unreadable or materially wrong.
+使用内置生图工具一次生成整张成图，英文原题、简体中文解说、给定数值、示意图、图注和纸张拼贴画面都在同一张图中完成，不再交给旧版文字卡片合成器处理。优先使用工具支持的最高纵向分辨率，画面比例尽量接近 1:2。生成后逐项目检标题、中文句子、技术标签、箭头关系、指标方向和数值；文字读不清或内容有实质错误，就重新生成。
 
-Summarize the entire paper in one tall portrait image with a clear top-to-bottom reading order. Prefer an approximately 1:2 layout when supported. Use the readable typography, open spacing, and precise diagrams of a science magazine.
+整张图概括论文，从上到下有清楚的阅读顺序。采用科学杂志常见的清晰字体、舒展留白和准确图解。
 
-Organize the content from top to bottom into exactly four visually connected chapters: (1) research question and core contribution, (2) method architecture and signal/data flow, (3) key experimental findings, and (4) conclusion and limitations. Use one dominant explanatory illustration or diagram per chapter, supported by only a few short labels. This is an explanatory image, not a fabricated paper figure.
+内容从上到下分成四个相互衔接的章节：研究问题与核心贡献、方法架构与信号或数据流、关键实验发现、结论与局限。每章以一幅主要图解说明内容，配少量短标签。这些是帮助读者理解的示意图，不能冒充论文原图。
 
-Reference figures supplied with the task are verified figures extracted from this exact paper. Use the highest-priority method overview, architecture, pipeline, or structure figure as the primary structural reference for chapter 2, then redraw or integrate it into the same editorial composition with adjacent Chinese explanation. If a second verified reference is a key result figure, use it only in chapter 3 with an accurate caption. Preserve real parallel branches, grouping, merge points, arrow direction, information hierarchy, and values. Do not force branches or alternative methods into a false linear chain. Do not paste an unreadable thumbnail, blindly copy decorative styling, or infer missing values.
+任务附带的参考图均已核验，来自这篇论文。第二章优先以最高优先级的方法总览、架构、流程或结构图为依据，重新绘制或融入整幅画面，并在旁边配中文解释。若第二张已核验参考图展示关键实验结果，只用于第三章，并配准确图注。保留真实的并行分支、分组、汇合点、箭头方向、信息层次和数值，不把分支或不同方法画成不存在的串行链。不要贴入读不清的缩略图，也不要照搬装饰风格或推测缺失数值。
 
-At the very top, render the original English paper title given below verbatim as a prominent, highly legible header. Preserve its English spelling, capitalization, punctuation, accented characters, hyphenated terms, and technical names exactly; never translate the title into Chinese.
+最上方醒目、清晰地呈现下面提供的英文论文原题。逐字保留拼写、大小写、标点、带重音字符、连字符和技术名称，不翻译成中文。
 
-Paper title: {title}
-Document type: {documentType}
-Primary task: {primaryTask}
-Primary method: {primaryMethod}
-Supplied paper summary: {summary}
-Supplied method evidence: {method}
-Supplied experiment evidence: {experiments}
-Supplied limitations: {limitations}
-Required coverage: {focus}
+论文标题：{title}
+文档类型：{documentType}
+主任务：{primaryTask}
+主方法：{primaryMethod}
+已提供的论文摘要：{summary}
+已提供的方法证据：{method}
+已提供的实验依据：{experiments}
+已提供的局限：{limitations}
+必须覆盖的内容：{focus}
 
-For beginner-researcher-v3 tasks, use only the fields supplied by the verified Reader output. The summary is its exact oneSentenceThesis; method, experiments, and limitations contain complete Reader sections, including comparison conditions and counterexamples. Use readerBackground, when supplied, to explain the research question. Do not replace these inputs with the stored analysis or review commentary. QA entries identify the complete source sections by index, heading, and body SHA. They do not provide additional claims. When selecting findings, preserve the metric direction and dataset, distinguish deployment results from oracle results, and keep absolute values separate from changes.
+对于 beginner-researcher-v3 任务，只使用已经核验的 Reader 输出字段。摘要就是原样提供的 oneSentenceThesis；method、experiments 和 limitations 包含完整 Reader 章节，其中的比较条件和反例也要保留。提供了 readerBackground 时，用它解释研究问题。不要改用旧分析正文或审查批注。QA 条目用章节索引、标题和正文 SHA 标识完整来源段落，它们不提供额外结论。选取实验发现时保留指标方向和数据集，分清实际部署结果与理想条件下的 oracle 结果，也分清绝对值与变化量。
 
-Use pixels only from the referenceImages supplied as prepared image paths for this task. Their ordinal, source URL, source DOM SHA, and asset SHA identify the images the verified Reader output actually used. Do not describe a Reader figure that is absent from the current reference list. If the list is empty, create a clearly explanatory illustration from the verified Reader output rather than reconstructing a paper figure. A previous Reader verification does not establish that this image-generation task received the pixels.
+只使用本次 referenceImages 中、以准备好的图片路径提供的像素。每张图片的序号、来源 URL、来源 DOM SHA 和图片 SHA 标识了已核验 Reader 实际使用的图片。当前参考列表里没有的 Reader 图片，不要描述；列表为空时，根据已核验 Reader 内容绘制明确标为解释用途的示意图，不重建论文原图。此前的 Reader 图片核验不能证明本次生图已经收到像素。
 
-Visual direction: {direction}
+视觉方向：{direction}
 
-Art direction and palette:
-- Use a warm off-white or very pale oatmeal paper-like background, with large clean areas of negative space.
-- Use deep slate-blue for primary type, plus a restrained low-saturation palette of mist blue, sage green, soft coral, pale apricot, and muted lavender. Gentle tonal gradients are allowed only as subtle depth; keep contrast accessible.
-- Use paper-collage details: crisp flat-vector editorial illustration, layered paper-cut shapes, subtle deckled or precisely torn edges, one or two small translucent paper-tape accents, thin technical linework, simple data marks, restrained risograph-like grain, and very soft natural shadows. Keep these details subtle so they do not compete with the explanation. Use consistent corner radii and stroke weights throughout.
-- Audio waveforms, spectrograms, microphones, instruments, or neural-network motifs may appear only when genuinely relevant to this paper. Treat them as elegant explanatory symbols, not decorative filler.
-- Give every chapter its own lightly tinted surface or open composition, while keeping the whole poster visually coherent. Alternate diagram-led and text-led balance to create rhythm.
+配色与画面：
+- 使用暖白色或很浅的燕麦色纸张背景，留出大块干净空间。
+- 正文主色采用深灰蓝，辅以低饱和度的雾蓝、鼠尾草绿、柔珊瑚色、浅杏色和灰紫色。可以用轻微渐变增加层次，但必须保证文字与背景的对比度。
+- 使用清晰的扁平矢量插画和克制的纸张拼贴细节：分层剪纸形状、轻微毛边或整齐撕边、一两处半透明纸胶带、细技术线条、简洁数据标记、轻微印刷颗粒和柔和自然阴影。装饰不能抢走内容的注意力，圆角与线宽保持一致。
+- 只有与论文内容确实相关时，才出现音频波形、频谱图、麦克风、乐器或神经网络图案，用来解释内容，不用作无关装饰。
+- 每章可以用浅色底或开放构图区分，同时保持全图统一。不同章节按内容调整图文占比，不必排成相同大小的方框。
 
-Typography and layout:
-- Reserve roughly the top 12–16% for the exact English title in a clean bold editorial style with comfortable line spacing. Do not add a dark banner behind it.
-- Use a disciplined 12-column editorial grid, generous outer margins, aligned edges, and at least one module-height of whitespace between chapters.
-- Keep chapter numbers small. Chapter headings should be the strongest Chinese text after the title.
-- Keep the body concise but substantively informative. Across the whole poster, target roughly 220–360 Simplified-Chinese characters excluding the English title and technical names. Each chapter should contain 2–4 complete explanatory statements, usually 18–42 Chinese characters each, rather than isolated slogan fragments.
-- Chapter 1 must state the concrete research problem, why existing approaches are insufficient, and the paper's central contribution.
-- Chapter 2 must name the main modules and explain how data flows between them. Use 4–8 short module labels plus 2–3 explanatory statements around the redrawn reference structure.
-- Chapter 3 must name the dataset or evaluation setting, comparison target, metric direction, and what the supplied numbers demonstrate. Never display an unlabeled number or invent a comparison value.
-- Chapter 4 must separate conclusion from limitations. Include one 1–2 sentence takeaway and 2–4 specific limitation statements with causes or scope boundaries.
-- Never use a dense prose paragraph. Break complete statements into readable callouts, captions, or short bullet lines with comfortable leading.
-- Make the method chapter the largest and most informative area. Use clear left-to-right or top-to-bottom arrows, few nodes, and no crossing connectors.
-- Show experiments with one or two honest, easy-to-read comparison graphics or metric cards. Show limitations in a calm neutral callout, not an alarming red warning box.
-- Keep all text comfortably readable on a phone. Allocate more vertical height when needed; if information still does not fit, omit low-priority detail rather than shrinking the font or crowding the layout.
+字体与排版：
+- 顶部约 12–16% 留给英文原题，使用清晰的粗体和舒适行距，不加深色标题条。
+- 按 12 列网格对齐，外侧留足边距，章节之间至少留出一个模块高度的空白。
+- 章节序号保持小巧；除英文标题外，章节标题是最醒目的中文文字。
+- 正文简洁但要有实质内容。除英文标题与技术名称外，全图约 220–360 个简体中文字符。每章通常包含 2–4 句完整解释，每句约 18–42 个中文字符，不堆孤立口号。
+- 第一章交代具体研究问题、已有方法的不足，以及论文的核心贡献。
+- 第二章写明主要模块和数据流向。在依据参考图绘制的结构旁，配 4–8 个短模块标签与 2–3 句解释。
+- 第三章写明数据集或评测设置、比较对象、指标方向，以及给定数值说明了什么。不展示没有标签的数字，不编造比较值。
+- 第四章分开呈现结论与局限。用 1–2 句概括结论，再用 2–4 句说明具体局限及其原因或适用范围。
+- 不使用密集长段落，把完整句子安排为清楚的说明框、图注或短条目，并留足行距。
+- 方法章占据最大面积，也提供最多信息。箭头从左向右或从上向下，节点精简，避免连线交叉。
+- 实验部分用一两组准确、易读的比较图或指标卡展示结果。局限使用中性说明框，不使用刺眼的红色警告框。
+- 手机阅读时所有文字都应清楚。空间不足时增加纵向高度；仍放不下，就省去次要细节，不缩小字体或挤压版面。
 
-All body section headings, module labels, flow explanations, findings, conclusions, and limitation notes must be in Simplified Chinese. Keep established model names, dataset names, acronyms, symbols, and equations in their original technical form. Include labels only if they can be rendered clearly. Apart from the required English title header, do not put author names, arXiv ID, exact scores, unverifiable benchmark numbers, logos, watermarks, or dense paragraphs inside the image. Do not invent claims, datasets, equations, or measured gains beyond the verified evidence. Leave a calm area around the edge for the publishing system's HTML caption.
+所有正文章节标题、模块标签、流程解释、实验发现、结论和局限都用简体中文。既定模型名、数据集名、缩写、符号和公式保留原形；只有能清晰呈现的标签才放进图中。除必须保留的英文原题外，不添加作者姓名、arXiv ID、精确评分、无法核实的基准数字、徽标、水印或密集段落。不得添加已核验证据之外的结论、数据集、公式或测量增益。四周留出清爽空间，供发布页面的 HTML 图注使用。
 
-Render legible text without random characters or pseudo-text. Do not use a dark navy or black full-page background, neon glow, cyberpunk or sci-fi HUD elements, luminous outlines, metallic beveled frames, or gamer-interface panels. Avoid trophies, medals, star ratings, giant numbered badges, and photorealistic stock people. Keep glass effects subtle, and avoid cluttered icons, repeated decorative waveforms, a dense grid of equal-sized boxes, tiny text, and fake UI chrome. Paper textures must not include dirty vintage paper, heavy stains, excessive torn edges, or crowded scrapbook decoration.
+文字必须清楚可读，不出现随机字符或伪文字。不要使用深藏青或黑色整页背景、霓虹光效、赛博朋克或科幻抬头显示界面、发光轮廓、金属斜面边框、游戏界面面板。避免奖杯、奖牌、星级评分、巨大编号徽章和写实素材人物。玻璃效果保持轻微，不堆图标、重复装饰波形、同样大小的密集方格、细小文字或仿界面装饰。纸纹不使用脏旧纸张、重污渍、过多撕边或拥挤的剪贴簿装饰。
 ```

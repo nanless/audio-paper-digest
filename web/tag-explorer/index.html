@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="论文历史标签的只读映射预览与分面检索；不代表正式语义重标。">
+  <meta name="description" content="按分类维度检索历史论文标签；标签来自旧名称映射，尚未逐篇重新核对。">
   <title>研究标签浏览 · 历史映射预览</title>
   <link rel="stylesheet" href="./style.css">
   <script src="./app.js" defer></script>
@@ -11,9 +11,9 @@
 <body>
   <a class="skip-link" href="#results-heading">跳到论文结果</a>
   <header class="site-header">
-    <p class="eyebrow">AUDIO PAPER DIGEST / RESEARCH INDEX</p>
+    <p class="eyebrow">音频论文速递 · 研究索引</p>
     <h1>研究标签浏览</h1>
-    <p class="preview-notice"><strong>历史标签映射预览</strong> · 非正式语义重标。即使标签全部映射，也未完成逐篇论文语义核验。</p>
+    <p class="preview-notice"><strong>历史标签映射预览</strong> · 标签由旧名称映射而来，尚未根据论文原文逐篇重新核对。</p>
     <p id="dataset-meta" class="muted">正在读取本地预览索引…</p>
   </header>
   <main>
@@ -24,7 +24,7 @@
     </section>
     <form id="filters" aria-label="论文筛选" autocomplete="off">
       <fieldset id="controls" disabled>
-        <legend class="sr-only">检索与分面筛选</legend>
+        <legend class="sr-only">检索与分类筛选</legend>
         <div class="search-row">
           <div class="search-field">
             <label for="search">搜索标题、原标签或中英文别名</label>
@@ -36,9 +36,9 @@
           <label class="check-label"><input id="needs-review" type="checkbox">仅看未映射或主任务待核的记录</label>
           <label for="page-size">每页 <select id="page-size"><option value="20">20</option><option value="50">50</option></select> 条</label>
         </div>
-        <p id="filter-help" class="muted">同一分面多选为“或”，不同分面为“且”。选择父节点自动包含子节点；括号内是包含子节点的记录数，不可相加。</p>
+        <p id="filter-help" class="muted">同一分类维度的多项选择满足一项即可，不同维度须同时满足。选择上级标签会包含下级标签；括号内是相关记录数，同一篇可能出现在多项中。</p>
         <div class="workspace">
-          <aside id="facets" aria-label="标签分面"></aside>
+          <aside id="facets" aria-label="标签分类维度"></aside>
           <section id="results" aria-labelledby="results-heading">
             <div class="results-header">
               <h2 id="results-heading" tabindex="-1">论文结果</h2>

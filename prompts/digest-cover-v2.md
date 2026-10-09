@@ -1,36 +1,36 @@
 # 论文速递汇总封面
 
 ```text
-Create a high-resolution portrait cover that presents the daily research-paper digest clearly.
+生成一张清楚呈现每日论文速递的高分辨率纵向封面。
 
-Use the built-in tool to generate the full image. It renders the whole cover in one pass: the title, the subtitle, the paper count, the hot-direction counts, the TOP 10 titles, the scores, the tags, the ranks, and the paper-collage artwork all come out as a single composition. Do not pass the result through the legacy deterministic text-card compositor. Prefer the highest available portrait resolution. Visually check every supplied title, number, count, tag, and rank; regenerate any cover whose text is unreadable or materially wrong.
+使用内置生图工具一次生成整张成图，标题、副标题、论文数量、热门方向计数、TOP 10 题目、分数、标签、名次和纸张拼贴画面都在同一张图中完成，不再交给旧版文字卡片合成器处理。优先使用工具支持的最高纵向分辨率。生成后逐项目检所有给定标题、数字、数量、标签和名次；文字读不清或内容有实质错误，就重新生成。
 
-Create one portrait cover for the daily digest that has already been published. The cover is a separate publication asset and is not inserted into the blog or presented as a paper figure. Use a clear hierarchy in a tall layout, approximately 1:2 when supported. Aim for the readable typography, open spacing, and restrained illustration of a science magazine.
+为已经发布的日更批次制作一张独立封面。它是单独的发布素材，不插入博客，也不能冒充论文插图。采用清楚的层级和纵向布局，工具支持时比例尽量接近 1:2。字体、留白和插画参照科学杂志的清晰、舒展风格。
 
-At the top, render this exact Chinese title prominently and legibly:
+顶部醒目、清晰地原样呈现以下中文标题：
 {title}
 
-Paper count: {paperCount}
-Hot directions (render as a compact Chinese trend panel with counts):
+论文数量：{paperCount}
+热门方向（用紧凑的中文区域展示方向及其数量）：
 {hotDirections}
 
-Paper ranking (render every supplied entry as a TOP 10 leaderboard; if the published batch has fewer than ten papers, render all supplied entries; keep each paper's original English title, score, and Chinese task tag exactly as provided):
+论文排行榜（展示所有给定条目，最多十篇；发布批次不足十篇时全部展示。每篇的英文原题、评分和中文任务标签均原样保留）：
 {ranking}
 
-Composition from top to bottom:
-1. Reserve roughly the top 15% for the main title and the concise subtitle “深度分析 · 热门方向 · 高分排行”. Keep this area spacious and editorial.
-2. Create one main illustration connecting speech, music, and general audio research through flowing ribbons, abstract sound shapes, and a small neural-network motif. It should occupy about 20–25% of the cover and must not look like stock clip art.
-3. Present “热门方向” as a clean visual constellation, soft bubble chart, or flowing tag landscape with supplied counts—not as a rigid dashboard grid.
-4. Present “论文排行榜 TOP 10” as up to ten clearly aligned rows in descending order. Use small rank circles, clear title alignment, restrained score emphasis, and lightly tinted task-tag pills. Do not omit lower-ranked supplied entries merely to enlarge the first five.
+从上到下安排画面：
+1. 顶部约 15% 留给主标题和简短副标题“深度分析 · 热门方向 · 高分排行”，保持舒展。
+2. 用一幅主插画连接语音、音乐和一般音频研究，可使用流动飘带、抽象声音形状和小型神经网络图案，占封面约 20–25%。不要做成素材库剪贴画。
+3. “热门方向”可以用清楚的星群分布、柔和气泡图或流动标签展示，并标明给定数量，不排成僵硬的仪表盘网格。
+4. “论文排行榜 TOP 10”按降序排成最多十行，行间对齐清楚。名次圆圈保持小巧，题目对齐，分数适度突出，任务标签采用浅色圆角底。不能为了放大前五篇而省略其余给定条目。
 
-Art direction and palette:
-- Use a warm off-white or pale oatmeal background with generous negative space and a subtle uncoated-paper feel.
-- Use deep slate-blue typography with a restrained low-saturation palette: mist blue, sage green, soft coral, pale apricot, and muted lavender.
-- Use crisp flat-vector editorial illustration with paper-collage details: layered paper-cut geometry, subtle deckled edges, one or two small translucent paper-tape accents, thin linework, soft organic shapes, restrained risograph-like grain, and very gentle natural shadows. Keep these details subtle so that the title and ranking remain easy to read. Keep corner radii, icon style, and strokes consistent.
-- Use a disciplined editorial grid, generous outer margins, aligned baselines, and clear separation between the main illustration, trends, and ranking.
-- Keep the date and paper count smaller than the main title. Preserve comfortable line spacing for long English titles.
+配色与画面：
+- 使用暖白色或浅燕麦色背景，留出充足空白，纸面质感轻微。
+- 字体采用深灰蓝，辅以低饱和度的雾蓝、鼠尾草绿、柔珊瑚色、浅杏色和灰紫色。
+- 使用清晰的扁平矢量插画，配少量纸张拼贴细节：分层剪纸形状、轻微毛边、一两处半透明纸胶带、细线条、柔和曲线形状、轻微印刷颗粒和很淡的自然阴影。装饰保持克制，确保标题与排行榜易读；圆角、图标风格和线宽一致。
+- 使用整齐的版面网格，留足外侧边距，对齐文字基线，明确区分主插画、热门方向与排行榜。
+- 日期与论文数量小于主标题；较长的英文题目也要留足行距。
 
-All headings, explanatory labels, counts, rank labels, and task tags must be Simplified Chinese. Keep paper titles in their original English. Do not invent, translate, shorten, reorder, or alter any supplied title, score, tag, count, or ranking. Do not add author names, arXiv IDs, logos, watermarks, fake awards, or unsupported claims. Keep text large and readable on a phone; avoid dense paragraphs. If a title is long, wrap it cleanly rather than shrinking all leaderboard text.
+所有标题、说明、数量、名次标记和任务标签都用简体中文，论文题目保留英文原文。不要编造、翻译、缩写、重排或修改给定题目、分数、标签、数量与排名。不添加作者姓名、arXiv ID、徽标、水印、虚构奖项或没有依据的结论。文字在手机上应足够大且清晰，避免密集段落。长题目自然换行，不为此缩小整个排行榜的字体。
 
-Render legible text without random characters or pseudo-text. Do not use a dark navy or black full-page background, neon glow, cyberpunk or sci-fi HUD elements, a luminous waveform wall, metallic beveled frames, or gamer-interface panels. Avoid podiums, medals, laurels, trophies, fake awards, giant rank badges, photorealistic microphones, and stock people. Keep glass effects subtle, and avoid a dense grid of equal boxes, tiny text, and decorative clutter. Paper textures must not include dirty vintage paper, heavy stains, excessive torn edges, or crowded scrapbook decoration.
+文字必须清楚可读，不出现随机字符或伪文字。不要使用深藏青或黑色整页背景、霓虹光效、赛博朋克或科幻抬头显示界面、发光波形墙、金属斜面边框、游戏界面面板。避免领奖台、奖牌、桂冠、奖杯、虚构奖项、巨大名次徽章、写实麦克风和素材人物。玻璃效果保持轻微，不使用同样大小的密集方格、细小文字或杂乱装饰。纸纹不使用脏旧纸张、重污渍、过多撕边或拥挤的剪贴簿装饰。
 ```
