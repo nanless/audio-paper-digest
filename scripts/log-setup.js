@@ -84,6 +84,38 @@ function redactLogText(value) {
     return text;
 }
 
+function environmentSecrets() {
+    return Object.entries(process.env)
+        .filter(([key, value]) => /(?:API_KEYS?|SECRET|TOKEN|PASSWORD|PASSWD|COOKIES?)$/i.test(key) && String(value).length >= 6)
+        .flatMap(([, value]) => String(value).split(',').map(item => item.trim()).filter(item => item.length >= 6))
+        .sort((left, right) => right.length - left.length);
+}
+
+function formatErrorSummary(error) {
+    const secrets = environmentSecrets();
+    const seen = new Set();
+    const pending = [{ error, label: '错误' }];
+    const lines = [];
+    while (pending.length && lines.length < 32) {
+        const current = pending.shift();
+        if (seen.has(current.error)) continue;
+        seen.add(current.error);
+        let message = String(current.error?.message ?? current.error ?? '未知错误');
+        // 必须先遮住完整密钥，再截断，避免截断后留下无法匹配的密钥片段。
+        for (const secret of secrets) message = message.split(secret).join('[REDACTED]');
+        message = redactLogText(message);
+        lines.push(`${current.label}：${message.slice(0, 4096)}`);
+        if (Array.isArray(current.error?.errors)) {
+            current.error.errors.slice(0, 32).forEach((item, index) => {
+                pending.push({ error: item, label: `并发错误 ${index + 1}` });
+            });
+        }
+        if (current.error?.cause !== undefined) pending.push({ error: current.error.cause, label: '原因' });
+    }
+    if (pending.length) lines.push('其余错误未展开，已达到诊断长度限制。');
+    return lines.join('\n').slice(0, 16384);
+}
+
 function setStdoutBlocking() {
     if (process.stdout._handle && process.stdout._handle.setBlocking) {
         process.stdout._handle.setBlocking(true);
@@ -238,9 +270,7 @@ function setupScriptLogging(scriptPath, options = {}) {
 
     // 只有走这个显式的测试/编程接口，才允许指定非默认的 env 文件。
     loadProjectEnv(options.envFile);
-    configuredSecrets = Object.entries(process.env)
-        .filter(([key, value]) => /(?:API_KEYS?|SECRET|TOKEN|PASSWORD|PASSWD|COOKIES?)$/i.test(key) && String(value).length >= 6)
-        .flatMap(([, value]) => String(value).split(',').map(item => item.trim()).filter(item => item.length >= 6));
+    configuredSecrets = environmentSecrets();
     setStdoutBlocking();
 
     if (isTestProcess() && !options.allowInTestProcess) return null;
@@ -353,6 +383,7 @@ module.exports = {
     setupScriptLogging,
     closeScriptLogging,
     redactLogText,
+    formatErrorSummary,
     setStdoutBlocking,
     formatTs,
     formatLogTimestamp,

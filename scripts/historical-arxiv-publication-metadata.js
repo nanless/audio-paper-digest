@@ -170,6 +170,6 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
 if (require.main === module) main().then(output => {
     process.exitCode = partialExitCode(output);
 }).catch(error => {
-    console.error(`[historical-arxiv-publication-metadata] ${error.message}`); process.exitCode = 1;
+    console.error(`[historical-arxiv-publication-metadata] ${require('./log-setup.js').formatErrorSummary(error)}`); process.exitCode = 1;
 });
 module.exports = { USAGE, parsePaperIds, parseArgs, parserFailureIds, mapConcurrent, partialExitCode, main };
