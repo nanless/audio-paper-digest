@@ -2036,15 +2036,19 @@ function readerSourceQuoteCoversNumericToken(token, quoteCorpus, allowSplitUnit 
     if (!readerNumericTokens(corpus).includes(numberToken)) return false;
     const escapeRegExp = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const unit = match[2].toLowerCase() === 'db' ? 'dB' : match[2];
-    const numericPattern = escapeRegExp(match[1]).replace('-', '[-\\u2212\\uFF0D]?');
     const unitPattern = escapeRegExp(unit);
-    // 双栏抽取之后，「[18]」这类引文标注会夹在可见数字和它的单位之间；在这个范围很窄
-    // 的恢复检查里，它们不算与之竞争的其他测量值。
+    // 双栏抽取之后，引用编号可能夹在数值与单位之间；它不是另一个测量值。
     const citationStrippedCorpus = corpus.replace(/\[\s*\d+(?:\s*[,;]\s*\d+)*\s*\]/g, ' ');
-    return new RegExp(
-        `${numericPattern}(?:(?![-+\\u2212\\uFF0D]?\\d(?:[\\d.,]*))(?:[\\s\\S])){0,160}?${unitPattern}(?![A-Za-z0-9_])`,
+    const trailingUnit = new RegExp(
+        `^(?:(?![-+\\u2212\\uFF0D]?[0-9\\uFF10-\\uFF19])(?:[\\s\\S])){0,160}?(?<![A-Za-z0-9_\\uFF21-\\uFF3A\\uFF41-\\uFF5A\\uFF10-\\uFF19])${unitPattern}(?![A-Za-z0-9_\\uFF21-\\uFF3A\\uFF41-\\uFF5A\\uFF10-\\uFF19])`,
         'i'
-    ).test(citationStrippedCorpus);
+    );
+    // 先定位同值且同符号的完整数值，再只检查它后面的单位；不能从另一个
+    // 正数或更长数字的尾部借单位，也不能把相邻测量的单位移到这个标量上。
+    return readerNumericTokenMatches(citationStrippedCorpus).some(value => (
+        normalizeReaderNumericToken(value[0]) === numberToken
+        && trailingUnit.test(citationStrippedCorpus.slice(value.index + (value.sourceLength || value[0].length)))
+    ));
 }
 
 function deriveExactTableSourceQuotes(renderedMarkdown, sourceText, options = {}) {

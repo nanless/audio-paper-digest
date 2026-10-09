@@ -1127,6 +1127,11 @@ function hasValidApiReaderV3Records(paper) {
                         && item.sourceQuoteSha256 === crypto.createHash('sha256')
                             .update(String(item?.quote || '')).digest('hex')
                     ))
+                    // 旧记录也重核数字对应关系；保留已有会议 PDF 拆单位的窄兼容。
+                    && require('./deep-analyzer.js').readerNumericTokens(renderedTables[index].markdown).every(token => (
+                        require('./deep-analyzer.js').readerSourceQuoteCoversNumericToken(token,
+                            binding.sourceQuotes.map(item => item.quote).join('\n'), true)
+                    ))
             )
         ))
         && formulaBindings.every(binding => {
