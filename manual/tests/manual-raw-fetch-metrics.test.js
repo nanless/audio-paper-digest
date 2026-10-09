@@ -77,7 +77,7 @@ describe('Manual 原始抓取实测指标', () => {
         assert.equal(JSON.parse(fs.readFileSync(target, 'utf8')).outputFingerprint, metric.outputFingerprint);
     });
 
-    it('输出批次日期、角色或文件 SHA 漂移时拒绝聚合', () => {
+    it('抓取结果文件改动后，原统计记录及缺少角色的记录都不能通过核验', () => {
         const item = fixture();
         const metric = buildRawFetchMetric({
             date: '2026-08-28', wallNs: 1000000n, paperCount: 0,

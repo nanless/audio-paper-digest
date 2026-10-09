@@ -20,7 +20,7 @@ const {
 
 const registryPath = path.resolve(__dirname, '../config/tag-catalog.json');
 
-test('运行时从词表推导出全部启用的首选标签、角色和紧凑投影', () => {
+test('运行时按词表生成可用标签、任务与方法分类和精简标签说明', () => {
     const runtime = createTagRules({ registryPath });
     assert.equal(runtime.projectionContract, TAG_PROMPT_TEXT_CONTRACT);
     assert.equal(runtime.selectionContract, TAG_SELECTION_CONTRACT);

@@ -42,7 +42,7 @@ describe('Manual 表格转录核验记录', () => {
         assert.equal(result.value.passed, true);
     });
 
-    it('拒绝模型 provenance 缺失或文章 SHA 漂移', () => {
+    it('独立表格审查记录的模型名不符合旧 Terra/high 要求时拒绝', () => {
         const f = fixture();
         f.value.provenance.model = 'unknown';
         fs.writeFileSync(f.filePath, JSON.stringify(f.value));

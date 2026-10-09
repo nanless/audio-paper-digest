@@ -102,7 +102,7 @@ describe('Manual v5 fresh-authoring-v1 文件约定', () => {
         assert.doesNotThrow(() => resolveArtifactAuthority(f.artifactManifestPath, f.artifactExpected));
     });
 
-    it('拒绝旧文案声明和文章漂移', () => {
+    it('拒绝声明使用旧文章正文，以及文章文件被改动的情况', () => {
         const f = fixture();
         const options = {
             paperId: ID, articlePath: f.files.articlePath, readerArticle: f.article,

@@ -243,7 +243,7 @@ describe('Manual 教程表格、图片和公式的整理', () => {
         assert.match(renderMarkdownTable(source), /方向按未知处理/);
     });
 
-    it('漏图、数字单元格漂移或确定性表格字节被改动时直接失败', () => {
+    it('拒绝漏图、数值覆盖缺项、表格字节改动和猜测正负方向', () => {
         const index = allMusicCapsArtifact();
         const plan = buildTutorialArtifactPlan(index);
         const missingFigure = structuredClone(plan);

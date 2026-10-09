@@ -111,12 +111,12 @@ function buildLlmUsageEvent({ protocol, model, request, response, statusCode, du
 function writeLlmUsageEvent(event, options = {}) {
     if (options.enabled === false) return false;
     // Node 测试运行器会认出自己的 worker 进程。无关测试里的假传输不能污染真实的
-    // 生产成本账。
+    // 生产用量记录。
     if (process.env.NODE_TEST_CONTEXT && !options.directory) return false;
     const configured = options.directory || require('../config.js').FILES.llmUsageDir;
     const directory = path.resolve(configured);
-    // 每一层都拒绝已存在的符号链接。新建的叶子文件是私有的；记录是排他的不可变
-    // 文件，绝不向任意路径追加。
+    // 逐层拒绝已存在的符号链接；新记录文件仅当前用户可读写。以独占方式创建文件，
+    // 保存后不再修改，也不向已有文件追加。
     let current = path.parse(directory).root;
     for (const part of directory.slice(current.length).split(path.sep).filter(Boolean)) {
         current = path.join(current, part);
@@ -143,7 +143,7 @@ function recordLlmUsage(input, options = {}) {
     let event = null;
     try { event = buildLlmUsageEvent(input); writeLlmUsageEvent(event, options); }
     catch (_) {
-        if (!warned) { console.warn('[llm-usage] 用量元数据未能持久化；本次统计不完整'); warned = true; }
+        if (!warned) { console.warn('[llm-usage] 模型请求的用量记录未能保存；本次统计不完整'); warned = true; }
     }
     return event;
 }

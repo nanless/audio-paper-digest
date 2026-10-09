@@ -18,7 +18,7 @@ test('根据已核验的 Reader 文章重建草稿时，保留术语解释、标
     assert.equal(JSON.stringify(f),before);
 });
 
-test('产物表格坐标绑定先剥掉派生的单元格证明，再精确重建',()=>{
+test('重建结构化原表的单元格对应记录时，只保留展示和来源的行列坐标',()=>{
     const f=fixture({artifactTable:true}),result=reconstructReaderDraftFromVerifiedArticle(f);
     assert.equal(result.draft.tableBindings[1].sourceType,'artifact_table');
     assert.deepEqual(Object.keys(result.draft.tableBindings[1].cellBindings[0]).sort(),

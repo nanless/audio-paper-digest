@@ -170,7 +170,7 @@ test('归一化周边 Reader 正文时，PDF 单元格字节保持原样', () =>
     assert.ok(normalized.includes('量化结果应保留来源表格。'));
 });
 
-test('后续清理跑完之后，重新核对选中的产物表格单元格', () => {
+test('按结构化原表还原选定表格的单元格字节', () => {
     const domSha = 'a'.repeat(64);
     const table = {
         ordinal: 8, recoveryStatus: 'complete', cells: [

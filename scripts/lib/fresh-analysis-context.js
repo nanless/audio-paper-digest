@@ -138,7 +138,7 @@ function getFreshAnalysisContext() { return scope.getStore() || null; }
 
 // 日更来源运行会封存 source.txt、source.pdf、source-runtime.json 和
 // source-manifest.json。图片字节按设计只为当前请求临时生成，所以失败的 Reader 候选
-// 需要单独的一份临时像素绑定。更早的 fresh rewrite 运行沿用它们已有的候选语义。
+// 需要另外记录本次临时图片的身份。更早的 fresh rewrite 运行仍按原规则处理候选记录。
 function isDailyFreshSourceScope() {
     return getFreshAnalysisContext()?.runContract === DAILY_SOURCE_RUN_CONTRACT;
 }
@@ -166,7 +166,7 @@ function validateSource(details, id, expectation) {
     if (!validSha(payloadSha256) || sha(JSON.stringify(body)) !== payloadSha256
         || payloadSha256 !== expectation.structuredArtifactsSha256
         || artifacts.flattenedTextSha256 !== expectation.sourceSha256) {
-        throw fail(`${id} 的结构化产物内容哈希无效，或与预期产物和来源文本不匹配。`);
+        throw fail(`${id} 的结构化提取结果内容哈希无效，或与预期提取结果和来源文本不匹配。`);
     }
     return details;
 }
@@ -176,8 +176,8 @@ function sourceDirectory(context, id) { return path.join(context.runDir, 'source
 function bundleRoot(context) { return path.join(context.runDir, 'sources'); }
 
 function buildSourceDetailsFromBundle(stored) {
-    // 已封存的来源包已经用持久化的 PDF/TXT 清单校验过非像素的运行元数据。复算这份
-    // 包能保住日更 Reader 运行所需的表格、公式绑定和图片发现结果；它从不包含图片
+    // 已封存的来源包已按保存的 PDF/TXT 清单核验图片像素以外的运行记录。按包中的
+    // 记录重建来源详情时，会保留日更 Reader 所需的表格、公式来源及图片发现结果；它从不包含图片
     // 字节，也不含旧的 data/current 缓存路径。
     const runtime = stored.runtimeDetails;
     if (!runtime || runtime.paperId !== stored.manifest.paperId
@@ -205,8 +205,8 @@ function buildSourceDetailsFromBundle(stored) {
         freshSourceDescriptor: descriptor };
 }
 
-// 这一篇的来源目录是不是真的不存在。fs.existsSync 会把权限不足、父目录读不了
-// 也报成 false；用它判断，读取失败就会被当成来源换新，所以要自己只认 ENOENT。
+// 检查这一篇的来源目录是否确实不存在。fs.existsSync 对权限不足或父目录无法读取
+// 也会返回 false，不能据此重新获取来源；只有 ENOENT 才按目录不存在处理。
 function sourceGenerationAbsent(sourceApi, root, id, generation) {
     try {
         fs.lstatSync(sourceApi.sourceDirectory(root, id, generation));
@@ -271,7 +271,7 @@ function writeExact(directory, filename, bytes) {
         fd = fs.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
         fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.closeSync(fd); fd = undefined;
         safeDirectory(directory);
-        // 用排他链接提交，不会覆盖并发创建的文件。
+        // 用硬链接保存最终文件；若目标已被并发创建，不会覆盖它。
         try { fs.linkSync(temporary, target); }
         catch (error) {
             if (error.code !== 'EEXIST' || !readBytes(target).equals(Buffer.from(bytes))) throw error;
@@ -302,8 +302,8 @@ async function fetchFreshSource(arxivId, fetchOriginal) {
         const directory = sourceDirectory(context, id);
         let details;
         try {
-            // 写完 source-details、还没写提交标记时崩溃，可以在本地补齐：重新逐字节
-            // 核对原始数据即可。
+            // 写完 source-details.json、还没写 source.json 时中断，可以核对已有
+            // 原始记录并补齐文件，无需再次抓取。
             safeDirectory(directory);
             details = readJson(path.join(directory, 'source-details.json'));
         } catch (error) { if (error.code !== 'ENOENT') throw error; }

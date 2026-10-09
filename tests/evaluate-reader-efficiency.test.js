@@ -49,7 +49,7 @@ test('命令行默认离线，并要求显式且互不重复的输入输出参�
     assert.equal(BUDGETS.transportAttemptsPerRequest, 1);
 });
 
-test('来源载荷和产物载荷必须复核同一份已签名快照', t => {
+test('来源正文和结构化提取记录必须与同一份论文快照中的 SHA 对应', t => {
     const f = fixture(t);
     assert.equal(loadInputs(f.options).artifactSha256, f.artifacts.payloadSha256);
     fs.writeFileSync(f.options.sourceTextPath, f.sourceText + ' changed');
@@ -116,7 +116,7 @@ test('默认离线评估不调模型，写一份私有报告，并保留来源�
     assert.equal(fs.statSync(path.join(f.options.outputDir, 'report.json')).mode & 0o777, 0o600);
 });
 
-test('归档产物无效时写一份失败报告，不加载模型代码', async t => {
+test('结构化来源记录不完整时保存失败报告，不加载模型代码', async t => {
     const f = fixture(t);
     fs.writeFileSync(f.options.artifactsPath, JSON.stringify({ text: f.sourceText, tables: [], formulas: [] }));
     const report = await evaluate(f.options);

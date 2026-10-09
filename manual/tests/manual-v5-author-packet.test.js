@@ -236,7 +236,7 @@ describe('Manual v5 旧作者包只读核验', () => {
         assert.throws(() => validateAuthorPacket(built.packet, { ...fx.options, requireMaterialized: true }), /额外输入/);
     });
 
-    it('全文或 ArtifactIndex 身份漂移时直接失败', () => {
+    it('全文或图表索引记录的输入 SHA 不一致时，拒绝构造作者任务', () => {
         const fx = fixture();
         const manifest = JSON.parse(fs.readFileSync(fx.options.fulltextManifestPath, 'utf8'));
         manifest.papers[ID].paperInputSha256 = 'f'.repeat(64);

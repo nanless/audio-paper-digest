@@ -1,7 +1,7 @@
 'use strict';
 
 // 历史直改的运行器传入的来源对象，要么来自刚抓取的 arXiv generation，要么来自
-// 保留的会议 PDF。它单独占用一个 AsyncLocalStorage 作用域，与旧的 fresh-run
+// 保留的会议 PDF。它通过 AsyncLocalStorage 单独保存当前异步调用的来源，与旧的 fresh-run
 // 缓存分开：直改运行不得读取 data/current、旧分析结果，也不得读取之前生成过的
 // Reader 素材。
 
@@ -74,8 +74,8 @@ function withDirectRewriteAnalysisSource(identity, callback) {
     const id = paperId(identity.paperId);
     if (!['arxiv-fresh-fetch', 'conference-local-pdf'].includes(identity.route)) fail('来源路线不合法：只接受 arxiv-fresh-fetch 或 conference-local-pdf');
     const sourceDetails = validateSource(identity.sourceDetails, id);
-    // 来源作用域的单元测试可以传快照哈希，用来跑通嵌套的 Reader 路径。
-    // 只有带 run ID 时，证明才具备持久化能力。
+    // 来源上下文测试可以传入快照哈希，检查嵌套 Reader 调用。
+    // 未传 runId 时，后续调用不会生成可保存的来源凭证。
     const hasRunId = identity.runId !== undefined;
     if (hasRunId && (!UUID.test(String(identity.runId || '')) || !SHA.test(String(identity.sourceSha256 || ''))
         || !SHA.test(String(identity.structuredArtifactsSha256 || ''))
@@ -118,18 +118,18 @@ function withDirectRewriteAnalysisSource(identity, callback) {
     }
     const context = Object.freeze({ paperId: id, sourceDetails: Object.freeze(sourceDetails), readerAttemptsDir,
         materializeReaderFigures: identity.materializeReaderFigures || null,
-        // 历史直改会先把完成的 Reader 阶段落盘，再注销可恢复的已接受草稿。
-        // 日更和旧调用方仍按原来的方式立即注销，除非它们显式加入同一事务。
+        // 历史直改会先保存已完成的 Reader 阶段，再停用可恢复的已接受草稿。
+        // 日更和旧调用方仍立即停用草稿，除非显式启用同样的延后处理。
         deferReaderCandidateCommit: identity.deferReaderCandidateCommit === true,
         // 分析不完整后，外层历史重试会拿到一个新的 Reader 恢复身份。上一次失败的
         // 候选记录有意保留，供审查和重新核对；但它不能在新一轮 Reader 尝试发出
-        // 请求之前，就把这次有界尝试的额度耗光。
+        // 请求之前，就耗尽本次允许的尝试次数。
         ...(identity.readerRetryEpoch !== undefined
             ? { readerRetryEpoch: identity.readerRetryEpoch } : {}),
         // 双模型主分析必须走这个直改专用下载器。它可以返回字节或 base64，但绝不会
-        // 返回 data/current 下的缓存路径，并且始终限定在当前执行的 AsyncLocal 作用域内。
+        // 返回 data/current 下的缓存路径；只有当前异步调用的来源上下文能提供这个下载器。
         downloadPrimaryImage: identity.downloadPrimaryImage || null,
-        // 原始字节只留在这个 AsyncLocalStorage 作用域里。运行器在每次写 JSON 之前
+        // 原始字节只保存在当前异步调用的 AsyncLocalStorage 上下文中。运行器在每次写 JSON 之前
         // 都会把它们去掉。
         supplementaryReaderImages: Object.freeze(supplementaryImages.map(image => Object.freeze({ ...image, rawBytes: Buffer.from(image.rawBytes) }))),
         sourceSnapshotSha256: String(identity.sourceSnapshotSha256 || ''),
@@ -150,7 +150,7 @@ function getDirectRewriteAnalysisContext() { return scope.getStore() || null; }
 function getDirectRewriteSource(paper) {
     const context = scope.getStore();
     if (!context || !context.runId) return null;
-    if (paperId(paper) !== context.paperId) fail('分析请求的论文与当前来源作用域不是同一篇');
+    if (paperId(paper) !== context.paperId) fail('分析请求的论文与当前来源上下文不是同一篇');
     return clone(context.sourceDetails);
 }
 
@@ -201,7 +201,7 @@ function attachDirectSourceRecord(paper, manifest, source) {
 
 function stripEphemeralFigureFields(figure) {
     if (!figure || typeof figure !== 'object' || Array.isArray(figure)) fail('Reader 插图不是普通对象');
-    // assetSha256 记录的是本次调用中看到的像素的完整性，不是可持久化的素材定位符。
+    // assetSha256 用于核对本次调用看到的图片像素，不能用它定位已保存的图片文件。
     // 删掉所有路径和字节后要保留它，但不能把未校验的值写进这个字段。
     if (figure.assetSha256 !== undefined && !SHA.test(String(figure.assetSha256 || ''))) {
         fail('Reader 图片证据的 assetSha256 格式无效');
@@ -214,7 +214,7 @@ function stripEphemeralFigureFields(figure) {
 function assertNoPersistentFigureFields(value) {
     const encoded = JSON.stringify(value);
     if (/(?:"(?:cachePath|tempPath|rawBytes|assetFilename|assetBytes|assetWidth|assetHeight|assetMediaType)"|image-cache|api-reader-assets)/.test(encoded)) {
-        fail('直改执行试图把图片路径或图片字节写进持久化结果');
+        fail('直改执行试图把图片路径或图片字节写进保存的结果');
     }
     const validateEvidenceSha = item => {
         if (!item || typeof item !== 'object') return;
