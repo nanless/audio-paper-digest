@@ -24,6 +24,7 @@ import argparse
 import copy
 import contextvars
 import difflib
+import errno
 import html
 import json, re, sys, os, subprocess, datetime, base64, hashlib, math, io
 import ipaddress, shutil, socket, tempfile, stat, struct, zlib, unicodedata, time, signal
@@ -606,6 +607,27 @@ def review_unit_cache(date_str, page_path, *, required, paper_id=None, run_id=No
         _REVIEW_UNIT_CONTEXT.reset(token)
 
 
+def _read_review_unit_checkpoint(checkpoint):
+    """缓存仅接受普通文件，不能在特殊节点上等待；普通坏缓存仍可重新审查。"""
+    try:
+        descriptor = os.open(checkpoint, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise PublishDataValidationError('审查请求检查点禁止符号链接') from exc
+        return None
+    with os.fdopen(descriptor, 'rb') as source:
+        info = os.fstat(source.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise PublishDataValidationError('审查请求检查点必须是普通 JSON 文件')
+        if info.st_size > 1024 * 1024:
+            return None
+        try:
+            raw = source.read(1024 * 1024 + 1)
+        except OSError:
+            return None
+        return raw if len(raw) <= 1024 * 1024 else None
+
+
 def review_cached_unit(kind, inputs, run):
     """只复用完全一致的请求成功证据；失败问题保留下来供诊断。"""
     context = _REVIEW_UNIT_CONTEXT.get()
@@ -627,10 +649,11 @@ def review_cached_unit(kind, inputs, run):
             raise PublishDataValidationError('review unit checkpoint 禁止符号链接')
         if component == current_root:
             break
+    raw_checkpoint = _read_review_unit_checkpoint(checkpoint)
     try:
-        if checkpoint.stat().st_size > 1024 * 1024:
-            raise ValueError('review unit checkpoint exceeds bounded result size')
-        record = json.loads(checkpoint.read_text(encoding='utf-8'))
+        if raw_checkpoint is None:
+            raise ValueError('审查请求检查点无可用缓存')
+        record = json.loads(raw_checkpoint.decode('utf-8'))
         if (
             isinstance(record, dict)
             and all(record.get(name) == value for name, value in identity.items())
@@ -1685,16 +1708,24 @@ def _load_review_image_from_local_repo(url):
     图片仓库之外的路径（或本地未暂存的路径）返回
     None，调用方据此回退到固定 IP 的远端下载。
     """
-    match = re.fullmatch(r'https://raw\.githubusercontent\.com/[^/]+/([^/]+)/main/([^?#]+)', url)
-    if not match:
+    image_base_url = os.environ.get(
+        'PAPER_DIGEST_IMAGE_BASE_URL',
+        'https://raw.githubusercontent.com/nanless/audio-paper-digest-images/main',
+    ).rstrip('/')
+    if not re.fullmatch(
+            r'https://raw\.githubusercontent\.com/[^/?#]+/[^/?#]+/main',
+            image_base_url):
         return None
-    repo_name, relative = match.groups()
+    prefix = image_base_url + '/'
+    if not url.startswith(prefix):
+        return None
+    relative = url[len(prefix):]
+    if not relative or '?' in relative or '#' in relative:
+        return None
     image_repo = Path(
         os.environ.get('PAPER_DIGEST_IMAGE_REPO',
                        str(Path.home() / 'code' / 'github_repos' / 'audio-paper-digest-images'))
     ).expanduser().resolve()
-    if repo_name != image_repo.name or not relative:
-        return None
     target = (image_repo / relative).resolve()
     if not target.is_relative_to(image_repo) or target.is_symlink() or not target.is_file():
         return None
