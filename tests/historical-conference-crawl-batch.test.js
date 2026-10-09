@@ -10,13 +10,13 @@ const options = { crosswalkRoot: '/tmp/crosswalk', identityRoot: '/tmp/identity'
 
 test('已停用的会议抓取批次在读取元数据、标题或对照表状态之前就失败', async () => {
     let read = 0;
-    await assert.rejects(batch.runConferenceCrawlBatch(options, { readCrosswalk: () => { read++; throw new Error('must not read'); } }), /retired/);
+    await assert.rejects(batch.runConferenceCrawlBatch(options, { readCrosswalk: () => { read++; throw new Error('不应读取来源对照表'); } }), /已停用/);
     assert.equal(read, 0);
 });
 
 test('旧版会议命令包装器是个会明确报错的兼容入口，直接失败', async () => {
-    assert.throws(() => cli.parseArgs(['--dry-run']), /retired/);
-    await assert.rejects(cli.main(['--apply']), /retired/);
+    assert.throws(() => cli.parseArgs(['--dry-run']), /已停用/);
+    await assert.rejects(cli.main(['--apply']), /已停用/);
 });
 
 test('显式的非标题分组仍只是纯函数辅助，不是执行入口', () => {

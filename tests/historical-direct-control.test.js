@@ -270,19 +270,73 @@ test('控制命令行只接受 status watch，拒绝不安全的组合', () => {
     assert.deepEqual(cli.parseArgs(['status', '--plan', '/tmp/plan.json', '--generation', '2', '--watch-seconds', '5']), {
         action: 'status', planFile: '/tmp/plan.json', generation: 2, watchSeconds: 5, phase: null,
         publicationId: null, liveRemote: false });
-    assert.throws(() => cli.parseArgs(['pause', '--plan', '/tmp/plan.json', '--watch-seconds', '5']), /Use/);
+    assert.throws(() => cli.parseArgs(['pause', '--plan', '/tmp/plan.json', '--watch-seconds', '5']), /用法/);
     assert.deepEqual(cli.parseArgs(['pause', '--plan', '/tmp/plan.json', '--phase', 'source']), {
         action: 'pause', planFile: '/tmp/plan.json', generation: 1, watchSeconds: null, phase: 'source' });
-    assert.throws(() => cli.parseArgs(['resume', '--plan', '/tmp/plan.json']), /Use/);
-    assert.throws(() => cli.parseArgs(['status', '--plan', 'relative.json']), /Use/);
+    assert.throws(() => cli.parseArgs(['resume', '--plan', '/tmp/plan.json']), /用法/);
+    assert.throws(() => cli.parseArgs(['status', '--plan', 'relative.json']), /用法/);
     assert.equal(cli.parseArgs(['status', '--plan', '/tmp/plan.json', '--verify-sources', 'true']).verifySources, true);
     const publication = cli.parseArgs(['status', '--plan', '/tmp/plan.json', '--publication-id',
         '12345678-1234-4123-8123-123456789abc']);
     assert.equal(publication.liveRemote, true);
     assert.equal(publication.publicationId, '12345678-1234-4123-8123-123456789abc');
-    assert.throws(() => cli.parseArgs(['status', '--plan', '/tmp/plan.json', '--live-remote', 'true']), /Use/);
+    assert.throws(() => cli.parseArgs(['status', '--plan', '/tmp/plan.json', '--live-remote', 'true']), /用法/);
     assert.throws(() => cli.parseArgs(['status', '--plan', '/tmp/plan.json', '--publication-id',
-        '12345678-1234-4123-8123-123456789abc', '--watch-seconds', '5']), /Use/);
+        '12345678-1234-4123-8123-123456789abc', '--watch-seconds', '5']), /用法/);
     assert.throws(() => cli.parseArgs(['status', '--plan', '/tmp/plan.json', '--verify-sources', 'true',
-        '--watch-seconds', '5']), /Use/);
+        '--watch-seconds', '5']), /用法/);
+});
+
+test('暂停请求短写不留坏标记，下次请求和正常恢复仍可用', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-pause-short-write-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const plan = minimalPlan(), options = { registryRoot: root, plan, requestedAt: '2026-09-07T00:00:00.000Z' };
+    const paths = control.controlPaths(options), originalWrite = fs.writeFileSync;
+    fs.writeFileSync = (fd, bytes) => { fs.writeSync(fd, Buffer.from(bytes).subarray(0, 10)); throw Object.assign(new Error('模拟暂停写入失败'), { code: 'EIO' }); };
+    try { assert.throws(() => control.writePauseRequest(options), /模拟暂停写入失败/); }
+    finally { fs.writeFileSync = originalWrite; }
+    assert.equal(fs.existsSync(paths.pauseFile), false);
+    assert.equal(control.writePauseRequest(options).status, 'pause-requested');
+    assert.equal(control.resumeRewrite(options).status, 'resumed');
+});
+
+test('真实进程在暂停请求链接后被杀，新请求恢复原时间戳而不重写证明', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-pause-kill-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const plan = minimalPlan(), options = { registryRoot: root, plan, requestedAt: '2026-09-07T00:00:00.000Z' };
+    const script = `const fs=require('node:fs'),control=require(${JSON.stringify(require.resolve('../scripts/lib/historical-direct-control.js'))});
+const link=fs.linkSync;fs.linkSync=(a,b)=>{link(a,b);process.kill(process.pid,'SIGKILL');};
+control.writePauseRequest(${JSON.stringify(options)});`;
+    const child = require('node:child_process').spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(child.signal, 'SIGKILL', child.stderr);
+    const filename = control.controlPaths(options).pauseFile, before = fs.readFileSync(filename);
+    assert.equal(fs.statSync(filename).nlink, 2);
+    const recovered = control.writePauseRequest({ ...options, requestedAt: '2026-09-07T01:00:00.000Z' });
+    assert.equal(recovered.status, 'already-pause-requested');
+    assert.equal(recovered.record.requestedAt, options.requestedAt);
+    assert.deepEqual(fs.readFileSync(filename), before); assert.equal(fs.statSync(filename).nlink, 1);
+});
+
+test('并发暂停请求复用先写入的合法时间和原因，拒绝坏记录且不吞 I/O 失败', t => {
+    for (const kind of ['timestamp', 'reason', 'invalid', 'io']) {
+        const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-pause-race-'));
+        t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+        const plan = minimalPlan(), requestedAt = '2026-09-07T00:00:00.000Z';
+        const options = { registryRoot: root, plan, requestedAt };
+        const winner = control.pauseRecord(plan, 1, '2026-09-07T01:00:00.000Z',
+            kind === 'reason' ? { code: 'SIGINT', detail: '先到的暂停请求' } : undefined);
+        const bytes = Buffer.from(JSON.stringify(kind === 'invalid' ? { ...winner, requestSha256: '0'.repeat(64) } : winner));
+        const link = fs.linkSync;
+        fs.linkSync = (from, to) => {
+            fs.writeFileSync(to, bytes, { flag: 'wx', mode: 0o600 });
+            if (kind === 'io') throw Object.assign(new Error('模拟暂停硬链接 I/O 失败'), { code: 'EIO' });
+            return link(from, to);
+        };
+        try {
+            if (kind === 'invalid') assert.throws(() => control.writePauseRequest(options), /SHA drifted/);
+            else if (kind === 'io') assert.throws(() => control.writePauseRequest(options), error => error.code === 'EIO');
+            else assert.deepEqual(control.writePauseRequest(options).record, winner);
+        } finally { fs.linkSync = link; }
+        assert.deepEqual(fs.readFileSync(control.controlPaths(options).pauseFile), bytes);
+    }
 });

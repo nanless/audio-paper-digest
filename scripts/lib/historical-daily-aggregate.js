@@ -9,6 +9,7 @@ const path = require('node:path');
 const crosswalkApi = require('./page-source-crosswalk.js');
 const pageStagingApi = require('./historical-page-staging.js');
 const fresh = require('./fresh-rewrite-run.js');
+const { writeImmutableFile } = require('./immutable-file.js');
 
 const PAGE_STAGING_CONTRACT = pageStagingApi.CONTRACT;
 const CONTRACT = 'historical-daily-aggregate-staging-v2';
@@ -368,13 +369,9 @@ function writeAggregates({ outputRoot, aggregateRunId, aggregates } = {}) {
     const root = fresh.assertSafeDirectory(outputRoot, true);
     const runRoot = fresh.assertSafeDirectory(path.join(root, aggregateRunId), true); const outputs = [];
     for (const aggregate of aggregates) {
-        const filename = path.join(runRoot, `daily-${aggregate.date}.json`); const bytes = Buffer.from(`${JSON.stringify(aggregate, null, 2)}\n`); let fd;
-        try { fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600); fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); }
-        catch (error) {
-            if (error.code !== 'EEXIST') throw error;
-            const existing = readRegular(filename, 64 * 1024 * 1024, `日期 ${aggregate.date} 的已有每日汇总文件`);
-            if (!existing.bytes.equals(bytes)) fail(`日期 ${aggregate.date} 的已有每日汇总文件与本次内容不同，拒绝覆盖。`);
-        } finally { if (fd !== undefined) fs.closeSync(fd); }
+        const filename = path.join(runRoot, `daily-${aggregate.date}.json`);
+        const bytes = Buffer.from(`${JSON.stringify(aggregate, null, 2)}\n`);
+        writeImmutableFile(filename, bytes, fail);
         outputs.push({ date: aggregate.date, filename, fileSha256: sha256(bytes) });
     }
     return outputs;

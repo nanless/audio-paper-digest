@@ -12,6 +12,7 @@ const runner = require('./historical-direct-rewrite-runner.js');
 const aggregateApi = require('./historical-direct-aggregate.js');
 const directPages = require('./historical-direct-page-staging.js');
 const conferencePageMappingsApi = require('./historical-conference-page-projections.js');
+const { writeImmutableFile, recoverImmutableFileLink } = require('./immutable-file.js');
 
 const PAUSE_CONTRACT = 'historical-direct-rewrite-pause-request-v1';
 const STATUS_CONTRACT = 'historical-direct-rewrite-status-v1';
@@ -213,16 +214,24 @@ function writePauseRequest({ phase = 'analysis', registryRoot, sourceRoot, plan,
         phase === 'analysis' ? 'registry root' : 'fresh arXiv source root', true);
     const paths = phasePaths({ phase, registryRoot, sourceRoot, plan, generation });
     const record = pauseRecord(plan, generation, requestedAt, reason);
-    const bytes = prettyBytes(record); let fd;
+    recoverImmutableFileLink(paths.pauseFile, fail, 1024 * 1024);
+    const existing = readPauseFile(paths.pauseFile, plan, generation);
+    if (existing) return { status: 'already-pause-requested', phase, ...paths, record: existing.record };
+    // 并发暂停保留第一份完整记录；仅内容冲突可重读复用，I/O 与文件身份变化仍须失败。
+    const rejectWrite = (message, details) => {
+        const error = new HistoricalDirectControlError(message);
+        if (details?.code === 'IMMUTABLE_FILE_CONTENT_CONFLICT') error.code = details.code;
+        throw error;
+    };
     try {
-        fd = fs.openSync(paths.pauseFile, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-        fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.fchmodSync(fd, 0o600);
-        return { status: 'pause-requested', phase, ...paths, record };
+        const status = writeImmutableFile(paths.pauseFile, prettyBytes(record), rejectWrite);
+        return { status: status === 'created' ? 'pause-requested' : 'already-pause-requested', phase, ...paths, record };
     } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        const existing = readPauseFile(paths.pauseFile, plan, generation);
-        return { status: 'already-pause-requested', phase, ...paths, record: existing.record };
-    } finally { if (fd !== undefined) fs.closeSync(fd); }
+        if (error.code !== 'IMMUTABLE_FILE_CONTENT_CONFLICT') throw error;
+        const winner = readPauseFile(paths.pauseFile, plan, generation);
+        if (!winner) throw error;
+        return { status: 'already-pause-requested', phase, ...paths, record: winner.record };
+    }
 }
 function lockPresent(lockDirectory) {
     const stat = fs.lstatSync(lockDirectory, { throwIfNoEntry: false });

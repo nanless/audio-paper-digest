@@ -11,6 +11,7 @@ const identityApi = require('./paper-identity.js');
 const icmlPosterApi = require('./historical-icml-poster-authority.js');
 const openreviewPdfApi = require('./historical-openreview-pdf-source.js');
 const alternatePdfApi = require('./historical-icml-alternate-pdf-source.js');
+const { writeImmutableFile } = require('./immutable-file.js');
 
 const CONTRACT = 'historical-conference-local-sources-v2';
 const VERSION = 2;
@@ -110,7 +111,7 @@ function hashAvailablePdf(filename) {
         const initial = Buffer.alloc(5);
         const initialRead = fs.readSync(fd, initial, 0, initial.length, 0);
         if (initialRead !== initial.length || initial.toString('ascii') !== '%PDF-') {
-            return { availability: 'invalid-pdf', absolutePath, bytes: opened.size, sha256: null };
+            return { availability: 'invalid-pdf', absolutePath, bytes: null, sha256: null };
         }
         const hash = crypto.createHash('sha256');
         const chunk = Buffer.alloc(1024 * 1024);
@@ -541,19 +542,8 @@ function writeManifest({ root, outputName, manifest }) {
     if (!SAFE_JSON_NAME.test(String(outputName || ''))) fail('manifest output name is unsafe');
     const normalized = assertManifest(manifest); const bytes = prettyBytes(normalized); const filename = path.resolve(directory, outputName);
     if (path.dirname(filename) !== directory) fail('manifest 输出路径逃出了配置目录');
-    let fd; let recovered = false;
-    try {
-        fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-        fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.fchmodSync(fd, 0o600);
-    } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        const existing = readStableFile(filename, 'existing local source manifest', MAX_METADATA_BYTES);
-        if (!existing.bytes.equals(bytes)) fail('拒绝覆盖不同的本地来源 manifest');
-        recovered = true;
-    } finally {
-        if (fd !== undefined) fs.closeSync(fd);
-    }
-    return { filename, status: recovered ? 'recovered' : 'created', manifestSha256: normalized.manifestSha256, summary: clone(normalized.summary) };
+    const status = writeImmutableFile(filename, bytes, fail);
+    return { filename, status, manifestSha256: normalized.manifestSha256, summary: clone(normalized.summary) };
 }
 
 module.exports = { CONTRACT, VERSION, ICML_POSTER_SOURCE_SET, ICML_POSTER_PROVENANCE, SAFE_JSON_NAME,

@@ -1,12 +1,10 @@
 'use strict';
 
-// 保留下来的爬虫记录对只读的审计和恢复工具仍有价值，但不能用来创建 crosswalk
-// 分配。直接重写要么重新抓取 arXiv，要么复算专门的会议本地来源目录。
+// 保留爬虫记录供只读审计和恢复，但不能据此写入来源对照表。
+// 历史直接重写须重新抓取 arXiv，或重新核验会议本地来源目录。
 
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const localCrawlApi = require('./historical-local-crawl-authority.js');
 const crosswalkApi = require('./page-source-crosswalk.js');
 
 const RECORD_CONTRACT = 'historical-local-crawl-batch-record-v1';
@@ -35,10 +33,10 @@ function attemptDirectory(root, crosswalkId) {
     const safeRoot = crosswalkApi.safeDirectory(root, { create: true }); const directory = path.join(safeRoot, crosswalkId);
     try { fs.mkdirSync(directory, { mode: 0o700 }); } catch (error) { if (error.code !== 'EEXIST') throw error; }
     const stat = fs.lstatSync(directory);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory) fail('local crawl batch directory is unsafe');
+    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(directory) !== directory) fail('本地爬虫批次路径必须是真实目录，不能是符号链接');
     return directory;
 }
-function fail(message) { throw new Error(`Historical archive crawl batch rejected: ${message}`); }
+function fail(message) { throw new Error(`历史归档爬虫批次无法执行：${message}`); }
 function writeAttemptRecord(root, record) {
     const body = { contract: RECORD_CONTRACT, version: VERSION, ...record };
     const sealed = { ...body, recordSha256: crosswalkApi.stableHash(body) };
@@ -51,82 +49,12 @@ function writeAttemptRecord(root, record) {
     } finally { if (fd !== undefined) fs.closeSync(fd); }
     return { filename, record: sealed };
 }
-function dependencies() {
-    return { readCrosswalk: crosswalkApi.readCrosswalk, scan: localCrawlApi.scanLocalCrawlPapers,
-        prepareAuthority: localCrawlApi.prepareLocalCrawlAuthority, buildDecision: crosswalkApi.buildVerifiedDecisionArtifact,
-        writeDecision: crosswalkApi.writeDecisionArtifact, loadDecision: crosswalkApi.loadDecisionHandle,
-        applyDecision: crosswalkApi.applyDecision, writeAttemptRecord, uuid: () => crypto.randomUUID(), now: () => new Date().toISOString() };
-}
 async function runLocalCrawlBatch({ crosswalkRoot, identityRoot, snapshotRoot, dataRoot, batchRoot, crosswalkId, owner,
     limit = null, apply = true, concurrency = 3, recoveryPolicy = null } = {}, overrides = {}) {
     void crosswalkRoot; void identityRoot; void snapshotRoot; void dataRoot; void batchRoot; void crosswalkId; void owner;
     void limit; void apply; void concurrency; void recoveryPolicy; void overrides;
-    fail('local crawler crosswalk mutation is retired; use history:direct-inputs and history:direct-plan');
-    /* c8 ignore next -- 保留在下面，作为既有运行时记录的事后取证参考。 */
-    const deps = { ...dependencies(), ...overrides };
-    if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 5) fail('concurrency 必须是 1 到 5 的整数');
-    const initial = deps.readCrosswalk({ crosswalkRoot, crosswalkId }); const index = deps.scan({ dataRoot });
-    const matches = index.matches;
-    const all = eligiblePages(initial).map(page => ({ ...page, match: selectMatch(matches.get(page.arxivId) || [], page.cohortDate) }));
-    const matched = all.filter(item => item.match); const maximum = limit === null ? matched.length : limit;
-    if (!Number.isSafeInteger(maximum) || maximum < 0) fail('limit 必须是 null 或非负整数');
-    const selected = matched.slice(0, maximum);
-    if (!apply) return { status: 'dry-run', crosswalkId, localCrawlFiles: index.files.length,
-        eligiblePages: all.length, matchedPages: matched.length, unmatchedPages: all.length - matched.length,
-        selectedPages: selected.length, concurrency };
+    fail('已停用通过本地爬虫修改来源对照表的流程；请使用 history:direct-inputs 和 history:direct-plan');
 
-    const results = new Array(selected.length); let cursor = 0; let decisionTail = Promise.resolve();
-    const serializeDecision = callback => {
-        const pending = decisionTail.then(callback, callback); decisionTail = pending.catch(() => {}); return pending;
-    };
-    const processPage = async (item, resultIndex) => {
-        const attemptId = deps.uuid(); const startedAt = deps.now(); let authorityName = null;
-        try {
-            const current = deps.readCrosswalk({ crosswalkRoot, crosswalkId });
-            if (current.assignments[item.pageKey]?.status !== 'pending') {
-                const record = { crosswalkId, attemptId, arxivId: item.arxivId, pageKey: item.pageKey, cohortDate: item.cohortDate,
-                    authorityName: null, status: 'complete', startedAt, finishedAt: deps.now(), sourceKind: item.match.sourceKind,
-                    sourceRelativePath: item.match.sourceRelativePath,
-                    recordSha256: item.match.recordSha256, error: null };
-                deps.writeAttemptRecord(batchRoot, record); results[resultIndex] = record; return;
-            }
-            const prepared = await deps.prepareAuthority({ identityRoot, snapshotRoot, dataRoot, arxivId: item.arxivId, match: item.match, apply: true });
-            authorityName = prepared.authorityName;
-            const applied = await serializeDecision(() => {
-                const fresh = deps.readCrosswalk({ crosswalkRoot, crosswalkId });
-                if (fresh.assignments[item.pageKey]?.status !== 'pending') return false;
-                const artifact = deps.buildDecision({ state: fresh, pageKey: item.pageKey, authorityHandle: prepared.authorityHandle,
-                    operationId: deps.uuid(), actorId: owner,
-                    reason: 'Retained local crawler filtered-papers record exactly matches the frozen non-title arXiv identity hint.' });
-                const decisionName = `local-crawl-${item.arxivId.replace('.', '-')}-${attemptId}-${item.pageKey.slice(5)}.json`;
-                const decisionFile = deps.writeDecision({ crosswalkRoot, crosswalkId, decisionName, artifact });
-                const handle = deps.loadDecision(decisionFile, { authorityHandle: prepared.authorityHandle });
-                deps.applyDecision({ crosswalkRoot, crosswalkId, decisionHandle: handle, owner, recoveryPolicy });
-                return true;
-            });
-            const record = { crosswalkId, attemptId, arxivId: item.arxivId, pageKey: item.pageKey, cohortDate: item.cohortDate,
-                authorityName, status: 'complete', startedAt, finishedAt: deps.now(), sourceKind: item.match.sourceKind,
-                sourceRelativePath: item.match.sourceRelativePath,
-                recordSha256: item.match.recordSha256, error: applied ? null : 'page was already completed by a concurrent worker' };
-            deps.writeAttemptRecord(batchRoot, record); results[resultIndex] = record;
-        } catch (error) {
-            const record = { crosswalkId, attemptId, arxivId: item.arxivId, pageKey: item.pageKey, cohortDate: item.cohortDate,
-                authorityName, status: 'failed', startedAt, finishedAt: deps.now(), sourceKind: item.match.sourceKind,
-                sourceRelativePath: item.match.sourceRelativePath,
-                recordSha256: item.match.recordSha256, error: String(error.message).slice(0, 2000) };
-            deps.writeAttemptRecord(batchRoot, record); results[resultIndex] = record;
-        }
-    };
-    const worker = async () => { while (cursor < selected.length) { const index = cursor++; await processPage(selected[index], index); } };
-    await Promise.all(Array.from({ length: Math.min(concurrency, selected.length) }, worker));
-    const final = deps.readCrosswalk({ crosswalkRoot, crosswalkId }); const complete = results.filter(Boolean);
-    const failures = complete.filter(item => item.status !== 'complete');
-    return { status: failures.length ? 'partial' : 'complete', crosswalkId, localCrawlFiles: index.files.length,
-        eligiblePages: all.length, matchedPages: matched.length, unmatchedPages: all.length - matched.length,
-        processedPages: complete.length, completedPages: complete.filter(item => item.status === 'complete').length,
-        failures: failures.map(item => ({ pageKey: item.pageKey, arxivId: item.arxivId, error: item.error })),
-        crosswalkVerified: final.completion.verified, crosswalkTotal: final.completion.total, concurrency,
-        exitCode: failures.length ? 1 : 0 };
 }
 
 module.exports = { RECORD_CONTRACT, VERSION, eligiblePages, selectMatch, attemptDirectory, writeAttemptRecord,

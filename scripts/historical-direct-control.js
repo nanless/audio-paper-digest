@@ -13,12 +13,12 @@ const USAGE = 'status --plan ABSOLUTE.json [--generation N] [--watch-seconds N] 
 function parseArgs(argv) {
     const [action, ...rest] = argv; const values = {};
     if (!['status', 'pause', 'resume'].includes(action) || rest.length < 2 || rest.length > 12 || rest.length % 2) {
-        throw new Error(`Use ${USAGE}`);
+        throw new Error(`用法：${USAGE}`);
     }
     for (let index = 0; index < rest.length; index += 2) {
         const flag = rest[index]; const value = rest[index + 1];
         if (!['--plan', '--generation', '--watch-seconds', '--phase', '--verify-sources', '--publication-id', '--live-remote'].includes(flag) || !value || Object.hasOwn(values, flag)) {
-            throw new Error(`Use ${USAGE}`);
+            throw new Error(`用法：${USAGE}`);
         }
         values[flag] = value;
     }
@@ -35,7 +35,7 @@ function parseArgs(argv) {
         || values['--live-remote'] !== undefined && !['true', 'false'].includes(values['--live-remote'])
         || values['--live-remote'] !== undefined && values['--publication-id'] === undefined
         || action === 'status' && values['--phase'] !== undefined
-        || action !== 'status' && !['source', 'analysis'].includes(values['--phase'])) throw new Error(`Use ${USAGE}`);
+        || action !== 'status' && !['source', 'analysis'].includes(values['--phase'])) throw new Error(`用法：${USAGE}`);
     return { action, planFile: path.resolve(values['--plan']), generation: Number(values['--generation'] || 1),
         watchSeconds: values['--watch-seconds'] === undefined ? null : Number(values['--watch-seconds']),
         phase: values['--phase'] || null,
@@ -44,7 +44,7 @@ function parseArgs(argv) {
             liveRemote: values['--publication-id'] ? values['--live-remote'] !== 'false' : false } : {}) };
 }
 function loadPlan(filename) {
-    return planApi.normalizePlan(conferencePageMappingsApi.readStableJson(filename, 'direct rewrite control plan').value);
+    return planApi.normalizePlan(conferencePageMappingsApi.readStableJson(filename, '历史直接重写的控制计划').value);
 }
 function roots(runtime = {}) {
     const files = runtime.files || Config.FILES;

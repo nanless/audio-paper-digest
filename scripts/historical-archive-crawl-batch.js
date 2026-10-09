@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 'use strict';
 
-// 有意保留这个会明确报错的兼容入口。留存的本地爬虫数据是直通路线的输入，绝不作为
-// 生产环境来源对照的依据。
+// 保留旧命令以便明确提示替代入口。本地爬虫数据只能交给历史直接重写流程，
+// 不能据此修改正式来源对照表。
 const { requireExternalRuntime } = require('./env-loader.js');
-const RETIRED_MESSAGE = 'history:archive-crawl-batch is retired: local crawler data must use history:direct-inputs and history:direct-plan; it cannot mutate a crosswalk';
+const RETIRED_MESSAGE = 'history:archive-crawl-batch 已停用；本地爬虫数据须经 history:direct-inputs 和 history:direct-plan 处理，不能用来修改来源对照表';
 function parseArgs() { throw new Error(RETIRED_MESSAGE); }
 async function main() { requireExternalRuntime('historical-archive-crawl-batch.js'); throw new Error(RETIRED_MESSAGE); }
 if (require.main === module) main().catch(error => { console.error(`[historical-archive-crawl-batch] ${error.message}`); process.exitCode = 1; });

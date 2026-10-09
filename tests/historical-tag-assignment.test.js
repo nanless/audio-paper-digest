@@ -218,3 +218,60 @@ test('历史标签分配读取旧缓存且拒绝混用，不新增缺少校验�
         assert.throws(() => api.getConsistentClassificationLabels(mixed), /解析结果不能同时包含/);
     }
 });
+
+
+function storageFixture(t) {
+    const f = runFixture(t), value = api.buildAssignments({ runHandle: f.handle, tagCatalog: registry() })[0];
+    const root = f.output, args = { outputRoot: root, assignments: [value] };
+    const write = () => api.writeAssignments(args);
+    const filename = path.join(root, RUN_ID, api.assignmentFilename(value.paperId, value.registrySha256, value.assignmentSha256));
+    return { root, value, args, write, filename };
+}
+test('不可变后处理输出短写失败不留正式文件，原请求可以成功重试', t => {
+    const f = storageFixture(t), original = fs.writeFileSync;
+    let injected = false;
+    fs.writeFileSync = function(target, bytes, ...args) {
+        if (!injected && typeof target === 'number') {
+            injected = true;
+            original.call(fs, target, Buffer.from(bytes).subarray(0, 7));
+            throw Object.assign(new Error('磁盘空间不足'), { code: 'ENOSPC' });
+        }
+        return original.call(fs, target, bytes, ...args);
+    };
+    try { assert.throws(f.write, {code:'ENOSPC'}); } finally { fs.writeFileSync = original; }
+    assert.equal(injected, true); assert.equal(fs.existsSync(f.filename), false);
+    const [result] = f.write();
+    assert.deepEqual(JSON.parse(fs.readFileSync(f.filename)), f.value);
+    assert.equal(result.fileSha256, sha(fs.readFileSync(f.filename)));
+});
+test('不可变后处理输出写入失败不能覆盖或删除竞争者的正式文件', t => {
+    const f = storageFixture(t), original = fs.writeFileSync;
+    let injected = false; const winner = Buffer.from('另一写者保存的原始字节');
+    fs.writeFileSync = function(target, bytes, ...args) {
+        if (!injected && typeof target === 'number') {
+            injected = true;
+            original.call(fs, f.filename, winner);
+            throw Object.assign(new Error('写入失败'), { code: 'EIO' });
+        }
+        return original.call(fs, target, bytes, ...args);
+    };
+    try { assert.throws(f.write, {code:'EIO'}); } finally { fs.writeFileSync = original; }
+    assert.deepEqual(fs.readFileSync(f.filename), winner);
+    assert.throws(f.write); assert.deepEqual(fs.readFileSync(f.filename), winner);
+});
+test('不可变后处理输出建立正式链接后进程中断，公开写入入口可安全恢复', t => {
+    const f = storageFixture(t);
+    const { spawnSync } = require('node:child_process');
+    const child = spawnSync(process.execPath, ['-e', `
+        const fs = require('node:fs'), link = fs.linkSync;
+        fs.linkSync = (...args) => { link(...args); process.kill(process.pid, 'SIGKILL'); };
+        require(process.argv[1]).writeAssignments(JSON.parse(process.argv[2]));
+    `, require.resolve('../scripts/lib/historical-tag-assignment.js'), JSON.stringify(f.args)], {encoding:'utf8'});
+    assert.equal(child.signal, 'SIGKILL', child.stderr);
+    const before = fs.readFileSync(f.filename);
+    assert.equal(fs.statSync(f.filename).nlink, 2);
+    const [result] = f.write();
+    assert.deepEqual(fs.readFileSync(f.filename), before);
+    assert.equal(fs.statSync(f.filename).nlink, 1);
+    assert.equal(result.fileSha256, sha(before));
+});

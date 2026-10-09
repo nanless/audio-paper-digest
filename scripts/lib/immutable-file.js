@@ -99,8 +99,11 @@ function writeImmutableFile(filename, bytes, reject) {
             Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);
             continue;
         }
-        if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || named.size !== payload.length) {
+        if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1) {
             reject('已有不可变文件不是相同长度的普通单链接文件，拒绝覆盖');
+        }
+        if (named.size !== payload.length) {
+            reject('已有不可变文件不是相同长度的普通单链接文件，拒绝覆盖', { code: 'IMMUTABLE_FILE_CONTENT_CONFLICT' });
         }
         const readFd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         try {
@@ -110,9 +113,12 @@ function writeImmutableFile(filename, bytes, reject) {
             }
             const actual = fs.readFileSync(readFd);
             const after = fs.fstatSync(readFd); const namedAfter = fs.lstatSync(filename);
-            if (!actual.equals(payload) || !sameIdentity(after, opened) || !sameIdentity(namedAfter, opened)
+            if (actual.length !== opened.size || !sameIdentity(after, opened) || !sameIdentity(namedAfter, opened)
                 || after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs
-                || namedAfter.nlink !== 1 || namedAfter.isSymbolicLink()) reject('拒绝覆盖内容不同或读取时变化的不可变文件');
+                || namedAfter.nlink !== 1 || namedAfter.isSymbolicLink()) reject('拒绝覆盖读取时变化的不可变文件');
+            if (!actual.equals(payload)) {
+                reject('拒绝覆盖内容不同的不可变文件', { code: 'IMMUTABLE_FILE_CONTENT_CONFLICT' });
+            }
         } finally { fs.closeSync(readFd); }
         break;
     }

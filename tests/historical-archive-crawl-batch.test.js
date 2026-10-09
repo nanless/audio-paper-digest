@@ -11,15 +11,15 @@ const options = { crosswalkRoot: '/tmp/crosswalk', identityRoot: '/tmp/identity'
 
 test('保留的本地爬虫批次在打开数据或对照表状态之前就失败', async () => {
     let read = 0;
-    await assert.rejects(batch.runLocalCrawlBatch(options, { readCrosswalk: () => { read++; throw new Error('must not read'); } }), /retired/);
+    await assert.rejects(batch.runLocalCrawlBatch(options, { readCrosswalk: () => { read++; throw new Error('不应读取来源对照表'); } }), /已停用/);
     assert.equal(read, 0);
 });
 
 test('旧版归档和本地命令包装器是会明确报错的直接失败兼容入口', async () => {
-    assert.throws(() => cli.parseArgs(['--dry-run']), /retired/);
-    await assert.rejects(cli.main(['--dry-run']), /retired/);
-    assert.throws(() => localCli.parseArgs(['--apply']), /retired/);
-    await assert.rejects(localCli.main(['--apply']), /retired/);
+    assert.throws(() => cli.parseArgs(['--dry-run']), /已停用/);
+    await assert.rejects(cli.main(['--dry-run']), /已停用/);
+    assert.throws(() => localCli.parseArgs(['--apply']), /已停用/);
+    await assert.rejects(localCli.main(['--apply']), /已停用/);
 });
 
 test('只读的保留来源偏好辅助函数对审计工具保持确定性', () => {

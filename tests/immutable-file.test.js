@@ -140,3 +140,25 @@ test('不可变文件写入准确返回新建或恢复状态', t => {
     assert.equal(writeImmutableFile(target, '完整记录', reject), 'created');
     assert.equal(writeImmutableFile(target, '完整记录', reject), 'recovered');
 });
+
+test('只有内容冲突提供稳定冲突码，读取期间换主仍属完整性错误', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'immutable-conflict-kind-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const target = path.join(root, 'record.json');
+    const rejectWithCode = (message, details) => { throw Object.assign(new Error(message), details); };
+    writeImmutableFile(target, 'abc', reject);
+    for (const payload of ['xyz', 'different length']) {
+        assert.throws(() => writeImmutableFile(target, payload, rejectWithCode), error => error.code === 'IMMUTABLE_FILE_CONTENT_CONFLICT');
+    }
+    const read = fs.readFileSync; let changed = false;
+    fs.readFileSync = (fd, ...args) => {
+        const bytes = read(fd, ...args);
+        if (typeof fd === 'number' && !changed) {
+            changed = true; fs.renameSync(target, `${target}.old`); fs.writeFileSync(target, 'xyz', { mode: 0o600 });
+        }
+        return bytes;
+    };
+    try { assert.throws(() => writeImmutableFile(target, 'xyz', rejectWithCode), error => error.code !== 'IMMUTABLE_FILE_CONTENT_CONFLICT' && /读取时变化/.test(error.message)); }
+    finally { fs.readFileSync = read; }
+    assert.equal(changed, true); assert.equal(fs.readFileSync(target, 'utf8'), 'xyz');
+});

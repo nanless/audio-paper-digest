@@ -163,3 +163,40 @@ test('生产构建和命令行要求显式的绝对 ICML 快照目录和 PDF 目
     assert.throws(() => cli.parseArgs(['--dry-run', '--icml-poster-snapshot', 'relative.json',
         '--icml-pdf-root', f.icmlPdfs]), /Use/);
 });
+
+test('损坏 PDF 留作不可用来源，不能阻断完整清单或冒充可用字节', t => {
+    const f = fixture(t), badFile = path.join(f.root, 'icassp.pdf');
+    for (const bytes of [Buffer.from('<html>download failed</html>'), Buffer.alloc(0)]) {
+        fs.writeFileSync(badFile, bytes);
+        const descriptor = api.hashAvailablePdf(badFile);
+        assert.equal(descriptor.availability, 'invalid-pdf');
+        assert.equal(descriptor.bytes, null); assert.equal(descriptor.sha256, null);
+        const manifest = build(f), record = manifest.records.find(item => item.paperId.endsWith(':icassp-arnumber:100'));
+        assert.equal(record.sources[0].pdf.availability, 'invalid-pdf');
+        assert.equal(record.sources[0].pdf.acquisition, null);
+        assert.equal(manifest.summary.directRewriteEligible, 4); assert.equal(manifest.summary.unavailableOnly, 2);
+        assert.equal(api.assertManifest(manifest), manifest);
+    }
+});
+
+test('来源清单短写不留坏正式文件，同路径重试保持规范字节', t => {
+    const f = fixture(t), manifest = build(f), root = path.join(f.root, 'output');
+    fs.mkdirSync(root); const filename = path.join(root, 'sources.json'), originalWrite = fs.writeFileSync;
+    fs.writeFileSync = (fd, bytes) => { fs.writeSync(fd, Buffer.from(bytes).subarray(0, 10)); throw Object.assign(new Error('模拟清单写入失败'), { code: 'EIO' }); };
+    try { assert.throws(() => api.writeManifest({ root, outputName: 'sources.json', manifest }), /模拟清单写入失败/); }
+    finally { fs.writeFileSync = originalWrite; }
+    assert.equal(fs.existsSync(filename), false);
+    assert.equal(api.writeManifest({ root, outputName: 'sources.json', manifest }).status, 'created');
+    assert.equal(api.writeManifest({ root, outputName: 'sources.json', manifest }).status, 'recovered');
+    assert.deepEqual(fs.readFileSync(filename), api.prettyBytes(manifest));
+});
+
+test('来源清单写入竞争不得覆盖或删除另一写者文件', t => {
+    const f = fixture(t), manifest = build(f), root = path.join(f.root, 'output');
+    const originalLink = fs.linkSync, competitor = Buffer.from('另一写者的不可变内容');
+    fs.linkSync = (from, to) => { fs.writeFileSync(to, competitor, { flag: 'wx', mode: 0o600 }); return originalLink(from, to); };
+    try { assert.throws(() => api.writeManifest({ root, outputName: 'sources.json', manifest }), /拒绝覆盖/); }
+    finally { fs.linkSync = originalLink; }
+    assert.deepEqual(fs.readFileSync(path.join(root, 'sources.json')), competitor);
+    assert.deepEqual(fs.readdirSync(root), ['sources.json']);
+});

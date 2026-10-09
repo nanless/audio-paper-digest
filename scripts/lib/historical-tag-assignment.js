@@ -3,10 +3,10 @@
 // 根据已完成且绑定原论文来源的历史分析，确定标签分配；不读取旧博客标签，也不调用模型。
 
 const crypto = require('node:crypto');
-const fs = require('node:fs');
 const path = require('node:path');
 const tagCatalogApi = require('./tag-catalog.js');
 const fresh = require('./fresh-rewrite-run.js');
+const { writeImmutableFile } = require('./immutable-file.js');
 
 const CONTRACT = 'paper-tag-assignment-v2';
 const VERSION = 2;
@@ -176,21 +176,8 @@ function writeAssignments({ outputRoot, assignments } = {}) {
         const filename = path.join(runRoot, assignmentFilename(
             assignment.paperId, assignment.registrySha256, assignment.assignmentSha256
         ));
-        const bytes = canonicalBytes(assignment); let fd;
-        try {
-            fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-            fs.writeFileSync(fd, bytes); fs.fsyncSync(fd);
-        } catch (error) {
-            if (error.code !== 'EEXIST') throw error;
-            const existingStat = fs.lstatSync(filename);
-            if (!existingStat.isFile() || existingStat.isSymbolicLink() || existingStat.nlink !== 1) {
-                fail(`已有标签分配记录的文件类型或链接不安全：${path.basename(filename)}`);
-            }
-            const existingFd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-            let existing;
-            try { existing = fs.readFileSync(existingFd); } finally { fs.closeSync(existingFd); }
-            if (!existing.equals(bytes)) fail(`已有标签分配记录与待写入内容不同，不能覆盖：${path.basename(filename)}`);
-        } finally { if (fd !== undefined) fs.closeSync(fd); }
+        const bytes = canonicalBytes(assignment);
+        writeImmutableFile(filename, bytes, fail);
         outputs.push({ paperId: assignment.paperId, filename, fileSha256: sha256(bytes), status: assignment.status });
     }
     return outputs;
