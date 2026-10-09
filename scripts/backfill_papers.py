@@ -3,8 +3,8 @@ from log_setup import setup_script_logging
 setup_script_logging(__file__)
 
 """
-后台补录：耐限流地抓取所有论文 ID 并写入 papers.json
-使用 requests + timeout，避免挂起
+补录近期 arXiv 和 HuggingFace 论文元数据，合并写入 papers.json。
+请求设置超时；来源抓取失败时停止，不把失败当作没有新论文。
 """
 
 import json
@@ -99,42 +99,49 @@ def fetch_arxiv_category(category_id, max_results=30, existing_ids=None):
         f"max_results={max_results}"
     )
     headers = {'User-Agent': 'Mozilla/5.0 (compatible; PaperDigest/1.0)'}
+    proxies = fetch_proxies()
+    last_error = None
 
     for attempt in range(1, 6):
         try:
             log(f"  请求 {category_id} (尝试 {attempt}/5)...")
-            resp = requests.get(url, headers=headers, timeout=30, proxies=fetch_proxies())
+            resp = requests.get(url, headers=headers, timeout=30, proxies=proxies)
             if resp.status_code == 429:
+                last_error = RuntimeError('arXiv 返回 HTTP 429')
                 wait = min(2 ** attempt * 5, 60)
                 log(f"  限流，等待 {wait}秒...")
                 time.sleep(wait)
                 continue
             resp.raise_for_status()
             break
-        except requests.exceptions.Timeout:
+        except requests.exceptions.Timeout as exc:
+            last_error = exc
             log(f"  超时，{attempt*5}秒后重试...")
             time.sleep(attempt * 5)
         except Exception as e:
+            last_error = e
             log(f"  错误: {e}")
             time.sleep(attempt * 5)
     else:
-        log(f"  ✗ {category_id} 最终失败")
-        return []
+        raise RuntimeError(f'arXiv 类别 {category_id} 抓取失败，不能当作空结果') from last_error
 
     papers = []
     try:
         root = ET.fromstring(resp.content)
         ns = {'atom': 'http://www.w3.org/2005/Atom'}
+        if root.tag != '{http://www.w3.org/2005/Atom}feed':
+            raise ValueError('响应不是 Atom feed')
         entries = root.findall('atom:entry', ns)
     except Exception as e:
-        log(f"  XML 解析失败: {e}")
-        return []
+        raise RuntimeError(f'arXiv 类别 {category_id} 的 XML 响应无效') from e
 
     consecutive_existing = 0
     for entry in entries:
         id_elem = entry.find('atom:id', ns)
-        if id_elem is None:
-            continue
+        if id_elem is None or not (id_elem.text or '').strip():
+            raise RuntimeError(f'arXiv 类别 {category_id} 的记录缺少论文 ID')
+        if '/api/errors' in id_elem.text:
+            raise RuntimeError(f'arXiv 类别 {category_id} 返回错误记录，不能写入论文库')
         arxiv_id = id_elem.text.split('/abs/')[-1].strip()
 
         if existing_ids and arxiv_id in existing_ids:
@@ -175,6 +182,7 @@ def fetch_hf_papers(existing_ids, days=7):
     """抓取 HuggingFace Papers"""
     cutoff = now_bj() - timedelta(days=days)
     cutoff_str = cutoff.strftime('%Y-%m-%d')
+    proxies = fetch_proxies()
 
     merged = {}
 
@@ -183,10 +191,12 @@ def fetch_hf_papers(existing_ids, days=7):
         offset = page * 100
         url = f"https://huggingface.co/api/daily_papers?limit=100&offset={offset}"
         try:
-            resp = requests.get(url, timeout=30, proxies=fetch_proxies())
+            resp = requests.get(url, timeout=30, proxies=proxies)
             resp.raise_for_status()
             data = resp.json()
-            if not isinstance(data, list) or not data:
+            if not isinstance(data, list):
+                raise ValueError('HuggingFace daily_papers 响应不是列表')
+            if not data:
                 break
 
             oldest = None
@@ -225,13 +235,14 @@ def fetch_hf_papers(existing_ids, days=7):
             page += 1
             time.sleep(1)
         except Exception as e:
-            log(f"  HF 请求失败: {e}")
-            break
+            raise RuntimeError(f'HuggingFace daily_papers 第 {page + 1} 页抓取失败') from e
 
     try:
-        resp = requests.get("https://huggingface.co/api/papers?limit=100", timeout=30, proxies=fetch_proxies())
+        resp = requests.get("https://huggingface.co/api/papers?limit=100", timeout=30, proxies=proxies)
         resp.raise_for_status()
         data = resp.json()
+        if not isinstance(data, list):
+            raise ValueError('HuggingFace papers 响应不是列表')
         for item in data:
             if not isinstance(item, dict):
                 continue
@@ -259,7 +270,7 @@ def fetch_hf_papers(existing_ids, days=7):
                 }
         log(f"  HF papers API: {len(data)}篇")
     except Exception as e:
-        log(f"  HF papers API 失败: {e}")
+        raise RuntimeError('HuggingFace papers 抓取失败') from e
 
     result = [p for p in merged.values() if p['paper_id'] not in existing_ids]
     return result

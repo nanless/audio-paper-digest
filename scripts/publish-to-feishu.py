@@ -51,8 +51,10 @@ def feishu_request(url, headers=None, data=None, method='GET'):
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read().decode('utf-8'))
-        if result.get('code', 0) != 0:
-            raise Exception(f"飞书接口报错：{result.get('msg', 'unknown')}")
+        if not isinstance(result, dict) or type(result.get('code')) is not int:
+            raise RuntimeError('飞书响应缺少有效的结果码，无法确认操作成功')
+        if result['code'] != 0:
+            raise RuntimeError(f"飞书接口报错：{result.get('msg', '未提供错误说明')}")
         return result.get('data', result)
     except urllib.error.HTTPError as e:
         err_body = e.read().decode('utf-8', errors='replace')
@@ -104,7 +106,7 @@ def text_run(content, bold=False):
 
 
 def md_to_feishu_blocks(md_text):
-    """将 Markdown 转换为飞书 block 列表"""
+    """转换标题和列表；保留表格与行内标记，避免删除链接地址和公式符号。"""
     blocks = []
     lines = md_text.split('\n')
     i = 0
@@ -141,9 +143,6 @@ def md_to_feishu_blocks(md_text):
         # 无序列表
         elif stripped.startswith('- ') or stripped.startswith('* '):
             content = stripped[2:]
-            # 去掉 Markdown 的粗体和斜体标记
-            content = re.sub(r'\*\*([^*]+)\*\*', r'\1', content)
-            content = re.sub(r'\*([^*]+)\*', r'\1', content)
             blocks.append({
                 'block_type': 12,
                 'bullet': {'elements': [text_run(content)]}
@@ -151,33 +150,24 @@ def md_to_feishu_blocks(md_text):
         # 有序列表
         elif re.match(r'^\d+\.\s', stripped):
             content = re.sub(r'^\d+\.\s', '', stripped)
-            content = re.sub(r'\*\*([^*]+)\*\*', r'\1', content)
             blocks.append({
                 'block_type': 13,
                 'ordered': {'elements': [text_run(content)]}
             })
-        # 表格（暂时跳过：飞书表格需要复杂的块结构）
+        # 尚未支持原生表格块，保留全部表头、分隔符和数据，不能只写占位说明。
         elif stripped.startswith('|'):
-            # 跳过表格各行，只插入一句占位说明
-            if i == 0 or not lines[i-1].strip().startswith('|'):
-                blocks.append({
-                    'block_type': 2,
-                    'text': {'elements': [text_run('[表格内容，请手动粘贴或查看原博客]')]}
-                })
-            # 一直跳到表格结束
+            table_lines = []
             while i < len(lines) and lines[i].strip().startswith('|'):
+                table_lines.append(lines[i])
                 i += 1
+            blocks.append({'block_type': 2,
+                           'text': {'elements': [text_run('\n'.join(table_lines))]}})
             continue
         # 普通段落
         else:
-            # 去掉 Markdown 的粗体标记
-            content = re.sub(r'\*\*([^*]+)\*\*', r'\1', stripped)
-            content = re.sub(r'\*([^*]+)\*', r'\1', content)
-            # 去掉 Markdown 的链接标记，只留文字
-            content = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', content)
             blocks.append({
                 'block_type': 2,
-                'text': {'elements': [text_run(content)]}
+                'text': {'elements': [text_run(line)]}
             })
 
         i += 1
