@@ -192,6 +192,34 @@ class RegistryTest(unittest.TestCase):
 
 
 class PreviewBuilderTest(unittest.TestCase):
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), '系统不支持命名管道')
+    def test_existing_preview_fifo_stops_without_blocking_or_deleting_input(self):
+        self.output.mkdir()
+        target = self.output / 'index.json'
+        os.mkfifo(target, 0o600)
+        before = target.lstat()
+        code = """
+import importlib.util
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1] + '/scripts')
+spec = importlib.util.spec_from_file_location('preview', sys.argv[1] + '/scripts/build-tag-preview.py')
+preview = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(preview)
+try:
+    preview.validate_output_root(sys.argv[2], Path(sys.argv[3]))
+except ValueError as error:
+    if '普通文件' not in str(error):
+        raise
+else:
+    raise AssertionError('不能接受已有命名管道作为标签预览输入')
+"""
+        result = subprocess.run([sys.executable, '-c', code, str(ROOT), str(self.output), str(self.repo)],
+                                capture_output=True, text=True, timeout=3, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(target.lstat().st_ino, before.st_ino)
+        self.assertTrue(stat.S_ISFIFO(target.lstat().st_mode))
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name).resolve()

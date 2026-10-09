@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import subprocess
 import tempfile
 import unittest
 
@@ -63,6 +64,35 @@ def metadata_sidecar(paper, abstract_sha):
 
 
 class HistoricalPageRenderTests(unittest.TestCase):
+    @unittest.skipUnless(hasattr(os, 'mkfifo'), '系统不支持命名管道')
+    def test_packet_fifo_is_rejected_before_blocking_read(self):
+        with tempfile.TemporaryDirectory() as directory:
+            fifo = Path(directory) / 'packet.json'
+            os.mkfifo(fifo, 0o600)
+            before = fifo.lstat()
+            code = """
+import importlib.util
+import sys
+sys.path.insert(0, sys.argv[1] + '/scripts')
+spec = importlib.util.spec_from_file_location(
+    'historical_page_render', sys.argv[1] + '/scripts/historical-page-render.py')
+renderer = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(renderer)
+try:
+    renderer.read_packet_bytes(['renderer', '--input-file', sys.argv[2]])
+except ValueError as error:
+    if '普通文件' not in str(error):
+        raise
+else:
+    raise AssertionError('命名管道不能作为页面生成输入')
+"""
+            result = subprocess.run(
+                [sys.executable, '-c', code, ROOT, str(fifo)],
+                capture_output=True, text=True, timeout=3, check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(fifo.lstat().st_ino, before.st_ino)
+
     def test_packet_input_file_is_absolute_regular_and_bounded(self):
         with tempfile.TemporaryDirectory() as temporary:
             packet = os.path.join(temporary, 'packet.json')

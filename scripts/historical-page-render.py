@@ -256,7 +256,7 @@ def read_packet_bytes(argv):
         filename = Path(argv[2])
         if not filename.is_absolute():
             raise ValueError('页面生成输入文件必须使用绝对路径。')
-        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+        flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_NONBLOCK', 0)
         descriptor = os.open(filename, flags)
         try:
             if not stat.S_ISREG(os.fstat(descriptor).st_mode):
