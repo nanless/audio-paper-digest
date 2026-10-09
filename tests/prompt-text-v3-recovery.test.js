@@ -11,12 +11,12 @@ const registry = require('../scripts/lib/prompt-text-versions.js');
 const deep = require('../scripts/deep-analyzer.js');
 const { validAnalysisText } = require('./valid-analysis-fixture.js');
 const changed = ['primaryAnalysis','openSourceScan','revision','apiReaderArticle','apiReaderRepair','scoringAudit','imageSupplement'];
-test('改写阶段分别读取 v1、v2、v3 原路径，旧版本不能解析成当前 v3', () => {
+test('改写阶段分别读取 v1、v2、v3 原路径，旧版本不能解析成当前版本', () => {
     for (const stage of changed) {
         const v1 = registry.promptFilePathForContract(stage, '');
         const v2 = registry.promptFilePathForContract(stage, 'analysis-prompt-text-v2');
-        const v3 = registry.currentTextStagePromptPath(stage);
-        assert.equal(registry.currentPromptTextContract(stage), 'analysis-prompt-text-v3');
+        const v3 = registry.promptFilePathForContract(stage, 'analysis-prompt-text-v3');
+        assert.equal(registry.currentPromptTextContract(stage), ['primaryAnalysis','scoringAudit'].includes(stage) ? 'analysis-prompt-text-v4' : 'analysis-prompt-text-v3');
         assert.equal(v2, v1.replace('.md', '-v2.md'));
         assert.equal(v3, v1.replace('.md', '-v3.md'));
         assert.notEqual(deep.runtimePromptTemplateSha256(v2), deep.runtimePromptTemplateSha256(v3));

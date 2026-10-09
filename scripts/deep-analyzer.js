@@ -527,7 +527,7 @@ const SCORING_EVIDENCE_PROFILE_KEYS = Object.freeze([
 ]);
 const SCORING_AUDIT_CONTRACT = 'api-scoring-audit-v2';
 const SCORING_CAP_RULES_VERSION = 'evidence-caps-v2';
-const OPEN_SOURCE_DEFICIT = /(?:不开源|闭源|未开源|没有开源|代码未提供|权重未提供|数据集未提供|缺少(?:代码|权重|数据集|核心产物)|(?:代码|权重|数据集|核心产物)(?:未|没有|尚未)公开)/;
+const OPEN_SOURCE_DEFICIT = /(?:不开源|闭源|未开源|没有开源|代码未提供|权重未提供|数据集未提供|缺少(?:代码|权重|数据集|核心(?:产物|材料))|(?:代码|权重|数据集|核心(?:产物|材料))(?:未|没有|尚未)公开)/;
 const VERIFIED_RESOURCE_DENIAL = /(?:(?:未|没有|尚未)(?:发布|公开|提供)[^.。；;]{0,16}(?:代码|模型权重|数据集)|(?:代码|模型权重|数据集)[^.。；;]{0,16}(?:未|没有|尚未)(?:发布|公开|提供))/;
 const REPRODUCIBILITY_DEFICIT = /(?:无法复现|不可复现|缺少|未提供|未披露|没有|不足|不完整|不清楚)[^.。；;]{0,18}(?:超参数|训练配置|硬件配置|复现步骤|实现细节)|(?:超参数|训练配置|硬件配置|复现步骤|实现细节)[^.。；;]{0,18}(?:缺失|不足|不完整|未提供|未披露|不清楚)/;
 
@@ -807,7 +807,7 @@ function applyScoringAuditResult(analysis, audit) {
 
 function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceIdentity = null) {
     const current = parseAnalysis(analysis) || {};
-    // 理论论文的核心公开产物可以就是论文中完整披露的证明、推导与附录，
+    // 理论论文的核心材料可以就是论文中完整披露的证明、推导与附录，
     // 不能仅凭没有代码/模型/数据链接就覆盖主模型已经按文类作出的判断。
     if (audit.documentType === '理论研究') return applyScoringEvidenceCaps(audit);
     let verifiedAvailableTypes = null;
@@ -832,7 +832,7 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
         const hasDemo = hasAffirmativeDemoEvidence(sourceText);
         const normalizedScore = promisesRelease ? 0.5 : hasDemo ? 0.2 : 0;
         const normalizedReason = promisesRelease
-            ? '[A_OPEN] 论文明确承诺未来开放核心产物，但当前尚未发布可用代码、模型权重或数据资源。'
+            ? '[A_OPEN] 论文明确承诺未来开放核心材料，但当前尚未发布可用代码、模型权重或数据资源。'
             : hasDemo
                 ? '[A_OPEN] 论文目前只提供可访问的在线演示页面，未发布核心代码、模型权重或训练数据。'
                 : '[A_OPEN] 论文未发布核心代码、模型权重或数据资源，也未给出明确的后续开源承诺。';
@@ -868,7 +868,7 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
                     ...audit.dimensions,
                     openSource: {
                         score: 1.5,
-                        reason: '[A_OPEN] 已验证代码仓库与模型权重当前可用，且官方仓库 README 完整覆盖安装、推理与微调文档，符合核心产物和文档完整开放的 1.5 分锚点。'
+                        reason: '[A_OPEN] 已验证代码仓库与模型权重当前可用，且官方仓库 README 完整覆盖安装、推理与微调文档，符合核心材料和文档完整开放的 1.5 分标准。'
                     }
                 }
             };
@@ -888,7 +888,7 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
                     ...audit.dimensions,
                     openSource: {
                         score: Math.max(1.0, openSource.score),
-                        reason: `[A_OPEN] 已由论文来源中的精确链接及 HTTPS 可达性验证确认${available}可用；其余核心产物与文档完整度仅按现有证据评价。`
+                        reason: `[A_OPEN] 已由论文来源中的精确链接及 HTTPS 可达性验证确认${available}可用；其余核心材料与文档完整度仅按现有证据评价。`
                     }
                 }
             };

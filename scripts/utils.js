@@ -1564,7 +1564,7 @@ function parseAnalysis(analysis, options = {}) {
             }
     }
 
-    // 非理论论文的资源字段与高开源分矛盾时归零；理论论文的核心产物
+    // 非理论论文的资源字段与高开源分矛盾时归零；理论论文的核心材料
     // 可以是正文/附录中的公开证明，三个资源字段不能完整表达其状态。
     const openScoreVal = parseFloat(result.openSourceScore || 0);
     const isTheoryPaper = result.documentType === '理论研究';

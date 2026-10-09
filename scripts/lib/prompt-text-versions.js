@@ -10,6 +10,7 @@
 const ANALYSIS_PROMPT_TEXT_V1_CONTRACT = 'analysis-prompt-text-v1';
 const ANALYSIS_PROMPT_TEXT_V2_CONTRACT = 'analysis-prompt-text-v2';
 const ANALYSIS_PROMPT_TEXT_V3_CONTRACT = 'analysis-prompt-text-v3';
+const ANALYSIS_PROMPT_TEXT_V4_CONTRACT = 'analysis-prompt-text-v4';
 
 // 恢复阶段的 v1 冻结路径，外加读者局部修复提示词（它不是一个恢复阶段，但同样
 // 参与读者阶段的指纹和失败草稿身份）。旧记录的指纹一律按这里复算。
@@ -96,9 +97,8 @@ const FROZEN_V2_PROMPT_FILES = Object.freeze({
     })
 });
 
-// 已发布的 v2 文件保留原路径；只有改写正文的阶段才使用 v3。
-const PROMPT_FILE_VERSIONS = Object.freeze({
-    ...FROZEN_V2_PROMPT_FILES,
+// 已发布的 v3 文件保留原路径，旧记录仍按它们核验。
+const FROZEN_V3_PROMPT_FILES = Object.freeze({
     primaryAnalysis: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/deep-analysis-v3.md' }),
     apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/api-reader-article-v3.md' }),
     apiReaderRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/api-reader-repair-v3.md' }),
@@ -106,6 +106,14 @@ const PROMPT_FILE_VERSIONS = Object.freeze({
     revision: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/gap-fill-v3.md' }),
     scoringAudit: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/scoring-audit-v3.md' }),
     imageSupplement: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/image-supplement-v3.md' }),
+});
+
+// 只有本次改写的两阶段使用 v4，其余阶段保留原版本。
+const PROMPT_FILE_VERSIONS = Object.freeze({
+    ...FROZEN_V2_PROMPT_FILES,
+    ...FROZEN_V3_PROMPT_FILES,
+    primaryAnalysis: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/deep-analysis-v4.md' }),
+    scoringAudit: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/scoring-audit-v4.md' }),
 });
 
 // v1 路径反查阶段名。会议实现清单只记路径，需要据此换成当前版本的正文。
@@ -139,10 +147,13 @@ function promptFilePathForContract(stage, promptTextContract) {
     }
     const archivedV2 = FROZEN_V2_PROMPT_FILES[stage];
     if (declared === ANALYSIS_PROMPT_TEXT_V2_CONTRACT && archivedV2) return archivedV2.path;
+    const archivedV3 = FROZEN_V3_PROMPT_FILES[stage];
+    if (declared === ANALYSIS_PROMPT_TEXT_V3_CONTRACT && archivedV3?.contract === declared) return archivedV3.path;
     const entry = PROMPT_FILE_VERSIONS[stage];
     if (entry && declared === entry.contract) return entry.path;
     const known = [ANALYSIS_PROMPT_TEXT_V1_CONTRACT];
     if (archivedV2) known.push(ANALYSIS_PROMPT_TEXT_V2_CONTRACT);
+    if (archivedV3?.contract === ANALYSIS_PROMPT_TEXT_V3_CONTRACT) known.push(ANALYSIS_PROMPT_TEXT_V3_CONTRACT);
     if (entry && !known.includes(entry.contract)) known.push(entry.contract);
     throw new Error(`阶段 ${stage} 的提示词版本 ${declared} 没有登记；只认识 ${known.join(' 和 ')}。`);
 }
@@ -168,8 +179,10 @@ module.exports = {
     ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
     ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
     ANALYSIS_PROMPT_TEXT_V3_CONTRACT,
+    ANALYSIS_PROMPT_TEXT_V4_CONTRACT,
     FROZEN_V1_PROMPT_FILES,
     FROZEN_V2_PROMPT_FILES,
+    FROZEN_V3_PROMPT_FILES,
     PROMPT_FILE_VERSIONS,
     promptTextContractForStage,
     currentPromptTextContract,

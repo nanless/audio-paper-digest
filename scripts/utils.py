@@ -658,7 +658,7 @@ def parse_analysis(analysis, *, tag_catalog=None, legacy_tags=False):
                 r['machineSummary']['reproducibility'] = r['reproducibilityScore']
                 r['machineSummary']['engineeringScore'] = r['engineeringScore']
 
-    # 理论论文的核心产物可以是正文/附录中的公开证明，资源字段不能完整表达其状态。
+    # 理论论文的核心材料可以是正文或附录中的公开证明；代码、模型、数据字段不能完整表示证明的公开状态。
     open_score_val = float(r.get('openSourceScore', 0) or 0)
     is_theory_paper = r.get('documentType') == '理论研究'
     has_code_yes = r.get('hasCode') in ('是', 'yes')

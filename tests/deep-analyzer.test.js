@@ -5748,16 +5748,16 @@ has_dataset: 否
             deep.promptFilePathForContract('primaryAnalysis', deep.ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
             'prompts/deep-analysis.md'
         );
-        // 新请求使用 v3；旧记录继续按其声明版本计算指纹。
+        // 新请求使用 v4；旧记录继续按其声明版本计算指纹。
         const fresh = capture({ version: 1, stages: {} });
-        assert.strictEqual(fresh.payload.promptTextContract, 'analysis-prompt-text-v3');
+        assert.strictEqual(fresh.payload.promptTextContract, 'analysis-prompt-text-v4');
         assert.strictEqual(
             fresh.payload.promptTemplateSha256,
             deep.runtimePromptTemplateSha256(
-                'prompts/deep-analysis-v3.md', CORE_SUMMARY_CONTRACT_VERSION)
+                'prompts/deep-analysis-v4.md', CORE_SUMMARY_CONTRACT_VERSION)
         );
         assert.strictEqual(
-            deep.currentTextStagePromptPath('primaryAnalysis'), 'prompts/deep-analysis-v3.md');
+            deep.currentTextStagePromptPath('primaryAnalysis'), 'prompts/deep-analysis-v4.md');
         // 判别力：两个版本必须算出不同的正文哈希和不同的阶段指纹，否则这条测试等于没测。
         assert.notStrictEqual(
             fresh.payload.promptTemplateSha256, legacy.payload.promptTemplateSha256);

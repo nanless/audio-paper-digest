@@ -1134,14 +1134,15 @@ describe('严格可复用的 Manual v4 spec 组装器', () => {
         } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
     });
 
-    it('当前阶段分别使用 v3 或 v2 正文，旧记录的 v1 冻结正文仍可复算', () => {
+    it('当前主分析与评分使用 v4，其他阶段保留 v3 或 v2，旧 v1 正文仍可核验', () => {
         const current = currentStagePromptBindings();
         const legacy = legacyStagePromptBindings();
         const directSha = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
         const migrated = ['primaryAnalysis', 'openSourceScan', 'revision', 'tableRepair', 'methodRepair',
             'structureRepair', 'scoringAudit', 'imageSupplement'];
         for (const stage of migrated) {
-            const version = ['tableRepair', 'methodRepair', 'structureRepair'].includes(stage) ? 'v2' : 'v3';
+            const version = ['primaryAnalysis', 'scoringAudit'].includes(stage) ? 'v4'
+                : ['tableRepair', 'methodRepair', 'structureRepair'].includes(stage) ? 'v2' : 'v3';
             assert.match(current[stage].source, new RegExp(`-${version}\\.md$`));
             assert.equal(
                 current[stage].sha256,
