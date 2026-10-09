@@ -299,8 +299,24 @@ function validateReaderResultTableCoverage(sections, artifacts) {
     if (!requirement.minimumResultTables) return requirement;
     const { extractMarkdownTables } = require('../analysis-contract.js');
     const results = sections.filter(section => ['result', 'ablation'].includes(section?.kind));
+    const metadataLabel = value => {
+        const label = String(value || '').normalize('NFKC').replace(/[*`]/g, '').trim();
+        return /^(?:years?|metrics?|notes?|conditions?|configurations?|settings?|methods?|models?|datasets?(?: sizes?)?|number of (?:samples|examples|utterances|speakers|clips|frames)|corpus|corpora|splits?|languages?|versions?|epochs?|steps?|batches?|batch sizes?|learning rates?|seeds?|(?:training|train|test|validation|dev|total)?\s*(?:samples?|examples?|utterances?|speakers?|clips?|hours?|frames?)(?:\s*(?:count|size))?)(?:\s*\([^)]*\))?$/i.test(label)
+            || /^(?:年份|指标|说明|备注|条件|配置|设置|方法(?:名称)?|模型(?:名称)?|数据集|语料|数据划分|划分|语言|版本|训练轮数|训练步数|批量大小|学习率|随机种子|(?:训练|测试|验证|总)?(?:样本(?:数|数量)?|片段(?:数|数量)?|说话人(?:数|数量)?|语音时长|音频时长))(?:[（(][^）)]*[）)])?$/.test(label);
+    };
+    const measurementValue = value => {
+        const text = String(value || '').normalize('NFKC').replace(/[*`]/g, '').trim();
+        return /^(?:[($（]\s*)?[≈~<>≤≥]?\s*[+−-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+−-]?\d+)?(?=$|[\s%±(),，）;:/]|[–—-]\s*\d|(?:ms|s|hz|khz|mhz|ghz|db|mb|gb|kb|fps)\b)/i.test(text);
+    };
     const numericResultTables = results.flatMap(section => extractMarkdownTables(String(section.body || '')))
-        .filter(table => (String(table.markdown || '').match(/\d+/g) || []).length >= 4);
+        .filter(table => {
+            // 年份、样本量和训练配置不属于实测结果。按单元格计数，不能用一个
+            // 版本号或一串年份补足四项结果；横排与纵排指标表都保留原列顺序。
+            const measurementColumns = table.header.map((label, index) => metadataLabel(label) ? -1 : index)
+                .filter(index => index >= 0);
+            return table.rows.filter(row => !metadataLabel(row[0])).reduce((count, row) => count
+                + measurementColumns.filter(column => measurementValue(row[column])).length, 0) >= 4;
+        });
     if (!numericResultTables.length) {
         throw new Error('读者文章主结果表覆盖不足：原论文 TABLE_'
             + requirement.sourceTableOrdinals.join('/TABLE_')

@@ -537,6 +537,25 @@ class HtmlGateTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, '表格'):
                 gate.inspect_html(markdown, self.rendered(broken), [], 'https://example.com/images')
 
+    def test_numeric_signs_must_survive_in_the_corresponding_rendered_cell(self):
+        for source, rendered in [('0.5', '-0.5'), ('0.5', '−0.5'), ('-0.5', '0.5'),
+                                 ('−0.5', '+0.5'), ('+0.5', '-0.5')]:
+            with self.subTest(source=source, rendered=rendered):
+                markdown = f'| Method | WER |\n| --- | --- |\n| A | {source} |'
+                body = ('<table><tr><th>Method</th><th>WER</th></tr>'
+                        f'<tr><td>A</td><td>{rendered}</td></tr></table>')
+                with self.assertRaisesRegex(ValueError, '表格数字/单位'):
+                    gate.inspect_html(markdown, self.rendered(body), [], 'https://example.com/images')
+
+    def test_signed_values_ranges_and_identifiers_keep_their_original_meaning(self):
+        for source, rendered in [('-0.5', '−0.5'), ('−0.5', '-0.5'), ('+2%', '+2%'),
+                                 ('8-10', '8-10'), ('8–10', '8–10'), ('Qwen3-8B', 'Qwen3-8B')]:
+            with self.subTest(source=source, rendered=rendered):
+                markdown = f'| Item | Value |\n| --- | --- |\n| A | {source} |'
+                body = ('<table><tr><th>Item</th><th>Value</th></tr>'
+                        f'<tr><td>A</td><td>{rendered}</td></tr></table>')
+                gate.inspect_html(markdown, self.rendered(body), [], 'https://example.com/images')
+
     def test_numeric_prefix_of_paper_identifier_is_not_a_measurement(self):
         markdown = '| 音频编号 | 错误率 |\n| --- | --- |\n| 2023.acl-long.23 | 5.00 |'
         body = '<table><tr><th>音频编号</th><th>错误率</th></tr>' \

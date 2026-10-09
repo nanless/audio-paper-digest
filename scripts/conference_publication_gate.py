@@ -242,9 +242,11 @@ def inspect_html(markdown, rendered, image_records, image_base):
             # Unicode 字母也算标识符字符。否则 ``λ1*Lalign`` 这样的损失项名在
             # Markdown 里会多出数字记号 ``1``，而 Goldmark 输出的 HTML 是
             # ``λ1Lalign``。
-            tokens = re.findall(r'(?<![^\W_.])(?<!\.)(?!(?:[-+]?\d+)(?:\.\d+){2,}(?![A-Za-z\d.]))[-+]?\d+(?:\.\d+)?(?:%|[A-Za-z]+)?(?![^\W_.])(?!\.)', visible_source)
-            if any(not re.search(r'(?<![\d.])' + re.escape(token) + r'(?![A-Za-z\d.])', actual)
-                   for token in tokens):
+            quantity_pattern = re.compile(r'(?<![^\W_.])(?<!\.)(?!(?:[-+]?\d+)(?:\.\d+){2,}(?![A-Za-z\d.]))[-+]?\d+(?:\.\d+)?(?:%|[A-Za-z]+)?(?![^\W_.])(?!\.)')
+            tokens = quantity_pattern.findall(visible_source.replace('−', '-'))
+            actual_tokens = quantity_pattern.findall(actual.replace('−', '-'))
+            # 两边按同一规则取完整量值，不能从负数中截出正数；区间与标识符沿用原规则。
+            if any(token not in actual_tokens for token in tokens):
                 raise ValueError(f'HTML 表格数字/单位未在对应单元格保留：Markdown 期望数字 {tokens}，HTML 单元格实际为 {actual!r}')
     visible_content = page.visible_content_fields()
     return {'url': url, 'htmlSha256': digest(rendered.encode()),
