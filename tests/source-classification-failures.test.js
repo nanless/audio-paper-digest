@@ -43,3 +43,28 @@ test('普通 HTTP 429 会让调度器暂停，不派发第二次审查、不切�
  await new Promise(resolve=>setImmediate(resolve));release();const result=await run;
  assert.equal(requests,2);assert.equal(result.stopped.status,'model-service-http-unavailable');assert.equal(result.results.filter(Boolean).length,0);
 });
+
+test('明确的存储错误含包装或组合错误会停止运行，论文中同名文字不触发', () => {
+ for(const code of ['EIO','ENOSPC','EDQUOT','EROFS','EMFILE','ENFILE','EACCES','EPERM']) {
+  const error=Object.assign(new Error('写入失败'),{code});
+  assert.equal(api.classifyRunFailure(error),'local-storage-unavailable');
+  assert.equal(api.classifyRunFailure(new Error('包装',{cause:error})),'local-storage-unavailable');
+  assert.equal(api.classifyRunFailure(new AggregateError([new Error('其它'),error])),'local-storage-unavailable');
+ }
+ assert.equal(api.classifyRunFailure(new Error('论文原文提到ENOSPC和EIO')),null);
+});
+
+test('存储失败保留在途完成结果且不派发后续论文或额外审查', async () => {
+ let release,requests=0;
+ const blocked=new Promise(resolve=>release=resolve);
+ const run=scheduler.runBounded(['first','in-flight','never'],{concurrency:2,isRunFailure:api.classifyRunFailure,
+  processItem:async(item,index,control)=>{
+   await control.request(async()=>{requests++;if(item==='in-flight')await blocked;});
+   if(item==='first')throw Object.assign(new Error('磁盘已满'),{code:'ENOSPC'});
+   return {paperId:item};
+  }});
+ await new Promise(resolve=>setImmediate(resolve));release();
+ const result=await run;
+ assert.equal(result.stopped.status,'local-storage-unavailable');assert.equal(requests,2);
+ assert.equal(result.results[1].paperId,'in-flight');assert.equal(result.results[2],undefined);
+});

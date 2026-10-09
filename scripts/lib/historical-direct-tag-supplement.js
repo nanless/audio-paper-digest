@@ -1,6 +1,5 @@
 'use strict';
 
-const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const aggregate = require('./historical-direct-aggregate.js');
@@ -10,6 +9,7 @@ const fresh = require('./fresh-arxiv-rewrite-source.js');
 const pages = require('./historical-direct-page-staging.js');
 const tagCatalogApi = require('./tag-catalog.js');
 const io = require('./historical-conference-page-projections.js');
+const { writeImmutableFile } = require('./immutable-file.js');
 const { hasPageTagMetadata } = require('./page-tag-metadata.js');
 const CONTRACT = 'historical-direct-tag-supplement-v2';
 const LEGACY_CONTRACT = 'historical-direct-taxonomy-supplement-v1';
@@ -120,8 +120,7 @@ function writeImmutable(directory, name, value) {
     if (!path.isAbsolute(directory) || !/^[a-z0-9._-]+\.json$/.test(name)) fail('输出目录必须是绝对路径，文件名须只含小写字母、数字、点、下划线或连字符，并以 .json 结尾。');
     io.safeDirectory(directory, '标签补充文件的输出目录', true);
     const bytes = Buffer.from(JSON.stringify(value, null, 2) + '\n'); const filename = path.join(directory, name);
-    try { fs.writeFileSync(filename, bytes, { flag: 'wx', mode: 0o600 }); }
-    catch (error) { if (error.code !== 'EEXIST' || !io.readStableFile(filename, '不可覆盖的补充文件').bytes.equals(bytes)) throw error; }
+    writeImmutableFile(filename, bytes, fail);
     return { filename, fileSha256: digest(bytes) };
 }
 

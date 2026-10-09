@@ -480,3 +480,24 @@ test('既有分类缓存导出也会重新核验旧计划的正文身份', async
     await assert.rejects(f.exportApi.exportCheckpoint({...f.options,checkpointFile:f.path.join(f.options.outputDirectory,checkpointName)}),/旧截断提示/);
     assert.equal(f.calls.length,calls);
 });
+
+
+test('来源标签保存响应失败会停派，不重发选择或把未保存论文记为完成', async t => {
+    for (const [prefix, calls] of [['attempt-', 1], ['review-', 2], ['decision-', 2]]) {
+        const supplement = require('../scripts/lib/historical-direct-tag-supplement.js');
+        const original = supplement.writeImmutable; let f, injected = false;
+        supplement.writeImmutable = (root, name, value) => {
+            if (name.startsWith(prefix) && !injected) { injected = true; throw Object.assign(new Error('模拟存储空间耗尽'), { code: 'ENOSPC' }); }
+            return original(root, name, value);
+        };
+        try { f = await sourceClassificationFixture(t, call => call.maxTokens === 3000 ? '{"accepted":true,"issues":[]}' : f.normalResponse); }
+        finally { supplement.writeImmutable = original; }
+        const result = await f.run();
+        assert.equal(injected, true);
+        assert.equal(result.report.state, 'partial', prefix);
+        assert.equal(result.report.stopped.status, 'local-storage-unavailable');
+        assert.equal(result.report.processed, 0);
+        assert.deepEqual(result.report.remainingPaperIds, [f.item.paperId]);
+        assert.equal(f.calls.length, calls, prefix);
+    }
+});

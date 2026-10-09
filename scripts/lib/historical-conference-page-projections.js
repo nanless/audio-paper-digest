@@ -10,6 +10,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const conference = require('./historical-conference-crawl-authority.js');
 const icmlPosterApi = require('./historical-icml-poster-authority.js');
+const { writeImmutableFile } = require('./immutable-file.js');
 
 const CONTRACT = 'historical-conference-page-projections-v3';
 const VERSION = 3;
@@ -341,19 +342,8 @@ function writeConferencePageMappingRecord({ root, outputName, artifact } = {}) {
     if (!SAFE_NAME_RE.test(String(outputName || ''))) fail('The conference page mapping output name is unsafe: it must match the allowed JSON filename format.');
     const directory = safeDirectory(root, 'conference page mapping output directory', true);
     const normalized = normalizeConferencePageMappingRecord(artifact); const filename = path.join(directory, outputName);
-    const bytes = prettyBytes(normalized); let fd;
-    try {
-        fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
-            | fs.constants.O_NOFOLLOW, 0o600);
-        fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.fchmodSync(fd, 0o600);
-        return { status: 'created', filename, artifact: normalized };
-    } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        if (!readStableFile(filename, 'existing conference page mapping file').bytes.equals(bytes)) {
-            fail(`拒绝用不同字节覆盖已有的会议页面映射文件：${outputName}`);
-        }
-        return { status: 'recovered', filename, artifact: normalized };
-    } finally { if (fd !== undefined) fs.closeSync(fd); }
+    const status = writeImmutableFile(filename, prettyBytes(normalized), fail);
+    return { status, filename, artifact: normalized };
 }
 
 function buildFromFiles({ catalogFile, inventoryFile, blogRoot } = {}) {

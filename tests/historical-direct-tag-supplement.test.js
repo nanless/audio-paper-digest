@@ -59,5 +59,51 @@ test('不可变输出在字节相同时复用，拒绝覆盖', t => {
     const first = api.writeImmutable(root, 'supplement.json', { a: 1 });
     assert.equal(fs.statSync(first.filename).mode & 0o777, 0o600);
     assert.deepEqual(api.writeImmutable(root, 'supplement.json', { a: 1 }), first);
-    assert.throws(() => api.writeImmutable(root, 'supplement.json', { a: 2 }), /EEXIST/);
+    assert.throws(() => api.writeImmutable(root, 'supplement.json', { a: 2 }), /拒绝覆盖/);
+});
+
+test('标签补充输出短写失败不会留下正式坏文件，重试保留完整 JSON', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'tag-write-failure-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const filename = path.join(root, 'supplement.json'), originalWrite = fs.writeFileSync;
+    fs.writeFileSync = (target, bytes, ...args) => {
+        // 同时覆盖旧实现的路径写入和新实现的文件描述符写入。
+        if (typeof target === 'number') fs.writeSync(target, Buffer.from(bytes).subarray(0, 7));
+        else originalWrite(target, Buffer.from(bytes).subarray(0, 7), ...args);
+        throw Object.assign(new Error('模拟磁盘写入中断'), { code: 'EIO' });
+    };
+    try { assert.throws(() => api.writeImmutable(root, 'supplement.json', { records: { paper: '完整记录' } }), /模拟磁盘写入中断/); }
+    finally { fs.writeFileSync = originalWrite; }
+    assert.equal(fs.existsSync(filename), false);
+    const first = api.writeImmutable(root, 'supplement.json', { records: { paper: '完整记录' } });
+    assert.deepEqual(JSON.parse(fs.readFileSync(filename)), { records: { paper: '完整记录' } });
+    assert.deepEqual(api.writeImmutable(root, 'supplement.json', { records: { paper: '完整记录' } }), first);
+});
+
+test('标签补充写入竞争不能覆盖或清理另一写者的正式文件', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'tag-write-race-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const filename = path.join(root, 'supplement.json'), originalLink = fs.linkSync;
+    const competitor = Buffer.from('{"owner":"另一个写者"}\n');
+    fs.linkSync = (from, to) => { fs.writeFileSync(to, competitor, { flag: 'wx', mode: 0o600 }); return originalLink(from, to); };
+    try { assert.throws(() => api.writeImmutable(root, 'supplement.json', { owner: '本次写者' }), /拒绝覆盖/); }
+    finally { fs.linkSync = originalLink; }
+    assert.deepEqual(fs.readFileSync(filename), competitor);
+    assert.deepEqual(fs.readdirSync(root), ['supplement.json']);
+});
+
+test('标签补充写入者在正式链接后被杀，重写同一字节可恢复残留链接', t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'tag-write-kill-'));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    const filename = path.join(root, 'supplement.json'), record = { records: { paper: '已核验记录' } };
+    const script = `const fs=require('node:fs'),api=require(${JSON.stringify(require.resolve('../scripts/lib/historical-direct-tag-supplement.js'))});
+const original=fs.linkSync;fs.linkSync=(from,to)=>{original(from,to);process.kill(process.pid,'SIGKILL');};
+api.writeImmutable(${JSON.stringify(root)},'supplement.json',${JSON.stringify(record)});`;
+    const child = require('node:child_process').spawnSync(process.execPath, ['-e', script], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(child.signal, 'SIGKILL', child.stderr);
+    assert.equal(fs.statSync(filename).nlink, 2);
+    api.writeImmutable(root, 'supplement.json', record);
+    assert.equal(fs.statSync(filename).nlink, 1);
+    assert.deepEqual(JSON.parse(fs.readFileSync(filename)), record);
+    assert.deepEqual(fs.readdirSync(root), ['supplement.json']);
 });
