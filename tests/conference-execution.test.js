@@ -153,7 +153,7 @@ test('旧执行任务在原 UUID 继续，保留权限文件和已有执行记�
     assert.throws(() => execution.transitionExecution({ executionRoot, planHandle, executionId,
         owner: 'current-worker', patch: { operationId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
             expectedStateSha256: next.stateSha256, paperId: f.paperId,
-            nextState: { status: 'completed', usage: { requests: 2 }, projection: {} } } }), /completion-proof receipt bundle/);
+            nextState: { status: 'completed', usage: { requests: 2 }, projection: {} } } }), /完成状态需要会议最终核验凭证；当前入口尚不支持/);
 });
 
 test('执行模板拒绝混用词表字段，并核对状态的格式版本', t => {
@@ -342,7 +342,7 @@ test('不安全的旧版执行来源和已完成的转换仍然拒绝', t => {
     assert.throws(() => execution.assertConferenceExecution(insecure), /unknown or missing fields/);
     assert.throws(() => execution.transitionExecution({ executionRoot: f.root, executionId, planHandle: f.handle,
         owner: 'worker', patch: { operationId, expectedStateSha256: state.stateSha256, paperId,
-            nextState: { status: 'completed', usage: {}, projection: {} } } }), /completion-proof receipt bundle/);
+            nextState: { status: 'completed', usage: {}, projection: {} } } }), /完成状态需要会议最终核验凭证；当前入口尚不支持/);
 });
 
 test('执行阶段的每条 CLI 命令都要求完整的上游授权链', () => {

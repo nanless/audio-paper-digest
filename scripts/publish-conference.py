@@ -248,15 +248,6 @@ def verify_blobs(repo, revision, records):
                 f'期望 {record["sourceSha256"]}')
 
 
-def expected_delta(repo, base, records):
-    paths = []
-    for record in records:
-        exists = git(repo, 'cat-file', '-e', f'{base}:{record["path"]}', check=False)
-        if exists.returncode or blob_sha(repo, base, record['path']) != record['sourceSha256']:
-            paths.append(record['path'])
-    return sorted(paths)
-
-
 def verify_own_commit(repo, commit, base, records):
     delta = sorted(expected_delta(repo, base, records))
     if commit == base:

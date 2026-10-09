@@ -1775,6 +1775,24 @@ function safeTransportErrorCode(error) {
     return code || 'LLM_TRANSPORT_UNAVAILABLE';
 }
 
+// 运行级故障要先保存本篇证据，再停止派发。恢复旧回执时只识别稳定错误码，
+// 不用服务端文本或中文措辞推断故障范围，也不改写既有回执。
+function transportRunFailure(receipt, originalError = null) {
+    if (originalError?.scope === 'run') return originalError;
+    const categories = {
+        LLM_ACCOUNT_AUTH_ERROR: 'authentication',
+        LLM_ACCOUNT_POOL_EXHAUSTED: 'quota_exhausted',
+        LLM_ACCOUNT_POOL_STATE_ERROR: 'state',
+        LLM_ACCOUNT_POOL_CONFIG_ERROR: 'config'
+    };
+    const code = receipt.outcome === 'received' && receipt.statusCode === 401
+        ? 'LLM_ACCOUNT_AUTH_ERROR' : receipt.errorCode;
+    if (!Object.hasOwn(categories, code)) return null;
+    return Object.assign(new Error(`会议筛选因运行级故障停止：${code}；本篇失败证据已保存。`), {
+        code, scope: 'run', category: categories[code], retryable: false
+    });
+}
+
 function usageFromEvents(events, fallback) {
     if (!events.length) return normalizeUsage(fallback);
     const result = { requests: events.length };
@@ -2095,6 +2113,7 @@ async function advanceProductionLlmDecisions({ filterRoot, filterId, discoveryHa
             let intent = recoveredIntent; recoveredIntent = null;
             let requestBody; let usageContext; const recovered = Boolean(intent);
             const expectedEnvelope = envelopeFromProductionReplay(state, paperId, replayContext);
+            let runFailure = null;
             if (!intent) {
                 ({ intent, requestBody, usageContext } = createIntent({ directory, state, paperId, owner,
                     discoveryHandle, evidenceHandle, expectedEnvelope, llm: config }));
@@ -2111,6 +2130,7 @@ async function advanceProductionLlmDecisions({ filterRoot, filterId, discoveryHa
                 const existingReceipt = readOptional(responseFilename(directory, intent.operationId),
                     'LLM transport receipt', normalizeTransportReceipt);
                 if (!existingReceipt) fail('保留的 LLM decision 缺少其 transport receipt');
+                runFailure = transportRunFailure(existingReceipt);
                 const expectedDecision = decisionFromTransport({ state, intent, receipt: existingReceipt,
                     discoveryHandle, evidenceHandle, expectedEnvelope, now: artifact.createdAt });
                 if (stableHash(expectedDecision) !== stableHash(artifact)) {
@@ -2136,10 +2156,12 @@ async function advanceProductionLlmDecisions({ filterRoot, filterId, discoveryHa
                                     usageEvents.push({ event, persisted });
                                 } });
                     } catch (caught) { error = caught; }
+                    if (error?.scope === 'run') runFailure = error;
                     receipt = buildTransportReceipt({ intent, response, error,
                         apiType: config.apiType, usageEvents });
                     writeExclusive(responseFilename(directory, intent.operationId), `${JSON.stringify(receipt, null, 2)}\n`);
                 }
+                runFailure = transportRunFailure(receipt, runFailure);
                 artifact = decisionFromTransport({ state, intent, receipt, discoveryHandle, evidenceHandle,
                     expectedEnvelope });
                 writeDecisionArtifact({ filterRoot, filterId,
@@ -2149,6 +2171,7 @@ async function advanceProductionLlmDecisions({ filterRoot, filterId, discoveryHa
             state = applyProductionDecisionToCheckedState({ directory, state, digestChain, operationIds,
                 decisionFile, artifact });
             processed.push({ paperId, status: state.decisions[paperId].status, recovered });
+            if (runFailure) throw runFailure;
         }
         ensureSelectionReceiptFromCheckedState(directory, state);
         return { state, processed };
@@ -2184,6 +2207,7 @@ async function advanceProductionLlmDecision({ filterRoot, filterId, discoveryHan
             assertRequestBinding(intent.request, { state, paperId, discoveryHandle, evidenceHandle,
                 envelope: envelopeFromRecord(intent.envelope) });
         }
+        let runFailure = null;
         const existingDecision = readOptional(decisionFilename(directory, intent.operationId), 'LLM decision artifact', normalizeDecisionArtifact);
         if (existingDecision) {
             const existingReceipt = readOptional(responseFilename(directory, intent.operationId),
@@ -2196,6 +2220,8 @@ async function advanceProductionLlmDecision({ filterRoot, filterId, discoveryHan
             }
             const handle = loadDecisionHandleInternal(decisionFilename(directory, intent.operationId), { allowLlm: true });
             state = applyDecisionLocked({ filterRoot, filterId, decisionHandle: handle, lockHandle: lock });
+            runFailure = transportRunFailure(existingReceipt);
+            if (runFailure) throw runFailure;
             return { state, paperId, recovered: true };
         }
         let receipt = readOptional(responseFilename(directory, intent.operationId), 'LLM transport receipt', normalizeTransportReceipt);
@@ -2215,13 +2241,16 @@ async function advanceProductionLlmDecision({ filterRoot, filterId, discoveryHan
                             usageEvents.push({ event, persisted });
                         } });
             } catch (caught) { error = caught; }
+            if (error?.scope === 'run') runFailure = error;
             receipt = buildTransportReceipt({ intent, response, error, apiType: config.apiType, usageEvents });
             writeExclusive(responseFilename(directory, intent.operationId), `${JSON.stringify(receipt, null, 2)}\n`);
         }
+        runFailure = transportRunFailure(receipt, runFailure);
         const artifact = decisionFromTransport({ state, intent, receipt, discoveryHandle, evidenceHandle });
         const filename = writeDecisionArtifact({ filterRoot, filterId, decisionName: `llm-${intent.operationId}.json`, artifact });
         state = applyDecisionLocked({ filterRoot, filterId,
             decisionHandle: loadDecisionHandleInternal(filename, { allowLlm: true }), lockHandle: lock });
+        if (runFailure) throw runFailure;
         return { state, paperId, recovered };
     } finally { releaseLock(lock); }
 }

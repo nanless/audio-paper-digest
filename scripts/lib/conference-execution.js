@@ -22,7 +22,7 @@ const SHA_RE = /^[a-f0-9]{64}$/;
 const OWNER_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/;
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 
-function fail(message) { throw new Error(`Invalid conference execution: ${message}`); }
+function fail(message) { throw new Error(`会议执行记录无效：${message}`); }
 function clone(value) { return JSON.parse(JSON.stringify(value)); }
 function isPlainObject(value) {
     return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -395,7 +395,7 @@ function assertConferenceExecution(value) {
 function prepareExecutionFromPlan({ executionRoot, planHandle, executionId = crypto.randomUUID(), now } = {}) {
     let authority;
     try { authority = planApi.planHandleAuthority(planHandle); }
-    catch (error) { fail(`requires an authenticated plan handle: ${error.message}`); }
+    catch (error) { fail(`需要已认证的计划句柄：${error.message}`); }
     const verifiedRun = runApi.assertConferenceRunFromVerifiedLedger(authority.snapshot.run, authority.ledgerHandle);
     assertInitialRun(verifiedRun); assertUuid(executionId);
     if (verifiedRun.version === runApi.LEGACY_VERSION) {
@@ -582,7 +582,7 @@ function transitionExecution({ executionRoot, executionId, patch, owner, now, pl
     const root = safeDirectory(executionRoot); const directory = executionDirectory(root, executionId);
     const normalizedPatch = normalizePatch(patch); const patchSha256 = stableHash(normalizedPatch);
     if (normalizedPatch.nextState.status === 'completed') {
-        fail('completed transition requires the future conference completion-proof receipt bundle');
+        fail('完成状态需要会议最终核验凭证；当前入口尚不支持。');
     }
     const lock = acquireOperationLock(directory, owner, now);
     try {

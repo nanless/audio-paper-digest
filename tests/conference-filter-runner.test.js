@@ -606,3 +606,86 @@ test('原 v5 未完成 intent 无响应时保留未知结果，不重复请求',
     assert.match(restoredState.decisions[pid('100')].reason, /^LLM_TRANSPORT_UNAVAILABLE:INTERRUPTED_/);
     assert.deepEqual(fs.readFileSync(intentFile), intentBytes);
 });
+
+test('认证失败先落盘再停止批量筛选，其余候选保持待处理', async t => {
+    const service = await serverFixture(t, [{ statusCode: 401, body: { error: { message: 'invalid key' } } }]);
+    const f = fixture(t, service.endpoint);
+    await assert.rejects(() => runner.main(args(), { files: f.files, env: f.env }),
+        error => error.scope === 'run' && error.code === 'LLM_ACCOUNT_AUTH_ERROR' && error.retryable === false);
+    assert.equal(service.calls.length, 1);
+    const state = filter.readFilter({ filterRoot: f.dirs.filters, filterId });
+    assert.equal(state.decisions[pid('100')].status, 'failed');
+    assert.equal(state.decisions[pid('200')].status, 'pending');
+    assert.equal(state.attempts.length, 1);
+    const directory = path.join(f.dirs.filters, filterId);
+    assert.equal(fs.existsSync(path.join(directory, 'operation.lock')), false);
+    const receipt = JSON.parse(fs.readFileSync(onlyJson(path.join(directory, 'llm-responses'))));
+    assert.equal(receipt.statusCode, 401);
+    assert.equal(receipt.usage.requests, 1);
+});
+
+test('公共封装的运行级配置异常保留原始诊断并停止派发', async t => {
+    const service = await serverFixture(t); const f = fixture(t, service.endpoint);
+    const env = { ...f.env, PAPER_ANALYZER_FALLBACK_API_KEYS: 'second-fixture-key' };
+    await assert.rejects(() => runner.main(args(), { files: f.files, env }), error => {
+        assert.equal(error.code, 'LLM_ACCOUNT_POOL_CONFIG_ERROR');
+        assert.equal(error.scope, 'run'); assert.equal(error.category, 'config');
+        assert.equal(error.retryable, false);
+        assert.match(error.message, /备用 API key 只允许用于 OpenCode Go/);
+        return true;
+    });
+    assert.equal(service.calls.length, 0);
+    const state = filter.readFilter({ filterRoot: f.dirs.filters, filterId });
+    assert.equal(state.decisions[pid('100')].reason, 'LLM_TRANSPORT_UNAVAILABLE:LLM_ACCOUNT_POOL_CONFIG_ERROR');
+    assert.equal(state.decisions[pid('200')].status, 'pending');
+    assert.equal(state.attempts.length, 1);
+});
+
+test('单篇输出格式失败不阻止后续候选', async t => {
+    const service = await serverFixture(t, [{ body: chatResponse('not a decision') }]);
+    const f = fixture(t, service.endpoint);
+    await runner.main(args(), { files: f.files, env: f.env });
+    const state = filter.readFilter({ filterRoot: f.dirs.filters, filterId });
+    assert.equal(service.calls.length, 2);
+    assert.equal(state.decisions[pid('100')].reason, 'LLM_RESPONSE_INVALID');
+    assert.equal(state.decisions[pid('200')].status, 'included');
+});
+
+for (const interruptedStage of ['receipt', 'decision']) {
+    for (const entry of ['batch', 'single']) {
+        test(`运行级故障在 ${interruptedStage} 后中断，${entry} 恢复保存失败并停止`, async t => {
+            const service = await serverFixture(t); const f = fixture(t, service.endpoint);
+            const env = { ...f.env, PAPER_ANALYZER_FALLBACK_API_KEYS: 'second-fixture-key' };
+            const originalOpen = fs.openSync; const originalRename = fs.renameSync; let interrupted = false;
+            fs.openSync = function (filename, ...rest) {
+                if (interruptedStage === 'receipt' && !interrupted && String(filename).includes('/decisions/llm-')) {
+                    interrupted = true; throw new Error('测试：决定写入中断');
+                }
+                return originalOpen.call(this, filename, ...rest);
+            };
+            fs.renameSync = function (source, target) {
+                if (interruptedStage === 'decision' && !interrupted && String(target).endsWith('/state.json')) {
+                    interrupted = true; throw new Error('测试：状态写入中断');
+                }
+                return originalRename.call(this, source, target);
+            };
+            try { await assert.rejects(() => runner.main(args(), { files: f.files, env }), /写入中断/); }
+            finally { fs.openSync = originalOpen; fs.renameSync = originalRename; }
+            assert.equal(interrupted, true);
+            const receiptFile = onlyJson(path.join(f.dirs.filters, filterId, 'llm-responses'));
+            const receiptBytes = fs.readFileSync(receiptFile);
+            const resume = entry === 'batch' ? () => runner.main(args(), { files: f.files, env: f.env })
+                : () => filter.advanceProductionLlmDecision({ filterRoot: f.dirs.filters, filterId,
+                    discoveryHandle: f.discoveryHandle, evidenceHandle: f.evidenceHandle, spec: f.spec,
+                    paperId: pid('100'), owner: 'resume.fixture', llm: legacyLlmConfig(f) });
+            await assert.rejects(resume, error => error.scope === 'run' && error.code === 'LLM_ACCOUNT_POOL_CONFIG_ERROR');
+            assert.deepEqual(fs.readFileSync(receiptFile), receiptBytes);
+            assert.equal(service.calls.length, 0);
+            const state = filter.readFilter({ filterRoot: f.dirs.filters, filterId });
+            assert.equal(state.decisions[pid('100')].status, 'failed');
+            assert.equal(state.decisions[pid('200')].status, 'pending');
+            assert.equal(state.attempts.length, 1);
+            assert.equal(fs.existsSync(path.join(f.dirs.filters, filterId, 'operation.lock')), false);
+        });
+    }
+}

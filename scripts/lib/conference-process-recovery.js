@@ -32,7 +32,9 @@ function classifyFailure(error, now) {
         .replace(/\bBearer\s+\S+|\bsk-[A-Za-z0-9_-]+/gi, '[REDACTED]').slice(0, 2000);
     const code = typeof error?.code === 'string' && /^[A-Z0-9_]{1,100}$/.test(error.code) ? error.code : null;
     let category = 'paper';
-    if (/insufficient.balance|GoUsageLimitError|quota.*exhaust|billing|ACCOUNT_POOL.*EXHAUST/i.test(`${code} ${message}`)) category = 'quota';
+    // 来源和后处理校验器有明确错误码，分类不受诊断措辞、语言或引用文本影响。
+    if (code === 'CONFERENCE_POSTPROCESS_INTEGRITY' || code === 'CONFERENCE_SOURCE_CONTEXT_INTEGRITY') category = 'integrity';
+    else if (/insufficient.balance|GoUsageLimitError|quota.*exhaust|billing|ACCOUNT_POOL.*EXHAUST/i.test(`${code} ${message}`)) category = 'quota';
     // 认证失败同样必须同时认中英文：旧记录存英文，当前消息已汉化。
     // 前半段英文词逐字保持原样，后半段只加「authentication」的对应中文说法「认证失败」。
     // 有意不加「未授权」（unauthorized 的直译）：它出现在 deep-analyzer 的修复指引正文里，

@@ -1914,3 +1914,23 @@ test('无关原任务的损坏状态不会阻断目标任务，实际匹配状�
     await assert.rejects(processApi.runConferenceProcess({ apply: true, concurrency: 1 }, target.deps),
         /checkpoint integrity failed/);
 });
+
+
+test('来源与后处理完整性错误优先按稳定错误码分类，不随诊断措辞重试', () => {
+    const recovery = require('../scripts/lib/conference-process-recovery.js');
+    for (const code of ['CONFERENCE_POSTPROCESS_INTEGRITY', 'CONFERENCE_SOURCE_CONTEXT_INTEGRITY']) {
+        for (const message of [
+            '会议后处理检查未通过：读者文章与正式分析的对应记录未通过校验。',
+            'structuredArtifacts payload is invalid',
+            '来源校验失败，记录中包含 HTTP 401 和 proxy 文本'
+        ]) {
+            const failure = recovery.classifyFailure(Object.assign(new Error(message), { code }),
+                '2026-10-09T00:00:00.000Z');
+            assert.equal(failure.category, 'integrity');
+            assert.equal(failure.retryable, false);
+            assert.equal(failure.systemic, false);
+            assert.equal(recovery.eligible({ status: 'failed', attempts: 1, lastFailure: failure },
+                '2026-10-09T01:00:00.000Z'), false);
+        }
+    }
+});
