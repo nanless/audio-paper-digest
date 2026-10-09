@@ -115,6 +115,20 @@ describe('分析豁免契约', () => {
         }
     });
 
+    it('乱序豁免即使重算自身 SHA 也不能通过读取校验', () => {
+        const f = fixture(['2609.00001', '2609.00002']);
+        try {
+            const { payload } = create(f, { paperIds: ['2609.00001', '2609.00002'] });
+            assert.equal(waiver.validateAnalysisWaiver(payload, DATE, f.files).valid, true);
+            payload.papers.reverse();
+            delete payload.waiverSha256;
+            payload.waiverSha256 = waiver.stableSha256(payload);
+            issueOf(payload, f, 'waiver paper IDs must be unique and sorted');
+        } finally {
+            fs.rmSync(f.directory, { recursive: true, force: true });
+        }
+    });
+
     it('没有豁免记录时视为通过；缺文件时 loadAnalysisWaiver 返回 null', () => {
         const f = fixture();
         try {

@@ -130,7 +130,6 @@ async function reanalyzeSelected(ids) {
 
     // 重新分析
     const analyzedResults = [];
-    const attemptResults = [];
     let digestStatusUpdated = 0;
     const runAnalysisFromDailySources = () => analyzeBatch(toReanalyze, {
         checkpointFilePath: RESULT_FILE,
@@ -158,7 +157,6 @@ async function reanalyzeSelected(ids) {
                 parsed: null,
                 error: result.error || '分析失败'
             };
-            attemptResults.push(attempted);
             if (result.success) analyzedResults.push(attempted);
             updateJsonFileLocked(RESULT_FILE, current => ({
                 ...(!Array.isArray(current) && current ? current : {}),

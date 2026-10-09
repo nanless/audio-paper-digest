@@ -98,7 +98,7 @@ function validateAnalysisWaiver(waiver, date, files = Config.FILES, snapshots = 
         }
     }
     const uniqueIds = [...new Set(ids)].sort();
-    if (uniqueIds.length !== ids.length || JSON.stringify(uniqueIds) !== JSON.stringify(ids.slice().sort())) {
+    if (uniqueIds.length !== ids.length || JSON.stringify(uniqueIds) !== JSON.stringify(ids)) {
         issues.push('waiver paper IDs must be unique and sorted');
     }
 

@@ -25,7 +25,7 @@ const getConferenceAnalysisContext = () => require('./conference-analysis-contex
 function readEnvelope(filename) {
     let fd;
     try {
-        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.nlink !== 1 || stat.size > 20 * 1024 * 1024 || (stat.mode & 0o777) !== 0o600) {
             throw new Error('Unsafe Reader recovery revision candidate');

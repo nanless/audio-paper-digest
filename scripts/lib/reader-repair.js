@@ -281,7 +281,7 @@ function readerAttemptLimit(maxAttempts, completedAttempts, candidate, implement
 function readAllowanceEnvelope(filename) {
     let fd;
     try {
-        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_FILE_BYTES || (stat.mode & 0o777) !== 0o600) {
             throw new Error('Reader implementation allowance source envelope is unsafe');
@@ -1277,7 +1277,7 @@ function loadFailedCandidate(directory, identity) {
     const filename = candidatePath(directory, identity);
     let fd;
     try {
-        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_FILE_BYTES || (stat.mode & 0o777) !== 0o600) {
             throw new Error('Unsafe Reader candidate file or permissions');
