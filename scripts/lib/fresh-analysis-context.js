@@ -45,7 +45,7 @@ function safeDirectory(directory, create = false) {
             if (error.code !== 'ENOENT' || !create) throw error;
             fs.mkdirSync(cursor, { mode: 0o700 }); stat = fs.lstatSync(cursor);
         }
-        if (!stat.isDirectory() || stat.isSymbolicLink()) throw fail(`Unsafe fresh directory: ${cursor}`);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw fail(`来源目录不是普通目录，或是符号链接： ${cursor}`);
     }
     return absolute;
 }
@@ -55,7 +55,7 @@ function readBytes(filename) {
     try {
         fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const stat = fs.fstatSync(fd);
-        if (!stat.isFile() || stat.nlink !== 1 || stat.size > 64 * 1024 * 1024) throw fail('Unsafe or oversized fresh cache file');
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size > 64 * 1024 * 1024) throw fail('来源文件不是普通文件、硬链接数量不为 1，或大小超过 64 MiB');
         return fs.readFileSync(fd);
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
@@ -79,13 +79,13 @@ function validateRun(runDir, identity) {
         { root: dailyRoot, contract: DAILY_SOURCE_RUN_CONTRACT }
     ].filter(item => item.root && item.root !== path.resolve('.'));
     const matchedRoot = roots.find(item => resolvedRunDir === path.join(item.root, runId));
-    if (!matchedRoot) throw fail('Fresh runDir must be the configured root/runId directory');
+    if (!matchedRoot) throw fail('runDir 必须是配置的来源运行根目录下、以 runId 命名的直接子目录');
     safeDirectory(resolvedRunDir);
     const run = readJson(path.join(resolvedRunDir, 'run.json'));
     if (run.runId !== runId || run.contract !== matchedRoot.contract || run.version !== 1) throw fail('来源运行清单格式无效，或与请求的运行不匹配。');
     const expectations = identity?.sourceExpectations;
     if (!expectations || typeof expectations !== 'object' || Array.isArray(expectations)
-        || stable(expectations) !== stable(run.sourceExpectations)) throw fail('Fresh source expectations differ from the run manifest');
+        || stable(expectations) !== stable(run.sourceExpectations)) throw fail('sourceExpectations 缺失、不是对象、是数组，或与运行清单中的预期来源记录不一致');
     const ids = Object.keys(expectations);
     if (!ids.length || !Array.isArray(run.paperIds) || stable(ids.slice().sort()) !== stable(run.paperIds.slice().sort())) {
         throw fail('fresh 来源预期未覆盖确切的运行输入集合');
@@ -97,7 +97,7 @@ function validateRun(runDir, identity) {
             throw fail(`${id} 的预期来源记录未提供有效的论文 ID，以及所需的来源哈希或包代次。`);
         }
         if (expectations[id].sourceId !== undefined && paperId(expectations[id].sourceId) !== id) {
-            throw fail(`Fresh sourceId belongs to another paper: ${id}`);
+            throw fail(`sourceId 指向另一篇论文： ${id}`);
         }
     }
     return { runId, runDir: resolvedRunDir, runContract: matchedRoot.contract, sourceExpectations: structuredClone(expectations),
@@ -107,7 +107,7 @@ function validateRun(runDir, identity) {
 function withFreshAnalysisContext(identity, callback) {
     const checked = validateRun(identity?.runDir, identity);
     if (identity.refreshReaderDiagnostics !== undefined && typeof identity.refreshReaderDiagnostics !== 'boolean') {
-        throw fail('refreshReaderDiagnostics must be an explicit boolean');
+        throw fail('refreshReaderDiagnostics 若有设置，必须为 true 或 false');
     }
     for (const expectation of Object.values(checked.sourceExpectations)) Object.freeze(expectation);
     Object.freeze(checked.sourceExpectations);
@@ -252,7 +252,7 @@ function readFreshSource(runDir, paper, identity) {
     const details = validateSource(JSON.parse(bytes.toString('utf8')), id, expectation);
     if (sha(readBytes(path.join(directory, 'source.txt'))) !== expectation.sourceSha256
         || readBytes(path.join(directory, 'artifacts.json')).toString('utf8') !== JSON.stringify(details.structuredArtifacts)) {
-        throw fail('The source text or artifact files do not match the saved source details.');
+        throw fail('source.txt 的内容 SHA 或 artifacts.json 的原始内容与已保存的来源详情不一致。');
     }
     return { ...details, freshSourceDescriptor: descriptor };
 }
@@ -328,7 +328,7 @@ function resolveFreshSource(runDir, paper, identity) {
     const id = paperId(paper);
     const requestedId = isBundleExpectation(identity?.sourceExpectations?.[id]) ? id : identity?.sourceExpectations?.[id]?.sourceId
         ?? (typeof paper === 'string' ? paper : paper.arxivId || paper.paper_id || paper.id);
-    if (paperId(requestedId) !== id) throw fail(`Fresh sourceId belongs to another paper: ${id}`);
+    if (paperId(requestedId) !== id) throw fail(`sourceId 指向另一篇论文： ${id}`);
     return withFreshAnalysisContext({ ...identity, runDir }, () => require('../deep-analyzer.js').fetchArxivTextDetailed(requestedId));
 }
 
@@ -361,16 +361,16 @@ function assertFreshPaper(paper) {
     if (!context) return;
     const id = paperId(paper);
     if (!context.sourceExpectations[id]) throw fail(`论文不在该 fresh 运行内：${id}`);
-    if (paper.fullText || paper.pdfText) throw fail('Fresh analysis must use this run source cache, not caller-provided text');
+    if (paper.fullText || paper.pdfText) throw fail('分析只能读取本次运行保存的来源文件，不能传入 fullText 或 pdfText 正文');
     const generated = Object.keys(paper).filter(key => /^(?:analysis(?:$|Checkpoint|Manifest|Stage|Recovery)|parsed$|apiReader|imageManifest$)/.test(key)
         && paper[key] !== undefined && paper[key] !== null && paper[key] !== '');
     if (!generated.length && !paper.freshRewriteProvenance) return;
     const source = readFreshSource(context.runDir, id, context);
-    if (!source) throw fail('Generated analysis has no corresponding source files in this run.');
+    if (!source) throw fail('已有分析结果在本次运行中缺少对应的来源文件。');
     const expected = buildFreshSourceRecord(source);
     if (stable(paper.freshRewriteProvenance) !== stable(expected)
         || (paper.analysisManifest && stable(paper.analysisManifest.freshRewriteProvenance) !== stable(expected))) {
-        throw fail('The analysis or its stage manifest has a missing or inconsistent source record for this run.');
+        throw fail('分析结果或阶段清单的来源记录缺失，或与本次运行的来源记录不一致。');
     }
 }
 
@@ -392,7 +392,7 @@ function freshReaderAttemptsDirectory(requestedDirectory) {
     const context = getFreshAnalysisContext();
     if (!context) return requestedDirectory;
     const expected = path.join(context.runDir, 'reader-attempts');
-    if (requestedDirectory && path.resolve(requestedDirectory) !== expected) throw fail('Fresh Reader candidates must stay inside the current run');
+    if (requestedDirectory && path.resolve(requestedDirectory) !== expected) throw fail('Reader 候选目录必须是本次 runDir 下的 reader-attempts 目录');
     return expected;
 }
 

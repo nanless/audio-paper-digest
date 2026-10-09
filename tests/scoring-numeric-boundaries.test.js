@@ -14,7 +14,7 @@ function analysisWith(line, score) {
         .replace('6.9/10', `${(5.4 + score).toFixed(1)}/10`);
 }
 
-test('完整评分解析及正式契约拒绝被截断的得分、分母和数字后缀', () => {
+test('完整评分解析与正式分析检查拒绝被截断的得分、分母和数字后缀', () => {
     for (const item of cases.invalid) {
         const analysis = analysisWith(item.line, item.prefixScore);
         const parsed = parseAnalysis(analysis);

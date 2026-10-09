@@ -12,6 +12,8 @@ const api = require('../scripts/lib/tag-catalog-change.js');
 
 const CURRENT = path.resolve(__dirname, '../config/tag-catalog.json');
 const HISTORY = path.resolve(__dirname, '../config/tag-catalog-history');
+const PRE_DESCRIPTION_UPDATE_SHA = 'bb94d9a8d3b651e32d9f64c2eed96f2907cd3eeb4c4f5cbb681f3997a79e8ac5';
+const PRE_DESCRIPTION_UPDATE = path.join(HISTORY, `${PRE_DESCRIPTION_UPDATE_SHA}.json`);
 const OLD_SEED = path.join(HISTORY,
     'dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf.json');
 const OLD_ALIAS_REMOVAL = path.join(HISTORY,
@@ -206,16 +208,13 @@ test('遇到不可能的 facet 迁移时，词表校验仍然直接失败', () =
     assert.throws(() => api.classifyRegistryChange(raw(), migrated), /概念 ID 的格式或所属分类维度无效，或 ID 重复：task\.asr/);
 });
 
-// 换表口径（config/tag-catalog.json 已于 09-30 换为 v1.1 / 262 概念 /
-// SHA a3b75a14…）：本文件早先的期望是换表前（current=15c82a56，228 概念）写的，
-// 下面三对过渡的分级、counts、summary 全部按当前代码实测重算 —— 旧表“只增概念”
-// 的 additive 过渡在 v1.1 里同时删了别名、改了 broaderId 与首选标签，所以
-// seed → current 也翻成了 destructive（可确认白名单内）。“按文档分类”的测试
-// 意图不变：期望仍逐条写死，任何分级漂移都会立刻暴露。
+// 下面保留旧 seed、删别名版本与本轮说明修改前词表的历史比较。
+// 新的六处说明变化另测，不把旧迁移的原因数量当作当前词表的固定数量。
 test('真实的历史词表迁移结果与文档记录一致', () => {
     const seed = tagCatalogApi.loadTagCatalog(OLD_SEED);
     const aliasRemoval = tagCatalogApi.loadTagCatalog(OLD_ALIAS_REMOVAL);
-    const current = tagCatalogApi.loadTagCatalog(CURRENT);
+    const current = tagCatalogApi.loadTagCatalog(PRE_DESCRIPTION_UPDATE);
+    assert.equal(current.registrySha256, PRE_DESCRIPTION_UPDATE_SHA);
 
     // 历史 seed → aliasRemoval 新增 method.end-to-end-learning，其别名“端到端”
     // 与“End-to-end”撞上既有 setting.end-to-end 的 zh/en 首选（跨分面、候选由 1
@@ -227,7 +226,7 @@ test('真实的历史词表迁移结果与文档记录一致', () => {
     assert.equal(introduced.counts.conceptsAdded, 1);
     assert.equal(introduced.summary, '词表变更属于 destructive；各项原因及数量为：label-collision×2、concept-added×1。');
 
-    // seed → current(v1.1)：+58 概念 / +5 别名 / 2 处 definition / 8 处 scopeNote，
+    // seed → 修改说明前的词表：+58 概念 / +5 别名 / 2 处 definition / 8 处 scopeNote，
     // 但同时删了 flow-matching、self-supervised 两条别名，task.speech-spoofing 的
     // broaderId 由 null 指向 task.audio-forgery，task.music-understanding 中英文
     // 首选标签改名 —— 解析语义改变即 destructive。
@@ -243,7 +242,7 @@ test('真实的历史词表迁移结果与文档记录一致', () => {
     assert.equal(upgraded.counts.conceptsAdded, 58);
     assert.equal(upgraded.counts.conceptsChanged, 13);
 
-    // aliasRemoval → current(v1.1)：比上一对多删 end-to-end-learning 的 3 条别名，
+    // aliasRemoval → 修改说明前的词表：比上一对多删 end-to-end-learning 的 3 条别名，
     // 故 alias-removed 由 2 升到 5、conceptsAdded 少 1（旧表已含该概念）。
     const detail = expectLevel(aliasRemoval, current, 'destructive',
         ['alias-removed', 'broader-id-changed', 'preferred-label-changed', 'concept-added']);
@@ -258,6 +257,40 @@ test('真实的历史词表迁移结果与文档记录一致', () => {
     assert.equal(detail.summary, '词表变更属于 destructive；各项原因及数量为：alias-removed×5、broader-id-changed×1'
         + '、preferred-label-changed×2、alias-added×7、concept-added×57'
         + '、definition-updated×2、scope-note-updated×8。');
+});
+
+test('六处词表说明更新只改变显示文字，旧词表仍按原 SHA 保存', () => {
+    const bytes = fs.readFileSync(PRE_DESCRIPTION_UPDATE);
+    assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), PRE_DESCRIPTION_UPDATE_SHA);
+    const previous = tagCatalogApi.loadTagCatalog(PRE_DESCRIPTION_UPDATE);
+    const current = tagCatalogApi.loadTagCatalog(CURRENT);
+    assert.equal(current.registrySha256, '0a0847314ab2059d95efac33376414498e598a1f02a1486869bee0efc481d1f7');
+    const detail = expectLevel(previous, current, 'additive');
+    assert.deepEqual(detail.reasons.map(reason => [reason.level, reason.code,
+        reason.conceptId || reason.facet]), [
+        ['additive', 'definition-updated', 'artifact.software'],
+        ['additive', 'facet-label-updated', 'artifact'],
+        ['additive', 'scope-note-updated', 'artifact.model-weights'],
+        ['additive', 'scope-note-updated', 'method.benchmark-design'],
+        ['additive', 'scope-note-updated', 'research_focus.theory'],
+        ['additive', 'scope-note-updated', 'task.audio-understanding']
+    ]);
+    assert.deepEqual(detail.counts, { oldConcepts: 262, newConcepts: 262,
+        conceptsAdded: 0, conceptsRemoved: 0, conceptsChanged: 5,
+        aliasesAdded: 0, aliasesRemoved: 0, facetsAdded: 0, facetsRemoved: 0 });
+    assert.equal(detail.summary, '词表变更属于 additive；各项原因及数量为：definition-updated×1、facet-label-updated×1、scope-note-updated×4。');
+
+    // 除这六个显示字段外，版本、概念、标签、别名、层级和状态都必须与旧原记录相同。
+    const oldBody = JSON.parse(bytes);
+    const newBody = JSON.parse(fs.readFileSync(CURRENT));
+    for (const body of [oldBody, newBody]) {
+        delete body.facets.find(facet => facet.id === 'artifact').label;
+        delete byId(body, 'artifact.software').definition;
+        for (const id of ['artifact.model-weights', 'method.benchmark-design',
+            'research_focus.theory', 'task.audio-understanding']) delete byId(body, id).scopeNote;
+    }
+    assert.deepEqual(newBody, oldBody);
+    assert.deepEqual(fs.readFileSync(PRE_DESCRIPTION_UPDATE), bytes);
 });
 
 test('快照按字节 SHA 解析，内容对不上就拒绝', () => {

@@ -40,7 +40,7 @@ test('五份旧正文仍可按整文件和模板 SHA 核验，新首围栏保留
     }
 });
 
-test('结构修复的摘要门槛与实际契约一致，方法要求能满足正式验证器', () => {
+test('结构修复提示词的摘要长度要求与正式检查一致，方法正文最低长度边界准确', () => {
     const prompt = loadPrompt(versions.currentTextStagePromptPath('structureRepair'), {});
     assert.ok(prompt.includes(`${contract.CORE_SUMMARY_MIN_SENTENCES}–${contract.CORE_SUMMARY_MAX_SENTENCES} 句`));
     assert.ok(prompt.includes(`${contract.CORE_SUMMARY_MIN_CHINESE_CHARS}–${contract.CORE_SUMMARY_MAX_CHINESE_CHARS} 个`));

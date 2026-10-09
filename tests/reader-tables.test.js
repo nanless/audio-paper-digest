@@ -401,7 +401,7 @@ test('不安全的原表标记会被拒绝，最终的原表 SHA 和单元格检
         selectionTableIndexes: compiled.selectionTableIndexes }), /不一致/);
 });
 
-test('完整 Reader 解析器编译两个选中的宽表，仍输出既有的 v3/v4 契约', () => {
+test('Reader 解析器编译两张选中宽表后，保留 v3 计划和 v4 来源对应格式', () => {
     const { parseArxivStructuredArtifactsFromHtml, bindStructuredArtifactsToText, parseApiReaderArticleResult } = require('../scripts/deep-analyzer.js');
     const header = '<thead><tr><th>System</th><th>WER</th><th>CER</th><th>Latency</th><th>Memory</th></tr></thead>';
     const rows = '<tbody><tr><td>Baseline</td><td>4.8%</td><td>3.1%</td><td>2 ms</td><td>8 GB</td></tr><tr><td>Proposed</td><td>4.1%</td><td>2.9%</td><td>3 ms</td><td>9 GB</td></tr></tbody>';

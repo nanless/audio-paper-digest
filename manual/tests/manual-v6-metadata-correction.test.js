@@ -293,7 +293,7 @@ describe('Manual v6 显式元数据更正协议', () => {
         fs.rmSync(root, { recursive: true, force: true });
     });
 
-    it('submit 拒绝未 start 与伪造 queuedAt，并封印 output/receipt raw+semantic SHA 后检测漂移', () => {
+    it('元数据修正协议检查拒绝未启动或伪造排队时间，提交后发现结果文件改动', () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-correction-submit-'));
         setupMinimalProduction(root);
         const state = initializeCorrectionState(DATE, root, QUEUED_AT);

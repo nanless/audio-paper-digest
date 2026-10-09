@@ -123,7 +123,7 @@ test('证据未绑定、状态不合法或身份写法无效时，schema 直接�
     ]) assert.throws(() => ledger.validateIdentity({ type, value }));
 });
 
-test('身份已核验的成员仍可以是受阻或待复查，此时会显式标明复核产物缺失', t => {
+test('允许记录缺少文件的受阻或待复核成员，但不能将其核验为可用', t => {
     const root = fixture(t);
     const base = member(root, 'icassp-arnumber', '102');
     const blocked = removeArtifact(removeArtifact(removeArtifact(base, 'artifacts'), 'text'), 'pdf');
@@ -141,15 +141,15 @@ test('身份已核验的成员仍可以是受阻或待复查，此时会显式�
     absentWithEvidence.members[0].status.evidence.push({ kind: 'pdf', sha256: base.pdfSha256 });
     assert.throws(() => ledger.validateLedger(absentWithEvidence), /exactly the present/);
 
-    // 过期的实体产物故意留在缓存里。被拦下的账目
-    // 允许查看，但缺失的产物不参与字节复核，
-    // 也就不会意外把该成员变成就绪状态。
+    // 旧文件故意留在缓存里。受阻的来源记录
+    // 允许查看，但标为缺失的文件不参与字节核验，
+    // 也就不会使该成员意外变成就绪状态。
     const onlyArtifactsAbsent = removeArtifact(base, 'artifacts');
     fs.writeFileSync(path.join(root, base.artifactsFile), 'stale absent bytes');
     assert.throws(() => ledger.verifyMemberFiles(makeLedger(root, [onlyArtifactsAbsent]), root), /non-verified members.*not ready/);
 });
 
-test('完整的复核产物、完整的 SHA 证据和派生提取来源，只有已核验成员才有', t => {
+test('只有已核验成员才能标为文件齐备，提取来源记录也必须完整对应', t => {
     const root = fixture(t);
     const base = member(root, 'conference-paper-id', '103');
     const nonVerifiedComplete = structuredClone(base);
@@ -206,7 +206,7 @@ test('所有来源文件都用可移植的相对路径；路径穿越、绝对�
     assert.throws(() => ledger.verifyMemberFiles(source, root), /Unsafe ledger artifact/);
 });
 
-test('账目 JSON 的读取和不可变写入拒绝重复键、链接、不安全的输出和字节漂移', t => {
+test('来源清单读取与新文件保存拒绝重复键、符号链接、覆盖已有文件及来源 SHA 不符', t => {
     const root = fixture(t);
     const source = makeLedger(root, [member(root, 'icassp-arnumber', '109')]);
     const output = path.join(root, 'ledger.json');

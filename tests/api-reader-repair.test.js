@@ -1286,7 +1286,7 @@ test('校验问题变了可以继续，传输错误不计入连续次数', async
     assert.equal(envelope.payload.transportFailures, 1);
 });
 
-test('传输失败保留最新候选，来源漂移则另起一个身份', async t => {
+test('传输失败保留最新草稿，来源正文改变后另存一份候选', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t);
     const paper = { arxivId: '2609.99994', title: '离线网络故障' };

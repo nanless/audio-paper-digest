@@ -27,7 +27,7 @@
     },
     {
       "id": "artifact",
-      "label": "数据、评测基准、工具与模型文件"
+      "label": "研究产物"
     },
     {
       "id": "scientific_topic",
@@ -715,7 +715,7 @@
       "aliases": [],
       "broaderId": null,
       "definition": "解释音频中的内容、关系或语义。",
-      "scopeNote": "宽任务仅供真正综合理解研究或显式待细分记录，不用于容纳所有无法明确分类的任务。",
+      "scopeNote": "宽任务仅供真正综合理解研究或显式待细分记录，不作万用兜底。",
       "status": "active",
       "replacedBy": null
     },
@@ -2219,7 +2219,7 @@
       ],
       "broaderId": "method.evaluation-protocol",
       "definition": "联合设计任务、数据划分、指标、基线和比较规则，形成可复用研究基准。",
-      "scopeNote": "在已有评测基准上做实验，不等于设计新基准；artifact.benchmark 表示论文贡献的评测任务、协议或基准集合，本概念表示设计方法。",
+      "scopeNote": "在已有 benchmark 上跑实验不是基准设计；artifact.benchmark 表示产物，本概念表示方法。",
       "status": "active",
       "replacedBy": null
     },
@@ -3021,7 +3021,7 @@
       "aliases": [],
       "broaderId": null,
       "definition": "以理论性质、边界或形式化分析为研究重点。",
-      "scopeNote": "不能用于代替未明确分类的工程主任务，也不取代文档类型字段。",
+      "scopeNote": "不是工程主任务的兜底，也不取代文档类型字段。",
       "status": "active",
       "replacedBy": null
     },
@@ -3149,7 +3149,7 @@
       },
       "aliases": [],
       "broaderId": null,
-      "definition": "作为论文贡献提供可操作的软件或工具。",
+      "definition": "贡献可操作的软件或工具产物。",
       "scopeNote": "存在工具标签不证明代码已可达或许可证开放。",
       "status": "active",
       "replacedBy": null
@@ -3951,7 +3951,7 @@
       ],
       "broaderId": null,
       "definition": "训练得到并可发布的模型参数文件或检查点。",
-      "scopeNote": "记录论文贡献的模型权重文件；是否开源由资源证据决定，不由标签声称。未设上级概念，因此是根概念。",
+      "scopeNote": "记录“权重”这一产物；是否开源由资源证据决定，不由标签声称。父节点缺失故成根。",
       "status": "active",
       "replacedBy": null
     },

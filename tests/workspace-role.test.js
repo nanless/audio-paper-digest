@@ -40,7 +40,7 @@ test('复制来的标记不能授权另一个真实路径，除非显式强制�
     }).workspaceRealpath, second);
 });
 
-test('未知角色、标记结构漂移、权限过弱和符号链接根目录都直接失败', () => {
+test('角色未知、标记多出字段、文件权限过宽或根目录是符号链接时拒绝', () => {
     const dir = root();
     role.writeWorkspaceRole('daily', { root: dir });
     assert.throws(() => role.requireWorkspaceRole('unknown', dir), /未知的工作区角色要求/);

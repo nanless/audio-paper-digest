@@ -176,7 +176,7 @@ test('归一化、有歧义和未匹配的发现成员，没有解决凭证就�
     }
 });
 
-test('提取凭证、提取器、PDF、文本或产物字节一变，暂存就拒绝', t => {
+test('暂存拒绝提取器版本、PDF、文本或结构化记录被改动；核验接口也拒绝自行构造的对象', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const reviewed = extraction(f.sources, f.first.handle);
     const receiptFile = path.join(f.sources, '100-receipt.json');

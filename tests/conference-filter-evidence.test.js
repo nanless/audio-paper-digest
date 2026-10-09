@@ -113,7 +113,7 @@ test('已核验的发现会暂存可续跑的证据，只有完整时才给目�
     assert.throws(() => api.evidenceHandleSnapshot({}, paper.member.paperId), /authenticated evidence handle/);
 });
 
-test('状态查询只读，最终产物缺失时直接失败', () => {
+test('状态查询发现提取报告缺失时拒绝，且不补建报告', () => {
     const site = workspace(); const runId = '66666666-6666-4666-8666-666666666666';
     api.prepareEvidence({ evidenceRunsRoot: site.runs, runId, discoveryHandle: site.handle,
         apply: true, extract: extractorWith(fixture('acl.txt')) });

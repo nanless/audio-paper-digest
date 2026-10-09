@@ -45,11 +45,11 @@ test('当日上下文限定 UUID、根目录、清单和来源集合身份，绝
     fresh.withFreshAnalysisContext({ ...f.context, refreshReaderDiagnostics: true }, () => {
         assert.equal(fresh.getFreshAnalysisContext().refreshReaderDiagnostics, true);
     });
-    assert.throws(() => fresh.withFreshAnalysisContext({ ...f.context, refreshReaderDiagnostics: 'true' }, () => {}), /explicit boolean/);
+    assert.throws(() => fresh.withFreshAnalysisContext({ ...f.context, refreshReaderDiagnostics: 'true' }, () => {}), /refreshReaderDiagnostics 若有设置，必须为 true 或 false/);
     assert.throws(() => fresh.withFreshAnalysisContext({ ...f.context, runId: '../outside' }, () => {}), /UUID/);
-    assert.throws(() => fresh.withFreshAnalysisContext({ ...f.context, runDir: f.directory }, () => {}), /configured root/);
+    assert.throws(() => fresh.withFreshAnalysisContext({ ...f.context, runDir: f.directory }, () => {}), /runDir 必须是配置的来源运行根目录下/);
     const changed = structuredClone(f.context); changed.sourceExpectations[f.id].sourceSha256 = '0'.repeat(64);
-    assert.throws(() => fresh.withFreshAnalysisContext(changed, () => {}), /expectations differ/);
+    assert.throws(() => fresh.withFreshAnalysisContext(changed, () => {}), /sourceExpectations 缺失、不是对象、是数组，或与运行清单中的预期来源记录不一致/);
 });
 
 test('当日运行的用量上下文能跨 await 和嵌套论文范围，且不在并发运行之间泄漏', async t => {
@@ -159,7 +159,7 @@ test('来源解析保留基线版本或调用方版本，拒绝跨论文的 sour
     await fresh.resolveFreshSource(updated.runDir, { arxivId: `${f.id}v2` }, updated);
     assert.equal(requested.at(-1), `${f.id}v1`, 'baseline source identity takes precedence');
     updated.sourceExpectations[f.id].sourceId = '2609.99971v1';
-    assert.throws(() => fresh.resolveFreshSource(updated.runDir, f.id, updated), /another paper/);
+    assert.throws(() => fresh.resolveFreshSource(updated.runDir, f.id, updated), /sourceId 指向另一篇论文/);
     assert.equal(requested.length, 4);
 });
 
@@ -171,7 +171,7 @@ test('原始抓取还在进行时，来源预期不能漂移', async t => {
         manifest.sourceExpectations[f.id].sourceSha256 = '0'.repeat(64);
         fs.writeFileSync(filename, JSON.stringify(manifest));
         return structuredClone(f.details);
-    })), /expectations differ/);
+    })), /sourceExpectations 缺失、不是对象、是数组，或与运行清单中的预期来源记录不一致/);
     assert.equal(fs.existsSync(path.join(f.context.runDir, 'sources', f.id, 'source.json')), false);
 });
 
@@ -194,12 +194,12 @@ test('只读缓存复核拒绝被改动的附属文件和符号链接目录，�
     await fresh.withFreshAnalysisContext(f.context, () => fresh.fetchFreshSource(f.id, async () => structuredClone(f.details)));
     const directory = path.join(f.context.runDir, 'sources', f.id);
     fs.writeFileSync(path.join(directory, 'source.txt'), 'changed');
-    assert.throws(() => fresh.readFreshSource(f.context.runDir, f.id, f.context), /The source text or artifact files do not match the saved source details/);
+    assert.throws(() => fresh.readFreshSource(f.context.runDir, f.id, f.context), /source\.txt 的内容 SHA 或 artifacts\.json 的原始内容与已保存的来源详情不一致/);
     fs.writeFileSync(path.join(directory, 'source.txt'), f.text);
     const moved = `${directory}-saved`; fs.renameSync(directory, moved); fs.symlinkSync(moved, directory);
-    assert.throws(() => fresh.readFreshSource(f.context.runDir, f.id, f.context), /Unsafe fresh directory/);
+    assert.throws(() => fresh.readFreshSource(f.context.runDir, f.id, f.context), /来源目录不是普通目录，或是符号链接/);
     await assert.rejects(fresh.withFreshAnalysisContext(f.context, () => fresh.fetchFreshSource(f.id,
-        async () => { throw new Error('unexpected network'); })), /Unsafe fresh directory/);
+        async () => { throw new Error('unexpected network'); })), /来源目录不是普通目录，或是符号链接/);
 });
 
 test('来源提交中断后，可以凭已核验的原始明细写完，不必重新抓取', async t => {
@@ -218,8 +218,8 @@ test('当日论文拒绝旧版或跨运行生成的文本，并把同一次运�
     const f = fixture(t);
     await fresh.withFreshAnalysisContext(f.context, async () => {
         assert.doesNotThrow(() => fresh.assertFreshPaper({ arxivId: f.id, title: 'Original metadata', abstract: 'Original abstract' }));
-        assert.throws(() => fresh.assertFreshPaper({ arxivId: f.id, analysis: 'old analysis' }), /Generated analysis has no corresponding source files in this run/);
-        assert.throws(() => fresh.assertFreshPaper({ arxivId: f.id, fullText: f.text }), /caller-provided text/);
+        assert.throws(() => fresh.assertFreshPaper({ arxivId: f.id, analysis: 'old analysis' }), /已有分析结果在本次运行中缺少对应的来源文件/);
+        assert.throws(() => fresh.assertFreshPaper({ arxivId: f.id, fullText: f.text }), /不能传入 fullText 或 pdfText 正文/);
         const source = await fresh.fetchFreshSource(f.id, async () => structuredClone(f.details));
         const paper = { arxivId: f.id }; const manifest = { stages: {} };
         fresh.attachFreshSourceRecord(paper, manifest, source);
@@ -228,8 +228,8 @@ test('当日论文拒绝旧版或跨运行生成的文本，并把同一次运�
         paper.analysisManifest = manifest; paper.analysisCheckpoint = 'new run partial analysis';
         assert.doesNotThrow(() => fresh.assertFreshPaper(paper));
         paper.freshRewriteProvenance = { ...paper.freshRewriteProvenance, runId: crypto.randomUUID() };
-        assert.throws(() => fresh.assertFreshPaper(paper), /The analysis or its stage manifest has a missing or inconsistent source record for this run/);
-        assert.throws(() => fresh.assertFreshPaper({ arxivId: f.id, apiReaderArticle: 'old reader' }), /The analysis or its stage manifest has a missing or inconsistent source record for this run/);
+        assert.throws(() => fresh.assertFreshPaper(paper), /分析结果或阶段清单的来源记录缺失，或与本次运行的来源记录不一致/);
+        assert.throws(() => fresh.assertFreshPaper({ arxivId: f.id, apiReaderArticle: 'old reader' }), /分析结果或阶段清单的来源记录缺失，或与本次运行的来源记录不一致/);
     });
 });
 
@@ -282,7 +282,7 @@ test('当日 Reader 候选不能用旧的全局目录，已签名修订也不能
             readerRecordDisposition: () => {}, readerMaterializeFigures: async () => [], readerMaxAttempts: 1 };
         await assert.rejects(deep.generateApiReaderArticleDetailed({ arxivId: f.id }, '', '', {
             ...options, readerAttemptsDir: path.join(f.directory, 'old-global-candidates')
-        }), /current run/);
+        }), /Reader 候选目录必须是本次 runDir 下的 reader-attempts 目录/);
         assert.equal(calls, 0);
         await assert.rejects(deep.generateApiReaderArticleDetailed({ arxivId: f.id }, '', '', options), /JSON/);
         assert.equal(calls, 1);
@@ -290,6 +290,6 @@ test('当日 Reader 候选不能用旧的全局目录，已签名修订也不能
         const envelope = JSON.parse(fs.readFileSync(path.join(candidates, fs.readdirSync(candidates)[0]), 'utf8'));
         assert.equal(envelope.identity.freshAnalysis.runId, f.context.runId);
         assert.equal(envelope.identity.freshAnalysis.sourceSnapshotSha256, sha(JSON.stringify(f.details)));
-        await assert.rejects(deep.analyzePaperDeep({ arxivId: f.id, analysis: 'previous date generated text' }), /The analysis or its stage manifest has a missing or inconsistent source record for this run/);
+        await assert.rejects(deep.analyzePaperDeep({ arxivId: f.id, analysis: 'previous date generated text' }), /分析结果或阶段清单的来源记录缺失，或与本次运行的来源记录不一致/);
     });
 });

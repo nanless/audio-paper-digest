@@ -751,7 +751,7 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
         assert.deepStrictEqual(timeouts, [5000, 3800]);
     });
 
-    it('调用传输之前就拒绝 endpoint/apiUrl 身份漂移', async () => {
+    it('请求地址与配置端点不一致时，在传输前拒绝', async () => {
         let calls = 0;
         await assert.rejects(
             requestLlmJson(

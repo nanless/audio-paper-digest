@@ -1048,7 +1048,7 @@ describe('严格可复用的 Manual v4 spec 组装器', () => {
         );
     });
 
-    it('拒绝缺失 records、manifest v1、来源被篡改以及筛选批次漂移', () => {
+    it('拒绝缺少分析记录、旧 v1 来源清单、篡改来源文件或变更筛选批次', () => {
         const f = fixture();
         assert.throws(() => buildSpec({
             date: DATE,

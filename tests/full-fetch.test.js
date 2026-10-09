@@ -63,7 +63,7 @@ describe('full-fetch 辅助函数', () => {
         );
     });
 
-    it('来源配置指纹包含强制 recent 翻页契约版本', () => {
+    it('来源配置生成 16 位十六进制指纹', () => {
         const { getSourceConfigFingerprint } = require('../scripts/full-fetch.js');
         const fingerprint = getSourceConfigFingerprint();
         assert.match(fingerprint, /^[a-f0-9]{16}$/);
@@ -290,7 +290,7 @@ describe('full-fetch 辅助函数', () => {
         assert.deepStrictEqual(incomplete.retryableIds, ['2607.00002']);
     });
 
-    it('筛选产物一致性同时校验 stats.complete、候选覆盖和相关结果', () => {
+    it('筛选记录核对完成标记、候选覆盖、入选集合和来源完整性', () => {
         const { validateFilterArtifacts, stableContentSha256 } = require('../scripts/full-fetch.js');
         const rawPapers = [{ arxivId: '2607.00001' }, { arxivId: '2607.00002' }];
         const rawPapersSha256 = stableContentSha256(rawPapers);
@@ -643,7 +643,7 @@ describe('full-fetch 辅助函数', () => {
         assert.deepStrictEqual(baseline, ['blog', 'historicalreanalyzedtoday', 'old']);
     });
 
-    it('筛选配置指纹绑定 endpoint/protocol/温度/token 与解析契约', () => {
+    it('筛选请求端点或提示词变化时，配置指纹随之变化', () => {
         const { getFilterConfigFingerprint } = require('../scripts/full-fetch.js');
         const oldEndpoint = process.env.PAPER_ANALYZER_ENDPOINT;
         const oldModel = process.env.PAPER_ANALYZER_MODEL;
