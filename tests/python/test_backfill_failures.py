@@ -1,4 +1,5 @@
 import importlib.util
+import tempfile
 import sys
 import unittest
 from pathlib import Path
@@ -58,8 +59,58 @@ class BackfillFailureTests(unittest.TestCase):
             content = f'<feed xmlns="http://www.w3.org/2005/Atom">{entry}</feed>'.encode()
             with self.subTest(entry=entry), mock.patch.object(module.requests, 'get',
                     return_value=response(content=content)):
-                with self.assertRaisesRegex(RuntimeError, '错误记录|缺少论文 ID'):
+                with self.assertRaisesRegex(RuntimeError, 'XML 响应无效'):
                     module.fetch_arxiv_category('eess.AS')
+
+    def test_main_rejects_invalid_atom_before_mutating_real_database_or_report(self):
+        for identity, title, summary in (
+                ('https://example.invalid/arbitrary', 'Valid title', 'Valid abstract'),
+                ('https://arxiv.org/abs/2609.12345v1', '', 'Valid abstract'),
+                ('https://arxiv.org/abs/2609.12345v1', 'Valid title', '')):
+            with self.subTest(identity=identity, title=title, summary=summary), \
+                    tempfile.TemporaryDirectory() as directory:
+                database = Path(directory) / 'papers.json'
+                report = Path(directory) / 'result.json'
+                original = b'{"generation": 3, "papers": {"existing": {"title": "kept"}}}'
+                database.write_bytes(original)
+                feed = (
+                    '<feed xmlns="http://www.w3.org/2005/Atom"><entry>'
+                    f'<id>{identity}</id><title>{title}</title><summary>{summary}</summary>'
+                    '</entry></feed>'
+                ).encode()
+                with mock.patch.object(module, 'PAPERS_FILE', database), \
+                        mock.patch.object(module, 'backfill_result_path', return_value=report), \
+                        mock.patch.object(module, 'CATEGORIES', [('eess.AS', '音频语音')]), \
+                        mock.patch.object(module.requests, 'get', side_effect=[
+                            response(content=feed), response(payload=[]), response(payload=[]),
+                        ]) as get:
+                    with self.assertRaisesRegex(RuntimeError, 'XML 响应无效') as caught:
+                        module.main()
+                    self.assertIsNotNone(caught.exception.__cause__)
+                self.assertEqual(get.call_count, 1)
+                self.assertEqual(database.read_bytes(), original)
+                self.assertFalse(report.exists())
+
+    def test_strict_atom_accepts_complete_modern_and_old_ids_and_keeps_known_stop(self):
+        def entry(identity, number):
+            return (
+                f'<entry><id>https://arxiv.org/abs/{identity}</id><title>Title {number}</title>'
+                '<summary>Complete abstract</summary><author><name>A. Author</name></author>'
+                '<category term="eess.AS"/></entry>'
+            )
+        ids = ['2609.12345v1', 'hep-th/9901001v2']
+        ids.extend(f'2609.{number:05d}' for number in range(20))
+        ids.append('2609.99999')
+        feed = ('<feed xmlns="http://www.w3.org/2005/Atom">'
+                + ''.join(entry(identity, index) for index, identity in enumerate(ids))
+                + '</feed>').encode()
+        with mock.patch.object(module.requests, 'get', return_value=response(content=feed)):
+            papers = module.fetch_arxiv_category('eess.AS', existing_ids=set(ids[2:22]))
+        self.assertEqual([paper['arxivId'] for paper in papers], ids[:2])
+        self.assertEqual(papers[0]['abstract'], 'Complete abstract')
+        self.assertEqual(papers[0]['authors'], ['A. Author'])
+        self.assertEqual(papers[0]['categories'], ['eess.AS'])
+        self.assertEqual(papers[0]['fetchedFrom'], 'eess.AS')
 
     def test_missing_proxy_fails_before_network_or_sleep(self):
         with mock.patch.object(module, 'fetch_proxies', side_effect=RuntimeError('缺少项目代理')), \

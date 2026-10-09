@@ -7,10 +7,11 @@ setup_script_logging(__file__)
 请求设置超时；来源抓取失败时停止，不把失败当作没有新论文。
 """
 
+import importlib.util
 import json
 import os
 import time
-import xml.etree.ElementTree as ET
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -23,6 +24,12 @@ from path_config import (
     update_json_file_locked,
 )
 from project_env import build_fetch_proxies
+
+_atom_spec = importlib.util.spec_from_file_location(
+    'backfill_arxiv_atom', Path(__file__).with_name('parse-arxiv-atom.py'),
+)
+_atom_parser = importlib.util.module_from_spec(_atom_spec)
+_atom_spec.loader.exec_module(_atom_parser)
 
 BJ_TZ = timezone(timedelta(hours=8))
 
@@ -125,25 +132,17 @@ def fetch_arxiv_category(category_id, max_results=30, existing_ids=None):
     else:
         raise RuntimeError(f'arXiv 类别 {category_id} 抓取失败，不能当作空结果') from last_error
 
-    papers = []
     try:
-        root = ET.fromstring(resp.content)
-        ns = {'atom': 'http://www.w3.org/2005/Atom'}
-        if root.tag != '{http://www.w3.org/2005/Atom}feed':
-            raise ValueError('响应不是 Atom feed')
-        entries = root.findall('atom:entry', ns)
-    except Exception as e:
-        raise RuntimeError(f'arXiv 类别 {category_id} 的 XML 响应无效') from e
+        if len(resp.content) > _atom_parser.MAX_BYTES:
+            raise ValueError('arXiv Atom 响应超过允许的字节上限')
+        records = _atom_parser.parse_atom(resp.content.decode('utf-8', errors='strict'))
+    except (ValueError, UnicodeError, _atom_parser.ET.ParseError) as exc:
+        raise RuntimeError(f'arXiv 类别 {category_id} 的 XML 响应无效') from exc
 
+    papers = []
     consecutive_existing = 0
-    for entry in entries:
-        id_elem = entry.find('atom:id', ns)
-        if id_elem is None or not (id_elem.text or '').strip():
-            raise RuntimeError(f'arXiv 类别 {category_id} 的记录缺少论文 ID')
-        if '/api/errors' in id_elem.text:
-            raise RuntimeError(f'arXiv 类别 {category_id} 返回错误记录，不能写入论文库')
-        arxiv_id = id_elem.text.split('/abs/')[-1].strip()
-
+    for record in records:
+        arxiv_id = record['arxivId']
         if existing_ids and arxiv_id in existing_ids:
             consecutive_existing += 1
             if consecutive_existing >= 20:
@@ -151,27 +150,10 @@ def fetch_arxiv_category(category_id, max_results=30, existing_ids=None):
                 break
             continue
         consecutive_existing = 0
-
-        title = entry.find('atom:title', ns)
-        title = title.text.replace('\n', ' ').strip() if title is not None and title.text else ''
-
-        summary = entry.find('atom:summary', ns)
-        summary = summary.text.replace('\n', ' ').strip() if summary is not None and summary.text else ''
-
-        authors = [name.text for name in entry.findall('atom:author/atom:name', ns) if name.text]
-
-        published = entry.find('atom:published', ns)
-        published = published.text if published is not None else ''
-
-        categories = [cat.get('term') for cat in entry.findall('atom:category', ns) if cat.get('term')]
-
         papers.append({
-            'arxivId': arxiv_id,
-            'title': title,
-            'abstract': summary,
-            'authors': authors,
-            'published': published,
-            'categories': categories,
+            **record,
+            'authors': [author for author in record['authors'] if author],
+            'categories': [category for category in record['categories'] if category],
             'fetchedFrom': category_id,
             'fetchedAt': now_bj().isoformat(),
         })
