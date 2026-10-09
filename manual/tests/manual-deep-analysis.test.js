@@ -1135,7 +1135,7 @@ describe('manual_complete v3 深度分析约定', () => {
 describe('Manual full-text-evidence-v2 质量检查', () => {
     const v2Options = sourceText => ({ sourceText, manualDepthContractVersion: MANUAL_DEPTH_CONTRACT_VERSION_V2 });
 
-    it('合规正文同时通过 v1 与 v2 契约', () => {
+    it('符合要求的分析正文同时通过 v1 和 v2 检查', () => {
         const fixture = baseSpec();
         assert.equal(validateManualDepthContract(fixture.analysis, { sourceText: fixture.sourceText }), null);
         assert.equal(validateManualDepthContract(fixture.analysis, v2Options(fixture.sourceText)), null);

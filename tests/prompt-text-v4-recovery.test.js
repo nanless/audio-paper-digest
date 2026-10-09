@@ -13,7 +13,7 @@ const history = require('../scripts/lib/prompt-history.js');
 const deep = require('../scripts/deep-analyzer.js');
 const { validAnalysisText } = require('./valid-analysis-fixture.js');
 
-test('主分析和评分分别读取旧 v3 与当前 v4，旧原字节不被新版本替代', () => {
+test('主分析和评分分别读取旧 v3 与 v4，旧原字节不被当前版本替代', () => {
     const names = { primaryAnalysis: 'deep-analysis', scoringAudit: 'scoring-audit' };
     const originalV3Sha = {
         primaryAnalysis: 'ad04165708b244182d17341a682027fa055e5be121e4488bf0e17cb9a296ccd2',
@@ -24,8 +24,9 @@ test('主分析和评分分别读取旧 v3 与当前 v4，旧原字节不被新�
         for (const [stage, name] of Object.entries(names)) {
             const oldPath = `prompts/${name}-v3.md`, newPath = `prompts/${name}-v4.md`;
             assert.equal(registry.promptFilePathForContract(stage, 'analysis-prompt-text-v3'), oldPath);
-            assert.equal(registry.currentTextStagePromptPath(stage), newPath);
-            assert.equal(registry.currentPromptTextContract(stage), 'analysis-prompt-text-v4');
+            assert.equal(registry.promptFilePathForContract(stage, 'analysis-prompt-text-v4'), newPath);
+            assert.equal(registry.currentTextStagePromptPath(stage), stage === 'scoringAudit' ? `prompts/${name}-v5.md` : newPath);
+            assert.equal(registry.currentPromptTextContract(stage), stage === 'scoringAudit' ? 'analysis-prompt-text-v5' : 'analysis-prompt-text-v4');
             const oldBytes = fs.readFileSync(path.join(__dirname, '..', oldPath));
             const sha = crypto.createHash('sha256').update(oldBytes).digest('hex');
             assert.equal(sha, originalV3Sha[stage], `${stage} 已发布的 v3 原字节必须保持`);

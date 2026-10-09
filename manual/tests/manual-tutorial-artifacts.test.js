@@ -91,7 +91,7 @@ function allMusicCapsArtifact() {
     return fallbackAllMusicCapsFixture();
 }
 
-describe('Manual 教程产物的汇总', () => {
+describe('Manual 教程表格、图片和公式的整理', () => {
     it('接受 AllMusicCaps 原有的三张 HTTPS SVG 图，拒绝三个资助方 logo', () => {
         const index = allMusicCapsArtifact();
         const decisions = index.figures.map(classifyFigureCandidate);

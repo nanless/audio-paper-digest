@@ -196,7 +196,7 @@ function stageStatusMap() {
     return Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => [stage, MANUAL_COMPLETE_STATUS]));
 }
 
-// 新配置使用当前提示词；旧配置按 v1 或 v2 的原文件核验。路径均由公共版本表决定，
+// 新配置使用当前提示词；旧配置按 v1、v2 或评分升级前的完整版本组合核验。路径均由公共版本表决定，
 // 不在这里另存一份路径清单。没有提示词文件的阶段继续使用原来的阶段规则 SHA。
 function stagePromptBindings(promptTextVersion) {
     return Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => {
@@ -209,9 +209,11 @@ function stagePromptBindings(promptTextVersion) {
         const declaredContract = promptTextVersion === 'v1'
             ? promptTextVersions.ANALYSIS_PROMPT_TEXT_V1_CONTRACT
             : promptTextVersion === 'v2' ? promptTextVersions.ANALYSIS_PROMPT_TEXT_V2_CONTRACT : null;
-        const relativePath = declaredContract
-            ? promptTextVersions.promptFilePathForContract(stage, declaredContract)
-            : promptTextVersions.currentOrFrozenPromptPath(stage);
+        const relativePath = promptTextVersion === 'v4-mixed'
+            ? promptTextVersions.FROZEN_V4_MIXED_PROMPT_FILES[stage].path
+            : declaredContract
+                ? promptTextVersions.promptFilePathForContract(stage, declaredContract)
+                : promptTextVersions.currentOrFrozenPromptPath(stage);
         return [stage, { source: relativePath, sha256: sha256File(path.join(PROJECT_ROOT, relativePath)) }];
     }));
 }
@@ -246,6 +248,11 @@ function specPromptTextVersion(spec, currentBindings, legacyBindings,
         && REQUIRED_RECOVERY_STAGES.every(stage => declared[stage] === frozenV2Bindings[stage].sha256)) {
         return 'v2';
     }
+    const frozenV4Bindings = stagePromptBindings('v4-mixed');
+    if (Object.keys(declared).length === REQUIRED_RECOVERY_STAGES.length
+        && REQUIRED_RECOVERY_STAGES.every(stage => declared[stage] === frozenV4Bindings[stage].sha256)) {
+        return 'v4-mixed';
+    }
     return 'v1';
 }
 
@@ -253,7 +260,8 @@ function selectManualSpecPromptBindings(spec, currentBindings, legacyBindings) {
     const frozenV2Bindings = buildFrozenV2StagePromptBindings();
     const version = specPromptTextVersion(spec, currentBindings, legacyBindings, frozenV2Bindings);
     return { version, bindings: version === 'v1' ? legacyBindings
-        : version === 'v2' ? frozenV2Bindings : currentBindings };
+        : version === 'v2' ? frozenV2Bindings
+            : version === 'v4-mixed' ? stagePromptBindings('v4-mixed') : currentBindings };
 }
 
 function resolveManualSpecPromptBindings(spec, currentBindings = buildStagePromptBindings(),

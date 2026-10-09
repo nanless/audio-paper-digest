@@ -165,7 +165,7 @@ describe('Manual 教程质量约定', () => {
     });
 });
 
-describe('v5 教程材料重放原表行身份', () => {
+describe('v5 教程表格保留原表中的模型名称和数字', () => {
     it('实际文件凭证保留不同模型及图注，旧猜改计划在正文质量检查前拒绝', () => {
         const fs = require('node:fs');
         const os = require('node:os');
