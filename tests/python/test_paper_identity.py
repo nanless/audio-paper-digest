@@ -19,6 +19,12 @@ VECTORS = json.loads((Path(__file__).resolve().parents[2] / "config" / "paper-id
 
 
 class PaperIdentityTests(unittest.TestCase):
+    def test_rejects_shared_non_string_and_non_ascii_identity_vectors(self) -> None:
+        filename = Path(__file__).resolve().parents[1] / "fixtures" / "paper-identity-invalid-records.json"
+        for vector in json.loads(filename.read_text("utf-8")):
+            with self.subTest(name=vector["name"]), self.assertRaises(ValueError):
+                identity.normalize_identity(vector["record"])
+
     def test_vectors_are_canonical_and_cross_runtime_stable(self) -> None:
         self.assertEqual(VECTORS["contract"], identity.CONTRACT)
         for vector in VECTORS["vectors"]:

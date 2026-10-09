@@ -148,7 +148,7 @@ function normalizeIdentity(value) {
     const citation = validateCitation(value.citation);
 
     if (value.kind === 'arxiv') {
-        if (!ARXIV_ID_RE.test(String(value.arxivId || ''))) fail('arxivId is invalid');
+        if (typeof value.arxivId !== 'string' || !ARXIV_ID_RE.test(value.arxivId)) fail('arxivId 必须是使用半角数字的规范字符串');
         if (value.conference !== null || value.externalId !== null) fail('arxiv identity must not contain conference fields');
         const canonicalId = `arxiv:${value.arxivId}`;
         if (value.canonicalId !== canonicalId) fail('canonicalId does not bind arxivId');
@@ -161,7 +161,7 @@ function normalizeIdentity(value) {
 
     if (value.arxivId !== null) fail('conference identity must not contain arxivId');
     assertExactFields(value.conference, ['slug', 'year'], 'conference');
-    if (!SLUG_RE.test(String(value.conference.slug || ''))) fail('conference.slug must be a normalized slug');
+    if (typeof value.conference.slug !== 'string' || !SLUG_RE.test(value.conference.slug)) fail('conference.slug 必须是规范的字符串');
     const conference = { slug: value.conference.slug, year: assertYear(value.conference.year, 'conference.year') };
     const externalId = validateExternalId(value.externalId);
     const canonicalId = canonicalConferenceId(conference, externalId);

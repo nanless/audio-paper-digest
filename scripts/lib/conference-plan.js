@@ -418,12 +418,42 @@ function applyRunPlan(result, io = fs) {
             io.writeFileSync(opened[index].fd, specs[index][1]); io.fsyncSync(opened[index].fd);
         }
     } catch (error) {
+        const cleanupErrors = [];
+        const sameIdentity = (left, right) => left.dev === right.dev && left.ino === right.ino;
+        const checkDirectory = () => {
+            const current = io.lstatSync(outputDirectory);
+            if (!current.isDirectory() || current.isSymbolicLink() || !sameIdentity(current, outputStat)) {
+                throw new Error(`运行输出目录已被替换，保留现有路径：${outputDirectory}`);
+            }
+        };
         for (const item of opened) {
-            try { io.closeSync(item.fd); } catch {}
-            try { io.unlinkSync(item.filename); } catch {}
+            try {
+                checkDirectory();
+                const held = io.fstatSync(item.fd);
+                const current = io.lstatSync(item.filename);
+                if (!current.isFile() || current.isSymbolicLink() || current.nlink !== 1
+                    || !sameIdentity(current, held)) {
+                    throw new Error(`运行文件已被替换或增加硬链接，保留现有路径：${item.filename}`);
+                }
+                io.unlinkSync(item.filename);
+            } catch (cleanupError) {
+                if (cleanupError.code !== 'ENOENT') cleanupErrors.push(cleanupError);
+            } finally {
+                try { io.closeSync(item.fd); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+            }
         }
-        if (createdDirectory) try { io.rmdirSync(outputDirectory); } catch {}
-        throw fail(`could not create recoverable run/plan-receipt pair: ${error.message}`);
+        if (createdDirectory) {
+            try { checkDirectory(); io.rmdirSync(outputDirectory); }
+            catch (cleanupError) {
+                if (cleanupError.code !== 'ENOENT') cleanupErrors.push(cleanupError);
+            }
+        }
+        const failure = new Error(`会议运行文件与计划凭证写入失败：${error.message}`
+            + (cleanupErrors.length ? `；部分文件未清理：${cleanupErrors.map(item => item.message).join('；')}` : ''),
+        { cause: error });
+        if (error.code) failure.code = error.code;
+        if (cleanupErrors.length) failure.cleanupError = new AggregateError(cleanupErrors, '会议运行写入失败后的清理未完成');
+        throw failure;
     }
     for (const item of opened) io.closeSync(item.fd);
     return result;

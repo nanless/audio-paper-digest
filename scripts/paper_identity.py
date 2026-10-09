@@ -10,7 +10,7 @@ from typing import Any, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
 CONTRACT = "paper-identity-v1"
-ARXIV_ID_RE = re.compile(r"^\d{4}\.\d{4,5}$")
+ARXIV_ID_RE = re.compile(r"^[0-9]{4}\.[0-9]{4,5}$")
 SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 SCHEMES = frozenset(("icassp-arnumber", "openreview-forum-id", "conference-paper-id"))
 SHA_RE = re.compile(r"^[a-f0-9]{64}$")
@@ -48,7 +48,7 @@ def validate_external_id(value: Any) -> dict[str, str]:
         _fail("externalId.scheme is unsupported")
     identifier = _text(raw["value"], "externalId.value",
                        maximum=200 if raw["scheme"] == "conference-paper-id" else 128)
-    valid = (re.fullmatch(r"[1-9]\d*", identifier) if raw["scheme"] == "icassp-arnumber"
+    valid = (re.fullmatch(r"[1-9][0-9]*", identifier) if raw["scheme"] == "icassp-arnumber"
              else re.fullmatch(r"[A-Za-z0-9._-]{1,200}", identifier)
              if raw["scheme"] == "conference-paper-id"
              else re.fullmatch(r"[A-Za-z0-9_-]{6,128}", identifier))

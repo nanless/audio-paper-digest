@@ -1,0 +1,218 @@
+[
+  {
+    "name": "数字类型arXiv",
+    "record": {
+      "contract": "paper-identity-v1",
+      "kind": "arxiv",
+      "canonicalId": "arxiv:2601.1234",
+      "arxivId": 2601.1234,
+      "conference": null,
+      "externalId": null,
+      "source": {
+        "status": "unavailable",
+        "url": null
+      },
+      "citation": {
+        "title": "Test-Time Adaptation for Speech Enhancement",
+        "authors": [
+          "Ada Example",
+          "Bohr Example"
+        ],
+        "venue": null,
+        "year": 2026
+      }
+    }
+  },
+  {
+    "name": "数组类型arXiv",
+    "record": {
+      "contract": "paper-identity-v1",
+      "kind": "arxiv",
+      "canonicalId": "arxiv:2601.1234",
+      "arxivId": [
+        "2601.1234"
+      ],
+      "conference": null,
+      "externalId": null,
+      "source": {
+        "status": "unavailable",
+        "url": null
+      },
+      "citation": {
+        "title": "Test-Time Adaptation for Speech Enhancement",
+        "authors": [
+          "Ada Example",
+          "Bohr Example"
+        ],
+        "venue": null,
+        "year": 2026
+      }
+    }
+  },
+  {
+    "name": "全角arXiv",
+    "record": {
+      "contract": "paper-identity-v1",
+      "kind": "arxiv",
+      "canonicalId": "arxiv:２６０１.１２３４",
+      "arxivId": "２６０１.１２３４",
+      "conference": null,
+      "externalId": null,
+      "source": {
+        "status": "unavailable",
+        "url": null
+      },
+      "citation": {
+        "title": "Test-Time Adaptation for Speech Enhancement",
+        "authors": [
+          "Ada Example",
+          "Bohr Example"
+        ],
+        "venue": null,
+        "year": 2026
+      }
+    }
+  },
+  {
+    "name": "阿拉伯数字arXiv",
+    "record": {
+      "contract": "paper-identity-v1",
+      "kind": "arxiv",
+      "canonicalId": "arxiv:٢٦٠١.١٢٣٤",
+      "arxivId": "٢٦٠١.١٢٣٤",
+      "conference": null,
+      "externalId": null,
+      "source": {
+        "status": "unavailable",
+        "url": null
+      },
+      "citation": {
+        "title": "Test-Time Adaptation for Speech Enhancement",
+        "authors": [
+          "Ada Example",
+          "Bohr Example"
+        ],
+        "venue": null,
+        "year": 2026
+      }
+    }
+  },
+  {
+    "name": "数字类型会议slug",
+    "record": {
+      "contract": "paper-identity-v1",
+      "kind": "conference",
+      "canonicalId": "conference:123:2026:icassp-arnumber:10910001",
+      "arxivId": null,
+      "conference": {
+        "slug": 123,
+        "year": 2026
+      },
+      "externalId": {
+        "scheme": "icassp-arnumber",
+        "value": "10910001"
+      },
+      "source": {
+        "status": "unavailable",
+        "url": null
+      },
+      "citation": {
+        "title": "A Conference Paper",
+        "authors": [
+          "Chen Example"
+        ],
+        "venue": "ICASSP 2026",
+        "year": 2026
+      }
+    }
+  },
+  {
+    "name": "数组类型会议slug",
+    "record": {
+      "contract": "paper-identity-v1",
+      "kind": "conference",
+      "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+      "arxivId": null,
+      "conference": {
+        "slug": [
+          "icassp"
+        ],
+        "year": 2026
+      },
+      "externalId": {
+        "scheme": "icassp-arnumber",
+        "value": "10910001"
+      },
+      "source": {
+        "status": "unavailable",
+        "url": null
+      },
+      "citation": {
+        "title": "A Conference Paper",
+        "authors": [
+          "Chen Example"
+        ],
+        "venue": "ICASSP 2026",
+        "year": 2026
+      }
+    }
+  },
+  {
+    "name": "混合全角文章号",
+    "record": {
+      "contract": "paper-identity-v1",
+      "kind": "conference",
+      "canonicalId": "conference:icassp:2026:icassp-arnumber:1１",
+      "arxivId": null,
+      "conference": {
+        "slug": "icassp",
+        "year": 2026
+      },
+      "externalId": {
+        "scheme": "icassp-arnumber",
+        "value": "1１"
+      },
+      "source": {
+        "status": "unavailable",
+        "url": null
+      },
+      "citation": {
+        "title": "A Conference Paper",
+        "authors": [
+          "Chen Example"
+        ],
+        "venue": "ICASSP 2026",
+        "year": 2026
+      }
+    }
+  },
+  {
+    "name": "混合阿拉伯文章号",
+    "record": {
+      "contract": "paper-identity-v1",
+      "kind": "conference",
+      "canonicalId": "conference:icassp:2026:icassp-arnumber:1١",
+      "arxivId": null,
+      "conference": {
+        "slug": "icassp",
+        "year": 2026
+      },
+      "externalId": {
+        "scheme": "icassp-arnumber",
+        "value": "1١"
+      },
+      "source": {
+        "status": "unavailable",
+        "url": null
+      },
+      "citation": {
+        "title": "A Conference Paper",
+        "authors": [
+          "Chen Example"
+        ],
+        "venue": "ICASSP 2026",
+        "year": 2026
+      }
+    }
+  }
+]

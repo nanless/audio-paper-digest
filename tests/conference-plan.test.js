@@ -91,3 +91,70 @@ test('计划文件名仍然是直接的 JSON 名', () => {
     assert.throws(() => plan.receiptNameFor('../run.json'), /safe direct JSON/);
     assert.equal(plan.receiptNameFor('run.json'), 'run.plan-receipt.json');
 });
+
+test('计划写入失败只清理本人文件，普通文件与符号链接竞争者均保留', t => {
+    const f = productionPlanFixture(t);
+    for (const replacement of ['file', 'symlink', 'directory']) {
+        const output = path.join(f.root, `cleanup-${replacement}`);
+        const result = { ...f.planned, runFile: path.join(output, 'run.json'),
+            receiptFile: path.join(output, 'run.plan-receipt.json') };
+        const savedDirectory = `${output}-held`;
+        const target = path.join(f.root, `winner-${replacement}.json`);
+        const winner = Buffer.from('其他写入者的完整文件');
+        fs.writeFileSync(target, winner);
+        const originalError = Object.assign(new Error('测试实际短写后的磁盘错误'), { code: 'EIO' });
+        const io = Object.create(fs); let injected = false;
+        io.writeFileSync = (fd, bytes) => {
+            if (injected) return fs.writeFileSync(fd, bytes);
+            injected = true; fs.writeSync(fd, Buffer.from(bytes), 0, 4, 0);
+            if (replacement === 'directory') {
+                fs.renameSync(output, savedDirectory); fs.mkdirSync(output); fs.writeFileSync(result.runFile, winner);
+            } else {
+                fs.unlinkSync(result.runFile);
+                if (replacement === 'symlink') fs.symlinkSync(target, result.runFile);
+                else fs.writeFileSync(result.runFile, winner);
+            }
+            throw originalError;
+        };
+        let failure;
+        try { plan.applyRunPlan(result, io); } catch (error) { failure = error; }
+        assert.deepEqual(fs.readFileSync(result.runFile), winner);
+        assert.equal(failure.cause, originalError); assert.equal(failure.code, 'EIO');
+        assert.ok(failure.cleanupError instanceof AggregateError);
+        assert.match(failure.message, /保留现有路径/);
+        assert.deepEqual(fs.readFileSync(target), winner);
+        if (replacement === 'symlink') assert.equal(fs.lstatSync(result.runFile).isSymbolicLink(), true);
+        if (replacement === 'directory') assert.equal(fs.existsSync(path.join(savedDirectory, 'run.json')), true);
+        else assert.equal(fs.existsSync(result.receiptFile), false);
+    }
+});
+
+test('本人独占文件短写后完整清理，可用同一计划重新写入', t => {
+    const f = productionPlanFixture(t); const output = path.join(f.root, 'cleanup-retry');
+    const result = { ...f.planned, runFile: path.join(output, 'run.json'), receiptFile: path.join(output, 'run.plan-receipt.json') };
+    const originalError = Object.assign(new Error('测试独占文件短写'), { code: 'EIO' });
+    const io = Object.create(fs);
+    io.writeFileSync = (fd, bytes) => { fs.writeSync(fd, Buffer.from(bytes), 0, 4, 0); throw originalError; };
+    assert.throws(() => plan.applyRunPlan(result, io), error => {
+        assert.equal(error.cause, originalError); assert.equal(error.cleanupError, undefined); return true;
+    });
+    assert.equal(fs.existsSync(output), false);
+    assert.equal(plan.applyRunPlan(result), result);
+    assert.deepEqual(fs.readFileSync(result.runFile), result.runBytes);
+    assert.deepEqual(fs.readFileSync(result.receiptFile), result.receiptBytes);
+});
+
+test('计划写入与清理同时失败时保留两种原始错误', t => {
+    const f = productionPlanFixture(t); const output = path.join(f.root, 'cleanup-error');
+    const result = { ...f.planned, runFile: path.join(output, 'run.json'), receiptFile: path.join(output, 'run.plan-receipt.json') };
+    const originalError = Object.assign(new Error('测试写入错误'), { code: 'EIO' });
+    const cleanupError = Object.assign(new Error('测试清理权限错误'), { code: 'EACCES' });
+    const io = Object.create(fs);
+    io.writeFileSync = (fd, bytes) => { fs.writeSync(fd, Buffer.from(bytes), 0, 4, 0); throw originalError; };
+    io.unlinkSync = () => { throw cleanupError; };
+    assert.throws(() => plan.applyRunPlan(result, io), error => {
+        assert.equal(error.cause, originalError);
+        assert.ok(error.cleanupError.errors.includes(cleanupError)); return true;
+    });
+    assert.equal(fs.existsSync(result.runFile), true);
+});

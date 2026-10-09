@@ -117,3 +117,9 @@ test('官方 URL 接受一个正式末尾斜杠，但拒绝空、点、编码和
             /unsafe or non-canonical|canonical URL spelling/);
     }
 });
+
+
+test('两种运行时共同拒绝非字符串身份与非 ASCII 数字', () => {
+    const invalid = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'paper-identity-invalid-records.json'), 'utf8'));
+    for (const vector of invalid) assert.throws(() => identity.normalizeIdentity(vector.record), undefined, vector.name);
+});

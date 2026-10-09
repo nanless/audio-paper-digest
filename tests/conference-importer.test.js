@@ -317,7 +317,7 @@ test('已核验的导入、计划和执行保留完整的选择凭证链', t => 
         };
         const value = target[property]; return typeof value === 'function' ? value.bind(target) : value;
     } });
-    assert.throws(() => planApi.applyRunPlan(planned, failingIo), /recoverable run\/plan-receipt pair/);
+    assert.throws(() => planApi.applyRunPlan(planned, failingIo), /会议运行文件与计划凭证写入失败/);
     assert.equal(fs.existsSync(path.join(runs, 'run.json')), false);
     assert.equal(fs.existsSync(path.join(runs, 'run.plan-receipt.json')), false);
     planApi.applyRunPlan(planned);
