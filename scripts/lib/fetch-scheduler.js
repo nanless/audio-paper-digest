@@ -79,8 +79,8 @@ function createHostTaskScheduler(options = {}) {
     }
 
     async function run(host, task, runOptions = {}) {
-        if (typeof host !== 'string' || !host.trim()) throw new Error('fetch scheduler host 不能为空');
-        if (typeof task !== 'function') throw new Error('fetch scheduler task 必须是函数');
+        if (typeof host !== 'string' || !host.trim()) throw new Error('抓取调度的主机名不能为空');
+        if (typeof task !== 'function') throw new Error('抓取调度的任务必须是函数');
         const state = getState(host.trim().toLowerCase());
         const previous = state.tail;
         let release;

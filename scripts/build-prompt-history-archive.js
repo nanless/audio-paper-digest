@@ -95,7 +95,8 @@ function collectReferencedPromptSha256() {
             'data', '--glob', '*.json'
         ], { cwd: PROJECT_ROOT, maxBuffer: 1 << 30 }).toString('utf8');
     } catch (error) {
-        // rg 在没有任何命中时退出码是 1，输出仍然可用。
+        // 只有没有匹配项的退出码 1 表示空集合；工具或目录读取失败必须保留。
+        if (error.status !== 1) throw error;
         listing = error.stdout ? error.stdout.toString('utf8') : '';
     }
     const files = listing.split('\n').map(line => line.trim()).filter(Boolean);
@@ -111,12 +112,7 @@ function collectReferencedPromptSha256() {
         }
     };
     for (const file of files) {
-        let parsed;
-        try {
-            parsed = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, file), 'utf8'));
-        } catch (_error) {
-            continue;
-        }
+        const parsed = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, file), 'utf8'));
         visit(parsed);
     }
     return { referenced, fileCount: files.length };
@@ -161,7 +157,8 @@ function collectArchiveEntries() {
 function readExisting(file) {
     try {
         return fs.readFileSync(file);
-    } catch (_error) {
+    } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
         return null;
     }
 }
