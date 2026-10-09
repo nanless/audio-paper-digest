@@ -432,3 +432,143 @@ describe('汇总封面提示词版本机制', () => {
         );
     }));
 });
+
+describe('汇总封面状态必须重核当前文件', () => {
+    const { spawnSync } = require('node:child_process');
+    const {
+        productionV6GenerationFields,
+        productionV6ReceiptFields
+    } = require('./production-v6-publication-fixture.js');
+    const {
+        publishedPapersFingerprint,
+        assertPublishedBlogReceipt
+    } = require('../scripts/visual-summary-state.js');
+
+    function withPublishedCover(callback) {
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cover-current-file-'));
+        const previousAssetDir = Config.FILES.digestCoverAssetDir;
+        const previousCurrentDir = Config.CURRENT_DIR;
+        try {
+            const assetDir = path.join(directory, 'archive');
+            Config.FILES.digestCoverAssetDir = assetDir;
+            Config.CURRENT_DIR = directory;
+            const targetDate = '2026-07-13';
+            const papers = [paper('2607.12345', 6.9, '#语音识别', 'Current cover')];
+            const fingerprint = publishedPapersFingerprint(papers);
+            const generation = {
+                schemaVersion: 3,
+                date: targetDate,
+                category: '论文速递',
+                visualSummaryRequired: false,
+                digestCoverRequired: false,
+                inputFingerprint: 'c'.repeat(64),
+                publishAll: false,
+                publishedPapers: papers,
+                publishedPapersFingerprintContract: 'typed-json-f64-utf16-v1',
+                publishedPapersFingerprint: fingerprint,
+                ...productionV6GenerationFields(papers)
+            };
+            const generationBytes = Buffer.from(JSON.stringify(generation));
+            fs.writeFileSync(path.join(directory, `blog-generation-manifest-${targetDate}.json`), generationBytes);
+            const receiptPath = path.join(directory, `blog-review-receipt-${targetDate}.json`);
+            fs.writeFileSync(receiptPath, JSON.stringify({
+                schemaVersion: 3,
+                date: targetDate,
+                strictReview: true,
+                hugoGate: 'hugo',
+                reviewProtocolFingerprint: 'b'.repeat(64),
+                generationManifestSha256: crypto.createHash('sha256').update(generationBytes).digest('hex'),
+                generationInputIntegrity: 'typed-json-f64-utf16-v1',
+                generationInputFingerprint: generation.inputFingerprint,
+                publishedPapersFingerprint: fingerprint,
+                publicationCommit: 'a'.repeat(40),
+                remoteVerifiedOid: 'a'.repeat(40),
+                remoteVerifiedAt: '2026-07-14T02:00:00+08:00',
+                ...productionV6ReceiptFields(generation)
+            }));
+            const publication = assertPublishedBlogReceipt(targetDate, receiptPath);
+            const manifestPath = path.join(directory, 'cover.json');
+            const planned = planDigestCoverImpl({
+                targetDate,
+                papers,
+                manifestPath,
+                publication
+            });
+            const sourcePath = path.join(directory, 'generated.png');
+            fs.writeFileSync(sourcePath, portraitPng());
+            const manifest = recordDigestCoverImpl({
+                sourcePath,
+                taskToken: planned.cover.taskToken,
+                targetDate,
+                manifestPath,
+                qaAttested: true
+            });
+            const asset = path.resolve(Config.PROJECT_ROOT, manifest.cover.assetPath);
+            const runStatus = () => spawnSync(process.execPath, ['-e', `
+                const Config = require('./scripts/config.js');
+                Config.FILES.digestCoverAssetDir = process.argv[1];
+                Config.CURRENT_DIR = require('node:path').dirname(process.argv[3]);
+                require('./scripts/digest-cover-state.js').main([
+                    'status', '--date', process.argv[2],
+                    '--manifest', process.argv[3], '--receipt', process.argv[4]
+                ]);
+            `, assetDir, targetDate, manifestPath, receiptPath], {
+                cwd: path.join(__dirname, '..'),
+                encoding: 'utf8',
+                timeout: 2500
+            });
+            callback({ directory, manifestPath, manifest, sourcePath, asset, runStatus });
+        } finally {
+            Config.FILES.digestCoverAssetDir = previousAssetDir;
+            Config.CURRENT_DIR = previousCurrentDir;
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    }
+
+    function assertInvalidStatus(result) {
+        assert.ifError(result.error);
+        assert.equal(result.status, 1, result.stderr);
+        assert.match(result.stdout, /汇总图: invalid/);
+        assert.doesNotMatch(result.stdout, /汇总图: complete/);
+    }
+
+    it('当前发布绑定的原PNG仍完成，缺失或损坏文件不能显示旧complete', () => {
+        withPublishedCover(({ asset, manifestPath, runStatus }) => {
+            const savedManifest = fs.readFileSync(manifestPath);
+            const original = runStatus();
+            assert.ifError(original.error);
+            assert.equal(original.status, 0, original.stderr);
+            assert.match(original.stdout, /汇总图: complete/);
+            fs.writeFileSync(asset, 'broken PNG');
+            assertInvalidStatus(runStatus());
+            fs.unlinkSync(asset);
+            assertInvalidStatus(runStatus());
+            assert.deepEqual(fs.readFileSync(manifestPath), savedManifest);
+        });
+    });
+
+    it('相同SHA的符号链接也不是可确认完成的封面文件', () => {
+        withPublishedCover(({ asset, sourcePath, manifestPath, runStatus }) => {
+            const savedManifest = fs.readFileSync(manifestPath);
+            fs.unlinkSync(asset);
+            fs.symlinkSync(sourcePath, asset);
+            const before = fs.lstatSync(asset);
+            assertInvalidStatus(runStatus());
+            assert.equal(fs.lstatSync(asset).ino, before.ino);
+            assert.deepEqual(fs.readFileSync(manifestPath), savedManifest);
+        });
+    });
+
+    it('真实status遇无写者FIFO立即拒绝并保留文件和登记记录', () => {
+        withPublishedCover(({ asset, manifestPath, runStatus }) => {
+            const savedManifest = fs.readFileSync(manifestPath);
+            fs.unlinkSync(asset);
+            const created = spawnSync('mkfifo', [asset], { encoding: 'utf8' });
+            assert.equal(created.status, 0, created.stderr);
+            const before = fs.lstatSync(asset);
+            assertInvalidStatus(runStatus());
+            assert.equal(fs.lstatSync(asset).ino, before.ino);
+            assert.deepEqual(fs.readFileSync(manifestPath), savedManifest);
+        });
+    });
+});

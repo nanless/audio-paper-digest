@@ -161,12 +161,33 @@ function validateCompletedCover(cover, dataSha256, expectedPromptSha, expectedTo
     const expected = digestCoverAssetPath(cover.batchDate || '');
     const actual = path.resolve(Config.PROJECT_ROOT, String(cover.assetPath || ''));
     if (actual !== expected) return false;
+    let descriptor;
     try {
-        const raw = fs.readFileSync(actual);
-        validatePngBuffer(raw);
-        return sha256Buffer(raw) === cover.assetSha256;
+        assertSafeAssetTarget(actual, Config.FILES.digestCoverAssetDir);
+        descriptor = fs.openSync(actual, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+        const before = fs.fstatSync(descriptor);
+        if (!before.isFile() || before.size > RENDERING_CONTRACT.maxPngBytes) return false;
+        const raw = Buffer.alloc(before.size + 1);
+        let length = 0;
+        while (length < raw.length) {
+            const read = fs.readSync(descriptor, raw, length, raw.length - length, length);
+            if (read === 0) break;
+            length += read;
+        }
+        const after = fs.fstatSync(descriptor);
+        assertSafeAssetTarget(actual, Config.FILES.digestCoverAssetDir);
+        const named = fs.lstatSync(actual);
+        if (!named.isFile() || length !== before.size
+            || [after, named].some(stat => stat.dev !== before.dev || stat.ino !== before.ino
+                || stat.size !== before.size || stat.mtimeMs !== before.mtimeMs
+                || stat.ctimeMs !== before.ctimeMs)) return false;
+        const bytes = raw.subarray(0, length);
+        validatePngBuffer(bytes);
+        return sha256Buffer(bytes) === cover.assetSha256;
     } catch (_error) {
         return false;
+    } finally {
+        if (descriptor !== undefined) fs.closeSync(descriptor);
     }
 }
 
@@ -537,7 +558,9 @@ function main(argv = process.argv.slice(2)) {
         const complete = validateCompletedCover(
             manifest.cover, expected.expectedDataSha, expected.expectedPromptSha, expected.expectedToken
         );
-        console.log(`汇总图: ${complete ? 'complete' : (manifest.cover?.status || 'pending')}`);
+        const status = complete ? 'complete'
+            : (manifest.cover?.status === 'complete' ? 'invalid' : (manifest.cover?.status || 'pending'));
+        console.log(`汇总图: ${status}`);
         if (!complete) process.exitCode = 1;
         return;
     }
