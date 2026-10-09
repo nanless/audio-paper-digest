@@ -309,7 +309,7 @@ function historicalDirectRemoteLegacyLockMayReclaim(snapshot, nowMs, options = {
     if (options.recoveryPolicy !== HISTORICAL_DIRECT_REMOTE_LEGACY_PAPER_LOCK_RECOVERY
         || typeof options.prepareHistoricalDirectLegacyLockReclaim !== 'function'
         || !exactLegacyFileLockOwner(snapshot)
-        || snapshot.owner.hostname === os.hostname()) return false;
+        || ownerIsOnThisMachine(snapshot.owner)) return false;
     const ageMs = nowMs - snapshot.ownerFile.mtimeMs;
     return ageMs > HISTORICAL_DIRECT_REMOTE_LEGACY_STALE_MS;
 }
@@ -333,7 +333,7 @@ function fileLockSnapshotIsReclaimable(snapshot, staleMs, nowMs = Date.now(), op
     // 0755/0644 的旧锁早于加固协议。只有这条本机已死进程的升级路径接受它们；
     // 远端或身份不明的旧 owner 一律不回收。
     if (exactLegacy && !ownerIsOnThisMachine(owner)) return false;
-    if (owner.hostname !== os.hostname()) return true;
+    if (!ownerIsOnThisMachine(owner)) return true;
     return localOwnerIsConfirmedDead(owner);
 }
 
@@ -382,7 +382,7 @@ function reclaimMarkerIsStale(marker, staleMs) {
     const owner = marker.value;
     if (typeof owner?.hostname !== 'string' || !owner.hostname
         || !Number.isInteger(owner.pid) || owner.pid <= 0 || typeof owner.token !== 'string') return false;
-    if (owner.hostname !== os.hostname()) return true;
+    if (!ownerIsOnThisMachine(owner)) return true;
     try { process.kill(owner.pid, 0); return false; }
     catch (error) {
         if (error.code === 'ESRCH') return true;
@@ -554,7 +554,7 @@ function inspectFileLockState(filePath, options = {}) {
     const ageMs = Math.max(0, nowMs - leaseMtimeMs);
     const reclaimable = fileLockSnapshotIsReclaimable(snapshot, staleMs, nowMs);
     let ownerActive = null;
-    if (snapshot.owner?.hostname === os.hostname()
+    if (ownerIsOnThisMachine(snapshot.owner)
         && Number.isInteger(snapshot.owner.pid) && snapshot.owner.pid > 0) {
         try { process.kill(snapshot.owner.pid, 0); ownerActive = true; }
         catch (error) {
@@ -1360,6 +1360,12 @@ async function analyzePaperWithRetry(paper, options = {}) {
     let lastErrorScope = null;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        // 每次尝试的诊断独立记录，不能把前次请求错误附到本次正文拒绝上。
+        lastErrorCode = null;
+        lastErrorRetryable = true;
+        lastErrorCategory = null;
+        lastErrorStatus = null;
+        lastErrorScope = null;
         if (onAttempt) {
             onAttempt(attempt, maxRetries, paper);
         }
