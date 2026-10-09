@@ -389,6 +389,90 @@ class GitPublicationTest(unittest.TestCase):
             publisher.review(self.cid, self.pid)
             publisher.push(self.cid, self.pid)
 
+    def test_semantic_status_reflects_verified_review_before_and_after_publication(self):
+        self.prepare_flow()
+        with contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(publisher, 'run_hugo', return_value=self.gate):
+            publisher.generate(self.cid, self.pid)
+            publisher.review(self.cid, self.pid)
+            reviewed = publisher.status(self.cid, self.pid)
+            self.assertEqual(reviewed['layers']['semanticReview'], 'passed')
+            self.assertFalse(reviewed['complete'])
+            with mock.patch.object(publisher, 'verify_publication_urls', return_value=self.acceptance):
+                publisher.push(self.cid, self.pid)
+            published = publisher.status(self.cid, self.pid)
+        self.assertTrue(published['complete'])
+        self.assertEqual(published['layers']['semanticReview'], 'passed')
+        self.assertEqual(published['layers']['visualInspection'], 'not_performed')
+        self.assertEqual(published['layers']['mathBrowserExecution'], 'not_performed')
+        self.assertEqual(published['completionScope'], 'mechanical-html+remote-oid+online-urls')
+
+    def test_legacy_generation_does_not_promote_unverified_content_review_fields(self):
+        self.prepare_flow()
+        with contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(publisher, 'run_hugo', return_value=self.gate):
+            publisher.generate(self.cid, self.pid)
+            publisher.review(self.cid, self.pid)
+        directory = publisher.publication_dir(self.cid, self.pid)
+        generation = publisher.read_json(directory / 'generation.json')
+        review = publisher.read_json(directory / 'review.json')
+        generation['version'] = 1
+        generation.pop('generationSha256')
+        generation['generationSha256'] = publisher.stable(generation)
+        review.update(version=1, generationSha256=generation['generationSha256'])
+        review['contentReview'] = {'status': 'passed', 'pages': [], 'protocol': 'not-verified'}
+        review.pop('reviewSha256')
+        review['reviewSha256'] = publisher.stable(review)
+        for name, value in [('generation.json', generation), ('review.json', review)]:
+            (directory / name).write_bytes(publisher.json_bytes(value))
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = publisher.status(self.cid, self.pid)
+        self.assertFalse(result['complete'])
+        self.assertEqual(result['layers']['semanticReview'], 'not_performed')
+
+    def test_old_published_review_without_content_evidence_stays_not_performed(self):
+        self.finish_flow()
+        directory = publisher.publication_dir(self.cid, self.pid)
+        review = publisher.read_json(directory / 'review.json')
+        review.pop('contentReview')
+        review.pop('reviewSha256')
+        review['reviewSha256'] = publisher.stable(review)
+        (directory / 'review.json').write_bytes(publisher.json_bytes(review))
+        published = publisher.read_json(directory / 'publish.json')
+        published['reviewSha256'] = review['reviewSha256']
+        published.pop('publishSha256')
+        published['publishSha256'] = publisher.stable(published)
+        (directory / 'publish.json').write_bytes(publisher.json_bytes(published))
+        with contextlib.redirect_stdout(io.StringIO()):
+            result = publisher.status(self.cid, self.pid)
+        self.assertTrue(result['complete'])
+        self.assertEqual(result['layers']['semanticReview'], 'not_performed')
+
+    def test_semantic_status_rejects_failed_or_changed_page_evidence(self):
+        self.finish_flow()
+        directory = publisher.publication_dir(self.cid, self.pid)
+        original_review = publisher.read_json(directory / 'review.json')
+        original_publish = publisher.read_json(directory / 'publish.json')
+        for mutation in ('failed', 'page-sha', 'generation-sha'):
+            with self.subTest(mutation=mutation):
+                review = json.loads(json.dumps(original_review))
+                if mutation == 'failed':
+                    review['contentReview']['status'] = 'failed'
+                elif mutation == 'page-sha':
+                    review['contentReview']['pages'][0]['sha256'] = 'b' * 64
+                else:
+                    review['generationSha256'] = 'b' * 64
+                review.pop('reviewSha256')
+                review['reviewSha256'] = publisher.stable(review)
+                (directory / 'review.json').write_bytes(publisher.json_bytes(review))
+                published = dict(original_publish)
+                published['reviewSha256'] = review['reviewSha256']
+                published.pop('publishSha256')
+                published['publishSha256'] = publisher.stable(published)
+                (directory / 'publish.json').write_bytes(publisher.json_bytes(published))
+                with self.assertRaises(publisher.ConferencePublicationError):
+                    publisher.status(self.cid, self.pid)
+
     def test_v2_explicit_verify_regets_and_records_failure_then_recovery(self):
         self.finish_flow()
         directory = publisher.publication_dir(self.cid, self.pid)

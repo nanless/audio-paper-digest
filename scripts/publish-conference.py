@@ -1661,6 +1661,8 @@ def published_state(conference_id, process_id, repo, images, result, *, verify_u
     result['layers']['remoteOid'] = 'passed'
     if published.get('version') == 2:
         validate_review(generation, receipt, current=False)
+        if generation.get('version') == 2 and (receipt.get('contentReview') or {}).get('status') == 'passed':
+            result['layers']['semanticReview'] = 'passed'
         validate_publication(generation, receipt, published, commit, image_commit)
         result['layers'].update(htmlMechanical='passed', onlineUrls='passed')
         result.update(status='complete', complete=True, nextAction=None)
@@ -1734,6 +1736,8 @@ def publication_state(conference_id, process_id, *, verify_urls=False):
         return result
     receipt = load_review(conference_id, process_id)
     validate_review(generation, receipt)
+    if generation.get('version') == 2 and (receipt.get('contentReview') or {}).get('status') == 'passed':
+        layers['semanticReview'] = 'passed'
     layers['htmlMechanical'] = 'passed'
     result['nextAction'] = 'push'
     # 精确字节必须已提交，并且存在于每个实际推送的远端。
