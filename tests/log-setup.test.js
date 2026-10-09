@@ -168,7 +168,7 @@ describe('日志初始化', () => {
         assert.match(output, /Authorization: \[REDACTED\]/);
     });
 
-    it('默认创建唯一日志，输出经脱敏且显式关闭后完整落盘', () => {
+    it('默认创建唯一日志，输出隐藏敏感信息，并在显式关闭后完整保存', () => {
         const before = listLogFiles();
         const runId = `${process.pid}-${Date.now()}`;
         const base = `default-log-test-${runId}`;

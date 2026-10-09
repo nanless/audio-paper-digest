@@ -611,9 +611,9 @@ function defaultHugoGate({ blogRepo, generation }) {
     try {
         const source = path.join(temporary, 'site');
         fs.cpSync(blogRepo, source, { recursive: true, filter: filename => !['.git', 'public', 'resources'].includes(path.basename(filename)) });
-        // Hugo 站点启用了 GitInfo，而隔离闸门有意不复制真实仓库的元数据。
-        // 在闸门副本里建一个一次性的本地提交，让 Hugo 校验同一套配置和模板，
-        // 既不读也不改生产仓库。
+        // Hugo 站点启用了 GitInfo，但临时检查目录不复制真实仓库的 Git 元数据。
+        // 在临时副本里建一个一次性的本地提交，让 Hugo 校验同一套配置和模板，
+        // 不读取生产仓库的 Git 元数据，也不修改生产文件。
         const git = (args, label) => {
             const result = spawnSync('git', ['-C', source, ...args], {
                 encoding: 'utf8', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' }, maxBuffer: 4 * 1024 * 1024

@@ -117,7 +117,7 @@ function main(argv = process.argv.slice(2), dependencies = {}) {
     if (state.completion.status === 'complete') {
         const kinds = new Set(Object.values(state.assignments).map(item => item.sourceAuthority?.evidenceKind));
         if (kinds.has('conference-plan-source-context')) {
-            throw new Error('生产环境的会议计划来源包加载器未安装，命令行 finalize 按失败关闭处理');
+            throw new Error('命令行 finalize 尚不支持读取生产会议计划来源包，无法继续');
         }
     }
     const finalized = api.finalizeCrosswalk({ crosswalkRoot: roots.crosswalkRoot, crosswalkId: options.crosswalkId,

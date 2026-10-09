@@ -167,7 +167,7 @@ test('准备意图绑定未经改动的待分析撰写输入', t => {
     assert.throws(() => adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION }), /evidence drifted/);
 });
 
-test('模拟的常规分析只通过已核验上下文读取来源，并落盘隔离的正式记录', async t => {
+test('模拟的常规分析只通过已核验上下文读取来源，并在独立目录保存正式记录', async t => {
     const fixture = productionPlanFixture(t); const analysisRoot = path.join(fixture.root, 'analysis');
     adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
         sourceRoot: fixture.sourceRoot, analysisRoot, executionId: EXECUTION });

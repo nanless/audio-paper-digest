@@ -47,7 +47,7 @@ test('AudioSet 原文的 validation set 不被改成 TidyVoice，仍可逐句绑
     assert.equal(result.tableBindings[0].sourceQuotes[0].quote, sourceText);
 });
 
-test('明确比例或百分数都通过单位闸门，裸 WER 比较仍须按原文修复', () => {
+test('明确写出比例或百分数时通过单位检查；未带单位的 WER 比较仍须按原文修复', () => {
     const bare = '词错误率 1.2 高于基线的 1.1。';
     assert.equal(editorial.findMissingComparisonUnits(bare).length, 1);
     for (const unit of ['无量纲', '比率', '比例', '%']) {

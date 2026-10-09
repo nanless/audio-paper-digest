@@ -1068,7 +1068,7 @@ function isAllowedReaderNarrativeNumeralIssue(issue, article = '') {
     // 豁免只绑定这一处。
     if (match === '一个方向' && Number.isInteger(issue.index) && issue.index >= 1
         && articleText.slice(issue.index - 1, issue.index + match.length) === '另一个方向') return true;
-    // 「另一个任务」是同样的指代构造；空格归一化之后，闸门本会匹配到里面的
+    // 「另一个任务」是同样的指代构造；统一空格写法后，数词检查本会匹配到里面的
     // 「一个任务」。
     if (match === '一个任务' && Number.isInteger(issue.index) && issue.index >= 1
         && articleText.slice(issue.index - 1, issue.index + match.length) === '另一个任务') return true;
@@ -1076,8 +1076,8 @@ function isAllowedReaderNarrativeNumeralIssue(issue, article = '') {
     // 在说量到了确切的数据集数量。例外只限这一处；「两个数据集」这类仍按精确计数
     // 要求写成阿拉伯数字。
     if (match === '一个数据集') return true;
-    // 「一模态」是模态标签（unimodal），不是模型或实验的确切计数。例外只限这一处，
-    // 「一个模型」这类说法仍按数量门禁处理。
+    // 「一模态」表示单一模态，不是模型或实验的确切计数，因此允许保留。
+    // 后面的规则也允许「一个模型」等说明性写法，不要求改成阿拉伯数字。
     if (match === '一模态') return true;
     return /^(?:一|两)(?:个|条|段|类|层|种|套|路|方面|部分|组|步|轮|半|张|幅)$/.test(match)
         || /^一(?:个)?(?:模型|系统|框架|方法|组件|问题|概念|目标|接口|视角|例子|直觉)$/.test(match);
@@ -12556,7 +12556,7 @@ async function downloadImagesSerial(imageUrls, maxCount, maxBase64Chars, maxTota
         } catch (e) {
             if (e.code === 'PROXY_CONFIG_ERROR') throw e;
             // 历史直接运行会提供一个临时下载器，它那套受信任的 arXiv 字节校验器遇到
-            // 永久性失败就抛错（比如声明是 JPEG，魔数字节却是 PNG）。这种明确报错停止的
+            // 永久性失败就抛错（比如声明是 JPEG，文件头却是 PNG）。这种明确报错停止的
             // 拒绝要保留成候选项的终态结果；传输错误仍可重试，属于临时问题。
             outcomes.push({
                 url,

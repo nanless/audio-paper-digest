@@ -1035,7 +1035,7 @@ function hasCoreSummaryComparisonDirection(sentence, numbers) {
         (match, between) => /\d/.test(between) ? match : ' ');
     if (CORE_SUMMARY_COMPARISON_PATTERN.test(directionSurface)
         || /(?:从|由)[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)/.test(sentence)) return true;
-    // “基线为 12.4%，本文方法降至 9.8%”省略“从/由”仍是闭合比较；
+    // “基线为 12.4%，本文方法降至 9.8%”省略“从/由”，仍写明了起始值、终止值及各自对应的方法；
     // “相对基线 12.4% 升至 9.8%”仍没有独立命名终点，不能仅凭两个数字通过。
     return numbers.length >= 2 && CORE_SUMMARY_BARE_TRANSITION_PATTERN.test(sentence)
         && /(?:基线|对照)[^，；。]{0,80}[，；][^。]{0,80}(?:本文方法|本方法|所提方法|完整模型)[^。]{0,40}(?:升至|降至)/.test(sentence);

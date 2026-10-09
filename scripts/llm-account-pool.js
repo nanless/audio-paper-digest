@@ -317,7 +317,7 @@ function acquireStateLock(stateFile, options = {}) {
                 try {
                     fs.mkdirSync(reclaimPath);
                     ownsReclaim = true;
-                    // 在回收闸门生效期间重新检查，避免新的持有者在
+                    // 持有回收标记期间重新检查，避免新的持有者在
                     // 过期观察与移除之间插入。
                     if (lockIsReclaimable(lockPath, staleMs)) {
                         fs.rmSync(lockPath, { recursive: true, force: true });

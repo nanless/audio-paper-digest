@@ -1478,7 +1478,7 @@ function buildSpec(options) {
             const details = editorialQuality.issues.slice(0, 8)
                 .map(item => `${item.code}:${item.section || '-'}:${item.match || item.message}`)
                 .join('；');
-            throw new Error(`${id} 未通过 Manual v4 读者文本质量门禁: ${details}`);
+            throw new Error(`${id} 未通过 Manual v4 文章质量检查: ${details}`);
         }
         const eligibleImages = selectImageCandidates(imageInfos, Config.ANALYSIS_CONFIG.imageCandidateMax);
         if (!isCurrentRecords && explicitSelection

@@ -199,8 +199,8 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
         if (!repair.parseRepairableDraft(draft) || repair.hashDraft(draft) === repair.hashDraft(payload.draft)) {
             throw new Error('operator patch 必须改动一个已有的有效草稿节点');
         }
-        // 生产解析器是唯一的验收闸门。它返回的文章按设计被丢弃：这次操作发不出成功
-        // 证明。
+        // 只有生产解析器可以判定草稿是否通过。这里不保存它返回的文章，
+        // 本次操作仍不会生成成功凭证。
         deps.parseApiReaderArticleResult(JSON.stringify(draft), options);
         const audit = { contract: CONTRACT, runId: run.runId, paperId: request.paperId,
             candidateIdentitySha256: request.candidateIdentitySha256, patchFileSha256: requestFile.sha256,

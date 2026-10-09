@@ -760,7 +760,7 @@ describe('抓取健康状态', () => {
         assert.strictEqual(papers._sourceHealth.failures[0].fastFallback, true);
     });
 
-    it('recent 结构失败后仍由 search/API 完整覆盖并保持 fail-closed 健康判定', async () => {
+    it('recent 页面结构解析失败后，search/API 完整覆盖来源时，仍可判定抓取成功', async () => {
         const urls = [];
         const result = await fetchCategoryPapers('cs.SD', 100, 5, new Set(), {
             requestFn: async url => {

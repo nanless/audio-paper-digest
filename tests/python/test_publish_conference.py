@@ -247,7 +247,7 @@ class ConferencePublishTests(unittest.TestCase):
 
     def test_review_without_hugo_runtime_refuses_to_seal_a_pass(self):
         # 缺 Hugo 运行时的检出目录跑不了正文/图片审查。这条路径过去会伪造一份
-        # status=passed 的 contentReview 并落盘；现在必须在落任何凭证之前停下。
+        # status=passed 的 contentReview 并保存；现在必须在保存任何凭证之前停下。
         r = self.record()
         body = {'contract': 'conference-blog-generation-v1', 'version': 2,
                 'conferenceId': 'icassp-2026',
@@ -751,8 +751,8 @@ class PreContentReviewV2ReceiptTest(ConferencePublishTests):
                               current=False)
 
     def test_v2_receipt_without_html_page_set_is_rejected_even_when_reading(self):
-        # 旧格式豁免只覆盖 contentReview 字段；HTML 门禁页面集合对每个 v2
-        # 凭证都必须闭合，缺了它不能靠 current=False 蒙过去。
+        # 旧格式豁免只覆盖 contentReview 字段；每份 v2 凭证仍须包含完整的
+        # HTML 检查页面集合，即使 current=False 也不能省略。
         generation = self.v2_generation()
         with self.assertRaisesRegex(M.ConferencePublicationError, '页面集合不闭合'):
             M.validate_review(generation, self.v2_receipt(generation, pages='missing'),

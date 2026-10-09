@@ -77,7 +77,7 @@ function normalizeConceptBridgeMarkerLocations(draft) {
     for (const [sectionIndex, section] of sections.entries()) {
         const before = section.body;
         // 模型有时会在相邻几行上各放一个独立的桥接 token。它们作为 marker 身份
-        // 仍然唯一，但 Markdown 会把这几行当成一个段落，下游的绑定闸门也确实
+        // 仍然唯一，但 Markdown 会把这几行当成一个段落，后续来源绑定检查也确实
         // 会拒绝它。这里只补上缺的那个空行分隔，作者写的正文和 marker 字节都不动。
         const after = before.replace(
             /(^|\n)([ \t]{0,3}\[\[CONCEPT_BRIDGE_\d+\]\][ \t]*)\n(?=[ \t]{0,3}\[\[CONCEPT_BRIDGE_\d+\]\][ \t]*(?:\n|$))/gm,
@@ -567,7 +567,7 @@ function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
     const inputSha256 = sha(input);
     const sections = Array.isArray(draft?.sections) ? draft.sections : [];
     const ranked = sections.map((section, index) => ({ section, index }));
-    // 未知或畸形的小节类型归解析器的形状闸门管；在它报出来之前，不要自己
+    // 未知或格式错误的小节类型由解析器检查；在它报告错误之前，不要自己
     // 编一个顺序，也不要改索引。
     const sectionsAreKnown = ranked.every(({ section }) => READER_SECTION_KINDS.includes(section?.kind));
     if (sectionsAreKnown) {

@@ -106,7 +106,7 @@ test('citation按明确作者分组保留多机构，等长数组和集中排列
     ]);
 });
 
-test('真实解析与解析后消费者不把同名首项机构移给另一同名作者', () => {
+test('解析、作者信息整理和来源核对均不会把首位同名作者的机构移给另一位', () => {
     const details = source('<div class="ltx_authors">'
         + author('John Smith', 'Alpha University') + author('John Smith', 'Beta University') + '</div>');
     assert.deepEqual(details.readerAuthors.authors.map(value => value.affiliations), [['Alpha University'], ['Beta University']]);

@@ -1,6 +1,6 @@
 'use strict';
 
-// 换表前封口盘点（scripts/tag-check-inventory.js）的只读分组测试：
+// 换词表前的标签完成记录盘点（scripts/tag-check-inventory.js）的只读分组测试：
 // 用 tmp fixture 跑真实 CLI，断言按 registrySha256 分组、状态计数、
 // 与当前 config SHA 的差集、示例 paperId，以及运行前后 fixture 字节不变。
 

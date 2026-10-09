@@ -296,8 +296,8 @@ function validateMetadataIdentity(metadata, request) {
     catch (error) { fail(`metadata identity evidence does not bind canonical paperId: ${error.message}`); }
     return { conference, identity };
 }
-// PDF 版面属于来源证据，不是作者写的 TeX。这个闸门与 source-context 共用，免得一次
-// 只读元数据的重新加载就把候选提升为可用。
+// PDF 版面属于来源证据，不是作者写的 TeX。source-context 也使用这项检查，避免
+// 重新读取元数据时，把尚未通过核验的公式候选误标为可用。
 function validatePdfFormulaRecord(formula, index, audit, pageCount) {
     exact(formula, ['ordinal', 'page', 'tex', 'sourceRef', 'recoveryStatus', 'sourceExpression'], `formulas[${index}]`);
     if (formula.ordinal !== index + 1 || !Number.isSafeInteger(formula.page)

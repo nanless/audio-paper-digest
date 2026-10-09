@@ -296,7 +296,7 @@ describe('运行时存储的引用感知清理', () => {
         }
     });
 
-    it('权威 JSON 损坏时 apply 在任何删除前 fail closed', () => {
+    it('正式 JSON 数据损坏时，apply 在删除任何文件前停止', () => {
         const projectRoot = makeProject();
         try {
             const oldCache = writeFile(projectRoot, 'data/current/image-cache/old.bin');
@@ -312,7 +312,7 @@ describe('运行时存储的引用感知清理', () => {
         }
     });
 
-    it('常见抓取/分析/发布锁 owner 仍存活时 apply fail closed 且不猜删锁', () => {
+    it('抓取、分析或发布锁的持有进程仍存活时，apply 停止并保留锁', () => {
         const projectRoot = makeProject();
         try {
             const oldCache = writeFile(projectRoot, 'data/current/image-cache/old.bin');

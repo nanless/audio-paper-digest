@@ -25,7 +25,7 @@ describe('Manual 跨运行时签名约定', () => {
         }
     });
 
-    it('非 ASCII key 与非法数字签名对象 fail closed', () => {
+    it('用于计算校验信息的对象含非 ASCII 键或非法数字时，规范 JSON 转换会拒绝', () => {
         for (const vector of vectors.rejected) {
             assert.throws(() => canonicalJson(vector.value), new RegExp(vector.error), vector.name);
         }

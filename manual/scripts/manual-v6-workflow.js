@@ -662,7 +662,7 @@ function validateReviewOutput(output, role, paperId, receipt, label) {
         }
         const validation = validateReadabilityRubric(rubric, { minimumTotal: 12 });
         if (!validation.valid || !validation.passing) {
-            throw new Error(`${label}.readabilityRubric 未通过 7 维门禁: ${validation.errors.join('; ') || `total=${validation.total}`}`);
+            throw new Error(`${label}.readabilityRubric 未通过 7 项可读性检查: ${validation.errors.join('; ') || `total=${validation.total}`}`);
         }
         const scores = Object.values(rubric.dimensions).map(item => item.score);
         if (scores.every(score => score === 2)) {
@@ -829,8 +829,8 @@ function validateManualRecordV4(record, artifactIndex, verificationContext = {})
             throw new Error('manual record metadata correction 是已合法 payload 的 orphan correction');
         }
     }
-    // records v4/spec v6 正式契约复用 records v3 validator 作为基础子校验，
-    // 不能绕开其标题、作者、八维评分、证据账本、结果 claims、开源资源、图片和可读性门禁。
+    // records v4/spec v6 的正式检查以 records v3 校验函数为基础，
+    // 标题、作者、八维评分、证据记录、结果说明、开源资源、图片和可读性都必须检查。
     validateRecord(value, paperId, `manual record ${paperId}`, { recordsVersion: RECORDS_VERSION });
     const source = assertObject(value.sourceSnapshot, 'manual record.sourceSnapshot');
     assertSha(source.paperInputSha256, 'manual record.sourceSnapshot.paperInputSha256');

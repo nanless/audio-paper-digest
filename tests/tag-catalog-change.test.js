@@ -280,9 +280,9 @@ test('快照按字节 SHA 解析，内容对不上就拒绝', () => {
     assert.equal(map.registrySha256, sha);
 });
 
-// 换表口径：seed → current(v1.1) 复算是**可确认 destructive**（删 2 条别名、
-// 改 broaderId、改首选标签），不再有“additive 注记直接放行”的形态；destructive
-// 注记的唯一合法构造就是显式 acknowledgeDestructive=true（构建期 fail-closed）。
+// 从 seed 到 current(v1.1) 重新计算变更：删除 2 条别名、修改 broaderId 和首选标签，
+// 因此判定为 destructive，不能使用 additive 注记通过检查。只有显式设置
+// acknowledgeDestructive=true 才能生成合法注记；构建时缺少它就拒绝。
 test('registryUpgradeFrom 标注会生成，并按重算出的级别校验', () => {
     const from = tagCatalogApi.loadTagCatalog(OLD_SEED);
     const to = tagCatalogApi.loadTagCatalog(CURRENT);

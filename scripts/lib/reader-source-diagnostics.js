@@ -1,7 +1,7 @@
 'use strict';
 
 // 只是修复提示。这些候选既不能授权来源绑定，也不会把渲染后的正文规范化。
-// 完整的来源闸门仍然是权威。
+// 是否允许使用这些来源，仍由完整的来源核验决定。
 const READER_SOURCE_DIAGNOSTICS_VERSION = 'reader-source-diagnostics-v2';
 const clean = value => String(value ?? '').normalize('NFKC').replace(/[\u2212]/g, '-').trim();
 const identity = value => clean(value).toLowerCase().replace(/[*_`]/g, '')

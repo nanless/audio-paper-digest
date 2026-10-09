@@ -99,7 +99,7 @@ describe('Manual 原始抓取实测指标', () => {
         }), /bytes\/SHA|raw_candidates/);
     });
 
-    it('日期目录 symlink 时 fail closed 且不写到目录外', () => {
+    it('日期目录是符号链接时拒绝写入，目录外不产生文件', () => {
         const item = fixture();
         fs.mkdirSync(item.shadow, { recursive: true });
         const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-raw-metrics-outside-'));

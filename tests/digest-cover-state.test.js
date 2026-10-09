@@ -283,7 +283,7 @@ describe('digest cover 状态', () => {
             assert.ok(fs.existsSync(path.resolve(Config.PROJECT_ROOT, completed.cover.assetPath)));
             assert.match(completed.cover.assetPath, /archive\/2026-07-13\/visual-summaries\/00-digest-cover-2026-07-13\.png$/);
             const archivedPath = path.resolve(Config.PROJECT_ROOT, completed.cover.assetPath);
-            // 统一到 writeFileAtomic 后行为不变：落盘字节与源 PNG 一致、权限仍是
+            // 统一到 writeFileAtomic 后行为不变：保存的字节与源 PNG 一致、权限仍是
             // 强制 0600，且只在同目录改名，不留临时文件。
             assert.deepStrictEqual(fs.readFileSync(archivedPath), fs.readFileSync(sourcePath));
             if (process.platform !== 'win32') assert.strictEqual(fs.statSync(archivedPath).mode & 0o777, 0o600);

@@ -178,7 +178,7 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     const updated = structuredClone(old.payload);
     // 有些旧的失败载荷保留了合法的原始 JSON 响应，却因为严格的生产形状解析器
     // 拒绝而把 draft 留成 null。这里只补全受限的恢复形状；调用方在接受之前
-    // 仍要跑完整的 Reader 解析器和来源绑定闸门。
+    // 仍要运行完整的 Reader 解析器并核验来源绑定。
     if (!updated.draft && updated.rawDraft) {
         updated.draft = parseRecoveryDraft(updated.rawDraft);
     }
@@ -202,7 +202,7 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
             }));
         }
         // 会议 PDF 候选里可能确定性地混有真实 Markdown 表格和选择标记。先修复这个
-        // 受限的来源绑定形状，再交给通用的分节顺序闸门；否则闸门会在
+        // 受限的来源绑定结构，再检查各小节的顺序；否则顺序检查会在
         // deep-analyzer 的会议归一化器有机会证明顺序之前就拒绝候选。
         // 这里用惰性导入，避免恢复库在启动时依赖分析器。
         if (conference?.sourceDetails?.structuredArtifacts?.sourceKind === 'conference_pdf') {
@@ -269,8 +269,8 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     if (diagnosticImplementationChanged) {
         updated.noProgress = 0; updated.failureSignature = '';
         updated.validationFailureStreak = 0; updated.validationFailureSignature = '';
-        // 保留已付费的计数器，但在今天的完整解析器发现新代码引入的闸门之后，
-        // 只允许新增一次本地修复。
+        // 保留已有调用次数，清除旧检查留下的连续失败计数；
+        // 新增尝试仍受下方恢复许可规则限制。
     }
     updated.readerRecoveryRevisions = [...(updated.readerRecoveryRevisions || []), audit];
     delete updated.implementationRepairAllowance;

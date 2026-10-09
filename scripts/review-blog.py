@@ -295,7 +295,7 @@ def _run_review(module, date_str):
             print(f'🔍 开始严格全量 review: {len(paper_slugs)} 篇论文')
         combined_results = dict(plan['priorResults'])
         manifest_sha256 = module._sha256_file(manifest_path)
-        # 在第一次 LLM 调用之前先把待办落盘。这样崩溃或 API 中断后，
+        # 在第一次 LLM 调用之前先保存待审页面的记录。这样崩溃或 API 中断后，
         # 下一次运行只会续跑未完成或暂时失败的页面。
         module.save_review_failure_state(
             date_str, paths, manifest_path, base_head, combined_results,

@@ -42,7 +42,7 @@ describe('test-api-key 备用账号边界', () => {
         ]);
     });
 
-    it('Go 到非 Go 且无显式 secondary key 时 typed fail-closed', () => {
+    it('主模型使用 Go、副模型使用其他服务且未配置副模型密钥时，抛出账号配置错误', () => {
         assert.throws(() => resolveApiKeyTestConfig({
             ...primaryGo,
             PAPER_ANALYZER_SECONDARY_ENDPOINT: 'https://api.example.com/v1',
@@ -51,7 +51,7 @@ describe('test-api-key 备用账号边界', () => {
             && /必须显式配置 PAPER_ANALYZER_SECONDARY_API_KEY/.test(error.message));
     });
 
-    it('主非 Go 到副 Go 且无显式 secondary key 时 typed fail-closed', () => {
+    it('主模型使用其他服务、副模型使用 Go 且未配置副模型密钥时，抛出账号配置错误', () => {
         assert.throws(() => resolveApiKeyTestConfig({
             ...primaryGo,
             PAPER_ANALYZER_ENDPOINT: 'https://api.primary.example/v1',
@@ -60,7 +60,7 @@ describe('test-api-key 备用账号边界', () => {
             && /必须显式配置 PAPER_ANALYZER_SECONDARY_API_KEY/.test(error.message));
     });
 
-    it('不同服务显式 secondary fallback 但缺 secondary key 时 typed fail-closed', () => {
+    it('副模型使用不同服务时，即使配置备用账号，缺少副模型主密钥仍抛出账号配置错误', () => {
         assert.throws(() => resolveApiKeyTestConfig({
             ...primaryGo,
             PAPER_ANALYZER_SECONDARY_ENDPOINT: 'https://api.example.com/v1',

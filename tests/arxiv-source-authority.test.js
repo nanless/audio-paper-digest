@@ -112,7 +112,7 @@ test('实际执行保留请求、来源、快照、凭证和授权，恢复时�
         authorityApi.replayAuthorityHandle(live.authorityHandle, { requireProduction: true })).productionAuthorized, true);
 });
 
-test('请求落盘之后才能续跑，来源证据不完整或变了就拒绝', async t => {
+test('保存来源请求后才能续跑；来源证据不完整或发生变化时拒绝继续', async t => {
     const root = fixture(t); const names = api.namesFor('arxiv-2601.00001.json', '2601.00001');
     const request = api.requestFor({ arxivId: '2601.00001', authorityName: names.authorityName, operationId, now: stamp });
     fs.writeFileSync(path.join(root, names.requestName), authorityApi.prettyBytes(request), { mode: 0o600 });

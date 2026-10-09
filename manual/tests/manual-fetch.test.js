@@ -157,7 +157,7 @@ describe('Manual 抓取的数据一致性辅助函数', () => {
         );
     });
 
-    it('落盘正面、负面和归档排除的 Manual 决定，并给出安全状态', () => {
+    it('保存相关、不相关及归档排除的 Manual 筛选决定，并给出安全状态', () => {
         const papersData = { papers: {} };
         const raw = [
             { arxivId: '2608.00001', title: 'negative' },

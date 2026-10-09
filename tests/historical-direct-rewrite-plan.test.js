@@ -170,7 +170,7 @@ function fixture(t, { icasspPages = 898, iclrPages = 267, uncoveredDailyPages = 
     return { root, blog, catalog, catalogPath, catalogFileSha256, inventory, inventoryPath, inventoryFileSha256 };
 }
 
-test('会议标题投影覆盖全部 898 个 ICASSP 和 267 个 ICLR 页面，正式论文只跑一次', t => {
+test('会议论文与页面的对应记录覆盖全部 898 个 ICASSP 和 267 个 ICLR 页面，同一论文只安排一次分析', t => {
     const f = fixture(t); const artifact = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog,
         catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
     assert.equal(artifact.projections.length, 2); assert.equal(artifact.unmatchedPages.length, 0);
@@ -189,7 +189,7 @@ test('会议标题投影覆盖全部 898 个 ICASSP 和 267 个 ICLR 页面，�
     assert.equal(icassp.pageKeys.length, 898); assert.equal(iclr.pageKeys.length, 267);
     assert.notEqual(icassp.runId, iclr.runId);
     assert.equal(Object.hasOwn(icassp.route, 'sourceDisclosure'), false,
-        'ordinary v5 conference routes retain the legacy byte shape for resumability');
+        '普通 v5 会议来源记录保留原有文件格式，以便续跑');
     assert.equal(planner.normalizePlan(plan).planSha256, plan.planSha256);
     const registry = planner.buildRegistry(plan); const stage = planner.directStagingBinding({ plan, registry,
         paperId: icassp.paperId, analysisArtifact: { paperId: icassp.paperId, runId: icassp.runId,
@@ -241,7 +241,7 @@ test('直接来源调度器使用新的 arXiv 来源存储，并把 arXiv 本地
         verifyConferenceSource: async item => { advanced.push(item.paperId); return { sources: 1 }; }
     });
     assert.deepEqual(nextConference.selectedPaperIds, [conferenceIds[1]]);
-    assert.deepEqual(advanced, [conferenceIds[1]], 'durable ready checkpoint advances the next conference batch');
+    assert.deepEqual(advanced, [conferenceIds[1]], '已保存的来源就绪检查点使下一批会议论文继续处理');
 });
 
 test('来源工作池在队列尾部除不尽时，异步暂停检查之后会重新核对游标', async t => {
@@ -266,12 +266,12 @@ test('来源工作池在队列尾部除不尽时，异步暂停检查之后会�
         conferenceConcurrency: 2, shouldPause }, {
         verifyConferenceSource: async item => { observed.push(item.paperId); return { sourceCount: 1 }; }
     });
-    assert.equal(3 % 2, 1, 'fixture must keep a non-divisible worker tail');
+    assert.equal(3 % 2, 1, '测试论文数量必须不能被并发任务数整除');
     assert.equal(result.status, 'ready');
     assert.equal(result.processedCount, 3);
     assert.deepEqual(observed.slice().sort(), plan.queue.filter(item => item.route.kind === 'conference-local-pdf')
         .map(item => item.paperId).sort());
-    assert.ok(pauseChecks >= 4, 'both workers crossed the asynchronous tail pause check');
+    assert.ok(pauseChecks >= 4, '两个任务都已完成队列末尾的异步暂停检查');
 });
 
 test('来源调度器命令行保存进度，并把就绪成员交给下一轮有界选择', async t => {
@@ -286,7 +286,7 @@ test('来源调度器命令行保存进度，并把就绪成员交给下一轮�
     const dry = await schedulerCli.main(['--dry-run', '--plan', planFile], { files,
         prepare: planner.prepareDirectSources });
     assert.deepEqual(dry.sourceStatusCounts, { pending: plan.queue.length, ready: 0, handoff: 0, failed: 0 });
-    assert.equal(dry.sourceStatusFile, null, 'dry-run reports planned pending work without creating a checkpoint');
+    assert.equal(dry.sourceStatusFile, null, '试运行只报告计划中的待处理任务，不创建检查点');
     const run = () => schedulerCli.main(['--apply', '--plan', planFile, '--max-papers', '1'], { files,
         prepare: async options => { observed.push(options.completedPaperIds.slice());
             if (!options.completedPaperIds.includes(paperId)) await options.onProgress({ paperId, status: 'ready', result: {} });
@@ -298,7 +298,7 @@ test('来源调度器命令行保存进度，并把就绪成员交给下一轮�
     await run(); assert.deepEqual(observed, [[], [paperId]]);
 });
 
-test('来源调度器只接受绑定其计划和 generation 的已签名暂停标记', async t => {
+test('来源调度器只接受校验通过、且对应同一计划和来源获取序号的暂停记录', async t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
     const artifact = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog,
         catalogFileSha256: f.catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
@@ -340,7 +340,7 @@ test('全新 arXiv 获取失败只写一份不可变的冻结链接与页面交�
     const first = await run('2026-09-07T00:00:00.000Z');
     assert.equal(first.status, 'partial'); assert.equal(first.arxiv[0].status, 'handoff');
     assert.deepEqual(first.conference.map(item => item.status), ['ready', 'ready']);
-    assert.equal(conferenceRuns.length, 2, 'a failed arXiv source never blocks either local conference source');
+    assert.equal(conferenceRuns.length, 2, 'arXiv 来源获取失败不能阻止两篇使用本地会议来源的论文继续处理');
     const names = fs.readdirSync(handoffRoot); assert.equal(names.length, 1);
     const stored = planner.readArxivFreshFailureHandoff({ root: handoffRoot, handoffName: names[0] }).handoff;
     assert.equal(stored.version, 1);
@@ -355,7 +355,7 @@ test('全新 arXiv 获取失败只写一份不可变的冻结链接与页面交�
     const second = await run('2026-09-07T00:01:00.000Z');
     assert.equal(second.arxiv[0].status, 'handoff');
     assert.equal(second.arxiv[0].result.handoff.status, 'recovered');
-    assert.equal(fs.readdirSync(handoffRoot).length, 1, 'the same failure handoff is immutable and idempotent');
+    assert.equal(fs.readdirSync(handoffRoot).length, 1, '相同失败交接重复保存时，原记录内容保持不变');
     let captures = 0;
     const conferenceOnly = await planner.prepareDirectSources({ blogRoot: f.blog, plan, apply: true, queue: 'conference' }, {
         captureFreshArxivRewriteSource: async () => { captures++; throw new Error('conference queue must not acquire arXiv'); },
@@ -389,7 +389,7 @@ test('计划为每个没有直接来源路线的冻结论文页面保存并核�
     assert.throws(() => planner.normalizePlan(drifted), /coverage binding drifted/);
 });
 
-test('计划用多个线索复核目录主绑定，并通过全新 arXiv 路线投影', t => {
+test('计划核验含多个身份线索的页面所指定的主要 arXiv 论文，并安排获取新的官方来源', t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
     const page = inventoryPage({ blog: f.blog, relativePath: 'content/posts/multiple-primary.md',
         title: 'Multiple primary', scope: { type: 'daily', key: '2026-05-03' }, number: 'multiple-primary',
@@ -457,7 +457,7 @@ test('直接 arXiv 的登记、分析和暂存绑定同一代已保存并核验�
         paperId: arxiv.paperId, analysisArtifact }), /本次已保存的来源/);
 });
 
-test('计划要求完整的显式会议投影产物，命令行保持两条队列分开', t => {
+test('计划要求提供完整的会议论文与页面对应记录，命令行分别处理两条队列', t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
     assert.throws(() => planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
         inventory: f.inventory, conferencePageProjections: {} }), /conference page mapping record is missing required fields or contains unsupported fields/);
@@ -519,7 +519,7 @@ test('保留的元数据标题有歧义就直接失败，不猜会议页面归�
         catalogFileSha256: sha('ambiguous catalog'), inventory: f.inventory, blogRoot: f.blog }), /the frontmatter title matches more than one retained conference paper/);
 });
 
-test('日更 ICML 投影消费已保存并核验的海报授权绑定，不做标题匹配', t => {
+test('为日更 ICML 页面确定对应论文时，读取已核验的官方海报记录，不按标题匹配', t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1, includeIcml: true, dailyIcmlPages: [
         { title: 'ICML Daily Title', body: '[paper](https://icml.cc/virtual/2026/poster/60946)' },
         { title: 'ICML Daily Title', body: '[one](https://icml.cc/virtual/2026/poster/60946) [two](https://icml.cc/virtual/2026/poster/61140)' },
@@ -543,7 +543,7 @@ test('日更 ICML 投影消费已保存并核验的海报授权绑定，不做�
     const artifact = conferencePageMappingsApi.buildConferencePageMappings({ catalog,
         catalogFileSha256, inventory: f.inventory, blogRoot: f.blog });
     const icml = artifact.projections.find(item => item.paperId.startsWith('conference:icml:2026:'));
-    assert.equal(icml.pages.length, 2, 'one conference page plus exactly one eligible daily page');
+    assert.equal(icml.pages.length, 2, '应包含一张会议页面和恰好一张符合条件的日更页面');
     const daily = icml.pages.find(page => page.scope.type === 'daily');
     assert.equal(daily.mapping, icmlPosterApi.DIRECT_PAGE_MAPPING);
     assert.equal(daily.dailyIcmlBinding.poster.officialUrl, 'https://icml.cc/virtual/2026/poster/60946');
@@ -555,7 +555,7 @@ test('日更 ICML 投影消费已保存并核验的海报授权绑定，不做�
     assert.ok(plan.uncoveredFrozenPaperPages.every(page => page.identityHintStatus === 'none'));
 });
 
-test('实际冻结清单和 v5 目录把每个保留的会议正式记录恰好投影一次', {
+test('固定保存的实际页面清单与 v5 论文目录中，每篇保留的会议论文只有一份页面对应记录', {
     skip: (() => {
         const root = path.resolve(__dirname, '..');
         const catalog = path.join(root, 'data/runtime/direct-local-inputs/scoped-historical-local-data-v5.json');
@@ -591,9 +591,9 @@ test('实际冻结清单和 v5 目录把每个保留的会议正式记录恰好�
         .filter(binding => !catalog.value.dailyIcmlPosterRoutableBindings.some(item =>
             item.page.pageKey === binding.page.pageKey))
         .every(binding => !routedKeys.has(binding.page.pageKey)),
-    'unavailable local PDFs remain auditable but never enter the projection');
+    '本地 PDF 不可用的论文仍保留核查记录，但不加入页面对应记录');
     const projectedPageKeys = artifact.projections.flatMap(row => row.pageKeys);
-    assert.equal(new Set(projectedPageKeys).size, projectedPageKeys.length, 'a frozen page cannot project to two canonicals');
+    assert.equal(new Set(projectedPageKeys).size, projectedPageKeys.length, '一张固定保存的页面不能对应两篇不同的规范论文记录');
     const inventory = conferencePageMappingsApi.readStableJson(inventoryFile, 'frozen historical inventory');
     const plan = planner.buildDirectRewritePlan({ blogRoot, catalog: catalog.value, catalogFileSha256: catalog.fileSha256,
         inventory: inventory.value, conferencePageProjections: artifact });
@@ -662,7 +662,7 @@ test('封存来源已写入但进度未登记时，有界续跑补齐就绪状�
     assert.equal(networkCalls, 0);
 });
 
-test('新计划拒绝旧清单中由截断 URL 生成的正文身份提示，正常旧页无需重签', t => {
+test('新计划拒绝旧清单中由截断 URL 生成的正文身份提示，正常旧页面的记录保持不变', t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
     const build = () => {
         const artifact = conferencePageMappingsApi.buildConferencePageMappings({ catalog: f.catalog,

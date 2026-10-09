@@ -57,7 +57,7 @@ function fingerprint(registryPath) {
     return JSON.parse(output.split('FINGERPRINT_RESULT=')[1].split('\n')[0]);
 }
 
-test('真实阶段消费者仅因词表变化更新主分析、修订、结构修复与标签指纹', () => {
+test('使用词表的实际分析阶段，会因词表变化更新主分析、修订、结构修复与标签选择的指纹', () => {
     const before = fingerprint(oldPath);
     const after = fingerprint(currentPath);
     for (const stage of ['primaryAnalysis','revision','structureRepair','tagSelection']) assert.notEqual(before[stage], after[stage], stage);

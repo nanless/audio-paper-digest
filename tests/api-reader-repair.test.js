@@ -415,7 +415,7 @@ test('已解决的失败可以恢复地退场，不会重新变成候选', t => 
     assert.equal(retireFailedCandidate(directory, identity), null);
 });
 
-test('生产循环对格式错误的整篇回复设上限，并落盘失败', async t => {
+test('正式 Reader 生成对格式错误的整篇回复限制重试次数，并保存失败记录', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t);
     let calls = 0;
@@ -468,7 +468,7 @@ test('生产续跑只请求补丁，合并后正文不完整仍然拒绝', async
     assert.equal(envelope.payload.draft.readerTitle, '声音表示如何与语义条件连接起来');
 });
 
-test('生产恢复落盘正式的小节/表格配对，并记录原始到正式的 SHA 映射', async t => {
+test('正式 Reader 恢复保存整理后的小节与表格对应关系，并记录原始及整理后的 SHA', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const { normalizeReaderDraftOrder } = require('../scripts/lib/reader-draft-order.js');
     const directory = temporary(t);

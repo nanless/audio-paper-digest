@@ -163,7 +163,7 @@ describe('digest:waive-visuals 写入侧', () => {
         }
     });
 
-    it('凭证在门禁读取之后被改写时按未绑定处理', () => {
+    it('凭证在检查读取后被改写时，视为未与发布记录绑定', () => {
         const f = fixture();
         const receiptPath = path.join(f.directory, `blog-review-receipt-${DATE}.json`);
         const originalRead = fs.readFileSync;

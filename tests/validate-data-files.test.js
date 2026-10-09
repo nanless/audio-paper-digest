@@ -571,7 +571,7 @@ describe('validate-data-files', () => {
             /核心摘要未达到 core-summary-detailed-v3.*中文字符不足/);
     });
 
-    it('validate:data 只读兼容真实旧 API 完成形状，但任何摘要声明仍执行 current 严格门禁', () => {
+    it('validate:data 可只读检查旧 API 完成记录，但声明摘要版本时仍执行当前严格检查', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-legacy-core-summary-'));
         const resultFile = path.join(dir, 'deep-analysis-result.json');
         const legacy = validLegacyApiAnalysisPaper('2607.00013');
@@ -623,7 +623,7 @@ describe('validate-data-files', () => {
         assert.match(issues, /analysisManifest\.sourceAcquisition 的受控全文内容 SHA 不一致/);
     });
 
-    it('validate:data 按 manualDepth 版本重跑 Manual v4 正文门禁', () => {
+    it('validate:data 按 manualDepth 版本重新检查 Manual v4 正文', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-manual-v4-depth-'));
         const { resultFile } = writeManualV4BindingFixture(dir, { invalidClaimQuote: false });
         const issues = validatePaperListFile(resultFile, { deepAnalysis: true }).join('\n');
@@ -637,7 +637,7 @@ describe('validate-data-files', () => {
             .papers[0].analysisManifest.manualTakeover;
         // 前提：manualTakeover 及其被哈希的子对象，键都是固定 ASCII 字面量。键一旦出现
         // 非 BMP 字符，JS 的 UTF-16 码元序与 Python 的码点序会分歧（U+1F600 排在 U+FFFD
-        // 之前 vs 之后），排序后的键进哈希，两端 SHA 不同，发布门禁报「……不匹配」而两边
+        // 之前 vs 之后），排序后的键进哈希，两端 SHA 不同，发布检查报「……不匹配」而两边
         // 都自认正确。
         assert.deepStrictEqual(collectNonAsciiKeys(takeover), [],
             'manualTakeover 里出现了非 ASCII 键；非 BMP 键会让 JS 的码元序与 Python 的码点序分歧，跨语言哈希不再一致');
@@ -1239,7 +1239,7 @@ describe('validate-data-files', () => {
         }), []);
     });
 
-    it('filtered 标记 complete 时来源不完整仍会被四件套门禁拒绝', () => {
+    it('filtered 标记 complete 时，四份当前数据文件的检查仍会拒绝不完整的来源', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-incomplete-source-'));
         const files = writeMinimalCurrentBatch(dir);
         const raw = JSON.parse(fs.readFileSync(files.rawCandidates));

@@ -42,7 +42,7 @@ test('诊断截断保留根因，并先去掉凭证', () => {
     assert.doesNotMatch(value, /sk-test|secret-token|user:password|token=secret/);
 });
 
-test('有界并发在拒绝之前先等所有在跑的 worker 结束，并停止再领任务', async () => {
+test('并发任务失败时，先等其他正在运行的任务结束，并停止领取新任务', async () => {
     let release; const gate = new Promise(resolve => { release = resolve; });
     let entered; const started = new Promise(resolve => { entered = resolve; });
     const seen = []; let settled = false;
@@ -57,7 +57,7 @@ test('有界并发在拒绝之前先等所有在跑的 worker 结束，并停止
     release(); await rejection; assert.deepEqual(seen, [0, 1]);
 });
 
-test('有界并发的暂停检查被拒绝时，也会把另一个 worker 排空', async () => {
+test('暂停检查失败时，也要等另一个正在运行的任务结束', async () => {
     let release; const gate = new Promise(resolve => { release = resolve; });
     let checks = 0; let settled = false;
     const pending = runner.bounded([0, 1, 2], 2, async () => { await gate; }, async () => {
@@ -69,7 +69,7 @@ test('有界并发的暂停检查被拒绝时，也会把另一个 worker 排空
     assert.equal(settled, false); release(); await rejection;
 });
 
-test('三 worker 的账号熔断在第一次全局失败后就停下更长的队列', async () => {
+test('三个并发任务首次遇到账号整体故障后，停止领取后续任务', async () => {
     let stopped = false; const claimed = []; let active = 0;
     let release; const gate = new Promise(resolve => { release = resolve; });
     const result = await runner.bounded([0, 1, 2, 3, 4, 5], 3, async item => {
@@ -83,7 +83,7 @@ test('三 worker 的账号熔断在第一次全局失败后就停下更长的队
     assert.deepEqual(result.values.sort(), [0, 1, 2]);
 });
 
-test('带类型的账号失败会落盘暂停标记，未被领取的论文保持原样', async t => {
+test('带明确错误类型的账号故障会保存暂停记录，尚未领取的论文保持原样', async t => {
     const f = fixture(t); const roots = files(f.root); let analyses = 0; let ticks = 0;
     const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, concurrency: 1 }, {
         captureFreshArxivRewriteSource: directArxivCapture(),
@@ -117,11 +117,11 @@ test('恢复期的结构化失败即使最终校验错误很笼统，也会暂�
     assert.equal(result.pauseReason.code, 'account-authentication-failed');
 });
 
-test('信号形态的优雅暂停会落盘兼容的标记，且不启动分析', async t => {
+test('收到退出信号后保存可用于续跑的暂停记录，不启动分析', async t => {
     const f = fixture(t); const roots = files(f.root);
     const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots }, {
         shouldPause: async () => ({ code: 'SIGTERM', detail: 'User requested graceful pause via SIGTERM' }),
-        analyze: async () => { assert.fail('paused run must not call analysis'); }
+        analyze: async () => { assert.fail('暂停的运行不能调用分析'); }
     });
     assert.equal(result.status, 'paused'); assert.equal(result.progress.processed, 0);
     assert.equal(runner.pauseFileRequested(result.pauseFile, f.plan, 1), true);
@@ -164,7 +164,7 @@ test('数量上限选择和元数据前置条件看的是锁内注册表，不�
     await assert.rejects(runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, maxPapers: 1 }, {
         withOperationLock: async (_target, callback) => { locked = true; try { return await callback(); } finally { locked = false; } },
         assertPublicationMetadataReady: item => { assert.equal(locked, true); checked.push(item.paperId); },
-        analyze: async () => { assert.fail('must reject actual not-ready selection'); }
+        analyze: async () => { assert.fail('必须拒绝实际尚未就绪的所选论文'); }
     }), /not marked every selected paper ready/);
     assert.deepEqual(checked, []);
     await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv' }, {
@@ -538,8 +538,8 @@ function sealedAnalysis(item, sourceDescriptor, sourceDetails) {
         structuredArtifactsSha256: provenance.structuredArtifactsSha256
     });
     paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256 = paper.apiReaderResources.identitySha256;
-    assert.equal(engine.hasValidApiReaderV3Records(paper), true, 'test fixture must satisfy the current Reader contract');
-    assert.equal(engine.isSuccessfulAnalysisRecord(paper), true, 'test fixture must satisfy the current analysis contract');
+    assert.equal(engine.hasValidApiReaderV3Records(paper), true, '测试正文必须通过当前 Reader 内容检查');
+    assert.equal(engine.isSuccessfulAnalysisRecord(paper), true, '测试分析记录必须通过当前分析内容检查');
     return paper;
 }
 
@@ -685,7 +685,7 @@ test('直连运行的选题按计划顺序、有数量上限，并拒绝重复�
         paperIds: [ids[0], ids[0]] }), /unique/);
     await assert.rejects(runner.runDirectRewrite({ apply: false, plan: f.plan, ...roots,
         queue: 'conference', paperIds: [ids.find(id => id.startsWith('arxiv:'))] }), /unknown or outside/);
-    assert.equal(fs.existsSync(roots.registryRoot), false, 'dry-run must not create the registry/control directory');
+    assert.equal(fs.existsSync(roots.registryRoot), false, '试运行不能创建分析登记或控制目录');
 });
 
 test('调度器没有把每篇选中的论文标成就绪时，直连运行在取来源和调模型之前就失败', async t => {
@@ -700,7 +700,7 @@ test('调度器没有把每篇选中的论文标成就绪时，直连运行在�
     }), /source scheduler checkpoint is missing/);
     assert.equal(captures, 0); assert.equal(analyses, 0);
     assert.equal(fs.existsSync(runner.registryPath(roots.registryRoot, f.plan, 1)), false,
-        'locked prerequisite may create the lock directory, but must not mutate the registry');
+        '持锁检查前置条件时可以创建锁目录，但不能修改分析登记文件');
     assert.equal(fs.existsSync(`${runner.operationLockTarget(roots.registryRoot, f.plan, 1)}.lock`), false);
     const dry = await runner.runDirectRewrite({ apply: false, plan: f.plan, ...roots,
         queue: 'arxiv', arxivGeneration: 1 });
@@ -861,7 +861,7 @@ test('进展触发的暂停会做完当前论文，续跑时不重做已保存�
     const resumed = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
         arxivGeneration: 1, concurrency: 1 }, base);
     assert.equal(resumed.status, 'complete'); assert.deepEqual(resumed.results.map(item => item.status), ['recovered', 'staged']);
-    assert.equal(resumed.registryCounts.staged, 2); assert.equal(analyses, 2, 'the staged arXiv paper is replayed, not re-analyzed');
+    assert.equal(resumed.registryCounts.staged, 2); assert.equal(analyses, 2, '已暂存的 arXiv 论文应恢复现有结果，不重新分析');
 });
 
 test('计划生成的操作锁防止并发的直连运行器同时加载同一份注册表', async t => {
@@ -947,7 +947,7 @@ test('两个直连运行器立刻回收同一个刚死亡的同主机操作持�
 
 // defaultAnalyze 的返回值可能带着单篇错误而不抛异常。
 // 这种情况仍须让登记和本次运行失败，绝不能写入分析结果或暂存页。
-test('defaultAnalyze 遇到不完整结果就判失败，绝不落盘或暂存', async t => {
+test('defaultAnalyze 遇到不完整结果就判失败，绝不保存分析结果或暂存页面', async t => {
     const f = fixture(t); const roots = files(f.root);
     const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 1 }, {
         captureFreshArxivRewriteSource: directArxivCapture(),
@@ -964,7 +964,7 @@ test('defaultAnalyze 遇到不完整结果就判失败，绝不落盘或暂存',
     assert.deepEqual(allFiles(path.join(f.root, 'runtime', 'executions')).filter(name => path.basename(name) === 'analysis.json'), []);
 });
 
-test('defaultAnalyze 跨进程落盘可恢复的检查点，续跑时不暂存那次不完整的尝试', async t => {
+test('defaultAnalyze 保存可供新进程续跑的检查点，不暂存上次未完成的分析页面', async t => {
     const f = fixture(t); const roots = files(f.root); let engineRuns = 0;
     const partial = { directPaperId: 'arxiv:2601.00001', arxivId: '2601.00001',
         analysis: null, parsed: null, analysisCheckpoint: 'recoverable canonical checkpoint',
@@ -1017,7 +1017,7 @@ test('defaultAnalyze 跨进程落盘可恢复的检查点，续跑时不暂存�
     const failedRegistry = JSON.parse(fs.readFileSync(replayFailure.registryFile, 'utf8'));
     assert.equal(failedRegistry.entries.find(entry => entry.paperId === partial.directPaperId)
         .analysisRecovery.recoverySha256, partialEntry.analysisRecovery.recoverySha256,
-    'a retry that fails before analysis must not orphan the earlier recoverable checkpoint');
+    '重试在分析前失败时，必须保留先前可用于恢复的检查点');
 
     const second = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
         queue: 'arxiv', arxivGeneration: 1 }, dependencies);
@@ -1077,7 +1077,7 @@ test('analyzing 阶段崩溃后先复核同来源的恢复凭证，再在同一�
         recoverySha256: receipt.recoverySha256 }]);
 });
 
-test('analyzing 崩溃且没有恢复记录时先落盘为失败，然后同一轮再取来源', async t => {
+test('分析中断且没有恢复记录时先保存失败状态，然后在同一轮重新读取来源', async t => {
     const f = fixture(t); const roots = files(f.root); const item = f.plan.queue
         .find(entry => entry.paperId === 'arxiv:2601.00001');
     const seeded = await seedFailedArxivExecution(f, roots);
@@ -1202,8 +1202,8 @@ test('analysis_complete 崩溃后严格复核来源和分析凭证，直接进�
     });
     assert.equal(resumed.status, 'complete');
     assert.equal(resumed.results[0].status, 'staged');
-    assert.equal(analyses, 1, 'verified analysis_complete must not repeat expensive analysis');
-    assert.equal(captures, 2, 'recovery replays the sealed source before direct staging');
+    assert.equal(analyses, 1, '已核验的分析完成记录不能触发重复分析');
+    assert.equal(captures, 2, '恢复时先读取已保存并核验的来源，再暂存页面');
     assert.deepEqual(audits.map(audit => [audit.fromStatus, audit.normalizedStatus,
         audit.recoveryStatus]), [['analysis_complete', 'staged', 'completed-analysis-replayed']]);
 });
@@ -1282,7 +1282,7 @@ test('分析已完成但暂存失败时绝不回退到分析，下一轮只重�
     });
     assert.equal(failed.status, 'partial');
     assert.equal(failed.results[0].status, 'failed');
-    assert.equal(analyses, 1, 'same run must stop before the analysis/Reader path');
+    assert.equal(analyses, 1, '同一轮运行必须在进入分析或 Reader 生成前停止');
     const failedEntry = JSON.parse(fs.readFileSync(first.registryFile, 'utf8')).entries
         .find(entry => entry.paperId === item.paperId);
     assert.equal(failedEntry.status, 'failed');
@@ -1341,14 +1341,14 @@ test('analysis_complete 的分析字节漂移时直接失败，不在同一轮�
         } });
     assert.equal(resumed.status, 'partial');
     assert.equal(resumed.results[0].status, 'failed');
-    assert.equal(analyses, 1, 'invalid completed bytes must not enter analysis in the same run');
+    assert.equal(analyses, 1, '已完成记录的文件内容不符合校验时，不能在同一轮重新分析');
     assert.deepEqual(audits.map(audit => [audit.normalizedStatus, audit.recoveryStatus]),
         [['failed', 'completed-analysis-invalid']]);
     const retried = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
         queue: 'arxiv', arxivGeneration: 1 }, dependencies);
     assert.equal(retried.status, 'complete');
     assert.equal(retried.results[0].status, 'staged');
-    assert.equal(analyses, 2, 'the next explicit run may perform one normal analysis');
+    assert.equal(analyses, 2, '下一次显式启动的运行可以正常分析一次');
 });
 
 test('即使规范分析本身能解析，缺少当前 Reader 也会挡住暂存', async t => {
@@ -1474,7 +1474,7 @@ test('会议视觉选页给 PDF 页像素设上限，并优先选真正的图和
     assert.deepEqual(runner.selectConferenceVisualPages({ pages: [] }), []);
 });
 
-test('新的 arXiv 代次拿到隔离的直连注册表，无法恢复上一代的暂存', async t => {
+test('新一轮 arXiv 来源获取使用独立的分析登记文件，不能恢复上一轮暂存的页面', async t => {
     const f = fixture(t); const roots = files(f.root); let analyses = 0;
     const capture = options => freshSource.captureFreshArxivRewriteSource(options, {
         fetchText: async id => ({ text: ['Official title', 'Abstract',
@@ -1488,7 +1488,7 @@ test('新的 arXiv 代次拿到隔离的直连注册表，无法恢复上一代�
     const first = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 1 }, { captureFreshArxivRewriteSource: capture, analyze, renderDirectPage });
     const second = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 2 }, { captureFreshArxivRewriteSource: capture, analyze, renderDirectPage });
     assert.equal(first.results[0].status, 'staged'); assert.equal(second.results[0].status, 'staged');
-    assert.equal(analyses, 2, 'generation two must analyze rather than recover generation one');
+    assert.equal(analyses, 2, '第二轮来源获取必须重新分析，不能恢复第一轮的结果');
     assert.notEqual(first.registryFile, second.registryFile);
     assert.match(path.basename(first.registryFile), /arxiv-generation-000001/);
     assert.match(path.basename(second.registryFile), /arxiv-generation-000002/);
@@ -1502,7 +1502,7 @@ test('调度器负责的 arXiv 包缺失时，直连运行绝不改成网络重�
     });
     assert.equal(first.status, 'partial'); assert.equal(first.results[0].status, 'failed'); assert.equal(analyses, 0);
     assert.equal(fs.existsSync(roots.freshArxivFailureHandoffRoot), false,
-        'direct-run cannot create a scheduler failure handoff');
+        '直接运行不能创建由来源调度器负责的失败交接记录');
     const registry = JSON.parse(fs.readFileSync(first.registryFile, 'utf8'));
     assert.equal(registry.entries[0].status, 'failed');
     assert.equal(Object.hasOwn(registry.entries[0], 'failureHandoff'), false);
@@ -1523,12 +1523,12 @@ test('会议暂存恢复在返回「已恢复」之前，拒绝暂存之后的 P
         const dependencies = { extractPdfText: async () => 'FRESH_CONFERENCE_PDF_TEXT '.repeat(20),
             materializeConferenceFigures: async () => [], renderDirectPage, analyze: async ({ item, sourceDescriptor, sourceDetails }) => { analyses += 1; return sealedAnalysis(item, sourceDescriptor, sourceDetails); } };
         const staged = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'conference' }, dependencies);
-        assert.equal(staged.results[0].status, 'staged', `${mutation.name} fixture must stage first`);
+        assert.equal(staged.results[0].status, 'staged', `${mutation.name} 测试样例必须先完成页面暂存`);
         mutation.mutate(f);
         const recovered = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'conference' }, dependencies);
         assert.equal(recovered.status, 'partial'); assert.equal(recovered.results[0].status, 'failed');
         assert.match(recovered.results[0].error, new RegExp(`retained conference ${mutation.name} changed after planning`, 'i'));
-        assert.equal(recovered.failed, 1); assert.equal(analyses, 1, `${mutation.name} mutation must fail before a second analysis`);
+        assert.equal(recovered.failed, 1); assert.equal(analyses, 1, `${mutation.name} 被修改后，必须在第二次分析前失败`);
         const registry = JSON.parse(fs.readFileSync(recovered.registryFile, 'utf8'));
         assert.equal(registry.entries.find(entry => entry.paperId.startsWith('conference:')).status, 'failed');
     }
@@ -1562,7 +1562,7 @@ test('默认运行器引擎让会议 PDF 页面贯穿嵌套的分析和 Reader �
                 } });
             assert.equal(result.reader, 'complete');
         });
-        assert.equal(fs.existsSync(temporaryDirectory), true, 'page survives until nested Reader completes');
+        assert.equal(fs.existsSync(temporaryDirectory), true, '页面图片必须保留到嵌套的 Reader 生成结束');
     }, { temporaryRoot, materializeConferenceFigures: async ({ directory }) => {
         temporaryDirectory = directory; write(path.join(directory, 'page-1.png'), 'conference-reader-page');
         const rawBytes = fs.readFileSync(path.join(directory, 'page-1.png'));
@@ -1649,7 +1649,7 @@ test('旧版锁审计保留去重后的重复意图，并在写入失败后复�
         contract: 'historical-direct-remote-legacy-paper-lock-reclaim-completion-v1', version: 1,
         recoveredAt: '2026-09-08T01:00:00.000Z', outcome: 'reclaimed-by-current-operation'
     }));
-    assert.equal(fs.existsSync(firstPaths.intent), true, 'completion failure cannot remove the immutable intent');
+    assert.equal(fs.existsSync(firstPaths.intent), true, '完成记录保存失败时，不能删除固定保存的操作意图记录');
     fs.rmdirSync(firstPaths.completion);
 
     const fakeEngine = { getPaperAnalysisLockPath: () => path.join(f.root, 'absent-canonical-lock'),
@@ -1660,7 +1660,7 @@ test('旧版锁审计保留去重后的重复意图，并在写入失败后复�
     assert.equal(reconciled.length, 2);
     const names = fs.readdirSync(executionDirectory).filter(name => name.startsWith('legacy-paper-lock-reclaim-'));
     assert.equal(names.filter(name => name.endsWith('.intent.json')).length, 2,
-        'same owner bytes on replacement inodes remain separate append-only events');
+        '持有者内容相同但文件被替换时，仍须分别追加两次操作记录');
     assert.equal(names.filter(name => name.endsWith('.completion.json')).length, 2);
     const before = names.sort().map(name => [name, sha(fs.readFileSync(path.join(executionDirectory, name)))]);
     assert.deepEqual(runner.reconcileLegacyPaperLockReclaimAudits({ executionDirectory,
@@ -1726,7 +1726,7 @@ test('直连运行器重试同一代的失败时复用表格、公式和图元�
     const second = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv', arxivGeneration: 1 },
         { captureFreshArxivRewriteSource: capture, analyze, renderDirectPage });
     assert.equal(second.results[0].status, 'staged');
-    assert.equal(captureFetches, 1, 'same generation reuses sealed text/PDF and source metadata');
+    assert.equal(captureFetches, 1, '同一轮来源获取须复用已保存并核验的文本、PDF 和来源元数据');
     assert.equal(analysisCalls, 2);
 });
 

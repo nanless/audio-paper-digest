@@ -641,7 +641,7 @@ test('汇总页展示逐级展开的标签，并把标签层级写进清单', t 
     assert.equal(section.includes('#### 应用'), false);
     assert.equal(section.includes('音频分离'), false);
     assert.ok(markdown.includes(`paper_digest_tags_registry_sha256: "${registry.registrySha256}"`));
-    // 落盘字节与 manifest 完全一致，且层级统计随 manifest 一起封存。
+    // 保存的字节与 manifest 完全一致，层级统计也随 manifest 一起保存。
     const directory = path.join(aggregateRoot, 'icassp-2026', result.manifest.aggregateId);
     assert.equal(fs.readFileSync(path.join(directory, 'aggregate.md'), 'utf8'), markdown);
     const written = JSON.parse(fs.readFileSync(path.join(directory, 'manifest.json'), 'utf8'));

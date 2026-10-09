@@ -190,7 +190,7 @@ describe('Manual v4 编辑质量的基础函数', () => {
         );
     });
 
-    it('归一化已落盘问题里精确的简单经验计数', () => {
+    it('按已保存的问题记录，把原句中的简单中文计数转成数字', () => {
         const source = '模型包含三分支，并在一对测试样本上进行比较。';
         const issues = [
             { code: 'quantitative_chinese_numeral', match: '三分支' },

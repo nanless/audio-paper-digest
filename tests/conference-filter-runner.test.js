@@ -181,7 +181,7 @@ test('生产 runner 用真实的公共传输，并保留绑定的意图、原始
         /transport injection is forbidden/);
 });
 
-test('一个有上限的生产批次完整复核一次筛选状态，并保留每篇已落盘的 CAS', async t => {
+test('正式筛选按数量上限处理一批候选，完整复核一次状态，并保存逐篇状态更新的前后 SHA 对应关系', async t => {
     const service = await serverFixture(t, [
         { body: chatResponse('{"decision":"included","reason":"Speech enhancement is primary."}') },
         { body: chatResponse('{"decision":"excluded","reason":"Audio is incidental."}') },
@@ -203,7 +203,7 @@ test('一个有上限的生产批次完整复核一次筛选状态，并保留�
     try { result = await runner.main(args(['--limit', '3']), { files: f.files, env: f.env }); }
     finally { fs.openSync = originalOpen; }
     assert.equal(result.processed.length, 3); assert.equal(service.calls.length, 3);
-    assert.equal(stateReads, 1, 'the authenticated state/history/artifact closure is replayed once per runner process');
+    assert.equal(stateReads, 1, '每次执行筛选程序只读取一次状态文件，复核状态、历史记录和生成文件的对应关系');
     const state = filter.readFilter({ filterRoot: f.dirs.filters, filterId });
     assert.equal(state.completion.status, 'complete');
     assert.equal(state.attempts.length, 3);
@@ -220,7 +220,7 @@ test('一个有上限的生产批次完整复核一次筛选状态，并保留�
     assert.deepEqual(noWork.processed, [], 'a complete filter retains the previous lazy credential boundary');
 });
 
-test('OpenAI Responses 的落盘请求同时就是一条日更用户提示', async t => {
+test('保存的 OpenAI Responses 请求使用与日更相同的单条用户提示', async t => {
     const service = await serverFixture(t, [{ body: responsesResponse('理由：语音增强是核心任务。\n结论：相关') }]);
     const f = fixture(t, `${service.endpoint}/responses`, null, 'fixture-filter-model');
     await runner.main(args(['--limit', '1']), { files: f.files, env: f.env });
@@ -232,7 +232,7 @@ test('OpenAI Responses 的落盘请求同时就是一条日更用户提示', asy
     assert.doesNotMatch(body.input[0].content[0].text, /conference-filter-llm-request/);
 });
 
-test('OpenAI Responses 的落盘重试沿用日更的 4096 token 下限和日更尝试上限', async t => {
+test('保存的 OpenAI Responses 重试请求沿用日更的 4096 token 下限与尝试次数上限', async t => {
     const service = await serverFixture(t, [
         { body: truncatedResponsesResponse() },
         { body: truncatedResponsesResponse() },
@@ -255,7 +255,7 @@ test('OpenAI Responses 的落盘重试沿用日更的 4096 token 下限和日更
     assert.equal(state.attempts.filter(attempt => attempt.paperId === pid('100')).length, 4);
 });
 
-test('来源只给出部分用量时，落盘成失败证据，而不是计费之后抛异常', async t => {
+test('模型响应只给出部分用量时，保存失败记录及已知用量', async t => {
     const service = await serverFixture(t, [{ body: chatResponse('{"decision":"included","reason":"Audio."}',
         { prompt_tokens: 5, completion_tokens: 2 }) }]);
     const f = fixture(t, service.endpoint);
@@ -442,7 +442,7 @@ test('换提示词版本后，v1 正文写下的持久意图仍能恢复', async
     const intentBody = { ...intent }; delete intentBody.intentSha256;
     intent.intentSha256 = filter.stableHash(intentBody);
     fs.writeFileSync(intentFile, `${JSON.stringify(intent, null, 2)}\n`);
-    // 已落盘的传输凭证绑定旧的 intent SHA，跟着一起改，否则恢复会先卡在凭证校验上。
+    // 保存的传输凭证对应旧 intent SHA；这里也更新它，使恢复测试能继续检查修改后的请求。
     const receiptFile = onlyJson(path.join(f.dirs.filters, filterId, 'llm-responses'));
     const receipt = JSON.parse(fs.readFileSync(receiptFile));
     receipt.intentSha256 = intent.intentSha256;
@@ -607,7 +607,7 @@ test('原 v5 未完成 intent 无响应时保留未知结果，不重复请求',
     assert.deepEqual(fs.readFileSync(intentFile), intentBytes);
 });
 
-test('认证失败先落盘再停止批量筛选，其余候选保持待处理', async t => {
+test('认证失败时先保存失败记录，再停止批量筛选，其余候选保持待处理', async t => {
     const service = await serverFixture(t, [{ statusCode: 401, body: { error: { message: 'invalid key' } } }]);
     const f = fixture(t, service.endpoint);
     await assert.rejects(() => runner.main(args(), { files: f.files, env: f.env }),

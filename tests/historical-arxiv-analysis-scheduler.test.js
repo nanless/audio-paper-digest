@@ -622,7 +622,7 @@ test('扫描期间 Reader 传输冷却保持不变，只有真正重试后才重
     await run(); assert.deepEqual({ live, analyzed }, { live: 1, analyzed: 1 });
 });
 
-test('Reader 实现指纹变化会清除旧的耗尽记录', () => {
+test('Reader 实现指纹变化后，允许已用尽重试次数的论文再尝试一次', () => {
     assert.deepEqual(scheduler.mergeRecoveryState({ recoveryFingerprint: 'old', failureSignature: 'same', exhausted: true,
         nextEligibleAt: '2026-09-08T00:00:00.000Z' }, { recoveryKind: 'reader', recoveryFingerprint: 'new',
         failureSignature: 'same', exhausted: true, cooldownMs: scheduler.READER_TRANSPORT_COOLDOWN_MS },
@@ -635,7 +635,7 @@ test('Reader 实现指纹变化会清除旧的耗尽记录', () => {
     const pending = scheduler.mergeRecoveryState({ recoveryFingerprint: 'new', failureSignature: 'same',
         exhausted: false, implementationRecoveryPendingFingerprint: 'new' }, observed,
     '2026-09-07T00:00:01.000Z');
-    assert.equal(pending.exhausted, false, 'offline scans cannot consume an implementation recovery');
+    assert.equal(pending.exhausted, false, '仅扫描状态不能用掉因实现变化而增加的一次重试机会');
     const attempted = scheduler.mergeRecoveryState(pending, observed, '2026-09-07T00:00:02.000Z', { attempted: true });
     assert.equal(attempted.exhausted, true);
     assert.equal(attempted.implementationRecoveryPendingFingerprint, null);
@@ -659,7 +659,7 @@ test('实现恢复的待处理指纹只为它实际尝试过的那次运行开�
     const run = () => scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
         stage: 'analyze', queue: 'reader-recovery', limit: 'pilot', concurrency: 1 }, deps);
     await run();
-    assert.deepEqual(refreshValues, [], 'an initially observed exhausted candidate has no implementation unlock');
+    assert.deepEqual(refreshValues, [], '初次扫描发现已用尽重试次数时，不能凭空增加重试机会');
     fingerprint = 'reader-implementation-v2';
     await run();
     assert.deepEqual(refreshValues, [true]);
@@ -667,10 +667,10 @@ test('实现恢复的待处理指纹只为它实际尝试过的那次运行开�
     assert.equal(checkpoint.items[groups[0].paperId].implementationRecoveryPendingFingerprint, null);
     assert.equal(checkpoint.items[groups[0].paperId].exhausted, true);
     await run();
-    assert.deepEqual(refreshValues, [true], 'consumed implementation recovery cannot migrate a second time');
+    assert.deepEqual(refreshValues, [true], '因实现变化增加的重试机会用过后，不能再次刷新诊断记录');
 });
 
-test('精确的人工补丁审计解锁一次全门禁复核，随后即被消费', t => {
+test('人工补丁与保存的审计记录全部一致时，允许再尝试一次，并记录该机会已使用', t => {
     const root = fixture(t); const runId = '22222222-2222-4222-8222-222222222222'; const paperId = '2601.18904';
     const runDir = path.join(root, runId); const repair = require('../scripts/lib/reader-repair.js');
     const fresh = require('../scripts/lib/fresh-rewrite-run.js');
@@ -697,7 +697,7 @@ test('精确的人工补丁审计解锁一次全门禁复核，随后即被消�
     assert.equal(consumed.exhausted, true);
     assert.equal(consumed.operatorRecoveryConsumedSha256, operatorPatchSha256);
     const repeated = scheduler.mergeRecoveryState(consumed, observed, '2026-09-07T00:00:02.000Z');
-    assert.equal(repeated.exhausted, true, 'the same operator audit cannot unlock a second attempt');
+    assert.equal(repeated.exhausted, true, '同一份人工修补审计记录不能再增加第二次重试机会');
     fs.appendFileSync(path.join(archive, 'patch.json'), ' ');
     assert.equal(scheduler.exactOperatorPatchRecovery(runDir, runId, paperId, payload), null);
 });
@@ -719,7 +719,7 @@ function stopFixture(t, ids = ['2604.10001', '2604.10002', '2604.10003']) {
 }
 
 for (const code of ['LLM_ACCOUNT_POOL_EXHAUSTED', 'LLM_ACCOUNT_AUTH_ERROR', 'LLM_ACCOUNT_POOL_CONFIG_ERROR']) {
-    test(`历史外层调度遇到 ${code} 时落盘并原样停止，不派下一篇`, async t => {
+    test(`历史外层调度遇到 ${code} 时保存状态，并保留原错误停止运行，不再分派下一篇`, async t => {
         const f = stopFixture(t); const analyzed = [];
         const failure = Object.assign(new Error('账号不可用，停止本次运行'), { code, scope: 'run', retryable: false });
         await assert.rejects(scheduler.runHistoricalScheduler(f.options, { ...f.deps,
@@ -745,7 +745,7 @@ test('历史外层调度保留普通单篇失败并继续其余论文', async t 
     assert.equal(analyzed.length, 3); assert.equal(result.complete, 2); assert.equal(result.failed, 1);
 });
 
-test('历史并发分析遇到运行级失败后等同伴落盘，不派第三篇', async t => {
+test('历史并发分析遇到整次运行必须停止的错误后，等其他任务保存结果，不再分派第三篇', async t => {
     const f = stopFixture(t); const analyzed = [];
     let release; const secondStarted = new Promise(resolve => { release = resolve; });
     const failure = Object.assign(new Error('账号池耗尽'), { code: 'LLM_ACCOUNT_POOL_EXHAUSTED', scope: 'run' });

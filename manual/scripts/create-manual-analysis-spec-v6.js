@@ -245,8 +245,8 @@ function loadPaperEvidence(envelope, envelopePath, rawId, descriptor, occupiedPa
         allowSignedLegacyTableRender: (options.runtimeMode || MANUAL_V6_RUNTIME_MODE_PRODUCTION)
             === MANUAL_V6_RUNTIME_MODE_PRODUCTION,
         // 有少数经运行器校验的迁移记录早于 editorialPlan v2 元数据。它们已
-        // 签名的 reader-longform-v2 包仍是权威的文章契约；新建与影子记录遇到
-        // 非 editorialPlan v2 仍然 fail-closed。
+        // 通过校验的 reader-longform-v2 材料包仍规定文章格式；新建与影子记录遇到
+        // 不符合 editorialPlan v2 的提纲时，仍须拒绝。
         allowSignedLegacyEditorialPlan: (options.runtimeMode || MANUAL_V6_RUNTIME_MODE_PRODUCTION)
             === MANUAL_V6_RUNTIME_MODE_PRODUCTION,
         metadataCorrection: options.metadataCorrection || null

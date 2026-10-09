@@ -65,8 +65,8 @@ function conferenceWeakReaderCapabilityPolicy(paper, structuredArtifacts) {
     if (!details) return null;
     const artifacts = details.structuredArtifacts;
     const provided = structuredArtifacts === undefined ? artifacts : structuredArtifacts;
-    // 可重放的 PDF 来源走常规 Reader 约定。这个函数继续作为旧版弱包的
-    // 兼容闸门，但不要给一份已核验产物里带 PDF 插图像素的来源
+    // 可以重新读取并核验的 PDF 来源使用常规 Reader 规则。这个函数继续
+    // 检查旧版资料有限的证据能力，但不要给已核验且包含 PDF 插图像素的来源
     // 附加弱策略提示词。PDF 文本永远不是经过核验的原始 TeX。
     if (details.conferenceCapabilities?.fullText === 'full'
         && details.conferenceCapabilities?.tables === 'unavailable'

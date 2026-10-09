@@ -28,7 +28,7 @@ test('默认论文速递脚本保留 API、显式 Manual、博客三阶段和视
     }
 });
 
-test('默认论文速递脚本不调用图像 API，并明确要求 Codex 接续最终视觉门禁', () => {
+test('默认论文速递脚本不调用图像 API，并明确要求 Codex 继续完成图片生成、检查和登记', () => {
     assert.doesNotMatch(source, /OPENAI_API_KEY|images\/generations|images\/edits|image_gen\.py/);
     assert.match(source, /digest:prepare 仅完成博客发布与视觉输入准备；退出成功不代表整条论文速递完成/);
     assert.match(source, /Codex 现在必须继续生成、目检并登记 TOP 10 论文长图和汇总封面/);

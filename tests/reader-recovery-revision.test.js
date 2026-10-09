@@ -491,7 +491,7 @@ test('未使用的沿袭额度在身份变化后转移，不会产生第二个�
     assert.equal(repair.readerAttemptLimit(6, transferred.attempts, transferred.draft, 1), 7);
 });
 
-test('解析器、编辑和机械门禁三类实现变化各允许一次诊断迁移', async t => {
+test('解析器、文字检查及固定规则检查的实现变化，各允许迁移一次诊断记录', async t => {
     for (const field of ['parserImplementationSha256', 'editorialImplementationSha256',
         'mechanicalContractSha256']) {
         await t.test(field, tt => {

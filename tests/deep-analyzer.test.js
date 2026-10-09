@@ -3682,7 +3682,7 @@ primary_task_tag: #音视频生成
         ), /exact sourceQuote|关键数字缺少 exact quote\/cell 证据/);
     });
 
-    it('原表裸 Delta 只授权裸值，Reader 擅加百分号仍由完整来源门禁拒绝', () => {
+    it('原表 Delta 未带单位时只允许原数值，完整来源检查仍拒绝 Reader 擅加百分号', () => {
         const { deriveExactTableSourceQuotes, bindApiReaderSourceEvidence,
             bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
         const sourceText = 'Contrastive-learning ablation on AVSBench V1m:\n'
@@ -4072,7 +4072,7 @@ primary_task_tag: #音视频生成
         assert.strictEqual(normalizeDuplicateReaderConceptBridgeMarkers(candidate), false);
     });
 
-    it('会议 quote 证据表的行列编号不被最终数字证据门禁误读', () => {
+    it('会议引文证据表的行列编号不被最终数字检查误认作实验数值', () => {
         const { normalizeConferenceGeneratedEvidenceTableLabels } = require('../scripts/deep-analyzer.js');
         const candidate = { sections: [{ kind: 'result', body: [
             '| 来源证据 | 量化值 1 | 量化值 2 |',
@@ -4228,7 +4228,7 @@ primary_task_tag: #音视频生成
         }
     });
 
-    it('短行 quote 保留原始空白并在首匹配无效时继续，单位门禁仍区分1与1 s', () => {
+    it('短行引文保留原始空白，首次匹配无效时继续查找；单位检查仍区分 1 与 1 s', () => {
         const { deriveExactTableSourceQuotes } = require('../scripts/deep-analyzer.js');
         const table = value => `| Value |\n| --- |\n| ${value} |`;
         const indented = '  7\r\n\r\n   Evaluation setup\r\n  reported count\r\n';
@@ -4687,7 +4687,7 @@ has_dataset: 否
         assert.deepStrictEqual(getRepairableAnalysisStructureIssues(mismatched), []);
     });
 
-    it('负面证据门禁接受精确“负结果”但不把普通下降或微升当作负面', () => {
+    it('负面证据检查接受明确的“负结果”，但不把普通下降或微升当作负面结果', () => {
         const {
             EXPERIMENT_TABLE_CONTRACT_VERSION,
             validateExperimentTableContract
@@ -4708,12 +4708,12 @@ has_dataset: 否
         assert.match(validate('测试误差从 12.4% 下降至 10.8%。'), /没有保留负面证据/);
         assert.match(validate('代价是测试误差从 12.4% 下降至 10.8%。'), /没有保留负面证据/);
         // explicitMetricDecline：裸指标（higher-is-better）下降本身即算负面证据，
-        // 无需"代价/牺牲"前缀，因此本例通过门禁返回 null。
+        // 无需"代价/牺牲"前缀，因此本例通过检查并返回 null。
         assert.strictEqual(validate('动态幅度从 44.58 下降至 35.62。'), null);
         assert.match(validate('准确率从 90.0% 微升至 91.0%。'), /没有保留负面证据/);
     });
 
-    it('核心摘要新深度目标独立于历史 80 字符兼容门禁', () => {
+    it('核心摘要的新详细程度要求与旧版 80 字符兼容检查分别判断', () => {
         const { getCoreSummaryDetailIssue, getRepairableAnalysisStructureIssues } = require('../scripts/deep-analyzer.js');
         const placeholder = validAnalysisText().replace(
             /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
@@ -4726,7 +4726,7 @@ has_dataset: 否
             .some(issue => issue.startsWith('核心摘要内容不足')), false);
     });
 
-    it('核心摘要深度门禁同时限制 320–600 中文字符与 6–9 句', () => {
+    it('核心摘要详细程度检查同时要求 320–600 中文字符和 6–9 句', () => {
         const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
         const withSummary = summary => validAnalysisText().replace(
             /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
@@ -4818,7 +4818,7 @@ has_dataset: 否
         );
     });
 
-    it('真实 AVI-Edit 摘要识别边界化 FVD 指标且保留方向与设置门禁', () => {
+    it('AVI-Edit 摘要能识别紧邻中文的 FVD 指标，并继续检查比较方向与评测设置', () => {
         const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
         const withSummary = summary => validAnalysisText().replace(
             /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
@@ -4895,7 +4895,7 @@ has_dataset: 否
         );
     });
 
-    it('核心摘要 Prompt 推荐的高低比较通过门禁但无“从”的升降端点仍拒绝', () => {
+    it('核心摘要提示词推荐的高低比较通过检查，但省略“从”的不完整升降表述仍被拒绝', () => {
         const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
         const withResult = sentence => validAnalysisText().replace(
             '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。',
@@ -4939,7 +4939,7 @@ has_dataset: 否
         assert.strictEqual(getCoreSummaryDetailIssue(withResult(closed2509)), null);
     });
 
-    it('2604.13715 的 R@0.9 与“从…升至”按 Prompt 约定通过核心摘要门禁', () => {
+    it('2604.13715 的 R@0.9 与“从…升至”按提示词要求通过核心摘要检查', () => {
         const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
         const analysis = validAnalysisText().replace(
             '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。',
@@ -5082,7 +5082,7 @@ has_dataset: 否
         }
     });
 
-    it('2512.14629 并列候选优先诊断含数字句且不放宽完整比较门禁', () => {
+    it('2512.14629 的多个候选句优先诊断含数字句，仍要求完整的比较信息', () => {
         const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
         const withSummary = summary => validAnalysisText().replace(
             /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
@@ -5192,7 +5192,7 @@ has_dataset: 否
         assert.match(issue, /训练、推理或部署成本/);
     });
 
-    it('无数字理论论文用显式不可得声明通过摘要内容门禁', () => {
+    it('未提供实验数字的理论论文可明确说明证据不可得，通过摘要内容检查', () => {
         const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
         const summary = [
             '本文研究音频表征可辨识性的理论问题，输入是满足给定生成假设的观测分布，输出是表示何时能够恢复潜在因素的条件，难点在于等价变换会造成不可区分解。',
@@ -5235,7 +5235,7 @@ has_dataset: 否
         }), null);
     });
 
-    it('核心摘要接受闭合升降与反超句式，但拒绝无起点的单数字裸升至', () => {
+    it('核心摘要接受比较信息完整的升降与反超句式，但拒绝只写终值、没有起点的“升至”', () => {
         const { getCoreSummaryDetailIssue } = require('../scripts/deep-analyzer.js');
         const quantitativeSentence = '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。';
         const withSentence = sentence => validAnalysisText().replace(quantitativeSentence, sentence);
@@ -5262,7 +5262,7 @@ has_dataset: 否
         );
     });
 
-    it('摘要最终门禁严格位于结构修复之后、评分之前', () => {
+    it('摘要最终检查严格位于结构修复之后、评分之前', () => {
         const { RECOVERY_STAGE_ORDER } = require('../scripts/deep-analyzer.js');
         assert.ok(RECOVERY_STAGE_ORDER.indexOf('structureRepair') < RECOVERY_STAGE_ORDER.indexOf('coreSummaryRepair'));
         assert.ok(RECOVERY_STAGE_ORDER.indexOf('coreSummaryRepair') < RECOVERY_STAGE_ORDER.indexOf('scoringAudit'));
@@ -5898,7 +5898,7 @@ has_dataset: 否
         assert.doesNotMatch(prompts[1], /量化句须在同一句内闭合/);
     });
 
-    it('核心摘要无定量证据重试要求删除实验数字，不再要求量化句在同一句内闭合', async () => {
+    it('核心摘要没有定量证据时，重试要求删除实验数字，不再要求把完整量化比较写在同一句', async () => {
         const { repairCoreSummarySection } = require('../scripts/deep-analyzer.js');
         const original = validAnalysisText();
         const existingSummary = original.match(
@@ -6205,7 +6205,7 @@ has_dataset: 否
         );
     });
 
-    it('逐级加约束的带符号行也能闭合原文消融证据', () => {
+    it('逐级添加约束的带符号表格行也能与原文消融证据对应', () => {
         const { validateExperimentTableEvidenceDepth } = require('../scripts/analysis-contract.js');
         const analysis = [
             '## 实验结果',

@@ -233,7 +233,7 @@ test('当日论文拒绝旧版或跨运行生成的文本，并把同一次运�
     });
 });
 
-test('第一个落盘的分析检查点就已经带上精确的当日来源出处', async t => {
+test('第一次保存分析检查点时，就已记录对应的当日来源', async t => {
     const f = fixture(t); const deep = require('../scripts/deep-analyzer.js');
     await fresh.withFreshAnalysisContext(f.context, async () => {
         const source = await fresh.fetchFreshSource(f.id, async () => structuredClone(f.details));

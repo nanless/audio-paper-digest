@@ -85,7 +85,7 @@ describe('官方 Manual records v4 / spec v6 组装器', () => {
         fs.rmSync(root, { recursive: true, force: true });
     });
 
-    it('filtered 规范化重复论文在读取下游工件前即 fail closed', () => {
+    it('filtered 中论文 ID 去除版本号后重复时，在读取后续文件前即被拒绝', () => {
         assert.throws(() => buildSpecV6({
             date: '2026-08-28',
             runtimeMode: 'production',

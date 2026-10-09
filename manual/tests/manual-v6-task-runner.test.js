@@ -254,7 +254,7 @@ function submitReview(fx, role, taskName) {
 }
 
 describe('Manual v6 持久任务执行器', () => {
-    it('production author submit 在接收签名草稿时门禁 type/task/primaryMethodTag/tags', () => {
+    it('正式写作提交入口接收带校验信息的草稿时，检查 type/task/primaryMethodTag/tags', () => {
         const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-author-base-')));
         fs.mkdirSync(path.join(root, 'draft'));
         const articlePath = path.join(root, 'draft', 'author-article.md');
@@ -489,7 +489,7 @@ describe('Manual v6 持久任务执行器', () => {
         fs.rmSync(fx.root, { recursive: true, force: true });
     });
 
-    it('Terra-high receipt、taskName 和真实输出 semantic SHA 全部 fail closed', () => {
+    it('提交任务时检查 Terra-high 凭证、taskName 和输出内容 SHA，任一不符合要求就拒绝', () => {
         const fx = fixture();
         register(fx, '2608.12345', 'author');
         validateAuthor(fx);
@@ -788,7 +788,7 @@ describe('Manual v6 持久任务执行器', () => {
         assert.doesNotThrow(() => validateTaskPacket(packet, options));
     });
 
-    it('filtered、packet 或 state 字节/字段被篡改后 status/mutation 必须 fail closed', () => {
+    it('filtered 或任务输入文件被篡改、状态字段非法时，输入与状态检查均拒绝继续', () => {
         const fx = fixture(); register(fx, '2608.12345', 'author');
         assert.doesNotThrow(() => verifyBoundInputs(fx.state));
         fs.appendFileSync(fx.state.papers['2608.12345'].tasks.author.packetPath, ' ');
@@ -852,7 +852,7 @@ describe('Manual v6 持久任务执行器', () => {
         fs.rmSync(fx.root, { recursive: true, force: true });
     });
 
-    it('records-v4 envelope 只报告真实普通文件并绑定 bytes SHA，symlink fail closed', () => {
+    it('records-v4 记录只报告真实普通文件及其字节 SHA，拒绝符号链接', () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-envelope-'));
         const dateRoot = path.join(root, '2026-08-28');
         fs.mkdirSync(dateRoot);

@@ -318,7 +318,7 @@ describe('Manual v6 确定性修订绑定器', () => {
         assert.equal(result.scoringCalibration.reviewerTaskName, '/root/technical');
     });
 
-    it('签名 revision payload 前只规范化无歧义 type alias，并对未知/缺失基础字段 fail closed', () => {
+    it('计算修订内容的校验信息前，只转换含义明确的 type 别名，并拒绝未知或缺失的基础字段', () => {
         const base = {
             type: 'dataset', task: '#语音识别', primaryMethodTag: '#数据集构建',
             tags: '#语音识别 #数据集构建 #多语言'

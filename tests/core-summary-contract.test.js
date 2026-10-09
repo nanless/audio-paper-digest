@@ -9,7 +9,7 @@ const {
     classifySourceQuantitativeEvidence
 } = require('../scripts/analysis-contract.js');
 
-test('操作参数和单独成本数字不触发核心摘要定量结果门禁', () => {
+test('运行参数和单独的成本数字不被识别为核心摘要的定量结果证据', () => {
     const source = 'The evaluation setup uses 4 GPUs and 100k training steps; inference latency is 21 ms.';
     assert.equal(hasCoreSummaryQuantitativeEvidence(source), false);
     assert.equal(classifySourceQuantitativeEvidence(source), false);
@@ -21,7 +21,7 @@ test('有基线指标数字仍被识别为实证结果', () => {
     assert.equal(classifySourceQuantitativeEvidence(source), true);
 });
 
-test('操作型指标只有在明确比较时才触发证据门禁', () => {
+test('延迟等运行指标只有在明确比较时才被识别为定量结果证据', () => {
     const source = 'On the public test set, baseline inference latency is 120 ms versus our method at 90 ms.';
     assert.equal(hasCoreSummaryQuantitativeEvidence(source), true);
     assert.equal(classifySourceQuantitativeEvidence(source), true);

@@ -171,7 +171,7 @@ describe('Manual 实测性能报告', () => {
         assert.ok(report.sources.every(item => item.selected));
     });
 
-    it('任一候选 sidecar 的绑定文件漂移就 fail closed，不会只挑同日最新文件', () => {
+    it('任一候选指标记录对应的文件发生变化时，拒绝生成报告；不能只检查同日最新记录', () => {
         const fx = fixture();
         const oldPath = stageSidecar(fx, '2026-08-28', 100, 'old');
         const latestPath = stageSidecar(fx, '2026-08-28', 10, 'latest');

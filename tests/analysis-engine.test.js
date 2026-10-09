@@ -711,7 +711,7 @@ describe('analyzePaperWithRetry', () => {
             contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
             documentType: '方法研究',
             sourceText: 'Table 1 compares HCNA w/o extrap. against fixed and GCR extrapolation.'
-        }), null, '中文“无外推”应与来源中的 w/o extrap. 构成闭合消融对照');
+        }), null, '中文“无外推”应与来源中的 w/o extrap. 对应同一项消融设置');
         const stageIdentifier = valid.replace('方法 / 设置', '训练阶段');
         assert.strictEqual(validateExperimentTableContract(stageIdentifier, {
             contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
@@ -876,7 +876,7 @@ describe('analyzePaperWithRetry', () => {
         ), /没有保留负面证据/);
     });
 
-    it('带方向的 AVG 条件列是指标列，条件-方法型结果表通过可核对数字门禁', () => {
+    it('带方向的 AVG 条件列是指标列，按方法和条件列出的结果表能通过数字可核对检查', () => {
         const withResults = body => validAnalysisText().replace(
             /## 实验结果\n[\s\S]*?\n\n## 细节详述/,
             `## 实验结果\n${body}\n\n## 细节详述`
@@ -899,10 +899,10 @@ describe('analyzePaperWithRetry', () => {
             contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION,
             documentType: '方法研究',
             sourceText: 'Table 2 reports semantic evaluation results of different models under different temperature settings.',
-        }), null, '方法×条件型结果表的数字必须被计入可核对数字门禁');
+        }), null, '按方法和条件列出的结果表，其数字必须计入可核对数字数量');
     });
 
-    it('结果段用“对比/超过/降至”等中文比较表述时满足保留比较对象门禁', () => {
+    it('结果段用“对比/超过/降至”等中文表述时，能通过比较对象保留检查', () => {
         const withResults = body => validAnalysisText().replace(
             /## 实验结果\n[\s\S]*?\n\n## 细节详述/,
             `## 实验结果\n${body}\n\n## 细节详述`

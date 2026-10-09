@@ -543,7 +543,7 @@ test('最终完成事务在发布凭证之前，会再核对一次配置身份',
     assert.equal(fs.existsSync(path.join(directory, 'completion-receipt.json')), false);
 });
 
-test('条目 CAS 会保留并发完成的条目，最终事务会再核对一次是否闭合', async t => {
+test('条目条件更新（CAS）保留其他任务已完成的结果，最终事务再次确认所有条目已完成', async t => {
     const f = fixture(t); const options = { apply: true, catalogName: 'catalog.json', reportName: 'report.json',
         filterId: f.authority.filterId, concurrency: 1 };
     const processId = processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.CONTRACT);

@@ -109,7 +109,7 @@ test('生产输出不合法时不写候选，也不建审计目录', async t => 
     assert.deepEqual(fs.readdirSync(path.join(f.runDir, 'patches')), ['fix.json']);
 });
 
-test('真正的生产解析器在落盘前拒绝不完整的 Reader 输出', async t => {
+test('正式解析器在保存前拒绝不完整的 Reader 输出', async t => {
     const f = fixture(t); const before = fs.readFileSync(f.candidateFile);
     await assert.rejects(f.apply({ parseApiReaderArticleResult: require('../scripts/deep-analyzer.js').parseApiReaderArticleResult }));
     assert.deepEqual(fs.readFileSync(f.candidateFile), before);

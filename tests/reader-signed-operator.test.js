@@ -210,7 +210,7 @@ test('只有意图没有输出的人工记录只拒绝变化过的输出 SHA，�
     }
 });
 
-test('父级过期、来源/草稿/节点非法、追加和生产门禁失败都让分析和归档保持不变',async t=>{
+test('父记录过期、来源/草稿/节点非法、非法追加或正式检查失败时，分析与归档保持不变',async t=>{
     for(const mutate of [f=>{f.request.parentPaperSha256='0'.repeat(64);},
         f=>{f.request.sourceSha256='0'.repeat(64);},f=>{f.request.patch.draftSha256='0'.repeat(64);},
         f=>{f.request.patch.replacements[0].oldSha256='0'.repeat(64);},

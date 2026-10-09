@@ -29,7 +29,7 @@ test('方法、指标和数据集列的六种位置都按真实指标单元格�
     }
 });
 
-test('数据集年份不能顶替缺失指标，缓存成功记录经真实门禁重新拒绝', () => {
+test('数据集年份不能顶替缺失指标；重新检查缓存的成功记录时仍会拒绝', () => {
     const text = analysis([0,1,2], rows.map(row => [row[0], '未报告', '2024']));
     assert.match(contract.validateExperimentTableContract(text, options), /只有 0 个可核对数字/);
     const paper = validAnalysisPaper('2601.12345', {}, text);

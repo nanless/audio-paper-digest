@@ -283,7 +283,7 @@ test('准备回滚不会删掉这样的状态路径：它新建的 inode 在 EIO
         executionId: interruptedId, now: stamp }), /execution recovery state/);
 });
 
-test('状态查询和转换会复核已落盘的授权，拒绝授权或状态漂移', t => {
+test('查询或转换状态时会复核保存的授权；授权或状态发生变化时拒绝继续', t => {
     const f = fixture(t);
     let state = execution.prepareExecutionFromPlan({ executionRoot: f.root, planHandle: f.handle, executionId, now: stamp });
     state = execution.transitionExecution({ executionRoot: f.root, executionId, planHandle: f.handle, owner: 'worker', now: stamp,

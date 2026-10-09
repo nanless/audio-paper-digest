@@ -202,7 +202,7 @@ describe('Manual v6 显式元数据更正协议', () => {
         assert.throws(() => validateReceipt(badReceipt, packet, correction), /provenance/);
     });
 
-    it('四字段修正后仍缺 author-owned 基础内容时预检 fail closed', () => {
+    it('写作助手负责的基础字段仍不完整或不合法时，预检拒绝只修正四个元数据字段', () => {
         const packet = packetFixture();
         const correction = correctionFixture(packet);
         const incomplete = { paperId: ID, type: 'free text', task: 'speech', tags: ['speech'] };

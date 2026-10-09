@@ -252,7 +252,7 @@ test('发现已有 v2 发布记录时，队列完成之前仍要跑真实的 ver
     assert.equal(result.status, 'complete'); assert.deepEqual(events, ['verify:odyssey-2026']);
 });
 
-test('队列看起来完整，但已落盘的发布证明漂移时，apply 拒绝', async t => {
+test('队列已标记完成，但保存的发布凭证发生变化时，apply 拒绝继续', async t => {
     const f = fixture(t, 1); const events = []; const deps = dependencies(f, events);
     const first = await queue.runConferenceQueue({ mode: 'apply', plan: f.plan }, deps);
     assert.equal(first.status, 'complete');

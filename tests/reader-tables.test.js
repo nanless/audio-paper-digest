@@ -327,7 +327,7 @@ test('选择拒绝重复或越界坐标、伪造表头、混合载荷和格式�
     }
 });
 
-test('唯一原表头可确定性补回，多级表头仍失败关闭', () => {
+test('原表头唯一时可按固定规则补回，无法唯一确认原表头时仍被拒绝', () => {
     const { artifacts } = artifactsFixture();
     const narrowed = structuredClone(artifacts);
     const binding = selected(1, 2);

@@ -1413,7 +1413,7 @@ def run_extraction(
     source_root: Path = DEFAULT_STAGING_SOURCE_DIR,
     backend: ExtractionBackend | None = None,
 ) -> dict[str, Any]:
-    """校验一份不可变的抽取产物，必要时落盘写出。"""
+    """校验一份不可变的抽取结果，指定 apply 时保存文件。"""
     manifest_name = _safe_name(manifest_name, SAFE_JSON_NAME, "manifest name")
     root_fd = _open_root(Path(source_root))
     try:

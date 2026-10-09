@@ -1,7 +1,7 @@
 'use strict';
 
 // Reader 候选只是恢复用的输入，从来不能当作生产凭证。每个合并进来的
-// 候选仍然要通过调用方完整的 Reader 解析器和来源闸门。
+// 候选仍然要通过调用方完整的 Reader 解析和来源核验。
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -198,7 +198,7 @@ function hashRecoveryIssues(issues) {
 function normalizeValidationMessage(message) {
     return String(message || '')
         // exact 绑定失败的草稿取值会变，而同一个行/列可能一直没绑上。结构坐标
-        // 和闸门名要留着，易变的单元格内容和缺失值要去掉。
+        // 和检查名称要留着，易变的单元格内容和缺失值要去掉。
         .replace(/(关键数字缺少 exact quote\/cell 证据:)\s*[^；]+/giu, '$1 <values>')
         .replace(/\btext="[^"]*"/giu, 'text="<value>"')
         .replace(/\bmissing=[^。；，]+/giu, 'missing=<value>')
@@ -410,7 +410,7 @@ function parseReaderPatchJson(raw) {
     try { return JSON.parse(source); } catch (originalError) {
         // 有些服务商在输出完一个完整的最终替换对象之后就报完成，但外层数组
         // 或根对象的定界符还没出来。只补这两种机械上唯一确定的后缀。绝不去
-        // 闭合字符串、标量、替换对象或其他嵌套值：语义是否完整是模型的责任。
+        // 补齐字符串、标量、替换对象或其他嵌套值：内容是否完整仍由模型负责。
         const stack = [];
         let inString = false;
         let escaped = false;
@@ -1071,7 +1071,7 @@ function buildRepairTargets(draft, issues) {
             add(missingResultTableOperation.destinationSectionPath);
             add(missingResultTableOperation.bindingPath);
         } else {
-            // 只有表格串已经闭合时，才复用现成的一个表序号。搬动或替换最后一张
+            // 复用已有表格及其对应来源绑定的序号。搬动或替换最后一张
             // 实验设置表，能保住后面所有表的序号不变。
             add(missingResultTableOperation.donorSectionPath);
             add(missingResultTableOperation.destinationSectionPath);
@@ -1085,7 +1085,7 @@ function buildRepairTargets(draft, issues) {
     const globalWideTableIssue = blockingIssues.find(issue => !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
         && /宽表/.test(String(issue?.message || '')));
     if (globalWideTableIssue) {
-        // 过去用一条全局的「宽表数量下限」闸门，一次授权所有表正文和绑定，
+        // 过去根据全局的「宽表数量下限」检查，一次允许修改所有表正文和绑定，
         // 结果五个节点的大补丁反复在 JSON 后缀之前就断掉。现在一次只修一对表，
         // 下一轮再让权威完整解析器指出下一个缺口。
         const tableSpecific = blockingIssues.filter(issue => (

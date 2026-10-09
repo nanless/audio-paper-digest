@@ -461,7 +461,7 @@ describe('OpenCode Go 账号粘性状态', () => {
         }
     });
 
-    it('检查期间并发进程删掉了回收闸门就重试', () => {
+    it('检查期间其他进程删掉了锁回收目录时，重新尝试', () => {
         const { file } = tempState();
         const reclaimPath = `${file}.lock.reclaim`;
         fs.mkdirSync(reclaimPath);

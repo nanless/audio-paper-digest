@@ -429,7 +429,7 @@ test('进程检查点发生变化时，更新会停止，并保留原分析文�
     assert.deepEqual(after.receipt, before.receipt, 'completion receipt 不得被归档');
     assert.equal(fs.readFileSync(fx.stateFile).equals(tamperedBytes), true);
     assert.equal(processApi.assertState(JSON.parse(fs.readFileSync(fx.stateFile, 'utf8'))).status,
-        'complete', '进程仍保持篡改后的完整状态，没有半个封口');
+        'complete', '状态文件保持修改后的 complete 状态，更新没有写入部分结果');
 });
 
 test('分析文件内容发生变化时，更新会在写入前停止', async t => {

@@ -42,7 +42,7 @@ function pdfResponse(id, suffix = 'one') {
         url: `https://arxiv.org/pdf/${id}.pdf`, fetchedAt: '2026-09-07T00:00:02.000Z' };
 }
 
-test('当日 arXiv 生成会原子地落盘官方文本、PDF 和非像素来源元数据', async t => {
+test('当日 arXiv 来源获取用原子写入保存官方文本、PDF 和不含图片像素的来源元数据', async t => {
     const f = fixture(t); const id = '2403.14817'; let textCalls = 0; let pdfCalls = 0;
     const result = await source.captureFreshArxivRewriteSource({ rootDir: f.sourceRoot, arxivId: id, generation: 1,
         now: '2026-09-07T00:00:00.000Z', extractorVersion: 'test-extractor-v9' }, {

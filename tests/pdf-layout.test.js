@@ -1,6 +1,6 @@
 'use strict';
 
-// PDF 排版提取是所有纯 PDF 来源共用的入口。这里测三件事：临时文件怎么落盘、
+// PDF 排版提取是所有纯 PDF 来源共用的入口。这里测三件事：临时文件如何保存、
 // 视觉审计的字段与 SHA 是否自洽、参数与结果校验在出错时是否真的拦下来。
 // 需要真实 PyMuPDF 的用例走 scripts/python-runtime.sh，不联网、不调模型。
 
@@ -160,7 +160,7 @@ describe('PDF 排版提取', () => {
         }
     });
 
-    it('走真实 PyMuPDF 渲染请求的每一页，文件确实落盘', async () => {
+    it('用真实 PyMuPDF 渲染请求的每一页，并确认文件已保存', async () => {
         const directory = tempDirectory('pdf-layout-render-');
         try {
             const pdfPath = writePdf(directory, [['one'], ['two']]);

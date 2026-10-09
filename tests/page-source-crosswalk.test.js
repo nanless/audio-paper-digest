@@ -310,7 +310,7 @@ function load(f) {
     return api.loadHistoricalInventoryHandle({ inventoryRoot: f.inventory, ledgerName: f.ledgerName, receiptName: f.receiptName });
 }
 
-test('合成扫描 v3 与 v4 样本按原格式读取，拒绝字段混用和错误原摘要', t => {
+test('合成扫描 v3 与 v4 样本按原格式读取，拒绝字段混用和错误的原记录 SHA-256', t => {
     const f = fixture(t);
     const ledgerFile = path.join(f.inventory, f.ledgerName);
     const receiptFile = path.join(f.inventory, f.receiptName);
@@ -551,7 +551,7 @@ test('真实 Python 新扫描和原实现两版扫描经配对凭证进入 Node�
         /receipt does not bind the exact ledger/);
 });
 
-test('prepare 只挑出没有标题与正文的论文页，试运行不写盘，apply 使用安全模式', t => {
+test('准备页面对应记录时省略标题和正文；试运行不保存文件，实际保存时设置严格的文件权限', t => {
     const f = fixture(t); const roots = { inventoryRoot: f.inventory, crosswalkRoot: f.crosswalk };
     const args = ['prepare', '--dry-run', '--ledger', f.ledgerName, '--receipt', f.receiptName, '--crosswalk', ids[0]];
     const dry = cli.main(args, { roots, now: stamp });
@@ -944,7 +944,7 @@ test('显式冲突解决器只接受已存在、非标题且带精确生产授�
     await assert.rejects(conflictCli.main([...common.slice(0, 7), '--value', '2601.99999', ...common.slice(7)],
         { files: { paperSourceAuthorityDir: authorityRoot, pageSourceCrosswalkDir: f.crosswalk } }),
     /not exactly one existing page hint/);
-    assert.equal(calls, 0, 'invalid operator selection must fail before network access');
+    assert.equal(calls, 0, '操作人员选择无效时，必须在网络请求前失败');
 
     const output = await conflictCli.main([...common.slice(0, 7), '--value', '2601.00001', ...common.slice(7)],
         { files: { paperSourceAuthorityDir: authorityRoot, pageSourceCrosswalkDir: f.crosswalk } });
@@ -988,7 +988,7 @@ test('冲突解决器拒绝单页、仅有持久化授权，以及授权与选�
     /does not exactly match/);
 });
 
-test('归档抓取身份授权可以结清一条精确的归档 arXiv 提示，但不会升级为全文授权', t => {
+test('归档抓取的身份凭证可以核验对应的 arXiv 身份提示，但不能证明全文来源已核验', t => {
     const f = fixture(t); const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
         crosswalkId: ids[0], now: stamp, apply: true });
     const dataRoot = path.join(f.root, 'data'); const archiveDirectory = path.join(dataRoot, 'archive', '2026-01-01');
@@ -1161,7 +1161,7 @@ test('跨页的同一规范身份归为一个确定分组，冲突记录一律�
     assert.equal(state.completion.pending, 1);
 });
 
-test('路径、链接、重复 JSON 和 CLI 语法有问题时直接失败，不写盘', t => {
+test('路径、链接、重复 JSON 键和命令行语法有问题时直接失败，不保存文件', t => {
     const f = fixture(t); const roots = { inventoryRoot: f.inventory, crosswalkRoot: f.crosswalk };
     assert.throws(() => cli.parseArgs(['prepare', '--dry-run', '--ledger', '../x.json', '--receipt', 'r.json']));
     assert.throws(() => cli.parseArgs(['status', '--crosswalk', '../x']));
@@ -1252,8 +1252,8 @@ test('历史页 crosswalk 的 number 证据前提：整型浮点双向拒绝，f
         'from historical_page_scan import validate_ledger, _publication_evidence, _page_snapshot_body, stable_hash',
         'validate_ledger(json.load(open(sys.argv[2], encoding="utf-8")))',
         // 整数值那份清单的 SHA 是 Node 用 forceFloat 算的（值写成 7.0），Python 复算
-        // 得到的是 7，两边不一致。先用 Python 自己的口径把摘要补一致，才能把校验推进
-        // 到证据类型分支，看到 Python 拒绝的是类型而不是摘要。
+        // 得到的是 7，两边不一致。先按 Python 的序列化规则重新计算 SHA-256，才能把校验推进
+        // 到证据类型分支，确认 Python 拒绝的是类型，而不是 SHA-256 不一致。
         'def rehash(ledger):',
         '    for page in ledger["pages"]:',
         '        page["snapshotSha256"]=stable_hash(_page_snapshot_body(page))',
@@ -1429,7 +1429,7 @@ test('主评分行交接在请求前拒绝原页、评分行证明和完整候�
     assert.equal(fs.existsSync(f.options.authorityRoot), false);
 });
 
-test('主评分行决定落盘后应用前再次重核原页，拒绝替换且保留 pending', async t => {
+test('保存主评分行对应论文的决定后，在应用前再次核验原页；页面被替换时拒绝应用，并保留待处理状态', async t => {
     const f = primaryHandoffFixture(t);
     const produced = await arxivAdapter.prepareArxivSourceAuthority({ authorityRoot: f.options.authorityRoot,
         arxivId: '2601.00001', authorityName: 'arxiv-2601.00001.json', apply: true });

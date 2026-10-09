@@ -207,7 +207,7 @@ describe('Manual v6 影子审查', () => {
         }), /历史批次仅允许审计/);
     });
 
-    it('输入与输出 symlink realpath 逃逸均 fail closed', () => {
+    it('输出经符号链接指向目录外、输入文件直接指向目录外时，均被拒绝', () => {
         const fixture = makeFixture();
         const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-shadow-outside-'));
         const outputLink = path.join(fixture.shadowRoot, 'escape');
@@ -341,7 +341,7 @@ describe('Manual 影子基准', () => {
         }), /SHA\/bytes 已变化/);
     });
 
-    it('benchmark 的输入报告 symlink 与输出 symlink 均 fail closed', () => {
+    it('性能对照的输入报告或输出路径使用符号链接时，均被拒绝', () => {
         const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-shadow-benchmark-link-'));
         const currentDir = path.join(projectRoot, 'data', 'current');
         const archiveDir = path.join(projectRoot, 'data', 'archive');

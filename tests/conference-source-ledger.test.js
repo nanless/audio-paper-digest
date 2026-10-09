@@ -177,7 +177,7 @@ test('完整的复核产物、完整的 SHA 证据和派生提取来源，只有
     assert.throws(() => ledger.validateLedger(makeLedger(root, [unknownProvenance])), /unexpected or missing/);
 });
 
-test('createLedger 只升级旧版那种全部到齐的内存撰写结构，已落盘的账目仍然直接失败', t => {
+test('createLedger 只升级字段齐全的旧版内存对象，读取已保存的旧格式来源记录仍会拒绝', t => {
     const root = fixture(t);
     const canonical = member(root, 'icassp-arnumber', '104');
     const legacy = structuredClone(canonical);

@@ -1,7 +1,7 @@
 'use strict';
 
-// 分析豁免能绕过分析门禁，所以这里既测写出的记录本身自洽，也测读取侧对每一类
-// 篡改和产物漂移都会拒绝。全部在临时目录里做，不碰 data/current。
+// 分析豁免允许跳过分析检查，因此这里既检查豁免记录的字段是否对应，
+// 也检查读取时是否拒绝各类篡改和产物变化。全部在临时目录里做，不碰 data/current。
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');

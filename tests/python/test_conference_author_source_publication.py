@@ -120,7 +120,7 @@ class ExistingConferenceAuthorPublicationTest(unittest.TestCase):
             old.validate_generation('odyssey-2026', f['processId'],blog,images)
             self.assertTrue(full_generation['files'])
             self.assertEqual(full_generation['completionReceiptSha256'],read(pd/'completion-receipt.json')['receiptSha256'])
-            print('旧核心消费者实际生成的完整 v2 凭证已核验：',full_generation['generationSha256'])
+            print('旧版核心发布实现实际生成的完整 v2 凭证已核验：',full_generation['generationSha256'])
             for action in [new.review,new.push]:
                 with self.assertRaisesRegex(new.ConferencePublicationError,'会议作者来源未由'):
                     action('odyssey-2026',f['processId'])

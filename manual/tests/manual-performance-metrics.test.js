@@ -71,7 +71,7 @@ describe('Manual 实测性能指标', () => {
         }), /bytes\/SHA/);
     });
 
-    it('缺少明确 timing 字段或篡改 I/O 汇总时 fail closed', () => {
+    it('缺少 timing 字段或 I/O 汇总被篡改时，拒绝指标记录', () => {
         const item = fixture();
         const metric = buildStageMetric({
             date: '2026-08-28', stage: 'artifact_index', status: 'complete',
@@ -92,7 +92,7 @@ describe('Manual 实测性能指标', () => {
         assert.throws(() => verify(changedBytes), /io 汇总/);
     });
 
-    it('指标文件只原子写入 shadow 根，路径 symlink fail closed', () => {
+    it('指标文件只在 shadow 根目录内原子写入，拒绝符号链接路径', () => {
         const item = fixture();
         const metric = buildStageMetric({
             date: '2026-08-28', stage: 'fulltext', status: 'complete',

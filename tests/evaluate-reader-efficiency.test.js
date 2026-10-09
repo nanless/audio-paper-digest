@@ -160,7 +160,7 @@ test('评估持久化最终图像装配计划，来源凭证与两个文件及�
     fs.writeFileSync(f.options.artifactsPath, JSON.stringify(f.artifacts));
     fs.writeFileSync(f.options.snapshotPath, JSON.stringify(f.paper));
     const options = { ...f.options, paperId: id, live: true };
-    // 子进程保留生产入口的新进程约束；仅替换模型生成函数，图像装配和落盘仍走真实实现。
+    // 子进程保留生产入口的新进程约束；仅替换模型生成函数，图像装配和文件保存仍使用实际实现。
     const script = `const Module=require('node:module'), load=Module._load;
 const api=require(${JSON.stringify(require.resolve('../scripts/evaluate-reader-efficiency.js'))});
 let generated=0;

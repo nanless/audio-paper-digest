@@ -136,7 +136,7 @@ describe('Manual v6 工作流与 Merkle spec', () => {
         }), /逐项复用 author/);
     });
 
-    it('task packet 通过 symlink 指向根外文件时 fail closed', () => {
+    it('任务输入清单通过符号链接指向根目录外的文件时，被拒绝', () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-root-'));
         const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-outside-'));
         const outsidePath = path.join(outside, 'artifact.json');

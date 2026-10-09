@@ -172,7 +172,7 @@ test('主任务是否过于宽泛按整个词表判断；该告警不使已有�
     assert.equal(leaf.valid, true, leaf.errors.join('; '));
     assert.equal(leaf.specificityWarning, null);
 
-    // 告警不阻断标签节门禁，也不阻断已封口 taxonomySeal stage 的回放验证。
+    // 告警不使标签节检查失败，也不使已完成 taxonomySeal 阶段的记录重新校验失败。
     assert.strictEqual(contract.validateTagSectionContract(analysis, parsed), null);
     const textSha = value => crypto.createHash('sha256').update(value).digest('hex');
     const binding = {

@@ -1,4 +1,4 @@
-"""发布图片解析器与 URL 不变闸门的离线回归。"""
+"""发布图片解析器及图片 URL 保持不变检查的离线回归。"""
 import importlib.util
 import os
 from pathlib import Path

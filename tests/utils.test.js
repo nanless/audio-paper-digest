@@ -92,7 +92,7 @@ describe('writeFileAtomic', () => {
         }
     });
 
-    it('模式覆盖默认继承，强制成传入的权限位，二进制内容原样落盘', () => {
+    it('显式文件权限覆盖继承值，二进制内容原样保存', () => {
         // 视觉资产登记原来手写 writeFileSync(..., { mode: 0o600 }) + rename，
         // 统一到 helper 后必须继续「一律 0600」，不能继承目标残留下的权限位。
         // 这条断言不是恒真的：没有 mode 选项时下面两次都会保持 0o644。
@@ -1172,7 +1172,7 @@ describe('loadPublishedIdsFromBlog', () => {
         assert.deepStrictEqual(Object.keys(invocation.options.env).sort(), ['LC_ALL', 'PATH']);
     });
 
-    it('Git HEAD 扫描异常时 fail-closed，不能回退工作树', () => {
+    it('扫描 Git HEAD 失败时停止去重，不能改用工作目录文件', () => {
         const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'paper-blog-head-fail-'));
         fs.mkdirSync(path.join(root, '.git'), { recursive: true });
         fs.mkdirSync(path.join(root, 'content', 'posts'), { recursive: true });
@@ -1189,7 +1189,7 @@ describe('loadPublishedIdsFromBlog', () => {
         );
     });
 
-    it('目录存在但 Markdown 读取失败时 fail-closed', () => {
+    it('博客目录存在但 Markdown 读取失败时，停止去重', () => {
         const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'paper-blog-fail-'));
         const post = path.join(root, 'content', 'posts', 'post.md');
         fs.mkdirSync(path.dirname(post), { recursive: true });
