@@ -12,7 +12,7 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 const HUGO_VERSION = '0.160.1';
 const EXCLUDED_DIRECTORIES = new Set([
     'node_modules', '.venv', 'data', 'logs', '.git', '__pycache__', '.pytest_cache',
-    '.agents', '.codex'
+    '.agents', '.codex', 'tmp'
 ]);
 
 function parseOptions(args) {

@@ -21,7 +21,7 @@
 | 改进解读写法，比较重写前后的文章 | [解读写作与比较](reader-writing.md) | [维护约定](maintenance.md) |
 | 设计标签、检查历史标签映射或分类显示 | [标签体系设计](tag-system-design.md) | [实施计划](tag-system-implementation.md)、[显示规则](tag-display-policy.md)和 `npm run tags:preview` |
 | 抓取并处理 2026 年新会议论文 | [会议工作流](conference-workflow.md) | `conference:new:*`；[来源研究记录](research/2026-conferences/report-source.md)说明研究时的覆盖范围 |
-| 整理本地会议 PDF，处理历史会议论文 | [会议工作流](conference-workflow.md) | 原 `conference:*` 在历史工作区运行；发布历史页面另查[历史发布流程](history-direct-publication.md) |
+| 整理本地会议 PDF，处理历史会议论文 | [会议工作流](conference-workflow.md) | 原 `conference:*` 在当前工作区通过跨角色开关运行；发布历史页面另查[历史发布流程](history-direct-publication.md) |
 | 查看会议处理曾出现的故障与修复范围 | [2026-09-12 修复记录](conference-repair-notes.md) | 文中的验证结果与待修旧页面属于记录当时的范围 |
 | 核对旧会议分支的迁移限制 | [2026-09-06 分支审查](conference-branch-audit.md) | [当前会议工作流](conference-workflow.md) |
 | 显式运行人工流程 | [Manual 入口](../manual/README.md) | [人工流程操作说明](../manual/docs/workflow.md) |
@@ -40,7 +40,7 @@
 
 脚本成功退出后，仍需完成内置生图及目检，或记录用户明确取消配图的选择。宣告任务完成前，还须确认 GitHub Pages 构建、部署及每篇页面核验通过，重新读取最终状态。具体要求见[主流程](workflow.md)。
 
-新会议的摘要提取与每会独立筛选配置见[会议工作流](conference-workflow.md)，首次运行、并发和恢复见[筛选健康检查、并发与恢复](conference-workflow.md#筛选健康检查并发与恢复)。历史重写只在历史工作区运行；独立历史发布入口已存在，但生成了暂存页面并不代表整批已经审查或发布。
+新会议的摘要提取与每会独立筛选配置见[会议工作流](conference-workflow.md)，首次运行、并发和恢复见[筛选健康检查、并发与恢复](conference-workflow.md#筛选健康检查并发与恢复)。历史重写在当前工作区运行，旧历史工作区已废弃；独立历史发布入口已存在，但生成了暂存页面并不代表整批已经审查或发布。
 
 ## English documentation
 

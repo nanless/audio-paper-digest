@@ -31,9 +31,9 @@ python3.11 -m venv .venv
 cp env.example .env
 ```
 
-先确认当前工作区用途，再运行 `npm run workspace:role -- status`。日更目录必须是 `daily`，全历史目录必须是 `history`。角色标记缺失或真实路径不符时先停止，确认用途后才用 `npm run workspace:role -- set daily|history [--force]` 绑定；不要无条件强制设置。
+先确认当前工作区用途，再运行 `npm run workspace:role -- status`。当前目录保持 `daily`，日更、会议与历史维护都在此执行。旧历史工作区已废弃。角色标记缺失或真实路径不符时先停止，确认用途后才用 `npm run workspace:role -- set daily|history [--force]` 绑定；不要无条件强制设置。
 
-本机日更目录已在 `.env` 设 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`：`history:*` 入口会跨角色放行并打印提示。这个开关只放宽「daily 工作区执行 history 命令」，反向仍拒绝，也不解除「两个工作区不得同时发布」。
+本机日更目录已在 `.env` 设 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`：`history:*` 入口会跨角色放行并打印提示。这个开关只放宽「daily 工作区执行 history 命令」，反向仍拒绝，也不允许日更、会议和历史任务同时生成、审查或推送博客；执行任务的 Agent 负责错峰。
 
 在 `.env` 至少配置以下字段。仓库文档当前推荐模型为 `mimo-v2.6-flash`，实际模型由项目配置指定：
 
@@ -218,7 +218,7 @@ npm run blog:push -- --date YYYY-MM-DD
 
 ## 历史直接重写
 
-全历史任务只能在 `audio-paper-digest-rewrite-all` 工作区执行。当前路线 `direct-local-first` 先把来源和私有产物准备好，再独立发布：
+全历史任务在当前 `audio-paper-digest` 工作区执行，运行资料保存在本项目 `data/runtime/`；不再使用旧历史工作区。当前路线 `direct-local-first` 先把来源和私有产物准备好，再独立发布：
 
 ```text
 保留的会议元数据/PDF + 冻结的历史 arXiv 链接

@@ -22,7 +22,7 @@ pwd
 npm run workspace:role -- status
 ```
 
-日更目录应为 `daily`，全历史副本应为 `history`。角色标记缺失或绑定的真实路径不匹配时，先停止运行。确认目录用途后，再用 `npm run workspace:role -- set daily` 或 `npm run workspace:role -- set history` 绑定；不要用 `--force` 把历史工作区改成日更工作区来绕过检查。
+当前目录的角色保持 `daily`；每日、会议和历史任务都在此运行，历史入口使用本机已配置的 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`。旧历史工作区已废弃。角色标记缺失或绑定的真实路径不匹配时，先停止运行。确认目录用途后，再用 `npm run workspace:role -- set daily` 或 `npm run workspace:role -- set history` 绑定；不要用 `--force` 把历史工作区改成日更工作区来绕过检查。
 
 ## 最小 `.env`
 

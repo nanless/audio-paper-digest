@@ -154,7 +154,7 @@ function requireWorkspaceRole(requiredRole, root = path.resolve(__dirname, '..')
         }
         console.warn(`[workspace-role] 跨角色放行：当前 workspace role=${marker.role}，`
             + `命令要求 role=${requiredRole}（${CROSS_ROLE_ENV}=${CROSS_ROLE_VALUE}）。`
-            + '生成、审查和推送仍必须与另一个工作区错开时间：两个工作区不得同时发布。');
+            + '日更、会议和历史任务的生成、审查和推送必须错峰，不得同时发布；旧历史工作区已废弃。');
     }
     return marker;
 }

@@ -38,13 +38,13 @@ cp env.example .env
 ```
 
 Before starting, confirm which checkout you are using and run `npm run workspace:role -- status`.
-The daily checkout must be `daily`; the full-history checkout must be `history`. Stop if its role
+Use the current `daily` checkout for daily, conference, and historical work; the old history checkout is retired. Stop if its role
 marker is missing or bound to another real path. Once you have confirmed the purpose, bind the appropriate
 role with `npm run workspace:role -- set daily|history [--force]`; do not force a role change by default.
 
 The local daily checkout sets `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` in `.env`, so `history:*` entry points
 run across roles and print a notice. The switch only allows a `daily` checkout to run `history` commands;
-the reverse stays refused, and it does not lift the rule that the two checkouts must never publish at the same time.
+the reverse stays refused. The executing agent must serialize blog generation, review, and publication across daily, conference, and historical work.
 
 Set at least these fields in the project `.env`. The current documented model recommendation is
 `mimo-v2.6-flash`; the project configuration is what selects the actual model:
@@ -268,7 +268,7 @@ single-paper publication does not amount to full-batch publication or visual com
 
 ## Historical direct rewrite
 
-Full-history work belongs only in the `audio-paper-digest-rewrite-all` checkout. Its current
+Full-history work uses the current `audio-paper-digest` checkout and its `data/runtime/` directory. Do not use the retired history checkout or copy its checkpoints into this one. The current
 `direct-local-first` route prepares sources and private output before independent publication:
 
 ```text

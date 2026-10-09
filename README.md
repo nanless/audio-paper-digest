@@ -36,7 +36,7 @@ arXiv + HuggingFace
 
 ## 全历史重写
 
-全历史工作只在 `audio-paper-digest-rewrite-all` 工作区执行。当前采用 `direct-local-first` 路线：每轮 arXiv
+全历史工作与日更、会议整理统一在当前工作区执行，角色保持 `daily`，历史入口使用 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`。旧历史工作区已废弃，各类发布由执行任务的 Agent 错峰安排。当前采用 `direct-local-first` 路线：每轮 arXiv
 重写重新获取官方文本和 PDF；会议论文使用已核验 SHA 的本地元数据和 PDF。旧博客正文和旧分析不能用于写作。
 OpenReview 不可达时，默认停止，不自行改用其他来源。唯一由代码白名单和用户授权的跨标题例外
 `n1mAjfRDZ6` 可导入作者发布在 SSRN 的早期预印本，但分析输入、页面顶部和 staging manifest 都必须明示

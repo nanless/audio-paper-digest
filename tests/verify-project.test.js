@@ -31,7 +31,7 @@ test('快速计划是显式的语法与数据子集；非法参数直接失败',
 test('源码遍历在任意深度都排除 runtime/vendor 目录和符号链接', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-verify-test-'));
     try {
-        for (const directory of ['scripts', 'manual/scripts', 'node_modules', '.venv', 'data', 'logs', '.git', 'nested/node_modules']) {
+        for (const directory of ['scripts', 'manual/scripts', 'node_modules', '.venv', 'data', 'logs', '.git', 'nested/node_modules', 'tmp', 'nested/tmp']) {
             fs.mkdirSync(path.join(root, directory), { recursive: true });
             fs.writeFileSync(path.join(root, directory, 'sample.js'), '');
         }

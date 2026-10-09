@@ -6,12 +6,12 @@
 
 ## 默认目标与最短路径
 
-### 工作区分工（必须先核对 `pwd`）
+### 当前工作区（必须先核对 `pwd`）
 
-- `/Users/francis7999/code/github_repos/audio-paper-digest` 专用于新论文筛选、日更博客生成、审查和推送。用户已决定历史功能也在当前目录跑：本机 `.env` 设了 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`，`history:*` 入口会跨角色放行并打印提示。这个开关只放宽「daily 工作区执行 history 命令」，history 工作区执行 daily 命令仍然拒绝；它不改变下一条的发布时间约束。
-- `/Users/francis7999/code/github_repos/audio-paper-digest-rewrite-all` 专用于全历史论文页、每日汇总和会议汇总的来源核验、重写、重新分类、私有页面生成和历史发布。
-- 两个工作区不得同时生成、审查、推送博客，或修改同一远端 `main`。历史工作区发布前，必须停止日更发布，同步代码仓库和博客仓库的最新远端 `main`，再基于最新 Git 基线重新生成发布凭证。
-- 长期历史任务的运行数据只保存在 `audio-paper-digest-rewrite-all/data/runtime/`；不把检查点复制回日更工作区，也不手工合并两边的运行数据 JSON。
+- 每日速递、新会议整理和历史博客维护统一在 `/Users/francis7999/code/github_repos/audio-paper-digest` 执行。当前角色保持 `daily`；本机 `.env` 的 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` 允许历史入口在此运行，反向放行仍然禁止。
+- 旧 `audio-paper-digest-rewrite-all` 工作区已废弃，不再进入、修改或启动任务；不从旧目录复制检查点或手工合并运行数据。
+- 当前任务的运行数据保存在本项目 `data/runtime/`。日更、会议、历史任务的生成、审查和推送必须错峰，由执行任务的 Agent 检查运行进程并安排；共享博客锁继续防止并发修改。
+- 历史发布前先结束其他发布任务，同步代码仓库和博客仓库的最新远端 `main`，再基于最新 Git 基线生成审查与发布凭证。旧凭证不能因切换工作区而直接复用。
 
 用户说“运行/进行 YYYY-MM-DD 论文速递”时，默认执行完整 LLM/API 日更：
 
@@ -26,7 +26,7 @@ npm run digest:prepare -- YYYY-MM-DD
 
 ## 运行前六项检查
 
-0. 先运行 `npm run workspace:role -- status`。原日更目录必须是 `daily`，全历史副本必须是 `history`；角色标记缺失或真实路径不匹配时先停止，确认工作区用途后才用 `npm run workspace:role -- set daily|history [--force]` 绑定。
+0. 先运行 `npm run workspace:role -- status`。当前目录必须是 `daily`，历史命令须通过已配置的跨角色开关运行；角色标记缺失或真实路径不匹配时先停止，确认工作区用途后才用 `npm run workspace:role -- set daily|history [--force]` 绑定。
 1. Node 满足 `>=20.18.1 <21 || >=22.3.0`，依赖已安装。
    默认博客/视觉 Python 入口还要求 Python 3.11+ 与 OpenSSL；`scripts/python-runtime.sh` 优先使用项目 `.venv`，再选择并校验 `python3.11` / `python3`。
 2. 项目根 `.env` 存在，加载器会将文件权限收紧为 `0600`。

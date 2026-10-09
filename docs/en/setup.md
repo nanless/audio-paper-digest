@@ -22,7 +22,7 @@ pwd
 npm run workspace:role -- status
 ```
 
-The daily checkout must have role `daily`. The full-history checkout must have role `history`. Stop if the marker is missing or its recorded real path does not match. Once you have confirmed what the directory is for, bind it with `npm run workspace:role -- set daily` or `npm run workspace:role -- set history`. Do not force a history checkout into the daily role just to get past a check.
+Keep the current checkout in the `daily` role. Daily, conference, and historical tasks run here, with `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` for historical commands. The old history checkout is retired. Stop if the marker is missing or its recorded real path does not match. Once you have confirmed what the directory is for, bind it with `npm run workspace:role -- set daily` or `npm run workspace:role -- set history`. Do not force a history checkout into the daily role just to get past a check.
 
 ## Minimum `.env`
 

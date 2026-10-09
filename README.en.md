@@ -71,7 +71,7 @@ Confirm what this checkout is for, then inspect its role:
 npm run workspace:role -- status
 ```
 
-The daily checkout must be `daily`; the full-history checkout must be `history`. Stop if the marker is
+Keep the current checkout in the `daily` role for daily, conference, and historical work. Use `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` for historical commands; the old history checkout is retired. Stop if the marker is
 missing or its real path does not match. Only after confirming the directory purpose, use
 `npm run workspace:role -- set daily|history [--force]` to bind the appropriate role.
 
@@ -111,7 +111,7 @@ or another page review.
 
 ## Full-history rewrite
 
-Full-history work runs only in the `audio-paper-digest-rewrite-all` workspace. Its active route is
+Daily, conference, and historical work now share the current `audio-paper-digest` checkout. Keep its role as `daily` and enable `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` for historical commands. The old history checkout is retired. The executing agent must serialize generation, review, and publication across these workflows. The active historical route is
 `direct-local-first`:
 
 ```text

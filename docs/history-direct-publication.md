@@ -2,7 +2,7 @@
 
 `history:direct-publication` 发布当前[全历史重写流程](history-rewrite.md)生成的页面。它读取 `historical-direct-rewrite-plan-v5`、对应执行记录、`historical-direct-aggregate-projection-v3`、完整单篇暂存页和 `historical-direct-aggregate-v2` 汇总，逐项核对实际文件。它不读取日更正式分析，不生成日更 schema-v3 凭证，也不接受旧 `history:publication` 私有文件作为当前来源证明。
 
-全历史发布在历史工作区进行，发布前停止日更发布，同步代码与博客最新远端 `main`，按 [AGENTS.md](../AGENTS.md) 核对角色、基线和任务范围。入口已经存在，不表示某次历史现场已完成重写或发布。
+全历史发布在当前工作区进行，发布前停止其他日更、会议和历史发布任务，同步代码与博客最新远端 `main`，按 [AGENTS.md](../AGENTS.md) 核对角色、基线和任务范围。入口已经存在，不表示某次历史现场已完成重写或发布。
 
 ## 发布顺序与页面覆盖
 
