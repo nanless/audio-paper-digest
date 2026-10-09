@@ -36,7 +36,7 @@
 | `signal` | 7 | 主要研究什么信号 |
 | `application` | 11 | 主要应用场景是什么 |
 | `research_focus` | 10 | 主要研究哪种性质或风险 |
-| `artifact` | 4 | 论文贡献了什么产物 |
+| `artifact` | 4 | 论文贡献了哪些数据集、工具等研究成果 |
 | `scientific_topic` | 11 | 主要解释什么科学现象 |
 | `model_family` | 5 | 哪类基础模型承担关键角色 |
 
@@ -297,7 +297,7 @@ npm run history:postprocess -- --apply \
 
 ### 阶段 C：闭合剩余 4038 页的来源身份
 
-旧草案拟先处理 pending 中具有唯一直接 arXiv 线索的页面，让 `history:arxiv-batch` 获取官方来源授权并按 crosswalk CAS 写入，不调用 LLM：
+旧草案拟先处理 pending 中具有唯一直接 arXiv 线索的页面，让 `history:arxiv-batch` 获取官方来源授权，并在整份页面与来源对应表的状态 SHA 与处理决定记录要求的旧状态 SHA 一致后，更新页面状态并保存处理决定，不调用 LLM：
 
 ```bash
 npm run history:arxiv-batch -- --dry-run \
@@ -310,7 +310,7 @@ npm run history:arxiv-batch -- --apply \
 
 随后拟改用数值 limit、最多 3 并发，每批重新读取 crosswalk 状态。这些 arxiv-batch 命令已不受当前参数解析器支持，只保留历史原形；不能扫描普通 pending。当前入口只接新 arXiv 获取失败后生成的命名交接文件，见开头说明。analyze-batch/postprocess 的 pilot|N 参数没有因此删除。
 
-旧多线索和冲突线索须由 history:resolve-conflict 选择 inventory 已有的非标题线索，标题相似度不能产生 verified。无可靠 arXiv 身份的页面拟交会议或其他来源适配器，旧正文、旧标题、PDF 文件名相似度和搜索结果不能当成已核身份。原方案只有 pending=0 且全部来源授权可重放才 finalize，不能在此前报告“全部历史论文”已核验。
+旧多线索和冲突线索须由 history:resolve-conflict 选择 inventory 已有的非标题线索，标题相似度不能产生 verified。无可靠 arXiv 身份的页面拟交会议或其他来源适配器，旧正文、旧标题、PDF 文件名相似度和搜索结果不能当成已核身份。原方案只有 pending=0 且全部来源授权均能从原记录重新核验才 finalize，不能在此前报告“全部历史论文”已核验。
 
 ### 阶段 D：ICASSP 2026 真实会议链
 
@@ -361,7 +361,7 @@ npm run history:publication -- generate --apply \
 
 ## 6. 当时拟定的完成定义（已废止）
 
-归档草案将“全部历史博客已重写、重标并发布”限定为：4185 个冻结论文页面的来源均可重放，每篇唯一论文只从原始来源证据生成一次分析和 Reader；摘要、评分、Reader 和分类证明符合当时版本且能核验。3–5 标签来自同一词表，主任务和主方法明确，没有别名输出或祖先重复。
+归档草案将“全部历史博客已重写、重标并发布”限定为：4185 个冻结论文页面的来源均能从原记录重新核验，每篇唯一论文只从原始来源证据生成一次分析和 Reader；摘要、评分、Reader 和分类证明符合当时版本且能核验。3–5 标签来自同一词表，主任务和主方法明确，没有别名输出或祖先重复。
 
 重复页面使用同一论文结果分别生成，保留原 URL。每日及会议汇总只读取完整成员；全量审查没有阻断问题，固定 Hugo 检查通过，博客只提交 manifest 允许的差异。推送后远端 main OID 与本地提交相同，最终状态列明页面数、唯一论文数、成功、失败和阻断数，不能将部分完成称为全部完成。
 

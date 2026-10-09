@@ -1,7 +1,7 @@
 'use strict';
 
-// 在进入会议暂存之前，核对 Python PDF 抽取产物的确定性结果。抽取器可能带上从官方
-// PDF 复算出来的结构，但原始 PDF 才是权威。
+// 在进入会议暂存之前，核对 Python 从 PDF 抽取的结果。抽取器可能附上从官方
+// PDF 重新计算的结构化记录，但仍须以原始 PDF 为依据。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -37,8 +37,8 @@ const MAX_JSON_BYTES = 64 * 1024 * 1024;
 const MAX_METADATA_BYTES = 16 * 1024 * 1024;
 const MAX_PDF_BYTES = 256 * 1024 * 1024;
 const MAX_TEXT_BYTES = 64 * 1024 * 1024;
-// Python 抽取器在 base64 编码前把单个内嵌图片限制在 2 MiB。receipt 校验器要与这个
-// 上限保持一致，同时整个 JSON 产物的上限仍是 64 MiB。
+// Python 抽取器在 base64 编码前把单个内嵌图片限制在 2 MiB。抽取凭证校验器要与这个
+// 上限保持一致，同时整个 JSON 文件的上限仍是 64 MiB。
 const MAX_FIGURE_ASSET_BASE64_CHARS = 4 * Math.ceil((2 * 1024 * 1024) / 3) + 4;
 const EXTRACTION_HANDLES = new WeakSet();
 const EXTRACTION_HANDLE_DATA = new WeakMap();

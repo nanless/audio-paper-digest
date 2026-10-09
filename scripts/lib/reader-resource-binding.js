@@ -141,8 +141,8 @@ function paperSourceResourceFacets(sourceText, sourceToken) {
 /**
  * 从已核验的论文文本里提取仓库引用。单个 URL 可能有意给出多个
  * 带类型的引用（例如代码 + 数据集）。断行恢复只限同一段落内的
- * URL 分隔符；保留精确的断开的 token，方便之后用来源引文重放
- * 来证明规范化后的 HTTPS URL。
+ * URL 分隔符；保留原文中断行的地址文本，供后续结合原文引文重新核对
+ * 恢复后的 HTTPS URL。
  */
 function extractPaperSourceRepositoryCandidates(sourceText) {
     const source = String(sourceText || '');
