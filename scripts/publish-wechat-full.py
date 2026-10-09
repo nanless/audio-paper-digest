@@ -382,7 +382,7 @@ def main():
             for img_url in imgs:
                 cdn_url = img_map.get(img_url)
                 if cdn_url:
-                    h += f'<p><img src="{cdn_url}" data-src="{cdn_url}" /></p>\n'
+                    h += f'<p><img src="{html.escape(cdn_url)}" data-src="{html.escape(cdn_url)}" /></p>\n'
 
         paper_htmls.append((h, paper))
 
@@ -430,34 +430,34 @@ def main():
         else:
             part_title = f"语音/音乐/音频论文速递 {today} | part {part_num} | {part_paper_count}篇论文"
 
-        html = f'<h2 style="text-align:center;">{part_title}</h2>\n'
+        article_html = f'<h2 style="text-align:center;">{part_title}</h2>\n'
         if total_parts > 1:
-            html += f'<p style="text-align:center;color:#888;">共 {total} 篇，分 {total_parts} 部分发布，当前第 {part_num} 部分</p>\n'
+            article_html += f'<p style="text-align:center;color:#888;">共 {total} 篇，分 {total_parts} 部分发布，当前第 {part_num} 部分</p>\n'
         else:
-            html += f'<p style="text-align:center;color:#888;">共分析 {total} 篇论文</p>\n'
-        html += '<hr/>\n'
+            article_html += f'<p style="text-align:center;color:#888;">共分析 {total} 篇论文</p>\n'
+        article_html += '<hr/>\n'
 
         if part_num == 1:
-            html += overview
+            article_html += overview
 
         for idx in part_indices:
             ph, _ = paper_htmls[idx]
-            html += ph + SEPARATOR
+            article_html += ph + SEPARATOR
 
-        html += footer
+        article_html += footer
 
         if dry_run:
-            print(f"\n🧪 dry-run: 跳过创建草稿 Part {part_num} ({len(html)} chars)")
+            print(f"\n🧪 dry-run: 跳过创建草稿 Part {part_num} ({len(article_html)} chars)")
             continue
 
-        print(f"\n📝 创建草稿 Part {part_num}... ({len(html)} chars)")
+        print(f"\n📝 创建草稿 Part {part_num}... ({len(article_html)} chars)")
 
         payload = json.dumps({
             "articles": [{
                 "title": part_title,
                 "author": os.environ.get('PAPER_DIGEST_AUTHOR', ''),
-                "digest": html.replace('<','').replace('>','')[:120],
-                "content": html,
+                "digest": article_html.replace('<','').replace('>','')[:120],
+                "content": article_html,
                 "content_source_url": "",
                 "thumb_media_id": thumb_id,
                 "need_open_comment": 0,
