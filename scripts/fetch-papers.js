@@ -596,7 +596,7 @@ async function callModelForFilter(messages, maxTokens = 1000, maxRetries = FILTE
             // 必须先拒绝截断终态，再接受任何非空正文。
             const content = extractFilterResponseContent(apiType, response.body, attemptMaxTokens);
             if (content !== null) return content;
-            throw new Error(`Invalid response (HTTP ${response.statusCode}): ${response.raw.substring(0, 200)}`);
+            throw new Error(`响应格式无效（HTTP ${response.statusCode}）： ${response.raw.substring(0, 200)}`);
         } catch (err) {
             const classified = classifyFilterRequestError(err, { secrets: runtimeApiKeys });
             lastError = classified;
@@ -721,7 +721,7 @@ function httpsRequestWithProxy(
                 const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
                 responseBytes += buffer.length;
                 if (responseBytes > maxResponseBytes) {
-                    const error = new Error(`arXiv response exceeds ${maxResponseBytes} byte limit`);
+                    const error = new Error(`arXiv 响应超过 ${maxResponseBytes} 字节上限`);
                     error.code = 'ARXIV_RESPONSE_TOO_LARGE';
                     res.destroy?.(error);
                     req.destroy(error);
@@ -740,7 +740,7 @@ function httpsRequestWithProxy(
         });
 
         deadlineTimer = setTimeout(() => {
-            const error = new Error(`arXiv request deadline exceeded after ${timeoutMs}ms`);
+            const error = new Error(`arXiv 请求超过 ${timeoutMs} 毫秒期限`);
             error.code = 'ARXIV_REQUEST_DEADLINE_EXCEEDED';
             req.destroy(error);
             finish(reject, error);
@@ -748,7 +748,7 @@ function httpsRequestWithProxy(
 
         req.on('error', error => finish(reject, error));
         req.on('timeout', () => {
-            const error = new Error(`arXiv request socket timeout after ${timeoutMs}ms`);
+            const error = new Error(`arXiv 请求连接在 ${timeoutMs} 毫秒后超时`);
             error.code = 'ARXIV_REQUEST_SOCKET_TIMEOUT';
             req.destroy(error);
             finish(reject, error);
@@ -1144,7 +1144,7 @@ async function fetchAbstracts(papers, concurrency = 1, options = {}) {
                         }
                     }
                 }
-                throw lastError || new Error('unknown error');
+                throw lastError || new Error('未知错误');
             })();
             abstractCache.set(paperId, ownedPromise);
             try {

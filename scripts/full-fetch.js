@@ -1110,8 +1110,7 @@ function cleanOldData(filePath, name, today, options = {}) {
                 fs.copyFileSync(filePath, backupPath);
                 console.log(`  [清理] ${name}: 清理前已备份到 ${backupPath}`);
             } catch (e) {
-                console.log(`  [清理] ${name}: 清理前备份失败，跳过清理（${e.message}）`);
-                return;
+                throw new Error(`清理前备份失败，已停止新批次：${name}：${e.message}`, { cause: e });
             }
             const now = getBeijingISOString();
             data.timestamp = now;
