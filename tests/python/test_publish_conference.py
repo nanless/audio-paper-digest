@@ -691,6 +691,18 @@ class ConferencePublishTests(unittest.TestCase):
 class PreContentReviewV2ReceiptTest(ConferencePublishTests):
     """已发布 v2 凭证的旧格式识别，以及识别边界。"""
 
+    def setUp(self):
+        super().setUp()
+        restore_environment_after(self)
+        reviewer = M.load_publish_to_blog()
+        runtime = self.root / 'review-runtime'
+        runtime.mkdir()
+        (runtime / 'hugo.toml').write_text('baseURL = "https://example.invalid/"\n')
+        reviewer.BLOG_REPO = runtime
+        loader = mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer)
+        loader.start()
+        self.addCleanup(loader.stop)
+
     def v2_generation(self):
         page = self.record()
         body = {'version': 2, 'conferenceId': 'uai-2026',
@@ -725,7 +737,6 @@ class PreContentReviewV2ReceiptTest(ConferencePublishTests):
 
     def test_v2_receipt_with_failed_content_review_stays_rejected(self):
         # 有 contentReview 但没通过、或逐页记录不符的凭证，任何时候都不放行。
-        restore_environment_after(self)  # M.load_publish_to_blog() 会把 .env 写进 os.environ
         generation = self.v2_generation()
         failed = {'status': 'failed', 'protocol': 'p', 'pages': []}
         with self.assertRaisesRegex(M.ConferencePublicationError, '语义 review'):

@@ -239,6 +239,14 @@ class GitPublicationTest(unittest.TestCase):
         # publisher.load_publish_to_blog() 导入 publish-to-blog.py 时会读 .env 并写
         # os.environ；调用方是真实用例，用完还给进程原来的环境。
         restore_environment_after(self)
+        reviewer = publisher.load_publish_to_blog()
+        runtime = self.root / 'review-runtime'
+        runtime.mkdir()
+        (runtime / 'hugo.toml').write_text('baseURL = "https://example.invalid/"\n')
+        reviewer.BLOG_REPO = runtime
+        loader = mock.patch.object(publisher, 'load_publish_to_blog', return_value=reviewer)
+        loader.start()
+        self.addCleanup(loader.stop)
         self.cid, self.pid = 'test-2026', '11111111-1111-4111-8111-111111111111'
         source = self.root / 'source.md'
         source.write_bytes(b'approved')
