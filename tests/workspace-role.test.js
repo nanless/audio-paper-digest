@@ -14,7 +14,7 @@ function root() {
 
 test('工作区标记是私有的、精确的、按角色授权的，只在显式操作时切换', () => {
     const dir = root();
-    assert.throws(() => role.readWorkspaceRole(dir), /marker 缺失/);
+    assert.throws(() => role.readWorkspaceRole(dir), /工作区角色标记缺失/);
     const daily = role.writeWorkspaceRole('daily', { root: dir });
     assert.equal(daily.role, 'daily');
     assert.equal(daily.workspaceRealpath, dir);
@@ -43,7 +43,7 @@ test('复制来的标记不能授权另一个真实路径，除非显式强制�
 test('未知角色、标记结构漂移、权限过弱和符号链接根目录都直接失败', () => {
     const dir = root();
     role.writeWorkspaceRole('daily', { root: dir });
-    assert.throws(() => role.requireWorkspaceRole('unknown', dir), /未知 required/);
+    assert.throws(() => role.requireWorkspaceRole('unknown', dir), /未知的工作区角色要求/);
     const marker = role.markerPath(dir);
     const value = JSON.parse(fs.readFileSync(marker));
     fs.writeFileSync(marker, JSON.stringify({ ...value, extra: true }));
@@ -54,7 +54,7 @@ test('未知角色、标记结构漂移、权限过弱和符号链接根目录�
     if (process.platform !== 'win32') assert.throws(() => role.readWorkspaceRole(dir), /0600/);
     const link = `${dir}-link`;
     fs.symlinkSync(dir, link);
-    assert.throws(() => role.workspaceRoot(link), /不得为 symlink/);
+    assert.throws(() => role.workspaceRoot(link), /工作区根目录必须存在且不能是符号链接/);
 });
 
 test('直接命令推断和包入口覆盖 daily/history 边界', () => {

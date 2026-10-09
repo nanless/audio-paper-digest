@@ -1055,7 +1055,7 @@ function buildAnalysis(paper, record, options = {}) {
         : baseSummary;
     // 这些紧凑字段仍是独立的审计与来源输入。它们不会被前置到已完成的
     // 编辑小节里：那样做会产出一篇明显是字段拼装的文章，把同一个方法
-    // 和贡献重复讲两遍。没有编辑正文的旧记录仍走显式的路线图兜底。
+    // 和贡献重复讲两遍。旧记录没有编辑正文时，仍用已保存的方法字段生成路线说明。
     const baseMethodBody = editorial.method ? rebalanceEditorialParagraphs(editorial.method, 5) : distinctParagraphs(
         `**路线概览。** ${record.method}`,
         `**训练与组件关系。** ${record.method2}`,

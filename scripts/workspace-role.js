@@ -16,7 +16,7 @@ function workspaceRoot(value) {
     const root = path.resolve(value === undefined ? path.resolve(__dirname, '..') : value);
     const stat = fs.lstatSync(root, { throwIfNoEntry: false });
     if (!stat?.isDirectory() || stat.isSymbolicLink()) {
-        throw new Error('workspace root 必须是存在的真实目录且不得为 symlink');
+        throw new Error('工作区根目录必须存在且不能是符号链接');
     }
     return fs.realpathSync(root);
 }
@@ -39,9 +39,9 @@ function validateMarker(value, root) {
 function readWorkspaceRole(root = path.resolve(__dirname, '..')) {
     const file = markerPath(root);
     const before = fs.lstatSync(file, { throwIfNoEntry: false });
-    if (!before) throw new Error(`workspace role marker 缺失；先运行 npm run workspace:role -- set daily|history`);
+    if (!before) throw new Error(`工作区角色标记缺失；先运行 npm run workspace:role -- set daily|history`);
     if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1) {
-        throw new Error('workspace role marker 必须是单链接普通文件且不得为 symlink');
+        throw new Error('工作区角色标记必须是只有一个硬链接的普通文件，不能是符号链接');
     }
     const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0);
     let fd;
@@ -50,10 +50,10 @@ function readWorkspaceRole(root = path.resolve(__dirname, '..')) {
         fd = fs.openSync(file, flags);
         const opened = fs.fstatSync(fd);
         if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== before.dev || opened.ino !== before.ino) {
-            throw new Error('workspace role marker 在读取期间发生身份漂移');
+            throw new Error('工作区角色标记不是只有一个硬链接的普通文件，或打开的文件与先前检查的文件不同。');
         }
         if (process.platform !== 'win32' && (opened.mode & 0o077) !== 0) {
-            throw new Error('workspace role marker 权限必须为 0600');
+            throw new Error('工作区角色标记权限必须为 0600');
         }
         raw = fs.readFileSync(fd, 'utf8');
     } finally {
@@ -61,7 +61,7 @@ function readWorkspaceRole(root = path.resolve(__dirname, '..')) {
     }
     let value;
     try { value = JSON.parse(raw); }
-    catch (error) { throw new Error(`workspace role marker JSON 损坏: ${error.message}`); }
+    catch (error) { throw new Error(`工作区角色标记的 JSON 无法解析: ${error.message}`); }
     return validateMarker(value, root);
 }
 
@@ -142,7 +142,7 @@ function allowsCrossRole(actualRole, requiredRole, root) {
 }
 
 function requireWorkspaceRole(requiredRole, root = path.resolve(__dirname, '..')) {
-    if (!ROLES.includes(requiredRole)) throw new Error(`未知 required workspace role: ${requiredRole}`);
+    if (!ROLES.includes(requiredRole)) throw new Error(`未知的工作区角色要求: ${requiredRole}`);
     const marker = readWorkspaceRole(root);
     if (marker.role !== requiredRole) {
         // realpath 校验已经在 readWorkspaceRole 里做完；开关不碰它。

@@ -460,8 +460,8 @@ def validate_image_narrative_contract(paper):
         plan = plans_by_url.get(url)
         if plan is None and not strict_plan_binding:
             # 兼容旧的无版本号 API 清单：它们没有保存重建 URL -> imageNumber
-            # 映射所需的下载候选下标。带版本号的新清单不再走这条只比对正文的
-            # 兜底路径。
+            # 映射所需的下载候选下标。只有这些旧清单按相邻正文匹配图片计划，
+            # 带版本号的新清单不能采用此兼容处理。
             matched_index = next((position for position, candidate in enumerate(unresolved_plans)
                                   if _normalize_image_narrative_text(candidate.get('lead')) == lead
                                   and _normalize_image_narrative_text(candidate.get('explanation')) == explanation), None)
@@ -1928,7 +1928,7 @@ def _validate_current_manual_research_identity(takeover, policy, paper_id, task_
 
 
 def validate_manual_v6_payload(paper):
-    """校验并确定性地重放一篇规范的 Manual v6 文章。
+    """校验 Manual v6 记录，并按固定规则从正文分块生成文章。
 
     返回的文章只由受控的 longform 块组成。旧的
     ``manualTakeover.readerArticle`` 只用于比对内容是否一致，绝不参与渲染。
@@ -3584,10 +3584,10 @@ def find_cross_section_duplicate_sentences(analysis, limit=3):
 
 
 def validate_manual_depth_contract_v2(analysis):
-    """复刻 Node 的 full-text-evidence-v2 质量闸。
+    """按 Node 的 full-text-evidence-v2 规则检查分析正文。
 
-    开源 URL 闸需要来源全文，而全文不在规范发布记录里；该闸只在 Node
-    摄入阶段执行。其余检查在这里作为发布阶段的兜底再做一遍。
+    检查开源 URL 需要来源全文，而全文不在规范发布记录里；这项检查只在 Node
+    导入分析时执行。其余检查在发布前再次执行。
     """
     heading_issue = evaluation_heading_issue(analysis)
     if heading_issue:
@@ -4310,8 +4310,8 @@ def validate_final_manual_v4_markdown(markdown, paper=None):
 def validate_digest_index_reader_quality(markdown, required=False):
     """校验生成的索引正文是否精确，同时保留旧的未标记页面。
 
-    新生成流程会显式标记索引协议。历史索引早于这个读者闸，只要调用方
-    没有显式要求新契约，它们仍然可读。
+    新生成流程会显式标记索引协议。历史索引生成于这些读者正文检查之前；只要调用方
+    没有明确要求新格式，仍允许读取这些页面。
     """
     text = str(markdown or '')
     marker = re.search(
@@ -4436,7 +4436,7 @@ def validate_publish_parsed(
     require_reason_dimensions=False,
     validate_tags=True,
 ):
-    """校验并归一化完整的、按文档类型区分的评分契约。"""
+    """校验并统一按文档类型区分的评分字段及其表示方式。"""
     if not isinstance(parsed, dict):
         raise PublishDataValidationError(f'{source} 必须是对象')
 
@@ -4740,11 +4740,10 @@ def is_canonical_publish_arxiv_id(value):
 
 
 def validate_papers_for_publish(papers, *, validate_manual_stage_records=True):
-    """在生成任何发布产物之前校验每一篇论文。
+    """在生成任何发布文件之前校验每一篇论文。
 
     ``validate_manual_stage_records=False`` 只留给派生的发布图片排除视图。
-    它的规范来源在派生之前刚刚校验过；所有读者可见的契约仍会针对改过的
-    分析重跑一遍。
+    它的规范来源在派生之前刚刚校验过；所有面向读者的发布要求仍会针对改过的分析重新检查。
     """
     if not isinstance(papers, list):
         raise PublishDataValidationError('待发布论文必须是数组')
@@ -6157,7 +6156,7 @@ def escape_html_like_tags(text):
     # 反引号，得到非法的 `` `turn off `<EOT>`` 形态。
     text = re.sub(r'(?<!`)(`+)(?!`)([^`\n]*?)\1(?!`)', protect_inline_code, text)
     # ``publish-to-blog.py`` 为可折叠的评分区刻意输出这两个不含属性的容器
-    # 标签。要在下面通用的论文记号转义之前保护它们；否则最后的兜底会把
+    # 标签。要在下面通用的论文记号转义之前保护它们；否则后面的通用转义会把
     # 我们自己的 UI 标记（``<details>``）变成行内代码，评分区不再折叠。
     # 带属性的和用户自己写的变体仍走常规清理。
     safe_containers = []

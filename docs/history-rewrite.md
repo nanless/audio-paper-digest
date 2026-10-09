@@ -211,7 +211,7 @@ npm run history:direct-aggregate -- aggregate --apply \
 # 会议汇总将 --daily YYYY-MM-DD 改为 --conference conference-key
 ```
 
-`registryFile` 与汇总页面对应文件以命令实际输出为准。每日集合可同时包含本次 arXiv 来源与通过核验的本地会议 PDF；纯来源集合沿用各自协议，混合集合记录自哈希 `historical-direct-mixed-source-v1`，分别绑定同一 arXiv 获取序号的逐篇 manifest 和逐篇会议 PDF SHA。会议集合仅允许本地会议 PDF。获取序号、manifest、PDF 或成员身份漂移均拒绝汇总。
+`registryFile` 与汇总页面对应文件以命令实际输出为准。每日集合可同时包含本次 arXiv 来源与通过核验的本地会议 PDF；纯来源集合沿用各自协议，混合集合记录自哈希 `historical-direct-mixed-source-v1`，分别绑定同一 arXiv 获取序号的逐篇 manifest 和逐篇会议 PDF SHA。会议集合仅允许本地会议 PDF。获取序号、manifest 或 PDF 的 SHA、论文成员集合及每篇来源身份，只要与原记录不一致，就拒绝汇总。
 
 v3 汇总页面对应文件保留冻结会议任务页的路径、URL、旧字节 SHA、会议及任务键（`task key`），只按冻结链接关系确定论文成员。链接集合、目标页 SHA、渲染实现及任务覆盖情况均有自哈希。会议汇总先生成全部任务页，再生成会议总页作为同一轮完成标记。没有重写论文成员的冻结每日页记录为 `retain-unchanged`；`pageCoverage` 覆盖清单每一页，才允许 `publicationReady=true`。
 

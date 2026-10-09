@@ -452,7 +452,7 @@ describe('validate-data-files', () => {
         assert.match(issues, /huggingface\.papersCount/);
     });
 
-    it('当前抓取筛选产物强制完整合法指纹并与 checkpoint 对齐', () => {
+    it('当前抓取和筛选记录必须包含完整合法的指纹，并与抓取检查点一致', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-fingerprint-'));
         const files = writeMinimalCurrentBatch(dir);
         const raw = JSON.parse(fs.readFileSync(files.rawCandidates));
@@ -475,7 +475,7 @@ describe('validate-data-files', () => {
         assert.match(issues, /blogDedupFingerprint 必须与 fetch-checkpoint\.json 一致/);
     });
 
-    it('当前抓取筛选产物必须使用北京时间 ISO 且同批日期一致', () => {
+    it('当前抓取和筛选记录的时间必须用北京时间 ISO 格式，并属于同一批次日期', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-date-'));
         const files = writeMinimalCurrentBatch(dir);
         const raw = JSON.parse(fs.readFileSync(files.rawCandidates));
@@ -1259,7 +1259,7 @@ describe('validate-data-files', () => {
         assert.match(issues, /七个 arXiv 类别和 HuggingFace sourceHealth 全部 ok=true/);
     });
 
-    it('健康空 arXiv checkpoint 可满足 complete 产物契约但不承诺跨进程复用', () => {
+    it('arXiv 来源抓取成功但没有论文时，空检查点仍可通过本批数据一致性检查', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-validate-empty-source-'));
         const files = writeMinimalCurrentBatch(dir);
         const checkpoint = JSON.parse(fs.readFileSync(files.fetchCheckpoint));

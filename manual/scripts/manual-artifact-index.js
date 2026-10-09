@@ -707,8 +707,8 @@ function buildArtifactIndex(options = {}) {
         sections,
         tables,
         figures,
-        // 历史上的使用方用的是 images；长文契约统一到 figures 之后，
-        // 仍保留这份兼容投影。
+        // 旧读取程序使用 images；长文格式改用 figures 后，
+        // images 仍提供同一份图片列表，兼容旧读取程序。
         images: figures,
         formulas,
         references,

@@ -3005,9 +3005,9 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         if (!/^[零〇一二两三四五六七八九]+$/.test(parts[1])) return null;
         return `${sign}${integer}.${[...parts[1]].map(char => numeralMap[char]).join('')}`;
     };
-    // 「采样率为十六千赫兹」这种量出来的频率只有一种精确的编辑写法。只有在质量闸门已经
-    // 指出同一处频率/参数语境下存在定量问题时才启用；「十六与四十八千赫」这类混合形态
-    // 不动，因为第一个系数没有明确的单位。
+    // 只有定量检查已经发现中文数词出现在频率或采样率描述中时，才统一明确的频率数值，
+    // 例如把「采样率为十六千赫兹」写成 16 kHz。「十六与四十八千赫」这类并列描述
+    // 不改，因为第一个数值没有明确的单位。
     const hasFrequencyNumeralIssue = quantitativeIssues.some(issue => (
         issue?.code === 'quantitative_chinese_numeral'
         && /(?:[千兆]赫|赫兹|采样率|频率)/.test(String(issue.match || ''))
@@ -3065,7 +3065,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
             || isAllowedReaderNarrativeNumeralIssue(issue, text)) continue;
         const match = String(issue.match || '').trim();
         if (!match) continue;
-        // 显式的混合量级上面已经整段处理过。不支持的复合量级保持可见，交给权威闸门拒绝。
+        // 显式的混合量级上面已经整段处理过。不支持的复合量级保留原文，交给后续定量检查拒绝。
         if (/\d[ \t]*[万亿]/.test(match)) continue;
         // 「百分之X」只有一种精确的阿拉伯数字写法，可以就地安全归一化。其他分数和有歧义
         // 的带量级单位仍要做语义修复，不能靠猜一个显示形式。

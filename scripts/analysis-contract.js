@@ -95,8 +95,8 @@ const EDITORIAL_QUALITY_CONTRACT_VERSION = 'reader-facing-v1';
 // 这里特意做成单独的可选约定：旧的合法 API 记录继续兼容，
 // 新的 manual 记录则不能缩水成摘要加几句泛泛的过程评述。
 const MANUAL_DEPTH_CONTRACT_VERSION = 'full-text-evidence-v1';
-// v2 补上 2026-08-20 那批暴露的 manual 质量闸：跨章节自我复制、
-// 编辑模板句、开源 URL 漏提取，以及没有锚点的评分理由。
+// v2 根据 2026-08-20 批次的问题增加 manual 分析正文检查：跨章节重复、
+// 编辑模板句、遗漏原文开源 URL，以及评分理由没有引用证据编号。
 const MANUAL_DEPTH_CONTRACT_VERSION_V2 = 'full-text-evidence-v2';
 // v3 补的是对比 2026-08-25 manual 批次和 2026-08-14 API 批次时发现的读者
 // 可见差距。只够长不行：成稿要读起来像技术解读——摘要里有真正的论证，
@@ -105,7 +105,7 @@ const MANUAL_DEPTH_CONTRACT_VERSION_V2 = 'full-text-evidence-v2';
 const MANUAL_DEPTH_CONTRACT_VERSION_V3 = 'full-text-evidence-v3';
 // v4 保留 v3 的全部行文与证据要求，另外绑定更细的实验表格约定和
 // 与上下文绑定的图片讲述约定。这个绑定刻意按版本走：
-// 已发布的 v1–v3 manual 记录沿用当时的表格语义，不用新的质量闸重新解读。
+// 已发布的 v1–v3 manual 记录沿用当时的表格规则，不套用新版正文检查。
 const MANUAL_DEPTH_CONTRACT_VERSION_V4 = 'full-text-evidence-v4';
 const MANUAL_DEPTH_CONTRACT_VERSION_V5 = 'full-text-evidence-v5';
 const MANUAL_DEPTH_CONTRACT_VERSIONS = Object.freeze([

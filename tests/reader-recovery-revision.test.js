@@ -440,7 +440,7 @@ test('已耗尽的付费额度保留计数，但恰好得到一个实现修复�
     assert.equal(repair.readerAttemptLimit(6, 7, loaded.draft, 0), 7);
 });
 
-test('实现额度证明只能消费一次，无法恢复', t => {
+test('实现更新带来的额外修复名额只能使用一次，不能重新启用', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
     const proof = migrated.implementationRepairAllowanceProof;
@@ -451,7 +451,7 @@ test('实现额度证明只能消费一次，无法恢复', t => {
         { ...consumed, implementationRepairAllowanceProof: proof }), /already consumed/);
 });
 
-test('沿袭额度消费完之后，后续实现变化不能再叠加新尝试', t => {
+test('额外修复名额用完后，再次更新实现不会增加尝试次数', t => {
     const f = fixture(t); const exhausted = { ...f.payload, attempts: 6, fullAttempts: 2 };
     saveFailedCandidate(f.directory, f.oldIdentity, exhausted);
     const first = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));

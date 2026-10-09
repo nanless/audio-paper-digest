@@ -192,7 +192,7 @@ test('拒绝符号链接、硬链接、FIFO、损坏的 PDF、不安全的元数
     assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /single-link/);
 });
 
-test('命令行预演不写任何东西；实际执行用 O_EXCL 写绑定产物，遇到冲突就回滚预留', t => {
+test('命令行预演不写文件；正式执行保存相互对应的候选与报告，遇到文件名冲突时清理本次新建文件', t => {
     const f = fixture(t); writeJson(f.metadata, [{ forum_id: 'AbCdef_12', title: 'One' }]); writePdf(f.pdf, 'AbCdef_12.pdf');
     const base = ['--adapter', 'iclr', '--year', '2026', '--metadata', f.metadata, '--pdf-root', f.pdf];
     const files = { conferenceDiscoveryCatalogDir: f.catalogs, conferenceDiscoveryReportDir: f.reports };
@@ -256,7 +256,7 @@ test('严格的打包校验会复核每个来源、候选、基数、计数和�
     assert.throws(() => discovery.validateDiscoveryBundle(original.manifest, reportDrift), /canonical candidate manifest bytes/);
 });
 
-test('加载后的发现句柄要求成对的正式文件，无法伪造，并返回防御性快照', t => {
+test('加载后的结果对象要求成对的正式文件，拒绝伪造，返回副本不影响原记录', t => {
     const f = fixture(t); writeJson(f.metadata, [{ forum_id: 'AbCdef_12', title: 'One' }]); writePdf(f.pdf, 'AbCdef_12.pdf');
     const result = discovery.discoverConference({ adapter: 'iclr', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf });
     const catalogName = 'iclr-2026.json'; const reportName = 'iclr-2026.report.json';
@@ -277,7 +277,7 @@ test('加载后的发现句柄要求成对的正式文件，无法伪造，并�
     assert.throws(() => discovery.loadDiscoveryHandle(catalogFile, reportFile), /exact canonical bytes/);
 });
 
-test('加载后的发现句柄拒绝交叉配对的上报、重复的键和被改动的描述符', t => {
+test('加载后的结果对象拒绝不配对的报告、重复键和被改动的 PDF 记录', t => {
     const f = fixture(t); writeJson(f.metadata, [{ forum_id: 'AbCdef_12', title: 'One' }]); writePdf(f.pdf, 'AbCdef_12.pdf');
     const result = discovery.discoverConference({ adapter: 'iclr', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf });
     const catalogFile = path.join(f.catalogs, 'catalog.json'); const reportFile = path.join(f.reports, 'report.json');
@@ -331,7 +331,7 @@ test('发现公开入口写失败时保留替换后的普通文件、符号链�
     }
 });
 
-test('发现公开入口短写后清理本人文件，重试生成可重放的候选与报告', t => {
+test('正式入口写入不完整时清理本次新建文件，重试后候选与报告仍可通过读取检查', t => {
     const f = cleanupFixture(t); const originalWrite = fs.writeFileSync;
     const originalError = Object.assign(new Error('测试发现短写重试'), { code: 'EIO' });
     const mocked = t.mock.method(fs, 'writeFileSync', (fd, bytes, ...rest) => {

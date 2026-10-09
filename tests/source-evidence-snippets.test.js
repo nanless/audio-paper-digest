@@ -30,7 +30,7 @@ test('预算只容纳一个片段时仍返回真实原文，且不超过字符�
     assert.equal(source.slice(bundle.snippets[0].quoteStart, bundle.snippets[0].quoteEnd), bundle.snippets[0].quote);
 });
 
-test('只有空白的正文明确说明没有证据，不生成空投影或触发属性异常', () => {
+test('正文只有空白时，明确报错说明没有可用的证据片段', () => {
     for (const source of [' '.repeat(100), ' '.repeat(3000)]) {
         assert.throws(() => api.buildSourceEvidenceSnippets(source, { maxChars: 1000, maxSnippetChars: 1000 }),
             /没有可用的连续文本片段/);

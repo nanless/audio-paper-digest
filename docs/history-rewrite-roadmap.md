@@ -72,7 +72,7 @@
 
 当时仍需解决以下接口问题：
 
-- 默认 `analyzePaperDeep` 会获取 arXiv 来源，会议只能接收 `conference-source-context-v2` 提供的获授权的计划句柄。
+- 默认 `analyzePaperDeep` 会获取 arXiv 来源，会议只能接收 `conference-source-context-v2` 提供的已获授权的计划对象。
 - 论文锁、结果合并和正式记录查找须使用 `paper-identity-v1.canonicalId`，不能以 `sourceIdentity`、标题或页面路径代替论文主键。
 - 当时的会议 PDF 能力仅授权逐页正文与可重放的视觉审计，Reader 可在 OS 临时目录查看命中的页面。它不提供 HTML DOM、作者原始 TeX 或可独立发布的 Figure URL，不能据此编造对应结构；能力不足须记录“视觉可见、语义未绑定”。这不表示今天所有会议 PDF 都没有表格、公式或图像能力。
 - 历史分析须写独立论文库和完成凭证，不混入日更 checkpoint。
@@ -180,13 +180,13 @@ npm run history:crosswalk -- finalize --crosswalk UUID
 
 1. `historical-source-run-v1` 拟绑定 crosswalk final receipt、U 个 analysis key、adapter 版本、并发和 source policy，每个身份保存独立状态与尝试记录。
 2. `historical-source-bundle-v1` 拟保存论文身份、元数据、全文、结构数据、原始来源位置，以及 source/artifact/PDF/DOM SHA、能力矩阵和不可变来源描述文件。
-3. `historical-source-completion-v1` 拟证明精确的 U/U 来源集合和 self-SHA。任何缺失、短正文、身份漂移、摘要降级或缓存损坏都不能 complete。
+3. `historical-source-completion-v1` 拟证明精确的 U/U 来源集合和 self-SHA。任何缺失、短正文、论文或来源身份与记录不符、摘要降级或缓存损坏都不能 complete。
 
 能力须分别报告 `fullText`、`tables`、`formulas`、`figures`、`authorDom` 和 `resourceLinks`，每项为 `replayable/weak/unavailable` 并说明原因，不能从 `analysisReady=true` 推断所有结构都可用。
 
 ### 5.2 实现边界
 
-arXiv 适配器拟复用 `fetchArxivTextDetailed`、代理、HTML/PDF 和结构提取，但输入改为核验过的 `paper-identity-v1` 与来源授权凭证，不读日更当前数据。会议适配器只接受 `conference-source-context-v2` 的真实计划句柄；当时 weak PDF 可用于长文分析，表格、公式和图像仍为 unavailable，须由后续独立提取凭证证明相应能力才能开放。
+arXiv 适配器拟复用 `fetchArxivTextDetailed`、代理、HTML/PDF 和结构提取，但输入改为核验过的 `paper-identity-v1` 与来源授权凭证，不读日更当前数据。会议适配器只接受 `conference-source-context-v2` 的已核验并登记的计划对象；当时 weak PDF 可用于长文分析，表格、公式和图像仍为 unavailable，须由后续独立提取凭证证明相应能力才能开放。
 
 每篇论文只缓存一份来源，多个历史页引用同一来源文件组的 SHA。旧来源归档只供查找，须逐字节按来源协议重放；当时 82 个来源归档没有完整的现代五段来源文件，不能凭文件存在跳过恢复。默认禁止 abstract-only 发布：没有全文时保持 blocked，显式降级须另获用户同意，并且不纳入“全部深度重写”的 complete。
 

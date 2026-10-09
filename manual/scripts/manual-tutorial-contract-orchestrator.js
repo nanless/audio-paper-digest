@@ -3,13 +3,12 @@
 /**
  * 新写作的 Manual 教程统一走这一个公开校验入口。
  *
- * 底下三个模块各自保持纯粹，也能单独测试：
+ * 以下三个模块也能单独测试：
  * - 教程质量：检查面向读者的讲解方式和 Markdown；
  * - 教程素材：检查原文素材清单是否被逐项覆盖；
  * - research/longform：检查证据绑定，以及正文是否按原文块逐块对上。
  *
- * 预览、v5 已核验材料、v6 录入都调用这个编排器，不再各自挑其中一部分校验器
- * 拼一遍。
+ * 预览、v5 已核验材料、v6 录入都调用这个统一检查入口，按相同顺序执行所需检查。
  */
 
 const crypto = require('crypto');
@@ -253,7 +252,7 @@ function validateTutorialPayloadBundle(input) {
 
 function validateManualTutorialReaderBundle(plan, article, evidenceLedger = [], options = {}) {
     // 不要走 manual-research-contract 里那条历史遗留的 longform 直连兼容分支；
-    // 跨校验器的调用顺序由这个编排器负责。
+    // 多个检查函数的调用顺序由这里统一安排。
     const researchOptions = { ...options };
     delete researchOptions.longformBundle;
     delete researchOptions.artifactIndex;

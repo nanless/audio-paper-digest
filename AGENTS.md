@@ -11,7 +11,7 @@
 - 每日速递、新会议整理和历史博客维护统一在 `/Users/francis7999/code/github_repos/audio-paper-digest` 执行。当前角色保持 `daily`；本机 `.env` 的 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` 允许历史入口在此运行，反向放行仍然禁止。
 - 旧 `audio-paper-digest-rewrite-all` 工作区已废弃，不再进入、修改或启动任务；不从旧目录复制检查点或手工合并运行数据。
 - 当前任务的运行数据保存在本项目 `data/runtime/`。日更、会议、历史任务的生成、审查和推送必须错峰，由执行者检查运行进程并安排；共享博客锁继续防止并发修改。
-- 历史发布前先结束其他发布任务，同步代码仓库和博客仓库的最新远端 `main`，再基于最新 Git 基线生成审查与发布凭证。旧凭证不能因切换工作区而直接复用。
+- 历史发布前先结束其他发布任务，同步代码仓库和博客仓库的最新远端 `main`，再以同步后的博客 Git 提交为依据生成审查与发布凭证。旧凭证不能因切换工作区而直接复用。
 
 用户说“运行/进行 YYYY-MM-DD 论文速递”时，默认执行完整 LLM/API 日更：
 
@@ -105,7 +105,7 @@ npm run digest:prepare -- YYYY-MM-DD
 - 失败记录必须保留 `analysisManifest`、检查点和恢复图片清单。旧成功正文可保留，但最新失败必须强制后续重试；成功后才清除失败标记。
 - 同篇分析必须持有规范化 arXiv ID 锁，在锁内重读数据、合并结果并递增 `generation`，禁止用锁外读取的陈旧对象覆盖正式分析结果。
 - ICML/OpenReview 默认不接受替代 PDF。唯一经用户授权的跨标题预印本例外是
-  `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`：必须由代码白名单中的来源封存器核验 poster/forum、
+  `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`：必须由代码白名单中负责保存来源的程序核验 poster/forum、
   固定 SSRN 标题、作者、DOI，以及 PDF、获取凭证和来源 SHA；浏览器下载只能经 `--import-file` 导入并记录
   `networkResponseObserved: false`。计划、模型输入和最终页面必须明确提示非 camera-ready；不得推广到其他论文。
 
@@ -134,9 +134,9 @@ npm run blog:review -- --date YYYY-MM-DD
 npm run blog:push -- --date YYYY-MM-DD
 ```
 
-`generate` 生成页面和 schema v3 页面清单；`review` 只读审查最终文件，记录逐页 SHA、协议、Git 基线与 Hugo 检查结果；`push` 只提交审查凭证允许的精确差异，并在推送后验证远端 `main` OID。
+`generate` 生成页面和 schema v3 页面清单；`review` 只读审查最终文件，记录逐页 SHA、协议、审查所依据的博客 Git 提交与 Hugo 构建检查结果；`push` 只提交审查凭证允许的精确差异，并在推送后验证远端 `main` OID。
 
-发布器代码变化时仍须重新生成页面，以发现实际内容变化。逐页审查通过记录按“相对路径 + 页面内容 SHA”永久复用，只有内容 SHA 变化才重审该文件。生成清单元数据、模型、发布器代码、审查协议指纹或 Hugo 运行时变化，只要求重跑当前批次检查并生成新的审查凭证，不能让字节未变的页面重审。Git 基线、远端身份或凭证与当前批次不符时，仍须阻断推送。审查任务不得原地修改已审文件；修正建议须交回生成或修复阶段。
+发布器代码变化时仍须重新生成页面，以发现实际内容变化。逐页审查通过记录按“相对路径 + 页面内容 SHA”永久复用，只有内容 SHA 变化才重审该文件。生成清单元数据、模型、发布器代码、审查协议指纹或 Hugo 运行时变化，只要求重跑当前批次检查并生成新的审查凭证，不能让字节未变的页面重审。审查所依据的博客 Git 提交、远端身份或凭证与当前批次不符时，仍须阻断推送。审查任务不得原地修改已审文件；修正建议须交回生成或修复阶段。
 
 `digest:status` 里的 `remoteOidVerified` 只证明 Git 提交已到远端。对用户宣告博客已上线或任务已完成前，还必须确认 GitHub Pages workflow 的 build/deploy 均成功，并逐页核验目标日期汇总页及已发布单篇的 HTTP 200、正式地址和标题。部署 workflow 必须对应发布提交，或保留该批次已审页面字节的后续提交；保留部署与页面核验记录。部署失败时读取失败日志、修复并继续检查；`digest:status` 显示 complete 也不能代替上线核验。
 

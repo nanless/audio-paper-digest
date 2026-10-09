@@ -93,7 +93,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。npm 中的 Python 命令要求 Python 
 - 4–10 组术语搭配说明，解释各部分的分工、搭配原因和新增作用；
 - 用前后段落说明数据协议、主结果、消融/失败、训练或部署成本的表格；
 - 官方插图依次呈现导读、看图路径、原图、图注和解释，相关段落须相邻；
-- Markdown 表的每个单元格对应原表 DOM 单元格或逐字原文引文，展示公式由结构化原始 TeX 确定性注入；
+- Markdown 表的每个单元格对应原表 DOM 单元格或逐字原文引文，展示公式由程序将结构化来源中的原始 TeX 写入正文；
 - 作者姓名与机构逐项核验来源；开源资源逐项绑定原文或已验证 Demo、重定向终点与可达状态，暂时不可达不得冒充可用；
 - 初学研究者能分清论文事实、有限解释和未验证推测。
 
@@ -157,7 +157,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。npm 中的 Python 命令要求 Python 
 | `filtered-papers.json` | 正式入选集 |
 | `deep-analysis-result.json` | 正式分析结果、阶段检查点与发布资格证明 |
 | `blog-generation-manifest-*.json` | 生成页面集合和 SHA |
-| `blog-review-receipt-*.json` | 审查结果、Git 基线与远端发布证明 |
+| `blog-review-receipt-*.json` | 审查结果、审查所依据的博客 Git 提交与远端发布证明 |
 | `visual-summary-manifests/*.json` | TOP 10 长图任务 |
 | `digest-cover-manifests/*.json` | 汇总封面任务 |
 
@@ -206,13 +206,13 @@ npm run blog:review -- --date YYYY-MM-DD
 npm run blog:push -- --date YYYY-MM-DD
 ```
 
-`generate` 生成并安装本批页面，保存页面清单；`review` 只读审查最终文件，执行确定性、LLM、图片与 Hugo 检查，逐页保存检查点，再生成审查凭证；`push` 只提交凭证允许的精确 Git 差异，并在推送后验证远端 `main` OID。
+`generate` 生成并安装本批页面，保存页面清单；`review` 只读审查最终文件，执行程序检查、LLM 审查、图片检查和 Hugo 构建检查，逐页保存检查点，再生成审查凭证；`push` 只提交凭证允许的精确 Git 差异，并在推送后验证远端 `main` OID。
 
 远端 OID 和 `digest:status` 中的 `remoteOidVerified` 只证明 Git 提交已到远端。宣告上线或完成前，须另行确认对应发布提交（或保留本批已审页面字节的后续提交）的 GitHub Pages workflow 已成功 build/deploy，再逐页检查目标日期汇总页和单篇页面的 HTTP 200、正式地址与标题，并保存核验记录。部署失败时读取日志、修复并等待重新部署成功。状态命令尚未自动执行这些上线检查。
 
 标签迁移期间，新发布页面继续写 Hugo 兼容的扁平 `tags`，同时必须保存并核验 `paper-tag-flat-tags-v2`、当前词表的版本与 SHA、逐标签 `{id, facet, label}`、`paper_digest_primary_task` 和 `paper_digest_primary_method`。旧页面与旧标签 URL 保持不变。汇总“热门方向”只按显式主任务统计，网页标签总表须说明其中包含新旧两种标签。
 
-逐页审查通过记录按“相对路径 + 内容 SHA”持久复用，只有该文件的内容 SHA 变化才重审。发布器代码变化时仍要重新渲染页面，以发现真实字节变化。新的页面清单、发布资格证明、模型、发布器代码、审查协议指纹或 Hugo 运行时变化，只要求重跑当前批次的确定性/Hugo 检查并生成新的审查凭证，不得让字节未变的文件重审。博客基线、远端名称、推送 URL 身份或凭证与当前批次不符时，仍须阻断推送。审查不能修改已审页面；修正须回到生成阶段。
+逐页审查通过记录按“相对路径 + 内容 SHA”持久复用，只有该文件的内容 SHA 变化才重审。发布器代码变化时仍要重新渲染页面，以发现真实字节变化。新的页面清单、发布资格证明、模型、发布器代码、审查协议指纹或 Hugo 运行时变化，只要求重跑当前批次的程序检查和 Hugo 构建检查并生成新的审查凭证，不得让字节未变的文件重审。审查所依据的博客 Git 提交、远端名称、推送 URL 身份或凭证与当前批次不符时，仍须阻断推送。审查不能修改已审页面；修正须回到生成阶段。
 
 单篇 `--include-id` 与排除 `--exclude-id` 属于显式维护功能，参数必须在适用阶段保持一致；单篇发布不能作为整批发布或整批视觉完成的依据。旧 `sealed_tutorial_preview` 仅保留材料只读检查，新生成、审查声明与推送均已停用。
 
@@ -229,7 +229,7 @@ npm run blog:push -- --date YYYY-MM-DD
 
 每轮 arXiv 重写都会重新获取官方文本、PDF、运行元数据和清单，保存在 `data/runtime/fetched-arxiv-sources/` 下。保留的 arXiv 文本、PDF、图片、旧分析和旧博客正文都不进入写作输入。会议论文只有在 SHA 核验通过后，才使用保留的元数据和 PDF。同一篇论文只分析一次，再据此生成对应的全部历史页面。
 
-备用 `history:arxiv-batch` 只接收新一轮 arXiv 获取失败后生成的命名且不可变交接文件。`history:crosswalk` 仍支持旧来源对照记录的显式维护，须经过来源授权和 CAS 检查。保留的会议来源不可用或损坏时，直接路线只在该论文上停止，不进入 arXiv 备用路线，也不影响队列中其余论文。独立发布入口要求来源和页面覆盖完整、审查通过、Git 基线与远端检查有效。`activate --apply` 已被禁用；激活、提交、推送和 OID 核验统一由 `publish --apply` 在共享博客锁内完成。入口存在不代表某次全历史重写或发布已经完成。参数细节见[历史重写](docs/history-rewrite.md)与[独立历史发布](docs/history-direct-publication.md)。
+备用 `history:arxiv-batch` 只接收新一轮 arXiv 获取失败后生成的有明确文件名、写入后不再改动的抓取失败记录文件。`history:crosswalk` 仍支持旧来源对照记录的显式维护，须经过来源授权，并在整份页面与来源对应表的状态 SHA 与处理决定记录要求的旧状态 SHA 一致后，更新页面状态并保存处理决定。保留的会议来源不可用或损坏时，直接路线只在该论文上停止，不进入 arXiv 备用路线，也不影响队列中其余论文。独立发布入口要求来源和页面覆盖完整、审查通过、生成和审查所依据的博客 Git 提交及远端检查有效。`activate --apply` 已被禁用；激活、提交、推送和 OID 核验统一由 `publish --apply` 在共享博客锁内完成。入口存在不代表某次全历史重写或发布已经完成。参数细节见[历史重写](docs/history-rewrite.md)与[独立历史发布](docs/history-direct-publication.md)。
 
 ICML/OpenReview 的替代 PDF 默认一律拒绝。唯一经用户授权的跨标题例外是 `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`：代码白名单必须核对它的 poster/forum、固定 SSRN 标题、作者、DOI、PDF、获取凭证和来源 SHA。浏览器下载只能通过 `--import-file` 导入，并记录 `networkResponseObserved: false`。计划、模型输入和最终页面都必须写明这不是 camera-ready，该例外不得推广到其他论文。
 

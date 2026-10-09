@@ -409,7 +409,7 @@ describe('Manual v6 确定性修订绑定器', () => {
         assert.equal(removePureMarkdownTables(blocks[0].markdown), '正文保留。');
     });
 
-    it('重放 ArtifactIndex 表格时只移除紧邻旧表格的精确表题且保持幂等', () => {
+    it('移除旧表格时，只移除紧邻的相同表题，保留正文中的表题引用', () => {
         const caption = 'Table 1. Results';
         const markdown = `正文中的 **${caption}** 引用保留。\n\n**${caption}**\n\n**${caption}**\n\n| A | B |\n| --- | --- |\n| 1 | 2 |`;
         assert.equal(
@@ -418,7 +418,7 @@ describe('Manual v6 确定性修订绑定器', () => {
         );
     });
 
-    it('用 ArtifactIndex 精确矩阵替换作者局部表格并生成可重放正式 longform', () => {
+    it('用来源索引中的完整表格替换作者的局部表格，并记录表格和数字单元格的对应关系', () => {
         const specs = [
             ['理解论文前必须具备什么', 'prerequisites'], ['论文真正提出的可证伪问题', 'problem'],
             ['相关路线与本文差异在哪里', 'related_work'], ['沿信号路径理解核心方法', 'signal_path'],

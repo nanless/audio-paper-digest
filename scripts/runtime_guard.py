@@ -69,18 +69,18 @@ def required_workspace_role_for_command(command_name):
 
 def require_workspace_role(required_role, project_root=PROJECT_ROOT):
     if required_role not in {'daily', 'history'}:
-        raise ExternalRuntimeRequired(f'未知 required workspace role: {required_role}')
+        raise ExternalRuntimeRequired(f'未知的工作区角色要求: {required_role}')
     root = Path(project_root).resolve(strict=True)
     if not root.is_dir() or Path(project_root).is_symlink():
-        raise ExternalRuntimeRequired('workspace root 必须是存在的真实目录且不得为 symlink')
+        raise ExternalRuntimeRequired('工作区根目录必须存在且不能是符号链接')
     marker = root / WORKSPACE_ROLE_MARKER
     try:
         info = marker.lstat()
     except FileNotFoundError as exc:
         raise ExternalRuntimeRequired(
-            'workspace role marker 缺失；先运行 npm run workspace:role -- set daily|history') from exc
+            '工作区角色标记缺失；先运行 npm run workspace:role -- set daily|history') from exc
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or marker.is_symlink():
-        raise ExternalRuntimeRequired('workspace role marker 必须是单链接普通文件且不得为 symlink')
+        raise ExternalRuntimeRequired('工作区角色标记必须是只有一个硬链接的普通文件，不能是符号链接')
     try:
         flags = os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
         fd = os.open(marker, flags)
@@ -89,17 +89,17 @@ def require_workspace_role(required_role, project_root=PROJECT_ROOT):
             if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
                     or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino)):
                 raise ExternalRuntimeRequired(
-                    'workspace role marker 在读取期间发生身份漂移')
+                    '工作区角色标记不是只有一个硬链接的普通文件，或打开的文件与先前检查的文件不同。')
             if os.name != 'nt' and opened.st_mode & 0o077:
-                raise ExternalRuntimeRequired('workspace role marker 权限必须为 0600')
+                raise ExternalRuntimeRequired('工作区角色标记权限必须为 0600')
             raw = os.read(fd, max(opened.st_size + 1, 4096))
             if len(raw) > 4096 or len(raw) != opened.st_size:
-                raise ExternalRuntimeRequired('workspace role marker 字节长度非法或读取期间漂移')
+                raise ExternalRuntimeRequired('工作区角色标记超过 4096 字节，或读取长度与打开时记录的长度不同。')
         finally:
             os.close(fd)
         value = json.loads(raw.decode('utf-8'))
     except (OSError, ValueError) as exc:
-        raise ExternalRuntimeRequired(f'workspace role marker JSON 损坏: {exc}') from exc
+        raise ExternalRuntimeRequired(f'工作区角色标记读取失败或 JSON 无法解析: {exc}') from exc
     if (not isinstance(value, dict)
             or set(value) != {'contract', 'version', 'role', 'workspaceRealpath'}
             or value.get('contract') != 'paper-digest-workspace-role-v1'

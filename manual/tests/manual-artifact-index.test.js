@@ -86,14 +86,14 @@ function fixture() {
     return { dir, context, input, text, sourceEntry, structuredArtifacts };
 }
 
-describe('Manual 产物索引 v1', () => {
-    it('使用稳定键序重放 structured artifact payload SHA', () => {
+describe('Manual 结构化来源索引 v1', () => {
+    it('对象键顺序不同，结构化来源内容的 SHA-256 仍相同', () => {
         const left = { version: 1, parserVersion: 'arxiv-html-dom-v4', nested: { b: 2, a: 1 } };
         const right = { nested: { a: 1, b: 2 }, parserVersion: 'arxiv-html-dom-v4', version: 1 };
         assert.equal(computeStructuredPayloadSha256(left), computeStructuredPayloadSha256(right));
     });
 
-    it('v4 表格 inventory 升级后不复用任何旧 HTML parser 快照', () => {
+    it('表格清单升级到 v4 后，不复用旧 HTML 解析器保存的结果', () => {
         assert.equal(isReusableStructuredSnapshotForCurrentParser(
             { source: 'html' },
             { parserVersion: 'arxiv-html-dom-v2', health: { status: 'complete' } }
