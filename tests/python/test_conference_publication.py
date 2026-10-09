@@ -62,7 +62,7 @@ class GitPublicationTest(unittest.TestCase):
         self.git(repo, 'config', 'user.email', 'fixture@example.invalid')
         (repo / 'README.md').write_text('baseline')
         self.git(repo, 'add', 'README.md')
-        self.git(repo, 'commit', '-m', 'fixture baseline')
+        self.git(repo, 'commit', '-m', '测试仓库初始提交')
         self.git(repo, 'remote', 'add', 'origin', str(remote))
         self.git(repo, 'push', 'origin', 'HEAD:main')
         return repo
@@ -74,7 +74,7 @@ class GitPublicationTest(unittest.TestCase):
         return {'path': path, 'sourceSha256': sha(data), 'size': len(data)}
 
     def commit(self, records=None):
-        return publisher.commit_delta(self.blog, records or [self.record], self.base, self.identity, 'fixture publication')
+        return publisher.commit_delta(self.blog, records or [self.record], self.base, self.identity, '测试发布提交')
 
     def test_index_old_bytes_are_rejected_even_when_worktree_is_approved(self):
         target = self.blog / self.record['path']
@@ -162,7 +162,7 @@ class GitPublicationTest(unittest.TestCase):
         self.assertFalse((output / 'static/untracked.png').exists())
         self.assertFalse((output / self.record['path']).exists())
 
-    @unittest.skipUnless(shutil.which('hugo'), 'Hugo unavailable')
+    @unittest.skipUnless(shutil.which('hugo'), '找不到 Hugo 可执行程序')
     def test_real_hugo_uses_frozen_template_and_checks_nested_content(self):
         config = self.blog / 'hugo.toml'
         config.write_text('baseURL = "https://example.com/"\n[markup.goldmark.renderer]\nunsafe = true\n')
@@ -171,9 +171,9 @@ class GitPublicationTest(unittest.TestCase):
         template.write_text('<!DOCTYPE html><html><head><link rel="canonical" href="{{ .Permalink }}">'
                             '</head><body><div class="post-content">{{ .Content }}</div></body></html>')
         self.git(self.blog, 'add', 'hugo.toml', 'layouts')
-        self.git(self.blog, 'commit', '-m', 'fixture Hugo')
+        self.git(self.blog, 'commit', '-m', '测试 Hugo 模板')
         baseline = self.git(self.blog, 'rev-parse', 'HEAD').strip()
-        # 这些没提交的改动，绝不能影响渲染出来的证明页。
+        # 这些未提交的改动，不能影响用于检查的渲染页面。
         template.write_text('{{ invalid_template_call }}')
         self.record_file(self.blog, 'content/unrelated.md', b'---\ninvalid: [\n---')
         body = b'---\ntitle: Test\ndate: 2020-01-01\n---\n<div><p>Nested intro</p></div>\n\n| A | B |\n| --- | --- |\n| 5ms | 8% |\n'
@@ -195,7 +195,7 @@ class GitPublicationTest(unittest.TestCase):
         self.assertEqual(filename.read_bytes(), b'{"complete":true}')
         self.assertFalse(publisher.write_exact(filename, b'{"complete":true}'))
 
-    @unittest.skipUnless(shutil.which('hugo'), 'Hugo unavailable')
+    @unittest.skipUnless(shutil.which('hugo'), '找不到 Hugo 可执行程序')
     def test_real_gitlink_theme_uses_parent_oid_not_dirty_submodule_head(self):
         theme = self.repository('theme')
         layout = theme / 'layouts/_default/single.html'
@@ -228,7 +228,7 @@ class GitPublicationTest(unittest.TestCase):
         self.assertEqual(theme_layout.read_text(), '{{ broken_dirty_template }}')
         # gitlink 指向的 OID 在本地不存在时，必须直接失败，不能自动抓取。
         self.git(self.blog, 'update-index', '--cacheinfo', '160000,' + 'f' * 40 + ',themes/Fixture')
-        self.git(self.blog, 'commit', '-m', 'unavailable gitlink fixture')
+        self.git(self.blog, 'commit', '-m', '测试缺失的子模块提交')
         missing_base = self.git(self.blog, 'rev-parse', 'HEAD').strip()
         output = self.root / 'missing-export'
         output.mkdir()
@@ -270,7 +270,7 @@ class GitPublicationTest(unittest.TestCase):
         self.gate = {'status': 'passed', 'contract': gate.GATE_CONTRACT, 'pages': [page],
                      'implementationSha256': publisher.gate_fingerprint()}
         # review() 的内容审查要求真实 Hugo 运行时和带 frontmatter 的页面；这些
-        # 用例只验证发布流程，内容审查本身由 test_publish_conference.py 覆盖。
+        # 测试只验证发布流程，内容审查本身由 test_publish_conference.py 覆盖。
         protocol = publisher.content_review_protocol(publisher.load_publish_to_blog())
         self.content_review = {
             'status': 'passed', 'protocol': protocol,

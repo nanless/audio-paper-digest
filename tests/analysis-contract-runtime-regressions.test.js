@@ -249,7 +249,7 @@ describe('生产分析约定的回归', () => {
         }), null);
     });
 
-    it('recognizes an explicit Chinese 比较是 relation without accepting a generic 比较问题', () => {
+    it('能识别“比较是”后面的具体比较对象', () => {
         const analysis = validAnalysisText().replace(
             '实验在多个语音识别数据集上比较错误率',
             '第一个待验证的比较是模型 A、模型 B 与模型 C 的错误率排序能否代替推理质量排序'
@@ -270,26 +270,26 @@ function annotationFor(fromRegistrySha256) {
     const current = tagCatalogApi.loadTagCatalog(REGISTRY_FILE);
     const from = registryChange.resolveRegistrySnapshot(fromRegistrySha256);
     const { changeLevel, detail } = registryChange.classifyRegistryChange(from, current);
-    // 本助手构造可用于核验的升级说明，因此为当前允许确认的破坏性变更附加明确确认。
+    // 本辅助函数构造可用于核验的升级说明，因此为当前允许确认的破坏性变更附加明确确认。
     // 缺少说明、缺少确认或字段被篡改的反例由各用例单独构造。
     const eligible = changeLevel === 'destructive'
         && registryChange.canAcknowledgeRegistryChange(detail) === true;
     return registryChange.buildRegistryUpgradeAnnotation({
         from, to: current, changeLevel, detail,
-        note: `确定性重投影，升级自 ${fromRegistrySha256.slice(0, 8)}`,
+        note: `重新核对标签，原词表 SHA 为 ${fromRegistrySha256.slice(0, 8)}`,
         acknowledgeDestructive: eligible });
 }
 
-// destructive 只有在注记携带与复算绑定的 destructiveAcknowledgement 时才可能放行。
+// 破坏性变更只有在升级说明中提供对应变更原因的 destructiveAcknowledgement 确认时，才可能通过检查。
 function acknowledgedAnnotationFor(fromRegistrySha256) {
     const current = tagCatalogApi.loadTagCatalog(REGISTRY_FILE);
     const from = registryChange.resolveRegistrySnapshot(fromRegistrySha256);
     const { changeLevel, detail } = registryChange.classifyRegistryChange(from, current);
     return registryChange.buildRegistryUpgradeAnnotation({
         from, to: current, changeLevel, detail,
-        note: `确定性重投影，升级自 ${fromRegistrySha256.slice(0, 8)}`,
+        note: `重新核对标签，原词表 SHA 为 ${fromRegistrySha256.slice(0, 8)}`,
         acknowledgeDestructive: true,
-        acknowledgementNote: '人工确认：仅别名语义变化，conceptId 影响 none'
+        acknowledgementNote: '人工确认标签名称和上级关系变化；所选概念 ID 不变。'
     });
 }
 
@@ -369,7 +369,7 @@ describe('taxonomySeal 词表升级检查', () => {
         assert.strictEqual(validateSeal({}), null);
     });
 
-    it('记录 registryUpgradeFrom 时，允许增量升级', () => {
+    it('registryUpgradeFrom 中提供有效升级说明和确认时，允许沿用旧记录', () => {
         assert.strictEqual(validateSeal({
             registrySha256: ADDITIVE_OLD_SHA,
             projectionSha256: 'e'.repeat(64),
@@ -378,8 +378,8 @@ describe('taxonomySeal 词表升级检查', () => {
     });
 
     it('拒绝不带 registryUpgradeFrom 的旧保存记录', () => {
-        // 换表后旧封口对当前为 destructive，缺注记时先走破坏性拒绝分支——
-        // 文案不再出现字面 registryUpgradeFrom，但仍明确指向升级注记机制（意图不变：必拒）。
+        // 旧词表与当前词表存在破坏性变更，缺少升级说明时首先因缺少确认而拒绝。
+        // 拒绝原因不一定包含 registryUpgradeFrom 字段名，但必须说明为何不能沿用旧记录。
         assert.match(validateSeal({
             registrySha256: ADDITIVE_OLD_SHA,
             projectionSha256: 'e'.repeat(64)
@@ -421,7 +421,7 @@ describe('taxonomySeal 词表升级检查', () => {
         assert.match(seal({ annotation: { ...annotation, destructiveAcknowledgement: {
             ...annotation.destructiveAcknowledgement, conceptIdImpact: 'removed' }
         } }), /conceptIdImpact/);
-        // 注记谎报 additive：确认不能把 destructive 翻案成 additive。
+        // 升级说明把实际破坏性变更写成仅增加概念时，即使有确认也必须拒绝。
         assert.match(seal({ annotation: { ...annotation, changeLevel: 'additive' } }), /destructive/);
         // 即使确认有效，引用缺失或已停用的概念仍须被拒绝。
         const fixture = sealedPaper({ registrySha256: DESTRUCTIVE_OLD_SHA,
@@ -432,7 +432,7 @@ describe('taxonomySeal 词表升级检查', () => {
         }), /原标签阶段记录引用的以下概念在当前词表中缺失或已停用/);
     });
 
-    it('白名单之外的破坏性改动一律不放行', () => {
+    it('不允许人工确认的破坏性改动必须被拒绝', () => {
         const current = tagCatalogApi.loadTagCatalog(REGISTRY_FILE);
         const synthetic = structuredClone(current);
         synthetic.concepts.push({
@@ -476,7 +476,7 @@ describe('taxonomySeal 词表升级检查', () => {
         }), /原标签阶段记录引用的以下概念在当前词表中缺失或已停用/);
     });
 
-    it('词表 SHA 已经对上时，仍拒绝汇总内容漂移', () => {
+    it('词表 SHA 相同时，仍拒绝标签提示文本的 SHA 不一致', () => {
         assert.match(validateSeal({ projectionSha256: 'e'.repeat(64) }), /词表版本、标签提示文本或标签选择规则与当前配置不一致/);
     });
 
@@ -517,7 +517,7 @@ describe('taxonomySeal 词表升级检查', () => {
 
 describe('标签提示版本的读取边界', () => {
     const textSha = value => crypto.createHash('sha256').update(value).digest('hex');
-    it('同词表 v1/v2 的 complete 和 not_needed 记录精确核验且不补签', () => {
+    it('同一词表的 v1/v2 提示记录均按保存的 SHA 核验，检查不改写记录', () => {
         const runtime = createTagRules({ registryPath: REGISTRY_FILE });
         for (const projectionContract of [LEGACY_TAG_PROMPT_TEXT_CONTRACT, TAG_PROMPT_TEXT_CONTRACT]) {
             const projectionSha256 = textSha(buildTagPromptText(runtime.tagCatalog, projectionContract));
@@ -598,8 +598,8 @@ describe('标签提示版本的读取边界', () => {
 });
 
 
-describe('标签合同读取新旧解析结果', () => {
-    it('旧缓存只读可核验，两字段混用返回诊断而不是抛错', () => {
+describe('标签检查读取新旧解析结果', () => {
+    it('读取旧缓存时保留内容，同时出现新旧字段时返回错误说明', () => {
         const f = sealedPaper();
         const legacy = Object.fromEntries(Object.entries(f.parsed).map(([key, value]) =>
             [key === 'tagValidation' ? 'taxonomyValidation' : key, value]));
@@ -641,7 +641,7 @@ describe('标签阶段的新旧保存格式', () => {
         if (status === 'complete') paper.analysisStageCheckpoints.structureRepair = paper.analysis;
         return { ...fixture, stage, originalStage };
     }
-    it('按保存的选择协议核验两种阶段格式，保留原绑定字节并拒绝未知或错配合同', () => {
+    it('按保存的标签选择规则核验两种阶段格式，保留原记录并拒绝未知或错配版本', () => {
         for (const selectionContract of [LEGACY_TAG_SELECTION_CONTRACT, TAG_SELECTION_CONTRACT]) {
             for (const fixture of [sealedPaper({ selectionContract }), currentFixture()]) {
                 fixture.stage.selectionContract = selectionContract;
@@ -688,7 +688,7 @@ describe('标签阶段的新旧保存格式', () => {
             assert.match(contract.validateTagStageProof(saved, current), /bindingSha256/);
         }
     });
-    it('每层双键与跨层混代即使相等或为 null 也拒绝，失败记录不要求完整凭证', () => {
+    it('同一层或不同层混用新旧字段时均拒绝，即使值相等或为 null；失败记录可以保留缺失字段', () => {
         for (const value of [null, {}]) {
             for (const add of [
                 p => { p.analysisManifest.stages.taxonomySeal = value; },

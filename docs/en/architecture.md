@@ -43,7 +43,7 @@ Each stage saves its input fingerprint, model and protocol, prompt SHA, evidence
 
 Model output has token, elapsed-time, and response-byte limits, and Node analysis also checks that streamed responses end correctly. Node and Python both check the response terminal state before accepting text: Responses `incomplete/failed/cancelled`, Chat `length`, and Anthropic `max_tokens` do not count as success, even when the text happens to be complete JSON. Python keeps a bounded recovery only for responses that originally had no text and spent their output budget on hidden reasoning. A rejected nonempty body gets no such recovery.
 
-Node's `analyzeBatch` stops claiming new papers on run-level errors such as failed authentication or an unusable account pool. Papers already started still save their results, and papers not yet started stay pending. The batch entry reports the failure after its final save. An ordinary per-paper error ends only that paper's attempt. Python page review and channel summaries also bound submitted work. A run-level error stops new submissions; in-flight results are saved before the original error is reported. If saving fails too, both errors are retained.
+Node's `analyzeBatch` stops claiming new papers on run-level errors such as failed authentication or an unusable account pool. Papers already started still save their results, and papers not yet started stay pending. The batch entry reports the failure after its final save. An ordinary per-paper error ends only that paper's attempt. Python page review and channel summaries also bound submitted work. A run-level error stops new submissions; results from already started tasks are saved before the original error is reported. If saving fails too, both errors are retained.
 
 API Reader draws its facts from the saved source text, structured evidence, verified resources, and the figures prepared for this call, never from scored analysis prose. The parser still reads the older 13-section analysis. Running Reader after scoring does not make the score part of its writing input.
 
@@ -90,13 +90,13 @@ The remote OID proves only that the Git commit reached the remote. Before callin
 | Hugo repository | Generated pages, static assets, and verified publication commits |
 | `logs/` | Redacted diagnostics under age and capacity retention rules |
 
-An existing file does not mean the stage is complete. Consumers check dates, paper sets, state, input fingerprints, and SHA. Historical snapshots are usable for recovery only after they pass the cross-file checks, and they never excuse a current batch failure.
+An existing file does not mean the stage is complete. The programs reading these files check dates, paper sets, state, input fingerprints, and SHA. Historical snapshots are usable for recovery only after they pass the cross-file checks, and they never excuse a current batch failure.
 
 ## Lock boundaries
 
 | Lock | Protects | Recovery |
 |---|---|---|
-| full-fetch run lock | Archiving, fetching, filtering, and batch initialization | Never delete a live holder; after it exits, reclaim by the holder and lease rules |
+| full-fetch run lock | Archiving, fetching, filtering, and batch initialization | Never delete a lock while its holder is running; after it exits, reclaim by the holder and lease rules |
 | paper analysis lock | One paper's checkpoints and merge into accepted analysis | Wait for the running task; reread inside the lock, and never let a stale object overwrite |
 | JSON file lock | Shared files such as `papers.json`, deep analysis, and manifests | Read-modify-write in one step and increment `generation` |
 | LLM account pool lock | Account selection and cooldown state across dates | Held briefly for account selection or quota confirmation; HTTP requests always run outside it |

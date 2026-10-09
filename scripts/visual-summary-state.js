@@ -453,7 +453,7 @@ function visualSummaryPromptPath(promptTextContract) {
     );
 }
 
-// 显式传入 promptPath 的调用方（测试夹具）可能指向临时文件，此时无法反查版本，
+// 测试显式传入的 promptPath 可能指向临时提示词文件，此时无法通过路径识别版本，
 // 返回 null，让记录不写版本字段；核验方会按 v1 处理。
 function visualSummaryPromptContractForPath(promptPath) {
     const relative = path.relative(Config.PROJECT_ROOT, path.resolve(promptPath)).split(path.sep).join('/');
@@ -475,7 +475,7 @@ function promptSha256(promptPath = null) {
 // 设计上要冻结，实际被就地改写过，所以旧 manifest 声明的 SHA 与当前文件不符。声明值
 // 与当前文件不一致时，先确认归档里真有这份字节，再按声明值走；归档里没有就返回当前值，
 // 与改动前完全一样（继续报「prompt 已失效」）。
-// 显式传入 promptPath 的是测试夹具，不查归档，避免改变夹具路径的既有行为。
+// 测试显式传入 promptPath 时不查询归档，保持测试资料路径原有的处理方式。
 function resolvedPromptSha256(declaredSha256, promptPath = null, promptTextContract = null) {
     const current = promptPath
         ? promptSha256(promptPath)
@@ -1759,7 +1759,7 @@ function planVisualSummaries({
         }
     }
     const currentPromptSha = promptSha256(promptPath);
-    // 显式 promptPath 可能指向临时夹具，那时不写版本字段；核验方按 v1 处理。
+    // 显式 promptPath 可能指向临时测试文件，此时不写版本字段；核验方按 v1 处理。
     const declaredPromptTextContract = promptPath
         ? visualSummaryPromptContractForPath(promptPath)
         : currentPromptTextContract(VISUAL_SUMMARY_PROMPT_STAGE);

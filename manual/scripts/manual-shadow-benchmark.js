@@ -59,7 +59,7 @@ function metricValue(metric, key = 'durationMs') {
 }
 
 function qualityValue(value) {
-    // 发布前的测试夹具可以直接给数值；manual-v6-shadow 产出的报告一律用显式的
+    // 发布前的测试资料可以直接提供数值；manual-v6-shadow 产出的报告一律使用明确的
     // 状态对象。
     if (Number.isFinite(value)) return value;
     return value?.status === 'known' && Number.isFinite(value.value) ? value.value : null;

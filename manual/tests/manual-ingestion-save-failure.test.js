@@ -4,7 +4,7 @@ const { spawnSync } = require('node:child_process');
 const path = require('node:path');
 
 for (const failure of ['lock', 'save']) {
-    test(`真实人工录入遇到${failure === 'lock' ? '锁' : '落盘'}失败，不能把旧成功记录算成本轮完成`, () => {
+    test(`真实人工录入遇到${failure === 'lock' ? '锁' : '写入文件'}失败，不能把旧成功记录算成本轮完成`, () => {
         const script = `
 const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
 const root=fs.mkdtempSync(path.join(os.tmpdir(),'manual-failed-attempt-'));
@@ -12,7 +12,7 @@ const Config=require('./scripts/config');
 const engine=require('./scripts/analysis-engine');
 const {validAnalysisPaper}=require('./tests/valid-analysis-fixture');
 const paper=validAnalysisPaper('2601.12345');
-if (!engine.isSuccessfulAnalysisRecord(paper)) throw new Error('旧记录夹具必须真实满足成功门禁');
+if (!engine.isSuccessfulAnalysisRecord(paper)) throw new Error('用于测试的旧记录必须实际通过分析成功检查');
 const filtered=path.join(root,'filtered.json'),canonical=path.join(root,'canonical.json'),specPath=path.join(root,'spec.json');
 Config.FILES.filteredPapers=filtered;Config.FILES.deepAnalysisResult=canonical;
 fs.writeFileSync(filtered,JSON.stringify({batchDate:'2026-09-01',status:'complete',papers:[{arxivId:'2601.12345',title:'Paper'}]}));

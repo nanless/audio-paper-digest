@@ -2,7 +2,7 @@
 
 ## 这份文件给谁
 
-本文供第一次进入仓库、需要运行或修改论文速递的 Agent 使用，列出容易遗漏的操作限制。完整操作说明见 [SKILL.md](SKILL.md)，按任务查文档见 [docs/README.md](docs/README.md)，代码入口见 [scripts/README.md](scripts/README.md)。
+本文供第一次进入仓库、需要运行或修改论文速递的执行者使用，列出容易遗漏的操作限制。完整操作说明见 [SKILL.md](SKILL.md)，按任务查文档见 [docs/README.md](docs/README.md)，代码入口见 [scripts/README.md](scripts/README.md)。
 
 ## 默认目标与最短路径
 
@@ -10,7 +10,7 @@
 
 - 每日速递、新会议整理和历史博客维护统一在 `/Users/francis7999/code/github_repos/audio-paper-digest` 执行。当前角色保持 `daily`；本机 `.env` 的 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` 允许历史入口在此运行，反向放行仍然禁止。
 - 旧 `audio-paper-digest-rewrite-all` 工作区已废弃，不再进入、修改或启动任务；不从旧目录复制检查点或手工合并运行数据。
-- 当前任务的运行数据保存在本项目 `data/runtime/`。日更、会议、历史任务的生成、审查和推送必须错峰，由执行任务的 Agent 检查运行进程并安排；共享博客锁继续防止并发修改。
+- 当前任务的运行数据保存在本项目 `data/runtime/`。日更、会议、历史任务的生成、审查和推送必须错峰，由执行者检查运行进程并安排；共享博客锁继续防止并发修改。
 - 历史发布前先结束其他发布任务，同步代码仓库和博客仓库的最新远端 `main`，再基于最新 Git 基线生成审查与发布凭证。旧凭证不能因切换工作区而直接复用。
 
 用户说“运行/进行 YYYY-MM-DD 论文速递”时，默认执行完整 LLM/API 日更：

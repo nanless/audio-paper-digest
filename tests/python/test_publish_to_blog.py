@@ -90,7 +90,7 @@ def manual_v5_reader_paper():
 @contextlib.contextmanager
 def manual_v5_fresh_files(paper, date_str, *, official_project_evidence=False,
                           project_root=None):
-    """给 v5 夹具挂上一份真实的、由文件支撑的新撰写凭证。"""
+    """为 v5 测试样例数据添加一份可核对实际文件的新写作凭证。"""
     project_root = Path(ROOT) if project_root is None else Path(project_root)
     with tempfile.TemporaryDirectory() as tmp:
         current = Path(tmp) / 'current'
@@ -4029,7 +4029,7 @@ title: "Bad table"
             'arxivId': '2608.30001',
             'parsed': {
                 'score': '8.2', 'tags': ['#音频理解'],
-                'summary': '旧 canonical 摘要仍承担兼容字段。',
+                'summary': '保留旧摘要字段，以便读取旧格式记录。',
                 'roast': '证据很扎实，但还没有覆盖真实部署。',
                 'opensource': '代码尚未公开。',
                 'architecture': '这段固定栏目不应成为读者正文。',
@@ -4394,7 +4394,7 @@ title: "Bad table"
                 publish_to_blog, 'reusable_verified_publication_generation', return_value=reused,
         ), mock.patch.object(
                 publish_to_blog, 'infer_generation_publication_mode',
-                side_effect=AssertionError('已发布历史凭证不应进入新 v4 generation 门禁'),
+                side_effect=AssertionError('已有远端发布记录的历史批次不应重新判断生成模式'),
         ), mock.patch.object(
                 publish_to_blog, 'generation_journal_path', return_value=Path('/tmp/no-journal'),
         ), mock.patch.object(
@@ -4898,9 +4898,9 @@ title: "Bad table"
         paper = manual_v6_publication_fixture()
         markdown, _slug = publish_to_blog.generate_paper_page(paper, '2026-08-28')
         sanitized = publish_to_blog.sanitize_markdown_for_publish(markdown)
-        # 这份精简的发布器固定数据故意不带庞大的 v5
-        # resultClaims 账目，所以一个本来干净的页面可能在那道
-        # 独立检查上失败。它首先要通过 v6 的确定性复核。
+        # 这份发布器测试样例数据没有提供 v5 的 resultClaims 结果主张记录，
+        # 因而页面即使满足 v6 要求，也可能未通过单独的 v5 检查。
+        # 这里仅核对 v6 正文块与最终页面的内容是否一致。
         pristine_issue = publish_to_blog.validate_final_manual_v4_markdown(
             sanitized, paper,
         ) or ''
@@ -5419,7 +5419,7 @@ primary_method_tag: #Transformer
             (Path(ROOT) / 'tests' / 'fixtures' / 'published-papers-fingerprint-probe.json')
             .read_text(encoding='utf-8')
         )
-        # 和 Node 侧的探针共用。按 Unicode 码点，U+E000 排在非 BMP 键之前；
+        # 与 Node 测试共用这份输入样例。按 Unicode 码点，U+E000 排在非 BMP 键之前；
         # 但按 JS 的 UTF-16，它排在这些键的前导代理项之后。
         self.assertEqual(
             publish_to_blog.published_papers_fingerprint(probe),
@@ -6126,7 +6126,7 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             )
             self.assertEqual(
                 publish_to_blog.validate_hugo_rendered_html_gate(output, [artifact]), [],
-                '相关旧文章卡片的截断 Markdown 不得污染当前正文门禁',
+                '相关旧文章卡片中的截断 Markdown 不应导致当前正文检查失败',
             )
 
     def test_hugo_rendered_html_gate_checks_api_reader_v3_focus_tables_and_images(self):
@@ -7155,7 +7155,7 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
                 first_record = journal['installation']['files'][0]
                 first_target = repo / first_record['path']
                 first_source = stage / first_target.name
-                # 模拟在目标文件替换之后、installed=true 落盘之前收到 SIGKILL。
+                # 模拟替换目标文件后，尚未将 installed=true 写入日志就收到 SIGKILL。
                 first_target.write_text(first_source.read_text(encoding='utf-8'), encoding='utf-8')
                 installed = publish_to_blog.resume_generation_installation(
                     journal, journal_path, stage,
@@ -8452,7 +8452,7 @@ body
                 )
 
     def test_git_push_rechecks_schema_v3_input_integrity_before_receipt_or_git_mutation(self):
-        """直接调用推送也不能绕过 schema v3 的新来源闸门。"""
+        """直接调用推送也必须检查 schema v3 生成记录中的新来源文件。"""
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
             current = Path(tmp) / 'data' / 'current'
@@ -8756,7 +8756,7 @@ body
             ancestors = item['ancestorIds']
             self.assertNotIn(item['id'], ancestors)
             for index, ancestor in enumerate(ancestors):
-                # 自根到父链：父概念的祖先必须是本概念祖先的前缀
+                # 祖先从最上层排列到父概念；父概念的祖先必须对应当前列表的开头。
                 self.assertEqual(by_id[ancestor]['ancestorIds'], ancestors[:index])
         raw = publish_to_blog.tag_catalog_snapshot_bytes(snapshot)
         self.assertTrue(raw.endswith(b'\n'))
@@ -8798,7 +8798,7 @@ body
                     publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
                 )
                 self.assertEqual(len(payload['concepts']), 262)  # v1.1 换表：228→262
-            # 字节未变时不重写，避免把博客工作树弄脏
+            # 文件内容未变时不重写，避免在博客仓库中产生无关改动。
             with mock.patch.object(publish_to_blog, 'TAG_DISPLAY_POLICY_PATH', root / 'absent-policy.json'):
                 self.assertEqual(publish_to_blog.export_tag_catalog_files(repo), [])
 
@@ -8844,7 +8844,7 @@ body
                     ), contextlib.redirect_stdout(io.StringIO()):
                 with self.assertRaises(SystemExit):
                     publish_to_blog.generate_main(options)
-            # journal 未建立时不允许先修改博客；版本资产随 staging 一起安装。
+            # 尚未建立生成日志时，不得修改博客；标签词表文件随待发布文件一起写入。
             self.assertFalse((repo / 'data' / 'tag-catalog-snapshot.json').exists())
             self.assertFalse((repo / 'static' / 'data' / 'tag-catalog-snapshot.json').exists())
 

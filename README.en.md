@@ -84,7 +84,7 @@ today="$(TZ=Asia/Shanghai date +%F)"
 npm run digest:prepare -- "$today"
 ```
 
-`digest:prepare` processes the data, publishes the Git commit, and prepares visual tasks. The Agent must
+`digest:prepare` processes the data, publishes the Git commit, and prepares visual tasks. The assistant running the task must
 then verify deployment and the live pages, use Codex built-in image generation, inspect each image,
 and record the results. An explicit user-requested waiver may replace the visuals. Scripts do not call an image API.
 
@@ -100,7 +100,7 @@ A complete daily run means all of the following:
 1. Fetching, filtering, and deep analysis are complete, and their data matches across files.
 2. The digest and every paper page passed review; the blog commit is pushed and matches the remote OID.
 3. GitHub Pages build/deploy succeeded for the publication commit, or a later commit that preserves the
-   reviewed page bytes. The Agent manually checks HTTP 200, the official address, and the title of every
+   reviewed page bytes. The assistant checks HTTP 200, the official address, and the title of every
    digest and paper page, and saves the deployment and page-check records.
 4. TOP 10 infographics and the digest cover are recorded, or an explicit waiver binds the current publication.
 5. A fresh `digest:status` report, read after the last push or image record, lists no incomplete stage.

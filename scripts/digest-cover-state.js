@@ -80,7 +80,7 @@ function promptSha256(promptPath = null) {
 
 // 同 visual-summary-state.js：记录声明的 promptSha256 可能指向 prompts/history/ 里归档
 // 的历史字节。声明值与当前文件不符时，只有归档里确实有这份字节才按声明值走，否则返回
-// 当前值，保持改动前的失败行为。显式 promptPath 是测试夹具，不查归档。
+// 当前值，保持改动前的失败行为。测试显式传入 promptPath 时不查询归档。
 function resolvedPromptSha256(declaredSha256, promptPath = null, promptTextContract = null) {
     const current = promptPath
         ? promptSha256(promptPath)

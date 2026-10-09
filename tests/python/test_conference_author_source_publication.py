@@ -25,7 +25,7 @@ class ExistingConferenceAuthorPublicationTest(unittest.TestCase):
         spec = importlib.util.spec_from_file_location('author_conference_publisher', ROOT / 'scripts/publish-conference.py')
         new = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(new)
-        # 真实旧三函数原文；其余公共 helpers 使用当前实现，非完整旧 publisher 快照。
+        # 直接读取旧实现的三个函数原文；其余公共辅助函数使用当前实现，因此这里不代表完整的旧发布器。
         old_source = (ROOT / 'tests/fixtures/conference-publication-old-core.py').read_bytes()
         self.assertEqual(hashlib.sha256(old_source).hexdigest(), 'f7d4e23944f8ddf2f887d2c9cde06045e11d5cf54682b79d40c4dd91b3b9600c')
         old = types.ModuleType('old_author_conference_core')

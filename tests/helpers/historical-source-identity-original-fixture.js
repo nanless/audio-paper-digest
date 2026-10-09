@@ -1,6 +1,6 @@
 'use strict';
 // 原实现来自 e8b916eb281ac718ee98599155ab6b04304d60b2，先核完整源码字节再隔离装载。
-// 仅计划读取、来源就绪和封存资格使用离线夹具；实际来源记录、页面读取和摘要算法不替换。
+// 仅为读取计划、检查来源就绪状态和保存资格提供离线测试数据；实际来源记录、页面读取和 SHA-256 算法不替换。
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');

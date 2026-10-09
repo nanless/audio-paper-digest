@@ -18,7 +18,7 @@ This guide is for maintainers changing the default API, shared publication, prom
 | Reader writing/tables/repair | `api-reader-article-v2.md`, `api-reader-repair-v2.md` (current versions; v1 stays frozen in the same names without the suffix), `lib/reader-contract.js`, `lib/reader-tables.js`, `lib/reader-repair.js` | Validators, candidates and stage fingerprints, blog review |
 | Blog transaction | `publish-to-blog.py` | Three entry points and receipt tests |
 | Visual state | State modules and integration | Planner, status, record |
-| Command alias | `package.json` | User and Agent documentation |
+| Command alias | `package.json` | User and assistant documentation |
 
 ## Invariants
 

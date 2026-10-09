@@ -6,7 +6,7 @@
 // 版本按原始字节抽到 prompts/history/<sha256>.md，供 prompt-history.js 在「声明的
 // SHA 与当前文件不符」时取用。
 //
-// 默认只报告不落盘；加 --write 才写文件。重复运行不改变已有文件。
+// 默认只报告；加 --write 才保存文件。重复运行不改变已有文件。
 
 const fs = require('fs');
 const path = require('path');
@@ -255,7 +255,7 @@ function main() {
     const { entries, referenced } = collectArchiveEntries();
     const stats = report(entries, referenced, write ? writeArchive([...entries.values()]) : {});
     if (!write) {
-        console.log('（只报告，未落盘。加 --write 落盘到 prompts/history/）');
+        console.log('（只报告，未保存文件。加 --write 保存到 prompts/history/）');
     }
     return stats;
 }

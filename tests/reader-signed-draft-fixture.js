@@ -70,8 +70,8 @@ function fixture(options = {}) {
     const artifactBody=stableObject({version:1,parserVersion:'reader-signed-draft-fixture-v1',
         flattenedTextSha256:sha(text),tables,figures:options.noFigures?[]:[figure],formulas:[{ordinal:1,latex:'y=x.',
         recoveryStatus:'complete',sourceDomSha256:'b'.repeat(64)}]});
-    // 生产端绑定算的是稳定的对象指纹，签名端的反向校验则独立重算已落盘的
-    // JSON 原始字节。键序规范化之后，这份共享夹具同时满足两边的生产约定。
+    // 生产端按固定键顺序计算对象的 SHA-256，签名校验端则独立重算已保存
+    // JSON 的原始字节。先按固定顺序排列键，这份共用测试数据就能同时满足两边的要求。
     const artifacts={...artifactBody,payloadSha256:hash(artifactBody)};
     const snapshot={text,structuredArtifacts:artifacts};
     const descriptor={version:1,contract:'fresh-source-cache-v1',runId,paperId,sourceSha256:sha(text),

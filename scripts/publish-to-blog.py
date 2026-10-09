@@ -1697,6 +1697,21 @@ _IMAGE_REPO_SUFFIX_MIME = {
 }
 
 
+def _open_review_image_under_directory(image_repo, relative):
+    """沿已打开的目录逐层读取；内部目录被换成链接时不跟随该链接。"""
+    directories = []
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_NONBLOCK
+    try:
+        directories.append(os.open(image_repo, directory_flags))
+        for component in relative.split('/')[:-1]:
+            directories.append(os.open(component, directory_flags, dir_fd=directories[-1]))
+        return os.open(relative.split('/')[-1], os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW,
+                       dir_fd=directories[-1])
+    finally:
+        for descriptor in reversed(directories):
+            os.close(descriptor)
+
+
 def _load_review_image_from_local_repo(url):
     """从本地工作树里读取我们自己推送前的图片仓库 URL。
 
@@ -1740,7 +1755,7 @@ def _load_review_image_from_local_repo(url):
     if media_type not in REVIEW_IMAGE_MIME_TYPES:
         return None
     try:
-        descriptor = os.open(target, os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW)
+        descriptor = _open_review_image_under_directory(image_repo, relative)
     except OSError:
         return None
     with os.fdopen(descriptor, 'rb') as source:

@@ -854,7 +854,7 @@ def save_optimized_png(image, output_path):
             raise SpecError("PNG 经调色板优化后仍超过 8 MiB")
         with Image.open(temp_path) as check:
             if check.size != (CANVAS_WIDTH, CANVAS_HEIGHT) or check.format != "PNG":
-                raise SpecError("输出 PNG 尺寸或格式门禁失败")
+                raise SpecError("输出 PNG 的尺寸或格式不符合要求")
             check.verify()
         # 改走 path_config 的公共 helper：同目录临时文件 + fsync + 原子改名 +
         # 目录 fsync。这里原先是裸的 os.replace，写完既不 fsync 文件也不 fsync

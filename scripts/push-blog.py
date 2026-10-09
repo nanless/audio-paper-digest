@@ -12,22 +12,22 @@ from runtime_guard import require_external_runtime
 def parse_options(module, argv=None):
     parser = argparse.ArgumentParser(
         prog='push-blog.py',
-        description='只提交并推送已经取得严格 review 凭证的博客文件。',
+        description='只提交并推送已经取得审查通过凭证的博客文件。',
         allow_abbrev=False,
     )
     parser.add_argument('--date', action='append',
                         help='博客批次日期（YYYY-MM-DD；省略时为北京时间今天）')
     parser.add_argument('--require-visual-plan', action='store_true',
-                        help='视觉规划失败时以非零状态退出（默认日更编排使用）')
+                        help='图片任务规划失败时以非零状态退出（默认日更流程使用）')
     parser.add_argument('--include-id', action='append', metavar='ARXIV_ID',
-                        help='只推送该单篇灰度 generation；必须与生成/review 时 ID 一致')
+                        help='只推送指定单篇论文；ID 必须与生成和审查时一致')
     args = parser.parse_args(argv)
     if args.date and len(args.date) > 1:
         parser.error('--date 只能指定一次')
     if args.include_id and len(args.include_id) > 1:
         parser.error('--include-id 只能指定一次')
     if args.include_id and args.require_visual_plan:
-        parser.error('单篇灰度发布不建立批次视觉任务，--include-id 与 --require-visual-plan 互斥')
+        parser.error('单篇发布不建立整批图片任务，--include-id 不能与 --require-visual-plan 同时使用')
     return (
         module.validate_publish_date(module.get_today_bj(args.date[0] if args.date else None)),
         args.require_visual_plan,

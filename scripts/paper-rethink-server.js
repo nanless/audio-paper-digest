@@ -5,7 +5,7 @@
  * 只在本机运行的助手，用调用方自己的 LLM 账号重读一篇论文。
  *
  * 公开博客只允许在新标签页里打开 /ui，不得探测这个服务，也不得拿到本进程的
- * session token。供应商凭证只在这一个进程里存活一次请求，不落盘，也不写日志。
+ * 临时访问密钥。供应商凭证仅在当前进程处理一次请求时使用，不保存到文件，也不写日志。
  */
 
 const crypto = require('node:crypto');
@@ -795,7 +795,7 @@ async function downloadArxivPdf(arxivId, options = {}) {
             }
         }
     }
-    fail('PDF_UPSTREAM_INVALID', 'arXiv PDF 重定向无法收敛', 502);
+    fail('PDF_UPSTREAM_INVALID', 'arXiv PDF 重定向次数超过上限', 502);
 }
 
 function splitCsv(value) {

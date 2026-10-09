@@ -2,7 +2,7 @@
 
 ## 1. 受众、目标与入口
 
-本文供运行、恢复、发布或维护默认 LLM/API 论文速递的 Agent 使用。关键操作限制见 [AGENTS.md](AGENTS.md)，按任务查文档见 [docs/README.md](docs/README.md)，代码入口见 [scripts/README.md](scripts/README.md)。
+本文供运行、恢复、发布或维护默认 LLM/API 论文速递的执行者使用。关键操作限制见 [AGENTS.md](AGENTS.md)，按任务查文档见 [docs/README.md](docs/README.md)，代码入口见 [scripts/README.md](scripts/README.md)。
 
 默认任务是完成北京时间当天的论文筛选、分析、博客发布、上线核验和发布后图片：
 
@@ -33,7 +33,7 @@ cp env.example .env
 
 先确认当前工作区用途，再运行 `npm run workspace:role -- status`。当前目录保持 `daily`，日更、会议与历史维护都在此执行。旧历史工作区已废弃。角色标记缺失或真实路径不符时先停止，确认用途后才用 `npm run workspace:role -- set daily|history [--force]` 绑定；不要无条件强制设置。
 
-本机日更目录已在 `.env` 设 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`：`history:*` 入口会跨角色放行并打印提示。这个开关只放宽「daily 工作区执行 history 命令」，反向仍拒绝，也不允许日更、会议和历史任务同时生成、审查或推送博客；执行任务的 Agent 负责错峰。
+本机日更目录已在 `.env` 设 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`：`history:*` 入口会跨角色放行并打印提示。这个开关只放宽「daily 工作区执行 history 命令」，反向仍拒绝，也不允许日更、会议和历史任务同时生成、审查或推送博客；执行者负责错峰。
 
 在 `.env` 至少配置以下字段。仓库文档当前推荐模型为 `mimo-v2.6-flash`，实际模型由项目配置指定：
 
@@ -90,7 +90,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。npm 中的 Python 命令要求 Python 
 
 - 12–18 个小节，先解释必要的概念，再讲依赖这些概念的方法和机制；
 - 5000–18000 中文字；
-- 4–10 组术语组合桥；
+- 4–10 组术语搭配说明，解释各部分的分工、搭配原因和新增作用；
 - 用前后段落说明数据协议、主结果、消融/失败、训练或部署成本的表格；
 - 官方插图依次呈现导读、看图路径、原图、图注和解释，相关段落须相邻；
 - Markdown 表的每个单元格对应原表 DOM 单元格或逐字原文引文，展示公式由结构化原始 TeX 确定性注入；
@@ -116,7 +116,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。npm 中的 Python 命令要求 Python 
 | 其他 `/anthropic` | Anthropic | `{base}/messages` |
 | 其他（含当前推荐的 `mimo-v2.6-flash`） | OpenAI Chat | `/v1/chat/completions` |
 
-所有 Node LLM 调用经 `requestLlmJson()`。`muse-spark-*` 每次请求都创建独立的 HTTP CONNECT 连接对象，结束后销毁；这里的 `agent` 指连接对象，并非分析子代理。其他模型默认以 `agent:false` 直连，当前推荐的 `mimo-v2.6-flash` 不含 `muse-spark-` 前缀，走直连。Python 发布请求遵守同样的 Muse 代理规则。
+所有 Node LLM 调用经 `requestLlmJson()`。`muse-spark-*` 每次请求都创建独立的 HTTP CONNECT 连接对象，结束后销毁；这里的 `agent` 指连接对象，并非参与论文分析的独立助手。其他模型默认以 `agent:false` 直连，当前推荐的 `mimo-v2.6-flash` 不含 `muse-spark-` 前缀，走直连。Python 发布请求遵守同样的 Muse 代理规则。
 
 配置 `PAPER_ANALYZER_FALLBACK_API_KEYS` 后启用 OpenCode Go 备用账号。初始使用主密钥；明确 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 时，记录账号冷却并按配置顺序向后切换，不返回前面已冷却的账号。普通认证 401 不切号，而是上报运行级错误；所有后续账号不可用时停止派发并保留断点。
 

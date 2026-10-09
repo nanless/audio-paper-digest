@@ -2,7 +2,7 @@
 
 [返回入口](../README.md) · [文档地图](README.md) · [架构说明](architecture.md) · [编辑要求](editorial-reference-contract.md)
 
-主代理负责创建真实单篇子代理、登记任务并汇总整批结果。本手册按执行顺序说明每步读取和生成什么，以及失败后怎样恢复。文件身份和 SHA 算法见[架构说明](architecture.md)，正文质量要求见[编辑说明](editorial-reference-contract.md)。
+主助手负责创建实际运行的单篇助手、登记任务并汇总整批结果。本手册按执行顺序说明每步读取和生成什么，以及失败后怎样恢复。文件身份和 SHA 算法见[架构说明](architecture.md)，正文质量要求见[编辑说明](editorial-reference-contract.md)。
 
 ## 开始前确认工作区和日期
 
@@ -21,7 +21,7 @@ npm run workspace:role -- status
 
 角色须为 `daily`。日期使用北京时间批次日期，格式为 `YYYY-MM-DD`；抓取阶段还须符合根目录的日期限制，历史日期不能从抓取开始重跑。共享流程负责校验项目环境、代理和博客配置，不能因默认 API 的网络、模型或配额失败就自动切换到 Manual。
 
-正式模式（`production`）、隔离模式（`shadow`）和旧 v5 维护使用各自路径，不能混用文件。主代理直接管理单篇任务队列，任务管理器不创建子代理。其他发布渠道与实际生图操作另见根目录说明。
+正式模式（`production`）、隔离模式（`shadow`）和旧 v5 维护使用各自路径，不能混用文件。主助手直接管理单篇任务队列，任务管理器不创建单篇助手。其他发布渠道与实际生图操作另见根目录说明。
 
 ## 一、抓取与筛选候选
 
@@ -33,7 +33,7 @@ npm run manual:fetch -- --date YYYY-MM-DD --raw
 
 `--raw` 访问 arXiv/HuggingFace，不调用筛选模型。检查输出中的完整候选、逐来源健康信息、checkpoint 和输入 SHA。某来源暂时失败时，不能将不完整集合宣布为完整。
 
-主代理逐篇给出 `manual_offline` 决定，再提交筛选 spec：
+主助手逐篇给出 `manual_offline` 决定，再提交筛选 spec：
 
 ```bash
 npm run manual:fetch -- --date YYYY-MM-DD --select FILTER_SPEC.json
@@ -79,7 +79,7 @@ author
                      author_revision
 ```
 
-初稿验证通过后两个审查任务才可运行，两者都通过后才可修订。不同论文可并发，同篇不能跳过依赖。这里的“通过”是管理器核验文件与角色要求后记录的 `validated`，不能用子代理一句“完成”替代。
+初稿验证通过后两个审查任务才可运行，两者都通过后才可修订。不同论文可并发，同篇不能跳过依赖。这里的“通过”是管理器核验文件与角色要求后记录的 `validated`，不能用单篇助手一句“完成”替代。
 
 ## 四、创建并推进一个角色任务
 
@@ -103,7 +103,7 @@ npm run manual:tasks -- register --date YYYY-MM-DD \
   --artifact-root ARTIFACT_ROOT --packet PACKET_JSON
 ```
 
-`register` 核验并登记文件白名单，不领取任务或创建子代理。
+`register` 核验并登记文件白名单，不领取任务或创建单篇助手。
 
 ### 领取可运行任务
 
@@ -111,22 +111,22 @@ npm run manual:tasks -- register --date YYYY-MM-DD \
 npm run manual:tasks -- claim --date YYYY-MM-DD --limit 3
 ```
 
-`--limit` 默认为 3，范围 1–3。管理器只领取依赖满足的任务，并按当前已领取或运行的任务计算剩余容量。平台共 4 槽，主代理占 1 槽，最多同时运行 3 个单篇子代理。
+`--limit` 默认为 3，范围 1–3。管理器只领取依赖满足的任务，并按当前已领取或运行的任务计算剩余容量。平台共 4 槽，主助手占 1 槽，最多同时运行 3 个单篇助手。
 
 ### 创建真实子代理并登记任务名
 
-主代理根据 claim 创建只处理当前论文、当前角色的子代理。平台返回唯一任务名后，才能执行：
+主助手根据 claim 创建只处理当前论文、当前角色的单篇助手。平台返回唯一任务名后，才能执行：
 
 ```bash
 npm run manual:tasks -- start --date YYYY-MM-DD \
   --claim CLAIM_ID --task-name TASK_NAME
 ```
 
-不能提前 start，也不能用虚构任务名占位。四个正文角色均使用 `gpt-5.6-terra` 和 `high`；按输入包的实际契约创建任务，不能以其他模型运行后填同一凭证。
+不能提前 start，也不能用虚构任务名占位。四个正文角色均使用 `gpt-5.6-terra` 和 `high`；按输入包的实际要求创建任务，不能以其他模型运行后填同一凭证。
 
 ### 提交结果与凭证
 
-子代理只读取白名单文件，按 `outputContract` 写入规定结果和提交凭证。完成后提交：
+单篇助手只读取白名单文件，按 `outputContract` 写入规定结果和提交凭证。完成后提交：
 
 ```bash
 npm run manual:tasks -- submit --date YYYY-MM-DD \
@@ -148,7 +148,7 @@ npm run manual:tasks -- retry --date YYYY-MM-DD \
   --paper ARXIV_ID --role ROLE
 ```
 
-子代理明确返回失败时用 `fail` 保存原因；平台已确认任务终止，但领取记录未正常结束时用 `abandon`；失败或放弃后，用 `retry` 重新开放对应论文和角色。不能只凭等待时间推断任务死亡，否则可能出现两个子代理同时写同一目录。
+单篇助手明确返回失败时用 `fail` 保存原因；平台已确认任务终止，但领取记录未正常结束时用 `abandon`；失败或放弃后，用 `retry` 重新开放对应论文和角色。不能只凭等待时间推断任务已经终止，否则可能出现两个单篇助手同时写同一目录。
 
 ## 五、四个角色分别交付什么
 
@@ -239,7 +239,7 @@ npm run blog:generate -- --date YYYY-MM-DD
 npm run blog:manual-plan -- --date YYYY-MM-DD
 ```
 
-计划输出逐页审查文件及批次审查声明（`attestation`）的受控路径。每个最终页面由独立单页 `gpt-5.6-terra/high` 子代理审查，并登记逐页唯一的真实任务名。审查者只读当前不可变页面；需要修改时回到生成或修订阶段，产生新 SHA 后重审该页。
+计划输出逐页审查文件及批次审查声明（`attestation`）的受控路径。每个最终页面由独立的 `gpt-5.6-terra/high` 助手逐页审查，并登记逐页唯一的真实任务名。审查者只读当前不可变页面；需要修改时回到生成或修订阶段，产生新 SHA 后重审该页。
 
 Manual v5 和 v6 新页面都必须使用 v3 审查声明，包含独立单页任务和逐图审查记录；历史 v2 声明不能用于新的发布。已发布历史凭证仍按原格式核验，不补改其版本或内容。
 
@@ -270,9 +270,9 @@ npm run digest:status -- --date YYYY-MM-DD
 | 状态或症状 | 含义 | 下一步与限制 |
 |---|---|---|
 | `awaiting_packet` | 当前角色没有有效输入包 | 生成包，使用返回参数 register；不猜路径或借其他论文的包 |
-| `pending` | 输入有效、依赖满足，等待领取 | 有容量时 claim 并创建真实子代理；不手改成 running |
+| `pending` | 输入有效、依赖满足，等待领取 | 有容量时 claim 并创建真实单篇助手；不手改成 running |
 | `blocked` | 上游角色尚未 validated | 完成上游再查状态；不跳过依赖直接修订 |
-| `claimed` | 已领取，未登记真实任务 | 创建子代理后立即 start；不长期占位或填假任务名 |
+| `claimed` | 已领取，未登记真实任务 | 创建单篇助手后立即 start；不长期占位或填假任务名 |
 | `running` | 真实任务已登记 | 等待提交；只有确认终止才 abandon，不凭超时重复创建 |
 | `validated` | 结果和凭证已核验 | 推进下游；不原地修改验证文件 |
 | `failed` | 有明确失败记录 | 修复后 retry 指定论文和角色；不删状态或凭证掩盖失败 |

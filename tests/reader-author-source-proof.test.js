@@ -25,7 +25,7 @@ function source(originalHtml = html) {
     };
 }
 
-test('真实整HTML、原结构载荷与全文SHA闭合后才能重放作者机构', () => {
+test('完整原始 HTML、结构化数据和全文 SHA 一致后，才重新解析作者机构', () => {
     const details = source();
     const replayed = parser.replayHtmlReaderAuthors(details);
     assert.deepEqual(replayed.authors, [{ name: 'Alice Brown', affiliations: ['University A'] }]);
@@ -36,7 +36,7 @@ test('真实整HTML、原结构载荷与全文SHA闭合后才能重放作者机�
     }).authors, [{ name: 'Charlie Green', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] }]);
 });
 
-test('旧数组自洽、错HTML、错全文或错结构载荷都不能冒充原始作者来源', () => {
+test('旧数组内部一致也不能替代原始作者来源，错误 HTML、全文或结构化数据均拒绝', () => {
     for (const mutate of [
         details => { delete details.readerAuthors.sourceHtml; },
         details => { details.readerAuthors.sourceHtml = html.replace('University A', 'University B'); },
@@ -50,7 +50,7 @@ test('旧数组自洽、错HTML、错全文或错结构载荷都不能冒充原�
     }
 });
 
-test('原HTML证据有界且不封存内联图片，安全普通HTML可以原字节保留', () => {
+test('原始 HTML 有大小限制且不保存内联图片，符合条件的 HTML 保留原始字节', () => {
     const original = source();
     assert.equal(original.readerAuthors.sourceHtml, html);
     for (const invalid of [
@@ -94,7 +94,7 @@ test('实际作者刷新按原HTML重建，无原HTML保留元数据姓名并明
     }
 });
 
-test('引擎早跳和锁内跳过均重核原HTML；旧自洽错误机构不能直接跳过', async () => {
+test('分析引擎提前跳过或持锁后跳过，都须重新核验原始 HTML；旧记录中的错误机构不能复用', async () => {
     const engine = require('../scripts/analysis-engine.js');
     const direct = require('../scripts/lib/direct-rewrite-analysis-context.js');
     for (const locked of [false, true]) {
@@ -146,7 +146,7 @@ test('引擎早跳和锁内跳过均重核原HTML；旧自洽错误机构不能�
     }
 });
 
-test('封存runtime保留合格完整HTML，拒绝超限或实体编码图片；模型Reader证据不含原HTML', () => {
+test('来源运行记录保留合格的完整 HTML，拒绝超限内容或实体编码图片；读者文章的模型输入不含原始 HTML', () => {
     const fresh = require('../scripts/lib/fresh-arxiv-rewrite-source.js');
     const details = source();
     const text = { source: 'html', sourceId: '2610.12345v1', bytes: Buffer.from(details.text), responseSha256: sha256(details.text) };
@@ -166,7 +166,7 @@ test('封存runtime保留合格完整HTML，拒绝超限或实体编码图片；
     }
 });
 
-test('会议PDF无法重放作者上标时，以元数据姓名和明确不可得机构修复而非阻断入口', () => {
+test('会议 PDF 无法还原作者上标对应关系时，使用论文信息中的姓名并明确机构不可得，允许继续处理', () => {
     const text = 'Original conference PDF text';
     const details = { source: 'conference_pdf_text', text, structuredArtifacts: { payloadSha256: 'a'.repeat(64) } };
     const paper = { authors: ['Alice Brown'], sourceSha256: sha256(text), analysisManifest: {
@@ -179,7 +179,7 @@ test('会议PDF无法重放作者上标时，以元数据姓名和明确不可�
     assert.equal(parser.readerAuthorIdentityMatchesSource(paper, details), true);
 });
 
-test('无全文的会议兼容必须绑定已核metadata完整姓名与明确不可得，重签自SHA不能冒充', () => {
+test('没有全文的旧会议记录必须对应已核验的完整作者姓名并明确机构不可得，重算自身 SHA 也不能伪造', () => {
     const details = source();
     delete details.readerAuthors.sourceHtml;
     const paper = { authors: ['Alice Brown'], sourceSha256: sha256(details.text), analysisManifest: {
@@ -219,7 +219,7 @@ test('无全文的会议兼容必须绑定已核metadata完整姓名与明确不
     assert.equal(parser.readerAuthorUnavailableIdentityMatches(paper, { ...authority, sourceSha256: 'f'.repeat(64) }), false);
 });
 
-test('实际复用门禁拒绝旧不可得兼容记录的断裂SHA和不对应身份字段', () => {
+test('复用检查拒绝旧机构不可得记录中的错误 SHA 和不对应的身份字段', () => {
     const { canReuseReaderAuthorInputs } = require('../scripts/lib/reader-author-source.js');
     const details = source(); delete details.readerAuthors.sourceHtml;
     const paper = { authors: ['Alice Brown'], sourceSha256: sha256(details.text), analysisManifest: {
@@ -259,7 +259,7 @@ test('实际复用门禁拒绝旧不可得兼容记录的断裂SHA和不对应�
     }
 });
 
-test('真实复用门禁保持受控TeX重音姓名展示与旧不可得提示语兼容', () => {
+test('复用检查保留受支持的 TeX 重音姓名展示和旧机构不可得提示语', () => {
     const { canReuseReaderAuthorInputs } = require('../scripts/lib/reader-author-source.js');
     const details = source(); delete details.readerAuthors.sourceHtml;
     const paper = { authors: ['Ga{ë}l'], sourceSha256: sha256(details.text), analysisManifest: {

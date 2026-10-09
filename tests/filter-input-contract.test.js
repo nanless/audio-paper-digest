@@ -4,10 +4,10 @@ const assert = require('node:assert');
 const { buildFilterInputSha256: buildFromContract } = require('../scripts/lib/filter-input-contract.js');
 const { buildFilterInputSha256: buildFromFetcher } = require('../scripts/fetch-papers.js');
 
-// 期望值全部冻结。这些常量按契约独立算好后写死，没有调用 buildFilterInputSha256：
+// 期望值全部冻结。这些常量按约定独立算好后写死，没有调用 buildFilterInputSha256：
 // 输入是 title、abstract、categories 三个键，categories 数组先 map(String) 再排序，
-// 序列化用 JSON.stringify。夹具若调用被测函数，就会跟着实现一起漂移——把实现改成
-// 「只哈希 title」时测试仍然全绿，筛选决策缓存就可能在只对上标题的情况下复用。
+// 序列化用 JSON.stringify。测试样例数据若调用被测函数，就会跟着实现一起改变——把实现改成
+// 「只计算 title 的 SHA-256」时测试仍然全部通过，筛选决策缓存就可能在只对上标题的情况下复用。
 const FROZEN = Object.freeze({
     // { title:'  Audio Paper  ', abstract:'  Abstract  ', categories:['cs.SD','eess.AS'] }
     // 序列化后为 {"title":"Audio Paper","abstract":"Abstract","categories":["cs.SD","eess.AS"]}
@@ -42,14 +42,14 @@ const SAMPLES = Object.freeze({
     chineseText: { title: '语音识别', abstract: '中文摘要', categories: ['cs.SD'] }
 });
 
-describe('filter-input-contract 筛选输入契约', () => {
+describe('filter-input-contract 筛选输入约定', () => {
     it('每类输入的 SHA-256 都等于冻结值，改动覆盖范围会失败', () => {
         for (const [name, paper] of Object.entries(SAMPLES)) {
-            assert.strictEqual(buildFromContract(paper), FROZEN[name], `${name} 的契约哈希已变`);
+            assert.strictEqual(buildFromContract(paper), FROZEN[name], `${name} 的 SHA-256 已偏离固定预期值`);
         }
     });
 
-    it('筛选生成端与共享契约给出同一结果', () => {
+    it('筛选生成端与共享约定给出同一结果', () => {
         for (const [name, paper] of Object.entries(SAMPLES)) {
             assert.strictEqual(buildFromFetcher(paper), FROZEN[name], `${name} 经 fetch-papers 导出后哈希不一致`);
         }

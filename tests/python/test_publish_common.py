@@ -473,7 +473,7 @@ class PublishCommonSanitizerTest(unittest.TestCase):
     def test_manual_paper_identity_mode_only_allows_true_historical_fallback(self):
         self.assertEqual(
             _manual_paper_identity_mode(
-                {'manualDepth': 'full-text-evidence-v5'}, 'historical fixture'
+                {'manualDepth': 'full-text-evidence-v5'}, '历史测试样例数据'
             ),
             'historical_per_entry',
         )
@@ -484,7 +484,7 @@ class PublishCommonSanitizerTest(unittest.TestCase):
                 _manual_paper_identity_mode({
                     'manualDepth': 'full-text-evidence-v5',
                     marker: f'{marker}-fixture',
-                }, 'fresh fixture')
+                }, '新写作测试样例数据')
         self.assertEqual(_manual_paper_identity_mode({
             'manualDepth': 'full-text-evidence-v5',
             'freshAuthoring': 'fresh-authoring-v1',
@@ -508,7 +508,7 @@ class PublishCommonSanitizerTest(unittest.TestCase):
         claim['sourceBindings']['value'] = '3.73.7'
         self.assertIn('3.73.7', claim['sourceQuote'])
         self.assertIn('未覆盖', _validate_manual_result_claim_bindings(
-            claim, 'sourceBindings', claim['sourceQuote'], 'fixture',
+            claim, 'sourceBindings', claim['sourceQuote'], '测试样例数据',
         ))
 
     def test_manual_v5_all_reject_images_requires_full_specific_coverage(self):
@@ -537,25 +537,25 @@ class PublishCommonSanitizerTest(unittest.TestCase):
             },
         ]
         self.assertIsNone(_validate_manual_v5_all_rejected_images(
-            paper, decisions, 'fixture',
+            paper, decisions, '测试样例数据',
         ))
         with self.assertRaisesRegex(PublishDataValidationError, '未逐项覆盖'):
-            _validate_manual_v5_all_rejected_images(paper, decisions[:-1], 'fixture')
+            _validate_manual_v5_all_rejected_images(paper, decisions[:-1], '测试样例数据')
         generic = copy.deepcopy(decisions)
         generic[0]['reason'] = '图片在移动端不够清晰，因此不建议插入正文；它没有提供比文字更有价值的信息，也不适合在博客中展示。'
         with self.assertRaisesRegex(PublishDataValidationError, '不是论文特有'):
-            _validate_manual_v5_all_rejected_images(paper, generic, 'fixture')
+            _validate_manual_v5_all_rejected_images(paper, generic, '测试样例数据')
         duplicated = copy.deepcopy(decisions)
         duplicated[1]['reason'] = duplicated[0]['reason'].replace('1917×989', '1917 × 989')
         with self.assertRaisesRegex(PublishDataValidationError, '不得跨图复用'):
-            _validate_manual_v5_all_rejected_images(paper, duplicated, 'fixture')
+            _validate_manual_v5_all_rejected_images(paper, duplicated, '测试样例数据')
         inconsistent = copy.deepcopy(paper)
         inconsistent['imageManifest']['insertionPlan'] = [{'imageNumber': 1}]
         with self.assertRaisesRegex(PublishDataValidationError, '空 insertionPlan'):
-            _validate_manual_v5_all_rejected_images(inconsistent, decisions, 'fixture')
+            _validate_manual_v5_all_rejected_images(inconsistent, decisions, '测试样例数据')
 
     def test_manual_v5_all_reject_images_accepts_js_specific_visual_anchors(self):
-        """发布端必须接受与 JS 记录/规格闸门相同的具体锚点。"""
+        """发布端必须接受 JS 记录和规格检查允许的同一组具体图片描述词。"""
         anchors = ['系统总览', '矩阵', '分布', '公式', '箭头', '分桶']
         urls = [f'https://example.com/{index}.png' for index in range(len(anchors))]
         paper = {
@@ -578,7 +578,7 @@ class PublishCommonSanitizerTest(unittest.TestCase):
             for index, (url, anchor) in enumerate(zip(urls, anchors), start=1)
         ]
         self.assertIsNone(_validate_manual_v5_all_rejected_images(
-            paper, decisions, 'fixture',
+            paper, decisions, '测试样例数据',
         ))
 
     def test_manual_binding_single_character_whitelist_matches_node(self):
@@ -587,14 +587,14 @@ class PublishCommonSanitizerTest(unittest.TestCase):
         claim['sourceBindings']['unit'] = '%'
         claim['sourceBindings']['direction'] = '↓'
         self.assertIsNone(_validate_manual_result_claim_bindings(
-            claim, 'sourceBindings', claim['sourceQuote'], 'fixture',
+            claim, 'sourceBindings', claim['sourceQuote'], '测试样例数据',
         ))
         for field, fragment in (('unit', 'x'), ('direction', '→')):
             invalid = copy.deepcopy(claim)
             invalid['sourceQuote'] += f' {fragment}'
             invalid['sourceBindings'][field] = fragment
             self.assertIn('至少 2 个非空白字符', _validate_manual_result_claim_bindings(
-                invalid, 'sourceBindings', invalid['sourceQuote'], 'fixture',
+                invalid, 'sourceBindings', invalid['sourceQuote'], '测试样例数据',
             ))
 
     def test_manual_v4_reader_lexical_boundaries_and_node_parity(self):
@@ -653,7 +653,7 @@ class PublishCommonSanitizerTest(unittest.TestCase):
         self.assertIn('悬空连接词', dangling)
 
     def test_manual_v4_quantity_audit_ignores_headings_and_indefinite_one_phrases(self):
-        """让 Python 发布端镜像与 editorial-quality.js 保持一致。"""
+        """让 Python 发布端的数量检查与 editorial-quality.js 保持一致。"""
         safe_cases = (
             '## 核心摘要\n一个好看的示意图不能替代真实实验，正文仍需给出可核对的比较。\n',
             '## 方法概述和架构\n### 冻结之后仍有一段必须学习\n该段说明冻结模块与可训练模块的职责边界。\n',
@@ -809,7 +809,7 @@ title: "Reader page"
         self.assertIn('这是实验段落。\n\n## 局限与问题\n', reader_view)
 
     def test_final_manual_v5_reader_article_replaces_fixed_v4_sections(self):
-        """v5 页面发布的是自定义 readerArticle，不是旧版六列表皮。"""
+        """v5 页面使用 readerArticle 中自定义的正文，不再使用旧版六个固定栏目。"""
         v5_markdown = '''---
 title: "Reader-first page"
 paper_digest_manual_depth: "full-text-evidence-v5"
@@ -863,10 +863,9 @@ paper_digest_manual_depth: "full-text-evidence-v5"
             )],
             [url],
         )
-        # 这份精简固定数据故意不带权威的 v5 结论声明载荷。
-        # 因此最终检查可能因为这条独立原因拒掉它，
-        # 但它不该再把同一个自链图片
-        # 当成 selectedImageUrls 顺序不符而重复报错。
+        # 这份测试样例数据没有提供 v5 结果主张记录，可能因此未通过最终检查。
+        # 这里仅检查点击图片打开原图的链接结构，
+        # 不应把同一张图片重复计数并误报 selectedImageUrls 顺序不符。
         self.assertNotIn(
             '图片 URL/顺序',
             validate_final_manual_v4_markdown(sanitized, paper) or '',
@@ -934,7 +933,7 @@ paper_digest_manual_depth: "full-text-evidence-v4"
         # 嵌套的 Markdown 标题会切分正文。
         # 旧的回退实现把五个中文句号也算成字符，
         # 于是这段 258 个汉字、五个句子的段落
-        # 被误判成超过 260 的硬失败。
+        # 被误判为超过 260 个汉字，导致检查失败。
         punctuation_boundary = '\n'.join((
             '### 这是一条嵌套标题，不应并入正文长度',
             '甲' * 258 + '。' * 5,
@@ -1264,7 +1263,7 @@ paper_digest_manual_depth: "full-text-evidence-v4"
                 with self.assertRaisesRegex(PublishDataValidationError, '数值|未覆盖'):
                     _validate_manual_v4_result_claims(
                         {'documentType': '方法研究', 'resultClaims': claims},
-                        '## 实验结果\n' + '\n'.join(lines), 'fixture')
+                        '## 实验结果\n' + '\n'.join(lines), '测试样例数据')
 
     def test_manual_publication_preserves_exact_numbers_and_tex_values(self):
         for source_value, claimed_value in [
@@ -1284,7 +1283,7 @@ paper_digest_manual_depth: "full-text-evidence-v4"
                                  f'{claimed_value}%，越低越好。')
                 self.assertEqual(_validate_manual_v4_result_claims(
                     {'documentType': '方法研究', 'resultClaims': claims},
-                    '## 实验结果\n' + '\n'.join(lines), 'fixture'), claims)
+                    '## 实验结果\n' + '\n'.join(lines), '测试样例数据'), claims)
 
     def test_manual_v4_publish_result_claims_require_three_nonempty_source_bound_numbers(self):
         analysis = '''## 实验结果
@@ -1305,54 +1304,54 @@ paper_digest_manual_depth: "full-text-evidence-v4"
         ]
         takeover = {'documentType': '方法研究', 'resultClaims': claims}
         self.assertEqual(
-            _validate_manual_v4_result_claims(takeover, analysis, 'fixture'), claims,
+            _validate_manual_v4_result_claims(takeover, analysis, '测试样例数据'), claims,
         )
 
         too_few = copy.deepcopy(takeover)
         too_few['resultClaims'] = too_few['resultClaims'][:2]
         with self.assertRaisesRegex(PublishDataValidationError, '至少需要 3 条'):
-            _validate_manual_v4_result_claims(too_few, analysis, 'fixture')
+            _validate_manual_v4_result_claims(too_few, analysis, '测试样例数据')
 
         empty = copy.deepcopy(takeover)
         empty['resultClaims'][0]['baseline'] = ''
         with self.assertRaisesRegex(PublishDataValidationError, 'baseline 缺失'):
-            _validate_manual_v4_result_claims(empty, analysis, 'fixture')
+            _validate_manual_v4_result_claims(empty, analysis, '测试样例数据')
 
         quote_drift = copy.deepcopy(takeover)
         quote_drift['resultClaims'][0]['sourceQuote'] = 'The full system improves recognition.'
         with self.assertRaisesRegex(PublishDataValidationError, 'sourceBindings'):
-            _validate_manual_v4_result_claims(quote_drift, analysis, 'fixture')
+            _validate_manual_v4_result_claims(quote_drift, analysis, '测试样例数据')
 
         mixed_not_reported = copy.deepcopy(takeover)
         mixed_not_reported['resultClaims'][0]['unit'] = 'notReported 7.1'
         with self.assertRaisesRegex(PublishDataValidationError, '不得把 notReported 与数值混写'):
-            _validate_manual_v4_result_claims(mixed_not_reported, analysis, 'fixture')
+            _validate_manual_v4_result_claims(mixed_not_reported, analysis, '测试样例数据')
 
         body_drift = copy.deepcopy(takeover)
         body_drift['resultClaims'][0]['value'] = '6.8'
         body_drift['resultClaims'][0] = manual_result_claim_fixture('6.8')
         with self.assertRaisesRegex(PublishDataValidationError, '未共同落在'):
-            _validate_manual_v4_result_claims(body_drift, analysis, 'fixture')
+            _validate_manual_v4_result_claims(body_drift, analysis, '测试样例数据')
 
         invalid_direction = copy.deepcopy(takeover)
         invalid_direction['resultClaims'][0]['direction'] = '越快越好'
         with self.assertRaisesRegex(PublishDataValidationError, '方向语义'):
-            _validate_manual_v4_result_claims(invalid_direction, analysis, 'fixture')
+            _validate_manual_v4_result_claims(invalid_direction, analysis, '测试样例数据')
 
         scalar_not_reported = copy.deepcopy(takeover)
         scalar_not_reported['resultClaims'][0]['unit'] = '未报告'
         with self.assertRaisesRegex(PublishDataValidationError, '必须使用.*notReported'):
-            _validate_manual_v4_result_claims(scalar_not_reported, analysis, 'fixture')
+            _validate_manual_v4_result_claims(scalar_not_reported, analysis, '测试样例数据')
 
         duplicate = copy.deepcopy(takeover)
         duplicate['resultClaims'][1] = copy.deepcopy(duplicate['resultClaims'][0])
         with self.assertRaisesRegex(PublishDataValidationError, '重复'):
-            _validate_manual_v4_result_claims(duplicate, analysis, 'fixture')
+            _validate_manual_v4_result_claims(duplicate, analysis, '测试样例数据')
 
         missing_binding_field = copy.deepcopy(takeover)
         del missing_binding_field['resultClaims'][0]['readerBindings']['metric']
         with self.assertRaisesRegex(PublishDataValidationError, '必须且只能包含'):
-            _validate_manual_v4_result_claims(missing_binding_field, analysis, 'fixture')
+            _validate_manual_v4_result_claims(missing_binding_field, analysis, '测试样例数据')
 
         qualitative_claims = copy.deepcopy(takeover)
         qualitative_analysis = analysis + ' 定性结果不可得，只保留论文报告的失败方向。'
@@ -1366,12 +1365,12 @@ paper_digest_manual_depth: "full-text-evidence-v4"
             claim['readerBindings']['value'] = '定性结果不可得'
         with self.assertRaisesRegex(PublishDataValidationError, '实证论文.*至少需要 1 条'):
             _validate_manual_v4_result_claims(
-                qualitative_claims, qualitative_analysis, 'fixture',
+                qualitative_claims, qualitative_analysis, '测试样例数据',
             )
 
     def test_manual_v2_publish_provenance_is_cryptographically_closed(self):
         paper, manifest = manual_v2_fixture(hardened=True)
-        _validate_manual_takeover_manifest(paper, manifest, 'fixture')
+        _validate_manual_takeover_manifest(paper, manifest, '测试样例数据')
 
         cases = []
         candidate = copy.deepcopy((paper, manifest))
@@ -1416,48 +1415,48 @@ paper_digest_manual_depth: "full-text-evidence-v4"
 
         for label, (candidate_paper, candidate_manifest), message in cases:
             with self.subTest(label=label), self.assertRaisesRegex(PublishDataValidationError, message):
-                _validate_manual_takeover_manifest(candidate_paper, candidate_manifest, 'fixture')
+                _validate_manual_takeover_manifest(candidate_paper, candidate_manifest, '测试样例数据')
 
     def test_manual_v2_legacy_migration_boundary_keeps_2026_08_21_only(self):
         paper, manifest = manual_v2_fixture(hardened=False)
-        _validate_manual_takeover_manifest(paper, manifest, 'legacy fixture')
+        _validate_manual_takeover_manifest(paper, manifest, '旧格式测试样例数据')
 
         newer_paper, newer_manifest = manual_v2_fixture(
             hardened=False,
             completed_at='2026-08-22T00:00:00.000+08:00',
         )
         with self.assertRaisesRegex(PublishDataValidationError, '逐阶段 prompt/context 绑定'):
-            _validate_manual_takeover_manifest(newer_paper, newer_manifest, 'newer legacy fixture')
+            _validate_manual_takeover_manifest(newer_paper, newer_manifest, '较晚日期的旧格式测试样例数据')
 
     def test_manual_v3_publish_provenance_binds_authoring_images_and_execution_kind(self):
         paper, manifest = manual_v2_fixture(hardened=True, v3=True)
-        _validate_manual_takeover_manifest(paper, manifest, 'v3 fixture')
+        _validate_manual_takeover_manifest(paper, manifest, 'v3 测试样例数据')
 
         candidate = copy.deepcopy((paper, manifest))
         candidate[1]['manualTakeover']['manualAuthoringPromptSha256'] = None
         with self.assertRaisesRegex(PublishDataValidationError, 'manualAuthoringPromptSha256'):
-            _validate_manual_takeover_manifest(*candidate, 'v3 fixture')
+            _validate_manual_takeover_manifest(*candidate, 'v3 测试样例数据')
 
         candidate = copy.deepcopy((paper, manifest))
         candidate[1]['manualTakeover']['stageEvidence']['primaryAnalysis']['executionKind'] = 'llm_api'
         with self.assertRaisesRegex(PublishDataValidationError, 'executionKind'):
-            _validate_manual_takeover_manifest(*candidate, 'v3 fixture')
+            _validate_manual_takeover_manifest(*candidate, 'v3 测试样例数据')
 
         candidate = copy.deepcopy((paper, manifest))
         candidate[0]['imageManifest']['insertionDiagnostics'].append({'url': 'https://example.com/tampered.png'})
         with self.assertRaisesRegex(PublishDataValidationError, 'selectionEvidenceSha256'):
-            _validate_manual_takeover_manifest(*candidate, 'v3 fixture')
+            _validate_manual_takeover_manifest(*candidate, 'v3 测试样例数据')
 
     def test_manual_v4_requires_evidence_rich_table_contract_without_retroactive_v3_change(self):
         paper, manifest = manual_v2_fixture(hardened=True, v3=True)
-        _validate_manual_takeover_manifest(paper, manifest, 'historical v3 fixture')
+        _validate_manual_takeover_manifest(paper, manifest, '历史 v3 测试样例数据')
 
         manifest['contracts']['manualDepth'] = 'full-text-evidence-v4'
         manifest['contracts']['experimentTables'] = EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION
         with self.assertRaisesRegex(
                 PublishDataValidationError,
                 'manual v4 必须声明 experimentTables=evidence-rich-v2'):
-            _validate_manual_takeover_manifest(paper, manifest, 'v4 fixture')
+            _validate_manual_takeover_manifest(paper, manifest, 'v4 测试样例数据')
 
     def test_shared_publish_date_validation_rejects_impossible_dates(self):
         self.assertEqual(get_today_bj('2026-07-13'), '2026-07-13')
@@ -1644,8 +1643,8 @@ primary_method_tag: #基准测试
         self.assertEqual(sanitize_markdown_for_publish(sanitize_markdown_for_publish(table)), table)
 
     def test_fix_extraction_diacritic_damage_repairs_pdf_torn_accents(self):
-        # PDF 提取把重音撕成反引号/游离音标；孤立反引号会打开不闭合的行内
-        # 代码，最终 Markdown 门禁必然失败（Interspeech 2026 review 实测）。
+        # PDF 提取可能将重音拆成反引号和独立音标。孤立反引号会形成未闭合的行内
+        # 代码，使最终 Markdown 检查失败（Interspeech 2026 审查中发现过此问题）。
         self.assertIn('Yoruba', fix_extraction_diacritic_damage('the Yor`ub ́a minimal'))
         self.assertIn('Yoruba', fix_extraction_diacritic_damage('the Yor`ub´a minimal'))
         self.assertIn('Concrete', fix_extraction_diacritic_damage('title: "Concr`ete: x"'))
@@ -3680,7 +3679,7 @@ primary_method_tag: #基准测试
             c for c in synthetic_old['concepts'] if c['id'] != 'task.wake-word']
         self.assertFalse(any(c.get('broaderId') == 'task.wake-word'
                              for c in synthetic_old['concepts']),
-                         'task.wake-word 必须无子节点才可作为合成删除对象')
+                         '构造测试用旧词表时，只能移除没有下级概念的 task.wake-word')
         # 写入词表文件时只保留 version、facets、concepts 三个字段。
         # registrySha256 是加载后附加的元数据，写回文件会先被词表字段校验拒绝，
         # 快照读取因此返回 None。
@@ -3705,12 +3704,12 @@ primary_method_tag: #基准测试
                     'toRegistryVersion': current['version'],
                     'changeLevel': 'additive',
                     'reasons': ['concept-added'],
-                    'note': '合成 additive 快照：验证确认字段只属于 destructive',
+                    'note': '构造只增加概念的词表更新，核对确认字段只能用于破坏性变更',
                     'destructiveAcknowledgement': {
                         'acknowledged': True,
                         'reasonsHash': _destructive_reasons_hash(additive_detail),
                         'conceptIdImpact': 'none',
-                        'note': '不该出现在 additive 上',
+                        'note': '仅增加概念时不应提供破坏性变更确认',
                     },
                 }
                 valid_additive = dict(annotated)
@@ -3726,7 +3725,7 @@ primary_method_tag: #基准测试
 
     def test_python_registry_upgrade_gate_matches_node_fixture(self):
         # Python 与 Node 使用同一份旧词表 SHA、升级说明和概念 ID 输入，逐项比较处理结果。
-        # 另一个 JavaScript 测试读取相同 fixture；本 Python 方法不执行 Node。
+        # 另一个 JavaScript 测试读取同一份测试样例数据；本 Python 方法不执行 Node。
         display_expectations = {
             'additive-upgrade-allowed': {
                 'summary': '词表变更属于 destructive；各项原因及数量为：alias-removed×2、broader-id-changed×1、preferred-label-changed×2、alias-added×5、concept-added×58、definition-updated×2、scope-note-updated×8。',
@@ -4063,8 +4062,8 @@ primary_method_tag: #基准测试
                     document_type='方法研究',
                     source_text='The third configuration fails on the hard subset.',
                 ), '没有保留负面证据')
-        # explicit_metric_decline: 裸指标（higher-is-better）下降本身即算负面证据，
-        # 无需“代价”前缀，因此本例通过门禁（与 Node 侧 analysis-contract 语义一致）。
+        # explicit_metric_decline：对越高越好的指标，数值下降本身就是负面结果；
+        # 不需要“代价”前缀。因此本例应通过检查，与 Node 的 analysis-contract 检查一致。
         self.assertIsNone(validate_experiment_table_contract(
             analysis_with('动态幅度从 44.58 下降至 35.62'),
             contract_version=EXPERIMENT_TABLE_CONTRACT_VERSION,

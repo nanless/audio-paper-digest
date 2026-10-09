@@ -378,8 +378,8 @@ def rendered_article_fragment(rendered):
     # PaperMod 把真正的 Markdown 正文包在 ``.post-content`` 里，相关文章卡片
     # 可能留在外层 ``article`` 内。那些卡片引用旧文章，可以合法地包含被截断
     # 的旧版 Markdown（例如 ``**S``），不能算到正在审查的页面上。
-    # 优先用较窄的正文包装元素；对不提供它的主题和测试夹具，保留
-    # article/main/body 兜底。
+    # 优先使用只包含正文的元素；主题或测试 HTML 没有该元素时，
+    # 依次查找 article/main/body。
     line_offsets = _html_line_offsets(rendered)
 
     class ArticleContent(HTMLParser):

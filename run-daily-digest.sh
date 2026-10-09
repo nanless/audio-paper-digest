@@ -205,8 +205,8 @@ run_stage 8 "准备论文关键图输入" node scripts/visual-summary-state.js p
 echo "==> digest:prepare 仅完成博客发布与视觉输入准备；退出成功不代表整条论文速递完成。"
 echo "==> Codex 现在必须继续生成、目检并登记 TOP 10 论文长图和汇总封面。"
 echo "==> 若用户明确取消视觉，改运行 digest:waive-visuals，禁止调用 image_gen 或伪造 complete。"
-echo "==> 最终门禁: npm run visual:status -- --date ${target_date}"
-echo "==> 最终门禁: npm run cover:status -- --date ${target_date}"
+echo "==> 最终检查: npm run visual:status -- --date ${target_date}"
+echo "==> 最终检查: npm run cover:status -- --date ${target_date}"
 
 echo "==> 还须确认对应提交的 GitHub Pages 构建、部署成功，并逐页核对正式地址、HTTP 200 与标题。"
 echo "==> 完成图片登记或后续推送后重新读取: npm run digest:status -- --date ${target_date}"

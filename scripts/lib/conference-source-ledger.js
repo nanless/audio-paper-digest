@@ -344,9 +344,9 @@ function verifyMemberFiles(ledger, root) {
     return true;
 }
 
-// 收紧这份契约时 v1 还没有运行时 ledger。这条窄的写作兼容只留给那些构造内存中
-// 全在场夹具的调用方，之后一律写出规范 schema，而不是在 validateLedger/loadLedger
-// 里接受一个无法审查的旧对象。
+// 收紧这些检查要求时，v1 尚未保存运行时 ledger。创建时只兼容在内存中构造、
+// 并将全部来源标为存在的测试资料；随后按当前标准格式保存，不在
+// validateLedger/loadLedger 中接受无法核验的旧对象。
 function upgradeLegacyCreateMember(member) {
     const legacyFields = [
         'identity', 'metadataFile', 'metadataSha256', 'pdfFile', 'pdfSha256',

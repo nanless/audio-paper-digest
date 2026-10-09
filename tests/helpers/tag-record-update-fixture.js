@@ -1,7 +1,7 @@
 'use strict';
 
-// 标签记录更新测试的共享夹具：当前词表运行信息、按 SHA 命名的旧词表快照、
-// 依据旧词表保存的规范分析记录。只读重放与 --apply 写入测试共用，
+// 标签记录更新测试共用的数据：当前词表运行信息、按 SHA 命名的旧词表快照、
+// 依据旧词表保存的正式分析记录。只读重新核验与 --apply 写入测试共用，
 // 保证两边构造出的原记录字节完全一致。
 //
 // 只读取 config/ 下的真实词表与 config/tag-catalog-history/ 的按内容
@@ -31,10 +31,10 @@ function annotationFor(fromRegistrySha256, options = {}) {
     const current = tagCatalogApi.loadTagCatalog(REGISTRY_FILE);
     const from = registryChange.resolveRegistrySnapshot(fromRegistrySha256);
     const { changeLevel, detail } = registryChange.classifyRegistryChange(from, current);
-    // 换表（v1.1）后 dcf83f84→当前 的分级由 additive 变为可确认的 destructive；
-    // happy-path 夹具的意图是“构造一份合法可放行的注记”，因此在调用方未显式指定时，
-    // 对落在可确认白名单内的 destructive 自动携带 ack。显式传
-    // acknowledgeDestructive:false 的用例仍按原样被拒（用于验证无 ack 失败路径）。
+    // 词表升级到 v1.1 后，dcf83f84→当前 的变动类别从 additive 变成允许确认的 destructive；
+    // 这里需要构造一份能通过检查的升级说明，因此调用方未显式指定时，
+    // 对允许确认的 destructive 变动自动带上确认字段 ack。显式传
+    // acknowledgeDestructive:false 的测试仍会被拒绝，用于验证缺少确认时的失败情况。
     const eligible = changeLevel === 'destructive'
         && registryChange.canAcknowledgeRegistryChange(detail) === true;
     const acknowledge = options.acknowledgeDestructive === undefined
@@ -46,7 +46,7 @@ function annotationFor(fromRegistrySha256, options = {}) {
         acknowledgementNote: options.acknowledgementNote ?? null });
 }
 
-// 构造一份“旧 registry 下封口”的 canonical analysis 记录。
+// 构造一份已按旧词表核验并保存的正式分析记录。
 function analysisRecord(options = {}) {
     const current = runtime();
     const text = options.analysis ?? validAnalysisText();
@@ -74,7 +74,7 @@ function analysisRecord(options = {}) {
     };
     const stage = { status: 'not_needed', ...binding, bindingSha256: contract.manualSha256(binding) };
     if (options.annotation) stage.registryUpgradeFrom = options.annotation;
-    // 保留旧字段的缓存种子：词表 SHA 与原阶段记录一致。
+    // 为缓存保留旧字段；词表 SHA 与原阶段记录一致。
     const cachedParsed = Object.fromEntries(Object.entries(parsed).map(([key, value]) =>
         key === 'tagValidation' ? ['taxonomyValidation', { ...value, registryVersion, registrySha256 }] : [key, value]));
     const paper = {

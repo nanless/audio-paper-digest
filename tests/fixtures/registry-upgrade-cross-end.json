@@ -28,12 +28,12 @@
           "preferred-label-changed",
           "scope-note-updated"
         ],
-        "note": "确定性重投影：可确认 destructive 显式确认",
+        "note": "确认别名、上级关系和首选标签的变更，所选概念 ID 保持有效。",
         "destructiveAcknowledgement": {
           "acknowledged": true,
           "reasonsHash": "bac3ccc63f83715ced2b15ba122f13a03869935a1234c7d8cd4a134465b9a400",
           "conceptIdImpact": "none",
-          "note": "人工确认：仅改标签解析语义（删别名/改 broaderId/改首选标签），conceptId 影响 none"
+          "note": "人工确认删除别名、修改上级关系和首选标签；所选概念 ID 不变。"
         }
       },
       "expect": {
@@ -62,7 +62,7 @@
         },
         "error": null
       },
-      "note": "换表口径：旧名保留（tests/python/test_publish_common.py 按名取用）。dcf83f84 → current(v1.1) 复算为可确认 destructive（删别名/改 broaderId/改首选标签），本用例的语义由“additive 放行”改为“可确认 destructive + 合法 ack 放行”。"
+      "note": "保留旧用例名供 Python 测试查找。dcf83f84 到本样例使用的 v1.1 词表存在破坏性变更；只有提供有效确认，且所选概念 ID 仍有效时，才能沿用原标签阶段记录。"
     },
     {
       "name": "missing-annotation-rejected",
@@ -117,7 +117,7 @@
         "reasons": [
           "concept-added"
         ],
-        "note": "确定性重投影：只增新概念"
+        "note": "声称只增加了新概念，但本例缺少对应的旧词表快照。"
       },
       "expect": {
         "ok": false,
@@ -146,7 +146,7 @@
         "reasons": [
           "concept-added"
         ],
-        "note": "把 destructive 谎报成 additive"
+        "note": "将实际存在的破坏性变更错误地声明为仅增加概念。"
       },
       "expect": {
         "ok": false,
@@ -199,12 +199,12 @@
           "preferred-label-changed",
           "scope-note-updated"
         ],
-        "note": "谎报为零变化",
+        "note": "将实际存在的词表变更错误地声明为没有变化。",
         "destructiveAcknowledgement": {
           "acknowledged": true,
           "reasonsHash": "bac3ccc63f83715ced2b15ba122f13a03869935a1234c7d8cd4a134465b9a400",
           "conceptIdImpact": "none",
-          "note": "人工确认：仅改标签解析语义（删别名/改 broaderId/改首选标签），conceptId 影响 none"
+          "note": "人工确认删除别名、修改上级关系和首选标签；所选概念 ID 不变。"
         }
       },
       "expect": {
@@ -258,12 +258,12 @@
           "preferred-label-changed",
           "scope-note-updated"
         ],
-        "note": "确定性重投影：只增新概念",
+        "note": "提供破坏性变更确认，但所选概念中包含当前词表没有的 ID。",
         "destructiveAcknowledgement": {
           "acknowledged": true,
           "reasonsHash": "bac3ccc63f83715ced2b15ba122f13a03869935a1234c7d8cd4a134465b9a400",
           "conceptIdImpact": "none",
-          "note": "人工确认：仅改标签解析语义（删别名/改 broaderId/改首选标签），conceptId 影响 none"
+          "note": "人工确认删除别名、修改上级关系和首选标签；所选概念 ID 不变。"
         }
       },
       "expect": {
@@ -310,7 +310,7 @@
         "reasons": [
           "concept-added"
         ],
-        "note": "确定性重投影：只增新概念"
+        "note": "声称只增加了新概念，但本例提供的旧词表 SHA 格式无效。"
       },
       "expect": {
         "ok": false,
@@ -345,12 +345,12 @@
           "preferred-label-changed",
           "scope-note-updated"
         ],
-        "note": "确定性重投影：别名语义人工确认",
+        "note": "明确确认别名、上级关系和首选标签的变更。",
         "destructiveAcknowledgement": {
           "acknowledged": true,
           "reasonsHash": "2442f16185af5300754e2b7d948728df085e6895880b9bcfa0c23ba60f9f8273",
           "conceptIdImpact": "none",
-          "note": "人工确认：仅改标签解析语义（删别名/改 broaderId/改首选标签），conceptId 影响 none"
+          "note": "人工确认删除别名、修改上级关系和首选标签；所选概念 ID 不变。"
         }
       },
       "expect": {
@@ -404,7 +404,7 @@
           "preferred-label-changed",
           "scope-note-updated"
         ],
-        "note": "确定性重投影：别名语义人工确认"
+        "note": "说明了别名变化，但未提供必要的破坏性变更确认。"
       },
       "expect": {
         "ok": false,
@@ -457,12 +457,12 @@
           "preferred-label-changed",
           "scope-note-updated"
         ],
-        "note": "确定性重投影：别名语义人工确认",
+        "note": "提供破坏性变更确认，但确认中保存的原因哈希不正确。",
         "destructiveAcknowledgement": {
           "acknowledged": true,
           "reasonsHash": "0000000000000000000000000000000000000000000000000000000000000000",
           "conceptIdImpact": "none",
-          "note": "人工确认：仅改标签解析语义（删别名/改 broaderId/改首选标签），conceptId 影响 none"
+          "note": "人工确认删除别名、修改上级关系和首选标签；所选概念 ID 不变。"
         }
       },
       "expect": {
@@ -516,12 +516,12 @@
           "preferred-label-changed",
           "scope-note-updated"
         ],
-        "note": "确定性重投影：别名语义人工确认",
+        "note": "确认记录声称概念 ID 被删除，不符合所选概念 ID 不变的要求。",
         "destructiveAcknowledgement": {
           "acknowledged": true,
           "reasonsHash": "2442f16185af5300754e2b7d948728df085e6895880b9bcfa0c23ba60f9f8273",
           "conceptIdImpact": "removed",
-          "note": "人工确认：仅改标签解析语义（删别名/改 broaderId/改首选标签），conceptId 影响 none"
+          "note": "人工确认删除别名、修改上级关系和首选标签；所选概念 ID 不变。"
         }
       },
       "expect": {
@@ -575,12 +575,12 @@
           "preferred-label-changed",
           "scope-note-updated"
         ],
-        "note": "确定性重投影：别名语义人工确认",
+        "note": "提供破坏性变更确认，但所选概念中包含当前词表没有的 ID。",
         "destructiveAcknowledgement": {
           "acknowledged": true,
           "reasonsHash": "2442f16185af5300754e2b7d948728df085e6895880b9bcfa0c23ba60f9f8273",
           "conceptIdImpact": "none",
-          "note": "人工确认：仅改标签解析语义（删别名/改 broaderId/改首选标签），conceptId 影响 none"
+          "note": "人工确认删除别名、修改上级关系和首选标签；所选概念 ID 不变。"
         }
       },
       "expect": {

@@ -3,8 +3,8 @@ const processApi=require('../../scripts/lib/conference-process.js'), discovery=r
 const extractionFixture=require('./conference-extraction-fixture.js'),evidenceFixture=require('./conference-filter-evidence-fixture.js');
 const adapter=require('../../scripts/lib/conference-analysis-adapter.js'),authorParser=require('../../scripts/lib/reader-author-parser.js');
 const H=adapter.stableHash, sha=value=>crypto.createHash('sha256').update(value).digest('hex');
-// 仅为来源升级的公开发布正例建立真实来源/分析凭证；升级调度与格式反例仍由原测试执行。
-// 不调用模型、网络或发布写入；没有替换或关闭作者来源门禁。
+// 仅为来源升级的发布成功测试准备真实来源和分析凭证；升级调度及错误格式仍由原测试覆盖。
+// 不调用模型、网络或发布写入；没有替换或关闭作者来源检查。
 function bindUpgradePublicationFixture(f) {
     const root=f.root;
 

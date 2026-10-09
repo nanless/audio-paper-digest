@@ -128,7 +128,7 @@ function apply(f, state, paperId, status, operationId, options = {}) {
         decisionHandle: decision.handle, owner: 'worker', now: options.now || stamp });
 }
 
-test('生产准备要求已核验的发现，并锁定来源身份', t => {
+test('准备筛选前必须核验论文发现记录，并保留对应的来源身份', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const state = prepare(f);
     assert.deepEqual(Object.keys(state.decisions), papers); assert.equal(state.completion.pending, 2);
@@ -138,7 +138,7 @@ test('生产准备要求已核验的发现，并锁定来源身份', t => {
         /authenticated discovery handle/);
 });
 
-test('准备阶段记录确定性关键词拒绝，摘要太短时按放行处理交给 LLM', t => {
+test('准备阶段保存关键词筛选的排除决定；摘要太短时交给模型判断', t => {
     const f = fixture([
         { arnumber: '100', title: 'Generic optimization', abstract: 'This paper studies a general convex optimization method with convergence bounds across several synthetic benchmarks and mathematical settings.' },
         { arnumber: '200', title: 'Generic optimization follow-up', abstract: '' }
@@ -161,7 +161,7 @@ test('准备阶段记录确定性关键词拒绝，摘要太短时按放行处�
     assert.equal(keywordInput.requestEnvelopeSha256.length, 64);
 });
 
-test('批量关键词准备只核验一次来源集合，并跨检查点保留 CAS 链', t => {
+test('批量关键词筛选复用来源集合核验结果，并让每条决定对应修改前后的状态', t => {
     const records = Array.from({ length: 140 }, (_, index) => ({
         arnumber: String(1000 + index),
         title: `Generic optimization study ${index}`,
@@ -195,7 +195,7 @@ test('批量关键词准备只核验一次来源集合，并跨检查点保留 C
     assert.equal(replayed.attempts[127].nextStateSha256, replayed.attempts[128].priorStateSha256);
 });
 
-test('核心音频会议按放行处理，宽泛会议仍保留确定性拒绝', () => {
+test('核心音频会议的论文交给模型判断；其他会议仍可由关键词筛选排除', () => {
     const examples = [
         { conferenceId: 'chime-2026', title: 'Multichannel Speech Enhancement' },
         { conferenceId: 'dafx-2026', title: 'Efficient Plate Reverberator Design' },
@@ -227,7 +227,7 @@ test('会议筛选使用日更提示块和日更结构化决定解析器', () =>
     assert.equal(filter.LLM_FILTER_PROMPT, require('../scripts/utils.js').loadPrompt('prompts/filter-v2.md', {
         title: '{title}', abstract: '{abstract}', categories: '{categories}'
     }));
-    // v1 正文永久冻结，旧 spec 的 promptSha256 靠白名单继续通过。
+    // v1 提示正文保持不变，旧筛选配置的 promptSha256 必须在允许的历史 SHA 列表中。
     assert.ok(filter.LEGACY_LLM_FILTER_PROMPT_SHA256_LIST.includes(
         require('node:crypto').createHash('sha256').update(require('../scripts/utils.js').loadPrompt(
             'prompts/filter.md', { title: '{title}', abstract: '{abstract}', categories: '{categories}' }
@@ -257,7 +257,7 @@ test('生产筛选接受已核验的官方论文集，并保留稳定的来源�
     assert.equal(envelope.discovery.sourceIdentity, 'conference-paper-id:AAAI-2026.002');
 });
 
-test('关键词 CAS 摘要把 CVPR 大小写混杂的 ID 归一化，不受语言环境迭代顺序影响', t => {
+test('关键词筛选统一 CVPR 论文 ID 的大小写，状态核验不受语言环境的排序差异影响', t => {
     const genericAbstract = 'This paper studies a general visual optimization method with convergence bounds across several synthetic benchmarks and mathematical settings.';
     const papers = [
         { id: 'Bai_DRiffusion_Draft-and-Refine_Process_Parallelizes_Diffusion_Models_with_Ease_CVPR_2026_paper',
@@ -279,7 +279,7 @@ test('关键词 CAS 摘要把 CVPR 大小写混杂的 ID 归一化，不受语�
     assert.equal(filter.readFilter({ filterRoot: f.filters, filterId: ids[0] }).stateSha256, state.stateSha256);
 });
 
-test('分会议 spec 拒绝旧版共用结构、未注册的定位配置和另一次证据运行的产物', t => {
+test('每个会议的筛选配置拒绝旧共用格式、未知定位规则和另一次运行的证据', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const bound = spec(f);
     assert.deepEqual(bound.evidence.locator,
@@ -344,7 +344,7 @@ test('筛选在准备之前就拒绝未核验和被篡改的证据', t => {
         evidenceHandle: f.evidenceHandle, spec: spec(f), filterId: ids[3] }), /evidence|receipt|drift|JSON/);
 });
 
-test('日更提示的类别保留会议、人类可读领域标签和 track', () => {
+test('日更提示的类别保留会议名称、领域名称和论文分组信息', () => {
     const prompt = filter.renderDailyFilterPrompt({
         discovery: { conference: { id: 'dafx-2026', year: 2026 } },
         metadataRecord: { title: 'PolyADAA', abstract: 'A nonlinear audio circuit emulation method.', track: 'Audio Effects Modeling' }
@@ -377,7 +377,7 @@ test('最终决定要求证据已保留，凭证里只写入选的身份', t => 
         decisionName: `${ids[1]}.json`, artifact: {} }), /artifact|exclusively/);
 });
 
-test('状态已经完整但选择凭证写到一半就中断时，幂等的最终决定重试能补上', t => {
+test('所有决定已完成但写入选凭证中断时，重试最后一条决定可以补齐凭证', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     let state = prepare(f);
     state = apply(f, state, papers[0], 'included', ids[1]);
@@ -409,7 +409,7 @@ test('状态已经完整但选择凭证写到一半就中断时，幂等的最�
     assert.equal(filter.readSelectionReceipt({ filterRoot: f.filters, filterId: ids[0] }).filterId, ids[0]);
 });
 
-test('手写的 LLM actor 和伪造的句柄一律拒绝', t => {
+test('手工填入的模型执行记录和未经核验的记录对象均被拒绝', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const state = prepare(f);
     assert.throws(() => filter.applyDecision({ filterRoot: f.filters, filterId: ids[0], decisionHandle: {}, owner: 'worker' }), /authenticated decision/);
@@ -429,7 +429,7 @@ test('手写的 LLM actor 和伪造的句柄一律拒绝', t => {
     assert.equal(filter.adaptDiscoveryCatalog, undefined); assert.equal(filter.discoveryDocumentToFilterCatalog, undefined);
 });
 
-test('决定字节会被复核，漂移就直接失败', t => {
+test('筛选决定文件会被重新核对，内容修改后检查失败', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     let state = prepare(f); const decision = artifactHandle(f, state, papers[0], 'included', ids[1]);
     state = filter.applyDecision({ filterRoot: f.filters, filterId: ids[0], decisionHandle: decision.handle, owner: 'worker', now: stamp });
@@ -455,7 +455,7 @@ test('人工决定不能冒充模型或协议', t => {
     /manual decision must use/);
 });
 
-test('操作幂等绑定到精确保留的决定产物', t => {
+test('重复应用同一决定不重复计数，同一操作 ID 使用不同决定文件时拒绝', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const state = prepare(f);
     const first = artifactHandle(f, state, papers[0], 'included', ids[1]);
@@ -471,7 +471,7 @@ test('操作幂等绑定到精确保留的决定产物', t => {
     assert.equal(applied.attempts.length, 1);
 });
 
-test('命令行要求目录、上报、spec 和决定产物，不接受原始补丁', () => {
+test('命令行要求论文清单、发现报告、筛选配置和决定文件，不接受手写状态补丁', () => {
     assert.deepEqual(cli.parseArgs(['spec', '--catalog', 'icassp.json', '--report', 'icassp-report.json',
         '--evidence-run', evidenceRunId, '--output', 'icassp-filter-v5.json']),
     { command: 'spec', catalogName: 'icassp.json', reportName: 'icassp-report.json', evidenceRunId,
@@ -488,7 +488,7 @@ test('命令行要求目录、上报、spec 和决定产物，不接受原始补
 });
 
 
-test('当前筛选配置和任务只输出新词表字段，混用与错代明确拒绝', t => {
+test('当前筛选配置和任务使用新词表字段，混用旧字段或版本不符时拒绝', t => {
     const f = fixture(); t.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
     const boundSpec = spec(f), state = prepare(f);
     assert.equal(boundSpec.contract, 'conference-filter-spec-v6'); assert.equal(boundSpec.version, 6);

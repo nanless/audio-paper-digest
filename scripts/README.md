@@ -9,7 +9,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 
 ## 从哪里开始
 
-- 完整日更由根目录 [`run-daily-digest.sh`](../run-daily-digest.sh) 编排；默认走
+- 完整日更由根目录 [`run-daily-digest.sh`](../run-daily-digest.sh) 依次执行各阶段；默认走
   LLM/API，入口是 `npm run digest:prepare -- YYYY-MM-DD`。只有显式 `--manual` 或
   `digest:manual` 才进入 `manual/`。
 - 全历史任务在当前工作区通过 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` 运行。先准备来源、分析和私有页面，再使用独立的
@@ -48,7 +48,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 
 | 文件 | 类型 | 职责 |
 |---|---|---|
-| `full-fetch.js` | Node 入口 | 编排默认数据流程，依次归档、抓取、筛选、去重、深度分析，并逐篇保存结果。 |
+| `full-fetch.js` | Node 入口 | 按顺序执行默认数据流程，依次归档、抓取、筛选、去重、深度分析，并逐篇保存结果。 |
 | `lib/daily-fresh-source-plan.js` | Node 库 | 日更筛选结束后，为每篇 arXiv 论文封存本次官方 TXT、PDF 和清单；分析只读取这组文件，图片只在当前请求里临时准备。 |
 | `lib/fresh-arxiv-rewrite-source.js` | Node 库 | 每轮 arXiv 来源获取时，用原子写入保存官方文本、PDF、不含像素的来源元数据和清单。只有当前稿 PDF 明确返回 404，才允许改用同一论文的官方 `vN` PDF；文本必须从该 PDF 提取，并按条件生成可自校验的 `sourceVersion`。普通来源文件仍按原结构读取。 |
 | `lib/direct-rewrite-analysis-context.js` | Node 库 | 用 AsyncLocalStorage 隔离历史重写和日更的来源文件，让旧正文和缓存进不了分析，Reader 图片只能用临时文件；论文历史版本的身份 SHA 随来源记录进入所有分析阶段。 |
@@ -236,7 +236,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `rewrite-from-source.js` | 通过 `prepare/sources/analyze/status/patch/signed-patch/promote` 显式运行同源重写。`patch` 修复失败候选，`signed-patch` 局部修订本运行的成功 Reader 并要求事实复核；两种补丁都不调用 API，也不接受任意路径。 |
 | `paper-rethink-server.js` | 历史独立维护工具；博客已取消本机助手集成，不应为阅读、引用或复制 AI 提问启动此服务。旧接口实现仍保留供历史维护。 |
 | `validate-data-files.js` | 只读核验当前数据、跨文件论文集合、评分及兼容结果的来源记录。 |
-| `build-prompt-history-archive.js` | 从 git 历史抽取存量数据引用过的历史提示词字节，落到 `prompts/history/<sha256>.md`。默认只报告，`--write` 才落盘，可重复运行。 |
+| `build-prompt-history-archive.js` | 从 git 历史抽取存量数据引用过的历史提示词字节，落到 `prompts/history/<sha256>.md`。默认只报告，`--write` 才保存文件，可重复运行。 |
 | `backfill_papers.py` | 补录近期论文元数据，不执行深度分析；任一来源抓取失败时停止，不写成功报告。 |
 
 ## 配置、环境与通用工具

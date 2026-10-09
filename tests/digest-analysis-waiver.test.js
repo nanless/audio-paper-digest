@@ -55,8 +55,8 @@ function sourceBoundPaper(plan, id) {
         sourceOnly: true, oldGeneratedTextIncluded: false };
     reader.freshRewriteProvenance = proof;
     reader.analysisManifest.freshRewriteProvenance = structuredClone(proof);
-    assert.equal(isSuccessfulAnalysisRecord(reader), true, '正常夹具必须通过实际分析完成校验');
-    assert.equal(llmApiPaperComplete(reader), true, '正常夹具必须通过实际 API Reader、评分与来源核验');
+    assert.equal(isSuccessfulAnalysisRecord(reader), true, '正常测试样例数据必须通过实际分析完成校验');
+    assert.equal(llmApiPaperComplete(reader), true, '正常测试样例数据必须通过实际 API Reader、评分与来源核验');
     return reader;
 }
 
@@ -172,7 +172,7 @@ test('成功论文即使列入有效豁免也只按成功计数', async t => {
     assert.equal(report.analysis.publicationMode, 'llm_api_production');
 });
 
-test('豁免的三份绑定文件任一漂移都会恢复失败门禁', async t => {
+test('豁免所对应的三份文件任一改变，都会重新拒绝分析失败的论文', async t => {
     const f = await fixture(t); f.fail(); f.waive();
     for (const key of ['deepAnalysisResult', 'filteredPapers', 'papers']) {
         const filename = Config.FILES[key], original = fs.readFileSync(filename);

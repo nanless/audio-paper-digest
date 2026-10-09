@@ -22,7 +22,7 @@ with project_env_scope():
 class ReaderAuthorSourceReplayTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # 使用生产纯解析器构造合法记录，再逐项破坏来源；不初始化深分析或模型路由。
+        # 使用生产纯解析器构造合法记录，再逐项破坏来源；不初始化深度分析或模型请求配置。
         code = r'''
 const p = require('./scripts/lib/reader-author-parser.js');
 const c = require('cheerio');
@@ -110,7 +110,7 @@ process.stdout.write(JSON.stringify({paper,sourceDetails:details}));
                 record['identitySha256'] = gate._reader_record_sha256(record['identity'], 'test')
                 stage['readerAuthorIdentitySha256'] = record['identitySha256']
                 stage['readerAuthorsSha256'] = gate._reader_record_sha256(record, 'test')
-                # 旧结构验收仍可只读接受自洽记录；实际发布入口必须重放封存来源。
+                # 旧结构检查仍可只读接受内部一致的记录；实际发布入口必须重新解析已保存的原始来源。
                 gate._validate_api_reader_author_identity(paper)
                 data_file.write_text(json.dumps(payload))
                 with self.assertRaisesRegex(gate.PublishDataValidationError, '作者姓名或机构'):
@@ -119,7 +119,7 @@ process.stdout.write(JSON.stringify({paper,sourceDetails:details}));
     def test_explicit_author_refresh_can_repair_missing_html_without_claiming_affiliations(self):
         value = copy.deepcopy(self.fixture)
         del value['sourceDetails']['readerAuthors']['sourceHtml']
-        # 同一纯来源重放器输出受控元数据姓名和明确不可得机构。
+        # 同一来源解析器使用已核验论文信息中的姓名，并明确说明机构不可得。
         code = "const p=require('./scripts/lib/reader-author-parser.js');let v=JSON.parse(process.argv[1]);process.stdout.write(JSON.stringify(p.resolveVerifiedReaderAuthors(v.paper,v.sourceDetails)));"
         result = subprocess.run(['node', '-e', code, json.dumps(value)], cwd=ROOT,
                                 capture_output=True, text=True, check=True, timeout=30)
