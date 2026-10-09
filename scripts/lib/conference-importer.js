@@ -501,6 +501,27 @@ function loadImportHandle(ledgerFile, importReceiptFile, stagingHandle) {
     if (ledgerApi.stableHash(stagedIdentities) !== ledgerApi.stableHash(ledgerIdentities)) {
         throw fail('ledger identity set differs from staged included selection');
     }
+    // 导入凭证的自哈希只证明账目自身一致，来源仍必须逐项对应已核验的暂存清单。
+    if (ledgerApi.stableHash(loadedLedger.ledger.conference) !== ledgerApi.stableHash(staged.importManifest.conference)) {
+        throw fail('导入账目的会议与暂存清单不一致');
+    }
+    const stagedMembers = new Map(staged.importManifest.members.map(member => [ledgerApi.identityKey(member.identity), member]));
+    for (const member of loadedLedger.ledger.members) {
+        const stagedMember = stagedMembers.get(ledgerApi.identityKey(member.identity));
+        const stem = cacheStem(staged.importManifest.conference, member.identity);
+        for (const kind of EVIDENCE_KINDS) {
+            const entry = stagedMember[kind];
+            const extension = kind === 'metadata' || kind === 'artifacts' ? '.json' : kind === 'pdf' ? '.pdf' : '.txt';
+            const expectedFile = entry ? `${stem}/${kind}${extension}` : null;
+            const expectedProvenance = !entry ? null : kind === 'metadata' || kind === 'pdf'
+                ? entry.provenance : { ...entry.provenance, inputSha256: stagedMember.pdf.sha256 };
+            if (member[`${kind}File`] !== expectedFile || member[`${kind}Sha256`] !== (entry?.sha256 || null)
+                || member.availability[kind] !== (entry ? 'present' : 'absent')
+                || ledgerApi.stableHash(member.provenance[kind]) !== ledgerApi.stableHash(expectedProvenance)) {
+                throw fail(`导入账目的 ${kind} 来源与暂存清单不一致`);
+            }
+        }
+    }
     const verifiedMembers = loadedLedger.ledger.members.filter(member => member.status.state === 'verified').map(member => {
         const sourceIdentity = ledgerApi.identityKey(member.identity);
         return { paperId: paperIdentity.canonicalConferencePaperId(

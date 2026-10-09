@@ -1382,21 +1382,28 @@ def _reserve_and_write(root_fd: int, outputs: list[tuple[str, bytes]]) -> None:
             os.fsync(fd)
             os.fchmod(fd, 0o600)
         os.fsync(root_fd)
-    except Exception:
-        for _, fd in opened:
+    except Exception as error:
+        cleanup_errors = []
+        for name, fd in opened:
             try:
-                os.close(fd)
-            except OSError:
-                pass
-        for name, _ in opened:
-            try:
+                try:
+                    named = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                owned = os.fstat(fd)
+                if (not stat.S_ISREG(named.st_mode) or named.st_nlink != 1
+                        or (named.st_dev, named.st_ino) != (owned.st_dev, owned.st_ino)):
+                    raise _fail("抽取输出文件已换主，拒绝清理")
                 os.unlink(name, dir_fd=root_fd)
-            except OSError:
-                pass
+            except Exception as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+        if cleanup_errors:
+            raise error from ExceptionGroup("抽取失败后部分输出不能安全清理", cleanup_errors)
         raise
-    else:
+    finally:
         for _, fd in opened:
             os.close(fd)
+
 
 
 def run_extraction(

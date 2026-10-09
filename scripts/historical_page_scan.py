@@ -1347,7 +1347,31 @@ def write_inventory_pair(output_dir: Path, ledger_name: str, receipt_name: str,
     _assert_repository_snapshot(checked_repo, ledger, remote_name)
     root = _safe_directory(Path(output_dir), create=True)
     ledger_path = root / ledger_name; receipt_path = root / receipt_name
+    root_stat = root.stat()
     opened: list[tuple[Path, int]] = []
+
+    def remove_owned_outputs():
+        errors = []
+        for target, fd in opened:
+            try:
+                current_root = root.lstat()
+                if (not stat.S_ISDIR(current_root.st_mode) or root.resolve() != root
+                        or (current_root.st_dev, current_root.st_ino) != (root_stat.st_dev, root_stat.st_ino)):
+                    raise _fail("清单输出目录已换主，拒绝清理")
+                try:
+                    named = target.lstat()
+                except FileNotFoundError:
+                    continue
+                owned = os.fstat(fd)
+                if (not stat.S_ISREG(named.st_mode) or named.st_nlink != 1
+                        or (named.st_dev, named.st_ino) != (owned.st_dev, owned.st_ino)):
+                    raise _fail("清单输出文件已换主，拒绝清理")
+                target.unlink()
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise ExceptionGroup("清单写入失败后部分文件不能安全清理", errors)
+
     try:
         for target in (ledger_path, receipt_path):
             fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
@@ -1364,27 +1388,20 @@ def write_inventory_pair(output_dir: Path, ledger_name: str, receipt_name: str,
                 written += count
             os.fsync(fd); os.fchmod(fd, 0o600)
         _assert_repository_snapshot(checked_repo, ledger, remote_name)
-    except Exception:
-        for _path, fd in opened:
-            try: os.close(fd)
-            except OSError: pass
-        for target, _fd in opened:
-            try: target.unlink()
-            except OSError: pass
+        directory_fd = os.open(root, os.O_RDONLY)
+        try: os.fsync(directory_fd)
+        finally: os.close(directory_fd)
+        load_inventory_pair(ledger_path, receipt_path)
+    except Exception as error:
+        try:
+            remove_owned_outputs()
+        except Exception as cleanup_error:
+            raise error from cleanup_error
         raise
-    else:
+    finally:
         for _path, fd in opened:
             os.close(fd)
-    directory_fd = os.open(root, os.O_RDONLY)
-    try: os.fsync(directory_fd)
-    finally: os.close(directory_fd)
-    try:
-        load_inventory_pair(ledger_path, receipt_path)
-    except Exception:
-        for target in (ledger_path, receipt_path):
-            try: target.unlink()
-            except OSError: pass
-        raise
+
     return {"ledger": str(ledger_path), "receipt": str(receipt_path)}
 
 

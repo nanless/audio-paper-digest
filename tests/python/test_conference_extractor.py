@@ -252,6 +252,50 @@ class ConferenceExtractorTest(unittest.TestCase):
         self.assertFalse(receipt["textReplayable"])
         self.assertEqual(artifacts["profile"], "replayable-pdf-layout-v1")
 
+    def test_write_failure_keeps_replacement_and_cleans_owned_outputs(self):
+        manifest, request = self.write_request(build_pdf([["too short"]]))
+        target = self.root / request["outputs"]["textFile"]
+        def replace_then_fail(fd, payload):
+            target.rename(self.root / "owned.txt")
+            target.write_text("竞争者文件", encoding="utf-8")
+            raise OSError("模拟写入故障")
+        with mock.patch("conference_extractor.os.write", side_effect=replace_then_fail):
+            with self.assertRaisesRegex(OSError, "模拟写入故障") as raised:
+                run_extraction(manifest, apply=True, source_root=self.root)
+        self.assertIsInstance(raised.exception.__cause__, ExceptionGroup)
+        self.assertEqual(target.read_text(encoding="utf-8"), "竞争者文件")
+        for key in ["artifactsFile", "receiptFile"]:
+            self.assertFalse((self.root / request["outputs"][key]).exists())
+
+    def test_partial_write_cleans_outputs_and_allows_real_extraction_retry(self):
+        manifest, request = self.write_request(build_pdf([["too short"]]))
+        real_write = os.write
+        def partial_then_fail(fd, payload):
+            real_write(fd, payload[:5])
+            raise OSError("模拟部分写入故障")
+        with mock.patch("conference_extractor.os.write", side_effect=partial_then_fail):
+            with self.assertRaisesRegex(OSError, "模拟部分写入故障"):
+                run_extraction(manifest, apply=True, source_root=self.root)
+        for name in request["outputs"].values():
+            self.assertFalse((self.root / name).exists())
+        self.assertEqual(run_extraction(manifest, apply=True, source_root=self.root)["status"], "blocked")
+        self.assertEqual(verify_blocked_extraction(manifest, source_root=self.root)["status"], "verified-blocked")
+
+    def test_write_failure_keeps_symlink_replacement_and_its_target(self):
+        manifest, request = self.write_request(build_pdf([["too short"]]))
+        target = self.root / request["outputs"]["textFile"]
+        competitor = self.root / "competitor.txt"
+        competitor.write_text("其他文件", encoding="utf-8")
+        def replace_then_fail(fd, payload):
+            target.rename(self.root / "owned.txt")
+            target.symlink_to(competitor)
+            raise OSError("模拟替换后的故障")
+        with mock.patch("conference_extractor.os.write", side_effect=replace_then_fail):
+            with self.assertRaisesRegex(OSError, "模拟替换后的故障"):
+                run_extraction(manifest, apply=True, source_root=self.root)
+        self.assertTrue(target.is_symlink())
+        self.assertEqual(competitor.read_text(encoding="utf-8"), "其他文件")
+
     def test_parse_failure_writes_only_a_blocked_receipt(self):
         manifest, request = self.write_request(b"%PDF-1.4\nnot a valid PDF\n%%EOF\n")
         result = run_extraction(manifest, apply=True, source_root=self.root)

@@ -333,6 +333,50 @@ class HistoricalPageScanTest(unittest.TestCase):
         self.assertFalse((reserved / "reserved.receipt.json").exists())
         run_git(self.repo, "checkout", "--", ".")
 
+    def test_failed_reservation_keeps_replacement_and_cleans_only_owned_file(self):
+        ledger = scan_historical_pages(self.repo, require_clean_main=True)
+        output = self.root / "replacement"
+        def replace_then_fail():
+            (output / "history.json").rename(output / "owned.json")
+            (output / "history.json").write_text("竞争者文件", encoding="utf-8")
+            raise OSError("后续写入失败")
+        with self.assertRaisesRegex(OSError, "后续写入失败") as raised:
+            write_inventory_pair(output, "history.json", "history.receipt.json", ledger,
+                                 expected_repo=self.repo, after_reservation_hook=replace_then_fail)
+        self.assertIsInstance(raised.exception.__cause__, ExceptionGroup)
+        self.assertEqual((output / "history.json").read_text(encoding="utf-8"), "竞争者文件")
+        self.assertFalse((output / "history.receipt.json").exists())
+
+    def test_failed_final_validation_keeps_replacement(self):
+        ledger = scan_historical_pages(self.repo, require_clean_main=True)
+        output = self.root / "final-replacement"
+        def replace_then_fail(*_args):
+            (output / "history.receipt.json").rename(output / "owned.receipt.json")
+            (output / "history.receipt.json").write_text("竞争者凭证", encoding="utf-8")
+            raise HistoricalPageInventoryError("最终核验失败")
+        with mock.patch.object(page_scan, "load_inventory_pair", side_effect=replace_then_fail):
+            with self.assertRaisesRegex(HistoricalPageInventoryError, "最终核验失败"):
+                write_inventory_pair(output, "history.json", "history.receipt.json", ledger,
+                                     expected_repo=self.repo)
+        self.assertEqual((output / "history.receipt.json").read_text(encoding="utf-8"), "竞争者凭证")
+        self.assertFalse((output / "history.json").exists())
+
+    def test_partial_write_failure_cleans_owned_outputs_and_retry_succeeds(self):
+        ledger = scan_historical_pages(self.repo, require_clean_main=True)
+        output = self.root / "partial-write"
+        real_write = os.write
+        def partial_then_fail(fd, payload):
+            real_write(fd, payload[:10])
+            raise OSError("磁盘写入失败")
+        with mock.patch.object(page_scan.os, "write", side_effect=partial_then_fail):
+            with self.assertRaisesRegex(OSError, "磁盘写入失败"):
+                write_inventory_pair(output, "history.json", "history.receipt.json", ledger,
+                                     expected_repo=self.repo)
+        self.assertEqual(list(output.iterdir()), [])
+        paths = write_inventory_pair(output, "history.json", "history.receipt.json", ledger,
+                                     expected_repo=self.repo)
+        self.assertEqual(load_inventory_pair(Path(paths["ledger"]), Path(paths["receipt"]))[0], ledger)
+
     def test_apply_requires_clean_main_and_scan_detects_page_drift(self):
         page = self.repo / "content" / "posts" / "2026-01-01.md"
         with self.assertRaisesRegex(HistoricalPageInventoryError, "drifted"):

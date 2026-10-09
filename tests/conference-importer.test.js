@@ -354,3 +354,47 @@ test('已核验的导入、计划和执行保留完整的选择凭证链', t => 
     assert.throws(() => executionApi.prepareExecutionFromPlan({ executionRoot: executions, planHandle: {},
         executionId: '66666666-6666-4666-8666-666666666666', now: NOW }), /authenticated plan handle/);
 });
+
+
+test('导入凭证自洽重签也不能替换暂存会议或任何来源声明', t => {
+    const f = productionFixture(t);
+    cli.main(['--apply', '--import', 'import.json', '--receipt', 'receipt.json', '--filter', f.filterId,
+        '--catalog', 'catalog.json', '--report', 'report.json', '--updated-at', NOW, '--ledger-output', 'ledger.json'],
+    { files: f.files });
+    const stagingHandle = stagingApi.loadStagingHandle(path.join(f.staging, 'import.json'), path.join(f.staging, 'receipt.json'),
+        f.selectionHandle, f.discoveryHandle, f.source);
+    const ledgerFile = path.join(f.output, 'ledger.json');
+    const receiptFile = path.join(f.output, 'ledger.import-receipt.json');
+    const originalLedger = JSON.parse(fs.readFileSync(ledgerFile));
+    const originalReceipt = JSON.parse(fs.readFileSync(receiptFile));
+    const cases = [['会议年份', ledger => { ledger.conference.year = 2027; }],
+        ['会议名称', ledger => { ledger.conference.id = 'icassp-other'; }]];
+    for (const kind of ['metadata', 'pdf', 'text', 'artifacts']) {
+        cases.push([`${kind} SHA`, ledger => {
+            const member = ledger.members[0]; member[`${kind}Sha256`] = sha(`替换 ${kind}`);
+            member.status.evidence.find(entry => entry.kind === kind).sha256 = member[`${kind}Sha256`];
+            if (kind === 'pdf') for (const derived of ['text', 'artifacts']) member.provenance[derived].inputSha256 = member.pdfSha256;
+        }]);
+        cases.push([`${kind} 文件`, ledger => { ledger.members[0][`${kind}File`] = `other/${kind}.bin`; }]);
+        cases.push([`${kind} 来源凭证`, ledger => {
+            const provenance = ledger.members[0].provenance[kind];
+            if (kind === 'metadata' || kind === 'pdf') provenance.locator = 'https://example.invalid/wrong-source';
+            else provenance.version = '错误提取器版本';
+        }]);
+    }
+    for (const [label, mutate] of cases) {
+        const ledger = structuredClone(originalLedger); mutate(ledger);
+        ledger.memberSetSha256 = ledgerApi.memberSetSha256(ledger.members);
+        ledgerApi.validateLedger(ledger); // 负例本身符合账目格式，必须由跨凭证绑定拦截。
+        fs.writeFileSync(ledgerFile, `${JSON.stringify(ledger, null, 2)}\n`);
+        const receipt = structuredClone(originalReceipt);
+        receipt.ledger.sha256 = sha(fs.readFileSync(ledgerFile));
+        receipt.ledger.memberSetSha256 = ledger.memberSetSha256;
+        delete receipt.receiptSha256; receipt.receiptSha256 = ledgerApi.stableHash(receipt);
+        fs.writeFileSync(receiptFile, JSON.stringify(receipt));
+        assert.throws(() => importer.loadImportHandle(ledgerFile, receiptFile, stagingHandle), /与暂存清单不一致/, label);
+    }
+    fs.writeFileSync(ledgerFile, `${JSON.stringify(originalLedger, null, 2)}\n`);
+    fs.writeFileSync(receiptFile, JSON.stringify(originalReceipt));
+    assert.equal(importer.importHandleSnapshot(importer.loadImportHandle(ledgerFile, receiptFile, stagingHandle)).verifiedMembers.length, 1);
+});
