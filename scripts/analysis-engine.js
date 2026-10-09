@@ -136,10 +136,10 @@ function readFileLockSnapshot(lockPath) {
         if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || named.size > 4096) {
             return { exists: true, consistent: false, lockPath, reason: 'unsafe_owner' };
         }
-        const fd = fs.openSync(ownerPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        const fd = fs.openSync(ownerPath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         try {
             const opened = fs.fstatSync(fd);
-            if (opened.dev !== named.dev || opened.ino !== named.ino || opened.size !== named.size
+            if (!opened.isFile() || opened.dev !== named.dev || opened.ino !== named.ino || opened.size !== named.size
                 || opened.nlink !== 1) {
                 return { exists: true, consistent: false, lockPath, reason: 'owner_changed' };
             }
@@ -345,9 +345,12 @@ function readReclaimMarker(filename) {
     try {
         const named = fs.lstatSync(filename);
         if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || named.size > 4096) return null;
-        const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         try {
-            const opened = fs.fstatSync(fd); const bytes = fs.readFileSync(fd);
+            const opened = fs.fstatSync(fd);
+            if (!opened.isFile() || opened.dev !== named.dev || opened.ino !== named.ino
+                || opened.nlink !== 1 || opened.size !== named.size) return null;
+            const bytes = fs.readFileSync(fd);
             const after = fs.fstatSync(fd);
             const finalNamed = fs.lstatSync(filename);
             if (opened.dev !== named.dev || opened.ino !== named.ino || opened.nlink !== 1
