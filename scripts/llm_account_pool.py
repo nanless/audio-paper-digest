@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import socket
+import stat
 import time
 import uuid
 from contextlib import contextmanager
@@ -173,6 +174,22 @@ def get_pool_identity(api_keys, endpoint):
     }
 
 
+def _read_regular_state_text(file_path):
+    target = Path(file_path)
+    initial = target.lstat()
+    if not stat.S_ISREG(initial.st_mode):
+        raise LlmAccountPoolStateError(f'LLM 账号池文件必须为普通文件: {target}')
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, 'O_NOFOLLOW', 0)
+    descriptor = os.open(target, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise LlmAccountPoolStateError(f'LLM 账号池文件必须为普通文件: {target}')
+        with os.fdopen(descriptor, 'r', encoding='utf-8', closefd=False) as stream:
+            return stream.read()
+    finally:
+        os.close(descriptor)
+
+
 def _lock_reclaimable(lock_path, stale_seconds):
     lock_path = Path(lock_path)
     owner_path = lock_path / 'owner.json'
@@ -188,7 +205,7 @@ def _lock_reclaimable(lock_path, stale_seconds):
     except FileNotFoundError:
         return True
     try:
-        owner = json.loads((lock_path / 'owner.json').read_text(encoding='utf-8'))
+        owner = json.loads(_read_regular_state_text(lock_path / 'owner.json'))
         if not isinstance(owner, dict):
             return age > stale_seconds
         owner_pid = owner.get('pid')
@@ -304,7 +321,7 @@ def _state_lock(state_file, *, timeout_seconds=LOCK_TIMEOUT_SECONDS,
                 raise LlmAccountPoolStateError(
                     f'LLM 账号池 owner 路径禁止使用 symlink: {owner_path}'
                 )
-            owner = json.loads(owner_path.read_text(encoding='utf-8'))
+            owner = json.loads(_read_regular_state_text(owner_path))
             if owner.get('token') == token:
                 shutil.rmtree(lock_path, ignore_errors=True)
         except (FileNotFoundError, OSError, json.JSONDecodeError):
@@ -330,7 +347,7 @@ def read_state_strict(state_file=LLM_ACCOUNT_POOL_STATE_FILE):
         if target.is_symlink():
             raise LlmAccountPoolStateError(f'LLM 账号池状态路径禁止使用 symlink: {target}')
         state = json.loads(
-            target.read_text(encoding='utf-8'),
+            _read_regular_state_text(target),
             parse_constant=_reject_non_finite_json,
         )
         target.chmod(0o600)

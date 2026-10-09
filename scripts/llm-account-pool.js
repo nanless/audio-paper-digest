@@ -184,6 +184,23 @@ function assertSafeProjectStatePath(stateFile) {
     }
 }
 
+function readRegularStateText(filePath) {
+    const initial = fs.lstatSync(filePath);
+    if (initial.isSymbolicLink() || !initial.isFile()) {
+        throw new LlmAccountPoolStateError(`LLM 账号池文件必须为普通文件: ${filePath}`);
+    }
+    const flags = fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOFOLLOW || 0);
+    const fd = fs.openSync(filePath, flags);
+    try {
+        if (!fs.fstatSync(fd).isFile()) {
+            throw new LlmAccountPoolStateError(`LLM 账号池文件必须为普通文件: ${filePath}`);
+        }
+        return fs.readFileSync(fd, 'utf8');
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
 function lockIsReclaimable(lockPath, staleMs) {
     let ageMs;
     try {
@@ -208,7 +225,7 @@ function lockIsReclaimable(lockPath, staleMs) {
         throw error;
     }
     try {
-        const owner = JSON.parse(fs.readFileSync(path.join(lockPath, 'owner.json'), 'utf8'));
+        const owner = JSON.parse(readRegularStateText(path.join(lockPath, 'owner.json')));
         if (owner.hostname === os.hostname() && Number.isInteger(owner.pid) && owner.pid > 0) {
             try {
                 process.kill(owner.pid, 0);
@@ -284,7 +301,7 @@ function acquireStateLock(stateFile, options = {}) {
                     if (fs.lstatSync(ownerPath).isSymbolicLink()) {
                         throw new LlmAccountPoolStateError(`LLM 账号池 owner 路径禁止使用 symlink: ${ownerPath}`);
                     }
-                    const owner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
+                    const owner = JSON.parse(readRegularStateText(ownerPath));
                     if (owner.token !== token) return false;
                     fs.rmSync(lockPath, { recursive: true, force: true });
                     return true;
@@ -355,7 +372,7 @@ function readStateStrict(stateFile) {
         if (fs.lstatSync(stateFile).isSymbolicLink()) {
             throw new LlmAccountPoolStateError(`LLM 账号池状态路径禁止使用 symlink: ${stateFile}`);
         }
-        state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+        state = JSON.parse(readRegularStateText(stateFile));
         fs.chmodSync(stateFile, 0o600);
     } catch (error) {
         if (error.code === 'ENOENT') return newState();
