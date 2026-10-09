@@ -41,7 +41,9 @@ function canonicalValue(value, label = 'signature') {
     for (const key of Object.keys(value).sort()) {
         assertUnicodeScalarString(key, `${label}.key`);
         if (!ASCII_KEY_RE.test(key)) throw new Error(`${label} 签名对象 key 必须是可见 ASCII: ${key}`);
-        result[key] = canonicalValue(value[key], `${label}.${key}`);
+        Object.defineProperty(result, key, {
+            value: canonicalValue(value[key], `${label}.${key}`), enumerable: true, writable: true, configurable: true
+        });
     }
     return result;
 }

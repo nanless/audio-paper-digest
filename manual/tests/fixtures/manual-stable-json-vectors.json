@@ -33,6 +33,43 @@
       "sha256": "93e582d073c867be7958aa39b6ca1271383866e03d6ab6ee22ffe12b4e0421b2",
       "nfkcInput": "  分数 1.7  ",
       "nfkcText": "分数 1.7"
+    },
+    {
+      "name": "own-prototype-key",
+      "value": {
+        "__proto__": {
+          "hidden": "必须完整签名"
+        },
+        "ok": 1
+      },
+      "canonicalJson": "{\"__proto__\":{\"hidden\":\"必须完整签名\"},\"ok\":1}",
+      "sha256": "9f452cef769e3dbcbec4984613932d6e61d87d63ea009686775648aa5753d63a",
+      "nfkcInput": "　正文　",
+      "nfkcText": "正文"
+    },
+    {
+      "name": "nested-prototype-keys",
+      "value": {
+        "items": [
+          {
+            "__proto__": null
+          },
+          {
+            "__proto__": 7
+          },
+          {
+            "constructor": {
+              "prototype": {
+                "__proto__": "原样保留"
+              }
+            }
+          }
+        ]
+      },
+      "canonicalJson": "{\"items\":[{\"__proto__\":null},{\"__proto__\":7},{\"constructor\":{\"prototype\":{\"__proto__\":\"原样保留\"}}}]}",
+      "sha256": "635d86add9c9abf50e6f1de4d47099866231a61faeccf420d49e08e2e4b10d91",
+      "nfkcInput": "　正文　",
+      "nfkcText": "正文"
     }
   ],
   "rejected": [
