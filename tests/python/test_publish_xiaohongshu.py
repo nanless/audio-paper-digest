@@ -1,5 +1,6 @@
 import importlib.util
 import contextlib
+import concurrent.futures
 import hashlib
 import io
 import json
@@ -204,15 +205,41 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
         self.assertEqual(saved['entries']['2607.00002']['status'], 'success')
 
     def test_analysis_change_invalidates_only_matching_oneliner(self):
+        original_executor = concurrent.futures.ThreadPoolExecutor
+
+        class SecondWorkerFirst(original_executor):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.submitted = 0
+                self.second_finished = threading.Event()
+
+            def submit(self, function, *args, **kwargs):
+                self.submitted += 1
+                index = self.submitted
+
+                def invoke():
+                    # 第二篇先执行，验证缓存文案依论文绑定，不依线程启动顺序。
+                    if index == 1 and not self.second_finished.wait(5):
+                        raise AssertionError('第二个测试任务没有启动')
+                    try:
+                        return function(*args, **kwargs)
+                    finally:
+                        if index == 2:
+                            self.second_finished.set()
+
+                return super().submit(invoke)
+
         papers = [
             (9.0, {'arxivId': '2607.00003', 'title': 'A', 'analysis': '旧分析'}, {}),
             (8.0, {'arxivId': '2607.00004', 'title': 'B', 'analysis': '稳定分析'}, {}),
         ]
         with tempfile.TemporaryDirectory() as tmp:
             cache_path = Path(tmp) / 'cache.json'
-            with mock.patch.object(
+            with mock.patch('publish_common.concurrent.futures.ThreadPoolExecutor', SecondWorkerFirst), \
+                    mock.patch.object(publish_xiaohongshu, 'get_oneliner_concurrency', return_value=2), \
+                    mock.patch.object(
                 publish_xiaohongshu, 'call_llm_for_oneliner',
-                side_effect=['论文A第一次生成的完整亮点。', '论文B第一次生成的完整亮点。'],
+                side_effect=lambda title, _abstract, _parsed: f'论文{title}第一次生成的完整亮点。',
             ):
                 publish_xiaohongshu.generate_llm_oneliners(
                     papers, date_str='2026-07-13', cache_path=cache_path,

@@ -227,6 +227,10 @@ def read_json_strict(path, *, allow_missing=False):
     return data
 
 
+class _LockSnapshotChanged(RuntimeError):
+    """同一文件锁的创建或续租正在更新内容，等待方需要重新读取。"""
+
+
 def _lock_identity(info):
     return info.st_dev, info.st_ino
 
@@ -265,16 +269,27 @@ def _lock_read_owner(directory_fd):
         named = os.stat('owner.json', dir_fd=directory_fd, follow_symlinks=False)
         signature = lambda info: (_lock_identity(info), info.st_size, info.st_mtime_ns,
                                   info.st_ctime_ns, info.st_nlink)
-        if len(data) > 16384 or signature(opened) != signature(after) \
-                or signature(after) != signature(named) or len(data) != after.st_size:
-            raise RuntimeError('读取文件锁持有人记录时，文件变化或超过大小上限')
+        if len(data) > 16384 or after.st_size > 16384 or named.st_size > 16384:
+            raise RuntimeError('文件锁持有人记录超过大小上限')
+        for info in (after, named):
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 \
+                    or info.st_uid != os.getuid() or _lock_identity(info) != _lock_identity(opened):
+                raise RuntimeError('读取文件锁持有人记录时，文件身份或链接发生变化')
+        if signature(opened) != signature(after) or signature(after) != signature(named) \
+                or len(data) != after.st_size:
+            raise _LockSnapshotChanged('读取文件锁持有人记录时，同一文件的内容正在更新')
         try:
             record = json.loads(data)
         except (ValueError, UnicodeError):
             record = None
         named = os.stat('owner.json', dir_fd=directory_fd, follow_symlinks=False)
-        if signature(after) != signature(named):
+        if not stat.S_ISREG(named.st_mode) or named.st_nlink != 1 \
+                or named.st_uid != os.getuid() or _lock_identity(after) != _lock_identity(named):
             raise RuntimeError('解析文件锁持有人记录时，路径对应的文件发生变化')
+        if named.st_size > 16384:
+            raise RuntimeError('文件锁持有人记录超过大小上限')
+        if signature(after) != signature(named):
+            raise _LockSnapshotChanged('解析文件锁持有人记录时，同一文件的内容正在更新')
         return {'identity': _lock_identity(opened), 'mtime': opened.st_mtime_ns,
                 'ctime': opened.st_ctime_ns, 'bytes': bytes(data),
                 'record': record if isinstance(record, dict) else None}
@@ -291,9 +306,14 @@ def _lock_snapshot(lock_path):
             raise RuntimeError(f'文件锁目录含未知文件，已保留：{lock_path}：{entries}')
         owner = _lock_read_owner(fd) if entries else None
         after = os.fstat(fd)
-        if info.st_mtime_ns != after.st_mtime_ns \
-                or _lock_identity(lock_path.lstat()) != _lock_identity(info):
+        named = lock_path.lstat()
+        if not stat.S_ISDIR(named.st_mode) or named.st_uid != os.getuid() \
+                or _lock_identity(named) != _lock_identity(info):
             raise RuntimeError(f'读取文件锁期间目录发生变化：{lock_path}')
+        if info.st_mtime_ns != after.st_mtime_ns:
+            if sorted(os.listdir(fd)) not in ([], ['owner.json']):
+                raise RuntimeError(f'文件锁目录含未知文件，已保留：{lock_path}')
+            raise _LockSnapshotChanged(f'读取文件锁期间，持有人记录正在创建或移除：{lock_path}')
         return {'path': lock_path, 'identity': _lock_identity(info),
                 'mtime': info.st_mtime_ns, 'entries': entries, 'owner': owner}
     finally:
@@ -445,35 +465,38 @@ def _lock_acquire(lock_path, timeout_seconds, stale_seconds):
     reclaim_path = lock_path.with_name(f'{lock_path.name}.reclaim')
     while True:
         try:
-            marker = _lock_snapshot(reclaim_path)
-        except FileNotFoundError:
-            marker = None
-        if marker is not None:
-            if _lock_snapshot_reclaimable(marker, stale_seconds):
-                _lock_remove(marker)
-                continue
-        else:
             try:
-                return _lock_create(lock_path, stale_seconds)
-            except FileExistsError:
-                pass
-            try:
-                stale = _lock_snapshot(lock_path)
+                marker = _lock_snapshot(reclaim_path)
             except FileNotFoundError:
-                continue
-            if _lock_snapshot_reclaimable(stale, stale_seconds):
-                guard = None
+                marker = None
+            if marker is not None:
+                if _lock_snapshot_reclaimable(marker, stale_seconds):
+                    _lock_remove(marker)
+                    continue
+            else:
                 try:
-                    guard = _lock_create(reclaim_path, stale_seconds)
-                    current = _lock_snapshot(lock_path)
-                    if current == stale and _lock_snapshot_reclaimable(current, stale_seconds):
-                        _lock_remove(current)
-                except (FileExistsError, FileNotFoundError):
+                    return _lock_create(lock_path, stale_seconds)
+                except FileExistsError:
                     pass
-                finally:
-                    if guard is not None:
-                        _lock_remove(guard)
-                continue
+                try:
+                    stale = _lock_snapshot(lock_path)
+                except FileNotFoundError:
+                    continue
+                if _lock_snapshot_reclaimable(stale, stale_seconds):
+                    guard = None
+                    try:
+                        guard = _lock_create(reclaim_path, stale_seconds)
+                        current = _lock_snapshot(lock_path)
+                        if current == stale and _lock_snapshot_reclaimable(current, stale_seconds):
+                            _lock_remove(current)
+                    except (FileExistsError, FileNotFoundError):
+                        pass
+                    finally:
+                        if guard is not None:
+                            _lock_remove(guard)
+                    continue
+        except _LockSnapshotChanged:
+            pass
         if time.monotonic() - started >= timeout_seconds:
             raise TimeoutError(f'等待文件锁超时：{lock_path}')
         time.sleep(0.05)

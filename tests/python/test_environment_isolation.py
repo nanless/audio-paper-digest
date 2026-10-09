@@ -10,6 +10,9 @@
 """
 
 import json
+import os
+import tempfile
+from unittest import mock
 import subprocess
 import sys
 import unittest
@@ -47,22 +50,31 @@ IMPORT_ONLY_MODULES = (
 )
 
 PROBE = r'''
-import importlib, json, os, sys, unittest
+import importlib, io, json, os, re, sys, unittest
 sys.path[:0] = %(paths)r
+test_output = io.StringIO()
 before = dict(os.environ)
 importlib.import_module(%(module)r)
 if %(run)r:
     suite = unittest.TestLoader().loadTestsFromName(%(module)r)
-    result = unittest.TextTestRunner(stream=open(os.devnull, 'w'), verbosity=0).run(suite)
+    result = unittest.TextTestRunner(stream=test_output, verbosity=0).run(suite)
     passed = result.wasSuccessful()
 else:
     passed = True
 after = dict(os.environ)
+from log_setup import redact_log_text
+details = test_output.getvalue()
+secrets = {value for snapshot in (before, after) for key, value in snapshot.items()
+           if value and re.search(r'key|token|secret|password|passwd|authorization|cookie', key, re.I)}
+for secret in sorted(secrets, key=len, reverse=True):
+    details = details.replace(secret, '[REDACTED]')
+details = redact_log_text(details)[-16000:]
 # 被测脚本会接管 sys.stdout 并给每行加时间戳，所以标记写到原始 stdout。
 print('ENV-DIFF:' + json.dumps({
     'added': sorted(key for key in after if before.get(key) != after[key]),
     'removed': sorted(key for key in before if key not in after),
     'testsPassed': passed,
+    'testDetails': details if not passed else '',
 }), file=sys.__stdout__)
 '''
 
@@ -81,12 +93,32 @@ class EnvironmentIsolationTest(unittest.TestCase):
         markers = [line for line in completed.stdout.splitlines() if 'ENV-DIFF:' in line]
         self.assertTrue(markers, completed.stdout[-3000:])
         diff = json.loads(markers[-1].split('ENV-DIFF:', 1)[1])
-        self.assertTrue(diff['testsPassed'], f'{module} 的用例本身失败了，先修那些')
+        self.assertTrue(diff['testsPassed'], f"{module} 的子测试失败：\n{diff.get('testDetails', '')}")
         self.assertEqual(
             {'added': diff['added'], 'removed': diff['removed']},
             {'added': [], 'removed': []},
             f'{module} 把项目 .env 留在了 os.environ，套件结果会随执行顺序变化',
         )
+
+    def test_failed_child_reports_case_and_redacted_traceback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            test_root = Path(temporary)
+            (test_root / 'failed_probe.py').write_text(
+                "import os, unittest\nclass ProbeFailure(unittest.TestCase):\n"
+                "    def test_original_failure(self):\n"
+                "        self.fail('故障详情标记\\napi_key=private-test-value\\n' + os.environ['PAPER_ANALYZER_API_KEY'])\n",
+                encoding='utf-8',
+            )
+            with mock.patch(__name__ + '.TESTS', test_root), \
+                    mock.patch.dict(os.environ, {'PAPER_ANALYZER_API_KEY': 'private-runtime-value-without-prefix'}):
+                with self.assertRaises(AssertionError) as captured:
+                    self.probe('failed_probe', run=True)
+            message = str(captured.exception)
+            self.assertIn('test_original_failure', message)
+            self.assertIn('故障详情标记', message)
+            self.assertIn('[REDACTED]', message)
+            self.assertNotIn('private-test-value', message)
+            self.assertNotIn('private-runtime-value-without-prefix', message)
 
     def test_reading_project_env_does_not_leak_into_process_environment(self):
         for module in ENV_READING_MODULES:
