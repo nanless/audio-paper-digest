@@ -19,3 +19,20 @@ test('编造的证据 ID 和模型自己写的引文不能进入注入的证据'
  assert.throws(()=>api.fillConceptQuotesFromSnippets(JSON.stringify(raw),bundle),/每个概念必须仅包含 id、evidenceId 和 rationale，且 evidenceId 必须对应已编号的来源片段/);
  raw.concepts[0]={id:'task.asr',quote:'fabricated',rationale:'已核原文'};assert.throws(()=>api.fillConceptQuotesFromSnippets(JSON.stringify(raw),bundle),/每个概念必须仅包含 id、evidenceId 和 rationale，且 evidenceId 必须对应已编号的来源片段/);
 });
+
+
+test('预算只容纳一个片段时仍返回真实原文，且不超过字符上限', () => {
+    const source = '甲'.repeat(1000) + '乙'.repeat(1000) + '丙'.repeat(1000);
+    const bundle = api.buildSourceEvidenceSnippets(source, { maxChars: 1000, maxSnippetChars: 1000 });
+    assert.equal(bundle.snippets.length, 1);
+    assert.equal(bundle.evidenceChars, 1000);
+    assert.equal(bundle.snippets[0].quote, '乙'.repeat(1000));
+    assert.equal(source.slice(bundle.snippets[0].quoteStart, bundle.snippets[0].quoteEnd), bundle.snippets[0].quote);
+});
+
+test('只有空白的正文明确说明没有证据，不生成空投影或触发属性异常', () => {
+    for (const source of [' '.repeat(100), ' '.repeat(3000)]) {
+        assert.throws(() => api.buildSourceEvidenceSnippets(source, { maxChars: 1000, maxSnippetChars: 1000 }),
+            /没有可用的连续文本片段/);
+    }
+});

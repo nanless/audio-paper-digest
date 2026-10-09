@@ -20,12 +20,17 @@ function buildSourceEvidenceSnippets(source, { maxChars = 50000, maxSnippetChars
             quoteStart: offset, quoteEnd: end, offsetUnit: 'utf16-code-unit', quoteSha256: digest(quote) });
         offset = end;
     }
+    if (chunks.length === 0) throw new Error('来源正文没有可用的连续文本片段。');
     let selected = chunks;
     if (source.length > maxChars) {
         const count = Math.floor(maxChars / maxSnippetChars), chosen = new Set();
-        // 按片段位置均衡取样，覆盖来源的开头、中间和结尾，不推断具体章节。
+        // 按片段位置均衡取样；只能容纳一段时取中间片段，不推断具体章节。
         // 引文直接截取来源字符串，保留原始空白，并按 UTF16 代码单元记录位置。
-        for (let i = 0; i < count; i++) chosen.add(Math.round(i * (chunks.length - 1) / (count - 1)));
+        for (let i = 0; i < count; i++) {
+            const position = count === 1 ? Math.floor((chunks.length - 1) / 2)
+                : Math.round(i * (chunks.length - 1) / (count - 1));
+            chosen.add(position);
+        }
         selected = [...chosen].sort((a, b) => a - b).map(i => chunks[i]);
     }
     const evidenceText = selected.map(s => `[${s.id}; source UTF16 ${s.quoteStart}:${s.quoteEnd}]\n${s.quote}`).join('\n\n');

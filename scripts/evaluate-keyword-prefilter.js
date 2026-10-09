@@ -50,18 +50,17 @@ function findFilteredFiles(rootDir) {
             else if (entry.isFile() && entry.name === 'filtered-papers.json') files.push(fullPath);
         }
     };
-    if (fs.existsSync(rootDir)) visit(rootDir);
+    visit(rootDir);
     return files.sort();
 }
 
 function readPapers(filePath) {
-    try {
-        const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-        return Array.isArray(data) ? data : (Array.isArray(data?.papers) ? data.papers : []);
-    } catch (error) {
-        console.warn(`[keyword-recall] 跳过无法读取的文件 ${filePath}: ${error.message}`);
-        return [];
+    const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    const papers = Array.isArray(data) ? data : data?.papers;
+    if (!Array.isArray(papers) || papers.some(paper => !paper || typeof paper !== 'object' || Array.isArray(paper))) {
+        throw new Error(`历史入选记录必须是论文对象数组: ${filePath}`);
     }
+    return papers;
 }
 
 function evaluateHistoricalRecall(rootDir = Config.ARCHIVE_DIR, goldSet = loadGoldSet()) {
@@ -87,7 +86,7 @@ function evaluateHistoricalRecall(rootDir = Config.ARCHIVE_DIR, goldSet = loadGo
             positives: papers.length,
             passed,
             missed: papers.length - passed,
-            recall: papers.length > 0 ? passed / papers.length : 1,
+            recall: papers.length > 0 ? passed / papers.length : null,
             missedIds: misses
         });
     }
@@ -97,17 +96,23 @@ function evaluateHistoricalRecall(rootDir = Config.ARCHIVE_DIR, goldSet = loadGo
         goldSet.historicalFalsePositives.map(item => normalizedId(item.arxivId)).filter(Boolean)
     );
     let adjudicatedHistoricalFalsePositives = 0;
+    let rawPassed = 0;
+    const historicalFalsePositiveLeaks = [];
     const matchedGroups = {};
     let passed = 0;
     let categoryFallbackOnly = 0;
     for (const { paper, files: sourceFiles } of uniquePapers.values()) {
         const result = evaluateKeywordPrefilter(paper);
+        if (result.pass) rawPassed += 1;
+        if (adjudicatedFalsePositiveIds.has(normalizedId(paper))) {
+            adjudicatedHistoricalFalsePositives += 1;
+            if (result.pass) historicalFalsePositiveLeaks.push(normalizedId(paper));
+            continue;
+        }
         if (result.pass) {
             passed += 1;
             if (result.categoryFallback && result.matchedKeywords.length === 0) categoryFallbackOnly += 1;
             for (const group of result.matchedGroups) matchedGroups[group] = (matchedGroups[group] || 0) + 1;
-        } else if (adjudicatedFalsePositiveIds.has(normalizedId(paper))) {
-            adjudicatedHistoricalFalsePositives += 1;
         } else {
             misses.push({
                 arxivId: normalizedId(paper) || paper?.arxivId || paper?.paper_id || '',
@@ -130,14 +135,20 @@ function evaluateHistoricalRecall(rootDir = Config.ARCHIVE_DIR, goldSet = loadGo
         adjudicatedPositives,
         passed,
         missed: misses.length,
-        rawRecall: historicalSelected > 0 ? passed / historicalSelected : 1,
-        recall: adjudicatedPositives > 0 ? passed / adjudicatedPositives : 1,
+        rawPassed,
+        rawRecall: historicalSelected > 0 ? rawPassed / historicalSelected : null,
+        recall: adjudicatedPositives > 0 ? passed / adjudicatedPositives : null,
+        historicalFalsePositiveLeaks,
         categoryFallbackOnly,
         adjudicatedHistoricalFalsePositives,
         matchedGroups,
         misses,
         perFile
     };
+}
+
+function formatRecall(value) {
+    return value === null ? '无有效样本' : `${(value * 100).toFixed(3)}%`;
 }
 
 function main() {
@@ -148,8 +159,9 @@ function main() {
     console.log(`[keyword-recall] 词表版本: ${report.keywordPrefilterVersion}`);
     console.log(`[keyword-recall] 历史文件: ${report.files}`);
     console.log(`[keyword-recall] 历史 LLM 入选: ${report.historicalSelected} | 已裁决历史误筛: ${report.adjudicatedHistoricalFalsePositives}`);
-    console.log(`[keyword-recall] 裁决后有效正样本: ${report.adjudicatedPositives} | 通过: ${report.passed} | 漏召回: ${report.missed} | 有效正样本召回率: ${(report.recall * 100).toFixed(3)}%`);
-    console.log(`[keyword-recall] 未经裁决原始命中率: ${(report.rawRecall * 100).toFixed(3)}%`);
+    console.log(`[keyword-recall] 裁决后有效正样本: ${report.adjudicatedPositives} | 通过: ${report.passed} | 漏召回: ${report.missed} | 有效正样本召回率: ${formatRecall(report.recall)}`);
+    console.log(`[keyword-recall] 未经裁决原始命中率: ${formatRecall(report.rawRecall)}`);
+    console.log(`[keyword-recall] 已裁决负样本误放: ${report.historicalFalsePositiveLeaks.length} | ${report.historicalFalsePositiveLeaks.join(', ')}`);
     console.log(`[keyword-recall] 仅靠核心类别兜底: ${report.categoryFallbackOnly}`);
     console.log(`[keyword-recall] 命中词族: ${JSON.stringify(report.matchedGroups)}`);
     if (report.misses.length > 0) {
@@ -157,7 +169,9 @@ function main() {
         for (const miss of report.misses) console.log(JSON.stringify(miss));
     }
     process.exitCode = (
-        report.missed === 0
+        report.adjudicatedPositives > 0
+        && report.missed === 0
+        && report.historicalFalsePositiveLeaks.length === 0
         && gold.positiveMisses.length === 0
         && gold.negativeLeaks.length === 0
     ) ? 0 : 2;

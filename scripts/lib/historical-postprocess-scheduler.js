@@ -16,8 +16,8 @@ const SHA_RE = /^[a-f0-9]{64}$/;
 const stableHash = fresh.stableHash;
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
-function fail(message) { const error = new Error(`历史后处理检查未通过：${message}`);
-    error.code = 'HISTORICAL_POSTPROCESS_INTEGRITY'; error.retryable = false; throw error; }
+function fail(message, code = 'HISTORICAL_POSTPROCESS_INTEGRITY') { const error = new Error(`历史后处理检查未通过：${message}`);
+    error.code = code; error.retryable = false; throw error; }
 function uuidFrom(value) { const bytes = Buffer.from(sha256(value).slice(0, 32), 'hex');
     bytes[6] = (bytes[6] & 0x0f) | 0x40; bytes[8] = (bytes[8] & 0x3f) | 0x80; const hex = bytes.toString('hex');
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`; }
@@ -90,7 +90,8 @@ function prepareCurrentAssignment(item, tagCatalog, files, deps) {
         arxivId: item.paperId.slice(6), rootDir: files.freshRewriteRunsDir,
         now: deps.now() });
     if (!(recovered?.storageSealed === true && recovered.currentContractComplete === true)) {
-        fail(`论文 ${item.paperId} 的分析运行未保存完整数据，或尚未通过当前规则的完成检查。`);
+        fail(`论文 ${item.paperId} 的分析运行未保存完整数据，或尚未通过当前规则的完成检查。`,
+            'HISTORICAL_ANALYSIS_NOT_READY');
     }
     const handle = deps.loadAnalysisRun({ analysisRoot: files.freshRewriteRunsDir, runId: item.runId });
     const assignments = deps.buildAssignments({ runHandle: handle, tagCatalog, paperId: item.paperId });
@@ -202,7 +203,10 @@ async function runHistoricalPostprocess(options, overrides = {}) {
     const relevantComplete = options.date ? allComplete.filter(item => (item.cohortDates || []).includes(options.date)) : allComplete;
     const dryPrepared = options.apply ? [] : relevantComplete.flatMap(item => {
         try { return [{ ...item, currentAssignment: prepareCurrentAssignment(item, tagCatalog, files, deps) }]; }
-        catch { return []; }
+        catch (error) {
+            if (error.code !== 'HISTORICAL_ANALYSIS_NOT_READY') throw error;
+            return [];
+        }
     });
     const available = options.apply ? relevantComplete : dryPrepared; const maximum = options.limit === 'pilot' ? 1
         : options.limit === null ? available.length : options.limit; const selected = available.slice(0, maximum);
@@ -306,7 +310,10 @@ async function runHistoricalPostprocess(options, overrides = {}) {
                 stagingRunId: deterministicStagingRunId(options.crosswalkId, item,
                     tagCatalog.registrySha256, rendererImplementationSha256,
                     assignment.assignmentSha256) });
-        } catch { /* 已失效或未保存完整数据的论文会阻止其对应日期生成汇总。 */ }
+        } catch (error) {
+            // 已知未完成的分析阻止对应日期汇总；读取失败或内容损坏保留原错误。
+            if (error.code !== 'HISTORICAL_ANALYSIS_NOT_READY') throw error;
+        }
     }
     const daily = [];
     for (const date of dates) {

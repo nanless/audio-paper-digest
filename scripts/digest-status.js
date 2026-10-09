@@ -4,6 +4,7 @@ const path = require('path');
 const crypto = require('crypto');
 const zlib = require('zlib');
 const { pipeline } = require('stream/promises');
+const { Writable } = require('node:stream');
 const {
     getBeijingISOString,
     normalizeToBeijingISOString,
@@ -54,20 +55,21 @@ function sha256Buffer(value) {
 }
 
 async function readGzipPayloadBounded(filePath, maxBytes) {
-    const gunzip = zlib.createGunzip();
-    fs.createReadStream(filePath).pipe(gunzip);
     const chunks = [];
     let bytes = 0;
-    for await (const chunk of gunzip) {
-        bytes += chunk.length;
-        if (bytes > maxBytes) {
-            gunzip.destroy();
-            const error = new Error(`papers backup 解压超过 ${maxBytes} 字节上限`);
-            error.code = 'PAPERS_BACKUP_TOO_LARGE';
-            throw error;
+    await pipeline(fs.createReadStream(filePath), zlib.createGunzip(), new Writable({
+        write(chunk, _encoding, callback) {
+            bytes += chunk.length;
+            if (bytes > maxBytes) {
+                const error = new Error(`论文库备份解压超过 ${maxBytes} 字节上限`);
+                error.code = 'PAPERS_BACKUP_TOO_LARGE';
+                callback(error);
+                return;
+            }
+            chunks.push(chunk);
+            callback();
         }
-        chunks.push(chunk);
-    }
+    }));
     return Buffer.concat(chunks, bytes);
 }
 
@@ -96,12 +98,12 @@ async function verifyPapersBackup(backupPath, options = {}) {
             || manifest.sourceBytes < 0
             || !Number.isInteger(manifest.compressedBytes)
             || manifest.compressedBytes < 0) {
-            throw new Error(`papers backup manifest 无效: ${manifestPath}`);
+            throw new Error(`论文库备份清单无效: ${manifestPath}`);
         }
         const compressed = await fs.promises.readFile(resolved);
         if (compressed.length !== manifest.compressedBytes
             || sha256Buffer(compressed) !== manifest.compressedSha256) {
-            throw new Error(`papers backup 压缩字节与 manifest 不一致: ${resolved}`);
+            throw new Error(`论文库备份的压缩字节与清单不一致: ${resolved}`);
         }
         const maxRawBytes = Math.min(
             Number.isInteger(options.maxRawBytes) ? options.maxRawBytes : PAPERS_BACKUP_MAX_RAW_BYTES,
@@ -109,17 +111,17 @@ async function verifyPapersBackup(backupPath, options = {}) {
         );
         const raw = await readGzipPayloadBounded(resolved, maxRawBytes);
         if (raw.length !== manifest.sourceBytes || sha256Buffer(raw) !== manifest.sourceSha256) {
-            throw new Error(`papers backup 解压字节与 manifest 不一致: ${resolved}`);
+            throw new Error(`论文库备份的解压字节与清单不一致: ${resolved}`);
         }
         const parsed = JSON.parse(raw.toString('utf8'));
         validatePapersDatabaseSchema(parsed);
         return { backupPath: resolved, manifestPath, manifest, data: parsed, sourceSha256: manifest.sourceSha256 };
     }
 
-    if (!resolved.endsWith('.json')) throw new Error(`不支持的 papers backup 格式: ${resolved}`);
+    if (!resolved.endsWith('.json')) throw new Error(`不支持的论文库备份格式: ${resolved}`);
     const raw = await fs.promises.readFile(resolved);
     if (raw.length > (options.maxRawBytes || PAPERS_BACKUP_MAX_RAW_BYTES)) {
-        throw new Error(`legacy papers backup 超过字节上限: ${resolved}`);
+        throw new Error(`旧版论文库备份超过字节上限: ${resolved}`);
     }
     const parsed = JSON.parse(raw.toString('utf8'));
     validatePapersDatabaseSchema(parsed);
@@ -153,7 +155,7 @@ async function listValidManagedBackupGroups(archiveDir) {
                 createdAt: Date.parse(verified.manifest.createdAt) || 0
             });
         } catch (_) {
-            // 损坏/不完整的组不参与去重和 retention，更不会被自动删除。
+            // 损坏或不完整的备份组不参与去重和保留数量统计，也不会被自动删除。
         }
     }
     return groups.sort((a, b) => b.createdAt - a.createdAt || b.backupPath.localeCompare(a.backupPath));
@@ -174,13 +176,13 @@ async function backupPapersJson(papersFilePath, archiveDir, options = {}) {
     const sourcePath = path.resolve(papersFilePath);
     const targetDir = path.resolve(archiveDir);
     const date = options.date || getBeijingISOString().slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`papers backup 日期无效: ${date}`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error(`论文库备份日期无效: ${date}`);
     if (!fs.existsSync(sourcePath)) return { backedUp: false, message: 'papers.json 不存在，无需备份' };
 
     return withFileLock(sourcePath, async () => {
         const sourceStat = await fs.promises.lstat(sourcePath);
         if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
-            throw new Error(`papers backup source 必须是普通文件: ${sourcePath}`);
+            throw new Error(`论文库备份源必须是普通文件: ${sourcePath}`);
         }
         const sourceRaw = await fs.promises.readFile(sourcePath);
         const sourceData = JSON.parse(sourceRaw.toString('utf8'));
@@ -222,7 +224,7 @@ async function backupPapersJson(papersFilePath, archiveDir, options = {}) {
             const compressed = await fs.promises.readFile(tempBackupPath);
             const recovered = await readGzipPayloadBounded(tempBackupPath, sourceRaw.length + 1);
             if (recovered.length !== sourceRaw.length || sha256Buffer(recovered) !== sourceSha256) {
-                throw new Error('papers backup 写后解压 SHA 与 source 不一致');
+                throw new Error('论文库备份写入后解压所得内容的 SHA 与源文件不一致');
             }
             const manifest = {
                 contract: PAPERS_BACKUP_CONTRACT,

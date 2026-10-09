@@ -43,9 +43,7 @@ function parseDate(argv) {
     return value;
 }
 
-// 读不到 JSON 有两种原因，后果不一样：文件不存在（这一步还没跑）与文件在但解析失败（坏了）。
-// 旧写法两者都返回 null，报告上分不出来，运维会把「损坏」当成「没生成」。
-// 现在把后者记进 readProblems，前者保持安静——文件不存在是正常状态，不是错误。
+// 文件不存在表示阶段尚未运行；读取或解析失败须单独记入诊断。
 function readJson(filePath, readProblems = null) {
     let text;
     try {
@@ -378,19 +376,12 @@ function visualAssetsAreValid(visual) {
     return { visualCards, assetsValid, archiveUnique };
 }
 
-// 长图计数读不到时返回 null 而不是 0：0 是一个真实可能的取值（清单在、但一张都没做），
-// 和「清单根本不存在」是两件事，不能显示成同一个数。
+// 未知长图数量用 null 表示；零表示已知数量为零。
 function visualCount(value) {
     return Number.isInteger(value) ? value : null;
 }
 
-// 分析未完成时该报什么。原来的判别式只看 productionAnalysisComplete，而它用的是粗粒度的
-// llmApiComplete；successful 用的却是逐篇复验（含 validateTagStageProof）。两者错位，会把
-// 「今天拿当前词表复验旧记录不通过」写成「集合未精确覆盖筛选结果」。
-// 实测：归档里 101 个有 deep 快照的日期共 2799 篇失败，2799 篇全部是标签阶段复验没过，
-// 真正计数不匹配只有 5 天。09-25 那天 75 篇全是词表破坏性变更导致复验不过、集合其实精确
-// 覆盖，运维照旧文案会白跑一次 reanalyze（要调模型）。
-// 这里要把「复验不通过」和「集合缺篇」分开，并说明复验不是在评价当时那次运行。
+// 分开报告逐篇核验失败和集合缺口，避免把旧记录不兼容误报成缺篇。
 function analysisFailureMessage({
     productionAnalysisComplete, failedCount, failedIds, missing, total, expected
 }) {
@@ -491,9 +482,7 @@ function buildDigestRunReport(targetDate, options = {}) {
     } catch (_error) {
         publicationVerified = false;
     }
-    // publicationVerified 是「整份凭证通过校验」，它失败的原因可能跟远端无关——实测
-    // data/current 下 62 份 receipt 里有 35 份 OID 明明对得上，却因为别的校验项没过而被
-    // 摘要报成 remoteVerified=false，读的人会以为推送没到远端。两件事分开报。
+    // 凭证整体有效与保存的远端 OID 一致是两项独立检查。
     const {
         visualCards,
         assetsValid: visualAssetsValid,
@@ -552,9 +541,7 @@ function buildDigestRunReport(targetDate, options = {}) {
         && filtered?.status === 'complete'
         && filterSnapshotsComplete
     );
-    // analysis.total 一直只数 deep 集合，于是「筛选出了 N 篇、分析结果里只有 M 篇」这种缺口
-    // 显示不出来：08-25 筛选出 46 篇而 deep 快照缺失时，摘要是 `success=0/0 | failed=0`，
-    // 看着像没有失败项。这两个字段把分母和缺口补齐，total 的含义不动（仍是 deep 集合大小）。
+    // total 统计实际分析记录，expected 和 missing 另行表示入选集合及缺口。
     const deepIds = new Set(deepBatch.map(normalizedId).filter(Boolean));
     const analysisExpected = filtered ? filteredBatch.length : null;
     const analysisMissing = filtered
@@ -630,14 +617,7 @@ function buildDigestRunReport(targetDate, options = {}) {
         Number.isInteger(decidedTotal) && Number.isInteger(decidedCount)
     ) ? Math.max(0, decidedTotal - decidedCount) : null;
     return {
-        // 3：v2 之后又改了两处取值域，旧报告分不出来，所以再升一档。
-        //   - visuals.status 由门禁派生，门禁不过时不会再出现 status=complete；
-        //   - fetch.rawCandidateCount 读不到快照时是 null，不再伪装成 0；
-        //   - 新增 readProblems，区分「文件不存在」与「文件在但解析失败」。
-        // 2：这次不只是新增字段，还改了取值域——长图计数可能是 null（未知不再伪装成 0）、
-        // cover.status 不再镜像清单内层说法、分析多了 expected/missing、博客把远端 OID
-        // 核验与凭证有效性分开。旧报告仍是 1 且是旧口径，靠 version 就能分辨，
-        // 不必再去猜某个字段在不在。仓库内没有任何代码读这个 version。
+        // v3 区分未知计数与零，并单列读取问题；视觉状态由核验结果确定。
         version: 3,
         batchDate: targetDate,
         generatedAt: getBeijingISOString(),
@@ -649,7 +629,7 @@ function buildDigestRunReport(targetDate, options = {}) {
             filterDecisions: decisionsSnapshot.source,
             deepAnalysisResult: deepSnapshot.source
         },
-        // 存在的文件读不出来时列在这里；真·不存在的文件不会出现在这个数组里。
+        // 只列实际读取或解析失败，不包括尚未创建的文件。
         readProblems,
         fetch: {
             complete: fetchComplete,
@@ -664,14 +644,7 @@ function buildDigestRunReport(targetDate, options = {}) {
             decided: decisionStats.decided ?? null,
             keywordRejected: decisionStats.keywordRejected ?? null,
             llmCandidates: decisionStats.llmCandidates ?? null,
-            // 未决数必须是「候选总数减去已决定数」，不能取 retryable：后者只数已经
-            // 有决定、但决定本身可重试的条目。运行在写完全部决定之前被杀时，缺口
-            // 里没有任何 retryable 项，取 retryable 会显示 pending=0，把还差多少篇
-            // 没有决定这件事藏起来。
-            // 未获明确决定的候选数（总候选数 − 已决定数）。旧版这里报的是
-            // decisions.stats.retryable，只数已经有决定但可重试的条目；运行在
-            // 写完全部决定之前被杀时缺口里没有可重试项，旧版会显示 0，把还差
-            // 多少篇没有决定藏起来。字段名与报告 version 未变，但语义已改。
+            // 尚未保存决定的候选与已标为可重试的决定分开计数。
             pendingDecisions: undecidedDecisionCount,
             retryableDecisions: decisionStats.retryable ?? null
         },
@@ -709,11 +682,7 @@ function buildDigestRunReport(targetDate, options = {}) {
         },
         visuals: {
             gateComplete: visualGateComplete,
-            // 和封面一样，状态由门禁派生。旧写法直接镜像清单内层的 overallStatus，
-            // 于是清单自称 complete、而资产校验或发布绑定已经失败时，摘要会打出
-            // `长图 incomplete | status=complete | complete=10/10 | pending=0 | failed=0`。
-            // 门禁不过就不替它宣布完成：清单里写的是 pending/partial_failed 就照说，
-            // 清单自称 complete 而门禁不过则说 incomplete，清单根本不在才是 missing。
+            // 核验未通过时，不能沿用清单自报的 complete。
             status: visualsWaived
                 ? 'waived'
                 : (visualGateComplete
@@ -722,9 +691,7 @@ function buildDigestRunReport(targetDate, options = {}) {
                         ? visual.overallStatus
                         : (visual ? 'incomplete' : 'missing'))),
             waived: visualsWaived,
-            // 这几项原来写成 `|| 0`，于是「没有长图清单」和「清单里长图数为 0」显示成
-            // 同一个 0。今天的批次就是这样：摘要显示 complete=0/0、pending=0、failed=0，
-            // 看着像全做完了，而真实状态是 missing。读不到计数就报 null，让摘要打印 `?`。
+            // 未知数量保留为 null，摘要显示问号。
             complete: visualCount(visual?.counts?.completeCards),
             total: visualCount(visual?.counts?.totalCards),
             pending: visualCount(visual?.counts?.pendingCards),
@@ -733,9 +700,7 @@ function buildDigestRunReport(targetDate, options = {}) {
             archiveUnique: visualArchiveUnique
         },
         cover: {
-            // 原来直接取清单内层的 cover.cover.status，于是出现过「封面 incomplete 但
-            // status=complete」这种自相矛盾的摘要。状态由门禁派生，内层说法只在门禁
-            // 通过时才采纳；门禁不过时最多说「未完成」，不会替它宣布完成。
+            // 封面的完成状态同样以核验结果为准。
             status: visualsWaived
                 ? 'waived'
                 : (coverGateComplete

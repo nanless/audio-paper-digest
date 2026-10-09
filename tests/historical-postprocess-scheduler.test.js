@@ -318,3 +318,36 @@ test('CLI 校验模式、日期、上限和并发，并透传试运行参数', a
     const result = await cli.main(['--dry-run', '--crosswalk', CROSSWALK], { run: async options => ({ options }) });
     assert.equal(result.options.apply, false);
 });
+
+
+test('后处理预演保留真实磁盘读取失败，不能报成来源未封存', async t => {
+    const f = fixture(t, 'pending');
+    const error = Object.assign(new Error('读取分析文件失败'), { code: 'EIO' });
+    f.deps.recoverRun = () => { throw error; };
+    await assert.rejects(api.runHistoricalPostprocess({apply:false,crosswalkId:CROSSWALK,
+        date:DATE,limit:null,concurrency:1},f.deps), failure => failure === error);
+    assert.equal(fs.existsSync(f.files.historicalPostprocessSchedulerDir), false);
+});
+
+
+test('后处理预演不能把损坏分析或权限错误当作普通未就绪', async t => {
+    for (const code of ['EACCES', 'HISTORICAL_TAG_ASSIGNMENT_INTEGRITY']) {
+        const f = fixture(t, 'pending');
+        const error = Object.assign(new Error('无法核验已保存分析'), {code});
+        f.deps.loadAnalysisRun = () => {throw error;};
+        await assert.rejects(api.runHistoricalPostprocess({apply:false,crosswalkId:CROSSWALK,
+            date:DATE,limit:null,concurrency:1},f.deps), failure => failure === error);
+        assert.equal(fs.existsSync(f.files.historicalPostprocessSchedulerDir),false);
+    }
+});
+test('暂存成功后的完成集合复查遇到EIO须外抛，已保存单篇成果仍保留', async t => {
+    const f = fixture(t,'pending'); let reads=0;
+    const error=Object.assign(new Error('复查分析时读取失败'),{code:'EIO'});
+    f.deps.recoverRun=()=>{if(++reads===3) throw error;return {storageSealed:true,currentContractComplete:true};};
+    await assert.rejects(api.runHistoricalPostprocess({apply:true,crosswalkId:CROSSWALK,
+        date:DATE,limit:null,concurrency:1},f.deps),failure=>failure===error);
+    const filename=api.checkpointPath(f.files.historicalPostprocessSchedulerDir,CROSSWALK,REGISTRY,RENDERER);
+    const state=JSON.parse(fs.readFileSync(filename));
+    assert.equal(state.items[f.paperIds[0]].status,'staged');
+    assert.equal(f.stageCalls.length,1);assert.equal(f.aggregateCalls.length,0);
+});

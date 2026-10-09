@@ -279,6 +279,8 @@ npm run history:postprocess -- --apply --crosswalk UUID --concurrency 3
 npm run history:postprocess -- --apply --crosswalk UUID --date YYYY-MM-DD --concurrency 3
 ```
 
+预演只略过明确尚未封存或尚未完成的分析；磁盘读取、权限和内容完整性错误会中止并保留原原因。暂存后的完成集合复查也遵守这一规则，已保存的单篇成果保留，不能把读取失败报成普通缺页。
+
 每篇先按当前标签注册表生成以 SHA 命名的标签分配记录；`blocked` 记录保留供审计，不能写入页面。暂存 run ID 由 crosswalk、分析任务、注册表、调度项及渲染实现 SHA 稳定推导，后者包括页面渲染、发布页面对应关系、标签生成、每日汇总和直接配置。实现改变会建立新的不可变暂存文件和 checkpoint，旧文件保留，但不能当作当前结果。
 
 渲染先在内存完成，复核实现身份后原子写入；若写文件后、保存 manifest 前中断，同一写入计划（intent）及分析任务只能续用逐字一致的部分文件，未知或漂移文件会拒绝。每日汇总要求全部成员使用同一渲染 SHA，且该日期全部历史论文页已核验暂存；它合并逐篇 manifest，只写受保护 runtime。后处理 checkpoint 按 crosswalk 及注册表 SHA 隔离并自哈希，注册表升级不能覆盖旧审计记录。
