@@ -840,7 +840,7 @@ test('SIGINT 拒绝替换持有者文件 inode，也拒绝并发替换锁持有�
     });
 });
 
-test('自造的 arXiv 夹具无法在核心 API 或独立 CLI 进程中授权已核验的决定', t => {
+test('自行构造的 arXiv 测试数据，不能让直接函数调用或独立命令进程接受为已核验的决定', t => {
     const f = fixture(t); const authorityRoot = path.join(f.root, 'authorities');
     const authorityHandle = writeArxivAuthority(authorityRoot);
     const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),

@@ -373,7 +373,7 @@ test('出版元数据批次保留瞬时失败、保存并核验同伴、以部�
 });
 
 test('旧解析器封存的实体和空白按 v1 原字节重放，默认新抓取仍解码', async t => {
-    // 夹具来自严格解析改造前的生产解析器，不能用当前解析结果生成预期 SHA。
+    // 这份测试数据由严格解析改造前的正式解析器生成，不能用当前解析结果重算预期 SHA-256。
     const saved = require('./fixtures/legacy-official-atom-v1.json');
     const officialResult = { metadata: saved.metadata, proof: saved.proof,
         rawBytes: Buffer.from(saved.raw, 'utf8') };

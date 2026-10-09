@@ -27,9 +27,9 @@
 
 当前模型标签提示使用 `paper-tag-prompt-text-v2`；核验旧记录时，按记录明确保存的 `paper-taxonomy-prompt-projection-v1` 版本读取。提示更新没有同时升级词表或标签选择协议，也没有重算旧记录的绑定。历史页面展示仍使用独立格式和 `historical-taxonomy-prompt-projection-v2` 哈希前缀；它与新版模型提示属于不同接口，SHA 不能互换。提示核验、跨词表的旧兼容范围，以及重新分析时的指纹变化，见 [脚本说明](../scripts/README.md#词表变更与确认范围)。
 
-Node 与 Python 的新解析结果只写 `tagValidation`，旧缓存通过集中接口读取，不批量迁移。新旧字段混用时拒绝，旧缓存的评分覆盖仍按原规则核验。解析字段与阶段保存格式独立核验，页面元数据保持。会议实现指纹另记录 Python 解析器源码 SHA，使解析器及兼容读取函数的变化也参与恢复判断；旧凭证不补签。
+Node 与 Python 的新解析结果只写 `tagValidation`，旧缓存通过集中接口读取，不批量迁移。新旧字段混用时拒绝，旧缓存的评分覆盖仍按原规则核验。解析字段与阶段保存格式独立核验，页面元数据保持。会议实现指纹另记录 Python 解析器源码 SHA，使解析器及兼容读取函数的变化也参与恢复判断；不改写旧凭证或更新其中的校验记录。
 
-API 新阶段保存格式使用 `contracts.tagSelectionRecord=paper-tag-stage-record-v2`，阶段与正文检查点都叫 `tagSelection`。新绑定只将标签内容哈希字段改为 `tagSectionAndPrimaryTagsSha256`；旧绑定保留原十三字段及算法，读取旧记录不会重签。集中读取器拒绝双字段和跨格式混用；摘要上游和恢复检查使用对应格式的实际阶段与检查点。新写入、只读检查、注记及显式重新生成的范围见 [脚本说明](../scripts/README.md#标签选择与具体程度)。标签阶段保存格式与页面标签协议、历史分配记录及人工流程阶段集合分别核验。
+API 新阶段保存格式使用 `contracts.tagSelectionRecord=paper-tag-stage-record-v2`，阶段与正文检查点都叫 `tagSelection`。新绑定只将标签内容哈希字段改为 `tagSectionAndPrimaryTagsSha256`；旧绑定保留原十三字段及算法，读取时不改写旧记录或重新生成其证明。集中读取器拒绝双字段和跨格式混用；摘要上游和恢复检查使用对应格式的实际阶段与检查点。新写入、只读检查、注记及显式重新生成的范围见 [脚本说明](../scripts/README.md#标签选择与具体程度)。标签阶段保存格式与页面标签协议、历史分配记录及人工流程阶段集合分别核验。
 
 新预览使用 `paper-tag-preview-v2`，词表版本字段为 `tagCatalogVersion`。报告、文件清单和标签处置格式也使用对应的 v2 标识。读取器先核对三份文件的原字节 SHA，再检查格式、词表和来源是否一致；旧 v1 预览按原字段读取，不能与新格式混用。每条记录保留原 `tags`、全部 `mappedIds` 和 `unresolvedTags`；只有展示用的 `displayIds` 去除冗余祖先，原始证据不删除。主任务只能来自显式字段，并须唯一解析为任务概念，不能用首标签补齐。
 

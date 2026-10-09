@@ -3,7 +3,7 @@
 // 这些集成测试检查标签记录更新工具的 --apply 写入流程。
 // 每个用例都在系统临时目录中构造会议处理、来源、分析和运行记录，
 // 包括 state.json 与完成凭证；内存中的记录核验另见 tag-record-update.test.js。
-// 两类测试分别覆盖文件写入和记录规则，避免夹具构造失败掩盖规则回归。
+// 两类测试分别检查文件写入和记录规则，避免测试数据构造失败掩盖记录规则的错误。
 // 可用 node --test tests/tag-record-update*.test.js 运行这两份测试。
 // 临时词表快照仍以文件内容 SHA 命名。这里不写入真实运行目录，
 // 也不修改 config/ 下的源文件。
@@ -220,7 +220,7 @@ function fixture(t, options = {}) {
         completionReceiptSha256: receipt.receiptSha256
     };
     state.stateSha256 = processApi.stateDigest(state);
-    // 夹具自检：写进去的 checkpoint 必须是合法的 complete 进程。
+    // 先检查测试数据：待保存的检查点必须满足整批会议处理完成的条件。
     processApi.assertState(state);
     processApi.validateCompletionReceipt(state, receipt);
 
@@ -268,8 +268,8 @@ function planOf(fx) {
         analysisRoot: fx.files.conferenceAnalysisDir,
         runtime: tagRules(),
         mode: 'reproject',
-        // 默认夹具用于测试可写入的更新，因此提供这次破坏性变更所需的明确确认。
-        // 缺少确认的拒绝用例直接调用 CLI，不使用本助手生成确认。
+        // 这些默认测试数据用于验证更新能成功写入，因此明确确认允许这次破坏性变更。
+        // 测试缺少确认时会被拒绝的情况时，直接调用命令入口，不通过这个辅助函数提供确认。
         acknowledgeDestructive: true,
         snapshotOptions: { historyDir: fx.historyDir }
     }) };

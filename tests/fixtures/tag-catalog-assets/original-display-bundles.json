@@ -1,7 +1,7 @@
 {
   "producerSourceSha256": "2185883ec8684445dfbb9883680c296ff4b92ff775f31b7077b53ebc068fcadc",
   "producerCommit": "a8c9e258157d770391d67dbeae9071900acfbbe1",
-  "qualification": "原发布器通过既有隔离夹具生成；词表、Git边界和日志保存为夹具依赖，不称生产发布凭证。",
+  "qualification": "原发布器在隔离测试环境中生成；所用词表、模拟 Git 操作的程序和日志保存程序都是测试辅助文件，这些结果不是生产发布凭证。",
   "bundles": {
     "legacy-display-old-archive": {
       "assets": {

@@ -1,4 +1,4 @@
-"""离线 PDF 夹具：不调用模型，也不写生产运行时目录。"""
+"""离线 PDF 测试样例：不调用模型，也不写正式运行数据目录。"""
 import base64
 import os
 import sys

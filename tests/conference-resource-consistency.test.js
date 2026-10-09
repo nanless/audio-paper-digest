@@ -139,7 +139,7 @@ test('弱来源提取仍需会议级核验，有歧义的引用不会变成代�
     );
 });
 
-test('弱会议提取复用多 facet 和安全的换行仓库绑定', () => {
+test('弱会议来源提取能识别多种资源类型，并安全处理跨行仓库地址', () => {
     const source = 'Code and dataset are available at huggingface.co/example/\nshared-assets.';
     const candidates = deep.extractWeakConferenceSourceResourceCandidates(source);
     assert.deepEqual(candidates, binding.extractPaperSourceRepositoryCandidates(source));
@@ -188,7 +188,7 @@ test('弱会议提取复用多 facet 和安全的换行仓库绑定', () => {
     ), []);
 });
 
-test('共用仓库保留代码和检查点 facet，并绑定逗号分隔的状态尾部', async () => {
+test('共用仓库保留代码和模型检查点两种资源类型，并绑定逗号分隔的状态尾部', async () => {
     const paperId = 'conference:eacl:2026:conference-paper-id:2026.eacl-long.149';
     const text = 'The code and checkpoints are available at https://github.com/audiosae/audiosae_demo.';
     const details = weakDetails(paperId, text);

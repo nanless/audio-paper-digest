@@ -240,10 +240,10 @@ class DailyFreshPublishGateTest(unittest.TestCase):
                 publish_to_blog.validate_daily_fresh_sources_for_publish(data, '2026-09-07')
 
     def test_canonical_json_bytes_are_frozen(self):
-        """规范形式的字节写死，避免夹具只用被测函数自产自销。
+        """固定保存预期 JSON 字节，避免用同一个被测函数生成数据和验证数据。
 
-        上面的 _canonical_bytes 会用被测函数写夹具、再用被测函数核对，
-        键序不再排序也测不出来；这里把「排序后的嵌套键序」和两种序列化
+        上面的 _canonical_bytes 用被测函数生成测试数据，再用同一函数核对，
+        因此即使该函数不再排序键，也发现不了；这里把嵌套对象键的固定顺序和两种 JSON 输出
         结果固定成字面量，改动 _daily_fresh_canonical 会立刻失败。
         """
         value = {'b': 1, 'a': [2, {'d': 4, 'c': 3}], 's': '中文'}

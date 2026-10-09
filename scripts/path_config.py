@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Python 侧共用的项目路径，以及可靠落盘的文件写入辅助函数。"""
+"""Python 侧共用的项目路径，以及确保文件内容完整保存的写入辅助函数。"""
 
 import json
 import errno

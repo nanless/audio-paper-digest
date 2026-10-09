@@ -105,7 +105,7 @@ function withDigestPaths(root, callback) {
 }
 
 describe('日更运行报告', () => {
-    it('只接受与当前发布和精确清单绑定的用户视觉豁免', () => {
+    it('用户取消视觉任务的记录必须对应当前发布和两份图片清单', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'visual-waiver-'));
         const visualPath = path.join(dir, 'visual.json');
         const coverPath = path.join(dir, 'cover.json');
@@ -143,7 +143,7 @@ describe('日更运行报告', () => {
         assert.throws(() => parseDate([]), /用法/);
     });
 
-    it('筛选未跑完时 pending 报未决篇数，不报可重试项数', () => {
+    it('筛选未跑完时，待处理数表示尚未得到筛选决定的篇数', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-pending-'));
         try {
             withDigestPaths(dir, () => {
@@ -180,7 +180,7 @@ describe('日更运行报告', () => {
         }
     });
 
-    it('抓取健康必须覆盖配置中的全部来源', () => {
+    it('抓取成功记录必须覆盖配置中的全部来源', () => {
         const raw = {
             batchDate: '2026-07-29',
             papers: [{ arxivId: '2607.1' }],
@@ -199,7 +199,7 @@ describe('日更运行报告', () => {
         assert.strictEqual(sourceHealthComplete(raw, '2026-07-29'), false);
     });
 
-    it('分析集合必须按规范化论文 ID 精确覆盖筛选集合', () => {
+    it('分析结果中的论文 ID 去除版本号后，必须与入选论文完全一致', () => {
         assert.strictEqual(
             samePaperIds([{ arxivId: '2607.1v2' }], [{ arxivId: '2607.1' }]),
             true
@@ -214,7 +214,7 @@ describe('日更运行报告', () => {
         );
     });
 
-    it('LLM API canonical 必须与 reader、评分、来源和实际正文哈希保持一致', () => {
+    it('API 正式分析的完成记录必须与读者文章、评分、来源和正文 SHA-256 一致', () => {
         const stable = value => {
             if (Array.isArray(value)) return value.map(stable);
             if (value && typeof value === 'object') {
@@ -349,7 +349,7 @@ describe('日更运行报告', () => {
         assert.strictEqual(llmApiPaperComplete(paper), false);
     });
 
-    it('默认自动归档完整保存历史 fetch/filter/analysis companion 并可恢复报告', () => {
+    it('自动归档保存候选、筛选决定、入选论文和分析结果，并能据此恢复历史报告', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-history-'));
         try {
             withDigestPaths(dir, ({ current, archive }) => {
@@ -439,7 +439,7 @@ describe('日更运行报告', () => {
         }
     });
 
-    it('当前日期缺失或错批次时不得用同日 archive 掩盖 current 故障', () => {
+    it('当天运行文件缺失或日期不符时，不能用同日归档替代', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-current-'));
         try {
             withDigestPaths(dir, ({ archive }) => {
@@ -483,7 +483,7 @@ describe('日更运行报告', () => {
         }
     });
 
-    it('历史 archive 中存在但损坏的决定快照不得被 filtered 契约静默替代', () => {
+    it('历史归档中的筛选决定文件损坏时，不能仅凭入选文件判断筛选完成', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-corrupt-'));
         try {
             withDigestPaths(dir, ({ archive }) => {
@@ -513,7 +513,7 @@ describe('日更运行报告', () => {
         }
     });
 
-    it('旧归档缺少 raw/decisions companion 时保持 fail-closed', () => {
+    it('旧归档缺少候选或筛选决定文件时，不能判断整批已完成', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-missing-companion-'));
         try {
             withDigestPaths(dir, ({ archive }) => {
@@ -556,7 +556,7 @@ describe('日更运行报告', () => {
         }
     });
 
-    it('历史 archive 的 decisions 未完整覆盖 raw 时筛选门禁保持 incomplete', () => {
+    it('历史归档中仍有候选未得到筛选决定时，筛选保持未完成', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-coverage-'));
         try {
             withDigestPaths(dir, ({ archive }) => {
@@ -604,7 +604,7 @@ describe('日更运行报告', () => {
         }
     });
 
-    it('历史 archive 的 filtered 集合不等于 related 决定时筛选门禁保持 incomplete', () => {
+    it('历史归档的入选论文与筛选决定中判为相关的论文不一致时，筛选保持未完成', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-filter-set-'));
         try {
             withDigestPaths(dir, ({ archive }) => {
@@ -654,7 +654,7 @@ describe('日更运行报告', () => {
         }
     });
 
-    it('历史 archive 的 filtered 或 deep 混批时不得静默过滤错误论文', () => {
+    it('历史归档的入选或分析文件混入其他日期的论文时，不能删掉错误论文后继续接受文件', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-mixed-'));
         try {
             withDigestPaths(dir, ({ archive }) => {
@@ -705,7 +705,7 @@ describe('日更运行报告', () => {
         }
     });
 
-    it('默认终端摘要保留门禁数字但不展开来源健康大对象', () => {
+    it('终端摘要显示各阶段进度和完成条件，不展开来源检查的完整对象', () => {
         const summary = formatDigestRunSummary({
             batchDate: '2026-07-29',
             overallStatus: 'incomplete',
@@ -723,7 +723,7 @@ describe('日更运行报告', () => {
         assert.doesNotMatch(summary, /sourceHealth|huge/);
     });
 
-    it('长图计数满额但资产门禁失败时终端不得误报 complete', () => {
+    it('长图计数已满但图片未通过校验时，终端不能报告完成', () => {
         const summary = formatDigestRunSummary({
             batchDate: '2026-07-29',
             overallStatus: 'incomplete',
@@ -744,7 +744,7 @@ describe('日更运行报告', () => {
             },
             cover: { complete: true, status: 'complete' }
         });
-        // 门禁不过就不得印 status=complete。改前这里打的是
+        // 图片未通过校验就不能显示 status=complete。修复前这里显示的是
         // `长图 incomplete | status=complete | complete=10/10 | pending=0 | failed=0`，
         // 同一行自相矛盾。
         assert.match(summary, /长图 incomplete \| status=incomplete \| complete=10\/10/);
@@ -752,7 +752,7 @@ describe('日更运行报告', () => {
         assert.doesNotMatch(summary, /长图 complete \|/);
     });
 
-    it('长图清单不存在时摘要报 ? 与 status，不把未知显示成 0', () => {
+    it('长图清单不存在时显示问号和缺失状态，不能把未知数量写成 0', () => {
         const summary = formatDigestRunSummary({
             batchDate: '2026-07-29',
             overallStatus: 'incomplete',
@@ -781,7 +781,7 @@ describe('日更运行报告', () => {
         assert.doesNotMatch(visualLine, /failed=0/);
     });
 
-    it('封面门禁不过时摘要不得显示 status=complete', () => {
+    it('封面未通过完成条件检查时，摘要不能显示 status=complete', () => {
         const summary = formatDigestRunSummary({
             batchDate: '2026-07-29',
             overallStatus: 'incomplete',
@@ -800,7 +800,7 @@ describe('日更运行报告', () => {
         assert.doesNotMatch(summary, /封面 incomplete \| status=complete/);
     });
 
-    it('没有长图清单时 build 出来的计数是 null，不是 0', () => {
+    it('没有长图清单时，生成的报告将数量记为 null，而不是 0', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-novisual-'));
         try {
             withDigestPaths(dir, () => {
@@ -822,14 +822,14 @@ describe('日更运行报告', () => {
         }
     });
 
-    it('长图清单里的归档路径参数非法时也要出报告，不能抛栈', () => {
+    it('长图归档路径参数非法时，仍应返回报告，不能因异常中止', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-badvisual-'));
         try {
             withDigestPaths(dir, () => {
                 const date = '2026-07-29';
                 fs.mkdirSync(Config.FILES.visualSummaryManifestDir, { recursive: true });
                 // rank 超出 1–10 时 visualSummaryAssetPath 会抛「视觉摘要归档路径参数非法」。
-                // 修复前这会让整个 digest:status 抛栈，运维拿不到报告。
+                // 修复前这会让整个 digest:status 因异常中止，无法返回报告。
                 fs.writeFileSync(
                     path.join(Config.FILES.visualSummaryManifestDir, `${date}.json`),
                     JSON.stringify({
@@ -850,7 +850,7 @@ describe('日更运行报告', () => {
                 const report = buildDigestRunReport(date, { today: date });
                 assert.strictEqual(report.visuals.assetsValid, false);
                 assert.strictEqual(report.visuals.gateComplete, false);
-                // 能打出摘要，就说明没抛栈。
+                // 能返回摘要，就说明没有因异常中止。
                 assert.match(formatDigestRunSummary(report), /长图 incomplete/);
             });
         } finally {
@@ -918,7 +918,7 @@ describe('日更运行报告', () => {
         assert.match(missingUnknown, /缺口篇数未知/);
         assert.doesNotMatch(missingUnknown, /还缺/);
 
-        // 生产契约本身不满足时，报原文案，不去猜是复验还是集合。
+        // 分析本身未满足正式发布要求时，说明这一原因，不猜测是逐篇核验还是论文集合的问题。
         const notProduction = analysisFailureMessage({
             productionAnalysisComplete: false, failedCount: 9, failedIds: ['x'], missing: 9
         });
@@ -985,7 +985,7 @@ describe('日更运行报告', () => {
         assert.doesNotMatch(analysisLine, /missing=0/);
     });
 
-    it('统一状态门禁与 visual:status 一样严格绑定 canonical 长图路径', () => {
+    it('日更状态检查与 visual:status 都要求长图位于规定的正式归档路径', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-visual-'));
         const originalAssetDir = Config.FILES.visualSummaryAssetDir;
         try {
@@ -1057,7 +1057,7 @@ describe('日更运行报告', () => {
         }
     });
 
-    it('长图 status 由门禁派生：清单自称 complete 而资产不过时不得说 complete', () => {
+    it('长图完成状态由实际检查决定：清单写着完成但图片不合格时，仍应报告未完成', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-visual-status-'));
         const originalAssetDir = Config.FILES.visualSummaryAssetDir;
         const originalWaiverDir = Config.FILES.postPublishVisualWaiverDir;
@@ -1070,7 +1070,7 @@ describe('日更运行报告', () => {
                 const date = '2026-07-29';
                 fs.mkdirSync(Config.FILES.visualSummaryManifestDir, { recursive: true });
                 const manifestPath = path.join(Config.FILES.visualSummaryManifestDir, `${date}.json`);
-                // 清单自己说 complete、计数也满，但这张卡的资产核验过不了。
+                // 清单自己说 complete、计数也满，但这张长图未通过文件校验。
                 const manifest = {
                     batchDate: date,
                     overallStatus: 'complete',
@@ -1140,12 +1140,12 @@ describe('日更运行报告', () => {
         }
     });
 
-    it('文件存在但读不出来时报告给出告警，真·不存在保持安静', () => {
+    it('文件存在但无法读取时报告提醒，文件不存在时不报读取错误', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'digest-report-readproblems-'));
         try {
             withDigestPaths(dir, () => {
                 const date = '2026-07-29';
-                // A 真·不存在：不算错误，也不该有告警。
+                // A 文件不存在：不算读取错误，也不该有读取提醒。
                 const missing = buildDigestRunReport(date, { today: date });
                 assert.deepStrictEqual(missing.readProblems, []);
                 assert.strictEqual(missing.dataSources.rawCandidates, 'missing');

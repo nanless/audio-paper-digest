@@ -48,8 +48,8 @@ function papersSha256(papers) {
 }
 
 // 冻结的筛选输入 SHA-256，和 tests/filter-input-contract.test.js 里的同名常量一致。
-// 期望值按契约独立算好后写死，故意不调用 buildFilterInputSha256：夹具若调用被测函数，
-// 就会和实现一起漂移，把「只按标题复用筛选决策」这类回归放过去。
+// 预期值按规定的计算规则独立算好后固定保存，不调用 buildFilterInputSha256：生成测试数据若调用被测函数，
+// 预期值就会随实现一起改变，无法发现「只按标题复用筛选决定」这类错误。
 const FROZEN_FILTER_INPUT_SHA256 = Object.freeze({
     // 这些候选只有 arxivId（有的再加 sources），title/abstract/categories 都是空
     emptyInput: '6d1dd72f35f609e7ac3be4f1c845dc4b3a3ec6650394bf1fc63123ee52a1e2af',

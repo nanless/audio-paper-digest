@@ -2369,7 +2369,7 @@ def _validate_manual_result_claim_bindings(
         fragment = bindings.get(field)
         normalized_fragment = _normalize_manual_evidence(fragment) \
             if isinstance(fragment, str) else ''
-        # 与 Node 门禁使用同一组完整单字符语义；其余任意单字符仍拒绝。
+        # 与 Node 检查使用同一组允许的单字符单位和方向；其余任意单字符仍拒绝。
         legitimate_single_character = (
             field == 'unit'
             and re.fullmatch(r'(?:%|s|h|W|分|帧|人)', normalized_fragment, re.I)
@@ -6162,7 +6162,7 @@ def fix_extraction_diacritic_damage(text):
     ´ / 组合音标（例如 Yoruba → "Yor`ub´a"、Satosphere → "Satosph`ere"、
     Concrète → "Concr`ete"）。行内成对的反引号才是代码边界；字母夹住且
     左侧词干不是代码闭合符的反引号属于提取损伤，会打开永不闭合的代码段，
-    最终 Markdown 门禁必然失败。此处只删除这类损伤反引号，并清理同源的
+    最终 Markdown 检查会因此失败。此处只删除这类损伤反引号，并清理同源的
     游离锐音符与"空格 + 组合音标"孤儿，不触碰合法的成对行内代码。
     """
     if not text:
@@ -6296,7 +6296,7 @@ def strip_internal_scoring_anchors(text):
     )
     value = re.sub(rf'{anchor}[ \t]*', '', value)
     # CJK 字符间的空格压缩只做锚点清理的善后，不得触碰 Markdown 表格行：
-    # 表格字节由 source-binding SHA 绑定，改一个空格就会导致发布门禁漂移。
+    # 表格字节由 source-binding SHA 绑定，修改空格也会使发布检查时计算的 SHA 与保存值不同。
     table_lines = set()
     for table in extract_markdown_tables(value):
         table_lines.update(range(table['start_line'], table['end_line'] + 1))
@@ -6502,7 +6502,7 @@ def escape_statistical_significance_stars(text):
 def sanitize_markdown_for_publish(text):
     """发布前通用 Markdown 清洗。"""
     # LLM 输出偶尔会携带 UTF-8 替换字符；先清理后再进入 staging，
-    # 避免最终 Markdown 门禁才发现不可逆的乱码字节。
+    # 避免直到最终 Markdown 检查时才发现无法还原的乱码字符。
     text = text.replace('\ufffd\ufffd\ufffd', '。')
     text = text.replace('\ufffd\ufffd', '。')
     text = text.replace('\ufffd', '')

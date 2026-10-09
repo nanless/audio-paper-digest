@@ -216,7 +216,7 @@ npm run conference:new:process -- --status --verify-files \
 
 只有 `--apply` 取得 process 操作锁，`--dry-run` 和 `--status` 只读且不取写锁。程序返回或抛出异常时在 `finally` 释放锁；进程退出遗留的锁只允许安全回收同机已死亡 owner，未知或仍存活 owner 不能擅自清理。逐篇更新另有状态 SHA 比较，禁止把 complete 回退成 analyzing 或 analysis_partial。最终完成事务在锁内重新确认全部成员及回执。
 
-`--status` 默认只读 `state.json` 和 `completion-receipt.json`，核的是凭证内部自洽，不读磁盘上的分析结果和暂存页；报告里的 `filesVerified` 为 `false` 就表示这次没核文件。要同时确认文件在位，加 `--verify-files`：它按 `analysisProof`、`pageProof` 和 `aggregate` 复算 analysis.json、暂存 page.md／manifest.json、汇总页的 SHA，缺文件或字节不符都列进 `fileVerification.failures`（`paperId`、`artifact`、`detail`），进程退出码为 1。它只遍历该进程已知的 `analysisRunId` 目录，不扫整个暂存根目录。来源封存文件不在这项检查内，它们由 `--apply` 的来源连续性核验和发布前检查负责。
+`--status` 默认只读 `state.json` 和 `completion-receipt.json`，检查状态与完成凭证中记录的内容及对应关系，不读磁盘上的分析结果和暂存页；报告里的 `filesVerified` 为 `false` 就表示这次没核文件。要同时确认文件在位，加 `--verify-files`：它按 `analysisProof`、`pageProof` 和 `aggregate` 复算 analysis.json、暂存 page.md／manifest.json、汇总页的 SHA，缺文件或字节不符都列进 `fileVerification.failures`（`paperId`、`artifact`、`detail`），进程退出码为 1。它只遍历该进程已知的 `analysisRunId` 目录，不扫整个暂存根目录。来源封存文件不在这项检查内，它们由 `--apply` 的来源连续性核验和发布前检查负责。
 
 process 只生成私有来源、缓存、检查点及单篇和汇总暂存页，不执行博客生成、审查、推送或远端验证。完成处理后继续下节发布，不把 process complete 当作已上线。
 

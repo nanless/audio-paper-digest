@@ -49,8 +49,8 @@ const TEST_PUBLICATION = Object.freeze({
     generationManifestSha256: 'e'.repeat(64)
 });
 
-describe('视觉任务紧凑输出', () => {
-    it('待生成任务不再把完整 generationContext 打印到终端', () => {
+describe('视觉任务的简短输出', () => {
+    it('待生成任务的终端输出省略完整生图上下文', () => {
         const item = {
             arxivId: '2607.12345',
             kind: 'infographic',
@@ -72,7 +72,7 @@ describe('视觉任务紧凑输出', () => {
         assert.strictEqual(Object.hasOwn(compact, 'generationContext'), false);
     });
 
-    it('prepare 紧凑输出仍保留 image_gen 必需的绝对路径', () => {
+    it('准备参考图时，简短输出仍保留内置生图工具所需的绝对路径', () => {
         const compact = compactPreparedVisualTask({
             rank: 1,
             arxivId: '2607.12345',
@@ -132,7 +132,7 @@ function makePng(width = 768, height = 1200) {
 
 const PNG = makePng();
 
-describe('modern Reader 视觉来源一致性', () => {
+describe('当前读者文章的视觉任务来源检查', () => {
     function withReader(callback, options = {}) {
         const old = Config.CURRENT_DIR;
         const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'visual-reader-source-')));
@@ -167,7 +167,7 @@ describe('modern Reader 视觉来源一致性', () => {
         }
     }
 
-    it('文案/thesis/完整 QA 段落身份只来自签名 Reader，忽略 canonical 毒化文案及旧选图', () => withReader(reader => {
+    it('生图文案、主线、检查依据和原图只取自通过校验的读者文章，忽略正式分析中的干扰文案和旧选图', () => withReader(reader => {
         reader.selectedImageUrls = ['https://example.com/poison.png'];
         reader.imageManifest = { selected: reader.selectedImageUrls };
         const context = buildGenerationContext(reader);
@@ -186,7 +186,7 @@ describe('modern Reader 视觉来源一致性', () => {
         assert.equal(Object.hasOwn(context.referenceImages[0], 'pixelSeen'), false);
     }));
 
-    it('canonical 文案变化不影响 modern 来源指纹，签名 Reader 修订必须改变指纹', () => withReader((reader, sign) => {
+    it('修改正式分析文案不影响读者文章的来源标识，修订读者文章后必须改变该标识', () => withReader((reader, sign) => {
         const first = analysisSha256(reader);
         reader.parsed.summary = 'another unsupported summary';
         reader.analysis = 'another canonical body';
@@ -196,7 +196,7 @@ describe('modern Reader 视觉来源一致性', () => {
         assert.notEqual(analysisSha256(reader), first);
     }));
 
-    it('仅投影/QA 选择逻辑改变也使旧 complete 成图失效，Reader 和 prompt 保持原身份', () => withReader((reader, _sign, dir) => {
+    it('选择生图段落或检查依据的程序改变时，旧成图失效，即使读者文章和提示词未变', () => withReader((reader, _sign, dir) => {
         const Module = require('node:module');
         const filename = require.resolve('../scripts/visual-summary-state.js');
         const source = fs.readFileSync(filename, 'utf8');
@@ -217,8 +217,8 @@ describe('modern Reader 视觉来源一致性', () => {
                 ['method: blocks(methods)', 'method: blocks(methods.slice(0, -1))'],
                 ['metricClaims: claims(results)', 'metricClaims: claims(results).slice(0, 1)']
             ]) {
-                // 只在内存里编译一份独立的汇总页版本，
-                // 不改生产源码，也不真的跑视觉规划。
+                // 只在内存里编译一份独立的视觉任务程序版本，
+                // 测试不修改项目源码，也不实际创建视觉任务计划。
                 assert.ok(source.includes(before));
                 const revised = new Module(filename, module);
                 revised.filename = filename; revised.paths = module.paths;
@@ -236,7 +236,7 @@ describe('modern Reader 视觉来源一致性', () => {
         } finally { Config.FILES.visualSummaryAssetDir = oldRoot; }
     }));
 
-    it('坏 article/plan/figure 或像素证据身份均失败关闭，不降级旧文案', () => withReader(reader => {
+    it('读者文章、提纲、原图或像素证据校验不通过时，拒绝创建生图上下文，不改用旧文案', () => withReader(reader => {
         for (const mutate of [
             p => { p.apiReaderArticle += 'drift'; },
             p => { p.apiReaderPlan.oneSentenceThesis = 'drift'; },
@@ -248,7 +248,7 @@ describe('modern Reader 视觉来源一致性', () => {
         }
     }));
 
-    it('同签名但错章节映射、私网或跨论文 URL 及伪 cache 路径仍拒绝', () => withReader((reader, sign) => {
+    it('即使重新计算校验信息，章节不符、私网或其他论文的图片地址以及任意缓存路径仍被拒绝', () => withReader((reader, sign) => {
         for (const mutate of [
             p => { p.apiReaderPlan.sections[0].heading += 'drift'; },
             p => { p.apiReaderFigures[0].url = 'https://127.0.0.1/a.png'; },
@@ -260,7 +260,7 @@ describe('modern Reader 视觉来源一致性', () => {
         }
     }));
 
-    it('当前 asset 字节漂移、叶子及父目录 symlink 都拒绝', () => withReader((reader, _sign, dir) => {
+    it('图片内容改变，或图片文件及父目录被换成符号链接时，拒绝读取', () => withReader((reader, _sign, dir) => {
         const file = reader.apiReaderFigures[0].cachePath;
         fs.writeFileSync(file, Buffer.alloc(PNG.length));
         assert.throws(() => selectVisualReferenceImages(reader), /SHA/);
@@ -274,14 +274,14 @@ describe('modern Reader 视觉来源一致性', () => {
         assert.throws(() => selectVisualReferenceImages(reader), /父目录不安全/);
     }));
 
-    it('合法无绑定原图不伪造像素见证或回退旧图', () => withReader(reader => {
+    it('读者文章没有原图记录时，不编造已读取图片的记录，也不改用旧选图', () => withReader(reader => {
         reader.selectedImageUrls = ['https://example.com/old.png'];
         const context = buildGenerationContext(reader);
         assert.deepEqual(context.referenceImages, []);
         assert.equal(context.sourceIdentity.imageEvidenceCount, 0);
     }, { noFigures: true }));
 
-    it('daily ephemeral Reader 保留来源与像素 SHA，但视觉任务不伪造本地参考图', () => withReader((reader, sign) => {
+    it('日更读者文章只保留来源和像素 SHA-256 时，视觉任务不编造本地参考图', () => withReader((reader, sign) => {
         reader.analysisManifest.contracts.apiReaderFigurePersistence =
             'ephemeral-no-persisted-figure-assets-v1';
         for (const figure of reader.apiReaderFigures) {
@@ -299,7 +299,7 @@ describe('modern Reader 视觉来源一致性', () => {
         assert.equal(context.sourceIdentity.imageEvidenceCount, reader.apiReaderFigures.length);
     }));
 
-    it('离线 prepare 仍输出受控绝对 PNG 路径且保留签名原图身份', () => withReader(reader => {
+    it('离线准备参考图时，输出规定目录中的 PNG 绝对路径，并保留已校验的原图来源信息', () => withReader(reader => {
         const context = buildGenerationContext(reader);
         const manifest = { batchDate: '2026-07-13', papers: { [reader.arxivId]: {
             arxivId: reader.arxivId, rank: 1, title: reader.title,
@@ -380,7 +380,7 @@ function writeImageCache(currentDir, url, raw, mime = 'image/png') {
 }
 
 describe('视觉汇总状态', () => {
-    it('publishedPapers 指纹按 UTF-16 code unit 排序 BMP 与非 BMP 对象键', () => {
+    it('计算已发布论文的校验信息时，包含表情符号等字符的对象键仍按 UTF-16 编码单元排序', () => {
         const probe = JSON.parse(fs.readFileSync(
             path.join(__dirname, 'fixtures', 'published-papers-fingerprint-probe.json'),
             'utf8'
@@ -391,7 +391,7 @@ describe('视觉汇总状态', () => {
         );
     });
 
-    it('完成态必须保留合法语义 QA 声明，缺失或损坏时重新进入待生成', () => {
+    it('已完成长图必须保留有效的内容检查声明，缺失或格式错误时重新等待生成', () => {
         const originals = {
             current: Config.CURRENT_DIR,
             manifests: Config.FILES.visualSummaryManifestDir,
@@ -431,7 +431,7 @@ describe('视觉汇总状态', () => {
             Config.FILES.visualSummaryAssetDir = originals.assets;
         }
     });
-    it('record 核心 API 要求显式语义 QA 声明', () => {
+    it('直接调用长图登记函数也必须明确声明已检查图片内容', () => {
         assert.throws(
             () => recordVisualSummaryCardImpl({
                 kind: 'infographic',
@@ -440,7 +440,7 @@ describe('视觉汇总状态', () => {
             /qaAttested=true/
         );
     });
-    it('视觉状态 CLI 拒绝未知、缺值和重复参数', () => {
+    it('视觉状态命令拒绝未知、缺值和重复参数', () => {
         assert.throws(() => parseArgs(['status', '--unknown', 'value']), /未知参数/);
         assert.throws(() => parseArgs(['status', '--date']), /无效参数/);
         assert.throws(
@@ -663,7 +663,7 @@ describe('视觉汇总状态', () => {
                 preparedManifest.papers['2607.12345'].cards.infographic.taskToken
             );
 
-            // 清单代次无关地加一，不应让某篇论文已准备好的输入失效——
+            // 只增加清单更新次数而不改变该论文的任务，不应让已准备好的输入失效——
             // 只要它的任务令牌和图片哈希都还对得上。
             const unrelatedUpdate = structuredClone(preparedManifest);
             unrelatedUpdate.updatedAt = '2026-07-13T12:00:00+08:00';
@@ -702,7 +702,7 @@ describe('视觉汇总状态', () => {
         }
     });
 
-    it('prepare 拒绝视觉参考输出根目录和批次父目录符号链接', () => {
+    it('准备参考图时，拒绝输出根目录和批次父目录中的符号链接', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-prepare-symlink-'));
         const current = path.join(dir, 'current');
         const url = 'https://arxiv.org/html/2607.12345v1/figure/method.png';
@@ -751,7 +751,7 @@ describe('视觉汇总状态', () => {
         }
     });
 
-    it('核心规划 API 也拒绝绕过远端发布绑定', () => {
+    it('直接调用视觉规划函数也必须提供已核验远端发布的记录', () => {
         assert.throws(() => planVisualSummariesImpl({
             targetDate: '2026-07-13', papers: [paper()],
             manifestPath: path.join(os.tmpdir(), `unpublished-${Date.now()}.json`)
@@ -773,7 +773,7 @@ describe('视觉汇总状态', () => {
         }
     });
 
-    it('完整 LLM API production 凭证可以启动视觉阶段且篡改 binding 会失败', () => {
+    it('符合 API 正式发布要求的凭证可以启动视觉任务，但篡改其中的模型记录会被拒绝', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-api-published-'));
         const originalCurrent = Config.CURRENT_DIR;
         try {
@@ -796,7 +796,7 @@ describe('视觉汇总状态', () => {
         }
     });
 
-    it('视觉入口拒绝 publishedPapers 被篡改但 inputFingerprint 未变化的凭证', () => {
+    it('发布凭证中的论文内容被篡改而输入校验信息未更新时，拒绝启动视觉任务', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-snapshot-tamper-'));
         const originalCurrent = Config.CURRENT_DIR;
         try {
@@ -820,7 +820,7 @@ describe('视觉汇总状态', () => {
             fs.rmSync(dir, { recursive: true, force: true });
         }
     });
-    it('默认 manifest 按日期隔离，历史 plan 不会覆盖其他批次', () => {
+    it('视觉任务清单默认按日期分别保存，历史日期的计划不会覆盖其他批次', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-dates-'));
         const originalCurrentDir = Config.CURRENT_DIR;
         const originalManifestDir = Config.FILES.visualSummaryManifestDir;
@@ -854,7 +854,7 @@ describe('视觉汇总状态', () => {
         );
     });
 
-    it('建立 TOP 10 单张长图计划，只保留与当前分析和 prompt 一致的已完成项', () => {
+    it('为评分前十论文各规划一张长图，只复用与当前分析和提示词一致的有效成图', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-plan-'));
         const manifestPath = path.join(dir, 'manifest.json');
         const promptPath = path.join(dir, 'prompt.md');
@@ -931,7 +931,7 @@ describe('视觉汇总状态', () => {
         fs.rmSync(dir, { recursive: true, force: true });
     });
 
-    it('验证 PNG 文件头、原子登记资产，且下次计划只保留有效完成项', () => {
+    it('登记长图时校验 PNG 文件头并完整保存图片，下次规划只复用有效成图', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-record-'));
         const manifestPath = path.join(dir, 'manifest.json');
         const promptPath = path.join(dir, 'prompt.md');
@@ -958,7 +958,7 @@ describe('视觉汇总状态', () => {
             assert.match(card.assetPath, /archive\/2026-07-13\/visual-summaries\/01-2607\.12345-visual-summary-paper\.png$/);
             assert.strictEqual(pendingVisualSummaryCards(recorded).length, 0);
 
-            // 兼容旧版 current 资产：plan 校验 PNG/SHA 后迁移回带排名编号的日期归档。
+            // 兼容旧版 current 目录中的图片：规划时校验 PNG 和 SHA-256，再移入按日期和排名编号保存的归档。
             const archivedPath = path.resolve(Config.PROJECT_ROOT, card.assetPath);
             const legacyPath = path.join(
                 Config.CURRENT_DIR, 'visual-summaries', '2026-07-13', '2607.12345', 'infographic.png'
@@ -984,7 +984,7 @@ describe('视觉汇总状态', () => {
         }
     });
 
-    it('record 后清理同一归档目录中由调用方留下的非 canonical 临时副本', () => {
+    it('登记后清理同一归档目录中由调用方留下、未使用规定文件名的临时图片副本', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-cleanup-'));
         const manifestPath = path.join(dir, 'manifest.json');
         const promptPath = path.join(dir, 'prompt.md');
@@ -1014,7 +1014,7 @@ describe('视觉汇总状态', () => {
         }
     });
 
-    it('重排或标题变化时删除旧 canonical 成品，并拒绝归档中的重复排行榜图', () => {
+    it('排名或标题变化时删除旧正式成图，并拒绝归档中未登记或重复的排行榜图片', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-replan-cleanup-'));
         const manifestPath = path.join(dir, 'manifest.json');
         const promptPath = path.join(dir, 'prompt.md');
@@ -1074,7 +1074,7 @@ describe('视觉汇总状态', () => {
         }
     });
 
-    it('旧 canonical 清理先保存可续跑清单，并拒绝通过父目录符号链接删除', () => {
+    it('清理旧正式成图前先保存恢复所需清单，父目录为符号链接时拒绝删除', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-safe-cleanup-'));
         const manifestPath = path.join(dir, 'manifest.json');
         const promptPath = path.join(dir, 'prompt.md');
@@ -1139,7 +1139,7 @@ describe('视觉汇总状态', () => {
         }
     });
 
-    it('历史归档命令按已发布排行榜编号并更新旧 manifest 资产路径', () => {
+    it('历史归档命令按已发布排行榜为图片编号，并更新旧清单中的图片路径', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-legacy-archive-'));
         const current = path.join(dir, 'current');
         const archive = path.join(dir, 'archive');
@@ -1245,7 +1245,7 @@ describe('视觉汇总状态', () => {
         }
     });
 
-    it('将 v1 三卡 manifest 原子迁移为 v3 TOP 10 单长图待生成任务', () => {
+    it('将 v1 三张图的清单完整更新为 v3 评分前十论文各一张长图的待生成任务', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-v1-'));
         const manifestPath = path.join(dir, 'manifest.json');
         const promptPath = path.join(dir, 'prompt.md');
@@ -1286,7 +1286,7 @@ describe('视觉汇总状态', () => {
         fs.rmSync(dir, { recursive: true, force: true });
     });
 
-    it('task token 变化后拒绝旧 record/fail，且完成项不会被旧失败覆盖', () => {
+    it('任务标识改变后拒绝旧任务的登记和失败记录，已完成结果不会被旧失败覆盖', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-cas-'));
         const manifestPath = path.join(dir, 'manifest.json');
         const promptPath = path.join(dir, 'prompt.md');
@@ -1316,7 +1316,7 @@ describe('视觉汇总状态', () => {
                 arxivId: '2607.12345', kind: 'infographic', sourcePath, taskToken: newToken, manifestPath
             });
             assert.strictEqual(complete.papers['2607.12345'].cards.infographic.status, 'complete');
-            // 统一到 writeFileAtomic 后行为不变：资产字节与源 PNG 一致、权限仍是
+            // 改用 writeFileAtomic 保存后行为不变：图片字节与源 PNG 一致，文件权限仍为
             // 强制 0600，且只在同目录改名，不留临时文件。
             const cardAssetPath = path.resolve(
                 Config.PROJECT_ROOT, complete.papers['2607.12345'].cards.infographic.assetPath);
@@ -1335,7 +1335,7 @@ describe('视觉汇总状态', () => {
         }
     });
 
-    it('status 只读检查已发布权威快照，不受当前分析文件变化影响', () => {
+    it('状态命令只检查发布凭证中保存的论文内容，当前分析文件变化不影响已有任务', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-status-'));
         const manifestPath = path.join(dir, 'manifest.json');
         const analysisPath = path.join(dir, 'deep.json');
@@ -1507,7 +1507,7 @@ describe('正式长图状态与受控旧路径迁移', () => {
     }
 
     for (const replacement of ['symlink', 'fifo', 'damaged']) {
-        it(`真实status拒绝${replacement}长图，原PNG和只读清单保持合法`, () => {
+        it(`实际状态命令拒绝被换成 ${replacement} 的长图，不改动替换后的文件或清单`, () => {
             withCompletedVisual(({ manifestPath, source, asset, run }) => {
                 const original = run('status');
                 assert.ifError(original.error);
@@ -1530,7 +1530,7 @@ describe('正式长图状态与受控旧路径迁移', () => {
     }
 
     for (const replacement of ['symlink', 'fifo', 'damaged', 'valid']) {
-        it(`真实plan迁移旧路径${replacement}长图，保留原QA和发布绑定`, () => {
+        it(`实际规划命令检查旧路径长图（${replacement}），仅迁移合法文件并保留原内容检查和发布记录`, () => {
             withCompletedVisual(({ directory, manifestPath, completed, source, asset, run }) => {
                 const legacy = path.join(directory, 'visual-summaries', targetDate, paperId, 'infographic.png');
                 fs.mkdirSync(path.dirname(legacy), { recursive: true });

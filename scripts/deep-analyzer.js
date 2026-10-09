@@ -1957,7 +1957,7 @@ function deriveExactTableSourceQuotes(renderedMarkdown, sourceText, options = {}
         // 其他抽取怪癖的兜底。
         addDirectUnitQuote(token);
         // 逐 token best-effort：单个数字在原文找不到时只跳过它，不再让整张表
-        // 的自动修复归零；下游 missingNumbers 仍会对跳过的数字报错，门禁不放松。
+        // 的自动修复归零；下游 missingNumbers 仍会对跳过的数字报错，数字证据检查仍保持原要求。
         const unitlessFallback = String(token).match(/^([-+]?\d+(?:\.\d+)?)(?:db|ms|hz|khz|mhz|gb|mb|kb|pp|%|s|h)$/i);
         for (const match of sourceMatches) {
             const exact = sourceNumericTokenExpansions(match[0]).has(token);
@@ -2036,7 +2036,7 @@ function pruneUnsupportedSourceQuoteTable(rendered, quoteCorpus) {
     ));
     // 只要还有至少一行完整、绑定证据的数据，就保住这张表的比较结构。否则按列先剪会把
     // 所有指标列和结果列都删掉——只因为另外几行含有无支撑的值，最后宽表只剩标签。这条
-    // 路径仍按失败关闭：留下的表头和数据行里，每个数字 token 都能在原文引文里找到。
+    // 路径仍要求严格核验：留下的表头和数据行里，每个数字 token 都能在原文引文里找到。
     if (headerSupported && fullySupportedDataRows.length > 0) {
         const markdown = [
             line(rows[0]),
@@ -5120,8 +5120,8 @@ function normalizeDeclaredReaderMarkerParagraphs(value) {
             && String(section.body || '').split(/\r?\n/).some(line => line.trim() === marker));
         // 有时图的绑定保住了合法的 targetKind，模型却把这个唯一、叙述完整的标记放进了
         // 另一个同样合法的小节。把元数据对齐到那个已经写好的位置，比搬动正文或新编一段
-        // 引导和解释更稳妥。这条路径按失败关闭：只有唯一、精确、前后相邻内容都在的标记
-        // 才能归一化，概念和公式的语义不动。
+        // 引导和解释更稳妥。只有标记唯一、精确匹配且前后相邻内容完整时
+        // 才调整对应的位置记录，概念和公式的语义不动。
         if (!target && declaration.type === 'figure') {
             const located = value.sections.filter(section => API_READER_KINDS.includes(section?.kind)
                 && String(section.body || '').split(/\r?\n/).some(line => line.trim() === marker));
@@ -6312,7 +6312,7 @@ function repairApiReaderArticleAndPlanBindings(paper, analysisManifest) {
         const heading = normalizeReaderProseFormatting(String(section?.heading || '').trim());
         if (heading === articleHeadings[index]) return heading;
         // 早先的 Reader 修复把标题里量出来的计数归一化了，计划却没跟着改。只恢复同一个
-        // 精确的排版变换；其他标题改动仍按失败关闭。
+        // 精确的排版变换；其他标题改动仍被拒绝。
         const issues = findQuantitativeChineseNumerals(heading).map(issue => ({
             ...issue, code: 'quantitative_chinese_numeral'
         }));
@@ -6492,8 +6492,8 @@ function deferOrRetireReaderCandidate(result, repair, candidateDirectory, identi
     if (!direct.directReaderCandidateCommitDeferred()) {
         return repair.retireFailedCandidate(candidateDirectory, identity);
     }
-    // 在调用方把整个 Reader 阶段落盘之前，就算草稿已被接受，它也只是恢复候选。让它留在
-    // 现有的失败关闭外层对象里，下游图或网络失败时就能零额外模型调用地复现这份草稿。
+    // 在调用方保存整个 Reader 阶段之前，就算草稿已被接受，它也只是恢复候选。让它留在
+    // 现有的失败候选记录中，下游图或网络失败时就能零额外模型调用地复现这份草稿。
     if (payload) repair.saveFailedCandidate(candidateDirectory, identity, payload);
     else if (!repair.loadFailedCandidate(candidateDirectory, identity)) {
         throw new Error('Deferred Reader candidate commit lacks its recovery envelope');
@@ -7219,8 +7219,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         structuredArtifacts: options.structuredArtifacts,
         sourceText: options.sourceText
     });
-    // 恢复候选即使被之前的执行单元标成失败，也要重新校验。没有任何已落盘的成功标志能
-    // 绕过当前这套完整闸门。
+    // 恢复候选即使被之前的执行单元标成失败，也要重新校验。已保存的成功标志不能
+    // 替代当前完整检查。
     if (candidate) {
         try {
             normalizeCandidate();
@@ -7240,7 +7240,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     }
     // 补丁正好在基础预算处被截断时，下一次显式恢复可以换一次更大的响应，而不是把剩下的
     // 普通 8000 token 配额继续浪费在同一个重推理的补丁上。重试预算被截断之后不会重复
-    // 升级，因为 shouldEscalate 只认基础上限。落盘的内容计数器保持单调，每次返回的响应
+    // 升级，因为 shouldEscalate 只认基础上限。已保存的内容尝试计数只增不减，每次返回的响应
     // 仍然消耗一次尝试。
     const boundedRecoveryAllowance = implementationRepairAllowanceProof
         || useEscalatedRepairBudget ? 1 : 0;
@@ -8024,7 +8024,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         };
         if (stabilityResolution.status !== 'resolved') {
             throw new Error(
-                `评分稳定性二次审计未收敛: first=${firstAuditScore.toFixed(1)}, `
+                `两次评分的差异超过允许范围: first=${firstAuditScore.toFixed(1)}, `
                 + `second=${secondAuditScore.toFixed(1)}`
             );
         }
@@ -8841,9 +8841,9 @@ function buildApiReaderBaseFingerprint(
         surfaceRepairVersion: API_READER_SURFACE_REPAIR_VERSION,
         mechanicalContractVersion: READER_MECHANICAL_CONTRACT,
         mechanicalContractImplementationSha256: promptTemplateSha256('scripts/lib/reader-contract.js'),
-        // 落盘的质量证明（blockingIssueCount）由 editorial-quality.js 里的检测器和
+        // 已保存的质量检查结果（blockingIssueCount）由 editorial-quality.js 里的检测器和
         // 本文件里的豁免规则、指标共同产生。所以这两处实现的字节都必须让已完成的 reader
-        // 阶段失效；否则用旧闸门代码核验过的阶段会一直留着过期的证明，永远过不了绑定检查
+        // 阶段失效；否则用旧检查代码核验过的阶段会一直留着过期的证明，永远过不了绑定检查
         // （修 bridge/引文数字豁免时正好撞上过这个死锁）。
         qualityEditorialImplementationSha256: promptTemplateSha256('scripts/editorial-quality.js'),
         qualityPipelineImplementationSha256: promptTemplateSha256('scripts/deep-analyzer.js'),
@@ -11936,7 +11936,7 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
     };
 }
 
-// 全新来源存储只会用它已经落盘的那一份原始官方 PDF 调这里。这段代码里没有网络路径，
+// 全新来源存储只会用它已经保存的那一份原始官方 PDF 调这里。这段代码里没有网络路径，
 // 因此不可能绕过清单去抓另一份兜底文档。
 async function extractArxivPdfTextDetailedFromBytes(arxivId, rawBytes, options = {}) {
     const normalized = String(arxivId || '').trim().replace(/v\d+$/i, '');
@@ -12556,7 +12556,7 @@ async function downloadImagesSerial(imageUrls, maxCount, maxBase64Chars, maxTota
         } catch (e) {
             if (e.code === 'PROXY_CONFIG_ERROR') throw e;
             // 历史直接运行会提供一个临时下载器，它那套受信任的 arXiv 字节校验器遇到
-            // 永久性失败就抛错（比如声明是 JPEG，魔数字节却是 PNG）。这种按失败关闭的
+            // 永久性失败就抛错（比如声明是 JPEG，魔数字节却是 PNG）。这种明确报错停止的
             // 拒绝要保留成候选项的终态结果；传输错误仍可重试，属于临时问题。
             outcomes.push({
                 url,
@@ -13659,7 +13659,7 @@ async function analyzePaperDeepInternal(paper) {
     }
 
     // 历史直接执行从当前生效的直接作用域拿到来源证明。其他只处理来源的执行仍用全新运行
-    // 的来源证明。两条路径都会在分析或 Reader 检查点落盘之前，先绑定传进来的确切文本和
+    // 的来源证明。两条路径都会在分析或 Reader 检查点保存之前，先绑定传进来的确切文本和
     // artifact。
     if (directSource) directRewriteContext.attachDirectSourceRecord(paper, analysisManifest, sourceDetails);
     else require('./lib/fresh-analysis-context.js').attachFreshSourceRecord(paper, analysisManifest, sourceDetails);
@@ -14781,7 +14781,7 @@ async function analyzePaperDeepInternal(paper) {
                     // 单跑一次第二轮本身也可能有噪声。再独立审一次，只有在原始容差内
                     // 有两者一致才接受；三次互不相同就维持严格的拒绝结论。
                     console.log(
-                        `    [deep] ⚠️  评分二审未收敛，触发第三次独立审计: `
+                        `    [deep] ⚠️  前两次评分的差异超过允许范围，开始第三次独立评分检查: `
                         + `first=${firstAuditScore.toFixed(1)} | second=${secondScore.toFixed(1)}`
                     );
                     const thirdResult = await auditTypeAwareScoringDetailed(
@@ -14821,7 +14821,7 @@ async function analyzePaperDeepInternal(paper) {
                     totalScoringAttempts += thirdResult.attempts;
                     if (resolution.status !== 'resolved') {
                         const error = new Error(
-                            `评分稳定性二次审计未收敛: first=${firstAuditScore.toFixed(1)}, `
+                            `三次评分中最接近的两次仍超过允许差异: first=${firstAuditScore.toFixed(1)}, `
                             + `second=${secondScore.toFixed(1)}, third=${thirdScore.toFixed(1)}, `
                             + `bestDifference=${consensus.difference.toFixed(1)}`
                         );
@@ -15040,7 +15040,7 @@ async function analyzePaperDeepInternal(paper) {
             // 每日全新来源运行可能发现一张图，它的像素被有上限的下载器永久拒绝（比如
             // 响应体超过 6 MiB 上限）。这种情况下 Reader 提示词正确地拿不到像素，因此
             // 生成的文章必须略去这张图，而不是要求直接证据核验流程去证明从未观察到的
-            // 字节。历史直接运行仍按失败关闭，声明的每张图都仍要有确切证据。
+            // 字节。历史直接运行仍要求每张声明的图片都有确切证据，缺少证据就拒绝。
             const dailyFigureEvidence = require('./lib/fresh-analysis-context.js').isDailyFreshSourceScope()
                 ? new Set((generatedReaderResult.imageEvidence || [])
                     .filter(item => item?.kind === 'figure' && item.status === 'ready')

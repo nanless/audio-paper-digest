@@ -34,7 +34,7 @@ function currentSelection() {
         primaryMethodTag: currentTag('method.transformer')
     };
     const validation = TAG_RULES.validateTagSelection(selection);
-    assert.equal(validation.valid, true, `conference fixture taxonomy is invalid: ${validation.errors.join('; ')}`);
+    assert.equal(validation.valid, true, `会议测试样例的标签分配无效： ${validation.errors.join('; ')}`);
     return selection;
 }
 
@@ -294,7 +294,7 @@ test('含点的 IWSLT conference-paper-id 仍算会议身份', t => {
     assert.doesNotMatch(result.markdown, /arxiv/i);
 });
 
-test('完成状态漂移、arXiv 渲染器泄漏和弱素材一律直接失败', t => {
+test('完成状态与记录不符、误用 arXiv 渲染器或素材不足时一律拒绝继续', t => {
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging');
     f.runs.get(f.one).run.completionReceipt.analysisSha256 = 'c'.repeat(64);
     assert.throws(() => api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
@@ -400,7 +400,7 @@ test('会议新汇总固定使用 v2，保留新旧成员原始分配及页面�
             const createTagRules = tagRulesApi.createTagRules;
             let staged;
             try {
-                // 第一成员保存明确旧格式合成资料；第二成员由实际当前 writer 保存。
+                // 第一成员保存明确旧格式合成资料；第二成员由当前写入程序实际保存。
                 tagRulesApi.createTagRules = options => ({ ...createTagRules(options),
                     flatCompatContract: executionId === f.one ? firstContract : tagRulesApi.TAG_FLAT_COMPAT_CONTRACT });
                 staged = api.stagePaper({ analysisRoot: 'ignored', executionId, tagCatalogPath: TAG_CATALOG_PATH,
@@ -533,7 +533,7 @@ test('多层标签统计分别计算每一级的直接使用篇数和包含下�
     assert.equal(hierarchy.facets.length, 9);
     const facet = id => hierarchy.facets.find(item => item.id === id);
     assert.deepEqual(hierarchy.facets.map(item => item.id), registry.facets.map(item => item.id));
-    // 每分面一棵树，只输出计数 > 0 的节点。
+    // 每个标签分类维度各有一棵树，只输出计数 > 0 的节点。
     const task = facet('task');
     assert.deepEqual(task.nodes.map(node => node.id), ['task.asr']);
     const [root] = task.nodes;
@@ -546,9 +546,9 @@ test('多层标签统计分别计算每一级的直接使用篇数和包含下�
     assert.deepEqual({ id: third.id, level: third.level, directCount: third.directCount, subtreeCount: third.subtreeCount },
         { id: 'task.lip-reading', level: 2, directCount: 1, subtreeCount: 1 });
     assert.deepEqual(third.children, []);
-    // 空分面保留分面壳（每分面一棵树），但没有任何节点。
+    // 没有论文使用的标签分类维度仍保留分类记录，但没有任何节点。
     assert.deepEqual(facet('application'), { id: 'application', label: '应用', nodes: [] });
-    // 同分面内未被计数的兄弟/后代概念绝不出现。
+    // 同一分类维度内未被计数的同级或下级概念绝不出现。
     const serialized = JSON.stringify(hierarchy);
     for (const id of ['task.inverse-text-normalization', 'task.speech-separation',
         'research_focus.adversarial-robustness']) assert.equal(serialized.includes(id), false);
@@ -565,7 +565,7 @@ test('多层标签统计分别计算每一级的直接使用篇数和包含下�
     const deduped = api.aggregateHierarchy(registry, [['task.asr', 'task.av-asr'], ['task.lip-reading']]);
     const dedupRoot = deduped.facets.find(item => item.id === 'task').nodes[0];
     assert.deepEqual([dedupRoot.directCount, dedupRoot.subtreeCount], [1, 2]);
-    // 未知概念 fail-closed。
+    // 遇到未知概念就拒绝继续。
     assert.throws(() => api.aggregateHierarchy(registry, [['task.not-a-concept']]), /当前词表中缺失或未启用的概念/);
     assert.throws(() => api.aggregateHierarchy(registry, [[null]]), /当前词表中缺失或未启用的概念/);
     assert.throws(() => api.aggregateHierarchy(registry, ['not-an-array']), /概念 ID 列表必须是数组/);
@@ -587,7 +587,7 @@ test('多层标签统计分别计算每一级的直接使用篇数和包含下�
     assert.equal(lines.some(line => line.startsWith('#### 应用')), false);
 });
 
-test('汇总渲染多级标签下钻，并把它写进清单', t => {
+test('汇总页展示逐级展开的标签，并把标签层级写进清单', t => {
     const tagged = tag => validAnalysisText().replaceAll('#语音识别', tag);
     const f = fixture(t, [
         { executionId: '33333333-3333-4333-8333-333333333333', index: 3,
@@ -651,7 +651,7 @@ test('汇总渲染多级标签下钻，并把它写进清单', t => {
     assert.equal(Object.hasOwn(written, 'taxonomyHierarchy'), false);
 });
 
-test('Reader、评分、词表和发布这几道兼容检查，不能靠成功桩绕过', t => {
+test('Reader、评分、词表和发布这几道兼容检查，不能靠模拟的成功返回值绕过', t => {
     const f = fixture(t); const args = { analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot: path.join(f.root, 'staging'), planHandle: f.planHandle, sourceRoot: f.sourceRoot };
     f.runs.get(f.one).analysis.papers[0].analysisManifest.contracts.apiReaderSourceBindings = 'api-reader-source-bindings-v3';
@@ -961,7 +961,7 @@ test('会议后处理在生成页面前拒绝旧清洗可能损坏的来源，�
     bindFixtureSource(record.analysis.papers[0], record.source.sourceDetails);
     assert.equal(api.stagePaper(options, f.dependencies).status, 'staged');
 });
-for (const replacementKind of ['file', 'symlink', 'directory']) test(`blocked 分配读取后换主为 ${replacementKind} 时保留竞争者`, t => {
+for (const replacementKind of ['file', 'symlink', 'directory']) test(`读取被阻断的标签分配后，文件被替换为 ${replacementKind} 时保留其他任务写入的内容`, t => {
     const f = fixture(t);
     const stagingRoot = path.join(f.root, 'replacement-proof');
     const bad = validAnalysisText()

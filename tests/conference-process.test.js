@@ -76,7 +76,7 @@ function success(item) {
         pagePath: `content/posts/${item.paperId.split(':').at(-1)}.md` } };
 }
 // 写真实的 analysis.json 和 staging page.md/manifest.json，proof 由实际字节算出，
-// 这样 --verify-files 的通过与失败都能用同一套夹具区分。
+// 这样 --verify-files 的通过与失败都能用同一套测试样例数据区分。
 function writeConferenceArtifacts(files, item) {
     const analysisDirectory = path.join(files.conferenceAnalysisDir, item.analysisRunId);
     fs.mkdirSync(analysisDirectory, { recursive: true, mode: 0o700 });
@@ -831,7 +831,7 @@ test('迁移后旧实现仍可寻址，并且绝不重分析已完成的论文',
     assert.equal(resumed.status, 'complete'); assert.equal(resumed.processId, first.processId);
 });
 
-test('系统性失败后，worker 会把手上的活做完，但不再派发新任务', async t => {
+test('系统性失败后，正在处理论文的任务会完成手上的工作，但不再派发新任务', async t => {
     const f = fixture(t, 7); let calls = 0;
     let release; const inFlight = new Promise(resolve => { release = resolve; });
     const result = await processApi.runConferenceProcess({ apply: true, concurrency: 3 }, { ...f.deps,
@@ -942,7 +942,7 @@ test('标签审查让批次继续走，先扣住页面，并报告一个可见�
     assert.deepEqual(status.tagReviewQueue[0].blockedReasons, blockedReasons);
     assert.equal(status.tagReviewQueueFile, first.tagReviewQueueFile);
 
-    // 旧检查点和队列保留有效原始哈希，状态读取只投影新名称。
+    // 旧检查点和队列保留有效原始哈希，读取状态时只按新名称展示字段。
     const stateFile = path.join(directory, 'state.json');
     const legacyQueueFile = path.join(directory, 'taxonomy-review-queue.json');
     review.lastFailure.code = 'CONFERENCE_TAXONOMY_REVIEW_REQUIRED';
@@ -1198,8 +1198,8 @@ test('文本或产物一变，就在调用模型或改动迁移之前拒绝复�
     }
 });
 
-// 来源升级各提升模式共用的固定数据：已保存并核验的历史来源、
-// 模拟的 discovery/prepareShared/staging/aggregate 调用链，以及
+// 来源升级各种结果登记模式共用的固定数据：已保存并核验的历史来源、
+// 模拟的来源发现、共享准备、单篇暂存和汇总步骤，以及
 // 一个可切换的「新来源代次」，好让升级结果与原始记录明显不同。
 function sourceUpgradeFixture(t, count = 3, original = null) {
     const f = fixture(t, count, original); const digest = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
@@ -1518,11 +1518,11 @@ test('promote --prefer-upgrade 先登记升级过的成员，保留其余成员�
     assert.deepEqual(preserved.pageProof, h.control.originalItems.get(kept).pageProof);
     assert.deepEqual(h.control.preservedCalls, [kept]);
     assert.deepEqual(h.control.stageCalls, upgradedIds.map(id => state.items[id].analysisRunId));
-    // 终态口径：promoted 进程只作 --status/发布节点，后续 --apply 按设计拒绝重绑。
+    // 完成后的用途：promoted 进程只供 --status 查询和发布读取，后续 --apply 按设计拒绝重绑。
     await assert.rejects(processApi.runConferenceProcess({ apply: true, concurrency: 1 }, h.deps),
         error => error.code === 'CONFERENCE_SOURCE_UPGRADE_REBIND_REQUIRED'
             && /请先检查 --source-upgrade-plan --from /.test(error.message));
-    // 收据字段 fail-closed：乱序、重复、越集和类型错误一律拒绝。
+    // 凭证字段的顺序、唯一性、成员范围或类型不符合要求时，一律拒绝。
     const tamper = (mutation, pattern) => {
         const copy = structuredClone(state);
         mutation(copy.sourceUpgradePromotion);
@@ -1725,7 +1725,7 @@ test('原零尝试初始化例外保留，实现变化只创建新版进程而�
     assert.equal(Object.hasOwn(state.authority, 'taxonomyRegistrySha256'), false);
 });
 
-test('词表字段混用按存在性拒绝，原状态摘要损坏优先拒绝', async t => {
+test('出现混用的新旧词表字段时拒绝继续；优先检查原状态的 SHA-256', async t => {
     const f = fixture(t);
     const result = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, {
         ...f.deps, processPaper: async (_c, _s, item) => success(item)
@@ -1870,7 +1870,7 @@ test('原升级计划写入后中断，可在原授权选择下补建检查点�
     assert.deepEqual(fs.readFileSync(parentFile), parentBytes);
 });
 
-test('无关原任务的损坏状态不会阻断目标任务，实际匹配状态仍先核原摘要', async t => {
+test('无关原任务的损坏状态不会阻断目标任务，实际匹配状态仍先核原 SHA-256', async t => {
     const original = loadOriginalConferenceProcessApis();
     const target = fixture(t, 1, original);
     const completed = await original.processApi.runConferenceProcess({ apply: true, concurrency: 1 }, {
@@ -1897,7 +1897,7 @@ test('无关原任务的损坏状态不会阻断目标任务，实际匹配状�
         });
         const originalFile = path.join(unrelated.files.conferenceProcessDir, result.processId, 'state.json');
         const state = JSON.parse(fs.readFileSync(originalFile));
-        state.generation += 1; // 故意破坏摘要；不是把新版对象改头伪造旧记录。
+        state.generation += 1; // 故意使原 SHA-256 不再匹配；不是把新版对象改头伪造旧记录。
         const directory = path.join(target.files.conferenceProcessDir, result.processId);
         fs.mkdirSync(directory, { mode: 0o700 });
         const filename = path.join(directory, 'state.json');

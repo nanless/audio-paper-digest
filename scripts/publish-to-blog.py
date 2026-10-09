@@ -642,7 +642,7 @@ def review_cached_unit(kind, inputs, run):
     directory = context['directory']
     checkpoint = directory / f'{key}.json'
     # 绝不跟随缓存里的符号链接；格式损坏的检查点本来就不能作为
-    # 请求成功的证明。提示词、页面正文和图片字节都不落盘。
+    # 请求成功的证明。不保存提示词、页面正文或图片字节。
     current_root = Path(CURRENT_DIR)
     for component in (checkpoint, directory, *directory.parents):
         if component.is_symlink():
@@ -1466,7 +1466,7 @@ def _download_review_image(url):
                         # 只有传输层失败才可以重试同一个
                         # 已经通过 DNS 校验的地址，或者换到另一个
                         # 通过校验的地址。内容与安全类失败
-                        # 一律按失败关闭处理，绝不静默绕过。
+                        # 一律报错停止，不跳过内容或安全检查。
                         import urllib3
                         if isinstance(exc, (OSError, urllib3.exceptions.HTTPError)):
                             transient_error = exc
@@ -1860,7 +1860,7 @@ def parse_markdown_images(content):
     这里只排除段落里的代码段和顶层围栏；缩进代码
     与容器围栏不做一般化处理。引号标题里可能有
     不配对的圆括号；只有目标地址的圆括号影响 URL 配对。
-    破损的行内图片按失败关闭处理；引用式标签不在处理范围内。
+    行内图片的标签或目标地址括号不配对时直接报错；引用式标签不在处理范围内。
     """
     def is_escaped(position):
         previous = position
@@ -5608,7 +5608,7 @@ def _validate_legacy_reader_figure_source(paper, plan, article, structured_sha, 
     paper_id = normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
     figures = paper.get('apiReaderFigures') or []
     if not isinstance(figures, list):
-        return  # 完整图片列表校验由正式 Reader 发布门禁负责。
+        return  # 完整图片列表由正式 Reader 发布检查核验。
     if (paper_id == '2609.27195'
             and any(isinstance(item, dict) and item.get('url') == 'https://arxiv.org/html/2609.27195v1/fig4_placement_ratio_readable.svg' for item in figures)
             and any(text in article for text in _LEGACY_READER_PIXEL_NARRATIVES)):
@@ -9686,7 +9686,7 @@ def _remote_main_oid():
 def _remote_identity_sha256():
     """把一次已验证的发布绑定到配置远端确切的推送 URL。
 
-    URL 本身不落盘，因为里面可能带凭据。对远端名
+    不保存 URL 本身，因为里面可能带凭据。对远端名
     和 Git 解析出的确切推送 URL 求哈希，仍然能让
     把 ``origin`` 换成一个无关仓库的操作作废旧发布证据。
     """
@@ -10842,7 +10842,7 @@ def prepare_generation_journal(
         if journal_mismatch:
             # 还没有对任何目标路径做快照或安装，所以这只是
             # 推导出来的暂存状态。记录或模板修复可以安全地
-            # 从这里重来。安装一旦开始，我们仍然按失败关闭处理，
+            # 从这里重来。安装一旦开始，日志与当前输入不匹配时仍直接报错，
             # 因为那时日志才是回滚的依据。
             if journal.get('installation') is not None:
                 raise PublishDataValidationError(
@@ -10966,7 +10966,7 @@ def resume_generation_installation(journal, journal_path, staged_posts):
             installed_paths.append(target)
             continue
         if current == expected:
-            # 进程可能在 os.replace 或 unlink 之后、日志标记落盘之前
+            # 进程可能在 os.replace 或 unlink 之后、保存日志标记之前
             # 就退出了。只采纳完全符合预期的字节。
             record['installed'] = True
             _save_generation_journal(journal_path, journal)
@@ -12920,7 +12920,7 @@ def load_verified_review_receipt(date_str):
 
 
 def exclude_papers_for_publish(papers, excluded_ids):
-    """排除明确点名的论文，遇到拼写错误或过期 ID 时按失败关闭处理。"""
+    """排除明确点名的论文，排除列表中有不属于当前论文集合的 ID 时直接报错。"""
     normalized_excluded = {
         normalize_publish_arxiv_id(value) for value in (excluded_ids or [])
     }
@@ -13044,7 +13044,7 @@ def select_generation_data_file(
                 return str(current)
         except (OSError, UnicodeError, json.JSONDecodeError):
             # 没有确切的归档批次可用时，保留现有加载器
-            # 按失败关闭的报错行为。
+            # 在缺少所需资料时直接报错的行为。
             pass
     archived = ARCHIVE_DIR / validate_publish_date(target_date) / 'deep-analysis-result.json'
     if archived.is_file():

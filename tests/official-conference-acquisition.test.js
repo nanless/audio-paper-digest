@@ -123,7 +123,7 @@ function temporaryRoot(t) {
     return { base, outputRoot: path.join(base, 'run') };
 }
 
-test('所有固定来源适配器都能从纯单索引夹具产出严格的核心元数据结构', () => {
+test('所有固定来源适配器都能从单个索引页面的测试样例数据产出严格的核心元数据结构', () => {
     for (const [providerId, fixture] of Object.entries(FIXTURES)) {
         const metadata = acquisition.parseCatalog(providerId, fixture);
         assertCoreSchema(metadata, providerId);
@@ -517,7 +517,7 @@ test('下载预演和校验报告目录不完整，但不写 PDF', async t => {
     assert.equal(verified.complete, false);
 });
 
-test('显式的有界并发下载不同论文，并等所有 worker 结束', async t => {
+test('按指定数量并发下载不同论文，并等待全部下载任务结束', async t => {
     const { outputRoot } = temporaryRoot(t);
     await acquisition.acquireCatalog({ providerId: 'odyssey-2026', outputRoot, apply: true },
         dependencies(async () => httpResponse(ODYSSEY_TWO_FIXTURE, 'text/html')));
@@ -556,7 +556,7 @@ test('显式的重试预算只重试同一 URL 的暂时性失败', async t => {
     assert.deepEqual(delays, [500]);
 });
 
-test('命令行要求显式的来源身份和年份，只用配置的运行时根目录，并对各模式设门禁', () => {
+test('命令行要求显式的来源身份和年份，只用配置的运行时根目录，并检查各模式允许使用的参数', () => {
     const root = path.join(os.tmpdir(), 'conference-runs');
     const parsed = cli.parseArgs(['catalog', '--provider', 'odyssey-2026', '--conference-id', 'odyssey-2026',
         '--year', '2026', '--dry-run'], { acquisitionRoot: root });

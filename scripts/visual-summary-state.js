@@ -1818,7 +1818,7 @@ function planVisualSummaries({
         const obsoleteVisualAssets = collectObsoleteCompletedVisualAssets(current, nextManifest);
         if (obsoleteVisualAssets.length > 0) nextManifest.obsoleteVisualAssets = obsoleteVisualAssets;
         nextManifest.generation = (Number.isInteger(current?.generation) ? current.generation : 0) + 1;
-        // 先落盘作废或待处理的清单，再删旧素材。这样即使中途崩溃，留下的也只是一份
+        // 先保存已作废或待处理的任务清单，再删除旧图片。这样即使中途崩溃，留下的也只是一份
         // 可安全续跑的清理清单，不会出现旧清单仍标记完成却指向已删文件的情况。
         writeFileAtomic(manifestPath, JSON.stringify(nextManifest, null, 2));
         cleanupObsoleteCompletedVisualAssets(current, nextManifest);

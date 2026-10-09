@@ -1,4 +1,4 @@
-"""隔离的 AST 夹具：不读 .env，不调 API，不写日更数据，也不引入发布主模块。"""
+"""隔离的测试环境：从语法树中只加载所需函数，不读 .env、不调 API、不写日更数据，也不引入发布主模块。"""
 import ast
 import base64
 import copy
@@ -39,7 +39,7 @@ class TagVersionFilesTests(unittest.TestCase):
         current_names = NAMES - {'_legacy_tag_catalog_file_contents'}
         nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef)
                  and node.name in current_names]
-        # 旧生成器只用于离线构造旧格式测试资料，固定夹具不随 SOURCE 改变。
+        # 旧生成器只用于离线构造旧格式测试数据，保存的旧生成器原字节不随 SOURCE 改变。
         original_writer_path = (Path(__file__).resolve().parents[1] / 'fixtures'
                                 / 'tag-catalog-original-writer.txt')
         original_writer_raw = original_writer_path.read_bytes()
@@ -320,7 +320,7 @@ class TagVersionFilesTests(unittest.TestCase):
         captured_raw = (Path(__file__).resolve().parents[1] / 'fixtures' /
                         'tag-catalog-assets/original-display-bundles.json').read_bytes()
         self.assertEqual(hashlib.sha256(captured_raw).hexdigest(),
-            '2895c3b77443aa1077f5fc00f62fea6159d183ed254e367e30f91e5b4bc273ae')
+            'f48509ba85134a307d97daa45d89955e66f70ac2214ef96ab2ac092238e6651e')
         captured = json.loads(captured_raw)
         self.assertEqual(captured['producerSourceSha256'],
             '2185883ec8684445dfbb9883680c296ff4b92ff775f31b7077b53ebc068fcadc')
