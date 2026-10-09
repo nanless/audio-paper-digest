@@ -355,3 +355,41 @@ test('执行阶段的每条 CLI 命令都要求完整的上游授权链', () => 
     for (const args of [['status', '--execution', executionId], ['transition', '--execution', executionId,
         '--patch', 'step.json', '--owner', 'worker']]) assert.throws(() => cli.parseArgs(args), /complete/);
 });
+
+for (const command of ['read', 'prepare', 'transition']) {
+    test(`真实计划的执行目录改名后，${command} 拒绝借用另一 UUID 的完整记录`, t => {
+        const f = productionPlanFixture(t);
+        const executionRoot = path.join(f.root, 'executions');
+        const initial = execution.prepareExecutionFromPlan({ executionRoot, planHandle: f.planHandle, executionId, now: stamp });
+        const renamedId = '44444444-4444-4444-8444-444444444444';
+        const directory = path.join(executionRoot, renamedId);
+        fs.renameSync(path.join(executionRoot, executionId), directory);
+        const stateBytes = fs.readFileSync(path.join(directory, 'state.json'));
+        const authorityBytes = fs.readFileSync(path.join(directory, 'authority.json'));
+        const options = { executionRoot, executionId: renamedId, planHandle: f.planHandle };
+        const run = command === 'read' ? () => execution.readExecution(options)
+            : command === 'prepare' ? () => execution.prepareExecutionFromPlan({ ...options, now: stamp })
+                : () => execution.transitionExecution({ ...options, owner: 'identity-review', now: stamp,
+                    patch: { operationId, expectedStateSha256: initial.stateSha256, paperId: f.paperId,
+                        nextState: { status: 'source_ready', usage: { requests: 1 } } } });
+        assert.throws(run, /UUID 与请求目录不一致/);
+        assert.deepEqual(fs.readFileSync(path.join(directory, 'state.json')), stateBytes);
+        assert.deepEqual(fs.readFileSync(path.join(directory, 'authority.json')), authorityBytes);
+        assert.deepEqual(fs.readdirSync(directory).sort(), ['authority.json', 'patches', 'state.json']);
+    });
+}
+
+test('真实计划的仅状态恢复先核请求 UUID，不能为另一执行记录补写权限文件', t => {
+    const f = productionPlanFixture(t);
+    const executionRoot = path.join(f.root, 'executions');
+    execution.prepareExecutionFromPlan({ executionRoot, planHandle: f.planHandle, executionId, now: stamp });
+    const renamedId = '55555555-5555-4555-8555-555555555555';
+    const directory = path.join(executionRoot, renamedId);
+    fs.renameSync(path.join(executionRoot, executionId), directory);
+    fs.unlinkSync(path.join(directory, 'authority.json'));
+    const original = fs.readFileSync(path.join(directory, 'state.json'));
+    assert.throws(() => execution.prepareExecutionFromPlan({ executionRoot, executionId: renamedId,
+        planHandle: f.planHandle, now: stamp }), /partial execution state does not match/);
+    assert.deepEqual(fs.readFileSync(path.join(directory, 'state.json')), original);
+    assert.deepEqual(fs.readdirSync(directory).sort(), ['patches', 'state.json']);
+});

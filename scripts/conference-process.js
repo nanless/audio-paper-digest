@@ -41,7 +41,7 @@ function parseArgs(argv) {
     if (values['--page-repair-mode'] !== undefined && values['--page-repair-mode'] !== 'caption-only') throw new Error(`Use ${USAGE}`);
     if (mode === '--source-upgrade-promote' && (!/^[a-f0-9]{64}$/.test(values['--plan-sha'] || '') || values['--paper-ids'])) throw new Error(`Use ${USAGE}`);
     if (mode === '--source-upgrade-apply' && (!values['--authorize-new-analysis'] || !/^[a-f0-9]{64}$/.test(values['--plan-sha'] || '')
-        || !values['--paper-ids'] || values['--paper-ids'].split(',').some(id => !/^conference:[a-z0-9:._-]+$/.test(id)))) throw new Error(`Use ${USAGE}`);
+        || !values['--paper-ids'] || values['--paper-ids'].split(',').some(id => !/^conference:[A-Za-z0-9:._-]+$/.test(id)))) throw new Error(`Use ${USAGE}`);
     return { apply: mode === '--apply', statusOnly: mode === '--status', catalogName: values['--catalog'],
         reportName: values['--report'], filterId: values['--filter'], concurrency: Number(values['--concurrency'] || 1),
         ...(values['--retry-failed'] ? { retryFailed: true } : {}),

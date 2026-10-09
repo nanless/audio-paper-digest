@@ -488,7 +488,7 @@ function prepareExecutionFromPlan({ executionRoot, planHandle, executionId = cry
         if (entries.includes('state.json')) {
             existingState = assertConferenceExecution(readRegularJson(
                 safeDirectFile(directory, 'state.json'), 'execution recovery state').value);
-            if (existingState.attempts.length !== 0
+            if (existingState.executionId !== executionId || existingState.attempts.length !== 0
                 || stableHash(existingState.source) !== stableHash(state.source)
                 || stableHash(existingState.runTemplate) !== stableHash(state.runTemplate)
                 || stableHash(existingState.paperStates) !== stableHash(state.paperStates)) {
@@ -546,6 +546,7 @@ function readExecution({ executionRoot, executionId, planHandle } = {}) {
     const filename = safeDirectFile(directory, 'state.json');
     const authorityFile = safeDirectFile(directory, 'authority.json');
     const execution = assertConferenceExecution(readRegularJson(filename, 'execution state').value);
+    if (execution.executionId !== executionId) fail('执行记录的 UUID 与请求目录不一致');
     const authority = normalizeAuthority(readRegularJson(authorityFile, 'execution authority').value);
     assertPlanAuthority(execution, authority, planHandle);
     return execution;

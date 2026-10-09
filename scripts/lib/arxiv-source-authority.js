@@ -61,8 +61,12 @@ function identityFor(arxivId) {
         source: { status: 'official', url: `https://arxiv.org/abs/${arxivId}` }, citation: null });
 }
 function namesFor(authorityName, arxivId) {
-    if (!SAFE_AUTHORITY_NAME.test(String(authorityName || ''))
-        || !authorityName.startsWith(`arxiv-${arxivId}`)) fail('authorityName must be a safe direct name bound to arxivId');
+    if (!identityApi.ARXIV_ID_RE.test(String(arxivId || ''))
+        || !SAFE_AUTHORITY_NAME.test(String(authorityName || ''))
+        || !(authorityName === `arxiv-${arxivId}.json`
+            || authorityName.startsWith(`arxiv-${arxivId}-`))) {
+        fail('authorityName must be a safe direct name bound to arxivId');
+    }
     const stem = authorityName.slice(0, -5);
     return { authorityName, requestName: `${stem}-request.json`, observationName: `${stem}-observation.json`,
         fulltextName: `${stem}-fulltext.txt`, snapshotName: `${stem}-snapshot.json`, receiptName: `${stem}-receipt.json` };
@@ -494,7 +498,7 @@ function readLiveProductionSourceDetails(handle) {
 
 async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityName,
     apply = false, now, operationId, requireLiveAuthorization = false } = {}) {
-    const root = safeRoot(authorityRoot, apply); const names = namesFor(authorityName, arxivId);
+    const names = namesFor(authorityName, arxivId); const root = safeRoot(authorityRoot, apply);
     const planned = { status: 'dry-run', arxivId, paperId: `arxiv:${arxivId}`, authorityName,
         officialUrl: `https://arxiv.org/abs/${arxivId}`, artifacts: clone(names) };
     if (!apply) return planned;

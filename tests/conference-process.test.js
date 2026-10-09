@@ -1949,3 +1949,23 @@ test('提示词渲染迁移实现只进入当前会议清单，v1 旧清单与�
     assert.notEqual(fingerprint(), current);
     assert.equal(fingerprint('v1'), legacy);
 });
+
+
+test('来源升级CLI保留合法OpenReview身份大小写，仍拒绝路径和空身份', () => {
+    const identity = require('../scripts/lib/paper-identity.js');
+    const paperId = identity.canonicalConferencePaperId({ id: 'icml-2026', year: 2026 },
+        { type: 'openreview-forum-id', value: 'n1mAjfRDZ6' });
+    const argsFor = value => ['--source-upgrade-apply', '--catalog', 'catalog.json', '--report', 'report.json',
+        '--filter', '11111111-1111-4111-8111-111111111111',
+        '--from', '22222222-2222-4222-8222-222222222222', '--plan-sha', 'a'.repeat(64),
+        '--paper-ids', value, '--authorize-new-analysis'];
+    const parsed = cli.parseArgs(argsFor(paperId));
+    assert.deepEqual(parsed.paperIds, ['conference:icml:2026:openreview-forum-id:n1mAjfRDZ6']);
+    assert.equal(parsed.authorizeNewAnalysis, true);
+    assert.equal(parsed.planSha256, 'a'.repeat(64));
+    for (const invalid of ['', `${paperId},`, `,${paperId}`, `${paperId}/../../state.json`,
+        `${paperId}\\state.json`, `${paperId} other`, `${paperId}?x=1`]) {
+        assert.throws(() => cli.parseArgs(argsFor(invalid)), /Use/);
+    }
+    assert.throws(() => cli.parseArgs(argsFor(paperId).slice(0, -1)), /Use/);
+});

@@ -297,3 +297,29 @@ test('调用方装了处理器时，SIGTERM 会保留进行中的抓取锁，并
     assert.equal(fs.existsSync(path.join(root, `arxiv-${id}-observation.json`)), false);
     assert.equal(fs.existsSync(path.join(root, `arxiv-${id}-fulltext.txt`)), false);
 });
+
+
+test('来源名称必须绑定完整 arXiv ID，错误名称在预演和创建目录前拒绝', async t => {
+    const parent = fixture(t); let calls = 0;
+    mockOfficialFetcher(t, async id => { calls++; return source(id); });
+    for (const apply of [false, true]) {
+        for (const arxivId of ['2601.1234', '2601', '2601.12345v2']) {
+            const root = path.join(parent, `missing-${apply}-${arxivId}`);
+            await assert.rejects(api.prepareArxivSourceAuthority({
+                authorityRoot: root, arxivId, authorityName: 'arxiv-2601.12345.json', apply
+            }), /safe direct/);
+            assert.equal(fs.existsSync(root), false);
+        }
+    }
+    assert.equal(calls, 0);
+    for (const arxivId of ['2601.1234', '2601.12345']) {
+        for (const suffix of ['', '-revision-2']) {
+            const result = await api.prepareArxivSourceAuthority({
+                authorityRoot: path.join(parent, 'still-missing'), arxivId,
+                authorityName: `arxiv-${arxivId}${suffix}.json`
+            });
+            assert.equal(result.status, 'dry-run');
+            assert.equal(result.paperId, `arxiv:${arxivId}`);
+        }
+    }
+});
