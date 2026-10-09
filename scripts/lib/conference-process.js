@@ -131,6 +131,7 @@ function currentImplementationFiles() {
         return stage ? promptTextVersions.currentOrFrozenPromptPath(stage) : name;
     });
     files.push(PROMPT_TEXT_VERSIONS_FILE);
+    files.push('scripts/lib/prompt-rendering-contract.js');
     files.push(...SOURCE_VERIFICATION_FILES);
     return files;
 }

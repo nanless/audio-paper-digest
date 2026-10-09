@@ -1934,3 +1934,18 @@ test('来源与后处理完整性错误优先按稳定错误码分类，不随�
         }
     }
 });
+
+test('提示词渲染迁移实现只进入当前会议清单，v1 旧清单与重算保持不变', () => {
+    const helper = 'scripts/lib/prompt-rendering-contract.js';
+    assert.ok(!processApi.IMPLEMENTATION_FILES.includes(helper));
+    assert.equal(processApi.currentImplementationFiles().filter(name => name === helper).length, 1);
+    const root = '/virtual/prompt-rendering';
+    const files = [...new Set([...processApi.currentImplementationFiles(), ...processApi.IMPLEMENTATION_FILES])];
+    const sources = new Map(files.map(name => [name, Buffer.from(`source:${name}`)]));
+    const fingerprint = promptTextVersion => processApi.implementationSha256({ root, promptTextVersion,
+        readFileSync: filename => sources.get(path.relative(root, filename)) });
+    const current = fingerprint(); const legacy = fingerprint('v1');
+    sources.set(helper, Buffer.from('updated prompt rendering helper'));
+    assert.notEqual(fingerprint(), current);
+    assert.equal(fingerprint('v1'), legacy);
+});

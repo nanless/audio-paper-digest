@@ -531,6 +531,9 @@ function validateDailyFreshSourceRun(filePath, data, papers, issues) {
         const prefix = `papers[${index}].freshRewriteProvenance`;
         try {
             const details = dailyFreshSources.readDailyFreshSource(plan, paper);
+            if (require('./lib/prompt-rendering-contract.js').legacyPromptRenderingNeedsReplay(paper, details)) {
+                addIssue(issues, filePath, `${prefix} 的旧提示词渲染可能改写输入，须重新分析该论文。`);
+            }
             const descriptor = details.freshSourceDescriptor;
             const proof = paper.freshRewriteProvenance;
             const manifestProof = paper.analysisManifest?.freshRewriteProvenance;

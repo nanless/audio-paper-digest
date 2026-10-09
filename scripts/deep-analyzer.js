@@ -70,6 +70,8 @@ const {
 loadEnvFile();
 
 // 解决 stdout 缓冲问题：后台运行时强制立即 flush
+const { PROMPT_RENDERING_CONTRACT, promptRenderingFingerprintFields, legacyPromptRenderingNeedsReplay }
+    = require('./lib/prompt-rendering-contract.js');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -6958,7 +6960,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         paperId: getPaperArxivId(paper),
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
         contentMode,
-        inputFingerprint: stableFingerprint({ contentMode, sourceEvidence,
+        inputFingerprint: stableFingerprint({
+            ...promptRenderingFingerprintFields(paper.title, sourceEvidence, options.reviewFeedback, start.previousDraft),
+            contentMode, sourceEvidence,
             reviewFeedback: options.reviewFeedback || '', initialDraft: start.previousDraft,
             structuredArtifacts: options.structuredArtifacts?.payloadSha256 || '',
             directSupplementaryEvidence: directSupplementaryPreflightEvidence,
@@ -8669,6 +8673,7 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext, prompt
                 declaredPromptTextContract || ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
             stage === 'coreSummaryRepair' ? CORE_SUMMARY_CONTRACT_VERSION : ''
         ),
+        ...promptRenderingFingerprintFields(inputAnalysis, evidenceContext),
         evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
         evidenceMaxChars: config.evidenceMaxChars,
         evidenceSha256: crypto.createHash('sha256').update(String(evidenceContext || '')).digest('hex'),
@@ -8770,6 +8775,7 @@ function buildPrimaryAnalysisBaseFingerprint(promptTextContract, paper, textForA
                 declaredPromptTextContract || ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
             CORE_SUMMARY_CONTRACT_VERSION
         ),
+        ...promptRenderingFingerprintFields(paper.title, paper.authors, paper.categories, textForAnalysis),
         usedTextSha256: crypto.createHash('sha256').update(textForAnalysis).digest('hex'),
         evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
         fullTextMaxChars: FULL_TEXT_MAX_CHARS,
@@ -8928,6 +8934,7 @@ function buildImageSupplementFingerprint(baseFingerprint, candidateImageInfos, d
 function buildApiReaderExecutionFingerprint(baseFingerprint, evidenceContext, structuredArtifacts, readerCapabilityPolicy = null) {
     const checkedPolicy = validateReaderCapabilityPolicy(readerCapabilityPolicy);
     return stableFingerprint({
+        ...promptRenderingFingerprintFields(evidenceContext),
         configurationFingerprint: baseFingerprint,
         evidenceSha256: crypto.createHash('sha256').update(String(evidenceContext || '')).digest('hex'),
         structuredArtifactsSha256: structuredArtifacts?.payloadSha256 || '',
@@ -9023,6 +9030,7 @@ function migrateSourceOnlyApiReaderFingerprint(
     paper, manifest, currentFingerprint, legacyFingerprint
 ) {
     const stage = manifest?.stages?.apiReaderArticle;
+    if (legacyPromptRenderingNeedsReplay(paper)) return false;
     if (!isRecoveryStageComplete(manifest, 'apiReaderArticle')
         || stage.fingerprint !== legacyFingerprint) return false;
     // 这里会复现生产环境的每一项 SHA、原文绑定、作者和资源证明；只有当已保存的 Reader
@@ -9764,6 +9772,18 @@ function invalidateApiReaderForResourceCountChange(
     // 阶段失效会删掉所有属于 Reader 的字段。只保留刚刚核验过的身份，好让正常的生成分支
     // 把它写进替换后的 Reader；过期的文章、计划、图片和作者字节都不留。
     paper.apiReaderResources = verifiedReaderResources;
+    return true;
+}
+
+function resetLegacyPromptRenderingRecovery(paper, manifest, sourceDetails) {
+    if (!legacyPromptRenderingNeedsReplay(paper, sourceDetails)) return false;
+    captureStaleAnalysisSnapshot(paper, manifest, 'primaryAnalysis', PROMPT_RENDERING_CONTRACT);
+    manifest.stages = {};
+    delete manifest.contracts;
+    for (const field of ['analysisCheckpoint', 'analysisStageCheckpoints', 'apiReaderArticle',
+        'apiReaderPlan', 'apiReaderFigures', 'apiReaderAuthors', 'apiReaderResources',
+        'apiReaderArticleSha256', 'apiReaderPlanSha256']) delete paper[field];
+    console.log('    [deep] 旧提示词渲染可能改写本篇输入，已停用本篇旧阶段，使用封存原文重做');
     return true;
 }
 
@@ -13963,7 +13983,7 @@ async function analyzePaperDeepInternal(paper) {
         throw new Error('Direct rewrite source and conference source cannot both be active');
     }
     const previousScore = Number.parseFloat(paper?.parsed?.score);
-    const savedCoreSummaryRepairCandidate = captureSavedAnalysisForCoreSummaryRepair(paper);
+    let savedCoreSummaryRepairCandidate = captureSavedAnalysisForCoreSummaryRepair(paper);
     const analysisManifest = createAnalysisRecoveryManifest(paper);
     console.log(`    [deep] 获取全文: ${arxivId}`);
 
@@ -14103,6 +14123,10 @@ async function analyzePaperDeepInternal(paper) {
         delete paper.analysisStageCheckpoints;
         console.log(`    [deep] ⚠️  实际分析输入发生变化，已清除主分析及依赖它的后续恢复记录`);
     }
+    if (resetLegacyPromptRenderingRecovery(paper, analysisManifest, { ...sourceDetails, text: rawTextForAnalysis })) {
+        savedCoreSummaryRepairCandidate = null;
+    }
+    sourceAcquisitionRecord.promptRenderingContract = PROMPT_RENDERING_CONTRACT;
     analysisManifest.sourceAcquisition = sourceAcquisitionRecord;
     const recoveryFingerprints = buildRecoveryFingerprints(
         paper, textForAnalysis, arxivId, analysisManifest);
@@ -17231,6 +17255,7 @@ module.exports = {
     makeModelHttpError,
     modelFingerprint,
     createAnalysisRecoveryManifest,
+    resetLegacyPromptRenderingRecovery,
     removeManualAnalysisFields,
     markRecoveryStage,
     isRecoveryStageComplete,

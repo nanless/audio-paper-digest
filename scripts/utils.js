@@ -1892,14 +1892,14 @@ function loadPrompt(mdPath, vars = {}) {
         throw new Error(`Prompt 文件 ${mdPath} 中未找到 fenced code block`);
     }
 
-    let prompt = blockMatch[2];
-
-    // 替换占位符 {key} → value（对 key 做正则转义，防止注入；使用回调避免 $ 特殊含义）
-    for (const [key, value] of Object.entries(vars)) {
-        const escapedKey = key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        const placeholder = new RegExp(`\\{${escapedKey}\\}`, 'g');
-        prompt = prompt.replace(placeholder, () => String(value));
-    }
+    // 只扫描原模板一次；论文原文、草稿和反馈中的花括号不能被当作新的占位符。
+    const replacements = new Map(Object.entries(vars).map(([key, value]) => [`{${key}}`, value]));
+    const escapedPlaceholders = [...replacements.keys()]
+        .map(placeholder => placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    const prompt = escapedPlaceholders.length
+        ? blockMatch[2].replace(new RegExp(escapedPlaceholders.join('|'), 'g'),
+            placeholder => String(replacements.get(placeholder)))
+        : blockMatch[2];
 
     // 检测未替换的占位符并警告（只在原始模板中检测，避免将替换值中的 LaTeX 符号误判）
     // 排除单字母（如 {N}, {k}, {i} 等数学公式变量）

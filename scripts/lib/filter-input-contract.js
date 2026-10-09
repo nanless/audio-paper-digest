@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const { PROMPT_RENDERING_CONTRACT, sequentialSubstitutionChangesInput } = require('./prompt-rendering-contract.js');
 
 /**
  * 筛选决定绑定的最小输入契约。
@@ -15,6 +16,7 @@ function buildFilterInputSha256(paper) {
         abstract: String(paper?.abstract || paper?.summary || '').trim(),
         categories
     };
+    if (sequentialSubstitutionChangesInput(input)) input.promptRenderingContract = PROMPT_RENDERING_CONTRACT;
     return crypto.createHash('sha256').update(JSON.stringify(input)).digest('hex');
 }
 

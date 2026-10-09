@@ -1255,6 +1255,54 @@ describe('loadPrompt', () => {
         assert.strictEqual(prompt.trim(), '标题: 测试标题\n分数: 9.5');
     });
 
+    it('变量里的占位符文本保持原样，渲染结果与传入键顺序无关', () => {
+        const vars = { title: '论文中的 {score}、{title} 和 {unknown}', score: '9.5' };
+        const expected = '标题: 论文中的 {score}、{title} 和 {unknown}\n分数: 9.5';
+        assert.strictEqual(loadPrompt('tests/fixtures/prompt.md', vars).trim(), expected);
+        assert.strictEqual(loadPrompt('tests/fixtures/prompt.md',
+            Object.fromEntries(Object.entries(vars).reverse())).trim(), expected);
+    });
+
+    it('替换值中的美元符号和反斜杠保持原样，键中的正则符号不匹配其他键', () => {
+        const title = String.raw`$& $' $` + '`' + String.raw` \\ {score}`;
+        const vars = { 'title|score': '不能匹配', '.*': '不能匹配', title, score: '{title}' };
+        assert.strictEqual(loadPrompt('tests/fixtures/prompt.md', vars).trim(),
+            `标题: ${title}\n分数: {title}`);
+        assert.strictEqual(loadPrompt('tests/fixtures/prompt.md', {}).trim(), '标题: {title}\n分数: {score}');
+    });
+
+    it('Reader 正文和修复请求不改写已插入的原文、标题、草稿或反馈', () => {
+        const vars = {
+            title: '论文标题 {arxivId}', arxivId: '2610.00001',
+            sourceEvidence: '原文逐字证据 {validationFeedback} {previousDraft} {mechanicalContract}',
+            validationFeedback: '检查失败：原句含 {sourceEvidence} {previousDraft}',
+            previousDraft: '{"body":"原文示例 {mechanicalContract}"}',
+            repairTargets: '{"targets":["原句 {sourceEvidence} {mechanicalContract}"]}',
+            mechanicalContract: '长度与来源检查要求'
+        };
+        for (const file of ['prompts/api-reader-article-v2.md', 'prompts/api-reader-repair-v2.md']) {
+            const rendered = loadPrompt(file, vars);
+            for (const key of ['title', 'sourceEvidence', 'validationFeedback', 'mechanicalContract',
+                file.includes('repair') ? 'repairTargets' : 'previousDraft']) {
+                assert.ok(rendered.includes(vars[key]), `${file} 改写了 ${key}`);
+            }
+            assert.strictEqual(rendered, loadPrompt(file, Object.fromEntries(Object.entries(vars).reverse())));
+            assert.ok(!rendered.includes('## 用途'), '首围栏之外的说明不能进入模型请求');
+        }
+    });
+
+    it('评分请求保留原分析与原文里的占位符字面量', () => {
+        const vars = {
+            existingAnalysis: '已有分析含 {sourceEvidence} 与 {validationFeedback}',
+            sourceEvidence: '[SOURCE_1] 原文代码模板含 {validationFeedback}',
+            validationFeedback: '仅修改错误字段'
+        };
+        const rendered = loadPrompt('prompts/scoring-audit-v2.md', vars);
+        for (const value of Object.values(vars)) assert.ok(rendered.includes(value));
+        assert.strictEqual(rendered, loadPrompt('prompts/scoring-audit-v2.md',
+            Object.fromEntries(Object.entries(vars).reverse())));
+    });
+
     it('缺少代码块时报错', () => {
         assert.throws(
             () => loadPrompt('tests/fixtures/no-codeblock.md'),

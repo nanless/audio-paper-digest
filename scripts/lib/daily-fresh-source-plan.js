@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const Config = require('../config.js');
+const { legacyPromptRenderingNeedsReplay } = require('./prompt-rendering-contract.js');
 const { normalizedId } = require('../utils.js');
 const fresh = require('./fresh-analysis-context.js');
 const arxivSource = require('./fresh-arxiv-rewrite-source.js');
@@ -266,6 +267,7 @@ function isPaperBoundToPlan(paper, plan) {
 // 这一步只比内存里的记录。比对本身出错（证明字段缺失、类型不对）说明这篇给不出
 // 绑定证明，按未绑定处理；来源读取失败不走这条路，免得把读不出来当成来源换新。
 function paperProvesBinding(paper, plan, details) {
+    if (legacyPromptRenderingNeedsReplay(paper, details)) return false;
     try {
         const proof = paper?.freshRewriteProvenance;
         const versionMatches = details.sourceVersion
