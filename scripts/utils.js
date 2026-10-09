@@ -725,14 +725,13 @@ function parseResponseText(apiType, response) {
     if (apiType === 'anthropic') {
         if (response.content && Array.isArray(response.content) && response.content.length > 0) {
             const textBlocks = response.content
-                .filter(block => block && (block.type === 'text' || block.text))
+                .filter(block => block?.type === 'text' && typeof block.text === 'string')
                 .map(block => block.text || '')
                 .filter(Boolean);
             if (textBlocks.length > 0) {
                 return textBlocks.join('\n');
             }
-            const first = response.content[0];
-            return first.text || first.thinking || '';
+            return null;
         }
     } else if (apiType === 'openai_responses') {
         if (typeof response.output_text === 'string' && response.output_text) {
@@ -741,7 +740,7 @@ function parseResponseText(apiType, response) {
         if (Array.isArray(response.output)) {
             const textBlocks = response.output.flatMap(item => (
                 Array.isArray(item?.content) ? item.content : []
-            )).filter(block => block?.type === 'output_text' || typeof block?.text === 'string')
+            )).filter(block => block?.type === 'output_text' && typeof block.text === 'string')
                 .map(block => block.text || '')
                 .filter(Boolean);
             if (textBlocks.length > 0) return textBlocks.join('\n');
@@ -749,7 +748,7 @@ function parseResponseText(apiType, response) {
     } else {
         if (response.choices && response.choices[0]) {
             const msg = response.choices[0].message;
-            return msg.content || msg.reasoning_content || '';
+            return typeof msg?.content === 'string' && msg.content ? msg.content : null;
         }
     }
     return null;

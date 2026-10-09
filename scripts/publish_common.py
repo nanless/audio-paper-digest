@@ -5080,7 +5080,8 @@ def parse_publish_response_text(api_type, data):
             if not isinstance(item, dict):
                 continue
             for block in item.get('content') or []:
-                if isinstance(block, dict) and isinstance(block.get('text'), str):
+                if isinstance(block, dict) and block.get('type') == 'output_text' \
+                        and isinstance(block.get('text'), str):
                     parts.append(block['text'])
         return '\n'.join(part for part in parts if part).strip()
     return (data.get('choices', [{}])[0].get('message', {}).get('content') or '').strip()
