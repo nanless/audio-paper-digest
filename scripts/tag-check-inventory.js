@@ -214,7 +214,10 @@ function groupEntries(entries, currentRegistrySha256) {
             groups.set(key, group);
         }
         group.seals += 1;
-        group.statuses[entry.status] = (group.statuses[entry.status] || 0) + 1;
+        Object.defineProperty(group.statuses, entry.status, {
+            value: (Object.hasOwn(group.statuses, entry.status) ? group.statuses[entry.status] : 0) + 1,
+            enumerable: true, writable: true, configurable: true
+        });
         group.bySource[entry.source] = (group.bySource[entry.source] || 0) + 1;
         if (entry.paperId && group.samplePaperIds.length < SAMPLE_LIMIT
             && !group.samplePaperIds.includes(entry.paperId)) {
