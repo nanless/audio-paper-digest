@@ -33,7 +33,7 @@ let handlingLockSignal = false;
 
 class ArxivSourceAuthorityError extends Error {
     constructor(message) {
-        super(`arXiv source authority rejected: ${message}`);
+        super(`arXiv 官方来源核验失败： ${message}`);
         this.name = 'ArxivSourceAuthorityError';
         this.code = 'ARXIV_SOURCE_AUTHORITY_INTEGRITY';
         this.retryable = false;
@@ -51,12 +51,12 @@ function sortJsonKeys(value) {
 }
 const nowIso = value => {
     const date = value === undefined ? new Date() : new Date(value);
-    if (!Number.isFinite(date.getTime())) fail('timestamp 非法');
+    if (!Number.isFinite(date.getTime())) fail('时间格式无效');
     return date.toISOString();
 };
 
 function identityFor(arxivId) {
-    if (!identityApi.ARXIV_ID_RE.test(String(arxivId || ''))) fail('arxivId must be a normalized versionless ID');
+    if (!identityApi.ARXIV_ID_RE.test(String(arxivId || ''))) fail('arXiv ID 必须使用不带版本号的规范格式');
     return identityApi.normalizeIdentity({ contract: identityApi.CONTRACT, kind: 'arxiv',
         canonicalId: `arxiv:${arxivId}`, arxivId, conference: null, externalId: null,
         source: { status: 'official', url: `https://arxiv.org/abs/${arxivId}` }, citation: null });
@@ -66,7 +66,7 @@ function namesFor(authorityName, arxivId) {
         || !SAFE_AUTHORITY_NAME.test(String(authorityName || ''))
         || !(authorityName === `arxiv-${arxivId}.json`
             || authorityName.startsWith(`arxiv-${arxivId}-`))) {
-        fail('authorityName must be a safe direct name bound to arxivId');
+        fail('来源授权文件名必须直接对应当前 arXiv ID，且不能包含目录路径');
     }
     const stem = authorityName.slice(0, -5);
     return { authorityName, requestName: `${stem}-request.json`, observationName: `${stem}-observation.json`,
@@ -80,7 +80,7 @@ function safeRoot(root, create = false) {
         fs.mkdirSync(absolute, { recursive: true, mode: 0o700 });
     }
     const stat = fs.lstatSync(absolute);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(absolute) !== absolute) fail('authorityRoot is unsafe');
+    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(absolute) !== absolute) fail('来源授权目录必须是真实目录，不能是符号链接或包含路径跳转');
     return absolute;
 }
 function readBytes(filename, max = 64 * 1024 * 1024) {
@@ -89,9 +89,9 @@ function readBytes(filename, max = 64 * 1024 * 1024) {
         fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const stat = fs.fstatSync(fd); const named = fs.lstatSync(filename);
         if (!stat.isFile() || stat.nlink !== 1 || named.isSymbolicLink() || named.dev !== stat.dev
-            || named.ino !== stat.ino || stat.size > max) fail(`unsafe or oversized artifact: ${path.basename(filename)}`);
+            || named.ino !== stat.ino || stat.size > max) fail(`文件类型、链接关系或大小不符合要求： ${path.basename(filename)}`);
         const bytes = fs.readFileSync(fd);
-        if (bytes.length !== stat.size) fail(`构件在读取过程中发生变化：${path.basename(filename)}`);
+        if (bytes.length !== stat.size) fail(`文件在读取过程中发生变化：${path.basename(filename)}`);
         return bytes;
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
@@ -111,7 +111,7 @@ function readCanonicalJson(filename) {
     const bytes = readBytes(filename); let value;
     try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); }
     catch (error) { fail(`${path.basename(filename)} 不是严格的 JSON/UTF-8：${error.message}`); }
-    if (!bytes.equals(prettyBytes(value))) fail(`${path.basename(filename)} 不是规范化的美化 JSON`);
+    if (!bytes.equals(prettyBytes(value))) fail(`${path.basename(filename)} 未按规定的缩进和键顺序保存 JSON`);
     return { value, bytes, sha256: sha256(bytes) };
 }
 function requestFor({ arxivId, authorityName, operationId, now }) {
@@ -130,18 +130,18 @@ function validateRequest(value, expected = {}) {
     const rebuilt = requestFor({ arxivId: value?.arxivId, authorityName: value?.authorityName,
         operationId: value?.operationId, now: value?.requestedAt });
     if (stableHash(value) !== stableHash(rebuilt) || value.requestSha256 !== rebuilt.requestSha256) fail('请求格式或按记录内容计算的 SHA 不一致');
-    if (expected.arxivId && value.arxivId !== expected.arxivId) fail('request 属于另一个 arXiv ID');
-    if (expected.authorityName && value.authorityName !== expected.authorityName) fail('request 属于另一个 authority 名称');
+    if (expected.arxivId && value.arxivId !== expected.arxivId) fail('来源请求属于另一个 arXiv ID');
+    if (expected.authorityName && value.authorityName !== expected.authorityName) fail('来源请求对应另一个授权文件名');
     return rebuilt;
 }
 function normalizeFetchedSource(details, arxivId, fetchedAt) {
-    if (!details || typeof details !== 'object' || Array.isArray(details)) fail('官方抓取未返回 source 对象');
+    if (!details || typeof details !== 'object' || Array.isArray(details)) fail('官方抓取未返回来源信息对象');
     if (Object.keys(details).some(key => /^(?:analysis|parsed$|apiReader|freshRewrite|freshSource)/.test(key))) {
-        fail('official source adapter rejects generated analysis or Reader fields');
+        fail('官方抓取结果不能包含分析结果、导读或其他生成记录的字段');
     }
     if (!['html', 'pdf'].includes(details.source) || typeof details.text !== 'string') fail('官方抓取未返回 HTML/PDF 全文');
     const sourceId = String(details.sourceId || '');
-    if (sourceId.replace(/v\d+$/i, '') !== arxivId) fail('official fetch sourceId belongs to another paper');
+    if (sourceId.replace(/v\d+$/i, '') !== arxivId) fail('官方抓取结果的来源 ID 属于另一篇论文');
     let nonWhitespace = 0; for (const character of details.text) if (!/\s/u.test(character)) nonWhitespace += 1;
     if (nonWhitespace < authorityApi.MIN_FULLTEXT_CHARACTERS) fail('官方抓取的全文短于来源核验要求的最低长度');
     const structuredArtifacts = details.structuredArtifacts;
@@ -153,9 +153,9 @@ function normalizeFetchedSource(details, arxivId, fetchedAt) {
     if (!/^[a-f0-9]{64}$/.test(String(payloadSha256 || ''))
         || payloadSha256 !== sha256(JSON.stringify(artifactBody))
         || structuredArtifacts.flattenedTextSha256 !== sha256(details.text)) {
-        fail('官方抓取的结构化来源哈希未绑定全文');
+        fail('官方抓取的结构化来源 SHA-256 格式无效、与内容不符，或其全文 SHA-256 与正文不一致');
     }
-    // 先按规范对 JSON 的键排序，再保存来源对象；后续须按相同字节重新计算 SHA。
+    // 先按固定顺序排列 JSON 的键，再保存来源对象；后续须按相同字节重新计算 SHA。
     const durableArtifactBody = sortJsonKeys(artifactBody);
     const durableStructuredArtifacts = { ...durableArtifactBody,
         payloadSha256: sha256(JSON.stringify(durableArtifactBody)) };
@@ -223,26 +223,26 @@ function validateLockOwner(value, arxivId) {
     }
     return value;
 }
-function inspectLockDirectory(lockPath, arxivId, label = 'source operation lock') {
+function inspectLockDirectory(lockPath, arxivId, label = '来源操作锁') {
     const directory = fs.lstatSync(lockPath);
     if (!directory.isDirectory() || directory.isSymbolicLink() || fs.realpathSync(lockPath) !== lockPath) {
-        fail(`${label} is not a canonical directory`);
+        fail(`${label} 必须是真实目录，不能是符号链接或包含路径跳转`);
     }
     if (process.platform !== 'win32' && (directory.mode & 0o777) !== 0o700) {
         fail(`${label} 权限必须是 0700`);
     }
     const entries = fs.readdirSync(lockPath).sort();
     if (entries.length > 1 || entries.length === 1 && entries[0] !== 'owner.json') {
-        fail(`${label} contains unexpected entries`);
+        fail(`${label} 包含非预期的文件或目录`);
     }
     if (!entries.length) return { kind: 'empty', lockPath, arxivId, directoryDev: directory.dev,
         directoryIno: directory.ino, directoryMtimeMs: directory.mtimeMs, entries };
     const ownerPath = path.join(lockPath, 'owner.json'); const ownerInfo = fs.lstatSync(ownerPath);
     if (!ownerInfo.isFile() || ownerInfo.isSymbolicLink() || ownerInfo.nlink !== 1) {
-        fail(`${label} owner is not a private regular file`);
+        fail(`${label} 持有者记录必须是普通文件，不能是符号链接或有其他硬链接`);
     }
     if (process.platform !== 'win32' && (ownerInfo.mode & 0o777) !== 0o600) {
-        fail(`${label} owner permissions must be 0600`);
+        fail(`${label} 持有者记录权限必须是 0600`);
     }
     let bytes; let record = null;
     try {
@@ -298,7 +298,7 @@ function removeExactLockDirectory(snapshot, label, options = {}) {
     options.beforeInspect?.(snapshot, label);
     const current = inspectLockDirectory(snapshot.lockPath, snapshot.arxivId, label);
     if (!sameLockSnapshot(snapshot, current, { includeLeaseMtime: options.includeLeaseMtime === true })) {
-        fail(`${label} changed before removal`);
+        fail(`${label} 在删除前发生变化`);
     }
     if (options.requireReclaimable === true
         && !lockSnapshotIsReclaimable(current, options.dependencies || {})) {
@@ -344,10 +344,10 @@ function createLockDirectory(lockPath, arxivId, dependencies = {}) {
 }
 function clearOrRejectReclaimMarker(reclaimPath, arxivId, dependencies = {}) {
     let marker;
-    try { marker = inspectLockDirectory(reclaimPath, arxivId, 'source lock reclaim marker'); }
+    try { marker = inspectLockDirectory(reclaimPath, arxivId, '来源锁回收标记'); }
     catch (error) { if (error.code === 'ENOENT') return; throw error; }
-    if (!lockSnapshotIsReclaimable(marker, dependencies)) fail(`source lock reclaim is active: ${arxivId}`);
-    removeExactLockDirectory(marker, 'source lock reclaim marker', {
+    if (!lockSnapshotIsReclaimable(marker, dependencies)) fail(`来源锁正在被回收： ${arxivId}`);
+    removeExactLockDirectory(marker, '来源锁回收标记', {
         includeLeaseMtime: true, requireReclaimable: true, dependencies
     });
 }
@@ -374,7 +374,7 @@ function handleLockSignal(signal) {
 }
 function installLockSignalHandlers() {
     if (lockSignalHandlersInstalled) return;
-    // 要在调用方安装的 once/on handler 之前执行，这样它们的注册仍然可观察，清理时
+    // 要在调用方注册的信号处理函数之前执行，才能确认是否还有其他处理函数，清理时
     // 也不会替它们重新发出本想自己处理的信号。
     for (const signal of LOCK_SIGNALS) process.prependListener(signal, handleLockSignal);
     lockSignalHandlersInstalled = true;
@@ -404,7 +404,7 @@ function acquireLock(root, arxivId, dependencies = {}) {
             ACTIVE_LOCK_HANDLES.add(handle); installLockSignalHandlers(); return handle;
         } catch (error) { if (error.code !== 'EEXIST') throw error; }
         const stale = inspectLockDirectory(lockPath, arxivId);
-        if (!lockSnapshotIsReclaimable(stale, dependencies)) fail(`source operation is locked: ${arxivId}`);
+        if (!lockSnapshotIsReclaimable(stale, dependencies)) fail(`来源操作锁仍被占用： ${arxivId}`);
         let reclaim;
         try { reclaim = createLockDirectory(reclaimPath, arxivId, dependencies); }
         catch (error) { if (error.code === 'EEXIST') continue; throw error; }
@@ -416,36 +416,36 @@ function acquireLock(root, arxivId, dependencies = {}) {
                 || !lockSnapshotIsReclaimable(current, dependencies)) {
                 fail('来源操作锁在过期回收期间发生变化');
             }
-            removeExactLockDirectory(current, 'source operation lock', {
+            removeExactLockDirectory(current, '来源操作锁', {
                 includeLeaseMtime: true,
                 requireReclaimable: true,
                 dependencies,
                 beforeInspect: dependencies.beforeReclaimRemoval
             });
-        } finally { removeExactLockDirectory(reclaim, 'source lock reclaim marker'); }
+        } finally { removeExactLockDirectory(reclaim, '来源锁回收标记'); }
     }
-    fail(`来源锁获取超出有界回收尝试次数：${arxivId}`);
+    fail(`来源锁获取已超过允许的回收尝试次数：${arxivId}`);
 }
 function beginLockOperation(handle) {
     if (!handle || typeof handle !== 'object' || !LOCK_HANDLES.has(handle)) {
-        fail('authenticated source lock handle required');
+        fail('必须使用本次程序实际取得的来源锁对象');
     }
     LOCK_HANDLE_DATA.get(handle).operationActive = true;
 }
 function assertLockWritable(handle) {
-    if (STOPPING_LOCK_HANDLES.has(handle)) fail('source operation is stopping after process signal');
+    if (STOPPING_LOCK_HANDLES.has(handle)) fail('收到进程信号，正在停止来源操作');
     if (!handle || typeof handle !== 'object' || !LOCK_HANDLES.has(handle)) {
         fail('来源操作锁已不再持有');
     }
 }
 function releaseLock(handle) {
-    if (!handle || typeof handle !== 'object' || !LOCK_HANDLES.has(handle)) fail('authenticated source lock handle required');
+    if (!handle || typeof handle !== 'object' || !LOCK_HANDLES.has(handle)) fail('必须使用本次程序实际取得的来源锁对象');
     const expected = LOCK_HANDLE_DATA.get(handle); const current = inspectLockDirectory(expected.lockPath, expected.arxivId);
     if (!sameLockSnapshot(expected.snapshot, current) || current.record?.token !== expected.snapshot.record?.token
         || current.record?.pid !== process.pid || current.record?.hostname !== os.hostname()) {
-        fail('source operation lock changed while held');
+        fail('持有期间来源操作锁发生变化');
     }
-    clearInterval(expected.heartbeat); removeExactLockDirectory(current, 'source operation lock');
+    clearInterval(expected.heartbeat); removeExactLockDirectory(current, '来源操作锁');
     ACTIVE_LOCK_HANDLES.delete(handle); LOCK_HANDLES.delete(handle); LOCK_HANDLE_DATA.delete(handle);
     if (ACTIVE_LOCK_HANDLES.size === 0 && !handlingLockSignal) setImmediate(() => {
         if (ACTIVE_LOCK_HANDLES.size === 0 && !handlingLockSignal) uninstallLockSignalHandlers();
@@ -476,12 +476,12 @@ function replayProductionAuthorityHandle(handle) {
     const replayed = authorityApi.replayAuthorityHandle(stored.genericHandle);
     const current = authorityApi.authorityHandleSnapshot(replayed);
     const expected = { ...clone(stored.publicSnapshot), productionAuthorized: false };
-    if (stableHash(current) !== stableHash(expected)) fail('实时官方 authority 证据在抓取后发生变化');
+    if (stableHash(current) !== stableHash(expected)) fail('本次官方来源授权记录在抓取后发生变化');
     return handle;
 }
 
 function readLiveProductionSourceDetails(handle) {
-    if (!replayProductionAuthorityHandle(handle)) fail('live production-authorized arXiv source handle required');
+    if (!replayProductionAuthorityHandle(handle)) fail('必须使用本次官方抓取已核验且允许正式分析读取的来源对象');
     const stored = PRODUCTION_HANDLE_DATA.get(handle);
     const details = clone(stored.sourceDetails);
     if (sha256(Buffer.from(details.text, 'utf8')) !== stored.publicSnapshot.fulltextSha256
@@ -554,7 +554,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
         if (fs.existsSync(authorityFile)) {
             const generic = authorityApi.loadAuthorityHandle({ authorityRoot: root, authorityName });
             const snapshot = authorityApi.authorityHandleSnapshot(generic);
-            if (snapshot.authority.paperId !== planned.paperId) fail('已存在的 authority 属于另一个 arXiv 来源');
+            if (snapshot.authority.paperId !== planned.paperId) fail('已有来源授权记录属于另一个 arXiv 来源');
             if (!requireLiveAuthorization) return { ...planned, status: 'recovered', authorityHandle: generic, authority: snapshot };
             const fetched = normalizeFetchedSource(
                 await require('../deep-analyzer.js').fetchArxivTextDetailedUncached(arxivId), arxivId, now);
@@ -564,7 +564,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
             const comparable = value => { const copy = clone(value); delete copy.fetchedAt; delete copy.observationSha256; return copy; };
             if (!persistedText.equals(Buffer.from(fetched.text, 'utf8'))
                 || stableHash(comparable(persistedObservation)) !== stableHash(comparable(fetched.observation))) {
-                fail('实时官方重新抓取与持久化来源包不一致；请评审后用另一个名称新建 authority');
+                fail('本次官方重新抓取与已保存的来源文件不一致；请审查后用另一个名称新建来源授权记录');
             }
             const handle = liveProductionHandle(generic, fetched.sourceDetails);
             return { ...planned, status: 'live-verified', authorityHandle: handle,
@@ -577,7 +577,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
             writeArtifact(observationFile, prettyBytes(observation));
             writeArtifact(fulltextFile, Buffer.from(text, 'utf8'));
         } else if (fs.existsSync(observationFile) || fs.existsSync(fulltextFile)) {
-            if (!fs.existsSync(observationFile) || !fs.existsSync(fulltextFile)) fail('partial source evidence requires operator review');
+            if (!fs.existsSync(observationFile) || !fs.existsSync(fulltextFile)) fail('来源文件不完整，需要人工检查');
             observation = readCanonicalJson(observationFile).value; text = new TextDecoder('utf-8', { fatal: true }).decode(readBytes(fulltextFile));
             if (observation.paperId !== planned.paperId || observation.observationSha256 !== stableHash((({ observationSha256: _, ...body }) => body)(observation))) fail('缓存的来源观测发生变化');
         } else {
@@ -630,7 +630,7 @@ async function prepareArxivSourceAuthority({ authorityRoot, arxivId, authorityNa
             const comparable = value => { const copy = clone(value); delete copy.fetchedAt; delete copy.observationSha256; return copy; };
             if (!fulltextBytes.equals(Buffer.from(fetched.text, 'utf8'))
                 || stableHash(comparable(observation)) !== stableHash(comparable(fetched.observation))) {
-                fail('实时官方重新抓取与恢复出的持久化来源包不一致');
+                fail('本次官方重新抓取与恢复出的已保存来源文件不一致');
             }
             liveSourceDetails = fetched.sourceDetails;
         }

@@ -17,7 +17,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 - `package.json` 是命令别名的权威清单。直接执行任意项目脚本仍必须遵守项目根
   `AGENTS.md` 的工作区角色、沙箱外运行、代理、凭据与发布要求。
 - 本目录中的 `analysis-contract.js`、`validate-data-files.js` 和博客发布模块仍会读取
-  `manual/`，用来复验已有的 Manual 产物；这是共享兼容边界，默认 API 不会因此启动
+  `manual/`，用来重新核验已保存的 Manual 结果；这是共享兼容边界，默认 API 不会因此启动
   Manual 写作流程。
 
 | 需求 | 推荐入口 |
@@ -71,7 +71,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/prompt-text-versions.js` | Node 库 | 登记每个分析阶段当前使用的提示词正文路径和版本标识。旧记录按自己声明的版本取冻结的 v1 路径复算，未知版本直接报错；深度分析按它选正文，会议与 manual 的指纹也按它决定要哈希哪份文件。 |
 | `lib/prompt-rendering-contract.js` | Node 库 | 识别旧提示词替换可能改写的输入，仅使受影响论文的旧阶段失效；正常输入继续沿用原指纹和恢复记录。 |
 | `lib/model-text-sanitization.js` | Node 库 | 记录保留合法 Unicode 字符的请求清洗版本；生产恢复、提升和暂存核验当前来源，旧受影响输入须重分析，缺少受控来源不能推定可复用。旧成功结构和已发布只读状态不改。 |
-| `lib/reader-author-parser.js` | Node 库 | 从原始材料重新解析并核验作者：校验完整原 HTML、结构产物及全文 SHA，或从会议 PDF 文本重新解析作者上标；原文不可得时只使用元数据姓名和明确不可得机构。不会加载配置或请求模型。 |
+| `lib/reader-author-parser.js` | Node 库 | 从原始材料重新解析并核验作者：校验完整原 HTML、结构化解析结果及全文 SHA，或从会议 PDF 文本重新解析作者上标；原文不可得时只使用元数据姓名和明确不可得机构。不会加载配置或请求模型。 |
 | `lib/reader-author-source.js` | Node 库 | 当前生产 Reader 作者复用资格；跳过已完成分析、恢复历史/会议任务及发布前，必须从已核验的原始材料重新解析并核验作者，保留旧成功结构与只读统计。 |
 | `lib/reader-author-replay-cli.js` | Node 子进程入口 | 供 Python 发布器调用的本地作者核验入口；只读取调用方传入的私有文件，限制输入字节并只输出布尔核验结果。 |
 | `lib/conference-publication-author-source.js` | Node 库 | 只读核验官方元数据、PDF、已有抽取来源与分析凭证，核完整姓名及作者机构；不新建来源、不重抽 PDF 或请求模型。 |
@@ -213,7 +213,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `historical-arxiv-publication-metadata.js` | 默认对直接重写计划全部 arXiv 论文预览或批量封存官方 Atom 附件。只复用满足当前论文版本和时间窗的原始 Atom，其余按封存来源 ID 经公共 CONNECT 适配器精确获取，不调用模型。瞬时失败最多重试三次；单篇耗尽后继续整批，最后报告 partial 并非零退出。失败项不生成附件，重跑只补缺失项。 |
 | `historical-direct-aggregate.js` | 为直接重写中已完成的论文记录生成可重新核验的日汇总或会议汇总私有页面。 |
 | `historical-direct-tag-supplement.js` | 在当前工作区生成不可变分类补充和报告，不修改博客页面或发布状态。所需计划、词表、博客、快照及运行参数见本页的历史补充维护说明。 |
-| `historical-source-tag-assignment.js` | 在当前工作区按原文生成分类补充，逐请求保存选择、审查和决定的检查点。同 UUID 核验输入后续跑；账号耗尽只保存编号 partial，不占用最终产物。参数见本页的历史补充维护说明。 |
+| `historical-source-tag-assignment.js` | 在当前工作区按原文生成分类补充，逐请求保存选择、审查和决定的检查点。同 UUID 核验输入后续跑；账号耗尽只保存编号 partial，不占用最终分类结果文件。参数见本页的历史补充维护说明。 |
 | `historical-source-identity-supplement.js` | 在当前工作区核验全部封存来源和没有正式分类记录的旧页，生成独立不可变身份证明，保留会议来源与论文版本披露，不请求模型。参数见本页的历史补充维护说明。 |
 | `historical-tag-checkpoint-export.js` | 从分类检查点或部分运行记录导出页面分类记录和处理报告，保留原分类缓存，不调用模型。恢复、排除集合和新运行参数见本页的历史补充维护说明。 |
 | `historical-direct-control.js` | 提供全历史长任务控制：`history:status` 单次或持续只读汇总任务登记记录、暂停、锁、覆盖率、汇总结果和发布阻断项；`history:pause` 保存对应计划与获取序号的停止请求；`history:resume` 只在操作锁释放后恢复。 |
@@ -306,7 +306,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
   [`manual/scripts/`](../manual/scripts/)；对应测试在
   [`manual/tests/`](../manual/tests/)。
 - `scripts/analysis-contract.js` 与 `scripts/validate-data-files.js` 会导入 Manual
-  核验器，让默认工具能读取已有产物，同时拒绝损坏的历史产物。
+  核验器，让默认工具能读取已保存的 Manual 结果，同时拒绝损坏的旧结果。
 - 博客共享层同样保留 Manual 只读验证，但默认 `digest:prepare` 不会调用 Manual 的
   写作、任务注册或结果写入入口。
 
@@ -523,7 +523,7 @@ npm run history:tag-checkpoint-export -- --plan ABS --registry ABS --blog ABS --
 
 来源身份补充的新记录、检查点、总文件和报告使用 `historical-source-identity-supplement-v2`，标签状态字段为 `tagStatus`。重跑同一运行标识时，若已有完整总文件和报告，会先核对原摘要、来源、页面、正文和计划，再按其原格式复算；全部字节一致才复用，原文件不改写。缺少完整输出、只有旧格式的部分检查点或文件校验失败时，命令停止，应保留原文件并使用新的运行标识。新版部分检查点仍按原续跑规则处理。身份核验不请求模型，标签分类和正文审查仍要单独做。
 
-运行时保存论文选择集合，以及标签选择响应、独立审核和分类决策的检查点。使用同一 UUID 继续运行时，仍须核对输入；账号用量耗尽后保存编号的部分运行记录，不占用最终产物文件。导出器读取并核验分类检查点或部分运行记录，核验已接受的分类缓存后导出页面分类记录。报告同时保留失败项和未处理论文，不请求模型。
+运行时保存论文选择集合，以及标签选择响应、独立审核和分类决策的检查点。使用同一 UUID 继续运行时，仍须核对输入；账号用量耗尽后保存编号的部分运行记录，不占用最终分类结果文件。导出器读取并核验分类检查点或部分运行记录，核验已接受的分类缓存后导出页面分类记录。报告同时保留失败项和未处理论文，不请求模型。
 
 暂停后重跑原 UUID 可继续分类。要从正规 checkpoint 开始新的论文集合，使用
 `--resume-after-checkpoint ABS --resume-after-export ABS`；partial 不能当作续跑 checkpoint。

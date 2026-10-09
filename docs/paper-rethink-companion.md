@@ -135,7 +135,7 @@ HTTPS 到 HTTP loopback 导航可能使浏览器移除 referrer，它既可缺�
 
 ### `POST /v1/zotero/import`
 
-接口只允许精确本机 UI Origin 和进程随机 session header。界面显示即将写入的标题、arXiv ID、作者来源和目标；用户确认后才消费十分钟有效、单次使用的随机 ticket，最多 128 个并存。服务先作废票据，再尝试导入；网络结果不确定时不能复用同票据自动重写。
+接口只允许精确本机 UI Origin 和进程随机 session header。界面显示即将写入的标题、arXiv ID、作者来源和目标；用户确认后，才接受有效期十分钟、只能使用一次的随机导入票据（`ticket`），最多 128 个并存。服务先作废票据，再尝试导入；网络结果不确定时不能复用同票据自动重写。
 
 服务以 BibTeX 请求固定 `127.0.0.1:23119/connector/import`，写入 Zotero 当前选中的库或分类。对 Zotero 10 的本机 HTTP 加固还发送 `Zotero-Allowed-Request: true`。公共博客不能取得本机 UI 的 origin/session 条件，也不共享它的票据、端口或权限。
 

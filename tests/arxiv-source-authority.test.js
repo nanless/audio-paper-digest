@@ -78,8 +78,8 @@ test('预演只校验直连身份和名称，不联网也不写文件', async t 
     const result = await api.prepareArxivSourceAuthority({ authorityRoot: root, arxivId: '2601.00001',
         authorityName: 'arxiv-2601.00001.json' });
     assert.equal(result.status, 'dry-run'); assert.equal(calls, 0); assert.equal(fs.existsSync(root), false);
-    assert.throws(() => api.namesFor('../escape.json', '2601.00001'), /safe direct/);
-    assert.throws(() => api.identityFor('2601.00001v2'), /versionless/);
+    assert.throws(() => api.namesFor('../escape.json', '2601.00001'), /文件名必须直接对应当前 arXiv ID/);
+    assert.throws(() => api.identityFor('2601.00001v2'), /不带版本号的规范格式/);
 });
 
 test('实际执行保留请求、来源、快照、凭证和授权，恢复时不重新抓取', async t => {
@@ -105,7 +105,7 @@ test('实际执行保留请求、来源、快照、凭证和授权，恢复时�
     assert.throws(() => authorityApi.replayAuthorityHandle(recovered.authorityHandle, { requireProduction: true }), /production-authorized/);
     const durableOnly = authorityApi.loadAuthorityHandle({ authorityRoot: root, authorityName: options.authorityName });
     assert.equal(authorityApi.authorityHandleSnapshot(durableOnly).productionAuthorized, false);
-    assert.throws(() => api.readLiveProductionSourceDetails(durableOnly), /authenticated paper source authority handle|required/);
+    assert.throws(() => api.readLiveProductionSourceDetails(durableOnly), /本次官方抓取已核验且允许正式分析读取的来源对象/);
     const live = await api.prepareArxivSourceAuthority({ ...options, requireLiveAuthorization: true });
     assert.equal(live.status, 'live-verified'); assert.equal(calls, 2);
     assert.equal(authorityApi.authorityHandleSnapshot(
@@ -133,9 +133,9 @@ test('来源配对不完整时直接失败，生成的字段和来源别名一�
     fs.writeFileSync(path.join(root, names.fulltextName), 'partial', { mode: 0o600 });
     mockOfficialFetcher(t, async () => source());
     await assert.rejects(api.prepareArxivSourceAuthority({ authorityRoot: root, arxivId: '2601.00001',
-        authorityName: names.authorityName, apply: true }), /partial source evidence/);
-    assert.throws(() => api.normalizeFetchedSource({ ...source(), analysis: 'old prose' }, '2601.00001', stamp), /generated/);
-    assert.throws(() => api.normalizeFetchedSource(source('2601.99999'), '2601.00001', stamp), /another paper/);
+        authorityName: names.authorityName, apply: true }), /来源文件不完整，需要人工检查/);
+    assert.throws(() => api.normalizeFetchedSource({ ...source(), analysis: 'old prose' }, '2601.00001', stamp), /不能包含分析结果、导读或其他生成记录的字段/);
+    assert.throws(() => api.normalizeFetchedSource(source('2601.99999'), '2601.00001', stamp), /来源 ID 属于另一篇论文/);
 });
 
 test('命令行只接受显式模式、归一化 ID 和直连授权名称', async t => {
@@ -149,11 +149,11 @@ test('命令行只接受显式模式、归一化 ID 和直连授权名称', asyn
 test('来源锁用不透明的精确持有者释放，拒绝 ABA 式替换', t => {
     const root = fixture(t); const target = lockPath(root);
     const first = api.acquireLock(root, '2601.00001');
-    assert.throws(() => api.releaseLock(target), /authenticated source lock handle/);
+    assert.throws(() => api.releaseLock(target), /本次程序实际取得的来源锁对象/);
     const displaced = `${target}.displaced`; fs.renameSync(target, displaced);
     const second = api.acquireLock(root, '2601.00001');
     const replacement = fs.readFileSync(path.join(target, 'owner.json'));
-    assert.throws(() => api.releaseLock(first), /changed while held/);
+    assert.throws(() => api.releaseLock(first), /持有期间来源操作锁发生变化/);
     assert.deepEqual(fs.readFileSync(path.join(target, 'owner.json')), replacement);
     api.releaseLock(second); assert.equal(fs.existsSync(target), false);
     fs.renameSync(displaced, target); api.releaseLock(first);
@@ -164,40 +164,40 @@ test('过期的空锁、无效锁和远端锁可以精确恢复，但新鲜的�
     writeLock(root, id, { empty: true }); let handle = api.acquireLock(root, id); api.releaseLock(handle);
     writeLock(root, id, { invalid: true }); handle = api.acquireLock(root, id); api.releaseLock(handle);
     writeLock(root, id, { hostname: 'another-host.example', stale: false });
-    assert.throws(() => api.acquireLock(root, id), /source operation is locked/);
+    assert.throws(() => api.acquireLock(root, id), /来源操作锁仍被占用/);
     fs.unlinkSync(path.join(lockPath(root, id), 'owner.json')); fs.rmdirSync(lockPath(root, id));
     writeLock(root, id, { hostname: 'another-host.example' }); handle = api.acquireLock(root, id); api.releaseLock(handle);
 
     writeLock(root, id, { invalid: true, stale: false });
-    assert.throws(() => api.acquireLock(root, id), /source operation is locked/);
+    assert.throws(() => api.acquireLock(root, id), /来源操作锁仍被占用/);
     fs.unlinkSync(path.join(lockPath(root, id), 'owner.json')); fs.rmdirSync(lockPath(root, id));
     writeLock(root, id); fs.chmodSync(path.join(lockPath(root, id), 'owner.json'), 0o644);
-    assert.throws(() => api.acquireLock(root, id), /permissions must be 0600/);
+    assert.throws(() => api.acquireLock(root, id), /持有者记录权限必须是 0600/);
     fs.unlinkSync(path.join(lockPath(root, id), 'owner.json')); fs.rmdirSync(lockPath(root, id));
     const linkedOwner = path.join(root, 'linked-owner.json'); fs.writeFileSync(linkedOwner, '{}', { mode: 0o600 });
     fs.mkdirSync(lockPath(root, id), { mode: 0o700 }); fs.linkSync(linkedOwner, path.join(lockPath(root, id), 'owner.json'));
-    assert.throws(() => api.acquireLock(root, id), /private regular file/);
+    assert.throws(() => api.acquireLock(root, id), /持有者记录必须是普通文件/);
     assert.equal(fs.readFileSync(linkedOwner, 'utf8'), '{}');
     fs.unlinkSync(path.join(lockPath(root, id), 'owner.json')); fs.rmdirSync(lockPath(root, id));
     fs.symlinkSync(root, lockPath(root, id), 'dir');
-    assert.throws(() => api.acquireLock(root, id), /not a canonical directory/);
+    assert.throws(() => api.acquireLock(root, id), /必须是真实目录/);
     fs.unlinkSync(lockPath(root, id));
     const protectedLock = writeLock(root, id, { extra: true });
-    assert.throws(() => api.acquireLock(root, id), /unexpected entries/);
+    assert.throws(() => api.acquireLock(root, id), /包含非预期的文件或目录/);
     assert.equal(fs.readFileSync(path.join(protectedLock, 'extra'), 'utf8'), 'do not delete');
 });
 
 test('过期的本地存活或 EPERM 持有者绝不回收，只有 ESRCH 才允许接管', t => {
     const root = fixture(t); const id = '2601.00001';
     writeLock(root, id, { pid: process.pid });
-    assert.throws(() => api.acquireLock(root, id), /source operation is locked/);
+    assert.throws(() => api.acquireLock(root, id), /来源操作锁仍被占用/);
     fs.unlinkSync(path.join(lockPath(root, id), 'owner.json')); fs.rmdirSync(lockPath(root, id));
 
     writeLock(root, id);
     const denied = new Error('not permitted'); denied.code = 'EPERM';
     assert.throws(() => api.acquireLock(root, id, {
         processKill() { throw denied; }
-    }), /source operation is locked/);
+    }), /来源操作锁仍被占用/);
     assert.equal(fs.existsSync(path.join(lockPath(root, id), 'owner.json')), true);
     fs.unlinkSync(path.join(lockPath(root, id), 'owner.json')); fs.rmdirSync(lockPath(root, id));
 
@@ -212,11 +212,11 @@ test('回收 CAS 与最终删除之间有心跳时，保留续期后的锁', t =
     let injected = 0;
     assert.throws(() => api.acquireLock(root, id, {
         beforeReclaimRemoval(_snapshot, label) {
-            if (label !== 'source operation lock') return;
+            if (label !== '来源操作锁') return;
             injected += 1;
             const now = new Date(); fs.utimesSync(path.join(target, 'owner.json'), now, now);
         }
-    }), /changed before removal|renewed/);
+    }), /在删除前发生变化|已被续期/);
     assert.equal(injected, 1);
     assert.equal(fs.existsSync(path.join(target, 'owner.json')), true);
     assert.equal(fs.existsSync(`${target}.reclaim`), false);
@@ -242,7 +242,7 @@ test('两个过期回收者串行执行；默认 SIGTERM 只释放胜出的那�
     assert.equal(settled.filter(item => item.status === 'rejected').length, 1);
     const winner = settled[0].status === 'fulfilled' ? left : right;
     const loser = winner === left ? right : left;
-    assert.match(loser.stderr(), /locked|reclaim/);
+    assert.match(loser.stderr(), /仍被占用|正在被回收/);
     winner.child.kill('SIGTERM'); const [code, signal] = await once(winner.child, 'exit');
     assert.equal(code, null); assert.equal(signal, 'SIGTERM');
     assert.equal(fs.existsSync(lockPath(root, id)), false);
@@ -292,7 +292,7 @@ test('调用方装了处理器时，SIGTERM 会保留进行中的抓取锁，并
     const [code, signal] = await once(child, 'exit');
     assert.deepEqual({ code, signal }, { code: 0, signal: null });
     const state = fs.readFileSync(marker, 'utf8');
-    assert.match(state, /^held\|.*stopping after process signal\|unlocked$/);
+    assert.match(state, /^held\|.*收到进程信号，正在停止来源操作\|unlocked$/);
     assert.equal(fs.existsSync(lockPath(root, id)), false);
     assert.equal(fs.existsSync(path.join(root, `arxiv-${id}-observation.json`)), false);
     assert.equal(fs.existsSync(path.join(root, `arxiv-${id}-fulltext.txt`)), false);
@@ -307,7 +307,7 @@ test('来源名称必须绑定完整 arXiv ID，错误名称在预演和创建�
             const root = path.join(parent, `missing-${apply}-${arxivId}`);
             await assert.rejects(api.prepareArxivSourceAuthority({
                 authorityRoot: root, arxivId, authorityName: 'arxiv-2601.12345.json', apply
-            }), /safe direct/);
+            }), /文件名必须直接对应当前 arXiv ID/);
             assert.equal(fs.existsSync(root), false);
         }
     }

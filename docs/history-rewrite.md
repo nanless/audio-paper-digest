@@ -71,7 +71,7 @@ npm run history:direct-plan -- --apply \
 
 主评分行路线抓取失败时写入 v2 交接，附完整评分行绑定；原单提示路线仍使用原字节格式的 v1 交接。备用 `history:arxiv-batch` 在新请求前读取当前配置下的冻结清单与凭证，核对 crosswalk 的完整候选集合，再按原页面 SHA 和评分行字节重建绑定。只有这些检查全部通过，才生成携带该绑定的 v2 crosswalk 决策，并在锁内应用前再次重核；普通多候选页面仍须走显式身份裁定。缺少冻结清单、原页或证明时明确停止，不按候选优先级选择论文。
 
-没有冻结历史页面对应关系的来源记录不进入抓取、crosswalk 或模型队列。反过来，没有可用来源的冻结论文页须出现在 `uncoveredFrozenPaperPages` 和 `paperPageCoverage`，记录页面与内容 SHA、范围及身份线索状态，并按范围和状态统计。`none/conflict/multiple` 是待处理问题，不能据此猜身份。`--apply` 还会保存与计划 SHA 绑定的不可变 `historical-direct-rewrite-unprojected-catalog-report-v1`，记录未投影来源的论文 ID、来源类型和原因；该报告不是待执行任务清单。
+没有冻结历史页面对应关系的来源记录不进入抓取、crosswalk 或模型队列。反过来，没有可用来源的冻结论文页须出现在 `uncoveredFrozenPaperPages` 和 `paperPageCoverage`，记录页面与内容 SHA、范围及身份线索状态，并按范围和状态统计。`none/conflict/multiple` 是待处理问题，不能据此猜身份。`--apply` 还会保存与计划 SHA 绑定的不可变 `historical-direct-rewrite-unprojected-catalog-report-v1`，记录未找到对应冻结历史页面的来源所涉及的论文 ID、来源类型和原因；该报告不是待执行任务清单。
 
 ## 会议 PDF 与特殊来源
 
@@ -118,7 +118,7 @@ arXiv 来源并发默认 3，会议来源并发默认 5，各可设为 1–8。�
 
 ### 官方摘要与论文信息
 
-arXiv 单篇页研究工作区展示的原始摘要统一来自官方 Atom 附属文件。`source.txt` 的有界 Abstract 解析只作诊断，不能替代发布来源。计划中的 arXiv 论文都不得使用旧博客、爬虫或模型生成的摘要。
+arXiv 单篇页研究工作区展示的原始摘要统一来自官方 Atom 附属文件。从 `source.txt` 中限定范围提取 Abstract 只作诊断，不能替代发布来源。计划中的 arXiv 论文都不得使用旧博客、爬虫或模型生成的摘要。
 
 ```bash
 npm run history:publication-metadata -- --dry-run --plan /absolute/path/direct-rewrite-plan-v5.json \
@@ -135,7 +135,7 @@ socket、DNS、超时和 HTTP 408/425/429/5xx 在共享主机调度器内最多�
 
 `direct-run` 在分析前预检、暂存时再次读取这些文件。已暂存任务恢复、汇总及最终发布也重新读取并校验原始 Atom 响应；缺失、额外文件、权限不符、硬链接、ID、获取序号或 SHA 与原记录不同均拒绝。
 
-现行 `official-arxiv-atom-metadata-v1` 的字段投影保留原 XML 实体写法及作者空白，避免改变已封存记录的 SHA。解析仍先严格核验完整 XML 与论文身份；命名空间或属性写法无法按既有字段规则重新解析并得到原记录时，明确拒绝。正常日更抓取使用解码后的 XML 字段；若更改官方元数据投影语义，须另立协议版本并保留 v1 读取，不能直接重算旧记录证明。
+现行 `official-arxiv-atom-metadata-v1` 提取字段时保留原 XML 实体写法及作者空白，避免改变已封存记录的 SHA。解析仍先严格核验完整 XML 与论文身份；命名空间或属性写法无法按既有字段规则重新解析并得到原记录时，明确拒绝。正常日更抓取使用解码后的 XML 字段；若更改从官方元数据提取字段的规则，须另立协议版本并保留 v1 读取，不能直接重算旧记录证明。
 
 ### 分析与暂存页面
 
@@ -234,7 +234,7 @@ npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v5.json --ge
 
 不传 `--publication-id` 时，不读取发布事务或访问远端，状态不会把未选择发布的任务算作完整发布。指定后深核全部来源，要求发布计划 SHA 对应当前历史计划，默认实时核验远端身份及 OID；发布终验不能与 watch 同用。`--live-remote false` 仅作离线诊断，不能产生完整发布状态。
 
-当前 `history:direct-publication` 已有会议和任务汇总发布能力；实际产物缺失或校验失败仍阻断。Git 远端 OID 只证明推送，不证明网页已上线。向用户确认完成前，还须按[历史发布说明](history-direct-publication.md)核验对应部署及全部目标页面，并完成用户本次范围内的视觉要求。状态是读取时快照，发布后应重新查询。
+当前 `history:direct-publication` 已有会议和任务汇总发布能力；实际页面或汇总文件缺失、校验失败时仍拒绝发布。Git 远端 OID 只证明推送，不证明网页已上线。向用户确认完成前，还须按[历史发布说明](history-direct-publication.md)核验对应部署及全部目标页面，并完成用户本次范围内的视觉要求。状态是读取时快照，发布后应重新查询。
 
 ## arXiv 获取失败的备用处理
 
@@ -344,8 +344,8 @@ npm run history:publication -- plan --apply --plan-id UUID \
 npm run history:publication -- generate --apply --plan-id UUID --batch-id daily-YYYY-MM-DD
 ```
 
-plan/generate 核验 `selectedBindings`、crosswalk/inventory、封存分析来源、当前标签注册表及确定性每日汇总。plan 固定干净 `main`、HEAD/tree、远端身份及 OID、Hugo 配置、逐路径 Git/工作树基线及创建、替换、保留原样（`create/replace/unchanged`）操作；未知资产只允许目标不存在或已有完全同 SHA。generate 再核产物及前序批次完整 manifest，独占写入 `data/runtime/historical-publications/`，保存 manifest 前再次检查基线一致性及私有文件集合。
+plan/generate 核验 `selectedBindings`、crosswalk/inventory、封存分析来源、当前标签注册表及确定性每日汇总。plan 固定干净 `main`、HEAD/tree、远端身份及 OID、Hugo 配置、逐路径 Git/工作树基线及创建、替换、保留原样（`create/replace/unchanged`）操作；未知资产只允许目标不存在或已有完全同 SHA。generate 再核生成文件及前序批次完整 manifest，独占写入 `data/runtime/historical-publications/`，保存 manifest 前再次检查基线一致性及私有文件集合。
 
-`oldGeneratedTextIncluded:false` 表示旧正文不进入创作或新产物，事务仍会短暂读取旧 Git/工作树字节计算基线 SHA。旧入口不支持会议汇总，非空会议引用（`conference refs`）被拒绝；这项限制不适用于当前独立历史发布。私有文件完整不等于已允许改写博客或已发布。
+`oldGeneratedTextIncluded:false` 表示旧正文不进入创作或新生成的页面，事务仍会短暂读取旧 Git/工作树字节计算基线 SHA。旧入口不支持会议汇总，非空会议引用（`conference refs`）被拒绝；这项限制不适用于当前独立历史发布。私有文件完整不等于已允许改写博客或已发布。
 
 当前历史发布按相对路径与最终内容 SHA 复用逐页通过记录；模型、代码、Hugo、审查协议或生成清单元数据变化仍须重做当前批次检查并生成新的审查凭证。只有内容 SHA 改变才重审页面，基线及远端校验不放宽。完整发布与上线验收见[历史发布说明](history-direct-publication.md)。

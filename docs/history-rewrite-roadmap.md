@@ -44,11 +44,11 @@
 <a id="21-历史-inventory-与-crosswalk"></a>
 ### 2.1 历史页面清单与来源对应表
 
-当时 `npm run history:inventory` 能保存 `content/posts` 的 Git、Hugo、页面和链接快照，使用 O_EXCL、0600、双文件凭证及写入前后的 repository CAS，防止基线变化时继续写入。`npm run history:crosswalk` 能从经过核验、不能自行构造的清单句柄创建 4,185 个页面对应记录，保存状态 SHA 和只追加的决定，并从崩溃或失效锁中安全恢复。
+当时 `npm run history:inventory` 能保存 `content/posts` 的 Git、Hugo、页面和链接快照，使用 O_EXCL、0600、双文件凭证及写入前后的 repository CAS，防止基线变化时继续写入。`npm run history:crosswalk` 能从核验程序实际生成、不能自行构造的清单引用对象创建 4,185 个页面对应记录，保存状态 SHA 和只追加的决定，并从崩溃或失效锁中安全恢复。
 
-`paper-source-authority-v1` 及 crosswalk 的 verified/finalize 基础已实现。每项 verified 决定绑定 pageId、内容 SHA、完整论文身份记录及双 SHA、来源授权文件及其自身 SHA，以及来源证据类型。同一论文的多页确定性分组，全部 verified 才生成不可变的最终凭证。每次读取仍须使用当前获生产授权的句柄重放来源，标题证据始终不足。
+`paper-source-authority-v1` 及 crosswalk 的 verified/finalize 基础已实现。每项 verified 决定绑定 pageId、内容 SHA、完整论文身份记录及双 SHA、来源授权文件及其自身 SHA，以及来源证据类型。同一论文的多页确定性分组，全部 verified 才生成不可变的最终凭证。每次读取仍须使用核验程序实际生成、具有生产授权的引用对象，重新读取并核验来源，标题证据始终不足。
 
-设计时，真实 arXiv 来源授权采集器和会议计划授权的跨进程装载还没有完成：arXiv 只有可重放协议和测试数据，会议只能在持有有效计划句柄的同一进程内核验。因此，当时还不能生成全历史正式最终凭证，也不能据此授权全量分析。这是当时的实现限制，不是对今天入口的描述。
+设计时，真实 arXiv 来源授权采集器和会议计划授权的跨进程装载还没有完成：arXiv 只有重新读取并核验来源的协议和测试数据，会议只能在持有有效计划引用对象的同一进程内核验。因此，当时还不能生成全历史正式最终凭证，也不能据此授权全量分析。这是当时的实现限制，不是对今天入口的描述。
 
 旧标签 URL 只是清单中的 `unverified` 候选。正式重标前仍须由 Hugo 保存实际分类路由，不能根据标签字符串猜测 slug 并声称已保留旧 URL。
 
@@ -131,15 +131,15 @@ P5  immutable generation --> review --> one history publication transaction
 
 以下是当时已有的基础及拟补的能力：
 
-1. `paper-source-authority-v1` 的协议和加载器已有，生产适配器待实现。它绑定 `paper-identity-v1` 的完整身份记录 SHA 和 identity SHA；接入官方 metadata 适配器之前，citation 必须为 null，不能携带旧标题、作者或 venue。证据类型只有 `arxiv-official-fulltext` 和 `conference-plan-source-context`：arXiv 文件的自哈希不能授予生产授权，会议必须持有当前进程核验过的计划句柄，完整重放导入记录、来源清单和上下文，才能生成获授权句柄。授权记录绑定命名来源文件及 SHA、来源快照和全文 SHA、会议观察记录和计划绑定 SHA；理由、决定者、模型和实际用量留在后续决定记录。候选线索只供查找，不进入已验证输出，标题单独匹配不够。
-2. `page-source-crosswalk-v1` 的 verified 扩展已有，批量解析待实现。页面对应记录精确覆盖 4,185 个 pageId；`pending/needs-review/blocked/conflict/verified` 转换只追加、按 CAS 写入。verified 必须引用核验过的来源授权句柄，不能接受调用方手填 SHA。
+1. `paper-source-authority-v1` 的协议和加载器已有，生产适配器待实现。它绑定 `paper-identity-v1` 的完整身份记录 SHA 和 identity SHA；接入官方 metadata 适配器之前，citation 必须为 null，不能携带旧标题、作者或 venue。证据类型只有 `arxiv-official-fulltext` 和 `conference-plan-source-context`：arXiv 文件的自哈希不能授予生产授权，会议必须持有当前进程核验过的计划引用对象，重新逐项核验完整导入记录、来源清单和上下文，才能生成带授权的来源引用对象。授权记录绑定命名来源文件及 SHA、来源快照和全文 SHA、会议观察记录和计划绑定 SHA；理由、决定者、模型和实际用量留在后续决定记录。候选线索只供查找，不进入已验证输出，标题单独匹配不够。
+2. `page-source-crosswalk-v1` 的 verified 扩展已有，批量解析待实现。页面对应记录精确覆盖 4,185 个 pageId；`pending/needs-review/blocked/conflict/verified` 转换只追加、按 CAS 写入。verified 必须引用核验程序实际生成的来源授权对象，不能接受调用方手填 SHA。
 3. `identityGroups` 分组基础已有，全量数据尚待核验。每个论文身份对应一个或多个 pageId，只存 `paperId`、身份和完整记录的 SHA、排序后的 `pageKeys` 及 group SHA。范围、批次和页面 URL 保留在 crosswalk 的 `source.papers` 中，重复页不能因分组丢失。`analysisKey` 尚未进入该协议，须由后续分析计划定义并绑定最终来源。
 4. `page-source-crosswalk-final-receipt-v1` 基础已有，全量生产凭证尚未生成。它绑定 inventory ledger/receipt、完整决定集合、4,185 个 assignment 和 U 个 identity group；只有 `pending=blocked=conflict=0` 才 complete，并核对 self-SHA、文件 SHA、页面集合 SHA 及身份分组集合 SHA。
 
 <a id="42-adapter-与难例"></a>
 ### 4.2 来源适配器与难例
 
-- 对日更单一线索重放 arXiv metadata/abs URL，不直接相信文件名或旧 frontmatter；版本差异保留在来源版本中，论文身份仍用无版本号 arXiv ID。
+- 对日更单一线索重新核验 arXiv metadata/abs URL，不直接相信文件名或旧 frontmatter；版本差异保留在来源版本中，论文身份仍用无版本号 arXiv ID。
 - 对 daily 116 个 none，依次检查旧归档原始 raw metadata、可核来源凭证和页面外链官方 ID；没有权威身份时保持 blocked，不能按标题相似度补齐。
 - 对 daily 72 个 conflict 和 3 个 multiple，保存全部候选及冲突证据，只在官方 ID 与来源记录吻合后选择。
 - 对 conference 1,161 个 none，从会议目录、官方元数据索引和已下载 PDF 精确匹配入手，经过 filter、extraction、staging、import 和 plan；文件名或标题模糊匹配只能产生候选。
@@ -164,13 +164,13 @@ npm run history:crosswalk -- apply-verified --crosswalk UUID \
 npm run history:crosswalk -- finalize --crosswalk UUID
 ```
 
-设计还拟新增批量 resolve 和来源授权采集器，只写受控 decision/authority 目录。会议计划须从完整文件链重放为句柄，不接受序列化伪句柄；该方案要求 finalize 后才进入 P1，不能据此阻挡当前直接重写。
+设计还拟新增批量 resolve 和来源授权采集器，只写受控 decision/authority 目录。会议计划须重新核验完整文件链后生成引用对象，不接受用保存的普通对象冒充授权引用；该方案要求 finalize 后才进入 P1，不能据此阻挡当前直接重写。
 
 ### 4.4 P0 验收
 
 要求 4,185/4,185 页面各有一次 assignment，pageId、路径、内容 SHA 与清单相同；U 个分组没有重复论文身份，pageId 并集恰好等于论文页集合。116 个 daily none、72 个 daily conflict、1,161 个 conference none 等队列须归零，否则整批明确 blocked。
 
-输出不得含旧正文、用户绝对路径、API key 或远端 URL 凭据。重新加载来源句柄后仍须能独立重放原字节，inventory/crosswalk 对应的 Git/Hugo 快照漂移时立即停止。
+输出不得含旧正文、用户绝对路径、API key 或远端 URL 凭据。重新加载来源引用对象后，仍须独立读取并核验原始文件字节；inventory/crosswalk 对应的 Git/Hugo 快照与原记录不同时立即停止。
 
 <a id="5-p1全量-source-recovery"></a>
 ## 5. P1：恢复并核验全部来源
@@ -233,7 +233,7 @@ planned history:sources finalize --run-id UUID
 
 Reader 只接受原始来源、结构和必要元数据，不重复注入旧分析评论或博客。结构证据不足时减少相应表格、公式和图片，不能放松表格单元格、TeX 或像素的来源绑定。
 
-先用生产解析器做零 Token 重放，再将可局部修复的问题交给局部修复，事实问题交给独立审查。同一论文身份只做一次事实复验，所有页面引用同一已核记录。操作补丁保留 parent/source CAS、归档和 `newApiRequests=0` 证明，不能新建 runId 重置预算。
+先用生产解析器重新解析并检查已保存结果，不请求模型，再将可局部修复的问题交给局部修复，事实问题交给独立审查。同一论文身份只做一次事实复验，所有页面引用同一已核记录。操作补丁保留 parent/source CAS、归档和 `newApiRequests=0` 证明，不能新建 runId 重置预算。
 
 ### 6.4 CLI
 
@@ -251,7 +251,7 @@ planned history:analyze finalize --run-id UUID
 
 ### 6.5 P2 验收
 
-U/U 正式分析和 Reader 须通过 `isSuccessfulAnalysisRecord`、`hasValidApiReaderV3Records` 及来源重放。13 个标题、篇幅、术语组合解释、主结果覆盖、评分、作者/机构、资源可达性和结构证据分别检查。
+U/U 正式分析和 Reader 须通过 `isSuccessfulAnalysisRecord`、`hasValidApiReaderV3Records` 及重新读取来源后的完整核验。13 个标题、篇幅、术语组合解释、主结果覆盖、评分、作者/机构、资源可达性和结构证据分别检查。
 
 每篇事实报告绑定最终文章 SHA，操作补丁改变内容后，旧报告即失效。服务商用量按论文、阶段和尝试汇总，未知回执单列，不能说成零。重复页面不得触发第二次正式分析或 Reader 主生成。
 

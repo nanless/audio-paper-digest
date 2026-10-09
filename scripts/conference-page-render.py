@@ -653,7 +653,7 @@ def render_packet(packet):
              f'paper_digest_conference_structure: {"pdf-visual-quote-evidence-v1" if capabilities == PDF_VISUAL else "replayable-pdf-layout-v1" if capabilities == FULL else "weak-text-only-v1"}', '---', '',
              f'# 📄 {reader_title}', '', f'> 英文题目：*{title}*', '',
              f'> 会议身份：`{paper_id}`', '',
-             ('> ⚠️ 来源为会议 PDF 弱结构纯文本；表格、公式和论文图片均不可用，本文不会据此重建这些结构。' if capabilities == WEAK else ''),
+             ('> ⚠️ 来源为会议 PDF 提取的正文；表格、公式和论文图片均不可用，本文不会据此重建这些结构。' if capabilities == WEAK else ''),
              ('> ℹ️ 这是会议论文集中的短篇 PDF；正文较短，但分析使用封存的完整 PDF 文本，未降级为摘要。' if short_proceedings else ''),
              ('> 来源为官方会议 PDF；图片依据原页像素，表格数字依据原文引用。PDF 文字层不视为原始 TeX，未可靠恢复的结构不作推断。' if capabilities == PDF_VISUAL else ''),
              ('> ✅ 来源为官方会议 PDF；表格和公式来自 PDF 抽取结果，论文图片依据原页像素。PDF 公式以原页区域图片展示，未冒称作者原始 TeX；未成功恢复的结构不作推断。' if capabilities == FULL else ''), '',
