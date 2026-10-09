@@ -2,6 +2,7 @@
 """Python 侧共用的项目路径，以及可靠落盘的文件写入辅助函数。"""
 
 import json
+import errno
 import os
 import re
 import shutil
@@ -191,9 +192,10 @@ def atomic_write_bytes(path, content, *, mode=None, dir_mode=None):
                 os.fsync(directory_fd)
             finally:
                 os.close(directory_fd)
-        except OSError:
-            # 有些文件系统不支持对目录做 fsync。
-            pass
+        except OSError as exc:
+            # 只兼容明确不支持目录同步的文件系统；真实 I/O 或权限错误须上报。
+            if exc.errno not in {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP}:
+                raise
     finally:
         if temp_path is not None:
             temp_path.unlink(missing_ok=True)

@@ -13,6 +13,7 @@ const directPages = require('./historical-direct-page-staging.js');
 const freshArxiv = require('./fresh-arxiv-rewrite-source.js');
 const conferencePageMappingsApi = require('./historical-conference-page-projections.js');
 const { parseAnalysis } = require('../utils.js');
+const { writeImmutableFile } = require('./immutable-file.js');
 const tagRules = require('./tag-rules.js').getDefaultTagRules();
 
 const CONTRACT = 'historical-direct-aggregate-v2';
@@ -386,17 +387,12 @@ function writeAggregateProjection({ root, outputName, projection, plan } = {}) {
     const normalizedPlan = planApi.normalizePlan(plan);
     const normalized = normalizeAggregateProjection(projection, normalizedPlan);
     const directory = safeRoot(root, 'direct aggregate projection root', true);
-    const filename = path.join(directory, outputName); const bytes = prettyBytes(normalized); let fd;
-    try {
-        fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-        fs.writeFileSync(fd, bytes); fs.fsyncSync(fd); fs.fchmodSync(fd, 0o600);
-        return { status: 'created', filename, fileSha256: sha256(bytes), projection: normalized };
-    } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        const existing = conferencePageMappingsApi.readStableFile(filename, 'existing direct aggregate projection');
-        if (!existing.bytes.equals(bytes)) fail(`refuses to overwrite different direct aggregate projection: ${outputName}`);
-        return { status: 'recovered', filename, fileSha256: existing.fileSha256, projection: normalized };
-    } finally { if (fd !== undefined) fs.closeSync(fd); }
+    const filename = path.join(directory, outputName);
+    const bytes = prettyBytes(normalized);
+    const status = writeImmutableFile(filename, bytes, message => fail(`${message}: ${filename}`));
+    const stored = conferencePageMappingsApi.readStableFile(filename, 'direct aggregate projection');
+    if (!stored.bytes.equals(bytes)) fail(`写入后的汇总页面对应记录与预期字节不一致：${filename}`);
+    return { status, filename, fileSha256: stored.fileSha256, projection: normalized };
 }
 
 function exactRegistryEntry(entry, item) {
@@ -849,15 +845,9 @@ function aggregateRunIdFor(aggregates) {
     return uuidFromHash(aggregates.map(item => item.manifestSha256).sort().join('\0'));
 }
 function writeExactAggregateFile(filename, bytes, label) {
-    const directory = safeRoot(path.dirname(filename), `${label} directory`, true); const payload = Buffer.from(bytes); let fd;
-    try {
-        fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-        fs.writeFileSync(fd, payload); fs.fsyncSync(fd); fs.fchmodSync(fd, 0o600);
-    } catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        const current = conferencePageMappingsApi.readStableFile(filename, `existing ${label}`);
-        if (!current.bytes.equals(payload)) fail(`refuses to overwrite different ${label}`);
-    } finally { if (fd !== undefined) fs.closeSync(fd); }
+    safeRoot(path.dirname(filename), `${label} directory`, true);
+    const payload = Buffer.from(bytes);
+    writeImmutableFile(filename, payload, message => fail(`${message}: ${filename}`));
     const stored = conferencePageMappingsApi.readStableFile(filename, label);
     if (!stored.bytes.equals(payload)) fail(`${label} write verification failed`);
     return stored.fileSha256;

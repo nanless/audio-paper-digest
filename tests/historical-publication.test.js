@@ -6,7 +6,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
 const api = require('../scripts/lib/historical-publication.js');
 const daily = require('../scripts/lib/historical-daily-aggregate.js');
 const cli = require('../scripts/historical-publication.js');
@@ -138,16 +138,21 @@ test('原子不可变写入会清掉失败的临时文件，绝不占用目标�
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'historical-publication-write-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const target = path.join(root, 'artifact.json'); let writes = 0;
-    const io = Object.create(fs);
-    io.writeSync = (...args) => { writes += 1; if (writes === 1) return Math.min(3, args[3]);
-        const error = new Error('injected EIO'); error.code = 'EIO'; throw error; };
-    assert.throws(() => api.writeExact(target, Buffer.from('complete immutable payload'), { io,
-        randomUUID: () => 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }), /injected EIO/);
+    const originalWrite = fs.writeSync;
+    const writeMock = t.mock.method(fs, 'writeSync', (...args) => {
+        writes += 1;
+        if (writes === 1) return originalWrite(args[0], args[1], args[2], Math.min(3, args[3]), args[4]);
+        const error = new Error('injected EIO');
+        error.code = 'EIO';
+        throw error;
+    });
+    assert.throws(() => api.writeExact(target, Buffer.from('complete immutable payload')), /injected EIO/);
+    writeMock.mock.restore();
     assert.equal(fs.existsSync(target), false);
     assert.deepEqual(fs.readdirSync(root), []);
     api.writeExact(target, Buffer.from('complete immutable payload'));
     assert.equal(fs.readFileSync(target, 'utf8'), 'complete immutable payload');
-    assert.throws(() => api.writeExact(target, Buffer.from('different')), /已有文件内容不同，不能覆盖/);
+    assert.throws(() => api.writeExact(target, Buffer.from('different')), /拒绝覆盖/);
 });
 
 test('计划拒绝过期的清单 HEAD、内容树或远端代次', t => {
@@ -496,4 +501,136 @@ test('命令行要求显式指定第一阶段，拒绝格式错误的生产器�
     let generated; cli.main(['generate', '--dry-run', '--plan-id', PLAN, '--batch-id', `daily-${DATE}`], {
         config, generateBundle: options => { generated = options; return { status: 'dry-run' }; } });
     assert.equal(generated.outputRoot, '/publication'); assert.equal(generated.tagCatalogPath, '/registry');
+});
+
+function killPublicationWriter(f, target, mode = 'generate') {
+    const packet = {
+        options: {
+            outputRoot: f.outputRoot,
+            planId: PLAN,
+            batchId: `daily-${DATE}`,
+            blogRepo: f.blogRepo,
+            stagingRoot: f.stagingRoot,
+            aggregateRoot: f.aggregateRoot,
+            apply: true
+        },
+        plan: f.plan,
+        state: f.deps.blogState(),
+        replay: f.deps.replayProducerSet(),
+        baseline: [...f.baseline].map(([name, bytes]) => [name, bytes.toString('base64')])
+    };
+    const script = `
+        const fs = require('node:fs');
+        const api = require(${JSON.stringify(require.resolve('../scripts/lib/historical-publication.js'))});
+        const packet = JSON.parse(process.argv[1]);
+        const baseline = new Map(packet.baseline.map(([name, value]) => [name, Buffer.from(value, 'base64')]));
+        const original = fs.linkSync;
+        fs.linkSync = (source, destination) => {
+            original(source, destination);
+            if (destination === process.argv[2]) process.kill(process.pid, 'SIGKILL');
+        };
+        if (process.argv[3] === 'plan') {
+            api.writePlan({ outputRoot: packet.options.outputRoot, plan: packet.plan });
+        } else {
+            api.generateBundle(packet.options, {
+                blogState: () => packet.state,
+                replayProducerSet: () => packet.replay,
+                gitBlob: (_repo, _head, relative) => baseline.get(relative) || null
+            });
+        }
+    `;
+    const result = spawnSync(process.execPath, ['-e', script, JSON.stringify(packet), target, mode], { encoding: 'utf8' });
+    assert.equal(result.signal, 'SIGKILL', result.stderr);
+    assert.equal(fs.statSync(target).nlink, 2);
+}
+
+function generateOptions(f) {
+    return {
+        outputRoot: f.outputRoot,
+        planId: PLAN,
+        batchId: `daily-${DATE}`,
+        blogRepo: f.blogRepo,
+        stagingRoot: f.stagingRoot,
+        aggregateRoot: f.aggregateRoot,
+        apply: true
+    };
+}
+
+test('私有发布计划在真实写者退出后恢复双链接并保留原时间戳', t => {
+    const f = fixture(t);
+    const target = path.join(f.outputRoot, PLAN, 'plan.json');
+    fs.unlinkSync(target);
+    killPublicationWriter(f, target, 'plan');
+    const before = fs.readFileSync(target);
+    assert.throws(() => api.loadPlan({ outputRoot: f.outputRoot, planId: PLAN }), /来源文件不安全/);
+    const rebuilt = structuredClone(f.plan);
+    rebuilt.createdAt = '2026-09-08T00:00:00.000Z';
+    delete rebuilt.planSha256;
+    rebuilt.planSha256 = api.stableHash(rebuilt);
+    const result = api.writePlan({ outputRoot: f.outputRoot, plan: rebuilt });
+    assert.equal(result.reused, true);
+    assert.equal(result.plan.createdAt, f.plan.createdAt);
+    assert.equal(fs.statSync(target).nlink, 1);
+    assert.deepEqual(fs.readFileSync(target), before);
+});
+
+test('私有发布各已知生成文件在 link 后真实被杀仍可由同计划恢复', t => {
+    for (const relative of ['intent.json', `bundle/content/posts/${DATE}-paper.md`, 'manifest.json']) {
+        const f = fixture(t);
+        const target = path.join(f.outputRoot, PLAN, 'generations', `daily-${DATE}`, relative);
+        killPublicationWriter(f, target);
+        const bytes = fs.readFileSync(target);
+        const result = api.generateBundle(generateOptions(f), f.deps);
+        assert.equal(result.status, 'generated');
+        assert.equal(fs.statSync(target).nlink, 1);
+        assert.deepEqual(fs.readFileSync(target), bytes);
+    }
+});
+
+test('私有发布恢复前仍先核来源，来源变化不能清理已保存双链接', t => {
+    const f = fixture(t);
+    const target = path.join(f.outputRoot, PLAN, 'generations', `daily-${DATE}`, 'manifest.json');
+    killPublicationWriter(f, target);
+    const before = fs.readdirSync(path.dirname(target)).sort();
+    assert.throws(() => api.generateBundle(generateOptions(f), {
+        ...f.deps,
+        sourceBytes: () => Buffer.from('different source')
+    }), /生成来源文件的实际字节/);
+    assert.equal(fs.statSync(target).nlink, 2);
+    assert.deepEqual(fs.readdirSync(path.dirname(target)).sort(), before);
+});
+
+test('旧无所有者临时链接与活写者链接均不得被私有发布恢复删除', t => {
+    for (const owner of ['legacy', 'live']) {
+        const f = fixture(t);
+        const target = path.join(f.outputRoot, PLAN, 'plan.json');
+        const host = sha(os.hostname()).slice(0, 16);
+        const suffix = owner === 'legacy' ? crypto.randomUUID() : `${host}.${process.pid}.${crypto.randomUUID()}`;
+        const temporary = path.join(path.dirname(target), `.plan.json.${suffix}.tmp`);
+        fs.linkSync(target, temporary);
+        const before = fs.readFileSync(target);
+        assert.throws(() => api.writePlan({ outputRoot: f.outputRoot, plan: f.plan }), /单链接/);
+        assert.deepEqual(fs.readFileSync(target), before);
+        assert.equal(fs.statSync(target).nlink, 2);
+        assert.equal(fs.existsSync(temporary), true);
+    }
+});
+
+test('发布计划写后目录同步失败不会因正式文件存在被吞成成功', t => {
+    const f = fixture(t);
+    const target = path.join(f.outputRoot, PLAN, 'plan.json');
+    fs.unlinkSync(target);
+    const original = fs.fsyncSync;
+    const syncMock = t.mock.method(fs, 'fsyncSync', fd => {
+        if (fs.fstatSync(fd).isDirectory()) {
+            const error = new Error('injected publication directory EIO');
+            error.code = 'EIO';
+            throw error;
+        }
+        return original(fd);
+    });
+    assert.throws(() => api.writePlan({ outputRoot: f.outputRoot, plan: f.plan }), /directory EIO/);
+    syncMock.mock.restore();
+    assert.equal(fs.statSync(target).nlink, 1);
+    assert.equal(api.writePlan({ outputRoot: f.outputRoot, plan: f.plan }).reused, true);
 });

@@ -1,4 +1,5 @@
 import os
+import errno
 import sys
 import tempfile
 import unittest
@@ -208,6 +209,41 @@ class PathConfigTest(unittest.TestCase):
             self.assertIn(False, fsync_kinds)
             self.assertIn(True, fsync_kinds)
             self.assertEqual(list(Path(tmp).glob('.cover.png.*.tmp')), [])
+
+    def test_atomic_write_reports_directory_sync_io_failure_after_replace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'state.json'
+            target.write_bytes(b'old')
+            real_fsync = os.fsync
+            failure = OSError(errno.EIO, '测试目录同步失败')
+
+            def fail_directory_sync(fd):
+                if stat.S_ISDIR(os.fstat(fd).st_mode):
+                    raise failure
+                return real_fsync(fd)
+
+            with mock.patch('path_config.os.fsync', side_effect=fail_directory_sync):
+                with self.assertRaises(OSError) as caught:
+                    atomic_write_bytes(target, b'new')
+            self.assertIs(caught.exception, failure)
+            # 改名已经完成，报错后保留真实新字节，不能假装回滚或再次删除。
+            self.assertEqual(target.read_bytes(), b'new')
+            self.assertEqual(list(Path(tmp).glob('.state.json.*.tmp')), [])
+
+    def test_atomic_write_allows_only_unsupported_directory_sync(self):
+        for error_number in {errno.EINVAL, errno.ENOTSUP, errno.EOPNOTSUPP}:
+            with self.subTest(error_number=error_number), tempfile.TemporaryDirectory() as tmp:
+                target = Path(tmp) / 'state.json'
+                real_fsync = os.fsync
+
+                def unsupported_directory_sync(fd):
+                    if stat.S_ISDIR(os.fstat(fd).st_mode):
+                        raise OSError(error_number, '测试文件系统不支持目录同步')
+                    return real_fsync(fd)
+
+                with mock.patch('path_config.os.fsync', side_effect=unsupported_directory_sync):
+                    atomic_write_bytes(target, b'new')
+                self.assertEqual(target.read_bytes(), b'new')
 
     def test_atomic_write_bytes_inherits_mode_without_mode_argument(self):
         with tempfile.TemporaryDirectory() as tmp:

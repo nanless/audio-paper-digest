@@ -582,3 +582,90 @@ test('会议任务标题的引号、反斜杠和换行按 YAML 字符串保存',
         assert.equal(frontMatter.draft, false);
     }
 });
+
+function aggregateWriteScenario(f, mode, root, aggregates) {
+    const args = mode === 'projection'
+        ? { root, outputName: 'projection.json', projection: f.projection, plan: f.plan }
+        : { outputRoot: root, aggregateRunId: direct.aggregateRunIdFor(aggregates), aggregates };
+    const target = mode === 'projection' ? path.join(root, 'projection.json')
+        : path.join(root, args.aggregateRunId, mode === 'manifest'
+            ? `daily-${DATE}.json` : aggregates[0].outputPage.stagedPath);
+    const writeOutput = () => mode === 'projection'
+        ? direct.writeAggregateProjection(args) : direct.writeDirectAggregates(args);
+    return { args, target, writeOutput };
+}
+
+test('直接汇总投影与页面短写失败不占正式路径，重试沿用原字节', async t => {
+    const f = await fixture(t);
+    const aggregates = direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE });
+    for (const mode of ['projection', 'page']) {
+        const scenario = aggregateWriteScenario(f, mode, path.join(f.root, `short-${mode}`), aggregates);
+        let calls = 0;
+        const original = fs.writeSync;
+        const mock = t.mock.method(fs, 'writeSync', (fd, buffer, offset, length, position) => {
+            if (++calls === 1) return original(fd, buffer, offset, Math.min(length, 3), position);
+            const error = new Error('injected direct aggregate EIO');
+            error.code = 'EIO';
+            throw error;
+        });
+        assert.throws(scenario.writeOutput, /aggregate EIO/);
+        mock.mock.restore();
+        assert.equal(fs.existsSync(scenario.target), false);
+        scenario.writeOutput();
+        const bytes = fs.readFileSync(scenario.target);
+        scenario.writeOutput();
+        assert.deepEqual(fs.readFileSync(scenario.target), bytes);
+        assert.equal(fs.statSync(scenario.target).mode & 0o777, 0o600);
+    }
+});
+
+test('直接汇总三个写点真实 link 后终止可恢复，旧半截文件保留拒绝', async t => {
+    const { spawnSync } = require('node:child_process');
+    const f = await fixture(t);
+    const aggregates = direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE });
+    for (const mode of ['projection', 'page', 'manifest']) {
+        const scenario = aggregateWriteScenario(f, mode, path.join(f.root, `kill-${mode}`), aggregates);
+        const script = `
+            const fs = require('node:fs');
+            const api = require(${JSON.stringify(require.resolve('../scripts/lib/historical-direct-aggregate.js'))});
+            const original = fs.linkSync;
+            fs.linkSync = (from, to) => {
+                original(from, to);
+                if (to === process.argv[2]) process.kill(process.pid, 'SIGKILL');
+            };
+            const args = JSON.parse(process.argv[1]);
+            if (process.argv[3] === 'projection') api.writeAggregateProjection(args);
+            else api.writeDirectAggregates(args);
+        `;
+        const result = spawnSync(process.execPath, ['-e', script, JSON.stringify(scenario.args), scenario.target, mode], {
+            encoding: 'utf8'
+        });
+        assert.equal(result.signal, 'SIGKILL', result.stderr);
+        assert.equal(fs.statSync(scenario.target).nlink, 2);
+        const expected = fs.readFileSync(scenario.target);
+        scenario.writeOutput();
+        assert.equal(fs.statSync(scenario.target).nlink, 1);
+        assert.deepEqual(fs.readFileSync(scenario.target), expected);
+        fs.writeFileSync(scenario.target, 'old partial');
+        assert.throws(scenario.writeOutput, /拒绝覆盖/);
+        assert.equal(fs.readFileSync(scenario.target, 'utf8'), 'old partial');
+    }
+});
+
+test('直接汇总并发出现不同文件时保留胜者，不覆盖或清理', async t => {
+    const f = await fixture(t);
+    const aggregates = direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE });
+    for (const mode of ['projection', 'page']) {
+        const scenario = aggregateWriteScenario(f, mode, path.join(f.root, `collision-${mode}`), aggregates);
+        const original = fs.linkSync;
+        const mock = t.mock.method(fs, 'linkSync', (from, to) => {
+            if (to === scenario.target && !fs.existsSync(to)) fs.writeFileSync(to, 'competing writer');
+            return original(from, to);
+        });
+        assert.throws(scenario.writeOutput, /拒绝覆盖/);
+        mock.mock.restore();
+        assert.equal(fs.readFileSync(scenario.target, 'utf8'), 'competing writer');
+        assert.equal(fs.statSync(scenario.target).nlink, 1);
+        assert.deepEqual(fs.readdirSync(path.dirname(scenario.target)), [path.basename(scenario.target)]);
+    }
+});

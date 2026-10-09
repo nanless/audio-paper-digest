@@ -7,6 +7,7 @@ const { spawnSync } = require('node:child_process');
 const fresh = require('./fresh-rewrite-run.js');
 const dailyApi = require('./historical-daily-aggregate.js');
 const pageApi = require('./historical-page-staging.js');
+const { writeImmutableFile } = require('./immutable-file.js');
 
 const PLAN_CONTRACT = 'historical-publication-plan-v2';
 const LEGACY_PLAN_CONTRACT = 'historical-publication-plan-v1';
@@ -54,71 +55,38 @@ function sameDirectory(left, right) { return left.absolute === right.absolute &&
 function readRegular(filename, maximum = 128 * 1024 * 1024, dependencies = {}) {
     let fd; const parentBefore = directoryIdentity(path.dirname(filename));
     try { const before = fs.lstatSync(filename, { bigint: true });
-        if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1n || before.size > BigInt(maximum)) fail(`来源文件不安全：类型、链接数或大小不符合要求：${filename}`);
+        if (!before.isFile() || before.isSymbolicLink() || (before.nlink !== 1n && !(dependencies.allowPendingLink && before.nlink === 2n)) || before.size > BigInt(maximum)) fail(`来源文件不安全：类型、链接数或大小不符合要求：${filename}`);
         fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); const opened = fs.fstatSync(fd, { bigint: true });
         dependencies.afterOpen?.(filename);
         const named = fs.lstatSync(filename, { bigint: true });
-        if (!opened.isFile() || opened.nlink !== 1n || named.isSymbolicLink() || named.nlink !== 1n
+        if (!opened.isFile() || opened.nlink !== before.nlink || named.isSymbolicLink() || named.nlink !== before.nlink
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size !== named.size
             || opened.size > BigInt(maximum)) fail(`打开后来源文件不安全：类型、链接数、大小或身份不符合要求：${filename}`);
         const bytes = fs.readFileSync(fd);
         const after = fs.fstatSync(fd, { bigint: true }); const namedAfter = fs.lstatSync(filename, { bigint: true });
         if (BigInt(bytes.length) !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino
-            || after.size !== opened.size || after.mtimeNs !== opened.mtimeNs || after.ctimeNs !== opened.ctimeNs
-            || namedAfter.dev !== opened.dev || namedAfter.ino !== opened.ino || namedAfter.size !== opened.size
+            || after.nlink !== opened.nlink || after.size !== opened.size || after.mtimeNs !== opened.mtimeNs || after.ctimeNs !== opened.ctimeNs
+            || namedAfter.dev !== opened.dev || namedAfter.ino !== opened.ino || namedAfter.nlink !== opened.nlink || namedAfter.size !== opened.size
             || namedAfter.mtimeNs !== opened.mtimeNs || namedAfter.ctimeNs !== opened.ctimeNs
             || !sameDirectory(parentBefore, directoryIdentity(path.dirname(filename)))) fail(`读取时文件的身份、大小、修改时间或父目录发生变化，或读取字节数与记录不一致：${filename}`);
         return { bytes, sha256: sha256(bytes) }; }
     finally { if (fd !== undefined) fs.closeSync(fd); }
 }
-function writeExact(filename, bytes, dependencies = {}) {
-    const payload = Buffer.from(bytes); const parent = fresh.assertSafeDirectory(path.dirname(filename), true);
-    const parentBefore = directoryIdentity(parent); const io = dependencies.io || fs;
-    const temporary = path.join(parent, `.${path.basename(filename)}.${dependencies.randomUUID?.() || crypto.randomUUID()}.tmp`);
-    let fd; let created = null; let published = false; let collided = false;
-    try {
-        fd = io.openSync(temporary, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-        created = (io.fstatSync || fs.fstatSync)(fd, { bigint: true }); let offset = 0;
-        while (offset < payload.length) {
-            const written = io.writeSync(fd, payload, offset, payload.length - offset, offset);
-            if (!Number.isSafeInteger(written) || written <= 0 || written > payload.length - offset) fail(`写入临时文件时未能按预期写出全部字节：${temporary}`);
-            offset += written;
+function writeExact(filename, bytes) {
+    const payload = Buffer.from(bytes);
+    if (payload.length > 128 * 1024 * 1024) fail(`不可变发布文件超过大小限制：${filename}`);
+    fresh.assertSafeDirectory(path.dirname(filename), true);
+    writeImmutableFile(filename, payload, (message, details) => {
+        if (details?.code === 'IMMUTABLE_FILE_CONTENT_CONFLICT') {
+            const error = new Error(`历史发布检查未通过：${message}：${filename}`);
+            error.code = details.code;
+            throw error;
         }
-        io.fsyncSync(fd); io.closeSync(fd); fd = undefined;
-        dependencies.afterWrite?.(temporary);
-        if (!sameDirectory(parentBefore, directoryIdentity(parent))) fail(`写入期间目标文件的父目录发生变化：${filename}`);
-        try { (io.linkSync || fs.linkSync)(temporary, filename); published = true; }
-        catch (error) {
-            if (error.code !== 'EEXIST') throw error;
-            collided = true;
-        }
-    } finally {
-        if (fd !== undefined) io.closeSync(fd);
-        if (created) {
-            try {
-                const named = fs.lstatSync(temporary, { bigint: true });
-                if (named.isFile() && !named.isSymbolicLink() && named.nlink === (published ? 2n : 1n)
-                    && named.dev === created.dev && named.ino === created.ino) (io.unlinkSync || fs.unlinkSync)(temporary);
-                else fail(`清理时临时文件的身份与写入时不一致：${temporary}`);
-            } catch (cleanupError) { if (cleanupError.code !== 'ENOENT') throw cleanupError; }
-        }
-    }
-    if (!sameDirectory(parentBefore, directoryIdentity(path.dirname(filename)))) fail(`写入期间目标文件的父目录发生变化：${filename}`);
-    let verified;
-    for (let attempt = 0; attempt < 50; attempt++) {
-        try { verified = readRegular(filename); break; }
-        catch (error) {
-            let linked = false;
-            try { const stat = fs.lstatSync(filename, { bigint: true }); linked = stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 2n; }
-            catch { /* 保留最初读取时的完整性错误。 */ }
-            if (!collided || !linked || attempt === 49) throw error;
-            Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2);
-        }
-    }
-    if (!verified.bytes.equals(payload)) fail(`${collided ? '已有文件内容不同，不能覆盖' : '写入后的文件内容与待写入字节不一致'}: ${filename}`);
-    const parentFd = fs.openSync(parent, fs.constants.O_RDONLY);
-    try { fs.fsyncSync(parentFd); } finally { fs.closeSync(parentFd); }
-    return sha256(payload);
+        fail(`${message}：${filename}`);
+    });
+    const verified = readRegular(filename);
+    if (!verified.bytes.equals(payload)) fail(`写入后的文件内容与待写入字节不一致：${filename}`);
+    return verified.sha256;
 }
 const canonicalBytes = value => Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
 function sealed(body, field) { return { ...body, [field]: stableHash(body) }; }
@@ -400,13 +368,14 @@ function outputDirectory(outputRoot, planId, create = false) {
 function comparablePlan(plan) { const value = clone(plan); delete value.createdAt; delete value.planSha256; return value; }
 function writePlan({ outputRoot, plan }) {
     validatePlan(plan, plan?.planId); const dir = outputDirectory(outputRoot, plan.planId, true); const filename = path.join(dir, 'plan.json');
-    const reuse = () => { const existing = loadPlan({ outputRoot, planId: plan.planId });
+    const reuse = () => { const existing = loadPlanForWrite({ outputRoot, planId: plan.planId });
         if (stableHash(comparablePlan(existing.plan)) !== stableHash(comparablePlan(plan))) fail('同一发布计划 ID 已对应其他发布输入，不能覆盖。');
+        writeExact(filename, existing.bytes);
         return { dir, plan: existing.plan, reused: true }; };
     if (fs.existsSync(filename)) return reuse();
     if (plan.contract !== PLAN_CONTRACT || plan.version !== PLAN_VERSION) fail('新写入的发布计划必须使用当前格式。');
     try { writeExact(filename, canonicalBytes(plan)); }
-    catch (error) { if (fs.existsSync(filename)) return reuse(); throw error; }
+    catch (error) { if (error.code === 'IMMUTABLE_FILE_CONTENT_CONFLICT') return reuse(); throw error; }
     return { dir, plan, reused: false };
 }
 function validateProducer(producer, label) {
@@ -585,12 +554,18 @@ function validatePlan(plan, planId) {
     const expectedBatches = batchesFor(plan.artifacts, aggregateDates);
     if (stableHash(expectedBatches) !== stableHash(plan.batches)) fail('发布批次及其依赖关系与按待发布文件和日期计算的结果不一致。');
 }
-function loadPlan({ outputRoot, planId }) {
-    const dir = outputDirectory(outputRoot, planId); const loaded = readRegular(path.join(dir, 'plan.json'), 64 * 1024 * 1024);
+function loadPlanRecord({ outputRoot, planId }, allowPendingLink) {
+    const dir = outputDirectory(outputRoot, planId);
+    const loaded = readRegular(path.join(dir, 'plan.json'), 64 * 1024 * 1024, { allowPendingLink });
     const plan = strictJson(loaded.bytes, '发布计划');
     validatePlan(plan, planId);
-    return { dir, plan, fileSha256: loaded.sha256 };
+    return { dir, plan, fileSha256: loaded.sha256, bytes: loaded.bytes };
 }
+function loadPlan(options) {
+    const { bytes, ...loaded } = loadPlanRecord(options, false);
+    return loaded;
+}
+function loadPlanForWrite(options) { return loadPlanRecord(options, true); }
 
 function runGit(blogRepo, args, { text = true, maximum = 128 * 1024 * 1024 } = {}) {
     const result = spawnSync('git', ['-C', blogRepo, ...args], { encoding: text ? 'utf8' : null,
@@ -746,7 +721,7 @@ function loadGenerationProof({ loadedPlan, batchId }) {
 
 function generateBundle({ outputRoot, planId, batchId, blogRepo, stagingRoot, aggregateRoot, crosswalkRoot,
     inventoryRoot, analysisRoot, tagAssignmentRoot, tagCatalogPath, apply = false, remoteName = 'origin' } = {}, dependencies = {}) {
-    const loaded = loadPlan({ outputRoot, planId }); const batch = loaded.plan.batches.find(item => item.batchId === batchId);
+    const loaded = apply ? loadPlanForWrite({ outputRoot, planId }) : loadPlan({ outputRoot, planId }); const batch = loaded.plan.batches.find(item => item.batchId === batchId);
     if (!batch) fail('发布计划中没有指定批次。');
     const refs = { pageStagingRunIds: loaded.plan.producers.filter(item => item.kind === 'page-staging').map(item => item.runId),
         dailyAggregates: loaded.plan.producers.filter(item => item.kind === 'daily-aggregate').map(item => ({ aggregateRunId: item.runId, date: item.date })),
@@ -796,8 +771,6 @@ function generateBundle({ outputRoot, planId, batchId, blogRepo, stagingRoot, ag
     const manifest = sealed(body, 'generationSha256');
     if (!apply) return { status: 'dry-run', manifest };
     const generationRoot = path.join(loaded.dir, 'generations', batchId); fresh.assertSafeDirectory(generationRoot, true);
-    assertGenerationRoot(generationRoot, { complete: fs.existsSync(path.join(generationRoot, 'manifest.json')) });
-    assertBundle(path.join(generationRoot, 'bundle'), records, true);
     const intent = sealed({ contract: INTENT_CONTRACT, version: VERSION, generationId, planId,
         planFileSha256: loaded.fileSha256, planSha256: loaded.plan.planSha256, batchId,
         batchPathSetSha256: batch.pathSetSha256, predecessorProofs,
@@ -807,6 +780,21 @@ function generateBundle({ outputRoot, planId, batchId, blogRepo, stagingRoot, ag
         hugoConfig: state.hugoConfig, fileSetSha256: manifest.fileSetSha256,
         bundleSetSha256: manifest.bundleSetSha256, exactDeltaSha256: manifest.exactDeltaSha256,
         generationSha256: manifest.generationSha256 }, 'intentSha256');
+    // 先核对计划、真实来源和博客基线，再恢复本次已知文件；只读入口不清理链接。
+    const recoverKnown = (filename, bytes) => {
+        let stat;
+        try { stat = fs.lstatSync(filename); }
+        catch (error) { if (error.code === 'ENOENT') return; throw error; }
+        if (stat.isFile() && !stat.isSymbolicLink() && stat.nlink === 2) writeExact(filename, bytes);
+    };
+    recoverKnown(path.join(loaded.dir, 'plan.json'), loaded.bytes);
+    recoverKnown(path.join(generationRoot, 'intent.json'), canonicalBytes(intent));
+    recoverKnown(path.join(generationRoot, 'manifest.json'), canonicalBytes(manifest));
+    for (const record of records) {
+        recoverKnown(path.join(generationRoot, 'bundle', ...record.path.split('/')), payloads.get(record.path));
+    }
+    assertGenerationRoot(generationRoot, { complete: fs.existsSync(path.join(generationRoot, 'manifest.json')) });
+    assertBundle(path.join(generationRoot, 'bundle'), records, true);
     writeExact(path.join(generationRoot, 'intent.json'), canonicalBytes(intent));
     let copied = 0;
     for (const record of records) {
