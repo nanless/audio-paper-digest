@@ -69,6 +69,8 @@ npm run history:direct-plan -- --apply \
 
 `history:direct-plan` 生成 `historical-direct-rewrite-plan-v5`。页面对应关系和计划都使用来源清单生产者的完整严格校验，v3 及更旧清单会被拒绝。v5 对部分 `conflict/multiple` 日汇总页，只使用唯一严格评分行中的主 arXiv 链接，并记录字节区间和 SHA。计划重新核对该记录的自哈希、页面 SHA、原身份状态及候选集合，不能按候选优先级猜测。
 
+主评分行路线抓取失败时写入 v2 交接，附完整评分行绑定；原单提示路线仍使用原字节格式的 v1 交接。备用 `history:arxiv-batch` 在新请求前读取当前配置下的冻结清单与凭证，核对 crosswalk 的完整候选集合，再按原页面 SHA 和评分行字节重建绑定。只有这些检查全部通过，才生成携带该绑定的 v2 crosswalk 决策，并在锁内应用前再次重核；普通多候选页面仍须走显式身份裁定。缺少冻结清单、原页或证明时明确停止，不按候选优先级选择论文。
+
 没有冻结历史页面对应关系的来源记录不进入抓取、crosswalk 或模型队列。反过来，没有可用来源的冻结论文页须出现在 `uncoveredFrozenPaperPages` 和 `paperPageCoverage`，记录页面与内容 SHA、范围及身份线索状态，并按范围和状态统计。`none/conflict/multiple` 是待处理问题，不能据此猜身份。`--apply` 还会保存与计划 SHA 绑定的不可变 `historical-direct-rewrite-unprojected-catalog-report-v1`，记录未投影来源的论文 ID、来源类型和原因；该报告不是待执行任务清单。
 
 ## 会议 PDF 与特殊来源

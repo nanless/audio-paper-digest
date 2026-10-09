@@ -1290,3 +1290,160 @@ test('历史页 crosswalk 的 number 证据前提：整型浮点双向拒绝，f
     assert.notEqual(python.intHash, api.stableHash(intEvidence),
         '这就是要守的分歧：整数值走 number 分支时 JS 写 7.0、Python 写 7，两端稳定哈希不同');
 });
+
+function primaryHandoffFixture(t) {
+    const f = fixture(t);
+    const primary = require('../scripts/lib/historical-daily-primary-arxiv-binding.js');
+    const catalogApi = require('../scripts/lib/historical-direct-rewrite-input-catalog.js');
+    const projectionApi = require('../scripts/lib/historical-conference-page-projections.js');
+    const planner = require('../scripts/lib/historical-direct-rewrite-plan.js');
+    const page = f.ledger.pages.find(item => item.kind === 'paper');
+    f.blog = path.join(f.root, 'blog');
+    const pageFile = path.join(f.blog, page.path);
+    fs.mkdirSync(path.dirname(pageFile), { recursive: true });
+    const pageText = '---\ntitle: 临时测试论文\n---\n'
+        + '✅ **7.0/10** | 前50% | #语音识别 | [arxiv](https://arxiv.org/abs/2601.00001v1)\n\n'
+        + 'Reference: https://openreview.net/forum?id=AbCdef_12\n';
+    fs.writeFileSync(pageFile, pageText);
+    page.contentSha256 = sha(pageText);
+    page.identityHints = { status: 'multiple', candidates: [
+        { scheme: 'arxiv', value: '2601.00001', sources: ['body:arxiv-link', 'filename'] },
+        { scheme: 'openreview-forum-id', value: 'AbCdef_12', sources: ['body:openreview-link'] }
+    ] };
+    rehashPage(page); rehashLedger(f.ledger);
+    const ledgerBytes = api.prettyBytes(f.ledger);
+    fs.writeFileSync(path.join(f.inventory, f.ledgerName), ledgerBytes);
+    const receiptBody = structuredClone(f.receipt);
+    delete receiptBody.receiptSha256;
+    receiptBody.ledger.fileSha256 = sha(ledgerBytes);
+    receiptBody.ledger.ledgerSha256 = f.ledger.ledgerSha256;
+    receiptBody.ledger.pageSetSha256 = f.ledger.pageSetSha256;
+    f.receipt = { ...receiptBody, receiptSha256: api.stableHash(receiptBody) };
+    fs.writeFileSync(path.join(f.inventory, f.receiptName), api.prettyBytes(f.receipt));
+    const state = api.prepareCrosswalk({ crosswalkRoot: f.crosswalk, inventoryHandle: load(f),
+        crosswalkId: ids[0], now: stamp, apply: true });
+    const binding = primary.build({ blogRoot: f.blog, page: state.source.papers[0] });
+    const catalog = catalogApi.normalizeCatalog({
+        contract: catalogApi.CONTRACT, version: catalogApi.VERSION, scope: catalogApi.SCOPE,
+        scopeBinding: {
+            inventoryPath: path.join(f.inventory, f.ledgerName), inventorySha256: sha(ledgerBytes),
+            inventoryLedgerSha256: f.ledger.ledgerSha256, inventoryPageSetSha256: f.ledger.pageSetSha256,
+            arxivPageCount: 1, singleArxivPageCount: 0, dailyPrimaryArxivBindingCount: 1,
+            dailyIcmlPosterBindingCount: 0, dailyIcmlPosterRoutableBindingCount: 0, conferencePageCount: 0
+        },
+        inputs: [{ path: path.join(f.root, 'empty-conference.json'), sha256: sha('empty'), selectedPapers: 0 }],
+        summary: {
+            arxivPapers: 1, arxivPages: 1, singleArxivPages: 0, dailyPrimaryArxivBindings: 1,
+            conferencePapers: 0, dailyIcmlPosterBindings: 0, dailyIcmlPosterRoutableBindings: 0,
+            canonicalRecords: 1, sourceRecords: 0, conferenceSourceSets: {}
+        },
+        dailyPrimaryArxivBindings: [binding], dailyPrimaryArxivBindingSetSha256: api.stableHash([binding]),
+        dailyIcmlPosterBindings: [], dailyIcmlPosterBindingSetSha256: api.stableHash([]),
+        dailyIcmlPosterRoutableBindings: [], dailyIcmlPosterRoutableBindingSetSha256: api.stableHash([]),
+        icmlPosterAuthoritySha256: null, entries: [{ paperId: 'arxiv:2601.00001', sources: [] }]
+    });
+    const catalogFileSha256 = sha(JSON.stringify(catalog));
+    const projection = projectionApi.buildConferencePageMappings({ catalog, catalogFileSha256,
+        inventory: f.ledger, blogRoot: f.blog });
+    const plan = planner.buildDirectRewritePlan({ catalog, catalogFileSha256, inventory: f.ledger,
+        conferencePageProjections: projection, blogRoot: f.blog });
+    const handoffRoot = path.join(f.root, 'handoffs');
+    const written = planner.writeArxivFreshFailureHandoff({ root: handoffRoot, plan,
+        paperId: 'arxiv:2601.00001', generation: 1, error: new Error('来源获取失败'), observedAt: stamp });
+    const handoffName = path.basename(written.filename);
+    const options = {
+        crosswalkRoot: f.crosswalk, crosswalkId: ids[0], owner: 'primary.handoff.test',
+        handoffRoot, handoffNames: [handoffName], authorityRoot: path.join(f.root, 'authority'),
+        batchRoot: path.join(f.root, 'batch'), blogRoot: f.blog, inventoryRoot: f.inventory
+    };
+    let fetchCalls = 0;
+    const originalFetch = deep.fetchArxivTextDetailedUncached;
+    t.after(() => { deep.fetchArxivTextDetailedUncached = originalFetch; });
+    const text = 'official primary paper methods and results '.repeat(400);
+    const structured = { version: 1, source: 'arxiv_html', tables: [], formulas: [], flattenedTextSha256: sha(text) };
+    deep.fetchArxivTextDetailedUncached = async id => {
+        fetchCalls++;
+        return { text, source: 'html', sourceId: id, htmlAvailability: 'available', htmlAttempts: 1,
+            warnings: [], imageInfos: [], structuredArtifacts: {
+                ...structured, payloadSha256: sha(JSON.stringify(structured))
+            } };
+    };
+    return { ...f, state, pageFile, pageText, binding, plan, planner, written, handoffName, options,
+        fetchCalls: () => fetchCalls };
+}
+
+test('主评分行的新失败交接经真实批次与 crosswalk 决策完成', async t => {
+    const f = primaryHandoffFixture(t);
+    const batch = require('../scripts/lib/historical-arxiv-batch.js');
+    const loaded = f.planner.readArxivFreshFailureHandoff({ root: f.options.handoffRoot, handoffName: f.handoffName });
+    assert.equal(loaded.handoff.version, 2);
+    assert.deepEqual(loaded.handoff.dailyPrimaryArxivBindings, [f.binding]);
+    const result = await batch.runSingleHintBatch(f.options);
+    assert.equal(result.status, 'complete', JSON.stringify(result));
+    assert.equal(result.processedPages, 1);
+    assert.equal(f.fetchCalls(), 1);
+    const state = api.readCrosswalk(f.options);
+    assert.equal(state.assignments[f.binding.pageKey].status, 'verified');
+    const artifact = JSON.parse(fs.readFileSync(path.join(f.crosswalk, ids[0], 'decisions', state.attempts[0].decisionName)));
+    assert.equal(artifact.version, 2);
+    assert.deepEqual(artifact.primaryArxivBinding, f.binding);
+    assert.equal(artifact.sourceAuthority.paperId, 'arxiv:2601.00001');
+    assert.equal((await batch.runSingleHintBatch(f.options)).status, 'complete');
+    assert.equal(f.fetchCalls(), 1);
+});
+
+test('主评分行交接在请求前拒绝原页、评分行证明和完整候选集的变化', async t => {
+    const f = primaryHandoffFixture(t);
+    const batch = require('../scripts/lib/historical-arxiv-batch.js');
+    fs.writeFileSync(f.pageFile, f.pageText.replace('7.0/10', '8.0/10'));
+    await assert.rejects(batch.runSingleHintBatch(f.options), /frozen page bytes differ/);
+    fs.writeFileSync(f.pageFile, f.pageText);
+    const original = fs.readFileSync(f.written.filename);
+    const handoff = JSON.parse(original);
+    const proof = handoff.dailyPrimaryArxivBindings[0];
+    proof.semanticLineSha256 = sha('另一行');
+    const proofBody = structuredClone(proof); delete proofBody.bindingSha256;
+    proof.bindingSha256 = api.stableHash(proofBody);
+    const deterministic = {
+        contract: handoff.contract, version: handoff.version, dailyPrimaryArxivBindings: handoff.dailyPrimaryArxivBindings,
+        planSha256: handoff.planSha256, catalogFileSha256: handoff.catalogFileSha256, inventory: handoff.inventory,
+        paperId: handoff.paperId, runId: handoff.runId, arxivId: handoff.arxivId, generation: handoff.generation,
+        failure: handoff.failure, pageBindings: handoff.pageBindings, pageBindingSetSha256: handoff.pageBindingSetSha256
+    };
+    handoff.handoffKey = api.stableHash(deterministic);
+    const body = structuredClone(handoff); delete body.handoffSha256;
+    handoff.handoffSha256 = api.stableHash(body);
+    const changedName = f.planner.arxivFreshFailureHandoffName(handoff);
+    fs.writeFileSync(path.join(f.options.handoffRoot, changedName), api.prettyBytes(handoff));
+    await assert.rejects(batch.runSingleHintBatch({ ...f.options, handoffNames: [changedName] }), /原始字节或候选来源/);
+    const changedState = structuredClone(f.state);
+    changedState.source.papers[0].identityHints.candidates[1].value = 'Another_12';
+    changedState.source.paperPageSetSha256 = api.stableHash(changedState.source.papers);
+    const stateBody = structuredClone(changedState); delete stateBody.stateSha256;
+    changedState.stateSha256 = api.stableHash(stateBody);
+    api.assertCrosswalkState(changedState);
+    const stateFile = path.join(f.crosswalk, ids[0], 'state.json');
+    fs.writeFileSync(stateFile, api.prettyBytes(changedState));
+    await assert.rejects(batch.runSingleHintBatch(f.options), /完整冻结候选集合/);
+    assert.equal(f.fetchCalls(), 0);
+    assert.equal(fs.existsSync(f.options.authorityRoot), false);
+});
+
+test('主评分行决定落盘后应用前再次重核原页，拒绝替换且保留 pending', async t => {
+    const f = primaryHandoffFixture(t);
+    const produced = await arxivAdapter.prepareArxivSourceAuthority({ authorityRoot: f.options.authorityRoot,
+        arxivId: '2601.00001', authorityName: 'arxiv-2601.00001.json', apply: true });
+    assert.throws(() => api.buildVerifiedDecisionArtifact({ state: f.state, pageKey: f.binding.pageKey,
+        authorityHandle: produced.authorityHandle, actorId: 'primary.test' }), /single unambiguous/);
+    const artifact = api.buildVerifiedDecisionArtifact({ state: f.state, pageKey: f.binding.pageKey,
+        authorityHandle: produced.authorityHandle, actorId: 'primary.test', primaryArxivBinding: f.binding,
+        blogRoot: f.blog, inventoryRoot: f.inventory });
+    const filename = api.writeDecisionArtifact({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0],
+        decisionName: 'primary.json', artifact });
+    const handle = api.loadDecisionHandle(filename, { authorityHandle: produced.authorityHandle,
+        blogRoot: f.blog, inventoryRoot: f.inventory });
+    fs.writeFileSync(f.pageFile, f.pageText.replace('2601.00001v1', '2601.00002v1'));
+    assert.throws(() => api.applyDecision({ crosswalkRoot: f.crosswalk, crosswalkId: ids[0],
+        decisionHandle: handle, owner: 'primary.test' }), /frozen page bytes differ/);
+    assert.equal(api.readCrosswalk(f.options).assignments[f.binding.pageKey].status, 'pending');
+});

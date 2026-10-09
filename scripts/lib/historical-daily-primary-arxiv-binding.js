@@ -225,8 +225,19 @@ function normalizeDailyPrimaryArxivBinding(value) {
     return clone(value);
 }
 
+function verifyDailyPrimaryArxivBinding({ binding, paper, blogRoot } = {}) {
+    const normalized = normalizeDailyPrimaryArxivBinding(binding);
+    if (!paper || normalized.pageKey !== paper.pageKey || normalized.pagePath !== paper.pagePath
+        || normalized.pageContentSha256 !== paper.pageContentSha256) {
+        fail('主 arXiv 绑定与冻结页面不一致');
+    }
+    const replayed = buildDailyPrimaryArxivBinding({ blogRoot, page: paper });
+    if (stableHash(replayed) !== stableHash(normalized)) fail('主 arXiv 评分行的原始字节或候选来源已变化');
+    return normalized;
+}
+
 module.exports = {
-    CONTRACT, VERSION, MAPPING, verifyBodyOnlyIdentityHints,
+    CONTRACT, VERSION, MAPPING, verifyBodyOnlyIdentityHints, verifyDailyPrimaryArxivBinding,
     contract: CONTRACT, mapping: MAPPING,
     HistoricalDailyPrimaryArxivBindingError,
     build: buildDailyPrimaryArxivBinding,

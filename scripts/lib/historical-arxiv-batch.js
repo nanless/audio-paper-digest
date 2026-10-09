@@ -10,6 +10,7 @@ const path = require('node:path');
 const arxivApi = require('./arxiv-source-authority.js');
 const crosswalkApi = require('./page-source-crosswalk.js');
 const planApi = require('./historical-direct-rewrite-plan.js');
+const primaryArxiv = require('./historical-daily-primary-arxiv-binding.js');
 
 const RECORD_CONTRACT = 'historical-arxiv-failure-handoff-batch-record-v2';
 const VERSION = 2;
@@ -20,7 +21,7 @@ const hasOwn = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
 function fail(message) { throw new Error(`历史 arXiv 失败交接批次被拒绝：${message}`); }
 function same(value, expected) { return crosswalkApi.stableHash(value) === crosswalkApi.stableHash(expected); }
 
-function assertHandoffMatchesCrosswalk(state, handoff) {
+function assertHandoffMatchesCrosswalk(state, handoff, blogRoot, inventoryRoot) {
     if (!state || typeof state !== 'object' || !state.source || !state.assignments) fail('crosswalk 状态不合法：缺少 source 或 assignments');
     if (state.source.ledgerSha256 !== handoff.inventory.ledgerSha256
         || state.source.pageSetSha256 !== handoff.inventory.pageSetSha256) {
@@ -39,6 +40,15 @@ function assertHandoffMatchesCrosswalk(state, handoff) {
             || !same(paper.scope, binding.scope)) {
             fail(`${handoff.arxivId} frozen page binding drifted`);
         }
+        if (binding.mapping === primaryArxiv.MAPPING) {
+            const primary = handoff.dailyPrimaryArxivBindings?.find(item => item.pageKey === binding.pageKey);
+            crosswalkApi.verifyPrimaryArxivDecisionBinding({ state, binding: primary, blogRoot, inventoryRoot });
+            if (primary.arxivId !== handoff.arxivId
+                || !same(primary.candidateSources, binding.historicalArxivLink.hintSources)) {
+                fail('主 arXiv 交接与当前冻结候选不一致');
+            }
+            continue;
+        }
         const hints = paper.identityHints;
         const candidate = hints?.status === 'single' && hints.candidates?.length === 1 ? hints.candidates[0] : null;
         if (!candidate || candidate.scheme !== 'arxiv' || candidate.value !== handoff.arxivId
@@ -50,7 +60,7 @@ function assertHandoffMatchesCrosswalk(state, handoff) {
     return handoff.pageBindings.map(binding => binding.pageKey).sort();
 }
 
-function selectedGroups(state, handoffs) {
+function selectedGroups(state, handoffs, blogRoot, inventoryRoot) {
     if (!Array.isArray(handoffs) || !handoffs.length) fail('至少需要一个具名的 fresh 失败交接单');
     const arxivIds = new Set(); const pageKeys = new Set();
     return handoffs.map(({ handoffName, fileSha256, handoff }) => {
@@ -60,7 +70,7 @@ function selectedGroups(state, handoffs) {
         }
         if (arxivIds.has(handoff.arxivId)) fail(`arXiv 抓取失败交接重复：${handoff.arxivId}`);
         arxivIds.add(handoff.arxivId);
-        const bindings = assertHandoffMatchesCrosswalk(state, handoff);
+        const bindings = assertHandoffMatchesCrosswalk(state, handoff, blogRoot, inventoryRoot);
         for (const pageKey of bindings) {
             if (pageKeys.has(pageKey)) fail(`多份 fresh 抓取失败交接在 ${pageKey} 上重叠`);
             pageKeys.add(pageKey);
@@ -130,11 +140,12 @@ function loadSelectedHandoffs({ handoffRoot, handoffNames }, deps) {
 }
 
 async function runSingleHintBatch({ crosswalkRoot, authorityRoot, handoffRoot, handoffNames, batchRoot, crosswalkId, owner,
-    apply = true, concurrency = 2 } = {}, overrides = {}) {
+    apply = true, concurrency = 2, blogRoot = require('../config.js').PUBLISH_CONFIG.blogRepo,
+    inventoryRoot = require('../config.js').FILES.historicalPageInventoryDir } = {}, overrides = {}) {
     const deps = { ...defaultDependencies(), ...overrides };
     if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 3) fail('并发数必须是 1 到 3 之间的整数');
     const initial = deps.readCrosswalk({ crosswalkRoot, crosswalkId });
-    const selected = selectedGroups(initial, loadSelectedHandoffs({ handoffRoot, handoffNames }, deps));
+    const selected = selectedGroups(initial, loadSelectedHandoffs({ handoffRoot, handoffNames }, deps), blogRoot, inventoryRoot);
     if (!apply) return { status: 'dry-run', crosswalkId, handoffCount: selected.length,
         selectedIdentities: selected.length, selectedPages: selected.reduce((count, item) => count + item.pageKeys.length, 0),
         concurrency, identities: selected.map(item => ({ arxivId: item.arxivId, pageCount: item.pageKeys.length,
@@ -147,7 +158,7 @@ async function runSingleHintBatch({ crosswalkRoot, authorityRoot, handoffRoot, h
     const currentPending = (state, group) => {
         // 不要因为下一页现在也有同样的 arXiv 提示就扩到那里。这份不可变的交接文件
         // 就是完整的可处理名单。
-        assertHandoffMatchesCrosswalk(state, group.handoff);
+        assertHandoffMatchesCrosswalk(state, group.handoff, blogRoot, inventoryRoot);
         return group.pageKeys.filter(pageKey => state.assignments[pageKey]?.status === 'pending');
     };
     const processGroup = async (group, resultIndex) => {
@@ -171,11 +182,12 @@ async function runSingleHintBatch({ crosswalkRoot, authorityRoot, handoffRoot, h
                     current = deps.readCrosswalk({ crosswalkRoot, crosswalkId }); currentPending(current, group);
                     if (current.assignments[pageKey]?.status !== 'pending') return false;
                     const artifact = deps.buildDecision({ state: current, pageKey, authorityHandle: prepared.authorityHandle,
-                        operationId: deps.uuid(), actorId: owner,
+                        operationId: deps.uuid(), actorId: owner, blogRoot, inventoryRoot,
+                        primaryArxivBinding: group.handoff.dailyPrimaryArxivBindings?.find(binding => binding.pageKey === pageKey),
                         reason: `Fallback after sealed fresh-arXiv acquisition failure handoff ${group.handoffSha256}.` });
                     const decisionName = `fresh-failure-${group.arxivId.replace('.', '-')}-${attemptId}-${pageKey.slice(5)}.json`;
                     const decisionFile = deps.writeDecision({ crosswalkRoot, crosswalkId, decisionName, artifact });
-                    const handle = deps.loadDecision(decisionFile, { authorityHandle: prepared.authorityHandle });
+                    const handle = deps.loadDecision(decisionFile, { authorityHandle: prepared.authorityHandle, blogRoot, inventoryRoot });
                     deps.applyDecision({ crosswalkRoot, crosswalkId, decisionHandle: handle, owner }); return true;
                 });
                 if (applied) completedPageKeys.push(pageKey);

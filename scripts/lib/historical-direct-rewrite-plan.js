@@ -21,6 +21,7 @@ const PAGE_KEY_RE = /^page:[a-f0-9]{64}$/;
 const ARXIV_ID_RE = /^\d{4}\.\d{4,5}$/;
 const ARXIV_FRESH_FAILURE_HANDOFF_CONTRACT = 'historical-arxiv-fresh-failure-crosswalk-handoff-v1';
 const ARXIV_FRESH_FAILURE_HANDOFF_VERSION = 1;
+const PRIMARY_ARXIV_HANDOFF_CONTRACT = 'historical-arxiv-fresh-failure-crosswalk-handoff-v2';
 const ARXIV_FRESH_FAILURE_HANDOFF_PREFIX = 'arxiv-fresh-failure-';
 const UNPROJECTED_REPORT_CONTRACT = 'historical-direct-rewrite-unprojected-catalog-report-v1';
 const UNPROJECTED_REPORT_VERSION = 1;
@@ -589,12 +590,17 @@ function buildArxivFreshFailureHandoff({ plan, paperId, generation, error, obser
     if (!item || item.route.kind !== 'arxiv-fresh-fetch') fail('arXiv 新失败交接需要一篇已规划的 arXiv 论文');
     const normalizedGenerationValue = normalizedGeneration(generation); const failure = normalizedFailure(error);
     const pageBindings = handoffPageBindings(item);
-    const handoffKey = stableHash({ contract: ARXIV_FRESH_FAILURE_HANDOFF_CONTRACT,
-        version: ARXIV_FRESH_FAILURE_HANDOFF_VERSION, planSha256: normalized.planSha256,
+    const primaryPages = new Set(pageBindings.filter(page => page.mapping === dailyPrimaryArxiv.MAPPING)
+        .map(page => page.pageKey));
+    const primaryBindings = normalized.dailyPrimaryArxivBindings.filter(binding => primaryPages.has(binding.pageKey));
+    const contract = primaryPages.size ? PRIMARY_ARXIV_HANDOFF_CONTRACT : ARXIV_FRESH_FAILURE_HANDOFF_CONTRACT;
+    const version = primaryPages.size ? 2 : ARXIV_FRESH_FAILURE_HANDOFF_VERSION;
+    const primaryFields = primaryPages.size ? { dailyPrimaryArxivBindings: clone(primaryBindings) } : {};
+    const handoffKey = stableHash({ contract, version, ...primaryFields, planSha256: normalized.planSha256,
         catalogFileSha256: normalized.catalogFileSha256, inventory: normalized.inventory,
         paperId: item.paperId, runId: item.runId, arxivId: item.route.arxivId,
         generation: normalizedGenerationValue, failure, pageBindings, pageBindingSetSha256: stableHash(pageBindings) });
-    const body = { contract: ARXIV_FRESH_FAILURE_HANDOFF_CONTRACT, version: ARXIV_FRESH_FAILURE_HANDOFF_VERSION,
+    const body = { contract, version, ...primaryFields,
         handoffKey, planSha256: normalized.planSha256, catalogFileSha256: normalized.catalogFileSha256,
         inventory: clone(normalized.inventory), paperId: item.paperId, runId: item.runId,
         route: item.route.kind, arxivId: item.route.arxivId, generation: normalizedGenerationValue,
@@ -603,10 +609,11 @@ function buildArxivFreshFailureHandoff({ plan, paperId, generation, error, obser
 }
 
 function normalizeArxivFreshFailureHandoff(value) {
+    const primaryVersion = value?.contract === PRIMARY_ARXIV_HANDOFF_CONTRACT && value.version === 2;
     exact(value, ['contract', 'version', 'handoffKey', 'planSha256', 'catalogFileSha256', 'inventory', 'paperId',
         'runId', 'route', 'arxivId', 'generation', 'failure', 'pageBindings', 'pageBindingSetSha256', 'observedAt',
-        'handoffSha256'], 'arXiv fresh failure handoff');
-    if (value.contract !== ARXIV_FRESH_FAILURE_HANDOFF_CONTRACT || value.version !== ARXIV_FRESH_FAILURE_HANDOFF_VERSION
+        'handoffSha256', ...(primaryVersion ? ['dailyPrimaryArxivBindings'] : [])], 'arXiv fresh failure handoff');
+    if ((!primaryVersion && (value.contract !== ARXIV_FRESH_FAILURE_HANDOFF_CONTRACT || value.version !== ARXIV_FRESH_FAILURE_HANDOFF_VERSION))
         || !validSha(value.handoffKey) || !validSha(value.planSha256) || !validSha(value.catalogFileSha256)
         || !plain(value.inventory) || !validSha(value.inventory.ledgerSha256) || !validSha(value.inventory.pageSetSha256)
         || typeof value.paperId !== 'string' || value.paperId !== `arxiv:${value.arxivId}` || !ARXIV_ID_RE.test(value.arxivId)
@@ -628,7 +635,8 @@ function normalizeArxivFreshFailureHandoff(value) {
         if (!PAGE_KEY_RE.test(page.pageKey) || typeof page.pagePath !== 'string' || !page.pagePath
             || !validSha(page.pageContentSha256) || !(page.primaryUrl === null || typeof page.primaryUrl === 'string')
             || typeof page.cohortDate !== 'string' || !plain(page.scope) || typeof page.scope.type !== 'string'
-            || typeof page.scope.key !== 'string' || page.mapping !== 'frozen-single-arxiv-identity-hint'
+            || typeof page.scope.key !== 'string' || !['frozen-single-arxiv-identity-hint',
+                ...(primaryVersion ? [dailyPrimaryArxiv.MAPPING] : [])].includes(page.mapping)
             || seenPages.has(page.pageKey)) fail('arXiv 新失败的页面绑定格式不正确或有重复');
         seenPages.add(page.pageKey);
         return { pageKey: page.pageKey, pagePath: page.pagePath, pageContentSha256: page.pageContentSha256,
@@ -637,12 +645,29 @@ function normalizeArxivFreshFailureHandoff(value) {
     }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
     if (value.pageBindings.some((page, index) => page.pageKey !== pageBindings[index].pageKey)
         || stableHash(pageBindings) !== value.pageBindingSetSha256) fail('arXiv 新失败的页面绑定已变化');
-    const deterministic = { contract: value.contract, version: value.version, planSha256: value.planSha256,
+    let primaryFields = {};
+    if (primaryVersion) {
+        const pages = pageBindings.filter(page => page.mapping === dailyPrimaryArxiv.MAPPING);
+        if (!pages.length || !Array.isArray(value.dailyPrimaryArxivBindings)
+            || value.dailyPrimaryArxivBindings.length !== pages.length) fail('主 arXiv 交接缺少完整页面绑定');
+        const bindings = value.dailyPrimaryArxivBindings.map(binding => dailyPrimaryArxiv.normalize(binding));
+        for (const [index, binding] of bindings.entries()) {
+            const page = pages[index];
+            if (binding.pageKey !== page.pageKey || binding.pagePath !== page.pagePath
+                || binding.pageContentSha256 !== page.pageContentSha256 || page.scope.type !== 'daily'
+                || binding.arxivId !== value.arxivId
+                || stableHash(binding.candidateSources) !== stableHash(page.historicalArxivLink.hintSources)) {
+                fail('主 arXiv 交接绑定与页面、来源身份或候选来源不一致');
+            }
+        }
+        primaryFields = { dailyPrimaryArxivBindings: bindings };
+    }
+    const deterministic = { contract: value.contract, version: value.version, ...primaryFields, planSha256: value.planSha256,
         catalogFileSha256: value.catalogFileSha256, inventory: clone(value.inventory), paperId: value.paperId,
         runId: value.runId, arxivId: value.arxivId, generation, failure: clone(value.failure), pageBindings,
         pageBindingSetSha256: value.pageBindingSetSha256 };
     if (stableHash(deterministic) !== value.handoffKey) fail('arXiv 新失败交接的 key 已变化');
-    const body = { contract: value.contract, version: value.version, handoffKey: value.handoffKey,
+    const body = { contract: value.contract, version: value.version, ...primaryFields, handoffKey: value.handoffKey,
         planSha256: value.planSha256, catalogFileSha256: value.catalogFileSha256, inventory: clone(value.inventory),
         paperId: value.paperId, runId: value.runId, route: value.route, arxivId: value.arxivId, generation,
         failure: clone(value.failure), pageBindings, pageBindingSetSha256: value.pageBindingSetSha256, observedAt };

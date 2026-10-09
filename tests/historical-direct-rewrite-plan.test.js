@@ -343,6 +343,9 @@ test('全新 arXiv 获取失败只写一份不可变的冻结链接与页面交�
     assert.equal(conferenceRuns.length, 2, 'a failed arXiv source never blocks either local conference source');
     const names = fs.readdirSync(handoffRoot); assert.equal(names.length, 1);
     const stored = planner.readArxivFreshFailureHandoff({ root: handoffRoot, handoffName: names[0] }).handoff;
+    assert.equal(stored.version, 1);
+    assert.equal(stored.contract, 'historical-arxiv-fresh-failure-crosswalk-handoff-v1');
+    assert.equal(Object.hasOwn(stored, 'dailyPrimaryArxivBindings'), false);
     assert.equal(stored.paperId, 'arxiv:2601.00001'); assert.equal(stored.route, 'arxiv-fresh-fetch');
     assert.equal(stored.failure.errorCode, 'ARXIV_TRANSPORT'); assert.equal(stored.pageBindings.length, 1);
     assert.deepEqual(stored.pageBindings[0].historicalArxivLink, {

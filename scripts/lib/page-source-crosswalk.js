@@ -12,11 +12,13 @@ const archiveIdentityApi = require('./historical-archive-crawl-authority.js');
 const localCrawlIdentityApi = require('./historical-local-crawl-authority.js');
 const conferenceIdentityApi = require('./historical-conference-crawl-authority.js');
 const identityApi = require('./paper-identity.js');
+const primaryArxiv = require('./historical-daily-primary-arxiv-binding.js');
 
 const LEDGER_CONTRACT = 'historical-page-ledger-v1';
 const LEDGER_RECEIPT_CONTRACT = 'historical-page-ledger-receipt-v1';
 const CONTRACT = 'page-source-crosswalk-v1';
 const DECISION_CONTRACT = 'page-source-crosswalk-decision-v1';
+const PRIMARY_ARXIV_DECISION_CONTRACT = 'page-source-crosswalk-decision-v2';
 const LOCK_OWNER_CONTRACT = 'page-source-crosswalk-lock-owner-v1';
 const FINAL_RECEIPT_CONTRACT = 'page-source-crosswalk-final-receipt-v1';
 const VERSION = 1;
@@ -1164,9 +1166,11 @@ function readCrosswalk({ crosswalkRoot, crosswalkId } = {}) {
 
 function decisionDigest(value) { const body = clone(value); delete body.artifactSha256; return stableHash(body); }
 function normalizeDecisionArtifact(value) {
+    const primaryVersion = value?.contract === PRIMARY_ARXIV_DECISION_CONTRACT && value.version === 2;
     exact(value, ['contract', 'version', 'crosswalkId', 'operationId', 'expectedStateSha256', 'pageKey',
-        'pagePath', 'pageContentSha256', 'actorId', 'result', 'sourceAuthority', 'createdAt', 'artifactSha256'], 'decision artifact');
-    if (value.contract !== DECISION_CONTRACT || value.version !== VERSION || !UUID_RE.test(value.crosswalkId)
+        'pagePath', 'pageContentSha256', 'actorId', 'result', 'sourceAuthority', 'createdAt', 'artifactSha256',
+        ...(primaryVersion ? ['primaryArxivBinding'] : [])], 'decision artifact');
+    if ((!primaryVersion && (value.contract !== DECISION_CONTRACT || value.version !== VERSION)) || !UUID_RE.test(value.crosswalkId)
         || !UUID_RE.test(value.operationId)) fail('decision 的契约、版本或 UUID 无效');
     assertSha(value.expectedStateSha256, 'decision expectedStateSha256');
     if (!PAGE_KEY_RE.test(value.pageKey)) fail('decision 的 page key 格式不正确');
@@ -1176,6 +1180,14 @@ function normalizeDecisionArtifact(value) {
     if (![...FINAL_REVIEW_STATUSES, 'verified'].includes(value.result.status)) fail('decision 的 status 不受支持');
     if (value.result.status === 'verified') validateAuthorityReference(value.sourceAuthority, 'decision sourceAuthority');
     else if (value.sourceAuthority !== null) fail('review-only decision 不能带来源权威');
+    if (primaryVersion) {
+        const binding = primaryArxiv.normalize(value.primaryArxivBinding);
+        if (value.result.status !== 'verified' || value.sourceAuthority.identity.kind !== 'arxiv'
+            || binding.arxivId !== value.sourceAuthority.identity.arxivId || binding.pageKey !== value.pageKey
+            || binding.pagePath !== value.pagePath || binding.pageContentSha256 !== value.pageContentSha256) {
+            fail('主 arXiv 决策绑定与页面或生产来源不一致');
+        }
+    }
     text(value.result.reason, 'decision reason', 2000);
     if (assertSha(value.artifactSha256, 'decision artifactSha256') !== decisionDigest(value)) fail('decision artifact 的自校验 SHA 已变化');
     return clone(value);
@@ -1191,8 +1203,19 @@ function buildDecisionArtifact({ state, pageKey, operationId = crypto.randomUUID
         sourceAuthority: null, createdAt: nowIso(now) };
     return normalizeDecisionArtifact({ ...body, artifactSha256: stableHash(body) });
 }
+function verifyPrimaryArxivDecisionBinding({ state, binding, blogRoot, inventoryRoot } = {}) {
+    const handle = loadHistoricalInventoryHandle({ inventoryRoot,
+        ledgerName: state.source.ledgerName, receiptName: state.source.receiptName });
+    const frozenSource = sourceBinding(inventoryHandleSnapshot(handle));
+    if (stableHash(frozenSource) !== stableHash(state.source)) fail('主 arXiv 决策的完整冻结候选集合已变化');
+    const paper = state.source.papers.find(item => item.pageKey === binding?.pageKey);
+    return primaryArxiv.verifyDailyPrimaryArxivBinding({ binding, paper, blogRoot });
+}
+
 function buildVerifiedDecisionArtifact({ state, pageKey, authorityHandle, operationId = crypto.randomUUID(),
-    actorId, reason = 'Authenticated source authority exactly matches an explicit page identity hint.', now } = {}) {
+    actorId, reason = 'Authenticated source authority exactly matches an explicit page identity hint.', now,
+    primaryArxivBinding, blogRoot = require('../config.js').PUBLISH_CONFIG.blogRepo,
+    inventoryRoot = require('../config.js').FILES.historicalPageInventoryDir } = {}) {
     const checked = assertCrosswalkState(state);
     if (!Object.hasOwn(checked.assignments, pageKey)) fail('verified decision 的 pageKey 不在 crosswalk 中');
     const source = sourceAuthoritySnapshot(authorityHandle); const snapshot = source.snapshot;
@@ -1210,12 +1233,19 @@ function buildVerifiedDecisionArtifact({ state, pageKey, authorityHandle, operat
             && candidate.value === expectedHint.value
             && candidate.sources.every(source => !/(?:^|:)title(?:$|:)/i.test(source)))
         : [];
+    let verifiedPrimary = null;
+    if (primaryArxivBinding !== undefined) {
+        verifiedPrimary = verifyPrimaryArxivDecisionBinding({ state: checked, binding: primaryArxivBinding, blogRoot, inventoryRoot });
+        if (expectedHint.scheme !== 'arxiv' || verifiedPrimary.arxivId !== expectedHint.value) {
+            fail('主 arXiv 评分行与生产来源身份不一致');
+        }
+    }
     const titleBindings = snapshot.authority.titleBindings;
     const titleBindingMatches = Array.isArray(titleBindings) && ['none', 'conflict'].includes(paper.identityHints.status)
         ? titleBindings.filter(binding => binding?.pageKey === pageKey && binding.pagePath === assignment.pagePath
             && binding.pageContentSha256 === assignment.pageContentSha256)
         : [];
-    if (hintMatches.length !== 1 && titleBindingMatches.length !== 1) {
+    if (hintMatches.length !== 1 && titleBindingMatches.length !== 1 && !verifiedPrimary) {
         if (paper.identityHints.status !== 'single' && !Array.isArray(titleBindings)) {
             fail('verified authority requires a single unambiguous page identity hint; conflict/multiple requires separate resolution authority');
         }
@@ -1224,7 +1254,9 @@ function buildVerifiedDecisionArtifact({ state, pageKey, authorityHandle, operat
         }
         fail('verified authority 必须匹配一条显式的非标题页面身份提示');
     }
-    const body = { contract: DECISION_CONTRACT, version: VERSION, crosswalkId: checked.crosswalkId,
+    const body = { contract: verifiedPrimary ? PRIMARY_ARXIV_DECISION_CONTRACT : DECISION_CONTRACT,
+        version: verifiedPrimary ? 2 : VERSION, ...(verifiedPrimary ? { primaryArxivBinding: verifiedPrimary } : {}),
+        crosswalkId: checked.crosswalkId,
         operationId, expectedStateSha256: checked.stateSha256, pageKey, pagePath: assignment.pagePath,
         pageContentSha256: assignment.pageContentSha256, actorId, result: { status: 'verified', reason },
         sourceAuthority, createdAt: nowIso(now) };
@@ -1240,7 +1272,8 @@ function writeDecisionArtifact({ crosswalkRoot, crosswalkId, decisionName, artif
     catch (error) { if (error instanceof PageSourceCrosswalkError) throw error; fail(`无法保留 decision：${error.message}`); }
     return filename;
 }
-function loadDecisionHandle(filename, { authorityHandle = null } = {}) {
+function loadDecisionHandle(filename, { authorityHandle = null, blogRoot = require('../config.js').PUBLISH_CONFIG.blogRepo,
+    inventoryRoot = require('../config.js').FILES.historicalPageInventoryDir } = {}) {
     const loaded = readRegular(filename, MAX_DECISION_BYTES, 'crosswalk decision');
     const artifact = normalizeDecisionArtifact(loaded.value);
     if (!loaded.bytes.equals(prettyBytes(artifact))) fail('decision artifact 的字节不规范');
@@ -1258,12 +1291,12 @@ function loadDecisionHandle(filename, { authorityHandle = null } = {}) {
     const handle = Object.freeze(Object.create(null)); DECISION_HANDLES.add(handle);
     DECISION_HANDLE_DATA.set(handle, Object.freeze({ artifact, filename: fs.realpathSync(filename),
         fileSha256: loaded.sha256, fileDev: loaded.dev, fileIno: loaded.ino,
-        authorityAuthenticated, authorityHandle }));
+        authorityAuthenticated, authorityHandle, blogRoot, inventoryRoot }));
     return handle;
 }
 function decisionHandleSnapshot(handle) {
     if (!handle || typeof handle !== 'object' || !DECISION_HANDLES.has(handle)) fail('需要已认证的 decision 句柄');
-    const { authorityHandle: _authorityHandle, ...snapshot } = DECISION_HANDLE_DATA.get(handle);
+    const { authorityHandle: _authorityHandle, blogRoot: _blogRoot, inventoryRoot: _inventoryRoot, ...snapshot } = DECISION_HANDLE_DATA.get(handle);
     return clone(snapshot);
 }
 function lockOwnerRecord(owner, now, token = crypto.randomUUID()) {
@@ -1467,7 +1500,8 @@ function applyDecision({ crosswalkRoot, crosswalkId, decisionHandle, owner, now,
             }
         }
         const currentDecisionHandle = loadDecisionHandle(originalDecision.filename,
-            { authorityHandle: replayedAuthorityHandle });
+            { authorityHandle: replayedAuthorityHandle, blogRoot: originalDecision.blogRoot,
+                inventoryRoot: originalDecision.inventoryRoot });
         const currentDecision = DECISION_HANDLE_DATA.get(currentDecisionHandle);
         if (currentDecision.fileDev !== originalDecision.fileDev || currentDecision.fileIno !== originalDecision.fileIno
             || currentDecision.fileSha256 !== originalDecision.fileSha256
@@ -1492,6 +1526,10 @@ function applyDecision({ crosswalkRoot, crosswalkId, decisionHandle, owner, now,
             fail('decision 的页面快照与 crosswalk assignment 不一致');
         }
         if (current.status !== 'pending') fail('只有 pending assignment 可以接收当前 review decision');
+        if (artifact.contract === PRIMARY_ARXIV_DECISION_CONTRACT) {
+            verifyPrimaryArxivDecisionBinding({ state, binding: artifact.primaryArxivBinding,
+                blogRoot: originalDecision.blogRoot, inventoryRoot: originalDecision.inventoryRoot });
+        }
         const recordedAt = nowIso(now);
         if (artifact.createdAt > recordedAt) fail('decision artifact 不能早于其创建时间被记录');
         const next = clone(state);
@@ -1638,7 +1676,7 @@ module.exports = {
     PageSourceCrosswalkError, stableHash, prettyBytes, safeDirectory, safeDirectJson,
     validateHistoricalLedger, validateHistoricalReceipt, loadHistoricalInventoryHandle, inventoryHandleSnapshot,
     assignmentKey, sourceBinding, completionFor, identityGroupsFor, normalizeIdentityGroups,
-    assertCrosswalkState, buildInitialState,
+    assertCrosswalkState, buildInitialState, verifyPrimaryArxivDecisionBinding,
     crosswalkDirectory, prepareCrosswalk,
     readCrosswalk, normalizeDecisionArtifact, buildDecisionArtifact, buildVerifiedDecisionArtifact,
     writeDecisionArtifact, loadDecisionHandle,
