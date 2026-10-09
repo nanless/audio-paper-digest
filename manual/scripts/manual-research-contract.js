@@ -966,17 +966,17 @@ function validateOpenSourceEvidence(evidence, options = {}) {
 }
 
 function exactFactTokens(value) {
-    const text = String(value || '')
+    const text = String(value || '').normalize('NFKC').replace(/−/g, '-')
         .replace(/https?:\/\/\S+/g, ' ')
         .replace(/\[[A-Z][A-Z0-9_/-]*\]/g, ' ');
     const patterns = [
-        /\b\d+(?:\.\d+)?\s*[×x]\s*10\s*\^?\s*-?\d+\b/gi,
-        /(?<![A-Za-z])\d+(?:\.\d+)?\s*(?:%|pp|ms|s|Hz|kHz|MHz|GHz|GB|MB|KB|dB|mJ|W|FPS|fps|token(?:s)?|帧|小时|样本|人)(?![A-Za-z])/g,
-        /(?<![A-Za-z])\d+(?:\.\d+)?\s*(?:layers?|dimensions?|epochs?|configs?|devices?|channels?|microphones?|speakers?|classes?|datasets?|tasks?|models?|GPUs?)(?![A-Za-z])/gi,
-        /\b\d+\s*-\s*D\b/gi,
+        /(?<![A-Za-z0-9.+-])[-+]?\d+(?:\.\d+)?\s*[×x]\s*10\s*\^?\s*-?\d+\b/gi,
+        /(?<![A-Za-z0-9.+-])[-+]?\d+(?:\.\d+)?\s*(?:%|pp|ms|s|Hz|kHz|MHz|GHz|GB|MB|KB|dB|mJ|W|FPS|fps|token(?:s)?|帧|小时|毫秒|秒|样本|人)(?![A-Za-z])/g,
+        /(?<![A-Za-z0-9.+-])[-+]?\d+(?:\.\d+)?\s*(?:layers?|dimensions?|epochs?|configs?|devices?|channels?|microphones?|speakers?|classes?|datasets?|tasks?|models?|GPUs?)(?![A-Za-z])/gi,
+        /(?<![A-Za-z0-9.+-])[-+]?\d+\s*-\s*D\b/gi,
         /\b(?:A|H|V)\d{2,4}\b/g,
-        /\b\d+(?:\.\d+)?\s*[KMB](?![A-Za-z])/g,
-        /(?<![A-Za-z0-9])\d{3,}(?:\.\d+)?(?![A-Za-z0-9])/g
+        /(?<![A-Za-z0-9.+-])[-+]?\d+(?:\.\d+)?\s*[KMB](?![A-Za-z])/g,
+        /(?<![A-Za-z0-9.+-])[-+]?\d{3,}(?:\.\d+)?(?![A-Za-z0-9.])/g
     ];
     const tokens = new Set();
     for (const pattern of patterns) {
@@ -996,79 +996,47 @@ function validateExactFactCoverage(analysis, sourceText, options = {}) {
     const readerText = typeof options.readerText === 'string'
         ? options.readerText
         : sections.map(section => extractSection(analysis, section)).join('\n');
-    const source = normalizeEvidence(sourceText).toLowerCase().replace(/\^/g, '');
-    const looseSource = source.replace(/[\p{P}\p{S}]+/gu, '');
-    const external = normalizeEvidence((options.externalEvidence || []).join('\n')).toLowerCase().replace(/\^/g, '');
-    const boundEvidenceItems = (options.boundEvidence || []).map(value => (
-        normalizeEvidence(value).toLowerCase().replace(/\^/g, '')
-    ));
-    const boundEvidence = boundEvidenceItems.join('\n');
+    const normalizeQuantityEvidence = value => String(value || '').normalize('NFKC')
+        .replace(/−/g, '-').toLowerCase().replace(/\^/g, '');
+    const evidenceItems = [sourceText, ...(options.externalEvidence || []), ...(options.boundEvidence || [])]
+        .map(normalizeQuantityEvidence);
     const derived = new Set((options.derivedFacts || []).map(item => (
         typeof item === 'string' ? item : item?.value
-    )).filter(Boolean).map(value => normalizeEvidence(value).toLowerCase().replace(/\^/g, '')));
-    const tokenAliases = token => {
-        const aliases = [token];
-        for (const [from, targets] of Object.entries({
-            '帧': ['frame', 'frames'], '小时': ['hour', 'hours'],
-            '样本': ['sample', 'samples'], '秒': ['second', 'seconds'],
-            '毫秒': ['ms', 'millisecond', 'milliseconds'],
-            '人': ['participant', 'participants', 'subject', 'subjects', 'listener', 'listeners', 'speaker', 'speakers'],
-            '个': ['']
-        })) {
-            if (token.endsWith(from)) {
-                for (const target of targets) aliases.push(token.slice(0, -from.length) + target);
-            }
-        }
-        if (/\d(?:\.\d+)?s$/i.test(token)) {
-            const number = token.replace(/s$/i, '');
-            aliases.push(`${number}second`, `${number}seconds`);
-        }
-        return aliases.map(value => value.replace(/[\p{P}\p{S}]+/gu, ''));
-    };
-    const locallyContainsQuantity = (haystack, number, aliases) => {
-        const body = normalizeEvidence(haystack).toLowerCase().replace(/\^/g, '');
+    )).filter(Boolean).map(value => normalizeEvidence(normalizeQuantityEvidence(value))));
+    const escapePattern = value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // 中文叙述可紧接数值；其他字母、组合标记和数字不能被截成量值边界。
+    const foreignLetter = '[^\\P{L}\\p{Script=Han}]';
+    const numericLeftBoundary = `(?<![\\p{N}\\p{M}.+-]|${foreignLetter})`;
+    const unitRightBoundary = `(?![\\p{N}\\p{M}]|${foreignLetter})`;
+    const locallyContainsQuantity = (body, number, aliases) => {
         const numberWords = {
             1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five', 6: 'six',
             7: 'seven', 8: 'eight', 9: 'nine', 10: 'ten', 11: 'eleven', 12: 'twelve',
             13: 'thirteen', 14: 'fourteen', 15: 'fifteen', 16: 'sixteen',
             17: 'seventeen', 18: 'eighteen', 19: 'nineteen', 20: 'twenty'
         };
-        const numberAlternatives = [number, numberWords[Number(number)]]
-            .filter(Boolean)
-            .map(value => String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-        const numberPattern = `(?:${numberAlternatives.join('|')})`;
+        const numbers = [number];
+        if (/^\d+$/.test(number) && numberWords[Number(number)]) numbers.push(numberWords[Number(number)]);
+        // 只接受完整数值及紧邻单位。表头与远处数字同时存在，不能证明它们属于同一格。
+        const numberPattern = `${numericLeftBoundary}(?:${numbers.map(escapePattern).join('|')})(?![\\p{N}.])`;
         return aliases.some(alias => {
-            const unitPattern = alias.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-            if (new RegExp(
-                `(?:${numberPattern}.{0,40}${unitPattern}|${unitPattern}.{0,40}${numberPattern})`,
-                'iu'
-            ).test(body)) return true;
-            // PDF/HTML 表格抽取经常把单位放在表头，数值却出现在几百字符之后。
-            // 只有在明确识别出的 Table 块里才放宽这个距离；其他正文仍然要求
-            // 数值和单位在附近同时出现。
-            const numberRegex = new RegExp(numberPattern, 'giu');
-            for (const match of body.matchAll(numberRegex)) {
-                const window = body.slice(Math.max(0, match.index - 800), match.index + 800);
-                if (/table\s*\d+/i.test(window) && new RegExp(unitPattern, 'iu').test(window)) {
-                    return true;
-                }
-            }
-            return false;
+            const unitPattern = `${escapePattern(alias)}${unitRightBoundary}`;
+            return new RegExp(`${numberPattern}\\s*(?:-\\s*)?${unitPattern}`, 'iu').test(body);
         });
     };
     const missing = exactFactTokens(readerText).filter(token => {
-        if (source.includes(token) || external.includes(token) || boundEvidence.includes(token)
-            || derived.has(token)) return false;
+        if (derived.has(token)) return false;
         const numericWithUnit = token.match(/^([-+]?\d+(?:\.\d+)?)([a-z%\u4e00-\u9fff]+)$/i);
         if (numericWithUnit) {
             const [, number, unit] = numericWithUnit;
             const unitAliases = {
                 db: ['db'], pp: ['pp', 'point', 'points', 'percentagepoint', 'percentagepoints'],
                 ms: ['ms', 'millisecond', 'milliseconds'], s: ['s', 'second', 'seconds'],
+                毫秒: ['毫秒', 'ms', 'millisecond', 'milliseconds'], 秒: ['秒', 's', 'second', 'seconds'],
                 hz: ['hz'], khz: ['khz'], mhz: ['mhz'], gb: ['gb'], mb: ['mb'],
                 '%': ['%', 'percent'], fps: ['fps'], token: ['token', 'tokens'], tokens: ['token', 'tokens'],
-                帧: ['frame', 'frames'], 小时: ['hour', 'hours'], 样本: ['sample', 'samples'],
-                人: ['participant', 'participants', 'subject', 'subjects', 'listener', 'listeners'],
+                帧: ['帧', 'frame', 'frames'], 小时: ['小时', 'hour', 'hours'], 样本: ['样本', 'sample', 'samples'],
+                人: ['人', 'participant', 'participants', 'subject', 'subjects', 'listener', 'listeners'],
                 layer: ['layer', 'layers'], layers: ['layer', 'layers'],
                 dimension: ['dimension', 'dimensions'], dimensions: ['dimension', 'dimensions'],
                 epoch: ['epoch', 'epochs'], epochs: ['epoch', 'epochs'],
@@ -1077,21 +1045,10 @@ function validateExactFactCoverage(analysis, sourceText, options = {}) {
                 gpu: ['gpu', 'gpus'], gpus: ['gpu', 'gpus']
             };
             const aliases = unitAliases[unit.toLowerCase()] || [unit.toLowerCase()];
-            if (locallyContainsQuantity(sourceText, number, aliases)
-                || locallyContainsQuantity((options.externalEvidence || []).join('\n'), number, aliases)
-                || boundEvidenceItems.some(item => {
-                    const loose = item.replace(/[\p{P}\p{S}]+/gu, '');
-                    const numbers = [number, ({
-                        1: 'one', 2: 'two', 3: 'three', 4: 'four', 5: 'five', 6: 'six',
-                        7: 'seven', 8: 'eight', 9: 'nine', 10: 'ten', 11: 'eleven', 12: 'twelve'
-                    })[Number(number)]].filter(Boolean);
-                    return numbers.some(value => loose.includes(String(value).toLowerCase()))
-                        && aliases.some(alias => loose.includes(alias.replace(/[\p{P}\p{S}]+/gu, '')));
-                })) {
-                return false;
-            }
+            return !evidenceItems.some(item => locallyContainsQuantity(item, number, aliases));
         }
-        return !tokenAliases(token).some(alias => alias && looseSource.includes(alias));
+        const tokenPattern = new RegExp(`${numericLeftBoundary}${[...token].map(escapePattern).join('\\s*')}${unitRightBoundary}(?!\\.\\p{N})`, 'iu');
+        return !evidenceItems.some(item => tokenPattern.test(item));
     });
     if (missing.length) {
         throw new Error(`${label} 含未绑定本篇全文/外部证据/显式推导的精确量: ${missing.slice(0, 12).join(', ')}`);

@@ -36,11 +36,11 @@ describe('Manual 长文表格的 reader 渲染', () => {
         assert.equal(sanitizeArtifactTableCellForReader('RT60\\textrm{RT}_{60} / C50C_{50}'), 'RT60 / C50');
         assert.equal(sanitizeArtifactTableCellForReader('RT60=0.2\\mathrm{RT}_{60}=0.2 s'), 'RT60=0.2 s');
         assert.equal(sanitizeArtifactTableCellForReader('1st1^{\\text{st}} / 6th6^{\\text{th}}'), '1st / 6th');
-        assert.equal(sanitizeArtifactTableCellForReader('k=1\\mathbf{k=1} / k=0k{=}0 / kk'), 'k=1 / k=0 / k');
-        assert.equal(sanitizeArtifactTableCellForReader('1≤k<|S|1\\leq k<|S| / k=|S|k=|S|'), '1≤k<|S| / k=|S|');
-        assert.equal(sanitizeArtifactTableCellForReader('N=(3,600,1,800)N=(3{,}600,1{,}800)'), 'N=(3,600,1,800)');
+        assert.equal(sanitizeArtifactTableCellForReader('k=1\\mathbf{k=1} / k=0k{=}0 / kk'), 'k=1 / k=0k{=}0 / kk');
+        assert.equal(sanitizeArtifactTableCellForReader('1≤k<|S|1\\leq k<|S| / k=|S|k=|S|'), '1≤k<|S| / k=|S|k=|S|');
+        assert.equal(sanitizeArtifactTableCellForReader('N=(3,600,1,800)N=(3{,}600,1{,}800)'), 'N=(3,600,1,800)N=(3{,}600,1{,}800)');
         assert.equal(sanitizeArtifactTableCellForReader('6 - 10 m\\mathrm{m} / 0.2 - 0.5 s\\mathrm{s}'), '6 - 10 m / 0.2 - 0.5 s');
-        assert.equal(sanitizeArtifactTableCellForReader('Cohen’s dd'), 'Cohen’s d');
+        assert.equal(sanitizeArtifactTableCellForReader('Cohen’s dd'), 'Cohen’s dd');
         assert.equal(
             sanitizeArtifactTableCellForReader('AdamW (β1=0.9,β2=0.999\\beta_{1}=0.9,\\beta_{2}=0.999)'),
             'AdamW (β1=0.9, β2=0.999)'
@@ -53,36 +53,36 @@ describe('Manual 长文表格的 reader 渲染', () => {
             sanitizeArtifactTableCellForReader('Model ↓\\downarrow ∣\\mid #Datasets →\\rightarrow'),
             'Model / #Datasets'
         );
-        assert.equal(sanitizeArtifactTableCellForReader('N=15,000N=15{,}000, p<0.001p<0.001'), 'N=15,000, p<0.001');
-        assert.equal(sanitizeArtifactTableCellForReader('−8%-8\\% / +20+20'), '−8% / +20');
+        assert.equal(sanitizeArtifactTableCellForReader('N=15,000N=15{,}000, p<0.001p<0.001'), 'N=15,000N=15{,}000, p<0.001p<0.001');
+        assert.equal(sanitizeArtifactTableCellForReader('−8%-8\\% / +20+20'), '−8% / +20+20');
         assert.equal(sanitizeArtifactTableCellForReader('λ=0.3\\lambda=0.3'), '\\(\\lambda=0.3\\)');
         assert.equal(sanitizeArtifactTableCellForReader('EtE_{t} / HtH_{t} / J​StJS_{t}'), '\\(E_t\\) / \\(H_t\\) / \\(JS_t\\)');
         assert.equal(sanitizeArtifactTableCellForReader('∼\\bm{\\sim} indicates partial support'), '~ indicates partial support');
-        assert.equal(sanitizeArtifactTableCellForReader('Random, p=0.5p=0.5'), 'Random, p=0.5');
+        assert.equal(sanitizeArtifactTableCellForReader('Random, p=0.5p=0.5'), 'Random, p=0.5p=0.5');
         assert.equal(sanitizeArtifactTableCellForReader('12.3\\bf 12.3'), '12.3');
         assert.equal(sanitizeArtifactTableCellForReader('−0.90\\mathbf{-0.90}'), '−0.90');
         assert.equal(sanitizeArtifactTableCellForReader('±1.12\\pm 1.12 / ±1.39\\pm 1.39'), '±1.12 / ±1.39');
         assert.equal(sanitizeArtifactTableCellForReader('35.1±235.1\\pm 2'), '35.1±2');
         assert.equal(sanitizeArtifactTableCellForReader('12.3±𝟐\\bf 12.3\\pm 2'), '12.3±2');
-        assert.equal(sanitizeArtifactTableCellForReader('Silence threshold 2.02.0 s'), 'Silence threshold 2.0 s');
-        assert.equal(sanitizeArtifactTableCellForReader('Scored speeches 130130'), 'Scored speeches 130');
+        assert.equal(sanitizeArtifactTableCellForReader('Silence threshold 2.02.0 s'), 'Silence threshold 2.02.0 s');
+        assert.equal(sanitizeArtifactTableCellForReader('Scored speeches 130130'), 'Scored speeches 130130');
         assert.equal(sanitizeArtifactTableCellForReader('user_11 and 22 folds'), 'user_11 and 22 folds');
-        assert.equal(sanitizeArtifactTableCellForReader('0.9790.979'), '0.979');
-        assert.equal(sanitizeArtifactTableCellForReader('−0.715-0.715'), '−0.715');
-        assert.equal(sanitizeArtifactTableCellForReader('CI [−0.15,+0.08][−0.15,+0.08]'), 'CI [−0.15,+0.08]');
+        assert.equal(sanitizeArtifactTableCellForReader('0.9790.979'), '0.9790.979');
+        assert.equal(sanitizeArtifactTableCellForReader('−0.715-0.715'), '−0.715-0.715');
+        assert.equal(sanitizeArtifactTableCellForReader('CI [−0.15,+0.08][−0.15,+0.08]'), 'CI [−0.15,+0.08][−0.15,+0.08]');
         assert.equal(sanitizeArtifactTableCellForReader('95%95\\% CIs'), '95% CIs');
         assert.equal(sanitizeArtifactTableCellForReader('≥1\\geq 1'), '≥1');
-        assert.equal(sanitizeArtifactTableCellForReader('Underpowered (<100<100 pairs)'), 'Underpowered (<100 pairs)');
-        assert.equal(sanitizeArtifactTableCellForReader('most artists have degree 00–11'), 'most artists have degree 0–1');
+        assert.equal(sanitizeArtifactTableCellForReader('Underpowered (<100<100 pairs)'), 'Underpowered (<100<100 pairs)');
+        assert.equal(sanitizeArtifactTableCellForReader('most artists have degree 00–11'), 'most artists have degree 00–11');
         assert.equal(sanitizeArtifactTableCellForReader('140×80140\\times 80 matrix'), '140×80 matrix');
         assert.equal(sanitizeArtifactTableCellForReader('3×10−53\\times 10^{-5}'), '3×10^-5');
         assert.equal(sanitizeArtifactTableCellForReader('2×10−52\\times 10^{-5}'), '2×10^-5');
-        assert.equal(sanitizeArtifactTableCellForReader('ρ\\rho (n=130n=130)'), 'ρ (n=130)');
+        assert.equal(sanitizeArtifactTableCellForReader('ρ\\rho (n=130n=130)'), 'ρ (n=130n=130)');
         assert.equal(sanitizeArtifactTableCellForReader('≈0.99\\approx 0.99'), '≈0.99');
         assert.equal(sanitizeArtifactTableCellForReader('WER 12.3'), 'WER 12.3');
         assert.equal(
             sanitizeArtifactTableCellForReader('Label quality is measured on 55K samples, and ranking performance is assessed via Hit@1 on 11K, respectively.'),
-            'Label quality is measured on 5K samples, and ranking performance is assessed via Hit@1 on 1K, respectively.'
+            'Label quality is measured on 55K samples, and ranking performance is assessed via Hit@1 on 11K, respectively.'
         );
         assert.equal(
             sanitizeArtifactTableCellForReader('(A+V−Ours)/A+V(\\text{A+V}-\\text{Ours})/\\text{A+V}'),
@@ -90,7 +90,7 @@ describe('Manual 长文表格的 reader 渲染', () => {
         );
     });
 
-    it('把 LaTeXML 伪 colspan 的 contrast 行只路由到匹配样本量列', () => {
+    it('没有结构化 colspan 时保留对比行的每个源值，不猜测所属样本列', () => {
         const rendered = renderArtifactTableMarkdown({
             id: 'T04', caption: 'Contrasts', matrix: [
                 ['Arm', 'rho (n=130)', 'rho (n=125 diar.)'],
@@ -100,8 +100,8 @@ describe('Manual 长文表格的 reader 渲染', () => {
                 ['B − A', '−0.086', '−0.086']
             ]
         });
-        assert.match(rendered, /\| B − A \| −0\.069, CI \[−0\.15,\+0\.08\] \|  \|/u);
-        assert.match(rendered, /\| B − A \|  \| −0\.086 \|/u);
+        assert.match(rendered, /\| B − A \| −0\.069, CI \[−0\.15,\+0\.08\] \| −0\.069, CI \[−0\.15,\+0\.08\] \|/u);
+        assert.match(rendered, /\| B − A \| −0\.086 \| −0\.086 \|/u);
     });
 
     it('按结构化 colspan 去掉重复组名并确定性标注指标方向', () => {
@@ -412,5 +412,76 @@ describe('Manual v6 长文约定', () => {
             () => validateManualLongformBundle(driftedFinal, article, artifactIndex),
             /唯一绑定最终 readerArticle/
         );
+    });
+});
+
+
+describe('Manual 表格保留来源数字及受影响旧记录复核', () => {
+    const cases = [
+        { matrix: [['Method', 'Samples'], ['A', '130130']], expected: '| A | 130130 |', wrong: '| A | 130 |' },
+        ...[
+            ['+1+1', '+1'], ['−0.715-0.715', '−0.715'], ['<100<100 pairs', '<100 pairs'],
+            ['[−0.15,+0.08][−0.15,+0.08]', '[−0.15,+0.08]'],
+            ['N=15,000N=15{,}000', 'N=15,000'], ['n=130n=130', 'n=130'],
+            ['p<0.001p<0.001', 'p<0.001'], ['p=0.5p=0.5', 'p=0.5'],
+            ['k=2k=2', 'k=2'], ['++1', '+1'], ['−-3', '−3']
+        ].map(([value, oldValue]) => ({
+            matrix: [['Method', 'Value'], ['A', value]],
+            expected: `| A | ${value} |`, wrong: `| A | ${oldValue} |`
+        })),
+        { matrix: [['A', 'B'], ['12', '12']], expected: '| 12 | 12 |', wrong: '| 12 |  |' },
+        { matrix: [['Method', 'Samples'], ['A', '50000']],
+            caption: 'Label quality is measured on 55K samples, and ranking performance is assessed via Hit@1 on 11K, respectively.',
+            expected: '55K samples', wrong: '5K samples' }
+    ];
+    function withTable(testCase, transform = value => value) {
+        const { artifactIndex, bundle } = fixture();
+        const source = artifactIndex.tables[0];
+        source.matrix = testCase.matrix;
+        if (testCase.caption) source.caption = testCase.caption;
+        source.matrixSha256 = stableSha256(JSON.stringify(source.matrix));
+        const before = bundle.tables[0].renderedMarkdown;
+        const rendered = transform(renderArtifactTableMarkdown(source));
+        bundle.blocks[7].markdown = bundle.blocks[7].markdown.replace(before, rendered);
+        const cellIds = tableNumericCellIds(source);
+        Object.assign(bundle.tables[0], {
+            sourceMatrixSha256: source.matrixSha256, numericCellCount: cellIds.length,
+            coveredNumericCellIds: cellIds, renderedMarkdown: rendered,
+            renderedFragmentSha256: stableSha256(rendered)
+        });
+        const article = renderLongformBlocks(bundle.blocks);
+        bundle.articleSha256 = stableSha256(article);
+        bundle.finalRevisionAuthorReceipt.articleSha256 = bundle.articleSha256;
+        return { artifactIndex, bundle, article, rendered };
+    }
+    it('完整长文真实校验使用保留原数字和每个测量格的表格', () => {
+        for (const testCase of cases) {
+            const { artifactIndex, bundle, article, rendered } = withTable(testCase);
+            assert.ok(rendered.includes(testCase.expected), rendered);
+            assert.equal(validateManualLongformBundle(bundle, article, artifactIndex).tableCount, 1);
+        }
+    });
+    it('旧签排版例外也不允许无依据删改数字或漏格，重算所有输出SHA不能恢复资格', () => {
+        for (const testCase of cases) {
+            const { artifactIndex, bundle, article } = withTable(testCase, value => value.replace(testCase.expected, testCase.wrong));
+            assert.throws(() => validateManualLongformBundle(bundle, article, artifactIndex, {
+                allowSignedLegacyTableRender: true
+            }), /数值改写或遗漏/);
+        }
+    });
+    it('既有签名表格仅改变排版且保留来源数值时仍兼容', () => {
+        const { artifactIndex, bundle, article } = withTable(cases[0], value => value.replaceAll('**', '*')
+            .replaceAll('---', '-----').replace('Method', 'Method-name'));
+        assert.equal(validateManualLongformBundle(bundle, article, artifactIndex, {
+            allowSignedLegacyTableRender: true
+        }).tableCount, 1);
+    });
+    it('真实结构化 colspan 可去掉扩展矩阵的重复格，普通相同值不能去掉', () => {
+        const matrix = [['A', 'B'], ['12', '12']];
+        const plain = renderArtifactTableMarkdown({ id: 'T01', matrix });
+        const spanned = renderArtifactTableMarkdown({ id: 'T01', matrix,
+            cells: [{ row: 1, column: 0, colspan: 2, text: '12', header: false }] });
+        assert.ok(plain.includes('| 12 | 12 |'));
+        assert.ok(spanned.includes('| 12 |  |'));
     });
 });

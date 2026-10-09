@@ -136,6 +136,23 @@ describe('Manual v5 音频研究者约定', () => {
         assert.doesNotThrow(() => validateReaderArticle(plan, article, [
             { id: 'E01' }, { id: 'E02' }, { id: 'E03' }, { id: 'E04' }
         ]));
+        const evidenceIds = ['E01', 'E02', 'E03', 'E04'].map(id => ({ id }));
+        for (const [claim, sourceText] of [
+            ['WER 为 7.1%。', 'The WER is 17.1%.'],
+            ['延迟是 5 ms。', 'The delay is 15 ms.'],
+            ['延迟是 5 ms。', 'The delay is 5 msé.'],
+            ['延迟是 5 ms。', 'The delay is é5 ms.'],
+            ['延迟是 5 ms。', 'The delay is 5 ms2.'],
+            ['SNR 为 3 dB。', 'The SNR is -3 dB.'],
+            ['SNR 为 -3 dB。', 'The SNR is 3 dB.']
+        ]) {
+            assert.throws(() => validateReaderArticle(plan, `${article}\n\n${claim}`, evidenceIds, {
+                sourceText
+            }), /精确量/, `${claim} 不能由 ${sourceText} 支撑`);
+        }
+        assert.doesNotThrow(() => validateReaderArticle(plan, `${article}\n\nWER 为 7.1%，SNR 为 −3 dB。`, evidenceIds, {
+            sourceText: 'The WER is 7.1%, and the SNR is -3 dB.'
+        }));
         const expandedArticle = article.replace(
             '### 再追踪两条通路',
             '### 额外的 V6 证据节点\n\n这一额外节点由 reader-longform-v2 完整重放，旧 editorialPlan 只保留锚点顺序。'.repeat(4)
@@ -243,6 +260,42 @@ describe('Manual v5 音频研究者约定', () => {
         assert.doesNotThrow(
             () => validateExactFactCoverage(analysis, localEvidence, { label: 'local-quantity' })
         );
+    });
+
+    it('来源、外部和绑定引文均不得用数字子串或相邻其他单位代替完整精确量', () => {
+        const cases = [
+            ['7.1%', '17.1%'], ['5 ms', '15 ms'], ['-256K', '256K tokens'],
+            ['-1 × 10^3', '1 × 10^3'], ['3 dB', '-3 dB'],
+            ['-3 dB', '3 dB'], ['5 ms', '5 msé'], ['5 ms', 'é5 ms'], ['5 ms', '5 ms2'],
+            ['5 s', '5 ms'], ['5 Hz', '5 kHz'],
+            ['11 人', '211 participants'], ['11 人', '11 layers, 2 participants'],
+            ['1.2%', 'Table 1. WER (%) of B is 8. A has WER ratio 1.2.'],
+            ['3 dB', '3 layers. The SNR is 8 dB.']
+        ];
+        for (const [claim, quote] of cases) {
+            for (const evidenceKind of ['source', 'externalEvidence', 'boundEvidence']) {
+                const options = { readerText: claim };
+                if (evidenceKind !== 'source') options[evidenceKind] = [quote];
+                assert.throws(() => validateExactFactCoverage('', evidenceKind === 'source' ? quote : '', options),
+                    /精确量/, `${evidenceKind}: ${claim} / ${quote}`);
+            }
+        }
+    });
+
+    it('完整数值保留中文英文单位、连字符数量、负号和显式推导', () => {
+        for (const [claim, quote] of [
+            ['7.1%', 'WER is 7.1%.'], ['-3 dB', 'SNR is −3 dB.'],
+            ['119 帧', 'a 119-frame video'], ['11 人', 'eleven participants'],
+            ['5 秒', '5 seconds'], ['5 毫秒', '5 milliseconds'], ['5 ms', '5 ms'], ['5 ms', '延迟为5 ms即可'],
+            ['30 FPS', '30 FPS'], ['256K token', '256K tokens'],
+            ['123', 'The count is 123.'], ['A100', 'The device is A100.'],
+            ['-1 × 10^3', 'The value is -1 × 10^3.']
+        ]) {
+            assert.doesNotThrow(() => validateExactFactCoverage('', quote, { readerText: claim }));
+        }
+        assert.doesNotThrow(() => validateExactFactCoverage('', 'The source contains 15 ms.', {
+            readerText: '5 ms', derivedFacts: [{ value: '5 ms' }]
+        }));
     });
 
     it('缺消融、内部评测和中置信度不能把系统报告打到 10 分', () => {

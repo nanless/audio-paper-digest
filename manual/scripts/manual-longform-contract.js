@@ -142,19 +142,10 @@ function sanitizeArtifactTableCellForReader(value) {
         .replace(/RT60=([0-9]+(?:\.[0-9]+)?)\\mathrm\{RT\}_\{60\}=\1/gu, 'RT60=$1')
         .replace(/C50C_\{50\}/gu, 'C50')
         .replace(/k=(\d+)\\mathbf\{k=\1\}/gu, 'k=$1')
-        .replace(/k=(\d+)k(?:=|\{=\})\1/gu, 'k=$1')
         .replace(/1≤k<[|]S[|]1\\leq k<[|]S[|]/gu, '1≤k<|S|')
-        .replace(/k=[|]S[|]k=[|]S[|]/gu, 'k=|S|')
-        .replace(/\{,\}/gu, ',')
-        .replace(/\b(N=[0-9,]+)\1/gu, '$1')
-        .replace(/\b(N=\([0-9,]+\))\1/gu, '$1')
-        .replace(/\bkk\b/gu, 'k')
         .replace(/(\d+)(st|nd|rd|th)\1\^\{\\text\{\2\}\}/gu, '$1$2')
         .replace(/(\d+(?:\.\d+)?\s*-\s*\d+(?:\.\d+)?)\s+([ms])\\mathrm\{\2\}/gu, '$1 $2')
-        .replace(/Cohen’s dd/gu, 'Cohen’s d')
         .replace(/β1=0\.9,β2=0\.999\\beta_\{1\}=0\.9,\\beta_\{2\}=0\.999/gu, 'β1=0.9, β2=0.999')
-        .replace(/N=15,000N=15\{,\}000/gu, 'N=15,000')
-        .replace(/p<0\.001p<0\.001/gu, 'p<0.001')
         .replace(/EtE_\{t\}/gu, '\\(E_t\\)')
         .replace(/HtH_\{t\}/gu, '\\(H_t\\)')
         .replace(/J\u200b?StJS_\{t\}/gu, '\\(JS_t\\)')
@@ -166,61 +157,24 @@ function sanitizeArtifactTableCellForReader(value) {
         .replace(/(\d+(?:\.\d+)?)×10−(\d+)\1\\times\s*10\^\{-\2\}/gu, '$1×10^-$2')
         .replace(/[∼~](\d+(?:\.\d+)?)\{\\sim\}\1/gu, '~$1')
         .replace(/≈(\d+(?:\.\d+)?)\\approx\s*\1/gu, '≈$1')
-        .replace(/(p=0\.5)\1/gu, '$1')
         .replace(/(\d+(?:\.\d+)?)\\bf\s*\1/gu, '$1')
         .replace(/−(\d+(?:\.\d+)?)\\mathbf\{-\1\}/gu, '−$1')
         .replace(/±(\d+(?:\.\d+)?)\\pm\s*\1/gu, '±$1')
         .replace(/(\d+(?:\.\d+)?)±(\d+)\\bf\s*\1\\pm\s*\2/gu, '$1±$2')
         .replace(/(\d+(?:\.\d+)?)±(\d+)\1\\pm\s*\2/gu, '$1±$2')
-        .replace(/\b([123]\.0)\1(?=\s*s\b)/gu, '$1')
-        .replace(/\b(n=\d+)\1\b/gu, '$1')
-        .replace(/\+([0-9]+(?:\.[0-9]+)?)\+\1/gu, '+$1')
-        .replace(/−([0-9]+(?:\.[0-9]+)?)-\1/gu, '−$1')
-        .replace(/(?<![\d.])(\d+\.\d+)\1(?![\d.])/gu, '$1')
-        .replace(/\[−(\d+(?:\.\d+)?)(,[^\]]+)\]\[-\1\2\]/gu, '[−$1$2]')
         .replace(/(\d+)%\1\\%/gu, '$1%')
         .replace(/≥(\d+)\\geq\s*\1/gu, '≥$1')
-        .replace(/<(\d+)<\1(?=\s+pairs\b)/gu, '<$1')
-        .replace(/\bdegree 00–11\b/gu, 'degree 0–1')
         .replace(/−(\d+(?:\.\d+)?)%-\1\\%/gu, '−$1%')
         .replace(/\+(\d+(?:\.\d+)?)%\+\1\\%/gu, '+$1%')
-        .replace(/(\[[^\]]+\])\1/gu, '$1')
-        // 有一处已知的 LaTeXML 可访问文本重复：某个表注里，原文本身分别写了
-        // 5,000 个候选和 1,000 次查询。要匹配完整成对短语，这样单独出现的
-        // 55K 或 11K 不会被误缩。
-        .replace(/Label quality is measured on 55K samples, and ranking performance is assessed via Hit@1 on 11K, respectively\./gu,
-            'Label quality is measured on 5K samples, and ranking performance is assessed via Hit@1 on 1K, respectively.')
         // LaTeXML 可能把可见的比例和它的 TeX 回退拼在一起。
         .replace(/\(A\+V−Ours\)\/A\+V\(\\text\{A\+V\}-\\text\{Ours\}\)\/\\text\{A\+V\}/gu,
-            '(A+V−Ours)/A+V')
-        .replace(/\+\+/gu, '+')
-        .replace(/−-/gu, '−');
+            '(A+V−Ours)/A+V');
     // 紧凑表头里，LaTeXML 可能同时留下可见的方向箭头和它的 TeX 回退。
     // 读者页不能出现裸 TeX 命令。
     text = text.replace(/Model\s+↓\\downarrow\s+∣\\mid\s+(#?(?:Datasets|Conditions))\s+→(?:\\rightarrow)?/gu,
         'Model / $1')
         .replace(/↓\\downarrow/gu, '(越低越好)')
         .replace(/↑\\uparrow/gu, '(越高越好)');
-    // 把相邻的可见支与可访问支产生的完全重复的无符号数字串合并
-    //（130130、0.9790.979、53.753.7）。整个串必须能对半分成两个相同的
-    // 部分，这样无关的数字不会被牵连。
-    text = text.replace(/(?<![\d.])(\d+(?:\.\d+)?)(?![\d.])/gu, token => {
-        // 2020 这样的四位年份也能对半分成相同的两半，但它不是重复的可访问支。
-        // 去重真正重复的数字串（比如 130130）时，绝不能把引用的发表年份
-        // 变成臆造出来的两位年份。
-        if (/^(?:18|19|20)\d{2}$/u.test(token)) return token;
-        if (!token.includes('.') && token.length < 4) return token;
-        for (let split = 1; split <= Math.floor(token.length / 2); split++) {
-            if (token.length === split * 2 && token.slice(0, split) === token.slice(split)) {
-                return token.slice(0, split);
-            }
-        }
-        for (let split = 1; split < token.length; split++) {
-            const left = token.slice(0, split); const right = token.slice(split);
-            if (left === right) return left;
-        }
-        return token;
-    });
     return text;
 }
 
@@ -309,35 +263,10 @@ function renderArtifactTableMarkdown(table) {
     for (let rowIndex = 0; rowIndex < Math.min(headerDepth, expanded.length); rowIndex += 1) {
         expanded[rowIndex] = expanded[rowIndex].map(cell => annotateMetricDirectionForReader(cell, captionText));
     }
-    const headerText = expanded[0].map(normalizeText);
-    let activeContrastColumn = null;
-    const routed = expanded.map((row, rowIndex) => {
-        if (rowIndex === 0) return row;
-        const populated = row.map(normalizeText).filter(Boolean);
-        if (populated.length === width && new Set(populated).size === 1) {
-            const sampleSize = populated[0].match(/\bn=(\d+)/iu)?.[1];
-            activeContrastColumn = sampleSize
-                ? headerText.findIndex(cell => cell.includes(`n=${sampleSize}`))
-                : null;
-            return [row[0], ...Array.from({ length: width - 1 }, () => '')];
-        }
-        if (Number.isInteger(activeContrastColumn) && activeContrastColumn > 0
-            && /^[A-Z]\s*[−-]\s*[A-Z]$/u.test(sanitizeArtifactTableCellForReader(row[0]))) {
-            const value = row.slice(1).find(cell => normalizeText(cell)) || '';
-            const output = Array.from({ length: width }, () => '');
-            output[0] = row[0]; output[activeContrastColumn] = value;
-            return output;
-        }
-        return row;
-    });
-    const normalized = routed.map(row => Array.from({ length: width }, (_, index) => (
+    // 只有结构化 colspan 能说明重复格来自合并单元格；相同测量值不得推断成合并。
+    const normalized = expanded.map(row => Array.from({ length: width }, (_, index) => (
         escapeMarkdownTableCell(row[index] ?? '')
-    ))).map(row => {
-        const populated = row.filter(Boolean);
-        return populated.length > 1 && new Set(populated).size === 1
-            ? [populated[0], ...Array.from({ length: width - 1 }, () => '')]
-            : row;
-    });
+    )));
     const header = normalized[0];
     // 对比表有时会故意让左上角源单元格留空，而第一列装的是各行指标。
     // Markdown 需要一个明确的可访问标签；这个固定兜底不改动任何源值，
@@ -354,6 +283,32 @@ function renderArtifactTableMarkdown(table) {
         `| ${header.map(() => '---').join(' | ')} |`,
         ...rows.map(row => `| ${row.join(' | ')} |`)
     ].join('\n');
+}
+
+function needsLegacyNumericReplay(table) {
+    const values = [table?.caption || '', ...(table?.matrix || []).flat()];
+    const unprovenScalar = values.some(value => {
+        const text = normalizeText(value);
+        if (/Label quality is measured on 55K samples, and ranking performance is assessed via Hit@1 on 11K, respectively\.|degree 00–11/.test(text)) return true;
+        if (/(?<![\d.])(\d+\.\d+)\1(?![\d.])/u.test(text)) return true;
+        if (/(?:\+([0-9]+(?:\.[0-9]+)?)\+\1|−([0-9]+(?:\.[0-9]+)?)-\2|\[[^\]]+\]\[[^\]]+\]|<(\d+)<\3|[nNk]=|p[=<]|\+\+|−-)/u.test(text)) return true;
+        return [...text.matchAll(/(?<![\d.])(\d{4,})(?![\d.])/gu)].some(match => {
+            const token = match[1];
+            return !/^(?:18|19|20)\d{2}$/u.test(token) && token.length % 2 === 0
+                && token.slice(0, token.length / 2) === token.slice(token.length / 2);
+        });
+    });
+    const repeatedRow = (table?.matrix || []).some(row => {
+        const populated = row.map(normalizeText).filter(Boolean);
+        return populated.length > 1 && new Set(populated).size === 1;
+    });
+    return unprovenScalar || repeatedRow;
+}
+
+function renderedNumericQuantities(markdown) {
+    const text = normalizeText(markdown).replace(/−/g, '-');
+    return [...text.matchAll(/[-+]*(?:\d{1,3}(?:,\d{3})+(?!\d)|\d+)(?:\.\d+)?(?:[eE][-+]?\d+)?/g)]
+        .map(match => match[0].replace(/,/g, '')).sort();
 }
 
 function validateTableCoverage(tables, artifactIndex, blocksById, label, options = {}) {
@@ -405,6 +360,11 @@ function validateTableCoverage(tables, artifactIndex, blocksById, label, options
             if (!block) throw new Error(`${itemLabel}.blockId 引用了未知 block`);
             const expectedMarkdown = renderArtifactTableMarkdown(source);
             const renderedMarkdown = assertText(item.renderedMarkdown, `${itemLabel}.renderedMarkdown`, 20);
+            if (options.allowSignedLegacyTableRender === true && needsLegacyNumericReplay(source)
+                && JSON.stringify(renderedNumericQuantities(renderedMarkdown))
+                    !== JSON.stringify(renderedNumericQuantities(expectedMarkdown))) {
+                throw new Error(`${itemLabel} 已签旧表格包含无来源依据的数值改写或遗漏，须重新生成并审查`);
+            }
             if (renderedMarkdown !== expectedMarkdown && options.allowSignedLegacyTableRender !== true) {
                 throw new Error(`${itemLabel}.renderedMarkdown 必须由 ArtifactIndex 确定性生成`);
             }
