@@ -1176,7 +1176,6 @@ function assertVisualArchiveUniqueness(manifest) {
     const targetDate = validateDate(manifest?.batchDate);
     const root = visualSummaryArchiveRoot(targetDate);
     const expected = new Set();
-    const knownIds = Object.keys(manifest?.papers || {});
     for (const [id, paper] of Object.entries(manifest?.papers || {})) {
         for (const [kind, card] of Object.entries(paper.cards || {})) {
             if (card?.status !== 'complete') continue;
@@ -1210,10 +1209,6 @@ function assertVisualArchiveUniqueness(manifest) {
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
         if (!entry.isFile() || entry.isSymbolicLink() || path.extname(entry.name).toLowerCase() !== '.png') continue;
         if (entry.name === `00-digest-cover-${targetDate}.png`) continue;
-        const isKnownPaperAsset = knownIds.some(id => (
-            new RegExp(`^\\d{2}-${regexEscape(id)}-.+\\.png$`, 'i').test(entry.name)
-        ));
-        const looksRanked = /^\d{2}-\d{4}\.\d{4,5}-.+\.png$/i.test(entry.name);
         if (!expected.has(path.resolve(root, entry.name))) {
             extras.push(entry.name);
         }
