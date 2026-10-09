@@ -40,7 +40,8 @@ test('两端共用的词表标签、别名和祖先链在 Node 与 Python 下一
         faceted:faceted.map(([label,facet])=>resolveLabel(tagCatalog,label,facet)?.id||null),
         ancestors:input.ids.map(id=>ancestors(tagCatalog,id)),pruned:input.groups.map(ids=>pruneAncestors(tagCatalog,ids))};
     const script=[
-        'import json, sys',
+        'import json, sys, faulthandler',
+        'faulthandler.dump_traceback_later(30)',
         'sys.path.insert(0,"scripts")',
         'from tag_catalog import load_tag_catalog, resolve_label, ancestors, prune_ancestors, tag_prompt_text_sha256, build_tag_prompt_text, TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT',
         't=load_tag_catalog(); p=json.load(sys.stdin)',
@@ -51,7 +52,8 @@ test('两端共用的词表标签、别名和祖先链在 Node 与 Python 下一
         '"faceted":[(resolve_label(t,s,f) or {}).get("id") for s,f in p["faceted"]],',
         '"ancestors":[ancestors(t,s) for s in p["ids"]],',
         '"pruned":[prune_ancestors(t,s) for s in p["groups"]]}',
-        'print(json.dumps(r,ensure_ascii=False))'
+        'print(json.dumps(r,ensure_ascii=False))',
+        'faulthandler.cancel_dump_traceback_later()'
     ].join('\n');
     const result=spawnSync('bash',['scripts/python-runtime.sh','-c',script],{
         cwd:path.resolve(__dirname,'..'),input:JSON.stringify(input),encoding:'utf8',maxBuffer:16*1024*1024,timeout:120000

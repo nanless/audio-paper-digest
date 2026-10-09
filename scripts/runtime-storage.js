@@ -704,7 +704,7 @@ function prunePlanIdentity(plan) {
 }
 
 function blockedError(plan, blockers) {
-    const error = new Error(`storage prune 已阻断：发现 ${blockers.length} 个安全问题`);
+    const error = new Error(`存储清理已停止：发现 ${blockers.length} 个安全问题`);
     error.code = 'STORAGE_PRUNE_BLOCKED';
     error.plan = { ...plan, blockers };
     return error;
@@ -717,7 +717,7 @@ function pruneStorage(options = {}) {
     const layout = getLayout(options.projectRoot);
     if (plan.blockers.length > 0) throw blockedError(plan, plan.blockers);
 
-    // Apply 前重新扫描一次权威 JSON 与候选集。新建/改写引用、
+    // 执行清理前重新扫描一次权威 JSON 与候选集。新建或改写引用、
     // 新出现的损坏 JSON 或候选文件漂移均会在任何 unlink 前阻断。
     const verifiedPlan = buildPrunePlan(options);
     const verificationBlockers = [...verifiedPlan.blockers];
@@ -759,38 +759,39 @@ function formatBytes(bytes) {
 }
 
 function printStatus(status) {
-    console.log(`Runtime storage status: ${status.projectRoot}`);
+    console.log(`运行存储状态：${status.projectRoot}`);
     for (const target of status.targets) {
-        console.log(`${target.key.padEnd(30)} ${formatBytes(target.bytes).padStart(10)}  ${String(target.files).padStart(7)} files`);
+        console.log(`${target.key.padEnd(30)} ${formatBytes(target.bytes).padStart(10)}  ${String(target.files).padStart(7)} 个文件`);
+        for (const error of target.errors) console.error(`读取失败：${error.path}（${error.message}）`);
     }
 }
 
 function printPlan(plan, options = {}) {
-    console.log(`Storage prune ${plan.mode}: retention=${plan.retentionDays} days, candidates=${plan.deleteCount}, reclaimable=${formatBytes(plan.reclaimableBytes)}`);
-    console.log(`Reference scan: ${plan.referenceJsonFiles} JSON, ${plan.referencedPaths} paths, ${plan.referencedUrlHashes} URL hashes`);
+    console.log(`存储清理（${plan.mode === 'apply' ? '执行' : '预览'}）：保留 ${plan.retentionDays} 天，候选 ${plan.deleteCount} 个，可回收 ${formatBytes(plan.reclaimableBytes)}`);
+    console.log(`引用检查：${plan.referenceJsonFiles} 份 JSON、${plan.referencedPaths} 个路径、${plan.referencedUrlHashes} 个 URL 哈希`);
     const visible = options.verbose ? plan.candidates : plan.candidates.slice(0, 20);
     for (const item of visible) console.log(`- ${item.relativePath} (${formatBytes(item.bytes)}; ${item.reason})`);
     if (!options.verbose && plan.candidates.length > visible.length) {
         console.log(`... 省略 ${plan.candidates.length - visible.length} 项；传 --verbose 查看完整清单`);
     }
     if (plan.blockers.length > 0) {
-        console.log(`Safety blockers: ${plan.blockers.length}`);
+        console.log(`阻止清理的问题：${plan.blockers.length} 项`);
         for (const blocker of plan.blockers) console.log(`! ${blocker.type}: ${blocker.path}${blocker.value ? ` -> ${blocker.value}` : ''}`);
     }
-    if (plan.mode === 'apply') console.log(`Deleted ${plan.deletedCount} files; reclaimed ${formatBytes(plan.reclaimedBytes)}`);
-    else console.log('Dry-run only. Re-run with --apply to delete the listed files.');
+    if (plan.mode === 'apply') console.log(`已删除 ${plan.deletedCount} 个文件，回收 ${formatBytes(plan.reclaimedBytes)}`);
+    else console.log('本次只预览；加 --apply 后才会删除清单中的文件。');
 }
 
 function printPdfDuplicateReport(report) {
-    console.log(`PDF duplicate report (${report.hashMode}): ${report.scannedPdfCount} PDFs, ${report.duplicateGroups.length} duplicate groups`);
+    console.log(`PDF 重复检查（${report.hashMode}）：${report.scannedPdfCount} 份 PDF，${report.duplicateGroups.length} 组重复`);
     console.log(report.byteVerificationNote);
     for (const group of report.duplicateGroups) {
-        console.log(`- ${group.hash} (${group.occurrenceCount} files; ${formatBytes(group.totalBytes)}; byteVerified=${group.byteVerified})`);
+        console.log(`- ${group.hash} (${group.occurrenceCount} 个文件；${formatBytes(group.totalBytes)}；字节已核验=${group.byteVerified})`);
         for (const occurrence of group.occurrences) console.log(`  ${occurrence.path}`);
     }
-    console.log(`Unbound PDFs: ${report.unboundPdfCount}; missing receipt targets: ${report.missingDeclaredPdfCount}`);
+    console.log(`未绑定凭证的 PDF：${report.unboundPdfCount} 份；凭证指向但文件缺失：${report.missingDeclaredPdfCount} 份`);
     if (report.blockers.length > 0) {
-        console.log(`Diagnostics blockers: ${report.blockers.length}`);
+        console.log(`诊断问题：${report.blockers.length} 项`);
         for (const blocker of report.blockers) console.log(`! ${blocker.type}: ${blocker.path}`);
     }
 }
@@ -800,7 +801,9 @@ function main(argv = process.argv.slice(2)) {
     const command = argv[0] || 'status';
     if (command === 'status') {
         if (argv.length > 1) throw new Error(`status 命令不接受参数: ${argv.slice(1).join(' ')}`);
-        printStatus(getStorageStatus());
+        const status = getStorageStatus();
+        printStatus(status);
+        if (status.targets.some(target => target.errors.length > 0)) process.exitCode = 1;
         return;
     }
     if (command === 'prune') {

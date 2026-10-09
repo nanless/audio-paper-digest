@@ -112,6 +112,28 @@ function writeFile(projectRoot, relative, content = 'x', mtimeMs = OLD_MS) {
 }
 
 describe('运行时存储状态', () => {
+    it('真实状态命令在目录无法读取时保留诊断并以失败状态退出', () => {
+        const root = makeProject();
+        const locked = path.join(root, 'logs');
+        const scripts = path.join(root, 'scripts');
+        fs.mkdirSync(scripts);
+        const sourceRoot = path.resolve(__dirname, '..', 'scripts');
+        fs.copyFileSync(path.join(sourceRoot, 'runtime-storage.js'), path.join(scripts, 'runtime-storage.js'));
+        fs.symlinkSync(path.join(sourceRoot, 'env-loader.js'), path.join(scripts, 'env-loader.js'));
+        fs.chmodSync(locked, 0o000);
+        try {
+            const result = require('node:child_process').spawnSync(process.execPath,
+                [path.join(scripts, 'runtime-storage.js'), 'status'], { encoding: 'utf8', timeout: 10000 });
+            assert.strictEqual(result.status, 1, result.stderr);
+            assert.ok(result.stderr.includes(locked));
+            assert.match(result.stderr, /EACCES|permission denied/i);
+            assert.match(result.stdout, /data\/current/);
+        } finally {
+            fs.chmodSync(locked, 0o700);
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
     it('拒绝未知或重复 CLI 参数，避免 destructive apply 吞掉拼写错误', () => {
         assert.throws(() => main(['prune', '--apply', '--force']), /未知参数/);
         assert.throws(() => main(['prune', '--apply', '--apply']), /重复参数/);

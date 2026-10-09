@@ -175,12 +175,20 @@ function pruneLogFiles(logsDir, options = {}) {
             + problems.map(problem => `${problem.path}（${problem.code || problem.message}）`).join('；'));
     }
 
+    const failedRemovals = new Set();
     const remove = entry => {
+        if (failedRemovals.has(entry.filePath)) return false;
         try {
             fs.unlinkSync(entry.filePath);
             return true;
         } catch (error) {
-            return error.code === 'ENOENT';
+            if (error.code === 'ENOENT') return true;
+            failedRemovals.add(entry.filePath);
+            const problem = { path: entry.filePath, code: error?.code || null,
+                message: `无法删除日志文件: ${error?.message || error}` };
+            problems.push(problem);
+            console.warn(`[log] ${problem.message}（${problem.path}）`);
+            return false;
         }
     };
     let removed = 0;

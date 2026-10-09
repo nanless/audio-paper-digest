@@ -68,6 +68,37 @@ describe('日志初始化', () => {
         }
     });
 
+    it('删除失败保留日志并报告原因，不因年龄和容量规则重复删除', t => {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-log-delete-failure-'));
+        const filename = path.join(dir, 'expired.log');
+        fs.writeFileSync(filename, '需要保留的日志');
+        fs.utimesSync(filename, 1, 1);
+        const originalUnlink = fs.unlinkSync;
+        let attempts = 0;
+        const deletion = t.mock.method(fs, 'unlinkSync', target => {
+            if (target !== filename) return originalUnlink(target);
+            attempts++;
+            throw Object.assign(new Error('模拟删除权限不足'), { code: 'EACCES' });
+        });
+        const warnings = [];
+        t.mock.method(console, 'warn', message => warnings.push(message));
+        try {
+            const result = pruneLogFiles(dir, { retentionDays: 1, maxTotalBytes: 1 });
+            assert.strictEqual(result.removed, 0);
+            assert.strictEqual(result.reclaimedBytes, 0);
+            assert.strictEqual(result.problems.length, 1);
+            assert.strictEqual(result.problems[0].path, filename);
+            assert.strictEqual(result.problems[0].code, 'EACCES');
+            assert.strictEqual(attempts, 1);
+            assert.strictEqual(warnings.length, 1);
+            assert.match(warnings[0], /模拟删除权限不足/);
+            assert.strictEqual(fs.readFileSync(filename, 'utf8'), '需要保留的日志');
+        } finally {
+            deletion.mock.restore();
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
     it('没有日志目录是「无可清理」，不报读取问题', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-log-absent-'));
         try {

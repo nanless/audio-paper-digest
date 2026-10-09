@@ -37,7 +37,7 @@ This guide is for maintainers changing the default API, shared publication, prom
 
 `loadPrompt()` reads the first fenced block. Check that placeholders match the caller, the output matches the parser, inner examples do not break the outer fence, and the prompt SHA belongs to the correct stage fingerprint. Retry feedback has to locate the problem and limit what changes. Reader prose must contain no template sentences, evidence IDs, or workflow commentary.
 
-Prompt text is versioned by file and registered in `scripts/lib/prompt-text-versions.js`: v1 stays frozen at its original path (the same file names without the -v2 suffix), and the current version is the same name with a -v2 suffix; the Reader row in the table above lists the current versions. New wording goes into a new version file; never edit the frozen v1. An older record is recomputed from the version it declares: a missing field means v1, and an unknown version is an error. After upgrading a version, recheck stage fingerprints and the conference and manual prompt lists.
+Prompt text is versioned by file and registered in `scripts/lib/prompt-text-versions.js`: v1 stays frozen at its original path (the same file names without the -v2 suffix), and the current version is the same name with a -v2 suffix; the Reader row in the table above lists the current versions. Never edit frozen v1. Before changing current v2 text, save the original whole-file bytes as `prompts/history/<sha256>.md`. Older records use their declared version; where historical lookup is supported, a differing SHA can reuse only archived bytes that pass verification again. A well-formed SHA alone proves nothing. A missing version means v1, and an unknown version is an error. After upgrading a version, recheck stage fingerprints and the conference and manual prompt lists.
 
 Scoring changes must preserve dimension order and ranges, Open Source anchors, evidence IDs, and code-calculated caps. Sample Reader output for term bridges, table explanations, adjacent figure discussion, and limits on descriptions without pixels.
 
@@ -61,7 +61,7 @@ Structural changes require Node validators, Python publishers, fixtures, migrati
 
 Use atomic JSON writes. A read-modify-write operation acquires the shared locks, rereads the latest accepted record, merges only the paper or field it owns, and increments `generation`. Never overwrite it with a whole array read outside the lock.
 
-Long tasks use heartbeats and leases, and only the implementation's owner and lease checks may authorize recovery. Node analysis stops claiming papers after a run-level failure. Python page review submits its thread tasks in advance, so it does not share that dispatch behavior.
+Long tasks use heartbeats and leases, and only the implementation's owner and lease checks may authorize recovery. Node analysis stops claiming papers after a run-level failure. Python page review and channel summaries use `run_bounded_llm_tasks()` to limit submitted work, stop new submissions after a run-level failure, and wait for in-flight saves before reporting the original error. Concurrent save failures are retained too; ordinary paper failures follow the caller’s policy.
 
 ## Security and Logs
 
@@ -69,7 +69,7 @@ Use HTTPS for external resources, except loopback tests. Revalidate DNS/IP on ex
 
 ## Runtime storage
 
-`npm run storage:status` reports size and file counts, including protected daily sources, historical sources/plans/private pages, and conference evidence. These are inputs and recovery evidence, so prune never removes them.
+`npm run storage:status` reports size and file counts, including protected daily sources, historical sources/plans/private pages, and conference evidence. These are inputs and recovery evidence, so prune never removes them. A directory read error is printed with its path and cause, and status exits nonzero while retaining the partial counts it could read.
 
 `npm run storage:prune` scans references and prints a deletion preview. Status and previews can run while tasks are active. Before deleting anything, check the preview and stop all fetching, filtering, analysis, blog generation/review/push, and visual writers:
 
