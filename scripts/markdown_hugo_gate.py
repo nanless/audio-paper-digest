@@ -157,15 +157,18 @@ def heading_figure_table_number_issues(text, label):
     return issues
 
 
+def _html_line_offsets(text):
+    # HTMLParser 的行号只按 LF 递增；Unicode 分隔符、CR 和 VT 不能另算一行。
+    return [0, *(match.end() for match in re.finditer('\n', text))]
+
+
 def _rendered_currency_dollar_positions(text):
     """保留 HTML td/th 的父元素身份，不把单元格当正文。
 
     只有真实表格行里的直接纯文本才算数。嵌套标记、注释、公式和多个美元
     符号都不继承货币例外。这里产出的是只读诊断视图，绝不改动渲染字节。
     """
-    offsets = [0]
-    for line in text.splitlines(keepends=True):
-        offsets.append(offsets[-1] + len(line))
+    offsets = _html_line_offsets(text)
 
     class CurrencyCells(HTMLParser):
         def __init__(self):
@@ -377,14 +380,41 @@ def rendered_article_fragment(rendered):
     # 的旧版 Markdown（例如 ``**S``），不能算到正在审查的页面上。
     # 优先用较窄的正文包装元素；对不提供它的主题和测试夹具，保留
     # article/main/body 兜底。
-    post_content = re.search(
-        r'<div\b(?=[^>]*\bclass\s*=\s*["\'][^"\']*\bpost-content\b[^"\']*["\'])'
-        r'[^>]*>(.*?)</div>',
-        rendered,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if post_content:
-        return post_content.group(1)
+    line_offsets = _html_line_offsets(rendered)
+
+    class ArticleContent(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=False)
+            self.start = None
+            self.end = None
+            self.depth = 0
+
+        def source_index(self):
+            line, column = self.getpos()
+            return line_offsets[line - 1] + column
+
+        def handle_starttag(self, tag, attrs):
+            if tag != 'div' or self.end is not None:
+                return
+            if self.start is not None:
+                self.depth += 1
+            elif 'post-content' in str(dict(attrs).get('class') or '').split():
+                self.start = self.source_index() + len(self.get_starttag_text())
+                self.depth = 1
+
+        def handle_endtag(self, tag):
+            if tag == 'div' and self.start is not None and self.end is None:
+                self.depth -= 1
+                if self.depth == 0:
+                    self.end = self.source_index()
+
+    content = ArticleContent()
+    content.feed(rendered)
+    content.close()
+    if content.start is not None:
+        if content.end is None:
+            raise PublishDataValidationError('Hugo 正文容器未闭合，无法核验完整读者页面')
+        return rendered[content.start:content.end]
     for tag in ('article', 'main'):
         match = re.search(
             rf'<{tag}\b[^>]*>(.*?)</{tag}>', rendered,
