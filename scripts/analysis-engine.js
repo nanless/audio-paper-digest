@@ -1582,7 +1582,9 @@ async function analyzeBatch(papers, options = {}) {
         if (!shouldSkip) return false;
         const key = normalizedId(paper) || paper;
         if (skipDecisions.has(key)) return skipDecisions.get(key);
-        const value = Boolean(shouldSkip(paper));
+        const value = Boolean(shouldSkip(paper))
+            && (!paper?.analysisManifest?.stages?.primaryAnalysis
+                || require('./lib/model-text-sanitization.js').canReuseModelTextInputs(paper));
         skipDecisions.set(key, value);
         return value;
     };
@@ -1610,7 +1612,8 @@ async function analyzeBatch(papers, options = {}) {
             const prepared = preparePaperLocked
                 ? await preparePaperLocked(paper)
                 : { paper, skip: false };
-            if (prepared?.skip) {
+            if (prepared?.skip && (!(prepared.paper || paper)?.analysisManifest?.stages?.primaryAnalysis
+                || require('./lib/model-text-sanitization.js').canReuseModelTextInputs(prepared.paper || paper))) {
                 return { skipped: true, paper: prepared.paper || paper, reason: prepared.reason || '已由其他进程完成' };
             }
             const paperForAnalysis = prepared?.paper || paper;

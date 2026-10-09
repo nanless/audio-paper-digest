@@ -510,6 +510,7 @@ function sealedAnalysis(item, sourceDescriptor, sourceDetails) {
     paper.freshRewriteProvenance = provenance;
     paper.analysisManifest.freshRewriteProvenance = structuredClone(provenance);
     paper.analysisManifest.sourceAcquisition = {
+        modelTextSanitizationContract: 'model-text-unicode-scalars-v1',
         analysisSource: sourceDetails.source, sourceId: sourceDetails.sourceId,
         sourceTextChars: sourceDetails.text.length, usedTextChars: sourceDetails.text.length,
         fullTextChars: sourceDetails.text.length, fullTextAvailable: true, truncated: false,
@@ -1771,4 +1772,29 @@ test('真实 Reader 请求从直连作用域拿到一页会议 PDF，被拒绝�
     assert.deepEqual(fs.readdirSync(temporaryRoot), []);
     const persisted = allFiles(path.join(f.root, 'runtime')).map(filename => fs.readFileSync(filename, 'utf8')).join('\n');
     assert.doesNotMatch(persisted, /conference-reader-page|Y29uZmVyZW5jZS1yZWFkZXItcGFnZQ==/);
+});
+
+test('直改暂存要求旧分析的 Unicode 输入可复用，正文与来源 SHA 均保留', async t => {
+    const f = fixture(t);
+    const roots = files(f.root);
+    let original = null;
+    const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'conference', maxPapers: 1 }, {
+        extractPdfText: async () => 'Original equation 𝑥 = 𝑦 + 1. '.repeat(100),
+        materializeConferenceFigures: async () => [],
+        renderDirectPage,
+        analyze: async ({ item, sourceDescriptor, sourceDetails }) => {
+            const paper = sealedAnalysis(item, sourceDescriptor, sourceDetails);
+            delete paper.analysisManifest.sourceAcquisition.modelTextSanitizationContract;
+            original = structuredClone(paper);
+            return paper;
+        }
+    });
+    assert.equal(result.results[0].status, 'failed');
+    assert.match(result.results[0].error, /Unicode.*重新分析/);
+    assert.ok(original.sourceSha256);
+    assert.equal(engine.isSuccessfulAnalysisRecord(original), true, '旧成功结构不被重定义');
+    const registry = JSON.parse(fs.readFileSync(result.registryFile, 'utf8'));
+    const entry = registry.entries.find(item => item.paperId === result.results[0].paperId);
+    assert.equal(entry.staging, null);
 });

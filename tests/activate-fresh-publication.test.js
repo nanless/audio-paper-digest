@@ -21,7 +21,7 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 const USAGE = /用法：--run-id UUID \[--dry-run\]/;
 
 // 照 tests/fresh-rewrite-run.test.js 的接缝搭一份能通过 loadRun 的真实运行目录。
-function fixture(t) {
+function fixture(t, { omitSourceText = false } = {}) {
     const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'activate-fresh-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
     const originals = ['2609.00001', '2609.00002'].map(id => ({
@@ -71,7 +71,10 @@ function fixture(t) {
         }),
         readFreshSource: (_runDir, paper) => cache.get(runner.paperId(paper)) || null,
         resolveFreshSource: async (_runDir, paper) => {
-            const result = { freshSourceDescriptor: descriptor(runner.paperId(paper)) };
+            const result = {
+                freshSourceDescriptor: descriptor(runner.paperId(paper)),
+                ...(!omitSourceText ? { text: `source ${runner.paperId(paper)}` } : {})
+            };
             cache.set(runner.paperId(paper), result);
             return result;
         },
@@ -141,6 +144,18 @@ describe('blog:activate-fresh', () => {
         await assert.rejects(() => activate.main(['--run-id', RUN_ID]),
             /只有状态为 promoted 的 fresh 运行才能接替旧发布/);
         assert.deepEqual(calls, [], '被拒绝的运行不该启动 Python');
+    });
+
+    it('旧完成记录没有可重放来源正文时不能晋升，也不能启动发布进程', async t => {
+        const f = fixture(t, { omitSourceText: true });
+        await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
+        await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
+        await runner.analyzeRewrite({ runId: RUN_ID }, f.deps);
+        const calls = stubSpawn(t, child => child.emit('exit', 0, null));
+        await assert.rejects(() => runner.promoteRewrite({ runId: RUN_ID }, f.deps),
+            /requires all sources and analysis to be complete/);
+        assert.notEqual(runner.loadRun(RUN_ID, { rootDir: f.deps.rootDir }).run.status, 'promoted');
+        assert.deepEqual(calls, []);
     });
 
     it('promoted 运行按固定命令行接替旧发布，--dry-run 原样透传', async t => {

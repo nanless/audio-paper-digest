@@ -72,6 +72,8 @@ loadEnvFile();
 // 解决 stdout 缓冲问题：后台运行时强制立即 flush
 const { PROMPT_RENDERING_CONTRACT, promptRenderingFingerprintFields, legacyPromptRenderingNeedsReplay }
     = require('./lib/prompt-rendering-contract.js');
+const { MODEL_TEXT_SANITIZATION_CONTRACT, modelTextFingerprintFields, legacyModelTextNeedsReplay }
+    = require('./lib/model-text-sanitization.js');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -422,7 +424,7 @@ function sanitizeOpenSourceEvidence(text) {
         .replace(/\\/g, '⧵')
         // arXiv HTML 转文本偶尔会留下孤立 UTF-16 代理字符；JSON.stringify
         // 会把它们编码成 `\\uXXXX`，部分网关会将其误判为截断的 Unicode 转义。
-        .replace(/[\uD800-\uDFFF]/g, '�')
+        .replace(/[\uD800-\uDFFF]/gu, '�')
         .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ');
 }
 
@@ -430,7 +432,7 @@ function sanitizeModelMessages(messages, options = {}) {
     const replaceBackslashes = options.replaceBackslashes === true;
     const sanitizeText = value => {
         let text = String(value || '')
-            .replace(/[\uD800-\uDFFF]/g, '�')
+            .replace(/[\uD800-\uDFFF]/gu, '�')
             .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ');
         // 只有针对具体任务的证据清洗器才该启用这种有损转换。提示词指令和此前的模型
         // 输出保持原样，主分析和修复阶段才能保住 LaTeX 语义。
@@ -7647,6 +7649,9 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         || sourceSha256 !== paper.sourceSha256) {
         throw new Error('刷新读者文章的全文 SHA 与 canonical 来源不一致');
     }
+    if (!require('./lib/model-text-sanitization.js').canReuseModelTextInputs(paper, sourceDetails)) {
+        throw new Error('旧 Unicode 模型输入需完整重分析，不能只刷新 Reader、评分或图片');
+    }
     const conference = require('./lib/conference-analysis-context.js');
     const readerCapabilityPolicy = validateReaderCapabilityPolicy(
         conference.conferenceWeakReaderCapabilityPolicy(paper, sourceDetails.structuredArtifacts)
@@ -7986,6 +7991,9 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         || sourceSha256 !== manifest?.sourceAcquisition?.sourceSha256) {
         throw new Error('评分复验的全文 SHA 与 canonical 来源不一致');
     }
+    if (!require('./lib/model-text-sanitization.js').canReuseModelTextInputs(paper, sourceDetails)) {
+        throw new Error('旧 Unicode 模型输入需完整重分析，不能只刷新 Reader、评分或图片');
+    }
     const coreSummaryStage = manifest?.stages?.coreSummaryRepair;
     const coreSummaryCheckpoint = paper?.analysisStageCheckpoints?.coreSummaryRepair;
     if (coreSummaryStage?.status === 'complete'
@@ -8124,6 +8132,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         temperature: scoringResult.temperature,
         promptTemplateSha256: scoringResult.promptTemplateSha256,
         promptTextContract: currentPromptTextContract('scoringAudit'),
+        ...modelTextFingerprintFields(analysis, scoringEvidenceContext),
         scoringInputSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
         coreSummaryInputAnalysisSha256: manifest.stages.coreSummaryRepair?.outputAnalysisSha256 || '',
         inputCoreSummarySha256: crypto.createHash('sha256')
@@ -8217,6 +8226,9 @@ async function refreshApiReaderFiguresFromSource(paper, sourceDetails) {
         || sourceSha256 !== paper.sourceSha256
         || sourceSha256 !== manifest.sourceAcquisition?.sourceSha256) {
         throw new Error('论文图刷新只接受 apiReaderArticle 契约、阶段状态和来源 SHA 都一致的 v3 canonical');
+    }
+    if (!require('./lib/model-text-sanitization.js').canReuseModelTextInputs(paper, sourceDetails)) {
+        throw new Error('旧 Unicode 模型输入需完整重分析，不能只刷新 Reader、评分或图片');
     }
     const figures = Array.isArray(paper.apiReaderFigures) ? paper.apiReaderFigures : [];
     const currentInventory = getApiReaderFigureInventory(
@@ -8729,6 +8741,7 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext, prompt
             stage === 'coreSummaryRepair' ? CORE_SUMMARY_CONTRACT_VERSION : ''
         ),
         ...promptRenderingFingerprintFields(inputAnalysis, evidenceContext),
+        ...modelTextFingerprintFields(inputAnalysis, evidenceContext),
         evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
         evidenceMaxChars: config.evidenceMaxChars,
         evidenceSha256: crypto.createHash('sha256').update(String(evidenceContext || '')).digest('hex'),
@@ -8831,6 +8844,7 @@ function buildPrimaryAnalysisBaseFingerprint(promptTextContract, paper, textForA
             CORE_SUMMARY_CONTRACT_VERSION
         ),
         ...promptRenderingFingerprintFields(paper.title, paper.authors, paper.categories, textForAnalysis),
+        ...modelTextFingerprintFields(paper.title, paper.authors, paper.categories, textForAnalysis),
         usedTextSha256: crypto.createHash('sha256').update(textForAnalysis).digest('hex'),
         evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
         fullTextMaxChars: FULL_TEXT_MAX_CHARS,
@@ -8974,6 +8988,7 @@ function hasCurrentPrimaryAnalysisCheckpoint(manifest, currentFingerprint) {
 function buildImageSupplementFingerprint(baseFingerprint, candidateImageInfos, downloadedImages, preImageAnalysis) {
     return stableFingerprint({
         configurationFingerprint: baseFingerprint,
+        ...modelTextFingerprintFields(candidateImageInfos, preImageAnalysis),
         candidates: (candidateImageInfos || []).map(info => ({
             url: info.url || '',
             caption: info.caption || ''
@@ -8990,6 +9005,7 @@ function buildApiReaderExecutionFingerprint(baseFingerprint, evidenceContext, st
     const checkedPolicy = validateReaderCapabilityPolicy(readerCapabilityPolicy);
     return stableFingerprint({
         ...promptRenderingFingerprintFields(evidenceContext),
+        ...modelTextFingerprintFields(evidenceContext),
         configurationFingerprint: baseFingerprint,
         evidenceSha256: crypto.createHash('sha256').update(String(evidenceContext || '')).digest('hex'),
         structuredArtifactsSha256: structuredArtifacts?.payloadSha256 || '',
@@ -9085,7 +9101,7 @@ function migrateSourceOnlyApiReaderFingerprint(
     paper, manifest, currentFingerprint, legacyFingerprint
 ) {
     const stage = manifest?.stages?.apiReaderArticle;
-    if (legacyPromptRenderingNeedsReplay(paper)) return false;
+    if (legacyPromptRenderingNeedsReplay(paper) || legacyModelTextNeedsReplay(paper)) return false;
     if (!isRecoveryStageComplete(manifest, 'apiReaderArticle')
         || stage.fingerprint !== legacyFingerprint) return false;
     // 这里会复现生产环境的每一项 SHA、原文绑定、作者和资源证明；只有当已保存的 Reader
@@ -9827,6 +9843,27 @@ function invalidateApiReaderForResourceCountChange(
     // 阶段失效会删掉所有属于 Reader 的字段。只保留刚刚核验过的身份，好让正常的生成分支
     // 把它写进替换后的 Reader；过期的文章、计划、图片和作者字节都不留。
     paper.apiReaderResources = verifiedReaderResources;
+    return true;
+}
+
+function resetLegacyModelTextRecovery(paper, manifest, sourceDetails, previous = null) {
+    if (!legacyModelTextNeedsReplay(paper, sourceDetails)) return false;
+    const snapshotPaper = previous || paper;
+    const saved = { ...snapshotPaper, analysisCheckpoint: snapshotPaper.analysisCheckpoint || snapshotPaper.analysis || '' };
+    const snapshot = captureStaleAnalysisSnapshot(saved, previous?.analysisManifest || manifest,
+        'primaryAnalysis', MODEL_TEXT_SANITIZATION_CONTRACT);
+    if (snapshot) {
+        snapshot.payload.sourceAcquisition = structuredClone(
+            (previous?.analysisManifest || manifest).sourceAcquisition || {});
+        snapshot.payloadSha256 = stableFingerprint(snapshot.payload);
+    }
+    if (saved.analysisStaleSnapshots) paper.analysisStaleSnapshots = saved.analysisStaleSnapshots;
+    manifest.stages = {};
+    delete manifest.contracts;
+    for (const field of ['analysisCheckpoint', 'analysisStageCheckpoints', 'apiReaderArticle',
+        'apiReaderPlan', 'apiReaderFigures', 'apiReaderAuthors', 'apiReaderResources',
+        'apiReaderArticleSha256', 'apiReaderPlanSha256']) delete paper[field];
+    console.log('    [deep] 旧请求清洗可能改写本篇 Unicode 输入，已保留快照，按封存来源重做');
     return true;
 }
 
@@ -14056,6 +14093,8 @@ async function analyzePaperDeepInternal(paper) {
     }
     const previousScore = Number.parseFloat(paper?.parsed?.score);
     let savedCoreSummaryRepairCandidate = captureSavedAnalysisForCoreSummaryRepair(paper);
+    const modelTextRecoveryCandidate = paper.analysisManifest?.sourceAcquisition?.modelTextSanitizationContract
+        === MODEL_TEXT_SANITIZATION_CONTRACT ? null : structuredClone(paper);
     const analysisManifest = createAnalysisRecoveryManifest(paper);
     console.log(`    [deep] 获取全文: ${arxivId}`);
 
@@ -14198,6 +14237,10 @@ async function analyzePaperDeepInternal(paper) {
     if (resetLegacyPromptRenderingRecovery(paper, analysisManifest, { ...sourceDetails, text: rawTextForAnalysis })) {
         savedCoreSummaryRepairCandidate = null;
     }
+    if (resetLegacyModelTextRecovery(paper, analysisManifest, { ...sourceDetails, text: rawTextForAnalysis }, modelTextRecoveryCandidate)) {
+        savedCoreSummaryRepairCandidate = null;
+    }
+    sourceAcquisitionRecord.modelTextSanitizationContract = MODEL_TEXT_SANITIZATION_CONTRACT;
     sourceAcquisitionRecord.promptRenderingContract = PROMPT_RENDERING_CONTRACT;
     analysisManifest.sourceAcquisition = sourceAcquisitionRecord;
     const recoveryFingerprints = buildRecoveryFingerprints(
@@ -15095,7 +15138,9 @@ async function analyzePaperDeepInternal(paper) {
         const currentEvidenceSha256 = crypto.createHash('sha256')
             .update(scoringEvidenceContext)
             .digest('hex');
-        const fingerprintChanged = scoringStage.model !== DEEP_CONFIG.model
+        const fingerprintChanged = scoringStage.modelTextSanitizationContract
+                !== modelTextFingerprintFields(scoringInputAnalysis, scoringEvidenceContext).modelTextSanitizationContract
+            || scoringStage.model !== DEEP_CONFIG.model
             || scoringStage.protocol !== detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model)
             || scoringStage.endpointSha256 !== crypto.createHash('sha256').update(DEEP_CONFIG.endpoint).digest('hex')
             || scoringStage.maxTokens !== 16000
@@ -15288,6 +15333,7 @@ async function analyzePaperDeepInternal(paper) {
                 temperature: scoringResult.temperature,
                 promptTemplateSha256: scoringResult.promptTemplateSha256,
                 promptTextContract: currentPromptTextContract('scoringAudit'),
+                ...modelTextFingerprintFields(scoringInputAnalysis, scoringEvidenceContext),
                 scoringInputSha256,
                 coreSummaryInputAnalysisSha256:
                     analysisManifest.stages.coreSummaryRepair.outputAnalysisSha256,
@@ -17348,6 +17394,7 @@ module.exports = {
     modelFingerprint,
     createAnalysisRecoveryManifest,
     resetLegacyPromptRenderingRecovery,
+    resetLegacyModelTextRecovery,
     removeManualAnalysisFields,
     markRecoveryStage,
     isRecoveryStageComplete,

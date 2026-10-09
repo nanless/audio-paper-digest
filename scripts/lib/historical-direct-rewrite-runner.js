@@ -1346,7 +1346,7 @@ async function replayCompletedAnalysisForStaging({ item, active, generation, exe
             fail(`${item.paperId} completed analysis recovery receipt drifted`);
         }
     }
-    assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis });
+    assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis, sourceDetails });
     return { sourceDescriptor, sourceDetails, analysis };
 }
 
@@ -1360,7 +1360,7 @@ function resealCompletedAnalysisSurfaceRepair({ item, active, completed, now,
         return { ...completed, surfaceRepair: null, analysisReceipt: active.analysis };
     }
     assertDirectAnalysisReadyForStaging({ item, sourceDescriptor: completed.sourceDescriptor,
-        analysis: completed.analysis });
+        analysis: completed.analysis, sourceDetails: completed.sourceDetails });
     const analysisFile = path.join(active.analysis.directory, 'analysis.json');
     const analysisFileSha256 = writeAtomic(analysisFile, completed.analysis);
     const analysisRecordSha256 = stableHash(completed.analysis);
@@ -1386,7 +1386,7 @@ function resealCompletedAnalysisSurfaceRepair({ item, active, completed, now,
     };
 }
 
-function assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis }) {
+function assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis, sourceDetails = null }) {
     if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)
         || analysis.directPaperId !== item.paperId) {
         fail(`${item.paperId} analysis is not bound to the direct execution identity`);
@@ -1409,13 +1409,20 @@ function assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis 
         || analysis.analysisManifest?.sourceAcquisition?.fullTextAvailable !== true) {
         fail(`${item.paperId} analysis provenance is not sealed to this direct source`);
     }
+    if (sourceDetails && (sha256(sourceDetails.text) !== expected.sourceSha256
+        || sourceDetails.structuredArtifacts?.payloadSha256 !== expected.structuredArtifactsSha256)) {
+        fail(`${item.paperId} Unicode 复用检查的原文与封存来源不符`);
+    }
+    if (!require('./model-text-sanitization.js').canReuseModelTextInputs(analysis, sourceDetails)) {
+        fail(`${item.paperId} 旧模型输入缺少 Unicode 清洗证明，须核验来源并重新分析后再暂存`);
+    }
     return expected;
 }
 
 function stageDirectExecution({ plan, registry, item, sourceDescriptor, sourceDetails = null,
     analysis, stagingRoot, freshArxivSourceRoot = null, publicationMetadataRoot = null,
     dependencies = {} }) {
-    assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis });
+    assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis, sourceDetails });
     const publicationSource = publicationSourceFor(item, sourceDetails, sourceDescriptor, {
         freshArxivSourceRoot, publicationMetadataRoot,
         readPublicationMetadata: dependencies.readPublicationMetadata
@@ -1456,7 +1463,7 @@ function stageDirectExecution({ plan, registry, item, sourceDescriptor, sourceDe
         stagingInputSha256, stagingBindingSha256: body.stagingBindingSha256,
         expectedRendererImplementationSha256: rendererImplementationSha256,
         dependencies: { ...dependencies, assertCompleteAnalysis: candidate =>
-            assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis: candidate }) } });
+            assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis: candidate, sourceDetails }) } });
     return { directory, stagingBindingSha256: body.stagingBindingSha256, analysisArtifact: artifact,
         pageStaging: directPages.receipt(pageManifest) };
 }
@@ -1494,13 +1501,23 @@ function replayDirectPageStaging({ item, active, stagingRoot, executionRoot,
         || staging.analysisArtifact.analysisRecordSha256 !== active.analysis.analysisRecordSha256) {
         fail(`${item.paperId} staged analysis bytes drifted`);
     }
+    let sourceDetails = null;
+    if (item.route.kind === 'arxiv-fresh-fetch') {
+        const stored = freshArxiv.readFreshArxivRewriteSource({ rootDir: freshArxivSourceRoot,
+            arxivId: item.route.arxivId, generation: active.source.generation });
+        stored.paperId = item.paperId;
+        if (stableHash(compactSourceDescriptor(item.route.kind, stored, item)) !== stableHash(active.source)) {
+            fail(`${item.paperId} 暂存分析的来源描述与封存字节不符`);
+        }
+        sourceDetails = stored.runtimeDetails || fallbackArxivDetails(stored);
+    }
     const manifest = directPages.validateManifest({
         value: JSON.parse(readRegular(path.join(directory, 'page-staging-manifest.json')).bytes.toString('utf8')),
         item, sourceDescriptor: active.source, publicationSource: body.publicationSource,
         artifact: staging.analysisArtifact, analysis,
         stagingInputSha256: stagingInput.sha256, stagingBindingSha256: body.stagingBindingSha256, directory,
         rendererImplementationSha256: staging.pageStaging.rendererImplementationSha256,
-        assertCompleteAnalysis: candidate => assertDirectAnalysisReadyForStaging({ item, sourceDescriptor: active.source, analysis: candidate })
+        assertCompleteAnalysis: candidate => assertDirectAnalysisReadyForStaging({ item, sourceDescriptor: active.source, analysis: candidate, sourceDetails })
     });
     if (stableHash(directPages.receipt(manifest)) !== stableHash(staging.pageStaging)) {
         fail(`${item.paperId} staged page receipt drifted`);
@@ -1816,7 +1833,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             // 最终契约在写可持久化分析文件之前检查一次，stageDirectExecution
             // 内部也检查一次。引擎返回 failed/partial 时只留在 registry 的错误
             // 字段里；执行记录和暂存输入都不许活过这次尝试。
-            assertDirectAnalysisReadyForStaging({ item, sourceDescriptor: descriptor, analysis });
+            assertDirectAnalysisReadyForStaging({ item, sourceDescriptor: descriptor, analysis, sourceDetails });
             const analysisFile = path.join(executionDir, 'analysis.json');
             const analysisFileSha256 = writeAtomic(analysisFile, analysis);
             const analysisRecovery = readAnalysisRecovery({ executionDirectory: executionDir, item,

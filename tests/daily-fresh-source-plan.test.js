@@ -415,3 +415,51 @@ test('即使调用方绕过论文准备，直连日更范围也拒绝调用方�
     ));
     assert.deepEqual(result, []);
 });
+
+test('旧成功日更遇到封存数学字母必须重分析，普通旧结果和新清洗记录仍可恢复', async t => {
+    fixture(t);
+    const contract = require('../scripts/lib/model-text-sanitization.js');
+    for (const [index, prefix] of ['', '原式 𝑥 = 𝑦。'].entries()) {
+        const id = `2610.1000${index}`;
+        const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-10-09', batchId: `unicode-${index}`,
+            papers: [{ arxivId: id }] });
+        await daily.captureDailyFreshSources(plan, {
+            capture: options => require('../scripts/lib/fresh-arxiv-rewrite-source.js')
+                .captureFreshArxivRewriteSource(options, {
+                    fetchText: async () => {
+                        const source = sourcePayload(id);
+                        source.text = prefix + source.text;
+                        source.structuredArtifacts.flattenedTextSha256 = sha(source.text);
+                        delete source.structuredArtifacts.payloadSha256;
+                        source.structuredArtifacts.payloadSha256 = sha(JSON.stringify(source.structuredArtifacts));
+                        return source;
+                    },
+                    fetchPdf: async () => ({ bytes: Buffer.from('%PDF-1.7\nUnicode source\n%%EOF\n'),
+                        url: `https://arxiv.org/pdf/${id}.pdf` })
+                })
+        });
+        const details = daily.readDailyFreshSource(plan, { arxivId: id });
+        const descriptor = details.freshSourceDescriptor;
+        const proof = { contract: 'fresh-source-analysis-v1', runId: plan.runId,
+            sourceSha256: descriptor.sourceSha256, structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
+            sourceSnapshotSha256: descriptor.sourceSnapshotSha256, sourceGeneration: descriptor.sourceGeneration,
+            sourceManifestSha256: descriptor.sourceManifestSha256, sourceOnly: true, oldGeneratedTextIncluded: false };
+        const paper = { arxivId: id, analysis: '旧成功正文', analysisCheckpoint: '旧检查点',
+            sourceSha256: proof.sourceSha256, freshRewriteProvenance: proof,
+            analysisManifest: { version: 1, sourceAcquisition: { sourceSha256: proof.sourceSha256 },
+                freshRewriteProvenance: structuredClone(proof),
+                stages: { primaryAnalysis: { status: 'complete', fingerprint: 'old-primary' } } } };
+        const before = JSON.stringify(paper);
+        assert.equal(daily.isPaperBoundToPlan(paper, plan), index === 0);
+        assert.equal(JSON.stringify(paper), before, '只读资格检查不改旧成功记录');
+        const prepared = daily.prepareDailyPaper(paper, plan);
+        assert.equal(prepared.analysis, index === 0 ? '旧成功正文' : undefined);
+        if (index === 1) {
+            assert.equal(prepared.analysisStaleSnapshots[0].payload.sourceAcquisition.sourceSha256, proof.sourceSha256);
+            assert.equal(prepared.analysisStaleSnapshots[0].payload.analysisCheckpoint, '旧检查点');
+        }
+        paper.analysisManifest.sourceAcquisition.modelTextSanitizationContract = contract.MODEL_TEXT_SANITIZATION_CONTRACT;
+        assert.equal(daily.isPaperBoundToPlan(paper, plan), true);
+        assert.equal(daily.readDailyFreshSource(plan, paper).freshSourceDescriptor.sourceSha256, proof.sourceSha256);
+    }
+});

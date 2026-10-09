@@ -463,6 +463,10 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
     verifyPlanAuthority(loaded, planHandle, sourceRoot);
     const analysisFile = path.join(loaded.directory, 'analysis.json');
     if (loaded.analysis.status === 'complete') {
+        if (!require('./model-text-sanitization.js').canReuseModelTextInputs(
+            loaded.analysis.papers[0], loaded.source.sourceDetails)) {
+            fail('旧会议模型输入清洗可能损坏 Unicode 字符，必须按已核验来源重新分析后再复用');
+        }
         const run = loaded.run.status === 'complete' && loaded.analysis.stats?.analysisStatus === 'complete'
             ? loaded.run : await sealCompletedRunLocked({
             analysisRoot, executionId, engine, expectedAnalysisSha256: loaded.analysisFileSha256 });

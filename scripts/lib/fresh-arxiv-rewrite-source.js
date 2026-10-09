@@ -165,8 +165,12 @@ function officialUrl(url, kind, arxivId, sourceId = null) {
             fail('PDF URL does not bind the requested canonical/version arXiv ID');
         }
     } else {
-        const match = pathname.match(/^\/html\/(\d{4}\.\d{4,5})(?:v\d+)?\/?$/);
+        const match = pathname.match(/^\/html\/(\d{4}\.\d{4,5})(v\d+)?\/?$/);
         if (!match || match[1] !== id) fail('text URL does not bind the canonical arXiv ID');
+        // 无版本地址可能跳转到明确版本；只有双方都声明版本时才要求完全一致。
+        if (match[2] && boundSourceId !== id && `${match[1]}${match[2]}` !== boundSourceId) {
+            fail('HTML 来源地址的版本与来源 ID 不一致');
+        }
     }
     if (parsed.search || parsed.hash) fail(`${kind} URL must not include a query or fragment`);
     return parsed.toString();

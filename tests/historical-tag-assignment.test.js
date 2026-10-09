@@ -30,7 +30,8 @@ function runFixture(t, papers = [paper()]) {
     fs.writeFileSync(path.join(runDir, 'analysis.json'), bytes, { mode: 0o600 });
     const run = { runId: RUN_ID, status: 'complete', analysisSha256: sha(bytes),
         baseline: { contract: api.HISTORICAL_BASELINE_CONTRACT } };
-    const dependencies = { loadRun: () => ({ run, analysis, runDir }), isSuccessfulAnalysisRecord: () => true };
+    const dependencies = { loadRun: () => ({ run, analysis, runDir }), isSuccessfulAnalysisRecord: () => true,
+        readFreshSource: () => ({ text: 'Original source text' }) };
     const handle = api.loadCompletedHistoricalAnalysisRun({ analysisRoot: path.join(root, 'runs'), runId: RUN_ID }, dependencies);
     return { root, runDir, run, analysis, dependencies, handle, output: path.join(root, 'assignments') };
 }
@@ -274,4 +275,16 @@ test('不可变后处理输出建立正式链接后进程中断，公开写入�
     assert.deepEqual(fs.readFileSync(f.filename), before);
     assert.equal(fs.statSync(f.filename).nlink, 1);
     assert.equal(result.fileSha256, sha(before));
+});
+
+test('旧历史分析的补充平面来源不直接复用标签，普通原文仍通过', t => {
+    const f = runFixture(t);
+    const options = { analysisRoot: path.join(f.root, 'runs'), runId: RUN_ID };
+    assert.throws(() => api.loadCompletedHistoricalAnalysisRun(options, {
+        ...f.dependencies, readFreshSource: () => ({ text: '原论文定义数学变量 𝑥，作者𠮷田。' })
+    }), /Unicode.*重分析/);
+    assert.throws(() => api.loadCompletedHistoricalAnalysisRun(options, {
+        ...f.dependencies, readFreshSource: () => null
+    }), /Unicode.*重分析/);
+    assert.doesNotThrow(() => api.loadCompletedHistoricalAnalysisRun(options, f.dependencies));
 });

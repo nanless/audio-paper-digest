@@ -1738,7 +1738,11 @@ describe('analyzeBatch', () => {
                 : { paper, skip: false },
             analyzeFn: async () => {
                 analyzeCalls++;
-                return validAnalyzedResult();
+                const result = validAnalyzedResult();
+                result.analysisManifest.sourceAcquisition = {
+                    modelTextSanitizationContract: 'model-text-unicode-scalars-v1'
+                };
+                return result;
             },
             onPaperResultLocked: async (_paper, result) => {
                 canonical = result.result;

@@ -43,7 +43,14 @@ function loadCompletedHistoricalAnalysisRun({ analysisRoot, runId } = {}, depend
         || stableHash(current.value) !== stableHash(loaded.analysis)) fail('已完成分析文件的字节或内容与运行凭证不一致。');
     const isSuccessful = dependencies.isSuccessfulAnalysisRecord
         || require('../analysis-engine.js').isSuccessfulAnalysisRecord;
-    for (const paper of loaded.analysis.papers) if (!isSuccessful(paper)) fail(`${paperIdOf(paper)} 没有完整的正式分析结果。`);
+    for (const paper of loaded.analysis.papers) {
+        if (!isSuccessful(paper)) fail(`${paperIdOf(paper)} 没有完整的正式分析结果。`);
+        const source = (dependencies.readFreshSource || require('./fresh-analysis-context.js').readFreshSource)(
+            loaded.runDir, paper, loaded.run);
+        if (!require('./model-text-sanitization.js').canReuseModelTextInputs(paper, source)) {
+            fail(`${paperIdOf(paper)} 的旧 Unicode 模型输入需重分析，不能直接复用标签。`);
+        }
+    }
     const handle = Object.freeze(Object.create(null)); HANDLES.add(handle);
     HANDLE_DATA.set(handle, Object.freeze({ runId, analysisFile, analysisFileSha256: current.sha256,
         papers: clone(loaded.analysis.papers) }));

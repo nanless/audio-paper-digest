@@ -7834,12 +7834,15 @@ def _daily_fresh_official_url(value, kind, paper_id, source_id=None):
                 or parsed.password is not None or parsed.query or parsed.fragment):
             raise ValueError('not an official source URL')
         pattern = (r'/pdf/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)(?:\.pdf)?'
-                   if kind == 'pdf' else r'/html/(\d{4}\.\d{4,5})(?:v\d+)?/?')
+                   if kind == 'pdf' else r'/html/(\d{4}\.\d{4,5})(v\d+)?/?')
         match = re.fullmatch(pattern, unquote(parsed.path))
         if not match or normalize_publish_arxiv_id(match.group(1)) != paper_id:
             raise ValueError('URL belongs to another paper')
         if kind == 'pdf' and source_id is not None and match.group(1) != source_id:
             raise ValueError('PDF URL belongs to another version')
+        if (kind != 'pdf' and match.group(2) and source_id is not None
+                and source_id != paper_id and match.group(1) + match.group(2) != source_id):
+            raise ValueError('HTML 来源地址的版本与来源 ID 不一致')
     except (ValueError, UnicodeError) as exc:
         raise PublishDataValidationError(f'{paper_id} 来源网址不是本篇论文的官方 HTTPS 地址') from exc
     return parsed._replace(scheme='https', netloc='arxiv.org').geturl(), match.group(1)
@@ -8078,6 +8081,50 @@ def _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper):
             != proof.get('sourceSha256')
     ):
         raise PublishDataValidationError(f'{paper_id} daily fresh provenance 未闭合到 canonical/analysis manifest')
+    _validate_current_model_text_reuse_for_publish(
+        paper, {**details, 'title': runtime.get('title'), 'sourceVersion': runtime.get('sourceVersion')}, paper_id,
+    )
+
+
+
+def _contains_supplementary_model_character(value):
+    if isinstance(value, str):
+        return bool(re.search(r'[\U00010000-\U0010ffff]', value))
+    if isinstance(value, list):
+        return any(_contains_supplementary_model_character(item) for item in value)
+    if isinstance(value, dict):
+        return any(_contains_supplementary_model_character(item) for item in value.values())
+    return False
+
+
+def _validate_current_model_text_reuse_for_publish(paper, source_details, paper_id):
+    # 只用于当前生产发布，旧记录的只读结构、状态和封存 SHA 保持原样。
+    acquisition = paper.get('analysisManifest', {}).get('sourceAcquisition', {})
+    if acquisition.get('modelTextSanitizationContract') == 'model-text-unicode-scalars-v1':
+        return
+    fields = ('title', 'authors', 'categories', 'abstract', 'summary', 'analysis',
+              'analysisCheckpoint', 'analysisStageCheckpoints', 'apiReaderArticle', 'apiReaderPlan')
+    if _contains_supplementary_model_character([paper.get(key) for key in fields] + [source_details]):
+        raise PublishDataValidationError(
+            f'{paper_id} 旧 Unicode 模型输入可能被清洗改写，须按封存来源重新分析后再发布'
+        )
+
+
+
+def _reject_unbound_api_generation_input(papers):
+    # Manual 不使用 API Reader 契约；空集合与非 API 文件继续交给原加载器判断。
+    if not isinstance(papers, list):
+        return
+    for paper in papers:
+        if not isinstance(paper, dict):
+            continue
+        manifest = paper.get('analysisManifest')
+        contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
+        reader_contract = contracts.get('apiReaderArticle') if isinstance(contracts, dict) else None
+        if reader_contract in {'beginner-researcher-v2', 'beginner-researcher-v3'}:
+            raise PublishDataValidationError(
+                'API Reader 发布输入缺少可重放的封存来源；Unicode 清洗版本不能替代来源 SHA 核验'
+            )
 
 
 def validate_daily_fresh_sources_for_publish(data_file, target_date):
@@ -8097,6 +8144,7 @@ def validate_daily_fresh_sources_for_publish(data_file, target_date):
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PublishDataValidationError('无法读取 daily sealed source 输入') from exc
     if not isinstance(payload, dict):
+        _reject_unbound_api_generation_input(payload)
         return
     papers = payload.get('papers')
     run_claimed = 'dailyFreshSourceRun' in payload
@@ -8105,6 +8153,7 @@ def validate_daily_fresh_sources_for_publish(data_file, target_date):
         for paper in papers
     )
     if not run_claimed and not claims_fresh_source_record:
+        _reject_unbound_api_generation_input(papers)
         return
     if not isinstance(papers, list) or not papers:
         raise PublishDataValidationError('dailyFreshSourceRun 要求非空 papers 数组')

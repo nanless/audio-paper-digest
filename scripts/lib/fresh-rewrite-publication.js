@@ -371,12 +371,16 @@ function promoteRun(options) {
             || hash(paper.apiReaderArticle) === baseline.oldPaperHashes[id].readerArticleSha256) {
             throw new Error(`每篇论文都要有新写的分析正文和 Reader 正文，${id} 仍为空或与旧字节相同`);
         }
-        const descriptor = readSource(ctx.runDir, paper, { runId: run.runId, sourceExpectations: run.sourceExpectations })?.freshSourceDescriptor;
+        const sourceDetails = readSource(ctx.runDir, paper, { runId: run.runId, sourceExpectations: run.sourceExpectations });
+        const descriptor = sourceDetails?.freshSourceDescriptor;
         if (!descriptor || descriptor.runId !== run.runId || descriptor.paperId !== id
             || ['sourceSha256', 'structuredArtifactsSha256', 'sourceSnapshotSha256'].some(key => descriptor[key] !== provenance[key])
             || (sourcePlan?.sourceMode === 'sealed-arxiv-bundle-v1'
                 && ['sourceGeneration', 'sourceManifestSha256'].some(key => descriptor[key] !== provenance[key]))) {
             throw new Error(`Fresh source snapshot drift or missing original evidence: ${id}`);
+        }
+        if (!require('./model-text-sanitization.js').canReuseModelTextInputs(paper, sourceDetails)) {
+            throw new Error(`旧 Unicode 模型输入需重新分析，不能提升正式记录：${id}`);
         }
     });
     const inputSha256 = jsonHash(analysis);

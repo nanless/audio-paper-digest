@@ -105,7 +105,7 @@ function completed(executionId, index = 0, analysisText) {
     const completionReceipt = { ...receiptBody, receiptSha256: api.stableHash(receiptBody) };
     return { planKey: 'a', analysis: analysisRecord, analysisFileSha256, run: { status: 'complete', executionId, paperId,
         conference: { id: 'icassp-2026', year: 2026 }, capabilities: WEAK, sourceSnapshotSha256: 'b'.repeat(64),
-        analysisSha256: analysisFileSha256, completionReceipt }, source: { sourceDetails: { structuredArtifacts: {
+        analysisSha256: analysisFileSha256, completionReceipt }, source: { sourceDetails: { text: 'Original conference PDF text', structuredArtifacts: {
             tables: [], formulas: [], figures: [] } } } };
 }
 
@@ -918,4 +918,22 @@ test('会议页面实现身份包含标签词表及两端标签格式读取器�
             }
         } finally { pageApi.readRegular = originalRead; }
     }
+});
+
+test('会议后处理在生成页面前拒绝旧清洗可能损坏的来源，不能靠 complete 状态跳过', t => {
+    const f = fixture(t);
+    const stagingRoot = path.join(f.root, 'unicode-staging');
+    const options = { analysisRoot: path.join(f.root, 'analysis'), executionId: f.one,
+        tagCatalogPath: TAG_CATALOG_PATH, stagingRoot, planHandle: f.planHandle,
+        sourceRoot: f.sourceRoot, apply: true };
+    const record = f.runs.get(f.one);
+    record.source.sourceDetails.text = 'Source defines 𝑥 = 𝑦 + 1.';
+    let renders = 0;
+    assert.throws(() => api.stagePaper(options, { ...f.dependencies,
+        render: () => { renders++; throw new Error('不能进入渲染'); }
+    }), /Unicode.*重新分析/);
+    assert.equal(renders, 0);
+    assert.equal(fs.existsSync(stagingRoot), false);
+    record.source.sourceDetails.text = 'Source defines x = y + 1.';
+    assert.equal(api.stagePaper(options, f.dependencies).status, 'staged');
 });

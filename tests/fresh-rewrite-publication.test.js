@@ -93,7 +93,7 @@ function fixture(t, { sourceId } = {}) {
     } };
     const promote = () => promoteRun({ ...options, run, analysis, ...hooks,
         validatePaper: p => p.complete === true,
-        readSource: (_dir, p) => ({ freshSourceDescriptor: { ...p.freshRewriteProvenance, paperId: p.arxivId } }) });
+        readSource: (_dir, p) => ({ text: `source ${p.arxivId}`, freshSourceDescriptor: { ...p.freshRewriteProvenance, paperId: p.arxivId } }) });
     return { ...options, baseline, run, analysis, promote, outside, entries, asset, sidecar, hooks, outsidePage };
 }
 
@@ -219,7 +219,7 @@ test('提升流程在规范 CAS 之前尊重每一个已存在的归一化论文
     try {
         assert.throws(() => promoteRun({ ...f, paperLockTimeoutMs: 5, run: f.run, analysis: f.analysis,
             validatePaper: () => true,
-            readSource: (_dir, p) => ({ freshSourceDescriptor: { ...p.freshRewriteProvenance, paperId: p.arxivId } }) }), /锁|lock/i);
+            readSource: (_dir, p) => ({ text: `source ${p.arxivId}`, freshSourceDescriptor: { ...p.freshRewriteProvenance, paperId: p.arxivId } }) }), /锁|lock/i);
         assert.deepEqual(fs.readFileSync(f.canonicalPath), before);
     } finally { release(); }
 });

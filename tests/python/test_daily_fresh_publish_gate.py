@@ -53,7 +53,7 @@ def _source_artifacts(text_sha):
     })
 
 
-def _daily_payload(root, paper_ids, versioned_source_ids=frozenset()):
+def _daily_payload(root, paper_ids, versioned_source_ids=frozenset(), *, text_prefix='', html_urls=None):
     """按 Node 抓取路径的样式在来源库里造出字节。"""
     date = '2026-09-07'
     run_id = '11111111-1111-4111-8111-111111111111'
@@ -64,7 +64,7 @@ def _daily_payload(root, paper_ids, versioned_source_ids=frozenset()):
     for paper_id in sorted(paper_ids):
         source_id = f'{paper_id}v1' if paper_id in versioned_source_ids else paper_id
         source_dir = run_dir / 'sources' / paper_id / 'generation-000001'
-        text = (f'Official fresh text for {paper_id}.\n' * 20).encode('utf-8')
+        text = (text_prefix + f'Official fresh text for {paper_id}.\n' * 20).encode('utf-8')
         pdf = f'%PDF-1.4\n{paper_id}\n%%EOF\n'.encode('ascii')
         text_sha = hashlib.sha256(text).hexdigest()
         pdf_sha = hashlib.sha256(pdf).hexdigest()
@@ -83,7 +83,7 @@ def _daily_payload(root, paper_ids, versioned_source_ids=frozenset()):
             'capturedAt': '2026-09-07T00:00:00.000Z',
             'text': {
                 'filename': 'source.txt', 'source': 'html', 'sourceId': source_id,
-                'url': f'https://arxiv.org/html/{source_id}',
+                'url': (html_urls or {}).get(paper_id, f'https://arxiv.org/html/{source_id}'),
                 'fetchedAt': '2026-09-07T00:00:00.000Z',
                 'extractor': {
                     'contract': 'deep-analyzer-official-arxiv-fulltext-v1',
@@ -168,6 +168,76 @@ class DailyFreshPublishGateTest(unittest.TestCase):
         data_file = Path(root) / 'deep-analysis-result.json'
         data_file.write_text(json.dumps(payload, ensure_ascii=False), encoding='utf-8')
         return data_file
+
+    def test_old_unicode_inputs_require_reanalysis_after_real_source_validation(self):
+        for field, value in (
+                ('title', '数学模型 𝑥 与 𝑦'),
+                ('authors', ['𠮷田']),
+                ('analysisStageCheckpoints', {'revision': '旧修复草稿 😀'}),
+                ('apiReaderPlan', {'oneSentenceThesis': '变量 𝑥'}),
+                ('source', 'The paper defines 𝑥 = 𝑦 + 1.')):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / 'sources'
+                payload = _daily_payload(root, ['2609.12341'],
+                                         text_prefix=value if field == 'source' else '')
+                paper = payload['papers'][0]
+                if field != 'source':
+                    paper[field] = value
+                before = copy.deepcopy(paper)
+                source_file = root / payload['dailyFreshSourceRun']['runId'] / 'sources' / '2609.12341' / 'generation-000001' / 'source.txt'
+                source_bytes = source_file.read_bytes()
+                data = self._write_payload(directory, payload)
+                with mock.patch.object(publish_to_blog, 'DAILY_FRESH_SOURCE_RUNS_DIR', root):
+                    with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, 'Unicode.*重新分析'):
+                        publish_to_blog.validate_daily_fresh_sources_for_publish(data, payload['batchDate'])
+                    self.assertEqual(paper, before)
+                    self.assertEqual(source_file.read_bytes(), source_bytes)
+                    paper['analysisManifest']['sourceAcquisition']['modelTextSanitizationContract'] = 'model-text-unicode-scalars-v1'
+                    data = self._write_payload(directory, payload)
+                    publish_to_blog.validate_daily_fresh_sources_for_publish(data, payload['batchDate'])
+                    source_file.write_bytes(source_bytes + b'changed')
+                    with self.assertRaises(publish_to_blog.PublishDataValidationError):
+                        publish_to_blog.validate_daily_fresh_sources_for_publish(data, payload['batchDate'])
+
+    def test_generate_stops_before_loading_or_rendering_affected_old_api_result(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'sources'
+            payload = _daily_payload(root, ['2609.12341'], text_prefix='Original equation 𝑥 = 𝑦. ')
+            data = self._write_payload(directory, payload)
+            options = {'data_file': str(data), 'target_date': payload['batchDate'],
+                       'category': 'all', 'publish_all': False, 'excluded_ids': []}
+            with mock.patch.object(publish_to_blog, 'DAILY_FRESH_SOURCE_RUNS_DIR', root), \
+                    mock.patch.object(publish_to_blog, 'validate_publish_target', return_value=(directory, directory)), \
+                    mock.patch('log_setup.setup_script_logging'), \
+                    mock.patch.object(publish_to_blog, 'load_papers', side_effect=AssertionError('不可进入正文加载')) as load:
+                with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, 'Unicode.*重新分析'):
+                    publish_to_blog.generate_main(options)
+                load.assert_not_called()
+
+    def test_bmp_and_literal_escape_old_inputs_keep_eligibility(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / 'sources'
+            payload = _daily_payload(root, ['2609.12341'])
+            payload['papers'][0]['title'] = r'普通中文 x，字面量 \uD835\uDC65'
+            data = self._write_payload(directory, payload)
+            with mock.patch.object(publish_to_blog, 'DAILY_FRESH_SOURCE_RUNS_DIR', root):
+                publish_to_blog.validate_daily_fresh_sources_for_publish(data, payload['batchDate'])
+            self.assertFalse(publish_to_blog._contains_supplementary_model_character('\ud800'))
+            self.assertFalse(publish_to_blog._contains_supplementary_model_character('\udc00'))
+
+    def test_unbound_api_input_is_rejected_without_reclassifying_manual_or_read_only_records(self):
+        with tempfile.TemporaryDirectory() as directory:
+            api = {'title': '旧 API 正文', 'apiReaderArticle': '普通中文',
+                   'analysisManifest': {'contracts': {'apiReaderArticle': 'beginner-researcher-v3'},
+                                        'sourceAcquisition': {'modelTextSanitizationContract': 'model-text-unicode-scalars-v1'}}}
+            for payload in ([api], {'papers': [api]}):
+                data = self._write_payload(directory, payload)
+                with self.assertRaisesRegex(publish_to_blog.PublishDataValidationError, '缺少可重放的封存来源'):
+                    publish_to_blog.validate_daily_fresh_sources_for_publish(data, '2026-09-07')
+                self.assertEqual(publish_to_blog.load_papers(data), [api])
+            for payload in ([], {'papers': []}, {'papers': [{'title': 'Manual 𝑥', 'analysisMode': 'manual'}]}):
+                data = self._write_payload(directory, payload)
+                publish_to_blog.validate_daily_fresh_sources_for_publish(data, '2026-09-07')
 
     def test_canonical_json_bytes_are_frozen(self):
         """规范形式的字节写死，避免夹具只用被测函数自产自销。
@@ -269,6 +339,49 @@ class DailyFreshPublishGateTest(unittest.TestCase):
                 publish_to_blog.validate_daily_fresh_sources_for_publish(
                     data_file, '2026-09-07',
                 )
+
+    def test_conflicting_explicit_html_version_fails_with_self_consistent_sealed_hashes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            source_root = Path(tmp) / 'daily-fresh-source-runs'
+            payload = _daily_payload(
+                source_root, ['2609.12349'], versioned_source_ids={'2609.12349'},
+                html_urls={'2609.12349': 'https://arxiv.org/html/2609.12349v2'},
+            )
+            data_file = self._write_payload(tmp, payload)
+            before = {path: path.read_bytes() for path in source_root.rglob('*') if path.is_file()}
+            with mock.patch.object(
+                    publish_to_blog, 'DAILY_FRESH_SOURCE_RUNS_DIR', source_root,
+            ):
+                with self.assertRaisesRegex(
+                        publish_to_blog.PublishDataValidationError, '官方 HTTPS 地址'):
+                    publish_to_blog.validate_daily_fresh_sources_for_publish(
+                        data_file, '2026-09-07',
+                    )
+            self.assertEqual(
+                {path: path.read_bytes() for path in source_root.rglob('*') if path.is_file()},
+                before,
+            )
+
+    def test_html_version_compatibility_replays_real_sealed_sources(self):
+        for versioned, url in (
+                (True, 'https://arxiv.org/html/2609.12349v1'),
+                (True, 'https://arxiv.org/html/2609.12349/'),
+                (False, 'https://arxiv.org/html/2609.12349v2'),
+                (False, 'https://arxiv.org/html/2609.12349')):
+            with self.subTest(versioned=versioned, url=url), tempfile.TemporaryDirectory() as tmp:
+                source_root = Path(tmp) / 'daily-fresh-source-runs'
+                payload = _daily_payload(
+                    source_root, ['2609.12349'],
+                    versioned_source_ids={'2609.12349'} if versioned else frozenset(),
+                    html_urls={'2609.12349': url},
+                )
+                data_file = self._write_payload(tmp, payload)
+                with mock.patch.object(
+                        publish_to_blog, 'DAILY_FRESH_SOURCE_RUNS_DIR', source_root,
+                ):
+                    publish_to_blog.validate_daily_fresh_sources_for_publish(
+                        data_file, '2026-09-07',
+                    )
 
     def test_schema_v3_all_fresh_generation_replays_input_source_reference(self):
         with tempfile.TemporaryDirectory() as tmp:

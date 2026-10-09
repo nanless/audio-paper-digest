@@ -267,7 +267,8 @@ function isPaperBoundToPlan(paper, plan) {
 // 这一步只比内存里的记录。比对本身出错（证明字段缺失、类型不对）说明这篇给不出
 // 绑定证明，按未绑定处理；来源读取失败不走这条路，免得把读不出来当成来源换新。
 function paperProvesBinding(paper, plan, details) {
-    if (legacyPromptRenderingNeedsReplay(paper, details)) return false;
+    if (legacyPromptRenderingNeedsReplay(paper, details)
+        || require('./model-text-sanitization.js').legacyModelTextNeedsReplay(paper, details)) return false;
     try {
         const proof = paper?.freshRewriteProvenance;
         const versionMatches = details.sourceVersion
@@ -333,6 +334,12 @@ const GENERATED_FIELDS = Object.freeze([
 function prepareDailyPaper(paper, plan) {
     if (isPaperBoundToPlan(paper, plan)) return clone(paper);
     const clean = clone(paper);
+    let details = null;
+    try { details = readDailyFreshSource(plan, paper); }
+    catch (error) { if (!isSourceAbsent(error)) throw error; }
+    if (clean.analysisManifest && require('./model-text-sanitization.js').legacyModelTextNeedsReplay(clean, details)) {
+        require('../deep-analyzer.js').resetLegacyModelTextRecovery(clean, clean.analysisManifest, details);
+    }
     for (const field of GENERATED_FIELDS) delete clean[field];
     return clean;
 }

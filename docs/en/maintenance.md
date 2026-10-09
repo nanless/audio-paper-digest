@@ -47,6 +47,10 @@ Table-count diagnostics use a stable `code`, `requiredCount`, and `actualCount`.
 
 ## Data Contracts
 
+`model-text-unicode-scalars-v1` preserves valid supplementary Unicode characters, including mathematical letters and uncommon names, while still replacing lone UTF-16 surrogates. Affected stage inputs include this version in their fingerprints. Production recovery, promotion, staging, and daily publication must either verify that the old inputs were unaffected using the bound source or require complete reanalysis. Preserve the old text and stages in a hashed snapshot before reanalysis; do not change sealed source bytes. The new marker never replaces text, PDF, runtime, manifest, or source-SHA checks.
+
+Missing input cannot establish safe reuse. Old direct conference staging without the new marker may be rejected because it lacks replayable full text, even when its metadata uses ordinary characters. Explicit API Reader v2/v3 files without replayable sealed-source references cannot be regenerated or pushed directly. Manual, read-only published pages, and structural success checks retain their existing rules. This upgrade does not call models or rewrite old blogs automatically. Old records with fully verified sources and unaffected inputs remain reusable.
+
 Explain each new field's purpose and validation:
 
 | Purpose | Requirement |

@@ -47,7 +47,8 @@ function fixture(t) {
         readFreshSource: (_runDir, paper) => cache.get(runner.paperId(paper)) || null,
         resolveFreshSource: async (_runDir, paper, identity) => {
             counters.sources++; assert.equal(identity.runId, RUN_ID);
-            const result = { freshSourceDescriptor: descriptor(runner.paperId(paper)) };
+            const result = { text: `source ${runner.paperId(paper)}`,
+                freshSourceDescriptor: descriptor(runner.paperId(paper)) };
             cache.set(runner.paperId(paper), result); return result;
         },
         withFreshAnalysisContext: async (identity, callback) => {

@@ -412,3 +412,62 @@ test('同代次恢复会复核绑定哈希的表格、公式和图片元数据�
     }
     assert.equal(figureFetches, 2, 'each direct attempt refetches pixels; no image cache exists');
 });
+
+test('真实来源捕获拒绝 HTML 地址与来源 ID 的显式版本冲突', async t => {
+    const f = fixture(t);
+    const id = '2601.00001';
+    await assert.rejects(source.captureFreshArxivRewriteSource({
+        rootDir: f.sourceRoot, arxivId: id, generation: 1
+    }, {
+        fetchText: async () => ({ ...textResponse(id), sourceId: `${id}v1`,
+            url: `https://arxiv.org/html/${id}v2` }),
+        fetchPdf: async () => pdfResponse(id)
+    }), /HTML 来源地址的版本与来源 ID 不一致/);
+    assert.equal(fs.existsSync(source.sourceDirectory(f.sourceRoot, id, 1)), false);
+});
+
+test('来源重读拒绝自洽清单中 HTML 地址与来源 ID 的显式版本冲突', async t => {
+    const f = fixture(t);
+    const id = '2601.00001';
+    const options = { rootDir: f.sourceRoot, arxivId: id, generation: 1 };
+    await source.captureFreshArxivRewriteSource(options, {
+        fetchText: async () => textResponse(id),
+        fetchPdf: async () => pdfResponse(id)
+    });
+    const filename = path.join(source.sourceDirectory(f.sourceRoot, id, 1), source.MANIFEST_NAME);
+    const manifest = JSON.parse(fs.readFileSync(filename, 'utf8'));
+    manifest.text.url = `https://arxiv.org/html/${id}v2`;
+    const canonical = value => Array.isArray(value) ? value.map(canonical)
+        : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort()
+            .map(key => [key, canonical(value[key])])) : value;
+    const bytes = Buffer.from(`${JSON.stringify(canonical(manifest), null, 2)}\n`);
+    fs.writeFileSync(filename, bytes, { mode: 0o600 });
+    assert.throws(() => source.readFreshArxivRewriteSource(options), /HTML 来源地址的版本与来源 ID 不一致/);
+    assert.deepEqual(fs.readFileSync(filename), bytes);
+    await assert.rejects(source.captureFreshArxivRewriteSource(options, {
+        fetchText: async () => { throw new Error('损坏来源不能触发重新抓取'); },
+        fetchPdf: async () => { throw new Error('损坏来源不能触发重新抓取'); }
+    }), /HTML 来源地址的版本与来源 ID 不一致/);
+});
+
+test('真实 HTML 来源捕获与恢复保留同版本、无版本地址和无版本来源 ID 的兼容', async t => {
+    const f = fixture(t);
+    const id = '2601.00001';
+    const cases = [
+        { sourceId: `${id}v3`, url: `https://arxiv.org/html/${id}v3` },
+        { sourceId: `${id}v3`, url: `https://arxiv.org/html/${id}` },
+        { sourceId: id, url: `https://arxiv.org/html/${id}v3/` },
+        { sourceId: id, url: `https://arxiv.org/html/${id}/` }
+    ];
+    for (const [index, input] of cases.entries()) {
+        const options = { rootDir: f.sourceRoot, arxivId: id, generation: index + 1 };
+        const captured = await source.captureFreshArxivRewriteSource(options, {
+            fetchText: async () => ({ ...textResponse(id), ...input }),
+            fetchPdf: async () => pdfResponse(id)
+        });
+        const recovered = source.readFreshArxivRewriteSource(options);
+        assert.equal(recovered.manifest.text.sourceId, input.sourceId);
+        assert.equal(recovered.manifest.text.url, input.url);
+        assert.equal(recovered.sourceManifestSha256, captured.sourceManifestSha256);
+    }
+});
