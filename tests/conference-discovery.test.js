@@ -292,3 +292,73 @@ test('加载后的发现句柄拒绝交叉配对的上报、重复的键和被�
     writeCanonical(catalogFile, tampered); writeCanonical(reportFile, discovery.buildReport(tampered));
     assert.throws(() => discovery.loadDiscoveryHandle(catalogFile, reportFile), /exactly match/);
 });
+
+function cleanupFixture(t) {
+    const f = fixture(t);
+    writeJson(f.metadata, [{ forum_id: 'AbCdef_12', title: 'One' }]);
+    writePdf(f.pdf, 'AbCdef_12.pdf');
+    const args = ['--apply', '--adapter', 'iclr', '--year', '2026', '--metadata', f.metadata,
+        '--pdf-root', f.pdf, '--candidate-output', 'candidate.json', '--report-output', 'report.json'];
+    return { ...f, candidate: path.join(f.catalogs, 'candidate.json'), report: path.join(f.reports, 'report.json'),
+        run: () => cli.main(args, { files: { conferenceDiscoveryCatalogDir: f.catalogs, conferenceDiscoveryReportDir: f.reports } }) };
+}
+
+test('发现公开入口写失败时保留替换后的普通文件、符号链接和目录', t => {
+    for (const kind of ['file', 'symlink', 'directory']) {
+        const f = cleanupFixture(t); const originalWrite = fs.writeFileSync;
+        const winner = Buffer.from('另一写入者的完整候选文件');
+        const target = path.join(f.root, 'winner.json'); originalWrite(target, winner);
+        const originalError = Object.assign(new Error('测试发现输出短写'), { code: 'EIO' });
+        let injected = false;
+        const mocked = t.mock.method(fs, 'writeFileSync', (fd, bytes, ...rest) => {
+            if (typeof fd !== 'number' || injected) return originalWrite(fd, bytes, ...rest);
+            injected = true; fs.writeSync(fd, Buffer.from(bytes), 0, 4, 0);
+            if (kind === 'directory') { fs.renameSync(f.catalogs, `${f.catalogs}-held`); fs.mkdirSync(f.catalogs); }
+            else fs.unlinkSync(f.candidate);
+            if (kind === 'symlink') fs.symlinkSync(target, f.candidate);
+            else originalWrite(f.candidate, winner);
+            throw originalError;
+        });
+        let failure;
+        try { f.run(); } catch (error) { failure = error; } finally { mocked.mock.restore(); }
+        assert.deepEqual(fs.readFileSync(f.candidate), winner);
+        assert.deepEqual(fs.readFileSync(target), winner);
+        assert.equal(failure.cause, originalError); assert.equal(failure.code, 'EIO');
+        assert.ok(failure.cleanupError instanceof AggregateError);
+        assert.equal(fs.existsSync(f.report), false);
+        if (kind === 'symlink') assert.equal(fs.lstatSync(f.candidate).isSymbolicLink(), true);
+        if (kind === 'directory') assert.equal(fs.existsSync(path.join(`${f.catalogs}-held`, 'candidate.json')), true);
+    }
+});
+
+test('发现公开入口短写后清理本人文件，重试生成可重放的候选与报告', t => {
+    const f = cleanupFixture(t); const originalWrite = fs.writeFileSync;
+    const originalError = Object.assign(new Error('测试发现短写重试'), { code: 'EIO' });
+    const mocked = t.mock.method(fs, 'writeFileSync', (fd, bytes, ...rest) => {
+        if (typeof fd !== 'number') return originalWrite(fd, bytes, ...rest);
+        fs.writeSync(fd, Buffer.from(bytes), 0, 4, 0); throw originalError;
+    });
+    try { assert.throws(f.run, error => error === originalError); } finally { mocked.mock.restore(); }
+    assert.equal(fs.existsSync(f.candidate), false); assert.equal(fs.existsSync(f.report), false);
+    assert.equal(f.run().status, 'written');
+    const handle = discovery.loadDiscoveryHandle(f.candidate, f.report);
+    assert.equal(discovery.discoveryHandleSnapshot(handle).candidateManifest.members.length, 1);
+});
+
+test('发现公开入口同时保留写入故障和清理权限故障', t => {
+    const f = cleanupFixture(t); const originalWrite = fs.writeFileSync;
+    const originalError = Object.assign(new Error('测试发现写入故障'), { code: 'EIO' });
+    const cleanupError = Object.assign(new Error('测试发现清理权限故障'), { code: 'EACCES' });
+    const write = t.mock.method(fs, 'writeFileSync', (fd, bytes, ...rest) => {
+        if (typeof fd !== 'number') return originalWrite(fd, bytes, ...rest);
+        fs.writeSync(fd, Buffer.from(bytes), 0, 4, 0); throw originalError;
+    });
+    const unlink = t.mock.method(fs, 'unlinkSync', () => { throw cleanupError; });
+    try {
+        assert.throws(f.run, error => {
+            assert.equal(error.cause, originalError);
+            assert.ok(error.cleanupError.errors.includes(cleanupError)); return true;
+        });
+    } finally { write.mock.restore(); unlink.mock.restore(); }
+    assert.equal(fs.existsSync(f.candidate), true);
+});

@@ -5,7 +5,6 @@ import json
 import errno
 import os
 import re
-import shutil
 import socket
 import stat
 import tempfile

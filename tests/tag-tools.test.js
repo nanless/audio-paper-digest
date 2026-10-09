@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const crypto = require('node:crypto');
+const { spawnSync } = require('node:child_process');
 const { parseArgs, readSafeFile, readPreviewBundle, loadAssets, createPreviewServer } = require('../scripts/tag-tools');
 
 function bundleFixture(legacy = false) {
@@ -168,4 +169,21 @@ test('预览包在核对原始哈希后拒绝混用代次、目录字段和绑�
     writeBundle(dir,bundleFixture());
     fs.writeFileSync(path.join(dir,'migration-report.json'),'{invalid JSON');
     assert.throws(()=>readPreviewBundle(indexPath,tagCatalog),/预览文件与清单校验和不符/);
+});
+
+
+test('预览资源命名管道立即拒绝，不等待写入者', t => {
+    const dir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'tag-preview-fifo-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const fifo = path.join(dir, 'bundle-manifest.json');
+    const created = spawnSync('mkfifo', [fifo], { encoding: 'utf8' });
+    assert.equal(created.status, 0, created.stderr);
+    const result = spawnSync(process.execPath, ['-e', `
+        const { readSafeFile } = require(process.argv[1]);
+        try { readSafeFile(process.argv[2]); process.exitCode = 2; }
+        catch (error) { console.log(error.message); }
+    `, require.resolve('../scripts/tag-tools'), fifo], { encoding: 'utf8', timeout: 5000 });
+    assert.equal(result.error, undefined, '读取命名管道不能超时');
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /普通文件/);
 });

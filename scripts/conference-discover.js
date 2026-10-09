@@ -102,17 +102,43 @@ function writeOutputsOnce({ catalogDir, catalogName, candidate, reportDir, repor
     const opened = [];
     try {
         for (const [filename] of specs) {
+            const directory = path.dirname(filename);
+            const parent = fs.lstatSync(directory);
             const fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-            opened.push({ filename, fd });
+            opened.push({ filename, fd, directory, parent });
         }
         for (let index = 0; index < specs.length; index += 1) {
             fs.writeFileSync(opened[index].fd, specs[index][1]);
             fs.fsyncSync(opened[index].fd);
         }
     } catch (error) {
+        const cleanupErrors = [];
         for (const item of opened) {
-            try { fs.closeSync(item.fd); } catch {}
-            try { fs.unlinkSync(item.filename); } catch {}
+            try {
+                const parent = fs.lstatSync(item.directory);
+                if (!parent.isDirectory() || parent.isSymbolicLink()
+                    || parent.dev !== item.parent.dev || parent.ino !== item.parent.ino) {
+                    throw new Error(`发现结果的输出目录已被替换，保留现有路径：${item.directory}`);
+                }
+                const held = fs.fstatSync(item.fd);
+                const named = fs.lstatSync(item.filename);
+                if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1
+                    || named.dev !== held.dev || named.ino !== held.ino) {
+                    throw new Error(`发现结果文件已被替换或增加硬链接，保留现有路径：${item.filename}`);
+                }
+                fs.unlinkSync(item.filename);
+            } catch (cleanupError) {
+                if (cleanupError.code !== 'ENOENT') cleanupErrors.push(cleanupError);
+            } finally {
+                try { fs.closeSync(item.fd); } catch (cleanupError) { cleanupErrors.push(cleanupError); }
+            }
+        }
+        if (cleanupErrors.length) {
+            const failure = new Error(`会议发现结果写入失败：${error.message}；部分文件未清理：`
+                + cleanupErrors.map(item => item.message).join('；'), { cause: error });
+            if (error.code) failure.code = error.code;
+            failure.cleanupError = new AggregateError(cleanupErrors, '会议发现写入失败后的清理未完成');
+            throw failure;
         }
         throw error;
     }

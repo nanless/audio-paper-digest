@@ -45,7 +45,7 @@ function parseArgs(args) {
 function readSafeFile(filename, limit = 32 * 1024 * 1024) {
     const absolute = path.resolve(filename);
     if (fs.realpathSync(absolute) !== absolute) throw new Error(`预览文件不能经过符号链接：${absolute} 不是它的真实路径`);
-    const fd = fs.openSync(absolute, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const fd = fs.openSync(absolute, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.nlink !== 1 || stat.size > limit) throw new Error('预览文件不合法：只接受单链接的普通文件，且不超过大小上限');

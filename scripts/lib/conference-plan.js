@@ -379,14 +379,6 @@ function planHandleAuthority(handle) {
     return { snapshot: planHandleSnapshot(handle), ledgerHandle: value.ledgerHandle, importHandle: value.importHandle };
 }
 
-function writeExclusive(filename, bytes) {
-    let fd;
-    try {
-        fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-        fs.writeFileSync(fd, bytes); fs.fsyncSync(fd);
-    } finally { if (fd !== undefined) fs.closeSync(fd); }
-}
-
 function applyRunPlan(result, io = fs) {
     if (result.recovered || result.plan?.contract !== PLAN_CONTRACT || result.plan?.version !== PLAN_VERSION
         || result.run?.contract !== runApi.CONTRACT || result.run?.version !== runApi.RUN_VERSION
