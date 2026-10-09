@@ -277,3 +277,44 @@ describe('Manual 教程产物的汇总', () => {
         assert.doesNotMatch(markdown, /\| Corpus \| Generation \| Validation \| TTS Path \|/);
     });
 });
+
+describe('原表聚类行身份保真', () => {
+    it('相邻 GMM 和 K-Means 不允许猜成同一模型，图注和说明也不凭空改写', () => {
+        const matrix = [
+            ['Model', 'Clustering', 'Accuracy'],
+            ['Model A', 'GMM', '81'],
+            ['Model B', 'K-Means', '93']
+        ];
+        const source = table('TAB9001', 'result', 'Results. Higher is better.', matrix);
+        const index = {
+            paperId: '2601.12345',
+            outputSha256: sha('index'),
+            tables: [source],
+            figures: [],
+            formulas: []
+        };
+        const plan = buildTutorialArtifactPlan(index);
+        const result = plan.tables[0];
+        assert.deepEqual(result.displayProjection.displayMatrix, matrix);
+        assert.deepEqual(result.displayProjection.transformations, []);
+        assert.match(result.renderedMarkdown, /\| Model B \| K-Means \| 93 \|/);
+        assert.match(result.renderedMarkdown, /Higher is better/);
+        assert.doesNotMatch(result.renderedMarkdown, /符号说明|方向按未知/);
+        assert.equal(result.sourceMatrixSha256, source.matrixSha256);
+        assert.deepEqual(result.numericCellIds, numericCellIds(source));
+        validateTutorialArtifactPlan(index, plan);
+    });
+
+    it('原矩阵已展开的相同模型跨行值及空白身份都原样保留', () => {
+        for (const secondLabel of ['Model A', '']) {
+            const matrix = [
+                ['Model', 'Clustering', 'Accuracy'],
+                ['Model A', 'GMM', '81'],
+                [secondLabel, 'K-Means', '93']
+            ];
+            const result = buildTableDisplayRecord(table('TAB9002', 'result', 'Results', matrix));
+            assert.deepEqual(result.displayMatrix, matrix);
+            assert.deepEqual(result.transformations, []);
+        }
+    });
+});

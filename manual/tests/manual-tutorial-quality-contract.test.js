@@ -164,3 +164,123 @@ describe('Manual 教程质量约定', () => {
         );
     });
 });
+
+describe('v5 教程材料重放原表行身份', () => {
+    it('实际文件凭证保留不同模型及图注，旧猜改计划在正文质量检查前拒绝', () => {
+        const fs = require('node:fs');
+        const os = require('node:os');
+        const path = require('node:path');
+        const { buildTutorialArtifactPlan } = require('../scripts/manual-tutorial-artifacts');
+        const { artifactPlanBindingSha256 } = require('../scripts/manual-tutorial-contract-orchestrator');
+        const {
+            defaultTutorialPayloadPaths,
+            validateTutorialPayloadReceipt,
+            MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT
+        } = require('../scripts/manual-v5-tutorial-payload');
+        const sha = value => crypto.createHash('sha256').update(value).digest('hex');
+        const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-row-identity-'));
+        try {
+            const data = fixture();
+            const matrix = [
+                ['Model', 'Clustering', 'MRR'],
+                ['Model A', 'GMM', '15.1'],
+                ['Model B', 'K-Means', '18.8']
+            ];
+            const index = {
+                paperId: data.packet.paperId,
+                outputSha256: sha(JSON.stringify(matrix)),
+                inventoryHealth: { status: 'complete' },
+                tables: [{
+                    id: 'T1',
+                    kind: 'result',
+                    caption: 'Results. Higher is better.',
+                    matrix,
+                    matrixSha256: sha(JSON.stringify(matrix))
+                }],
+                figures: [{
+                    id: 'F1',
+                    url: 'https://papers.example.org/funding.png',
+                    caption: 'Sponsor logo'
+                }],
+                formulas: []
+            };
+            const plan = buildTutorialArtifactPlan(index);
+            const originalTable = data.packet.artifactDisposition.tables[0].fullTableMarkdown;
+            const expectedMarkdown = '**Results. Higher is better.**\n\n'
+                + '| Model | Clustering | MRR |\n| --- | --- | --- |\n'
+                + '| Model A | GMM | 15.1 |\n| Model B | K-Means | 18.8 |';
+            const article = data.article.replaceAll(originalTable, expectedMarkdown);
+            const fresh = {
+                contract: 'fresh-authoring-v1',
+                mode: 'fresh_from_evidence',
+                authoringSessionId: 'original-row-identity',
+                articleSha256: sha(article.normalize('NFKC')),
+                articleFileSha256: sha(article),
+                prohibitedProseInputs: [],
+                inputs: [{ kind: 'artifact_index', sha256: index.outputSha256 }],
+                receiptSha256: sha('fresh receipt')
+            };
+            data.packet.freshAuthoring = fresh;
+            data.packet.artifactDisposition.tables[0].fullTableMarkdown = expectedMarkdown;
+            data.packet.artifactPlan = {
+                version: 1,
+                paperId: index.paperId,
+                sha256: artifactPlanBindingSha256(plan)
+            };
+            data.packet.presentation = {
+                score: 4,
+                scoreBreakdown: Object.fromEntries([
+                    'innovationScore', 'technicalRigorScore', 'experimentalSufficiencyScore', 'clarityScore',
+                    'impactScore', 'openSourceScore', 'reproducibilityScore', 'engineeringScore'
+                ].map(field => [field, 0.5]))
+            };
+            const paths = defaultTutorialPayloadPaths(directory, '2026-10-09', index.paperId);
+            fs.mkdirSync(path.dirname(paths.qualityPath), { recursive: true });
+            const writePayloadFiles = () => {
+                fs.writeFileSync(paths.qualityPath, JSON.stringify(data.packet));
+                fs.writeFileSync(paths.artifactPlanPath, JSON.stringify(plan));
+            };
+            writePayloadFiles();
+            const options = {
+                paperId: index.paperId,
+                currentRoot: directory,
+                date: '2026-10-09',
+                artifactIndex: index,
+                article,
+                articleFileSha256: sha(article),
+                freshAuthoring: fresh
+            };
+            const receipt = validateTutorialPayloadReceipt({
+                contract: MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT,
+                ...paths
+            }, options);
+            assert.equal(receipt.validation.tableCount, 1);
+            assert.deepEqual(validateTutorialPayloadReceipt(receipt, options), receipt);
+
+            const tablePlan = plan.tables[0];
+            tablePlan.displayProjection.displayMatrix[2][0] = 'Model A';
+            tablePlan.displayProjection.transformations.push({
+                kind: 'paired_clustering_label',
+                policy: 'gmm-kmeans-paired-label-v1',
+                rowIndex: 2,
+                columnIndex: 0,
+                rawValue: 'Model B',
+                rawValueSha256: sha('Model B'),
+                displayValue: 'Model A',
+                basisRows: [1, 2],
+                direction: 'not_applicable'
+            });
+            tablePlan.renderedMarkdown = expectedMarkdown.replace('Model B', 'Model A');
+            tablePlan.renderedSha256 = sha(tablePlan.renderedMarkdown);
+            plan.coverageMatrix.tables[0].displayProjectionSha256 = sha(JSON.stringify(tablePlan.displayProjection));
+            data.packet.artifactPlan.sha256 = artifactPlanBindingSha256(plan);
+            writePayloadFiles();
+            assert.throws(() => validateTutorialPayloadReceipt({
+                contract: MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT,
+                ...paths
+            }, options), /展示投影未保留原始单元格/);
+        } finally {
+            fs.rmSync(directory, { recursive: true, force: true });
+        }
+    });
+});

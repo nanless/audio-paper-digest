@@ -165,30 +165,6 @@ function buildTableDisplayRecord(table) {
         });
         return displayValue;
     }));
-    // LaTeXML 偶尔会丢掉 GMM/K-Means 这一对里 K-Means 那一半的跨行标签，或者
-    // 把下一个模型标签往上挪。当相邻两行明确写着 GMM 再 K-Means 时，这一对在
-    // 结构上没有歧义。这里只修显示标签，绝不动数值单元格，并且留下一条同时
-    // 绑定原始两行的转换记录。
-    for (let rowIndex = 0; rowIndex + 1 < displayMatrix.length; rowIndex++) {
-        const current = displayMatrix[rowIndex];
-        const next = displayMatrix[rowIndex + 1];
-        if (normalizeText(current[1]).toUpperCase() !== 'GMM'
-            || normalizeText(next[1]).toUpperCase() !== 'K-MEANS'
-            || !normalizeText(current[0]) || normalizeText(next[0]) === normalizeText(current[0])) continue;
-        const rawValue = next[0];
-        next[0] = current[0];
-        transformations.push({
-            kind: 'paired_clustering_label',
-            policy: 'gmm-kmeans-paired-label-v1',
-            rowIndex: rowIndex + 1,
-            columnIndex: 0,
-            rawValue,
-            rawValueSha256: sha256(rawValue),
-            displayValue: next[0],
-            basisRows: [rowIndex, rowIndex + 1],
-            direction: 'not_applicable'
-        });
-    }
     return {
         policy: AMBIGUOUS_SIGN_POLICY,
         sourceValuesPreserved: true,
