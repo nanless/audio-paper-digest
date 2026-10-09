@@ -106,7 +106,7 @@ def require_workspace_role(required_role, project_root=PROJECT_ROOT):
             or value.get('version') != 1
             or value.get('role') not in {'daily', 'history'}
             or value.get('workspaceRealpath') != str(root)):
-        raise ExternalRuntimeRequired('workspace role marker schema、角色或 realpath 绑定非法')
+        raise ExternalRuntimeRequired('工作区角色标记的字段结构、contract、version、role 或 workspaceRealpath 路径与当前工作区不符。')
     if value['role'] != required_role:
         # realpath 校验在上面已完成；开关不碰它。
         if not _allows_cross_role(value['role'], required_role, root):
@@ -144,7 +144,7 @@ def require_external_runtime(command_name, project_root=PROJECT_ROOT,
     enforce = bool(wrapped) or direct or enforce_workspace_role
     if enforce and wrapped and inferred and wrapped != inferred:
         raise ExternalRuntimeRequired(
-            f'{command_name} 的固定 workspace role={inferred} 与 wrapper={wrapped} 冲突')
+            f'{command_name} 固定要求 role={inferred}，当前环境指定 wrapper={wrapped}，两者不一致')
     required = (inferred or wrapped) if enforce else None
     if required:
         require_workspace_role(required, project_root)

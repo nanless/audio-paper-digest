@@ -121,7 +121,7 @@ class ExternalRuntimeGuardTest(unittest.TestCase):
                 shutil.copy(marker, copy / '.paper-digest-workspace-role.json')
                 (copy / '.paper-digest-workspace-role.json').chmod(0o600)
                 (copy / '.env').write_text('PD_WORKSPACE_ALLOW_CROSS_ROLE=1\n', encoding='utf-8')
-                with self.assertRaisesRegex(ExternalRuntimeRequired, 'realpath 绑定非法'):
+                with self.assertRaisesRegex(ExternalRuntimeRequired, 'workspaceRealpath 路径与当前工作区不符'):
                     require_workspace_role('history', copy)
 
 

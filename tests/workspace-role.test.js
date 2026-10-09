@@ -33,8 +33,8 @@ test('复制来的标记不能授权另一个真实路径，除非显式强制�
     role.writeWorkspaceRole('daily', { root: first });
     fs.copyFileSync(role.markerPath(first), role.markerPath(second));
     fs.chmodSync(role.markerPath(second), 0o600);
-    assert.throws(() => role.readWorkspaceRole(second), /realpath 绑定非法/);
-    assert.throws(() => role.writeWorkspaceRole('history', { root: second }), /realpath 绑定非法/);
+    assert.throws(() => role.readWorkspaceRole(second), /workspaceRealpath 路径与当前工作区不符/);
+    assert.throws(() => role.writeWorkspaceRole('history', { root: second }), /workspaceRealpath 路径与当前工作区不符/);
     assert.equal(role.writeWorkspaceRole('history', {
         root: second, force: true
     }).workspaceRealpath, second);
@@ -48,7 +48,7 @@ test('未知角色、标记结构漂移、权限过弱和符号链接根目录�
     const value = JSON.parse(fs.readFileSync(marker));
     fs.writeFileSync(marker, JSON.stringify({ ...value, extra: true }));
     fs.chmodSync(marker, 0o600);
-    assert.throws(() => role.readWorkspaceRole(dir), /schema/);
+    assert.throws(() => role.readWorkspaceRole(dir), /字段结构、contract、version、role/);
     fs.writeFileSync(marker, JSON.stringify(value));
     fs.chmodSync(marker, 0o644);
     if (process.platform !== 'win32') assert.throws(() => role.readWorkspaceRole(dir), /0600/);
@@ -136,7 +136,7 @@ test('跨角色开关只放行 daily 执行 history，默认拒绝且不绕过 r
         const copy = root();
         fs.copyFileSync(role.markerPath(dir), role.markerPath(copy));
         fs.chmodSync(role.markerPath(copy), 0o600);
-        assert.throws(() => role.requireWorkspaceRole('history', copy), /realpath 绑定非法/);
+        assert.throws(() => role.requireWorkspaceRole('history', copy), /workspaceRealpath 路径与当前工作区不符/);
     } finally {
         console.warn = previousWarn;
         if (previous === undefined) delete process.env[role.CROSS_ROLE_ENV];

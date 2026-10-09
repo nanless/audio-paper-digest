@@ -31,7 +31,7 @@ function validateMarker(value, root) {
         || Object.keys(value).sort().join(',') !== 'contract,role,version,workspaceRealpath'
         || value.contract !== CONTRACT || value.version !== VERSION
         || !ROLES.includes(value.role) || value.workspaceRealpath !== realRoot) {
-        throw new Error('workspace role marker schema、角色或 realpath 绑定非法');
+        throw new Error('工作区角色标记的字段结构、contract、version、role 或 workspaceRealpath 路径与当前工作区不符。');
     }
     return Object.freeze({ ...value });
 }
@@ -66,13 +66,13 @@ function readWorkspaceRole(root = path.resolve(__dirname, '..')) {
 }
 
 function writeWorkspaceRole(role, options = {}) {
-    if (!ROLES.includes(role)) throw new Error(`workspace role 必须是 ${ROLES.join('|')}`);
+    if (!ROLES.includes(role)) throw new Error(`工作区角色必须是 ${ROLES.join('|')}`);
     const root = workspaceRoot(options.root);
     const target = path.join(root, MARKER_NAME);
     const existing = fs.lstatSync(target, { throwIfNoEntry: false });
     if (existing) {
         if (!existing.isFile() || existing.isSymbolicLink() || existing.nlink !== 1) {
-            throw new Error('已有 workspace role marker 类型非法，拒绝覆盖');
+            throw new Error('现有工作区角色标记不是只有一个硬链接的普通文件，或是符号链接，不能覆盖');
         }
         let current;
         try { current = readWorkspaceRole(root); }
@@ -81,7 +81,7 @@ function writeWorkspaceRole(role, options = {}) {
         }
         if (current?.role === role) return current;
         if (options.force !== true) {
-            throw new Error(`workspace 已绑定 ${current?.role || 'invalid'}；切换角色必须显式 --force`);
+            throw new Error(`工作区已设为 ${current?.role || 'invalid'}；切换角色必须显式 --force`);
         }
     }
     const marker = { contract: CONTRACT, version: VERSION, role, workspaceRealpath: root };

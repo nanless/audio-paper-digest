@@ -1441,7 +1441,7 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
         if (values.length > 1) {
             const expected = values[0][1];
             for (const [filePath, value] of values.slice(1)) {
-                if (value !== expected) addIssue(issues, filePath, `${field} 必须与同批次抓取/筛选产物一致`);
+                if (value !== expected) addIssue(issues, filePath, `${field} 必须与其他同批次候选、筛选决定或入选论文记录中的对应字段一致`);
             }
         }
     }
@@ -1452,7 +1452,7 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
     }
 
     if (!fetchPath || !fs.existsSync(fetchPath)) {
-        addIssue(issues, fetchPath || DEFAULT_FETCH_CHECKPOINT_FILE, '当前抓取/筛选产物缺少同批次 fetch-checkpoint.json');
+        addIssue(issues, fetchPath || DEFAULT_FETCH_CHECKPOINT_FILE, '当前候选或筛选记录存在，但缺少本批抓取检查点 fetch-checkpoint.json');
         return issues;
     }
     const checkpoint = readJsonSafe(fetchPath, null);
