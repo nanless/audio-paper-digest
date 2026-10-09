@@ -1116,9 +1116,16 @@ function hasValidApiReaderV3Records(paper) {
                 ? /^[a-f0-9]{64}$/.test(String(binding?.sourceTableDomSha256 || ''))
                     && Array.isArray(binding?.cellBindings)
                     && binding.cellBindings.length > 0
-                    && binding.cellBindings.every(cell => (
-                        /^[a-f0-9]{64}$/.test(String(cell?.sourceDomSha256 || ''))
-                    ))
+                    && binding.cellBindings.every(cell => {
+                        const rows = [renderedTables[index].header, ...renderedTables[index].rows];
+                        const text = rows[cell?.renderedRow]?.[cell?.renderedColumn];
+                        const normalize = require('./deep-analyzer.js').normalizeReaderSourceCell;
+                        return /^[a-f0-9]{64}$/.test(String(cell?.sourceDomSha256 || ''))
+                            && typeof text === 'string' && typeof cell.renderedText === 'string'
+                            && typeof cell.sourceText === 'string'
+                            && normalize(text) === normalize(cell.renderedText)
+                            && normalize(text) === normalize(cell.sourceText);
+                    })
                 : binding?.sourceType === 'source_quotes'
                     && Array.isArray(binding?.sourceQuotes)
                     && binding.sourceQuotes.length > 0

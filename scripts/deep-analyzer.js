@@ -1620,8 +1620,8 @@ function buildApiReaderQualityMetrics(quality, article) {
 }
 
 // arXiv 的 LaTeXML 文本投影会把可见公式和它的 TeX 注解放进同一个表格单元。这一步
-// 刻意收得很窄：只合并已核验来源包里确实见到的学习率形态和有符号小数重复形态。证据以
-// 原始 DOM 字节为准，这个辅助函数只负责挑一个安全的显示表层。
+// 只合并带明确 TeX 语法、两侧数值完全一致的显示副本。裸数字或符号的重复不能
+// 证明它们来自同一个值；来源绑定仍以原始 DOM 字节为准。
 function normalizeReaderSourceDisplayArtifacts(value) {
     let output = String(value ?? '');
     // LaTeXML 会把同一个置信区间输出两次：一次是可见文字，一次是花括号编码的逗号注解。
@@ -1634,10 +1634,6 @@ function normalizeReaderSourceDisplayArtifacts(value) {
                 ? visible : whole
         )
     );
-    // 一个独立的百分数可能同时带着 LaTeXML 可见公式和注解里的同一个前置符号。正文表述
-    // 和两个不同数值的对比都不适用这条。
-    output = output.replace(/^−-(\d+(?:\.\d+)?%)$/, '−$1')
-        .replace(/^\+\+(\d+(?:\.\d+)?%)$/, '+$1');
     output = output.replace(
         /(?<![\d,])(\d{1,3}(?:,\d{3})+)(\d{1,3}(?:\{,\}\d{3})+)(?![\d,])/g,
         (whole, visible, annotation) => annotation.replaceAll('{,}', ',') === visible
@@ -1665,10 +1661,6 @@ function normalizeReaderSourceDisplayArtifacts(value) {
         /l[\u200b\u200c\u200d\ufeff]*r\s*=\s*([0-9]+(?:\.[0-9]+)?)[\u200b\u200c\u200d\ufeff]*e[−-](\d+)\s*lr\s*=\s*\1e\^\{[-−]\2\}/gi,
         (_whole, base, exponent) => `lr=${base}e-${exponent}`
     );
-    output = output.replace(
-        /([−]\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)(?=$|[\s,，;；\]）)])/g,
-        (whole, signed, unsigned) => signed.slice(1) === unsigned ? signed : whole
-    );
     return output;
 }
 
@@ -1690,7 +1682,7 @@ function findStructuredTableCell(table, row, column) {
 }
 
 function readerNumericTokenMatches(value) {
-    // 直接在原文上匹配（不做 NFKC 拷贝），保证 match.index 可直接用于原文切片；
+    // 只对全角数字、点和符号做等长映射，不做整篇 NFKC，保证 match.index 可用于原文切片；
     // 之前先 NFKC 再匹配，遇到 ﬁ/ﬂ 等合字会让索引整体漂移，导致按索引切出的
     // quote 落在错误位置、token 永远对不上。全角数字/小数点/百分号与数学减号
     // 纳入字符类；比较归一化仍由 normalizeReaderNumericToken 负责。
@@ -1708,10 +1700,9 @@ function readerNumericTokenMatches(value) {
     // `10^-4,2000` 会被截成假 token `-4,200`（规范形式 `-4200`），而实际上是 `-4` 和
     // `2000` 两个真实数值。
     const groupedInteger = `(?:${digit}{1,3}(?:[,\\uFF0C]${digit}{3})+(?!${digit})|${digit}+)`;
-    // LaTeXML 的 3.093.09 必须一次取到完整双写表面，才能证明半部 3.09。
-    // 普通小数模式会先截成 3.093，再截 09；精确重复及右边界避免猜拆非重复串。
-    const decimal = `(?:${digit}+(?:${dot}${digit}+)?|${dot}${digit}+)`;
-    const doubledDecimal = `(${digit}+${dot}${digit}+)\\1(?!${digit}|${dot}${digit})`;
+    // 3.093.09 一类损坏表面整体保留，不能截出 3.093 或猜成 3.09。
+    const decimal = `(?:${digit}*${dot}${digit}+)`;
+    const doubledDecimal = `(?:\\+(${decimal})\\+\\1|[-\\uFF0D\\u2212](${decimal})[-\\uFF0D\\u2212]\\2|${sign}?(${decimal})\\3)(?!${digit}|${dot}${digit})`;
     const pattern = new RegExp(
         `${lookbehind}(?:${doubledDecimal}|${sign}?(?:${groupedInteger}(?:${dot}${digit}+)?|${dot}${digit}+))(?:${percent}|\\s*(?:${unit}))?`,
         'gi'
@@ -1730,7 +1721,7 @@ function readerNumericTokenMatches(value) {
             }
             return ' '.repeat(prefix.length) + number;
         }
-    );
+    ).replace(/[０-９．＋－]/g, character => String.fromCharCode(character.charCodeAt(0) - 0xfee0));
     const matches = [...numericSurface.matchAll(pattern)];
     // LaTeXML 有时会把可见公式和它的 TeX 注解紧挨着压平在一起。为正文和表格文本里确实
     // 见到的两种形态各留一个范围很窄的别名，好让后面的单位仍挂在它真正描述的数值上。
@@ -1752,31 +1743,6 @@ function readerNumericTokenMatches(value) {
         alias.latexmlExactDuplicateAlias = true;
         matches.push(alias);
     };
-    // LaTeXML 可能把可见的千位分组整数和一模一样的 MathML/TeX 注解连在一起
-    // （500,000500,000）。更严格的千位整数边界刻意拒绝就地解析任何一半，所以只把这一处
-    // 完全重复的表层恢复成范围很窄、绑定原文的别名。相邻计数不相等、逗号普通列举的情况
-    // 仍区分对待。
-    const duplicatedGroupedInteger = /(?<![A-Za-z0-9])([+\-\u2212\uFF0D]?[0-9\uFF10-\uFF19]{1,3}(?:[,\uFF0C][0-9\uFF10-\uFF19]{3})+)\1(?![A-Za-z0-9\uFF10-\uFF19,\uFF0C])/g;
-    for (const whole of originalSurface.matchAll(duplicatedGroupedInteger)) {
-        appendAlias(whole, whole[1], whole[1], '');
-    }
-    // 压平输出里，重复的小数之间没有分隔符（10.010.0）；带负号的重复还可能可见那份用
-    // U+2212、TeX 那份用 '-'（−5.6-5.6）。扫描一段有上限的数字串，只有当恰好有一种
-    // 切法能让两半归一化后字节相等时才接受。
-    const duplicateRun = /(?<![A-Za-z0-9])([+\-\u2212\uFF0D]?[0-9\uFF10-\uFF19.,\uFF0C\uFF0E]+(?:[+\-\u2212\uFF0D][0-9\uFF10-\uFF19.,\uFF0C\uFF0E]+)?)\s*(seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp|[%\uFF05])(?![A-Za-z0-9_])/gi;
-    for (const whole of originalSurface.matchAll(duplicateRun)) {
-        const run = whole[1];
-        // 光秃秃的重复整数太容易和标识符或相邻计数混淆。只有当小数点或显式符号让两份都
-        // 可核查时，才接受这种抽取影子。
-        if (!/[.\uFF0E+\-\u2212\uFF0D]/.test(run)) continue;
-        const splits = [];
-        for (let index = 1; index < run.length; index += 1) {
-            const left = exactNumber(run.slice(0, index));
-            const right = exactNumber(run.slice(index));
-            if (left && right && left === right) splits.push([run.slice(0, index), run.slice(index)]);
-        }
-        if (splits.length === 1) appendAlias(whole, splits[0][0], splits[0][1], whole[2]);
-    }
     // TeX 的千位分隔符会被压平成 `{,}`，通常跟在字面统计量名后面，例如
     // 4,852\mu=4{,}852 ms。只认这个 \mu= 桥接形态，而且要求去掉 TeX 花括号之后两边的
     // 数字写法完全相同。
@@ -1829,47 +1795,8 @@ function normalizeReaderNumericToken(raw) {
     return `${String(num)}${suffix}`;
 }
 
-function readerDoubledHalfToken(surface) {
-    // LaTeX 转换会把同一数字的纯文本与 TeX 双写粘连（4096 + 4096、68 + 68）；
-    // 表面（去空白后）恰为两段相同半部时返回半部，否则返回 null。末尾若带
-    // 单位字母或百分号时，只对数值部分检查双写，并把单位保留在半部结果中。
-    // 半部至少含 2 个数字；纯数字表面落在 [1000, 2999] 时不拆——那基本是年份
-    // 或编号（如 2020、1212），拆成 20、12 会造成误绑定；6868 这类非年份值
-    // 不受影响。
-    const pickHalf = compact => {
-        const doubled = String(compact || '').match(/^([0-9.]+)\1$/);
-        if (!doubled) return null;
-        const half = doubled[1];
-        if (half.replace(/[.]/g, '').length < 2) return null;
-        if (/^[0-9]+$/.test(compact)
-            && Number(compact) >= 1000 && Number(compact) <= 2999) return null;
-        return half;
-    };
-    const compact = String(surface || '').normalize('NFKC').replace(/\s+/g, '');
-    const direct = pickHalf(compact);
-    if (direct) return direct;
-    const suffix = compact.match(/[%a-zA-Z]+$/)?.[0];
-    if (suffix) {
-        const half = pickHalf(compact.slice(0, -suffix.length));
-        // 这个显式分隔符同时也把「秒」和年份复数里那个 s 区分开。
-        if (half) return `${half} ${suffix}`;
-    }
-    return null;
-}
-
 function readerNumericTokens(value) {
-    const tokens = [];
-    for (const match of readerNumericTokenMatches(value)) {
-        const normalizedNumericToken = normalizeReaderNumericToken(match[0]);
-        tokens.push(normalizedNumericToken);
-        // 双写粘连的半部与整体同时索引，让“模型写干净值、原文是粘连串”可绑定。
-        const half = readerDoubledHalfToken(match[0]);
-        if (half) {
-            const halfToken = normalizeReaderNumericToken(half);
-            if (halfToken !== normalizedNumericToken) tokens.push(halfToken);
-        }
-    }
-    return tokens;
+    return readerNumericTokenMatches(value).map(match => normalizeReaderNumericToken(match[0]));
 }
 
 function exactSourceExcerpt(sourceText, index, length, maxChars = 800) {
@@ -1922,12 +1849,7 @@ function exactSourceExcerpt(sourceText, index, length, maxChars = 800) {
 }
 
 function sourceNumericTokenExpansions(raw) {
-    // 与 readerNumericTokens 同一套展开（含双写粘连半部），供 derive 在来源侧
-    // 使用；否则渲染侧的半部 token（如 4096）在来源侧永远找不到。
-    const out = new Set([normalizeReaderNumericToken(raw)]);
-    const half = readerDoubledHalfToken(raw);
-    if (half) out.add(normalizeReaderNumericToken(half));
-    return out;
+    return new Set([normalizeReaderNumericToken(raw)]);
 }
 
 function readerSourceQuoteCoversNumericToken(token, quoteCorpus, allowSplitUnit = false) {
@@ -2023,7 +1945,8 @@ function deriveExactTableSourceQuotes(renderedMarkdown, sourceText, options = {}
         const match = pattern.exec(String(sourceText));
         if (!match || !Number.isInteger(match.index)) return;
         const quote = exactSourceExcerpt(sourceText, match.index, match[0].length);
-        if (quote.length >= 12 && sourceText.includes(quote) && !quotes.includes(quote)) {
+        if (quote.length >= 12 && sourceText.includes(quote) && !quotes.includes(quote)
+            && readerSourceQuoteCoversNumericToken(token, quote)) {
             quotes.push(quote);
         }
     };
@@ -4965,11 +4888,6 @@ function normalizeApiReaderTablePasteArtifacts(article) {
             cleaned = cleaned
                 .replace(/\s+/g, ' ')
                 .trim();
-            const exactDoubled = cleaned.match(/^(.{3,})\1$/u);
-            if (exactDoubled && /[\d\\=]/.test(exactDoubled[1])) cleaned = exactDoubled[1];
-            cleaned = cleaned
-                .replace(/^([∼~≈]\s*\d+(?:\.\d+)?)\1$/, '$1')
-                .replace(/^((?:\d{1,3}(?:,\d{3})+|\d+(?:\.\d+)?))\1$/, '$1');
             if (!cleaned) {
                 throw new Error('Reader source-binding v4 表格清理后出现空单元格；请从原始 cell 重建内容');
             }
@@ -6717,10 +6635,10 @@ function buildApiReaderValidationFeedback(error) {
     }
     if (/comparison_unit_missing/.test(message)) {
         fixes.push(
-            '每组比较数字都分别补齐同一指标名与单位；不要写无单位的“从 A 到 B”或“X 对 Y”；'
-            + '错误率、准确率等百分比指标的差值必须明确写“百分点”（例如“下降 22.3 个百分点”），'
-            + '把“7 对 30%”改成原文明确支持的“7% 对 30%”或“相差 23 个百分点”；'
-            + '词错误率应写成“从约 23% 降到约 15%”，不要把“词”夹在数字和指标之间；'
+            '每组比较数字都必须根据同一实验的原文明确指标名与单位；不要写无单位的“从 A 到 B”或“X 对 Y”。'
+            + '词错误率等指标可以用百分数、比率或无量纲值，保留原文采用的表示及原数值，不因指标名称自行加百分号。'
+            + '只有原文明确按百分数报告时才保留百分号，百分数的绝对差应区分百分点；不得把比例差直接写成百分点。'
+            + '缺少明确单位或实验对应关系时，删除无依据的精确比较并解释证据缺口；'
             + '若原文只支持“百分之几”等模糊量级，删除该精确比较数字并改成定性趋势，禁止拼出“3 对百分”或自行补百分号'
         );
     }
@@ -6806,8 +6724,9 @@ function buildApiReaderValidationFeedback(error) {
     }
     if (/粘连复写/.test(message)) {
         fixes.push(
-            '只重写报错指出的那一个单元格：删掉重复的另一份（纯文本与 TeX 只留纯文本那份），'
-            + 'LaTeX 命令残留改成纯文本或 Unicode 符号，改后数字仍须与原文一致且可绑定；'
+            '先核对报错单元格对应的原始 DOM 或连续原文；裸数字重复不能证明它是粘贴错误，不得猜测半值。'
+            + '只有明确 TeX 语法证明是同一数值及同一单位的显示副本时才删除副本；合法完整数字原样保留。'
+            + '无法证明时保留原始值并补齐来源绑定，或按来源重建该单元格；不要自行折半或补单位；'
             + '不要整表重写，不要动其他已通过的单元格'
         );
     }
@@ -17137,6 +17056,7 @@ function appendSectionByTitle(analysis, title, newContent) {
 }
 
 module.exports = {
+    normalizeReaderSourceCell,
     analyzePaperDeep,
     parseAnalysis,
     callModel,

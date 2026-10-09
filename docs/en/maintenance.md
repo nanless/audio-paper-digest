@@ -51,6 +51,8 @@ Table-count diagnostics use a stable `code`, `requiredCount`, and `actualCount`.
 
 Missing input cannot establish safe reuse. Old direct conference staging without the new marker may be rejected because it lacks replayable full text, even when its metadata uses ordinary characters. Explicit API Reader v2/v3 files without replayable sealed-source references cannot be regenerated or pushed directly. Manual, read-only published pages, and structural success checks retain their existing rules. This upgrade does not call models or rewrite old blogs automatically. Old records with fully verified sources and unaffected inputs remain reusable.
 
+Reader source checks retain complete numbers. Bare repeated integers, decimals, or signs do not establish a duplicated value; cleanup requires explicit TeX structure with matching values and units. Node recovery and Python publication recheck old table bindings and reject guessed halves or mismatched source cells. Repair them from the original source and review the changed pages; this upgrade does not rewrite old text automatically. When both the full number and its half occur in the same passage, numeric presence alone cannot establish which experiment or cell supports the old table. Repair feedback must retain the source's percentage, ratio, or dimensionless representation.
+
 Explain each new field's purpose and validation:
 
 | Purpose | Requirement |

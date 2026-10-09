@@ -191,7 +191,7 @@ function findReaderTablePasteDuplication(cell, context = {}) {
             { index: doubled.index, length: doubled[0].length })) continue;
         if (hasSourceBoundRepeatedColonVector(compact, context,
             { index: doubled.index, length: doubled[0].length })) continue;
-        return `单元格存在原文粘连复写“${doubled[0].slice(0, 40)}”，只保留其中一份`;
+        return `单元格存在疑似粘连复写“${doubled[0].slice(0, 40)}”，须核对完整原始值与绑定，不能仅按重复形状删减数字`;
     }
     if (/([A-Za-z]+)(\d*)\1_\{[^}]*\}/.test(compact)) {
         return '单元格存在纯文本与 TeX 下标双写（如 S1S_{1}），只保留其中一份干净写法';

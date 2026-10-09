@@ -5267,8 +5267,6 @@ def _normalize_api_reader_display_artifacts(value):
 def _normalize_api_reader_source_cell(value):
     value = unicodedata.normalize('NFKC', str(value or ''))
     value = _normalize_api_reader_display_artifacts(value)
-    value = re.sub(r'^−-(\d+(?:\.\d+)?%)$', r'−\1', value)
-    value = re.sub(r'^\+\+(\d+(?:\.\d+)?%)$', r'+\1', value)
     value = re.sub(
         r'(?<![\d,])(\d{1,3}(?:,\d{3})+)(\d{1,3}(?:\{,\}\d{3})+)(?![\d,])',
         lambda match: match[1] if match[2].replace('{,}', ',') == match[1]
@@ -5277,7 +5275,7 @@ def _normalize_api_reader_source_cell(value):
     value = re.sub(r'<br\s*/?>', ' ', value, flags=re.IGNORECASE)
     # arXiv 的 LaTeXML 文本扁平化会把 TeX 上标的渲染结果
     # 贴在对应的纯文本旁边（例如
-    # ``lr=2e−4lr=2e^{-4}``），或者把带符号小数重复成 ``−22.9-22.9``。
+    # ``lr=2e−4lr=2e^{-4}``）。裸数字或符号重复不据此认作注解。
     # Reader 后处理器执行同样范围的显示清理；
     # 发布侧的等价性检查要和这个清理保持一致。
     value = value.replace('\u200b', '')
@@ -5299,11 +5297,6 @@ def _normalize_api_reader_source_cell(value):
         else match[0], value,
     )
     value = re.sub(r'\blr\s*=\s*2e[−-]4\s*lr\s*=\s*2e\^\{-4\}', 'lr=2e-4', value)
-    duplicate_signed = re.compile(r'([+−-])(\d+(?:\.\d+)?)\s*-\s*\2')
-    previous = None
-    while value != previous:
-        previous = value
-        value = duplicate_signed.sub(r'\1\2', value)
     value = re.sub(r'[*_`]', '', value).replace('％', '%')
     return re.sub(r'\s+', ' ', value).strip()
 
@@ -5382,41 +5375,14 @@ def _reader_table_header_unit_evidence_failures(table, quotes):
     return failures
 
 
-def _reader_doubled_half_token(surface):
-    """双写粘连半部提取，与 Node 端 readerDoubledHalfToken 同一规则。"""
-    def pick_half(compact):
-        match = re.fullmatch(r'([0-9.]+)\1', compact)
-        if not match:
-            return None
-        half = match.group(1)
-        if len(half.replace('.', '')) < 2:
-            return None
-        if re.fullmatch(r'[0-9]+', compact) \
-                and 1000 <= int(compact) <= 2999:
-            return None
-        return half
-
-    compact = re.sub(r'\s+', '', unicodedata.normalize('NFKC', str(surface or '')))
-    direct = pick_half(compact)
-    if direct:
-        return direct
-    suffix_match = re.search(r'[%a-zA-Z]+$', compact)
-    if suffix_match:
-        half = pick_half(compact[:suffix_match.start()])
-        if half:
-            return f'{half} {suffix_match.group(0)}'
-    return None
-
-
 def _api_reader_numeric_tokens(value):
     # 千位分组分支必须吃掉逗号之后的整段数字。
     # 否则 ``10^-4,2000`` 会被截成一个凭空造出的词元
     # ``-4,200`` / ``-4200``，而不是重放出 ``-4`` 和 ``2000``。
     grouped_integer = r'(?:\d{1,3}(?:,\d{3})+(?!\d)|\d+)'
     pattern = re.compile(
-        # 完全重复的小数要整体消费掉，再做半词元
-        # 重放；否则 3.093.09 会被错误地拆成 3.093 和 09。
-        rf'(?<![A-Za-z0-9])(?:(\d+\.\d+)\1(?!\d|\.\d)|[-+−－]?(?:{grouped_integer}(?:\.\d+)?|\.\d+))'
+        # 损坏的小数表面整体保留，不能截成部分数字或猜测半值。
+        rf'(?<![A-Za-z0-9])(?:(?:\+(\d*\.\d+)\+\1|[-−－](\d*\.\d+)[-−－]\2|[-+−－]?(\d*\.\d+)\3)(?!\d|\.\d)|[-+−－]?(?:{grouped_integer}(?:\.\d+)?|\.\d+))'
         r'(?:\s*%|\s*(?:seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp)(?![A-Za-z0-9_]))?',
         flags=re.IGNORECASE,
     )
@@ -5439,26 +5405,6 @@ def _api_reader_numeric_tokens(value):
     for match in pattern.finditer(unicodedata.normalize('NFKC', numeric_surface)):
         normalized_numeric_token = _normalize_api_reader_numeric_token(match.group(0))
         tokens.append(normalized_numeric_token)
-        # 与 Node 端 readerNumericTokens 同一条双写粘连规则（4096+4096、
-        # 8.218.21、40964096s 同时索引半部；短半部不拆，避免误读 2020/1212）。
-        half = _reader_doubled_half_token(match.group(0))
-        if half:
-            half_token = _normalize_api_reader_numeric_token(half)
-            if half_token != normalized_numeric_token:
-                tokens.append(half_token)
-
-    # LaTeXML 会把可见的千位分组整数和它一模一样的
-    # 注解拼在一起（``500,000500,000``）。常规的千位分组数字
-    # 分支必须为 ``10^-4,2000`` 保留严格的尾部边界；只把
-    # 完全重复的那种分组形式加进去，作为可核对的半值别名。
-    duplicated_grouped_integer = re.compile(
-        r'(?<![A-Za-z0-9])'
-        r'([+\-−－]?[0-9０-９]{1,3}(?:[,，][0-9０-９]{3})+)\1'
-        r'(?![A-Za-z0-9０-９,，])'
-    )
-    for match in duplicated_grouped_integer.finditer(original_surface):
-        tokens.append(_normalize_api_reader_numeric_token(match.group(1)))
-
     # 和 Node 的 LaTeXML 统计别名完全一致。HTML 文本提取器可能
     # 把一个显示出来的千位分组值连同它的 TeX 注解扁平化成
     # `4,852\mu=4{,}852 ms`。只有跨过这道确切桥梁、且数字写法完全相同的情况
@@ -5482,33 +5428,6 @@ def _api_reader_numeric_tokens(value):
                 r'[+\-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?', surface):
             return None
         return surface
-
-    # 和 Node 的 LaTeXML 重复串别名保持一致。可见的数学式
-    # 和它的 TeX 注解可能被扁平化成 ``−20-20 dB``。只接受
-    # 长度有限、恰好一处拆分、并且归一化后的带符号数字
-    # 逐字节相等的串；数值不等的情况和无符号相邻整数
-    # 仍然不支持。
-    duplicate_run = re.compile(
-        r'(?<![A-Za-z0-9])'
-        r'([+\-−－]?[0-9０-９.,，．]+(?:[+\-−－][0-9０-９.,，．]+)?)\s*'
-        r'(seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp|[%％])'
-        r'(?![A-Za-z0-9_])',
-        flags=re.IGNORECASE,
-    )
-    for match in duplicate_run.finditer(original_surface):
-        run = match.group(1)
-        if not re.search(r'[.．+\-−－]', run):
-            continue
-        splits = []
-        for index in range(1, len(run)):
-            left = exact_number(run[:index])
-            right = exact_number(run[index:])
-            if left and right and left == right:
-                splits.append((run[:index], run[index:]))
-        if len(splits) == 1:
-            tokens.append(_normalize_api_reader_numeric_token(
-                f'{splits[0][0]} {match.group(2)}'
-            ))
 
     for match in tex_statistic.finditer(original_surface):
         left = exact_number(match.group(1))

@@ -2135,25 +2135,14 @@ class PublishToBlogReviewTest(unittest.TestCase):
         tokens = publish_to_blog._api_reader_numeric_tokens(
             '共 40964096 个样本，2020 年，1212 项'
         )
-        self.assertIn('4096', tokens)
+        self.assertNotIn('4096', tokens)
+        self.assertIn('40964096', tokens)
         self.assertNotIn('20', tokens)
         self.assertIn('2020', tokens)
         self.assertIn('1212', tokens)
-        self.assertEqual(
-            publish_to_blog._reader_doubled_half_token('40964096 s'), '4096 s',
-        )
-        self.assertEqual(
-            publish_to_blog._reader_doubled_half_token('8.218.21'), '8.21',
-        )
-        self.assertEqual(
-            publish_to_blog._reader_doubled_half_token('6868'), '68',
-        )
-        self.assertIsNone(publish_to_blog._reader_doubled_half_token('2020'))
-        self.assertIsNone(publish_to_blog._reader_doubled_half_token('1212'))
-        self.assertIsNone(publish_to_blog._reader_doubled_half_token('11'))
         leading = publish_to_blog._api_reader_numeric_tokens('.119.119 and .222.222')
-        self.assertIn('0.119', leading)
-        self.assertIn('0.222', leading)
+        self.assertNotIn('0.119', leading)
+        self.assertNotIn('0.222', leading)
 
         exponent_and_warmup = publish_to_blog._api_reader_numeric_tokens(
             'AdamW，5×10^-4，2000 warm-up steps，exponential decay'
@@ -2163,11 +2152,11 @@ class PublishToBlogReviewTest(unittest.TestCase):
         doubled_grouped = publish_to_blog._api_reader_numeric_tokens(
             'We perform 500,000500,000 gradient steps.'
         )
-        self.assertIn('500000', doubled_grouped)
+        self.assertNotIn('500000', doubled_grouped)
         signed_duplicate = publish_to_blog._api_reader_numeric_tokens(
             'MM and WW are set to −20-20 dB and 90°.'
         )
-        self.assertIn('-20db', signed_duplicate)
+        self.assertNotIn('-20db', signed_duplicate)
         self.assertNotIn(
             '500000',
             publish_to_blog._api_reader_numeric_tokens(
@@ -2234,7 +2223,8 @@ class PublishToBlogReviewTest(unittest.TestCase):
             }],
         }]
         reseal_llm_api_reader_fixture(paper)
-        publish_to_blog._validate_api_reader_source_bindings(paper)
+        with self.assertRaisesRegex(PublishDataValidationError, '数字或单位未被来源引文完整覆盖'):
+            publish_to_blog._validate_api_reader_source_bindings(paper)
 
     def test_api_reader_source_quotes_bind_exact_latexml_signed_duplicate_with_unit(self):
         source = 'MM and WW are set to −20-20 dB and 90° under the recorded protocol.'
@@ -2255,7 +2245,8 @@ class PublishToBlogReviewTest(unittest.TestCase):
             }],
         }]
         reseal_llm_api_reader_fixture(paper)
-        publish_to_blog._validate_api_reader_source_bindings(paper)
+        with self.assertRaisesRegex(PublishDataValidationError, '数字或单位未被来源引文完整覆盖'):
+            publish_to_blog._validate_api_reader_source_bindings(paper)
 
     def test_api_reader_numeric_tex_color_replay_preserves_units_and_signs(self):
         source = 'Original table values:\n\\textcolorblue58.62\n\\textcolorblue62.37\n' \
@@ -2327,20 +2318,10 @@ class PublishToBlogReviewTest(unittest.TestCase):
         with self.assertRaisesRegex(PublishDataValidationError, '数字或单位未被来源引文完整覆盖'):
             publish_to_blog._validate_api_reader_source_bindings(tampered)
 
-    def test_api_reader_numeric_replay_preserves_exact_repeated_decimals(self):
-        tokens = publish_to_blog._api_reader_numeric_tokens(
-            'DNS Challenge\n2.222.22\n3.093.09\n3.503.50\n3.803.80\n'
-            '+0.05+0.05\n−0.02-0.02\n+0.15+0.15'
-        )
-        for expected in ('2.22', '3.09', '3.5', '3.8', '0.05', '-0.02', '0.15'):
-            self.assertIn(expected, tokens)
-        for fabricated in ('3.1', '-3.09', '3.09db'):
-            self.assertNotIn(fabricated, tokens)
-        self.assertNotIn('3.09', publish_to_blog._api_reader_numeric_tokens('3.093.08'))
-        self.assertIn('0.9', publish_to_blog._api_reader_numeric_tokens(
-            'TTA is performed using standard gradient descent with momentum 0.90.9.'
-        ))
-        self.assertNotIn('3.09', publish_to_blog._api_reader_numeric_tokens('3.093.093'))
+    def test_api_reader_numeric_replay_never_guesses_repeated_decimal_halves(self):
+        for source, half in [('3.093.09', '3.09'), ('0.90.9', '0.9'), ('3.093.093', '3.09')]:
+            with self.subTest(source=source):
+                self.assertNotIn(half, publish_to_blog._api_reader_numeric_tokens(source))
 
     def test_api_reader_source_binding_refuses_internal_failure_placeholders(self):
         paper = llm_api_publication_fixture()
@@ -2396,9 +2377,9 @@ class PublishToBlogReviewTest(unittest.TestCase):
                 ('20202020 s', '2020 s', '2020')):
             quote = f'The measured quantity is {surface} under the shared protocol.'
             tokens = publish_to_blog._api_reader_numeric_tokens(quote)
-            self.assertIn(publish_to_blog._normalize_api_reader_numeric_token(correct), tokens)
+            self.assertNotIn(publish_to_blog._normalize_api_reader_numeric_token(correct), tokens)
             self.assertNotIn(bare, tokens)
-            for value, accepted in ((correct, True), (bare, False)):
+            for value, accepted in ((correct, False), (bare, False)):
                 paper = llm_api_publication_fixture()
                 article = f'| Metric | Measurement |\n| --- | --- |\n| Checked | {value} |'
                 paper['apiReaderArticle'] = article

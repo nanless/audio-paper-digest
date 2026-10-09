@@ -466,13 +466,13 @@ describe('arXiv HTML 全文健康检查', () => {
             ['5', '10', '-4', '2000']
         );
         assert.deepStrictEqual(readerNumericTokens('valid 6,005 grouped samples'), ['6005']);
-        assert.ok(readerNumericTokens(
+        assert.ok(!readerNumericTokens(
             'We perform 500,000500,000 gradient steps.'
         ).includes('500000'));
-        assert.ok(deriveExactTableSourceQuotes(
+        assert.deepStrictEqual(deriveExactTableSourceQuotes(
             '| Stage | Steps |\n| --- | --- |\n| Translation | 500,000 |',
             'We perform 500,000500,000 gradient steps with a fixed batch size.'
-        ).some(quote => quote.includes('500,000500,000')));
+        ), []);
         assert.ok(!readerNumericTokens(
             'Two distinct runs use 500,000600,000 samples.'
         ).includes('500000'));
@@ -3621,12 +3621,12 @@ primary_task_tag: #音视频生成
             '| 指标 | 数值 |\n| --- | --- |\n| SDR | 3.00 ±\\pm0.11 |\n| 样本 | 1,3441,344 |'
         );
         assert.match(pasted, /3\.00 ± 0\.11/);
-        assert.match(pasted, /\| 样本 \| 1,344 \|/);
+        assert.match(pasted, /\| 样本 \| 1,3441,344 \|/);
         assert.match(
             normalizeApiReaderTablePasteArtifacts(
                 '| 条件 | 数值 |\n| --- | --- |\n| 帧长 | L=1024L=1024 |'
             ),
-            /\| 帧长 \| L=1024 \|/
+            /\| 帧长 \| L=1024L=1024 \|/
         );
         const narrated = ensureApiReaderTableNarratives(
             '### 结果\n\n| 指标 | 数值 |\n| --- | --- |\n| SDR | 3.00 |\n\n### 局限'
@@ -4205,40 +4205,23 @@ primary_task_tag: #音视频生成
         ), []);
     });
 
-    it('2609.03622 原表小数双写保留完整 match，可按原字 quote 绑定干净值且不猜拆非重复串', () => {
+    it('无 TeX 结构的粘连小数不能猜成半值，来源引文保持原字节', () => {
         const { deriveExactTableSourceQuotes, bindApiReaderSourceEvidence,
             bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
-        // 这是表 1 里各 DOM 单元格拍平之后的精确内容。
-        // 原始数学文本和它的 TeX 标注拼在一起。
-        const sourceText = 'DNS Challenge\nNoisy input\n2.222.22\n3.193.19\n2.382.38\n'
-            + 'SE w/o TTA (k=0)(k=0)\n3.093.09\n3.503.50\n3.803.80\n'
-            + 'SE w/ TTA\n+0.05+0.05\n−0.02-0.02\n+0.15+0.15\n';
-        const article = '| Setting | OVRL | SIG | BAK |\n| --- | --- | --- | --- |\n'
-            + '| Noisy | 2.22 | 3.19 | 2.38 |\n| Pretrained | 3.09 | 3.50 | 3.80 |\n'
-            + '| Adapted change | +0.05 | -0.02 | +0.15 |';
-        const quotes = deriveExactTableSourceQuotes(article, sourceText);
-        assert.ok(quotes.length > 0);
-        assert.ok(quotes.every(quote => sourceText.includes(quote)));
-        const bindings = [{ tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
-            cellBindings: [], sourceQuotes: quotes }];
-        const options = { sourceText,
-            structuredArtifacts: bindStructuredArtifactsToText({ tables: [], formulas: [] }, sourceText) };
-        assert.strictEqual(bindApiReaderSourceEvidence(article, bindings, [], options).article, article);
-        for (const fabricated of ['3.10', '-3.09', '3.09 dB']) {
-            assert.throws(() => bindApiReaderSourceEvidence(
-                article.replace('| 3.09 |', `| ${fabricated} |`), bindings, [], options
-            ), /关键数字缺少 exact quote\/cell 证据/);
+        for (const sourceText of [
+            'A ﬁne oﬃcial table follows: 3.093.09 under the shared protocol.',
+            'The malformed extracted cell is 3.093.08 on this row.',
+            'Malformed continuation 3.093.093 is not a complete scalar.'
+        ]) {
+            const article = '| Metric | Value |\n| --- | --- |\n| A | 3.09 |';
+            assert.deepStrictEqual(deriveExactTableSourceQuotes(article, sourceText), []);
+            assert.throws(() => bindApiReaderSourceEvidence(article, [{
+                tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
+                cellBindings: [], sourceQuotes: [sourceText]
+            }], [], { sourceText, structuredArtifacts: bindStructuredArtifactsToText(
+                { tables: [], formulas: [] }, sourceText
+            ) }), /关键数字缺少 exact quote\/cell 证据/);
         }
-        assert.deepStrictEqual(deriveExactTableSourceQuotes('| Value |\n| --- |\n| 3.09 |',
-            'The malformed extracted cell is 3.093.08 on this row.'), []);
-        const ligatures = 'A ﬁne oﬃcial table follows:\n3.093.09\n3.503.50\n3.803.80';
-        assert.ok(deriveExactTableSourceQuotes('| Value |\n| --- |\n| 3.09 |', ligatures)
-            .some(quote => ligatures.includes(quote) && quote.includes('3.093.09')));
-        const momentum = 'TTA is performed using standard gradient descent with momentum 0.90.9.';
-        assert.ok(deriveExactTableSourceQuotes('| Momentum |\n| --- |\n| 0.9 |', momentum)
-            .includes(momentum));
-        assert.deepStrictEqual(deriveExactTableSourceQuotes('| Value |\n| --- |\n| 3.09 |',
-            'Malformed continuation 3.093.093 is not a complete repeated scalar.'), []);
     });
 
     it('短行 quote 保留原始空白并在首匹配无效时继续，单位门禁仍区分1与1 s', () => {
@@ -4314,7 +4297,7 @@ primary_task_tag: #音视频生成
         }
     });
 
-    it('双写恢复保留 dB/秒/百分号，禁止裸值借带单位来源或自行补单位', () => {
+    it('裸重复数字即便带单位也不授权半值或自行补单位', () => {
         const { deriveExactTableSourceQuotes, bindApiReaderSourceEvidence,
             bindStructuredArtifactsToText } = require('../scripts/deep-analyzer.js');
         const table = value => `| Metric | Measurement |\n| --- | --- |\n| Checked | ${value} |`;
@@ -4327,13 +4310,14 @@ primary_task_tag: #音视频生成
         ]) {
             const sourceText = `The measured quantity is ${surface} under the shared protocol.`;
             const quotes = deriveExactTableSourceQuotes(table(correct), sourceText);
-            assert.ok(quotes.includes(sourceText), correct);
+            assert.deepStrictEqual(quotes, [], correct);
             assert.deepStrictEqual(deriveExactTableSourceQuotes(table(bare), sourceText), [], bare);
             const binding = [{ tableIndex: 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
                 cellBindings: [], sourceQuotes: [sourceText] }];
             const options = { sourceText,
                 structuredArtifacts: bindStructuredArtifactsToText({ tables: [], formulas: [] }, sourceText) };
-            assert.strictEqual(bindApiReaderSourceEvidence(table(correct), binding, [], options).article, table(correct));
+            assert.throws(() => bindApiReaderSourceEvidence(table(correct), binding, [], options),
+                /关键数字缺少 exact quote\/cell 证据/);
             assert.throws(() => bindApiReaderSourceEvidence(table(bare), binding, [], options),
                 /关键数字缺少 exact quote\/cell 证据/);
         }
@@ -4366,7 +4350,7 @@ primary_task_tag: #音视频生成
             ['+0.15+0.15 dB', '+0.15 dB']
         ]) {
             const source = `The exact duplicated measurement is ${surface} in the source.`;
-            assert.ok(deriveExactTableSourceQuotes(table(rendered), source).includes(source));
+            assert.deepStrictEqual(deriveExactTableSourceQuotes(table(rendered), source), []);
         }
         for (const [source, rendered] of [
             ['Observed latency was μ=4,852\\mu=4{,}851 ms.', '4,852 ms'],
