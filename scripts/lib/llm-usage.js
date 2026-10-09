@@ -83,16 +83,16 @@ function buildLlmUsageEvent({ protocol, model, request, response, statusCode, du
     context, outputText, eventId = crypto.randomUUID(), at = new Date().toISOString() }) {
     const terminal = response?.status === 'incomplete' || response?.stop_reason === 'max_tokens'
         || (Array.isArray(response?.choices) && response.choices.some(choice => choice?.finish_reason === 'length'));
-    const responseStatus = protocol === 'openai_responses' ? response?.status : null;
+    const responseStatus = protocol === 'openai_responses' ? response?.status : undefined;
     const chatTerminalFailed = ['openai', 'openai_chat'].includes(protocol)
         && Array.isArray(response?.choices) && response.choices.some(choice =>
-            choice?.finish_reason != null && !['stop', 'length'].includes(choice.finish_reason));
-    const anthropicTerminalFailed = protocol === 'anthropic' && response?.stop_reason != null
+            choice?.finish_reason !== undefined && !['stop', 'length'].includes(choice.finish_reason));
+    const anthropicTerminalFailed = protocol === 'anthropic' && response?.stop_reason !== undefined
         && !['end_turn', 'stop_sequence', 'max_tokens'].includes(response.stop_reason);
     let outcome;
     if (errorCode) outcome = 'transport_error';
     else if (!Number.isInteger(statusCode) || statusCode < 200 || statusCode >= 300) outcome = 'http_error';
-    else if (responseStatus != null && !['completed', 'incomplete'].includes(responseStatus)) outcome = 'provider_error';
+    else if (responseStatus !== undefined && !['completed', 'incomplete'].includes(responseStatus)) outcome = 'provider_error';
     else if (chatTerminalFailed || anthropicTerminalFailed) outcome = 'provider_error';
     else if (terminal) outcome = 'incomplete';
     else outcome = 'completed';

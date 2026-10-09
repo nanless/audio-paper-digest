@@ -1,4 +1,6 @@
 import os
+import errno
+from unittest import mock
 import re
 import subprocess
 import sys
@@ -51,10 +53,46 @@ class LogSetupTest(unittest.TestCase):
             result = prune_log_files(
                 logs_dir, retention_days=30, max_total_bytes=12, now=now,
             )
-            self.assertEqual(result, {'removed': 2, 'reclaimedBytes': 12})
+            self.assertEqual(result, {'removed': 2, 'reclaimedBytes': 12, 'problems': []})
             self.assertEqual(sorted(os.listdir(logs_dir)), [
                 f'active-20260101-000000-{os.getpid()}-0.log', 'keep.txt', 'newer.log',
             ])
+
+    def test_log_scan_distinguishes_missing_directory_from_io_failures(self):
+        sys.path.insert(0, os.path.join(ROOT, 'scripts'))
+        from log_setup import prune_log_files
+        with tempfile.TemporaryDirectory() as root:
+            missing = os.path.join(root, 'missing')
+            self.assertEqual(prune_log_files(missing).get('problems'), [])
+            for operation in ['listdir', 'lstat']:
+                with self.subTest(operation=operation):
+                    filename = os.path.join(root, 'read-error.log')
+                    with open(filename, 'w') as handle:
+                        handle.write('retained')
+                    with mock.patch(f'log_setup.os.{operation}', side_effect=OSError(errno.EIO, '测试日志读取失败')):
+                        result = prune_log_files(root)
+                    self.assertEqual(result['removed'], 0)
+                    self.assertEqual(result['problems'][0]['code'], 'EIO')
+                    self.assertIn('读取失败', result['problems'][0]['message'])
+                    self.assertTrue(os.path.isfile(filename))
+
+    def test_log_delete_failure_is_reported_and_not_retried_for_size_limit(self):
+        sys.path.insert(0, os.path.join(ROOT, 'scripts'))
+        from log_setup import prune_log_files
+        with tempfile.TemporaryDirectory() as root:
+            filename = os.path.join(root, 'expired.log')
+            with open(filename, 'w') as handle:
+                handle.write('retained')
+            now = 1_788_307_200.0
+            os.utime(filename, (now - 40 * 86400, now - 40 * 86400))
+            with mock.patch('log_setup.os.unlink', side_effect=PermissionError(errno.EACCES, '测试删除失败')) as remove:
+                result = prune_log_files(root, retention_days=30, max_total_bytes=1, now=now)
+            self.assertEqual(remove.call_count, 1)
+            self.assertEqual(result['removed'], 0)
+            self.assertEqual(result['reclaimedBytes'], 0)
+            self.assertEqual(result['problems'][0]['code'], 'EACCES')
+            with open(filename) as handle:
+                self.assertEqual(handle.read(), 'retained')
 
     def test_python_logging_creates_file_logs_by_default_and_disable_switch_stops_it(self):
         before = list_log_files()

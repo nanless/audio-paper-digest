@@ -2,6 +2,8 @@ import atexit
 import os
 import re
 import sys
+import stat
+import errno
 import threading
 import time
 from datetime import datetime
@@ -191,30 +193,45 @@ def prune_log_files(logs_dir, *, retention_days=None, max_total_bytes=None, now=
     now = time.time() if now is None else float(now)
     cutoff = now - retention_days * 24 * 60 * 60
     entries = []
+    problems = []
+
+    def report_problem(file_path, operation, error):
+        code = errno.errorcode.get(error.errno) if error.errno is not None else None
+        problem = {'path': str(file_path), 'code': code, 'message': f'{operation}: {error}'}
+        problems.append(problem)
+        print(redact_log_text(f'[log] {problem["message"]}（{problem["path"]}）'), file=sys.stderr)
+
     try:
         names = os.listdir(logs_dir)
-    except OSError:
-        return {'removed': 0, 'reclaimedBytes': 0}
+    except FileNotFoundError:
+        return {'removed': 0, 'reclaimedBytes': 0, 'problems': []}
+    except OSError as error:
+        report_problem(logs_dir, '读不出日志目录', error)
+        return {'removed': 0, 'reclaimedBytes': 0, 'problems': problems}
     for name in names:
         if not name.endswith('.log'):
             continue
         file_path = os.path.join(logs_dir, name)
         try:
-            stat = os.lstat(file_path)
-        except OSError:
+            file_stat = os.lstat(file_path)
+        except FileNotFoundError:
             continue
-        if not os.path.isfile(file_path) or os.path.islink(file_path):
+        except OSError as error:
+            report_problem(file_path, '读不出日志文件状态', error)
+            continue
+        if not stat.S_ISREG(file_stat.st_mode):
             continue
         entries.append({
             'path': file_path,
-            'mtime': stat.st_mtime,
-            'size': stat.st_size,
+            'mtime': file_stat.st_mtime,
+            'size': file_stat.st_size,
             'active_owner': _log_owner_process_is_alive(file_path),
         })
 
     removed = 0
     reclaimed = 0
     retained = []
+    failed_removals = set()
     for entry in entries:
         if not entry['active_owner'] and entry['mtime'] < cutoff:
             try:
@@ -224,8 +241,9 @@ def prune_log_files(logs_dir, *, retention_days=None, max_total_bytes=None, now=
                 continue
             except FileNotFoundError:
                 continue
-            except OSError:
-                pass
+            except OSError as error:
+                failed_removals.add(entry['path'])
+                report_problem(entry['path'], '无法删除日志文件', error)
         retained.append(entry)
     retained.sort(key=lambda item: (-item['mtime'], item['path']))
     total_bytes = sum(item['size'] for item in retained)
@@ -233,19 +251,20 @@ def prune_log_files(logs_dir, *, retention_days=None, max_total_bytes=None, now=
         if total_bytes <= max_total_bytes:
             break
         # 别的进程可能还在用这个日志，不要删。
-        if entry['active_owner'] or entry['mtime'] >= now - ACTIVE_LOG_GRACE_SECONDS:
+        if entry['path'] in failed_removals or entry['active_owner'] or entry['mtime'] >= now - ACTIVE_LOG_GRACE_SECONDS:
             continue
         try:
             os.unlink(entry['path'])
         except FileNotFoundError:
             total_bytes -= entry['size']
             continue
-        except OSError:
+        except OSError as error:
+            report_problem(entry['path'], '无法删除日志文件', error)
             continue
         total_bytes -= entry['size']
         removed += 1
         reclaimed += entry['size']
-    return {'removed': removed, 'reclaimedBytes': reclaimed}
+    return {'removed': removed, 'reclaimedBytes': reclaimed, 'problems': problems}
 
 
 def setup_script_logging(script_path=None):

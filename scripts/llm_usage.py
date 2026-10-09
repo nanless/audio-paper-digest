@@ -106,15 +106,15 @@ def build_llm_usage_event(*, protocol, model, request, response=None, status_cod
                for choice in choices)
     response_status = body.get('status') if protocol == 'openai_responses' else None
     chat_terminal_failed = protocol in {'openai', 'openai_chat'} and any(
-        isinstance(choice, dict) and choice.get('finish_reason') is not None
+        isinstance(choice, dict) and 'finish_reason' in choice
         and choice.get('finish_reason') not in ('stop', 'length') for choice in choices)
-    anthropic_terminal_failed = protocol == 'anthropic' and body.get('stop_reason') is not None \
+    anthropic_terminal_failed = protocol == 'anthropic' and 'stop_reason' in body \
         and body.get('stop_reason') not in ('end_turn', 'stop_sequence', 'max_tokens')
     if error_code:
         outcome = 'transport_error'
     elif not isinstance(status_code, int) or not 200 <= status_code < 300:
         outcome = 'http_error'
-    elif response_status is not None and response_status not in ('completed', 'incomplete'):
+    elif protocol == 'openai_responses' and 'status' in body and response_status not in ('completed', 'incomplete'):
         outcome = 'provider_error'
     elif chat_terminal_failed or anthropic_terminal_failed:
         outcome = 'provider_error'
