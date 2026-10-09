@@ -914,9 +914,9 @@ def validate_unpublished_rebase(repo, images, previous, snapshot, image_snapshot
             if stat.S_IMODE(target.lstat().st_mode) != 0o644:
                 raise ConferencePublicationError(f'{label}工作区目标模式漂移: {path}')
             if sha_bytes(data) != record['sourceSha256']:
-                # 有主字节等值放行：目标恰等于本次生成的 staged 源字节（权威源已落位，
-                # 见中断恢复/经审重裁场景）→ 放行，新 generation 将以源字节刷新记录；
-                # 任意其他漂移（含人工改动）照旧 fail-closed。
+                # 目标内容与旧记录不同，但恰等于本次暂存内容时允许继续；
+                # 这可处理本次内容已写入目标后的恢复，新生成记录将保存本次内容的 SHA。
+                # 其他内容变化仍拒绝，包括人工修改。
                 staged_sha = ((new_source_sha if repository == repo
                                else new_image_source_sha) or {}).get(path)
                 if staged_sha is None or sha_bytes(data) != staged_sha:
@@ -1058,7 +1058,7 @@ def generate(conference_id, process_id):
             if same_implementation and not completion_changed and (previous['files'] != files
                     or previous['imageFiles'] != image_files):
                 raise ConferencePublicationError('同一 process 的发布内容已变化')
-            # 暂存字节是当前渲染器与发布约定的产物。渲染器或检查器一变，就必须
+            # 暂存 Markdown 对应当前渲染器和发布规则。渲染器或检查器一变，就必须
             # 把同一批已完成论文重新产出，review 才不会去审过期的 Markdown。
             # 更早的 v2 凭证没有这个指纹，因此会有意走一次重新生成。
             if same_implementation and not completion_changed and not rebased:
@@ -1181,9 +1181,9 @@ def validate_generation(conference_id, process_id, repo, images, *,
     for record in image_files:
         data = target_bytes(images, record)
         if sha_bytes(data) != record['sourceSha256']:
-            # 有主图片漂移：目标字节恰等于本次生成的 staged 源字节（本次权威源已落在目标，
-            # 多见于中断恢复与经审重裁的资产）→ 放行，新 generation 将以 staged 源刷新记录；
-            # 其余漂移照旧 fail-closed（asset 无内容标记，不用 kind 探测，只认字节等值）。
+            # 目标图片与旧记录不同，但恰等于本次暂存图片时允许继续；
+            # 新生成记录将保存本次图片的 SHA。其他内容变化仍拒绝。
+            # 图片没有正文标记，不能根据 kind 判断是否属于本次内容，只比较内容 SHA。
             staged_sha = (new_image_source_sha or {}).get(record['path'])
             if not staged_sha or sha_bytes(data) != staged_sha:
                 raise ConferencePublicationError(f'图片仓库目标字节与 generation 不一致: {record["path"]}')
@@ -1527,8 +1527,8 @@ def validate_review(generation, receipt, *, current=True):
     if content is None:
         # v2 凭证的含义中途变过：早期版本写 version 2 但不写 contentReview，
         # 当时的 validate_review 也不要求它。那些已发布凭证的自哈希、
-        # files/imageFiles、generationSha256 和 HTML 门禁页面集合都对得上，
-        # 是那段代码的合法产物，不是缺陷产物——但它们只证明 HTML 门禁，
+        # files/imageFiles、generationSha256 和 HTML 检查的页面集合都对得上，
+        # 是当时程序按原规则生成的记录——但它们只证明 HTML 检查通过，
         # 没有做过正文与图片审查。所以只对已发布凭证（current=False）按旧格式
         # 识别；待推送的凭证照旧必须带一份通过的 contentReview。
         if current:
@@ -1658,7 +1658,7 @@ def fresh_online_acceptance(directory, repo, images, generation, published, mech
                 verify_published_tree(images, image_commit, generation['imageRemoteIdentitySha256'], image_files)
         except Exception as exc:
             failure = exc
-            # 不落盘传输层异常文本（可能带密钥）。
+            # 不保存本次核验失败的异常文本，因为其中可能含密钥。
             acceptance = {'status': 'failed', 'errorCode': 'online_verification_failed'}
         result_body = {'contract': 'conference-online-acceptance-result-v1',
                        'intentSha256': intent['intentSha256'], 'publishSha256': published['publishSha256'],
@@ -1858,7 +1858,7 @@ def verify(conference_id, process_id):
 def push(conference_id, process_id):
     repo, images = blog_repo(), image_repo()
     if (publication_dir(conference_id, process_id) / 'publish.json').exists():
-        # 重放 push 时只读状态；只有显式 verify 才会重新发起线上 GET。
+        # 再次运行 push 时只读取已发布状态；只有显式 verify 才重新发起线上 GET。
         return status(conference_id, process_id)
     with shared_blog_repository_lock(repo, owner=f'conference-push:{conference_id}'):
         with shared_blog_repository_lock(images, owner=f'conference-images:{conference_id}'):

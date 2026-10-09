@@ -58,7 +58,7 @@ describe('论文库恢复的安全性', () => {
         }
     });
 
-    it('压缩备份组可重放 SHA、字节数和 papers schema', async () => {
+    it('压缩论文库备份可还原原数据，并核对来源 SHA 和备份格式', async () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-backup-valid-'));
         const source = path.join(dir, 'current', 'papers.json');
         const archive = path.join(dir, 'archive');
@@ -80,7 +80,7 @@ describe('论文库恢复的安全性', () => {
         }
     });
 
-    it('历史 .json 备份仍可验证，但不进入新 writer retention', async () => {
+    it('旧 JSON 备份仍可读取核验，但不列入新的受管理备份集合', async () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-backup-legacy-'));
         const legacy = path.join(dir, 'papers-2026-08-01.json');
         const database = { generation: 1, papers: { '2608.00001': { arxivId: '2608.00001' } } };

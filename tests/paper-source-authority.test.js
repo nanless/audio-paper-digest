@@ -41,7 +41,7 @@ function arxivFixture(t) {
     return { root, paperId, authority };
 }
 
-test('arXiv 授权复核正式身份、官方快照与凭证和精确全文，并装入不透明句柄', t => {
+test('加载 arXiv 来源授权时核对身份与全文 SHA，核验接口拒绝复制出的对象', t => {
     const f = arxivFixture(t); const handle = api.loadAuthorityHandle({ authorityRoot: f.root, authorityName: 'authority.json' });
     const snapshot = api.authorityHandleSnapshot(handle);
     assert.equal(snapshot.authority.paperId, f.paperId); assert.equal(snapshot.fulltextSha256, f.authority.proof.fulltextSha256);

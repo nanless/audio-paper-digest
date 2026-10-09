@@ -68,7 +68,7 @@ describe('发布后视觉提示词风格契约', () => {
 
     // v1 永久冻结，只作为历史契约留在上面两条断言里。实际发出去的是版本登记表解析出的
     // 那一份，所以设计契约必须在当前中文正文上再查一遍，防止换版时遗漏约束。
-    it('当前版本提示词仍带完整设计契约', () => {
+    it('当前长图与封面提示词保留规定的设计要素和禁止样式', () => {
         const { currentTextStagePromptPath } = require('../scripts/lib/prompt-text-versions.js');
         const cases = [
             {

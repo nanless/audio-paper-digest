@@ -1,8 +1,7 @@
 'use strict';
 
-// 这个队列有意做得很小，只当一个协调者。它管顺序和持久化的意图，证据和锁由
-// process、publisher 模块自己管。边界划清楚，中断的队列才能续跑，也不会把一次
-// 成功的推送记成假的 complete。
+// 队列安排各会议的执行顺序，并保存进度；来源证据和操作锁由 process、publisher 管理。
+// 中断后按保存的阶段继续，推送成功后还须核验发布结果，才能记为 complete。
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -552,8 +551,8 @@ async function validateCompletedQueue(state, plan, deps) {
         const expected = entryState.receipts.verify?.receiptSha256;
         if (!SHA_RE.test(String(expected || ''))) fail(`complete 状态的队列中 ${entry.conferenceId} 缺少 verify 证明`);
         if (!entryState.receipts.push?.receiptSha256) fail(`complete 状态的队列中 ${entry.conferenceId} 缺少 publish 证明`);
-        // 默认发布器会暴露持久的 publish.json。apply 时重新读一遍，避免过期的队列状态
-        // 掩盖发布漂移。
+        // 默认发布器保留 publish.json。apply 时重新读取并核验发布凭证，
+        // 避免只凭旧队列状态接受已经变化的发布记录。
         if (typeof deps.publisher?.findPublished === 'function') {
             const found = await deps.publisher.findPublished(entry, entryState.processId, { readOnly: true });
             if (!found) fail(`${entry.conferenceId} 的已发布证明消失`);
@@ -720,8 +719,8 @@ async function runConferenceQueue(options, overrides = {}) {
                 if (result.kind === 'paused') return { contract: CONTRACT, version: VERSION, mode, queueId,
                     status: 'paused', planSha256: plan.planSha256, entries: summary(state), stateFile };
             } catch (error) {
-                // runEntry 在每次外部调用前都会把下一阶段落盘。这里重新读一次，这样
-                // generate/review/push/verify 中途崩溃时，不会被记成过期的流程阶段错误。
+                // runEntry 会保存执行进度。这里重读最新状态，
+                // 使 generate/review/push/verify 的失败记录对应实际保存的阶段。
                 const latest = readState(stateFile, plan, queueId) || state;
                 const entry = { ...latest.entries[index], status: 'paused',
                     failure: errorRecord(error, latest.entries[index].stage), blocked: null };

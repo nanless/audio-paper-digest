@@ -104,7 +104,7 @@ def _quiet_pymupdf_output():
     saved_stdout = os.dup(1)
     try:
         # PyMuPDF 会绕过 Python 层，把 C 层诊断直接写到 fd 1。
-        # redirect_stdout 拦不住这些字节，而 Node 重放约定要求 stdout 上
+        # redirect_stdout 拦不住这些字节，而 Node 读取抽取结果时要求 stdout 上
         # 只能有一个 JSON 对象。
         os.dup2(2, 1)
         with contextlib.redirect_stdout(io.StringIO()):
@@ -374,7 +374,7 @@ def _normalize_page_text(value: Any) -> str:
     if not isinstance(value, str):
         raise ConferencePdfExtractionError("PDF backend returned non-text page content")
     # 有些 PDF 本身能读，只是字体编码表里带了 UTF-16 代理码位。合法的代理对
-    # 按 Unicode 标量值保留，只替换落单的代理码位；这样封存产物仍是严格
+    # 按 Unicode 标量值保留，只替换落单的代理码位；这样保存的抽取结果仍是严格
     # UTF-8，不至于把本可恢复的一页变成 PDF_EXTRACTION_FAILED。
     value = value.encode("utf-16", "surrogatepass").decode("utf-16", "replace")
     value = unicodedata.normalize("NFC", value.replace("\r\n", "\n").replace("\r", "\n"))
@@ -414,7 +414,7 @@ def _bbox(value: Any) -> list[float]:
         rounded = round(float(item), 3)
         # JavaScript 的 JSON.stringify 把整数写成 1，Python 的 json.dumps 写成
         # 1.0。这里先归一化，视觉审计哈希在 Python 抽取器和 Node 检查器两边
-        # 才能重放出同一个值。
+        # 才能计算出同一个 SHA。
         normalized.append(int(rounded) if rounded.is_integer() else rounded)
     return normalized
 
@@ -978,7 +978,7 @@ def load_pypdf_backend() -> ExtractionBackend:
                         elif current[0]:
                             # 凭证约定（conference-pdf-extraction-receipt-v2）
                             # 把每个单元格限制在 500 字符内；合并换行标签时也要
-                            # 守住这个上限，长标签才不会让下游重放失败。
+                            # 守住这个上限，长标签才不会让后续读取和核验失败。
                             cells[0] = clean_structure_text(f"{current[0]} {cells[0]}", 500)
                     current = cells
                     last_data_y = line[0]["y0"]
@@ -1072,7 +1072,7 @@ def load_pypdf_backend() -> ExtractionBackend:
                             "recoveryStatus": "complete"})
             next_ordinal += 1
         # 上面的按行恢复可能找到了一页里的一张表，却漏掉另一张（多见于第二张
-        # 无框线，或配置列换行）。兜底的几何方法一律要跑，只补还没恢复的图注；
+        # 无框线，或配置列换行）。按几何位置恢复表格的方法也要运行，补漏表或替换同图注但更不完整的结果；
         # 一页里本来就可以有多张互不相干的表。
         existing_captions = {record["caption"] for record in records}
         fallback_records = layout_table_records(page, page_number, next_ordinal)
@@ -1096,7 +1096,7 @@ def load_pypdf_backend() -> ExtractionBackend:
             records.append(record)
             existing_captions.add(record["caption"])
             next_ordinal += 1
-        # 几何兜底会给它能恢复的每条图注都预分序号，但上面的合并丢掉了那些
+        # 按几何位置恢复的方法会给每条恢复出的图注预分序号，但上面的合并丢掉了那些
         # 按行路径已恢复的同名图注，于是序号出现空档（还会和下一页冲突，
         # 因为下一页的基数是 len(tables)+1）。凭证约定不接受这种记录
         # ("table records must be ordered and complete")。这里按插入顺序
@@ -1259,7 +1259,7 @@ def load_pypdf_backend() -> ExtractionBackend:
         try:
             pdf_document = pymupdf.open(stream=pdf_bytes, filetype="pdf")
             # 调用方没有提供经认证的原页审计，就无法说明含表格的版面可以安全
-            # 提升成可重放的单元格或公式裁切图。这些区域一律只留作视觉审计
+            # 作为可重新核验的单元格或公式裁切图使用。这些区域一律只留作视觉审计
             # 候选；生产抽取会先显式传入已封存的审计，再启用更完整的 FULL
             # 投影。这样随手直接调用这个辅助函数时，不会悄悄把任意 PDF 几何
             # 变成来源结构。

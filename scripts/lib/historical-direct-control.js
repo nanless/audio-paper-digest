@@ -349,19 +349,19 @@ function taskSnapshot({ aggregateProjectionRoot, plan } = {}) {
         let loaded;
         try { loaded = conferencePageMappingsApi.readStableJson(filename, 'direct aggregate projection status input'); }
         catch (error) {
-            // 读不出内容就无法判断属于哪个计划，只能单独记下来。它可能是别的计划的产物，
-            // 也可能就是本计划那份坏掉的投影；无论哪种，都不能当作「还没生成」。
+            // 读不出内容就无法判断属于哪个计划，必须单独记录错误。该文件可能属于别的计划，
+            // 也可能是本计划已损坏的汇总文件；两种情况都不能显示成「还没生成」。
             projectionErrors.push({ filename, stage: 'read', error: String(error.message).slice(0, 500) });
             continue;
         }
         const value = loaded.value;
-        // contract、version 或 planSha 不符的文件属于别的计划或别的诊断产物，跳过不算损坏。
+        // contract、version 或 planSha 不符时，此文件不作为本计划的汇总记录检查；跳过它不算损坏。
         if (value?.contract !== aggregateApi.PROJECTION_CONTRACT || value?.version !== aggregateApi.PROJECTION_VERSION
             || value?.planSha256 !== plan.planSha256) continue;
         let normalized;
         try { normalized = aggregateApi.normalizeAggregateProjection(value, plan); }
         catch (error) {
-            // 已声明属于本计划的投影却通不过校验，就是损坏，必须让运维看到，而不是显示成未就绪。
+            // 已声明属于本计划的汇总记录未通过检查时，必须报告损坏，不能显示成尚未准备好。
             projectionErrors.push({ filename, stage: 'normalize', error: String(error.message).slice(0, 500) });
             continue;
         }

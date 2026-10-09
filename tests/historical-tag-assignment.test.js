@@ -92,7 +92,7 @@ test('未知、跨 facet 歧义、已废弃或缺失的主标签一律标记为�
     assert.equal(ambiguous.status, 'blocked'); assert.ok(ambiguous.blockedReasons.some(reason => reason.includes('tag:ambiguous:#Transformer')));
 });
 
-test('加载器拒绝不完整、非历史、漂移或过期的已解析分析运行', t => {
+test('加载器拒绝未完成、非历史或 SHA 不符的分析运行，以及被改动的论文记录', t => {
     const f = runFixture(t);
     for (const mutate of [
         run => { run.status = 'analysis_partial'; },
@@ -107,7 +107,7 @@ test('加载器拒绝不完整、非历史、漂移或过期的已解析分析�
     assert.throws(() => api.buildAssignment({ runHandle: f.handle, paper: stale, tagCatalog: registry() }), /论文记录与该分析运行中的完整原记录不一致/);
 });
 
-test('命令行支持批次和单篇预演，零写入；写入则生成私有且幂等的产物', t => {
+test('命令行可预演批次或单篇；实际保存的标签文件仅当前用户可读写，重复调用不改变文件', t => {
     const f = runFixture(t, [paper('2609.03622'), paper('2609.03623')]);
     const config = { FILES: { freshRewriteRunsDir: path.join(f.root, 'runs'),
         tagCatalogFile: path.join(__dirname, '..', 'config', 'tag-catalog.json'),
@@ -131,7 +131,7 @@ test('命令行支持批次和单篇预演，零写入；写入则生成私有�
         '--paper-id', '../escape']));
 });
 
-test('登记升级会在原审计记录旁边新建一份不可变产物', t => {
+test('词表 SHA 更新后另存新的标签记录，保留原文件', t => {
     const f = runFixture(t); const firstTagCatalog = registry();
     const first = api.buildAssignments({ runHandle: f.handle, tagCatalog: firstTagCatalog });
     const firstOutput = api.writeAssignments({ outputRoot: f.output, assignments: first })[0];
@@ -165,7 +165,7 @@ test('同一次分析运行保留每个升级后的分配，文件名不冲突',
     assert.equal(fs.existsSync(upgradedOutput.filename), true);
 });
 
-test('原历史分析完整复算旧分配，并按原文件 SHA 重放，不被旁边新版替代', t => {
+test('按原分析重新核对旧标签记录及原文件 SHA，旁边的新版记录不能替代它', t => {
     const f = runFixture(t), catalog = registry(), paperId = `arxiv:${f.analysis.papers[0].arxivId}`;
     const old = api.buildLegacyAssignment({ runHandle: f.handle, paper: f.analysis.papers[0], tagCatalog: catalog });
     const current = api.buildAssignment({ runHandle: f.handle, paper: f.analysis.papers[0], tagCatalog: catalog });

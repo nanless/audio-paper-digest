@@ -532,7 +532,7 @@ describe('analyzePaperWithRetry', () => {
         assert.match(getInvalidAnalysisReason('## 评分\n8.0/10', {}), /缺少必要章节/);
     });
 
-    it('终态契约拒绝高置信度模型编辑和自检批注泄漏', () => {
+    it('最终正文检查拒绝出现模型编辑过程或自检批注', () => {
         const leakages = [
             '这里保持原样。注意原文只有一个作者，已有分析去掉括号但可接受。',
             '注意修正拼写。',
@@ -621,7 +621,7 @@ describe('analyzePaperWithRetry', () => {
         assert.match(result.error, /叙事契约无效.*编辑\/自检批注泄漏/);
     });
 
-    it('bounded-v1 硬契约限制实验表格数量、数据行和指标列', () => {
+    it('bounded-v1 检查限制实验表格数量、数据行和指标列，并核对各行列数', () => {
         const table = (rows = 12, metrics = 8, label = 'A') => {
             const headers = ['方法', '数据集', ...Array.from({ length: metrics }, (_, i) => `M${i + 1}`)];
             const separator = headers.map(() => '---');
@@ -942,7 +942,7 @@ describe('analyzePaperWithRetry', () => {
         );
     });
 
-    it('detailed-v1 方法硬契约要求 600 中文字符、结构词和三个段落', () => {
+    it('detailed-v1 方法正文检查要求 600 中文字符、结构相关词语和三个段落', () => {
         const short = validAnalysisText();
         assert.match(validateMethodDetailContract(short), /中文字符不足/);
         const paragraph = `输入首先经过模型模块与网络结构处理，随后沿流程进入多个阶段并产生输出。${'方法细节用于说明组件连接关系。'.repeat(12)}`;
@@ -959,7 +959,7 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(isSuccessfulAnalysisRecord(versioned), true);
     });
 
-    it('结构契约会返回精确缺失章节供局部修复', () => {
+    it('正文检查列出缺失的必需章节，供局部修复', () => {
         const text = validAnalysisText().replace(/## 细节详述[\s\S]*?(?=\n## 评分理由)/, '');
         assert.deepStrictEqual(getMissingRequiredSections(text), ['细节详述']);
         assert.match(getInvalidAnalysisReason(text, require('../scripts/utils.js').parseAnalysis(text)), /细节详述/);
@@ -1554,7 +1554,7 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(result.result.digestStatus.error, null);
     });
 
-    it('最终契约拒绝展示总分或分档与八维重算结果不一致', () => {
+    it('最终检查拒绝展示总分或排名分档与八维重算结果不一致', () => {
         const wrongScore = validAnalysisText().replace('6.9/10', '6.0/10');
         assert.match(getInvalidAnalysisReason(wrongScore, require('../scripts/utils.js').parseAnalysis(wrongScore)), /总分.*不一致/);
         const wrongRank = validAnalysisText().replace('rank_bucket: 前50%', 'rank_bucket: 后50%');
@@ -2343,7 +2343,7 @@ describe('分析运行状态', () => {
 });
 
 describe('选中重分析的统计', () => {
-    it('只把旧评分契约恢复为当前契约的论文计入恢复数', () => {
+    it('重分析统计只把原待恢复集合中的成功论文计入恢复数', () => {
         const { updateReanalysisStats } = require('../scripts/lib/reanalysis-helpers.js');
         const data = {
             papers: [{ arxivId: 'a' }, { arxivId: 'b' }, { arxivId: 'c' }],

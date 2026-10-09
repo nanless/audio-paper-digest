@@ -147,7 +147,7 @@ test('promote 原子替换全部 30 篇当日论文，递增代次，保留日�
     assert.equal(fs.readFileSync(path.join(f.blogRepo, f.outsidePage), 'utf8'), 'outside-date page remains unchanged');
 });
 
-test('基线 CAS 漂移时 promote 拒绝，且不碰已被改动的正式记录', t => {
+test('正式记录代次已变化时拒绝替换，保留当前文件原内容', t => {
     const f = fixture(t); const current = JSON.parse(fs.readFileSync(f.canonicalPath)); current.generation++;
     write(f.canonicalPath, current); const before = fs.readFileSync(f.canonicalPath);
     assert.throws(() => f.promote(), /baseline|CAS/i);
@@ -178,7 +178,7 @@ test('规范文件已安装但论文库同步失败后，提升流程可以续�
     assert.equal(JSON.parse(fs.readFileSync(path.join(f.currentDir, 'papers.json'))).generation, 5);
 });
 
-test('原始或筛选批次漂移后，已安装的规范文件不能续跑数据库同步', t => {
+test('原始候选或筛选批次被改动后，拒绝继续同步论文库', t => {
     const f = fixture(t); const apply = f.hooks.applyDigestStatuses;
     f.hooks.applyDigestStatuses = () => { throw new Error('simulated database failure'); };
     assert.throws(() => f.promote(), /simulated database failure/);

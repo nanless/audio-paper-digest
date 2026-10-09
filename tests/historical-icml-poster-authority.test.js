@@ -137,7 +137,7 @@ test('本地 forum-ID PDF 描述符绑定授权、身份、路径和精确字节
         pdfRoot: f.pdfRoot }), /no longer replays/);
 });
 
-test('已核验来源字节漂移后，所有句柄和绑定都失败', t => {
+test('已核验的来源快照或页面内容被改动后，来源与页面检查都拒绝', t => {
     const f = fixture(t); const handle = api.loadPosterAuthority({ snapshotFile: f.snapshotFile });
     fs.appendFileSync(f.snapshotFile, ' ');
     assert.throws(() => api.replayPosterAuthority(handle), /changed after authentication/);

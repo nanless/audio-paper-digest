@@ -481,13 +481,6 @@ function markDigestCoverFailed({ error, taskToken, targetDate, manifestPath }) {
     }, { allowMissing: false });
 }
 
-function loadPapers(filePath = Config.FILES.deepAnalysisResult) {
-    const data = readJsonFileStrict(filePath);
-    const papers = Array.isArray(data) ? data : data.papers;
-    if (!Array.isArray(papers)) throw new Error(`深度分析文件 papers 必须是数组: ${filePath}`);
-    return papers;
-}
-
 function parseArgs(argv) {
     const [command, ...rest] = argv;
     const options = {};

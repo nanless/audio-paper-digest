@@ -4,7 +4,7 @@
 本文整理截至源码快照 [aaac5300dc6d3e52d71e166b1760da1a83c5ad2a](https://github.com/nanless/audio-paper-digest/commit/aaac5300dc6d3e52d71e166b1760da1a83c5ad2a) 的目标、实施方法、实际结果和未完成事项。
 统计以本说明新增前的受跟踪文件为范围；文档中的状态也是相应时点的记录，不是对后续运行结果的承诺。
 
-原始问题研究见[命名研究](naming-review.txt)，当前修正和验收记录见[修正进度](refactor-progress.txt)。
+原始问题研究见[命名研究](naming-review.txt)，2026-10-06 的修正与验收记录见[当时的修正进度](refactor-progress.txt)。后续修正、验证与未完成范围见[2026-10-09 起的审查记录](refactor-audit-2026-10-09.md)。
 过去逐批记录的完整原文保存在 [f2f9f1a 版本的进度文件](https://github.com/nanless/audio-paper-digest/blob/f2f9f1a28e1ddf8ec03fe6828b5d948986e7cc70/docs/refactor-progress.txt)。
 原失败、补修和检查过程可以从固定 Git 版本查阅，不以当前简化后的进度说明取代历史证据。
 

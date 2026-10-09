@@ -163,7 +163,7 @@ describe('digest cover 状态', () => {
         }), /远端已验证/);
     });
 
-    it('只读契约检查会发现 prompt 变化，不能让旧完成状态假绿', () => {
+    it('封面只读检查发现提示词变化时拒绝旧记录', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-cover-stale-prompt-'));
         const prompt = path.join(dir, 'prompt.md');
         const changedPrompt = path.join(dir, 'changed.md');

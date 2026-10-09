@@ -50,7 +50,7 @@ test('来源暂停使用独立的计划代次标记，可单独续跑', t => {
     assert.equal(control.resumeRewrite({ phase: 'source', sourceRoot: root, plan }).status, 'resumed');
 });
 
-test('暂停原因扩展旧契约，但不允许凭证或过期绑定', t => {
+test('暂停记录可附原因，但拒绝保存密钥或用于另一代次', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-pause-reason-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true })); const plan = minimalPlan();
     const reason = { code: 'SIGINT', detail: 'User requested graceful pause via SIGINT' };
@@ -184,7 +184,7 @@ test('汇总快照报告精确的普通任务和会议任务总数', t => {
     assert.deepEqual(snapshot.missing.conferenceTask, ['icassp-2026-asr', 'iclr-2026-audio']);
 });
 
-test('投影文件损坏与尚未生成在状态里可区分', t => {
+test('状态区分汇总对应记录尚未生成、无法读取和内容校验失败', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-projection-damage-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const plan = minimalPlan(); const planFile = path.join(root, 'plan.json');
@@ -244,7 +244,7 @@ test('状态报告为暂停中，直到每个请求的阶段释放自己的操�
     }
 });
 
-test('汇总状态复核页面字节，并要求精确的投影任务键', t => {
+test('汇总状态核对页面内容，并分别报告缺失和多出的会议任务', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-aggregate-status-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const aggregateRoot = path.join(root, 'aggregates'); const runId = '12345678-1234-4123-8123-123456789abc';

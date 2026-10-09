@@ -161,7 +161,7 @@ LLM_API_READER_STRUCTURED_CONTRACTS = {
 LLM_API_READER_SOURCE_BINDING_CONTRACT = 'api-reader-source-bindings-v4'
 LLM_API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1'
 LLM_API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1'
-# 这条契约标记一旦出现，就表示没有保存配图资产是有意为之、
+# 这个格式标记一旦出现，就表示未保存配图文件是预期行为、
 # 可以复核的。这个字段缺席时，旧的 Reader 记录仍然由缓存提供。
 EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT = 'ephemeral-no-persisted-figure-assets-v1'
 LLM_API_SCORING_CONTRACT = 'api-scoring-audit-v2'
@@ -2118,8 +2118,8 @@ def multimodal_review_images(content, title="", required=False):
             # 使用最新来源生成的生产页可能有意不保存配图资产，
             # 但外层 Markdown 链接里仍保留确切的官方 HTTPS 地址。
             # 这时应审查这个有绑定关系的来源，
-            # 而不是把本地投影缺失当成内容失败；
-            # _load_review_image 里的所有 HTTPS 来源闸门照常生效。
+            # 而不是把本地配图文件缺失当成内容失败；
+            # _load_review_image 仍检查所有 HTTPS 来源是否符合访问规则。
             image_payload = None
             fallback_url = _linked_image_source_url(content, match['end'])
             if fallback_url:
@@ -2315,7 +2315,7 @@ def slugify(text, max_length=50):
     text = text.strip('-')
     if len(text) > max_length:
         text = text[:max_length].rsplit('-', 1)[0]
-    # 如果过滤后为空（极少数情况），返回 "paper" 作为兜底
+    # 如果过滤后为空（极少数情况），使用默认名称 "paper"
     return text if text else 'paper'
 
 
@@ -4159,7 +4159,7 @@ def _detailed_core_summary_semantic_issue(summary):
     if not has_numbered_method_chain and len(tier_role_stages) < 2:
         issues.append('缺少 2–4 步方法链的分工与衔接')
     # 这份白名单要和 scripts/analysis-contract.js 保持同步。
-    # 发布器在 Node 分析阶段之后重放同一份 v3 契约，
+    # 发布器在 Node 分析阶段之后按同一份 v3 正文规则再次检查，
     # 所以上游已经接受的指标，不能仅仅因为它用了
     # 更新的别名（例如 PPL 或压缩率）就在这里被拒。
     metric = re.compile(
@@ -4193,7 +4193,7 @@ def _detailed_core_summary_semantic_issue(summary):
         # R@0.9 或 F1 这样的数值指标限定词是在指明
         # 指标本身，不是某次实验变化的一个端点。
         # CLAP 可能是用来对比的模型，而不是被测量的指标；
-        # 这里照搬 Node 契约里明确的基线/模型排除规则。
+        # 这里使用与 Node 正文检查相同的基线/模型排除规则。
         metric_sentence = re.sub(
             r'\bCLAP\s*(?:基线|模型|baseline\b|model\b)',
             '', result_sentence, flags=re.IGNORECASE,
@@ -4705,9 +4705,9 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             digest = hashlib.sha256(source_url.encode('utf-8')).hexdigest()[:16]
             # API Reader v3 的图片是临时的：它们的像素只能在
             # 当次调用中生成，绝不写进
-            # 博客仓库。该契约的官方 HTTPS 来源要留在
-            # 汇总页里；只有持久化的 Reader
-            # 资产才可以投影成本地镜像 URL。
+            # 博客仓库。按此规则，官方 HTTPS 来源仍要留在
+            # 汇总页里；只有已保存的 Reader 配图文件
+            # 才能使用本地图片地址。
             if figure is not None and figure.get('cachePath'):
                 local_url = (
                     f'{BASE_PATH}/images/papers/{normalize_arxiv_id(paper.get("arxivId"))}/'
@@ -5339,7 +5339,7 @@ def _api_reader_markdown_tables(article):
             else:
                 # 发布环节会转义字面的声学/生物序列符号
                 # （例如 ``*******___``），免得 Markdown
-                # 把它们解析成强调标记。重放已签名的表格哈希和单元格映射之前，
+                # 把它们解析成强调标记。核对已记录的表格 SHA 和单元格对应关系之前，
                 # 先还原出规范的来源字节。
                 visible_lines.append(re.sub(
                     r'(?<=\|)([ \t]*)((?:\\[*_]|[*_])+)([ \t]*)(?=\|)',
@@ -5522,7 +5522,7 @@ def _reader_table_header_unit_evidence_failures(table, quotes):
 def _api_reader_numeric_tokens(value):
     # 千位分组分支必须吃掉逗号之后的整段数字。
     # 否则 ``10^-4,2000`` 会被截成一个凭空造出的词元
-    # ``-4,200`` / ``-4200``，而不是重放出 ``-4`` 和 ``2000``。
+    # ``-4,200`` / ``-4200``，而不是正确解析出 ``-4`` 和 ``2000``。
     grouped_integer = r'(?:\d{1,3}(?:,\d{3})+(?!\d)|\d+)'
     pattern = re.compile(
         # 损坏的小数表面整体保留，不能截成部分数字或猜测半值。
@@ -5530,7 +5530,7 @@ def _api_reader_numeric_tokens(value):
         r'(?:\s*%|\s*(?:seconds?|dB|ms|s|Hz|kHz|MHz|GB|M|B|k|pp)(?![A-Za-z0-9_]))?',
         flags=re.IGNORECASE,
     )
-    # 和 Node 一样，只在窄范围内重放 LaTeXML 具名颜色，不改引号、
+    # 和 Node 一样，只处理明确支持的 LaTeXML 具名颜色写法，不改引号、
     # 数字符号、单位，也不动普通标识符的边界。
     original_surface = str(value or '')
 
@@ -7127,7 +7127,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
         # 把中文读者标题留在 H1 里，然后明确给出论文的
         # 英文原题和规范链接。只写成「论文」会让
         # reader-first 身份区块产生歧义，也会破坏
-        # 每日汇总页在用的同一份标题与链接契约。
+        # 每日汇总页采用的同一份标题与链接规则。
         md += f'> 英文题目：*{paper_link}*\n\n' if reader_display_fields is not None else (
             f'> 英文题目：*{paper_link}*\n>\n> 一句话：**{reader_plan["oneSentenceThesis"].strip()}**\n\n'
         )
@@ -7237,7 +7237,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
                     content = re.sub(r'^(?:#{1,6}\s*[^\n]+\n+)+', '', content.strip(), count=1)
                 # 旧正文里带编号的来源小节只是格式噪声，
                 # 但规范 API Reader 文章里的编号标题是与来源
-                # 绑定的字节，最终页面重放时必须原样保留。
+                # 绑定的原始内容，生成最终页面时必须原样保留。
                 if key != 'readerArticle':
                     content = re.sub(r'^###\s*\d+\.\s*[^\n]+\n', '', content, flags=re.MULTILINE)
                 content = re.sub(r'^\d+\.\s*\*\*([^*]+)\*\*\s*$', r'\1', content, flags=re.MULTILINE)
@@ -8028,7 +8028,7 @@ def _daily_fresh_validate_runtime(runtime, manifest, text, paper_id):
     if (
             not _daily_fresh_is_sha256(payload_sha)
             or artifacts.get('flattenedTextSha256') != _daily_fresh_sha256(text)
-            # 早期已核验保存的 v4 运行时在规范化对象键排序之前就签了产物。
+            # 早期已核验保存的 v4 运行记录，在按稳定顺序排列对象键之前就计算了结构化内容的 SHA。
             # 来源清单仍能认证确切的运行时字节，规范论文证明也绑定了
             # 其中声明的 SHA。照搬 Reader 的兼容规则：
             # 这种历史签名只在解析器身份（或
@@ -8206,7 +8206,7 @@ def _validate_current_model_text_reuse_for_publish(paper, source_details, paper_
 
 
 def _reject_unbound_api_generation_input(papers):
-    # Manual 不使用 API Reader 契约；空集合与非 API 文件继续交给原加载器判断。
+    # Manual 不按 API Reader 规则检查；空集合与非 API 文件继续交给原加载器判断。
     if not isinstance(papers, list):
         return
     for paper in papers:
@@ -10512,7 +10512,7 @@ def _validate_generation_input_integrity(manifest, date_str):
     scope = _validate_publication_scope(manifest, published_papers)
     input_source_reference = manifest.get('inputSourceReference')
     # 声称使用最新来源分析的 schema-v3 快照，必须保留
-    # 可以用来重放这份来源的确切 JSON 输入。缺少它，
+    # 可以重新读取并核验这份来源的确切 JSON 输入。缺少它，
     # 审查和推送就可能接受一份清单，而它声称的最新来源包
     # 在 `data/current` 前移之后再也找不到、也核对不了。
     if (
@@ -10527,8 +10527,8 @@ def _validate_generation_input_integrity(manifest, date_str):
             '使用新来源重写的论文缺少生成输入的来源文件记录。'
         )
     if input_source_reference is not None:
-        # 先核对来源字节，再重放指纹，这样归档或 --data-file 有变化时
-        # 报告的是来源漂移，而不是笼统的不匹配。
+        # 先核对来源文件内容，再重算输入 SHA，这样归档或 --data-file 有变化时
+        # 会明确报告来源文件变化，而不是笼统的不匹配。
         validate_generation_input_source_reference(manifest, date_str)
     expected_input = generation_input_fingerprint(
         published_papers, date_str, category, publish_all,
@@ -12333,10 +12333,10 @@ def save_review_receipt(
             generation_payload.get('inputSourceReference')
             if generation_schema == 3 else None
         ),
-        # 明确绑定这次通过审查的生成能否进入现代发布后视觉状态机。
-        # 生成 SHA 仍然是密码学意义上的权威依据；
-        # 这个字段只是把维护意图
-        # 暴露给 push 和 status 工具。
+        # 生成 SHA 用于核对这次通过审查的生成记录。
+        # postPublishVisuals 告知 push 和 status：required 表示必须完成发布后视觉任务；
+        # not_applicable_single_paper 表示单篇发布不适用，
+        # not_applicable_legacy_maintenance 表示旧格式维护不适用。
         'postPublishVisuals': post_publish_visuals,
         'publicationMode': publication_mode,
         'manualV6ProductionFingerprint': generation_payload.get(
@@ -13297,7 +13297,7 @@ def generate_main(options=None):
             )
         # 失败的空生成不能留下同一天的清单或
         # 审查、发布凭证，否则之后单独调起的阶段
-        # 可能把它误当成这次运行的产物。
+        # 可能把它误当成这次运行已生成的结果。
         generation_manifest_path(today).unlink(missing_ok=True)
         review_receipt_path(today).unlink(missing_ok=True)
         review_failure_path(today).unlink(missing_ok=True)

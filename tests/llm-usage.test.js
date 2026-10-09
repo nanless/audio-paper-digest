@@ -66,7 +66,7 @@ test('事件只含元数据和哈希，并发的论文作用域彼此隔离', as
     }
 });
 
-test('账目把上报用量与估算、缺失数据和失败调用分开', () => {
+test('用量汇总区分实际上报、估算、缺失字段和失败调用', () => {
     const event = buildLlmUsageEvent({ protocol: 'openai_responses', model: 'test',
         request: { input: 'abcdef' }, response: { usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } }, statusCode: 200 });
     const failed = buildLlmUsageEvent({ protocol: 'openai_responses', model: 'test', request: {}, errorCode: 'ECONNRESET' });
@@ -111,7 +111,7 @@ test('传输错误和 HTTP 错误优先于响应的终态', () => {
     }
 });
 
-test('账目用私有的不可变文件，拒绝链接目录', t => {
+test('用量记录保存为仅当前用户可读写的新文件，拒绝符号链接目录', t => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'usage-ledger-')));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const directory = path.join(root, 'ledger');

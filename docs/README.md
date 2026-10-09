@@ -12,7 +12,7 @@
 | 查命令参数或脚本职责 | [脚本说明](scripts.md) | [`scripts/` 索引](../scripts/README.md) |
 | 下载论文原文、导读和引用，或批量导出资料 | [博客阅读工具](blog-reading-tools.md) | 博客“关于与方法”页面 |
 | 修改评分、提示词、路径或数据格式 | [维护约定](maintenance.md) | [数据格式](data-format.md) |
-| 清理晦涩的代码命名和生硬表达 | [重构目标、方法与当前进度](refactor-overview.md) | [最初命名研究](naming-review.txt)、[修正进度](refactor-progress.txt) |
+| 清理晦涩的代码命名和生硬表达 | [当前修正与验收记录](refactor-audit-2026-10-09.md) | [2026-10-06 重构总览](refactor-overview.md)、[当时的修正进度](refactor-progress.txt)、[最初命名研究](naming-review.txt) |
 | 核对 2026-10-09 全项目审查的修复、验证与未完成范围 | [本次审查记录](refactor-audit-2026-10-09.md) | 每轮提交、独立审查、真实数据限制与远端 CI 结果 |
 | 执行离线验证或排查故障恢复 | [验证矩阵](maintenance.md#验证矩阵) | `npm run verify` |
 | 根据原文重写一个已有日批次 | [从原文完整重写](fresh-rewrite.md) | `npm run rewrite:source` 的分阶段入口 |

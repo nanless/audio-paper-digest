@@ -86,7 +86,7 @@ test('已保存并核验的直接来源与 Reader 数据包生成全部计划中
     assert.equal(recovered.manifestSha256, result.manifestSha256);
 });
 
-test('直接 arXiv 发布来源拒绝身份、来源和摘要 SHA 漂移', t => {
+test('直接 arXiv 页面暂存拒绝论文身份、来源快照 SHA 或摘要 SHA 不符', t => {
     const f = fixture(t);
     for (const publicationSource of [
         { ...f.publicationSource, paperId: 'arxiv:2609.99999' },
@@ -98,7 +98,7 @@ test('直接 arXiv 发布来源拒绝身份、来源和摘要 SHA 漂移', t => 
     }
 });
 
-test('直接页面暂存保存并核验精确的元数据旁路证明，拒绝任何外层绑定漂移', t => {
+test('直接页面暂存保存元数据对应记录，并拒绝来源、版本、时间、哈希或字段不符', t => {
     const f = fixture(t); const metadataSidecar = {
         contract: 'historical-arxiv-publication-metadata-v1', paperId: f.item.paperId,
         manifestSha256: sha('sidecar manifest'),

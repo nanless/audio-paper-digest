@@ -57,7 +57,7 @@ Reader 的各协议分别检查不同对象：
 | `api-reader-author-identity-v1` | 作者与机构对应 HTML、论文元数据或明确不可得状态 |
 | `api-reader-resource-identity-v1` | 资源的原文/Demo 证据、重定向终点与可达状态 |
 
-结构化证据按稳定键序计算 SHA。旧结构化文件须核验来源清单、原始全文 SHA、解析器版本和布局。受限的 v1 无布局来源包括 `fresh_arxiv_text_without_layout`、`direct_conference_pdf_text`，以及能力为 `weak-text-only-v1` 的 `conference_pdf_weak_text`，其表、公式和图三个数组必须全空。识别出的旧键序文件仍受来源清单和原始全文 SHA 约束，但旧 `payloadSha256` 不必等于按当前稳定键序重算的值；程序只在内存中计算稳定指纹，不改已保存的文件。这个兼容例外不允许使用伪造的结构化内容。
+结构化证据按稳定键序计算 SHA。旧结构化文件须核验来源清单、原始全文 SHA、解析器版本和布局。受限的 v1 无布局来源包括 `fresh_arxiv_text_without_layout`、`direct_conference_pdf_text`，以及标为 `weak-text-only-v1` 的 `conference_pdf_weak_text`，其表、公式和图三个数组必须全空。识别出的旧键序文件仍受来源清单和原始全文 SHA 约束，但旧 `payloadSha256` 不必等于按当前稳定键序重算的值；程序只在内存中按稳定键序计算用于核验的 SHA，不改已保存的文件。这个兼容例外不允许使用伪造的结构化内容。
 
 阶段复用仍受实现 SHA 约束。当前 Reader 检查包含整个 `deep-analyzer.js` 的 SHA，因此修改其中与 Reader 无关的代码也可能要求重做；不能只凭评分结果未改就认定 Reader 可复用。
 

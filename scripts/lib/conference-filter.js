@@ -1,7 +1,7 @@
 'use strict';
 
-// 会议筛选的状态和带认证的生产运行器。它从不读取 data/current，也不发布；
-// 只有在筛选锁内写下持久意图之后，模型流量才走已捕获的公共 LLM 边界。
+// 保存会议筛选状态并验证运行所用的来源记录。此模块不读取 data/current，也不发布；
+// 在筛选锁内保存请求记录后，才通过固定的公共 LLM 请求函数调用模型。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -121,9 +121,9 @@ function exact(value, fields, label) {
 function sha256(value) { return crypto.createHash('sha256').update(value).digest('hex'); }
 const LLM_FILTER_POLICY_SHA256 = sha256(Buffer.from(LLM_FILTER_POLICY, 'utf8'));
 const LLM_FILTER_PROMPT_SHA256 = sha256(Buffer.from(LLM_FILTER_PROMPT, 'utf8'));
-// 会议兜底映射表有意算进策略摘要。恢复期间要接受每次会议标签扩充之前准备好的
-// 策略摘要：它们的持久状态和请求外壳仍然绑定当时那份策略。这是一个兼容窗口，
-// 不是允许接受任意策略哈希。
+// 核心音频会议及其标签也参与筛选策略的 SHA 计算。恢复时保留下列旧策略 SHA，
+// 因为已保存的状态和请求记录仍对应标签扩充前的策略。
+// 只接受明确列出的旧值，不接受任意策略 SHA。
 // '382af440…' = interspeech-2026 加入 core-audio 标签之前的策略；
 // '11b277a5…' = 最初的 2026 会议标签之前的策略。
 const LEGACY_FILTER_POLICY_SHA256_LIST = Object.freeze([
@@ -1401,9 +1401,9 @@ function renderDailyFilterPrompt(envelope) {
     return utilsApi.loadPrompt(LLM_FILTER_PROMPT_PATH, promptFields(envelope));
 }
 
-// 换提示词版本之前写下的持久意图里，请求正文是 v1 渲染出来的。恢复时必须能按当时那份
-// 正文重算，否则中断的会议筛选会被判成「请求漂移」而卡死。所以校验请求绑定时接受当前
-// 版本和 v1 两种渲染结果：两者都只是同一份 envelope 的确定性渲染，区别仅在提示词正文。
+// 旧请求记录保存的是按 v1 提示词生成的请求正文。恢复时仍须用同一版本重新生成正文，
+// 否则原请求会因正文不一致被拒绝。因此检查请求正文时，接受当前版本或 v1 的结果：
+// 两者使用同一份 envelope 填入占位符，区别只在提示词正文。
 function renderFrozenDailyFilterPrompt(envelope) {
     return utilsApi.loadPrompt(FROZEN_LLM_FILTER_PROMPT_PATH, promptFields(envelope));
 }

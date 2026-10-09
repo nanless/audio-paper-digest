@@ -62,7 +62,7 @@ function pythonRegistry() {
     ].join('\n')));
 }
 
-test('两份提示词版本表对每个阶段给出的 v1 路径、当前契约名与当前路径一致', () => {
+test('Node 与 Python 提示词版本表的旧 v1 路径、当前格式标识和当前路径一致', () => {
     const py = pythonRegistry();
 
     // 契约名本身先要对上：两边必须叫同一个 v1、同一个 v2。
@@ -118,7 +118,7 @@ test('两份提示词版本表对每个阶段给出的 v1 路径、当前契约�
     }
 });
 
-test('Python 版本表对没登记的契约名报错，不退化成 v1', () => {
+test('Python 提示词版本表拒绝未登记的格式标识，不自动改读 v1', () => {
     const output = runPython([
         'import sys',
         'sys.path.insert(0, "scripts")',

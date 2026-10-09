@@ -359,7 +359,7 @@ npm run conference:new:process -- --source-upgrade-promote \
 
 ## 旧会议来源和隔离执行的维护
 
-以下命令保留 history 角色入口，在当前 daily 工作区通过项目的 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` 运行，用于维护已有独立会议链。它们不替代新会议 process，也不自动映射历史页面清单的旧 URL 和任务页。旧会议汇总未接入 `history:publication` 的限制只属于该旧入口，不能据此说当前历史直接发布没有会议能力。
+以下命令保留 history 角色入口，在当前 daily 工作区通过项目的 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` 运行，用于维护已有独立会议链。它们不替代新会议 process，也不自动映射历史页面清单的旧 URL 和任务页。旧会议汇总未接入 `history:publication` 的限制只属于该旧入口，不能据此说当前历史直接发布无法发布会议论文页和汇总页。
 
 一份本机 PDF 的文件名、相似题目或旧博客题目不足以证明论文身份。旧链先固定官方主身份、PDF 字节和匹配依据，再依次发现、筛选、提取、复核、导入、计划及隔离执行。
 

@@ -50,7 +50,7 @@ function fixture(t) {
     return { root, dependencies, state, paper, assignment };
 }
 
-test('一份正式记录投影到每个已核验的重复页面，同时保留路径、日期和 URL', t => {
+test('同一篇论文生成多个已核验页面，保留页面路径和所属日期', t => {
     const f = fixture(t); const args = { apply: true, crosswalkId: CROSSWALK, stagingRunId: STAGING, limit: 'pilot',
         analysisRunId: ANALYSIS_RUN, crosswalkRoot: '/unused', analysisRoot: '/unused', tagAssignmentRoot: '/unused',
         tagCatalogPath: '/unused', stagingRoot: f.root };
@@ -169,7 +169,7 @@ test('暂存意图和清单拒绝在同一个不可变运行 ID 下更换渲染�
         .rendererImplementationSha256, RENDERER_SHA);
 });
 
-test('渲染过程中渲染器实现漂移就不生成清单', t => {
+test('页面生成过程中生成器实现指纹改变时，拒绝生成清单', t => {
     const f = fixture(t); let reads = 0;
     assert.throws(() => api.stageHistoricalPages({ apply: true, crosswalkId: CROSSWALK,
         stagingRunId: STAGING, limit: 'pilot', analysisRunId: ANALYSIS_RUN,
@@ -235,7 +235,7 @@ test('默认渲染器使用私有临时输入文件和受约束的子进程', ()
     assert.equal(fs.existsSync(path.dirname(observedInputFile)), false);
 });
 
-test('选中绑定的复核容忍之后出现的无关页面或同身份页面，但拒绝选中页面漂移', t => {
+test('新增同篇页面不影响已选页面；已选页面的对应记录改变则拒绝', t => {
     const f = fixture(t); const selected = api.loadPageGenerationInputs({ crosswalkRoot: '/unused', crosswalkId: CROSSWALK,
         analysisRoot: '/unused', tagAssignmentRoot: '/unused', tagCatalogPath: '/unused',
         analysisRunId: ANALYSIS_RUN }, f.dependencies).groups;
@@ -346,7 +346,7 @@ test('页面暂存拒绝素材路径穿越和已存在的符号链接运行目�
     assert.throws(() => api.stageHistoricalPages({ ...args, stagingRunId: symlinkRun }, f.dependencies), /Unsafe fresh rewrite directory/);
 });
 
-test('页面暂存拒绝与确定性当前登记投影不一致的自哈希分配', t => {
+test('页面暂存拒绝与当前词表重算结果不一致的标签记录', t => {
     const f = fixture(t);
     assert.throws(() => api.stageHistoricalPages({ apply: false, crosswalkId: CROSSWALK,
         analysisRunId: ANALYSIS_RUN, limit: 'pilot', crosswalkRoot: '/unused', analysisRoot: '/unused',

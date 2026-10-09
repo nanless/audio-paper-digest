@@ -1727,13 +1727,6 @@ function buildPaperPlan(paper, existing, targetDate, currentPromptSha, publicati
     };
 }
 
-function loadAnalysisPapers(filePath = Config.FILES.deepAnalysisResult) {
-    const data = readJsonFileStrict(filePath);
-    const papers = Array.isArray(data) ? data : data.papers;
-    if (!Array.isArray(papers)) throw new Error(`深度分析文件 papers 必须是数组: ${filePath}`);
-    return papers;
-}
-
 function planVisualSummaries({
     targetDate,
     papers,

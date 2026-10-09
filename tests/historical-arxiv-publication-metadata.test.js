@@ -96,7 +96,7 @@ test('已核验的旧版 Atom 作者空白只在返回视图里归一化', async
     assert.deepEqual(fs.readFileSync(metadataFile), before.metadata);
 });
 
-test('出版元数据附带文件拒绝语义观测时间和原始条目版本漂移', async t => {
+test('出版元数据附带文件拒绝观测时间或 Atom 条目版本被改动', async t => {
     const observed = await fixture(t, 'observed-drift');
     sidecars.sealPublicationMetadata({ rootDir: observed.sidecarRoot, sourceRoot: observed.sourceRoot,
         arxivId: ID, generation: 1, officialResult: official() });
@@ -146,7 +146,7 @@ test('出版元数据附带文件只接受不新于已保存并核验来源的 A
 });
 
 for (const target of [sidecars.ATOM_NAME, sidecars.METADATA_NAME, sidecars.MANIFEST_NAME]) {
-    test(`出版元数据附带文件拒绝 ${target} 的字节漂移`, async t => {
+    test(`出版元数据附带文件拒绝 ${target} 的原始内容被改动`, async t => {
         const f = await fixture(t, target); sidecars.sealPublicationMetadata({ rootDir: f.sidecarRoot,
             sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult: official() });
         const filename = path.join(sidecars.sidecarDirectory(f.sidecarRoot, ID, 1), target);
@@ -170,7 +170,7 @@ test('出版元数据附带文件拒绝论文、证明、历史来源版本不�
         sourceRoot: f.sourceRoot, arxivId: ID, generation: 1 }), /unexpected files/);
 });
 
-test('出版元数据附带文件拒绝来源代次字节、清单、快照和文本漂移', async t => {
+test('出版元数据附带文件拒绝来源清单被改动、来源不对应、文本被改动或代次缺失', async t => {
     const f = await fixture(t); sidecars.sealPublicationMetadata({ rootDir: f.sidecarRoot,
         sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult: official() });
     const sourceManifest = path.join(f.sourceRoot, ID, 'generation-000001', 'source-manifest.json');

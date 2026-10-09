@@ -110,7 +110,7 @@ Reader v3 规定正文结构，`api-reader-source-bindings-v4` 核对表格和�
 
 ## 博客生成清单
 
-schema v3 生成清单记录日期、`category`、博客基线 `HEAD`、精确非空页面和受控下载文件集合、逐文件 SHA、新建或覆盖或删除状态、输入及模板指纹、实际渲染的 `publishedPapers`、一致的 `publicationMode` 与发布依据，以及发布后视觉能力。
+schema v3 生成清单记录日期、`category`、博客基线 `HEAD`、精确非空页面和受控下载文件集合、逐文件 SHA、新建或覆盖或删除状态、输入及模板指纹、实际渲染的 `publishedPapers`、一致的 `publicationMode` 与发布依据，以及论文长图与汇总封面不在发布前生成的标记。
 
 默认 API 使用 `llm_api_production`；显式 Manual 使用自己的发布依据。混合两种来源、缺少绑定或使用旧 schema，不能用于新日更发布。
 

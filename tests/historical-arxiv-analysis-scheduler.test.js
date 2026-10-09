@@ -51,7 +51,7 @@ test('已核验的重复页面收敛为一个确定性分析身份，并取最�
     assert.match(groups[0].runId, /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/);
 });
 
-test('只有当前契约的存储记录才算完成，其余排队做完整契约升级', () => {
+test('分析记录必须已封存且通过当前规则检查才算完成，未完成记录可排队重分析', () => {
     const group = scheduler.groupsFromCrosswalk(state())[0];
     assert.equal(scheduler.recoveredSchedulerStatus({ status: 'complete',
         storageSealed: true, currentContractComplete: false }), 'analysis_partial');
@@ -268,7 +268,7 @@ test('准备阶段返回当前检查点条目，不复用过期的恢复许可',
     assert.deepEqual(refresh, [false]);
 });
 
-test('持久完成之后分析抛错时，以已保存并核验的当前契约运行为准', async t => {
+test('分析结果已保存并通过当前检查后，即使后续回调抛错仍计为完成', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
         historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };

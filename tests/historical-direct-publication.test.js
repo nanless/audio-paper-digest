@@ -359,7 +359,7 @@ test('发布事务能沿计划、生成、审查、激活和远端凭证一路�
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
-test('计划拒绝基线漂移，状态也不会把缺失的阶段报成完成', () => {
+test('发布计划拒绝工作区文件与 Git 基线不符，状态查询不把缺失阶段报成完成', () => {
     const baseline = Buffer.from('old'); const next = Buffer.from('new'); const authority = fakeAuthority(next, baseline);
     assert.throws(() => api.buildPlan({ publicationId, authorityOptions: {}, blogRepo: '/tmp', createdAt: now }, {
         loadAuthority: () => authority, blogState, gitBlob: () => baseline, worktreeSha: () => hash('9')

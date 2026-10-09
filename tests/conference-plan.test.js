@@ -82,7 +82,7 @@ test('旧计划和凭证可按原字节读取，但不能创建另一份运行�
     }
 });
 
-test('旧版只写账目的计划构造函数不再对外暴露', () => {
+test('仅保存旧版计划记录的两个构造函数不再对外提供', () => {
     assert.equal(plan.createRunFromPlan, undefined);
     assert.equal(plan.createPlanReceipt, undefined);
 });

@@ -197,7 +197,7 @@ test('两个真实的逐篇暂存产出合并为一个完整每日汇总', t => 
     }
 });
 
-test('混用标签词表和已核验身份漂移都直接失败', () => {
+test('每日汇总拒绝论文词表 SHA 不同或已核验的论文标识不符', () => {
     const mixed = aggregateFixture(); mixed.stagedPages[0].canonical.tagCatalogSha256 = '8'.repeat(64);
     assert.throws(() => api.buildDailyAggregates({ inputs: mixed, date: DATE }), /论文使用了不同的标签词表 SHA/);
     const drifted = aggregateFixture(); drifted.topology.state.assignments[drifted.stagedPages[0].pageKey].sourceAuthority.paperId = 'arxiv:2604.99999';
@@ -303,7 +303,7 @@ test('写入会生成隔离的不可变清单，复核则幂等', t => {
     assert.throws(() => api.writeAggregates({ outputRoot: root, aggregateRunId, aggregates: changed }), /已有不可变文件.*拒绝覆盖/);
 });
 
-test('已保存每日汇总按原完整格式只读重放，混用和坏 SHA 不会改签旧文件', t => {
+test('旧每日汇总按原格式只读核验，混用字段或 SHA 不符时拒绝且原文件不变', t => {
     const inputs = aggregateFixture();
     const [current] = api.buildDailyAggregates({ inputs, date: DATE });
     // 明确合成原 v1 完整表示；不把旧保存对象改头后作为当前 writer 输出。
