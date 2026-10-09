@@ -276,12 +276,12 @@ def _require_current_review_statement_version(module, generation_payload, review
     requires_v3 = any(
         isinstance(paper, dict)
         and (((paper.get('analysisManifest') or {}).get('contracts') or {}).get('manualDepth')
-             == 'full-text-evidence-v5')
+             in {'full-text-evidence-v5', 'full-text-evidence-v6'})
         for paper in generation_payload.get('publishedPapers') or []
     )
     if requires_v3 and review_statement.get('version') != 3:
         raise module.PublishDataValidationError(
-            'Manual v5 新页面必须使用 v3 人工审查声明；历史 v2 声明不能替代独立单页任务和逐图审查记录。'
+            'Manual v5/v6 新页面必须使用 v3 人工审查声明；历史 v2 声明不能替代独立单页任务和逐图审查记录。'
         )
 
 

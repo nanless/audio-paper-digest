@@ -116,6 +116,43 @@ class ManualReviewAttestationTest(unittest.TestCase):
                 Module, generation, mismatched,
             )
 
+    def test_v6_run_rejects_v2_before_page_review_or_receipt_write(self):
+        legacy = attestation()
+        legacy['version'] = 2
+        for item in legacy['files']:
+            item.pop('reviewSubagent')
+            item.pop('imageFindings')
+        with tempfile.TemporaryDirectory() as tmp:
+            statement = self.write_payload(tmp, legacy)
+            manifest = Path(tmp) / 'generation.json'
+            manifest.write_text(json.dumps({
+                'schemaVersion': 3,
+                'publishedPapers': [{'arxivId': '2608.12345', 'analysisManifest': {
+                    'contracts': {'manualDepth': 'full-text-evidence-v6'},
+                }}],
+            }), encoding='utf-8')
+            module = mock.Mock()
+            module.PublishDataValidationError = ValueError
+            module.validate_publish_target.return_value = (Path(tmp), Path(tmp))
+            module.load_generation_manifest.return_value = ([], manifest)
+            module.validate_git_publish_branch.return_value = 'a' * 40
+            module.reusable_verified_publication_review.return_value = None
+            module.has_publication_evidence_for_generation.return_value = False
+            module.normalize_publish_arxiv_id.side_effect = AssertionError('旧版错误地继续处理 v2 声明')
+            with self.assertRaisesRegex(ValueError, 'v5/v6.*v3'):
+                manual_review_blog._run(module, '2026-08-25', statement)
+            module.review_and_fix_post.assert_not_called()
+            module.run_hugo_gate.assert_not_called()
+            module.save_review_receipt.assert_not_called()
+
+    def test_v6_v3_and_existing_nonmanual_v2_version_scope_is_preserved(self):
+        class Module:
+            PublishDataValidationError = ValueError
+        for depth, version in [('full-text-evidence-v6', 3), ('full-text-evidence-v5', 3), (None, 2)]:
+            manual_review_blog._require_current_review_statement_version(Module, {
+                'schemaVersion': 3, 'publishedPapers': [{'analysisManifest': {'contracts': {'manualDepth': depth}}}],
+            }, {'version': version})
+
     def test_fresh_manual_v5_generation_rejects_legacy_v2_attestation(self):
         class Module:
             class PublishDataValidationError(ValueError):
