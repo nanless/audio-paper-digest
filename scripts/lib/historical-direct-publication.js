@@ -921,6 +921,7 @@ function activate({ outputRoot, publicationId, blogRepo, remoteName = 'origin', 
             reviewSha256: reviewReceipt.receipt.reviewSha256, baseHead: existing.baseHead,
             exactDeltaSha256: loaded.plan.exactDeltaSha256 };
         const reboundIntent = seal(reboundIntentBody, 'intentSha256');
+        if (!apply) return { status: 'dry-run', intent: reboundIntent, deltaCount: delta.length };
         atomicReplace(path.join(loaded.directory, 'activation', 'intent.json'), prettyBytes(reboundIntent));
         const reboundBody = { contract: ACTIVATION_CONTRACT, version: VERSION, publicationId,
             intentSha256: reboundIntent.intentSha256, planSha256: loaded.plan.planSha256,

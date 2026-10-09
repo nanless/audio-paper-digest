@@ -241,3 +241,41 @@ test('新来源目录拒绝旧正文的截断 ID 与变化的页面 SHA，不覆
     assert.throws(build, /完整匹配.*拒绝使用旧截断提示/);
     assert.ok(fs.readFileSync(f.inventoryFile).equals(frozen));
 });
+
+
+test('当前目录指针的保留名不能写入不可变目录，也不能产生自指针', t => {
+    const f = fixture(t);
+    const options = { apply: true, name: 'current.json', conferenceManifest: f.conferenceManifest,
+        inventoryFile: f.inventoryFile, blogRoot: f.blog };
+    const catalogValue = catalog.buildScopedCatalog(options);
+    const { name: _name, ...unnamed } = options;
+    assert.equal(catalog.buildAndWrite({ ...unnamed, apply: false }).status, 'dry-run');
+    assert.throws(() => catalog.writeCatalog({ catalogRoot: f.catalogRoot,
+        name: 'current.json', catalog: catalogValue }));
+    assert.equal(fs.existsSync(f.catalogRoot), false);
+    assert.throws(() => catalog.writeCurrentCatalogPointer({ catalogRoot: f.catalogRoot,
+        catalogName: 'current.json', fileSha256: sha('catalog') }));
+    assert.equal(fs.existsSync(f.catalogRoot), false);
+    assert.throws(() => catalog.buildAndWrite(options, {
+        files: { historicalDirectRewriteInputCatalogDir: f.catalogRoot }
+    }));
+    assert.equal(fs.existsSync(f.catalogRoot), false);
+    const args = inputArgs(f, '--apply');
+    args[args.indexOf('--name') + 1] = 'current.json';
+    assert.throws(() => inputsCli.parseArgs(args));
+
+    const normal = catalog.buildAndWrite({ ...options, name: 'named-catalog.json' }, {
+        files: { historicalDirectRewriteInputCatalogDir: f.catalogRoot }
+    });
+    assert.equal(normal.status, 'created');
+    const original = fs.readFileSync(normal.filename);
+    const pointer = JSON.parse(fs.readFileSync(normal.currentCatalogPointer, 'utf8'));
+    assert.equal(pointer.activeCatalog, 'named-catalog.json');
+    assert.equal(pointer.sha256, sha(original));
+    assert.deepEqual(catalog.normalizeCatalog(JSON.parse(original)), catalogValue);
+    assert.throws(() => catalog.buildAndWrite(options, {
+        files: { historicalDirectRewriteInputCatalogDir: f.catalogRoot }
+    }));
+    assert.deepEqual(fs.readFileSync(normal.filename), original);
+    assert.deepEqual(JSON.parse(fs.readFileSync(normal.currentCatalogPointer, 'utf8')), pointer);
+});

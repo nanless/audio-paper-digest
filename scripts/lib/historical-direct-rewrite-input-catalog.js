@@ -20,7 +20,8 @@ const VERSION = 5;
 const SCOPE = 'historical-corresponding-local-sources-only';
 const SHA_RE = /^[a-f0-9]{64}$/;
 const ARXIV_ID_RE = /^\d{4}\.\d{4,5}$/;
-const SAFE_NAME_RE = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
+// current.json 专供可变的目录指针使用，不能同时作为不可变目录文件名。
+const SAFE_NAME_RE = /^(?!current\.json$)[a-z0-9][a-z0-9._-]{0,159}\.json$/;
 const MAX_MANIFEST_BYTES = 128 * 1024 * 1024;
 const BLOCKED_CROSS_VERSION_RELATION = 'author-prior-preprint-with-different-title';
 const AUTHORIZED_PRIOR_PREPRINT_PAPER_ID = 'conference:icml:2026:openreview-forum-id:n1mAjfRDZ6';
@@ -502,6 +503,9 @@ function buildAndWrite(options, overrides = {}) {
     if (!options || typeof options.conferenceManifest !== 'string' || typeof options.inventoryFile !== 'string'
         || typeof options.blogRoot !== 'string') {
         fail('必须提供已批准的会议 manifest、冻结清单和 blog 根目录');
+    }
+    if (options.name !== undefined && !SAFE_NAME_RE.test(String(options.name || ''))) {
+        fail('目录文件名不安全，current.json 仅供当前目录指针使用');
     }
     const files = overrides.files || require('../config.js').FILES;
     const catalog = buildScopedCatalog(options);

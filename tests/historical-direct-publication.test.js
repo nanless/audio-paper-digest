@@ -110,6 +110,24 @@ test('发布事务能沿计划、生成、审查、激活和远端凭证一路�
         deps.hugoVersion = 'hugo v0.second-protocol-change';
         assert.equal(api.review({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'reviewed');
         assert.equal(semanticModelCalls, 1);
+        const activationDirectory = path.join(outputRoot, publicationId, 'activation');
+        const activationBeforeDryRun = new Map(['intent.json', 'receipt.json'].map(name => {
+            const filename = path.join(activationDirectory, name);
+            return [name, { bytes: fs.readFileSync(filename), stat: fs.statSync(filename) }];
+        }));
+        const reviewedBeforeDryRun = fs.readFileSync(path.join(outputRoot, publicationId, 'review.json'));
+        const dryRebound = api.activate({ outputRoot, publicationId, blogRepo, apply: false }, deps);
+        assert.equal(dryRebound.status, 'dry-run');
+        assert.equal(dryRebound.deltaCount, 1);
+        assert.equal(dryRebound.intent.reviewSha256, JSON.parse(reviewedBeforeDryRun).reviewSha256);
+        for (const [name, before] of activationBeforeDryRun) {
+            const filename = path.join(activationDirectory, name);
+            assert.deepEqual(fs.readFileSync(filename), before.bytes);
+            assert.equal(fs.statSync(filename).ino, before.stat.ino);
+            assert.equal(fs.statSync(filename).mtimeMs, before.stat.mtimeMs);
+        }
+        assert.deepEqual(fs.readFileSync(path.join(outputRoot, publicationId, 'review.json')), reviewedBeforeDryRun);
+        assert.deepEqual(fs.readFileSync(target), next);
         assert.equal(api.activate({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'activation-rebound');
         assert.equal(api.publish({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'published');
         assert.equal(api.publish({ outputRoot, publicationId, blogRepo, apply: true }, deps).status, 'already-published');
