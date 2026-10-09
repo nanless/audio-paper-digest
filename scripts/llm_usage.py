@@ -160,7 +160,7 @@ def write_llm_usage_event(event, directory=None):
             pass
         mode = current.lstat().st_mode
         if not stat.S_ISDIR(mode) or stat.S_ISLNK(mode):
-            raise ValueError('Unsafe usage directory')
+            raise ValueError('用量目录必须是真实目录，不能是符号链接')
     target_dir.chmod(0o700)
     ident = str(uuid.uuid4())
     temporary = target_dir / f'.{ident}.tmp'

@@ -122,7 +122,7 @@ function writeLlmUsageEvent(event, options = {}) {
         current = path.join(current, part);
         if (!fs.existsSync(current)) fs.mkdirSync(current, { mode: 0o700 });
         const stat = fs.lstatSync(current);
-        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Unsafe usage directory');
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('用量目录必须是真实目录，不能是符号链接');
     }
     fs.chmodSync(directory, 0o700);
     const id = crypto.randomUUID();
@@ -150,7 +150,7 @@ function recordLlmUsage(input, options = {}) {
 
 function recordLlmDisposition(input, options = {}) {
     if (!['accepted', 'rejected'].includes(input?.disposition) || !digest(input.outputTextSha256)) {
-        throw new Error('LLM disposition 无效');
+        throw new Error('模型产物采用记录不合法');
     }
     const event = { version: VERSION, kind: 'disposition', eventId: crypto.randomUUID(),
         at: new Date().toISOString(), runtime: 'node', ...usageContext(input),
@@ -200,7 +200,7 @@ function summarizeLlmUsage(events) {
         group.estimatedInputTextTokens += count(event.estimates?.estimatedInputTextTokens) || 0;
         group.durationMs += count(event.durationMs) || 0;
     }
-    return { version: VERSION, note: 'Reported usage excludes unavailable values; estimates are not billing tokens. Cached/reasoning are subtotals, not extra totals.',
+    return { version: VERSION, note: '用量总计只累加服务商已提供的数值；字符估算不等于计费 token。缓存和推理数量属于小计，不额外加到总量。',
         groups: [...groups.values()].map(group => ({ ...group, usage: Object.fromEntries(Object.entries(group.usage)
             .map(([name, value]) => [name, { ...value, sum: value.reportedRequests ? value.sum : null }])) })) };
 }

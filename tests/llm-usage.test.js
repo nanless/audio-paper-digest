@@ -120,7 +120,7 @@ test('账目用私有的不可变文件，拒绝链接目录', t => {
     assert.equal(fs.statSync(file).mode & 0o777, 0o600);
     assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
     fs.symlinkSync(directory, path.join(root, 'link'));
-    assert.throws(() => writeLlmUsageEvent({}, { directory: path.join(root, 'link') }), /Unsafe/);
+    assert.throws(() => writeLlmUsageEvent({}, { directory: path.join(root, 'link') }), /用量目录必须是真实目录/);
 });
 
 test('采用汇总绑定原始输出、论文、阶段和内容尝试次数，不靠猜', () => {
@@ -137,7 +137,7 @@ test('采用汇总绑定原始输出、论文、阶段和内容尝试次数，�
 test('用量报告在读记录之前就拒绝不存在的日历日期', () => {
     const { main } = require('../scripts/llm-usage-report.js');
     for (const date of ['2026-02-30', '2026-13-01', 'not-a-date']) {
-        assert.throws(() => main(['--date', date]), /Invalid date/);
+        assert.throws(() => main(['--date', date]), /有效的 YYYY-MM-DD 日历日期/);
     }
 });
 
@@ -150,7 +150,7 @@ test('全新运行的作用域会保留，不同重写的用量绝不合并', ()
     assert.deepEqual(events.map(event => event.runId), ids);
     assert.equal(summarizeLlmUsage(events).groups.length, 2);
     const { main } = require('../scripts/llm-usage-report.js');
-    assert.throws(() => main(['--run', '../other']), /Invalid run ID/);
+    assert.throws(() => main(['--run', '../other']), /规范 UUID v4/);
 });
 
 test('传输层记录格式错误的响应和网络错误，但不改变它们的结果', async () => {

@@ -24,13 +24,13 @@ function parseArgs(argv) {
     const seen = new Set();
     for (let index = 0; index < argv.length; index++) {
         const arg = argv[index];
-        if (seen.has(arg)) throw new Error(`Duplicate option: ${arg}`);
+        if (seen.has(arg)) throw new Error(`参数重复：${arg}`);
         seen.add(arg);
         if (arg === '--live') { options.live = true; continue; }
-        if (!names[arg] || !argv[index + 1] || argv[index + 1].startsWith('--')) throw new Error(`Invalid or incomplete option: ${arg}`);
+        if (!names[arg] || !argv[index + 1] || argv[index + 1].startsWith('--')) throw new Error(`参数无效或缺少取值：${arg}`);
         options[names[arg]] = argv[++index];
     }
-    for (const name of Object.values(names)) if (!options[name]) throw new Error(`Required option missing: ${name}`);
+    for (const name of Object.values(names)) if (!options[name]) throw new Error(`缺少必需参数：${name}`);
     if (!/^\d{4}\.\d{4,5}(?:v\d+)?$/.test(options.paperId)) throw new Error('arXiv 论文 ID 无效');
     options.paperId = normalizeId(options.paperId);
     for (const name of ['sourceTextPath', 'artifactsPath', 'snapshotPath', 'outputDir']) options[name] = path.resolve(options[name]);
@@ -38,7 +38,7 @@ function parseArgs(argv) {
 }
 
 function readRegular(filename) {
-    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.size > 64 * 1024 * 1024) throw new Error(`输入必须是有大小上限的普通文件：${filename}`);
@@ -59,23 +59,23 @@ function loadInputs(options) {
     if (!sourceText || paper.sourceSha256 !== sourceSha256
         || (paper.analysisManifest?.sourceAcquisition?.sourceSha256
             && paper.analysisManifest.sourceAcquisition.sourceSha256 !== sourceSha256)) {
-        throw new Error('Source text SHA does not replay the paper snapshot');
+        throw new Error('来源全文的 SHA 与论文快照不一致');
     }
     if (!artifacts || typeof artifacts !== 'object' || Array.isArray(artifacts)
         || !Array.isArray(artifacts.tables) || !Array.isArray(artifacts.formulas)
         || !/^[a-f0-9]{64}$/.test(String(artifacts.payloadSha256 || ''))) {
-        throw new Error('A complete production structured artifact with payloadSha256 is required; a summary cannot be re-signed');
+        throw new Error('必须提供含 payloadSha256 的完整结构化来源记录，不能用摘要重算哈希代替');
     }
     const { payloadSha256, ...body } = artifacts;
     if (sha(JSON.stringify(body)) !== payloadSha256 || artifacts.flattenedTextSha256 !== sourceSha256
         || (artifacts.sourceId && normalizeId(artifacts.sourceId) !== options.paperId)) {
-        throw new Error('Structured artifact SHA, source text, or paper identity does not replay');
+        throw new Error('结构化来源的 SHA、全文或论文身份不一致');
     }
     const expectedArtifactHashes = [paper.structuredArtifactsSha256,
         paper.analysisManifest?.sourceAcquisition?.structuredArtifactsSha256,
         paper.analysisManifest?.stages?.apiReaderArticle?.structuredArtifactsSha256].filter(Boolean);
     if (!expectedArtifactHashes.length || expectedArtifactHashes.some(value => value !== payloadSha256)) {
-        throw new Error('Structured artifact payload differs from the signed paper snapshot');
+        throw new Error('结构化来源内容与论文快照绑定的 SHA 不一致');
     }
     if (typeof paper.analysis !== 'string' || !paper.analysis.trim()) throw new Error('缺少快照的规范化分析');
     return { paper, sourceText, artifacts, sourceSha256, artifactSha256: payloadSha256,
@@ -89,14 +89,14 @@ function replaySnapshotPlan(paper, artifacts, sourceText) {
     const plan = paper.apiReaderPlan;
     const article = paper.apiReaderArticle;
     if (!plan || typeof article !== 'string' || paper.apiReaderArticleSha256 !== sha(article)
-        || paper.apiReaderPlanSha256 !== stableHash(plan)) throw new Error('Snapshot Reader article/plan SHA mismatch');
+        || paper.apiReaderPlanSha256 !== stableHash(plan)) throw new Error('快照中的 Reader 正文或计划 SHA 不一致');
     const stage = paper.analysisManifest?.stages?.apiReaderArticle;
-    if (stage?.articleSha256 && stage.articleSha256 !== sha(article)) throw new Error('Snapshot Reader stage article SHA mismatch');
-    if (stage?.planSha256 && stage.planSha256 !== stableHash(plan)) throw new Error('Snapshot Reader stage plan SHA mismatch');
+    if (stage?.articleSha256 && stage.articleSha256 !== sha(article)) throw new Error('快照中 Reader 阶段绑定的正文 SHA 不一致');
+    if (stage?.planSha256 && stage.planSha256 !== stableHash(plan)) throw new Error('快照中 Reader 阶段绑定的计划 SHA 不一致');
     for (const binding of plan.formulaBindings || []) {
         const formula = artifacts.formulas.find(item => item.ordinal === binding.formulaOrdinal);
         if (!formula || formula.sourceDomSha256 !== binding.sourceDomSha256 || String(formula.latex).trim() !== binding.latex) {
-            throw new Error('Snapshot formula binding does not replay its structured source');
+            throw new Error('快照公式与结构化来源中的原始公式不一致');
         }
     }
     for (const binding of plan.tableBindings || []) {
@@ -106,10 +106,10 @@ function replaySnapshotPlan(paper, artifacts, sourceText) {
         } else if (binding.sourceType === 'source_quotes') {
             if (!Array.isArray(binding.sourceQuotes) || !binding.sourceQuotes.length
                 || binding.sourceQuotes.some(item => typeof item.quote !== 'string' || !sourceText.includes(item.quote)
-                    || sha(item.quote) !== item.sourceQuoteSha256)) throw new Error('Snapshot table source quote does not replay');
+                    || sha(item.quote) !== item.sourceQuoteSha256)) throw new Error('快照表格引用无法与来源全文逐字对应');
         } else throw new Error('不支持该快照表格绑定');
     }
-    return { status: 'replayed', scope: 'article/plan hashes, original formula identity, table DOM identity and exact source quotes; not semantic review',
+    return { status: 'replayed', scope: '核对正文与计划哈希、原始公式身份、表格 DOM 身份及逐字原文引用；未进行语义审查',
         articleSha256: sha(article), planSha256: stableHash(plan),
         sections: plan.sections?.length || 0, tables: plan.tableBindings?.length || 0,
         formulas: plan.formulaBindings?.length || 0, figures: plan.figurePlacements?.length || 0,
@@ -122,25 +122,25 @@ function snapshotFigures(paper) {
         if (!Number.isInteger(figure.ordinal) || typeof figure.cachePath !== 'string'
             || !/^[a-f0-9]{64}$/.test(String(figure.assetSha256 || ''))) throw new Error('快照图片身份或缓存路径不完整');
         const bytes = readRegular(figure.cachePath);
-        if (sha(bytes) !== figure.assetSha256) throw new Error(`Cached figure ${figure.ordinal} SHA mismatch`);
+        if (sha(bytes) !== figure.assetSha256) throw new Error(`图片 ${figure.ordinal} 的缓存 SHA 不一致`);
         return { ...figure, cachePath: path.resolve(figure.cachePath) };
     });
 }
 
 function safeOutputDirectory(directory, inputPaths, currentDir) {
     const absolute = path.resolve(directory);
-    if (absolute === currentDir || absolute.startsWith(`${currentDir}${path.sep}`)) throw new Error('Evaluation output must be outside data/current');
+    if (absolute === currentDir || absolute.startsWith(`${currentDir}${path.sep}`)) throw new Error('评估输出必须位于 data/current 之外');
     if (inputPaths.some(filename => filename === absolute || filename.startsWith(`${absolute}${path.sep}`))) {
-        throw new Error('Evaluation output must not contain an input artifact');
+        throw new Error('评估输出目录不能包含输入文件');
     }
     let cursor = path.parse(absolute).root;
     for (const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
         cursor = path.join(cursor, part);
         if (!fs.existsSync(cursor)) fs.mkdirSync(cursor, { mode: 0o700 });
         const stat = fs.lstatSync(cursor);
-        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Unsafe evaluation output directory');
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('评估输出路径必须逐级为真实目录，不能是符号链接');
     }
-    if (fs.readdirSync(absolute).length) throw new Error('Use a fresh empty evaluation output directory');
+    if (fs.readdirSync(absolute).length) throw new Error('请使用新的空目录保存评估输出');
     fs.chmodSync(absolute, 0o700);
     return absolute;
 }
@@ -156,8 +156,8 @@ function writeArtifact(directory, filename, content) {
 function hashExisting(filename) {
     let fd;
     try {
-        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-        if (!fs.fstatSync(fd).isFile()) throw new Error(`Integrity target is not a regular file: ${filename}`);
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+        if (!fs.fstatSync(fd).isFile()) throw new Error(`待核验路径不是普通文件：${filename}`);
         const digest = crypto.createHash('sha256');
         const chunk = Buffer.allocUnsafe(256 * 1024);
         let bytes;
@@ -178,7 +178,7 @@ async function evaluate(options) {
     const report = { version: VERSION, mode: options.live ? 'live' : 'offline', paperId: options.paperId,
         startedAt: new Date().toISOString(),
         status: 'running', budgets: BUDGETS, calls: [], outputs: {}, usage: { status: 'not_requested' },
-        scope: 'Isolated Reader evaluation. No canonical mutation or publication.' };
+        scope: '独立评估 Reader，不修改正式记录或发布博客。' };
     let failure = null;
     try {
         const inputs = loadInputs(options);
@@ -224,7 +224,7 @@ async function evaluate(options) {
                 if (report.calls.length >= BUDGETS.logicalRequests) throw new Error('评估的逻辑请求预算已耗尽');
                 const kind = requestOptions.usageContext?.stage === 'apiReaderRepair' ? 'patch' : 'full';
                 const expected = kind === 'patch' ? BUDGETS.patchOutputTokens : BUDGETS.fullOutputTokens;
-                if (tokens !== expected) throw new Error('Actual Reader output budget drifted from evaluation budget');
+                if (tokens !== expected) throw new Error('Reader 实际输出预算与评估预算不一致');
                 const call = { index: report.calls.length + 1, kind, outputBudgetTokens: tokens,
                     inputCharacters: messages.reduce((sum, message) => sum + (Array.isArray(message.content)
                         ? message.content.reduce((count, block) => count + (block.type === 'text' ? String(block.text || '').length : 0), 0)
@@ -242,14 +242,14 @@ async function evaluate(options) {
         const assembled = result.plan.figurePlacements.length
             ? deep.injectApiReaderFigures(result, inputs.artifacts, options.paperId) : { ...result, figures: [] };
         report.outputs.article = writeArtifact(outputDir, 'reader.article.md', assembled.article);
-        report.outputs.plan = writeArtifact(outputDir, 'reader.plan.json', result.plan);
-        report.outputs.result = writeArtifact(outputDir, 'reader.result.json', { ...result, article: assembled.article, figures: assembled.figures });
+        report.outputs.plan = writeArtifact(outputDir, 'reader.plan.json', assembled.plan);
+        report.outputs.result = writeArtifact(outputDir, 'reader.result.json', assembled);
         report.result = { attempts: result.attempts, fullAttempts: result.fullAttempts, contentMode: result.contentMode,
-            articleSha256: sha(assembled.article), planSha256: stableHash(result.plan), qualityMetrics: result.qualityMetrics,
-            sections: result.plan.sections.length, tables: result.plan.tableBindings.length,
-            formulas: result.plan.formulaBindings.length, figures: result.plan.figurePlacements.length,
+            articleSha256: sha(assembled.article), planSha256: stableHash(assembled.plan), qualityMetrics: result.qualityMetrics,
+            sections: assembled.plan.sections.length, tables: assembled.plan.tableBindings.length,
+            formulas: assembled.plan.formulaBindings.length, figures: assembled.plan.figurePlacements.length,
             chineseCharacters: (assembled.article.match(/[\u3400-\u9fff]/g) || []).length,
-            review: 'not_performed; requires independent factual and visual review' };
+            review: '尚未审查；仍需独立核对事实和图片' };
         report.status = 'live_reader_generated';
         return report;
     } catch (error) {
@@ -267,12 +267,12 @@ async function evaluate(options) {
             report.usage = { status: requests.length && requests.every(event => event.usage?.status === 'reported')
                 ? 'reported' : report.calls.length ? 'unknown_or_partial' : 'not_requested',
                 actualProviderRequests: requests.length, summary: usage.summarizeLlmUsage(events),
-                cost: null, costStatus: 'unknown; no provider price configured' };
+                cost: null, costStatus: '未配置服务商价格，费用未知' };
         }
         const after = Object.fromEntries(watchedFiles.map(filename => [filename, hashExisting(filename)]));
         report.integrity = { unchanged: watchedFiles.every(filename => before[filename] === after[filename]), before, after };
         if (!report.integrity.unchanged) {
-            report.status = 'failed'; report.error = { code: 'INPUT_OR_CANONICAL_CHANGED', message: 'A watched source/snapshot/canonical file changed during evaluation' };
+            report.status = 'failed'; report.error = { code: 'INPUT_OR_CANONICAL_CHANGED', message: '评估期间，被监测的来源、快照或正式文件发生变化' };
         }
         writeArtifact(outputDir, 'report.json', report);
         if (failure) process.stderr.write(`[reader-evaluation] ${failure.message}\n`);
