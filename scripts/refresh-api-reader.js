@@ -185,8 +185,9 @@ async function refreshApiReaders(targetIds, options = {}) {
     const results = new Array(ids.length);
     const failures = [];
     let cursor = 0;
+    let runStopError = null;
     async function worker() {
-        while (true) {
+        while (!runStopError) {
             const index = cursor;
             cursor += 1;
             if (index >= ids.length) return;
@@ -194,12 +195,19 @@ async function refreshApiReaders(targetIds, options = {}) {
             try {
                 results[index] = await refreshApiReader(id, options);
             } catch (error) {
+                if (error?.scope === 'run') runStopError ||= error;
                 failures.push({ id, error: error.message });
                 console.error(`❌ ${id} 刷新失败: ${error.message}`);
             }
         }
     }
     await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    // 已开始的刷新仍须完成保存并释放锁，再把首个运行级错误原样交回调用方。
+    if (runStopError) {
+        runStopError.failures = failures;
+        runStopError.results = results.filter(Boolean);
+        throw runStopError;
+    }
     if (failures.length > 0) {
         const error = new Error(
             `API reader 批量刷新失败 ${failures.length}/${ids.length}: `

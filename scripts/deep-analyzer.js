@@ -10209,6 +10209,12 @@ function getModelOutputTerminationError(apiType, response, maxTokens) {
                 { code: 'MODEL_RESPONSE_FAILED', retryable: true, category: 'response_terminal' }
             );
         }
+        if (response?.status !== undefined && response.status !== 'completed') {
+            return makeModelRequestError(
+                `OpenAI Responses 未正常完成：${String(response.status)}`,
+                { code: 'MODEL_OUTPUT_INCOMPLETE', retryable: false, category: 'output_incomplete' }
+            );
+        }
         return null;
     }
     if (apiType === 'anthropic' && response?.stop_reason === 'max_tokens') {
@@ -10221,6 +10227,15 @@ function getModelOutputTerminationError(apiType, response, maxTokens) {
         return makeModelRequestError(
             `OpenAI Chat 输出被 max_tokens=${maxTokens} 截断`,
             { code: 'MODEL_OUTPUT_TRUNCATED', retryable: false, category: 'output_incomplete' }
+        );
+    }
+    const terminal = apiType === 'anthropic' ? response?.stop_reason : response?.choices?.[0]?.finish_reason;
+    const successful = apiType === 'anthropic' ? ['end_turn', 'stop_sequence'] : ['stop'];
+    // 兼容未提供终态的旧网关；已明确返回的终态必须表示正常完成。
+    if (terminal !== undefined && !successful.includes(terminal)) {
+        return makeModelRequestError(
+            `${apiType === 'anthropic' ? 'Anthropic' : 'OpenAI Chat'} 未正常完成：${String(terminal)}`,
+            { code: 'MODEL_OUTPUT_INCOMPLETE', retryable: false, category: 'output_incomplete' }
         );
     }
     return null;

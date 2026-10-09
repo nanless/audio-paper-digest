@@ -701,3 +701,92 @@ test('精确的人工补丁审计解锁一次全门禁复核，随后即被消�
     fs.appendFileSync(path.join(archive, 'patch.json'), ' ');
     assert.equal(scheduler.exactOperatorPatchRecovery(runDir, runId, paperId, payload), null);
 });
+
+
+function stopFixture(t, ids = ['2604.10001', '2604.10002', '2604.10003']) {
+    const root = fixture(t); const current = stateForIds(ids);
+    const groups = scheduler.groupsFromCrosswalk(current);
+    const runs = new Map(groups.map(group => [group.runId, { runId: group.runId, status: 'sources_ready' }]));
+    const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
+        paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
+        historicalAnalysisSchedulerDir: path.join(root, 'scheduler') };
+    return { groups, runs, files, options: { apply: true, crosswalkId: CROSSWALK,
+        stage: 'analyze', queue: 'all', limit: ids.length, concurrency: 1 },
+    deps: { files, readCrosswalk: () => current, recoverRun: ({ runId }) => runs.get(runId) || null,
+        prepareAuthority: async () => ({ authorityHandle: {} }), verifyRunAuthority: () => true,
+        now: () => '2026-09-07T00:00:00.000Z' },
+    checkpoint: () => JSON.parse(fs.readFileSync(path.join(files.historicalAnalysisSchedulerDir, `${CROSSWALK}.json`))) };
+}
+
+for (const code of ['LLM_ACCOUNT_POOL_EXHAUSTED', 'LLM_ACCOUNT_AUTH_ERROR', 'LLM_ACCOUNT_POOL_CONFIG_ERROR']) {
+    test(`历史外层调度遇到 ${code} 时落盘并原样停止，不派下一篇`, async t => {
+        const f = stopFixture(t); const analyzed = [];
+        const failure = Object.assign(new Error('账号不可用，停止本次运行'), { code, scope: 'run', retryable: false });
+        await assert.rejects(scheduler.runHistoricalScheduler(f.options, { ...f.deps,
+            analyzeRun: async ({ runId }) => { analyzed.push(runId); throw failure; }
+        }), error => error === failure);
+        assert.deepEqual(analyzed, [f.groups[0].runId]);
+        const items = f.checkpoint().items;
+        assert.equal(items[f.groups[0].paperId].status, 'analysis_failed');
+        assert.equal(items[f.groups[0].paperId].lastError, failure.message);
+        assert.equal(items[f.groups[1].paperId].status, 'sources_ready');
+    });
+}
+
+test('历史外层调度保留普通单篇失败并继续其余论文', async t => {
+    const f = stopFixture(t); const analyzed = [];
+    const result = await scheduler.runHistoricalScheduler(f.options, { ...f.deps,
+        analyzeRun: async ({ runId }) => { analyzed.push(runId);
+            if (runId === f.groups[0].runId) throw new Error('单篇正文未通过检查');
+            const complete = { runId, status: 'complete', storageSealed: true, currentContractComplete: true };
+            f.runs.set(runId, complete); return complete;
+        }
+    });
+    assert.equal(analyzed.length, 3); assert.equal(result.complete, 2); assert.equal(result.failed, 1);
+});
+
+test('历史并发分析遇到运行级失败后等同伴落盘，不派第三篇', async t => {
+    const f = stopFixture(t); const analyzed = [];
+    let release; const secondStarted = new Promise(resolve => { release = resolve; });
+    const failure = Object.assign(new Error('账号池耗尽'), { code: 'LLM_ACCOUNT_POOL_EXHAUSTED', scope: 'run' });
+    await assert.rejects(scheduler.runHistoricalScheduler({ ...f.options, concurrency: 2 }, { ...f.deps,
+        analyzeRun: async ({ runId }) => {
+            analyzed.push(runId);
+            if (runId === f.groups[0].runId) { await secondStarted; throw failure; }
+            release(); await new Promise(resolve => setTimeout(resolve, 20));
+            const complete = { runId, status: 'complete', storageSealed: true, currentContractComplete: true };
+            f.runs.set(runId, complete); return complete;
+        }
+    }), error => error === failure);
+    assert.deepEqual(analyzed, f.groups.slice(0, 2).map(group => group.runId));
+    const items = f.checkpoint().items;
+    assert.equal(items[f.groups[0].paperId].status, 'analysis_failed');
+    assert.equal(items[f.groups[1].paperId].status, 'complete');
+    assert.equal(items[f.groups[2].paperId].status, 'sources_ready');
+});
+
+test('在途来源准备结束时若同伴已停止运行，只保存来源，不启动模型', async t => {
+    const f = stopFixture(t); const analyzed = [];
+    let failNow; const preparedSecond = new Promise(resolve => { failNow = resolve; });
+    const failure = Object.assign(new Error('账号认证失败'), { code: 'LLM_ACCOUNT_AUTH_ERROR', scope: 'run' });
+    await assert.rejects(scheduler.runHistoricalScheduler({ ...f.options, concurrency: 2 }, { ...f.deps,
+        prepareAuthority: async ({ arxivId }) => {
+            if (arxivId === f.groups[1].arxivId) { failNow(); await new Promise(resolve => setTimeout(resolve, 20)); }
+            return { authorityHandle: {} };
+        },
+        analyzeRun: async ({ runId }) => { analyzed.push(runId); await preparedSecond; throw failure; }
+    }), error => error === failure);
+    assert.deepEqual(analyzed, [f.groups[0].runId]);
+    assert.equal(f.checkpoint().items[f.groups[1].paperId].status, 'sources_ready');
+});
+
+test('来源准备中的运行级错误停止队列并传递原错误', async t => {
+    const f = stopFixture(t); f.runs.clear(); const fetched = [];
+    const failure = Object.assign(new Error('来源配置不可用'), { code: 'SOURCE_CONFIG_ERROR', scope: 'run' });
+    await assert.rejects(scheduler.runHistoricalScheduler({ ...f.options, stage: 'prepare-only' }, { ...f.deps,
+        fetchMetadata: async id => { fetched.push(id); throw failure; }
+    }), error => error === failure);
+    assert.deepEqual(fetched, [f.groups[0].arxivId]);
+    assert.equal(f.checkpoint().items[f.groups[0].paperId].status, 'prepare_failed');
+    assert.equal(f.checkpoint().items[f.groups[1].paperId].status, 'pending');
+});

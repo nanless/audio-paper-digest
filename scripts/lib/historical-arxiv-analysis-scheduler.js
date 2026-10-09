@@ -349,12 +349,26 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
     }
     const candidates = selectCandidates(effectiveGroups, checkpoint.items,
         { stage: options.stage, queue, maximum, now: deps.now() });
+    let runStopError = null;
+    const observeRunStop = error => {
+        if (error?.scope === 'run') runStopError ||= error;
+    };
+    const finishWorkers = (settled, label) => {
+        const failures = settled.filter(item => item.status === 'rejected').map(item => item.reason);
+        if (failures.length) {
+            const error = new AggregateError(runStopError ? [runStopError, ...failures] : failures, label);
+            if (runStopError) Object.assign(error, { cause: runStopError, code: runStopError.code, scope: runStopError.scope });
+            throw error;
+        }
+        if (runStopError) throw runStopError;
+    };
     const prepareGroup = async group => {
         let recovered = deps.recoverRun({ runId: group.runId, date: group.analysisDate,
             arxivId: group.arxivId, rootDir: files.freshRewriteRunsDir, now: deps.now() });
         let live;
         if (!recovered) {
             const metadata = await deps.fetchMetadata(group.arxivId);
+            if (runStopError) return null;
             live = await deps.prepareAuthority({ authorityRoot: files.paperSourceAuthorityDir,
                 arxivId: group.arxivId, authorityName: group.authorityName, apply: true, requireLiveAuthorization: true });
             recovered = deps.prepareRun({ authorityHandle: live.authorityHandle, metadata: metadata.metadata,
@@ -374,10 +388,11 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
     if (options.stage === 'prepare-only') {
         let cursor = 0;
         const worker = async () => {
-            while (cursor < candidates.length) {
+            while (!runStopError && cursor < candidates.length) {
                 const group = candidates[cursor++];
                 try { await prepareGroup(group); }
                 catch (error) {
+                    observeRunStop(error);
                     updateItem(filename, group, { status: 'prepare_failed',
                         lastError: String(error.message).slice(0, 2000) }, deps);
                 }
@@ -386,23 +401,23 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
         const settled = await Promise.allSettled(Array.from({
             length: Math.min(options.concurrency, candidates.length)
         }, worker));
-        const failures = settled.filter(item => item.status === 'rejected').map(item => item.reason);
-        if (failures.length) throw new AggregateError(failures, 'Historical prepare workers failed after settling');
+        finishWorkers(settled, '历史来源准备失败，已等待在途任务保存状态');
     } else {
         let cursor = 0;
         const worker = async () => {
-            while (cursor < candidates.length) {
+            while (!runStopError && cursor < candidates.length) {
                 const group = candidates[cursor++];
                 let prepared;
                 try { prepared = await prepareGroup(group); }
                 catch (error) {
+                    observeRunStop(error);
                     updateItem(filename, group, { status: 'prepare_failed',
                         lastError: String(error.message).slice(0, 2000) }, deps);
                     continue;
                 }
                 // 候选选定之后，直接运行或更早的调度器可能已经完成或认领了这个 run。
                 // 上面那次持久化检查点更新才是当前的判定边界。
-                if (prepared.item.status === 'complete' || prepared.item.status === 'analyzing') continue;
+                if (runStopError || !prepared || prepared.item.status === 'complete' || prepared.item.status === 'analyzing') continue;
                 try {
                     const item = prepared.item;
                     const result = await deps.analyzeRun({ runId: group.runId, concurrency: 1,
@@ -419,6 +434,7 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
                     updateItemRecovery(filename, group,
                         { status, lastError: null, observed, attempted: true }, deps);
                 } catch (error) {
+                    observeRunStop(error);
                     try {
                         const recovered = deps.recoverRun({ runId: group.runId, date: group.analysisDate,
                             arxivId: group.arxivId, rootDir: files.freshRewriteRunsDir, now: deps.now() });
@@ -444,8 +460,7 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
         const settled = await Promise.allSettled(Array.from({
             length: Math.min(options.concurrency, candidates.length)
         }, worker));
-        const failures = settled.filter(item => item.status === 'rejected').map(item => item.reason);
-        if (failures.length) throw new AggregateError(failures, 'Historical analysis workers failed after settling');
+        finishWorkers(settled, '历史分析失败，已等待在途任务保存状态');
     }
     checkpoint = JSON.parse(fs.readFileSync(filename, 'utf8'));
     const values = Object.values(checkpoint.items);
