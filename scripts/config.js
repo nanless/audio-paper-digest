@@ -222,7 +222,7 @@ const FILES = {
     historicalConferencePageProjectionDir: path.join(DATA_DIR, 'runtime', 'historical-conference-page-projections'),
     historicalDirectRewritePlanDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-plans'),
     historicalDirectRewriteUnprojectedReportDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-unprojected-reports'),
-    // 仅来源直接执行路径的状态和中间产物。它们与旧的 fresh-rewrites 分开，
+    // 仅使用论文来源的直接执行流程所保存的状态和中间文件。它们与旧的 fresh-rewrites 分开，
     // 从不含图片资源。
     historicalDirectRewriteRegistryDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-registries'),
     historicalDirectRewriteExecutionDir: path.join(DATA_DIR, 'runtime', 'historical-direct-rewrite-executions'),
@@ -241,7 +241,7 @@ const FILES = {
     // 也不能当分析来源。
     historicalLocalCrawlIdentityDir: path.join(DATA_DIR, 'runtime', 'historical-local-crawl-identities'),
     historicalLocalCrawlSnapshotDir: path.join(DATA_DIR, 'runtime', 'historical-local-crawl-identity-snapshots'),
-    // 沿用旧名字是为了在重放时保持现有五组归档依据的分配，
+    // 沿用旧名字是为了在再次读取归档时保持现有五组归档依据的分配，
     // 以及这些文件固定的位置。
     historicalArchiveCrawlIdentityDir: path.join(DATA_DIR, 'runtime', 'historical-archive-crawl-identities'),
     historicalConferenceCrawlIdentityDir: path.join(DATA_DIR, 'runtime', 'historical-conference-crawl-identities'),
@@ -279,7 +279,7 @@ const FILES = {
     // data/archive/<date>/visual-summaries/*.png，论文长图与汇总封面扁平归档。
     visualSummaryAssetDir: ARCHIVE_DIR,
     digestCoverManifestDir: path.join(CURRENT_DIR, 'digest-cover-manifests'),
-    // 对某次已封存日更分析的显式人工决定。豁免绑定当时的 current 产物，
+    // 对某次已封存日更分析的显式人工决定。豁免绑定当时 current 中的分析结果及相关文件，
     // 从不修改分析结果本身。
     analysisWaiverDir: path.join(CURRENT_DIR, 'analysis-waivers'),
     postPublishVisualWaiverDir: path.join(CURRENT_DIR, 'post-publish-visual-waivers'),
@@ -292,7 +292,7 @@ const FILES = {
     manualV6ShadowMetricsDir: path.join(CURRENT_DIR, 'manual-v6-shadow'),
     // 旧 v5 只读队列观测和性能快照。
     manualV5ObservabilityDir: path.join(CURRENT_DIR, 'manual-v5-observability'),
-    // 每个日期/论文一份默认拒绝的单篇作者包。这些文件只是编排输入，
+    // 每个日期/论文一份默认拒绝的单篇作者包。这些文件只是供只读检查使用的旧作者任务输入资料，
     // 从不是正式分析状态。
     manualV5AuthorInputDir: path.join(CURRENT_DIR, 'manual-v5-author-inputs'),
     // 跨批次报告是可选的、不可更改的纯观测汇总。

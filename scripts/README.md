@@ -228,7 +228,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `reanalyze.js` | 归档并停用全部旧失败 Reader 候选，清空 Reader 和图片补充状态后强制全量重分析。仍只读取正式分析结果精确绑定的日更 PDF/TXT，不恢复旧分析、正文或缓存。 |
 | `reanalyze-selected.js` | 只重分析指定 arXiv ID，并同步恢复统计。 |
 | `refresh-api-reader.js` | 刷新指定论文或日期批次的 Reader、评分、作者和图片阶段。只读取封存 PDF/TXT；图片只为本次调用在系统临时目录中准备。 |
-| `evaluate-keyword-prefilter.js` | 只读回放金标准与历史入选记录。裁决后的正样本召回与原始命中率分开统计，已裁决负样本误放单列；缺少有效样本或存在误放时非零退出，读取及格式错误不按空样本处理。 |
+| `evaluate-keyword-prefilter.js` | 只读取人工判定的样例和历史入选记录，用当前关键词预筛规则检查是否通过预筛。裁决后的正样本召回与原始命中率分开统计，已裁决负样本误放单列；缺少有效样本或存在误放时非零退出，读取及格式错误不按空样本处理。 |
 | `test-api-key.js` | 测试主模型或副模型的协议路由、代理和响应。 |
 | `verify-project.js` | 沙箱外完整离线验证：固定 Hugo、全仓语法、默认/Manual JS 与 Python、只读数据检查；`--quick` 仅语法与数据，不是完整验收。 |
 | `llm-usage-report.js` | 只读汇总真实请求用量；`--paper` 支持新旧 arXiv ID 和完整会议论文 ID。区分服务提供的 usage、不可得状态和字符估算，不推算未经证实的费用；旧记录缺失的论文身份不能自动补回。 |

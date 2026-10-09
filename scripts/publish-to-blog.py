@@ -854,7 +854,7 @@ def has_unconverted_dollar_math(content):
 
 
 def markdown_table_shapes_are_valid(content):
-    """重放显式的 Markdown 表格列数，用于过滤 LLM 误报。"""
+    """检查 Markdown 表格各行的列数是否一致，用于排除模型的误报。"""
     lines = str(content or '').splitlines()
     for index, line in enumerate(lines):
         if not re.match(r'^\s*\|(?:\s*:?-{3,}:?\s*\|)+\s*$', line):
@@ -1254,7 +1254,7 @@ def llm_review_post(content, title="", required=False):
     # 分块审查只能看到自己那一小段，可能误判某个
     # 整篇文档级的结构（最常见的是 YAML frontmatter）没有闭合。
     # 在合并结论落定之前，再对照完整的页面字节
-    # 重放一次确定性的误报检查。
+    # 再按程序规则检查一次是否属于误报。
     all_issues = filter_false_positive_review_issues(content, all_issues)
     fixed_content = apply_llm_fixes(content, all_issues)
     passed = count_blocking_review_issues(all_issues) == 0

@@ -105,15 +105,23 @@ def build_child_process_env(extra=None, allowed_keys=()):
 
 def get_required_fetch_proxy():
     """返回 arXiv/HF 抓取所需的项目内 HTTP CONNECT 代理。"""
-    proxy = (
-        os.environ.get("https_proxy") or os.environ.get("HTTPS_PROXY")
-        or os.environ.get("http_proxy") or os.environ.get("HTTP_PROXY")
-    )
-    if not proxy:
+    proxy_key = next((key for key in (
+        "https_proxy", "HTTPS_PROXY", "http_proxy", "HTTP_PROXY"
+    ) if os.environ.get(key)), None)
+    if proxy_key is None:
         raise RuntimeError('抓取 arXiv/HuggingFace 必须在项目 .env 配置 HTTPS_PROXY 或 HTTP_PROXY')
-    parsed = urlparse(proxy)
-    if parsed.scheme not in ('http', 'https') or not parsed.hostname:
-        raise RuntimeError(f'Python 抓取只支持 HTTP CONNECT 代理，收到: {proxy}')
+    proxy = os.environ[proxy_key]
+    invalid_proxy_message = (
+        f'Python 抓取只支持 HTTP CONNECT 代理；请检查 {proxy_key} '
+        '是否为包含主机名的 http:// 或 https:// 地址'
+    )
+    try:
+        parsed = urlparse(proxy)
+        valid_proxy = parsed.scheme in ('http', 'https') and bool(parsed.hostname)
+    except ValueError:
+        raise RuntimeError(invalid_proxy_message) from None
+    if not valid_proxy:
+        raise RuntimeError(invalid_proxy_message)
     return proxy
 
 

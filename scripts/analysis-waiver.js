@@ -60,21 +60,21 @@ function validateAnalysisWaiver(waiver, date, files = Config.FILES, snapshots = 
     const issues = [];
     if (waiver === null || waiver === undefined) return { valid: true, issues, paperIds: new Set() };
     if (!waiver || typeof waiver !== 'object' || Array.isArray(waiver)) {
-        return { valid: false, issues: ['waiver must be an object'], paperIds: new Set() };
+        return { valid: false, issues: ['分析豁免记录必须是对象，不能是数组'], paperIds: new Set() };
     }
     const expectedKeys = [
         'batchDate', 'contract', 'papers', 'reason', 'requestedBy', 'source',
         'status', 'version', 'waivedAt', 'waiverSha256'
     ].sort();
     if (JSON.stringify(Object.keys(waiver).sort()) !== JSON.stringify(expectedKeys)) {
-        issues.push('waiver has unknown or missing fields');
+        issues.push('分析豁免记录含有未知字段或缺少必需字段');
     }
-    if (waiver.contract !== CONTRACT || waiver.version !== VERSION) issues.push('waiver contract/version invalid');
-    if (waiver.batchDate !== date || !DATE_RE.test(waiver.batchDate || '')) issues.push('waiver batchDate invalid');
-    if (waiver.status !== 'waived' || waiver.requestedBy !== 'user') issues.push('waiver status/requester invalid');
-    if (typeof waiver.reason !== 'string' || waiver.reason.trim().length < 10) issues.push('waiver reason is too short');
-    if (typeof waiver.waivedAt !== 'string' || !Number.isFinite(Date.parse(waiver.waivedAt))) issues.push('waiver timestamp invalid');
-    if (!Array.isArray(waiver.papers) || waiver.papers.length === 0) issues.push('waiver papers must be a non-empty array');
+    if (waiver.contract !== CONTRACT || waiver.version !== VERSION) issues.push('分析豁免记录的 contract 或 version 不符合要求');
+    if (waiver.batchDate !== date || !DATE_RE.test(waiver.batchDate || '')) issues.push('分析豁免记录的 batchDate 格式无效或与目标日期不一致');
+    if (waiver.status !== 'waived' || waiver.requestedBy !== 'user') issues.push('分析豁免记录的 status 必须为 waived，requestedBy 必须为 user');
+    if (typeof waiver.reason !== 'string' || waiver.reason.trim().length < 10) issues.push('分析豁免记录的 reason 必须是去除首尾空白后至少含 10 个字符的字符串');
+    if (typeof waiver.waivedAt !== 'string' || !Number.isFinite(Date.parse(waiver.waivedAt))) issues.push('分析豁免记录的 waivedAt 必须是可解析的日期时间字符串');
+    if (!Array.isArray(waiver.papers) || waiver.papers.length === 0) issues.push('分析豁免记录的 papers 必须是至少包含一项的数组');
 
     const entries = Array.isArray(waiver.papers) ? waiver.papers : [];
     const entryKeys = ['deepPaperSha256', 'originalDigestStatus', 'originalLatestAttemptStatus', 'paperId', 'sourceSha256'].sort();
@@ -154,7 +154,7 @@ function createAnalysisWaiver({ date, paperIds, reason, files = Config.FILES, no
     const db = papers.papers || {};
     const entries = ids.map(id => {
         const deepPaper = deepById.get(id); const dbPaper = db[id];
-        if (!deepPaper || !dbPaper) throw new Error(`当前产物里找不到这篇论文：${id}`);
+        if (!deepPaper || !dbPaper) throw new Error(`当前分析结果或论文库中找不到这篇论文：${id}`);
         const sourceSha256 = deepPaper.sourceSha256 || deepPaper.analysisManifest?.sourceAcquisition?.sourceSha256;
         if (!SHA256_RE.test(sourceSha256 || '')) throw new Error(`论文缺少可核验的来源 SHA（深度分析结果里没有 sourceSha256）: ${id}`);
         return { paperId: id, deepPaperSha256: stableSha256(deepPaper), sourceSha256,

@@ -164,7 +164,7 @@ describe('分析豁免契约', () => {
                 /必须是规范化且不重复的论文 ID/);
             assert.throws(() => create(f, { reason: '太短' }), /至少要 10 个字符/);
             assert.throws(() => create(f, { paperIds: ['2609.99999'] }),
-                /当前产物里找不到这篇论文/);
+                /当前分析结果或论文库中找不到这篇论文/);
 
             const missingSource = fixture();
             try {
@@ -189,39 +189,39 @@ describe('分析豁免契约', () => {
 
             const unknownField = clone();
             unknownField.extra = true;
-            issueOf(unknownField, f, 'waiver has unknown or missing fields');
+            issueOf(unknownField, f, '分析豁免记录含有未知字段或缺少必需字段');
 
             const wrongContract = clone();
             wrongContract.contract = 'daily-analysis-waiver-v2';
-            issueOf(wrongContract, f, 'waiver contract/version invalid');
+            issueOf(wrongContract, f, '分析豁免记录的 contract 或 version 不符合要求');
 
             const wrongVersion = clone();
             wrongVersion.version = 2;
-            issueOf(wrongVersion, f, 'waiver contract/version invalid');
+            issueOf(wrongVersion, f, '分析豁免记录的 contract 或 version 不符合要求');
 
             const wrongDate = clone();
             wrongDate.batchDate = '2026-09-05';
-            issueOf(wrongDate, f, 'waiver batchDate invalid');
+            issueOf(wrongDate, f, '分析豁免记录的 batchDate 格式无效或与目标日期不一致');
 
             const wrongStatus = clone();
             wrongStatus.status = 'pending';
-            issueOf(wrongStatus, f, 'waiver status/requester invalid');
+            issueOf(wrongStatus, f, '分析豁免记录的 status 必须为 waived，requestedBy 必须为 user');
 
             const wrongRequester = clone();
             wrongRequester.requestedBy = 'agent';
-            issueOf(wrongRequester, f, 'waiver status/requester invalid');
+            issueOf(wrongRequester, f, '分析豁免记录的 status 必须为 waived，requestedBy 必须为 user');
 
             const shortReason = clone();
             shortReason.reason = '太短';
-            issueOf(shortReason, f, 'waiver reason is too short');
+            issueOf(shortReason, f, '分析豁免记录的 reason 必须是去除首尾空白后至少含 10 个字符的字符串');
 
             const badTimestamp = clone();
             badTimestamp.waivedAt = '不是时间';
-            issueOf(badTimestamp, f, 'waiver timestamp invalid');
+            issueOf(badTimestamp, f, '分析豁免记录的 waivedAt 必须是可解析的日期时间字符串');
 
             const emptyPapers = clone();
             emptyPapers.papers = [];
-            issueOf(emptyPapers, f, 'waiver papers must be a non-empty array');
+            issueOf(emptyPapers, f, '分析豁免记录的 papers 必须是至少包含一项的数组');
 
             const badEntry = clone();
             badEntry.papers[0].extra = 1;
@@ -369,7 +369,7 @@ describe('digest:waive-analysis 入口', () => {
         }
     });
 
-    it('main 在论文不在当前产物里时抛错，不写半份记录', () => {
+    it('main 在分析结果或论文库中找不到论文时拒绝，不写不完整记录', () => {
         const f = fixture();
         const originals = {};
         for (const key of Object.keys(f.files)) {
@@ -378,7 +378,7 @@ describe('digest:waive-analysis 入口', () => {
         }
         try {
             assert.throws(() => cli.main(['--date', DATE, '--paper-id', '2609.99999',
-                '--reason', REASON]), /当前产物里找不到这篇论文/);
+                '--reason', REASON]), /当前分析结果或论文库中找不到这篇论文/);
             assert.equal(fs.existsSync(path.join(f.files.analysisWaiverDir, `${DATE}.json`)), false);
         } finally {
             for (const key of Object.keys(f.files)) Config.FILES[key] = originals[key];
