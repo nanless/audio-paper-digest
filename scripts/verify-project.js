@@ -37,7 +37,7 @@ function collectSourceFiles(root = PROJECT_ROOT) {
                 if (!EXCLUDED_DIRECTORIES.has(entry.name)) visit(fullPath);
             } else if (entry.isFile()) {
                 const extension = path.extname(entry.name);
-                const group = { '.js': 'javascript', '.py': 'python', '.sh': 'shell' }[extension];
+                const group = { '.js': 'javascript', '.cjs': 'javascript', '.mjs': 'javascript', '.py': 'python', '.sh': 'shell' }[extension];
                 if (group) files[group].push(path.relative(root, fullPath));
             }
         }

@@ -248,20 +248,20 @@ describe('Manual 教程产物的汇总', () => {
         const plan = buildTutorialArtifactPlan(index);
         const missingFigure = structuredClone(plan);
         missingFigure.figures.pop();
-        assert.throws(() => validateTutorialArtifactPlan(index, missingFigure), /逐项处置/);
+        assert.throws(() => validateTutorialArtifactPlan(index, missingFigure), /为全部原始素材逐项记录/);
 
         const missingNumber = structuredClone(plan);
         missingNumber.tables[0].coverage.coveredNumericCellIds.pop();
-        assert.throws(() => validateTutorialArtifactPlan(index, missingNumber), /100%/);
+        assert.throws(() => validateTutorialArtifactPlan(index, missingNumber), /数值单元格的必需和已覆盖标识必须全部匹配原表/);
 
         const altered = structuredClone(plan);
         altered.tables[0].renderedMarkdown = altered.tables[0].renderedMarkdown.replace(/\d/, '9');
-        assert.throws(() => validateTutorialArtifactPlan(index, altered), /确定性完整渲染/);
+        assert.throws(() => validateTutorialArtifactPlan(index, altered), /按固定规则由原始矩阵完整生成/);
 
         const guessedDirection = structuredClone(plan);
         const ambiguousTable = guessedDirection.tables.find(item => item.id === 'TAB0002');
         ambiguousTable.displayProjection.transformations[0].direction = 'positive';
-        assert.throws(() => validateTutorialArtifactPlan(index, guessedDirection), /试图推断符号方向/);
+        assert.throws(() => validateTutorialArtifactPlan(index, guessedDirection), /显示转换记录与按原始单元格计算的记录不一致/);
     });
 
     it('把无数值的长文本协议矩阵逐记录拆成窄表且不遗漏源字段', () => {

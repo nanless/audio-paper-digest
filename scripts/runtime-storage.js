@@ -718,7 +718,7 @@ function pruneStorage(options = {}) {
     if (plan.blockers.length > 0) throw blockedError(plan, plan.blockers);
 
     // 执行清理前重新扫描一次权威 JSON 与候选集。新建或改写引用、
-    // 新出现的损坏 JSON 或候选文件漂移均会在任何 unlink 前阻断。
+    // 新出现的损坏 JSON 或候选文件变化，都会使程序在删除任何文件前停止。
     const verifiedPlan = buildPrunePlan(options);
     const verificationBlockers = [...verifiedPlan.blockers];
     if (prunePlanIdentity(plan) !== prunePlanIdentity(verifiedPlan)) {

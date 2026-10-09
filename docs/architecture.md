@@ -12,7 +12,7 @@ run-daily-digest.sh
   │    ├─ daily-fresh-source-plan.js → 封存官方文本与 PDF
   │    └─ analysis-engine.js → deep-analyzer.js
   ├─ generate-blog.py → 生成页面
-  ├─ review-blog.py → 确定性检查、LLM/图片审查与 Hugo 检查
+  ├─ review-blog.py → 程序检查、模型及图片审查与 Hugo 检查
   ├─ push-blog.py → 提交精确改动、推送并核验远端 OID
   └─ 视觉规划 → Codex image_gen → 目检、登记与状态检查
 ```
@@ -65,11 +65,11 @@ Reader 的各协议分别检查不同对象：
 
 ```text
 正式批次输入
-  → generation manifest v3 与精确页面字节
+  → v3 页面生成清单与精确页面字节
   → 不可变逐页审查文件
-  → 确定性、LLM 与图片审查
+  → 程序检查、模型与图片审查
   → 隔离 Hugo 检查
-  → 对应页面 SHA 和 Git 基线的 review receipt
+  → 记录页面 SHA 和 Git 基线的审查凭证
   → 精确提交 → 推送 → 现场核验远端 main OID
   → 发布后视觉任务
 ```
@@ -78,7 +78,7 @@ Reader 的各协议分别检查不同对象：
 
 逐页通过记录永久按“相对路径 + 页面内容 SHA”复用，只有页面内容 SHA 变化才重审。发布器实现变化仍会重新渲染，以发现真实字节变化；清单、模型、代码、协议或 Hugo 变化须重跑当前批次检查并生成新的审查凭证，不能使未变页面重审。分析阶段的实现 SHA 与这项页面缓存规则各自适用，不能混用。
 
-远端 OID 只证明 Git 提交已到远端。完成前还须人工确认对应发布提交，或保留本批已审页面字节的后续提交，已经成功 build/deploy；逐页核验目标日期汇总和论文页的 HTTP 200、正式地址与标题，并保留记录。`digest:status` 尚未自动执行这些上线检查。
+远端 OID 只证明 Git 提交已到远端。完成前还须人工确认对应发布提交，或保留本批已审页面字节的后续提交，已经成功构建和部署；逐页核验目标日期汇总和论文页的 HTTP 200、正式地址与标题，并保留记录。`digest:status` 尚未自动执行这些上线检查。
 
 ## 数据所有权
 
@@ -97,13 +97,13 @@ Reader 的各协议分别检查不同对象：
 
 | 锁 | 保护对象 | 恢复要求 |
 |---|---|---|
-| full-fetch run lock | 归档、抓取、筛选和批次初始化 | 持锁进程仍在运行时不得删除锁，退出后按持有者与租约规则回收 |
+| full-fetch run lock | 归档、抓取、筛选和批次初始化 | 持锁进程仍在运行时不得删除锁，退出后按持有者与有效期限规则回收 |
 | paper analysis lock | 单篇检查点与正式分析合并 | 等待已有任务；锁内重读，禁止旧对象覆盖 |
 | JSON file lock | `papers.json`、deep、manifest 等共享文件 | 同步读改写并递增 generation |
 | LLM account pool lock | 跨日期账号选择与冷却状态 | 选择账号或确认额度时短暂持锁，HTTP 请求始终在锁外 |
 | blog repository/date lock | 页面生成、审查、Git index、commit 与 push | 检查持有者与子进程，不得直接删除仍由运行中进程持有的锁 |
 
-等待锁时，程序会核对锁持有者的 owner PID、hostname、heartbeat 以及父子进程关系。只有实现确认租约与持有者符合失效条件时才可回收，不能只因命令慢就删锁。
+等待锁时，程序会核对持有者的进程 ID（owner PID）、机器名称（hostname）、定时更新的锁记录（heartbeat）以及父子进程关系。只有程序确认有效期限与持有者符合失效条件时才可回收，不能只因命令慢就删锁。
 
 ## 设计边界
 

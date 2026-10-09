@@ -4,8 +4,8 @@
  * 按固定规则把一份 Manual ArtifactIndex 变成给读者看的教程素材。
  *
  * 这个模块不下载、不转换、也不发布素材。它把已经绑定好的 ArtifactIndex 整理
- * 成一份可审计的教程方案：每张表、每张图、每个公式都会得到一个明确的处置
- * 结论；可恢复表格由源矩阵确定性完整渲染，渲染结果与其 SHA 一并绑定，结果表里的数值单元格全部记进覆盖率
+ * 成一份可逐项核对的教程方案：每张表、每张图、每个公式都会得到一个明确的处置
+ * 结论；可恢复表格按固定规则由原始矩阵完整生成，渲染结果与其 SHA 一并绑定，结果表里的数值单元格全部记进覆盖率
  * 矩阵。
  */
 
@@ -55,7 +55,7 @@ function unsignedNumericTokens(value) {
 
 /**
  * 只清理一类抽取瑕疵：Unicode 符号和它的 LaTeX 写法被连续输出在一起。普通
- * 数值 token 一律不做归一化。数值前重复出现的符号无法解释成证据，这里把它
+ * 数字只做 Unicode、换行和首尾空白的统一，不改写其取值。数值前重复出现的符号无法解释成证据，这里把它
  * 显示成去掉符号的数值再加一个标记。原始矩阵和逐单元格的转换记录才是依据
  * 来源，展示层不会去猜方向。
  */
@@ -78,7 +78,7 @@ function sanitizeTableDisplayText(value) {
         ? unsignedNumericTokens(numericComparisonSource) : numericTokens(numericComparisonSource);
     const displayNumbers = ambiguities.length ? unsignedNumericTokens(cleaned) : numericTokens(cleaned);
     if (JSON.stringify(sourceNumbers) !== JSON.stringify(displayNumbers)) {
-        throw new Error('表格显示净化试图改写数值，已拒绝');
+        throw new Error('清理表格显示格式后数字发生变化，已拒绝');
     }
     return cleaned;
 }
@@ -111,7 +111,7 @@ function assertSha(value, label) {
 function normalizeMatrix(table) {
     const matrix = assertArray(table?.matrix, `${table?.id || 'unknown'}.matrix`);
     if (matrix.length < 1 || !matrix.every(row => Array.isArray(row) && row.length > 0)) {
-        throw new Error(`${table?.id || 'unknown'} 没有可确定性渲染的矩阵`);
+        throw new Error(`${table?.id || 'unknown'} 没有至少一行、且每行均为非空数组的表格矩阵`);
     }
     const width = Math.max(...matrix.map(row => row.length));
     return matrix.map(row => Array.from({ length: width }, (_, index) => normalizeText(row[index] ?? '')));
@@ -550,7 +550,7 @@ function buildTutorialArtifactPlan(index) {
             disposition: available ? 'inline' : 'omit',
             formulaText: text,
             sourceFormulaSha256: sha256(text),
-            ...(available ? {} : { omissionReason: '该公式没有可验证的 TeX、MathML 或文本表示，不能在教程正文中重放。' })
+            ...(available ? {} : { omissionReason: '该公式没有可验证的 TeX、MathML 或文本表示，不能在教程正文中呈现。' })
         };
     });
     const plan = {
@@ -582,10 +582,10 @@ function buildTutorialArtifactPlan(index) {
 
 function assertExactIds(items, sourceItems, label) {
     assertArray(items, label);
-    if (items.length !== sourceItems.length) throw new Error(`${label} 必须逐项处置全部源工件`);
+    if (items.length !== sourceItems.length) throw new Error(`${label} 必须为全部原始素材逐项记录呈现或省略方式`);
     const expected = sourceItems.map(item => assertId(item.id, `${label}.source.id`));
     const actual = items.map(item => assertId(item?.id, `${label}.id`));
-    if (new Set(actual).size !== actual.length) throw new Error(`${label} 不得重复处置同一工件`);
+    if (new Set(actual).size !== actual.length) throw new Error(`${label} 不能重复记录同一原始素材的呈现或省略方式`);
     const missing = expected.filter(id => !actual.includes(id));
     const unknown = actual.filter(id => !expected.includes(id));
     if (missing.length || unknown.length) {
@@ -609,16 +609,16 @@ function validateTutorialArtifactPlan(index, plan) {
     for (const item of plan.tables) {
         const source = index.tables.find(table => table.id === item.id);
         assertDisposition(item.disposition, `table ${item.id}`);
-        if (item.disposition === 'omit') throw new Error(`table ${item.id} 不得省略：教程资产层必须完整处置可恢复表格`);
+        if (item.disposition === 'omit') throw new Error(`table ${item.id} 不得省略：教程素材方案必须完整呈现可恢复表格`);
         if (item.sourceMatrixSha256 !== source.matrixSha256) throw new Error(`table ${item.id} 源矩阵 SHA 不一致`);
         if (item.sourceMatrixBound !== true) throw new Error(`table ${item.id} 必须显式保留源矩阵 SHA 绑定`);
         const expectedDisplayRecord = buildTableDisplayRecord(source);
         if (JSON.stringify(item.displayProjection) !== JSON.stringify(expectedDisplayRecord)) {
-            throw new Error(`table ${item.id} 展示投影未保留原始单元格或试图推断符号方向`);
+            throw new Error(`table ${item.id} 显示转换记录与按原始单元格计算的记录不一致`);
         }
         const expectedMarkdown = renderMarkdownTable(source);
         if (item.renderedMarkdown !== expectedMarkdown || item.renderedSha256 !== sha256(expectedMarkdown)) {
-            throw new Error(`table ${item.id} 不是由源矩阵确定性完整渲染`);
+            throw new Error(`table ${item.id} 与按固定规则由原始矩阵完整生成的 Markdown 或其 SHA 不一致`);
         }
         const expectedIds = numericCellIds(source);
         const coverage = assertObject(item.coverage, `table ${item.id}.coverage`);
@@ -629,7 +629,7 @@ function validateTutorialArtifactPlan(index, plan) {
             || JSON.stringify(coverage.coveredNumericCellIds) !== JSON.stringify(expectedIds)
             || coverage.missingNumericCellIds.length !== 0
             || coverage.numericFidelity !== 1) {
-            throw new Error(`table ${item.id} 数值单元格必须 100% 保真覆盖`);
+            throw new Error(`table ${item.id} 数值单元格的必需和已覆盖标识必须全部匹配原表，不能缺项，numericFidelity 必须为 1`);
         }
         if (JSON.stringify(item.numericCellIds) !== JSON.stringify(expectedIds)) {
             throw new Error(`table ${item.id} numericCellIds 与源矩阵不一致`);
@@ -662,7 +662,7 @@ function validateTutorialArtifactPlan(index, plan) {
             throw new Error(`formula ${item.id} 与 ArtifactIndex 公式字节不一致`);
         }
         if (!expectedText && item.disposition !== 'omit') {
-            throw new Error(`formula ${item.id} 缺少可重放表示，必须明确省略`);
+            throw new Error(`formula ${item.id} 没有可用的公式文本，必须明确省略`);
         }
     }
 
@@ -718,12 +718,12 @@ if (require.main === module) {
         const output = `${JSON.stringify(buildTutorialArtifactPlan(index), null, 2)}\n`;
         if (outputPath) {
             writeFileAtomic(outputPath, output);
-            process.stdout.write(`✅ artifact plan: ${outputPath}\n`);
+            process.stdout.write(`✅ 教程素材方案已保存： ${outputPath}\n`);
         } else {
             process.stdout.write(output);
         }
     } catch (error) {
-        process.stderr.write(`manual tutorial artifacts failed: ${error.message}\n`);
+        process.stderr.write(`Manual 教程素材整理失败： ${error.message}\n`);
         process.exitCode = 1;
     }
 }

@@ -714,33 +714,38 @@ function buildDigestRunReport(targetDate, options = {}) {
 }
 
 function formatDigestRunSummary(report) {
-    const state = value => value ? 'complete' : 'incomplete';
-    // 摘要不要在同一个「封面」行里既说 incomplete 又说 status=complete。构建报告时
-    // 已经按门禁派生过状态，这里再兜一道：门禁不过就不打印 complete。
+    const displayStatus = value => {
+        const labels = { complete: '完成', incomplete: '未完成', waived: '已豁免', missing: '缺失', pending: '待处理', failed: '失败', partial_failed: '部分失败' };
+        return Object.prototype.hasOwnProperty.call(labels, value) ? labels[value] : `未知状态（${String(value)}）`;
+    };
+    const displayBoolean = value => value === true ? '是' : value === false ? '否' : `未知值（${String(value)}）`;
+    const state = value => value ? '完成' : '未完成';
+    // 封面没有通过完整检查时，不能因清单自称 complete 就在摘要中显示完成。
+    // 构建报告时已核验过一次；这里也检查传入状态，兼容旧报告或手工构造的报告。
     const printedCoverStatus = cover => {
         if (cover?.waived) return 'waived';
         if (cover?.complete) return 'complete';
         return cover?.status === 'complete' ? 'incomplete' : (cover?.status ?? 'missing');
     };
-    // 长图行同理：门禁不过时不能印 status=complete。构建报告时已经派生过，
-    // 这里再兜一道，免得手工拼的报告或旧 JSON 又把矛盾打出来。
+    // 长图也按实际检查结果显示状态；没有通过检查时，不能显示 complete。
+    // 旧 JSON 或手工构造的报告即使自称 complete，这里仍会显示 incomplete。
     const printedVisualStatus = visuals => {
         if (visuals?.waived) return 'waived';
         if (visuals?.gateComplete === true) return 'complete';
         return visuals?.status === 'complete' ? 'incomplete' : (visuals?.status ?? 'missing');
     };
     const lines = [
-        `[digest-status] ${report.batchDate} overall=${report.overallStatus} errors=${report.errors.length}`,
-        `  抓取 ${state(report.fetch.complete)} | candidates=${report.fetch.rawCandidateCount ?? '?'}`,
-        `  筛选 ${state(report.filter.complete)} | selected=${report.filter.selectedCount} | candidates=${report.filter.totalCandidates ?? '?'} | pending=${report.filter.pendingDecisions ?? '?'}`,
-        `  分析 ${state(report.analysis.complete)} | success=${report.analysis.successful}/${report.analysis.total} | expected=${report.analysis.expected ?? '?'} | missing=${report.analysis.missing ?? '?'} | waived=${report.analysis.waived || 0} | failed=${report.analysis.failed}`,
+        `[digest-status] ${report.batchDate} 本报告状态=${displayStatus(report.overallStatus)} 问题数=${report.errors.length}`,
+        `  抓取 ${state(report.fetch.complete)} | 候选数=${report.fetch.rawCandidateCount ?? '?'}`,
+        `  筛选 ${state(report.filter.complete)} | 入选数=${report.filter.selectedCount} | 候选数=${report.filter.totalCandidates ?? '?'} | 尚未保存决定数=${report.filter.pendingDecisions ?? '?'}`,
+        `  分析 ${state(report.analysis.complete)} | 通过分析检查数=${report.analysis.successful}/${report.analysis.total} | 预期入选数=${report.analysis.expected ?? '?'} | 缺少分析记录数=${report.analysis.missing ?? '?'} | 已豁免分析数=${report.analysis.waived || 0} | 失败数=${report.analysis.failed}`,
         ...(report.analysis.scoringStabilityUnresolvedIds?.length
-            ? [`  评分稳定性 unresolved=${report.analysis.scoringStabilityUnresolvedIds.join(',')}`]
+            ? [`  评分稳定性 尚未解决的论文=${report.analysis.scoringStabilityUnresolvedIds.join(',')}`]
             : []),
-        `  博客 ${state(report.blog.complete)} | strictReview=${report.blog.strictReview} | remoteOidVerified=${report.blog.remoteOidVerified === true} | receiptValid=${report.blog.publicationVerified}`,
-        `  长图 ${report.visuals.waived ? 'waived' : state(report.visuals.gateComplete === true)} | status=${printedVisualStatus(report.visuals)} | complete=${report.visuals.complete ?? '?'}/${report.visuals.total ?? '?'} | pending=${report.visuals.pending ?? '?'} | failed=${report.visuals.failed ?? '?'}`,
-        `  封面 ${report.cover.waived ? 'waived' : state(report.cover.complete)} | status=${printedCoverStatus(report.cover)}`,
-        '  本报告未核验网站上线：还须检查对应提交的构建和部署结果，以及全部目标网页的正式地址、HTTP 200 和标题；complete 不表示网站已上线。'
+        `  博客 ${state(report.blog.complete)} | 严格审查记录=${displayBoolean(report.blog.strictReview)} | 发布提交与已存远端提交一致=${displayBoolean(report.blog.remoteOidVerified === true)} | 发布凭证有效=${displayBoolean(report.blog.publicationVerified)}`,
+        `  长图 ${report.visuals.waived ? '已豁免' : state(report.visuals.gateComplete === true)} | 状态=${displayStatus(printedVisualStatus(report.visuals))} | 清单记录的完成数=${report.visuals.complete ?? '?'}/${report.visuals.total ?? '?'} | 待处理数=${report.visuals.pending ?? '?'} | 失败数=${report.visuals.failed ?? '?'}`,
+        `  封面 ${report.cover.waived ? '已豁免' : state(report.cover.complete)} | 状态=${displayStatus(printedCoverStatus(report.cover))}`,
+        '  本报告未核验网站上线：还须检查对应提交的构建和部署结果，以及全部目标网页的正式地址、HTTP 200 和标题；报告显示“完成”不表示网站已上线。'
     ];
     for (const error of report.errors) lines.push(`  错误: ${error}`);
     // 文件存在却读不出来时要说出来。文件不存在不会进这个数组，也不该报成错误。

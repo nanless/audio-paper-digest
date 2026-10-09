@@ -109,7 +109,7 @@ function resolveManualPaperIdentityMode(manifest) {
         return 'historical_per_entry';
     }
     if (identityMarker !== MANUAL_PAPER_SOURCE_IDENTITY_CONTRACT) {
-        throw new Error('逐论文来源身份契约标记非法');
+        throw new Error('逐篇论文来源身份的协议标记不受支持');
     }
     return 'per_paper_v1';
 }
@@ -510,7 +510,7 @@ function validateDailyFreshSourceRun(filePath, data, papers, issues) {
     let plan;
     try { plan = dailyFreshSources.readDailyFreshSourcePlan(reference); }
     catch (error) {
-        addIssue(issues, filePath, `dailyFreshSourceRun 无法重放: ${error.message}`);
+        addIssue(issues, filePath, `dailyFreshSourceRun 对应的封存来源计划未通过读取或核验: ${error.message}`);
         return;
     }
     if (data.batchDate !== plan.batchDate) {
@@ -959,7 +959,7 @@ function validatePaperListFile(filePath, options = {}) {
                     legacyTagSurface: legacyReadOnly
                 });
                 if (invalidReason) {
-                    addIssue(issues, filePath, `papers[${index}] analysis 正文契约非法: ${invalidReason}`);
+                    addIssue(issues, filePath, `papers[${index}] analysis 正文未通过结构、评分或内容检查: ${invalidReason}`);
                 }
             }
             const parsed = paper.parsed;
@@ -992,7 +992,7 @@ function validatePaperListFile(filePath, options = {}) {
                     if (!Number.isFinite(value) || value < 0 || value > maxScore) {
                         addIssue(issues, filePath, `papers[${index}] parsed.${field} 非法: ${parsed[field]}`);
                     } else if (field === 'openSourceScore' && !isOpenSourceScoreAnchor(value)) {
-                        addIssue(issues, filePath, `papers[${index}] parsed.${field} 非法，必须使用固定锚点 ${OPEN_SOURCE_SCORE_ANCHORS.join('/')}`);
+                        addIssue(issues, filePath, `papers[${index}] parsed.${field} 非法，必须使用开源状态对应的固定分值 ${OPEN_SOURCE_SCORE_ANCHORS.join('/')}`);
                     } else {
                         dimensionValues.push(normalizeScoreToOneDecimal(value));
                     }
@@ -1487,11 +1487,11 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
     for (const id of expectedIds) {
         const entry = checkpoint.arxiv?.[id];
         if (!hasCompleteFetchSourceContract(entry, id)) {
-            addIssue(issues, fetchPath, `raw-candidates.json 来源完整时 arxiv.${id} 必须满足 complete/health/count/SHA checkpoint 契约`);
+            addIssue(issues, fetchPath, `raw-candidates.json 来源完整时 arxiv.${id} 检查点必须完成，并通过来源状态、论文数量与内容 SHA 的检查`);
         }
     }
     if (!hasCompleteFetchSourceContract(checkpoint.huggingface)) {
-        addIssue(issues, fetchPath, 'raw-candidates.json 来源完整时 huggingface 必须满足 complete/health/count/SHA checkpoint 契约');
+        addIssue(issues, fetchPath, 'raw-candidates.json 来源完整时 huggingface 检查点必须完成，并通过来源状态、论文数量与内容 SHA 的检查');
     }
     return issues;
 }
@@ -1549,12 +1549,12 @@ function validateCompleteFilterCompanionContract(files, decisionsPath, fetchPath
     for (const id of expectedIds) {
         const entry = checkpoint.arxiv?.[id];
         if (!hasCompleteFetchSourceContract(entry, id)) {
-            addIssue(issues, fetchPath, `complete filtered-papers.json 要求 arxiv.${id} 满足 complete/health/count/SHA checkpoint 契约`);
+            addIssue(issues, fetchPath, `complete filtered-papers.json 要求 arxiv.${id} 检查点完成，并通过来源状态、论文数量与内容 SHA 的检查`);
         }
     }
     const hf = checkpoint.huggingface;
     if (!hasCompleteFetchSourceContract(hf)) {
-        addIssue(issues, fetchPath, 'complete filtered-papers.json 要求 huggingface 满足 complete/health/count/SHA checkpoint 契约');
+        addIssue(issues, fetchPath, 'complete filtered-papers.json 要求 huggingface 检查点完成，并通过来源状态、论文数量与内容 SHA 的检查');
     }
     return issues;
 }

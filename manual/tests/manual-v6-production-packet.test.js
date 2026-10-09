@@ -139,7 +139,7 @@ describe('Manual v6 生产包生成器', () => {
         output.recordDraft.semanticSha256 = stableSha256(draft);
         assert.throws(() => validateAuthorOutputDescriptor(output, root, {
             paperId: '2608.12345', taskName: 'author-task-12345'
-        }), /不得伪装 sealed/);
+        }), /不能带有 sealedRecordSha256/);
         fs.rmSync(root, { recursive: true, force: true });
     });
 
@@ -226,7 +226,7 @@ describe('Manual v6 生产包生成器', () => {
         index.figures[0] = {
             id: 'IMG0001', cachePath: outside, cacheSha256: sha(png), mime: 'image/png'
         };
-        assert.throws(() => materializeAuthorizedFigures(index, paper, current), /逃逸/);
+        assert.throws(() => materializeAuthorizedFigures(index, paper, current), /不在指定的 image-cache 根目录内/);
         fs.rmSync(current, { recursive: true, force: true });
     });
 });

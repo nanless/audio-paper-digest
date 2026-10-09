@@ -73,7 +73,7 @@ function readOrdinaryFile(filePath, label) {
     const declared = path.resolve(filePath);
     const stat = fs.lstatSync(declared, { throwIfNoEntry: false });
     if (!stat?.isFile() || stat.isSymbolicLink()) {
-        throw new Error(`${label} 必须是存在的普通文件且不得为 symlink`);
+        throw new Error(`${label} 必须是存在的普通文件，不能使用符号链接`);
     }
     return { path: fs.realpathSync(declared), bytes: fs.readFileSync(declared) };
 }
@@ -84,7 +84,7 @@ function assertInsideRoot(rootPath, filePath, label) {
     const relative = path.relative(root, file.path);
     if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`)
         || path.isAbsolute(relative)) {
-        throw new Error(`${label} 逃逸单篇 production artifact root`);
+        throw new Error(`${label} 解析后的文件路径不在这篇论文的生产材料目录内`);
     }
     return { ...file, relativePath: relative.replace(/\\/g, '/') };
 }
@@ -92,7 +92,7 @@ function assertInsideRoot(rootPath, filePath, label) {
 function writeExact(destination, bytes, label) {
     const existing = fs.lstatSync(destination, { throwIfNoEntry: false });
     if (existing?.isSymbolicLink() || (existing && !existing.isFile())) {
-        throw new Error(`${label} 目标类型非法或使用 symlink`);
+        throw new Error(`${label} 目标不是普通文件，或使用了符号链接`);
     }
     if (existing && fs.readFileSync(destination).equals(bytes)) return;
     writeFileAtomic(destination, bytes);
@@ -500,7 +500,7 @@ function materializeAuthorizedFigures(artifactIndex, artifactRoot, currentDir) {
         : (artifactIndex.images || []))];
     if (!rootStat) return { artifacts: [], unavailableFigureIds: figures.map(item => item.id).filter(Boolean) };
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) {
-        throw new Error('受控 image-cache 根类型非法或使用 symlink');
+        throw new Error('指定的 image-cache 根不是普通目录，或使用了符号链接');
     }
     const realCacheRoot = fs.realpathSync(cacheRoot);
     const artifacts = [];
@@ -524,11 +524,11 @@ function materializeAuthorizedFigures(artifactIndex, artifactRoot, currentDir) {
         const relative = path.relative(realCacheRoot, file.path);
         if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`)
             || path.isAbsolute(relative)) {
-            throw new Error(`ArtifactIndex ${id} image cache 逃逸受控 image-cache 根`);
+            throw new Error(`ArtifactIndex ${id} 图片缓存解析后的路径不在指定的 image-cache 根目录内`);
         }
         const actualMime = sniffImageMime(file.bytes);
         if (actualMime !== declaredMime || sha256Bytes(file.bytes) !== expectedSha) {
-            throw new Error(`ArtifactIndex ${id} image cache MIME 或 SHA 与真实字节不一致`);
+            throw new Error(`ArtifactIndex ${id} 图片缓存声明的 MIME 类型或 SHA 与实际文件字节不一致`);
         }
         const relativeOutput = `evidence/figures/${id}.${imageExtension(actualMime)}`;
         writeExact(path.join(artifactRoot, relativeOutput), file.bytes, `${id} paper figure`);
@@ -588,10 +588,10 @@ function loadProductionSourceContext(options) {
     const filtered = readJsonBytes(filteredFile.bytes, 'filtered-papers');
     if (filtered.status !== 'complete' || filtered.batchDate !== options.date
         || !Array.isArray(filtered.papers)) {
-        throw new Error('packet 只接受同日 complete filtered 批次');
+        throw new Error('任务包只接受同一日期、状态为 complete 且含 papers 数组的筛选批次');
     }
     const paper = filtered.papers.find(item => normalizedId(item) === options.paperId);
-    if (!paper) throw new Error(`${options.paperId} 不在 filtered 批次`);
+    if (!paper) throw new Error(`${options.paperId} 不在该筛选批次的论文集合内`);
     const fullRoot = path.join(currentDir, 'manual-full-text', options.date);
     const manifestFile = readOrdinaryFile(path.join(fullRoot, 'manifest.json'), 'full-text manifest');
     const manifest = readJsonBytes(manifestFile.bytes, 'full-text manifest');
@@ -602,7 +602,7 @@ function loadProductionSourceContext(options) {
     if (manifest.status !== 'complete' || manifest.failed !== 0 || manifest.date !== options.date
         || artifactManifest.status !== 'complete' || artifactManifest.failed !== 0
         || Number(artifactManifest.incomplete || 0) !== 0 || artifactManifest.date !== options.date) {
-        throw new Error('production packet 要求同日 complete 全文与 ArtifactIndex manifest');
+        throw new Error('生产任务包要求全文和 ArtifactIndex 清单均属于同一日期、已全部完成且没有失败或未完成项');
     }
     const fullContext = buildManifestContext(filtered, options.date, fullRoot);
     const input = fullContext.byId.get(options.paperId);
@@ -614,17 +614,17 @@ function loadProductionSourceContext(options) {
         || !isReusableArtifactCheckpoint(artifactEntry, {
             context: artifactContext, input, sourceEntry, sourceText
         }) || artifactEntry.status !== 'complete') {
-        throw new Error(`${options.paperId} 全文或 complete ArtifactIndex checkpoint 不可复用`);
+        throw new Error(`${options.paperId} 全文检查点或已完成的 ArtifactIndex 检查点未通过当前输入核验，不能复用`);
     }
     const artifactFile = readOrdinaryFile(artifactEntry.path, 'ArtifactIndex file');
     if (sha256Bytes(artifactFile.bytes) !== artifactEntry.outputSha256) {
-        throw new Error('ArtifactIndex manifest 未绑定当前真实文件字节');
+        throw new Error('ArtifactIndex 清单记录的 SHA 与当前文件字节不一致');
     }
     const artifactIndex = readJsonBytes(artifactFile.bytes, 'ArtifactIndex file');
     if (artifactIndex.inventoryHealth?.status !== 'complete'
         || artifactIndex.outputSha256 !== artifactIndex.artifactIndexSha256
         || artifactIndex.artifactIndexSha256 !== computeArtifactIndexSha256(artifactIndex)) {
-        throw new Error(`${options.paperId} ArtifactIndex 语义身份或 inventoryHealth 非 complete`);
+        throw new Error(`${options.paperId} ArtifactIndex 内容 SHA 核对失败，或 inventoryHealth 状态不是 complete`);
     }
     return {
         currentDir, filtered, paper, input, sourceEntry, artifactEntry, artifactFile, artifactIndex
@@ -639,7 +639,7 @@ function materializeAuthorEvidence(context, artifactRoot) {
         schemaDir, path.join(artifactRoot, 'packets')]) {
         const existing = fs.lstatSync(dir, { throwIfNoEntry: false });
         if (existing?.isSymbolicLink() || (existing && !existing.isDirectory())) {
-            throw new Error(`受控目录类型非法或使用 symlink: ${dir}`);
+            throw new Error(`指定的路径不是普通目录，或使用了符号链接: ${dir}`);
         }
         fs.mkdirSync(dir, { recursive: true });
     }
@@ -667,7 +667,7 @@ function materializeAuthorEvidence(context, artifactRoot) {
     if (context.artifactIndex.inputIdentity?.structuredArtifactsSha256) {
         const structuredFile = readOrdinaryFile(structured?.path, 'structured source snapshot');
         if (sha256Bytes(structuredFile.bytes) !== structured.outputSha256) {
-            throw new Error('structured source snapshot 字节 SHA 不匹配');
+            throw new Error('结构化来源快照的文件字节与记录的 SHA 不匹配');
         }
         sources.splice(3, 0, [
             'evidence/structured-source.json', structuredFile.bytes, 'structured_fulltext'
@@ -692,7 +692,7 @@ function validateAuthorOutputDescriptor(output, artifactRoot, expected = {}) {
         || output.role !== 'author' || normalizedId(output.paperId) !== expected.paperId
         || output.passed !== true || output.taskName !== expected.taskName
         || !SHA_RE.test(String(output.articleSha256 || ''))) {
-        throw new Error('author output 必须是当前 runner task 的 manual-v6-author-output-v2');
+        throw new Error('作者输出的版本、格式、角色、论文、任务、通过状态或正文 SHA 不符合当前任务的 manual-v6-author-output-v2 要求');
     }
     const refs = [
         ['article', output.article, 'draft/author-article.md'],
@@ -701,19 +701,19 @@ function validateAuthorOutputDescriptor(output, artifactRoot, expected = {}) {
     const result = {};
     for (const [key, ref, fixedPath] of refs) {
         if (!ref || ref.path !== fixedPath || !SHA_RE.test(String(ref.fileSha256 || ''))) {
-            throw new Error(`author output.${key} 必须绑定受控固定路径与文件 SHA`);
+            throw new Error(`author output.${key} 必须声明指定的固定文件路径和合法的文件 SHA`);
         }
         const file = assertInsideRoot(artifactRoot, path.join(artifactRoot, fixedPath), `author output.${key}`);
         if (sha256Bytes(file.bytes) !== ref.fileSha256) throw new Error(`author output.${key} 文件 SHA 不匹配`);
         result[key] = file;
     }
     if (normalizedArticleSha256(result.article.bytes) !== output.articleSha256) {
-        throw new Error('author output.articleSha256 未绑定真实 NFKC/trim 正文');
+        throw new Error('author output.articleSha256 与按 NFKC、统一换行并去除首尾空白处理后的实际正文不一致');
     }
     const draft = readJsonBytes(result.recordDraft.bytes, 'author record draft');
     if (normalizedId(draft.paperId || draft.arxivId) !== expected.paperId
         || draft.sealedRecordSha256 || draft.reviewReceipts || draft.reviewResolution) {
-        throw new Error('author record draft 必须属于当前论文且不得伪装 sealed/review closure');
+        throw new Error('作者记录草稿必须属于当前论文，不能带有 sealedRecordSha256、reviewReceipts 或 reviewResolution 所声明的封存或审查记录');
     }
     if (refSemanticSha(output.recordDraft) !== stableSha256(draft)) {
         throw new Error('author output.recordDraft.semanticSha256 与真实 JSON 不一致');
@@ -737,18 +737,18 @@ function validateAuthorOutputDescriptor(output, artifactRoot, expected = {}) {
 
 function refSemanticSha(ref) {
     const value = String(ref?.semanticSha256 || '');
-    if (!SHA_RE.test(value)) throw new Error('JSON descriptor 缺少 semanticSha256');
+    if (!SHA_RE.test(value)) throw new Error('JSON 文件说明缺少合法的 semanticSha256');
     return value;
 }
 
 function buildReviewPacket(role, paperId, sourceIdentity, artifactRoot, state) {
     const authorTask = state.papers[paperId].tasks.author;
-    if (authorTask.status !== 'validated') throw new Error(`${role} packet 只能绑定 runner validated author`);
+    if (authorTask.status !== 'validated') throw new Error(`${role} 任务包只接受运行器已核验通过的作者任务`);
     const outputFile = assertInsideRoot(artifactRoot, authorTask.outputPath, 'validated author output');
     const receiptFile = assertInsideRoot(artifactRoot, authorTask.receiptPath, 'validated author receipt');
     if (sha256Bytes(outputFile.bytes) !== authorTask.outputFileSha256
         || sha256Bytes(receiptFile.bytes) !== authorTask.receiptFileSha256) {
-        throw new Error('runner validated author output/receipt 已漂移');
+        throw new Error('作者输出文件或凭证文件的字节 SHA 与运行器已核验的记录不一致');
     }
     const output = readJsonBytes(outputFile.bytes, 'validated author output');
     const authorArtifacts = validateAuthorOutputDescriptor(output, artifactRoot, {
@@ -779,7 +779,7 @@ function buildRevisionPacket(paperId, sourceIdentity, artifactRoot, state) {
     const tasks = state.papers[paperId].tasks;
     for (const role of ['author', 'technical_scoring', 'pedagogy_readability']) {
         if (tasks[role].status !== 'validated') {
-            throw new Error('author_revision packet 只接受 runner validated author 与两份 review');
+            throw new Error('作者修订任务包只接受运行器已核验通过的作者任务和两项审查任务');
         }
     }
     const authorPacketFile = assertInsideRoot(artifactRoot, tasks.author.packetPath, 'author packet');
@@ -790,7 +790,7 @@ function buildRevisionPacket(paperId, sourceIdentity, artifactRoot, state) {
     ].map(([kind, task, expectedPath]) => {
         const output = assertInsideRoot(artifactRoot, task.outputPath, kind);
         if (output.relativePath !== expectedPath || sha256Bytes(output.bytes) !== task.outputFileSha256) {
-            throw new Error(`${kind} 不是 runner validated 固定输出`);
+            throw new Error(`${kind} 不是运行器已核验的固定路径输出，或文件 SHA 不一致`);
         }
         return { path: output.relativePath, sha256: task.outputFileSha256, kind };
     });
@@ -818,15 +818,15 @@ function materializePacket(options = {}) {
     const paperId = normalizedId(options.paperId);
     const role = options.role;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) || !paperId || !ROLES.includes(role)) {
-        throw new Error('materializePacket 需要合法 date/paperId/role');
+        throw new Error('生成任务包需要合法的 date、paperId 和 role');
     }
     const currentDir = path.resolve(options.currentDir || Config.CURRENT_DIR);
     const { paths, state } = loadRunnerState(currentDir, date);
-    if (!state.papers[paperId]) throw new Error(`${paperId} 不在 production runner 批次`);
+    if (!state.papers[paperId]) throw new Error(`${paperId} 不在生产运行器批次的论文集合内`);
     const artifactRoot = path.join(paths.taskRoot, paperId);
     const rootStat = fs.lstatSync(artifactRoot, { throwIfNoEntry: false });
     if (!rootStat?.isDirectory() || rootStat.isSymbolicLink()) {
-        throw new Error('单篇 production artifact root 缺失或使用 symlink；先运行 runner init');
+        throw new Error('这篇论文的生产材料根目录缺失、不是目录或使用了符号链接；请先运行运行器初始化命令');
     }
     const context = loadProductionSourceContext({ currentDir, date, paperId });
     const sourceIdentity = {
@@ -885,7 +885,7 @@ function run(argv = process.argv.slice(2), overrides = {}) {
 
 if (require.main === module) {
     try { run(); } catch (error) {
-        console.error(`Manual v6 production packet 失败: ${error.message}`);
+        console.error(`Manual v6 生产任务包生成失败: ${error.message}`);
         process.exitCode = 1;
     }
 }

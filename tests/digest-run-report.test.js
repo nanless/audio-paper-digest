@@ -173,7 +173,7 @@ describe('日更运行报告', () => {
                 assert.strictEqual(report.filter.complete, false);
                 assert.strictEqual(report.filter.pendingDecisions, 8);
                 assert.strictEqual(report.filter.retryableDecisions, 0);
-                assert.match(formatDigestRunSummary(report), /pending=8/);
+                assert.match(formatDigestRunSummary(report), /尚未保存决定数=8/);
             });
         } finally {
             fs.rmSync(dir, { recursive: true, force: true });
@@ -717,8 +717,8 @@ describe('日更运行报告', () => {
             visuals: { gateComplete: false, complete: 8, total: 10, pending: 2, failed: 0 },
             cover: { complete: true, status: 'complete' }
         });
-        assert.match(summary, /candidates=42/);
-        assert.match(summary, /complete=8\/10/);
+        assert.match(summary, /候选数=42/);
+        assert.match(summary, /清单记录的完成数=8\/10/);
         assert.match(summary, /错误: 长图未完成/);
         assert.doesNotMatch(summary, /sourceHealth|huge/);
     });
@@ -747,9 +747,9 @@ describe('日更运行报告', () => {
         // 图片未通过校验就不能显示 status=complete。修复前这里显示的是
         // `长图 incomplete | status=complete | complete=10/10 | pending=0 | failed=0`，
         // 同一行自相矛盾。
-        assert.match(summary, /长图 incomplete \| status=incomplete \| complete=10\/10/);
-        assert.doesNotMatch(summary, /长图 incomplete \| status=complete/);
-        assert.doesNotMatch(summary, /长图 complete \|/);
+        assert.match(summary, /长图 未完成 \| 状态=未完成 \| 清单记录的完成数=10\/10/);
+        assert.doesNotMatch(summary, /长图 未完成 \| 状态=完成/);
+        assert.doesNotMatch(summary, /长图 完成 \|/);
     });
 
     it('长图清单不存在时显示问号和缺失状态，不能把未知数量写成 0', () => {
@@ -775,13 +775,13 @@ describe('日更运行报告', () => {
         });
         // 关键：不能出现 complete=0/0 | pending=0 | failed=0 —— 那看着像已经全做完。
         const visualLine = summary.split('\n').find(line => line.includes('长图'));
-        assert.match(visualLine, /长图 incomplete \| status=missing \| complete=\?\/\? \| pending=\? \| failed=\?/);
-        assert.doesNotMatch(visualLine, /complete=0\/0/);
-        assert.doesNotMatch(visualLine, /pending=0/);
-        assert.doesNotMatch(visualLine, /failed=0/);
+        assert.match(visualLine, /长图 未完成 \| 状态=缺失 \| 清单记录的完成数=\?\/\? \| 待处理数=\? \| 失败数=\?/);
+        assert.doesNotMatch(visualLine, /清单记录的完成数=0\/0/);
+        assert.doesNotMatch(visualLine, /待处理数=0/);
+        assert.doesNotMatch(visualLine, /失败数=0/);
     });
 
-    it('封面未通过完成条件检查时，摘要不能显示 status=complete', () => {
+    it('封面未通过检查时，摘要不能沿用清单中的完成状态', () => {
         const summary = formatDigestRunSummary({
             batchDate: '2026-07-29',
             overallStatus: 'incomplete',
@@ -796,8 +796,8 @@ describe('日更运行报告', () => {
             },
             cover: { complete: false, status: 'complete' }
         });
-        assert.match(summary, /封面 incomplete \| status=incomplete/);
-        assert.doesNotMatch(summary, /封面 incomplete \| status=complete/);
+        assert.match(summary, /封面 未完成 \| 状态=未完成/);
+        assert.doesNotMatch(summary, /封面 未完成 \| 状态=完成/);
     });
 
     it('没有长图清单时，生成的报告将数量记为 null，而不是 0', () => {
@@ -815,7 +815,7 @@ describe('日更运行报告', () => {
                 assert.strictEqual(report.visuals.status, 'missing');
                 const visualLine = formatDigestRunSummary(report).split('\n')
                     .find(line => line.includes('长图'));
-                assert.match(visualLine, /complete=\?\/\? \| pending=\? \| failed=\?/);
+                assert.match(visualLine, /清单记录的完成数=\?\/\? \| 待处理数=\? \| 失败数=\?/);
             });
         } finally {
             fs.rmSync(dir, { recursive: true, force: true });
@@ -851,7 +851,7 @@ describe('日更运行报告', () => {
                 assert.strictEqual(report.visuals.assetsValid, false);
                 assert.strictEqual(report.visuals.gateComplete, false);
                 // 能返回摘要，就说明没有因异常中止。
-                assert.match(formatDigestRunSummary(report), /长图 incomplete/);
+                assert.match(formatDigestRunSummary(report), /长图 未完成/);
             });
         } finally {
             fs.rmSync(dir, { recursive: true, force: true });
@@ -941,7 +941,7 @@ describe('日更运行报告', () => {
             cover: { complete: true, status: 'complete' }
         };
         const summary = formatDigestRunSummary(base);
-        assert.match(summary, /remoteOidVerified=true \| receiptValid=false/);
+        assert.match(summary, /发布提交与已存远端提交一致=是 \| 发布凭证有效=否/);
         // 不能再只打一个 remoteVerified，那会让人以为推送没到远端。
         assert.doesNotMatch(summary, /remoteVerified=/);
     });
@@ -961,7 +961,7 @@ describe('日更运行报告', () => {
             },
             cover: { complete: false, status: 'pending' }
         });
-        assert.match(summary, /success=0\/0 \| expected=46 \| missing=46/);
+        assert.match(summary, /通过分析检查数=0\/0 \| 预期入选数=46 \| 缺少分析记录数=46/);
     });
 
     it('分析缺口的两个数读不到时报 ?，不显示成 0', () => {
@@ -980,9 +980,9 @@ describe('日更运行报告', () => {
             cover: { complete: false, status: 'missing' }
         });
         const analysisLine = summary.split('\n').find(line => line.includes('分析 '));
-        assert.match(analysisLine, /expected=\? \| missing=\?/);
-        assert.doesNotMatch(analysisLine, /expected=0/);
-        assert.doesNotMatch(analysisLine, /missing=0/);
+        assert.match(analysisLine, /预期入选数=\? \| 缺少分析记录数=\?/);
+        assert.doesNotMatch(analysisLine, /预期入选数=0/);
+        assert.doesNotMatch(analysisLine, /缺少分析记录数=0/);
     });
 
     it('日更状态检查与 visual:status 都要求长图位于规定的正式归档路径', () => {
@@ -1097,8 +1097,8 @@ describe('日更运行报告', () => {
                 assert.strictEqual(report.visuals.status, 'incomplete');
                 const line = formatDigestRunSummary(report).split('\n')
                     .find(item => item.includes('长图'));
-                assert.match(line, /长图 incomplete \| status=incomplete/);
-                assert.doesNotMatch(line, /status=complete/);
+                assert.match(line, /长图 未完成 \| 状态=未完成/);
+                assert.doesNotMatch(line, /状态=完成/);
 
                 // 清单自己说 pending 时照说 pending，不要一律压成 incomplete。
                 manifest.overallStatus = 'pending';
@@ -1122,8 +1122,8 @@ describe('日更运行报告', () => {
                 // 快照不在：读不到就报 null，不能报 0。
                 const missing = buildDigestRunReport(date, { today: date });
                 assert.strictEqual(missing.fetch.rawCandidateCount, null);
-                assert.match(formatDigestRunSummary(missing), /抓取 incomplete \| candidates=\?/);
-                assert.doesNotMatch(formatDigestRunSummary(missing), /candidates=0/);
+                assert.match(formatDigestRunSummary(missing), /抓取 未完成 \| 候选数=\?/);
+                assert.doesNotMatch(formatDigestRunSummary(missing), /候选数=0/);
 
                 // 快照在、候选确实为空：这时 0 是真值，要照打 0。
                 fs.writeFileSync(Config.FILES.rawCandidates, JSON.stringify({
@@ -1133,7 +1133,7 @@ describe('日更运行报告', () => {
                 }));
                 const empty = buildDigestRunReport(date, { today: date });
                 assert.strictEqual(empty.fetch.rawCandidateCount, 0);
-                assert.match(formatDigestRunSummary(empty), /candidates=0/);
+                assert.match(formatDigestRunSummary(empty), /候选数=0/);
             });
         } finally {
             fs.rmSync(dir, { recursive: true, force: true });
@@ -1186,11 +1186,30 @@ describe('状态报告的上线核验范围', () => {
             visuals: { gateComplete: true, status: 'complete', complete: 1, total: 1, pending: 0, failed: 0 },
             cover: { complete: true, status: 'complete' }
         });
-        assert.match(summary, /overall=complete/);
-        assert.match(summary, /remoteOidVerified=true/);
+        assert.match(summary, /本报告状态=完成/);
+        assert.match(summary, /发布提交与已存远端提交一致=是/);
         assert.match(summary, /本报告未核验网站上线/);
         assert.match(summary, /对应提交的构建和部署结果/);
         assert.match(summary, /全部目标网页的正式地址、HTTP 200 和标题/);
-        assert.match(summary, /complete 不表示网站已上线/);
+        assert.match(summary, /报告显示“完成”不表示网站已上线/);
+        for (const unknown of ['future-status', '__proto__', 'toString']) {
+            const report = {
+                batchDate: '2026-10-10', overallStatus: unknown, errors: [],
+                fetch: { complete: false, rawCandidateCount: null },
+                filter: { complete: false, selectedCount: 0, totalCandidates: null, pendingDecisions: null },
+                analysis: { complete: false, successful: 0, total: 0, expected: null, missing: null, failed: 0 },
+                blog: { complete: false, strictReview: undefined, publicationVerified: null, remoteOidVerified: false },
+                visuals: { gateComplete: false, status: unknown, complete: null, total: null, pending: null, failed: null },
+                cover: { complete: false, status: unknown }
+            };
+            const before = JSON.stringify(report);
+            const unknownSummary = formatDigestRunSummary(report);
+            assert.ok(unknownSummary.includes(`本报告状态=未知状态（${unknown}）`));
+            assert.ok(unknownSummary.includes(`状态=未知状态（${unknown}）`));
+            assert.match(unknownSummary, /严格审查记录=未知值（undefined）/);
+            assert.match(unknownSummary, /发布凭证有效=未知值（null）/);
+            assert.match(unknownSummary, /发布提交与已存远端提交一致=否/);
+            assert.strictEqual(JSON.stringify(report), before);
+        }
     });
 });

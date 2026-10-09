@@ -278,7 +278,7 @@ describe('v5 教程材料重放原表行身份', () => {
             assert.throws(() => validateTutorialPayloadReceipt({
                 contract: MANUAL_V5_TUTORIAL_PAYLOAD_CONTRACT,
                 ...paths
-            }, options), /展示投影未保留原始单元格/);
+            }, options), /显示转换记录与按原始单元格计算的记录不一致/);
         } finally {
             fs.rmSync(directory, { recursive: true, force: true });
         }

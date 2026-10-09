@@ -45,6 +45,33 @@ test('源码遍历在任意深度都排除 runtime/vendor 目录和符号链接'
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+test('普通、CommonJS 和 ESM 文件都纳入语法检查；模块语法错误会使检查失败', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-module-syntax-'));
+    try {
+        fs.mkdirSync(path.join(root, 'scripts'));
+        fs.writeFileSync(path.join(root, 'scripts/plain.js'), 'const value = 1;');
+        fs.writeFileSync(path.join(root, 'scripts/common.cjs'), 'module.exports = ;');
+        fs.writeFileSync(path.join(root, 'scripts/module.mjs'), 'export const = 1;');
+        const files = collectSourceFiles(root);
+        assert.deepEqual(files.javascript, ['scripts/common.cjs', 'scripts/module.mjs', 'scripts/plain.js']);
+        const steps = buildVerificationPlan(parseOptions(['--quick']), files)
+            .filter(step => step.group === 'JavaScript 语法检查');
+        assert.equal(steps.length, 3);
+        for (const suffix of ['.cjs', '.mjs']) {
+            const step = steps.find(item => item.args[1].endsWith(suffix));
+            assert.ok(step);
+            assert.throws(() => executeCommand(step, { root, capture: true }), /JavaScript 语法检查 失败[\s\S]*SyntaxError/);
+        }
+        const marker = path.join(root, 'must-not-be-created');
+        fs.writeFileSync(path.join(root, 'scripts/common.cjs'),
+            `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'unexpected'); module.exports = 1;`);
+        fs.writeFileSync(path.join(root, 'scripts/module.mjs'),
+            `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(marker)}, 'unexpected'); export const value = 1;`);
+        for (const step of steps) executeCommand(step, { root, capture: true });
+        assert.equal(fs.existsSync(marker), false);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('子进程报错、收到信号或非零退出都不能被报成通过', () => {
     const step = { group: 'fixture', command: 'test-tool', args: ['argument with spaces'] };
     for (const result of [{ status: 1 }, { status: null, signal: 'SIGTERM' }, { error: new Error('ENOENT') }]) {

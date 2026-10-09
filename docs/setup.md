@@ -120,9 +120,9 @@ npm test
 npm run validate:data -- --allow-empty
 ```
 
-`--allow-empty` 仅供明确没有运行数据的干净 checkout 使用。已有数据的工作区应运行 `npm run validate:data`，检查实际数据。测试和诊断同样须在沙箱外执行。
+`--allow-empty` 仅供明确没有运行数据、也没有本地改动的仓库使用。已有数据的工作区应运行 `npm run validate:data`，检查实际数据。测试和诊断同样须在沙箱外执行。
 
-需要验证模型路由时，可单独运行 `node scripts/test-api-key.js`；它会发送真实 API 请求，不属于上述离线检查。不要把完整日更当作安装探针。
+需要验证模型路由时，可单独运行 `node scripts/test-api-key.js`；它会发送真实 API 请求，不属于上述离线检查。不要用完整日更来检查安装是否正确。
 
 ## 安全边界
 

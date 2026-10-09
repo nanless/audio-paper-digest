@@ -564,14 +564,14 @@ function signedReaderVisualSource(paper) {
         || headings.length !== plan.sections.length
         || new Set(plan.sections.map(section => section.heading)).size !== headings.length
         || typeof plan.oneSentenceThesis !== 'string' || !plan.oneSentenceThesis.trim()) {
-        throw new Error('已签 Reader 章节不能精确回放到视觉来源');
+        throw new Error('已核验的 Reader 正文标题、章节数或核心论点不符合配图文案的读取要求');
     }
     const sections = plan.sections.map((section, index) => {
-        if (headings[index][1] !== section.heading) throw new Error('Reader 视觉章节标题/次序漂移');
+        if (headings[index][1] !== section.heading) throw new Error('Reader 配图所用正文的章节标题或顺序与已保存计划不一致');
         const start = headings[index].index + headings[index][0].length;
         const end = index + 1 < headings.length ? headings[index + 1].index - 2 : article.length;
         const body = article.slice(start, end);
-        if (!body.trim() || body !== body.trim()) throw new Error('Reader 视觉章节正文边界漂移');
+        if (!body.trim() || body !== body.trim()) throw new Error('Reader 配图所用章节正文为空，或首尾含多余空白');
         return { sectionIndex: index, kind: section.kind, heading: section.heading, body };
     });
     const stage = paper.analysisManifest.stages.apiReaderArticle;
@@ -619,7 +619,7 @@ function readSignedReaderVisualReference(reference, paperId) {
         if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_ASSET_BYTES
             || stat.size !== reference.bytes) throw new Error('Reader 视觉缓存文件/大小非法');
         const raw = fs.readFileSync(fd);
-        if (sha256Buffer(raw) !== reference.sha256) throw new Error('Reader 视觉缓存 SHA 漂移');
+        if (sha256Buffer(raw) !== reference.sha256) throw new Error('Reader 配图缓存文件的字节 SHA 与已保存记录不一致');
         validatePngBuffer(raw, { requirePortrait: false });
         return raw;
     } finally { fs.closeSync(fd); }
@@ -658,7 +658,7 @@ function selectVisualReferenceImages(paper, limit = MAX_REFERENCE_IMAGES) {
         }
         const references = paper.apiReaderFigures.map((figure, sourceOrder) => {
             const expectedFilename = `figure-${figure.ordinal}-${String(figure.assetSha256).slice(0, 16)}.png`;
-            if (figure.assetFilename !== expectedFilename) throw new Error('Reader 视觉原图文件名漂移');
+            if (figure.assetFilename !== expectedFilename) throw new Error('Reader 配图原图文件名与图号及文件 SHA 对应的名称不一致');
             const role = ['method_overview', 'component', 'training'].includes(figure.targetKind)
                 ? { role: 'method_reference', priority: 0 }
                 : ['result', 'ablation', 'experiment_setup'].includes(figure.targetKind)
@@ -897,7 +897,7 @@ function assertPreparedReferenceInputs(paper, targetDate) {
         if (expectedReference.sourceContract === READER_VISUAL_SOURCE_CONTRACT
             && ['sourceContract', 'ordinal', 'url', 'sourceDomSha256'].some(
                 key => reference[key] !== expectedReference[key])) {
-            throw new Error('Reader 视觉 prepared 原图来源身份漂移');
+            throw new Error('Reader 已准备原图的来源协议、图号、URL 或 DOM SHA 与预期记录不一致');
         }
         const extension = REFERENCE_MIME_EXTENSIONS[String(expectedReference.mime || '').toLowerCase()];
         if (!extension) {
@@ -1603,7 +1603,7 @@ function assertVisualManifestCurrent(manifest, publication, targetDate, promptPa
     const papers = bindPublishedPapersToDate(publication, targetDate);
     const limit = Number(manifest.selection?.limit);
     if (!Number.isInteger(limit) || limit !== DEFAULT_SELECTION_LIMIT) {
-        throw new Error('视觉摘要 TOP 10 选择契约已失效，请重新执行发布后规划');
+        throw new Error('视觉摘要清单中的论文选择上限不是规定的 TOP 10，请重新执行发布后规划');
     }
     const selected = selectTopRankedPapers(papers, targetDate, limit);
     const currentPromptSha = resolvedPromptSha256(
@@ -1674,7 +1674,7 @@ function buildPaperPlan(paper, existing, targetDate, currentPromptSha, publicati
     const id = normalizedId(paper);
     if (!id) throw new Error('视觉摘要论文缺少可规范化的 arXiv ID');
     if (!isSuccessfulAnalysisRecord(paper)) {
-        throw new Error(`${id} 深度分析未通过完整契约，禁止生成视觉摘要`);
+        throw new Error(`${id} 深度分析结果未通过完整检查，禁止生成视觉摘要`);
     }
     if (paper.latestAnalysisAttemptError) {
         throw new Error(`${id} 最新一次分析失败，禁止用陈旧正文生成视觉摘要`);
@@ -1785,7 +1785,7 @@ function planVisualSummaries({
                 title: paper.title || '',
                 reason: paper.latestAnalysisAttemptError
                     ? `最新一次分析失败: ${paper.latestAnalysisAttemptError}`
-                    : '深度分析未通过完整契约'
+                    : '深度分析结果未通过完整检查'
             }));
         for (const [index, paper] of selected.entries()) {
             const id = normalizedId(paper);
