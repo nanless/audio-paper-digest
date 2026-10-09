@@ -254,3 +254,160 @@ test('博客目录不干净、运行目录逃逸、备份是符号链接或清�
     assert.throws(() => prepareBaseline({ ...f, runDir: runThree }), /Unsafe directory/);
     assert.deepEqual(fs.readdirSync(outside), []);
 });
+
+function crashFreshWrite(f, target, operation) {
+    const options = Object.fromEntries(['runDir', 'rootDir', 'date', 'paperIds', 'blogRepo',
+        'canonicalPath', 'currentDir', 'paperLockRoot'].map(key => [key, f[key]]));
+    const child = `
+        const fs = require('node:fs');
+        const api = require(${JSON.stringify(require.resolve('../scripts/lib/fresh-rewrite-publication.js'))});
+        const original = fs.linkSync;
+        fs.linkSync = function(source, destination) {
+            original.call(this, source, destination);
+            if (destination === ${JSON.stringify(target)}) process.kill(process.pid, 'SIGKILL');
+        };
+        const options = ${JSON.stringify(options)};
+        if (${JSON.stringify(operation)} === 'prepare') api.prepareBaseline(options);
+        else api.promoteRun({ ...options, run: ${JSON.stringify(f.run)}, analysis: ${JSON.stringify(f.analysis)},
+            validatePaper: paper => paper.complete === true,
+            readSource: (_directory, paper) => ({ text: 'source ' + paper.arxivId,
+                freshSourceDescriptor: { ...paper.freshRewriteProvenance, paperId: paper.arxivId } }) });
+    `;
+    const result = require('node:child_process').spawnSync(process.execPath, ['-e', child], {
+        encoding: 'utf8', timeout: 30000,
+    });
+    assert.equal(result.signal, 'SIGKILL', result.stderr);
+    assert.equal(fs.statSync(target).nlink, 2);
+    // 原锁协议仍等待租约；只在测试中推进已退出子进程的 owner 时间，不改变生产回收策略。
+    for (const root of [f.runDir, f.currentDir, f.paperLockRoot]) {
+        if (!fs.existsSync(root)) continue;
+        for (const item of fs.readdirSync(root)) {
+            const owner = path.join(root, item, 'owner.json');
+            if (item.endsWith('.lock') && fs.existsSync(owner)) {
+                assert.equal(JSON.parse(fs.readFileSync(owner)).pid, result.pid);
+                fs.utimesSync(owner, new Date(0), new Date(0));
+            }
+        }
+    }
+}
+
+for (const stage of ['backup', 'baseline', 'payload', 'intent']) {
+    test(`fresh ${stage} 链接后真实崩溃，只在重核原输入后恢复已退出写者`, t => {
+        const f = fixture(t);
+        let target;
+        const preparing = stage === 'backup' || stage === 'baseline';
+        if (preparing) {
+            fs.rmSync(f.runDir, { recursive: true });
+            fs.mkdirSync(f.runDir);
+            target = stage === 'backup'
+                ? path.join(f.runDir, 'baseline-files/data/deep-analysis-result.json')
+                : path.join(f.runDir, 'baseline.json');
+        } else {
+            target = path.join(f.runDir, stage === 'payload' ? 'promoted-canonical.json' : 'promotion.json');
+        }
+        crashFreshWrite(f, target, preparing ? 'prepare' : 'promote');
+        const bytes = fs.readFileSync(target);
+        const inode = fs.statSync(target).ino;
+        if (preparing) prepareBaseline(f);
+        else assert.equal(f.promote().status, 'promoted');
+        assert.deepEqual(fs.readFileSync(target), bytes);
+        assert.equal(fs.statSync(target).ino, inode);
+        assert.equal(fs.statSync(target).nlink, 1);
+    });
+}
+
+test('fresh 基线恢复先核全部原文件，变动时保留已知残留链接', t => {
+    const f = fixture(t);
+    fs.rmSync(f.runDir, { recursive: true });
+    fs.mkdirSync(f.runDir);
+    const target = path.join(f.runDir, 'baseline.json');
+    crashFreshWrite(f, target, 'prepare');
+    const original = fs.readFileSync(path.join(f.currentDir, 'papers.json'));
+    fs.writeFileSync(path.join(f.currentDir, 'papers.json'), '{}');
+    const before = fs.readFileSync(target);
+    assert.throws(() => prepareBaseline(f), /原输入已变化/);
+    assert.equal(fs.statSync(target).nlink, 2);
+    assert.deepEqual(fs.readFileSync(target), before);
+    fs.writeFileSync(path.join(f.currentDir, 'papers.json'), original);
+    prepareBaseline(f);
+    assert.equal(fs.statSync(target).nlink, 1);
+});
+
+test('fresh 提升恢复在核验来源和批次输入前不清理既有意图', t => {
+    const f = fixture(t);
+    const target = path.join(f.runDir, 'promotion.json');
+    crashFreshWrite(f, target, 'promote');
+    const original = f.analysis.papers[0].sourceSha256;
+    f.analysis.papers[0].sourceSha256 = '0'.repeat(64);
+    assert.throws(() => f.promote(), /来源凭证/);
+    assert.equal(fs.statSync(target).nlink, 2);
+    f.analysis.papers[0].sourceSha256 = original;
+    const filtered = path.join(f.currentDir, 'filtered-papers.json');
+    const before = fs.readFileSync(filtered);
+    fs.writeFileSync(filtered, '{}');
+    assert.throws(() => f.promote(), /Batch input baseline/);
+    assert.equal(fs.statSync(target).nlink, 2);
+    fs.writeFileSync(filtered, before);
+    f.promote();
+    assert.equal(fs.statSync(target).nlink, 1);
+});
+
+test('fresh 备份短写不留下正式半文件，同一请求可以重试', t => {
+    const f = fixture(t);
+    fs.rmSync(f.runDir, { recursive: true });
+    fs.mkdirSync(f.runDir);
+    const target = path.join(f.runDir, 'baseline-files/data/deep-analysis-result.json');
+    const originalOpen = fs.openSync;
+    const originalWrite = fs.writeFileSync;
+    const failure = Object.assign(new Error('模拟备份短写'), { code: 'EIO' });
+    let fd;
+    fs.openSync = function(filename, ...args) {
+        const opened = originalOpen.call(this, filename, ...args);
+        if (String(filename) === target || String(filename).startsWith(path.join(path.dirname(target), '.deep-analysis-result.json.'))) fd = opened;
+        return opened;
+    };
+    fs.writeFileSync = function(destination, bytes, ...args) {
+        if (fd !== undefined && destination === fd) {
+            fs.writeSync(destination, Buffer.from(bytes).subarray(0, 7));
+            throw failure;
+        }
+        return originalWrite.call(this, destination, bytes, ...args);
+    };
+    try { assert.throws(() => prepareBaseline(f), error => error === failure); }
+    finally { fs.openSync = originalOpen; fs.writeFileSync = originalWrite; }
+    assert.equal(fs.existsSync(target), false);
+    assert.deepEqual(fs.readdirSync(path.dirname(target)).filter(name => name.endsWith('.tmp')), []);
+    prepareBaseline(f);
+    assert.deepEqual(fs.readFileSync(target), fs.readFileSync(f.canonicalPath));
+});
+
+test('fresh 基线拒绝旧未知双链接和半截清单，不清理原文件', t => {
+    const f = fixture(t);
+    const target = path.join(f.runDir, 'baseline.json');
+    const bytes = fs.readFileSync(target);
+    const unknown = path.join(f.runDir, '.baseline.json.unknown.tmp');
+    fs.linkSync(target, unknown);
+    assert.throws(() => prepareBaseline(f));
+    assert.deepEqual(fs.readFileSync(target), bytes);
+    assert.equal(fs.statSync(target).nlink, 2);
+    fs.unlinkSync(unknown);
+    fs.writeFileSync(target, '{"contract":');
+    assert.throws(() => prepareBaseline(f));
+    assert.equal(fs.readFileSync(target, 'utf8'), '{"contract":');
+});
+
+
+test('fresh 基线不抢占仍存活写者的已知临时链接', t => {
+    const f = fixture(t);
+    const target = path.join(f.runDir, 'baseline.json');
+    const host = sha(os.hostname()).slice(0, 16);
+    const temporary = path.join(f.runDir, `.baseline.json.${host}.${process.pid}.${crypto.randomUUID()}.tmp`);
+    fs.linkSync(target, temporary);
+    const bytes = fs.readFileSync(target);
+    const inode = fs.statSync(target).ino;
+    assert.throws(() => prepareBaseline(f));
+    assert.deepEqual(fs.readFileSync(target), bytes);
+    assert.equal(fs.statSync(target).ino, inode);
+    assert.equal(fs.statSync(target).nlink, 2);
+    assert.equal(fs.statSync(temporary).ino, inode);
+});

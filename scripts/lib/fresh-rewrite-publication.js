@@ -8,6 +8,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
 const Config = require('../config.js');
+const { writeImmutableFile } = require('./immutable-file.js');
 const { withFileLockSync, isSuccessfulAnalysisRecord, getPaperAnalysisLockPath } = require('../analysis-engine.js');
 const { normalizedId, getBeijingISOString } = require('../utils.js');
 
@@ -57,31 +58,36 @@ function under(root, relative) {
     return target;
 }
 
-function readBytes(filename) {
+function readBytes(filename, { allowPendingLink = false } = {}) {
     safeDirectory(path.dirname(filename));
-    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
         const stat = fs.fstatSync(fd);
-        if (!stat.isFile() || stat.nlink !== 1 || stat.size > 256 * 1024 * 1024) throw new Error('Unsafe or oversized backup input');
-        return fs.readFileSync(fd);
+        if (!stat.isFile() || (stat.nlink !== 1 && !(allowPendingLink && stat.nlink === 2))
+            || stat.size > 256 * 1024 * 1024) throw new Error('Unsafe or oversized backup input');
+        const raw = fs.readFileSync(fd);
+        const after = fs.fstatSync(fd);
+        const named = fs.lstatSync(filename);
+        if (raw.length !== stat.size || [after, named].some(item =>
+            !item.isFile() || item.dev !== stat.dev || item.ino !== stat.ino || item.nlink !== stat.nlink
+            || item.size !== stat.size || item.mtimeMs !== stat.mtimeMs || item.ctimeMs !== stat.ctimeMs)) {
+            throw new Error(`读取期间基线文件发生变化：${filename}`);
+        }
+        return raw;
     } finally { fs.closeSync(fd); }
 }
 
 function readJson(filename) { return JSON.parse(readBytes(filename).toString('utf8')); }
 
 function immutableWrite(filename, bytes) {
-    const raw = Buffer.isBuffer(bytes) ? bytes : Buffer.from(bytes);
     safeDirectory(path.dirname(filename), true);
-    if (fs.existsSync(filename)) {
-        if (!readBytes(filename).equals(raw) || (fs.lstatSync(filename).mode & 0o777) !== 0o600) {
-            throw new Error(`不可变基线备份与已有字节不一致：${filename}（要求内容相同且权限为 0600）`);
-        }
-        return;
+    const existing = fs.lstatSync(filename, { throwIfNoEntry: false });
+    if (existing && (existing.mode & 0o777) !== 0o600) {
+        throw new Error(`不可变基线文件权限必须为 0600：${filename}`);
     }
-    const temporary = path.join(path.dirname(filename), `.${path.basename(filename)}.${crypto.randomUUID()}.tmp`);
-    const fd = fs.openSync(temporary, fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY | fs.constants.O_NOFOLLOW, 0o600);
-    try { fs.writeFileSync(fd, raw); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-    try { fs.linkSync(temporary, filename); } finally { fs.unlinkSync(temporary); }
+    writeImmutableFile(filename, bytes, (message, details = {}) => {
+        throw Object.assign(new Error(`不可变基线文件写入失败：${message}：${filename}`), details);
+    });
 }
 
 function replacePrivate(filename, raw) {
@@ -196,8 +202,8 @@ function baselineDescriptor(baseline, raw) {
         sourceExpectations: baseline.sourceExpectations };
 }
 
-function loadBaseline(ctx, descriptor) {
-    const raw = readBytes(path.join(ctx.runDir, 'baseline.json'));
+function loadBaseline(ctx, descriptor, { allowPendingLink = false } = {}) {
+    const raw = readBytes(path.join(ctx.runDir, 'baseline.json'), { allowPendingLink });
     const baseline = JSON.parse(raw);
     if (baseline.contract !== BASELINE_CONTRACT || baseline.date !== ctx.date
         || baseline.blog.repo !== ctx.blogRepo || baseline.canonical.path !== ctx.canonicalPath
@@ -205,7 +211,7 @@ function loadBaseline(ctx, descriptor) {
         || (descriptor && descriptor.sha256 !== hash(raw))) throw new Error('Fresh baseline identity or SHA mismatch');
     for (const record of baseline.files) {
         const backup = under(ctx.runDir, record.backupPath);
-        if (!record.backupPath.startsWith('baseline-files/') || hash(readBytes(backup)) !== record.sha256
+        if (!record.backupPath.startsWith('baseline-files/') || hash(readBytes(backup, { allowPendingLink })) !== record.sha256
             || (fs.lstatSync(backup).mode & 0o777) !== 0o600) throw new Error('Fresh baseline backup is corrupt');
     }
     return { baseline, raw };
@@ -261,9 +267,28 @@ function prepareBaseline(options) {
     return withFileLockSync(path.join(ctx.runDir, 'baseline.json'), () => {
         const blog = gitState(ctx.blogRepo);
         if (fs.existsSync(path.join(ctx.runDir, 'baseline.json'))) {
-            const { baseline, raw } = loadBaseline(ctx);
+            const { baseline, raw } = loadBaseline(ctx, undefined, { allowPendingLink: true });
             if (blog.head !== baseline.blog.head || hash(readBytes(ctx.canonicalPath)) !== baseline.canonical.sha256) {
                 throw new Error('准备之后 fresh 基线发生变化：博客 HEAD 或正式分析结果字节已不同');
+            }
+            const baselinePath = path.join(ctx.runDir, 'baseline.json');
+            const pending = baseline.files.filter(record =>
+                fs.lstatSync(under(ctx.runDir, record.backupPath)).nlink === 2);
+            if (pending.length || fs.lstatSync(baselinePath).nlink === 2) {
+                // 先核验全部原输入，任何变化都不得借恢复操作清理现有链接。
+                for (const record of baseline.files) {
+                    if (!['blog', 'data'].includes(record.category)) throw new Error('基线备份类别无效');
+                    const source = under(record.category === 'blog' ? ctx.blogRepo : ctx.currentDir, record.relativePath);
+                    if (hash(readBytes(source)) !== record.sha256) throw new Error(`基线恢复前原输入已变化：${record.relativePath}`);
+                }
+                for (const record of pending) {
+                    const filename = under(ctx.runDir, record.backupPath);
+                    const bytes = readBytes(filename, { allowPendingLink: true });
+                    if (hash(bytes) !== record.sha256) throw new Error('基线备份在恢复前发生变化');
+                    immutableWrite(filename, bytes);
+                }
+                immutableWrite(baselinePath, raw);
+                loadBaseline(ctx, baselineDescriptor(baseline, raw));
             }
             return baselineDescriptor(baseline, raw);
         }
@@ -389,7 +414,8 @@ function promoteRun(options) {
         getSavedAnalysisPapers(canonical);
         validateNewBatch();
         const intentPath = path.join(ctx.runDir, 'promotion.json');
-        const priorIntent = fs.existsSync(intentPath) ? readJson(intentPath) : null;
+        const priorIntentRaw = fs.existsSync(intentPath) ? readBytes(intentPath, { allowPendingLink: true }) : null;
+        const priorIntent = priorIntentRaw ? JSON.parse(priorIntentRaw) : null;
         if (priorIntent && (priorIntent.contract !== PROMOTION_CONTRACT || priorIntent.runId !== run.runId
             || priorIntent.baselineSha256 !== run.baseline.sha256 || priorIntent.inputSha256 !== inputSha256)) {
             throw new Error('已保存的不可变晋升意图与本次运行不符');
@@ -397,6 +423,7 @@ function promoteRun(options) {
         if (priorIntent && hash(canonicalRaw) === priorIntent.canonicalSha256
             && canonical.generation === priorIntent.canonicalGeneration) {
             verifyBatchInputBaseline(ctx, baseline);
+            immutableWrite(intentPath, priorIntentRaw);
             const database = synchronizePapersDatabase(ctx, run, analysis, options);
             return { ...priorIntent, status: 'promoted', papersDatabase: database, alreadyPromoted: true };
         }
@@ -408,12 +435,16 @@ function promoteRun(options) {
         if (gitState(ctx.blogRepo).head !== baseline.blog.head) throw new Error('博客 HEAD 相对 fresh 基线已变化');
         let nextRaw; let intent = priorIntent;
         if (intent) {
-            nextRaw = readBytes(path.join(ctx.runDir, 'promoted-canonical.json'));
+            const stagedPath = path.join(ctx.runDir, 'promoted-canonical.json');
+            nextRaw = readBytes(stagedPath, { allowPendingLink: true });
             if (hash(nextRaw) !== intent.canonicalSha256) throw new Error('晋升恢复载荷已损坏：字节与记录的 canonicalSha256 不符');
+            immutableWrite(stagedPath, nextRaw);
+            immutableWrite(intentPath, priorIntentRaw);
         } else {
             const replacements = new Map(analysis.papers.map(paper => [idOf(paper), structuredClone(paper)]));
             const stagedPath = path.join(ctx.runDir, 'promoted-canonical.json');
-            const staged = fs.existsSync(stagedPath) ? readJson(stagedPath) : null;
+            const stagedRaw = fs.existsSync(stagedPath) ? readBytes(stagedPath, { allowPendingLink: true }) : null;
+            const staged = stagedRaw ? JSON.parse(stagedRaw) : null;
             const promotedAt = staged?.lastUpdated || getBeijingISOString();
             const next = { ...canonical, generation: canonical.generation + 1,
                 papers: canonical.papers.map(paper => replacements.get(idOf(paper)) || paper),
@@ -425,7 +456,7 @@ function promoteRun(options) {
                 freshRewritePromotion: { contract: PROMOTION_CONTRACT, runId: run.runId, baselineSha256: run.baseline.sha256 } };
             if (!Number.isSafeInteger(next.generation)) throw new Error('正式分析结果的 generation 自增后超出安全整数范围');
             if (staged && jsonHash(staged) !== jsonHash(next)) throw new Error('晋升恢复载荷与本次 fresh 批次不一致');
-            nextRaw = staged ? readBytes(stagedPath) : Buffer.from(JSON.stringify(next, null, 2));
+            nextRaw = stagedRaw || Buffer.from(JSON.stringify(next, null, 2));
             immutableWrite(stagedPath, nextRaw);
             intent = { version: 1, contract: PROMOTION_CONTRACT, status: 'prepared', runId: run.runId,
                 baselineSha256: run.baseline.sha256, inputSha256, promotedAt,
