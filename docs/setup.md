@@ -13,7 +13,7 @@ python3.11 -m venv .venv
 cp env.example .env
 ```
 
-Node 版本须满足 `>=20.18.1 <21 || >=22.3.0`。Python 须为 3.11 或更高版本，并使用 OpenSSL 提供 TLS；macOS 自带的 Python 3.9/LibreSSL 不受支持。默认博客和视觉入口通过 `scripts/python-runtime.sh` 选择 Python，优先使用项目 `.venv`，其次是 `python3.11`，最后才检查 `python3`。项目使用 Node 内置测试框架，Python 依赖用于博客生成、Hugo 构建检查和视觉辅助。
+Node 版本须满足 `>=20.18.1 <21 || >=22.3.0`。Python 须为 3.11 或更高版本，并使用 OpenSSL 提供 TLS；macOS 自带的 Python 3.9/LibreSSL 不受支持。npm 中的 Python 命令（包括博客、视觉、人工流程和可选渠道）通过 `scripts/python-runtime.sh` 选择 Python，优先使用项目 `.venv`，其次是 `python3.11`，最后才检查 `python3`。项目使用 Node 内置测试框架，Python 依赖用于博客生成、Hugo 构建检查和视觉辅助。
 
 安装后先确认当前目录及工作区角色：
 

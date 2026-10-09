@@ -9,9 +9,8 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # Import-time configuration guards intentionally require the production
-    # variable names. CI uses non-routable placeholders; unit tests mock every
-    # request and must never depend on repository or organization secrets.
+    # 模块加载时会检查正式环境变量。CI 使用无法联网的占位配置，
+    # 单元测试模拟请求，不读取仓库或组织的密钥。
     env:
       PAPER_ANALYZER_ENDPOINT: https://example.invalid/v1
       PAPER_ANALYZER_API_KEY: ci-placeholder-not-a-secret
@@ -23,31 +22,31 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js ${{ matrix.node-version }}
+      - name: 配置 Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
 
-      - name: Install dependencies
+      - name: 安装项目依赖
         run: npm ci
 
-      - name: Setup Python test dependencies
+      - name: 配置 Python 测试环境
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install Python test dependencies
+      - name: 安装 Python 测试依赖
         run: |
           python3 -m pip install --disable-pip-version-check -r requirements.txt
           bash scripts/python-runtime.sh -m pip check
 
-      - name: Install CJK rendering font
+      - name: 安装中日韩字体
         run: |
           sudo apt-get update
           sudo apt-get install --yes --no-install-recommends fonts-noto-cjk
 
-      - name: Install pinned Hugo with official release checksum
+      - name: 安装固定版本 Hugo 并核验官方校验和
         env:
           HUGO_VERSION: '0.160.1'
         run: |
@@ -66,7 +65,7 @@ jobs:
           sudo install -m 0755 hugo /usr/local/bin/hugo
           hugo version
 
-      - name: Create isolated CI project environment
+      - name: 创建独立的 CI 环境配置
         run: |
           umask 077
           printf '%s\n' \
@@ -75,7 +74,7 @@ jobs:
             "PAPER_ANALYZER_MODEL=$PAPER_ANALYZER_MODEL" \
             "HTTPS_PROXY=http://127.0.0.1:9" > .env
 
-      - name: Run complete offline verification
-        # data/ is intentionally gitignored; the empty-checkout mode keeps CI
-        # useful while the unit tests exercise representative current files.
+      - name: 运行完整离线验证
+        # data/ 不纳入版本控制，因此 CI 显式允许空数据；
+        # 单元测试另行构造数据，检查正式文件的格式与对应关系。
         run: npm run verify -- --allow-empty

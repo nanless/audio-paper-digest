@@ -62,7 +62,7 @@ test('完整验证要求锁定版本的 Hugo，且必须真实可用', () => {
     for (const stdout of ['hugo v0.159.0+extended linux/amd64', 'not hugo', '']) {
         assert.throws(() => assertPinnedHugo({ spawn: () => ({ status: 0, stdout }) }), /需要 Hugo 0\.160\.1/);
     }
-    assert.throws(() => assertPinnedHugo({ spawn: () => ({ error: new Error('ENOENT') }) }), /Required Hugo runtime/);
+    assert.throws(() => assertPinnedHugo({ spawn: () => ({ error: new Error('ENOENT') }) }), /必需的 Hugo 运行环境/);
     assert.match(assertPinnedHugo({ spawn: () => ({ status: 0, stdout: 'hugo v0.160.1+extended linux/amd64' }) }), /0\.160\.1/);
 });
 
@@ -72,7 +72,7 @@ test('直接验证入口在任何检查之前就拒绝沙箱环境', () => {
     });
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /必须在沙箱外运行/);
-    assert.doesNotMatch(result.stdout, /passed|JavaScript syntax/);
+    assert.doesNotMatch(result.stdout, /通过|JavaScript 语法检查/);
 });
 
 test('CI 使用同一个完整入口，并在解压前校验锁定版本的官方 Hugo 归档', () => {

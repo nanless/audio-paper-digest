@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Default/shared Python entrypoints require a maintained interpreter and
-# OpenSSL-backed TLS. Prefer the repository-local, gitignored environment.
+# Python 命令统一使用受支持的解释器和 OpenSSL。
+# 优先使用项目内不纳入版本控制的虚拟环境。
 if [[ "${PD_PYTHON_RUNTIME_DISABLE_VENV:-0}" != "1" && -x ".venv/bin/python" ]]; then
   python_bin=".venv/bin/python"
 elif command -v python3.11 >/dev/null 2>&1; then
@@ -21,7 +21,7 @@ import sys
 if sys.version_info < (3, 11):
     raise SystemExit(f"需要 Python >= 3.11，当前为 {sys.version.split()[0]}")
 if not ssl.OPENSSL_VERSION.startswith("OpenSSL "):
-    raise SystemExit(f"需要 OpenSSL-backed Python，当前为 {ssl.OPENSSL_VERSION}")
+    raise SystemExit(f"Python 需要使用 OpenSSL 提供 TLS，当前为 {ssl.OPENSSL_VERSION}")
 ' || {
   echo "Python 运行时检查失败；请创建项目 .venv 或安装合规的 python3.11" >&2
   exit 1

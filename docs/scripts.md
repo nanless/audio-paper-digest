@@ -209,7 +209,7 @@ projection v3 按冻结的 `outboundPostLinks` 将会议任务页对应到论文
 
 ## 可选渠道
 
-`npm run wechat`、`npm run xiaohongshu`、`npm run xhs-login`、`npm run xhs-publish` 和 `python3 scripts/publish-to-feishu.py` 不属于默认日更。只有用户明确要求时才执行真实渠道写入。
+`npm run wechat`、`npm run xiaohongshu`、`npm run xhs-login`、`npm run xhs-publish` 和 `bash scripts/python-runtime.sh scripts/publish-to-feishu.py` 不属于默认日更。只有用户明确要求时才执行真实渠道写入。
 
 ## 测试
 

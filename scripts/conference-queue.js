@@ -9,18 +9,18 @@ const USAGE = '--dry-run|--status|--apply --plan ABSOLUTE.json [--retry-failed]'
 
 function parseArgs(argv) {
     const mode = argv[0];
-    if (!['--dry-run', '--status', '--apply'].includes(mode)) throw new Error(`Use ${USAGE}`);
+    if (!['--dry-run', '--status', '--apply'].includes(mode)) throw new Error(`用法：${USAGE}`);
     const values = {};
     for (let index = 1; index < argv.length;) {
         const flag = argv[index];
         if (flag === '--retry-failed') {
-            if (mode !== '--apply' || values.retryFailed) throw new Error(`Use ${USAGE}`);
+            if (mode !== '--apply' || values.retryFailed) throw new Error(`用法：${USAGE}`);
             values.retryFailed = true; index += 1; continue;
         }
-        if (flag !== '--plan' || !argv[index + 1] || values.planFile) throw new Error(`Use ${USAGE}`);
+        if (flag !== '--plan' || !argv[index + 1] || values.planFile) throw new Error(`用法：${USAGE}`);
         values.planFile = argv[index + 1]; index += 2;
     }
-    if (!path.isAbsolute(values.planFile || '')) throw new Error(`Use ${USAGE}`);
+    if (!path.isAbsolute(values.planFile || '')) throw new Error(`用法：${USAGE}`);
     return { mode: mode.slice(2), apply: mode === '--apply', statusOnly: mode === '--status',
         planFile: path.resolve(values.planFile), retryFailed: Boolean(values.retryFailed) };
 }

@@ -13,7 +13,7 @@ python3.11 -m venv .venv
 cp env.example .env
 ```
 
-Node must satisfy `>=20.18.1 <21 || >=22.3.0`. Python must be 3.11 or later with OpenSSL providing TLS. The macOS system Python 3.9/LibreSSL runtime is unsupported. Blog and visual commands use `scripts/python-runtime.sh`, which prefers the project `.venv`, then `python3.11`, and finally checks `python3`. Tests use the built-in Node test runner. The Python dependencies cover blog generation, Hugo checks, and visual preparation.
+Node must satisfy `>=20.18.1 <21 || >=22.3.0`. Python must be 3.11 or later with OpenSSL providing TLS. The macOS system Python 3.9/LibreSSL runtime is unsupported. Python commands in npm, including blog, visual, Manual, and optional channel commands, use `scripts/python-runtime.sh`, which prefers the project `.venv`, then `python3.11`, and finally checks `python3`. Tests use the built-in Node test runner. The Python dependencies cover blog generation, Hugo checks, and visual preparation.
 
 After installation, check the directory and its workspace role:
 

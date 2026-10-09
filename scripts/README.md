@@ -252,7 +252,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `analysis_sections.py` | 在 Python 解析和发布检查中识别论文评价章节，兼容旧标题并拒绝重复或混用。 |
 | `log_setup.py` | 统一 Python 日志并脱敏。 |
 | `runtime_guard.py` | 拒绝在沙箱内运行 Python 项目入口。 |
-| `python-runtime.sh` | 为默认博客/视觉入口选择并校验 Python 3.11+ 与 OpenSSL。默认用项目 `.venv/bin/python`；设 `PD_PYTHON_RUNTIME_DISABLE_VENV=1` 可跳过它，再依次用 `python3.11`、`python3`。没有其他覆写变量。 |
+| `python-runtime.sh` | 为 npm 中的 Python 命令选择并校验 Python 3.11+ 与 OpenSSL，包括博客、视觉、人工流程和可选渠道。默认用项目 `.venv/bin/python`；设 `PD_PYTHON_RUNTIME_DISABLE_VENV=1` 可跳过它，再依次用 `python3.11`、`python3`。没有其他覆写变量。 |
 
 ## 博客生成、审查与发布
 

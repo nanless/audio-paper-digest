@@ -28,7 +28,7 @@ npm run digest:prepare -- YYYY-MM-DD
 
 0. 先运行 `npm run workspace:role -- status`。当前目录必须是 `daily`，历史命令须通过已配置的跨角色开关运行；角色标记缺失或真实路径不匹配时先停止，确认工作区用途后才用 `npm run workspace:role -- set daily|history [--force]` 绑定。
 1. Node 满足 `>=20.18.1 <21 || >=22.3.0`，依赖已安装。
-   默认博客/视觉 Python 入口还要求 Python 3.11+ 与 OpenSSL；`scripts/python-runtime.sh` 优先使用项目 `.venv`，再选择并校验 `python3.11` / `python3`。
+   npm 中的 Python 命令还要求 Python 3.11+ 与 OpenSSL；`scripts/python-runtime.sh` 优先使用项目 `.venv`，再选择并校验 `python3.11` / `python3`。
 2. 项目根 `.env` 存在，加载器会将文件权限收紧为 `0600`。
 3. `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT` 完整；仓库文档当前推荐 OpenCode Go `mimo-v2.6-flash`，实际模型仍由项目配置指定。可选 `PAPER_ANALYZER_FALLBACK_API_KEYS` 为同一路由提供备用账号；切换后持续使用成功账号，不能代替副模型配置。
 4. `HTTPS_PROXY` 或 `HTTP_PROXY` 是项目 `.env` 内的 HTTP CONNECT 地址；`muse-spark-*` 模型与 arXiv 缺代理立即失败，当前推荐的 `mimo-v2.6-flash` 不含该前缀，走直连。

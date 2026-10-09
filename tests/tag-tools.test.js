@@ -86,7 +86,7 @@ test('预览包拒绝写到一半的多文件、注册表漂移和过时的来�
     assert.equal(readPreviewBundle(indexPath,tagCatalog).toString(),payloads['index.json']);
     assert.throws(()=>readPreviewBundle(indexPath,{...tagCatalog,registrySha256:'d'.repeat(64)}));
     fs.appendFileSync(path.join(dir,'migration-report.json'),' ');
-    assert.throws(()=>readPreviewBundle(indexPath,tagCatalog),/drift/);
+    assert.throws(()=>readPreviewBundle(indexPath,tagCatalog),/预览文件与清单校验和不符/);
     fs.writeFileSync(path.join(dir,'migration-report.json'),payloads['migration-report.json']);
     fs.writeFileSync(manifestPath,JSON.stringify({...manifest,source:{...fixture.manifest.source,commit:'e'.repeat(40)}}));
     assert.throws(()=>readPreviewBundle(indexPath,tagCatalog),/博客提交或页面 SHA/);
@@ -167,5 +167,5 @@ test('预览包在核对原始哈希后拒绝混用代次、目录字段和绑�
     }
     writeBundle(dir,bundleFixture());
     fs.writeFileSync(path.join(dir,'migration-report.json'),'{invalid JSON');
-    assert.throws(()=>readPreviewBundle(indexPath,tagCatalog),/Preview bundle drift/);
+    assert.throws(()=>readPreviewBundle(indexPath,tagCatalog),/预览文件与清单校验和不符/);
 });

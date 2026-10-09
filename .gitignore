@@ -1,41 +1,41 @@
-# Dependencies
+# 项目依赖
 node_modules/
 
-# Data & logs (never commit)
+# 运行数据和日志，禁止提交
 data/
 logs/
 
-# Environment variables
+# 环境配置和工作区角色
 .env
 .env.*
 .paper-digest-workspace-role.json
 
-# OS files
+# 系统生成的文件
 .DS_Store
 Thumbs.db
 
-# Editor / IDE
+# 编辑器配置和临时文件
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# Claude Code session files
+# Claude Code 会话文件
 .claude/
 
-# Python cache
+# Python 环境和缓存
 .venv/
 __pycache__/
 *.pyc
 *.pyo
 
-# Temporary / backup files
+# 临时文件和备份
 tmp/
 *.backup*
 *.bak
 *.tmp
 *-cache.json
 
-# WeChat image cache (if generated locally)
+# 本地生成的微信图片缓存
 wechat-image-cache.json

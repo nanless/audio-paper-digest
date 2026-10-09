@@ -385,6 +385,6 @@ test('命令行要求显式的绝对路径计划，并且只提供只读模式�
     assert.deepEqual(cli.parseArgs(['--dry-run', '--plan', '/tmp/selected.json']), {
         mode: 'dry-run', apply: false, statusOnly: false, planFile: '/tmp/selected.json', retryFailed: false
     });
-    assert.throws(() => cli.parseArgs(['--apply']), /Use/);
-    assert.throws(() => cli.parseArgs(['--status', '--plan', 'relative.json']), /Use/);
+    assert.throws(() => cli.parseArgs(['--apply']), /用法：/);
+    assert.throws(() => cli.parseArgs(['--status', '--plan', 'relative.json']), /用法：/);
 });

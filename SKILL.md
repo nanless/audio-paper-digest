@@ -49,7 +49,7 @@ HTTP_PROXY=http://127.0.0.1:7897
 PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
 ```
 
-Node 要求 `>=20.18.1 <21 || >=22.3.0`。默认发布入口要求 Python 3.11+ 且由 OpenSSL 提供 TLS；`scripts/python-runtime.sh` 依次选择项目 `.venv`、`python3.11`，最后才校验 `python3`。所有项目脚本、测试和检查必须在沙箱外执行；沙箱拒绝不能当成远端服务故障处理。
+Node 要求 `>=20.18.1 <21 || >=22.3.0`。npm 中的 Python 命令要求 Python 3.11+ 且由 OpenSSL 提供 TLS；`scripts/python-runtime.sh` 依次选择项目 `.venv`、`python3.11`，最后才校验 `python3`。所有项目脚本、测试和检查必须在沙箱外执行；沙箱拒绝不能当成远端服务故障处理。
 
 ## 3. 默认流程概览
 

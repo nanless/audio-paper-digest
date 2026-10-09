@@ -66,7 +66,7 @@ function readPreviewBundle(indexPath, tagCatalog) {
     for (const name of names) {
         const bytes = readSafeFile(path.join(directory, name));
         const actual = crypto.createHash('sha256').update(bytes).digest('hex');
-        if (actual !== manifest.files[name]) throw new Error(`Preview bundle drift: ${name}; rebuild preview`);
+        if (actual !== manifest.files[name]) throw new Error(`预览文件与清单校验和不符：${name}；请重新运行 npm run tags:preview。`);
         files.set(name, bytes);
     }
     if (!readSafeFile(manifestPath).equals(manifestBytes)) throw new Error('预览文件在读取过程中被改写');

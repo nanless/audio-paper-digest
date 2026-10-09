@@ -62,7 +62,7 @@ A passed page review is reused permanently by relative path and content SHA. Pub
 
 Each stage takes the shared lock under the blog's Git common-dir, then its project/date lock. Two checkouts targeting one blog cannot concurrently modify its worktree, index, or HEAD. The shared lock is outside tracked blog files. Recovery and release remove only a lock whose inode, token, and SHA still match. `publish-to-blog.py` is shared implementation and a generation compatibility entry, not a bypass around the stages.
 
-Blog and visual entry points use `scripts/python-runtime.sh`, which prefers the project `.venv` and requires Python 3.11+ with OpenSSL.
+Python commands in npm, including blog, visual, Manual, and optional channel commands, use `scripts/python-runtime.sh`, which prefers the project `.venv` and requires Python 3.11+ with OpenSSL.
 
 ## Conference Papers
 
