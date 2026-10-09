@@ -25,6 +25,27 @@ class PaperIdentityTests(unittest.TestCase):
             with self.subTest(name=vector["name"]), self.assertRaises(ValueError):
                 identity.normalize_identity(vector["record"])
 
+    def test_real_json_numeric_years_normalize_with_cross_runtime_hashes(self) -> None:
+        filename = Path(__file__).resolve().parents[1] / "fixtures" / "paper-identity-year-records.json"
+        cases = json.loads(filename.read_text("utf-8"))
+        for item in cases["positive"]:
+            with self.subTest(name=item["name"]):
+                normalized = identity.normalize_identity(item["record"])
+                self.assertEqual(normalized, item["normalized"])
+                self.assertIs(type(normalized["conference"]["year"]), int)
+                self.assertIs(type(normalized["citation"]["year"]), int)
+                self.assertEqual(identity.stable_json(normalized), item["stableJson"])
+                self.assertEqual(identity.identity_sha256(item["record"]), item["identitySha256"])
+                self.assertEqual(identity.record_sha256(item["record"]), item["recordSha256"])
+        self.assertEqual(identity.conference_coordinates(cases["coordinates"]), {"slug": "icassp", "year": 2026})
+        for item in cases["negative"]:
+            with self.subTest(name=item["name"]), self.assertRaises(ValueError):
+                identity.normalize_identity(item["record"])
+        record = copy.deepcopy(cases["positive"][0]["record"])
+        record["conference"]["year"] = float("nan")
+        with self.assertRaises(ValueError):
+            identity.normalize_identity(record)
+
     def test_vectors_are_canonical_and_cross_runtime_stable(self) -> None:
         self.assertEqual(VECTORS["contract"], identity.CONTRACT)
         for vector in VECTORS["vectors"]:

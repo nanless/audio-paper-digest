@@ -1,0 +1,677 @@
+{
+  "positive": [
+    {
+      "name": "conference",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 2026.0
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2026
+        }
+      },
+      "normalized": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 2026
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2026
+        }
+      },
+      "stableJson": "{\"arxivId\":null,\"canonicalId\":\"conference:icassp:2026:icassp-arnumber:10910001\",\"citation\":{\"authors\":[\"Chen Example\"],\"title\":\"A Conference Paper\",\"venue\":\"ICASSP 2026\",\"year\":2026},\"conference\":{\"slug\":\"icassp\",\"year\":2026},\"contract\":\"paper-identity-v1\",\"externalId\":{\"scheme\":\"icassp-arnumber\",\"value\":\"10910001\"},\"kind\":\"conference\",\"source\":{\"status\":\"official\",\"url\":\"https://ieeexplore.ieee.org/document/10910001\"}}",
+      "identitySha256": "52dec963af3d879f07f7449d8dfa17e377ec398705f603e8d4946882a87735bf",
+      "recordSha256": "4e236466e7d417ae579800f151e4a8bc66df7b692b1abcf74301c8fda9fd4bdb"
+    },
+    {
+      "name": "citation",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 2026
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2026.0
+        }
+      },
+      "normalized": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 2026
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2026
+        }
+      },
+      "stableJson": "{\"arxivId\":null,\"canonicalId\":\"conference:icassp:2026:icassp-arnumber:10910001\",\"citation\":{\"authors\":[\"Chen Example\"],\"title\":\"A Conference Paper\",\"venue\":\"ICASSP 2026\",\"year\":2026},\"conference\":{\"slug\":\"icassp\",\"year\":2026},\"contract\":\"paper-identity-v1\",\"externalId\":{\"scheme\":\"icassp-arnumber\",\"value\":\"10910001\"},\"kind\":\"conference\",\"source\":{\"status\":\"official\",\"url\":\"https://ieeexplore.ieee.org/document/10910001\"}}",
+      "identitySha256": "52dec963af3d879f07f7449d8dfa17e377ec398705f603e8d4946882a87735bf",
+      "recordSha256": "4e236466e7d417ae579800f151e4a8bc66df7b692b1abcf74301c8fda9fd4bdb"
+    },
+    {
+      "name": "both",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 2026.0
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2026.0
+        }
+      },
+      "normalized": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 2026
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2026
+        }
+      },
+      "stableJson": "{\"arxivId\":null,\"canonicalId\":\"conference:icassp:2026:icassp-arnumber:10910001\",\"citation\":{\"authors\":[\"Chen Example\"],\"title\":\"A Conference Paper\",\"venue\":\"ICASSP 2026\",\"year\":2026},\"conference\":{\"slug\":\"icassp\",\"year\":2026},\"contract\":\"paper-identity-v1\",\"externalId\":{\"scheme\":\"icassp-arnumber\",\"value\":\"10910001\"},\"kind\":\"conference\",\"source\":{\"status\":\"official\",\"url\":\"https://ieeexplore.ieee.org/document/10910001\"}}",
+      "identitySha256": "52dec963af3d879f07f7449d8dfa17e377ec398705f603e8d4946882a87735bf",
+      "recordSha256": "4e236466e7d417ae579800f151e4a8bc66df7b692b1abcf74301c8fda9fd4bdb"
+    }
+  ],
+  "negative": [
+    {
+      "name": "conference-True",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": true
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2026
+        }
+      }
+    },
+    {
+      "name": "conference-False",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": false
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2026
+        }
+      }
+    },
+    {
+      "name": "conference-None",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": null
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2026
+        }
+      }
+    },
+    {
+      "name": "conference-2026",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": "2026"
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2026
+        }
+      }
+    },
+    {
+      "name": "conference-2026.5",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 2026.5
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2026
+        }
+      }
+    },
+    {
+      "name": "conference-1899",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 1899
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2026
+        }
+      }
+    },
+    {
+      "name": "conference-2101",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 2101
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2026
+        }
+      }
+    },
+    {
+      "name": "conference-inf",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 1e309
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2026
+        }
+      }
+    },
+    {
+      "name": "conference--inf",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": -1e309
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2026
+        }
+      }
+    },
+    {
+      "name": "citation-True",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 2026
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": true
+        }
+      }
+    },
+    {
+      "name": "citation-False",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 2026
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": false
+        }
+      }
+    },
+    {
+      "name": "citation-2026",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 2026
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": "2026"
+        }
+      }
+    },
+    {
+      "name": "citation-2026.5",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 2026
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2026.5
+        }
+      }
+    },
+    {
+      "name": "citation-1899",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 2026
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 1899
+        }
+      }
+    },
+    {
+      "name": "citation-2101",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 2026
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 2101
+        }
+      }
+    },
+    {
+      "name": "citation-inf",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 2026
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": 1e309
+        }
+      }
+    },
+    {
+      "name": "citation--inf",
+      "record": {
+        "contract": "paper-identity-v1",
+        "kind": "conference",
+        "canonicalId": "conference:icassp:2026:icassp-arnumber:10910001",
+        "arxivId": null,
+        "conference": {
+          "slug": "icassp",
+          "year": 2026
+        },
+        "externalId": {
+          "scheme": "icassp-arnumber",
+          "value": "10910001"
+        },
+        "source": {
+          "status": "official",
+          "url": "https://ieeexplore.ieee.org/document/10910001"
+        },
+        "citation": {
+          "title": "A Conference Paper",
+          "authors": [
+            "Chen Example"
+          ],
+          "venue": "ICASSP 2026",
+          "year": -1e309
+        }
+      }
+    }
+  ],
+  "coordinates": {
+    "id": "icassp-2026",
+    "year": 2026.0
+  }
+}

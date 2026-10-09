@@ -37,9 +37,11 @@ def _text(value: Any, label: str, *, allow_empty: bool = False, maximum: int = 4
 
 
 def _year(value: Any, label: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1900 or value > 2100:
-        _fail(f"{label} must be a supported four-digit year")
-    return value
+    # JSON 不区分 2026 与 2026.0；与 Node 的整数数值规则一致，并固定规范输出类型。
+    if isinstance(value, bool) or not isinstance(value, (int, float)) \
+            or not 1900 <= value <= 2100 or value != int(value):
+        _fail(f"{label} 必须是 1900 至 2100 之间的有限整数年份")
+    return int(value)
 
 
 def validate_external_id(value: Any) -> dict[str, str]:

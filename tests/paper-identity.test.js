@@ -123,3 +123,20 @@ test('两种运行时共同拒绝非字符串身份与非 ASCII 数字', () => {
     const invalid = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'paper-identity-invalid-records.json'), 'utf8'));
     for (const vector of invalid) assert.throws(() => identity.normalizeIdentity(vector.record), undefined, vector.name);
 });
+
+
+test('真实 JSON 年份数字按数值归一化，两端身份与完整记录摘要一致', () => {
+    const cases = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'paper-identity-year-records.json'), 'utf8'));
+    for (const item of cases.positive) {
+        const normalized = identity.normalizeIdentity(item.record);
+        assert.deepEqual(normalized, item.normalized, item.name);
+        assert.equal(identity.stableJson(normalized), item.stableJson);
+        assert.equal(identity.identitySha256(item.record), item.identitySha256);
+        assert.equal(identity.recordSha256(item.record), item.recordSha256);
+    }
+    assert.deepEqual(identity.conferenceCoordinates(cases.coordinates), { slug: 'icassp', year: 2026 });
+    for (const item of cases.negative) assert.throws(() => identity.normalizeIdentity(item.record), undefined, item.name);
+    const record = structuredClone(cases.positive[0].record);
+    record.conference.year = NaN;
+    assert.throws(() => identity.normalizeIdentity(record));
+});
