@@ -174,7 +174,7 @@ Normal direct work does not depend on crosswalk. `history:crosswalk` still permi
 | `npm run cover:record -- --date DATE --file /abs/cover.png --token TOKEN --qa-attested true` | Record an inspected cover; `--output-hint HINT` may replace `--file` |
 | `npm run cover:fail -- ...` | Save cover failure |
 
-Only built-in `image_gen` creates final art. `visual:render:debug` is for debugging or offline fallback. TOKEN comes from `taskToken` in the corresponding visual/cover status task. Never reuse an older task token.
+Only built-in `image_gen` creates final art. `visual:render:debug` produces local debug previews and does not satisfy final visual completion. TOKEN comes from `taskToken` in the corresponding visual/cover status task. Never reuse an older task token.
 
 ## Shared Runtime
 

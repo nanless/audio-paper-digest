@@ -63,6 +63,8 @@ npm run history:direct-plan -- --apply \
 
 会议来源优先使用工作区爬虫保存的记录。`accepted-local-iclr-*` 只有在它是某个冻结 ICLR 页唯一且标题精确对应的来源时才保留，不能带入外部 accepted corpus 的其他记录。输出协议为 `merged-good-historical-local-data-v5`，只保存来源类型、路径和 SHA，默认文件是 `data/runtime/direct-local-inputs/scoped-historical-local-data-v5.json`。旧 `historical-direct-rewrite-input-catalog-v1` 合并器输出不能用于当前计划。
 
+`direct-inputs --name` 可指定不可变来源清单的文件名，但不能使用 `current.json`。这个名字专供当前清单指针使用；程序在创建输出目录前拒绝该保留名，防止指针覆盖清单自身。
+
 `history:conference-projections` 记录论文与历史会议页面的对应关系。它核对冻结页面、论文信息和 PDF 的 SHA；如果完整 inline TeX 曾被 Hugo 确定性省略，还会检查论文信息中对应省略形式的指纹。任一形式对应多个会议论文身份时都会拒绝，不能用标题相似度选择。这种页面对应关系不赋予旧 crosswalk 身份确认权限。
 
 `history:direct-plan` 生成 `historical-direct-rewrite-plan-v5`。页面对应关系和计划都使用来源清单生产者的完整严格校验，v3 及更旧清单会被拒绝。v5 对部分 `conflict/multiple` 日汇总页，只使用唯一严格评分行中的主 arXiv 链接，并记录字节区间和 SHA。计划重新核对该记录的自哈希、页面 SHA、原身份状态及候选集合，不能按候选优先级猜测。

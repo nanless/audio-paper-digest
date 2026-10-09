@@ -180,7 +180,7 @@ projection v3 按冻结的 `outboundPostLinks` 将会议任务页对应到论文
 | `npm run cover:record -- --date DATE --file /abs/cover.png --token TOKEN --qa-attested true` | 登记已目检封面；`--file` 可换成 `--output-hint HINT` |
 | `npm run cover:fail -- ...` | 保存封面失败状态 |
 
-只有 Codex 内置 `image_gen` 生成正式图片；`visual:render:debug` 仅用于调试或离线兜底。TOKEN 来自对应 visual/cover status 待办项的 `taskToken`，不能复用旧任务 token。
+只有 Codex 内置 `image_gen` 生成正式图片；`visual:render:debug` 只生成本地调试预览，不满足正式视觉完成条件。TOKEN 来自对应 visual/cover status 待办项的 `taskToken`，不能复用旧任务 token。
 
 ## 配置与公共实现
 

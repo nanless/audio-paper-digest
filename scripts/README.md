@@ -278,7 +278,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `digest-cover-state.js` | Node 入口/状态机 | 规划、校验、登记每日汇总封面任务，处理失败并归档历史记录。 |
 | `visual-summary-integration.js` | Node 共享 | 在同一发布证明下协调论文长图与汇总封面。 |
 | `plan-post-publish-visuals.py` | Python 入口 | 博客远端发布核验通过后调用共用视觉规划接口。 |
-| `render-visual-summary.py` | Python 调试入口 | 按固定规则在本地渲染，仅用于调试或离线兜底，不替代正式生图工具。 |
+| `render-visual-summary.py` | Python 调试入口 | 按固定规则生成本地调试预览，不满足正式视觉完成条件，不替代正式生图工具。 |
 | `waive-post-publish-visuals.js` | Node 入口 | 用户明确取消生图时，记录与当前发布绑定的视觉豁免。 |
 | `digest-run-report.js` | Node 入口 | 汇总抓取、筛选、分析、远端发布和两类视觉状态；尚未自动核验部署与网页。 |
 
