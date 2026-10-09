@@ -33,6 +33,8 @@ The persistent deduplication database. A paper's `digestStatus` tracks success, 
 
 Per-arXiv-category and HuggingFace source state, candidate counts, content hashes, and recovery metadata. Damage invalidates that one source, and a gap in any required source blocks downstream completion.
 
+The v5-to-v6 source protocol upgrade requires both HuggingFace endpoints to provide a canonical arXiv ID and non-empty title and abstract. Repeated-ID pages are validated before pagination stops. This upgrade changes the entire `candidateFingerprint`, so an old v5 fetch checkpoint cannot be reused as a whole; damage to one source under an unchanged protocol still invalidates only that source. For a batch dated today in Beijing, rerun the same daily entrypoint to fetch again. Historical dates cannot resume from fetching and must use the controlled historical-maintenance workflow. The upgrade neither rewrites nor re-signs existing run data. Valid record structure does not establish full-text authenticity.
+
 ### `raw-candidates.json`
 
 The complete normalized, merged filter input, after already published papers are removed. Decision coverage is measured against this set, not just the papers that got a successful API response.

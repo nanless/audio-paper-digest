@@ -228,9 +228,9 @@ function hasValidFetchSourceIntegrity(entry) {
 
 function getSourceConfigFingerprint() {
     return stableHash({
-        // v5: Atom 使用严格 XML 与完整论文条目校验，recent 空标题不再算成功。
+        // v6: HuggingFace 两端点核完整 arXiv 身份和非空题摘，重复页也先校验条目。
         // 旧抓取记录不能证明未漏掉被截断的条目，需重新抓取对应来源。
-        sourceContractVersion: 5,
+        sourceContractVersion: 6,
         arxivCategories: Config.ARXIV_CATEGORIES.map(({ id, priority }) => ({ id, priority })),
         arxiv: {
             maxResultsPerCategory: Config.ARXIV_CONFIG.maxResultsPerCategory,

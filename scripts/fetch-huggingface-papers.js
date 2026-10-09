@@ -22,6 +22,7 @@ const { buildChildProcessEnv } = require('./env-loader.js');
 
 const { getBeijingDateString, getBeijingISOString, normalizeToBeijingISOString, normalizedId, detectProxyUrl } = require('./utils.js');
 const { HUGGINGFACE_CONFIG } = require('./config.js');
+const { normalizeUsagePaperId } = require('./lib/llm-usage.js');
 
 /**
  * 使用 curl 获取数据
@@ -219,6 +220,17 @@ function makeSourceFetchError(message, sourceHealth) {
     return error;
 }
 
+// 来源必须提供完整的 arXiv 编号和题摘，不能把坏条目计作合法空结果。
+function validHuggingFacePaperFields(paper, title, summary) {
+    if (!paper || typeof paper !== 'object' || Array.isArray(paper)) return false;
+    const id = paper.id;
+    if (typeof id !== 'string' || normalizeUsagePaperId(id) !== id || id.startsWith('conference:')) return false;
+    const version = id.match(/v([0-9]+)$/);
+    if (version && !/^[1-9][0-9]*$/.test(version[1])) return false;
+    return typeof title === 'string' && Boolean(title.trim())
+        && typeof summary === 'string' && Boolean(summary.trim());
+}
+
 /**
  * 将 daily_papers 格式转为标准格式
  */
@@ -226,8 +238,10 @@ function convertDailyPaper(hfPaper, options = {}) {
     if (!hfPaper || typeof hfPaper !== 'object') return null;
     const paper = (hfPaper.paper !== undefined && hfPaper.paper !== null) ? hfPaper.paper : hfPaper;
     if (!paper || typeof paper !== 'object') return null;
+    const title = paper.title || hfPaper.title || '';
+    const summary = paper.summary || hfPaper.summary || '';
+    if (!validHuggingFacePaperFields(paper, title, summary)) return null;
     const arxivId = paper.id;
-    if (!arxivId) return null;
 
     const authors = (paper.authors || []).map(a => a.name).filter(Boolean);
 
@@ -242,10 +256,10 @@ function convertDailyPaper(hfPaper, options = {}) {
     return {
         paper_id: arxivId,
         arxivId: arxivId,
-        title: paper.title || hfPaper.title || '',
+        title,
         authors: authors,
-        summary: paper.summary || hfPaper.summary || '',
-        abstract: paper.summary || hfPaper.summary || '',
+        summary,
+        abstract: summary,
         published: publishedAt,
         hfSelectedAt: selectedAt || publishedAt,
         updatedDate: publishedAt.split('T')[0] || '',
@@ -274,8 +288,8 @@ function convertDailyPaper(hfPaper, options = {}) {
  * 将 papers API 格式转为标准格式
  */
 function convertPaper(paper, options = {}) {
+    if (!validHuggingFacePaperFields(paper, paper?.title, paper?.summary)) return null;
     const arxivId = paper.id;
-    if (!arxivId) return null;
 
     const authors = (paper.authors || []).map(a => a.name).filter(Boolean);
 
@@ -420,7 +434,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         }
 
         if (legalItems !== data.length) {
-            health.failures.push({ name: `daily_papers:${page + 1}`, error: `response contains invalid paper items (${legalItems}/${data.length})` });
+            health.failures.push({ name: `daily_papers:${page + 1}`, error: `响应包含非法论文条目 (${legalItems}/${data.length})` });
             health.successfulRequests--;
             health.requests[health.requests.length - 1].ok = false;
             console.log(`  页${page + 1}: 响应包含非法论文条目，停止`);
@@ -469,6 +483,13 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
             papersComplete = true;
             break;
         }
+        const convertedPapers = papersData.map(item => convertPaper(item, { fetchedAt }));
+        if (convertedPapers.some(paper => !paper)) {
+            health.failures.push({ name: `papers:${papersPage + 1}`, error: '响应包含非法论文条目' });
+            health.successfulRequests--;
+            health.requests[health.requests.length - 1].ok = false;
+            break;
+        }
         const pageSignature = papersData
             .map(item => String(item?.id || ''))
             .join('\n');
@@ -482,14 +503,8 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         }
         seenPapersPageSignatures.add(pageSignature);
         let newCount = 0;
-        let legalItems = 0;
         let oldestDate = null;
-        for (const item of papersData) {
-            if (typeof item !== 'object' || !item) continue;
-
-            const paper = convertPaper(item, { fetchedAt });
-            if (!paper) continue;
-            legalItems++;
+        for (const paper of convertedPapers) {
 
             const pubDate = paper.published.split('T')[0];
             if (!oldestDate || pubDate < oldestDate) oldestDate = pubDate;
@@ -506,12 +521,6 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
                     existing.hf_upvotes = paper.hf_upvotes;
                 }
             }
-        }
-        if (legalItems !== papersData.length) {
-            health.failures.push({ name: `papers:${papersPage + 1}`, error: `response contains invalid paper items (${legalItems}/${papersData.length})` });
-            health.successfulRequests--;
-            health.requests[health.requests.length - 1].ok = false;
-            break;
         }
         console.log(`  papers API 页${papersPage + 1}: ${papersData.length}篇，新增 ${newCount} 篇`);
         if (papersData.length < HUGGINGFACE_CONFIG.pageLimit || (oldestDate && oldestDate < cutoffStr)) {

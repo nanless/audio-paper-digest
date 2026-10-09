@@ -245,14 +245,14 @@ describe('HuggingFace 抓取健康状态', () => {
             sleepFn: async () => {}
         }), error => error.code === 'SOURCE_FETCH_FAILED'
             && error.sourceHealth.ok === false
-            && error.sourceHealth.failures.some(item => /invalid paper items/.test(item.error)));
+            && error.sourceHealth.failures.some(item => /响应包含非法论文条目/.test(item.error)));
     });
 
     it('daily_papers 使用 HF 入选日期分页，不被旧 arXiv 日期提前截断', async () => {
         const selectedAt = new Date().toISOString();
         const firstPage = Array.from({ length: 100 }, (_, index) => ({
             publishedAt: selectedAt,
-            paper: { id: `2607.${String(index).padStart(5, '0')}`, title: 'old but selected today', authors: [], publishedAt: '2020-01-01T00:00:00Z' }
+            paper: { id: `2607.${String(index).padStart(5, '0')}`, title: 'old but selected today', summary: 'Audio study.', authors: [], publishedAt: '2020-01-01T00:00:00Z' }
         }));
         const urls = [];
         await fetchHuggingFacePapers(new Set(), {
@@ -271,7 +271,7 @@ describe('HuggingFace 抓取健康状态', () => {
     it('papers API 满页时继续分页，直到短页或日期截止线', async () => {
         const publishedAt = new Date().toISOString();
         const firstPage = Array.from({ length: 100 }, (_, index) => ({
-            id: `2607.${String(index).padStart(5, '0')}`, title: 'new', authors: [], publishedAt
+            id: `2607.${String(index).padStart(5, '0')}`, title: 'new', summary: 'Audio study.', authors: [], publishedAt
         }));
         const urls = [];
         await fetchHuggingFacePapers(new Set(), {
@@ -292,7 +292,7 @@ describe('HuggingFace 抓取健康状态', () => {
         const publishedAt = new Date().toISOString();
         const repeatedPage = Array.from({ length: 100 }, (_, index) => ({
             id: `2607.${String(index).padStart(5, '0')}`,
-            title: 'new', authors: [], publishedAt
+            title: 'new', summary: 'Audio study.', authors: [], publishedAt
         }));
         const urls = [];
         const result = await fetchHuggingFacePapers(new Set(), {
