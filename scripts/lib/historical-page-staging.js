@@ -27,6 +27,7 @@ const RENDERER_IMPLEMENTATION_FILES = Object.freeze([
     'scripts/lib/historical-postprocess-scheduler.js',
     'scripts/lib/historical-daily-aggregate.js',
     'scripts/lib/historical-tag-assignment.js',
+    'scripts/lib/immutable-file.js',
     'scripts/lib/tag-catalog.js',
     'config/tag-catalog.json',
     'scripts/historical-page-render.py',
@@ -98,18 +99,25 @@ function strictJson(bytes, label) {
     try { return JSON.parse(source); } catch { throw new Error(`${label} 的内容不是有效的 JSON。`); }
 }
 
-function readRegular(filename, maximum, label) {
+function readRegular(filename, maximum, label, allowPendingLink = false) {
     let fd;
     try {
         const before = fs.lstatSync(filename);
-        if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maximum) throw new Error(`${label} 不安全：必须是没有符号链接、仅有一个硬链接且大小不超过限制的普通文件。`);
+        if (!before.isFile() || before.isSymbolicLink() || (before.nlink !== 1 && !(allowPendingLink && before.nlink === 2)) || before.size > maximum) throw new Error(`${label} 不安全：必须是没有符号链接、仅有一个硬链接且大小不超过限制的普通文件。`);
         fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
         const opened = fs.fstatSync(fd); const named = fs.lstatSync(filename);
-        if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
+        if (!opened.isFile() || opened.nlink !== before.nlink || named.isSymbolicLink() || named.nlink !== before.nlink
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size !== named.size) throw new Error(`${label} 打开后的文件与当前路径不对应，或文件类型、链接数量、大小不符合要求。`);
         const bytes = fs.readFileSync(fd);
-        if (bytes.length !== opened.size) throw new Error(`${label} 的读取字节数与打开时记录的文件大小不一致。`);
-        return { bytes, fileSha256: sha256(bytes) };
+        const after = fs.fstatSync(fd);
+        const finalNamed = fs.lstatSync(filename);
+        if (bytes.length !== opened.size || after.size !== opened.size
+            || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs
+            || finalNamed.dev !== opened.dev || finalNamed.ino !== opened.ino
+            || finalNamed.isSymbolicLink() || finalNamed.nlink !== opened.nlink) {
+            throw new Error(`${label} 的读取字节数不符，或文件在读取期间发生变化。`);
+        }
+        return { bytes, fileSha256: sha256(bytes), ...(allowPendingLink ? { pendingLink: opened.nlink === 2 } : {}) };
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
@@ -405,33 +413,16 @@ function defaultRender(packet, dependencies = {}) {
     }
 }
 
-function writeExact(filename, bytes, dependencies = {}) {
-    fresh.assertSafeDirectory(path.dirname(filename), true); const payload = Buffer.from(bytes); const io = dependencies.io || fs;
-    let fd; let created = null; let completed = false;
-    try {
-        fd = io.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW, 0o600);
-        created = fs.fstatSync(fd, { bigint: true }); let offset = 0;
-        while (offset < payload.length) {
-            const written = io.writeSync(fd, payload, offset, payload.length - offset, offset);
-            if (!Number.isSafeInteger(written) || written <= 0 || written > payload.length - offset) throw new Error(`写入返回的字节数无效，无法继续写入页面生成文件：${filename}`);
-            offset += written;
-        }
-        io.fsyncSync(fd); completed = true;
+function writeExact(filename, bytes) {
+    fresh.assertSafeDirectory(path.dirname(filename), true);
+    const payload = Buffer.from(bytes);
+    if (payload.length > 64 * 1024 * 1024) throw new Error(`页面生成文件超过允许的大小：${filename}`);
+    require('./immutable-file.js').writeImmutableFile(filename, payload, message => {
+        throw new Error(`${message}：${filename}`);
+    });
+    if (!readRegular(filename, 64 * 1024 * 1024, '已写入的页面生成文件').bytes.equals(payload)) {
+        throw new Error(`页面生成文件的实际内容与写入内容不一致：${filename}`);
     }
-    catch (error) {
-        if (error.code !== 'EEXIST') throw error;
-        if (!readRegular(filename, 64 * 1024 * 1024, '已有页面生成文件').bytes.equals(payload)) throw new Error(`已有页面生成文件与待写入内容不同，不能覆盖：${filename}`);
-    }
-    finally {
-        if (fd !== undefined) io.closeSync(fd);
-        if (!completed && created) {
-            try { const named = fs.lstatSync(filename, { bigint: true });
-                if (named.isFile() && !named.isSymbolicLink() && named.nlink === 1n
-                    && named.dev === created.dev && named.ino === created.ino) fs.unlinkSync(filename); }
-            catch (cleanupError) { if (cleanupError.code !== 'ENOENT') throw cleanupError; }
-        }
-    }
-    if (!readRegular(filename, 64 * 1024 * 1024, '已写入的页面生成文件').bytes.equals(payload)) throw new Error(`页面生成文件的实际内容与写入内容不一致：${filename}`);
     return sha256(payload);
 }
 
@@ -452,19 +443,26 @@ function stagedFileInventory(runRoot, maximum = 10000) {
 }
 
 function readExistingStaging(runRoot) {
-    const loadedIntent = readRegular(path.join(runRoot, 'intent.json'), 16 * 1024 * 1024, '已有页面生成输入记录');
+    // 仅在显式 apply 内预读双链接；先完成身份与全部字节核验，再回收本人死写者残留。
+    const pendingLinks = [];
+    const readCandidate = (filename, maximum, label) => {
+        const loaded = readRegular(filename, maximum, label, true);
+        if (loaded.pendingLink) pendingLinks.push({ filename, bytes: loaded.bytes });
+        return loaded;
+    };
+    const loadedIntent = readCandidate(path.join(runRoot, 'intent.json'), 16 * 1024 * 1024, '已有页面生成输入记录');
     const intent = normalizeStagingIntent(strictJson(loadedIntent.bytes, '已有页面生成输入记录'));
-    const loadedManifest = readRegular(path.join(runRoot, 'manifest.json'), 16 * 1024 * 1024, '已有页面生成清单');
+    const loadedManifest = readCandidate(path.join(runRoot, 'manifest.json'), 16 * 1024 * 1024, '已有页面生成清单');
     const manifest = normalizeStagingManifest(strictJson(loadedManifest.bytes, '已有页面生成清单'));
     for (const page of manifest.pages) {
         const target = path.resolve(runRoot, ...page.stagedPath.split('/'));
         if (!target.startsWith(`${runRoot}${path.sep}`)
-            || readRegular(target, 32 * 1024 * 1024, '待恢复页面').fileSha256 !== page.contentSha256) throw new Error('恢复页面的路径越出运行目录，或文件 SHA 与生成清单不一致。');
+            || readCandidate(target, 32 * 1024 * 1024, '待恢复页面').fileSha256 !== page.contentSha256) throw new Error('恢复页面的路径越出运行目录，或文件 SHA 与生成清单不一致。');
     }
     for (const asset of manifest.assets) {
         const target = path.resolve(runRoot, 'assets', ...asset.path.split('/'));
         if (!target.startsWith(`${path.join(runRoot, 'assets')}${path.sep}`)) throw new Error('恢复资源的路径越出了当前运行的资源目录。');
-        const found = readRegular(target, 64 * 1024 * 1024, '待恢复资源');
+        const found = readCandidate(target, 64 * 1024 * 1024, '待恢复资源');
         if (found.fileSha256 !== asset.sha256 || found.bytes.length !== asset.size) throw new Error('恢复资源的 SHA 或字节数与生成清单不一致。');
     }
     const assignmentProofs = Object.create(null);
@@ -474,7 +472,7 @@ function readExistingStaging(runRoot) {
             && stableHash(assignmentProofs[page.paperId]) !== stableHash(proof)) throw new Error(`论文 ${page.paperId} 的多个已保存页面绑定了不同的标签分配凭证。`);
         assignmentProofs[page.paperId] = proof;
     }
-    return { intent, manifest, assignmentProofs };
+    return { intent, manifest, assignmentProofs, pendingLinks };
 }
 
 function stageHistoricalPages(options, dependencies = {}) {
@@ -541,17 +539,24 @@ function stageHistoricalPages(options, dependencies = {}) {
         if (stableHash(recoveredPageBindings) !== stableHash(recoveredBindings)) {
             throw new Error('恢复记录中的分析、标签或页面对应关系与本次输入不一致。');
         }
+        for (const pending of existing.pendingLinks) writeExact(pending.filename, pending.bytes);
+        // 不能把允许双链接的预读当成最终通过；恢复后沿原单链接规则再次读取。
+        for (const pending of existing.pendingLinks) readRegular(pending.filename, 64 * 1024 * 1024, '恢复后的页面生成文件');
         return { ...plan, status: 'recovered', stagingRunId: options.stagingRunId, stagingRoot: runRoot,
             pageCount: manifest.pages.length, manifestSha256: manifest.manifestSha256,
             manifest: structuredClone(manifest) };
     }
-    const priorEntries = fs.readdirSync(runRoot).sort();
-    if (priorEntries.some(name => !['intent.json', 'pages', 'assets'].includes(name))) {
-        throw new Error('旧运行目录中有无法与输入记录对应的未完成文件；请使用新的运行 ID。');
-    }
+    let priorEntries = fs.readdirSync(runRoot).sort();
     if (priorEntries.includes('intent.json')) {
-        const priorIntent = normalizeStagingIntent(strictJson(readRegular(intentFile, 16 * 1024 * 1024, '未完成的页面生成输入记录').bytes, '未完成的页面生成输入记录'));
+        const priorIntent = normalizeStagingIntent(strictJson(readRegular(intentFile, 16 * 1024 * 1024, '未完成的页面生成输入记录', true).bytes, '未完成的页面生成输入记录'));
         if (priorIntent.contract === LEGACY_INTENT_CONTRACT) throw new Error('旧格式的页面生成输入记录尚无完整清单；请保留原文件并使用新的运行 ID。');
+        if (stableHash(priorIntent) !== stableHash(intent)) throw new Error('已有页面生成输入记录与本次输入不一致。');
+        writeExact(intentFile, Buffer.from(`${JSON.stringify(intent, null, 2)}\n`));
+        priorEntries = fs.readdirSync(runRoot).sort();
+    }
+    const unknownEntries = priorEntries.filter(name => !['intent.json', 'pages', 'assets'].includes(name));
+    if (unknownEntries.length) {
+        throw new Error(`旧运行目录中有无法与输入记录对应的未完成文件：${unknownEntries.map(name => path.join(runRoot, name)).join('，')}。请核验写入进程和来源凭证后单独处理，或使用新的运行 ID。`);
     }
     for (const name of priorEntries.filter(name => ['pages', 'assets'].includes(name))) {
         fresh.assertSafeDirectory(path.join(runRoot, name));

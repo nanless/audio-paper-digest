@@ -742,12 +742,17 @@ test('重新签名的来源文件实际 SHA 与 run.json 不符时，分析加�
 test('共用的不可变暂存写入器会删掉自己写坏的 EIO 文件，并安全重试', t => {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-short-write-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true })); const filename = path.join(root, 'page.md');
-    let calls = 0; const io = { openSync: fs.openSync, closeSync: fs.closeSync, fsyncSync: fs.fsyncSync,
-        writeSync: (fd, buffer, offset, length, position) => {
-            calls += 1; if (calls === 1) return fs.writeSync(fd, buffer, offset, Math.min(3, length), position);
-            const error = new Error('injected short-write EIO'); error.code = 'EIO'; throw error;
-        } };
-    assert.throws(() => pageApi.writeExact(filename, Buffer.from('complete bytes'), { io }), /EIO/);
+    let calls = 0;
+    const originalWrite = fs.writeSync;
+    const writeMock = t.mock.method(fs, 'writeSync', (fd, buffer, offset, length, position) => {
+        calls += 1;
+        if (calls === 1) return originalWrite(fd, buffer, offset, Math.min(3, length), position);
+        const error = new Error('injected short-write EIO');
+        error.code = 'EIO';
+        throw error;
+    });
+    assert.throws(() => pageApi.writeExact(filename, Buffer.from('complete bytes')), /EIO/);
+    writeMock.mock.restore();
     assert.equal(fs.existsSync(filename), false);
     assert.equal(pageApi.writeExact(filename, Buffer.from('complete bytes')), sha256('complete bytes'));
 });

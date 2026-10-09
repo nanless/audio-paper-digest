@@ -379,7 +379,7 @@ test('writeExact 在恢复路径上拒绝末端和父级符号链接', t => {
     const f = fixture(t); const outside = path.join(f.root, 'outside.bin'); fs.writeFileSync(outside, 'outside');
     const safe = path.join(f.root, 'safe'); fs.mkdirSync(safe);
     const leaf = path.join(safe, 'leaf.bin'); fs.symlinkSync(outside, leaf);
-    assert.throws(() => api.writeExact(leaf, Buffer.from('fresh')), /不安全：必须是没有符号链接、仅有一个硬链接且大小不超过限制的普通文件/);
+    assert.throws(() => api.writeExact(leaf, Buffer.from('fresh')), /普通单链接文件/);
     const parent = path.join(f.root, 'linked-parent'); fs.symlinkSync(safe, parent);
     assert.throws(() => api.writeExact(path.join(parent, 'child.bin'), Buffer.from('fresh')), /Unsafe fresh rewrite directory/);
 });
@@ -406,4 +406,159 @@ test('没有清单的旧版半成品文件因缺少输入意图而被拒绝', t 
         stagingRunId: runId, analysisRunId: ANALYSIS_RUN, limit: 'pilot', crosswalkRoot: '/unused',
         analysisRoot: '/unused', tagAssignmentRoot: '/unused', tagCatalogPath: '/unused', stagingRoot: f.root },
     f.dependencies), /生成目录中的文件与本次输入和生成结果不完全对应，无法生成清单/);
+});
+
+function stagingArgs(root) {
+    return {
+        apply: true,
+        crosswalkId: CROSSWALK,
+        stagingRunId: STAGING,
+        limit: 'pilot',
+        analysisRunId: ANALYSIS_RUN,
+        crosswalkRoot: '/unused',
+        analysisRoot: '/unused',
+        tagAssignmentRoot: '/unused',
+        tagCatalogPath: '/unused',
+        stagingRoot: root
+    };
+}
+
+function interruptedStage(f, target, beforeLink = false) {
+    const script = `
+        const fs = require('node:fs');
+        const api = require(process.argv[1]);
+        const { args, state, assignment, paper, target, beforeLink } = JSON.parse(process.argv[2]);
+        const dependencies = {
+            readCrosswalk: () => state,
+            findAssignment: () => ({ value: assignment, fileSha256: 'e'.repeat(64) }),
+            rendererImplementationSha256: () => ${JSON.stringify(RENDERER_SHA)},
+            loadTagCatalog: () => ({ registrySha256: ${JSON.stringify(REGISTRY_SHA)} }),
+            loadRun: () => ({}),
+            runSnapshot: () => ({ analysisFileSha256: 'a'.repeat(64), papers: [paper] }),
+            buildAssignment: () => assignment,
+            render: packet => '---\\ndate: ' + packet.cohortDate + '\\n---\\nNEW PAGE',
+            now: () => '2026-09-07T00:00:00.000Z'
+        };
+        const link = fs.linkSync;
+        fs.linkSync = function(source, destination) {
+            if (!beforeLink) link.call(this, source, destination);
+            if (destination.endsWith(target)) process.kill(process.pid, 'SIGKILL');
+            if (beforeLink) link.call(this, source, destination);
+        };
+        api.stageHistoricalPages(args, dependencies);
+    `;
+    return require('node:child_process').spawnSync(process.execPath, [
+        '-e', script,
+        require.resolve('../scripts/lib/historical-page-staging'),
+        JSON.stringify({ args: stagingArgs(f.root), state: f.state, assignment: f.assignment,
+            paper: f.paper, target, beforeLink })
+    ], { encoding: 'utf8', timeout: 10000 });
+}
+
+test('页面短写失败不留下半截正式文件，同一意图可以正常重试', t => {
+    const f = fixture(t);
+    const args = stagingArgs(f.root);
+    const original = fs.writeSync;
+    let injected = false;
+    fs.writeSync = function(fd, bytes, offset, length, position) {
+        if (!injected) {
+            injected = true;
+            original.call(this, fd, bytes, offset, 4, position);
+            throw Object.assign(new Error('测试页面磁盘写入失败'), { code: 'EIO' });
+        }
+        return original.call(this, fd, bytes, offset, length, position);
+    };
+    try {
+        assert.throws(() => api.stageHistoricalPages(args, f.dependencies), /测试页面磁盘写入失败/);
+    } finally {
+        fs.writeSync = original;
+    }
+    assert.equal(fs.existsSync(path.join(f.root, STAGING, 'intent.json')), false);
+    assert.equal(api.stageHistoricalPages(args, f.dependencies).status, 'staged');
+});
+
+test('正式链接后进程退出，意图、页面和最终清单都能从同一公开入口恢复', t => {
+    for (const target of ['intent.json', 'page-0.md', 'manifest.json']) {
+        const f = fixture(t);
+        const child = interruptedStage(f, target);
+        assert.equal(child.signal, 'SIGKILL', child.stderr);
+        const relative = target === 'page-0.md' ? 'pages/content/posts/page-0.md' : target;
+        const filename = path.join(f.root, STAGING, relative);
+        const originalBytes = fs.readFileSync(filename);
+        assert.equal(fs.lstatSync(filename).nlink, 2);
+        const result = api.stageHistoricalPages(stagingArgs(f.root), f.dependencies);
+        assert.equal(result.status, target === 'manifest.json' ? 'recovered' : 'staged');
+        assert.deepEqual(fs.readFileSync(filename), originalBytes);
+        assert.equal(fs.lstatSync(filename).nlink, 1);
+        assert.equal(api.stageHistoricalPages(stagingArgs(f.root), f.dependencies).status, 'recovered');
+    }
+});
+
+test('恢复前发现输入身份改变时，不删除旧清单的任何临时硬链接', t => {
+    const f = fixture(t);
+    assert.equal(interruptedStage(f, 'manifest.json').signal, 'SIGKILL');
+    const runRoot = path.join(f.root, STAGING);
+    const before = fs.readdirSync(runRoot).sort();
+    const filename = path.join(runRoot, 'manifest.json');
+    const originalBytes = fs.readFileSync(filename);
+    const changedState = structuredClone(f.state);
+    changedState.identityGroups[0].identitySha256 = '4'.repeat(64);
+    assert.throws(() => api.stageHistoricalPages(stagingArgs(f.root), {
+        ...f.dependencies,
+        readCrosswalk: () => changedState
+    }), /已有页面生成记录与本次选择.*不一致/);
+    assert.deepEqual(fs.readdirSync(runRoot).sort(), before);
+    assert.equal(fs.lstatSync(filename).nlink, 2);
+    assert.deepEqual(fs.readFileSync(filename), originalBytes);
+});
+
+test('链接前退出留下未知临时文件时明确拒绝，不把残片当成正式意图', t => {
+    const f = fixture(t);
+    assert.equal(interruptedStage(f, 'intent.json', true).signal, 'SIGKILL');
+    const runRoot = path.join(f.root, STAGING);
+    const before = fs.readdirSync(runRoot).sort();
+    assert.equal(fs.existsSync(path.join(runRoot, 'intent.json')), false);
+    assert.throws(() => api.stageHistoricalPages(stagingArgs(f.root), f.dependencies), /未完成文件/);
+    assert.deepEqual(fs.readdirSync(runRoot).sort(), before);
+});
+
+test('写入进程在正文尚未完整时被强制退出，不产生半截正式文件', t => {
+    const f = fixture(t);
+    const filename = path.join(f.root, 'page.md');
+    const script = `
+        const fs = require('node:fs');
+        const api = require(process.argv[1]);
+        const write = fs.writeSync;
+        fs.writeSync = function(fd, bytes, offset, length, position) {
+            write.call(this, fd, bytes, offset, 4, position);
+            process.kill(process.pid, 'SIGKILL');
+        };
+        api.writeExact(process.argv[2], Buffer.from('complete historical page'));
+    `;
+    const child = require('node:child_process').spawnSync(process.execPath, [
+        '-e', script, require.resolve('../scripts/lib/historical-page-staging'), filename
+    ], { encoding: 'utf8', timeout: 10000 });
+    assert.equal(child.signal, 'SIGKILL', child.stderr);
+    assert.equal(fs.existsSync(filename), false);
+    assert.ok(fs.readdirSync(f.root).some(name => name.endsWith('.tmp')),
+        '链接前退出的未知临时文件保留供核验，不自动删除');
+});
+
+test('只读拒绝双链接，显式恢复也不能删除未知链接或活写者链接', t => {
+    for (const owner of ['unknown', 'live']) {
+        const f = fixture(t);
+        api.stageHistoricalPages(stagingArgs(f.root), f.dependencies);
+        const filename = path.join(f.root, STAGING, 'manifest.json');
+        const hostId = crypto.createHash('sha256').update(os.hostname()).digest('hex').slice(0, 16);
+        const link = path.join(path.dirname(filename), owner === 'live'
+            ? `.manifest.json.${hostId}.${process.pid}.${crypto.randomUUID()}.tmp`
+            : 'unknown-hardlink');
+        fs.linkSync(filename, link);
+        const originalBytes = fs.readFileSync(filename);
+        assert.throws(() => api.readRegular(filename, 16 * 1024 * 1024, '只读检查'), /不安全/);
+        assert.throws(() => api.stageHistoricalPages(stagingArgs(f.root), f.dependencies), /普通单链接文件/);
+        assert.equal(fs.existsSync(link), true);
+        assert.equal(fs.lstatSync(filename).nlink, 2);
+        assert.deepEqual(fs.readFileSync(filename), originalBytes);
+    }
 });
