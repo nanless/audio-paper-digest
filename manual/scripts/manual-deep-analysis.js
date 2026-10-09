@@ -645,13 +645,21 @@ function finalizeManualAnalysisBatchState(filePath, options) {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date || '') || expectedIds.length === 0) {
         throw new Error('finalizeManualAnalysisBatchState 的 date 必须符合 YYYY-MM-DD 格式，目标论文 ID 列表 expectedIds 在规范化后不能为空。');
     }
+    const failedAttempts = options.failedAttempts || {};
+    if (!failedAttempts || typeof failedAttempts !== 'object' || Array.isArray(failedAttempts)
+        || Object.entries(failedAttempts).some(([id, message]) => (
+            normalizedId(id) !== id || !expectedIds.includes(id) || typeof message !== 'string' || !message
+        ))) {
+        throw new Error('本轮失败记录必须按批次内规范论文 ID 保存具体错误。');
+    }
     return updateJsonFileLocked(filePath, current => {
         const currentObject = current && !Array.isArray(current) ? current : {};
         const papers = Array.isArray(current) ? current : (currentObject.papers || []);
         const byId = new Map(papers.map(paper => [normalizedId(paper), paper]));
         const expectedRecords = expectedIds.map(id => byId.get(id) || null);
         const isExpectedSuccess = record => (
-            isSuccessfulAnalysisRecord(record)
+            !Object.prototype.hasOwnProperty.call(failedAttempts, normalizedId(record))
+            && isSuccessfulAnalysisRecord(record)
             && (!options.requiredManualV6Runtime || (
                 record.manualDepth === MANUAL_DEPTH_V6
                 && record.manualV6Provenance?.runtimeMode === options.requiredManualV6Runtime
@@ -687,6 +695,7 @@ function finalizeManualAnalysisBatchState(filePath, options) {
                 failed: failedIds.length,
                 remainingFailed: failedIds.length,
                 failedIds,
+                failedAttempts: { ...failedAttempts },
                 manualComplete: expectedRecords.filter(record => (
                     isExpectedSuccess(record)
                     && record.analysisManifest?.manualTakeover?.mode === MANUAL_COMPLETE_STATUS
@@ -2037,6 +2046,7 @@ async function run() {
     const saved = finalizeManualAnalysisBatchState(analysisFilePath, {
         date,
         expectedIds: papers.map(normalizedId),
+        failedAttempts: Object.fromEntries(failures),
         ...(v6RuntimeMode ? { requiredManualV6Runtime: v6RuntimeMode } : {}),
         stats: {
             skippedCanonical: skipped,
