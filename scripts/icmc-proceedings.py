@@ -14,6 +14,8 @@ import json
 import os
 import re
 import sys
+import stat
+import uuid
 from pathlib import Path
 
 import fitz
@@ -126,24 +128,119 @@ def extract_metadata(source: Path, index_url: str, combined_pdf_url: str) -> dic
         document.close()
 
 
+def _split_directory_unchanged(output_dir: Path, directory_fd: int) -> None:
+    named = output_dir.lstat()
+    held = os.fstat(directory_fd)
+    if not stat.S_ISDIR(named.st_mode) or not os.path.samestat(named, held):
+        raise ValueError(f"拆分输出目录已被替换：{output_dir}")
+
+
+def _existing_split_matches(directory_fd: int, name: str, expected: bytes) -> bool:
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+    except FileNotFoundError:
+        return False
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size != len(expected):
+            raise ValueError(f"已有拆分 PDF 不是预期长度的普通单链接文件：{name}")
+        data = bytearray()
+        while len(data) <= len(expected):
+            chunk = os.read(fd, min(65536, len(expected) + 1 - len(data)))
+            if not chunk:
+                break
+            data.extend(chunk)
+        after = os.fstat(fd)
+        named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        signature = lambda item: (item.st_dev, item.st_ino, item.st_size,
+                                  item.st_mtime_ns, item.st_ctime_ns, item.st_nlink)
+        if signature(before) != signature(after) or signature(after) != signature(named) \
+                or not stat.S_ISREG(named.st_mode) or data != expected:
+            raise ValueError(f"已有拆分 PDF 与当前来源页码的完整字节不一致：{name}")
+        return True
+    finally:
+        os.close(fd)
+
+
+def _write_split_pdf(output_dir: Path, directory_fd: int, name: str, payload: bytes) -> bool:
+    _split_directory_unchanged(output_dir, directory_fd)
+    if _existing_split_matches(directory_fd, name, payload):
+        return False
+    temporary = f".icmc-write-{uuid.uuid4().hex}.tmp"
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                 0o600, dir_fd=directory_fd)
+    created = os.fstat(fd)
+    linked = False
+    failure = None
+    try:
+        os.fchmod(fd, 0o600)
+        offset = 0
+        while offset < len(payload):
+            count = os.write(fd, payload[offset:])
+            if count <= 0 or count > len(payload) - offset:
+                raise OSError("拆分 PDF 临时文件未完整写入")
+            offset += count
+        os.fsync(fd)
+        _split_directory_unchanged(output_dir, directory_fd)
+        named = os.stat(temporary, dir_fd=directory_fd, follow_symlinks=False)
+        if not stat.S_ISREG(named.st_mode) or named.st_nlink != 1 or not os.path.samestat(created, named):
+            raise ValueError("拆分 PDF 临时文件已被替换，保留现有文件")
+        try:
+            os.link(temporary, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd, follow_symlinks=False)
+            linked = True
+        except FileExistsError:
+            if not _existing_split_matches(directory_fd, name, payload):
+                raise ValueError(f"并发拆分结果消失：{name}")
+    except BaseException as exc:
+        failure = exc
+        raise
+    finally:
+        try:
+            named = os.stat(temporary, dir_fd=directory_fd, follow_symlinks=False)
+            if not stat.S_ISREG(named.st_mode) or not os.path.samestat(created, named) \
+                    or named.st_nlink != (2 if linked else 1):
+                raise ValueError("拆分 PDF 临时文件身份发生变化，拒绝清理")
+            os.unlink(temporary, dir_fd=directory_fd)
+            os.fsync(directory_fd)
+        except Exception as cleanup_error:
+            if failure is not None:
+                raise failure from cleanup_error
+            raise
+        finally:
+            os.close(fd)
+    _split_directory_unchanged(output_dir, directory_fd)
+    if not _existing_split_matches(directory_fd, name, payload):
+        raise ValueError(f"拆分后的 PDF 文件缺失：{name}")
+    return linked
+
+
 def split_papers(source: Path, page_map_file: Path, output_dir: Path) -> dict:
     page_map = json.loads(page_map_file.read_text(encoding="utf-8"))
     ranges = page_map.get("papers")
     if not isinstance(ranges, list) or not ranges:
         raise ValueError("页码映射里没有 papers 区间")
-    output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     document = fitz.open(source)
+    directory_fd = None
     try:
+        seen = set()
+        for item in ranges:
+            paper_id = item.get("id") if isinstance(item, dict) else None
+            if not isinstance(paper_id, str) or not re.fullmatch(r"paper-(?:0|[1-9][0-9]*)", paper_id):
+                raise ValueError("页码映射里的论文编号必须是 paper- 加半角整数，不能包含路径")
+            if paper_id in seen:
+                raise ValueError(f"页码映射含重复论文编号：{paper_id}")
+            seen.add(paper_id)
+            start_page, end_page = item.get("startPage"), item.get("endPage")
+            if type(start_page) is not int or type(end_page) is not int \
+                    or not (1 <= start_page <= end_page <= document.page_count):
+                raise ValueError(f"{paper_id} 的页码范围不合法：起止页要落在 1 到 PDF 总页数之间，且起始页不大于结束页")
+        output_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        directory_fd = os.open(output_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        _split_directory_unchanged(output_dir, directory_fd)
         written = []
         for item in ranges:
             paper_id = item["id"]
-            start_page = int(item["startPage"])
-            end_page = int(item["endPage"])
-            target = output_dir / f"{paper_id}.pdf"
-            if target.exists():
-                continue
-            if not (1 <= start_page <= end_page <= document.page_count):
-                raise ValueError(f"{paper_id} 的页码范围不合法：起止页要落在 1 到 PDF 总页数之间，且起始页不大于结束页")
+            start_page, end_page = item["startPage"], item["endPage"]
             # 这里必须用 MuPDF：源文件的页面树声称末尾还有两页，而 pypdf
             # 数不出来。随后再用 pypdf 重写这一段，好让派生出的字节在每次
             # 重跑时都有稳定的文档 ID 和元数据。
@@ -161,12 +258,14 @@ def split_papers(source: Path, page_map_file: Path, output_dir: Path) -> dict:
                 "/Producer": "audio-paper-digest-icmc-split-v1",
                 "/Creator": "audio-paper-digest",
             })
-            with target.open("xb") as stream:
-                output.write(stream)
-            os.chmod(target, 0o600)
-            written.append(paper_id)
+            stream = io.BytesIO()
+            output.write(stream)
+            if _write_split_pdf(output_dir, directory_fd, f"{paper_id}.pdf", stream.getvalue()):
+                written.append(paper_id)
         return {"written": written, "total": len(ranges)}
     finally:
+        if directory_fd is not None:
+            os.close(directory_fd)
         document.close()
 
 

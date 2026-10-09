@@ -12,6 +12,8 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
+import errno
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -276,7 +278,7 @@ class SplitPapersTests(IcmcTestCase):
         bad = [dict(self.RANGES[0], startPage=8, endPage=4)]
         with self.assertRaisesRegex(ValueError, "paper-1 的页码范围不合法"):
             icmc.split_papers(source, self.page_map_file(bad), output)
-        self.assertEqual([item.name for item in output.iterdir()], [])
+        self.assertFalse(output.exists())
 
     def test_failure_页码映射没有区间时必须报错(self):
         source = self.fixture_pdf()
@@ -285,6 +287,114 @@ class SplitPapersTests(IcmcTestCase):
                 page_map = self.page_map_file(papers, name=f"page-map-{papers!r}.json".replace("/", "_"))
                 with self.assertRaisesRegex(ValueError, "页码映射里没有 papers 区间"):
                     icmc.split_papers(source, page_map, self.directory / "out")
+
+    def test_failure_全部身份与页码在创建任何输出之前验证(self):
+        source = self.fixture_pdf()
+        cases = [dict(self.RANGES[0], id=value) for value in
+                 ("../escaped", "/absolute", "paper-1/child", "paper-1\\child", "paper-１", "paper-01", "", 1)]
+        cases += [dict(self.RANGES[0], startPage=value) for value in (True, 1.5, "1")]
+        for index, invalid in enumerate(cases):
+            with self.subTest(invalid=invalid):
+                output = self.directory / f"invalid-{index}"
+                with self.assertRaises(ValueError):
+                    icmc.split_papers(source, self.page_map_file([self.RANGES[1], invalid]), output)
+                self.assertFalse(output.exists())
+                self.assertFalse((self.directory / "escaped.pdf").exists())
+        with self.assertRaisesRegex(ValueError, "重复论文编号"):
+            icmc.split_papers(source, self.page_map_file([self.RANGES[0], self.RANGES[0]]), self.directory / "duplicate")
+
+    def test_failure_已有损坏或错误页码PDF不能被当成完成且保持原字节(self):
+        source = self.fixture_pdf()
+        for name, contents in (("partial", b"%PDF-"), ("other-source-pages", source.read_bytes())):
+            with self.subTest(name=name):
+                output = self.directory / name
+                output.mkdir()
+                target = output / "paper-1.pdf"
+                target.write_bytes(contents)
+                with self.assertRaises(ValueError):
+                    icmc.split_papers(source, self.page_map_file([self.RANGES[0]]), output)
+                self.assertEqual(target.read_bytes(), contents)
+
+    def test_failure_已有链接和特殊文件不能被当成拆分结果(self):
+        source = self.fixture_pdf()
+        for kind in ("symlink", "hardlink", "fifo", "directory"):
+            with self.subTest(kind=kind):
+                output = self.directory / kind
+                output.mkdir()
+                target = output / "paper-1.pdf"
+                if kind == "symlink":
+                    target.symlink_to(source)
+                elif kind == "hardlink":
+                    os.link(source, target)
+                elif kind == "fifo":
+                    os.mkfifo(target)
+                else:
+                    target.mkdir()
+                with self.assertRaises((OSError, ValueError)):
+                    icmc.split_papers(source, self.page_map_file([self.RANGES[0]]), output)
+                self.assertTrue(target.exists())
+
+    def test_failure_PDF序列化半途失败不留下正式半文件且可重跑(self):
+        source = self.fixture_pdf()
+        output = self.directory / "writer-failure"
+        page_map = self.page_map_file([self.RANGES[0]])
+        original_error = OSError(errno.EIO, "测试 PDF 输出短写")
+        def short_write(_writer, stream):
+            stream.write(b"%PDF-")
+            raise original_error
+        with mock.patch.object(icmc.PdfWriter, "write", short_write):
+            with self.assertRaises(OSError) as caught:
+                icmc.split_papers(source, page_map, output)
+        self.assertIs(caught.exception, original_error)
+        self.assertFalse((output / "paper-1.pdf").exists())
+        self.assertEqual(icmc.split_papers(source, page_map, output)["written"], ["paper-1"])
+
+    def test_failure_临时文件真实短写清理后可正常重跑(self):
+        source = self.fixture_pdf()
+        output = self.directory / "temporary-write-failure"
+        page_map = self.page_map_file([self.RANGES[0]])
+        original_write = icmc.os.write
+        original_error = OSError(errno.EIO, "测试临时 PDF 短写")
+        def short_write(fd, data):
+            original_write(fd, data[:4])
+            raise original_error
+        with mock.patch.object(icmc.os, "write", short_write):
+            with self.assertRaises(OSError) as caught:
+                icmc.split_papers(source, page_map, output)
+        self.assertIs(caught.exception, original_error)
+        self.assertEqual(list(output.iterdir()), [])
+        self.assertEqual(icmc.split_papers(source, page_map, output)["written"], ["paper-1"])
+
+    def test_failure_竞争者正式文件与替换后的临时文件均保留(self):
+        source = self.fixture_pdf()
+        page_map = self.page_map_file([self.RANGES[0]])
+        winner = b"another writer"
+        output = self.directory / "competitor"
+        original_link = icmc.os.link
+        def create_winner_then_link(src, dst, **kwargs):
+            (output / dst).write_bytes(winner)
+            return original_link(src, dst, **kwargs)
+        with mock.patch.object(icmc.os, "link", create_winner_then_link):
+            with self.assertRaises(ValueError):
+                icmc.split_papers(source, page_map, output)
+        self.assertEqual((output / "paper-1.pdf").read_bytes(), winner)
+        self.assertEqual([p.name for p in output.iterdir()], ["paper-1.pdf"])
+        output = self.directory / "temporary-competitor"
+        original_write = icmc.os.write
+        original_error = OSError(errno.EIO, "临时文件换主后写入失败")
+        def replace_temporary(fd, data):
+            original_write(fd, data[:4])
+            temporary = next(output.glob(".icmc-write-*.tmp"))
+            temporary.unlink()
+            temporary.write_bytes(winner)
+            raise original_error
+        with mock.patch.object(icmc.os, "write", replace_temporary):
+            with self.assertRaises(OSError) as caught:
+                icmc.split_papers(source, page_map, output)
+        self.assertIs(caught.exception, original_error)
+        self.assertIsInstance(caught.exception.__cause__, ValueError)
+        self.assertEqual(next(output.glob(".icmc-write-*.tmp")).read_bytes(), winner)
+        self.assertFalse((output / "paper-1.pdf").exists())
 
 
 class CommandLineTests(IcmcTestCase):
