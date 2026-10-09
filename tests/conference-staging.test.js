@@ -185,15 +185,15 @@ test('提取凭证、提取器、PDF、文本或产物字节一变，暂存就�
     const { receiptSha256: _old, ...receiptBody } = changedReceipt;
     changedReceipt.receiptSha256 = extractionReceipt.stableHash(receiptBody);
     fs.writeFileSync(receiptFile, `${JSON.stringify(changedReceipt, null, 2)}\n`);
-    assert.throws(() => stage(f, reviewed), /extractor\/backend name or version/);
+    assert.throws(() => stage(f, reviewed), /抽取器或其底层程序的名称、版本与指定实现不同/);
 
     extraction(f.sources, f.first.handle); fs.appendFileSync(path.join(f.sources, '100.pdf'), 'changed');
-    assert.throws(() => stage(f, reviewed), /SHA differs/);
+    assert.throws(() => stage(f, reviewed), /SHA 与请求或凭证中的记录不同/);
     extraction(f.sources, f.first.handle); fs.appendFileSync(path.join(f.sources, '100.txt'), 'changed');
-    assert.throws(() => stage(f, reviewed), /SHA differs/);
+    assert.throws(() => stage(f, reviewed), /SHA 与请求或凭证中的记录不同/);
     extraction(f.sources, f.first.handle); fs.appendFileSync(path.join(f.sources, '100-artifacts.json'), ' ');
-    assert.throws(() => stage(f, reviewed), /SHA differs/);
-    assert.throws(() => extractionReceipt.extractionHandleSnapshot({}), /authenticated extraction handle/);
+    assert.throws(() => stage(f, reviewed), /SHA 与请求或凭证中的记录不同/);
+    assert.throws(() => extractionReceipt.extractionHandleSnapshot({}), /由抽取凭证校验器实际核验并生成的结果对象/);
 });
 
 test('命令行预演不写文件；实际执行在配置的暂存输出目录里用 O_EXCL 创建不可变配对', t => {

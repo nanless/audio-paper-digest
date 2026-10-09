@@ -1969,3 +1969,83 @@ test('来源升级CLI保留合法OpenReview身份大小写，仍拒绝路径和�
     }
     assert.throws(() => cli.parseArgs(argsFor(paperId).slice(0, -1)), /Use/);
 });
+
+test('真实抽取凭证拒绝后停止该论文的自动重试，其他论文继续；显式重试保留旧失败', async t => {
+    const f = fixture(t, 2);
+    f.files.conferenceAnalysisDir = path.join(f.root, 'analysis');
+    const sourceRoot = fs.realpathSync(f.root);
+    const receiptPath = path.join(sourceRoot, 'invalid.receipt.json');
+    fs.writeFileSync(receiptPath, '{}', { mode: 0o600 });
+    const extraction = require('../scripts/lib/conference-extraction-receipt.js');
+    const beforeReceipt = fs.readFileSync(receiptPath);
+    let now = Date.parse('2026-09-09T00:00:00.000Z');
+    const analyzed = [];
+    const dependencies = { ...f.deps,
+        now: () => new Date(now++).toISOString(),
+        adapter: {
+            prepareConferenceAnalysis: () => {},
+            analyzeConference: async ({ executionId }) => {
+                analyzed.push(executionId);
+                return { status: 'complete', analysisSha256: H(executionId) };
+            }
+        },
+        postprocess: {
+            stagePaper: ({ executionId }) => {
+                // 使用实际来源校验器拒绝损坏凭证，再让真实逐篇处理及调度入口接收原异常。
+                // 用已开始分析的顺序识别成员，不依赖额外的伪造错误或英文关键词。
+                if (executionId === analyzed[0]) {
+                    extraction.loadExtractionHandle(sourceRoot, 'invalid.receipt.json', { replay: false });
+                }
+                return { status: 'staged', manifest: { completionReceiptSha256: H('completion'),
+                    sourceSnapshotSha256: H('snapshot'), manifestSha256: H('manifest'),
+                    contentSha256: H('content'), pagePath: 'content/posts/valid-peer.md' } };
+            }
+        }
+    };
+    const options = { apply: true, concurrency: 1 };
+    const first = await processApi.runConferenceProcess(options, dependencies);
+    assert.equal(first.status, 'partial');
+    assert.equal(analyzed.length, 2);
+    const statePath = path.join(f.files.conferenceProcessDir, first.processId, 'state.json');
+    const readState = () => processApi.assertState(JSON.parse(fs.readFileSync(statePath)));
+    const initial = readState();
+    const failed = initial.items[f.members[0].paperId];
+    assert.equal(failed.lastFailure.code, 'CONFERENCE_EXTRACTION_RECEIPT_INTEGRITY');
+    assert.equal(failed.lastFailure.category, 'integrity');
+    assert.equal(failed.lastFailure.retryable, false);
+    assert.equal(failed.lastFailure.systemic, false);
+    assert.equal(initial.items[f.members[1].paperId].status, 'complete');
+    assert.equal(initial.batchFailure == null, true);
+    const originalFailure = structuredClone(failed.lastFailure);
+    now += 20 * 60 * 1000;
+    await processApi.runConferenceProcess(options, dependencies);
+    assert.equal(analyzed.length, 2);
+    assert.equal(readState().items[f.members[0].paperId].attempts, 1);
+    assert.deepEqual(readState().items[f.members[0].paperId].lastFailure, originalFailure);
+    assert.deepEqual(fs.readFileSync(receiptPath), beforeReceipt);
+    await processApi.runConferenceProcess({ ...options, retryFailed: true }, dependencies);
+    assert.equal(analyzed.length, 3);
+    const explicitlyRetried = readState().items[f.members[0].paperId];
+    assert.equal(explicitlyRetried.attempts, 2);
+    assert.deepEqual(explicitlyRetried.retryReleases[0].previousFailure, originalFailure);
+    assert.equal(explicitlyRetried.lastFailure.code, originalFailure.code);
+    assert.equal(explicitlyRetried.lastFailure.retryable, false);
+    assert.deepEqual(fs.readFileSync(receiptPath), beforeReceipt);
+});
+
+test('抽取凭证的稳定错误码优先于被引用的认证、网络及普通文字', () => {
+    const recovery = require('../scripts/lib/conference-process-recovery.js');
+    const extraction = require('../scripts/lib/conference-extraction-receipt.js');
+    for (const message of ['字段无效', '引用中含 HTTP 401 proxy', '普通正文']) {
+        const failure = recovery.classifyFailure(new extraction.ConferenceExtractionReceiptError(message),
+            '2026-09-09T00:00:00.000Z');
+        assert.equal(failure.category, 'integrity');
+        assert.equal(failure.retryable, false);
+        assert.equal(failure.systemic, false);
+    }
+    assert.equal(recovery.classifyFailure(new Error('HTTP 401 Unauthorized'),
+        '2026-09-09T00:00:00.000Z').category, 'authentication');
+    const network = recovery.classifyFailure(new Error('HTTP 503 upstream'), '2026-09-09T00:00:00.000Z');
+    assert.equal(network.category, 'transport');
+    assert.equal(network.systemic, true);
+});
