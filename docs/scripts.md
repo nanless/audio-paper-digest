@@ -14,9 +14,9 @@ npm run workspace:role -- status
 
 日更 `digest:*`、`fetch`、`blog:generate/review/push` 和新会议 `conference:new:*` 使用 `daily`。历史 `history:*`、旧会议 `conference:*` 维护入口、`rewrite:source` 和 `blog:activate-fresh` 使用 `history`；不能把新旧会议命令混用。
 
-首次确认用途后，用 `npm run workspace:role -- set daily|history` 绑定。整库复制后，角色标记仍指向旧真实路径；确认副本用于历史工作后才执行 `npm run workspace:role -- set history --force`。标记是 Git 忽略、权限为 `0600` 的本机文件。
+当前项目保持 `daily` 角色，旧历史工作区已废弃，不再创建历史副本或切换角色。角色标记与当前真实路径绑定，是 Git 忽略、权限为 `0600` 的本机文件。
 
-默认不允许跨角色执行：`daily` 工作区跑 `history:*` 会被拒绝，反过来也一样。用户已决定在当前日更目录跑历史功能，所以本机 `.env` 设了 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`。值为 `1` 时放行「daily 工作区执行 history 命令」，脚本会打印一条跨角色提示；反向仍然拒绝，`workspaceRealpath` 与真实路径不符也照旧拒绝。开关只放宽入口检查，不解除两个工作区不得同时生成、审查、推送博客的约束，时间要由使用者自己错开。
+默认不允许跨角色执行：`daily` 工作区跑 `history:*` 会被拒绝，反过来也一样。用户已决定在当前日更目录跑历史功能，所以本机 `.env` 设了 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`。值为 `1` 时放行「daily 工作区执行 history 命令」，脚本会打印一条跨角色提示；反向仍然拒绝，`workspaceRealpath` 与真实路径不符也照旧拒绝。开关只放宽入口检查。日更、会议和历史任务不得同时生成、审查或推送同一博客，执行任务的 Agent 负责检查运行进程并错峰。
 
 ## 日更脚本阶段与最终状态
 
@@ -42,7 +42,6 @@ npm run workspace:role -- status
 | `npm run batch -- --retry-failed-readers` | 归档并停用未完成论文的失败 Reader 候选，然后续跑，不影响已完成论文 |
 | `npm run reanalyze -- --concurrency N` | 归档并停用全部旧失败 Reader 候选，清空 Reader/图片补充状态，再用绑定来源强制重分析 |
 | `node scripts/reanalyze-selected.js ID...` | 重分析指定集合；统计口径实现见 `scripts/lib/reanalysis-helpers.js` |
-| `node scripts/refilter-reanalyze-by-date.js DATE` | 受控的历史日期重筛与重分析；实现见 `scripts/lib/reanalysis-helpers.js` |
 | `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | 从绑定来源批量刷新评分和 Reader，图片只为本次调用临时准备 |
 | `npm run validate:data` | 只读核验当前数据 |
 | `npm run keyword:recall` | 按金标准重跑关键词预筛 |
@@ -83,7 +82,7 @@ npm run conference:new:process -- --dry-run --catalog catalog.json --report repo
 
 页面生成后，独立的 `conference:new:publish:generate/review/push/status/verify` 处理发布与检查；这些入口均须提供 `--conference-id` 和 `--process-id`。命令存在不代表来源、审查或线上验收已通过。
 
-旧 `conference:*` 保留在历史工作区用于已有独立发现、筛选、提取、暂存、导入、计划、执行、分析和后处理记录的维护；旧后处理并发上限 3，不是新 process 的配置。准确参数、恢复条件与审查文件格式见[会议论文工作流](conference-workflow.md)。
+旧 `conference:*` 在当前工作区通过跨角色开关运行，用于已有独立发现、筛选、提取、暂存、导入、计划、执行、分析和后处理记录的维护；旧后处理并发上限 3，不是新 process 的配置。准确参数、恢复条件与审查文件格式见[会议论文工作流](conference-workflow.md)。
 
 ## 全历史重写
 

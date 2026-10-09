@@ -22,9 +22,9 @@ Completion also requires a successful GitHub Pages build/deploy for the publicat
 
 Run `npm run workspace:role -- status` before production commands. Daily `digest:*`, `fetch`, `blog:generate/review/push`, and new-conference `conference:new:*` commands use `daily`. Historical `history:*`, older `conference:*` maintenance, `rewrite:source`, and `blog:activate-fresh` use `history`. Do not mix new and old conference entry points.
 
-After confirming the checkout's purpose, bind it with `npm run workspace:role -- set daily|history [--force]`. A copied checkout retains a marker bound to the original real path. Force a historical role only after confirming the copy's purpose. The marker is a Git-ignored local file with `0600` permissions.
+Keep the current checkout bound to `daily`. Historical commands run here with `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`; the old history checkout is retired. Do not copy its checkpoints into this checkout. The role marker is bound to the real path, Git-ignored, and protected with `0600` permissions. The executing agent must serialize all blog generation, review, and publication.
 
-Cross-role execution is off by default: a `daily` checkout cannot run `history:*`, and the reverse is also refused. The user has decided to run historical work in the current daily checkout, so the local `.env` sets `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`. A value of `1` lets a `daily` checkout run `history` commands and prints a cross-role notice; the reverse direction and the `workspaceRealpath` check still fail. The switch only relaxes the entry check — it does not lift the rule that the two checkouts must never generate, review, or push blogs at the same time; stagger the times yourself.
+Cross-role execution is off by default: a `daily` checkout cannot run `history:*`, and the reverse is also refused. The user has decided to run historical work in the current daily checkout, so the local `.env` sets `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`. A value of `1` lets a `daily` checkout run `history` commands and prints a cross-role notice; the reverse direction and the `workspaceRealpath` check still fail. The switch only relaxes the entry check. The executing agent must serialize blog generation, review, and publication across daily, conference, and historical tasks.
 
 ## Data Stage
 
@@ -36,7 +36,6 @@ Cross-role execution is off by default: a `daily` checkout cannot run `history:*
 | `npm run batch -- --retry-failed-readers` | Archive and disable failed Reader candidates for unfinished papers, then resume |
 | `npm run reanalyze -- --concurrency N` | Archive and disable all old failed Reader candidates, clear Reader/image-supplement state, and force reanalysis from bound sources |
 | `node scripts/reanalyze-selected.js ID...` | Reanalyze selected IDs; counters live in `scripts/lib/reanalysis-helpers.js` |
-| `node scripts/refilter-reanalyze-by-date.js DATE` | Controlled historical refilter/reanalysis; implementation in `scripts/lib/reanalysis-helpers.js` |
 | `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | Refresh scores/Reader from bound sources; prepare figures only for the active call |
 | `npm run validate:data` | Read-only current data validation |
 | `npm run keyword:recall` | Recheck keyword-filter gold data |
@@ -77,7 +76,7 @@ npm run conference:new:process -- --dry-run --catalog catalog.json --report repo
 
 The independent `conference:new:publish:generate/review/push/status/verify` entries handle publication and checks. Each requires `--conference-id` and `--process-id`. Available commands do not prove that any batch passed source, review, or live-site verification.
 
-Older `conference:*` entries remain in the history workspace to maintain existing discovery, filtering, extraction, staging, import, plan, execution, analysis, and postprocessing records. The older postprocessing limit is 3, separate from new process settings. Exact arguments and evidence formats are in the [conference workflow](../conference-workflow.md).
+Older `conference:*` entries run in the current checkout with the cross-role switch to maintain existing discovery, filtering, extraction, staging, import, plan, execution, analysis, and postprocessing records. The older postprocessing limit is 3, separate from new process settings. Exact arguments and evidence formats are in the [conference workflow](../conference-workflow.md).
 
 ## Historical Direct Rewrite
 

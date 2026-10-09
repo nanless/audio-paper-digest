@@ -12,7 +12,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 - 完整日更由根目录 [`run-daily-digest.sh`](../run-daily-digest.sh) 编排；默认走
   LLM/API，入口是 `npm run digest:prepare -- YYYY-MM-DD`。只有显式 `--manual` 或
   `digest:manual` 才进入 `manual/`。
-- 全历史任务只在历史工作区运行。先准备来源、分析和私有页面，再使用独立的
+- 全历史任务在当前工作区通过 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` 运行。先准备来源、分析和私有页面，再使用独立的
   `history:direct-publication` 发布；命令存在不等于历史任务已经完成或已经上线。
 - `package.json` 是命令别名的权威清单。直接执行任意项目脚本仍必须遵守项目根
   `AGENTS.md` 的工作区角色、沙箱外运行、代理、凭据与发布要求。
@@ -57,7 +57,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `deep-analyzer.js` | Node 核心 | 获取单篇全文，执行多阶段分析、评分审计、API Reader 写作和图片规划。结构修复后，只用原文证据核验 `core-summary-detailed-v3`；按阶段依赖、SHA 和旧检查点决定恢复范围，尽量少做整篇重做。 |
 | `analysis-engine.js` | Node 共享 | 管理论文锁、重试、检查点、批量并发与结果合并，并判断每篇是否完成。 |
 | `analysis-contract.js` | Node 共享 | 核验 API 分析的结构、评分、方法和表格要求，同时能读历史 Manual 结果。 |
-| `lib/reanalysis-helpers.js` | Node 库 | 收容选中重分析与按日期重筛的恢复统计、检查点读写与日期路由实现；两 CLI 脚本只留薄包装，旧引用路径保持可用。 |
+| `lib/reanalysis-helpers.js` | Node 库 | 供指定论文重分析使用，清理 Reader 状态并更新恢复统计。 |
 | `editorial-quality.js` | Node 共享 | 检查 API/Manual 读者正文的语言、事实表述、评分和可读性。 |
 | `digest-status.js` | Node 共享 | 同步 `papers.json` 的分析状态、批次日期和恢复状态。 |
 | `lib/fetch-scheduler.js` | Node 库 | 按主机串行调度抓取，记录冷却时间并识别失败类型。 |
@@ -204,9 +204,9 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `historical-direct-rewrite-run.js` | 运行仅使用原文的直接重写分析、Reader 和单篇私有页面生成。apply 要求所选项已有同计划、同获取序号的 scheduler-ready 状态；失败阶段按来源核验过的恢复文件跨进程续跑，不能当成已生成页面。 |
 | `historical-arxiv-publication-metadata.js` | 默认对直接重写计划全部 arXiv 论文预览或批量封存官方 Atom 附件。只复用满足当前论文版本和时间窗的原始 Atom，其余按封存来源 ID 经公共 CONNECT 适配器精确获取，不调用模型。瞬时失败最多重试三次；单篇耗尽后继续整批，最后报告 partial 并非零退出。失败项不生成附件，重跑只补缺失项。 |
 | `historical-direct-aggregate.js` | 为直接重写中已完成的论文记录生成可重新核验的日汇总或会议汇总私有页面。 |
-| `historical-direct-tag-supplement.js` | 仅在历史工作区生成不可变分类补充和报告，不修改博客页面或发布状态。所需计划、词表、博客、快照及运行参数见本页的历史补充维护说明。 |
-| `historical-source-tag-assignment.js` | 仅在历史工作区按原文生成分类补充，逐请求保存选择、审查和决定的检查点。同 UUID 核验输入后续跑；账号耗尽只保存编号 partial，不占用最终产物。参数见本页的历史补充维护说明。 |
-| `historical-source-identity-supplement.js` | 仅在历史工作区核验全部封存来源和没有正式分类记录的旧页，生成独立不可变身份证明，保留会议来源与论文版本披露，不请求模型。参数见本页的历史补充维护说明。 |
+| `historical-direct-tag-supplement.js` | 在当前工作区生成不可变分类补充和报告，不修改博客页面或发布状态。所需计划、词表、博客、快照及运行参数见本页的历史补充维护说明。 |
+| `historical-source-tag-assignment.js` | 在当前工作区按原文生成分类补充，逐请求保存选择、审查和决定的检查点。同 UUID 核验输入后续跑；账号耗尽只保存编号 partial，不占用最终产物。参数见本页的历史补充维护说明。 |
+| `historical-source-identity-supplement.js` | 在当前工作区核验全部封存来源和没有正式分类记录的旧页，生成独立不可变身份证明，保留会议来源与论文版本披露，不请求模型。参数见本页的历史补充维护说明。 |
 | `historical-tag-checkpoint-export.js` | 从分类检查点或部分运行记录导出页面分类记录和处理报告，保留原分类缓存，不调用模型。恢复、排除集合和新运行参数见本页的历史补充维护说明。 |
 | `historical-direct-control.js` | 提供全历史长任务控制：`history:status` 单次或持续只读汇总任务登记记录、暂停、锁、覆盖率、汇总结果和发布阻断项；`history:pause` 保存对应计划与获取序号的停止请求；`history:resume` 只在操作锁释放后恢复。 |
 | `historical-direct-publication.js` | 全历史直接重写发布入口：按 `plan → generate → review → publish → status` 驱动单一 publication UUID；发布阶段独占共享博客锁并验证远端 `main` OID。 |
@@ -219,7 +219,6 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `batch-analyze.js` | 用当前正式分析结果绑定的日更 PDF/TXT 批量分析未完成论文。`--retry-failed-readers` 仅归档并停用这些论文的失败 Reader 候选；没有对应来源记录时停止。 |
 | `reanalyze.js` | 归档并停用全部旧失败 Reader 候选，清空 Reader 和图片补充状态后强制全量重分析。仍只读取正式分析结果精确绑定的日更 PDF/TXT，不恢复旧分析、正文或缓存。 |
 | `reanalyze-selected.js` | 只重分析指定 arXiv ID，并同步恢复统计。 |
-| `refilter-reanalyze-by-date.js` | 对历史日期重新筛选、分析并写入受控日期快照。 |
 | `refresh-api-reader.js` | 刷新指定论文或日期批次的 Reader、评分、作者和图片阶段。只读取封存 PDF/TXT；图片只为本次调用在系统临时目录中准备。 |
 | `evaluate-keyword-prefilter.js` | 只读回放金标准与历史正样本，报告关键词召回。 |
 | `test-api-key.js` | 测试主模型或副模型的协议路由、代理和响应。 |
@@ -482,7 +481,7 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 
 ## 历史补充维护说明
 
-下列命令只在历史工作区运行。它们生成独立补充记录，不替换历史正文或正式发布状态。
+下列命令在当前 `daily` 工作区通过 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1` 运行。它们生成独立补充记录，不替换历史正文或正式发布状态。
 
 来源分类和证据片段库使用以下接口。直接引文接口要求模型返回 `quote`；当前历史分类流程要求模型返回片段编号 `evidenceId`，随后由程序填入原文引文，两种格式分别解析。公开的 `projection`、`evidence` 等选项和保存字段继续沿用原格式。
 
