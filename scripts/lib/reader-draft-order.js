@@ -459,29 +459,73 @@ function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables, structuredAr
         index, score: score(binding, node, kind, sourceTable)
     })).filter(candidate => candidate.score > 0));
     if (candidates.some(items => items.length === 0)) return false;
-    let bestScore = -1, bestAssignments = [], assignment = [];
-    const visit = (bindingIndex, used, total) => {
-        if (bindingIndex === evidenceBindings.length) {
-            if (total > bestScore) {
-                bestScore = total;
-                bestAssignments = [assignment.slice()];
-            } else if (total === bestScore && bestAssignments.length < 2) {
-                bestAssignments.push(assignment.slice());
-            }
-            return;
+    // 求完整的一一对应最大权匹配。旧实现遍历全部排列，12 张相似小表就有
+    // 12! 条路径；这里只做多项式匹配，再逐条禁用已选边核对最优解是否唯一。
+    const size = evidenceBindings.length;
+    const weights = candidates.map(items => new Map(items.map(item => [item.index, item.score])));
+    const maximumScore = candidates.reduce((maximum, items) =>
+        items.reduce((current, item) => Math.max(current, item.score), maximum), 0);
+    const forbiddenCost = (maximumScore + 1) * (size + 1);
+    const solve = (excludedRow = -1, excludedColumn = -1) => {
+        const rowPotential = Array(size + 1).fill(0), columnPotential = Array(size + 1).fill(0);
+        const matchedRow = Array(size + 1).fill(0), previousColumn = Array(size + 1).fill(0);
+        for (let row = 1; row <= size; row++) {
+            matchedRow[0] = row;
+            let column = 0;
+            const distance = Array(size + 1).fill(Infinity), visited = Array(size + 1).fill(false);
+            do {
+                visited[column] = true;
+                const activeRow = matchedRow[column];
+                let delta = Infinity, nextColumn = 0;
+                for (let candidateColumn = 1; candidateColumn <= size; candidateColumn++) {
+                    if (visited[candidateColumn]) continue;
+                    const weight = weights[activeRow - 1].get(candidateColumn - 1);
+                    const excluded = activeRow - 1 === excludedRow && candidateColumn - 1 === excludedColumn;
+                    const cost = weight === undefined || excluded ? forbiddenCost : -weight;
+                    const reduced = cost - rowPotential[activeRow] - columnPotential[candidateColumn];
+                    if (reduced < distance[candidateColumn]) {
+                        distance[candidateColumn] = reduced;
+                        previousColumn[candidateColumn] = column;
+                    }
+                    if (distance[candidateColumn] < delta) {
+                        delta = distance[candidateColumn];
+                        nextColumn = candidateColumn;
+                    }
+                }
+                for (let candidateColumn = 0; candidateColumn <= size; candidateColumn++) {
+                    if (visited[candidateColumn]) {
+                        rowPotential[matchedRow[candidateColumn]] += delta;
+                        columnPotential[candidateColumn] -= delta;
+                    } else distance[candidateColumn] -= delta;
+                }
+                column = nextColumn;
+            } while (matchedRow[column] !== 0);
+            do {
+                const previous = previousColumn[column];
+                matchedRow[column] = matchedRow[previous];
+                column = previous;
+            } while (column !== 0);
         }
-        for (const candidate of candidates[bindingIndex]) {
-            if (used.has(candidate.index)) continue;
-            used.add(candidate.index);
-            assignment.push(candidate);
-            visit(bindingIndex + 1, used, total + candidate.score);
-            assignment.pop();
-            used.delete(candidate.index);
+        const assignment = Array(size);
+        let score = 0;
+        for (let column = 1; column <= size; column++) {
+            const row = matchedRow[column] - 1, index = column - 1;
+            const weight = weights[row]?.get(index);
+            if (weight === undefined || (row === excludedRow && index === excludedColumn)) return null;
+            assignment[row] = { index, score: weight };
+            score += weight;
         }
+        return { assignment, score };
     };
-    visit(0, new Set(), 0);
-    if (bestAssignments.length !== 1) return false;
-    const assignedByNode = new Map(bestAssignments[0].map((item, index) => [
+    const best = solve();
+    if (!best) return false;
+    // 任何另一完整最优解至少不使用一条当前已选边。逐边排除并重算，能检出全部
+    // 同分歧义；不能因为匹配算法先找到一组就把它当作来源对应关系。
+    for (let row = 0; row < size; row++) {
+        const alternative = solve(row, best.assignment[row].index);
+        if (alternative?.score === best.score) return false;
+    }
+    const assignedByNode = new Map(best.assignment.map((item, index) => [
         item.index, evidenceBindings[index].binding
     ]));
     let markerMap = new Map();
