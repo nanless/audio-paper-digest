@@ -1,14 +1,15 @@
 'use strict';
 
-// prompts/*.md 的提示词正文版本登记表。这里是唯一的真相来源：deep-analyzer 按它
+// prompts/*.md 的提示词正文版本登记表。各阶段实际加载的路径以这张表为准：deep-analyzer 按它
 // 选正文，会议与 manual 的指纹也按它决定要哈希哪一份文件。
 //
-// 已发布的 v1 正文永久冻结在原路径，改文字只新增 -v2 文件。读取旧记录时按记录里
+// 已发布的 v1 正文永久冻结在原路径，改文字时新增对应版本文件。读取旧记录时按记录里
 // 声明的版本选路径重算：字段缺失按 v1 处理，未知版本直接报错，不退化成「只校验
 // 64 位十六进制」。
 
 const ANALYSIS_PROMPT_TEXT_V1_CONTRACT = 'analysis-prompt-text-v1';
 const ANALYSIS_PROMPT_TEXT_V2_CONTRACT = 'analysis-prompt-text-v2';
+const ANALYSIS_PROMPT_TEXT_V3_CONTRACT = 'analysis-prompt-text-v3';
 
 // 恢复阶段的 v1 冻结路径，外加读者局部修复提示词（它不是一个恢复阶段，但同样
 // 参与读者阶段的指纹和失败草稿身份）。旧记录的指纹一律按这里复算。
@@ -32,8 +33,9 @@ const FROZEN_V1_PROMPT_FILES = Object.freeze({
     digestCover: 'prompts/digest-cover.md'
 });
 
-// 表里登记的是各阶段当前版本。v1 不写在这里，固定由 FROZEN_V1_PROMPT_FILES 给出。
-const PROMPT_FILE_VERSIONS = Object.freeze({
+// 这里登记已发布的 v2 阶段路径；当前版本在下方 PROMPT_FILE_VERSIONS 登记。
+// v1 路径固定由 FROZEN_V1_PROMPT_FILES 给出。
+const FROZEN_V2_PROMPT_FILES = Object.freeze({
     primaryAnalysis: Object.freeze({
         contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
         path: 'prompts/deep-analysis-v2.md'
@@ -94,6 +96,18 @@ const PROMPT_FILE_VERSIONS = Object.freeze({
     })
 });
 
+// 已发布的 v2 文件保留原路径；只有改写正文的阶段才使用 v3。
+const PROMPT_FILE_VERSIONS = Object.freeze({
+    ...FROZEN_V2_PROMPT_FILES,
+    primaryAnalysis: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/deep-analysis-v3.md' }),
+    apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/api-reader-article-v3.md' }),
+    apiReaderRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/api-reader-repair-v3.md' }),
+    openSourceScan: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/opensource-scan-v3.md' }),
+    revision: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/gap-fill-v3.md' }),
+    scoringAudit: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/scoring-audit-v3.md' }),
+    imageSupplement: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/image-supplement-v3.md' }),
+});
+
 // v1 路径反查阶段名。会议实现清单只记路径，需要据此换成当前版本的正文。
 const STAGE_BY_FROZEN_V1_PATH = Object.freeze(Object.fromEntries(
     Object.entries(FROZEN_V1_PROMPT_FILES).map(([stage, relativePath]) => [relativePath, stage])
@@ -123,15 +137,18 @@ function promptFilePathForContract(stage, promptTextContract) {
         if (!frozen) throw new Error(`阶段 ${stage} 没有冻结的 v1 提示词路径`);
         return frozen;
     }
+    const archivedV2 = FROZEN_V2_PROMPT_FILES[stage];
+    if (declared === ANALYSIS_PROMPT_TEXT_V2_CONTRACT && archivedV2) return archivedV2.path;
     const entry = PROMPT_FILE_VERSIONS[stage];
     if (entry && declared === entry.contract) return entry.path;
     const known = [ANALYSIS_PROMPT_TEXT_V1_CONTRACT];
+    if (archivedV2) known.push(ANALYSIS_PROMPT_TEXT_V2_CONTRACT);
     if (entry && !known.includes(entry.contract)) known.push(entry.contract);
     throw new Error(`阶段 ${stage} 的提示词版本 ${declared} 没有登记；只认识 ${known.join(' 和 ')}。`);
 }
 
-// 新请求用当前版本的提示词正文；旧记录的指纹核验仍走 promptFilePathForContract
-// 的 v1 冻结路径，不会因为新版本上线而按 v2 文件重算。
+// 新请求用当前版本的提示词正文；旧记录的指纹核验仍由 promptFilePathForContract
+// 选择其声明版本的冻结路径，不按新版本文件重算。
 function currentTextStagePromptPath(stage) {
     return promptFilePathForContract(stage, currentPromptTextContract(stage));
 }
@@ -150,7 +167,9 @@ function stageForFrozenPromptPath(relativePath) {
 module.exports = {
     ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
     ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+    ANALYSIS_PROMPT_TEXT_V3_CONTRACT,
     FROZEN_V1_PROMPT_FILES,
+    FROZEN_V2_PROMPT_FILES,
     PROMPT_FILE_VERSIONS,
     promptTextContractForStage,
     currentPromptTextContract,

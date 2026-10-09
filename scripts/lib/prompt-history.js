@@ -100,7 +100,7 @@ function historicalPromptTemplateBytesForSha256(sha256, contractVersion = '', di
     return null;
 }
 
-// 统一的入口：先看当前路径与同阶段的 -v2 路径的字节是否就是声明的 SHA，都不是再到
+// 统一入口：先核验同阶段已发布的 v1、v2 和当前路径，再按声明 SHA 到
 // 归档里取。stage 只用于解析当前路径，取不到就返回 null。
 function promptBytesForSha256(stage, sha256, directory = HISTORY_DIR) {
     const value = String(sha256 || '').toLowerCase();
@@ -118,6 +118,9 @@ function promptBytesForSha256(stage, sha256, directory = HISTORY_DIR) {
         try {
             candidates.push(path.join(PROJECT_ROOT, promptFilePathForContract(stage, 'analysis-prompt-text-v1')));
         } catch (_error) { /* 阶段没有 v1 路径 */ }
+        try {
+            candidates.push(path.join(PROJECT_ROOT, promptFilePathForContract(stage, 'analysis-prompt-text-v2')));
+        } catch (_error) { /* 阶段没有 v2 路径 */ }
         try {
             candidates.push(path.join(PROJECT_ROOT, promptFilePathForContract(stage, currentPromptTextContract(stage))));
         } catch (_error) { /* 阶段没有登记版本 */ }

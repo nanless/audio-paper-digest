@@ -1089,14 +1089,57 @@ describe('严格可复用的 Manual v4 spec 组装器', () => {
         }), /filtered 完整批次指纹不一致/);
     });
 
-    it('当前阶段绑定用 v2 正文，旧记录的 v1 冻结正文仍可复算', () => {
+    it('旧 v2 配置通过实际入口重新组装，进入录入前停止且保留原字节', async () => {
+        const { expectedFrozenV2Bindings } = require('./helpers/frozen-v2-prompt-bindings.cjs');
+        const frozen = expectedFrozenV2Bindings(), f = fixture();
+        try {
+            const spec = buildSpec({
+                date: DATE, filtered: f.filtered, filteredPath: f.filteredPath,
+                manifest: f.manifest, manifestPath: f.manifestPath, mergedRecords: f.mergedRecords,
+                generatedAt: '2026-08-25T12:30:00.000+08:00', promptBindings: frozen
+            });
+            const specPath = path.join(f.root, 'old-v2-spec.json'); writeJson(specPath, spec);
+            const bytes = fs.readFileSync(specPath), before = JSON.stringify(spec);
+            const checked = validateManualV4AssemblyInputs(spec, {
+                date: DATE, filtered: f.filtered, filteredPath: f.filteredPath,
+                manifestPath: f.manifestPath, promptBindings: frozen
+            });
+            assert.deepEqual(checked.rebuilt, spec);
+            assert.equal(JSON.stringify(spec), before);
+            assert.deepEqual(fs.readFileSync(specPath), bytes);
+            assert.throws(() => validateManualV4AssemblyInputs(spec, {
+                date: DATE, filtered: f.filtered, filteredPath: f.filteredPath,
+                manifestPath: f.manifestPath, promptBindings: currentStagePromptBindings()
+            }), /重新生成的结果不一致/);
+            const Config = require('../../scripts/config.js');
+            const previousCurrent = Config.CURRENT_DIR, previousFiltered = Config.FILES.filteredPapers;
+            const previousResult = Object.getOwnPropertyDescriptor(Config.FILES, 'deepAnalysisResult');
+            const previousArgv = process.argv;
+            const stop = new Error('CONTROLLED_STOP_AFTER_REAL_ASSEMBLY_BEFORE_WORKERS');
+            try {
+                Config.CURRENT_DIR = f.root; Config.FILES.filteredPapers = f.filteredPath;
+                Object.defineProperty(Config.FILES, 'deepAnalysisResult', { configurable: true, get() { throw stop; } });
+                process.argv = ['node', 'manual-deep-analysis.js', '--date', DATE, '--spec', specPath];
+                await assert.rejects(require('../scripts/manual-deep-analysis.js').run(), error => error === stop);
+            } finally {
+                Config.CURRENT_DIR = previousCurrent; Config.FILES.filteredPapers = previousFiltered;
+                if (previousResult) Object.defineProperty(Config.FILES, 'deepAnalysisResult', previousResult);
+                else delete Config.FILES.deepAnalysisResult;
+                process.argv = previousArgv;
+            }
+            assert.deepEqual(fs.readFileSync(specPath), bytes);
+        } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+    });
+
+    it('当前阶段分别使用 v3 或 v2 正文，旧记录的 v1 冻结正文仍可复算', () => {
         const current = currentStagePromptBindings();
         const legacy = legacyStagePromptBindings();
         const directSha = value => require('node:crypto').createHash('sha256').update(value).digest('hex');
         const migrated = ['primaryAnalysis', 'openSourceScan', 'revision', 'tableRepair', 'methodRepair',
             'structureRepair', 'scoringAudit', 'imageSupplement'];
         for (const stage of migrated) {
-            assert.match(current[stage].source, /-v2\.md$/);
+            const version = ['tableRepair', 'methodRepair', 'structureRepair'].includes(stage) ? 'v2' : 'v3';
+            assert.match(current[stage].source, new RegExp(`-${version}\\.md$`));
             assert.equal(
                 current[stage].sha256,
                 directSha(fs.readFileSync(path.join(__dirname, '..', '..', current[stage].source))),
@@ -1109,7 +1152,7 @@ describe('严格可复用的 Manual v4 spec 组装器', () => {
             );
             assert.notEqual(current[stage].sha256, legacy[stage].sha256, stage);
         }
-        // 还没迁到 v2 的阶段和合成的阶段规则两版相同。
+        // 没有单独提示词文件的阶段沿用原阶段规则，不能替换成公共表里的文件。
         for (const stage of ['coreSummaryRepair']) {
             assert.equal(current[stage].sha256, legacy[stage].sha256, stage);
             assert.equal(current[stage].source, legacy[stage].source, stage);

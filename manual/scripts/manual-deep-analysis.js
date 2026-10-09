@@ -195,8 +195,8 @@ function stageStatusMap() {
     return Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => [stage, MANUAL_COMPLETE_STATUS]));
 }
 
-// 新配置按当前版本绑定提示词正文（已迁移的阶段是 -v2 文件）；旧配置按 v1 的冻结
-// 路径复算。两套路径都来自 scripts/lib/prompt-text-versions.js，不在这里另抄一份。
+// 新配置使用当前提示词；旧配置按 v1 或 v2 的原文件核验。路径均由公共版本表决定，
+// 不在这里另存一份路径清单。没有提示词文件的阶段继续使用原来的阶段规则 SHA。
 function stagePromptBindings(promptTextVersion) {
     return Object.fromEntries(REQUIRED_RECOVERY_STAGES.map(stage => {
         if (!STAGE_PROMPT_FILES[stage]) {
@@ -205,8 +205,11 @@ function stagePromptBindings(promptTextVersion) {
                 sha256: manualSha256({ contract: 'manual-stage-contract-v1', stage })
             }];
         }
-        const relativePath = promptTextVersion === 'v1'
-            ? promptTextVersions.promptFilePathForContract(stage, promptTextVersions.ANALYSIS_PROMPT_TEXT_V1_CONTRACT)
+        const declaredContract = promptTextVersion === 'v1'
+            ? promptTextVersions.ANALYSIS_PROMPT_TEXT_V1_CONTRACT
+            : promptTextVersion === 'v2' ? promptTextVersions.ANALYSIS_PROMPT_TEXT_V2_CONTRACT : null;
+        const relativePath = declaredContract
+            ? promptTextVersions.promptFilePathForContract(stage, declaredContract)
             : promptTextVersions.currentOrFrozenPromptPath(stage);
         return [stage, { source: relativePath, sha256: sha256File(path.join(PROJECT_ROOT, relativePath)) }];
     }));
@@ -220,9 +223,14 @@ function buildLegacyStagePromptBindings() {
     return stagePromptBindings('v1');
 }
 
+function buildFrozenV2StagePromptBindings() {
+    return stagePromptBindings('v2');
+}
+
 // 记录自己声明绑的是哪一版正文：拿它保存的 SHA 逐阶段比对。缺字段、或与任何一版
 // 都比不中时按 v1 处理——旧记录本来就没有版本字段，随后逐阶段检查会报出不一致。
-function specPromptTextVersion(spec, currentBindings, legacyBindings) {
+function specPromptTextVersion(spec, currentBindings, legacyBindings,
+    frozenV2Bindings = buildFrozenV2StagePromptBindings()) {
     const discriminating = REQUIRED_RECOVERY_STAGES.filter(
         stage => legacyBindings[stage].sha256 !== currentBindings[stage].sha256
     );
@@ -230,7 +238,21 @@ function specPromptTextVersion(spec, currentBindings, legacyBindings) {
     if (!declared || typeof declared !== 'object' || Array.isArray(declared) || !discriminating.length) return 'v1';
     const present = discriminating.filter(stage => declared[stage] !== undefined);
     if (!present.length) return 'v1';
-    return present.every(stage => declared[stage] === currentBindings[stage].sha256) ? 'current' : 'v1';
+    if (present.every(stage => declared[stage] === currentBindings[stage].sha256)) return 'current';
+    // 旧 v2 配置只有在全部必需阶段逐项匹配真实 v2 文件和原阶段规则时才可接受。
+    // 不能用某一个提示词的 SHA 代替整套版本，也不能混用 v2 和当前正文。
+    if (Object.keys(declared).length === REQUIRED_RECOVERY_STAGES.length
+        && REQUIRED_RECOVERY_STAGES.every(stage => declared[stage] === frozenV2Bindings[stage].sha256)) {
+        return 'v2';
+    }
+    return 'v1';
+}
+
+function selectManualSpecPromptBindings(spec, currentBindings, legacyBindings) {
+    const frozenV2Bindings = buildFrozenV2StagePromptBindings();
+    const version = specPromptTextVersion(spec, currentBindings, legacyBindings, frozenV2Bindings);
+    return { version, bindings: version === 'v1' ? legacyBindings
+        : version === 'v2' ? frozenV2Bindings : currentBindings };
 }
 
 function resolveManualSpecPromptBindings(spec, currentBindings = buildStagePromptBindings(),
@@ -244,10 +266,10 @@ function resolveManualSpecPromptBindings(spec, currentBindings = buildStagePromp
     }
     const currentAuthoringSha256 = sha256File(MANUAL_AUTHORING_PROMPT_PATH);
     if (CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version) || spec.version === MANUAL_SPEC_VERSION_V6) {
-        // 改动前写下的配置绑的是冻结的 v1 正文；按 v2 重算会把它们全判成漂移。
-        const bindings = specPromptTextVersion(spec, currentBindings, legacyBindings) === 'v1'
-            ? legacyBindings : currentBindings;
-        if (spec.promptSha256 && spec.promptSha256 !== bindings.primaryAnalysis.sha256) {
+        // 只按配置保存的整组 SHA 选择已发布版本，不改写旧配置或其凭证。
+        const { version, bindings } = selectManualSpecPromptBindings(spec, currentBindings, legacyBindings);
+        if ((version === 'v2' || spec.promptSha256)
+            && spec.promptSha256 !== bindings.primaryAnalysis.sha256) {
             throw new Error('人工分析配置的 promptSha256 与当前主分析提示文件的 SHA 不一致。');
         }
         if (spec.manualAuthoringPromptSha256 !== currentAuthoringSha256) {
@@ -1895,9 +1917,9 @@ async function run() {
     }
     const currentPromptBindings = buildStagePromptBindings();
     const legacyPromptBindings = buildLegacyStagePromptBindings();
-    // 重新组装必须用配置自己声明的那一版绑定，否则改动前写下的 v1 配置会被按 v2 复算。
-    const assemblyPromptBindings = specPromptTextVersion(spec, currentPromptBindings, legacyPromptBindings) === 'v1'
-        ? legacyPromptBindings : currentPromptBindings;
+    // 重新组装沿用配置已声明的完整版本，不把旧配置改标成当前版本。
+    const { bindings: assemblyPromptBindings } = selectManualSpecPromptBindings(
+        spec, currentPromptBindings, legacyPromptBindings);
     const verifiedAssemblyInputs = spec.version === MANUAL_SPEC_VERSION_V6
         ? validateManualV6AssemblyInputs(spec, { date, runtimeMode: v6RuntimeMode, promptBindings: assemblyPromptBindings })
         : (CURRENT_MANUAL_SPEC_VERSIONS.has(spec.version)
@@ -2105,6 +2127,7 @@ module.exports = {
     buildStageEvidence,
     buildStagePromptBindings,
     buildLegacyStagePromptBindings,
+    buildFrozenV2StagePromptBindings,
     specPromptTextVersion,
     conciseManualImageCaption,
     normalizeManualV4ImageArtifacts,

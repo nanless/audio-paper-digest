@@ -76,7 +76,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/reader-author-replay-cli.js` | Node 子进程入口 | Python 发布器通过有界私有文件描述符调用的纯作者重放桥接，限制输入字节并只输出布尔核验结果。 |
 | `lib/conference-publication-author-source.js` | Node 库 | 只读重放官方元数据、PDF、已有抽取来源与分析凭证，核完整姓名及作者机构；不新建来源、不重抽 PDF 或请求模型。 |
 | `lib/conference-publication-author-replay-cli.js` | Node 子进程入口 | 会议发布器通过私有文件描述符调用的离线来源桥；输出逐篇已核验作者及分析、完成凭证、来源快照 SHA，禁止网络与配置加载。 |
-| `lib/prompt-history.js` | Node 库 | 按记录声明的 SHA 从 `prompts/history/` 取历史提示词字节。先看当前文件（含 `-v2`）是否就是那份字节，不符才查归档，查不到返回 `null` 让调用方维持原行为。 |
+| `lib/prompt-history.js` | Node 库 | 按记录声明的 SHA 从 `prompts/history/` 取历史提示词字节。先按原 v1、已发布 v2 和当前阶段路径逐一核对文件字节的 SHA，不符才查归档，查不到返回 `null` 让调用方维持原行为。 |
 | `lib/tag-record-update.js` | Node 库 | 更新或核验分析中的标签阶段记录，所选概念 ID 必须仍与原记录一致；无法核验时拒绝并说明原因。另外可只读盘点旧分类文件，不调用模型。 |
 | `lib/historical-tag-assignment.js` | Node 库 | 根据已完成且来源核验通过的历史分析结果选择标签，记录概念 ID 并去除上级重复标签。新版分配文件的名称包含词表 SHA 和分配 SHA；旧记录按原格式完整复算后读取，已有页面则按保存的对象及文件 SHA 找回原证据。 |
 | `lib/historical-page-staging.js` | Node 库 | 按已核验的页面对应表（`crosswalk`）保留单篇路径，用完成的分析和当前标签记录生成私有页面。同一论文的多个历史页面共用分析结果；生成清单保存逐页 SHA，并核对恢复所用输入与生成器实现。 |

@@ -290,10 +290,14 @@ test('实现指纹绑定显式的分析、Reader、身份和提示词依赖', ()
     const fingerprint = () => processApi.implementationSha256({ root,
         readFileSync: filename => sources.get(path.relative(root, filename)) });
     const baseline = fingerprint();
-    // Reader 正文已迁到 v2，当前指纹绑的是 -v2 那份；v1 那份留给旧记录复算。
+    // Reader 正文已迁到 v3，当前指纹必须包含 v3；v1 路径仍供旧记录核验。
+    for (const name of ['prompts/api-reader-article-v3.md', 'prompts/deep-analysis-v3.md', 'prompts/opensource-scan-v3.md']) {
+        assert.ok(processApi.currentImplementationFiles().includes(name), name);
+    }
+    assert.equal(processApi.currentImplementationFiles().includes('prompts/api-reader-article-v2.md'), false);
     for (const name of ['scripts/deep-analyzer.js', 'scripts/config.js', 'scripts/env-loader.js',
         'scripts/llm-account-pool.js', 'scripts/paper_identity.py', 'scripts/utils.py',
-        'scripts/lib/reader-resource-sync.js', 'prompts/api-reader-article-v2.md']) {
+        'scripts/lib/reader-resource-sync.js', 'prompts/api-reader-article-v3.md']) {
         const original = sources.get(name); sources.set(name, Buffer.concat([original, Buffer.from('\nrepresentative drift')]));
         assert.notEqual(fingerprint(), baseline, name); sources.set(name, original);
     }
@@ -302,21 +306,29 @@ test('实现指纹绑定显式的分析、Reader、身份和提示词依赖', ()
 
 test('会议实现指纹按版本绑定提示词正文，v1 冻结清单仍可复算', () => {
     const root = '/virtual/conference-prompt-versions';
-    const files = [...new Set([...processApi.currentImplementationFiles(), ...processApi.IMPLEMENTATION_FILES])];
+    const files = [...new Set([...processApi.currentImplementationFiles(), ...processApi.IMPLEMENTATION_FILES, 'prompts/opensource-scan-v2.md'])];
     const sources = new Map(files.map(name => [name, Buffer.from(`source:${name}`)]));
     const fingerprint = promptTextVersion => processApi.implementationSha256({ root, promptTextVersion,
         readFileSync: filename => sources.get(path.relative(root, filename)) });
     const current = fingerprint();
     const legacy = fingerprint('v1');
     assert.notEqual(current, legacy);
-    // 新写入绑定 v2：改 v2 正文会改变当前指纹，改 v1 正文不会。
-    const v2Name = 'prompts/opensource-scan-v2.md';
+    // 当前开源提示词必须绑定 v3；v1 清单保持原路径，旧 v2 字节不影响这两种指纹。
+    assert.ok(processApi.currentImplementationFiles().includes('prompts/opensource-scan-v3.md'));
+    assert.equal(processApi.currentImplementationFiles().includes('prompts/opensource-scan-v2.md'), false);
+    const oldV2Name = 'prompts/opensource-scan-v2.md';
+    const oldV2 = sources.get(oldV2Name);
+    sources.set(oldV2Name, Buffer.concat([oldV2, Buffer.from('\nold v2 bytes changed')]));
+    assert.equal(fingerprint(), current);
+    assert.equal(fingerprint('v1'), legacy);
+    sources.set(oldV2Name, oldV2);
+    const v3Name = 'prompts/opensource-scan-v3.md';
     const v1Name = 'prompts/opensource-scan.md';
-    const v2 = sources.get(v2Name); const v1 = sources.get(v1Name);
-    sources.set(v2Name, Buffer.concat([v2, Buffer.from('\nv2 drift')]));
+    const v3 = sources.get(v3Name); const v1 = sources.get(v1Name);
+    sources.set(v3Name, Buffer.concat([v3, Buffer.from('\nv3 bytes changed')]));
     assert.notEqual(fingerprint(), current);
     assert.equal(fingerprint('v1'), legacy);
-    sources.set(v2Name, v2);
+    sources.set(v3Name, v3);
     sources.set(v1Name, Buffer.concat([v1, Buffer.from('\nv1 drift')]));
     assert.equal(fingerprint(), current);
     assert.notEqual(fingerprint('v1'), legacy);

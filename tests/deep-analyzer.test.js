@@ -5586,8 +5586,8 @@ has_dataset: 否
         // 新请求按当前版本写指纹；旧记录没有版本字段时仍按 v1 的冻结路径重算。
         const deep = require('../scripts/deep-analyzer.js');
         assert.strictEqual(deep.ANALYSIS_PROMPT_TEXT_V2_CONTRACT, 'analysis-prompt-text-v2');
-        assert.strictEqual(deep.currentPromptTextContract('revision'), 'analysis-prompt-text-v2');
-        assert.strictEqual(deep.currentTextStagePromptPath('revision'), 'prompts/gap-fill-v2.md');
+        assert.strictEqual(deep.currentPromptTextContract('revision'), 'analysis-prompt-text-v3');
+        assert.strictEqual(deep.currentTextStagePromptPath('revision'), 'prompts/gap-fill-v3.md');
         assert.strictEqual(deep.promptFilePathForContract('revision', ''), 'prompts/gap-fill.md');
         assert.strictEqual(
             deep.promptFilePathForContract('revision', deep.ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
@@ -5680,16 +5680,16 @@ has_dataset: 否
             legacyPayload.promptTemplateSha256,
             deep.runtimePromptTemplateSha256('prompts/api-reader-article.md')
         );
-        // 新请求：登记了 v2，指纹里带合同名，正文按 v2 算。
+        // 新请求使用 v3；旧记录继续按其声明版本计算指纹。
         const freshPayload = capture({ version: 1, stages: {} });
-        assert.strictEqual(freshPayload.promptTextContract, 'analysis-prompt-text-v2');
+        assert.strictEqual(freshPayload.promptTextContract, 'analysis-prompt-text-v3');
         assert.strictEqual(
             freshPayload.promptTemplateSha256,
-            deep.runtimePromptTemplateSha256('prompts/api-reader-article-v2.md')
+            deep.runtimePromptTemplateSha256('prompts/api-reader-article-v3.md')
         );
         assert.strictEqual(
             deep.currentTextStagePromptPath('apiReaderArticle'),
-            'prompts/api-reader-article-v2.md'
+            'prompts/api-reader-article-v3.md'
         );
         assert.strictEqual(
             deep.promptFilePathForContract('apiReaderArticle', deep.ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
@@ -5748,16 +5748,16 @@ has_dataset: 否
             deep.promptFilePathForContract('primaryAnalysis', deep.ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
             'prompts/deep-analysis.md'
         );
-        // 新请求：登记了 v2，指纹里带合同名，正文按 v2 算。
+        // 新请求使用 v3；旧记录继续按其声明版本计算指纹。
         const fresh = capture({ version: 1, stages: {} });
-        assert.strictEqual(fresh.payload.promptTextContract, 'analysis-prompt-text-v2');
+        assert.strictEqual(fresh.payload.promptTextContract, 'analysis-prompt-text-v3');
         assert.strictEqual(
             fresh.payload.promptTemplateSha256,
             deep.runtimePromptTemplateSha256(
-                'prompts/deep-analysis-v2.md', CORE_SUMMARY_CONTRACT_VERSION)
+                'prompts/deep-analysis-v3.md', CORE_SUMMARY_CONTRACT_VERSION)
         );
         assert.strictEqual(
-            deep.currentTextStagePromptPath('primaryAnalysis'), 'prompts/deep-analysis-v2.md');
+            deep.currentTextStagePromptPath('primaryAnalysis'), 'prompts/deep-analysis-v3.md');
         // 判别力：两个版本必须算出不同的正文哈希和不同的阶段指纹，否则这条测试等于没测。
         assert.notStrictEqual(
             fresh.payload.promptTemplateSha256, legacy.payload.promptTemplateSha256);

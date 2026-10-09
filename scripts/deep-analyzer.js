@@ -9575,6 +9575,11 @@ function legacyStructureCompatibilityIsValid(paper, manifest, sourceText) {
 function tryMigrateCoreSummaryV3LegacyCheckpoints(
     paper, manifest, textForAnalysis, sourceText, arxivId, currentPrimaryFingerprint
 ) {
+    // 这项旧摘要修正许可只对应已发布的 v2 提示词，不随当前版本升级。
+    const migrationPromptTextContract = ANALYSIS_PROMPT_TEXT_V2_CONTRACT;
+    const migrationPrimaryFingerprint = buildPrimaryAnalysisBaseFingerprint(
+        migrationPromptTextContract, paper, textForAnalysis, arxivId);
+    if (currentPrimaryFingerprint !== migrationPrimaryFingerprint) return false;
     if (!currentCoreSummaryV3MigrationPromptsAreExact()) return false;
     const requiredTextStages = [
         'openSourceScan', 'revision', 'tableRepair', 'methodRepair',
@@ -9625,11 +9630,12 @@ function tryMigrateCoreSummaryV3LegacyCheckpoints(
         manifest.contracts = structuredClone(candidatePayload.contracts || {});
     }
     const legacyPrimaryFingerprint = manifest.stages.primaryAnalysis.fingerprint;
-    manifest.stages.primaryAnalysis.fingerprint = currentPrimaryFingerprint;
+    manifest.stages.primaryAnalysis.fingerprint = migrationPrimaryFingerprint;
+    manifest.stages.primaryAnalysis.promptTextContract = migrationPromptTextContract;
     for (const stage of ['openSourceScan', 'revision', 'tableRepair', 'methodRepair']) {
         const input = getTextStageInputAnalysis(paper, stage, paper.analysisCheckpoint);
         const evidence = buildStageEvidenceContext(stage, input, sourceText);
-        const promptTextContract = currentPromptTextContract(stage);
+        const promptTextContract = migrationPromptTextContract;
         manifest.stages[stage].fingerprint = buildTextStageFingerprint(
             stage, input, evidence, promptTextContract);
         manifest.stages[stage].promptTextContract = promptTextContract;

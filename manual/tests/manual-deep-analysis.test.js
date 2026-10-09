@@ -26,6 +26,7 @@ const {
     buildManualRecord,
     buildStagePromptBindings,
     buildLegacyStagePromptBindings,
+    buildFrozenV2StagePromptBindings,
     specPromptTextVersion,
     conciseManualImageCaption,
     finalizeManualAnalysisBatchState,
@@ -488,7 +489,47 @@ describe('manual_complete v3 深度分析约定', () => {
         );
     });
 
-    it('改动前写下的 v4/v5 配置按冻结的 v1 正文复算，新配置绑定当前 v2 正文', () => {
+    it('旧 v4/v5/v6 配置使用八份 v2 原文件的真实 SHA，混代或缺字段不能通过', () => {
+        const { expectedFrozenV2Bindings } = require('./helpers/frozen-v2-prompt-bindings.cjs');
+        const frozen = expectedFrozenV2Bindings();
+        assert.deepEqual(buildFrozenV2StagePromptBindings(), frozen);
+        assert.equal(frozen.coreSummaryRepair.source, 'manual-stage-contract:coreSummaryRepair:v1');
+        const current = buildStagePromptBindings(), legacy = buildLegacyStagePromptBindings();
+        for (const stage of ['tableRepair', 'methodRepair', 'structureRepair']) {
+            assert.deepEqual(current[stage], frozen[stage]);
+        }
+        const authoringPath = 'manual/prompts/manual-analysis-record.md';
+        for (const version of [4, 5, 6]) {
+            const spec = {
+                version, promptSha256: frozen.primaryAnalysis.sha256,
+                manualAuthoringPromptPath: authoringPath,
+                manualAuthoringPromptSha256: directSha(fs.readFileSync(path.join(__dirname, '../..', authoringPath))),
+                stagePromptSha256: Object.fromEntries(Object.entries(frozen).map(([stage, value]) => [stage, value.sha256]))
+            };
+            const before = JSON.stringify(spec);
+            assert.equal(specPromptTextVersion(spec, current, legacy), 'v2');
+            assert.deepEqual(resolveManualSpecPromptBindings(spec, current, legacy), frozen);
+            assert.equal(JSON.stringify(spec), before);
+            for (const stage of ['primaryAnalysis', 'openSourceScan', 'revision', 'scoringAudit', 'imageSupplement']) {
+                const mixed = structuredClone(spec);
+                mixed.stagePromptSha256[stage] = current[stage].sha256;
+                assert.throws(() => resolveManualSpecPromptBindings(mixed, current, legacy));
+            }
+            for (const change of [
+                value => { delete value.promptSha256; },
+                value => { delete value.stagePromptSha256.methodRepair; },
+                value => { value.stagePromptSha256.unknownStage = 'a'.repeat(64); },
+                value => { value.stagePromptSha256.coreSummaryRepair = 'f'.repeat(64); },
+                value => { value.manualAuthoringPromptSha256 = '0'.repeat(64); }
+            ]) {
+                const invalid = structuredClone(spec); change(invalid);
+                assert.throws(() => resolveManualSpecPromptBindings(invalid, current, legacy));
+            }
+            assert.throws(() => resolveManualSpecPromptBindings({ ...spec, version: 7 }, current, legacy));
+        }
+    });
+
+    it('旧 v4/v5 配置按冻结的 v1 正文核验，新配置绑定当前各阶段正文', () => {
         const current = buildStagePromptBindings();
         const legacy = buildLegacyStagePromptBindings();
         const authoringSha = directSha(fs.readFileSync(
@@ -513,7 +554,7 @@ describe('manual_complete v3 深度分析约定', () => {
         assert.equal(specPromptTextVersion(withoutStages, current, legacy), 'v1');
         const replayCurrent = resolveManualSpecPromptBindings(currentSpec, current, legacy);
         assert.equal(replayCurrent.openSourceScan.sha256, current.openSourceScan.sha256);
-        assert.equal(replayCurrent.openSourceScan.source, 'prompts/opensource-scan-v2.md');
+        assert.equal(replayCurrent.openSourceScan.source, 'prompts/opensource-scan-v3.md');
         const replayLegacy = resolveManualSpecPromptBindings(legacySpec, current, legacy);
         assert.equal(replayLegacy.openSourceScan.sha256, legacy.openSourceScan.sha256);
         assert.equal(replayLegacy.openSourceScan.source, 'prompts/opensource-scan.md');

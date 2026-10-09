@@ -15,7 +15,7 @@
 | 历史直接重写来源及页面对应 | `historical-direct-*`、`historical-conference-*-sources/projections` | 来源目录、计划、队列、执行、汇总、arXiv 失败交接入口及历史文档 |
 | 分析恢复 | `analysis-engine.js`、`deep-analyzer.js` | 所有分析入口与 digest 状态 |
 | 分析结构或评分 | `analysis-contract.js` 与提示词 | Node/Python 解析器和发布器 |
-| Reader 写作、图表或修复 | `api-reader-article-v2.md`、`api-reader-repair-v2.md`（当前生效；v1 冻结在无后缀的同名文件）、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
+| Reader 写作、图表或修复 | `api-reader-article-v3.md`、`api-reader-repair-v3.md`（当前生效；v1/v2 文件保持原字节供旧记录核验）、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
 | 博客事务 | `publish-to-blog.py` | 三个独立入口与审查凭证测试 |
 | 视觉状态 | 两个 state JS 与 integration | 规划、status 与 record |
 | 命令别名 | `package.json` | README、AGENTS、SKILL 与 docs |
@@ -44,7 +44,9 @@
 5. 重试反馈能定位问题并限制修改范围，不使整篇内容无故变化。
 6. 读者正文没有模板句、证据 ID 或流程说明。
 
-提示词正文按版本分文件，登记表在 `scripts/lib/prompt-text-versions.js`：v1 永久冻结在原路径（不带 -v2 后缀的同名文件），当前版本是带 -v2 后缀的同名文件，上表 Reader 一行列的就是当前版本。冻结的 v1 不再改写；现行 v2 修改前，将原始整文件字节按 SHA 保存到 `prompts/history/<sha256>.md`。旧记录按声明版本取路径，SHA 不同且实现支持历史读取时，只能复用归档中重新核验通过的原字节；不能只因 SHA 形式合法就认可。字段缺失按 v1 处理，未知版本直接报错。升级版本后要同步核对阶段指纹，以及会议和 manual 的提示词清单。
+提示词正文按版本分文件，登记表在 `scripts/lib/prompt-text-versions.js`。主分析、Reader 文章和局部修复、开源检查、正文审校、评分审查及图片补充这七个阶段使用 `-v3.md`；表格修复、方法补充、核心摘要、结构修复、标签选择及两类发布后配图这七个阶段仍使用 `-v2.md`，筛选也保持 `filter-v2.md`。这里是提示词正文版本，不代替 Reader 文章等内容协议。只有正文发生变化的阶段才新增版本。
+
+v1 永久保留在无版本后缀的原路径，已发布 v2 也保持原字节；旧文件只读，不能修改后给旧记录重新计算凭证。需要保存旧提示词时，按原始整文件字节的 SHA 存入 `prompts/history/<sha256>.md`。旧记录按声明版本取路径；SHA 不同且实现支持历史读取时，只能读取并核验对应原字节，不能只因 SHA 形式合法就认可。字段缺失按 v1 处理，未知版本直接报错。旧 v2 可以读取，不会自动认可为当前 v3；原允许的旧核心摘要修正仍须通过原模板 SHA 和真实 v2 主分析指纹检查，不能把旧输出改标 v3。升级版本后要同步核对阶段指纹，以及会议和 manual 的提示词清单。
 
 提示词历史归档扫描只将检索退出码 1 视为没有匹配项。工具失败、候选 JSON 损坏或已有归档读取失败都会保留错误并中止，不能跳过后报告归档完整；只有文件确实不存在才进入新文件写入。
 

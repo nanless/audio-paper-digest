@@ -120,7 +120,7 @@ function collectReferencedPromptSha256() {
 
 // 记录里声明的版本号会进首块模板哈希。归档不假设具体取值，把见过的版本都试一遍。
 const TEMPLATE_CONTRACT_VERSIONS = [
-    '', 'analysis-prompt-text-v1', 'analysis-prompt-text-v2',
+    '', 'analysis-prompt-text-v1', 'analysis-prompt-text-v2', 'analysis-prompt-text-v3',
     'v1', 'v2', 'scoring-audit-v1', 'api-reader-v1', 'api-reader-v2'
 ];
 

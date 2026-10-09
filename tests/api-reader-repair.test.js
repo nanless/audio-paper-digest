@@ -456,7 +456,7 @@ test('生产续跑只请求补丁，合并后正文不完整仍然拒绝', async
             assert.equal(options.usageContext.stage, 'apiReaderRepair');
             const prompt = messages[0].content[0].text;
             assert.ok(prompt.includes(require('../scripts/lib/reader-source-diagnostics.js').readerNumericSpellingGuidance()));
-            assert.match(prompt, /允许修改的节点/);
+            assert.match(prompt, /允许修改的内容/);
             assert.doesNotMatch(prompt, /现有 canonical 分析/);
             return JSON.stringify(patchFor(draft, [['/readerTitle', '声音表示如何与语义条件连接起来']]));
         }

@@ -125,7 +125,7 @@ const SOURCE_VERIFICATION_FILES = Object.freeze([
     'scripts/lib/conference-pdf-source.js',
     'scripts/lib/conference-importer.js'
 ]);
-// 当前实现清单：把已迁移到 v2 的提示词换成 -v2 路径，其余保持冻结路径。
+// 当前实现清单：按版本登记表选择各阶段路径；已改写阶段使用 v3，其余阶段保留 v2。
 // 提示词正文本身仍在清单里，所以改正文或改版本映射都会改变指纹。
 function currentImplementationFiles() {
     const files = IMPLEMENTATION_FILES.map(name => {
@@ -556,7 +556,7 @@ function defaultDependencies() {
         postprocess: require('./conference-postprocess.js'), ledger: require('./conference-source-ledger.js'),
         now: () => new Date().toISOString(), execFileSync };
 }
-// 新写入按当前版本清单绑定（7 个文本阶段是 v2 正文）；旧记录按 promptTextVersion
+// 新写入按当前版本清单绑定，阶段提示词可分别使用 v3 或 v2；旧记录按 promptTextVersion
 // 为 'v1' 的冻结清单取值。这张清单包含 conference-process.js 自己，所以改代码之后
 // 旧记录的 implementationSha256 本来就不再复现，只能走显式的实现迁移记录。
 function implementationSha256(options = {}) {
