@@ -59,6 +59,12 @@ describe('Manual v6 生产包生成器', () => {
         ]), { date: '2026-08-29', paper: '2608.12345', role: 'author' });
         const blank = buildBlankRecordSchema('2608.12345');
         assert.equal(blank.populated, false);
+        for (const flag of ['hasCode', 'hasModel', 'hasDataset']) {
+            assert.equal(blank.recordSkeleton[flag], '未说明');
+            assert.ok(blank.roleOwnership.author.includes(flag));
+            assert.ok(blank.fields.resourceFlags.fields.includes(flag));
+        }
+        assert.match(blank.fields.resourceFlags.requirement, /第三方依赖、未来承诺/);
         assert.equal(blank.authorOutputDescriptor.contract, 'manual-v6-author-output-v2');
         assert.equal(blank.authorOutputDescriptor.paperId, '2608.12345');
         assert.deepEqual(blank.authorOutputDescriptor.article, {

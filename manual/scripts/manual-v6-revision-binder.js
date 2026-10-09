@@ -287,23 +287,19 @@ function normalizeReviewBoundOpenSourceEvidence(payloadValue) {
     if (![0, 0.2, 0.5, 1, 1.2, 1.5].includes(score)) {
         throw new Error(`validated technical review 的 openSource 分数非法: ${score}`);
     }
-    const evidenceText = normalizedText(JSON.stringify({ original, open: payload.open, urls, sourceQuotes }))
-        .toLowerCase();
     let state;
     if (score >= 1) {
         if (urls.length < 1) {
             throw new Error('开源分达到 1.0 但 revision 证据没有 HTTPS 资源 URL；必须返修作者证据或技术评分');
         }
         state = 'released';
-        const inferred = {
-            hasCode: /code|github|gitlab|repository|仓库|代码/u.test(evidenceText),
-            hasModel: /model|weight|checkpoint|模型|权重/u.test(evidenceText),
-            hasDataset: /dataset|data\b|corpus|数据集|语料/u.test(evidenceText)
-        };
-        if (!Object.values(inferred).some(Boolean)) inferred.hasCode = true;
-        for (const [key, present] of Object.entries(inferred)) {
-            if (present) payload[key] = '是';
-            else if (!['是', '否', '未说明'].includes(payload[key])) payload[key] = '未说明';
+        // 资源标志属于作者的事实判断。分数、链接域名和资源名词都不能替代
+        // “本论文已经公开该资源”的声明，尤其不能覆盖作者明确写出的否定。
+        for (const key of ['hasCode', 'hasModel', 'hasDataset']) {
+            if (!['是', '否', '未说明'].includes(payload[key])) payload[key] = '未说明';
+        }
+        if (!['hasCode', 'hasModel', 'hasDataset'].some(key => payload[key] === '是')) {
+            throw new Error('开源分达到 1.0，但作者未明确确认任何已公开核心资源；请补充证据或修正评分');
         }
     } else if (score === 0.5) {
         state = urls.length > 0 ? 'partial_release' : 'promise';

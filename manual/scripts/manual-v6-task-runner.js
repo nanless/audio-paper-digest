@@ -62,6 +62,16 @@ function assertDate(date) {
     return date;
 }
 
+function assertSafePaperId(id) {
+    // 兼容旧 arXiv 的 category/id；身份规范化本身不保证文件路径安全。
+    if (typeof id !== 'string' || !id || normalizedId(id) !== id || path.isAbsolute(id)
+        || /^[a-z]:/i.test(id) || /[\\\u0000-\u001f\u007f]/u.test(id)
+        || id.split('/').some(part => !part || part === '.' || part === '..')) {
+        throw new Error('论文 ID 必须是受控任务目录内的安全相对身份');
+    }
+    return id;
+}
+
 function assertRole(role) {
     if (!ROLES.includes(role)) throw new Error(`role 非法: ${role}`);
     return role;
@@ -99,7 +109,7 @@ function emptyTask() {
 }
 
 function initializeState(date, paperIds, generatedAt = getBeijingISOString(), filteredInput = {}, executionScope = 'production') {
-    const ids = paperIds.map(normalizedId);
+    const ids = paperIds.map(value => assertSafePaperId(normalizedId(value)));
     if (!ids.length || ids.some(id => !id) || new Set(ids).size !== ids.length) {
         throw new Error('expectedPaperIds 必须是非空且不重复的规范化论文集合');
     }
@@ -144,6 +154,7 @@ function validateState(state) {
     const seenTaskNames = new Set();
     let active = 0;
     for (const id of state.expectedPaperIds) {
+        assertSafePaperId(id);
         if (normalizedId(id) !== id || !state.papers[id]?.tasks) throw new Error(`state 缺少规范论文: ${id}`);
         for (const role of ROLES) {
             const task = state.papers[id].tasks[role];
@@ -885,7 +896,7 @@ function run(argv = process.argv.slice(2), overrides = {}) {
         const filteredBytes = fs.readFileSync(papersPath);
         const filtered = JSON.parse(filteredBytes.toString('utf8'));
         if (filtered.status !== 'complete' || filtered.batchDate !== args.date) throw new Error('init 只接受同日 complete filtered');
-        const ids = filtered.papers.map(normalizedId).sort();
+        const ids = filtered.papers.map(value => assertSafePaperId(normalizedId(value))).sort();
         fs.mkdirSync(paths.taskRoot, { recursive: true });
         ids.forEach(id => fs.mkdirSync(path.join(paths.taskRoot, id), { recursive: true }));
         const binding = {

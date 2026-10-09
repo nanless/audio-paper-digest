@@ -873,3 +873,42 @@ describe('Manual v6 持久任务执行器', () => {
         fs.rmSync(root, { recursive: true, force: true });
     });
 });
+
+
+describe('Manual 任务目录身份边界', () => {
+    it('真实 init 在创建目录和状态之前拒绝路径穿越及路径别名', t => {
+        const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'manual-runner-path-'));
+        t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+        const productionRoot = path.join(root, 'production');
+        const filteredFile = path.join(root, 'filtered.json');
+        const runner = require('../scripts/manual-v6-task-runner.js');
+        for (const id of ['../../escaped', '../escaped', '/tmp/escaped', 'a/../escaped', 'a/./b',
+            'a//b', 'a\\b', 'c:/escaped', '.', '..', 'unsafe\u0000id']) {
+            fs.writeFileSync(filteredFile, JSON.stringify({ status: 'complete', batchDate: '2026-08-28', papers: [{ arxivId: id }] }));
+            assert.throws(() => runner.run(['init', '--date', '2026-08-28', '--papers', filteredFile], { productionRoot }), /安全相对身份/, id);
+            assert.equal(fs.existsSync(productionRoot), false, id);
+        }
+    });
+
+    it('恢复入口拒绝已存越界身份，合法现代和旧式 arXiv 身份仍可初始化及恢复', t => {
+        const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'manual-runner-recovery-'));
+        t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+        const productionRoot = path.join(root, 'production');
+        const filteredFile = path.join(root, 'filtered.json');
+        const runner = require('../scripts/manual-v6-task-runner.js');
+        const papers = [{ arxivId: '2608.12345v2' }, { arxivId: 'hep-th/9901001' }];
+        fs.writeFileSync(filteredFile, JSON.stringify({ status: 'complete', batchDate: '2026-08-28', papers }));
+        t.mock.method(console, 'log', () => {});
+        runner.run(['init', '--date', '2026-08-28', '--papers', filteredFile], { productionRoot });
+        const args = ['status', '--date', '2026-08-28'];
+        const good = runner.run(args, { productionRoot });
+        assert.equal(good.tasks.length, 8);
+        const paths = runnerPaths('2026-08-28', productionRoot);
+        const state = JSON.parse(fs.readFileSync(paths.statePath));
+        state.expectedPaperIds[0] = '../../escaped';
+        state.papers['../../escaped'] = state.papers['2608.12345']; delete state.papers['2608.12345'];
+        fs.writeFileSync(paths.statePath, JSON.stringify(state));
+        assert.throws(() => runner.run(args, { productionRoot }), /安全相对身份/);
+        assert.equal(fs.existsSync(path.join(productionRoot, '2026-08-28', 'escaped')), false);
+    });
+});

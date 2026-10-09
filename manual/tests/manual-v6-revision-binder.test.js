@@ -11,6 +11,7 @@ const {
     applyRevisionAuthorPatches, applyReviewDecisionsAndRevisionPatches
 } = require('../scripts/manual-v6-revision-binder.js');
 const { renderArtifactTableMarkdown } = require('../scripts/manual-longform-contract.js');
+const { validateOpenSourceEvidence } = require('../scripts/manual-research-contract.js');
 const { REQUIRED_RECOVERY_STAGES } = require('../../scripts/analysis-contract.js');
 
 function paragraph(heading) {
@@ -47,6 +48,7 @@ describe('Manual v6 确定性修订绑定器', () => {
     it('按已验证开源分和真实 HTTPS 证据规范化异构 author 状态', () => {
         const released = normalizeReviewBoundOpenSourceEvidence({
             dims: [1, 1, 1, 1, 1, 1.2, 1, 1],
+            hasCode: '是', hasModel: '是', hasDataset: '是',
             open: '论文声明代码、权重和数据均已公开。',
             openSourceEvidence: {
                 state: '论文自述公开', code: 'https://github.com/example/project',
@@ -74,6 +76,55 @@ describe('Manual v6 确定性修订绑定器', () => {
             dims: [1, 1, 1, 1, 1, 1.2, 1, 1],
             openSourceEvidence: { state: 'paper_declared', urls: [], sourceQuotes: ['公开声明足够长。'] }
         }), /没有 HTTPS 资源 URL/);
+    });
+
+    it('数据集公开不覆盖代码和模型的明确否定，并通过真实全文来源核验', () => {
+        const sourceText = 'Our dataset is publicly available; code and model weights are not released.';
+        const input = {
+            dims: [1, 1, 1, 1, 1, 1, 1, 1],
+            hasCode: '否', hasModel: '否', hasDataset: '是', open: sourceText,
+            openSourceEvidence: {
+                state: 'released', dataset: 'https://github.com/example/dataset',
+                sourceQuotes: [sourceText]
+            }
+        };
+        const result = normalizeReviewBoundOpenSourceEvidence(input);
+        assert.equal(result.hasCode, '否');
+        assert.equal(result.hasModel, '否');
+        assert.equal(result.hasDataset, '是');
+        assert.equal(input.hasCode, '否');
+        assert.doesNotThrow(() => validateOpenSourceEvidence(result.openSourceEvidence, {
+            dims: result.dims, resourceFlags: result, sourceText, requireSourceBinding: true
+        }));
+        assert.throws(() => validateOpenSourceEvidence(result.openSourceEvidence, {
+            dims: result.dims, resourceFlags: result,
+            sourceText: 'This paper has no resource statement.', requireSourceBinding: true
+        }), /不存在于绑定全文/);
+    });
+
+    it('已确认资源不会把未说明和缺失标志按关键词补成肯定', () => {
+        const result = normalizeReviewBoundOpenSourceEvidence({
+            dims: [1, 1, 1, 1, 1, 1, 1, 1], hasCode: '未说明', hasDataset: '是',
+            openSourceEvidence: {
+                dataset: 'https://github.com/example/data',
+                sourceQuotes: ['Our dataset supports model and code evaluation.']
+            }
+        });
+        assert.equal(result.hasCode, '未说明');
+        assert.equal(result.hasModel, '未说明');
+        assert.equal(result.hasDataset, '是');
+    });
+
+    it('高分、代码链接和资源名词不能替代作者对公开状态的确认', () => {
+        for (const flags of [{}, { hasCode: '否', hasModel: '否', hasDataset: '未说明' }]) {
+            assert.throws(() => normalizeReviewBoundOpenSourceEvidence({
+                dims: [1, 1, 1, 1, 1, 1, 1, 1], ...flags,
+                openSourceEvidence: {
+                    code: 'https://github.com/tensorflow/tensorflow',
+                    sourceQuotes: ['We use TensorFlow source code for the baseline model.']
+                }
+            }), /作者未明确确认任何已公开核心资源/);
+        }
     });
 
     it('只从绑定当前字节的独立 Terra-high 两轮审计派生 manualAudit', () => {

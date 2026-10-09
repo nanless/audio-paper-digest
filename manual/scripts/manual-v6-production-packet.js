@@ -116,7 +116,8 @@ function buildBlankRecordSkeleton(paperId) {
         manualDepth: 'full-text-evidence-v6',
         paperId,
         arxivId: paperId,
-        type: '', task: '', primaryMethodTag: '', tags: '', dims: Array(8).fill(null), confidence: '',
+        type: '', task: '', primaryMethodTag: '', tags: '',
+        hasCode: '未说明', hasModel: '未说明', hasDataset: '未说明', dims: Array(8).fill(null), confidence: '',
         authorInfo: {
             firstAuthorAffiliation: '', correspondingAuthors: '', affiliations: '', sourceQuote: ''
         },
@@ -219,7 +220,7 @@ function buildBlankRecordSchema(paperId) {
                 'method', 'method2', 'method3', 'innovations', 'results', 'details',
                 'limits', 'open', 'review', 'evidenceLedger', 'resultClaims',
                 'researchBrief', 'manualAudit', 'stageReviewAttemptsByStage',
-                'stageReviews', 'openSourceEvidence', 'figureReview', 'editorial'
+                'stageReviews', 'openSourceEvidence', 'hasCode', 'hasModel', 'hasDataset', 'figureReview', 'editorial'
             ],
             technical_scoring: [
                 'dims', 'confidence', 'scoringReasons', 'scoringCalibration',
@@ -389,6 +390,11 @@ function buildBlankRecordSchema(paperId) {
                 primaryMethodTag: 'one explicit current method-facet preferred #tag included in tags; peer method tags remain allowed',
                 tags: 'one string containing 3-5 unique current preferred tags, including task and primaryMethodTag, without ancestor duplication; arrays are forbidden',
                 title: 'the authoritative title is bound through evidence/paper-metadata.json; titleOverride remains optional and may only repair whitespace'
+            },
+            resourceFlags: {
+                fields: ['hasCode', 'hasModel', 'hasDataset'],
+                allowedValues: ['是', '否', '未说明'],
+                requirement: '作者逐项核对本文代码、模型和数据的公开状态；第三方依赖、未来承诺、链接域名及评分不能支撑肯定。开源分达到 1.0 时至少一项须有明确已公开证据。'
             },
             sourceSnapshot: {
                 required: [
