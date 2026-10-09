@@ -42,11 +42,11 @@ function main(argv = process.argv.slice(2), runtime = {}) {
     const openreviewReceiptRoot = options.openreviewReceiptRoot || files.historicalOpenreviewPdfSourceDir;
     const alternateReceiptRoot = options.alternateReceiptRoot || files.historicalIcmlAlternatePdfSourceDir;
     if (typeof files.historicalConferenceLocalSourcesDir !== 'string' || !path.isAbsolute(files.historicalConferenceLocalSourcesDir)) {
-        throw new Error('historicalConferenceLocalSourcesDir must be a configured absolute path');
+        throw new Error('historicalConferenceLocalSourcesDir 必须是已配置的绝对路径');
     }
     if (![icmlFreshPdfRoot, openreviewReceiptRoot, alternateReceiptRoot]
         .every(value => typeof value === 'string' && path.isAbsolute(value))) {
-        throw new Error('historical ICML fresh PDF and receipt roots must be configured absolute paths');
+        throw new Error('历史 ICML 新抓 PDF 与 receipt 根目录必须是已配置的绝对路径');
     }
     const manifest = api.buildLocalSourcesManifest({ dataRoot, iclrAcceptedRoot,
         icmlPosterSnapshotFile: options.icmlPosterSnapshotFile, icmlPdfRoot: options.icmlPdfRoot,

@@ -18,7 +18,7 @@ function parseArgs(argv) {
             && rest[4] === '--evidence-run' && rest[6] === '--output'
             && [rest[1], rest[3], rest[7]].every(value => filterApi.SAFE_JSON_NAME.test(String(value || '')))
             && evidenceApi.UUID_RE.test(String(rest[5] || ''));
-        if (!valid) throw new Error('Use spec --catalog NAME.json --report NAME.json --evidence-run UUID --output NAME.json');
+        if (!valid) throw new Error('用法：spec --catalog NAME.json --report NAME.json --evidence-run UUID --output NAME.json');
         return { command, catalogName: rest[1], reportName: rest[3], evidenceRunId: rest[5], specName: rest[7] };
     }
     if (command === 'prepare') {
@@ -27,7 +27,7 @@ function parseArgs(argv) {
             && [rest[1], rest[3], rest[7]].every(value => filterApi.SAFE_JSON_NAME.test(String(value || '')))
             && evidenceApi.UUID_RE.test(String(rest[5] || ''))
             && (rest.length === 8 || (rest[8] === '--filter' && filterApi.UUID_RE.test(String(rest[9] || ''))));
-        if (!valid) throw new Error('Use prepare --catalog NAME.json --report NAME.json --evidence-run UUID --spec NAME.json [--filter UUID]');
+        if (!valid) throw new Error('用法：prepare --catalog NAME.json --report NAME.json --evidence-run UUID --spec NAME.json [--filter UUID]');
         return { command, catalogName: rest[1], reportName: rest[3], evidenceRunId: rest[5],
             specName: rest[7], filterId: rest[9] };
     }
@@ -39,13 +39,13 @@ function parseArgs(argv) {
         && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(String(rest[5] || ''))) {
         return { command, filterId: rest[1], decisionName: rest[3], owner: rest[5] };
     }
-    throw new Error('Use spec|prepare|status|apply with controlled direct filenames');
+    throw new Error('用法：spec|prepare|status|apply，且只能使用受控的直接文件名');
 }
 
 function requireFiles(files) {
     for (const field of ['conferenceDiscoveryCatalogDir', 'conferenceDiscoveryReportDir', 'conferenceFilterEvidenceRunsDir',
         'conferenceFilterSpecsDir', 'conferenceFiltersDir']) {
-        if (typeof files?.[field] !== 'string') throw new Error(`Configured ${field} is required`);
+        if (typeof files?.[field] !== 'string') throw new Error(`必须配置 ${field}`);
     }
     return files;
 }
@@ -53,7 +53,7 @@ function readConfiguredJson(directory, name) {
     return ledgerApi.readRegularJson(filterApi.safeDirectJson(directory, name));
 }
 function verifyTagCatalogFileBinding(files, spec) {
-    if (typeof files.tagCatalogFile !== 'string') throw new Error('Configured tagCatalogFile is required');
+    if (typeof files.tagCatalogFile !== 'string') throw new Error('必须配置 tagCatalogFile');
     const loaded = ledgerApi.readRegularJson(files.tagCatalogFile);
     if (loaded.sha256 !== filterApi.tagCatalogSha256ForSpec(spec)) throw new Error('配置词表的文件 SHA 与筛选配置记录不一致。');
 }

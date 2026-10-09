@@ -499,7 +499,7 @@ function normalizeByteRecord(value, label, { nullable = false } = {}) {
     }
     const bytes = Buffer.from(value.data, 'base64');
     if (!Number.isSafeInteger(value.size) || value.size < 1 || value.size > MAX_DECISION_PAYLOAD_BYTES || bytes.length !== value.size
-        || bytes.toString('base64') !== value.data) fail(`${label} size/base64 is inconsistent`);
+        || bytes.toString('base64') !== value.data) fail(`${label} 的 size/base64 不匹配`);
     if (assertSha(value.sha256, `${label}.sha256`) !== sha256(bytes)) fail(`${label} SHA drifted`);
     return { encoding: 'base64', size: bytes.length, sha256: value.sha256, data: value.data };
 }
@@ -863,7 +863,7 @@ function readLockDirectory(lockPath, label = 'filter operation lock') {
     const info = fs.lstatSync(lockPath);
     if (!info.isDirectory() || info.isSymbolicLink() || fs.realpathSync(lockPath) !== lockPath) fail(`${label} is unsafe`);
     const entries = fs.readdirSync(lockPath).sort();
-    if (entries.length !== 1 || entries[0] !== 'owner.json') fail(`${label} contains unknown or missing evidence`);
+    if (entries.length !== 1 || entries[0] !== 'owner.json') fail(`${label} 含未知或缺失的证据`);
     const ownerPath = path.join(lockPath, 'owner.json'); const ownerInfo = fs.lstatSync(ownerPath);
     if (!ownerInfo.isFile() || ownerInfo.isSymbolicLink() || ownerInfo.nlink !== 1
         || ownerInfo.size < 1 || ownerInfo.size > MAX_LOCK_OWNER_BYTES) fail(`${label} owner is unsafe`);
@@ -1353,7 +1353,7 @@ function rejectDuplicateJsonKeys(source, label) {
         else if (token === ',' && top?.object) top.expectKey = true;
         else if (token.startsWith('"') && top?.object && top.expectKey) {
             const key = JSON.parse(token);
-            if (top.keys.has(key)) fail(`${label} contains duplicate JSON key: ${key}`);
+            if (top.keys.has(key)) fail(`${label} 含重复的 JSON 键：${key}`);
             top.keys.add(key); top.expectKey = false;
         }
     }
@@ -1609,7 +1609,7 @@ function parseStrictJson(source, label) {
     try { rejectDuplicateJsonKeys(source, label); return JSON.parse(source); }
     catch (error) {
         if (String(error.message || error).startsWith('Invalid conference filter:')) throw error;
-        fail(`${label} is not strict JSON`);
+        fail(`${label} 不是严格 JSON`);
     }
 }
 

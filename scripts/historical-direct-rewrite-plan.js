@@ -31,7 +31,7 @@ function main(argv = process.argv.slice(2), runtime = {}) {
     if (typeof files.historicalDirectRewritePlanDir !== 'string' || !path.isAbsolute(files.historicalDirectRewritePlanDir)
         || typeof files.historicalDirectRewriteUnprojectedReportDir !== 'string'
         || !path.isAbsolute(files.historicalDirectRewriteUnprojectedReportDir)) {
-        throw new Error('historicalDirectRewritePlanDir and historicalDirectRewriteUnprojectedReportDir must be configured absolute paths');
+        throw new Error('historicalDirectRewritePlanDir 和 historicalDirectRewriteUnprojectedReportDir 必须是已配置的绝对路径');
     }
     const plan = api.buildFromFiles(options); const queues = api.splitQueues(plan);
     const result = { status: options.apply ? null : 'dry-run', arxivFreshFetch: queues.arxiv.length,

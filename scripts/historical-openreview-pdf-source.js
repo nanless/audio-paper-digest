@@ -31,7 +31,7 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
     const pdfRoot = options.pdfRoot || files.historicalOpenreviewPdfRoot;
     const receiptRoot = options.receiptRoot || files.historicalOpenreviewPdfSourceDir;
     if (!path.isAbsolute(String(pdfRoot || '')) || !path.isAbsolute(String(receiptRoot || ''))) {
-        throw new Error('historical OpenReview PDF and receipt roots must be configured absolute paths');
+        throw new Error('历史 OpenReview PDF 与 receipt 根目录必须是已配置的绝对路径');
     }
     const result = await (runtime.seal || api.sealOpenreviewPdf)({ ...options, pdfRoot, receiptRoot }, runtime.dependencies);
     console.log(JSON.stringify(result)); return result;

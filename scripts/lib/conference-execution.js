@@ -296,7 +296,7 @@ function authorityFor(execution) {
 function assertPlanAuthority(execution, authority, planHandle) {
     let plan;
     try { plan = planApi.planHandleSnapshot(planHandle); }
-    catch (error) { fail(`requires an authenticated plan handle: ${error.message}`); }
+    catch (error) { fail(`需要已认证的计划句柄：${error.message}`); }
     const expectedSource = sourceForPlan(plan.run, plan);
     if (authority.executionId !== execution.executionId
         || stableHash(authority.source) !== stableHash(expectedSource)

@@ -16,7 +16,7 @@ const { safeRuntimeFile } = require('./conference-tools.js');
 
 function executionRoot(files = Config.FILES) {
     if (!files || typeof files.conferenceExecutionsDir !== 'string' || !path.isAbsolute(files.conferenceExecutionsDir)) {
-        throw new Error('conferenceExecutionsDir must be an absolute configured runtime path');
+        throw new Error('conferenceExecutionsDir 必须是指向已配置运行目录的绝对路径');
     }
     return files.conferenceExecutionsDir;
 }
@@ -38,9 +38,9 @@ function validatedAuthorityOptions(values) {
         throw new Error('Every conference execution command requires the complete plan/import/staging/filter/discovery authority chain');
     }
     for (const flag of AUTHORITY_FLAGS.filter(flag => flag !== '--filter')) {
-        if (!executionApi.SAFE_JSON_NAME.test(String(values[flag] || ''))) throw new Error(`${flag} must be a safe direct JSON filename`);
+        if (!executionApi.SAFE_JSON_NAME.test(String(values[flag] || ''))) throw new Error(`${flag} 必须是安全的直接 JSON 文件名`);
     }
-    if (!executionApi.UUID_RE.test(String(values['--filter'] || ''))) throw new Error('--filter must be a canonical UUID v4');
+    if (!executionApi.UUID_RE.test(String(values['--filter'] || ''))) throw new Error('--filter 必须是规范 UUID v4');
     return { runName: values['--run'], planReceiptName: values['--plan-receipt'], planName: values['--plan'],
         ledgerName: values['--ledger'], importReceiptName: values['--import-receipt'], importName: values['--import'],
         stagingReceiptName: values['--staging-receipt'], filterId: values['--filter'],
@@ -50,12 +50,12 @@ function parseArgs(args) {
     const [command, ...rest] = args;
     if (command === 'prepare') {
         const values = parsePairs(rest, [...AUTHORITY_FLAGS, '--execution']);
-        if (values['--execution'] && !executionApi.UUID_RE.test(values['--execution'])) throw new Error('--execution must be a canonical UUID v4');
+        if (values['--execution'] && !executionApi.UUID_RE.test(values['--execution'])) throw new Error('--execution 必须是规范 UUID v4');
         return { command, ...validatedAuthorityOptions(values), executionId: values['--execution'] };
     }
     if (command === 'status') {
         const values = parsePairs(rest, [...AUTHORITY_FLAGS, '--execution']);
-        if (!executionApi.UUID_RE.test(String(values['--execution'] || ''))) throw new Error('--execution must be a canonical UUID v4');
+        if (!executionApi.UUID_RE.test(String(values['--execution'] || ''))) throw new Error('--execution 必须是规范 UUID v4');
         return { command, ...validatedAuthorityOptions(values), executionId: values['--execution'] };
     }
     if (command === 'transition') {
@@ -63,12 +63,12 @@ function parseArgs(args) {
         if (!executionApi.UUID_RE.test(String(values['--execution'] || ''))
             || !executionApi.SAFE_JSON_NAME.test(String(values['--patch'] || ''))
             || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$/.test(String(values['--owner'] || ''))) {
-            throw new Error('transition requires canonical execution UUID, direct patch JSON, and owner');
+            throw new Error('transition 需要规范的执行 UUID、直接 patch JSON 和 owner');
         }
         return { command, ...validatedAuthorityOptions(values), executionId: values['--execution'],
             patchName: values['--patch'], owner: values['--owner'] };
     }
-    throw new Error('Use prepare, status, or transition with the complete authority chain');
+    throw new Error('用法：prepare、status 或 transition，并带上完整权限链');
 }
 function loadBoundPlan(files, options) {
     const importHandle = planCli.loadImportHandle(files, options);
@@ -93,7 +93,7 @@ function publicStatus(execution) {
 function main(argv = process.argv.slice(2), dependencies = {}) {
     requireExternalRuntime('conference-execution.js');
     if (process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE === '1') {
-        throw new Error('New-conference execution must use conference:new:process');
+        throw new Error('新会议执行必须使用 conference:new:process');
     }
     const options = parseArgs(argv); const files = dependencies.files || Config.FILES;
     const root = dependencies.executionRoot || executionRoot(files);

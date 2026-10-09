@@ -37,12 +37,12 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('history-conflict-identity.js');
     if (!runtime || typeof runtime !== 'object' || Array.isArray(runtime)
         || Object.keys(runtime).some(key => key !== 'files')) {
-        throw new Error('history conflict resolver only accepts configured files; transport injection is forbidden');
+        throw new Error('历史冲突解析器只接受已配置的文件；禁止注入传输层');
     }
     const options = parseArgs(argv); const files = runtime.files || Config.FILES;
     if (typeof files.paperSourceAuthorityDir !== 'string' || !path.isAbsolute(files.paperSourceAuthorityDir)
         || typeof files.pageSourceCrosswalkDir !== 'string' || !path.isAbsolute(files.pageSourceCrosswalkDir)) {
-        throw new Error('paperSourceAuthorityDir and pageSourceCrosswalkDir must be configured absolute paths');
+        throw new Error('paperSourceAuthorityDir 和 pageSourceCrosswalkDir 必须是已配置的绝对路径');
     }
     const current = crosswalkApi.readCrosswalk({ crosswalkRoot: files.pageSourceCrosswalkDir,
         crosswalkId: options.crosswalkId });

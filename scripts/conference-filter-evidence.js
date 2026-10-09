@@ -24,29 +24,29 @@ function parseArgs(argv) {
             || value === undefined || Object.hasOwn(values, flag)) throw new Error(USAGE);
         values[flag] = value; index += 2;
     }
-    for (const flag of ['--catalog', '--report', '--run']) if (!values[flag]) throw new Error(`Missing ${flag}`);
+    for (const flag of ['--catalog', '--report', '--run']) if (!values[flag]) throw new Error(`缺少 ${flag}`);
     for (const flag of ['--catalog', '--report']) {
-        if (!discovery.SAFE_JSON_NAME.test(values[flag])) throw new Error(`${flag} must be a safe JSON filename`);
+        if (!discovery.SAFE_JSON_NAME.test(values[flag])) throw new Error(`${flag} 必须是安全的 JSON 文件名`);
     }
-    if (!evidence.UUID_RE.test(values['--run'])) throw new Error('--run must be a canonical UUID v4');
+    if (!evidence.UUID_RE.test(values['--run'])) throw new Error('--run 必须是规范 UUID v4');
     const all = values['--all'] === true;
     if (all && (command !== 'apply' || values['--limit'] !== undefined || values['--expected-total'] === undefined)) {
         throw new Error('--all requires apply and --expected-total, and cannot be combined with --limit');
     }
     if (!all && values['--expected-total'] !== undefined) throw new Error('--expected-total requires --all');
     const limit = values['--limit'] === undefined ? 1 : Number(values['--limit']);
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new Error('--limit must be 1..500');
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw new Error('--limit 必须在 1..500 之间');
     const expectedTotal = all ? Number(values['--expected-total']) : null;
     if (all && (!Number.isSafeInteger(expectedTotal) || expectedTotal < 1)) {
-        throw new Error('--expected-total must be a positive integer');
+        throw new Error('--expected-total 必须是正整数');
     }
-    if (command === 'status' && values['--limit'] !== undefined) throw new Error('status does not accept --limit');
+    if (command === 'status' && values['--limit'] !== undefined) throw new Error('status 不接受 --limit');
     return { command, catalog: values['--catalog'], report: values['--report'], runId: values['--run'],
         limit, all, expectedTotal };
 }
 function requireFiles(files) {
     for (const field of ['conferenceDiscoveryCatalogDir', 'conferenceDiscoveryReportDir', 'conferenceFilterEvidenceRunsDir']) {
-        if (typeof files?.[field] !== 'string' || !path.isAbsolute(files[field])) throw new Error(`${field} must be absolute`);
+        if (typeof files?.[field] !== 'string' || !path.isAbsolute(files[field])) throw new Error(`${field} 必须是绝对路径`);
     }
     return files;
 }

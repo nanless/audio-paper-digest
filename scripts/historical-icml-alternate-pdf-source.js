@@ -38,7 +38,7 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
     const pdfRoot = options.pdfRoot || files.historicalOpenreviewPdfRoot;
     const receiptRoot = options.receiptRoot || files.historicalIcmlAlternatePdfSourceDir;
     if (!path.isAbsolute(String(pdfRoot || '')) || !path.isAbsolute(String(receiptRoot || ''))) {
-        throw new Error('historical ICML alternate PDF and receipt roots must be configured absolute paths');
+        throw new Error('历史 ICML 备用 PDF 与 receipt 根目录必须是已配置的绝对路径');
     }
     const seal = runtime.seal || (options.importFile ? api.sealImportedAlternatePdf : api.sealAlternatePdf);
     const result = await seal({ ...options, pdfRoot, receiptRoot }, runtime.dependencies);

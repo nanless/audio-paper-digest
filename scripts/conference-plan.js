@@ -17,18 +17,18 @@ const USAGE = '--dry-run|--apply --catalog NAME --report NAME --filter UUID --im
 
 function parseArgs(argv) {
     const [mode, ...rest] = argv;
-    if (!['--dry-run', '--apply'].includes(mode)) throw new Error(`First argument must be --dry-run or --apply. ${USAGE}`);
+    if (!['--dry-run', '--apply'].includes(mode)) throw new Error(`第一个参数必须是 --dry-run 或 --apply。${USAGE}`);
     const options = {};
     for (let index = 0; index < rest.length; index += 2) {
         const flag = rest[index]; const value = rest[index + 1];
         if (!FLAGS.includes(flag) || value === undefined || Object.hasOwn(options, flag)) throw new Error(USAGE);
         options[flag] = value;
     }
-    for (const flag of FLAGS) if (!options[flag]) throw new Error(`Missing required argument: ${flag}`);
+    for (const flag of FLAGS) if (!options[flag]) throw new Error(`缺少必需参数：${flag}`);
     for (const flag of FLAGS.filter(flag => flag !== '--filter')) {
-        if (!planApi.SAFE_JSON_NAME.test(options[flag])) throw new Error(`${flag} must be a safe direct JSON filename`);
+        if (!planApi.SAFE_JSON_NAME.test(options[flag])) throw new Error(`${flag} 必须是安全的直接 JSON 文件名`);
     }
-    if (!filterApi.UUID_RE.test(options['--filter'])) throw new Error('--filter must be a canonical UUID v4');
+    if (!filterApi.UUID_RE.test(options['--filter'])) throw new Error('--filter 必须是规范 UUID v4');
     return { apply: mode === '--apply', catalogName: options['--catalog'], reportName: options['--report'],
         filterId: options['--filter'], importName: options['--import'], stagingReceiptName: options['--staging-receipt'],
         ledgerName: options['--ledger'], importReceiptName: options['--import-receipt'],
@@ -39,7 +39,7 @@ function requireFiles(files) {
     for (const field of ['conferenceDiscoveryCatalogDir', 'conferenceDiscoveryReportDir', 'conferenceFiltersDir',
         'conferenceStagingDir', 'conferenceStagingSourceDir', 'conferenceSourceLedgerDir',
         'conferenceRunsDir', 'tagCatalogFile']) {
-        if (typeof files?.[field] !== 'string') throw new Error(`Configured ${field} is required`);
+        if (typeof files?.[field] !== 'string') throw new Error(`必须配置 ${field}`);
     }
     return files;
 }
