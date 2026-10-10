@@ -9,7 +9,7 @@ const RETRY_COOLDOWN_MS = 15 * 60 * 1000;
 function readPrivateJson(filename) {
     const stat = fs.lstatSync(filename);
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600) {
-        throw new Error(`Unsafe conference recovery file: ${filename}`);
+        throw new Error(`会议恢复文件不安全：必须是权限为 0600、只有一个硬链接的普通文件：${filename}`);
     }
     const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
     try {
@@ -18,21 +18,21 @@ function readPrivateJson(filename) {
         if (opened.ino !== stat.ino || opened.dev !== stat.dev || opened.size !== bytes.length || after.size !== bytes.length
             || after.mtimeMs !== opened.mtimeMs || named.ino !== opened.ino || named.dev !== opened.dev
             || named.size !== bytes.length || named.nlink !== 1 || (named.mode & 0o777) !== 0o600) {
-            throw new Error('Conference recovery file changed while reading');
+            throw new Error('读取会议恢复文件期间，文件身份、大小、修改时间、硬链接数量或权限已变化');
         }
         return JSON.parse(bytes.toString('utf8'));
     } finally { fs.closeSync(fd); }
 }
 
 function classifyFailure(error, now) {
-    // 调度器里不保存凭据、URL 或服务端响应正文。
-    const message = String(error?.message || error || 'analysis failed')
+    // 保存错误前，遮掉 URL 和可识别的账号凭据，再限制说明长度。
+    const message = String(error?.message || error || '分析失败')
         .replace(/https?:\/\/\S+/gi, '[URL]')
         .replace(/\b(api[_-]?key|authorization|token)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]')
         .replace(/\bBearer\s+\S+|\bsk-[A-Za-z0-9_-]+/gi, '[REDACTED]').slice(0, 2000);
     const code = typeof error?.code === 'string' && /^[A-Z0-9_]{1,100}$/.test(error.code) ? error.code : null;
     let category = 'paper';
-    // 来源和后处理校验器有明确错误码，分类不受诊断措辞、语言或引用文本影响。
+    // 以下来源和后处理错误按确切错误码分类，不根据说明文字猜测。
     if (['CONFERENCE_POSTPROCESS_INTEGRITY', 'CONFERENCE_SOURCE_CONTEXT_INTEGRITY',
         'CONFERENCE_EXTRACTION_RECEIPT_INTEGRITY', 'ARXIV_SOURCE_AUTHORITY_INTEGRITY',
         'FRESH_ANALYSIS_INTEGRITY', 'READER_IMAGE_SOURCE_INTEGRITY'].includes(code)) category = 'integrity';
@@ -41,12 +41,12 @@ function classifyFailure(error, now) {
     // 前半段英文词逐字保持原样，后半段只加「authentication」的对应中文说法「认证失败」。
     // 有意不加「未授权」（unauthorized 的直译）：它出现在 deep-analyzer 的修复指引正文里，
     // 那段正文会被拼进「上一次输出被代码拒绝」这条错误消息，加进去会把单篇拒稿误判成
-    // 整批停机的 authentication。
+    // 整批停止的认证失败。
     else if (/HTTP\s*(401|403)\b|authentication|invalid.api.key|unauthorized|认证失败/i.test(message)) category = 'authentication';
     else if (/HTTP\s*429\b|rate.limit/i.test(message)) category = 'rate_limit';
-    // Demo/资源核验只是单篇论文的可选证据。某个 demo 主机不可达时，
+    // Demo 或资源链接检查属于单篇论文的可选依据。某个 Demo 网站无法连接时，
     // 这篇论文要能重试，但不能让整个会议批次停下来，
-    // 好像分析器传输层不可用一样。
+    // 避免误认为所有分析请求都无法连接服务。
     else if (code === 'DEMO_TRANSIENT_FAILURE') category = 'paper';
     // 未解决的标签分配是确定的逐篇复核条件：它既不会让批次停下，也不会自己重试
     // （得先修好标签），并且通过复核队列报出。
@@ -99,7 +99,7 @@ function resolveProcess(context, deps, api) {
         if (!fs.existsSync(filename)) continue;
         const saved = readPrivateJson(filename);
         // 先筛选来源、配置和词表值，跳过无关任务；此处不授予任何恢复资格。
-        // 匹配后仍须核验原完整摘要、格式和字段族，再作正式身份比较。
+        // 匹配后仍须核验原状态 SHA、格式及新旧词表字段，再比较完整运行资料。
         const candidateAuthority = { ...(saved?.authority || {}) };
         const currentAuthority = { ...context.authority };
         for (const key of ['implementationSha256', 'taxonomyVersion', 'taxonomyRegistrySha256', 'tagCatalogVersion', 'tagCatalogSha256']) {
@@ -107,8 +107,8 @@ function resolveProcess(context, deps, api) {
             delete currentAuthority[key];
         }
         if (api.stableHash(candidateAuthority) !== api.stableHash(currentAuthority)) continue;
-        // 同一来源和配置下的混用字段不能因空值被当作无关词表跳过。
-        // 先核原状态摘要，再由正式字段检查拒绝混用。
+        // 同一来源和配置的记录若混用了新旧词表字段，即使字段值为空也不能跳过检查。
+        // 先核验原状态 SHA，再检查并拒绝新旧词表字段混用。
         const hasCurrentCatalog = ['tagCatalogVersion', 'tagCatalogSha256'].some(key => Object.hasOwn(saved.authority || {}, key));
         const hasLegacyCatalog = ['taxonomyVersion', 'taxonomyRegistrySha256'].some(key => Object.hasOwn(saved.authority || {}, key));
         if (hasCurrentCatalog && hasLegacyCatalog) api.assertState(saved);
@@ -123,13 +123,13 @@ function resolveProcess(context, deps, api) {
         const state = api.assertState(saved);
         if (api.stableHash(withoutImplementation(state.authority, state.version))
             !== api.stableHash(withoutImplementation(context.authority, api.PROCESS_VERSION))) continue;
-        if (state.processId !== id) throw new Error('Conference process directory identity mismatch');
+        if (state.processId !== id) throw new Error('会议任务目录名与记录的任务 ID 不同');
         if (api.stableHash(api.authorityForComparison(state.authority, state.version))
             !== api.stableHash(api.authorityForComparison(context.authority, api.PROCESS_VERSION))) {
             // 进程可能在共享来源准备阶段就失败，这时还没有任何条目完成保存与核验，
             // 也没有分析。在这种没有进展的窄情况下，实现变更不会让分析失效
             // （本来就没有分析要保留），所以可以让新实现派生新的进程命名空间，
-            // 同时保留旧检查点供审计。
+            // 同时保留旧检查点，供以后核查。
             // 一旦任何条目有进展，就必须走正常的显式迁移规则。
             const untouched = state.status === 'pending'
                 && Object.values(state.items || {}).every(item => item.status === 'pending'
@@ -143,10 +143,10 @@ function resolveProcess(context, deps, api) {
             const records = fs.readdirSync(directory).filter(name => /^implementation-migration(?:-[a-f0-9]{12})?\.json$/.test(name))
                 .map(name => readPrivateJson(path.join(directory, name)));
             const record = records.find(value => value.toImplementationSha256 === state.authority.implementationSha256);
-            if (!record && !state.sourceImplementationSha256) throw new Error('Migrated process lacks recovery provenance');
+            if (!record && !state.sourceImplementationSha256) throw new Error('已迁移的会议任务缺少实现迁移记录或原实现 SHA');
             for (const value of records) {
                 const { receiptSha256, ...body } = value;
-                if (value.processId !== id || receiptSha256 !== api.stableHash(body)) throw new Error('Migration receipt integrity failed');
+                if (value.processId !== id || receiptSha256 !== api.stableHash(body)) throw new Error('实现迁移凭证的字段或 SHA 未通过完整性检查');
             }
             sourceImplementation(state, directory, api);
         }
@@ -155,18 +155,18 @@ function resolveProcess(context, deps, api) {
     const worked = matches.filter(item => item.worked);
     const promoted = worked.filter(item => item.promoted);
     if (promoted.length === 1) return promoted[0].id;
-    if (worked.length > 1) throw new Error('Multiple progressed conference processes match; use explicit migration --from');
+    if (worked.length > 1) throw new Error('存在多个已有处理进展的匹配会议任务；请用迁移命令的 --from 指定原任务');
     if (worked.length) return worked[0].id;
     if (matches.length) return matches.find(item => item.id === derived)?.id || matches[0].id;
     const untouchedOlder = older.filter(item => item.untouched);
     if (older.length && untouchedOlder.length === older.length) return derived;
-    if (older.length) throw new Error(`Conference implementation changed; migrate with --from ${older.map(item => item.id).join(' or ')} to preserve analysis`);
+    if (older.length) throw new Error(`会议实现已更改；请用 --from ${older.map(item => item.id).join(' 或 ')} 迁移并保留已有分析`);
     return derived;
 }
 
 function sourceImplementation(state, directory, api, ancestry = new Set()) {
     api.assertState(state);
-    if (ancestry.has(state.processId) || ancestry.size >= 64) throw new Error('Promotion provenance contains a cycle');
+    if (ancestry.has(state.processId) || ancestry.size >= 64) throw new Error('来源升级恢复路径重复引用同一任务，或超过 64 层');
     const parents = new Set(ancestry); parents.add(state.processId);
     const withoutImplementation = (value, version) => {
         const copy = api.authorityForComparison(value, version);
@@ -180,24 +180,24 @@ function sourceImplementation(state, directory, api, ancestry = new Set()) {
         const { planSha256, ...plan } = savedPlan;
         if (planSha256 !== api.stableHash(plan) || planSha256 !== promotion.planSha256
             || plan.version !== state.version
-            // 已晋升的进程之后可能走一次显式的实现迁移。来源升级计划本身受签名保护，
-            // 因此必然保留晋升时的权威指纹，而检查点记录的是当前实现。
-            // 来源、筛选、成员的权威必须仍然一致，只有这个经过审计的实现字段可以前进。
+            // 来源升级后的任务仍可显式迁移实现。原来源升级计划的内容受 SHA 保护，
+            // 因此计划保留升级时的运行资料，检查点则记录当前实现。
+            // 来源、筛选和论文集合必须保持相同；这里只允许有迁移记录的实现 SHA 更新。
             || api.stableHash(withoutImplementation(plan.authority, plan.version))
                 !== api.stableHash(withoutImplementation(state.authority, state.version))
             || plan.fromProcessId !== promotion.originalProcessId
             || plan.sourceImplementationSha256 !== promotion.sourceImplementationSha256
             || api.stableHash(plan.pageRepairPolicy || null) !== api.stableHash(promotion.pageRepairPolicy || null)
             || api.stableHash(plan.papers.map(item => item.paperId).sort()) !== api.stableHash(Object.keys(state.items).sort())) {
-            throw new Error('Source upgrade promotion plan integrity failed');
+            throw new Error('来源升级计划与任务记录的字段或 SHA 未通过完整性检查');
         }
-        // 父进程 UUID 绑定的是它发放的权威，而不是晋升计划里更新的那份登记记录。
-        // 重新打开已签名的父状态。
+        // 原任务 UUID 按原任务的运行资料计算，不能用升级计划中更新后的资料代替。
+        // 重新读取并核验原任务状态。
         const parentDirectory = api.safeProcessDirectory(path.dirname(directory), plan.fromProcessId, false);
         const parent = api.assertState(readPrivateJson(path.join(parentDirectory, 'state.json')));
         if (parent.processId !== plan.fromProcessId || parent.stateSha256 !== plan.originalStateSha256
             || api.stableHash(Object.keys(parent.items).sort()) !== api.stableHash(Object.keys(state.items).sort())) {
-            throw new Error('Promotion parent state does not bind the original plan');
+            throw new Error('来源升级前的任务 ID、状态 SHA 或论文集合与原计划不同');
         }
         const parentSource = sourceImplementation(parent, parentDirectory, api, parents);
         const sourceAuthority = (value, version) => {
@@ -214,7 +214,7 @@ function sourceImplementation(state, directory, api, ancestry = new Set()) {
                 ? api.deterministicUuid(parent.sourceUpgradePromotion.planSha256, 'conference-source-upgrade-process-v1')
                 : api.deterministicUuid(api.stableHash({ ...parent.authority, implementationSha256: parentSource }),
                     parent.contract)) !== parent.processId) {
-            throw new Error('Promotion parent source/authority/UUID integrity failed');
+            throw new Error('来源升级前的来源、运行资料或任务 UUID 未通过完整性检查');
         }
         if (parent.status === 'complete') api.validateCompletionReceipt(parent,
             readPrivateJson(path.join(parentDirectory, 'completion-receipt.json')));
@@ -223,7 +223,7 @@ function sourceImplementation(state, directory, api, ancestry = new Set()) {
     const bindsOrigin = implementationSha256 => /^[a-f0-9]{64}$/.test(implementationSha256 || '')
         && api.deterministicUuid(api.stableHash({ ...state.authority, implementationSha256 }), state.contract) === state.processId;
     if (state.sourceImplementationSha256) {
-        if (!bindsOrigin(state.sourceImplementationSha256)) throw new Error('Source implementation does not bind original process UUID');
+        if (!bindsOrigin(state.sourceImplementationSha256)) throw new Error('原实现 SHA 无法计算出记录中的原任务 UUID');
     }
     const records = fs.readdirSync(directory).filter(name => /^implementation-migration(?:-[a-f0-9]{12})?\.json$/.test(name))
         .map(name => readPrivateJson(path.join(directory, name)));
@@ -233,17 +233,17 @@ function sourceImplementation(state, directory, api, ancestry = new Set()) {
             || value.processId !== state.processId || value.conferenceId !== state.authority.conferenceId
             || !/^[a-f0-9]{64}$/.test(value.fromImplementationSha256 || '')
             || !/^[a-f0-9]{64}$/.test(value.toImplementationSha256 || '')
-            || receiptSha256 !== api.stableHash(body)) throw new Error('Migration receipt integrity failed');
+            || receiptSha256 !== api.stableHash(body)) throw new Error('实现迁移凭证的字段或 SHA 未通过完整性检查');
     }
     if (state.sourceImplementationSha256) return state.sourceImplementationSha256;
     let implementation = state.authority.implementationSha256;
     const visited = new Set();
     while (!bindsOrigin(implementation)) {
-        if (visited.has(implementation)) throw new Error('Migration provenance contains a cycle');
+        if (visited.has(implementation)) throw new Error('实现迁移记录重复引用同一实现 SHA');
         visited.add(implementation);
         const parents = [...new Set(records.filter(value => value.toImplementationSha256 === implementation)
             .map(value => value.fromImplementationSha256))];
-        if (parents.length !== 1) throw new Error('Migration provenance is missing or ambiguous before original process UUID');
+        if (parents.length !== 1) throw new Error('尚未找到原任务 UUID 对应的实现 SHA，且前一步迁移记录缺失或有多个来源');
         implementation = parents[0];
     }
     return implementation;

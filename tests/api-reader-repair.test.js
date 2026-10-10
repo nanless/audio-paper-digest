@@ -1231,12 +1231,12 @@ test('校验签名保留单调改善的缺口，忽略易变的措辞', () => {
     const improved = validationFailureSignature(issue(260, 60));
     const stalled = validationFailureSignature(issue(260, 60, '现有'));
     const regressed = validationFailureSignature(issue(220, 100));
-    assert.notEqual(first, improved, 'comparable deficits remain in the persisted signature');
+    assert.notEqual(first, improved, '可比较的缺口数值改变时，保存的校验签名也改变');
     assert.equal(validationFailureHasNoProgress(first, improved), false);
     assert.equal(validationFailureHasNoProgress(improved, stalled), true,
-        'wording changes cannot disguise an unchanged deficit');
+        '缺口相同时，仅改变说明措辞不算改善');
     assert.equal(validationFailureHasNoProgress(improved, regressed), true,
-        'a regression is not progress merely because its numbers changed');
+        '缺口增大不算改善，即使数值已经改变');
 });
 
 test('公开的候选保存不能凭一个裸字段造出实现许可', t => {
@@ -1418,17 +1418,17 @@ test('历史直连允许一次预检抓取，推迟候选退场，并以零次 L
     let modelCalls = 0;
     const first = await invoke(async () => { modelCalls += 1; return JSON.stringify(signed.draft); });
     assert.equal(modelCalls, 1);
-    assert.equal(materializations, 1, 'Reader preflight fetches Figure pixels exactly once');
+    assert.equal(materializations, 1, 'Reader 预检只调用一次图片准备回调');
     const injected = deep.injectApiReaderFigures(first, sourceDetails.structuredArtifacts, id);
     const receipts = deep.bindDirectApiReaderFiguresToEvidence(
         injected.figures, first.imageEvidence
     );
-    assert.equal(materializations, 1, 'accepted Reader post-processing performs zero additional network fetches');
+    assert.equal(materializations, 1, '已接受文章的后处理不再次调用图片准备回调');
     assert.deepEqual(receipts.map(item => item.assetSha256), [pixelSha256]);
     assert.equal(fs.readdirSync(directory).filter(name => name.endsWith('.json')).length, 1,
-        'accepted draft remains recoverable before the Reader stage checkpoint commits');
+        'Reader 阶段提交检查点前，已接受草稿仍有一份可恢复的候选文件');
     const second = await invoke(async () => { modelCalls += 1; throw new Error('must not call model'); });
-    assert.equal(modelCalls, 1, 'recovery replays the accepted candidate with zero LLM calls');
+    assert.equal(modelCalls, 1, '恢复已接受候选时，不再调用模型回调');
     assert.equal(second.resumedCandidate, true);
     const retired = deep.commitDeferredReaderCandidate(second);
     assert.match(retired, /\.resolved\.json$/);
@@ -1452,7 +1452,7 @@ test('最初两次网络失败不消耗已收内容或格式错误根对象的�
         } };
     for (let iteration = 1; iteration <= 2; iteration++) {
         await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /network failure/);
-        assert.equal(calls, iteration, 'one transport failure ends the current invocation');
+        assert.equal(calls, iteration, '一次传输失败即结束当前调用');
         const envelope = JSON.parse(fs.readFileSync(path.join(directory, fs.readdirSync(directory)[0]), 'utf8'));
         assert.equal(envelope.payload.attempts, 0);
         assert.equal(envelope.payload.fullAttempts, 0);
@@ -1483,7 +1483,7 @@ test('历史流程里模型之前的图片临时故障仍可重试，不产生�
         }
     ), error => error === transient && error.retryable === true && error.attempts === 3);
     assert.equal(modelCalls, 0);
-    assert.deepEqual(fs.readdirSync(directory), [], 'pre-model failure cannot create a Reader candidate');
+    assert.deepEqual(fs.readdirSync(directory), [], '请求模型前图片处理失败时，不创建 Reader 候选文件');
 
     const permanent = new Error('arXiv Figure download failed: HTTP 404');
     await assert.rejects(generateApiReaderArticleDetailed(
@@ -1568,15 +1568,15 @@ test('收到截断或不完整的整篇回复会跨多次调用消耗内容和�
             } };
         for (let iteration = 1; iteration <= 2; iteration++) {
             await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), error => error.code === code);
-            assert.equal(calls, iteration, 'a terminated response ends this invocation');
+            assert.equal(calls, iteration, '回复被终止后即结束当前调用');
             const envelope = JSON.parse(fs.readFileSync(path.join(directory, fs.readdirSync(directory)[0]), 'utf8'));
-            assert.equal(envelope.payload.attempts, iteration, `${code} must consume received-content budget`);
-            assert.equal(envelope.payload.fullAttempts, iteration, `${code} must consume full-response budget`);
+            assert.equal(envelope.payload.attempts, iteration, `${code} 必须计入已接收内容的尝试次数`);
+            assert.equal(envelope.payload.fullAttempts, iteration, `${code} 必须计入整篇回复的尝试次数`);
             assert.equal(envelope.payload.transportFailures || 0, 0);
-            assert.equal(envelope.payload.draft, null, 'partial output must never become a candidate');
+            assert.equal(envelope.payload.draft, null, '不完整输出不得保存为候选草稿');
         }
         await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /root JSON|exhausted/);
-        assert.equal(calls, 2, 'the third invocation cannot purchase another identical full response');
+        assert.equal(calls, 2, '第三次调用不得再次请求相同额度的整篇回复');
     }
 });
 
@@ -1603,23 +1603,23 @@ test('收到截断或不完整的补丁回复只消耗内容额度，不改动�
         await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), error => error.code === code);
         assert.equal(calls, 2);
         const envelope = JSON.parse(fs.readFileSync(path.join(directory, fs.readdirSync(directory)[0]), 'utf8'));
-        assert.equal(envelope.payload.attempts, 2, `${code} patch must consume its received-content attempt`);
-        assert.equal(envelope.payload.fullAttempts, 1, 'patch truncation is not a full-response attempt');
+        assert.equal(envelope.payload.attempts, 2, `${code} 补丁必须计入已接收内容的尝试次数`);
+        assert.equal(envelope.payload.fullAttempts, 1, '补丁截断不增加整篇回复的尝试次数');
         assert.equal(envelope.payload.transportFailures || 0, 0);
         assert.equal(hashDraft(envelope.payload.draft), hashDraft(draft));
         if (code === 'MODEL_OUTPUT_TRUNCATED') {
             await assert.rejects(generateApiReaderArticleDetailed(
                 paper, 'canonical', '', options
             ), error => error.code === code);
-            assert.equal(calls, 3, 'an exact base truncation purchases one larger patch response');
+            assert.equal(calls, 3, '达到原输出上限的截断只允许一次更大额度的补丁回复');
             const retried = JSON.parse(fs.readFileSync(path.join(directory, fs.readdirSync(directory)[0]), 'utf8'));
             assert.equal(retried.payload.attempts, 3);
             assert.equal(retried.payload.lastContentError.maxOutputTokens, 16000);
             await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
-            assert.equal(calls, 3, 'a retry-budget truncation cannot purchase another response');
+            assert.equal(calls, 3, '扩大额度后的回复仍截断时，不再请求另一份回复');
         } else {
             await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
-            assert.equal(calls, 2, 'non-budget incomplete output has no escalation allowance');
+            assert.equal(calls, 2, '未达到输出上限的不完整回复，不获得扩大额度的机会');
         }
     }
 });
@@ -1657,7 +1657,7 @@ test('非最后一次的补丁在 8000 token 处精确截断时，立刻用掉�
     const active = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
     const afterTruncation = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
     assert.equal(afterTruncation.identity.repairMaxTokens, 8000,
-        'candidate identity keeps the base budget for implementation-only migration');
+        '候选标识保留原 8000 token 额度');
     assert.equal(afterTruncation.payload.attempts, 2);
     assert.equal(afterTruncation.payload.fullAttempts, 1);
     assert.equal(afterTruncation.payload.lastContentError.requestKind, 'patch');
@@ -1674,7 +1674,7 @@ test('非最后一次的补丁在 8000 token 处精确截断时，立刻用掉�
     assert.equal(afterRetry.payload.draft.readerTitle, '声音表示如何与语义条件连接起来');
     assert.equal(afterRetry.payload.draft.sections[0].body, '太短');
     assert.equal(afterRetry.payload.attempts, 3);
-    assert.equal(afterRetry.payload.fullAttempts, 1, 'the resumed invocation made zero full Reader requests');
+    assert.equal(afterRetry.payload.fullAttempts, 1, '续跑没有增加整篇 Reader 请求次数');
 });
 
 test('最后一次普通尝试在 8000 处截断时，只得到一次有上限的 16000 重试槽位', async t => {
@@ -1724,7 +1724,7 @@ test('最后一次普通尝试在 8000 处截断时，只得到一次有上限�
     assert.equal(envelope.payload.implementationRepairAllowanceLineage,
         'reader-implementation-repair-lineage-v1');
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
-    assert.equal(calls.length, 3, 'the one larger retry cannot be repeated');
+    assert.equal(calls.length, 3, '唯一一次扩大额度的重试不能再次使用');
 });
 
 test('实现谱系的槽位在 8000 处截断后，不能再叠加第二个 16000 槽位', async t => {
@@ -1756,7 +1756,7 @@ test('实现谱系的槽位在 8000 处截断后，不能再叠加第二个 1600
         implementationRepairAllowanceLineage: 'reader-implementation-repair-lineage-v1'
     });
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
-    assert.equal(calls, 2, 'the consumed implementation lineage blocks a stacked 16000 response');
+    assert.equal(calls, 2, '已使用的实现恢复额度不能再叠加一次 16000 token 回复');
 });
 
 test('最后槽位的 16000 回复之前发生传输失败，保留同一次重试且不消耗内容', async t => {
@@ -1792,9 +1792,9 @@ test('最后槽位的 16000 回复之前发生传输失败，保留同一次重�
         /connection reset/);
     let active = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
     let envelope = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
-    assert.equal(envelope.payload.attempts, 2, 'transport receives no content and cannot consume the extra slot');
+    assert.equal(envelope.payload.attempts, 2, '传输失败未收到内容，不消耗额外内容尝试');
     assert.equal(envelope.payload.lastContentError.maxOutputTokens, 8000,
-        'the exact base truncation proof survives a transport-only failure');
+        '仅发生传输失败时，仍保留原 8000 token 截断记录');
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options),
         error => error.code === 'MODEL_OUTPUT_TRUNCATED');
     active = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));

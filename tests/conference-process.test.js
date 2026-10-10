@@ -1841,7 +1841,7 @@ test('原来源升级计划及费用检查点恢复时保持授权、原计划�
     mixedChild.stateSha256 = processApi.stateDigest(mixedChild);
     fs.writeFileSync(childFile, processApi.canonicalBytes(mixedChild), { mode: 0o600 });
     assert.throws(() => require('../scripts/lib/conference-process-recovery.js').sourceImplementation(
-        mixedChild, path.dirname(childFile), processApi), /promotion plan integrity failed/);
+        mixedChild, path.dirname(childFile), processApi), /来源升级计划与任务记录的字段或 SHA 未通过完整性检查/);
 });
 
 test('原升级计划写入后中断，可在原授权选择下补建检查点而不改计划', async t => {
