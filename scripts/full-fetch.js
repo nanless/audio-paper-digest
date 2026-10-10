@@ -923,6 +923,7 @@ function autoArchiveCurrentData(batchDate = getBeijingDateString(), options = {}
     // Config.FILES 指向别的 current 目录时，也走真实的默认归档路径，而不是退回模块
     // 加载时定下的常量。
     const targets = options.targets || [
+        Config.FILES.fetchCheckpoint,
         Config.FILES.deepAnalysisResult,
         Config.FILES.filteredPapers,
         Config.FILES.analyzed,

@@ -848,6 +848,76 @@ describe('full-fetch 辅助函数', () => {
         );
     });
 
+    function configureArchiveInputs(t) {
+        const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'fetch-archive-default-'));
+        const names = { fetchCheckpoint: 'fetch-checkpoint.json', deepAnalysisResult: 'deep-analysis-result.json',
+            filteredPapers: 'filtered-papers.json', analyzed: 'analyzed.json',
+            rawCandidates: 'raw-candidates.json', filterDecisions: 'filter-decisions.json', papers: 'papers.json' };
+        const previous = Object.fromEntries(Object.keys(names).map(key => [key, Config.FILES[key]]));
+        fs.mkdirSync(path.join(directory, 'current'));
+        for (const [key, filename] of Object.entries(names)) {
+            Config.FILES[key] = path.join(directory, 'current', filename);
+        }
+        t.after(() => {
+            Object.assign(Config.FILES, previous);
+            fs.rmSync(directory, { recursive: true, force: true });
+        });
+        return { directory, archiveDir: path.join(directory, 'archive'), names };
+    }
+
+    it('默认归档同时保存旧抓取记录及筛选配套文件，不移动累积论文库', t => {
+        const { autoArchiveCurrentData } = require('../scripts/full-fetch.js');
+        const fixture = configureArchiveInputs(t);
+        const saved = new Map();
+        for (const key of ['fetchCheckpoint', 'rawCandidates', 'filterDecisions', 'filteredPapers']) {
+            const bytes = JSON.stringify({ batchDate: '2026-10-05', timestamp: '2026-10-05T12:00:00+08:00', marker: key });
+            fs.writeFileSync(Config.FILES[key], bytes);
+            saved.set(key, bytes);
+        }
+        const papersFile = Config.FILES.papers;
+        fs.writeFileSync(papersFile, 'cumulative library');
+        autoArchiveCurrentData('2026-10-10', { archiveDir: fixture.archiveDir });
+        for (const [key, bytes] of saved) {
+            assert.strictEqual(fs.existsSync(Config.FILES[key]), false);
+            assert.strictEqual(fs.readFileSync(path.join(fixture.archiveDir, '2026-10-05', fixture.names[key]), 'utf8'), bytes);
+        }
+        assert.strictEqual(fs.readFileSync(papersFile, 'utf8'), 'cumulative library');
+    });
+
+    it('默认抓取记录归档冲突时保留原备份并保存当前完整字节', t => {
+        const { autoArchiveCurrentData } = require('../scripts/full-fetch.js');
+        const fixture = configureArchiveInputs(t);
+        const archiveDay = path.join(fixture.archiveDir, '2026-10-05');
+        fs.mkdirSync(archiveDay, { recursive: true });
+        const archived = path.join(archiveDay, 'fetch-checkpoint.json');
+        const oldBytes = JSON.stringify({ batchDate: '2026-10-05', timestamp: '2026-10-05T12:00:00+08:00', source: 'original archived record' });
+        const currentBytes = JSON.stringify({ batchDate: '2026-10-05', timestamp: '2026-10-05T12:00:00+08:00', source: 'latest current record' });
+        fs.writeFileSync(archived, oldBytes);
+        fs.writeFileSync(Config.FILES.fetchCheckpoint, currentBytes);
+        autoArchiveCurrentData('2026-10-10', { archiveDir: fixture.archiveDir });
+        assert.strictEqual(fs.existsSync(Config.FILES.fetchCheckpoint), false);
+        assert.strictEqual(fs.readFileSync(archived, 'utf8'), currentBytes);
+        const backups = fs.readdirSync(archiveDay).filter(name => name.startsWith('fetch-checkpoint-conflict-'));
+        assert.strictEqual(backups.length, 1);
+        assert.strictEqual(fs.readFileSync(path.join(archiveDay, backups[0]), 'utf8'), oldBytes);
+    });
+
+    it('默认抓取记录归档失败时保留当前记录并停止移动其他配套文件', t => {
+        const { autoArchiveCurrentData } = require('../scripts/full-fetch.js');
+        const fixture = configureArchiveInputs(t);
+        const archiveTarget = path.join(fixture.archiveDir, '2026-10-05', 'fetch-checkpoint.json');
+        fs.mkdirSync(archiveTarget, { recursive: true });
+        const currentBytes = JSON.stringify({ batchDate: '2026-10-05', timestamp: '2026-10-05T12:00:00+08:00', marker: 'fetch' });
+        const rawBytes = JSON.stringify({ batchDate: '2026-10-05', timestamp: '2026-10-05T12:00:00+08:00', marker: 'raw' });
+        fs.writeFileSync(Config.FILES.fetchCheckpoint, currentBytes);
+        fs.writeFileSync(Config.FILES.rawCandidates, rawBytes);
+        assert.throws(() => autoArchiveCurrentData('2026-10-10', { archiveDir: fixture.archiveDir }),
+            /归档更新或校验失败，已停止新批次/);
+        assert.strictEqual(fs.readFileSync(Config.FILES.fetchCheckpoint, 'utf8'), currentBytes);
+        assert.strictEqual(fs.readFileSync(Config.FILES.rawCandidates, 'utf8'), rawBytes);
+        assert.strictEqual(fs.statSync(archiveTarget).isDirectory(), true);
+    });
+
     it('归档冲突时保存当前文件内容，并将原归档另存为备份', () => {
         const { autoArchiveCurrentData } = require('../scripts/full-fetch.js');
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-archive-conflict-'));
