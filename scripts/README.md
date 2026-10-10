@@ -158,7 +158,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/source-classification-scheduler.js` | Node 库 | 以 1–3 个并行任务处理来源分类。账号级失败或停止请求发生后不再派发新模型请求，保留已返回响应，按所选论文顺序合并并记录未完成项。 |
 | `lib/source-classification-failures.js` | Node 库 | 只根据公共请求层的结构化错误识别账号或服务故障，并停止新请求。正文校验失败和输出截断仍按单篇处理，不根据错误文案猜故障或切账号。 |
 | `lib/historical-tag-checkpoint-export.js` | Node 库 | 读取并核验分类检查点或部分运行记录、来源、原文引文及独立审核，按排除集合导出页面分类记录。支持原连续处理范围与并发已处理集合；采用集合格式时只读取决策对应文件名的缓存。 |
-| `lib/historical-direct-publication.js` | Node 库 | 核验直接重写的全部私有页面、汇总对应记录 v3、汇总文件 v2 和显式视觉处置，执行可恢复的历史发布。固定博客基线；按路径与内容 SHA 复用逐页通过记录，重跑本批确定性/Hugo 检查并生成凭证，再处理激活回滚、Git 提交与远端 OID。 |
+| `lib/historical-direct-publication.js` | Node 库 | 核验直接重写的全部私有页面、汇总对应记录 v3、汇总文件 v2 和显式视觉处置，执行可恢复的历史发布。固定博客基线；按路径与内容 SHA 复用逐页通过记录，重跑本批程序检查和 Hugo 构建，并生成凭证，再处理激活回滚、Git 提交与远端 OID。 |
 
 ## 默认 LLM/API：恢复与维护入口
 
@@ -270,7 +270,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `generate-blog.py` | Python 入口 | 只生成并安装 Hugo Markdown。 |
 | `activate-fresh-publication.js` | Node 入口 | 显式接替同日已提升重写结果的旧发布，持有本运行操作锁后调用 Python 归档旧凭证；不生成内容或推送。 |
 | `publication_activation.py` | Python 入口/共享库 | 核验旧提交、博客基线和实时远端，归档六个精确状态文件。pending 状态阻断发布三阶段，支持中断恢复，不修改已提升的论文分析。 |
-| `review-blog.py` | Python 入口 | 审查本批最终页面，执行确定性检查、LLM、图片和 Hugo 审查，通过后生成 receipt。 |
+| `review-blog.py` | Python 入口 | 审查本批最终页面，执行程序检查、模型正文审查、图片审查和 Hugo 构建，通过后生成 receipt。 |
 | `push-blog.py` | Python 入口 | 核验 receipt，提交并推送其允许的改动，确认远端 OID 后规划视觉任务。 |
 | `publish-to-blog.py` | Python 核心 | 实现三个发布阶段共用的页面模板、标签兼容映射、Git 事务、批次凭证及发布证明。`researcher-workbench-v1` 规定页面元数据、引用和论文再思考附属资料；逐页审查永久按“相对路径 + 内容 SHA”复用。发布器代码变化会重新渲染页面，但最终字节未变的页面不重新审查。 |
 | `manual_agent_policy.py` | Python 共享 | 按可信外层规则核对 Manual 新旧模型身份；当前声明要求 Sol/high 与对应版本，旧记录保留原身份，新声明不能借旧模型规则绕过检查。只验证记录字段，不证明远端模型实际执行。 |

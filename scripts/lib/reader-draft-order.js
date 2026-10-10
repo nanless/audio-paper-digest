@@ -164,10 +164,10 @@ function pruneUniquelyUnboundReaderMarkdownTables(input) {
     const bindings = input.tableBindings;
     if (nodes.length <= bindings.length || bindings.length === 0) return 0;
     const solutions = [];
-    // 会议 PDF 抽取可能把引文里带千分位的数字（如 `169,221`）压平，而作者
-    // 写的表里是 `169221`。这个匹配器只服务于剪除证明：最终的来源绑定仍会
-    // 做权威的数字重放。旧匹配器会把带分组的来源数字拆成 `169` 和 `221`，
-    // 于是一张本来可以证明的 SounDiT 表看起来就成了未绑定。
+    // 会议 PDF 引文中的千位分隔数字（如 `169,221`）可能与草稿表中的 `169221` 写法不同。
+    // 这里统一数字写法，只用于判断哪些表没有匹配的来源记录；
+    // 最终接受正文前仍须核对表中数字与来源。旧匹配会把 `169,221` 拆成两个数字，
+    // 导致实际相同的数字无法匹配，把 SounDiT 的表误判为没有来源记录。
     const numericTokens = value => String(value || '').match(
         /(?<![A-Za-z0-9])[-+]?(?:\d{1,3}(?:[ ,]\d{3})+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)(?:\s*(?:k|m|b|samples?|bins?|epochs?|%|dB|kHz|MHz|Hz|GB|MB|KB|ms|s|h))?(?![A-Za-z0-9])/gi
     ) || [];
@@ -203,11 +203,11 @@ function pruneUniquelyUnboundReaderMarkdownTables(input) {
     };
     visit(0, 0, []);
 
-    // 上面那套严格的顺序保持证明，处理常规情况时仍是权威。第二套证明同样
-    // 失败即停，用来处理选择 marker 和作者写的引文表以不同顺序输出的混排
-    // 草稿。它有意只限于至少有一处数量重叠的 source_quotes。引文绑定生成的
-    // `来源证据` 表是确定性的恢复产物；优先用它，而不是一张未绑定、内容更
-    // 丰富的手写重复表，因为在这个阶段只有被引用的数字经过了核验。
+    // 先按严格顺序匹配；没有唯一匹配时，再检查选择标记与引文表顺序不同的草稿。
+    // 第二种匹配也要求唯一结果，否则不删除表格；仅检查与来源引文至少有一个数字相同的表。
+    // 根据绑定引文生成的
+    // `来源证据` 表优先于未绑定、内容更丰富的手写重复表，
+    // 因为在这个阶段只有被引用的数字经过了核验。
     let selectedIndexes = solutions.length === 1 ? solutions[0] : null;
     let usedRelaxedAssignment = false;
     if (!selectedIndexes) {
@@ -308,9 +308,9 @@ function pruneUniquelyUnboundReaderMarkdownTables(input) {
     }
     const remaining = locateReaderDraftTables(draft);
     if (remaining.length !== bindings.length) return 0;
-    // 放宽后的混排顺序分配，上面那套一一对应的评分证明已经专门核对过；
-    // 它们的节点顺序由后面那道混排绑定流程规范化。在这里重新套用旧的
-    // 位置匹配器，反而会否掉这套证明刚刚处理过的那种 marker/表格排列。
+    // 混排情况已经按上面的匹配分值选出唯一的表格对应结果；
+    // 后续会按当前表格位置重新排列绑定并更新选择标记序号。这里不再要求原位置顺序，
+    // 否则会拒绝刚刚按数字匹配成功的混排结果；来源事实仍由后续正文检查核验。
     if (!usedRelaxedAssignment && !remaining.every((node, index) => matches(bindings[index], node))) return 0;
     input.sections = draft.sections;
     return unbound.length;

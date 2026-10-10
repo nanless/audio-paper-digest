@@ -8374,14 +8374,14 @@ def _review_single_paper(args):
         for issue in llm_issues:
             sev = issue.get('severity', 'warning')
             desc = issue.get('description', '')
-            lines.append(f"    🤖 LLM ({sev}): {desc}")
+            lines.append(f"    模型文本审查 ({sev}): {desc}")
     if llm_fixed_content != content:
         readonly_issue = {
             'severity': 'error',
             'description': '模型建议修改最终页面；审查阶段不能写回文件，请回到生成阶段修复后重新审查。',
         }
         llm_issues = list(llm_issues or []) + [readonly_issue]
-        lines.append(f"    🤖 LLM (error): {readonly_issue['description']}")
+        lines.append(f"    模型文本审查 (error): {readonly_issue['description']}")
     if llm_issues:
         llm_blocking = count_blocking_review_issues(llm_issues)
         blocking_count += llm_blocking
@@ -8525,14 +8525,14 @@ def review_all_posts(
             for issue in llm_issues:
                 sev = issue.get('severity', 'warning')
                 desc = issue.get('description', '')
-                print(f"    🤖 LLM ({sev}): {desc}")
+                print(f"    模型文本审查 ({sev}): {desc}")
         if llm_fixed_content != content:
             readonly_issue = {
                 'severity': 'error',
                 'description': '模型建议修改最终页面；审查阶段不能写回文件，请回到生成阶段修复后重新审查。',
             }
             llm_issues = list(llm_issues or []) + [readonly_issue]
-            print(f"    🤖 LLM (error): {readonly_issue['description']}")
+            print(f"    模型文本审查 (error): {readonly_issue['description']}")
         llm_blocking = count_blocking_review_issues(llm_issues)
         total_blocking_issues += llm_blocking
         total_advisory_issues += len(llm_issues) - llm_blocking

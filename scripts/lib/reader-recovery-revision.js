@@ -161,8 +161,8 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
         if (!envelope?.identity || name !== `${hashDraft(envelope.identity)}.json`) {
             throw new Error('Corrupt Reader diagnostic revision identity/filename');
         }
-        // 常规加载器仍然是权威：外层对象、私有文件、JSON 安全性、载荷哈希、
-        // 根结构以及持久化计数器的校验都由它负责。
+        // 原加载器继续检查外层对象、文件权限、JSON、失败候选内容哈希、
+        // 根结构与已保存的计数。
         const payload = loadFailedCandidate(directory, envelope.identity);
         if (!payload || hashDraft(payload) !== envelope.payloadSha256) {
             throw new Error('Reader diagnostic revision candidate changed during audit');
@@ -176,9 +176,9 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     if (!compatible.length) return null;
     const old = compatible[0];
     const updated = structuredClone(old.payload);
-    // 有些旧的失败载荷保留了合法的原始 JSON 响应，却因为严格的生产形状解析器
-    // 拒绝而把 draft 留成 null。这里只补全受限的恢复形状；调用方在接受之前
-    // 仍要运行完整的 Reader 解析器并核验来源绑定。
+    // 有些旧失败候选保存了合法的 JSON 响应，但原解析器拒绝其结构，draft 因而为空。
+    // 这里只尝试解析允许恢复的结构；调用方接受正文前仍须运行完整的 Reader 解析器，
+    // 并核对正文与来源的对应关系。
     if (!updated.draft && updated.rawDraft) {
         updated.draft = parseRecoveryDraft(updated.rawDraft);
     }

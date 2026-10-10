@@ -101,7 +101,7 @@ npm run blog:push -- --date YYYY-MM-DD
 
 ## 7. 发布后视觉
 
-远端提交验证后，系统规划最终评分前 10 篇论文的长图和一张汇总封面。项目脚本只管理任务，不调用图像 API；实际生成须使用 Codex 内置 `image_gen`。分工：`visual:post-publish` 在远端验证后幂等建立两类图片任务（任务缺失或失效时重跑它）；`visual:prepare` 在每次生图前输出本次可用的绝对参考路径。
+远端提交验证后，系统规划最终评分前 10 篇论文的长图和一张汇总封面。项目脚本只管理任务，不调用图像 API；实际生成须使用 Codex 内置 `image_gen`。分工：`visual:post-publish` 在远端验证后创建或恢复两类图片任务（任务缺失或失效时重跑它）；`visual:prepare` 在每次生图前输出本次可用的绝对参考路径。
 
 ```bash
 npm run visual:post-publish -- --date YYYY-MM-DD

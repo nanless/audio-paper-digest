@@ -61,7 +61,7 @@ function input(f, { full = true } = {}) {
         members: [member], memberSetSha256: ledgerApi.memberSetSha256([{ identity: member.identity }]) };
 }
 
-test('绑定清单的预演和实际执行只复制声明过的本地产物，并生成可复核的已核验账目', t => {
+test('导入预演与实际执行只复制清单列出的本地来源文件，并生成已核验的来源清单', t => {
     const f = fixture(t); const manifest = input(f);
     const dry = importer.importConferenceSources({ manifest, sourceRoot: f.source, cacheRoot: f.cache, updatedAt: NOW });
     assert.equal(dry.mode, 'dry-run'); assert.equal(dry.verified, 1); assert.equal(fs.readdirSync(f.cache).length, 0);
@@ -70,11 +70,11 @@ test('绑定清单的预演和实际执行只复制声明过的本地产物，�
     assert.equal(ledgerApi.verifyMemberFiles(applied.ledger, f.cache), true);
     assert.equal(applied.ledger.members[0].identity.value, '100');
     assert.match(applied.ledger.members[0].metadataFile, /^icassp-2026-2026\/icassp-arnumber--100\/metadata\.json$/);
-    // 只有缓存产物字节完全一致时，重复进入才是安全的。
+    // 只有缓存文件内容完全一致时，才可重复导入。
     assert.equal(importer.importConferenceSources({ manifest, sourceRoot: f.source, cacheRoot: f.cache, updatedAt: NOW, apply: true }).verified, 1);
 });
 
-test('缓存发布遇到写入不完整时会删掉临时 inode，并且仍可安全重试', t => {
+test('缓存文件写入不完整时会删掉临时文件，重试仍可正常保存', t => {
     const f = fixture(t); const manifest = input(f);
     const originalOpen = fs.openSync; const originalWrite = fs.writeFileSync;
     let cacheWriteFd; let interrupted = false;
@@ -113,7 +113,7 @@ test('PDF 缺失就保持受阻，元数据里的标题不能变成身份，也�
     assert.throws(() => importer.validateManifest(titleIdentity), /invalid/);
 });
 
-test('拒绝未声明的、越界的、链接或硬链接的文件，损坏的 PDF，以及事先就存在的字节漂移', t => {
+test('拒绝越界路径、符号链接、多个硬链接，以及与已有缓存内容不同的 PDF', t => {
     const f = fixture(t); const manifest = input(f);
     const traversal = structuredClone(manifest); traversal.members[0].pdf.file = '../pdf/100.pdf';
     assert.throws(() => importer.importConferenceSources({ manifest: traversal, sourceRoot: f.source, cacheRoot: f.cache, updatedAt: NOW }), /relative path/);
@@ -143,7 +143,7 @@ test('任何成员要核验通过，都必须先有清单输入 SHA 和严格的
     assert.throws(() => importer.validateManifest(missingEvidence), /unknown or missing fields/);
 });
 
-test('拒绝重叠的根目录、FIFO 来源、非 UTF-8 文本，以及重复的元数据或产物 JSON 键', t => {
+test('拒绝重叠根目录、FIFO 来源、非 UTF-8 文本，以及元数据或结构化提取文件中的重复 JSON 键', t => {
     const f = fixture(t); const manifest = input(f);
     assert.throws(() => importer.importConferenceSources({ manifest, sourceRoot: f.source, cacheRoot: f.source, updatedAt: NOW }), /must not overlap/);
     const nestedCache = path.join(f.source, 'nested-cache'); fs.mkdirSync(nestedCache, { mode: 0o700 });

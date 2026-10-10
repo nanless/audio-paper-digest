@@ -324,7 +324,7 @@ def generate_llm_oneliners(top_papers, date_str=None, cache_path=None):
         return results
 
     workers = min(get_oneliner_concurrency(), len(pending))
-    print(f"🤖 正在并发生成论文一句话介绍（并发度: {workers}）...")
+    print(f"正在并发生成论文的一句话介绍（同时处理 {workers} 篇）...")
 
     def worker(pending_item):
         idx, item, paper_id, fingerprint, expected_entry = pending_item

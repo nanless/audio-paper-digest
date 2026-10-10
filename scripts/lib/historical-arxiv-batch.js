@@ -1,8 +1,8 @@
 'use strict';
 
-// 这是一个兜底 worker，不是清单解析器。它唯一的选取输入，是直接 arXiv 来源阶段写下
-// 的、按名字指定的不可变「抓取失败交接」文件。它绝不能去枚举待处理的 crosswalk 提示：
-// 本地和会议记录走直接路线，fresh arXiv 路线要在那里重试过之后才会留下交接文件。
+// 本模块只处理直接 arXiv 来源阶段保存的、按文件名指定的抓取失败交接记录，
+// 不扫描 crosswalk 中的待处理提示。本地和会议记录走各自的直接处理入口；
+// fresh arXiv 来源经过重试后仍失败，才会保存供本模块读取的交接文件。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');

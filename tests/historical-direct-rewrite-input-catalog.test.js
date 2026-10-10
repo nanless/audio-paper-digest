@@ -139,7 +139,7 @@ test('限定范围的 v5 构建器从冻结证据推导全新 arXiv 身份，只
     assert.deepEqual(catalog.normalizeCatalog(value), value);
 });
 
-test('命令行生成限定范围的 v5 目录，其投影到计划的预演通过', t => {
+test('命令行生成限定范围的 v5 目录后，页面对应记录与计划预演通过', t => {
     const f = fixture(t); const parsed = inputsCli.parseArgs(inputArgs(f));
     assert.equal(parsed.apply, false); assert.equal(parsed.name, 'scoped-historical-local-data-v5.json');
     const written = inputsCli.main(inputArgs(f, '--apply'), { files: { historicalDirectRewriteInputCatalogDir: f.catalogRoot } });
@@ -172,7 +172,7 @@ test('命令行拒绝已移除的 arXiv 清单前置条件和范围不完整的�
     assert.throws(() => inputsCli.parseArgs(['--dry-run', '--conference-manifest', f.conferenceManifest, '--inventory', f.inventoryFile]), /Use/);
 });
 
-test('投影和计划通过产出端严格校验器拒绝旧版 v3/v4 和格式错误的 v5 字节', t => {
+test('页面对应记录与计划的输入检查拒绝旧 v3/v4 及格式无效的 v5 目录', t => {
     const f = fixture(t);
     const current = catalog.buildScopedCatalog({ conferenceManifest: f.conferenceManifest,
         inventoryFile: f.inventoryFile, blogRoot: f.blog });

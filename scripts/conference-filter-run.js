@@ -88,9 +88,9 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
     const spec = filter.normalizeSpec(ledger.readRegularJson(
         filter.safeDirectJson(files.conferenceFilterSpecsDir, options.specName)).value);
     filterCli.verifyTagCatalogFileBinding(files, spec);
-    // 体积大且不可变的来源、证据、状态这一整套先整体核验一次，然后在同一把锁下推进
-    // 每个有界条目。每篇论文仍然各有自己的持久化意图、传输凭证、决定产物、状态 CAS
-    // 和 fsync。
+    // 先整体核验已保存的来源、证据和状态，再在同一把锁下处理本次数量限制内的论文。
+    // 每篇仍分别保存请求准备记录、传输凭证与筛选决定，核对原状态后更新，
+    // 并用 fsync 确保文件写入完成。
     const advanced = await filter.advanceProductionLlmDecisions({ filterRoot: files.conferenceFiltersDir,
         filterId: options.filterId, discoveryHandle, evidenceHandle, spec, owner: options.owner,
         llm: () => productionLlmConfig(runtime.env || process.env, files), limit: options.limit,

@@ -162,7 +162,7 @@ function main() {
     console.log(`[keyword-recall] 裁决后有效正样本: ${report.adjudicatedPositives} | 通过: ${report.passed} | 漏召回: ${report.missed} | 有效正样本召回率: ${formatRecall(report.recall)}`);
     console.log(`[keyword-recall] 未经裁决原始命中率: ${formatRecall(report.rawRecall)}`);
     console.log(`[keyword-recall] 已裁决负样本误放: ${report.historicalFalsePositiveLeaks.length} | ${report.historicalFalsePositiveLeaks.join(', ')}`);
-    console.log(`[keyword-recall] 仅靠核心类别兜底: ${report.categoryFallbackOnly}`);
+    console.log(`[keyword-recall] 未命中关键词、仅因核心音频类别通过: ${report.categoryFallbackOnly}`);
     console.log(`[keyword-recall] 命中词族: ${JSON.stringify(report.matchedGroups)}`);
     if (report.misses.length > 0) {
         console.log('[keyword-recall] 漏召回明细:');

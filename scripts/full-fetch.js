@@ -432,7 +432,7 @@ function loadCompleteFilteredForToday(today, filePath = FILTERED_FILE, expected 
         if (!filterFingerprintMatches(data[key], expected[key])) return null;
     }
     if (expected.requireConsistentFilterArtifacts && !hasConsistentFilterArtifacts(today, data)) {
-        console.log('  [filter] 今日筛选产物与逐篇决策缓存不一致，忽略 complete 缓存并重新筛选');
+        console.log('  [filter] 今日入选论文记录与逐篇筛选决定不一致，忽略 complete 记录并重新筛选');
         return null;
     }
     return data;
@@ -1583,7 +1583,7 @@ async function runFullFetch() {
         console.log(`💾 原始候选论文已保存到: ${RAW_CANDIDATES_FILE}`);
 
         // ========== 第四步：大模型筛选 ==========
-        console.log('\n🤖 第四步：大模型筛选（判断是否语音/音频相关）');
+        console.log('\n第四步：模型筛选（判断论文是否与语音或音频相关）');
         filterDecisions = loadReusableFilterDecisions(today, filterModel, acceptedFilterPromptHashes, {
             ...candidateFingerprints, filterConfigFingerprint: acceptedFilterConfigFingerprints
         });
