@@ -2,7 +2,7 @@
 /**
  * OpenCode Go 账号池的共享状态实现。
  *
- * 账号池有意保持粘性：一旦选中某个账号就一直用它，直到服务端明确返回
+ * 成功后继续使用已选账号，直到服务端明确返回
  * GoUsageLimitError 或余额不足的 401。它不会在成功请求之间轮流切换账号，
  * 也不会把普通的 429/5xx/网络故障当成账号耗尽。
  */
@@ -475,7 +475,7 @@ function selectApiKey(apiKeys, endpoint, stateFile, options = {}) {
         const service = ensureService(state, identity);
         let group = service.groups[identity.groupId];
         const isNewGroup = !group;
-        // 追加凭据不能重置粘性选择。旧版 v1 分组没有有序成员关系，
+        // 追加账号不能重置已有选择。旧版 v1 分组没有有序成员关系，
         // 所以按精确前缀身份匹配。
         if (!group) {
             for (let length = keys.length - 1; length > 0; length -= 1) {

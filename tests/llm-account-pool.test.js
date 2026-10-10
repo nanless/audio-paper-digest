@@ -128,7 +128,7 @@ describe('OpenCode Go 已选账号的继续使用与切换状态', () => {
         );
     });
 
-    it('人工选定第四个账号后，在匹配的主池和备用池中保持粘性', () => {
+    it('人工选定第四个账号后，匹配的主账号和备用账号列表继续使用它', () => {
         const { file } = tempState();
         const primary = resolvePrimaryApiKeyPool('a-secret', 'b-secret,c-secret,d-secret');
         const secondary = resolveApiKeyPool('a-secret', 'b-secret,c-secret,d-secret');
@@ -498,7 +498,7 @@ describe('OpenCode Go 已选账号的继续使用与切换状态', () => {
         assert.ok(getAccountId('a') in Object.values(readStateStrict(file).services)[0].accounts);
     });
 
-    it('写出的状态 schema 让 Python 发布端读出一致的粘性结果', () => {
+    it('保存账号状态后，Python 发布端与 Node 继续选择同一个可用账号', () => {
         const { file } = tempState();
         const first = selectApiKey(['a', 'b'], ENDPOINT, file, { nowMs: 1000 });
         markQuotaExhausted(first, { blockedUntilMs: 100000 }, file, { nowMs: 1000 });
@@ -583,7 +583,7 @@ describe('requestLlmJson 的 OpenCode Go 故障切换', () => {
         assert.strictEqual(calls, 0);
     });
 
-    it('在备用账号上复核，并在多次逻辑请求之间保持粘性', async () => {
+    it('切换到备用账号后，下一次请求继续使用该账号', async () => {
         const { file } = tempState();
         const seen = [];
         const transportRequestFn = async (url, _body, headers) => {

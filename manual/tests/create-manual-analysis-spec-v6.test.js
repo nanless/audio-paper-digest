@@ -18,8 +18,8 @@ const { buildManifestContext } = require('../scripts/manual-fetch-fulltext.js');
 
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 
-describe('官方 Manual records v4 / spec v6 组装器', () => {
-    it('CLI 必须显式选择 production/shadow 且拒绝任意 --output', () => {
+describe('Manual v4 记录与 v6 分析配置组装', () => {
+    it('命令参数须选择正式或隔离模式，不能自行指定输出路径', () => {
         assert.deepEqual(parseArgs([
             '--production', '--date', '2026-08-28', '--records', 'a.json', '--records', 'b.json'
         ]), {
@@ -40,14 +40,14 @@ describe('官方 Manual records v4 / spec v6 组装器', () => {
         ]), /未知参数/);
     });
 
-    it('所有 descriptor path 必须是安全相对路径', () => {
+    it('文件引用拒绝绝对路径和越界的相对路径', () => {
         assert.equal(safeRelative('packets/author.json', 'packet'), 'packets/author.json');
         for (const candidate of ['../x.json', '/tmp/x.json', '.', 'a/../../x.json']) {
             assert.throws(() => safeRelative(candidate, 'packet'), /安全相对路径/);
         }
     });
 
-    it('官方文件引用同时验证真实文件字节 SHA、拒绝重复与 symlink', () => {
+    it('文件引用核对内容 SHA，并拒绝重复路径与符号链接', () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-ref-'));
         const bytes = Buffer.from('{"paperId":"2608.12345"}');
         fs.writeFileSync(path.join(root, '2608.12345-record.json'), bytes);
@@ -64,7 +64,7 @@ describe('官方 Manual records v4 / spec v6 组装器', () => {
         fs.rmSync(root, { recursive: true, force: true });
     });
 
-    it('records envelope 缺少真实逐篇文件时不能用 hash-looking 占位通过', () => {
+    it('记录清单引用的逐篇文件缺失时，SHA 占位不能通过检查', () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-envelope-'));
         const envelopePath = path.join(root, 'records.json');
         fs.writeFileSync(envelopePath, JSON.stringify({
@@ -85,7 +85,7 @@ describe('官方 Manual records v4 / spec v6 组装器', () => {
         fs.rmSync(root, { recursive: true, force: true });
     });
 
-    it('filtered 中论文 ID 去除版本号后重复时，在读取后续文件前即被拒绝', () => {
+    it('入选论文 ID 去除版本号后重复时，在读取后续文件前拒绝', () => {
         assert.throws(() => buildSpecV6({
             date: '2026-08-28',
             runtimeMode: 'production',
@@ -97,7 +97,7 @@ describe('官方 Manual records v4 / spec v6 组装器', () => {
         }), /规范化重复/);
     });
 
-    it('taskName 在整个批次而非仅篇内保持唯一', () => {
+    it('不同论文不能复用同一个任务名称', () => {
         const owners = new Map();
         claimBatchTaskNames(owners, '2608.12345', ['author-12345', 'review-12345']);
         assert.throws(() => claimBatchTaskNames(
@@ -105,7 +105,7 @@ describe('官方 Manual records v4 / spec v6 组装器', () => {
         ), /批次全局复用/);
     });
 
-    it('ArtifactIndex manifest 只要存在 incomplete 就不能组装 complete spec v6', () => {
+    it('结构化来源清单未完成时，不能组装已完成的 v6 分析配置', () => {
         const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-artifact-health-'));
         const filtered = {
             batchDate: '2026-08-28', status: 'complete',

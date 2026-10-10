@@ -88,8 +88,8 @@ function finishRevisionArchives(directory, identity, payload) {
             try { fs.lstatSync(original); throw new Error('Reader diagnostic revision has duplicate unarchived evidence'); }
             catch (error) { if (error.code !== 'ENOENT') throw error; }
         } else {
-            // 先装新文件再改名旧文件，有意做成可恢复的。只有旧文件的完整字节通过 CAS
-            // 校验，并且补上缺失的归档步骤之后，新的候选才算就绪。
+            // 先保存新文件，再把旧文件改名归档，允许中断后继续完成这两步。
+            // 旧文件的完整字节和内容 SHA 仍与记录一致，且归档步骤完成后，新的候选才算就绪。
             const checked = verify(original);
             if (hashDraft(loadFailedCandidate(directory, checked.envelope.identity)) !== audit.oldPayloadSha256) {
                 throw new Error('Reader diagnostic revision old payload drifted before archive');
@@ -249,8 +249,8 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     const lineageAlreadyIssued = updated.implementationRepairAllowanceLineage
         === IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT;
     const previousActiveAllowance = updated.implementationRepairAllowanceProof || null;
-    // 同一条实现谱系最多只能多得到一次正文尝试。尚未使用的证明可以转到更新的
-    // 实现身份上，但一旦某个模型请求用掉它，之后实现再变也不能再生出更多调用。
+    // 实现变化时，只有尚未发放过许可、仍有未使用的许可，或恢复规则版本变化，
+    // 才会新增或转交一次正文尝试的许可。用过的许可不会因普通实现变化再次发放。
     const recoveryEpochChanged = old.changedFields.includes('readerRecoveryEpochSha256');
     const grantOrTransferAllowance = diagnosticImplementationChanged
         && (!lineageAlreadyIssued || Boolean(previousActiveAllowance) || recoveryEpochChanged);

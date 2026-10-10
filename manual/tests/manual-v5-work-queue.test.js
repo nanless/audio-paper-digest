@@ -160,7 +160,7 @@ function build(fx, extra = {}) {
 }
 
 describe('Manual v5 可观察工作队列', () => {
-    it('推导出作者完成、审查者就绪、页面受阻，以及三个槽位的派发', () => {
+    it('作者已完成、审查者就绪且页面检查受阻时，只安排审查任务', () => {
         const fx = fixture();
         const report = build(fx);
         assert.equal(report.papers[ID].tasks.author.status, 'finished');

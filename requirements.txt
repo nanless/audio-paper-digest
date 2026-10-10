@@ -1,4 +1,4 @@
-# Runtime lock for Python 3.11+ with OpenSSL: update deliberately and verify in CI before merging.
+# Python 3.11+ 和 OpenSSL 所用依赖的固定版本；更新后须在合并前通过 CI 检查。
 requests==2.32.5
 urllib3==2.6.3
 certifi==2026.2.25

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""只读来源的历史页面台账与配套凭证的命令行入口。"""
+"""生成历史页面清单及对应凭证的命令行入口；页面来源只读。"""
 
 from __future__ import annotations
 

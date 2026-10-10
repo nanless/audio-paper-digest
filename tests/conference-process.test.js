@@ -255,7 +255,7 @@ test('--status 默认不核磁盘，--verify-files 才区分凭证自洽与文�
     assert.equal(cli.parseArgs(['--status', '--catalog', 'catalog.json', '--report', 'report.json',
         '--filter', f.authority.filterId]).verifyFiles, undefined);
     assert.throws(() => cli.parseArgs(['--apply', '--catalog', 'catalog.json', '--report', 'report.json',
-        '--filter', f.authority.filterId, '--verify-files']), /Use/);
+        '--filter', f.authority.filterId, '--verify-files']), /参数不符合要求。用法：/);
 });
 
 test('调度器把每篇论文的完整生命周期上限设为三', async t => {
@@ -760,8 +760,8 @@ test('命令行给并发设上限，并关掉旧版新建会议的绕过口子',
         '--filter', '11111111-1111-4111-8111-111111111111', '--concurrency', '5']);
     assert.equal(raised.concurrency, 5);
     assert.throws(() => cli.parseArgs(['--apply', '--catalog', 'catalog.json', '--report', 'report.json',
-        '--filter', '11111111-1111-4111-8111-111111111111', '--concurrency', '6']), /Use/);
-    assert.throws(() => cli.parseArgs(['--legacy-disabled', 'analyze']), /must use conference:new:process/);
+        '--filter', '11111111-1111-4111-8111-111111111111', '--concurrency', '6']), /参数不符合要求。用法：/);
+    assert.throws(() => cli.parseArgs(['--legacy-disabled', 'analyze']), /新会议的执行、分析和页面处理必须使用 conference:new:process/);
 });
 
 test('401 余额失败会停止派发，能跨续跑保留，并且只显式释放未完成的工作', async t => {
@@ -1140,8 +1140,8 @@ test('计划对不上时，来源代次升级不会重置已有分析', async t 
 test('重试放行是一个显式的、只在 apply 时可用的命令行参数', () => {
     const args = ['--catalog', 'catalog.json', '--report', 'report.json', '--filter', '11111111-1111-4111-8111-111111111111'];
     assert.equal(cli.parseArgs(['--apply', '--retry-failed', ...args]).retryFailed, true);
-    assert.throws(() => cli.parseArgs(['--status', ...args, '--retry-failed']), /Use/);
-    assert.throws(() => cli.parseArgs(['--apply', ...args, '--retry-failed', '--retry-failed']), /Use/);
+    assert.throws(() => cli.parseArgs(['--status', ...args, '--retry-failed']), /参数不符合要求。用法：/);
+    assert.throws(() => cli.parseArgs(['--apply', ...args, '--retry-failed', '--retry-failed']), /参数不符合要求。用法：/);
     assert.equal(require('../scripts/migrate-conference-process.js').parseArgs(['--apply', ...args,
         '--from', '11111111-1111-4111-8111-111111111111', '--retry-failed']).retryFailed, true);
 });
@@ -1462,7 +1462,7 @@ test('来源升级只授权显式子集，并保留未选中的和原始的结�
     const authArgs = ['--catalog', 'catalog.json', '--report', 'report.json', '--filter', f.authority.filterId,
         '--from', original.processId];
     assert.equal(cli.parseArgs(['--source-upgrade-plan', ...authArgs]).sourceUpgrade, 'plan');
-    assert.throws(() => cli.parseArgs(['--source-upgrade-apply', ...authArgs]), /Use/);
+    assert.throws(() => cli.parseArgs(['--source-upgrade-apply', ...authArgs]), /参数不符合要求。用法：/);
     const parsed = cli.parseArgs(['--source-upgrade-apply', ...authArgs, '--plan-sha', plan.planSha256,
         '--paper-ids', selected, '--authorize-new-analysis']);
     assert.deepEqual(parsed.paperIds, [selected]); assert.equal(parsed.authorizeNewAnalysis, true);
@@ -1476,12 +1476,12 @@ test('promote 命令行只接受一个 promote 账目模式参数', () => {
     assert.equal(cli.parseArgs(promote).preferUpgrade, undefined);
     assert.equal(cli.parseArgs([...promote, '--preserve-original-complete']).preserveOriginalComplete, true);
     assert.equal(cli.parseArgs([...promote, '--prefer-upgrade']).preferUpgrade, true);
-    assert.throws(() => cli.parseArgs([...promote, '--preserve-original-complete', '--prefer-upgrade']), /Use/);
-    assert.throws(() => cli.parseArgs([...promote, '--prefer-upgrade', '--preserve-original-complete']), /Use/);
-    assert.throws(() => cli.parseArgs(['--source-upgrade-plan', ...shared, '--prefer-upgrade']), /Use/);
+    assert.throws(() => cli.parseArgs([...promote, '--preserve-original-complete', '--prefer-upgrade']), /参数不符合要求。用法：/);
+    assert.throws(() => cli.parseArgs([...promote, '--prefer-upgrade', '--preserve-original-complete']), /参数不符合要求。用法：/);
+    assert.throws(() => cli.parseArgs(['--source-upgrade-plan', ...shared, '--prefer-upgrade']), /参数不符合要求。用法：/);
     assert.throws(() => cli.parseArgs(['--source-upgrade-apply', ...shared, '--plan-sha', 'a'.repeat(64),
         '--paper-ids', 'conference:odyssey:2026:conference-paper-id:paper.1', '--authorize-new-analysis',
-        '--prefer-upgrade']), /Use/);
+        '--prefer-upgrade']), /参数不符合要求。用法：/);
 });
 
 test('promote --prefer-upgrade 先登记升级过的成员，保留其余成员，并生成可核对的账目', async t => {
@@ -1978,9 +1978,9 @@ test('来源升级CLI保留合法OpenReview身份大小写，仍拒绝路径和�
     assert.equal(parsed.planSha256, 'a'.repeat(64));
     for (const invalid of ['', `${paperId},`, `,${paperId}`, `${paperId}/../../state.json`,
         `${paperId}\\state.json`, `${paperId} other`, `${paperId}?x=1`]) {
-        assert.throws(() => cli.parseArgs(argsFor(invalid)), /Use/);
+        assert.throws(() => cli.parseArgs(argsFor(invalid)), /参数不符合要求。用法：/);
     }
-    assert.throws(() => cli.parseArgs(argsFor(paperId).slice(0, -1)), /Use/);
+    assert.throws(() => cli.parseArgs(argsFor(paperId).slice(0, -1)), /参数不符合要求。用法：/);
 });
 
 test('真实抽取凭证拒绝后停止该论文的自动重试，其他论文继续；显式重试保留旧失败', async t => {

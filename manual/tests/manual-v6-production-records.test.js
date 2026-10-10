@@ -54,8 +54,8 @@ function minimalUnsealedLongform(paperId) {
     };
 }
 
-describe('Manual v6 生产 records 外层对象组装器', () => {
-    it('CLI 只接受固定日期与显式 force', () => {
+describe('Manual v6 正式记录集合组装', () => {
+    it('命令参数接受日期与强制选项，拒绝自定义输出路径', () => {
         assert.deepEqual(parseArgs(['--date', '2026-08-29']), {
             date: '2026-08-29', force: false
         });
@@ -118,7 +118,7 @@ describe('Manual v6 生产 records 外层对象组装器', () => {
         }, { paperId: record.paperId, outputSha256: semanticSha }, fileSha), /不是当前 SHA/);
     });
 
-    it('从 revision 绑定的无环 payload 与 runner receipts 确定性封印 record', () => {
+    it('按修订输出与任务完成记录保存封存记录，重复保存保持文件字节不变', () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-seal-'));
         const id = '2608.12345';
         const finalText = '这是最终正文。';

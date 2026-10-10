@@ -10,8 +10,8 @@ const recovery = require('./lib/conference-process-recovery.js');
 
 const USAGE = '--dry-run|--apply|--status|--source-upgrade-plan|--source-upgrade-apply|--source-upgrade-promote --catalog NAME.json --report NAME.json --filter UUID [--concurrency 1|2|3|4|5] [--retry-failed]; --status supports [--verify-files]; source upgrade: --from UUID; apply requires --plan-sha SHA --paper-ids ID,ID --authorize-new-analysis; promote requires --plan-sha SHA [--preserve-original-complete|--prefer-upgrade]; plan/promote support [--page-repair-mode caption-only]';
 function parseArgs(argv) {
-    if (argv[0] === '--legacy-disabled') throw new Error('New-conference execution/analyze/postprocess must use conference:new:process');
-    const mode = argv[0]; if (!['--dry-run', '--apply', '--status', '--source-upgrade-plan', '--source-upgrade-apply', '--source-upgrade-promote'].includes(mode)) throw new Error(`Use ${USAGE}`);
+    if (argv[0] === '--legacy-disabled') throw new Error('新会议的执行、分析和页面处理必须使用 conference:new:process');
+    const mode = argv[0]; if (!['--dry-run', '--apply', '--status', '--source-upgrade-plan', '--source-upgrade-apply', '--source-upgrade-promote'].includes(mode)) throw new Error(`参数不符合要求。用法：${USAGE}`);
     const upgrade = mode.startsWith('--source-upgrade-');
     const values = {};
     for (let index = 1; index < argv.length; index += 2) {
@@ -22,26 +22,26 @@ function parseArgs(argv) {
                 || (flag === '--verify-files' && mode !== '--status')
                 || (flag === '--authorize-new-analysis' && mode !== '--source-upgrade-apply')
                 || ((flag === '--preserve-original-complete' || flag === '--prefer-upgrade') && mode !== '--source-upgrade-promote')
-                || values[flag]) throw new Error(`Use ${USAGE}`);
+                || values[flag]) throw new Error(`参数不符合要求。用法：${USAGE}`);
             values[flag] = true; index -= 1; continue;
         }
         if (![ '--catalog', '--report', '--filter', '--concurrency', ...(upgrade ? ['--from', '--plan-sha', '--paper-ids'] : []),
             ...(['--source-upgrade-plan', '--source-upgrade-promote'].includes(mode) ? ['--page-repair-mode'] : []) ].includes(flag) || !value || Object.hasOwn(values, flag)) {
-            throw new Error(`Use ${USAGE}`);
+            throw new Error(`参数不符合要求。用法：${USAGE}`);
         }
         values[flag] = value;
     }
     if (!/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(values['--catalog'] || '')
         || !/^[a-z0-9][a-z0-9._-]{0,159}\.json$/.test(values['--report'] || '')
         || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(values['--filter'] || '')
-        || (values['--concurrency'] && !/^[1-5]$/.test(values['--concurrency']))) throw new Error(`Use ${USAGE}`);
-    if (upgrade && !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(values['--from'] || '')) throw new Error(`Use ${USAGE}`);
-    if (mode === '--source-upgrade-plan' && (values['--plan-sha'] || values['--paper-ids'])) throw new Error(`Use ${USAGE}`);
-    if (values['--preserve-original-complete'] && values['--prefer-upgrade']) throw new Error(`Use ${USAGE}`);
-    if (values['--page-repair-mode'] !== undefined && values['--page-repair-mode'] !== 'caption-only') throw new Error(`Use ${USAGE}`);
-    if (mode === '--source-upgrade-promote' && (!/^[a-f0-9]{64}$/.test(values['--plan-sha'] || '') || values['--paper-ids'])) throw new Error(`Use ${USAGE}`);
+        || (values['--concurrency'] && !/^[1-5]$/.test(values['--concurrency']))) throw new Error(`参数不符合要求。用法：${USAGE}`);
+    if (upgrade && !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(values['--from'] || '')) throw new Error(`参数不符合要求。用法：${USAGE}`);
+    if (mode === '--source-upgrade-plan' && (values['--plan-sha'] || values['--paper-ids'])) throw new Error(`参数不符合要求。用法：${USAGE}`);
+    if (values['--preserve-original-complete'] && values['--prefer-upgrade']) throw new Error(`参数不符合要求。用法：${USAGE}`);
+    if (values['--page-repair-mode'] !== undefined && values['--page-repair-mode'] !== 'caption-only') throw new Error(`参数不符合要求。用法：${USAGE}`);
+    if (mode === '--source-upgrade-promote' && (!/^[a-f0-9]{64}$/.test(values['--plan-sha'] || '') || values['--paper-ids'])) throw new Error(`参数不符合要求。用法：${USAGE}`);
     if (mode === '--source-upgrade-apply' && (!values['--authorize-new-analysis'] || !/^[a-f0-9]{64}$/.test(values['--plan-sha'] || '')
-        || !values['--paper-ids'] || values['--paper-ids'].split(',').some(id => !/^conference:[A-Za-z0-9:._-]+$/.test(id)))) throw new Error(`Use ${USAGE}`);
+        || !values['--paper-ids'] || values['--paper-ids'].split(',').some(id => !/^conference:[A-Za-z0-9:._-]+$/.test(id)))) throw new Error(`参数不符合要求。用法：${USAGE}`);
     return { apply: mode === '--apply', statusOnly: mode === '--status', catalogName: values['--catalog'],
         reportName: values['--report'], filterId: values['--filter'], concurrency: Number(values['--concurrency'] || 1),
         ...(values['--retry-failed'] ? { retryFailed: true } : {}),
@@ -56,7 +56,7 @@ function parseArgs(argv) {
 function readSafeJson(filename) {
     const named = fs.lstatSync(filename);
     if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || (named.mode & 0o777) !== 0o600) {
-        throw new Error(`unsafe conference process state file: ${filename}`);
+        throw new Error(`会议状态文件不安全，必须是权限为 0600、只有一个硬链接的普通文件：${filename}`);
     }
     const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
