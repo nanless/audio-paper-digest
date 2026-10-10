@@ -64,7 +64,7 @@ def select_blog_published_snapshot(
 
 
 def get_oneliner_concurrency():
-    """返回项目 .env 配置的 one-liner 并发度，限制在安全范围内。"""
+    """读取项目 .env 配置，同时生成一句话介绍的数量限定为 1–5；配置无效时使用 5。"""
     raw = os.environ.get('PD_XIAOHONGSHU_ONELINER_CONCURRENCY', '5')
     try:
         value = int(raw)
@@ -99,7 +99,7 @@ def normalize_oss_status(value):
 
 
 def sanitize_oneliner_claims(text, parsed_analysis=None):
-    """依据结构化开源状态删除 one-liner 中相冲突的开源断言。"""
+    """删除一句话介绍中开源状态字段未标为已公开的代码、权重或数据可用声明。"""
     parsed_analysis = parsed_analysis or {}
     claims = (
         ('hasCode', r'(?:代码|源码)(?:仓库)?'),
@@ -124,7 +124,7 @@ def sanitize_oneliner_claims(text, parsed_analysis=None):
 
 
 def safe_oneliner(text, parsed_analysis=None, max_len=65):
-    """清洗、校验并截断 one-liner；不可用时返回 None 触发本地回退。"""
+    """清理一句话介绍并检查有效字符数量，再按长度截断；不可用时返回 None，由调用方改用本地摘要。"""
     cleaned = sanitize_oneliner_claims(text, parsed_analysis)
     meaningful = re.findall(r'[\u4e00-\u9fffA-Za-z0-9]', cleaned)
     if len(meaningful) < 10:
@@ -133,7 +133,7 @@ def safe_oneliner(text, parsed_analysis=None, max_len=65):
 
 
 def build_oneliner_context(title, abstract, parsed_analysis=None):
-    """构造 one-liner 输入，优先使用深度分析 parsed 字段。"""
+    """准备一句话介绍所需内容，优先使用 parsed 中的分析结果；没有这些内容时才使用摘要。"""
     parsed_analysis = parsed_analysis or {}
     parts = [
         f"标题：{title}",
@@ -161,7 +161,7 @@ def build_oneliner_context(title, abstract, parsed_analysis=None):
 
 
 def build_oneliner_prompt(title, abstract, parsed_analysis=None):
-    """构造稳定的 one-liner prompt，供调用和缓存指纹共同使用。"""
+    """准备一句话介绍的模型提示；模型请求与缓存身份检查使用同一份文本。"""
     context = build_oneliner_context(title, abstract, parsed_analysis)
     return f"""用1-2句话总结下面这篇论文的核心亮点，要口语化、有吸引力，适合发小红书。总字数严格控制在70字以内，必须输出完整内容，不要省略。优先突出任务、方法、实验收益或开源价值，不要只复述标题。开源情况只能依据“结构化开源状态”，不得从其他文字推断：
 
@@ -171,7 +171,7 @@ def build_oneliner_prompt(title, abstract, parsed_analysis=None):
 
 
 def call_llm_for_oneliner(title, abstract, parsed_analysis=None):
-    """调用 LLM 生成一句话论文介绍，自动检测协议。"""
+    """通过公共请求入口让模型生成一句话介绍，并按开源状态及长度要求清理结果。"""
     prompt = build_oneliner_prompt(title, abstract, parsed_analysis)
 
     content = call_publish_llm_api(
@@ -286,7 +286,7 @@ def _save_oneliner_cache_entry(
 
 
 def generate_llm_oneliners(top_papers, date_str=None, cache_path=None):
-    """并行生成 one-liner；跨运行复用成功项，只重试缺失或失败项。"""
+    """并发生成一句话介绍；已有成功结果只有身份字段一致且清理后仍可用时才复用，其余重新生成。"""
     if not top_papers:
         return {}
 
@@ -319,7 +319,7 @@ def generate_llm_oneliners(top_papers, date_str=None, cache_path=None):
         pending.append((idx, item, paper_id, fingerprint, cached))
 
     if results:
-        print(f"♻️ 复用小红书 one-liner 缓存 {len(results)} 篇，仅生成 {len(pending)} 篇")
+        print(f"♻️ 复用已保存的小红书一句话介绍 {len(results)} 篇，仅生成 {len(pending)} 篇")
     if not pending:
         return results
 
@@ -369,15 +369,15 @@ def generate_llm_oneliners(top_papers, date_str=None, cache_path=None):
 
     for idx, _item, _paper_id, _fingerprint, _expected_entry in pending:
         if statuses.get(idx) == 'success':
-            print(f"  ✓ 第 {idx + 1} 名：LLM one-liner 生成成功")
+            print(f"  ✓ 第 {idx + 1} 名：模型生成一句话介绍成功")
         elif statuses.get(idx) == 'success_cache_failed':
-            print(f"  ⚠️  第 {idx + 1} 名：LLM 生成成功但 checkpoint 写入失败，本轮仍使用结果")
+            print(f"  ⚠️  第 {idx + 1} 名：模型生成成功但结果保存失败，本轮仍使用结果")
         elif statuses.get(idx) == 'error':
             print(f"  ⚠️  第 {idx + 1} 名：调用异常，将使用本地摘要")
         elif statuses.get(idx) == 'fallback_cache_failed':
-            print(f"  ⚠️  第 {idx + 1} 名：无可用结果且 checkpoint 写入失败，将使用本地摘要")
+            print(f"  ⚠️  第 {idx + 1} 名：无可用结果且保存失败，将使用本地摘要")
         else:
-            print(f"  ⚠️  第 {idx + 1} 名：LLM 无可用结果，将使用本地摘要")
+            print(f"  ⚠️  第 {idx + 1} 名：模型没有可用结果，将使用本地摘要")
 
     return results
 

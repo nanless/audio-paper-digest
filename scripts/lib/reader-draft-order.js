@@ -358,10 +358,9 @@ function alignMixedBindingsToCurrentTableNodes(draft, tables) {
     return true;
 }
 
-// 没有 marker 的来源引文绑定和 artifact 表绑定，都没有可见的序号标记。
-// 模型把各节以不同顺序输出时，只能靠唯一且有证据支撑的表格分配来恢复
-// 排列。artifact 表要求每个渲染出来的单元格都能对上它已核验的 DOM
-// 单元格。选择 marker 仍是更强的锚点，绝不从正文里推断。
+// 来源引文表和结构化原表的绑定没有可见序号。模型改变小节顺序后，
+// 必须找到唯一的表格对应关系才能重新排列。结构化原表要求每个展示单元格
+// 都与已核验的原表 DOM 单元格一致；带选择标记的表仍按显式序号对应，不从正文猜测。
 function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables, structuredArtifacts = null) {
     const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
     if (!bindings.length || tables.length !== bindings.length
@@ -459,8 +458,9 @@ function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables, structuredAr
         index, score: score(binding, node, kind, sourceTable)
     })).filter(candidate => candidate.score > 0));
     if (candidates.some(items => items.length === 0)) return false;
-    // 求完整的一一对应最大权匹配。旧实现遍历全部排列，12 张相似小表就有
-    // 12! 条路径；这里只做多项式匹配，再逐条禁用已选边核对最优解是否唯一。
+    // 为所有表格选择总匹配分值最高的一一对应关系（最大权匹配）。
+    // 旧实现枚举全部排列，12 张相似小表就有 12! 种；这里使用多项式时间算法，
+    // 再逐个排除已选对应关系，检查最高分结果是否唯一。
     const size = evidenceBindings.length;
     const weights = candidates.map(items => new Map(items.map(item => [item.index, item.score])));
     const maximumScore = candidates.reduce((maximum, items) =>
@@ -519,8 +519,8 @@ function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables, structuredAr
     };
     const best = solve();
     if (!best) return false;
-    // 任何另一完整最优解至少不使用一条当前已选边。逐边排除并重算，能检出全部
-    // 同分歧义；不能因为匹配算法先找到一组就把它当作来源对应关系。
+    // 另一组完整的最高分匹配至少会改变一个对应关系；逐个排除当前对应关系再重算，
+    // 若仍能得到相同总分，就拒绝这次重新排列，不能把先找到的结果当作唯一来源对应。
     for (let row = 0; row < size; row++) {
         const alternative = solve(row, best.assignment[row].index);
         if (alternative?.score === best.score) return false;
@@ -545,10 +545,10 @@ function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables, structuredAr
     return true;
 }
 
-// 末尾那些没有可见表格节点的 source_quotes 声明，不含面向读者的内容，
-// 也编译不出来。只有满足以下条件时才删掉这段末尾后缀：可见的整条表格
-// 串都是普通 Markdown，前面所有绑定都是顺序的 source_quotes，且任何
-// 地方都不存在 TABLE marker。完整解析器仍会重放剩下每一条引文。
+// 没有展示表格与之对应的末尾 source_quotes 记录不会生成读者可见内容。
+// 只有所有可见表格均为普通 Markdown、全部绑定按连续序号使用 source_quotes，
+// 且正文没有 TABLE 选择标记时，才删去这些多余的末尾记录。
+// 完整解析器仍须逐条核对保留的来源引文。
 function pruneTrailingUnboundSourceQuoteBindings(draft, tables) {
     const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
     if (!Array.isArray(draft?.sections) || bindings.length <= tables.length
@@ -581,8 +581,8 @@ function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
     let tableMap = originalTables.map(table => ({ rawIndex: table.bindingIndex, canonicalIndex: table.bindingIndex,
         rawSectionIndex: table.sectionIndex, canonicalSectionIndex: table.sectionIndex }));
     if (sectionOrderChanged && Array.isArray(draft.tableBindings)) {
-        // 有核验过的证据时优先于位置顺序。这也覆盖了一种常见情况：位置形状
-        // 看着有效，但每个绑定其实属于另一个原始小节。
+        // 先尝试按来源引文或原表单元格内容匹配，而非直接沿用位置序号；
+        // 位置序号可能看似有效，实际对应的表却属于另一个原始小节。
         const sourceQuoteAligned = alignSourceQuoteBindingsToCurrentTableNodes(
             draft, originalTables, structuredArtifacts
         );
@@ -593,9 +593,9 @@ function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
                     ? originalTables[index]?.markerIndex === index + 1
                         && sections.reduce((n, section) => n + String(section?.body || '').split(`[[TABLE_${index + 1}]]`).length - 1, 0) === 1
                     : !originalTables[index]?.marker));
-        // 混排的表格串可以在小节排序之前无歧义地对齐：选择绑定靠它唯一的
-        // TABLE 序号锚定，来源引文和 artifact 绑定保持原有的相对顺序。
-        // 下游的来源绑定解析器仍会重放每一个单元格和每一条引文。
+        // 小节排序前先检查选择标记与普通表混排的对应关系：选择绑定按唯一 TABLE 序号对应，
+        // 来源引文与原表绑定保持原有相对顺序。
+        // 后续来源检查仍须逐个核对单元格和引文。
         if (!valid && alignMixedBindingsToCurrentTableNodes(draft, originalTables)) {
             originalTables = locateReaderDraftTables(draft);
             valid = originalTables.length === draft.tableBindings.length
@@ -665,8 +665,8 @@ function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
         }
     }
     if (Array.isArray(draft?.sections)) draft.sections = ranked.map(item => item.section);
-    // 桥接 marker 是稳定 ID，不表示它在正文里出现的先后。只有完整且无歧义的
-    // 1..N 排列才允许重排。凡是畸形的集合，一个字节都不改，留给解析器报错。
+    // 术语组合解释标记用固定编号表示身份，不表示正文中的出现顺序。
+    // 编号必须完整覆盖 1..N 且无重复，才按编号重新排列；否则保留原内容，由解析器报错。
     let bridgeMap = [];
     if (Array.isArray(draft?.conceptBridges)) {
         const bridges = draft.conceptBridges.map((bridge, rawIndex) => {

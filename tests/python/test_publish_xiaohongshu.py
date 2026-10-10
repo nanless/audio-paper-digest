@@ -161,7 +161,7 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
         self.assertEqual(results, {0: 'A-亮点'})
         self.assertNotIn('secret-token-must-not-appear', output.getvalue())
         self.assertIn('第 2 名：调用异常', output.getvalue())
-        self.assertIn('第 3 名：LLM 无可用结果', output.getvalue())
+        self.assertIn('第 3 名：模型没有可用结果', output.getvalue())
 
     def test_successful_oneliner_cache_is_reused_without_api_call(self):
         papers = [(9.0, {
