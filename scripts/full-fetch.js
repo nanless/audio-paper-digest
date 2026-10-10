@@ -225,7 +225,8 @@ function hasCoveredFetchBoundary(health, boundary, huggingface = false) {
         && provider.window?.since === boundary.since
         && provider.window?.until === boundary.until
         && provider.window?.covered === true
-        && (!huggingface || (provider.cutoffDate === boundary.lastDigestDate && provider.dailyCovered === true)));
+        && (!huggingface || (provider.cutoffDate === boundary.lastDigestDate && provider.dailyCovered === true
+                && provider.dailySelectedAtField === 'paper.submittedOnDailyAt')));
 }
 
 function resolvePinnedFetchBoundary(blogRepo, now, checkpoint = null, publishedIds = null, options = {}) {

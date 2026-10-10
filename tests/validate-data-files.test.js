@@ -1648,7 +1648,7 @@ describe('显式数据路径与 v7 缺少候选的诊断', () => {
                 window: { since: boundary.since, until: boundary.until, covered: true } };
             for (const entry of Object.values(checkpoint.arxiv)) entry.health.provider = provider;
             checkpoint.huggingface.health.provider = { ...provider,
-                cutoffDate: boundary.lastDigestDate, dailyCovered: true };
+                cutoffDate: boundary.lastDigestDate, dailyCovered: true, dailySelectedAtField: 'paper.submittedOnDailyAt' };
             checkpoint.fetchSourcesSha256 = pipeline.getFetchSourcesSha256(checkpoint);
             fs.writeFileSync(filename, JSON.stringify(checkpoint));
             assert.deepEqual(validateFetchCheckpointFile(filename), []);

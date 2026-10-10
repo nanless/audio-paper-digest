@@ -86,7 +86,7 @@ test('合法v7发布窗口继续上次结束时间，损坏来源证明不退回
     const cp = { sourceContractVersion: 7, batchDate: '2026-10-03', batchStartedAt: old.until,
         ...pipeline.buildCandidateFingerprints(new Set(), new Set(), old), historicalDedupIds: [],
         arxiv: Object.fromEntries(['eess.AS','cs.SD','eess.SP','cs.CL','cs.LG','cs.AI','cs.MM'].map(id => [id, entry])),
-        huggingface: { ...entry, health: { ok: true, provider: { ...provider, cutoffDate: old.lastDigestDate, dailyCovered: true } } } };
+        huggingface: { ...entry, health: { ok: true, provider: { ...provider, cutoffDate: old.lastDigestDate, dailyCovered: true, dailySelectedAtField: 'paper.submittedOnDailyAt' } } } };
     cp.fetchSourcesSha256 = pipeline.getFetchSourcesSha256(cp);
     const papers = mergeAndDeduplicate(sourcePapers, []);
     const raw = { ...pipeline.buildCandidateFingerprints(new Set(), new Set(), old), sourceContractVersion: 7, batchDate: '2026-10-03', fetchBoundary: old, papers, rawPapersSha256: stable(papers), fetchSourcesSha256: cp.fetchSourcesSha256 };
@@ -100,6 +100,16 @@ test('合法v7发布窗口继续上次结束时间，损坏来源证明不退回
         files: [{ path: old.provenance.indexPath, sha256: old.provenance.indexSha256 }, ...old.provenance.papers.map(p => ({ path: p.path, sha256: p.sha256 }))] });
     const result = resolveDailyFetchBoundary(f.root, { until, dataRoot });
     assert.equal(result.since, old.until); assert.equal(result.provenance.boundaryBasis, 'verified-previous-fetch-until');
+    const missingSelectedField = structuredClone(cp);
+    delete missingSelectedField.huggingface.health.provider.dailySelectedAtField;
+    missingSelectedField.fetchSourcesSha256 = pipeline.getFetchSourcesSha256(missingSelectedField);
+    put('archive/2026-10-03/fetch-checkpoint.json', missingSelectedField);
+    put('archive/2026-10-03/raw-candidates.json', { ...raw, fetchSourcesSha256: missingSelectedField.fetchSourcesSha256 });
+    put('archive/2026-10-03/filtered-papers.json', { ...filtered, fetchSourcesSha256: missingSelectedField.fetchSourcesSha256 });
+    assert.throws(() => resolveDailyFetchBoundary(f.root, { until, dataRoot }), /拒绝缩短/);
+    put('archive/2026-10-03/fetch-checkpoint.json', cp);
+    put('archive/2026-10-03/raw-candidates.json', raw);
+    put('archive/2026-10-03/filtered-papers.json', filtered);
     const dropped = { ...raw, papers: selected, rawPapersSha256: stable(selected) };
     put('archive/2026-10-03/raw-candidates.json', dropped);
     put('archive/2026-10-03/filtered-papers.json', { ...filtered, rawPapersSha256: dropped.rawPapersSha256 });

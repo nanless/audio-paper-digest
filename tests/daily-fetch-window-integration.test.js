@@ -7,7 +7,7 @@ const boundary = { contract: 'daily-fetch-boundary-v1', lastDigestDate: '2026-10
 boundary.identitySha256 = crypto.createHash('sha256').update(JSON.stringify(Object.fromEntries(Object.entries(boundary).sort(([a], [b]) => a.localeCompare(b))))).digest('hex');
 function item(index, selectedAt = '2026-10-09T00:00:00Z') {
     return { publishedAt: selectedAt, paper: { id: `2610.${String(index).padStart(5, '0')}`,
-        title: 'Audio paper', summary: 'Audio study.', authors: [], publishedAt: '2020-01-01T00:00:00Z' } };
+        title: 'Audio paper', summary: 'Audio study.', authors: [], publishedAt: '2020-01-01T00:00:00Z', submittedOnDailyAt: selectedAt } };
 }
 function options(fetchFn) {
     return { cutoffDate: boundary.lastDigestDate, boundary, minUpvotes: 0,
@@ -101,7 +101,7 @@ function completeCheckpoint(boundary, count = 0) {
             status: 'complete', papers: Array.from({ length: count }, (_, index) => ({ arxivId: `2610.${String(index).padStart(5, '0')}` })),
             health: { id: category.id, ok: true, provider: structuredClone(provider) }
         }])), huggingface: { status: 'complete', papers: [], health: { ok: true,
-            provider: { ...provider, cutoffDate: boundary.lastDigestDate, dailyCovered: true } } } };
+            provider: { ...provider, cutoffDate: boundary.lastDigestDate, dailyCovered: true, dailySelectedAtField: 'paper.submittedOnDailyAt' } } } };
 }
 test('合法同日 v7 检查点固定原抓取终点；后续时钟变化不重算候选范围', t => {
     const blog = blogFixture(t);
@@ -266,7 +266,7 @@ test('首次保存未发布的本日检查点后，继续固定原终点和候�
 
 test('每日精选没有入选时间时，不能拿论文原始日期证明分页覆盖', async () => {
     const invalid = item(1);
-    delete invalid.publishedAt;
+    delete invalid.paper.submittedOnDailyAt;
     await assert.rejects(fetchHuggingFacePapers(new Set(), options(url => url.includes('daily_papers') ? [invalid] : [])),
         error => error.code === 'SOURCE_FETCH_FAILED' && error.sourceHealth.provider.dailyCovered === false);
 });
@@ -287,4 +287,88 @@ test('v7 类别集合不是数组时，公开数据检查返回问题而非抛�
     fs.writeFileSync(files.filterDecisions, JSON.stringify({ ...common, decisions: {}, stats: { complete: true } }));
     const issues = validator.validateCurrentDataFiles(files);
     assert.ok(issues.some(issue => issue.includes('categories 必须是数组')));
+});
+
+test('原论文发布日期反序时，按真实精选入选日期读取正常窗口', async () => {
+    const first = item(31, '2026-10-09T00:00:00Z');
+    const second = item(32, '2026-10-08T00:00:00Z');
+    first.publishedAt = first.paper.publishedAt = '2020-01-01T00:00:00Z';
+    second.publishedAt = second.paper.publishedAt = '2026-10-10T00:00:00Z';
+    const requests = [];
+    const papers = await fetchHuggingFacePapers(new Set(), options(url => {
+        requests.push(url);
+        return url.includes('daily_papers') ? [first, second] : [];
+    }));
+    assert.deepEqual(papers.map(paper => paper.arxivId), ['2610.00031', '2610.00032']);
+    assert.equal(papers[0].hfSelectedAt, '2026-10-09T08:00:00.000+08:00');
+    assert.equal(papers[0].published, '2020-01-01T08:00:00.000+08:00');
+    assert.equal(papers._sourceHealth.provider.dailySelectedAtField, 'paper.submittedOnDailyAt');
+    assert.ok(requests.filter(url => url.includes('daily_papers'))
+        .every(url => new URL(url).searchParams.get('sort') === 'publishedAt'));
+});
+
+test('跨页超过100篇旧论文最近入选，不以论文原日期或已知ID提前结束', async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => item(3000 + index, '2026-10-09T00:00:00Z'));
+    const secondPage = [item(3100, '2026-10-05T00:00:00Z'), item(3101, '2026-10-04T00:00:00Z')];
+    for (const entry of [...firstPage, ...secondPage]) entry.publishedAt = entry.paper.publishedAt;
+    const requests = [];
+    const papers = await fetchHuggingFacePapers(new Set(firstPage.map(entry => entry.paper.id)), options(url => {
+        requests.push(url);
+        if (!url.includes('daily_papers')) return [];
+        return new URL(url).searchParams.get('p') === '0' ? firstPage : secondPage;
+    }));
+    assert.deepEqual(papers.map(paper => paper.arxivId), ['2610.03100']);
+    assert.ok(requests.some(url => url.includes('p=1')));
+    assert.equal(papers._sourceHealth.provider.dailyCovered, true);
+});
+
+test('真实精选日期跨页回升时拒绝不完整窗口，不能用原发布日期掩盖', async () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => item(4000 + index, '2026-10-08T00:00:00Z'));
+    const secondPage = [item(4100, '2026-10-09T00:00:00Z')];
+    for (const entry of [...firstPage, ...secondPage]) entry.publishedAt = '2020-01-01T00:00:00Z';
+    await assert.rejects(fetchHuggingFacePapers(new Set(), options(url => {
+        if (!url.includes('daily_papers')) return [];
+        return new URL(url).searchParams.get('p') === '0' ? firstPage : secondPage;
+    })), error => error.code === 'SOURCE_FETCH_FAILED'
+        && error.sourceHealth.provider.dailyCovered === false
+        && error.sourceHealth.provider.window.covered === false);
+});
+
+test('缺真实精选入选字段时，顶部日期存在也不能证明窗口完整', async () => {
+    const entry = item(51);
+    delete entry.paper.submittedOnDailyAt;
+    entry.date = '2026-10-09';
+    entry.createdAt = '2026-10-09T00:00:00Z';
+    await assert.rejects(fetchHuggingFacePapers(new Set(), options(url =>
+        url.includes('daily_papers') ? [entry] : [])), error =>
+        error.code === 'SOURCE_FETCH_FAILED' && error.sourceHealth.provider.dailyCovered === false);
+});
+
+test('固定终点之后的精选不进入候选，截止日同日与终点整刻仍保留', async () => {
+    const entries = [item(61, '2026-10-10T14:00:00.001Z'), item(62, boundary.until),
+        item(63, '2026-10-05T00:00:00Z'), item(64, '2026-10-04T00:00:00Z')];
+    const papers = await fetchHuggingFacePapers(new Set(), options(url =>
+        url.includes('daily_papers') ? entries : []));
+    assert.deepEqual(papers.map(paper => paper.arxivId), ['2610.00062', '2610.00063']);
+    assert.equal(papers._sourceHealth.provider.window.covered, true);
+});
+
+test('旧HF完成记录缺入选字段证明时不复用，已完整arXiv仍可续用且终点不变', t => {
+    const blog = blogFixture(t);
+    const actual = resolveDailyFetchBoundary(blog.root, { until: boundary.until });
+    const checkpoint = completeCheckpoint(actual, 1);
+    const filename = path.join(blog.root, 'checkpoint.json');
+    pipeline.saveFetchCheckpoint(checkpoint, filename);
+    assert.equal(pipeline.hasCrossProcessReusableFetchCheckpoint(checkpoint), true);
+    delete checkpoint.huggingface.health.provider.dailySelectedAtField;
+    pipeline.saveFetchCheckpoint(checkpoint, filename);
+    assert.equal(pipeline.hasCompleteFetchCheckpoint(checkpoint), false);
+    assert.equal(pipeline.hasCrossProcessReusableFetchCheckpoint(checkpoint), false);
+    assert.ok(validator.validateFetchCheckpointFile(filename).length > 0);
+    for (const entry of Object.values(checkpoint.arxiv)) {
+        assert.equal(pipeline.isReusableArxivCheckpoint(entry, actual), true);
+    }
+    const pinned = pipeline.resolvePinnedFetchBoundary(blog.root, '2026-10-10T15:00:00Z', checkpoint);
+    assert.equal(pinned.until, actual.until);
+    assert.equal(pinned.identitySha256, actual.identitySha256);
 });

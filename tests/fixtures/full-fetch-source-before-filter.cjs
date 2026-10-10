@@ -33,7 +33,7 @@ function health(boundary, hf) {
     return { ok: true, attempts: 1, successfulRequests: 1,
         provider: { boundaryIdentity: boundary.identitySha256,
             window: { since: boundary.since, until: boundary.until, covered: true },
-            ...(hf ? { cutoffDate: boundary.lastDigestDate, dailyCovered: true } : {}) } };
+            ...(hf ? { cutoffDate: boundary.lastDigestDate, dailyCovered: true, dailySelectedAtField: 'paper.submittedOnDailyAt' } : {}) } };
 }
 fetchApi.fetchCategoryPapersSince = async (category, boundary) => {
     if (scenario === 'arxiv-failed') throw new Error('本地模拟 arXiv 后页失败');

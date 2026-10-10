@@ -247,7 +247,7 @@ function convertDailyPaper(hfPaper, options = {}) {
 
     const publishedAt = normalizeToBeijingISOString(paper.publishedAt || hfPaper.publishedAt || '');
     const selectedAt = normalizeToBeijingISOString(
-        hfPaper.publishedAt || hfPaper.date || hfPaper.createdAt || paper.publishedAt || ''
+        paper.submittedOnDailyAt || hfPaper.publishedAt || hfPaper.date || hfPaper.createdAt || paper.publishedAt || ''
     );
     if (!publishedAt) {
         console.warn(`  ⚠️  跳过 HuggingFace 论文 ${arxivId}: 缺少有效 publishedAt`);
@@ -401,7 +401,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
     const seenDailyPageSignatures = new Set();
     let previousSelectedDate = null;
     while (!reachedCutoff && page < maxPages) {
-        const url = `https://huggingface.co/api/daily_papers?limit=${HUGGINGFACE_CONFIG.pageLimit}&p=${page}`;
+        const url = `https://huggingface.co/api/daily_papers?limit=${HUGGINGFACE_CONFIG.pageLimit}&p=${page}&sort=publishedAt`;
         const response = await fetchTracked(`daily_papers:${page + 1}`, url);
         const data = response.data;
 
@@ -428,11 +428,11 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
 
         for (const item of data) {
             if (boundary && (!item || typeof item !== 'object'
-                    || !normalizeToBeijingISOString(item.publishedAt || item.date || item.createdAt || ''))) {
-                throw makeSourceFetchError('每日精选缺少有效入选时间，无法证明补更范围完整', {
+                    || !normalizeToBeijingISOString(item.paper?.submittedOnDailyAt || ''))) {
+                throw makeSourceFetchError('每日精选缺少有效的 paper.submittedOnDailyAt 入选时间，无法证明补更范围完整', {
                     ...health, ok: false, provider: { boundaryIdentity: boundary.identitySha256,
                         window: { since: boundary.since, until: boundary.until, covered: false },
-                        cutoffDate: cutoffStr, dailyCovered: false }
+                        cutoffDate: cutoffStr, dailyCovered: false, dailySelectedAtField: 'paper.submittedOnDailyAt' }
                 });
             }
             if (typeof item !== 'object' || !item) continue;
@@ -452,7 +452,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
                 throw makeSourceFetchError('每日精选日期顺序改变，无法证明补更范围完整', {
                     ...health, ok: false, provider: { boundaryIdentity: boundary.identitySha256,
                         window: { since: boundary.since, until: boundary.until, covered: false },
-                        cutoffDate: cutoffStr, dailyCovered: false }
+                        cutoffDate: cutoffStr, dailyCovered: false, dailySelectedAtField: 'paper.submittedOnDailyAt' }
                 });
             }
             previousSelectedDate = pubDate;
@@ -577,7 +577,8 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         boundaryIdentity: boundary.identitySha256,
         window: { since: boundary.since, until: boundary.until, covered: dailyComplete && papersComplete && health.failures.length === 0 },
         cutoffDate: cutoffStr,
-        dailyCovered: dailyComplete
+        dailyCovered: dailyComplete,
+        dailySelectedAtField: 'paper.submittedOnDailyAt'
     };
     health.ok = dailyComplete && papersComplete && health.failures.length === 0;
     health.allFailed = health.attempts > 0 && health.successfulRequests === 0;

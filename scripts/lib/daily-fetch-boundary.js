@@ -84,7 +84,8 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
             && entry.papersCount === entry.papers.length && entry.papersSha256 === stableSha(entry.papers)
             && provider?.boundaryIdentity === boundary.identitySha256 && provider.window?.since === boundary.since
             && provider.window?.until === boundary.until && provider.window?.covered === true
-            && (!hf || (provider.cutoffDate === boundary.lastDigestDate && provider.dailyCovered === true));
+            && (!hf || (provider.cutoffDate === boundary.lastDigestDate && provider.dailyCovered === true
+                && provider.dailySelectedAtField === 'paper.submittedOnDailyAt'));
     };
     if (checkpoint.batchDate !== date || checkpoint.coverageStrategy !== 'previous-digest-window-v1'
         || !categories.every(id => covered(checkpoint.arxiv?.[id])) || !covered(checkpoint.huggingface, true)

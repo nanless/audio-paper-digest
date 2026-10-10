@@ -279,7 +279,8 @@ function hasCoveredFetchBoundary(health, boundary, huggingface = false) {
         && health.provider.window?.since === boundary.since
         && health.provider.window?.until === boundary.until
         && health.provider.window?.covered === true
-        && (!huggingface || (health.provider.cutoffDate === boundary.lastDigestDate && health.provider.dailyCovered === true)));
+        && (!huggingface || (health.provider.cutoffDate === boundary.lastDigestDate && health.provider.dailyCovered === true
+                && health.provider.dailySelectedAtField === 'paper.submittedOnDailyAt')));
 }
 
 function validateFetchBoundary(filePath, data, issues) {
