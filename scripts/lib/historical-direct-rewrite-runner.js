@@ -1001,16 +1001,6 @@ async function renderConferencePdfPages({ pdfPath, directory, visualAudit = null
     });
 }
 
-function analysisAttemptDirectory(dependencies = {}) {
-    const root = path.resolve(dependencies.temporaryRoot || os.tmpdir());
-    const persistentRoots = (dependencies.persistentRoots || []).filter(Boolean).map(value => path.resolve(value));
-    if (persistentRoots.some(base => root === base || root.startsWith(`${base}${path.sep}`))) {
-        fail('analysis checkpoints cannot use a persistent runtime directory');
-    }
-    fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-    return fs.mkdtempSync(path.join(root, 'historical-direct-analysis-'));
-}
-
 async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, executionDirectory, dependencies }) {
     const engine = dependencies.engine || require('../analysis-engine.js');
     const sourcePaper = item.route.kind === 'conference-local-pdf'

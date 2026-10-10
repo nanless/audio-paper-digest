@@ -1194,10 +1194,6 @@ function hasCrossMetricDirectionalComparison(sentence) {
     return false;
 }
 
-function hasCompleteCoreSummaryQuantitativeResult(text) {
-    return coreSummaryQuantitativeResultState(text).complete;
-}
-
 function validateCoreSummarySemanticContract(analysis, options = {}) {
     const summary = extractSection(String(analysis || ''), '核心摘要');
     const count = chineseCharacterCount(summary);

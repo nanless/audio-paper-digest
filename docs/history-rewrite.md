@@ -260,7 +260,7 @@ npm run history:arxiv-batch -- --dry-run --crosswalk UUID --owner fallback.worke
 ```bash
 npm run history:arxiv-source -- --dry-run --id 2609.03622 --authority arxiv-2609.03622.json
 npm run history:arxiv-source -- --apply --id 2609.03622 --authority arxiv-2609.03622.json
-npm run history:arxiv-analyze -- prepare --apply --id 2609.03622 --date 2026-09-04 \
+npm run history:arxiv-analyze -- prepare --apply --run-id UUID --id 2609.03622 --date 2026-09-04 \
   --authority arxiv-2609.03622.json
 npm run history:arxiv-analyze -- analyze --run-id UUID --concurrency 1
 npm run history:arxiv-analyze -- status --run-id UUID

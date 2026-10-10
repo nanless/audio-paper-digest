@@ -189,14 +189,6 @@ function normalizeCatalog(value) {
     return { contract, conferenceId, catalogSha256, members };
 }
 
-function adaptDiscoveryCatalog(discoveryDocument, { documentSha256, adapter } = {}) {
-    if (typeof adapter !== 'function') fail('必须提供 discovery 目录适配器回调');
-    assertSha(documentSha256, 'discovery document SHA');
-    const catalog = normalizeCatalog(adapter(clone(discoveryDocument), { documentSha256 }));
-    if (catalog.catalogSha256 !== documentSha256) fail('catalog SHA 与 discovery 文档字节不匹配');
-    return catalog;
-}
-
 function trustedDiscovery(handle) {
     try { return discoveryApi.discoveryHandleSnapshot(handle); }
     catch (error) { fail(`requires an authenticated discovery handle: ${error.message}`); }

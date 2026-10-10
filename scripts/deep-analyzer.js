@@ -16595,19 +16595,6 @@ function syncResourceFieldsFromOpenSource(analysis, openSourceText) {
     }, analysis);
 }
 
-function mergeSection(analysis, sectionHeader, newContent) {
-    // 去掉 newContent 开头重复的 sectionHeader，避免合并后出现双标题
-    const headerPattern = new RegExp('^' + sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[：:\\s]*\\n*');
-    const cleanContent = newContent.replace(headerPattern, '').trim();
-
-    const escaped = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const regex = new RegExp(`(${escaped}[：:\\s]*\n)([\\s\\S]*?)(?=\n#{2,3}\\s|$)`, '');
-    if (regex.test(analysis)) {
-        return analysis.replace(regex, `$1${cleanContent}\n`);
-    }
-    return analysis.trim() + '\n\n' + sectionHeader + '\n' + cleanContent;
-}
-
 function escapeRegExp(text) {
     return String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
