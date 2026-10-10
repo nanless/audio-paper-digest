@@ -1951,13 +1951,11 @@ function deriveExactTableSourceQuotes(renderedMarkdown, sourceText, options = {}
         }
     };
     for (const token of [...new Set(readerNumericTokens(renderedMarkdown))]) {
-        // 带单位的渲染值比光秃秃的标量更有说服力。在质量很差的 PDF 双栏文本里，光秃秃的
-        // 标量可能也出现在页眉的日期里（例如「1–4 September」），而完整的「1 kHz」在
-        // 后面正文里才有。先定位那个完整的短语；下面的普通 token 复现仍作为单位被拆开和
-        // 其他抽取怪癖的兜底。
+        // 先查找同时包含数值和单位的原句，例如「1 kHz」；只查数字可能误中页眉日期。
+        // 然后逐个查找数值；PDF 提取时拆开的单位是否可接受，仍由 allowSplitUnit 控制。
         addDirectUnitQuote(token);
-        // 逐 token best-effort：单个数字在原文找不到时只跳过它，不再让整张表
-        // 的自动修复归零；下游 missingNumbers 仍会对跳过的数字报错，数字证据检查仍保持原要求。
+        // 单个数值在原文找不到时，继续查找其他数值；不丢弃整张表已找到的引文。
+        // 后续 missingNumbers 仍会报告缺少依据的数值，来源要求不变。
         const unitlessFallback = String(token).match(/^([-+]?\d+(?:\.\d+)?)(?:db|ms|hz|khz|mhz|gb|mb|kb|pp|%|s|h)$/i);
         for (const match of sourceMatches) {
             const exact = sourceNumericTokenExpansions(match[0]).has(token);
@@ -3323,8 +3321,8 @@ function buildApiReaderArtifactEvidence(
         && allTables.filter(candidate => candidate?.ordinal === table.ordinal).length === 1
         && assessReaderTableSelectionEligibility(table).eligible
     )).map(table => table.ordinal);
-    // 走 PDF 文本兜底时，可能提到好几个表格图注却完全恢复不出表格 DOM。把可选清单写
-    // 明确，模型才不会从正文里推断序号，发出一个解不掉的 TABLE 标记。
+    // 只提取 PDF 文本时，文中有表格标题也不代表已获得表格结构。
+    // 写明可用的表格序号，避免模型生成无法对应原表的 TABLE 标记。
     appendLine(
         `TABLE_ORDINALS_AVAILABLE: ${JSON.stringify(availableTableOrdinals)}`,
         32
@@ -11848,8 +11846,8 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
         }
     }
     if (options.allowPdfFallback === false) {
-        // 全新重写采集独占这一次 PDF 请求。这里只返回 HTML 观察结果，来源存储就能从它
-        // 将要核验保存的那份 PDF 字节里抽兜底文本，不必在这里再下一份 PDF 然后丢掉。
+        // 重新抓取来源的流程自行下载 PDF；此处仅返回 HTML 获取情况。
+        // 文本提取使用该流程待核验和保存的那份 PDF，避免重复下载。
         return {
             text: '', source: 'unavailable', sourceId: '', imageInfos: [], structuredArtifacts: null,
             htmlAvailability, htmlAttempts, warnings,
@@ -11858,7 +11856,7 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
     }
     console.log(`    [deep] fetchArxivText ${arxivId} 转入 PDF fallback | html_status=${htmlAvailability} | attempts=${htmlAttempts}`);
 
-    // PDF 兜底：下载 PDF 并抽取文本
+    // HTML 不可用时，下载 PDF 并提取文本。
     let pdfHadTransientFailure = false;
     let lastTransientFailure = '';
     for (const pdfId of getArxivHtmlIds(arxivId)) {
@@ -11942,8 +11940,7 @@ async function fetchArxivTextDetailedOriginal(arxivId, options = {}) {
     };
 }
 
-// 全新来源存储只会用它已经保存的那一份原始官方 PDF 调这里。这段代码里没有网络路径，
-// 因此不可能绕过清单去抓另一份兜底文档。
+// 来源保存流程传入已保存的官方 PDF 字节；此函数不联网下载其他文件。
 async function extractArxivPdfTextDetailedFromBytes(arxivId, rawBytes, options = {}) {
     const normalized = String(arxivId || '').trim().replace(/v\d+$/i, '');
     if (!/^\d{4}\.\d{4,5}$/.test(normalized)) throw new Error('arXiv PDF extraction requires a normalized modern arXiv ID');
@@ -15441,9 +15438,8 @@ async function scanOpensource(paper, sourceText, preparedEvidence = null) {
         return await callModel([{ role: 'user', content: prompt }], 8000,
             { usageContext: { stage: 'openSourceScan' } });
     } catch (error) {
-        // 一次格式错误的单发响应不能抹掉有原文依据的 URL 证据。只对响应解析失败走兜底，
-        // 而且这一节只能用核验过的论文文本里找到的确切仓库 token 来拼。网络失败和其他
-        // 模型失败仍算可重试错误，免得把来源不可用这件事盖过去。
+        // 只有模型响应无法解析时，才从已核验全文中明确出现的仓库 URL 生成这一节。
+        // 网络或其他模型错误继续抛出，不能用这段替代内容掩盖失败。
         if (error?.code !== 'MODEL_INVALID_RESPONSE') throw error;
         const fallback = buildDeterministicOpenSourceScan(sourceText);
         console.warn('    [deep] 开源扫描模型响应无效，使用 sealed source URL 后备');
@@ -16244,9 +16240,9 @@ async function finalizeStructureRepairOutput(paper, inputAnalysis, sourceText, o
         );
     }
 
-    // 方法兜底本身也是模型输出，必须再次接受完整结构/叙事契约审计。
-    // 否则它可在满足 600 字方法契约的同时新增编辑批注或破坏其他章节，
-    // 并被错误地保存为 structureRepair=complete 供后续运行复用。
+    // 方法修复也来自模型，须再次检查整篇文章的结构和行文要求。
+    // 仅满足方法节 600 字要求，仍可能新增编辑批注或破坏其他章节；
+    // 这些问题未解决时，不能保存为 structureRepair=complete 供后续运行复用。
     const finalStructureIssues = getRepairableAnalysisStructureIssues(analysis, {
         sourceText, requireCurrentEvaluationTitle: options.requireCurrentEvaluationTitle === true
     });

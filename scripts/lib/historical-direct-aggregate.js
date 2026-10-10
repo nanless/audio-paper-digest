@@ -836,8 +836,7 @@ function buildDirectAggregates({ inputs, daily = null, conference = null } = {})
             outputPage: projectionOutputPage({ pageKey: task.pageKey, path: task.path, primaryUrl: task.primaryUrl,
                 previousContentSha256: task.previousContentSha256 }, `conference task ${task.pageKey} output page`) }));
     if (!dailyCohorts.length && !conferenceCohorts.length) fail('direct aggregate projection has no selected cohort');
-    // 任务页先写，会议汇总后写。
-    // 汇总落盘了，一次会议运行才算完整写完，重跑能接上。
+    // 会议任务页清单排在会议汇总之前，保存流程按此顺序处理。
     return [...dailyCohorts, ...taskCohorts, ...conferenceCohorts].map(cohort => buildCohort(inputs, cohort));
 }
 function aggregateRunIdFor(aggregates) {

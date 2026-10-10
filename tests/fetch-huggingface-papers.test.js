@@ -141,8 +141,8 @@ describe('mergeAndDeduplicate', () => {
     });
 });
 
-describe('HuggingFace 日期守卫', () => {
-    it('缺少 publishedAt 的 daily paper 会被跳过', () => {
+describe('HuggingFace 记录的发表日期检查', () => {
+    it('每日论文记录缺少 publishedAt 时被跳过', () => {
         const paper = convertDailyPaper({
             paper: {
                 id: '2604.10000',
@@ -153,7 +153,7 @@ describe('HuggingFace 日期守卫', () => {
         assert.strictEqual(paper, null);
     });
 
-    it('缺少 publishedAt 的 papers API 记录会被跳过', () => {
+    it('论文 API 记录缺少 publishedAt 时被跳过', () => {
         const paper = convertPaper({
             id: '2604.10001',
             title: 'No date',

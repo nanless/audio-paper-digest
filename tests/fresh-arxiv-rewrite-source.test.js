@@ -122,10 +122,10 @@ test('带版本的 PDF 校验拒绝跨论文 URL、查询串或片段夹带，�
         currentPdfUnavailable: true, currentPdfStatus: 404 });
     await assert.rejects(source.captureFreshArxivRewriteSource({ ...common, generation: 1 }, {
         fetchText: text, fetchPdf: async () => candidate('https://arxiv.org/pdf/2605.03462v1.pdf')
-    }), /requested canonical\/version|belongs to another/);
+    }), /PDF URL 的路径必须对应本次请求的 arXiv ID 和版本/);
     await assert.rejects(source.captureFreshArxivRewriteSource({ ...common, generation: 2 }, {
         fetchText: text, fetchPdf: async () => candidate(`https://arxiv.org/pdf/${id}v1.pdf?download=1`)
-    }), /query or fragment/);
+    }), /URL 不得包含查询参数或片段标识/);
     await assert.rejects(source.captureFreshArxivRewriteSource({ ...common, generation: 3 }, {
         fetchText: text, fetchPdf: async () => ({ ...candidate(`https://arxiv.org/pdf/${id}v1.pdf`),
             currentPdfUnavailable: false, currentPdfStatus: null })
@@ -469,5 +469,67 @@ test('真实 HTML 来源捕获与恢复保留同版本、无版本地址和无�
         assert.equal(recovered.manifest.text.sourceId, input.sourceId);
         assert.equal(recovered.manifest.text.url, input.url);
         assert.equal(recovered.sourceManifestSha256, captured.sourceManifestSha256);
+    }
+});
+
+
+test('四个来源文件变为 FIFO 时，公开读取及时拒绝并保留其余来源文件', {
+    skip: process.platform === 'win32' ? '该检查需要 POSIX FIFO' : false
+}, async t => {
+    const f = fixture(t);
+    const id = '2403.14817';
+    const options = { rootDir: f.sourceRoot, arxivId: id, generation: 1,
+        now: '2026-09-07T00:00:00.000Z' };
+    const captured = await source.captureFreshArxivRewriteSource(options, {
+        fetchText: async () => textResponse(id),
+        fetchPdf: async () => pdfResponse(id)
+    });
+    const originalResult = source.readFreshArxivRewriteSource(options);
+    const originalBytes = Object.fromEntries(source.SOURCE_FILES.map(name =>
+        [name, fs.readFileSync(path.join(captured.directory, name))]));
+    const { execFileSync, spawnSync } = require('node:child_process');
+    const modulePath = require.resolve('../scripts/lib/fresh-arxiv-rewrite-source.js');
+    for (const name of source.SOURCE_FILES) {
+        await t.test(name, () => {
+            const filename = path.join(captured.directory, name);
+            const originalMode = fs.statSync(filename).mode & 0o777;
+            fs.unlinkSync(filename);
+            execFileSync('mkfifo', ['-m', '600', filename]);
+            const fifo = fs.lstatSync(filename);
+            try {
+                const childScript = `
+                    const source = require(${JSON.stringify(modulePath)});
+                    try {
+                        source.readFreshArxivRewriteSource(${JSON.stringify(options)});
+                        process.exitCode = 3;
+                    } catch (error) {
+                        process.stdout.write(JSON.stringify({ code: error.code,
+                            retryable: error.retryable, message: error.message }));
+                    }
+                `;
+                const child = spawnSync(process.execPath, ['-e', childScript], {
+                    encoding: 'utf8', timeout: 1500, killSignal: 'SIGKILL'
+                });
+                assert.equal(child.error, undefined, 'FIFO 必须在会阻塞的文件读取之前被拒绝');
+                assert.equal(child.signal, null);
+                assert.equal(child.status, 0, child.stderr);
+                const error = JSON.parse(child.stdout);
+                assert.equal(error.code, 'FRESH_ARXIV_REWRITE_SOURCE_INTEGRITY');
+                assert.equal(error.retryable, false);
+                assert.match(error.message, /不安全：必须是只有一个硬链接且大小不超过允许上限的普通文件/);
+                const after = fs.lstatSync(filename);
+                assert.equal(after.isFIFO(), true);
+                assert.equal(after.ino, fifo.ino);
+                assert.equal(after.dev, fifo.dev);
+                assert.equal(after.mode, fifo.mode);
+                for (const peer of source.SOURCE_FILES.filter(value => value !== name)) {
+                    assert.deepEqual(fs.readFileSync(path.join(captured.directory, peer)), originalBytes[peer]);
+                }
+            } finally {
+                fs.unlinkSync(filename);
+                fs.writeFileSync(filename, originalBytes[name], { mode: originalMode });
+            }
+            assert.deepEqual(source.readFreshArxivRewriteSource(options), originalResult);
+        });
     }
 });

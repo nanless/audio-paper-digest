@@ -1,10 +1,10 @@
 'use strict';
 
-// 专放历史 arXiv 重写所需来源的小型存储，只存来源本身。
+// 保存日更和历史重写所需的 arXiv 官方来源。
 // 它和 data/current、旧的新来源缓存都没有关系：
 // 每个新 generation 都重新请求一份官方正文和一份原始 PDF。
 // 长期保存的只有 source.txt、source.pdf、source-runtime.json、
-// source-manifest.json 这四个能原样重放的文件。图片字节只在一次回调里有效，
+// source-manifest.json 这四个文件供后续读取原始内容。图片字节只在一次回调里有效，
 // 放在系统临时目录下，不管成功失败都会删掉。
 
 const crypto = require('node:crypto');
@@ -31,7 +31,7 @@ const MAX_PDF_BYTES = 512 * 1024 * 1024;
 
 class FreshArxivRewriteSourceError extends Error {
     constructor(message) {
-        super(`Fresh arXiv rewrite source rejected: ${message}`);
+        super(`arXiv 来源检查未通过：${message}`);
         this.name = 'FreshArxivRewriteSourceError';
         this.code = 'FRESH_ARXIV_REWRITE_SOURCE_INTEGRITY';
         this.retryable = false;
@@ -53,21 +53,21 @@ function canonicalJson(value) { return `${JSON.stringify(canonical(value), null,
 
 function normalizedArxivId(value) {
     const id = String(value || '').trim().replace(/v\d+$/i, '');
-    if (!ARXIV_ID_RE.test(id)) fail('arxivId must be a normalized modern versionless ID');
+    if (!ARXIV_ID_RE.test(id)) fail('arxivId 去掉版本号后必须是点号前四位、点号后四位或五位数字的 arXiv ID');
     return id;
 }
 
-function normalizedSourceId(value, arxivId, label = 'arXiv source ID') {
+function normalizedSourceId(value, arxivId, label = 'arXiv 来源 ID') {
     const sourceId = String(value || '').trim(); const canonicalId = normalizedArxivId(arxivId);
     if (!ARXIV_SOURCE_ID_RE.test(sourceId) || sourceId.replace(/v\d+$/i, '') !== canonicalId) {
-        fail(`${label} belongs to another paper or is malformed`);
+        fail(`${label} 格式无效或指向另一篇论文`);
     }
     return sourceId;
 }
 
 function normalizedGeneration(value) {
     if (!Number.isSafeInteger(value) || value < 1 || value > 999999999) {
-        fail('generation must be a positive safe integer');
+        fail('generation 必须是 1 至 999999999 之间的安全整数');
     }
     return value;
 }
@@ -78,17 +78,17 @@ function generationName(generation) {
 
 function asIso(value, label) {
     const date = new Date(value);
-    if (!Number.isFinite(date.getTime()) || date.toISOString() !== value) fail(`${label} must be an ISO timestamp`);
+    if (!Number.isFinite(date.getTime()) || date.toISOString() !== value) fail(`${label} 必须是与 Date.toISOString() 输出完全相同的时间字符串`);
     return value;
 }
 
 function nowIso(now) {
     const value = typeof now === 'function' ? now() : now === undefined ? new Date().toISOString() : now;
-    return asIso(value, 'capture time');
+    return asIso(value, '来源抓取时间');
 }
 
-function safeDirectory(directory, create = false, label = 'directory') {
-    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} must be an absolute path`);
+function safeDirectory(directory, create = false, label = '目录') {
+    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} 必须是绝对路径`);
     const absolute = path.resolve(directory);
     let cursor = path.parse(absolute).root;
     for (const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
@@ -99,7 +99,7 @@ function safeDirectory(directory, create = false, label = 'directory') {
             if (error.code !== 'ENOENT' || !create) throw error;
             fs.mkdirSync(cursor, { mode: 0o700 }); stat = fs.lstatSync(cursor);
         }
-        if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`unsafe ${label}: ${cursor}`);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} 不安全：路径中的某一项不是目录或是符号链接：${cursor}`);
     }
     return absolute;
 }
@@ -113,12 +113,12 @@ function sourceDirectory(rootDir, arxivId, generation) {
 function readPrivateFile(filename, maxBytes, label) {
     let fd;
     try {
-        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.nlink !== 1 || stat.size < 0 || stat.size > maxBytes) {
-            fail(`unsafe ${label}`);
+            fail(`${label} 不安全：必须是只有一个硬链接且大小不超过允许上限的普通文件`);
         }
-        if (process.platform !== 'win32' && (stat.mode & 0o777) !== 0o600) fail(`${label} permissions must be 0600`);
+        if (process.platform !== 'win32' && (stat.mode & 0o777) !== 0o600) fail(`${label} 的文件权限必须是 0600`);
         return fs.readFileSync(fd);
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
@@ -154,7 +154,7 @@ function officialUrl(url, kind, arxivId, sourceId = null) {
         : `https://arxiv.org/html/${boundSourceId}`;
     const parsed = new URL(requested || fallback);
     if (parsed.protocol !== 'https:' || parsed.hostname !== 'arxiv.org' || parsed.port || parsed.username || parsed.password) {
-        fail(`${kind} URL is not a direct official arXiv HTTPS URL`);
+        fail(`${kind} URL 必须使用官方 arxiv.org 的 HTTPS 地址，且不得带端口、用户名或密码`);
     }
     const pathname = decodeURIComponent(parsed.pathname);
     if (kind === 'pdf') {
@@ -162,17 +162,17 @@ function officialUrl(url, kind, arxivId, sourceId = null) {
         // 请求可能被重定向到 `/pdf/<id>vN`。
         const match = pathname.match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)(?:\.pdf)?$/);
         if (!match || match[1].replace(/v\d+$/i, '') !== id || match[1] !== boundSourceId) {
-            fail('PDF URL does not bind the requested canonical/version arXiv ID');
+            fail('PDF URL 的路径必须对应本次请求的 arXiv ID 和版本');
         }
     } else {
         const match = pathname.match(/^\/html\/(\d{4}\.\d{4,5})(v\d+)?\/?$/);
-        if (!match || match[1] !== id) fail('text URL does not bind the canonical arXiv ID');
+        if (!match || match[1] !== id) fail('正文 URL 的路径必须对应本次请求的 arXiv ID');
         // 无版本地址可能跳转到明确版本；只有双方都声明版本时才要求完全一致。
         if (match[2] && boundSourceId !== id && `${match[1]}${match[2]}` !== boundSourceId) {
             fail('HTML 来源地址的版本与来源 ID 不一致');
         }
     }
-    if (parsed.search || parsed.hash) fail(`${kind} URL must not include a query or fragment`);
+    if (parsed.search || parsed.hash) fail(`${kind} URL 不得包含查询参数或片段标识`);
     return parsed.toString();
 }
 
@@ -429,11 +429,11 @@ function validateManifest(manifest, arxivId, generation) {
 }
 
 function readFreshArxivRewriteSource({ rootDir, arxivId, generation } = {}) {
-    const root = safeDirectory(rootDir, false, 'source root');
+    const root = safeDirectory(rootDir, false, '来源根目录');
     const id = normalizedArxivId(arxivId); const normalized = normalizedGeneration(generation);
     const directory = sourceDirectory(root, id, normalized);
-    safeDirectory(path.join(root, id), false, 'paper source directory');
-    safeDirectory(directory, false, 'generation source directory');
+    safeDirectory(path.join(root, id), false, '论文来源目录');
+    safeDirectory(directory, false, '本次来源获取序号对应的目录');
     const entries = fs.readdirSync(directory).sort();
     if (entries.join('\0') !== SOURCE_FILES.slice().sort().join('\0')) fail('generation source directory contains unexpected files');
     const manifestBytes = readPrivateFile(path.join(directory, MANIFEST_NAME), 1024 * 1024, 'source manifest');
@@ -539,14 +539,14 @@ function removeOwnedTemporaryDirectory(directory) {
 }
 
 async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
-    const root = safeDirectory(options.rootDir || require('../config.js').FILES.freshArxivFetchedSourcesDir, true, 'source root');
+    const root = safeDirectory(options.rootDir || require('../config.js').FILES.freshArxivFetchedSourcesDir, true, '来源根目录');
     const id = normalizedArxivId(options.arxivId); const generation = normalizedGeneration(options.generation);
     const target = sourceDirectory(root, id, generation);
     if (fs.existsSync(target)) {
         const stored = readFreshArxivRewriteSource({ rootDir: root, arxivId: id, generation });
         return { ...stored, status: 'recovered', fetched: false };
     }
-    const paperDirectory = path.join(root, id); safeDirectory(paperDirectory, true, 'paper source directory');
+    const paperDirectory = path.join(root, id); safeDirectory(paperDirectory, true, '论文来源目录');
     const capturedAt = nowIso(options.now);
     const fetchText = overrides.fetchText || defaultFetchText;
     const fetchPdf = overrides.fetchPdf || defaultFetchPdf;

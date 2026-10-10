@@ -80,13 +80,13 @@ test('哈希前提断言：键或数字违反跨语言前提就抛错，正常�
     assert.equal(checks.normalApiBinding, 'no-throw', '正常的 finalScore 与计数不能被挡住');
 });
 
-test('哈希前提断言的调用点：会议资源身份与公式证据都走带守卫的包装', () => {
+test('源码中的资源身份和公式记录校验使用带输入检查的 SHA 计算函数', () => {
     const renderSource = fs.readFileSync(
         path.join(PROJECT, 'scripts/conference-page-render.py'), 'utf8');
     const publishSource = fs.readFileSync(
         path.join(PROJECT, 'scripts/publish-to-blog.py'), 'utf8');
     assert.doesNotMatch(renderSource, /stable_sha\(resource_identity\)/,
-        '资源身份必须走 reader_record_sha，不能退回无守卫的 stable_sha');
+        '资源身份必须调用 reader_record_sha 检查输入，不能直接调用 stable_sha');
     assert.match(renderSource,
         /evidence\.get\('evidenceSha256'\) != reader_record_sha\(body, '会议公式证据'\)/);
     assert.match(publishSource,

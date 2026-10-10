@@ -86,7 +86,7 @@ test('直接命令推断和包入口覆盖 daily/history 边界', () => {
     }
 });
 
-test('daily 与 history 的直接入口守卫拒绝相反的工作区角色', () => {
+test('daily 和 history 的直接入口拒绝在另一角色的工作区运行', () => {
     const dailyRoot = root();
     const historyRoot = root();
     role.writeWorkspaceRole('daily', { root: dailyRoot });
@@ -184,7 +184,7 @@ test('new-conference 别名只认显式的包装模式，且仅限 daily', () =>
     }
 });
 
-test('conference:new:process 包装器与运行时守卫在 daily 上一致，又不削弱旧版 history 隔离', () => {
+test('conference:new:process 命令与运行前检查都允许 daily，旧入口仍要求 history', () => {
     const scripts = require('../package.json').scripts;
     assert.equal(scripts['conference:new:process'],
         'AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE=1 node scripts/workspace-role.js exec daily -- node scripts/conference-process.js');

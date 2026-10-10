@@ -662,14 +662,14 @@ test('面对同一份固定数据，Node 与 Python 的词表升级检查结论�
         path.join(PROJECT_ROOT, 'tests/python/registry_upgrade_cross_end.py')
     ], { cwd: PROJECT_ROOT, encoding: 'utf8', timeout: 180000,
         input: JSON.stringify(classificationInputs) });
-    assert.equal(run.status, 0, `Python harness 失败:\n${run.stderr}`);
+    assert.equal(run.status, 0, `Python 测试程序运行失败:\n${run.stderr}`);
     const lines = String(run.stdout).split(/\r?\n/);
     const resultLines = lines.filter(text => text.startsWith('CROSS_END_RESULT:'));
     const reasonLines = lines.filter(text => text.startsWith('CROSS_END_REASONS:'));
     assert.equal(resultLines.length, 1, run.stdout);
     assert.equal(reasonLines.length, 1, run.stdout);
     const line = resultLines[0];
-    assert.ok(line, `Python harness 缺少结果行:\n${run.stdout}`);
+    assert.ok(line, `Python 测试程序没有输出结果行:\n${run.stdout}`);
     const pythonResults = JSON.parse(line.slice('CROSS_END_RESULT:'.length));
     assert.equal(pythonResults.length, fixture.cases.length);
     const pythonClassifications = JSON.parse(reasonLines[0].slice('CROSS_END_REASONS:'.length));
@@ -705,7 +705,7 @@ test('面对同一份固定数据，Node 与 Python 的词表升级检查结论�
         const pythonResult = pythonResults.find(entry => entry.name === item.name);
         assert.ok(pythonResult, `Python 侧缺少用例 ${item.name}`);
 
-        assert.deepEqual(nodeViewOf(nodeResult), expected, `Node 输出偏离 fixture: ${item.name}`);
+        assert.deepEqual(nodeViewOf(nodeResult), expected, `Node 输出与固定测试数据中的预期不一致: ${item.name}`);
         assert.deepEqual({
             ok: pythonResult.ok,
             changeLevel: pythonResult.changeLevel,
@@ -713,7 +713,7 @@ test('面对同一份固定数据，Node 与 Python 的词表升级检查结论�
             reasonCodes: pythonResult.reasonCodes,
             counts: pythonResult.counts,
             error: normalizeError(pythonResult.error)
-        }, expected, `Python 输出偏离 fixture: ${item.name}`);
+        }, expected, `Python 输出与固定测试数据中的预期不一致: ${item.name}`);
     }
 });
 

@@ -738,7 +738,7 @@ describe('buildRequestBody', () => {
         }
     });
 
-    it('服务端推理信封不得进入出站请求（reasoning encrypted_content 防 400）', () => {
+    it('请求正文移除服务端返回的内部推理记录，保留用户文字和图片', () => {
         const reasoningItem = {
             type: 'reasoning',
             id: 'rs_abc',

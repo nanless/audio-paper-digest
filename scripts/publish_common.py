@@ -85,7 +85,7 @@ class PublishDataValidationError(ValueError):
 
 
 def run_bounded_llm_tasks(items, worker, max_workers, on_result=None):
-    """逐个补派模型任务；运行级故障后只等在途任务保存，不再启动新任务。"""
+    """逐个补派模型任务；运行级故障后，等待已开始的任务结束及结果处理，不再启动新任务。"""
     if not isinstance(max_workers, int) or max_workers < 1:
         raise ValueError('模型任务并发数必须是正整数')
     items = list(items)

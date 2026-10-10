@@ -1187,7 +1187,7 @@ test('多跳的旧版迁移沿凭证父级一路追到绑定 UUID 的起点', as
     assert.throws(() => recovery.sourceImplementation(state, directory, processApi), /missing or ambiguous/);
 });
 
-test('文本或产物一变，就在调用模型或改动迁移之前拒绝复用完整证明', async t => {
+test('来源核验记录中的正文或结构化记录 SHA 变化时，重跑和迁移都拒绝复用完成记录', async t => {
     const migration = require('../scripts/migrate-conference-process.js');
     const f = fixture(t); const options = { apply: true, concurrency: 1 };
     const first = await processApi.runConferenceProcess(options, { ...f.deps,
@@ -1197,8 +1197,8 @@ test('文本或产物一变，就在调用模型或改动迁移之前拒绝复�
     for (const field of ['textSha256', 'artifactsSha256']) {
         const deps = { ...f.deps, prepareShared: async (...args) => {
             const shared = await f.deps.prepareShared(...args); shared.sealed[0].proof[field] = H(`changed-${field}`); return shared;
-        }, processPaper: () => assert.fail('must not call model'),
-        postprocess: { stagePaper: () => assert.fail('must not restage inconsistent complete proof') } };
+        }, processPaper: () => assert.fail('来源核验记录不一致时不能处理论文'),
+        postprocess: { stagePaper: () => assert.fail('来源核验记录不一致时不能重新暂存论文') } };
         await assert.rejects(processApi.runConferenceProcess(options, deps),
             error => error.code === 'CONFERENCE_SOURCE_UPGRADE_REBIND_REQUIRED');
         assert.deepEqual(fs.readFileSync(stateFile), original);

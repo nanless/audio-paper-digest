@@ -211,7 +211,7 @@ test('状态区分汇总对应记录尚未生成、无法读取和内容校验�
     const damaged = blockersFor();
     assert.equal(damaged.length, 1); assert.equal(damaged[0].code, 'aggregate-projection-corrupt');
     assert.equal(damaged[0].filename, corrupt); assert.match(damaged[0].error, /direct aggregate projection/);
-    // 别的计划的投影不归本计划，不能算成损坏。
+    // 另一计划的汇总对应记录不用于本计划，因此本计划仍记为缺少记录。
     fs.rmSync(corrupt);
     fs.writeFileSync(path.join(roots.aggregateProjectionRoot, 'other-plan.json'),
         `${JSON.stringify({ contract: aggregateApi.PROJECTION_CONTRACT, version: aggregateApi.PROJECTION_VERSION,

@@ -62,7 +62,7 @@ describe('env-loader', () => {
                 timeout: 5000
             });
             assert.notStrictEqual(result.status, 0, `${script} 不应在沙箱中启动`);
-            assert.match(`${result.stdout}${result.stderr}`, /必须在沙箱外运行/, `${script} 缺少运行时守卫`);
+            assert.match(`${result.stdout}${result.stderr}`, /必须在沙箱外运行/, `${script} 没有报告必须在沙箱外运行`);
         }
     });
 
@@ -76,11 +76,11 @@ describe('env-loader', () => {
                 timeout: 5000
             });
             assert.notStrictEqual(result.status, 0, `${script} 不应在沙箱中启动`);
-            assert.match(`${result.stdout}${result.stderr}`, /必须在沙箱外运行/, `${script} 缺少运行时守卫`);
+            assert.match(`${result.stdout}${result.stderr}`, /必须在沙箱外运行/, `${script} 没有报告必须在沙箱外运行`);
         }
     });
 
-    it('将共享 scripts 与 Manual scripts 的 JS 主入口识别为受守卫脚本', () => {
+    it('识别共享脚本和 Manual 脚本中的 JS 命令入口，测试文件不属于命令入口', () => {
         assert.strictEqual(isScriptsEntrypoint(path.join(__dirname, '../scripts/full-fetch.js')), true);
         assert.strictEqual(isScriptsEntrypoint(path.join(__dirname, '../manual/scripts/manual-fetch.js')), true);
         assert.strictEqual(isScriptsEntrypoint(path.join(__dirname, 'env-loader.test.js')), false);

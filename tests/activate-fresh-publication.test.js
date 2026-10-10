@@ -146,7 +146,7 @@ describe('blog:activate-fresh', () => {
         assert.deepEqual(calls, [], '被拒绝的运行不该启动 Python');
     });
 
-    it('旧完成记录没有可重放来源正文时不能晋升，也不能启动发布进程', async t => {
+    it('旧完成记录缺少可核对的来源正文时，不能转为可发布状态或启动发布进程', async t => {
         const f = fixture(t, { omitSourceText: true });
         await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
         await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);

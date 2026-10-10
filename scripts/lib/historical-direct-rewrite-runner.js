@@ -1845,9 +1845,8 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             registryCounts: counts, pauseRequested: await pauseRequested(), pauseReason,
             updatedAt: clock() };
         if (dependencies.onProgress) await dependencies.onProgress(event);
-        // 进度消费方可能会创建那个持久化的暂停标记。回调之后再刷新同一个
-        // event 对象，进程内监控和测试才能看到已提交的控制状态；CLI 发出的
-        // 那条信息仍然如实描述发出当时的状态。
+        // onProgress 回调可能保存暂停文件；回调返回后再更新同一个 event 对象。
+        // 进程内监控和测试由此能读取最新暂停状态，已输出的命令行信息仍对应输出时的状态。
         event.pauseRequested = await pauseRequested();
         return result;
     }, pauseRequested);

@@ -4035,7 +4035,7 @@ primary_task_tag: #音视频生成
         assert.match(withSelectionMarker.sections[0].body, /\| 原文 \| 16 kHz \|/);
     });
 
-    it('编辑质量投影会跳过已签名原表但保留表外散文检查', () => {
+    it('检查正文表达时移除选定表格，保留表前表后文字，且不改原文', () => {
         const { omitReaderSelectedTablesForProseCheck } = require('../scripts/deep-analyzer.js');
         const article = [
             '正文仍需检查 16kHz 之外的自然表达。',

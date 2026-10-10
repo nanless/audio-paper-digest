@@ -427,7 +427,7 @@ test('v1 字段读取规则先核 XML 结构，并明确拒绝不能按旧字节
 });
 
 for (const [retryable, peerFails] of [[false, false], [true, false], [false, true]]) {
-    test(`真实出版元数据入口在${retryable ? '单篇暂时失败后继续' : peerFails ? '两个运行故障后保留全部原异常' : '运行故障后停派并等待在途保存'}`, async t => {
+    test(`真实出版元数据入口在${retryable ? '单篇暂时失败后继续' : peerFails ? '两个运行故障后保留全部原异常' : '运行故障后停止新任务并等待已经开始的任务结束'}`, async t => {
         const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'metadata-dispatch-stop-'));
         t.after(() => fs.rmSync(root, { recursive: true, force: true }));
         const ids = ['2601.00001', '2601.00002', '2601.00003', '2601.00004'];
@@ -481,7 +481,7 @@ for (const [retryable, peerFails] of [[false, false], [true, false], [false, tru
             error => { settled = true; return { error }; });
         try {
             await new Promise(resolve => setImmediate(resolve));
-            assert.equal(settled, false, '入口必须等待已在途来源完成封存');
+            assert.equal(settled, false, '入口必须等待已经开始的另一篇来源处理结束');
             if (!retryable) assert.deepEqual(called, ids.slice(0, 2));
         } finally { releasePeer(); }
         const outcome = await completion;
