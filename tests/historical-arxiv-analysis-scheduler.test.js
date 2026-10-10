@@ -408,7 +408,7 @@ test('缺少显式身份哈希的旧检查点，只有旧组 SHA 能证明身份
     delete attacked.items[group.paperId].identityRecordSha256; attacked.items[group.paperId].groupSha256 = '0'.repeat(64);
     fs.writeFileSync(path.join(files.historicalAnalysisSchedulerDir, `${CROSSWALK}.json`), JSON.stringify(attacked));
     await assert.rejects(scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
-        stage: 'analyze', limit: 'pilot', concurrency: 1 }, { files, readCrosswalk: () => state(), recoverRun: () => null }), /binding drifted/);
+        stage: 'analyze', limit: 'pilot', concurrency: 1 }, { files, readCrosswalk: () => state(), recoverRun: () => null }), /调度记录与当前来源名称、来源文件 SHA、论文身份、页面集合或运行 ID 不同/);
 });
 
 test('后出现的重复页面只扩展检查点，不改动已有分析的运行 ID 和日期', async t => {
@@ -554,11 +554,11 @@ test('paperIds 范围先于恢复、限流和实时准备生效，未知 ID 在�
     assert.deepEqual(recovered, [groups[1].runId, groups[1].runId]);
     assert.deepEqual(live, ['2609.03622']);
     await assert.rejects(scheduler.runHistoricalScheduler({ apply: true, crosswalkId: CROSSWALK,
-        stage: 'analyze', queue: 'all', paperIds: ['arxiv:2609.99999'], limit: 'pilot', concurrency: 1 }, deps), /Unknown/);
+        stage: 'analyze', queue: 'all', paperIds: ['arxiv:2609.99999'], limit: 'pilot', concurrency: 1 }, deps), /paperIds 中有论文不在已核验的 arXiv 论文集合内/);
     assert.deepEqual(live, ['2609.03622']);
     await assert.rejects(scheduler.runHistoricalScheduler({ apply: false, crosswalkId: CROSSWALK,
         stage: 'analyze', queue: 'all', paperIds: ['arxiv:2609.03622', 'arxiv:2609.03622'],
-        limit: 'pilot', concurrency: 1 }, deps), /duplicate-free/);
+        limit: 'pilot', concurrency: 1 }, deps), /paperIds 必须是非空数组，元素为不带版本号的 arxiv: ID，且不得重复/);
 });
 
 test('reader-recovery 只重试上游已完成且符合条件的半成品，并幂等地保存耗尽状态', async t => {
@@ -790,3 +790,79 @@ test('来源准备中的运行级错误停止队列并传递原错误', async t 
     assert.equal(f.checkpoint().items[f.groups[0].paperId].status, 'prepare_failed');
     assert.equal(f.checkpoint().items[f.groups[1].paperId].status, 'pending');
 });
+
+for (const companionFailure of [false, true]) {
+    test(`历史调度状态写入失败不会被再次保存掩盖${companionFailure ? '，并保留同伴认证故障' : '，也不派发第三篇'}`, async t => {
+        const f = stopFixture(t);
+        const analyzed = [];
+        let releaseSecond;
+        const secondStarted = new Promise(resolve => { releaseSecond = resolve; });
+        const underlying = Object.assign(new Error('合成磁盘写入错误'), {
+            code: companionFailure ? 'EIO' : 'ENOSPC',
+        });
+        const writeFailure = companionFailure
+            ? new Error('合成保存失败包装', { cause: underlying }) : underlying;
+        const accountFailure = Object.assign(new Error('合成账号停止'), {
+            code: 'LLM_ACCOUNT_AUTH_ERROR', scope: 'run', retryable: false,
+        });
+        const failedPaper = f.groups[companionFailure ? 1 : 0].paperId;
+        let injected = false;
+        let completedSaveCalls = 0;
+        let caught;
+        const originalWrite = fs.writeFileSync;
+        t.after(() => { fs.writeFileSync = originalWrite; });
+        fs.writeFileSync = (target, content, ...options) => {
+            if (typeof target === 'string'
+                && path.dirname(target) === f.files.historicalAnalysisSchedulerDir
+                && path.basename(target).startsWith(`.${CROSSWALK}.json.`)) {
+                const next = JSON.parse(content);
+                if (next.items[failedPaper].status === 'complete') {
+                    completedSaveCalls++;
+                    if (!injected) {
+                        injected = true;
+                        throw writeFailure;
+                    }
+                }
+            }
+            return originalWrite(target, content, ...options);
+        };
+        try {
+            await scheduler.runHistoricalScheduler({ ...f.options, concurrency: 2 }, {
+                ...f.deps,
+                analyzeRun: async ({ runId }) => {
+                    analyzed.push(runId);
+                    if (runId === f.groups[0].runId) {
+                        await secondStarted;
+                        if (companionFailure) throw accountFailure;
+                    } else {
+                        releaseSecond();
+                        await new Promise(resolve => setTimeout(resolve, 20));
+                    }
+                    const complete = { runId, status: 'complete', storageSealed: true,
+                        currentContractComplete: true };
+                    f.runs.set(runId, complete);
+                    return complete;
+                },
+            });
+        } catch (error) {
+            caught = error;
+        } finally {
+            fs.writeFileSync = originalWrite;
+        }
+        assert.equal(injected, true);
+        assert.ok(caught instanceof AggregateError, '状态写入错误必须交回调用方');
+        assert.ok(caught.errors.includes(writeFailure), '必须保留原写入异常对象');
+        assert.equal(writeFailure.cause, companionFailure ? underlying : undefined);
+        assert.equal(underlying.code, companionFailure ? 'EIO' : 'ENOSPC');
+        assert.equal(completedSaveCalls, 1, '失败写入不能通过第二次保存掩盖');
+        assert.deepEqual(analyzed, f.groups.slice(0, 2).map(group => group.runId));
+        if (companionFailure) {
+            assert.equal(caught.cause, accountFailure);
+            assert.ok(caught.errors.includes(accountFailure));
+        }
+        const items = f.checkpoint().items;
+        assert.equal(items[failedPaper].status, 'sources_ready');
+        assert.equal(items[f.groups[2].paperId].status, 'sources_ready');
+        if (!companionFailure) assert.equal(items[f.groups[1].paperId].status, 'complete');
+    });
+}

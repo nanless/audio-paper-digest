@@ -158,7 +158,7 @@ class BlogStageEntryTest(unittest.TestCase):
                 PublishDataValidationError=ValueError,
                 review_and_fix_post=review_and_fix,
             )
-            with self.assertRaisesRegex(ValueError, '当前确定性门禁'):
+            with self.assertRaisesRegex(ValueError, '当前程序检查'):
                 review_blog.validate_reused_pages(
                     module, '2026-07-10', [page], {
                         str(page.resolve()): {'passed': True},

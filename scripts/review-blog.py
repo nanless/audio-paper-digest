@@ -119,7 +119,7 @@ def read_generated_pages(
 def validate_reused_pages(
     module, date_str, paths, prior_results, page_artifacts, authoritative_papers=None,
 ):
-    """对缓存命中的页面重跑当前确定性闸，并按规范视图判断。"""
+    """对已有通过记录的页面重新执行当前程序检查，并与生成清单中的论文记录核对。"""
     normalize_id = getattr(module, 'normalize_publish_arxiv_id', lambda value: str(value or ''))
     authoritative_by_id = {
         normalize_id(paper.get('arxivId')): paper
@@ -151,7 +151,7 @@ def validate_reused_pages(
         )
         if fixed or issues:
             raise module.PublishDataValidationError(
-                f'缓存页面未通过当前确定性门禁，必须重新生成/审查: {path.name}: {issues}'
+                f'缓存页面未通过当前程序检查，必须重新生成并审查: {path.name}: {issues}'
             )
 
 
@@ -175,7 +175,7 @@ def preflight_generated_pages(
                 )
                 issues.extend(f'{page.name}: {issue}' for issue in page_issues)
                 if fixed and not page_issues:
-                    issues.append(f'{page.name}: 最终字节需要确定性修复')
+                    issues.append(f'{page.name}: 页面内容需要按程序检查结果修正')
             except module.PublishDataValidationError as exc:
                 issues.append(f'{page.name}: {exc}')
         try:
@@ -191,7 +191,7 @@ def preflight_generated_pages(
             asset_results = {}
             if attest(date_str, paths, manifest_path, asset_results, preflight_only=True):
                 issues.extend(
-                    f'{Path(path).name}: 论文图片或 sidecar 确定性绑定失败'
+                    f'{Path(path).name}: 论文图片或图片附带记录与页面的对应检查失败'
                     for path, result in asset_results.items() if result.get('passed') is not True
                 )
         except module.PublishDataValidationError as exc:
@@ -278,7 +278,7 @@ def _run_review(module, date_str):
         plan = module.plan_incremental_review(
             date_str, paths, manifest_path, base_head,
         )
-        # 下面的批次预检会为缓存命中和待审查的页面重跑当前的确定性闸，
+        # 下面的批次预检会为缓存命中和待审查的页面重新执行当前程序检查，
         # 一次性收集各页面的独立缺陷。规划阶段可以把旧核验记录里逐文件的
         # 通过结果迁移过来。本次尝试一开始，批次级核验记录本身就作废了。
         module.review_receipt_path(date_str).unlink(missing_ok=True)
@@ -291,8 +291,8 @@ def _run_review(module, date_str):
             )
         else:
             if plan.get('reason'):
-                print(f'ℹ️ 续审证据不可复用，退回全量 review: {plan["reason"]}')
-            print(f'🔍 开始严格全量 review: {len(paper_slugs)} 篇论文')
+                print(f'ℹ️ 续审证据不可复用，改为审查全部页面: {plan["reason"]}')
+            print(f'🔍 开始逐页严格审查: {len(paper_slugs)} 篇论文')
         combined_results = dict(plan['priorResults'])
         manifest_sha256 = module._sha256_file(manifest_path)
         # 在第一次 LLM 调用之前先保存待审页面的记录。这样崩溃或 API 中断后，
@@ -356,7 +356,7 @@ def _run_review(module, date_str):
                 combined_results,
             )
             print(f'💾 已保存失败集续审状态: {failure_path}')
-            raise module.PublishDataValidationError(f'review 仍有 {blocking} 个未解决阻断问题')
+            raise module.PublishDataValidationError(f'审查仍有 {blocking} 个未解决阻断问题')
         if fixed:
             print(f'✅ review 自动修复 {fixed} 个文件')
         try:
@@ -397,13 +397,13 @@ def main():
             with module.blog_publication_lock(date_str):
                 receipt = _run_review(module, date_str)
     except (module.PublishDataValidationError, module.PublishLLMUnavailable) as exc:
-        print(f'\n❌ review 失败，未生成审查凭证: {exc}')
+        print(f'\n❌ 审查失败，未生成本次审查凭证: {exc}')
         sys.exit(1)
     except TimeoutError as exc:
         print(f'\n❌ 博客仓库或同日期事务正在运行: {exc}')
         sys.exit(1)
     print(f'🧾 审查凭证: {receipt}')
-    print(f'\n✅ review 完成；下一步: python3 scripts/push-blog.py --date {date_str}')
+    print(f'\n✅ 审查完成；下一步: python3 scripts/push-blog.py --date {date_str}')
 
 
 if __name__ == '__main__':

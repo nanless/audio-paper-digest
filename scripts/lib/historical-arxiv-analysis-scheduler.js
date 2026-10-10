@@ -10,6 +10,19 @@ const READER_TRANSPORT_COOLDOWN_MS = 5 * 60 * 1000;
 const READER_RECOVERY_POLICY_VERSION = 'reader-recovery-policy-v2';
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
+function isStorageWriteFailure(error) {
+    const codes = new Set(['EIO', 'ENOSPC', 'EDQUOT', 'EROFS', 'EMFILE', 'ENFILE', 'EACCES', 'EPERM']);
+    const seen = new Set();
+    const inspect = value => {
+        if (!value || typeof value !== 'object' || seen.has(value)) return false;
+        seen.add(value);
+        if (codes.has(value.code)) return true;
+        if (value instanceof AggregateError && value.errors.some(inspect)) return true;
+        return ['cause', 'errorDetails', 'error'].some(key => inspect(value[key]));
+    };
+    return inspect(error);
+}
+
 function readerImplementationFingerprint() {
     const root = path.join(__dirname, '..', '..');
     const files = ['prompts/api-reader-article.md', 'prompts/api-reader-repair.md',
@@ -121,8 +134,8 @@ function mergeRecoveryState(existing, observed, now, { attempted = false } = {})
 
 function deterministicRunId(crosswalkId, paperId) {
     const bytes = Buffer.from(sha256(`${crosswalkId}\0${paperId}`).slice(0, 32), 'hex');
-    // 保留由摘要派生出来的稳定身份，但变体位要按 UUID v4 来设，因为现有的 fresh-run
-    // 加载器只接受 v4。
+    // 根据 crosswalk ID 和论文 ID 计算稳定的运行 ID；UUID 版本位和变体位
+    // 按 v4 设置，因为现有运行记录加载器只接受 v4。
     bytes[6] = (bytes[6] & 0x0f) | 0x40; bytes[8] = (bytes[8] & 0x3f) | 0x80;
     const hex = bytes.toString('hex');
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
@@ -132,15 +145,15 @@ function groupsFromCrosswalk(state) {
     const pages = new Map(state.source.papers.map(page => [page.pageKey, page]));
     return state.identityGroups.filter(group => group.paperId.startsWith('arxiv:')).map(group => {
         const arxivId = group.paperId.slice(6);
-        if (!/^\d{4}\.\d{4,5}$/.test(arxivId)) throw new Error(`Malformed verified arXiv identity: ${group.paperId}`);
+        if (!/^\d{4}\.\d{4,5}$/.test(arxivId)) throw new Error(`已核验记录中的 arXiv ID 格式错误：${group.paperId}`);
         const assignments = group.pageKeys.map(key => state.assignments[key]);
         const refs = assignments.map(item => item?.sourceAuthority);
-        if (refs.some(ref => !ref || ref.paperId !== group.paperId)) throw new Error(`${group.paperId} lacks verified authority on every page`);
+        if (refs.some(ref => !ref || ref.paperId !== group.paperId)) throw new Error(`${group.paperId} 对应的页面中有页面缺少该论文的已核验来源记录`);
         const authorityNames = [...new Set(refs.map(ref => ref.authorityName))];
         const authorityShas = [...new Set(refs.map(ref => ref.authorityFileSha256))];
-        if (authorityNames.length !== 1 || authorityShas.length !== 1) throw new Error(`${group.paperId} has multiple authority bundles`);
+        if (authorityNames.length !== 1 || authorityShas.length !== 1) throw new Error(`${group.paperId} 对应页面的来源记录名称和文件 SHA 必须各自只有一个取值`);
         const cohortDates = [...new Set(group.pageKeys.map(key => pages.get(key)?.cohortDate))].sort();
-        if (!cohortDates.length || cohortDates.some(date => !/^\d{4}-\d{2}-\d{2}$/.test(date || ''))) throw new Error(`${group.paperId} has invalid cohort dates`);
+        if (!cohortDates.length || cohortDates.some(date => !/^\d{4}-\d{2}-\d{2}$/.test(date || ''))) throw new Error(`${group.paperId} 缺少页面所属日期，或日期不是 YYYY-MM-DD 格式`);
         return { paperId: group.paperId, arxivId, groupSha256: group.groupSha256,
             identitySha256: group.identitySha256, identityRecordSha256: group.identityRecordSha256,
             pageKeys: group.pageKeys.slice(), cohortDates, analysisDate: cohortDates[0],
@@ -154,11 +167,11 @@ function scopeGroups(groups, requestedPaperIds) {
     if (!Array.isArray(requestedPaperIds) || requestedPaperIds.length === 0
         || requestedPaperIds.some(id => !/^arxiv:\d{4}\.\d{4,5}$/.test(id))
         || new Set(requestedPaperIds).size !== requestedPaperIds.length) {
-        throw new Error('paperIds must be a non-empty duplicate-free list of canonical arxiv: IDs');
+        throw new Error('paperIds 必须是非空数组，元素为不带版本号的 arxiv: ID，且不得重复');
     }
     const requested = new Set(requestedPaperIds); const known = new Set(groups.map(group => group.paperId));
     const unknown = requestedPaperIds.filter(id => !known.has(id));
-    if (unknown.length) throw new Error(`Unknown verified arXiv paperIds: ${unknown.join(', ')}`);
+    if (unknown.length) throw new Error(`paperIds 中有论文不在已核验的 arXiv 论文集合内：${unknown.join(', ')}`);
     return groups.filter(group => requested.has(group.paperId));
 }
 
@@ -178,7 +191,7 @@ function defaultDependencies() {
 
 function schedulerPath(root, crosswalkId) {
     const absolute = path.resolve(root); fs.mkdirSync(absolute, { recursive: true, mode: 0o700 });
-    if (!/^[a-f0-9-]{36}$/i.test(crosswalkId)) throw new Error('Invalid crosswalk ID');
+    if (!/^[a-f0-9-]{36}$/i.test(crosswalkId)) throw new Error('crosswalk ID 必须是由十六进制字符和连字符组成的 36 字符标识');
     return path.join(absolute, `${crosswalkId}.json`);
 }
 
@@ -201,12 +214,12 @@ function syncCheckpoint(filename, crosswalk, groups, deps) {
     return deps.updateLocked(filename, current => {
         const prior = current || { contract: CONTRACT, version: VERSION, crosswalkId: crosswalk.crosswalkId,
             createdAt: deps.now(), items: {} };
-        if (prior.contract !== CONTRACT || prior.version !== VERSION || prior.crosswalkId !== crosswalk.crosswalkId) throw new Error('Scheduler checkpoint identity drifted');
+        if (prior.contract !== CONTRACT || prior.version !== VERSION || prior.crosswalkId !== crosswalk.crosswalkId) throw new Error('调度记录的协议标识、版本或 crosswalk ID 与本次不同');
         const items = { ...prior.items };
         for (const group of groups) {
             const existing = items[group.paperId];
             if (existing && !checkpointBindingMatches(existing, group)) {
-                throw new Error(`${group.paperId} scheduler binding drifted`);
+                throw new Error(`${group.paperId} 的调度记录与当前来源名称、来源文件 SHA、论文身份、页面集合或运行 ID 不同`);
             }
             if (existing && existing.runId !== group.runId) {
                 const oldRunDirectory = deps.files?.freshRewriteRunsDir
@@ -214,7 +227,7 @@ function syncCheckpoint(filename, crosswalk, groups, deps) {
                 const untouchedLegacyId = existing.status === 'pending' && existing.lastError === null
                     && /^[a-f0-9]{8}-[a-f0-9]{4}-5[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(existing.runId)
                     && (!oldRunDirectory || !fs.existsSync(oldRunDirectory));
-                if (!untouchedLegacyId) throw new Error(`${group.paperId} scheduler binding drifted`);
+                if (!untouchedLegacyId) throw new Error(`${group.paperId} 的调度记录与当前来源名称、来源文件 SHA、论文身份、页面集合或运行 ID 不同`);
                 items[group.paperId] = { ...group, status: 'pending', lastError: null };
             } else {
                 items[group.paperId] = existing ? { ...existing, ...group,
@@ -230,7 +243,7 @@ function syncCheckpoint(filename, crosswalk, groups, deps) {
 function updateItem(filename, group, patch, deps) {
     return deps.updateLocked(filename, current => {
         const item = current?.items?.[group.paperId];
-        if (!item || item.runId !== group.runId || item.groupSha256 !== group.groupSha256) throw new Error('Scheduler item changed while active');
+        if (!item || item.runId !== group.runId || item.groupSha256 !== group.groupSha256) throw new Error('保存状态时，调度条目的运行 ID 或分组 SHA 已变化，或条目不存在');
         return { ...current, items: { ...current.items, [group.paperId]: { ...item, ...patch, updatedAt: deps.now() } }, updatedAt: deps.now() };
     });
 }
@@ -239,7 +252,7 @@ function updateItemRecovery(filename, group, { status, lastError, observed, atte
     return deps.updateLocked(filename, current => {
         const item = current?.items?.[group.paperId];
         if (!item || item.runId !== group.runId || item.groupSha256 !== group.groupSha256) {
-            throw new Error('Scheduler item changed while active');
+            throw new Error('保存状态时，调度条目的运行 ID 或分组 SHA 已变化，或条目不存在');
         }
         const now = deps.now();
         const recovery = mergeRecoveryState(item, observed, now, { attempted: attempted === true });
@@ -259,8 +272,8 @@ function selectCandidates(groups, items, { stage, queue, maximum, now }) {
         const reader = ['analysis_partial', 'analyzing'].includes(status) && item.recoveryKind === 'reader';
         const eligibleReader = reader && item.exhausted !== true
             && (!item.nextEligibleAt || new Date(item.nextEligibleAt).getTime() <= nowMs);
-        // 明确过期或缺失的操作锁会被恢复流程归一成 analysis_partial。剩下的
-        // analyzing 要么还在跑，要么无法判断，在哪个队列里都不该入选。
+        // 恢复检查会将锁缺失或可回收的中断运行标为 analysis_partial。
+        // 仍标为 analyzing 的运行可能尚在执行，不应加入任何待处理队列。
         if (status === 'analyzing') return false;
         if (queue === 'new-full') return !['complete', 'analysis_partial', 'analyzing'].includes(status);
         if (queue === 'reader-recovery') return eligibleReader;
@@ -285,7 +298,7 @@ function dryRunState(groups, crosswalkId, files, deps) {
     if (fs.existsSync(filename)) {
         const snapshot = require('./fresh-rewrite-run.js').readRegularJson(filename).value;
         if (snapshot.contract !== CONTRACT || snapshot.version !== VERSION || snapshot.crosswalkId !== crosswalkId) {
-            throw new Error('Scheduler checkpoint identity drifted');
+            throw new Error('调度记录的协议标识、版本或 crosswalk ID 与本次不同');
         }
         stored = snapshot.items || {};
     }
@@ -316,7 +329,7 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
     const queue = options.queue || 'all';
     if (!Number.isSafeInteger(maximum) || maximum < 1 || !['prepare-only', 'analyze'].includes(options.stage)
         || !['new-full', 'reader-recovery', 'all'].includes(queue)
-        || !Number.isInteger(options.concurrency) || options.concurrency < 1 || options.concurrency > 3) throw new Error('Invalid scheduler stage/limit/concurrency');
+        || !Number.isInteger(options.concurrency) || options.concurrency < 1 || options.concurrency > 3) throw new Error('调度参数无效：stage 必须为 prepare-only 或 analyze，queue 必须为 new-full、reader-recovery 或 all，解析后的处理数量必须为正的安全整数，concurrency 必须是 1 至 3 的整数');
     if (!options.apply) {
         const snapshot = dryRunState(scopedGroups, options.crosswalkId, files, deps);
         const selected = selectCandidates(snapshot.effectiveGroups, snapshot.items,
@@ -337,7 +350,7 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
         if (!recovered) {
             if (checkpoint.items[group.paperId].status !== 'pending') {
                 checkpoint = updateItem(filename, group, { status: 'pending',
-                    lastError: 'analysis run missing; checkpoint completion was not trusted' }, deps);
+                    lastError: '找不到对应的分析运行，不能采用调度记录中的已完成状态' }, deps);
             }
             continue;
         }
@@ -350,6 +363,17 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
     const candidates = selectCandidates(effectiveGroups, checkpoint.items,
         { stage: options.stage, queue, maximum, now: deps.now() });
     let runStopError = null;
+    const stateWriteErrors = new Set();
+    const saveState = operation => {
+        try { return operation(); }
+        catch (error) {
+            stateWriteErrors.add(error);
+            if (isStorageWriteFailure(error)) runStopError ||= error;
+            throw error;
+        }
+    };
+    const saveItem = (...args) => saveState(() => updateItem(...args));
+    const saveRecovery = (...args) => saveState(() => updateItemRecovery(...args));
     const observeRunStop = error => {
         if (error?.scope === 'run') runStopError ||= error;
     };
@@ -382,7 +406,7 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
         }
         const status = recovered.status === 'recovered'
             ? 'sources_ready' : recoveredSchedulerStatus(recovered);
-        const updated = updateItem(filename, group, { status, lastError: null }, deps);
+        const updated = saveItem(filename, group, { status, lastError: null }, deps);
         return { recovered, item: updated.items[group.paperId] };
     };
     if (options.stage === 'prepare-only') {
@@ -392,8 +416,9 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
                 const group = candidates[cursor++];
                 try { await prepareGroup(group); }
                 catch (error) {
+                    if (stateWriteErrors.has(error)) throw error;
                     observeRunStop(error);
-                    updateItem(filename, group, { status: 'prepare_failed',
+                    saveItem(filename, group, { status: 'prepare_failed',
                         lastError: String(error.message).slice(0, 2000) }, deps);
                 }
             }
@@ -401,7 +426,7 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
         const settled = await Promise.allSettled(Array.from({
             length: Math.min(options.concurrency, candidates.length)
         }, worker));
-        finishWorkers(settled, '历史来源准备失败，已等待在途任务保存状态');
+        finishWorkers(settled, '历史来源准备失败，已等待已经开始的任务结束并尝试保存状态');
     } else {
         let cursor = 0;
         const worker = async () => {
@@ -410,13 +435,14 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
                 let prepared;
                 try { prepared = await prepareGroup(group); }
                 catch (error) {
+                    if (stateWriteErrors.has(error)) throw error;
                     observeRunStop(error);
-                    updateItem(filename, group, { status: 'prepare_failed',
+                    saveItem(filename, group, { status: 'prepare_failed',
                         lastError: String(error.message).slice(0, 2000) }, deps);
                     continue;
                 }
-                // 候选选定之后，直接运行或更早的调度器可能已经完成或认领了这个 run。
-                // 上面那次持久化检查点更新才是当前的判定边界。
+                // 选出论文后，其他运行可能已经完成分析或正在处理同一运行。
+                // 依据刚保存的状态决定是否继续分析，不沿用选出论文时的状态。
                 if (runStopError || !prepared || prepared.item.status === 'complete' || prepared.item.status === 'analyzing') continue;
                 try {
                     const item = prepared.item;
@@ -426,14 +452,15 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
                         arxivId: group.arxivId, rootDir: files.freshRewriteRunsDir, now: deps.now() });
                     if (result.status === 'complete' && !(sealed?.storageSealed === true
                         && sealed.currentContractComplete === true)) {
-                        throw new Error('analysis reported complete without a current-contract proof');
+                        throw new Error('分析返回已完成，但恢复检查未确认结果已保存且符合当前正式分析要求');
                     }
                     const status = sealed ? recoveredSchedulerStatus(sealed) : 'analysis_partial';
                     const observed = status === 'analysis_partial'
                         ? deps.inspectRunRecovery({ runId: group.runId, rootDir: files.freshRewriteRunsDir, now: deps.now() }) : null;
-                    updateItemRecovery(filename, group,
+                    saveRecovery(filename, group,
                         { status, lastError: null, observed, attempted: true }, deps);
                 } catch (error) {
+                    if (stateWriteErrors.has(error)) throw error;
                     observeRunStop(error);
                     try {
                         const recovered = deps.recoverRun({ runId: group.runId, date: group.analysisDate,
@@ -444,14 +471,15 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
                                 rootDir: files.freshRewriteRunsDir, now: deps.now() }) : null;
                         const status = recoveredStatus === 'complete' ? 'complete'
                             : observed?.recoveryKind === 'reader' ? 'analysis_partial' : 'analysis_failed';
-                        updateItemRecovery(filename, group, { status,
+                        saveRecovery(filename, group, { status,
                             lastError: status === 'complete' ? null : String(error.message).slice(0, 2000),
                             observed, attempted: true }, deps);
                     } catch (recoveryError) {
-                        // 恢复记录本身读不出来时，不能凭空编一个 run 状态。保留原状态，
-                        // 把两个错误都记下来，等同批 worker 全部收敛后再拒绝这次调用。
-                        updateItem(filename, group, { lastError:
-                            `${String(error.message)}; recovery failed: ${String(recoveryError.message)}`.slice(0, 2000) }, deps);
+                        if (stateWriteErrors.has(recoveryError)) throw recoveryError;
+                        // 恢复检查失败时保留原状态，保存原分析错误和恢复错误。
+                        // 等同批已开始的任务结束后，再向调用方报告失败。
+                        saveItem(filename, group, { lastError:
+                            `${String(error.message)}; 恢复检查失败：${String(recoveryError.message)}`.slice(0, 2000) }, deps);
                         throw recoveryError;
                     }
                 }
@@ -460,7 +488,7 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
         const settled = await Promise.allSettled(Array.from({
             length: Math.min(options.concurrency, candidates.length)
         }, worker));
-        finishWorkers(settled, '历史分析失败，已等待在途任务保存状态');
+        finishWorkers(settled, '历史分析失败，已等待已经开始的任务结束并尝试保存状态');
     }
     checkpoint = JSON.parse(fs.readFileSync(filename, 'utf8'));
     const values = Object.values(checkpoint.items);
