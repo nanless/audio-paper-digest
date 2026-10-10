@@ -16,7 +16,7 @@ const Config = require('../config.js');
 const utilsApi = require('../utils.js');
 const {
     LLM_FILTER_PROMPT_PATH,
-    FROZEN_LLM_FILTER_PROMPT_PATH, FROZEN_V2_LLM_FILTER_PROMPT_PATH
+    FROZEN_LLM_FILTER_PROMPT_PATH, FROZEN_V2_LLM_FILTER_PROMPT_PATH, FROZEN_V3_LLM_FILTER_PROMPT_PATH
 } = require('./prompt-text-versions.js');
 const fixedRequestLlmJson = utilsApi.requestLlmJson;
 
@@ -137,7 +137,8 @@ const ACCEPTED_FILTER_POLICY_SHA256 = new Set([LLM_FILTER_POLICY_SHA256, ...LEGA
 // 日更路径用 __TITLE__ 哨兵渲染，算出的值不同，不在这张表里。
 const LEGACY_LLM_FILTER_PROMPT_SHA256_LIST = Object.freeze([
     '4489809518e5df61bd17cc9b5874aa86cf4bfea6a1f76b324498e9f11f467661',
-    '62da57271fbce9b9bf944b060612053e73c97a65c4bd3241ca260b15c33a7bd5'
+    '62da57271fbce9b9bf944b060612053e73c97a65c4bd3241ca260b15c33a7bd5',
+    '7550a71d13052a5a82936b26ddb774c9753ab6be3f737a471188936b56865f9f'
 ]);
 const ACCEPTED_LLM_FILTER_PROMPT_SHA256 = new Set([LLM_FILTER_PROMPT_SHA256, ...LEGACY_LLM_FILTER_PROMPT_SHA256_LIST]);
 const FILTER_CONFIG_SHA256 = stableHash(FILTER_CONFIG_BINDING);
@@ -1419,6 +1420,12 @@ function renderDeclaredDailyFilterPrompt(envelope) {
         }), 'utf8')) === declaredSha) {
         return utilsApi.loadPrompt(FROZEN_V2_LLM_FILTER_PROMPT_PATH, promptFields(envelope));
     }
+    if (declaredSha === '7550a71d13052a5a82936b26ddb774c9753ab6be3f737a471188936b56865f9f'
+        && sha256(Buffer.from(utilsApi.loadPrompt(FROZEN_V3_LLM_FILTER_PROMPT_PATH, {
+            title: '{title}', abstract: '{abstract}', categories: '{categories}'
+        }), 'utf8')) === declaredSha) {
+        return utilsApi.loadPrompt(FROZEN_V3_LLM_FILTER_PROMPT_PATH, promptFields(envelope));
+    }
     fail('新请求的筛选提示词版本没有登记，或冻结正文已变化');
 }
 
@@ -1433,6 +1440,12 @@ function dailyFilterPromptMatches(prompt, envelope) {
             title: '{title}', abstract: '{abstract}', categories: '{categories}'
         }), 'utf8')) === envelope.filter.promptSha256
         && prompt === utilsApi.loadPrompt(FROZEN_V2_LLM_FILTER_PROMPT_PATH, promptFields(envelope))) return true;
+    // v3 原文同样只对应声明的冻结模板，不能与当前正文混用。
+    if (envelope.filter.promptSha256 === '7550a71d13052a5a82936b26ddb774c9753ab6be3f737a471188936b56865f9f'
+        && sha256(Buffer.from(utilsApi.loadPrompt(FROZEN_V3_LLM_FILTER_PROMPT_PATH, {
+            title: '{title}', abstract: '{abstract}', categories: '{categories}'
+        }), 'utf8')) === envelope.filter.promptSha256
+        && prompt === utilsApi.loadPrompt(FROZEN_V3_LLM_FILTER_PROMPT_PATH, promptFields(envelope))) return true;
     const declaredSha = envelope.filter.promptSha256;
     const archiveSha = HISTORICAL_FILTER_PROMPT_ARCHIVES[declaredSha];
     if (!archiveSha) return false;

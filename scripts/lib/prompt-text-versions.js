@@ -134,8 +134,9 @@ const STAGE_BY_FROZEN_V1_PATH = Object.freeze(Object.fromEntries(
 ));
 
 // 筛选提示词不进上面那张阶段表：它的身份是「渲染占位符之后的首块」，算法和阶段指纹
-// 那套不一样。新请求读取 v3；v1 和 v2 原文保留，供已有请求核验。
-const LLM_FILTER_PROMPT_PATH = 'prompts/filter-v3.md';
+// 那套不一样。新请求读取 v4；v1、v2 和 v3 原文保留，供已有请求核验。
+const LLM_FILTER_PROMPT_PATH = 'prompts/filter-v4.md';
+const FROZEN_V3_LLM_FILTER_PROMPT_PATH = 'prompts/filter-v3.md';
 const FROZEN_V2_LLM_FILTER_PROMPT_PATH = 'prompts/filter-v2.md';
 const FROZEN_LLM_FILTER_PROMPT_PATH = 'prompts/filter.md';
 
@@ -211,5 +212,6 @@ module.exports = {
     stageForFrozenPromptPath,
     LLM_FILTER_PROMPT_PATH,
     FROZEN_LLM_FILTER_PROMPT_PATH,
-    FROZEN_V2_LLM_FILTER_PROMPT_PATH
+    FROZEN_V2_LLM_FILTER_PROMPT_PATH,
+    FROZEN_V3_LLM_FILTER_PROMPT_PATH
 };

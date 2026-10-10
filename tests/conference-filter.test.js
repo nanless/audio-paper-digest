@@ -224,7 +224,7 @@ test('核心音频会议的论文交给模型判断；其他会议仍可由关�
 
 test('会议筛选使用日更提示块和日更结构化决定解析器', () => {
     assert.match(filter.LLM_FILTER_PROMPT, /语音、音频或音乐处理/);
-    assert.equal(filter.LLM_FILTER_PROMPT, require('../scripts/utils.js').loadPrompt('prompts/filter-v3.md', {
+    assert.equal(filter.LLM_FILTER_PROMPT, require('../scripts/utils.js').loadPrompt('prompts/filter-v4.md', {
         title: '{title}', abstract: '{abstract}', categories: '{categories}'
     }));
     // v1 提示正文保持不变，旧筛选配置的 promptSha256 必须在允许的历史 SHA 列表中。
