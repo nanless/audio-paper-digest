@@ -241,19 +241,19 @@ test('严格的打包校验会复核每个来源、候选、基数、计数和�
         const report = discovery.buildReport(manifest); mutateReport?.(report);
         assert.throws(() => discovery.validateDiscoveryBundle(manifest, report), pattern);
     };
-    expectRejected(manifest => { manifest.pdfCatalogSha256 = sha('forged'); }, null, /pdfCatalog SHA drifted/);
-    expectRejected(manifest => { manifest.members[0].match.candidates[0].size += 1; }, null, /exactly match/);
-    expectRejected(manifest => { manifest.members[0].match.candidates = []; }, null, /cardinality/);
-    expectRejected(manifest => { manifest.members[0].match.kind = 'normalized'; }, null, /cannot be replayed/);
-    expectRejected(manifest => { manifest.members[0].metadataIndex = 4; }, null, /metadata indexes/);
-    expectRejected(manifest => { manifest.members[0].identity = { type: 'icassp-arnumber', value: '42' }; }, null, /identity type.*adapter/);
-    expectRejected(manifest => { manifest.members[0].numericAlias = '42'; }, null, /only supported by the icml/);
-    expectRejected(manifest => { manifest.memberSetSha256 = sha('forged'); }, null, /member set SHA drifted/);
-    expectRejected(null, report => { report.metadataSnapshotSha256 = sha('other metadata'); }, /source SHA bindings/);
-    expectRejected(null, report => { report.counts.exact = 0; }, /counts drifted/);
-    expectRejected(manifest => { manifest.extra = true; }, null, /unknown or missing fields/);
+    expectRejected(manifest => { manifest.pdfCatalogSha256 = sha('forged'); }, null, /pdfCatalog SHA 与重新计算的结果不同/);
+    expectRejected(manifest => { manifest.members[0].match.candidates[0].size += 1; }, null, /候选路径、SHA 或字节数与 PDF 目录中的记录不同/);
+    expectRejected(manifest => { manifest.members[0].match.candidates = []; }, null, /候选数量不符合匹配类型/);
+    expectRejected(manifest => { manifest.members[0].match.kind = 'normalized'; }, null, /重新计算的 member.*匹配结果与记录不同/);
+    expectRejected(manifest => { manifest.members[0].metadataIndex = 4; }, null, /metadataIndex 必须从 0 开始连续覆盖全部成员/);
+    expectRejected(manifest => { manifest.members[0].identity = { type: 'icassp-arnumber', value: '42' }; }, null, /身份类型不符合适配器/);
+    expectRejected(manifest => { manifest.members[0].numericAlias = '42'; }, null, /只有 icml 适配器允许/);
+    expectRejected(manifest => { manifest.memberSetSha256 = sha('forged'); }, null, /成员集合 SHA 与重新计算的结果不同/);
+    expectRejected(null, report => { report.metadataSnapshotSha256 = sha('other metadata'); }, /元数据快照 SHA 或 PDF 目录 SHA 与候选 manifest 不同/);
+    expectRejected(null, report => { report.counts.exact = 0; }, /数量与根据候选 manifest 重新计算的数量不同/);
+    expectRejected(manifest => { manifest.extra = true; }, null, /含未允许的字段或缺少必填字段/);
     const reportDrift = structuredClone(original.report); reportDrift.candidateManifestSha256 = sha('forged');
-    assert.throws(() => discovery.validateDiscoveryBundle(original.manifest, reportDrift), /canonical candidate manifest bytes/);
+    assert.throws(() => discovery.validateDiscoveryBundle(original.manifest, reportDrift), /candidateManifestSha256 与按固定 JSON 格式生成的候选 manifest SHA 不同/);
 });
 
 test('加载后的结果对象要求成对的正式文件，拒绝伪造，返回副本不影响原记录', t => {
@@ -269,12 +269,12 @@ test('加载后的结果对象要求成对的正式文件，拒绝伪造，返�
     assert.equal(first.candidateManifest.members[0].identity.value, 'AbCdef_12');
     first.candidateManifest.members[0].identity.value = 'Mutated_12';
     assert.equal(discovery.discoveryHandleSnapshot(handle).candidateManifest.members[0].identity.value, 'AbCdef_12');
-    assert.throws(() => discovery.discoveryHandleSnapshot(Object.freeze(Object.create(null))), /authenticated loaded/);
+    assert.throws(() => discovery.discoveryHandleSnapshot(Object.freeze(Object.create(null))), /必须提供由 loadDiscoveryHandle 校验并加载的 discovery 对象/);
     assert.equal(discovery.discoveryHandleSnapshot(discovery.loadDiscoveryHandle(catalogFile, reportFile)).catalogSha256,
         result.report.candidateManifestSha256);
 
     fs.writeFileSync(catalogFile, JSON.stringify(result.manifest), { mode: 0o600 });
-    assert.throws(() => discovery.loadDiscoveryHandle(catalogFile, reportFile), /exact canonical bytes/);
+    assert.throws(() => discovery.loadDiscoveryHandle(catalogFile, reportFile), /字节或 SHA 与报告对应的固定 JSON 格式内容不同/);
 });
 
 test('加载后的结果对象拒绝不配对的报告、重复键和被改动的 PDF 记录', t => {
@@ -284,13 +284,13 @@ test('加载后的结果对象拒绝不配对的报告、重复键和被改动�
     writeCanonical(catalogFile, result.manifest);
     const wrongReport = structuredClone(result.report); wrongReport.candidateManifestSha256 = sha('different catalog');
     writeCanonical(reportFile, wrongReport);
-    assert.throws(() => discovery.loadDiscoveryHandle(catalogFile, reportFile), /canonical candidate manifest bytes/);
+    assert.throws(() => discovery.loadDiscoveryHandle(catalogFile, reportFile), /candidateManifestSha256 与按固定 JSON 格式生成的候选 manifest SHA 不同/);
     fs.writeFileSync(reportFile, '{"contract":"conference-discovery-report-v1","contract":"other"}\n', { mode: 0o600 });
     assert.throws(() => discovery.loadDiscoveryHandle(catalogFile, reportFile), /duplicate JSON key/);
 
     const tampered = JSON.parse(JSON.stringify(result.manifest)); tampered.members[0].match.candidates[0].sha256 = sha('tampered pdf');
     writeCanonical(catalogFile, tampered); writeCanonical(reportFile, discovery.buildReport(tampered));
-    assert.throws(() => discovery.loadDiscoveryHandle(catalogFile, reportFile), /exactly match/);
+    assert.throws(() => discovery.loadDiscoveryHandle(catalogFile, reportFile), /候选路径、SHA 或字节数与 PDF 目录中的记录不同/);
 });
 
 function cleanupFixture(t) {

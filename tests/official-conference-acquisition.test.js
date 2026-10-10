@@ -217,7 +217,7 @@ test('CVF 在没有可见链接时按同名文件推出精确的官方 PDF', () 
         'https://openaccess.thecvf.com/content/CVPR2026/papers/Xiao_Audio_CVPR_2026_paper.pdf');
 });
 
-test('新增来源的索引、记录和 PDF 白名单都是精确的，排除卷目录和前置页产物', () => {
+test('新增来源的索引、记录和 PDF 白名单都是精确的，排除整卷与前置页 PDF', () => {
     assert.deepEqual({ aistats: acquisition.PROVIDERS['aistats-2026'].indexUrl,
         uai: acquisition.PROVIDERS['uai-2026'].indexUrl,
         cvpr: acquisition.PROVIDERS['cvpr-2026'].indexUrl,

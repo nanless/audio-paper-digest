@@ -373,7 +373,7 @@ test('出版元数据批次保留瞬时失败、保存并核验同伴、以部�
     /implementation bug/, '未预期的程序错误仍须抛出，不能当作可继续处理的抓取失败');
 });
 
-test('旧解析器封存的实体和空白按 v1 原字节重放，默认新抓取仍解码', async t => {
+test('旧解析器封存的实体和空白按 v1 原字节读取，默认新抓取仍解码', async t => {
     // 这份测试数据由严格解析改造前的正式解析器生成，不能用当前解析结果重算预期 SHA-256。
     const saved = require('./fixtures/legacy-official-atom-v1.json');
     const officialResult = { metadata: saved.metadata, proof: saved.proof,

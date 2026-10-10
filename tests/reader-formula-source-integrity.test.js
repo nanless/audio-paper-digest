@@ -53,7 +53,7 @@ test('截断公式错误保留可定位的修复路径，不改变封存来源',
 const guessed = String.raw`\displaystyle S_{\text{ctc}}(y,X)=-\frac{\mathrm{CTCLoss}\big(\log p_{\text{ctc}}(X),\,\mathrm{tok}(y)\big)}{\max(|\mathrm{tok}(y)|,\,5)}`;
 const crypto = require('node:crypto');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
-test('原文确实含完整整式时附原始结构化字节，完整原文 SHA 与 TeX 都能重放', () => {
+test('原文含完整公式时附结构化原始内容，核验全文 SHA 和原始 TeX', () => {
     const f = fixture(guessed), result = f.bind();
     assert.equal(sha(result.structuredSourcePayload), f.structuredArtifacts.payloadSha256);
     assert.equal(deep.readerFormulaSourcePayloadValid(result.formulaBindings[0], result.structuredSourcePayload,

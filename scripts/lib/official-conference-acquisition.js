@@ -1575,7 +1575,7 @@ function acquisitionStatus({ providerId, outputRoot } = {}) {
 function rejectInterruptedTemporaryFiles(directories) {
     for (const directory of directories) {
         if (!fs.existsSync(directory)) continue;
-        safeDirectory(directory, '获取产物目录', false);
+        safeDirectory(directory, '抓取文件目录', false);
         for (const entry of fs.readdirSync(directory)) {
             if (/^\..+\.[a-f0-9]{16}\.[1-9]\d*\.[a-f0-9-]{36}\.tmp$/.test(entry)) {
                 fail(unexpectedArtifactMessage(path.join(directory, entry), '未完成写入'));
@@ -1587,7 +1587,7 @@ function rejectInterruptedTemporaryFiles(directories) {
 function unexpectedArtifactMessage(filename, label) {
     const detail = /^\..+\.[a-f0-9]{16}\.[1-9]\d*\.[a-f0-9-]{36}\.tmp$/.test(path.basename(filename))
         ? '；这可能是发布正式文件前中断留下的临时文件。请先核验写入进程已经退出、文件归属及正式凭证，再单独清理；本命令不会自动删除。' : '';
-    return `出现意外的 ${label} 产物：${filename}${detail}`;
+    return `发现不允许的 ${label} 文件或目录：${filename}${detail}`;
 }
 
 function verifyMultiIssueResponseArtifacts(catalog) {
@@ -1599,7 +1599,7 @@ function verifyMultiIssueResponseArtifacts(catalog) {
     }
     const entries = fs.readdirSync(catalog.paths.responses, { withFileTypes: true });
     if (entries.length !== 1 || entries[0].name !== 'issues' || !entries[0].isDirectory() || entries[0].isSymbolicLink()) {
-        fail('AAAI 响应目录含固定期号集合之外的产物');
+        fail('AAAI 响应目录必须只含一个名为 issues 的普通子目录');
     }
     const issueDirectory = path.join(catalog.paths.responses, 'issues');
     for (const entry of fs.readdirSync(issueDirectory, { withFileTypes: true })) {
@@ -1608,7 +1608,7 @@ function verifyMultiIssueResponseArtifacts(catalog) {
         }
         expected.delete(entry.name);
     }
-    if (expected.size) fail('AAAI 响应目录缺少固定期号产物');
+    if (expected.size) fail('AAAI 的 issues 目录缺少固定期号对应的响应文件或凭证文件');
 }
 
 function verifyAcquisition({ providerId, outputRoot } = {}) {

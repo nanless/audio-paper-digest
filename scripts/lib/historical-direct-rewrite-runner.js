@@ -457,7 +457,7 @@ function selectDirectItems(plan, options = {}, registry = null) {
         .map(entry => entry.paperId));
     // 有数量上限的隐式批次在续跑时必须往前走，不能每次都挑同一批已经暂存的
     // 前缀。显式指定的 paper ID 仍然可以重跑，方便操作者主动复核
-    // 已经核验并保存的产物。
+    // 已经核验并暂存的分析与页面。
     const candidates = maxPapers !== null && requested.size === 0
         ? scoped.filter(item => !completed.has(item.paperId)) : scoped;
     const items = maxPapers === null ? candidates : candidates.slice(0, maxPapers);
@@ -1776,9 +1776,9 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                     invokeAnalysis, executionDependencies)
                 : await invokeAnalysis([]);
             pauseForAccountFailure(analysis);
-            // 最终契约在写可持久化分析文件之前检查一次，stageDirectExecution
-            // 内部也检查一次。引擎返回 failed/partial 时只留在 registry 的错误
-            // 字段里；执行记录和暂存输入都不许活过这次尝试。
+            // 保存分析文件前先检查结果是否满足暂存要求，stageDirectExecution
+            // 内部也会检查。引擎返回 failed/partial 时，将失败或可恢复状态写入
+            // registry，不接受为本次成功分析，也不据此生成新的暂存页面。
             assertDirectAnalysisReadyForStaging({ item, sourceDescriptor: descriptor, analysis, sourceDetails });
             const analysisFile = path.join(executionDir, 'analysis.json');
             const analysisFileSha256 = writeAtomic(analysisFile, analysis);
