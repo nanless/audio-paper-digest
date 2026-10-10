@@ -1,0 +1,18 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
+for (const [scenario, title] of [
+    ['unchanged', '相同提示词续筛选只请求未决定论文，保留已付费回答'],
+    ['changed-v1', '旧 v1 日更决定不能改标为新提示词结果，全部模型候选重新判断'],
+    ['changed', '新提示词重新判断全部模型候选，复用完整来源并本地重建关键词决定']
+]) {
+    test(title, () => {
+        const result = spawnSync(process.execPath,
+            [path.join(__dirname, 'fixtures/full-fetch-v5-prompt-resume.cjs'), scenario],
+            { cwd: path.resolve(__dirname, '..'), encoding: 'utf8', timeout: 120000, maxBuffer: 16 * 1024 * 1024 });
+        assert.equal(result.error, undefined, result.stdout + result.stderr);
+        assert.equal(result.status, 0, result.stdout + result.stderr);
+    });
+}

@@ -150,7 +150,7 @@ test('准备阶段保存关键词筛选的排除决定；摘要太短时交给�
     assert.equal(state.completion.excluded, 1);
     const artifact = JSON.parse(fs.readFileSync(path.join(f.filters, ids[0], 'decisions', state.attempts[0].decisionArtifactName)));
     assert.equal(artifact.actor.type, 'keyword');
-    assert.equal(artifact.actor.id, 'speech-audio-music-v5');
+    assert.equal(artifact.actor.id, 'speech-audio-music-v6');
     assert.deepEqual(artifact.result.usage, { requests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 });
     const evaluation = JSON.parse(Buffer.from(artifact.response.data, 'base64').toString());
     const keywordInput = JSON.parse(Buffer.from(artifact.request.data, 'base64').toString());
@@ -224,7 +224,7 @@ test('核心音频会议的论文交给模型判断；其他会议仍可由关�
 
 test('会议筛选使用日更提示块和日更结构化决定解析器', () => {
     assert.match(filter.LLM_FILTER_PROMPT, /语音、音频或音乐处理/);
-    assert.equal(filter.LLM_FILTER_PROMPT, require('../scripts/utils.js').loadPrompt('prompts/filter-v4.md', {
+    assert.equal(filter.LLM_FILTER_PROMPT, require('../scripts/utils.js').loadPrompt('prompts/filter-v5.md', {
         title: '{title}', abstract: '{abstract}', categories: '{categories}'
     }));
     // v1 提示正文保持不变，旧筛选配置的 promptSha256 必须在允许的历史 SHA 列表中。

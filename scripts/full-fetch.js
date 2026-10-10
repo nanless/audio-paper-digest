@@ -44,8 +44,7 @@ const {
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 const { resolveDailyFetchBoundary, validateDailyFetchBoundary, readCommittedPublishedPaperIds } = require('./lib/daily-fetch-boundary.js');
 const {
-    LLM_FILTER_PROMPT_PATH,
-    FROZEN_LLM_FILTER_PROMPT_PATH
+    LLM_FILTER_PROMPT_PATH
 } = require('./lib/prompt-text-versions.js');
 
 const Config = require('./config.js');
@@ -115,13 +114,6 @@ function filterPromptHashForPath(promptPath) {
 
 function getFilterPromptHash() {
     return filterPromptHashForPath(LLM_FILTER_PROMPT_PATH);
-}
-
-// 换提示词版本之前写下的当日筛选产物，prompt 哈希和配置指纹都按 v1 正文算。两条旧值
-// 留在这里，当天中断的续跑就不用把已经判过的论文重新请求一遍。配置指纹里含 prompt 哈希，
-// 所以只认旧 prompt 哈希不够——旧配置指纹也得一起算出来。
-function legacyFilterPromptHash() {
-    return filterPromptHashForPath(FROZEN_LLM_FILTER_PROMPT_PATH);
 }
 
 function filterFingerprintMatches(actual, expected) {
@@ -1527,12 +1519,9 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
     const filterModel = process.env.PAPER_ANALYZER_MODEL || '';
     const filterPromptHash = getFilterPromptHash();
     const filterConfigFingerprint = getFilterConfigFingerprint(filterPromptHash);
-    // 读取旧产物时同时认当前版本和 v1 的值；写入仍然只写当前值。
-    const legacyPromptHash = legacyFilterPromptHash();
-    const acceptedFilterPromptHashes = [filterPromptHash, legacyPromptHash];
-    const acceptedFilterConfigFingerprints = [
-        filterConfigFingerprint, getFilterConfigFingerprint(legacyPromptHash)
-    ];
+    // 日更只复用当前提示词与配置完全匹配的决定；旧提示词须按新规则重新筛选。
+    const acceptedFilterPromptHashes = filterPromptHash;
+    const acceptedFilterConfigFingerprints = filterConfigFingerprint;
 
     const completedFiltered = refilter ? null : loadCompleteFilteredForToday(today, FILTERED_FILE, {
         filterModel,
@@ -2299,7 +2288,6 @@ module.exports = {
     shouldUsePaperForFetchDedup,
     markPaperDigestStatus,
     getFilterPromptHash,
-    legacyFilterPromptHash,
     getFilterConfigFingerprint,
     stableHash,
     stableContentSha256,

@@ -16,7 +16,7 @@ const Config = require('../config.js');
 const utilsApi = require('../utils.js');
 const {
     LLM_FILTER_PROMPT_PATH,
-    FROZEN_LLM_FILTER_PROMPT_PATH, FROZEN_V2_LLM_FILTER_PROMPT_PATH, FROZEN_V3_LLM_FILTER_PROMPT_PATH
+    FROZEN_LLM_FILTER_PROMPT_PATH, FROZEN_V2_LLM_FILTER_PROMPT_PATH, FROZEN_V3_LLM_FILTER_PROMPT_PATH, FROZEN_V4_LLM_FILTER_PROMPT_PATH
 } = require('./prompt-text-versions.js');
 const fixedRequestLlmJson = utilsApi.requestLlmJson;
 
@@ -126,15 +126,25 @@ const LLM_FILTER_PROMPT_SHA256 = sha256(Buffer.from(LLM_FILTER_PROMPT, 'utf8'));
 // 只接受明确列出的旧值，不接受任意策略 SHA。
 // '382af440…' = interspeech-2026 加入 core-audio 标签之前的策略；
 // '11b277a5…' = 最初的 2026 会议标签之前的策略。
-// 只兼容同一运行预算与会议身份下的固定旧 v4 词表策略，不接受任意外来版本。
+// 只兼容同一运行预算与会议身份下的固定旧 v4、v5 词表策略，不接受任意外来版本。
 const LEGACY_KEYWORD_V4_FILTER_POLICY_SHA256 = sha256(Buffer.from(JSON.stringify({
     prompt: 'prompts/filter.md:first-fenced-block',
     parser: DAILY_DECISION_PARSER_VERSION,
     ...FILTER_CONFIG_BINDING,
     keywordPrefilterVersion: 'speech-audio-music-v4'
 }), 'utf8'));
+const LEGACY_KEYWORD_V5_FILTER_POLICY_SHA256 = sha256(Buffer.from(JSON.stringify({
+    prompt: 'prompts/filter.md:first-fenced-block',
+    parser: DAILY_DECISION_PARSER_VERSION,
+    ...FILTER_CONFIG_BINDING,
+    keywordPrefilterVersion: 'speech-audio-music-v5'
+}), 'utf8'));
+const LEGACY_KEYWORD_FILTER_POLICY_SHA256 = new Set([
+    LEGACY_KEYWORD_V4_FILTER_POLICY_SHA256, LEGACY_KEYWORD_V5_FILTER_POLICY_SHA256
+]);
 const LEGACY_FILTER_POLICY_SHA256_LIST = Object.freeze([
     LEGACY_KEYWORD_V4_FILTER_POLICY_SHA256,
+    LEGACY_KEYWORD_V5_FILTER_POLICY_SHA256,
     '382af4406aaf0f4c8e49f22cdacb9ab215c4ab0563903b49930cb3ed8cf9e096',
     '11b277a5fe01498a8b5482365cd86f21bf3ed043900745c2fc7943623c4ed275'
 ]);
@@ -146,7 +156,8 @@ const ACCEPTED_FILTER_POLICY_SHA256 = new Set([LLM_FILTER_POLICY_SHA256, ...LEGA
 const LEGACY_LLM_FILTER_PROMPT_SHA256_LIST = Object.freeze([
     '4489809518e5df61bd17cc9b5874aa86cf4bfea6a1f76b324498e9f11f467661',
     '62da57271fbce9b9bf944b060612053e73c97a65c4bd3241ca260b15c33a7bd5',
-    '7550a71d13052a5a82936b26ddb774c9753ab6be3f737a471188936b56865f9f'
+    '7550a71d13052a5a82936b26ddb774c9753ab6be3f737a471188936b56865f9f',
+    '58d875d9dfef3861c6e343e6186d2b8181753af8fe2fbce3ea41f70976523f29'
 ]);
 const ACCEPTED_LLM_FILTER_PROMPT_SHA256 = new Set([LLM_FILTER_PROMPT_SHA256, ...LEGACY_LLM_FILTER_PROMPT_SHA256_LIST]);
 const FILTER_CONFIG_SHA256 = stableHash(FILTER_CONFIG_BINDING);
@@ -977,7 +988,7 @@ function prepareFilter({ filterRoot, discoveryHandle, evidenceHandle, spec, filt
     }
     nonempty(filterId, 'filterId', UUID_RE);
     if (isLegacySpec(normalizedSpec)
-        || normalizedSpec.filterPolicySha256 === LEGACY_KEYWORD_V4_FILTER_POLICY_SHA256) {
+        || LEGACY_KEYWORD_FILTER_POLICY_SHA256.has(normalizedSpec.filterPolicySha256)) {
         // 旧任务只有通过完整核验后才能继续，不能借旧配置创建新任务。
         const existing = readFilter({ filterRoot, filterId });
         const bound = assertBoundInputsFromCheckedState(existing,
@@ -1015,7 +1026,7 @@ function applyKeywordPrefilter({ filterRoot, filterId, discoveryHandle, evidence
     const lock = acquireLock(directory, 'keyword-prefilter', now);
     try {
         let current = assertFilterState(state);
-        if (current.input.filterPolicySha256 === LEGACY_KEYWORD_V4_FILTER_POLICY_SHA256
+        if (LEGACY_KEYWORD_FILTER_POLICY_SHA256.has(current.input.filterPolicySha256)
             && Object.values(current.decisions).some(decision => decision.status === 'pending')) {
             fail('旧策略仍有未筛候选；保留原任务，请新建使用当前筛选配置的任务，不能用新词表冒充旧策略');
         }
@@ -1439,6 +1450,12 @@ function renderDeclaredDailyFilterPrompt(envelope) {
         }), 'utf8')) === declaredSha) {
         return utilsApi.loadPrompt(FROZEN_V3_LLM_FILTER_PROMPT_PATH, promptFields(envelope));
     }
+    if (declaredSha === '58d875d9dfef3861c6e343e6186d2b8181753af8fe2fbce3ea41f70976523f29'
+        && sha256(Buffer.from(utilsApi.loadPrompt(FROZEN_V4_LLM_FILTER_PROMPT_PATH, {
+            title: '{title}', abstract: '{abstract}', categories: '{categories}'
+        }), 'utf8')) === declaredSha) {
+        return utilsApi.loadPrompt(FROZEN_V4_LLM_FILTER_PROMPT_PATH, promptFields(envelope));
+    }
     fail('新请求的筛选提示词版本没有登记，或冻结正文已变化');
 }
 
@@ -1459,6 +1476,11 @@ function dailyFilterPromptMatches(prompt, envelope) {
             title: '{title}', abstract: '{abstract}', categories: '{categories}'
         }), 'utf8')) === envelope.filter.promptSha256
         && prompt === utilsApi.loadPrompt(FROZEN_V3_LLM_FILTER_PROMPT_PATH, promptFields(envelope))) return true;
+    if (envelope.filter.promptSha256 === '58d875d9dfef3861c6e343e6186d2b8181753af8fe2fbce3ea41f70976523f29'
+        && sha256(Buffer.from(utilsApi.loadPrompt(FROZEN_V4_LLM_FILTER_PROMPT_PATH, {
+            title: '{title}', abstract: '{abstract}', categories: '{categories}'
+        }), 'utf8')) === envelope.filter.promptSha256
+        && prompt === utilsApi.loadPrompt(FROZEN_V4_LLM_FILTER_PROMPT_PATH, promptFields(envelope))) return true;
     const declaredSha = envelope.filter.promptSha256;
     const archiveSha = HISTORICAL_FILTER_PROMPT_ARCHIVES[declaredSha];
     if (!archiveSha) return false;

@@ -7,7 +7,7 @@
  * 不会因此重新抓取来源。
  */
 
-const KEYWORD_PREFILTER_VERSION = 'speech-audio-music-v5';
+const KEYWORD_PREFILTER_VERSION = 'speech-audio-music-v6';
 const MIN_ABSTRACT_CHARS_FOR_REJECTION = 80;
 const CORE_AUDIO_CATEGORIES = new Set(['eess.AS', 'cs.SD']);
 
@@ -196,6 +196,11 @@ function evaluateKeywordPrefilter(paper) {
     const categoryFallback = categories.some(category => CORE_AUDIO_CATEGORIES.has(category));
     const failOpen = abstract.length < MIN_ABSTRACT_CHARS_FOR_REJECTION;
     const uniqueKeywords = [...new Set(matchedKeywords)].slice(0, 24);
+    // 通用方法与声音实证同时出现时，先核官方方法和实验；不是直接认定相关。
+    const generalMethodClaim = /\b(?:theor(?:y|ies|etical)|representations?|algorithms?|sampl(?:er|ers|ing)|decod(?:er|ers|ing)|readouts?|inference|latent|optimization|frameworks?|generators?)\b/i.test(text)
+        || /理论|表示|算法|采样|解码|推理|框架/.test(text);
+    const audioEvidenceHint = matchedGroups.some(group => !['uncertain_modalities', 'affective_paralinguistics'].includes(group));
+    const generalAudioMethodNeedsScope = !categoryFallback && generalMethodClaim && audioEvidenceHint;
     return {
         pass: failOpen || categoryFallback || uniqueKeywords.length > 0,
         reason: failOpen && !categoryFallback && uniqueKeywords.length === 0
@@ -208,8 +213,8 @@ function evaluateKeywordPrefilter(paper) {
         matchedGroups: [...new Set(matchedGroups)],
         matchedKeywords: uniqueKeywords,
         categoryFallback,
-        requiresScopeEvidence: matchedGroups.includes('uncertain_modalities')
-            && !categoryFallback && matchedGroups.every(group => ['uncertain_modalities', 'affective_paralinguistics'].includes(group)),
+        requiresScopeEvidence: generalAudioMethodNeedsScope || (matchedGroups.includes('uncertain_modalities')
+            && !categoryFallback && matchedGroups.every(group => ['uncertain_modalities', 'affective_paralinguistics'].includes(group))),
         failOpen,
         version: KEYWORD_PREFILTER_VERSION
     };

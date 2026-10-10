@@ -190,12 +190,12 @@ test('明确待重筛的占位不冒充正式决定，允许原输入等待模�
     assert.equal(scope.validatedDecisionInputSha256(candidate, pending, { filterModel: 'local-test-model', filterPromptHash: 'current' }), pipeline.buildFilterInputSha256(candidate));
     assert.throws(() => scope.validatedDecisionInputSha256(candidate, { ...pending, related: false }, { filterModel: 'local-test-model', filterPromptHash: 'current' }), error => error.code === 'FILTER_SCOPE_SOURCE_INTEGRITY', '正式否定决定不能冒用待重筛标记');
 });
-test('口语与韵律术语交给模型筛选，不需用论文 ID 放行', () => {
+test('通用表示与口语或韵律线索交给模型，并先核验官方材料', () => {
     for (const term of ['spoken dialogue', 'prosodic features']) {
         const candidate = { ...paper(), title: 'Representation study', abstract: `We evaluate ${term} through controlled experiments and report the resulting model behavior.` };
         const result = pipeline.evaluateKeywordPrefilter(candidate);
         assert.equal(result.pass, true);
-        assert.equal(result.requiresScopeEvidence, false);
+        assert.equal(result.requiresScopeEvidence, true);
     }
 });
 test('API 恢复不复用冒称人工筛选的缺来源决定', async t => {
