@@ -188,7 +188,7 @@ test('出版元数据附带文件拒绝来源清单被改动、来源不对应�
     const otherText = path.join(corrupt.sourceRoot, ID, 'generation-000001', 'source.txt');
     fs.appendFileSync(otherText, 'drift');
     assert.throws(() => sidecars.readPublicationMetadata({ rootDir: f.sidecarRoot,
-        sourceRoot: corrupt.sourceRoot, arxivId: ID, generation: 1 }), /source text drifted/i);
+        sourceRoot: corrupt.sourceRoot, arxivId: ID, generation: 1 }), /来源正文的字节数或 SHA 与清单记录不同/i);
     assert.throws(() => sidecars.readPublicationMetadata({ rootDir: f.sidecarRoot,
         sourceRoot: other.sourceRoot, arxivId: ID, generation: 2 }), /ENOENT|generation/i);
 });

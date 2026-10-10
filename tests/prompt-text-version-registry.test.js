@@ -1,12 +1,10 @@
 // 提示词版本表有两份：JS 的 scripts/lib/prompt-text-versions.js 是源头，
-// scripts/publish-to-blog.py 里有一份手抄副本 _VISUAL_PROMPT_TEXT_FILES，
-// 只用于历史 manifest 取证。两份之间原本没有一致性检查，加版本时漏改一边
-// 不会有任何测试发现——漂移的表现是「JS 认某个版本、Python 不认」，或者
-// 两边指向不同文件，都要等到特定阶段读旧记录时才炸。
+// scripts/publish-to-blog.py 里另有一份版本表 _VISUAL_PROMPT_TEXT_FILES，
+// 用于核对历史发布后视觉任务清单。这里检查两份表，避免新增版本时漏改一边，
+// 导致 JS 接受而 Python 不接受同一版本，或两边读取不同文件。
 //
-// 这里断言的是语义一致（同一阶段的 v1 路径、当前契约名、当前路径相同），
-// 不是两份文件文本相同——后者会因为排版差异而变脆。数据从两个真实源头读：
-// JS 侧直接 require，Python 侧通过解释器读出来，都不在测试里重新手抄。
+// 这里比较同一阶段的 v1 路径、当前格式标识和当前路径，不比较文件的排版。
+// JS 侧直接读取版本表，Python 侧通过解释器读取，不在测试里另写一份预期表。
 //
 // 一致性要查两个方向。第一条按 Python 表里的阶段逐项比对，管的是「Python 有的
 // 阶段两端对不对得上」；它发现不了 Python 漏登记某个阶段。最后一条从 JS 表出发，
@@ -65,16 +63,16 @@ function pythonRegistry() {
 test('Node 与 Python 提示词版本表的旧 v1 路径、当前格式标识和当前路径一致', () => {
     const py = pythonRegistry();
 
-    // 契约名本身先要对上：两边必须叫同一个 v1、同一个 v2。
+    // 先比较版本格式标识：两边的 v1 和 v2 名称必须分别相同。
     assert.equal(py.v1Contract, ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
-        `v1 契约名两端不一致：Python 写 ${py.v1Contract}，JS 写 ${ANALYSIS_PROMPT_TEXT_V1_CONTRACT}`);
+        `v1 格式标识两端不一致：Python 写 ${py.v1Contract}，JS 写 ${ANALYSIS_PROMPT_TEXT_V1_CONTRACT}`);
     assert.equal(py.v2Contract, ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
-        `v2 契约名两端不一致：Python 写 ${py.v2Contract}，JS 写 ${ANALYSIS_PROMPT_TEXT_V2_CONTRACT}`);
+        `v2 格式标识两端不一致：Python 写 ${py.v2Contract}，JS 写 ${ANALYSIS_PROMPT_TEXT_V2_CONTRACT}`);
     assert.equal(fs.realpathSync(py.promptsDir), fs.realpathSync(PROMPTS_DIR),
         `两端读的不是同一个提示词目录：Python 指向 ${py.promptsDir}，仓库里是 ${PROMPTS_DIR}`);
 
     // 比对范围取自 Python 那份表本身，而不是在测试里再列一份阶段清单：
-    // 那份清单也是手抄，Python 新增阶段时同样不会有人记得同步它。
+    // 另写的清单也可能在 Python 新增阶段时漏掉更新。
     const stages = Object.keys(py.files).sort();
     assert.ok(stages.length > 0,
         'Python 的 _VISUAL_PROMPT_TEXT_FILES 是空的，登记表被删空或改了名字');
@@ -94,27 +92,27 @@ test('Node 与 Python 提示词版本表的旧 v1 路径、当前格式标识和
 
         const pythonV1 = entry[py.v1Contract];
         assert.ok(pythonV1,
-            `阶段 ${pythonStage} 的 Python 副本没登记 v1 契约 ${py.v1Contract}，只登记了 ${pythonContracts}`);
+            `阶段 ${pythonStage} 的 Python 副本没登记 v1 格式标识 ${py.v1Contract}，只登记了 ${pythonContracts}`);
         assert.equal(`prompts/${pythonV1}`, jsV1,
             `阶段 ${pythonStage} 的 v1 路径两端不一致：Python 写 prompts/${pythonV1}，JS 写 ${jsV1}`);
 
         const pythonCurrent = entry[jsCurrent.contract];
         assert.ok(pythonCurrent,
-            `阶段 ${pythonStage} 的 Python 副本没登记 JS 当前契约 ${jsCurrent.contract}，只登记了 ${pythonContracts}；`
+            `阶段 ${pythonStage} 的 Python 副本没登记 JS 当前格式标识 ${jsCurrent.contract}，只登记了 ${pythonContracts}；`
             + 'JS 升了新版本而 Python 那份没跟上，新记录会被 Python 拒绝');
         assert.equal(`prompts/${pythonCurrent}`, jsCurrent.path,
-            `阶段 ${pythonStage} 在契约 ${jsCurrent.contract} 下的路径两端不一致：`
+            `阶段 ${pythonStage} 使用格式标识 ${jsCurrent.contract} 时的路径两端不一致：`
             + `Python 写 prompts/${pythonCurrent}，JS 写 ${jsCurrent.path}`);
 
-        // JS 的 promptFilePathForContract 对每个阶段只接受 v1 和当前版本；Python
-        // 副本应当认识同一组契约，多认或少认都会让同一个 manifest 在两端得出不同结论。
+        // 这里检查的发布后视觉阶段，两端应接受同一组格式标识。
+        // 多登记或少登记一个版本，都可能让两端对同一任务清单得出不同结论。
         assert.deepEqual(Object.keys(entry).sort(),
             [py.v1Contract, jsCurrent.contract].sort(),
-            `阶段 ${pythonStage} 登记的契约集合两端不一致：Python 认 ${pythonContracts}，`
+            `阶段 ${pythonStage} 登记的格式标识集合两端不一致：Python 认 ${pythonContracts}，`
             + `JS 只认 ${[ANALYSIS_PROMPT_TEXT_V1_CONTRACT, jsCurrent.contract].sort().join('、')}`);
 
         assert.equal(toKebab(stage), pythonStage,
-            `阶段名映射不对称：JS 键 ${stage} 换回 kebab 是 ${toKebab(stage)}，Python 用的是 ${pythonStage}`);
+            `阶段名转换后不一致：JS 键 ${stage} 换回 kebab 是 ${toKebab(stage)}，Python 用的是 ${pythonStage}`);
     }
 });
 
@@ -132,16 +130,16 @@ test('Python 提示词版本表拒绝未登记的格式标识，不自动改读 
         '    print(type(error).__name__ + ": " + str(error))',
     ].join('\n')).trim();
     assert.notEqual(output, 'NO-THROW',
-        '未登记的契约名没有报错，Python 退化成了 v1');
+        '未登记的格式标识没有报错，Python 改读了 v1');
     assert.match(output, /analysis-prompt-text-v9/,
-        `报错消息里要带上那个没登记的契约名，实际是 ${output}`);
+        `报错消息里要包含未登记的格式标识，实际是 ${output}`);
 });
 
-// JS 表里 Python 明确不读的阶段。Python 的副本只服务发布后视觉 manifest，
+// JS 表里 Python 明确不读的阶段。Python 版本表只用于发布后视觉任务清单，
 // 这些阶段的正文由 deep-analyzer、读者阶段和 manual 在 Node 侧打开，Python
 // 发布器碰不到。清单写死在测试里、不参与比对范围推导，所以它不会跟着 JS 表
 // 自动变长：JS 新增阶段时它既不在 Python 副本里、也不在这张清单里，下面这条
-// 测试就会报错，逼作者决定 Python 要不要跟。
+// 测试就会报错，要求明确 Python 是否需要读取新增阶段。
 const JS_STAGES_PYTHON_DOES_NOT_READ = Object.freeze([
     'primaryAnalysis', 'openSourceScan', 'revision', 'tableRepair', 'methodRepair',
     'coreSummaryRepair', 'structureRepair', 'tagSelection', 'scoringAudit',
@@ -161,7 +159,7 @@ test('JS 表里的每个阶段都在 Python 副本里，或声明了 Python 不�
         + '要么加进本测试的 JS_STAGES_PYTHON_DOES_NOT_READ 并写明 Python 为什么不读');
 
     // 清单和 Python 副本重叠，或者清单里留着 JS 已经不存在的阶段，都说明它过期了，
-    // 会掩盖真实的镜像关系。
+    // 会掩盖两端阶段登记不一致的问题。
     const onBothSides = JS_STAGES_PYTHON_DOES_NOT_READ.filter(stage => pythonStages.has(stage));
     assert.deepEqual(onBothSides, [],
         `这些阶段同时出现在 Python 副本和 JS_STAGES_PYTHON_DOES_NOT_READ 里：${onBothSides.join('、')}`);

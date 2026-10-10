@@ -452,7 +452,7 @@ test('直接汇总展示已核验的历史 arXiv 版本，拒绝版本警告被�
     const filename = path.join(f.root, 'drifted-version-registry.json');
     writeRegistry(filename, rebasedRegistry(registry, entries));
     assert.throws(() => direct.buildDirectAggregates({ inputs: inputs(f, filename), daily: DATE }),
-        /historical-version identity evidence\/SHA drifted/);
+        /历史版本来源记录未选定带版本号的来源，或其字段、固定警告、SHA 与重新计算的记录不同/);
     const removedEntries = registry.entries.map(entry => {
         if (entry.paperId !== 'arxiv:2608.00001') return entry;
         const source = { ...entry.source }; delete source.sourceVersion; return { ...entry, source };

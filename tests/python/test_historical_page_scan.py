@@ -356,7 +356,7 @@ class HistoricalPageScanTest(unittest.TestCase):
         prior = copy.deepcopy(current)
         prior["policy"] = copy.deepcopy(page_scan.LEGACY_SCAN_POLICY_V5)
         prior["ledgerSha256"] = page_scan.stable_hash({key: value for key, value in prior.items() if key != "ledgerSha256"})
-        # fixture 页面链接均完整，v5/v6 页面内容与摘要完全相同；这里只还原旧策略信封。
+        # 这些测试页面的链接均完整，v5/v6 的页面内容与摘要相同；此处按 v5 扫描规则构建清单和凭证。
         raw, receipt, receipt_raw = page_scan.build_receipt(prior, "v5.json")
         output = self.root / "prior-v5"; output.mkdir()
         ledger_path = output / "v5.json"; receipt_path = output / "v5.receipt.json"

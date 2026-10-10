@@ -180,7 +180,7 @@ test('隔离运行执行全新分析回调，并保存自己的正式记录', as
         arxivId: '2609.03622', rootDir: runRoot });
     assert.equal(recovered.storageSealed, true);
     assert.equal(recovered.currentContractComplete, false,
-        'mockComplete is storage-complete but not a current production contract');
+        'mockComplete 只表示测试结果已保存，不表示满足当前正式分析要求');
     assert.equal(recovered.upgradeRequired, true);
     assert.equal(recovered.status, 'analysis_partial');
     canonical.papers[0].analysis = 'tampered after seal';
@@ -189,7 +189,7 @@ test('隔离运行执行全新分析回调，并保存自己的正式记录', as
         arxivId: '2609.03622', rootDir: runRoot }), /结果文件的 SHA 与运行记录不符/);
 });
 
-test('冻结的 2403/2512 v2 存储记录被显式排队做完整契约升级', t => {
+test('冻结的 2403/2512 v2 存储记录恢复后仍需按当前正式分析要求重新分析', t => {
     const fixtures = [
         ['66759276-f030-4e3c-886e-6f5ca858b278', '2403.14817'],
         ['2a95c85b-f493-4d82-9ef1-758d7dfe2705', '2512.14629']
@@ -223,7 +223,7 @@ test('冻结的、无操作锁的 2602 中断运行可以恢复', t => {
     assert.equal(recovered.recoveryKind, 'full');
 });
 
-test('冻结的 2602 中断恢复会阻塞仍在运行的操作属主，只接受已失效的旧属主', t => {
+test('冻结的 2602 中断运行不能绕过仍存活的持锁进程，旧进程已退出时才可恢复', t => {
     const runId = 'd663ab14-abae-4196-a363-a8d295befce5';
     const frozen = frozenHistoricalRun(t, { runId, arxivId: '2602.05847',
         runStatus: 'analyzing', analysisStatus: 'running' });
@@ -252,7 +252,7 @@ test('冻结的 2602 中断恢复会阻塞仍在运行的操作属主，只接�
     assert.equal(recovered.operationLock.reclaimable, true);
     assert.equal(recovered.interruptedRecoverable, true);
     assert.equal(recovered.status, 'analysis_partial');
-    assert.equal(fs.existsSync(lockPath), true, 'read-only recovery must never delete the stale lock');
+    assert.equal(fs.existsSync(lockPath), true, '只读恢复检查不能删除已失效进程留下的锁');
 });
 
 test('历史分析初始化七类文件短写后可用原运行 ID 续跑', async t => {
@@ -286,7 +286,7 @@ test('历史分析初始化七类文件短写后可用原运行 ID 续跑', asyn
     }
 });
 
-test('真实进程在运行信封链接后被杀，准备入口在读取旧信封前恢复', async t => {
+test('真实进程为 run.json 创建硬链接后被杀，准备入口先恢复运行记录再读取它', async t => {
     const root=fixture(t), authorityRoot=path.join(root,'authority'), runRoot=path.join(root,'runs');fs.mkdirSync(authorityRoot);
     const metadata={arxivId:'2609.03622',paper_id:'2609.03622',title:'Official title',abstract:'Official abstract',authors:['Author'],categories:['cs.SD'],source:'arxiv',sources:['arxiv']};
     const metadataProof={contract:history.METADATA_CONTRACT,paperId:'arxiv:2609.03622',sourceName:'fixture.json',fileSha256:'b'.repeat(64),recordSha256:fresh.stableHash(metadata)};

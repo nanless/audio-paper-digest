@@ -1,4 +1,4 @@
-"""守卫：读过项目 .env 的用例不得把结果留在进程环境里。
+"""检查读过项目 .env 的测试不会把配置留在进程环境里。
 
 脚本入口读配置的方式就是把仓库 .env 灌进 os.environ（publish-to-blog.py 的第一
 行、log_setup.setup_script_logging()）。测试在同一个进程里导入这些模块或调它们

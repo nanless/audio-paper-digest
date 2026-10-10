@@ -355,7 +355,7 @@ class BlogStageEntryTest(unittest.TestCase):
         generate = mock.Mock()
         module = SimpleNamespace(main=generate)
         with mock.patch.object(generate_blog, 'load_publish_to_blog', return_value=module):
-            # 直接 import 时那段可执行守卫不会生效，所以要调用同一个入口目标。
+            # 导入模块不会执行 __main__ 分支；此处直接调用入口函数。
             generate_blog.load_publish_to_blog().main()
         generate.assert_called_once_with()
 

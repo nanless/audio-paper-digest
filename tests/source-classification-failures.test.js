@@ -2,7 +2,7 @@
 const test=require('node:test'),assert=require('node:assert/strict');
 const api=require('../scripts/lib/source-classification-failures.js'),scheduler=require('../scripts/lib/source-classification-scheduler.js');
 const typed=(code,category,extra={})=>Object.assign(new Error('Typed engine failure'),{code,category,modelRequestClassified:true,...extra});
-test('只有引擎权威的传输和 HTTP 字段才暂停整个运行，不靠猜错误文本',()=>{
+test('按引擎标记和明确的超时错误码判定运行级失败，不按错误文字猜测',()=>{
  for(const status of [429,500,502,503])assert.equal(api.classifyRunFailure(typed('MODEL_HTTP_TRANSIENT','http_transient',{status})),'model-service-http-unavailable');
  assert.equal(api.classifyRunFailure(typed('ECONNRESET','network')),'model-service-network-unavailable');
  assert.equal(api.classifyRunFailure(Object.assign(new Error(),{code:'MODEL_OVERALL_TIMEOUT'})),'model-service-timeout');
@@ -19,12 +19,12 @@ test('带类型的输出上限和不完整输出只算单篇问题；本地引�
  }
  for(const text of ['source quote mismatch','independent review rejected','missing PDF evidence','unknown taxonomy role'])assert.equal(api.classifyRunFailure(new Error(text)),null);
 });
-test('原因复核能识别带类型的传输失败，同时安全处理循环和无关论文记录',()=>{
+test('检查包装错误的原因时能识别网络错误，并跳过循环引用和无关错误文字',()=>{
  const wrapped=new Error('Wrapper');wrapped.cause=typed('REQUEST_SOCKET_TIMEOUT','network');wrapped.cause.cause=wrapped;
  assert.equal(api.classifyRunFailure(wrapped),'model-service-network-unavailable');
  const cyclic={category:'network',text:'MODEL_HTTP_TRANSIENT'};cyclic.cause=cyclic;assert.equal(api.classifyRunFailure(cyclic),null);
 });
-test('判定函数匹配引擎常见的 HTTP、网络和输出枚举，且不发模型请求',()=>{
+test('判定函数识别引擎生成的 HTTP、网络和输出错误类型，且不发模型请求',()=>{
  const engine=require('../scripts/deep-analyzer.js'),config={key:'test-only',apiKeys:[],maxResponseBytes:1048576};
  for(const status of [429,500,503]) {
   const error=engine.makeModelHttpError(status,'Test transient',config);
@@ -54,7 +54,7 @@ test('明确的存储错误含包装或组合错误会停止运行，论文中�
  assert.equal(api.classifyRunFailure(new Error('论文原文提到ENOSPC和EIO')),null);
 });
 
-test('存储失败保留在途完成结果且不派发后续论文或额外审查', async () => {
+test('存储失败后等待已开始的任务结束并保留其结果，不派发后续论文或额外审查', async () => {
  let release,requests=0;
  const blocked=new Promise(resolve=>release=resolve);
  const run=scheduler.runBounded(['first','in-flight','never'],{concurrency:2,isRunFailure:api.classifyRunFailure,

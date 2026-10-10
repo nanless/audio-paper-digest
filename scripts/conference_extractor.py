@@ -905,8 +905,8 @@ def load_pypdf_backend() -> ExtractionBackend:
     def layout_table_records(page: Any, page_number: int, next_ordinal: int) -> list[dict[str, Any]]:
         """按图注围出的词坐标，恢复没有框线的表格。
 
-        会议论文里相当一部分表格没有框线，``find_tables`` 取不到。这个兜底
-        办法用表头给出的指标列位置，单元格一律保留抽取到的文本，不凭空补值，
+        没有框线的表格可能无法通过 ``find_tables`` 提取；这里按表头识别指标列数量，
+        再按数据词的横向位置排列单元格。保留实际提取的文本，不补造缺少的值，
         也不把结果转成数值矩阵。
         """
         captions = caption_blocks(page, "Table")

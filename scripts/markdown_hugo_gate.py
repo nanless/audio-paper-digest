@@ -351,7 +351,7 @@ def html_to_text(value):
 
 
 def rendered_page_candidates(output_dir, title, source_path=None):
-    """优先按确定性的文章 slug 绑定，标题扫描只作兜底。"""
+    """优先按源文件名查找生成的文章页面；找不到该文件时，再按标题扫描 HTML。"""
     if source_path:
         direct = Path(output_dir) / 'posts' / Path(source_path).stem / 'index.html'
         if direct.is_file():

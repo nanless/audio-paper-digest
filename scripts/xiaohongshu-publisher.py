@@ -404,7 +404,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
         except Exception as e:
             print(f"[xhs] ⚠️ 填写标题失败: {e}")
 
-        # 策略 B: 通过 evaluate 直接操作 DOM（兜底）
+        # 标题未填好时，在页面内查找输入框并设置内容。
         if not title_filled:
             try:
                 fill_result = await page.evaluate(f'''
@@ -479,7 +479,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
         except Exception as e:
             print(f"[xhs] ⚠️ 填写正文失败: {e}")
 
-        # 策略 B: DOM evaluate 兜底
+        # 正文未填好时，在页面内查找编辑区域并设置内容。
         if not body_filled:
             try:
                 fill_result = await page.evaluate(f'''
@@ -590,7 +590,7 @@ async def publish_note(title: str, body: str, images: list[str] | None = None, h
         except Exception as e:
             print(f"[xhs] ⚠️ 点击发布失败: {e}")
 
-        # 兜底：DOM evaluate 找发布按钮
+        # 尚未确认已点击发布时，在页面内查找文字为“发布”、高度大于 20 像素的元素并点击。
         if not publish_clicked:
             try:
                 result = await page.evaluate('''() => {

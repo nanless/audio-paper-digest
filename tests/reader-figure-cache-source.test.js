@@ -22,7 +22,7 @@ function seal(paper) {
     Object.assign(paper.analysisManifest.stages.apiReaderArticle,{articleSha256:paper.apiReaderArticleSha256,
         planSha256:paper.apiReaderPlanSha256,figuresSha256:deep.stableFingerprint(paper.apiReaderFigures)});
 }
-test('普通 Reader 缓存拒绝自洽旧图注，仅原始来源可恢复，不能靠布尔自声明',()=>{
+test('Reader 缓存要求图注对应原始来源，不能只靠重新计算 SHA 或设置已检查标志',()=>{
     const {paper,source,payload}=affected();seal(paper);
     assert.equal(engine.hasValidApiReaderV3Records(paper),false);
     paper.apiReaderPlan.figurePixelsVerified=true;seal(paper);
@@ -42,7 +42,7 @@ test('普通 Reader 缓存拒绝自洽旧图注，仅原始来源可恢复，不
         assert.equal(engine.hasValidApiReaderV3Records(paper),false,key);
     }
 });
-test('固定无像素图中叙述不得复用；去掉旧叙述的正常来源记录不受迁移影响',()=>{
+test('Reader 缓存拒绝指定图片的无像素依据描述；移除该描述后仍可使用来源记录',()=>{
     const {paper}=affected();paper.arxivId='2609.27195';
     const before=paper.apiReaderFigures[0].url,url='https://arxiv.org/html/2609.27195v1/fig4_placement_ratio_readable.svg';
     paper.apiReaderFigures[0].url=url;paper.apiReaderFigures[0].caption='Figure 3: Original caption.';
@@ -52,7 +52,7 @@ test('固定无像素图中叙述不得复用；去掉旧叙述的正常来源�
     assert.equal(engine.hasValidApiReaderV3Records(paper),false);
     paper.apiReaderArticle=clean;seal(paper);assert.equal(engine.hasValidApiReaderV3Records(paper),true);
 });
-test('真实来源确实包含同一图注时，新图像注入自动保留可重放来源，无须伪造迁移标志',()=>{
+test('来源记录包含同一图注时，插图整理结果保留可按 SHA 核对的原始记录',()=>{
     const {paper,source,payload}=affected(),artifacts={...source,payloadSha256:sha(payload)};
     const result=deep.injectApiReaderFigures({article:'### 方法\n\n[[FIGURE_1]]',plan:{sections:[{kind:'component',heading:'方法'}],figurePlacements:[{figureOrdinal:1,targetKind:'component',marker:'[[FIGURE_1]]'}]}},artifacts,'2609.15067');
     assert.equal(sha(result.plan.structuredSourcePayload),artifacts.payloadSha256);

@@ -79,7 +79,7 @@ for (const code of ['LLM_ACCOUNT_AUTH_ERROR', 'LLM_ACCOUNT_POOL_EXHAUSTED',
     });
 }
 
-test('Reader 运行级失败等待在途刷新保存，第三篇不启动，成功文件仍可再次取得锁', async t => {
+test('Reader 运行级失败等待已开始的刷新结束并保存成功结果，第三篇不启动，成功论文仍可再次取得锁', async t => {
     const f = await fixture(t); const seen = [];
     let release; const secondStarted = new Promise(resolve => { release = resolve; });
     const failure = Object.assign(new Error('认证失败'), { code: 'LLM_ACCOUNT_AUTH_ERROR', scope: 'run' });

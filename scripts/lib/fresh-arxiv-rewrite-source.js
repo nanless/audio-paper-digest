@@ -2,7 +2,7 @@
 
 // 保存日更和历史重写所需的 arXiv 官方来源。
 // 它和 data/current、旧的新来源缓存都没有关系：
-// 每个新 generation 都重新请求一份官方正文和一份原始 PDF。
+// 每次增加来源获取序号 generation，都重新请求官方正文和原始 PDF。
 // 长期保存的只有 source.txt、source.pdf、source-runtime.json、
 // source-manifest.json 这四个文件供后续读取原始内容。图片字节只在一次回调里有效，
 // 放在系统临时目录下，不管成功失败都会删掉。
@@ -177,17 +177,17 @@ function officialUrl(url, kind, arxivId, sourceId = null) {
 }
 
 function validateTextResponse(value, arxivId, capturedAt, extractorVersion) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) fail('official text fetch returned no object');
+    if (!value || typeof value !== 'object' || Array.isArray(value)) fail('官方正文抓取结果必须是对象，不能是数组或空值');
     const source = value.source;
-    if (!['html', 'pdf'].includes(source)) fail('official text fetch did not return HTML/PDF text');
+    if (!['html', 'pdf'].includes(source)) fail('官方正文抓取结果的 source 必须是 html 或 pdf');
     const text = String(value.text || '');
     const bytes = Buffer.from(text, 'utf8');
-    if (!text || bytes.length > MAX_TEXT_BYTES) fail('official text response is empty or oversized');
+    if (!text || bytes.length > MAX_TEXT_BYTES) fail('官方正文为空，或 UTF-8 字节数超过 64 MiB');
     const sourceId = String(value.sourceId || arxivId);
-    if (normalizedArxivId(sourceId) !== arxivId) fail('official text sourceId belongs to another paper');
+    if (normalizedArxivId(sourceId) !== arxivId) fail('官方正文的 sourceId 指向另一篇论文');
     const url = officialUrl(value.url || (source === 'html'
         ? `https://arxiv.org/html/${sourceId}` : `https://arxiv.org/pdf/${arxivId}.pdf`), source === 'html' ? 'text' : 'pdf', arxivId, sourceId);
-    const fetchedAt = value.fetchedAt === undefined ? capturedAt : asIso(value.fetchedAt, 'text fetchedAt');
+    const fetchedAt = value.fetchedAt === undefined ? capturedAt : asIso(value.fetchedAt, '正文 fetchedAt');
     const responseSha256 = sha256(bytes);
     return { bytes, source, sourceId, url, fetchedAt, responseSha256,
         extractor: { contract: EXTRACTOR_CONTRACT, version: extractorVersion } };
@@ -195,10 +195,10 @@ function validateTextResponse(value, arxivId, capturedAt, extractorVersion) {
 
 function validatePdfResponse(value, arxivId, capturedAt) {
     const candidate = Buffer.isBuffer(value) || value instanceof Uint8Array ? { bytes: value } : value;
-    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) fail('official PDF fetch returned no object');
+    if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) fail('官方 PDF 抓取结果必须是对象，不能是数组或空值');
     const bytes = Buffer.from(candidate.bytes || candidate.pdf || []);
     if (bytes.length < 5 || bytes.length > MAX_PDF_BYTES || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
-        fail('official PDF response is missing a valid PDF header or exceeds the size limit');
+        fail('官方 PDF 少于五个字节、缺少 %PDF- 文件头，或超过 512 MiB');
     }
     let sourceId = String(candidate.sourceId || '').trim();
     if (!sourceId && candidate.url) {
@@ -206,14 +206,14 @@ function validatePdfResponse(value, arxivId, capturedAt) {
             .match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)(?:\.pdf)?$/)?.[1] || ''; }
         catch { /* 真正的拒绝由下面的 officialUrl 发出 */ }
     }
-    sourceId = normalizedSourceId(sourceId || arxivId, arxivId, 'official PDF source ID');
+    sourceId = normalizedSourceId(sourceId || arxivId, arxivId, '官方 PDF 来源 ID');
     const url = officialUrl(candidate.url, 'pdf', arxivId, sourceId);
     const versioned = sourceId !== arxivId;
     if (versioned && (candidate.currentPdfUnavailable !== true || candidate.currentPdfStatus !== 404)) {
-        fail('versioned PDF requires a sealed current unversioned PDF HTTP 404 observation');
+        fail('使用带版本号的 PDF 前，必须记录当前无版本 PDF 返回 HTTP 404 且不可用');
     }
     if (!versioned && (candidate.currentPdfUnavailable === true || candidate.currentPdfStatus !== undefined
-        && candidate.currentPdfStatus !== null)) fail('current PDF cannot claim historical-version fallback');
+        && candidate.currentPdfStatus !== null)) fail('当前无版本 PDF 不得声明使用历史版本或携带当前 PDF 状态码');
     const fetchedAt = candidate.fetchedAt === undefined ? capturedAt : asIso(candidate.fetchedAt, 'PDF fetchedAt');
     return { bytes, url, sourceId, fetchedAt, responseSha256: sha256(bytes),
         currentPdfUnavailable: versioned, currentPdfStatus: versioned ? 404 : null };
@@ -226,15 +226,15 @@ function historicalVersionIdentity({ arxivId, textSourceId, pdf, warnings = [] }
     const id = normalizedArxivId(arxivId); const selectedSourceId = normalizedSourceId(pdf?.sourceId || id, id);
     if (selectedSourceId === id) return null;
     if (pdf.currentPdfUnavailable !== true || pdf.currentPdfStatus !== 404
-        || normalizedSourceId(textSourceId, id, 'versioned text source ID') !== selectedSourceId) {
-        fail('historical-version text/PDF/current-unavailable identity is incomplete or mixed');
+        || normalizedSourceId(textSourceId, id, '带版本号的正文来源 ID') !== selectedSourceId) {
+        fail('历史版本来源记录必须包含当前 PDF 不可用且返回 HTTP 404，并使正文和 PDF 的来源 ID 相同');
     }
     const body = { contract: HISTORICAL_VERSION_CONTRACT, version: 1, canonicalArxivId: id,
         selectedSourceId, textSourceId: selectedSourceId, selectedPdfUrl: officialUrl(pdf.url, 'pdf', id, selectedSourceId),
         currentPdfAvailable: false, attemptedCurrentPdfStatus: 404,
         attemptedCurrentPdfUrl: officialUrl('', 'pdf', id, id) };
     const warning = historicalVersionWarning(body);
-    if (warnings.length && !warnings.includes(warning)) fail('historical-version current-unavailable warning is missing');
+    if (warnings.length && !warnings.includes(warning)) fail('历史版本来源记录的 warnings 缺少当前 PDF 不可用的固定警告');
     const sealed = { ...body, warning };
     return { ...sealed, identitySha256: sha256(JSON.stringify(canonical(sealed))) };
 }
@@ -242,7 +242,7 @@ function normalizeHistoricalVersionIdentity(value, arxivId) {
     const fields = ['contract', 'version', 'canonicalArxivId', 'selectedSourceId', 'textSourceId', 'selectedPdfUrl',
         'currentPdfAvailable', 'attemptedCurrentPdfStatus', 'attemptedCurrentPdfUrl', 'warning', 'identitySha256'];
     if (!value || typeof value !== 'object' || Array.isArray(value)
-        || Object.keys(value).sort().join('\0') !== fields.sort().join('\0')) fail('historical-version identity schema is invalid');
+        || Object.keys(value).sort().join('\0') !== fields.sort().join('\0')) fail('历史版本来源记录必须是对象，并且字段集合必须符合固定格式');
     const id = normalizedArxivId(arxivId); const selected = normalizedSourceId(value.selectedSourceId, id);
     const body = { contract: HISTORICAL_VERSION_CONTRACT, version: 1, canonicalArxivId: id,
         selectedSourceId: selected, textSourceId: normalizedSourceId(value.textSourceId, id),
@@ -253,7 +253,7 @@ function normalizeHistoricalVersionIdentity(value, arxivId) {
         || value.canonicalArxivId !== id || value.textSourceId !== selected || value.currentPdfAvailable !== false
         || value.attemptedCurrentPdfStatus !== 404 || value.warning !== warning
         || value.identitySha256 !== sha256(JSON.stringify(canonical(sealed)))) {
-        fail('historical-version identity evidence/SHA drifted');
+        fail('历史版本来源记录未选定带版本号的来源，或其字段、固定警告、SHA 与重新计算的记录不同');
     }
     return { ...sealed, identitySha256: value.identitySha256 };
 }
@@ -261,7 +261,7 @@ function normalizeHistoricalVersionIdentity(value, arxivId) {
 // 结构化来源证据只以 JSON 元数据的形式长期保存。
 // 它可以带表格/公式的 DOM 绑定和图片链接，
 // 但不能带图片像素、缓存路径、base64 或临时文件名。
-// 每次直接分析/Reader 都重新把像素取到系统临时目录的回调里。
+// 分析或 Reader 写作需要图片时，重新抓取到系统临时目录供本次回调使用。
 function fallbackArtifacts(text) {
     const body = { version: 1, source: 'fresh_arxiv_text_without_layout',
         tables: [], formulas: [], figures: [], flattenedTextSha256: text.responseSha256 };
@@ -273,18 +273,18 @@ function sourceTitle(value, fallbackText = '') {
         || String(fallbackText || '').replace(/\r\n?/g, '\n').split('\n')
             .map(item => item.replace(/\s+/g, ' ').trim()).find(Boolean) || '';
     // 这是来源元数据，不是模型标题也不是旧页面标题。
-    // 保存前截断长度，防止走形的 HTML 首行把每个运行时来源包撑大。
+    // 保存前限制标题长度，避免异常 HTML 首行占用过多来源元数据空间。
     // 标题缺失就明确写无，不猜。
     return candidate.slice(0, 2000);
 }
-function assertNoPersistentImageBytes(value, label = 'runtime metadata') {
+function assertNoPersistentImageBytes(value, label = '来源元数据') {
     const forbidden = new Set(['cachePath', 'tempPath', 'rawBytes', 'assetBytes', 'base64', 'buffer',
         'assetFilename', 'assetMediaType', 'assetWidth', 'assetHeight', 'dataUri']);
     const inspect = (entry, pathLabel) => {
         if (Array.isArray(entry)) return entry.forEach((item, index) => inspect(item, `${pathLabel}[${index}]`));
         if (!entry || typeof entry !== 'object') return;
         for (const [key, item] of Object.entries(entry)) {
-            if (forbidden.has(key)) fail(`${label} contains persistent image field ${pathLabel}.${key}`);
+            if (forbidden.has(key)) fail(`${label} 不得长期保存图片字节、缓存路径或相关图片文件字段：${pathLabel}.${key}`);
             inspect(item, `${pathLabel}.${key}`);
         }
     };
@@ -316,14 +316,14 @@ function runtimeMetadataFromDetails(details, text, arxivId) {
         htmlAvailability: String(details.htmlAvailability || ''), htmlAttempts: details.htmlAttempts,
         warnings: Array.isArray(details.warnings) ? details.warnings.map(String) : [],
         ...(details.sourceVersion ? { sourceVersion: normalizeHistoricalVersionIdentity(details.sourceVersion, arxivId) } : {}) };
-    // 可重放原 HTML 是本地作者证据。总运行元数据预算不够时不封存它，
+    // 保存的原始 HTML 用于核对作者和机构；不符合保留条件或总元数据超出大小限制时删除这段 HTML，
     // 后续只能明确说明机构不可得，不能用旧解析数组替代原文。
     if (metadata.readerAuthors?.sourceHtml
         && (!require('./reader-author-parser.js').canRetainAuthorSourceHtml(metadata.readerAuthors.sourceHtml)
             || Buffer.byteLength(canonicalJson(metadata), 'utf8') > MAX_TEXT_BYTES)) {
         delete metadata.readerAuthors.sourceHtml;
     }
-    if (Buffer.byteLength(canonicalJson(metadata), 'utf8') > MAX_TEXT_BYTES) fail('runtime metadata exceeds 64 MiB');
+    if (Buffer.byteLength(canonicalJson(metadata), 'utf8') > MAX_TEXT_BYTES) fail('来源元数据的固定格式 JSON 超过 64 MiB');
     return assertNoPersistentImageBytes(metadata);
 }
 function validateRuntimeMetadata(metadata, text, arxivId) {
@@ -340,12 +340,12 @@ function validateRuntimeMetadata(metadata, text, arxivId) {
         || !Number.isSafeInteger(metadata.htmlAttempts) || metadata.htmlAttempts < 0
         || typeof metadata.htmlAvailability !== 'string'
         || (metadata.readerAuthors !== null && (!metadata.readerAuthors || typeof metadata.readerAuthors !== 'object' || Array.isArray(metadata.readerAuthors)))) {
-        fail('runtime metadata is invalid');
+        fail('来源元数据的字段集合、格式版本、论文 ID、正文 SHA 或字段内容不符合要求');
     }
     assertNoPersistentImageBytes(metadata);
     if (metadata.sourceVersion) {
         const identity = normalizeHistoricalVersionIdentity(metadata.sourceVersion, arxivId);
-        if (!metadata.warnings.includes(identity.warning)) fail('runtime historical-version warning is not bound to its evidence');
+        if (!metadata.warnings.includes(identity.warning)) fail('来源元数据的 warnings 缺少历史版本来源记录中的固定警告');
     }
     return metadata;
 }
@@ -394,8 +394,8 @@ function validateManifest(manifest, arxivId, generation) {
         || Object.keys(manifest).sort().join('\0') !== keys.join('\0')
         || manifest.contract !== CONTRACT || manifest.version !== VERSION
         || manifest.arxivId !== arxivId || manifest.paperId !== `arxiv:${arxivId}`
-        || manifest.generation !== generation) fail('source manifest identity is invalid');
-    asIso(manifest.capturedAt, 'manifest capture time');
+        || manifest.generation !== generation) fail('来源清单的字段集合、格式版本、论文 ID 或来源获取序号不符合要求');
+    asIso(manifest.capturedAt, '来源清单的抓取时间');
     const text = manifest.text; const pdf = manifest.pdf; const runtimeMetadata = manifest.runtimeMetadata;
     const textKeys = ['extractor', 'fetchedAt', 'filename', 'responseBytes', 'responseSha256', 'source', 'sourceId', 'url'];
     const pdfKeys = ['fetchedAt', 'filename', 'responseBytes', 'responseSha256', 'url'];
@@ -407,14 +407,14 @@ function validateManifest(manifest, arxivId, generation) {
         || !text.extractor || typeof text.extractor !== 'object' || Array.isArray(text.extractor)
         || Object.keys(text.extractor).sort().join('\0') !== ['contract', 'version'].join('\0')
         || text.extractor.contract !== EXTRACTOR_CONTRACT || typeof text.extractor.version !== 'string' || !text.extractor.version) {
-        fail('text manifest is invalid');
+        fail('正文清单的字段集合、来源类型、文件名、来源 ID、字节数、SHA 或提取器记录不符合要求');
     }
     officialUrl(text.url, text.source === 'html' ? 'text' : 'pdf', arxivId, text.sourceId);
-    asIso(text.fetchedAt, 'text fetchedAt');
+    asIso(text.fetchedAt, '正文 fetchedAt');
     if (!pdf || typeof pdf !== 'object' || Array.isArray(pdf)
         || Object.keys(pdf).sort().join('\0') !== pdfKeys.join('\0') || pdf.filename !== PDF_NAME
         || !Number.isSafeInteger(pdf.responseBytes) || pdf.responseBytes < 5 || pdf.responseBytes > MAX_PDF_BYTES
-        || !SHA_RE.test(pdf.responseSha256)) fail('PDF manifest is invalid');
+        || !SHA_RE.test(pdf.responseSha256)) fail('PDF 清单的字段集合、文件名、字节数或 SHA 格式不符合要求');
     let pdfSourceId;
     try { pdfSourceId = decodeURIComponent(new URL(pdf.url).pathname)
         .match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)(?:\.pdf)?$/)?.[1]; }
@@ -424,7 +424,7 @@ function validateManifest(manifest, arxivId, generation) {
         || Object.keys(runtimeMetadata).sort().join('\0') !== ['filename', 'responseBytes', 'responseSha256'].join('\0')
         || runtimeMetadata.filename !== RUNTIME_METADATA_NAME || !Number.isSafeInteger(runtimeMetadata.responseBytes)
         || runtimeMetadata.responseBytes < 2 || runtimeMetadata.responseBytes > MAX_TEXT_BYTES
-        || !SHA_RE.test(runtimeMetadata.responseSha256)) fail('runtime metadata manifest is invalid');
+        || !SHA_RE.test(runtimeMetadata.responseSha256)) fail('来源元数据清单的字段集合、文件名、字节数或 SHA 格式不符合要求');
     return manifest;
 }
 
@@ -435,33 +435,33 @@ function readFreshArxivRewriteSource({ rootDir, arxivId, generation } = {}) {
     safeDirectory(path.join(root, id), false, '论文来源目录');
     safeDirectory(directory, false, '本次来源获取序号对应的目录');
     const entries = fs.readdirSync(directory).sort();
-    if (entries.join('\0') !== SOURCE_FILES.slice().sort().join('\0')) fail('generation source directory contains unexpected files');
-    const manifestBytes = readPrivateFile(path.join(directory, MANIFEST_NAME), 1024 * 1024, 'source manifest');
+    if (entries.join('\0') !== SOURCE_FILES.slice().sort().join('\0')) fail('本次来源获取目录必须恰好包含四个规定的来源文件');
+    const manifestBytes = readPrivateFile(path.join(directory, MANIFEST_NAME), 1024 * 1024, '来源清单');
     let manifest;
     try { manifest = JSON.parse(manifestBytes.toString('utf8')); }
-    catch (error) { fail(`source manifest is invalid JSON: ${error.message}`); }
-    if (!manifestBytes.equals(Buffer.from(canonicalJson(manifest), 'utf8'))) fail('source manifest must be canonical JSON');
+    catch (error) { fail(`来源清单不是有效的 JSON：${error.message}`); }
+    if (!manifestBytes.equals(Buffer.from(canonicalJson(manifest), 'utf8'))) fail('来源清单必须按项目固定的键顺序、缩进和末尾换行保存 JSON');
     validateManifest(manifest, id, normalized);
-    const text = readPrivateFile(path.join(directory, TEXT_NAME), MAX_TEXT_BYTES, 'source text');
-    const pdf = readPrivateFile(path.join(directory, PDF_NAME), MAX_PDF_BYTES, 'source PDF');
-    const runtimeMetadataBytes = readPrivateFile(path.join(directory, RUNTIME_METADATA_NAME), MAX_TEXT_BYTES, 'runtime metadata');
-    if (text.length !== manifest.text.responseBytes || sha256(text) !== manifest.text.responseSha256) fail('source text drifted from manifest');
+    const text = readPrivateFile(path.join(directory, TEXT_NAME), MAX_TEXT_BYTES, '来源正文');
+    const pdf = readPrivateFile(path.join(directory, PDF_NAME), MAX_PDF_BYTES, '来源 PDF');
+    const runtimeMetadataBytes = readPrivateFile(path.join(directory, RUNTIME_METADATA_NAME), MAX_TEXT_BYTES, '来源元数据');
+    if (text.length !== manifest.text.responseBytes || sha256(text) !== manifest.text.responseSha256) fail('来源正文的字节数或 SHA 与清单记录不同');
     if (pdf.length !== manifest.pdf.responseBytes || sha256(pdf) !== manifest.pdf.responseSha256
-        || pdf.subarray(0, 5).toString('ascii') !== '%PDF-') fail('source PDF drifted from manifest');
+        || pdf.subarray(0, 5).toString('ascii') !== '%PDF-') fail('来源 PDF 的字节数或 SHA 与清单记录不同，或缺少 %PDF- 文件头');
     if (runtimeMetadataBytes.length !== manifest.runtimeMetadata.responseBytes
-        || sha256(runtimeMetadataBytes) !== manifest.runtimeMetadata.responseSha256) fail('runtime metadata drifted from manifest');
+        || sha256(runtimeMetadataBytes) !== manifest.runtimeMetadata.responseSha256) fail('来源元数据的字节数或 SHA 与清单记录不同');
     let runtimeMetadata;
     try { runtimeMetadata = JSON.parse(runtimeMetadataBytes.toString('utf8')); }
-    catch (error) { fail(`runtime metadata is invalid JSON: ${error.message}`); }
-    if (!runtimeMetadataBytes.equals(Buffer.from(canonicalJson(runtimeMetadata), 'utf8'))) fail('runtime metadata must be canonical JSON');
+    catch (error) { fail(`来源元数据不是有效的 JSON：${error.message}`); }
+    if (!runtimeMetadataBytes.equals(Buffer.from(canonicalJson(runtimeMetadata), 'utf8'))) fail('来源元数据必须按项目固定的键顺序、缩进和末尾换行保存 JSON');
     const pdfSourceId = decodeURIComponent(new URL(manifest.pdf.url).pathname)
         .match(/^\/pdf\/(\d{4}\.\d{4,5}(?:v[1-9]\d*)?)(?:\.pdf)?$/)?.[1] || '';
     if (pdfSourceId !== id) {
         const identity = normalizeHistoricalVersionIdentity(runtimeMetadata.sourceVersion, id);
         if (identity.selectedSourceId !== pdfSourceId || manifest.text.source !== 'pdf'
-            || manifest.text.sourceId !== pdfSourceId) fail('versioned PDF source is mixed with another text version');
+            || manifest.text.sourceId !== pdfSourceId) fail('带版本号 PDF 的来源 ID 与历史版本记录或正文来源 ID 不同，或正文不是从 PDF 提取');
     } else if (runtimeMetadata.sourceVersion !== undefined) {
-        fail('current PDF bundle cannot carry historical-version evidence');
+        fail('当前无版本 PDF 的来源文件组不得附带历史版本来源记录');
     }
     const textInfo = { source: manifest.text.source, sourceId: manifest.text.sourceId, bytes: text,
         responseSha256: manifest.text.responseSha256 };
@@ -511,7 +511,7 @@ async function fetchEphemeralFigureWithRetry(fetchFigure, url, options = {}) {
                 await sleep(attempt * 1000);
                 continue;
             }
-            const failure = error instanceof Error ? error : new Error(String(error || 'ephemeral Figure fetch failed'));
+            const failure = error instanceof Error ? error : new Error(String(error || '临时图片抓取失败'));
             failure.retryable = true;
             failure.ephemeralFigureFetch = true;
             failure.attempts = attempt;
@@ -519,7 +519,7 @@ async function fetchEphemeralFigureWithRetry(fetchFigure, url, options = {}) {
             throw failure;
         }
     }
-    throw new Error('ephemeral Figure fetch retry loop ended unexpectedly');
+    throw new Error('临时图片重试循环意外结束，未返回结果或抛出最后一次错误');
 }
 function defaultExtractPdfText(arxivId, bytes, options) {
     return require('../deep-analyzer.js').extractArxivPdfTextDetailedFromBytes(arxivId, bytes, options);
@@ -533,7 +533,7 @@ function temporaryGenerationDirectory(parent, name) {
 
 function removeOwnedTemporaryDirectory(directory) {
     if (!directory || !path.basename(directory).startsWith('.generation-') || !path.basename(directory).endsWith('.tmp')) {
-        fail('refuses to remove a non-owned temporary source directory');
+        fail('拒绝删除名称不符合本模块临时来源目录规则的目录');
     }
     fs.rmSync(directory, { recursive: true, force: true, maxRetries: 2 });
 }
@@ -552,15 +552,15 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
     const fetchPdf = overrides.fetchPdf || defaultFetchPdf;
     const extractPdfText = overrides.extractPdfText || defaultExtractPdfText;
     if (typeof fetchText !== 'function' || typeof fetchPdf !== 'function' || typeof extractPdfText !== 'function') {
-        fail('official HTML text, PDF, and PDF-text extractors are required');
+        fail('官方 HTML 正文抓取、PDF 抓取和 PDF 文字提取三个入口都必须是函数');
     }
     const extractorVersion = String(options.extractorVersion || DEFAULT_EXTRACTOR_VERSION).trim();
-    if (!extractorVersion || extractorVersion.length > 200) fail('extractorVersion is invalid');
+    if (!extractorVersion || extractorVersion.length > 200) fail('extractorVersion 去掉首尾空白后不得为空或超过 200 个字符');
     let temporary = null;
     try {
         // 先解析 HTML，这样 PDF 回退时能优先用选定的官方版本。
         // 无版本当前稿 PDF 仍先探一次，
-        // 版本回退才有可重放的 HTTP 404 记录。
+        // 这样改用历史版本时，才能保留当前 PDF 返回 HTTP 404 的记录。
         const rawText = await fetchText(id);
         const preferredSourceId = rawText?.source === 'html' ? rawText.sourceId : null;
         const rawPdf = await fetchPdf(id, { preferredSourceId });
@@ -575,7 +575,7 @@ async function captureFreshArxivRewriteSource(options = {}, overrides = {}) {
             // 说明适配器丢掉了 PDF 字节，或自己另下了一份。
             // 只有一种回退是允许的：从 `pdf.bytes` 提取，
             // 也就是下面存起来的那一份响应。
-            if (rawText?.source === 'pdf') fail('HTML text adapter must not fetch an independent PDF fallback');
+            if (rawText?.source === 'pdf') fail('HTML 正文抓取函数不得自行另取 PDF 作为备用正文');
             const extracted = await extractPdfText(id, pdf.bytes, {
                 htmlAvailability: rawText?.htmlAvailability || 'unavailable',
                 htmlAttempts: rawText?.htmlAttempts || 0,
@@ -635,7 +635,7 @@ function canonicalExistingAncestor(candidate) {
     let cursor = path.resolve(candidate); const suffix = [];
     while (!fs.existsSync(cursor)) {
         const parent = path.dirname(cursor);
-        if (parent === cursor) fail('path has no existing filesystem ancestor');
+        if (parent === cursor) fail('路径没有已存在的上级目录或文件');
         suffix.unshift(path.basename(cursor)); cursor = parent;
     }
     return path.join(fs.realpathSync(cursor), ...suffix);
@@ -645,31 +645,31 @@ function officialFigureUrl(value, arxivId) {
     const parsed = new URL(String(value || ''));
     if (parsed.protocol !== 'https:' || parsed.hostname !== 'arxiv.org' || parsed.port || parsed.username || parsed.password
         || parsed.search || parsed.hash || !parsed.pathname.startsWith('/html/')) {
-        fail('figure URL must be a direct official arXiv HTML HTTPS URL');
+        fail('图片 URL 必须是官方 arxiv.org 的 HTTPS HTML 路径，且不得带非默认端口、账号、查询参数或片段标识');
     }
     const match = decodeURIComponent(parsed.pathname).match(/^\/html\/(\d{4}\.\d{4,5})(?:v\d+)?(?:\/|$)/);
-    if (!match || match[1] !== normalizedArxivId(arxivId)) fail('figure URL belongs to another paper');
+    if (!match || match[1] !== normalizedArxivId(arxivId)) fail('图片 URL 的 HTML 路径指向另一篇论文，或不符合规定格式');
     return parsed.toString();
 }
 
 function normalizeFigureResponse(value) {
     const candidate = Buffer.isBuffer(value) || value instanceof Uint8Array ? { bytes: value } : value;
     const bytes = Buffer.from(candidate?.bytes || []);
-    if (!bytes.length || bytes.length > 32 * 1024 * 1024) fail('ephemeral figure bytes are empty or oversized');
+    if (!bytes.length || bytes.length > 32 * 1024 * 1024) fail('临时图片内容为空，或超过 32 MiB');
     const mediaType = String(candidate?.mediaType || 'application/octet-stream').toLowerCase();
-    if (!/^image\/(?:png|jpeg|webp|svg\+xml)$/.test(mediaType)) fail('ephemeral figure media type is unsupported');
+    if (!/^image\/(?:png|jpeg|webp|svg\+xml)$/.test(mediaType)) fail('临时图片的 mediaType 只接受 PNG、JPEG、WebP 或 SVG 类型');
     return { bytes, mediaType };
 }
 
 async function withEphemeralArxivFigures(options = {}, callback, overrides = {}) {
-    if (typeof callback !== 'function') fail('ephemeral figure callback is required');
+    if (typeof callback !== 'function') fail('临时图片处理回调必须是函数');
     const id = normalizedArxivId(options.arxivId);
-    const figures = Array.isArray(options.figures) ? options.figures : fail('figures must be an array');
+    const figures = Array.isArray(options.figures) ? options.figures : fail('figures 必须是数组');
     const ordinalSet = new Set();
     const normalizedFigures = figures.map((figure, index) => {
         if (!figure || typeof figure !== 'object' || Array.isArray(figure)
             || !Number.isSafeInteger(figure.ordinal) || figure.ordinal < 1 || ordinalSet.has(figure.ordinal)) {
-            fail(`figure ${index + 1} has an invalid or duplicate ordinal`);
+            fail(`第 ${index + 1} 项图片必须是对象，且 ordinal 必须是未重复的正安全整数`);
         }
         ordinalSet.add(figure.ordinal);
         return { ordinal: figure.ordinal, url: officialFigureUrl(figure.url, id) };
@@ -679,15 +679,15 @@ async function withEphemeralArxivFigures(options = {}, callback, overrides = {})
     const configuredDataRoot = canonicalExistingAncestor(require('../config.js').DATA_DIR);
     if (!pathInside(osTemporaryRoot, temporaryRoot) || pathInside(configuredDataRoot, temporaryRoot)
         || pathInside(temporaryRoot, configuredDataRoot)) {
-        fail('ephemeral figures must use an OS-temporary directory outside Config.DATA_DIR');
+        fail('临时图片目录必须位于系统临时目录内，且与 Config.DATA_DIR 互不包含');
     }
     const persistentRoots = [options.sourceRoot, ...(options.persistentRoots || [])]
         .filter(Boolean).map(item => path.resolve(item));
     if (persistentRoots.some(root => pathInside(root, temporaryRoot))) {
-        fail('ephemeral figures cannot use a persistent runtime directory');
+        fail('临时图片目录不得位于来源目录或其他长期保存目录内');
     }
     const fetchFigure = overrides.fetchFigure || defaultFetchFigure;
-    if (typeof fetchFigure !== 'function') fail('official figure fetcher is required');
+    if (typeof fetchFigure !== 'function') fail('官方图片抓取入口必须是函数');
     fs.mkdirSync(temporaryRoot, { recursive: true, mode: 0o700 });
     const directory = fs.mkdtempSync(path.join(temporaryRoot, 'fresh-arxiv-figures-'));
     fs.chmodSync(directory, 0o700);
@@ -704,7 +704,7 @@ async function withEphemeralArxivFigures(options = {}, callback, overrides = {})
         }
         // 链接只留在这个调用栈里用来取图。
         // 回调拿到的是按序号绑定的字节/路径，
-        // 不会顺着来源层的结果把链接写出去。
+        // 传入回调的图片记录不带 URL；本模块不会另行保存本次抓取使用的链接。
         return await callback(Object.freeze({ arxivId: id, temporaryDirectory: directory,
             figures: Object.freeze(materialized) }));
     } finally {

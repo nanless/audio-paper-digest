@@ -129,7 +129,7 @@ test('带版本的 PDF 校验拒绝跨论文 URL、查询串或片段夹带，�
     await assert.rejects(source.captureFreshArxivRewriteSource({ ...common, generation: 3 }, {
         fetchText: text, fetchPdf: async () => ({ ...candidate(`https://arxiv.org/pdf/${id}v1.pdf`),
             currentPdfUnavailable: false, currentPdfStatus: null })
-    }), /requires a sealed current unversioned PDF HTTP 404/);
+    }), /必须记录当前无版本 PDF 返回 HTTP 404 且不可用/);
 });
 
 test('带版本的 PDF 校验接受官方 arXiv 那种不带 .pdf 后缀的重定向写法', async t => {
@@ -249,7 +249,7 @@ test('HTML 回退只从那一份已保存的 PDF 响应里提取文本，拒绝�
         now: '2026-09-07T00:10:00.000Z' }, {
         fetchText: async () => ({ text: 'a separately fetched PDF text', source: 'pdf', sourceId: id,
             url: rawPdf.url, fetchedAt: rawPdf.fetchedAt }), fetchPdf: async () => rawPdf
-    }), /independent PDF fallback/);
+    }), /HTML 正文抓取函数不得自行另取 PDF 作为备用正文/);
 });
 
 test('临时图片不把 URL 和字节写进运行目录，只提供临时字节，成功后清理', async t => {
@@ -296,11 +296,11 @@ test('临时图片在回调或抓取失败时也会清理，并且拒绝持久�
     }), /figure transport failed/);
     assert.deepEqual(fs.readdirSync(f.temporaryRoot), []);
     await assert.rejects(source.withEphemeralArxivFigures({ arxivId: id, figures: [], temporaryRoot: f.sourceRoot,
-        sourceRoot: f.sourceRoot }, async () => {}), /persistent runtime directory/);
+        sourceRoot: f.sourceRoot }, async () => {}), /临时图片目录不得位于来源目录或其他长期保存目录内/);
     const Config = require('../scripts/config.js');
     await assert.rejects(source.withEphemeralArxivFigures({ arxivId: id, figures: [],
         temporaryRoot: path.join(Config.DATA_DIR, 'runtime', 'forbidden-figures') }, async () => {}),
-    /OS-temporary directory outside Config\.DATA_DIR/);
+    /临时图片目录必须位于系统临时目录内，且与 Config\.DATA_DIR 互不包含/);
 });
 
 test('临时图片抓取只重试暂时性的网络或状态失败，永久性检查照旧', async t => {
@@ -362,7 +362,7 @@ test('临时图片抓取只重试暂时性的网络或状态失败，永久性�
         figures: [{ ordinal: 1, url: 'https://arxiv.org/html/2403.99999/x1.png' }],
         temporaryRoot: f.temporaryRoot, sourceRoot: f.sourceRoot }, async () => {}, {
         fetchFigure: async () => { calls += 1; return { bytes: Buffer.from('pixels'), mediaType: 'image/png' }; }
-    }), /another paper/);
+    }), /图片 URL 的 HTML 路径指向另一篇论文/);
     assert.equal(calls, 0, '图片地址属于另一篇论文时，在请求前拒绝');
 
     calls = 0;
@@ -370,7 +370,7 @@ test('临时图片抓取只重试暂时性的网络或状态失败，永久性�
         figures: [{ ordinal: 1, url: figureUrl }], temporaryRoot: f.temporaryRoot,
         sourceRoot: f.sourceRoot }, async () => {}, {
         fetchFigure: async () => { calls += 1; return { bytes: Buffer.from('not pixels'), mediaType: 'text/plain' }; }
-    }), /media type is unsupported/);
+    }), /临时图片的 mediaType 只接受 PNG、JPEG、WebP 或 SVG 类型/);
     assert.equal(calls, 1, '响应不是支持的图片类型时，只请求一次');
     assert.deepEqual(fs.readdirSync(f.temporaryRoot), []);
 });
