@@ -60,8 +60,10 @@ function readRegular(filename, maximum, label) {
     try {
         const before = fs.lstatSync(filename);
         if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maximum) fail(`${label}不安全：不是普通文件、存在符号链接、硬链接数量不为 1，或大小超过允许上限。`);
-        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-        const opened = fs.fstatSync(fd); const named = fs.lstatSync(filename);
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > maximum) fail(`${label} 打开后的文件与先前检查不对应，或文件类型、链接数量、大小不符合要求。`);
+        const named = fs.lstatSync(filename);
         if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size !== named.size) fail(`${label}在打开时发生变化，或不再满足普通文件和单硬链接要求。`);
         const bytes = fs.readFileSync(fd); if (bytes.length !== opened.size) fail(`${label}的实际读取字节数与打开时记录的文件大小不一致。`);

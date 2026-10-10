@@ -47,9 +47,13 @@ function readSafeJson(filename, label = 'JSON') {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600) {
         fail(`${label} 不是权限为 0600 的单链接私有文件：${filename}`);
     }
-    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
         const before = fs.fstatSync(fd);
+        if (!before.isFile() || before.nlink !== 1 || (before.mode & 0o777) !== 0o600
+            || before.ino !== stat.ino || before.dev !== stat.dev) {
+            fail(`${label} 打开的文件不是先前检查的权限为 0600、只有一个硬链接的普通文件：${filename}`);
+        }
         const bytes = fs.readFileSync(fd);
         const after = fs.fstatSync(fd);
         const named = fs.lstatSync(filename);

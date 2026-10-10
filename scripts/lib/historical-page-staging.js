@@ -103,9 +103,11 @@ function readRegular(filename, maximum, label, allowPendingLink = false) {
     let fd;
     try {
         const before = fs.lstatSync(filename);
-        if (!before.isFile() || before.isSymbolicLink() || (before.nlink !== 1 && !(allowPendingLink && before.nlink === 2)) || before.size > maximum) throw new Error(`${label} 不安全：必须是没有符号链接、仅有一个硬链接且大小不超过限制的普通文件。`);
-        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-        const opened = fs.fstatSync(fd); const named = fs.lstatSync(filename);
+        if (!before.isFile() || before.isSymbolicLink() || (before.nlink !== 1 && !(allowPendingLink && before.nlink === 2)) || before.size > maximum) throw new Error(`${label} 不安全：必须是没有符号链接、硬链接数量符合读取要求且大小不超过限制的普通文件。`);
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile() || opened.nlink !== before.nlink || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > maximum) throw new Error(`${label} 打开后的文件与先前检查不对应，或文件类型、链接数量、大小不符合要求。`);
+        const named = fs.lstatSync(filename);
         if (!opened.isFile() || opened.nlink !== before.nlink || named.isSymbolicLink() || named.nlink !== before.nlink
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size !== named.size) throw new Error(`${label} 打开后的文件与当前路径不对应，或文件类型、链接数量、大小不符合要求。`);
         const bytes = fs.readFileSync(fd);

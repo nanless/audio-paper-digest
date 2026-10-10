@@ -304,21 +304,21 @@ function readJsonObject(filename, blockers) {
     try { named = fs.lstatSync(filename); }
     catch (error) { blockers.push({ type: 'io', path: filename, message: error.message }); return null; }
     if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || named.size > MAX_RECEIPT_BYTES) {
-        blockers.push({ type: 'unsafe_receipt', path: filename, message: 'receipt 必须是有界普通单链接文件' });
+        blockers.push({ type: 'unsafe_receipt', path: filename, message: '来源记录必须是大小受限、只有一个硬链接的普通文件' });
         return null;
     }
     try {
-        const fd = fs.openSync(filename, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+        const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOFOLLOW || 0));
         try {
             const opened = fs.fstatSync(fd);
             if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== named.dev || opened.ino !== named.ino) {
-                blockers.push({ type: 'changed_receipt', path: filename, message: 'receipt 在读取期间发生身份变化' });
+                blockers.push({ type: 'changed_receipt', path: filename, message: '来源记录在读取期间的文件身份已变化' });
                 return null;
             }
             const raw = fs.readFileSync(fd, 'utf8');
             const after = fs.fstatSync(fd);
             if (after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size) {
-                blockers.push({ type: 'changed_receipt', path: filename, message: 'receipt 在读取期间发生变化' });
+                blockers.push({ type: 'changed_receipt', path: filename, message: '来源记录在读取期间已变化' });
                 return null;
             }
             return JSON.parse(raw);
@@ -380,16 +380,27 @@ function scanPdfDeclarations(layout, declarations, blockers) {
     }, blockers);
 }
 
-function hashFileBytes(filename) {
+function hashFileBytes(filename, expected) {
     const hash = crypto.createHash('sha256');
-    const fd = fs.openSync(filename, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK | (fs.constants.O_NOFOLLOW || 0));
     const buffer = Buffer.allocUnsafe(1024 * 1024);
+    const matchesScan = stat => stat.isFile() && !stat.isSymbolicLink()
+        && stat.dev === expected.dev && stat.ino === expected.ino
+        && stat.size === expected.size && stat.mtimeMs === expected.mtimeMs;
     try {
+        if (!matchesScan(fs.fstatSync(fd))) throw new Error('PDF 文件在目录扫描后已变化，不能核验其字节');
+        let totalBytes = 0;
         let bytesRead;
         do {
             bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null);
-            if (bytesRead > 0) hash.update(buffer.subarray(0, bytesRead));
+            if (bytesRead > 0) {
+                hash.update(buffer.subarray(0, bytesRead));
+                totalBytes += bytesRead;
+            }
         } while (bytesRead > 0);
+        if (totalBytes !== expected.size || !matchesScan(fs.fstatSync(fd)) || !matchesScan(fs.lstatSync(filename))) {
+            throw new Error('PDF 文件在读取期间已变化，不能核验其字节');
+        }
     } finally { fs.closeSync(fd); }
     return hash.digest('hex');
 }
@@ -403,7 +414,7 @@ function getPdfDuplicateReport(options = {}) {
     scanPdfDeclarations(layout, declarations, blockers);
     walk(layout.runtime, (entryPath, stat) => {
         if (!stat.isFile() || path.extname(entryPath).toLowerCase() !== '.pdf') return;
-        files.set(path.resolve(entryPath), { path: path.resolve(entryPath), bytes: stat.size });
+        files.set(path.resolve(entryPath), { path: path.resolve(entryPath), bytes: stat.size, scannedStat: stat });
     }, blockers);
 
     for (const [pdfPath, claims] of declarations.entries()) {
@@ -423,7 +434,7 @@ function getPdfDuplicateReport(options = {}) {
         let declaredHashMismatch = false;
         if (record.bytes !== null && hashBytes) {
             try {
-                actualHash = hashFileBytes(record.path);
+                actualHash = hashFileBytes(record.path, record.scannedStat);
                 hashSource = 'bytes';
                 byteVerified = true;
                 declaredHashMismatch = declaredHashes.some(hash => hash !== actualHash);

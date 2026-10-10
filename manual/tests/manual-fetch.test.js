@@ -42,7 +42,7 @@ describe('Manual 抓取的数据一致性辅助函数', () => {
         `;
         const child = spawn(process.execPath, ['-e', childSource, modulePath, lockTarget], {
             stdio: ['ignore', 'pipe', 'pipe'],
-            env: { ...process.env, CODEX_SANDBOX: '' }
+            env: { ...process.env }
         });
         try {
             await new Promise((resolve, reject) => {

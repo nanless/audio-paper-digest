@@ -84,7 +84,6 @@ test('默认 Manual 命令使用正式 v6，旧 v5 和隔离运行命令须显�
 
 test('默认论文速递脚本在启动业务阶段前实际拒绝非法日期与历史抓取', () => {
     const env = { ...process.env };
-    delete env.CODEX_SANDBOX;
     for (const [date, expected] of [
         ['2026-02-30', /非法日期/],
         ['2000-01-01', /抓取阶段只允许北京时间当天/],
@@ -113,7 +112,6 @@ test('push 续跑只由 push 规划一次，visual 续跑才直接调用独立�
         PATH: `${dir}:${process.env.PATH || ''}`,
         PD_PYTHON_RUNTIME_DISABLE_VENV: '1'
     };
-    delete env.CODEX_SANDBOX;
 
     let result = spawnSync('bash', [scriptPath, '2026-07-13', '--from', 'push'], {
         cwd: path.dirname(scriptPath), env, encoding: 'utf8'
@@ -140,7 +138,6 @@ test('tasks 续跑只调用任务初始化与状态命令，并以退出码 3 �
     fs.writeFileSync(fake, `#!/bin/sh\nprintf '%s %s\\n' 'npm' "$*" >> '${logPath}'\n`);
     fs.chmodSync(fake, 0o755);
     const env = { ...process.env, PATH: `${dir}:${process.env.PATH || ''}`, PD_DAILY_API_MODE: '0' };
-    delete env.CODEX_SANDBOX;
     const result = spawnSync('bash', [scriptPath, '2026-07-13', '--from', 'tasks'], {
         cwd: path.dirname(scriptPath), env, encoding: 'utf8'
     });
@@ -155,7 +152,6 @@ test('tasks 续跑只调用任务初始化与状态命令，并以退出码 3 �
 
 test('默认 API 模式拒绝 Manual v6 专属 tasks/spec/analyze 续跑阶段', () => {
     const env = { ...process.env };
-    delete env.CODEX_SANDBOX;
     const result = spawnSync('bash', [scriptPath, '2026-07-13', '--api', '--from', 'spec'], {
         cwd: path.dirname(scriptPath), env, encoding: 'utf8'
     });

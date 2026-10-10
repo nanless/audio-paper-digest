@@ -429,7 +429,6 @@ describe('digest:waive-analysis 入口的理由检查与进程结果', () => {
         const target = path.join(Config.FILES.analysisWaiverDir, `${probeDate}.json`);
         assert.equal(fs.existsSync(target), false, `测试前置：${target} 不该存在`);
         const env = { ...process.env };
-        delete env.CODEX_SANDBOX;
         const result = spawnSync(process.execPath,
             [path.join(PROJECT, 'scripts', 'waive-analysis-failures.js'),
                 '--date', probeDate, '--paper-id', PAPER, '--reason', '太短'],

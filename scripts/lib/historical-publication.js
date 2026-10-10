@@ -56,7 +56,8 @@ function readRegular(filename, maximum = 128 * 1024 * 1024, dependencies = {}) {
     let fd; const parentBefore = directoryIdentity(path.dirname(filename));
     try { const before = fs.lstatSync(filename, { bigint: true });
         if (!before.isFile() || before.isSymbolicLink() || (before.nlink !== 1n && !(dependencies.allowPendingLink && before.nlink === 2n)) || before.size > BigInt(maximum)) fail(`来源文件不安全：类型、链接数或大小不符合要求：${filename}`);
-        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); const opened = fs.fstatSync(fd, { bigint: true });
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); const opened = fs.fstatSync(fd, { bigint: true });
+        if (!opened.isFile() || opened.nlink !== before.nlink || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > BigInt(maximum)) fail(`打开后来源文件不安全：类型、链接数、大小或身份不符合要求：${filename}`);
         dependencies.afterOpen?.(filename);
         const named = fs.lstatSync(filename, { bigint: true });
         if (!opened.isFile() || opened.nlink !== before.nlink || named.isSymbolicLink() || named.nlink !== before.nlink

@@ -53,8 +53,10 @@ function readFile(filename, maximum, label) {
     try {
         const before = fs.lstatSync(filename);
         if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maximum) fail(`${label} 不安全：必须是没有符号链接、仅有一个硬链接且大小不超过限制的普通文件。`);
-        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-        const opened = fs.fstatSync(fd); const named = fs.lstatSync(filename);
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile() || opened.nlink !== 1 || opened.dev !== before.dev || opened.ino !== before.ino || opened.size > maximum) fail(`${label} 打开后的文件与先前检查不对应，或文件类型、链接数量、大小不符合要求。`);
+        const named = fs.lstatSync(filename);
         if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size !== named.size) fail(`${label} 打开后的文件与当前路径不对应，或文件类型、链接数量、大小不符合要求。`);
         const bytes = fs.readFileSync(fd); const after = fs.fstatSync(fd);

@@ -58,9 +58,14 @@ function readSafeJson(filename) {
     if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1 || (named.mode & 0o777) !== 0o600) {
         throw new Error(`unsafe conference process state file: ${filename}`);
     }
-    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
-        const opened = fs.fstatSync(fd); const bytes = fs.readFileSync(fd);
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile() || opened.nlink !== 1 || (opened.mode & 0o777) !== 0o600
+            || opened.ino !== named.ino || opened.dev !== named.dev) {
+            throw new Error(`会议状态打开的文件不是先前检查的权限为 0600、只有一个硬链接的普通文件：${filename}`);
+        }
+        const bytes = fs.readFileSync(fd);
         const after = fs.fstatSync(fd); const finalNamed = fs.lstatSync(filename);
         if (!opened.isFile() || opened.nlink !== 1 || bytes.length !== opened.size
             || after.dev !== opened.dev || after.ino !== opened.ino || after.size !== opened.size
@@ -96,9 +101,14 @@ function readRegularBytes(filename, label) {
     if (!named.isFile() || named.isSymbolicLink() || named.nlink !== 1) {
         throw new Error(`${label}不是普通单链接文件：${filename}`);
     }
-    const descriptor = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const descriptor = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
-        const opened = fs.fstatSync(descriptor); const bytes = fs.readFileSync(descriptor);
+        const opened = fs.fstatSync(descriptor);
+        if (!opened.isFile() || opened.nlink !== 1
+            || opened.ino !== named.ino || opened.dev !== named.dev) {
+            throw new Error(`${label}打开的文件不是先前检查的普通单链接文件：${filename}`);
+        }
+        const bytes = fs.readFileSync(descriptor);
         const after = fs.fstatSync(descriptor);
         if (!opened.isFile() || opened.nlink !== 1 || bytes.length !== opened.size
             || after.ino !== opened.ino || after.dev !== opened.dev || after.size !== opened.size) {

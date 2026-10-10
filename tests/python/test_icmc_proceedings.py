@@ -419,7 +419,6 @@ class CommandLineTests(IcmcTestCase):
         source = self.fixture_pdf()
         page_map = self.page_map_file([{"id": "paper-1", "startPage": 8, "endPage": 4}])
         environment = dict(os.environ)
-        environment.pop("CODEX_SANDBOX", None)
         result = subprocess.run(
             [sys.executable, str(SCRIPTS / "icmc-proceedings.py"), "split",
              str(source), str(page_map), str(self.directory / "out")],

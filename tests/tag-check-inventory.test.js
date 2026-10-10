@@ -90,7 +90,6 @@ function snapshot(root) {
 
 function runCli(args) {
     const env = { ...process.env };
-    delete env.CODEX_SANDBOX;
     return spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8', env, cwd: ROOT });
 }
 
