@@ -427,8 +427,11 @@ describe('filterPapersByKeywords', () => {
             { title: 'A Speech Recognition Model', abstract: 'speech recognition benchmark' },
             { title: 'A Text Classifier', abstract: 'We present a purely textual classification benchmark for written documents, with extensive evaluation on several natural language corpora and no additional modalities.' }
         ]);
-        assert.strictEqual(result.length, 1);
+        assert.strictEqual(result.length, 2);
         assert.strictEqual(result[0].title, 'A Speech Recognition Model');
+        assert.strictEqual(result[1].title, 'A Text Classifier');
+        assert.strictEqual(evaluateKeywordPrefilter(result[1]).requiresScopeEvidence, true,
+            '提及模态而缺少类别的候选须核官方材料，关键词放行不等于音频相关');
     });
 
     it('覆盖语音、音乐、生物声学、听觉健康、空间音频和常用数据集词族', () => {

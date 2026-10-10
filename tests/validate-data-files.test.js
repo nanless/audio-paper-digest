@@ -373,7 +373,7 @@ function writeMinimalCurrentBatch(dir) {
         timestamp: TIMESTAMP, ...fingerprints, ...integrity, filterModel: 'model-a', filterPromptHash: 'hash-a',
         filterConfigFingerprint: FILTER_FP,
         stats: { totalCandidates: 1, decided: 1, related: 1, complete: true },
-        decisions: { '2607.00001': { related: true, inputSha256: FROZEN_FILTER_INPUT_SHA256.emptyInput } }
+        decisions: { '2607.00001': { related: true, filterModel: 'model-a', filterPromptHash: 'hash-a', inputSha256: FROZEN_FILTER_INPUT_SHA256.emptyInput } }
     }));
     fs.writeFileSync(filteredPapers, JSON.stringify({
         timestamp: TIMESTAMP, ...fingerprints, ...integrity, filterModel: 'model-a', filterPromptHash: 'hash-a',
@@ -1220,9 +1220,9 @@ describe('validate-data-files', () => {
                 complete: true
             },
             decisions: {
-                '2607.00001': { id: '2607.00001', related: true, reason: 'audio', parseSource: 'conclusion_line', inputSha256: FROZEN_FILTER_INPUT_SHA256.emptyInput },
-                '2607.00002': { id: '2607.00002', related: true, reason: 'audio', parseSource: 'conclusion_line', inputSha256: FROZEN_FILTER_INPUT_SHA256.emptyInput },
-                '2607.00003': { id: '2607.00003', related: false, reason: 'irrelevant', parseSource: 'conclusion_line', inputSha256: FROZEN_FILTER_INPUT_SHA256.emptyInput }
+                '2607.00001': { id: '2607.00001', related: true, reason: 'audio', parseSource: 'conclusion_line', filterModel: 'model-a', filterPromptHash: 'hash-a', inputSha256: FROZEN_FILTER_INPUT_SHA256.emptyInput },
+                '2607.00002': { id: '2607.00002', related: true, reason: 'audio', parseSource: 'conclusion_line', filterModel: 'model-a', filterPromptHash: 'hash-a', inputSha256: FROZEN_FILTER_INPUT_SHA256.emptyInput },
+                '2607.00003': { id: '2607.00003', related: false, reason: 'irrelevant', parseSource: 'conclusion_line', filterModel: 'model-a', filterPromptHash: 'hash-a', inputSha256: FROZEN_FILTER_INPUT_SHA256.emptyInput }
             }
         }));
 

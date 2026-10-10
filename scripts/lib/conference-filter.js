@@ -126,7 +126,15 @@ const LLM_FILTER_PROMPT_SHA256 = sha256(Buffer.from(LLM_FILTER_PROMPT, 'utf8'));
 // 只接受明确列出的旧值，不接受任意策略 SHA。
 // '382af440…' = interspeech-2026 加入 core-audio 标签之前的策略；
 // '11b277a5…' = 最初的 2026 会议标签之前的策略。
+// 只兼容同一运行预算与会议身份下的固定旧 v4 词表策略，不接受任意外来版本。
+const LEGACY_KEYWORD_V4_FILTER_POLICY_SHA256 = sha256(Buffer.from(JSON.stringify({
+    prompt: 'prompts/filter.md:first-fenced-block',
+    parser: DAILY_DECISION_PARSER_VERSION,
+    ...FILTER_CONFIG_BINDING,
+    keywordPrefilterVersion: 'speech-audio-music-v4'
+}), 'utf8'));
 const LEGACY_FILTER_POLICY_SHA256_LIST = Object.freeze([
+    LEGACY_KEYWORD_V4_FILTER_POLICY_SHA256,
     '382af4406aaf0f4c8e49f22cdacb9ab215c4ab0563903b49930cb3ed8cf9e096',
     '11b277a5fe01498a8b5482365cd86f21bf3ed043900745c2fc7943623c4ed275'
 ]);
@@ -968,7 +976,8 @@ function prepareFilter({ filterRoot, discoveryHandle, evidenceHandle, spec, filt
         fail('filter spec does not bind this authenticated discovery and evidence run');
     }
     nonempty(filterId, 'filterId', UUID_RE);
-    if (isLegacySpec(normalizedSpec)) {
+    if (isLegacySpec(normalizedSpec)
+        || normalizedSpec.filterPolicySha256 === LEGACY_KEYWORD_V4_FILTER_POLICY_SHA256) {
         // 旧任务只有通过完整核验后才能继续，不能借旧配置创建新任务。
         const existing = readFilter({ filterRoot, filterId });
         const bound = assertBoundInputsFromCheckedState(existing,
@@ -1006,6 +1015,10 @@ function applyKeywordPrefilter({ filterRoot, filterId, discoveryHandle, evidence
     const lock = acquireLock(directory, 'keyword-prefilter', now);
     try {
         let current = assertFilterState(state);
+        if (current.input.filterPolicySha256 === LEGACY_KEYWORD_V4_FILTER_POLICY_SHA256
+            && Object.values(current.decisions).some(decision => decision.status === 'pending')) {
+            fail('旧策略仍有未筛候选；保留原任务，请新建使用当前筛选配置的任务，不能用新词表冒充旧策略');
+        }
         const discovery = trustedDiscovery(discoveryHandle);
         let replays; let evidenceSnapshots;
         try {

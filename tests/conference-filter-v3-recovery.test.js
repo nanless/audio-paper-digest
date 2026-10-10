@@ -199,3 +199,19 @@ test('旧 v3 会议请求仍按原提示词核验，重算自校验也不能接�
     assert.throws(() => currentApi.normalizeLlmIntent(sourceChanged), /effective metadata|单用户/);
     assert.deepEqual(fs.readFileSync(intentFile), originalIntentBytes);
 });
+
+test('旧关键词策略不能创建新筛选任务，拒绝时不留下状态文件', async t => {
+    const service = await serverFixture(t);
+    const fixtureData = fixture(t, service.endpoint);
+    const oldPolicy = { ...JSON.parse(filter.LLM_FILTER_POLICY), keywordPrefilterVersion: 'speech-audio-music-v4' };
+    const oldSpec = { ...fixtureData.spec, filterPolicySha256: sha(JSON.stringify(oldPolicy)) };
+    const newFilterId = '99999999-9999-4999-8999-999999999999';
+    assert.throws(() => filter.prepareFilter({ filterRoot: fixtureData.dirs.filters,
+        discoveryHandle: fixtureData.discoveryHandle, evidenceHandle: fixtureData.evidenceHandle,
+        spec: oldSpec, filterId: newFilterId, now: stamp }),
+    error => error.code === 'ENOENT' && error.path === path.join(fixtureData.dirs.filters, newFilterId),
+    '旧策略只能读取原任务，缺少原目录时不得创建新任务');
+    assert.equal(fs.existsSync(path.join(fixtureData.dirs.filters, newFilterId, 'state.json')), false,
+        '拒绝旧策略的新任务须发生在状态文件写入前');
+    assert.equal(service.calls.length, 0);
+});

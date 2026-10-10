@@ -6,7 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const Config = require('./config.js');
-const { buildFilterInputSha256 } = require('./lib/filter-input-contract.js');
+const { validatedDecisionInputSha256 } = require('./lib/filter-scope-evidence.js');
 const { KEYWORD_PREFILTER_VERSION } = require('./lib/keyword-prefilter.js');
 const {
     readJsonSafe,
@@ -1338,6 +1338,14 @@ function validateFilterDecisionsFile(filePath = DEFAULT_FILTER_DECISIONS_FILE) {
     return issues;
 }
 
+function checkedDecisionInputSha256(paper, decision, issues, filePath, options = {}) {
+    try { return validatedDecisionInputSha256(paper, decision, options); }
+    catch (error) {
+        addIssue(issues, filePath, `筛选所用官方范围来源不可核验：${error.message}`);
+        return null;
+    }
+}
+
 function resolveFilterDecisionsPath(files = Config.FILES) {
     if (files.filterDecisions) return files.filterDecisions;
     if (files.filteredPapers) return path.join(path.dirname(files.filteredPapers), 'filter-decisions.json');
@@ -1407,10 +1415,18 @@ function validateRawCandidateFilterConsistency(rawPath, decisionsPath, filteredP
     if (decisionData.rawPapersSha256 !== raw.rawPapersSha256) {
         addIssue(issues, decisionsPath, 'rawPapersSha256 必须与 raw-candidates.json 一致');
     }
+    const decisionInputOptions = {
+        batchDate: raw.batchDate,
+        allowManual: raw.filterContract === 'manual-offline-v1'
+            && decisionData.filterContract === 'manual-offline-v1'
+            && decisionData.filterModel === 'manual_offline',
+        filterModel: decisionData.filterModel,
+        filterPromptHash: decisionData.filterPromptHash
+    };
     const rawById = new Map(rawPapers.map(paper => [normalizedId(paper), paper]));
     for (const [key, decision] of Object.entries(decisionData.decisions)) {
         const paper = rawById.get(normalizedId(key));
-        if (!paper || decision.inputSha256 !== buildFilterInputSha256(paper)) {
+        if (!paper || decision.inputSha256 !== checkedDecisionInputSha256(paper, decision, issues, decisionsPath, decisionInputOptions)) {
             addIssue(issues, decisionsPath, `decisions.${key}.inputSha256 与当前筛选输入不一致`);
         }
     }
@@ -1420,7 +1436,7 @@ function validateRawCandidateFilterConsistency(rawPath, decisionsPath, filteredP
     )) {
         const id = normalizedId(key);
         const paper = rawById.get(id);
-        if (!paper || decision?.inputSha256 !== buildFilterInputSha256(paper)) {
+        if (!paper || decision?.inputSha256 !== checkedDecisionInputSha256(paper, decision, issues, decisionsPath, decisionInputOptions)) {
             addIssue(issues, decisionsPath, `retryableDecisions.${key}.inputSha256 与当前筛选输入不一致`);
         }
         if (id && definitiveIds.has(id)) {

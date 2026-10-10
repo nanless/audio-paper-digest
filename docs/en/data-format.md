@@ -45,6 +45,8 @@ Fetched candidates after normalization, merging, and removal of already publishe
 
 Decisions keyed by normalized paper ID, including model or keyword decisions, reasons, raw responses, parsing method, input SHA, and configuration fingerprint. Change the model, prompt, protocol, or keyword rules and you must refilter. Healthy candidates are not fetched again.
 
+Candidates matching only generic modality terms without identifying sound reach model filtering. All such candidates must have official evidence fetched and verified before any paid filtering request; failure stops filtering, while complete saved material can be verified and reused. An 80-character abstract meets a local length condition, not proof of complete modality coverage. This API rule does not add networking to the Manual workflow. `filterScopeEvidence` binds the four source files, the selected original text, and its content hashes to the decision input SHA. Resume and data validation reread and verify those files rather than trusting stored hash fields. This material helps the model identify actual input, output, and evaluation modalities; it does not automatically mark a paper related or rewrite raw candidates.
+
 ### `filtered-papers.json`
 
 The selected set must equal candidate decisions with `related=true`, minus explicit `excludedRelatedIds`. Unknown, failed, and missing decisions must not vanish silently.

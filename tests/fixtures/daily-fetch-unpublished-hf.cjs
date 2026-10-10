@@ -28,7 +28,8 @@ async function main() {
         const result = await api.resumeFilterStage({
             allPapers: [paper], allPapersFiltered: [paper], sourceHealth,
             baseFilterStats: { sourceContractVersion: 7, batchDate: '2026-10-10', batchStartedAt: '2026-10-10T22:00:00+08:00' },
-            initialDecisions: { [paper.arxivId]: { related: true, inputSha256: buildFilterInputSha256(paper) } },
+            initialDecisions: { [paper.arxivId]: { related: true, inputSha256: buildFilterInputSha256(paper),
+                filterModel: 'local-test-only', filterPromptHash: 'b'.repeat(64), batchDate: '2026-10-10' } },
             filterModel: 'local-test-only', filterPromptHash: 'b'.repeat(64), today: '2026-10-10'
         });
         assert.equal(result.filteredNew.length, 1);

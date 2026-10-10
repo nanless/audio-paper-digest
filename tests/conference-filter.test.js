@@ -150,7 +150,7 @@ test('准备阶段保存关键词筛选的排除决定；摘要太短时交给�
     assert.equal(state.completion.excluded, 1);
     const artifact = JSON.parse(fs.readFileSync(path.join(f.filters, ids[0], 'decisions', state.attempts[0].decisionArtifactName)));
     assert.equal(artifact.actor.type, 'keyword');
-    assert.equal(artifact.actor.id, 'speech-audio-music-v4');
+    assert.equal(artifact.actor.id, 'speech-audio-music-v5');
     assert.deepEqual(artifact.result.usage, { requests: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0 });
     const evaluation = JSON.parse(Buffer.from(artifact.response.data, 'base64').toString());
     const keywordInput = JSON.parse(Buffer.from(artifact.request.data, 'base64').toString());

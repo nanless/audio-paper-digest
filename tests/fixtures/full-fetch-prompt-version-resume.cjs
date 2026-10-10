@@ -8,6 +8,7 @@ const scenario = process.argv[2];
 const folder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'prompt-version-resume-')));
 const config = require('../../scripts/config');
 const defaultSourceRuns = config.FILES.dailyFreshSourceRunsDir;
+const defaultFetchedSources = config.FILES.freshArxivFetchedSourcesDir;
 function directoryBytes(root) {
     if (!fs.existsSync(root)) return [];
     const output = [];
@@ -25,6 +26,7 @@ function directoryBytes(root) {
     return output;
 }
 const originalDefaultSourceRuns = directoryBytes(defaultSourceRuns);
+const originalDefaultFetchedSources = directoryBytes(defaultFetchedSources);
 config.DATA_DIR = folder;
 config.CURRENT_DIR = path.join(folder, 'current');
 config.ARCHIVE_DIR = path.join(folder, 'archive');
@@ -36,6 +38,7 @@ for (const key of ['rawCandidates', 'filteredPapers', 'filterDecisions', 'fetchC
     config.FILES[key] = path.join(config.CURRENT_DIR, `${key}.json`);
 }
 config.FILES.dailyFreshSourceRunsDir = path.join(folder, 'runtime/daily-fresh-source-runs');
+config.FILES.freshArxivFetchedSourcesDir = path.join(folder, 'runtime/fresh-arxiv-fetched-sources');
 config.ARXIV_CONFIG.firstRequestDelayMs = 0;
 config.FILTER_CONFIG.keywordPrefilterEnabled = true;
 config.FILTER_CONFIG.batchSize = 5;
@@ -53,7 +56,7 @@ const utils = require('../../scripts/utils');
 const papers = Array.from({ length: 4171 }, (_, index) => ({ arxivId: `2610.${10000 + index}`,
     title: index < 425 ? `本地语音论文${index}` : `本地数学论文${index}`,
     abstract: index < 425 ? 'Speech recognition and audio processing.'
-        : 'We study lattice symmetries and abstract algebraic structures. The proof establishes relations among groups and rings without empirical modalities.',
+        : 'We study lattice symmetries and abstract algebraic structures. The proof establishes relations among groups and rings without empirical experiments.',
     categories: index < 425 ? ['cs.SD'] : ['math.RA'], sources: ['arxiv'] }));
 let phase = 'old';
 const requests = [];
@@ -149,6 +152,8 @@ async function main() {
         try {
             assert.deepEqual(directoryBytes(defaultSourceRuns), originalDefaultSourceRuns,
                 '默认封存来源目录及原文件字节必须保持');
+            assert.deepEqual(directoryBytes(defaultFetchedSources), originalDefaultFetchedSources,
+                '默认官方全文证据目录及原文件字节必须保持');
         } finally { fs.rmSync(folder, { recursive: true, force: true }); }
     }
 }

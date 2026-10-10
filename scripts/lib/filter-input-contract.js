@@ -7,7 +7,7 @@ const { PROMPT_RENDERING_CONTRACT, sequentialSubstitutionChangesInput } = requir
  * 字段及序列化顺序属于已保存记录的格式：filter-decisions.json 会保存
  * 此函数产生的 SHA-256，生成、断点复用与数据校验必须共同调用本实现。
  */
-function buildFilterInputSha256(paper) {
+function buildFilterInputSha256(paper, scopeEvidence = null) {
     const categories = Array.isArray(paper?.categories)
         ? [...paper.categories].map(String).sort()
         : String(paper?.categories || paper?.category || '');
@@ -16,6 +16,11 @@ function buildFilterInputSha256(paper) {
         abstract: String(paper?.abstract || paper?.summary || '').trim(),
         categories
     };
+    if (scopeEvidence) {
+        const canonical = value => Array.isArray(value) ? value.map(canonical)
+            : (value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value);
+        input.scopeEvidence = canonical(scopeEvidence);
+    }
     if (sequentialSubstitutionChangesInput(input)) input.promptRenderingContract = PROMPT_RENDERING_CONTRACT;
     return crypto.createHash('sha256').update(JSON.stringify(input)).digest('hex');
 }

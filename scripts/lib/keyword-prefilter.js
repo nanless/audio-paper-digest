@@ -7,14 +7,20 @@
  * 不会因此重新抓取来源。
  */
 
-const KEYWORD_PREFILTER_VERSION = 'speech-audio-music-v4';
+const KEYWORD_PREFILTER_VERSION = 'speech-audio-music-v5';
 const MIN_ABSTRACT_CHARS_FOR_REJECTION = 80;
 const CORE_AUDIO_CATEGORIES = new Set(['eess.AS', 'cs.SD']);
 
 const PHRASE_GROUPS = Object.freeze({
+    uncertain_modalities: [
+        'multimodal', 'multi-modal', 'multi modal', 'omni-modal', 'omnimodal',
+        'multimodality', 'cross-modal', 'crossmodal', 'modality', 'modalities',
+        'heterogeneous modalities', 'any-to-any', 'multisensory', 'multi-sensory', 'heterogeneous sensors',
+        'multimodal signals', '多模态', '多感官'
+    ],
     speech: [
-        'speech', 'spoken language', 'spoken word', 'voice', 'speaker', 'talker',
-        'utterance', 'phoneme', 'phonetic', 'phonology', 'prosody', 'paralinguistic',
+        'speech', 'spoken', 'spoken language', 'spoken word', 'voice', 'speaker', 'talker',
+        'utterance', 'phoneme', 'phonetic', 'phonology', 'prosody', 'prosodic', 'paralinguistic',
         'text-to-speech', 'speech-to-text', 'speech recognition', 'speech synthesis',
         'speech generation', 'speech translation', 'speech enhancement',
         'speech separation', 'speech denoising', 'speech restoration',
@@ -202,6 +208,8 @@ function evaluateKeywordPrefilter(paper) {
         matchedGroups: [...new Set(matchedGroups)],
         matchedKeywords: uniqueKeywords,
         categoryFallback,
+        requiresScopeEvidence: matchedGroups.includes('uncertain_modalities')
+            && !categoryFallback && matchedGroups.every(group => ['uncertain_modalities', 'affective_paralinguistics'].includes(group)),
         failOpen,
         version: KEYWORD_PREFILTER_VERSION
     };

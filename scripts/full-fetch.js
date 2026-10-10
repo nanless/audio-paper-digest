@@ -12,6 +12,7 @@ const path = require('path');
 const crypto = require('crypto');
 const { fetchCategoryPapersSince, DAILY_ARXIV_API_PAGE_SIZE, filterPapersWithLLM, buildFilterInputSha256 } = require('./fetch-papers.js');
 const { KEYWORD_PREFILTER_VERSION } = require('./lib/keyword-prefilter.js');
+const { FILTER_SCOPE_EVIDENCE_VERSION, validatedDecisionInputSha256 } = require('./lib/filter-scope-evidence.js');
 const {
     createHostTaskScheduler,
     getAdaptiveHostCooldownMs
@@ -140,7 +141,8 @@ function getFilterConfigFingerprint(filterPromptHash = getFilterPromptHash()) {
         promptHash: filterPromptHash,
         decisionContractVersion: Config.FILTER_CONFIG.decisionContractVersion,
         keywordPrefilterEnabled: Config.FILTER_CONFIG.keywordPrefilterEnabled,
-        keywordPrefilterVersion: KEYWORD_PREFILTER_VERSION
+        keywordPrefilterVersion: KEYWORD_PREFILTER_VERSION,
+        scopeEvidenceVersion: FILTER_SCOPE_EVIDENCE_VERSION
     });
 }
 
@@ -385,7 +387,7 @@ function isDefinitiveFilterDecision(decision) {
         && !decision.fallback;
 }
 
-function validateFilterDecisionCoverage(papers, decisions) {
+function validateFilterDecisionCoverage(papers, decisions, options = {}) {
     const paperById = new Map((papers || []).map(paper => [normalizedId(paper), paper]).filter(([id]) => Boolean(id)));
     const candidateIds = new Set(paperById.keys());
     const decisionEntries = Object.entries(decisions || {})
@@ -393,11 +395,11 @@ function validateFilterDecisionCoverage(papers, decisions) {
         .filter(([id]) => Boolean(id));
     const validDecisionIds = new Set(decisionEntries
         .filter(([id, decision]) => isDefinitiveFilterDecision(decision)
-            && decision.inputSha256 === buildFilterInputSha256(paperById.get(id)))
+            && decision.inputSha256 === validatedDecisionInputSha256(paperById.get(id), decision, options))
         .map(([id]) => id));
     const retryableIds = decisionEntries
         .filter(([id, decision]) => !isDefinitiveFilterDecision(decision)
-            || decision.inputSha256 !== buildFilterInputSha256(paperById.get(id)))
+            || decision.inputSha256 !== validatedDecisionInputSha256(paperById.get(id), decision, options))
         .map(([id]) => id);
     const missingIds = Array.from(candidateIds).filter(id => !validDecisionIds.has(id));
     const unexpectedIds = Array.from(validDecisionIds).filter(id => !candidateIds.has(id));
@@ -471,7 +473,7 @@ function loadResumableFilterForToday(today, expected = {}, files = {}) {
                 ? expected.filterPromptHash[0] : expected.filterPromptHash };
     }
 
-    const coverage = validateFilterDecisionCoverage(rawCandidates.papers, decisionsData.decisions);
+    const coverage = validateFilterDecisionCoverage(rawCandidates.papers, decisionsData.decisions, { batchDate: today, filterModel: decisionsData.filterModel, filterPromptHash: decisionsData.filterPromptHash });
     return { rawCandidates, decisionsData, coverage };
 }
 
@@ -533,7 +535,7 @@ function validateFilterArtifacts(filteredData, decisionsData, rawCandidates = nu
     for (const key of ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint']) {
         if (!rawCandidates[key] || filteredData[key] !== rawCandidates[key] || decisionsData[key] !== rawCandidates[key]) return false;
     }
-    const coverage = validateFilterDecisionCoverage(rawCandidates.papers, decisionsData.decisions);
+    const coverage = validateFilterDecisionCoverage(rawCandidates.papers, decisionsData.decisions, { batchDate: decisionsData.batchDate, filterModel: decisionsData.filterModel, filterPromptHash: decisionsData.filterPromptHash });
     if (!coverage.complete || coverage.decided !== decisionCount) return false;
     if (decisionsData.stats.totalCandidates !== coverage.totalCandidates) return false;
     if (decisionsData.stats.decided !== coverage.decided) return false;
@@ -872,7 +874,7 @@ async function resumeFilterStage({
         delayBetweenBatches: Config.FILTER_CONFIG.delayBetweenBatchesMs,
         useKeywordPreFilter: Config.FILTER_CONFIG.keywordPrefilterEnabled,
         initialDecisions: filterDecisions,
-        decisionMetadata: { filterModel, filterPromptHash },
+        decisionMetadata: { filterModel, filterPromptHash, batchDate: today },
         onBatchComplete: async ({ results, decisions, retryableDecisions }) => {
             filterDecisions = decisions;
             retryableFilterDecisions = retryableDecisions;
@@ -1348,7 +1350,7 @@ function prepareExplicitRefilter(today, expected, request) {
     for (const id of request.ids) {
         const paper = papersById.get(id); const decision = original.decisions?.[id];
         if (!paper || !isDefinitiveFilterDecision(decision)
-            || decision.inputSha256 !== buildFilterInputSha256(paper)
+            || decision.inputSha256 !== validatedDecisionInputSha256(paper, decision, { batchDate: today })
             || decision.parseSource === 'keyword_prefilter') {
             throw new Error(`指定论文 ${id} 必须是当前原始候选中已有有效模型决定的论文；此入口只复核模型决定，未请求模型`);
         }
@@ -1391,7 +1393,7 @@ function prepareExplicitRefilter(today, expected, request) {
     const pendingCoverage = validateFilterDecisionCoverage(raw.papers, initialDecisions);
     const definitiveDecisions = Object.entries(initialDecisions)
         .filter(([id, decision]) => papersById.has(id) && isDefinitiveFilterDecision(decision)
-            && decision.inputSha256 === buildFilterInputSha256(papersById.get(id)))
+            && decision.inputSha256 === validatedDecisionInputSha256(papersById.get(id), decision, { batchDate: today }))
         .map(([, decision]) => decision);
     pending.stats = { ...original.stats, complete: false, decided: pendingCoverage.decided,
         related: definitiveDecisions.filter(decision => decision.related === true).length,
@@ -1915,7 +1917,8 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
             initialDecisions: filterDecisions,
             decisionMetadata: {
                 filterModel,
-                filterPromptHash
+                filterPromptHash,
+                batchDate: today
             },
             onBatchComplete: async ({ results, decisions, retryableDecisions }) => {
                 filterDecisions = decisions;

@@ -63,7 +63,8 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `editorial-quality.js` | Node 共享 | 检查 API/Manual 读者正文的语言、事实表述、评分和可读性。 |
 | `digest-status.js` | Node 共享 | 同步 `papers.json` 的分析状态、批次日期和恢复状态。 |
 | `lib/fetch-scheduler.js` | Node 库 | 按主机串行调度抓取，记录冷却时间并识别失败类型。 |
-| `lib/filter-input-contract.js` | Node 库 | 算出筛选决定对应的最小输入 SHA。 |
+| `lib/filter-input-contract.js` | Node 库 | 算出筛选决定对应的输入 SHA；使用官方范围证据时，一并绑定实际交给模型的证据。 |
+| `lib/filter-scope-evidence.js` | Node 库 | 为仅命中泛多模态词、且未明确声音模态的候选获取同篇官方 TXT、PDF、来源元数据和清单；读取时核验文件，并保存模型所用原文及其 SHA。它不直接判定论文相关。 |
 | `lib/tag-catalog.js` | Node 库 | `loadTagCatalog` 加载共享标签词表，`validateTagCatalog` 检查字段与层级；另外可按别名解析，也能查上下级。Node/Python 解析器和发布检查都用词表原始字节计算 SHA。 |
 | `lib/tag-rules.js` | Node 库 | `createTagRules` 创建标签解析与选择规则，`getDefaultTagRules` 复用默认规则，`buildTagPromptText` 默认生成新版模型标签提示，指定旧版本时，也能生成核验文本。默认选择协议为 `paper-tag-selection-v2`，旧阶段按保存的版本读取，详见本页的分类词表维护说明。 |
 | `lib/page-tag-metadata.js` | Node 库 | 解析页面的 YAML 页首字段，识别新旧标签字段，拒绝混用与重复键；只认实际存在的顶层字段，描述或正文里的文字不算标签声明。 |

@@ -13,6 +13,7 @@ setupScriptLogging(__filename);
 const path = require('path');
 const cheerio = require('cheerio');
 const { buildFilterInputSha256 } = require('./lib/filter-input-contract.js');
+const { captureFilterScopeEvidence, assertFilterScopeEvidence, renderFilterScopeEvidence, validatedDecisionInputSha256 } = require('./lib/filter-scope-evidence.js');
 const {
     KEYWORD_PREFILTER_VERSION,
     evaluateKeywordPrefilter,
@@ -1907,11 +1908,19 @@ function getCaseInsensitiveField(obj, names) {
 async function getSpeechAudioDecision(paper, options = {}) {
     const paperId = normalizedId(paper) || paper.arxivId || paper.paper_id || paper.id || '';
     const circuitBreaker = options.circuitBreaker || createFilterCircuitBreaker(options.circuitBreakerOptions);
-    const prompt = loadPrompt(LLM_FILTER_PROMPT_PATH, {
+    let prompt = loadPrompt(LLM_FILTER_PROMPT_PATH, {
         title: paper.title,
         abstract: paper.abstract || paper.summary || '',
         categories: paper.categories || paper.category || ''
     });
+
+    const batchDate = options.batchDate || getBeijingISOString().slice(0, 10);
+    const scopeEvidence = paper.filterScopeEvidence || (evaluateKeywordPrefilter(paper).requiresScopeEvidence
+        ? await captureFilterScopeEvidence(paper, batchDate, options.scopeSourceOverrides || {}) : null);
+    if (scopeEvidence) {
+        assertFilterScopeEvidence(paper, scopeEvidence, batchDate);
+        prompt += renderFilterScopeEvidence(scopeEvidence);
+    }
 
     try {
         circuitBreaker.assertClosed();
@@ -1945,8 +1954,8 @@ async function getSpeechAudioDecision(paper, options = {}) {
     }
 }
 
-async function isSpeechAudioRelated(paper) {
-    return (await getSpeechAudioDecision(paper)).related;
+async function isSpeechAudioRelated(paper, options = {}) {
+    return (await getSpeechAudioDecision(paper, options)).related;
 }
 
 function getEffectiveFilterBatchSize(configuredBatchSize, model = FILTER_CONFIG.model) {
@@ -1971,7 +1980,7 @@ async function filterPapersWithLLM(papers, options = {}) {
     } = options;
     const circuitBreaker = createFilterCircuitBreaker(decisionOptions.circuitBreakerOptions);
     const activeDecisionFn = decisionFn === getSpeechAudioDecision
-        ? paper => getSpeechAudioDecision(paper, { ...decisionOptions, circuitBreaker })
+        ? paper => getSpeechAudioDecision(paper, { ...decisionOptions, batchDate: decisionMetadata.batchDate, circuitBreaker })
         : decisionFn;
     const effectiveBatchSize = decisionFn === getSpeechAudioDecision
         ? getEffectiveFilterBatchSize(batchSize)
@@ -2024,7 +2033,7 @@ async function filterPapersWithLLM(papers, options = {}) {
         const key = normalizedId(id);
         if (!key || !decision || typeof decision.related !== 'boolean' || decision.retryable || decision.fallback) return;
         if (!currentPaperIds.has(key)) return;
-        if (decision.inputSha256 !== buildFilterInputSha256(paperById.get(key))) return;
+        if (decision.inputSha256 !== validatedDecisionInputSha256(paperById.get(key), decision, decisionMetadata)) return;
         decisions.set(key, decision);
     };
     if (initialDecisions instanceof Map) {
@@ -2035,6 +2044,21 @@ async function filterPapersWithLLM(papers, options = {}) {
         for (const [id, decision] of Object.entries(initialDecisions)) {
             loadDecision(id, decision);
         }
+    }
+    // 先取得全部不明确多模态论文的官方材料，再开始任何付费筛选。
+    const scopeById = new Map();
+    for (const paper of papersToCheck) {
+        if (!evaluateKeywordPrefilter(paper).requiresScopeEvidence) continue;
+        const id = normalizedId(paper);
+        const evidence = await captureFilterScopeEvidence(paper, decisionMetadata.batchDate,
+            decisionOptions.scopeSourceOverrides || {});
+        scopeById.set(id, evidence);
+    }
+    papersToCheck = papersToCheck.map(paper => scopeById.has(normalizedId(paper))
+        ? { ...paper, filterScopeEvidence: scopeById.get(normalizedId(paper)) } : paper);
+    for (const paper of papersToCheck) {
+        const id = normalizedId(paper); const decision = decisions.get(id);
+        if (decision && decision.inputSha256 !== buildFilterInputSha256(paper, paper.filterScopeEvidence)) decisions.delete(id);
     }
     // 关键词排除是当前词表下的正式决定；它覆盖旧的 LLM 决定。词表/开关变化
     // 由上层 filterConfigFingerprint 负责使整批缓存失效。
@@ -2119,7 +2143,8 @@ async function filterPapersWithLLM(papers, options = {}) {
                 fallback: Boolean(modelDecision.fallback),
                 retryable: !isDefinitive,
                 decidedAt: getBeijingISOString(),
-                inputSha256: buildFilterInputSha256(paper),
+                inputSha256: buildFilterInputSha256(paper, paper.filterScopeEvidence),
+                ...(paper.filterScopeEvidence ? { filterScopeEvidence: paper.filterScopeEvidence } : {}),
                 ...decisionMetadata
             };
             if (isDefinitive) {
@@ -2157,7 +2182,8 @@ async function filterPapersWithLLM(papers, options = {}) {
                 fallback: true,
                 retryable: true,
                 decidedAt: getBeijingISOString(),
-                inputSha256: buildFilterInputSha256(paper),
+                inputSha256: buildFilterInputSha256(paper, paper.filterScopeEvidence),
+                ...(paper.filterScopeEvidence ? { filterScopeEvidence: paper.filterScopeEvidence } : {}),
                 ...decisionMetadata
             };
             retryableDecisions.set(paperId, decision);

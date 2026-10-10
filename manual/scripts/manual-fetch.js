@@ -563,7 +563,7 @@ function writeSelection(date, specPath) {
             reviewedFields
         };
     }
-    const coverage = validateFilterDecisionCoverage(raw.papers, output);
+    const coverage = validateFilterDecisionCoverage(raw.papers, output, { allowManual: true });
     if (!coverage.complete) throw new Error(`manual filter 覆盖失败: ${JSON.stringify(coverage)}`);
     const related = raw.papers.filter(paper => output[normalizedId(paper)]?.related === true);
     const archiveAnalyzedIds = loadAnalyzedIdsFromArchive();

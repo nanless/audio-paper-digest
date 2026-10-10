@@ -275,8 +275,8 @@ describe('full-fetch 辅助函数', () => {
             fetchSourcesSha256: checkpoint.fetchSourcesSha256,
             stats: { complete: true, totalCandidates: 2, decided: 2 },
             decisions: {
-                '2607.00001': { related: true, inputSha256: buildFilterInputSha256(rawPapers[0]) },
-                '2607.00002': { related: false, inputSha256: buildFilterInputSha256(rawPapers[1]) }
+                '2607.00001': { related: true, filterModel: 'model-a', filterPromptHash: 'hash-a', inputSha256: buildFilterInputSha256(rawPapers[0]) },
+                '2607.00002': { related: false, filterModel: 'model-a', filterPromptHash: 'hash-a', inputSha256: buildFilterInputSha256(rawPapers[1]) }
             }
         };
         const filtered = {
@@ -413,7 +413,7 @@ describe('full-fetch 辅助函数', () => {
             filterModel: 'model-a',
             filterPromptHash: 'hash-a',
             decisions: {
-                '2607.00001': { related: true, inputSha256: buildFilterInputSha256(papers[0]) },
+                '2607.00001': { related: true, filterModel: 'model-a', filterPromptHash: 'hash-a', inputSha256: buildFilterInputSha256(papers[0]) },
                 '2607.00002': { related: null, retryable: true, fallback: true }
             }
         }));
