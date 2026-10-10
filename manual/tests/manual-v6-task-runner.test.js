@@ -771,7 +771,7 @@ describe('Manual v6 持久任务执行器', () => {
                         ...fileOptions, requireFiles: false
                     }));
                     const currentContractError = {
-                        message: 'editorial_contract 不是仓库当前固定权威文件'
+                        message: 'editorial_contract 与仓库当前规定文件的内容校验值不同'
                     };
                     assert.throws(() => validateTaskPacket(packet, fileOptions), currentContractError);
                     assert.throws(() => registerPacket(fx.state, registerOptions), currentContractError);
@@ -794,7 +794,7 @@ describe('Manual v6 持久任务执行器', () => {
             assert.equal(bytesSha(packetPath), task.packetFileSha256);
             assert.equal(buildTaskPacket(packet).packetSha256, task.packetSha256);
             assert.throws(() => verifyBoundInputs(fx.state), {
-                message: 'editorial_contract 不是仓库当前固定权威文件'
+                message: 'editorial_contract 与仓库当前规定文件的内容校验值不同'
             });
             assert.equal(JSON.stringify(fx.state), stateBefore);
         });

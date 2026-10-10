@@ -98,7 +98,7 @@ function stableSha256(value) {
 
 function taskOutputContract(role, policy = CURRENT_MODEL_POLICY) {
     const rules = modelPolicyRules(policy);
-    if (!TASK_ROLES.has(role)) throw new Error('task output contract role 非法');
+    if (!TASK_ROLES.has(role)) throw new Error('任务输出要求中的 role 不受支持');
     const commonReceipt = {
         version: 1,
         requiredFields: [
@@ -186,10 +186,10 @@ function taskOutputContract(role, policy = CURRENT_MODEL_POLICY) {
 function resolveManualV6RuntimePaths(currentDir, date, runtimeMode) {
     const root = path.resolve(String(currentDir || ''));
     if (!root || !/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) {
-        throw new Error('Manual v6 runtime path 需要 currentDir 与合法日期');
+        throw new Error('Manual v6 运行目录需要 currentDir 和 YYYY-MM-DD 格式的日期');
     }
     if (![MANUAL_V6_RUNTIME_MODE_PRODUCTION, MANUAL_V6_RUNTIME_MODE_SHADOW].includes(runtimeMode)) {
-        throw new Error('Manual v6 runtime mode 必须显式为 production 或 shadow');
+        throw new Error('Manual v6 运行方式必须明确指定为 production 或 shadow');
     }
     const directoryName = runtimeMode === MANUAL_V6_RUNTIME_MODE_PRODUCTION
         ? 'manual-v6'
@@ -233,7 +233,7 @@ function normalizedRelativeArtifactPath(value, label) {
     const normalized = path.posix.normalize(raw);
     if (path.posix.isAbsolute(normalized) || normalized === '..' || normalized.startsWith('../')
         || normalized.includes('/../') || normalized === '.') {
-        throw new Error(`${label} 必须是单篇工件根下的安全相对路径`);
+        throw new Error(`${label} 必须是单篇任务目录下的安全相对路径`);
     }
     return normalized;
 }
@@ -248,7 +248,7 @@ function artifactRuleForPath(role, artifactPath) {
         : FRESH_EVIDENCE_RULES;
     const matches = rules.filter(rule => rule.pattern.test(artifactPath));
     if (matches.length !== 1) {
-        throw new Error(`${role} task packet 工件路径不属于确定性权威白名单: ${artifactPath}`);
+        throw new Error(`${role} 任务数据包中的文件路径不属于代码规定的允许清单: ${artifactPath}`);
     }
     return matches[0];
 }
@@ -264,16 +264,16 @@ function validateFreshAuthoringArtifacts(role, artifacts) {
     const evidence = artifacts.filter(item => item.authority !== 'runner_validated_output');
     for (const kind of REQUIRED_FRESH_EVIDENCE_KINDS) {
         if (evidence.filter(item => item.kind === kind).length !== 1) {
-            throw new Error(`${role} task packet 必须且只能绑定一份权威 ${kind}`);
+            throw new Error(`${role} 任务数据包必须且只能指定一份规定来源的 ${kind}`);
         }
     }
     if (role === 'author' && artifacts.length !== evidence.length) {
-        throw new Error('author task packet 禁止读取 review 或历史正文工件');
+        throw new Error('author 任务数据包禁止读取审查结果或历史正文文件');
     }
     if (role === 'author_revision') {
         for (const kind of ['technical_review', 'readability_review']) {
             if (artifacts.filter(item => item.kind === kind).length !== 1) {
-                throw new Error(`author_revision task packet 必须且只能绑定一份当前 runner 验证的 ${kind}`);
+                throw new Error(`author_revision 任务数据包必须且只能指定一份当前任务管理程序已验证的 ${kind}`);
             }
         }
     }
@@ -320,17 +320,17 @@ function validateFreshAuthorityFiles(packet, files, options = {}) {
     }
     if (options.expectedPaperMetadata
         && stableSha256(metadata) !== stableSha256(options.expectedPaperMetadata)) {
-        throw new Error('paper_metadata 不是 runner 绑定 filtered 批次中的当前论文元数据');
+        throw new Error('paper_metadata 与任务管理程序所绑定筛选批次中的当前论文元数据不同');
     }
     if (options.expectedPaperInputSha256
         && packet.paperInputSha256 !== options.expectedPaperInputSha256) {
-        throw new Error('task packet.paperInputSha256 不是 runner 绑定 filtered 批次的确定性输入身份');
+        throw new Error('task packet.paperInputSha256 与任务管理程序所绑定筛选批次的论文输入标识不同');
     }
     const snapshot = parseJsonFile(byKind.get('source_snapshot').resolved, 'source_snapshot');
     if (normalizedId(snapshot.paperId) !== packet.paperId
         || snapshot.paperInputSha256 !== packet.paperInputSha256
         || snapshot.sourceIdentitySha256 !== packet.sourceIdentitySha256) {
-        throw new Error('source_snapshot 未绑定当前论文 input/source identity');
+        throw new Error('source_snapshot 中的论文、输入或来源标识与任务数据包不同');
     }
     for (const field of ['source', 'sourceId', 'sourceSha256']) assertText(snapshot[field], `source_snapshot.${field}`, 1);
     assertSha(snapshot.sourceSha256, 'source_snapshot.sourceSha256');
@@ -338,7 +338,7 @@ function validateFreshAuthorityFiles(packet, files, options = {}) {
         source: snapshot.source, sourceId: snapshot.sourceId, sourceSha256: snapshot.sourceSha256
     });
     if (expectedSourceIdentity !== packet.sourceIdentitySha256) {
-        throw new Error('source_snapshot source identity 不是来源字段的确定性签名');
+        throw new Error('source_snapshot 的来源标识不是按 source、sourceId 和 sourceSha256 字段计算的结果');
     }
     if (byKind.get('fulltext').artifact.sha256 !== snapshot.sourceSha256) {
         throw new Error('fulltext 文件字节未绑定 source_snapshot.sourceSha256，禁止用改名旧稿冒充全文');
@@ -350,7 +350,7 @@ function validateFreshAuthorityFiles(packet, files, options = {}) {
         || artifactIndex.inputIdentity?.sourceSha256 !== snapshot.sourceSha256
         || artifactIndex.artifactIndexSha256 !== computeArtifactIndexSha256(artifactIndex)
         || artifactIndex.outputSha256 !== artifactIndex.artifactIndexSha256) {
-        throw new Error('artifact_index 不是当前 source snapshot 的确定性索引');
+        throw new Error('artifact_index 的论文或输入标识与当前来源快照不同，或自身内容校验未通过');
     }
     const structured = byKind.get('structured_fulltext');
     const expectedStructuredSha = String(artifactIndex.inputIdentity?.structuredArtifactsSha256 || '');
@@ -361,7 +361,7 @@ function validateFreshAuthorityFiles(packet, files, options = {}) {
             || envelope.sourceIdentitySha256 !== packet.sourceIdentitySha256
             || envelope.sourceSha256 !== snapshot.sourceSha256
             || envelope.payloadSha256 !== expectedStructuredSha) {
-            throw new Error('structured_fulltext envelope 未绑定当前 ArtifactIndex/source snapshot');
+            throw new Error('structured_fulltext 记录的论文、输入、来源或内容标识与当前 ArtifactIndex 或来源快照不同');
         }
         validateStructuredArtifacts(envelope.structuredArtifacts, {
             paperId: packet.paperId, sourceId: snapshot.sourceId, sourceSha256: snapshot.sourceSha256
@@ -370,21 +370,21 @@ function validateFreshAuthorityFiles(packet, files, options = {}) {
             throw new Error('structured_fulltext payload SHA 与 ArtifactIndex 不一致');
         }
     } else if (structured) {
-        throw new Error('ArtifactIndex 未声明结构化输入，不得额外塞入 structured_fulltext');
+        throw new Error('ArtifactIndex 未声明结构化输入，不得额外提供 structured_fulltext');
     }
     const policy = versionedModelPolicy(packet, LEGACY_TASK_PACKET_VERSION, TASK_PACKET_VERSION, '任务数据包');
     const authorityFiles = { ...REPOSITORY_AUTHORITY_FILES, editorial_contract:
         path.resolve(__dirname, '../..', modelPolicyRules(policy).editorialContractPath) };
     for (const [kind, repositoryPath] of Object.entries(authorityFiles)) {
         if (byKind.get(kind).artifact.sha256 !== fileSha256(repositoryPath)) {
-            throw new Error(`${kind} 不是仓库当前固定权威文件`);
+            throw new Error(`${kind} 与仓库当前规定文件的内容校验值不同`);
         }
     }
     const blankTemplate = parseJsonFile(byKind.get('record_template').resolved, 'record_template');
     if (blankTemplate.version !== 1 || blankTemplate.mode !== 'manual_v6_blank_record_schema'
         || blankTemplate.paperId !== packet.paperId || blankTemplate.populated !== false
         || containsFilledProseField(blankTemplate)) {
-        throw new Error('record_template 必须是绑定当前论文且不含历史正文/analysis 的空白 schema');
+        throw new Error('record_template 必须是当前论文的空白记录模板，且不含已填写的正文或 analysis');
     }
     const figures = files.filter(item => item.artifact.kind === 'paper_figure');
     const figureIndex = new Map((artifactIndex.figures || artifactIndex.images || [])
@@ -396,7 +396,7 @@ function validateFreshAuthorityFiles(packet, files, options = {}) {
             authority?.cacheSha256 || authority?.fileSha256 || authority?.sha256 || ''
         );
         if (!id || !authority || authoritativeFileSha !== figure.artifact.sha256) {
-            throw new Error(`paper_figure ${figure.artifact.path} 未由当前 ArtifactIndex 的缓存字节 SHA 授权`);
+            throw new Error(`paper_figure ${figure.artifact.path} 与当前 ArtifactIndex 中记录的图片文件 SHA 不对应`);
         }
     }
 }
@@ -433,7 +433,7 @@ function buildTaskPacket(options = {}) {
 // 旧数据包只在读取核验时按原规则重建，不能通过公开创建入口新发旧模型任务。
 function rebuildTaskPacket(options, policy) {
     const role = options.role;
-    if (!TASK_ROLES.has(role)) throw new Error('task packet role 非法');
+    if (!TASK_ROLES.has(role)) throw new Error('任务数据包的 role 不受支持');
     const paperId = assertPaperId(options.paperId, null, 'task packet');
     const allowedArtifacts = Array.isArray(options.allowedArtifacts) ? options.allowedArtifacts.map((raw, index) => {
         const item = assertObject(raw, `allowedArtifacts[${index}]`);
@@ -451,7 +451,7 @@ function rebuildTaskPacket(options, policy) {
             ...(rule ? { authority: rule.authority } : {})
         };
     }) : [];
-    if (allowedArtifacts.length < 1) throw new Error('task packet 至少绑定一个单篇工件');
+    if (allowedArtifacts.length < 1) throw new Error('任务数据包至少指定一个单篇任务文件');
     if (new Set(allowedArtifacts.map(item => item.path)).size !== allowedArtifacts.length) {
         throw new Error('task packet allowedArtifacts.path 不得重复');
     }
@@ -476,7 +476,7 @@ function rebuildTaskPacket(options, policy) {
         const expectedOutputContract = taskOutputContract(role, policy);
         if (options.outputContract !== undefined
             && stableSha256(options.outputContract) !== stableSha256(expectedOutputContract)) {
-            throw new Error('task packet.outputContract 与当前角色正式契约不一致');
+            throw new Error('task packet.outputContract 与当前角色的规定输出要求不一致');
         }
         packet.outputContract = expectedOutputContract;
     }
@@ -513,7 +513,7 @@ function validateTaskPacket(packet, options = {}) {
             const resolved = fs.realpathSync(declared);
             const relative = path.relative(artifactRoot, resolved);
             if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) {
-                throw new Error(`task packet allowedArtifacts[${index}] 逃逸单篇工件根`);
+                throw new Error(`task packet allowedArtifacts[${index}] 位于单篇任务目录之外`);
             }
             const embeddedPaperIds = artifact.path.match(/\b\d{4}\.\d{4,5}\b/g) || [];
             if (embeddedPaperIds.some(id => normalizedId(id) !== rebuilt.paperId)) {
@@ -545,14 +545,14 @@ function validateAuthorRevisionArtifactLineage(authorPacket, revisionPacket, rev
         || author.paperId !== revision.paperId
         || author.paperInputSha256 !== revision.paperInputSha256
         || author.sourceIdentitySha256 !== revision.sourceIdentitySha256) {
-        throw new Error('author_revision 与 author packet 不是同一篇权威证据输入');
+        throw new Error('author_revision 与 author 数据包的论文、输入或来源标识不同');
     }
     const revisionEvidence = revision.allowedArtifacts
         .filter(item => item.authority !== 'runner_validated_output')
         .map(artifactIdentity);
     const authorEvidence = author.allowedArtifacts.map(artifactIdentity);
     if (stableSha256(revisionEvidence) !== stableSha256(authorEvidence)) {
-        throw new Error('author_revision 必须逐项复用 author 的同序权威 evidence allowlist，禁止增删或替换');
+        throw new Error('author_revision 必须逐项复用 author 按相同顺序列出的来源文件，禁止增删或替换');
     }
     const expectedReviews = [
         ['technical_review', reviewArtifacts.technical],
@@ -561,13 +561,13 @@ function validateAuthorRevisionArtifactLineage(authorPacket, revisionPacket, rev
     for (const [kind, expected] of expectedReviews) {
         if (!expected || !SHA256_RE.test(String(expected.sha256 || ''))
             || typeof expected.path !== 'string') {
-            throw new Error(`author_revision 缺少 runner/assembler 验证的 ${kind} 工件身份`);
+            throw new Error(`author_revision 缺少任务管理或记录汇总程序已验证的 ${kind} 文件标识`);
         }
         const artifact = revision.allowedArtifacts.find(item => item.kind === kind);
         if (!artifact || artifact.path !== normalizedRelativeArtifactPath(expected.path, `${kind}.path`)
             || artifact.sha256 !== expected.sha256
             || artifact.authority !== 'runner_validated_output') {
-            throw new Error(`author_revision 的 ${kind} 不是当前已验证 review 输出`);
+            throw new Error(`author_revision 的 ${kind} 路径、文件校验值或来源类别与当前已验证的审查输出不同`);
         }
     }
     return revision;
@@ -773,7 +773,7 @@ function validateRevisionOutput(output, paperId, receipt, options = {}) {
             const resolved = fs.realpathSync(declared);
             const relative = path.relative(realRoot, resolved);
             if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-                throw new Error(`${label}.${field} 经 realpath 逃逸单篇工件根`);
+                throw new Error(`${label}.${field} 的实际文件路径位于单篇任务目录之外`);
             }
             const bytes = fs.readFileSync(resolved);
             if (crypto.createHash('sha256').update(bytes).digest('hex') !== ref.fileSha256) {

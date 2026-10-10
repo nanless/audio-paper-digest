@@ -45,7 +45,7 @@ function populateAuthorMinimums(draft) {
     return draft;
 }
 
-describe('Manual v6 生产包生成器', () => {
+describe('Manual v6 单篇任务包和作者输出检查', () => {
     it('新任务内联角色输出格式与 SHA-256 算法，要求当前模型身份', () => {
         const technical = taskOutputContract('technical_scoring');
         assert.equal(technical.fixedOutputPath, 'reviews/technical-scoring.json');
@@ -54,7 +54,7 @@ describe('Manual v6 生产包生成器', () => {
         assert.match(technical.receipt.semanticShaAlgorithm, /stable-json-ascii-keys-exact-ieee754/);
     });
 
-    it('CLI 固定单篇 role，blank schema 不含已填写 prose', () => {
+    it('命令参数限定单篇角色，空白记录格式不预填正文', () => {
         assert.deepEqual(parseArgs([
             '--date', '2026-08-29', '--paper', '2608.12345v2', '--role', 'author'
         ]), { date: '2026-08-29', paper: '2608.12345', role: 'author' });
@@ -113,7 +113,7 @@ describe('Manual v6 生产包生成器', () => {
         ]), /--role/);
     });
 
-    it('production author output v2 重开固定正文和未封印 record draft', () => {
+    it('作者输出 v2 重新读取指定正文和未封存草稿，并核对模型规则与 SHA', () => {
         const root = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-author-output-'));
         fs.mkdirSync(path.join(root, 'draft'));
         const article = Buffer.from('当前论文的独立初稿正文。\n', 'utf8');
@@ -160,7 +160,7 @@ describe('Manual v6 生产包生成器', () => {
         fs.rmSync(root, { recursive: true, force: true });
     });
 
-    it('author-owned 基础字段只接受受控类型/无歧义别名和规范标签字符串', () => {
+    it('作者填写的基础字段须使用允许的文档类型、明确别名和规范标签字符串', () => {
         const valid = {
             type: '方法研究', task: '#语音识别',
             primaryMethodTag: '#Transformer',
@@ -219,7 +219,7 @@ describe('Manual v6 生产包生成器', () => {
         assert.throws(() => validateAuthorOwnedRecordDraft(complete), /manualAudit/);
     });
 
-    it('只写出 ArtifactIndex 授权、真实 MIME/SHA 且位于受控 cache 的图片', () => {
+    it('图片须列入来源索引，文件类型标记与 SHA 相符，且位于指定缓存目录', () => {
         const current = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-v6-figures-'));
         const cache = path.join(current, 'image-cache');
         const paper = path.join(current, 'paper');

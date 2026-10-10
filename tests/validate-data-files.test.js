@@ -1039,7 +1039,7 @@ describe('validate-data-files', () => {
         assert.deepStrictEqual(validatePaperListFile(resultFile, { deepAnalysis: true }), []);
     });
 
-    it('校验阶段专属终态、detailed-v1 方法契约和顶层状态一致性', () => {
+    it('校验主分析完成状态、detailed-v1 方法正文和批次统计是否对应', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-method-status-'));
         const resultFile = path.join(dir, 'deep-analysis-result.json');
         const analysis = validAnalysisText();

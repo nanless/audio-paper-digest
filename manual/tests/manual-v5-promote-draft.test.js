@@ -112,7 +112,7 @@ describe('Manual v5 旧草稿只读审查与写入拒绝', () => {
         assert.equal(fs.existsSync(path.join(paperRoot, 'draft-promotion.json')), false);
     });
 
-    it('拒绝未绑定当前文章 SHA 的 review', () => {
+    it('旧审查记录必须绑定当前文章 SHA', () => {
         const f = fixture();
         fs.writeFileSync(f.technicalReview, JSON.stringify({
             paperId: '2608.25177', passed: true, blockers: [], articleSha: '0'.repeat(64),
@@ -122,14 +122,14 @@ describe('Manual v5 旧草稿只读审查与写入拒绝', () => {
             /没有绑定当前 revision article SHA/);
     });
 
-    it('拒绝只写 SHA 不写真实 authority path 的 fresh 自报', () => {
+    it('旧作者记录只写来源 SHA、未写实际文件路径时被拒绝', () => {
         const f = fixture();
         const recordPath = path.join(f.source, 'author-record.json');
         const record = JSON.parse(fs.readFileSync(recordPath, 'utf8'));
         delete record.freshAuthoring.inputs[0].path;
         fs.writeFileSync(recordPath, JSON.stringify(record));
-        // 此样例的 packet 是最小格式控制；这里只隔离测试来源路径核验，
-        // 完整生产作者包读取另由 author-packet 测试检查。
+        // 此任务包只包含测试所需的最少字段；这里只检查来源文件路径，
+        // 完整作者包的读取另由 author-packet 测试检查。
         assert.throws(() => validateAuthorAuthority(record, f.packetPath,
             '2026-08-27', '2608.25177', () => true, f.root),
         /paper_metadata 未精确绑定 author packet allowlist/);

@@ -464,7 +464,7 @@ describe('filterPapersByKeywords', () => {
         }).pass, false);
     });
 
-    it('缩写必须作为独立大写 token，避免普通单词子串误命中', () => {
+    it('缩写须以独立大写形式出现，小写片段不能作为关键词命中', () => {
         assert.strictEqual(evaluateKeywordPrefilter({
             title: 'An asr-like lowercase fragment',
             abstract: 'We conduct a text-only study of written-document classification and evaluate lexical representations, semantic features, and label efficiency on multiple corpora.',
@@ -477,7 +477,7 @@ describe('filterPapersByKeywords', () => {
         }).pass, true);
     });
 
-    it('摘要缺失或过短时安全放行给 LLM，不做无证据关键词排除', () => {
+    it('摘要缺失时保留给模型筛选，不仅凭关键词未命中排除', () => {
         const result = evaluateKeywordPrefilter({
             title: 'A New General Framework',
             abstract: '',
@@ -488,7 +488,7 @@ describe('filterPapersByKeywords', () => {
         assert.match(result.reason, /摘要不足/);
     });
 
-    it('withdrawn/retracted 不得绕过核心类别与短摘要 fail-open 契约', () => {
+    it('标题标明撤回或撤稿时，核心类别或短摘要的论文仍交给模型筛选', () => {
         assert.strictEqual(evaluateKeywordPrefilter({
             title: 'Withdrawn submission',
             abstract: 'Withdrawn by the authors.',

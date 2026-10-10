@@ -52,7 +52,7 @@ describe('Manual 单篇来源身份', () => {
         assert.equal(after.sha256, before.sha256);
     });
 
-    it('本篇的全文、图片、结构化证据或 ArtifactIndex 一变就直接失败', () => {
+    it('本篇全文 SHA、图注、结构化来源 SHA 或来源索引 SHA 改变时，原来源身份被拒绝', () => {
         const own = fixture();
         const declared = buildManualPaperSourceIdentity(own);
         assert.doesNotThrow(() => validateManualPaperSourceIdentity(declared, own));

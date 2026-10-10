@@ -139,7 +139,7 @@ function makeFixture(options = {}) {
     return { root, currentDir, archiveDir, shadowRoot, workspaceDir, fullDir, date, id };
 }
 
-describe('Manual v6 影子审查', () => {
+describe('Manual v6 隔离目录审查', () => {
     it('历史纯文本缺少结构快照时，不把表格及数值覆盖判为完整', () => {
         const fixture = makeFixture({ date: '2026-08-27', structured: false });
         const report = buildShadowReport({
@@ -182,7 +182,7 @@ describe('Manual v6 影子审查', () => {
         assert.strictEqual(report.summary.quality.numericCellCoverageRate.value, 1);
     });
 
-    it('显式 fresh init 只写 shadow workspace，复用相同 checkpoint 并拒绝历史日期', () => {
+    it('显式初始化只写隔离工作目录，复用相同检查点并拒绝历史日期', () => {
         const fixture = makeFixture();
         const officialFiles = [
             path.join(fixture.currentDir, 'filtered-papers.json'),
@@ -269,8 +269,8 @@ function reportFixture(date, duration, cacheRate, quality = {}) {
     return report;
 }
 
-describe('Manual 影子基准', () => {
-    it('少于三批明确 insufficient_samples，unknown 不当作 0', () => {
+describe('Manual 隔离审查报告的统计汇总', () => {
+    it('少于三批时报告样本不足，未知耗时或缓存比例不计为零', () => {
         const result = aggregateShadowReports([
             reportFixture('2026-08-25', 100, null),
             reportFixture('2026-08-26', 200, null)
@@ -283,7 +283,7 @@ describe('Manual 影子基准', () => {
         assert.strictEqual(result.stages.author.durationMs.p50, null);
     });
 
-    it('三批使用进入协议指纹的 nearest-rank-v1 计算 P50/P95', () => {
+    it('三批报告按 nearest-rank-v1 计算中位数和第 95 百分位数', () => {
         const result = aggregateShadowReports([
             reportFixture('2026-08-25', 100, 0.1, { articleCharsMean: 2000 }),
             reportFixture('2026-08-26', 300, 0.9, { articleCharsMean: 4000 }),

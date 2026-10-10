@@ -48,7 +48,7 @@ describe('Manual v6 工作流与 Merkle spec', () => {
         assert.equal(production.canonicalPath, path.join(current, 'deep-analysis-result.json'));
         assert.equal(shadow.canonicalPath,
             path.join(current, 'manual-v6-shadow', '2026-08-28', 'deep-analysis-result.json'));
-        assert.throws(() => resolveManualV6RuntimePaths(current, '2026-08-28', 'auto'), /显式/);
+        assert.throws(() => resolveManualV6RuntimePaths(current, '2026-08-28', 'auto'), /明确指定/);
     });
 
     it('单篇任务材料必须使用安全相对路径，读取时核对文件 SHA', () => {
@@ -99,12 +99,12 @@ describe('Manual v6 工作流与 Merkle spec', () => {
             role: 'author', paperId: '2608.12345',
             paperInputSha256: A, sourceIdentitySha256: B, contractSha256: C,
             allowedArtifacts: [{ path: 'draft/article.md', sha256: D, kind: 'reader_article' }]
-        }), /确定性权威白名单/);
+        }), /代码规定的允许清单/);
         assert.throws(() => buildTaskPacket({
             role: 'author_revision', paperId: '2608.12345',
             paperInputSha256: A, sourceIdentitySha256: B, contractSha256: C,
             allowedArtifacts: [{ path: 'article.md', sha256: D, kind: 'fulltext' }]
-        }), /确定性权威白名单/);
+        }), /代码规定的允许清单/);
         const replacement = buildTaskPacket({
             role: 'author_revision', paperId: '2608.12345',
             paperInputSha256: A, sourceIdentitySha256: B, contractSha256: C,
@@ -121,7 +121,7 @@ describe('Manual v6 工作流与 Merkle spec', () => {
             allowedArtifacts: freshArtifacts().map(item => item.kind === 'fulltext'
                 ? { ...item, path: 'evidence/table.json', kind: 'paper_table' }
                 : item)
-        }), /确定性权威白名单/);
+        }), /代码规定的允许清单/);
         assert.doesNotThrow(() => validateAuthorRevisionArtifactLineage(author, replacement, {
             technical: { path: 'reviews/technical-scoring.json', sha256: B },
             readability: { path: 'reviews/pedagogy-readability.json', sha256: C }
