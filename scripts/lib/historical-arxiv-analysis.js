@@ -161,7 +161,11 @@ function recoverHistoricalArxivRun({ runId, date, arxivId, rootDir, now = new Da
     if (loaded.run.baseline.metadata.contract === require('./arxiv-metadata-source.js').CONTRACT) {
         const filename = path.join(runDir, `metadata-${arxivId}.atom.xml`);
         let bytes; let fd;
-        try { fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); bytes = fs.readFileSync(fd); }
+        try {
+            fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+            if (!fs.fstatSync(fd).isFile()) throw new Error('官方元数据文件必须是普通文件');
+            bytes = fs.readFileSync(fd);
+        }
         catch (error) { fail(`无法重新读取已保存的官方元数据文件：${error.message}`); }
         finally { if (fd !== undefined) fs.closeSync(fd); }
         if (sha256(bytes) !== loaded.run.baseline.metadata.fileSha256) fail('官方元数据文件的 SHA 与运行记录中的原 SHA 不一致');

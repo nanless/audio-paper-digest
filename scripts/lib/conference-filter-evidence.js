@@ -113,7 +113,7 @@ function readRegular(filename, maximum, label) {
         if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maximum) {
             fail(`${label} must be a bounded regular single-link file`);
         }
-        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const opened = fs.fstatSync(fd); const named = fs.lstatSync(filename);
         if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink()
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size !== named.size) {

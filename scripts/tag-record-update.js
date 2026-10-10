@@ -198,9 +198,12 @@ function readProcessJson(filename) {
         || (named.mode & 0o777) !== 0o600) {
         throw new Error(`会议进程文件不安全：必须是权限为 0600、只有一个硬链接的普通文件，不能是符号链接：${filename}`);
     }
-    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
         const opened = fs.fstatSync(fd);
+        if (!opened.isFile()) {
+            throw new Error(`会议进程文件不安全：打开后发现不是普通文件：${filename}`);
+        }
         const bytes = fs.readFileSync(fd);
         const after = fs.fstatSync(fd);
         const finalNamed = fs.lstatSync(filename);
