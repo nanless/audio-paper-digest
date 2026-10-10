@@ -16,7 +16,7 @@ const Config = require('../config.js');
 const utilsApi = require('../utils.js');
 const {
     LLM_FILTER_PROMPT_PATH,
-    FROZEN_LLM_FILTER_PROMPT_PATH
+    FROZEN_LLM_FILTER_PROMPT_PATH, FROZEN_V2_LLM_FILTER_PROMPT_PATH
 } = require('./prompt-text-versions.js');
 const fixedRequestLlmJson = utilsApi.requestLlmJson;
 
@@ -136,7 +136,8 @@ const ACCEPTED_FILTER_POLICY_SHA256 = new Set([LLM_FILTER_POLICY_SHA256, ...LEGA
 // '4489809518…' = prompts/filter.md（v1）按 {title}/{abstract}/{categories} 渲染后的首块。
 // 日更路径用 __TITLE__ 哨兵渲染，算出的值不同，不在这张表里。
 const LEGACY_LLM_FILTER_PROMPT_SHA256_LIST = Object.freeze([
-    '4489809518e5df61bd17cc9b5874aa86cf4bfea6a1f76b324498e9f11f467661'
+    '4489809518e5df61bd17cc9b5874aa86cf4bfea6a1f76b324498e9f11f467661',
+    '62da57271fbce9b9bf944b060612053e73c97a65c4bd3241ca260b15c33a7bd5'
 ]);
 const ACCEPTED_LLM_FILTER_PROMPT_SHA256 = new Set([LLM_FILTER_PROMPT_SHA256, ...LEGACY_LLM_FILTER_PROMPT_SHA256_LIST]);
 const FILTER_CONFIG_SHA256 = stableHash(FILTER_CONFIG_BINDING);
@@ -1406,9 +1407,32 @@ const HISTORICAL_FILTER_PROMPT_ARCHIVES = Object.freeze({
         'e8678d07c58b38862dafa5b74a715db667d29db2a4e20664423208cff2f3cd8f'
 });
 
+function renderDeclaredDailyFilterPrompt(envelope) {
+    const declaredSha = envelope.filter.promptSha256;
+    if (declaredSha === LLM_FILTER_PROMPT_SHA256) return renderDailyFilterPrompt(envelope);
+    if (declaredSha === '4489809518e5df61bd17cc9b5874aa86cf4bfea6a1f76b324498e9f11f467661') {
+        return renderFrozenDailyFilterPrompt(envelope);
+    }
+    if (declaredSha === '62da57271fbce9b9bf944b060612053e73c97a65c4bd3241ca260b15c33a7bd5'
+        && sha256(Buffer.from(utilsApi.loadPrompt(FROZEN_V2_LLM_FILTER_PROMPT_PATH, {
+            title: '{title}', abstract: '{abstract}', categories: '{categories}'
+        }), 'utf8')) === declaredSha) {
+        return utilsApi.loadPrompt(FROZEN_V2_LLM_FILTER_PROMPT_PATH, promptFields(envelope));
+    }
+    fail('新请求的筛选提示词版本没有登记，或冻结正文已变化');
+}
+
 function dailyFilterPromptMatches(prompt, envelope) {
-    if (prompt === renderDailyFilterPrompt(envelope)
-        || prompt === renderFrozenDailyFilterPrompt(envelope)) return true;
+    if (envelope.filter.promptSha256 === LLM_FILTER_PROMPT_SHA256
+        && prompt === renderDailyFilterPrompt(envelope)) return true;
+    if (envelope.filter.promptSha256 === '4489809518e5df61bd17cc9b5874aa86cf4bfea6a1f76b324498e9f11f467661'
+        && prompt === renderFrozenDailyFilterPrompt(envelope)) return true;
+    // v2 原文只用于声明该历史模板 SHA 的旧请求，不能混入新模板的请求。
+    if (envelope.filter.promptSha256 === '62da57271fbce9b9bf944b060612053e73c97a65c4bd3241ca260b15c33a7bd5'
+        && sha256(Buffer.from(utilsApi.loadPrompt(FROZEN_V2_LLM_FILTER_PROMPT_PATH, {
+            title: '{title}', abstract: '{abstract}', categories: '{categories}'
+        }), 'utf8')) === envelope.filter.promptSha256
+        && prompt === utilsApi.loadPrompt(FROZEN_V2_LLM_FILTER_PROMPT_PATH, promptFields(envelope))) return true;
     const declaredSha = envelope.filter.promptSha256;
     const archiveSha = HISTORICAL_FILTER_PROMPT_ARCHIVES[declaredSha];
     if (!archiveSha) return false;
@@ -1928,7 +1952,7 @@ function createIntent({ directory, state, paperId, owner, discoveryHandle, evide
         : normalizeRequestEnvelope(expectedEnvelope);
     const envelopeBytes = Buffer.from(JSON.stringify(envelope), 'utf8');
     if (envelopeBytes.length > MAX_LLM_REQUEST_BYTES) fail('source envelope exceeds the durable evidence limit');
-    const messages = [{ role: 'user', content: renderDailyFilterPrompt(envelope) }];
+    const messages = [{ role: 'user', content: renderDeclaredDailyFilterPrompt(envelope) }];
     const attemptNumber = state.attempts.filter(item => item.paperId === paperId).length + 1;
     const attemptMaxTokens = utilsApi.getFilterAttemptMaxTokens(llm.apiType, llm.maxTokens, attemptNumber);
     const requestBody = utilsApi.buildRequestBody(llm.apiType, llm.model, messages, attemptMaxTokens, llm.temperature);

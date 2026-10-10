@@ -398,9 +398,9 @@ test('换提示词版本后，按 v1 prompt SHA 准备的旧 spec 仍然可用',
     const result = await runner.main(legacyArgs, { files: f.files, env: f.env });
     assert.equal(result.processed[0].status, 'included');
     assert.equal(service.calls.length, 1);
-    // 新请求必须用 v2 正文：只有 v2 写「则要结合标题和摘要判断」，v1 写「则须结合标题与摘要判断」。
-    assert.match(service.calls[0].body.messages[0].content, /则要结合标题和摘要判断/);
-    assert.doesNotMatch(service.calls[0].body.messages[0].content, /则须结合标题与摘要判断/);
+    // 旧 spec 声明 v1，新请求也使用 v1 原文，不能把新版正文标成旧版。
+    assert.match(service.calls[0].body.messages[0].content, /则须结合标题与摘要判断/);
+    assert.doesNotMatch(service.calls[0].body.messages[0].content, /则要结合标题和摘要判断/);
 });
 
 test('没有登记的 prompt SHA 仍在传输之前被拒绝', async t => {
@@ -420,7 +420,14 @@ test('没有登记的 prompt SHA 仍在传输之前被拒绝', async t => {
 
 test('换提示词版本后，v1 正文写下的持久意图仍能恢复', async t => {
     const service = await serverFixture(t);
-    const f = fixture(t, service.endpoint);
+    const legacySpecApi = {
+        ...filter,
+        buildProductionSpec: options => ({
+            ...filter.buildProductionSpec(options),
+            promptSha256: filter.LEGACY_LLM_FILTER_PROMPT_SHA256_LIST[0]
+        })
+    };
+    const f = fixture(t, service.endpoint, null, 'fixture-filter-model', legacySpecApi);
     const original = fs.openSync; let injected = false;
     fs.openSync = function (filename, ...rest) {
         if (!injected && String(filename).includes('/decisions/llm-')) {
@@ -434,7 +441,7 @@ test('换提示词版本后，v1 正文写下的持久意图仍能恢复', async
     const intent = JSON.parse(fs.readFileSync(intentFile));
     const request = JSON.parse(Buffer.from(intent.request.data, 'base64'));
     const envelope = JSON.parse(Buffer.from(intent.envelope.data, 'base64'));
-    // 把持久意图里的请求正文换回 v1 渲染结果，模拟升级之前中断的那次运行。
+    // v1 spec 生成并保存 v1 请求；这里按同一旧模板重算持久请求。
     request.messages[0].content = filter.renderFrozenDailyFilterPrompt(envelope);
     const requestBytes = Buffer.from(JSON.stringify(request));
     intent.request = { encoding: 'base64', size: requestBytes.length,

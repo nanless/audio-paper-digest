@@ -51,6 +51,10 @@ The keyword layer keeps papers that might be relevant. The model makes the final
 
 Decisions are saved per paper in `filter-decisions.json`. Filtering follows `PD_FILTER_BATCH_SIZE`. The current account moves to a later account only on an explicit `GoUsageLimitError` or `Insufficient balance` response. A generic 429 follows rate-limit backoff. Filtering is complete only when decisions cover every candidate and `filtered-papers.json` exactly matches the relevant decisions minus explicit exclusions.
 
+Filtering now uses `filter-v3.md`. Actual recordings and background-speech interference in transcription evaluation count as audio input or evaluation; music-conditioned dance generation also falls within scope. Text-only music recommendations, or an incidental audio benchmark for a general method, are not included merely by task name.
+
+A prompt change invalidates old model decisions for the new filtering fingerprint. For this catch-up batch, all 425 model candidates must be judged again, while 3746 keyword exclusions are recalculated locally without model calls. Complete RAW candidates and the fetch checkpoint can be reused after checking their sources and fixed window. Old answers have been backed up and are not relabeled as new-prompt results. These counts describe this batch, not a fixed processing cap.
+
 ### Recheck a specific paper
 
 After comparing the abstract with the saved model reason, stop the running daily task before requesting another model decision:
