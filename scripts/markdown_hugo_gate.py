@@ -1,7 +1,6 @@
-"""教程页面的确定性 Markdown 闸和 Hugo 渲染闸。
+"""教程页面的 Markdown 格式与 Hugo 渲染检查。
 
-这些函数有意只读：它们校验确切的源码或渲染字节，从不修改内容，所以审查
-始终是一步不可变的核验，而不是又一条改写路径。
+这些函数只读取页面源码或渲染结果，检查时不修改页面内容。
 """
 
 import html
@@ -40,13 +39,13 @@ TUTORIAL_SCORE_DIMENSIONS = (
 
 
 def parse_frontmatter_content(path, content):
-    """从已读入的 UTF-8 文本解析 frontmatter，不碰磁盘。"""
+    """从已读入的 UTF-8 文本解析页面开头的 YAML 字段，不读写页面文件。"""
     path = Path(path)
     try:
         import yaml
     except ImportError as exc:
         raise PublishDataValidationError(
-            '缺少 PyYAML，无法执行确定性 frontmatter 门禁'
+            '缺少 PyYAML，无法检查页面开头的 YAML 字段'
         ) from exc
 
     class UniqueKeyLoader(yaml.SafeLoader):

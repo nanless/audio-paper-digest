@@ -20,8 +20,8 @@ const MAX_PDF_BYTES = 256 * 1024 * 1024;
 const MAX_BUNDLE_BYTES = 64 * 1024 * 1024;
 const SHA_RE = /^[a-f0-9]{64}$/;
 const SAFE_JSON_NAME = /^[a-z0-9][a-z0-9._-]{0,159}\.json$/;
-// 通过校验的 discovery pair 是筛选阶段的权限边界。允许的字节和文档保存在模块私有
-// 状态里，调用方没法给一个对象挂上看似合理的摘要来伪造 catalog/report 组合。
+// 筛选只能使用经本模块校验的候选清单与发现报告。对应文件内容保存在模块私有状态中，
+// 调用方不能只给普通对象附上 SHA，就将其冒充为已经核验的清单与报告。
 const DISCOVERY_HANDLES = new WeakSet();
 const DISCOVERY_HANDLE_DATA = new WeakMap();
 
@@ -32,7 +32,7 @@ const plain = value => value && typeof value === 'object' && !Array.isArray(valu
     && [Object.prototype, null].includes(Object.getPrototypeOf(value));
 
 function fail(message) {
-    const error = new Error(`Conference discovery rejected: ${message}`);
+    const error = new Error(`会议来源发现检查未通过：${message}`);
     error.code = 'CONFERENCE_DISCOVERY_INTEGRITY';
     return error;
 }
@@ -58,32 +58,32 @@ function safeAbsoluteDirectory(directory, name) {
     for (const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
         cursor = path.join(cursor, part);
         const stat = fs.lstatSync(cursor);
-        if (!stat.isDirectory() || stat.isSymbolicLink()) throw fail(`${name} contains an unsafe directory: ${cursor}`);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw fail(`${name} 包含不安全的目录（不是普通目录或是符号链接）：${cursor}`);
     }
     if (fs.realpathSync(absolute) !== absolute) throw fail(`${name} 不得经由符号链接解析`);
     return absolute;
 }
 
 function safeAbsoluteFile(filename, name, maxBytes) {
-    if (typeof filename !== 'string' || !path.isAbsolute(filename)) throw fail(`${name} must be an absolute filename`);
+    if (typeof filename !== 'string' || !path.isAbsolute(filename)) throw fail(`${name} 必须是文件的绝对路径`);
     const absolute = path.resolve(filename);
-    safeAbsoluteDirectory(path.dirname(absolute), `${name} parent`);
+    safeAbsoluteDirectory(path.dirname(absolute), `${name} 的父目录`);
     let descriptor;
     let fd;
     try {
         const before = fs.lstatSync(absolute);
         if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > maxBytes) {
-            throw fail(`${name} must be a regular single-link file within its size limit`);
+            throw fail(`${name} 必须是只有一个硬链接、且字节数未超过上限的普通文件`);
         }
         fd = fs.openSync(absolute, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const opened = fs.fstatSync(fd);
         const named = fs.lstatSync(absolute);
         if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || !named.isFile() || named.nlink !== 1
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size > maxBytes) {
-            throw fail(`${name} changed or became unsafe while opening`);
+            throw fail(`${name} 打开期间文件发生变化或变得不安全`);
         }
         const bytes = fs.readFileSync(fd);
-        if (bytes.length !== opened.size) throw fail(`${name} changed while being read`);
+        if (bytes.length !== opened.size) throw fail(`${name} 读取的字节数与打开时记录的文件大小不同`);
         descriptor = { absolute, bytes };
     } finally {
         if (fd !== undefined) fs.closeSync(fd);
@@ -102,7 +102,7 @@ function rejectDuplicateJsonKeys(source, label) {
         else if (token === ',' && top?.object) top.expectKey = true;
         else if (token.startsWith('"') && top?.object && top.expectKey) {
             const key = JSON.parse(token);
-            if (top.keys.has(key)) throw fail(`${label} contains duplicate JSON key: ${key}`);
+            if (top.keys.has(key)) throw fail(`${label} 含重复的 JSON 字段：${key}`);
             top.keys.add(key);
             top.expectKey = false;
         }
@@ -136,7 +136,7 @@ function safeRelativePath(root, filename) {
 function readPdf(filename, relative) {
     const loaded = safeAbsoluteFile(filename, `PDF ${relative}`, MAX_PDF_BYTES);
     if (loaded.bytes.length < 5 || loaded.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
-        throw fail(`PDF ${relative} does not have a standard PDF header`);
+        throw fail(`PDF ${relative} 缺少标准的 %PDF- 文件头`);
     }
     return { path: relative, sha256: sha256(loaded.bytes), size: loaded.bytes.length };
 }
@@ -149,14 +149,14 @@ function catalogPdfs(pdfRoot) {
         for (const entry of entries) {
             const filename = path.join(directory, entry.name);
             const stat = fs.lstatSync(filename);
-            if (entry.isSymbolicLink() || stat.isSymbolicLink()) throw fail(`pdfRoot contains symbolic link: ${filename}`);
+            if (entry.isSymbolicLink() || stat.isSymbolicLink()) throw fail(`pdfRoot 包含符号链接：${filename}`);
             if (entry.isDirectory()) {
-                if (fs.realpathSync(filename) !== filename) throw fail(`pdfRoot contains unsafe directory: ${filename}`);
+                if (fs.realpathSync(filename) !== filename) throw fail(`pdfRoot 包含不安全的目录：${filename}`);
                 visit(filename);
                 continue;
             }
             if (!entry.isFile() || !stat.isFile() || stat.nlink !== 1) {
-                throw fail(`pdfRoot contains non-regular or hard-linked entry: ${filename}`);
+                throw fail(`pdfRoot 包含非普通文件或有多个硬链接的文件：${filename}`);
             }
             const relative = safeRelativePath(root, filename);
             if (path.posix.extname(relative).toLowerCase() === '.pdf') catalog.push(readPdf(filename, relative));
@@ -225,7 +225,7 @@ function normalizeOfficialRecord(record, index) {
     } catch (error) { throw fail(`metadata[${index}].id 无效：${error.message}`); }
     const title = text(record.title, `metadata[${index}].title`);
     if (!Array.isArray(record.authors) || !record.authors.length || record.authors.length > 1000) {
-        throw fail(`metadata[${index}].authors must be a nonempty array of at most 1000 names`);
+        throw fail(`metadata[${index}].authors 必须是包含 1 至 1000 个姓名的数组`);
     }
     const authors = record.authors.map((author, authorIndex) => text(author, `metadata[${index}].authors[${authorIndex}]`));
     if (new Set(authors).size !== authors.length) throw fail(`metadata[${index}].authors 含重复项`);
@@ -245,7 +245,7 @@ function positiveIntegerString(value, name) {
         if (!Number.isSafeInteger(value) || value < 1) throw fail(`${name} 必须是正的安全整数`);
         value = String(value);
     }
-    if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) throw fail(`${name} must be a canonical positive integer string`);
+    if (typeof value !== 'string' || !/^[1-9]\d*$/.test(value)) throw fail(`${name} 必须是无前导零的正整数字符串`);
     return value;
 }
 
@@ -279,7 +279,7 @@ function optionalNumericAlias(record, index, includeId = false) {
     const values = fields.filter(field => record[field] !== undefined && record[field] !== null)
         .map(field => positiveIntegerString(record[field], `metadata[${index}].${field}`));
     if (!values.length) return null;
-    if (new Set(values).size !== 1) throw fail(`metadata[${index}] has conflicting numeric aliases`);
+    if (new Set(values).size !== 1) throw fail(`metadata[${index}] 中提供的数字别名不同`);
     return values[0];
 }
 
@@ -298,11 +298,11 @@ function normalizeMetadataMember(adapter, record, index) {
     const candidates = fields
         .map(field => forumId(record[field], `metadata[${index}].${field}`));
     if (!candidates.length) throw fail(`metadata[${index}] 缺少其 OpenReview forum ID`);
-    if (new Set(candidates).size !== 1) throw fail(`metadata[${index}] has conflicting OpenReview forum IDs`);
+    if (new Set(candidates).size !== 1) throw fail(`metadata[${index}] 中提供的 OpenReview forum ID 不同`);
     if (adapter === 'icml' && explicitForum && record.id !== undefined && record.id !== null
         && !(typeof record.id === 'number' || /^\d+$/.test(String(record.id)))) {
         const redundantId = forumId(record.id, `metadata[${index}].id`);
-        if (redundantId !== candidates[0]) throw fail(`metadata[${index}] has conflicting OpenReview forum IDs`);
+        if (redundantId !== candidates[0]) throw fail(`metadata[${index}] 中提供的 OpenReview forum ID 不同`);
     }
     return { identity: { type: 'openreview-forum-id', value: candidates[0] }, metadataIndex: index, title,
         numericAlias: adapter === 'icml' ? optionalNumericAlias(record, index, explicitForum
@@ -791,10 +791,10 @@ function discoverConference({ adapter, year, conferenceId = null, metadataFile, 
     const pdfs = catalogPdfs(pdfRoot);
     let conference;
     if (adapter === 'official-proceedings') {
-        if (typeof conferenceId !== 'string' || !conferenceId) throw fail('official-proceedings requires conferenceId');
+        if (typeof conferenceId !== 'string' || !conferenceId) throw fail('official-proceedings 必须提供 conferenceId');
         conference = officialConference(metadata.value?.conference);
         if (conference.id !== conferenceId || conference.year !== year) {
-            throw fail('official-proceedings metadata conference must match conferenceId and year');
+            throw fail('official-proceedings 元数据中的会议必须对应 conferenceId 和 year');
         }
     } else {
         conference = { id: `${adapter}-${year}`, year };
@@ -804,7 +804,7 @@ function discoverConference({ adapter, year, conferenceId = null, metadataFile, 
     if (!records.length) throw fail('metadata 快照必须至少含一篇论文');
     const members = records.map((record, index) => normalizeMetadataMember(adapter, record, index));
     const identityKeys = members.map(member => ledgerApi.identityKey(member.identity));
-    if (new Set(identityKeys).size !== identityKeys.length) throw fail('metadata snapshot contains duplicate primary identities');
+    if (new Set(identityKeys).size !== identityKeys.length) throw fail('元数据快照含重复的论文主身份');
     const byPath = descriptorMap(pdfs.catalog);
     for (const member of members) member.match = matchMember(adapter, member, pdfs.catalog, byPath);
     if (['icassp', 'official-proceedings'].includes(adapter)) markSharedIcasspCandidatesAmbiguous(members);

@@ -120,11 +120,11 @@ test('官方论文集锁定会议身份，PDF 只按精确的 metadata.pdfFile �
     assert.deepEqual(result.manifest.members[1].match.candidates.map(candidate => candidate.path), ['papers/CVPR_001.pdf']);
     assert.equal(result.report.counts.orphanPdfFiles, 3);
     assert.throws(() => discovery.discoverConference({ adapter: 'official-proceedings', year: 2026,
-        metadataFile: f.metadata, pdfRoot: f.pdf }), /requires conferenceId/);
+        metadataFile: f.metadata, pdfRoot: f.pdf }), /必须提供 conferenceId/);
     assert.throws(() => discovery.discoverConference({ adapter: 'official-proceedings', conferenceId: 'acl-2026',
-        year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /must match conferenceId and year/);
+        year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /必须对应 conferenceId 和 year/);
     assert.throws(() => discovery.discoverConference({ adapter: 'official-proceedings', conferenceId: 'cvpr-2026',
-        year: 2025, metadataFile: f.metadata, pdfRoot: f.pdf }), /must match conferenceId and year/);
+        year: 2025, metadataFile: f.metadata, pdfRoot: f.pdf }), /必须对应 conferenceId 和 year/);
 });
 
 test('官方论文集的元数据结构、标识、URL 和 PDF 路径不合法时直接失败', t => {
@@ -144,7 +144,7 @@ test('官方论文集的元数据结构、标识、URL 和 PDF 路径不合法�
     const unbounded = structuredClone(record);
     unbounded.authors = Array.from({ length: 1001 }, (_, index) => `Author ${index + 1}`);
     assert.throws(() => discover({ conference: { id: 'acl-2026', year: 2026 }, papers: [unbounded] }),
-        /at most 1000 names/);
+        /1 至 1000 个姓名/);
     for (const mutate of [
         value => { value.extra = true; },
         value => { value.papers[0].extra = true; },
@@ -162,34 +162,34 @@ test('官方论文集的元数据结构、标识、URL 和 PDF 路径不合法�
 test('拒绝重复身份、冲突的 ID 或别名、重复的 JSON 键以及非标准身份', t => {
     const f = fixture(t);
     writeJson(f.metadata, [{ forum_id: 'AbCdef_12', title: 'One' }, { forum_id: 'AbCdef_12', title: 'Two' }]);
-    assert.throws(() => discovery.discoverConference({ adapter: 'iclr', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /duplicate primary identities/);
+    assert.throws(() => discovery.discoverConference({ adapter: 'iclr', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /重复的论文主身份/);
     writeJson(f.metadata, { papers: [{ forum_id: 'AbCdef_12', id: 'OtherID_99', title: 'One' }] });
-    assert.throws(() => discovery.discoverConference({ adapter: 'icml', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /conflicting OpenReview/);
+    assert.throws(() => discovery.discoverConference({ adapter: 'icml', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /提供的 OpenReview forum ID 不同/);
     writeJson(f.metadata, { papers: [{ id: 'AbCdef_12', paper_number: 1, numericAlias: 2, title: 'One' }] });
-    assert.throws(() => discovery.discoverConference({ adapter: 'icml', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /conflicting numeric aliases/);
+    assert.throws(() => discovery.discoverConference({ adapter: 'icml', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /提供的数字别名不同/);
     fs.writeFileSync(f.metadata, '[{"arnumber":"1","arnumber":"2","title":"One"}]', { mode: 0o600 });
-    assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /duplicate JSON key/);
+    assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /重复的 JSON 字段/);
     writeJson(f.metadata, [{ arnumber: '001', title: 'One' }]);
-    assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /canonical positive integer/);
+    assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /无前导零的正整数字符串/);
 });
 
 test('拒绝符号链接、硬链接、FIFO、损坏的 PDF、不安全的元数据和相对来源路径', t => {
     const f = fixture(t); writeJson(f.metadata, [{ arnumber: '1', title: 'One' }]);
     const original = writePdf(f.pdf, 'one.pdf');
     fs.symlinkSync(original, path.join(f.pdf, 'linked.pdf'));
-    assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /symbolic link/);
+    assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /包含符号链接/);
     fs.unlinkSync(path.join(f.pdf, 'linked.pdf'));
     fs.linkSync(original, path.join(f.pdf, 'hard.pdf'));
-    assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /hard-linked|single-link/);
+    assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /有多个硬链接|只有一个硬链接/);
     fs.unlinkSync(path.join(f.pdf, 'hard.pdf'));
     execFileSync('mkfifo', [path.join(f.pdf, 'pipe')]);
-    assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /non-regular/);
+    assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /非普通文件/);
     fs.unlinkSync(path.join(f.pdf, 'pipe'));
     fs.writeFileSync(original, 'not a pdf');
-    assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /standard PDF header/);
-    assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: 'relative.json', pdfRoot: f.pdf }), /absolute filename/);
+    assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /标准的 %PDF- 文件头/);
+    assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: 'relative.json', pdfRoot: f.pdf }), /文件的绝对路径/);
     const hardMetadata = path.join(f.root, 'hard-metadata.json'); fs.linkSync(f.metadata, hardMetadata);
-    assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /single-link/);
+    assert.throws(() => discovery.discoverConference({ adapter: 'icassp', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf }), /只有一个硬链接/);
 });
 
 test('命令行预演不写文件；正式执行保存相互对应的候选与报告，遇到文件名冲突时清理本次新建文件', t => {
@@ -286,7 +286,7 @@ test('加载后的结果对象拒绝不配对的报告、重复键和被改动�
     writeCanonical(reportFile, wrongReport);
     assert.throws(() => discovery.loadDiscoveryHandle(catalogFile, reportFile), /candidateManifestSha256 与按固定 JSON 格式生成的候选 manifest SHA 不同/);
     fs.writeFileSync(reportFile, '{"contract":"conference-discovery-report-v1","contract":"other"}\n', { mode: 0o600 });
-    assert.throws(() => discovery.loadDiscoveryHandle(catalogFile, reportFile), /duplicate JSON key/);
+    assert.throws(() => discovery.loadDiscoveryHandle(catalogFile, reportFile), /重复的 JSON 字段/);
 
     const tampered = JSON.parse(JSON.stringify(result.manifest)); tampered.members[0].match.candidates[0].sha256 = sha('tampered pdf');
     writeCanonical(catalogFile, tampered); writeCanonical(reportFile, discovery.buildReport(tampered));
