@@ -54,7 +54,7 @@ function fixture(t) {
 test('新版执行准备须核验计划，并保存独立版本的权限凭证', t => {
     const f = fixture(t);
     assert.equal(execution.prepareExecution, undefined);
-    assert.throws(() => execution.prepareExecutionFromPlan({ executionRoot: f.root, planHandle: {}, executionId }), /authenticated plan handle/);
+    assert.throws(() => execution.prepareExecutionFromPlan({ executionRoot: f.root, planHandle: {}, executionId }), /经过核验并登记的计划对象/);
     const state = execution.prepareExecutionFromPlan({ executionRoot: f.root, planHandle: f.handle, executionId, now: stamp });
     const directory = path.join(f.root, executionId);
     assert.equal(state.source.planReceiptFileSha256, f.snapshot.receiptFileSha256);
@@ -68,7 +68,7 @@ test('新版执行准备须核验计划，并保存独立版本的权限凭证',
     assert.equal(state.runTemplate.tagCatalogVersion, 'paper-tag-catalog-v2');
     assert.equal(execution.readExecution({ executionRoot: f.root, executionId, planHandle: f.handle }).stateSha256,
         state.stateSha256);
-    assert.throws(() => execution.readExecution({ executionRoot: f.root, executionId, planHandle: {} }), /authenticated plan handle/);
+    assert.throws(() => execution.readExecution({ executionRoot: f.root, executionId, planHandle: {} }), /经过核验并登记的计划对象/);
     assert.equal(execution.prepareExecutionFromPlan({ executionRoot: f.root, planHandle: f.handle,
         executionId, now: '2026-09-07T00:00:00.000Z' }).stateSha256, state.stateSha256);
 });

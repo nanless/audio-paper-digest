@@ -460,7 +460,7 @@ test('直接 arXiv 的登记、分析和暂存绑定同一代已保存并核验�
 test('计划要求提供完整的会议论文与页面对应记录，命令行分别处理两条队列', t => {
     const f = fixture(t, { icasspPages: 1, iclrPages: 1 });
     assert.throws(() => planner.buildDirectRewritePlan({ blogRoot: f.blog, catalog: f.catalog, catalogFileSha256: f.catalogFileSha256,
-        inventory: f.inventory, conferencePageProjections: {} }), /conference page mapping record is missing required fields or contains unsupported fields/);
+        inventory: f.inventory, conferencePageProjections: {} }), /会议论文与页面对应记录 缺少必填字段，或含有不支持的字段/);
     const parsed = schedulerCli.parseArgs(['--dry-run', '--plan', f.catalogPath, '--queue', 'conference',
         '--generation', '2', '--arxiv-concurrency', '3', '--conference-concurrency', '5',
         '--paper-ids', 'conference:icassp:2026:icassp-arnumber:100', '--max-papers', '1']);
@@ -516,7 +516,7 @@ test('保留的元数据标题有歧义就直接失败，不猜会议页面归�
     const ambiguousCatalog = currentCatalog({ root: f.root, inventory: f.inventory, inventoryPath: f.inventoryPath,
         inventoryFileSha256: f.inventoryFileSha256, entries: [...f.catalog.entries, duplicate] });
     assert.throws(() => conferencePageMappingsApi.buildConferencePageMappings({ catalog: ambiguousCatalog,
-        catalogFileSha256: sha('ambiguous catalog'), inventory: f.inventory, blogRoot: f.blog }), /the frontmatter title matches more than one retained conference paper/);
+        catalogFileSha256: sha('ambiguous catalog'), inventory: f.inventory, blogRoot: f.blog }), /页面头部标题匹配了多篇保留的会议论文/);
 });
 
 test('为日更 ICML 页面确定对应论文时，读取已核验的官方海报记录，不按标题匹配', t => {

@@ -297,7 +297,7 @@ test('已核验的导入、计划和执行保留完整的选择凭证链', t => 
         snapshot: { ...realAuthority.snapshot, ledgerSha256: '0'.repeat(64) } });
     try {
         assert.throws(() => planApi.createRunFromImportPlan({ files: planFiles, importHandle,
-            planName: 'plan.json', runName: 'mismatch.json' }), /run ledger SHA differs/);
+            planName: 'plan.json', runName: 'mismatch.json' }), /运行记录中的来源账本 SHA/);
     } finally { importer.importHandleAuthority = originalAuthorityLoader; }
     const aliasedPlan = structuredClone(plan); aliasedPlan.selectionPolicy.identities[0].paperId = 'icassp-2026:alias';
     aliasedPlan.selectionPolicy.selectedMemberSetSha256 = planApi.stableHash(
@@ -306,7 +306,7 @@ test('已核验的导入、计划和执行保留完整的选择凭证链', t => 
     fs.writeFileSync(path.join(f.output, 'alias-plan.json'), `${JSON.stringify(aliasedPlan, null, 2)}\n`);
     assert.throws(() => planApi.createRunFromImportPlan({ files: { conferenceSourceLedgerDir: f.output,
         conferenceRunsDir: runs, tagCatalogFile: tagCatalogPath }, importHandle, planName: 'alias-plan.json', runName: 'alias.json' }),
-    /exactly equal|not canonical/);
+    /须与已导入且通过核验的完整集合一致|not canonical/);
     const planned = planApi.createRunFromImportPlan({ files: { conferenceSourceLedgerDir: f.output,
         conferenceRunsDir: runs, tagCatalogFile: tagCatalogPath }, importHandle, planName: 'plan.json', runName: 'run.json' });
     let writes = 0;
@@ -352,7 +352,7 @@ test('已核验的导入、计划和执行保留完整的选择凭证链', t => 
     assert.throws(() => planApi.loadPlanHandle(path.join(runs, 'run.json'), path.join(runs, 'missing.json'),
         path.join(f.output, 'plan.json'), importHandle, tagCatalogPath), /cannot be read safely|ENOENT/);
     assert.throws(() => executionApi.prepareExecutionFromPlan({ executionRoot: executions, planHandle: {},
-        executionId: '66666666-6666-4666-8666-666666666666', now: NOW }), /authenticated plan handle/);
+        executionId: '66666666-6666-4666-8666-666666666666', now: NOW }), /经过核验并登记的计划对象/);
 });
 
 

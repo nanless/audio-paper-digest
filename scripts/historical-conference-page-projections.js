@@ -10,18 +10,18 @@ const USAGE = '--dry-run|--apply --catalog ABSOLUTE.json --inventory ABSOLUTE.js
 function parseArgs(argv) {
     const [mode, ...rest] = argv; const values = {};
     if (!['--dry-run', '--apply'].includes(mode) || rest.length < 4 || rest.length > 6 || rest.length % 2) {
-        throw new Error(`Use ${USAGE}`);
+        throw new Error(`用法：${USAGE}`);
     }
     for (let index = 0; index < rest.length; index += 2) {
         const flag = rest[index]; const value = rest[index + 1];
         if (!['--catalog', '--inventory', '--output'].includes(flag) || !value || Object.hasOwn(values, flag)) {
-            throw new Error(`Use ${USAGE}`);
+            throw new Error(`用法：${USAGE}`);
         }
         values[flag] = value;
     }
     if (!path.isAbsolute(values['--catalog'] || '') || !path.isAbsolute(values['--inventory'] || '')
         || (values['--output'] !== undefined && !api.SAFE_NAME_RE.test(values['--output']))) {
-        throw new Error(`Use ${USAGE}`);
+        throw new Error(`用法：${USAGE}`);
     }
     return { apply: mode === '--apply', catalogFile: path.resolve(values['--catalog']),
         inventoryFile: path.resolve(values['--inventory']), outputName: values['--output'] || 'conference-page-projections-v3.json' };
@@ -32,7 +32,7 @@ function main(argv = process.argv.slice(2), runtime = {}) {
     const blogRoot = runtime.blogRoot || Config.PUBLISH_CONFIG.blogRepo;
     if (typeof files.historicalConferencePageProjectionDir !== 'string'
         || !path.isAbsolute(files.historicalConferencePageProjectionDir) || !path.isAbsolute(blogRoot)) {
-        throw new Error('配置的会议投影根目录和博客根目录必须是绝对路径');
+        throw new Error('会议论文与页面对应记录的保存目录和博客根目录必须是绝对路径');
     }
     const artifact = api.buildFromFiles({ ...options, blogRoot });
     if (!options.apply) return { status: 'dry-run', projections: artifact.projections.length,

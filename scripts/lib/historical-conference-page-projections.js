@@ -46,7 +46,7 @@ function exact(value, fields, label) {
     if (!plain(value)) fail(`${label} 必须是普通对象`);
     const actual = Object.keys(value).sort(); const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
-        fail(`${label} is missing required fields or contains unsupported fields.`);
+        fail(`${label} 缺少必填字段，或含有不支持的字段`);
     }
 }
 
@@ -61,22 +61,22 @@ function safeDirectory(directory, label, create = false) {
     for (const segment of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
         cursor = path.join(cursor, segment);
         const stat = fs.lstatSync(cursor);
-        if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} has an unsafe path: every component must be a directory and must not be a symbolic link.`);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} 路径不安全：每一级都必须是目录，且不得为符号链接`);
     }
-    if (fs.realpathSync(absolute) !== absolute) fail(`${label} has an unsafe path: its resolved location does not match the requested directory.`);
+    if (fs.realpathSync(absolute) !== absolute) fail(`${label} 路径不安全：解析后的实际位置与指定目录不同`);
     return absolute;
 }
 
 function readStableFile(filename, label, maxBytes = MAX_JSON_BYTES) {
     if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail(`${label} 必须是绝对文件路径`);
-    const absolute = path.resolve(filename); safeDirectory(path.dirname(absolute), `parent directory of ${label}`);
+    const absolute = path.resolve(filename); safeDirectory(path.dirname(absolute), `${label} 的父目录`);
     let fd;
     try {
         fd = fs.openSync(absolute, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const opened = fs.fstatSync(fd); const named = fs.lstatSync(absolute);
         if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size > maxBytes) {
-            fail(`${label} is unsafe to read: it is not a regular file with a single hard link, its file identity does not match the path, or it exceeds the size limit.`);
+            fail(`${label} 不安全，拒绝读取：文件须为只有一个硬链接的普通文件，打开文件与路径所指文件的身份须相同，且大小不得超过限制`);
         }
         const bytes = fs.readFileSync(fd); const after = fs.fstatSync(fd);
         if (bytes.length !== opened.size || after.dev !== opened.dev || after.ino !== opened.ino
@@ -108,7 +108,7 @@ function readStableJson(filename, label, maxBytes = MAX_JSON_BYTES) {
         rejectDuplicateJsonKeys(text); value = JSON.parse(text);
     } catch (error) {
         if (error instanceof HistoricalConferencePageProjectionError) throw error;
-        fail(`${label} must contain valid UTF-8 JSON.`);
+        fail(`${label} 必须是有效的 UTF-8 JSON`);
     }
     if (!plain(value) && !Array.isArray(value)) fail(`${label} 的顶层必须是 JSON 对象或数组`);
     return { ...loaded, value };
@@ -122,7 +122,7 @@ function normalizeCurrentCatalog(value) {
     try {
         normalized = require('./historical-direct-rewrite-input-catalog.js').normalizeCatalog(value);
     } catch (error) {
-        fail(`The scoped v5 local source catalog failed validation: ${error.message}`);
+        fail(`带范围限制的 v5 本地来源目录未通过检查： ${error.message}`);
     }
     return normalized;
 }
@@ -156,11 +156,11 @@ function normalizeInventory(value) {
 // 有些历史 Hugo 标题会丢掉完整的内联 TeX 表达式，比如 `$\tau$-Voice` 变成 `-Voice`。
 // 匹配时要么用原标题指纹，要么用按这条规则去掉之后算出的指纹。这不是模糊标题匹配；
 // 调用方必须拒绝论文 ID 之间的冲突。
-function getPageTitleFingerprints(title, label = 'conference metadata title') {
+function getPageTitleFingerprints(title, label = '会议元数据标题') {
     const exactFingerprint = conference.titleFingerprint(title, label);
     const omittedInlineTex = title.replace(/\$(?:\\[\s\S]|[^$\\])*\$/gu, '');
     if (!omittedInlineTex.trim()) return [exactFingerprint];
-    const displayFingerprint = conference.titleFingerprint(omittedInlineTex, `${label} without inline TeX`);
+    const displayFingerprint = conference.titleFingerprint(omittedInlineTex, `${label} 去掉行内 TeX 后的标题`);
     return [...new Set([exactFingerprint, displayFingerprint])].sort();
 }
 
@@ -174,7 +174,7 @@ function getSourceTitleFingerprints(source, paperId, cache) {
         || !validSha(metadata.metadataIdentityBindingSha256)) return null;
     let snapshot = cache.get(metadata.absolutePath);
     if (!snapshot) {
-        snapshot = readStableJson(metadata.absolutePath, 'conference metadata file', 64 * 1024 * 1024);
+        snapshot = readStableJson(metadata.absolutePath, '会议元数据文件', 64 * 1024 * 1024);
         cache.set(metadata.absolutePath, snapshot);
     }
     if (snapshot.fileSha256 !== metadata.sha256) fail(`${paperId}：会议元数据文件的 SHA 与来源记录不符`);
@@ -184,8 +184,8 @@ function getSourceTitleFingerprints(source, paperId, cache) {
         fail(`${paperId}：元数据文件在记录的索引处没有字符串 title 的记录`);
     }
     const title = records[metadata.recordIndex].title || records[metadata.recordIndex].name;
-    return { originalTitleFingerprint: conference.titleFingerprint(title, 'conference metadata title'),
-        pageTitleFingerprints: getPageTitleFingerprints(title, 'conference metadata title') };
+    return { originalTitleFingerprint: conference.titleFingerprint(title, '会议元数据标题'),
+        pageTitleFingerprints: getPageTitleFingerprints(title, '会议元数据标题') };
 }
 
 function selectConferenceSources(entry, cache) {
@@ -215,7 +215,7 @@ function buildConferencePageMappings({ catalog, catalogFileSha256, inventory, bl
     const history = normalizeInventory(inventory);
     if (currentCatalog.scopeBinding.inventoryLedgerSha256 !== history.ledgerSha256
         || currentCatalog.scopeBinding.inventoryPageSetSha256 !== history.pageSetSha256) {
-        fail('这份 scoped v5 目录引用的是另一份冻结页面清单');
+        fail('这份带范围限制的 v5 目录引用的是另一份冻结页面清单');
     }
     const cache = new Map(); const candidatesByScopeAndTitle = new Map();
     const sourceByPaperId = new Map();
@@ -238,7 +238,7 @@ function buildConferencePageMappings({ catalog, catalogFileSha256, inventory, bl
             || new Set();
         if (matchingPaperIds.size === 0) { unmatchedPages.push({ pageKey: page.pageKey, pagePath: page.pagePath,
             scope: page.scope, reason: 'no-retained-local-title-match' }); continue; }
-        if (matchingPaperIds.size !== 1) fail(`${page.pageKey}: the frontmatter title matches more than one retained conference paper.`);
+        if (matchingPaperIds.size !== 1) fail(`${page.pageKey}：页面头部标题匹配了多篇保留的会议论文`);
         const paperId = [...matchingPaperIds][0]; const mappedPages = pagesByPaperId.get(paperId) || [];
         mappedPages.push({ ...page, titleFingerprintSha256: pageTitleRecord.titleFingerprintSha256,
             mapping: 'retained-local-title-fingerprint', dailyIcmlBinding: null }); pagesByPaperId.set(paperId, mappedPages);
@@ -278,7 +278,7 @@ function buildConferencePageMappings({ catalog, catalogFileSha256, inventory, bl
 
 function normalizeConferencePageMappingRecord(value) {
     exact(value, ['contract', 'version', 'catalogFileSha256', 'inventory', 'projections',
-        'projectionSetSha256', 'unmatchedPages', 'artifactSha256'], 'conference page mapping record');
+        'projectionSetSha256', 'unmatchedPages', 'artifactSha256'], '会议论文与页面对应记录');
     if (value.contract !== CONTRACT || value.version !== VERSION || !validSha(value.catalogFileSha256)
         || !plain(value.inventory) || !validSha(value.inventory.ledgerSha256)
         || !validSha(value.inventory.pageSetSha256) || !Array.isArray(value.projections)
@@ -339,20 +339,20 @@ function normalizeConferencePageMappingRecord(value) {
 }
 
 function writeConferencePageMappingRecord({ root, outputName, artifact } = {}) {
-    if (!SAFE_NAME_RE.test(String(outputName || ''))) fail('The conference page mapping output name is unsafe: it must match the allowed JSON filename format.');
-    const directory = safeDirectory(root, 'conference page mapping output directory', true);
+    if (!SAFE_NAME_RE.test(String(outputName || ''))) fail('会议论文与页面对应记录的输出文件名不安全：须符合允许的 JSON 文件名格式');
+    const directory = safeDirectory(root, '会议论文与页面对应记录的输出目录', true);
     const normalized = normalizeConferencePageMappingRecord(artifact); const filename = path.join(directory, outputName);
     const status = writeImmutableFile(filename, prettyBytes(normalized), fail);
     return { status, filename, artifact: normalized };
 }
 
 function buildFromFiles({ catalogFile, inventoryFile, blogRoot } = {}) {
-    const catalog = readStableJson(catalogFile, 'local source catalog');
-    const inventory = readStableJson(inventoryFile, 'historical inventory');
+    const catalog = readStableJson(catalogFile, '本地来源目录');
+    const inventory = readStableJson(inventoryFile, '历史页面清单');
     const currentCatalog = normalizeCurrentCatalog(catalog.value);
     if (currentCatalog.scopeBinding.inventoryPath !== inventory.filename
         || currentCatalog.scopeBinding.inventorySha256 !== inventory.fileSha256) {
-        fail('清单文件路径或 SHA 与 scoped v5 目录不符');
+        fail('清单文件路径或 SHA 与带范围限制的 v5 目录不符');
     }
     return buildConferencePageMappings({ catalog: catalog.value, catalogFileSha256: catalog.fileSha256,
         inventory: inventory.value, blogRoot });
