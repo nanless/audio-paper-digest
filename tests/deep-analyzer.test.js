@@ -6046,7 +6046,7 @@ has_dataset: 否
         );
     });
 
-    it('结构修复持续输出编辑批注时以 contract rejected 终止', async () => {
+    it('结构修复两次输出都含编辑批注时，返回 CONTRACT_REJECTED 错误', async () => {
         const {
             repairMissingAnalysisSections,
             recoveryFailureStatus
@@ -6080,7 +6080,7 @@ has_dataset: 否
         assert.strictEqual(recoveryFailureStatus(failure), 'contract_rejected');
     });
 
-    it('方法兜底新增同一行编辑批注时拒绝完成，并可从失败 checkpoint 跨次恢复', async () => {
+    it('方法修复在同一行新增编辑批注时不会完成；下次运行可从保存的失败记录继续修复', async () => {
         const {
             finalizeStructureRepairOutput,
             recoveryFailureStatus,
@@ -6127,8 +6127,8 @@ has_dataset: 否
                 scoringAudit: { status: 'complete', fingerprint: 'must-be-removed' }
             }
         };
-        // 与生产 catch 一致：Promise 拒绝时调用方仍持有方法兜底前正文，
-        // 但 structureRepair 必须保存为非终态，下一次才能重新执行兜底。
+        // 与实际错误处理一致：修复失败时，调用方仍持有方法修复前的正文，
+        // 但 structureRepair 必须保存为未完成状态，下一次才能重新修复。
         saveAnalysisCheckpoint(paper, validAnalysisText(), manifest);
 
         const resumedManifest = createAnalysisRecoveryManifest(paper);

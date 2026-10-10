@@ -419,8 +419,8 @@ function recordDigestCover({ sourcePath, taskToken, targetDate, manifestPath, qa
             digestCoverAssetPath(current.batchDate),
             Config.FILES.digestCoverAssetDir
         );
-        // 上面刚拒绝 complete 封面，目标必为新建；强制 0600 与原来手写的
-        // 「同目录临时文件 + rename」完全等价，公共 helper 也只做同目录改名。
+        // 封面文件先写到同目录临时文件，再改名到正式位置；
+        // 显式指定 0o600，避免沿用已存在文件的其他权限。
         writeFileAtomic(target, raw, { mode: 0o600 });
         // 与论文长图相同：若调用方先把结果复制到归档目录，清理正式封面之外留下的
         // 同批次临时别名，避免目录出现两张封面。
@@ -434,7 +434,7 @@ function recordDigestCover({ sourcePath, taskToken, targetDate, manifestPath, qa
                 const sourceStat = fs.lstatSync(source);
                 if (sourceStat.isFile() && !sourceStat.isSymbolicLink()) fs.unlinkSync(source);
             } catch (_error) {
-                // 临时源文件可能已由调用方清理，不影响已完成的 canonical 登记。
+                // 清理临时副本失败时，继续登记已经写到正式位置的封面。
             }
         }
         const now = getBeijingISOString();
@@ -538,8 +538,8 @@ function main(argv = process.argv.slice(2)) {
         return;
     }
     if (command === 'archive-legacy') {
-        // 历史归档只核对本地已完成的封面图及其 SHA，必须继续支持那些在现代远端
-        // 凭证出现之前创建的批次。
+        // 按旧清单核对已完成封面的 PNG 内容、SHA 和允许路径后归档。
+        // 此操作不要求远端发布凭证，以兼容尚未保存这种凭证的旧批次。
         archiveLegacyDigestCover({ targetDate: options.date, manifestPath: options.manifest });
         console.log('历史汇总封面已按日期归档');
         return;

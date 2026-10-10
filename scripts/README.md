@@ -68,7 +68,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/page-tag-metadata.js` | Node 库 | 解析页面的 YAML 页首字段，识别新旧标签字段，拒绝混用与重复键；只认实际存在的顶层字段，描述或正文里的文字不算标签声明。 |
 | `lib/tag-catalog-change.js` | Node 库 | 比较两份词表，给出 `none/additive/destructive` 分类和理由；按 SHA 读取旧快照，核验 `registryUpgradeFrom`。沿用与确认条件见本页的分类词表维护说明。 |
 | `lib/tag-stage-record.js` | Node 库 | 只读识别新旧标签阶段格式，返回原阶段及实际字段名；两种格式混用时拒绝，也不会改写或补签旧记录。 |
-| `lib/prompt-text-versions.js` | Node 库 | 登记每个分析阶段当前使用的提示词正文路径和版本标识。旧记录按自己声明的版本取冻结的 v1 路径复算，未知版本直接报错；深度分析按它选正文，会议与 manual 的指纹也按它决定要哈希哪份文件。 |
+| `lib/prompt-text-versions.js` | Node 库 | 登记每个分析阶段当前使用的提示词正文路径和版本标识。旧记录按自己声明的版本选择对应提示词文件重新核验，未声明版本时按 v1 读取，未知版本直接报错；深度分析按它选正文，会议与 manual 的指纹也按它决定要哈希哪份文件。 |
 | `lib/prompt-rendering-contract.js` | Node 库 | 识别旧提示词替换可能改写的输入，仅使受影响论文的旧阶段失效；正常输入继续沿用原指纹和恢复记录。 |
 | `lib/model-text-sanitization.js` | Node 库 | 记录保留合法 Unicode 字符的请求清洗版本；生产恢复、提升和暂存核验当前来源，旧受影响输入须重分析，缺少受控来源不能推定可复用。旧成功结构和已发布只读状态不改。 |
 | `lib/reader-author-parser.js` | Node 库 | 从原始材料重新解析并核验作者：校验完整原 HTML、结构化解析结果及全文 SHA，或从会议 PDF 文本重新解析作者上标；原文不可得时只使用元数据姓名和明确不可得机构。不会加载配置或请求模型。 |
@@ -86,9 +86,9 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/historical-publication.js` | Node 库 | 核验旧路线的论文页与日汇总来源链，固定干净 main、远端、Hugo、Git 基线和阶段依赖，再生成不可变私有文件；此入口不写博客、不审查，也不提交或推送。 |
 | `lib/keyword-prefilter.js` | Node 库 | 音频关键词预筛，追求高召回，按版本管理。 |
 | `lib/reader-repair.js` | Node 库 | 保存未通过检查的文章草稿，核对允许修改字段的 SHA，并应用经校验的局部修改。表格数量预估仅供参考；修复范围仍按错误码和字段位置核对，最终文章须通过完整解析检查。 |
-| `lib/reader-operator-patch.js` | Node 库 | 显式应用同一全新重写运行的人工局部补丁，核验来源、节点 SHA 和完整 Reader 解析结果。只保存失败候选，保留预算、原始字节归档和重复执行记录，不生成任何成功正文凭证。 |
+| `lib/reader-operator-patch.js` | Node 库 | 显式应用同一全新重写运行的人工局部补丁，核验来源、每个修改字段或数组项的原内容 SHA，以及完整 Reader 解析结果。只保存失败候选，保留预算、原始字节归档和重复执行记录，不生成任何成功正文凭证。 |
 | `lib/reader-signed-draft.js` | Node 库 | 把本次同源、已核验的 Reader 还原成与输入完全等价的版本。只有真正解析并注入原图之后，正文、计划、图片 SHA 全部相同才返回；不写文件、不调用模型，也不把恢复稿当作原始 API JSON。 |
-| `lib/reader-signed-operator.js` | Node 库 | 显式修订同一运行的已核验 Reader，先核对完整父稿、正文、计划及来源 SHA 与修改请求一致，再还原、解析并按共同流程封存结果；恢复输出时依赖不可变的意图记录。只写隔离分析并要求事实复核，不调用 API。 |
+| `lib/reader-signed-operator.js` | Node 库 | 显式修订同一运行的已核验 Reader，先核对完整父稿、正文、计划及来源 SHA 与修改请求一致，再还原、解析并按共同流程封存结果；恢复输出时核对先前保存且不再改动的准备记录，其中包含修改请求、父稿、运行、来源和预期输出的 SHA。只写隔离分析并要求事实复核，不调用 API。 |
 | `lib/reader-resource-binding.js` | Node 库 | 提取并规范化论文中的 GitHub、GitLab、Hugging Face 和 ModelScope 链接，保留原始 URL、逐字原文片段及资源类型，使换行 URL 也能准确核验来源。 |
 | `lib/reader-resource-sync.js` | Node 库 | 将封存资源状态同步到分析结果、解析结果和末端检查点及证明，保留评分和 Reader 字节。如果评分依赖的可用性证据变了，就拒绝同步，并要求走正常评分审计；不联网、不写文件。 |
 | `lib/reader-draft-order.js` | Node 库 | 调整同一草稿的小节顺序，同步表格绑定和标记，保存原始路径与调整后路径的 SHA 对应关系；无法唯一确定顺序时拒绝调整。 |

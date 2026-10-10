@@ -316,7 +316,7 @@ innovation: 2.0
         assert.strictEqual(parseAnalysis(null), null);
     });
 
-    it('主任务和主方法严格按 taxonomy facet 验证且不再危险兜底', () => {
+    it('主任务和主方法须属于词表规定的分类，类别不符时不自动填入其他标签', () => {
         const spatial = parseAnalysis(`## 评分\n6.0/10\n\n## 机器摘要\nprimary_task_tag: #空间音频\nprimary_method_tag: #CNN\n\n## 标签\n#空间音频 #音视频生成 #CNN\n主任务标签：#空间音频\n主方法标签：#CNN`);
         assert.strictEqual(spatial.primaryTaskTag, '');
         assert.strictEqual(spatial.primaryMethodTag, '#CNN');

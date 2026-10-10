@@ -451,7 +451,7 @@ describe('filterPapersByKeywords', () => {
         assert.deepStrictEqual(filterPapersByKeywords(papers), []);
     });
 
-    it('核心音频类别即使摘要术语稀少也保留给 LLM，eess.SP 不做无条件兜底', () => {
+    it('eess.AS 的短摘要保留给模型筛选，eess.SP 的长摘要没有音频关键词时被排除', () => {
         assert.strictEqual(evaluateKeywordPrefilter({
             title: 'A New Benchmark',
             abstract: 'We study a difficult problem.',

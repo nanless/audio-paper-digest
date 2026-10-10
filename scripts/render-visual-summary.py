@@ -81,8 +81,7 @@ def resolve_cjk_font():
 
 
 def load_font(font_path, size):
-    # 苹方和黑体的字体集合在索引 0 上就有可用的常规字面；与其逐个猜 TTC
-    # 索引，直接放大常规字面更稳妥。
+    # 统一加载字体集合中索引 0 的字形，并使用指定字号；不尝试其他字体索引。
     return ImageFont.truetype(str(font_path), int(size), index=0)
 
 
@@ -474,7 +473,7 @@ def _draw_module_grid_flow(draw, modules, box, fonts):
 
 
 def _draw_structured_diagram(draw, diagram, box, fonts):
-    """按显式给出的节点和连线画出已核实的上下级与合并关系。"""
+    """按输入中明确列出的节点、分组和连线绘制示意图。"""
     x0, y0, x1, y1 = map(int, box)
     draw.text((x0, y0), diagram["caption"], font=fonts["metric_label"], fill=PALETTE["muted"])
     panel_top = y0 + 52
@@ -517,8 +516,8 @@ def _draw_structured_diagram(draw, diagram, box, fonts):
             points = (start, (start[0], mid_y), (end[0], mid_y), end)
         draw.line(points, fill=PALETTE["accent"], width=5, joint="curve")
         draw.polygon(((end[0], end[1]), (end[0] - 13, end[1] - 9), (end[0] - 13, end[1] + 9)), fill=PALETTE["accent"])
-        # 连线标签仍保留在可核对的 spec 里，但手机上这种密集图一律不画：
-        # 阶段含义交给节点、分组标签和图注去说，那里不会和箭头打架。
+        # 输入中保留连线标签，但绘图时不显示，避免文字与箭头重叠。
+        # 图中的节点标签、分组标签和图注用于说明各阶段。
 
     for column in columns:
         for node in column:
@@ -856,10 +855,8 @@ def save_optimized_png(image, output_path):
             if check.size != (CANVAS_WIDTH, CANVAS_HEIGHT) or check.format != "PNG":
                 raise SpecError("输出 PNG 的尺寸或格式不符合要求")
             check.verify()
-        # 改走 path_config 的公共 helper：同目录临时文件 + fsync + 原子改名 +
-        # 目录 fsync。这里原先是裸的 os.replace，写完既不 fsync 文件也不 fsync
-        # 目录，崩溃后可能留下零字节或半截的正式 PNG；替换语义与原来一致，
-        # 权限仍固定 0o600（不继承目标原有权限位）。
+        # 使用 path_config 的公共写入函数：先写同目录临时文件并同步到磁盘，
+        # 再替换目标并同步父目录。目标权限固定为 0o600，不继承旧文件权限。
         atomic_write_bytes(output_path, temp_path.read_bytes(), mode=0o600)
     finally:
         temp_path.unlink(missing_ok=True)

@@ -477,8 +477,8 @@ function buildTypeAwareSourceContext(
         METHOD: new Set(['核心摘要', '方法概述和架构']),
         RESULT: new Set(['核心摘要', '方法概述和架构', '实验结果']),
         STRUCTURE: new Set(sectionDefinitions.map(([, title]) => title)),
-        // Reader 的事实只来自原文证据，不来自生成出来的规范小节（canonical
-        // sections）。规范小节仍只作为评分用的另一份产物。
+        // Reader 的事实只来自论文原文，不采用已经生成的分析小节作为事实来源。
+        // 评分和其他修复任务则按各自规则选取这些分析小节。
         READER: new Set(),
         SCORING: new Set(sectionDefinitions.map(([, title]) => title))
     };
@@ -14347,7 +14347,7 @@ async function analyzePaperDeepInternal(paper) {
         });
         try {
             if (structureIssues.length > 0) {
-                console.log(`    [deep] 🔧 检测到结构契约问题，执行最终结构修复: ${structureIssues.join('、')}`);
+                console.log(`    [deep] 🔧 检测到分析章节、机器摘要或正文检查问题，执行最终结构修复: ${structureIssues.join('、')}`);
                 analysis = await repairMissingAnalysisSections(
                     paper,
                     analysis,
@@ -15309,7 +15309,7 @@ async function analyzePaperDeepInternal(paper) {
                     fingerprint: imageSupplementWriteFingerprint,
                     promptTextContract: imageSupplementWriteContract
                 });
-                console.log(`    [deep] ⚠️  插图结果破坏最终契约，丢弃本篇插图计划: ${imageInvalidReason}`);
+                console.log(`    [deep] ⚠️  插图后的分析未通过当前分析检查，丢弃本篇插图计划: ${imageInvalidReason}`);
             } else {
                 analysis = imageResult.analysis;
                 selectedImageUrls = sanitizeSelectedImageUrls(imageResult.selectedImageUrls);

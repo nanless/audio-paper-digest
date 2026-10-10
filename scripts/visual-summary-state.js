@@ -605,8 +605,8 @@ function readSignedReaderVisualReference(reference, paperId) {
         `figure-${reference.ordinal}-${reference.sha256.slice(0, 16)}.png`);
     const recorded = path.resolve(Config.PROJECT_ROOT, String(reference.cachePath || ''));
     if (recorded !== expected) throw new Error('Reader 视觉原图缓存路径不受控');
-    // 每一级父目录都要查，配置里的 current 根目录也在内；这次新增的视觉任务
-    // 既不下载图片，也不该因为看过像素就拿到核验。
+    // 从文件系统根目录开始逐级检查父目录，包括配置中的 current 目录。
+    // 本函数只读取已有图片；图片记录和文件内容仍须通过下方的身份、大小和 SHA 检查。
     let cursor = path.parse(recorded).root;
     for (const part of path.dirname(recorded).slice(cursor.length).split(path.sep).filter(Boolean)) {
         cursor = path.join(cursor, part);
@@ -1221,8 +1221,9 @@ function assertVisualArchiveUniqueness(manifest) {
 
 /**
  * Codex 可能先把生成结果复制到日期归档目录，再调用 record。
- * record 会按统一 slug 计算 canonical 文件名；若两者不一致，必须
- * 删除调用方留下的临时副本，否则同一论文会出现两张图。
+ * record 会按统一的页面短名规则计算正式图片文件名。只清理该日期归档目录内、
+ * 文件名前缀符合当前排名和论文 ID 的 PNG 普通文件临时副本；符号链接和正式
+ * 目标均保留，避免同一论文留下两张图。
  */
 function cleanupGeneratedArchiveSource(sourcePath, target, { targetDate, rank, arxivId } = {}) {
     if (!sourcePath || !target || !targetDate || !Number.isInteger(rank) || !arxivId) return;
@@ -2064,9 +2065,9 @@ function main(argv = process.argv.slice(2)) {
         return;
     }
     if (command === 'archive-legacy') {
-        // 这个命令只迁移已完成的本地产物，迁移前会核对清单、SHA、PNG 字节和受控
-        // 路径。它有意不签发也不要求新的远端发布凭证：旧批次可能早于
-        // remoteVerifiedOid 与 schema v3。
+        // 先核对清单中已完成图片的 SHA、PNG 内容和允许的文件路径，再按日期归档；
+        // 剩余旧 PNG 也会检查格式后归档。本命令不生成或要求新的远端发布凭证，
+        // 因为旧批次可能没有 remoteVerifiedOid 和 schema v3。
         const result = archiveLegacyVisualManifestAssets({
             targetDate: options.date,
             manifestPath: options.manifest,

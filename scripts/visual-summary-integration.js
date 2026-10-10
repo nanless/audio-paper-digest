@@ -1,9 +1,9 @@
 'use strict';
 
 /**
- * 博客远端发布成功后，将权威深度分析文件与视觉资产对齐：
- * 只为最终评分 TOP 10 生成纵向长图，同一批次另生成一张发布后汇总图。
- * 这里只创建/失效任务，绝不调用图像 API；实际生图由 Codex 内置 image_gen 完成。
+ * 博客远端发布成功后，按发布凭证中的论文记录安排图片任务：
+ * 为最终评分 TOP 10 安排论文长图，同一批次另安排一张汇总封面。
+ * 本模块建立任务或使旧任务失效，不调用图像 API；实际生图由 Codex 内置 image_gen 完成。
  */
 
 const {
@@ -37,8 +37,8 @@ function reconcileVisualSummaryTasks({
     }
     category = publication.category;
     const papers = publication.publishedPapers;
-    // generation schema v3 才是「实际发布了什么」的依据。`--all` 和会议运行可能
-    // 发布更早日期抓到的论文，所以视觉排序必须把整个已发布快照绑到博客日期上。
+    // schema v3 生成清单记录实际发布的论文。`--all` 和会议运行可能发布更早
+    // 抓到的论文，因此将这些已发布论文的批次日期统一为本次博客日期后再安排图片。
     const normalizedPapers = papers.map(paper => ({
         ...paper,
         fetchBatchDate: targetDate,
