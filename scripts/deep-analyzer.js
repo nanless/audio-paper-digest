@@ -7872,10 +7872,12 @@ function reuseSignedApiReaderFigureAssets(figures, previous, arxivId) {
             || prior.cachePath !== path.join(root, expectedFilename) || prior.assetMediaType !== 'image/png') {
             throw new Error('Operator signed figure cache identity mismatch');
         }
-        const fd = fs.openSync(prior.cachePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        const fd = fs.openSync(prior.cachePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         try {
-            const stat = fs.fstatSync(fd), bytes = fs.readFileSync(fd);
-            if (!stat.isFile() || bytes.length !== prior.assetBytes
+            const stat = fs.fstatSync(fd);
+            if (!stat.isFile()) throw new Error('Operator signed figure cache bytes changed');
+            const bytes = fs.readFileSync(fd);
+            if (bytes.length !== prior.assetBytes
                 || crypto.createHash('sha256').update(bytes).digest('hex') !== prior.assetSha256) {
                 throw new Error('Operator signed figure cache bytes changed');
             }

@@ -613,7 +613,7 @@ function readSignedReaderVisualReference(reference, paperId) {
         const stat = fs.lstatSync(cursor);
         if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error('Reader 视觉缓存父目录不安全');
     }
-    const fd = fs.openSync(recorded, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const fd = fs.openSync(recorded, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_ASSET_BYTES
