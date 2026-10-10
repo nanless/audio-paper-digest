@@ -48,7 +48,7 @@ npm run workspace:role -- status
 | `npm run backfill` | 补录近期论文元数据，不执行历史全文分析或页面发布；来源抓取失败时停止 |
 | `npm run paper:rethink` | 历史独立维护工具，博客已取消集成，读者无需启动；见[历史说明](paper-rethink-companion.md) |
 
-`full-fetch.js` 只抓取其启动时的北京时间当天。后台只处理数据时可直接运行 `node scripts/full-fetch.js`，避免 npm/TTY 包装干扰；仍须遵守相同环境、角色和沙箱外运行要求。
+从抓取阶段启动 `full-fetch.js` 时，批次日期必须是获得运行锁后的北京时间当天；论文候选按上一已发布日更至固定终点的范围补抓，不限于当天提交的论文。具体规则见[日更补抓范围](daily-fetch-boundary.md)。后台只处理数据时可直接运行 `node scripts/full-fetch.js`，避免 npm/TTY 包装干扰；仍须遵守相同环境、角色和沙箱外运行要求。
 
 `deep`、`batch`、`reanalyze` 和 `api:reader:refresh` 只读取 `deep-analysis-result.json.dailyFreshSourceRun` 指定的文件，并核验 `batchDate`、论文集合及每篇 `source.txt`、`source.pdf`、runtime 和 manifest。它们不补抓来源或使用旧缓存。这些文件缺失、损坏或 SHA 不符时，程序在发出模型或图片请求前停止。目标仍为北京时间当天才重新运行 `npm run digest:prepare -- DATE`；历史日期保留失败记录，按历史维护处理，不能手改检查点。
 

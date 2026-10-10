@@ -344,9 +344,25 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         throw new Error('HuggingFace 抓取必须通过当前项目 .env 中的 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY，拒绝直连');
     }
 
-    const cutoffStr = getBeijingDateString(days);
+    const cutoffStr = options.cutoffDate || getBeijingDateString(days);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(cutoffStr)
+            || !Number.isFinite(Date.parse(cutoffStr + 'T00:00:00Z'))
+            || new Date(cutoffStr + 'T00:00:00Z').toISOString().slice(0, 10) !== cutoffStr) {
+        throw new Error('HuggingFace 补更截止日期无效');
+    }
+    const boundary = options.boundary;
+    if (boundary) require('./lib/daily-fetch-boundary.js').validateDailyFetchBoundary(boundary);
+    if (options.cutoffDate && (!boundary || boundary.lastDigestDate !== cutoffStr
+            || !/^[a-f0-9]{64}$/.test(boundary.identitySha256 || '')
+            || !Number.isFinite(Date.parse(boundary.since)) || !Number.isFinite(Date.parse(boundary.until))
+            || Date.parse(boundary.since) > Date.parse(boundary.until))) {
+        throw new Error('HuggingFace 补更日期必须绑定完整抓取范围');
+    }
+    const maxPages = options.cutoffDate ? Infinity : HUGGINGFACE_CONFIG.maxPages;
 
-    console.log(`📥 从 HuggingFace Papers 获取过去 ${days} 天的论文 (>= ${cutoffStr})...`);
+    console.log(options.cutoffDate
+        ? `📥 从 HuggingFace Papers 补抓 ${cutoffStr} 当日及之后的精选论文...`
+        : `📥 从 HuggingFace Papers 获取过去 ${days} 天的论文 (>= ${cutoffStr})...`);
 
     const merged = new Map(); // paper_id -> 论文对象
     const health = {
@@ -382,7 +398,9 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
     let reachedCutoff = false;
     let dailyComplete = false;
 
-    while (!reachedCutoff && page < HUGGINGFACE_CONFIG.maxPages) {
+    const seenDailyPageSignatures = new Set();
+    let previousSelectedDate = null;
+    while (!reachedCutoff && page < maxPages) {
         const url = `https://huggingface.co/api/daily_papers?limit=${HUGGINGFACE_CONFIG.pageLimit}&p=${page}`;
         const response = await fetchTracked(`daily_papers:${page + 1}`, url);
         const data = response.data;
@@ -409,6 +427,14 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         let legalItems = 0;
 
         for (const item of data) {
+            if (boundary && (!item || typeof item !== 'object'
+                    || !normalizeToBeijingISOString(item.publishedAt || item.date || item.createdAt || ''))) {
+                throw makeSourceFetchError('每日精选缺少有效入选时间，无法证明补更范围完整', {
+                    ...health, ok: false, provider: { boundaryIdentity: boundary.identitySha256,
+                        window: { since: boundary.since, until: boundary.until, covered: false },
+                        cutoffDate: cutoffStr, dailyCovered: false }
+                });
+            }
             if (typeof item !== 'object' || !item) continue;
 
             const paper = convertDailyPaper(item, { fetchedAt });
@@ -422,7 +448,16 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
                 oldestDate = pubDate;
             }
 
-            // 只保留一周内的
+            if (boundary && previousSelectedDate && pubDate > previousSelectedDate) {
+                throw makeSourceFetchError('每日精选日期顺序改变，无法证明补更范围完整', {
+                    ...health, ok: false, provider: { boundaryIdentity: boundary.identitySha256,
+                        window: { since: boundary.since, until: boundary.until, covered: false },
+                        cutoffDate: cutoffStr, dailyCovered: false }
+                });
+            }
+            previousSelectedDate = pubDate;
+            if (boundary && Date.parse(paper.hfSelectedAt) > Date.parse(boundary.until)) continue;
+            // 截止日包含同日入选的论文；旧论文后来入选也按入选日判断。
             if (pubDate && pubDate < cutoffStr) continue;
 
             // 去重
@@ -441,6 +476,12 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
             break;
         }
 
+        const dailySignature = data.map(item => `${item.paper?.id || item.id}:${item.publishedAt || ''}`).join('\n');
+        if (seenDailyPageSignatures.has(dailySignature)) {
+            health.failures.push({ name: `daily_papers:${page + 1}`, error: '每日精选分页重复，无法证明补更范围完整' });
+            break;
+        }
+        seenDailyPageSignatures.add(dailySignature);
         console.log(`  页${page + 1}: ${data.length}篇, 新增${newCount}篇, 最早: ${oldestDate || '?'}`);
 
         // 如果最老日期已经超过截止线，停止分页
@@ -467,7 +508,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
     let papersPage = 0;
     let papersComplete = false;
     const seenPapersPageSignatures = new Set();
-    while (!papersComplete && papersPage < HUGGINGFACE_CONFIG.maxPages) {
+    while (!papersComplete && papersPage < maxPages) {
         const offset = papersPage * HUGGINGFACE_CONFIG.pageLimit;
         const papersResponse = await fetchTracked(`papers:${papersPage + 1}`, `https://huggingface.co/api/papers?limit=${HUGGINGFACE_CONFIG.pageLimit}&offset=${offset}`);
         const papersData = papersResponse.data;
@@ -507,6 +548,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         for (const paper of convertedPapers) {
 
             const pubDate = paper.published.split('T')[0];
+            if (boundary && Date.parse(paper.published) > Date.parse(boundary.until)) continue;
             if (!oldestDate || pubDate < oldestDate) oldestDate = pubDate;
             if (pubDate && pubDate < cutoffStr) continue;
 
@@ -531,6 +573,12 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         await sleepFn(HUGGINGFACE_CONFIG.pageDelayMs);
     }
     health.coverage = { dailyComplete, papersComplete, reachedCutoff };
+    if (boundary) health.provider = {
+        boundaryIdentity: boundary.identitySha256,
+        window: { since: boundary.since, until: boundary.until, covered: dailyComplete && papersComplete && health.failures.length === 0 },
+        cutoffDate: cutoffStr,
+        dailyCovered: dailyComplete
+    };
     health.ok = dailyComplete && papersComplete && health.failures.length === 0;
     health.allFailed = health.attempts > 0 && health.successfulRequests === 0;
     if (health.allFailed) {

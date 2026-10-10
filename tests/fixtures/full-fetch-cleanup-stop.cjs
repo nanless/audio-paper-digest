@@ -20,7 +20,7 @@ const today = require(`${root}/scripts/utils.js`).getBeijingDateString();
 const original = JSON.stringify({ batchDate: today, timestamp: today + 'T12:00:00+08:00', status: 'filtering', papers: [{ arxivId: '2601.00001', title: 'old selected candidate', fetchedAt: '2026-01-01T12:00:00+08:00' }] });
 fs.writeFileSync(config.FILES.filteredPapers, original);
 const utils = require(`${root}/scripts/utils.js`);
-utils.loadPublishedIdsFromBlog = () => new Set();
+config.PUBLISH_CONFIG.blogRepo = require('./local-published-blog.cjs').createLocalPublishedBlog(dir);
 const digest = require(`${root}/scripts/digest-status.js`);
 digest.backupPapersJson = async () => ({ message: 'test isolated backup' });
 digest.loadPapersDatabase = () => ({ papers: {} });

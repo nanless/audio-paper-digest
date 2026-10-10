@@ -56,7 +56,7 @@ npm run digest:prepare -- YYYY-MM-DD
 `scripts/full-fetch.js` 负责归档、博客去重、arXiv/HuggingFace 抓取、筛选、论文库更新、深度分析和逐篇保存结果。关键状态位于 `data/current/`：
 
 - `papers.json`：跨运行累积的去重库，永不随日批次移走。
-- `fetch-checkpoint.json`：逐来源候选数量与内容 SHA。
+- `fetch-checkpoint.json`：逐来源候选数量、内容 SHA 与补抓覆盖窗口；运行前同步博客远端，以真正已发布日更续抓，详见[补抓边界](docs/daily-fetch-boundary.md)。
 - `raw-candidates.json`：当日完整候选。
 - `filter-decisions.json`：逐篇筛选决定、理由、响应和输入指纹。
 - `filtered-papers.json`：当日正式入选集合。

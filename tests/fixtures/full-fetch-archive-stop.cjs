@@ -23,7 +23,7 @@ if (scenario === 'conflict') fs.mkdirSync(archivedFile, { recursive: true });
 const original = JSON.stringify({ batchDate: '2026-01-01', timestamp: '2026-01-01T12:00:00+08:00', papers: [{ arxivId: '2601.00001', title: 'old raw candidate' }] });
 fs.writeFileSync(config.FILES.rawCandidates, original);
 const utils = require(`${root}/scripts/utils.js`);
-utils.loadPublishedIdsFromBlog = () => new Set();
+config.PUBLISH_CONFIG.blogRepo = require('./local-published-blog.cjs').createLocalPublishedBlog(dir);
 const digest = require(`${root}/scripts/digest-status.js`);
 digest.backupPapersJson = async () => ({ message: 'test isolated backup' });
 digest.loadPapersDatabase = () => ({ papers: {} });

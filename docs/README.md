@@ -7,7 +7,7 @@
 | 你要做什么 | 先读 | 再查 |
 |---|---|---|
 | 安装依赖，配置模型、代理和博客仓库 | [安装与配置](setup.md) | [故障排查](troubleshooting.md) |
-| 运行日更，或从中断处继续 | [主流程](workflow.md) | [数据格式](data-format.md) |
+| 运行日更，或从中断处继续 | [主流程](workflow.md) | [补抓边界](daily-fetch-boundary.md)、[数据格式](data-format.md) |
 | 理解模块、状态、锁和发布顺序 | [默认 API 架构](architecture.md) | [兼容规则](compatibility.md) |
 | 查命令参数或脚本职责 | [脚本说明](scripts.md) | [`scripts/` 索引](../scripts/README.md) |
 | 下载论文原文、导读和引用，或批量导出资料 | [博客阅读工具](blog-reading-tools.md) | 博客“关于与方法”页面 |

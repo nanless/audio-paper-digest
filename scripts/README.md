@@ -48,6 +48,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 
 | 文件 | 类型 | 职责 |
 |---|---|---|
+| `lib/daily-fetch-boundary.js` | Node 库 | 从已核验远端日更及受控归档确定补抓窗口，读取正式页字段去重；见[边界说明](../docs/daily-fetch-boundary.md)。 |
 | `full-fetch.js` | Node 入口 | 按顺序执行默认数据流程，依次归档、抓取、筛选、去重、深度分析，并逐篇保存结果。 |
 | `lib/daily-fresh-source-plan.js` | Node 库 | 日更筛选结束后，为每篇 arXiv 论文封存本次官方 TXT、PDF 和清单；分析只读取这组文件，图片只在当前请求里临时准备。 |
 | `lib/fresh-arxiv-rewrite-source.js` | Node 库 | 每轮 arXiv 来源获取时，用原子写入保存官方文本、PDF、不含像素的来源元数据和清单。只有当前稿 PDF 明确返回 404，才允许改用同一论文的官方 `vN` PDF；文本必须从该 PDF 提取，并按条件生成可自校验的 `sourceVersion`。普通来源文件仍按原结构读取。 |

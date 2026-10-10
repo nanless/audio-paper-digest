@@ -26,7 +26,7 @@ arXiv + HuggingFace
   → TOP 10 长图与汇总封面 → 最终状态验收
 ```
 
-- `digest:prepare` 与 `digest:api` 是同一条默认路线。
+- `digest:prepare` 与 `digest:api` 是同一条默认路线；候选从上一已发布日更补抓，分页不限制总量，详见[补抓边界](docs/daily-fetch-boundary.md)。
 - 默认 API 日更在筛选结束、深度分析开始前，为每篇入选 arXiv 论文封存本次官方文本和 PDF。
   来源文件位于 `data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/`，
   包含 `source.txt`、`source.pdf`、`source-runtime.json` 和 `source-manifest.json`。分析与 Reader 只能读取这组

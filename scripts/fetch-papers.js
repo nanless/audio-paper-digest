@@ -99,6 +99,7 @@ const FILTER_CONFIG = {
     model: process.env.PAPER_ANALYZER_MODEL || '',
     headers: {}
 };
+const DAILY_ARXIV_API_PAGE_SIZE = 100;
 const FILTER_SYSTEM_FAILURE_THRESHOLD = 3;
 const FILTER_RETRY_AFTER_MAX_MS = 60000;
 
@@ -1482,6 +1483,170 @@ async function fetchCategoryPapers(categoryId, maxResults = ARXIV_CONFIG.maxResu
     return finish();
 }
 
+
+// 日更补抓使用固定时间范围；每页数量只控制单次响应大小，不限制总论文数。
+async function fetchCategoryPapersSince(categoryId, boundary, existingIds = null, options = {}) {
+    const parseInstant = (value, label) => {
+        if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/.test(value)) {
+            throw new Error(`${label} 必须是完整的 UTC 时间`);
+        }
+        const time = Date.parse(value);
+        if (!Number.isFinite(time) || new Date(time).toISOString() !== value.replace(/Z$/, value.includes('.') ? 'Z' : '.000Z')) {
+            throw new Error(`${label} 不是有效的 UTC 时间`);
+        }
+        return time;
+    };
+    if (typeof categoryId !== 'string' || !/^[a-z]+\.[A-Z]{2}$/.test(categoryId)) {
+        throw new Error('arXiv 类别格式无效');
+    }
+    const since = parseInstant(boundary?.since, '补抓起点');
+    const until = parseInstant(boundary?.until, '补抓终点');
+    if (since >= until || !/^[a-f0-9]{64}$/.test(boundary?.identitySha256 || '')) {
+        throw new Error('补抓时间范围或已发布批次身份 SHA 无效');
+    }
+    const pageSize = options.pageSize ?? DAILY_ARXIV_API_PAGE_SIZE;
+    const maxRetries = options.maxRetries ?? ARXIV_CONFIG.fetchMaxRetries;
+    if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 2000
+        || !Number.isSafeInteger(maxRetries) || maxRetries < 1) {
+        throw new Error('API 每页数量或重试次数必须是允许范围内的正整数');
+    }
+    const requestFn = options.requestFn || httpsRequestWithProxy;
+    const proxyUrl = detectHttpConnectProxyUrl();
+    if (!options.requestFn && !proxyUrl) {
+        throw new Error('arXiv 抓取必须使用项目配置的 HTTP(S) CONNECT 代理');
+    }
+    const scheduler = options.requestScheduler || createHostTaskScheduler();
+    const sleepFn = options.sleepFn || (ms => new Promise(resolve => setTimeout(resolve, ms)));
+    const budget = createRateLimitBudget(options);
+    const health = { categoryId, source: 'arxiv-api-since', boundary: { ...boundary },
+        attempts: 0, successfulRequests: 0, failures: [], windows: [],
+        coverageComplete: false, ok: false, allFailed: false,
+        provider: { boundaryIdentity: boundary.identitySha256,
+            window: { since: boundary.since, until: boundary.until, covered: false } } };
+    const papers = [];
+    const fetchedIds = new Set();
+    const historicalIds = new Set(Array.from(existingIds || [], normalizedId));
+    const minuteKey = time => new Date(time).toISOString().slice(0, 16).replace(/[-:T]/g, '');
+    const finishHealth = () => {
+        health.rateLimitWaitMs = budget.waitedMs;
+        health.totalRetryWaitMs = budget.totalWaitedMs;
+        health.retryCount = budget.retryCount;
+        health.rateLimitRetryCount = budget.rateLimitRetryCount;
+        health.fetched = papers.length;
+        health.allFailed = health.attempts > 0 && health.successfulRequests === 0;
+    };
+    try {
+        const pendingWindows = [];
+        let dayStart = Math.floor(since / 60000) * 60000;
+        while (dayStart <= until) {
+            const dayEnd = Date.UTC(new Date(dayStart).getUTCFullYear(), new Date(dayStart).getUTCMonth(),
+                new Date(dayStart).getUTCDate() + 1) - 60000;
+            const dayWindowEnd = Math.min(Math.floor(until / 60000) * 60000, dayEnd);
+            pendingWindows.push({ start: dayStart, end: dayWindowEnd });
+            dayStart = dayWindowEnd + 60000;
+        }
+        while (pendingWindows.length > 0) {
+            const { start: windowStart, end: windowEnd, parentIndex = null } = pendingWindows.shift();
+            const window = { since: new Date(windowStart).toISOString(), until: new Date(windowEnd).toISOString(),
+                totalResults: null, pages: 0, entries: 0, complete: false };
+            const windowIndex = health.windows.length;
+            window.parentIndex = parentIndex;
+            health.windows.push(window);
+            if (parentIndex !== null) health.windows[parentIndex].childWindowIndices.push(windowIndex);
+            let start = 0;
+            let previousPublished = Number.POSITIVE_INFINITY;
+            while (true) {
+                const params = new URLSearchParams({ search_query: `cat:${categoryId} AND submittedDate:[${minuteKey(windowStart)} TO ${minuteKey(windowEnd)}]`,
+                    sortBy: 'submittedDate', sortOrder: 'descending', start: String(start), max_results: String(pageSize) });
+                const url = `https://export.arxiv.org/api/query?${params}`;
+                let page = null;
+                let lastError = null;
+                for (let attempt = 1; attempt <= maxRetries; attempt++) {
+                    try {
+                        health.attempts++;
+                        const response = await scheduler.run('export.arxiv.org', () => requestFn(url, getBrowserHeaders(), proxyUrl,
+                            ARXIV_CONFIG.fetchTimeoutMs, ARXIV_CONFIG.fetchMaxResponseBytes), { minimumCooldownMs: 3000 });
+                        if (response.status !== 200) throw new Error(`HTTP ${response.status}`);
+                        page = { xml: response.data };
+                        health.successfulRequests++;
+                        break;
+                    } catch (error) {
+                        lastError = error;
+                        // 网络与 HTTP 错误使用原等待预算；响应结构在请求成功后单独校验。
+                        if (attempt === maxRetries) break;
+                        const is429 = error.message.includes('429');
+                        const retry = budget.nextDelay(getFetchRetryDelayMs(attempt, is429), 0, is429);
+                        if (!retry.allowed) break;
+                        await sleepFn(retry.delay);
+                    }
+                }
+                if (!page) throw lastError || new Error('API 分页请求失败');
+                page = parseArxivXML(page.xml, categoryId, null, { stopAtConsecutiveExisting: false, feedPage: true });
+                const count = page.entries.length;
+                if (page.startIndex !== start
+                    || (window.totalResults !== null && page.totalResults !== window.totalResults)
+                    || (page.itemsPerPage !== pageSize && page.itemsPerPage !== count)
+                    || count !== Math.min(pageSize, Math.max(0, page.totalResults - start))) {
+                    throw new Error('API 分页数量、起点或总数不一致，不能确认完整抓取');
+                }
+                window.totalResults = page.totalResults;
+                if (page.totalResults > 30000) {
+                    if (start !== 0 || windowStart === windowEnd) {
+                        throw new Error('单个一分钟时间窗口超过 arXiv API 服务数量限制，无法确认完整抓取');
+                    }
+                    const midpoint = windowStart + Math.floor((windowEnd - windowStart) / 120000) * 60000;
+                    const children = [{ start: windowStart, end: midpoint, parentIndex: windowIndex },
+                        { start: midpoint + 60000, end: windowEnd, parentIndex: windowIndex }];
+                    window.childWindowIndices = [];
+                    pendingWindows.unshift(...children);
+                    window.pages = 1;
+                    window.observedEntries = count;
+                    window.splitInto = children.map(child => ({ since: new Date(child.start).toISOString(),
+                        until: new Date(child.end).toISOString() }));
+                    break;
+                }
+                for (const paper of page.entries) {
+                    const published = Date.parse(paper.published);
+                    const id = normalizedId(paper);
+                    if (!paper.published || !Number.isFinite(published)
+                        || published < windowStart || published >= windowEnd + 60000
+                        || published > previousPublished || !paper.categories.includes(categoryId)
+                        || fetchedIds.has(id)) {
+                        throw new Error('API 条目日期、分类、排序或重复身份不符合本次分页范围');
+                    }
+                    previousPublished = published;
+                    fetchedIds.add(id);
+                    if (published >= since && published <= until && !historicalIds.has(id)) papers.push(paper);
+                }
+                window.pages++;
+                window.entries += count;
+                start += count;
+                if (start === page.totalResults) {
+                    window.complete = true;
+                    break;
+                }
+            }
+        }
+        for (const window of health.windows.filter(item => item.splitInto)) {
+            const children = window.childWindowIndices.map(index => health.windows[index]);
+            if (children.length !== 2 || children.some(child => !child.complete && !child.splitInto)
+                || children.reduce((sum, child) => sum + child.totalResults, 0) !== window.totalResults) {
+                throw new Error('API 拆分前后的论文总数不一致，不能确认完整抓取');
+            }
+        }
+        health.coverageComplete = true;
+        health.ok = true;
+        health.completionReason = 'all-window-pages-verified';
+        health.provider.window.covered = true;
+        finishHealth();
+        return attachHealth(papers, health);
+    } catch (error) {
+        health.failures.push({ error: error.message });
+        finishHealth();
+        throw makeSourceFetchError(`arXiv ${categoryId} 补抓未完成：${error.message}`, health);
+    }
+}
+
 /**
  * 解析 arXiv API 返回的 XML
  */
@@ -1493,7 +1658,7 @@ function parseArxivXML(xml, categoryId, existingIds = null, options = {}) {
     const maxBytes = 16 * 1024 * 1024;
     if (input.length > maxBytes) throw new Error(`Atom 响应超过 ${maxBytes} 字节上限`);
     const parsed = spawnSync('bash', [path.join(__dirname, 'python-runtime.sh'),
-        path.join(__dirname, 'parse-arxiv-atom.py')], {
+        path.join(__dirname, 'parse-arxiv-atom.py'), ...(options.feedPage ? ['--feed-page'] : [])], {
         input, cwd: path.join(__dirname, '..'), encoding: 'utf8',
         timeout: 30000, maxBuffer: maxBytes
     });
@@ -1501,7 +1666,8 @@ function parseArxivXML(xml, categoryId, existingIds = null, options = {}) {
         throw new Error(`Atom XML 解析失败：${parsed.error?.message || parsed.stderr?.trim() || `退出码 ${parsed.status}`}`,
             { cause: parsed.error || undefined });
     }
-    let entries = JSON.parse(parsed.stdout);
+    const parsedFeed = JSON.parse(parsed.stdout);
+    let entries = options.feedPage ? parsedFeed.entries : parsedFeed;
     if (options.metadataProjection === 'official-arxiv-atom-metadata-v1') {
         // v1 的已封存记录保留原 XML 字段字节。结构和身份先由严格解析器核验。
         const rawEntries = [...String(xml).matchAll(/<entry>([\s\S]*?)<\/entry>/g)];
@@ -1564,7 +1730,7 @@ function parseArxivXML(xml, categoryId, existingIds = null, options = {}) {
     }
 
     papers._meta = { entryCount, legalEntryCount, stoppedAtConsecutive };
-    return papers;
+    return options.feedPage ? { ...parsedFeed, entries: papers } : papers;
 }
 
 /**
@@ -2058,7 +2224,9 @@ const filterPapers = filterPapersWithLLM;
 
 module.exports = {
     CATEGORIES,
+    DAILY_ARXIV_API_PAGE_SIZE,
     fetchCategoryPapers,
+    fetchCategoryPapersSince,
     httpsRequestWithProxy,
     fetchCategoryFromSearchPage,
     fetchCategoryFromRecentPage,

@@ -34,6 +34,8 @@ The default API route can resume from `generate`, `review`, `push`, or `visual`.
 
 ## 2. Fetch
 
+Update the blog remote before resolving a fixed UTC window from the last pushed daily digest. arXiv uses 100 entries per page, verifies every page, and splits oversized queries by minute; known IDs never stop pagination. HuggingFace covers each day in the same window. A same-day v7 resume pins the saved `until` only after rechecking the published baseline, source configuration, and complete checkpoint. Legacy v6 does not prove multi-day coverage. See [the boundary guide](../daily-fetch-boundary.md).
+
 arXiv and HuggingFace requests go through the project proxy. Each source has its own checkpoint with acquisition status, candidate count, and content SHA. Only a damaged source is fetched again. If a required source is incomplete, the filter result cannot be marked complete.
 
 Candidates are merged by normalized arXiv ID, deduplicated against published blog papers, and saved in `raw-candidates.json`.

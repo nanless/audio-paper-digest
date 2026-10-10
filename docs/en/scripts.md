@@ -42,7 +42,7 @@ Cross-role execution is off by default: a `daily` checkout cannot run `history:*
 | `npm run backfill` | Backfill recent paper metadata; stop on source failures without running historical analysis or publishing pages |
 | `npm run paper:rethink` | Historical maintenance tool; no longer integrated into the blog or needed by readers; see the [archived interface documentation](../paper-rethink-companion.md) |
 
-`full-fetch.js` fetches only the Beijing date on which it starts. Background data-only work may call `node scripts/full-fetch.js` directly to avoid npm/TTY wrapper issues. The same environment, role, and outside-sandbox requirements still apply.
+When `full-fetch.js` starts from fetching, its batch date must be the Beijing date when the run lock is acquired. It fetches candidates from the previous published daily digest to a fixed end time, including papers submitted on earlier days. See [daily fetch boundaries](../daily-fetch-boundary.md). Background data-only work may call `node scripts/full-fetch.js` directly to avoid npm/TTY wrapper issues. The same environment, role, and outside-sandbox requirements still apply.
 
 `deep`, `batch`, `reanalyze`, and `api:reader:refresh` read only the sources recorded in `deep-analysis-result.json.dailyFreshSourceRun`. They validate the batch date, paper membership, and every `source.txt`, `source.pdf`, runtime record, and manifest. Missing, damaged, or mismatched files fail before any model or figure request. Rerun `npm run digest:prepare -- DATE` only while the target date is Beijing today. For historical dates, keep the failures and use historical maintenance. Never refetch through these recovery entries, substitute old caches, or patch checkpoints.
 

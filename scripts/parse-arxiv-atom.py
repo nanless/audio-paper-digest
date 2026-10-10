@@ -2,6 +2,7 @@
 """严格解析抓取阶段的 Atom 响应，只向标准输出写入结构化 JSON。"""
 
 import json
+from datetime import datetime
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -15,7 +16,7 @@ ARXIV_URL = re.compile(
 )
 
 
-def parse_atom(source):
+def parse_atom(source, feed_page=False):
     if re.search(r'<!\s*(?:DOCTYPE|ENTITY)\b', source, re.IGNORECASE):
         raise ValueError('Atom 响应不能包含文档类型或实体声明')
     root = ET.fromstring(source)
@@ -41,6 +42,11 @@ def parse_atom(source):
                 raise ValueError(f'Atom 条目的 {name} 不能为空')
             return value
 
+        if feed_page:
+            published = field('published', required=True)
+            if not re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,3})?Z', published):
+                raise ValueError('Atom 分页的 published 必须是完整 UTC 时间')
+            datetime.fromisoformat(published.replace('Z', '+00:00'))
         identity = field('id', required=True)
         match = ARXIV_URL.fullmatch(identity)
         if not match:
@@ -56,7 +62,19 @@ def parse_atom(source):
             'categories': [category.get('term', '')
                            for category in entry.findall(f'{prefix}category')],
         })
-    return records
+    if not feed_page:
+        return records
+    namespace = '{http://a9.com/-/spec/opensearch/1.1/}'
+    metadata = {}
+    for name in ('totalResults', 'startIndex', 'itemsPerPage'):
+        values = root.findall(f'{namespace}{name}')
+        if len(values) != 1 or not re.fullmatch(r'[0-9]+', (values[0].text or '').strip()):
+            raise ValueError(f'Atom 分页必须包含唯一的非负整数 {name}')
+        value = int(values[0].text.strip())
+        if value > 9007199254740991:
+            raise ValueError(f'Atom 分页的 {name} 超出安全整数范围')
+        metadata[name] = value
+    return {**metadata, 'entries': records}
 
 
 def main():
@@ -64,7 +82,9 @@ def main():
     raw = sys.stdin.buffer.read(MAX_BYTES + 1)
     if len(raw) > MAX_BYTES:
         raise ValueError(f'Atom 响应超过 {MAX_BYTES} 字节上限')
-    records = parse_atom(raw.decode('utf-8', errors='strict'))
+    if sys.argv[1:] not in ([], ['--feed-page']):
+        raise ValueError('用法：parse-arxiv-atom.py [--feed-page]')
+    records = parse_atom(raw.decode('utf-8', errors='strict'), feed_page=sys.argv[1:] == ['--feed-page'])
     encoded = json.dumps(records, ensure_ascii=False).encode('utf-8')
     if len(encoded) > MAX_BYTES:
         raise ValueError(f'Atom 解析结果超过 {MAX_BYTES} 字节上限')

@@ -31,6 +31,8 @@ The persistent deduplication database. A paper's `digestStatus` tracks success, 
 
 ### `fetch-checkpoint.json`
 
+Current backfill uses `sourceContractVersion: 7`, `coverageStrategy: previous-digest-window-v1`, and a complete `fetchBoundary`. The boundary binds the last published date, fixed `since`/`until`, and identity SHA. All seven arXiv categories and HuggingFace must prove coverage of that window. Resume resolves the published remote baseline again with the saved `until` and compares the complete identity. Older v6 records remain preserved but cannot prove coverage of this window.
+
 Per-arXiv-category and HuggingFace source state, candidate counts, content hashes, and recovery metadata. Damage invalidates that one source, and a gap in any required source blocks downstream completion.
 
 The v5-to-v6 source protocol upgrade requires both HuggingFace endpoints to provide a canonical arXiv ID and non-empty title and abstract. Repeated-ID pages are validated before pagination stops. This upgrade changes the entire `candidateFingerprint`, so an old v5 fetch checkpoint cannot be reused as a whole; damage to one source under an unchanged protocol still invalidates only that source. For a batch dated today in Beijing, rerun the same daily entrypoint to fetch again. Historical dates cannot resume from fetching and must use the controlled historical-maintenance workflow. The upgrade neither rewrites nor re-signs existing run data. Valid record structure does not establish full-text authenticity.

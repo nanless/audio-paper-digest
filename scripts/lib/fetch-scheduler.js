@@ -113,7 +113,9 @@ function createHostTaskScheduler(options = {}) {
                 const cooldownMs = typeof cooldownAfter === 'function'
                     ? cooldownAfter({ value, error, host })
                     : Number(runOptions.cooldownMs || 0);
-                const normalizedCooldown = Math.max(0, Number.isFinite(cooldownMs) ? cooldownMs : 0);
+                const minimumCooldownMs = runOptions.minimumCooldownMs;
+                const normalizedCooldown = Math.max(0, Number.isFinite(cooldownMs) ? cooldownMs : 0,
+                    Number.isFinite(minimumCooldownMs) ? minimumCooldownMs : 0);
                 state.cooldownScheduledMs += normalizedCooldown;
                 state.nextEligibleAt = nowFn() + normalizedCooldown;
             } finally {

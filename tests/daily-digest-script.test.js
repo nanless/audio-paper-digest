@@ -9,7 +9,7 @@ const source = fs.readFileSync(scriptPath, 'utf8');
 
 test('默认论文速递脚本保留 API、显式 Manual、博客三阶段和视觉阶段顺序', () => {
     const expected = [
-        'node scripts/full-fetch.js',
+        'node scripts/full-fetch.js --date "$target_date"',
         'npm run manual:tasks -- init --date "$target_date"',
         'npm run manual:records -- --date "$target_date"',
         'npm run manual:spec -- --date "$target_date" --records "$records_v4"',

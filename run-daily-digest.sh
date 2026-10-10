@@ -166,7 +166,7 @@ if [ "$start_index" -eq 1 ] && [ "$api_mode" -ne 1 ]; then
 fi
 
 if [ "$start_index" -eq 1 ]; then
-  run_stage 1 "默认 LLM/API 抓取、筛选、深度分析" node scripts/full-fetch.js
+  run_stage 1 "默认 LLM/API 抓取、筛选、深度分析" node scripts/full-fetch.js --date "$target_date"
 fi
 
 if [ "$api_mode" -ne 1 ]; then

@@ -140,6 +140,7 @@ function validateFingerprint(filePath, field, value, issues) {
 
 function validateCurrentArtifactMetadata(filePath, data, issues, { filterArtifact = false } = {}) {
     validateBeijingTimestamp(filePath, data.timestamp, issues);
+    validateFetchBoundary(filePath, data, issues);
     for (const field of ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint']) {
         validateFingerprint(filePath, field, data[field], issues);
     }
@@ -155,6 +156,9 @@ function validateCurrentArtifactMetadata(filePath, data, issues, { filterArtifac
 
 function getFetchSourcesSha256(checkpoint) {
     return stableContentSha256({
+        ...(checkpoint?.sourceContractVersion === 7 ? { fetchBoundary: checkpoint.fetchBoundary,
+            providers: Object.fromEntries(Object.entries(checkpoint.arxiv || {}).map(([id, entry]) => [id, entry?.health?.provider])),
+            huggingfaceProvider: checkpoint.huggingface?.health?.provider } : {}),
         arxiv: Object.fromEntries(Object.entries(checkpoint?.arxiv || {}).sort(([a], [b]) => a.localeCompare(b))
             .map(([id, entry]) => [id, { status: entry?.status, papersCount: entry?.papersCount, papersSha256: entry?.papersSha256 }])),
         huggingface: checkpoint?.huggingface ? { status: checkpoint.huggingface.status, papersCount: checkpoint.huggingface.papersCount, papersSha256: checkpoint.huggingface.papersSha256 } : null
@@ -249,12 +253,59 @@ function validatePapersDatabase(filePath = Config.FILES.papers) {
 function validateSourceHealth(filePath, sourceHealth, issues) {
     if (!sourceHealth || typeof sourceHealth !== 'object') return;
     const categories = sourceHealth.arxiv?.categories;
+    if (sourceHealth.sourceContractVersion === 7) {
+        for (const category of Array.isArray(categories) ? categories : []) {
+            if (category?.ok === true && !hasCoveredFetchBoundary(category, sourceHealth.fetchBoundary)) {
+                addIssue(issues, filePath, `来源 ${category.id} 未证明完整补更范围`);
+            }
+        }
+        if (sourceHealth.huggingface?.ok === true && !hasCoveredFetchBoundary(sourceHealth.huggingface, sourceHealth.fetchBoundary, true)) {
+            addIssue(issues, filePath, 'HuggingFace 来源未证明完整补更日期范围');
+        }
+    }
     if (categories !== undefined && !Array.isArray(categories)) {
         addIssue(issues, filePath, 'sourceHealth.arxiv.categories 必须是数组');
     }
     const hfOk = sourceHealth.huggingface?.ok;
     if (hfOk !== undefined && typeof hfOk !== 'boolean') {
         addIssue(issues, filePath, 'sourceHealth.huggingface.ok 必须是布尔值');
+    }
+}
+
+function hasCoveredFetchBoundary(health, boundary, huggingface = false) {
+    try { require('./lib/daily-fetch-boundary.js').validateDailyFetchBoundary(boundary); } catch { return false; }
+    return Boolean(boundary && /^[a-f0-9]{64}$/.test(boundary.identitySha256 || '')
+        && health?.provider?.boundaryIdentity === boundary.identitySha256
+        && health.provider.window?.since === boundary.since
+        && health.provider.window?.until === boundary.until
+        && health.provider.window?.covered === true
+        && (!huggingface || (health.provider.cutoffDate === boundary.lastDigestDate && health.provider.dailyCovered === true)));
+}
+
+function validateFetchBoundary(filePath, data, issues) {
+    if (!isPlainObject(data) || data.sourceContractVersion !== 7) return;
+    const boundary = data.fetchBoundary;
+    if (data.coverageStrategy !== 'previous-digest-window-v1' || data.pageSize !== 100) {
+        addIssue(issues, filePath, 'v7 抓取必须绑定完整补更策略和每页 100 条的分页参数');
+    }
+    try { require('./lib/daily-fetch-boundary.js').validateDailyFetchBoundary(boundary); } catch (error) {
+        addIssue(issues, filePath, `补更边界核验失败：${error.message}`);
+    }
+    if (!boundary || typeof boundary.contract !== 'string' || !boundary.contract
+            || !/^\d{4}-\d{2}-\d{2}$/.test(boundary.lastDigestDate || '')
+            || !/^[a-f0-9]{64}$/.test(boundary.identitySha256 || '')
+            || !Number.isFinite(Date.parse(boundary.since)) || !Number.isFinite(Date.parse(boundary.until))
+            || Date.parse(boundary.since) > Date.parse(boundary.until)
+            || Date.parse(boundary.until) !== Date.parse(data.batchStartedAt || data.timestamp)) {
+        addIssue(issues, filePath, 'v7 抓取范围必须绑定上次日更、合法起止时间和完整身份 SHA');
+    }
+    for (const [id, entry] of Object.entries(data.arxiv || {})) {
+        if (entry?.status === 'complete' && !hasCoveredFetchBoundary(entry.health, boundary)) {
+            addIssue(issues, filePath, `arxiv.${id} 未证明完整补更范围`);
+        }
+    }
+    if (data.huggingface?.status === 'complete' && !hasCoveredFetchBoundary(data.huggingface.health, boundary, true)) {
+        addIssue(issues, filePath, 'HuggingFace 未证明每日精选完整覆盖补更日期范围');
     }
 }
 
@@ -267,6 +318,7 @@ function validateFetchCheckpointFile(filePath = DEFAULT_FETCH_CHECKPOINT_FILE) {
         return issues;
     }
     validateBeijingTimestamp(filePath, data.timestamp, issues);
+    validateFetchBoundary(filePath, data, issues);
     for (const field of ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint']) {
         validateFingerprint(filePath, field, data[field], issues);
     }
@@ -1458,6 +1510,11 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
     const checkpoint = readJsonSafe(fetchPath, null);
     if (!isPlainObject(checkpoint)) return issues;
     for (const [artifactPath, artifact] of artifacts) {
+        if (checkpoint.sourceContractVersion === 7 && (artifact.sourceContractVersion !== 7
+                || artifact.coverageStrategy !== checkpoint.coverageStrategy || artifact.pageSize !== checkpoint.pageSize
+                || stableContentSha256(artifact.fetchBoundary) !== stableContentSha256(checkpoint.fetchBoundary))) {
+            addIssue(issues, artifactPath, '补更范围必须与 v7 抓取检查点完全一致');
+        }
         for (const field of fingerprintFields) {
             if (checkpoint[field] !== artifact[field]) {
                 addIssue(issues, artifactPath, `${field} 必须与 fetch-checkpoint.json 一致`);
@@ -1482,6 +1539,10 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
     }
 
     const raw = artifacts.find(([filePath]) => filePath === rawPath)?.[1];
+    if (checkpoint.sourceContractVersion === 7 && (raw?.sourceHealth?.sourceContractVersion !== 7
+            || stableContentSha256(raw?.sourceHealth?.fetchBoundary) !== stableContentSha256(checkpoint.fetchBoundary))) {
+        addIssue(issues, rawPath, '候选来源健康状态必须绑定同一 v7 补更范围');
+    }
     if (!raw || !hasCompleteSourceHealthForValidation(raw.sourceHealth)) return issues;
     const expectedIds = Config.ARXIV_CATEGORIES.map(category => category.id);
     for (const id of expectedIds) {
@@ -1499,6 +1560,8 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
 function hasCompleteSourceHealthForValidation(sourceHealth) {
     const categories = sourceHealth?.arxiv?.categories;
     if (!Array.isArray(categories)) return false;
+    if (sourceHealth?.sourceContractVersion === 7 && (categories.some(category => !hasCoveredFetchBoundary(category, sourceHealth.fetchBoundary))
+            || !hasCoveredFetchBoundary(sourceHealth.huggingface, sourceHealth.fetchBoundary, true))) return false;
     const expectedIds = Config.ARXIV_CATEGORIES.map(category => category.id);
     const byId = new Map(categories.map(category => [category?.id, category]));
     return categories.length === expectedIds.length
@@ -1529,6 +1592,7 @@ function validateCompleteFilterCompanionContract(files, decisionsPath, fetchPath
     if (missing) return issues;
 
     const checkpoint = readJsonSafe(fetchPath, null);
+    validateFetchBoundary(fetchPath, checkpoint, issues);
     const raw = readJsonSafe(files.rawCandidates, null);
     const decisions = readJsonSafe(decisionsPath, null);
     if (!isPlainObject(checkpoint) || !isPlainObject(raw) || !isPlainObject(decisions)) {

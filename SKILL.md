@@ -151,7 +151,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。npm 中的 Python 命令要求 Python 
 | 文件 | 含义 |
 |---|---|
 | `papers.json` | 不随每日批次移走的去重库和运行状态 |
-| `fetch-checkpoint.json` | 每个抓取来源的恢复证明 |
+| `fetch-checkpoint.json` | 每个抓取来源及上一已发布日更至本次开始时间的覆盖证明；见[补抓边界](docs/daily-fetch-boundary.md) |
 | `raw-candidates.json` | 筛选全集 |
 | `filter-decisions.json` | 逐篇筛选决定与缓存 |
 | `filtered-papers.json` | 正式入选集 |

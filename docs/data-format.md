@@ -31,6 +31,8 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 ### `fetch-checkpoint.json`
 
+当前补抓使用 `sourceContractVersion: 7`、`coverageStrategy: previous-digest-window-v1` 和完整 `fetchBoundary`。它绑定上次已发布日期、固定 `since`/`until` 与身份 SHA；七类 arXiv 和 HuggingFace 均须提供对应窗口的完整覆盖证明。续跑须以原 `until` 重新解析远端已发布基线并核对全部身份，不能移动终点后拼接旧检查点。v6 及更早记录仍保留，但不能当作此窗口已抓完整的证据。
+
 按 arXiv 类别和 HuggingFace 保存来源状态、候选数、内容 SHA 及恢复信息。某一来源损坏只使该来源的记录失效；必需来源未完成时，下游不能声明完成。
 
 来源协议从 v5 升至 v6 时，HuggingFace 两个端点都须提供规范 arXiv 编号及非空题目、摘要，重复 ID 页也先核验条目。此次协议升级会改变整个 `candidateFingerprint`，所以旧 v5 抓取检查点整体不能复用，与同一协议下仅某个来源损坏的处理不同。目标日期仍为北京时间当天时，重新运行同一日更入口可以重新抓取；历史日期不能从抓取阶段续跑，须使用受控历史维护流程。升级不改写或重签已有运行数据；条目格式完整也不等于全文真实性已经核验。
