@@ -6,6 +6,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { spawnSync, execFileSync } = require('node:child_process');
 const { stableSha256 } = require('../scripts/manual-fresh-authoring-contract.js');
 const { buildStageMetric, writeStageMetric } = require('../scripts/manual-performance-metrics.js');
 const { buildRawFetchMetric, writeRawFetchMetric } = require('../scripts/manual-raw-fetch-metrics.js');
@@ -177,14 +178,14 @@ describe('Manual 实测性能报告', () => {
         const latestPath = stageSidecar(fx, '2026-08-28', 10, 'latest');
         const old = JSON.parse(fs.readFileSync(oldPath, 'utf8'));
         fs.appendFileSync(path.join(fx.root, old.outputs[0].path), 'tampered');
-        assert.throws(() => loadAll(fx, [oldPath, latestPath]), /bytes\/SHA/);
+        assert.throws(() => loadAll(fx, [oldPath, latestPath]), /文件的角色、相对路径、字节数或 SHA 已变化/);
     });
 
     it('sidecar、日期目录或 queue snapshot 使用 symlink 时拒绝', () => {
         const fx = fixture();
         const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-performance-report-outside-'));
         fs.symlinkSync(outside, path.join(fx.shadow, '2026-08-28'));
-        assert.throws(() => discoverSidecarPaths({ shadowRoot: fx.shadow, v5Root: fx.v5 }), /symlink/);
+        assert.throws(() => discoverSidecarPaths({ shadowRoot: fx.shadow, v5Root: fx.v5 }), /符号链接/);
 
         const fx2 = fixture();
         const queuePath = queueSidecar(fx2, '2026-08-28', 1000);
@@ -193,7 +194,7 @@ describe('Manual 实测性能报告', () => {
         const moved = path.join(fx2.v5, '2026-08-28', 'work-queue-real.json');
         fs.renameSync(realQueue, moved);
         fs.symlinkSync(moved, realQueue);
-        assert.throws(() => loadAll(fx2, [queuePath]), /symlink/);
+        assert.throws(() => loadAll(fx2, [queuePath]), /符号链接/);
         assert.equal(metrics.queueSnapshot.sha256.length, 64);
     });
 
@@ -206,6 +207,32 @@ describe('Manual 实测性能报告', () => {
         assert.equal(JSON.parse(fs.readFileSync(output, 'utf8')).sources[0].sha256, sha(fs.readFileSync(sidecar)));
         assert.throws(() => writeReport(report, 'report.json', { reportRoot, containmentRoot: fx.current }), /覆盖/);
         assert.throws(() => writeReport(report, '../escape.json', { reportRoot, containmentRoot: fx.current }), /受控/);
+    });
+
+    it('读取性能报告前拒绝已被替换为 FIFO 的来源文件，不等待写入端', () => {
+        const fx = fixture();
+        const metricPath = queueSidecar(fx, '2026-08-28', 1000);
+        const queuePath = path.join(fx.v5, '2026-08-28', 'work-queue.json');
+        const queueBytes = fs.readFileSync(queuePath);
+        const metricBytes = fs.readFileSync(metricPath);
+        const queue = JSON.parse(queueBytes);
+        const sourcePath = path.join(fx.root, queue.sourceFiles[0].path);
+        const options = { projectRoot: fx.root, shadowRoot: fx.shadow, v5Root: fx.v5,
+            allowedRoots: [fx.current, fx.archive], sidecarPaths: [metricPath] };
+        const script = 'require(process.argv[1]).run([], JSON.parse(process.argv[2]));';
+        const args = ['-e', script, require.resolve('../scripts/manual-performance-report.js'), JSON.stringify(options)];
+        const normal = spawnSync(process.execPath, args, { timeout: 2000, encoding: 'utf8' });
+        assert.equal(normal.error, undefined);
+        assert.equal(normal.status, 0, normal.stderr);
+        fs.unlinkSync(sourcePath);
+        execFileSync('mkfifo', [sourcePath]);
+        const rejected = spawnSync(process.execPath, args, { timeout: 2000, encoding: 'utf8' });
+        assert.equal(rejected.error, undefined, '必须在读取前拒绝 FIFO，不得等待写入端');
+        assert.equal(rejected.status, 1);
+        assert.match(rejected.stderr, /工作队列 sourceFiles\[0\] 不是普通文件，拒绝读取/);
+        assert.equal(fs.statSync(sourcePath).isFIFO(), true);
+        assert.deepEqual(fs.readFileSync(queuePath), queueBytes);
+        assert.deepEqual(fs.readFileSync(metricPath), metricBytes);
     });
 
     it('CLI 日期可重复指定但值不能重复，输出仍然是可选项', () => {

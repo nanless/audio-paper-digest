@@ -68,7 +68,7 @@ describe('Manual 实测性能指标', () => {
         fs.appendFileSync(item.input, 'tampered');
         assert.throws(() => verifyStageMetric(metric, {
             projectRoot: item.root, allowedRoots: [item.current, item.archive, item.shadow]
-        }), /bytes\/SHA/);
+        }), /文件的角色、相对路径、字节数或 SHA 已变化/);
     });
 
     it('缺少 timing 字段或 I/O 汇总被篡改时，拒绝指标记录', () => {
@@ -89,7 +89,7 @@ describe('Manual 实测性能指标', () => {
         assert.throws(() => verify(missingQueue), /wallMs\/queueMs/);
         const changedBytes = structuredClone(metric);
         changedBytes.io.inputBytes.value += 1;
-        assert.throws(() => verify(changedBytes), /io 汇总/);
+        assert.throws(() => verify(changedBytes), /io 字节数汇总与文件记录不一致/);
     });
 
     it('指标文件只在 shadow 根目录内原子写入，拒绝符号链接路径', () => {
@@ -116,7 +116,7 @@ describe('Manual 实测性能指标', () => {
         fs.symlinkSync(outside, path.join(item.shadow, '2026-08-29', 'metrics'));
         assert.throws(() => writeStageMetric({ ...metric, date: '2026-08-29' }, {
             shadowRoot: item.shadow, runId: 'escape'
-        }), /symlink|逃逸/);
+        }), /目录路径中不得包含符号链接/);
 
         const nestedOutside = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-performance-parent-outside-'));
         const currentLink = path.join(item.current, 'metrics-link');
@@ -125,7 +125,7 @@ describe('Manual 实测性能指标', () => {
             shadowRoot: path.join(currentLink, 'shadow'),
             containmentRoot: item.current,
             runId: 'parent-escape'
-        }), /symlink|逃逸/);
+        }), /目录路径中不得包含符号链接/);
     });
 
     it('毫秒值来自 raw nanoseconds 的保守上取整，缺失仍为 unknown', () => {
@@ -140,6 +140,6 @@ describe('Manual 实测性能指标', () => {
         assert.equal(unionNanoseconds([[0n, 10n], [5n, 15n], [30n, 35n]]), 20n);
         assert.equal(unionNanoseconds([[30n, 35n], [0n, 10n], [10n, 12n]]), 17n);
         assert.equal(unionNanoseconds([]), null);
-        assert.throws(() => unionNanoseconds([[5n, 4n]]), /interval/);
+        assert.throws(() => unionNanoseconds([[5n, 4n]]), /计时区间 interval\[0\] 必须包含两个非负 bigint 起止值，且结束值不得早于开始值/);
     });
 });

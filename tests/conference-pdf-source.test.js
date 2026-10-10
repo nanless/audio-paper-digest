@@ -117,7 +117,7 @@ test('本地提取结果保存可核对的 SHA；缺少可靠的结构化 TeX �
     const structuredArtifacts = { sections: [{ id: 'method', text: 'Method' }], formulaIndex: [] };
     const result = source.buildConferencePdfSource({ cacheRoot: f.root, record: f.record,
         extractPdf: ({ pdfBytes }) => {
-            assert.notEqual(pdfBytes, f.bytes, 'extractor receives a separate Buffer');
+            assert.notEqual(pdfBytes, f.bytes, '提取器收到的是另一个 Buffer 对象');
             return { extractorVersion: 'local-pdf-extractor-v1', text: 'local extracted text', structuredArtifacts,
                 formulaTeX: { available: false, reason: 'pdf-has-no-reliable-structured-tex' } };
         },
@@ -153,7 +153,7 @@ test('只接受受控根目录内、大小不超限且只有一个硬链接的�
         /regular, non-linked/);
     fs.unlinkSync(path.join(f.root, 'papers', 'hard-linked.pdf'));
     assert.throws(() => source.buildConferencePdfSource({ cacheRoot: f.root, record: f.record, maxBytes: f.bytes.length - 1 }), /size limit/);
-    t.diagnostic('security checks reject traversal, symbolic links, hard links, and oversized files');
+    t.diagnostic('路径检查拒绝目录越界、符号链接、多重硬链接及超大文件');
 });
 
 test('PDF 文件头无效、内容改变、SHA 不符或来源描述记录被改动时拒绝', () => {

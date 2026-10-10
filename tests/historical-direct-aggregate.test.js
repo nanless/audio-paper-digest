@@ -417,11 +417,11 @@ test('直接汇总拒绝发布来源记录缺失、多出字段或来源文本 S
 test('直接汇总复核官方元数据旁路授权，拒绝随后的原始字节失败', async t => {
     const f = await fixture(t, { publicationSidecar: true });
     const readsBeforeAggregate = f.sidecarState.reads;
-    assert.ok(readsBeforeAggregate >= 1, 'runner must read the sidecar while staging the ambiguous paper');
+    assert.ok(readsBeforeAggregate >= 1, '暂存身份不明确的论文时，执行器必须读取官方元数据补充记录');
     const [aggregate] = direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE });
     assert.equal(aggregate.members.length, 2);
     assert.equal(f.sidecarState.reads, readsBeforeAggregate + 2,
-        'aggregate must independently replay every arXiv sidecar before accepting staging');
+        '接受暂存论文前，汇总入口必须独立复核每份 arXiv 元数据补充记录');
     f.sidecarState.drift = true;
     assert.throws(() => direct.buildDirectAggregates({ inputs: inputs(f), daily: DATE }), /raw Atom sidecar drifted/);
 });

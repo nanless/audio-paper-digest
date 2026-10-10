@@ -119,7 +119,7 @@ test('日更封存模式只保存一次 PDF、TXT 和清单，复核只读同一
     const first = await fresh.withFreshAnalysisContext(identity, () => fresh.fetchFreshSource(f.id, async () => {
         captures++; throw new Error('legacy text-only fetch must not run');
     }));
-    assert.equal(captures, 1, 'daily sources phase must use one sealed bundle capture');
+    assert.equal(captures, 1, '日更来源阶段只抓取并封存一组来源文件');
     assert.equal(first.freshSourceDescriptor.contract, fresh.BUNDLE_CACHE_CONTRACT);
     assert.equal(first.freshSourceDescriptor.sourceGeneration, generation);
     assert.match(first.freshSourceDescriptor.sourceManifestSha256, /^[a-f0-9]{64}$/);
@@ -131,7 +131,7 @@ test('日更封存模式只保存一次 PDF、TXT 和清单，复核只读同一
     const replayed = await fresh.withFreshAnalysisContext(identity, () => fresh.fetchFreshSource(f.id, async () => {
         throw new Error('same generation must replay the sealed bundle');
     }));
-    assert.equal(captures, 1, 'same generation must not fetch again');
+    assert.equal(captures, 1, '同一代来源文件不能再次抓取');
     assert.equal(replayed.freshSourceDescriptor.sourceManifestSha256, first.freshSourceDescriptor.sourceManifestSha256);
     const paper = { arxivId: f.id }; const analysisManifest = { stages: {} };
     await fresh.withFreshAnalysisContext(identity, () => fresh.attachFreshSourceRecord(paper, analysisManifest, replayed));
@@ -259,7 +259,7 @@ test('深度主分析和 Reader 指纹按运行隔离，普通指纹保持不变
     const normal = deep.buildRecoveryFingerprints(paper, f.text, f.id);
     const first = await fresh.withFreshAnalysisContext(f.context, async () => {
         await fresh.fetchFreshSource(f.id, async () => structuredClone(f.details));
-        assert.equal((await deep.fetchArxivTextDetailed(f.id)).text, f.text, 'production wrapper reads this run cache');
+        assert.equal((await deep.fetchArxivTextDetailed(f.id)).text, f.text, '正式读取入口使用本次运行保存的来源文件');
         return deep.buildRecoveryFingerprints(paper, f.text, f.id);
     });
     const other = f.makeRun();

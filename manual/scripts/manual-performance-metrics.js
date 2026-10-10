@@ -59,7 +59,7 @@ function unionNanoseconds(intervals) {
         if (!Array.isArray(interval) || interval.length !== 2
             || typeof interval[0] !== 'bigint' || typeof interval[1] !== 'bigint'
             || interval[0] < 0n || interval[1] < interval[0]) {
-            throw new Error(`metrics interval[${index}] 非法`);
+            throw new Error(`计时区间 interval[${index}] 必须包含两个非负 bigint 起止值，且结束值不得早于开始值`);
         }
         return interval;
     }).sort((left, right) => (left[0] < right[0] ? -1 : (left[0] > right[0] ? 1 : 0)));
@@ -83,7 +83,7 @@ function observedMilliseconds(nanoseconds, aggregation = 'single_stage_wall') {
     }
     const milliseconds = (nanoseconds + 999999n) / 1000000n;
     if (milliseconds > BigInt(Number.MAX_SAFE_INTEGER)) {
-        throw new Error('metrics observed milliseconds 超出安全整数范围');
+        throw new Error('实测毫秒数超出安全整数范围');
     }
     return {
         status: 'known',
@@ -103,45 +103,45 @@ function assertSafeRoot(rootPath, label) {
     const declared = path.resolve(rootPath);
     if (!fs.statSync(declared, { throwIfNoEntry: false })?.isDirectory()
         || fs.lstatSync(declared).isSymbolicLink()) {
-        throw new Error(`${label} 必须是存在的真实目录且不得是 symlink`);
+        throw new Error(`${label} 必须是存在的真实目录且不得为符号链接`);
     }
     return fs.realpathSync(declared);
 }
 
 function ensureSafeDirectoryTree(basePath, targetPath, label) {
     const declaredBase = path.resolve(basePath);
-    const realBase = assertSafeRoot(declaredBase, `${label} base`);
+    const realBase = assertSafeRoot(declaredBase, `${label} 起始目录`);
     const declaredTarget = path.resolve(targetPath);
     if (!isInside(declaredBase, declaredTarget)) throw new Error(`${label} 逃逸受控根目录`);
     let component = declaredBase;
     for (const part of path.relative(declaredBase, declaredTarget).split(path.sep).filter(Boolean)) {
         component = path.join(component, part);
         const stat = fs.lstatSync(component, { throwIfNoEntry: false });
-        if (stat?.isSymbolicLink()) throw new Error(`${label} 目录链不得包含 symlink`);
-        if (stat && !stat.isDirectory()) throw new Error(`${label} 目录链包含非目录节点`);
+        if (stat?.isSymbolicLink()) throw new Error(`${label} 目录路径中不得包含符号链接`);
+        if (stat && !stat.isDirectory()) throw new Error(`${label} 目录路径中存在不是目录的部分`);
         if (!stat) fs.mkdirSync(component);
-        if (!isInside(realBase, fs.realpathSync(component))) throw new Error(`${label} realpath 逃逸受控根目录`);
+        if (!isInside(realBase, fs.realpathSync(component))) throw new Error(`${label} 解析符号链接后的实际路径超出受控根目录`);
     }
     return fs.realpathSync(declaredTarget);
 }
 
 function describeFiles(files, options = {}) {
-    const projectRoot = assertSafeRoot(options.projectRoot || Config.PROJECT_ROOT, 'metrics projectRoot');
+    const projectRoot = assertSafeRoot(options.projectRoot || Config.PROJECT_ROOT, '指标记录的 projectRoot');
     const allowedRoots = (options.allowedRoots || [Config.CURRENT_DIR, Config.ARCHIVE_DIR])
-        .filter(root => fs.existsSync(root)).map((root, index) => assertSafeRoot(root, `metrics allowedRoots[${index}]`));
+        .filter(root => fs.existsSync(root)).map((root, index) => assertSafeRoot(root, `指标记录的 allowedRoots[${index}]`));
     const seen = new Set();
     return (files || []).map((item, index) => {
         const role = String(item?.role || '').trim();
         const declared = path.resolve(String(item?.path || ''));
         if (!role || !fs.statSync(declared, { throwIfNoEntry: false })?.isFile()
             || fs.lstatSync(declared).isSymbolicLink()) {
-            throw new Error(`metrics files[${index}] role/path 非法或使用 symlink`);
+            throw new Error(`指标文件 files[${index}] 的 role 为空、path 不对应普通文件，或文件为符号链接`);
         }
         const realPath = fs.realpathSync(declared);
         if (!allowedRoots.some(root => isInside(root, realPath))) {
-            throw new Error(`metrics files[${index}] realpath 逃逸允许目录`);
+            throw new Error(`指标文件 files[${index}] 的实际路径超出允许目录`);
         }
-        if (seen.has(realPath)) throw new Error(`metrics 重复引用文件: ${realPath}`);
+        if (seen.has(realPath)) throw new Error(`指标记录重复引用文件: ${realPath}`);
         seen.add(realPath);
         const bytes = fs.readFileSync(realPath);
         return {
@@ -163,7 +163,7 @@ function cacheMeasurement(cache) {
     const hits = cache.hits;
     const misses = cache.misses;
     if (!Number.isSafeInteger(hits) || hits < 0 || !Number.isSafeInteger(misses) || misses < 0) {
-        throw new Error('metrics cache hits/misses 必须是非负安全整数');
+        throw new Error('缓存 hits/misses 必须是非负安全整数');
     }
     return { status: hits + misses === 0 ? 'not_applicable' : 'known', hits, misses, total: hits + misses };
 }
@@ -177,15 +177,15 @@ function fileFingerprint(files) {
 function buildStageMetric(options = {}) {
     const stage = String(options.stage || '');
     const date = String(options.date || '');
-    if (!ALLOWED_STAGES.has(stage)) throw new Error(`metrics stage 非法: ${stage}`);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('metrics date 必须是 YYYY-MM-DD');
+    if (!ALLOWED_STAGES.has(stage)) throw new Error(`指标记录的 stage 未登记: ${stage}`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new Error('指标记录的 date 必须是 YYYY-MM-DD');
     const status = String(options.status || 'complete');
-    if (!ALLOWED_STAGE_STATUSES.has(status)) throw new Error(`metrics status 非法: ${status}`);
+    if (!ALLOWED_STAGE_STATUSES.has(status)) throw new Error(`指标记录的 status 未登记: ${status}`);
     const wallAggregation = options.wallAggregation || 'single_stage_wall';
     const queueAggregation = options.queueAggregation || 'single_observed_queue_wait';
     if (!ALLOWED_WALL_AGGREGATIONS.has(wallAggregation)
         || !ALLOWED_QUEUE_AGGREGATIONS.has(queueAggregation)) {
-        throw new Error('metrics timing aggregation 不属于当前契约');
+        throw new Error('指标记录的耗时或排队等待时间汇总算法未登记');
     }
     const descriptorOptions = {
         projectRoot: options.projectRoot,
@@ -212,12 +212,12 @@ function buildStageMetric(options = {}) {
         },
         cache: cacheMeasurement(options.cache),
         io: {
-            inputBytes: knownCount(inputBytes, 'metrics inputBytes'),
-            outputBytes: knownCount(outputBytes, 'metrics outputBytes')
+            inputBytes: knownCount(inputBytes, '指标记录的 inputBytes'),
+            outputBytes: knownCount(outputBytes, '指标记录的 outputBytes')
         },
         work: {
-            paperCount: knownCount(options.paperCount, 'metrics paperCount'),
-            taskCount: knownCount(options.taskCount, 'metrics taskCount')
+            paperCount: knownCount(options.paperCount, '指标记录的 paperCount'),
+            taskCount: knownCount(options.taskCount, '指标记录的 taskCount')
         },
         inputs,
         outputs,
@@ -236,7 +236,7 @@ function verifyDescriptors(values, options, label) {
     if (described.length !== values.length || described.some((actual, index) => (
         actual.path !== values[index].path || actual.bytes !== values[index].bytes
         || actual.sha256 !== values[index].sha256 || actual.role !== values[index].role
-    ))) throw new Error(`${label} 文件 bytes/SHA/realpath 已变化`);
+    ))) throw new Error(`${label} 文件的角色、相对路径、字节数或 SHA 已变化`);
     return described;
 }
 
@@ -246,17 +246,17 @@ function verifyStageMetric(value, options = {}) {
         || value.contractFingerprint !== METRICS_CONTRACT_FINGERPRINT
         || !ALLOWED_STAGES.has(value.stage)
         || !/^\d{4}-\d{2}-\d{2}$/.test(value.date || '')) {
-        throw new Error('Manual stage metrics 契约非法');
+        throw new Error('Manual 阶段指标的版本、模式、协议、协议指纹、阶段或日期无效');
     }
     const inputs = verifyDescriptors(value.inputs, options, 'metrics.inputs');
     const outputs = verifyDescriptors(value.outputs, options, 'metrics.outputs');
     if (value.inputFingerprint !== fileFingerprint(inputs)
         || value.outputFingerprint !== fileFingerprint(outputs)) {
-        throw new Error('Manual stage metrics input/output fingerprint 不匹配');
+        throw new Error('Manual 阶段指标的输入或输出文件指纹不匹配');
     }
     if (!value.timing || Object.keys(value.timing).length !== 2
         || !Object.hasOwn(value.timing, 'wallMs') || !Object.hasOwn(value.timing, 'queueMs')) {
-        throw new Error('Manual stage metrics timing 必须明确包含 wallMs/queueMs');
+        throw new Error('Manual 阶段指标的 timing 必须且只能包含 wallMs/queueMs');
     }
     for (const [label, measurement] of Object.entries(value.timing)) {
         const allowedAggregations = label === 'wallMs'
@@ -270,12 +270,12 @@ function verifyStageMetric(value, options = {}) {
                 || measurement.rounding !== 'ceil_nanoseconds_to_integer_milliseconds'))
             || (measurement.status === 'unknown' && (measurement.value !== null
                 || measurement.rawNanoseconds !== null))) {
-            throw new Error(`Manual stage metrics timing.${label} 非法`);
+            throw new Error(`Manual 阶段指标的 timing.${label} 状态、耗时、原始纳秒值或计时规则无效`);
         }
     }
     if (!ALLOWED_STAGE_STATUSES.has(value.status)
         || !['known', 'unknown', 'not_applicable'].includes(value.cache?.status)) {
-        throw new Error('Manual stage metrics cache 状态非法');
+        throw new Error('Manual 阶段指标的阶段状态或 cache 状态未登记');
     }
     if ((value.cache.status === 'known' && (!Number.isSafeInteger(value.cache.hits)
         || !Number.isSafeInteger(value.cache.misses) || value.cache.hits < 0 || value.cache.misses < 0
@@ -284,13 +284,13 @@ function verifyStageMetric(value, options = {}) {
             || value.cache.misses !== 0 || value.cache.total !== 0))
         || (value.cache.status === 'unknown' && [value.cache.hits, value.cache.misses, value.cache.total]
             .some(item => item !== null))) {
-        throw new Error('Manual stage metrics cache 计数非法');
+        throw new Error('Manual 阶段指标的 cache 命中数、未命中数或总数与状态不符');
     }
     for (const [group, fields] of Object.entries({ io: ['inputBytes', 'outputBytes'], work: ['paperCount', 'taskCount'] })) {
         for (const field of fields) {
             const item = value[group]?.[field];
             if (item?.status !== 'known' || !Number.isSafeInteger(item.value) || item.value < 0) {
-                throw new Error(`Manual stage metrics ${group}.${field} 非法`);
+                throw new Error(`Manual 阶段指标的 ${group}.${field} 必须标为 known 且具有非负安全整数值`);
             }
         }
     }
@@ -298,7 +298,7 @@ function verifyStageMetric(value, options = {}) {
     const expectedOutputBytes = outputs.reduce((sum, item) => sum + item.bytes, 0);
     if (value.io.inputBytes.value !== expectedInputBytes
         || value.io.outputBytes.value !== expectedOutputBytes) {
-        throw new Error('Manual stage metrics io 汇总与文件描述符不一致');
+        throw new Error('Manual 阶段指标的 io 字节数汇总与文件记录不一致');
     }
     return { value, inputs, outputs };
 }
@@ -307,14 +307,14 @@ function writeStageMetric(metric, options = {}) {
     const shadowRoot = path.resolve(options.shadowRoot || Config.FILES.manualV6MetricsDir);
     const containmentRoot = path.resolve(options.containmentRoot
         || (options.shadowRoot ? path.dirname(shadowRoot) : Config.CURRENT_DIR));
-    ensureSafeDirectoryTree(containmentRoot, shadowRoot, 'Manual shadow metrics root');
-    const realRoot = assertSafeRoot(shadowRoot, 'Manual shadow metrics root');
+    ensureSafeDirectoryTree(containmentRoot, shadowRoot, 'Manual 指标记录根目录');
+    const realRoot = assertSafeRoot(shadowRoot, 'Manual 指标记录根目录');
     const suffix = options.runId || `${Date.now()}-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
-    if (!/^[A-Za-z0-9._-]+$/.test(suffix)) throw new Error('metrics runId 含非法字符');
+    if (!/^[A-Za-z0-9._-]+$/.test(suffix)) throw new Error('指标记录的 runId 含非法字符');
     const target = path.join(shadowRoot, metric.date, 'metrics', `${metric.stage}-${suffix}.json`);
-    ensureSafeDirectoryTree(shadowRoot, path.dirname(target), 'metrics 输出目录');
-    if (!isInside(realRoot, fs.realpathSync(path.dirname(target)))) throw new Error('metrics 输出目录逃逸 Manual shadow root');
-    if (fs.lstatSync(target, { throwIfNoEntry: false })) throw new Error('metrics run 文件已存在，禁止覆盖');
+    ensureSafeDirectoryTree(shadowRoot, path.dirname(target), '指标记录输出目录');
+    if (!isInside(realRoot, fs.realpathSync(path.dirname(target)))) throw new Error('指标记录输出目录的实际路径超出指定根目录');
+    if (fs.lstatSync(target, { throwIfNoEntry: false })) throw new Error('本次指标记录文件已存在，禁止覆盖');
     writeFileAtomic(target, `${JSON.stringify(metric, null, 2)}\n`);
     return fs.realpathSync(target);
 }

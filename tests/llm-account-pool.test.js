@@ -107,7 +107,7 @@ describe('OpenCode Go 账号粘性状态', () => {
             ),
             error => error.code === 'REQUEST_DEADLINE_EXCEEDED'
         );
-        assert.ok(Date.now() - startedAt < 1000, 'deadline must not inherit a hanging transport lifetime');
+        assert.ok(Date.now() - startedAt < 1000, '传输请求一直不结束时，仍须按本次请求的截止时间停止等待');
     });
 
     it('拒绝重复的主账号与备用账号凭证', () => {
