@@ -33,7 +33,7 @@ npm run manual:fetch -- --date YYYY-MM-DD --raw
 
 `--raw` 访问 arXiv/HuggingFace，不调用筛选模型。检查输出中的完整候选、逐来源健康信息、checkpoint 和输入 SHA。某来源暂时失败时，不能将不完整集合宣布为完整。
 
-主助手逐篇给出 `manual_offline` 决定，再提交筛选 spec：
+主助手逐篇给出 `manual_offline` 决定，再提交记录逐篇筛选决定的 spec 文件：
 
 ```bash
 npm run manual:fetch -- --date YYYY-MM-DD --select FILTER_SPEC.json
@@ -216,7 +216,7 @@ npm run manual:correction -- abandon --date YYYY-MM-DD \
   --claim CLAIM_ID --reason REASON
 ```
 
-`N` 只能为 1–3，不传时使用实现的活动任务上限。`--force` 只用于 `packet` 和 `manifest`，仍核字段、证据及 SHA。纠错清单完成后，从最早受影响节点重新生成正式任务输入包；不能直接改单篇记录或正式分析结果。
+`N` 只能为 1–3，不传时使用实现的活动任务上限。`--force` 只用于 `packet` 和 `manifest`，仍核字段、证据及 SHA。纠错清单完成后，从最早受影响的步骤重新生成正式任务输入包；不能直接改单篇记录或正式分析结果。
 
 ## 八、汇总单篇与整批结果
 
@@ -230,7 +230,7 @@ npm run manual:analyze -- --date YYYY-MM-DD \
   --spec data/current/manual-v6/YYYY-MM-DD/spec.json
 ```
 
-`manual:records` 重读每篇输入包、结果及凭证，生成单篇记录和整批文件。新记录、整批 records、spec 和正文分块文件 `manualReaderLongform` 必须保存当前 `modelPolicy` 并纳入 SHA；records 4、spec 6 和正文分块格式 `reader-longform` 2 的格式数字保持不变。旧缺标识记录只按原规则读取，不自动补字段或重算旧 SHA。`manual:spec` 重验论文全集、来源索引、records、任务证据和正文映射，生成每篇发布输入及 batch Merkle root。`manual:analyze` 再次验证 spec，写标准 `data/current/deep-analysis-result.json`。
+`manual:records` 重读每篇输入包、结果及凭证，生成单篇记录和整批文件。新记录、整批角色结果 records、发布输入 spec 和正文分块文件 `manualReaderLongform` 必须保存当前 `modelPolicy` 并纳入 SHA；records 4、spec 6 和正文分块格式 `reader-longform` 2 的格式数字保持不变。旧缺标识记录只按原规则读取，不自动补字段或重算旧 SHA。`manual:spec` 重验论文全集、来源索引、records、任务证据和正文映射，生成每篇发布输入及用于核验整批输入的 Merkle root。`manual:analyze` 再次验证 spec，写标准 `data/current/deep-analysis-result.json`。
 
 `manual:records` 支持显式 `--force`；`manual:spec` 和 `manual:analyze` 也支持在已有输出变化时显式覆盖。它只允许覆盖目标文件，不跳过任何校验。集合、路径、SHA、来源身份或 Merkle 不符仍会失败，四角色完成也不等于已发布。
 
@@ -280,7 +280,7 @@ npm run digest:status -- --date YYYY-MM-DD
 | `failed` | 有明确失败记录 | 修复后 retry 指定论文和角色；不删状态或凭证掩盖失败 |
 | `stale` | 输入或协议 SHA 不再一致 | 从最早变化节点重新生成、注册、提交；不改旧 SHA |
 | 作者包与仓库当前要求不符 | 包内副本及外层 SHA 可仍自洽，但当前提示词或编辑要求已变化 | 保留旧证据，按正常流程重建受影响输入和下游；不能仅保存旧副本继续 |
-| `awaiting_records_envelope` | 四角色完成，整批 records 尚未生成 | 运行 manual:records，再验证 spec；不能直接宣告批次完成 |
+| `awaiting_records_envelope` | 四角色完成，整批角色结果 records 尚未生成 | 运行 manual:records，再验证 spec；不能直接宣告批次完成 |
 | 页面 SHA 变化 | 审过的字节与当前页面不同 | 重审变化页，汇总当前批次凭证；不能复用不符的批次审查声明 |
 | 推送后 OID 不符 | 提交尚未得到远端确认 | 恢复 push 或远端核验；不能宣告已发布 |
 
@@ -320,6 +320,6 @@ npm run manual:performance-report -- \
 | `manual:v5:promote-draft` | `--date --paper-id --source-dir --technical-review --readability-review --figure-review`；可选 `--author-packet` |
 | `manual:v5:work-queue` | `--date`；可选 `--observations`、`--output-dir`、`--no-sidecar` |
 
-旧 spec、analyze、author-packet 和 promote-draft 的新写入已关闭。work-queue 可保留观察统计附属文件，不生成新的作者材料或正文。这些入口不能生成新正式模式的 v6 证明、混入 v6 批次或建立新视觉任务。Python v5 写作来源及既有封存预览仍核当前固定路径和字节 SHA；仅保存旧提示词或编辑要求副本，不保证旧预览能重新通过检查。预览中 `editorialContract` 绑定提示词，`referenceContract` 绑定编辑要求，不能混用。预览没有新写入口。
+旧 spec、analyze、author-packet 和 promote-draft 的新写入已关闭。work-queue 可保留实际运行统计的附属文件，不生成新的作者材料或正文。这些入口不能生成新正式模式的 v6 证明、混入 v6 批次或建立新视觉任务。Python v5 写作来源及既有封存预览仍核当前固定路径和字节 SHA；仅保存旧提示词或编辑要求副本，不保证旧预览能重新通过检查。预览中 `editorialContract` 绑定提示词，`referenceContract` 绑定编辑要求，不能混用。预览没有新写入口。
 
 静态旧文章的阅读、旧任务恢复、预览复验和重新发布各有边界，不能由某个包的失败推断全部历史文章不可读。哪些程序读取这些旧记录，以及各自允许什么操作，见[历史兼容边界](architecture.md#历史兼容边界)。

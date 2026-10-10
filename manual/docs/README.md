@@ -21,9 +21,11 @@ Manual 只在用户明确选择人工流程时使用；默认 LLM/API 主线不�
 | `canonical` | 博客生成器读取的正式分析结果；必须能据此重新核验 Manual 内容的来源与任务证据。 |
 | `stale` | 某个已注册任务的输入或协议已变化，必须从该任务及其下游重新验证。 |
 | `shadow` | 与正式结果隔离的审计或比较模式，不能发布。 |
-| `legacy v5` | 原文件只读核验；旧写入入口已关闭，工作队列可输出观察统计，不能跳过新任务的正式流程。 |
+| `legacy v5` | 原文件只读核验；旧写入入口已关闭，工作队列可输出实际运行统计，不能跳过新任务的正式流程。 |
 
-## 文档与 Prompt 的边界
+<a id="文档与-prompt-的边界"></a>
+
+## 文档与提示词分别用于什么
 
 - [manual-tutorial-article.md](../prompts/manual-tutorial-article.md) 是正式写作任务包的主要提示词。
 - [manual-analysis-record-v2.md](../prompts/manual-analysis-record-v2.md) 和 [editorial-reference-contract-v2.md](editorial-reference-contract-v2.md) 用于当前 Sol 模型规则，并按真实文件 SHA 绑定任务。它们不替代正式 v6 的主要教程提示词。

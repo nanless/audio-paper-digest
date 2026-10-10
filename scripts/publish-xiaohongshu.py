@@ -77,8 +77,8 @@ def smart_truncate(text, max_len=65):
     """优先保留长度阈值附近的句末标点，否则在分隔标点、空白或指定字符位置截断。"""
     if len(text) <= max_len:
         return text
-    # 从索引 max_len 向前找句末标点，找到后保留该标点。
-    for i in range(max_len, max_len // 2, -1):
+    # 从最后一个可保留字符的索引 max_len - 1 向前找句末标点，找到后保留该标点。
+    for i in range(max_len - 1, max_len // 2, -1):
         if i < len(text) and text[i] in '。！？.!?':
             return text[:i+1]
     # 没找到句末标点时，改在逗号、顿号等分隔标点或空白之前截断。

@@ -75,6 +75,18 @@ class PublishXiaohongshuConcurrencyTest(unittest.TestCase):
             '📦 开源：✅模型',
         )
 
+    def test_sentence_punctuation_does_not_exceed_oneliner_length_limit(self):
+        for limit in (65, 80):
+            with self.subTest(limit=limit):
+                inside = '甲' * (limit - 1) + '。后文'
+                outside = '甲' * limit + '。后文'
+                self.assertEqual(publish_xiaohongshu.smart_truncate(inside, limit), '甲' * (limit - 1) + '。')
+                self.assertEqual(publish_xiaohongshu.smart_truncate(outside, limit), '甲' * limit)
+                self.assertEqual(publish_xiaohongshu.safe_oneliner(outside, max_len=limit), '甲' * limit)
+                self.assertEqual(publish_xiaohongshu.smart_truncate('甲' * (limit - 2) + '，后文', limit), '甲' * (limit - 2))
+                self.assertEqual(publish_xiaohongshu.smart_truncate('甲' * (limit - 2) + ' 后文', limit), '甲' * (limit - 2))
+                self.assertEqual(publish_xiaohongshu.smart_truncate('甲' * limit, limit), '甲' * limit)
+
     def test_safe_oneliner_rejects_content_left_empty_after_sanitizing(self):
         self.assertIsNone(
             publish_xiaohongshu.safe_oneliner(
