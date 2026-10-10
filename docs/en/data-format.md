@@ -33,13 +33,13 @@ The persistent deduplication database. A paper's `digestStatus` tracks success, 
 
 Current backfill uses `sourceContractVersion: 7`, `coverageStrategy: previous-digest-window-v1`, and a complete `fetchBoundary`. The boundary binds the last published date, fixed `since`/`until`, and identity SHA. All seven arXiv categories and HuggingFace must prove coverage of that window. Resume resolves the published remote baseline again with the saved `until` and compares the complete identity. Older v6 records remain preserved but cannot prove coverage of this window.
 
-Per-arXiv-category and HuggingFace source state, candidate counts, content hashes, and recovery metadata. Damage invalidates that one source, and a gap in any required source blocks downstream completion.
+Per-arXiv-category and HuggingFace source state, candidate counts, content hashes, and recovery metadata. Damage invalidates that one source. Both new filtering and filtering resumes first require all necessary sources to be complete. Missing coverage stops paid filtering and analysis; saved records remain available for recovery. With only a v7 fetch checkpoint and no raw candidates yet, data validation reports an incomplete batch; same-day fetching can still resume from the checkpoint after its checks pass.
 
 The v5-to-v6 source protocol upgrade requires both HuggingFace endpoints to provide a canonical arXiv ID and non-empty title and abstract. Repeated-ID pages are validated before pagination stops. This upgrade changes the entire `candidateFingerprint`, so an old v5 fetch checkpoint cannot be reused as a whole; damage to one source under an unchanged protocol still invalidates only that source. For a batch dated today in Beijing, rerun the same daily entrypoint to fetch again. Historical dates cannot resume from fetching and must use the controlled historical-maintenance workflow. The upgrade neither rewrites nor re-signs existing run data. Valid record structure does not establish full-text authenticity.
 
 ### `raw-candidates.json`
 
-The complete normalized, merged filter input, after already published papers are removed. Decision coverage is measured against this set, not just the papers that got a successful API response.
+Fetched candidates after normalization, merging, and removal of already published papers. This set is a complete filtering input only when all required sources are complete. Partial candidates preserved after a source failure do not prove full coverage. Decision coverage is measured against the final complete candidate set, not just the papers that got a successful API response.
 
 ### `filter-decisions.json`
 

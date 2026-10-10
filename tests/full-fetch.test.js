@@ -91,44 +91,6 @@ describe('full-fetch 辅助函数', () => {
         ]);
     });
 
-    it('从抓取记录建立按规范化论文 ID 共享的摘要缓存', async () => {
-        const {
-            applyFetchSourceIntegrity,
-            buildSharedAbstractCache
-        } = require('../scripts/full-fetch.js');
-        const complete = applyFetchSourceIntegrity({
-            status: 'complete',
-            health: { ok: true },
-            papers: [{ arxivId: '2609.12345v1', abstract: 'shared speech abstract' }]
-        });
-        const failed = applyFetchSourceIntegrity({
-            status: 'failed',
-            health: { ok: false },
-            papers: [{ arxivId: '2609.99999', abstract: 'must not enter cache' }]
-        });
-        const unhealthyComplete = applyFetchSourceIntegrity({
-            status: 'complete',
-            health: { ok: false },
-            papers: [{ arxivId: '2609.88888', abstract: 'must not enter cache either' }]
-        });
-        const cache = buildSharedAbstractCache({
-            arxiv: {
-                'eess.AS': complete,
-                'cs.SD': {
-                    status: 'complete',
-                    health: { ok: true },
-                    papers: [{ arxivId: '2609.12345v3', abstract: '' }]
-                },
-                'cs.CL': failed,
-                'cs.LG': unhealthyComplete
-            }
-        });
-        assert.strictEqual(await cache.get('2609.12345'), 'shared speech abstract');
-        assert.strictEqual(cache.size, 1);
-        assert.strictEqual(cache.has('2609.99999'), false);
-        assert.strictEqual(cache.has('2609.88888'), false);
-    });
-
     it('模块可安全导入且不会自动启动长流程', () => {
         const mod = require('../scripts/full-fetch.js');
         assert.strictEqual(typeof mod.fullFetch, 'function');

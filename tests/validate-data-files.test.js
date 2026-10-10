@@ -1595,3 +1595,79 @@ describe('解析缓存标签字段的只读数据检查', () => {
         }
     });
 });
+
+
+describe('显式数据路径与 v7 缺少候选的诊断', () => {
+    it('显式路径不混入默认目录中的坏检查点、筛选记录或论文库', () => {
+        const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'validator-explicit-paths-'));
+        const modulePath = require.resolve('../scripts/validate-data-files.js');
+        const originalModule = require.cache[modulePath];
+        const originalFiles = { ...Config.FILES };
+        try {
+            for (const key of ['papers', 'rawCandidates', 'filteredPapers', 'filterDecisions', 'deepAnalysisResult', 'fetchCheckpoint']) {
+                Config.FILES[key] = path.join(folder, `default-${key}.json`);
+            }
+            fs.writeFileSync(Config.FILES.fetchCheckpoint, JSON.stringify({ sourceContractVersion: 7 }));
+            fs.writeFileSync(Config.FILES.filterDecisions, '[]');
+            fs.writeFileSync(Config.FILES.papers, '[]');
+            delete require.cache[modulePath];
+            const isolatedValidator = require(modulePath);
+            assert(isolatedValidator.validateCurrentDataFiles().length > 0);
+            assert.deepEqual(isolatedValidator.validateCurrentDataFiles({}), []);
+            const explicitFolder = path.join(folder, 'explicit');
+            fs.mkdirSync(explicitFolder);
+            const papers = path.join(explicitFolder, 'papers.json');
+            assert.deepEqual(isolatedValidator.validateCurrentDataFiles({ papers }), []);
+            fs.writeFileSync(path.join(explicitFolder, 'fetch-checkpoint.json'), JSON.stringify({ sourceContractVersion: 7 }));
+            const issues = isolatedValidator.validateCurrentDataFiles({ papers });
+            assert(issues.some(issue => issue.startsWith('raw-candidates.json: v7 抓取检查点必须有同批次原始候选')));
+        } finally {
+            Object.assign(Config.FILES, originalFiles);
+            require.cache[modulePath] = originalModule;
+            fs.rmSync(folder, { recursive: true, force: true });
+        }
+    });
+
+    it('显式 v7 检查点没有原始候选时返回问题，完整候选恢复后消除该问题', () => {
+        const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'validator-v7-missing-raw-'));
+        try {
+            const { createLocalPublishedBlog } = require('./fixtures/local-published-blog.cjs');
+            const { resolveDailyFetchBoundary } = require('../scripts/lib/daily-fetch-boundary.js');
+            const pipeline = require('../scripts/full-fetch.js');
+            const boundary = resolveDailyFetchBoundary(createLocalPublishedBlog(folder), {
+                until: '2026-10-10T02:00:00.000Z'
+            });
+            const filename = path.join(folder, 'fetch-checkpoint.json');
+            writeCompleteCheckpoint(filename);
+            const checkpoint = JSON.parse(fs.readFileSync(filename));
+            Object.assign(checkpoint, pipeline.buildCandidateFingerprints(new Set(), new Set(), boundary));
+            checkpoint.timestamp = '2026-10-10T10:00:00.000+08:00';
+            checkpoint.batchDate = '2026-10-10';
+            checkpoint.batchStartedAt = checkpoint.timestamp;
+            const provider = { boundaryIdentity: boundary.identitySha256,
+                window: { since: boundary.since, until: boundary.until, covered: true } };
+            for (const entry of Object.values(checkpoint.arxiv)) entry.health.provider = provider;
+            checkpoint.huggingface.health.provider = { ...provider,
+                cutoffDate: boundary.lastDigestDate, dailyCovered: true };
+            checkpoint.fetchSourcesSha256 = pipeline.getFetchSourcesSha256(checkpoint);
+            fs.writeFileSync(filename, JSON.stringify(checkpoint));
+            assert.deepEqual(validateFetchCheckpointFile(filename), []);
+            const missing = validateCurrentDataFiles({ fetchCheckpoint: filename });
+            assert(missing.some(issue => issue.startsWith('raw-candidates.json: v7 抓取检查点必须有同批次原始候选')));
+            const files = writeMinimalCurrentBatch(folder);
+            fs.writeFileSync(filename, JSON.stringify(checkpoint));
+            const raw = JSON.parse(fs.readFileSync(files.rawCandidates));
+            Object.assign(raw, pipeline.buildCandidateFingerprints(new Set(), new Set(), boundary));
+            raw.sourceHealth.sourceContractVersion = 7;
+            raw.sourceHealth.fetchBoundary = boundary;
+            raw.sourceHealth.arxiv.categories.forEach(entry => { entry.provider = provider; });
+            raw.sourceHealth.huggingface.provider = checkpoint.huggingface.health.provider;
+            fs.writeFileSync(files.rawCandidates, JSON.stringify(raw));
+            const restored = validateCurrentDataFiles({ fetchCheckpoint: filename, rawCandidates: files.rawCandidates });
+            assert(!restored.some(issue => issue.includes('v7 抓取检查点必须有同批次原始候选')));
+            assert(!restored.some(issue => issue.includes('候选来源健康状态必须绑定同一 v7')));
+        } finally {
+            fs.rmSync(folder, { recursive: true, force: true });
+        }
+    });
+});

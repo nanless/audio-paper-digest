@@ -36,9 +36,9 @@ The default API route can resume from `generate`, `review`, `push`, or `visual`.
 
 Update the blog remote before resolving a fixed UTC window from the last pushed daily digest. arXiv uses 100 entries per page, verifies every page, and splits oversized queries by minute; known IDs never stop pagination. HuggingFace covers each day in the same window. A same-day v7 resume pins the saved `until` only after rechecking the published baseline, source configuration, and complete checkpoint. Legacy v6 does not prove multi-day coverage. See [the boundary guide](../daily-fetch-boundary.md).
 
-arXiv and HuggingFace requests go through the project proxy. Each source has its own checkpoint with acquisition status, candidate count, and content SHA. Only a damaged source is fetched again. If a required source is incomplete, the filter result cannot be marked complete.
+arXiv and HuggingFace requests go through the project proxy. Each source has its own checkpoint with acquisition status, candidate count, and content SHA. Only a damaged source is fetched again. Paid model filtering starts only after all seven arXiv categories and HuggingFace pass their required acquisition-state and fixed-window coverage checks. Filtering resumes recheck these sources first. If any required source is incomplete, preserve saved checkpoints and partial candidates and stop before filtering or analysis model calls.
 
-Candidates are merged by normalized arXiv ID, deduplicated against published blog papers, and saved in `raw-candidates.json`.
+Fetched candidates are merged by normalized arXiv ID, deduplicated against published blog papers, and saved in `raw-candidates.json`. Candidates from partial sources support inspection and fetch recovery, but are not a complete filtering input.
 
 ## 3. Keyword and LLM Filtering
 

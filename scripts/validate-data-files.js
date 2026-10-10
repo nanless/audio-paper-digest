@@ -1340,7 +1340,9 @@ function validateFilterDecisionsFile(filePath = DEFAULT_FILTER_DECISIONS_FILE) {
 function resolveFilterDecisionsPath(files = Config.FILES) {
     if (files.filterDecisions) return files.filterDecisions;
     if (files.filteredPapers) return path.join(path.dirname(files.filteredPapers), 'filter-decisions.json');
-    return DEFAULT_FILTER_DECISIONS_FILE;
+    const anchor = files.rawCandidates || files.deepAnalysisResult || files.papers;
+    if (anchor) return path.join(path.dirname(anchor), 'filter-decisions.json');
+    return null;
 }
 
 function validateFilterArtifactsConsistency(filteredPath, decisionsPath) {
@@ -1483,8 +1485,6 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
         .filter(filePath => fs.existsSync(filePath))
         .map(filePath => [filePath, readJsonSafe(filePath, null)])
         .filter(([, data]) => isPlainObject(data));
-    if (artifacts.length === 0) return issues;
-
     const fingerprintFields = ['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint'];
     for (const field of fingerprintFields) {
         const values = artifacts
@@ -1504,7 +1504,9 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
     }
 
     if (!fetchPath || !fs.existsSync(fetchPath)) {
-        addIssue(issues, fetchPath || DEFAULT_FETCH_CHECKPOINT_FILE, '当前候选或筛选记录存在，但缺少本批抓取检查点 fetch-checkpoint.json');
+        if (artifacts.length > 0) {
+            addIssue(issues, fetchPath || 'fetch-checkpoint.json', '当前候选或筛选记录存在，但缺少本批抓取检查点 fetch-checkpoint.json');
+        }
         return issues;
     }
     const checkpoint = readJsonSafe(fetchPath, null);
@@ -1539,8 +1541,11 @@ function validateFetchArtifactConsistency(fetchPath, rawPath, decisionsPath, fil
     }
 
     const raw = artifacts.find(([filePath]) => filePath === rawPath)?.[1];
-    if (checkpoint.sourceContractVersion === 7 && (raw?.sourceHealth?.sourceContractVersion !== 7
-            || stableContentSha256(raw?.sourceHealth?.fetchBoundary) !== stableContentSha256(checkpoint.fetchBoundary))) {
+    if (checkpoint.sourceContractVersion === 7 && !raw) {
+        addIssue(issues, rawPath || path.join(path.dirname(fetchPath), 'raw-candidates.json'),
+            'v7 抓取检查点必须有同批次原始候选 raw-candidates.json，以核验补抓范围和来源健康状态');
+    } else if (checkpoint.sourceContractVersion === 7 && (raw.sourceHealth?.sourceContractVersion !== 7
+            || stableContentSha256(raw.sourceHealth?.fetchBoundary) !== stableContentSha256(checkpoint.fetchBoundary))) {
         addIssue(issues, rawPath, '候选来源健康状态必须绑定同一 v7 补更范围');
     }
     if (!raw || !hasCompleteSourceHealthForValidation(raw.sourceHealth)) return issues;
@@ -1789,13 +1794,15 @@ function currentAnalysisWaiverContext(files = Config.FILES) {
 
 function validateCurrentDataFiles(files = Config.FILES) {
     const filterDecisions = resolveFilterDecisionsPath(files);
+    const companionAnchor = files.rawCandidates || files.filteredPapers || files.filterDecisions
+        || files.deepAnalysisResult || files.papers;
     const fetchCheckpoint = files.fetchCheckpoint || (
-        files.rawCandidates ? path.join(path.dirname(files.rawCandidates), 'fetch-checkpoint.json') : DEFAULT_FETCH_CHECKPOINT_FILE
+        companionAnchor ? path.join(path.dirname(companionAnchor), 'fetch-checkpoint.json') : null
     );
     const analysisWaiverContext = currentAnalysisWaiverContext(files);
     return [
         ...analysisWaiverContext.issues.map(issue => `${path.basename(files.deepAnalysisResult || 'deep-analysis-result.json')}: ${issue}`),
-        ...validatePapersDatabase(files.papers),
+        ...validatePapersDatabase(files.papers || null),
         ...validateFetchCheckpointFile(fetchCheckpoint),
         ...validatePaperListFile(files.rawCandidates, { rawCandidates: true }),
         ...validateFilterDecisionsFile(filterDecisions),

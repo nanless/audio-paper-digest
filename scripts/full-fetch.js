@@ -67,20 +67,6 @@ function createProductionArxivRequestScheduler(options = {}) {
     });
 }
 
-function buildSharedAbstractCache(checkpoint) {
-    const cache = new Map();
-    for (const entry of Object.values(checkpoint?.arxiv || {})) {
-        if (entry?.status !== 'complete' || entry?.health?.ok !== true
-                || !hasValidFetchSourceIntegrity(entry)) continue;
-        for (const paper of entry?.papers || []) {
-            const id = normalizedId(paper);
-            const abstract = String(paper?.abstract || paper?.summary || '').trim();
-            if (id && abstract && !cache.has(id)) cache.set(id, abstract);
-        }
-    }
-    return cache;
-}
-
 // 每个 Muse 请求都会创建独立、禁用连接复用的 HTTP CONNECT 连接对象；
 // 分析结果则由逐论文锁和共享结果文件锁保护，因此代理模型同样遵守
 // 项目配置的分析并发度。
@@ -98,7 +84,6 @@ const RESULT_FILE = Config.FILES.deepAnalysisResult;
 const LEGACY_RESULT_FILE = Config.FILES.deepAnalysisResultLegacy;
 const FILTERED_FILE = Config.FILES.filteredPapers;
 const PAPERS_FILE = Config.FILES.papers;
-const ANALYZED_FILE = Config.FILES.analyzed;
 const RAW_CANDIDATES_FILE = Config.FILES.rawCandidates;
 const FILTER_DECISIONS_FILE = Config.FILES.filterDecisions;
 const FETCH_CHECKPOINT_FILE = Config.FILES.fetchCheckpoint;
@@ -875,6 +860,9 @@ async function resumeFilterStage({
     filterPromptHash,
     today
 }) {
+    if (hasRequiredSourceFailure(sourceHealth)) {
+        throw new Error(`缓存候选的抓取来源不完整，保留已有恢复记录，禁止调用筛选模型: ${getSourceFailures(sourceHealth).join('; ')}`);
+    }
     let filterDecisions = initialDecisions;
     let retryableFilterDecisions = {};
     const filtered = await filterPapersWithLLM(allPapersFiltered, {
@@ -1693,6 +1681,9 @@ async function runFullFetch(options = {}) {
             papers: allPapersFiltered
         }, null, 2));
         console.log(`💾 原始候选论文已保存到: ${RAW_CANDIDATES_FILE}`);
+        if (hasRequiredSourceFailure(sourceHealth)) {
+            throw new Error(`抓取来源不完整，已保存原始候选和抓取检查点，禁止调用筛选模型: ${getSourceFailures(sourceHealth).join('; ')}`);
+        }
 
         // ========== 第四步：大模型筛选 ==========
         console.log('\n第四步：模型筛选（判断论文是否与语音或音频相关）');
@@ -2092,7 +2083,6 @@ module.exports = {
     runFullFetch,
     getEffectiveAnalysisConcurrency,
     createProductionArxivRequestScheduler,
-    buildSharedAbstractCache,
     getArxivInterCategoryDelayMs,
     autoArchiveCurrentData,
     inferLegacyAnalysisArrayBatchDate,
