@@ -819,7 +819,7 @@ test('迁移后旧实现仍可寻址，并且绝不重分析已完成的论文',
     const oldImplementation = f.authority.implementationSha256;
     f.context.authority = { ...f.authority, implementationSha256: H('new implementation') };
     f.runtimeAuthority.implementationSha256 = f.context.authority.implementationSha256;
-    assert.throws(() => cli.processStatus(options, { dependencies: f.deps }), /migrate with --from/);
+    assert.throws(() => cli.processStatus(options, { dependencies: f.deps }), /会议实现已更改；请用 --from [a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12} 迁移并保留已有分析/);
     // 之前建的空分叉不能盖住已经迁移过来的完成记录。
     const dormant = JSON.parse(fs.readFileSync(path.join(f.files.conferenceProcessDir, first.processId, 'state.json')));
     dormant.authority = f.context.authority;
@@ -1182,9 +1182,9 @@ test('多跳的旧版迁移沿凭证父级一路追到绑定 UUID 的起点', as
     const middleBytes = fs.readFileSync(middleFile); const middle = JSON.parse(middleBytes);
     middle.fromImplementationSha256 = versions[12]; delete middle.receiptSha256; middle.receiptSha256 = H(middle);
     fs.writeFileSync(middleFile, JSON.stringify(middle));
-    assert.throws(() => recovery.sourceImplementation(state, directory, processApi), /cycle/);
+    assert.throws(() => recovery.sourceImplementation(state, directory, processApi), /实现迁移记录重复引用同一实现 SHA/);
     fs.writeFileSync(middleFile, middleBytes); fs.renameSync(middleFile, `${middleFile}.unavailable`);
-    assert.throws(() => recovery.sourceImplementation(state, directory, processApi), /missing or ambiguous/);
+    assert.throws(() => recovery.sourceImplementation(state, directory, processApi), /尚未找到原任务 UUID 对应的实现 SHA，且前一步迁移记录缺失或有多个来源/);
 });
 
 test('来源核验记录中的正文或结构化记录 SHA 变化时，重跑和迁移都拒绝复用完成记录', async t => {
@@ -1696,7 +1696,7 @@ test('原费用失败记录先要求显式迁移，再沿原 UUID 和尝试记�
     // 实现变化是独立、明确的模拟；原实现生成的记录保持原字节。
     f.context.authority.implementationSha256 = H('explicit current implementation');
     f.runtimeAuthority.implementationSha256 = f.context.authority.implementationSha256;
-    await assert.rejects(processApi.runConferenceProcess({ apply: true, concurrency: 1 }, f.deps), /migrate with --from/);
+    await assert.rejects(processApi.runConferenceProcess({ apply: true, concurrency: 1 }, f.deps), /会议实现已更改；请用 --from [a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12} 迁移并保留已有分析/);
     assert.deepEqual(fs.readFileSync(filename), before);
     const migrated = await require('../scripts/migrate-conference-process.js').migrateAndRun({
         apply: true, concurrency: 1, fromProcessId: failed.processId, retryFailed: true

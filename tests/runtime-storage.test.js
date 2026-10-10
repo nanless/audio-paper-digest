@@ -134,7 +134,7 @@ describe('运行时存储状态', () => {
         }
     });
 
-    it('拒绝未知或重复 CLI 参数，避免 destructive apply 吞掉拼写错误', () => {
+    it('状态与删除命令拒绝不支持或重复的参数', () => {
         assert.throws(() => main(['prune', '--apply', '--force']), /未知参数/);
         assert.throws(() => main(['prune', '--apply', '--apply']), /重复参数/);
         assert.throws(() => main(['status', '--verbose']), /不接受参数/);
@@ -154,7 +154,7 @@ describe('运行时存储状态', () => {
         }
     });
 
-    it('只读报告 official receipt 与 evidence receipt 宣称的 PDF 重复，并显式标记未做字节验证', () => {
+    it('只按官方获取凭证和筛选来源凭证报告重复 PDF，并注明未核验文件字节', () => {
         const projectRoot = makeProject();
         try {
             const pdfBytes = '%PDF-declared-only';

@@ -1,8 +1,8 @@
 'use strict';
 
 // 换词表前的标签完成记录盘点（scripts/tag-check-inventory.js）的只读分组测试：
-// 用 tmp fixture 跑真实 CLI，断言按 registrySha256 分组、状态计数、
-// 与当前 config SHA 的差集、示例 paperId，以及运行前后 fixture 字节不变。
+// 用临时合成文件运行实际命令行入口，检查按 registrySha256 分组、状态计数、
+// 与当前词表 SHA 的差异、示例 paperId，以及运行前后合成文件字节不变。
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -158,7 +158,7 @@ test('盘点脚本按 registrySha256 分组并给出与当前 SHA 的差集', t 
         inSyncRatio: 0.5714
     });
 
-    // 只读：fixture 的每一字节都没变
+    // 只读：临时合成文件的每一字节都没变
     assert.equal(snapshot(root), before);
 });
 

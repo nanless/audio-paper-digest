@@ -1381,7 +1381,7 @@ test('直连来源范围单独保存临时的像素绑定，回调图片一变�
     assert.equal(calls, 1);
 });
 
-test('历史直连允许一次预检抓取，推迟候选退场，并以零次 LLM 调用续跑', async t => {
+test('历史直连只准备一次图片，保存已接受草稿供恢复，提交后标记为已用', async t => {
     const deep = require('../scripts/deep-analyzer.js');
     const direct = require('../scripts/lib/direct-rewrite-analysis-context.js');
     const signed = require('./reader-signed-draft-fixture.js').fixture();
@@ -1435,7 +1435,7 @@ test('历史直连允许一次预检抓取，推迟候选退场，并以零次 L
     assert.equal(fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).length, 0);
 });
 
-test('最初两次网络失败不消耗已收内容或格式错误根对象的额度', async t => {
+test('最初两次网络失败不增加内容和整篇回复尝试次数，收到回复后才计一次', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t);
     const paper = { arxivId: '2609.99996', title: '初次生成网络恢复' };
@@ -1467,7 +1467,7 @@ test('最初两次网络失败不消耗已收内容或格式错误根对象的�
     assert.equal(envelope.payload.transportFailures, 2);
 });
 
-test('历史流程里模型之前的图片临时故障仍可重试，不产生候选也不发起 LLM 请求', async t => {
+test('历史流程中模型请求前图片失败时保留原错误，不保存草稿或调用模型回调', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const directory = temporary(t); const url = 'https://arxiv.org/html/2509.24457v1/conf_conv.png';
     const sourceEvidence = `FIGURE_1: confidence intervals\nFIGURE_1_URL: ${url}`;
@@ -1624,7 +1624,7 @@ test('收到截断或不完整的补丁回复只消耗内容额度，不改动�
     }
 });
 
-test('非最后一次的补丁在 8000 token 处精确截断时，立刻用掉那个唯一的 16000 token 槽位', async t => {
+test('普通尝试尚未耗尽时，8000 token 补丁截断后续跑一次 16000 token 补丁', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
     const priorRepairMaxTokens = configuration.apiReaderRepairMaxTokens;
@@ -1677,7 +1677,7 @@ test('非最后一次的补丁在 8000 token 处精确截断时，立刻用掉�
     assert.equal(afterRetry.payload.fullAttempts, 1, '续跑没有增加整篇 Reader 请求次数');
 });
 
-test('最后一次普通尝试在 8000 处截断时，只得到一次有上限的 16000 重试槽位', async t => {
+test('最后一次普通补丁在 8000 token 截断后，只能再请求一次 16000 token 补丁', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
     const priorRepairMaxTokens = configuration.apiReaderRepairMaxTokens;
@@ -1727,7 +1727,7 @@ test('最后一次普通尝试在 8000 处截断时，只得到一次有上限�
     assert.equal(calls.length, 3, '唯一一次扩大额度的重试不能再次使用');
 });
 
-test('实现谱系的槽位在 8000 处截断后，不能再叠加第二个 16000 槽位', async t => {
+test('补丁在 8000 token 截断后，已标记使用实现恢复额度的草稿不再获得额外请求', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
     const priorRepairMaxTokens = configuration.apiReaderRepairMaxTokens;
@@ -1759,7 +1759,7 @@ test('实现谱系的槽位在 8000 处截断后，不能再叠加第二个 1600
     assert.equal(calls, 2, '已使用的实现恢复额度不能再叠加一次 16000 token 回复');
 });
 
-test('最后槽位的 16000 回复之前发生传输失败，保留同一次重试且不消耗内容', async t => {
+test('最后一次 16000 token 补丁遇到传输失败时，保留重试且不增加内容尝试次数', async t => {
     const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
     const configuration = require('../scripts/config.js').ANALYSIS_CONFIG;
     const priorRepairMaxTokens = configuration.apiReaderRepairMaxTokens;

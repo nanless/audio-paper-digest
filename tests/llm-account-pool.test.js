@@ -29,8 +29,8 @@ function tempState() {
     return { dir, file: path.join(dir, 'llm-account-pool.json') };
 }
 
-describe('OpenCode Go 账号粘性状态', () => {
-    it('追加时继承第三个粘性账号，即使旧冷却已过期也只向前切换', () => {
+describe('OpenCode Go 已选账号的继续使用与切换状态', () => {
+    it('追加账号后继续使用第三个账号，旧冷却过期也不向前面的账号切换', () => {
         const { file } = tempState();
         const keys = ['a', 'b', 'c'];
         for (const nowMs of [1000, 1100]) {
@@ -49,7 +49,7 @@ describe('OpenCode Go 账号粘性状态', () => {
             error => error.code === 'LLM_ACCOUNT_POOL_EXHAUSTED' && error.scope === 'run');
     });
 
-    it('Node 与 Python 共用追加后的成员集合和被阻塞的前向游标', () => {
+    it('Node 与 Python 共用追加后的账号集合，第三个账号额度耗尽后使用第四个', () => {
         const { file } = tempState();
         const keys = ['a', 'b', 'c'];
         for (const nowMs of [1000, 1100]) {

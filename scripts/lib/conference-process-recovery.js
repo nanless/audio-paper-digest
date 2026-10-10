@@ -11,9 +11,14 @@ function readPrivateJson(filename) {
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600) {
         throw new Error(`会议恢复文件不安全：必须是权限为 0600、只有一个硬链接的普通文件：${filename}`);
     }
-    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
     try {
-        const opened = fs.fstatSync(fd), bytes = fs.readFileSync(fd), after = fs.fstatSync(fd);
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile() || opened.nlink !== 1 || (opened.mode & 0o777) !== 0o600
+            || opened.ino !== stat.ino || opened.dev !== stat.dev) {
+            throw new Error(`会议恢复文件不安全：打开的文件必须是与先前检查相同、权限为 0600、只有一个硬链接的普通文件：${filename}`);
+        }
+        const bytes = fs.readFileSync(fd), after = fs.fstatSync(fd);
         const named = fs.lstatSync(filename);
         if (opened.ino !== stat.ino || opened.dev !== stat.dev || opened.size !== bytes.length || after.size !== bytes.length
             || after.mtimeMs !== opened.mtimeMs || named.ino !== opened.ino || named.dev !== opened.dev

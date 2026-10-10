@@ -75,7 +75,7 @@ test('真实 Reader ID 能区分重复的组件类型，并识别明显的跨小
     assert.equal(findings[0].right.section, 'sections[1]');
     assert.equal(findings[0].severity, 'warning');
     assert.ok(findings[0].similarity > 0.86);
-    assert.ok(!JSON.stringify(findings).includes(explanation), 'diagnostics identify nodes without duplicating article bodies');
+    assert.ok(!JSON.stringify(findings).includes(explanation), '诊断不重复保存这段完整正文');
 });
 
 test('不同上下文、表格和同一小节内重复出现的相同数字不算跨小节重复', () => {

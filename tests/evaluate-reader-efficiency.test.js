@@ -145,7 +145,7 @@ Promise.resolve().then(()=>api[${JSON.stringify(operation)}](${JSON.stringify(op
     }
 });
 
-test('评估持久化最终图像装配计划，来源凭证与两个文件及报告哈希一致', async t => {
+test('评估保存最终图片插入计划，结果文件与报告对应同一份计划', async t => {
     const f = fixture(t), id = '2609.15067';
     const figure = { ordinal: 1, label: 'Figure 1:', caption: 'Figure 1: Overview of the study.',
         sourceDomSha256: '4'.repeat(64), recoveryStatus: 'complete',

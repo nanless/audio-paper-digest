@@ -61,17 +61,17 @@ test('原权限记录决定上级 UUID，新的词表记录不能改写原身份
  const f=provenance(t);assert.equal(recovery.sourceImplementation(f.child,f.childDir,f.focusedApi),f.origin);
 });
 test('重新给更新的计划算哈希，也绕不过原始状态哈希和来源授权',t=>{
- const f=provenance(t);f.parent.stateSha256=H('drift');f.save(f.parent);assert.throws(()=>recovery.sourceImplementation(f.child,f.childDir,f.focusedApi),/original plan/);
+ const f=provenance(t);f.parent.stateSha256=H('drift');f.save(f.parent);assert.throws(()=>recovery.sourceImplementation(f.child,f.childDir,f.focusedApi),/来源升级前的任务 ID、状态 SHA 或论文集合与原计划不同/);
 });
 test('缺少原上级进程时，拒绝合并，不能用当前词表推算原进程身份',t=>{
  const f=provenance(t);fs.rmSync(path.join(f.root,f.parent.processId),{recursive:true});assert.throws(()=>recovery.sourceImplementation(f.child,f.childDir,f.focusedApi),/ENOENT/);
 });
 test('重新签名的计划不能改动父成员状态或来源身份',t=>{
  const f=provenance(t);f.plan.papers[0].previousStatus='complete';delete f.plan.planSha256;f.plan.planSha256=H(f.plan);f.child.sourceUpgradePromotion.planSha256=f.plan.planSha256;f.save(f.child,f.plan);
- assert.throws(()=>recovery.sourceImplementation(f.child,f.childDir,f.focusedApi),/source\/authority\/UUID/);
+ assert.throws(()=>recovery.sourceImplementation(f.child,f.childDir,f.focusedApi),/来源升级前的来源、运行资料或任务 UUID 未通过完整性检查/);
 });
 test('父级提升的递归会检查自己的计划，并能发现父级成环',t=>{
- const f=provenance(t);assert.throws(()=>recovery.sourceImplementation(f.child,f.childDir,f.focusedApi,new Set([f.child.processId])),/cycle/);
+ const f=provenance(t);assert.throws(()=>recovery.sourceImplementation(f.child,f.childDir,f.focusedApi,new Set([f.child.processId])),/来源升级恢复路径重复引用同一任务，或超过 64 层/);
  const secondPlan={contract:'conference-source-upgrade-plan-v2',version:2,authority:f.child.authority,fromProcessId:f.child.processId,originalStateSha256:H('child issued state'),sourceImplementationSha256:f.origin,papers:structuredClone(f.plan.papers)};
  f.child.stateSha256=secondPlan.originalStateSha256;f.save(f.child,f.plan);secondPlan.planSha256=H(secondPlan);
  const second={...structuredClone(f.child),processId:api.deterministicUuid(secondPlan.planSha256,'conference-source-upgrade-process-v1'),sourceUpgradePromotion:{originalProcessId:f.child.processId,sourceImplementationSha256:f.origin,planSha256:secondPlan.planSha256}};
