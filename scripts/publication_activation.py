@@ -1,4 +1,4 @@
-"""把已晋升的新批次顶掉的旧发布下线，过程可恢复。
+"""将旧发布状态文件归档，让新的正式分析结果能重新生成和发布；中断后可恢复。
 
 这里不生成内容、不请求模型、不写博客，也不改动任何科研状态。对外入口是
 activate-fresh-publication.js，Node 侧的运行锁由它持有。
@@ -56,7 +56,7 @@ def read(path):
             if not stat.S_ISREG(other.st_mode) or other.st_ino != info.st_ino \
                     or other.st_dev != info.st_dev or other.st_nlink != 2 \
                     or other.st_mode & 0o777 != 0o600:
-                raise ValueError('无法识别这个激活硬链接：临时文件的 inode、设备号、链接数或权限不符')
+                raise ValueError('无法识别这个发布启用硬链接：临时文件的 inode、设备号、链接数或权限不符')
         return raw
     finally:
         os.close(fd)
@@ -82,11 +82,11 @@ def write(path, raw, immutable=True):
     path = Path(path); safe_dir(path.parent, create=True)
     if immutable and path.exists():
         if read(path) != raw or path.stat().st_mode & 0o777 != 0o600:
-            raise ValueError('不可变激活凭证与已有字节不一致（要求内容相同且权限为 0600）')
+            raise ValueError('发布启用凭证已存在，但内容或权限不符合要求（要求内容相同且权限为 0600）')
         temporary = path.parent / f'.activation-write-{path.name}-{sha(raw)}'
         if temporary.exists():
             if not os.path.samestat(path.lstat(), temporary.lstat()):
-                raise ValueError('激活临时文件与目标文件不是同一份 inode')
+                raise ValueError('发布启用临时文件与目标文件不是同一份 inode')
             temporary.unlink(); sync_dir(path.parent)
         return
     temporary = path.parent / f'.activation-write-{path.name}-{sha(raw)}'
@@ -94,7 +94,7 @@ def write(path, raw, immutable=True):
         partial = read(temporary)
         if not raw.startswith(partial) or temporary.stat().st_mode & 0o777 != 0o600 \
                 or temporary.stat().st_nlink != 1:
-            raise ValueError('激活临时文件的字节不是目标内容的完整前缀，或权限、链接数不符')
+            raise ValueError('发布启用临时文件的字节不是目标内容的完整前缀，或权限、链接数不符')
         temporary.unlink(); sync_dir(path.parent)
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
     try:
@@ -114,7 +114,7 @@ def write(path, raw, immutable=True):
 
 def marker_path(current, date):
     if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', date):
-        raise ValueError('激活日期不合法：必须是 YYYY-MM-DD')
+        raise ValueError('发布启用日期不合法：必须是 YYYY-MM-DD')
     return Path(current) / PUBLICATION_ACTIVATION_DIRNAME / f'{date}.json'
 
 
@@ -125,27 +125,27 @@ def assert_no_pending(current, date, runs_root=None):
     try:
         value = json.loads(read(marker))
         if value.get('contract') != CONTRACT or value.get('date') != date or value.get('status') != 'activated':
-            raise ValueError('激活记录未完成')
+            raise ValueError('发布启用记录未完成')
         run_id = value.get('runId')
         if not isinstance(run_id, str) or str(uuid.UUID(run_id)) != run_id:
-            raise ValueError('激活记录的 runId 不是规范 UUID')
+            raise ValueError('发布启用记录的 runId 不是规范 UUID')
         run_dir = safe_dir(Path(runs_root or FRESH_REWRITE_RUNS_DIR) / run_id)
         intent_raw = read(run_dir / 'publication-activation-intent.json')
         intent = json.loads(intent_raw)
         if sha(intent_raw) != value.get('intentSha256') or intent.get('runId') != run_id \
                 or intent.get('date') != date or intent.get('contract') != CONTRACT \
                 or json.loads(read(run_dir / 'publication-activation.json')) != value:
-            raise ValueError('激活完成凭证与意图记录不一致')
+            raise ValueError('发布启用完成凭证与意图记录不一致')
         run = json.loads(read(run_dir / 'run.json'))
         if run.get('runId') != run_id or run.get('date') != date or run.get('status') != 'promoted' \
                 or sha(read(run_dir / 'run.json')) != intent.get('runSha256'):
-            raise ValueError('已晋升的运行记录与激活意图不一致：runId、日期或 run.json 的 SHA 不符')
+            raise ValueError('已替换正式分析结果的运行记录与发布启用意图不一致：runId、日期或 run.json 的 SHA 不符')
         files = intent['files']
         if len(files) != 6 or len({r['path'] for r in files}) != 6:
-            raise ValueError('激活归档不是 6 个互不重复的状态路径')
+            raise ValueError('发布启用归档不是 6 个互不重复的状态路径')
         for record in files:
             if sha(read(child(run_dir / 'publication-archive', record['path']))) != record['sha256']:
-                raise ValueError('激活归档中的文件字节与意图记录的 SHA 不符')
+                raise ValueError('发布启用归档中的文件字节与意图记录的 SHA 不符')
     except (OSError, ValueError, TypeError, KeyError) as exc:
         # 未完成或损坏的启用记录都阻止发布；须从专用入口恢复后重新检查。
         raise ValueError('发布启用尚未完成，或其记录已损坏；请从专用的发布启用入口恢复') from exc
@@ -157,17 +157,17 @@ def verify_completed(current, run_dir, intent):
     pending = {**completion, 'status': 'pending'}
     if json.loads(read(run_dir / 'publication-activation.json')) != completion \
             or read(run_dir / 'publication-activation-intent.json') != encoded(intent):
-        raise ValueError('已完成激活的身份记录被改动：完成凭证或意图字节不符')
+        raise ValueError('已完成发布启用的身份记录被改动：完成凭证或意图字节不符')
     for record in intent['files']:
         if sha(read(child(run_dir / 'publication-archive', record['path']))) != record['sha256']:
-            raise ValueError('已完成激活的归档字节被改动')
+            raise ValueError('已完成发布启用的归档字节被改动')
     if json.loads(read(marker_path(current, intent['date']))) not in (pending, completion):
-        raise ValueError('这个日期已被另一次激活占用')
+        raise ValueError('这个日期已被另一次发布启用占用')
     return completion
 
 
 def retire_files(current, run_dir, intent, after_move=lambda _index: None, validate=lambda: None):
-    """调用方已经持有运行锁、仓库锁和日期锁，并核过全部 CAS 凭证。"""
+    """调用方已经持有运行锁、仓库锁和日期锁，并已核验本次操作绑定的文件及其 SHA。"""
     current = safe_dir(current); run_dir = safe_dir(run_dir)
     intent_raw = encoded(intent); digest = sha(intent_raw)
     intent_path = run_dir / 'publication-activation-intent.json'
@@ -176,7 +176,7 @@ def retire_files(current, run_dir, intent, after_move=lambda _index: None, valid
     archive = run_dir / 'publication-archive'
     records = intent['files']
     if len(records) != 6 or len({r['path'] for r in records}) != 6:
-        raise ValueError('激活要求恰好 6 个互不重复的状态路径')
+        raise ValueError('发布启用要求恰好 6 个互不重复的状态路径')
     for record in records:
         child(current, record['path']); child(archive, record['path'])
     completion = {'contract': CONTRACT, 'date': intent['date'], 'runId': intent['runId'],
@@ -189,22 +189,22 @@ def retire_files(current, run_dir, intent, after_move=lambda _index: None, valid
         for record in records:
             saved = child(archive, record['path'])
             write(saved, read(saved))
-        # 已经写完完成记录、还没来得及清掉 pending 闸门时崩掉也没关系。
+        # 完成记录已写好但日期记录仍为 pending 时，即使中断也可据完成记录恢复。
         write(marker, encoded(completion), immutable=False)
         return completion
     for record in records:
         source = child(current, record['path']); saved = child(archive, record['path'])
         candidate = source if source.exists() or source.is_symlink() else saved
         if sha(read(candidate)) != record['sha256']:
-            raise ValueError('现役发布文件的字节与激活记录不符')
+            raise ValueError('当前发布状态文件的字节与发布启用记录不符')
         if saved.exists() and sha(read(saved)) != record['sha256']:
-            raise ValueError('激活归档的字节与激活记录不符')
+            raise ValueError('发布启用归档的字节与发布启用记录不符')
     validate()
     write(intent_path, intent_raw)
     if marker.exists() and json.loads(read(marker)) != pending:
-        raise ValueError('这个日期已被另一次激活占用')
+        raise ValueError('这个日期已被另一次发布启用占用')
     write(marker, encoded(pending))
-    # 先把每个字节复制过去并 fsync，再动任何现役路径。
+    # 先把每个字节复制过去并 fsync，再动当前发布状态文件路径。
     for record in records:
         source = child(current, record['path']); saved = child(archive, record['path'])
         write(saved, read(saved) if saved.exists() else read(source))
@@ -214,7 +214,7 @@ def retire_files(current, run_dir, intent, after_move=lambda _index: None, valid
         source = child(current, record['path'])
         if source.exists() or source.is_symlink():
             if sha(read(source)) != record['sha256']:
-                raise ValueError('下线现役文件前发现它的字节与激活记录不符')
+                raise ValueError('移除当前发布状态文件前发现它的字节与发布启用记录不符')
             source.unlink(); sync_dir(current)
         after_move(index)
     validate()
@@ -229,29 +229,29 @@ def verify_paper_scope(run_dir, run, baseline, analysis):
     if not isinstance(expected, list) or not expected or any(
             not isinstance(value, str) or not value for value in expected
     ) or len(set(expected)) != len(expected):
-        raise ValueError('激活运行的论文集合无效或重复')
+        raise ValueError('发布启用运行的论文集合无效或重复')
     expected = set(expected)
 
     def split_papers(payload):
         if not isinstance(payload, dict) or not isinstance(payload.get('papers'), list):
-            raise ValueError('激活正式结果缺少论文列表')
+            raise ValueError('发布启用正式结果缺少论文列表')
         by_id = {}
         for paper in payload['papers']:
             paper_id = paper.get('arxivId') if isinstance(paper, dict) else None
             if not isinstance(paper_id, str) or not paper_id or paper_id in by_id:
-                raise ValueError('激活正式结果包含无效或重复论文 ID')
+                raise ValueError('发布启用正式结果包含无效或重复论文 ID')
             by_id[paper_id] = paper
         target_date_ids = set()
         for paper_id, paper in by_id.items():
             fetched_at = paper.get('fetchedAt') or ''
             if not isinstance(fetched_at, str):
-                raise ValueError('激活论文的抓取时间不是字符串')
+                raise ValueError('发布启用论文的抓取时间不是字符串')
             date = (paper.get('fetchBatchDate') or paper.get('batchDate')
                     or fetched_at[:10] or payload.get('batchDate'))
             if date == run['date']:
                 target_date_ids.add(paper_id)
         if target_date_ids != expected or not expected.issubset(by_id):
-            raise ValueError('激活日期的论文集合与运行不一致')
+            raise ValueError('发布启用日期的论文集合与运行不一致')
         return {paper_id: paper for paper_id, paper in by_id.items() if paper_id not in expected}
 
     current_outside = split_papers(analysis)
@@ -259,14 +259,14 @@ def verify_paper_scope(run_dir, run, baseline, analysis):
                if record.get('category') == 'data'
                and record.get('relativePath') == 'deep-analysis-result.json']
     if len(records) != 1:
-        raise ValueError('激活基线缺少唯一的旧正式结果备份，无法核验其他日期论文')
+        raise ValueError('发布启用基线缺少唯一的旧正式结果备份，无法核验其他日期论文')
     record = records[0]
     backup_path = record.get('backupPath')
     if not isinstance(backup_path, str) or not backup_path.startswith('baseline-files/'):
-        raise ValueError('旧正式结果备份路径不在激活基线内')
+        raise ValueError('旧正式结果备份路径不在发布启用基线内')
     raw = read(child(run_dir, backup_path))
     if sha(raw) != record.get('sha256') or sha(raw) != baseline.get('canonical', {}).get('sha256'):
-        raise ValueError('旧正式结果备份与激活基线的 SHA 不一致')
+        raise ValueError('旧正式结果备份与发布启用基线的 SHA 不一致')
     old_outside = split_papers(json.loads(raw))
     if encoded(old_outside) != encoded(current_outside):
         raise ValueError('其他日期论文相对基线发生了新增、删除或内容变更')
@@ -290,7 +290,7 @@ def prepare_intent(module, run_dir):
             or sha(analysis_result_bytes) != promotion.get('canonicalSha256') \
             or analysis_result.get('generation') != promotion.get('canonicalGeneration') \
             or analysis_result.get('freshRewritePromotion', {}).get('runId') != run['runId']:
-        raise ValueError('已晋升运行、基线与正式分析结果之间对不上')
+        raise ValueError('替换正式结果的运行记录、基线和正式分析结果不一致')
     verify_paper_scope(run_dir, run, baseline, analysis_result)
     git = lambda args: module._run_git(args, text=True, check=True).stdout.strip()
     head = git(['rev-parse', 'HEAD'])
@@ -306,7 +306,7 @@ def prepare_intent(module, run_dir):
         backup = child(run_dir, record['backupPath'])
         if not record['backupPath'].startswith('baseline-files/') or sha(read(backup)) != record['sha256'] \
                 or backup.stat().st_mode & 0o777 != 0o600:
-            raise ValueError('基线备份的字节或权限已漂移')
+            raise ValueError('基线备份的内容或权限已变化')
         if record['category'] == 'blog':
             if sha(read(child(repo, record['relativePath']))) != record['sha256']:
                 raise ValueError('博客当前目标文件与基线字节不符')
@@ -316,7 +316,7 @@ def prepare_intent(module, run_dir):
     names = sorted(name for name in data_records if re.fullmatch(
         rf'blog-(?:generation-manifest|review-receipt)-{re.escape(date)}(?:-single-[\w-]+)?\.json', name))
     if len(names) != 4:
-        raise ValueError('激活只支持一次全量加一次单篇的发布事务，当前同名状态文件不是 4 个')
+        raise ValueError('发布启用只支持一次全量加一次单篇的发布事务，当前同名状态文件不是 4 个')
     receipts = [name for name in names if name.startswith('blog-review-receipt-')]
     if f'blog-review-receipt-{date}.json' not in receipts or len(receipts) != 2:
         raise ValueError('需要一份全量审查凭证和一份单篇审查凭证')
@@ -339,7 +339,7 @@ def prepare_intent(module, run_dir):
         raw = active_bytes(name)
         expected = data_records[name]['sha256'] if name in data_records else expected_prior.get(name, sha(raw))
         if sha(raw) != expected:
-            raise ValueError('旧发布状态文件与基线或激活意图的 SHA 不符')
+            raise ValueError('旧发布状态文件与基线或发布启用意图的 SHA 不符')
         records.append({'path': name, 'sha256': expected})
     latest = False
     for name in receipts:
@@ -361,7 +361,7 @@ def prepare_intent(module, run_dir):
               'canonicalGeneration': analysis_result['generation'], 'paperIds': run['paperIds'],
               'blogHead': head, 'remoteOid': remote_oid, 'remoteIdentitySha256': identity}
     if prior and prior != intent:
-        raise ValueError('激活意图与已保存的记录不一致')
+        raise ValueError('发布启用意图与已保存的记录不一致')
     return intent
 
 
@@ -375,19 +375,19 @@ def main():
     run_dir = safe_dir(FRESH_REWRITE_RUNS_DIR / args.run_id)
     owner = json.loads(read(run_dir / '.operation.lock' / 'owner.json'))
     if owner.get('pid') != os.getppid() or owner.get('hostname') != socket.gethostname() or not owner.get('token'):
-        raise ValueError('激活必须在官方 Node 运行操作锁下执行：锁属主的 pid、主机名或令牌不符')
+        raise ValueError('发布启用必须在官方 Node 运行操作锁下执行：锁属主的 pid、主机名或令牌不符')
     from blog_entry_loader import load_publish_to_blog
     module = load_publish_to_blog()
     date = json.loads(read(run_dir / 'run.json'))['date']
     with module.blog_repository_lock():
         with module.blog_transaction_lock(date):
             completed = run_dir / 'publication-activation.json'
-            # 常规生成此时可能已经替换了现役路径、改动了博客。已完成的这次
+            # 常规生成此时可能已经替换了当前发布状态文件、改动了博客。已完成的这次
             # 下线不会去动这些新字节。
             if completed.exists():
                 intent = json.loads(read(run_dir / 'publication-activation-intent.json'))
                 if intent.get('runId') != args.run_id or intent.get('date') != date:
-                    raise ValueError('已完成激活属于另一次运行或另一个日期')
+                    raise ValueError('已完成发布启用属于另一次运行或另一个日期')
                 verify_completed(module.CURRENT_DIR, run_dir, intent)
             else:
                 intent = prepare_intent(module, run_dir)
@@ -401,7 +401,7 @@ def main():
                     (Path(module.CURRENT_DIR) / 'deep-analysis-result.json', intent['canonicalSha256']),
                 ]:
                     if sha(read(target)) != expected:
-                        raise ValueError('激活期间科研晋升文件发生了变化')
+                        raise ValueError('发布启用期间运行记录、替换结果凭证或正式分析结果发生了变化')
             result = {'status': 'ready', 'intent': intent} if args.dry_run else retire_files(
                 module.CURRENT_DIR, run_dir, intent, validate=validate_cas)
     print(json.dumps(result, ensure_ascii=False, indent=2))

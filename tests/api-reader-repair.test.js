@@ -90,7 +90,7 @@ test('局部替换保留每个未选中的节点，拒绝过期或未授权的�
     assert.equal(staleError?.readerIssue?.code, 'reader_patch_stale_node_sha');
     assert.match(staleError?.message || '', new RegExp(`received=${'0'.repeat(64)}`));
     assert.match(staleError?.message || '', new RegExp(`expected-current=${patch.replacements[0].oldSha256}`));
-    assert.equal(JSON.stringify(draft), original, 'stale patch must not change any candidate byte');
+    assert.equal(JSON.stringify(draft), original, '过期补丁被拒绝后，草稿的序列化内容必须保持不变');
     assert.throws(() => applyReaderPatch(draft, patch, []), /unauthorized/);
 });
 
@@ -339,9 +339,9 @@ test('所有格式错误的引用绑定、只有标记的表格和长度不足�
         assert.ok(targets.some(target => target.path === pointer), pointer);
     }
     assert.equal(targets.some(target => target.path === '/sections/0/body'), false,
-        'diagnostic-only length expansion waits until blocking table issues are fixed');
-    assert.ok(targets.length <= 8, 'one repair request remains within the patch-node limit');
-    assert.equal(targets.some(target => /^\/sections\/\d+$/.test(target.path)), false, 'body diagnostics never duplicate whole section targets');
+        '表格错误尚未修好时，不因长度提示扩大到首节正文');
+    assert.ok(targets.length <= 8, '一次修复请求最多选择 8 个修改位置');
+    assert.equal(targets.some(target => /^\/sections\/\d+$/.test(target.path)), false, '正文诊断只选择正文位置，不同时选择整个小节');
 });
 
 test('内部概念值不合法时给出诊断，而不是抛异常', () => {
@@ -605,7 +605,7 @@ test('不同的格式错误补丁会消耗尝试次数，但不会误判成草�
             throw new Error('stop after two distinct malformed patches');
         }
     }), /stop after two distinct malformed patches/);
-    assert.equal(calls, 4, 'distinct malformed patches must not trip no-progress before another request');
+    assert.equal(calls, 4, '两份格式错误但内容不同的补丁后，仍允许发起下一次请求');
     const active = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
     let envelope = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
     assert.equal(envelope.payload.attempts, 3);
@@ -622,9 +622,9 @@ test('不同的格式错误补丁会消耗尝试次数，但不会误判成草�
             throw new Error('resumed patch request observed');
         }
     }), /resumed patch request observed/);
-    assert.equal(resumedCalls, 1, 'recovery must reach the model instead of preflight exhaustion');
+    assert.equal(resumedCalls, 1, '续跑仍须调用修复请求函数，不能提前判定尝试次数已用尽');
     envelope = JSON.parse(fs.readFileSync(path.join(directory, active), 'utf8'));
-    assert.equal(envelope.payload.attempts, 3, 'transport failure does not consume a content attempt');
+    assert.equal(envelope.payload.attempts, 3, '请求传输失败不增加内容修复尝试次数');
     assert.equal(envelope.payload.noProgress, 0);
 });
 
@@ -804,7 +804,7 @@ test('带码的计数诊断保留旧的修复目标，以及两份已保存的�
     }
     assert.deepEqual(original.targets.map(target => target.path), ['/sections/8/body', '/tableBindings']);
     assert.equal(original.atomicOperation.kind, 'append_narrative_table_v1');
-    assert.notEqual(hashDraft([natural]), hashDraft([misleading]), 'generic object hashes retain exact message bytes');
+    assert.notEqual(hashDraft([natural]), hashDraft([misleading]), '通用对象的 SHA 计算仍区分不同消息内容');
 });
 
 test('计数进展取决于上报的计数和必需阈值，而不是文案里的数字', () => {
@@ -910,7 +910,7 @@ test('有效计数没有原子操作可用时，生产请求一个有限的结�
                 assert.equal(calls, 2);
                 const prompt = messages[0].content[0].text;
                 const targetStart = prompt.indexOf('{"draftSha256":');
-                assert.ok(targetStart >= 0, 'the patch request includes the authorized target envelope');
+                assert.ok(targetStart >= 0, '补丁请求须包含允许修改的位置及草稿 SHA');
                 const targetEnd = prompt.indexOf('\n', targetStart);
                 const envelope = JSON.parse(prompt.slice(targetStart, targetEnd < 0 ? undefined : targetEnd));
                 assert.deepEqual(envelope.targets.map(target => target.path), expectedPaths);
@@ -920,7 +920,7 @@ test('有效计数没有原子操作可用时，生产请求一个有限的结�
             }
         }
     ), /至少需要 4 张 Markdown 表/);
-    assert.equal(calls, 2, 'one initial response and one bounded patch use the existing attempt budget');
+    assert.equal(calls, 2, '一次初稿请求和一次局部补丁请求共使用两次已有尝试额度');
     const files = fs.readdirSync(options.readerAttemptsDir).filter(name => /^[a-f0-9]{64}\.json$/.test(name));
     const stored = JSON.parse(fs.readFileSync(path.join(options.readerAttemptsDir, files[0]), 'utf8'));
     assert.equal(stored.payload.fullAttempts, 1);

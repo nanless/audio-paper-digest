@@ -137,14 +137,14 @@ test('补丁文件的路径穿越、符号链接、硬链接和权限都不能�
     fs.chmodSync(f.filename, 0o644); await assert.rejects(f.apply(), /0600/); fs.chmodSync(f.filename, 0o600);
     const copy = path.join(f.runDir, 'original.json'); fs.renameSync(f.filename, copy); fs.symlinkSync(copy, f.filename);
     await assert.rejects(f.apply(), /ELOOP|symbolic/i); fs.unlinkSync(f.filename); fs.linkSync(copy, f.filename);
-    await assert.rejects(f.apply(), /single-link/);
+    await assert.rejects(f.apply(), /只有一个硬链接/);
 });
 
 test('重复的活跃身份和只剩已解决记录的文件都不能打补丁', async t => {
     const f = fixture(t);
     const otherIdentity = { ...f.identity, changed: true };
     const otherPath = repair.saveFailedCandidate(f.candidateDir, otherIdentity, f.payload);
-    await assert.rejects(f.apply(), /multiple active/);
+    await assert.rejects(f.apply(), /多份当前仍在使用的补丁草稿/);
     fs.unlinkSync(otherPath); fs.renameSync(f.candidateFile, f.candidateFile.replace('.json', '.resolved.json'));
     await assert.rejects(f.apply(), /ENOENT/);
 });
@@ -152,16 +152,16 @@ test('重复的活跃身份和只剩已解决记录的文件都不能打补丁',
 test('补丁不能凭空造出没见过的像素，来源身份漂移会挡住解析器', async t => {
     const f = fixture(t); f.request.patch.replacements[0].value = '说明\n\n[[FIGURE_1]]\n\n解释'; f.writeRequest();
     await assert.rejects(f.apply(), /pixels/); assert.equal(f.calls.parser, 0);
-    f.source.text += ' drift'; await assert.rejects(f.apply(), /source snapshot/);
+    f.source.text += ' drift'; await assert.rejects(f.apply(), /来源快照字段不同/);
 });
 
 test('CAS 拒绝候选与请求之间的竞态，幂等复核拒绝损坏的原字节归档', async t => {
     const f = fixture(t);
-    await assert.rejects(f.apply({ afterArchive: () => fs.appendFileSync(f.filename, ' ') }), /bytes changed/);
+    await assert.rejects(f.apply({ afterArchive: () => fs.appendFileSync(f.filename, ' ') }), /补丁请求文件的字节已变化/);
     f.writeRequest(); await f.apply();
     const saved = repair.loadFailedCandidate(f.candidateDir, f.identity);
     fs.appendFileSync(path.join(f.runDir, saved.operatorPatches[0].archive, 'before.json'), ' ');
-    await assert.rejects(f.apply(), /audit.*drifted/);
+    await assert.rejects(f.apply(), /历史修改记录、原归档文件或当前草稿已变化/);
 });
 
 test('命令行的补丁阶段必须显式指定，且只接受运行目录内的补丁名', () => {
@@ -257,7 +257,7 @@ test('已签名临时补丁拒绝缺失或无效的父级签名和全新来源�
     ]) {
         const f = fixture(t); useSignedCandidate(f); if (mutate) installSignedParent(f, mutate);
         const before = fs.readFileSync(f.candidateFile), parent = fs.readFileSync(path.join(f.runDir, 'analysis.json'));
-        await assert.rejects(f.apply(), /signed parent|source snapshot|source or artifact/);
+        await assert.rejects(f.apply(), /签名有效的父级读者文章|来源快照字段不同|source snapshot|不同的来源或结构化提取结果/);
         assert.deepEqual(fs.readFileSync(f.candidateFile), before);
         assert.deepEqual(fs.readFileSync(path.join(f.runDir, 'analysis.json')), parent);
         assert.equal(f.calls.parser, 0);
@@ -268,7 +268,7 @@ test('已签名临时补丁拒绝缺失或无效的父级签名和全新来源�
 test('只含来源的临时补丁不能靠过期的已加载元数据绕过当前成功的 Reader', async t => {
     const f = fixture(t); installSignedParent(f); const before = fs.readFileSync(f.candidateFile);
     assert.equal(f.loaded.analysis.papers[0].apiReaderArticle, undefined);
-    await assert.rejects(f.apply(), /Source-only.*successful/);
+    await assert.rejects(f.apply(), /仅使用论文来源资料的人工补丁不能改动已成功的分析/);
     assert.deepEqual(fs.readFileSync(f.candidateFile), before); assert.equal(f.calls.parser, 0);
 });
 
@@ -278,7 +278,7 @@ test('已签名临时补丁仍然拒绝跨运行和来源快照的候选漂移',
         fs.unlinkSync(f.candidateFile); f.identity.freshAnalysis[field] = '0'.repeat(64);
         f.candidateFile = repair.saveFailedCandidate(f.candidateDir, f.identity, f.payload);
         f.request.candidateIdentitySha256 = repair.hashDraft(f.identity); f.writeRequest();
-        const before = fs.readFileSync(f.candidateFile); await assert.rejects(f.apply(), /identity|source snapshot/);
+        const before = fs.readFileSync(f.candidateFile); await assert.rejects(f.apply(), /身份或论文编号与补丁请求不同|来源快照字段不同/);
         assert.deepEqual(fs.readFileSync(f.candidateFile), before); assert.equal(f.calls.parser, 0);
     }
 });

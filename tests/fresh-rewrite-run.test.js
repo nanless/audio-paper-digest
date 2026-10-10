@@ -223,11 +223,11 @@ test('已保存并核验的恢复凭证只由完全一致的完整运行签发�
         runner.stableHash(complete.analysis.papers.find(paper => paper.arxivId === '2609.00001')));
     assert.equal(runner.consumeSavedAnalysisRecoveryPermission(handle, {
         runId: crypto.randomUUID()
-    }), false, 'a capability cannot be copied to another run identity');
+    }), false, '恢复凭证不能用于另一次运行');
     assert.equal(runner.consumeSavedAnalysisRecoveryPermission(handle, {
         runId: RUN_ID, paperId: '2609.00001', recordSha256: snapshot.recordSha256
     }), true);
-    assert.equal(runner.getSavedAnalysisRecoveryPermissionDetails(handle), null, 'one-shot capability is spent');
+    assert.equal(runner.getSavedAnalysisRecoveryPermissionDetails(handle), null, '这份恢复凭证只能使用一次，使用后不再有效');
     assert.equal(runner.getSavedAnalysisRecoveryPermissionDetails(handle, { allowConsumed: true }).consumed, true);
 
     observed = null;
@@ -235,7 +235,7 @@ test('已保存并核验的恢复凭证只由完全一致的完整运行签发�
         ...f.deps, withFreshAnalysisContext: inspectContext
     });
     assert.equal(observed.size, 0,
-        'trusted test dependency overrides must never mint a production capability');
+        '传入测试用替代函数时不能签发正式恢复凭证');
 
     const runPath = path.join(f.deps.rootDir, RUN_ID, 'run.json');
     const run = runner.readRegularJson(runPath).value;
@@ -243,7 +243,7 @@ test('已保存并核验的恢复凭证只由完全一致的完整运行签发�
     fs.writeFileSync(runPath, JSON.stringify(run));
     observed = null;
     await runner.analyzeRewrite({ runId: RUN_ID });
-    assert.equal(observed.size, 0, 'analysis SHA drift cannot mint a capability');
+    assert.equal(observed.size, 0, '分析文件 SHA 不符时不能签发恢复凭证');
 });
 
 test('部分完成的分析运行绝不签发已保存并核验的恢复凭证', async t => {
@@ -470,11 +470,11 @@ test('显式的 sources/analyze/promote 阶段保留运行身份，绝不把上�
     const sources = await runner.collectRewriteSources({ runId: RUN_ID, concurrency: 2 }, f.deps);
     assert.equal(sources.status, 'sources_ready'); assert.equal(f.counters.sources, 2);
     await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
-    assert.equal(f.counters.sources, 2, 'resuming sources must replay the cached source, not fetch again');
+    assert.equal(f.counters.sources, 2, '来源阶段续跑只复核已保存的来源，不能再次抓取');
     const analyzed = await runner.analyzeRewrite({ runId: RUN_ID }, f.deps);
     assert.equal(analyzed.status, 'complete'); assert.equal(analyzed.complete, 2);
     const sourceResume = await runner.collectRewriteSources({ runId: RUN_ID }, f.deps);
-    assert.equal(sourceResume.status, 'complete', 'source replay must not downgrade a completed analysis run');
+    assert.equal(sourceResume.status, 'complete', '复核已保存来源不能把完成分析的运行改回较早阶段');
     assert.deepEqual(fs.readFileSync(f.files.deepAnalysisResult), canonicalBefore);
     const status = runner.rewriteStatus({ runId: RUN_ID }, f.deps);
     assert.equal(status.analysisComplete, 2); assert.equal(f.counters.sources, 2);

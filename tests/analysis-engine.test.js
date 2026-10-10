@@ -664,12 +664,12 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(
             validateExperimentTableContract(withTables(`\`\`\`markdown\n${table(13)}\n\`\`\``)),
             null,
-            'fenced examples are not rendered Markdown tables'
+            '代码围栏内的示例表格不计入正文表格数量'
         );
 
         const oversized = withTables(table(13));
         const parsed = require('../scripts/utils.js').parseAnalysis(oversized);
-        assert.strictEqual(getInvalidAnalysisReason(oversized, parsed), null, 'legacy records stay compatible');
+        assert.strictEqual(getInvalidAnalysisReason(oversized, parsed), null, '未开启实验表格数量限制时，这份旧分析仍通过检查');
         assert.match(getInvalidAnalysisReason(oversized, parsed, {
             enforceExperimentTableContract: true
         }), /表格契约无效/);

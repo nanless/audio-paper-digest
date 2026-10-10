@@ -72,7 +72,8 @@ for (const [moduleName, entry] of entries) {
                 assert.equal(outcome.locks, 1);
             } else {
                 assert.equal(outcome.locks, 0);
-                if (kind === 'fifo') assert.match(outcome.message, /regular.*single-link.*0600/);
+                if (kind === 'fifo') assert.match(outcome.message, moduleName === 'reader-operator-patch'
+                    ? /权限为 0600、只有一个硬链接.*普通文件/ : /regular.*single-link.*0600/);
                 else assert.equal(outcome.code, 'ELOOP');
             }
             const after = fs.lstatSync(filename);

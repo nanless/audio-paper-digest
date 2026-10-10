@@ -352,7 +352,7 @@ test('出版元数据批次保留瞬时失败、保存并核验同伴、以部�
     ]);
     assert.equal(first.results[0].retryable, true); assert.equal(first.results[0].attempts, 3);
     assert.equal(cli.partialExitCode(first), 1);
-    assert.equal(fs.existsSync(directoryFor(ids[0])), false, 'failed paper cannot leave a sidecar directory');
+    assert.equal(fs.existsSync(directoryFor(ids[0])), false, '抓取失败的论文不能留下出版元数据保存目录');
     assert.equal(fs.existsSync(directoryFor(ids[1])), true);
 
     failFirst = false;
@@ -362,14 +362,14 @@ test('出版元数据批次保留瞬时失败、保存并核验同伴、以部�
     assert.equal(second.status, 'complete'); assert.equal(second.failed, 0);
     assert.equal(second.sealed, 1); assert.equal(second.recovered, 1);
     assert.equal(cli.partialExitCode(second), 0);
-    assert.deepEqual(sealedIds, [ids[1], ids[0]], 'the recovered peer is never resealed');
-    assert.deepEqual(fetched, [ids[0], ids[1], ids[0]], 'resume fetches only the previously failed paper');
+    assert.deepEqual(sealedIds, [ids[1], ids[0]], '续跑复用已保存的另一篇论文，不再次封存它的元数据');
+    assert.deepEqual(fetched, [ids[0], ids[1], ids[0]], '续跑只重新抓取上次失败的论文');
 
     fs.rmSync(directoryFor(ids[0]), { recursive: true, force: true });
     await assert.rejects(cli.main(['--apply', '--plan', planFile, '--generation', '1',
         '--paper-ids', ids[0]], { ...common,
         fetchOfficialArxivMetadata: async () => { throw new TypeError('implementation bug'); } }),
-    /implementation bug/, 'unexpected implementation failures remain fail-closed');
+    /implementation bug/, '未预期的程序错误仍须抛出，不能当作可继续处理的抓取失败');
 });
 
 test('旧解析器封存的实体和空白按 v1 原字节重放，默认新抓取仍解码', async t => {

@@ -1,8 +1,7 @@
 'use strict';
 
-// 这个模块有意不认识会议 ledger、LLM 和网络。调用方传入一条已经匹配并核验过的
-// ledger 记录，它把本地不可变的 PDF 和可选的本地抽取结果，整理成一个可以在分析前
-// 再核对一次的小描述对象。
+// 从已核验的本地 PDF 及可选提取结果整理来源记录，也支持已加载并核验的会议来源清单。
+// 分析前可再次核验 PDF、提取结果及来源记录；此模块不调用模型或网络。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -40,14 +39,14 @@ function canonicalize(value) {
     if (isPlainObject(value)) {
         return Object.fromEntries(Object.keys(value).sort().map(key => {
             if (value[key] === undefined || typeof value[key] === 'function' || typeof value[key] === 'symbol') {
-                throw fail(`Descriptor data has a non-JSON value at ${key}`);
+                throw fail(`PDF 描述数据中的字段无法按 JSON 保存： ${key}`);
             }
             return [key, canonicalize(value[key])];
         }));
     }
     if (value === null || ['string', 'boolean'].includes(typeof value)) return value;
     if (typeof value === 'number' && Number.isFinite(value)) return value;
-    throw fail('Descriptor data must be JSON-safe');
+    throw fail('PDF 描述数据须能按 JSON 保存');
 }
 
 function stableJson(value) {
@@ -63,7 +62,7 @@ function clone(value) {
 }
 
 function requireSafeDirectory(directory) {
-    if (typeof directory !== 'string' || !directory) throw fail('cacheRoot must be a non-empty path');
+    if (typeof directory !== 'string' || !directory) throw fail('cacheRoot 须为非空路径');
     const absolute = path.resolve(directory);
     let cursor = path.parse(absolute).root;
     for (const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
@@ -71,10 +70,10 @@ function requireSafeDirectory(directory) {
         let stat;
         try { stat = fs.lstatSync(cursor); }
         catch (error) {
-            if (error.code === 'ENOENT') throw fail(`PDF cache root does not exist: ${absolute}`);
+            if (error.code === 'ENOENT') throw fail(`PDF 本地来源根目录不存在： ${absolute}`);
             throw error;
         }
-        if (!stat.isDirectory() || stat.isSymbolicLink()) throw fail(`Unsafe PDF cache directory: ${cursor}`);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw fail(`PDF 本地来源目录不安全：不是实际目录，或使用了符号链接： ${cursor}`);
     }
     return absolute;
 }
@@ -82,54 +81,54 @@ function requireSafeDirectory(directory) {
 function requireRelativePdfPath(relativePath) {
     if (typeof relativePath !== 'string' || !relativePath || relativePath.includes('\0')
         || path.isAbsolute(relativePath) || path.win32.isAbsolute(relativePath)) {
-        throw fail('PDF path must be a non-empty relative path');
+        throw fail('PDF 路径须为非空相对路径，且不能含空字符');
     }
-    // ledger 里的路径统一用 POSIX 分隔符保存。两种点分量都拒绝，ledger 才能在 Windows
-    // 和 POSIX 主机之间通用。
+    // 来源清单的路径统一使用正斜杠；拒绝当前目录和上级目录段，
+    // 保持 Windows 与 POSIX 系统读取相同路径。
     if (relativePath.includes('\\') || relativePath.split('/').some(part => !part || part === '.' || part === '..')) {
-        throw fail('PDF path cannot contain traversal or ambiguous components');
+        throw fail('PDF 路径不能含反斜杠、空目录段、当前目录段或上级目录段');
     }
     return relativePath;
 }
 
 function requireRecord(record) {
-    if (!isPlainObject(record)) throw fail('Verified conference record must be an object');
+    if (!isPlainObject(record)) throw fail('已核验的会议记录须为普通对象');
     if (!isPlainObject(record.identity) || !Object.keys(record.identity).length) {
-        throw fail('Verified conference record requires a non-empty identity object');
+        throw fail('已核验的会议记录须包含非空身份对象');
     }
     const identity = clone(record.identity);
     const relativePath = requireRelativePdfPath(record.pdfRelativePath);
-    if (!isSha256(record.pdfSha256)) throw fail('Verified conference record requires a lowercase PDF SHA-256');
+    if (!isSha256(record.pdfSha256)) throw fail('已核验的会议记录须包含小写 PDF SHA-256');
     return { identity, relativePath, pdfSha256: record.pdfSha256 };
 }
 
 function requireExactKeys(value, keys, name) {
-    if (!isPlainObject(value)) throw fail(`${name} must be a plain object`);
+    if (!isPlainObject(value)) throw fail(`${name} 须为普通对象`);
     const actual = Object.keys(value).sort();
     const expected = [...keys].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
-        throw fail(`${name} has unexpected or missing fields`);
+        throw fail(`${name} 包含未允许的字段，或缺少必填字段`);
     }
 }
 
 function requireDescriptorHash(value, name) {
-    if (value !== null && !isSha256(value)) throw fail(`${name} must be a lowercase SHA-256 or null`);
+    if (value !== null && !isSha256(value)) throw fail(`${name} 须为小写 SHA-256 或 null`);
 }
 
 function requireLedgerBinding(value) {
-    requireExactKeys(value, ['ledgerSha256', 'identityKey', 'metadataSha256', 'textSha256', 'artifactsSha256'], 'Conference PDF ledger binding');
-    if (!isSha256(value.ledgerSha256)) throw fail('Conference PDF ledger binding requires a lowercase ledger SHA-256');
+    requireExactKeys(value, ['ledgerSha256', 'identityKey', 'metadataSha256', 'textSha256', 'artifactsSha256'], '会议 PDF 来源清单绑定');
+    if (!isSha256(value.ledgerSha256)) throw fail('会议 PDF 来源清单绑定须包含小写 ledger SHA-256');
     if (typeof value.identityKey !== 'string' || !value.identityKey.trim()) {
-        throw fail('Conference PDF ledger binding requires a non-empty identity key');
+        throw fail('会议 PDF 来源清单绑定须包含非空身份标识');
     }
     for (const field of ['metadataSha256', 'textSha256', 'artifactsSha256']) {
-        if (!isSha256(value[field])) throw fail(`Conference PDF ledger binding requires ${field}`);
+        if (!isSha256(value[field])) throw fail(`会议 PDF 来源清单绑定须包含有效的 ${field} SHA-256`);
     }
     return clone(value);
 }
 
 function ledgerBindingForMember(member, ledgerSha256) {
-    if (!isSha256(ledgerSha256)) throw fail('ledgerSha256 must be a lowercase SHA-256');
+    if (!isSha256(ledgerSha256)) throw fail('ledgerSha256 须为小写 SHA-256');
     return requireLedgerBinding({
         ledgerSha256,
         identityKey: ledgerApi.identityKey(member.identity),
@@ -142,7 +141,7 @@ function ledgerBindingForMember(member, ledgerSha256) {
 function requireMaxBytes(value) {
     const maxBytes = value === undefined ? DEFAULT_MAX_PDF_BYTES : value;
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 1 || maxBytes > ABSOLUTE_MAX_PDF_BYTES) {
-        throw fail(`maxBytes must be an integer from 1 to ${ABSOLUTE_MAX_PDF_BYTES}`);
+        throw fail(`PDF 读取大小上限 maxBytes 必须是 1 到 ${ABSOLUTE_MAX_PDF_BYTES} 之间的整数`);
     }
     return maxBytes;
 }
@@ -150,17 +149,17 @@ function requireMaxBytes(value) {
 function safePdfFilename(cacheRoot, relativePath) {
     const target = path.resolve(cacheRoot, relativePath);
     const relative = path.relative(cacheRoot, target);
-    if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw fail('PDF path escapes cache root');
+    if (!relative || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) throw fail('PDF 路径超出本地来源根目录');
     let cursor = cacheRoot;
     for (const part of relative.split(path.sep).slice(0, -1)) {
         cursor = path.join(cursor, part);
         let stat;
         try { stat = fs.lstatSync(cursor); }
         catch (error) {
-            if (error.code === 'ENOENT') throw fail(`PDF cache directory is missing: ${cursor}`);
+            if (error.code === 'ENOENT') throw fail(`PDF 本地来源目录缺失： ${cursor}`);
             throw error;
         }
-        if (!stat.isDirectory() || stat.isSymbolicLink()) throw fail(`Unsafe PDF cache directory: ${cursor}`);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) throw fail(`PDF 本地来源目录不安全：不是实际目录，或使用了符号链接： ${cursor}`);
     }
     return target;
 }
@@ -170,26 +169,26 @@ function readVerifiedPdf(cacheRoot, relativePath, maxBytes) {
     let beforeOpen;
     try { beforeOpen = fs.lstatSync(filename); }
     catch (error) { throw error; }
-    if (beforeOpen.isSymbolicLink()) throw fail('PDF must be a regular, non-linked cache file');
+    if (beforeOpen.isSymbolicLink()) throw fail('PDF 须为只有一个硬链接的普通文件，不能使用符号链接，打开的文件须与路径检查的文件相同');
     let fd;
     try {
         try { fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); }
         catch (error) {
             // lstat 与 open 这一对有意重复：lstat 给出确定可复现的错误，O_NOFOLLOW 则
             // 堵住两者之间被换文件的窗口。
-            if (error.code === 'ELOOP') throw fail('PDF must be a regular, non-linked cache file');
+            if (error.code === 'ELOOP') throw fail('PDF 须为只有一个硬链接的普通文件，不能使用符号链接，打开的文件须与路径检查的文件相同');
             throw error;
         }
         const opened = fs.fstatSync(fd);
         const named = fs.lstatSync(filename);
         if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
             || opened.dev !== named.dev || opened.ino !== named.ino) {
-            throw fail('PDF must be a regular, non-linked cache file');
+            throw fail('PDF 须为只有一个硬链接的普通文件，不能使用符号链接，打开的文件须与路径检查的文件相同');
         }
-        if (opened.size < 5 || opened.size > maxBytes) throw fail('PDF is empty or exceeds the configured size limit');
+        if (opened.size < 5 || opened.size > maxBytes) throw fail('PDF 少于 5 字节，或超过配置的大小限制');
         const bytes = fs.readFileSync(fd);
         if (bytes.length !== opened.size || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
-            throw fail('Local source is not a standard PDF');
+            throw fail('本地文件字节数改变，或文件头不是标准 PDF 标识');
         }
         return bytes;
     } finally {
@@ -203,17 +202,17 @@ function readVerifiedArtifact(cacheRoot, relativePath, expectedSha256, label) {
     try {
         try { fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK); }
         catch (error) {
-            if (error.code === 'ELOOP') throw fail(`${label} must be a regular, non-linked cache file`);
+            if (error.code === 'ELOOP') throw fail(`${label} 须为只有一个硬链接的普通文件，不能使用符号链接，打开的文件须与路径检查的文件相同`);
             throw error;
         }
         const opened = fs.fstatSync(fd);
         const named = fs.lstatSync(filename);
         if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
             || opened.dev !== named.dev || opened.ino !== named.ino) {
-            throw fail(`${label} must be a regular, non-linked cache file`);
+            throw fail(`${label} 须为只有一个硬链接的普通文件，不能使用符号链接，打开的文件须与路径检查的文件相同`);
         }
         const bytes = fs.readFileSync(fd);
-        if (sha256(bytes) !== expectedSha256) throw fail(`${label} SHA-256 differs from the verified conference ledger`);
+        if (sha256(bytes) !== expectedSha256) throw fail(`${label} SHA-256 与已核验的会议来源清单记录不符`);
         return bytes;
     } finally {
         if (fd !== undefined) fs.closeSync(fd);
@@ -231,21 +230,21 @@ function unavailableExtraction() {
 
 function normalizeExtraction(value) {
     if (value === undefined || value === null) return unavailableExtraction();
-    if (!isPlainObject(value)) throw fail('Local PDF extractor result must be an object');
+    if (!isPlainObject(value)) throw fail('本地 PDF 提取结果须为普通对象');
     const extractorVersion = typeof value.extractorVersion === 'string' && value.extractorVersion.trim()
         ? value.extractorVersion.trim() : null;
-    if (!extractorVersion) throw fail('Local PDF extractor requires a version');
+    if (!extractorVersion) throw fail('本地 PDF 提取结果须明确提取器版本');
     const text = value.text === undefined || value.text === null ? null : value.text;
-    if (text !== null && typeof text !== 'string') throw fail('Extracted PDF text must be a string or null');
+    if (text !== null && typeof text !== 'string') throw fail('PDF 提取文本须为字符串或 null');
     const structuredArtifacts = value.structuredArtifacts === undefined || value.structuredArtifacts === null
         ? null : value.structuredArtifacts;
     if (structuredArtifacts !== null && !isPlainObject(structuredArtifacts)) {
-        throw fail('Structured PDF artifacts must be an object or null');
+        throw fail('PDF 结构化提取结果须为普通对象或 null');
     }
     const formulaTeX = value.formulaTeX === undefined || value.formulaTeX === null
         ? { available: false, reason: 'no-reliable-structured-tex' } : value.formulaTeX;
     if (!isPlainObject(formulaTeX) || typeof formulaTeX.available !== 'boolean') {
-        throw fail('formulaTeX must explicitly declare availability');
+        throw fail('formulaTeX 须为普通对象，并明确填写布尔可用状态');
     }
     if (!formulaTeX.available) {
         return { extractorVersion, text, structuredArtifacts,
@@ -256,12 +255,12 @@ function normalizeExtraction(value) {
     // 后续 Reader 才可以渲染公式。
     if (formulaTeX.reliability !== 'reliable' || !Array.isArray(formulaTeX.formulas)
         || !formulaTeX.formulas.length || structuredArtifacts === null) {
-        throw fail('PDF formula TeX cannot be available without reliable structured TeX artifacts');
+        throw fail('声明 PDF 公式可用时，须提供可靠的结构化 TeX 提取结果和非空公式列表');
     }
     const formulas = formulaTeX.formulas.map((formula, index) => {
         if (!isPlainObject(formula) || typeof formula.tex !== 'string' || !formula.tex.trim()
             || typeof formula.sourceRef !== 'string' || !formula.sourceRef.trim()) {
-            throw fail(`Reliable formula TeX entry ${index} lacks tex or sourceRef`);
+            throw fail(`第 ${index} 个可靠 TeX 公式缺少非空 tex 或 sourceRef`);
         }
         return clone(formula);
     });
@@ -314,8 +313,8 @@ function buildSource({ cacheRoot, record, maxBytes, extractPdf, ledgerBinding = 
     const checked = requireRecord(record);
     const bytes = readVerifiedPdf(root, checked.relativePath, requireMaxBytes(maxBytes));
     const actualPdfSha256 = sha256(bytes);
-    if (actualPdfSha256 !== checked.pdfSha256) throw fail('Local PDF SHA-256 differs from the verified conference record');
-    if (extractPdf !== undefined && typeof extractPdf !== 'function') throw fail('extractPdf must be a function when supplied');
+    if (actualPdfSha256 !== checked.pdfSha256) throw fail('本地 PDF SHA-256 与已核验的会议记录不符');
+    if (extractPdf !== undefined && typeof extractPdf !== 'function') throw fail('传入 extractPdf 时，它须为函数');
     const extraction = normalizeExtraction(extractPdf && extractPdf({
         pdfBytes: Buffer.from(bytes), pdfSha256: actualPdfSha256, identity: clone(checked.identity), record: clone(record),
     }));
@@ -335,19 +334,19 @@ function buildConferencePdfSource({ cacheRoot, record, maxBytes, extractPdf } = 
 function resolveVerifiedLedgerMember({ sourceRoot, ledgerHandle, identityKey }) {
     let loaded;
     try { loaded = ledgerApi.ledgerHandleSnapshot(ledgerHandle); }
-    catch (error) { throw fail(`Conference PDF source requires an authenticated loaded ledger handle: ${error.message}`); }
+    catch (error) { throw fail(`会议 PDF 来源须使用已经加载、核验并登记的来源清单对象： ${error.message}`); }
     const { ledger, ledgerSha256 } = loaded;
-    if (typeof identityKey !== 'string' || !identityKey.trim()) throw fail('identityKey must be a non-empty canonical ledger identity');
+    if (typeof identityKey !== 'string' || !identityKey.trim()) throw fail('identityKey 须为非空的规范来源身份标识');
     const member = ledger.members.find(item => ledgerApi.identityKey(item.identity) === identityKey);
-    if (!member) throw fail('identityKey does not identify a member in the loaded conference ledger');
-    if (member.status.state !== 'verified') throw fail('Conference PDF source requires a verified ledger member');
+    if (!member) throw fail('identityKey 未对应已加载会议来源清单中的论文');
+    if (member.status.state !== 'verified') throw fail('会议 PDF 来源须对应核验状态为 verified 的清单成员');
     const root = requireSafeDirectory(sourceRoot);
     const binding = ledgerBindingForMember(member, ledgerSha256);
     // 首次读取和再次核验时，先检查来源清单绑定的元数据、文本与结构化提取文件。
     // 下方的构建或重新核验函数另行读取 PDF，避免直接信任先前保存的描述对象。
-    readVerifiedArtifact(root, member.metadataFile, member.metadataSha256, 'Conference metadata artifact');
-    readVerifiedArtifact(root, member.textFile, member.textSha256, 'Conference text artifact');
-    readVerifiedArtifact(root, member.artifactsFile, member.artifactsSha256, 'Conference structured-artifacts file');
+    readVerifiedArtifact(root, member.metadataFile, member.metadataSha256, '会议元数据文件');
+    readVerifiedArtifact(root, member.textFile, member.textSha256, '会议全文文件');
+    readVerifiedArtifact(root, member.artifactsFile, member.artifactsSha256, '会议结构化提取文件');
     return { root, member: clone(member), binding };
 }
 
@@ -373,60 +372,60 @@ function validateDescriptorBody(body, expectedLedgerBinding) {
         'textSha256', 'structuredArtifactsSha256', 'formulaTeXSha256', 'extractor', 'availability'
     ];
     const fields = expectedLedgerBinding === null ? baseFields : [...baseFields, 'ledgerBinding'];
-    requireExactKeys(body, fields, 'Conference PDF descriptor');
+    requireExactKeys(body, fields, 'PDF 描述对象');
     if (body.contract !== CONTRACT || body.version !== VERSION || body.kind !== KIND) {
-        throw fail('Conference PDF descriptor has an unsupported contract');
+        throw fail('PDF 描述对象的 contract、version 或 kind 不属于支持的组合');
     }
     const checked = requireRecord({ identity: body.identity, pdfRelativePath: body.pdfRelativePath, pdfSha256: body.pdfSha256 });
-    if (!Number.isSafeInteger(body.pdfBytes) || body.pdfBytes < 5) throw fail('Conference PDF descriptor has invalid PDF byte length');
-    for (const field of ['textSha256', 'structuredArtifactsSha256', 'formulaTeXSha256']) requireDescriptorHash(body[field], `Conference PDF descriptor ${field}`);
-    requireExactKeys(body.extractor, ['version', 'textAvailable', 'structuredArtifactsAvailable', 'formulaTeXAvailable'], 'Conference PDF descriptor extractor');
-    if (typeof body.extractor.version !== 'string' || !body.extractor.version.trim()) throw fail('Conference PDF descriptor extractor version is invalid');
-    requireExactKeys(body.availability, ['text', 'structuredArtifacts', 'formulaTeX'], 'Conference PDF descriptor availability');
+    if (!Number.isSafeInteger(body.pdfBytes) || body.pdfBytes < 5) throw fail('PDF 描述对象的 pdfBytes 必须是至少 5 的整数，且不超过 JavaScript 能精确表示的整数上限');
+    for (const field of ['textSha256', 'structuredArtifactsSha256', 'formulaTeXSha256']) requireDescriptorHash(body[field], `PDF 描述对象 ${field}`);
+    requireExactKeys(body.extractor, ['version', 'textAvailable', 'structuredArtifactsAvailable', 'formulaTeXAvailable'], 'PDF 描述对象 extractor');
+    if (typeof body.extractor.version !== 'string' || !body.extractor.version.trim()) throw fail('PDF 描述对象的提取器版本须为非空字符串');
+    requireExactKeys(body.availability, ['text', 'structuredArtifacts', 'formulaTeX'], 'PDF 描述对象 availability');
     for (const field of ['text', 'structuredArtifacts', 'formulaTeX']) {
         if (typeof body.availability[field] !== 'boolean' || typeof body.extractor[`${field}Available`] !== 'boolean') {
-            throw fail('Conference PDF descriptor availability must be explicit booleans');
+            throw fail('PDF 描述对象的可用状态和提取器可用状态均须为布尔值');
         }
         const hashField = field === 'text' ? 'textSha256' : field === 'structuredArtifacts' ? 'structuredArtifactsSha256' : 'formulaTeXSha256';
         const present = body[hashField] !== null;
         if (body.availability[field] !== present || body.extractor[`${field}Available`] !== present) {
-            throw fail('Conference PDF descriptor availability, hash, and extractor fields are internally inconsistent');
+            throw fail('PDF 描述对象的可用状态、哈希是否存在及提取器状态彼此冲突');
         }
     }
     if (body.availability.formulaTeX && !body.availability.structuredArtifacts) {
-        throw fail('Conference PDF formula availability requires structured artifacts');
+        throw fail('声明 PDF 公式可用时，还须声明结构化提取结果可用');
     }
     if (expectedLedgerBinding !== null && stableJson(requireLedgerBinding(body.ledgerBinding)) !== stableJson(expectedLedgerBinding)) {
-        throw fail('Conference PDF descriptor does not belong to this loaded ledger member');
+        throw fail('PDF 描述对象未绑定本次已加载的来源清单成员');
     }
     return checked;
 }
 
 function replaySource({ cacheRoot, record, descriptor, text = null, structuredArtifacts = null, formulaTeX = null, maxBytes, expectedLedgerBinding = null } = {}) {
     if (!isPlainObject(descriptor) || descriptor.contract !== CONTRACT || descriptor.version !== VERSION || descriptor.kind !== KIND) {
-        throw fail('Conference PDF descriptor has an unsupported contract');
+        throw fail('PDF 描述对象的 contract、version 或 kind 不属于支持的组合');
     }
     const { descriptorSha256, ...body } = descriptor;
-    if (!isSha256(descriptorSha256) || stableSha256(body) !== descriptorSha256) throw fail('Conference PDF descriptor checksum changed');
+    if (!isSha256(descriptorSha256) || stableSha256(body) !== descriptorSha256) throw fail('PDF 描述对象的校验信息无效，或与其内容不符');
     const bodyRecord = validateDescriptorBody(body, expectedLedgerBinding);
     const root = requireSafeDirectory(cacheRoot);
     const checked = requireRecord(record);
     if (stableJson(checked.identity) !== stableJson(bodyRecord.identity) || checked.relativePath !== bodyRecord.relativePath
-        || checked.pdfSha256 !== body.pdfSha256) throw fail('Conference PDF descriptor does not belong to this verified record');
+        || checked.pdfSha256 !== body.pdfSha256) throw fail('PDF 描述对象的身份、路径或 PDF SHA 未对应本次已核验记录');
     const bytes = readVerifiedPdf(root, checked.relativePath, requireMaxBytes(maxBytes));
-    if (bytes.length !== body.pdfBytes || sha256(bytes) !== body.pdfSha256) throw fail('Conference PDF bytes no longer replay the descriptor');
+    if (bytes.length !== body.pdfBytes || sha256(bytes) !== body.pdfSha256) throw fail('PDF 当前字节数或 SHA 与描述对象记录不符');
     if ((body.textSha256 === null) !== (text === null) || (text !== null && (typeof text !== 'string' || sha256(text) !== body.textSha256))) {
-        throw fail('Conference PDF text artifact does not replay the descriptor');
+        throw fail('PDF 文本的有无、类型或 SHA 与描述对象记录不符');
     }
     if ((body.structuredArtifactsSha256 === null) !== (structuredArtifacts === null)
         || (structuredArtifacts !== null && (!isPlainObject(structuredArtifacts)
             || stableSha256(structuredArtifacts) !== body.structuredArtifactsSha256))) {
-        throw fail('Conference PDF structured artifacts do not replay the descriptor');
+        throw fail('PDF 结构化提取结果是否存在、类型或 SHA 未对应描述对象记录');
     }
     if ((body.formulaTeXSha256 === null) !== (formulaTeX === null)
         || (formulaTeX !== null && (!isPlainObject(formulaTeX)
             || stableSha256(formulaTeX) !== body.formulaTeXSha256))) {
-        throw fail('Conference PDF formula TeX artifact does not replay the descriptor');
+        throw fail('PDF 公式 TeX 是否存在、类型或 SHA 未对应描述对象记录');
     }
     return Object.freeze(clone(descriptor));
 }
@@ -436,8 +435,8 @@ function replayConferencePdfSource({ cacheRoot, record, descriptor, text = null,
 }
 
 /**
- * 只按准入时用过的同一份 ledger SHA 和规范身份重新核对。绑定 ledger 的描述对象
- * 有意不允许走上面那个只认记录对象的 API。
+ * 按首次核验时使用的同一份来源清单 SHA 和论文身份重新核验。
+ * 已绑定来源清单的描述对象不能通过上方只接收记录对象的接口读取。
  */
 function replayConferencePdfSourceFromLedger({ sourceRoot, ledgerHandle, identityKey, descriptor, text = null, structuredArtifacts = null, formulaTeX = null, maxBytes } = {}) {
     const checked = resolveVerifiedLedgerMember({ sourceRoot, ledgerHandle, identityKey });
@@ -462,6 +461,6 @@ module.exports = {
     replayConferencePdfSource,
     buildConferencePdfSourceFromLedger,
     replayConferencePdfSourceFromLedger,
-    // 供 ledger 适配器在不读 PDF 的情况下预检记录。
+    // 供来源清单处理入口在不读取 PDF 时预先检查记录字段。
     requireRecord,
 };

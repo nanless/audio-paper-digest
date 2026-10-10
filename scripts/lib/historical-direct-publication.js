@@ -668,7 +668,7 @@ function defaultSemanticReview({ loadedPlan, generation, blogRepo, protocol }) {
         '--concurrency', String(historicalReviewConcurrency())], {
         cwd: path.resolve(__dirname, '../..'), encoding: 'utf8', env: { ...process.env }, maxBuffer: 32 * 1024 * 1024
     });
-    if (result.error || result.signal || ![0, 1].includes(result.status)) fail(`semantic review worker failed: ${result.error?.message || result.signal || result.status}`);
+    if (result.error || result.signal || result.status !== 0) fail(`semantic review worker failed: ${result.error?.message || result.signal || result.status}`);
     const loaded = strictJsonFile(outputPath, 'semantic review receipt'); const value = loaded.value;
     const body = clone(value); delete body.semanticReviewSha256;
     if (value.contract !== 'historical-direct-semantic-review-v1' || value.version !== VERSION

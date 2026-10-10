@@ -217,7 +217,7 @@ test('正式筛选按数量上限处理一批候选，完整复核一次状态�
     assert.equal(fs.readdirSync(path.join(f.dirs.filters, filterId, 'llm-intents')).length, 3);
     assert.equal(fs.readdirSync(path.join(f.dirs.filters, filterId, 'llm-responses')).length, 3);
     const noWork = await runner.main(args(['--limit', '3']), { files: f.files, env: {} });
-    assert.deepEqual(noWork.processed, [], 'a complete filter retains the previous lazy credential boundary');
+    assert.deepEqual(noWork.processed, [], '筛选已完成且没有待处理论文时，不读取模型凭证');
 });
 
 test('保存的 OpenAI Responses 请求使用与日更相同的单条用户提示', async t => {

@@ -202,7 +202,7 @@ test('状态区分汇总对应记录尚未生成、无法读取和内容校验�
     fs.writeFileSync(broken, '{"contract":"historical-direct-aggregate-projection-v3","ver');
     const unreadable = blockersFor();
     assert.equal(unreadable.length, 1); assert.equal(unreadable[0].code, 'aggregate-projection-unreadable');
-    assert.equal(unreadable[0].filename, broken); assert.match(unreadable[0].error, /valid UTF-8 JSON/);
+    assert.equal(unreadable[0].filename, broken); assert.match(unreadable[0].error, /必须是有效的 UTF-8 JSON/);
     fs.rmSync(broken);
     const corrupt = path.join(roots.aggregateProjectionRoot, 'corrupt.json');
     fs.writeFileSync(corrupt, `${JSON.stringify({ contract: aggregateApi.PROJECTION_CONTRACT,

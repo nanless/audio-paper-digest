@@ -113,7 +113,7 @@ test('本地提取结果保存可核对的 SHA；缺少可靠的结构化 TeX �
     const f = fixture();
     assert.throws(() => source.buildConferencePdfSource({ cacheRoot: f.root, record: f.record,
         extractPdf: () => ({ extractorVersion: 'pdftotext-24.02', text: 'plain extracted text', formulaTeX: { available: true } }),
-    }), /reliable structured TeX/);
+    }), /可靠的结构化 TeX/);
     const structuredArtifacts = { sections: [{ id: 'method', text: 'Method' }], formulaIndex: [] };
     const result = source.buildConferencePdfSource({ cacheRoot: f.root, record: f.record,
         extractPdf: ({ pdfBytes }) => {
@@ -128,7 +128,7 @@ test('本地提取结果保存可核对的 SHA；缺少可靠的结构化 TeX �
     source.replayConferencePdfSource({ cacheRoot: f.root, record: f.record, descriptor: result.descriptor,
         text: result.text, structuredArtifacts: result.structuredArtifacts });
     assert.throws(() => source.replayConferencePdfSource({ cacheRoot: f.root, record: f.record, descriptor: result.descriptor,
-        text: 'modified', structuredArtifacts }), /text artifact/);
+        text: 'modified', structuredArtifacts }), /PDF 文本的有无、类型或 SHA/);
     const reliable = source.buildConferencePdfSource({ cacheRoot: f.root, record: f.record,
         extractPdf: () => ({ extractorVersion: 'structured-tex-v1', text: 'text', structuredArtifacts: { formulaIndex: ['eq-1'] },
             formulaTeX: { available: true, reliability: 'reliable', formulas: [{ tex: 'x^2', sourceRef: 'page-1:eq-1' }] } }),
@@ -143,29 +143,29 @@ test('只接受受控根目录内、大小不超限且只有一个硬链接的�
     const f = fixture();
     for (const pdfRelativePath of ['/tmp/outside.pdf', '../outside.pdf', 'papers/../example.pdf', 'papers\\example.pdf']) {
         assert.throws(() => source.buildConferencePdfSource({ cacheRoot: f.root, record: { ...f.record, pdfRelativePath } }),
-            /relative path|traversal/);
+            /非空相对路径|不能含反斜杠/);
     }
     fs.symlinkSync(f.filename, path.join(f.root, 'papers', 'linked.pdf'));
     assert.throws(() => source.buildConferencePdfSource({ cacheRoot: f.root, record: { ...f.record, pdfRelativePath: 'papers/linked.pdf' } }),
-        /regular, non-linked/);
+        /只有一个硬链接/);
     fs.linkSync(f.filename, path.join(f.root, 'papers', 'hard-linked.pdf'));
     assert.throws(() => source.buildConferencePdfSource({ cacheRoot: f.root, record: { ...f.record, pdfRelativePath: 'papers/hard-linked.pdf' } }),
-        /regular, non-linked/);
+        /只有一个硬链接/);
     fs.unlinkSync(path.join(f.root, 'papers', 'hard-linked.pdf'));
-    assert.throws(() => source.buildConferencePdfSource({ cacheRoot: f.root, record: f.record, maxBytes: f.bytes.length - 1 }), /size limit/);
+    assert.throws(() => source.buildConferencePdfSource({ cacheRoot: f.root, record: f.record, maxBytes: f.bytes.length - 1 }), /大小限制/);
     t.diagnostic('路径检查拒绝目录越界、符号链接、多重硬链接及超大文件');
 });
 
 test('PDF 文件头无效、内容改变、SHA 不符或来源描述记录被改动时拒绝', () => {
     const bad = fixture({ bytes: Buffer.from('not a PDF') });
-    assert.throws(() => source.buildConferencePdfSource({ cacheRoot: bad.root, record: bad.record }), /standard PDF/);
+    assert.throws(() => source.buildConferencePdfSource({ cacheRoot: bad.root, record: bad.record }), /标准 PDF 标识/);
     const f = fixture();
-    assert.throws(() => source.buildConferencePdfSource({ cacheRoot: f.root, record: { ...f.record, pdfSha256: '0'.repeat(64) } }), /SHA-256 differs/);
+    assert.throws(() => source.buildConferencePdfSource({ cacheRoot: f.root, record: { ...f.record, pdfSha256: '0'.repeat(64) } }), /SHA-256 与已核验/);
     const result = source.buildConferencePdfSource({ cacheRoot: f.root, record: f.record });
     const mutated = { ...result.descriptor, pdfBytes: result.descriptor.pdfBytes + 1 };
-    assert.throws(() => source.replayConferencePdfSource({ cacheRoot: f.root, record: f.record, descriptor: mutated }), /checksum/);
+    assert.throws(() => source.replayConferencePdfSource({ cacheRoot: f.root, record: f.record, descriptor: mutated }), /校验信息/);
     fs.writeFileSync(f.filename, Buffer.concat([f.bytes, Buffer.from('changed')]), { mode: 0o600 });
-    assert.throws(() => source.replayConferencePdfSource({ cacheRoot: f.root, record: f.record, descriptor: result.descriptor }), /bytes no longer replay/);
+    assert.throws(() => source.replayConferencePdfSource({ cacheRoot: f.root, record: f.record, descriptor: result.descriptor }), /当前字节数或 SHA/);
 });
 
 test('从来源清单读取选中的已核验论文，并记录其元数据、文本及结构化提取文件的 SHA', () => {
@@ -187,7 +187,7 @@ test('从来源清单读取选中的已核验论文，并记录其元数据、�
     }), result.descriptor);
     assert.throws(() => source.buildConferencePdfSourceFromLedger({
         sourceRoot: f.root, ledgerHandle: f.ledgerHandle, identityKey: 'icassp-arnumber:9999',
-    }), /does not identify/);
+    }), /未对应已加载/);
 
     const blocked = structuredClone(f.ledger);
     const blockedMember = blocked.members[0];
@@ -198,7 +198,7 @@ test('从来源清单读取选中的已核验论文，并记录其元数据、�
     blockedMember.status = { ...blockedMember.status, state: 'blocked', evidence: blockedMember.status.evidence.filter(item => ['metadata', 'pdf'].includes(item.kind)) };
     assert.throws(() => source.buildConferencePdfSourceFromLedger({
         sourceRoot: f.root, ledgerHandle: structuredClone(f.ledgerHandle), identityKey,
-    }), /authenticated loaded ledger handle/);
+    }), /已经加载、核验并登记的来源清单对象/);
 });
 
 test('来源复核拒绝另一篇论文、复制的清单对象、被改动的来源或重算 SHA 后的错误描述字段', () => {
@@ -210,24 +210,24 @@ test('来源复核拒绝另一篇论文、复制的清单对象、被改动的�
     });
     assert.throws(() => source.replayConferencePdfSourceFromLedger({
         sourceRoot: f.root, ledgerHandle: f.ledgerHandle, identityKey: secondKey, descriptor: result.descriptor,
-    }), /does not belong to this loaded ledger member/);
+    }), /未绑定本次已加载的来源清单成员/);
     assert.throws(() => source.replayConferencePdfSourceFromLedger({
         sourceRoot: f.root, ledgerHandle: structuredClone(f.ledgerHandle), identityKey: firstKey, descriptor: result.descriptor,
-    }), /authenticated loaded ledger handle/);
+    }), /已经加载、核验并登记的来源清单对象/);
 
     const unknown = resign({ ...result.descriptor, untrustedField: 'forged' });
     assert.throws(() => source.replayConferencePdfSourceFromLedger({
         sourceRoot: f.root, ledgerHandle: f.ledgerHandle, identityKey: firstKey, descriptor: unknown,
-    }), /unexpected or missing fields/);
+    }), /包含未允许的字段，或缺少必填字段/);
     const inconsistent = resign({ ...result.descriptor, extractor: { ...result.descriptor.extractor, textAvailable: true } });
     assert.throws(() => source.replayConferencePdfSourceFromLedger({
         sourceRoot: f.root, ledgerHandle: f.ledgerHandle, identityKey: firstKey, descriptor: inconsistent,
-    }), /availability, hash, and extractor/);
+    }), /可用状态、哈希是否存在及提取器状态/);
 
     fs.writeFileSync(path.join(f.root, f.first.metadataFile), 'metadata drift', { mode: 0o600 });
     assert.throws(() => source.replayConferencePdfSourceFromLedger({
         sourceRoot: f.root, ledgerHandle: f.ledgerHandle, identityKey: firstKey, descriptor: result.descriptor,
-    }), /metadata artifact SHA-256 differs/);
+    }), /会议元数据文件 SHA-256 与已核验/);
 });
 
 
@@ -275,7 +275,7 @@ for (const entry of ['ledger-json', 'pdf', 'ledger-artifact', 'ledger-artifact-r
             entry, f.root, target, JSON.stringify(f.record)], { encoding: 'utf8', timeout: 2000 });
         assert.equal(result.error, undefined, result.error?.message);
         assert.equal(result.status, 1, result.stderr);
-        assert.match(result.stderr, /Unsafe ledger|regular, non-linked/);
+        assert.match(result.stderr, /Unsafe ledger|只有一个硬链接/);
         assert.equal(fs.lstatSync(target).isFIFO(), true);
     });
 }
