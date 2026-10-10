@@ -72,7 +72,7 @@ function writePublication(currentDir, papers, commit = 'a'.repeat(40), mode = 'm
     return receipt;
 }
 
-describe('发布后的视觉编排', () => {
+describe('发布后的论文长图与汇总封面任务', () => {
     it('视觉规划 CLI 拒绝未知、缺值和重复参数', () => {
         assert.throws(() => parseArgs(['--unknown', 'value']), /未知参数/);
         assert.throws(() => parseArgs(['--date']), /无效参数/);

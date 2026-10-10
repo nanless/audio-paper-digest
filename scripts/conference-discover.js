@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-// 显式的离线候选发现。这条命令绝不会把匹配结果提升为「已核验」。Apply 只写配置的
-// 运行根目录下的直接文件名。
+// 根据已有本地文件寻找来源候选，匹配结果仍须核验。传入 --apply 时，
+// 只在配置的运行目录中保存候选清单与报告，不允许输出到子目录。
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -37,7 +37,7 @@ function requireFiles(files) {
 function ensureConfiguredDirectory(directory, name) {
     const absolute = path.resolve(directory);
     const parent = path.dirname(absolute);
-    discovery.safeAbsoluteDirectory(parent, `${name} parent`);
+    discovery.safeAbsoluteDirectory(parent, `${name} 的父目录`);
     try { fs.mkdirSync(absolute, { mode: 0o700 }); }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
     return discovery.safeAbsoluteDirectory(absolute, name);
@@ -47,7 +47,7 @@ function safeOutput(directory, filename, name) {
     if (typeof filename !== 'string' || !discovery.SAFE_JSON_NAME.test(filename)) {
         throw new Error(`${name} 必须是不带子目录的 .json 文件名`);
     }
-    const root = ensureConfiguredDirectory(directory, `${name} directory`);
+    const root = ensureConfiguredDirectory(directory, `${name} 目录`);
     const absolute = path.resolve(root, filename);
     if (path.dirname(absolute) !== root) throw new Error(`${name} 必须直接放在配置目录下，不能带子目录`);
     return absolute;
@@ -62,13 +62,13 @@ function parseCommand(argv) {
     }
     if (!/^\d{4}$/.test(options['--year'])) throw new Error(`--year 必须是四位年份：当前是 ${options['--year']}`);
     if (options['--adapter'] === 'official-proceedings' && !options['--conference-id']) {
-        throw new Error('official-proceedings requires --conference-id');
+        throw new Error('official-proceedings 必须提供 --conference-id');
     }
     if (options['--conference-id'] && !/^[a-z0-9]+(?:-[a-z0-9]+)*-\d{4}$/.test(options['--conference-id'])) {
-        throw new Error('--conference-id must be a normalized conference slug ending in its year');
+        throw new Error('--conference-id 必须使用小写字母、数字和连字符，并以四位年份结尾');
     }
     if (options['--conference-id'] && !options['--conference-id'].endsWith(`-${options['--year']}`)) {
-        throw new Error('--conference-id must end with the exact --year');
+        throw new Error('--conference-id 末尾的年份必须等于 --year');
     }
     if (options['--acquisition-root'] !== undefined && !path.isAbsolute(options['--acquisition-root'])) {
         throw new Error('--acquisition-root 必须是绝对路径');
@@ -77,10 +77,10 @@ function parseCommand(argv) {
         throw new Error('--acquisition-root 只对 official-proceedings 有效');
     }
     const outputs = [options['--candidate-output'], options['--report-output']];
-    if (mode === '--dry-run' && outputs.some(Boolean)) throw new Error('--dry-run must not specify output files');
-    if (mode === '--apply' && outputs.some(value => !value)) throw new Error('--apply requires --candidate-output and --report-output');
+    if (mode === '--dry-run' && outputs.some(Boolean)) throw new Error('--dry-run 不得指定输出文件');
+    if (mode === '--apply' && outputs.some(value => !value)) throw new Error('--apply 必须同时提供 --candidate-output 和 --report-output');
     if (mode === '--apply' && outputs.some(value => !discovery.SAFE_JSON_NAME.test(String(value)))) {
-        throw new Error('--apply output values must be safe direct JSON filenames');
+        throw new Error('--apply 输出必须是符合文件名规则、不带子目录的 JSON 文件名');
     }
     return { apply: mode === '--apply', adapter: options['--adapter'], year: Number(options['--year']),
         ...(options['--conference-id'] ? { conferenceId: options['--conference-id'] } : {}),
@@ -92,11 +92,11 @@ function parseCommand(argv) {
 
 function writeOutputsOnce({ catalogDir, catalogName, candidate, reportDir, reportName, report, forbiddenRoot }) {
     discovery.validateDiscoveryBundle(candidate, report);
-    const candidateOutput = safeOutput(catalogDir, catalogName, 'candidate output');
-    const reportOutput = safeOutput(reportDir, reportName, 'report output');
+    const candidateOutput = safeOutput(catalogDir, catalogName, '候选清单输出');
+    const reportOutput = safeOutput(reportDir, reportName, '发现报告输出');
     if (candidateOutput === reportOutput) throw new Error('候选输出和报告输出不能是同一个文件');
     if ([candidateOutput, reportOutput].some(output => output === forbiddenRoot || output.startsWith(`${forbiddenRoot}${path.sep}`))) {
-        throw new Error('discovery outputs must not be inside pdfRoot');
+        throw new Error('候选清单与报告不得保存到 pdfRoot 内');
     }
     const specs = [[candidateOutput, discovery.canonicalBytes(candidate)], [reportOutput, discovery.canonicalBytes(report)]];
     const opened = [];

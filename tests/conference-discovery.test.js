@@ -205,29 +205,29 @@ test('命令行预演不写文件；正式执行保存相互对应的候选与�
     assert.equal(fs.statSync(candidate).mode & 0o777, 0o600);
     assert.throws(() => cli.main(['--apply', ...base, '--candidate-output', 'candidate.json', '--report-output', 'other.json'], { files }), /EEXIST/);
     assert.equal(fs.existsSync(path.join(f.reports, 'other.json')), false);
-    assert.throws(() => cli.parseCommand(['--apply', ...base, '--candidate-output', 'candidate.json']), /requires/);
-    assert.throws(() => cli.parseCommand(['--dry-run', ...base, '--candidate-output', 'candidate.json', '--report-output', 'report.json']), /must not specify/);
+    assert.throws(() => cli.parseCommand(['--apply', ...base, '--candidate-output', 'candidate.json']), /必须同时提供/);
+    assert.throws(() => cli.parseCommand(['--dry-run', ...base, '--candidate-output', 'candidate.json', '--report-output', 'report.json']), /不得指定输出文件/);
     for (const unsafe of ['/tmp/x.json', '../x.json', 'nested/x.json', 'X.json']) {
-        assert.throws(() => cli.parseCommand(['--apply', ...base, '--candidate-output', unsafe, '--report-output', 'report.json']), /safe direct/);
+        assert.throws(() => cli.parseCommand(['--apply', ...base, '--candidate-output', unsafe, '--report-output', 'report.json']), /符合文件名规则、不带子目录/);
     }
 });
 
 test('命令行要求并透传精确的官方会议 ID，同时保留旧版参数', () => {
     const base = ['--adapter', 'official-proceedings', '--year', '2026', '--metadata', '/tmp/metadata.json', '--pdf-root', '/tmp/pdf'];
-    assert.throws(() => cli.parseCommand(['--dry-run', ...base]), /requires --conference-id/);
+    assert.throws(() => cli.parseCommand(['--dry-run', ...base]), /必须提供 --conference-id/);
     const parsed = cli.parseCommand(['--dry-run', ...base, '--conference-id', 'ijcai-ecai-2026']);
     assert.equal(parsed.conferenceId, 'ijcai-ecai-2026');
-    assert.throws(() => cli.parseCommand(['--dry-run', ...base, '--conference-id', 'IJCAI 2026']), /normalized/);
-    assert.throws(() => cli.parseCommand(['--dry-run', ...base, '--conference-id', 'ijcai-ecai-2025']), /exact --year/);
+    assert.throws(() => cli.parseCommand(['--dry-run', ...base, '--conference-id', 'IJCAI 2026']), /小写字母、数字和连字符/);
+    assert.throws(() => cli.parseCommand(['--dry-run', ...base, '--conference-id', 'ijcai-ecai-2025']), /年份必须等于 --year/);
     assert.equal(Object.hasOwn(cli.parseCommand(['--dry-run', '--adapter', 'iclr', '--year', '2026',
         '--metadata', '/tmp/metadata.json', '--pdf-root', '/tmp/pdf']), 'conferenceId'), false);
 });
 
-test('实际执行拒绝把输出写到目录根之内', t => {
+test('保存结果时拒绝把候选清单写入 PDF 来源目录', t => {
     const f = fixture(t); writeJson(f.metadata, [{ forum_id: 'AbCdef_12', title: 'One' }]); writePdf(f.pdf, 'AbCdef_12.pdf');
     const result = discovery.discoverConference({ adapter: 'iclr', year: 2026, metadataFile: f.metadata, pdfRoot: f.pdf });
     assert.throws(() => cli.writeOutputsOnce({ catalogDir: f.pdf, catalogName: 'candidate.json', candidate: result.manifest,
-        reportDir: f.reports, reportName: 'report.json', report: result.report, forbiddenRoot: result.manifest.pdfRoot }), /must not be inside pdfRoot/);
+        reportDir: f.reports, reportName: 'report.json', report: result.report, forbiddenRoot: result.manifest.pdfRoot }), /不得保存到 pdfRoot 内/);
 });
 
 test('严格的打包校验会复核每个来源、候选、基数、计数和成员集合绑定', t => {

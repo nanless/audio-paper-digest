@@ -1133,7 +1133,7 @@ test('第二轮审查有噪声时，多轮评分的共识仍然可以复核', ()
     assert.equal(deep.scoringStabilityResolutionIsValid(stage), false);
 });
 
-test('作者逗号枚举的代码、权重和数据集都保留，完整跨行原句可重放', async () => {
+test('作者逗号枚举的代码、权重和数据集都保留，完整跨行原句仍可核验资源对应关系', async () => {
     const url = 'https://github.com/example/shared-assets';
     for (const text of [
         `Our code, dataset, and model weights are available at ${url}.`,
