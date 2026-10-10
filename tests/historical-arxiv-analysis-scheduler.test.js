@@ -765,7 +765,7 @@ test('历史并发分析遇到整次运行必须停止的错误后，等其他�
     assert.equal(items[f.groups[2].paperId].status, 'sources_ready');
 });
 
-test('在途来源准备结束时若同伴已停止运行，只保存来源，不启动模型', async t => {
+test('已经开始的来源准备结束时，若同伴已停止运行，只保存来源，不启动模型', async t => {
     const f = stopFixture(t); const analyzed = [];
     let failNow; const preparedSecond = new Promise(resolve => { failNow = resolve; });
     const failure = Object.assign(new Error('账号认证失败'), { code: 'LLM_ACCOUNT_AUTH_ERROR', scope: 'run' });

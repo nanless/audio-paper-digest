@@ -1,10 +1,10 @@
 /**
- * LLM 前置关键词预筛。
+ * 在模型筛选前，根据标题、摘要和类别检查音频相关关键词。
  *
- * 设计目标是高召回：命中任一明确的语音/音频/音乐词族即交给 LLM，
- * eess.AS / cs.SD 这两个核心类别也始终交给 LLM。只有未命中任何词族的
- * 补充类别论文才会被确定性排除。词表版本会进入筛选配置指纹，修改后只
- * 失效筛选决定，不会触发重新抓取。
+ * 命中关键词、属于 eess.AS / cs.SD，或摘要不足 80 字符时，都保留给模型筛选。
+ * 只有摘要长度达到门槛、类别不属于上述范围且没有关键词的论文才被排除。
+ * 关键词版本号参与筛选配置指纹；更新版本号会使旧筛选决定需要重新检查，
+ * 不会因此重新抓取来源。
  */
 
 const KEYWORD_PREFILTER_VERSION = 'speech-audio-music-v4';
@@ -129,7 +129,7 @@ const PHRASE_GROUPS = Object.freeze({
     ]
 });
 
-// 缩写只在原文以独立大写 token 出现时命中，避免 asr/ssl/vc 等普通字母组合误判。
+// 缩写须保持大写，且前后不能紧接英文字母或数字；小写 asr/ssl/vc 不命中。
 const UPPERCASE_ACRONYMS = Object.freeze([
     'ASR', 'TTS', 'STT', 'SLU', 'VAD', 'KWS', 'SV', 'SD', 'SER',
     'VC', 'SE', 'SS', 'SED', 'ASC', 'MIR', 'AMT', 'MOS', 'PESQ',

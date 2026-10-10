@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * Paper Digest 统一配置中心
- * 所有硬编码参数集中于此，支持环境变量覆盖
+ * 论文速递的公共配置：路径、抓取、筛选、分析和发布参数。
+ * 部分参数可通过下方列出的环境变量调整。
  */
 
 const path = require('path');
 const { loadProjectEnv } = require('./env-loader.js');
 
 // ═══════════════════════════════════════════════════════
-// 自动加载 .env（所有脚本的入口点，先于 loadEnvFile 执行）
+// 读取项目 .env，再根据其中的环境变量设置本模块配置。
 // ═══════════════════════════════════════════════════════
 
 loadProjectEnv();
@@ -53,14 +53,14 @@ const ARXIV_CONFIG = {
     fetchMaxWaitMs: 600000,
     fetchTimeoutMs: 60000,
     fetchMaxResponseBytes: 8 * 1024 * 1024,
-    // 真实 socket 请求按 host 串行。健康请求只保留最小间隔；异常和 429
-    // 由 scheduler 自适应抬高，不再在每个健康类别后固定等待 60 秒。
+    // 同一主机的抓取请求逐个执行。正常请求之间使用较短间隔；
+    // 请求异常或返回 429 时，调度器按结果增加等待时间。
     hostHealthyCooldownMs: 1000,
     hostTransientCooldownMs: 5000,
     hostRateLimitedCooldownMs: 60000,
     hostCooldownJitterMs: 1000,
-    // 旧 API 自动流程仍读取 categoryDelayMs；Manual raw 不再把它作为
-    // 健康类别之间的固定 sleep。
+    // 保留旧抓取流程使用的类别间等待参数；Manual 原始抓取流程
+    // 不用它在正常完成的类别之间固定等待。
     categoryDelayMs: 60000,
     firstRequestDelayMs: 30000,
     consecutiveExistingThreshold: 20,
@@ -78,7 +78,7 @@ const ARXIV_CONFIG = {
 };
 
 // ═══════════════════════════════════════════════════════
-// LLM 筛选配置
+// 模型筛选配置
 // ═══════════════════════════════════════════════════════
 
 const FILTER_CONFIG = {
@@ -111,9 +111,9 @@ const ANALYSIS_CONFIG = {
     apiMaxRetries: 3,
     apiRetryBaseDelayMs: 5000,
     apiMaxTokens: 64000,
-    // LLM JSON/SSE 响应总字节硬上限；超限必须中止，不得截断后解析。
+    // 模型 JSON 或 SSE 响应的总字节上限；超过后停止读取，不解析截断内容。
     apiMaxResponseBytes: 16 * 1024 * 1024,
-    // 局部审校/修复通常只需重写既有分析；限制输出预算可避免推理模型在网关超时前持续思考。
+    // 局部检查和修复使用较小的输出上限，与主分析和 Reader 长文分别设置。
     repairMaxTokens: 16000,
     // 初学研究者长文需要容纳更多章节、宽表和逐图解说，不与局部修复共用较小的输出上限。
     apiReaderMaxTokens: 48000,
@@ -133,10 +133,10 @@ const ANALYSIS_CONFIG = {
     imageInsertionMax: 4,
     // 主分析保留较大的全文上下文；超长论文使用跨全文均衡取样，而不是只截取开头。
     fullTextMaxChars: 200000,
-    // 后处理阶段只读取任务相关证据切片，避免同一全文被重复发送 4-6 次。
+    // 为后续检查和修复分别设置相关原文证据的长度上限。
     openSourceEvidenceMaxChars: 16000,
     revisionEvidenceMaxChars: 60000,
-    // 读者长文使用独立证据预算，确保训练、数据、表格、公式与 Figure 能同时进入上下文。
+    // Reader 长文单独设置证据长度上限，用于选取训练、数据、表格、公式和图片资料。
     apiReaderEvidenceMaxChars: 180000,
     apiReaderContextMaxChars: 240000,
     scoringEvidenceMaxChars: 40000,
@@ -171,8 +171,8 @@ const FILES = {
     tagPreviewDir: path.join(DATA_DIR, 'runtime', 'tag-preview'),
     tagRecordUpdateReportDir: path.join(DATA_DIR, 'runtime', 'tag-record-update-reports'),
     tagExplorerAssets: path.join(PROJECT_ROOT, 'web', 'tag-explorer'),
-    // 跨日期、跨 Node/Python 的 provider 账号状态。它不是日批次数据，
-    // 因此不能放进会被归档轮转的 current/。
+    // 模型供应商的账号状态由 Node 和 Python 共用，跨日期保留。
+    // 放在 runtime/，避免随 current/ 的日批次文件一起归档。
     llmAccountPoolState: path.join(DATA_DIR, 'runtime', 'llm-account-pool.json'),
     llmUsageDir: path.join(DATA_DIR, 'runtime', 'llm-usage'),
     freshRewriteRunsDir: path.join(DATA_DIR, 'runtime', 'fresh-rewrites'),
@@ -185,13 +185,13 @@ const FILES = {
     // source-runtime.json 和 source-manifest.json。
     // 图片只属于当次运行的临时证据，从不做长期缓存。
     freshArxivFetchedSourcesDir: path.join(DATA_DIR, 'runtime', 'fetched-arxiv-sources'),
-    // 只给发布用的官方 Atom sidecar，每个直接计划的历史 arXiv 来源都需要。
-    // 它们绑定对应的新一代 arXiv 来源，但绝不改动那份来源；
-    // 扁平文本解析只作诊断。
+    // 历史 arXiv 直接发布计划使用的官方 Atom 元数据附属文件。
+    // 这些文件绑定对应的重新抓取来源，不改动来源本身；
+    // 从纯文本解析出的信息只用于诊断。
     historicalArxivPublicationMetadataDir: path.join(DATA_DIR, 'runtime', 'historical-arxiv-publication-metadata'),
-    // 新一代 arXiv 抓取失败会连同当时冻结的页面/链接对应关系记在这里，
-    // 供后续 crosswalk worker 使用。这里不是 crosswalk 状态目录，
-    // 也不能改页面归属。
+    // 保存 arXiv 重新抓取失败记录和当时固定的页面、链接对应关系，
+    // 供后续页面与来源对照任务读取。这里不保存该任务的运行状态，
+    // 也不改变页面所属论文。
     historicalArxivFreshFailureHandoffDir: path.join(DATA_DIR, 'runtime', 'historical-arxiv-fresh-failure-handoffs'),
     // 会议 PDF 和它们的来源台账是运行时的私有输入。它们与 current/ 隔离，
     // 这样没导完的数据不会影响当天的生产批次。

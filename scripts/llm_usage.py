@@ -1,4 +1,4 @@
-"""只记录元数据的 LLM 用量事件，格式与 lib/llm-usage.js 互通。"""
+"""记录模型请求的用量、状态与摘要，不保存请求或响应正文；格式与 lib/llm-usage.js 一致。"""
 if __name__ == '__main__':
     from runtime_guard import require_external_runtime
     require_external_runtime('llm_usage.py')
@@ -141,14 +141,13 @@ def build_llm_usage_event(*, protocol, model, request, response=None, status_cod
 
 
 def write_llm_usage_event(event, directory=None):
-    """把一次用量事件写成一份全新的文件，不替换任何已有文件。
+    """用新的随机 UUID 命名用量文件，先写临时文件，再改名保存。
 
-    这段写入不能改成公共的「原子替换」helper，语义和前置校验都不同：
-    - 目录链逐级创建为 0700，并逐级反符号链接：任何一级不是真目录就报错。
-      公共 helper 只 `mkdir -p`，不检查中间目录是不是链接。
-    - 文件名是新的 uuid4，属于「只新增、不替换」。用量事件一旦写下就不该被
-      覆盖，公共 helper 的改名替换语义正好相反。
-    - 临时文件以 O_EXCL|O_NOFOLLOW 创建，写完 fsync 再改名。
+    本函数有自己的目录和文件检查，不能直接改用公共的文件替换函数：
+    - 逐级检查父目录，拒绝符号链接或非目录；新建目录指定 0700，
+      最终用量目录再设为 0700，不更改已有上级目录的权限。
+    - 每次生成新的 uuid4 文件名，不用于改写某个指定的已有用量文件。
+    - 临时文件以 O_EXCL|O_NOFOLLOW 创建，写完并同步文件后再改名。
     """
     target_dir = Path(directory or LLM_USAGE_DIR).absolute()
     current = Path(target_dir.anchor)
@@ -193,7 +192,7 @@ def record_llm_usage(*, sink=None, directory=None, **kwargs):
 
 
 def _running_unittest():
-    """真正的研究脚本 import unittest.mock 不算跑测试。"""
+    """识别 unittest 命令，或已加载 unittest 且直接运行的 test_ 文件。"""
     main = sys.modules.get('__main__')
     spec = getattr(main, '__spec__', None)
     if getattr(spec, 'name', None) == 'unittest.__main__':
