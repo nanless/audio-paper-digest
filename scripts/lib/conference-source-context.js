@@ -45,11 +45,11 @@ class ConferenceSourceContextError extends Error {
 }
 
 function integrity(message, reasonCode = 'integrity_failure') {
-    throw new ConferenceSourceContextError(`Conference source context rejected: ${message}`, { reasonCode });
+    throw new ConferenceSourceContextError(`会议来源上下文被拒绝：${message}`, { reasonCode });
 }
 
 function blocked(message, reasonCode) {
-    throw new ConferenceSourceContextError(`Conference source context blocked: ${message}`, {
+    throw new ConferenceSourceContextError(`会议来源上下文无法用于分析：${message}`, {
         code: 'CONFERENCE_SOURCE_CONTEXT_BLOCKED', reasonCode
     });
 }
@@ -60,11 +60,11 @@ function plain(value) {
 }
 
 function exact(value, fields, label) {
-    if (!plain(value)) integrity(`${label} must be a plain object`);
+    if (!plain(value)) integrity(`${label} 必须是普通对象`);
     const actual = Object.keys(value).sort();
     const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
-        integrity(`${label} has unknown or missing fields`);
+        integrity(`${label} 包含未允许的字段，或缺少必填字段`);
     }
 }
 
@@ -77,7 +77,7 @@ function canonical(value) {
     if (plain(value)) return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
     if (value === null || ['string', 'boolean'].includes(typeof value)) return value;
     if (typeof value === 'number' && Number.isFinite(value)) return value;
-    integrity('source snapshot contains a non-JSON value');
+    integrity('来源快照包含 JSON 不支持的值');
 }
 
 function stableHash(value) { return sha256(JSON.stringify(canonical(value))); }
@@ -103,8 +103,8 @@ function rejectDuplicateJsonKeys(source, label) {
         else if (token.startsWith('"') && top?.object && top.expectKey) {
             let key;
             try { key = JSON.parse(token); }
-            catch { integrity(`${label} contains invalid JSON string syntax`, 'invalid_json'); }
-            if (top.keys.has(key)) integrity(`${label} contains duplicate JSON key: ${key}`, 'duplicate_json_key');
+            catch { integrity(`${label} 包含格式无效的 JSON 字符串`, 'invalid_json'); }
+            if (top.keys.has(key)) integrity(`${label} 包含重复的 JSON 键： ${key}`, 'duplicate_json_key');
             top.keys.add(key); top.expectKey = false;
         }
     }
@@ -113,24 +113,24 @@ function rejectDuplicateJsonKeys(source, label) {
 function readBoundBytes(sourceRoot, relativePath, expectedSha256, limit, label) {
     let filename;
     try { filename = ledgerApi.safeArtifactPath(sourceRoot, relativePath); }
-    catch (error) { integrity(`${label} path is unsafe: ${error.message}`, 'unsafe_source_path'); }
+    catch (error) { integrity(`${label} 路径未通过安全检查： ${error.message}`, 'unsafe_source_path'); }
     let fd;
     try {
         fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const opened = fs.fstatSync(fd); const named = fs.lstatSync(filename);
         if (!opened.isFile() || opened.nlink !== 1 || named.isSymbolicLink() || named.nlink !== 1
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size > limit) {
-            integrity(`${label} must be a regular single-link file within its size limit`, 'unsafe_source_file');
+            integrity(`${label} 必须是只有一个硬链接、且大小不超过限制的普通文件，打开的文件还须与路径检查的文件相同`, 'unsafe_source_file');
         }
         const bytes = fs.readFileSync(fd);
-        if (bytes.length !== opened.size) integrity(`${label} changed while being read`, 'source_changed_during_read');
+        if (bytes.length !== opened.size) integrity(`${label} 读取时文件字节数发生变化`, 'source_changed_during_read');
         if (!SHA_RE.test(String(expectedSha256 || '')) || sha256(bytes) !== expectedSha256) {
-            integrity(`${label} SHA-256 differs from the authenticated ledger`, 'source_sha_drift');
+            integrity(`${label} SHA-256 格式无效，或与已核验来源清单记录的值不一致`, 'source_sha_drift');
         }
         return bytes;
     } catch (error) {
         if (error instanceof ConferenceSourceContextError) throw error;
-        integrity(`${label} cannot be read safely: ${error.message}`, 'source_read_failed');
+        integrity(`${label} 无法安全读取： ${error.message}`, 'source_read_failed');
     } finally {
         if (fd !== undefined) fs.closeSync(fd);
     }
@@ -138,23 +138,23 @@ function readBoundBytes(sourceRoot, relativePath, expectedSha256, limit, label) 
 
 function strictUtf8(bytes, label) {
     try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
-    catch { integrity(`${label} is not strict UTF-8`, 'invalid_utf8'); }
+    catch { integrity(`${label} 不是有效的 UTF-8 文本`, 'invalid_utf8'); }
 }
 
 function strictJson(bytes, label) {
     const source = strictUtf8(bytes, label);
     rejectDuplicateJsonKeys(source, label);
     try { return JSON.parse(source); }
-    catch { integrity(`${label} is not valid JSON`, 'invalid_json'); }
+    catch { integrity(`${label} 不是有效的 JSON`, 'invalid_json'); }
 }
 
 function positiveInteger(value, label) {
-    if (!Number.isSafeInteger(value) || value < 1) integrity(`${label} must be a positive safe integer`, 'invalid_artifact_schema');
+    if (!Number.isSafeInteger(value) || value < 1) integrity(`${label} 必须是大于零的安全整数`, 'invalid_artifact_schema');
 }
 
 function string(value, label, { empty = false } = {}) {
     if (typeof value !== 'string' || (!empty && !value.trim()) || /\u0000/u.test(value)) {
-        integrity(`${label} must be ${empty ? 'a' : 'a non-empty'} string`, 'invalid_artifact_schema');
+        integrity(`${label} 必须是${empty ? '不含空字符的' : '非空且不含空字符的'}字符串`, 'invalid_artifact_schema');
     }
 }
 
@@ -163,12 +163,12 @@ function validatePage(item, index, previousEnd, textBytes) {
     positiveInteger(item.page, `structuredArtifacts.pages[${index}].page`);
     if (item.page !== index + 1 || !Number.isSafeInteger(item.textStart) || !Number.isSafeInteger(item.textEnd)
         || item.textStart !== previousEnd || item.textEnd <= item.textStart || item.textEnd > textBytes.length) {
-        integrity('structuredArtifacts pages must be consecutive and exactly partition the source text', 'invalid_artifact_schema');
+        integrity('structuredArtifacts 页码必须连续，字节区间必须连续、非空且不得超出来源全文', 'invalid_artifact_schema');
     }
     try {
         new TextDecoder('utf-8', { fatal: true }).decode(textBytes.subarray(item.textStart, item.textEnd));
     } catch {
-        integrity('structuredArtifacts page offsets must fall on UTF-8 code-point boundaries', 'invalid_artifact_schema');
+        integrity('structuredArtifacts 每页文本的字节区间必须能单独解码为有效 UTF-8', 'invalid_artifact_schema');
     }
     return item.textEnd;
 }
@@ -183,7 +183,7 @@ function validateLocatedRecord(item, index, kind) {
     positiveInteger(item.ordinal, `structuredArtifacts.${kind}s[${index}].ordinal`);
     positiveInteger(item.page, `structuredArtifacts.${kind}s[${index}].page`);
     if (item.ordinal !== index + 1 || item.recoveryStatus !== 'complete') {
-        integrity(`structuredArtifacts ${kind} records must be ordered and completely recovered`, 'invalid_artifact_schema');
+        integrity(`structuredArtifacts 的 ${kind} 记录序号必须连续，且 recoveryStatus 必须为 complete`, 'invalid_artifact_schema');
     }
     string(item.sourceRef, `structuredArtifacts.${kind}s[${index}].sourceRef`);
     if (kind === 'formula') string(item.tex, `structuredArtifacts.formulas[${index}].tex`);
@@ -191,10 +191,10 @@ function validateLocatedRecord(item, index, kind) {
     if (kind === 'table') {
         if (!Array.isArray(item.cells) || !item.cells.length || item.cells.some(row => (
             !Array.isArray(row) || !row.length || row.some(cell => typeof cell !== 'string')
-        ))) integrity('structuredArtifacts table cells must be a non-empty string matrix', 'invalid_artifact_schema');
+        ))) integrity('structuredArtifacts 表格必须包含非空的行，每个单元格必须是字符串', 'invalid_artifact_schema');
         const width = item.cells[0].length;
         if (item.cells.some(row => row.length !== width)) {
-            integrity('structuredArtifacts table cells must form a rectangular matrix', 'invalid_artifact_schema');
+            integrity('structuredArtifacts 表格的每行单元格数量必须相同', 'invalid_artifact_schema');
         }
     }
 }
@@ -205,7 +205,7 @@ function validateReplayableFigureRecord(item, index) {
     positiveInteger(item.ordinal, `structuredArtifacts.figures[${index}].ordinal`);
     positiveInteger(item.page, `structuredArtifacts.figures[${index}].page`);
     if (item.ordinal !== index + 1 || item.recoveryStatus !== 'complete') {
-        integrity('structuredArtifacts figure records must be ordered and completely recovered', 'invalid_artifact_schema');
+        integrity('structuredArtifacts 图片记录序号必须连续，且 recoveryStatus 必须为 complete', 'invalid_artifact_schema');
     }
     string(item.sourceRef, `structuredArtifacts.figures[${index}].sourceRef`);
     string(item.caption, `structuredArtifacts.figures[${index}].caption`, { empty: true });
@@ -216,11 +216,11 @@ function validateReplayableFigureRecord(item, index) {
         if (!/^image\/(?:png|jpeg|webp|gif)$/i.test(item.asset.mediaType)
             || !/^[A-Za-z0-9+/]+={0,2}$/.test(item.asset.base64)
             || !SHA_RE.test(String(item.asset.sha256 || ''))) {
-            integrity('structuredArtifacts Figure asset is malformed', 'invalid_artifact_schema');
+            integrity('structuredArtifacts 图片文件的媒体类型、Base64 内容或 SHA 格式无效', 'invalid_artifact_schema');
         }
         const bytes = Buffer.from(item.asset.base64, 'base64');
         if (!bytes.length || sha256(bytes) !== item.asset.sha256) {
-            integrity('structuredArtifacts Figure asset SHA does not replay its bytes', 'invalid_artifact_schema');
+            integrity('structuredArtifacts 图片文件内容为空，或 SHA 与解码后的字节不一致', 'invalid_artifact_schema');
         }
     }
 }
@@ -236,7 +236,7 @@ function validateVisualAudit(value) {
         || !Array.isArray(value.figureCandidates) || !Array.isArray(value.limitations)
         || !Number.isSafeInteger(value.visualBytes) || value.visualBytes < 1
         || value.visualBytes > 48 * 1024 * 1024 || !value.limitations.every(item => typeof item === 'string' && item.trim())) {
-        integrity('structuredArtifacts.visualAudit contract or bounds are invalid', 'invalid_visual_audit');
+        integrity('structuredArtifacts.visualAudit 的格式、提取程序版本、渲染设置、数组或字节限制无效', 'invalid_visual_audit');
     }
     let total = 0;
     value.pages.forEach((page, index) => {
@@ -246,13 +246,13 @@ function validateVisualAudit(value) {
             || !Number.isSafeInteger(page.width) || page.width < 1 || !Number.isSafeInteger(page.height) || page.height < 1
             || !Number.isSafeInteger(page.bytes) || page.bytes < 1 || !SHA_RE.test(page.sha256)
             || png.length !== page.bytes || sha256(png) !== page.sha256) {
-            integrity(`structuredArtifacts.visualAudit.pages[${index}] is not a replayable PNG render`, 'invalid_visual_audit');
+            integrity(`structuredArtifacts.visualAudit.pages[${index}] 页码、PNG 格式、渲染尺寸、字节数或 SHA 不符合记录`, 'invalid_visual_audit');
         }
         total += page.bytes;
     });
     const body = clone(value); delete body.auditSha256;
     if (total !== value.visualBytes || !SHA_RE.test(value.auditSha256) || value.auditSha256 !== stableHash(body)) {
-        integrity('structuredArtifacts.visualAudit byte count or self-SHA drifted', 'visual_audit_sha_drift');
+        integrity('structuredArtifacts.visualAudit 总字节数或记录自身的 SHA 格式无效或不符', 'visual_audit_sha_drift');
     }
 }
 
@@ -261,38 +261,38 @@ function validateStructuredArtifacts(value, sourceText) {
     const actual = Object.keys(value).sort();
     const expected = [...fields, ...(Object.hasOwn(value, 'visualAudit') ? ['visualAudit'] : [])].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
-        integrity('structuredArtifacts has unknown or missing fields', 'invalid_artifact_schema');
+        integrity('structuredArtifacts 包含未允许的字段，或缺少必填字段', 'invalid_artifact_schema');
     }
     if (value.contract !== ARTIFACT_CONTRACT || value.version !== ARTIFACT_VERSION
         || ![REPLAYABLE_PROFILE, WEAK_PROFILE, UNAVAILABLE_PROFILE].includes(value.profile)) {
-        integrity('structuredArtifacts contract/version/profile is unsupported', 'unsupported_artifact_profile');
+        integrity('structuredArtifacts 的 contract、version 或 profile 不受支持', 'unsupported_artifact_profile');
     }
     if (value.offsetUnit !== OFFSET_UNIT) {
-        integrity(`structuredArtifacts.offsetUnit must be ${OFFSET_UNIT}`, 'invalid_artifact_schema');
+        integrity(`structuredArtifacts.offsetUnit 必须为 ${OFFSET_UNIT}`, 'invalid_artifact_schema');
     }
     if (!SHA_RE.test(String(value.flattenedTextSha256 || '')) || value.flattenedTextSha256 !== sha256(sourceText)) {
-        integrity('structuredArtifacts.flattenedTextSha256 does not bind source text', 'flattened_text_sha_drift');
+        integrity('structuredArtifacts.flattenedTextSha256 格式无效，或与来源全文的 SHA 不一致', 'flattened_text_sha_drift');
     }
     if (Object.hasOwn(value, 'visualAudit')) validateVisualAudit(value.visualAudit);
     const { payloadSha256, ...body } = value;
     if (!SHA_RE.test(String(payloadSha256 || '')) || payloadSha256 !== sha256(JSON.stringify(body))) {
-        integrity('structuredArtifacts.payloadSha256 does not bind its payload', 'artifact_payload_sha_drift');
+        integrity('structuredArtifacts.payloadSha256 格式无效，或与该记录其余字段的 SHA 不一致', 'artifact_payload_sha_drift');
     }
     for (const field of ['pages', 'tables', 'formulas', 'figures']) {
-        if (!Array.isArray(value[field])) integrity(`structuredArtifacts.${field} must be an array`, 'invalid_artifact_schema');
+        if (!Array.isArray(value[field])) integrity(`structuredArtifacts.${field} 必须是数组`, 'invalid_artifact_schema');
     }
     if (value.profile === UNAVAILABLE_PROFILE) {
         if ([value.pages, value.tables, value.formulas, value.figures].some(items => items.length)) {
-            integrity('unavailable structured-artifact profile cannot carry recovered records', 'invalid_artifact_schema');
+            integrity('结构化内容标为 unavailable 时，不得保存已提取的页面、表格、公式或图片记录', 'invalid_artifact_schema');
         }
         return value;
     }
     if (value.profile === REPLAYABLE_PROFILE && !value.pages.length) {
-        integrity('replayable structured artifacts contain no page map', 'invalid_artifact_schema');
+        integrity('可重新核验的结构化记录缺少页面文本区间', 'invalid_artifact_schema');
     }
     if (!value.pages.length) {
         if ([value.tables, value.formulas, value.figures].some(items => items.length)) {
-            integrity('structuredArtifacts records require a page map', 'invalid_artifact_schema');
+            integrity('structuredArtifacts 的表格、公式或图片记录必须同时提供页面文本区间', 'invalid_artifact_schema');
         }
         return value;
     }
@@ -300,7 +300,7 @@ function validateStructuredArtifacts(value, sourceText) {
     let end = 0;
     value.pages.forEach((page, index) => { end = validatePage(page, index, end, sourceBytes); });
     if (end !== sourceBytes.length) {
-        integrity('structuredArtifacts page map does not cover the complete source text', 'invalid_artifact_schema');
+        integrity('structuredArtifacts 页面文本区间未覆盖完整来源全文', 'invalid_artifact_schema');
     }
     for (const kind of ['table', 'formula', 'figure']) {
         const values = value[`${kind}s`];
@@ -313,15 +313,15 @@ function validateStructuredArtifacts(value, sourceText) {
             } else validateLocatedRecord(item, index, kind);
         });
         if (new Set(values.map(item => item.sourceRef)).size !== values.length) {
-            integrity(`structuredArtifacts ${kind} sourceRef values must be unique`, 'invalid_artifact_schema');
+            integrity(`structuredArtifacts 的 ${kind} 记录不能使用重复的 sourceRef`, 'invalid_artifact_schema');
         }
         if (values.some(item => item.page > value.pages.length)) {
-            integrity(`structuredArtifacts ${kind} page is outside the page map`, 'invalid_artifact_schema');
+            integrity(`structuredArtifacts 的 ${kind} 记录页码超出页面文本区间的页数`, 'invalid_artifact_schema');
         }
     }
     if (value.formulas.length > 32 || value.formulas.reduce((sum, formula) => (
         sum + Buffer.from(formula.sourceExpression.crop.base64, 'base64').length
-    ), 0) > 8 * 1024 * 1024) integrity('PDF formula image budget exceeded', 'invalid_formula_source_expression');
+    ), 0) > 8 * 1024 * 1024) integrity('PDF 公式图片数量超过 32，或裁剪图片总字节数超过 8 MiB', 'invalid_formula_source_expression');
     return value;
 }
 
@@ -342,25 +342,25 @@ function availableCapability(reason) {
 
 function resolveRun(input) {
     if ((input.run === undefined) === (input.execution === undefined)) {
-        integrity('exactly one of run or execution must be supplied', 'ambiguous_run_source');
+        integrity('run 和 execution 必须且只能提供其中一项', 'ambiguous_run_source');
     }
     if (input.run !== undefined) {
         let run;
         try { run = runApi.assertConferenceRunFromVerifiedLedger(input.run, input.ledgerHandle); }
-        catch (error) { integrity(`run is not strongly bound to the ledger: ${error.message}`, 'run_binding_invalid'); }
+        catch (error) { integrity(`运行记录与已核验来源清单不匹配： ${error.message}`, 'run_binding_invalid'); }
         return { run, binding: { kind: 'run', runIdentitySha256: run.identitySha256, runStateSha256: run.stateSha256 } };
     }
     let execution;
     try { execution = executionApi.assertConferenceExecution(input.execution); }
-    catch (error) { integrity(`execution snapshot is invalid: ${error.message}`, 'execution_binding_invalid'); }
+    catch (error) { integrity(`执行记录未通过核验： ${error.message}`, 'execution_binding_invalid'); }
     const run = { ...execution.runTemplate, paperStates: execution.paperStates };
     run.stateSha256 = runApi.stableHash({ identitySha256: run.identitySha256, paperStates: run.paperStates });
     let verified;
     try { verified = runApi.assertConferenceRunFromVerifiedLedger(run, input.ledgerHandle); }
-    catch (error) { integrity(`execution run is not strongly bound to the ledger: ${error.message}`, 'execution_binding_invalid'); }
+    catch (error) { integrity(`执行记录还原的运行记录与已核验来源清单不匹配： ${error.message}`, 'execution_binding_invalid'); }
     if (execution.source.runIdentitySha256 !== verified.identitySha256
         || execution.source.ledgerSha256 !== verified.ledgerSha256) {
-        integrity('execution source does not bind the reconstructed run', 'execution_binding_invalid');
+        integrity('执行记录中的来源身份或来源清单 SHA 与还原的运行记录不一致', 'execution_binding_invalid');
     }
     return { run: verified, binding: { kind: 'execution', executionId: execution.executionId,
         executionStateSha256: execution.stateSha256, runIdentitySha256: verified.identitySha256,
@@ -368,23 +368,23 @@ function resolveRun(input) {
 }
 
 function buildConferenceSourceContextFromLedger(input = {}, productionBinding = null) {
-    if (productionBinding === null) integrity('authenticated plan authority is required', 'plan_handle_invalid');
-    if (!plain(input)) integrity('conference source context input must be a plain object');
+    if (productionBinding === null) integrity('必须提供已核验计划的授权信息', 'plan_handle_invalid');
+    if (!plain(input)) integrity('会议来源上下文输入必须是普通对象');
     const hasRun = Object.prototype.hasOwnProperty.call(input, 'run');
     const hasExecution = Object.prototype.hasOwnProperty.call(input, 'execution');
-    if (hasRun === hasExecution) integrity('exactly one of run or execution must be supplied', 'ambiguous_run_source');
-    exact(input, ['ledgerHandle', hasExecution ? 'execution' : 'run', 'paperId', 'sourceRoot'], 'conference source context input');
-    if (typeof input.paperId !== 'string' || !input.paperId) integrity('paperId must be non-empty', 'paper_not_found');
+    if (hasRun === hasExecution) integrity('run 和 execution 必须且只能提供其中一项', 'ambiguous_run_source');
+    exact(input, ['ledgerHandle', hasExecution ? 'execution' : 'run', 'paperId', 'sourceRoot'], '会议来源上下文输入');
+    if (typeof input.paperId !== 'string' || !input.paperId) integrity('paperId 必须是非空字符串', 'paper_not_found');
     const resolved = resolveRun(input);
     const matches = resolved.run.members.filter(member => member.paperId === input.paperId);
-    if (matches.length !== 1) integrity('paperId must identify exactly one run member', 'paper_not_found');
+    if (matches.length !== 1) integrity('paperId 必须对应运行记录中唯一的一篇论文', 'paper_not_found');
     const runMember = matches[0];
     let loaded;
     try { loaded = ledgerApi.ledgerHandleSnapshot(input.ledgerHandle); }
-    catch (error) { integrity(`ledgerHandle is not authenticated: ${error.message}`, 'ledger_handle_invalid'); }
+    catch (error) { integrity(`ledgerHandle 不是已核验并登记的来源清单对象： ${error.message}`, 'ledger_handle_invalid'); }
     const ledgerMatches = loaded.ledger.members.filter(member => ledgerApi.identityKey(member.identity) === runMember.sourceIdentity);
     if (ledgerMatches.length !== 1 || ledgerMatches[0].status.state !== 'verified') {
-        integrity('run source identity does not identify one verified ledger member', 'source_identity_invalid');
+        integrity('运行记录的来源身份必须对应来源清单中唯一的已核验成员', 'source_identity_invalid');
     }
     const member = ledgerMatches[0];
     let pdfSource;
@@ -392,20 +392,20 @@ function buildConferenceSourceContextFromLedger(input = {}, productionBinding = 
         pdfSource = pdfApi.buildConferencePdfSourceFromLedger({ sourceRoot: input.sourceRoot,
             ledgerHandle: input.ledgerHandle, identityKey: runMember.sourceIdentity });
     } catch (error) {
-        integrity(`ledger-aware PDF replay failed: ${error.message}`, 'pdf_source_invalid');
+        integrity(`按来源清单重新读取并核验 PDF 失败： ${error.message}`, 'pdf_source_invalid');
     }
-    const metadataBytes = readBoundBytes(input.sourceRoot, member.metadataFile, member.metadataSha256, MAX_METADATA_BYTES, 'metadata artifact');
-    const textBytes = readBoundBytes(input.sourceRoot, member.textFile, member.textSha256, MAX_TEXT_BYTES, 'text artifact');
-    const artifactBytes = readBoundBytes(input.sourceRoot, member.artifactsFile, member.artifactsSha256, MAX_ARTIFACT_BYTES, 'structured-artifacts file');
-    const metadata = strictJson(metadataBytes, 'metadata artifact');
-    if (!plain(metadata) || !Object.keys(metadata).length) integrity('metadata artifact must contain a non-empty JSON object', 'invalid_metadata');
-    const text = strictUtf8(textBytes, 'text artifact');
+    const metadataBytes = readBoundBytes(input.sourceRoot, member.metadataFile, member.metadataSha256, MAX_METADATA_BYTES, '元数据文件');
+    const textBytes = readBoundBytes(input.sourceRoot, member.textFile, member.textSha256, MAX_TEXT_BYTES, '全文文件');
+    const artifactBytes = readBoundBytes(input.sourceRoot, member.artifactsFile, member.artifactsSha256, MAX_ARTIFACT_BYTES, '结构化提取记录文件');
+    const metadata = strictJson(metadataBytes, '元数据文件');
+    if (!plain(metadata) || !Object.keys(metadata).length) integrity('元数据文件必须包含非空 JSON 对象', 'invalid_metadata');
+    const text = strictUtf8(textBytes, '全文文件');
     let nonWhitespaceCharacters = 0;
     for (const character of text) if (!/\s/u.test(character)) nonWhitespaceCharacters += 1;
     if (nonWhitespaceCharacters < MIN_TEXT_CHARS) {
-        blocked(`source text is shorter than ${MIN_TEXT_CHARS} non-whitespace characters`, 'text_too_short');
+        blocked(`来源全文少于 ${MIN_TEXT_CHARS} 个非空白字符`, 'text_too_short');
     }
-    const structuredArtifacts = validateStructuredArtifacts(strictJson(artifactBytes, 'structured-artifacts file'), text);
+    const structuredArtifacts = validateStructuredArtifacts(strictJson(artifactBytes, '结构化提取记录文件'), text);
     const structuredReason = structuredCapabilityReason(structuredArtifacts.profile);
     const capability = structuredArtifacts.profile === REPLAYABLE_PROFILE
         ? availableCapability(structuredReason) : unavailableCapability(structuredReason);
@@ -454,11 +454,11 @@ function buildConferenceSourceContextFromLedger(input = {}, productionBinding = 
 }
 
 function buildConferenceSourceContext(input = {}) {
-    if (!plain(input)) integrity('production conference source context input must be a plain object');
-    exact(input, ['planHandle', 'paperId', 'sourceRoot'], 'production conference source context input');
+    if (!plain(input)) integrity('正式会议来源上下文输入必须是普通对象');
+    exact(input, ['planHandle', 'paperId', 'sourceRoot'], '正式会议来源上下文输入');
     let authority;
     try { authority = planApi.planHandleAuthority(input.planHandle); }
-    catch (error) { integrity(`planHandle is not authenticated: ${error.message}`, 'plan_handle_invalid'); }
+    catch (error) { integrity(`planHandle 不是已核验并登记的计划对象： ${error.message}`, 'plan_handle_invalid'); }
     const snapshot = authority.snapshot;
     const receipt = snapshot.receipt;
     const bindingBody = {

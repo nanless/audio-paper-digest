@@ -36,7 +36,7 @@ def safe_dir(path, create=False):
         if create and not parent.exists():
             parent.mkdir(mode=0o700)
         if parent.is_symlink() or not parent.is_dir():
-            raise ValueError('Unsafe activation directory')
+            raise ValueError('发布启用目录类型或符号链接检查未通过')
     return path
 
 
@@ -47,7 +47,7 @@ def read(path):
     try:
         info = os.fstat(fd)
         if not stat.S_ISREG(info.st_mode) or info.st_nlink not in (1, 2) or info.st_size > 256 * 1024 * 1024:
-            raise ValueError('Unsafe activation file')
+            raise ValueError('发布启用文件不是普通文件、硬链接数不符合要求，或大小超过限制')
         with os.fdopen(fd, 'rb', closefd=False) as stream:
             raw = stream.read()
         if info.st_nlink == 2:
@@ -66,7 +66,7 @@ def child(root, relative):
     if not isinstance(relative, str) or not relative or '\\' in relative or any(
         part in ('', '.', '..') for part in relative.split('/')
     ) or Path(relative).is_absolute():
-        raise ValueError('Unsafe activation path')
+        raise ValueError('发布启用文件路径无效：须为不含目录越界的相对路径')
     return Path(root) / relative
 
 
@@ -147,9 +147,8 @@ def assert_no_pending(current, date, runs_root=None):
             if sha(read(child(run_dir / 'publication-archive', record['path']))) != record['sha256']:
                 raise ValueError('激活归档中的文件字节与意图记录的 SHA 不符')
     except (OSError, ValueError, TypeError, KeyError) as exc:
-        # 这条消息被 tests/python/test_publication_activation.py:53 用 /activation/ 逐字匹配，
-        # 改它就得同步改测试，所以保留原字节。
-        raise ValueError('Publication activation is pending or corrupt; resume the explicit activation entry') from exc
+        # 未完成或损坏的启用记录都阻止发布；须从专用入口恢复后重新检查。
+        raise ValueError('发布启用尚未完成，或其记录已损坏；请从专用的发布启用入口恢复') from exc
 
 
 def verify_completed(current, run_dir, intent):

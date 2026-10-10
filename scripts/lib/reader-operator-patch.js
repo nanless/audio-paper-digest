@@ -218,7 +218,7 @@ async function applyOperatorPatch({ loaded, patchFile }, overrides = {}) {
         const updated = { ...payload, draft, rawDraft: JSON.stringify(draft), status: 'failed',
             operatorPatches: [...(payload.operatorPatches || []), committedAudit] };
         const expectedIntent = { contract: CONTRACT, audit: committedAudit, afterPayloadSha256: repair.hashDraft(updated) };
-        if (intent && !same(intent, expectedIntent)) throw new Error('operator patch 的待处理载荷已变化');
+        if (intent && !same(intent, expectedIntent)) throw new Error('人工补丁的准备记录与本次准备保存的补丁记录不同');
         if (Buffer.byteLength(JSON.stringify({ version: repair.REPAIR_VERSION, identity,
             payload: updated, payloadSha256: repair.hashDraft(updated) })) > 20 * 1024 * 1024) {
             throw new Error('operator patch 已超出 Reader 候选大小预算');

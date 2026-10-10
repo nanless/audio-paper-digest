@@ -193,9 +193,9 @@ function evaluateKeywordPrefilter(paper) {
     return {
         pass: failOpen || categoryFallback || uniqueKeywords.length > 0,
         reason: failOpen && !categoryFallback && uniqueKeywords.length === 0
-            ? `摘要不足 ${MIN_ABSTRACT_CHARS_FOR_REJECTION} 字符，证据不足，安全放行给 LLM`
+            ? `摘要不足 ${MIN_ABSTRACT_CHARS_FOR_REJECTION} 字符，保留交由模型筛选`
             : (categoryFallback && uniqueKeywords.length === 0
-            ? `核心音频类别兜底：${categories.filter(category => CORE_AUDIO_CATEGORIES.has(category)).join(', ')}`
+            ? `所属类别符合音频范围，保留交由模型筛选：${categories.filter(category => CORE_AUDIO_CATEGORIES.has(category)).join(', ')}`
             : (uniqueKeywords.length > 0
                 ? `命中语音/音频/音乐关键词：${uniqueKeywords.join(', ')}`
                 : '标题、摘要及类别未命中高召回语音/音频/音乐词表')),

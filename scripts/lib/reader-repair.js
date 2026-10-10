@@ -176,10 +176,10 @@ function recoveryIssueProjection(issue) {
     // 这里保留的是 v1 候选和 v2 失败签名用到的比较输入。这段兼容文本
     // 不会作为展示消息。
     //
-    // 措辞本身是冻结的：它进 gateSha256 和 failureSignature，data/ 下已经有带这段
-    // 旧措辞的失败候选。改字会让那些签名算不出来，续跑同一计数失败时少记一轮
-    // 「无进展」，多花一次修复调用。既然它不展示，去黑话在这里没有收益，别动它。
-    // 下面那条正则是通配的，新旧措辞都能解析，所以将来真要改措辞也不会漏读。
+    // 这句旧文本参与 gateSha256 和 failureSignature 的计算，已有失败候选按它保存。
+    // 这里继续使用原句核对旧记录，避免同一表格计数失败少记一次「无进展」，
+    // 进而多发一次修复请求。它不作为显示消息；显示措辞由当前诊断另行提供。
+    // 上面的正则可读取新旧措辞中的计数，原签名输入仍保持不变。
     const projected = counts
         ? { path: issue.path ?? null,
             message: `读者文章至少需要 ${counts.requiredCount} 张有叙事闭环的 Markdown 表，当前 ${counts.actualCount}` }

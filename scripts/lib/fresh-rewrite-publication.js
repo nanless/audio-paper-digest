@@ -440,7 +440,7 @@ function promoteRun(options) {
         if (intent) {
             const stagedPath = path.join(ctx.runDir, 'promoted-canonical.json');
             nextRaw = readBytes(stagedPath, { allowPendingLink: true });
-            if (hash(nextRaw) !== intent.canonicalSha256) throw new Error('晋升恢复载荷已损坏：字节与记录的 canonicalSha256 不符');
+            if (hash(nextRaw) !== intent.canonicalSha256) throw new Error('准备替换正式结果的文件已损坏：字节与记录的 canonicalSha256 不符');
             immutableWrite(stagedPath, nextRaw);
             immutableWrite(intentPath, priorIntentRaw);
         } else {
@@ -458,7 +458,7 @@ function promoteRun(options) {
                     analyzedFailed: 0, total: ctx.paperIds.length, success: ctx.paperIds.length, failed: 0, savedAt: promotedAt },
                 freshRewritePromotion: { contract: PROMOTION_CONTRACT, runId: run.runId, baselineSha256: run.baseline.sha256 } };
             if (!Number.isSafeInteger(next.generation)) throw new Error('正式分析结果的 generation 自增后超出安全整数范围');
-            if (staged && jsonHash(staged) !== jsonHash(next)) throw new Error('晋升恢复载荷与本次 fresh 批次不一致');
+            if (staged && jsonHash(staged) !== jsonHash(next)) throw new Error('准备替换正式结果的文件内容与本次重新分析的批次不一致');
             nextRaw = stagedRaw || Buffer.from(JSON.stringify(next, null, 2));
             immutableWrite(stagedPath, nextRaw);
             intent = { version: 1, contract: PROMOTION_CONTRACT, status: 'prepared', runId: run.runId,

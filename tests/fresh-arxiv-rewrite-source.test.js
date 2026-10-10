@@ -67,10 +67,10 @@ test('当日 arXiv 来源获取用原子写入保存官方文本、PDF 和不含
     assert.deepEqual(Object.keys(result.manifest).sort(), ['arxivId', 'capturedAt', 'contract', 'generation',
         'paperId', 'pdf', 'runtimeMetadata', 'text', 'version']);
     assert.equal(Object.hasOwn(result.runtimeDetails, 'sourceVersion'), false,
-        'ordinary current-version bundles retain their existing shape');
-    assert.equal(result.runtimeDetails.title, textResponse(id).text.slice(0, 2000), 'source title is persisted from fresh source text when HTML has no explicit title field');
+        '普通当前版本的来源记录保持原字段结构');
+    assert.equal(result.runtimeDetails.title, textResponse(id).text.slice(0, 2000), 'HTML 没有明确标题字段时，从本次来源文本中截取并保存标题');
     assert.doesNotMatch(fs.readFileSync(path.join(directory, 'source-runtime.json'), 'utf8'), /(?:cachePath|tempPath|rawBytes|assetBytes|base64|buffer)/);
-    assert.equal(fs.existsSync(f.currentRoot), false, 'source capture must not touch data/current');
+    assert.equal(fs.existsSync(f.currentRoot), false, '来源抓取不能写入 data/current');
 });
 
 test('当前 PDF 已撤下时，保存一份参与自哈希的同版本回退，并强制用这些 PDF 字节作为来源文本', async t => {
@@ -93,14 +93,14 @@ test('当前 PDF 已撤下时，保存一份参与自哈希的同版本回退，
             return { text: 'Text extracted exclusively from the selected historical PDF bytes. '.repeat(20) };
         }
     });
-    assert.equal(extracted, 1, 'version fallback must not analyze an HTML withdrawal/current page');
+    assert.equal(extracted, 1, '版本回退必须从选定的 PDF 提取文本，不使用撤稿说明或当前 HTML 页面');
     assert.equal(result.manifest.text.source, 'pdf');
     assert.equal(result.manifest.text.sourceId, selected);
     assert.equal(result.manifest.text.url, rawPdf.url);
     assert.equal(result.manifest.pdf.url, rawPdf.url);
     assert.equal(result.runtimeDetails.title, 'Historical paper title');
     assert.doesNotMatch(result.runtimeDetails.title, /来源版本警告/,
-        'the mandatory source warning must not replace the paper title');
+        '必要的来源版本警告不能替代论文标题');
     assert.equal(result.runtimeDetails.sourceVersion.selectedSourceId, selected);
     assert.equal(result.runtimeDetails.sourceVersion.attemptedCurrentPdfStatus, 404);
     assert.match(result.text, /^【来源版本警告】arXiv 当前无版本 PDF/);
@@ -184,11 +184,11 @@ test('抓取中断后清除未完成目录，重试时重新获取并保存文�
     }), /simulated interruption/);
     assert.equal(source.generationExists(f.sourceRoot, id, 1), false);
     const paperDirectory = path.join(f.sourceRoot, id);
-    assert.deepEqual(fs.readdirSync(paperDirectory), [], 'owned temporary directory is removed after failure');
+    assert.deepEqual(fs.readdirSync(paperDirectory), [], '失败后清除本次创建的未完成临时目录');
     const recovered = await source.captureFreshArxivRewriteSource(options, fetchers);
     assert.equal(recovered.status, 'captured');
     assert.deepEqual({ textCalls, pdfCalls }, { textCalls: 2, pdfCalls: 2 },
-        'unsealed interruption must fetch both official responses again');
+        '封存前中断后，须重新抓取官方文本和 PDF 两份响应');
     assert.deepEqual(fs.readdirSync(source.sourceDirectory(f.sourceRoot, id, 1)).sort(),
         ['source-manifest.json', 'source-runtime.json', 'source.pdf', 'source.txt']);
 });
@@ -244,7 +244,7 @@ test('HTML 回退只从那一份已保存的 PDF 响应里提取文本，拒绝�
     assert.equal(pdfCalls, 1); assert.equal(extracted, 1);
     assert.equal(captured.manifest.text.source, 'pdf');
     assert.equal(captured.manifest.pdf.responseSha256, sha256(rawPdf.bytes));
-    assert.deepEqual(captured.pdf, rawPdf.bytes, 'the exact fallback bytes are the sealed PDF');
+    assert.deepEqual(captured.pdf, rawPdf.bytes, '封存的 PDF 必须与回退时使用的原始字节完全一致');
     await assert.rejects(source.captureFreshArxivRewriteSource({ rootDir: f.sourceRoot, arxivId: id, generation: 2,
         now: '2026-09-07T00:10:00.000Z' }, {
         fetchText: async () => ({ text: 'a separately fetched PDF text', source: 'pdf', sourceId: id,
@@ -264,7 +264,7 @@ test('临时图片不把 URL 和字节写进运行目录，只提供临时字节
         sourceRoot: f.sourceRoot, persistentRoots: [f.currentRoot] }, async bundle => {
         assert.equal(bundle.arxivId, id);
         assert.equal(bundle.figures.length, 1);
-        assert.equal('url' in bundle.figures[0], false, 'figure URL is not returned for serialization');
+        assert.equal('url' in bundle.figures[0], false, '返回的图片记录不能带 URL 字段');
         assert.equal(fs.readFileSync(bundle.figures[0].tempPath).toString('utf8'), 'ephemeral-pixels');
         assert.ok(path.resolve(bundle.figures[0].tempPath).startsWith(`${path.resolve(f.temporaryRoot)}${path.sep}`));
         return { temporaryDirectory: bundle.temporaryDirectory, sha256: bundle.figures[0].sha256 };
@@ -273,12 +273,12 @@ test('临时图片不把 URL 和字节写进运行目录，只提供临时字节
         return { bytes: Buffer.from('ephemeral-pixels'), mediaType: 'image/png' };
     } });
     assert.ok(observed.sha256);
-    assert.deepEqual(fs.readdirSync(f.temporaryRoot), [], 'success removes active-run temporary figures');
+    assert.deepEqual(fs.readdirSync(f.temporaryRoot), [], '成功后清除本次运行的临时图片');
     assert.deepEqual(filesUnder(f.sourceRoot), [
         `${id}/generation-000001/source-manifest.json`, `${id}/generation-000001/source-runtime.json`,
         `${id}/generation-000001/source.pdf`, `${id}/generation-000001/source.txt`
     ]);
-    assert.equal(fs.existsSync(f.currentRoot), false, 'figure path cannot write data/current image-cache or api-reader-assets');
+    assert.equal(fs.existsSync(f.currentRoot), false, '图片处理不能写入 data/current 的图片缓存或 api-reader-assets');
     assert.doesNotMatch(JSON.stringify(source.readFreshArxivRewriteSource({ rootDir: f.sourceRoot, arxivId: id, generation: 1 }).manifest),
         /x1\.png|image-cache|api-reader-assets/);
 });
@@ -410,7 +410,7 @@ test('同代次恢复会复核绑定哈希的表格、公式和图片元数据�
         }, { fetchFigure: async () => ({ bytes: Buffer.from(`pixel-${figureFetches++}`), mediaType: 'image/png' }) });
         assert.deepEqual(fs.readdirSync(f.temporaryRoot), []);
     }
-    assert.equal(figureFetches, 2, 'each direct attempt refetches pixels; no image cache exists');
+    assert.equal(figureFetches, 2, '每次调用都重新获取图片字节，不复用图片缓存');
 });
 
 test('真实来源捕获拒绝 HTML 地址与来源 ID 的显式版本冲突', async t => {

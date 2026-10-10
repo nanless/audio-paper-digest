@@ -8717,7 +8717,7 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
             output_dir, frontmatter.get('title'), artifact.get('path'),
         )
         if len(candidates) != 1:
-            continue  # 共用的 Hugo 闸门已经会报告这个绑定失败。
+            continue  # 共用的 Hugo 页面检查会报告无法找到唯一渲染页面的问题。
         rendered_fragment = html.unescape(_rendered_article_fragment(candidates[0][1]))
         for formula_index, block in enumerate(source_blocks, 1):
             # Hugo 在渲染前会还原它写入的字面短代码转义。

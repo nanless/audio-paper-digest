@@ -55,7 +55,7 @@ class ActivationTransactionTest(unittest.TestCase):
                         raise RuntimeError('injected crash')
                 with self.assertRaisesRegex(RuntimeError, 'injected'):
                     activation.retire_files(current, run, intent, after_move=crash)
-                with self.assertRaisesRegex(ValueError, 'activation'):
+                with self.assertRaisesRegex(ValueError, '发布启用尚未完成，或其记录已损坏；请从专用的发布启用入口恢复'):
                     activation.assert_no_pending(current, intent['date'], run.parent)
                 activation.retire_files(current, run, intent)
                 activation.assert_no_pending(current, intent['date'], run.parent)
@@ -108,7 +108,7 @@ class ActivationTransactionTest(unittest.TestCase):
                 capture_output=True, text=True, timeout=3,
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn('Unsafe activation file', result.stderr)
+            self.assertIn('发布启用文件不是普通文件、硬链接数不符合要求，或大小超过限制', result.stderr)
             self.assertEqual(marker.lstat().st_ino, before.st_ino)
             self.assertEqual(marker.lstat().st_mode, before.st_mode)
 

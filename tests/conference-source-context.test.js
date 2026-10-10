@@ -36,7 +36,7 @@ test('生产来源上下文不公开跳过计划核验的测试辅助入口', ()
 test('生产来源上下文拒绝调用方另行提供运行记录、执行记录、来源清单或文本', () => {
     for (const extra of [{ run: {} }, { execution: {} }, { ledgerHandle: {} }, { text: 'forged' }]) {
         assert.throws(() => context.buildConferenceSourceContext({ planHandle: {}, paperId: 'x', sourceRoot: '/tmp', ...extra }),
-            /unknown or missing fields/);
+            /包含未允许的字段，或缺少必填字段/);
     }
 });
 
