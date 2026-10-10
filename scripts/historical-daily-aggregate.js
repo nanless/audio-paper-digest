@@ -5,18 +5,18 @@ const { requireExternalRuntime } = require('./env-loader.js');
 
 const USAGE = '--dry-run|--apply --staging-runs UUID[,UUID...] [--date YYYY-MM-DD]';
 function parseArgs(argv) {
-    if (!['--dry-run', '--apply'].includes(argv[0])) throw new Error(`Use ${USAGE}`);
+    if (!['--dry-run', '--apply'].includes(argv[0])) throw new Error(`用法：${USAGE}`);
     const values = {};
     for (let index = 1; index < argv.length; index += 2) {
         const flag = argv[index]; const value = argv[index + 1];
-        if (!['--staging-runs', '--date'].includes(flag) || value === undefined || Object.hasOwn(values, flag)) throw new Error(`Use ${USAGE}`);
+        if (!['--staging-runs', '--date'].includes(flag) || value === undefined || Object.hasOwn(values, flag)) throw new Error(`用法：${USAGE}`);
         values[flag] = value;
     }
     const api = require('./lib/historical-daily-aggregate.js');
     const stagingRunIds = String(values['--staging-runs'] || '').split(',');
     if (!stagingRunIds.length || new Set(stagingRunIds).size !== stagingRunIds.length
         || stagingRunIds.some(value => !api.UUID_RE.test(value))
-        || values['--date'] !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(values['--date'])) throw new Error(`Use ${USAGE}`);
+        || values['--date'] !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(values['--date'])) throw new Error(`用法：${USAGE}`);
     return { apply: argv[0] === '--apply', stagingRunIds, date: values['--date'] || null };
 }
 

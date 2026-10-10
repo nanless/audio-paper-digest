@@ -7,20 +7,20 @@ const USAGE = 'plan --dry-run|--apply --plan-id UUID --page-staging-runs UUID[,U
 function pairs(argv, start, allowed) {
     const values = {};
     for (let i = start; i < argv.length; i += 2) {
-        if (!allowed.includes(argv[i]) || argv[i + 1] === undefined || Object.hasOwn(values, argv[i])) throw new Error(`Use ${USAGE}`);
+        if (!allowed.includes(argv[i]) || argv[i + 1] === undefined || Object.hasOwn(values, argv[i])) throw new Error(`用法：${USAGE}`);
         values[argv[i]] = argv[i + 1];
     }
     return values;
 }
 function parseArgs(argv) {
     const [action, mode] = argv;
-    if (!['plan', 'generate'].includes(action) || !['--dry-run', '--apply'].includes(mode)) throw new Error(`Use ${USAGE}`);
+    if (!['plan', 'generate'].includes(action) || !['--dry-run', '--apply'].includes(mode)) throw new Error(`用法：${USAGE}`);
     const values = pairs(argv, 2, action === 'plan'
         ? ['--plan-id', '--page-staging-runs', '--daily-aggregates', '--conference-refs']
         : ['--plan-id', '--batch-id']);
-    if (!api.UUID_RE.test(values['--plan-id'] || '')) throw new Error(`Use ${USAGE}`);
+    if (!api.UUID_RE.test(values['--plan-id'] || '')) throw new Error(`用法：${USAGE}`);
     if (action === 'generate') {
-        if (!/^daily-\d{4}-\d{2}-\d{2}$/.test(values['--batch-id'] || '')) throw new Error(`Use ${USAGE}`);
+        if (!/^daily-\d{4}-\d{2}-\d{2}$/.test(values['--batch-id'] || '')) throw new Error(`用法：${USAGE}`);
         return { action, apply: mode === '--apply', planId: values['--plan-id'], batchId: values['--batch-id'] };
     }
     const pageStagingRunIds = String(values['--page-staging-runs'] || '').split(',');
@@ -28,7 +28,7 @@ function parseArgs(argv) {
         const match = item.match(/^([a-f0-9-]{36})@(\d{4}-\d{2}-\d{2})$/i); return match ? { aggregateRunId: match[1], date: match[2] } : null;
     });
     if (!pageStagingRunIds.length || pageStagingRunIds.some(id => !api.UUID_RE.test(id))
-        || dailyAggregates.some(item => !item)) throw new Error(`Use ${USAGE}`);
+        || dailyAggregates.some(item => !item)) throw new Error(`用法：${USAGE}`);
     return { action, apply: mode === '--apply', planId: values['--plan-id'], pageStagingRunIds,
         dailyAggregates, conferenceRefs: values['--conference-refs'] ? [values['--conference-refs']] : [] };
 }

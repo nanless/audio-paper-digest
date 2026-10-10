@@ -358,8 +358,8 @@ test('旧每日汇总按原格式只读核验，混用字段或 SHA 不符时拒
 
 test('命令行预演绝不调用写入器，写入则指向配置的汇总根目录', () => {
     assert.equal(cli.parseArgs(['--dry-run', '--staging-runs', RUN, '--date', DATE]).date, DATE);
-    assert.throws(() => cli.parseArgs(['--apply', '--staging-runs', 'bad']), /Use/);
-    assert.throws(() => cli.parseArgs(['--apply', '--staging-runs', `${RUN},${RUN}`]), /Use/);
+    assert.throws(() => cli.parseArgs(['--apply', '--staging-runs', 'bad']), /^Error: 用法：/);
+    assert.throws(() => cli.parseArgs(['--apply', '--staging-runs', `${RUN},${RUN}`]), /^Error: 用法：/);
     const inputs = aggregateFixture(); let writes = 0;
     const fakeApi = { UUID_RE: api.UUID_RE, aggregateRunIdFor: api.aggregateRunIdFor, loadAggregateInputs: () => inputs,
         buildDailyAggregates: api.buildDailyAggregates,

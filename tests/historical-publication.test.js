@@ -489,7 +489,7 @@ test('命令行要求显式指定第一阶段，拒绝格式错误的生产器�
         '--daily-aggregates', `${AGG}@${DATE}`]).dailyAggregates[0].date, DATE);
     assert.equal(cli.parseArgs(['generate', '--apply', '--plan-id', PLAN, '--batch-id', `daily-${DATE}`]).apply, true);
     assert.throws(() => cli.parseArgs(['plan', '--apply', '--plan-id', PLAN, '--page-staging-runs', '../x',
-        '--daily-aggregates', `${AGG}@${DATE}`]), /Use/);
+        '--daily-aggregates', `${AGG}@${DATE}`]), /^Error: 用法：/);
     const config = { PUBLISH_CONFIG: { blogRepo: '/blog' }, FILES: { historicalPublicationDir: '/publication',
         historicalPageStagingDir: '/staging', historicalDailyAggregateDir: '/aggregate', pageSourceCrosswalkDir: '/crosswalk',
         historicalPageInventoryDir: '/inventory', freshRewriteRunsDir: '/analysis',

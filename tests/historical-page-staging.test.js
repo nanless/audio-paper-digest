@@ -322,7 +322,7 @@ test('暂存命令行要求写入时给出运行 ID，支持试点或数字批�
         '--limit', 'pilot']).limit, 'pilot');
     assert.equal(cli.parseArgs(['--apply', '--crosswalk', CROSSWALK, '--analysis-run', ANALYSIS_RUN,
         '--run-id', STAGING, '--limit', '20']).limit, 20);
-    assert.throws(() => cli.parseArgs(['--apply', '--crosswalk', CROSSWALK, '--run-id', STAGING]), /Use/);
+    assert.throws(() => cli.parseArgs(['--apply', '--crosswalk', CROSSWALK, '--run-id', STAGING]), /^Error: 用法：/);
 });
 
 test('分配读取器拒绝重复 JSON 键和符号链接', t => {
