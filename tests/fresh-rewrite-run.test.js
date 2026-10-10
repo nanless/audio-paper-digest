@@ -637,3 +637,98 @@ test('运维补丁先拿运行操作锁再拿论文锁，绝不改动分析或�
     fs.writeFileSync(analysisPath, JSON.stringify(analysis)); order.length = 0;
     await assert.rejects(runner.patchRewrite({ runId: RUN_ID, patchFile: 'test.json' }, overrides), /仅使用论文来源资料的人工补丁不能改动已成功的分析或已签名的读者文章/);
 });
+
+test('status 只统计来源可继续复用的分析，旧作者机构与已封存 HTML 不符时仍列为待分析', async t => {
+    const f = fixture(t);
+    const Config = require('../scripts/config.js');
+    const deep = require('../scripts/deep-analyzer.js');
+    const engine = require('../scripts/analysis-engine.js');
+    const authorParser = require('../scripts/lib/reader-author-parser.js');
+    const authorSource = require('../scripts/lib/reader-author-source.js');
+    const modelText = require('../scripts/lib/model-text-sanitization.js');
+    const fresh = require('../scripts/lib/fresh-analysis-context.js');
+    const cheerio = require('cheerio');
+    const previousRoot = Config.FILES.freshRewriteRunsDir;
+    Config.FILES.freshRewriteRunsDir = f.deps.rootDir;
+    t.after(() => { Config.FILES.freshRewriteRunsDir = previousRoot; });
+    const id = f.originals[0].arxivId;
+    const canonical = value => Array.isArray(value) ? value.map(canonical)
+        : value && typeof value === 'object'
+            ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+    const makeSource = institution => {
+        const html = '<html><head><meta name="citation_author" content="Original Author">'
+            + `<meta name="citation_author_institution" content="University ${institution}"></head>`
+            + '<body><div class="ltx_authors"><div class="ltx_creator ltx_role_author">'
+            + '<span class="ltx_personname">Original Author</span></div></div><p>'
+            + 'Controlled source measurement. '.repeat(300) + '</p></body></html>';
+        const text = cheerio.load(html).text();
+        return { source: 'html', sourceId: `${id}v1`, text,
+            structuredArtifacts: canonical(deep.bindStructuredArtifactsToText(
+                deep.parseArxivStructuredArtifactsFromHtml(html, `${id}v1`, id), text)),
+            readerAuthors: authorParser.retainAuthorSourceHtml(
+                authorParser.parseArxivReaderAuthors(cheerio.load(html)), html) };
+    };
+    const previousSource = makeSource('A');
+    const currentSource = makeSource('B');
+    assert.equal(previousSource.text, currentSource.text);
+    f.sourceExpectations[id] = { sourceSha256: runner.sha256(currentSource.text),
+        structuredArtifactsSha256: currentSource.structuredArtifacts.payloadSha256 };
+    const prepared = await runner.prepareRewrite({ date: '2026-09-04' }, f.deps);
+    const run = runner.readRegularJson(path.join(prepared.runDir, 'run.json')).value;
+    let localSourceCalls = 0;
+    const savedSource = await fresh.withFreshAnalysisContext({ runId: RUN_ID, runDir: prepared.runDir,
+        sourceExpectations: run.sourceExpectations }, () => fresh.fetchFreshSource(id, async () => {
+        localSourceCalls++;
+        return currentSource;
+    }));
+    assert.equal(localSourceCalls, 1);
+    const source = fresh.readFreshSource(prepared.runDir, id, run);
+    assert.deepEqual(source, savedSource);
+    // 此样例沿用已有非 API 评分的历史记录形状；不冒充完整的现代 API Reader 结果。
+    const paper = require('./valid-analysis-fixture.js').validAnalysisPaper(id, f.originals[0]);
+    paper.sourceSha256 = f.sourceExpectations[id].sourceSha256;
+    paper.analysisManifest.sourceAcquisition = { ...f.sourceExpectations[id] };
+    paper.analysisManifest.contracts.apiReaderArticle = 'beginner-researcher-v3';
+    const setAuthors = details => {
+        paper.apiReaderAuthors = authorParser.resolveVerifiedReaderAuthors(paper, details);
+        paper.analysisManifest.stages.apiReaderArticle = { status: 'complete',
+            structuredArtifactsSha256: f.sourceExpectations[id].structuredArtifactsSha256,
+            readerAuthorIdentitySha256: paper.apiReaderAuthors.identitySha256,
+            readerAuthorsSha256: runner.stableHash(paper.apiReaderAuthors) };
+    };
+    setAuthors(currentSource);
+    const provenance = { contract: runner.FRESHNESS_CONTRACT, runId: RUN_ID,
+        ...f.sourceExpectations[id], sourceSnapshotSha256: savedSource.freshSourceDescriptor.sourceSnapshotSha256,
+        sourceOnly: true, oldGeneratedTextIncluded: false };
+    paper.freshRewriteProvenance = provenance;
+    paper.analysisManifest.freshRewriteProvenance = structuredClone(provenance);
+    const analysisPath = path.join(prepared.runDir, 'analysis.json');
+    const analysis = runner.readRegularJson(analysisPath).value;
+    const savePaper = () => {
+        analysis.papers[0] = paper;
+        fs.writeFileSync(analysisPath, JSON.stringify(analysis));
+    };
+    const dependencies = { ...f.deps, readFreshSource: fresh.readFreshSource,
+        isSuccessfulAnalysisRecord: engine.isSuccessfulAnalysisRecord };
+    assert.equal(engine.isSuccessfulAnalysisRecord(paper), true);
+    assert.equal(modelText.canReuseModelTextInputs(paper, source), true);
+    assert.equal(authorSource.canReuseReaderAuthorInputs(paper, source), true);
+    savePaper();
+    const currentBytes = fs.readFileSync(analysisPath);
+    const normal = runner.rewriteStatus({ runId: RUN_ID }, dependencies);
+    assert.equal(normal.analysisComplete, 1);
+    assert.deepEqual(normal.analysisRemainingIds, [f.originals[1].arxivId]);
+    assert.equal(normal.status, 'prepared');
+    assert.deepEqual(fs.readFileSync(analysisPath), currentBytes);
+    setAuthors(previousSource);
+    assert.equal(engine.isSuccessfulAnalysisRecord(paper), true);
+    assert.equal(authorSource.canReuseReaderAuthorInputs(paper, source), false);
+    savePaper();
+    const staleBytes = fs.readFileSync(analysisPath);
+    const stale = runner.rewriteStatus({ runId: RUN_ID }, dependencies);
+    assert.equal(stale.analysisComplete, 0);
+    assert.deepEqual(stale.analysisRemainingIds, f.originals.map(item => item.arxivId));
+    assert.equal(stale.status, 'prepared');
+    assert.deepEqual(fs.readFileSync(analysisPath), staleBytes);
+    assert.equal(localSourceCalls, 1);
+});

@@ -1400,9 +1400,27 @@ function renderFrozenDailyFilterPrompt(envelope) {
     return utilsApi.loadPrompt(FROZEN_LLM_FILTER_PROMPT_PATH, promptFields(envelope));
 }
 
+// 只恢复明确登记的历史筛选模板，不把其他阶段的归档作为筛选提示。
+const HISTORICAL_FILTER_PROMPT_ARCHIVES = Object.freeze({
+    'e567bf955491c945c2003e043232c8aaa55525113f05bed122166fb7cf390eec':
+        'e8678d07c58b38862dafa5b74a715db667d29db2a4e20664423208cff2f3cd8f'
+});
+
 function dailyFilterPromptMatches(prompt, envelope) {
-    return prompt === renderDailyFilterPrompt(envelope)
-        || prompt === renderFrozenDailyFilterPrompt(envelope);
+    if (prompt === renderDailyFilterPrompt(envelope)
+        || prompt === renderFrozenDailyFilterPrompt(envelope)) return true;
+    const declaredSha = envelope.filter.promptSha256;
+    const archiveSha = HISTORICAL_FILTER_PROMPT_ARCHIVES[declaredSha];
+    if (!archiveSha) return false;
+    const bytes = require('./prompt-history.js').historicalPromptBytesForSha256(archiveSha);
+    if (!bytes) return false;
+    const block = bytes.toString('utf8').match(/^(`{3,}|~{3,})(?:text)?\r?\n([\s\S]*?)\r?\n\1/m);
+    if (!block || sha256(Buffer.from(block[2], 'utf8')) !== declaredSha) return false;
+    const fields = promptFields(envelope);
+    // 单次替换原模板；来源文字中的花括号不再被当作模板字段。
+    const rendered = block[2].replace(/\{(?:title|abstract|categories)\}/g,
+        placeholder => String(fields[placeholder.slice(1, -1)]));
+    return prompt === rendered;
 }
 
 function evaluateConferenceKeywordPrefilter(record, conferenceId, evidenceStatus = 'ready') {

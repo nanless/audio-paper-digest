@@ -521,7 +521,9 @@ function rewriteStatus(options, overrides = {}) {
     const successful = loaded.analysis.papers.filter(paper => {
         if (!deps.isSuccessfulAnalysisRecord(paper)) return false;
         assertFreshSourceRecordMatchesRun(paper, loaded.run, sources.records[paperId(paper)]);
-        return true;
+        const source = deps.readFreshSource(loaded.runDir, paper, loaded.run);
+        return require('./model-text-sanitization.js').canReuseModelTextInputs(paper, source)
+            && require('./reader-author-source.js').canReuseReaderAuthorInputs(paper, source);
     }).map(paperId);
     return { runId: loaded.run.runId, date: loaded.run.date, status: loaded.run.status,
         paperCount: loaded.run.paperIds.length, sourcesComplete: Object.keys(sources.records).length,

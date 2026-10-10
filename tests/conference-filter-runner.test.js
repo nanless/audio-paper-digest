@@ -689,3 +689,78 @@ for (const interruptedStage of ['receipt', 'decision']) {
         });
     }
 }
+
+
+test('旧筛选请求仅按明确登记的原提示归档恢复，并拒绝正文、来源或归档变化', async t => {
+    const service = await serverFixture(t);
+    const f = fixture(t, service.endpoint);
+    await runner.main(args(['--limit', '1']), { files: f.files, env: f.env });
+    const intentFile = onlyJson(path.join(f.dirs.filters, filterId, 'llm-intents'));
+    const originalBytes = fs.readFileSync(intentFile);
+    const original = JSON.parse(originalBytes);
+    const envelope = JSON.parse(Buffer.from(original.envelope.data, 'base64'));
+    const request = JSON.parse(Buffer.from(original.request.data, 'base64'));
+    const archivePath = 'prompts/history/e8678d07c58b38862dafa5b74a715db667d29db2a4e20664423208cff2f3cd8f.md';
+    const declaredSha = 'e567bf955491c945c2003e043232c8aaa55525113f05bed122166fb7cf390eec';
+    const fields = {
+        title: String(envelope.metadataRecord.title || ''),
+        abstract: String(envelope.metadataRecord.abstract || envelope.metadataRecord.summary || ''),
+        categories: filter.conferencePromptCategories(envelope.metadataRecord,
+            envelope.discovery.conference.id).join(', ')
+    };
+    envelope.filter.promptSha256 = declaredSha;
+    request.messages[0].content = utils.loadPrompt(archivePath, fields);
+    function boundIntent(sourceEnvelope, sourceRequest) {
+        const copiedEnvelope = structuredClone(sourceEnvelope);
+        delete copiedEnvelope.requestSha256;
+        copiedEnvelope.requestSha256 = filter.stableHash(copiedEnvelope);
+        const envelopeBytes = Buffer.from(JSON.stringify(copiedEnvelope));
+        const requestBytes = Buffer.from(JSON.stringify(sourceRequest));
+        const intent = { ...original, requestEnvelopeSha256: copiedEnvelope.requestSha256,
+            envelope: { encoding: 'base64', size: envelopeBytes.length,
+                sha256: sha(envelopeBytes), data: envelopeBytes.toString('base64') },
+            request: { encoding: 'base64', size: requestBytes.length,
+                sha256: sha(requestBytes), data: requestBytes.toString('base64') } };
+        delete intent.intentSha256;
+        intent.intentSha256 = filter.stableHash(intent);
+        return intent;
+    }
+    const retained = boundIntent(envelope, request);
+    assert.deepEqual(filter.normalizeLlmIntent(retained), retained);
+    const changedRequest = structuredClone(request);
+    changedRequest.messages[0].content += '改动后的提示';
+    assert.throws(() => filter.normalizeLlmIntent(boundIntent(envelope, changedRequest)),
+        /请求不是其 envelope 绑定的单用户日更筛选提示/);
+    const changedEnvelope = structuredClone(envelope);
+    changedEnvelope.metadataRecord.title += '改动后的论文标题';
+    changedEnvelope.evidence.effectiveMetadataRecordSha256 = filter.stableHash(changedEnvelope.metadataRecord);
+    assert.throws(() => filter.normalizeLlmIntent(boundIntent(changedEnvelope, request)),
+        /请求不是其 envelope 绑定的单用户日更筛选提示/);
+    const unknownEnvelope = structuredClone(envelope);
+    unknownEnvelope.filter.promptSha256 = 'f'.repeat(64);
+    assert.throws(() => filter.normalizeLlmIntent(boundIntent(unknownEnvelope, request)),
+        /请求不是其 envelope 绑定的单用户日更筛选提示/);
+    const otherFamily = structuredClone(envelope);
+    const otherArchive = fs.readFileSync(path.join(__dirname,
+        '../prompts/history/008fe925b5a610501ae5f1c5451e6594909e3a8149137c7bd4c55b49d3b773c3.md'), 'utf8');
+    const otherBlock = otherArchive.match(/^(`{3,}|~{3,})(?:text)?\r?\n([\s\S]*?)\r?\n\1/m)[2];
+    otherFamily.filter.promptSha256 = sha(otherBlock);
+    const otherRequest = structuredClone(request);
+    otherRequest.messages[0].content = otherBlock.replace(/\{(?:title|abstract|categories)\}/g,
+        placeholder => String(fields[placeholder.slice(1, -1)]));
+    assert.throws(() => filter.normalizeLlmIntent(boundIntent(otherFamily, otherRequest)),
+        /请求不是其 envelope 绑定的单用户日更筛选提示/);
+    const readFile = fs.readFileSync;
+    fs.readFileSync = function (filename, ...rest) {
+        const bytes = readFile.call(this, filename, ...rest);
+        return String(filename).endsWith(archivePath) ? bytes.subarray(0, bytes.length - 1) : bytes;
+    };
+    try {
+        assert.throws(() => filter.normalizeLlmIntent(retained),
+            /请求不是其 envelope 绑定的单用户日更筛选提示/);
+    } finally {
+        fs.readFileSync = readFile;
+    }
+    assert.deepEqual(fs.readFileSync(intentFile), originalBytes);
+    assert.equal(service.calls.length, 1);
+});
