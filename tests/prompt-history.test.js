@@ -85,7 +85,7 @@ test('截断的归档不被接受，当作没有这份归档', t => {
     assert.equal(history.historicalPromptBytesForSha256(declared, directory), null,
         '按整文件 SHA 取回了截断内容');
     assert.equal(history.promptBytesForSha256('deepAnalysis', declared, directory), null,
-        'promptBytesForSha256 的兜底把截断内容当成历史提示词返回了');
+        'promptBytesForSha256 在查找历史提示词时返回了截断内容');
     const template = history.promptTemplateSha256(full.toString('utf8'), '');
     assert.equal(history.historicalPromptTemplateBytesForSha256(template, '', directory), null,
         '首块完好的截断文件被模板索引命中');

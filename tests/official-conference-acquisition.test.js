@@ -585,7 +585,7 @@ test('命令行要求显式的来源身份和年份，只用配置的运行时�
 });
 
 
-test('官方目录四种不可变文件短写后均可重新抓取或重放恢复', async t => {
+test('官方目录四种不可变文件未写完整时，重新抓取后仍能读取并核验', async t => {
     for (let failAt = 1; failAt <= 4; failAt += 1) {
         const { outputRoot } = temporaryRoot(t);
         const deps = dependencies(async () => httpResponse(ODYSSEY_FIXTURE, 'text/html'));
@@ -629,7 +629,7 @@ test('PDF及其凭证短写后续跑可恢复且完成状态重新验证字节',
     }
 });
 
-test('官方XHTML目录可封存及离线重放，仍拒绝非HTML内容', async t => {
+test('官方 XHTML 目录保存后无需再次请求即可读取，仍拒绝非 HTML 内容', async t => {
     const { outputRoot } = temporaryRoot(t);
     const result = await acquisition.acquireCatalog({ providerId: 'odyssey-2026', outputRoot, apply: true },
         dependencies(async () => httpResponse(ODYSSEY_FIXTURE, 'application/xhtml+xml; charset=utf-8')));

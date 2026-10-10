@@ -862,7 +862,10 @@ async function runWorkers(items, concurrency, worker, shouldStop = () => false) 
     const runners = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
         while (!shouldStop()) { const index = cursor++; if (index >= items.length) return; results[index] = await worker(items[index], index); }
     });
-    await Promise.all(runners); return results;
+    const settled = await Promise.allSettled(runners);
+    const errors = settled.filter(result => result.status === 'rejected').map(result => result.reason);
+    if (errors.length) throw new AggregateError(errors, '会议任务结束后仍有状态保存或处理错误', { cause: errors[0] });
+    return results;
 }
 
 function assertSourceContinuity(state, shared) {
@@ -944,7 +947,30 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
     const shared = await (deps.prepareShared || prepareShared)(sourceContext, deps, state.createdAt);
     assertSourceContinuity(state, shared);
     const sourceByPaper = new Map(shared.sealed.map(item => [item.paperId, item.proof]));
-    const updateItem = (paperId, expectedStatuses, updater) => deps.engine.updateJsonFileLocked(stateFile, current => {
+    let stopped = false;
+    const stateWriteErrors = new Set();
+    const systemicErrors = [];
+    const isStorageFailure = error => {
+        const codes = new Set(['EIO', 'ENOSPC', 'EDQUOT', 'EROFS', 'EMFILE', 'ENFILE', 'EACCES', 'EPERM']);
+        const seen = new Set();
+        const inspect = value => {
+            if (!value || typeof value !== 'object' || seen.has(value)) return false;
+            seen.add(value);
+            return codes.has(value.code)
+                || (value instanceof AggregateError && value.errors.some(inspect))
+                || ['cause', 'errorDetails', 'error'].some(key => inspect(value[key]));
+        };
+        return inspect(error);
+    };
+    const saveState = operation => {
+        try { return operation(); }
+        catch (error) {
+            stateWriteErrors.add(error);
+            if (isStorageFailure(error)) stopped = true;
+            throw error;
+        }
+    };
+    const updateItem = (paperId, expectedStatuses, updater) => saveState(() => deps.engine.updateJsonFileLocked(stateFile, current => {
         const checked = assertState(current, expected); const currentItem = checked.items[paperId];
         if (!currentItem || !Array.isArray(expectedStatuses) || expectedStatuses.length === 0) {
             throw new Error(`Conference process item CAS is invalid: ${paperId}`);
@@ -962,7 +988,7 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
         next.updatedAt = deps.now(); next.status = 'running'; next.aggregate = null; next.completionReceiptSha256 = null;
         next.generation = checked.generation + 1;
         next.stateSha256 = stateDigest(next); return assertState(next, expected);
-    });
+    }));
     for (const member of context.members) {
         const current = assertState(JSON.parse(fs.readFileSync(stateFile)), expected).items[member.paperId];
         if (current.status === 'complete') continue;
@@ -972,34 +998,40 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
     }
     const pending = context.members.map(member => assertState(JSON.parse(fs.readFileSync(stateFile)), expected).items[member.paperId])
         .filter(item => recovery.eligible(item, deps.now()));
-    let stopped = false;
-    await runWorkers(pending, options.concurrency, async item => {
-        const claimed = updateItem(item.paperId, [item.status], current => ({ ...current,
-            status: 'analyzing', attempts: current.attempts + 1,
-            updatedAt: deps.now() }));
-        if (claimed.items[item.paperId].status === 'complete') return;
-        try {
-            const proof = await (deps.processPaper || processOne)(context, shared, item, deps);
-            updateItem(item.paperId, ['analyzing'], current => ({ ...current, ...proof,
-                status: 'complete', lastError: null, lastFailure: null, reviewRequired: null,
-                retryNotBefore: null, updatedAt: deps.now() }));
-        } catch (error) {
-            const failure = recovery.classifyFailure(error, deps.now());
-            if (failure.systemic) stopped = true;
-            updateItem(item.paperId, ['analyzing'], current => ({ ...current,
-                status: 'analysis_partial', lastError: failure.message, lastFailure: failure,
-                // 标签分配复核是显式的逐篇待定状态，通过复核队列报出，
-                // 而不是报成普通失败。
-                ...(error.tagReview
-                    ? { reviewRequired: { ...error.tagReview, classifiedAt: failure.at } }
-                    : {}),
-                retryNotBefore: new Date(Date.parse(failure.at) + recovery.RETRY_COOLDOWN_MS).toISOString(), updatedAt: deps.now() }));
-            if (failure.systemic) deps.engine.updateJsonFileLocked(stateFile, current => {
-                const next = clone(assertState(current, expected)); next.batchFailure = failure;
-                next.generation += 1; next.updatedAt = deps.now(); next.stateSha256 = stateDigest(next); return next;
-            });
-        }
-    }, () => stopped);
+    try {
+        await runWorkers(pending, options.concurrency, async item => {
+            const claimed = updateItem(item.paperId, [item.status], current => ({ ...current,
+                status: 'analyzing', attempts: current.attempts + 1,
+                updatedAt: deps.now() }));
+            if (claimed.items[item.paperId].status === 'complete') return;
+            try {
+                const proof = await (deps.processPaper || processOne)(context, shared, item, deps);
+                updateItem(item.paperId, ['analyzing'], current => ({ ...current, ...proof,
+                    status: 'complete', lastError: null, lastFailure: null, reviewRequired: null,
+                    retryNotBefore: null, updatedAt: deps.now() }));
+            } catch (error) {
+                if (stateWriteErrors.has(error)) throw error;
+                const failure = recovery.classifyFailure(error, deps.now());
+                if (failure.systemic) { stopped = true; systemicErrors.push(error); }
+                updateItem(item.paperId, ['analyzing'], current => ({ ...current,
+                    status: 'analysis_partial', lastError: failure.message, lastFailure: failure,
+                    // 标签分配复核是显式的逐篇待定状态，通过复核队列报出，
+                    // 而不是报成普通失败。
+                    ...(error.tagReview
+                        ? { reviewRequired: { ...error.tagReview, classifiedAt: failure.at } }
+                        : {}),
+                    retryNotBefore: new Date(Date.parse(failure.at) + recovery.RETRY_COOLDOWN_MS).toISOString(), updatedAt: deps.now() }));
+                if (failure.systemic) saveState(() => deps.engine.updateJsonFileLocked(stateFile, current => {
+                    const next = clone(assertState(current, expected)); next.batchFailure = failure;
+                    next.generation += 1; next.updatedAt = deps.now(); next.stateSha256 = stateDigest(next); return next;
+                }));
+            }
+        }, () => stopped);
+    } catch (error) {
+        const workerErrors = error instanceof AggregateError ? error.errors : [error];
+        throw new AggregateError([...workerErrors, ...systemicErrors],
+            '会议任务已结束，但状态保存或处理失败', { cause: workerErrors[0] });
+    }
     state = assertState(JSON.parse(fs.readFileSync(stateFile)), expected);
     let incomplete = Object.values(state.items).filter(item => item.status !== 'complete');
     if (incomplete.length) {

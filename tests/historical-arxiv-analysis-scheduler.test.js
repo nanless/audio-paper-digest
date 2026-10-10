@@ -866,3 +866,67 @@ for (const companionFailure of [false, true]) {
         if (!companionFailure) assert.equal(items[f.groups[1].paperId].status, 'complete');
     });
 }
+
+test('历史调度先发生状态写入错误后，仍保留已开始同伴随后发生的认证错误', async t => {
+    const f = stopFixture(t);
+    const analyzed = [];
+    const writeFailure = Object.assign(new Error('测试模拟调度状态写入失败'), { code: 'ENOSPC' });
+    const accountFailure = Object.assign(new Error('测试模拟同伴认证失败'), {
+        code: 'LLM_ACCOUNT_AUTH_ERROR', scope: 'run', retryable: false
+    });
+    let releaseSecond;
+    const secondStarted = new Promise(resolve => { releaseSecond = resolve; });
+    let releaseWriteFailure;
+    const writeFailed = new Promise(resolve => { releaseWriteFailure = resolve; });
+    let injected = false;
+    let completedSaveCalls = 0;
+    let caught;
+    const originalWrite = fs.writeFileSync;
+    t.after(() => { fs.writeFileSync = originalWrite; });
+    fs.writeFileSync = (target, content, ...options) => {
+        if (typeof target === 'string' && path.dirname(target) === f.files.historicalAnalysisSchedulerDir
+            && path.basename(target).startsWith(`.${CROSSWALK}.json.`)) {
+            const next = JSON.parse(content);
+            if (next.items[f.groups[0].paperId].status === 'complete') {
+                completedSaveCalls += 1;
+                if (!injected) {
+                    injected = true;
+                    releaseWriteFailure();
+                    throw writeFailure;
+                }
+            }
+        }
+        return originalWrite(target, content, ...options);
+    };
+    try {
+        await scheduler.runHistoricalScheduler({ ...f.options, concurrency: 2 }, {
+            ...f.deps,
+            analyzeRun: async ({ runId }) => {
+                analyzed.push(runId);
+                if (runId === f.groups[0].runId) {
+                    await secondStarted;
+                    const complete = { runId, status: 'complete', storageSealed: true,
+                        currentContractComplete: true };
+                    f.runs.set(runId, complete);
+                    return complete;
+                }
+                releaseSecond();
+                await writeFailed;
+                throw accountFailure;
+            }
+        });
+    } catch (error) { caught = error; }
+    finally { fs.writeFileSync = originalWrite; }
+    assert.equal(injected, true);
+    assert.ok(caught instanceof AggregateError);
+    assert.equal(caught.cause, writeFailure, '首个停止原因仍为原写入异常');
+    assert.ok(caught.errors.includes(writeFailure));
+    assert.ok(caught.errors.includes(accountFailure), '已经开始的同伴后来发生的原认证异常也必须保留');
+    assert.equal(caught.errors.length, 2, '同一异常对象只记录一次');
+    assert.equal(writeFailure.code, 'ENOSPC');
+    assert.equal(accountFailure.code, 'LLM_ACCOUNT_AUTH_ERROR');
+    assert.equal(completedSaveCalls, 1);
+    assert.deepEqual(analyzed, f.groups.slice(0, 2).map(group => group.runId));
+    assert.equal(f.checkpoint().items[f.groups[0].paperId].status, 'sources_ready');
+    assert.equal(f.checkpoint().items[f.groups[2].paperId].status, 'sources_ready');
+});

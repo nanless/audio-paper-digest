@@ -2117,3 +2117,74 @@ test('arXiv 来源校验错误按明确错误码分类，不依赖新旧说明�
         code: 'UNKNOWN_INTEGRITY'
     }), now).category, 'paper');
 });
+
+test('会议保存完成状态失败时停止派发，并等待已经开始的论文结束', async t => {
+    for (const companionAuthenticationFailure of [false, true]) {
+        await t.test(companionAuthenticationFailure ? '保留同伴认证错误和带 cause 的写入错误' : '保留原写入错误和同伴成功结果', async t => {
+            const f = fixture(t, 3);
+            const originalWrite = fs.writeFileSync;
+            t.after(() => { fs.writeFileSync = originalWrite; });
+            const storageCause = Object.assign(new Error('测试模拟状态写入失败'), {
+                code: companionAuthenticationFailure ? 'EIO' : 'ENOSPC'
+            });
+            const writeFailure = companionAuthenticationFailure
+                ? new Error('测试模拟保存失败包装错误', { cause: storageCause }) : storageCause;
+            const authenticationFailure = Object.assign(new Error('HTTP 401 Authentication failed'), {
+                code: 'AUTH_TEST_ONLY'
+            });
+            const failedPaperId = f.members[companionAuthenticationFailure ? 1 : 0].paperId;
+            let writesAttempted = 0;
+            let injected = false;
+            fs.writeFileSync = (target, bytes, ...args) => {
+                if (typeof target === 'string' && path.basename(target).startsWith('.state.json.')
+                    && target.startsWith(f.files.conferenceProcessDir + path.sep)) {
+                    let next;
+                    try { next = JSON.parse(bytes); } catch {}
+                    if (next?.items?.[failedPaperId]?.status === 'complete') {
+                        writesAttempted += 1;
+                        if (!injected) { injected = true; throw writeFailure; }
+                    }
+                }
+                return originalWrite(target, bytes, ...args);
+            };
+            const analyzed = [];
+            let releaseStarted;
+            const bothStarted = new Promise(resolve => { releaseStarted = resolve; });
+            let caught;
+            try {
+                await processApi.runConferenceProcess({ apply: true, catalogName: 'catalog.json',
+                    reportName: 'report.json', filterId: f.authority.filterId, concurrency: 2 }, {
+                    ...f.deps,
+                    processPaper: async (_context, _shared, item) => {
+                        analyzed.push(item.paperId);
+                        if (analyzed.length === 2) releaseStarted();
+                        await bothStarted;
+                        if (companionAuthenticationFailure && item.paperId === f.members[0].paperId) {
+                            throw authenticationFailure;
+                        }
+                        return success(item);
+                    }
+                });
+            } catch (error) { caught = error; }
+            finally { fs.writeFileSync = originalWrite; }
+            assert.equal(injected, true);
+            assert.ok(caught instanceof AggregateError);
+            assert.ok(caught.errors.includes(writeFailure), '返回的错误集合必须保留实际写入异常对象');
+            assert.equal(writesAttempted, 1, '不得再保存一次成功状态来掩盖原写入错误');
+            assert.equal(storageCause.code, companionAuthenticationFailure ? 'EIO' : 'ENOSPC');
+            assert.deepEqual(analyzed, f.members.slice(0, 2).map(member => member.paperId));
+            const stateFiles = fs.readdirSync(f.files.conferenceProcessDir);
+            const state = JSON.parse(fs.readFileSync(path.join(f.files.conferenceProcessDir, stateFiles[0], 'state.json')));
+            assert.equal(state.items[failedPaperId].status, 'analyzing');
+            assert.equal(state.items[f.members[2].paperId].status, 'source_sealed');
+            if (companionAuthenticationFailure) {
+                assert.equal(writeFailure.cause, storageCause);
+                assert.ok(caught.errors.includes(authenticationFailure));
+                assert.equal(state.items[f.members[0].paperId].lastFailure.category, 'authentication');
+            } else {
+                assert.equal(caught.cause, writeFailure);
+                assert.equal(state.items[f.members[1].paperId].status, 'complete');
+            }
+        });
+    }
+});

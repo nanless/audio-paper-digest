@@ -37,7 +37,6 @@ from path_config import (  # noqa: E402
     xiaohongshu_markdown_path,
     xiaohongshu_oneliner_cache_path,
     validate_date_component,
-    _lock_reclaimable,
 )
 
 
@@ -348,18 +347,37 @@ class PathConfigTest(unittest.TestCase):
             self.assertFalse(lock_path.exists())
 
     def test_heartbeat_keeps_remote_lease_fresh(self):
-        import time
+        import threading
+        import path_config
+        renewed = threading.Event()
+        snapshots = []
+        original_renew = path_config._lock_renew
+
+        def observe_renewal(snapshot):
+            current = original_renew(snapshot)
+            snapshots.append((snapshot, current))
+            renewed.set()
+            return current
+
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / 'active.json'
+            lock_path = Path(f'{target}.lock')
             with mock.patch('path_config.socket.gethostname', return_value='owner-host'):
-                with file_lock(target, timeout_seconds=1, stale_seconds=0.15):
-                    lock_path = Path(f'{target}.lock')
-                    first = json.loads((lock_path / 'owner.json').read_text(encoding='utf-8'))
-                    time.sleep(0.35)
-                    second = json.loads((lock_path / 'owner.json').read_text(encoding='utf-8'))
-                    self.assertNotEqual(first['heartbeatAt'], second['heartbeatAt'])
-                    with mock.patch('path_config.socket.gethostname', return_value='observer-host'):
-                        self.assertFalse(_lock_reclaimable(lock_path, 0.15))
+                with mock.patch.object(path_config, '_lock_renew', side_effect=observe_renewal):
+                    with file_lock(target, timeout_seconds=1, stale_seconds=0.15):
+                        self.assertTrue(renewed.wait(5), '等待实际锁心跳完成')
+                        original, current = snapshots[0]
+                        self.assertNotEqual(original['owner']['record']['heartbeatAt'],
+                                            current['owner']['record']['heartbeatAt'])
+                        with mock.patch('path_config.socket.gethostname', return_value='observer-host'):
+                            with self.assertRaises(TimeoutError):
+                                with file_lock(target, timeout_seconds=0.2, stale_seconds=0.15):
+                                    self.fail('持有人的心跳仍在续租时，竞争方不得取得文件锁')
+                        self.assertEqual(path_config._lock_identity(lock_path.lstat()), current['identity'])
+                        self.assertTrue(all(item['owner']['record']['token']
+                                            == original['owner']['record']['token']
+                                            for _, item in snapshots))
+            self.assertFalse(lock_path.exists())
 
 
 class FileLockRaceTest(unittest.TestCase):

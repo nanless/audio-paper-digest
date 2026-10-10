@@ -1379,11 +1379,21 @@ async function analyzePaperWithRetry(paper, options = {}) {
             onAttempt(attempt, maxRetries, paper);
         }
 
+        let checkpointFailed = false;
+        let checkpointFailure;
         try {
             const analyzePaperDeep = analyzeFn || require('./deep-analyzer.js').analyzePaperDeep;
             if (onCheckpoint) {
                 Object.defineProperty(paper, ANALYSIS_CHECKPOINT_CALLBACK, {
-                    value: onCheckpoint,
+                    value: checkpoint => {
+                        if (checkpointFailed) throw checkpointFailure;
+                        try { return onCheckpoint(checkpoint); }
+                        catch (error) {
+                            checkpointFailed = true;
+                            checkpointFailure = error;
+                            throw error;
+                        }
+                    },
                     configurable: true,
                     enumerable: false
                 });
@@ -1394,6 +1404,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
             } finally {
                 delete paper[ANALYSIS_CHECKPOINT_CALLBACK];
             }
+            if (checkpointFailed) throw checkpointFailure;
             if (analyzed && typeof analyzed === 'object') {
                 Object.assign(paper, analyzed);
             }
@@ -1492,6 +1503,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
                 }
             }
         } catch (error) {
+            if (checkpointFailed) throw checkpointFailure;
             lastError = error.message;
             lastErrorCode = error.code || null;
             lastErrorRetryable = error.retryable !== false;

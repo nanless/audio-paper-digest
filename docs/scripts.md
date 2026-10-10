@@ -44,7 +44,7 @@ npm run workspace:role -- status
 | `node scripts/reanalyze-selected.js ID...` | 重分析指定集合；统计口径实现见 `scripts/lib/reanalysis-helpers.js` |
 | `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | 从绑定来源批量刷新评分和 Reader，图片只为本次调用临时准备 |
 | `npm run validate:data` | 只读核验当前数据 |
-| `npm run keyword:recall` | 按金标准重跑关键词预筛 |
+| `npm run keyword:recall` | 读取人工判定样例和历史入选记录，核对当前关键词预筛结果是否符合人工判定，并统计历史入选记录的漏选与误放 |
 | `npm run backfill` | 补录近期论文元数据，不执行历史全文分析或页面发布；来源抓取失败时停止 |
 | `npm run paper:rethink` | 历史独立维护工具，博客已取消集成，读者无需启动；见[历史说明](paper-rethink-companion.md) |
 

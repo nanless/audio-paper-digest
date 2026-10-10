@@ -2362,3 +2362,59 @@ describe('选中重分析的统计', () => {
         assert.strictEqual(data.stats.selectedReanalyzeFailed, 0);
     });
 });
+
+
+describe('阶段记录保存失败必须停止批次', () => {
+    for (const swallowed of [false, true]) {
+        it(`首次保存异常传回调用方且不重试下一篇${swallowed ? '，分析器自行捕获后仍不得掩盖' : ''}`, async t => {
+            const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-checkpoint-write-failure-'));
+            const filename = path.join(directory, 'results.json');
+            const papers = [{ arxivId: '2610.98761', title: '第一篇' },
+                { arxivId: '2610.98762', title: '第二篇' }];
+            const originalWrite = fs.writeFileSync;
+            const failure = Object.assign(new Error('测试中模拟阶段记录保存失败'), { code: 'ENOSPC' });
+            const calls = [];
+            let writes = 0;
+            let retries = 0;
+            fs.writeFileSync = (target, content, ...options) => {
+                if (typeof target === 'string' && path.dirname(target) === directory
+                    && path.basename(target).startsWith('.results.json.')) {
+                    writes++;
+                    if (writes === 1) throw failure;
+                }
+                return originalWrite(target, content, ...options);
+            };
+            t.after(() => { fs.writeFileSync = originalWrite; fs.rmSync(directory, { recursive: true, force: true }); });
+            try {
+                await assert.rejects(analyzeBatch(papers, {
+                    concurrency: 1, maxRetries: 2, retryDelayMs: 0,
+                    checkpointFilePath: filename,
+                    onAttempt: attempt => { if (attempt) retries++; },
+                    analyzeFn: async paper => {
+                        calls.push(paper.arxivId);
+                        const save = paper[Symbol.for('audio-paper-digest.analysisCheckpointCallback')];
+                        if (!swallowed) save(paper);
+                        else {
+                            try { save(paper); }
+                            catch {
+                                try { save(paper); } catch {}
+                            }
+                        }
+                        return { ...validAnalyzedResult(), arxivId: paper.arxivId };
+                    },
+                }), error => {
+                    assert.equal(error.cause, failure, '批次错误必须保留首次保存异常对象');
+                    assert.equal(error.code, 'ENOSPC');
+                    return true;
+                });
+            } finally {
+                fs.writeFileSync = originalWrite;
+            }
+            assert.deepEqual(calls, [papers[0].arxivId]);
+            assert.equal(writes, 1, '首次保存失败后不得再次写入掩盖错误');
+            assert.equal(retries, 0);
+            assert.equal(Object.hasOwn(papers[0], Symbol.for('audio-paper-digest.analysisCheckpointCallback')), false);
+            assert.equal(fs.existsSync(filename), false);
+        });
+    }
+});

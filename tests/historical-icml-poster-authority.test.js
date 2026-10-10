@@ -105,12 +105,12 @@ test('tau-Voice 使用一个冻结的摘要小节、精确的子页面 URL 和�
     assert.equal(binding.summary.pageContentSha256, f.summary.contentSha256);
     assert.equal(binding.summary.section.childUrl, '/audio-paper-digest-blog/posts/2026-05-23-tau-voice');
     assert.ok(binding.summary.section.endByte > binding.summary.section.startByte);
-    assert.equal(JSON.stringify(binding).includes('Source:'), false, 'only section coordinates and SHA may survive');
+    assert.equal(JSON.stringify(binding).includes('Source:'), false, '对应记录不含带 Source: 标记的原文');
     assert.equal(api.replayDailyPageBinding({ binding, authorityHandle: handle, blogRoot: f.blogRoot,
         page: f.tau, summaryPage: f.summary }).bindingSha256, binding.bindingSha256);
 });
 
-test('摘要兜底拒绝缺失、重复或含多个 poster 的子页面小节', t => {
+test('借助汇总页定位 poster 时，拒绝没有对应小节或同一小节含多个 poster', t => {
     const f = fixture(t); const handle = api.loadPosterAuthority({ snapshotFile: f.snapshotFile });
     assert.throws(() => api.bindDailyPage({ authorityHandle: handle, blogRoot: f.blogRoot, page: f.tau }), /no poster and no frozen daily summary/);
     const summaryFile = path.join(f.blogRoot, f.summary.path);

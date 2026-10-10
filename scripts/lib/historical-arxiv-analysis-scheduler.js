@@ -363,6 +363,7 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
     const candidates = selectCandidates(effectiveGroups, checkpoint.items,
         { stage: options.stage, queue, maximum, now: deps.now() });
     let runStopError = null;
+    const observedRunErrors = new Set();
     const stateWriteErrors = new Set();
     const saveState = operation => {
         try { return operation(); }
@@ -375,12 +376,14 @@ async function runHistoricalSchedulerUnlocked(options, deps, lockedFilename = nu
     const saveItem = (...args) => saveState(() => updateItem(...args));
     const saveRecovery = (...args) => saveState(() => updateItemRecovery(...args));
     const observeRunStop = error => {
-        if (error?.scope === 'run') runStopError ||= error;
+        if (error?.scope === 'run') { observedRunErrors.add(error); runStopError ||= error; }
     };
     const finishWorkers = (settled, label) => {
         const failures = settled.filter(item => item.status === 'rejected').map(item => item.reason);
         if (failures.length) {
-            const error = new AggregateError(runStopError ? [runStopError, ...failures] : failures, label);
+            const errors = [...new Set([...(runStopError ? [runStopError] : []),
+                ...observedRunErrors, ...failures])];
+            const error = new AggregateError(errors, label);
             if (runStopError) Object.assign(error, { cause: runStopError, code: runStopError.code, scope: runStopError.scope });
             throw error;
         }
