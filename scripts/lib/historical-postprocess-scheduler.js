@@ -1,7 +1,6 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const fs = require('node:fs');
 const path = require('node:path');
 const fresh = require('./fresh-rewrite-run.js');
 const pageStaging = require('./historical-page-staging.js');

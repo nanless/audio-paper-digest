@@ -10,7 +10,6 @@ setupScriptLogging(__filename);
  * 3. LLM 筛选语音/音频相关论文（统一使用 PAPER_ANALYZER_* 环境变量）
  */
 
-const fs = require('fs');
 const path = require('path');
 const cheerio = require('cheerio');
 const { buildFilterInputSha256 } = require('./lib/filter-input-contract.js');

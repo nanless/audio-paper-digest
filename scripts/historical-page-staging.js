@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 'use strict';
 
-const crypto = require('node:crypto');
 const { requireExternalRuntime } = require('./env-loader.js');
 
 const USAGE = '--dry-run|--apply --crosswalk UUID --analysis-run UUID [--run-id UUID] [--limit pilot|N]';

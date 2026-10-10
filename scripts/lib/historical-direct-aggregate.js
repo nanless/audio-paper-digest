@@ -5,7 +5,6 @@
 // 也不请求网络或模型。
 
 const crypto = require('node:crypto');
-const fs = require('node:fs');
 const path = require('node:path');
 const planApi = require('./historical-direct-rewrite-plan.js');
 const runnerApi = require('./historical-direct-rewrite-runner.js');

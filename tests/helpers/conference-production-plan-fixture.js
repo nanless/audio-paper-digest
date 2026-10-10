@@ -132,4 +132,4 @@ function loadOriginalConferenceApis() {
         execution: loadedApis['conference-execution'] };
 }
 
-module.exports = { productionPlanFixture, NOW, sha256, loadOriginalConferenceApis, ORIGINAL_CONFERENCE_SOURCE_PINS };
+module.exports = { productionPlanFixture, sha256, loadOriginalConferenceApis };
