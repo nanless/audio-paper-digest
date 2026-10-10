@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""给单个私有历史包做语义/多模态审查，失败能接着跑。"""
+"""检查单批历史页面的正文及图片，保留进度以便失败后继续。"""
 
 import argparse
 import concurrent.futures
@@ -28,17 +28,17 @@ def stable(value):
 def read_json(path):
     value = json.loads(Path(path).read_text(encoding='utf-8'))
     if not isinstance(value, dict):
-        raise ValueError(f'JSON object required: {path}')
+        raise ValueError(f'JSON 文件的顶层必须是对象： {path}')
     return value
 
 
 def atomic_json(path, value, *, dir_mode=0o700):
     """原子写检查点 JSON：临时文件 + fsync + 改名。
 
-    dir_mode 只作用于新建的父目录链，默认 0700，已存在的目录不动，默认行为
-    与加参数前一致。这里刻意保留本地实现而不并到 path_config 的
-    atomic_write_json：检查点必须固定 0600（公共 helper 对新建文件只沿用
-    umask 权限），临时文件也要用 O_EXCL 独占创建。
+    dir_mode 默认 0700，仅用于新建的直接父目录，并受 umask 限制；
+    缺失的更高层父目录使用默认创建权限，已有目录不改权限。
+    这里保留专用保存函数：检查点文件固定为 0600，临时文件须独占创建，
+    不直接沿用 path_config.atomic_write_json 的文件权限处理。
     """
     target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True, mode=dir_mode)
@@ -80,14 +80,14 @@ def checkpoint(root, identity, unit, index, input_sha, protocol, runner):
                 or not isinstance(value.get('inputSha256'), str)
                 or not isinstance(value.get('protocol'), dict)
                 or declared != stable(body)):
-            raise ValueError(f'stale semantic review checkpoint: {candidate}')
+            raise ValueError(f'正文或图片审查检查点的格式、身份或 SHA 不符： {candidate}')
         if (value.get('inputSha256') == input_sha
                 and value['result'].get('passed') is True):
             if candidate == legacy and not target.exists():
                 atomic_json(target, value)
             return value['result']
         if value.get('inputSha256') == input_sha:
-            raise ValueError('canonical semantic checkpoint may only contain a passing result')
+            raise ValueError('正式审查检查点只能保存通过结果')
     attempt_prefix = f'{target.stem}.attempt-'
     # 失败的尝试只留作审计，不当作永久的否定缓存。
     # 每次调用最多做一次审查请求（传输层自带有限重试），
@@ -107,19 +107,19 @@ def checkpoint(root, identity, unit, index, input_sha, protocol, runner):
             run_error = exc
         result = {'passed': False, 'issues': [{
             'severity': 'error', 'type': 'infrastructure',
-            'description': f'review worker failed: {type(exc).__name__}: {str(exc)[:500]}'
+            'description': f'页面审查执行失败： {type(exc).__name__}: {str(exc)[:500]}'
         }]}
     issues = result.get('issues') if isinstance(result, dict) else None
     if not isinstance(issues, list) or not isinstance(result.get('passed'), bool):
         result = {'passed': False, 'issues': [{
             'severity': 'error', 'type': 'protocol',
-            'description': 'review worker returned an invalid result'
+            'description': '页面审查结果缺少有效的 issues 列表或 passed 布尔值'
         }]}
     if blocking(result['issues']):
         result['passed'] = False
     if result['passed'] is False and not blocking(result['issues']):
         result['issues'].append({'severity': 'error', 'type': 'protocol',
-                                 'description': 'reviewer returned false without a blocking issue'})
+                                 'description': '页面审查未通过，但结果没有列出阻断问题'})
     body = {'contract': CHECKPOINT_CONTRACT, 'version': 1, 'identity': identity,
             'unit': unit, 'index': index, 'inputSha256': input_sha,
             'protocol': protocol, 'result': result}
@@ -130,7 +130,7 @@ def checkpoint(root, identity, unit, index, input_sha, protocol, runner):
         attempt_path = target.with_name(f'{attempt_prefix}{max(attempt_numbers, default=0) + 1:03d}.json')
         if attempt_path.exists():
             if read_json(attempt_path) != checkpoint_record:
-                raise ValueError('semantic failure attempt collision')
+                raise ValueError('已有同序号失败记录与本次失败记录不同')
         else:
             atomic_json(attempt_path, checkpoint_record)
     if run_error is not None:
@@ -142,11 +142,11 @@ def review_page(module, page, staged_repo, checkpoint_root, protocol):
     relative = page['path']
     target = (staged_repo / relative).resolve()
     if not str(target).startswith(str(staged_repo) + os.sep):
-        raise ValueError('page escaped staged repository')
+        raise ValueError('待审页面路径超出临时博客目录')
     raw = target.read_bytes()
     actual_sha = hashlib.sha256(raw).hexdigest()
     if actual_sha != page['sha256']:
-        raise ValueError(f'page SHA drifted: {relative}')
+        raise ValueError(f'待审页面 SHA 与请求记录不同： {relative}')
     page_checkpoint = checkpoint_path(checkpoint_root, relative, 'page', 0, actual_sha)
     legacy_page_checkpoint = checkpoint_path(checkpoint_root, relative, 'page', 0)
     for candidate in (page_checkpoint, legacy_page_checkpoint):
@@ -160,7 +160,7 @@ def review_page(module, page, staged_repo, checkpoint_root, protocol):
                 or not isinstance(value.get('inputSha256'), str)
                 or not isinstance(value.get('protocol'), dict)
                 or declared != stable(body)):
-            raise ValueError(f'stale page review checkpoint: {candidate}')
+            raise ValueError(f'页面审查检查点的格式、身份或 SHA 不符： {candidate}')
         if (value.get('inputSha256') == actual_sha
                 and value.get('result', {}).get('passed') is True):
             if candidate == legacy_page_checkpoint and not page_checkpoint.exists():
@@ -220,18 +220,18 @@ def validate_semantic_protocol(value):
                    ('endpointSha256', 'implementationSha256', 'promptSha256'))
             or not isinstance(value.get('budgets'), dict)
             or set(value['budgets']) != budget_fields):
-        raise ValueError('semantic review protocol schema is invalid')
+        raise ValueError('页面内容审查规则的格式、版本、模型或预算字段无效')
     body = dict(value)
     declared = body.pop('protocolSha256')
     if declared != stable(body):
-        raise ValueError('semantic review protocol self-SHA drifted')
+        raise ValueError('页面内容审查规则的自校验 SHA 不符')
     budgets = value['budgets']
     if (not 4000 <= budgets['chunkChars'] <= 16000
             or not 1000 <= budgets['maxTokens'] <= 16000
             or budgets['timeoutSeconds'] != 120 or budgets['maxRetries'] != 5
             or budgets['temperature'] != 0.1 or budgets['imageMaxBytes'] != 8 * 1024 * 1024
             or not 1 <= budgets['pageConcurrency'] <= 5):
-        raise ValueError('semantic review protocol budget is invalid')
+        raise ValueError('页面内容审查的分块长度、输出预算、超时、重试、温度、图片大小或并发设置无效')
     return value
 
 
@@ -278,10 +278,10 @@ def run(request_path, output_path, checkpoint_root, concurrency):
             or request['version'] != 1 or not SHA_RE.fullmatch(request['generationSha256'])
             or not SHA_RE.fullmatch(request['reviewProtocolFingerprint'])
             or stable(request['files']) != request['fileSetSha256']):
-        raise ValueError('semantic review request is invalid')
+        raise ValueError('页面内容审查请求的字段、格式、版本或 SHA 无效')
     validate_semantic_protocol(request['semanticProtocol'])
     if request['semanticProtocol']['budgets']['pageConcurrency'] != concurrency:
-        raise ValueError('semantic review concurrency differs from signed protocol')
+        raise ValueError('页面审查并发数与请求中已绑定的规则不同')
     blog_repo = Path(request['blogRepo']).resolve(strict=True)
     bundle_root = Path(request['bundleRoot']).resolve(strict=True)
     output = Path(output_path).resolve()
@@ -289,7 +289,7 @@ def run(request_path, output_path, checkpoint_root, concurrency):
     transaction_root = Path(request_path).resolve().parent
     if not str(output).startswith(str(transaction_root) + os.sep) \
             or not str(checkpoints).startswith(str(transaction_root) + os.sep):
-        raise ValueError('semantic review outputs escaped publication transaction')
+        raise ValueError('审查结果或检查点目录超出本次发布目录')
     pages = [item for item in request['files'] if item['path'].endswith('.md')]
     with tempfile.TemporaryDirectory(prefix='historical-direct-semantic-review-') as temporary:
         staged = Path(temporary) / 'site'
@@ -298,10 +298,10 @@ def run(request_path, output_path, checkpoint_root, concurrency):
         for item in request['files']:
             source = (bundle_root / item['path']).resolve(strict=True)
             if not str(source).startswith(str(bundle_root) + os.sep):
-                raise ValueError('bundle file escaped generation root')
+                raise ValueError('待审文件路径超出本次页面生成目录')
             raw = source.read_bytes()
             if hashlib.sha256(raw).hexdigest() != item['sha256']:
-                raise ValueError(f'bundle SHA drifted: {item["path"]}')
+                raise ValueError(f'待审文件 SHA 与请求记录不同： {item["path"]}')
             target = staged / item['path']
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(raw)
@@ -336,7 +336,7 @@ def main(argv=None):
     parser.add_argument('--concurrency', required=True, type=int)
     args = parser.parse_args(argv)
     if not 1 <= args.concurrency <= 5:
-        parser.error('--concurrency must be 1-5')
+        parser.error('--concurrency 必须为 1 到 5')
     result = run(args.request, args.output, args.checkpoint_dir, args.concurrency)
     print(json.dumps({'status': 'passed' if result['passed'] else 'blocked',
                       'semanticReviewSha256': result['semanticReviewSha256'],

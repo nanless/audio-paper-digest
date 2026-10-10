@@ -1004,7 +1004,7 @@ describe('validate-data-files', () => {
         assert.match(issues, /最新分析尝试仍为失败/);
     });
 
-    it('只对带 bounded-v1 标记的新结果强制实验表格硬契约', () => {
+    it('只对带 bounded-v1 标记的结果检查实验表格数据行数量限制', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-digest-table-contract-'));
         const resultFile = path.join(dir, 'deep-analysis-result.json');
         const rows = Array.from({ length: 13 }, (_, index) => `| Model ${index + 1} | ${index} |`).join('\n');

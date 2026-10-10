@@ -1,7 +1,8 @@
 'use strict';
 
-// 用户批准的保留本地输入的确定性路由计划。这里有意只做计划与登记边界：
-// 它不调用 LLM、不抓 arXiv；历史正文只用于重核身份链接，不写入计划，也不改动 crosswalk。
+// 按用户批准的规则，为保留的本地输入生成来源处理计划及登记记录。
+// 计划生成不调用模型、不抓取 arXiv；历史正文只用于重新核验论文身份链接，
+// 不写入计划，也不修改页面与来源对应表。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -29,7 +30,7 @@ const UNPROJECTED_REPORT_PREFIX = 'direct-rewrite-unprojected-';
 
 class HistoricalDirectRewritePlanError extends Error {
     constructor(message) {
-        super(`Historical direct rewrite plan rejected: ${message}`);
+        super(`历史直接重写计划检查未通过： ${message}`);
         this.name = 'HistoricalDirectRewritePlanError';
         this.code = 'HISTORICAL_DIRECT_REWRITE_PLAN_INTEGRITY';
     }
@@ -52,12 +53,12 @@ function exact(value, fields, label) {
     if (!plain(value)) fail(`${label} 必须是对象`);
     const actual = Object.keys(value).sort(); const expected = [...fields].sort();
     if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
-        fail(`${label} has unknown or missing fields`);
+        fail(`${label} 有未知字段或缺少必填字段`);
     }
 }
 
 function deterministicRunId(catalogFileSha256, paperId) {
-    if (!validSha(catalogFileSha256) || typeof paperId !== 'string' || !paperId) fail('catalog SHA 和 paper ID 都是必需的');
+    if (!validSha(catalogFileSha256) || typeof paperId !== 'string' || !paperId) fail('来源目录 SHA 和论文编号都是必需的');
     const bytes = Buffer.from(sha256(`${CONTRACT}\0${catalogFileSha256}\0${paperId}`).slice(0, 32), 'hex');
     bytes[6] = (bytes[6] & 0x0f) | 0x40; bytes[8] = (bytes[8] & 0x3f) | 0x80;
     const hex = bytes.toString('hex');
@@ -65,12 +66,12 @@ function deterministicRunId(catalogFileSha256, paperId) {
 }
 
 function normalizeCurrentCatalog(value) {
-    // 当前 v5 契约由生产者负责，这里不要再维护一套更弱的校验器：旧 v3 采集文件
-    // 用了同样的主版本号，却允许保留的 arXiv 正文和 PDF 输入。
+    // 当前 v5 来源目录直接使用生成该目录的模块核验，避免另设一套要求较低的检查。
+    // 旧 v3 采集文件使用了相同主版本号，但允许保留的 arXiv 正文和 PDF 输入。
     try {
         return require('./historical-direct-rewrite-input-catalog.js').normalizeCatalog(value);
     } catch (error) {
-        fail(`current scoped v5 local source catalog is invalid: ${error.message}`);
+        fail(`当前带范围限制的 v5 本地来源目录未通过检查： ${error.message}`);
     }
 }
 
@@ -78,7 +79,7 @@ function normalizeCatalog(value) { return normalizeCurrentCatalog(value).entries
 
 function normalizeInventory(value) {
     if (!plain(value) || !Array.isArray(value.pages) || !validSha(value.pageSetSha256)
-        || !validSha(value.ledgerSha256)) fail('历史清单契约无效');
+        || !validSha(value.ledgerSha256)) fail('历史页面清单的格式或 SHA 字段无效');
     const seen = new Set();
     const pages = value.pages.filter(page => page?.kind === 'paper').map((page, index) => {
         if (!PAGE_KEY_RE.test(String(page.pageId || '')) || typeof page.path !== 'string' || !page.path
@@ -134,12 +135,12 @@ function arxivPageProjections(inventory, knownPaperIds, primaryBindings = []) {
             || page.scope.type !== 'daily' || !['conflict', 'multiple'].includes(page.identityHints?.status)
             || candidate.length !== 1 || stableHash(candidate[0].sources) !== stableHash(binding.candidateSources)
             || !knownPaperIds.has(paperId)) {
-            fail(`${binding.pageKey} 的日更主 arXiv 绑定与冻结清单或 catalog 条目不一致`);
+            fail(`${binding.pageKey} 的日更主 arXiv 绑定与冻结清单或来源目录条目不一致`);
         }
         const historicalArxivLink = { arxivId: binding.arxivId,
             canonicalUrl: `https://arxiv.org/abs/${binding.arxivId}`, hintSources: binding.candidateSources.slice() };
         const values = byPaperId.get(paperId) || [];
-        if (values.some(item => item.pageKey === page.pageKey)) fail(`${page.pageKey} 有重复的 arXiv 投影`);
+        if (values.some(item => item.pageKey === page.pageKey)) fail(`${page.pageKey} 重复对应同一篇 arXiv 论文`);
         values.push({ pageKey: page.pageKey, pagePath: page.pagePath, primaryUrl: page.primaryUrl,
             cohortDate: page.cohortDate, scope: page.scope, pageContentSha256: page.pageContentSha256,
             mapping: dailyPrimaryArxiv.MAPPING, historicalArxivLink });
@@ -185,16 +186,16 @@ function conferenceSourceDisclosure(paperId, sources) {
 function normalizeConferenceSourceDisclosure(value, paperId, sources) {
     const expected = conferenceSourceDisclosure(paperId, sources);
     if (expected === null) {
-        if (value !== undefined && value !== null) fail('conference source disclosure drifted');
+        if (value !== undefined && value !== null) fail('会议来源版本说明与来源记录不同');
         return null;
     }
-    if (value === undefined || value === null) fail('conference source disclosure is required');
-    if (stableHash(value) !== stableHash(expected)) fail('conference source disclosure drifted');
+    if (value === undefined || value === null) fail('必须提供会议来源版本说明');
+    if (stableHash(value) !== stableHash(expected)) fail('会议来源版本说明与来源记录不同');
     return expected;
 }
 
 function normalizeHistoricalArxivLink(value, expectedArxivId) {
-    exact(value, ['arxivId', 'canonicalUrl', 'hintSources'], 'frozen historical arXiv link');
+    exact(value, ['arxivId', 'canonicalUrl', 'hintSources'], '已保存的历史 arXiv 链接');
     if (!ARXIV_ID_RE.test(String(value.arxivId || '')) || value.arxivId !== expectedArxivId
         || value.canonicalUrl !== `https://arxiv.org/abs/${expectedArxivId}` || !Array.isArray(value.hintSources)
         || !value.hintSources.length || value.hintSources.some(source => typeof source !== 'string' || !source)
@@ -209,10 +210,10 @@ function normalizedConferenceProjections(value, { catalogFileSha256, inventory }
     const artifact = conferencePageMappingsApi.normalizeConferencePageMappingRecord(value);
     if (artifact.catalogFileSha256 !== catalogFileSha256 || artifact.inventory.ledgerSha256 !== inventory.ledgerSha256
         || artifact.inventory.pageSetSha256 !== inventory.pageSetSha256) {
-        fail('会议页面投影产物绑定到了另一个 catalog 或清单');
+        fail('会议论文与页面对应记录使用了另一份来源目录或页面清单');
     }
     if (artifact.unmatchedPages.length) {
-        fail(`会议页面投影产物留下 ${artifact.unmatchedPages.length} 个历史会议页面未解析`);
+        fail(`会议论文与页面对应记录中仍有 ${artifact.unmatchedPages.length} 个历史会议页面未找到对应论文`);
     }
     return artifact;
 }
@@ -255,12 +256,12 @@ function coverageSummary(projectedPages, uncoveredPages) {
 }
 
 function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, conferencePageProjections, blogRoot = require('../config.js').PUBLISH_CONFIG.blogRepo } = {}) {
-    if (!validSha(catalogFileSha256)) fail('catalog 文件 SHA 是必需的');
+    if (!validSha(catalogFileSha256)) fail('来源目录文件 SHA 是必需的');
     const currentCatalog = normalizeCurrentCatalog(catalog); const entries = currentCatalog.entries;
     const history = normalizeInventory(inventory);
     if (currentCatalog.scopeBinding.inventoryLedgerSha256 !== history.ledgerSha256
         || currentCatalog.scopeBinding.inventoryPageSetSha256 !== history.pageSetSha256) {
-        fail('当前作用域 v5 catalog 属于另一份冻结清单');
+        fail('当前带范围限制的 v5 来源目录属于另一份已保存的页面清单');
     }
     const conferenceArtifact = normalizedConferenceProjections(conferencePageProjections, {
         catalogFileSha256, inventory: history
@@ -275,8 +276,8 @@ function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, confere
         const projected = isArxiv ? arxivByPaperId.get(entry.paperId) || []
             : conferenceByPaperId.get(entry.paperId)?.pages || [];
         if (!projected.length) {
-            // 没有冻结历史页面投影的保留本地素材属于审查项，不是新来源请求、crosswalk
-            // 改动或 LLM 运行的候选。它留在 `queue` 之外。
+            // 没有对应已保存历史页面的本地素材只列入待审查报告。
+            // 不为它抓取新来源、修改页面与来源对应表或调用模型，也不列入 `queue`。
             unprojectedCatalogEntries.push({ paperId: entry.paperId, route: route.kind,
                 reason: 'no-frozen-historical-page-projection' });
             continue;
@@ -288,7 +289,7 @@ function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, confere
             historicalArxivLink: page.historicalArxivLink ? clone(page.historicalArxivLink) : null }))
             .sort((left, right) => left.pageKey.localeCompare(right.pageKey));
         for (const page of pages) {
-            if (allPageKeys.has(page.pageKey)) fail(`${page.pageKey} 被多篇规范论文投影`);
+            if (allPageKeys.has(page.pageKey)) fail(`${page.pageKey} 对应了多篇不同论文`);
             allPageKeys.add(page.pageKey);
         }
         queue.push({ paperId: entry.paperId, runId: deterministicRunId(catalogFileSha256, entry.paperId),
@@ -302,13 +303,13 @@ function buildDirectRewritePlan({ catalog, catalogFileSha256, inventory, confere
     const requiredConferencePages = history.pages.filter(page => page.scope.type === 'conference');
     if (coveredConferencePages.size !== requiredConferencePages.length
         || requiredConferencePages.some(page => !coveredConferencePages.has(page.pageKey))) {
-        fail('会议页面投影产物未覆盖完整的冻结会议页面集合');
+        fail('会议论文与页面对应记录未覆盖全部已保存的会议页面');
     }
     const projectedPages = queue.flatMap(item => item.pages.map(page => ({ paperId: item.paperId,
         runId: item.runId, route: item.route.kind, ...page }))).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
     const projectedArxivPages = projectedPages.filter(page => page.route === 'arxiv-fresh-fetch').length;
     if (projectedArxivPages !== currentCatalog.scopeBinding.arxivPageCount) {
-        fail('直接 arXiv 投影数与当前作用域 catalog 不一致');
+        fail('直接安排获取来源的 arXiv 页面数与当前范围的来源目录不一致');
     }
     const uncoveredFrozenPaperPages = history.pages.filter(page => !allPageKeys.has(page.pageKey))
         .map(uncoveredPageRecord).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
@@ -337,7 +338,7 @@ function normalizePlan(value) {
         'dailyIcmlPosterBindings', 'dailyIcmlPosterBindingSetSha256', 'icmlPosterAuthoritySha256',
         'dailyIcmlPosterRoutableBindings', 'dailyIcmlPosterRoutableBindingSetSha256',
         'projectedPageSetSha256', 'uncoveredFrozenPaperPages', 'uncoveredFrozenPaperPageSetSha256',
-        'paperPageCoverage', 'planSha256'], 'direct rewrite plan');
+        'paperPageCoverage', 'planSha256'], '直接重写计划');
     if (value.contract !== CONTRACT || value.version !== VERSION || !validSha(value.catalogFileSha256)
         || !plain(value.inventory) || !validSha(value.inventory.ledgerSha256) || !validSha(value.inventory.pageSetSha256)
         || !validSha(value.conferenceProjectionArtifactSha256) || !Array.isArray(value.queue)
@@ -350,7 +351,7 @@ function normalizePlan(value) {
         || !Array.isArray(value.unprojectedCatalogEntries) || !validSha(value.unprojectedCatalogEntrySetSha256)
         || !validSha(value.projectedPageSetSha256) || !Array.isArray(value.uncoveredFrozenPaperPages)
         || !validSha(value.uncoveredFrozenPaperPageSetSha256) || !plain(value.paperPageCoverage)
-        || !validSha(value.planSha256)) fail('直接重写计划 envelope 无效');
+        || !validSha(value.planSha256)) fail('直接重写计划的完整记录格式或 SHA 字段无效');
     const paperIds = new Set(); const pageKeys = new Set();
     const queue = value.queue.map((item, index) => {
         exact(item, ['paperId', 'runId', 'route', 'pageKeys', 'pages', 'projectionSha256'], `queue[${index}]`);
@@ -366,18 +367,18 @@ function normalizePlan(value) {
         exact(route, expectedRoute === 'arxiv-fresh-fetch'
             ? ['kind', 'arxivId', 'writerInputs', 'freshFetch', 'failurePolicy']
             : ['kind', 'writerInputs', ...(hasSourceDisclosure ? ['sourceDisclosure'] : []), 'failurePolicy'],
-        'direct rewrite route');
+        '直接重写的来源处理方式');
         if (route.kind !== expectedRoute || !Array.isArray(route.writerInputs)
-            || route.failurePolicy?.crosswalkPrerequisite !== false) fail('直接重写路由格式不正确');
+            || route.failurePolicy?.crosswalkPrerequisite !== false) fail('直接重写的来源处理方式格式不正确');
         if (expectedRoute === 'arxiv-fresh-fetch' && (route.writerInputs.length !== 0
             || route.freshFetch?.authority !== 'official-arxiv'
             || route.freshFetch?.imagePersistence !== 'ephemeral-only'
             || route.failurePolicy?.kind !== 'crosswalk-arxiv-fresh-fetch-failure-only')) {
-            fail('arXiv 直接路由必须要求新来源，并排除本地写作输入');
+            fail('arXiv 重写必须重新抓取官方来源，不能使用本地旧材料写作');
         }
         if (expectedRoute === 'conference-local-pdf' && (!route.writerInputs.length
             || route.failurePolicy?.kind !== 'local-conference-source-failure')) {
-            fail('会议直接路由要求保留的本地 PDF 输入');
+            fail('会议重写必须使用保留的本地 PDF 输入');
         }
         if (expectedRoute === 'conference-local-pdf') {
             route.writerInputs = route.writerInputs.map(source => {
@@ -386,12 +387,12 @@ function normalizePlan(value) {
             });
             if (route.writerInputs.some(source =>
                 !inputCatalogApi.directEligibleConferenceSource(source, item.paperId))) {
-                fail('会议写作来源不符合直接路由条件');
+                fail('会议写作来源不符合直接使用本地 PDF 的条件');
             }
             const sourceDisclosure = normalizeConferenceSourceDisclosure(route.sourceDisclosure,
                 item.paperId, route.writerInputs);
             if (sourceDisclosure) route.sourceDisclosure = sourceDisclosure;
-            else if (hasSourceDisclosure) fail('普通会议路由不得携带来源披露字段');
+            else if (hasSourceDisclosure) fail('普通会议来源处理方式不得携带预印本版本说明字段');
         }
         const pages = item.pages.map((page, pageIndex) => {
             exact(page, ['pageKey', 'pagePath', 'primaryUrl', 'cohortDate', 'scope', 'pageContentSha256', 'mapping',
@@ -403,10 +404,10 @@ function normalizePlan(value) {
                 || !validSha(page.pageContentSha256) || !['frozen-single-arxiv-identity-hint', dailyPrimaryArxiv.MAPPING,
                     'retained-local-title-fingerprint', icmlPosterApi.DIRECT_PAGE_MAPPING,
                     icmlPosterApi.SUMMARY_SECTION_MAPPING].includes(page.mapping)
-                || pageKeys.has(page.pageKey)) fail('直接重写投影页面格式不正确或有重复');
+                || pageKeys.has(page.pageKey)) fail('直接重写的论文与页面对应记录格式不正确或有重复');
             const historicalArxivLink = route.kind === 'arxiv-fresh-fetch'
                 ? normalizeHistoricalArxivLink(page.historicalArxivLink, route.arxivId)
-                : page.historicalArxivLink === null ? null : fail('会议投影不能携带 arXiv 链接');
+                : page.historicalArxivLink === null ? null : fail('会议论文对应的页面记录不能携带 arXiv 链接');
             const arxivMapping = ['frozen-single-arxiv-identity-hint', dailyPrimaryArxiv.MAPPING].includes(page.mapping);
             if ((route.kind === 'arxiv-fresh-fetch') !== arxivMapping
                 || [icmlPosterApi.DIRECT_PAGE_MAPPING, icmlPosterApi.SUMMARY_SECTION_MAPPING].includes(page.mapping)
@@ -414,12 +415,12 @@ function normalizePlan(value) {
                         || !item.paperId.startsWith('conference:icml:2026:'))
                 || page.mapping === 'retained-local-title-fingerprint' && page.scope.type !== 'conference'
                 || arxivMapping && page.scope.type !== 'daily') {
-                fail('直接重写路由与页面映射的类型不一致');
+                fail('直接重写的来源处理方式与论文、页面对应关系的类型不一致');
             }
             pageKeys.add(page.pageKey); return { ...clone(page), historicalArxivLink };
         }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
         if (item.pageKeys.join('\0') !== pages.map(page => page.pageKey).join('\0')
-            || stableHash(pages) !== item.projectionSha256) fail('直接重写页面投影已变化');
+            || stableHash(pages) !== item.projectionSha256) fail('直接重写的页面对应记录或其 SHA 已变化');
         return { paperId: item.paperId, runId: item.runId, route, pageKeys: item.pageKeys.slice(), pages,
             projectionSha256: item.projectionSha256 };
     }).sort((left, right) => left.paperId.localeCompare(right.paperId));
@@ -432,13 +433,13 @@ function normalizePlan(value) {
             : entry.paperId?.startsWith('conference:') ? 'conference-local-pdf' : null;
         if (!expectedRoute || entry.route !== expectedRoute || entry.reason !== 'no-frozen-historical-page-projection'
             || paperIds.has(entry.paperId) || unprojectedPaperIds.has(entry.paperId)) {
-            fail('未投影的 catalog 条目格式不正确，或与直接队列重叠');
+            fail('没有对应历史页面的来源目录条目格式不正确，或已列入直接重写队列');
         }
         unprojectedPaperIds.add(entry.paperId); return clone(entry);
     }).sort((left, right) => left.paperId.localeCompare(right.paperId));
     if (value.unprojectedCatalogEntries.some((entry, index) => entry.paperId !== unprojectedCatalogEntries[index].paperId)
         || stableHash(unprojectedCatalogEntries) !== value.unprojectedCatalogEntrySetSha256) {
-        fail('未投影的 catalog 条目已变化');
+        fail('没有对应历史页面的来源目录条目或其排序、SHA 已变化');
     }
     const projectedPages = value.projectedPages.map((page, index) => {
         exact(page, ['paperId', 'runId', 'route', 'pageKey', 'pagePath', 'primaryUrl', 'cohortDate', 'scope',
@@ -446,11 +447,11 @@ function normalizePlan(value) {
         if (!PAGE_KEY_RE.test(page.pageKey) || !['arxiv-fresh-fetch', 'conference-local-pdf'].includes(page.route)
             || (page.route === 'arxiv-fresh-fetch' && !page.paperId.startsWith('arxiv:'))
             || (page.route === 'conference-local-pdf' && !page.paperId.startsWith('conference:'))) {
-            fail('直接投影页面格式不正确');
+            fail('直接重写的论文与页面对应记录格式不正确');
         }
         const expectedArxivId = page.paperId.startsWith('arxiv:') ? page.paperId.slice(6) : null;
         if (expectedArxivId) normalizeHistoricalArxivLink(page.historicalArxivLink, expectedArxivId);
-        else if (page.historicalArxivLink !== null) fail('会议投影页面不能携带 arXiv 链接');
+        else if (page.historicalArxivLink !== null) fail('会议论文对应的页面记录不能携带 arXiv 链接');
         return clone(page);
     }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
     const expectedProjected = queue.flatMap(item => item.pages.map(page => ({ paperId: item.paperId,
@@ -472,7 +473,7 @@ function normalizePlan(value) {
                 || page.pageContentSha256 !== binding.pageContentSha256
                 || page.historicalArxivLink?.arxivId !== binding.arxivId
                 || stableHash(page.historicalArxivLink?.hintSources) !== stableHash(binding.candidateSources);
-        })) fail('日更主 arXiv 绑定的投影已变化');
+        })) fail('日更主要 arXiv 论文与页面的对应记录已变化');
     const icmlPageKeys = new Set(); const dailyIcmlPosterBindings = value.dailyIcmlPosterBindings.map((binding, index) => {
         let normalized;
         try { normalized = icmlPosterApi.normalizeDailyPageBinding(binding); }
@@ -490,11 +491,11 @@ function normalizePlan(value) {
         value.dailyIcmlPosterRoutableBindings.map((binding, index) => {
             let normalized;
             try { normalized = icmlPosterApi.normalizeDailyPageBinding(binding); }
-            catch (error) { fail(`日更 ICML 可路由 poster 绑定 ${index} 无效：${error.message}`); }
+            catch (error) { fail(`日更 ICML 可安排重写的 poster 对应记录 ${index} 无效：${error.message}`); }
             const sealed = allIcmlBindingsByPage.get(normalized.page.pageKey);
             if (!sealed || stableHash(sealed) !== stableHash(normalized)
                 || routableIcmlPageKeys.has(normalized.page.pageKey)) {
-                fail('日更 ICML 可路由 poster 绑定不是已封存绑定的唯一子集');
+                fail('日更 ICML 可安排重写的 poster 对应记录有重复，或不属于已保存的对应记录');
             }
             routableIcmlPageKeys.add(normalized.page.pageKey); return normalized;
         }).sort((left, right) => left.page.pageKey.localeCompare(right.page.pageKey));
@@ -512,7 +513,7 @@ function normalizePlan(value) {
             return !page || page.paperId !== `conference:icml:2026:openreview-forum-id:${binding.poster.forumId}`
                 || page.pagePath !== binding.page.pagePath || page.pageContentSha256 !== binding.page.pageContentSha256
                 || page.mapping !== binding.mapping;
-        })) fail('日更 ICML poster 绑定的投影已变化');
+        })) fail('日更 ICML poster 与页面的对应记录已变化');
     const uncoveredPageKeys = new Set();
     const uncoveredFrozenPaperPages = value.uncoveredFrozenPaperPages.map((page, index) => {
         exact(page, ['pageKey', 'pagePath', 'primaryUrl', 'cohortDate', 'scope', 'pageContentSha256',
@@ -522,7 +523,7 @@ function normalizePlan(value) {
             || typeof page.cohortDate !== 'string' || !plain(page.scope) || typeof page.scope.type !== 'string'
             || typeof page.scope.key !== 'string' || !validSha(page.pageContentSha256)
             || !IDENTITY_HINT_STATUSES.has(page.identityHintStatus) || page.reason !== 'no-direct-source-route') {
-            fail('未覆盖的冻结论文页面格式不正确、重复，或已被投影');
+            fail('没有安排重写的已保存论文页面格式不正确、重复，或已列入页面对应记录');
         }
         uncoveredPageKeys.add(page.pageKey); return clone(page);
     }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
@@ -534,7 +535,7 @@ function normalizePlan(value) {
         || stableHash(projectedPages) !== stableHash(expectedProjected)
         || stableHash(uncoveredFrozenPaperPages) !== value.uncoveredFrozenPaperPageSetSha256
         || stableHash(value.paperPageCoverage) !== stableHash(expectedCoverage)) {
-        fail('direct rewrite plan queue/projection/coverage binding drifted');
+        fail('直接重写计划的队列、页面对应记录、覆盖统计或其 SHA 已变化');
     }
     const body = { contract: CONTRACT, version: VERSION, catalogFileSha256: value.catalogFileSha256,
         inventory: clone(value.inventory), conferenceProjectionArtifactSha256: value.conferenceProjectionArtifactSha256,
@@ -553,7 +554,7 @@ function normalizePlan(value) {
 }
 
 function normalizedGeneration(value) {
-    if (!Number.isSafeInteger(value) || value < 1 || value > 999999999) fail('arXiv 新失败代次无效');
+    if (!Number.isSafeInteger(value) || value < 1 || value > 999999999) fail('arXiv 新抓取失败记录的来源获取序号无效');
     return value;
 }
 
@@ -561,7 +562,7 @@ function normalizedObservedAt(value) {
     const observedAt = value === undefined ? new Date().toISOString() : value;
     const parsed = new Date(observedAt);
     if (typeof observedAt !== 'string' || !Number.isFinite(parsed.getTime()) || parsed.toISOString() !== observedAt) {
-        fail('arXiv 新失败的 observedAt 必须是 ISO 时间戳');
+        fail('arXiv 新抓取失败记录的 observedAt 必须是 ISO 时间戳');
     }
     return observedAt;
 }
@@ -577,7 +578,7 @@ function normalizedFailure(error) {
 }
 
 function handoffPageBindings(item) {
-    if (!item || item.route?.kind !== 'arxiv-fresh-fetch') fail('arXiv 新失败交接需要 arXiv 路由');
+    if (!item || item.route?.kind !== 'arxiv-fresh-fetch') fail('arXiv 新抓取失败记录要求该论文采用重新抓取官方来源的处理方式');
     return item.pages.map(page => ({ pageKey: page.pageKey, pagePath: page.pagePath,
         pageContentSha256: page.pageContentSha256, primaryUrl: page.primaryUrl,
         cohortDate: page.cohortDate, scope: clone(page.scope), mapping: page.mapping,
@@ -587,7 +588,7 @@ function handoffPageBindings(item) {
 
 function buildArxivFreshFailureHandoff({ plan, paperId, generation, error, observedAt } = {}) {
     const normalized = normalizePlan(plan); const item = normalized.queue.find(entry => entry.paperId === paperId);
-    if (!item || item.route.kind !== 'arxiv-fresh-fetch') fail('arXiv 新失败交接需要一篇已规划的 arXiv 论文');
+    if (!item || item.route.kind !== 'arxiv-fresh-fetch') fail('arXiv 新抓取失败记录要求论文已列入计划的 arXiv 抓取队列');
     const normalizedGenerationValue = normalizedGeneration(generation); const failure = normalizedFailure(error);
     const pageBindings = handoffPageBindings(item);
     const primaryPages = new Set(pageBindings.filter(page => page.mapping === dailyPrimaryArxiv.MAPPING)
@@ -612,7 +613,7 @@ function normalizeArxivFreshFailureHandoff(value) {
     const primaryVersion = value?.contract === PRIMARY_ARXIV_HANDOFF_CONTRACT && value.version === 2;
     exact(value, ['contract', 'version', 'handoffKey', 'planSha256', 'catalogFileSha256', 'inventory', 'paperId',
         'runId', 'route', 'arxivId', 'generation', 'failure', 'pageBindings', 'pageBindingSetSha256', 'observedAt',
-        'handoffSha256', ...(primaryVersion ? ['dailyPrimaryArxivBindings'] : [])], 'arXiv fresh failure handoff');
+        'handoffSha256', ...(primaryVersion ? ['dailyPrimaryArxivBindings'] : [])], 'arXiv 新抓取失败记录');
     if ((!primaryVersion && (value.contract !== ARXIV_FRESH_FAILURE_HANDOFF_CONTRACT || value.version !== ARXIV_FRESH_FAILURE_HANDOFF_VERSION))
         || !validSha(value.handoffKey) || !validSha(value.planSha256) || !validSha(value.catalogFileSha256)
         || !plain(value.inventory) || !validSha(value.inventory.ledgerSha256) || !validSha(value.inventory.pageSetSha256)
@@ -620,36 +621,36 @@ function normalizeArxivFreshFailureHandoff(value) {
         || typeof value.runId !== 'string' || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(value.runId)
         || value.route !== 'arxiv-fresh-fetch' || !Array.isArray(value.pageBindings) || !value.pageBindings.length
         || !validSha(value.pageBindingSetSha256) || !validSha(value.handoffSha256)) {
-        fail('arXiv 新失败交接 envelope 无效');
+        fail('arXiv 新抓取失败记录的完整格式或 SHA 字段无效');
     }
     const generation = normalizedGeneration(value.generation); const observedAt = normalizedObservedAt(value.observedAt);
-    exact(value.failure, ['kind', 'errorName', 'errorCode', 'messageSha256'], 'arXiv fresh failure evidence');
+    exact(value.failure, ['kind', 'errorName', 'errorCode', 'messageSha256'], 'arXiv 新抓取失败证据');
     if (value.failure.kind !== 'fresh-arxiv-acquisition-failed'
         || typeof value.failure.errorName !== 'string' || !/^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(value.failure.errorName)
         || !(value.failure.errorCode === null || (typeof value.failure.errorCode === 'string'
             && /^[A-Za-z][A-Za-z0-9_.-]{0,159}$/.test(value.failure.errorCode)))
-        || !validSha(value.failure.messageSha256)) fail('arXiv 新失败证据格式不正确');
+        || !validSha(value.failure.messageSha256)) fail('arXiv 新抓取失败记录的错误类型、名称、代码或消息 SHA 格式无效');
     const seenPages = new Set(); const pageBindings = value.pageBindings.map((page, index) => {
         exact(page, ['pageKey', 'pagePath', 'pageContentSha256', 'primaryUrl', 'cohortDate', 'scope', 'mapping',
-            'historicalArxivLink'], `arXiv fresh failure pageBindings[${index}]`);
+            'historicalArxivLink'], `arXiv 新抓取失败记录的页面对应项 [${index}]`);
         if (!PAGE_KEY_RE.test(page.pageKey) || typeof page.pagePath !== 'string' || !page.pagePath
             || !validSha(page.pageContentSha256) || !(page.primaryUrl === null || typeof page.primaryUrl === 'string')
             || typeof page.cohortDate !== 'string' || !plain(page.scope) || typeof page.scope.type !== 'string'
             || typeof page.scope.key !== 'string' || !['frozen-single-arxiv-identity-hint',
                 ...(primaryVersion ? [dailyPrimaryArxiv.MAPPING] : [])].includes(page.mapping)
-            || seenPages.has(page.pageKey)) fail('arXiv 新失败的页面绑定格式不正确或有重复');
+            || seenPages.has(page.pageKey)) fail('arXiv 新抓取失败记录的页面对应项格式无效或重复');
         seenPages.add(page.pageKey);
         return { pageKey: page.pageKey, pagePath: page.pagePath, pageContentSha256: page.pageContentSha256,
             primaryUrl: page.primaryUrl, cohortDate: page.cohortDate, scope: clone(page.scope), mapping: page.mapping,
             historicalArxivLink: normalizeHistoricalArxivLink(page.historicalArxivLink, value.arxivId) };
     }).sort((left, right) => left.pageKey.localeCompare(right.pageKey));
     if (value.pageBindings.some((page, index) => page.pageKey !== pageBindings[index].pageKey)
-        || stableHash(pageBindings) !== value.pageBindingSetSha256) fail('arXiv 新失败的页面绑定已变化');
+        || stableHash(pageBindings) !== value.pageBindingSetSha256) fail('arXiv 新抓取失败记录的页面对应集合或其 SHA 已变化');
     let primaryFields = {};
     if (primaryVersion) {
         const pages = pageBindings.filter(page => page.mapping === dailyPrimaryArxiv.MAPPING);
         if (!pages.length || !Array.isArray(value.dailyPrimaryArxivBindings)
-            || value.dailyPrimaryArxivBindings.length !== pages.length) fail('主 arXiv 交接缺少完整页面绑定');
+            || value.dailyPrimaryArxivBindings.length !== pages.length) fail('主 arXiv 新抓取失败记录缺少完整页面对应项');
         const bindings = value.dailyPrimaryArxivBindings.map(binding => dailyPrimaryArxiv.normalize(binding));
         for (const [index, binding] of bindings.entries()) {
             const page = pages[index];
@@ -657,7 +658,7 @@ function normalizeArxivFreshFailureHandoff(value) {
                 || binding.pageContentSha256 !== page.pageContentSha256 || page.scope.type !== 'daily'
                 || binding.arxivId !== value.arxivId
                 || stableHash(binding.candidateSources) !== stableHash(page.historicalArxivLink.hintSources)) {
-                fail('主 arXiv 交接绑定与页面、来源身份或候选来源不一致');
+                fail('主 arXiv 新抓取失败记录与页面、来源身份或候选来源不一致');
             }
         }
         primaryFields = { dailyPrimaryArxivBindings: bindings };
@@ -666,38 +667,38 @@ function normalizeArxivFreshFailureHandoff(value) {
         catalogFileSha256: value.catalogFileSha256, inventory: clone(value.inventory), paperId: value.paperId,
         runId: value.runId, arxivId: value.arxivId, generation, failure: clone(value.failure), pageBindings,
         pageBindingSetSha256: value.pageBindingSetSha256 };
-    if (stableHash(deterministic) !== value.handoffKey) fail('arXiv 新失败交接的 key 已变化');
+    if (stableHash(deterministic) !== value.handoffKey) fail('arXiv 新抓取失败记录的 key 与内容计算结果不同');
     const body = { contract: value.contract, version: value.version, ...primaryFields, handoffKey: value.handoffKey,
         planSha256: value.planSha256, catalogFileSha256: value.catalogFileSha256, inventory: clone(value.inventory),
         paperId: value.paperId, runId: value.runId, route: value.route, arxivId: value.arxivId, generation,
         failure: clone(value.failure), pageBindings, pageBindingSetSha256: value.pageBindingSetSha256, observedAt };
-    if (stableHash(body) !== value.handoffSha256) fail('arXiv 新失败交接的自校验 SHA 已变化');
+    if (stableHash(body) !== value.handoffSha256) fail('arXiv 新抓取失败记录的自校验 SHA 与内容不同');
     return { ...body, handoffSha256: value.handoffSha256 };
 }
 
 function arxivFreshFailureHandoffName(handoff) {
     const normalized = normalizeArxivFreshFailureHandoff(handoff);
     const name = `${ARXIV_FRESH_FAILURE_HANDOFF_PREFIX}${normalized.arxivId}-g${String(normalized.generation).padStart(6, '0')}-${normalized.handoffKey.slice(0, 24)}.json`;
-    if (!SAFE_NAME_RE.test(name)) fail('arXiv fresh failure handoff filename is unsafe');
+    if (!SAFE_NAME_RE.test(name)) fail('arXiv 新抓取失败记录文件名不安全');
     return name;
 }
 
 function readArxivFreshFailureHandoff({ root, handoffName } = {}) {
     if (!SAFE_NAME_RE.test(String(handoffName || '')) || !handoffName.startsWith(ARXIV_FRESH_FAILURE_HANDOFF_PREFIX)) {
-        fail('arXiv fresh failure handoff name is unsafe');
+        fail('arXiv 新抓取失败记录名称不安全');
     }
-    const directory = conferencePageMappingsApi.safeDirectory(root, 'arXiv fresh failure handoff root');
+    const directory = conferencePageMappingsApi.safeDirectory(root, 'arXiv 新抓取失败记录目录');
     const filename = path.resolve(directory, handoffName);
-    if (path.dirname(filename) !== directory) fail('arXiv 新失败交接超出其 root');
-    const loaded = conferencePageMappingsApi.readStableJson(filename, 'arXiv fresh failure handoff');
+    if (path.dirname(filename) !== directory) fail('arXiv 新抓取失败记录文件超出指定目录');
+    const loaded = conferencePageMappingsApi.readStableJson(filename, 'arXiv 新抓取失败记录');
     const handoff = normalizeArxivFreshFailureHandoff(loaded.value);
-    if (!loaded.bytes.equals(prettyBytes(handoff))) fail('arXiv 新失败交接的字节不规范');
+    if (!loaded.bytes.equals(prettyBytes(handoff))) fail('arXiv 新抓取失败记录的文件字节不符合固定 JSON 保存格式');
     return { filename: fs.realpathSync(filename), fileSha256: loaded.fileSha256, handoff };
 }
 
 function writeArxivFreshFailureHandoff({ root, plan, paperId, generation, error, observedAt } = {}) {
     const handoff = buildArxivFreshFailureHandoff({ plan, paperId, generation, error, observedAt });
-    const directory = conferencePageMappingsApi.safeDirectory(root, 'arXiv fresh failure handoff root', true);
+    const directory = conferencePageMappingsApi.safeDirectory(root, 'arXiv 新抓取失败记录目录', true);
     const handoffName = arxivFreshFailureHandoffName(handoff); const filename = path.join(directory, handoffName);
     const bytes = prettyBytes(handoff); let fd;
     try {
@@ -710,17 +711,17 @@ function writeArxivFreshFailureHandoff({ root, plan, paperId, generation, error,
         const existing = readArxivFreshFailureHandoff({ root: directory, handoffName });
         const expected = { ...handoff }; delete expected.observedAt; delete expected.handoffSha256;
         const actual = { ...existing.handoff }; delete actual.observedAt; delete actual.handoffSha256;
-        if (stableHash(actual) !== stableHash(expected)) fail('拒绝覆盖内容不同的 arXiv 新失败交接');
+        if (stableHash(actual) !== stableHash(expected)) fail('拒绝覆盖内容不同的 arXiv 新抓取失败记录');
         return { status: 'recovered', filename: existing.filename, handoffName, fileSha256: existing.fileSha256,
             handoff: existing.handoff };
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
 
 function writePlan({ root, outputName, plan } = {}) {
-    if (!SAFE_NAME_RE.test(String(outputName || ''))) fail('plan output name is unsafe');
+    if (!SAFE_NAME_RE.test(String(outputName || ''))) fail('计划输出文件名不安全');
     const normalized = normalizePlan(plan); const directory = conferencePageMappingsApi.safeDirectory
-        ? conferencePageMappingsApi.safeDirectory(root, 'direct rewrite plan root', true)
-        : (() => { if (!path.isAbsolute(root)) fail('直接重写计划 root 必须是绝对路径'); fs.mkdirSync(root, { recursive: true, mode: 0o700 }); return root; })();
+        ? conferencePageMappingsApi.safeDirectory(root, '直接重写计划目录', true)
+        : (() => { if (!path.isAbsolute(root)) fail('直接重写计划目录必须是绝对路径'); fs.mkdirSync(root, { recursive: true, mode: 0o700 }); return root; })();
     const filename = path.join(directory, outputName); const bytes = prettyBytes(normalized); let fd;
     try {
         fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL
@@ -729,7 +730,7 @@ function writePlan({ root, outputName, plan } = {}) {
         return { status: 'created', filename, plan: normalized };
     } catch (error) {
         if (error.code !== 'EEXIST') throw error;
-        if (!conferencePageMappingsApi.readStableFile(filename, 'existing direct rewrite plan').bytes.equals(bytes)) {
+        if (!conferencePageMappingsApi.readStableFile(filename, '已保存的直接重写计划').bytes.equals(bytes)) {
             fail(`拒绝覆盖内容不同的直接重写计划：${outputName}`);
         }
         return { status: 'recovered', filename, plan: normalized };
@@ -747,55 +748,55 @@ function buildUnprojectedCatalogReport({ plan } = {}) {
 
 function normalizeUnprojectedCatalogReport(value) {
     exact(value, ['contract', 'version', 'planSha256', 'catalogFileSha256', 'inventory', 'entries', 'entrySetSha256',
-        'excludedOperations', 'reportSha256'], 'unprojected direct rewrite catalog report');
+        'excludedOperations', 'reportSha256'], '没有对应历史页面的来源目录报告');
     if (value.contract !== UNPROJECTED_REPORT_CONTRACT || value.version !== UNPROJECTED_REPORT_VERSION
         || !validSha(value.planSha256) || !validSha(value.catalogFileSha256) || !plain(value.inventory)
         || !validSha(value.inventory.ledgerSha256) || !validSha(value.inventory.pageSetSha256)
         || !Array.isArray(value.entries) || !validSha(value.entrySetSha256) || !validSha(value.reportSha256)
         || !Array.isArray(value.excludedOperations)
         || value.excludedOperations.join('\0') !== ['fresh-arxiv-acquisition', 'crosswalk', 'llm-analysis'].join('\0')) {
-        fail('未投影直接重写 catalog 报告的 envelope 无效');
+        fail('没有对应历史页面的来源目录报告完整格式或 SHA 字段无效');
     }
     const paperIds = new Set(); const entries = value.entries.map((entry, index) => {
-        exact(entry, ['paperId', 'route', 'reason'], `unprojected direct rewrite catalog entries[${index}]`);
+        exact(entry, ['paperId', 'route', 'reason'], `没有对应历史页面的来源目录报告条目 [${index}]`);
         const expectedRoute = entry.paperId?.startsWith('arxiv:') ? 'arxiv-fresh-fetch'
             : entry.paperId?.startsWith('conference:') ? 'conference-local-pdf' : null;
         if (!expectedRoute || entry.route !== expectedRoute || entry.reason !== 'no-frozen-historical-page-projection'
-            || paperIds.has(entry.paperId)) fail('未投影直接重写 catalog 报告的条目无效');
+            || paperIds.has(entry.paperId)) fail('没有对应历史页面的来源目录报告的条目无效');
         paperIds.add(entry.paperId); return clone(entry);
     }).sort((left, right) => left.paperId.localeCompare(right.paperId));
     if (value.entries.some((entry, index) => entry.paperId !== entries[index].paperId)
-        || stableHash(entries) !== value.entrySetSha256) fail('未投影直接重写 catalog 报告的条目已变化');
+        || stableHash(entries) !== value.entrySetSha256) fail('没有对应历史页面的来源目录报告的条目已变化');
     const body = { contract: value.contract, version: value.version, planSha256: value.planSha256,
         catalogFileSha256: value.catalogFileSha256, inventory: clone(value.inventory), entries,
         entrySetSha256: value.entrySetSha256, excludedOperations: value.excludedOperations.slice() };
-    if (stableHash(body) !== value.reportSha256) fail('未投影直接重写 catalog 报告的自校验 SHA 已变化');
+    if (stableHash(body) !== value.reportSha256) fail('没有对应历史页面的来源目录报告的自校验 SHA 已变化');
     return { ...body, reportSha256: value.reportSha256 };
 }
 
 function unprojectedCatalogReportName(report) {
     const normalized = normalizeUnprojectedCatalogReport(report);
     const name = `${UNPROJECTED_REPORT_PREFIX}${normalized.planSha256.slice(0, 32)}.json`;
-    if (!SAFE_NAME_RE.test(name)) fail('unprojected direct rewrite catalog report filename is unsafe');
+    if (!SAFE_NAME_RE.test(name)) fail('没有对应历史页面的来源目录报告文件名不安全');
     return name;
 }
 
 function readUnprojectedCatalogReport({ root, reportName } = {}) {
     if (!SAFE_NAME_RE.test(String(reportName || '')) || !reportName.startsWith(UNPROJECTED_REPORT_PREFIX)) {
-        fail('unprojected direct rewrite catalog report name is unsafe');
+        fail('没有对应历史页面的来源目录报告名称不安全');
     }
-    const directory = conferencePageMappingsApi.safeDirectory(root, 'unprojected direct rewrite catalog report root');
+    const directory = conferencePageMappingsApi.safeDirectory(root, '没有对应历史页面的来源目录报告目录');
     const filename = path.resolve(directory, reportName);
-    if (path.dirname(filename) !== directory) fail('未投影直接重写 catalog 报告超出其 root');
-    const loaded = conferencePageMappingsApi.readStableJson(filename, 'unprojected direct rewrite catalog report');
+    if (path.dirname(filename) !== directory) fail('没有对应历史页面的来源目录报告超出指定目录');
+    const loaded = conferencePageMappingsApi.readStableJson(filename, '没有对应历史页面的来源目录报告');
     const report = normalizeUnprojectedCatalogReport(loaded.value);
-    if (!loaded.bytes.equals(prettyBytes(report))) fail('未投影直接重写 catalog 报告的字节不规范');
+    if (!loaded.bytes.equals(prettyBytes(report))) fail('没有对应历史页面的来源目录报告的字节不规范');
     return { filename: fs.realpathSync(filename), fileSha256: loaded.fileSha256, report };
 }
 
 function writeUnprojectedCatalogReport({ root, plan } = {}) {
     const report = buildUnprojectedCatalogReport({ plan });
-    const directory = conferencePageMappingsApi.safeDirectory(root, 'unprojected direct rewrite catalog report root', true);
+    const directory = conferencePageMappingsApi.safeDirectory(root, '没有对应历史页面的来源目录报告目录', true);
     const reportName = unprojectedCatalogReportName(report); const filename = path.join(directory, reportName);
     const bytes = prettyBytes(report); let fd;
     try {
@@ -807,7 +808,7 @@ function writeUnprojectedCatalogReport({ root, plan } = {}) {
         if (error.code !== 'EEXIST') throw error;
         const existing = readUnprojectedCatalogReport({ root: directory, reportName });
         if (stableHash(existing.report) !== stableHash(report)) {
-            fail('拒绝覆盖内容不同的未投影直接重写 catalog 报告');
+            fail('拒绝覆盖内容不同的没有对应历史页面的来源目录报告');
         }
         return { status: 'recovered', filename: existing.filename, reportName, fileSha256: existing.fileSha256,
             report: existing.report };
@@ -815,13 +816,13 @@ function writeUnprojectedCatalogReport({ root, plan } = {}) {
 }
 
 function buildFromFiles({ catalogFile, inventoryFile, conferenceProjectionFile, blogRoot } = {}) {
-    const catalog = conferencePageMappingsApi.readStableJson(catalogFile, 'local source catalog');
-    const inventory = conferencePageMappingsApi.readStableJson(inventoryFile, 'historical inventory');
-    const projection = conferencePageMappingsApi.readStableJson(conferenceProjectionFile, 'conference page projection');
+    const catalog = conferencePageMappingsApi.readStableJson(catalogFile, '本地来源目录');
+    const inventory = conferencePageMappingsApi.readStableJson(inventoryFile, '历史页面清单');
+    const projection = conferencePageMappingsApi.readStableJson(conferenceProjectionFile, '会议论文与页面对应记录');
     const currentCatalog = normalizeCurrentCatalog(catalog.value);
     if (currentCatalog.scopeBinding.inventoryPath !== inventory.filename
         || currentCatalog.scopeBinding.inventorySha256 !== inventory.fileSha256) {
-        fail('当前作用域 v5 catalog 的清单文件绑定已变化');
+        fail('当前带范围限制的 v5 来源目录所使用的页面清单文件或 SHA 已变化');
     }
     return buildDirectRewritePlan({ catalog: catalog.value, catalogFileSha256: catalog.fileSha256,
         inventory: inventory.value, conferencePageProjections: projection.value, blogRoot });
@@ -844,13 +845,13 @@ function directSourceRunIdentity(item, sourceBinding) {
 }
 
 function normalizeFreshArxivSourceBinding(item, value) {
-    if (!item || item.route?.kind !== 'arxiv-fresh-fetch') fail('新 arXiv 来源绑定需要 arXiv 路由');
+    if (!item || item.route?.kind !== 'arxiv-fresh-fetch') fail('新 arXiv 来源记录要求采用重新抓取官方来源的处理方式');
     exact(value, ['contract', 'arxivId', 'generation', 'paperId', 'pdfSha256', 'sourceManifestSha256', 'textSha256'],
-        `${item.paperId} fresh source binding`);
+        `${item.paperId} 的新来源对应记录`);
     if (value.contract !== FRESH_ARXIV_SOURCE_CONTRACT || value.paperId !== item.paperId
         || value.arxivId !== item.route.arxivId || !Number.isSafeInteger(value.generation) || value.generation < 1
         || !validSha(value.sourceManifestSha256) || !validSha(value.textSha256) || !validSha(value.pdfSha256)) {
-        fail(`${item.paperId} fresh source binding is invalid`);
+        fail(`${item.paperId} 的新来源对应记录格式或 SHA 字段无效`);
     }
     return clone(value);
 }
@@ -879,22 +880,22 @@ function stageAdapterFor(item) {
     if (kind === 'conference-local-pdf') return { contract: STAGING_ADAPTER_CONTRACT, version: 1,
         kind: 'conference-local-pdf-analysis-stage', crosswalkPrerequisite: false, postprocessSchedulerPrerequisite: false,
         requiredSource: 'retained-local-conference-pdf' };
-    fail('未知的直接暂存适配器路由');
+    fail('未知的直接暂存来源处理方式');
 }
 
 function verifyConferenceWriterInputs(item) {
     if (!item || item.route?.kind !== 'conference-local-pdf' || !Array.isArray(item.route.writerInputs)
-        || !item.route.writerInputs.length) fail('会议来源核验需要一条已规划的本地 PDF 路由');
+        || !item.route.writerInputs.length) fail('会议来源核验要求论文已列入使用本地 PDF 的计划');
     for (const source of item.route.writerInputs) {
         try { localSources.validateSource(source, item.paperId); }
         catch (error) { fail(`${item.paperId} 保留的来源绑定在规划后已变化：${error.message}`); }
-        const metadata = conferencePageMappingsApi.readStableFile(source.metadata.absolutePath, 'retained conference metadata', 64 * 1024 * 1024);
+        const metadata = conferencePageMappingsApi.readStableFile(source.metadata.absolutePath, '保留的会议元数据文件', 64 * 1024 * 1024);
         if (metadata.fileSha256 !== source.metadata.sha256) {
-            fail(`${item.paperId} retained conference metadata changed after planning`);
+            fail(`${item.paperId} 保留的会议元数据文件在规划后已变化`);
         }
         const pdf = localSources.hashAvailablePdf(source.pdf.absolutePath);
         if (pdf.availability !== 'available' || pdf.sha256 !== source.pdf.sha256) {
-            fail(`${item.paperId} retained conference PDF changed after planning`);
+            fail(`${item.paperId} 保留的会议 PDF 在规划后已变化`);
         }
     }
     return { paperId: item.paperId, sources: item.route.writerInputs.length };
@@ -919,17 +920,17 @@ function buildRegistry(plan, options = {}) {
 function normalizeRegistry(value, plan) {
     const normalizedPlan = normalizePlan(plan);
     exact(value, ['contract', 'version', 'planSha256', 'entries', 'entrySetSha256', 'registrySha256'],
-        'direct rewrite registry');
+        '直接重写登记记录');
     if (value.contract !== REGISTRY_CONTRACT || value.version !== 2 || value.planSha256 !== normalizedPlan.planSha256
         || !Array.isArray(value.entries) || !validSha(value.entrySetSha256) || !validSha(value.registrySha256)) {
-        fail('直接重写注册表 envelope 无效');
+        fail('直接重写登记记录的完整格式或 SHA 字段无效');
     }
     const expected = buildRegistry(normalizedPlan, { sourceBindings: value.entries
         .filter(item => item.route === 'arxiv-fresh-fetch' && item.sourceBinding !== null)
         .map(item => item.sourceBinding) });
     if (stableHash(value.entries) !== value.entrySetSha256 || stableHash({ contract: value.contract, version: value.version,
         planSha256: value.planSha256, entries: value.entries, entrySetSha256: value.entrySetSha256 }) !== value.registrySha256
-        || stableHash(value) !== stableHash(expected)) fail('直接重写注册表与 plan 不一致');
+        || stableHash(value) !== stableHash(expected)) fail('直接重写登记记录与计划不一致');
     return clone(expected);
 }
 
@@ -941,7 +942,7 @@ function directStagingBinding({ plan, registry, paperId, analysisArtifact } = {}
         || analysisArtifact.runId !== item.runId || analysisArtifact.route !== item.route.kind
         || !validSha(analysisArtifact.analysisFileSha256) || !validSha(analysisArtifact.analysisRecordSha256)
         || !validSha(analysisArtifact.sourceSnapshotSha256)) {
-        fail('直接暂存需要其规划路由对应的已封存规范分析产物');
+        fail('直接暂存需要与计划中的论文、运行和来源处理方式对应的已保存分析文件、分析记录及来源快照 SHA');
     }
     if (item.route.kind === 'arxiv-fresh-fetch') {
         const binding = registered.sourceBinding;
@@ -954,8 +955,8 @@ function directStagingBinding({ plan, registry, paperId, analysisArtifact } = {}
             fail('arXiv 直接暂存要求分析结果出自本次已保存的来源：generation 与来源清单 SHA 必须一致');
         }
     }
-    // 这个包是直接渲染器拿到的页面级精确输入。它有意不带 crosswalk decision，
-    // 也不带 postprocess-scheduler 字段。
+    // 这份记录为直接页面生成器提供各页面的输入及 SHA。
+    // 不包含页面与来源对应表的处理决定，也不包含后处理调度字段。
     const pages = item.pages.map(page => ({ ...clone(page), paperId: item.paperId, runId: item.runId,
         route: item.route.kind, analysisFileSha256: analysisArtifact.analysisFileSha256,
         analysisRecordSha256: analysisArtifact.analysisRecordSha256,
@@ -985,7 +986,7 @@ async function bounded(work, concurrency, shouldPause = () => false, onProgress 
             const value = work[cursor++];
             const paperId = value?.paperId;
             if (!value || typeof value.run !== 'function' || typeof paperId !== 'string' || !paperId) {
-                fail('直接来源队列产出了无效的工作项');
+                fail('直接来源队列中的任务缺少论文编号或执行函数');
             }
             try {
                 const result = await value.run();
@@ -1022,27 +1023,26 @@ async function prepareDirectSources({ plan, queue = 'all', arxivGeneration = 1,
     const queues = splitQueues(normalized); let selected = [...(queue === 'conference' ? [] : queues.arxiv),
         ...(queue === 'arxiv' ? [] : queues.conference)].sort((left, right) => left.paperId.localeCompare(right.paperId));
     if (!Array.isArray(paperIds) || paperIds.some(id => typeof id !== 'string' || !id)
-        || new Set(paperIds).size !== paperIds.length) fail('来源 paper ID 必须唯一');
+        || new Set(paperIds).size !== paperIds.length) fail('来源论文编号必须是非空字符串且不能重复');
     const known = new Set(selected.map(item => item.paperId)); const unknown = paperIds.filter(id => !known.has(id));
-    if (unknown.length) fail(`来源 paper ID 未知或不在 queue=${queue} 内：${unknown.join(', ')}`);
+    if (unknown.length) fail(`来源论文编号未知或不在 queue=${queue} 指定的队列内：${unknown.join(', ')}`);
     if (paperIds.length) { const requested = new Set(paperIds); selected = selected.filter(item => requested.has(item.paperId)); }
     // 检查点覆盖整个计划；切换队列时仍须接受另一来源已完成的论文。
     const plannedPaperIds = new Set(normalized.queue.map(item => item.paperId));
     if (!Array.isArray(completedPaperIds) || completedPaperIds.some(id => !plannedPaperIds.has(id))
-        || new Set(completedPaperIds).size !== completedPaperIds.length) fail('已完成的来源 paper ID 无效');
+        || new Set(completedPaperIds).size !== completedPaperIds.length) fail('已完成来源获取的论文编号不在计划中或有重复');
     const completed = new Set(completedPaperIds);
     if (!paperIds.length && completedPaperIds.length) {
-        // 会议核验没有单独的持久来源包，所以它的加锁状态检查点按有界批次推进。
-        // arXiv 的 ready 条目会一直留在这里，直到下面现有的筛选器重新核对完那组
-        // 恰好四个文件的 generation。
+        // 会议核验不另存来源文件包，已完成的论文按加锁进度记录跳过。
+        // arXiv 的 ready 条目仍保留，直到下面重新核验同一获取序号下的四份来源文件。
         selected = selected.filter(item => item.route.kind === 'arxiv-fresh-fetch' || !completed.has(item.paperId));
     }
     if (maxPapers !== null) {
-        if (!Number.isSafeInteger(maxPapers) || maxPapers < 1) fail('source maxPapers 必须为正数');
+        if (!Number.isSafeInteger(maxPapers) || maxPapers < 1) fail('来源准备的 maxPapers 必须为正整数');
         if (!paperIds.length && typeof freshArxivSourceRoot === 'string' && fs.existsSync(freshArxivSourceRoot)) {
             const fresh = require('./fresh-arxiv-rewrite-source.js');
             selected = selected.filter(item => {
-                // 封存成功后可能尚未来得及保存进度；这类条目须重放来源并补登记。
+                // 来源保存成功后可能还未记下进度；按已完成记录核验原来源文件，避免重复抓取。
                 if (item.route.kind !== 'arxiv-fresh-fetch' || !completed.has(item.paperId)
                     || !fresh.generationExists(freshArxivSourceRoot, item.route.arxivId, arxivGeneration)) return true;
                 fresh.readFreshArxivRewriteSource({ rootDir: freshArxivSourceRoot,
@@ -1068,7 +1068,7 @@ async function prepareDirectSources({ plan, queue = 'all', arxivGeneration = 1,
     const verifyConference = overrides.verifyConferenceSource || verifyConferenceWriterInputs;
     const writeFailureHandoff = overrides.writeArxivFreshFailureHandoff || writeArxivFreshFailureHandoff;
     if (typeof capture !== 'function' || typeof verifyConference !== 'function' || typeof writeFailureHandoff !== 'function') {
-        fail('直接来源适配器是必需的');
+        fail('必须提供来源抓取、会议来源核验和抓取失败记录保存函数');
     }
     const [arxivResults, conferenceResults] = await Promise.all([
         bounded(arxiv.map(item => ({ paperId: item.paperId, run: async () => {
@@ -1090,8 +1090,8 @@ async function prepareDirectSources({ plan, queue = 'all', arxivGeneration = 1,
                     pdfSha256: captured.manifest.pdf.responseSha256, sourceManifestSha256: captured.sourceManifestSha256,
                     sourceBinding, sourceRunIdentitySha256: directSourceRunIdentity(item, sourceBinding) };
             } catch (error) {
-                // 这是不可变的交接，绝不是 crosswalk 改动。本地会议队列并行继续，
-                // 之后专门的 crosswalk worker 可以重新核对这份冻结映射。
+                // 保存这次抓取失败记录后不再改动，也不修改页面与来源对应表。
+                // 本地会议队列继续运行；后续对应表处理入口可重新核验记录中的页面对应关系。
                 const handoff = await writeFailureHandoff({ root: freshArxivFailureHandoffRoot, plan: normalized,
                     paperId: item.paperId, generation: arxivGeneration, error, observedAt });
                 return { outcome: 'crosswalk-handoff', arxivId: item.route.arxivId, generation: arxivGeneration,

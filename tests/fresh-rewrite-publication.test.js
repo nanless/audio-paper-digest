@@ -113,7 +113,7 @@ test('准备阶段备份实际的 31 个页面，含较新的单篇发布、素�
     }
     assert.deepEqual(prepareBaseline(f), f.baseline);
     const record = baseline.files[0]; fs.writeFileSync(path.join(f.runDir, record.backupPath), 'damaged');
-    assert.throws(() => prepareBaseline(f), /backup|baseline/i);
+    assert.throws(() => prepareBaseline(f), /基线的备份路径/);
 });
 
 test('新基线审查原始 arXiv 版本，同时要求有新的已保存来源代次', t => {
@@ -127,7 +127,7 @@ test('新基线审查原始 arXiv 版本，同时要求有新的已保存来源�
 
 test('基线拒绝格式错误或跨论文的原始来源 ID', t => {
     for (const sourceId of ['2609.99999v1', 'https://arxiv.org/abs/2609.00001v1', '2609.00001v0', '2609.00001v1/other']) {
-        assert.throws(() => fixture(t, { sourceId }), /source ID does not identify/);
+        assert.throws(() => fixture(t, { sourceId }), /基线原来源 ID 无效/);
     }
 });
 
@@ -150,7 +150,7 @@ test('promote 原子替换全部 30 篇当日论文，递增代次，保留日�
 test('正式记录代次已变化时拒绝替换，保留当前文件原内容', t => {
     const f = fixture(t); const current = JSON.parse(fs.readFileSync(f.canonicalPath)); current.generation++;
     write(f.canonicalPath, current); const before = fs.readFileSync(f.canonicalPath);
-    assert.throws(() => f.promote(), /baseline|CAS/i);
+    assert.throws(() => f.promote(), /正式分析结果的 SHA 或 generation 已变化/);
     assert.deepEqual(fs.readFileSync(f.canonicalPath), before);
 });
 
@@ -158,11 +158,11 @@ test('正式替换之前，批次输入或来源快照证据一变，promote 就
     const f = fixture(t); const before = fs.readFileSync(f.canonicalPath);
     const filtered = path.join(f.currentDir, 'filtered-papers.json'); const original = fs.readFileSync(filtered);
     write(filtered, { batchDate: '2026-09-05', papers: [] });
-    assert.throws(() => f.promote(), /Batch input baseline drifted/);
+    assert.throws(() => f.promote(), /批次输入文件与准备时保存的内容已不同/);
     assert.deepEqual(fs.readFileSync(f.canonicalPath), before);
     fs.writeFileSync(filtered, original);
     assert.throws(() => promoteRun({ ...f, run: f.run, analysis: f.analysis,
-        validatePaper: () => true, readSource: () => null }), /source snapshot/i);
+        validatePaper: () => true, readSource: () => null }), /本次来源记录缺失/);
     assert.deepEqual(fs.readFileSync(f.canonicalPath), before);
 });
 
@@ -189,7 +189,7 @@ test('原始候选或筛选批次被改动后，拒绝继续同步论文库', t 
     for (const name of ['raw-candidates.json', 'filtered-papers.json']) {
         const filename = path.join(f.currentDir, name); const original = fs.readFileSync(filename);
         write(filename, { batchDate: '2026-09-05', papers: [] });
-        assert.throws(() => f.promote(), /Batch input baseline drifted/);
+        assert.throws(() => f.promote(), /批次输入文件与准备时保存的内容已不同/);
         assert.deepEqual(fs.readFileSync(f.canonicalPath), canonicalBefore);
         assert.deepEqual(fs.readFileSync(databasePath), databaseBefore);
         assert.equal(JSON.parse(fs.readFileSync(f.canonicalPath)).generation, 8);
@@ -232,26 +232,26 @@ test('Reader 未变化、生产不完整、证明缺失、运行不符或来源�
         f.analysis.papers[29] = structuredClone(original); mutate(f.analysis.papers[29]);
         assert.throws(() => f.promote()); assert.deepEqual(fs.readFileSync(f.canonicalPath), before);
     }
-    f.analysis.papers.pop(); assert.throws(() => f.promote(), /paper|ID|coverage/i);
+    f.analysis.papers.pop(); assert.throws(() => f.promote(), /完整论文集合不符合本次基线/);
 });
 
 test('博客目录不干净、运行目录逃逸、备份是符号链接或清单路径穿越时，prepare 一律拒绝', t => {
     const f = fixture(t);
-    assert.throws(() => prepareBaseline({ ...f, runDir: path.dirname(f.rootDir) }), /run|root/i);
+    assert.throws(() => prepareBaseline({ ...f, runDir: path.dirname(f.rootDir) }), /运行目录必须直接位于配置的运行根目录下/);
     fs.writeFileSync(path.join(f.blogRepo, 'manual-change.txt'), 'user change');
-    assert.throws(() => prepareBaseline(f), /dirty|clean/i);
+    assert.throws(() => prepareBaseline(f), /博客仓库必须位于 main 分支且没有未提交改动/);
     fs.unlinkSync(path.join(f.blogRepo, 'manual-change.txt'));
     const runDir = path.join(f.rootDir, 'run-two'); fs.mkdirSync(runDir);
     const manifest = path.join(f.currentDir, `blog-generation-manifest-${f.date}.json`);
     write(manifest, { files: [{ path: '../../outside', deleted: false }] });
-    assert.throws(() => prepareBaseline({ ...f, runDir }), /path|scope|traversal/i);
+    assert.throws(() => prepareBaseline({ ...f, runDir }), /相对路径不安全/);
     const baseline = JSON.parse(fs.readFileSync(path.join(f.runDir, 'baseline.json')));
     const savedManifest = baseline.files.find(record => record.relativePath === path.basename(manifest));
     fs.writeFileSync(manifest, fs.readFileSync(path.join(f.runDir, savedManifest.backupPath)));
     const runThree = path.join(f.rootDir, 'run-three'); fs.mkdirSync(runThree);
     const outside = path.join(path.dirname(f.rootDir), 'outside'); fs.mkdirSync(outside);
     fs.symlinkSync(outside, path.join(runThree, 'baseline-files'));
-    assert.throws(() => prepareBaseline({ ...f, runDir: runThree }), /Unsafe directory/);
+    assert.throws(() => prepareBaseline({ ...f, runDir: runThree }), /目录不安全/);
     assert.deepEqual(fs.readdirSync(outside), []);
 });
 
@@ -345,7 +345,7 @@ test('fresh 提升恢复在核验来源和批次输入前不清理既有意图',
     const filtered = path.join(f.currentDir, 'filtered-papers.json');
     const before = fs.readFileSync(filtered);
     fs.writeFileSync(filtered, '{}');
-    assert.throws(() => f.promote(), /Batch input baseline/);
+    assert.throws(() => f.promote(), /批次输入文件与准备时保存的内容已不同/);
     assert.equal(fs.statSync(target).nlink, 2);
     fs.writeFileSync(filtered, before);
     f.promote();

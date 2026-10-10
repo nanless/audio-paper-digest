@@ -71,10 +71,10 @@ test('先前预印本路线的披露精确复核，拒绝任何标题或哈希�
         disclosure.disclosureSha256);
     const changedTitle = structuredClone(disclosure); changedTitle.preprintTitle = 'Changed title';
     assert.throws(() => planner.normalizeConferenceSourceDisclosure(changedTitle, paperId, sources),
-        /source disclosure drifted/);
+        /会议来源版本说明与来源记录不同/);
     const changedHash = structuredClone(disclosure); changedHash.disclosureSha256 = sha('changed');
     assert.throws(() => planner.normalizeConferenceSourceDisclosure(changedHash, paperId, sources),
-        /source disclosure drifted/);
+        /会议来源版本说明与来源记录不同/);
     assert.equal(planner.normalizeConferenceSourceDisclosure(null,
         'conference:icml:2026:openreview-forum-id:regular', [{ pdf: { acquisition: { versionRelation: null } } }]), null);
 });
@@ -386,7 +386,7 @@ test('计划为每个没有直接来源路线的冻结论文页面保存并核�
         ], uncoveredByIdentityHintStatus: [{ status: 'conflict', count: 1 }, { status: 'none', count: 1 }] });
     assert.equal(planner.normalizePlan(plan).planSha256, plan.planSha256);
     const drifted = structuredClone(plan); drifted.paperPageCoverage.uncoveredFrozenPaperPages = 1;
-    assert.throws(() => planner.normalizePlan(drifted), /coverage binding drifted/);
+    assert.throws(() => planner.normalizePlan(drifted), /页面对应记录、覆盖统计或其 SHA 已变化/);
 });
 
 test('计划核验含多个身份线索的页面所指定的主要 arXiv 论文，并安排获取新的官方来源', t => {
@@ -482,7 +482,7 @@ test('会议来源适配器在标记直接来源就绪之前，复核计划中�
     const icassp = plan.queue.find(item => item.paperId.includes(':icassp:'));
     assert.equal(planner.verifyConferenceWriterInputs(icassp).sources, 1);
     fs.appendFileSync(icassp.route.writerInputs[0].pdf.absolutePath, 'changed');
-    assert.throws(() => planner.verifyConferenceWriterInputs(icassp), /PDF changed after planning/);
+    assert.throws(() => planner.verifyConferenceWriterInputs(icassp), /PDF 在规划后已变化/);
 });
 
 test('目录和计划复核内部来源绑定，不轻信形状像哈希的字段', t => {
@@ -622,9 +622,9 @@ test('分来源续跑接受同计划另一队列的就绪检查点，但不接�
         completedPaperIds: conferenceIds });
     assert.deepEqual(arxiv.selectedPaperIds, [arxivId]);
     await assert.rejects(planner.prepareDirectSources({ blogRoot: f.blog, plan, queue: 'conference', apply: false,
-        completedPaperIds: ['arxiv:9999.99999'] }), /已完成的来源 paper ID 无效/);
+        completedPaperIds: ['arxiv:9999.99999'] }), /已完成来源获取的论文编号不在计划中或有重复/);
     await assert.rejects(planner.prepareDirectSources({ blogRoot: f.blog, plan, queue: 'conference', apply: false,
-        paperIds: [arxivId] }), /不在 queue=conference 内/);
+        paperIds: [arxivId] }), /不在 queue=conference 指定的队列内/);
 });
 
 

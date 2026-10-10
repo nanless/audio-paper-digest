@@ -308,7 +308,7 @@ test('未启用的全新范围优先于日更分析使用的嵌套直接来源�
     assert.equal(fs.readdirSync(f.directory).length, 1);
 });
 
-test('来源、模型、提示词、运行和额度发生漂移就不能复用候选', t => {
+test('来源、运行身份、提示词、输入指纹或请求额度变化时，不能复用旧候选', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     for (const mutate of [id => { id.model.maxTokens = 24000; }, id => { id.maxAttempts = 5; },
         id => { id.repairMaxTokens = 16000; }, id => { id.promptSha256 = 'new prompt'; },
@@ -350,7 +350,7 @@ test('精确匹配的新候选胜出，不碰旧候选及其无进展标记', t 
     assert.equal(fs.readdirSync(f.directory).length, 2);
 });
 
-test('只有实现变了才允许重置无进展标记，光换契约标签不行', t => {
+test('只修改草稿顺序格式标记，不清除旧候选的无进展计数', t => {
     const f = fixture(t); saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     const loaded = f.enabled(() => loadReaderRecoveryRevision(f.directory, { ...f.oldIdentity, draftOrderContract: 'label only' }));
     assert.equal(loaded.noProgress, 2); assert.equal(loaded.failureSignature, 'old failure');
@@ -508,7 +508,7 @@ test('解析器、文字检查及固定规则检查的实现变化，各允许�
     }
 });
 
-test('图片漂移不能迁移候选，而精确的旧版图片载荷可以绑定', t => {
+test('图片 SHA 变化时拒绝迁移，并保留旧候选记录', t => {
     const f = fixture(t); const oldPixels = [{ ordinal: 1, sha256: '6'.repeat(64) }];
     const oldIdentity = { ...f.identity, parserImplementationSha256: '4'.repeat(64) };
     const oldPayload = { ...f.payload, imageEvidence: oldPixels };
@@ -519,7 +519,7 @@ test('图片漂移不能迁移候选，而精确的旧版图片载荷可以绑�
     assert.deepEqual(loadFailedCandidate(f.directory, oldIdentity), oldPayload);
 });
 
-test('临时的直接/日更图片绑定使用自己的载荷字段，并拒绝漂移', t => {
+test('临时图片及补充图片记录的 SHA 变化时拒绝迁移，一致时保留原记录', t => {
     const f = fixture(t);
     const oldIdentity = { ...f.identity, parserImplementationSha256: '4'.repeat(64) };
     const ephemeralImageEvidence = {
@@ -578,7 +578,7 @@ test('装入新候选后归档出现 EIO，精确候选重入时补完，不重�
     assert.deepEqual(f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), resumed);
 });
 
-test('EIO 重入即使草稿和所有计数都没变，也拒绝完整的旧载荷漂移', t => {
+test('归档中断后重试，即使草稿和次数不变，也拒绝旧诊断和图片记录被改动', t => {
     const f = fixture(t); interruptArchival(f);
     saveFailedCandidate(f.directory, f.oldIdentity, { ...f.payload,
         issues: [{ path: null, message: 'changed old diagnostics' }], imageEvidence: [{ changed: true }] });

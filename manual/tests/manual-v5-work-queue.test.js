@@ -172,7 +172,7 @@ describe('Manual v5 可观察工作队列', () => {
         assert.match(report.papers[ID].tasks.reviewer.inputSha256, /^[a-f0-9]{64}$/);
     });
 
-    it('只有明确且对得上的观测才算已认领，绝不从时间戳推断耗时', () => {
+    it('任务运行记录与输入 SHA 对应时才标为已认领，耗时取记录中的测量值', () => {
         const fx = fixture();
         const initial = build(fx);
         const reviewer = initial.papers[ID].tasks.reviewer;
@@ -237,7 +237,7 @@ describe('Manual v5 可观察工作队列', () => {
         assert.equal(report.summary.finished, 3);
     });
 
-    it('观测数据或命令行参数不合法时直接失败', () => {
+    it('拒绝输入 SHA 无效的任务记录，并识别不保存统计文件的命令行选项', () => {
         assert.throws(() => validateObservations({
             version: 1, mode: OBSERVATIONS_MODE, date: DATE,
             tasks: [{ paperId: ID, role: 'author', status: 'claimed', inputSha256: 'bad', taskName: 'task' }]

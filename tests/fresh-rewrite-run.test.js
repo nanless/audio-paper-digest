@@ -635,5 +635,5 @@ test('运维补丁先拿运行操作锁再拿论文锁，绝不改动分析或�
     const analysis = runner.readRegularJson(analysisPath).value;
     analysis.papers[0] = f.freshPaper(analysis.papers[0]);
     fs.writeFileSync(analysisPath, JSON.stringify(analysis)); order.length = 0;
-    await assert.rejects(runner.patchRewrite({ runId: RUN_ID, patchFile: 'test.json' }, overrides), /successful analysis/);
+    await assert.rejects(runner.patchRewrite({ runId: RUN_ID, patchFile: 'test.json' }, overrides), /仅使用论文来源资料的人工补丁不能改动已成功的分析或已签名的读者文章/);
 });
