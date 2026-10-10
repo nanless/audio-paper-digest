@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 'use strict';
 
-// 这个命令有意和 history:direct-scheduler 分开。后者只准备来源包，不调用模型；
-// 这个才是显式的分析、Reader 和暂存阶段，绝不会被隐式调用。
+// history:direct-scheduler 只准备来源文件，不调用模型；
+// 显式传入 --apply 时，执行分析、Reader 写作和私有页面保存；
+// --dry-run 只检查并报告论文选择、来源准备情况以及暂停和操作锁路径。
 
 const path = require('node:path');
 const { requireExternalRuntime } = require('./env-loader.js');
@@ -17,24 +18,24 @@ function parsePaperIds(value) {
     const paperIds = value.split(',').map(item => item.trim());
     if (!paperIds.length || paperIds.some(item => !item)
         || paperIds.some(item => !/^(?:arxiv:\d{4}\.\d{4,5}|conference:[a-z0-9]+(?:-[a-z0-9]+)*:\d{4}:(?:icassp-arnumber|openreview-forum-id):[^:]+)$/.test(item))
-        || new Set(paperIds).size !== paperIds.length) throw new Error(`Use ${USAGE}`);
+        || new Set(paperIds).size !== paperIds.length) throw new Error(`用法：${USAGE}`);
     return paperIds;
 }
 function parseArgs(argv) {
     const [mode, ...rest] = argv; const values = {};
-    if (!['--dry-run', '--apply'].includes(mode) || rest.length < 2 || rest.length > 14 || rest.length % 2) throw new Error(`Use ${USAGE}`);
+    if (!['--dry-run', '--apply'].includes(mode) || rest.length < 2 || rest.length > 14 || rest.length % 2) throw new Error(`用法：${USAGE}`);
     for (let index = 0; index < rest.length; index += 2) {
         const flag = rest[index]; const value = rest[index + 1];
         if (!['--plan', '--queue', '--generation', '--concurrency', '--paper-ids', '--max-papers', '--limit'].includes(flag)
-            || !value || Object.hasOwn(values, flag)) throw new Error(`Use ${USAGE}`);
+            || !value || Object.hasOwn(values, flag)) throw new Error(`用法：${USAGE}`);
         values[flag] = value;
     }
-    if (values['--max-papers'] !== undefined && values['--limit'] !== undefined) throw new Error(`Use ${USAGE}`);
+    if (values['--max-papers'] !== undefined && values['--limit'] !== undefined) throw new Error(`用法：${USAGE}`);
     const maximum = values['--max-papers'] ?? values['--limit'];
     if (!path.isAbsolute(values['--plan'] || '') || (values['--queue'] !== undefined && !['all', 'arxiv', 'conference'].includes(values['--queue']))
         || (values['--generation'] !== undefined && !/^[1-9]\d{0,8}$/.test(values['--generation']))
         || (values['--concurrency'] !== undefined && !/^[1-8]$/.test(values['--concurrency']))
-        || (maximum !== undefined && !/^[1-9]\d{0,8}$/.test(maximum))) throw new Error(`Use ${USAGE}`);
+        || (maximum !== undefined && !/^[1-9]\d{0,8}$/.test(maximum))) throw new Error(`用法：${USAGE}`);
     return { apply: mode === '--apply', planFile: path.resolve(values['--plan']), queue: values['--queue'] || 'all',
         arxivGeneration: Number(values['--generation'] || 1), concurrency: Number(values['--concurrency'] || 3),
         paperIds: parsePaperIds(values['--paper-ids']), maxPapers: maximum === undefined ? null : Number(maximum) };
@@ -42,10 +43,10 @@ function parseArgs(argv) {
 async function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('historical-direct-rewrite-run.js');
     const options = parseArgs(argv); const files = runtime.files || Config.FILES;
-    const loaded = conferencePageMappingsApi.readStableJson(options.planFile, 'direct rewrite plan'); const plan = planApi.normalizePlan(loaded.value);
+    const loaded = conferencePageMappingsApi.readStableJson(options.planFile, '历史页面重写计划'); const plan = planApi.normalizePlan(loaded.value);
     let stopSignal = null;
     const onSignal = signal => {
-        if (stopSignal === null) console.error(`[historical-direct-rewrite-run] received ${signal}; finishing active papers before pausing`);
+        if (stopSignal === null) console.error(`[historical-direct-rewrite-run] 收到 ${signal}，等待正在处理的论文结束后暂停`);
         stopSignal = signal;
     };
     const signalHandlers = new Map(['SIGINT', 'SIGTERM'].map(signal => [signal, () => onSignal(signal)]));
@@ -59,7 +60,7 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
             publicationMetadataRoot: files.historicalArxivPublicationMetadataDir }, {
             ...(runtime.dependencies || {}),
             shouldPause: async () => stopSignal !== null
-                ? { code: stopSignal, detail: `User requested graceful pause via ${stopSignal}` }
+                ? { code: stopSignal, detail: `收到 ${stopSignal}，等待正在处理的论文结束后暂停` }
                 : await runtime.dependencies?.shouldPause?.(),
             onProgress: runtime.dependencies?.onProgress || (event => console.error(JSON.stringify(event)))
         });

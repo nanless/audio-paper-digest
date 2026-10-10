@@ -745,9 +745,9 @@ test('直连运行命令行解析稳定的作用域，拒绝有歧义的上限�
     assert.deepEqual(parsed.paperIds, ['arxiv:2601.00001', 'conference:icassp:2026:icassp-arnumber:100']);
     assert.equal(parsed.maxPapers, 2);
     assert.equal(runnerCli.parseArgs(['--dry-run', '--plan', plan, '--limit', '1']).maxPapers, 1);
-    assert.throws(() => runnerCli.parseArgs(['--dry-run', '--plan', plan, '--max-papers', '1', '--limit', '1']), /Use/);
-    assert.throws(() => runnerCli.parseArgs(['--dry-run', '--plan', plan, '--paper-ids', 'arxiv:2601.00001,arxiv:2601.00001']), /Use/);
-    assert.throws(() => runnerCli.parseArgs(['--dry-run', '--plan', plan, '--pause-file', '/tmp/custom.pause']), /Use/);
+    assert.throws(() => runnerCli.parseArgs(['--dry-run', '--plan', plan, '--max-papers', '1', '--limit', '1']), /用法：/);
+    assert.throws(() => runnerCli.parseArgs(['--dry-run', '--plan', plan, '--paper-ids', 'arxiv:2601.00001,arxiv:2601.00001']), /用法：/);
+    assert.throws(() => runnerCli.parseArgs(['--dry-run', '--plan', plan, '--pause-file', '/tmp/custom.pause']), /用法：/);
 });
 
 test('隐式的 max-papers 会跳过已暂存的条目，显式 ID 仍然可复核', async t => {

@@ -3,7 +3,7 @@
 // 给每份历史 arXiv 来源配的独立发布元数据附件，只和发布有关。
 // 这些文件不改动任何来源 generation，
 // 也不进入分析/模型输入。
-// 每次读取都重放原始官方 Atom 响应，并绑定到它补充的那个四文件来源 generation。
+// 每次读取都从原始官方 Atom 响应重新提取元数据，并核对它对应的那组四份来源文件。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -27,7 +27,7 @@ const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
 class HistoricalArxivPublicationMetadataError extends Error {
     constructor(message) {
-        super(`Historical arXiv publication metadata rejected: ${message}`);
+        super(`历史 arXiv 发布元数据被拒绝：${message}`);
         this.name = 'HistoricalArxivPublicationMetadataError';
         this.code = 'HISTORICAL_ARXIV_PUBLICATION_METADATA_INTEGRITY';
         this.retryable = false;
@@ -45,19 +45,19 @@ function canonical(value) {
 const canonicalJson = value => `${JSON.stringify(canonical(value), null, 2)}\n`;
 const exactKeys = (value, keys, label) => {
     if (!value || typeof value !== 'object' || Array.isArray(value)
-        || Object.keys(value).sort().join('\0') !== keys.slice().sort().join('\0')) fail(`${label} schema is invalid`);
+        || Object.keys(value).sort().join('\0') !== keys.slice().sort().join('\0')) fail(`${label} 的字段结构无效`);
 };
 function arxivId(value) {
     const id = String(value || '').trim().replace(/v\d+$/i, '');
-    if (!ID_RE.test(id)) fail('versionless arXiv ID is required');
+    if (!ID_RE.test(id)) fail('arXiv ID 无效：移除版本号后，点号前须为四位数字，点号后须为四位或五位数字');
     return id;
 }
 function generationName(value) {
-    if (!Number.isSafeInteger(value) || value < 1 || value > 999999999) fail('generation must be a positive safe integer');
+    if (!Number.isSafeInteger(value) || value < 1 || value > 999999999) fail('获取序号 generation 必须是大于零且不超过 999999999 的安全整数');
     return `generation-${String(value).padStart(6, '0')}`;
 }
-function safeDirectory(directory, create = false, label = 'directory') {
-    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} must be absolute`);
+function safeDirectory(directory, create = false, label = '目录') {
+    if (typeof directory !== 'string' || !path.isAbsolute(directory)) fail(`${label} 必须是绝对路径`);
     const absolute = path.resolve(directory); let cursor = path.parse(absolute).root;
     for (const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
         cursor = path.join(cursor, part); let stat;
@@ -66,17 +66,17 @@ function safeDirectory(directory, create = false, label = 'directory') {
             if (error.code !== 'ENOENT' || !create) throw error;
             fs.mkdirSync(cursor, { mode: 0o700 }); stat = fs.lstatSync(cursor);
         }
-        if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`unsafe ${label}: ${cursor}`);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} 不安全：必须是普通目录，不能是符号链接：${cursor}`);
     }
     return absolute;
 }
 function readPrivateFile(filename, maximum, label) {
     let fd;
     try {
-        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
         const stat = fs.fstatSync(fd);
-        if (!stat.isFile() || stat.nlink !== 1 || stat.size < 1 || stat.size > maximum) fail(`unsafe ${label}`);
-        if (process.platform !== 'win32' && (stat.mode & 0o777) !== 0o600) fail(`${label} permissions must be 0600`);
+        if (!stat.isFile() || stat.nlink !== 1 || stat.size < 1 || stat.size > maximum) fail(`${label} 不安全：必须是只有一个硬链接的普通文件，且字节数须在允许范围内`);
+        if (process.platform !== 'win32' && (stat.mode & 0o777) !== 0o600) fail(`${label} 权限必须为 0600`);
         return fs.readFileSync(fd);
     } finally { if (fd !== undefined) fs.closeSync(fd); }
 }
@@ -104,9 +104,9 @@ function sourceSnapshotSha(details) {
 }
 function normalizedOfficialResult(id, result) {
     if (!result || typeof result !== 'object' || !Buffer.isBuffer(result.rawBytes)
-        && !(result.rawBytes instanceof Uint8Array)) fail('official Atom result and raw bytes are required');
+        && !(result.rawBytes instanceof Uint8Array)) fail('必须提供官方 Atom 提取结果及原始字节');
     const rawBytes = Buffer.from(result.rawBytes);
-    if (rawBytes.length < 1 || rawBytes.length > MAX_ATOM_BYTES) fail('official Atom response is empty or oversized');
+    if (rawBytes.length < 1 || rawBytes.length > MAX_ATOM_BYTES) fail('官方 Atom 响应为空或超过允许的字节数');
     const proof = result.proof;
     const querySourceId = proof?.querySourceId;
     const replayed = metadataApi.parseOfficialArxivMetadataResponse(id, rawBytes.toString('utf8'), { querySourceId });
@@ -121,7 +121,7 @@ function normalizedOfficialResult(id, result) {
         || typeof observedAt !== 'string' || !Number.isFinite(Date.parse(observedAt))
         || new Date(observedAt).toISOString() !== observedAt
         || freshRun.stableHash(result.metadata) !== freshRun.stableHash(replayed.metadata)) {
-        fail('official Atom result/proof cannot be replayed');
+        fail('官方 Atom 提取结果或获取记录无法根据原始响应重新核对');
     }
     return { ...replayed, proof: { ...replayed.proof, observedAt } };
 }
@@ -129,7 +129,7 @@ function sourceBinding(sourceRoot, id, generation) {
     const source = freshSource.readFreshArxivRewriteSource({ rootDir: sourceRoot, arxivId: id, generation });
     const timestamps = [source.manifest.capturedAt, source.manifest.text.fetchedAt, source.manifest.pdf.fetchedAt];
     const milliseconds = timestamps.map(value => new Date(value).getTime());
-    if (milliseconds.some(value => !Number.isFinite(value))) fail('sealed source capture timestamps are invalid');
+    if (milliseconds.some(value => !Number.isFinite(value))) fail('已封存来源的获取时间无效');
     const sourceVersionIdentitySha256 = source.runtimeDetails.sourceVersion?.identitySha256 || null;
     return { source,
         value: { contract: source.manifest.contract, version: source.manifest.version,
@@ -147,23 +147,23 @@ function validateOfficialCompatibility({ sourceRoot, arxivId: value, generation,
     const source = sourceBinding(sourceRoot, id, generation).value;
     const official = normalizedOfficialResult(id, officialResult);
     if (Date.parse(official.proof.publishedAt) > Date.parse(official.proof.entryUpdatedAt)) {
-        fail('official Atom publication time is newer than its update time');
+        fail('官方 Atom 的发表时间晚于更新时间');
     }
     if (Date.parse(official.proof.entryUpdatedAt) > Date.parse(official.proof.observedAt)) {
-        fail('official Atom update time is newer than its observation time');
+        fail('官方 Atom 的更新时间晚于记录的获取时间');
     }
     if (Date.parse(official.proof.entryUpdatedAt) > Date.parse(source.sourceEarliestCapturedAt)) {
-        fail('official Atom entry is newer than the sealed source generation; capture a new source generation');
+        fail('官方 Atom 条目比本组已封存来源更新；须重新抓取并封存下一获取序号的来源');
     }
     const sourceVersion = source.sourceId.match(/v([1-9]\d*)$/i);
     if (sourceVersion && Number(sourceVersion[1]) !== official.proof.entryVersion) {
-        fail('official Atom entry version differs from the exact versioned sealed source');
+        fail('官方 Atom 条目的版本与已封存来源指定的版本不同');
     }
     if (!sourceVersion && Date.parse(official.proof.observedAt) < Date.parse(source.sourceLatestCapturedAt)) {
-        fail('official Atom response predates the versionless sealed source; refetch official metadata');
+        fail('官方 Atom 响应的获取时间早于不带版本号的已封存来源；须重新抓取官方元数据');
     }
     if (official.proof.querySourceId !== source.sourceId) {
-        fail('official Atom query is not bound to the exact sealed source ID');
+        fail('官方 Atom 查询未对应已封存来源的确切来源 ID');
     }
     return { source, official };
 }
@@ -187,28 +187,28 @@ function manifestFor({ id, generation, capturedAt, source, official, metadataByt
 
 function readPublicationMetadata({ rootDir, sourceRoot, arxivId: value, generation } = {}) {
     const id = arxivId(value); const directory = sidecarDirectory(safeDirectory(rootDir), id, generation);
-    safeDirectory(path.join(path.resolve(rootDir), id), false, 'publication metadata paper directory');
-    safeDirectory(directory, false, 'publication metadata generation directory');
+    safeDirectory(path.join(path.resolve(rootDir), id), false, '发布元数据的论文目录');
+    safeDirectory(directory, false, '发布元数据的获取序号目录');
     if (fs.readdirSync(directory).sort().join('\0') !== FILES.slice().sort().join('\0')) {
-        fail('publication metadata generation contains unexpected files');
+        fail('本获取序号的发布元数据目录中含额外文件');
     }
-    const manifestBytes = readPrivateFile(path.join(directory, MANIFEST_NAME), MAX_JSON_BYTES, 'publication metadata manifest');
-    const metadataBytes = readPrivateFile(path.join(directory, METADATA_NAME), MAX_JSON_BYTES, 'publication metadata record');
-    const atomBytes = readPrivateFile(path.join(directory, ATOM_NAME), MAX_ATOM_BYTES, 'publication metadata Atom response');
+    const manifestBytes = readPrivateFile(path.join(directory, MANIFEST_NAME), MAX_JSON_BYTES, '发布元数据清单');
+    const metadataBytes = readPrivateFile(path.join(directory, METADATA_NAME), MAX_JSON_BYTES, '发布元数据记录');
+    const atomBytes = readPrivateFile(path.join(directory, ATOM_NAME), MAX_ATOM_BYTES, '发布元数据 Atom 响应');
     let manifest; let metadata;
     try { manifest = JSON.parse(manifestBytes.toString('utf8')); metadata = JSON.parse(metadataBytes.toString('utf8')); }
-    catch (error) { fail(`publication metadata JSON is invalid: ${error.message}`); }
+    catch (error) { fail(`发布元数据不是有效 JSON：${error.message}`); }
     if (!manifestBytes.equals(Buffer.from(canonicalJson(manifest)))
-        || !metadataBytes.equals(Buffer.from(canonicalJson(metadata)))) fail('publication metadata JSON must be canonical');
-    exactKeys(manifest, ['contract', 'version', 'paperId', 'arxivId', 'generation', 'capturedAt', 'source', 'atom', 'metadata'], 'manifest');
+        || !metadataBytes.equals(Buffer.from(canonicalJson(metadata)))) fail('发布元数据 JSON 必须按固定的字段顺序和保存格式写入');
+    exactKeys(manifest, ['contract', 'version', 'paperId', 'arxivId', 'generation', 'capturedAt', 'source', 'atom', 'metadata'], '元数据清单');
     const hasSourceVersion = Object.hasOwn(manifest.source || {}, 'sourceVersionIdentitySha256');
     exactKeys(manifest.source, ['contract', 'version', 'generation', 'sourceManifestSha256', 'sourceSnapshotSha256',
         'sourceTextSha256', 'sourceId', 'sourceCapturedAt', 'textFetchedAt', 'pdfFetchedAt',
         'sourceEarliestCapturedAt', 'sourceLatestCapturedAt',
-        ...(hasSourceVersion ? ['sourceVersionIdentitySha256'] : [])], 'source binding');
+        ...(hasSourceVersion ? ['sourceVersionIdentitySha256'] : [])], '来源对应记录');
     exactKeys(manifest.atom, ['contract', 'filename', 'sourceName', 'querySourceId', 'responseBytes', 'responseSha256',
-        'entryVersion', 'entryUpdatedAt', 'publishedAt', 'observedAt'], 'Atom binding');
-    exactKeys(manifest.metadata, ['filename', 'responseBytes', 'responseSha256', 'recordSha256', 'abstractSha256'], 'metadata binding');
+        'entryVersion', 'entryUpdatedAt', 'publishedAt', 'observedAt'], 'Atom 对应记录');
+    exactKeys(manifest.metadata, ['filename', 'responseBytes', 'responseSha256', 'recordSha256', 'abstractSha256'], '元数据对应记录');
     if (manifest.contract !== CONTRACT || manifest.version !== VERSION || manifest.paperId !== `arxiv:${id}`
         || manifest.arxivId !== id || manifest.generation !== generation
         || !Number.isFinite(Date.parse(manifest.capturedAt)) || new Date(manifest.capturedAt).toISOString() !== manifest.capturedAt
@@ -225,10 +225,10 @@ function readPublicationMetadata({ rootDir, sourceRoot, arxivId: value, generati
             manifest.metadata.recordSha256, manifest.metadata.abstractSha256].every(item => SHA_RE.test(String(item || '')))
         || manifest.atom.responseBytes !== atomBytes.length || manifest.atom.responseSha256 !== sha256(atomBytes)
         || manifest.metadata.responseBytes !== metadataBytes.length || manifest.metadata.responseSha256 !== sha256(metadataBytes)) {
-        fail('publication metadata manifest bytes or identity drifted');
+        fail('发布元数据清单的字段、论文身份、字节数或 SHA 与记录不同');
     }
     if (Date.parse(manifest.capturedAt) < Date.parse(manifest.atom.observedAt)) {
-        fail('publication metadata seal predates the official Atom observation');
+        fail('发布元数据的封存时间早于官方 Atom 响应的获取时间');
     }
     const official = metadataApi.parseOfficialArxivMetadataResponse(id, atomBytes.toString('utf8'), {
         querySourceId: manifest.atom.querySourceId
@@ -242,39 +242,39 @@ function readPublicationMetadata({ rootDir, sourceRoot, arxivId: value, generati
         || official.proof.publishedAt !== manifest.atom.publishedAt
         || freshRun.stableHash(metadata) !== freshRun.stableHash(official.metadata)
         || sha256(Buffer.from(metadata.abstract, 'utf8')) !== manifest.metadata.abstractSha256) {
-        fail('publication metadata record does not replay the raw official Atom response');
+        fail('发布元数据记录无法根据原始官方 Atom 响应重新核对');
     }
     const bound = sourceBinding(sourceRoot, id, generation).value;
     if (freshRun.stableHash(bound) !== freshRun.stableHash(manifest.source)) {
-        fail('publication metadata no longer binds the sealed source generation');
+        fail('发布元数据不再对应这组已封存的来源文件');
     }
     if (Date.parse(manifest.atom.entryUpdatedAt) > Date.parse(bound.sourceEarliestCapturedAt)) {
-        fail('official Atom entry is newer than the sealed source generation; capture a new source generation');
+        fail('官方 Atom 条目比本组已封存来源更新；须重新抓取并封存下一获取序号的来源');
     }
     if (Date.parse(manifest.atom.publishedAt) > Date.parse(manifest.atom.entryUpdatedAt)) {
-        fail('official Atom publication time is newer than its update time');
+        fail('官方 Atom 的发表时间晚于更新时间');
     }
     if (Date.parse(manifest.atom.entryUpdatedAt) > Date.parse(manifest.atom.observedAt)) {
-        fail('official Atom update time is newer than its observation time');
+        fail('官方 Atom 的更新时间晚于记录的获取时间');
     }
     const sourceVersion = bound.sourceId.match(/v([1-9]\d*)$/i);
     if (sourceVersion && Number(sourceVersion[1]) !== manifest.atom.entryVersion) {
-        fail('official Atom entry version differs from the exact versioned sealed source');
+        fail('官方 Atom 条目的版本与已封存来源指定的版本不同');
     }
     if (!sourceVersion && Date.parse(manifest.atom.observedAt) < Date.parse(bound.sourceLatestCapturedAt)) {
-        fail('official Atom response predates the versionless sealed source; refetch official metadata');
+        fail('官方 Atom 响应的获取时间早于不带版本号的已封存来源；须重新抓取官方元数据');
     }
     if (manifest.atom.querySourceId !== bound.sourceId) {
-        fail('official Atom query is not bound to the exact sealed source ID');
+        fail('官方 Atom 查询未对应已封存来源的确切来源 ID');
     }
     if (!Array.isArray(metadata.authors) || metadata.authors.length === 0
         || metadata.authors.some(author => typeof author !== 'string' || !author.trim())) {
-        fail('publication metadata authors are empty or invalid');
+        fail('发布元数据中的作者列表为空或含无效姓名');
     }
-    // 原始 Atom 响应、规范元数据字节、清单和已存来源，前面都已重放过。
+    // 前面已核对原始 Atom 响应、按固定格式保存的元数据、清单及已保存来源。
     // 旧官方 Atom 条目的 <name> 里可能留有首尾空白；
     // 只整理返回的作者视图，
-    // 不碰不可改的附件和它的哈希。
+    // 不改已保存的附带文件及其 SHA。
     const authors = metadata.authors.map(author => author.trim());
     return { directory, sourceManifestSha256: manifest.source.sourceManifestSha256,
         sourceSnapshotSha256: manifest.source.sourceSnapshotSha256,
@@ -297,16 +297,16 @@ function readPublicationMetadata({ rootDir, sourceRoot, arxivId: value, generati
 
 function sealPublicationMetadata({ rootDir, sourceRoot, arxivId: value, generation,
     officialResult, now = new Date().toISOString() } = {}) {
-    const id = arxivId(value); const root = safeDirectory(rootDir, true, 'publication metadata root');
+    const id = arxivId(value); const root = safeDirectory(rootDir, true, '发布元数据根目录');
     const target = sidecarDirectory(root, id, generation);
     if (fs.existsSync(target)) return { ...readPublicationMetadata({ rootDir: root, sourceRoot, arxivId: id, generation }),
         status: 'recovered', fetched: false };
     const { source, official } = validateOfficialCompatibility({ sourceRoot, arxivId: id, generation, officialResult });
     const capturedAt = new Date(now).toISOString();
     if (capturedAt !== now || Date.parse(capturedAt) < Date.parse(official.proof.observedAt)) {
-        fail('publication metadata seal time is invalid or predates the official Atom observation');
+        fail('发布元数据的封存时间无效，或早于官方 Atom 响应的获取时间');
     }
-    const paperDirectory = safeDirectory(path.join(root, id), true, 'publication metadata paper directory');
+    const paperDirectory = safeDirectory(path.join(root, id), true, '发布元数据的论文目录');
     const temporary = path.join(paperDirectory, `.${generationName(generation)}.${crypto.randomUUID()}.tmp`);
     fs.mkdirSync(temporary, { mode: 0o700 });
     try {
@@ -332,10 +332,10 @@ function sealPublicationMetadata({ rootDir, sourceRoot, arxivId: value, generati
 
 function reusableOfficialAtomIndex({ freshRewriteRoot, paperIds } = {}) {
     if (!Array.isArray(paperIds) || !paperIds.length || new Set(paperIds).size !== paperIds.length) {
-        fail('reusable Atom paper set must be non-empty and duplicate-free');
+        fail('待复用 Atom 响应的论文集合不能为空，且不能有重复项');
     }
     const selected = new Set(paperIds.map(arxivId));
-    const root = safeDirectory(freshRewriteRoot, false, 'fresh rewrite root');
+    const root = safeDirectory(freshRewriteRoot, false, '重新分析运行目录');
     const candidates = new Map([...selected].map(id => [id, []]));
     for (const name of fs.readdirSync(root).filter(item => UUID_RE.test(item)).sort()) {
         const directory = path.join(root, name); const stat = fs.lstatSync(directory);
@@ -348,7 +348,7 @@ function reusableOfficialAtomIndex({ freshRewriteRoot, paperIds } = {}) {
             try {
                 const run = freshRun.readRegularJson(path.join(directory, 'run.json')).value;
                 const inputs = freshRun.readRegularJson(path.join(directory, 'inputs.json')).value;
-                const atom = readPrivateFile(atomFile, MAX_ATOM_BYTES, 'reusable official Atom response');
+                const atom = readPrivateFile(atomFile, MAX_ATOM_BYTES, '可复用的官方 Atom 响应');
                 const proof = run?.metadataSources?.historicalRawMetadata;
                 const queryMatch = String(proof?.sourceName || '').match(/[?&]id_list=([^&]+)&max_results=1$/);
                 if (!queryMatch) continue;
@@ -360,8 +360,8 @@ function reusableOfficialAtomIndex({ freshRewriteRoot, paperIds } = {}) {
                     || proof.recordSha256 !== parsed.proof.recordSha256
                     || freshRun.stableHash(paper) !== freshRun.stableHash(parsed.metadata)) continue;
                 // 旧运行的 createdAt 不算新运行身份的一部分。
-                // 它只能给精确的不可变 vN 查询定时间；无版本候选要用
-                // 凭证绑定的观察时间。
+                // 仅查询指定的固定版本 vN 时，才可用它记录获取时间；不带版本号的候选须使用
+                // 获取记录中保存的观察时间。
                 const exactVersionQuery = /v[1-9]\d*$/i.test(querySourceId);
                 const observedValue = proof.observedAt || (exactVersionQuery ? run?.createdAt : null);
                 const observed = new Date(observedValue);
@@ -375,7 +375,7 @@ function reusableOfficialAtomIndex({ freshRewriteRoot, paperIds } = {}) {
     for (const [id, values] of candidates) {
         if (!values.length) continue;
         const identities = new Set(values.map(item => `${item.official.proof.recordSha256}\0${sha256(Buffer.from(item.official.metadata.abstract, 'utf8'))}`));
-        if (identities.size !== 1) fail(`${id} has conflicting reusable official Atom metadata`);
+        if (identities.size !== 1) fail(`${id} 的可复用官方 Atom 响应对应不同的元数据或摘要`);
         result.set(id, { ...values[0].official, reusedFromRunId: values[0].runId });
     }
     return result;

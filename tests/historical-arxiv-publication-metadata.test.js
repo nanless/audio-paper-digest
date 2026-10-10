@@ -6,6 +6,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { spawnSync } = require('node:child_process');
 const metadataApi = require('../scripts/lib/arxiv-metadata-source.js');
 const sidecars = require('../scripts/lib/historical-arxiv-publication-metadata.js');
 const freshSource = require('../scripts/lib/fresh-arxiv-rewrite-source.js');
@@ -105,7 +106,7 @@ test('出版元数据附带文件拒绝观测时间或 Atom 条目版本被改�
     manifest.atom.observedAt = '2027-01-05T00:00:00.000Z';
     fs.writeFileSync(manifestFile, canonicalJson(manifest), { mode: 0o600 });
     assert.throws(() => sidecars.readPublicationMetadata({ rootDir: observed.sidecarRoot,
-        sourceRoot: observed.sourceRoot, arxivId: ID, generation: 1 }), /seal predates|observation/i);
+        sourceRoot: observed.sourceRoot, arxivId: ID, generation: 1 }), /封存时间早于官方 Atom 响应的获取时间/);
 
     const version = await fixture(t, 'raw-version-drift');
     sidecars.sealPublicationMetadata({ rootDir: version.sidecarRoot, sourceRoot: version.sourceRoot,
@@ -113,7 +114,7 @@ test('出版元数据附带文件拒绝观测时间或 Atom 条目版本被改�
     const atomFile = path.join(sidecars.sidecarDirectory(version.sidecarRoot, ID, 1), sidecars.ATOM_NAME);
     fs.writeFileSync(atomFile, fs.readFileSync(atomFile, 'utf8').replace(`${ID}v1`, `${ID}v2`), { mode: 0o600 });
     assert.throws(() => sidecars.readPublicationMetadata({ rootDir: version.sidecarRoot,
-        sourceRoot: version.sourceRoot, arxivId: ID, generation: 1 }), /drift|response/i);
+        sourceRoot: version.sourceRoot, arxivId: ID, generation: 1 }), /字段、论文身份、字节数或 SHA 与记录不同/);
 });
 
 test('出版元数据附带文件只接受不新于已保存并核验来源的 Atom 状态', async t => {
@@ -123,11 +124,11 @@ test('出版元数据附带文件只接受不新于已保存并核验来源的 A
     const late = await fixture(t, 'late');
     assert.throws(() => sidecars.sealPublicationMetadata({ rootDir: late.sidecarRoot, sourceRoot: late.sourceRoot,
         arxivId: ID, generation: 1,
-        officialResult: official(ID, undefined, '2026-01-04T00:00:00Z') }), /newer than the sealed source/);
+        officialResult: official(ID, undefined, '2026-01-04T00:00:00Z') }), /官方 Atom 条目比本组已封存来源更新/);
     const versioned = await fixture(t, 'versioned', `${ID}v1`);
     assert.throws(() => sidecars.sealPublicationMetadata({ rootDir: versioned.sidecarRoot,
         sourceRoot: versioned.sourceRoot, arxivId: ID, generation: 1,
-        officialResult: official(ID, undefined, undefined, undefined, 2, `${ID}v2`) }), /version|query/i);
+        officialResult: official(ID, undefined, undefined, undefined, 2, `${ID}v2`) }), /官方 Atom 条目的版本与已封存来源指定的版本不同|查询的来源 ID/);
     assert.equal(sidecars.sealPublicationMetadata({ rootDir: versioned.sidecarRoot,
         sourceRoot: versioned.sourceRoot, arxivId: ID, generation: 1,
         officialResult: official(ID, undefined, undefined, undefined, 1, `${ID}v1`,
@@ -137,12 +138,12 @@ test('出版元数据附带文件只接受不新于已保存并核验来源的 A
     assert.throws(() => sidecars.sealPublicationMetadata({ rootDir: impossible.sidecarRoot,
         sourceRoot: impossible.sourceRoot, arxivId: ID, generation: 1,
         officialResult: official(ID, undefined, undefined, undefined, 1, `${ID}v1`,
-            '2026-01-01T00:00:00.000Z') }), /newer than its observation time/);
+            '2026-01-01T00:00:00.000Z') }), /官方 Atom 的更新时间晚于记录的获取时间/);
     const stale = await fixture(t, 'stale');
     assert.throws(() => sidecars.sealPublicationMetadata({ rootDir: stale.sidecarRoot,
         sourceRoot: stale.sourceRoot, arxivId: ID, generation: 1,
         officialResult: official(ID, undefined, undefined, undefined, 1, ID,
-            '2026-01-02T00:00:00.000Z') }), /predates the versionless sealed source/);
+            '2026-01-02T00:00:00.000Z') }), /官方 Atom 响应的获取时间早于不带版本号的已封存来源/);
 });
 
 for (const target of [sidecars.ATOM_NAME, sidecars.METADATA_NAME, sidecars.MANIFEST_NAME]) {
@@ -152,22 +153,22 @@ for (const target of [sidecars.ATOM_NAME, sidecars.METADATA_NAME, sidecars.MANIF
         const filename = path.join(sidecars.sidecarDirectory(f.sidecarRoot, ID, 1), target);
         fs.appendFileSync(filename, target === sidecars.ATOM_NAME ? '<!-- drift -->' : ' ');
         assert.throws(() => sidecars.readPublicationMetadata({ rootDir: f.sidecarRoot,
-            sourceRoot: f.sourceRoot, arxivId: ID, generation: 1 }), /drift|canonical|response/i);
+            sourceRoot: f.sourceRoot, arxivId: ID, generation: 1 }), /字段、论文身份、字节数或 SHA 与记录不同|发布元数据 JSON 必须按固定的字段顺序和保存格式写入/);
     });
 }
 
 test('出版元数据附带文件拒绝论文、证明、历史来源版本不符，以及多余文件', async t => {
     const f = await fixture(t); const wrong = official('2601.00002');
     assert.throws(() => sidecars.sealPublicationMetadata({ rootDir: f.sidecarRoot,
-        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult: wrong }), /belongs|replayed|response|查询的来源 ID/i);
+        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult: wrong }), /查询的来源 ID|官方 Atom 提取结果或获取记录无法根据原始响应重新核对/);
     const drifted = official(); drifted.proof.fileSha256 = sha('wrong');
     assert.throws(() => sidecars.sealPublicationMetadata({ rootDir: f.sidecarRoot,
-        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult: drifted }), /proof/);
+        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult: drifted }), /官方 Atom 提取结果或获取记录无法根据原始响应重新核对/);
     sidecars.sealPublicationMetadata({ rootDir: f.sidecarRoot, sourceRoot: f.sourceRoot,
         arxivId: ID, generation: 1, officialResult: official() });
     fs.writeFileSync(path.join(sidecars.sidecarDirectory(f.sidecarRoot, ID, 1), 'extra'), 'x', { mode: 0o600 });
     assert.throws(() => sidecars.readPublicationMetadata({ rootDir: f.sidecarRoot,
-        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1 }), /unexpected files/);
+        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1 }), /发布元数据目录中含额外文件/);
 });
 
 test('出版元数据附带文件拒绝来源清单被改动、来源不对应、文本被改动或代次缺失', async t => {
@@ -178,11 +179,11 @@ test('出版元数据附带文件拒绝来源清单被改动、来源不对应�
     driftedManifest.capturedAt = '2026-01-03T00:00:02.000Z';
     fs.writeFileSync(sourceManifest, canonicalJson(driftedManifest), { mode: 0o600 });
     assert.throws(() => sidecars.readPublicationMetadata({ rootDir: f.sidecarRoot,
-        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1 }), /manifest|canonical|drift|bind/i);
+        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1 }), /manifest|canonical|drift|bind|发布元数据不再对应这组已封存的来源文件/i);
 
     const other = await fixture(t, 'different-source');
     assert.throws(() => sidecars.readPublicationMetadata({ rootDir: f.sidecarRoot,
-        sourceRoot: other.sourceRoot, arxivId: ID, generation: 1 }), /source generation/i);
+        sourceRoot: other.sourceRoot, arxivId: ID, generation: 1 }), /发布元数据不再对应这组已封存的来源文件/);
     const corrupt = await fixture(t, 'corrupt-source');
     const otherText = path.join(corrupt.sourceRoot, ID, 'generation-000001', 'source.txt');
     fs.appendFileSync(otherText, 'drift');
@@ -199,11 +200,11 @@ test('出版元数据附带文件拒绝公开权限和硬链接证据', async t 
     const atomFile = path.join(directory, sidecars.ATOM_NAME);
     fs.chmodSync(atomFile, 0o644);
     assert.throws(() => sidecars.readPublicationMetadata({ rootDir: f.sidecarRoot,
-        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1 }), /permissions/);
+        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1 }), /权限必须为 0600/);
     fs.chmodSync(atomFile, 0o600);
     fs.linkSync(atomFile, path.join(f.root, 'atom-hardlink.xml'));
     assert.throws(() => sidecars.readPublicationMetadata({ rootDir: f.sidecarRoot,
-        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1 }), /unsafe.*Atom/i);
+        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1 }), /Atom 响应 不安全/);
 });
 
 test('可复用的历史 Atom 要求原始字节、官方证明和精确的元数据记录', async t => {
@@ -222,7 +223,7 @@ test('可复用的历史 Atom 要求原始字节、官方证明和精确的元�
     assert.equal(reused.proof.querySourceId, ID);
     assert.throws(() => sidecars.validateOfficialCompatibility({ sourceRoot: f.sourceRoot,
         arxivId: ID, generation: 1, officialResult: { ...reused,
-            proof: { ...reused.proof, observedAt: '2026-01-02T00:00:00.000Z' } } }), /predates/);
+            proof: { ...reused.proof, observedAt: '2026-01-02T00:00:00.000Z' } } }), /官方 Atom 响应的获取时间早于不带版本号的已封存来源/);
     delete run.metadataSources.historicalRawMetadata.observedAt;
     fs.writeFileSync(path.join(directory, 'run.json'), JSON.stringify(run), { mode: 0o600 });
     assert.equal(sidecars.findReusableOfficialAtom({ freshRewriteRoot: runs, arxivId: ID }), null,
@@ -510,3 +511,104 @@ for (const [retryable, peerFails] of [[false, false], [true, false], [false, tru
         }
     });
 }
+
+
+// 子进程限时用于发现打开 FIFO 时的阻塞；超时必须让测试失败，不能当作成功拒绝。
+function metadataChild(method, options) {
+    const script = `const api = require(process.argv[1]);
+        try {
+            const value = api[process.argv[2]](JSON.parse(process.argv[3]));
+            console.log(JSON.stringify({ size: value instanceof Map ? value.size : undefined }));
+        } catch (error) {
+            console.log(JSON.stringify({ name: error.name, code: error.code,
+                retryable: error.retryable, message: error.message }));
+        }`;
+    return spawnSync(process.execPath, ['-e', script,
+        require.resolve('../scripts/lib/historical-arxiv-publication-metadata.js'), method,
+        JSON.stringify(options)], {
+        encoding: 'utf8', timeout: 2000, killSignal: 'SIGKILL',
+        env: { ...process.env, PD_DISABLE_FILE_LOGS: '1' }
+    });
+}
+function replaceWithFifo(filename) {
+    fs.unlinkSync(filename);
+    const created = spawnSync('mkfifo', ['-m', '600', filename], { encoding: 'utf8' });
+    assert.equal(created.error, undefined);
+    assert.equal(created.status, 0, created.stderr);
+    assert.equal(fs.lstatSync(filename).isFIFO(), true);
+    return fs.lstatSync(filename).ino;
+}
+function completedMetadataChild(child) {
+    assert.equal(child.error, undefined, '公开读取入口必须及时返回，不能在打开 FIFO 时超时');
+    assert.equal(child.status, 0, child.stderr);
+    return JSON.parse(child.stdout.trim());
+}
+
+test('出版元数据读取拒绝三个文件中的 FIFO，并保持合法封存文件的读取结果',
+    { skip: process.platform === 'win32' ? '此测试需要 POSIX FIFO' : false }, async t => {
+        for (const [filename, label] of [
+            [sidecars.MANIFEST_NAME, '发布元数据清单'],
+            [sidecars.METADATA_NAME, '发布元数据记录'],
+            [sidecars.ATOM_NAME, '发布元数据 Atom 响应']
+        ]) {
+            await t.test(filename, async sub => {
+                const f = await fixture(sub, 'fifo');
+                const options = { rootDir: f.sidecarRoot, sourceRoot: f.sourceRoot,
+                    arxivId: ID, generation: 1 };
+                const sealed = sidecars.sealPublicationMetadata({ ...options,
+                    officialResult: official(), now: '2026-01-04T00:00:00.000Z' });
+                const expected = sidecars.readPublicationMetadata(options);
+                const bytes = new Map();
+                for (const name of [sidecars.MANIFEST_NAME, sidecars.METADATA_NAME, sidecars.ATOM_NAME]) {
+                    bytes.set(name, fs.readFileSync(path.join(sealed.directory, name)));
+                }
+                const target = path.join(sealed.directory, filename);
+                const inode = replaceWithFifo(target);
+                const rejected = completedMetadataChild(metadataChild('readPublicationMetadata', options));
+                assert.deepEqual(rejected, {
+                    name: 'HistoricalArxivPublicationMetadataError',
+                    code: 'HISTORICAL_ARXIV_PUBLICATION_METADATA_INTEGRITY', retryable: false,
+                    message: `历史 arXiv 发布元数据被拒绝：${label} 不安全：必须是只有一个硬链接的普通文件，且字节数须在允许范围内`
+                });
+                assert.equal(fs.lstatSync(target).isFIFO(), true);
+                assert.equal(fs.lstatSync(target).ino, inode);
+                assert.equal(fs.lstatSync(target).mode & 0o777, 0o600);
+                for (const [name, original] of bytes) {
+                    if (name !== filename) assert.deepEqual(fs.readFileSync(path.join(sealed.directory, name)), original);
+                }
+                fs.unlinkSync(target);
+                fs.writeFileSync(target, bytes.get(filename), { mode: 0o600 });
+                assert.deepEqual(sidecars.readPublicationMetadata(options), expected);
+            });
+        }
+    });
+
+test('旧运行的官方 Atom 文件是 FIFO 时，复用索引及时跳过它且不改文件',
+    { skip: process.platform === 'win32' ? '此测试需要 POSIX FIFO' : false }, t => {
+        const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'retained-atom-fifo-'));
+        t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+        const runId = '11111111-1111-4111-8111-111111111111';
+        const directory = path.join(root, runId);
+        fs.mkdirSync(directory, { mode: 0o700 });
+        const result = official();
+        const atomFile = path.join(directory, `metadata-${ID}.atom.xml`);
+        const runFile = path.join(directory, 'run.json');
+        const inputsFile = path.join(directory, 'inputs.json');
+        fs.writeFileSync(atomFile, result.rawBytes, { mode: 0o600 });
+        fs.writeFileSync(runFile, JSON.stringify({ metadataSources: { historicalRawMetadata: result.proof } }), { mode: 0o600 });
+        fs.writeFileSync(inputsFile, JSON.stringify({ papers: [result.metadata] }), { mode: 0o600 });
+        const options = { freshRewriteRoot: root, paperIds: [ID] };
+        const expected = sidecars.reusableOfficialAtomIndex(options);
+        assert.equal(expected.size, 1);
+        const originalRun = fs.readFileSync(runFile), originalInputs = fs.readFileSync(inputsFile);
+        const inode = replaceWithFifo(atomFile);
+        assert.deepEqual(completedMetadataChild(metadataChild('reusableOfficialAtomIndex', options)), { size: 0 });
+        assert.equal(fs.lstatSync(atomFile).isFIFO(), true);
+        assert.equal(fs.lstatSync(atomFile).ino, inode);
+        assert.equal(fs.lstatSync(atomFile).mode & 0o777, 0o600);
+        assert.deepEqual(fs.readFileSync(runFile), originalRun);
+        assert.deepEqual(fs.readFileSync(inputsFile), originalInputs);
+        fs.unlinkSync(atomFile);
+        fs.writeFileSync(atomFile, result.rawBytes, { mode: 0o600 });
+        assert.deepEqual(sidecars.reusableOfficialAtomIndex(options), expected);
+    });
