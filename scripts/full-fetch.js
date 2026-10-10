@@ -859,7 +859,8 @@ async function resumeFilterStage({
     initialDecisions,
     filterModel,
     filterPromptHash,
-    today
+    today,
+    onDecisionsSaved = null
 }) {
     if (hasRequiredSourceFailure(sourceHealth)) {
         throw new Error(`缓存候选的抓取来源不完整，保留已有恢复记录，禁止调用筛选模型: ${getSourceFailures(sourceHealth).join('; ')}`);
@@ -887,6 +888,7 @@ async function resumeFilterStage({
                 sourceHealth,
                 retryableDecisions
             });
+            if (onDecisionsSaved) onDecisionsSaved(filterDecisions, retryableFilterDecisions);
             console.log(`  💾 筛选续跑进度已保存: ${Object.keys(filterDecisions).length}/${allPapersFiltered.length} 篇明确判断，${Object.keys(retryableDecisions).length} 篇待重试`);
         }
     });
@@ -905,6 +907,7 @@ async function resumeFilterStage({
             sourceHealth,
             retryableDecisions: retryableFilterDecisions
         });
+        if (onDecisionsSaved) onDecisionsSaved(filterDecisions, retryableFilterDecisions);
         throw new Error(`筛选续跑未完成：明确决定 ${filterRunStats.decided}/${filterRunStats.totalCandidates}，待重试 ${filterRunStats.retryable || filterRunStats.retryableIds?.length || 0}`);
     }
     if (hasRequiredSourceFailure(sourceHealth)) {
@@ -1245,19 +1248,209 @@ function refreshCommittedPublishedPaperIds(blogRepo) {
     return readCommittedPublishedPaperIds(blogRepo);
 }
 
-function parseFullFetchArgs(argv = []) {
-    if (argv.length === 0) return {};
-    if (argv.length !== 2 || argv[0] !== '--date') throw new Error('用法：full-fetch.js [--date YYYY-MM-DD]');
-    const date = argv[1];
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number(date.slice(0, 4)) < 1
-        || Number.isNaN(Date.parse(`${date}T00:00:00Z`))
-        || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) {
-        throw new Error('抓取日期必须是有效的 YYYY-MM-DD 公历日期');
+function validateRefilterOptions(options = {}) {
+    if (options.refilterIds === undefined && options.refilterReason === undefined) return null;
+    if (!Array.isArray(options.refilterIds) || !options.refilterIds.length
+        || options.refilterIds.some(id => typeof id !== 'string' || !/^\d{4}\.\d{4,5}(?:v[1-9]\d*)?$/.test(id))
+        || typeof options.refilterReason !== 'string' || !options.refilterReason.trim()) {
+        throw new Error('指定论文复筛须提供有效的 arXiv ID 数组和非空复核原因');
     }
-    return { date };
+    const ids = options.refilterIds.map(normalizedId);
+    if (new Set(ids).size !== ids.length) throw new Error('指定论文复筛的 arXiv ID 不得重复');
+    return { ids, reason: options.refilterReason.trim() };
+}
+
+function parseFullFetchArgs(argv = []) {
+    const options = {};
+    for (let index = 0; index < argv.length; index += 2) {
+        const flag = argv[index]; const value = argv[index + 1];
+        if (!value || !['--date', '--refilter', '--refilter-reason'].includes(flag)) {
+            throw new Error('用法：full-fetch.js [--date YYYY-MM-DD] [--refilter ARXIV_ID --refilter-reason 复核原因]');
+        }
+        if (flag === '--refilter') (options.refilterIds ||= []).push(value);
+        else {
+            const key = flag === '--date' ? 'date' : 'refilterReason';
+            if (options[key] !== undefined) throw new Error(`参数不得重复：${flag}`);
+            options[key] = value;
+        }
+    }
+    if (options.date !== undefined) {
+        const date = options.date;
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || Number(date.slice(0, 4)) < 1
+            || Number.isNaN(Date.parse(`${date}T00:00:00Z`))
+            || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) {
+            throw new Error('抓取日期必须是有效的 YYYY-MM-DD 公历日期');
+        }
+    }
+    validateRefilterOptions(options);
+    return options;
+}
+
+function verifyRefilterRawFromCheckpoint(raw, expected, checkpoint = loadFetchCheckpoint(raw.batchDate, expected.candidateFingerprint)) {
+    const historicalIds = checkpoint?.historicalDedupIds;
+    if (!checkpoint || checkpoint.batchDate !== raw.batchDate || checkpoint.batchId !== raw.batchId
+        || stableContentSha256(checkpoint.fetchBoundary) !== stableContentSha256(raw.fetchBoundary)
+        || !Array.isArray(historicalIds) || new Set(historicalIds).size !== historicalIds.length
+        || stableHash([...historicalIds].sort()) !== expected.blogDedupFingerprint) {
+        throw new Error('指定论文复筛的抓取检查点与批次或已发布集合不符；未请求模型');
+    }
+    const expectedCategories = Config.ARXIV_CATEGORIES.map(category => category.id).sort();
+    if (!Array.isArray(checkpoint.categoryOrder)
+        || JSON.stringify([...checkpoint.categoryOrder].sort()) !== JSON.stringify(expectedCategories)) {
+        throw new Error('指定论文复筛的抓取类别顺序不完整；未请求模型');
+    }
+    const historical = new Set(historicalIds);
+    const arxivById = new Map();
+    for (const categoryId of checkpoint.categoryOrder) {
+        for (const originalPaper of checkpoint.arxiv[categoryId].papers) {
+            const paper = structuredClone(originalPaper); const id = normalizedId(paper);
+            if (historical.has(id)) continue;
+            if (arxivById.has(id)) mergePaperCategories(arxivById.get(id), paper);
+            else arxivById.set(id, paper);
+        }
+    }
+    const reconstructed = pinPapersToBatch(mergeAndDeduplicate([...arxivById.values()],
+        structuredClone(checkpoint.huggingface.papers)), raw.timestamp)
+        .filter(paper => !historical.has(normalizedId(paper)));
+    const sorted = papers => [...papers].sort((left, right) => {
+        const leftId = normalizedId(left); const rightId = normalizedId(right);
+        return leftId < rightId ? -1 : leftId > rightId ? 1 : 0;
+    });
+    if (new Set(raw.papers.map(normalizedId)).size !== raw.papers.length
+        || stableContentSha256(sorted(reconstructed)) !== stableContentSha256(sorted(raw.papers))) {
+        throw new Error('指定论文复筛的原始候选内容与完整抓取来源合并结果不符；未请求模型');
+    }
+    return { candidateCount: reconstructed.length, rawPapersSha256: stableContentSha256(raw.papers),
+        reconstructedPapersSha256: stableContentSha256(reconstructed) };
+}
+
+function prepareExplicitRefilter(today, expected, request) {
+    const loaded = loadResumableFilterForToday(today, expected);
+    if (!loaded) throw new Error('指定论文复筛需要当天可复用且来源完整的原始候选与抓取检查点；未请求模型');
+    const raw = loaded.rawCandidates;
+    verifyRefilterRawFromCheckpoint(raw, expected);
+    const decisionBytes = fs.readFileSync(FILTER_DECISIONS_FILE);
+    const original = JSON.parse(decisionBytes.toString('utf8'));
+    for (const key of ['filterModel', 'filterPromptHash', 'filterConfigFingerprint', 'candidateFingerprint',
+        'sourceConfigFingerprint', 'blogDedupFingerprint']) {
+        if (original[key] !== expected[key]) throw new Error(`指定论文复筛的原决策 ${key} 不匹配；未请求模型`);
+    }
+    for (const key of ['batchDate', 'batchId', 'rawPapersSha256', 'fetchSourcesSha256']) {
+        if (original[key] !== raw[key]) throw new Error(`指定论文复筛的原决策 ${key} 不匹配；未请求模型`);
+    }
+    for (const key of ['sourceContractVersion', 'coverageStrategy', 'pageSize']) {
+        if (original[key] !== raw[key]) throw new Error(`指定论文复筛的原决策 ${key} 不匹配；未请求模型`);
+    }
+    if (raw.batchDate !== today || stableContentSha256(original.fetchBoundary) !== stableContentSha256(raw.fetchBoundary)) {
+        throw new Error('指定论文复筛的日期或来源时间范围不匹配；未请求模型');
+    }
+    const papersById = new Map(raw.papers.map(paper => [normalizedId(paper), paper]));
+    for (const id of request.ids) {
+        const paper = papersById.get(id); const decision = original.decisions?.[id];
+        if (!paper || !isDefinitiveFilterDecision(decision)
+            || decision.inputSha256 !== buildFilterInputSha256(paper)
+            || decision.parseSource === 'keyword_prefilter') {
+            throw new Error(`指定论文 ${id} 必须是当前原始候选中已有有效模型决定的论文；此入口只复核模型决定，未请求模型`);
+        }
+    }
+    const analysis = loadTodayJsonFile(RESULT_FILE, today);
+    if (analysis?.batchId === raw.batchId && analysis.dailyFreshSourceRun) {
+        throw new Error('本批已进入封存来源分析，不能通过复筛改变论文集合；未请求模型');
+    }
+    const initialDecisions = { ...original.decisions };
+    for (const id of request.ids) delete initialDecisions[id];
+    const remainingUndecidedIds = validateFilterDecisionCoverage(raw.papers, original.decisions).missingIds
+        .filter(id => !request.ids.includes(id));
+    const auditDir = path.join(Config.DATA_DIR, 'runtime', 'filter-rechecks', crypto.randomUUID());
+    fs.mkdirSync(path.dirname(auditDir), { recursive: true, mode: 0o700 });
+    const auditRoot = fs.lstatSync(path.dirname(auditDir));
+    if (!auditRoot.isDirectory() || auditRoot.isSymbolicLink()) throw new Error('复筛审计目录不是普通目录；未请求模型');
+    fs.mkdirSync(auditDir, { mode: 0o700 });
+    const oldFile = path.join(auditDir, 'original-filter-decisions.json');
+    fs.writeFileSync(oldFile, decisionBytes, { flag: 'wx', mode: 0o600 });
+    const audit = { contract: 'daily-explicit-filter-recheck-v1', requestedAt: getBeijingISOString(),
+        status: 'pending', reason: request.reason, targetedRefilterIds: request.ids,
+        remainingUndecidedIds, remainingUndecidedCount: remainingUndecidedIds.length,
+        batchDate: raw.batchDate, batchId: raw.batchId,
+        rawFileSha256: crypto.createHash('sha256').update(fs.readFileSync(RAW_CANDIDATES_FILE)).digest('hex'),
+        checkpointFileSha256: crypto.createHash('sha256').update(fs.readFileSync(FETCH_CHECKPOINT_FILE)).digest('hex'),
+        originalDecisionsFileSha256: crypto.createHash('sha256').update(decisionBytes).digest('hex'),
+        fingerprints: Object.fromEntries(['candidateFingerprint', 'sourceConfigFingerprint', 'blogDedupFingerprint',
+            'filterConfigFingerprint', 'filterPromptHash', 'rawPapersSha256', 'fetchSourcesSha256'].map(key => [key, original[key]])),
+        originalDecisions: Object.fromEntries(request.ids.map(id => [id, original.decisions[id]])) };
+    const auditFile = path.join(auditDir, 'recheck.json');
+    writeFileAtomic(auditFile, JSON.stringify(audit, null, 2), { mode: 0o600 });
+    // 在请求前移除旧决定：新请求失败时也不能把旧结果重新当作本次成功决定。
+    const pending = { ...original, decisions: initialDecisions,
+        stats: { ...original.stats, complete: false, decided: Object.keys(initialDecisions).length },
+        retryableDecisions: { ...original.retryableDecisions } };
+    for (const id of request.ids) pending.retryableDecisions[id] = {
+        id, related: null, retryable: true, fallback: true, parseSource: 'explicit_recheck_pending',
+        reason: request.reason, rawResponse: '', inputSha256: buildFilterInputSha256(papersById.get(id))
+    };
+    const pendingCoverage = validateFilterDecisionCoverage(raw.papers, initialDecisions);
+    const definitiveDecisions = Object.entries(initialDecisions)
+        .filter(([id, decision]) => papersById.has(id) && isDefinitiveFilterDecision(decision)
+            && decision.inputSha256 === buildFilterInputSha256(papersById.get(id)))
+        .map(([, decision]) => decision);
+    pending.stats = { ...original.stats, complete: false, decided: pendingCoverage.decided,
+        related: definitiveDecisions.filter(decision => decision.related === true).length,
+        retryable: Object.keys(pending.retryableDecisions).length,
+        llmDecided: definitiveDecisions.filter(decision => decision.parseSource !== 'keyword_prefilter').length };
+    writeFileAtomic(FILTER_DECISIONS_FILE, JSON.stringify(pending, null, 2));
+    return { ...loaded, decisionsData: pending,
+        coverage: validateFilterDecisionCoverage(raw.papers, initialDecisions), audit, auditFile };
+}
+
+function refreshExplicitRefilterAudit(recheck, decisions, retryableDecisions, runError = null, finished = false) {
+    const { audit, auditFile } = recheck;
+    audit.newDecisions ||= {};
+    for (const id of audit.targetedRefilterIds) {
+        const current = decisions?.[id] || retryableDecisions?.[id];
+        if (current && current.parseSource !== 'explicit_recheck_pending') {
+            if (current.inputSha256 !== audit.originalDecisions[id].inputSha256) {
+                throw new Error(`指定论文 ${id} 的新复筛输入 SHA 与本次候选不符`);
+            }
+            audit.newDecisions[id] = current;
+        }
+    }
+    if (audit.targetedRefilterIds.every(id => isDefinitiveFilterDecision(audit.newDecisions[id]))) {
+        audit.status = 'decided';
+    } else if (audit.targetedRefilterIds.some(id => audit.newDecisions[id]
+        && !isDefinitiveFilterDecision(audit.newDecisions[id]))) {
+        audit.status = 'failed';
+    } else audit.status = finished && runError ? 'failed' : 'pending';
+    if (finished) audit.finishedAt = getBeijingISOString();
+    if (runError) audit.runError = runError;
+    // 真实结果保存后立即写审计；写入失败向外抛出，不能继续封存或分析。
+    writeFileAtomic(auditFile, JSON.stringify(audit, null, 2), { mode: 0o600 });
 }
 
 async function runFullFetch(options = {}) {
+    const auditContext = {};
+    try { return await runFullFetchBody(options, auditContext); }
+    catch (error) {
+        auditContext.error = { name: error.name, message: error.message, code: error.code || null };
+        throw error;
+    } finally {
+        if (auditContext.recheck) {
+            const current = readJsonSafe(FILTER_DECISIONS_FILE);
+            const { audit } = auditContext.recheck;
+            const bindings = { batchDate: audit.batchDate, batchId: audit.batchId, ...audit.fingerprints };
+            const invalid = Object.entries(bindings).some(([key, value]) => current?.[key] !== value);
+            if (invalid) {
+                audit.runError = { message: '复筛结束时的决定文件与本次批次或来源指纹不符，未采纳其他文件的结果' };
+                writeFileAtomic(auditContext.recheck.auditFile, JSON.stringify(audit, null, 2), { mode: 0o600 });
+                throw new Error(audit.runError.message);
+            }
+            refreshExplicitRefilterAudit(auditContext.recheck, current?.decisions,
+                current?.retryableDecisions, auditContext.error, true);
+        }
+    }
+}
+
+async function runFullFetchBody(options = {}, auditContext = {}) {
+    const refilterRequest = validateRefilterOptions(options);
     let batchStartedAt = getBeijingISOString();
     let batchDate = batchStartedAt.slice(0, 10);
     if (options.date !== undefined) {
@@ -1281,6 +1474,14 @@ async function runFullFetch(options = {}) {
         loadTodayJsonFile(FETCH_CHECKPOINT_FILE, today), publishedIds);
     batchStartedAt = normalizeToBeijingISOString(fetchBoundary.until);
     const candidateFingerprints = buildCandidateFingerprints(historicalExistingIds, publishedIds, fetchBoundary);
+
+    const refilter = refilterRequest ? prepareExplicitRefilter(today, {
+        ...candidateFingerprints,
+        filterModel: process.env.PAPER_ANALYZER_MODEL || '',
+        filterPromptHash: getFilterPromptHash(),
+        filterConfigFingerprint: getFilterConfigFingerprint(getFilterPromptHash())
+    }, refilterRequest) : null;
+    if (refilter) auditContext.recheck = refilter;
 
     migrateLegacyAnalysisResultToCurrent();
     autoArchiveCurrentData(batchDate);
@@ -1331,19 +1532,19 @@ async function runFullFetch(options = {}) {
         filterConfigFingerprint, getFilterConfigFingerprint(legacyPromptHash)
     ];
 
-    const completedFiltered = loadCompleteFilteredForToday(today, FILTERED_FILE, {
+    const completedFiltered = refilter ? null : loadCompleteFilteredForToday(today, FILTERED_FILE, {
         filterModel,
         filterPromptHash: acceptedFilterPromptHashes,
         filterConfigFingerprint: acceptedFilterConfigFingerprints,
         ...candidateFingerprints,
         requireConsistentFilterArtifacts: true
     });
-    const resumableFilter = completedFiltered ? null : loadResumableFilterForToday(today, {
+    const resumableFilter = refilter || (completedFiltered ? null : loadResumableFilterForToday(today, {
         filterModel,
         filterPromptHash: acceptedFilterPromptHashes,
         filterConfigFingerprint: acceptedFilterConfigFingerprints,
         ...candidateFingerprints
-    });
+    }));
     if (completedFiltered) {
         console.log('⏭️ 检测到今日完整 filtered-papers.json，跳过抓取与筛选，直接续跑深度分析');
         filteredNew = completedFiltered.papers;
@@ -1418,7 +1619,9 @@ async function runFullFetch(options = {}) {
             initialDecisions: resumableFilter.decisionsData.decisions,
             filterModel,
             filterPromptHash,
-            today
+            today,
+            onDecisionsSaved: refilter ? (decisions, retryable) =>
+                refreshExplicitRefilterAudit(refilter, decisions, retryable) : null
         });
         filtered = resumed.filtered;
         filteredNew = resumed.filteredNew;
@@ -2080,6 +2283,7 @@ if (require.main === module) {
 module.exports = {
     fullFetch,
     parseFullFetchArgs,
+    verifyRefilterRawFromCheckpoint,
     refreshCommittedPublishedPaperIds,
     runFullFetch,
     getEffectiveAnalysisConcurrency,

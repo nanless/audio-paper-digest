@@ -51,6 +51,18 @@ The keyword layer keeps papers that might be relevant. The model makes the final
 
 Decisions are saved per paper in `filter-decisions.json`. Filtering follows `PD_FILTER_BATCH_SIZE`. The current account moves to a later account only on an explicit `GoUsageLimitError` or `Insufficient balance` response. A generic 429 follows rate-limit backoff. Filtering is complete only when decisions cover every candidate and `filtered-papers.json` exactly matches the relevant decisions minus explicit exclusions.
 
+### Recheck a specific paper
+
+After comparing the abstract with the saved model reason, stop the running daily task before requesting another model decision:
+
+```bash
+npm run fetch -- --date YYYY-MM-DD --refilter ARXIV_ID --refilter-reason 'Specific conflict between the abstract and the saved reason'
+```
+
+The date must be today in Beijing. The ID must have a valid model decision in this batch with complete sources; keyword-only exclusions are not accepted. The reason is an operation record, not an instruction to include the paper: the model still uses the original prompt. The original decision file is preserved before removing the target decision. Other valid decisions are reused and missing decisions continue normally. A failed new request cannot reuse the target's old decision as a successful result. Each saved filtering batch also updates the recheck record; a record-write failure stops the run.
+
+Once this batch has entered saved-source analysis, changing its selected set is refused. After rechecking, this entry continues normal source capture and analysis. Qualified analysis must still proceed through blog generation, review, push, deployment/page checks, and visual tasks; rechecking alone does not complete the daily digest.
+
 ## 4. Full Text and Staged Analysis
 
 After filtering, the system freshly fetches official HTML text and PDF for every selected arXiv ID. It atomically saves `source.txt`, `source.pdf`, `source-runtime.json`, and `source-manifest.json` under `data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/`.

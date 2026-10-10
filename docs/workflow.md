@@ -50,6 +50,18 @@ arXiv 和 HuggingFace 请求使用项目代理。每个来源分别记录获取�
 
 模型决定逐篇写入 `filter-decisions.json`，筛选批次大小由 `PD_FILTER_BATCH_SIZE` 控制。当前账号只在明确返回 `GoUsageLimitError` 或 `Insufficient balance` 时切换到后续账号；普通 429 仍按限流规则退避。决定必须覆盖全部候选，`filtered-papers.json` 必须精确对应相关决定并扣除显式排除项，筛选才算完成。
 
+### 指定论文重新筛选
+
+人工核对摘要与模型理由后，如需让模型重新判断某篇论文，先结束正在运行的日更，再运行：
+
+```bash
+npm run fetch -- --date YYYY-MM-DD --refilter ARXIV_ID --refilter-reason '摘要与原筛选理由存在具体冲突'
+```
+
+日期必须是北京时间当天，ID 必须对应本批完整来源中的有效模型决定；关键词直接排除项不能通过这个入口复筛。复核原因用于保存操作记录，模型仍使用原提示词判断，不能用此参数指定入选结论。程序保存原决定的完整文件，再移除目标旧决定；其他有效决定复用，尚缺决定继续筛选。新请求失败时，目标旧决定不会重新当作本次成功结果。每批保存筛选进度后同步保存复核记录；记录保存失败会停止运行。
+
+本批已进入封存来源分析时，程序拒绝改变入选集合。复筛完成后，这个入口继续正常的来源封存与分析；分析合格后从博客生成阶段继续审查、推送、部署与网页核验及视觉任务，不能把复筛完成当作日更完成。
+
 ## 4. 全文与多阶段分析
 
 筛选完成后，程序为每个入选 arXiv ID 重新获取官方 HTML 文本和 PDF，原子保存到 `data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/`。每篇必须有 `source.txt`、`source.pdf`、`source-runtime.json` 和 `source-manifest.json`。
