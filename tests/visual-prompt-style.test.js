@@ -9,7 +9,7 @@ function readPrompt(name) {
     return fs.readFileSync(path.join(PROJECT_ROOT, 'prompts', name), 'utf8');
 }
 
-describe('发布后视觉提示词风格契约', () => {
+describe('发布后长图与封面提示词的风格要求', () => {
     it('论文长图使用清新编辑设计并显式排除旧版霓虹仪表盘风格', () => {
         const prompt = readPrompt('visual-summary.md');
         for (const required of [
@@ -57,7 +57,7 @@ describe('发布后视觉提示词风格契约', () => {
         assert.doesNotMatch(prompt, /luminous cyan/i);
     });
 
-    it('确定性渲染器只暴露调试命令，不伪装成默认生图流程', () => {
+    it('图片绘制脚本只提供调试命令，不作为默认生图入口', () => {
         const pkg = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf8'));
         assert.strictEqual(
             pkg.scripts['visual:render:debug'],
@@ -66,8 +66,8 @@ describe('发布后视觉提示词风格契约', () => {
         assert.ok(!Object.hasOwn(pkg.scripts, 'visual:render'));
     });
 
-    // v1 永久冻结，只作为历史契约留在上面两条断言里。实际发出去的是版本登记表解析出的
-    // 那一份，所以设计契约必须在当前中文正文上再查一遍，防止换版时遗漏约束。
+    // v1 永久冻结，上面两条测试保留旧版样式检查。实际使用的提示词由版本登记表解析，
+    // 所以还须检查当前中文正文中的设计要求，防止换版时遗漏。
     it('当前长图与封面提示词保留规定的设计要素和禁止样式', () => {
         const { currentTextStagePromptPath } = require('../scripts/lib/prompt-text-versions.js');
         const cases = [
@@ -116,7 +116,7 @@ describe('发布后视觉提示词风格契约', () => {
                 assert.match(
                     prompt,
                     new RegExp(phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i'),
-                    `${stage} 的当前提示词缺少设计契约: ${phrase}`
+                    `${stage} 的当前提示词缺少设计要求: ${phrase}`
                 );
             }
             assert.doesNotMatch(prompt, /deep midnight-blue background/i);

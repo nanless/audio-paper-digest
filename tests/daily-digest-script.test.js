@@ -55,9 +55,9 @@ test('默认论文速递脚本校验真实公历日期，且新抓取只能绑�
 test('显式 Manual 入口声明 records v4/spec v6，但不自动创建子任务', () => {
     assert.match(source, /data\/current\/manual-v6\/\$\{target_date\}/);
     assert.match(source, /records-v4\.json/);
-    assert.match(source, /生产 spec v6\/canonical/);
+    assert.match(source, /生成正式 spec v6 并写入正式分析结果（canonical）/);
     assert.match(source, /不会自动创建子任务、准备单篇任务材料，也不会汇总生成 records-v4\.json/);
-    assert.match(source, /逐篇创建 Terra-high 单篇子代理/);
+    assert.match(source, /逐篇创建 gpt-6\.1-sol\/high 单篇助手/);
     assert.doesNotMatch(source, /每篇由独立 paper subagent 写 records v3/);
     assert.doesNotMatch(source, /manual-v6-shadow\/\$\{target_date\}/);
 });

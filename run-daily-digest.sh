@@ -153,15 +153,15 @@ if [ "$start_index" -eq 1 ] && [ "$api_mode" -ne 1 ]; then
   run_stage 1 "Manual 联网抓取候选（不调用筛选模型）" \
     npm run manual:fetch -- --date "$target_date" --raw
   echo "==> Manual v6 已完成候选抓取，接下来需要逐篇人工筛选。"
-  echo "==> 下一步：每篇候选由独立 subagent 审核，生成 manual_offline spec 后运行："
+  echo "==> 下一步：每篇候选由独立助手审核，完成 manual_offline spec 后运行："
   echo "    npm run manual:fetch -- --date ${target_date} --select FILTER_SPEC.json"
   echo "    npm run manual:fulltext -- ${target_date}"
   echo "    npm run manual:tasks -- init --date ${target_date}"
   echo "    npm run manual:packet -- --date ${target_date} --paper ARXIV_ID --role author"
   echo "    npm run manual:tasks -- status --date ${target_date}"
   echo "==> 任务管理器只保存任务、记录领取情况并校验提交结果；不会自动创建子任务、准备单篇任务材料，也不会汇总生成 records-v4.json。"
-  echo "==> 主 Agent 必须逐篇创建 Terra-high 单篇子代理；四类任务全部 validated 后，由 manual:records 汇总生成 records v4。"
-  echo "==> 全部任务 validated 且 records-v4.json 就绪后，用 --from spec 续跑生产 spec v6/canonical。"
+  echo "==> 主助手必须逐篇创建 gpt-6.1-sol/high 单篇助手；四类任务全部通过校验后，由 manual:records 汇总生成 records v4。"
+  echo "==> 全部任务通过校验且 records-v4.json 就绪后，用 --from spec 续跑，生成正式 spec v6 并写入正式分析结果（canonical）。"
   exit 3
 fi
 
@@ -175,7 +175,7 @@ if [ "$api_mode" -ne 1 ]; then
       npm run manual:tasks -- init --date "$target_date"
     npm run manual:tasks -- status --date "$target_date"
     echo "==> 任务管理器已停在需要人工接手的步骤；它不会自动创建子任务、准备单篇任务材料，也不会汇总生成 records-v4.json。"
-    echo "==> 主 Agent 用 manual:packet 生成每个 role packet，并完成逐篇 register/claim/start/submit；随后用 --from spec 续跑。"
+    echo "==> 主助手用 manual:packet 准备各类单篇任务材料，并逐篇完成任务登记、领取、开始和提交（register/claim/start/submit）；随后用 --from spec 续跑。"
     exit 3
   fi
   run_stage 3 "汇总生成生产 Manual records v4" \
@@ -188,10 +188,10 @@ fi
 
 run_stage 5 "生成博客" bash scripts/python-runtime.sh scripts/generate-blog.py --date "$target_date"
 if [ "$api_mode" -eq 1 ]; then
-  run_stage 6 "LLM Review 博客" bash scripts/python-runtime.sh scripts/review-blog.py --date "$target_date"
+  run_stage 6 "模型审查博客" bash scripts/python-runtime.sh scripts/review-blog.py --date "$target_date"
 elif [ "$start_index" -le 6 ]; then
   echo "==> Manual 接下来需要逐页检查已生成页面的正文和图片。"
-  echo "==> generation 中每个页面必须由主 Agent 直接调度独立的单页子代理，生成逐图 attestation v3（不允许中转代理占用并发槽）。"
+  echo "==> 页面生成清单中的每个页面必须由主助手直接安排独立的单页助手审查，生成逐图审查凭证（attestation v3）；不得通过其他助手转派，以免额外占用并发任务名额。"
   echo "==> 逐页记录汇总后运行 blog:manual-attest 与 manual-review-blog.py，再用 --from push 续跑。"
   exit 3
 fi

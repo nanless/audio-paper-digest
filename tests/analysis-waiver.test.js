@@ -67,7 +67,7 @@ function issueOf(payload, f, expected) {
     return result;
 }
 
-describe('分析豁免契约', () => {
+describe('分析豁免记录的保存与核验', () => {
     it('写出的记录字段齐全、SHA 可复算、并落在批次目录里', () => {
         const f = fixture();
         try {
@@ -387,7 +387,7 @@ describe('digest:waive-analysis 入口', () => {
     });
 });
 
-describe('digest:waive-analysis 入口的进程级契约', () => {
+describe('digest:waive-analysis 入口的理由检查与进程结果', () => {
     function useFixtureFiles(f) {
         const originals = {};
         for (const key of Object.keys(f.files)) {

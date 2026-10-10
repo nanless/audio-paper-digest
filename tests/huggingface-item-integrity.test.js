@@ -87,7 +87,7 @@ test('papers 重复ID页也必须先核题摘，不能当作正常分页终点',
     }), error => error.code === 'SOURCE_FETCH_FAILED' && error.sourceHealth.ok === false);
 });
 
-test('来源v5抓取检查点不能复用，新契约的原样检查点可以续跑', () => {
+test('来源 v5 指纹的抓取检查点被拒绝，当前指纹的检查点可读取', () => {
     // v5固定来源协议形状：旧候选SHA自洽也不代表条目已按新规则核验。
     const sourceConfigFingerprint = fullFetch.stableHash({
         sourceContractVersion: 5,

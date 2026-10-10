@@ -87,7 +87,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/keyword-prefilter.js` | Node 库 | 音频关键词预筛，追求高召回，按版本管理。 |
 | `lib/reader-repair.js` | Node 库 | 保存未通过检查的文章草稿，核对允许修改字段的 SHA，并应用经校验的局部修改。表格数量预估仅供参考；修复范围仍按错误码和字段位置核对，最终文章须通过完整解析检查。 |
 | `lib/reader-operator-patch.js` | Node 库 | 显式应用同一全新重写运行的人工局部补丁，核验来源、每个修改字段或数组项的原内容 SHA，以及完整 Reader 解析结果。只保存失败候选，保留预算、原始字节归档和重复执行记录，不生成任何成功正文凭证。 |
-| `lib/reader-signed-draft.js` | Node 库 | 把本次同源、已核验的 Reader 还原成与输入完全等价的版本。只有真正解析并注入原图之后，正文、计划、图片 SHA 全部相同才返回；不写文件、不调用模型，也不把恢复稿当作原始 API JSON。 |
+| `lib/reader-signed-draft.js` | Node 库 | 把本次同源、已核验的 Reader 还原成与输入完全等价的版本。只有实际解析并恢复原图引用后，正文、计划、图片 SHA 全部相同才返回；不写文件、不调用模型，也不把恢复稿当作原始 API JSON。 |
 | `lib/reader-signed-operator.js` | Node 库 | 显式修订同一运行的已核验 Reader，先核对完整父稿、正文、计划及来源 SHA 与修改请求一致，再还原、解析并按共同流程封存结果；恢复输出时核对先前保存且不再改动的准备记录，其中包含修改请求、父稿、运行、来源和预期输出的 SHA。只写隔离分析并要求事实复核，不调用 API。 |
 | `lib/reader-resource-binding.js` | Node 库 | 提取并规范化论文中的 GitHub、GitLab、Hugging Face 和 ModelScope 链接，保留原始 URL、逐字原文片段及资源类型，使换行 URL 也能准确核验来源。 |
 | `lib/reader-resource-sync.js` | Node 库 | 将封存资源状态同步到分析结果、解析结果和末端检查点及证明，保留评分和 Reader 字节。如果评分依赖的可用性证据变了，就拒绝同步，并要求走正常评分审计；不联网、不写文件。 |
@@ -116,7 +116,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/conference-filter-evidence.js` | Node 库 | 从认证候选记录批量核验官方精确 PDF，由固定 PyMuPDF 提取页文本、视觉审计和原文摘要定位证据。保存可恢复的证据运行、候选及报告；非 ready 项一律交给 LLM，不能直接排除。 |
 | `lib/official-conference-acquisition.js` | Node 库 | 按固定 2026 官方 index/record/PDF 白名单抓取会议元数据与 PDF，`PROVIDERS` 是来源清单的唯一依据。AAAI volume 40 用固定 48-issue 清单，核验逐 issue 响应凭证、SHA 和跨 issue article ID 唯一性；其他来源用单索引。索引和逐篇下载以 `0600`、`O_EXCL` 保存，恢复时完整核验。 |
 | `lib/conference-source-context.js` | Node 库 | 生产入口只接受当前进程实际核验并登记的计划对象，再核验完整上游证明并读取会议全文；不导出 ledger/run 测试捷径。 |
-| `lib/conference-filter.js` | Node 库 | 固定候选、已核验的证据文件、逐篇凭证、日更提示词、关键词策略、会议领域标签，以及模型、接口地址和词表的指纹。状态为 `ready` 的摘要进入关键词和提示词筛选；其他项交给模型。程序在请求前保存准备记录，绑定请求内容、来源与原状态 SHA，再保存请求凭证和筛选决定；写入前核对原状态。生产凭证只能由固定公共 LLM 路由生成，不接受请求实现注入；恢复时先核验旧锁和已有记录，避免重复执行。 |
+| `lib/conference-filter.js` | Node 库 | 固定候选、已核验的证据文件、逐篇凭证、日更提示词、关键词策略、会议领域标签，以及模型、接口地址和词表的指纹。状态为 `ready` 的摘要进入关键词和提示词筛选；其他项交给模型。程序在请求前保存准备记录，绑定请求内容、来源与原状态 SHA，再保存请求凭证和筛选决定；写入前核对原状态。生产凭证只能由固定公共 LLM 路由生成，不允许替换网络请求实现；恢复时先核验旧锁和已有记录，避免重复执行。 |
 | `lib/conference-process.js` | Node 库 | 对会议完整入选集合封存官方 PDF、导入来源，调用公共引擎分析，生成读者文章、评分、分类页面和汇总。整批默认并发 1，可设为 1–5；每篇内部并发固定为 1。新进程及完成凭证使用各自 v2 格式，词表身份写入 `tagCatalogVersion`、`tagCatalogSha256`；旧记录完整核验后沿原 UUID 恢复。 |
 | `migrate-conference-process.js` | CLI | 显式更新会议处理实现指纹，重新核验完成页面，归档旧完成凭证，再继续未完成论文。保留原 UUID、记录格式、词表创建值及已有尝试，完成论文不重新请求模型。 |
 | `publish-conference.py` | CLI | 按会议处理凭证执行 generate/review/push/status/verify。generate 只安装文件；push 核验实际 Git index 和 commit blob，先发布图床再发布博客；verify 检查线上 URL。以上都是机械检查，语义审查和浏览器里的视觉效果仍要人工确认。 |
