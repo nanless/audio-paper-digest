@@ -421,8 +421,8 @@ async function collectRewriteSources(options, overrides = {}) {
 }
 
 async function analyzeRewrite(options, overrides = {}) {
-    // `overrides` 是仅供测试的内部可信接缝，不是 CLI/JSON 输入。生产恢复能力必须
-    // 扎在完整的默认依赖链上；换掉其中任何一个依赖，就不再签发。
+    // `overrides` 只供测试替换依赖，不接受 CLI 或 JSON 输入。
+    // 只有全部使用默认依赖时，才签发读取已保存分析结果的恢复许可。
     const productionCapabilityPath = Object.keys(overrides).length === 0;
     const deps = dependencies(overrides);
     return withRunOperation(options.runId, deps, async loaded => {

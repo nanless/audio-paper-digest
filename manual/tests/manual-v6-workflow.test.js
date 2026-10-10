@@ -51,7 +51,7 @@ describe('Manual v6 工作流与 Merkle spec', () => {
         assert.throws(() => resolveManualV6RuntimePaths(current, '2026-08-28', 'auto'), /显式/);
     });
 
-    it('task packet 只允许单篇根内的内容寻址工件', () => {
+    it('单篇任务材料必须使用安全相对路径，读取时核对文件 SHA', () => {
         const packet = buildTaskPacket({
             role: 'technical_scoring', paperId: '2608.12345',
             paperInputSha256: A, sourceIdentitySha256: B, contractSha256: C,

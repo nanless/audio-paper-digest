@@ -640,11 +640,11 @@ test('Reader 补丁解析器只补回被省略的外层数组或根对象结束�
     const complete = JSON.stringify(patch);
     assert.deepEqual(parseReaderPatchJson(complete), patch);
     assert.deepEqual(parseReaderPatchJson(complete.slice(0, -1)), patch,
-        'a complete replacements array may receive its omitted root delimiter');
+        '替换数组完整时，可补回缺少的根对象结束符');
     assert.deepEqual(parseReaderPatchJson(complete.slice(0, -2)), patch,
-        'a complete final replacement may receive only the omitted array/root delimiters');
+        '最后一个替换对象完整时，只补回缺少的数组和根对象结束符');
     assert.throws(() => parseReaderPatchJson(complete.slice(0, -3)), SyntaxError,
-        'the parser must not close an incomplete replacement object');
+        '替换对象未闭合时，解析器不得替它补结束符');
     assert.throws(() => parseReaderPatchJson('{"version":1,"draftSha256":"unterminated'), SyntaxError);
     assert.throws(() => parseReaderPatchJson('{"version":tru'), SyntaxError);
     assert.throws(() => parseReaderPatchJson('{"version":1,"replacements":[],'), SyntaxError);
