@@ -15,6 +15,16 @@ const {validAnalysisPaper}=require('./tests/valid-analysis-fixture');
 const paper=validAnalysisPaper(fx.id);
 if (!engine.isSuccessfulAnalysisRecord(paper)) throw new Error('用于测试的旧记录必须实际通过分析成功检查');
 const canonical=fx.canonicalPath,specPath=fx.specPath;
+const defaultPapers = require('node:path').join(fx.temporaryRoot, 'default-papers.json');
+const defaultLegacyPapers = require('node:path').join(fx.temporaryRoot, 'default-legacy-papers.json');
+const defaultBytes = Buffer.from(JSON.stringify({ papers: { [fx.id]: { arxivId: fx.id, title: '原有本地样例', digestStatus: { status: 'seen' } } }, lastUpdated: null }));
+fs.writeFileSync(defaultPapers, defaultBytes);
+fs.writeFileSync(defaultLegacyPapers, defaultBytes);
+Config.FILES.papers = defaultPapers;
+Config.FILES.papersLegacy = defaultLegacyPapers;
+// 默认位置仅指向本地合成库；本次录入必须使用任务自己的论文库。
+Config.FILES.papers = require('node:path').join(fx.currentDir, 'papers.json');
+Config.FILES.papersLegacy = require('node:path').join(fx.currentDir, 'papers-legacy.json');
 Config.CURRENT_DIR=fx.currentDir;
 Config.FILES.filteredPapers=fx.filteredPath;Config.FILES.deepAnalysisResult=canonical;
 Config.FILES.manualExternalResourceCache=path.join(fx.currentDir,'manual-external-resource-cache.json');
@@ -28,6 +38,8 @@ engine.mergeAndSaveResults=async()=>{throw Object.assign(new Error('模拟本轮
 const manual=require('./manual/scripts/manual-deep-analysis');
 process.argv=[process.execPath,'manual-deep-analysis.js','--date',fx.date,'--spec',specPath,'--v6-production','--force'];
 manual.run().then(()=>{
+    require('node:assert/strict').ok(fs.readFileSync(defaultPapers).equals(defaultBytes), '默认论文库原字节必须保持');
+    require('node:assert/strict').ok(fs.readFileSync(defaultLegacyPapers).equals(defaultBytes), '默认旧版论文库原字节必须保持');
     const saved=JSON.parse(fs.readFileSync(canonical));
     const failed={status:saved.status,failed:saved.stats.failed,success:saved.stats.success,
         failedIds:saved.stats.failedIds,errors:saved.stats.failedAttempts,

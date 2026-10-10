@@ -74,14 +74,29 @@ const fs = require('node:fs');
 const helper = require('./manual/tests/helpers/current-v6-public-pipeline.cjs');
 const fx = helper.createCurrentV6Pipeline();
 const Config = require('./scripts/config.js');
+const defaultPapers = require('node:path').join(fx.temporaryRoot, 'default-papers.json');
+const defaultLegacyPapers = require('node:path').join(fx.temporaryRoot, 'default-legacy-papers.json');
+const defaultBytes = Buffer.from(JSON.stringify({ papers: { [fx.id]: { arxivId: fx.id, title: '原有本地样例', digestStatus: { status: 'seen' } } }, lastUpdated: null }));
+fs.writeFileSync(defaultPapers, defaultBytes);
+fs.writeFileSync(defaultLegacyPapers, defaultBytes);
+Config.FILES.papers = defaultPapers;
+Config.FILES.papersLegacy = defaultLegacyPapers;
+// 默认位置仅指向本地合成库；本次录入必须使用任务自己的论文库。
+Config.FILES.papers = require('node:path').join(fx.currentDir, 'papers.json');
+Config.FILES.papersLegacy = require('node:path').join(fx.currentDir, 'papers-legacy.json');
 Config.CURRENT_DIR = fx.currentDir;
 Config.FILES.filteredPapers = fx.filteredPath;
 Config.FILES.deepAnalysisResult = fx.canonicalPath;
 Config.FILES.manualExternalResourceCache = fx.currentDir + '/manual-external-resource-cache.json';
 process.argv = [process.execPath, 'manual-deep-analysis.js', '--date', fx.date, '--spec', fx.specPath, '--v6-production', '--force'];
 require('./manual/scripts/manual-deep-analysis.js').run().then(() => {
+    require('node:assert/strict').ok(fs.readFileSync(defaultPapers).equals(defaultBytes), '默认论文库原字节必须保持');
+    require('node:assert/strict').ok(fs.readFileSync(defaultLegacyPapers).equals(defaultBytes), '默认旧版论文库原字节必须保持');
     const data = JSON.parse(fs.readFileSync(fx.canonicalPath));
     const paper = data.papers[0];
+    const localDatabase = JSON.parse(fs.readFileSync(Config.FILES.papers));
+    require('node:assert/strict').equal(localDatabase.papers[fx.id].digestStatus.status, 'analyzed', '任务论文库必须保存本次分析成功状态');
+    require('node:assert/strict').equal(localDatabase.papers[fx.id].analysis, paper.analysis, '任务论文库必须保存本次分析正文');
     const review = paper.analysisManifest.manualTakeover.stageReviews;
     const result = {status:data.status, success:data.stats.success, failed:data.stats.failed,
         version:review.version, nestedVersion:review.stages.version,
