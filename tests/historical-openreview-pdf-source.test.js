@@ -27,7 +27,7 @@ function download(f, overrides = {}) {
         contentType: 'application/pdf; charset=binary', ...overrides };
 }
 
-test('预演认证论坛，但不发网络请求也不写文件', async t => {
+test('预演核对论坛身份，不发网络请求也不保存文件', async t => {
     const f = fixture(t); let calls = 0;
     const result = await api.sealOpenreviewPdf({ apply: false, snapshotFile: f.snapshotFile,
         forumId: f.forumId, pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot }, {
@@ -37,7 +37,7 @@ test('预演认证论坛，但不发网络请求也不写文件', async t => {
     assert.equal(fs.existsSync(f.pdfRoot), false); assert.equal(fs.existsSync(f.receiptRoot), false);
 });
 
-test('写入会保存并核验 0600 权限的论坛 ID PDF 和自哈希凭证，之后不联网即可恢复', async t => {
+test('保存按论坛 ID 命名的 PDF 与附有自身 SHA 的凭证，权限为 0600，之后可离线恢复', async t => {
     const f = fixture(t); let calls = 0;
     const run = () => api.sealOpenreviewPdf({ apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId,
         pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, observedAt: '2026-09-07T00:00:00.000Z' }, {
@@ -51,7 +51,7 @@ test('写入会保存并核验 0600 权限的论坛 ID PDF 和自哈希凭证，
     const second = await run(); assert.equal(second.status, 'recovered'); assert.equal(calls, 1);
 });
 
-test('已有凭证对应的 PDF 缺失或漂移时，联网之前直接失败', async t => {
+test('已有凭证对应的 PDF 缺失时，在联网前拒绝恢复', async t => {
     const f = fixture(t); const options = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId,
         pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, observedAt: '2026-09-07T00:00:00.000Z' };
     await api.sealOpenreviewPdf(options, { fetchPdf: async () => download(f) });
@@ -60,7 +60,7 @@ test('已有凭证对应的 PDF 缺失或漂移时，联网之前直接失败', 
     assert.equal(calls, 0);
 });
 
-test('孤儿 PDF 只有新观测到的字节完全一致时才被接受', async t => {
+test('没有凭证的 PDF 只有与本次下载内容完全一致时才可保存凭证', async t => {
     const f = fixture(t); fs.mkdirSync(f.pdfRoot); fs.writeFileSync(path.join(f.pdfRoot, `${f.forumId}.pdf`), PDF);
     const options = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId,
         pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, observedAt: '2026-09-07T00:00:00.000Z' };
@@ -100,7 +100,7 @@ test('默认下载器要求 HTTP CONNECT，且只跟随连续的固定论坛重�
     }), /network request failed: ECONNRESET/);
 });
 
-test('拒绝非 PDF 内容类型、超大响应体、损坏的重定向凭证和授权漂移', async t => {
+test('拒绝非 PDF 内容类型、超大响应、重定向记录不连续及论坛快照内容改变', async t => {
     const f = fixture(t); const base = { apply: true, snapshotFile: f.snapshotFile, forumId: f.forumId,
         pdfRoot: f.pdfRoot, receiptRoot: f.receiptRoot, observedAt: '2026-09-07T00:00:00.000Z' };
     await assert.rejects(api.sealOpenreviewPdf(base, { fetchPdf: async () => download(f,

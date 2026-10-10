@@ -94,7 +94,7 @@ function ledgerFixture() {
     return { ...f, ledger, ledgerHandle, ledgerSha256, first: ledger.members[0], second: ledger.members[1] };
 }
 
-test('本地 PDF 来源描述符绑定已核验的身份、字节，并显式标明提取不可得', () => {
+test('本地 PDF 来源描述记录对应身份与文件内容，未提取的文本、结构化记录及公式均标为不可用', () => {
     const f = fixture();
     const result = source.buildConferencePdfSource({ cacheRoot: f.root, record: f.record });
     assert.equal(result.descriptor.contract, 'conference-pdf-source-v1');
@@ -109,7 +109,7 @@ test('本地 PDF 来源描述符绑定已核验的身份、字节，并显式标
     assert.deepEqual(source.replayConferencePdfSource({ cacheRoot: f.root, record: f.record, descriptor: result.descriptor }), result.descriptor);
 });
 
-test('本地提取记录可复核的哈希；没有可靠的结构化 TeX 时，不声称公式可用', () => {
+test('本地提取结果保存可核对的 SHA；缺少可靠的结构化 TeX 时不声明公式可用', () => {
     const f = fixture();
     assert.throws(() => source.buildConferencePdfSource({ cacheRoot: f.root, record: f.record,
         extractPdf: () => ({ extractorVersion: 'pdftotext-24.02', text: 'plain extracted text', formulaTeX: { available: true } }),
@@ -139,7 +139,7 @@ test('本地提取记录可复核的哈希；没有可靠的结构化 TeX 时，
         text: reliable.text, structuredArtifacts: reliable.structuredArtifacts, formulaTeX: reliable.formulaTeX });
 });
 
-test('只接受受控根目录内、大小不超限、且只有一条硬链接的普通 PDF', t => {
+test('只接受受控根目录内、大小不超限且只有一个硬链接的普通 PDF 文件', t => {
     const f = fixture();
     for (const pdfRelativePath of ['/tmp/outside.pdf', '../outside.pdf', 'papers/../example.pdf', 'papers\\example.pdf']) {
         assert.throws(() => source.buildConferencePdfSource({ cacheRoot: f.root, record: { ...f.record, pdfRelativePath } }),
@@ -156,7 +156,7 @@ test('只接受受控根目录内、大小不超限、且只有一条硬链接�
     t.diagnostic('security checks reject traversal, symbolic links, hard links, and oversized files');
 });
 
-test('文件头不对、字节变了、记录哈希不符或描述符被改动，一律直接失败', () => {
+test('PDF 文件头无效、内容改变、SHA 不符或来源描述记录被改动时拒绝', () => {
     const bad = fixture({ bytes: Buffer.from('not a PDF') });
     assert.throws(() => source.buildConferencePdfSource({ cacheRoot: bad.root, record: bad.record }), /standard PDF/);
     const f = fixture();
@@ -168,7 +168,7 @@ test('文件头不对、字节变了、记录哈希不符或描述符被改动�
     assert.throws(() => source.replayConferencePdfSource({ cacheRoot: f.root, record: f.record, descriptor: result.descriptor }), /bytes no longer replay/);
 });
 
-test('账目桥接只放行选中的已核验成员，并绑定所有非 PDF 来源的 SHA', () => {
+test('从来源清单读取选中的已核验论文，并记录其元数据、文本及结构化提取文件的 SHA', () => {
     const f = ledgerFixture();
     const identityKey = ledgerApi.identityKey(f.first.identity);
     const result = source.buildConferencePdfSourceFromLedger({
@@ -201,7 +201,7 @@ test('账目桥接只放行选中的已核验成员，并绑定所有非 PDF 来
     }), /authenticated loaded ledger handle/);
 });
 
-test('账目复核拒绝跨成员、跨账目、来源漂移，以及重算描述符字段的伪造', () => {
+test('来源复核拒绝另一篇论文、复制的清单对象、被改动的来源或重算 SHA 后的错误描述字段', () => {
     const f = ledgerFixture();
     const firstKey = ledgerApi.identityKey(f.first.identity);
     const secondKey = ledgerApi.identityKey(f.second.identity);

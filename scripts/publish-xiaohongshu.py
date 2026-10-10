@@ -74,14 +74,14 @@ def get_oneliner_concurrency():
 
 
 def smart_truncate(text, max_len=65):
-    """在句子边界智能截断文本，确保不超过 max_len 字符。"""
+    """优先保留长度阈值附近的句末标点，否则在分隔标点、空白或指定字符位置截断。"""
     if len(text) <= max_len:
         return text
-    # 在 max_len 范围内找最后一个句子结束符
+    # 从索引 max_len 向前找句末标点，找到后保留该标点。
     for i in range(max_len, max_len // 2, -1):
         if i < len(text) and text[i] in '。！？.!?':
             return text[:i+1]
-    #  fallback：在词语边界截断，避免截断到汉字中间
+    # 没找到句末标点时，改在逗号、顿号等分隔标点或空白之前截断。
     for i in range(max_len, max_len // 2, -1):
         if i < len(text) and (text[i] in '，、；：,;:' or text[i].isspace()):
             return text[:i]
@@ -89,7 +89,7 @@ def smart_truncate(text, max_len=65):
 
 
 def normalize_oss_status(value):
-    """把结构化开源字段归一化为 yes/no/unknown。"""
+    """把开源状态字段的写法统一为 yes/no/unknown。"""
     normalized = str(value or '').strip().lower()
     if normalized in _OSS_YES:
         return 'yes'
@@ -179,7 +179,7 @@ def call_llm_for_oneliner(title, abstract, parsed_analysis=None):
         max_tokens=500,
         temperature=_ONELINER_TEMPERATURE,
         required=False,
-        context="小红书 one-liner",
+        context="小红书一句话介绍",
         timeout=180
     )
     return safe_oneliner((content or '').strip('"\''), parsed_analysis, max_len=65)
@@ -232,7 +232,7 @@ def _load_oneliner_cache(cache_path, date_str):
 
 
 def _quarantine_oneliner_cache(cache_path, reason):
-    """原子地把派生缓存挪到一边；下次生成时重建即可。"""
+    """把缓存文件改名保存；下次生成一句话介绍时重新建立缓存。"""
     cache_path = Path(cache_path)
     if not cache_path.exists():
         return None
@@ -242,7 +242,7 @@ def _quarantine_oneliner_cache(cache_path, reason):
         os.replace(cache_path, quarantine)
     except FileNotFoundError:
         return None
-    print(f'⚠️ 小红书 one-liner 缓存已原子隔离并将重建: {quarantine} ({reason})')
+    print(f'⚠️ 小红书一句话介绍缓存已改名保存，将重新建立: {quarantine} ({reason})')
     return quarantine
 
 
@@ -261,11 +261,11 @@ def _save_oneliner_cache_entry(
             current = {'schemaVersion': _ONELINER_CACHE_SCHEMA_VERSION, 'date': date_str, 'entries': {}}
         if current.get('schemaVersion') != _ONELINER_CACHE_SCHEMA_VERSION \
                 or current.get('date') != date_str or not isinstance(current.get('entries'), dict):
-            raise RuntimeError(f'小红书 one-liner 缓存结构非法，拒绝覆盖: {cache_path}')
+            raise RuntimeError(f'小红书一句话介绍缓存结构非法，拒绝覆盖: {cache_path}')
         next_data = dict(current)
         entries = dict(current['entries'])
         current_entry = entries.get(paper_id)
-        # 检查点用乐观 CAS：拿着旧快照的 worker 不能覆盖快照之后写入的成功记录。
+        # 保存前比较当前条目与先前读到的条目；若其间已有成功结果写入，就不覆盖它。
         if current_entry != expected_entry and isinstance(current_entry, dict) \
                 and current_entry.get('status') == 'success':
             return None
@@ -411,7 +411,7 @@ def generate_top_n_post(scored, unscored, date_str, top_n=5):
     """生成 TOP N 精选版小红书文案"""
     top = scored[:top_n]
 
-    # 调用 LLM 生成一句话介绍
+    # 调用模型生成一句话介绍
     llm_oneliners = generate_llm_oneliners(top, date_str=date_str)
 
     total = len(scored) + len(unscored)

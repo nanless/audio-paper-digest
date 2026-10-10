@@ -28,10 +28,9 @@ function locateReaderDraftTables(draft) {
     return found;
 }
 
-// 选择 marker 是对 tableBindings[ordinal - 1] 的语义引用。当每张表都是
-// 唯一绑定的选择 marker 时，一整套 marker 排列就可以规范化，不必解读
-// 正文或表格内容。混用、畸形、重复、缺失或行内的 marker 集合一律不动，
-// 留给权威解析器报错。
+// 表格选择标记对应 tableBindings[ordinal - 1] 中的记录。每张表都使用
+// 唯一且完整的选择标记时，可以统一这些标记的序号，不需解读正文或表格内容。
+// 混用、格式错误、重复、缺失或嵌在正文行内的标记均不处理，交给后续解析检查报错。
 function completeSelectionMarkerPermutation(draft, tables) {
     const sections = Array.isArray(draft?.sections) ? draft.sections : [];
     const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
@@ -56,11 +55,10 @@ function completeSelectionMarkerPermutation(draft, tables) {
     return ordinals;
 }
 
-// 桥接 marker 本身不含作者写的正文，解释都在它的声明里。小节和桥接序号
-// 都规范之后，要确定地补上或挪动一个 marker，只有两个条件同时成立才行：
-// 它声明的小节类型恰好出现一次，且现有每个桥接 marker 都是精确、唯一、
-// 独立成行的 token。位置不对的 marker 只从段落末尾搬走，这样 "\n\nMARKER"
-// 这段字节能原样转移，不改动任何非 marker 字节。
+// 概念组合解释标记不包含作者正文，解释另存于对应声明。小节和标记序号
+// 已符合规则时，仅在目标小节类型唯一、现有标记格式正确且唯一独立成行的
+// 条件下补入或移动标记。移动只从段落末尾取走 "\n\nMARKER"，
+// 原样放入目标小节，不改其他正文。
 function normalizeConceptBridgeMarkerLocations(draft) {
     const sections = Array.isArray(draft?.sections) ? draft.sections : [];
     const bridges = Array.isArray(draft?.conceptBridges) ? draft.conceptBridges : [];
@@ -76,9 +74,9 @@ function normalizeConceptBridgeMarkerLocations(draft) {
     const spacingChanges = [];
     for (const [sectionIndex, section] of sections.entries()) {
         const before = section.body;
-        // 模型有时会在相邻几行上各放一个独立的桥接 token。它们作为 marker 身份
-        // 仍然唯一，但 Markdown 会把这几行当成一个段落，后续来源绑定检查也确实
-        // 会拒绝它。这里只补上缺的那个空行分隔，作者写的正文和 marker 字节都不动。
+        // 模型有时把不同的概念组合解释标记放在相邻行，虽各自唯一，Markdown
+        // 仍会将它们解析为同一段，导致后续来源对应检查拒绝。这里只补空行，
+        // 不改作者正文或标记本身。
         const after = before.replace(
             /(^|\n)([ \t]{0,3}\[\[CONCEPT_BRIDGE_\d+\]\][ \t]*)\n(?=[ \t]{0,3}\[\[CONCEPT_BRIDGE_\d+\]\][ \t]*(?:\n|$))/gm,
             '$1$2\n\n'
@@ -155,8 +153,8 @@ function normalizeConceptBridgeMarkerLocations(draft) {
 }
 
 // 草稿里可能多出一张手写的表，而它声明的绑定仍然只描述一条唯一有序的
-// 表格串。选择 marker 是强锚点：如果绑定到表格节点的顺序保持匹配只有
-// 一种，且每个没匹配上的节点都是普通 Markdown 表，那些表就可以证明是
+// 表格串。选择标记可确定对应表格：如果保持先后顺序的匹配只有
+// 一种，且未匹配项全部是普通 Markdown 表，就能判断这些表是
 // 未绑定的。只处理这一种窄情况；存在多种可能的匹配仍然算解析错误。
 function pruneUniquelyUnboundReaderMarkdownTables(input) {
     if (!Array.isArray(input?.sections) || !Array.isArray(input?.tableBindings)) return 0;
@@ -635,8 +633,8 @@ function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
         const markerMap = new Map(tableMap.filter(item => originalTables[item.rawIndex].marker)
             .map(item => [item.rawIndex + 1, item.canonicalIndex + 1]));
         draft.tableBindings = tableMap.map(item => ({ ...draft.tableBindings[item.rawIndex], tableIndex: item.canonicalIndex + 1 }));
-        // 一趟替换可以避免 1→2→1 这类连锁改名冲突。正文和表格单元格都不改：
-        // 只重命名显式绑定的选择 marker。
+        // 一次替换全部序号，避免 1→2→1 的连续改名冲突；只改有明确对应记录的
+        // 表格选择标记，不改其他正文或表格单元格。
         for (const section of sections) {
             if (typeof section?.body === 'string') section.body = section.body.replace(/\[\[TABLE_(\d+)\]\]/g,
                 (marker, index) => markerMap.has(Number(index)) ? `[[TABLE_${markerMap.get(Number(index))}]]` : marker);

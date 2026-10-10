@@ -5366,7 +5366,7 @@ def call_publish_llm_api(
     usage_sink=None,
     usage_directory=None,
 ):
-    """调用发布阶段 LLM API。required=True 时，缺配置或连续失败会抛错。"""
+    """调用发布阶段模型。required=True 时，缺配置或连续失败会抛错。"""
     primary_key = os.environ.get('PAPER_ANALYZER_API_KEY', '')
     primary_endpoint = os.environ.get('PAPER_ANALYZER_ENDPOINT', '')
     try:
@@ -5432,7 +5432,7 @@ def call_publish_llm_api(
                     )
                 api_keys = primary_api_keys
             elif same_endpoint_service:
-                # 非 Go 的副模型只有在完全同一个规范服务端点时才复用一把 key，
+                # 非 Go 的副模型仅在规范化后的服务地址完全相同时复用主模型密钥，
                 # 绝不继承主模型的备用账号池。
                 api_keys = [api_key]
             else:
@@ -5474,7 +5474,7 @@ def call_publish_llm_api(
 
     api_type = detect_publish_api_type(endpoint, model)
     try:
-        # 安全校验必须先于任何包含 API key 的 header 或 Request 构造。
+        # 先检查服务地址，再构造包含访问密钥的请求头或请求对象。
         api_url = build_publish_api_url(api_type, endpoint)
     except ValueError as exc:
         message = f'{context} 的 LLM endpoint 配置不安全: {exc}'
@@ -5485,9 +5485,9 @@ def call_publish_llm_api(
     last_error = None
     current_max_tokens = max(1, int(max_tokens))
     # 严格审查的响应只是很小的 JSON 对象。推理模型可能把预算全花在隐藏推理上，
-    # 最后不返回正文；任由这类调用反复涨到 16K，只会浪费配额，协议响应并不会
-    # 变好。通用发布调用保持向后兼容，只有一次结构化恢复被限制在 8K，除非
-    # 调用方显式配置了更大的初始预算。
+    # 最后不返回正文；让这类调用反复增加到 16K 不会改善要求的响应格式，只会浪费配额。
+    # 通用发布调用保持原有行为；结构化响应被隐藏推理耗尽预算时，仅允许一次恢复。
+    # 恢复预算上限通常为 8K；调用方初始预算更大时，保留该更大上限。
     adaptive_max_tokens = (
         max(current_max_tokens, 8000) if structured_output else 16000
     )
@@ -5507,7 +5507,7 @@ def call_publish_llm_api(
                 api_type, model, request_prompt, current_max_tokens, temperature, images=images
             )
             # Muse Spark Contributor 有地区限制，必须使用项目 .env 的
-            # HTTP CONNECT 代理。其他模型继续显式直连，避免代理污染。
+            # HTTP CONNECT 代理。其他模型明确直连，避免误用这组代理设置。
             if _publish_llm_requires_proxy(endpoint, model):
                 proxy = get_required_fetch_proxy()
                 opener = urllib.request.build_opener(
@@ -5582,7 +5582,7 @@ def call_publish_llm_api(
                     f'模型没有返回正文（{response_details}, reasoning_chars={reasoning_chars}）'
                 )
             # 只有原始正文为空且确实耗尽输出预算，才沿用预算恢复。
-            # 已拒绝的非空正文和失败/取消响应不能被当作隐藏推理耗尽。
+            # 已拒绝的非空正文，以及失败或取消的响应，均不能按隐藏推理耗尽预算处理。
             can_recover_empty_output = (
                 not content and output_truncated
                 and (response_status is None or response_status == 'incomplete')

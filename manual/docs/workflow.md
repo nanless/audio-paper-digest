@@ -286,14 +286,16 @@ npm run digest:status -- --date YYYY-MM-DD
 
 定位最早不符的输入，保留无关的健康任务，再重做对应下游。状态报告只是读取时快照，不能替代上线检查，也不能在后续写入后继续当作最终状态。
 
-## 十一、性能观测
+<a id="十一性能观测"></a>
+
+## 十一、性能统计
 
 ```bash
 npm run manual:performance-report -- \
   --date DATE_1 --date DATE_2 --date DATE_3
 ```
 
-将三个占位日期换成不同的真实 `YYYY-MM-DD`。`--date` 可重复提供，但不能重复同一日期；`--output PATH` 只能写受控的观测记录目录，且不能覆盖文件。报告只读取真实的附属统计文件；一个指标不足 3 个不同日期时显示 `insufficient_data`，不能从理论耗时推算 P50/P95。
+将三个占位日期换成不同的真实 `YYYY-MM-DD`。`--date` 可重复提供，但不能重复同一日期；`--output PATH` 只能写受控的运行统计记录目录，且不能覆盖文件。报告只读取真实的附属统计文件；一个指标不足 3 个不同日期时显示 `insufficient_data`，不能从理论耗时推算 P50/P95。
 
 ## 十二、隔离审计与旧格式维护
 

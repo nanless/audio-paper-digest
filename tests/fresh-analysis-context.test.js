@@ -92,7 +92,7 @@ test('当日来源抓取按原样保存完整原文，并发抓取去重，复�
     assert.equal(fs.readFileSync(path.join(directory, 'source-details.json'), 'utf8'), JSON.stringify(f.details));
 });
 
-test('日更打包模式只保存一次 PDF、TXT 和清单，复核时只用这一代，不读旧版文本缓存', async t => {
+test('日更封存模式只保存一次 PDF、TXT 和清单，复核只读同一代文件，不读旧文本缓存', async t => {
     const f = fixture(t); const generation = 1;
     const sourceExpectations = { [f.id]: { sourceMode: fresh.BUNDLE_SOURCE_MODE, sourceGeneration: generation } };
     const manifest = JSON.parse(fs.readFileSync(path.join(f.context.runDir, 'run.json'), 'utf8'));
@@ -163,7 +163,7 @@ test('来源解析保留基线版本或调用方版本，拒绝跨论文的 sour
     assert.equal(requested.length, 4);
 });
 
-test('原始抓取还在进行时，来源预期不能漂移', async t => {
+test('抓取过程中来源预期记录改变时，拒绝保存来源', async t => {
     const f = fixture(t);
     await assert.rejects(fresh.withFreshAnalysisContext(f.context, () => fresh.fetchFreshSource(f.id, async () => {
         const filename = path.join(f.context.runDir, 'run.json');
@@ -175,7 +175,7 @@ test('原始抓取还在进行时，来源预期不能漂移', async t => {
     assert.equal(fs.existsSync(path.join(f.context.runDir, 'sources', f.id, 'source.json')), false);
 });
 
-test('缓存提交之前，来源文本或产物漂移、摘要和旧的生成状态一律拒绝', async t => {
+test('保存缓存前拒绝来源文本或结构化记录改变、仅摘要来源及旧分析或 Reader 正文', async t => {
     const f = fixture(t);
     for (const mutate of [details => { details.text += 'drift'; },
         details => { details.structuredArtifacts.tables.push({ invented: true }); },
@@ -202,7 +202,7 @@ test('只读缓存复核拒绝被改动的附属文件和符号链接目录，�
         async () => { throw new Error('unexpected network'); })), /来源目录不是普通目录，或是符号链接/);
 });
 
-test('来源提交中断后，可以凭已核验的原始明细写完，不必重新抓取', async t => {
+test('来源保存中断后，可用已核验的原来源记录补齐文件，不再抓取', async t => {
     const f = fixture(t);
     await fresh.withFreshAnalysisContext(f.context, () => fresh.fetchFreshSource(f.id, async () => structuredClone(f.details)));
     const marker = path.join(f.context.runDir, 'sources', f.id, 'source.json');
@@ -273,7 +273,7 @@ test('深度主分析和 Reader 指纹按运行隔离，普通指纹保持不变
     assert.deepEqual(deep.buildRecoveryFingerprints(paper, f.text, f.id), normal);
 });
 
-test('当日 Reader 候选不能用旧的全局目录，已签名修订也不能录入另一次运行', async t => {
+test('当前 Reader 候选只写本次运行目录，并拒绝未绑定本次来源的旧分析正文', async t => {
     const f = fixture(t); const deep = require('../scripts/deep-analyzer.js');
     await fresh.withFreshAnalysisContext(f.context, async () => {
         await fresh.fetchFreshSource(f.id, async () => structuredClone(f.details));

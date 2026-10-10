@@ -26,21 +26,21 @@ function isReplayRejection(error) {
     return ['pdf_source_invalid', 'source_sha_drift', 'source_read_failed'].includes(error?.reasonCode);
 }
 
-test('生产来源上下文不提供任何绕过账目或运行测试的口子', () => {
+test('生产来源上下文不公开跳过计划核验的测试辅助入口', () => {
     assert.equal(context.buildConferenceSourceContextForTesting, undefined);
     assert.equal(context.buildConferenceSourceContextFromLedger, undefined);
     assert.throws(() => context.buildConferenceSourceContext({ planHandle: {}, paperId: 'x', sourceRoot: '/tmp' }),
         error => error.reasonCode === 'plan_handle_invalid');
 });
 
-test('生产来源上下文拒绝调用方自带运行、执行、账目或文本', () => {
+test('生产来源上下文拒绝调用方另行提供运行记录、执行记录、来源清单或文本', () => {
     for (const extra of [{ run: {} }, { execution: {} }, { ledgerHandle: {} }, { text: 'forged' }]) {
         assert.throws(() => context.buildConferenceSourceContext({ planHandle: {}, paperId: 'x', sourceRoot: '/tmp', ...extra }),
             /unknown or missing fields/);
     }
 });
 
-test('真实的已核验计划会复核来源字节，拒绝被替换的内容以及叶子和父级符号链接', t => {
+test('已核验计划再次读取来源文件，拒绝内容被替换以及文件或父级目录的符号链接', t => {
     const fixture = productionPlanFixture(t);
     const valid = build(fixture);
     assert.equal(valid.analysisReady, true);
@@ -60,7 +60,7 @@ test('真实的已核验计划会复核来源字节，拒绝被替换的内容�
     finally { fs.unlinkSync(memberDirectory); fs.renameSync(savedDirectory, memberDirectory); }
 });
 
-test('真实计划授权在使用之前就拒绝非法 UTF-8、重复 JSON、过短文本和产物语义漂移', t => {
+test('使用计划来源时拒绝非法 UTF-8、重复 JSON、过短文本或结构化提取记录被改动', t => {
     const fixture = productionPlanFixture(t); const valid = build(fixture);
     const textFile = artifactPath(fixture, 'textFile'); const metadataFile = artifactPath(fixture, 'metadataFile');
     const artifactsFile = artifactPath(fixture, 'artifactsFile');
