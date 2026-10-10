@@ -120,7 +120,7 @@ describe('Manual 结构化来源索引 v1', () => {
         ), true);
     });
 
-    it('生成结果确定、可复核的单篇清单，且与长文格式兼容', () => {
+    it('相同输入生成相同单篇清单，包含表格、图片、公式和来源引文', () => {
         const { input, text, sourceEntry, structuredArtifacts } = fixture();
         const options = {
             paperId: input.id,
@@ -259,7 +259,7 @@ describe('Manual 结构化来源索引 v1', () => {
         assert.equal(readArtifactManifestLocked(artifactContext).papers[input.id].outputSha256, entry.outputSha256);
     });
 
-    it('复用绑定到精确的结构化来源快照，而不只是拍平的文本', () => {
+    it('结构化来源快照中的表格值改变后，不能复用原检查点', () => {
         const { dir, context, input, text, sourceEntry, structuredArtifacts } = fixture();
         const artifactContext = buildArtifactManifestContext(context, dir);
         initializeArtifactManifestLocked(artifactContext);

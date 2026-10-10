@@ -372,7 +372,7 @@ describe('Manual v5 音频研究者约定', () => {
         }));
     });
 
-    it('图片 inventory 必须覆盖全部图并核对重复 caption identity', () => {
+    it('两图的图注身份相同时要求明确确认，选图顺序默认一致且可显式放宽', () => {
         const urls = ['https://arxiv.org/a.png', 'https://arxiv.org/b.png'];
         const review = {
             version: 1,

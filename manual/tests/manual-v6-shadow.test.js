@@ -140,7 +140,7 @@ function makeFixture(options = {}) {
 }
 
 describe('Manual v6 影子审查', () => {
-    it('历史扁平全文缺少结构快照时明确 blocked，绝不把 txt 推导为完整 inventory', () => {
+    it('历史纯文本缺少结构快照时，不把表格及数值覆盖判为完整', () => {
         const fixture = makeFixture({ date: '2026-08-27', structured: false });
         const report = buildShadowReport({
             date: fixture.date, currentDir: fixture.currentDir, archiveDir: fixture.archiveDir,
@@ -157,7 +157,7 @@ describe('Manual v6 影子审查', () => {
         assert.strictEqual(report.summary.quality.numericCellCoverageRate.value, null);
     });
 
-    it('报告记录真实输入 SHA、结构覆盖、正文统计与真实 metrics/receipt', () => {
+    it('报告保存输入 SHA、结构覆盖、正文统计和阶段耗时，缺失耗时保留未知', () => {
         const fixture = makeFixture({ v6Record: true });
         const report = buildShadowReport({
             date: fixture.date, currentDir: fixture.currentDir, archiveDir: fixture.archiveDir,
@@ -230,7 +230,7 @@ describe('Manual v6 影子审查', () => {
         }), /realpath 逃逸/);
     });
 
-    it('shadow 审计参数保持显式，默认 digest wiring 已切到 production v6', () => {
+    it('隔离初始化须指定工作目录，默认日更入口使用正式 v6 目录', () => {
         assert.throws(() => assertDate('2026-02-30'), /非法日期/);
         assert.strictEqual(coverageStatus(0, 0).status, 'not_applicable');
         assert.strictEqual(coverageStatus(null, null).status, 'unknown');
@@ -296,13 +296,13 @@ describe('Manual 影子基准', () => {
         assert.strictEqual(result.quality.articleCharsMean.p95, 4000);
     });
 
-    it('篡改 contract 或 embedded input fingerprint 时拒绝 benchmark', () => {
+    it('报告协议指纹或输入记录指纹被改动时，拒绝性能汇总', () => {
         const report = reportFixture('2026-08-25', 100, 0.5);
         assert.throws(() => aggregateShadowReports([{ ...report, contractFingerprint: '0'.repeat(64) }]), /contractFingerprint/);
         assert.throws(() => aggregateShadowReports([{ ...report, inputFingerprint: '0'.repeat(64) }]), /inputFingerprint/);
     });
 
-    it('从隔离目录加载报告时复核报告 SHA、输入文件 SHA 与 embedded fingerprint', () => {
+    it('读取隔离目录中的报告时，核对报告 SHA、输入文件 SHA 和输入记录指纹', () => {
         const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-shadow-benchmark-'));
         const currentDir = path.join(projectRoot, 'data', 'current');
         const archiveDir = path.join(projectRoot, 'data', 'archive');

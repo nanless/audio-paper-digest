@@ -117,7 +117,7 @@ describe('Manual 抓取的数据一致性辅助函数', () => {
         assert.deepEqual(result.filteredRelated.map(paper => paper.arxivId), ['2608.00001', '2608.00003']);
     });
 
-    it('在 package scripts 里暴露可续跑的全文入口', () => {
+    it('package.json 提供 manual:fulltext 全文入口', () => {
         const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', 'package.json'), 'utf8'));
         assert.equal(pkg.scripts['manual:fulltext'], 'node manual/scripts/manual-fetch-fulltext.js');
     });
