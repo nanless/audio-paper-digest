@@ -57,9 +57,9 @@ test('暂停记录可附原因，但拒绝保存密钥或用于另一代次', t 
     const paused = control.writePauseRequest({ registryRoot: root, plan, reason });
     assert.deepEqual(control.readPauseFile(paused.pauseFile, plan, 1).record.reason, reason);
     assert.equal(runner.pauseFileRequested(paused.pauseFile, plan, 1), true);
-    assert.throws(() => control.normalizePauseRecord({ ...paused.record, generation: 2 }, plan, 1), /bound/);
+    assert.throws(() => control.normalizePauseRecord({ ...paused.record, generation: 2 }, plan, 1), /不属于本次计划或代次/);
     assert.throws(() => control.pauseRecord(plan, 1, paused.record.requestedAt,
-        { code: 'SIGINT', detail: 'sk-do-not-persist' }), /unsafe/);
+        { code: 'SIGINT', detail: 'sk-do-not-persist' }), /不安全文本/);
     assert.equal(control.resumeRewrite({ registryRoot: root, plan }).status, 'resumed');
 });
 
@@ -92,7 +92,7 @@ test('来源状态检查点形状不可变，并推进可续跑的会议进度',
     assert.equal(control.sourceSnapshot({ sourceRoot: root, plan }).conference.durableSchedulerProgressAvailable, true);
     assert.equal(control.normalizeSourceStatus(created.status, plan, 1).statusSha256, created.status.statusSha256);
     const tampered = structuredClone(created.status); tampered.planSha256 = 'f'.repeat(64);
-    assert.throws(() => control.normalizeSourceStatus(tampered, plan, 1), /source status envelope/);
+    assert.throws(() => control.normalizeSourceStatus(tampered, plan, 1), /来源状态记录的字段、版本、计划、代次、时间或 SHA 格式无效/);
 });
 
 test('状态把旧渲染器暂存的页面算作未完成', t => {
@@ -122,7 +122,7 @@ test('直接运行锁还在时，恢复拒绝删除暂停请求', t => {
     t.after(() => fs.rmSync(root, { recursive: true, force: true })); const plan = minimalPlan();
     const request = control.writePauseRequest({ registryRoot: root, plan, requestedAt: '2026-09-07T00:00:00.000Z' });
     fs.mkdirSync(request.operationLockDirectory);
-    assert.throws(() => control.resumeRewrite({ registryRoot: root, plan }), /still holds its operation lock/);
+    assert.throws(() => control.resumeRewrite({ registryRoot: root, plan }), /仍持有操作锁/);
     assert.equal(fs.existsSync(request.pauseFile), true);
 });
 
@@ -263,7 +263,7 @@ test('汇总状态核对页面内容，并分别报告缺失和多出的会议�
     assert.deepEqual(snapshot.unexpectedTaskKeys, ['conference-task:icassp-2026-task-unexpected']);
     fs.writeFileSync(path.join(runRoot, stagedPath), 'drifted page\n');
     assert.equal(control.aggregateSnapshot({ aggregateRoot, plan: minimalPlan(),
-        expectedTaskKeys: ['icassp-2026-task-required'] }).errors.some(item => /page bytes drifted/.test(item.error)), true);
+        expectedTaskKeys: ['icassp-2026-task-required'] }).errors.some(item => /输出页面内容已变化/.test(item.error)), true);
 });
 
 test('控制命令行只接受 status watch，拒绝不安全的组合', () => {
@@ -333,7 +333,7 @@ test('并发暂停请求复用先写入的合法时间和原因，拒绝坏记�
             return link(from, to);
         };
         try {
-            if (kind === 'invalid') assert.throws(() => control.writePauseRequest(options), /SHA drifted/);
+            if (kind === 'invalid') assert.throws(() => control.writePauseRequest(options), /暂停请求的 SHA 已变化/);
             else if (kind === 'io') assert.throws(() => control.writePauseRequest(options), error => error.code === 'EIO');
             else assert.deepEqual(control.writePauseRequest(options).record, winner);
         } finally { fs.linkSync = link; }

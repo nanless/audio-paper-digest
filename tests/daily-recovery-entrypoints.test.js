@@ -175,7 +175,7 @@ function normalized(paper) { return String(paper?.arxivId || '').replace(/v\d+$/
 test('正式记录里没有已保存打包引用时，日更恢复来源计划直接失败', () => {
     assert.throws(() => daily.requireDailyFreshSourceRecoveryPlan({ batchDate: DATE, papers: [{ arxivId: ID }] }, {
         label: 'test recovery'
-    }), /requires current dailyFreshSourceRun/);
+    }), /缺少本次封存来源的引用 dailyFreshSourceRun/);
 });
 
 test('batch 只停用明确未完成论文的旧读者文章草稿', () => {

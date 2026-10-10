@@ -1,6 +1,6 @@
 'use strict';
 
-// 把线上、已授权用于生产的 arXiv 来源句柄接到现有的新分析引擎上，范围很窄。
+// 将经官方来源核验、允许用于正式分析的 arXiv 来源对象交给分析引擎。
 // 它会新建一次隔离的分析运行，既不读也不写日更的正式分析结果。
 
 const crypto = require('node:crypto');
@@ -34,9 +34,9 @@ const writeJsonExact = (filename, value) => writeExact(filename, Buffer.from(`${
 
 function normalizedMetadata(metadata, expectedId) {
     if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) fail('需要传入原始元数据对象');
-    if (Object.keys(metadata).some(key => GENERATED_FIELD_RE.test(key))) fail('old analysis/Reader/checkpoint fields are forbidden');
+    if (Object.keys(metadata).some(key => GENERATED_FIELD_RE.test(key))) fail('原始元数据不得包含旧分析正文、Reader 文章或检查点字段');
     const unexpected = Object.keys(metadata).filter(key => !fresh.ORIGINAL_METADATA_FIELDS.includes(key));
-    if (unexpected.length) fail(`raw metadata contains non-source fields: ${unexpected.join(', ')}`);
+    if (unexpected.length) fail(`原始元数据包含来源信息之外的字段： ${unexpected.join(', ')}`);
     const clean = fresh.metadataOnly(metadata);
     if (fresh.paperId(clean) !== expectedId) fail('原始元数据属于另一篇论文');
     return clean;
@@ -77,7 +77,7 @@ function prepareHistoricalArxivRun({ authorityHandle, metadata, metadataProof, m
     const structuredArtifactsSha256 = sourceDetails.structuredArtifacts?.payloadSha256;
     if (sourceSha256 !== authority.fulltextSha256 || !SHA_RE.test(String(structuredArtifactsSha256 || ''))
         || sourceDetails.structuredArtifacts.flattenedTextSha256 !== sourceSha256) {
-        fail('线上来源详情与来源句柄或结构化产物的哈希对不上');
+        fail('线上来源的全文 SHA 或结构化提取结果的 SHA 与来源记录不同');
     }
 
     const absoluteRoot = fresh.assertSafeDirectory(rootDir, true);
@@ -162,16 +162,16 @@ function recoverHistoricalArxivRun({ runId, date, arxivId, rootDir, now = new Da
         const filename = path.join(runDir, `metadata-${arxivId}.atom.xml`);
         let bytes; let fd;
         try { fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW); bytes = fs.readFileSync(fd); }
-        catch (error) { fail(`无法重放官方元数据文件：${error.message}`); }
+        catch (error) { fail(`无法重新读取已保存的官方元数据文件：${error.message}`); }
         finally { if (fd !== undefined) fs.closeSync(fd); }
-        if (sha256(bytes) !== loaded.run.baseline.metadata.fileSha256) fail('官方元数据文件的 SHA 已漂移');
+        if (sha256(bytes) !== loaded.run.baseline.metadata.fileSha256) fail('官方元数据文件的 SHA 与运行记录中的原 SHA 不一致');
     }
     const analysisFile = fresh.readRegularJson(path.join(runDir, 'analysis.json'));
     const storageSealed = loaded.run.status === 'complete';
     if (storageSealed && (loaded.analysis.status !== 'complete'
         || !SHA_RE.test(String(loaded.run.analysisSha256 || ''))
         || loaded.run.analysisSha256 !== analysisFile.sha256)) {
-        fail('complete historical run does not seal its canonical analysis bytes');
+        fail('已标为 complete 的历史运行没有保存完整的正式分析结果，或结果文件的 SHA 与运行记录不符');
     }
     const engine = require('../analysis-engine.js');
     const paper = loaded.analysis.papers[0];

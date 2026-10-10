@@ -22,7 +22,7 @@ const selected = (tableIndex = 1, ordinal = 1) => ({ tableIndex, selection: {
     sourceTableOrdinal: ordinal, sourceRows: ordinal === 1 ? [1, 2, 3] : [0, 1, 2], sourceColumns: [0, 1, 2]
 } });
 
-test('表格证据显式给出原表头行和形状，不猜它的科学角色', () => {
+test('表格来源说明列出原表头、行列数量，并保留未知的表格用途', () => {
     const { artifacts } = artifactsFixture();
     const evidence = require('../scripts/deep-analyzer.js').buildApiReaderArtifactEvidence(artifacts);
     const headerRows = JSON.parse(evidence.match(/^TABLE_1_HEADER_ROWS: (.+)$/m)[1]);
@@ -37,7 +37,7 @@ test('表格证据显式给出原表头行和形状，不猜它的科学角色',
     assert.match(authorEvidence, /TABLE_1_SHAPE: .*"role":"unknown"/);
 });
 
-test('脏 MathML、空表头和整行表头在选择之前就被拒绝，并给出可见理由', () => {
+test('空表头、没有数据行及数字重复的表格在选择前被拒绝，并列出原因', () => {
     const { artifacts } = artifactsFixture();
     const table = structuredClone(artifacts.tables[1]);
     table.matrix[0][0] = '';
@@ -55,7 +55,7 @@ test('脏 MathML、空表头和整行表头在选择之前就被拒绝，并给�
     assert.ok(result.reasonCodes.includes('empty_source_header'));
     assert.ok(result.reasonCodes.includes('no_explicit_data_rows'));
     assert.ok(result.reasonCodes.includes('source_display_cleanup_required'));
-    assert.equal(JSON.stringify(table), before, 'preflight must not clean or reinterpret evidence');
+    assert.equal(JSON.stringify(table), before, '选择前的检查不能清理或重新解释原表记录');
     assert.throws(() => renderReaderTableSelection(selected(1, 2), { tables: [table] }), /eligible=false/);
     const evidence = require('../scripts/deep-analyzer.js').buildApiReaderArtifactEvidence({ tables: [table] });
     const visible = JSON.parse(evidence.match(/^TABLE_2_SELECTION: (.+)$/m)[1]);
@@ -63,7 +63,7 @@ test('脏 MathML、空表头和整行表头在选择之前就被拒绝，并给�
     assert.match(visible.action, /source_quotes/);
 });
 
-test('清理资格的判定保守，不擅自换算任意数值或单位', () => {
+test('需要清理的数值或未处理的 TeX 不能直接选用，合法数值和单位保持原样', () => {
     const { artifacts } = artifactsFixture();
     for (const text of ['2.222.22', '3.093.09', '22.96 ±\\pm 0.08', 'k=\\tilde{k}']) {
         const table = structuredClone(artifacts.tables[1]);
@@ -111,7 +111,7 @@ test('旧版行表头蔓延只在有分组 DOM 跨度和数值正文语义时修
     } }, { tables: [legacy] });
     assert.match(rendered.markdown, /^\| SLM \| 1 \| 1-2 \|/);
     assert.equal(rendered.binding.cellBindings.length, 9);
-    assert.equal(JSON.stringify(legacy), before, 'compatibility projection must not mutate sealed evidence');
+    assert.equal(JSON.stringify(legacy), before, '兼容旧表头的处理不能改动已保存的原表记录');
 
     const counterexamples = [
         value => { value.cells.find(cell => cell.row === 0 && cell.column === 1).colspan = 1; },
@@ -127,7 +127,7 @@ test('旧版行表头蔓延只在有分组 DOM 跨度和数值正文语义时修
     }
 });
 
-test('2512.09066 重复的科学学习率需要分阶段语义，而提取影子仍然失败', () => {
+test('2512.09066 分阶段的重复学习率可保留，但混入的重复数字仍被拒绝', () => {
     const cell = '10k、5k、2k，5e-5、2e-5、2e-5，批量16';
     assert.match(findReaderTablePasteDuplication(cell), /粘连复写/);
     assert.equal(findReaderTablePasteDuplication(cell, { columnIndex: 2,
@@ -141,14 +141,14 @@ test('2512.09066 重复的科学学习率需要分阶段语义，而提取影子
     assert.ok(findReaderTablePasteDuplication(`2.222.22；${cell}`, { columnIndex: 2,
         header: ['环节', '需对齐的关键量', '原文口径'],
         row: ['训练优化', '步数、学习率、批量与早停', `2.222.22；${cell}`] }),
-    'a legitimate learning-rate list cannot hide an unrelated extraction shadow');
+    '合法学习率列表不能掩盖前面的其他重复数字');
     assert.ok(findReaderTablePasteDuplication(`${cell}；2.222.22`, { columnIndex: 2,
         header: ['环节', '需对齐的关键量', '原文口径'],
         row: ['训练优化', '步数、学习率、批量与早停', `${cell}；2.222.22`] }),
-    'a legitimate learning-rate list cannot hide a later extraction shadow');
+    '合法学习率列表不能掩盖后面的其他重复数字');
 });
 
-test('显式分阶段的科学测量使用真实空白和数字正则 token', () => {
+test('分阶段学习率检查识别带空格的阶段名称，并要求出现重复数值', () => {
     assert.equal(hasExplicitRepeatedScientificMeasurement(
         'stage 1 lr 5e-5、2e-5、2e-5'), true);
     assert.equal(hasExplicitRepeatedScientificMeasurement(
@@ -194,7 +194,7 @@ test('2512.10571 重复的划分大小需要精确的三方数据集上下文', 
     }
 });
 
-test('2604.09371 重复的权重向量需要精确的原表顺序和重数', () => {
+test('2604.09371 权重列表中的顺序和重复次数必须与原文一致', () => {
     const source = 'Changing the layer-wise loss weights from [2,1,...,1] to '
         + 'a steeper schedule [8,4,3,2,2,2,2,2,1,...,1] yields comparable scores.';
     const exact = '权重由[2,1,…,1]改为[8,4,3,2,2,2,2,2,1,…,1]';
@@ -214,7 +214,7 @@ test('2604.09371 重复的权重向量需要精确的原表顺序和重数', () 
     assert.match(findReaderTablePasteDuplication(exact, { ...context(exact), sourceTexts: [] }), /粘连复写/);
     assert.match(findReaderTablePasteDuplication(
         `${exact}${exact}`, context(`${exact}${exact}`)
-    ), /粘连复写/, 'an exact source vector cannot hide a duplicated whole cell');
+    ), /粘连复写/, '与原文相同的权重列表不能掩盖整个单元格被重复一次');
 });
 
 test('绑定来源的向量豁免只限显式的权重调度或层语义', () => {
@@ -255,23 +255,23 @@ test('2604.15804 绑定来源的重复冒号比值不会被误当成粘贴文本
     assert.equal(findReaderTablePasteDuplication(ratio, context), null);
     assert.match(findReaderTablePasteDuplication(ratio, {
         ...context, sourceTexts: []
-    }), /粘连复写/, 'the ratio exception requires exact source evidence');
+    }), /粘连复写/, '保留重复比例值必须有对应的原文');
     assert.match(findReaderTablePasteDuplication('3.5 : 3.5 : 4', {
         ...context, row: [...context.row.slice(0, -1), '3.5 : 3.5 : 4']
-    }), /粘连复写/, 'order and multiplicity must match the source ratio');
+    }), /粘连复写/, '比例中的最后一个数值已变化时仍会被拒绝');
     assert.match(findReaderTablePasteDuplication(`${ratio}；${ratio}`, {
         ...context, row: [...context.row.slice(0, -1), `${ratio}；${ratio}`]
-    }), /粘连复写/, 'a source-bound ratio cannot hide a duplicated whole cell');
+    }), /粘连复写/, '与原文相同的比例不能掩盖整个单元格被重复一次');
 });
 
-test('原表行列选择保留多级表头、跨行跨列的 DOM 身份、数值和旧版 v4 输出', () => {
+test('选择原表行列后保留多级表头、合并单元格的来源对应、数值和 v4 输出格式', () => {
     const { artifacts, sourceText } = artifactsFixture();
     const bindings = [selected(), selected(2, 2)];
     bindings[1].selection.sourceColumns = [0, 2, 1];
     const sections = [{ kind: 'result', body: '比较语音识别结果。\n\n[[TABLE_1]]\n\n再看部署成本。\n\n[[TABLE_2]]\n\n比较结束。' }];
     const before = JSON.stringify({ sections, bindings, artifacts });
     const compiled = compileReaderTableSelections(sections, bindings, artifacts);
-    assert.equal(JSON.stringify({ sections, bindings, artifacts }), before, 'compiler must not mutate its source/candidate');
+    assert.equal(JSON.stringify({ sections, bindings, artifacts }), before, '生成表格时不能改动原表、选取记录和待生成的正文');
     assert.match(compiled.sections[0].body, /\| System \| test-clean \| test-other \|/);
     assert.match(compiled.sections[0].body, /\| System \| Memory \| RTF \|/);
     assert.equal(compiled.tableBindings[0].cellBindings.length, 9);
@@ -286,12 +286,12 @@ test('原表行列选择保留多级表头、跨行跨列的 DOM 身份、数值
     assert.match(bound.sourceBindingsSha256, /^[a-f0-9]{64}$/);
 });
 
-test('选择会确定性地移动或前置唯一的原表头，不改数据单元格', () => {
+test('按固定规则把唯一的原表头移到或补到第一行，保留所选数据行', () => {
     const { artifacts } = artifactsFixture();
     assert.deepEqual(putReaderTableHeaderFirst([2, 1, 3], [0, 1]), [1, 2, 3]);
     assert.deepEqual(putReaderTableHeaderFirst([1, 2], [0]), [0, 1, 2]);
     assert.deepEqual(putReaderTableHeaderFirst([2, 3], [0, 1]), [2, 3],
-        'multiple absent header candidates remain ambiguous');
+        '缺少多个可能的表头时，不能自行选择其中一个');
 
     const moved = selected(); moved.selection.sourceRows = [2, 1, 3];
     const movedResult = renderReaderTableSelection(moved, artifacts);
@@ -374,7 +374,7 @@ test('原表头唯一时可按固定规则补回，无法唯一确认原表头�
     ), /第一行必须是原表头/);
 });
 
-test('表格标记必须唯一、独立成行、顺序正确且完整绑定', () => {
+test('每个表格标记必须唯一、独立成行、顺序正确，并有对应的来源记录', () => {
     const { artifacts } = artifactsFixture();
     for (const body of ['inline [[TABLE_1]]', '[[TABLE_1]]\n\n[[TABLE_1]]', '[[TABLE_2]]\n\n[[TABLE_1]]']) {
         assert.throws(() => compileReaderTableSelections([{ body }], [selected()], artifacts));
@@ -384,7 +384,7 @@ test('表格标记必须唯一、独立成行、顺序正确且完整绑定', ()
     assert.throws(() => compileReaderTableSelections([{ body: '| a | b |\n| --- | --- |\n| 1 | 2 |\n\n[[TABLE_1]]' }], [selected()], artifacts), /顺序/);
 });
 
-test('不安全的原表标记会被拒绝，最终的原表 SHA 和单元格检查仍约束编译结果', () => {
+test('拒绝无法安全写入 Markdown 的原表内容，并检查生成表格的来源 SHA 和单元格内容', () => {
     const { artifacts, sourceText } = artifactsFixture();
     for (const text of ['a | b', 'line\nbreak', '<script>bad</script>', '[link](javascript:bad)', '[[FIGURE_1]]']) {
         const bad = structuredClone(artifacts);

@@ -13,16 +13,16 @@ function validDate(value) {
 
 function parseArgs(argv) {
     const action = argv[0];
-    if (!['prepare', 'analyze', 'status'].includes(action)) throw new Error(`Use ${USAGE}`);
+    if (!['prepare', 'analyze', 'status'].includes(action)) throw new Error(`用法：${USAGE}`);
     const flags = {}; const booleans = new Set();
     for (let i = 1; i < argv.length; i++) {
         const flag = argv[i];
         if (['--apply', '--dry-run'].includes(flag)) {
-            if (booleans.has(flag)) throw new Error(`Use ${USAGE}`);
+            if (booleans.has(flag)) throw new Error(`用法：${USAGE}`);
             booleans.add(flag); continue;
         }
         if (!['--id', '--date', '--authority', '--run-id', '--concurrency'].includes(flag)
-            || Object.hasOwn(flags, flag) || argv[i + 1] === undefined) throw new Error(`Use ${USAGE}`);
+            || Object.hasOwn(flags, flag) || argv[i + 1] === undefined) throw new Error(`用法：${USAGE}`);
         flags[flag] = argv[++i];
     }
     if (action === 'prepare') {
@@ -31,13 +31,13 @@ function parseArgs(argv) {
             || !validDate(flags['--date'])
             || !/^arxiv-\d{4}\.\d{4,5}(?:-[a-z0-9][a-z0-9._-]{0,80})?\.json$/.test(flags['--authority'] || '')
             || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(flags['--run-id'] || '')
-            || flags['--concurrency']) throw new Error(`Use ${USAGE}`);
+            || flags['--concurrency']) throw new Error(`用法：${USAGE}`);
         return { action, apply: booleans.has('--apply'), runId: flags['--run-id'], arxivId: flags['--id'], date: flags['--date'], authorityName: flags['--authority'] };
     }
     if (booleans.size || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(flags['--run-id'] || '')
         || flags['--id'] || flags['--date'] || flags['--authority']
         || (action === 'status' && flags['--concurrency'])
-        || (flags['--concurrency'] && !/^[1-5]$/.test(flags['--concurrency']))) throw new Error(`Use ${USAGE}`);
+        || (flags['--concurrency'] && !/^[1-5]$/.test(flags['--concurrency']))) throw new Error(`用法：${USAGE}`);
     return { action, runId: flags['--run-id'], ...(flags['--concurrency'] ? { concurrency: Number(flags['--concurrency']) } : {}) };
 }
 

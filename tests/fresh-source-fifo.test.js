@@ -79,7 +79,7 @@ async function exercise(scenario, rootDir) {
     } catch (error) {
         const expectedMessage = scenario.startsWith('fresh-')
             ? /来源文件不是普通文件、硬链接数量不为 1，或大小超过 64 MiB/
-            : /unsafe|Unsafe/;
+            : /每日来源运行清单 不安全或超过大小限制/;
         if (!expectedMessage.test(error.message)) throw error;
         if (!fs.lstatSync(protectedFile).isFIFO()) throw new Error('管道文件被修改');
         return { code: error.code, message: error.message, calls };

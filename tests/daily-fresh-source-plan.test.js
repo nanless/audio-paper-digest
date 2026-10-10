@@ -316,7 +316,7 @@ test('日更来源引用只复核那次精确保存的运行清单', async t => 
     const replayed = daily.readDailyFreshSourcePlan(reference);
     assert.equal(replayed.runId, plan.runId);
     assert.equal(daily.readDailyFreshSource(replayed, { arxivId: id }).freshSourceDescriptor.sourceGeneration, 1);
-    assert.throws(() => daily.readDailyFreshSourcePlan({ ...reference, runManifestSha256: '0'.repeat(64) }), /SHA drifted/);
+    assert.throws(() => daily.readDailyFreshSourcePlan({ ...reference, runManifestSha256: '0'.repeat(64) }), /每日来源运行清单的 SHA 已变化/);
 });
 
 // root 运行 chmod 000 拦不住读，Windows 上 chmod 也基本无效，这两种环境跳过权限用例。

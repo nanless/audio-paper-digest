@@ -26,7 +26,7 @@ const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{1
 
 class DailyFreshSourcePlanError extends Error {
     constructor(message) {
-        super(`Daily fresh source plan rejected: ${message}`);
+        super(`每日封存来源计划检查未通过：${message}`);
         this.code = 'DAILY_FRESH_SOURCE_PLAN_INTEGRITY';
         this.retryable = false;
     }
@@ -58,7 +58,7 @@ function validDate(value) {
         && new Date(`${value}T00:00:00.000Z`).toISOString().slice(0, 10) === value;
 }
 
-function safeDirectory(value, create = false, label = 'directory') {
+function safeDirectory(value, create = false, label = '目录') {
     if (typeof value !== 'string' || !path.isAbsolute(value)) fail(`${label} 必须是绝对路径`);
     const absolute = path.resolve(value); let cursor = path.parse(absolute).root;
     for (const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
@@ -68,7 +68,7 @@ function safeDirectory(value, create = false, label = 'directory') {
             if (error.code !== 'ENOENT' || !create) throw error;
             fs.mkdirSync(cursor, { mode: 0o700 }); stat = fs.lstatSync(cursor);
         }
-        if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} is unsafe: ${cursor}`);
+        if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} 不安全：路径包含普通目录以外的文件或符号链接：${cursor}`);
     }
     return absolute;
 }
@@ -78,7 +78,7 @@ function readPrivateBytes(filename, label, maximum = 4 * 1024 * 1024) {
     try {
         const stat = fs.fstatSync(fd);
         if (!stat.isFile() || stat.nlink !== 1 || stat.size > maximum
-            || (process.platform !== 'win32' && (stat.mode & 0o777) !== 0o600)) fail(`${label} is unsafe or oversized`);
+            || (process.platform !== 'win32' && (stat.mode & 0o777) !== 0o600)) fail(`${label} 不安全或超过大小限制：须为只有一个硬链接的普通文件，且在非 Windows 系统上权限为 0600`);
         return fs.readFileSync(fd);
     } finally { fs.closeSync(fd); }
 }
@@ -94,9 +94,9 @@ function readPrivateJson(filename, label) {
 
 function writePrivateAtomic(filename, value) {
     const bytes = Buffer.from(`${JSON.stringify(canonical(value), null, 2)}\n`, 'utf8');
-    const directory = safeDirectory(path.dirname(filename), true, 'daily source run directory');
+    const directory = safeDirectory(path.dirname(filename), true, '每日来源运行目录');
     if (fs.existsSync(filename)) {
-        const existing = readPrivateBytes(filename, 'daily source run manifest');
+        const existing = readPrivateBytes(filename, '每日来源运行清单');
         if (!existing.equals(bytes) || (fs.lstatSync(filename).mode & 0o777) !== 0o600) {
             fail(`每日来源运行清单不同：${filename}`);
         }
@@ -109,7 +109,7 @@ function writePrivateAtomic(filename, value) {
     try { fs.linkSync(temporary, filename); }
     catch (error) {
         if (error.code !== 'EEXIST') throw error;
-        const existing = readPrivateBytes(filename, 'daily source run manifest');
+        const existing = readPrivateBytes(filename, '每日来源运行清单');
         if (!existing.equals(bytes)) throw error;
     } finally { fs.unlinkSync(temporary); }
 }
@@ -131,7 +131,7 @@ function sourceIds(papers) {
 }
 
 function sourceRunDirectory(rootDir, runId) {
-    return path.join(safeDirectory(rootDir, true, 'daily source root'), runId);
+    return path.join(safeDirectory(rootDir, true, '每日来源存放目录'), runId);
 }
 
 function createDailyFreshSourcePlan({ batchDate, batchId, papers, rootDir = Config.FILES.dailyFreshSourceRunsDir } = {}) {
@@ -149,8 +149,8 @@ function createDailyFreshSourcePlan({ batchDate, batchId, papers, rootDir = Conf
     writePrivateAtomic(path.join(runDir, 'run.json'), manifest);
     // 用深度分析将要使用的那个严格来源上下文检查器，重新读取已保存的字节。
     // 这样在发出任何来源请求或模型调用之前，就能挡住被改动或不属于本次运行的来源。
-    const stored = readPrivateJson(path.join(runDir, 'run.json'), 'daily source run manifest');
-    if (stableHash(stored) !== stableHash(manifest)) fail('daily source run manifest drifted');
+    const stored = readPrivateJson(path.join(runDir, 'run.json'), '每日来源运行清单');
+    if (stableHash(stored) !== stableHash(manifest)) fail('每日来源运行清单的内容已变化');
     return { ...clone(manifest), runDir, sourcesDir: path.join(runDir, 'sources'),
         readerAttemptsDir: path.join(runDir, 'reader-attempts') };
 }
@@ -162,12 +162,12 @@ function dailyFreshSourceReference(plan) {
         fail('每日来源计划无法生成引用');
     }
     const manifestFile = path.join(plan.runDir, 'run.json');
-    const bytes = readPrivateBytes(manifestFile, 'daily source run manifest');
-    const stored = readPrivateJson(manifestFile, 'daily source run manifest');
+    const bytes = readPrivateBytes(manifestFile, '每日来源运行清单');
+    const stored = readPrivateJson(manifestFile, '每日来源运行清单');
     if (stableHash(stored) !== stableHash({ contract: CONTRACT, version: VERSION, runId: plan.runId,
         batchDate: plan.batchDate, batchId: plan.batchId, paperIds: plan.paperIds,
         sourceSetSha256: plan.sourceSetSha256, sourceExpectations: plan.sourceExpectations })) {
-        fail('daily source run manifest drifted before reference creation');
+        fail('创建来源引用前，每日来源运行清单的内容已变化');
     }
     return Object.freeze({ contract: REFERENCE_CONTRACT, version: REFERENCE_VERSION, runId: plan.runId,
         batchDate: plan.batchDate, batchId: plan.batchId, sourceGeneration: SOURCE_GENERATION,
@@ -186,12 +186,12 @@ function readDailyFreshSourcePlan(reference, { rootDir = Config.FILES.dailyFresh
         || !SHA.test(String(reference.runManifestSha256 || ''))) {
         fail('每日来源引用无效');
     }
-    const root = safeDirectory(rootDir, false, 'daily source root');
-    const runDir = path.join(root, reference.runId); safeDirectory(runDir, false, 'daily source run directory');
+    const root = safeDirectory(rootDir, false, '每日来源存放目录');
+    const runDir = path.join(root, reference.runId); safeDirectory(runDir, false, '每日来源运行目录');
     const manifestFile = path.join(runDir, 'run.json');
-    const bytes = readPrivateBytes(manifestFile, 'daily source run manifest');
-    if (sha256(bytes) !== reference.runManifestSha256) fail('daily source run manifest SHA drifted');
-    const manifest = readPrivateJson(manifestFile, 'daily source run manifest');
+    const bytes = readPrivateBytes(manifestFile, '每日来源运行清单');
+    if (sha256(bytes) !== reference.runManifestSha256) fail('每日来源运行清单的 SHA 已变化');
+    const manifest = readPrivateJson(manifestFile, '每日来源运行清单');
     const plan = { ...manifest, runDir, sourcesDir: path.join(runDir, 'sources'),
         readerAttemptsDir: path.join(runDir, 'reader-attempts') };
     const replayed = dailyFreshSourceReference(plan);
@@ -244,7 +244,7 @@ function readDailyFreshSource(plan, paper) {
     const id = normalizedId(paper);
     if (!plan.paperIds.includes(id)) fail('论文不在该每日来源计划内');
     const details = fresh.readFreshSource(plan.runDir, { arxivId: id }, analysisIdentity(plan));
-    if (!details) throw absentSource(`${id} source is not sealed before analysis`);
+    if (!details) throw absentSource(`${id} 在分析前尚未保存并核验官方来源`);
     return details;
 }
 
@@ -298,16 +298,16 @@ function paperProvesBinding(paper, plan, details) {
 // 日更抓取阶段在分析开始前保存的那一组 PDF/TXT generation。把这个检查放在这里，
 // deep-only、reanalyze、batch 和 Reader 刷新就共用同一个「当前来源包是否可用」的
 // 判定，判定不通过就停下。
-function requireDailyFreshSourceRecoveryPlan(payload, { papers = null, label = 'daily recovery' } = {}) {
+function requireDailyFreshSourceRecoveryPlan(payload, { papers = null, label = '日更恢复' } = {}) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-        fail(`${label} 需要规范化的每日对象信封`);
+        fail(`${label} 的输入须为包含每日分析记录的对象，不能是数组或空值`);
     }
     const rows = papers === null ? payload.papers : papers;
     if (!Array.isArray(rows) || rows.length === 0) {
-        fail(`${label} 需要非空的规范化 papers`);
+        fail(`${label} 的 papers 须为非空的论文数组`);
     }
     const reference = payload.dailyFreshSourceRun;
-    if (!reference) fail(`${label} requires current dailyFreshSourceRun`);
+    if (!reference) fail(`${label} 缺少本次封存来源的引用 dailyFreshSourceRun`);
     const plan = readDailyFreshSourcePlan(reference);
     if (payload.batchDate !== plan.batchDate) {
         fail(`${label} 的 batchDate 与封存的每日来源运行不同`);
@@ -359,7 +359,7 @@ async function ephemeralReaderFigures(arxivId, figures, plan, options = {}) {
                 const bytes = Buffer.from(cached.base64, 'base64');
                 if (sha256(bytes) !== cached.sha256
                     || !/^image\/(?:png|jpeg|webp|svg\+xml)$/.test(String(cached.mime || ''))) {
-                    fail(`daily Reader Figure ${figure.ordinal} invocation cache drift`);
+                    fail(`论文图 ${figure.ordinal} 在本次调用内保存的图片字节或 MIME 类型与记录不符`);
                 }
                 materialized.push({
                     ...figure,
@@ -465,8 +465,8 @@ function createDailyAnalyzeFn(plan, options = {}) {
     if (typeof analyze !== 'function') fail('需要每日分析器');
     return async paper => {
         const result = await withDailyFreshPaperSource(plan, paper, () => analyze(paper), options);
-        // 直改上下文会在输出跨过引擎持久化边界之前剥掉字节和路径字段。这条断言要紧挨着
-        // 日更集成放，这样以后改动分析器时，默认流程不会悄悄重建 data/current 下的图片缓存。
+        // 来源上下文会在引擎保存输出之前去掉图片字节和路径字段，避免分析器改动后，
+        // 默认流程悄悄重建 data/current 下的图片缓存。
         return result;
     };
 }

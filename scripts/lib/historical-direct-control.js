@@ -1,8 +1,8 @@
 'use strict';
 
 // 给长时间运行的历史页面直接重写提供只读进度报告，以及显式的暂停/恢复标记。
-// 运行器只在两篇论文之间读取标记，因此当前这篇论文仍能走完它的原子登记和
-// 暂存切换，队列才会停止接收新任务。
+// 运行器只在两篇论文之间读取标记，因此当前这篇论文仍能走完它的完整记录保存和
+// 暂存页面替换，队列才会停止接收新任务。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -21,7 +21,7 @@ const SHA_RE = /^[a-f0-9]{64}$/;
 
 class HistoricalDirectControlError extends Error {
     constructor(message) {
-        super(`Historical direct rewrite control rejected: ${message}`);
+        super(`历史页面重写控制检查未通过：${message}`);
         this.name = 'HistoricalDirectControlError';
         this.code = 'HISTORICAL_DIRECT_REWRITE_CONTROL_INTEGRITY';
     }
@@ -38,7 +38,7 @@ const stableHash = value => crypto.createHash('sha256').update(JSON.stringify(ca
 const prettyBytes = value => Buffer.from(`${JSON.stringify(canonical(value), null, 2)}\n`, 'utf8');
 
 function generationNumber(value) {
-    if (!Number.isSafeInteger(value) || value < 1 || value > 999999999) fail('generation 必须是正的安全整数');
+    if (!Number.isSafeInteger(value) || value < 1 || value > 999999999) fail('generation 必须是 1 至 999999999 之间的安全整数');
     return value;
 }
 function configuredRoot(value, label, create = false) {
@@ -49,12 +49,12 @@ function configuredRoot(value, label, create = false) {
         fs.mkdirSync(absolute, { recursive: true, mode: 0o700 });
     }
     const stat = fs.lstatSync(absolute);
-    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(absolute) !== absolute) fail(`${label} is unsafe`);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || fs.realpathSync(absolute) !== absolute) fail(`${label} 不安全：必须是普通目录，且真实路径与指定路径相同`);
     return absolute;
 }
 function controlPaths({ registryRoot, plan, generation = 1 } = {}) {
     const normalized = planApi.normalizePlan(plan); const checked = generationNumber(generation);
-    const root = configuredRoot(registryRoot, 'registry root');
+    const root = configuredRoot(registryRoot, '执行登记目录');
     const registryFile = path.join(root, runner.registryName(normalized, checked));
     const pauseFile = `${registryFile}.pause`;
     const operationLockTarget = `${registryFile}.direct-run-operation`;
@@ -62,7 +62,7 @@ function controlPaths({ registryRoot, plan, generation = 1 } = {}) {
 }
 function sourceControlPaths({ sourceRoot, plan, generation = 1 } = {}) {
     const normalized = planApi.normalizePlan(plan); const checked = generationNumber(generation);
-    const root = configuredRoot(sourceRoot, 'fresh arXiv source root');
+    const root = configuredRoot(sourceRoot, '本次抓取的 arXiv 来源目录');
     const suffix = String(checked).padStart(6, '0');
     const base = path.join(root, `.${normalized.planSha256}.generation-${suffix}.source`);
     const operationLockTarget = `${base}.scheduler-operation`;
@@ -88,7 +88,7 @@ function normalizeSourceStatus(value, plan, generation) {
         || value.planSha256 !== normalized.planSha256 || value.generation !== generation
         || Number.isNaN(Date.parse(value.createdAt || '')) || new Date(value.createdAt).toISOString() !== value.createdAt
         || !Array.isArray(value.entries) || !SHA_RE.test(value.entrySetSha256 || '') || !SHA_RE.test(value.statusSha256 || '')) {
-        fail('source status envelope is invalid');
+        fail('来源状态记录的字段、版本、计划、代次、时间或 SHA 格式无效');
     }
     const expected = new Map(normalized.queue.map(item => [item.paperId, item.route.kind])); const seen = new Set();
     const entries = value.entries.map(entry => {
@@ -106,20 +106,20 @@ function normalizeSourceStatus(value, plan, generation) {
         || stableHash(entries) !== value.entrySetSha256) fail('来源状态未恰好覆盖计划队列');
     const body = { contract: value.contract, version: value.version, planSha256: value.planSha256,
         generation: value.generation, createdAt: value.createdAt, entries, entrySetSha256: value.entrySetSha256 };
-    if (stableHash(body) !== value.statusSha256) fail('source status SHA drifted');
+    if (stableHash(body) !== value.statusSha256) fail('来源状态记录的 SHA 已变化');
     return { ...body, statusSha256: value.statusSha256 };
 }
 function readSourceStatus({ sourceRoot, plan, generation = 1 } = {}) {
     const paths = sourceControlPaths({ sourceRoot, plan, generation });
     if (!fs.existsSync(paths.statusFile)) return null;
-    const loaded = conferencePageMappingsApi.readStableJson(paths.statusFile, 'direct source status');
+    const loaded = conferencePageMappingsApi.readStableJson(paths.statusFile, '历史重写的来源状态记录');
     return { filename: paths.statusFile, fileSha256: loaded.fileSha256,
         status: normalizeSourceStatus(loaded.value, plan, generation) };
 }
 function writeAtomicStatus(filename, value) {
-    const root = configuredRoot(path.dirname(filename), 'source status root');
+    const root = configuredRoot(path.dirname(filename), '来源状态目录');
     const existing = fs.lstatSync(filename, { throwIfNoEntry: false });
-    if (existing && (!existing.isFile() || existing.isSymbolicLink() || existing.nlink !== 1)) fail('source status target is unsafe');
+    if (existing && (!existing.isFile() || existing.isSymbolicLink() || existing.nlink !== 1)) fail('来源状态文件不安全：必须是只有一个硬链接的普通文件，不能是符号链接');
     const temporary = path.join(root, `.${path.basename(filename)}.${crypto.randomUUID()}.tmp`);
     let fd;
     try {
@@ -134,7 +134,7 @@ function writeAtomicStatus(filename, value) {
 function loadOrCreateSourceStatus({ sourceRoot, plan, generation = 1, now = new Date().toISOString(), apply = false } = {}) {
     const existing = readSourceStatus({ sourceRoot, plan, generation });
     if (existing || !apply) return existing;
-    configuredRoot(sourceRoot, 'fresh arXiv source root', true);
+    configuredRoot(sourceRoot, '本次抓取的 arXiv 来源目录', true);
     const paths = sourceControlPaths({ sourceRoot, plan, generation }); const status = sourceStatusRecord(plan, generation, now);
     writeAtomicStatus(paths.statusFile, status);
     return readSourceStatus({ sourceRoot, plan, generation });
@@ -146,7 +146,7 @@ function updateSourceStatus({ sourceRoot, plan, generation = 1, event, now = new
     if (index < 0 || !['ready', 'handoff', 'failed'].includes(event?.status)) fail('来源进度事件无效');
     const entries = current.entries.slice(); const before = entries[index];
     entries[index] = { ...before, status: event.status, attempts: before.attempts + 1, updatedAt: now,
-        outcomeSha256: stableHash(event), error: event.status === 'failed' ? String(event.error || 'source failed').slice(0, 2000) : null };
+        outcomeSha256: stableHash(event), error: event.status === 'failed' ? String(event.error || '来源准备失败').slice(0, 2000) : null };
     const body = { contract: SOURCE_STATUS_CONTRACT, version: 1, planSha256: current.planSha256,
         generation: current.generation, createdAt: current.createdAt, entries, entrySetSha256: stableHash(entries) };
     const status = { ...body, statusSha256: stableHash(body) }; writeAtomicStatus(loaded.filename, status);
@@ -186,7 +186,7 @@ function pauseRecord(plan, generation, requestedAt, reason) {
         || !['SIGINT', 'SIGTERM', 'external-pause', 'account-pool-exhausted',
             'account-balance-unavailable', 'account-authentication-failed', 'account-service-unavailable'].includes(reason.code)
         || typeof reason.detail !== 'string' || reason.detail !== runner.safeErrorText(reason.detail))) {
-        fail('pause reason is invalid or contains unsafe text');
+        fail('暂停原因的字段或原因代码无效，或说明中含不安全文本');
     }
     const body = { contract: PAUSE_CONTRACT, version: 1, planSha256: normalized.planSha256,
         generation: checked, requestedAt, ...(reason ? { reason } : {}) };
@@ -196,22 +196,22 @@ function normalizePauseRecord(value, plan, generation) {
     const expectedKeys = ['contract', 'version', 'planSha256', 'generation', 'requestedAt', 'requestSha256'];
     if (Object.hasOwn(value || {}, 'reason')) expectedKeys.push('reason');
     if (!value || typeof value !== 'object' || Array.isArray(value)
-        || Object.keys(value).sort().join('\0') !== expectedKeys.sort().join('\0')) fail('暂停请求的 schema 无效');
+        || Object.keys(value).sort().join('\0') !== expectedKeys.sort().join('\0')) fail('暂停请求的字段结构无效');
     const expected = pauseRecord(plan, generation, value.requestedAt, value.reason);
     if (value.contract !== expected.contract || value.version !== expected.version
-        || value.planSha256 !== expected.planSha256 || value.generation !== expected.generation) fail('pause request is not bound to this plan/generation');
-    if (value.requestSha256 !== expected.requestSha256 || !SHA_RE.test(value.requestSha256)) fail('pause request SHA drifted');
+        || value.planSha256 !== expected.planSha256 || value.generation !== expected.generation) fail('暂停请求不属于本次计划或代次');
+    if (value.requestSha256 !== expected.requestSha256 || !SHA_RE.test(value.requestSha256)) fail('暂停请求的 SHA 已变化');
     return expected;
 }
 function readPauseFile(filename, plan, generation) {
     if (!fs.existsSync(filename)) return null;
-    const loaded = conferencePageMappingsApi.readStableJson(filename, 'direct rewrite pause request');
+    const loaded = conferencePageMappingsApi.readStableJson(filename, '历史重写的暂停请求');
     return { record: normalizePauseRecord(loaded.value, plan, generation), fileSha256: loaded.fileSha256 };
 }
 function writePauseRequest({ phase = 'analysis', registryRoot, sourceRoot, plan, generation = 1,
     requestedAt = new Date().toISOString(), reason } = {}) {
     configuredRoot(phase === 'analysis' ? registryRoot : sourceRoot,
-        phase === 'analysis' ? 'registry root' : 'fresh arXiv source root', true);
+        phase === 'analysis' ? '执行登记目录' : '本次抓取的 arXiv 来源目录', true);
     const paths = phasePaths({ phase, registryRoot, sourceRoot, plan, generation });
     const record = pauseRecord(plan, generation, requestedAt, reason);
     recoverImmutableFileLink(paths.pauseFile, fail, 1024 * 1024);
@@ -236,13 +236,13 @@ function writePauseRequest({ phase = 'analysis', registryRoot, sourceRoot, plan,
 function lockPresent(lockDirectory) {
     const stat = fs.lstatSync(lockDirectory, { throwIfNoEntry: false });
     if (!stat) return false;
-    if (!stat.isDirectory() || stat.isSymbolicLink()) fail('direct-run operation lock is unsafe');
+    if (!stat.isDirectory() || stat.isSymbolicLink()) fail('历史重写操作锁目录不安全：必须是普通目录，不能是符号链接');
     return true;
 }
 function resumeRewrite({ phase = 'analysis', registryRoot, sourceRoot, plan, generation = 1 } = {}) {
     const paths = phasePaths({ phase, registryRoot, sourceRoot, plan, generation });
     if (lockPresent(paths.operationLockDirectory)) {
-        fail('direct-run still holds its operation lock; wait for active papers to finish before resume');
+        fail('历史重写仍持有操作锁，请等正在处理的论文结束后再恢复');
     }
     const existing = readPauseFile(paths.pauseFile, plan, generation);
     if (!existing) return { status: 'already-running', phase, ...paths };
@@ -257,7 +257,7 @@ function resumeRewrite({ phase = 'analysis', registryRoot, sourceRoot, plan, gen
 
 function registrySnapshot({ registryFile, plan, currentRendererImplementationSha256 = null } = {}) {
     if (!SHA_RE.test(String(currentRendererImplementationSha256 || ''))) {
-        fail('current direct renderer implementation SHA is invalid');
+        fail('当前历史页面生成器的实现 SHA 无效');
     }
     if (!fs.existsSync(registryFile)) {
         const counts = Object.fromEntries([...runner.STATES || []].sort().map(status => [status, 0]));
@@ -267,7 +267,7 @@ function registrySnapshot({ registryFile, plan, currentRendererImplementationSha
             currentRendererImplementationSha256, currentStagedCount: 0,
             staleStagedCount: 0, staleStagedPaperIds: [], lastUpdatedAt: null, recentFailures: [] };
     }
-    const loaded = conferencePageMappingsApi.readStableJson(registryFile, 'direct rewrite registry');
+    const loaded = conferencePageMappingsApi.readStableJson(registryFile, '历史重写的执行登记记录');
     const registry = runner.normalizeRegistry(loaded.value, plan); const counts = runner.registryCounts(registry);
     const updates = registry.entries.map(item => item.updatedAt).filter(Boolean).sort();
     const recentFailures = registry.entries.filter(item => ['failed', 'analysis_partial'].includes(item.status))
@@ -291,7 +291,7 @@ function expectedCohorts(plan) {
 }
 function safeChildren(root) {
     if (!fs.existsSync(root)) return [];
-    configuredRoot(root, 'status scan root');
+    configuredRoot(root, '状态检查目录');
     return fs.readdirSync(root, { withFileTypes: true }).filter(entry => !entry.isSymbolicLink());
 }
 function aggregateSnapshot({ aggregateRoot, plan, expectedTaskKeys = [] } = {}) {
@@ -301,23 +301,23 @@ function aggregateSnapshot({ aggregateRoot, plan, expectedTaskKeys = [] } = {}) 
         for (const entry of safeChildren(runRoot).filter(item => item.isFile() && /^(?:daily|conference|conference-task)-[a-z0-9-]+\.json$/.test(item.name))) {
             const filename = path.join(runRoot, entry.name);
             try {
-                const loaded = conferencePageMappingsApi.readStableJson(filename, 'direct aggregate status input'); const value = loaded.value;
+                const loaded = conferencePageMappingsApi.readStableJson(filename, '历史汇总的状态输入记录'); const value = loaded.value;
                 if (value?.contract !== aggregateApi.CONTRACT || value?.version !== aggregateApi.VERSION
                     || value?.status !== 'complete' || value?.source?.planSha256 !== plan.planSha256) continue;
                 const body = structuredClone(value); const manifestSha256 = body.manifestSha256; delete body.manifestSha256;
                 if (!SHA_RE.test(manifestSha256 || '') || aggregateApi.stableHash(body) !== manifestSha256) {
-                    fail('direct aggregate manifest SHA drifted');
+                    fail('历史汇总清单的 SHA 已变化');
                 }
                 const stagedPath = value.outputPage?.stagedPath;
                 if (typeof stagedPath !== 'string' || !stagedPath.startsWith('pages/content/posts/')
-                    || !SHA_RE.test(value.outputPage?.contentSha256 || '')) fail('直接汇总输出页面绑定无效');
+                    || !SHA_RE.test(value.outputPage?.contentSha256 || '')) fail('历史汇总的输出页面路径或内容 SHA 无效');
                 const pageFile = path.resolve(runRoot, ...stagedPath.split('/'));
                 if (!pageFile.startsWith(`${path.resolve(runRoot, 'pages')}${path.sep}`)
-                    || conferencePageMappingsApi.readStableFile(pageFile, 'direct aggregate status page').fileSha256 !== value.outputPage.contentSha256) {
-                    fail('direct aggregate output page bytes drifted');
+                    || conferencePageMappingsApi.readStableFile(pageFile, '历史汇总的状态对应页面').fileSha256 !== value.outputPage.contentSha256) {
+                    fail('历史汇总的输出页面内容已变化');
                 }
                 const key = `${value.scope}:${value.key}`; const prior = found.get(key);
-                if (prior && prior.manifestSha256 !== manifestSha256) fail(`多个直接汇总对 ${key} 的说法不同`);
+                if (prior && prior.manifestSha256 !== manifestSha256) fail(`${key} 有多份历史汇总记录，且清单 SHA 不同`);
                 found.set(key, { scope: value.scope, key: value.key, manifestSha256, filename });
             } catch (error) { errors.push({ filename, error: String(error.message).slice(0, 500) }); }
         }
@@ -328,7 +328,7 @@ function aggregateSnapshot({ aggregateRoot, plan, expectedTaskKeys = [] } = {}) 
     const observedTaskKeys = [...found.keys()].filter(key => key.startsWith('conference-task:'));
     const unexpectedTaskKeys = observedTaskKeys.filter(key => !expectedTaskSet.has(key));
     if (unexpectedTaskKeys.length) errors.push({ filename: null,
-        error: `unexpected conference-task aggregates: ${unexpectedTaskKeys.slice(0, 20).join(', ')}` });
+        error: `存在计划未要求的会议任务汇总：${unexpectedTaskKeys.slice(0, 20).join(', ')}` });
     const completeTasks = [...expectedTaskSet].filter(key => found.has(key)).length;
     return { expected: { daily: expected.daily.length, conference: expected.conference.length,
         conferenceTask: expectedTaskSet.size, aggregate: expected.daily.length + expected.conference.length,
@@ -347,7 +347,7 @@ function taskSnapshot({ aggregateProjectionRoot, plan } = {}) {
     for (const entry of safeChildren(aggregateProjectionRoot).filter(item => item.isFile() && item.name.endsWith('.json'))) {
         const filename = path.join(aggregateProjectionRoot, entry.name);
         let loaded;
-        try { loaded = conferencePageMappingsApi.readStableJson(filename, 'direct aggregate projection status input'); }
+        try { loaded = conferencePageMappingsApi.readStableJson(filename, '历史汇总页面对应关系的状态输入记录'); }
         catch (error) {
             // 读不出内容就无法判断属于哪个计划，必须单独记录错误。该文件可能属于别的计划，
             // 也可能是本计划已损坏的汇总文件；两种情况都不能显示成「还没生成」。
@@ -372,7 +372,7 @@ function taskSnapshot({ aggregateProjectionRoot, plan } = {}) {
     }
     if (!matches.length) return { projectionPresent: false, projectionErrors, total: null, pending: null, publicationReady: false };
     const identities = new Set(matches.map(item => item.projectionSha256));
-    if (identities.size !== 1) fail('同一直接计划的多个汇总投影彼此不同');
+    if (identities.size !== 1) fail('同一历史重写计划有多份汇总页面对应记录，且 SHA 不同');
     const coverage = matches[0].coverage; const pageCoverage = matches[0].pageCoverage;
     return { projectionPresent: true, projectionErrors, total: coverage?.total ?? 0, pending: coverage?.pending ?? 0,
         publicationReady: coverage?.publicationReady === true, reason: coverage?.reason ?? null,
@@ -383,21 +383,21 @@ function taskSnapshot({ aggregateProjectionRoot, plan } = {}) {
 function inspectConferenceSource(item, verifySha = false) {
     const paths = item.route.writerInputs.flatMap(source => [source?.metadata?.absolutePath, source?.pdf?.absolutePath]);
     if (!paths.length || paths.some(filename => typeof filename !== 'string' || !path.isAbsolute(filename))) {
-        return { status: 'failed', error: 'conference source paths are incomplete' };
+        return { status: 'failed', error: '会议论文的元数据或 PDF 路径缺失、不是字符串或不是绝对路径' };
     }
     for (const filename of paths) {
         let stat;
         try { stat = fs.lstatSync(filename); }
         catch (error) {
-            if (error.code === 'ENOENT') return { status: 'missing', error: `missing source: ${filename}` };
+            if (error.code === 'ENOENT') return { status: 'missing', error: `来源文件缺失：${filename}` };
             return { status: 'failed', error: String(error.message).slice(0, 500) };
         }
         if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) {
-            return { status: 'failed', error: `unsafe source: ${filename}` };
+            return { status: 'failed', error: `来源文件不安全：${filename}` };
         }
     }
     if (item.route.writerInputs.some(source => fs.statSync(source.pdf.absolutePath).size !== source.pdf.bytes)) {
-        return { status: 'failed', error: 'conference PDF size drifted' };
+        return { status: 'failed', error: '会议论文 PDF 的字节数已变化' };
     }
     if (verifySha) {
         try { planApi.verifyConferenceWriterInputs(item); }
@@ -416,7 +416,7 @@ function sourceSnapshot({ sourceRoot, plan, generation = 1, verifySources = fals
         : { pending: plan.queue.length, ready: 0, handoff: 0, failed: 0 };
     const byRoute = sourceStatusCountsByRoute(progress?.status || null, plan);
     if (fs.existsSync(sourceRoot)) {
-        configuredRoot(sourceRoot, 'fresh arXiv source root');
+        configuredRoot(sourceRoot, '本次抓取的 arXiv 来源目录');
         for (const item of arxiv) {
             const directory = fresh.sourceDirectory(sourceRoot, item.route.arxivId, checked);
             const entry = fs.lstatSync(directory, { throwIfNoEntry: false });
@@ -452,7 +452,7 @@ function sourceSnapshot({ sourceRoot, plan, generation = 1, verifySources = fals
 function buildStatus({ planFile, generation = 1, registryRoot, aggregateRoot, aggregateProjectionRoot,
     sourceRoot, publicationRoot, publicationId = null, blogRepo = null, remoteName = 'origin', liveRemote = null,
     verifySources = false, observedAt = new Date().toISOString() } = {}, dependencies = {}) {
-    const loaded = conferencePageMappingsApi.readStableJson(planFile, 'direct rewrite status plan');
+    const loaded = conferencePageMappingsApi.readStableJson(planFile, '历史重写的状态检查计划');
     const plan = planApi.normalizePlan(loaded.value); const paths = controlPaths({ registryRoot, plan, generation });
     const pause = readPauseFile(paths.pauseFile, plan, generation); const sourcePaths = sourceControlPaths({ sourceRoot, plan, generation });
     const sourcePause = readPauseFile(sourcePaths.pauseFile, plan, generation);

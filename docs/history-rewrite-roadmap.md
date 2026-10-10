@@ -4,7 +4,7 @@
 
 现在的历史重写以 [历史重写流程](history-rewrite.md) 为准。流程合并本地会议元数据/PDF 与冻结页面已有的单一 arXiv 线索，建立输入和计划；`direct-scheduler` 负责获取并封存来源，`direct-run` 只读取同一计划和来源获取序号 `generation` 下已标为 `ready` 的文件。arXiv 的文本、PDF、运行记录和来源清单须重新获取并封存，会议来源须核验本地元数据和 PDF SHA。
 
-只有新 arXiv 获取失败后生成的命名交接文件才能进入备用来源流程；会议本地文件缺失或损坏须停止该论文，不能转入这个备用流程。旧 crosswalk 仍可用于显式维护旧状态，但不再是普通直接重写的前提。当前已有 [历史直接发布流程](history-direct-publication.md)，不同于本文设计时尚不完整的旧私有发布入口；这也不表示全部历史论文已经重写或发布。新会议另见 [会议工作流](conference-workflow.md)。
+只有新 arXiv 获取失败后生成、有明确文件名的失败记录文件才能进入备用来源流程；会议本地文件缺失或损坏须停止该论文，不能转入这个备用流程。旧 crosswalk 仍可用于显式维护旧状态，但不再是普通直接重写的前提。当前已有 [历史直接发布流程](history-direct-publication.md)，不同于本文设计时尚不完整的旧私有发布入口；这也不表示全部历史论文已经重写或发布。新会议另见 [会议工作流](conference-workflow.md)。
 
 所有脚本和测试仍须遵守根目录 `AGENTS.md`。旧正文不得进入新的分析或 Reader 输入；来源、页面集合、Git、Hugo 或远端核验不一致时停止。远端 OID 只能证明提交已推送，宣告上线还须核验对应部署以及正式网页的 HTTP 200、地址和标题。
 
@@ -44,13 +44,13 @@
 <a id="21-历史-inventory-与-crosswalk"></a>
 ### 2.1 历史页面清单与来源对应表
 
-当时 `npm run history:inventory` 能保存 `content/posts` 的 Git、Hugo、页面和链接快照，使用 O_EXCL、0600、双文件凭证及写入前后的 repository CAS，防止基线变化时继续写入。`npm run history:crosswalk` 能从核验程序实际生成、不能自行构造的清单引用对象创建 4,185 个页面对应记录，保存状态 SHA 和只追加的决定，并从崩溃或失效锁中安全恢复。
+当时 `npm run history:inventory` 能保存 `content/posts` 的 Git、Hugo、页面和链接快照，使用 O_EXCL、0600、双文件凭证及写入前后对博客 Git 状态、Hugo 配置与页面内容的核对，防止基线变化时继续写入。`npm run history:crosswalk` 能从核验程序实际生成、不能自行构造的清单引用对象创建 4,185 个页面对应记录，保存状态 SHA 和只追加的决定，并从崩溃或失效锁中安全恢复。
 
-`paper-source-authority-v1` 及 crosswalk 的 verified/finalize 基础已实现。每项 verified 决定绑定 pageId、内容 SHA、完整论文身份记录及双 SHA、来源授权文件及其自身 SHA，以及来源证据类型。同一论文的多页确定性分组，全部 verified 才生成不可变的最终凭证。每次读取仍须使用核验程序实际生成、具有生产授权的引用对象，重新读取并核验来源，标题证据始终不足。
+`paper-source-authority-v1` 及 crosswalk 的 verified/finalize 基础已实现。每项 verified 决定绑定 pageId、内容 SHA、完整论文身份记录及双 SHA、来源授权文件及其自身 SHA，以及来源证据类型。同一论文的多个页面按论文身份分组，并固定论文和页面的排序，全部 verified 才生成不可变的最终凭证。每次读取仍须使用核验程序实际生成、具有生产授权的引用对象，重新读取并核验来源，标题证据始终不足。
 
 设计时，真实 arXiv 来源授权采集器和会议计划授权的跨进程装载还没有完成：arXiv 只有重新读取并核验来源的协议和测试数据，会议只能在持有有效计划引用对象的同一进程内核验。因此，当时还不能生成全历史正式最终凭证，也不能据此授权全量分析。这是当时的实现限制，不是对今天入口的描述。
 
-旧标签 URL 只是清单中的 `unverified` 候选。正式重标前仍须由 Hugo 保存实际分类路由，不能根据标签字符串猜测 slug 并声称已保留旧 URL。
+旧标签 URL 只是清单中的 `unverified` 候选。正式更改标签前仍须由 Hugo 保存实际生成的标签页地址，不能根据标签字符串猜测 slug 并声称已保留旧 URL。
 
 <a id="22-arxiv-fresh-source"></a>
 ### 2.2 arXiv 来源获取与隔离运行
@@ -80,7 +80,7 @@
 <a id="24-taxonomy"></a>
 ### 2.4 分类
 
-`paper-taxonomy-v1` 的词表、九个分面、稳定 concept ID、同分面父子关系、别名解析、祖先查询和中英文校验器可以复用。旧预览却不能当正式分类：当时 1,243 个旧标签只有 178 个字面映射，1,065 个未解析标签，语义审查数量为 0。旧标签只用于比较变化和保留旧路由，不成为新论文的分类证据。现行分类要求见 [分类实现说明](tag-system-implementation.md)。
+`paper-taxonomy-v1` 的词表、九个分类维度、稳定 concept ID、同一分类维度内的上下级关系、别名解析、祖先查询和中英文校验器可以复用。旧预览却不能当正式分类：当时 1,243 个旧标签只有 178 个字面映射，1,065 个未解析标签，语义审查数量为 0。旧标签只用于比较变化和保留旧标签页地址，不成为新论文的分类证据。现行分类要求见 [分类实现说明](tag-system-implementation.md)。
 
 <a id="25-generate--review--push"></a>
 ### 2.5 生成、审查与推送
@@ -132,7 +132,7 @@ P5  immutable generation --> review --> one history publication transaction
 以下是当时已有的基础及拟补的能力：
 
 1. `paper-source-authority-v1` 的协议和加载器已有，生产适配器待实现。它绑定 `paper-identity-v1` 的完整身份记录 SHA 和 identity SHA；接入官方 metadata 适配器之前，citation 必须为 null，不能携带旧标题、作者或 venue。证据类型只有 `arxiv-official-fulltext` 和 `conference-plan-source-context`：arXiv 文件的自哈希不能授予生产授权，会议必须持有当前进程核验过的计划引用对象，重新逐项核验完整导入记录、来源清单和上下文，才能生成带授权的来源引用对象。授权记录绑定命名来源文件及 SHA、来源快照和全文 SHA、会议观察记录和计划绑定 SHA；理由、决定者、模型和实际用量留在后续决定记录。候选线索只供查找，不进入已验证输出，标题单独匹配不够。
-2. `page-source-crosswalk-v1` 的 verified 扩展已有，批量解析待实现。页面对应记录精确覆盖 4,185 个 pageId；`pending/needs-review/blocked/conflict/verified` 转换只追加、按 CAS 写入。verified 必须引用核验程序实际生成的来源授权对象，不能接受调用方手填 SHA。
+2. `page-source-crosswalk-v1` 的 verified 扩展已有，批量解析待实现。页面对应记录精确覆盖 4,185 个 pageId；`pending/needs-review/blocked/conflict/verified` 的转换记录只追加，写入前须核对整份状态 SHA 与决定记录要求的旧状态 SHA 相同。verified 必须引用核验程序实际生成的来源授权对象，不能接受调用方手填 SHA。
 3. `identityGroups` 分组基础已有，全量数据尚待核验。每个论文身份对应一个或多个 pageId，只存 `paperId`、身份和完整记录的 SHA、排序后的 `pageKeys` 及 group SHA。范围、批次和页面 URL 保留在 crosswalk 的 `source.papers` 中，重复页不能因分组丢失。`analysisKey` 尚未进入该协议，须由后续分析计划定义并绑定最终来源。
 4. `page-source-crosswalk-final-receipt-v1` 基础已有，全量生产凭证尚未生成。它绑定 inventory ledger/receipt、完整决定集合、4,185 个 assignment 和 U 个 identity group；只有 `pending=blocked=conflict=0` 才 complete，并核对 self-SHA、文件 SHA、页面集合 SHA 及身份分组集合 SHA。
 
@@ -270,7 +270,7 @@ U/U 正式分析和 Reader 须通过 `isSuccessfulAnalysisRecord`、`hasValidApi
 
 分类从新分析和来源证据产生，不复制旧标签。任务采用最具体叶节点，父节点通过检索继承，不重复存储。方案曾提议让非任务论文使用科学主题并允许主任务为空；当前严格解析器尚不支持这个例外，不能用历史提案绕过现行主任务和主方法要求。
 
-方法、应用和运行设置不互相代替。可先确定性整理证据，再只对含糊分类调用模型，语义审查与字面映射分别统计。每个身份只分类一次，再生成全部对应页面；方案要求同一论文的不同批次使用相同分类，除非来源版本确实不同并已拆成不同身份。这一拆分规则也属于原设计，不能据此自行变更现行身份协议。
+方法、应用和运行设置不互相代替。可先按固定规则整理证据，再只对含糊分类调用模型；按论文原文核验标签和按旧标签文字查找概念的结果分别统计。每个身份只分类一次，再生成全部对应页面；方案要求同一论文的不同批次使用相同分类，除非来源版本确实不同并已拆成不同身份。这一拆分规则也属于原设计，不能据此自行变更现行身份协议。
 
 ### 7.3 CLI
 
@@ -289,7 +289,7 @@ planned history:tags finalize --run-id UUID
 
 U/U 分类记录须为已审状态，不能将 partial/legacy_mapped 当作语义通过。concept ID 须属于同一 registry SHA，父子冗余为 0，并核验数量和当时拟议的非任务例外。
 
-1,243 个旧标签名称各有经过核验的路由处置，1,065 个未解析标签不得静默消失。固定分层评测集复核覆盖广度、同义合并和子任务边界。页面只突出主任务与 2–3 个区分度高的概念，避免将多个分面重新堆成平面标签。
+1,243 个旧标签名称各有经过核验的标签页地址保留或跳转方案，1,065 个未解析标签不得静默消失。固定分层评测集复核覆盖广度、同义合并和子任务边界。页面只突出主任务与 2–3 个区分度高的概念，避免把不同分类维度的标签不加区分地堆在一起。
 
 <a id="8-p44490-页面确定性投影"></a>
 ## 8. P4：按既有身份生成 4,490 个页面

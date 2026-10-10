@@ -44,7 +44,7 @@ function parseArgs(argv) {
             liveRemote: values['--publication-id'] ? values['--live-remote'] !== 'false' : false } : {}) };
 }
 function loadPlan(filename) {
-    return planApi.normalizePlan(conferencePageMappingsApi.readStableJson(filename, '历史直接重写的控制计划').value);
+    return planApi.normalizePlan(conferencePageMappingsApi.readStableJson(filename, '历史页面重写的控制计划').value);
 }
 function roots(runtime = {}) {
     const files = runtime.files || Config.FILES;

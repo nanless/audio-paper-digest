@@ -313,7 +313,7 @@ test('来源调度器只接受校验通过、且对应同一计划和来源获�
     fs.writeFileSync(pauseFile, '', { mode: 0o600 });
     await assert.rejects(schedulerCli.main(['--apply', '--plan', planFile], { files,
         prepare: async options => { options.shouldPause(); throw new Error('unsigned marker was accepted'); } }),
-    /pause request|must contain valid UTF-8 JSON/);
+    /历史重写的暂停请求|must contain valid UTF-8 JSON/);
     fs.unlinkSync(pauseFile);
     directControl.writePauseRequest({ phase: 'source', sourceRoot, plan,
         requestedAt: '2026-09-07T00:00:00.000Z' });
@@ -467,11 +467,11 @@ test('计划要求提供完整的会议论文与页面对应记录，命令行�
     assert.equal(parsed.queue, 'conference'); assert.equal(parsed.arxivGeneration, 2); assert.equal(parsed.maxPapers, 1);
     assert.deepEqual(parsed.paperIds, ['conference:icassp:2026:icassp-arnumber:100']);
     assert.throws(() => schedulerCli.parseArgs(['--dry-run', '--plan', f.catalogPath, '--queue', 'all',
-        '--arxiv-concurrency', '0']), /Use/);
+        '--arxiv-concurrency', '0']), /用法：/);
     assert.throws(() => schedulerCli.parseArgs(['--dry-run', '--plan', f.catalogPath,
-        '--max-papers', '1', '--limit', '1']), /Use/);
+        '--max-papers', '1', '--limit', '1']), /用法：/);
     assert.throws(() => schedulerCli.parseArgs(['--dry-run', '--plan', f.catalogPath,
-        '--paper-ids', 'arxiv:2601.00001,arxiv:2601.00001']), /Use/);
+        '--paper-ids', 'arxiv:2601.00001,arxiv:2601.00001']), /用法：/);
 });
 
 test('会议来源适配器在标记直接来源就绪之前，复核计划中的元数据和 PDF 哈希', t => {

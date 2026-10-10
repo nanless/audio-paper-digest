@@ -116,22 +116,22 @@ test('实时授权创建隔离的全新引擎运行，不带旧的生成字段',
 });
 
 test('生成或非来源元数据在创建运行之前就被拒绝', () => {
-    assert.throws(() => history.normalizedMetadata({ arxivId: '2609.03622', title: 'x', abstract: 'y', analysis: 'old' }, '2609.03622'), /old analysis/);
-    assert.throws(() => history.normalizedMetadata({ arxivId: '2609.03622', title: 'x', abstract: 'y', score: 9 }, '2609.03622'), /non-source/);
+    assert.throws(() => history.normalizedMetadata({ arxivId: '2609.03622', title: 'x', abstract: 'y', analysis: 'old' }, '2609.03622'), /不得包含旧分析正文/);
+    assert.throws(() => history.normalizedMetadata({ arxivId: '2609.03622', title: 'x', abstract: 'y', score: 9 }, '2609.03622'), /来源信息之外的字段/);
 });
 
 test('命令行拒绝日历上不存在的日期', () => {
     assert.equal(cli.validDate('2026-09-04'), true);
     assert.equal(cli.validDate('2026-02-30'), false);
     assert.throws(() => cli.parseArgs(['prepare', '--dry-run', '--id', '2609.03622',
-        '--date', '2026-02-30', '--authority', 'arxiv-2609.03622.json']), /Use/);
+        '--date', '2026-02-30', '--authority', 'arxiv-2609.03622.json']), /用法：/);
 });
 
 test('准备命令行要求为恢复给出显式的稳定运行 ID', () => {
     const args = ['prepare', '--dry-run', '--run-id', RUN_ID, '--id', '2609.03622',
         '--date', '2026-09-04', '--authority', 'arxiv-2609.03622.json'];
     assert.equal(cli.parseArgs(args).runId, RUN_ID);
-    assert.throws(() => cli.parseArgs(args.filter((_, index) => ![2, 3].includes(index))), /Use/);
+    assert.throws(() => cli.parseArgs(args.filter((_, index) => ![2, 3].includes(index))), /用法：/);
 });
 
 test('隔离运行执行全新分析回调，并保存自己的正式记录', async t => {
@@ -186,7 +186,7 @@ test('隔离运行执行全新分析回调，并保存自己的正式记录', as
     canonical.papers[0].analysis = 'tampered after seal';
     fs.writeFileSync(path.join(runRoot, RUN_ID, 'analysis.json'), JSON.stringify(canonical));
     assert.throws(() => history.recoverHistoricalArxivRun({ runId: RUN_ID, date: '2026-09-04',
-        arxivId: '2609.03622', rootDir: runRoot }), /does not seal/);
+        arxivId: '2609.03622', rootDir: runRoot }), /结果文件的 SHA 与运行记录不符/);
 });
 
 test('冻结的 2403/2512 v2 存储记录被显式排队做完整契约升级', t => {

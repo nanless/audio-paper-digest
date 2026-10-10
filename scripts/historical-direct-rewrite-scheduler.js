@@ -14,15 +14,15 @@ const USAGE = '--dry-run|--apply --plan ABSOLUTE.json [--queue all|arxiv|confere
 function parseArgs(argv) {
     const [mode, ...rest] = argv; const values = {};
     if (!['--dry-run', '--apply'].includes(mode) || rest.length < 2 || rest.length > 16 || rest.length % 2) {
-        throw new Error(`Use ${USAGE}`);
+        throw new Error(`用法：${USAGE}`);
     }
     for (let index = 0; index < rest.length; index += 2) {
         const flag = rest[index]; const value = rest[index + 1];
         if (!['--plan', '--queue', '--generation', '--arxiv-concurrency', '--conference-concurrency', '--paper-ids', '--max-papers', '--limit'].includes(flag)
-            || !value || Object.hasOwn(values, flag)) throw new Error(`Use ${USAGE}`);
+            || !value || Object.hasOwn(values, flag)) throw new Error(`用法：${USAGE}`);
         values[flag] = value;
     }
-    if (values['--max-papers'] !== undefined && values['--limit'] !== undefined) throw new Error(`Use ${USAGE}`);
+    if (values['--max-papers'] !== undefined && values['--limit'] !== undefined) throw new Error(`用法：${USAGE}`);
     const maximum = values['--max-papers'] ?? values['--limit'];
     const paperIds = values['--paper-ids'] === undefined ? [] : values['--paper-ids'].split(',').map(id => id.trim());
     if (!path.isAbsolute(values['--plan'] || '') || (values['--queue'] !== undefined && !['all', 'arxiv', 'conference'].includes(values['--queue']))
@@ -30,7 +30,7 @@ function parseArgs(argv) {
         || ['--arxiv-concurrency', '--conference-concurrency'].some(flag => values[flag] !== undefined && !/^[1-8]$/.test(values[flag]))
         || (maximum !== undefined && !/^[1-9]\d{0,8}$/.test(maximum)) || paperIds.some(id => !id)
         || new Set(paperIds).size !== paperIds.length) {
-        throw new Error(`Use ${USAGE}`);
+        throw new Error(`用法：${USAGE}`);
     }
     return { apply: mode === '--apply', planFile: path.resolve(values['--plan']), queue: values['--queue'] || 'all',
         arxivGeneration: Number(values['--generation'] || 1), arxivConcurrency: Number(values['--arxiv-concurrency'] || 3),
@@ -43,15 +43,15 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
     if (typeof files.freshArxivFetchedSourcesDir !== 'string' || !path.isAbsolute(files.freshArxivFetchedSourcesDir)
         || typeof files.historicalArxivFreshFailureHandoffDir !== 'string'
         || !path.isAbsolute(files.historicalArxivFreshFailureHandoffDir)) {
-        throw new Error('freshArxivFetchedSourcesDir and historicalArxivFreshFailureHandoffDir must be configured absolute paths');
+        throw new Error('freshArxivFetchedSourcesDir 和 historicalArxivFreshFailureHandoffDir 必须配置为绝对路径');
     }
-    const loaded = conferencePageMappingsApi.readStableJson(options.planFile, 'direct rewrite plan');
+    const loaded = conferencePageMappingsApi.readStableJson(options.planFile, '历史重写的来源准备计划');
     const plan = planApi.normalizePlan(loaded.value);
     const generation = String(options.arxivGeneration).padStart(6, '0');
     const base = path.join(files.freshArxivFetchedSourcesDir, `.${plan.planSha256}.generation-${generation}.source`);
     const pauseFile = `${base}.pause`; const lockTarget = `${base}.scheduler-operation`;
     let stopped = false; const handlers = new Map(['SIGINT', 'SIGTERM'].map(signal => [signal, () => { stopped = true;
-        console.error(`[historical-direct-rewrite-scheduler] received ${signal}; finishing active sources before pausing`); }]));
+        console.error(`[historical-direct-rewrite-scheduler] 收到 ${signal}，等待正在处理的来源结束后暂停`); }]));
     for (const [signal, handler] of handlers) process.on(signal, handler);
     const pauseRequested = () => stopped || Boolean(control.readPauseFile(
         pauseFile, plan, options.arxivGeneration));
