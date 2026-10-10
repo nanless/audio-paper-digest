@@ -73,7 +73,7 @@ function writePublication(currentDir, papers, commit = 'a'.repeat(40), mode = 'm
 }
 
 describe('发布后的论文长图与汇总封面任务', () => {
-    it('视觉规划 CLI 拒绝未知、缺值和重复参数', () => {
+    it('长图与封面任务命令拒绝未知、缺值和重复参数', () => {
         assert.throws(() => parseArgs(['--unknown', 'value']), /未知参数/);
         assert.throws(() => parseArgs(['--date']), /无效参数/);
         assert.throws(
@@ -134,7 +134,7 @@ describe('发布后的论文长图与汇总封面任务', () => {
         }), /缺少可验证的博客发布凭证/);
     });
 
-    it('LLM API production 使用相同的已发布快照建立 TOP 10 与汇总图任务', () => {
+    it('API 日更的已发布论文记录用于安排前十篇长图与汇总封面', () => {
         const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'paper-visual-api-integration-'));
         const originals = {
             current: Config.CURRENT_DIR,

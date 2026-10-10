@@ -16,21 +16,21 @@ const USAGE = '--apply --catalog NAME.json --report NAME.json --evidence-run UUI
 
 function parseArgs(argv) {
     const [mode, ...rest] = argv;
-    if (mode !== '--apply') throw new Error(`First argument must be --apply. Use ${USAGE}`);
+    if (mode !== '--apply') throw new Error(`第一个参数必须是 --apply。用法：${USAGE}`);
     const values = {};
     for (let index = 0; index < rest.length; index += 1) {
         const flag = rest[index];
         if (flag === '--retry-failed') {
-            if (Object.hasOwn(values, flag)) throw new Error(`Use ${USAGE}`);
+            if (Object.hasOwn(values, flag)) throw new Error(`参数不符合用法：${USAGE}`);
             values[flag] = true; continue;
         }
         const value = rest[index + 1];
         if (!['--catalog', '--report', '--evidence-run', '--spec', '--filter', '--owner', '--limit'].includes(flag)
-            || value === undefined || Object.hasOwn(values, flag)) throw new Error(`Use ${USAGE}`);
+            || value === undefined || Object.hasOwn(values, flag)) throw new Error(`参数不符合用法：${USAGE}`);
         values[flag] = value; index += 1;
     }
     for (const flag of ['--catalog', '--report', '--evidence-run', '--spec', '--filter', '--owner']) {
-        if (!values[flag]) throw new Error(`Missing required argument: ${flag}`);
+        if (!values[flag]) throw new Error(`缺少必填参数：${flag}`);
     }
     for (const flag of ['--catalog', '--report', '--spec']) {
         if (!filter.SAFE_JSON_NAME.test(values[flag])) throw new Error(`${flag} 必须是安全的直接 JSON 文件名`);
@@ -77,7 +77,7 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
     requireExternalRuntime('conference-filter-run.js');
     if (!runtime || typeof runtime !== 'object' || Array.isArray(runtime)
         || Object.keys(runtime).some(key => !['files', 'env'].includes(key))) {
-        throw new Error('conference filter runtime only accepts files/env; transport injection is forbidden');
+        throw new Error('会议筛选运行只接受 files 和 env 配置；不允许替换网络请求函数');
     }
     const options = parseArgs(argv); const files = requireFiles(runtime.files || Config.FILES);
     const catalogFile = filter.safeDirectJson(files.conferenceDiscoveryCatalogDir, options.catalogName);

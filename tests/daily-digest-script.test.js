@@ -52,17 +52,17 @@ test('默认论文速递脚本校验真实公历日期，且新抓取只能绑�
     assert.match(source, /历史批次只能使用 --from tasks\|spec\|analyze\|generate\|review\|push\|visual/);
 });
 
-test('显式 Manual 边界只声明生产 records v4/spec v6，不伪装自动 subagent DAG', () => {
+test('显式 Manual 入口声明 records v4/spec v6，但不自动创建子任务', () => {
     assert.match(source, /data\/current\/manual-v6\/\$\{target_date\}/);
     assert.match(source, /records-v4\.json/);
     assert.match(source, /生产 spec v6\/canonical/);
-    assert.match(source, /不会创建 subagent、生成 role packet，也不会组装 records-v4\.json/);
+    assert.match(source, /不会自动创建子任务、准备单篇任务材料，也不会汇总生成 records-v4\.json/);
     assert.match(source, /逐篇创建 Terra-high 单篇子代理/);
     assert.doesNotMatch(source, /每篇由独立 paper subagent 写 records v3/);
     assert.doesNotMatch(source, /manual-v6-shadow\/\$\{target_date\}/);
 });
 
-test('package 默认 manual 命令进入 production v6，legacy v5 和 shadow 都必须显式命名', () => {
+test('默认 Manual 命令使用正式 v6，旧 v5 和隔离运行命令须显式指定', () => {
     const scripts = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../package.json'), 'utf8')).scripts;
     assert.equal(scripts['digest:prepare'], 'PD_DAILY_API_MODE=1 node scripts/workspace-role.js exec daily -- bash run-daily-digest.sh');
     assert.equal(scripts['digest:api'], 'PD_DAILY_API_MODE=1 node scripts/workspace-role.js exec daily -- bash run-daily-digest.sh');
@@ -133,7 +133,7 @@ test('push 续跑只由 push 规划一次，visual 续跑才直接调用独立�
     assert.doesNotMatch(commands, /push-blog\.py/);
 });
 
-test('tasks 续跑只初始化并展示持久 runner，然后在真实 subagent 边界退出', () => {
+test('tasks 续跑只调用任务初始化与状态命令，并以退出码 3 停止', () => {
     const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'daily-digest-tasks-'));
     const logPath = path.join(dir, 'commands.log');
     const fake = path.join(dir, 'npm');
@@ -148,7 +148,7 @@ test('tasks 续跑只初始化并展示持久 runner，然后在真实 subagent 
     const commands = fs.readFileSync(logPath, 'utf8');
     assert.match(commands, /npm run manual:tasks -- init --date 2026-07-13/);
     assert.match(commands, /npm run manual:tasks -- status --date 2026-07-13/);
-    assert.match(result.stdout, /不会创建 subagent、生成 packet，也不会组装 records-v4\.json/);
+    assert.match(result.stdout, /不会自动创建子任务、准备单篇任务材料，也不会汇总生成 records-v4\.json/);
     assert.doesNotMatch(commands, /manual:spec|manual:analyze|generate-blog/);
     fs.rmSync(dir, { recursive: true, force: true });
 });

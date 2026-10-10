@@ -1,8 +1,8 @@
 'use strict';
 
-// blog:activate-fresh 让新晋升的批次接替旧发布。它出错会改已发布状态，所以这里
-// 卡三件事：参数形状、只有 promoted 才能通过、以及交给 Python 的命令行是固定的。
-// 子进程用假的 spawn 观察，不真的启动 Python，也不碰 data/。
+// blog:activate-fresh 将状态为 promoted 的批次交给接替发布入口。
+// 这里检查参数、运行状态和传给 Python 的固定命令；子进程用替代 spawn 观察，不真正启动 Python。
+// 所有运行资料只写本测试的临时目录。
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
@@ -20,7 +20,7 @@ const RUN_ID = '11111111-2222-4333-8444-555555555555';
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const USAGE = /用法：--run-id UUID \[--dry-run\]/;
 
-// 照 tests/fresh-rewrite-run.test.js 的接缝搭一份能通过 loadRun 的真实运行目录。
+// 按照 tests/fresh-rewrite-run.test.js 的目录结构创建可由 loadRun 读取的临时运行资料。
 function fixture(t, { omitSourceText = false } = {}) {
     const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'activate-fresh-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
@@ -158,7 +158,7 @@ describe('blog:activate-fresh', () => {
         assert.deepEqual(calls, []);
     });
 
-    it('promoted 运行按固定命令行接替旧发布，--dry-run 原样透传', async t => {
+    it('状态为 promoted 的运行调用固定发布命令，并透传 --dry-run', async t => {
         const f = fixture(t);
         const loaded = await promotedRun(f);
         assert.equal(loaded.run.status, 'promoted');

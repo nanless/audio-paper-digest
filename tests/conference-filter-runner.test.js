@@ -178,7 +178,7 @@ test('生产 runner 用真实的公共传输，并保留绑定的意图、原始
     assert.equal(filter.runLlmDecision, undefined);
     assert.equal(runner.productionLlmConfig, undefined);
     await assert.rejects(() => runner.main(args(), { files: f.files, env: f.env, transportRequestFn: async () => ({}) }),
-        /transport injection is forbidden/);
+        /不允许替换网络请求函数/);
 });
 
 test('正式筛选按数量上限处理一批候选，完整复核一次状态，并保存逐篇状态更新的前后 SHA 对应关系', async t => {
@@ -492,9 +492,9 @@ test('过大的请求在传输之前就被拒绝，来源返回的坏字节不�
 });
 
 test('runner 命令行解析器拒绝不安全或有歧义的重试控制项', () => {
-    assert.throws(() => runner.parseArgs(['--apply', '--catalog', '../x.json']), /safe|Missing|Use/);
-    assert.throws(() => runner.parseArgs(['--dry-run', '--catalog', 'x.json']), /must be --apply/);
-    assert.throws(() => runner.parseArgs([...args(), '--retry-failed', '--retry-failed']), /Use/);
+    assert.throws(() => runner.parseArgs(['--apply', '--catalog', '../x.json']), /缺少必填参数：--report/);
+    assert.throws(() => runner.parseArgs(['--dry-run', '--catalog', 'x.json']), /第一个参数必须是 --apply/);
+    assert.throws(() => runner.parseArgs([...args(), '--retry-failed', '--retry-failed']), /参数不符合用法/);
     assert.equal(runner.parseArgs([...args(), '--retry-failed']).retryFailed, true);
     assert.throws(() => filter.parseLlmDecisionText('{"decision":"included","reason":"x","extra":1}'), /unknown or missing/);
     assert.throws(() => filter.parseLlmDecisionText('```json\n{}\n```'), /strict JSON/);

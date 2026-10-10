@@ -159,7 +159,7 @@ if [ "$start_index" -eq 1 ] && [ "$api_mode" -ne 1 ]; then
   echo "    npm run manual:tasks -- init --date ${target_date}"
   echo "    npm run manual:packet -- --date ${target_date} --paper ARXIV_ID --role author"
   echo "    npm run manual:tasks -- status --date ${target_date}"
-  echo "==> task runner 只持久化、claim 和校验真实任务；不会创建 subagent、生成 role packet，也不会组装 records-v4.json。"
+  echo "==> 任务管理器只保存任务、记录领取情况并校验提交结果；不会自动创建子任务、准备单篇任务材料，也不会汇总生成 records-v4.json。"
   echo "==> 主 Agent 必须逐篇创建 Terra-high 单篇子代理；四类任务全部 validated 后，由 manual:records 汇总生成 records v4。"
   echo "==> 全部任务 validated 且 records-v4.json 就绪后，用 --from spec 续跑生产 spec v6/canonical。"
   exit 3
@@ -174,7 +174,7 @@ if [ "$api_mode" -ne 1 ]; then
     run_stage 2 "初始化生产 Manual v6 task runner" \
       npm run manual:tasks -- init --date "$target_date"
     npm run manual:tasks -- status --date "$target_date"
-    echo "==> task runner 已停在需要人工接手的边界；它不会创建 subagent、生成 packet，也不会组装 records-v4.json。"
+    echo "==> 任务管理器已停在需要人工接手的步骤；它不会自动创建子任务、准备单篇任务材料，也不会汇总生成 records-v4.json。"
     echo "==> 主 Agent 用 manual:packet 生成每个 role packet，并完成逐篇 register/claim/start/submit；随后用 --from spec 续跑。"
     exit 3
   fi
