@@ -181,7 +181,7 @@ describe('Manual 实测性能报告', () => {
         assert.throws(() => loadAll(fx, [oldPath, latestPath]), /文件的角色、相对路径、字节数或 SHA 已变化/);
     });
 
-    it('sidecar、日期目录或 queue snapshot 使用 symlink 时拒绝', () => {
+    it('日期目录或工作队列文件是符号链接时拒绝读取', () => {
         const fx = fixture();
         const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'manual-performance-report-outside-'));
         fs.symlinkSync(outside, path.join(fx.shadow, '2026-08-28'));

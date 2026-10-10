@@ -116,7 +116,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/conference-filter-evidence.js` | Node 库 | 从认证候选记录批量核验官方精确 PDF，由固定 PyMuPDF 提取页文本、视觉审计和原文摘要定位证据。保存可恢复的证据运行、候选及报告；非 ready 项一律交给 LLM，不能直接排除。 |
 | `lib/official-conference-acquisition.js` | Node 库 | 按固定 2026 官方 index/record/PDF 白名单抓取会议元数据与 PDF，`PROVIDERS` 是来源清单的唯一依据。AAAI volume 40 用固定 48-issue 清单，核验逐 issue 响应凭证、SHA 和跨 issue article ID 唯一性；其他来源用单索引。索引和逐篇下载以 `0600`、`O_EXCL` 保存，恢复时完整核验。 |
 | `lib/conference-source-context.js` | Node 库 | 生产入口只接受当前进程实际核验并登记的计划对象，再核验完整上游证明并读取会议全文；不导出 ledger/run 测试捷径。 |
-| `lib/conference-filter.js` | Node 库 | 固定候选、已核验的证据文件、逐篇凭证、日更提示词、关键词策略、会议领域标签，以及模型、接口地址和词表的指纹。状态为 `ready` 的摘要进入关键词和提示词筛选；其他项交给模型。程序保存意图、请求凭证和决定，并在写入前核对原状态。生产凭证只能由固定公共 LLM 路由生成，不接受请求实现注入；恢复时先核验旧锁和已有记录，避免重复执行。 |
+| `lib/conference-filter.js` | Node 库 | 固定候选、已核验的证据文件、逐篇凭证、日更提示词、关键词策略、会议领域标签，以及模型、接口地址和词表的指纹。状态为 `ready` 的摘要进入关键词和提示词筛选；其他项交给模型。程序在请求前保存准备记录，绑定请求内容、来源与原状态 SHA，再保存请求凭证和筛选决定；写入前核对原状态。生产凭证只能由固定公共 LLM 路由生成，不接受请求实现注入；恢复时先核验旧锁和已有记录，避免重复执行。 |
 | `lib/conference-process.js` | Node 库 | 对会议完整入选集合封存官方 PDF、导入来源，调用公共引擎分析，生成读者文章、评分、分类页面和汇总。整批默认并发 1，可设为 1–5；每篇内部并发固定为 1。新进程及完成凭证使用各自 v2 格式，词表身份写入 `tagCatalogVersion`、`tagCatalogSha256`；旧记录完整核验后沿原 UUID 恢复。 |
 | `migrate-conference-process.js` | CLI | 显式更新会议处理实现指纹，重新核验完成页面，归档旧完成凭证，再继续未完成论文。保留原 UUID、记录格式、词表创建值及已有尝试，完成论文不重新请求模型。 |
 | `publish-conference.py` | CLI | 按会议处理凭证执行 generate/review/push/status/verify。generate 只安装文件；push 核验实际 Git index 和 commit blob，先发布图床再发布博客；verify 检查线上 URL。以上都是机械检查，语义审查和浏览器里的视觉效果仍要人工确认。 |
@@ -128,7 +128,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/arxiv-source-authority.js` | Node 库 | 使用默认强制代理抓取器获取官方 arXiv 全文，原子保存请求、来源配对、观测、全文、快照、凭证和授权；续跑重核原请求与完整来源字节，拒绝旧博客正文。 |
 | `lib/arxiv-metadata-source.js` | Node 库 | 通过项目 HTTP CONNECT 获取单篇 arXiv Atom 元数据，核验原始响应 SHA，并提取白名单中的标题、摘要、作者与类别。现行 v1 先严格校验 XML，再按既有规则保留字段中的实体和作者空白，以按原规则重新计算并核验旧封存 SHA；正常日更抓取使用解码后的 XML 字段。 |
 | `lib/historical-arxiv-publication-metadata.js` | Node 库 | 为历史直接重写计划的每篇 arXiv 论文封存仅用于发布的 Atom 附件。读取时核验原始 Atom、元数据、摘要 SHA、精确 `vN` 查询或无版本 ID 的观察时间窗，以及原来源获取序号、清单与快照；不修改四份原来源文件。 |
-| `lib/page-source-crosswalk.js` | Node 库 | 跨运行核验历史页面清单，在锁内核对处理状态的 SHA 与决定中的原状态 SHA 一致，再更新状态并追加决定记录，保存 pageId、页面 SHA 与发布授权来源。同一身份的多页确定性分组；标题不能用来判定 verified。finalize 和每次读取最终凭证时都重新验证来源。 |
+| `lib/page-source-crosswalk.js` | Node 库 | 跨运行核验历史页面清单，在锁内核对处理状态的 SHA 与决定中的原状态 SHA 一致，再更新状态并追加决定记录，保存 pageId、页面 SHA 与发布授权来源。按论文身份将多页归为一组，并固定页面与论文的排序；标题不能用来判定 verified。finalize 和每次读取最终凭证时都重新验证来源。 |
 | `lib/history-conflict-identity.js` | Node 库 | 保留旧版冲突解析功能；当前直接重写策略不把状态为 `conflict/multiple` 的页面送入正式 crosswalk。 |
 | `lib/historical-arxiv-analysis.js` | Node 库 | 将现场核验的 arXiv 全文和官方 Atom 元数据用于可恢复的独立原文分析运行，不读取旧生成正文。 |
 | `lib/historical-arxiv-analysis-scheduler.js` | Node 库 | 仅用于旧备用路线：从 crosswalk 中 verified 的唯一 arXiv 身份组生成稳定 run ID；不调度正常 direct-local 历史重写。 |
@@ -141,12 +141,12 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/historical-conference-crawl-batch.js` | Node 库 | 保留旧版只读辅助功能，crosswalk 写入功能已停用。会议标题指纹只能用于直接重写的页面对应，不能写进 crosswalk。 |
 | `lib/historical-conference-local-sources.js` | Node 库 | 生成 `historical-conference-local-sources-v2`。除既有会议元数据和 PDF 外，还按认证 ICML poster→OpenReview forum ID 合并 ICML 来源；只读已有目录及运行目录中的新文件，新 PDF 必须对应唯一 OpenReview/替代来源凭证。逐项记录元数据、论文记录、PDF 获取与来源 SHA；缺 PDF 时明确标为 unavailable。 |
 | `lib/historical-conference-page-projections.js` | Node 库 | 读取历史清单、页面标题和已保留的会议来源，核对文件 SHA 后确定论文对应哪些页面。页面文件参与校验，旧正文不作为重写输入。 |
-| `lib/historical-direct-rewrite-input-catalog.js` | Node 库 | 结合历史清单中的唯一 arXiv 提示、严格主评分行身份、ICML poster 与可路由身份、会议本地来源清单，生成 `merged-good-historical-local-data-v5`。身份记录仅保存字节区间和哈希，不把旧正文送入写作。 |
+| `lib/historical-direct-rewrite-input-catalog.js` | Node 库 | 结合历史清单中的唯一 arXiv 提示、严格主评分行身份、ICML poster 与符合本地 PDF 使用规则的论文身份、会议本地来源清单，生成 `merged-good-historical-local-data-v5`。身份记录仅保存字节区间和哈希，不把旧正文送入写作。 |
 | `lib/historical-daily-primary-arxiv-binding.js` | Node 库 | 核验冻结 Daily 页的 SHA，仅接受唯一合法评分元数据行中的规范 `[arxiv]` 主身份；保存对应字节区间和行哈希，拒绝把正文引用链接当成论文主身份。 |
 | `lib/historical-icml-poster-authority.js` | Node 库 | 认证 ICML 2026 原始 poster→OpenReview forum 快照，核验 Daily 子条目与汇总小节的身份及 forum-ID 本地 PDF；旧页面正文不进入写作。 |
 | `lib/historical-openreview-pdf-source.js` | Node 库 | 根据认证 ICML poster 记录固定 OpenReview forum 身份，经项目 HTTP CONNECT、手动受限重定向和流式字节上限获取缺失 PDF。以不可覆盖的原子写入和 `0600` 权限保存 forum-ID PDF、可自校验凭证；显式续跑先核授权与完整字节，再恢复已退出写者的已知临时硬链接。孤立 PDF 仍须联网重取并逐字比对，旧半文件和未知外链保留报错。 |
 | `lib/historical-icml-alternate-pdf-source.js` | Node 库 | OpenReview 被挑战页阻断时，只为代码白名单中的 poster/forum 使用固定替代 PDF，并核验快照标题和作者顺序。`n1mAjfRDZ6` 还可导入浏览器下载的 SSRN PDF，重新检查标题、作者、日期和跨页特征文本，对应固定 DOI，并用非网络获取凭证明示来源；不能当成 OpenReview 或 camera-ready 字节。 |
-| `lib/historical-direct-rewrite-plan.js` | Node 库 | 从严格的当前来源目录、历史清单和会议页面对应记录生成可重新核验的路由计划，并以自身 SHA 记录未覆盖论文页及 scope/hint-status 汇总。唯一白名单跨标题预印本须有可自校验的来源披露；普通 v5 路由保持旧字节结构以恢复长任务。不调用模型、网络或 crosswalk；旧页面只用于冻结身份重核，不进入分析和写作输入。 |
+| `lib/historical-direct-rewrite-plan.js` | Node 库 | 从严格的当前来源目录、历史清单和会议页面对应记录生成可重新核验的来源处理计划，并以自身 SHA 记录未覆盖论文页及按范围、身份提示状态统计的结果。唯一白名单跨标题预印本须有可自校验的来源披露；普通 v5 路由保持旧字节结构以恢复长任务。不调用模型、网络或 crosswalk；旧页面只用于冻结身份重核，不进入分析和写作输入。 |
 | `lib/historical-direct-rewrite-runner.js` | Node 库 | 执行直接重写计划前核验同计划、同来源获取序号的 scheduler-ready 记录与来源字节，保存来源对应的分析恢复检查点以便跨进程续跑；只有原文分析和 Reader 都完整时才生成私有页面。 |
 | `lib/historical-direct-control.js` | Node 库 | 按计划和来源获取序号管理不可变暂停请求、安全恢复及来源检查点，并只读汇总任务登记记录、汇总结果和发布阻断项；不调用模型或修改博客。 |
 | `lib/historical-direct-page-staging.js` | Node 库 | 用直接重写所保存的来源、分析和解读正文生成历史单篇私有页面，并核对输入、清单及页面 SHA。采用标题不同的早期预印本时，页首说明它不是会议定稿（camera-ready）；当前稿 PDF 返回 404 而采用同篇旧 `vN` 时，页首说明“当前稿不可用”。 |
@@ -206,8 +206,8 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `historical-openreview-pdf-source.js` | 为一个已认证 ICML/OpenReview forum ID 规划或封存缺失官方 PDF。dry-run 不联网、不写文件；PDF 保存到本地来源清单实际读取的 ICML PDF 根，凭证单独进入运行目录。 |
 | `historical-icml-alternate-pdf-source.js` | 只封存代码白名单中的 ICML 替代来源，固定 poster/forum、标题、作者与来源 URL。`--import-file` 仅允许 `n1mAjfRDZ6`，重新提取并匹配标题、作者、日期和跨页特征文本，以非网络获取凭证记录浏览器下载导入。 |
 | `historical-conference-page-projections.js` | 从指定的本地来源目录和历史清单确定会议论文与页面的对应关系；核对页面文件 SHA，但不把旧正文用于重写。 |
-| `historical-direct-rewrite-inputs.js` | 用冻结清单中的唯一 arXiv 提示、严格主评分行身份、ICML poster 全量/可路由身份、会议来源清单和博客根目录，生成范围固定的 v5 输入目录；不要求额外 arXiv 来源清单。 |
-| `historical-direct-rewrite-plan.js` | 用直接重写的 v5 来源目录、历史清单与会议页面对应记录 v3 生成原文重写计划，核验 arXiv 主身份与 ICML 可路由身份；拒绝旧 v4/v3 文件，并报告未覆盖历史论文页。 |
+| `historical-direct-rewrite-inputs.js` | 用冻结清单中的唯一 arXiv 提示、严格主评分行身份、ICML poster 的全部身份及符合本地 PDF 使用规则的身份、会议来源清单和博客根目录，生成范围固定的 v5 输入目录；不要求额外 arXiv 来源清单。 |
+| `historical-direct-rewrite-plan.js` | 用直接重写的 v5 来源目录、历史清单与会议页面对应记录 v3 生成原文重写计划，核验 arXiv 主身份与符合本地 PDF 使用规则的 ICML 身份；拒绝旧 v4/v3 文件，并报告未覆盖历史论文页。 |
 | `historical-direct-rewrite-scheduler.js` | 只准备直接重写计划的 arXiv/会议来源队列和封存文件，支持固定论文集合/上限、计划及获取序号锁、暂停标记、安全信号停止与逐项进度。arXiv 原子保存 TXT、PDF、元数据、清单；失败只保存不可变 crosswalk 交接文件，不执行分析、Reader、crosswalk 或发布。 |
 | `historical-direct-rewrite-run.js` | 运行仅使用原文的直接重写分析、Reader 和单篇私有页面生成。apply 要求所选项已有同计划、同获取序号的 scheduler-ready 状态；失败阶段按来源核验过的恢复文件跨进程续跑，不能当成已生成页面。 |
 | `historical-arxiv-publication-metadata.js` | 默认对直接重写计划全部 arXiv 论文预览或批量封存官方 Atom 附件。只复用满足当前论文版本和时间窗的原始 Atom，其余按封存来源 ID 经公共 CONNECT 适配器精确获取，不调用模型。瞬时失败最多重试三次；单篇耗尽后继续整批，最后报告 partial 并非零退出。失败项不生成附件，重跑只补缺失项。 |

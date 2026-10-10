@@ -1,7 +1,7 @@
 'use strict';
 
-// 直接本地历史重写用的失败即关闭发布事务。它有意不复用日更的 schema-v3 回执：
-// 历史生产者集合、保留的任务页以及视觉排除/豁免的权威和完成语义都不一样。
+// 本地历史重写发布时，任何检查失败都停止后续发布步骤，不复用日更的 schema-v3 凭证：
+// 两者的生成来源、保留任务页面以及图片任务排除或豁免规则不同，完成条件也不同。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -37,7 +37,7 @@ const HISTORICAL_VERSION_NOTICE_MARKER = '来源版本说明（当前稿不可�
 
 class HistoricalDirectPublicationError extends Error {
     constructor(message) {
-        super(`Historical direct publication rejected: ${message}`);
+        super(`历史直接发布已拒绝：${message}`);
         this.name = 'HistoricalDirectPublicationError';
         this.code = 'HISTORICAL_DIRECT_PUBLICATION_INTEGRITY';
     }
@@ -57,31 +57,31 @@ const prettyBytes = value => Buffer.from(`${JSON.stringify(canonical(value), nul
 const seal = (body, field) => ({ ...body, [field]: stableHash(body) });
 function exact(value, fields, label) {
     if (!value || typeof value !== 'object' || Array.isArray(value)
-        || Object.keys(value).sort().join('\0') !== fields.slice().sort().join('\0')) fail(`${label} schema is invalid`);
+        || Object.keys(value).sort().join('\0') !== fields.slice().sort().join('\0')) fail(`${label} 的对象类型或字段集合无效`);
 }
 function iso(value) {
     return typeof value === 'string' && !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
 }
-function safeRelative(value, label = 'publication path') {
+function safeRelative(value, label = '发布路径') {
     if (typeof value !== 'string' || !value || path.isAbsolute(value) || value.includes('\\')
         || path.posix.normalize(value) !== value || value.split('/').some(part => !part || part === '.' || part === '..')
-        || !SAFE_ARTIFACT_RE.test(value)) fail(`${label} is unsafe: ${value}`);
+        || !SAFE_ARTIFACT_RE.test(value)) fail(`${label} 的路径不安全：${value}`);
     return value;
 }
 function safeRoot(value, label, create = false) {
-    if (typeof value !== 'string' || !path.isAbsolute(value)) fail(`${label} must be absolute`);
+    if (typeof value !== 'string' || !path.isAbsolute(value)) fail(`${label} 必须是绝对路径`);
     const absolute = path.resolve(value); let cursor = path.parse(absolute).root;
     for (const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
         cursor = path.join(cursor, part);
         let stat = fs.lstatSync(cursor, { throwIfNoEntry: false });
         if (!stat && create) { fs.mkdirSync(cursor, { mode: 0o700 }); stat = fs.lstatSync(cursor); }
-        if (!stat || !stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} is unsafe: ${cursor}`);
+        if (!stat || !stat.isDirectory() || stat.isSymbolicLink()) fail(`${label} 的目录缺失、不是目录或含符号链接，路径不安全：${cursor}`);
     }
     return absolute;
 }
 function inside(root, relative, label) {
-    const base = safeRoot(root, `${label} root`); const target = path.resolve(base, ...String(relative).split('/'));
-    if (!target.startsWith(`${base}${path.sep}`)) fail(`${label} escaped its root`);
+    const base = safeRoot(root, `${label}根目录`); const target = path.resolve(base, ...String(relative).split('/'));
+    if (!target.startsWith(`${base}${path.sep}`)) fail(`${label} 超出指定根目录`);
     return target;
 }
 function readRegular(filename, maximum = MAX_ARTIFACT_BYTES) {
@@ -91,8 +91,8 @@ function readRegular(filename, maximum = MAX_ARTIFACT_BYTES) {
 function strictJsonFile(filename, label) {
     const loaded = readRegular(filename, 128 * 1024 * 1024); let value;
     try { value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(loaded.bytes)); }
-    catch { fail(`${label} must be UTF-8 JSON`); }
-    if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`${label} must be an object`);
+    catch { fail(`${label} 必须是有效的 UTF-8 JSON`); }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) fail(`${label} 必须是对象，且不能是数组`);
     return { value, fileSha256: loaded.sha256, bytes: loaded.bytes };
 }
 function writeExact(filename, bytes) {
@@ -100,34 +100,34 @@ function writeExact(filename, bytes) {
     catch (error) { fail(error.message); }
 }
 function publicationDirectory(outputRoot, publicationId, create = false) {
-    if (!UUID_RE.test(String(publicationId || ''))) fail('publication ID must be a UUID');
-    const root = safeRoot(outputRoot, 'publication output root', create);
+    if (!UUID_RE.test(String(publicationId || ''))) fail('publicationId 必须是 UUID');
+    const root = safeRoot(outputRoot, '发布输出根目录', create);
     const directory = path.join(root, publicationId);
-    return safeRoot(directory, 'publication transaction directory', create);
+    return safeRoot(directory, '发布任务目录', create);
 }
 function artifactSourcePath(record, roots) {
     if (record.source.kind === 'direct-page-staging') {
-        return inside(roots.stagingRoot, path.posix.join(record.source.directory, record.source.stagedPath), 'direct page source');
+        return inside(roots.stagingRoot, path.posix.join(record.source.directory, record.source.stagedPath), '直接重写页面来源');
     }
     if (record.source.kind === 'direct-page-asset') {
-        return inside(roots.stagingRoot, path.posix.join(record.source.directory, 'assets', record.source.path), 'direct asset source');
+        return inside(roots.stagingRoot, path.posix.join(record.source.directory, 'assets', record.source.path), '直接重写资源来源');
     }
     if (record.source.kind === 'direct-aggregate-page') {
-        return inside(roots.aggregateRoot, path.posix.join(record.source.runId, record.source.stagedPath), 'direct aggregate source');
+        return inside(roots.aggregateRoot, path.posix.join(record.source.runId, record.source.stagedPath), '直接重写汇总页面来源');
     }
-    fail(`unknown artifact source kind: ${record.source?.kind}`);
+    fail(`不支持的文件来源 kind：${record.source?.kind}`);
 }
 
 function normalizeVisualDisposition(value, plan) {
     const common = ['contract', 'version', 'planSha256', 'scope', 'mode', 'reason', 'requestedBy', 'createdAt', 'dispositionSha256'];
-    exact(value, common, 'visual disposition'); const body = clone(value); delete body.dispositionSha256;
+    exact(value, common, '图片任务处理记录'); const body = clone(value); delete body.dispositionSha256;
     if (value.contract !== VISUAL_DISPOSITION_CONTRACT || value.version !== VERSION || value.planSha256 !== plan.planSha256
         || !['full-history-publication', 'selected-sample-publication'].includes(value.scope)
         || !['excluded', 'waived'].includes(value.mode)
         || typeof value.reason !== 'string' || value.reason.trim().length < 10 || !iso(value.createdAt)
-        || value.dispositionSha256 !== stableHash(body)) fail('visual disposition envelope/SHA drifted');
-    if (value.mode === 'waived' && value.requestedBy !== 'user') fail('visual waiver must be explicitly requested by the user');
-    if (value.mode === 'excluded' && value.requestedBy !== 'system-contract') fail('visual exclusion must be a visible system-contract scope decision');
+        || value.dispositionSha256 !== stableHash(body)) fail('图片任务处理记录的格式、字段或 SHA 已变化');
+    if (value.mode === 'waived' && value.requestedBy !== 'user') fail('省略图片任务必须由用户明确提出');
+    if (value.mode === 'excluded' && value.requestedBy !== 'system-contract') fail('不生成图片必须明确记录这是系统规则所排除的范围');
     return clone(value);
 }
 function buildVisualDisposition({ plan, mode, reason, scope = 'full-history-publication',
@@ -139,29 +139,29 @@ function buildVisualDisposition({ plan, mode, reason, scope = 'full-history-publ
 
 function aggregateKey(value) { return `${value.scope}:${value.key}`; }
 function scanDirectAggregates(aggregateRoot, plan) {
-    const root = safeRoot(aggregateRoot, 'direct aggregate root'); const found = new Map();
+    const root = safeRoot(aggregateRoot, '直接重写汇总根目录'); const found = new Map();
     for (const dirent of fs.readdirSync(root, { withFileTypes: true })) {
         if (dirent.isSymbolicLink() || !dirent.isDirectory() || !UUID_RE.test(dirent.name)) continue;
-        const runRoot = safeRoot(path.join(root, dirent.name), 'direct aggregate run');
+        const runRoot = safeRoot(path.join(root, dirent.name), '直接重写汇总运行目录');
         for (const entry of fs.readdirSync(runRoot, { withFileTypes: true })) {
             if (entry.isSymbolicLink() || !entry.isFile() || !/^(?:daily|conference|conference-task)-[a-z0-9-]+\.json$/.test(entry.name)) continue;
-            const loaded = strictJsonFile(path.join(runRoot, entry.name), 'direct aggregate'); const value = loaded.value;
+            const loaded = strictJsonFile(path.join(runRoot, entry.name), '直接重写汇总记录'); const value = loaded.value;
             if (value.contract !== aggregateApi.CONTRACT || value.version !== aggregateApi.VERSION || value.status !== 'complete'
                 || value.source?.planSha256 !== plan.planSha256) continue;
             const body = clone(value); delete body.manifestSha256;
-            if (!SHA_RE.test(String(value.manifestSha256 || '')) || stableHash(body) !== value.manifestSha256) fail('direct aggregate self-SHA drifted');
+            if (!SHA_RE.test(String(value.manifestSha256 || '')) || stableHash(body) !== value.manifestSha256) fail('直接重写汇总记录的自身 SHA 已变化');
             const key = aggregateKey(value); const current = found.get(key);
-            if (current && current.value.manifestSha256 !== value.manifestSha256) fail(`multiple direct aggregates disagree for ${key}`);
+            if (current && current.value.manifestSha256 !== value.manifestSha256) fail(`同一汇总范围存在 SHA 不同的记录：${key}`);
             found.set(key, { value, fileSha256: loaded.fileSha256, runId: dirent.name });
         }
     }
     return found;
 }
 function absorbArtifact(byPath, record) {
-    safeRelative(record.path); if (!SHA_RE.test(record.sha256)) fail(`artifact SHA is invalid: ${record.path}`);
+    safeRelative(record.path); if (!SHA_RE.test(record.sha256)) fail(`文件 SHA 无效：${record.path}`);
     const current = byPath.get(record.path);
     if (current) {
-        if (current.sha256 !== record.sha256) fail(`multiple producers disagree for ${record.path}`);
+        if (current.sha256 !== record.sha256) fail(`多个生成来源为同一文件记录了不同的 SHA：${record.path}`);
         current.producers.push(...record.producers); return;
     }
     byPath.set(record.path, record);
@@ -171,21 +171,21 @@ function historicalSourceVersionProof(item, active, manifest) {
     const manifestVersion = manifest?.sourceDisclosure?.contract === freshArxivSourceApi.HISTORICAL_VERSION_CONTRACT
         ? manifest.sourceDisclosure : null;
     if (!sourceVersion) {
-        if (manifestVersion) fail(`${item.paperId} staged historical-version disclosure has no registry source proof`);
+        if (manifestVersion) fail(`${item.paperId} 的暂存历史版本说明缺少登记表中的来源证明`);
         return null;
     }
-    if (item.route?.kind !== 'arxiv-fresh-fetch') fail(`${item.paperId} non-arXiv registry source carries historical-version proof`);
+    if (item.route?.kind !== 'arxiv-fresh-fetch') fail(`${item.paperId} 的非 arXiv 登记来源含历史版本证明`);
     let normalized;
     try {
         normalized = freshArxivSourceApi.normalizeHistoricalVersionIdentity(sourceVersion, item.route.arxivId);
     } catch (error) {
-        fail(`${item.paperId} registry historical-version proof is invalid: ${error.message}`);
+        fail(`${item.paperId} 的登记表历史版本证明无效：${error.message}`);
     }
     if (!manifestVersion || stableHash(manifestVersion) !== stableHash(normalized)
         || active.source.sourceId !== normalized.selectedSourceId
         || !SHA_RE.test(String(active.source.sourceManifestSha256 || ''))
         || normalized.identitySha256 !== sourceVersion.identitySha256) {
-        fail(`${item.paperId} registry/staging historical-version proof drifted`);
+        fail(`${item.paperId} 的登记表与暂存页面的历史版本证明已变化`);
     }
     return { sourceVersion: clone(normalized), sourceVersionIdentitySha256: normalized.identitySha256,
         sourceManifestSha256: active.source.sourceManifestSha256 };
@@ -194,39 +194,39 @@ function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDis
     stagingRoot, executionRoot, aggregateRoot, freshArxivSourceRoot = null,
     publicationMetadataRoot = null, readPublicationMetadata = null } = {}) {
     for (const [label, filename] of Object.entries({ planFile, registryFile, projectionFile, visualDispositionFile })) {
-        if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail(`${label} must be an absolute file`);
+        if (typeof filename !== 'string' || !path.isAbsolute(filename)) fail(`${label} 必须是绝对文件路径`);
     }
-    const planLoaded = strictJsonFile(planFile, 'direct plan'); const plan = planApi.normalizePlan(planLoaded.value);
-    const registryLoaded = strictJsonFile(registryFile, 'direct registry'); const registry = runnerApi.normalizeRegistry(registryLoaded.value, plan);
+    const planLoaded = strictJsonFile(planFile, '直接重写计划'); const plan = planApi.normalizePlan(planLoaded.value);
+    const registryLoaded = strictJsonFile(registryFile, '直接重写登记表'); const registry = runnerApi.normalizeRegistry(registryLoaded.value, plan);
     if (!Array.isArray(selectedPaperIds) || new Set(selectedPaperIds).size !== selectedPaperIds.length
         || selectedPaperIds.some(id => typeof id !== 'string' || !id.trim())) {
-        fail('selected paper IDs must be a unique non-empty string array');
+        fail('selectedPaperIds 必须是无重复项的数组，且每项都是非空字符串');
     }
     const sample = selectedPaperIds.length > 0;
     const selectedSet = new Set(selectedPaperIds);
     const queueIds = new Set(plan.queue.map(item => item.paperId));
-    if ([...selectedSet].some(id => !queueIds.has(id))) fail('selected paper ID is absent from the direct rewrite plan');
-    if (!sample && registry.entries.some(entry => entry.status !== 'staged')) fail('direct registry must have every paper staged');
+    if ([...selectedSet].some(id => !queueIds.has(id))) fail('入选论文 ID 不在直接重写计划中');
+    if (!sample && registry.entries.some(entry => entry.status !== 'staged')) fail('直接重写登记表中的每篇论文都必须已暂存');
     if (sample && selectedPaperIds.some(id => registry.entries.find(entry => entry.paperId === id)?.status !== 'staged')) {
-        fail('selected paper must be staged before sample publication');
+        fail('发布样本前，入选论文必须已暂存');
     }
-    const projectionLoaded = strictJsonFile(projectionFile, 'direct aggregate projection');
+    const projectionLoaded = strictJsonFile(projectionFile, '直接重写汇总页面对应记录');
     const projection = aggregateApi.normalizeAggregateProjection(projectionLoaded.value, plan);
     if (!sample && (projection.pageCoverage?.publicationReady !== true || projection.pageCoverage?.uncoveredPageKeys?.length !== 0
         || projection.conferenceTaskCoverage?.publicationReady !== true)) {
-        fail('aggregate projection is not ready for full-page publication');
+        fail('汇总页面对应记录尚未满足完整页面发布条件');
     }
-    const visualLoaded = strictJsonFile(visualDispositionFile, 'visual disposition');
+    const visualLoaded = strictJsonFile(visualDispositionFile, '图片任务处理记录');
     const visualDisposition = normalizeVisualDisposition(visualLoaded.value, plan);
     if (visualDisposition.scope !== (sample ? 'selected-sample-publication' : 'full-history-publication')) {
-        fail('visual disposition scope does not match publication scope');
+        fail('图片任务处理范围与发布范围不同');
     }
     const byEntry = new Map(registry.entries.map(entry => [entry.paperId, entry])); const byPath = new Map(); const stageProofs = [];
     for (const item of plan.queue.filter(item => !sample || selectedSet.has(item.paperId))) {
         const active = byEntry.get(item.paperId); const manifest = runnerApi.replayDirectPageStaging({ item, active,
             stagingRoot, executionRoot, freshArxivSourceRoot, publicationMetadataRoot, readPublicationMetadata });
         const relativeDirectory = path.relative(path.resolve(stagingRoot), path.resolve(active.staging.directory)).split(path.sep).join('/');
-        if (!relativeDirectory || relativeDirectory.startsWith('..')) fail(`${item.paperId} staging directory escaped configured root`);
+        if (!relativeDirectory || relativeDirectory.startsWith('..')) fail(`${item.paperId} 的暂存目录为空或超出配置的根目录`);
         const sourceVersionProof = historicalSourceVersionProof(item, active, manifest);
         stageProofs.push({ paperId: item.paperId, runId: item.runId, manifestSha256: manifest.manifestSha256,
             pageSetSha256: manifest.pageSetSha256, assetSetSha256: manifest.assetSetSha256,
@@ -248,12 +248,12 @@ function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDis
         const inputs = aggregateApi.loadDirectAggregateInputs({ planFile, registryFile, projectionFile, stagingRoot, executionRoot,
             freshArxivSourceRoot, publicationMetadataRoot, readPublicationMetadata });
         const rebuilt = aggregateApi.buildDirectAggregates({ inputs }); const stored = scanDirectAggregates(aggregateRoot, plan);
-        if (stored.size !== rebuilt.length) fail(`direct aggregate set is incomplete: ${stored.size}/${rebuilt.length}`);
+        if (stored.size !== rebuilt.length) fail(`直接重写汇总记录不完整：${stored.size}/${rebuilt.length}`);
         for (const expected of rebuilt) {
             const loaded = stored.get(aggregateKey(expected));
-            if (!loaded || stableHash(loaded.value) !== stableHash(expected)) fail(`${aggregateKey(expected)} is not the deterministic current aggregate`);
+            if (!loaded || stableHash(loaded.value) !== stableHash(expected)) fail(`${aggregateKey(expected)} 不是按当前来源记录重新生成的汇总结果`);
             const sourcePath = path.join(aggregateRoot, loaded.runId, expected.outputPage.stagedPath);
-            if (readRegular(sourcePath).sha256 !== expected.outputPage.contentSha256) fail(`${aggregateKey(expected)} staged page bytes drifted`);
+            if (readRegular(sourcePath).sha256 !== expected.outputPage.contentSha256) fail(`${aggregateKey(expected)} 的暂存页面内容已变化`);
             const producer = { kind: 'direct-aggregate', scope: expected.scope, key: expected.key,
                 runId: loaded.runId, manifestSha256: expected.manifestSha256 };
             absorbArtifact(byPath, { path: expected.outputPage.path, sha256: expected.outputPage.contentSha256,
@@ -275,7 +275,7 @@ function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDis
     if (!sample && (rewrittenPages.length + projection.retainedPages.length !== pageCoverage.inventoryPageCount
         || rewrittenPages.length !== pageCoverage.coveredPageCount - pageCoverage.retainedUnchangedPageCount
         || projection.retainedPages.length !== pageCoverage.retainedUnchangedPageCount)) {
-        fail('direct producer artifacts do not exactly realize aggregate projection page coverage');
+        fail('各来源生成的文件未恰好覆盖汇总记录要求的页面集合');
     }
     const proof = { plan: { fileSha256: planLoaded.fileSha256, planSha256: plan.planSha256 },
         registry: { fileSha256: registryLoaded.fileSha256, registrySha256: registry.registrySha256 },
@@ -295,7 +295,7 @@ function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDis
         proof: seal(proof, 'proofSha256'), roots: { stagingRoot, aggregateRoot } };
 }
 
-function validateBlogState(value, label = 'blog state') {
+function validateBlogState(value, label = '博客状态') {
     exact(value, ['head', 'treeOid', 'contentTreeOid', 'branch', 'clean', 'remoteName', 'remoteIdentitySha256', 'remoteOid', 'hugoConfig'], label);
     exact(value.hugoConfig, ['path', 'sha256'], `${label}.hugoConfig`);
     if (value.branch !== 'main' || value.clean !== true || !GIT_OID_RE.test(value.head || '')
@@ -303,28 +303,28 @@ function validateBlogState(value, label = 'blog state') {
         || value.treeOid.length !== value.head.length || value.contentTreeOid.length !== value.head.length
         || value.remoteOid !== value.head || !SHA_RE.test(value.remoteIdentitySha256 || '')
         || !['hugo.yaml', 'hugo.yml', 'hugo.toml', 'hugo.json'].includes(value.hugoConfig.path)
-        || !SHA_RE.test(value.hugoConfig.sha256 || '')) fail(`${label} must be clean main at live remote OID`);
+        || !SHA_RE.test(value.hugoConfig.sha256 || '')) fail(`${label} 必须位于 main 分支，无未提交改动，HEAD 等于当前远端提交 OID，且 Git OID、远端身份及 Hugo 配置记录均有效`);
     return clone(value);
 }
 function defaultBlogState(blogRepo, remoteName = 'origin') { return validateBlogState(legacyPublication.defaultBlogState(blogRepo, remoteName)); }
 function defaultGitBlob(blogRepo, head, relative) { return legacyPublication.defaultGitBlob(blogRepo, head, relative); }
 function worktreeSha(blogRepo, relative) {
-    const target = inside(blogRepo, relative, 'blog worktree target');
+    const target = inside(blogRepo, relative, '博客工作区目标文件');
     if (!fs.existsSync(target)) return null;
     return readRegular(target).sha256;
 }
 function buildPlan({ publicationId, authorityOptions, blogRepo, remoteName = 'origin', createdAt = new Date().toISOString() } = {}, dependencies = {}) {
-    if (!UUID_RE.test(String(publicationId || '')) || !iso(createdAt)) fail('publication ID/time is invalid');
+    if (!UUID_RE.test(String(publicationId || '')) || !iso(createdAt)) fail('发布 ID 或创建时间无效');
     const authority = (dependencies.loadAuthority || loadDirectAuthority)(authorityOptions);
-    if (!authority?.proof || !Array.isArray(authority.artifacts) || !authority.artifacts.length) fail('direct publication authority is incomplete');
-    const opening = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), 'opening blog state');
+    if (!authority?.proof || !Array.isArray(authority.artifacts) || !authority.artifacts.length) fail('直接发布所需的来源证明或文件集合不完整');
+    const opening = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), '开始规划时的博客状态');
     const gitBlob = dependencies.gitBlob || defaultGitBlob; const records = [];
     for (const artifact of authority.artifacts) {
         const baseline = gitBlob(blogRepo, opening.head, artifact.path); const baselineSha256 = baseline === null ? null : sha256(baseline);
         const workingSha256 = (dependencies.worktreeSha || worktreeSha)(blogRepo, artifact.path);
-        if (workingSha256 !== baselineSha256) fail(`worktree/baseHead drifted: ${artifact.path}`);
-        if (artifact.baselineSha256 !== null && baselineSha256 !== artifact.baselineSha256) fail(`frozen baseline drifted: ${artifact.path}`);
-        if (artifact.baselineSha256 === null && baselineSha256 !== null && baselineSha256 !== artifact.sha256) fail(`unowned asset exists with different bytes: ${artifact.path}`);
+        if (workingSha256 !== baselineSha256) fail(`工作区文件与 baseHead 中的内容不同：${artifact.path}`);
+        if (artifact.baselineSha256 !== null && baselineSha256 !== artifact.baselineSha256) fail(`文件与已保存的基线内容不同：${artifact.path}`);
+        if (artifact.baselineSha256 === null && baselineSha256 !== null && baselineSha256 !== artifact.sha256) fail(`未纳入原基线的资源文件已存在，且内容不同：${artifact.path}`);
         records.push({ ...clone(artifact), baselineSha256,
             operation: baselineSha256 === null ? 'create' : baselineSha256 === artifact.sha256 ? 'unchanged' : 'replace' });
     }
@@ -332,12 +332,12 @@ function buildPlan({ publicationId, authorityOptions, blogRepo, remoteName = 'or
         const baseline = gitBlob(blogRepo, opening.head, retained.path);
         if (baseline === null || sha256(baseline) !== retained.previousContentSha256
             || (dependencies.worktreeSha || worktreeSha)(blogRepo, retained.path) !== retained.previousContentSha256) {
-            fail(`retained task page baseline drifted: ${retained.path}`);
+            fail(`保留的任务页面与原基线内容不同：${retained.path}`);
         }
-        if (records.some(record => record.path === retained.path)) fail(`retained task page is also generated: ${retained.path}`);
+        if (records.some(record => record.path === retained.path)) fail(`保留的任务页面也被列为待生成文件：${retained.path}`);
     }
-    const closing = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), 'closing blog state');
-    if (stableHash(closing) !== stableHash(opening)) fail('blog state changed while planning');
+    const closing = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), '完成规划时的博客状态');
+    if (stableHash(closing) !== stableHash(opening)) fail('生成计划期间博客状态已变化');
     const body = { contract: PLAN_CONTRACT, version: VERSION, publicationId, createdAt,
         authorityProof: authority.proof, authorityProofSha256: authority.proof.proofSha256,
         retainedDisposition: { mode: 'retain-unchanged', count: authority.retainedPages.length,
@@ -363,24 +363,24 @@ function validatePlan(value, publicationId = value?.publicationId) {
         'retainedDisposition', 'visualDisposition', 'blogBaseline', 'blogBaselineSha256', 'files', 'fileSetSha256',
         'exactDelta', 'exactDeltaSha256', 'retainedPages', 'retainedPageSetSha256', 'roots', 'planSha256'];
     const normalizedFields = hasScopeFields ? [...fields.slice(0, -1), 'publicationScope', 'selectedPaperIds', 'planSha256'] : fields;
-    exact(value, normalizedFields, 'direct publication plan'); const body = clone(value); delete body.planSha256;
+    exact(value, normalizedFields, '直接发布计划'); const body = clone(value); delete body.planSha256;
     const publicationScope = value.publicationScope || 'full-history';
     const selectedPaperIds = value.selectedPaperIds || [];
     if (value.contract !== PLAN_CONTRACT || value.version !== VERSION || value.publicationId !== publicationId
         || !UUID_RE.test(value.publicationId || '') || !iso(value.createdAt) || value.planSha256 !== stableHash(body)
         || value.authorityProofSha256 !== value.authorityProof?.proofSha256 || !SHA_RE.test(value.authorityProofSha256 || '')
-        || value.blogBaselineSha256 !== stableHash(validateBlogState(value.blogBaseline, 'sealed blog baseline'))
+        || value.blogBaselineSha256 !== stableHash(validateBlogState(value.blogBaseline, '已保存的博客基线'))
         || !Array.isArray(value.files) || !value.files.length || value.fileSetSha256 !== stableHash(value.files)
         || value.exactDeltaSha256 !== stableHash(value.exactDelta) || value.retainedPageSetSha256 !== stableHash(value.retainedPages)
         || !['full-history', 'selected-sample'].includes(publicationScope)
         || !Array.isArray(selectedPaperIds) || new Set(selectedPaperIds).size !== selectedPaperIds.length
         || (publicationScope === 'selected-sample') === (selectedPaperIds.length === 0)) {
-        fail('direct publication plan envelope/SHA drifted');
+        fail('直接发布计划的格式、字段或 SHA 已变化');
     }
     const producerPlanSha256 = value.authorityProof?.plan?.planSha256;
     normalizeVisualDisposition(value.visualDisposition, { planSha256: producerPlanSha256 });
     exact(value.retainedDisposition, ['mode', 'count', 'retainedPageSetSha256', 'pageCoverageSha256',
-        'inventoryPageCount', 'coveredPageCount', 'rewrittenPageCount'], 'retained disposition');
+        'inventoryPageCount', 'coveredPageCount', 'rewrittenPageCount'], '保留页面处理记录');
     const authorityCoverage = value.authorityProof?.retainedDisposition;
     if (value.retainedDisposition.mode !== 'retain-unchanged'
         || !SHA_RE.test(producerPlanSha256 || '') || value.visualDisposition.planSha256 !== producerPlanSha256
@@ -392,7 +392,7 @@ function validatePlan(value, publicationId = value?.publicationId) {
         || value.retainedDisposition.retainedPageSetSha256 !== authorityCoverage?.retainedPageSetSha256
         || stableHash(authorityCoverage?.pageCoverage) !== value.retainedDisposition.pageCoverageSha256
         || authorityCoverage?.rewrittenPageCount !== value.retainedDisposition.rewrittenPageCount) {
-        fail('direct publication retained/full-page coverage proof drifted');
+        fail('直接发布计划的保留页面或完整页面集合证明已变化');
     }
     const seen = new Set();
     for (const record of value.files) {
@@ -400,24 +400,24 @@ function validatePlan(value, publicationId = value?.publicationId) {
             || record.baselineSha256 !== null && !SHA_RE.test(record.baselineSha256 || '')
             || !['create', 'replace', 'unchanged'].includes(record.operation)
             || record.operation !== (record.baselineSha256 === null ? 'create'
-                : record.baselineSha256 === record.sha256 ? 'unchanged' : 'replace')) fail('direct publication file record is invalid');
+                : record.baselineSha256 === record.sha256 ? 'unchanged' : 'replace')) fail('直接发布计划中的文件记录无效');
         seen.add(record.path);
     }
     if (value.files.some((record, index) => index && value.files[index - 1].path.localeCompare(record.path) >= 0)) {
-        fail('direct publication files must be uniquely path-sorted');
+        fail('直接发布文件路径必须唯一，且按路径排序');
     }
     const expectedDelta = value.files.filter(item => item.operation !== 'unchanged').map(item => ({ path: item.path,
         operation: item.operation, baselineSha256: item.baselineSha256, newSha256: item.sha256 }));
     if (!Array.isArray(value.exactDelta) || stableHash(value.exactDelta) !== stableHash(expectedDelta)) {
-        fail('direct publication exact delta differs from file producers');
+        fail('直接发布计划的精确改动集合与各来源生成的文件不同');
     }
     const retainedPaths = new Set();
     for (const retained of value.retainedPages) {
-        exact(retained, ['pageKey', 'path', 'baselineSha256', 'reason'], 'retained page');
+        exact(retained, ['pageKey', 'path', 'baselineSha256', 'reason'], '保留页面');
         if (!/^page:[a-f0-9]{64}$/.test(retained.pageKey || '') || retainedPaths.has(retained.path)
             || seen.has(retained.path) || !retained.path.startsWith('content/posts/')
             || !SHA_RE.test(retained.baselineSha256 || '') || typeof retained.reason !== 'string' || !retained.reason) {
-            fail('direct publication retained page is invalid or overlaps generated output');
+            fail('直接发布计划中的保留页面无效，或也被列为待生成页面');
         }
         retainedPaths.add(retained.path);
     }
@@ -427,30 +427,30 @@ function writePlan({ outputRoot, plan }) {
     const normalized = validatePlan(plan); const directory = publicationDirectory(outputRoot, normalized.publicationId, true);
     const filename = path.join(directory, 'plan.json'); const bytes = prettyBytes(normalized);
     if (fs.existsSync(filename)) {
-        if (!readRegular(filename).bytes.equals(bytes)) fail('existing publication ID binds different plan bytes');
+        if (!readRegular(filename).bytes.equals(bytes)) fail('现有发布 ID 已绑定内容不同的计划');
         return { status: 'recovered', directory, filename, plan: normalized };
     }
     writeExact(filename, bytes); return { status: 'planned', directory, filename, plan: normalized };
 }
 function loadPlan({ outputRoot, publicationId }) {
-    const directory = publicationDirectory(outputRoot, publicationId); const loaded = strictJsonFile(path.join(directory, 'plan.json'), 'publication plan');
+    const directory = publicationDirectory(outputRoot, publicationId); const loaded = strictJsonFile(path.join(directory, 'plan.json'), '发布计划');
     const plan = validatePlan(loaded.value, publicationId);
-    if (!loaded.bytes.equals(prettyBytes(plan))) fail('publication plan bytes are not canonical');
+    if (!loaded.bytes.equals(prettyBytes(plan))) fail('发布计划文件不是规定的规范 JSON 保存格式');
     return { directory, plan, fileSha256: loaded.fileSha256 };
 }
 function assertAuthorityCurrent(loadedPlan, authorityOptions, dependencies = {}) {
     const current = (dependencies.loadAuthority || loadDirectAuthority)(authorityOptions);
     if (stableHash(current.proof) !== stableHash(loadedPlan.plan.authorityProof)
         || stableHash(current.artifacts) !== stableHash(loadedPlan.plan.files.map(({ operation, ...record }) => record))) {
-        fail('direct producer authority differs from sealed publication plan');
+        fail('各生成来源的证明与已保存的发布计划不同');
     }
     return current;
 }
 function generationDirectory(directory) { return path.join(directory, 'generation'); }
 function generate({ outputRoot, publicationId, authorityOptions, blogRepo, remoteName = 'origin', apply = false } = {}, dependencies = {}) {
     const loaded = loadPlan({ outputRoot, publicationId }); const authority = assertAuthorityCurrent(loaded, authorityOptions, dependencies);
-    const state = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), 'generation blog state');
-    if (stableHash(state) !== loaded.plan.blogBaselineSha256) fail('blog state differs from publication plan baseline');
+    const state = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), '开始生成时的博客状态');
+    if (stableHash(state) !== loaded.plan.blogBaselineSha256) fail('博客状态与发布计划的基线不同');
     const files = loaded.plan.files.map(record => ({ path: record.path, operation: record.operation,
         baselineSha256: record.baselineSha256, sha256: record.sha256 }));
     const body = { contract: GENERATION_CONTRACT, version: VERSION, publicationId, planSha256: loaded.plan.planSha256,
@@ -459,33 +459,33 @@ function generate({ outputRoot, publicationId, authorityOptions, blogRepo, remot
         remoteMainOid: state.remoteOid, files, fileSetSha256: stableHash(files), exactDeltaSha256: loaded.plan.exactDeltaSha256 };
     const manifest = seal(body, 'generationSha256');
     if (!apply) return { status: 'dry-run', manifest };
-    const root = safeRoot(generationDirectory(loaded.directory), 'generation directory', true);
+    const root = safeRoot(generationDirectory(loaded.directory), '生成目录', true);
     const intent = seal({ contract: `${GENERATION_CONTRACT}-intent`, version: VERSION, publicationId,
         planSha256: loaded.plan.planSha256, generationSha256: manifest.generationSha256,
         fileSetSha256: manifest.fileSetSha256 }, 'intentSha256');
     const intentPath = path.join(root, 'intent.json');
     if (!fs.existsSync(intentPath)) writeExact(intentPath, prettyBytes(intent));
-    else if (!readRegular(intentPath).bytes.equals(prettyBytes(intent))) fail('generation intent drifted');
+    else if (!readRegular(intentPath).bytes.equals(prettyBytes(intent))) fail('准备生成文件的记录已变化');
     for (const record of loaded.plan.files) {
         const artifact = authority.artifacts.find(item => item.path === record.path);
-        if (!artifact) fail(`generation source absent: ${record.path}`);
+        if (!artifact) fail(`待生成文件缺少来源记录：${record.path}`);
         const bytes = (dependencies.sourceBytes || ((item, roots) => readRegular(artifactSourcePath(item, roots)).bytes))(artifact, authority.roots);
-        if (sha256(bytes) !== record.sha256) fail(`generation source bytes drifted: ${record.path}`);
-        const target = inside(root, path.posix.join('bundle', record.path), 'generation bundle');
+        if (sha256(bytes) !== record.sha256) fail(`待生成文件的来源内容已变化：${record.path}`);
+        const target = inside(root, path.posix.join('bundle', record.path), '生成文件集合');
         if (!fs.existsSync(target)) writeExact(target, bytes);
-        else if (!readRegular(target).bytes.equals(Buffer.from(bytes))) fail(`generation bundle collision: ${record.path}`);
+        else if (!readRegular(target).bytes.equals(Buffer.from(bytes))) fail(`生成目录中已存在内容不同的同名文件：${record.path}`);
     }
-    const closing = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), 'generation closing blog state');
-    if (stableHash(closing) !== stableHash(state)) fail('blog changed while generating private bundle');
-    for (const record of loaded.plan.files) if (readRegular(inside(root, path.posix.join('bundle', record.path), 'generation bundle')).sha256 !== record.sha256) fail(`bundle verification failed: ${record.path}`);
+    const closing = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), '完成生成时的博客状态');
+    if (stableHash(closing) !== stableHash(state)) fail('在独立目录生成文件期间博客状态已变化');
+    for (const record of loaded.plan.files) if (readRegular(inside(root, path.posix.join('bundle', record.path), '生成文件集合')).sha256 !== record.sha256) fail(`生成文件的 SHA 检查失败：${record.path}`);
     const manifestPath = path.join(root, 'manifest.json');
     if (!fs.existsSync(manifestPath)) writeExact(manifestPath, prettyBytes(manifest));
-    else if (!readRegular(manifestPath).bytes.equals(prettyBytes(manifest))) fail('generation manifest collision');
+    else if (!readRegular(manifestPath).bytes.equals(prettyBytes(manifest))) fail('已存在内容不同的生成清单');
     return { status: 'generated', manifest, manifestPath };
 }
 function loadGeneration(loadedPlan) {
-    const root = safeRoot(generationDirectory(loadedPlan.directory), 'generation directory');
-    const loaded = strictJsonFile(path.join(root, 'manifest.json'), 'generation manifest'); const value = loaded.value;
+    const root = safeRoot(generationDirectory(loadedPlan.directory), '生成目录');
+    const loaded = strictJsonFile(path.join(root, 'manifest.json'), '生成清单'); const value = loaded.value;
     const body = clone(value); delete body.generationSha256;
     const expectedFiles = loadedPlan.plan.files.map(({ path, operation, baselineSha256, sha256 }) =>
         ({ path, operation, baselineSha256, sha256 }));
@@ -498,8 +498,8 @@ function loadGeneration(loadedPlan) {
         || value.remoteName !== loadedPlan.plan.blogBaseline.remoteName
         || value.remoteIdentitySha256 !== loadedPlan.plan.blogBaseline.remoteIdentitySha256
         || value.remoteMainOid !== loadedPlan.plan.blogBaseline.remoteOid
-        || value.exactDeltaSha256 !== loadedPlan.plan.exactDeltaSha256) fail('generation manifest drifted');
-    for (const record of value.files) if (readRegular(inside(root, path.posix.join('bundle', record.path), 'generation bundle')).sha256 !== record.sha256) fail(`generation bundle drifted: ${record.path}`);
+        || value.exactDeltaSha256 !== loadedPlan.plan.exactDeltaSha256) fail('生成清单的字段或 SHA 已变化');
+    for (const record of value.files) if (readRegular(inside(root, path.posix.join('bundle', record.path), '生成文件集合')).sha256 !== record.sha256) fail(`生成目录中的文件内容已变化：${record.path}`);
     return { root, manifest: value, fileSha256: loaded.fileSha256 };
 }
 
@@ -542,21 +542,21 @@ function semanticReviewProtocol() {
 }
 function defaultHugoVersion() {
     const result = spawnSync('hugo', ['version'], { encoding: 'utf8', env: { ...process.env, LANG: 'C', LC_ALL: 'C' } });
-    if (result.error || result.status !== 0) fail('Hugo runtime is unavailable');
+    if (result.error || result.status !== 0) fail('Hugo 程序无法运行');
     return result.stdout.trim();
 }
 function deterministicReview(record, bytes) {
-    if (sha256(bytes) !== record.sha256) fail(`review bytes drifted: ${record.path}`);
+    if (sha256(bytes) !== record.sha256) fail(`待审查文件的内容已变化：${record.path}`);
     if (record.path.endsWith('.md')) {
         const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
         if (!text.startsWith('---\n') || !/\npaper_digest_pipeline_owned:\s*true\s*\n/.test(text)
             || !/\npaper_digest_page_type:\s*(?:paper|index)\s*\n/.test(text)
             || !hasPageTagMetadata(bytes)
-            || /\ndraft:\s*true\s*\n/.test(text)) fail(`historical Markdown deterministic gate failed: ${record.path}`);
+            || /\ndraft:\s*true\s*\n/.test(text)) fail(`历史 Markdown 页面的固定格式检查失败：${record.path}`);
         for (const match of text.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
             const target = match[1].trim();
             if (!target.startsWith('/') && !target.startsWith('https://') && !target.startsWith('#')) {
-                fail(`historical Markdown contains unsafe/noncanonical link: ${record.path}`);
+                fail(`历史 Markdown 页面含不安全或非规范链接：${record.path}`);
             }
         }
         const producers = Array.isArray(record.producers) ? record.producers : [];
@@ -566,23 +566,23 @@ function deterministicReview(record, bytes) {
             const versionFields = ['sourceVersion', 'sourceVersionIdentitySha256', 'sourceManifestSha256'];
             const present = versionFields.filter(field => Object.hasOwn(producer, field));
             if (present.length && present.length !== versionFields.length) {
-                fail(`historical-version producer proof is incomplete: ${record.path}`);
+                fail(`历史版本页面的生成来源证明不完整：${record.path}`);
             }
         }
         const versioned = directProducers.filter(producer => Object.hasOwn(producer, 'sourceVersion'));
-        if (versioned.length > 1) fail(`multiple historical-version producers claim one page: ${record.path}`);
+        if (versioned.length > 1) fail(`多个历史版本生成来源同时声明同一页面：${record.path}`);
         if (versioned.length === 1) {
             const producer = versioned[0]; let sourceVersion;
             try {
                 sourceVersion = freshArxivSourceApi.normalizeHistoricalVersionIdentity(
                     producer.sourceVersion, producer.sourceVersion.canonicalArxivId);
             } catch (error) {
-                fail(`historical-version producer proof is invalid: ${record.path}: ${error.message}`);
+                fail(`历史版本页面的生成来源证明无效：${record.path}：${error.message}`);
             }
             if (producer.paperId !== `arxiv:${sourceVersion.canonicalArxivId}`
                 || producer.sourceVersionIdentitySha256 !== sourceVersion.identitySha256
                 || !SHA_RE.test(String(producer.sourceManifestSha256 || ''))) {
-                fail(`historical-version producer identity drifted: ${record.path}`);
+                fail(`历史版本页面的生成来源身份已变化：${record.path}`);
             }
             const expected = directPageStagingApi.arxivHistoricalVersionPageDisclosure({
                 paperId: producer.paperId,
@@ -591,15 +591,15 @@ function deterministicReview(record, bytes) {
                 sourceManifestSha256: producer.sourceManifestSha256 });
             const occurrences = text.split(HISTORICAL_VERSION_NOTICE_MARKER).length - 1;
             if (occurrences !== 1 || !directPageStagingApi.hasExactTopDisclosure(text, expected)) {
-                fail(`historical-version page lost or duplicated its exact top disclosure: ${record.path}`);
+                fail(`历史版本页面顶部的指定来源说明缺失、重复或位置不符：${record.path}`);
             }
             reviewedSourceVersionIdentitySha256 = sourceVersion.identitySha256;
         } else if (directProducers.length && text.includes(HISTORICAL_VERSION_NOTICE_MARKER)) {
-            fail(`ordinary direct page forged a historical-version disclosure: ${record.path}`);
+            fail(`普通直接重写页面含不属于它的历史版本来源说明：${record.path}`);
         }
         const priorPreprint = producers.some(producer => producer.paperId === PRIOR_PREPRINT_PAPER_ID);
         if (priorPreprint && (!text.includes('非 Camera-ready') || !text.includes('作者早期预印本'))) {
-            fail('authorized prior-preprint page lost its visible disclosure');
+            fail('已授权的旧预印本页面缺少面向读者的来源说明');
         }
         return { path: record.path, sha256: record.sha256, gate: 'deterministic-pass',
             ...(reviewedSourceVersionIdentitySha256 ? { sourceVersionIdentitySha256: reviewedSourceVersionIdentitySha256 } : {}) };
@@ -619,7 +619,7 @@ function defaultHugoGate({ blogRepo, generation }) {
                 encoding: 'utf8', env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1' }, maxBuffer: 4 * 1024 * 1024
             });
             if (result.error || result.status !== 0) {
-                fail(`temporary Hugo gate Git ${label} failed: ${String(result.stderr || result.error?.message || '').slice(-1000)}`);
+                fail(`临时 Hugo 检查目录的 Git ${label} 操作失败：${String(result.stderr || result.error?.message || '').slice(-1000)}`);
             }
         };
         git(['init', '--quiet'], 'init');
@@ -628,21 +628,21 @@ function defaultHugoGate({ blogRepo, generation }) {
         git(['add', '--all'], 'add');
         git(['commit', '--quiet', '--no-gpg-sign', '-m', 'temporary Hugo gate snapshot'], 'commit');
         const scan = directory => { for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-            const item = path.join(directory, entry.name); if (entry.isSymbolicLink()) fail(`Hugo staging contains symlink: ${item}`); if (entry.isDirectory()) scan(item);
+            const item = path.join(directory, entry.name); if (entry.isSymbolicLink()) fail(`Hugo 暂存目录含符号链接：${item}`); if (entry.isDirectory()) scan(item);
         } }; scan(source);
         for (const record of generation.manifest.files) {
-            const target = inside(source, record.path, 'Hugo staged target'); fs.mkdirSync(path.dirname(target), { recursive: true });
-            fs.writeFileSync(target, readRegular(inside(generation.root, path.posix.join('bundle', record.path), 'generation bundle')).bytes);
+            const target = inside(source, record.path, 'Hugo 暂存目标文件'); fs.mkdirSync(path.dirname(target), { recursive: true });
+            fs.writeFileSync(target, readRegular(inside(generation.root, path.posix.join('bundle', record.path), '生成文件集合')).bytes);
         }
         const result = spawnSync('hugo', ['--source', source, '--destination', path.join(temporary, 'public')],
             { encoding: 'utf8', env: { ...process.env, LANG: 'C', LC_ALL: 'C' }, maxBuffer: 32 * 1024 * 1024 });
-        if (result.error || result.status !== 0) fail(`Hugo gate failed: ${String(result.stderr || result.error?.message || '').slice(-2000)}`);
+        if (result.error || result.status !== 0) fail(`Hugo 构建检查失败：${String(result.stderr || result.error?.message || '').slice(-2000)}`);
         return { status: 'passed', engine: 'hugo', version: defaultHugoVersion() };
     } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 }
 function historicalReviewConcurrency() {
     const raw = String(process.env.PD_HISTORY_REVIEW_CONCURRENCY || '5');
-    if (!/^[1-5]$/.test(raw)) fail('PD_HISTORY_REVIEW_CONCURRENCY must be 1-5');
+    if (!/^[1-5]$/.test(raw)) fail('PD_HISTORY_REVIEW_CONCURRENCY 必须为 1–5');
     return Number(raw);
 }
 function defaultSemanticReview({ loadedPlan, generation, blogRepo, protocol }) {
@@ -654,42 +654,42 @@ function defaultSemanticReview({ loadedPlan, generation, blogRepo, protocol }) {
     const requestPath = path.join(loadedPlan.directory, 'semantic-review-request.json');
     if (!fs.existsSync(requestPath)) writeExact(requestPath, prettyBytes(request));
     else if (!readRegular(requestPath).bytes.equals(prettyBytes(request))) {
-        // 请求元数据按批次划分。替换它不能删掉这次事务下面
-        // 按内容寻址的页面检查点。
+        // 请求元数据按批次保存。替换请求记录时，保留本次发布目录中
+        // 按页面内容标识保存的检查点。
         atomicReplace(requestPath, prettyBytes(request));
     }
     const outputPath = path.join(loadedPlan.directory, 'semantic-review.json');
     const checkpointDir = path.join(loadedPlan.directory, 'semantic-review-checkpoints');
-    // 批次元数据变化时总是重放 worker。它的页面/单元检查点按内容寻址，
-    // 所以字节没变就不会发起任何模型调用，而输出外层对象重新绑定到这次请求。
+    // 批次元数据变化时重新运行审查子进程。它按页面及分块内容查找已有通过检查点；
+    // 内容未变且检查点有效时复用结果，生成与本次请求对应的外层审查凭证。
     const result = spawnSync('bash', [path.resolve(__dirname, '../python-runtime.sh'),
         path.resolve(__dirname, '../historical-direct-review.py'), '--request', requestPath,
         '--output', outputPath, '--checkpoint-dir', checkpointDir,
         '--concurrency', String(historicalReviewConcurrency())], {
         cwd: path.resolve(__dirname, '../..'), encoding: 'utf8', env: { ...process.env }, maxBuffer: 32 * 1024 * 1024
     });
-    if (result.error || result.signal || result.status !== 0) fail(`semantic review worker failed: ${result.error?.message || result.signal || result.status}`);
-    const loaded = strictJsonFile(outputPath, 'semantic review receipt'); const value = loaded.value;
+    if (result.error || result.signal || result.status !== 0) fail(`页面内容审查子进程失败：${result.error?.message || result.signal || result.status}`);
+    const loaded = strictJsonFile(outputPath, '页面内容审查凭证'); const value = loaded.value;
     const body = clone(value); delete body.semanticReviewSha256;
     if (value.contract !== 'historical-direct-semantic-review-v1' || value.version !== VERSION
         || value.publicationId !== loadedPlan.plan.publicationId || value.generationSha256 !== generation.manifest.generationSha256
         || value.reviewProtocolFingerprint !== protocol || stableHash(value.semanticProtocol) !== stableHash(request.semanticProtocol)
         || !Array.isArray(value.results) || value.resultSetSha256 !== stableHash(value.results)
-        || value.semanticReviewSha256 !== stableHash(body)) fail('semantic review receipt envelope/SHA drifted');
+        || value.semanticReviewSha256 !== stableHash(body)) fail('页面内容审查凭证的格式、字段或 SHA 已变化');
     const expectedPages = request.files.filter(item => item.path.endsWith('.md')).map(item => item.path).sort();
     const actualPages = value.results.map(item => item.path);
     if (actualPages.join('\0') !== expectedPages.join('\0') || value.results.some(item => item.passed !== true
         || item.sha256 !== request.files.find(file => file.path === item.path)?.sha256
         || item.resultSha256 !== stableHash(Object.fromEntries(Object.entries(item).filter(([key]) => key !== 'resultSha256'))))) {
-        fail('semantic review has blocking, missing, or drifted page results');
+        fail('页面内容审查存在阻断问题、缺少页面结果，或页面结果已变化');
     }
-    if (value.passed !== true) fail('semantic review is blocked');
+    if (value.passed !== true) fail('页面内容审查未通过');
     return { receipt: value, fileSha256: loaded.fileSha256 };
 }
 function review({ outputRoot, publicationId, blogRepo, remoteName = 'origin', apply = false } = {}, dependencies = {}) {
     const loaded = loadPlan({ outputRoot, publicationId }); const generation = loadGeneration(loaded);
-    const state = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), 'review blog state');
-    if (stableHash(state) !== loaded.plan.blogBaselineSha256) fail('blog baseline changed before review');
+    const state = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), '开始审查时的博客状态');
+    if (stableHash(state) !== loaded.plan.blogBaselineSha256) fail('开始审查前博客基线已变化');
     const protocol = reviewProtocolFingerprint(dependencies); const filename = path.join(loaded.directory, 'review.json');
     if (apply && fs.existsSync(filename)) {
         const existing = loadReview(loaded).receipt;
@@ -700,20 +700,20 @@ function review({ outputRoot, publicationId, blogRepo, remoteName = 'origin', ap
     }
     const plannedByPath = new Map(loaded.plan.files.map(record => [record.path, record]));
     const files = generation.manifest.files.map(record => {
-        const bytes = readRegular(inside(generation.root, path.posix.join('bundle', record.path), 'generation bundle')).bytes;
+        const bytes = readRegular(inside(generation.root, path.posix.join('bundle', record.path), '生成文件集合')).bytes;
         const planned = plannedByPath.get(record.path);
-        if (!planned) fail(`review path is absent from plan: ${record.path}`);
+        if (!planned) fail(`待审查文件路径不在计划中：${record.path}`);
         return (dependencies.reviewArtifact || deterministicReview)({ ...record, producers: planned.producers }, bytes);
     });
     const hugoGate = (dependencies.hugoGate || defaultHugoGate)({ blogRepo, generation, plan: loaded.plan });
-    if (hugoGate?.status !== 'passed') fail('Hugo gate did not pass');
-    const closing = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), 'review closing blog state');
-    if (stableHash(closing) !== stableHash(state)) fail('blog changed during read-only review');
+    if (hugoGate?.status !== 'passed') fail('Hugo 构建检查未通过');
+    const closing = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), '完成审查时的博客状态');
+    if (stableHash(closing) !== stableHash(state)) fail('只读审查期间博客状态已变化');
     if (!apply) return { status: 'dry-run', strictReview: false, semanticReviewRequired: true,
         deterministicFiles: files.length, hugoGate };
     const semantic = (dependencies.semanticReview || defaultSemanticReview)({ loadedPlan: loaded, generation, blogRepo, protocol });
     if (!semantic?.receipt || semantic.receipt.passed !== true || !SHA_RE.test(semantic.receipt.semanticReviewSha256 || '')) {
-        fail('semantic/multimodal review did not return a complete passing receipt');
+        fail('页面文字和图片审查未返回完整的通过凭证');
     }
     const body = { contract: REVIEW_CONTRACT, version: VERSION, publicationId, planSha256: loaded.plan.planSha256,
         generationSha256: generation.manifest.generationSha256, generationFileSha256: generation.fileSha256,
@@ -724,14 +724,14 @@ function review({ outputRoot, publicationId, blogRepo, remoteName = 'origin', ap
             semanticReviewFileSha256: semantic.fileSha256 || null, semanticProtocol: semantic.receipt.semanticProtocol,
             pageResults: semantic.receipt.results, pageResultSetSha256: semantic.receipt.resultSetSha256 },
         reviewedAt: dependencies.now?.() || new Date().toISOString() };
-    if (!iso(body.reviewedAt)) fail('review time is invalid'); const receipt = seal(body, 'reviewSha256');
+    if (!iso(body.reviewedAt)) fail('审查时间无效'); const receipt = seal(body, 'reviewSha256');
     if (!apply) return { status: 'dry-run', receipt };
     if (fs.existsSync(filename)) atomicReplace(filename, prettyBytes(receipt));
     else writeExact(filename, prettyBytes(receipt));
     return { status: 'reviewed', receipt, filename };
 }
 function loadReview(loadedPlan) {
-    const loaded = strictJsonFile(path.join(loadedPlan.directory, 'review.json'), 'review receipt'); const value = loaded.value;
+    const loaded = strictJsonFile(path.join(loadedPlan.directory, 'review.json'), '审查凭证'); const value = loaded.value;
     const body = clone(value); delete body.reviewSha256;
     const generation = loadGeneration(loadedPlan);
     const generationByPath = new Map(generation.manifest.files.map(item => [item.path, item]));
@@ -762,7 +762,7 @@ function loadReview(loadedPlan) {
             || generationByPath.get(item.path)?.sha256 !== item.sha256
             || !SHA_RE.test(item.resultSha256 || '')
             || item.resultSha256 !== stableHash(Object.fromEntries(Object.entries(item).filter(([key]) => key !== 'resultSha256'))))) {
-        fail('review receipt drifted');
+        fail('审查凭证的字段或 SHA 已变化');
     }
     return { receipt: value, fileSha256: loaded.fileSha256 };
 }
@@ -777,12 +777,12 @@ function defaultValidateActivatedWorktree(blogRepo, deltaPaths) {
     const entries = result.toString('utf8').split('\0').filter(Boolean); const allowed = new Set(deltaPaths);
     const dirty = new Set();
     for (const entry of entries) {
-        if (entry.length < 4 || entry[2] !== ' ' || ['R', 'C'].includes(entry[0]) || ['R', 'C'].includes(entry[1])) fail('activation worktree contains rename/copy state');
-        const relative = entry.slice(3); if (!allowed.has(relative)) fail(`activation contains unrelated worktree path: ${relative}`); dirty.add(relative);
+        if (entry.length < 4 || entry[2] !== ' ' || ['R', 'C'].includes(entry[0]) || ['R', 'C'].includes(entry[1])) fail('安装页面前的工作区状态格式无效，或含重命名或复制状态');
+        const relative = entry.slice(3); if (!allowed.has(relative)) fail(`安装页面前的工作区含计划外路径：${relative}`); dirty.add(relative);
     }
-    if ([...allowed].some(item => !dirty.has(item))) fail('activation worktree does not exactly equal planned delta');
+    if ([...allowed].some(item => !dirty.has(item))) fail('安装页面前的工作区改动未恰好等于计划中的改动集合');
     const staged = runGit(blogRepo, ['diff', '--cached', '--name-only', '-z'], { binary: true });
-    if (staged.length) fail('activation requires an empty Git index');
+    if (staged.length) fail('安装页面前 Git 暂存区必须为空');
 }
 function defaultValidateActivationRecovery(blogRepo, plan, remoteName, delta) {
     const branch = runGit(blogRepo, ['branch', '--show-current']).stdout;
@@ -792,27 +792,27 @@ function defaultValidateActivationRecovery(blogRepo, plan, remoteName, delta) {
     const remoteOid = remoteLine.split(/\s+/)[0].toLowerCase();
     if (branch !== 'main' || head !== plan.blogBaseline.head || remoteOid !== plan.blogBaseline.remoteOid
         || stableHash({ remote: remoteName, pushUrl }) !== plan.blogBaseline.remoteIdentitySha256) {
-        fail('activation recovery no longer has the sealed Git/remote baseline');
+        fail('恢复页面安装时，本地 Git 或远端状态已不符合已保存的基线');
     }
     const allowed = new Set(delta.map(item => item.path));
     const entries = runGit(blogRepo, ['status', '--porcelain=v1', '-z', '--untracked-files=all'], { binary: true })
         .toString('utf8').split('\0').filter(Boolean);
     for (const entry of entries) {
-        if (entry.length < 4 || entry[2] !== ' ' || !allowed.has(entry.slice(3))) fail('activation recovery contains unrelated worktree state');
+        if (entry.length < 4 || entry[2] !== ' ' || !allowed.has(entry.slice(3))) fail('恢复页面安装时工作区状态格式无效，或含计划外路径');
     }
-    if (runGit(blogRepo, ['diff', '--cached', '--name-only', '-z'], { binary: true }).length) fail('activation recovery requires an empty index');
+    if (runGit(blogRepo, ['diff', '--cached', '--name-only', '-z'], { binary: true }).length) fail('恢复页面安装时 Git 暂存区必须为空');
     for (const record of delta) {
         const current = worktreeSha(blogRepo, record.path);
-        if (![record.baselineSha256, record.sha256].includes(current)) fail(`activation recovery CAS drifted: ${record.path}`);
+        if (![record.baselineSha256, record.sha256].includes(current)) fail(`恢复页面安装时，文件既不等于原基线内容，也不等于待安装内容：${record.path}`);
     }
 }
 function blogCommonDirectory(blogRepo) {
     const raw = runGit(blogRepo, ['rev-parse', '--path-format=absolute', '--git-common-dir']).stdout;
     const resolved = path.resolve(raw);
-    return safeRoot(resolved, 'blog Git common directory');
+    return safeRoot(resolved, '博客 Git 公用目录');
 }
 function waitForSharedBlogLock(blogRepo, timeoutMs) {
-    // 回收交给日更同用的 Python 锁，复用活进程、租期、inode 与自哈希核验。
+    // 由日更共用的 Python 锁程序判断是否可回收：核查进程存活、有效期限、文件身份和记录 SHA。
     // 此处只等待锁可用；Python 释放后仍须由本进程独占创建，不能视为已持锁。
     const script = [
         'import sys',
@@ -857,7 +857,7 @@ function withBlogPublicationLock(blogRepo, callback, dependencies = {}) {
     catch (error) { if (error.code !== 'EEXIST') throw error; }
     const rootStat = fs.lstatSync(root);
     if (!rootStat.isDirectory() || rootStat.isSymbolicLink() || (rootStat.mode & 0o777) !== 0o700
-        || typeof process.getuid === 'function' && rootStat.uid !== process.getuid()) fail('shared blog lock root is not private/owned');
+        || typeof process.getuid === 'function' && rootStat.uid !== process.getuid()) fail('共享博客锁根目录必须是当前用户拥有的非符号链接目录，权限必须为 0700');
     const timeoutMs = dependencies.lockTimeoutMs ?? 30000;
     if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 30000) fail('共享博客锁等待时间必须为 1–30000 毫秒');
     const lock = path.join(root, 'blog-publication.lock'); const token = crypto.randomUUID(); const started = Date.now();
@@ -891,7 +891,7 @@ function withBlogPublicationLock(blogRepo, callback, dependencies = {}) {
     try { return callback(); }
     finally {
         const namedLock = fs.lstatSync(lock); const namedOwner = fs.lstatSync(ownerPath);
-        const current = strictJsonFile(ownerPath, 'shared blog lock owner');
+        const current = strictJsonFile(ownerPath, '共享博客持锁记录');
         if (namedLock.dev !== lockIdentity.dev || namedLock.ino !== lockIdentity.ino
             || namedOwner.dev !== ownerIdentity.dev || namedOwner.ino !== ownerIdentity.ino
             || !current.bytes.equals(ownerBytes)
@@ -903,14 +903,14 @@ function withBlogPublicationLock(blogRepo, callback, dependencies = {}) {
 function activate({ outputRoot, publicationId, blogRepo, remoteName = 'origin', apply = false } = {}, dependencies = {}) {
     const loaded = loadPlan({ outputRoot, publicationId }); const generation = loadGeneration(loaded); const reviewReceipt = loadReview(loaded);
     if (reviewReceipt.receipt.reviewProtocolFingerprint !== reviewProtocolFingerprint(dependencies)) {
-        fail('historical review protocol changed before activation');
+        fail('安装页面前历史审查规则已变化');
     }
     const delta = loaded.plan.files.filter(record => record.operation !== 'unchanged');
     const existingReceipt = path.join(loaded.directory, 'activation', 'receipt.json');
     if (fs.existsSync(existingReceipt)) {
         const existing = loadActivation(loaded).receipt;
         for (const record of delta) {
-            if ((dependencies.worktreeSha || worktreeSha)(blogRepo, record.path) !== record.sha256) fail(`recovered activation bytes drifted: ${record.path}`);
+            if ((dependencies.worktreeSha || worktreeSha)(blogRepo, record.path) !== record.sha256) fail(`恢复安装后的页面内容已变化：${record.path}`);
         }
         if (existing.reviewSha256 === reviewReceipt.receipt.reviewSha256
             && existing.generationSha256 === generation.manifest.generationSha256) {
@@ -929,7 +929,7 @@ function activate({ outputRoot, publicationId, blogRepo, remoteName = 'origin', 
             reviewSha256: reviewReceipt.receipt.reviewSha256, baseHead: existing.baseHead,
             exactDeltaSha256: loaded.plan.exactDeltaSha256, activatedFiles: existing.activatedFiles,
             activatedAt: dependencies.now?.() || new Date().toISOString() };
-        if (!iso(reboundBody.activatedAt)) fail('activation rebound time is invalid');
+        if (!iso(reboundBody.activatedAt)) fail('重新关联安装凭证的时间无效');
         const rebound = seal(reboundBody, 'activationSha256');
         atomicReplace(existingReceipt, prettyBytes(rebound));
         return { status: 'activation-rebound', receipt: rebound, filename: existingReceipt };
@@ -940,45 +940,45 @@ function activate({ outputRoot, publicationId, blogRepo, remoteName = 'origin', 
         (dependencies.validateActivationRecovery || defaultValidateActivationRecovery)(blogRepo, loaded.plan, remoteName, delta);
         state = loaded.plan.blogBaseline;
     } else {
-        state = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), 'activation blog state');
-        if (stableHash(state) !== loaded.plan.blogBaselineSha256) fail('activation baseline differs from plan');
+        state = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), '安装页面时的博客状态');
+        if (stableHash(state) !== loaded.plan.blogBaselineSha256) fail('安装页面时的博客基线与计划不同');
     }
-    if (reviewReceipt.receipt.baseHead !== state.head) fail('activation baseline differs from review');
+    if (reviewReceipt.receipt.baseHead !== state.head) fail('安装页面时的博客基线与审查记录不同');
     const intentBody = { contract: ACTIVATION_INTENT_CONTRACT, version: VERSION, publicationId,
         planSha256: loaded.plan.planSha256, generationSha256: generation.manifest.generationSha256,
         reviewSha256: reviewReceipt.receipt.reviewSha256, baseHead: state.head, exactDeltaSha256: loaded.plan.exactDeltaSha256 };
     const intent = seal(intentBody, 'intentSha256');
     if (!apply) return { status: 'dry-run', intent, deltaCount: delta.length };
-    const root = safeRoot(path.join(loaded.directory, 'activation'), 'activation directory', true);
+    const root = safeRoot(path.join(loaded.directory, 'activation'), '页面安装记录目录', true);
     const intentPath = path.join(root, 'intent.json');
     if (!fs.existsSync(intentPath)) writeExact(intentPath, prettyBytes(intent));
-    else if (!readRegular(intentPath).bytes.equals(prettyBytes(intent))) fail('activation intent drifted');
+    else if (!readRegular(intentPath).bytes.equals(prettyBytes(intent))) fail('准备安装页面的记录已变化');
     for (const record of delta) {
-        const target = inside(blogRepo, record.path, 'activation target'); const current = fs.existsSync(target) ? readRegular(target).sha256 : null;
+        const target = inside(blogRepo, record.path, '待安装页面'); const current = fs.existsSync(target) ? readRegular(target).sha256 : null;
         if (current === record.sha256) continue;
-        if (current !== record.baselineSha256) fail(`activation CAS drifted: ${record.path}`);
-        const rollback = inside(root, path.posix.join('rollback', record.path), 'activation rollback');
+        if (current !== record.baselineSha256) fail(`安装页面前文件内容已不同于原基线：${record.path}`);
+        const rollback = inside(root, path.posix.join('rollback', record.path), '安装前备份');
         if (current !== null && !fs.existsSync(rollback)) writeExact(rollback, readRegular(target).bytes);
         else if (current === null) {
             const absent = `${rollback}.absent.json`; if (!fs.existsSync(absent)) writeExact(absent, prettyBytes({ absent: true, path: record.path }));
         }
-        const source = inside(generation.root, path.posix.join('bundle', record.path), 'generation bundle');
+        const source = inside(generation.root, path.posix.join('bundle', record.path), '生成文件集合');
         (dependencies.replaceFile || atomicReplace)(target, readRegular(source).bytes, fs.existsSync(target) ? fs.statSync(target).mode & 0o777 : 0o600);
-        if (readRegular(target).sha256 !== record.sha256) fail(`activation write verification failed: ${record.path}`);
+        if (readRegular(target).sha256 !== record.sha256) fail(`安装页面后的文件 SHA 检查失败：${record.path}`);
     }
     (dependencies.validateActivatedWorktree || defaultValidateActivatedWorktree)(blogRepo, delta.map(item => item.path));
     const body = { contract: ACTIVATION_CONTRACT, version: VERSION, publicationId, intentSha256: intent.intentSha256,
         planSha256: loaded.plan.planSha256, generationSha256: generation.manifest.generationSha256,
         reviewSha256: reviewReceipt.receipt.reviewSha256, baseHead: state.head, exactDeltaSha256: loaded.plan.exactDeltaSha256,
         activatedFiles: delta.map(item => ({ path: item.path, sha256: item.sha256 })), activatedAt: dependencies.now?.() || new Date().toISOString() };
-    if (!iso(body.activatedAt)) fail('activation time is invalid'); const receipt = seal(body, 'activationSha256');
+    if (!iso(body.activatedAt)) fail('页面安装时间无效'); const receipt = seal(body, 'activationSha256');
     const filename = path.join(root, 'receipt.json');
     if (!fs.existsSync(filename)) writeExact(filename, prettyBytes(receipt));
-    else if (!readRegular(filename).bytes.equals(prettyBytes(receipt))) fail('activation receipt differs');
+    else if (!readRegular(filename).bytes.equals(prettyBytes(receipt))) fail('已存在内容不同的页面安装凭证');
     return { status: 'activated', receipt, filename };
 }
 function loadActivation(loadedPlan) {
-    const loaded = strictJsonFile(path.join(loadedPlan.directory, 'activation', 'receipt.json'), 'activation receipt'); const value = loaded.value;
+    const loaded = strictJsonFile(path.join(loadedPlan.directory, 'activation', 'receipt.json'), '页面安装凭证'); const value = loaded.value;
     const body = clone(value); delete body.activationSha256;
     const expectedFiles = loadedPlan.plan.files.filter(item => item.operation !== 'unchanged')
         .map(item => ({ path: item.path, sha256: item.sha256 }));
@@ -987,38 +987,38 @@ function loadActivation(loadedPlan) {
         || value.baseHead !== loadedPlan.plan.blogBaseline.head
         || !Array.isArray(value.activatedFiles)
         || stableHash(value.activatedFiles) !== stableHash(expectedFiles)
-        || value.activationSha256 !== stableHash(body)) fail('activation receipt drifted');
+        || value.activationSha256 !== stableHash(body)) fail('页面安装凭证的字段或 SHA 已变化');
     return { receipt: value, fileSha256: loaded.fileSha256 };
 }
 
 function runGit(blogRepo, args, { binary = false, allowFailure = false } = {}) {
     const result = spawnSync('git', ['-C', blogRepo, ...args], { encoding: binary ? null : 'utf8',
         env: { ...process.env, LANG: 'C', LC_ALL: 'C', GIT_TERMINAL_PROMPT: '0' }, maxBuffer: 128 * 1024 * 1024 });
-    if (!allowFailure && (result.error || result.signal || result.status !== 0)) fail(`git ${args[0]} failed`);
+    if (!allowFailure && (result.error || result.signal || result.status !== 0)) fail(`Git ${args[0]} 操作失败`);
     return binary ? Buffer.from(result.stdout || []) : { status: result.status, stdout: String(result.stdout || '').trim(), stderr: String(result.stderr || '').trim() };
 }
 function defaultPublishGit({ blogRepo, plan, publicationId, message }) {
     const delta = plan.files.filter(item => item.operation !== 'unchanged'); const paths = delta.map(item => item.path);
     const head = runGit(blogRepo, ['rev-parse', 'HEAD']).stdout.toLowerCase();
     if (head === plan.blogBaseline.head) {
-        // 每次 argv 都远低于平台的 ARG_MAX，以支持四千页规模的运行。
+        // 每批最多暂存 200 个路径，避免大量页面使命令参数超过平台的 ARG_MAX 限制。
         for (let index = 0; index < paths.length; index += 200) {
             runGit(blogRepo, ['add', '--', ...paths.slice(index, index + 200)]);
         }
         const staged = runGit(blogRepo, ['diff', '--cached', '--name-only', '-z'], { binary: true }).toString('utf8').split('\0').filter(Boolean).sort();
-        if (staged.join('\0') !== paths.slice().sort().join('\0')) fail('staged path set differs from exact historical delta');
+        if (staged.join('\0') !== paths.slice().sort().join('\0')) fail('Git 暂存路径集合与历史发布计划的精确改动集合不同');
         for (const record of delta) {
             const blob = runGit(blogRepo, ['show', `:${record.path}`], { binary: true });
-            if (sha256(blob) !== record.sha256) fail(`staged blob differs from plan: ${record.path}`);
+            if (sha256(blob) !== record.sha256) fail(`Git 暂存文件内容与计划不同：${record.path}`);
         }
         runGit(blogRepo, ['commit', '-m', message || `content: 发布全历史重写 ${publicationId}`]);
     }
     const commit = runGit(blogRepo, ['rev-parse', 'HEAD']).stdout.toLowerCase();
     const parents = runGit(blogRepo, ['rev-list', '--parents', '-n', '1', commit]).stdout.toLowerCase().split(/\s+/);
-    if (parents.length !== 2 || parents[1] !== plan.blogBaseline.head) fail('historical publication commit must have the sealed baseline as its sole parent');
+    if (parents.length !== 2 || parents[1] !== plan.blogBaseline.head) fail('历史发布提交必须只有一个父提交，且该父提交为已保存的基线');
     const changed = runGit(blogRepo, ['diff-tree', '--no-commit-id', '--name-only', '-r', commit]).stdout.split(/\r?\n/).filter(Boolean).sort();
-    if (changed.join('\0') !== paths.slice().sort().join('\0')) fail('historical publication commit delta differs from plan');
-    for (const record of delta) if (sha256(runGit(blogRepo, ['show', `${commit}:${record.path}`], { binary: true })) !== record.sha256) fail(`committed blob differs: ${record.path}`);
+    if (changed.join('\0') !== paths.slice().sort().join('\0')) fail('历史发布提交的改动集合与计划不同');
+    for (const record of delta) if (sha256(runGit(blogRepo, ['show', `${commit}:${record.path}`], { binary: true })) !== record.sha256) fail(`已提交文件内容与计划不同：${record.path}`);
     return commit;
 }
 function defaultPrePublishRemote(blogRepo, remoteName) {
@@ -1032,19 +1032,19 @@ function defaultPushAndVerify({ blogRepo, remoteName, commit }) {
     const identity = stableHash({ remote: remoteName, pushUrl: before });
     runGit(blogRepo, ['push', remoteName, 'HEAD:main']);
     const after = runGit(blogRepo, ['remote', 'get-url', '--push', remoteName]).stdout;
-    if (stableHash({ remote: remoteName, pushUrl: after }) !== identity) fail('remote identity changed during push');
+    if (stableHash({ remote: remoteName, pushUrl: after }) !== identity) fail('推送期间远端身份已变化');
     const remoteLine = runGit(blogRepo, ['ls-remote', '--exit-code', remoteName, 'refs/heads/main']).stdout.split(/\r?\n/)[0] || '';
     const remoteOid = remoteLine.split(/\s+/)[0].toLowerCase();
-    if (remoteOid !== commit) fail(`live remote main OID differs from publication commit: ${remoteOid}`);
+    if (remoteOid !== commit) fail(`当前远端 main 提交 OID 与发布提交不同：${remoteOid}`);
     return { remoteName, remoteIdentitySha256: identity, remoteVerifiedOid: remoteOid };
 }
 function loadCommit(loadedPlan) {
-    const loaded = strictJsonFile(path.join(loadedPlan.directory, 'commit.json'), 'publication commit receipt'); const value = loaded.value;
+    const loaded = strictJsonFile(path.join(loadedPlan.directory, 'commit.json'), '发布提交凭证'); const value = loaded.value;
     const body = clone(value); delete body.commitSha256;
     if (value.contract !== COMMIT_CONTRACT || value.version !== VERSION || value.publicationId !== loadedPlan.plan.publicationId
         || value.planSha256 !== loadedPlan.plan.planSha256 || value.baseHead !== loadedPlan.plan.blogBaseline.head
         || value.exactDeltaSha256 !== loadedPlan.plan.exactDeltaSha256 || !GIT_OID_RE.test(value.publicationCommit || '')
-        || !iso(value.committedAt) || value.commitSha256 !== stableHash(body)) fail('publication commit receipt drifted');
+        || !iso(value.committedAt) || value.commitSha256 !== stableHash(body)) fail('发布提交凭证的字段或 SHA 已变化');
     return { receipt: value, fileSha256: loaded.fileSha256 };
 }
 function publish({ outputRoot, publicationId, blogRepo, remoteName = 'origin', apply = false, message = null } = {}, dependencies = {}) {
@@ -1057,25 +1057,25 @@ function publish({ outputRoot, publicationId, blogRepo, remoteName = 'origin', a
             const line = runGit(repo, ['ls-remote', '--exit-code', remote, 'refs/heads/main']).stdout;
             return { remoteIdentitySha256: stableHash({ remote, pushUrl: url }), remoteOid: line.split(/\s+/)[0].toLowerCase() };
         }))(blogRepo, remoteName);
-        if (live.remoteIdentitySha256 !== existing.receipt.remoteIdentitySha256 || live.remoteOid !== existing.receipt.remoteVerifiedOid) fail('stored publication receipt fails live remote replay');
+        if (live.remoteIdentitySha256 !== existing.receipt.remoteIdentitySha256 || live.remoteOid !== existing.receipt.remoteVerifiedOid) fail('当前远端状态未通过已保存发布凭证的重新核验');
         return { status: 'already-published', receipt: existing.receipt };
     }
     if (reviewReceipt.receipt.reviewProtocolFingerprint !== reviewProtocolFingerprint(dependencies)) {
-        fail('historical review protocol changed; rerun review to reuse unchanged content and re-sign the batch receipt');
+        fail('历史审查规则已变化；请重新运行审查，复用内容未变的页面检查结果并生成当前批次凭证');
     }
     if (activation.receipt.reviewSha256 !== reviewReceipt.receipt.reviewSha256
-        || activation.receipt.generationSha256 !== generation.manifest.generationSha256) fail('activation does not bind current generation/review');
-    for (const record of delta) if ((dependencies.worktreeSha || worktreeSha)(blogRepo, record.path) !== record.sha256) fail(`activated worktree bytes drifted: ${record.path}`);
+        || activation.receipt.generationSha256 !== generation.manifest.generationSha256) fail('页面安装记录未关联当前生成清单和审查凭证');
+    for (const record of delta) if ((dependencies.worktreeSha || worktreeSha)(blogRepo, record.path) !== record.sha256) fail(`已安装工作区文件的内容已变化：${record.path}`);
     if (!apply) return { status: 'dry-run', deltaCount: delta.length, baseHead: loaded.plan.blogBaseline.head };
     const preRemote = (dependencies.prePublishRemote || defaultPrePublishRemote)(blogRepo, remoteName);
-    if (preRemote.branch !== undefined && preRemote.branch !== 'main') fail('publish requires blog main branch');
+    if (preRemote.branch !== undefined && preRemote.branch !== 'main') fail('发布要求博客位于 main 分支');
     if (preRemote.remoteIdentitySha256 !== loaded.plan.blogBaseline.remoteIdentitySha256
         || preRemote.remoteOid !== loaded.plan.blogBaseline.remoteOid
             && preRemote.remoteOid !== preRemote.localHead) {
-        fail('live remote advanced or changed identity after the sealed publication baseline');
+        fail('保存发布基线后，远端提交已前进或远端身份已变化');
     }
     const commit = (dependencies.publishGit || defaultPublishGit)({ blogRepo, plan: loaded.plan, publicationId, message });
-    if (!GIT_OID_RE.test(String(commit || '').toLowerCase())) fail('publication commit OID is invalid');
+    if (!GIT_OID_RE.test(String(commit || '').toLowerCase())) fail('发布提交 OID 无效');
     const commitBody = { contract: COMMIT_CONTRACT, version: VERSION, publicationId,
         planSha256: loaded.plan.planSha256, reviewSha256: reviewReceipt.receipt.reviewSha256,
         activationSha256: activation.receipt.activationSha256, baseHead: loaded.plan.blogBaseline.head,
@@ -1085,7 +1085,7 @@ function publish({ outputRoot, publicationId, blogRepo, remoteName = 'origin', a
     if (!fs.existsSync(commitPath)) writeExact(commitPath, prettyBytes(commitReceipt));
     else {
         commitReceipt = loadCommit(loaded).receipt;
-        if (commitReceipt.publicationCommit !== commit.toLowerCase()) fail('existing commit receipt binds another transaction');
+        if (commitReceipt.publicationCommit !== commit.toLowerCase()) fail('现有提交凭证关联了另一发布任务');
         if (commitReceipt.reviewSha256 !== reviewReceipt.receipt.reviewSha256
             || commitReceipt.activationSha256 !== activation.receipt.activationSha256) {
             commitReceipt = seal(commitBody, 'commitSha256');
@@ -1093,14 +1093,14 @@ function publish({ outputRoot, publicationId, blogRepo, remoteName = 'origin', a
         }
     }
     const remote = (dependencies.pushAndVerify || defaultPushAndVerify)({ blogRepo, remoteName, commit: commit.toLowerCase() });
-    if (remote.remoteVerifiedOid !== commit.toLowerCase() || !SHA_RE.test(remote.remoteIdentitySha256 || '')) fail('push did not return a live verified remote identity/OID');
+    if (remote.remoteVerifiedOid !== commit.toLowerCase() || !SHA_RE.test(remote.remoteIdentitySha256 || '')) fail('推送未返回已实时核验的远端身份和提交 OID');
     const body = { contract: PUBLICATION_CONTRACT, version: VERSION, publicationId,
         planSha256: loaded.plan.planSha256, reviewSha256: reviewReceipt.receipt.reviewSha256,
         activationSha256: activation.receipt.activationSha256, commitSha256: commitReceipt.commitSha256,
         publicationCommit: commit.toLowerCase(), remoteName: remote.remoteName || remoteName,
         remoteIdentitySha256: remote.remoteIdentitySha256, remoteVerifiedOid: remote.remoteVerifiedOid,
         remoteVerifiedAt: dependencies.now?.() || new Date().toISOString(), exactDeltaSha256: loaded.plan.exactDeltaSha256 };
-    if (!iso(body.remoteVerifiedAt)) fail('remote verification time is invalid'); const receipt = seal(body, 'publicationSha256');
+    if (!iso(body.remoteVerifiedAt)) fail('远端核验时间无效'); const receipt = seal(body, 'publicationSha256');
     writeExact(priorRemotePath, prettyBytes(receipt)); return { status: 'published', receipt, filename: priorRemotePath };
 }
 function activateAndPublish(options = {}, dependencies = {}) {
@@ -1111,7 +1111,7 @@ function activateAndPublish(options = {}, dependencies = {}) {
     }, dependencies);
 }
 function loadPublication(loadedPlan) {
-    const loaded = strictJsonFile(path.join(loadedPlan.directory, 'publication.json'), 'remote publication receipt'); const value = loaded.value;
+    const loaded = strictJsonFile(path.join(loadedPlan.directory, 'publication.json'), '远端发布凭证'); const value = loaded.value;
     const body = clone(value); delete body.publicationSha256;
     const generation = loadGeneration(loadedPlan).manifest;
     const review = loadReview(loadedPlan).receipt;
@@ -1150,13 +1150,13 @@ function status({ outputRoot, publicationId, liveRemote = true, blogRepo = null,
     let publication = null; const publicationOk = activationOk && probe('publication', () => {
         publication = loadPublication(loaded).receipt;
         if (liveRemote) {
-            if (!blogRepo) fail('live remote status requires blogRepo');
+            if (!blogRepo) fail('实时核验远端状态需要 blogRepo');
             const live = (dependencies.liveRemote || ((repo, remote) => {
                 const url = runGit(repo, ['remote', 'get-url', '--push', remote]).stdout;
                 const line = runGit(repo, ['ls-remote', '--exit-code', remote, 'refs/heads/main']).stdout;
                 return { remoteIdentitySha256: stableHash({ remote, pushUrl: url }), remoteOid: line.split(/\s+/)[0].toLowerCase() };
             }))(blogRepo, remoteName);
-            if (live.remoteIdentitySha256 !== publication.remoteIdentitySha256 || live.remoteOid !== publication.remoteVerifiedOid) fail('live remote no longer matches receipt');
+            if (live.remoteIdentitySha256 !== publication.remoteIdentitySha256 || live.remoteOid !== publication.remoteVerifiedOid) fail('当前远端状态已不同于凭证记录');
         }
         return { sha256: publication.publicationSha256, remoteVerifiedOid: publication.remoteVerifiedOid, liveVerified: Boolean(liveRemote) };
     }, 'publication-incomplete');

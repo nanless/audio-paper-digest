@@ -1515,8 +1515,8 @@ test('调度器负责的 arXiv 包缺失时，直连运行绝不改成网络重�
 
 test('会议暂存恢复在返回「已恢复」之前，拒绝暂存之后的 PDF 和元数据改动', async t => {
     const mutations = [
-        { name: 'PDF', mutate: f => fs.appendFileSync(path.join(f.root, 'conference.pdf'), 'mutated PDF bytes') },
-        { name: 'metadata', mutate: f => fs.appendFileSync(path.join(f.root, 'metadata.json'), '\nmutated metadata bytes') }
+        { name: 'PDF', expectedError: /保留的会议 PDF 在规划后已变化/, mutate: f => fs.appendFileSync(path.join(f.root, 'conference.pdf'), 'mutated PDF bytes') },
+        { name: 'metadata', expectedError: /保留的会议元数据文件在规划后已变化/, mutate: f => fs.appendFileSync(path.join(f.root, 'metadata.json'), '\nmutated metadata bytes') }
     ];
     for (const mutation of mutations) {
         const f = fixture(t); const roots = files(f.root); let analyses = 0;
@@ -1527,7 +1527,7 @@ test('会议暂存恢复在返回「已恢复」之前，拒绝暂存之后的 P
         mutation.mutate(f);
         const recovered = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'conference' }, dependencies);
         assert.equal(recovered.status, 'partial'); assert.equal(recovered.results[0].status, 'failed');
-        assert.match(recovered.results[0].error, new RegExp(`retained conference ${mutation.name} changed after planning`, 'i'));
+        assert.match(recovered.results[0].error, mutation.expectedError);
         assert.equal(recovered.failed, 1); assert.equal(analyses, 1, `${mutation.name} 被修改后，必须在第二次分析前失败`);
         const registry = JSON.parse(fs.readFileSync(recovered.registryFile, 'utf8'));
         assert.equal(registry.entries.find(entry => entry.paperId.startsWith('conference:')).status, 'failed');

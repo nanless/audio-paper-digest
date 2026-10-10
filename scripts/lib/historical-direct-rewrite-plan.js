@@ -719,9 +719,8 @@ function writeArxivFreshFailureHandoff({ root, plan, paperId, generation, error,
 
 function writePlan({ root, outputName, plan } = {}) {
     if (!SAFE_NAME_RE.test(String(outputName || ''))) fail('计划输出文件名不安全');
-    const normalized = normalizePlan(plan); const directory = conferencePageMappingsApi.safeDirectory
-        ? conferencePageMappingsApi.safeDirectory(root, '直接重写计划目录', true)
-        : (() => { if (!path.isAbsolute(root)) fail('直接重写计划目录必须是绝对路径'); fs.mkdirSync(root, { recursive: true, mode: 0o700 }); return root; })();
+    const normalized = normalizePlan(plan);
+    const directory = conferencePageMappingsApi.safeDirectory(root, '直接重写计划目录', true);
     const filename = path.join(directory, outputName); const bytes = prettyBytes(normalized); let fd;
     try {
         fd = fs.openSync(filename, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL

@@ -301,7 +301,7 @@ test('选择会确定性地移动或前置唯一的原表头，不改数据单�
     assert.deepEqual([...new Set(prependedResult.binding.cellBindings.map(cell => cell.sourceRow))], [0, 1, 2]);
 });
 
-test('选择拒绝重复或越界坐标、伪造表头、混合载荷和格式错误的原表矩阵', () => {
+test('选择拒绝重复或越界坐标、伪造表头、混入引用文本和格式错误的原表矩阵', () => {
     const { artifacts } = artifactsFixture();
     for (const mutate of [
         binding => { binding.selection.sourceRows = [1, 2, 2]; },

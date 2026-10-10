@@ -107,6 +107,6 @@ test('本次页面内容审查失败时拒绝旧通过凭证，成功时复用�
     assert.deepEqual(fs.readFileSync(output), oldReceipt);
     assert.deepEqual(workerStatuses, [0, 0, 1]);
     assert.ok(error, '本次审查退出失败时必须拒绝旧通过凭证');
-    assert.match(error.message, /semantic review worker failed: 1/);
+    assert.match(error.message, /页面内容审查子进程失败：1/);
     assert.equal(fs.existsSync(path.join(directory, 'review.json')), false);
 });

@@ -11,7 +11,7 @@ from runtime_guard import require_external_runtime
 def parse_date(module, argv=None):
     parser = argparse.ArgumentParser(
         prog='plan-post-publish-visuals.py',
-        description='在博客远端 OID 验证后幂等建立论文长图与汇总封面任务。',
+        description='确认博客提交已到远端后，建立论文长图与汇总封面任务；输入不变时复用已有任务。',
         allow_abbrev=False,
     )
     parser.add_argument('--date', action='append',

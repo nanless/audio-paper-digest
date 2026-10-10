@@ -51,7 +51,7 @@ test('视觉处置记录自带哈希且必须显式', () => {
         reason: '用户明确豁免本次全历史发布后的视觉生成。', createdAt: now });
     assert.equal(waived.mode, 'waived');
     assert.throws(() => api.buildVisualDisposition({ plan, mode: 'waived', requestedBy: 'agent',
-        reason: '代理不能自行签发视觉豁免，必须由用户明确提出。', createdAt: now }), /explicitly requested/);
+        reason: '代理不能自行签发视觉豁免，必须由用户明确提出。', createdAt: now }), /必须由用户明确提出/);
 });
 
 test('发布事务能沿计划、生成、审查、激活和远端凭证一路恢复', () => {
@@ -363,7 +363,7 @@ test('发布计划拒绝工作区文件与 Git 基线不符，状态查询不把
     const baseline = Buffer.from('old'); const next = Buffer.from('new'); const authority = fakeAuthority(next, baseline);
     assert.throws(() => api.buildPlan({ publicationId, authorityOptions: {}, blogRepo: '/tmp', createdAt: now }, {
         loadAuthority: () => authority, blogState, gitBlob: () => baseline, worktreeSha: () => hash('9')
-    }), /worktree\/baseHead drifted/);
+    }), /工作区文件与 baseHead 中的内容不同/);
     const absent = api.status({ outputRoot: fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'direct-publication-absent-')), publicationId });
     assert.equal(absent.complete, false);
     assert.equal(absent.phase, 'absent');
@@ -377,10 +377,10 @@ test('计划校验拒绝伪造的精确差异和不完整的 4490 式页面覆�
     const forgedDelta = structuredClone(plan); forgedDelta.exactDelta = [];
     forgedDelta.exactDeltaSha256 = api.stableHash([]); delete forgedDelta.planSha256;
     forgedDelta.planSha256 = api.stableHash(forgedDelta);
-    assert.throws(() => api.validatePlan(forgedDelta), /exact delta differs/);
+    assert.throws(() => api.validatePlan(forgedDelta), /精确改动集合与各来源生成的文件不同/);
     const forgedCoverage = structuredClone(plan); forgedCoverage.retainedDisposition.coveredPageCount = 0;
     delete forgedCoverage.planSha256; forgedCoverage.planSha256 = api.stableHash(forgedCoverage);
-    assert.throws(() => api.validatePlan(forgedCoverage), /full-page coverage proof/);
+    assert.throws(() => api.validatePlan(forgedCoverage), /保留页面或完整页面集合证明已变化/);
 });
 
 test('命令行拒绝有歧义的模式，并解析显式的发布范围', () => {
@@ -414,9 +414,9 @@ test('发布权威记录显式绑定注册表和暂存的历史版本身份', ()
     assert.deepEqual(proof.sourceVersion, f.sourceVersion);
     const drifted = structuredClone(f.sourceVersion); drifted.selectedSourceId = `${f.arxivId}v2`;
     assert.throws(() => api.historicalSourceVersionProof(f.item, { source: f.source }, { sourceDisclosure: drifted }),
-        /historical-version proof drifted|identity evidence\/SHA drifted/);
+        /登记表与暂存页面的历史版本证明已变化|identity evidence\/SHA drifted/);
     assert.throws(() => api.historicalSourceVersionProof(f.item, { source: { ...f.source, sourceVersion: undefined } },
-        { sourceDisclosure: f.sourceVersion }), /has no registry source proof/);
+        { sourceDisclosure: f.sourceVersion }), /缺少登记表中的来源证明/);
 });
 
 test('确定性发布审查要求带版本号的直连页面只有一条精确的顶部警告', () => {
@@ -431,14 +431,14 @@ test('确定性发布审查要求带版本号的直连页面只有一条精确�
         producers: [producer] }, Buffer.from(text));
     const exact = `${frontMatter}${disclosure}\n\n# body\n`;
     assert.equal(check(exact).sourceVersionIdentitySha256, f.sourceVersion.identitySha256);
-    assert.throws(() => check(`${frontMatter}# body\n`), /lost or duplicated its exact top disclosure/);
-    assert.throws(() => check(`${frontMatter}# body\n\n${disclosure}\n`), /lost or duplicated its exact top disclosure/);
-    assert.throws(() => check(`${frontMatter}${disclosure}\n\n${disclosure}\n`), /lost or duplicated its exact top disclosure/);
+    assert.throws(() => check(`${frontMatter}# body\n`), /顶部的指定来源说明缺失、重复或位置不符/);
+    assert.throws(() => check(`${frontMatter}# body\n\n${disclosure}\n`), /顶部的指定来源说明缺失、重复或位置不符/);
+    assert.throws(() => check(`${frontMatter}${disclosure}\n\n${disclosure}\n`), /顶部的指定来源说明缺失、重复或位置不符/);
 
     const ordinaryProducer = { kind: 'direct-page-staging', paperId: f.item.paperId, runId: publicationId,
         manifestSha256: hash('9') };
     assert.throws(() => api.deterministicReview({ path: 'content/posts/ordinary.md', sha256: sha(Buffer.from(exact)),
-        producers: [ordinaryProducer] }, Buffer.from(exact)), /ordinary direct page forged/);
+        producers: [ordinaryProducer] }, Buffer.from(exact)), /普通直接重写页面含不属于它的历史版本来源说明/);
 });
 
 test('审查约定给全新来源、运行器和页面暂存的实现都记指纹', () => {
@@ -463,5 +463,5 @@ test('页面审查接受新旧单一标签字段族，先核原页面 SHA 再拒
     }
     const mixed = page(`paper_digest_tags_contract: "${contract}"\n"paper_digest_taxonomy_concepts": null`);
     assert.throws(() => api.deterministicReview({ path: 'content/posts/one.md', sha256: sha(mixed) }, mixed), /新旧标签字段/);
-    assert.throws(() => api.deterministicReview({ path: 'content/posts/one.md', sha256: hash('a') }, mixed), /review bytes drifted/);
+    assert.throws(() => api.deterministicReview({ path: 'content/posts/one.md', sha256: hash('a') }, mixed), /待审查文件的内容已变化/);
 });

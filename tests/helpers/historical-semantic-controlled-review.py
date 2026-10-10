@@ -7,7 +7,7 @@ from pathlib import Path
 source = Path(sys.argv[1])
 sys.path.insert(0, str(source.parent))
 from runtime_guard import require_external_runtime
-require_external_runtime('历史语义审查本地测试')
+require_external_runtime('历史页面内容审查本地测试')
 spec = importlib.util.spec_from_file_location('actual_historical_review', source)
 module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)

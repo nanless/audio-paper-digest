@@ -152,7 +152,7 @@ run_stage() {
 if [ "$start_index" -eq 1 ] && [ "$api_mode" -ne 1 ]; then
   run_stage 1 "Manual 联网抓取候选（不调用筛选模型）" \
     npm run manual:fetch -- --date "$target_date" --raw
-  echo "==> 生产 Manual v6 默认链路已到人工筛选边界。"
+  echo "==> Manual v6 已完成候选抓取，接下来需要逐篇人工筛选。"
   echo "==> 下一步：每篇候选由独立 subagent 审核，生成 manual_offline spec 后运行："
   echo "    npm run manual:fetch -- --date ${target_date} --select FILTER_SPEC.json"
   echo "    npm run manual:fulltext -- ${target_date}"
@@ -190,7 +190,7 @@ run_stage 5 "生成博客" bash scripts/python-runtime.sh scripts/generate-blog.
 if [ "$api_mode" -eq 1 ]; then
   run_stage 6 "LLM Review 博客" bash scripts/python-runtime.sh scripts/review-blog.py --date "$target_date"
 elif [ "$start_index" -le 6 ]; then
-  echo "==> Manual 默认链路已到逐页语义审查边界。"
+  echo "==> Manual 接下来需要逐页检查已生成页面的正文和图片。"
   echo "==> generation 中每个页面必须由主 Agent 直接调度独立的单页子代理，生成逐图 attestation v3（不允许中转代理占用并发槽）。"
   echo "==> 逐页记录汇总后运行 blog:manual-attest 与 manual-review-blog.py，再用 --from push 续跑。"
   exit 3
