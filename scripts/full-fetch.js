@@ -25,6 +25,7 @@ const {
     readJsonFileStrict,
     updateJsonFileLocked,
     withFileLock,
+    LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY,
     withFileLockSync,
     isSuccessfulAnalysisRecord,
     getAnalysisRunStatus,
@@ -2069,7 +2070,10 @@ async function runFullFetch(options = {}) {
 
 async function fullFetch(options = {}) {
     const lockTarget = options.lockTarget || FULL_FETCH_RUN_LOCK;
-    return withFileLock(lockTarget, () => runFullFetch(options), options.lockOptions);
+    return withFileLock(lockTarget, () => runFullFetch(options), {
+        recoveryPolicy: LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY,
+        ...options.lockOptions
+    });
 }
 
 if (require.main === module) {
