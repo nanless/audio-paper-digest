@@ -309,12 +309,12 @@ test('临时图片抓取只重试暂时性的网络或状态失败，永久性�
     for (const status of [408, 425, 429, 500, 503]) {
         assert.equal(source.isTransientEphemeralFigureFetchError(
             new Error(`arXiv Figure download failed: HTTP ${status}`)
-        ), true, `HTTP ${status} is transient`);
+        ), true, `HTTP ${status} 被归为可重试的临时错误`);
     }
     for (const status of [400, 401, 403, 404]) {
         assert.equal(source.isTransientEphemeralFigureFetchError(
             new Error(`arXiv Figure download failed: HTTP ${status}`)
-        ), false, `HTTP ${status} is permanent`);
+        ), false, `HTTP ${status} 不作为临时错误重试`);
     }
     let calls = 0; const waits = [];
     const result = await source.withEphemeralArxivFigures({ arxivId: id,
@@ -354,7 +354,7 @@ test('临时图片抓取只重试暂时性的网络或状态失败，永久性�
             calls += 1; throw new Error('arXiv Figure download failed: HTTP 404');
         }
     }), error => error.retryable !== true && /HTTP 404/.test(error.message));
-    assert.equal(calls, 1, 'ordinary 4xx is permanently rejected without retry');
+    assert.equal(calls, 1, '收到 HTTP 404 后只请求一次，不重试');
     assert.deepEqual(fs.readdirSync(f.temporaryRoot), []);
 
     calls = 0;
@@ -363,7 +363,7 @@ test('临时图片抓取只重试暂时性的网络或状态失败，永久性�
         temporaryRoot: f.temporaryRoot, sourceRoot: f.sourceRoot }, async () => {}, {
         fetchFigure: async () => { calls += 1; return { bytes: Buffer.from('pixels'), mediaType: 'image/png' }; }
     }), /another paper/);
-    assert.equal(calls, 0, 'URL/paper identity fails before network');
+    assert.equal(calls, 0, '图片地址属于另一篇论文时，在请求前拒绝');
 
     calls = 0;
     await assert.rejects(source.withEphemeralArxivFigures({ arxivId: id,
@@ -371,7 +371,7 @@ test('临时图片抓取只重试暂时性的网络或状态失败，永久性�
         sourceRoot: f.sourceRoot }, async () => {}, {
         fetchFigure: async () => { calls += 1; return { bytes: Buffer.from('not pixels'), mediaType: 'text/plain' }; }
     }), /media type is unsupported/);
-    assert.equal(calls, 1, 'media/pixel validation is permanent and never retried');
+    assert.equal(calls, 1, '响应不是支持的图片类型时，只请求一次');
     assert.deepEqual(fs.readdirSync(f.temporaryRoot), []);
 });
 

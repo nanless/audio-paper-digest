@@ -9,32 +9,32 @@ const USAGE = '--dry-run|--apply --plan ABSOLUTE.json --generation N [--all-plan
 function parsePaperIds(value) {
     const ids = String(value || '').split(',').map(item => item.trim()).filter(Boolean);
     if (!ids.length || ids.some(id => !/^\d{4}\.\d{4,5}$/.test(id)) || new Set(ids).size !== ids.length) {
-        throw new Error(`Use ${USAGE}`);
+        throw new Error(`用法：${USAGE}`);
     }
     return ids;
 }
 function parseArgs(argv) {
     const mode = argv[0]; const values = {}; let allParserFailures = false; let allPlanArxiv = false;
-    if (!['--dry-run', '--apply'].includes(mode)) throw new Error(`Use ${USAGE}`);
+    if (!['--dry-run', '--apply'].includes(mode)) throw new Error(`用法：${USAGE}`);
     for (let index = 1; index < argv.length; index += 1) {
         const flag = argv[index];
         if (flag === '--all-parser-failures') {
-            if (allParserFailures) throw new Error(`Use ${USAGE}`);
+            if (allParserFailures) throw new Error(`用法：${USAGE}`);
             allParserFailures = true; continue;
         }
         if (flag === '--all-plan-arxiv') {
-            if (allPlanArxiv) throw new Error(`Use ${USAGE}`);
+            if (allPlanArxiv) throw new Error(`用法：${USAGE}`);
             allPlanArxiv = true; continue;
         }
         if (!['--plan', '--generation', '--paper-ids', '--concurrency'].includes(flag)
-            || Object.hasOwn(values, flag) || !argv[index + 1]) throw new Error(`Use ${USAGE}`);
+            || Object.hasOwn(values, flag) || !argv[index + 1]) throw new Error(`用法：${USAGE}`);
         values[flag] = argv[++index];
     }
     if (!path.isAbsolute(values['--plan'] || '')
         || !/^[1-9]\d{0,8}$/.test(values['--generation'] || '')
         || !/^[1-5]$/.test(values['--concurrency'] || '1')
         || Number(allParserFailures) + Number(allPlanArxiv) + Number(Boolean(values['--paper-ids'])) > 1) {
-        throw new Error(`Use ${USAGE}`);
+        throw new Error(`用法：${USAGE}`);
     }
     if (!allParserFailures && !allPlanArxiv && !values['--paper-ids']) allPlanArxiv = true;
     return { apply: mode === '--apply', planFile: path.resolve(values['--plan']),
@@ -69,11 +69,11 @@ async function mapConcurrent(items, concurrency, worker) {
             }
         }
     };
-    // 单篇可重试来源错误已由 worker 转成结果；外抛错误才中止派发。
-    // 等待已在途的来源完成封存，再将全部运行异常交还调用方。
+    // 单篇可重试来源错误已由任务函数转成结果；函数抛出的错误才停止安排新任务。
+    // 等待已经开始的任务完成或失败，再将它们抛出的异常交还调用方。
     await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, run));
     if (failures.length === 1) throw failures[0];
-    if (failures.length > 1) throw new AggregateError(failures, '多个在途出版元数据任务失败', { cause: failures[0] });
+    if (failures.length > 1) throw new AggregateError(failures, '多个已开始的发布元数据任务失败', { cause: failures[0] });
     return results;
 }
 function partialExitCode(output) {
@@ -87,7 +87,7 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
     const metadata = runtime.metadata || require('./lib/arxiv-metadata-source.js');
     const projections = runtime.projections || require('./lib/historical-conference-page-projections.js');
     const planApi = runtime.planApi || require('./lib/historical-direct-rewrite-plan.js');
-    const loadedPlan = projections.readStableJson(options.planFile, 'direct rewrite plan');
+    const loadedPlan = projections.readStableJson(options.planFile, '历史页面重写计划');
     const plan = planApi.normalizePlan(loadedPlan.value);
     const planArxivIds = plan.queue.filter(item => item.route.kind === 'arxiv-fresh-fetch')
         .map(item => item.route.arxivId).sort();
@@ -96,8 +96,8 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
         ? parserFailureIds(files.freshArxivFetchedSourcesDir, options.generation, planArxivIds, runtime)
         : options.paperIds.slice().sort();
     const unknown = ids.filter(id => !planArxivIds.includes(id));
-    if (unknown.length) throw new Error(`论文 ID 不在直接重写计划内：${unknown.join(',')}`);
-    if (!ids.length) throw new Error('没有匹配的 arXiv 出版元数据任务');
+    if (unknown.length) throw new Error(`论文 ID 不在历史页面重写计划内：${unknown.join(',')}`);
+    if (!ids.length) throw new Error('没有匹配的 arXiv 发布元数据任务');
     const existing = new Map(); const missingIds = [];
     for (const id of ids) {
         const directory = sidecars.sidecarDirectory(files.historicalArxivPublicationMetadataDir, id, options.generation);
@@ -148,9 +148,9 @@ async function main(argv = process.argv.slice(2), runtime = {}) {
                 source: reusable ? 'reused_official_atom' : 'live_official_atom',
                 manifestSha256: sealed.proof.manifestSha256 };
         } catch (error) {
-            // 只有标了 retryable、且已经重试到头的暂时性失败，才记成单篇论文的批次
-            // 结果。完整性、配置或编程错误仍要中断整轮运行，不能被摊薄成几千条误导
-            // 性的失败记录。
+            // 只有标记为 retryable 的错误，才记成单篇论文的批次
+            // 结果。完整性、配置或程序错误仍要中断整轮运行，不能被记录成大量容易误解
+            // 的单篇失败记录。
             if (error?.retryable !== true) throw error;
             return { paperId: `arxiv:${id}`, status: 'failed', retryable: true,
                 errorCode: String(error.code || 'ARXIV_METADATA_TRANSIENT'),

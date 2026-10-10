@@ -122,7 +122,7 @@ test('日更恢复入口只复核当前已保存的 PDF/TXT 来源，Reader 刷�
         assert.equal(item.dailyScope, true);
         assert.equal(item.runId, plan.runId);
     }
-    assert.equal(captureCalls, 1, 'recovery must replay the sealed pair and cannot recapture/fetch');
+    assert.equal(captureCalls, 1, '三个分析恢复入口运行后，来源抓取次数仍为一次');
 
     // 把同一份分析记录补成完成状态，只是为了走到 Reader 分支；
     // 自定义操作不调模型，就能证明来源和图片的范围。
@@ -167,7 +167,7 @@ test('日更恢复入口只复核当前已保存的 PDF/TXT 来源，Reader 刷�
         directSource: sourcePayload(ID).text,
         hasEphemeralMaterializer: true
     });
-    assert.equal(captureCalls, 1, 'Reader recovery also cannot recapture or use a legacy fetch path');
+    assert.equal(captureCalls, 1, 'Reader 作者信息恢复后，来源抓取次数仍为一次');
 });
 
 function normalized(paper) { return String(paper?.arxivId || '').replace(/v\d+$/, ''); }

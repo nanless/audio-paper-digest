@@ -377,7 +377,7 @@ test('来源存在但读不出来时，日更绑定判定报错，不把读取�
     assert.equal(bound.analysis, '已完成的整篇分析');
     assert.equal(bound.apiReaderArticle, '已完成的读者文章');
 
-    // 真·未绑定：来源可读，只是证明对不上，保持原来的清字段行为。
+    // 来源文件可读取，但分析记录与当前来源不对应时，清除旧分析字段。
     const unbound = { ...structuredClone(bound),
         freshRewriteProvenance: { ...bound.freshRewriteProvenance, sourceSha256: '0'.repeat(64) } };
     assert.equal(daily.isPaperBoundToPlan(unbound, plan), false);

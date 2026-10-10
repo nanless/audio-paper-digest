@@ -159,7 +159,7 @@ for (const target of [sidecars.ATOM_NAME, sidecars.METADATA_NAME, sidecars.MANIF
 test('出版元数据附带文件拒绝论文、证明、历史来源版本不符，以及多余文件', async t => {
     const f = await fixture(t); const wrong = official('2601.00002');
     assert.throws(() => sidecars.sealPublicationMetadata({ rootDir: f.sidecarRoot,
-        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult: wrong }), /belongs|replayed|response|query source ID/i);
+        sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult: wrong }), /belongs|replayed|response|查询的来源 ID/i);
     const drifted = official(); drifted.proof.fileSha256 = sha('wrong');
     assert.throws(() => sidecars.sealPublicationMetadata({ rootDir: f.sidecarRoot,
         sourceRoot: f.sourceRoot, arxivId: ID, generation: 1, officialResult: drifted }), /proof/);
@@ -237,7 +237,7 @@ test('出版元数据命令行的解析和解析失败选择都限定在计划�
     const parsed = cli.parseArgs(['--apply', '--plan', '/tmp/plan.json', '--generation', '1',
         '--all-parser-failures', '--concurrency', '3']);
     assert.equal(parsed.planFile, '/tmp/plan.json'); assert.equal(parsed.allParserFailures, true);
-    assert.throws(() => cli.parseArgs(['--apply', '--generation', '1', '--all-parser-failures']), /Use/);
+    assert.throws(() => cli.parseArgs(['--apply', '--generation', '1', '--all-parser-failures']), /用法：/);
     const reads = [];
     const ids = cli.parserFailureIds('/tmp/source', 1, ['2601.00001', '2601.00002'], {
         freshSource: { readFreshArxivRewriteSource: ({ arxivId }) => {

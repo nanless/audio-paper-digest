@@ -42,31 +42,31 @@ test('官方 Atom 适配器绑定精确版本查询，拒绝有歧义的原始�
     assert.match(versioned.proof.sourceName, /id_list=2609\.03622v1/);
     assert.throws(() => api.parseOfficialArxivMetadataResponse('2609.03622', atom, {
         querySourceId: '2609x03622v1'
-    }), /query source ID/);
+    }), /查询的来源 ID/);
     const duplicateId = atom.replace('</id>', '</id><id>http://arxiv.org/abs/2609.03622v9</id>');
     assert.throws(() => api.parseOfficialArxivMetadataResponse('2609.03622', duplicateId, {
         hasSignature: () => true,
         parseXml: () => Object.assign([{ arxivId: '2609.03622v1', title: 'Official title',
             abstract: 'Official abstract with evidence.', authors: ['Author One'], categories: ['cs.SD'],
             published: '2026-09-04T00:00:00Z' }], { _meta: { entryCount: 1, legalEntryCount: 1 } })
-    }), /identity\/version\/timestamps/);
+    }), /论文 ID、版本或时间字段/);
     const duplicateUpdated = atom.replace('</updated>', '</updated><updated>2026-09-05T00:00:00Z</updated>');
     assert.throws(() => api.parseOfficialArxivMetadataResponse('2609.03622', duplicateUpdated, {
         hasSignature: () => true,
         parseXml: () => Object.assign([{ arxivId: '2609.03622v1', title: 'Official title',
             abstract: 'Official abstract with evidence.', authors: ['Author One'], categories: ['cs.SD'],
             published: '2026-09-04T00:00:00Z' }], { _meta: { entryCount: 1, legalEntryCount: 1 } })
-    }), /identity\/version\/timestamps/);
+    }), /论文 ID、版本或时间字段/);
 });
 
 test('没有代理或身份覆盖不精确时，官方 Atom 适配器直接失败', async () => {
-    await assert.rejects(api.fetchOfficialArxivMetadata('2609.03622', { detectProxy: () => '' }), /proxy/);
+    await assert.rejects(api.fetchOfficialArxivMetadata('2609.03622', { detectProxy: () => '' }), /HTTP CONNECT 代理/);
     await assert.rejects(api.fetchOfficialArxivMetadata('2609.03622', {
         detectProxy: () => 'http://127.0.0.1:7897', requestFn: async () => ({ status: 200, data: atom }),
         fetchPapers: { hasApiResponseSignature: () => true,
             parseArxivXML: () => Object.assign([{ arxivId: '2609.99999', title: 'x', abstract: 'y', authors: [], categories: [], published: '2026-09-04T00:00:00Z' }],
                 { _meta: { entryCount: 1, legalEntryCount: 1 } }) }
-    }), /another paper/);
+    }), /另一篇论文/);
 });
 
 test('生产式 Atom 调度通过一个共用的主机队列重试明确的 429', async () => {

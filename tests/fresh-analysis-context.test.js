@@ -157,7 +157,7 @@ test('来源解析保留基线版本或调用方版本，拒绝跨论文的 sour
     manifest.sourceExpectations = updated.sourceExpectations;
     fs.writeFileSync(manifestPath, JSON.stringify(manifest));
     await fresh.resolveFreshSource(updated.runDir, { arxivId: `${f.id}v2` }, updated);
-    assert.equal(requested.at(-1), `${f.id}v1`, 'baseline source identity takes precedence');
+    assert.equal(requested.at(-1), `${f.id}v1`, '运行清单已指定来源版本时，按清单中的版本读取');
     updated.sourceExpectations[f.id].sourceId = '2609.99971v1';
     assert.throws(() => fresh.resolveFreshSource(updated.runDir, f.id, updated), /sourceId 指向另一篇论文/);
     assert.equal(requested.length, 4);
