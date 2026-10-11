@@ -131,7 +131,7 @@ const FROZEN_V4_MIXED_PROMPT_FILES = Object.freeze({
     ...FROZEN_V4_PROMPT_FILES,
 });
 
-// 评分使用 v5；主分析保持 v4。核心摘要使用 v4 正文，结构修复保留 v3 独立预算。
+// 评分使用 v5；主分析保持 v4。核心摘要使用 v5 正文，结构修复保留 v3 独立预算。
 // 旧核心摘要 v3 仍读取冻结 v2 正文，旧混合登记对象保持原样。
 const PROMPT_FILE_VERSIONS = Object.freeze({
     ...FROZEN_V4_MIXED_PROMPT_FILES,
@@ -139,7 +139,7 @@ const PROMPT_FILE_VERSIONS = Object.freeze({
     apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V6_CONTRACT, path: 'prompts/api-reader-article-v6.md' }),
     apiReaderRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V8_CONTRACT, path: 'prompts/api-reader-repair-v8.md' }),
     scoringAudit: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path: 'prompts/scoring-audit-v5.md' }),
-    coreSummaryRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/core-summary-repair-v4.md' }),
+    coreSummaryRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path: 'prompts/core-summary-repair-v5.md' }),
     structureRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/structure-repair-v2.md' }),
 });
 
@@ -181,6 +181,10 @@ function promptFilePathForContract(stage, promptTextContract) {
     if (stage === 'coreSummaryRepair' && declared === ANALYSIS_PROMPT_TEXT_V3_CONTRACT) {
         return FROZEN_V2_PROMPT_FILES.coreSummaryRepair.path;
     }
+    // 独立保存旧核心摘要 v4 路径，不改变旧 Manual 混合阶段组合。
+    if (stage === 'coreSummaryRepair' && declared === ANALYSIS_PROMPT_TEXT_V4_CONTRACT) {
+        return 'prompts/core-summary-repair-v4.md';
+    }
     const archivedV3 = FROZEN_V3_PROMPT_FILES[stage];
     if (declared === ANALYSIS_PROMPT_TEXT_V3_CONTRACT && archivedV3?.contract === declared) return archivedV3.path;
     const archivedV4 = FROZEN_READER_V4_PROMPT_FILES[stage] || FROZEN_V4_PROMPT_FILES[stage];
@@ -201,7 +205,7 @@ function promptFilePathForContract(stage, promptTextContract) {
     if (entry && declared === entry.contract) return entry.path;
     const known = [ANALYSIS_PROMPT_TEXT_V1_CONTRACT];
     if (archivedV2) known.push(ANALYSIS_PROMPT_TEXT_V2_CONTRACT);
-    if (stage === 'coreSummaryRepair') known.push(ANALYSIS_PROMPT_TEXT_V3_CONTRACT);
+    if (stage === 'coreSummaryRepair') known.push(ANALYSIS_PROMPT_TEXT_V3_CONTRACT, ANALYSIS_PROMPT_TEXT_V4_CONTRACT);
     if (archivedV3?.contract === ANALYSIS_PROMPT_TEXT_V3_CONTRACT) known.push(ANALYSIS_PROMPT_TEXT_V3_CONTRACT);
     if (archivedV4?.contract === ANALYSIS_PROMPT_TEXT_V4_CONTRACT) known.push(ANALYSIS_PROMPT_TEXT_V4_CONTRACT);
     if (stage === 'apiReaderRepair') known.push(ANALYSIS_PROMPT_TEXT_V5_CONTRACT);

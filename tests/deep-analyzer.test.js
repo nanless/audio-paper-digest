@@ -5868,7 +5868,8 @@ has_dataset: 否
         assert.match(prompts[1], /使用相同指标的原文数值明确比较/);
         assert.doesNotMatch(prompts[1], /方向必须字面使用|两侧必须重复同一指标名/);
         assert.match(prompts[1], /任务介绍与方法说明允许按下列长度或句数要求缩短、合并或补足/);
-        assert.match(prompts[1], /量化结果句、边界句和成本句逐字保留/);
+        assert.match(prompts[1], /量化结果、边界和成本事实及条件完整保留/);
+        assert.match(prompts[1], /明确要求逐字保留的句子原样保留/);
     });
 
     it('核心摘要 cost-only 重试传递上一候选并且不再误导修改量化句', async () => {

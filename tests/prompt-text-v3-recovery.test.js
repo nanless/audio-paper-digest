@@ -37,7 +37,7 @@ test('改写阶段分别读取 v1、v2、v3 原路径，旧版本不能解析成
     }
     const coreOld = registry.promptFilePathForContract('coreSummaryRepair', 'analysis-prompt-text-v3');
     const coreCurrent = registry.promptFilePathForContract('coreSummaryRepair', registry.currentPromptTextContract('coreSummaryRepair'));
-    assert.equal(registry.currentPromptTextContract('coreSummaryRepair'), 'analysis-prompt-text-v4');
+    assert.equal(registry.currentPromptTextContract('coreSummaryRepair'), 'analysis-prompt-text-v5');
     assert.equal(coreOld, registry.promptFilePathForContract('coreSummaryRepair', 'analysis-prompt-text-v2'));
     assert.notEqual(coreCurrent, coreOld);
     assert.notEqual(deep.runtimePromptTemplateSha256(coreCurrent), deep.runtimePromptTemplateSha256(coreOld));

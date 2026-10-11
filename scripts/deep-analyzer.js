@@ -16857,7 +16857,7 @@ async function repairCoreSummarySection(
                 : '补足任务难点和方法衔接的必要解释';
             retryTargets.push(`当前摘要按公共校验统计为 ${lengthIssue[2]} 个汉字与中文标点，`
                 + `必须保持在 ${CORE_SUMMARY_MIN_CHINESE_CHARS}–${CORE_SUMMARY_MAX_CHINESE_CHARS} 个以内；`
-                + `${lengthAction}。没有被指出问题的量化结果句、边界句和成本句仍逐字保留，`
+                + `${lengthAction}。没有被指出问题的量化结果、边界和成本事实及条件仍完整保留；反馈明确要求逐字保留的句子仍原样保留，`
                 + '在其余允许修改的内容中调整长度');
         }
         const sentenceCountIssue = feedback.match(/句数必须为 (\d+)–(\d+)，当前 (\d+)/);
@@ -16868,7 +16868,7 @@ async function repairCoreSummarySection(
                 ? '将未受保护的任务介绍、方法步骤及与已有方法的关键差异合并表达；关键差异可接在方法句内，用分号衔接，不必另起一句。只合并这些允许修改的内容，所有事实和条件保留'
                 : '把未受保护的任务或方法说明按实际内容分开，补充必要衔接，不拆空句';
             retryTargets.push(`当前摘要为 ${currentCount} 句，须为 ${sentenceCountIssue[1]}–${sentenceCountIssue[2]} 句；`
-                + `${sentenceAction}。没有被指出问题的量化结果句、边界句和成本句仍逐字保留，`
+                + `${sentenceAction}。没有被指出问题的量化结果、边界和成本事实及条件仍完整保留；反馈明确要求逐字保留的句子仍原样保留，`
                 + '不得为调整句数删去事实或改变数字');
         }
         const requiresUnavailableResultStatement = feedback.includes(
@@ -16897,14 +16897,24 @@ async function repairCoreSummarySection(
             ? `${feedback}${retryTargets.length ? `\n允许修复的内容：${retryTargets.join('\n')}` : ''}`
            : `这是第 ${attempt} 次局部修复。`
                + (lengthIssue || sentenceCountIssue
-                   ? '未被指出问题的量化结果句、边界句和成本句逐字保留；任务介绍与方法说明允许按下列长度或句数要求缩短、合并或补足，不删事实。'
-                   : '保留上一候选中已合格的句子，只编辑或补充下列未通过项：')
+                   ? '未被指出问题的量化结果、边界和成本事实及条件完整保留；明确要求逐字保留的句子原样保留；任务介绍与方法说明允许按下列长度或句数要求缩短、合并或补足，不删事实。'
+                   : '保留上一候选中已合格的事实和条件，优先替换不完整或重复说明，修复下列未通过项：')
                + `${retryTargets.length ? retryTargets.join('\n') : '根据下方校验反馈逐项修正'}。\n`
                + `上次校验错误：${feedback}`;
+        const candidateChineseChars = (candidateSummary.match(/[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]/g) || []).length;
+        const remainingChineseChars = CORE_SUMMARY_MAX_CHINESE_CHARS - candidateChineseChars;
+        const lengthBudget = `当前摘要实际含 ${candidateChineseChars} 个汉字与中文标点，`
+            + (remainingChineseChars >= 0
+                ? `距 600 个上限只剩 ${remainingChineseChars} 个。`
+                : `已超过 600 个上限 ${-remainingChineseChars} 个。`)
+            + '本次完整输出仍以 420–520 个为目标，须为 320–600 个、6–9 句。'
+            + '修正缺项应替换原有不完整或重复句，不在保留全部原句后另行追加说明。'
+            + '压缩表达不删改正确事实、比较条件、数字、单位、方向、边界或成本；'
+            + '反馈明确要求逐字保留的句子必须原样保留。';
         const prompt = loadPrompt(currentTextStagePromptPath('coreSummaryRepair'), {
             title: paper.title,
             arxivId: getPaperArxivId(paper),
-            summaryIssue,
+            summaryIssue: `${summaryIssue}\n当前篇幅预算：${lengthBudget}`,
             existingSummary: candidateSummary,
             textForAnalysis: evidenceContext
         });

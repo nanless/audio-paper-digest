@@ -62,7 +62,7 @@ test('句数过多与量化错误并存时第二次请求明确允许合并非�
             assert.match(messages[0].content, /所有事实和条件保留/);
             assert.match(messages[0].content, /任务介绍与方法说明允许按下列长度或句数要求缩短、合并或补足/);
             assert.doesNotMatch(messages[0].content, /保留上一候选中已合格的句子，只编辑/);
-            assert.match(messages[0].content, /量化结果句、边界句和成本句仍逐字保留/);
+            assert.match(messages[0].content, /量化结果、边界和成本事实及条件仍完整保留/);
             return `## 核心摘要\n${good}`;
         }
     });
@@ -72,7 +72,7 @@ test('句数过多与量化错误并存时第二次请求明确允许合并非�
 });
 
 
-test('只有量化缺项时仍保护上一轮其他合格句，不开放长度压缩', async () => {
+test('只有量化缺项时仍保护正确事实并优先替换原不完整说明', async () => {
     const candidate = good.replace(resultSentence, '在公开测试集的相同协议下，方法的输出质量有所改善，但此句尚未说明指标名称与可核对的数值比较对象。');
     const issue = contract.validateCoreSummarySemanticContract(replace(candidate), { sourceText: source });
     assert.match(issue, /定量|量化|指标/);
@@ -82,7 +82,7 @@ test('只有量化缺项时仍保护上一轮其他合格句，不开放长度�
         callModelFn: async messages => {
             calls += 1;
             if (calls === 1) return `## 核心摘要\n${candidate}`;
-            assert.match(messages[0].content, /保留上一候选中已合格的句子，只编辑或补充下列未通过项/);
+            assert.match(messages[0].content, /保留上一候选中已合格的事实和条件，优先替换不完整或重复说明/);
             assert.doesNotMatch(messages[0].content, /任务介绍与方法说明允许按下列长度或句数要求/);
             return `## 核心摘要\n${good}`;
         }
