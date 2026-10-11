@@ -26,7 +26,7 @@ test('改写阶段分别读取 v1、v2、v3 原路径，旧版本不能解析成
         assert.equal(registry.currentPromptTextContract(stage), 'analysis-prompt-text-v2');
         assert.throws(() => registry.promptFilePathForContract(stage, 'analysis-prompt-text-v3'), /没有登记/);
     }
-    for (const stage of ['coreSummaryRepair', 'structureRepair']) {
+    for (const stage of ['structureRepair']) {
         const oldPath = registry.promptFilePathForContract(stage, 'analysis-prompt-text-v2');
         const currentPath = registry.promptFilePathForContract(stage, registry.currentPromptTextContract(stage));
         assert.equal(registry.currentPromptTextContract(stage), 'analysis-prompt-text-v3');
@@ -35,6 +35,13 @@ test('改写阶段分别读取 v1、v2、v3 原路径，旧版本不能解析成
             fs.readFileSync(path.resolve(__dirname, '..', oldPath)));
         assert.throws(() => registry.promptFilePathForContract(stage, 'analysis-prompt-text-v9'), /没有登记/);
     }
+    const coreOld = registry.promptFilePathForContract('coreSummaryRepair', 'analysis-prompt-text-v3');
+    const coreCurrent = registry.promptFilePathForContract('coreSummaryRepair', registry.currentPromptTextContract('coreSummaryRepair'));
+    assert.equal(registry.currentPromptTextContract('coreSummaryRepair'), 'analysis-prompt-text-v4');
+    assert.equal(coreOld, registry.promptFilePathForContract('coreSummaryRepair', 'analysis-prompt-text-v2'));
+    assert.notEqual(coreCurrent, coreOld);
+    assert.notEqual(deep.runtimePromptTemplateSha256(coreCurrent), deep.runtimePromptTemplateSha256(coreOld));
+    assert.throws(() => registry.promptFilePathForContract('coreSummaryRepair', 'analysis-prompt-text-v9'), /没有登记/);
 });
 test('已完成的 v2 修订记录按原版本核验，保留 v2 身份；新请求使用不同的 v3 指纹', () => {
     const input = validAnalysisText(), source = 'Speech recognition source evidence.';

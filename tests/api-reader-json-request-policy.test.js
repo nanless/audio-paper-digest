@@ -86,8 +86,9 @@ test('旧省略 JSON 声明的失败草稿正常迁移且付费计数不清，�
         const childEnv={...process.env,READER_JSON_POLICY_CHILD:'1'};delete childEnv.NODE_TEST_CONTEXT;
         const result=cp.spawnSync(process.execPath,['--test','--test-name-pattern=旧省略 JSON 声明','tests/'+path.basename(__filename)],{cwd:folder,encoding:'utf8',env:childEnv});
         assert.equal(result.status,0,result.stdout+result.stderr);
-        assert.match(result.stdout,/# tests 1\b/);
-        assert.match(result.stdout,/ok 1 - 旧省略 JSON 声明/);return;
+        assert.match(result.stdout,/# pass 1\b/);
+        assert.match(result.stdout,/# fail 0\b/);
+        assert.match(result.stdout,/^ok \d+ - 旧省略 JSON 声明的失败草稿正常迁移且付费计数不清，反向和坏声明拒绝\r?$/m);return;
     }
     const fs = require('node:fs'), os = require('node:os'), path = require('node:path'), crypto = require('node:crypto');
     const Config = require('../scripts/config.js');

@@ -122,6 +122,7 @@ const {
     ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
     ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
     ANALYSIS_PROMPT_TEXT_V3_CONTRACT,
+    ANALYSIS_PROMPT_TEXT_V4_CONTRACT,
     FROZEN_V1_PROMPT_FILES: RECOVERY_PROMPT_FILES,
     PROMPT_FILE_VERSIONS,
     currentPromptTextContract,
@@ -8725,7 +8726,7 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext, prompt
             declaredPromptTextContract !== ANALYSIS_PROMPT_TEXT_V3_CONTRACT
                 && ['revision', 'structureRepair'].includes(stage)
                 ? REPAIR_MAX_TOKENS
-                : declaredPromptTextContract !== ANALYSIS_PROMPT_TEXT_V3_CONTRACT
+                : ![ANALYSIS_PROMPT_TEXT_V3_CONTRACT, ANALYSIS_PROMPT_TEXT_V4_CONTRACT].includes(declaredPromptTextContract)
                     && stage === 'coreSummaryRepair'
                     ? LEGACY_CURRENT_CORE_SUMMARY_REPAIR_MAX_TOKENS : config.maxTokens),
         promptTemplateSha256: promptTemplateSha256(
@@ -16255,6 +16256,16 @@ async function repairCoreSummarySection(
     const repairCallModel = options.callModelFn || callModel;
     for (let attempt = 1; attempt <= 3; attempt++) {
         const retryTargets = [];
+        const lengthIssue = feedback.match(/中文字符(过多|不足): (\d+)\/(\d+)/);
+        if (lengthIssue) {
+            const lengthAction = lengthIssue[1] === '过多'
+                ? '缩短冗余的任务介绍和方法说明，不再增加总长度'
+                : '补足任务难点和方法衔接的必要解释';
+            retryTargets.push(`当前摘要按公共校验统计为 ${lengthIssue[2]} 个汉字与中文标点，`
+                + `必须保持在 ${CORE_SUMMARY_MIN_CHINESE_CHARS}–${CORE_SUMMARY_MAX_CHINESE_CHARS} 个以内；`
+                + `${lengthAction}。没有被指出问题的量化结果句、边界句和成本句仍逐字保留，`
+                + '在其余允许修改的内容中调整长度');
+        }
         const requiresUnavailableResultStatement = feedback.includes(
             `原文无可核定量结果时必须明确写“${CORE_SUMMARY_RESULT_UNAVAILABLE}”`
         );
@@ -16278,7 +16289,7 @@ async function repairCoreSummarySection(
                 + '例如计算量、硬件、延迟或吞吐。只有原文确实未披露时，才写“原文未披露训练、推理或部署成本”');
         }
         const summaryIssue = attempt === 1
-            ? feedback
+            ? `${feedback}${retryTargets.length ? `\n允许修复的内容：${retryTargets.join('\n')}` : ''}`
            : `这是第 ${attempt} 次局部修复。保留上一候选中已合格的句子，只编辑或补充下列未通过项：`
                + `${retryTargets.length ? retryTargets.join('\n') : '根据下方校验反馈逐项修正'}。\n`
                + `上次校验错误：${feedback}`;
