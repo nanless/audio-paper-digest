@@ -293,6 +293,63 @@ function readAllowanceEnvelope(filename) {
 function validateImplementationAllowance(payload, identity, directory) {
     const proof = payload?.implementationRepairAllowanceProof;
     if (proof === undefined || proof === null) return false;
+    if (proof.contract === 'reader-repair-prompt-unused-allowance-transfer-v1') {
+        const keys = ['contract', 'fromIdentitySha256', 'toIdentitySha256', 'oldPayloadSha256',
+            'revisionAuditSha256', 'originalAllowanceSha256', 'allowanceSha256'];
+        const audit = payload.readerRecoveryRevisions?.at(-1);
+        const body = { ...proof }; delete body.allowanceSha256;
+        const from = String(proof.fromIdentitySha256 || '');
+        if (Object.keys(proof).sort().join('\0') !== keys.sort().join('\0')
+            || !audit || audit.contract !== 'reader-recovery-diagnostics-revision-v1'
+            || hashDraft(audit) !== proof.revisionAuditSha256
+            || audit.fromIdentitySha256 !== from || audit.toIdentitySha256 !== hashDraft(identity)
+            || proof.toIdentitySha256 !== hashDraft(identity)
+            || proof.oldPayloadSha256 !== audit.oldPayloadSha256
+            || hashDraft(body) !== proof.allowanceSha256
+            || hashDraft(audit.changedFields) !== hashDraft(['repairPromptSha256'])
+            || !new RegExp(`^${from}\\.migrated-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json$`).test(String(audit.archivedName || ''))
+            || !/^[a-f0-9]{64}$/.test(from)) throw new Error('修复提示词升级的原未用许可证明无效');
+        const absolute = assertSafeDirectory(directory);
+        let old;
+        try { old = readAllowanceEnvelope(path.join(absolute, audit.archivedName)); }
+        catch (error) { if (error.code !== 'ENOENT') throw error;
+            old = readAllowanceEnvelope(path.join(absolute, `${from}.json`)); }
+        const envelope = old.envelope;
+        const original = envelope?.payload;
+        const oldIdentity = envelope?.identity;
+        const omitPrompt = value => Object.fromEntries(Object.entries(value || {})
+            .filter(([key]) => key !== 'repairPromptSha256'));
+        if (crypto.createHash('sha256').update(old.bytes).digest('hex') !== audit.oldEnvelopeSha256
+            || hashDraft(oldIdentity) !== from || envelope.payloadSha256 !== audit.oldPayloadSha256
+            || hashDraft(original) !== audit.oldPayloadSha256
+            || oldIdentity.repairPromptSha256 !== 'c63148bca8bed36a8c31b0327b87e2a1e9ddf51fd8641813827f5e8f1eb4a6ec'
+            || identity.repairPromptSha256 !== '8d1483030d1167b9ac3b81602c267ae5e5ec0fc5e88fb7308aea5f1e2a52d470'
+            || !require('node:util').isDeepStrictEqual(omitPrompt(oldIdentity), omitPrompt(identity))
+            || original.implementationRepairAllowanceProof?.allowanceSha256 !== proof.originalAllowanceSha256
+            || original.implementationRepairAllowanceLineage !== IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT
+            || (original.consumedImplementationAllowanceSha256 || []).includes(proof.originalAllowanceSha256)
+            || !require('node:util').isDeepStrictEqual(payload.consumedImplementationAllowanceSha256 || [],
+                original.consumedImplementationAllowanceSha256 || [])
+            || (payload.consumedImplementationAllowanceSha256 || []).includes(proof.allowanceSha256)
+            || payload.implementationRepairAllowanceLineage !== original.implementationRepairAllowanceLineage
+            || ['attempts', 'fullAttempts', 'noProgress'].some(key =>
+                !require('node:util').isDeepStrictEqual(payload[key], original[key]))
+            || !Number.isSafeInteger(payload.transportFailures ?? 0)
+            || (payload.transportFailures ?? 0) < (original.transportFailures ?? 0)
+            || audit.attempts !== original.attempts || audit.fullAttempts !== original.fullAttempts
+            || audit.oldNoProgress !== original.noProgress
+            || audit.transportFailures !== (original.transportFailures ?? 0)
+            || audit.paperId !== identity.paperId
+            || audit.runId !== original.readerRecoveryRevisions?.at(-1)?.runId
+            || audit.scope !== original.readerRecoveryRevisions?.at(-1)?.scope) {
+            throw new Error('修复提示词升级不能改变原许可、来源或已用次数');
+        }
+        // 旧许可仍须通过原公共验证；这里只转交尚未使用的一次许可。
+        if (!validateImplementationAllowance(original, oldIdentity, absolute)) {
+            throw new Error('修复提示词升级缺少有效的原未用许可');
+        }
+        return true;
+    }
     const keys = ['contract', 'fromIdentitySha256', 'toIdentitySha256', 'oldPayloadSha256',
         'revisionAuditSha256', 'changedFields', 'allowanceSha256'];
     const audits = Array.isArray(payload.readerRecoveryRevisions) ? payload.readerRecoveryRevisions : [];
@@ -503,7 +560,14 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             if (item.path.startsWith('/figurePlacements/') && Number.isInteger(item.value?.figureOrdinal)) {
                 ordinals.push(item.value.figureOrdinal);
             }
-            if (ordinals.some(ordinal => !options.availableFigureOrdinals.includes(ordinal))) {
+            const removesOnlyInvalidSectionFields = /^\/sections\/\d+$/.test(item.path)
+                && old && typeof old === 'object' && !Array.isArray(old)
+                && Object.keys(old).some(key => !['kind', 'heading', 'body'].includes(key))
+                && Object.keys(item.value).sort().join(',') === 'body,heading,kind'
+                && ['kind', 'heading', 'body'].every(key => item.value[key] === old[key])
+                && !patch.replacements.some(replacement => replacement.path.startsWith('/figurePlacements/'));
+            if (ordinals.some(ordinal => !options.availableFigureOrdinals.includes(ordinal))
+                && !removesOnlyInvalidSectionFields) {
                 throw new Error('Reader patch figure was not included as pixels in this repair request');
             }
         }
@@ -575,9 +639,24 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         const destinationAfter = countInSection(afterTables, operation.destinationSectionIndex);
         const added = afterTables.find(table => table.tableIndex === operation.tableIndex);
         const binding = merged.tableBindings?.[operation.bindingIndex];
-        if (afterTables.length !== beforeTables.length + 1
-            || afterTables.length !== merged.tableBindings.length
+        // 一次只补一张表。若原稿缺了多张，不能同时要求这一次就补齐全部。
+        // 原有表格和其他来源记录必须保持，剩余缺口仍由完整解析器拒绝。
+        const oldTablesPreserved = beforeTables.every((table, index) => (
+            afterTables[index]?.sectionIndex === table.sectionIndex
+            && hashDraft(afterTables[index]?.table ?? null) === hashDraft(table.table ?? null)
+            && afterTables[index]?.marker === table.marker
+        ));
+        const otherBindingsPreserved = draft.tableBindings.every((oldBinding, index) => (
+            index === operation.bindingIndex
+            || hashDraft(merged.tableBindings?.[index]) === hashDraft(oldBinding)
+        ));
+        if (beforeTables.length >= draft.tableBindings.length
+            || merged.tableBindings.length !== draft.tableBindings.length
+            || afterTables.length !== beforeTables.length + 1
+            || afterTables.length > merged.tableBindings.length
+            || !oldTablesPreserved || !otherBindingsPreserved
             || destinationAfter !== destinationBefore + 1
+            || added?.sectionIndex !== operation.destinationSectionIndex
             || !added?.table
             || (String(added.table.markdown).match(/\d+/g) || []).length < 4
             || binding?.tableIndex !== operation.tableIndex
@@ -671,7 +750,10 @@ function collectDraftIssues(draft, parserError, options = {}) {
                         .map(() => sectionIndex) : []
             ));
             if (matches.length !== 1 || draft.sections[matches[0]]?.kind !== expectedKind) {
-                issues.push({ path: `/${field}/${index}`, message: `${field}[${index}] marker 必须唯一独占一段并位于声明 kind 小节` });
+                issues.push({ path: `/${field}/${index}`, message: `${field}[${index}] marker 必须唯一独占一段并位于声明 kind 小节；`
+                    + `声明 kind=${JSON.stringify(expectedKind)}，实际独占行出现 ${matches.length} 次，`
+                    + `所在小节=${JSON.stringify(matches.map(sectionIndex => ({ index: sectionIndex, kind: draft.sections[sectionIndex]?.kind })))}。`
+                    + '请依据原文修正绑定声明或已授权正文的位置，不得原样回传失败项或自动改变论文含义。' });
             }
         });
     }
@@ -823,7 +905,7 @@ function buildMissingResultTableOperation(draft, issues) {
                 requiredReplacementPaths: [destinationSectionPath, bindingPath],
                 requiredPostconditions: [
                     'destination result/ablation section gains exactly one numeric Markdown table',
-                    'the total table count becomes equal to the binding stream',
+                    '每次补上一张已声明来源的表，剩余缺表仍须逐项修复',
                     'the new table remains paired with the declared source_quotes binding'
                 ]
             };
@@ -997,6 +1079,27 @@ function buildRepairTargets(draft, issues) {
             if (paths.size >= 8) break;
         }
         if (paths.size) {
+            return [...paths].map(pointer => ({ path: pointer,
+                oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
+        }
+    }
+    // 缺失的表格插入标记没有现成正文位置，不能因其他小节问题已占目标
+    // 而只授权改绑定。先把绑定与结果正文一起交给模型，原解析器仍核验来源。
+    const missingSelection = blockingIssues.find(issue => {
+        const index = /^\/tableBindings\/(\d+)$/.exec(String(issue?.path || ''))?.[1];
+        const binding = index === undefined ? null : draft.tableBindings?.[Number(index)];
+        const marker = binding?.selection ? `[[TABLE_${binding.tableIndex}]]` : null;
+        return marker && /唯一独占一段/.test(String(issue?.message || ''))
+            && !draft.sections.some(section => String(section?.body || '').includes(marker));
+    });
+    if (missingSelection) {
+        const destinations = draft.sections.flatMap((section, index) => (
+            ['result', 'ablation'].includes(section?.kind) ? [`/sections/${index}/body`] : []
+        ));
+        if (destinations.length && destinations.length < 8) {
+            paths.clear();
+            add(missingSelection.path);
+            destinations.forEach(add);
             return [...paths].map(pointer => ({ path: pointer,
                 oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
         }

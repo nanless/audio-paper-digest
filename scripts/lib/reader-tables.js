@@ -450,7 +450,7 @@ function renderReaderTableSelection(binding, artifacts) {
         || sourceRows.slice(1).some(row => headerRows.includes(row))) {
         throw new Error(`${label} 第一行必须是原表头，其余行必须是数据行；`
             + `sourceTableOrdinal=${sourceTableOrdinal}，有效表头行=${JSON.stringify(headerRows)}，`
-            + `当前选择行=${JSON.stringify(requestedSourceRows)}。只修改本 binding 的 sourceRows，不能改写正文或原表。`);
+            + `当前选择行=${JSON.stringify(requestedSourceRows)}。修正本项行选择错误时只修改本 binding 的 sourceRows，不得改写原表；若另有正文标记或位置错误，仍须在对应授权正文中单独修正，不能据此禁止必要的正文修复。`);
     }
     const cellBindings = [];
     const matrix = sourceRows.map((sourceRow, renderedRow) => sourceColumns.map((sourceColumn, renderedColumn) => {

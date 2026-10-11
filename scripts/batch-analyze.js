@@ -28,6 +28,7 @@ loadEnvFile();
 
 const RESULT_FILE = Config.FILES.deepAnalysisResult;
 const RETRY_FAILED_READERS = process.argv.slice(2).includes('--retry-failed-readers');
+const REFRESH_READER_DIAGNOSTICS = process.argv.slice(2).includes('--refresh-reader-diagnostics');
 
 function retireIncompleteReaderCandidates(directory, paperIds, options = {}) {
     const readDir = options.readDir || fs.readdirSync;
@@ -80,6 +81,13 @@ function finalizeBatchZeroWorkState(resultPath, fallbackBatchDate) {
 }
 
 async function main(options = {}) {
+    if (options.refreshReaderDiagnostics !== undefined && typeof options.refreshReaderDiagnostics !== 'boolean') {
+        throw new Error('长文恢复检查设置必须为 true 或 false。');
+    }
+    const refreshReaderDiagnostics = REFRESH_READER_DIAGNOSTICS || options.refreshReaderDiagnostics === true;
+    if (refreshReaderDiagnostics && RETRY_FAILED_READERS) {
+        throw new Error('--refresh-reader-diagnostics 会继续使用已有长文草稿，不能与停用旧草稿的 --retry-failed-readers 同时使用。');
+    }
     // 这个入口只继续已有日更分析。旧结果文件没有对应的封存 PDF 和文本记录，
     // 不能把它迁为当前结果后，再让分析器通过旧抓取路径补取来源。
     if (!fs.existsSync(RESULT_FILE)) {
@@ -227,7 +235,9 @@ async function main(options = {}) {
             console.log(`   已更新批次统计到 ${RESULT_FILE}`);
         }
     });
-    const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runAnalysisFromDailySources);
+    const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(
+        dailySourcePlan, runAnalysisFromDailySources, { refreshReaderDiagnostics }
+    );
 
     console.log('\n=== 批量分析完成 ===');
     console.log(`成功: ${stats.success} | 失败: ${stats.failed} | 总计处理: ${notAnalyzed.length}`);

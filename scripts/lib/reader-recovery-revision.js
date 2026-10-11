@@ -15,8 +15,8 @@ const CONTRACT = 'reader-recovery-diagnostics-revision-v1';
 const ALLOWED_FIELDS = Object.freeze(['repairImplementationSha256', 'tableCompilerSha256', 'draftOrderContract',
     'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
     'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256',
-    'readerRecoveryEpochSha256', 'readerJsonRequestPolicy']);
-const implementationFields = ALLOWED_FIELDS.filter(field => field.endsWith('Sha256'));
+    'readerRecoveryEpochSha256', 'readerJsonRequestPolicy', 'repairPromptSha256']);
+const implementationFields = ALLOWED_FIELDS.filter(field => field.endsWith('Sha256') && field !== 'repairPromptSha256');
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const withoutRevisionFields = identity => Object.fromEntries(Object.entries(identity)
     .filter(([key]) => !ALLOWED_FIELDS.includes(key)));
@@ -138,12 +138,22 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     let revisionRunId; let revisionScope;
     if (context) {
         if (context.refreshReaderDiagnostics !== true) return null;
+        const canonicalMatch = /^(\d{4}\.\d{4,5})(?:v[1-9]\d*)?$/.exec(String(identity.paperId || ''));
+        if (!canonicalMatch) throw new Error('长文恢复的 arXiv 身份格式无效');
+        const canonicalPaperId = canonicalMatch[1];
+        const expectation = context.sourceExpectations[canonicalPaperId];
+        const sealedIdentity = expectation?.sourceMode === 'sealed-arxiv-bundle-v1'
+            ? require('./fresh-analysis-context.js').freshAnalysisIdentity(canonicalPaperId) : null;
+        const sourceMatches = sealedIdentity
+            ? isDeepStrictEqual(identity.freshAnalysis, sealedIdentity)
+                && identity.sourceSha256 === sealedIdentity.sourceSha256
+            : identity.sourceSha256 === expectation?.sourceSha256
+                && identity.freshAnalysis?.sourceSha256 === identity.sourceSha256
+                && identity.freshAnalysis?.structuredArtifactsSha256 === expectation?.structuredArtifactsSha256;
         if (path.resolve(directory) !== path.join(context.runDir, 'reader-attempts')
             || identity?.freshAnalysis?.runId !== context.runId
-            || identity.freshAnalysis.paperId !== identity.paperId
-            || identity.sourceSha256 !== context.sourceExpectations[identity.paperId]?.sourceSha256
-            || identity.freshAnalysis.sourceSha256 !== identity.sourceSha256
-            || identity.freshAnalysis.structuredArtifactsSha256 !== context.sourceExpectations[identity.paperId]?.structuredArtifactsSha256) {
+            || identity.freshAnalysis.paperId !== canonicalPaperId
+            || !sourceMatches) {
             throw new Error('Reader diagnostic revision must remain in the exact fresh run/source scope');
         }
         revisionRunId = context.runId; revisionScope = 'fresh-run';
@@ -183,6 +193,11 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
         assertReaderJsonRequestPolicy(oldJsonPolicy);
         // 仅旧省略声明到当前明确格式允许保留原草稿；反向撤掉声明不能复用。
         if (oldJsonPolicy !== undefined && newJsonPolicy === undefined) continue;
+        // 只允许已冻结的 v3 修复提示词转到当前 v4；不扩大其他提示词许可。
+        // 提示词变化本身不发放正文尝试额度，也不清除已有失败计数。
+        if (envelope.identity.repairPromptSha256 !== identity.repairPromptSha256
+            && !(envelope.identity.repairPromptSha256 === 'c63148bca8bed36a8c31b0327b87e2a1e9ddf51fd8641813827f5e8f1eb4a6ec'
+                && identity.repairPromptSha256 === '8d1483030d1167b9ac3b81602c267ae5e5ec0fc5e88fb7308aea5f1e2a52d470')) continue;
         if (!isDeepStrictEqual(withoutRevisionFields(envelope.identity), withoutRevisionFields(identity))) continue;
         verifyPixels(payload);
         const changedFields = ALLOWED_FIELDS.filter(field => !isDeepStrictEqual(envelope.identity[field], identity[field]));
@@ -293,14 +308,24 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     if (grantOrTransferAllowance) {
         updated.implementationRepairAllowanceLineage = IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT;
     }
-    if (previousActiveAllowance) {
+    const transferUnusedAllowance = old.changedFields.length === 1
+        && old.changedFields[0] === 'repairPromptSha256' && Boolean(previousActiveAllowance);
+    if (previousActiveAllowance && !transferUnusedAllowance) {
         updated.consumedImplementationAllowanceSha256 = [...new Set([
             ...(updated.consumedImplementationAllowanceSha256 || []),
             previousActiveAllowance.allowanceSha256
         ])].sort();
     }
-    updated.implementationRepairAllowanceProof = grantOrTransferAllowance
-        ? implementationAllowanceProof(identity, audit) : null;
+    if (transferUnusedAllowance) {
+        const body = { contract: 'reader-repair-prompt-unused-allowance-transfer-v1',
+            fromIdentitySha256: audit.fromIdentitySha256, toIdentitySha256: hashDraft(identity),
+            oldPayloadSha256: audit.oldPayloadSha256, revisionAuditSha256: hashDraft(audit),
+            originalAllowanceSha256: previousActiveAllowance.allowanceSha256 };
+        updated.implementationRepairAllowanceProof = { ...body, allowanceSha256: hashDraft(body) };
+    } else {
+        updated.implementationRepairAllowanceProof = grantOrTransferAllowance
+            ? implementationAllowanceProof(identity, audit) : null;
+    }
     // 调用方外面已经有常规的逐篇锁。安装前仍要重新检查：
     // 绝不覆盖更新的精确候选，也不覆盖过期的预算。
     const racedExact = loadFailedCandidate(directory, identity);

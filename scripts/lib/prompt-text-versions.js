@@ -127,6 +127,7 @@ const FROZEN_V4_MIXED_PROMPT_FILES = Object.freeze({
 const PROMPT_FILE_VERSIONS = Object.freeze({
     ...FROZEN_V4_MIXED_PROMPT_FILES,
     apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/api-reader-article-v4.md' }),
+    apiReaderRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/api-reader-repair-v4.md' }),
     scoringAudit: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path: 'prompts/scoring-audit-v5.md' }),
     coreSummaryRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/core-summary-repair-v4.md' }),
     structureRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/structure-repair-v2.md' }),

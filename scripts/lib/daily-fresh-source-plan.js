@@ -199,9 +199,12 @@ function readDailyFreshSourcePlan(reference, { rootDir = Config.FILES.dailyFresh
     return plan;
 }
 
-function analysisIdentity(plan) {
+function analysisIdentity(plan, options = {}) {
+    if (options.refreshReaderDiagnostics !== undefined && typeof options.refreshReaderDiagnostics !== 'boolean') {
+        fail('长文恢复检查设置必须为 true 或 false');
+    }
     return { runId: plan.runId, runDir: plan.runDir, sourceExpectations: clone(plan.sourceExpectations),
-        refreshReaderDiagnostics: false };
+        refreshReaderDiagnostics: options.refreshReaderDiagnostics === true };
 }
 
 function bounded(items, concurrency, callback) {
@@ -502,8 +505,8 @@ function createDailyAnalyzeFn(plan, options = {}) {
     };
 }
 
-function withDailyFreshAnalysisContext(plan, callback) {
-    return fresh.withFreshAnalysisContext(analysisIdentity(plan), callback);
+function withDailyFreshAnalysisContext(plan, callback, options = {}) {
+    return fresh.withFreshAnalysisContext(analysisIdentity(plan, options), callback);
 }
 
 module.exports = { CONTRACT, VERSION, SOURCE_GENERATION, REFERENCE_CONTRACT, REFERENCE_VERSION, DailyFreshSourcePlanError, stableHash,

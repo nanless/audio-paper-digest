@@ -53,11 +53,15 @@ npm run validate:data
 
 ```bash
 npm run deep -- --date YYYY-MM-DD
+# 保留已付费草稿及原调用次数，只更新核验后的修复诊断
+npm run batch -- --refresh-reader-diagnostics
+
+# 主动停用旧草稿后续跑
 npm run batch -- --retry-failed-readers
 npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader
 ```
 
-来源 SHA、提示词或模型变化会使对应阶段及必要下游重新运行。保留旧成功正文并不能覆盖最新失败。`batch --retry-failed-readers` 只停止复用未完成论文的失败解读候选；要强制重做全部分析，请用 `reanalyze`，它还会清空旧解读和图片补充状态。
+来源 SHA、提示词或模型变化会使对应阶段及必要下游重新运行。保留旧成功正文并不能覆盖最新失败。`batch --refresh-reader-diagnostics` 只接续同组已核验封存来源的失败草稿，保留原调用次数，提示词变更本身不增加请求额度；它与主动停用旧草稿的 `--retry-failed-readers` 不能同时使用。`batch --retry-failed-readers` 只停止复用未完成论文的失败解读候选；要强制重做全部分析，请用 `reanalyze`，它还会清空旧解读和图片补充状态。
 
 恢复命令报告日更来源缺失或变化时，不要改进度文件，也不要补入旧 `data/current` 文本。目标仍为北京时间当天时，重新运行同日 `npm run digest:prepare -- YYYY-MM-DD` 获取并保存来源；历史日期不能重新从抓取开始，应保留失败记录并按历史维护流程处理。
 

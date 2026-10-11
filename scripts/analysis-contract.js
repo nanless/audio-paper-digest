@@ -1275,7 +1275,10 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     const explicitBoundary = /(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)/.test(summary);
     const separatedUnverifiedBoundary = /(?:尚未|未曾|未能|未|没有)[^。！？!?\n]{0,60}(?:验证|覆盖|评估|测试)/.test(summary);
     const conditionalFailure = /(?:但|不过|然而)[^。！？!?\n]{0,80}(?:在|对)[^。！？!?\n]{1,60}(?:时|下|中|上)[^。！？!?\n]{0,60}(?:可能|易|会|明显)?(?:失真|退化|恶化|不稳定|不可靠|失效|下降|受损|偏差)/.test(summary);
-    if (!explicitBoundary && !separatedUnverifiedBoundary && !conditionalFailure) {
+    const scopedConclusionBoundary = /(?:结论|研究结果|研究发现)[^。！？!?\n]{0,40}(?<!不)(?<!非)限于[^。！？!?\n]{1,80}(?:语音|语料|数据|场景|条件|设置|样本|任务)/.test(summary);
+    const observationalCausalBoundary = /(?:观察性|非实验|非干预)[^。！？!?\n]{0,40}(?:不建立|不能建立|不支持|不能证明)[^。！？!?\n]{0,20}因果/.test(summary);
+    if (!explicitBoundary && !separatedUnverifiedBoundary && !conditionalFailure
+        && !scopedConclusionBoundary && !observationalCausalBoundary) {
         issues.push('缺少结论适用边界、失败条件或未验证范围');
     }
     const scopedResourceDisclosure = summary.split(/[。！？!?\n]/).some(sentence => (

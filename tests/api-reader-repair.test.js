@@ -2716,7 +2716,13 @@ test('真实排序异常保留五组旧完整诊断的顺序、重复路径、�
             assert.equal(validationFailureSignature(historicalIssues), row.signature);
             assert.equal(hashRecoveryIssues(issues), currentPreviewChecks[row.name].hash);
             assert.equal(validationFailureSignature(issues), currentPreviewChecks[row.name].signature);
-            assert.equal(JSON.stringify(buildRepairTargets(draft, issues)), JSON.stringify(row.targets));
+            // 旧诊断与其哈希仍按上面的原记录核验；只有当前缺插入标记的修复位置变化。
+            const currentTargets = row.name === 'missing-table-selection-binding'
+                ? [row.targets.find(target => target.path === '/tableBindings/3'),
+                    { path: '/sections/0/body', oldSha256: hashDraft(draft.sections[0].body), value: draft.sections[0].body },
+                    { path: '/sections/1/body', oldSha256: hashDraft(draft.sections[1].body), value: draft.sections[1].body }]
+                : row.targets;
+            assert.equal(JSON.stringify(buildRepairTargets(draft, issues)), JSON.stringify(currentTargets));
             assert.equal(JSON.stringify(draft), original);
         });
     }
