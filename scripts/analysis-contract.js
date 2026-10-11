@@ -1145,6 +1145,10 @@ function classifySourceQuantitativeEvidence(sourceText, sentences = null) {
         const localContext = values.slice(Math.max(0, index - 1), Math.min(values.length, index + 2)).join(' ');
         return /(?:experiment|evaluation|result|benchmark|test set|dataset|table|metric|实验|评测|结果|基准|测试集|数据集|表格|指标)/i
             .test(localContext)
+            // 听测结果须明确本方法、实测指标和已发生的数值变化。
+            // 人数、量表、音频时长、预测及转述的旧工作不能用这条规则通过。
+            || /^In (?:a|our) listening study\b[^,.;]{0,100},\s*(?:our|the proposed|this|region[- ]aware)\s+(?:method|model|system|approach|masking)\s+(?:reduces?|lowers?|improves?|increases?)\s+(?:the\s+)?(?:perceived\s+accent|accent\s+(?:ratings?|scores?))\s+from\s+[+-]?\d+(?:\.\d+)?\s+to\s+[+-]?\d+(?:\.\d+)?\b/i.test(sentence)
+                && /\b(?:baseline|control|reference)\b/i.test(sentence)
             || hasCoreSummaryStatisticalResult(sentence)
                 && /\b(?:adjusted|mixed[- ]effects?|count\s+models?|interaction|groups?)\b|调整后|计数模型|交互项|组别/i.test(localContext);
     }) || hasSourceMeasuredLossComparison(values);
