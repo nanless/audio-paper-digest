@@ -128,10 +128,14 @@ function current(paperId) {
     const value = scope.getStore();
     return value && (!paperId || value.feedback.paperId === normalizedId(paperId)) ? value : null;
 }
+const PRIMARY_BODY_REWRITE_STAGES = ['openSourceScan', 'revision', 'tableRepair', 'methodRepair', 'structureRepair'];
+function usesPrimaryFeedback(stage) {
+    return ['primaryAnalysis', 'scoringAudit', ...PRIMARY_BODY_REWRITE_STAGES].includes(stage);
+}
 function fingerprintFields(stage, declaredStage) {
-    if (!['primaryAnalysis', 'coreSummaryRepair', 'apiReaderArticle', 'tagSelection', 'scoringAudit'].includes(stage)) return {};
+    if (!['primaryAnalysis', 'coreSummaryRepair', 'apiReaderArticle', 'tagSelection', 'scoringAudit', ...PRIMARY_BODY_REWRITE_STAGES].includes(stage)) return {};
     const scopeValue = current();
-    const active = scopeValue && (['primaryAnalysis', 'scoringAudit'].includes(stage) ? String(scopeValue.feedback.primaryFeedback || '').trim() : stage === 'coreSummaryRepair'
+    const active = scopeValue && (usesPrimaryFeedback(stage) ? String(scopeValue.feedback.primaryFeedback || '').trim() : stage === 'coreSummaryRepair'
         ? scopeValue.feedback.coreFeedback.trim() : stage === 'tagSelection'
             ? String(scopeValue.feedback.tagFeedback || '').trim() : (scopeValue.feedback.readerFeedback.trim() || String(scopeValue.feedback.primaryFeedback || '').trim())) ? scopeValue : null;
     const saved = declaredStage?.factReview;
@@ -161,7 +165,7 @@ function assertScoringRequestAllowed(declaredStage) {
 function reviewFeedback(stage, paperId) {
     const value = current(paperId);
     if (!value) return '';
-    const primaryText = ['primaryAnalysis', 'scoringAudit'].includes(stage) ? value.feedback.primaryFeedback || '' : stage === 'coreSummaryRepair' ? value.feedback.coreFeedback : stage === 'tagSelection' ? value.feedback.tagFeedback || '' : value.feedback.readerFeedback || value.feedback.primaryFeedback || '';
+    const primaryText = usesPrimaryFeedback(stage) ? value.feedback.primaryFeedback || '' : stage === 'coreSummaryRepair' ? value.feedback.coreFeedback : stage === 'tagSelection' ? value.feedback.tagFeedback || '' : value.feedback.readerFeedback || value.feedback.primaryFeedback || '';
     const text = stage === 'scoringAudit'
         ? [primaryText, value.feedback.scoringFeedback || ''].filter(item => item.trim()).join('\n') : primaryText;
     if (!text.trim()) return '';
@@ -170,7 +174,7 @@ function reviewFeedback(stage, paperId) {
 function validateRepairedClaims(stage, text, paperId) {
     const value = current(paperId);
     if (!value) return;
-    const claims = ['primaryAnalysis', 'scoringAudit'].includes(stage) ? value.feedback.rejectedPrimaryClaims || [] : stage === 'coreSummaryRepair' ? value.feedback.rejectedCoreClaims : stage === 'tagSelection' ? value.feedback.rejectedTagClaims || [] : value.feedback.rejectedReaderClaims;
+    const claims = usesPrimaryFeedback(stage) ? value.feedback.rejectedPrimaryClaims || [] : stage === 'coreSummaryRepair' ? value.feedback.rejectedCoreClaims : stage === 'tagSelection' ? value.feedback.rejectedTagClaims || [] : value.feedback.rejectedReaderClaims;
     const scoringClaims = stage === 'scoringAudit' ? value.feedback.rejectedScoringClaims || [] : [];
     if ([...claims, ...scoringClaims].some(claim => String(text).includes(claim))) fail('模型输出仍包含已证实错误的原句');
 }

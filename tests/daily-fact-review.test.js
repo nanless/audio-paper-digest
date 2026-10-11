@@ -474,3 +474,78 @@ test('各自合法的主分析与评分反馈仍须遵守评分组合上下文�
     review.validateShape(sample.feedback);
     assert.equal(daily.stableHash(sample.feedback), originalHash);
 });
+
+
+test('正文重写收到主分析纠错且不能接受重新引入的错误', async t => {
+    const sample = await fixture(t);
+    const feedback = {
+        ...sample.feedback,
+        primaryFeedback: '正文各阶段保留文本教师 MSE，不得重新写成余弦蒸馏。',
+        rejectedPrimaryClaims: [wrong]
+    };
+    const bound = review.validateFeedback(feedback, sample.plan, sample.paper);
+    const corrected = original.replace(wrong, '文本教师 MSE。');
+    await review.withFactReview(bound, async () => {
+        let requestCount = 0;
+        await assert.rejects(deep.reviseAnalysis(sample.paper, corrected, sourceText, null, {
+            callModelFn: async messages => {
+                requestCount += 1;
+                assert.ok(messages[0].content.includes(feedback.primaryFeedback));
+                assert.ok(messages[0].content.includes(quote));
+                return original;
+            }
+        }), /模型输出仍包含/);
+        assert.equal(requestCount, 1);
+        for (const stage of ['openSourceScan', 'revision', 'tableRepair', 'methodRepair', 'structureRepair']) {
+            assert.deepEqual(review.fingerprintFields(stage), { factReview: bound.proof });
+            assert.ok(review.reviewFeedback(stage).includes(feedback.primaryFeedback));
+            assert.throws(() => review.validateRepairedClaims(stage, original), /模型输出仍包含/);
+        }
+    });
+});
+
+test('评分前拒绝正文遗留错误且不支付评分请求', async t => {
+    const sample = await fixture(t);
+    const feedback = { ...sample.feedback, primaryFeedback: '修正错误蒸馏事实。', rejectedPrimaryClaims: [wrong] };
+    const bound = review.validateFeedback(feedback, sample.plan, sample.paper);
+    let scoringRequests = 0;
+    await review.withFactReview(bound, async () => {
+        await assert.rejects(deep.auditTypeAwareScoringDetailed(original, sourceText, {
+            callModelFn: async () => { scoringRequests += 1; throw new Error('不应评分'); }
+        }), /模型输出仍包含/);
+    });
+    assert.equal(scoringRequests, 0);
+});
+
+test('已缓存坏正文不能复用，旧无反馈正文阶段指纹保持兼容', async t => {
+    const sample = await fixture(t);
+    const before = deep.buildTextStageFingerprint('revision', original, sourceText);
+    assert.deepEqual(review.fingerprintFields('revision'), {});
+    const feedback = { ...sample.feedback, primaryFeedback: '保留文本教师 MSE。', rejectedPrimaryClaims: [wrong] };
+    const bound = review.validateFeedback(feedback, sample.plan, sample.paper);
+    review.withFactReview(bound, () => {
+        const fingerprint = deep.buildTextStageFingerprint('revision', original, sourceText);
+        assert.notEqual(fingerprint, before);
+        sample.paper.analysisManifest.stages.revision = { status: 'complete', fingerprint, factReview: bound.proof };
+        sample.paper.analysisStageCheckpoints.revision = original;
+        const prepared = deep.prepareTextRecoveryStage(sample.paper, sample.paper.analysisManifest, 'revision', original, sourceText);
+        assert.equal(prepared.invalidated, true);
+        assert.notEqual(sample.paper.analysisManifest.stages.revision?.status, 'complete');
+    });
+    assert.equal(deep.buildTextStageFingerprint('revision', original, sourceText), before);
+});
+
+
+test('已保护主分析缺原反馈时正文重写不发请求且不改旧证明', async t => {
+    const sample = await fixture(t);
+    const feedback = { ...sample.feedback, primaryFeedback: '保留文本教师 MSE。', rejectedPrimaryClaims: [wrong] };
+    const bound = review.validateFeedback(feedback, sample.plan, sample.paper);
+    sample.paper.analysisManifest.stages.primaryAnalysis.factReview = bound.proof;
+    const before = JSON.stringify(sample.paper.analysisManifest);
+    let requests = 0;
+    await assert.rejects(deep.reviseAnalysis(sample.paper, original, sourceText, null, {
+        callModelFn: async () => { requests += 1; return original; }
+    }), /缺少对应的已绑定主分析反馈/);
+    assert.equal(requests, 0);
+    assert.equal(JSON.stringify(sample.paper.analysisManifest), before);
+});

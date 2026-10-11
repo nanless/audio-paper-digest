@@ -995,6 +995,8 @@ function hasAffirmativeDemoEvidence(sourceText) {
 async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', options = {}) {
     const scoringFactReview = require('./lib/daily-fact-review');
     scoringFactReview.assertScoringRequestAllowed(options.declaredStage);
+    // 评分只准改评分字段；正文中的已证实错误须先由正文重写阶段处理。
+    scoringFactReview.validateRepairedClaims('primaryAnalysis', analysis);
     const factFeedback = scoringFactReview.reviewFeedback('scoringAudit');
     let lastError = null;
     let validationFeedback = '这是第一次输出，没有上一次校验错误。';
@@ -1015,7 +1017,8 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', opti
             sourceEvidence: evidenceContext,
             validationFeedback
         }) + (factFeedback ? `\n来源绑定的事实纠错（评分理由不得重新引入已证实错误）：\n${factFeedback}` : '');
-        const raw = await callModel(
+        const request = options.callModelFn || callModel;
+        const raw = await request(
             [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
             16000,
             { temperature: SCORING_AUDIT_TEMPERATURE,
@@ -9171,8 +9174,18 @@ function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourc
         && !policyFields.declaredRepairRequestPolicyMismatch && ((stage === 'structureRepair'
         && legacyStructureCompatibilityIsValid(paper, manifest, sourceText))
         || canReuseStageForCoreSummaryRecovery(paper, manifest, sourceText, stage));
-    const invalidated = compatibilityReused
-        ? false : invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint);
+    let rejectedCachedClaim = false;
+    if (['openSourceScan', 'revision', 'tableRepair', 'methodRepair', 'structureRepair'].includes(stage)
+        && typeof savedCheckpoint === 'string') {
+        try { require('./lib/daily-fact-review').validateRepairedClaims(stage, savedCheckpoint, paper.arxivId); }
+        catch (error) {
+            if (error.code !== 'DAILY_FACT_REVIEW_INTEGRITY') throw error;
+            rejectedCachedClaim = true;
+        }
+    }
+    const invalidated = compatibilityReused && !rejectedCachedClaim
+        ? false : invalidateRecoveryStageIfChanged(paper, manifest, stage, rejectedCachedClaim
+            ? stableFingerprint({ fingerprint, rejectedPrimaryClaim: true }) : fingerprint);
     if (invalidated) {
         // 旧阶段失效后要发新请求，只能用当前正文、证据和实际预算记录新指纹。
         inputAnalysis = getTextStageInputAnalysis(paper, stage, paper.analysisCheckpoint || currentAnalysis);
@@ -9192,8 +9205,9 @@ function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourc
         evidenceSha256,
         inputAnalysisSha256,
         promptTextContract,
-        fingerprint: compatibilityReused ? manifest.stages[stage].fingerprint : fingerprint,
+        fingerprint: compatibilityReused && !rejectedCachedClaim ? manifest.stages[stage].fingerprint : fingerprint,
         repairRequestPolicy: resolveRepairRequestPolicy(stage),
+        factReviewFields: require('./lib/daily-fact-review').fingerprintFields(stage),
         compatibilityReused,
         invalidated
     };
@@ -14719,9 +14733,11 @@ async function analyzePaperDeepInternal(paper) {
                 analysis = syncResourceFieldsFromOpenSource(analysis, ossText);
                 console.log(`    [deep] ✅ 开源扫描完成`);
             }
+            require('./lib/daily-fact-review').validateRepairedClaims('openSourceScan', analysis, arxivId);
             markRecoveryStage(analysisManifest, 'openSourceScan', ossText ? 'complete' : 'invalid_output', {
                 ...(resolveAuxiliaryRequestPolicy('openSourceScan')
                     ? { auxiliaryRequestPolicy: resolveAuxiliaryRequestPolicy('openSourceScan') } : {}),
+                ...openSourceStage.factReviewFields,
                 evidenceChars: openSourceStage.evidenceChars,
                 evidenceSha256: openSourceStage.evidenceSha256,
                 inputAnalysisSha256: openSourceStage.inputAnalysisSha256,
@@ -14839,9 +14855,11 @@ async function analyzePaperDeepInternal(paper) {
                 analysis,
                 extractSectionByTitle(analysis, '开源详情')
             );
+            require('./lib/daily-fact-review').validateRepairedClaims('revision', analysis, arxivId);
             markRecoveryStage(analysisManifest, 'revision', 'complete', {
                 ...(resolveAuxiliaryRequestPolicy('revision')
                     ? { auxiliaryRequestPolicy: resolveAuxiliaryRequestPolicy('revision') } : {}),
+                ...revisionStage.factReviewFields,
                 evidenceChars: revisionStage.evidenceChars,
                 evidenceSha256: revisionStage.evidenceSha256,
                 inputAnalysisSha256: revisionStage.inputAnalysisSha256,
@@ -14880,7 +14898,9 @@ async function analyzePaperDeepInternal(paper) {
                 analysis = removeUnapprovedMarkdownImages(fixed.trim(), []);
                 console.log(`    [deep] ✅ 表格补充完成`);
             }
+            require('./lib/daily-fact-review').validateRepairedClaims('tableRepair', analysis, arxivId);
             markRecoveryStage(analysisManifest, 'tableRepair', changed ? 'complete' : 'not_needed', {
+                ...tableRepairStage.factReviewFields,
                 evidenceChars: tableRepairStage.evidenceChars,
                 evidenceSha256: tableRepairStage.evidenceSha256,
                 inputAnalysisSha256: tableRepairStage.inputAnalysisSha256,
@@ -14920,7 +14940,9 @@ async function analyzePaperDeepInternal(paper) {
                 analysis = removeUnapprovedMarkdownImages(fixed.trim(), []);
                 console.log(`    [deep] ✅ 方法概述补充完成`);
             }
+            require('./lib/daily-fact-review').validateRepairedClaims('methodRepair', analysis, arxivId);
             markRecoveryStage(analysisManifest, 'methodRepair', changed ? 'complete' : 'not_needed', {
+                ...methodRepairStage.factReviewFields,
                 evidenceChars: methodRepairStage.evidenceChars,
                 evidenceSha256: methodRepairStage.evidenceSha256,
                 inputAnalysisSha256: methodRepairStage.inputAnalysisSha256,
@@ -14994,6 +15016,7 @@ async function analyzePaperDeepInternal(paper) {
                 { requireCurrentEvaluationTitle }
             );
             analysis = finalization.analysis;
+            require('./lib/daily-fact-review').validateRepairedClaims('structureRepair', analysis, arxivId);
             analysisManifest.contracts = {
                 ...(analysisManifest.contracts || {}),
                 experimentTables: EXPERIMENT_TABLE_CONTRACT_VERSION,
@@ -15007,6 +15030,7 @@ async function analyzePaperDeepInternal(paper) {
                 {
                     deterministicNormalization: normalizedChanged,
                     normalizationIssues: preNormalizationIssues,
+                    ...structureRepairStage.factReviewFields,
                     evidenceChars: structureRepairStage.evidenceChars,
                     evidenceSha256: structureRepairStage.evidenceSha256,
                     inputAnalysisSha256: structureRepairStage.inputAnalysisSha256,
@@ -16091,11 +16115,11 @@ async function scanOpensource(paper, sourceText, preparedEvidence = null) {
     const evidence = typeof preparedEvidence === 'string'
         ? preparedEvidence
         : buildStageEvidenceContext('openSourceScan', '', sourceText);
-    const prompt = loadPrompt(currentTextStagePromptPath('openSourceScan'), {
+    const prompt = appendPrimaryFactReviewPrompt(loadPrompt(currentTextStagePromptPath('openSourceScan'), {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         textForAnalysis: evidence
-    });
+    }), 'openSourceScan', paper);
     try {
         return await callModel([{ role: 'user', content: prompt }], 8000,
             { usageContext: { stage: 'openSourceScan' } });
@@ -16427,20 +16451,29 @@ function hasOpenSourceLinks(analysis) {
     return false;
 }
 
+function appendPrimaryFactReviewPrompt(prompt, stage, paper) {
+    const review = require('./lib/daily-fact-review');
+    review.assertScoringRequestAllowed(paper.analysisManifest?.stages?.primaryAnalysis);
+    const feedback = review.reviewFeedback(stage, getPaperArxivId(paper));
+    return feedback ? `${prompt}\n来源绑定的事实纠错（重写后不得重新引入已证实错误）：\n${feedback}` : prompt;
+}
+
 async function reviseAnalysis(paper, existingAnalysis, sourceText, preparedEvidence = null, options = {}) {
     const evidence = typeof preparedEvidence === 'string'
         ? preparedEvidence
         : buildStageEvidenceContext('revision', existingAnalysis, sourceText);
-    const prompt = loadPrompt(currentTextStagePromptPath('revision'), {
+    const prompt = appendPrimaryFactReviewPrompt(loadPrompt(currentTextStagePromptPath('revision'), {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         existingAnalysis: existingAnalysis,
         textForAnalysis: evidence,
         tagPromptText: TAG_RULES.projection
-    });
+    }), 'revision', paper);
     const request = options.callModelFn || callModel;
-    return await request([{ role: 'user', content: prompt }], REVISION_MAX_TOKENS,
+    const revised = await request([{ role: 'user', content: prompt }], REVISION_MAX_TOKENS,
         { usageContext: { stage: 'revision' } });
+    require('./lib/daily-fact-review').validateRepairedClaims('revision', revised, getPaperArxivId(paper));
+    return revised;
 }
 
 function replaceOrInsertRequiredSection(analysis, title, content) {
@@ -16903,14 +16936,14 @@ async function repairMissingAnalysisSections(
         : buildStageEvidenceContext('structureRepair', existingAnalysis, sourceText);
 
     for (let attempt = 1; attempt <= 2 && structureIssues.length > 0; attempt++) {
-        const prompt = loadPrompt(currentTextStagePromptPath('structureRepair'), {
+        const prompt = appendPrimaryFactReviewPrompt(loadPrompt(currentTextStagePromptPath('structureRepair'), {
             title: paper.title,
             arxivId: getPaperArxivId(paper),
             missingSections: structureIssues.join('、'),
             validationFeedback,
             existingAnalysis: currentAnalysis,
             textForAnalysis: evidenceContext
-        });
+        }), 'structureRepair', paper);
         const repairCallModel = options.callModelFn || callModel;
         const repairedText = await repairCallModel([{ role: 'user', content: prompt }], STRUCTURE_MAX_TOKENS,
             { usageContext: { stage: 'structureRepair' },
@@ -17118,14 +17151,14 @@ async function checkAndFixMethodSection(paper, analysis, sourceText, preparedEvi
 
     console.log(`    [deep] 🔍 检测到方法概述不够详细，触发补充...`);
 
-    const prompt = loadPrompt(currentTextStagePromptPath('methodRepair'), {
+    const prompt = appendPrimaryFactReviewPrompt(loadPrompt(currentTextStagePromptPath('methodRepair'), {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         methodSection,
         textForAnalysis: typeof preparedEvidence === 'string'
             ? preparedEvidence
             : buildStageEvidenceContext('methodRepair', analysis, sourceText)
-    });
+    }), 'methodRepair', paper);
 
     const fixedSection = await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS,
         { usageContext: { stage: 'methodRepair' } });
@@ -17210,14 +17243,14 @@ async function checkAndFixTables(paper, analysis, sourceText, preparedEvidence =
 
     console.log(`    [deep] 🔍 检测到实验结果可能缺少表格，触发补充...`);
 
-    const prompt = loadPrompt(currentTextStagePromptPath('tableRepair'), {
+    const prompt = appendPrimaryFactReviewPrompt(loadPrompt(currentTextStagePromptPath('tableRepair'), {
         title: paper.title,
         arxivId: getPaperArxivId(paper),
         resultsSection,
         textForAnalysis: typeof preparedEvidence === 'string'
             ? preparedEvidence
             : buildStageEvidenceContext('tableRepair', analysis, sourceText)
-    });
+    }), 'tableRepair', paper);
 
     const fixedSection = await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS,
         { usageContext: { stage: 'tableRepair' },
