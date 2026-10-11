@@ -669,6 +669,11 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature, opti
         }
         return body;
     }
+    const readerJsonStage = ['apiReaderArticle', 'apiReaderRepair'].includes(options.usageContext?.stage);
+    if (apiType === 'openai' && model === 'mimo-v2.6-flash' && readerJsonStage
+        && options.readerResponseFormat !== undefined && options.readerResponseFormat !== 'json_object') {
+        throw new Error('长文 JSON 请求格式必须为 json_object');
+    }
     // OpenAI: 标准格式
     return {
         model,
@@ -678,6 +683,9 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature, opti
         })),
         max_tokens: maxTokens,
         temperature,
+        ...(apiType === 'openai' && model === 'mimo-v2.6-flash' && readerJsonStage
+            && options.readerResponseFormat === 'json_object'
+            ? { response_format: { type: 'json_object' } } : {}),
         ...(apiType === 'openai' && model === 'mimo-v2.6-flash'
             && options.readerThinkingMode !== undefined
             ? { thinking: { type: validateReaderThinkingMode(options.readerThinkingMode) } } : {}),

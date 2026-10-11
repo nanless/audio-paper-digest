@@ -15,7 +15,7 @@ const CONTRACT = 'reader-recovery-diagnostics-revision-v1';
 const ALLOWED_FIELDS = Object.freeze(['repairImplementationSha256', 'tableCompilerSha256', 'draftOrderContract',
     'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
     'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256',
-    'readerRecoveryEpochSha256']);
+    'readerRecoveryEpochSha256', 'readerJsonRequestPolicy']);
 const implementationFields = ALLOWED_FIELDS.filter(field => field.endsWith('Sha256'));
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const withoutRevisionFields = identity => Object.fromEntries(Object.entries(identity)
@@ -101,7 +101,18 @@ function finishRevisionArchives(directory, identity, payload) {
     return payload;
 }
 
+function assertReaderJsonRequestPolicy(policy) {
+    if (policy === undefined) return;
+    if (!policy || typeof policy !== 'object' || Array.isArray(policy)
+        || Object.keys(policy).sort().join(',') !== 'contract,model,responseFormat'
+        || policy.contract !== 'api-reader-json-request-policy-v1'
+        || policy.model !== 'mimo-v2.6-flash' || policy.responseFormat !== 'json_object') {
+        throw new Error('长文草稿的 JSON 请求设置无效');
+    }
+}
+
 function loadReaderRecoveryRevision(directory, identity, options = {}) {
+    assertReaderJsonRequestPolicy(identity?.readerJsonRequestPolicy);
     const expectedPixels = options.pixelEvidenceSha256;
     if (expectedPixels !== undefined && !/^[a-f0-9]{64}$/.test(expectedPixels)) {
         throw new Error('Reader recovery pixel evidence identity is invalid');
@@ -167,6 +178,11 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
         if (!payload || hashDraft(payload) !== envelope.payloadSha256) {
             throw new Error('Reader diagnostic revision candidate changed during audit');
         }
+        const oldJsonPolicy = envelope.identity.readerJsonRequestPolicy;
+        const newJsonPolicy = identity.readerJsonRequestPolicy;
+        assertReaderJsonRequestPolicy(oldJsonPolicy);
+        // 仅旧省略声明到当前明确格式允许保留原草稿；反向撤掉声明不能复用。
+        if (oldJsonPolicy !== undefined && newJsonPolicy === undefined) continue;
         if (!isDeepStrictEqual(withoutRevisionFields(envelope.identity), withoutRevisionFields(identity))) continue;
         verifyPixels(payload);
         const changedFields = ALLOWED_FIELDS.filter(field => !isDeepStrictEqual(envelope.identity[field], identity[field]));

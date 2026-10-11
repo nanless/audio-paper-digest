@@ -75,10 +75,19 @@ const { currentPromptTextContract } = require('./scripts/lib/prompt-text-version
         const currentContracts = { promptTextContract: currentPromptTextContract('apiReaderArticle'),
             repairPromptTextContract: currentPromptTextContract('apiReaderRepair') };
         const policy = { contract: 'api-reader-thinking-policy-v1', model: 'mimo-v2.6-flash', thinkingMode: 'disabled' };
-        assert.equal(fingerprint({ status: 'complete', ...currentContracts, readerRequestPolicy: policy }), current);
+        const jsonPolicy = { contract: 'api-reader-json-request-policy-v1', model: 'mimo-v2.6-flash', responseFormat: 'json_object' };
+        const oldThinkingOnly = { status: 'complete', ...currentContracts, readerRequestPolicy: policy };
+        const oldThinkingBytes = JSON.stringify(oldThinkingOnly);
+        const oldThinkingFingerprint = fingerprint(oldThinkingOnly);
+        assert.notEqual(oldThinkingFingerprint, current);
+        assert.equal(fingerprint(oldThinkingOnly), oldThinkingFingerprint);
+        assert.equal(JSON.stringify(oldThinkingOnly), oldThinkingBytes);
+        assert.equal(fingerprint({ status: 'complete', ...currentContracts, readerRequestPolicy: policy, readerJsonRequestPolicy: jsonPolicy }), current);
         Config.ANALYSIS_CONFIG.apiReaderThinkingMode = 'enabled';
         assert.notEqual(fingerprint({ status: 'pending' }), current);
-        assert.notEqual(fingerprint({ status: 'complete', ...currentContracts, readerRequestPolicy: policy }), current);
+        assert.notEqual(fingerprint({ status: 'complete', ...currentContracts, readerRequestPolicy: policy, readerJsonRequestPolicy: jsonPolicy }), current);
+        assert.notEqual(fingerprint(oldThinkingOnly), oldThinkingFingerprint);
+        assert.equal(JSON.stringify(oldThinkingOnly), oldThinkingBytes);
         assert.equal(fingerprint(oldStage), oldFingerprint);
         assert.equal(JSON.stringify(oldStage), oldBytes);
         for (const invalid of [{ ...policy, contract: 'other' }, { ...policy, model: 'other' },

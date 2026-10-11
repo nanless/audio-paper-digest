@@ -7351,6 +7351,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         const requestUsesEscalatedRepairBudget = Boolean(repairContext && useEscalatedRepairBudget);
         try {
             const requestOptions = {
+                ...(resolveApiReaderJsonRequestPolicy()
+                    ? { readerResponseFormat: resolveApiReaderJsonRequestPolicy().responseFormat } : {}),
                 ...(resolveApiReaderRequestPolicy()
                     ? { readerThinkingMode: resolveApiReaderRequestPolicy().thinkingMode } : {}),
                 temperature: attempt === 1 && !repairContext
@@ -8895,6 +8897,21 @@ function resolveApiReaderRequestPolicy() {
         thinkingMode: ANALYSIS_CONFIG.apiReaderThinkingMode };
 }
 
+function resolveApiReaderJsonRequestPolicy() {
+    if (!resolveApiReaderRequestPolicy()) return null;
+    return { contract: 'api-reader-json-request-policy-v1', model: 'mimo-v2.6-flash',
+        responseFormat: 'json_object' };
+}
+
+function validateDeclaredApiReaderJsonRequestPolicy(policy) {
+    if (!policy || typeof policy !== 'object' || Array.isArray(policy)
+        || Object.keys(policy).sort().join(',') !== 'contract,model,responseFormat'
+        || policy.contract !== 'api-reader-json-request-policy-v1'
+        || policy.model !== 'mimo-v2.6-flash' || policy.responseFormat !== 'json_object') {
+        throw new Error('已保存的长文 JSON 请求策略不安全或字段不完整');
+    }
+}
+
 function validateDeclaredApiReaderRequestPolicy(policy) {
     if (!policy || typeof policy !== 'object' || Array.isArray(policy)
         || Object.keys(policy).sort().join(',') !== 'contract,model,thinkingMode'
@@ -8907,7 +8924,7 @@ function validateDeclaredApiReaderRequestPolicy(policy) {
 
 function apiReaderRequestPolicyFields() {
     const policy = resolveApiReaderRequestPolicy();
-    return policy ? { readerRequestPolicy: policy } : {};
+    return policy ? { readerRequestPolicy: policy, readerJsonRequestPolicy: resolveApiReaderJsonRequestPolicy() } : {};
 }
 
 function buildApiReaderBaseFingerprint(
@@ -8915,6 +8932,9 @@ function buildApiReaderBaseFingerprint(
 ) {
     if (declaredPrompt && Object.prototype.hasOwnProperty.call(declaredPrompt, 'readerRequestPolicy')) {
         validateDeclaredApiReaderRequestPolicy(declaredPrompt.readerRequestPolicy);
+    }
+    if (declaredPrompt && Object.prototype.hasOwnProperty.call(declaredPrompt, 'readerJsonRequestPolicy')) {
+        validateDeclaredApiReaderJsonRequestPolicy(declaredPrompt.readerJsonRequestPolicy);
     }
     const freshIdentity = require('./lib/fresh-analysis-context.js').freshAnalysisIdentity(arxivId);
     const declaredPromptTextContract = String(promptTextContract || '');
@@ -8928,7 +8948,13 @@ function buildApiReaderBaseFingerprint(
         // 旧已保存阶段没有此字段时，仍核验原配方，不补写新策略。
         ...(!declaredPrompt || declaredPrompt.status !== 'complete'
             || declaredPrompt.readerRequestPolicy
-            ? apiReaderRequestPolicyFields() : {}),
+            ? (resolveApiReaderRequestPolicy() ? { readerRequestPolicy: resolveApiReaderRequestPolicy() } : {}) : {}),
+        ...(!declaredPrompt || declaredPrompt.status !== 'complete' || declaredPrompt.readerJsonRequestPolicy
+            ? (resolveApiReaderJsonRequestPolicy() ? { readerJsonRequestPolicy: resolveApiReaderJsonRequestPolicy() } : {}) : {}),
+        ...(declaredPrompt?.readerJsonRequestPolicy
+            && stableFingerprint(declaredPrompt.readerJsonRequestPolicy)
+                !== stableFingerprint(resolveApiReaderJsonRequestPolicy())
+            ? { declaredReaderJsonRequestPolicyMismatch: declaredPrompt.readerJsonRequestPolicy } : {}),
         ...(declaredPrompt?.readerRequestPolicy
             && stableFingerprint(declaredPrompt.readerRequestPolicy)
                 !== stableFingerprint(resolveApiReaderRequestPolicy())
@@ -10568,7 +10594,10 @@ async function _callModelOnce(messages, maxTokens, config, budget, apiType, time
     const apiUrl = buildApiUrl(apiType, config.endpoint);
     const temperature = Number.isFinite(config.temperature) ? config.temperature : API_TEMPERATURE;
     const bodyObj = buildRequestBody(apiType, config.model, messages, maxTokens, temperature,
-        { readerThinkingMode: ['apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe']
+        { usageContext: config.usageContext,
+            readerResponseFormat: ['apiReaderArticle', 'apiReaderRepair'].includes(config.usageContext?.stage)
+                ? config.readerResponseFormat : undefined,
+            readerThinkingMode: ['apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe']
             .includes(config.usageContext?.stage) ? config.readerThinkingMode : undefined,
             repairThinkingMode: ['coreSummaryRepair', 'structureRepair', 'tableRepair']
                 .includes(config.usageContext?.stage) ? config.repairThinkingMode : undefined });
@@ -10656,6 +10685,7 @@ async function callModel(messages, maxTokens = 8000, options = {}) {
     return await callModelWithConfig(messages, maxTokens, resolveApiMaxRetries(options.maxRetries), {
         ...DEEP_CONFIG,
         readerThinkingMode: options.readerThinkingMode,
+        readerResponseFormat: options.readerResponseFormat,
         repairThinkingMode: options.repairThinkingMode,
         usageContext: options.usageContext,
         usageDirectory: options.usageDirectory,
