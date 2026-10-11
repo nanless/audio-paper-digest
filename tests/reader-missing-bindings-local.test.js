@@ -106,8 +106,8 @@ test('缺口不明确或选择标记位置错误时不授权新增绑定；旧�
     assert.equal(repair.buildRepairContext(sample.draft, [], '').atomicOperation, null);
     sample.draft.sections[0].body += '\n\n[[TABLE_4]]';
     assert.equal(repair.buildRepairContext(sample.draft, sample.context.issues, '').atomicOperation, null);
-    assert.equal(versions.currentPromptTextContract('apiReaderRepair'), 'analysis-prompt-text-v6');
-    assert.equal(versions.currentTextStagePromptPath('apiReaderRepair'), 'prompts/api-reader-repair-v6.md');
+    assert.equal(versions.currentPromptTextContract('apiReaderRepair'), 'analysis-prompt-text-v7');
+    assert.equal(versions.currentTextStagePromptPath('apiReaderRepair'), 'prompts/api-reader-repair-v7.md');
     assert.equal(versions.promptFilePathForContract('apiReaderRepair', 'analysis-prompt-text-v5'), 'prompts/api-reader-repair-v5.md');
     assert.equal(deep.runtimePromptTemplateSha256('prompts/api-reader-repair-v5.md'),
         '89faba16d2b3af5a1549e13c85800bc7301d3a4217a1d9ae362b33c76cff9a34');

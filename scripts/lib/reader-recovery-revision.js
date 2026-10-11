@@ -15,8 +15,9 @@ const CONTRACT = 'reader-recovery-diagnostics-revision-v1';
 const ALLOWED_FIELDS = Object.freeze(['repairImplementationSha256', 'tableCompilerSha256', 'draftOrderContract',
     'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
     'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256',
-    'readerRecoveryEpochSha256', 'readerJsonRequestPolicy', 'repairPromptSha256']);
-const implementationFields = ALLOWED_FIELDS.filter(field => field.endsWith('Sha256') && field !== 'repairPromptSha256');
+    'readerRecoveryEpochSha256', 'readerJsonRequestPolicy', 'repairPromptSha256', 'promptSha256']);
+const implementationFields = ALLOWED_FIELDS.filter(field => field.endsWith('Sha256')
+    && !['repairPromptSha256', 'promptSha256'].includes(field));
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
 const withoutRevisionFields = identity => Object.fromEntries(Object.entries(identity)
     .filter(([key]) => !ALLOWED_FIELDS.includes(key)));
@@ -195,11 +196,17 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
         if (oldJsonPolicy !== undefined && newJsonPolicy === undefined) continue;
         // 仅允许已核验的固定 v3→v4 和 v5→v6 修复正文；其他提示词仍不可迁移。
         // 提示词变化本身不发放正文尝试额度，也不清除已有失败计数。
+        const completeTablePromptUpgrade = envelope.identity.promptSha256 === '929ec8f6e93b06edf85158e2fdf46de498111581373e54c06d457b265b00aea5'
+            && identity.promptSha256 === 'a41f67166a0f366a10bf23cc17aa51ca6105b246ce7964ec14c21d6b4018f380'
+            && envelope.identity.repairPromptSha256 === '7cb7332fa3085b4497c31d73a7075eb10f8700cd84d23f68875d8341cb97f5de'
+            && identity.repairPromptSha256 === 'cdbf91f9bb2fb48e085c72195000059bdb2ccc4eb6a0bd47a6f31bb9d4835965';
+        if (envelope.identity.promptSha256 !== identity.promptSha256 && !completeTablePromptUpgrade) continue;
         if (envelope.identity.repairPromptSha256 !== identity.repairPromptSha256
             && !(envelope.identity.repairPromptSha256 === 'c63148bca8bed36a8c31b0327b87e2a1e9ddf51fd8641813827f5e8f1eb4a6ec'
                 && identity.repairPromptSha256 === '8d1483030d1167b9ac3b81602c267ae5e5ec0fc5e88fb7308aea5f1e2a52d470')
             && !(envelope.identity.repairPromptSha256 === '89faba16d2b3af5a1549e13c85800bc7301d3a4217a1d9ae362b33c76cff9a34'
-                && identity.repairPromptSha256 === '7cb7332fa3085b4497c31d73a7075eb10f8700cd84d23f68875d8341cb97f5de')) continue;
+                && identity.repairPromptSha256 === '7cb7332fa3085b4497c31d73a7075eb10f8700cd84d23f68875d8341cb97f5de')
+            && !completeTablePromptUpgrade) continue;
         if (!isDeepStrictEqual(withoutRevisionFields(envelope.identity), withoutRevisionFields(identity))) continue;
         verifyPixels(payload);
         const changedFields = ALLOWED_FIELDS.filter(field => !isDeepStrictEqual(envelope.identity[field], identity[field]));
@@ -310,8 +317,9 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     if (grantOrTransferAllowance) {
         updated.implementationRepairAllowanceLineage = IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT;
     }
-    const transferUnusedAllowance = old.changedFields.length === 1
-        && old.changedFields[0] === 'repairPromptSha256' && Boolean(previousActiveAllowance);
+    const transferUnusedAllowance = old.changedFields.length > 0
+        && old.changedFields.every(field => ['repairPromptSha256', 'promptSha256'].includes(field))
+        && Boolean(previousActiveAllowance);
     if (previousActiveAllowance && !transferUnusedAllowance) {
         updated.consumedImplementationAllowanceSha256 = [...new Set([
             ...(updated.consumedImplementationAllowanceSha256 || []),

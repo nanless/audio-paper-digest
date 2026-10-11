@@ -690,3 +690,48 @@ test('其他修复提示词SHA不得冒充固定v5到v6迁移', t => {
     assert.equal(sample.enabled(() => loadReaderRecoveryRevision(sample.directory, sample.identity)), null);
     assert.deepEqual(fs.readFileSync(filename), originalBytes);
 });
+
+test('完整原表固定提示词升级保留已付费草稿、次数和归档字节', t => {
+    const sample = fixture(t);
+    sample.payload.draft = normalizeReaderDraftOrder(sample.payload.draft).draft;
+    sample.payload.rawDraft = JSON.stringify(sample.payload.draft);
+    const oldPromptSha = '7cb7332fa3085b4497c31d73a7075eb10f8700cd84d23f68875d8341cb97f5de';
+    const newPromptSha = 'cdbf91f9bb2fb48e085c72195000059bdb2ccc4eb6a0bd47a6f31bb9d4835965';
+    sample.oldIdentity = { ...sample.identity, promptSha256: '929ec8f6e93b06edf85158e2fdf46de498111581373e54c06d457b265b00aea5', repairPromptSha256: oldPromptSha };
+    sample.identity = { ...sample.identity, promptSha256: 'a41f67166a0f366a10bf23cc17aa51ca6105b246ce7964ec14c21d6b4018f380', repairPromptSha256: newPromptSha };
+    const filename = saveFailedCandidate(sample.directory, sample.oldIdentity, sample.payload);
+    const originalBytes = fs.readFileSync(filename);
+    const recovered = sample.enabled(() => loadReaderRecoveryRevision(sample.directory, sample.identity));
+    assert.equal(recovered.status, 'failed');
+    assert.equal(recovered.attempts, sample.payload.attempts);
+    assert.equal(recovered.fullAttempts, sample.payload.fullAttempts);
+    assert.equal(recovered.transportFailures, sample.payload.transportFailures);
+    assert.equal(recovered.noProgress, sample.payload.noProgress);
+    assert.equal(recovered.implementationRepairAllowanceProof, null);
+    assert.deepEqual(recovered.draft, sample.payload.draft);
+    assert.equal(recovered.rawDraft, sample.payload.rawDraft);
+    assert.deepEqual(fs.readFileSync(path.join(sample.directory,
+        recovered.readerRecoveryRevisions[0].archivedName)), originalBytes);
+});
+
+test('完整原表升级只接受固定正文及局部修复提示词配对', t => {
+    const sample = fixture(t);
+    sample.payload.draft = normalizeReaderDraftOrder(sample.payload.draft).draft;
+    sample.payload.rawDraft = JSON.stringify(sample.payload.draft);
+    sample.oldIdentity = { ...sample.identity,
+        promptSha256: '929ec8f6e93b06edf85158e2fdf46de498111581373e54c06d457b265b00aea5',
+        repairPromptSha256: '7cb7332fa3085b4497c31d73a7075eb10f8700cd84d23f68875d8341cb97f5de' };
+    const filename = saveFailedCandidate(sample.directory, sample.oldIdentity, sample.payload);
+    const originalBytes = fs.readFileSync(filename);
+    const currentIdentity = { ...sample.identity,
+        promptSha256: 'a41f67166a0f366a10bf23cc17aa51ca6105b246ce7964ec14c21d6b4018f380',
+        repairPromptSha256: 'cdbf91f9bb2fb48e085c72195000059bdb2ccc4eb6a0bd47a6f31bb9d4835965' };
+    for (const identity of [
+        { ...currentIdentity, promptSha256: 'a'.repeat(64) },
+        { ...currentIdentity, repairPromptSha256: 'a'.repeat(64) },
+        { ...currentIdentity, promptSha256: sample.oldIdentity.promptSha256 }
+    ]) {
+        assert.equal(sample.enabled(() => loadReaderRecoveryRevision(sample.directory, identity)), null);
+        assert.deepEqual(fs.readFileSync(filename), originalBytes);
+    }
+});

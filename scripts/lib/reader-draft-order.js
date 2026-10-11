@@ -617,9 +617,52 @@ function restoreCompleteArtifactTableMarkers(draft, artifacts) {
     }
 }
 
+// 新输入模式只声明整表身份，不接受模型填写单元格或选择子集。
+// 最终仍转换为已有 artifact_table 协议，再执行完整原表恢复和来源核验。
+function compileCompleteReaderTableDeclarations(draft, artifacts) {
+    if (artifacts === null || artifacts === undefined) return;
+    if (!Array.isArray(draft?.tableBindings)) return;
+    draft.tableBindings = draft.tableBindings.map((binding, index) => {
+        if (!binding || !Object.prototype.hasOwnProperty.call(binding, 'completeTable')) return binding;
+        const fail = () => { throw new Error('完整原表声明的字段或原表身份非法，不能推断表格'); };
+        if (Object.keys(binding).sort().join(',') !== 'completeTable,tableIndex'
+            || binding.tableIndex !== index + 1
+            || !binding.completeTable || typeof binding.completeTable !== 'object'
+            || Array.isArray(binding.completeTable)
+            || Object.keys(binding.completeTable).join(',') !== 'sourceTableOrdinal'
+            || !Number.isInteger(binding.completeTable.sourceTableOrdinal)) fail();
+        const marker = `[[TABLE_${binding.tableIndex}]]`;
+        const matching = (draft.sections || []).filter(section => typeof section?.body === 'string'
+            && section.body.includes(marker));
+        if (matching.length !== 1 || matching[0].body.split(marker).length !== 2
+            || !matching[0].body.split(/\n\s*\n/).some(block => block.trim() === marker)) fail();
+        const candidates = (artifacts.tables || []).filter(table => (
+            table?.ordinal === binding.completeTable.sourceTableOrdinal
+        ));
+        if (candidates.length !== 1) fail();
+        const matrix = candidates[0].matrix;
+        if (!Array.isArray(matrix) || matrix.length < 2 || !Array.isArray(matrix[0])
+            || matrix[0].length < 2 || matrix.some(row => !Array.isArray(row)
+                || row.length !== matrix[0].length)) fail();
+        return {
+            tableIndex: binding.tableIndex,
+            sourceType: 'artifact_table',
+            sourceTableOrdinal: binding.completeTable.sourceTableOrdinal,
+            cellBindings: matrix.flatMap((row, rowIndex) => row.map((_cell, columnIndex) => ({
+                renderedRow: rowIndex,
+                renderedColumn: columnIndex,
+                sourceRow: rowIndex,
+                sourceColumn: columnIndex
+            }))),
+            sourceQuotes: []
+        };
+    });
+}
+
 function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
     const draft = structuredClone(input);
     const inputSha256 = sha(input);
+    compileCompleteReaderTableDeclarations(draft, structuredArtifacts);
     restoreCompleteArtifactTableMarkers(draft, structuredArtifacts);
     const sections = Array.isArray(draft?.sections) ? draft.sections : [];
     const ranked = sections.map((section, index) => ({ section, index }));

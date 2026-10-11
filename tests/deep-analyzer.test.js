@@ -5683,21 +5683,24 @@ has_dataset: 否
             legacyPayload.promptTemplateSha256,
             deep.runtimePromptTemplateSha256('prompts/api-reader-article.md')
         );
-        // 新请求使用 v5；旧记录继续按其声明版本计算指纹。
+        // 新请求使用 v6；旧记录继续按其声明版本计算指纹。
         const freshPayload = capture({ version: 1, stages: {} });
-        assert.strictEqual(freshPayload.promptTextContract, 'analysis-prompt-text-v5');
+        assert.strictEqual(freshPayload.promptTextContract, 'analysis-prompt-text-v6');
         assert.strictEqual(
             freshPayload.promptTemplateSha256,
-            deep.runtimePromptTemplateSha256('prompts/api-reader-article-v5.md')
+            deep.runtimePromptTemplateSha256('prompts/api-reader-article-v6.md')
         );
         assert.strictEqual(
             deep.currentTextStagePromptPath('apiReaderArticle'),
-            'prompts/api-reader-article-v5.md'
+            'prompts/api-reader-article-v6.md'
         );
         assert.strictEqual(
             deep.promptFilePathForContract('apiReaderArticle', deep.ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
             'prompts/api-reader-article.md'
         );
+        assert.strictEqual(deep.promptFilePathForContract('apiReaderArticle', 'analysis-prompt-text-v5'), 'prompts/api-reader-article-v5.md');
+        const declaredV5Payload = capture({ version: 1, stages: { apiReaderArticle: { status: 'complete', fingerprint: 'old-v5', promptTextContract: 'analysis-prompt-text-v5' } } });
+        assert.strictEqual(declaredV5Payload.promptTemplateSha256, deep.runtimePromptTemplateSha256('prompts/api-reader-article-v5.md'));
         assert.throws(() => deep.buildRecoveryFingerprints(paper, text, arxivId, {
             version: 1, stages: { apiReaderArticle: { status: 'complete',
                 fingerprint: 'legacy', promptTextContract: 'analysis-prompt-text-v9' } }

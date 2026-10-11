@@ -5414,7 +5414,8 @@ function mergeShortReaderFigureLead(body, marker, minimumChars = API_READER_FIGU
 function removeOrphanReaderTableMarkers(value) {
     if (!Array.isArray(value?.sections) || !Array.isArray(value?.tableBindings)) return 0;
     const bound = new Set(value.tableBindings.filter(binding => (
-        binding && Object.prototype.hasOwnProperty.call(binding, 'selection')
+        binding && (Object.prototype.hasOwnProperty.call(binding, 'selection')
+            || Object.prototype.hasOwnProperty.call(binding, 'completeTable'))
         && Number.isInteger(binding.tableIndex)
     )).map(binding => `[[TABLE_${binding.tableIndex}]]`));
     let removed = 0;
@@ -6941,7 +6942,8 @@ function buildApiReaderValidationFeedback(error) {
             + '报错列出的每个数字都必须改成原文逐字写法（保留千分位逗号、百分号、小数位数和单位，'
             + '不得四舍五入），或删掉原文没有的数字；'
             + '若数字明明在原文表格 DOM 里以独立单元格存在、却因正文排版拼合找不到连续 quote，'
-            + '改用 artifact_table 模式逐格绑定该原表，不要坚持 source_quotes'
+            + '在正文和来源记录都已授权时，可用 completeTable 指定完整原表，由程序生成全部逐格绑定；'
+            + '也可按原有 artifact_table 协议完整绑定原表，不要坚持 source_quotes'
         );
     }
     if (/selection 原表身份或恢复状态非法/.test(message)) {
@@ -6977,7 +6979,7 @@ function buildApiReaderValidationFeedback(error) {
             '先按正文顺序核对实际 Markdown 表、独占 [[TABLE_n]] 和 tableBindings。'
             + '正文表少于绑定时，只在允许的小节补充有原文依据的表，并同步对应的现有绑定；'
             + '正文表多于绑定时，只删除不能对应任何绑定的多余手写表，保留其余表、占位符和来源记录。'
-            + '不得新增或删除 tableBindings 数组项。selection 绑定才可使用对应 [[TABLE_n]]；'
+            + '不得新增或删除 tableBindings 数组项。selection 或 completeTable 绑定可使用对应 [[TABLE_n]]；'
             + 'source_quotes 绑定必须直接写 Markdown 表'
         );
     }
@@ -8316,6 +8318,10 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         analysis, sourceText, manifest?.stages?.demoLinkScan,
         { paper, structuredArtifacts: sourceDetails.structuredArtifacts }
     );
+    if (scoringFactReview.current(getPaperArxivId(paper))?.scoringOnly
+        && (!existingReaderReusable || readerResources.identitySha256 !== existingReaderResourceSha256)) {
+        throw new Error('独立评分范围需要保持已核验Reader和资源身份，不能请求正文重写');
+    }
     analysis = applyApiReaderResourceAvailability(analysis, readerResources);
     paper.apiReaderResources = readerResources;
     const scoringEvidenceContext = buildStageEvidenceContext(
@@ -9775,7 +9781,15 @@ function staleAnalysisSnapshotPayload(paper, manifest) {
 }
 
 function captureStaleAnalysisSnapshot(paper, manifest, invalidatedStage, replacementFingerprint) {
-    const payload = staleAnalysisSnapshotPayload(paper, manifest);
+    const activeReview = require('./lib/daily-fact-review').current(getPaperArxivId(paper));
+    const finalAnalysisIsReviewInput = activeReview
+        && (typeof paper.analysisCheckpoint !== 'string' || !paper.analysisCheckpoint)
+        && typeof paper.analysis === 'string'
+        && crypto.createHash('sha256').update(paper.analysis).digest('hex')
+            === activeReview.proof.coreAnalysisSha256;
+    const snapshotInput = finalAnalysisIsReviewInput
+        ? { ...paper, analysisCheckpoint: paper.analysis } : paper;
+    const payload = staleAnalysisSnapshotPayload(snapshotInput, manifest);
     if (!payload) return null;
     const payloadSha256 = stableFingerprint(payload);
     const existing = Array.isArray(paper.analysisStaleSnapshots)
@@ -10888,6 +10902,7 @@ function makeModelHttpError(status, message, config = DEEP_CONFIG) {
 async function callModelWithConfig(messages, maxTokens, maxRetries = API_MAX_RETRIES, config = null) {
     maxRetries = resolveApiMaxRetries(maxRetries);
     const cfg = config || DEEP_CONFIG;
+    require('./lib/daily-fact-review').assertScoringOnlyModelStageAllowed(cfg.usageContext?.stage);
     const overallTimeoutMs = Number.isInteger(cfg.overallTimeoutMs) && cfg.overallTimeoutMs > 0
         ? cfg.overallTimeoutMs
         : API_OVERALL_TIMEOUT_MS;

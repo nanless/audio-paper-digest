@@ -90,7 +90,7 @@ test('独立评分刷新保留真实原输入快照且无反馈恢复零请求',
     });
     try {
         testData.paper.analysis = baseline;
-        testData.paper.analysisCheckpoint = baseline;
+        delete testData.paper.analysisCheckpoint;
         testData.feedback.coreAnalysisSha256 = review.sha(baseline);
         testData.feedback.coreSummarySha256 = review.sha(deep.extractSectionByTitle(
             baseline, '核心摘要'));

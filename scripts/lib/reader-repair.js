@@ -855,10 +855,13 @@ function collectDraftIssues(draft, parserError, options = {}) {
                     if (Array.isArray(value.tableBindings)) value.tableBindings.forEach((binding, index) => {
                         const allowed = binding && own(binding, 'selection')
                             ? ['tableIndex', 'selection']
+                            : binding && own(binding, 'completeTable') ? ['tableIndex', 'completeTable']
                             : ['tableIndex', 'sourceType', 'sourceTableOrdinal', 'cellBindings', 'sourceQuotes'];
                         addUnknownFields(binding, allowed, `tableBindings[${index}]`);
                         if (binding?.selection) addUnknownFields(binding.selection,
                             ['sourceTableOrdinal', 'sourceRows', 'sourceColumns'], `tableBindings[${index}].selection`);
+                        if (binding?.completeTable) addUnknownFields(binding.completeTable,
+                            ['sourceTableOrdinal'], `tableBindings[${index}].completeTable`);
                         if (Array.isArray(binding?.cellBindings)) binding.cellBindings.forEach((cell, cellIndex) =>
                             addUnknownFields(cell, ['renderedRow', 'renderedColumn', 'sourceRow', 'sourceColumn'],
                                 `tableBindings[${index}].cellBindings[${cellIndex}]`));
@@ -969,6 +972,25 @@ function collectTableBindingIssues(draft, options = {}) {
             add(index, '必须是合法表格绑定对象'); return;
         }
         if (binding.tableIndex !== index + 1) add(index, 'tableIndex 必须按最终正文表格顺序从 1 唯一递增');
+        if (own(binding, 'completeTable')) {
+            if (!exactKeys(binding, ['tableIndex', 'completeTable'])
+                || !exactKeys(binding.completeTable, ['sourceTableOrdinal'])) {
+                add(index, 'completeTable 只含 sourceTableOrdinal，不能混入选择子集、单元格或引文');
+            } else if (options.structuredArtifacts) {
+                try {
+                    require('./reader-draft-order').normalizeReaderDraftOrder({
+                        sections: [{ kind: 'result', body: '[[TABLE_1]]' }],
+                        tableBindings: [{ ...binding, tableIndex: 1 }]
+                    }, { structuredArtifacts: options.structuredArtifacts });
+                } catch (error) { add(index, error.message); }
+            }
+            const marker = `[[TABLE_${binding.tableIndex}]]`;
+            const matching = draft.sections.filter(section => String(section?.body || '').includes(marker));
+            const unique = matching.length === 1 && matching[0].body.split(marker).length === 2
+                && matching[0].body.split(/\n\s*\n/).some(block => block.trim() === marker);
+            if (!unique) add(index, `的 ${marker} 必须在正文中唯一独占一段`);
+            return;
+        }
         if (own(binding, 'selection')) {
             if (!exactKeys(binding, ['tableIndex', 'selection'])
                 || !exactKeys(binding.selection, ['sourceTableOrdinal', 'sourceRows', 'sourceColumns'])) {
@@ -1026,7 +1048,7 @@ function collectTableBindingIssues(draft, options = {}) {
             }
         }
     }
-    const selectionCount = draft.tableBindings.filter(binding => binding?.selection).length;
+    const selectionCount = draft.tableBindings.filter(binding => binding?.selection || binding?.completeTable).length;
     if (tables.length + selectionCount !== draft.tableBindings.length) {
         issues.push({ path: null, diagnosticOnly: true,
             message: `读者文章中的表格与来源对应记录数量不一致：正文有 ${tables.length} 张 Markdown 表、selection 有 ${selectionCount} 项、`
@@ -1425,7 +1447,7 @@ function buildRepairTargets(draft, issues) {
     const missingSelection = blockingIssues.find(issue => {
         const index = /^\/tableBindings\/(\d+)$/.exec(String(issue?.path || ''))?.[1];
         const binding = index === undefined ? null : draft.tableBindings?.[Number(index)];
-        const marker = binding?.selection ? `[[TABLE_${binding.tableIndex}]]` : null;
+        const marker = binding?.selection || binding?.completeTable ? `[[TABLE_${binding.tableIndex}]]` : null;
         return marker && /唯一独占一段/.test(String(issue?.message || ''))
             && !draft.sections.some(section => String(section?.body || '').includes(marker));
     });

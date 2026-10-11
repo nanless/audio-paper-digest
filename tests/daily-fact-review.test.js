@@ -590,3 +590,148 @@ test('已保护主分析缺原反馈时正文重写不发请求且不改旧证�
     assert.equal(requests, 0);
     assert.equal(JSON.stringify(sample.paper.analysisManifest), before);
 });
+
+test('独立评分双反馈保留原主分析证明，严格拒绝缺原包和越权范围', async t => {
+    const sample = await fixture(t);
+    const primaryFeedback = {
+        ...sample.feedback,
+        primaryFeedback: '只修正文原错误，保留其他来源事实。',
+        rejectedPrimaryClaims: ['原主分析错误。'],
+        coreFeedback: '',
+        rejectedCoreClaims: [],
+        readerFeedback: '',
+        rejectedReaderClaims: []
+    };
+    const primaryBound = review.validateFeedback(primaryFeedback, sample.plan, sample.paper);
+    sample.paper.analysisManifest.stages.primaryAnalysis.factReview = primaryBound.proof;
+    const scoringFeedback = {
+        ...primaryFeedback,
+        primaryFeedback: '',
+        rejectedPrimaryClaims: [],
+        scoringFeedback: '统计检验缺失只归实验充分性；真实逻辑或推导错误才归技术严谨性。',
+        rejectedScoringClaims: ['评分重复错误。']
+    };
+    const scoringBound = review.validateFeedback(scoringFeedback, sample.plan, sample.paper);
+    const protectedPrimary = structuredClone(sample.paper.analysisManifest.stages.primaryAnalysis);
+    let requests = 0;
+    for (const invalidPrimary of [null, { ...primaryBound }]) {
+        assert.throws(() => review.withScoringFactReviews(scoringBound, invalidPrimary, sample.paper, () => requests++), /尚未/);
+    }
+    const invalidPaper = structuredClone(sample.paper);
+    invalidPaper.analysisManifest.stages.primaryAnalysis.factReview = scoringBound.proof;
+    assert.throws(() => review.withScoringFactReviews(review.validateFeedback(scoringFeedback, sample.plan, invalidPaper), primaryBound, invalidPaper, () => requests++), /不对应/);
+    const mixedBound = review.validateFeedback({ ...scoringFeedback, primaryFeedback: '不允许新包改正文。', rejectedPrimaryClaims: ['另一错误。'] }, sample.plan, sample.paper);
+    assert.throws(() => review.withScoringFactReviews(mixedBound, primaryBound, sample.paper, () => requests++), /不能授权/);
+    const firstSamplePaths = { ...Config.FILES };
+    const unrelatedSample = await fixture(t);
+    const unrelatedPrimary = review.validateFeedback({
+        ...primaryFeedback,
+        runId: unrelatedSample.plan.runId,
+        sourceFiles: unrelatedSample.feedback.sourceFiles
+    }, unrelatedSample.plan, unrelatedSample.paper);
+    assert.throws(() => review.withScoringFactReviews(scoringBound, unrelatedPrimary, sample.paper, () => requests++), /来源身份/);
+    Object.assign(Config.FILES, firstSamplePaths);
+    const largePrimary = review.validateFeedback({ ...primaryFeedback, primaryFeedback: '原正文约束。'.repeat(340) }, sample.plan, sample.paper);
+    const largeScoring = review.validateFeedback({ ...scoringFeedback, scoringFeedback: '独立评分约束。'.repeat(280) }, sample.plan, sample.paper);
+    const largePaper = structuredClone(sample.paper);
+    largePaper.analysisManifest.stages.primaryAnalysis.factReview = largePrimary.proof;
+    assert.throws(() => review.withScoringFactReviews(review.validateFeedback(largeScoring.feedback, sample.plan, largePaper), largePrimary, largePaper, () => requests++), /超过4000/);
+    const savedScoring = review.validateFeedback({ ...scoringFeedback, scoringFeedback: '之前的评分反馈。' }, sample.plan, sample.paper);
+    sample.paper.analysisManifest.stages.scoringAudit.scoringFactReview = savedScoring.proof;
+    assert.equal(requests, 0);
+    await review.withScoringFactReviews(scoringBound, primaryBound, sample.paper, async () => {
+        const scoringFields = review.fingerprintFields('scoringAudit', sample.paper.analysisManifest.stages.scoringAudit);
+        assert.deepEqual(scoringFields.factReview, primaryBound.proof);
+        assert.deepEqual(scoringFields.scoringFactReview, scoringBound.proof);
+        assert.deepEqual(review.fingerprintFields('primaryAnalysis').factReview, primaryBound.proof);
+        assert.throws(() => review.reviewFeedback('primaryAnalysis'), /不允许/);
+        assert.throws(() => review.reviewFeedback('apiReaderArticle'), /不允许/);
+        assert.throws(() => review.assertScoringOnlyModelStageAllowed('revision'), /不允许/);
+        review.assertScoringOnlyModelStageAllowed('scoringAudit');
+        const promptFeedback = review.reviewFeedback('scoringAudit');
+        assert.ok(promptFeedback.includes(primaryFeedback.primaryFeedback));
+        assert.ok(promptFeedback.includes(scoringFeedback.scoringFeedback));
+        assert.ok(promptFeedback.includes(quote));
+        review.assertScoringRequestAllowed({ factReview: primaryBound.proof, scoringFactReview: savedScoring.proof });
+        assert.throws(() => review.assertScoringRequestAllowed({}), /原主分析证明/);
+        assert.throws(() => review.assertScoringRequestAllowed({ factReview: primaryBound.proof, scoringFactReview: largeScoring.proof }), /独立评分反馈/);
+        assert.throws(() => review.validateRepairedClaims('scoringAudit', '原主分析错误。'), /仍包含/);
+        assert.throws(() => review.validateRepairedClaims('scoringAudit', '评分重复错误。'), /仍包含/);
+        review.validateRepairedClaims('scoringAudit', '纠正后的八维评分。');
+    });
+    assert.deepEqual(sample.paper.analysisManifest.stages.primaryAnalysis, protectedPrimary);
+    assert.throws(() => review.withFactReview(scoringBound, () => review.assertScoringRequestAllowed({ factReview: primaryBound.proof })), /主分析反馈/);
+});
+
+test('真实原输入单独核验后可保留当前主分析，原副本被改仍零请求拒绝', async t => {
+    const sample = await fixture(t);
+    const retainedOriginal = structuredClone(sample.paper);
+    const originalFeedback = {
+        ...sample.feedback,
+        primaryFeedback: '主分析不能复述错误余弦蒸馏损失。',
+        rejectedPrimaryClaims: [wrong],
+        coreFeedback: '', rejectedCoreClaims: [],
+        readerFeedback: '', rejectedReaderClaims: []
+    };
+    const originalBound = review.validateFeedback(originalFeedback, sample.plan, retainedOriginal);
+    sample.paper.analysis = baseline;
+    sample.paper.analysisCheckpoint = baseline;
+    sample.paper.analysisStageCheckpoints.primaryAnalysis = baseline;
+    sample.paper.analysisManifest.stages.primaryAnalysis.factReview = originalBound.proof;
+    const newFeedback = {
+        ...originalFeedback,
+        coreAnalysisSha256: review.sha(baseline),
+        coreSummarySha256: review.sha(deep.extractSectionByTitle(baseline, '核心摘要')),
+        primaryFeedback: '', rejectedPrimaryClaims: [],
+        scoringFeedback: '缺少统计检验只归实验充分性，不作推导错误。',
+        rejectedScoringClaims: ['重复扣分原句。']
+    };
+    const newBound = review.validateFeedback(newFeedback, sample.plan, sample.paper);
+    assert.throws(() => review.validateFeedback(originalFeedback, sample.plan, sample.paper), /正文绑定已过期/);
+    let modelRequests = 0;
+    review.withScoringFactReviews(newBound, originalBound, sample.paper, () => {
+        review.validateRepairedClaims('primaryAnalysis', baseline);
+        assert.throws(() => review.validateRepairedClaims('primaryAnalysis', wrong), /仍包含/);
+        review.assertScoringOnlyModelStageAllowed('scoringAudit');
+        modelRequests++;
+    });
+    assert.equal(modelRequests, 1);
+    retainedOriginal.analysisCheckpoint += '篡改原输入';
+    assert.throws(() => review.withScoringFactReviews(newBound, originalBound, sample.paper, () => modelRequests++), /正文绑定已过期/);
+    assert.equal(modelRequests, 1);
+    assert.equal(sample.paper.analysisStaleSnapshots, undefined);
+    assert.deepEqual(sample.paper.analysisManifest.stages.primaryAnalysis.factReview, originalBound.proof);
+});
+
+test('只有已核验反馈匹配的最终正文可保留真实原输入快照', async t => {
+    for (const stage of ['primaryAnalysis', 'scoringAudit']) {
+        const sample = await fixture(t);
+        const originalAnalysis = sample.paper.analysisCheckpoint || sample.paper.analysis;
+        sample.paper.analysis = originalAnalysis;
+        delete sample.paper.analysisCheckpoint;
+        const bound = review.validateFeedback(sample.feedback, sample.plan, sample.paper);
+        const beforeCheckpoints = structuredClone(sample.paper.analysisStageCheckpoints);
+        review.withFactReview(bound, () => {
+            deep.captureStaleAnalysisSnapshot(sample.paper, sample.paper.analysisManifest, stage, bound.proof.feedbackSha256);
+        });
+        const snapshot = sample.paper.analysisStaleSnapshots.at(-1);
+        assert.equal(deep.validateStaleAnalysisSnapshot(snapshot).analysisCheckpoint, originalAnalysis);
+        assert.equal(sample.paper.analysisCheckpoint, undefined);
+        assert.deepEqual(sample.paper.analysisStageCheckpoints, beforeCheckpoints);
+        sample.paper.analysis = baseline;
+        sample.paper.analysisManifest.stages.primaryAnalysis.factReview = bound.proof;
+        assert.equal(review.validateFeedback(sample.feedback, sample.plan, sample.paper).proof.feedbackSha256, bound.proof.feedbackSha256);
+
+        const mismatchedPaper = structuredClone(sample.paper);
+        delete mismatchedPaper.analysisStaleSnapshots;
+        review.withFactReview(bound, () => {
+            deep.captureStaleAnalysisSnapshot(mismatchedPaper, mismatchedPaper.analysisManifest, stage, bound.proof.feedbackSha256);
+        });
+        assert.notEqual(deep.validateStaleAnalysisSnapshot(mismatchedPaper.analysisStaleSnapshots.at(-1)).analysisCheckpoint, originalAnalysis);
+        const ordinaryPaper = structuredClone(sample.paper);
+        ordinaryPaper.analysis = originalAnalysis;
+        delete ordinaryPaper.analysisStaleSnapshots;
+        deep.captureStaleAnalysisSnapshot(ordinaryPaper, ordinaryPaper.analysisManifest, stage, 'ordinary');
+        assert.notEqual(deep.validateStaleAnalysisSnapshot(ordinaryPaper.analysisStaleSnapshots.at(-1)).analysisCheckpoint, originalAnalysis);
+    }
+});
