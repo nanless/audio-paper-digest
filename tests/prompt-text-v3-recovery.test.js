@@ -10,19 +10,19 @@ const crypto = require('node:crypto');
 const registry = require('../scripts/lib/prompt-text-versions.js');
 const deep = require('../scripts/deep-analyzer.js');
 const { validAnalysisText } = require('./valid-analysis-fixture.js');
-const changed = ['primaryAnalysis','openSourceScan','revision','apiReaderArticle','apiReaderRepair','scoringAudit','imageSupplement'];
+const changed = ['primaryAnalysis','openSourceScan','revision','apiReaderArticle','apiReaderRepair','scoringAudit','imageSupplement','tagSelection'];
 test('改写阶段分别读取 v1、v2、v3 原路径，旧版本不能解析成当前版本', () => {
     for (const stage of changed) {
         const v1 = registry.promptFilePathForContract(stage, '');
         const v2 = registry.promptFilePathForContract(stage, 'analysis-prompt-text-v2');
         const v3 = registry.promptFilePathForContract(stage, 'analysis-prompt-text-v3');
-        assert.equal(registry.currentPromptTextContract(stage), stage === 'scoringAudit' ? 'analysis-prompt-text-v5' : ['primaryAnalysis', 'apiReaderArticle', 'apiReaderRepair'].includes(stage) ? 'analysis-prompt-text-v4' : 'analysis-prompt-text-v3');
+        assert.equal(registry.currentPromptTextContract(stage), ['scoringAudit', 'apiReaderArticle', 'apiReaderRepair'].includes(stage) ? 'analysis-prompt-text-v5' : stage === 'primaryAnalysis' ? 'analysis-prompt-text-v4' : 'analysis-prompt-text-v3');
         assert.equal(v2, v1.replace('.md', '-v2.md'));
         assert.equal(v3, v1.replace('.md', '-v3.md'));
         assert.notEqual(deep.runtimePromptTemplateSha256(v2), deep.runtimePromptTemplateSha256(v3));
         assert.throws(() => registry.promptFilePathForContract(stage, 'analysis-prompt-text-v9'), /没有登记/);
     }
-    for (const stage of ['visualSummary','digestCover','tableRepair','methodRepair','tagSelection']) {
+    for (const stage of ['visualSummary','digestCover','tableRepair','methodRepair']) {
         assert.equal(registry.currentPromptTextContract(stage), 'analysis-prompt-text-v2');
         assert.throws(() => registry.promptFilePathForContract(stage, 'analysis-prompt-text-v3'), /没有登记/);
     }
@@ -47,7 +47,7 @@ test('已完成的 v2 修订记录按原版本核验，保留 v2 身份；新请
     const input = validAnalysisText(), source = 'Speech recognition source evidence.';
     const evidence = deep.buildStageEvidenceContext('revision', input, source);
     const oldFingerprint = deep.buildTextStageFingerprint('revision', input, evidence, 'analysis-prompt-text-v2');
-    const newFingerprint = deep.buildTextStageFingerprint('revision', input, evidence, 'analysis-prompt-text-v3');
+    const newFingerprint = deep.buildTextStageFingerprint('revision', input, evidence, 'analysis-prompt-text-v3', {});
     assert.notEqual(oldFingerprint, newFingerprint);
     const paper = { analysisCheckpoint: input, analysisStageCheckpoints: { revision: input } };
     const manifest = { version: 1, stages: { revision: { status: 'complete', fingerprint: oldFingerprint,

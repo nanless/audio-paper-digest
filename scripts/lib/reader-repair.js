@@ -1343,7 +1343,7 @@ function buildRepairTargets(draft, issues) {
         // 绑到今天的节点 SHA 上。
         const stalePatchPath = /Reader patch has stale node SHA: (\/(?:sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/body)?)/.exec(message)?.[1];
         if (stalePatchPath) add(stalePatchPath);
-        if (/selection[\s\S]*第一行必须是原表头，其余行必须是数据行/.test(message)) {
+        if (/selection[\s\S]*(?:第一行必须是原表头，其余行必须是数据行|行列重复、越界或数量不足)/.test(message)) {
             const index = Number(/tableBindings\[(\d+)\]/.exec(message)?.[1]);
             if (Number.isInteger(index)) add(`/tableBindings/${index}`);
             // marker 和它所在的整节，结构上本来就有效。这里再要一整节正文，会让

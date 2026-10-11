@@ -159,9 +159,7 @@ test('主任务是否过于宽泛按整个词表判断；该告警不使已有�
     const parsed = parseAnalysis(analysis);
     assert.equal(parsed.tagValidation.valid, true,
         parsed.tagValidation.errors.join('; '));
-    assert.equal(parsed.tagValidation.specificityWarning,
-        '主任务标签过于宽泛：#语音识别 的下级概念中有未被选中的已启用概念（共 6 个）：'
-        + '#音视频语音识别 #逆文本规范化 #唇读 #多说话人语音识别 #重叠语音识别 #标点恢复');
+    assert.equal(parsed.tagValidation.specificityWarning, null);
 
     // 叶节点主任务没有 active 后代 → 无告警。
     const leaf = runtime.validateTagSelection({

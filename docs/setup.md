@@ -92,6 +92,7 @@ Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读�
 | `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 16000 |
 | `PD_API_READER_MAX_TOKENS` | 48000 |
 | `PD_ANALYSIS_PRIMARY_THINKING_MODE` | `disabled`；仅精确 `mimo-v2.6-flash` 的 OpenAI Chat 主分析，可设 `enabled` |
+| `PD_ANALYSIS_AUXILIARY_THINKING_MODE` | `disabled`；同一路由的开源检查、正文审校、评分和标签处理，可设 `enabled` |
 | `PD_API_READER_THINKING_MODE` | `disabled`；仅 MiMo-V2.6-Flash 的长文、修复及图像探测，可设 `enabled` |
 | `PD_API_READER_REPAIR_MAX_TOKENS` | 8000 |
 | `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 字符 |
@@ -100,6 +101,8 @@ Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读�
 | `PD_BLOG_REVIEW_CONCURRENCY` | 5 个独立页面审查任务 |
 
 主分析可通过 `PD_ANALYSIS_PRIMARY_THINKING_MODE=disabled|enabled` 配置推理，默认关闭，仅对精确 `mimo-v2.6-flash` 的 OpenAI Chat 主分析请求生效。旧完整主分析必须同时有有效正文检查点与原指纹，才按旧配方复用；不补签新声明。新请求绑定实际策略，截断、正文及来源检查保持。厂商支持不等于 OpenCode Go 已在本次业务中验证。
+
+开源检查、正文审校、评分和标签处理独立使用 `PD_ANALYSIS_AUXILIARY_THINKING_MODE`，默认关闭。请求参数、用量记录和新阶段指纹记录相同策略。旧完整检查点按原指纹核验，不补写新请求证明。Demo 链接检查不调用模型，不使用这个开关。此开关不修改输出容量、来源检查或发布要求。
 
 摘要、完整结构和表格修复可独立配置 `PD_ANALYSIS_REPAIR_THINKING_MODE=disabled|enabled`，默认关闭。仅对精确 `mimo-v2.6-flash` 的 OpenAI Chat 请求发送该参数，该修复开关不影响主分析、审校、评分或其他模型。新修复阶段绑定实际请求策略，旧成功记录没有该声明时仍按旧指纹核验，不补签；失效后重新执行使用当前策略。输出截断和内容、来源核验仍会拒绝不完整结果。[MiMo 官方推理说明](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/other/deep-thinking)支持此参数；OpenCode Go 是否接受须由正常业务响应确认，参数日志不代表已接受。
 

@@ -84,9 +84,7 @@ class UtilsTagRulesTests(unittest.TestCase):
             'primaryMethodId': 'method.transformer',
             'conceptIds': ['task.asr', 'method.transformer',
                            'model_family.unified-audio'],
-            'specificityWarning': (
-                '主任务标签过于宽泛：#语音识别 的下级概念中有未被选中的已启用概念'
-                '（共 6 个）：#音视频语音识别 #逆文本规范化 #唇读 #多说话人语音识别 #重叠语音识别 #标点恢复'),
+            'specificityWarning': None,
         })
         with self.assertRaisesRegex(ValueError, 'legacy_tags'):
             parse_analysis(analysis('#语音识别 #Transformer #低资源'),
@@ -112,7 +110,7 @@ class UtilsTagRulesTests(unittest.TestCase):
                          ['task.speech-synthesis', 'task.voice-cloning',
                           'task.voice-conversion', 'method.transformer'])
         # 3 个任务标签符合数量要求，但主任务仍有下级概念，照常给出告警。
-        self.assertIsNotNone(
+        self.assertIsNone(
             accepted['tagValidation']['specificityWarning'])
 
     def test_primary_task_specificity_is_a_warning_not_a_block(self):
@@ -122,9 +120,7 @@ class UtilsTagRulesTests(unittest.TestCase):
             '#语音识别 #Transformer #低资源', '#语音识别', '#Transformer'))
         validation = parsed['tagValidation']
         self.assertTrue(validation['valid'], validation['errors'])
-        self.assertEqual(validation['specificityWarning'],
-                         '主任务标签过于宽泛：#语音识别 的下级概念中有未被选中的已启用概念'
-                         '（共 6 个）：#音视频语音识别 #逆文本规范化 #唇读 #多说话人语音识别 #重叠语音识别 #标点恢复')
+        self.assertIsNone(validation['specificityWarning'])
 
         # 主任务没有已启用的下级概念时，不产生宽泛告警。
         # v1.1 换表后 #音视频语音识别 有了子节点（#唇读），叶子用例改用 #标点恢复。

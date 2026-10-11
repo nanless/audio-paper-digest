@@ -109,6 +109,11 @@ function buildLlmUsageEvent({ protocol, model, request, response, statusCode, du
             && ['enabled', 'disabled'].includes(request?.thinking?.type)
             ? { primaryRequestPolicy: { contract: 'analysis-primary-thinking-policy-v1',
                 model, thinkingMode: request.thinking.type } } : {}),
+        ...(['openSourceScan', 'revision', 'scoringAudit', 'tagSelection'].includes(context?.stage)
+            && model === 'mimo-v2.6-flash' && ['openai', 'openai_chat'].includes(protocol)
+            && ['enabled', 'disabled'].includes(request?.thinking?.type)
+            ? { auxiliaryRequestPolicy: { contract: 'analysis-auxiliary-thinking-policy-v1',
+                model, thinkingMode: request.thinking.type } } : {}),
         estimates: inputStatistics(request), usage: normalizeLlmUsage(protocol, response)
     };
 }

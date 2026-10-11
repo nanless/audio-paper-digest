@@ -105,16 +105,17 @@ test('三个不合格真实原文全部保留且不授成功，原合格摘要�
 
 for (const suffix of ['.request.json', '.response.json']) {
     test(`${suffix}写失败在请求前零次或响应后一请求停止且保留原EIO`, async t => {
-        isolated(t);
+        const testRoot = isolated(t);
         let calls = 0;
         const originalOpen = fs.openSync;
         fs.openSync = function (file, ...args) {
-            if (typeof file === 'string' && file.endsWith(suffix)) {
+            if (typeof file === 'string' && file.startsWith(testRoot + path.sep)
+                && file.endsWith(suffix) && String(args[0]).includes('w')) {
                 throw Object.assign(new Error('真实本地记录故障'), { code: 'EIO' });
             }
             return originalOpen.call(this, file, ...args);
         };
-        t.after(() => { fs.openSync = originalOpen; });
+        try {
         await assert.rejects(deep.repairCoreSummarySection(paper, incompleteAnalysis, sourceText, sourceText, {
             callModelFn: async () => {
                 calls++;
@@ -123,6 +124,7 @@ for (const suffix of ['.request.json', '.response.json']) {
         }), error => error.code === 'READER_DIAGNOSTIC_FAILED' && error.scope === 'run'
             && error.retryable === false && error.cause.code === 'EIO');
         assert.equal(calls, suffix === '.request.json' ? 0 : 1);
+        } finally { fs.openSync = originalOpen; }
     });
 }
 

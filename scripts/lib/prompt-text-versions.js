@@ -115,6 +115,12 @@ const FROZEN_V4_PROMPT_FILES = Object.freeze({
     scoringAudit: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/scoring-audit-v4.md' }),
 });
 
+// Reader v4 单独冻结；不能加入旧 Manual 混合阶段组合。
+const FROZEN_READER_V4_PROMPT_FILES = Object.freeze({
+    apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/api-reader-article-v4.md' }),
+    apiReaderRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/api-reader-repair-v4.md' }),
+});
+
 // 评分升级到 v5 前，Manual 配置实际使用的完整阶段组合。仅用于核验旧配置。
 const FROZEN_V4_MIXED_PROMPT_FILES = Object.freeze({
     ...FROZEN_V2_PROMPT_FILES,
@@ -126,8 +132,9 @@ const FROZEN_V4_MIXED_PROMPT_FILES = Object.freeze({
 // 旧核心摘要 v3 仍读取冻结 v2 正文，旧混合登记对象保持原样。
 const PROMPT_FILE_VERSIONS = Object.freeze({
     ...FROZEN_V4_MIXED_PROMPT_FILES,
-    apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/api-reader-article-v4.md' }),
-    apiReaderRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/api-reader-repair-v4.md' }),
+    tagSelection: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/tag-repair-v3.md' }),
+    apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path: 'prompts/api-reader-article-v5.md' }),
+    apiReaderRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path: 'prompts/api-reader-repair-v5.md' }),
     scoringAudit: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path: 'prompts/scoring-audit-v5.md' }),
     coreSummaryRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/core-summary-repair-v4.md' }),
     structureRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/structure-repair-v2.md' }),
@@ -173,7 +180,7 @@ function promptFilePathForContract(stage, promptTextContract) {
     }
     const archivedV3 = FROZEN_V3_PROMPT_FILES[stage];
     if (declared === ANALYSIS_PROMPT_TEXT_V3_CONTRACT && archivedV3?.contract === declared) return archivedV3.path;
-    const archivedV4 = FROZEN_V4_PROMPT_FILES[stage];
+    const archivedV4 = FROZEN_READER_V4_PROMPT_FILES[stage] || FROZEN_V4_PROMPT_FILES[stage];
     if (declared === ANALYSIS_PROMPT_TEXT_V4_CONTRACT && archivedV4?.contract === declared) return archivedV4.path;
     const entry = PROMPT_FILE_VERSIONS[stage];
     if (entry && declared === entry.contract) return entry.path;
@@ -214,6 +221,7 @@ module.exports = {
     FROZEN_V3_PROMPT_FILES,
     FROZEN_V4_PROMPT_FILES,
     FROZEN_V4_MIXED_PROMPT_FILES,
+    FROZEN_READER_V4_PROMPT_FILES,
     PROMPT_FILE_VERSIONS,
     promptTextContractForStage,
     currentPromptTextContract,

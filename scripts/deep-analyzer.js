@@ -3380,6 +3380,13 @@ function buildApiReaderArtifactEvidence(
         const tableMetadata = [
             `TABLE_${table.ordinal}_SELECTION: ${JSON.stringify(assessReaderTableSelectionEligibility(table))}`,
             `TABLE_${table.ordinal}_HEADER_ROWS: ${JSON.stringify(effectiveRows.headerRows)}`,
+            `TABLE_${table.ordinal}_INDEX_RULES: ${JSON.stringify({
+                indexBase: 0, minimumSelectedRows: 2, minimumSelectedColumns: 2,
+                maximumRowIndex: Array.isArray(table.matrix) ? table.matrix.length - 1 : -1,
+                maximumColumnIndex: Array.isArray(table.matrix?.[0]) ? table.matrix[0].length - 1 : -1,
+                distinctIndexesRequired: true,
+                action: 'Select only this table’s shown source cells. Counts are not indexes; do not copy adjacent-table dimensions.'
+            })}`,
             `TABLE_${table.ordinal}_SHAPE: ${JSON.stringify({
                 rows: Array.isArray(table.matrix) ? table.matrix.length : 0,
                 columns: Array.isArray(table.matrix?.[0]) ? table.matrix[0].length : 0,
@@ -7575,9 +7582,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             lastError = error;
             previousDraft = candidate ? JSON.stringify(candidate) : raw;
             currentIssues = repairContext && !patchApplied
-                ? [...currentIssues.filter(issue => issue.code === repair.TABLE_COUNT_ISSUE_CODE
+                ? [...currentIssues.map(issue => typeof issue.message === 'string'
+                    ? issue : { ...issue, message: '' }).filter(issue => issue.code === repair.TABLE_COUNT_ISSUE_CODE
                     || repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
-                    || !issue.message.startsWith('Reader patch')),
+                    || !String(issue.message || '').startsWith('Reader patch')),
                     { path: null, message: `Reader patch rejected: ${error.message}` }]
                 : repair.collectDraftIssues(candidate, error, {
                     sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts
@@ -8740,6 +8748,33 @@ function buildStageEvidenceContext(stage, analysis, sourceText) {
 // 不传 promptTextContract 表示按 v1 的历史形状算：哈希输入里没有这个字段，与
 // 改动前逐字节一致。要用新版本（含 v1 的新记录）时由调用方显式传当前版本，
 // 这样忘记传参的旧记录核验不会静默换指纹。
+// demoLinkScan 是网页扫描，不调用模型，也不声明模型请求策略。
+const AUXILIARY_LLM_STAGES = Object.freeze(['openSourceScan', 'revision', 'scoringAudit', 'tagSelection']);
+function resolveAuxiliaryRequestPolicy(stage, config = DEEP_CONFIG) {
+    if (!AUXILIARY_LLM_STAGES.includes(stage) || config.model !== 'mimo-v2.6-flash'
+        || detectApiType(config.endpoint, config.model) !== 'openai') return null;
+    const thinkingMode = ANALYSIS_CONFIG.auxiliaryThinkingMode;
+    if (!['enabled', 'disabled'].includes(thinkingMode)) throw new Error('辅助阶段请求推理设置无效');
+    return { contract: 'analysis-auxiliary-thinking-policy-v1', model: config.model, thinkingMode };
+}
+function auxiliaryRequestPolicyFields(stage, declaredStage) {
+    const declared = declaredStage?.auxiliaryRequestPolicy;
+    if (Object.prototype.hasOwnProperty.call(declaredStage || {}, 'auxiliaryRequestPolicy')) {
+        if (!declared || typeof declared !== 'object' || Array.isArray(declared)
+            || Object.keys(declared).sort().join(',') !== 'contract,model,thinkingMode'
+            || declared.contract !== 'analysis-auxiliary-thinking-policy-v1'
+            || declared.model !== 'mimo-v2.6-flash'
+            || !['enabled', 'disabled'].includes(declared.thinkingMode)) {
+            throw new Error('辅助阶段已保存的请求推理设置无效');
+        }
+    }
+    if (declaredStage === undefined || (['complete', 'not_needed'].includes(declaredStage?.status) && !declared)) return {};
+    const current = resolveAuxiliaryRequestPolicy(stage);
+    return { ...(current ? { auxiliaryRequestPolicy: current } : {}),
+        ...(declared && stableFingerprint(declared) !== stableFingerprint(current)
+            ? { auxiliaryRequestPolicyMismatch: declared } : {}) };
+}
+
 function resolveRepairRequestPolicy(stage) {
     if (!['coreSummaryRepair', 'structureRepair', 'tableRepair'].includes(stage)
         || DEEP_CONFIG.model !== 'mimo-v2.6-flash'
@@ -8776,6 +8811,8 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext, prompt
     const declaredPromptTextContract = String(promptTextContract || '');
     return stableFingerprint({
         ...repairRequestPolicyFields(stage, declaredStage),
+        ...require('./lib/daily-fact-review').fingerprintFields(stage, declaredStage),
+        ...auxiliaryRequestPolicyFields(stage, declaredStage),
         ...(declaredPromptTextContract
             ? { promptTextContract: declaredPromptTextContract } : {}),
         ...(stage === 'tagSelection' ? {
@@ -8857,12 +8894,19 @@ function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourc
     let inputAnalysis = getTextStageInputAnalysis(paper, stage, currentAnalysis);
     let evidenceContext = buildStageEvidenceContext(stage, inputAnalysis, sourceText);
     let promptTextContract = textStagePromptTextContract(paper, manifest, stage);
+    const savedStage = manifest.stages?.[physicalRecoveryStage(manifest, stage, paper.analysisStageCheckpoints)] || {};
+    const savedCheckpoint = paper.analysisStageCheckpoints?.[physicalRecoveryStage(manifest, stage, paper.analysisStageCheckpoints)];
+    const declaredStage = AUXILIARY_LLM_STAGES.includes(stage) && savedStage.status === 'complete'
+        && !(typeof savedCheckpoint === 'string' && savedCheckpoint.trim()) ? {} : savedStage;
     let fingerprint = buildTextStageFingerprint(
-        stage, inputAnalysis, evidenceContext, promptTextContract, manifest.stages?.[stage] || {});
+        stage, inputAnalysis, evidenceContext, promptTextContract, declaredStage);
     let evidenceSha256 = crypto.createHash('sha256').update(evidenceContext).digest('hex');
     let inputAnalysisSha256 = crypto.createHash('sha256').update(inputAnalysis).digest('hex');
     const policyFields = repairRequestPolicyFields(stage, manifest.stages?.[stage] || {});
-    const compatibilityReused = !policyFields.declaredRepairRequestPolicyMismatch && ((stage === 'structureRepair'
+    const auxiliaryFields = auxiliaryRequestPolicyFields(stage, manifest.stages?.[stage] || {});
+    const compatibilityReused = !require('./lib/daily-fact-review').fingerprintFields(stage, manifest.stages?.[stage]).factReview
+        && !auxiliaryFields.auxiliaryRequestPolicyMismatch
+        && !policyFields.declaredRepairRequestPolicyMismatch && ((stage === 'structureRepair'
         && legacyStructureCompatibilityIsValid(paper, manifest, sourceText))
         || canReuseStageForCoreSummaryRecovery(paper, manifest, sourceText, stage));
     const invalidated = compatibilityReused
@@ -9166,12 +9210,13 @@ function buildImageSupplementFingerprint(baseFingerprint, candidateImageInfos, d
     });
 }
 
-function buildApiReaderExecutionFingerprint(baseFingerprint, evidenceContext, structuredArtifacts, readerCapabilityPolicy = null) {
+function buildApiReaderExecutionFingerprint(baseFingerprint, evidenceContext, structuredArtifacts, readerCapabilityPolicy = null, declaredStage) {
     const checkedPolicy = validateReaderCapabilityPolicy(readerCapabilityPolicy);
     return stableFingerprint({
         ...promptRenderingFingerprintFields(evidenceContext),
         ...modelTextFingerprintFields(evidenceContext),
         configurationFingerprint: baseFingerprint,
+        ...require('./lib/daily-fact-review').fingerprintFields('apiReaderArticle', declaredStage),
         evidenceSha256: crypto.createHash('sha256').update(String(evidenceContext || '')).digest('hex'),
         structuredArtifactsSha256: structuredArtifacts?.payloadSha256 || '',
         ...(checkedPolicy ? {
@@ -9291,6 +9336,7 @@ function migrateSourceOnlyApiReaderFingerprint(
 function migrateSealedSourceOnlyReaderBeforeAnalysis(
     paper, manifest, baseFingerprint, sourceText, structuredArtifacts, arxivId
 ) {
+    if (require('./lib/daily-fact-review').current() || manifest?.stages?.apiReaderArticle?.factReview) return false;
     if (typeof paper?.analysis !== 'string' || !paper.analysis.trim()) return false;
     const evidence = buildApiReaderEvidenceContext(
         paper.analysis, sourceText, structuredArtifacts, arxivId
@@ -9471,7 +9517,12 @@ function captureStaleAnalysisSnapshot(paper, manifest, invalidatedStage, replace
             capturedAt: getBeijingISOString()
         });
     }
-    paper.analysisStaleSnapshots = existing.slice(-2);
+    const reviewedInput = require('./lib/daily-fact-review').current()?.proof.coreAnalysisSha256;
+    const originalReviewInput = reviewedInput && existing.find(item =>
+        crypto.createHash('sha256').update(item.payload.analysisCheckpoint).digest('hex') === reviewedInput);
+    paper.analysisStaleSnapshots = originalReviewInput
+        ? [originalReviewInput, ...existing.filter(item => item !== originalReviewInput).slice(-1)]
+        : existing.slice(-2);
     return paper.analysisStaleSnapshots.at(-1) || null;
 }
 
@@ -10698,6 +10749,7 @@ async function _callModelOnce(messages, maxTokens, config, budget, apiType, time
     const temperature = Number.isFinite(config.temperature) ? config.temperature : API_TEMPERATURE;
     const bodyObj = buildRequestBody(apiType, config.model, messages, maxTokens, temperature,
         { usageContext: config.usageContext,
+            auxiliaryThinkingMode: resolveAuxiliaryRequestPolicy(config.usageContext?.stage, config)?.thinkingMode,
             readerResponseFormat: ['apiReaderArticle', 'apiReaderRepair'].includes(config.usageContext?.stage)
                 ? config.readerResponseFormat : undefined,
             readerThinkingMode: ['apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe']
@@ -14038,9 +14090,15 @@ async function analyzePaperDeepInternal(paper) {
     sourceAcquisitionRecord.modelTextSanitizationContract = MODEL_TEXT_SANITIZATION_CONTRACT;
     sourceAcquisitionRecord.promptRenderingContract = PROMPT_RENDERING_CONTRACT;
     analysisManifest.sourceAcquisition = sourceAcquisitionRecord;
+    const boundFactReview = require('./lib/daily-fact-review').current(arxivId);
+    if (boundFactReview) {
+        // 保存真实付费正文和阶段；反馈只改变正常模型请求，不构造成功正文。
+        captureStaleAnalysisSnapshot(paper, analysisManifest, 'coreSummaryRepair', boundFactReview.proof.feedbackSha256);
+    }
     const recoveryFingerprints = buildRecoveryFingerprints(
         paper, textForAnalysis, arxivId, analysisManifest);
-    if (migrateSealedSourceOnlyReaderBeforeAnalysis(
+    if (!boundFactReview && !analysisManifest.stages.apiReaderArticle?.factReview
+        && migrateSealedSourceOnlyReaderBeforeAnalysis(
         paper,
         analysisManifest,
         recoveryFingerprints.apiReaderArticle,
@@ -14365,6 +14423,8 @@ async function analyzePaperDeepInternal(paper) {
                 console.log(`    [deep] ✅ 开源扫描完成`);
             }
             markRecoveryStage(analysisManifest, 'openSourceScan', ossText ? 'complete' : 'invalid_output', {
+                ...(resolveAuxiliaryRequestPolicy('openSourceScan')
+                    ? { auxiliaryRequestPolicy: resolveAuxiliaryRequestPolicy('openSourceScan') } : {}),
                 evidenceChars: openSourceStage.evidenceChars,
                 evidenceSha256: openSourceStage.evidenceSha256,
                 inputAnalysisSha256: openSourceStage.inputAnalysisSha256,
@@ -14483,6 +14543,8 @@ async function analyzePaperDeepInternal(paper) {
                 extractSectionByTitle(analysis, '开源详情')
             );
             markRecoveryStage(analysisManifest, 'revision', 'complete', {
+                ...(resolveAuxiliaryRequestPolicy('revision')
+                    ? { auxiliaryRequestPolicy: resolveAuxiliaryRequestPolicy('revision') } : {}),
                 evidenceChars: revisionStage.evidenceChars,
                 evidenceSha256: revisionStage.evidenceSha256,
                 inputAnalysisSha256: revisionStage.inputAnalysisSha256,
@@ -14706,31 +14768,14 @@ async function analyzePaperDeepInternal(paper) {
         beginTagSelectionStage(paper, analysisManifest);
         try {
             const before = analysis;
-            // 标签不合规时，修复失败会阻断分析。主任务标签过于宽泛只记为告警，
-            // 仅在本阶段尚未完成时尝试改选；失败则保留原标签。
-            // 上方对已完成阶段的额外检查只看标签是否合规，不因这条告警单独要求重跑。
-            let repairFeedback = tagValidationIssue;
-            if (!repairFeedback) {
-                const warning = parseAnalysis(analysis).tagValidation?.specificityWarning;
-                if (warning) repairFeedback = warning;
-            }
+            // 只修复实际标签合同或已绑定的来源反馈；目录子任务不代表本篇适用。
+            const tagReviewFeedback = require('./lib/daily-fact-review').reviewFeedback('tagSelection', arxivId);
+            const repairFeedback = tagReviewFeedback || tagValidationIssue;
             if (repairFeedback) {
                 console.log(`    [deep] 🏷️  正在局部修复标签：${repairFeedback}`);
-                try {
-                    analysis = await repairTagSelection(
-                        paper,
-                        analysis,
-                        tagStage.evidenceContext,
-                        repairFeedback,
-                        // 只有因主任务标签过于宽泛而触发修复时，才要求修复后的主任务标签不再出现这条告警；
-                        // 修复标签合规错误时，不附加这一要求。
-                        { requireMostSpecificTask: !tagValidationIssue }
-                    );
-                } catch (error) {
-                    if (tagValidationIssue) throw error;
-                    console.log(`    [deep] ⚠️  未能替换过于宽泛的主任务标签，保留本次修复前的正文：${error.message}`);
-                    analysis = before;
-                }
+                analysis = await repairTagSelection(
+                    paper, analysis, tagStage.evidenceContext, repairFeedback
+                );
             }
             const parsedForTagCheck = parseAnalysis(analysis);
             const finalTagValidationIssue = validateTagSectionContract(analysis, parsedForTagCheck);
@@ -14765,11 +14810,16 @@ async function analyzePaperDeepInternal(paper) {
                 // not_needed 仅用于没有标签错误且正文逐字未变的结果。
                 (tagValidationIssue || analysis !== before) ? 'complete' : 'not_needed',
                 {
-                    fingerprint: tagStage.fingerprint,
+                    ...(repairFeedback && resolveAuxiliaryRequestPolicy('tagSelection')
+                        ? { auxiliaryRequestPolicy: resolveAuxiliaryRequestPolicy('tagSelection') } : {}),
+                    fingerprint: repairFeedback ? tagStage.fingerprint : buildTextStageFingerprint(
+                        'tagSelection', tagStage.inputAnalysis, tagStage.evidenceContext,
+                        tagStage.promptTextContract, { status: 'not_needed' }),
                     evidenceChars: tagStage.evidenceChars,
                     evidenceSha256: tagStage.evidenceSha256,
                     ...(tagStage.promptTextContract
                         ? { promptTextContract: tagStage.promptTextContract } : {}),
+                    ...require('./lib/daily-fact-review').fingerprintFields('tagSelection', analysisManifest.stages.tagSelection),
                     ...tagStageProof,
                     bindingSha256: stableFingerprint(tagStageProof)
                 }
@@ -14819,7 +14869,8 @@ async function analyzePaperDeepInternal(paper) {
     if (!isRecoveryStageComplete(analysisManifest, 'coreSummaryRepair')) {
         const missingCoreSummary = getMissingRequiredSections(analysis).includes('核心摘要');
         const duplicateCoreSummary = getDuplicateRequiredSections(analysis).includes('核心摘要');
-        const summaryIssue = getCoreSummaryDetailIssue(analysis, { sourceText: rawTextForAnalysis });
+        const coreReviewFeedback = require('./lib/daily-fact-review').reviewFeedback('coreSummaryRepair', arxivId);
+        const summaryIssue = [getCoreSummaryDetailIssue(analysis, { sourceText: rawTextForAnalysis }), coreReviewFeedback].filter(Boolean).join('\n');
         try {
             if (missingCoreSummary || duplicateCoreSummary) {
                 throw contractRejectedError(
@@ -14834,7 +14885,7 @@ async function analyzePaperDeepInternal(paper) {
                     analysis,
                     rawTextForAnalysis,
                     coreSummaryRepairStage.evidenceContext,
-                    { diagnosticStage: coreSummaryRepairStage }
+                    { diagnosticStage: coreSummaryRepairStage, reviewFeedback: coreReviewFeedback }
                 );
                 changed = fixed !== analysis;
                 analysis = fixed;
@@ -14881,7 +14932,8 @@ async function analyzePaperDeepInternal(paper) {
                     ? { promptTextContract: coreSummaryRepairStage.promptTextContract } : {}),
                 ...(coreSummaryRepairStage.repairRequestPolicy
                     ? { repairRequestPolicy: coreSummaryRepairStage.repairRequestPolicy } : {}),
-                fingerprint: coreSummaryRepairStage.fingerprint
+                fingerprint: coreSummaryRepairStage.fingerprint,
+                ...require('./lib/daily-fact-review').fingerprintFields('coreSummaryRepair')
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
         } catch (error) {
@@ -14889,7 +14941,8 @@ async function analyzePaperDeepInternal(paper) {
                 analysisManifest,
                 'coreSummaryRepair',
                 recoveryFailureStatus(error),
-                { error: error.message, fingerprint: coreSummaryRepairStage.fingerprint }
+                { error: error.message, fingerprint: coreSummaryRepairStage.fingerprint,
+                    ...require('./lib/daily-fact-review').fingerprintFields('coreSummaryRepair') }
             );
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             throw error;
@@ -14939,7 +14992,8 @@ async function analyzePaperDeepInternal(paper) {
         const currentEvidenceSha256 = crypto.createHash('sha256')
             .update(scoringEvidenceContext)
             .digest('hex');
-        const fingerprintChanged = scoringStage.modelTextSanitizationContract
+        const fingerprintChanged = !!auxiliaryRequestPolicyFields('scoringAudit', scoringStage).auxiliaryRequestPolicyMismatch
+            || scoringStage.modelTextSanitizationContract
                 !== modelTextFingerprintFields(scoringInputAnalysis, scoringEvidenceContext).modelTextSanitizationContract
             || scoringStage.model !== DEEP_CONFIG.model
             || scoringStage.protocol !== detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model)
@@ -15125,6 +15179,8 @@ async function analyzePaperDeepInternal(paper) {
             const stabilityWarning = scoreDelta !== null
                 && Math.abs(scoreDelta) > SCORING_STABILITY_THRESHOLD;
             markRecoveryStage(analysisManifest, 'scoringAudit', 'complete', {
+                ...(resolveAuxiliaryRequestPolicy('scoringAudit')
+                    ? { auxiliaryRequestPolicy: resolveAuxiliaryRequestPolicy('scoringAudit') } : {}),
                 attempts: totalScoringAttempts,
                 model: scoringResult.model,
                 protocol: scoringResult.protocol,
@@ -15202,13 +15258,15 @@ async function analyzePaperDeepInternal(paper) {
         recoveryFingerprints.apiReaderArticle,
         apiReaderEvidenceContext,
         sourceDetails.structuredArtifacts,
-        readerCapabilityPolicy
+        readerCapabilityPolicy,
+        analysisManifest.stages.apiReaderArticle
     );
     const legacyApiReaderFingerprint = buildLegacyAnalysisBoundApiReaderFingerprint(
         buildLegacyApiReaderV3ConfigurationFingerprint(arxivId),
         analysis, apiReaderEvidenceContext,
         sourceDetails.structuredArtifacts);
-    if (!readerCapabilityPolicy && migrateSourceOnlyApiReaderFingerprint(
+    if (!boundFactReview && !analysisManifest.stages.apiReaderArticle?.factReview
+        && !readerCapabilityPolicy && migrateSourceOnlyApiReaderFingerprint(
         paper,
         analysisManifest,
         apiReaderFingerprint,
@@ -15298,7 +15356,8 @@ async function analyzePaperDeepInternal(paper) {
             generatedReaderResult = await generateApiReaderArticleDetailed(
                 paper, analysis, apiReaderEvidenceContext, {
                     structuredArtifacts: sourceDetails.structuredArtifacts,
-                    sourceText: rawTextForAnalysis
+                    sourceText: rawTextForAnalysis,
+                    reviewFeedback: require('./lib/daily-fact-review').reviewFeedback('apiReaderArticle', arxivId)
                 }
             );
             readerGenerationCompleted = true;
@@ -15350,6 +15409,7 @@ async function analyzePaperDeepInternal(paper) {
                     ? materializedFigures.map(directContext.stripEphemeralFigureFields)
                     : materializedFigures
             };
+            require('./lib/daily-fact-review').validateRepairedClaims('apiReaderArticle', readerResult.article, arxivId);
             paper.apiReaderArticle = readerResult.article;
             paper.apiReaderPlan = readerResult.plan;
             paper.apiReaderFigures = readerResult.figures;
@@ -15390,10 +15450,14 @@ async function analyzePaperDeepInternal(paper) {
                     apiReaderWriteContract, apiReaderWriteRepairContract, arxivId),
                 apiReaderEvidenceContext,
                 sourceDetails.structuredArtifacts,
-                readerCapabilityPolicy
+                readerCapabilityPolicy,
+                analysisManifest.stages.apiReaderArticle
             );
             markRecoveryStage(analysisManifest, 'apiReaderArticle', 'complete', {
                 fingerprint: apiReaderWriteFingerprint,
+                ...require('./lib/daily-fact-review').fingerprintFields('apiReaderArticle'),
+                ...(boundFactReview ? { reviewFeedbackSha256: crypto.createHash('sha256').update(
+                    require('./lib/daily-fact-review').reviewFeedback('apiReaderArticle', arxivId)).digest('hex') } : {}),
                 ...apiReaderRequestPolicyFields(),
                 promptTextContract: apiReaderWriteContract,
                 repairPromptTextContract: apiReaderWriteRepairContract,
@@ -15464,7 +15528,8 @@ async function analyzePaperDeepInternal(paper) {
                 analysisManifest,
                 'apiReaderArticle',
                 error.code === 'CONTRACT_REJECTED' ? 'contract_rejected' : 'invalid_output',
-                { error: error.message, fingerprint: apiReaderFingerprint }
+                { error: error.message, fingerprint: apiReaderFingerprint,
+                    ...require('./lib/daily-fact-review').fingerprintFields('apiReaderArticle') }
             );
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             throw readerGenerationCompleted
@@ -16339,7 +16404,9 @@ async function repairTagSelection(paper, analysis, evidenceContext, issue, optio
             { usageContext: { stage: 'tagSelection' } }
         );
         try {
-            return applyTagSelection(analysis, parseTagRepairResult(raw), options);
+            const repaired = applyTagSelection(analysis, parseTagRepairResult(raw), options);
+            require('./lib/daily-fact-review').validateRepairedClaims('tagSelection', extractSectionByTitle(repaired, '标签'), getPaperArxivId(paper));
+            return repaired;
         } catch (error) {
             feedback = error.message;
             if (attempt === 2) throw error;
@@ -16357,9 +16424,13 @@ async function repairCoreSummarySection(
     const evidenceContext = typeof preparedEvidence === 'string'
         ? preparedEvidence
         : buildStageEvidenceContext('coreSummaryRepair', original, sourceText);
+    const externalFeedback = String(options.reviewFeedback || '').trim();
+    if (externalFeedback && !require('./lib/daily-fact-review').current(getPaperArxivId(paper))) {
+        throw contractRejectedError('核心摘要事实反馈尚未绑定当前日更封存来源与正文');
+    }
     let issue = getCoreSummaryDetailIssue(original, { sourceText });
-    if (!issue) return original;
-    let feedback = issue;
+    if (!issue && !externalFeedback) return original;
+    let feedback = [issue, externalFeedback].filter(Boolean).join('\n');
     let candidateSummary = existingSummary;
     const repairCallModel = options.callModelFn || callModel;
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -16474,6 +16545,8 @@ async function repairCoreSummarySection(
             throw contractRejectedError('核心摘要局部修复改动了其他一级章节的内容。');
         }
         issue = getCoreSummaryDetailIssue(updated, { sourceText });
+        try { require('./lib/daily-fact-review').validateRepairedClaims('coreSummaryRepair', match[1], getPaperArxivId(paper)); }
+        catch (error) { issue = error.message; }
         diagnosticApi.saveCoreSummaryDisposition(diagnostic, {
             status: issue ? 'rejected' : 'validated', error: issue || null,
             outputTextSha256: crypto.createHash('sha256').update(rawResponse).digest('hex'),
@@ -16481,7 +16554,7 @@ async function repairCoreSummarySection(
         });
         if (!issue) return updated;
         console.warn(`    [deep] ⚠️  本次核心摘要局部修复仍未通过校验（${attempt}/3）：${issue}`);
-        feedback = issue;
+        feedback = [issue, externalFeedback].filter(Boolean).join('\n');
     }
     throw contractRejectedError(`核心摘要局部修复失败：${feedback}`);
 }
@@ -17266,6 +17339,8 @@ module.exports = {
     resetLegacyPromptRenderingRecovery,
     resetLegacyModelTextRecovery,
     removeManualAnalysisFields,
+    resolveAuxiliaryRequestPolicy,
+    auxiliaryRequestPolicyFields,
     markRecoveryStage,
     isRecoveryStageComplete,
     suppressOuterRetryAfterReaderExhaustion,

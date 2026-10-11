@@ -31,7 +31,7 @@ test('主分析实际请求关闭思考并记录同一策略，其他阶段和�
     assert.deepEqual(events[0].primaryRequestPolicy, { contract: 'analysis-primary-thinking-policy-v1', model: 'mimo-v2.6-flash', thinkingMode: 'disabled' });
     for (const change of [{ usageContext: { stage: 'revision' } }, { model: 'other-model' }]) {
         await deep.callModelWithConfig([{ role: 'user', content: '收到' }], 128, 1, { ...config, ...change });
-        assert.equal(bodies.at(-1).thinking, undefined);
+        assert.deepEqual(bodies.at(-1).thinking, change.model ? undefined : { type: 'disabled' });
         assert.equal(events.at(-1).primaryRequestPolicy, undefined);
     }
     assert.equal(utils.buildRequestBody('anthropic', 'mimo-v2.6-flash', [{ role: 'user', content: '收到' }], 128, 0.7, { usageContext: { stage: 'primaryAnalysis' }, primaryThinkingMode: 'disabled' }).thinking, undefined);

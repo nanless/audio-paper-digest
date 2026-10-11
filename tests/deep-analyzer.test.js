@@ -5864,7 +5864,8 @@ has_dataset: 否
         assert.match(prompts[1], /在同一句中说明比较对象、评测设置或数据集、指标、数值与方向/);
         assert.match(prompts[1], /使用相同指标的原文数值明确比较/);
         assert.doesNotMatch(prompts[1], /方向必须字面使用|两侧必须重复同一指标名/);
-        assert.match(prompts[1], /只编辑或补充下列未通过项/);
+        assert.match(prompts[1], /任务介绍与方法说明允许按下列长度或句数要求缩短、合并或补足/);
+        assert.match(prompts[1], /量化结果句、边界句和成本句逐字保留/);
     });
 
     it('核心摘要 cost-only 重试传递上一候选并且不再误导修改量化句', async () => {
@@ -7810,7 +7811,7 @@ describe('结构归一化和标签证据的新运行身份', () => {
             'structureRepair', paper.analysisCheckpoint, source);
         assert.strictEqual(prepared.promptTextContract, deep.currentPromptTextContract('structureRepair'));
         assert.strictEqual(prepared.fingerprint, deep.buildTextStageFingerprint('structureRepair',
-            prepared.inputAnalysis, prepared.evidenceContext, prepared.promptTextContract));
+            prepared.inputAnalysis, prepared.evidenceContext, prepared.promptTextContract, {}));
         assert.strictEqual(prepared.compatibilityReused, false);
         assert.strictEqual(prepared.invalidated, true);
         assert.strictEqual(prepared.analysis, input);

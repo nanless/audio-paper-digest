@@ -177,3 +177,46 @@ test('服务方拒图后，诊断保存两次实际输入并将响应绑定最�
     assert.notEqual(before.value.inputMessagesSha256, final.value.inputMessagesSha256);
     assert.notEqual(before.value.visibilityNotice, final.value.visibilityNotice);
 });
+
+test('分类诊断缺少 message 时仍保存付费响应和尝试', async t => {
+    const deep = require('../scripts/deep-analyzer.js');
+    const repair = require('../scripts/lib/reader-repair.js');
+    const directory = temporary(t);
+    const draft = fixture(); draft.readerTitle = '短';
+    const raw = '{"version":1,"replacements":[}';
+    const collect = repair.collectDraftIssues;
+    const classification = { path: null, code: 'reader_classification_only', diagnosticOnly: true };
+    // 增加诊断边界故障，原解析器及诊断仍实际执行。
+    let collections = 0;
+    repair.collectDraftIssues = (...args) => {
+        const issues = collect(...args);
+        return ++collections === 1 ? issues : [...issues, classification];
+    };
+    let calls = 0;
+    try {
+        await assert.rejects(deep.generateApiReaderArticleDetailed({ arxivId: '2610.90009', title: '分类诊断' }, 'canonical', '', {
+            sourceText: 'source', readerAttemptsDir: directory,
+            readerMaterializeFigures: async () => [], readerRecordDisposition() {},
+            readerCallModel: async () => {
+                calls++;
+                if (calls === 1) return JSON.stringify(draft);
+                if (calls === 2) return raw;
+                const savedName = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
+                const saved = JSON.parse(fs.readFileSync(path.join(directory, savedName))).payload;
+                assert.ok(saved.issues.some(issue => issue.code === classification.code && issue.message === ''));
+                throw new Error('保存完成后受控停止');
+            }
+        }), /保存完成后受控停止/);
+    } finally { repair.collectDraftIssues = collect; }
+    assert.equal(calls, 3);
+    const name = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
+    const payload = JSON.parse(fs.readFileSync(path.join(directory, name))).payload;
+    assert.equal(payload.attempts, 2);
+    assert.deepEqual(payload.draft, draft);
+    assert.equal(payload.rawDraft, JSON.stringify(draft));
+    const diagnostics = path.join(directory, 'request-diagnostics');
+    const responseName = fs.readdirSync(diagnostics).find(name => name.endsWith('.response.json'));
+    const response = JSON.parse(fs.readFileSync(path.join(diagnostics, responseName)));
+    assert.equal(response.rawResponse, raw);
+    assert.equal(response.outputTextSha256, require('node:crypto').createHash('sha256').update(raw).digest('hex'));
+});

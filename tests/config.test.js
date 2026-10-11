@@ -29,47 +29,47 @@ describe('config', () => {
     }
 
     it('基本配置值正确', () => {
-        Config = require('../scripts/config.js');
+        Config = withProjectEnv('', configured => configured);
         assert.strictEqual(Config.ANALYSIS_CONFIG.concurrency, 3);
         assert.strictEqual(Config.ANALYSIS_CONFIG.maxRetries, 2);
         assert.strictEqual(Config.ANALYSIS_CONFIG.apiMaxRetries, 3);
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.apiMaxResponseBytes,
-            Number(process.env.PD_ANALYSIS_API_MAX_RESPONSE_BYTES || 16 * 1024 * 1024)
+            (16 * 1024 * 1024)
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.apiMaxTokens,
-            Number(process.env.PD_ANALYSIS_API_MAX_TOKENS || 64000)
+            (64000)
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.repairMaxTokens,
-            Number(process.env.PD_ANALYSIS_REPAIR_MAX_TOKENS || 16000)
+            (16000)
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.revisionMaxTokens,
-            Number(process.env.PD_ANALYSIS_REVISION_MAX_TOKENS || 64000)
+            (64000)
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.apiReaderMaxTokens,
-            Number(process.env.PD_API_READER_MAX_TOKENS || 48000)
+            (48000)
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.apiReaderRepairMaxTokens,
-            Number(process.env.PD_API_READER_REPAIR_MAX_TOKENS || 8000)
+            (8000)
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.apiReaderOverallTimeoutMs,
-            Number(process.env.PD_API_READER_OVERALL_TIMEOUT_MS || 2400000)
+            (2400000)
         );
         assert.strictEqual(
             Config.ANALYSIS_CONFIG.apiReaderConcurrency,
-            Math.min(5, Number(process.env.PD_API_READER_CONCURRENCY || 5))
+            Math.min(5, (5))
         );
         assert.strictEqual(Config.ANALYSIS_CONFIG.scoringAuditTemperature, 0.1);
         assert.strictEqual(Config.ANALYSIS_CONFIG.imagePlanTemperature, 0.2);
         assert.strictEqual(Config.ANALYSIS_CONFIG.arxivPdfMaxBytes, 50 * 1024 * 1024);
         assert.strictEqual(Config.FILTER_CONFIG.batchSize,
-            Number(process.env.PD_FILTER_BATCH_SIZE || 5));
+            (5));
         assert.strictEqual(Config.FILTER_CONFIG.temperature, 0.3);
         assert.strictEqual(Config.FILTER_CONFIG.keywordPrefilterEnabled, true);
         assert.strictEqual(Config.FILTER_CONFIG.decisionContractVersion, 3);

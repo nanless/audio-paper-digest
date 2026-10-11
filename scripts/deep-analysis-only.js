@@ -23,25 +23,34 @@ const {
 const { updateAnalysisDigestStatuses } = require('./digest-status.js');
 const Config = require('./config.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
+const factReview = require('./lib/daily-fact-review.js');
 
 loadEnvFile();
 
-function parseTargetDate(argv = process.argv.slice(2)) {
+function parseDeepCliArgs(argv = process.argv.slice(2)) {
     if (!Array.isArray(argv)) throw new TypeError('命令行参数 argv 必须是数组。');
-    if (argv.length === 0) return getBeijingDateString();
-    if (argv.length !== 2 || argv[0] !== '--date') {
-        throw new Error('用法: npm run deep -- --date YYYY-MM-DD');
+    const options = { date: getBeijingDateString(), id: null, coreFeedbackFile: null };
+    const seen = new Set();
+    for (let i = 0; i < argv.length; i += 2) {
+        const flag = argv[i], value = argv[i + 1];
+        if (!['--date', '--id', '--core-feedback-file'].includes(flag)
+            || seen.has(flag) || !value || value.startsWith('--')) throw new Error('用法: npm run deep -- --date YYYY-MM-DD [--id ARXIV_ID --core-feedback-file FILE]');
+        seen.add(flag);
+        if (flag === '--date') options.date = value;
+        if (flag === '--id') {
+            if (!/^\d{4}\.\d{4,5}$/.test(value)) throw new Error('--id 须为规范arXiv ID');
+            options.id = value;
+        }
+        if (flag === '--core-feedback-file') options.coreFeedbackFile = value;
     }
-    const value = String(argv[1] || '');
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-        throw new Error('--date 必须是 YYYY-MM-DD');
-    }
-    const parsed = new Date(`${value}T00:00:00Z`);
-    if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
-        throw new Error('--date 不是有效日期');
-    }
-    return value;
+    const parsedDate = new Date(`${options.date}T00:00:00Z`);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(options.date)
+        || Number.isNaN(parsedDate.getTime())
+        || parsedDate.toISOString().slice(0, 10) !== options.date) throw new Error('--date 不是有效日期');
+    if (options.coreFeedbackFile && (!options.id || !seen.has('--date'))) throw new Error('事实反馈必须明确提供--id和--date');
+    return options;
 }
+function parseTargetDate(argv = process.argv.slice(2)) { return parseDeepCliArgs(argv).date; }
 
 function validateCompleteFilteredForToday(filteredData, today) {
     if (!filteredData || filteredData.status !== 'complete' || !Array.isArray(filteredData.papers)) {
@@ -102,7 +111,9 @@ async function runDeepAnalysis(options = {}) {
 
     const currentPath = Config.FILES.deepAnalysisResult;
     const filteredPath = Config.FILES.filteredPapers;
-    const today = options.date || parseTargetDate();
+    const cli = options.date ? options : parseDeepCliArgs();
+    const today = cli.date;
+    const feedback = cli.coreFeedbackFile ? factReview.readFeedback(cli.coreFeedbackFile) : null;
     const filteredData = validateCompleteFilteredForToday(readJsonFileStrict(filteredPath), today);
 
     const resultPath = currentPath;
@@ -114,10 +125,12 @@ async function runDeepAnalysis(options = {}) {
         throw new Error('继续分析需要已有日更分析记录及对应的 PDF 和文本来源文件。目标日期是北京时间当天时，请重新运行 npm run digest:prepare；历史日期应保留失败记录，并按历史维护流程处理。');
     }
 
-    let existingData = updateJsonFileLocked(resultPath, current =>
-        dailyFreshSources.prepareDailyFreshSourceRecoveryPayload(current,
-            validateCompleteFilteredForToday(readJsonFileStrict(filteredPath), today),
-            { label: 'deep-only recovery' }));
+    const prepare = current => dailyFreshSources.prepareDailyFreshSourceRecoveryPayload(current,
+        validateCompleteFilteredForToday(readJsonFileStrict(filteredPath), today),
+        { label: 'deep-only recovery' });
+    // 无效事实反馈必须在任何正式文件写入前停止。
+    let existingData = feedback || cli.id ? prepare(readJsonFileStrict(resultPath))
+        : updateJsonFileLocked(resultPath, prepare);
     const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(existingData, {
         label: 'deep-only recovery'
     });
@@ -131,8 +144,12 @@ async function runDeepAnalysis(options = {}) {
     console.log(`📊 读取到 ${papers.length} 篇筛选后的论文，其中 ${analyzedCount} 篇已有与当前封存来源对应的成功分析\n`);
 
     const freshById = new Map(filteredData.papers.map(paper => [normalizedId(paper), paper]));
+    if (cli.id && !papers.some(paper => normalizedId(paper) === cli.id)) throw new Error('指定论文不在完整日更集合内');
+    // 未取得论文锁时只作只读预检；取得锁后仍重新读取正式记录并核验同一反馈。
+    if (feedback) factReview.validateFeedback(feedback, dailySourcePlan, papers.find(paper => normalizedId(paper) === cli.id));
     const notAnalyzed = papers
-        .filter(p => !isSuccessfulAnalysisRecord(p)
+        .filter(p => !cli.id || normalizedId(p) === cli.id)
+        .filter(p => feedback || !isSuccessfulAnalysisRecord(p)
             || !dailyFreshSources.isPaperReusableForAnalysis(p, dailySourcePlan))
         .map(storedAnalysisRecord => mergeStoredAnalysisState(
             freshById.get(normalizedId(storedAnalysisRecord)) || storedAnalysisRecord,
@@ -174,13 +191,20 @@ async function runDeepAnalysis(options = {}) {
         saveInterval: Config.ANALYSIS_CONFIG.concurrency,
         analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
             ...options,
-            ...(options.analyzeFn ? { analyze: options.analyzeFn } : {})
+            ...(feedback ? { analyze: paper => {
+                const bound = factReview.validateFeedback(feedback, dailySourcePlan, paper);
+                return factReview.withFactReview(bound, () => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper));
+            } } : options.analyzeFn ? { analyze: options.analyzeFn } : {})
         }),
         preparePaperLocked: paper => {
             const current = readJsonFileStrict(resultPath);
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
-            if (isSuccessfulAnalysisRecord(latest)
+            if (feedback) {
+                const lockedPlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(current, { label: 'locked fact review' });
+                factReview.validateFeedback(feedback, lockedPlan, latest);
+            }
+            if (!feedback && isSuccessfulAnalysisRecord(latest)
                 && dailyFreshSources.isPaperReusableForAnalysis(latest, dailySourcePlan)) {
                 return { paper: latest, skip: true };
             }
@@ -298,6 +322,7 @@ if (require.main === module) {
 module.exports = {
     runDeepAnalysis,
     parseTargetDate,
+    parseDeepCliArgs,
     validateCompleteFilteredForToday,
     validateDeepAnalysisInput,
     finalizeDeepZeroWorkState

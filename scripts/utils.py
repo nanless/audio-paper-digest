@@ -279,44 +279,10 @@ def _validate_tag_selection(tag_catalog, tags, primary_task_tag, primary_method_
                       f'当前 {len(task_concepts)} 个'
                       + (f': {task_tag_list}' if task_tag_list else ''))
 
-    # 判断主任务是否足够具体时，要检查整个词表，而不只是本次选中的标签。
-    # 主任务过于宽泛只产生告警，不改变 valid 字段；已有阶段记录的绑定校验
-    # 和发布端解析仍按原规则执行，新的标签选择流程用该告警触发局部修复。
+    # 目录里的子任务不代表本篇适用；已选父子概念仍由上方硬规则核验。
     specificity_warning = None
-    if task is not None:
-        # 先核验一次词表，再用本地的父级映射查询上下级关系。
-        # tag_catalog.ancestors() 每次都会完整核验词表；逐个查询所有启用概念
-        # 会使选择检查达到 O(N²)。Node 的 tag-rules.activeDescendants
-        # 使用相同规则。
-        data = _validate_tag_catalog_content(tag_catalog)
-        parent_by_id = {concept['id']: concept['broaderId']
-                        for concept in data['concepts']}
-
-        def _chain(concept_id):
-            chain = []
-            parent = parent_by_id.get(concept_id)
-            while parent is not None:
-                chain.append(parent)
-                parent = parent_by_id.get(parent)
-            return chain
-
-        missing_descendants = [
-            concept for concept in data['concepts']
-            if concept['status'] == 'active'
-            and concept['id'] != task['id']
-            and task['id'] in _chain(concept['id'])
-            and concept['id'] not in ids
-        ]
-        if missing_descendants:
-            sample = ' '.join(_canonical_tag(concept)
-                              for concept in missing_descendants[:8])
-            tail = ' …' if len(missing_descendants) > 8 else ''
-            specificity_warning = (
-                f'主任务标签过于宽泛：{_canonical_tag(task)} 的下级概念中有未被选中的已启用概念'
-                f'（共 {len(missing_descendants)} 个）：{sample}{tail}')
-
-    # 与 Node 一致，删除重复诊断并保留首次出现的顺序。
     errors = list(dict.fromkeys(errors))
+
     return {
         'valid': not errors,
         'errors': errors,

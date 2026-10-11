@@ -123,29 +123,6 @@ function createTagRules(options = {}) {
         return matchingConcepts.length === 1 ? matchingConcepts[0] : null;
     }
 
-    // 在整个词表中查找主任务的已启用下级概念，并按词表原始顺序返回，
-    // 以便 Node 与 Python 给出一致的告警。告警不改变标签选择的 valid 结果。
-    // tag-catalog.ancestors() 每次调用都会重新校验整个词表；逐概念调用会使
-    // 检查耗时增长为 O(N²)。词表在创建规则时已校验，这里使用本地上级关系。
-    const parentByConceptId = new Map(
-        tagCatalog.concepts.map(concept => [concept.id, concept.broaderId])
-    );
-    function ancestorIds(conceptId) {
-        const chain = [];
-        let parent = parentByConceptId.get(conceptId);
-        while (parent !== null && parent !== undefined) {
-            chain.push(parent);
-            parent = parentByConceptId.get(parent);
-        }
-        return chain;
-    }
-    function activeDescendants(conceptId) {
-        return tagCatalog.concepts.filter(concept =>
-            concept.status === 'active'
-            && concept.id !== conceptId
-            && ancestorIds(concept.id).includes(conceptId));
-    }
-
     function validateTagSelection(selection = {}) {
         const rawTags = Array.isArray(selection.tags) ? selection.tags : [];
         const errors = [];
@@ -179,19 +156,8 @@ function createTagRules(options = {}) {
                 + `当前 ${taskConcepts.length} 个${taskTagList ? `: ${taskTagList}` : ''}`);
         }
 
-        // 如果主任务还有尚未选择的已启用下级概念，返回告警供新标签选择阶段
-        // 决定是否局部修复。告警不改变 valid，也不阻断已保存标签阶段记录的核验。
-        let specificityWarning = null;
-        if (primaryTaskConcept) {
-            const missingDescendants = activeDescendants(primaryTaskConcept.id)
-                .filter(concept => !selectedConceptIds.includes(concept.id));
-            if (missingDescendants.length > 0) {
-                const sample = missingDescendants.slice(0, 8).map(preferredTag).join(' ');
-                const tail = missingDescendants.length > 8 ? ' …' : '';
-                specificityWarning = `主任务标签过于宽泛：${preferredTag(primaryTaskConcept)} 的下级概念中有未被选中的已启用概念`
-                    + `（共 ${missingDescendants.length} 个）：${sample}${tail}`;
-            }
-        }
+        // 词表存在下级概念不证明本篇属于该任务。所选父子概念的硬检查在上方保留。
+        const specificityWarning = null;
 
         return {
             valid: errors.length === 0,

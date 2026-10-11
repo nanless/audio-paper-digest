@@ -433,13 +433,28 @@ function renderReaderTableSelection(binding, artifacts) {
     }
     const eligibility = assessReaderTableSelectionEligibility(table);
     if (!eligibility.eligible) {
+        const inventory = artifacts?.tables || [];
+        const alternatives = inventory.filter(candidate => Number.isInteger(candidate?.ordinal)
+            && candidate.ordinal >= 1
+            && inventory.filter(item => item?.ordinal === candidate.ordinal).length === 1
+            && assessReaderTableSelectionEligibility(candidate).eligible).map(candidate => candidate.ordinal);
         throw new Error(`${label} selection eligible=false: ${eligibility.reasonCodes.join(', ')}。`
-            + '原表不能逐字安全渲染为 Markdown；仅可使用有完整逐字证据的 source_quotes 路线，不得编造表头或改写来源。');
+            + `sourceTableOrdinal=${sourceTableOrdinal}；其他可选择原表序号=${JSON.stringify(alternatives)}。`
+            + '当前原表不能逐字安全渲染为 Markdown；可根据对应原文证据改选合格原表，或仅使用有完整逐字证据的 source_quotes 路线，不得编造表头或改写来源。');
     }
     for (const [values, limit, minimum] of [[requestedSourceRows, table.matrix.length, 2], [sourceColumns, width, 2]]) {
         if (!Array.isArray(values) || values.length < minimum || new Set(values).size !== values.length
             || values.some(index => !Number.isInteger(index) || index < 0 || index >= limit)) {
-            throw new Error(`${label} 行列重复、越界或数量不足`);
+            const axis = values === requestedSourceRows ? 'sourceRows' : 'sourceColumns';
+            const duplicateIndexes = Array.isArray(values)
+                ? [...new Set(values.filter((value, index) => values.indexOf(value) !== index))] : [];
+            const invalidIndexes = Array.isArray(values)
+                ? values.filter(index => !Number.isInteger(index) || index < 0 || index >= limit) : [];
+            throw new Error(`${label} 行列重复、越界或数量不足：${axis} 必须是至少${minimum}项的互不重复整数数组，`
+                + `索引从0开始，合法范围=0..${limit - 1}（数量=${limit}，末索引不是${limit}）；`
+                + `当前=${JSON.stringify(values)}，重复=${JSON.stringify(duplicateIndexes)}，非法=${JSON.stringify(invalidIndexes)}；`
+                + `sourceTableOrdinal=${sourceTableOrdinal}，原表头行=${JSON.stringify(effectiveReaderTableRows(table).headerRows)}。`
+                + '只根据本表实际展示的原文行列重新选择，不沿用相邻表的数量，不自动裁行或猜单元格；保留原比较条件与必要基线。');
         }
     }
     const effectiveRows = effectiveReaderTableRows(table);

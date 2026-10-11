@@ -87,7 +87,7 @@ test('旧完整阶段原样复用，证据变化后用当前版本和实际请�
     assert.equal(changed.invalidated, true);
     assert.equal(changed.promptTextContract, deep.currentPromptTextContract(stage));
     assert.equal(changed.fingerprint, deep.buildTextStageFingerprint(stage,
-        changed.inputAnalysis, changed.evidenceContext, changed.promptTextContract));
+        changed.inputAnalysis, changed.evidenceContext, changed.promptTextContract, {}));
     let actualBudget;
     const current = input.replace('## 毒舌点评\n', '## 论文评价\n');
     const repaired = await deep.repairMissingAnalysisSections(paper, input, '新的官方证据，内容确实变化。',

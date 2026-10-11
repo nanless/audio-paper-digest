@@ -27,7 +27,7 @@ test('局部修复请求通过公共路由发送实际推理参数，其余阶�
     }
     for (const body of bodies.slice(0, 3)) assert.deepEqual(body.thinking, { type: 'disabled' });
     assert.equal(Object.hasOwn(bodies[3], 'thinking'), false);
-    assert.equal(Object.hasOwn(bodies[4], 'thinking'), false);
+    assert.deepEqual(bodies[4].thinking, { type: 'disabled' });
     assert.equal(bodies.length, 5);
 });
 

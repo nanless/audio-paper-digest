@@ -3,6 +3,7 @@
 
 import hashlib
 from html.entities import html5
+from html.parser import HTMLParser
 import math
 import os
 from pathlib import Path
@@ -45,20 +46,68 @@ def normalize_html_svg_entities(text):
     return re.sub(r'&([A-Za-z][A-Za-z0-9]+);', replace, text)
 
 
+def normalize_static_html_breaks(text):
+    class BreakTokens(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=False)
+            self.replacements = []
+            self.has_image = False
+
+        def handle_starttag(self, tag, attrs):
+            if tag == 'img':
+                self.has_image = True
+            if tag != 'br':
+                return
+            line, column = self.getpos()
+            offset = sum(len(part) for part in text.splitlines(keepends=True)[:line - 1]) + column
+            token = self.get_starttag_text()
+            self.replacements.append((offset, token, token[:-1] + '/>'))
+
+        def handle_startendtag(self, tag, attrs):
+            if tag == 'img':
+                self.has_image = True
+
+    tokens = BreakTokens()
+    tokens.feed(text)
+    tokens.close()
+    if tokens.has_image:
+        return text
+    for offset, original, replacement in reversed(tokens.replacements):
+        if text[offset:offset + len(original)] != original:
+            raise ValueError('内联 SVG 换行节点位置无效')
+        text = text[:offset] + replacement + text[offset + len(original):]
+    return text
+
+
 def validate_svg(raw):
     if not raw or len(raw) > MAX_SOURCE_BYTES:
         raise ValueError('内联 SVG 字节为空或超过受控上限')
-    text = normalize_html_svg_entities(raw.decode('utf-8'))
+    text = normalize_static_html_breaks(normalize_html_svg_entities(raw.decode('utf-8')))
     if re.search(r'<!DOCTYPE|<!ENTITY|<\?', text, re.I):
         raise ValueError('内联 SVG 不允许实体或处理指令')
     root = ET.fromstring(text)
     if root.tag.split('}')[-1].lower() != 'svg':
         raise ValueError('内联 SVG 根元素无效')
+    parents = {child: parent for parent in root.iter() for child in parent}
     for element in root.iter():
         if element.tag.split('}')[-1].lower() not in ALLOWED_TAGS:
             raise ValueError('内联 SVG 含不允许的元素')
         for name, value in element.attrib.items():
+            original_name = name
             name = name.split('}')[-1].lower()
+            if name in {'accent', 'stretchy'}:
+                ancestor = element
+                in_math = False
+                while ancestor is not None:
+                    if ancestor.tag in {'math', '{http://www.w3.org/1998/Math/MathML}math'}:
+                        in_math = True
+                        break
+                    ancestor = parents.get(ancestor)
+                allowed_tag = 'mover' if name == 'accent' else 'mo'
+                if (original_name != name or element.tag not in {allowed_tag, '{http://www.w3.org/1998/Math/MathML}' + allowed_tag}
+                        or not in_math or value not in {'true', 'false'}):
+                    raise ValueError('内联 SVG 的数学布尔设置无效')
+                continue
             if name not in ALLOWED_ATTRIBUTES or name.startswith('on'):
                 raise ValueError('内联 SVG 含事件或资源请求')
             if name == 'href' and not re.fullmatch(r'#[A-Za-z_][\w.:-]*', value):

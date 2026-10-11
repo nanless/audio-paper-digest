@@ -636,6 +636,15 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature, opti
         error.code = 'REQUEST_THINKING_POLICY_CONFLICT';
         throw error;
     }
+    if (apiType === 'openai' && model === 'mimo-v2.6-flash'
+        && ['openSourceScan', 'revision', 'scoringAudit', 'tagSelection'].includes(options.usageContext?.stage)
+        && options.auxiliaryThinkingMode !== undefined
+        && [options.readerThinkingMode, options.repairThinkingMode, options.primaryThinkingMode].some(mode =>
+            mode !== undefined && mode !== options.auxiliaryThinkingMode)) {
+        const error = new Error('辅助阶段与其他请求推理设置冲突');
+        error.code = 'REQUEST_THINKING_POLICY_CONFLICT';
+        throw error;
+    }
     if (apiType === 'anthropic') {
         // Anthropic: system 必须是顶级字段，不能在 messages 中
         let system = undefined;
@@ -692,6 +701,10 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature, opti
         })),
         max_tokens: maxTokens,
         temperature,
+        ...(apiType === 'openai' && model === 'mimo-v2.6-flash'
+            && ['openSourceScan', 'revision', 'scoringAudit', 'tagSelection'].includes(options.usageContext?.stage)
+            && options.auxiliaryThinkingMode !== undefined
+            ? { thinking: { type: validateReaderThinkingMode(options.auxiliaryThinkingMode) } } : {}),
         ...(apiType === 'openai' && model === 'mimo-v2.6-flash' && readerJsonStage
             && options.readerResponseFormat === 'json_object'
             ? { response_format: { type: 'json_object' } } : {}),
