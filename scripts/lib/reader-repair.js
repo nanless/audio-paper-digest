@@ -1736,8 +1736,11 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '') {
     const evidence = String(sourceEvidence || '');
     const exactQuotes = [...new Set(targets.flatMap(target => target.value?.sourceQuotes || []))]
         .filter(quote => typeof quote === 'string' && String(sourceText).includes(quote));
+    const formulaAppendGuidance = atomicOperation?.kind === 'complete_existing_formula_bindings_v1'
+        ? `公式来源数组前 ${draft.formulaBindings.length} 条是不可改动的原记录，内容和顺序必须逐字保持。不要按公式编号排序；正文标记的排列顺序不决定数组顺序。只在数组末尾追加本轮明确列出的缺失记录。原记录前缀：${JSON.stringify(draft.formulaBindings)}。本轮允许提交的完整数组：${JSON.stringify([...draft.formulaBindings, ...atomicOperation.missingBindings])}。`
+        : '';
     const targetGuidance = `本轮只允许修改这些目标：${JSON.stringify(targets.map(target => target.path))}。`
-        + '下面的诊断可能列出其他已发现问题，列出问题不代表授权修改。只提交本轮允许目标，逐项使用请求给出的真实 oldSha256；其余问题留待下一轮重新核验并授权，不要为未授权目标编造 SHA。';
+        + '下面的诊断可能列出其他已发现问题，列出问题不代表授权修改。只提交本轮允许目标，逐项使用请求给出的真实 oldSha256；其余问题留待下一轮重新核验并授权，不要为未授权目标编造 SHA。' + formulaAppendGuidance;
     return { draftSha256: hashDraft(draft), targets, issues, evidence, atomicOperation, targetGuidance,
         exactQuotes, figureOrdinals: [...figureOrdinals], evidenceMode: 'full-evidence-local-output' };
 }

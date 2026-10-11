@@ -113,3 +113,28 @@ test('补齐公式后仍须绑定真实原始 TeX，缺来源和截断公式继�
             updated.formulaBindings, { sourceText, structuredArtifacts: {}, sections: updated.sections }));
     }
 });
+
+
+test('缺失的小编号公式只在末尾追加，动态指导完整保留原绑定前缀', () => {
+    const sample = createMissingFormulaBindingsSample();
+    sample.draft.formulaBindings = [sample.patch.replacements[0].value[1]];
+    const context = repair.buildRepairContext(sample.draft, sample.issues, 'FORMULA_ORDINALS_AVAILABLE: [1,7]');
+    const expectedBindings = [...sample.draft.formulaBindings, ...context.atomicOperation.missingBindings];
+    assert.deepEqual(expectedBindings.map(binding => binding.formulaOrdinal), [7, 1]);
+    assert.ok(context.targetGuidance.includes(`原记录前缀：${JSON.stringify(sample.draft.formulaBindings)}`));
+    assert.ok(context.targetGuidance.includes(`完整数组：${JSON.stringify(expectedBindings)}`));
+    assert.match(context.targetGuidance, /不要按公式编号排序/);
+    const patch = {
+        version: 1,
+        draftSha256: repair.hashDraft(sample.draft),
+        replacements: [{ path: '/formulaBindings', oldSha256: repair.hashDraft(sample.draft.formulaBindings), value: expectedBindings }]
+    };
+    const updated = repair.applyReaderPatch(sample.draft, patch, ['/formulaBindings'], { atomicOperation: context.atomicOperation });
+    assert.deepEqual(updated.sections, sample.draft.sections);
+    assert.deepEqual(updated.formulaBindings, expectedBindings);
+    const sortedPatch = structuredClone(patch);
+    sortedPatch.replacements[0].value.sort((left, right) => left.formulaOrdinal - right.formulaOrdinal);
+    assert.throws(() => repair.applyReaderPatch(sample.draft, sortedPatch, ['/formulaBindings'], { atomicOperation: context.atomicOperation }));
+    const unauthorizedContext = repair.buildRepairContext(sample.draft, [], '');
+    assert.doesNotMatch(unauthorizedContext.targetGuidance, /完整数组：/);
+});
