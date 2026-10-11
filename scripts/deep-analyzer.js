@@ -123,6 +123,7 @@ const {
     ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
     ANALYSIS_PROMPT_TEXT_V3_CONTRACT,
     ANALYSIS_PROMPT_TEXT_V4_CONTRACT,
+    ANALYSIS_PROMPT_TEXT_V5_CONTRACT,
     FROZEN_V1_PROMPT_FILES: RECOVERY_PROMPT_FILES,
     PROMPT_FILE_VERSIONS,
     currentPromptTextContract,
@@ -9113,7 +9114,8 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext, prompt
             declaredPromptTextContract !== ANALYSIS_PROMPT_TEXT_V3_CONTRACT
                 && ['revision', 'structureRepair'].includes(stage)
                 ? REPAIR_MAX_TOKENS
-                : ![ANALYSIS_PROMPT_TEXT_V3_CONTRACT, ANALYSIS_PROMPT_TEXT_V4_CONTRACT].includes(declaredPromptTextContract)
+                : ![ANALYSIS_PROMPT_TEXT_V3_CONTRACT, ANALYSIS_PROMPT_TEXT_V4_CONTRACT,
+                    ANALYSIS_PROMPT_TEXT_V5_CONTRACT].includes(declaredPromptTextContract)
                     && stage === 'coreSummaryRepair'
                     ? LEGACY_CURRENT_CORE_SUMMARY_REPAIR_MAX_TOKENS : config.maxTokens),
         promptTemplateSha256: promptTemplateSha256(
