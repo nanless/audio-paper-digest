@@ -1169,6 +1169,7 @@ function hasValidApiReaderV3Records(paper) {
     const figurePersistenceValid = figurePersistence === undefined
         || figurePersistence === EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT;
     const diagnosticChecks = {
+        concept_markers_assembled: !require('./deep-analyzer.js').findUnassembledApiReaderConceptMarker(article),
         figure_markers_assembled: !require('./deep-analyzer.js').findUnassembledApiReaderFigureMarker(article),
         article_hash: paper.apiReaderArticleSha256 === articleSha256
             && stage.articleSha256 === articleSha256,
@@ -1225,6 +1226,7 @@ function hasValidApiReaderV3Records(paper) {
     }
     return Boolean(
         diagnosticChecks.figure_markers_assembled
+        && diagnosticChecks.concept_markers_assembled
         && paper.apiReaderArticleSha256 === articleSha256
         && paper.apiReaderPlanSha256 === planSha256
         && stage.articleSha256 === articleSha256

@@ -11,7 +11,7 @@ const { hasValidApiReaderV3Records } = require('../scripts/analysis-engine.js');
 const sha = text => crypto.createHash('sha256').update(text).digest('hex');
 const sourceText = 'This is the same verified paper source used to produce the Reader.';
 
-function fixture() {
+function createReaderPaperSample() {
     const sourceSha256 = sha(sourceText);
     const paper = { arxivId: '2609.03622', authors: ['Author'], sourceSha256 };
     const identity = {
@@ -66,12 +66,12 @@ function fixture() {
             }
         }
     };
-    assert.equal(hasValidApiReaderV3Records(paper), true, 'fixture must satisfy the production validator');
+    assert.equal(hasValidApiReaderV3Records(paper), true, '测试正文必须通过正式校验器');
     return paper;
 }
 
 test('反馈修订的种子精确锁定已签名文章和计划，并带上来源与修订哈希', () => {
-    const paper = fixture();
+    const paper = createReaderPaperSample();
     const before = JSON.stringify(paper);
     const seed = prepareApiReaderRevisionSeed(paper, sourceText, '只修正图的颜色对应');
     assert.deepEqual(JSON.parse(seed.initialDraft), { article: paper.apiReaderArticle, plan: paper.apiReaderPlan });
@@ -81,11 +81,11 @@ test('反馈修订的种子精确锁定已签名文章和计划，并带上来�
     assert.equal(seed.metadata.revisionSeedPlanSha256, paper.apiReaderPlanSha256);
     assert.equal(seed.metadata.revisionSeedSourceSha256, sha(sourceText));
     assert.equal(seed.metadata.revisionTemperature, 0.1);
-    assert.equal(JSON.stringify(paper), before, 'seed preparation must be read-only');
+    assert.equal(JSON.stringify(paper), before, '准备修订参考不得改动原记录');
 });
 
 test('带种子的生成从修复温度开始，请求完整 schema，但不改写正确内容', () => {
-    const paper = fixture();
+    const paper = createReaderPaperSample();
     const reviewFeedback = '修正数据角色';
     const seed = prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback);
     const start = buildApiReaderGenerationStart(paper, { reviewFeedback, sourceText, initialDraft: seed.initialDraft });
@@ -116,16 +116,16 @@ test('不完整、被篡改、阶段过期或来源不对的 Reader，作为修�
         paper => { paper.analysisManifest.stages.apiReaderArticle.figuresSha256 = 'b'.repeat(64); },
         paper => { paper.latestAnalysisAttemptError = 'latest attempt failed'; }
     ]) {
-        const paper = fixture();
+        const paper = createReaderPaperSample();
         tamper(paper);
         assert.throws(() => prepareApiReaderRevisionSeed(paper, sourceText, '修正事实'), /定向修订需要完整的读者文章/);
     }
-    assert.throws(() => prepareApiReaderRevisionSeed(fixture(), sourceText + 'changed', '修正事实'), /来源 SHA 与本次论文全文不一致/);
+    assert.throws(() => prepareApiReaderRevisionSeed(createReaderPaperSample(), sourceText + 'changed', '修正事实'), /来源 SHA 与本次论文全文不一致/);
     assert.throws(() => prepareApiReaderRevisionSeed({}, sourceText, '修正事实'), /定向修订需要完整的读者文章/);
 });
 
 test('调用方提供的草稿不能绕过种子校验，已签名输入一变种子身份就变', () => {
-    const paper = fixture();
+    const paper = createReaderPaperSample();
     const seed = prepareApiReaderRevisionSeed(paper, sourceText, '修正事实');
     assert.throws(() => buildApiReaderGenerationStart(paper, {
         reviewFeedback: '修正事实', sourceText, initialDraft: seed.initialDraft + 'forged'
@@ -141,7 +141,7 @@ test('调用方提供的草稿不能绕过种子校验，已签名输入一变�
 
 
 test('已签名正文仍有图片标记时拒绝资格，普通图号引文保留', () => {
-    const paper = fixture();
+    const paper = createReaderPaperSample();
     const sourceSha256 = paper.sourceSha256;
     const sourceManifest = JSON.stringify(paper.analysisManifest.sourceAcquisition);
     for (const marker of ['[[FIGURE_2]]', '[[FIGURE_0]]', '[[FIGURE_02]]']) {
@@ -158,4 +158,122 @@ test('已签名正文仍有图片标记时拒绝资格，普通图号引文保�
     ordinaryQuote.apiReaderArticleSha256 = sha(ordinaryQuote.apiReaderArticle);
     ordinaryQuote.analysisManifest.stages.apiReaderArticle.articleSha256 = ordinaryQuote.apiReaderArticleSha256;
     assert.equal(hasValidApiReaderV3Records(ordinaryQuote), true);
+});
+
+
+function refreshBoundSample(paper) {
+    paper.apiReaderArticleSha256 = sha(paper.apiReaderArticle);
+    paper.apiReaderPlanSha256 = stableFingerprint(paper.apiReaderPlan);
+    const stage = paper.analysisManifest.stages.apiReaderArticle;
+    stage.articleSha256 = paper.apiReaderArticleSha256;
+    stage.planSha256 = paper.apiReaderPlanSha256;
+    stage.figureCount = paper.apiReaderFigures.length;
+    stage.figuresSha256 = stableFingerprint(paper.apiReaderFigures);
+}
+
+function addBoundFigure(paper, ordinal) {
+    const marker = `[[FIGURE_${ordinal}]]`;
+    const figure = { ordinal, label: `Figure ${ordinal}`, caption: '原始图注',
+        url: `https://arxiv.org/html/2609.03622/figure-${ordinal}.png` };
+    const block = '> **看图路径：** 1. 核对原图方向\n\n'
+        + `![原论文 Figure ${ordinal}：原始图注](${figure.url})\n\n`
+        + `*论文图 ${ordinal}。原论文 Figure ${ordinal}：“原始图注”。*`;
+    paper.apiReaderFigures.push(figure);
+    paper.apiReaderPlan.figurePlacements.push({ figureOrdinal: ordinal, marker,
+        targetKind: 'component', focusPoints: ['核对原图方向'] });
+    paper.apiReaderArticle += `\n\n图前新增导读。\n\n${block}\n\n图后新增解释。`;
+    refreshBoundSample(paper);
+    return { marker, block };
+}
+
+test('修订参考只逆转精确来源图块，保留导读、解释和旧计划', () => {
+    const paper = createReaderPaperSample();
+    const firstFigure = addBoundFigure(paper, 1);
+    const secondFigure = addBoundFigure(paper, 2);
+    assert.equal(hasValidApiReaderV3Records(paper), true);
+    const originalPaper = JSON.stringify(paper);
+    const seed = prepareApiReaderRevisionSeed(paper, sourceText, '只修事实');
+    const reference = JSON.parse(seed.initialDraft);
+    assert.ok(reference.article.includes(firstFigure.marker));
+    assert.ok(reference.article.includes(secondFigure.marker));
+    assert.equal(reference.article.includes('看图路径'), false);
+    assert.equal(reference.article.includes('![原论文'), false);
+    assert.equal(reference.article.includes('*论文图'), false);
+    assert.ok(reference.article.includes('图前新增导读。'));
+    assert.ok(reference.article.includes('图后新增解释。'));
+    assert.deepEqual(reference.plan, paper.apiReaderPlan);
+    assert.equal(seed.metadata.revisionSeedSha256, sha(seed.initialDraft));
+    assert.equal(seed.metadata.revisionSeedArticleSha256, paper.apiReaderArticleSha256);
+    assert.equal(JSON.stringify(paper), originalPaper);
+});
+
+test('不精确或重复的完整图块不能靠修订参考猜测删改', () => {
+    for (const scenario of ['修改图注', '重复整块']) {
+        const paper = createReaderPaperSample();
+        const figureSample = addBoundFigure(paper, 1);
+        if (scenario === '修改图注') {
+            paper.apiReaderArticle = paper.apiReaderArticle.replace('：“原始图注”。*', '：“另一解释”。*');
+        } else {
+            paper.apiReaderArticle += `\n\n${figureSample.block}`;
+        }
+        refreshBoundSample(paper);
+        assert.throws(() => prepareApiReaderRevisionSeed(paper, sourceText, '修事实'),
+            /无法精确重放 Figure 1 注入块/);
+    }
+});
+
+test('原始公式只从修订正文逆回标记，TeX 和来源记录仍保留在计划', () => {
+    const analyzer = require('../scripts/deep-analyzer.js');
+    const paper = createReaderPaperSample();
+    const html = '<div class="ltx_equation" id="E1"><math display="block"><semantics>'
+        + '<mtext>x equals y</mtext><annotation encoding="application/x-tex">x=y</annotation>'
+        + '</semantics></math></div>';
+    const artifacts = analyzer.bindStructuredArtifactsToText(
+        analyzer.parseArxivStructuredArtifactsFromHtml(html, paper.arxivId, paper.arxivId), sourceText
+    );
+    const requestedBindings = [{ formulaOrdinal: 1, targetKind: 'component', marker: '[[FORMULA_1]]' }];
+    const bound = analyzer.bindApiReaderSourceEvidence('[[FORMULA_1]]', [], requestedBindings,
+        { sourceText, structuredArtifacts: artifacts,
+            sections: [{ kind: 'component', heading: '公式说明', body: '[[FORMULA_1]]' }] });
+    paper.apiReaderPlan.formulaBindings = bound.formulaBindings;
+    paper.apiReaderPlan.structuredSourcePayload = bound.structuredSourcePayload;
+    paper.apiReaderArticle += `\n\n公式前解释。\n\n${bound.article}\n\n公式后解释。`;
+    paper.apiReaderPlan.sourceBindingsSha256 = stableFingerprint({ tableBindings: [], formulaBindings: bound.formulaBindings });
+    paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256 = artifacts.payloadSha256;
+    const stage = paper.analysisManifest.stages.apiReaderArticle;
+    stage.structuredArtifactsSha256 = artifacts.payloadSha256;
+    stage.formulaBindingCount = 1;
+    stage.sourceBindingsSha256 = paper.apiReaderPlan.sourceBindingsSha256;
+    refreshBoundSample(paper);
+    assert.equal(hasValidApiReaderV3Records(paper), true);
+    const seed = prepareApiReaderRevisionSeed(paper, sourceText, '修正事实');
+    const reference = JSON.parse(seed.initialDraft);
+    assert.ok(reference.article.includes('[[FORMULA_1]]'));
+    assert.equal(reference.article.includes(bound.article), false);
+    assert.ok(reference.article.includes('公式前解释。'));
+    assert.ok(reference.article.includes('公式后解释。'));
+    assert.deepEqual(reference.plan.formulaBindings, bound.formulaBindings);
+    assert.equal(reference.plan.structuredSourcePayload, bound.structuredSourcePayload);
+    const originalSeedSha256 = seed.metadata.revisionSeedSha256;
+    paper.apiReaderPlan.formulaBindings[0].renderedBlockSha256 = 'f'.repeat(64);
+    refreshBoundSample(paper);
+    assert.throws(() => prepareApiReaderRevisionSeed(paper, sourceText, '修正事实'),
+        /定向修订需要完整的读者文章/);
+    assert.equal(sha(seed.initialDraft), originalSeedSha256);
+});
+
+test('旧Reader自洽SHA仍不能给残留术语组合标记授予资格', () => {
+    const deep = require('../scripts/deep-analyzer');
+    const validSample = createReaderPaperSample();
+    assert.equal(hasValidApiReaderV3Records(validSample), true);
+    for (const marker of ['[[CONCEPT_BRIDGE_0]]', '[[CONCEPT_BRIDGE_99]]']) {
+        const sample = createReaderPaperSample();
+        sample.apiReaderArticle += '\n\n' + marker;
+        sample.apiReaderArticleSha256 = sha(sample.apiReaderArticle);
+        sample.analysisManifest.stages.apiReaderArticle.articleSha256 = sample.apiReaderArticleSha256;
+        const original = JSON.stringify(sample);
+        assert.equal(hasValidApiReaderV3Records(sample), false);
+        assert.equal(JSON.stringify(sample), original);
+        assert.equal(deep.findUnassembledApiReaderConceptMarker(sample.apiReaderArticle), marker);
+    }
 });

@@ -397,3 +397,80 @@ test('同一已执行反馈可从保留原正文恢复，其他旧正文和篡�
     inventedQuote.sourceQuotes = ['This sentence does not occur in the sealed source.'];
     assert.throws(() => review.validateFeedback(inventedQuote, sample.plan, sample.paper), /逐字引文/);
 });
+
+test('独立评分反馈不改变主文配方且旧主分析约束不可绕过', async t => {
+    const sample = await fixture(t);
+    const feedback = {
+        ...sample.feedback,
+        primaryFeedback: '', rejectedPrimaryClaims: [],
+        coreFeedback: '', rejectedCoreClaims: [],
+        readerFeedback: '', rejectedReaderClaims: [],
+        scoringFeedback: '评分不得把无显著差异称为不劣。',
+        rejectedScoringClaims: ['无显著差异证明不劣']
+    };
+    const bound = review.validateFeedback(feedback, sample.plan, sample.paper);
+    review.withFactReview(bound, () => {
+        assert.deepEqual(review.fingerprintFields('primaryAnalysis', {}), {});
+        assert.deepEqual(review.fingerprintFields('coreSummaryRepair', {}), {});
+        assert.deepEqual(review.fingerprintFields('apiReaderArticle', {}), {});
+        assert.deepEqual(review.fingerprintFields('scoringAudit', {}), { scoringFactReview: bound.proof });
+        review.assertScoringRequestAllowed({});
+        assert.throws(() => review.assertScoringRequestAllowed({ factReview: bound.proof }), /主分析反馈/);
+        assert.throws(() => review.validateRepairedClaims('scoringAudit', '无显著差异证明不劣', ID), /错误的原句/);
+        review.validateRepairedClaims('primaryAnalysis', '无显著差异证明不劣', ID);
+        assert.match(review.reviewFeedback('scoringAudit', ID), /评分不得/);
+        assert.equal(review.reviewFeedback('primaryAnalysis', ID), '');
+    });
+    assert.throws(() => review.assertScoringRequestAllowed({ scoringFactReview: bound.proof }), /独立评分反馈/);
+    assert.throws(() => review.validateShape({ ...feedback, rejectedScoringClaims: undefined }), /原句列表/);
+    assert.throws(() => review.validateShape({ ...feedback, rejectedScoringClaims: [] }), /逐字证据/);
+    assert.throws(() => review.validateShape({ ...feedback, scoreFeedback: '非法字段' }), /字段不合法/);
+});
+
+test('评分同收据恢复仍须真实原输入快照且不能信任篡改快照', async t => {
+    const sample = await fixture(t);
+    const feedback = {
+        ...sample.feedback,
+        coreFeedback: '', rejectedCoreClaims: [],
+        readerFeedback: '', rejectedReaderClaims: [],
+        scoringFeedback: '仅重新核对评分事实。', rejectedScoringClaims: ['旧评分错误']
+    };
+    const bound = review.validateFeedback(feedback, sample.plan, sample.paper);
+    sample.paper.analysisManifest.stages.scoringAudit = { status: 'complete', scoringFactReview: bound.proof };
+    const payload = {
+        analysisCheckpoint: sample.paper.analysisCheckpoint,
+        analysisStageCheckpoints: {}, stages: {}, contracts: {}
+    };
+    const snapshot = {
+        contract: 'stale-analysis-snapshot-v1', payload,
+        payloadSha256: daily.stableHash(payload)
+    };
+    sample.paper.analysis = sample.paper.analysisCheckpoint.replace(wrong, '新正文');
+    sample.paper.analysisCheckpoint = sample.paper.analysis;
+    assert.throws(() => review.validateFeedback(feedback, sample.plan, sample.paper), /正文绑定已过期/);
+    sample.paper.analysisStaleSnapshots = [snapshot];
+    assert.equal(deep.validateStaleAnalysisSnapshot(snapshot) !== null, true);
+    assert.doesNotThrow(() => review.validateFeedback(feedback, sample.plan, sample.paper));
+    snapshot.payload.analysisCheckpoint += '篡改';
+    assert.throws(() => review.validateFeedback(feedback, sample.plan, sample.paper), /正文绑定已过期/);
+});
+
+
+test('各自合法的主分析与评分反馈仍须遵守评分组合上下文预算', async t => {
+    const sample = await fixture(t);
+    const feedback = {
+        ...sample.feedback,
+        coreFeedback: '', rejectedCoreClaims: [],
+        readerFeedback: '', rejectedReaderClaims: [],
+        primaryFeedback: '主'.repeat(2100), rejectedPrimaryClaims: ['主文旧错'],
+        scoringFeedback: '分'.repeat(2100), rejectedScoringClaims: ['评分旧错']
+    };
+    assert.ok(feedback.primaryFeedback.length + quote.length + 80 < 4000);
+    assert.ok(feedback.scoringFeedback.length + quote.length + 80 < 4000);
+    assert.throws(() => review.validateShape(feedback), /评分组合反馈/);
+    feedback.primaryFeedback = '主'.repeat(1000);
+    assert.doesNotThrow(() => review.validateShape(feedback));
+    const originalHash = daily.stableHash(sample.feedback);
+    review.validateShape(sample.feedback);
+    assert.equal(daily.stableHash(sample.feedback), originalHash);
+});

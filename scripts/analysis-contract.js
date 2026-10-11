@@ -1323,8 +1323,14 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     const conditionalFailure = /(?:但|不过|然而)[^。！？!?\n]{0,80}(?:在|对)[^。！？!?\n]{1,60}(?:时|下|中|上)[^。！？!?\n]{0,60}(?:可能|易|会|明显)?(?:失真|退化|恶化|不稳定|不可靠|失效|下降|受损|偏差)/.test(summary);
     const scopedConclusionBoundary = /(?:结论|研究结果|研究发现)[^。！？!?\n]{0,40}(?<!不)(?<!非)限于[^。！？!?\n]{1,80}(?:语音|语料|数据|场景|条件|设置|样本|任务)/.test(summary);
     const observationalCausalBoundary = /(?:观察性|非实验|非干预)[^。！？!?\n]{0,40}(?:不建立|不能建立|不支持|不能证明)[^。！？!?\n]{0,20}因果/.test(summary);
+    const uncoveredScopeBoundary = summary.split(/[。！？!?\n]/).some(sentence => (
+        /未涵盖[^。！？!?\n]{1,60}(?:语音|语料|数据|场景|条件|设置|样本|任务|攻击|环境|设备|人群|语种|语言|录音)/.test(sentence)
+        && !/(?:并非|不是|不存在|没有|并不|不能说|不能认为|无法断言)[^，,；;。！？!?\n]{0,20}未涵盖/.test(sentence)
+        && !/未涵盖[^。！？!?\n]{0,90}(?:说法|表述|观点|判断|结论)[^。！？!?\n]{0,20}(?:不成立|不正确|不属实|并非事实|不符合事实|错误|有误)/.test(sentence)
+        && !/未涵盖[^。！？!?\n]{0,60}(?:并非事实|不是事实|并不属实|不属实|不是真的)/.test(sentence)
+    ));
     if (!explicitBoundary && !separatedUnverifiedBoundary && !conditionalFailure
-        && !scopedConclusionBoundary && !observationalCausalBoundary) {
+        && !scopedConclusionBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary) {
         issues.push('缺少结论适用边界、失败条件或未验证范围');
     }
     const scopedResourceDisclosure = summary.split(/[。！？!?\n]/).some(sentence => (

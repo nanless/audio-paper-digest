@@ -4569,6 +4569,15 @@ function findUnassembledApiReaderFigureMarker(article) {
     return /\[\[FIGURE_\d+\]\]/.exec(String(article || ''))?.[0] || null;
 }
 
+function findUnassembledApiReaderConceptMarker(article) {
+    return /\[\[CONCEPT_BRIDGE_\d+\]\]/.exec(String(article || ''))?.[0] || null;
+}
+
+function assertApiReaderConceptsAssembled(article) {
+    const marker = findUnassembledApiReaderConceptMarker(article);
+    if (marker) throw new Error(`读者文章仍有未装配的术语组合标记：${marker}；请核对正文与 conceptBridges，不得删除解释或猜测未声明的组合。`);
+}
+
 function assertApiReaderFiguresAssembled(article) {
     const marker = findUnassembledApiReaderFigureMarker(article);
     if (marker) {
@@ -4577,6 +4586,7 @@ function assertApiReaderFiguresAssembled(article) {
 }
 
 function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '') {
+    assertApiReaderConceptsAssembled(readerResult.article);
     const figures = getApiReaderFigureInventory(structuredArtifacts, arxivId);
     if (figures.length === 0) {
         assertApiReaderFiguresAssembled(readerResult.article);
@@ -5226,6 +5236,35 @@ function removeSafeStandaloneReaderMarker(body, marker) {
     return later.test(original) ? original.replace(later, '') : original;
 }
 
+function readerConceptMarkerIsProtected(body, marker) {
+    const text = String(body || '');
+    const paragraph = text.split(/\r?\n[ \t]*\r?\n/).find(block => block.includes(marker)) || '';
+    // 同一连续段的引用、表格、HTML 和链接内容属于字面区域，不能抽出成为可装配标记。
+    if (/^ {0,3}>/m.test(paragraph) || /^\s*\|/m.test(paragraph)
+        || /<!--|<\/?[a-z][^>]*>/i.test(paragraph) || /\]\s*\(/.test(paragraph)) return true;
+    const prefix = text.slice(0, text.indexOf(marker));
+    if (prefix.lastIndexOf('<!--') > prefix.lastIndexOf('-->')) return true;
+    let htmlCodeDepth = 0;
+    for (const tag of prefix.matchAll(/<\/?(?:code|pre)\b[^>]*>/gi)) {
+        htmlCodeDepth = tag[0].startsWith('</') ? Math.max(0, htmlCodeDepth - 1) : htmlCodeDepth + 1;
+    }
+    if (htmlCodeDepth > 0) return true;
+    let fence = null;
+    for (const line of String(body || '').split(/\r?\n/)) {
+        const boundary = line.match(/^ {0,3}(`{3,}|~{3,})/);
+        if (boundary) {
+            if (!fence) fence = boundary[1];
+            else if (boundary[1][0] === fence[0] && boundary[1].length >= fence.length
+                && line.slice(boundary[0].length).trim() === '') fence = null;
+            if (line.includes(marker)) return true;
+            continue;
+        }
+        if (line.includes(marker)) return Boolean(fence || /^ {0,3}>/.test(line) || /^(?: {4}|\t)/.test(line)
+            || line.includes('`') || line.includes(`\\${marker}`));
+    }
+    return false;
+}
+
 function normalizeDeclaredReaderMarkerParagraphs(value) {
     if (!Array.isArray(value?.sections)) return;
     const declarations = [
@@ -5266,12 +5305,14 @@ function normalizeDeclaredReaderMarkerParagraphs(value) {
         const markerSections = value.sections.filter(section => (
             typeof section?.body === 'string' && section.body.includes(marker)
         ));
-        const uniqueDeclaredSection = ['figure', 'formula'].includes(declaration.type)
+        const uniqueDeclaredSection = ['concept', 'figure', 'formula'].includes(declaration.type)
             && markerSections.length === 1 && markerSections[0].kind === declaration.kind
             && markerSections[0].body.split(marker).length - 1 === 1 ? markerSections[0] : null;
         const declaredSection = kindBound
             ? uniqueDeclaredSection || value.sections.find(section => section?.kind === declaration.kind)
             : markerSections.length === 1 ? markerSections[0] : null;
+        if (declaration.type === 'concept'
+            && markerSections.some(section => readerConceptMarkerIsProtected(section.body, marker))) continue;
         if (declaredSection && typeof declaredSection.body === 'string') {
             declaredSection.body = normalizeReaderStructuralLineBreaks(declaredSection.body, marker);
         }
@@ -6154,6 +6195,14 @@ function parseApiReaderArticleResult(raw, options = {}) {
                 : {})
         };
     });
+    const declaredConceptMarkers = new Set(conceptBridges.map(bridge => bridge.marker));
+    for (const [sectionIndex, section] of normalizedSections.entries()) {
+        for (const match of section.body.matchAll(/\[\[CONCEPT_BRIDGE_\d+\]\]/g)) {
+            if (!declaredConceptMarkers.has(match[0])) {
+                throw new Error(`读者文章 sections[${sectionIndex}].body 包含未声明的术语组合标记：${match[0]}；请核对本节与 conceptBridges，只修正当前授权正文，不得删除原解释。`);
+            }
+        }
+    }
     const declaredFigureMarkers = new Set(figurePlacements.map(placement => placement.marker));
     for (const [sectionIndex, section] of normalizedSections.entries()) {
         for (const match of section.body.matchAll(/\[\[FIGURE_\d+\]\]/g)) {
@@ -6174,6 +6223,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
         }
         article = article.replace(bridge.marker, bridge.explanation);
     }
+    assertApiReaderConceptsAssembled(article);
     const exactBridgeParagraphs = Array.isArray(options.exactSignedBridgeSurfaces)
         ? options.exactSignedBridgeSurfaces.filter(value => typeof value === 'string' && value.length > 0)
         : [];
@@ -7024,7 +7074,10 @@ function prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback) {
         || sourceSha256 !== revisionStage.sourceBindingsSourceTextSha256) {
         throw new Error('定向修订所用文章的来源 SHA 与本次论文全文不一致。');
     }
-    const initialDraft = JSON.stringify({ article: paper.apiReaderArticle, plan: paper.apiReaderPlan });
+    const articleWithMarkers = restoreApiReaderInjectionMarkers(
+        paper.apiReaderArticle, paper.apiReaderPlan, paper.apiReaderFigures
+    );
+    const initialDraft = JSON.stringify({ article: articleWithMarkers, plan: paper.apiReaderPlan });
     return {
         initialDraft,
         metadata: {
@@ -7064,7 +7117,9 @@ function buildApiReaderGenerationStart(paper, options = {}) {
             + `不能只复述问题而不修改内容：${externalReviewFeedback}`
             + (seed
                 ? '\n本次基于已核验的读者文章进行定向修订。previousDraft 中的 {article,plan} '
-                    + '提供原正文和写作计划，供修改时参考，不能直接作为本次输出。只修反馈指出的问题及必要连带内容，'
+                    + '提供已核验正文的标记视图和写作计划，供修改时参考，不能直接作为本次输出。'
+                    + '图的看图路径、图像和图注及原始公式由程序按已有来源记录装配，不要在正文中复制这些生成块；'
+                    + '保留图前导读和图后解释。只修反馈指出的问题及必要连带内容，'
                     + '保留已经正确的章节、解释、图表和数字，不要无端重写。'
                     + '仍须返回本次请求要求的完整 JSON，包括所有小节、占位符和来源记录；'
                     + '不得直接返回参考用的 {article,plan}；修改后的正文、图片、表格和公式仍须通过完整检查。'
@@ -8181,7 +8236,10 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
     const manifest = paper.analysisManifest;
     const scoringFactReview = require('./lib/daily-fact-review');
     const scoringRequestDeclaration = manifest?.stages?.primaryAnalysis?.factReview
-        ? { factReview: manifest.stages.primaryAnalysis.factReview } : manifest?.stages?.scoringAudit;
+        ? { factReview: manifest.stages.primaryAnalysis.factReview,
+            ...(manifest.stages.scoringAudit?.scoringFactReview
+                ? { scoringFactReview: manifest.stages.scoringAudit.scoringFactReview } : {}) }
+        : manifest?.stages?.scoringAudit;
     // 评分刷新也必须遵守原主分析纠错约束；在资源验证或模型请求前阻断无反馈恢复。
     scoringFactReview.assertScoringRequestAllowed(scoringRequestDeclaration);
     const scoringFactFields = scoringFactReview.fingerprintFields('scoringAudit', scoringRequestDeclaration);
@@ -8239,6 +8297,10 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
     // 在资源和评分同步有意改动这些绑定之前，先把带签名的父版本抓下来。新的 Reader 是
     // 这个父版本的一次修订；改动之后再去校验种子，会因为旧阶段签的仍是旧的资源身份而否掉
     // 一次本来合法的状态转换。
+    if (String(scoringFactReview.current(getPaperArxivId(paper))?.feedback.scoringFeedback || '').trim()) {
+        captureStaleAnalysisSnapshot(paper, manifest, 'scoringAudit',
+            scoringFactReview.current(getPaperArxivId(paper)).proof.feedbackSha256);
+    }
     const readerRevisionSeed = prepareApiReaderRevisionSeed(
         paper, sourceText, options.reviewFeedback || ''
     );
@@ -15203,10 +15265,14 @@ async function analyzePaperDeepInternal(paper) {
     const scoringFactReview = require('./lib/daily-fact-review');
     // 完成主分析后的中断也不能丢失事实约束；仅核验旧证明，不给旧评分补签。
     const scoringRequestDeclaration = analysisManifest.stages.primaryAnalysis?.factReview
-        ? { factReview: analysisManifest.stages.primaryAnalysis.factReview } : scoringStage;
+        ? { factReview: analysisManifest.stages.primaryAnalysis.factReview,
+            ...(scoringStage?.scoringFactReview ? { scoringFactReview: scoringStage.scoringFactReview } : {}) }
+        : scoringStage;
     const expectedScoringFactFields = scoringFactReview.fingerprintFields('scoringAudit', scoringRequestDeclaration);
     const activePrimaryClaims = scoringFactReview.current(paper.arxivId)?.feedback.primaryFeedback?.trim()
         ? scoringFactReview.current(paper.arxivId).feedback.rejectedPrimaryClaims : [];
+    const activeScoringClaims = scoringFactReview.current(paper.arxivId)?.feedback.scoringFeedback?.trim()
+        ? scoringFactReview.current(paper.arxivId).feedback.rejectedScoringClaims : [];
     const scoringInputSha256 = crypto.createHash('sha256').update(scoringInputAnalysis).digest('hex');
     const scoringEvidenceContext = buildStageEvidenceContext(
         'scoringAudit',
@@ -15230,8 +15296,11 @@ async function analyzePaperDeepInternal(paper) {
             .update(scoringEvidenceContext)
             .digest('hex');
         const fingerprintChanged = stableFingerprint(expectedScoringFactFields)
-                !== stableFingerprint(scoringStage.factReview ? { factReview: scoringStage.factReview } : {})
-            || activePrimaryClaims.some(claim => String(paper.analysisStageCheckpoints?.scoringAudit || '').includes(claim))
+                !== stableFingerprint({
+                    ...(scoringStage.factReview ? { factReview: scoringStage.factReview } : {}),
+                    ...(scoringStage.scoringFactReview ? { scoringFactReview: scoringStage.scoringFactReview } : {})
+                })
+            || [...activePrimaryClaims, ...activeScoringClaims].some(claim => String(paper.analysisStageCheckpoints?.scoringAudit || '').includes(claim))
             || !!auxiliaryRequestPolicyFields('scoringAudit', scoringStage).auxiliaryRequestPolicyMismatch
             || scoringStage.modelTextSanitizationContract
                 !== modelTextFingerprintFields(scoringInputAnalysis, scoringEvidenceContext).modelTextSanitizationContract
@@ -15266,7 +15335,8 @@ async function analyzePaperDeepInternal(paper) {
             ).digest('hex');
         if (fingerprintChanged) {
             scoringFactReview.assertScoringRequestAllowed(scoringRequestDeclaration);
-            if (scoringStage.factReview || expectedScoringFactFields.factReview) {
+            if (scoringStage.factReview || scoringStage.scoringFactReview
+                || expectedScoringFactFields.factReview || expectedScoringFactFields.scoringFactReview) {
                 captureStaleAnalysisSnapshot(paper, analysisManifest, 'scoringAudit', stableFingerprint({
                     scoringInputSha256, ...expectedScoringFactFields }));
             }
@@ -17334,6 +17404,7 @@ function appendSectionByTitle(analysis, title, newContent) {
 
 module.exports = {
     findUnassembledApiReaderFigureMarker,
+    findUnassembledApiReaderConceptMarker,
     normalizeReaderSourceCell,
     analyzePaperDeep,
     parseAnalysis,

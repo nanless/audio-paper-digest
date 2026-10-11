@@ -4230,7 +4230,25 @@ def _detailed_core_summary_semantic_issue(summary):
         r'(?:失真|退化|恶化|不稳定|不可靠|失效|下降|受损|偏差)',
         summary,
     )
-    if not any((explicit_boundary, separated_unverified_boundary, conditional_failure)):
+    scoped_conclusion_boundary = re.search(
+        r'(?:结论|研究结果|研究发现)[^。！？!?\n]{0,40}(?<!不)(?<!非)限于'
+        r'[^。！？!?\n]{1,80}(?:语音|语料|数据|场景|条件|设置|样本|任务)',
+        summary,
+    )
+    observational_causal_boundary = re.search(
+        r'(?:观察性|非实验|非干预)[^。！？!?\n]{0,40}'
+        r'(?:不建立|不能建立|不支持|不能证明)[^。！？!?\n]{0,20}因果',
+        summary,
+    )
+    uncovered_scope_boundary = any(
+        re.search(r'未涵盖[^。！？!?\n]{1,60}(?:语音|语料|数据|场景|条件|设置|样本|任务|攻击|环境|设备|人群|语种|语言|录音)', sentence)
+        and not re.search(r'(?:并非|不是|不存在|没有|并不|不能说|不能认为|无法断言)[^，,；;。！？!?\n]{0,20}未涵盖', sentence)
+        and not re.search(r'未涵盖[^。！？!?\n]{0,90}(?:说法|表述|观点|判断|结论)[^。！？!?\n]{0,20}(?:不成立|不正确|不属实|并非事实|不符合事实|错误|有误)', sentence)
+        and not re.search(r'未涵盖[^。！？!?\n]{0,60}(?:并非事实|不是事实|并不属实|不属实|不是真的)', sentence)
+        for sentence in re.split(r'[。！？!?\n]', summary)
+    )
+    if not any((explicit_boundary, separated_unverified_boundary, conditional_failure,
+                scoped_conclusion_boundary, observational_causal_boundary, uncovered_scope_boundary)):
         issues.append('缺少结论适用边界、失败条件或未验证范围')
     scoped_resource_disclosure = any(
         re.search(r'(?:训练|推理|部署)', sentence)
@@ -6370,6 +6388,8 @@ def _api_reader_payload(paper):
     if not isinstance(article, str) or not article.strip() or not isinstance(plan, dict):
         raise PublishDataValidationError('读者正文缺失或不是非空字符串，或编辑计划不是对象。')
     article = article.strip()
+    if re.search(r'\[\[CONCEPT_BRIDGE_\d+\]\]', article):
+        raise PublishDataValidationError('读者正文仍有未装配的术语组合标记。')
     article_sha = _javascript_string_sha256(article)
     plan_sha = _reader_record_sha256(plan, 'API reader 编辑计划')
     if (paper.get('apiReaderArticleSha256') != article_sha

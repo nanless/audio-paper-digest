@@ -37,7 +37,13 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 索引中的文件名、字段和协议名保持代码原形。SHA 用于核验文件内容和对应关系；CAS 指写入前核对
 当前内容仍与读取时一致；`O_EXCL` 表示拒绝覆盖已存在文件。这些机制只看文件和字节，论文内容对不对仍要人判断。
 
-事实反馈JSON使用 `daily-bound-fact-review-v1`：须提供 `paperId`、`batchDate`、`runId`、四文件名到SHA的 `sourceFiles`、当前 `analysisCheckpoint` 的 `coreAnalysisSha256`、公共章节提取器所得摘要的 `coreSummarySha256`，以及 `coreFeedback`、`readerFeedback`、`sourceQuotes`、`rejectedCoreClaims`、`rejectedReaderClaims`。完整主分析反馈可额外成对提供 `primaryFeedback`、`rejectedPrimaryClaims`，标签反馈可额外成对提供 `tagFeedback`、`rejectedTagClaims`。主分析、摘要、Reader和标签反馈至少一项非空；不修某阶段时对应反馈可为空、错误原句列表为空。逐字引文须存在于封存原文，反馈连同引文每阶段最多4000字符。新请求指纹与manifest保存反馈证明，旧无反馈配方保持；失败保留原付费正文SHA快照。同一反馈只有仍能核验原输入快照时可续跑，其他正文变更须重新审查并生成新绑定。模型输出继续经过原有结构、章节保护、来源和表图公式检查；原错误句重现会拒绝，但不能将此字符串检查当作完整事实审核，发布前仍须逐项只读目核。
+事实反馈 JSON 使用 `daily-bound-fact-review-v1`。身份与来源包括 `paperId`、`batchDate`、`runId`、四份来源文件的 `sourceFiles` SHA，以及当前正文的 `coreAnalysisSha256` 和摘要的 `coreSummarySha256`。正文取 `analysisCheckpoint`，缺失时取 `analysis`；摘要由公共章节提取器读取。
+
+基本反馈字段为 `coreFeedback`、`readerFeedback`、`sourceQuotes`、`rejectedCoreClaims`、`rejectedReaderClaims`。主文纠错可成对添加 `primaryFeedback`、`rejectedPrimaryClaims`；标签纠错可添加 `tagFeedback`、`rejectedTagClaims`；评分理由纠错可添加 `scoringFeedback`、`rejectedScoringClaims`。至少一项反馈非空；不修的部分使用空反馈和空错误原句列表。评分反馈单独保存为 `scoringFactReview`，不会因此要求重写主文。已有主文纠错约束仍须提供原来核验过的反馈，不能用另一份评分反馈绕过。
+
+引文必须逐字存在于封存原文。每个阶段的反馈、引文和固定说明合计不超过 4000 字符；评分同时使用主文和评分反馈时，两项合并计算。模型请求和保存的阶段记录都包含反馈证明；失败时保留原付费正文及内容 SHA。同一反馈只有能核验原输入记录时才可继续使用，其他正文变更必须重新审查。评分刷新改变正文前同样保存原输入，后续恢复不能只凭一份旧证明。
+
+模型输出仍须通过结构、其他章节不变、来源和图表公式检查。已证实错误的原句再次出现会被拒绝，但仅检查原句是否消失不能证明全文正确，发布前仍须逐项核对原文。
 
 ## 默认 LLM/API：抓取、筛选与分析
 

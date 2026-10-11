@@ -1365,6 +1365,47 @@ class PublishToBlogReviewTest(unittest.TestCase):
                     publish_to_blog._detailed_core_summary_semantic_issue(no_cost),
                 )
 
+    def test_core_summary_boundary_matches_node_for_scope_and_causal_limits(self):
+        script = (
+            "const { validAnalysisText } = require('./tests/valid-analysis-fixture.js');"
+            "const text = validAnalysisText();"
+            "process.stdout.write(JSON.stringify(text.match(/## 核心摘要\\n([\\s\\S]*?)(?=\\n## )/)[1]));"
+        )
+        summary = json.loads(subprocess.check_output(['node', '-e', script], cwd=ROOT, text=True))
+        original = '结论仅适用于论文覆盖的噪声类型与语种，对极低信噪比、未见录音环境和跨语言外推尚未验证。'
+        self.assertEqual(summary.count(original), 1)
+        prefix = '实验记录分别保存输入声学表示、上下文条件与输出识别结果，以便对照每个处理阶段的信息变化。'
+        positive = (
+            '结论限于固定朗读语料。',
+            '本研究的结论限于相同语音任务和录音条件。',
+            '观察性设计不建立因果关系。',
+            '非干预研究不能证明组别差异的因果关系。',
+            '该方法仅评估数字波形非定向攻击，未涵盖物理攻击或麦克风通道条件。',
+        )
+        negative = (
+            '训练预算限于四块显卡。', '结论限于本文。',
+            '观察性设计建立因果关系。', '研究结果支持确定的因果关系。',
+            '结论不限于固定朗读语料。', '结论并不限于固定朗读语料。',
+            '结论并非限于固定朗读语料。', '研究并非未涵盖物理攻击。',
+            '研究不是未涵盖麦克风通道条件。', '研究没有未涵盖物理攻击。',
+            '研究并非完全未涵盖物理攻击。', '不存在任何未涵盖的录音条件。',
+            '未涵盖物理攻击的说法并不成立。', '研究不是仅仅未涵盖麦克风通道条件。',
+            '未涵盖物理攻击不是真的。',
+            '该摘要未涵盖公式。', '未涵盖。',
+        )
+        for sentence in positive:
+            with self.subTest(sentence=sentence):
+                candidate = summary.replace(original, prefix + sentence)
+                self.assertIsNone(publish_to_blog._detailed_core_summary_semantic_issue(candidate))
+        for sentence in negative:
+            with self.subTest(sentence=sentence):
+                candidate = summary.replace(original, prefix + sentence)
+                self.assertIn('缺少结论适用边界', publish_to_blog._detailed_core_summary_semantic_issue(candidate))
+        for count in (641, 684):
+            with self.subTest(count=count):
+                self.assertIn(f'中文字符必须为 320–600，当前 {count}',
+                              publish_to_blog._detailed_core_summary_semantic_issue('字' * count))
+
     def test_core_summary_accepts_explicit_correlation_metrics_but_keeps_other_gates(self):
         summary = (
             '音频问答开放式回答需判断语义等价与部分正确并建模多人标注分歧，输入为问题、参考答案、文本化依据与候选回答，输出为1至5分正确性分布的均值与方差，难点在于依据缺失时需回听音频且主观性导致均值相近但方差差异显著。'

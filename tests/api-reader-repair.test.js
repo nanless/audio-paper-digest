@@ -3291,3 +3291,26 @@ test('表格索引提示只进入真实修复请求，原证据与候选输入�
     assert.equal(envelope.identity.inputFingerprint, firstIdentity.inputFingerprint);
     assert.equal(envelope.payload.attempts, 1);
 });
+
+test('正文中未声明的术语组合标记在装配前拒绝，不删除原稿', () => {
+    const deep = require('../scripts/deep-analyzer');
+    for (const marker of ['[[CONCEPT_BRIDGE_0]]', '[[CONCEPT_BRIDGE_99]]', '[[CONCEPT_BRIDGE_01]]']) {
+        const sample = fixture();
+        sample.sections[4].body += '\n\n' + marker;
+        const original = JSON.stringify(sample);
+        assert.throws(() => deep.parseApiReaderArticleResult(original), /未声明的术语组合标记/);
+        assert.equal(JSON.stringify(sample), original);
+    }
+});
+
+test('最终装配拒绝残留组合标记但普通术语和完整解释保持原样', () => {
+    const deep = require('../scripts/deep-analyzer');
+    for (const marker of ['[[CONCEPT_BRIDGE_0]]', '[[CONCEPT_BRIDGE_1]]', '[[CONCEPT_BRIDGE_99]]']) {
+        const sample = { article: '原文解释。\n\n' + marker, plan: { sections: [] } };
+        assert.throws(() => deep.injectApiReaderFigures(sample, { figures: [] }), /未装配的术语组合标记/);
+        assert.ok(sample.article.endsWith(marker));
+    }
+    const sample = { article: '声学表示与语义条件的分工已有完整解释，CONCEPT_BRIDGE 是普通文本。', plan: { sections: [] } };
+    assert.equal(deep.injectApiReaderFigures(sample, { figures: [] }).article, sample.article);
+    assert.equal(deep.findUnassembledApiReaderConceptMarker(sample.article), null);
+});

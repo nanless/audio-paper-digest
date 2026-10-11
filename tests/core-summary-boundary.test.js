@@ -28,6 +28,18 @@ test('训练资源限制、无实质范围或肯定因果不代替结论边界',
     }
 });
 
+test('未涵盖具体攻击和录音条件是范围限制，否定该限制和缺少范围仍拒绝', () => {
+    const sentence = '该方法仅评估数字波形非定向攻击，未涵盖物理攻击或麦克风通道条件。';
+    assert.equal(validateCoreSummarySemanticContract(analysisWithBoundary(sentence)), null);
+    for (const sentence of ['研究并非未涵盖物理攻击。', '研究不是未涵盖麦克风通道条件。',
+        '研究没有未涵盖物理攻击。', '研究并非完全未涵盖物理攻击。',
+        '不存在任何未涵盖的录音条件。', '未涵盖物理攻击的说法并不成立。',
+        '研究不是仅仅未涵盖麦克风通道条件。', '未涵盖物理攻击不是真的。',
+        '该摘要未涵盖公式。', '未涵盖。']) {
+        assert.match(validateCoreSummarySemanticContract(analysisWithBoundary(sentence)), /缺少结论适用边界/, sentence);
+    }
+});
+
 test('不限于与并非限于的陈述不能反向授予范围限制', () => {
     for (const sentence of ['结论不限于固定朗读语料。', '结论并不限于固定朗读语料。',
         '结论并非限于固定朗读语料。']) {
