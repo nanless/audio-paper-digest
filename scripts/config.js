@@ -117,8 +117,13 @@ const ANALYSIS_CONFIG = {
     repairMaxTokens: 16000,
     // 审校会重写完整分析，输出容量单独设置，避免误用局部修复上限。
     revisionMaxTokens: 64000,
+    // 完整结构修复同样输出全部章节，不能使用局部修复容量。
+    structureMaxTokens: 64000,
+    // 单节核心摘要保留严格长度约束，为模型推理留足独立输出容量。
+    coreSummaryRepairMaxTokens: 32000,
     // 初学研究者长文需要容纳更多章节、宽表和逐图解说，不与局部修复共用较小的输出上限。
     apiReaderMaxTokens: 48000,
+    apiReaderThinkingMode: 'disabled',
     apiReaderRepairMaxTokens: 8000,
     apiTemperature: 0.7,
     scoringAuditTemperature: 0.1,
@@ -395,6 +400,17 @@ function applyEnvOverrides() {
     }
     const revisionMaxTokens = readPositiveInt('PD_ANALYSIS_REVISION_MAX_TOKENS');
     if (revisionMaxTokens) ANALYSIS_CONFIG.revisionMaxTokens = revisionMaxTokens;
+    const structureMaxTokens = readPositiveInt('PD_ANALYSIS_STRUCTURE_MAX_TOKENS');
+    if (structureMaxTokens) ANALYSIS_CONFIG.structureMaxTokens = structureMaxTokens;
+    const coreSummaryRepairMaxTokens = readPositiveInt('PD_ANALYSIS_CORE_SUMMARY_REPAIR_MAX_TOKENS');
+    if (coreSummaryRepairMaxTokens) ANALYSIS_CONFIG.coreSummaryRepairMaxTokens = coreSummaryRepairMaxTokens;
+    if (process.env.PD_API_READER_THINKING_MODE !== undefined) {
+        const mode = process.env.PD_API_READER_THINKING_MODE;
+        if (!['enabled', 'disabled'].includes(mode)) {
+            throw new Error('PD_API_READER_THINKING_MODE 只能为 enabled 或 disabled');
+        }
+        ANALYSIS_CONFIG.apiReaderThinkingMode = mode;
+    }
     const apiReaderMaxTokens = readPositiveInt('PD_API_READER_MAX_TOKENS');
     if (apiReaderMaxTokens) {
         ANALYSIS_CONFIG.apiReaderMaxTokens = apiReaderMaxTokens;

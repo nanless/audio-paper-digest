@@ -612,7 +612,14 @@ function normalizeResponsesContent(content) {
     });
 }
 
-function buildRequestBody(apiType, model, messages, maxTokens, temperature) {
+function validateReaderThinkingMode(mode) {
+    if (!['enabled', 'disabled'].includes(mode)) {
+        throw new Error('Reader 推理模式只能为 enabled 或 disabled');
+    }
+    return mode;
+}
+
+function buildRequestBody(apiType, model, messages, maxTokens, temperature, options = {}) {
     if (apiType === 'anthropic') {
         // Anthropic: system 必须是顶级字段，不能在 messages 中
         let system = undefined;
@@ -663,7 +670,10 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature) {
             content: normalizeOpenAIContent(msg.content)
         })),
         max_tokens: maxTokens,
-        temperature
+        temperature,
+        ...(apiType === 'openai' && model === 'mimo-v2.6-flash'
+            && options.readerThinkingMode !== undefined
+            ? { thinking: { type: validateReaderThinkingMode(options.readerThinkingMode) } } : {})
     };
 }
 

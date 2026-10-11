@@ -87,8 +87,11 @@ Historical rewriting saves the same four files for each arXiv source capture, us
 | `PD_ANALYSIS_CONCURRENCY` | 3 papers |
 | `PD_ANALYSIS_API_MAX_TOKENS` | 64000 |
 | `PD_ANALYSIS_REVISION_MAX_TOKENS` | 64000; complete 13-section revision |
+| `PD_ANALYSIS_STRUCTURE_MAX_TOKENS` | 64000; complete 13-section structure rewrite |
+| `PD_ANALYSIS_CORE_SUMMARY_REPAIR_MAX_TOKENS` | 32000; core-summary repair, with the original summary length requirements |
 | `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 16000 |
 | `PD_API_READER_MAX_TOKENS` | 48000 |
+| `PD_API_READER_THINKING_MODE` | `disabled`; MiMo-V2.6-Flash Reader, repair and image probes only; `enabled` is also valid |
 | `PD_API_READER_REPAIR_MAX_TOKENS` | 8000 |
 | `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 characters |
 | `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 characters |
@@ -130,3 +133,5 @@ To check model routing on its own, use `node scripts/test-api-key.js`. It sends 
 Never commit `.env`, `data/`, `logs/`, caches, or credentials. Public model endpoints require HTTPS. Logs must hide keys, authentication headers, cookies, secrets, passwords, and URL user information.
 
 Non-dry-run WeChat publishing also requires `WECHAT_APP_ID`, `WECHAT_APP_SECRET`, and `WECHAT_THUMB_MEDIA_ID`. Optional channels are outside the default digest. Manual setup starts at [manual/README.md](../../manual/README.md).
+
+[MiMo documents `thinking.type`](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/other/deep-thinking) as its reasoning switch. This setting applies only to Reader-related Chat requests. OpenCode Go acceptance still requires evidence from actual responses; vendor support does not certify gateway support. Parameter errors do not trigger a model or account switch, and incomplete articles remain rejected.

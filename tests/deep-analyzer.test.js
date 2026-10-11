@@ -5807,7 +5807,7 @@ has_dataset: 否
         }
     });
 
-    it('核心摘要局部修复使用通用修复预算，其他 12 节的正文逐字不变', async () => {
+    it('核心摘要局部修复使用独立容量，其他 12 节的正文逐字不变', async () => {
         const { getCoreSummaryDetailIssue, repairCoreSummarySection } = require('../scripts/deep-analyzer.js');
         const original = validAnalysisText().replace(
             /## 核心摘要\n[\s\S]*?(?=\n## 方法概述和架构)/,
@@ -5854,7 +5854,7 @@ has_dataset: 否
         assert.match(prompt, /不要把 `0\.85` 写成 `85\.00`/);
         assert.match(prompt, /也不要增删末尾的零、舍入、把百分数与小数互换、换算单位或自己算差值/);
         assert.match(prompt, /摘要和引言里的概括值不能和表格里的基线值拼成一组比较/);
-        assert.strictEqual(maxTokens, 8000);
+        assert.strictEqual(maxTokens, 32000);
         assert.strictEqual(repairCalls, 3);
         assert.match(prompts[1], /这是一条仍不完整的修复摘要/);
         assert.match(prompts[1], /这是第 2 次局部修复/);
@@ -7003,7 +7003,8 @@ has_dataset: 否
         const {
             buildStageEvidenceContext,
             buildTextStageFingerprint,
-            prepareTextRecoveryStage
+            prepareTextRecoveryStage,
+            currentPromptTextContract
         } = require('../scripts/deep-analyzer.js');
         const inputAnalysis = 'body-after-demo';
         const oldEvidence = buildStageEvidenceContext('revision', inputAnalysis, 'old source evidence');
@@ -7037,9 +7038,11 @@ has_dataset: 否
         assert.strictEqual(manifest.stages.revision, undefined);
         assert.strictEqual(manifest.stages.tableRepair, undefined);
         assert.notStrictEqual(prepared.fingerprint, oldFingerprint);
+        assert.strictEqual(prepared.promptTextContract, currentPromptTextContract('revision'));
         assert.strictEqual(
             prepared.fingerprint,
-            buildTextStageFingerprint('revision', inputAnalysis, prepared.evidenceContext)
+            buildTextStageFingerprint('revision', prepared.inputAnalysis, prepared.evidenceContext,
+                prepared.promptTextContract)
         );
     });
 
@@ -7693,7 +7696,9 @@ describe('标签保存格式的实际执行与恢复边界', () => {
         const oldContracts = structuredClone(paper.analysisManifest.contracts);
         const prepared = deep.prepareTextRecoveryStage(paper, paper.analysisManifest,
             'tagSelection', input, source);
-        assert.equal(prepared.fingerprint, currentFingerprint);
+        assert.equal(prepared.promptTextContract, deep.currentPromptTextContract('tagSelection'));
+        assert.equal(prepared.fingerprint, deep.buildTextStageFingerprint('tagSelection',
+            prepared.inputAnalysis, prepared.evidenceContext, prepared.promptTextContract));
         assert.equal(prepared.invalidated, true);
         assert.equal(prepared.analysis, input);
         const snapshot = paper.analysisStaleSnapshots.at(-1);
@@ -7800,7 +7805,9 @@ describe('结构归一化和标签证据的新运行身份', () => {
             stages: paper.analysisManifest.stages, contracts: paper.analysisManifest.contracts });
         const prepared = deep.prepareTextRecoveryStage(paper, paper.analysisManifest,
             'structureRepair', paper.analysisCheckpoint, source);
-        assert.strictEqual(prepared.fingerprint, fingerprint);
+        assert.strictEqual(prepared.promptTextContract, deep.currentPromptTextContract('structureRepair'));
+        assert.strictEqual(prepared.fingerprint, deep.buildTextStageFingerprint('structureRepair',
+            prepared.inputAnalysis, prepared.evidenceContext, prepared.promptTextContract));
         assert.strictEqual(prepared.compatibilityReused, false);
         assert.strictEqual(prepared.invalidated, true);
         assert.strictEqual(prepared.analysis, input);

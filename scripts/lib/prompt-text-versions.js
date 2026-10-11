@@ -122,10 +122,13 @@ const FROZEN_V4_MIXED_PROMPT_FILES = Object.freeze({
     ...FROZEN_V4_PROMPT_FILES,
 });
 
-// 只有评分使用 v5；主分析保持 v4，其他阶段保持已登记的 v3 或 v2。
+// 评分使用 v5；主分析保持 v4。核心摘要和结构修复升到 v3 阶段身份，
+// 正文仍与冻结 v2 逐字相同，仅区分新的独立输出预算。旧混合登记对象保持原样。
 const PROMPT_FILE_VERSIONS = Object.freeze({
     ...FROZEN_V4_MIXED_PROMPT_FILES,
     scoringAudit: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path: 'prompts/scoring-audit-v5.md' }),
+    coreSummaryRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/core-summary-repair-v2.md' }),
+    structureRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/structure-repair-v2.md' }),
 });
 
 // v1 路径反查阶段名。会议实现清单只记路径，需要据此换成当前版本的正文。

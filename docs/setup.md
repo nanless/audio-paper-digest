@@ -87,8 +87,11 @@ Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读�
 | `PD_ANALYSIS_CONCURRENCY` | 3 篇论文 |
 | `PD_ANALYSIS_API_MAX_TOKENS` | 64000 |
 | `PD_ANALYSIS_REVISION_MAX_TOKENS` | 64000；完整13章正文审校重写 |
+| `PD_ANALYSIS_STRUCTURE_MAX_TOKENS` | 64000；完整13章结构重写 |
+| `PD_ANALYSIS_CORE_SUMMARY_REPAIR_MAX_TOKENS` | 32000；核心摘要修补，摘要长度要求不变 |
 | `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 16000 |
 | `PD_API_READER_MAX_TOKENS` | 48000 |
+| `PD_API_READER_THINKING_MODE` | `disabled`；仅 MiMo-V2.6-Flash 的长文、修复及图像探测，可设 `enabled` |
 | `PD_API_READER_REPAIR_MAX_TOKENS` | 8000 |
 | `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 字符 |
 | `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 字符 |
@@ -130,3 +133,5 @@ npm run validate:data -- --allow-empty
 `.env`、`data/`、`logs/`、缓存和密钥不得提交。公开模型端点须使用 HTTPS，日志须隐藏密钥、认证头、Cookie、密码、URL 中的用户认证信息及其他敏感信息。
 
 非 dry-run 微信发布还要求 `WECHAT_APP_ID`、`WECHAT_APP_SECRET` 和 `WECHAT_THUMB_MEDIA_ID`。这些可选渠道不属于默认日更。人工流程的环境与命令见 [Manual 入口](../manual/README.md)。
+
+[MiMo 官方推理说明](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/other/deep-thinking)支持通过 `thinking.type` 关闭推理；上述设置仅用于长文相关的 Chat 请求，不影响分析与筛选。OpenCode Go 是否实际接受该字段须由真实响应核验，不能把官方模型文档当作网关已验证。普通参数错误不会自动更换模型或账号；输出截断及内容检查仍会拒绝不完整文章。

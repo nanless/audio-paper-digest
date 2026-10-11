@@ -824,6 +824,7 @@ async function withPaperAnalysisLock(paper, callback, options = {}) {
     return withFileLock(getPaperAnalysisLockPath(paper), callback, {
         timeoutMs: PAPER_ANALYSIS_LOCK_TIMEOUT_MS,
         staleMs: PAPER_ANALYSIS_LOCK_STALE_MS,
+        recoveryPolicy: LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY,
         ...options
     });
 }

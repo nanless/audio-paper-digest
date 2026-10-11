@@ -1042,12 +1042,25 @@ function hasCoreSummaryComparisonDirection(sentence, numbers) {
         && /(?:基线|对照)[^，；。]{0,80}[，；][^。]{0,80}(?:本文方法|本方法|所提方法|完整模型)[^。]{0,40}(?:升至|降至)/.test(sentence);
 }
 
+function hasCoreSummaryStatisticalResult(sentence) {
+    // 率比和几率比也是实测结果。只认带数值、区间和实测说明的报告，
+    // 不把公式示例、先验设置或文献介绍当成本篇研究的发现。
+    const metric = /(?<![A-Za-z0-9_])(?:rate|odds|risk)\s+ratio(?![A-Za-z0-9_])|率比|几率比|比值比|优势比|风险比/i;
+    if (!metric.test(sentence)
+        || /\b(?:prior|hyperparameters?|hypothetical|illustrative|formula|defined?|assum(?:e|ed)|previous\s+stud(?:y|ies)|cited|references?)\b|先验|超参数|假设值|示意|公式|定义|文献引用|既有研究/i.test(sentence)) return false;
+    const metricValue = new RegExp(`(?:${metric.source})\\s*(?:\\((?:IRR|RR|OR)\\)\\s*)?(?:of|=|:|为|是)?\\s*[-+]?\\d+(?:\\.\\d+)?`, 'i');
+    const interval = /(?:\b(?:confidence\s+interval|CI)\b|置信区间)[^。！？!?\n]{0,20}\d+(?:\.\d+)?\s*(?:[-–—至]|\bto\b)\s*\d+(?:\.\d+)?/i;
+    const observed = /\b(?:adjusted|estimated|observed|reported|interaction|association)\b|调整后|经[^。！？!?\n]{0,20}调整|估计|观测|实测|交互项|组别效应/i;
+    return metricValue.test(sentence) && interval.test(sentence) && observed.test(sentence);
+}
+
 function hasCoreSummaryQuantitativeEvidence(text) {
     return String(text || '').split(/[。！？!?\n]/).some(rawSentence => {
         const sentence = stripCoreSummaryNonResultNumerals(rawSentence.trim());
         if (!sentence) return false;
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         if (!numbers.length) return false;
+        if (hasCoreSummaryStatisticalResult(sentence)) return true;
         const hasComparisonObject = CORE_SUMMARY_COMPARISON_OBJECT_PATTERN.test(sentence);
         const hasDirection = hasCoreSummaryComparisonDirection(sentence, numbers);
         // 音乐论文里的 "score(s)" 通常指乐谱而不是评价指标；"performance"
@@ -1112,7 +1125,9 @@ function classifySourceQuantitativeEvidence(sourceText, sentences = null) {
         if (!hasCoreSummaryQuantitativeEvidence(sentence)) return false;
         const localContext = values.slice(Math.max(0, index - 1), Math.min(values.length, index + 2)).join(' ');
         return /(?:experiment|evaluation|result|benchmark|test set|dataset|table|metric|实验|评测|结果|基准|测试集|数据集|表格|指标)/i
-            .test(localContext);
+            .test(localContext)
+            || hasCoreSummaryStatisticalResult(sentence)
+                && /\b(?:adjusted|mixed[- ]effects?|count\s+models?|interaction|groups?)\b|调整后|计数模型|交互项|组别/i.test(localContext);
     }) || hasSourceMeasuredLossComparison(values);
 }
 
@@ -1134,6 +1149,7 @@ function coreSummaryQuantitativeResultState(text) {
         const hasMetric = Boolean(sentence && (
             CORE_SUMMARY_METRIC_PATTERN.test(metricText)
             || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(metricText)
+            || hasCoreSummaryStatisticalResult(metricText)
         ));
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         const hasDirection = Boolean(sentence
