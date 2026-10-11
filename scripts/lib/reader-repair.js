@@ -1912,6 +1912,113 @@ function retireFailedCandidate(directory, identity) {
     return retired;
 }
 
+const METADATA_REPAIR_REQUIRED_FIELDS = ['version', 'readerTitle', 'oneSentenceThesis', 'sections',
+    'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings'];
+const METADATA_FIELDS = ['sourceBindingsContract', 'sourceBindingsSha256'];
+
+// JSON.parse 校验整个输入；扫描器只确定顶层成员的原始字节边界，不重写正文。
+function readTopLevelMembers(raw) {
+    JSON.parse(raw);
+    let cursor = 0;
+    const skipWhitespace = () => { while (/\s/.test(raw[cursor] || '') && cursor < raw.length) cursor += 1; };
+    const readString = () => {
+        const start = cursor;
+        cursor += 1;
+        while (cursor < raw.length) {
+            const character = raw[cursor++];
+            if (character === '\\') cursor += 1;
+            else if (character === '"') return { start, end: cursor };
+        }
+        throw new Error('Reader 原始 JSON 字符串未闭合');
+    };
+    skipWhitespace();
+    if (raw[cursor++] !== '{') throw new Error('Reader 原始 JSON 必须是对象');
+    const members = [];
+    const names = new Set();
+    while (true) {
+        skipWhitespace();
+        if (raw[cursor] === '}') break;
+        if (raw[cursor] !== '"') throw new Error('Reader 顶层字段名称无效');
+        const keySpan = readString();
+        const name = JSON.parse(raw.slice(keySpan.start, keySpan.end));
+        if (names.has(name)) throw new Error('Reader 原始 JSON 含重复顶层字段');
+        names.add(name);
+        skipWhitespace();
+        if (raw[cursor++] !== ':') throw new Error('Reader 顶层字段缺少冒号');
+        skipWhitespace();
+        const valueStart = cursor;
+        let nesting = 0;
+        while (cursor < raw.length) {
+            const character = raw[cursor];
+            if (character === '"') { readString(); continue; }
+            if (character === '{' || character === '[') nesting += 1;
+            if (character === '}' || character === ']') {
+                if (nesting === 0) break;
+                nesting -= 1;
+            }
+            if (character === ',' && nesting === 0) break;
+            cursor += 1;
+        }
+        let valueEnd = cursor;
+        while (/\s/.test(raw[valueEnd - 1] || '')) valueEnd -= 1;
+        const comma = raw[cursor] === ',' ? cursor : null;
+        members.push({ name, start: keySpan.start, valueStart, valueEnd, comma });
+        if (comma === null) break;
+        cursor += 1;
+    }
+    return members;
+}
+
+function buildTopLevelMetadataRepairContext(raw) {
+    if (typeof raw !== 'string') return null;
+    try {
+        const members = readTopLevelMembers(raw);
+        const value = JSON.parse(raw);
+        const names = members.map(member => member.name);
+        if (names.length !== METADATA_REPAIR_REQUIRED_FIELDS.length + METADATA_FIELDS.length
+            || !METADATA_REPAIR_REQUIRED_FIELDS.every(name => names.includes(name))
+            || !METADATA_FIELDS.every(name => names.includes(name))
+            || names.some(name => !METADATA_REPAIR_REQUIRED_FIELDS.includes(name) && !METADATA_FIELDS.includes(name))
+            || value.sourceBindingsContract !== 'api-reader-source-bindings-v4'
+            || !/^[a-f0-9]{64}$/.test(value.sourceBindingsSha256)
+            || value.version !== 3 || typeof value.readerTitle !== 'string'
+            || typeof value.oneSentenceThesis !== 'string'
+            || !METADATA_REPAIR_REQUIRED_FIELDS.slice(3).every(name => Array.isArray(value[name]))) return null;
+        return { kind: 'delete_top_level_program_metadata_v1', rawSha256: shaText(raw),
+            deleteFields: [...METADATA_FIELDS] };
+    } catch { return null; }
+}
+
+function applyTopLevelMetadataRepair(raw, patch, context) {
+    const current = buildTopLevelMetadataRepairContext(raw);
+    if (!current || JSON.stringify(context) !== JSON.stringify(current)
+        || !patch || Object.keys(patch).sort().join(',') !== 'deleteFields,rawSha256,version'
+        || patch.version !== 1 || patch.rawSha256 !== current.rawSha256
+        || JSON.stringify(patch.deleteFields) !== JSON.stringify(current.deleteFields)) {
+        throw new Error('Reader 顶层元数据删除必须明确授权两个字段，并绑定当前原始草稿 SHA');
+    }
+    const members = readTopLevelMembers(raw);
+    const spans = [];
+    for (let index = 0; index < members.length; index += 1) {
+        if (!METADATA_FIELDS.includes(members[index].name)) continue;
+        const firstIndex = index;
+        while (index + 1 < members.length && METADATA_FIELDS.includes(members[index + 1].name)) index += 1;
+        const first = members[firstIndex];
+        const last = members[index];
+        spans.push({ start: last.comma === null ? members[firstIndex - 1].comma : first.start,
+            end: last.comma === null ? last.valueEnd : last.comma + 1 });
+    }
+    let result = raw;
+    for (const span of spans.reverse()) result = result.slice(0, span.start) + result.slice(span.end);
+    const expected = JSON.parse(raw);
+    for (const name of METADATA_FIELDS) delete expected[name];
+    if (JSON.stringify(JSON.parse(result)) !== JSON.stringify(expected)) {
+        throw new Error('Reader 顶层元数据删除改变了其他内容');
+    }
+    return result;
+}
+
+
 module.exports = { REPAIR_VERSION, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
@@ -1919,6 +2026,7 @@ module.exports = { REPAIR_VERSION, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     readTableCountIssue, hashRecoveryIssues, hashDraft, shaText, normalizeValidationMessage, validationFailureSignature,
     validationFailureHasNoProgress, readerAttemptLimit,
     validateImplementationAllowance,
+    buildTopLevelMetadataRepairContext, applyTopLevelMetadataRepair,
     parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
     buildRepairTargets, applyReaderPatch, normalizeUnavailableReaderFigures, buildRepairContext, loadFailedCandidate, saveFailedCandidate,
     retireFailedCandidate };

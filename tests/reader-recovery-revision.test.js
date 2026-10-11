@@ -735,3 +735,32 @@ test('完整原表升级只接受固定正文及局部修复提示词配对', t 
         assert.deepEqual(fs.readFileSync(filename), originalBytes);
     }
 });
+
+
+test('固定局部修复版本升级保留原始元数据草稿、付费次数和归档字节', t => {
+    const sample = fixture(t);
+    sample.payload.draft = null;
+    const originalDraft = { version: 3, readerTitle: '元数据草稿', oneSentenceThesis: '保留正文。',
+        sections: [{ kind: 'component', heading: '原正文', body: '原始正文保持不变。' }],
+        conceptBridges: [], figurePlacements: [], tableBindings: [], formulaBindings: [],
+        sourceBindingsContract: 'api-reader-source-bindings-v4', sourceBindingsSha256: 'a'.repeat(64) };
+    sample.payload.rawDraft = JSON.stringify(originalDraft, null, 2);
+    sample.oldIdentity = { ...sample.identity,
+        promptSha256: 'a41f67166a0f366a10bf23cc17aa51ca6105b246ce7964ec14c21d6b4018f380',
+        repairPromptSha256: 'cdbf91f9bb2fb48e085c72195000059bdb2ccc4eb6a0bd47a6f31bb9d4835965' };
+    sample.identity = { ...sample.oldIdentity,
+        repairPromptSha256: '9a7e72d75fdd05f7004c132533425fa140d237c22bc98a3c6c64333e5d76e22e' };
+    const filename = saveFailedCandidate(sample.directory, sample.oldIdentity, sample.payload);
+    const originalBytes = fs.readFileSync(filename);
+    assert.equal(sample.enabled(() => loadReaderRecoveryRevision(sample.directory,
+        { ...sample.identity, repairPromptSha256: 'a'.repeat(64) })), null);
+    const recovered = sample.enabled(() => loadReaderRecoveryRevision(sample.directory, sample.identity));
+    assert.equal(recovered.draft, null);
+    assert.equal(recovered.rawDraft, sample.payload.rawDraft);
+    for (const field of ['attempts', 'fullAttempts', 'transportFailures', 'noProgress', 'validationFailureStreak']) {
+        assert.equal(recovered[field], sample.payload[field]);
+    }
+    assert.equal(recovered.implementationRepairAllowanceProof, null);
+    assert.deepEqual(fs.readFileSync(path.join(sample.directory,
+        recovered.readerRecoveryRevisions[0].archivedName)), originalBytes);
+});

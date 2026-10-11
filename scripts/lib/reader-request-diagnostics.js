@@ -40,8 +40,13 @@ function write(directoryPath, filename, payload) {
     return { path: file, sha256: sha(bytes) };
 }
 function begin(root, context) {
+    const metadataOperation = require('./reader-repair').buildTopLevelMetadataRepairContext(context?.rawDraft);
+    const metadataRepairValid = metadataOperation
+        && JSON.stringify(metadataOperation) === JSON.stringify(context.atomicOperation)
+        && context.draft === null && Array.isArray(context.repairTargets) && context.repairTargets.length === 0
+        && context.draftSha256 === metadataOperation.rawSha256;
     if (typeof context?.prompt !== 'string' || !Array.isArray(context.repairTargets)
-        || context.draftSha256 !== sha(JSON.stringify(context.draft))) {
+        || (!metadataRepairValid && context.draftSha256 !== sha(JSON.stringify(context.draft)))) {
         throw new Error('长文修复记录必须对应当前真实草稿和修复上下文');
     }
     const id = crypto.randomUUID();

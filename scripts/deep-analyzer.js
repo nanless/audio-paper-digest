@@ -7601,7 +7601,14 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             recovered, candidate, fullAttempts, currentIssues, readerCapabilityPolicy,
             options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy
         ) || implementationMigrationNeedsFullRegeneration;
-        const repairContext = candidate && !sourceBindingNeedsFullRetry
+        const metadataRepair = repair;
+        const metadataOperation = !candidate && !sourceBindingNeedsFullRetry
+            ? metadataRepair.buildTopLevelMetadataRepairContext(previousDraft) : null;
+        const repairContext = metadataOperation ? {
+            draftSha256: metadataOperation.rawSha256, targets: [], figureOrdinals: [],
+            evidence: sourceEvidence, atomicOperation: metadataOperation,
+            targetGuidance: '本次只授权明确删除两个顶层程序元数据字段。其他字段及全部正文逐字保留，删除后仍检查整篇。'
+        } : candidate && !sourceBindingNeedsFullRetry
             ? repair.buildRepairContext(candidate, currentIssues, sourceEvidence, options.sourceText) : null;
         if (repairContext && repairContext.targets.length === 0
             && currentIssues.some(issue => repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair)) {
@@ -7688,6 +7695,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                         .beginReaderRepairDiagnostic(candidateDirectory, {
                             identity, contentAttempt: attempt, prompt, visibilityNotice,
                             draftSha256: repairContext.draftSha256, draft: candidate,
+                            ...(metadataOperation ? { rawDraft: previousDraft } : {}),
                             repairTargets: repairContext.targets,
                             atomicOperation: repairContext.atomicOperation || null,
                             inputMessagesSha256: repair.shaText(JSON.stringify(messages)),
@@ -7776,13 +7784,19 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         try {
             if (repairContext) {
                 const patch = repair.parseReaderPatchJson(extractJsonObjectText(raw));
-                candidate = repair.applyReaderPatch(candidate, patch, repairContext.targets.map(target => target.path), {
-                    availableFigureOrdinals: selectedOrdinals,
-                    atomicOperation: repairContext.atomicOperation,
-                    structuredArtifacts: options.structuredArtifacts
-                });
+                if (metadataOperation) {
+                    raw = metadataRepair.applyTopLevelMetadataRepair(previousDraft, patch, metadataOperation);
+                    candidate = repair.parseRecoveryDraft(raw);
+                    if (!candidate) throw new Error('Reader 删除程序元数据后仍不满足恢复结构');
+                } else {
+                    candidate = repair.applyReaderPatch(candidate, patch, repairContext.targets.map(target => target.path), {
+                        availableFigureOrdinals: selectedOrdinals,
+                        atomicOperation: repairContext.atomicOperation,
+                        structuredArtifacts: options.structuredArtifacts
+                    });
+                    raw = JSON.stringify(candidate);
+                }
                 patchApplied = true;
-                raw = JSON.stringify(candidate);
             } else {
                 candidate = repair.parseRepairableDraft(extractJsonObjectText(raw));
             }
@@ -7823,7 +7837,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         } catch (error) {
             recordDisposition({ ...dispositionBase, disposition: 'rejected', errorCode: error.code || 'READER_VALIDATION_FAILED' });
             lastError = error;
-            previousDraft = candidate ? JSON.stringify(candidate) : raw;
+            previousDraft = candidate ? JSON.stringify(candidate)
+                : metadataOperation && !patchApplied ? previousDraft : raw;
             currentIssues = repairContext && !patchApplied
                 ? [...currentIssues.map(issue => typeof issue.message === 'string'
                     ? issue : { ...issue, message: '' }).filter(issue => issue.code === repair.TABLE_COUNT_ISSUE_CODE
@@ -7832,7 +7847,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     { path: null, message: `Reader patch rejected: ${error.message}` }]
                 : repair.collectDraftIssues(candidate, error, {
                     sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts,
-                    rawDraft: !repairContext && !candidate ? raw : undefined
+                    rawDraft: !candidate ? previousDraft : undefined
                 });
             const failureSignature = repair.hashRecoveryIssues(currentIssues);
             // 格式错误的补丁响应会消耗掉它那次有上限的内容尝试，但它从没改过候选项。只有

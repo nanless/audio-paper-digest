@@ -33,7 +33,7 @@ function patchFor(draft, replacements) {
     }) };
 }
 
-test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v7', () => {
+test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v8', () => {
     const paper = { id: '2610.90037', title: '局部修复版本核验' };
     const oldStage = { status: 'complete', promptTextContract: 'analysis-prompt-text-v4',
         repairPromptTextContract: 'analysis-prompt-text-v3' };
@@ -43,7 +43,7 @@ test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v7', () => 
     const oldFingerprint = fingerprint(oldStage);
     assert.equal(versions.promptFilePathForContract('apiReaderRepair', oldStage.repairPromptTextContract),
         'prompts/api-reader-repair-v3.md');
-    assert.equal(versions.currentPromptTextContract('apiReaderRepair'), 'analysis-prompt-text-v7');
+    assert.equal(versions.currentPromptTextContract('apiReaderRepair'), 'analysis-prompt-text-v8');
     assert.notEqual(fingerprint({ status: 'pending' }), oldFingerprint);
     assert.equal(fingerprint(oldStage), oldFingerprint);
     assert.equal(JSON.stringify(oldStage), before);
@@ -51,7 +51,7 @@ test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v7', () => 
         '03baf3e0c54831c8e6e25d2fda2f223e908a54353d0a2b54c68aa7cbd41cac2a');
 });
 
-test('真实公开局部请求使用当前完整原表修复 v7，保存的付费尝试数未清零', async t => {
+test('真实公开局部请求使用当前完整原表修复 v8，保存的付费尝试数未清零', async t => {
     const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-repair-v4-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
     const draft = createReaderTestArticle();
