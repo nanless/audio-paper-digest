@@ -67,7 +67,8 @@ function classifyPaperSourceResourceFacets(sourceQuote) {
         .replace(/\s+/g, ' ').trim()
         .replace(ATTACHED_FOOTNOTE_RESOURCE_LABEL, '');
     if (!quote || RESOURCE_NOT_RELEASED.test(quote) || THIRD_PARTY_RESOURCE.test(quote)
-        || !RESOURCE_AFFIRMATIVE.test(quote)) return ['third_party'];
+        || !RESOURCE_AFFIRMATIVE.test(quote)
+        || /\b(?:quotes?|quoted)\b.*\b(?:following|statement|declaration)\b|(?:引用以下声明)/i.test(quote)) return ['third_party'];
     const facetMatches = RESOURCE_FACET_SPECS.map(([type, pattern]) => ({ type, match: pattern.exec(quote) }))
         .filter(item => item.match);
     const firstFacet = Math.min(...facetMatches.map(item => item.match.index));
@@ -101,6 +102,38 @@ function repositoryClassificationQuote(sourceText, start, end) {
     const previousBoundaries = [before.lastIndexOf('. '), before.lastIndexOf('.\n'), before.lastIndexOf('。'),
         before.lastIndexOf('！'), before.lastIndexOf('？'), before.lastIndexOf(';'),
         before.lastIndexOf('；'), before.lastIndexOf('\n\n')];
+    // HTML 脚注可形成“句号+引用号、换行脚注号、资源声明”。只隔开明确的
+    // 独立声明，不删除来源字节，也不把前文引述的声明改认成本篇作者资源。
+    const footnoteBoundary = /\.\d{1,3}[ \t]*\r?\n[ \t]*\d{1,3}[ \t]*\r?\n[ \t]*(?=(?:source\s+code|code|(?:audio\s+)?demos?)\b[^\n]*\b(?:is|are)\s+(?:publicly\s+)?available\s+at\b)/giu;
+    for (const match of before.matchAll(footnoteBoundary)) {
+        const absoluteBoundary = start - before.length + match.index;
+        const paragraphStart = source.lastIndexOf('\n\n', absoluteBoundary);
+        const abstractCandidate = source.lastIndexOf('\nAbstract\n', absoluteBoundary);
+        const metadataLines = abstractCandidate < 0 ? [] : source.slice(0, abstractCandidate).trim().split(/\r?\n/);
+        // 只识别文档开头的标题与逐行作者姓名；任意正文中的 Abstract 不授权截断。
+        const authorLines = metadataLines.slice(1).map(line => line.split(/\\sthanks|Corresponding author/i)[0].trim());
+        const hasAuthorMetadata = metadataLines.length >= 2 && metadataLines.length <= 20
+            && authorLines.every(line => /^[A-Z][A-Za-z.'’–-]*(?:\s+[A-Z][A-Za-z.'’–-]*){1,5}$/.test(line));
+        const preAbstract = abstractCandidate < 0 ? '' : source.slice(0, abstractCandidate);
+        const abstractStart = hasAuthorMetadata && !RESOURCE_NOT_RELEASED.test(preAbstract)
+            && !THIRD_PARTY_RESOURCE.test(metadataLines[0] || '')
+            && !/\b(?:quotes?|quoted|states|stated|says?|said|writes?|wrote|reported|according\s+to|following|as\s+follows|authors?|et\s+al|documentation|announcement|this\s+sentence|excerpt|mentioned|noted|claimed|describes?|provides?|contains)\b|引用|以下声明|其他作者|另一篇工作/i.test(metadataLines[0] || '')
+            ? abstractCandidate : -1;
+        const introductionStart = Math.max(paragraphStart < 0 ? 0 : paragraphStart + 2,
+            abstractStart < 0 ? 0 : abstractStart + '\nAbstract\n'.length);
+        const introduction = source.slice(introductionStart, absoluteBoundary);
+        const sentenceStart = Math.max(-1, ...previousBoundaries.filter(index => index < match.index)) + 1;
+        const conclusionStart = Math.max(start - before.length + sentenceStart, introductionStart);
+        const conclusion = source.slice(conclusionStart, absoluteBoundary).trim();
+        // 额外句界只适用于紧邻的结果/分析结论。未知前文仍保持原分类窗口，
+        // 而不是按一张不完整的引述动词表猜测归属。
+        if (RESOURCE_NOT_RELEASED.test(introduction)
+            || /\b(?:quotes?|quoted|states|stated|says?|said|writes?|wrote|reported|according\s+to|following|as\s+follows|authors?|et\s+al|documentation|announcement|this\s+sentence)\b|(?:引用|以下声明|其他作者|另一篇工作)/i.test(introduction)) {
+            return source.slice(introductionStart, end).trim();
+        }
+        if (!/^(?:(?:these|our|the|further)\s+)?(?:experimental\s+)?(?:results?|analysis|evaluations?|experiments?)\b[^.!?]*\b(?:shows?|demonstrates?|indicates?|suggests?|confirms?|reveals?)\b/i.test(conclusion)) continue;
+        previousBoundaries.push(match.index + match[0].length - 1);
+    }
     const nextBoundaries = [after.indexOf('. '), after.indexOf('.\n'), after.indexOf('。'), after.indexOf('！'),
         after.indexOf('？'), after.indexOf(';'), after.indexOf('；'), after.indexOf('\n\n')]
         .filter(index => index >= 0);

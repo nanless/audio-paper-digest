@@ -363,3 +363,37 @@ test('纠错主分析完成而评分缺失时正常入口两次无反馈恢复�
     assert.match(result.stdout, /NORMAL_SCORING_RESUME_ZERO_REQUEST_PROOF_RETAINED/);
     assert.equal(calls, 0, '正常入口两次恢复均不得发出任何模型请求');
 });
+
+
+test('同一已执行反馈可从保留原正文恢复，其他旧正文和篡改证明不能绕过当前检查点', async t => {
+    const sample = await fixture(t);
+    const accepted = review.validateFeedback(sample.feedback, sample.plan, sample.paper);
+    sample.paper.analysis = original;
+    sample.paper.analysisCheckpoint = baseline;
+    sample.paper.analysisManifest.stages.coreSummaryRepair.factReview = accepted.proof;
+    const savedPaper = JSON.stringify(sample.paper);
+    const restored = review.validateFeedback(sample.feedback, sample.plan, sample.paper);
+    assert.deepEqual(restored.proof, accepted.proof);
+    assert.equal(JSON.stringify(sample.paper), savedPaper);
+    assert.equal(sample.paper.analysisStaleSnapshots, undefined);
+
+    const missingReceipt = structuredClone(sample.paper);
+    delete missingReceipt.analysisManifest.stages.coreSummaryRepair.factReview;
+    assert.throws(() => review.validateFeedback(sample.feedback, sample.plan, missingReceipt), /当前核心摘要正文绑定/);
+
+    const changedOriginal = structuredClone(sample.paper);
+    changedOriginal.analysis += '篡改旧正文';
+    assert.throws(() => review.validateFeedback(sample.feedback, sample.plan, changedOriginal), /当前核心摘要正文绑定/);
+
+    const forgedReceipt = structuredClone(sample.paper);
+    forgedReceipt.analysisManifest.stages.coreSummaryRepair.factReview.feedbackSha256 = 'a'.repeat(64);
+    assert.throws(() => review.validateFeedback(sample.feedback, sample.plan, forgedReceipt), /当前核心摘要正文绑定/);
+
+    const changedSource = structuredClone(sample.feedback);
+    changedSource.sourceFiles['source.pdf'] = 'a'.repeat(64);
+    assert.throws(() => review.validateFeedback(changedSource, sample.plan, sample.paper), /来源SHA/);
+
+    const inventedQuote = structuredClone(sample.feedback);
+    inventedQuote.sourceQuotes = ['This sentence does not occur in the sealed source.'];
+    assert.throws(() => review.validateFeedback(inventedQuote, sample.plan, sample.paper), /逐字引文/);
+});

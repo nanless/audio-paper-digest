@@ -68,3 +68,33 @@ test('先修术语解释位置时，不附带未授权的补表指令', () => {
     assert.deepEqual(context.targets.map(target => target.path), ['/sections/0/body']);
     assert.equal(context.atomicOperation, null);
 });
+
+test('所有已发现问题不会扩大本轮允许范围，越界回执明确指出目标', () => {
+    const draft = missingTableDraft();
+    draft.conceptBridges = Array.from({ length: 6 }, (_, index) => ({
+        terms: ['术语甲', '术语乙'], sectionKind: 'component',
+        marker: `[[CONCEPT_BRIDGE_${index + 1}]]`, explanation: '已有解释。', marker_note: ''
+    }));
+    draft.conceptBridges.forEach((bridge, index) => {
+        draft.sections[index].body += `\n\n${bridge.marker}\n\n`;
+    });
+    const issues = draft.conceptBridges.map((_, index) => ({
+        path: `/conceptBridges/${index}`, message: '包含额外字段 marker_note'
+    }));
+    const context = buildRepairContext(draft, issues, '完整原文证据');
+    const allowedPaths = context.targets.map(target => target.path);
+    assert.ok(allowedPaths.filter(pointer => pointer.startsWith('/conceptBridges/')).length < 6);
+    assert.match(context.targetGuidance, /列出问题不代表授权修改/);
+    assert.match(context.targetGuidance, /真实 oldSha256/);
+    assert.ok(context.targetGuidance.includes(JSON.stringify(allowedPaths)));
+    const unauthorizedPath = issues.find(issue => !allowedPaths.includes(issue.path)).path;
+    const patch = patchFor(draft, [[unauthorizedPath, structuredClone(draft.conceptBridges[2])]]);
+    patch.replacements[0].oldSha256 = 'PLACEHOLDER_2';
+    assert.throws(() => applyReaderPatch(draft, patch, allowedPaths), error => {
+        assert.ok(error.message.includes(`本次未授权目标：${JSON.stringify(unauthorizedPath)}`));
+        assert.ok(error.message.includes(`本次允许目标：${JSON.stringify(allowedPaths)}`));
+        return true;
+    });
+    assert.equal(draft.conceptBridges.length, 6);
+    assert.equal(draft.conceptBridges[2].marker_note, '');
+});

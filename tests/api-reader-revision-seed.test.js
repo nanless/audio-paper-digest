@@ -138,3 +138,24 @@ test('调用方提供的草稿不能绕过种子校验，已签名输入一变�
     assert.notEqual(next.metadata.revisionSeedSha256, seed.metadata.revisionSeedSha256);
     assert.notEqual(stableFingerprint(next.metadata), stableFingerprint(seed.metadata));
 });
+
+
+test('已签名正文仍有图片标记时拒绝资格，普通图号引文保留', () => {
+    const paper = fixture();
+    const sourceSha256 = paper.sourceSha256;
+    const sourceManifest = JSON.stringify(paper.analysisManifest.sourceAcquisition);
+    for (const marker of ['[[FIGURE_2]]', '[[FIGURE_0]]', '[[FIGURE_02]]']) {
+        const candidate = structuredClone(paper);
+        candidate.apiReaderArticle += `\n\n${marker}`;
+        candidate.apiReaderArticleSha256 = sha(candidate.apiReaderArticle);
+        candidate.analysisManifest.stages.apiReaderArticle.articleSha256 = candidate.apiReaderArticleSha256;
+        assert.equal(hasValidApiReaderV3Records(candidate), false, marker);
+        assert.equal(candidate.sourceSha256, sourceSha256);
+        assert.equal(JSON.stringify(candidate.analysisManifest.sourceAcquisition), sourceManifest);
+    }
+    const ordinaryQuote = structuredClone(paper);
+    ordinaryQuote.apiReaderArticle += '\n\n原文引用 FIGURE_2 与 Figure 2 都只是普通图号。';
+    ordinaryQuote.apiReaderArticleSha256 = sha(ordinaryQuote.apiReaderArticle);
+    ordinaryQuote.analysisManifest.stages.apiReaderArticle.articleSha256 = ordinaryQuote.apiReaderArticleSha256;
+    assert.equal(hasValidApiReaderV3Records(ordinaryQuote), true);
+});

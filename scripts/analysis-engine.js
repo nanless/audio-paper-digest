@@ -1169,6 +1169,7 @@ function hasValidApiReaderV3Records(paper) {
     const figurePersistenceValid = figurePersistence === undefined
         || figurePersistence === EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT;
     const diagnosticChecks = {
+        figure_markers_assembled: !require('./deep-analyzer.js').findUnassembledApiReaderFigureMarker(article),
         article_hash: paper.apiReaderArticleSha256 === articleSha256
             && stage.articleSha256 === articleSha256,
         plan_hash: paper.apiReaderPlanSha256 === planSha256
@@ -1223,7 +1224,8 @@ function hasValidApiReaderV3Records(paper) {
         console.warn(`[analysis-engine] 读者文章 v3 的以下核验项未通过：${failedDiagnosticChecks.join(', ')}`);
     }
     return Boolean(
-        paper.apiReaderArticleSha256 === articleSha256
+        diagnosticChecks.figure_markers_assembled
+        && paper.apiReaderArticleSha256 === articleSha256
         && paper.apiReaderPlanSha256 === planSha256
         && stage.articleSha256 === articleSha256
         && stage.planSha256 === planSha256

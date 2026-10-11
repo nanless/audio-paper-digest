@@ -101,7 +101,11 @@ function validateFeedback(feedback, plan, paper) {
         const payload = deep.validateStaleAnalysisSnapshot(snapshot);
         return payload && matches(payload.analysisCheckpoint);
     });
-    if (!matches(current) && !snapshotMatches) fail('当前核心摘要正文绑定已过期，不能套用旧反馈');
+    // 当前检查点可能已完成纠错；只有同一已执行反馈的证明，才能读取仍保留的原正文。
+    const retainedOriginalMatches = sameReceipt && matches(paper.analysis);
+    if (!matches(current) && !snapshotMatches && !retainedOriginalMatches) {
+        fail('当前核心摘要正文绑定已过期，不能套用旧反馈');
+    }
     const freeze = value => {
         if (value && typeof value === 'object') { Object.values(value).forEach(freeze); Object.freeze(value); }
         return value;

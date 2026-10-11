@@ -347,14 +347,24 @@ class PathConfigTest(unittest.TestCase):
             self.assertFalse(lock_path.exists())
 
     def test_heartbeat_keeps_remote_lease_fresh(self):
+        """真实线程连续续租；受控租期时钟不把CI调度暂停误当心跳失效。"""
         import threading
+        import time
         import path_config
         renewed = threading.Event()
         snapshots = []
         original_renew = path_config._lock_renew
+        clock = {'now': time.time(), 'tick': 0}
+        base = clock['now']
 
         def observe_renewal(snapshot):
             current = original_renew(snapshot)
+            clock['tick'] += 1
+            # 只有实际续租写入成功才推进租期时钟，随后重读真实mtime快照。
+            stamp = base + clock['tick'] * 0.05
+            os.utime(current['path'] / 'owner.json', (stamp, stamp))
+            current = path_config._lock_snapshot(current['path'])
+            clock['now'] = stamp + 0.1
             snapshots.append((snapshot, current))
             renewed.set()
             return current
@@ -365,18 +375,51 @@ class PathConfigTest(unittest.TestCase):
             with mock.patch('path_config.socket.gethostname', return_value='owner-host'):
                 with mock.patch.object(path_config, '_lock_renew', side_effect=observe_renewal):
                     with file_lock(target, timeout_seconds=1, stale_seconds=0.15):
-                        self.assertTrue(renewed.wait(5), '等待实际锁心跳完成')
+                        self.assertTrue(renewed.wait(5), '等待真实线程完成第一次续租')
                         original, current = snapshots[0]
                         self.assertNotEqual(original['owner']['record']['heartbeatAt'],
                                             current['owner']['record']['heartbeatAt'])
-                        with mock.patch('path_config.socket.gethostname', return_value='observer-host'):
-                            with self.assertRaises(TimeoutError):
-                                with file_lock(target, timeout_seconds=0.2, stale_seconds=0.15):
-                                    self.fail('持有人的心跳仍在续租时，竞争方不得取得文件锁')
+                        with mock.patch('path_config.time.time', side_effect=lambda: clock['now']):
+                            with mock.patch('path_config.socket.gethostname', return_value='observer-host'):
+                                with self.assertRaises(TimeoutError):
+                                    with file_lock(target, timeout_seconds=0.2, stale_seconds=0.15):
+                                        self.fail('实际租期新鲜时，竞争方不得取得文件锁')
+                        self.assertGreaterEqual(len(snapshots), 2, '竞争期间真实线程必须继续续租')
                         self.assertEqual(path_config._lock_identity(lock_path.lstat()), current['identity'])
                         self.assertTrue(all(item['owner']['record']['token']
                                             == original['owner']['record']['token']
                                             for _, item in snapshots))
+            self.assertFalse(lock_path.exists())
+
+    def test_stopped_heartbeat_remote_lease_can_expire(self):
+        """续租线程明确停止后，受控时钟越过租期，远端竞争方能正常回收。"""
+        import threading
+        import time
+        import path_config
+        stopped = threading.Event()
+
+        def stop_renewal(snapshot):
+            stopped.set()
+            raise RuntimeError('测试明确停止续租')
+
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / 'expired.json'
+            lock_path = Path(f'{target}.lock')
+            with mock.patch('path_config.socket.gethostname', return_value='owner-host'):
+                with mock.patch.object(path_config, '_lock_renew', side_effect=stop_renewal):
+                    holder = file_lock(target, timeout_seconds=1, stale_seconds=0.15)
+                    holder.__enter__()
+                    owner = path_config._lock_snapshot(lock_path)
+                    self.assertTrue(stopped.wait(5), '实际续租线程必须已停止')
+                    expired_now = max(owner['mtime'], owner['owner']['mtime']) / 1_000_000_000 + 1
+                    with mock.patch('path_config.time.time', return_value=expired_now):
+                        with mock.patch('path_config.socket.gethostname', return_value='observer-host'):
+                            with file_lock(target, timeout_seconds=1, stale_seconds=0.15):
+                                replacement = path_config._lock_snapshot(lock_path)
+                                self.assertNotEqual(replacement['owner']['record']['token'],
+                                                    owner['owner']['record']['token'])
+                    with self.assertRaisesRegex(RuntimeError, '续租失败'):
+                        holder.__exit__(None, None, None)
             self.assertFalse(lock_path.exists())
 
 
@@ -588,6 +631,90 @@ with file_lock(sys.argv[2]):
 def read_json_strict_for_test(path):
     with Path(path).open('r', encoding='utf-8') as handle:
         return json.load(handle)
+
+
+
+
+def _renew_lock_in_competing_process(connection, snapshot):
+    import path_config
+    connection.send({'stage': 'ready'})
+    connection.recv()
+    connection.send({'stage': 'renew-start'})
+    # 新版在原inode进程锁处阻塞；旧版无此步骤，必须走到真正续租完成。
+    if hasattr(path_config, 'fcntl'):
+        original_flock = path_config.fcntl.flock
+
+        def announce_flock(fd, operation):
+            connection.send({'stage': 'inode-lock-attempt'})
+            return original_flock(fd, operation)
+
+        path_config.fcntl.flock = announce_flock
+    try:
+        renewed = path_config._lock_renew(snapshot)
+        connection.send({'stage': 'finished', 'renewed': True,
+                         'heartbeat': renewed['owner']['record']['heartbeatAt']})
+    except Exception as exc:
+        connection.send({'stage': 'finished', 'renewed': False, 'error': str(exc)})
+
+
+class FileLockHeartbeatProcessRaceTest(unittest.TestCase):
+    def test_reclaim_and_same_inode_heartbeat_cannot_both_succeed(self):
+        """最终检查之后触发另一真实进程续租，回收与续租只能有一个成功。"""
+        import multiprocessing
+        import path_config
+        context = multiprocessing.get_context('spawn')
+        with tempfile.TemporaryDirectory() as tmp:
+            lock_path = Path(tmp) / 'active.lock'
+            snapshot = path_config._lock_create(lock_path, 0.15)
+            parent, child = context.Pipe()
+            worker = context.Process(target=_renew_lock_in_competing_process,
+                                     args=(child, snapshot))
+            worker.start()
+            self.assertTrue(parent.poll(10), '等待真实子进程ready握手')
+            self.assertEqual(parent.recv()['stage'], 'ready')
+            original_read = path_config._lock_read_owner
+            calls = 0
+            renewal_result = None
+
+            def trigger_after_final_read(directory_fd):
+                nonlocal calls, renewal_result
+                owner = original_read(directory_fd)
+                calls += 1
+                if calls == 2:
+                    parent.send('renew')
+                    self.assertTrue(parent.poll(10), '竞争进程须真正开始续租')
+                    self.assertEqual(parent.recv()['stage'], 'renew-start')
+                    self.assertTrue(parent.poll(10), '等待inode锁步骤或真实续租完成')
+                    progress = parent.recv()
+                    if progress['stage'] == 'finished':
+                        renewal_result = progress
+                    else:
+                        self.assertEqual(progress['stage'], 'inode-lock-attempt')
+                return owner
+
+            try:
+                with mock.patch.object(path_config, '_lock_read_owner',
+                                       side_effect=trigger_after_final_read):
+                    removed = path_config._lock_remove(snapshot)
+                if renewal_result is None:
+                    self.assertTrue(parent.poll(5), '续租进程须在回收释放进程锁后结束')
+                    renewal_result = parent.recv()
+                worker.join(5)
+                self.assertFalse(worker.is_alive())
+                self.assertFalse(removed and renewal_result['renewed'],
+                                 '不能删除另一真实进程已成功续租的同inode持有人')
+                self.assertTrue(removed or renewal_result['renewed'])
+                if removed:
+                    self.assertFalse(lock_path.exists())
+                else:
+                    self.assertEqual(json.loads((lock_path / 'owner.json').read_text())['token'],
+                                     snapshot['owner']['record']['token'])
+            finally:
+                if worker.is_alive():
+                    worker.terminate()
+                    worker.join(5)
+                parent.close()
+                child.close()
 
 
 if __name__ == '__main__':

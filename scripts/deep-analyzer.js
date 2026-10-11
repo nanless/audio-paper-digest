@@ -4565,9 +4565,23 @@ function orderApiReaderFiguresByArticle(article, figures) {
     return ordered.every(Boolean) ? ordered : null;
 }
 
+function findUnassembledApiReaderFigureMarker(article) {
+    return /\[\[FIGURE_\d+\]\]/.exec(String(article || ''))?.[0] || null;
+}
+
+function assertApiReaderFiguresAssembled(article) {
+    const marker = findUnassembledApiReaderFigureMarker(article);
+    if (marker) {
+        throw new Error(`读者文章仍有未装配的图片标记：${marker}；请核对正文与 figurePlacements，不得猜图或增加未核验的图。`);
+    }
+}
+
 function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '') {
     const figures = getApiReaderFigureInventory(structuredArtifacts, arxivId);
-    if (figures.length === 0) return { ...readerResult, figures: [] };
+    if (figures.length === 0) {
+        assertApiReaderFiguresAssembled(readerResult.article);
+        return { ...readerResult, figures: [] };
+    }
     let article = readerResult.article;
     const sections = readerResult.plan.sections || [];
     const placements = Array.isArray(readerResult.plan.figurePlacements)
@@ -4642,6 +4656,7 @@ function injectApiReaderFigures(readerResult, structuredArtifacts, arxivId = '')
     if (placements.length > 0 && used.length !== placements.length) {
         throw new Error(`论文图计划只成功插入 ${used.length}/${placements.length} 张；${skipped.join('；') || '存在不可用的原图 ordinal'}`);
     }
+    assertApiReaderFiguresAssembled(article);
     const orderedFigures = orderApiReaderFiguresByArticle(article, used);
     if (!orderedFigures) {
         throw new Error('正文里论文图的先后顺序与结构化 figure 对不上，无法按 figure 顺序重排');
@@ -6139,6 +6154,17 @@ function parseApiReaderArticleResult(raw, options = {}) {
                 : {})
         };
     });
+    const declaredFigureMarkers = new Set(figurePlacements.map(placement => placement.marker));
+    for (const [sectionIndex, section] of normalizedSections.entries()) {
+        for (const match of section.body.matchAll(/\[\[FIGURE_\d+\]\]/g)) {
+            if (!declaredFigureMarkers.has(match[0])) {
+                throw new Error(
+                    `读者文章 sections[${sectionIndex}].body 包含未声明的图片标记：${match[0]}；`
+                    + '请核对本节与现有 figurePlacements，只修正当前授权正文，不得增加未核验的图。'
+                );
+            }
+        }
+    }
     let article = normalizedSections.map(section => (
         `### ${section.heading.trim()}\n\n${section.body.trim()}`
     )).join('\n\n');
@@ -7361,6 +7387,11 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     candidate = recovered?.draft || null;
     draftOrderMappings = recovered?.draftOrderMappings || [];
     currentIssues = recovered?.issues || [];
+    if (!candidate && recovered?.rawDraft) {
+        const rawIssues = repair.collectDraftIssues(null, null, { rawDraft: recovered.rawDraft });
+        currentIssues = [...currentIssues, ...rawIssues.filter(issue => !currentIssues.some(existing =>
+            existing.path === issue.path && existing.message === issue.message))];
+    }
     completedAttempts = recovered?.attempts || 0;
     fullAttempts = recovered?.fullAttempts || 0;
     transportFailures = recovered?.transportFailures || 0;
@@ -7531,7 +7562,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         }
         const buildReaderPrompt = indexExamples => repairContext ? loadPrompt(currentTextStagePromptPath('apiReaderRepair'), {
             title: paper.title || '', arxivId: getPaperArxivId(paper),
-            validationFeedback: [numericSpellingGuidance, reviewFeedbackPrefix,
+            validationFeedback: [repairContext.targetGuidance, numericSpellingGuidance, reviewFeedbackPrefix,
                 ...currentIssues.map(issueFeedback), indexExamples].filter(Boolean).join('\n'),
             repairTargets: JSON.stringify({ draftSha256: repairContext.draftSha256,
                 targets: repairContext.targets,
@@ -7542,7 +7573,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             title: paper.title || '',
             arxivId: getPaperArxivId(paper),
             sourceEvidence,
-            validationFeedback: [validationFeedback, indexExamples].filter(Boolean).join('\n'),
+            validationFeedback: [validationFeedback,
+                ...(!candidate ? currentIssues.filter(issue => issue.diagnosticOnly === true).map(issueFeedback) : []),
+                indexExamples].filter(Boolean).join('\n'),
             previousDraft,
             mechanicalContract
         });
@@ -7737,7 +7770,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     || !String(issue.message || '').startsWith('Reader patch')),
                     { path: null, message: `Reader patch rejected: ${error.message}` }]
                 : repair.collectDraftIssues(candidate, error, {
-                    sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts
+                    sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts,
+                    rawDraft: !repairContext && !candidate ? raw : undefined
                 });
             const failureSignature = repair.hashRecoveryIssues(currentIssues);
             // 格式错误的补丁响应会消耗掉它那次有上限的内容尝试，但它从没改过候选项。只有
@@ -17299,6 +17333,7 @@ function appendSectionByTitle(analysis, title, newContent) {
 }
 
 module.exports = {
+    findUnassembledApiReaderFigureMarker,
     normalizeReaderSourceCell,
     analyzePaperDeep,
     parseAnalysis,

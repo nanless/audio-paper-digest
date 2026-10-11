@@ -220,3 +220,45 @@ test('分类诊断缺少 message 时仍保存付费响应和尝试', async t => 
     assert.equal(response.rawResponse, raw);
     assert.equal(response.outputTextSha256, require('node:crypto').createHash('sha256').update(raw).digest('hex'));
 });
+
+test('未声明图片标记进入下一次局部请求，只授权所在正文', async t => {
+    const deep = require('../scripts/deep-analyzer.js');
+    const crypto = require('node:crypto');
+    const directory = temporary(t);
+    const imagePath = path.join(directory, 'offline-pixel.png');
+    const pixels = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aT9sAAAAASUVORK5CYII=', 'base64');
+    fs.writeFileSync(imagePath, pixels);
+    const url = 'https://arxiv.org/html/2610.90008/figure.png';
+    const draft = fixture();
+    draft.sections[4].body += '\n\n[[FIGURE_2]]';
+    const originalDraft = JSON.stringify(draft);
+    const stopped = Object.assign(new Error('已截获下一次局部请求'), { retryable: false, scope: 'run' });
+    let calls = 0;
+    await assert.rejects(deep.generateApiReaderArticleDetailed(
+        { arxivId: '2610.90008', title: '未装配图的局部诊断' }, 'canonical',
+        `FIGURE_2: 本地测试像素\nFIGURE_2_URL: ${url}`, {
+            sourceText: '离线来源', readerAttemptsDir: directory,
+            readerMaterializeFigures: async () => [{ ordinal: 2, url, cachePath: imagePath,
+                assetSha256: crypto.createHash('sha256').update(pixels).digest('hex') }],
+            readerRecordDisposition() {},
+            readerCallModel: async (messages, budget, options) => {
+                calls++;
+                if (calls === 1) {
+                    assert.equal(options.usageContext.stage, 'apiReaderArticle');
+                    return originalDraft;
+                }
+                assert.equal(options.usageContext.stage, 'apiReaderRepair');
+                assert.match(JSON.stringify(messages), /未声明的图片标记/);
+                assert.match(JSON.stringify(messages), /sections\[4\]/);
+                const diagnosticDirectory = path.join(directory, 'request-diagnostics');
+                const requestFile = fs.readdirSync(diagnosticDirectory).find(name => name.endsWith('.request.json'));
+                const request = JSON.parse(fs.readFileSync(path.join(diagnosticDirectory, requestFile)));
+                assert.deepEqual(request.repairTargets.map(target => target.path), ['/sections/4/body']);
+                assert.match(request.draft.sections[4].body, /\[\[FIGURE_2\]\]/);
+                assert.deepEqual(request.draft.figurePlacements, []);
+                throw stopped;
+            }
+        }), /已截获下一次局部请求/);
+    assert.equal(calls, 2);
+    assert.equal(JSON.stringify(draft), originalDraft);
+});

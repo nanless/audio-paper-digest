@@ -3,6 +3,7 @@
 
 import json
 import errno
+import fcntl
 import os
 import re
 import socket
@@ -357,9 +358,17 @@ def _lock_remove(snapshot):
                 or sorted(os.listdir(fd)) != snapshot['entries']:
             return False
         if snapshot['owner'] is not None:
-            if _lock_read_owner(fd) != snapshot['owner']:
-                return False
-            os.unlink('owner.json', dir_fd=fd)
+            owner_fd = os.open('owner.json', os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0)
+                               | getattr(os, 'O_NONBLOCK', 0), dir_fd=fd)
+            try:
+                # 续租与最终回收共用原持有人 inode 的进程锁，防止检查后心跳更新。
+                fcntl.flock(owner_fd, fcntl.LOCK_EX)
+                if _lock_identity(os.fstat(owner_fd)) != snapshot['owner']['identity'] \
+                        or _lock_read_owner(fd) != snapshot['owner']:
+                    return False
+                os.unlink('owner.json', dir_fd=fd)
+            finally:
+                os.close(owner_fd)
         os.fsync(fd)
     finally:
         os.close(fd)
@@ -439,6 +448,7 @@ def _lock_renew(snapshot):
         fd = os.open('owner.json', os.O_RDWR | getattr(os, 'O_NOFOLLOW', 0)
                      | getattr(os, 'O_NONBLOCK', 0), dir_fd=directory_fd)
         try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
             if _lock_identity(os.fstat(fd)) != snapshot['owner']['identity'] \
                     or _lock_read_owner(directory_fd) != snapshot['owner']:
                 raise RuntimeError(f'文件锁续租前持有人记录被替换：{path}')

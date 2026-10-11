@@ -528,7 +528,10 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
     for (const item of patch.replacements) {
         if (!item || Object.keys(item).sort().join(',') !== 'oldSha256,path,value'
             || typeof item.path !== 'string' || !allowed.has(item.path)) {
-            throw new Error('Reader patch contains an unknown or unauthorized target');
+            const rejectedPath = typeof item?.path === 'string' ? JSON.stringify(item.path) : '（缺少合法 path）';
+            throw new Error('Reader patch contains an unknown or unauthorized target; '
+                + `本次未授权目标：${rejectedPath}；本次允许目标：${JSON.stringify([...allowed])}。`
+                + '只提交这些允许目标及请求中对应的真实 oldSha256；其他已发现问题留待后续重新核验和授权，不要编造 SHA。');
         }
         if (seen.some(pointer => pointer === item.path || pointer.startsWith(`${item.path}/`)
             || item.path.startsWith(`${pointer}/`))) throw new Error('Reader patch has duplicate or overlapping targets');
@@ -772,7 +775,59 @@ function collectDraftIssues(draft, parserError, options = {}) {
         }
     }
     issues.push(...standaloneParserIssues);
-    if (!draft) return issues;
+    if (!draft) {
+        // 原始响应只供诊断；不会成为可修复草稿，也不会获得任何修改权限。
+        try {
+            const raw = options.rawDraft;
+            if (typeof raw === 'string' && Buffer.byteLength(raw) <= MAX_FILE_BYTES) {
+                const value = JSON.parse(raw);
+                assertSafeJson(value);
+                if (value && typeof value === 'object' && !Array.isArray(value)) {
+                    const addUnknownFields = (node, allowed, location) => {
+                        if (!node || typeof node !== 'object' || Array.isArray(node)) return;
+                        const unknown = Object.keys(node).filter(key => !allowed.includes(key));
+                        if (unknown.length) issues.push({ path: null, diagnosticOnly: true,
+                            message: `原始输出 ${location} 包含额外字段：${unknown.join('、')}；只能含 ${allowed.join('、')}。解释、表格和标记应写入允许的正文或来源字段，不能另造字段；按论文证据核对后修正，不要直接丢弃内容。` });
+                    };
+                    addUnknownFields(value, ROOT_FIELDS, '根对象');
+                    if (Array.isArray(value.sections)) {
+                        if (value.sections.length < READER_LIMITS.minimumSections
+                            || value.sections.length > READER_LIMITS.maximumSections) {
+                            issues.push({ path: null, diagnosticOnly: true,
+                                message: `原始输出 sections 实际 ${value.sections.length} 节，必须为 ${READER_LIMITS.minimumSections}–${READER_LIMITS.maximumSections} 节；合并同类段落时保留原有事实、数字、单位和来源。` });
+                        }
+                        value.sections.forEach((section, index) => addUnknownFields(section,
+                            ['kind', 'heading', 'body'], `sections[${index}]`));
+                    }
+                    for (const [field, allowed] of [
+                        ['conceptBridges', ['terms', 'sectionKind', 'marker', 'explanation']],
+                        ['figurePlacements', ['figureOrdinal', 'targetKind', 'marker', 'focusPoints']],
+                        ['formulaBindings', ['formulaOrdinal', 'targetKind', 'marker']]
+                    ]) {
+                        if (Array.isArray(value[field])) value[field].forEach((node, index) =>
+                            addUnknownFields(node, allowed, `${field}[${index}]`));
+                    }
+                    if (Array.isArray(value.tableBindings)) value.tableBindings.forEach((binding, index) => {
+                        const allowed = binding && own(binding, 'selection')
+                            ? ['tableIndex', 'selection']
+                            : ['tableIndex', 'sourceType', 'sourceTableOrdinal', 'cellBindings', 'sourceQuotes'];
+                        addUnknownFields(binding, allowed, `tableBindings[${index}]`);
+                        if (binding?.selection) addUnknownFields(binding.selection,
+                            ['sourceTableOrdinal', 'sourceRows', 'sourceColumns'], `tableBindings[${index}].selection`);
+                        if (Array.isArray(binding?.cellBindings)) binding.cellBindings.forEach((cell, cellIndex) =>
+                            addUnknownFields(cell, ['renderedRow', 'renderedColumn', 'sourceRow', 'sourceColumn'],
+                                `tableBindings[${index}].cellBindings[${cellIndex}]`));
+                    });
+                    if (Array.isArray(value.figurePlacements)
+                        && value.figurePlacements.length > READER_LIMITS.maximumFigures) {
+                        issues.push({ path: null, diagnosticOnly: true,
+                            message: `原始输出 figurePlacements 实际 ${value.figurePlacements.length} 项，最多 ${READER_LIMITS.maximumFigures} 项；只能选择本次真正收到像素的原图。` });
+                    }
+                }
+            }
+        } catch (_) { /* 非完整或不安全 JSON 仍仅保留权威解析器错误。 */ }
+        return issues;
+    }
     draft.sections.forEach((section, index) => {
         if (!section || typeof section !== 'object' || Array.isArray(section)
             || Object.keys(section).sort().join(',') !== 'body,heading,kind') {
@@ -1537,7 +1592,9 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '') {
     const evidence = String(sourceEvidence || '');
     const exactQuotes = [...new Set(targets.flatMap(target => target.value?.sourceQuotes || []))]
         .filter(quote => typeof quote === 'string' && String(sourceText).includes(quote));
-    return { draftSha256: hashDraft(draft), targets, issues, evidence, atomicOperation,
+    const targetGuidance = `本轮只允许修改这些目标：${JSON.stringify(targets.map(target => target.path))}。`
+        + '下面的诊断可能列出其他已发现问题，列出问题不代表授权修改。只提交本轮允许目标，逐项使用请求给出的真实 oldSha256；其余问题留待下一轮重新核验并授权，不要为未授权目标编造 SHA。';
+    return { draftSha256: hashDraft(draft), targets, issues, evidence, atomicOperation, targetGuidance,
         exactQuotes, figureOrdinals: [...figureOrdinals], evidenceMode: 'full-evidence-local-output' };
 }
 

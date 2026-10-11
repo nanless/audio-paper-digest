@@ -55,3 +55,22 @@ test('已有精确图像 SHA 的核验说明继续保留，不匹配时回到原
     assert.match(changed, /Source caption/);
     assert.doesNotMatch(changed, /UniAdapt|冻结因果编码器/);
 });
+
+
+test('图片装配拒绝未绑定标记，零图也拒绝且不改输入', () => {
+    const artifacts = { figures: [figure('2609.00001', 1, 'source.png', 'Figure 1: Source caption.')] };
+    const valid = reader([1]);
+    const before = JSON.stringify(valid);
+    const assembled = deep.injectApiReaderFigures(valid, artifacts, '2609.00001');
+    assert.match(assembled.article, /!\[/);
+    assert.doesNotMatch(assembled.article, /\[\[FIGURE_\d+\]\]/);
+    assert.equal(JSON.stringify(valid), before);
+    const invalid = reader([1]);
+    invalid.article += '\n\n[[FIGURE_2]]';
+    const invalidBefore = JSON.stringify(invalid);
+    assert.throws(() => deep.injectApiReaderFigures(invalid, artifacts, '2609.00001'), /未装配.*FIGURE_2/);
+    assert.equal(JSON.stringify(invalid), invalidBefore);
+    assert.throws(() => deep.injectApiReaderFigures(reader([2]), { figures: [] }), /未装配.*FIGURE_2/);
+    const ordinary = { article: '原文写 FIGURE_2，但没有图片占位标记。', plan: { sections: [], figurePlacements: [] } };
+    assert.equal(deep.injectApiReaderFigures(ordinary, { figures: [] }).article, ordinary.article);
+});

@@ -298,7 +298,7 @@ def _is_table_identifier_header(value):
     """与 Node 对带方向指标表头的处理保持一致。"""
     normalized = str(value or '').strip()
     # 与 Node 显式列出的训练条件识别符保持一致。
-    if re.fullmatch(r'(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源)', normalized, flags=re.IGNORECASE):
+    if re.fullmatch(r'(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)', normalized, flags=re.IGNORECASE):
         return True
     if not normalized:
         return True
