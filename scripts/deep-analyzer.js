@@ -9049,6 +9049,7 @@ function buildPrimaryAnalysisBaseFingerprint(promptTextContract, paper, textForA
             ? { promptTextContract: declaredPromptTextContract } : {}),
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
         ...primaryRequestFingerprintFields(effectiveStage),
+        ...require('./lib/daily-fact-review').fingerprintFields('primaryAnalysis', declaredStage),
         analysisSectionTitlesImplementationSha256: promptTemplateSha256('scripts/lib/analysis-section-titles.js'),
         ...modelFingerprint(DEEP_CONFIG),
         promptTemplateSha256: promptTemplateSha256(
@@ -9398,7 +9399,8 @@ function migrateSourceOnlyApiReaderFingerprint(
 function migrateSealedSourceOnlyReaderBeforeAnalysis(
     paper, manifest, baseFingerprint, sourceText, structuredArtifacts, arxivId
 ) {
-    if (require('./lib/daily-fact-review').current() || manifest?.stages?.apiReaderArticle?.factReview) return false;
+    if (require('./lib/daily-fact-review').current() || manifest?.stages?.primaryAnalysis?.factReview
+        || manifest?.stages?.apiReaderArticle?.factReview) return false;
     if (typeof paper?.analysis !== 'string' || !paper.analysis.trim()) return false;
     const evidence = buildApiReaderEvidenceContext(
         paper.analysis, sourceText, structuredArtifacts, arxivId
@@ -14005,6 +14007,15 @@ async function analyzePaperDeepInternal(paper) {
     const modelTextRecoveryCandidate = paper.analysisManifest?.sourceAcquisition?.modelTextSanitizationContract
         === MODEL_TEXT_SANITIZATION_CONTRACT ? null : structuredClone(paper);
     const analysisManifest = createAnalysisRecoveryManifest(paper);
+    const savedPrimaryFactStage = analysisManifest.stages.primaryAnalysis;
+    const activePrimaryFactReview = require('./lib/daily-fact-review').current(arxivId)?.feedback.primaryFeedback?.trim();
+    if (activePrimaryFactReview) captureStaleAnalysisSnapshot(paper, analysisManifest, 'primaryAnalysis',
+        require('./lib/daily-fact-review').current(arxivId).proof.feedbackSha256);
+    if (savedPrimaryFactStage?.factReview && !activePrimaryFactReview
+        && (!isRecoveryStageComplete(analysisManifest, 'primaryAnalysis')
+            || !String(paper.analysisStageCheckpoints?.primaryAnalysis || paper.analysisCheckpoint || '').trim())) {
+        throw new Error('带事实纠错证明的主分析尚未完成，须重新提供同一份受控反馈后才能请求模型');
+    }
     console.log(`    [deep] 获取全文: ${arxivId}`);
 
     // 历史直接运行只能消费自己运行器注入的来源。它绝不会退回到调用方旧的 fullText、
@@ -14128,6 +14139,11 @@ async function analyzePaperDeepInternal(paper) {
     Object.assign(paper, sourceAcquisitionRecord, { sourceWarnings });
     delete analysisManifest.sourceAcquisitionLatestFailure;
     const actualAnalysisInputChanged = hasActualAnalysisInputChanged(previousSource, sourceAcquisitionRecord);
+    if (savedPrimaryFactStage?.factReview && !activePrimaryFactReview
+        && (actualAnalysisInputChanged || savedPrimaryFactStage.fingerprint !== buildPrimaryAnalysisBaseFingerprint(
+            savedPrimaryFactStage.promptTextContract, paper, textForAnalysis, arxivId, savedPrimaryFactStage))) {
+        throw new Error('带事实纠错证明的主分析需要重新生成，须重新提供对应受控反馈；不得用无反馈请求改签');
+    }
     if (actualAnalysisInputChanged) {
         invalidateSourceBoundImageRecovery(paper);
     }
@@ -14143,10 +14159,12 @@ async function analyzePaperDeepInternal(paper) {
         delete paper.analysisStageCheckpoints;
         console.log(`    [deep] ⚠️  实际分析输入发生变化，已清除主分析及依赖它的后续恢复记录`);
     }
-    if (resetLegacyPromptRenderingRecovery(paper, analysisManifest, { ...sourceDetails, text: rawTextForAnalysis })) {
+    const hasPrimaryFactReview = Boolean(require('./lib/daily-fact-review').current(arxivId)?.feedback.primaryFeedback?.trim()
+        || analysisManifest.stages.primaryAnalysis?.factReview);
+    if (!hasPrimaryFactReview && resetLegacyPromptRenderingRecovery(paper, analysisManifest, { ...sourceDetails, text: rawTextForAnalysis })) {
         savedCoreSummaryRepairCandidate = null;
     }
-    if (resetLegacyModelTextRecovery(paper, analysisManifest, { ...sourceDetails, text: rawTextForAnalysis }, modelTextRecoveryCandidate)) {
+    if (!hasPrimaryFactReview && resetLegacyModelTextRecovery(paper, analysisManifest, { ...sourceDetails, text: rawTextForAnalysis }, modelTextRecoveryCandidate)) {
         savedCoreSummaryRepairCandidate = null;
     }
     sourceAcquisitionRecord.modelTextSanitizationContract = MODEL_TEXT_SANITIZATION_CONTRACT;
@@ -14155,11 +14173,13 @@ async function analyzePaperDeepInternal(paper) {
     const boundFactReview = require('./lib/daily-fact-review').current(arxivId);
     if (boundFactReview) {
         // 保存真实付费正文和阶段；反馈只改变正常模型请求，不构造成功正文。
-        captureStaleAnalysisSnapshot(paper, analysisManifest, 'coreSummaryRepair', boundFactReview.proof.feedbackSha256);
+        captureStaleAnalysisSnapshot(paper, analysisManifest, boundFactReview.feedback.primaryFeedback?.trim()
+            ? 'primaryAnalysis' : 'coreSummaryRepair', boundFactReview.proof.feedbackSha256);
     }
     const recoveryFingerprints = buildRecoveryFingerprints(
         paper, textForAnalysis, arxivId, analysisManifest);
-    if (!boundFactReview && !analysisManifest.stages.apiReaderArticle?.factReview
+    if (!boundFactReview && !analysisManifest.stages.primaryAnalysis?.factReview
+        && !analysisManifest.stages.apiReaderArticle?.factReview
         && migrateSealedSourceOnlyReaderBeforeAnalysis(
         paper,
         analysisManifest,
@@ -14170,21 +14190,23 @@ async function analyzePaperDeepInternal(paper) {
     )) {
         console.log('    [deep] ♻️  重新执行主分析前，已核验并更新只使用论文来源证据的读者文章记录，避免重复生成文章');
     }
-    const restoredSavedStagesForSummaryRepair = restoreSavedStagesForCoreSummaryRepair(
+    const primaryFactReview = Boolean(boundFactReview?.feedback.primaryFeedback?.trim()
+        || analysisManifest.stages.primaryAnalysis?.factReview);
+    const restoredSavedStagesForSummaryRepair = !primaryFactReview && restoreSavedStagesForCoreSummaryRepair(
         savedCoreSummaryRepairCandidate,
         paper,
         analysisManifest,
         sourceAcquisitionRecord,
         rawTextForAnalysis
     );
-    const savedCoreSummaryRepairActive = restoredSavedStagesForSummaryRepair
+    const savedCoreSummaryRepairActive = !primaryFactReview && (restoredSavedStagesForSummaryRepair
         || canReuseStageForCoreSummaryRecovery(
             paper, analysisManifest, rawTextForAnalysis, 'primaryAnalysis'
-        );
+        ));
     if (restoredSavedStagesForSummaryRepair) {
         console.log('    [deep] ♻️  已核验并复用旧分析阶段，本次只修复核心摘要并重新审查评分');
     }
-    const migratedCoreSummaryV3 = savedCoreSummaryRepairActive
+    const migratedCoreSummaryV3 = !primaryFactReview && (savedCoreSummaryRepairActive
         || tryMigrateCoreSummaryV3LegacyCheckpoints(
         paper,
         analysisManifest,
@@ -14192,7 +14214,7 @@ async function analyzePaperDeepInternal(paper) {
         rawTextForAnalysis,
         arxivId,
         recoveryFingerprints.primaryAnalysis
-    );
+    ));
     if (!migratedCoreSummaryV3) {
         invalidateRecoveryStageIfChanged(
             paper, analysisManifest, 'primaryAnalysis', recoveryFingerprints.primaryAnalysis
@@ -14355,6 +14377,7 @@ async function analyzePaperDeepInternal(paper) {
     }
     saveAnalysisCheckpoint(paper, paper.analysisCheckpoint || '', analysisManifest, imageManifest);
 
+    const primaryReviewFeedback = require('./lib/daily-fact-review').reviewFeedback('primaryAnalysis', arxivId);
     const prompt = loadPrompt(currentTextStagePromptPath('primaryAnalysis'), {
         hasFullText: hasFullTextIntro,
         title: paper.title,
@@ -14363,7 +14386,7 @@ async function analyzePaperDeepInternal(paper) {
         arxivId: arxivId,
         textForAnalysis: textForAnalysis,
         tagPromptText: TAG_RULES.projection
-    });
+    }) + (primaryReviewFeedback ? `\n\n以下反馈已绑定当前封存全文与旧正文，请重新生成完整13节分析并纠正这些事实；不得仅改核心摘要或读者文章：\n${primaryReviewFeedback}` : '');
 
     // 当前提示生成的初稿即使跨次恢复，也必须完成新标题的结构修复。
     // 历史兼容检查点的原指纹不同，局部修复仍保留其旧标题。
@@ -14398,8 +14421,10 @@ async function analyzePaperDeepInternal(paper) {
                     ...(primaryAnalysisRequestPolicy
                         ? { primaryThinkingMode: primaryAnalysisRequestPolicy.thinkingMode } : {}) }
             );
+            require('./lib/daily-fact-review').validateRepairedClaims('primaryAnalysis', analysis, arxivId);
             requireCurrentEvaluationTitle = true;
             markRecoveryStage(analysisManifest, 'primaryAnalysis', 'complete', {
+                ...require('./lib/daily-fact-review').fingerprintFields('primaryAnalysis'),
                 fingerprint: primaryAnalysisWriteFingerprint,
                 promptTextContract: primaryAnalysisWriteContract,
                 ...(primaryAnalysisRequestPolicy ? { primaryRequestPolicy: primaryAnalysisRequestPolicy } : {})
@@ -14407,7 +14432,8 @@ async function analyzePaperDeepInternal(paper) {
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.log(`    [deep] ✅ 主模型文本分析完成 (${analysis.length} chars)`);
         } catch (err) {
-            markRecoveryStage(analysisManifest, 'primaryAnalysis', 'transient_failure', { error: err.message });
+            markRecoveryStage(analysisManifest, 'primaryAnalysis', 'transient_failure', { error: err.message,
+                ...require('./lib/daily-fact-review').fingerprintFields('primaryAnalysis') });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.error(`    [deep] 主模型文本分析失败: ${err.message}`);
             return {
@@ -14436,8 +14462,10 @@ async function analyzePaperDeepInternal(paper) {
                     ...(primaryAnalysisRequestPolicy
                         ? { primaryThinkingMode: primaryAnalysisRequestPolicy.thinkingMode } : {}) }
             );
+            require('./lib/daily-fact-review').validateRepairedClaims('primaryAnalysis', analysis, arxivId);
             requireCurrentEvaluationTitle = true;
             markRecoveryStage(analysisManifest, 'primaryAnalysis', 'complete', {
+                ...require('./lib/daily-fact-review').fingerprintFields('primaryAnalysis'),
                 fingerprint: primaryAnalysisWriteFingerprint,
                 promptTextContract: primaryAnalysisWriteContract,
                 ...(primaryAnalysisRequestPolicy ? { primaryRequestPolicy: primaryAnalysisRequestPolicy } : {})
@@ -14445,7 +14473,8 @@ async function analyzePaperDeepInternal(paper) {
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.log(`    [deep] ✅ 文本分析完成`);
         } catch (err) {
-            markRecoveryStage(analysisManifest, 'primaryAnalysis', 'transient_failure', { error: err.message });
+            markRecoveryStage(analysisManifest, 'primaryAnalysis', 'transient_failure', { error: err.message,
+                ...require('./lib/daily-fact-review').fingerprintFields('primaryAnalysis') });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.error(`    [deep] 文本分析失败: ${err.message}`);
             return {
@@ -15327,7 +15356,8 @@ async function analyzePaperDeepInternal(paper) {
         buildLegacyApiReaderV3ConfigurationFingerprint(arxivId),
         analysis, apiReaderEvidenceContext,
         sourceDetails.structuredArtifacts);
-    if (!boundFactReview && !analysisManifest.stages.apiReaderArticle?.factReview
+    if (!boundFactReview && !analysisManifest.stages.primaryAnalysis?.factReview
+        && !analysisManifest.stages.apiReaderArticle?.factReview
         && !readerCapabilityPolicy && migrateSourceOnlyApiReaderFingerprint(
         paper,
         analysisManifest,
@@ -15758,6 +15788,7 @@ async function analyzePaperDeepInternal(paper) {
         };
     }
 
+    require('./lib/daily-fact-review').validateRepairedClaims('primaryAnalysis', analysis, arxivId);
     saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
     if (hasIncompleteRecoveryStage(analysisManifest)) {
         const incompleteStages = Object.entries(analysisManifest.stages)

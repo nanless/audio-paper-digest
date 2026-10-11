@@ -82,7 +82,7 @@ test('反馈不可用临时论文假字段；core新指纹正常失效保留原�
         assert.throws(()=>review.validateRepairedClaims('apiReaderArticle','GLAP从零训练',ID),/仍包含/);
     });
     assert.deepEqual(review.fingerprintFields('coreSummaryRepair',{factReview:bound.proof}).factReview,bound.proof,'无反馈续跑保留真实已执行配方');
-    assert.deepEqual(review.fingerprintFields('primaryAnalysis',{factReview:bound.proof}),{});
+    assert.deepEqual(review.fingerprintFields('primaryAnalysis',{factReview:bound.proof}).factReview,bound.proof);
 });
 
 test('事实反馈强制正常core模型修复，保护其他章节，模型复述错误或抛错不会冒成功',async t=>{
@@ -237,4 +237,62 @@ test('可选标签反馈绑定现有来源并独立触发标签修复，原核�
     assert.throws(() => review.validateShape({ ...data.feedback, tagFeedback: 5 }), /tagFeedback/);
     const missingClaims = { ...data.feedback }; delete missingClaims.rejectedTagClaims;
     assert.throws(() => review.validateShape(missingClaims), /同时声明/);
+});
+
+
+test('主分析反馈独立绑定配方，正常失效全下游且完整保留付费正文，坏字段和残留claim拒绝',async t=>{
+ const f=await fixture(t);
+ f.feedback.coreFeedback='';f.feedback.readerFeedback='';f.feedback.rejectedCoreClaims=[];f.feedback.rejectedReaderClaims=[];
+ f.feedback.primaryFeedback='根据逐字来源重新生成全部13节，纠正实验节中错误的余弦损失解释。';
+ f.feedback.rejectedPrimaryClaims=[wrong];
+ const bound=review.validateFeedback(f.feedback,f.plan,f.paper);
+ const contract=require('../scripts/lib/prompt-text-versions').currentPromptTextContract('primaryAnalysis');
+ const old=deep.buildPrimaryAnalysisBaseFingerprint(contract,f.paper,sourceText,ID,f.paper.analysisManifest.stages.primaryAnalysis);
+ const oldBytes=JSON.stringify(f.paper.analysisManifest.stages);
+ let updated;
+ review.withFactReview(bound,()=>{
+  updated=deep.buildPrimaryAnalysisBaseFingerprint(contract,f.paper,sourceText,ID,f.paper.analysisManifest.stages.primaryAnalysis);
+  assert.notEqual(updated,old);
+  assert.deepEqual(review.fingerprintFields('coreSummaryRepair',{}),{});
+  assert.deepEqual(review.fingerprintFields('apiReaderArticle',{}).factReview,bound.proof);
+  assert.match(review.reviewFeedback('apiReaderArticle',ID),/重新生成全部13节/);
+  assert.match(review.reviewFeedback('primaryAnalysis',ID),/重新生成全部13节/);
+  assert.match(review.reviewFeedback('primaryAnalysis',ID),/TT-MSE uses/);
+  assert.throws(()=>review.validateRepairedClaims('primaryAnalysis',original,ID),/仍包含/);
+  review.validateRepairedClaims('primaryAnalysis',baseline,ID);
+  assert.equal(deep.invalidateRecoveryStageIfChanged(f.paper,f.paper.analysisManifest,'primaryAnalysis',updated),true);
+  for(const stage of ['primaryAnalysis','coreSummaryRepair','scoringAudit'])assert.equal(f.paper.analysisManifest.stages[stage],undefined);
+  assert.equal(f.paper.analysisCheckpoint,undefined);
+  const readerFp=deep.buildApiReaderExecutionFingerprint('configuration',sourceText,{},null,f.paper.analysisManifest.stages.apiReaderArticle);
+  assert.equal(deep.invalidateRecoveryStageIfChanged(f.paper,f.paper.analysisManifest,'apiReaderArticle',readerFp),true);
+  assert.equal(f.paper.analysisManifest.stages.apiReaderArticle,undefined);
+  const paid=f.paper.analysisStaleSnapshots.map(deep.validateStaleAnalysisSnapshot).find(x=>x?.analysisCheckpoint===original);
+  assert.ok(paid);assert.equal(JSON.stringify(paid.stages),oldBytes);
+ });
+ assert.equal(deep.buildPrimaryAnalysisBaseFingerprint(contract,{title:f.paper.title,analysisStageCheckpoints:{primaryAnalysis:original}},sourceText,ID,{status:'complete',fingerprint:'paid-primary'}),old);
+ const saved={status:'complete',factReview:bound.proof};
+ assert.deepEqual(review.fingerprintFields('primaryAnalysis',saved).factReview,bound.proof);
+ const bad={...f.feedback};delete bad.rejectedPrimaryClaims;assert.throws(()=>review.validateShape(bad),/同时声明/);
+ assert.throws(()=>review.validateShape({...f.feedback,primaryFeedback:4}),/primaryFeedback/);
+ assert.throws(()=>review.validateShape({...f.feedback,rejectedPrimaryClaims:[]}),/rejectedPrimaryClaims/);
+ assert.throws(()=>review.validateShape({...f.feedback,sourceQuotes:['x'.repeat(3000)],primaryFeedback:'x'.repeat(1200)}),/超过4000/);
+});
+
+
+test('正常封存来源主分析真实HTTP请求带绑定纠错，旧成功checkpoint不可复用，失败保留原付费档',async t=>{
+ const http=require('node:http'),cp=require('node:child_process');const bodies=[];
+ const server=http.createServer((req,res)=>{let input='';req.on('data',c=>input+=c);req.on('end',()=>{bodies.push(JSON.parse(input));res.setHeader('content-type','application/json');res.end(JSON.stringify({choices:[{message:{content:original},finish_reason:'stop'}]}));});});
+ await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
+ const folder=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'primary-fact-http-'));t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));
+ for(const dir of ['scripts','manual','prompts','config','tests'])fs.cpSync(path.resolve(__dirname,'..',dir),path.join(folder,dir),{recursive:true});
+ fs.symlinkSync(path.resolve(__dirname,'../node_modules'),path.join(folder,'node_modules'),'dir');
+ fs.writeFileSync(path.join(folder,'.env'),`PAPER_ANALYZER_API_KEY=synthetic-local-only\nPAPER_ANALYZER_MODEL=ci-test-model\nPAPER_ANALYZER_ENDPOINT=http://127.0.0.1:${server.address().port}/v1\n`,{mode:0o600});
+ const prefix=fs.readFileSync(__filename,'utf8').split("test('只读反馈严格绑定")[0].replace("imageInfos:[],structuredArtifacts:artifacts", "imageInfos:[{url:'https://example.invalid/synthetic-test.png'}],structuredArtifacts:artifacts");
+ const program=prefix+`
+(async()=>{const f=await fixture({after:()=>{}});Object.assign(f.paper.analysisManifest.sourceAcquisition,{usedTextSha256:review.sha(sourceText),sourceId:ID,analysisSource:'html'});f.feedback.coreFeedback='';f.feedback.readerFeedback='';f.feedback.rejectedCoreClaims=[];f.feedback.rejectedReaderClaims=[];f.feedback.primaryFeedback='主分析重生成全部13节：蒸馏使用MSE，实验中的旧余弦说明必须纠正。';f.feedback.rejectedPrimaryClaims=[wrong];const bound=review.validateFeedback(f.feedback,f.plan,f.paper);const result=await daily.withDailyFreshAnalysisContext(f.plan,()=>daily.createDailyAnalyzeFn(f.plan,{analyze:paper=>review.withFactReview(bound,()=>deep.analyzePaperDeep(paper))})(f.paper));assert.equal(result.analysis,null);assert.match(result.error,/仍包含/);assert.equal(result.analysisManifest.stages.primaryAnalysis.status,'transient_failure');assert.deepEqual(result.analysisManifest.stages.primaryAnalysis.factReview,bound.proof);assert.ok(result.analysisStaleSnapshots.some(x=>deep.validateStaleAnalysisSnapshot(x)?.analysisCheckpoint===original));assert.ok(review.validateFeedback(f.feedback,f.plan,result));const noFeedback=structuredClone(result);await assert.rejects(daily.withDailyFreshAnalysisContext(f.plan,()=>daily.createDailyAnalyzeFn(f.plan)(noFeedback)),/须重新提供同一份受控反馈/);console.log('NORMAL_PRIMARY_HTTP_NEGATIVE_CONFIRMED');fs.rmSync(f.root,{recursive:true,force:true});})().catch(e=>{console.error(e);process.exitCode=1;});`;
+ fs.writeFileSync(path.join(folder,'tests/primary-fact-http-child.cjs'),program);
+ const result=await new Promise(resolve=>{const child=cp.spawn(process.execPath,['tests/primary-fact-http-child.cjs'],{cwd:folder});let stdout='',stderr='';child.stdout.on('data',c=>stdout+=c);child.stderr.on('data',c=>stderr+=c);child.on('close',status=>resolve({status,stdout,stderr}));});
+ assert.equal(result.status,0,result.stdout+result.stderr);assert.match(result.stdout,/NORMAL_PRIMARY_HTTP_NEGATIVE_CONFIRMED/);
+ assert.equal(bodies.length,1,'旧primary必须正常请求一次，而非旧成功补签或先请求其他阶段');
+ const content=JSON.stringify(bodies[0].messages);assert.match(content,/主分析重生成全部13节/);assert.ok(content.includes(quote));
 });

@@ -7046,7 +7046,7 @@ has_dataset: 否
         assert.strictEqual(
             prepared.fingerprint,
             buildTextStageFingerprint('revision', prepared.inputAnalysis, prepared.evidenceContext,
-                prepared.promptTextContract)
+                prepared.promptTextContract, {})
         );
     });
 
@@ -7702,7 +7702,7 @@ describe('标签保存格式的实际执行与恢复边界', () => {
             'tagSelection', input, source);
         assert.equal(prepared.promptTextContract, deep.currentPromptTextContract('tagSelection'));
         assert.equal(prepared.fingerprint, deep.buildTextStageFingerprint('tagSelection',
-            prepared.inputAnalysis, prepared.evidenceContext, prepared.promptTextContract));
+            prepared.inputAnalysis, prepared.evidenceContext, prepared.promptTextContract, {}));
         assert.equal(prepared.invalidated, true);
         assert.equal(prepared.analysis, input);
         const snapshot = paper.analysisStaleSnapshots.at(-1);

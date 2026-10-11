@@ -24,7 +24,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 |---|---|
 | 跑完当天可脚本化阶段（博客发布 + 视觉输入准备） | `npm run digest:prepare -- YYYY-MM-DD` |
 | 只续跑分析 | `npm run deep -- --date YYYY-MM-DD`，只读取当前批次绑定的封存来源 |
-| 单篇受控事实纠错 | `npm run deep -- --date YYYY-MM-DD --id ARXIV_ID --core-feedback-file ABS_JSON`；原文与当前正文SHA绑定反馈，正常模型修复摘要、Reader或标签 |
+| 单篇受控事实纠错 | `npm run deep -- --date YYYY-MM-DD --id ARXIV_ID --core-feedback-file ABS_JSON`；原文与当前正文SHA绑定反馈，正常模型重做完整主分析，或修复摘要、Reader与标签 |
 | 校验运行数据 | `npm run validate:data` |
 | 完整离线验证代码、数据与 Hugo | `npm run verify`；CI 或干净的空检出目录须显式加 `-- --allow-empty`。 |
 | 查整轮最终状态 | `npm run digest:status -- --date YYYY-MM-DD` |
@@ -37,7 +37,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 索引中的文件名、字段和协议名保持代码原形。SHA 用于核验文件内容和对应关系；CAS 指写入前核对
 当前内容仍与读取时一致；`O_EXCL` 表示拒绝覆盖已存在文件。这些机制只看文件和字节，论文内容对不对仍要人判断。
 
-事实反馈JSON使用 `daily-bound-fact-review-v1`：须提供 `paperId`、`batchDate`、`runId`、四文件名到SHA的 `sourceFiles`、当前 `analysisCheckpoint` 的 `coreAnalysisSha256`、公共章节提取器所得摘要的 `coreSummarySha256`，以及 `coreFeedback`、`readerFeedback`、`sourceQuotes`、`rejectedCoreClaims`、`rejectedReaderClaims`。标签反馈可额外成对提供 `tagFeedback`、`rejectedTagClaims`。摘要、Reader和标签反馈至少一项非空；不修某阶段时对应反馈可为空、错误原句列表为空。逐字引文须存在于封存原文，反馈连同引文每阶段最多4000字符。新请求指纹与manifest保存反馈证明，旧无反馈配方保持；失败保留原付费正文SHA快照。同一反馈只有仍能核验原输入快照时可续跑，其他正文变更须重新审查并生成新绑定。模型输出继续经过原有结构、章节保护、来源和表图公式检查；原错误句重现会拒绝，但不能将此字符串检查当作完整事实审核，发布前仍须逐项只读目核。
+事实反馈JSON使用 `daily-bound-fact-review-v1`：须提供 `paperId`、`batchDate`、`runId`、四文件名到SHA的 `sourceFiles`、当前 `analysisCheckpoint` 的 `coreAnalysisSha256`、公共章节提取器所得摘要的 `coreSummarySha256`，以及 `coreFeedback`、`readerFeedback`、`sourceQuotes`、`rejectedCoreClaims`、`rejectedReaderClaims`。完整主分析反馈可额外成对提供 `primaryFeedback`、`rejectedPrimaryClaims`，标签反馈可额外成对提供 `tagFeedback`、`rejectedTagClaims`。主分析、摘要、Reader和标签反馈至少一项非空；不修某阶段时对应反馈可为空、错误原句列表为空。逐字引文须存在于封存原文，反馈连同引文每阶段最多4000字符。新请求指纹与manifest保存反馈证明，旧无反馈配方保持；失败保留原付费正文SHA快照。同一反馈只有仍能核验原输入快照时可续跑，其他正文变更须重新审查并生成新绑定。模型输出继续经过原有结构、章节保护、来源和表图公式检查；原错误句重现会拒绝，但不能将此字符串检查当作完整事实审核，发布前仍须逐项只读目核。
 
 ## 默认 LLM/API：抓取、筛选与分析
 
@@ -54,7 +54,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/daily-fetch-boundary.js` | Node 库 | 从已核验远端日更及受控归档确定补抓窗口，读取正式页字段去重；见[边界说明](../docs/daily-fetch-boundary.md)。 |
 | `full-fetch.js` | Node 入口 | 按顺序执行默认数据流程，依次归档、抓取、筛选、去重、深度分析，并逐篇保存结果。 |
 | `lib/daily-fresh-source-plan.js` | Node 库 | 日更筛选结束后，为每篇 arXiv 论文封存本次官方 TXT、PDF 和清单；分析只读取这组文件，图片只在当前请求里临时准备。 |
-| `lib/daily-fact-review.js` | Node 库 | 只读外部事实反馈，严格核验论文、日期、runId、四份封存来源SHA、当前核心摘要及全文SHA与逐字引文；锁内重读后将反馈传入正常摘要、Reader或标签模型阶段，不写手工成功正文。 |
+| `lib/daily-fact-review.js` | Node 库 | 只读外部事实反馈，严格核验论文、日期、runId、四份封存来源SHA、当前核心摘要及全文SHA与逐字引文；锁内重读后将反馈传入正常完整主分析、摘要、Reader或标签模型阶段；全文纠错先保存原付费记录，并拒绝无反馈重生成，不写手工成功正文。 |
 | `lib/fresh-arxiv-rewrite-source.js` | Node 库 | 每轮 arXiv 来源获取时，用原子写入保存官方文本、PDF、不含像素的来源元数据和清单。只有当前稿 PDF 明确返回 404，才允许改用同一论文的官方 `vN` PDF；文本必须从该 PDF 提取，并按条件生成可自校验的 `sourceVersion`。普通来源文件仍按原结构读取。 |
 | `lib/direct-rewrite-analysis-context.js` | Node 库 | 用 AsyncLocalStorage 隔离历史重写和日更的来源文件，让旧正文和缓存进不了分析，Reader 图片只能用临时文件；论文历史版本的身份 SHA 随来源记录进入所有分析阶段。 |
 | `fetch-papers.js` | Node 模块/入口 | 负责 arXiv 抓取、摘要补全、关键词预筛和逐篇 LLM 筛选；独立使用抓取模块也需要项目 Python 3.11+ 运行器来严格解析 Atom。 |

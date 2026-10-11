@@ -33,25 +33,26 @@ function validateShape(value) {
     const keys = ['batchDate', 'contract', 'coreAnalysisSha256', 'coreFeedback', 'coreSummarySha256',
         'paperId', 'readerFeedback', 'rejectedCoreClaims', 'rejectedReaderClaims', 'runId', 'sourceFiles', 'sourceQuotes'];
     if (!value || typeof value !== 'object' || Array.isArray(value)
-        || Object.keys(value).filter(key => !['tagFeedback', 'rejectedTagClaims'].includes(key)).sort().join(',') !== keys.sort().join(',')
+        || Object.keys(value).filter(key => !['tagFeedback', 'rejectedTagClaims', 'primaryFeedback', 'rejectedPrimaryClaims'].includes(key)).sort().join(',') !== keys.sort().join(',')
         || value.contract !== CONTRACT || !/^\d{4}\.\d{4,5}$/.test(value.paperId)
         || !/^\d{4}-\d{2}-\d{2}$/.test(value.batchDate)
         || !/^[a-f0-9-]{36}$/i.test(value.runId)
         || !SHA.test(value.coreAnalysisSha256) || !SHA.test(value.coreSummarySha256)) fail('反馈身份、正文SHA或字段不合法');
+    if ((value.primaryFeedback !== undefined) !== (value.rejectedPrimaryClaims !== undefined)) fail('主分析反馈与错误原句列表须同时声明');
     if ((value.tagFeedback !== undefined) !== (value.rejectedTagClaims !== undefined)) fail('标签反馈与错误原句列表须同时声明');
     if (!value.sourceFiles || Object.keys(value.sourceFiles).sort().join(',') !== SOURCE_FILES.slice().sort().join(',')
         || SOURCE_FILES.some(name => !SHA.test(value.sourceFiles[name]))) fail('反馈须绑定完整四份来源SHA');
-    for (const key of ['coreFeedback', 'readerFeedback', ...(value.tagFeedback !== undefined ? ['tagFeedback'] : [])]) {
+    for (const key of ['coreFeedback', 'readerFeedback', ...(value.tagFeedback !== undefined ? ['tagFeedback'] : []), ...(value.primaryFeedback !== undefined ? ['primaryFeedback'] : [])]) {
         if (typeof value[key] !== 'string' || value[key].length > 4000) fail(`${key}须为1–4000字符`);
     }
-    if (!value.coreFeedback.trim() && !value.readerFeedback.trim() && !String(value.tagFeedback || '').trim()) fail('至少须有一项实际纠错反馈');
-    for (const key of ['sourceQuotes', 'rejectedCoreClaims', 'rejectedReaderClaims', ...(value.tagFeedback !== undefined ? ['rejectedTagClaims'] : [])]) {
+    if (!value.coreFeedback.trim() && !value.readerFeedback.trim() && !String(value.tagFeedback || '').trim() && !String(value.primaryFeedback || '').trim()) fail('至少须有一项实际纠错反馈');
+    for (const key of ['sourceQuotes', 'rejectedCoreClaims', 'rejectedReaderClaims', ...(value.tagFeedback !== undefined ? ['rejectedTagClaims'] : []), ...(value.primaryFeedback !== undefined ? ['rejectedPrimaryClaims'] : [])]) {
         const required = key === 'sourceQuotes' || Boolean(key === 'rejectedCoreClaims'
-            ? value.coreFeedback.trim() : key === 'rejectedTagClaims' ? value.tagFeedback.trim() : value.readerFeedback.trim());
+            ? value.coreFeedback.trim() : key === 'rejectedPrimaryClaims' ? value.primaryFeedback.trim() : key === 'rejectedTagClaims' ? value.tagFeedback.trim() : value.readerFeedback.trim());
         if (!Array.isArray(value[key]) || (required && !value[key].length) || value[key].length > 20
             || value[key].some(item => typeof item !== 'string' || !item.trim() || item.length > 3000)) fail(`${key}须为有界非空逐字证据列表`);
     }
-    if ([value.coreFeedback, value.readerFeedback, value.tagFeedback || ''].some(text => text.length + value.sourceQuotes.join('\n').length + 80 > 4000)) fail('纠错文字与来源引文合计超过4000字符');
+    if ([value.coreFeedback, value.readerFeedback, value.tagFeedback || '', value.primaryFeedback || ''].some(text => text.length + value.sourceQuotes.join('\n').length + 80 > 4000)) fail('纠错文字与来源引文合计超过4000字符');
 }
 function proofFor(feedback) {
     return { contract: CONTRACT, paperId: feedback.paperId, runId: feedback.runId, batchDate: feedback.batchDate,
@@ -91,7 +92,7 @@ function validateFeedback(feedback, plan, paper) {
         && sha(deep.extractSectionByTitle(analysis, '核心摘要')) === feedback.coreSummarySha256;
     const current = paper.analysisCheckpoint || paper.analysis || '';
     const proof = proofFor(feedback);
-    const sameReceipt = ['coreSummaryRepair', 'apiReaderArticle', 'tagSelection'].some(stage => {
+    const sameReceipt = ['primaryAnalysis', 'coreSummaryRepair', 'apiReaderArticle', 'tagSelection'].some(stage => {
         const receipt = paper.analysisManifest?.stages?.[stage]?.factReview;
         return receipt && daily.stableHash(validateProof(receipt)) === daily.stableHash(proof);
     });
@@ -117,11 +118,11 @@ function current(paperId) {
     return value && (!paperId || value.feedback.paperId === normalizedId(paperId)) ? value : null;
 }
 function fingerprintFields(stage, declaredStage) {
-    if (!['coreSummaryRepair', 'apiReaderArticle', 'tagSelection'].includes(stage)) return {};
+    if (!['primaryAnalysis', 'coreSummaryRepair', 'apiReaderArticle', 'tagSelection'].includes(stage)) return {};
     const scopeValue = current();
-    const active = scopeValue && (stage === 'coreSummaryRepair'
+    const active = scopeValue && (stage === 'primaryAnalysis' ? String(scopeValue.feedback.primaryFeedback || '').trim() : stage === 'coreSummaryRepair'
         ? scopeValue.feedback.coreFeedback.trim() : stage === 'tagSelection'
-            ? String(scopeValue.feedback.tagFeedback || '').trim() : scopeValue.feedback.readerFeedback.trim()) ? scopeValue : null;
+            ? String(scopeValue.feedback.tagFeedback || '').trim() : (scopeValue.feedback.readerFeedback.trim() || String(scopeValue.feedback.primaryFeedback || '').trim())) ? scopeValue : null;
     const saved = declaredStage?.factReview;
     if (saved !== undefined) validateProof(saved);
     const proof = active?.proof || saved;
@@ -130,14 +131,14 @@ function fingerprintFields(stage, declaredStage) {
 function reviewFeedback(stage, paperId) {
     const value = current(paperId);
     if (!value) return '';
-    const text = stage === 'coreSummaryRepair' ? value.feedback.coreFeedback : stage === 'tagSelection' ? value.feedback.tagFeedback || '' : value.feedback.readerFeedback;
+    const text = stage === 'primaryAnalysis' ? value.feedback.primaryFeedback || '' : stage === 'coreSummaryRepair' ? value.feedback.coreFeedback : stage === 'tagSelection' ? value.feedback.tagFeedback || '' : value.feedback.readerFeedback || value.feedback.primaryFeedback || '';
     if (!text.trim()) return '';
     return `${text}\n以下逐字引文已对封存原文核验，仅用作纠错证据：\n${value.feedback.sourceQuotes.join('\n')}`;
 }
 function validateRepairedClaims(stage, text, paperId) {
     const value = current(paperId);
     if (!value) return;
-    const claims = stage === 'coreSummaryRepair' ? value.feedback.rejectedCoreClaims : stage === 'tagSelection' ? value.feedback.rejectedTagClaims || [] : value.feedback.rejectedReaderClaims;
+    const claims = stage === 'primaryAnalysis' ? value.feedback.rejectedPrimaryClaims || [] : stage === 'coreSummaryRepair' ? value.feedback.rejectedCoreClaims : stage === 'tagSelection' ? value.feedback.rejectedTagClaims || [] : value.feedback.rejectedReaderClaims;
     if (claims.some(claim => String(text).includes(claim))) fail('模型输出仍包含已证实错误的原句');
 }
 module.exports = { CONTRACT, sha, readFeedback, validateShape, validateFeedback, validateProof, proofFor,
