@@ -261,6 +261,8 @@ test('API 恢复不复用冒称人工筛选的缺来源决定', async t => {
 });
 
 test('人工筛选真实保存的整批决定通过公共来源校验，API 不借用该许可', t => {
+    // 批次来源固定在这一天；保存时间也固定，避免跨北京时间午夜改变凭证日期。
+    t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-10-11T10:00:00+08:00').getTime() });
     const fullFetch = require('../scripts/full-fetch.js');
     const manual = require('../manual/scripts/manual-fetch.js');
     const validator = require('../scripts/validate-data-files.js');

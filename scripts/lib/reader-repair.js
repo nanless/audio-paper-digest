@@ -610,6 +610,10 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             throw new Error('Reader narrative-table patch must replace every required atomic target');
         }
     }
+    if (operation?.kind === 'complete_existing_table_bindings_v1'
+        && (seen.length !== 1 || seen[0] !== '/tableBindings')) {
+        throw new Error('已有表格补绑定只能替换已授权的完整tableBindings数组');
+    }
     const merged = structuredClone(draft);
     for (const item of patch.replacements) {
         const parts = item.path.slice(1).split('/');
@@ -621,6 +625,22 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
     if (patch.replacements.some(item => item.path === '/figurePlacements')
         && merged.sections.some(section => /\[\[FIGURE_\d+\]\]/.test(String(section?.body || '')))) {
         throw new Error('无图清除必须同时移除全部正文图标记，不得只清空图绑定');
+    }
+    if (operation?.kind === 'complete_existing_table_bindings_v1') {
+        const tables = locateReaderDraftTables(draft);
+        const oldBindings = draft.tableBindings;
+        const bindings = merged.tableBindings;
+        const mutable = new Set(operation.mutableBindingIndices || []);
+        if (operation.expectedTableCount !== tables.length
+            || operation.existingBindingCount !== oldBindings.length
+            || tables.length <= oldBindings.length || tables.length - oldBindings.length > 4
+            || tables.some(table => !table.table || table.marker)
+            || bindings.length !== tables.length
+            || bindings.some((binding, index) => binding?.tableIndex !== index + 1)
+            || oldBindings.some((binding, index) => !mutable.has(index)
+                && hashDraft(binding) !== hashDraft(bindings[index]))) {
+            throw new Error('已有表格补绑定不能删表、改动未授权旧绑定或改变绑定缺口');
+        }
     }
     if (operation?.kind === 'relocate_result_table_v1') {
         const beforeTables = locateReaderDraftTables(draft);
@@ -763,6 +783,19 @@ function collectDraftIssues(draft, parserError, options = {}) {
     });
     for (const field of ['conceptBridges', 'figurePlacements', 'formulaBindings']) {
         draft[field].forEach((binding, index) => {
+            if (field === 'conceptBridges' && binding && typeof binding === 'object'
+                && !Array.isArray(binding)) {
+                const allowedFields = ['terms', 'sectionKind', 'marker', 'explanation'];
+                const extraFields = Object.keys(binding).filter(key => !allowedFields.includes(key));
+                if (extraFields.length > 0) {
+                    issues.push({ path: `/${field}/${index}`,
+                        message: `${field}[${index}] 包含额外字段: ${extraFields.join(', ')}。`
+                            + '本项只能含 terms、sectionKind、marker、explanation 四个字段；'
+                            + '请替换允许修改的完整对象，不要回传额外字段。额外字段中若有实质解释，'
+                            + '先按论文证据核对，再融入本项 explanation 或已授权正文；'
+                            + '保留有依据的事实和原有标记，不要直接丢弃内容或改动未授权字段。' });
+                }
+            }
             if (field === 'conceptBridges' && (!Array.isArray(binding?.terms) || binding.terms.length !== 2
                 || binding.terms.some(term => typeof term !== 'string' || term.trim().length < 2 || term.trim().length > 48))) {
                 issues.push({ path: `/${field}/${index}`,
@@ -901,6 +934,28 @@ function collectTableBindingIssues(draft, options = {}) {
                 + '能否用已有的原文引文自动补齐来源对应记录，仍由完整文章解析器检查。' });
     }
     return issues;
+}
+
+// 只为已经写出的普通表补足缺失绑定；正文和未被诊断的旧绑定不能改。
+function buildMissingTableBindingsOperation(draft, issues) {
+    if (!issues.some(issue => classifyTableBindingOrderIssue(issue).actionable)) return null;
+    const tables = locateReaderDraftTables(draft);
+    const bindings = draft.tableBindings;
+    if (!Array.isArray(bindings) || !bindings.length || tables.length <= bindings.length
+        || tables.length - bindings.length > 4 || tables.some(table => !table.table || table.marker)
+        || bindings.some((binding, index) => binding?.tableIndex !== index + 1)) return null;
+    const mutableBindingIndices = [...new Set(issues.filter(issue => issue?.diagnosticOnly !== true
+        && classifyTableBindingOrderIssue(issue).actionable)
+        .map(issue => /^\/tableBindings\/(0|[1-9]\d*)$/.exec(String(issue.path || ''))?.[1])
+        .filter(index => index !== undefined).map(Number))].filter(index => index < bindings.length);
+    return { kind: 'complete_existing_table_bindings_v1', expectedTableCount: tables.length,
+        existingBindingCount: bindings.length, mutableBindingIndices,
+        requiredReplacementPaths: ['/tableBindings'], requiredPostconditions: [
+            '正文所有原表、数字、单位和顺序保持逐字不变，只补足已有表的绑定',
+            '只有mutableBindingIndices明确列出的旧绑定可修正，其余旧绑定逐字保留',
+            '新数组按正文表序连续编号，新增绑定数量恰好等于已有表的缺口',
+            '不得编造证据，全部绑定仍须通过完整来源、排序和正文解析器'
+        ] };
 }
 
 function buildUniqueMissingQuoteTableOperation(draft, issues) {
@@ -1205,6 +1260,9 @@ function buildRepairTargets(draft, issues) {
         return [...paths].map(pointer => ({ path: pointer,
             oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
     }
+    if (ambiguousTableOrderIssue && buildMissingTableBindingsOperation(draft, issues)) {
+        return [{ path: '/tableBindings', oldSha256: hashDraft(draft.tableBindings), value: draft.tableBindings }];
+    }
     if (ambiguousTableOrderIssue) {
         const tables = locateReaderDraftTables(draft);
         const bindings = Array.isArray(draft.tableBindings) ? draft.tableBindings : [];
@@ -1457,7 +1515,8 @@ function normalizeUnavailableReaderFigures(draft, availableFigureOrdinals) {
 
 function buildRepairContext(draft, issues, sourceEvidence, sourceText = '') {
     const targets = buildRepairTargets(draft, issues);
-    const requestedOperation = buildUniqueMissingQuoteTableOperation(draft, issues)
+    const requestedOperation = buildMissingTableBindingsOperation(draft, issues)
+        || buildUniqueMissingQuoteTableOperation(draft, issues)
         || buildMissingResultTableOperation(draft, issues)
         || buildMissingNarrativeTableOperation(draft, issues);
     // 当前先修术语解释等其他问题时，不夹带一条没有授权修改范围的表格指令。

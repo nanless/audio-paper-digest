@@ -193,11 +193,13 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
         assertReaderJsonRequestPolicy(oldJsonPolicy);
         // 仅旧省略声明到当前明确格式允许保留原草稿；反向撤掉声明不能复用。
         if (oldJsonPolicy !== undefined && newJsonPolicy === undefined) continue;
-        // 只允许已冻结的 v3 修复提示词转到当前 v4；不扩大其他提示词许可。
+        // 仅允许已核验的固定 v3→v4 和 v5→v6 修复正文；其他提示词仍不可迁移。
         // 提示词变化本身不发放正文尝试额度，也不清除已有失败计数。
         if (envelope.identity.repairPromptSha256 !== identity.repairPromptSha256
             && !(envelope.identity.repairPromptSha256 === 'c63148bca8bed36a8c31b0327b87e2a1e9ddf51fd8641813827f5e8f1eb4a6ec'
-                && identity.repairPromptSha256 === '8d1483030d1167b9ac3b81602c267ae5e5ec0fc5e88fb7308aea5f1e2a52d470')) continue;
+                && identity.repairPromptSha256 === '8d1483030d1167b9ac3b81602c267ae5e5ec0fc5e88fb7308aea5f1e2a52d470')
+            && !(envelope.identity.repairPromptSha256 === '89faba16d2b3af5a1549e13c85800bc7301d3a4217a1d9ae362b33c76cff9a34'
+                && identity.repairPromptSha256 === '7cb7332fa3085b4497c31d73a7075eb10f8700cd84d23f68875d8341cb97f5de')) continue;
         if (!isDeepStrictEqual(withoutRevisionFields(envelope.identity), withoutRevisionFields(identity))) continue;
         verifyPixels(payload);
         const changedFields = ALLOWED_FIELDS.filter(field => !isDeepStrictEqual(envelope.identity[field], identity[field]));

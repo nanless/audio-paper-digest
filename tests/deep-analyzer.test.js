@@ -6471,13 +6471,16 @@ has_dataset: 否
         const analysis = `## 评分\n5.0/10\n\n## 机器摘要\nhas_code: 否\nhas_model: 否\nhas_dataset: 否\n\n## 开源详情\n仅提供在线演示 Demo：https://example.com/demo`;
         const normalized = validateScoringAuditAgainstAnalysis(analysis, audit);
         assert.strictEqual(normalized.dimensions.openSource.score, 0.2);
-        assert.match(normalized.dimensions.openSource.reason, /只提供可访问的在线演示页面/);
+        assert.match(normalized.dimensions.openSource.reason, /本项按演示证据计分/);
+        assert.match(normalized.dimensions.openSource.reason, /当前尚未核实核心代码、模型权重或数据资源可用/);
+        assert.match(normalized.dimensions.openSource.reason, /不据此否认原文中的其他资源声明/);
         assert.strictEqual(normalized.total, 5.8);
 
         const negativeAnalysis = `## 评分\n5.0/10\n\n## 机器摘要\nhas_code: 否\nhas_model: 否\nhas_dataset: 否\n\n## 开源详情\nDemo：论文中未提及；作者未承诺开源。`;
         const negativeNormalized = validateScoringAuditAgainstAnalysis(negativeAnalysis, audit);
         assert.strictEqual(negativeNormalized.dimensions.openSource.score, 0);
-        assert.match(negativeNormalized.dimensions.openSource.reason, /未给出明确的后续开源承诺/);
+        assert.match(negativeNormalized.dimensions.openSource.reason, /当前尚无已核实可用的代码、模型权重或数据资源/);
+        assert.match(negativeNormalized.dimensions.openSource.reason, /不据此否认论文中的资源声明或后续发布计划/);
         assert.strictEqual(negativeNormalized.total, 5.6);
 
         const sha = value => require('node:crypto').createHash('sha256')

@@ -74,7 +74,7 @@ test('评分刷新无反馈及错证明零请求不修改；合法反馈绑定�
     fs.symlinkSync(path.resolve(__dirname, '../node_modules'), path.join(
         testWorkspace, 'node_modules'), 'dir');
     fs.writeFileSync(path.join(testWorkspace, '.env'),
-        `PAPER_ANALYZER_API_KEY=synthetic-local-only\nPAPER_ANALYZER_MODEL=ci-test-model\nPAPER_ANALYZER_ENDPOINT=http://127.0.0.1:${server.address().port}/v1\n`, {
+        `PAPER_ANALYZER_API_KEY=synthetic-local-only\nPAPER_ANALYZER_MODEL=mimo-v2.6-flash\nPAPER_ANALYZER_ENDPOINT=http://127.0.0.1:${server.address().port}/v1\n`, {
             mode: 0o600
         });
     let sampleHelperSource = fs.readFileSync(path.join(__dirname,
@@ -149,6 +149,9 @@ test('评分刷新无反馈及错证明零请求不修改；合法反馈绑定�
                     .withDailyFreshPaperSource(testData.plan, testData.paper,
                         source => deep.refreshApiScoringAndReaderFromSource(testData
                             .paper, source))));
+            assert.equal(result.analysisManifest.stages.scoringAudit.resourceNormalizationContract,
+                'scoring-source-release-declarations-v1');
+            assert.equal(result.analysisManifest.stages.scoringAudit.requestFormatContract, 'scoring-request-format-v1');
             assert.deepEqual(result.analysisManifest.stages.scoringAudit.factReview,
                 validatedFeedback.proof);
             assert.deepEqual(result.analysisManifest.stages.primaryAnalysis.factReview,
@@ -207,6 +210,7 @@ test('评分刷新无反馈及错证明零请求不修改；合法反馈绑定�
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.match(result.stdout,
         /REFRESH_SCORING_PROOF_SUCCESS_BOUND_AND_LEGACY_COMPATIBLE/);
+    for (const request of scoringRequests) assert.deepEqual(request.response_format, {type: 'json_object'});
     assert.equal(scoringRequests.length, 5,
         '无反馈及错证明均零请求；合法反馈错误重试+两次稳定审计3请求，普通记录2请求');
     for (const request of scoringRequests.slice(0, 3)) assert.ok(JSON.stringify(

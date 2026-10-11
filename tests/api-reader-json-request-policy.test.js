@@ -5,7 +5,7 @@ const http = require('node:http');
 const deep = require('../scripts/deep-analyzer.js');
 const { buildRequestBody } = require('../scripts/utils.js');
 
-test('长文与修复的实际公共请求使用 JSON 模式，探图和其他阶段不发送', async t => {
+test('长文、修复和评分的实际公共请求使用 JSON 模式，探图与正文分析不发送', async t => {
     const bodies = [];
     const server = http.createServer((request, response) => {
         let text = '';
@@ -26,7 +26,8 @@ test('长文与修复的实际公共请求使用 JSON 模式，探图和其他�
     }
     assert.equal(bodies.length, 6);
     for (const body of bodies.slice(0, 2)) assert.deepEqual(body.response_format, { type: 'json_object' });
-    for (const body of bodies.slice(2)) assert.equal(Object.hasOwn(body, 'response_format'), false);
+    for (const body of bodies.slice(2, 5)) assert.equal(Object.hasOwn(body, 'response_format'), false);
+    assert.deepEqual(bodies[5].response_format, { type: 'json_object' });
 });
 
 test('JSON 请求参数只适用准确模型协议，非法模式拒绝', () => {

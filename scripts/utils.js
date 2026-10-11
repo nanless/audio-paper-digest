@@ -705,8 +705,10 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature, opti
             && ['openSourceScan', 'revision', 'scoringAudit', 'tagSelection'].includes(options.usageContext?.stage)
             && options.auxiliaryThinkingMode !== undefined
             ? { thinking: { type: validateReaderThinkingMode(options.auxiliaryThinkingMode) } } : {}),
-        ...(apiType === 'openai' && model === 'mimo-v2.6-flash' && readerJsonStage
-            && options.readerResponseFormat === 'json_object'
+        // MiMo 评分本来只接受 JSON；请求时也声明格式，减少非法转义造成的重复调用。
+        ...(apiType === 'openai' && model === 'mimo-v2.6-flash'
+            && ((readerJsonStage && options.readerResponseFormat === 'json_object')
+                || options.usageContext?.stage === 'scoringAudit')
             ? { response_format: { type: 'json_object' } } : {}),
         ...(apiType === 'openai' && model === 'mimo-v2.6-flash'
             && options.readerThinkingMode !== undefined

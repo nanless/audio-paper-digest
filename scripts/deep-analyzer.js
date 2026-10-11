@@ -530,6 +530,8 @@ const SCORING_EVIDENCE_PROFILE_KEYS = Object.freeze([
     'engineeringEvidence', 'evidenceBoundary', 'evidenceIds'
 ]);
 const SCORING_AUDIT_CONTRACT = 'api-scoring-audit-v2';
+const SCORING_REQUEST_FORMAT_CONTRACT = 'scoring-request-format-v1';
+const SCORING_RESOURCE_NORMALIZATION_CONTRACT = 'scoring-source-release-declarations-v1';
 const SCORING_CAP_RULES_VERSION = 'evidence-caps-v2';
 const OPEN_SOURCE_DEFICIT = /(?:不开源|闭源|未开源|没有开源|代码未提供|权重未提供|数据集未提供|缺少(?:代码|权重|数据集|核心(?:产物|材料))|(?:代码|权重|数据集|核心(?:产物|材料))(?:未|没有|尚未)公开)/;
 const VERIFIED_RESOURCE_DENIAL = /(?:(?:未|没有|尚未)(?:发布|公开|提供)[^.。；;]{0,16}(?:代码|模型权重|数据集)|(?:代码|模型权重|数据集)[^.。；;]{0,16}(?:未|没有|尚未)(?:发布|公开|提供))/;
@@ -809,7 +811,7 @@ function applyScoringAuditResult(analysis, audit) {
     return mergeSectionByTitle(updated, '评分理由', scoringReason);
 }
 
-function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceIdentity = null) {
+function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceIdentity = null, sourceEvidence = '') {
     const current = parseAnalysis(analysis) || {};
     // 理论论文的核心材料可以就是论文中完整披露的证明、推导与附录，
     // 不能仅凭没有代码/模型/数据链接就覆盖主模型已经按文类作出的判断。
@@ -832,14 +834,20 @@ function validateScoringAuditAgainstAnalysis(analysis, audit, verifiedResourceId
             .some(value => value === '是' || value === 'yes');
     if (!hasReleasedArtifact) {
         const sourceText = String(current.opensource || '');
-        const promisesRelease = hasAffirmativeReleasePromise(sourceText);
+        const sourcePromise = sourceReleasePromise(sourceEvidence, verifiedResourceIdentity);
+        const promisesRelease = sourceEvidence && verifiedResourceIdentity
+            ? Boolean(sourcePromise) : hasAffirmativeReleasePromise(sourceText);
         const hasDemo = hasAffirmativeDemoEvidence(sourceText);
         const normalizedScore = promisesRelease ? 0.5 : hasDemo ? 0.2 : 0;
         const normalizedReason = promisesRelease
-            ? '[A_OPEN] 论文明确承诺未来开放核心材料，但当前尚未发布可用代码、模型权重或数据资源。'
+            ? sourcePromise?.conditional
+                ? sourcePromise.consentOrInstitution
+                    ? '[A_OPEN] 作者说明未来发布核心材料须满足同意或机构要求；这是有条件的发布计划，当前尚未核实材料可用，不据此推断许可证。'
+                    : '[A_OPEN] 作者说明未来发布核心材料须满足原文所列条件；这是有条件的发布计划，当前尚未核实材料可用，不据此推断许可证。'
+                : '[A_OPEN] 论文明确说明未来发布核心材料，当前尚未核实代码、模型权重或数据资源可用。'
             : hasDemo
-                ? '[A_OPEN] 论文目前只提供可访问的在线演示页面，未发布核心代码、模型权重或训练数据。'
-                : '[A_OPEN] 论文未发布核心代码、模型权重或数据资源，也未给出明确的后续开源承诺。';
+                ? '[A_OPEN] 本项按演示证据计分，当前尚未核实核心代码、模型权重或数据资源可用，不据此否认原文中的其他资源声明。'
+                : '[A_OPEN] 当前尚无已核实可用的代码、模型权重或数据资源；本项仅按当前核验状态计分，不据此否认论文中的资源声明或后续发布计划。';
         if (audit.dimensions.openSource.score !== normalizedScore) {
             console.log(`    [deep] ℹ️  开源分按资源状态归一化: ${audit.dimensions.openSource.score} → ${normalizedScore}`);
         }
@@ -911,6 +919,57 @@ function revalidateScoringAudit(audit, allowedEvidenceIds) {
     }), allowedEvidenceIds);
 }
 
+function sourceReleasePromise(sourceEvidence, identity) {
+    const source = String(sourceEvidence || '');
+    // 只接受与核验资源记录相同的完整原文，不能把摘要或第三方说明当成作者声明。
+    if (!source || !identity || crypto.createHash('sha256').update(source).digest('hex')
+        !== identity.sourceTextSha256) return null;
+    // 只接受真正句首的作者声明；保留整段和上一非空行的引用归属，不截成子串。
+    const pattern = /\b(?:We will (?:instead )?(?:release|provide)|The accompanying repository will (?:release|provide))\b[^.!?。]{1,600}[.!?。]?/gi;
+    for (const match of source.matchAll(pattern)) {
+        const sentence = match[0];
+        const before = source.slice(0, match.index);
+        const sentencePrefix = before.slice(Math.max(before.lastIndexOf('.'), before.lastIndexOf('!'),
+            before.lastIndexOf('?'), before.lastIndexOf('。'), before.lastIndexOf('\n')) + 1);
+        if (sentencePrefix.trim()) continue;
+        const linesBefore = before.split('\n');
+        const paragraphPrefix = linesBefore.at(-1);
+        const previousLine = linesBefore.slice(0, -1).reverse().find(line => line.trim()) || '';
+        const context = paragraphPrefix + '\n' + previousLine;
+        const paragraphBoundary = /\n\s*\n/g;
+        let paragraphStart = 0;
+        let previousParagraphStart = 0;
+        for (const boundary of before.matchAll(paragraphBoundary)) {
+            previousParagraphStart = paragraphStart;
+            paragraphStart = boundary.index + boundary[0].length;
+        }
+        const paragraphContext = before.slice(previousParagraphStart);
+        // 引入引用的句子可在同段前几行或上一段；中间的引用正文不能抹掉归属。
+        if (/\bwrote\b|\bquot(?:e|ed|es|ing|ation)\b|following statement|(?:authors?|they)\s+(?:state|claim|write|say)|\b(?:authors?|articles?|papers?|they)\b[^\n.!?]{0,60}\bsaid\b|(?:^|\n)[A-Z][a-zA-Z-]+\s+said\b/i.test(paragraphContext)) continue;
+
+        if (/related work|quot(?:e|ed|es|ing|ation)|following statement|third[- ]party|unrelated|(?:authors?|they)\s+(?:state|claim|write|wrote|say|said)|(?:previous|prior|another|other|cited)\s+(?:work|studies|papers?|articles?|authors?)|\b(?:wrote|said)\b|et al\.[^\n]*(?:state|claim|write|wrote|say|said)|["“”'‘’`]/i.test(context)) continue;
+        if (!paragraphPrefix.trim() && /:\s*$/.test(previousLine)) continue;
+        // Markdown 引用、围栏代码和行内代码只是引用内容，不能替作者承诺发布。
+        let fence = null;
+        for (const line of linesBefore) {
+            const marker = /^\s*(`{3,}|~{3,})/.exec(line)?.[1];
+            if (!marker) continue;
+            if (!fence) fence = marker[0];
+            else if (marker[0] === fence) fence = null;
+        }
+        if (fence || /^\s*>/.test(paragraphPrefix)) continue;
+        if (/\b(?:not|never|no|third[- ]party|unrelated|external|borrowed)\b|developed by|other authors|["“”'‘’`]/i.test(sentence)) continue;
+        const accompanyingRepository = /^The accompanying repository will/i.test(sentence);
+        const ownsCoreMaterial = /\bour\b[^.!?。]{0,80}\b(?:code|models?|weights|datasets?)\b|\bresulting\s+(?:ASR\s+)?(?:models?|weights)\b/i.test(sentence);
+        if ((!accompanyingRepository && !ownsCoreMaterial)
+            || !/\b(?:code|models?|weights|datasets?)\b/i.test(sentence)) continue;
+        return { conditional: /\bsubject to\b|\bconsent\b|\binstitutional requirements\b/i.test(sentence),
+            consentOrInstitution: /\bconsent\b|\binstitutional requirements\b/i.test(sentence) };
+    }
+    return null;
+
+}
+
 function hasAffirmativeReleasePromise(sourceText) {
     const segments = String(sourceText || '').split(/[\n。；;]/).map(part => part.trim()).filter(Boolean);
     return segments.some(segment => {
@@ -970,7 +1029,8 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', opti
             const normalizedAudit = validateScoringAuditAgainstAnalysis(
                 analysis,
                 parsedAudit,
-                options.verifiedResourceIdentity
+                options.verifiedResourceIdentity,
+                sourceEvidence
             );
             const audit = {
                 ...revalidateScoringAudit(normalizedAudit, allowedEvidenceIds),
@@ -2960,7 +3020,22 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         // 起来。
         .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))/gu,
             () => protect('一对一'));
-    let normalized = protectedText
+    const adjacentNumeralSurfaces = [];
+    let numeralSafeText = protectedText;
+    for (const issue of quantitativeIssues) {
+        if (issue?.code !== 'quantitative_chinese_numeral') continue;
+        const surface = String(issue.match || '').trim();
+        if (!/^[一二两三四五六七八九](?:个|种)$/.test(surface)) continue;
+        const escaped = surface.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        // 首轮空格处理会分开原本相邻的数字和汉字。保留这个边界证据，
+        // 避免把较长数字里的中文后缀误当成独立计数。
+        numeralSafeText = numeralSafeText.replace(new RegExp(`\\d+${escaped}`, 'gu'), value => {
+            const token = `§PD_ADJACENT_NUMERAL_${adjacentNumeralSurfaces.length}§`;
+            adjacentNumeralSurfaces.push([token, value]);
+            return token;
+        });
+    }
+    let normalized = numeralSafeText
         .replace(/采样率\s*1\s*般(?=\s*16\s*千赫)/g, '采样率通常为')
         .replace(/([\u3400-\u9fff])([A-Za-z][A-Za-z0-9+.-]*)/g, '$1 $2')
         .replace(/([\u3400-\u9fff])([α-ωΑ-Ω])/g, '$1 $2')
@@ -3146,7 +3221,9 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         normalized = normalized.replaceAll(match, (surface, offset, whole) => {
             const before = whole.slice(0, offset), after = whole.slice(offset + surface.length);
             // 一个问题可能只指出更长数字或分数当中的一个后缀。
-            if (/[零〇一二两三四五六七八九十百千万亿\d]$|分之$/.test(before.trimEnd())
+            if (/[零〇一二两三四五六七八九十百千万亿]$|分之$/.test(before.trimEnd())
+                || (/\d$/.test(before.trimEnd())
+                    && (!/^[一二两三四五六七八九](?:个|种)$/.test(surface) || !/[ \t]$/.test(before)))
                 || ((/^[零〇一二两三四五六七八九十百千万亿\d]|^点[零〇一二两三四五六七八九\d]/.test(after))
                     && /[零〇一二两三四五六七八九十百千万亿\d]$/.test(surface.trimEnd()))
                 || /^分之/.test(after)
@@ -3187,7 +3264,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         ),
         normalizeReaderCurrencyAmounts(normalized)
     );
-    return restored;
+    return adjacentNumeralSurfaces.reduce((value, [token, original]) => value.split(token).join(original), restored);
 }
 
 function normalizeReaderCurrencyAmounts(value) {
@@ -8251,6 +8328,8 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         evidenceMaxChars: SCORING_EVIDENCE_MAX_CHARS,
         evidenceSha256: scoringResult.evidenceSha256,
         scoringContract: SCORING_AUDIT_CONTRACT,
+        resourceNormalizationContract: SCORING_RESOURCE_NORMALIZATION_CONTRACT,
+        requestFormatContract: SCORING_REQUEST_FORMAT_CONTRACT,
         capRulesVersion: SCORING_CAP_RULES_VERSION,
         previousScore: Number.isFinite(previousScore) ? previousScore : null,
         previousRunScore: Number.isFinite(previousScore) ? previousScore : null,
@@ -15142,6 +15221,8 @@ async function analyzePaperDeepInternal(paper) {
             || scoringStage.evidenceMaxChars !== SCORING_EVIDENCE_MAX_CHARS
             || scoringStage.evidenceSha256 !== currentEvidenceSha256
             || scoringStage.scoringContract !== SCORING_AUDIT_CONTRACT
+            || scoringStage.resourceNormalizationContract !== SCORING_RESOURCE_NORMALIZATION_CONTRACT
+            || scoringStage.requestFormatContract !== SCORING_REQUEST_FORMAT_CONTRACT
             || scoringStage.capRulesVersion !== SCORING_CAP_RULES_VERSION
             || !scoringStage.audit?.evidenceProfile
             || !scoringStabilityResolutionIsValid(scoringStage)
@@ -15336,6 +15417,8 @@ async function analyzePaperDeepInternal(paper) {
                 evidenceMaxChars: SCORING_EVIDENCE_MAX_CHARS,
                 evidenceSha256: scoringResult.evidenceSha256,
                 scoringContract: SCORING_AUDIT_CONTRACT,
+                resourceNormalizationContract: SCORING_RESOURCE_NORMALIZATION_CONTRACT,
+                requestFormatContract: SCORING_REQUEST_FORMAT_CONTRACT,
                 capRulesVersion: SCORING_CAP_RULES_VERSION,
                 previousScore: Number.isFinite(scoreBeforeAudit) ? scoreBeforeAudit : null,
                 previousRunScore: scoringDelta.previousRunScore,

@@ -655,3 +655,38 @@ test('完整原表标记的旧付费候选迁移不在无来源上下文中生�
         originalBytes
     );
 });
+
+
+test('保留已付费草稿、次数和归档字节', t => {
+    const sample = fixture(t);
+    sample.payload.draft = normalizeReaderDraftOrder(sample.payload.draft).draft;
+    sample.payload.rawDraft = JSON.stringify(sample.payload.draft);
+    const oldPromptSha = '89faba16d2b3af5a1549e13c85800bc7301d3a4217a1d9ae362b33c76cff9a34';
+    const newPromptSha = '7cb7332fa3085b4497c31d73a7075eb10f8700cd84d23f68875d8341cb97f5de';
+    sample.oldIdentity = { ...sample.identity, repairPromptSha256: oldPromptSha };
+    sample.identity = { ...sample.identity, repairPromptSha256: newPromptSha };
+    const filename = saveFailedCandidate(sample.directory, sample.oldIdentity, sample.payload);
+    const originalBytes = fs.readFileSync(filename);
+    const recovered = sample.enabled(() => loadReaderRecoveryRevision(sample.directory, sample.identity));
+    assert.equal(recovered.status, 'failed');
+    assert.equal(recovered.attempts, sample.payload.attempts);
+    assert.equal(recovered.fullAttempts, sample.payload.fullAttempts);
+    assert.equal(recovered.transportFailures, sample.payload.transportFailures);
+    assert.equal(recovered.noProgress, sample.payload.noProgress);
+    assert.equal(recovered.implementationRepairAllowanceProof, null);
+    assert.deepEqual(recovered.draft, sample.payload.draft);
+    assert.equal(recovered.rawDraft, sample.payload.rawDraft);
+    assert.deepEqual(fs.readFileSync(path.join(sample.directory,
+        recovered.readerRecoveryRevisions[0].archivedName)), originalBytes);
+});
+
+test('其他修复提示词SHA不得冒充固定v5到v6迁移', t => {
+    const sample = fixture(t);
+    sample.oldIdentity = { ...sample.identity, repairPromptSha256: 'a'.repeat(64) };
+    sample.identity = { ...sample.identity,
+        repairPromptSha256: '7cb7332fa3085b4497c31d73a7075eb10f8700cd84d23f68875d8341cb97f5de' };
+    const filename = saveFailedCandidate(sample.directory, sample.oldIdentity, sample.payload);
+    const originalBytes = fs.readFileSync(filename);
+    assert.equal(sample.enabled(() => loadReaderRecoveryRevision(sample.directory, sample.identity)), null);
+    assert.deepEqual(fs.readFileSync(filename), originalBytes);
+});
