@@ -10,7 +10,7 @@ const sha256 = value => crypto.createHash('sha256').update(String(value || '')).
 
 const RESOURCE_FACET_SPECS = Object.freeze([
     ['code', /\b(?:source\s+code|code|implementation|software|repository|repo)\b|源代码|代码|实现|仓库/i],
-    ['model', /\b(?:model(?:\s+weights?)?|weights?|checkpoints?)\b|模型(?:权重)?|权重|检查点/i],
+    ['model', /\b(?:models?(?:\s+weights?)?|weights?|checkpoints?)\b|模型(?:权重)?|权重|检查点/i],
     ['dataset', /\b(?:data|datasets?|corpus|corpora|benchmarks?)\b|数据集|数据|语料库|基准/i],
     ['demo', /\b(?:(?:audio\s+)?demos?|demonstration)\b|在线演示|项目演示/i],
     ['reproduction', /\b(?:artifacts?|reproducibility|reproduction(?:\s+materials?)?)\b|复现材料|工件/i]

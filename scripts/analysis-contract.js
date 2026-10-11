@@ -1169,7 +1169,7 @@ function coreSummaryQuantitativeResultState(text) {
         // CLAP 既可能指指标，也可能指对照模型。写明 model/baseline
         // 不能顶替缺失的结果指标。
         const metricText = sentence.replace(/\bCLAP\s*(?:基线|模型|baseline\b|model\b)/giu, '');
-        const hasMetric = Boolean(sentence && (
+        const hasRecognizedMetric = Boolean(sentence && (
             CORE_SUMMARY_METRIC_PATTERN.test(metricText)
             || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(metricText)
             || hasCoreSummaryStatisticalResult(metricText)
@@ -1182,11 +1182,34 @@ function coreSummaryQuantitativeResultState(text) {
         // `test/benchmark` 这样的英文词。只接受带明确设置后缀的拉丁文命名标识；
         // 上面那套通用设置词表不变。
         const hasNamedSetting = /(?:[A-Z][A-Za-z0-9._-]{2,}\s*[\u3400-\u9fff]{0,8}(?:集|数据集|语料|任务|基准)|(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}(?:\s*[上中下]))/i.test(sentence);
+        const hasTimedNamedSplit = /(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}\s+\d+(?:\.\d+)?\s+s\s+[\u3400-\u9fff]{0,12}划分(?:上|中)/.test(sentence);
         const hasSetting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)/i.test(sentence)
-            || hasNamedSetting;
+            || hasNamedSetting || hasTimedNamedSplit;
         const hasComparisonObjects = numbers.length >= 2
             || /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)/.test(sentence);
-        const crossMetricComparison = hasCrossMetricDirectionalComparison(sentence);
+        // 只补原文中实际使用的结果写法，不把同名方法或公式符号算作指标。
+        const fadComparison = /(?<![A-Za-z0-9_])FAD(?![A-Za-z0-9_])\s*[）)]?\s*(?:为|是|=|:|：)?\s*(\d+(?:\.\d+)?)(?=\s*(?:[,，;；、]|优于|低于|高于))[^。！？!?]{0,50}?(优于|低于|高于)([^。！？!?\d]{0,50})(?:(?<![A-Za-z0-9_.])|(?<=FAD))(\d+(?:\.\d+)?)(?=\s*(?:[,，;；、]|$))/.exec(sentence);
+        const fadNumbersAgree = Boolean(fadComparison && (fadComparison[2] === '高于'
+            ? Number(fadComparison[1]) > Number(fadComparison[4])
+            : Number(fadComparison[1]) < Number(fadComparison[4])));
+        const fadValue = fadNumbersAgree && !/FAD\s*(?:模型|方法|基线)/.test(sentence);
+        const dirComparison = /(?<![A-Za-z0-9_])DIR@FAR\s*=\s*(\d+(?:\.\d+)?)%\s*(?:从|由)\s*(\d+(?:\.\d+)?)%\s*(?:提升到|提升至|提高到|提高至|升至|升到|降至|降到|降低至|降低到)\s*(\d+(?:\.\d+)?)%(?=\s*(?:[,，;；、]|$))/.exec(sentence);
+        const dirResult = Boolean(dirComparison && dirComparison.slice(1).every(value => Number(value) <= 100)
+            && (/提升|提高|升至|升到/.test(dirComparison[0])
+                ? Number(dirComparison[3]) > Number(dirComparison[2])
+                : Number(dirComparison[3]) < Number(dirComparison[2])));
+        const addedComparison = /(?<![A-Za-z0-9_])(?:FAD(?![A-Za-z0-9_])\s*[）)]?\s*(?:为|是|=|:|：)?\s*\d+(?:\.\d+)?|DIR@FAR\s*=\s*\d+(?:\.\d+)?%)[^。！？!?]{0,90}?(?:优于|低于|高于|提升到|提升至|提高到|提高至|升至|升到|降至|降到|降低至|降低到)([^。！？!?\d]{0,50})\d/.exec(sentence);
+        const comparedLabel = String(addedComparison?.[1] || '').replace(/(?:指标|分数|得分)/g, '');
+        const addedMetricHasConflictingLabel = Boolean(comparedLabel && (
+            CORE_SUMMARY_METRIC_PATTERN.test(comparedLabel)
+            || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(comparedLabel)));
+        const addedMetricIsNonResult = /(?:公式|符号|定义为|假设|预计|预期|可能|将会|若|如果|先前工作|相关工作|文献)/.test(sentence);
+        const fadComparisonObjectIsValue = /(?:^$|(?:的|为|是|=|:|：|基线|对照|FAD)\s*$)/.test(String(fadComparison?.[3] || '').trim());
+        const hasMetric = hasRecognizedMetric || Boolean(hasSetting && hasDirection
+            && hasComparisonObjects && !addedMetricHasConflictingLabel
+            && !addedMetricIsNonResult && ((fadValue && fadComparisonObjectIsValue) || dirResult));
+        const crossMetricComparison = hasCrossMetricDirectionalComparison(sentence)
+            || addedMetricHasConflictingLabel;
         const missing = [
             !hasSetting && '评测设置', !hasMetric && '指标名称',
             numbers.length === 0 && '数值', !hasDirection && '比较方向',
