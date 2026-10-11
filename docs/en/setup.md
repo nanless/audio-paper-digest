@@ -86,6 +86,7 @@ Historical rewriting saves the same four files for each arXiv source capture, us
 |---|---:|
 | `PD_ANALYSIS_CONCURRENCY` | 3 papers |
 | `PD_ANALYSIS_API_MAX_TOKENS` | 64000 |
+| `PD_ANALYSIS_REVISION_MAX_TOKENS` | 64000; complete 13-section revision |
 | `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 16000 |
 | `PD_API_READER_MAX_TOKENS` | 48000 |
 | `PD_API_READER_REPAIR_MAX_TOKENS` | 8000 |

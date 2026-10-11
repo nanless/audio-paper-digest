@@ -88,7 +88,9 @@ async function main(options = {}) {
     console.log('=== 批量论文分析 ===');
     console.log(`数据文件: ${RESULT_FILE}`);
 
-    const data = readJsonFileStrict(RESULT_FILE);
+    const data = updateJsonFileLocked(RESULT_FILE, current =>
+        dailyFreshSources.prepareDailyFreshSourceRecoveryPayload(current,
+            readJsonFileStrict(Config.FILES.filteredPapers), { label: 'batch recovery' }));
 
     const papers = Array.isArray(data) ? data : (data.papers || []);
     const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(data, {

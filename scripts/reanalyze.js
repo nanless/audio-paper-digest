@@ -87,7 +87,9 @@ async function reanalyzeAll(options = {}) {
         process.exit(1);
     }
 
-    const data = readJsonFileStrict(DATA_FILE);
+    const data = updateJsonFileLocked(DATA_FILE, current =>
+        dailyFreshSources.prepareDailyFreshSourceRecoveryPayload(current,
+            readJsonFileStrict(Config.FILES.filteredPapers), { label: 'reanalyze recovery' }));
 
     const papers = Array.isArray(data) ? data : (data.papers || []);
     const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(data, {

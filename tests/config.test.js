@@ -46,6 +46,10 @@ describe('config', () => {
             Number(process.env.PD_ANALYSIS_REPAIR_MAX_TOKENS || 16000)
         );
         assert.strictEqual(
+            Config.ANALYSIS_CONFIG.revisionMaxTokens,
+            Number(process.env.PD_ANALYSIS_REVISION_MAX_TOKENS || 64000)
+        );
+        assert.strictEqual(
             Config.ANALYSIS_CONFIG.apiReaderMaxTokens,
             Number(process.env.PD_API_READER_MAX_TOKENS || 48000)
         );
@@ -209,6 +213,14 @@ describe('config', () => {
     it('项目 .env 覆写 PD_ANALYSIS_REPAIR_MAX_TOKENS', () => {
         withProjectEnv('PD_ANALYSIS_REPAIR_MAX_TOKENS=12000', (Config) => {
             assert.strictEqual(Config.ANALYSIS_CONFIG.repairMaxTokens, 12000);
+        });
+    });
+
+    it('完整审校与局部修复的输出预算分别覆写', () => {
+        withProjectEnv('PD_ANALYSIS_REVISION_MAX_TOKENS=48000\nPD_ANALYSIS_REPAIR_MAX_TOKENS=12000', (Config) => {
+            assert.strictEqual(Config.ANALYSIS_CONFIG.revisionMaxTokens, 48000);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.repairMaxTokens, 12000);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.apiMaxTokens, 64000);
         });
     });
 

@@ -121,6 +121,7 @@ const promptHistory = require('./lib/prompt-history.js');
 const {
     ANALYSIS_PROMPT_TEXT_V1_CONTRACT,
     ANALYSIS_PROMPT_TEXT_V2_CONTRACT,
+    ANALYSIS_PROMPT_TEXT_V3_CONTRACT,
     FROZEN_V1_PROMPT_FILES: RECOVERY_PROMPT_FILES,
     PROMPT_FILE_VERSIONS,
     currentPromptTextContract,
@@ -149,6 +150,7 @@ const {
     apiMaxTokens: API_MAX_TOKENS,
     apiMaxResponseBytes: API_MAX_RESPONSE_BYTES = 16 * 1024 * 1024,
     repairMaxTokens: REPAIR_MAX_TOKENS = 16000,
+    revisionMaxTokens: REVISION_MAX_TOKENS = 64000,
     apiReaderMaxTokens: API_READER_MAX_TOKENS = 48000,
     apiTemperature: API_TEMPERATURE,
     scoringAuditTemperature: SCORING_AUDIT_TEMPERATURE = 0.1,
@@ -8529,7 +8531,8 @@ function buildLegacyCoreSummaryV2TextFingerprint(stage, inputAnalysis, evidenceC
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
         ...modelFingerprint(DEEP_CONFIG, API_TEMPERATURE,
             stage === 'coreSummaryRepair'
-                ? LEGACY_CORE_SUMMARY_REPAIR_MAX_TOKENS : config.maxTokens),
+                ? LEGACY_CORE_SUMMARY_REPAIR_MAX_TOKENS
+                : stage === 'revision' ? REPAIR_MAX_TOKENS : config.maxTokens),
         promptTemplateSha256: legacyPromptSha256,
         evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION,
         evidenceMaxChars: config.evidenceMaxChars,
@@ -8571,7 +8574,7 @@ const TEXT_RECOVERY_STAGE_CONFIG = Object.freeze({
         sanitize: true
     },
     revision: {
-        maxTokens: REPAIR_MAX_TOKENS,
+        maxTokens: REVISION_MAX_TOKENS,
         evidenceMaxChars: REVISION_EVIDENCE_MAX_CHARS,
         patterns: BROAD_EVIDENCE_PATTERNS,
         taskLabel: 'REVISION',
@@ -8662,7 +8665,10 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext, prompt
         ...(['revision', 'structureRepair'].includes(stage) ? {
             analysisSectionTitlesImplementationSha256: promptTemplateSha256('scripts/lib/analysis-section-titles.js')
         } : {}),
-        ...modelFingerprint(DEEP_CONFIG, API_TEMPERATURE, config.maxTokens),
+        ...modelFingerprint(DEEP_CONFIG, API_TEMPERATURE,
+            stage === 'revision'
+                && declaredPromptTextContract !== ANALYSIS_PROMPT_TEXT_V3_CONTRACT
+                ? REPAIR_MAX_TOKENS : config.maxTokens),
         promptTemplateSha256: promptTemplateSha256(
             promptFilePathForContract(stage,
                 declaredPromptTextContract || ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
@@ -15767,7 +15773,7 @@ function hasOpenSourceLinks(analysis) {
     return false;
 }
 
-async function reviseAnalysis(paper, existingAnalysis, sourceText, preparedEvidence = null) {
+async function reviseAnalysis(paper, existingAnalysis, sourceText, preparedEvidence = null, options = {}) {
     const evidence = typeof preparedEvidence === 'string'
         ? preparedEvidence
         : buildStageEvidenceContext('revision', existingAnalysis, sourceText);
@@ -15778,7 +15784,8 @@ async function reviseAnalysis(paper, existingAnalysis, sourceText, preparedEvide
         textForAnalysis: evidence,
         tagPromptText: TAG_RULES.projection
     });
-    return await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS,
+    const request = options.callModelFn || callModel;
+    return await request([{ role: 'user', content: prompt }], REVISION_MAX_TOKENS,
         { usageContext: { stage: 'revision' } });
 }
 
@@ -16873,6 +16880,7 @@ module.exports = {
     getCoreSummaryDetailIssue,
     repairCoreSummarySection,
     repairMissingAnalysisSections,
+    reviseAnalysis,
     finalizeStructureRepairOutput,
     recoveryFailureStatus,
     getRepairableAnalysisStructureIssues,

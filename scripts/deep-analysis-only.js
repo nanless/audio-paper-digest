@@ -70,27 +70,6 @@ function validateDeepAnalysisInput(existingData, filteredData, today) {
     return existingData;
 }
 
-function repairMissingAnalysisRecords(resultPath, existingData, filteredData) {
-    const existingPapers = Array.isArray(existingData) ? existingData : (existingData?.papers || []);
-    const existingIds = new Set(existingPapers.map(normalizedId).filter(Boolean));
-    const missingPapers = filteredData.papers.filter(paper => !existingIds.has(normalizedId(paper)));
-    if (missingPapers.length === 0) return existingData;
-
-    const repaired = updateJsonFileLocked(resultPath, current => {
-        const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
-        const currentIds = new Set(currentPapers.map(normalizedId).filter(Boolean));
-        const additions = filteredData.papers.filter(paper => !currentIds.has(normalizedId(paper)));
-        if (additions.length === 0) return current;
-        return {
-            ...(!Array.isArray(current) && current ? current : {}),
-            papers: mergePapersById(currentPapers, additions),
-            lastUpdated: getBeijingISOString()
-        };
-    });
-    console.log(`🔧 已根据目标日期的筛选结果补回 ${missingPapers.length} 篇中断前未保存的论文，等待继续分析`);
-    return repaired;
-}
-
 function finalizeDeepZeroWorkState(resultPath, filteredData, today) {
     return updateJsonFileLocked(resultPath, current => {
         validateDeepAnalysisInput(current, filteredData, today);
@@ -135,15 +114,13 @@ async function runDeepAnalysis(options = {}) {
         throw new Error('继续分析需要已有日更分析记录及对应的 PDF 和文本来源文件。目标日期是北京时间当天时，请重新运行 npm run digest:prepare；历史日期应保留失败记录，并按历史维护流程处理。');
     }
 
-    let existingData = readJsonFileStrict(resultPath);
-    const currentPapersBeforeRepair = Array.isArray(existingData) ? existingData : (existingData?.papers || []);
-    const currentIds = new Set(currentPapersBeforeRepair.map(normalizedId).filter(Boolean));
-    const sourcePlanRows = mergePapersById(currentPapersBeforeRepair,
-        filteredData.papers.filter(paper => !currentIds.has(normalizedId(paper))));
+    let existingData = updateJsonFileLocked(resultPath, current =>
+        dailyFreshSources.prepareDailyFreshSourceRecoveryPayload(current,
+            validateCompleteFilteredForToday(readJsonFileStrict(filteredPath), today),
+            { label: 'deep-only recovery' }));
     const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(existingData, {
-        papers: sourcePlanRows, label: 'deep-only recovery'
+        label: 'deep-only recovery'
     });
-    existingData = repairMissingAnalysisRecords(resultPath, existingData, filteredData);
     existingData = validateDeepAnalysisInput(existingData, filteredData, today);
 
     const papers = Array.isArray(existingData) ? existingData : (existingData.papers || []);

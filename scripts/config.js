@@ -115,6 +115,8 @@ const ANALYSIS_CONFIG = {
     apiMaxResponseBytes: 16 * 1024 * 1024,
     // 局部检查和修复使用较小的输出上限，与主分析和 Reader 长文分别设置。
     repairMaxTokens: 16000,
+    // 审校会重写完整分析，输出容量单独设置，避免误用局部修复上限。
+    revisionMaxTokens: 64000,
     // 初学研究者长文需要容纳更多章节、宽表和逐图解说，不与局部修复共用较小的输出上限。
     apiReaderMaxTokens: 48000,
     apiReaderRepairMaxTokens: 8000,
@@ -391,6 +393,8 @@ function applyEnvOverrides() {
     if (repairMaxTokens) {
         ANALYSIS_CONFIG.repairMaxTokens = repairMaxTokens;
     }
+    const revisionMaxTokens = readPositiveInt('PD_ANALYSIS_REVISION_MAX_TOKENS');
+    if (revisionMaxTokens) ANALYSIS_CONFIG.revisionMaxTokens = revisionMaxTokens;
     const apiReaderMaxTokens = readPositiveInt('PD_API_READER_MAX_TOKENS');
     if (apiReaderMaxTokens) {
         ANALYSIS_CONFIG.apiReaderMaxTokens = apiReaderMaxTokens;

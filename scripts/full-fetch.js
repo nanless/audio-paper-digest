@@ -2082,7 +2082,13 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
     updateJsonFileLocked(outputFile, current => {
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
-            papers: Array.isArray(current) ? current : (current?.papers || []),
+            batchDate: today, batchId,
+            papers: filteredNew.map(paper => {
+                const currentRows = Array.isArray(current) ? current : (current?.papers || []);
+                const stored = currentRows.find(row => normalizedId(row) === normalizedId(paper));
+                const merged = mergeStoredAnalysisState(paper, stored);
+                return dailySourcePlan ? dailyFreshSources.prepareDailyPaper(merged, dailySourcePlan) : merged;
+            }),
             status: 'running',
             lastUpdated: getBeijingISOString(),
             stats: {

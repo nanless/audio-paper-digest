@@ -86,6 +86,7 @@ Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读�
 |---|---:|
 | `PD_ANALYSIS_CONCURRENCY` | 3 篇论文 |
 | `PD_ANALYSIS_API_MAX_TOKENS` | 64000 |
+| `PD_ANALYSIS_REVISION_MAX_TOKENS` | 64000；完整13章正文审校重写 |
 | `PD_ANALYSIS_REPAIR_MAX_TOKENS` | 16000 |
 | `PD_API_READER_MAX_TOKENS` | 48000 |
 | `PD_API_READER_REPAIR_MAX_TOKENS` | 8000 |

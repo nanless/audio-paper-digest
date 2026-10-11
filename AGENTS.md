@@ -85,7 +85,9 @@ npm run digest:prepare -- YYYY-MM-DD
 | 整篇分析并发 | 3 | `PD_ANALYSIS_CONCURRENCY` |
 | 筛选配置批次 | 5；主模型同样使用配置值 | `PD_FILTER_BATCH_SIZE` |
 | 整篇重试 / 单阶段尝试 | 2 / 3 | `PD_ANALYSIS_MAX_RETRIES` / `PD_ANALYSIS_API_MAX_RETRIES` |
-| 主分析 / 局部修复输出 | 64000 / 16000 tokens | `PD_ANALYSIS_API_MAX_TOKENS` / `PD_ANALYSIS_REPAIR_MAX_TOKENS` |
+| 主分析输出 | 64000 tokens | `PD_ANALYSIS_API_MAX_TOKENS` |
+| 完整正文审校重写输出 | 64000 tokens | `PD_ANALYSIS_REVISION_MAX_TOKENS` |
+| 局部修复输出 | 16000 tokens | `PD_ANALYSIS_REPAIR_MAX_TOKENS` |
 | 单次分析 LLM 响应 | 16 MiB | `PD_ANALYSIS_API_MAX_RESPONSE_BYTES` |
 | API Reader 输出 | 48000 tokens | `PD_API_READER_MAX_TOKENS` |
 | Reader 证据 / 总上下文 | 180000 / 240000 字符 | 对应 `PD_API_READER_*_MAX_CHARS` |

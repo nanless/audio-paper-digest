@@ -325,6 +325,36 @@ function requireDailyFreshSourceRecoveryPlan(payload, { papers = null, label = '
     return plan;
 }
 
+// 只用已完成筛选和实体来源计划补齐中断时尚未开始的记录；不授予分析成功资格。
+function prepareDailyFreshSourceRecoveryPayload(payload, filtered, { label = '日更恢复' } = {}) {
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+        || !Array.isArray(payload.papers)) fail(`${label} 缺少已有分析记录`);
+    if (!filtered || filtered.status !== 'complete' || !validDate(filtered.batchDate)
+        || typeof filtered.batchId !== 'string' || !filtered.batchId
+        || !Array.isArray(filtered.papers) || !filtered.papers.length) fail(`${label} 需要完整筛选批次`);
+    const plan = readDailyFreshSourcePlan(payload.dailyFreshSourceRun);
+    if (filtered.batchDate !== plan.batchDate || filtered.batchId !== plan.batchId) {
+        fail(`${label} 的筛选批次与封存来源不同`);
+    }
+    for (const date of [payload.batchDate, payload.stats?.batchDate]) {
+        if (date !== undefined && date !== plan.batchDate) fail(`${label} 的已有日期与封存来源不同`);
+    }
+    if (payload.batchId !== undefined && payload.batchId !== plan.batchId) fail(`${label} 的已有批号与封存来源不同`);
+    const selectedIds = filtered.papers.map(normalizedId);
+    const existingIds = payload.papers.map(normalizedId);
+    if (selectedIds.some(id => !ARXIV_ID.test(id)) || new Set(selectedIds).size !== selectedIds.length
+        || selectedIds.slice().sort().join('\0') !== plan.paperIds.join('\0')
+        || existingIds.some(id => !ARXIV_ID.test(id) || !selectedIds.includes(id))
+        || new Set(existingIds).size !== existingIds.length) fail(`${label} 的论文集合不符合完整筛选批次`);
+    const existing = new Map(payload.papers.map(paper => [normalizedId(paper), paper]));
+    const { mergeStoredAnalysisState } = require('../analysis-engine.js');
+    const result = { ...payload, batchDate: plan.batchDate, batchId: plan.batchId,
+        papers: filtered.papers.map(paper => mergeStoredAnalysisState(paper, existing.get(normalizedId(paper)))) };
+    // 保持原严格守卫：全集合及每篇四份实体文件都必须通过，之后才能保存或请求模型。
+    requireDailyFreshSourceRecoveryPlan(result, { label });
+    return result;
+}
+
 const GENERATED_FIELDS = Object.freeze([
     'analysis', 'parsed', 'analysisManifest', 'analysisCheckpoint', 'analysisStageCheckpoints',
     'apiReaderArticle', 'apiReaderArticleSha256', 'apiReaderPlan', 'apiReaderFigures', 'apiReaderResources',
@@ -478,5 +508,5 @@ function withDailyFreshAnalysisContext(plan, callback) {
 module.exports = { CONTRACT, VERSION, SOURCE_GENERATION, REFERENCE_CONTRACT, REFERENCE_VERSION, DailyFreshSourcePlanError, stableHash,
     createDailyFreshSourcePlan, captureDailyFreshSources, readDailyFreshSource, isPaperBoundToPlan, isPaperReusableForAnalysis,
     prepareDailyPaper, createDailyAnalyzeFn, withDailyFreshAnalysisContext,
-    dailyFreshSourceReference, readDailyFreshSourcePlan, requireDailyFreshSourceRecoveryPlan,
+    dailyFreshSourceReference, readDailyFreshSourcePlan, requireDailyFreshSourceRecoveryPlan, prepareDailyFreshSourceRecoveryPayload,
     withDailyFreshPaperSource, ephemeralReaderFigures, ephemeralPrimaryImage };

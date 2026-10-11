@@ -98,7 +98,7 @@ test('日更恢复入口只复核当前已保存的 PDF/TXT 来源，Reader 刷�
         dailyFreshSourceRun: daily.dailyFreshSourceReference(plan),
         papers: [unboundLegacy]
     };
-    writeJson(Config.FILES.filteredPapers, { batchDate: DATE, status: 'complete', papers: [paper] });
+    writeJson(Config.FILES.filteredPapers, { batchDate: DATE, batchId: plan.batchId, status: 'complete', papers: [paper] });
     writeJson(Config.FILES.deepAnalysisResult, envelope);
     writeJson(Config.FILES.papers, { generation: 0, papers: {} });
 
