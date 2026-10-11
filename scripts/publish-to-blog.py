@@ -8209,6 +8209,7 @@ def _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper):
         raise PublishDataValidationError(f'{paper_id} daily fresh provenance 未闭合到 canonical/analysis manifest')
     _validate_current_model_text_reuse_for_publish(
         paper, {**details, 'title': runtime.get('title'), 'sourceVersion': runtime.get('sourceVersion')}, paper_id,
+        sealed_bundle_root=run_dir / 'sources',
     )
 
 
@@ -8223,12 +8224,15 @@ def _contains_supplementary_model_character(value):
     return False
 
 
-def _validate_reader_author_source_replay(paper, source_details, paper_id):
+def _validate_reader_author_source_replay(paper, source_details, paper_id, *, sealed_bundle_root=None):
     contracts = paper.get('analysisManifest', {}).get('contracts', {})
     if contracts.get('apiReaderArticle') not in {'beginner-researcher-v2', 'beginner-researcher-v3'}:
         return
     # 已核验封存来源通过私有 FD 交给纯解析器；不加载项目配置或模型请求模块。
-    payload = _daily_fresh_compact_json_bytes({'paper': paper, 'sourceDetails': source_details})
+    replay_input = {'paper': paper, 'sourceDetails': source_details}
+    if sealed_bundle_root is not None:
+        replay_input['sealedBundleRoot'] = str(sealed_bundle_root)
+    payload = _daily_fresh_compact_json_bytes(replay_input)
     if len(payload) > 128 * 1024 * 1024:
         raise PublishDataValidationError(f'{paper_id} 作者来源重放输入超过上限')
     node = shutil.which('node')
@@ -8253,9 +8257,10 @@ def _validate_reader_author_source_replay(paper, source_details, paper_id):
         )
 
 
-def _validate_current_model_text_reuse_for_publish(paper, source_details, paper_id):
+def _validate_current_model_text_reuse_for_publish(paper, source_details, paper_id, *, sealed_bundle_root=None):
     # 只用于当前生产发布，旧记录的只读结构、状态和封存 SHA 保持原样。
-    _validate_reader_author_source_replay(paper, source_details, paper_id)
+    _validate_reader_author_source_replay(paper, source_details, paper_id,
+                                         sealed_bundle_root=sealed_bundle_root)
     acquisition = paper.get('analysisManifest', {}).get('sourceAcquisition', {})
     if acquisition.get('modelTextSanitizationContract') == 'model-text-unicode-scalars-v1':
         return

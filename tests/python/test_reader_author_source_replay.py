@@ -75,7 +75,7 @@ process.stdout.write(JSON.stringify({paper,sourceDetails:details}));
     def test_actual_daily_publication_entry_rejects_old_self_signed_institution(self):
         from test_daily_fresh_publish_gate import _daily_payload, publish_to_blog as gate
         with tempfile.TemporaryDirectory() as tmp:
-            source_root = Path(tmp) / 'sources'
+            source_root = Path(tmp).resolve() / 'sources'
             payload = _daily_payload(source_root, ['2610.12345'])
             paper = payload['papers'][0]
             runtime_path = source_root / payload['dailyFreshSourceRun']['runId'] / 'sources' / '2610.12345' / 'generation-000001' / 'source-runtime.json'

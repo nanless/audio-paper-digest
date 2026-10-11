@@ -261,6 +261,24 @@ function withVerifiedBundleReaderAuthorSource(details, callback) {
     return verifiedBundleAuthorScope.run(proof, callback);
 }
 
+// 发布子进程无法继承 WeakMap。重新读取四份封存文件，而不是相信传入对象上的已验证标记。
+function withVerifiedBundleReaderAuthorFiles({ rootDir, arxivId, generation,
+    sourceManifestSha256, sourceSnapshotSha256 }, callback) {
+    if (typeof callback !== 'function' || !validSha(sourceManifestSha256)
+        || !validSha(sourceSnapshotSha256)) throw fail('作者发布重放需要完整的封存来源指纹。');
+    const stored = require('./fresh-arxiv-rewrite-source.js').readFreshArxivRewriteSource({
+        rootDir, arxivId, generation
+    });
+    const details = buildSourceDetailsFromBundle(stored);
+    if (stored.sourceManifestSha256 !== sourceManifestSha256
+        || details.freshSourceDescriptor.sourceSnapshotSha256 !== sourceSnapshotSha256) {
+        throw fail('作者发布重放的四文件清单或来源快照不匹配。');
+    }
+    verifiedBundleAuthorSources.set(details, { rootDir, arxivId, generation,
+        sourceManifestSha256, detailsSha256: stable(details) });
+    return withVerifiedBundleReaderAuthorSource(details, () => callback(details));
+}
+
 function readFreshSource(runDir, paper, identity) {
     const checked = validateRun(runDir, identity);
     const id = paperId(paper);
@@ -427,5 +445,5 @@ function freshReaderAttemptsDirectory(requestedDirectory) {
 module.exports = { CONTRACT, CACHE_CONTRACT, BUNDLE_CACHE_CONTRACT, BUNDLE_SOURCE_MODE, DAILY_SOURCE_RUN_CONTRACT, isBundleExpectation,
     withFreshAnalysisContext, getFreshAnalysisContext, isDailyFreshSourceScope,
     getSavedAnalysisRecoveryPermission,
-    readFreshSource, readVerifiedBundleReaderAuthors, withVerifiedBundleReaderAuthorSource, resolveFreshSource, fetchFreshSource, freshAnalysisIdentity, assertFreshPaper,
+    readFreshSource, readVerifiedBundleReaderAuthors, withVerifiedBundleReaderAuthorSource, withVerifiedBundleReaderAuthorFiles, resolveFreshSource, fetchFreshSource, freshAnalysisIdentity, assertFreshPaper,
     withFreshPaperContext, attachFreshSourceRecord, freshReaderAttemptsDirectory };

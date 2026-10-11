@@ -55,8 +55,8 @@ function isReaderResourceAffiliationLabel(value) {
 }
 
 function sanitizeReaderAffiliationValue(value, authorNames = []) {
-    const text = normalizeReaderIdentityText(value)
-        .replace(/^(?:affiliation|institution)\s*[:：]?\s*/i, '');
+    const text = removeTrailingReaderAuthorIdentifier(normalizeReaderIdentityText(value)
+        .replace(/^(?:affiliation|institution)\s*[:：]?\s*/i, ''));
     const normalizedText = readerIdentityKey(text).replace(/[,:;]+$/g, '').trim();
     const isExactKnownAuthorName = (authorNames || []).some(name => (
         normalizedText.length > 0
@@ -75,6 +75,19 @@ function sanitizeReaderAffiliationValue(value, authorNames = []) {
     return text;
 }
 
+// 作者标识有时作为纯文本跟在机构后面；只去掉末尾且校验位正确的 ORCID。
+// 校验规则：https://support.orcid.org/hc/en-us/articles/360006897674
+function removeTrailingReaderAuthorIdentifier(value) {
+    const match = String(value).match(/(?:^|\s)(?:ORCID(?:\s+iD)?\s*[:：]?\s*)?(\d{4}-\d{4}-\d{4}-\d{3}[\dX])$/i);
+    if (!match || match[1].endsWith('x')) return value;
+    const digits = match[1].replace(/-/g, '').toUpperCase();
+    let total = 0;
+    for (const digit of digits.slice(0, -1)) total = (total + Number(digit)) * 2;
+    const remainder = (12 - (total % 11)) % 11;
+    if ((remainder === 10 ? 'X' : String(remainder)) !== digits.at(-1)) return value;
+    return String(value).slice(0, match.index).trim();
+}
+
 function cleanReaderAffiliationNode($, node, authorNames = []) {
     const affiliation = $(node).clone();
     affiliation.find([
@@ -82,6 +95,7 @@ function cleanReaderAffiliationNode($, node, authorNames = []) {
         '.ltx_note_mark', '.ltx_note', '.ltx_tag', 'sup',
         'a.ltx_url', 'a[href^="http://"]', 'a[href^="https://"]'
     ].join(', ')).remove();
+    affiliation.find('br').replaceWith(' ');
     return sanitizeReaderAffiliationValue(affiliation.text(), authorNames);
 }
 
@@ -394,7 +408,7 @@ function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
                 };
             }
             const direct = parsed?.affiliations?.find(value => (
-                readerIdentityKey(value) === readerIdentityKey(affiliation)
+                readerIdentityKey(sanitizeReaderAffiliationValue(value)) === readerIdentityKey(affiliation)
             ));
             if (!direct || !recoverySha256(sourceDomSha256)) {
                 throw new Error(`作者 ${author.name} 的机构“${affiliation}”缺少对应的来源机构记录，或来源内容 SHA 格式无效。`);
@@ -402,7 +416,7 @@ function bindApiReaderAuthorIdentity(paper, sourceDetails, resolved) {
             return {
                 sourceKind: isConferencePdf ? 'pdf_text' : 'html_dom',
                 association: 'direct_author',
-                sourceValue: direct,
+                sourceValue: affiliation,
                 sourceDomSha256
             };
         });

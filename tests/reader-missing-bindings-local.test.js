@@ -101,7 +101,7 @@ test('新增绑定不能绕过真实数字、单位、DOM缺格和来源SHA检�
         { sourceText: sample.sourceText, structuredArtifacts: badSource }));
 });
 
-test('非确切缺口或selection混排不能取得新增绑定授权；旧提示词保持冻结', () => {
+test('缺口不明确或选择标记位置错误时不授权新增绑定；旧提示词保持冻结', () => {
     const sample = createMissingBindingsSample();
     assert.equal(repair.buildRepairContext(sample.draft, [], '').atomicOperation, null);
     sample.draft.sections[0].body += '\n\n[[TABLE_4]]';
@@ -113,4 +113,67 @@ test('非确切缺口或selection混排不能取得新增绑定授权；旧提�
         '89faba16d2b3af5a1549e13c85800bc7301d3a4217a1d9ae362b33c76cff9a34');
     assert.notEqual(deep.runtimePromptTemplateSha256('prompts/api-reader-repair-v6.md'),
         deep.runtimePromptTemplateSha256('prompts/api-reader-repair-v5.md'));
+});
+
+function createMixedMissingBindingsSample() {
+    const sample = createMissingBindingsSample();
+    const firstTable = order.locateReaderDraftTables(sample.draft)[0].table.markdown;
+    sample.draft.sections[0].body = sample.draft.sections[0].body.replace(firstTable, '[[TABLE_1]]');
+    const selectionBinding = { tableIndex: 1, selection: {
+        sourceTableOrdinal: 1, sourceRows: [0, 1], sourceColumns: [0, 1, 2, 3, 4]
+    } };
+    sample.draft.tableBindings[0] = selectionBinding;
+    sample.bindings[0] = structuredClone(selectionBinding);
+    const issues = [{ path: '/tableBindings/0', code: repair.TABLE_BINDING_ORDER_ISSUE_CODE,
+        message: '正文表格与来源记录不能一一对应' }];
+    sample.context = repair.buildRepairContext(sample.draft, issues, sample.sourceText, sample.sourceText);
+    sample.patch = { version: 1, draftSha256: repair.hashDraft(sample.draft), replacements: [{
+        path: '/tableBindings', oldSha256: repair.hashDraft(sample.draft.tableBindings), value: sample.bindings
+    }] };
+    return sample;
+}
+
+test('原选择标记位置完整时只补普通表绑定，原正文和选择来源逐字保留', () => {
+    const sample = createMixedMissingBindingsSample();
+    assert.deepEqual(sample.context.targets.map(target => target.path), ['/tableBindings']);
+    assert.equal(sample.context.atomicOperation.kind, 'complete_existing_table_bindings_v1');
+    assert.deepEqual(sample.context.atomicOperation.mutableBindingIndices, []);
+    const updated = applySample(sample);
+    assert.deepEqual(updated.sections, sample.draft.sections);
+    assert.deepEqual(updated.tableBindings[0], sample.draft.tableBindings[0]);
+    const compiled = require('../scripts/lib/reader-tables').compileReaderTableSelections(
+        updated.sections, updated.tableBindings, sample.artifacts);
+    const article = compiled.sections.map(section => section.body).join('\n\n');
+    const bound = deep.bindApiReaderSourceEvidence(article, compiled.tableBindings, [], {
+        sourceText: sample.sourceText, structuredArtifacts: sample.artifacts
+    });
+    assert.equal(bound.tableBindings.length, 3);
+    assert.throws(() => deep.parseApiReaderArticleResult(JSON.stringify(updated), {
+        requiredVersion: 3, requireIntegratedTables: true, requireSourceBindings: true,
+        sourceText: sample.sourceText, structuredArtifacts: sample.artifacts
+    }), /readerTitle|至少|sections|oneSentenceThesis/);
+});
+
+test('混排补绑定不接受旧选择来源变动、错序标记、重复标记和伪造新增来源', () => {
+    const sample = createMixedMissingBindingsSample();
+    const changedSelection = structuredClone(sample.patch);
+    changedSelection.replacements[0].value[0].selection.sourceRows = [0, 99];
+    assert.throws(() => applySample(sample, changedSelection));
+    const fakeBinding = structuredClone(sample.patch);
+    fakeBinding.replacements[0].value[2].cellBindings.pop();
+    const updated = applySample(sample, fakeBinding);
+    const compiled = require('../scripts/lib/reader-tables').compileReaderTableSelections(
+        updated.sections, updated.tableBindings, sample.artifacts);
+    assert.throws(() => deep.bindApiReaderSourceEvidence(compiled.sections[0].body,
+        compiled.tableBindings, [], { sourceText: sample.sourceText, structuredArtifacts: sample.artifacts }));
+    for (const mutate of [
+        draft => { draft.sections[0].body = draft.sections[0].body.replace('[[TABLE_1]]', '[[TABLE_2]]'); },
+        draft => { draft.sections[0].body += '\n\n[[TABLE_1]]'; },
+        draft => { draft.sections[0].body = draft.sections[0].body.replace('[[TABLE_1]]', '正文 [[TABLE_1]]'); }
+    ]) {
+        const invalidDraft = structuredClone(sample.draft);
+        mutate(invalidDraft);
+        const context = repair.buildRepairContext(invalidDraft, sample.context.issues, sample.sourceText, sample.sourceText);
+        assert.notEqual(context.atomicOperation?.kind, 'complete_existing_table_bindings_v1');
+    }
 });

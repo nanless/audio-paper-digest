@@ -502,6 +502,7 @@ function nodeAt(draft, pointer) {
         return draft[pointer.slice(1)];
     }
     if (pointer === '/tableBindings') return draft.tableBindings;
+    if (pointer === '/formulaBindings') return draft.formulaBindings;
     if (pointer === '/figurePlacements') return draft.figurePlacements;
     const match = /^\/(sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(0|[1-9]\d*)(\/body)?$/.exec(pointer);
     if (!match || (match[3] && match[1] !== 'sections')) throw new Error(`Reader patch path is not allowed: ${pointer}`);
@@ -535,6 +536,9 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         }
         if (seen.some(pointer => pointer === item.path || pointer.startsWith(`${item.path}/`)
             || item.path.startsWith(`${pointer}/`))) throw new Error('Reader patch has duplicate or overlapping targets');
+        if (item.path === '/formulaBindings' && options.atomicOperation?.kind !== 'complete_existing_formula_bindings_v1') {
+            throw new Error('整组公式来源记录缺少本轮明确补齐授权');
+        }
         const old = nodeAt(draft, item.path);
         const expectedOldSha256 = hashDraft(old);
         if (item.oldSha256 !== expectedOldSha256) {
@@ -550,7 +554,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         }
         if ((item.path.endsWith('/body') || ['/readerTitle', '/oneSentenceThesis'].includes(item.path))
             && typeof item.value !== 'string') throw new Error('Reader patch text replacement must be a string');
-        if (item.path === '/tableBindings' && !Array.isArray(item.value)) {
+        if (['/tableBindings', '/formulaBindings'].includes(item.path) && !Array.isArray(item.value)) {
             throw new Error('Reader patch tableBindings replacement must be an array');
         }
         if (item.path === '/figurePlacements' && (!Array.isArray(options.availableFigureOrdinals)
@@ -558,7 +562,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             || item.value.length !== 0)) {
             throw new Error('无图清除只允许在本次没有可用像素时清空图绑定');
         }
-        if (item.path !== '/tableBindings' && item.path !== '/figurePlacements' && !item.path.endsWith('/body')
+        if (item.path !== '/tableBindings' && item.path !== '/formulaBindings' && item.path !== '/figurePlacements' && !item.path.endsWith('/body')
             && !['/readerTitle', '/oneSentenceThesis'].includes(item.path)
             && (!item.value || typeof item.value !== 'object' || Array.isArray(item.value))) {
             throw new Error('Reader patch node replacement must be an object');
@@ -617,6 +621,10 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         && (seen.length !== 1 || seen[0] !== '/tableBindings')) {
         throw new Error('已有表格补绑定只能替换已授权的完整tableBindings数组');
     }
+    if (operation?.kind === 'complete_existing_formula_bindings_v1'
+        && (seen.length !== 1 || seen[0] !== '/formulaBindings')) {
+        throw new Error('已有公式补来源只允许替换本轮授权的公式来源数组');
+    }
     const merged = structuredClone(draft);
     for (const item of patch.replacements) {
         const parts = item.path.slice(1).split('/');
@@ -629,6 +637,43 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         && merged.sections.some(section => /\[\[FIGURE_\d+\]\]/.test(String(section?.body || '')))) {
         throw new Error('无图清除必须同时移除全部正文图标记，不得只清空图绑定');
     }
+    if (operation?.kind === 'complete_reindexed_table_bindings_v1') {
+        const expected = buildReindexedTableBindingsOperation(draft, [{ code: TABLE_BINDING_ORDER_ISSUE_CODE, path: null, message: '正文表格与来源记录不能一一对应' }]);
+        if (!expected || hashDraft(expected) !== hashDraft(operation)
+            || seen.length !== operation.requiredReplacementPaths.length
+            || operation.requiredReplacementPaths.some(pointer => !seen.includes(pointer))
+            || merged.tableBindings.length !== operation.expectedTableCount
+            || merged.tableBindings.some((binding, index) => binding?.tableIndex !== index + 1)
+            || operation.missingBindingIndices.some(index => merged.tableBindings[index]?.selection
+                || !['artifact_table', 'source_quotes'].includes(merged.tableBindings[index]?.sourceType))) {
+            throw new Error('重编号补绑定只能使用本轮完整且精确的受控范围');
+        }
+        for (const move of operation.bindingMoves) {
+            const oldBinding = draft.tableBindings[move.oldIndex];
+            const expectedBinding = oldBinding.selection
+                ? { ...oldBinding, tableIndex: move.newIndex + 1 } : oldBinding;
+            if (hashDraft(merged.tableBindings[move.newIndex]) !== hashDraft(expectedBinding)) {
+                throw new Error('重编号补绑定不得删改任何已有来源或选择内容');
+            }
+            if (oldBinding.selection) require('./reader-tables').renderReaderTableSelection(oldBinding, options.structuredArtifacts);
+        }
+        for (let index = 0; index < draft.sections.length; index += 1) {
+            const changes = operation.markerChanges.filter(change => change.sectionIndex === index);
+            const expectedBody = String(draft.sections[index].body || '').replace(/\[\[TABLE_\d+\]\]/g,
+                marker => changes.find(change => change.oldMarker === marker)?.newMarker || marker);
+            if (merged.sections[index].body !== expectedBody) throw new Error('重编号只可改原有标记编号，不得改正文或原表');
+        }
+    }
+    if (operation?.kind === 'complete_existing_formula_bindings_v1') {
+        const expected = buildMissingFormulaBindingsOperation(draft, [{ message: 'formulaBindings 未覆盖正文公式占位符' }]);
+        const bindings = merged.formulaBindings;
+        if (!expected || hashDraft(expected) !== hashDraft(operation)
+            || bindings.length !== operation.expectedBindingCount
+            || draft.formulaBindings.some((binding, index) => hashDraft(binding) !== hashDraft(bindings[index]))
+            || operation.missingBindings.some((binding, index) => hashDraft(binding) !== hashDraft(bindings[draft.formulaBindings.length + index]))) {
+            throw new Error('补公式来源不能改旧记录、删公式或增加未声明的公式');
+        }
+    }
     if (operation?.kind === 'complete_existing_table_bindings_v1') {
         const tables = locateReaderDraftTables(draft);
         const oldBindings = draft.tableBindings;
@@ -637,10 +682,10 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         if (operation.expectedTableCount !== tables.length
             || operation.existingBindingCount !== oldBindings.length
             || tables.length <= oldBindings.length || tables.length - oldBindings.length > 4
-            || tables.some(table => !table.table || table.marker)
+            || !hasStableExistingTableMarkers(draft, tables, oldBindings)
             || bindings.length !== tables.length
             || bindings.some((binding, index) => binding?.tableIndex !== index + 1)
-            || oldBindings.some((binding, index) => !mutable.has(index)
+            || oldBindings.some((binding, index) => (binding.selection || !mutable.has(index))
                 && hashDraft(binding) !== hashDraft(bindings[index]))) {
             throw new Error('已有表格补绑定不能删表、改动未授权旧绑定或改变绑定缺口');
         }
@@ -991,18 +1036,81 @@ function collectTableBindingIssues(draft, options = {}) {
     return issues;
 }
 
+// 已有选择标记必须唯一、独占一段且仍处于原绑定对应的位置，不能借补绑定重新排列它。
+function hasStableExistingTableMarkers(draft, tables, bindings) {
+    const markers = tables.filter(table => table.marker);
+    const rawMarkers = draft.sections.flatMap(section => String(section.body || '').match(/\[\[TABLE_[^\]]*\]\]/g) || []);
+    if (rawMarkers.length !== markers.length || new Set(rawMarkers).size !== markers.length) return false;
+    return tables.every((table, index) => table.marker
+        ? table.marker === `[[TABLE_${index + 1}]]` && Boolean(bindings[index]?.selection)
+            && String(draft.sections[table.sectionIndex].body || '').split(/\n\s*\n/)
+                .filter(block => block.trim() === table.marker).length === 1
+        : Boolean(table.table) && !bindings[index]?.selection)
+        && bindings.every((binding, index) => !binding.selection || tables[index]?.marker === `[[TABLE_${index + 1}]]`);
+}
+
 // 只为已经写出的普通表补足缺失绑定；正文和未被诊断的旧绑定不能改。
+function buildReindexedTableBindingsOperation(draft, issues) {
+    if (!issues.some(issue => classifyTableBindingOrderIssue(issue).actionable)) return null;
+    const bindings = draft.tableBindings;
+    const tables = locateReaderDraftTables(draft);
+    if (!Array.isArray(bindings) || !bindings.length || tables.length <= bindings.length
+        || tables.length - bindings.length > 4
+        || bindings.some((binding, index) => binding?.tableIndex !== index + 1)) return null;
+    const markers = tables.filter(table => table.marker);
+    const rawMarkers = draft.sections.flatMap(section => String(section.body || '').match(/\[\[TABLE_[^\]]*\]\]/g) || []);
+    if (!markers.length || rawMarkers.length !== markers.length
+        || new Set(rawMarkers).size !== markers.length) return null;
+    const bindingMoves = [];
+    for (let index = 0; index < bindings.length; index += 1) {
+        const binding = bindings[index];
+        if (!binding.selection) {
+            if (!tables[index]?.table) return null;
+            bindingMoves.push({ oldIndex: index, newIndex: index });
+            continue;
+        }
+        const matching = tables.flatMap((table, tableIndex) => table.marker === `[[TABLE_${index + 1}]]`
+            ? [{ table, tableIndex }] : []);
+        if (matching.length !== 1) return null;
+        const { table, tableIndex } = matching[0];
+        if (!String(draft.sections[table.sectionIndex].body || '').split(/\n\s*\n/)
+            .some(block => block.trim() === table.marker)) return null;
+        bindingMoves.push({ oldIndex: index, newIndex: tableIndex });
+    }
+    if (markers.some(table => !bindings[table.markerIndex - 1]?.selection)
+        || new Set(bindingMoves.map(move => move.newIndex)).size !== bindings.length
+        || bindingMoves.every(move => move.oldIndex === move.newIndex)) return null;
+    const missingBindingIndices = tables.flatMap((table, index) =>
+        bindingMoves.some(move => move.newIndex === index) ? [] : [index]);
+    if (missingBindingIndices.some(index => !tables[index].table)) return null;
+    const markerChanges = markers.map(table => ({
+        sectionIndex: table.sectionIndex,
+        oldMarker: table.marker,
+        newMarker: `[[TABLE_${tables.indexOf(table) + 1}]]`
+    })).filter(change => change.oldMarker !== change.newMarker);
+    const bodyPaths = [...new Set(markerChanges.map(change => `/sections/${change.sectionIndex}/body`))];
+    if (bodyPaths.length > 7) return null;
+    return { kind: 'complete_reindexed_table_bindings_v1', expectedTableCount: tables.length,
+        bindingMoves, missingBindingIndices, markerChanges,
+        requiredReplacementPaths: ['/tableBindings', ...bodyPaths], requiredPostconditions: [
+            '本轮特别允许同时补齐整组表格来源记录并按真实正文表序重编号原有唯一选择标记',
+            '正文仅可替换列出的标记编号，所有原表、数字、解释及其余正文逐字保留',
+            '全部旧来源记录原样保留；选择记录只改变外层tableIndex，selection内容不得改变',
+            '缺口只能对应已经写出的普通表，新增绑定仍须完整DOM单元格或逐字原句核验'
+        ] };
+}
+
 function buildMissingTableBindingsOperation(draft, issues) {
     if (!issues.some(issue => classifyTableBindingOrderIssue(issue).actionable)) return null;
     const tables = locateReaderDraftTables(draft);
     const bindings = draft.tableBindings;
     if (!Array.isArray(bindings) || !bindings.length || tables.length <= bindings.length
-        || tables.length - bindings.length > 4 || tables.some(table => !table.table || table.marker)
+        || tables.length - bindings.length > 4 || !hasStableExistingTableMarkers(draft, tables, bindings)
         || bindings.some((binding, index) => binding?.tableIndex !== index + 1)) return null;
     const mutableBindingIndices = [...new Set(issues.filter(issue => issue?.diagnosticOnly !== true
         && classifyTableBindingOrderIssue(issue).actionable)
         .map(issue => /^\/tableBindings\/(0|[1-9]\d*)$/.exec(String(issue.path || ''))?.[1])
-        .filter(index => index !== undefined).map(Number))].filter(index => index < bindings.length);
+        .filter(index => index !== undefined).map(Number))].filter(index => index < bindings.length && !bindings[index]?.selection);
     return { kind: 'complete_existing_table_bindings_v1', expectedTableCount: tables.length,
         existingBindingCount: bindings.length, mutableBindingIndices,
         requiredReplacementPaths: ['/tableBindings'], requiredPostconditions: [
@@ -1177,7 +1285,41 @@ function removeUnavailableFigureProse(body) {
     return String(body).replace(/^[ \t]*\[\[FIGURE_\d+\]\][ \t]*(?:\r?\n|$)/gm, '');
 }
 
+function buildMissingFormulaBindingsOperation(draft, issues) {
+    if (!issues.some(issue => issue?.diagnosticOnly !== true
+        && /formulaBindings 未覆盖正文公式占位符/.test(String(issue?.message || '')))) return null;
+    const bindings = draft.formulaBindings;
+    if (!Array.isArray(bindings) || !bindings.length) return null;
+    const markers = [];
+    for (const section of draft.sections || []) {
+        for (const match of String(section.body || '').matchAll(/\[\[FORMULA_(\d+)\]\]/g)) {
+            if (!String(section.body).split(/\n\s*\n/).some(block => block.trim() === match[0])) return null;
+            markers.push({ formulaOrdinal: Number(match[1]), targetKind: section.kind, marker: match[0] });
+        }
+    }
+    if (new Set(markers.map(item => item.marker)).size !== markers.length
+        || bindings.some(binding => Object.keys(binding).sort().join(',') !== 'formulaOrdinal,marker,targetKind'
+            || !markers.some(marker => hashDraft(marker) === hashDraft(binding)))
+        || new Set(bindings.map(item => item.marker)).size !== bindings.length) return null;
+    const missingBindings = markers.filter(marker => !bindings.some(binding => binding.marker === marker.marker));
+    if (!missingBindings.length || missingBindings.length > 4) return null;
+    return { kind: 'complete_existing_formula_bindings_v1', expectedBindingCount: markers.length,
+        missingBindings, requiredReplacementPaths: ['/formulaBindings'], requiredPostconditions: [
+            '本轮特别允许补齐整组公式来源记录（formulaBindings），其余数组数量限制保持不变',
+            '只追加正文已有独立且唯一公式标记对应的记录，旧记录和全部正文逐字保留',
+            '公式编号必须属于请求列出的 FORMULA_ORDINALS_AVAILABLE，全部来源仍经完整解析器核验'
+        ] };
+}
+
 function buildRepairTargets(draft, issues) {
+    const reindexedOperation = buildReindexedTableBindingsOperation(draft, issues);
+    if (reindexedOperation) return reindexedOperation.requiredReplacementPaths.map(pointer => ({
+        path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
+        repairInstruction: reindexedOperation.requiredPostconditions.join('；')
+    }));
+    const formulaOperation = buildMissingFormulaBindingsOperation(draft, issues);
+    if (formulaOperation) return [{ path: '/formulaBindings', oldSha256: hashDraft(draft.formulaBindings),
+        value: draft.formulaBindings, repairInstruction: formulaOperation.requiredPostconditions.join('；') }];
     const paths = new Set();
     const add = pointer => {
         try {
@@ -1570,7 +1712,9 @@ function normalizeUnavailableReaderFigures(draft, availableFigureOrdinals) {
 
 function buildRepairContext(draft, issues, sourceEvidence, sourceText = '') {
     const targets = buildRepairTargets(draft, issues);
-    const requestedOperation = buildMissingTableBindingsOperation(draft, issues)
+    const requestedOperation = buildReindexedTableBindingsOperation(draft, issues)
+        || buildMissingFormulaBindingsOperation(draft, issues)
+        || buildMissingTableBindingsOperation(draft, issues)
         || buildUniqueMissingQuoteTableOperation(draft, issues)
         || buildMissingResultTableOperation(draft, issues)
         || buildMissingNarrativeTableOperation(draft, issues);
