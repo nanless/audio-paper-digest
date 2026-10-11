@@ -14,17 +14,17 @@ const parser = require('../scripts/lib/reader-author-parser.js');
 const fresh = require('../scripts/lib/fresh-analysis-context.js');
 const direct = require('../scripts/lib/direct-rewrite-analysis-context.js');
 const expected = ['Alice Brown', 'Bob White', 'Carol Green'].map((name, i) => ({ name, affiliations: ['University ' + ['A','B','C'][i]] }));
-async function sealed(t, noAuthors = false) {
+async function sealed(t, noAuthors = false, captureSet = expected) {
     const folder = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'sealed-authors-'));
     const previous = Config.FILES.dailyFreshSourceRunsDir;
     Config.FILES.dailyFreshSourceRunsDir = path.join(folder, 'daily-runs');
     t.after(() => { Config.FILES.dailyFreshSourceRunsDir = previous; fs.rmSync(folder, { recursive: true, force: true }); });
     const id = '2610.12345';
-    const html = '<html><head>' + (noAuthors ? '' : expected.map(author => '<meta name="citation_author" content="' + author.name + '"><meta name="citation_author_institution" content="' + author.affiliations[0] + '">').join('')) + '</head><body><section>' + 'Methods, controlled observations, experiments and limitations. '.repeat(160) + '</section></body></html>';
+    const html = '<html><head>' + (noAuthors ? '' : captureSet.map(author => '<meta name="citation_author" content="' + author.name + '"><meta name="citation_author_institution" content="' + author.affiliations[0] + '">').join('')) + '</head><body><section>' + 'Methods, controlled observations, experiments and limitations. '.repeat(160) + '</section></body></html>';
     const text = cheerio.load(html).text();
     const structuredArtifacts = deep.bindStructuredArtifactsToText(deep.parseArxivStructuredArtifactsFromHtml(html, id + 'v1', id), text);
     const readerAuthors = noAuthors ? null : parser.parseArxivReaderAuthors(cheerio.load(html));
-    if (!noAuthors) assert.deepEqual(readerAuthors.authors, expected);
+    if (!noAuthors) assert.deepEqual(readerAuthors.authors, captureSet);
     const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-10-11', batchId: 'sealed-authors-test', papers: [{ arxivId: id }] });
     await daily.captureDailyFreshSources(plan, { concurrency: 1, capture: options => capturer.captureFreshArxivRewriteSource(options, {
         fetchText: async () => ({ title: 'Official title', source: 'html', text, sourceId: id + 'v1', url: 'https://arxiv.org/html/' + id + 'v1', structuredArtifacts, readerAuthors }),
@@ -76,4 +76,29 @@ test('正常每日分析的直接来源克隆在已核验作用域内保持作�
     await daily.withDailyFreshAnalysisContext(plan, () => analyze({ arxivId: id }));
     assert.equal(calls, 1);
     assert.throws(() => fresh.withVerifiedBundleReaderAuthorSource(structuredClone(source), () => {}));
+});
+
+ test('封存作者集合污染时正常每日直接来源全部机构降级，保留原物理凭证', async t => {
+    const metadata = [...expected.map(author => author.name), 'Dave Black'];
+    const captured = [...expected, { name: 'Dave Black', affiliations: ['University D'] }, { name: 'Aalto University', affiliations: ['University E'] }];
+    const { plan, id, runtimePath } = await sealed(t, false, captured);
+    const before = fs.readFileSync(runtimePath);
+    let calls = 0;
+    const analyze = daily.createDailyAnalyzeFn(plan, { analyze: async paper => {
+        calls++;
+        const source = direct.getDirectRewriteSource(paper);
+        const verified = parser.verifiedReaderAuthorDetails(source);
+        assert.equal(verified.readerAuthors.authors.length, 5);
+        const authors = parser.resolveApiReaderAuthors(paper, verified);
+        assert.deepEqual(authors.authors.map(author => author.name), metadata);
+        for (const author of authors.identity.authors) {
+            assert.match(author.affiliations[0], /未.*可靠/);
+            assert.equal(author.nameBinding.sourceKind, 'paper_metadata');
+            assert.equal(author.affiliationBindings[0].sourceKind, 'explicit_unavailable');
+        }
+        return paper;
+    } });
+    await daily.withDailyFreshAnalysisContext(plan, () => analyze({ arxivId: id, authors: metadata }));
+    assert.equal(calls, 1);
+    assert.deepEqual(fs.readFileSync(runtimePath), before);
 });

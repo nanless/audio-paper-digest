@@ -29,11 +29,12 @@ test('不同姓名但作者数量相同，不把DOM作者机构按位置移给�
     const result = resolveApiReaderAuthors({ authors: ['Charlie Green', 'Bob White'] }, details);
     assert.deepEqual(result.authors, [
         { name: 'Charlie Green', affiliations: [unknown] },
-        { name: 'Bob White', affiliations: ['University B'] }
+        { name: 'Bob White', affiliations: [unknown] }
     ]);
     assert.equal(result.identity.authors[0].nameBinding.sourceKind, 'paper_metadata');
     assert.equal(result.identity.authors[0].affiliationBindings[0].sourceKind, 'explicit_unavailable');
-    assert.equal(result.identity.authors[1].affiliationBindings[0].association, 'direct_author');
+    assert.equal(result.identity.authors[1].nameBinding.sourceKind, 'paper_metadata');
+    assert.equal(result.identity.authors[1].affiliationBindings[0].sourceKind, 'explicit_unavailable');
 });
 
 test('DOM作者与citation元数据顺序不同，机构仍按明确姓名对应', () => {

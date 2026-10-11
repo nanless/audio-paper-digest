@@ -2965,12 +2965,14 @@ primary_task_tag: #音视频生成
         );
         assert.deepStrictEqual(resolvedVocalAuthors.authors.map(author => author.affiliations), [
             ['机构信息未在 arXiv HTML 中可靠披露'],
-            ['Besimple AI, San Mateo, CA'],
+            ['机构信息未在 arXiv HTML 中可靠披露'],
             ['机构信息未在 arXiv HTML 中可靠披露'],
             ['机构信息未在 arXiv HTML 中可靠披露'],
             ['机构信息未在 arXiv HTML 中可靠披露'],
             ['机构信息未在 arXiv HTML 中可靠披露']
         ]);
+        assert.ok(resolvedVocalAuthors.identity.authors.every(author => author.nameBinding.sourceKind === 'paper_metadata'
+            && author.affiliationBindings.every(binding => binding.sourceKind === 'explicit_unavailable')));
         const underwaterHtml = institution => (
             '<h1 class="ltx_title ltx_title_document">Title'
             + '<span class="ltx_pubnote ltx_role_thanks"><span class="ltx_note_name">Thanks: </span>'
@@ -3076,7 +3078,7 @@ primary_task_tag: #音视频生成
             }
         );
         assert.deepStrictEqual(completedAuthors.authors, [
-            { name: '戊', affiliations: ['机构 D'] },
+            { name: '戊', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] },
             { name: '己', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] }
         ]);
         const noAffiliationUnionLeak = resolveApiReaderAuthors(
@@ -3093,8 +3095,8 @@ primary_task_tag: #音视频生成
             }
         );
         assert.deepStrictEqual(noAffiliationUnionLeak.authors, [
-            { name: 'Author One', affiliations: ['Institute A'] },
-            { name: 'Author Two', affiliations: ['Institute B'] },
+            { name: 'Author One', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] },
+            { name: 'Author Two', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] },
             { name: 'Author Three', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] }
         ]);
         const png = Buffer.from(
@@ -5680,16 +5682,16 @@ has_dataset: 否
             legacyPayload.promptTemplateSha256,
             deep.runtimePromptTemplateSha256('prompts/api-reader-article.md')
         );
-        // 新请求使用 v3；旧记录继续按其声明版本计算指纹。
+        // 新请求使用 v4；旧记录继续按其声明版本计算指纹。
         const freshPayload = capture({ version: 1, stages: {} });
-        assert.strictEqual(freshPayload.promptTextContract, 'analysis-prompt-text-v3');
+        assert.strictEqual(freshPayload.promptTextContract, 'analysis-prompt-text-v4');
         assert.strictEqual(
             freshPayload.promptTemplateSha256,
-            deep.runtimePromptTemplateSha256('prompts/api-reader-article-v3.md')
+            deep.runtimePromptTemplateSha256('prompts/api-reader-article-v4.md')
         );
         assert.strictEqual(
             deep.currentTextStagePromptPath('apiReaderArticle'),
-            'prompts/api-reader-article-v3.md'
+            'prompts/api-reader-article-v4.md'
         );
         assert.strictEqual(
             deep.promptFilePathForContract('apiReaderArticle', deep.ANALYSIS_PROMPT_TEXT_V1_CONTRACT),

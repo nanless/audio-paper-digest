@@ -292,6 +292,19 @@ function resolveApiReaderAuthors(paper, sourceDetails) {
     let names = rawAuthors.map(author => (
         typeof author === 'string' ? author : author?.name
     )).map(normalizeName).filter(Boolean);
+    // 解析出来的姓名集合不匹配时，不能继续借用其中任何机构关联。
+    // 原封存对象保留用于诊断；只在本次解析中退回正式元数据姓名和明确不可得状态。
+    if (names.length > 0 && Array.isArray(parsed?.authors) && parsed.authors.length > 0) {
+        const expected = names.map(readerIdentityKey).sort();
+        const captured = parsed.authors.map(author => readerIdentityKey(normalizeName(author?.name))).sort();
+        if (expected.length !== captured.length
+            || new Set(expected).size !== expected.length
+            || new Set(captured).size !== captured.length
+            || expected.some((name, index) => name !== captured[index])) {
+            console.warn(`[作者来源] ${paper?.arxivId || ''} 姓名集合与论文元数据不一致；本次机构信息标为未能可靠取得，原封存记录保留。`);
+            return resolveApiReaderAuthors(paper, { ...sourceDetails, readerAuthors: null });
+        }
+    }
     const unavailableAffiliation = sourceDetails?.source === 'conference_pdf_text'
         ? '机构信息未能从会议 PDF 纯文本可靠映射'
         : sourceDetails?.analysisSource === 'pdf' || sourceDetails?.source === 'pdf'

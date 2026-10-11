@@ -243,7 +243,7 @@ const TABLE_NUMERIC_CELL_RE = /(?:^|[^A-Za-z])[-+]?\d(?:[\d,]*)(?:\.\d+)?(?:\s*(
 // 第一列也可能描述训练条件而不是指标。这里显式列出来，
 // 好让“训练损失 × evaluation metrics”这类表格按对比表处理，
 // 又不硬给条件列加上 ↑/↓ 标记。
-const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置)$/i;
+const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源)$/i;
 function isTableIdentifierHeader(value) {
     const normalized = String(value || '').trim();
     if (TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE.test(normalized)) return true;
@@ -1141,7 +1141,7 @@ function stripDuplicatedLineFootnoteMarkers(text) {
 }
 
 function coreSummaryQuantitativeResultState(text) {
-    const candidates = String(text || '').split(/[。！？!?\n]/).map(rawSentence => {
+    const candidates = String(text || '').split(/[。！？!?\n]/).map((rawSentence, sentenceIndex) => {
         const sentence = stripCoreSummaryNonResultNumerals(rawSentence.trim());
         // CLAP 既可能指指标，也可能指对照模型。写明 model/baseline
         // 不能顶替缺失的结果指标。
@@ -1172,6 +1172,7 @@ function coreSummaryQuantitativeResultState(text) {
         ].filter(Boolean);
         return {
             complete: Boolean(sentence) && missing.length === 0,
+            sentenceNumber: sentenceIndex + 1,
             missing,
             hasNumbers: numbers.length > 0,
             signalCount: Number(hasSetting) + Number(hasMetric) + Number(numbers.length > 0)
@@ -1179,9 +1180,11 @@ function coreSummaryQuantitativeResultState(text) {
         };
     });
     if (candidates.some(candidate => candidate.complete)) return { complete: true, missing: [] };
+    const candidateIssues = candidates.filter(candidate => candidate.hasNumbers)
+        .map(candidate => ({ sentenceNumber: candidate.sentenceNumber, missing: candidate.missing }));
     const best = candidates.sort((left, right) => right.signalCount - left.signalCount
         || Number(right.hasNumbers) - Number(left.hasNumbers))[0];
-    return { complete: false, missing: best?.missing || [
+    return { complete: false, candidateIssues, missing: best?.missing || [
         '评测设置', '指标名称', '数值', '比较方向', '比较对象'
     ] };
 }
@@ -1257,7 +1260,11 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     const completeQuantitativeResult = quantitativeResultState.complete;
     if (sourceHasQuantitativeEvidence === true && !completeQuantitativeResult) {
         issues.push('已有证据包含关键定量结果，但摘要没有写清比较对象、评测设置、指标、数值与方向'
-            + `（最接近的同句量化候选缺少：${quantitativeResultState.missing.join('、')}）`);
+            + `（最接近的同句量化候选缺少：${quantitativeResultState.missing.join('、')}）`
+            + (quantitativeResultState.candidateIssues.length
+                ? `；含数值的句子还须逐句核对：${quantitativeResultState.candidateIssues.map(candidate =>
+                    `第${candidate.sentenceNumber}句缺少${candidate.missing.join('、')}`).join('；')}。这些句子不一定都是结果，不得为运行参数编造指标或结论`
+                : ''));
     } else if (sourceHasQuantitativeEvidence === false
         && !summary.includes(CORE_SUMMARY_RESULT_UNAVAILABLE)) {
         issues.push(`原文无可核定量结果时必须明确写“${CORE_SUMMARY_RESULT_UNAVAILABLE}”`);

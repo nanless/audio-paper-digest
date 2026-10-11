@@ -1008,6 +1008,14 @@ function buildRepairTargets(draft, issues) {
     const ambiguousTableOrderIssue = blockingIssues.find(issue => (
         classifyTableBindingOrderIssue(issue).actionable
     ));
+    const missingResultTableOperation = buildMissingResultTableOperation(draft, issues);
+    if (ambiguousTableOrderIssue && missingResultTableOperation) {
+        // 表格数量尚未对应时，补表或搬表指令与允许修改的路径必须一致。
+        // 不能先授权最后一个实验小节，再要求模型修改第一个结果小节。
+        missingResultTableOperation.requiredReplacementPaths.forEach(add);
+        return [...paths].map(pointer => ({ path: pointer,
+            oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
+    }
     if (ambiguousTableOrderIssue) {
         const tables = locateReaderDraftTables(draft);
         const bindings = Array.isArray(draft.tableBindings) ? draft.tableBindings : [];
@@ -1062,7 +1070,6 @@ function buildRepairTargets(draft, issues) {
         && (issue?.code === 'reader_result_table_missing'
             || /^读者文章主结果表覆盖不足/.test(String(issue?.message || '')))
     ));
-    const missingResultTableOperation = buildMissingResultTableOperation(draft, issues);
     if (missingResultTableIssue && missingResultTableOperation) {
         if (missingResultTableOperation.kind === 'add_result_table_v1') {
             // 这个候选声明了绑定，却没有对应的表。只允许改目标正文和那个绑定；
@@ -1233,8 +1240,13 @@ function buildRepairTargets(draft, issues) {
 
 function buildRepairContext(draft, issues, sourceEvidence, sourceText = '') {
     const targets = buildRepairTargets(draft, issues);
-    const atomicOperation = buildMissingResultTableOperation(draft, issues)
+    const requestedOperation = buildMissingResultTableOperation(draft, issues)
         || buildMissingNarrativeTableOperation(draft, issues);
+    // 当前先修术语解释等其他问题时，不夹带一条没有授权修改范围的表格指令。
+    const atomicOperation = requestedOperation
+        && requestedOperation.requiredReplacementPaths.every(pointer => (
+            targets.some(target => target.path === pointer)
+        )) ? requestedOperation : null;
     const targetText = JSON.stringify(targets);
     const figureOrdinals = new Set();
     for (const match of targetText.matchAll(/\[\[FIGURE_(\d+)\]\]/g)) figureOrdinals.add(Number(match[1]));
