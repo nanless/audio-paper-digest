@@ -1,4 +1,6 @@
 'use strict';
+
+require('./core-diagnostics-test-isolation')();
 const test=require('node:test');
 const assert=require('node:assert/strict');
 const deep=require('../scripts/deep-analyzer.js');

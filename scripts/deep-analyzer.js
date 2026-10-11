@@ -5725,8 +5725,27 @@ function parseApiReaderArticleResult(raw, options = {}) {
     if (!Array.isArray(value.sections)
         || value.sections.length < minimumSectionCount
         || value.sections.length > maximumSectionCount) {
+        const sectionCountNotice = Array.isArray(value.sections) ? (() => {
+            const actualCount = value.sections.length;
+            const counts = new Map();
+            const allowedKinds = new Set(['background', 'related_work', 'problem', 'method_overview',
+                'component', 'training', 'experiment_setup', 'result', 'ablation', 'limitation',
+                'reproduction', 'synthesis']);
+            for (const section of value.sections) {
+                const kind = allowedKinds.has(section?.kind) ? section.kind : '未识别类型';
+                counts.set(kind, (counts.get(kind) || 0) + 1);
+            }
+            const adjustment = actualCount > maximumSectionCount
+                ? `至少减少 ${actualCount - maximumSectionCount} 节：可把同类内容合并为自然段，`
+                    + '不要求把同一种类型全部合并；保留证据、数字、单位、比较条件、来源记录和限制'
+                : `至少增加 ${minimumSectionCount - actualCount} 节：补齐有来源的实质解释，`
+                    + '不得拆成空节或重复段落凑数';
+            return `；实际 ${actualCount} 节；${adjustment}。当前类型数量：`
+                + [...counts].map(([kind, count]) => `${kind}=${count}`).join('、');
+        })() : '';
         throw new Error(
             `读者文章 sections 必须包含 ${minimumSectionCount}-${maximumSectionCount} 个小节`
+            + sectionCountNotice
         );
     }
     if (readerCapabilityPolicy) {
@@ -14736,7 +14755,8 @@ async function analyzePaperDeepInternal(paper) {
                     paper,
                     analysis,
                     rawTextForAnalysis,
-                    coreSummaryRepairStage.evidenceContext
+                    coreSummaryRepairStage.evidenceContext,
+                    { diagnosticStage: coreSummaryRepairStage }
                 );
                 changed = fixed !== analysis;
                 analysis = fixed;
@@ -16310,22 +16330,63 @@ async function repairCoreSummarySection(
             existingSummary: candidateSummary,
             textForAnalysis: evidenceContext
         });
-        const raw = String(await repairCallModel([{ role: 'user', content: prompt }],
-            TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens,
-            { usageContext: { stage: 'coreSummaryRepair' },
-                ...(resolveRepairRequestPolicy('coreSummaryRepair')
-                    ? { repairThinkingMode: resolveRepairRequestPolicy('coreSummaryRepair').thinkingMode } : {}) }) || '').trim();
+        const diagnosticApi = require('./lib/reader-request-diagnostics');
+        const diagnosticStage = options.diagnosticStage || {};
+        const diagnosticIdentity = {
+            paperId: getPaperArxivId(paper),
+            sourceIdentity: require('./lib/fresh-analysis-context').freshAnalysisIdentity(getPaperArxivId(paper)),
+            sourceTextSha256: crypto.createHash('sha256').update(String(sourceText)).digest('hex'),
+            inputAnalysisSha256: crypto.createHash('sha256').update(original).digest('hex'),
+            evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
+            stageFingerprint: diagnosticStage.fingerprint || null,
+            maxTokens: TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens,
+            repairRequestPolicy: resolveRepairRequestPolicy('coreSummaryRepair') || null,
+            promptTextContract: diagnosticStage.promptTextContract || currentPromptTextContract('coreSummaryRepair')
+        };
+        const diagnosticPaperId = getPaperArxivId(paper).replace(/v\d+$/, '');
+        if (!/^\d{4}\.\d{4,5}$/.test(diagnosticPaperId)) throw contractRejectedError('摘要修复记录需要规范论文身份');
+        const recordRoot = path.join(require('./config.js').FILES.analysisRepairAttemptsDir, diagnosticPaperId);
+        const diagnostic = diagnosticApi.beginCoreSummaryDiagnostic(recordRoot, {
+            identity: diagnosticIdentity, attempt, prompt, inputAnalysis: original,
+            sourceText, evidenceText: evidenceContext, candidateSummary,
+            maxTokens: TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens,
+            repairRequestPolicy: resolveRepairRequestPolicy('coreSummaryRepair') || null
+        });
+        let rawResponse;
+        try {
+            rawResponse = String(await repairCallModel([{ role: 'user', content: prompt }],
+                TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens,
+                { usageContext: { stage: 'coreSummaryRepair' },
+                    ...(resolveRepairRequestPolicy('coreSummaryRepair')
+                        ? { repairThinkingMode: resolveRepairRequestPolicy('coreSummaryRepair').thinkingMode } : {}) }) || '');
+        } catch (error) {
+            diagnosticApi.saveCoreSummaryDisposition(diagnostic, {
+                status: 'request_failed', error: { code: error.code || null, message: error.message }
+            });
+            throw error;
+        }
+        diagnosticApi.saveCoreSummaryResponse(diagnostic, rawResponse);
+        const raw = rawResponse.trim();
         const match = raw.match(/^##\s*核心摘要[：:\s]*\n([\s\S]+)$/);
         if (!match || /^#{1,6}\s/m.test(match[1])) {
             feedback = '输出必须且只能包含一节 ## 核心摘要，不得包含其他标题。';
+            diagnosticApi.saveCoreSummaryDisposition(diagnostic, { status: 'rejected', error: feedback, outputTextSha256: crypto.createHash('sha256').update(rawResponse).digest('hex') });
             continue;
         }
         candidateSummary = match[1];
         const updated = mergeSectionByTitle(original, '核心摘要', match[1]);
         if (sectionExteriorBytes(updated, '核心摘要') !== originalExterior) {
+            diagnosticApi.saveCoreSummaryDisposition(diagnostic, { status: 'rejected',
+                error: '核心摘要局部修复改动了其他一级章节的内容。',
+                outputTextSha256: crypto.createHash('sha256').update(rawResponse).digest('hex') });
             throw contractRejectedError('核心摘要局部修复改动了其他一级章节的内容。');
         }
         issue = getCoreSummaryDetailIssue(updated, { sourceText });
+        diagnosticApi.saveCoreSummaryDisposition(diagnostic, {
+            status: issue ? 'rejected' : 'validated', error: issue || null,
+            outputTextSha256: crypto.createHash('sha256').update(rawResponse).digest('hex'),
+            candidateSummarySha256: crypto.createHash('sha256').update(candidateSummary).digest('hex')
+        });
         if (!issue) return updated;
         console.warn(`    [deep] ⚠️  本次核心摘要局部修复仍未通过校验（${attempt}/3）：${issue}`);
         feedback = issue;

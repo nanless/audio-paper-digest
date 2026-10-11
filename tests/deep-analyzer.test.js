@@ -1,3 +1,4 @@
+require('./core-diagnostics-test-isolation')();
 const { describe, it, before } = require('node:test');
 const assert = require('node:assert');
 const crypto = require('node:crypto');

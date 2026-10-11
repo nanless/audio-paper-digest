@@ -1,5 +1,7 @@
 'use strict';
 
+require('./core-diagnostics-test-isolation')();
+
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const Config = require('../scripts/config.js');

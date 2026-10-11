@@ -273,6 +273,7 @@ const FILES = {
     // 绝不和日更 current/ 一起归档。
     paperSourceAuthorityDir: path.join(DATA_DIR, 'runtime', 'paper-source-authorities'),
     apiReaderAttemptsDir: path.join(DATA_DIR, 'runtime', 'reader-attempts'),
+    analysisRepairAttemptsDir: path.join(DATA_DIR, 'runtime', 'analysis-repair-attempts'),
     papers: path.join(CURRENT_DIR, 'papers.json'),
     papersLegacy: path.join(DATA_DIR, 'papers.json'),
     rawCandidates: path.join(CURRENT_DIR, 'raw-candidates.json'),
