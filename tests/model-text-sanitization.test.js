@@ -43,7 +43,8 @@ test('旧文本阶段仅在真实合法非 BMP 输入时失效，恢复保留前
         if (!affected) {
             const missing = { analysisCheckpoint: text, analysisStageCheckpoints: { demoLinkScan: text } };
             const incomplete = { version: 1, stages: { revision: { status: 'complete', fingerprint: oldFingerprint } } };
-            assert.equal(deep.prepareTextRecoveryStage(missing, incomplete, 'revision', text, source).invalidated, true);
+            assert.equal(deep.prepareTextRecoveryStage(missing, incomplete, 'revision', text, source).invalidated,
+                Boolean(deep.resolveAuxiliaryRequestPolicy('revision')));
         }
     }
 });
