@@ -1319,7 +1319,8 @@ test('传输失败保留最新草稿，来源正文改变后另存一份候选',
         }
     }), /source-b interruption/);
     assert.equal(seenStage, 'apiReaderArticle');
-    assert.equal(fs.readdirSync(directory).length, 2);
+    assert.equal(fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).length, 2);
+    assert.equal(fs.statSync(path.join(directory, 'request-diagnostics')).isDirectory(), true);
     assert.equal(fs.readFileSync(path.join(directory, firstFilename), 'utf8'), JSON.stringify(envelope));
 });
 

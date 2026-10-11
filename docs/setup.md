@@ -98,6 +98,8 @@ Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读�
 | `PD_API_READER_CONCURRENCY` | 5 个进程内解读生成任务 |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 5 个独立页面审查任务 |
 
+摘要、完整结构和表格修复可独立配置 `PD_ANALYSIS_REPAIR_THINKING_MODE=disabled|enabled`，默认关闭。仅对精确 `mimo-v2.6-flash` 的 OpenAI Chat 请求发送该参数，不影响主分析、审校、评分或其他模型。新修复阶段绑定实际请求策略，旧成功记录没有该声明时仍按旧指纹核验，不补签；失效后重新执行使用当前策略。输出截断和内容、来源核验仍会拒绝不完整结果。[MiMo 官方推理说明](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/other/deep-thinking)支持此参数；OpenCode Go 是否接受须由正常业务响应确认，参数日志不代表已接受。
+
 筛选批次大小由 `PD_FILTER_BATCH_SIZE` 控制，整篇分析并发由 `PD_ANALYSIS_CONCURRENCY` 控制。账号池只在选择账号和更新状态时短暂持锁，发送网络请求时不持锁。Responses 仅在 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE；`PD_OPENAI_RESPONSES_STREAM` 和 `PD_OPENAI_RESPONSES_REASONING_EFFORT` 对当前主模型的 Chat Completions 请求没有作用。
 
 解读正文的局部修复通常最多输出 8000 tokens。如果一次局部修复恰好在该上限截断，且候选尚可获得一次额外恢复机会，程序会保存失败草稿并停止；下次显式续跑可提高修复上限，默认最多 16000 tokens。这次机会与实现升级提供的额外尝试共用，不能叠加。自定义预算下，上限按正文预算和基础修复预算计算，最高为 16000，且不超过 `PD_API_READER_MAX_TOKENS`；不能据此无限追加尝试。模型返回任何内容后即消耗这次机会，纯网络故障不消耗。截断的 JSON 仍不能作为有效候选，也不能绕过内容检查。

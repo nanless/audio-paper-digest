@@ -620,6 +620,13 @@ function validateReaderThinkingMode(mode) {
 }
 
 function buildRequestBody(apiType, model, messages, maxTokens, temperature, options = {}) {
+    if (apiType === 'openai' && model === 'mimo-v2.6-flash'
+        && options.readerThinkingMode !== undefined && options.repairThinkingMode !== undefined
+        && options.readerThinkingMode !== options.repairThinkingMode) {
+        const error = new Error('长文与局部修复的请求推理设置冲突');
+        error.code = 'REQUEST_THINKING_POLICY_CONFLICT';
+        throw error;
+    }
     if (apiType === 'anthropic') {
         // Anthropic: system 必须是顶级字段，不能在 messages 中
         let system = undefined;
@@ -673,7 +680,10 @@ function buildRequestBody(apiType, model, messages, maxTokens, temperature, opti
         temperature,
         ...(apiType === 'openai' && model === 'mimo-v2.6-flash'
             && options.readerThinkingMode !== undefined
-            ? { thinking: { type: validateReaderThinkingMode(options.readerThinkingMode) } } : {})
+            ? { thinking: { type: validateReaderThinkingMode(options.readerThinkingMode) } } : {}),
+        ...(apiType === 'openai' && model === 'mimo-v2.6-flash'
+            && options.repairThinkingMode !== undefined
+            ? { thinking: { type: validateReaderThinkingMode(options.repairThinkingMode) } } : {})
     };
 }
 

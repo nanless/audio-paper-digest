@@ -7345,6 +7345,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 && repairContext.figureOrdinals.includes(image.ordinal))
             : activeImageInputs;
         let selectedOrdinals = selectedInputs.filter(image => image.kind === 'figure').map(image => image.ordinal);
+        let repairDiagnostic = null;
         let raw;
         const priorCandidateSha = candidate ? repair.hashDraft(candidate) : '';
         const requestUsesEscalatedRepairBudget = Boolean(repairContext && useEscalatedRepairBudget);
@@ -7360,11 +7361,26 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     stage: repairContext ? 'apiReaderRepair' : 'apiReaderArticle', contentAttempt: attempt }
             };
             const isolated = await requestReaderModelWithImageIsolation({ requestModel,
-                buildMessages: inputs => [{ role: 'user', content: [
-                    { type: 'text', text: prompt },
-                    { type: 'text', text: visibilityNoticeFor(inputs, repairContext) },
-                    ...inputs.flatMap(image => blocksForImage(image, repairContext))
-                ] }], imageInputs: selectedInputs,
+                buildMessages: inputs => {
+                    const visibilityNotice = visibilityNoticeFor(inputs, repairContext);
+                    const messages = [{ role: 'user', content: [
+                        { type: 'text', text: prompt },
+                        { type: 'text', text: visibilityNotice },
+                        ...inputs.flatMap(image => blocksForImage(image, repairContext))
+                    ] }];
+                    if (repairContext) repairDiagnostic = require('./lib/reader-request-diagnostics')
+                        .beginReaderRepairDiagnostic(candidateDirectory, {
+                            identity, contentAttempt: attempt, prompt, visibilityNotice,
+                            draftSha256: repairContext.draftSha256, draft: candidate,
+                            repairTargets: repairContext.targets,
+                            atomicOperation: repairContext.atomicOperation || null,
+                            inputMessagesSha256: repair.shaText(JSON.stringify(messages)),
+                            images: inputs.map(image => ({ inputId: image.inputId, kind: image.kind,
+                                ordinal: image.ordinal, mime: image.mime,
+                                base64Sha256: repair.shaText(image.base64) }))
+                        });
+                    return messages;
+                }, imageInputs: selectedInputs,
                 maxTokens: repairContext
                     ? requestUsesEscalatedRepairBudget ? repairTruncationRetryMaxTokens : repairMaxTokens
                     : API_READER_MAX_TOKENS,
@@ -7432,6 +7448,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             throw error;
         }
         implementationRepairAllowanceProof = null;
+        // 在解析和修改候选之前保存原响应；记录写入失败必须停止，不能当模型重试吞掉。
+        if (repairDiagnostic) require('./lib/reader-request-diagnostics')
+            .saveReaderRepairResponse(repairDiagnostic, raw);
         if (!repairContext) fullAttempts += 1;
         const responseSha256 = repair.shaText(raw);
         const dispositionBase = { paperId: getPaperArxivId(paper),
@@ -8654,12 +8673,42 @@ function buildStageEvidenceContext(stage, analysis, sourceText) {
 // 不传 promptTextContract 表示按 v1 的历史形状算：哈希输入里没有这个字段，与
 // 改动前逐字节一致。要用新版本（含 v1 的新记录）时由调用方显式传当前版本，
 // 这样忘记传参的旧记录核验不会静默换指纹。
-function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext, promptTextContract) {
+function resolveRepairRequestPolicy(stage) {
+    if (!['coreSummaryRepair', 'structureRepair', 'tableRepair'].includes(stage)
+        || DEEP_CONFIG.model !== 'mimo-v2.6-flash'
+        || detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model) !== 'openai') return null;
+    return { contract: 'analysis-repair-thinking-policy-v1', model: 'mimo-v2.6-flash',
+        thinkingMode: ANALYSIS_CONFIG.repairThinkingMode };
+}
+
+function repairRequestPolicyFields(stage, declaredStage) {
+    if (declaredStage === undefined) return {};
+    const declared = declaredStage?.repairRequestPolicy;
+    if (Object.prototype.hasOwnProperty.call(declaredStage || {}, 'repairRequestPolicy')) {
+        if (!declared || typeof declared !== 'object' || Array.isArray(declared)
+            || Object.keys(declared).sort().join(',') !== 'contract,model,thinkingMode'
+            || declared.contract !== 'analysis-repair-thinking-policy-v1'
+            || declared.model !== 'mimo-v2.6-flash'
+            || !['enabled', 'disabled'].includes(declared.thinkingMode)) {
+            throw new Error('已保存的局部修复请求策略不安全或字段不完整');
+        }
+    }
+    if (['complete', 'not_needed'].includes(declaredStage?.status) && !declared) return {};
+    const current = resolveRepairRequestPolicy(stage);
+    return {
+        ...(current ? { repairRequestPolicy: current } : {}),
+        ...(declared && stableFingerprint(declared) !== stableFingerprint(current)
+            ? { declaredRepairRequestPolicyMismatch: declared } : {})
+    };
+}
+
+function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext, promptTextContract, declaredStage) {
     const config = TEXT_RECOVERY_STAGE_CONFIG[stage];
     if (!config) throw new Error(`未知的文本恢复阶段: ${stage}`);
     const freshIdentity = require('./lib/fresh-analysis-context.js').freshAnalysisIdentity();
     const declaredPromptTextContract = String(promptTextContract || '');
     return stableFingerprint({
+        ...repairRequestPolicyFields(stage, declaredStage),
         ...(declaredPromptTextContract
             ? { promptTextContract: declaredPromptTextContract } : {}),
         ...(stage === 'tagSelection' ? {
@@ -8742,12 +8791,13 @@ function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourc
     let evidenceContext = buildStageEvidenceContext(stage, inputAnalysis, sourceText);
     let promptTextContract = textStagePromptTextContract(paper, manifest, stage);
     let fingerprint = buildTextStageFingerprint(
-        stage, inputAnalysis, evidenceContext, promptTextContract);
+        stage, inputAnalysis, evidenceContext, promptTextContract, manifest.stages?.[stage] || {});
     let evidenceSha256 = crypto.createHash('sha256').update(evidenceContext).digest('hex');
     let inputAnalysisSha256 = crypto.createHash('sha256').update(inputAnalysis).digest('hex');
-    const compatibilityReused = (stage === 'structureRepair'
+    const policyFields = repairRequestPolicyFields(stage, manifest.stages?.[stage] || {});
+    const compatibilityReused = !policyFields.declaredRepairRequestPolicyMismatch && ((stage === 'structureRepair'
         && legacyStructureCompatibilityIsValid(paper, manifest, sourceText))
-        || canReuseStageForCoreSummaryRecovery(paper, manifest, sourceText, stage);
+        || canReuseStageForCoreSummaryRecovery(paper, manifest, sourceText, stage));
     const invalidated = compatibilityReused
         ? false : invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint);
     if (invalidated) {
@@ -8755,7 +8805,7 @@ function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourc
         inputAnalysis = getTextStageInputAnalysis(paper, stage, paper.analysisCheckpoint || currentAnalysis);
         evidenceContext = buildStageEvidenceContext(stage, inputAnalysis, sourceText);
         promptTextContract = currentPromptTextContract(stage);
-        fingerprint = buildTextStageFingerprint(stage, inputAnalysis, evidenceContext, promptTextContract);
+        fingerprint = buildTextStageFingerprint(stage, inputAnalysis, evidenceContext, promptTextContract, {});
         evidenceSha256 = crypto.createHash('sha256').update(evidenceContext).digest('hex');
         inputAnalysisSha256 = crypto.createHash('sha256').update(inputAnalysis).digest('hex');
     }
@@ -8770,6 +8820,7 @@ function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourc
         inputAnalysisSha256,
         promptTextContract,
         fingerprint: compatibilityReused ? manifest.stages[stage].fingerprint : fingerprint,
+        repairRequestPolicy: resolveRepairRequestPolicy(stage),
         compatibilityReused,
         invalidated
     };
@@ -9726,7 +9777,7 @@ function tryMigrateCoreSummaryV3LegacyCheckpoints(
     const coreEvidence = buildStageEvidenceContext('coreSummaryRepair', coreInput, sourceText);
     const currentCoreFingerprint = buildTextStageFingerprint(
         'coreSummaryRepair', coreInput, coreEvidence,
-        currentPromptTextContract('coreSummaryRepair')
+        currentPromptTextContract('coreSummaryRepair'), {}
     );
     invalidateRecoveryStageIfChanged(
         paper, manifest, 'coreSummaryRepair', currentCoreFingerprint
@@ -10518,9 +10569,13 @@ async function _callModelOnce(messages, maxTokens, config, budget, apiType, time
     const temperature = Number.isFinite(config.temperature) ? config.temperature : API_TEMPERATURE;
     const bodyObj = buildRequestBody(apiType, config.model, messages, maxTokens, temperature,
         { readerThinkingMode: ['apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe']
-            .includes(config.usageContext?.stage) ? config.readerThinkingMode : undefined });
+            .includes(config.usageContext?.stage) ? config.readerThinkingMode : undefined,
+            repairThinkingMode: ['coreSummaryRepair', 'structureRepair', 'tableRepair']
+                .includes(config.usageContext?.stage) ? config.repairThinkingMode : undefined });
     if (bodyObj.thinking?.type) {
-        console.log(`    [api] 长文请求推理设置=${bodyObj.thinking.type === 'disabled' ? '关闭' : '开启'}（请求参数，尚不代表网关接受）`);
+        const requestLabel = ['coreSummaryRepair', 'structureRepair', 'tableRepair'].includes(config.usageContext?.stage)
+            ? '局部修复' : '长文';
+        console.log(`    [api] ${requestLabel}请求推理设置=${bodyObj.thinking.type === 'disabled' ? '关闭' : '开启'}（请求参数，尚不代表网关接受）`);
     }
     const postData = JSON.stringify(bodyObj);
     const headers = {
@@ -10601,6 +10656,7 @@ async function callModel(messages, maxTokens = 8000, options = {}) {
     return await callModelWithConfig(messages, maxTokens, resolveApiMaxRetries(options.maxRetries), {
         ...DEEP_CONFIG,
         readerThinkingMode: options.readerThinkingMode,
+        repairThinkingMode: options.repairThinkingMode,
         usageContext: options.usageContext,
         usageDirectory: options.usageDirectory,
         usageSink: options.usageSink,
@@ -14333,6 +14389,8 @@ async function analyzePaperDeepInternal(paper) {
                 inputAnalysisSha256: tableRepairStage.inputAnalysisSha256,
                 ...(tableRepairStage.promptTextContract
                     ? { promptTextContract: tableRepairStage.promptTextContract } : {}),
+                ...(tableRepairStage.repairRequestPolicy
+                    ? { repairRequestPolicy: tableRepairStage.repairRequestPolicy } : {}),
                 fingerprint: tableRepairStage.fingerprint
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
@@ -14458,7 +14516,9 @@ async function analyzePaperDeepInternal(paper) {
                     outputAnalysisSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
                     ...(structureRepairStage.promptTextContract
                         ? { promptTextContract: structureRepairStage.promptTextContract } : {}),
-                    fingerprint: structureRepairStage.fingerprint
+                    ...(structureRepairStage.repairRequestPolicy
+                    ? { repairRequestPolicy: structureRepairStage.repairRequestPolicy } : {}),
+                fingerprint: structureRepairStage.fingerprint
                 }
             );
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
@@ -14680,6 +14740,8 @@ async function analyzePaperDeepInternal(paper) {
                 bindingSha256: stableFingerprint(summaryBinding),
                 ...(coreSummaryRepairStage.promptTextContract
                     ? { promptTextContract: coreSummaryRepairStage.promptTextContract } : {}),
+                ...(coreSummaryRepairStage.repairRequestPolicy
+                    ? { repairRequestPolicy: coreSummaryRepairStage.repairRequestPolicy } : {}),
                 fingerprint: coreSummaryRepairStage.fingerprint
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
@@ -16199,7 +16261,9 @@ async function repairCoreSummarySection(
         });
         const raw = String(await repairCallModel([{ role: 'user', content: prompt }],
             TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens,
-            { usageContext: { stage: 'coreSummaryRepair' } }) || '').trim();
+            { usageContext: { stage: 'coreSummaryRepair' },
+                ...(resolveRepairRequestPolicy('coreSummaryRepair')
+                    ? { repairThinkingMode: resolveRepairRequestPolicy('coreSummaryRepair').thinkingMode } : {}) }) || '').trim();
         const match = raw.match(/^##\s*核心摘要[：:\s]*\n([\s\S]+)$/);
         if (!match || /^#{1,6}\s/m.test(match[1])) {
             feedback = '输出必须且只能包含一节 ## 核心摘要，不得包含其他标题。';
@@ -16241,7 +16305,9 @@ async function repairMissingAnalysisSections(
         });
         const repairCallModel = options.callModelFn || callModel;
         const repairedText = await repairCallModel([{ role: 'user', content: prompt }], STRUCTURE_MAX_TOKENS,
-            { usageContext: { stage: 'structureRepair' } });
+            { usageContext: { stage: 'structureRepair' },
+                ...(resolveRepairRequestPolicy('structureRepair')
+                    ? { repairThinkingMode: resolveRepairRequestPolicy('structureRepair').thinkingMode } : {}) });
         const cleaned = cleanGapFillPrefix(repairedText.trim());
         if (cleaned) currentAnalysis = normalizeAnalysisStructure(removeUnapprovedMarkdownImages(cleaned, []));
 
@@ -16546,7 +16612,9 @@ async function checkAndFixTables(paper, analysis, sourceText, preparedEvidence =
     });
 
     const fixedSection = await callModel([{ role: 'user', content: prompt }], REPAIR_MAX_TOKENS,
-        { usageContext: { stage: 'tableRepair' } });
+        { usageContext: { stage: 'tableRepair' },
+                ...(resolveRepairRequestPolicy('tableRepair')
+                    ? { repairThinkingMode: resolveRepairRequestPolicy('tableRepair').thinkingMode } : {}) });
     if (!fixedSection || fixedSection.length < 200) {
         return analysis;
     }
@@ -16955,6 +17023,7 @@ module.exports = {
     currentTextStagePromptPath,
     promptFilePathForContract,
     buildTextStageFingerprint,
+    resolveRepairRequestPolicy,
     tagRuleFingerprintFields,
     parseTagRepairResult,
     applyTagSelection,

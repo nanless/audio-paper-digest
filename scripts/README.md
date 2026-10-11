@@ -96,6 +96,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/reader-draft-order.js` | Node 库 | 调整同一草稿的小节顺序，同步表格绑定和标记，保存原始路径与调整后路径的 SHA 对应关系；无法唯一确定顺序时拒绝调整。 |
 | `lib/reader-source-diagnostics.js` | Node 库 | 把数字或单位来源不匹配的问题定位到正文单元格与原表行列，给出百分号、千分位及可能舍入的修复建议，但只读；不会自动改数字，也不会放宽来源检查。 |
 | `lib/reader-recovery-revision.js` | Node 库 | 显式迁移同源失败候选的诊断，保留付费请求计数、索引调整与旧无进展状态，归档原字节；表数量文案不能触发正文规范化。迁移不会产出成功凭证。 |
+| `lib/reader-request-diagnostics.js` | Node 库 | 在 Reader 修复付费请求前保存当前草稿、准确 SHA、允许修改的内容与提示词，响应后保留原文和请求关联 SHA；逐次记录不可覆写，写入失败停止，不授予正文或发布资格。 |
 | `lib/reader-contract.js` | Node 库 | 规定读者文章的格式要求，按本次证据向模型说明写作要求，并检查不同小节的内容是否近似重复。 |
 | `lib/reader-tables.js` | Node 库 | 将 TABLE 标记与原表行列选择展开为 Markdown 和逐格来源记录，保留表头对应关系，拒绝错位和越界。 |
 | `lib/llm-usage.js` | Node 库 | 规范化真实请求用量，按论文和阶段归因；服务没有提供计费用量时，就记为不可得。 |
