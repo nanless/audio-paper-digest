@@ -289,10 +289,77 @@ test('正常封存来源主分析真实HTTP请求带绑定纠错，旧成功chec
  fs.writeFileSync(path.join(folder,'.env'),`PAPER_ANALYZER_API_KEY=synthetic-local-only\nPAPER_ANALYZER_MODEL=ci-test-model\nPAPER_ANALYZER_ENDPOINT=http://127.0.0.1:${server.address().port}/v1\n`,{mode:0o600});
  const prefix=fs.readFileSync(__filename,'utf8').split("test('只读反馈严格绑定")[0].replace("imageInfos:[],structuredArtifacts:artifacts", "imageInfos:[{url:'https://example.invalid/synthetic-test.png'}],structuredArtifacts:artifacts");
  const program=prefix+`
-(async()=>{const f=await fixture({after:()=>{}});Object.assign(f.paper.analysisManifest.sourceAcquisition,{usedTextSha256:review.sha(sourceText),sourceId:ID,analysisSource:'html'});f.feedback.coreFeedback='';f.feedback.readerFeedback='';f.feedback.rejectedCoreClaims=[];f.feedback.rejectedReaderClaims=[];f.feedback.primaryFeedback='主分析重生成全部13节：蒸馏使用MSE，实验中的旧余弦说明必须纠正。';f.feedback.rejectedPrimaryClaims=[wrong];const bound=review.validateFeedback(f.feedback,f.plan,f.paper);const result=await daily.withDailyFreshAnalysisContext(f.plan,()=>daily.createDailyAnalyzeFn(f.plan,{analyze:paper=>review.withFactReview(bound,()=>deep.analyzePaperDeep(paper))})(f.paper));assert.equal(result.analysis,null);assert.match(result.error,/仍包含/);assert.equal(result.analysisManifest.stages.primaryAnalysis.status,'transient_failure');assert.deepEqual(result.analysisManifest.stages.primaryAnalysis.factReview,bound.proof);assert.ok(result.analysisStaleSnapshots.some(x=>deep.validateStaleAnalysisSnapshot(x)?.analysisCheckpoint===original));assert.ok(review.validateFeedback(f.feedback,f.plan,result));const noFeedback=structuredClone(result);await assert.rejects(daily.withDailyFreshAnalysisContext(f.plan,()=>daily.createDailyAnalyzeFn(f.plan)(noFeedback)),/须重新提供同一份受控反馈/);console.log('NORMAL_PRIMARY_HTTP_NEGATIVE_CONFIRMED');fs.rmSync(f.root,{recursive:true,force:true});})().catch(e=>{console.error(e);process.exitCode=1;});`;
+(async()=>{const f=await fixture({after:()=>{}});Object.assign(f.paper.analysisManifest.sourceAcquisition,{usedTextSha256:review.sha(sourceText),sourceId:ID,analysisSource:'html'});f.feedback.coreFeedback='';f.feedback.readerFeedback='';f.feedback.rejectedCoreClaims=[];f.feedback.rejectedReaderClaims=[];f.feedback.primaryFeedback='旧一轮主分析事实反馈。';f.feedback.rejectedPrimaryClaims=[wrong];const oldBound=review.validateFeedback(f.feedback,f.plan,f.paper);f.paper.analysisManifest.stages.primaryAnalysis.factReview=oldBound.proof;review.withFactReview(oldBound,()=>deep.captureStaleAnalysisSnapshot(f.paper,f.paper.analysisManifest,'primaryAnalysis',oldBound.proof.feedbackSha256));f.feedback.primaryFeedback='主分析重生成全部13节：蒸馏使用MSE，实验中的旧余弦说明必须纠正。';f.feedback.rejectedPrimaryClaims=[wrong];const bound=review.validateFeedback(f.feedback,f.plan,f.paper);const result=await daily.withDailyFreshAnalysisContext(f.plan,()=>daily.createDailyAnalyzeFn(f.plan,{analyze:paper=>review.withFactReview(bound,()=>deep.analyzePaperDeep(paper))})(f.paper));assert.equal(result.analysis,null);assert.match(result.error,/仍包含/);assert.equal(result.analysisManifest.stages.primaryAnalysis.status,'transient_failure');assert.deepEqual(result.analysisManifest.stages.primaryAnalysis.factReview,bound.proof);assert.ok(result.analysisStaleSnapshots.some(x=>deep.validateStaleAnalysisSnapshot(x)?.analysisCheckpoint===original));assert.ok(review.validateFeedback(f.feedback,f.plan,result));const noFeedback=structuredClone(result);await assert.rejects(daily.withDailyFreshAnalysisContext(f.plan,()=>daily.createDailyAnalyzeFn(f.plan)(noFeedback)),/须重新提供同一份受控反馈/);console.log('NORMAL_PRIMARY_HTTP_NEGATIVE_CONFIRMED');fs.rmSync(f.root,{recursive:true,force:true});})().catch(e=>{console.error(e);process.exitCode=1;});`;
  fs.writeFileSync(path.join(folder,'tests/primary-fact-http-child.cjs'),program);
  const result=await new Promise(resolve=>{const child=cp.spawn(process.execPath,['tests/primary-fact-http-child.cjs'],{cwd:folder});let stdout='',stderr='';child.stdout.on('data',c=>stdout+=c);child.stderr.on('data',c=>stderr+=c);child.on('close',status=>resolve({status,stdout,stderr}));});
  assert.equal(result.status,0,result.stdout+result.stderr);assert.match(result.stdout,/NORMAL_PRIMARY_HTTP_NEGATIVE_CONFIRMED/);
  assert.equal(bodies.length,1,'旧primary必须正常请求一次，而非旧成功补签或先请求其他阶段');
  const content=JSON.stringify(bodies[0].messages);assert.match(content,/主分析重生成全部13节/);assert.ok(content.includes(quote));
+});
+
+
+test('纠错主分析完成而评分缺失时正常入口两次无反馈恢复在任何模型请求前阻断且保留证明', async t => {
+    const http = require('node:http'), cp = require('node:child_process');
+    let calls = 0;
+    const server = http.createServer((req, res) => {
+        calls++;
+        req.resume();
+        res.writeHead(500);
+        res.end('unexpected model request');
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => new Promise(resolve => server.close(resolve)));
+    const folder = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'scoring-resume-http-'));
+    t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+    for (const dir of ['scripts', 'manual', 'prompts', 'config', 'tests']) {
+        fs.cpSync(path.resolve(__dirname, '..', dir), path.join(folder, dir), { recursive: true });
+    }
+    fs.symlinkSync(path.resolve(__dirname, '../node_modules'), path.join(folder, 'node_modules'), 'dir');
+    fs.writeFileSync(path.join(folder, '.env'), `PAPER_ANALYZER_API_KEY=synthetic-local-only\nPAPER_ANALYZER_MODEL=ci-test-model\nPAPER_ANALYZER_ENDPOINT=http://127.0.0.1:${server.address().port}/v1\n`, { mode: 0o600 });
+    const prefix = fs.readFileSync(__filename, 'utf8').split("test('只读反馈严格绑定")[0];
+    const program = prefix + `
+(async () => {
+    const f = await fixture({ after: () => {} });
+    try {
+        f.feedback.coreFeedback = '';
+        f.feedback.readerFeedback = '';
+        f.feedback.rejectedCoreClaims = [];
+        f.feedback.rejectedReaderClaims = [];
+        f.feedback.primaryFeedback = '主分析纠正蒸馏事实，评分理由不得重新引入错误余弦损失。';
+        f.feedback.rejectedPrimaryClaims = [wrong];
+        const bound = review.validateFeedback(f.feedback, f.plan, f.paper);
+        review.withFactReview(bound, () => deep.captureStaleAnalysisSnapshot(f.paper, f.paper.analysisManifest, 'primaryAnalysis', bound.proof.feedbackSha256));
+        f.paper.analysisCheckpoint = baseline;
+        f.paper.analysisStageCheckpoints.primaryAnalysis = baseline;
+        const primary = f.paper.analysisManifest.stages.primaryAnalysis;
+        primary.factReview = bound.proof;
+        primary.promptTextContract = require('../scripts/lib/prompt-text-versions').currentPromptTextContract('primaryAnalysis');
+        primary.fingerprint = deep.buildPrimaryAnalysisBaseFingerprint(primary.promptTextContract, f.paper, sourceText, ID, primary);
+        delete f.paper.analysisManifest.stages.scoringAudit;
+        delete f.paper.analysisStageCheckpoints.scoringAudit;
+        const beforePrimary = JSON.stringify(primary);
+        const beforeSnapshots = JSON.stringify(f.paper.analysisStaleSnapshots);
+        const beforeOfficial = fs.readFileSync(Config.FILES.deepAnalysisResult);
+        for (let attempt = 0; attempt < 2; attempt++) {
+            await assert.rejects(daily.withDailyFreshAnalysisContext(f.plan, () => daily.createDailyAnalyzeFn(f.plan)(f.paper)), /评分纠错的新请求缺少对应的已绑定主分析反馈/);
+            assert.equal(JSON.stringify(f.paper.analysisManifest.stages.primaryAnalysis), beforePrimary);
+            assert.equal(JSON.stringify(f.paper.analysisStaleSnapshots), beforeSnapshots);
+            assert.equal(f.paper.analysisStageCheckpoints.primaryAnalysis, baseline);
+            assert.equal(f.paper.analysisManifest.stages.scoringAudit, undefined);
+            assert.ok(beforeOfficial.equals(fs.readFileSync(Config.FILES.deepAnalysisResult)));
+        }
+        console.log('NORMAL_SCORING_RESUME_ZERO_REQUEST_PROOF_RETAINED');
+    } finally { fs.rmSync(f.root, { recursive: true, force: true }); }
+})().catch(error => { console.error(error); process.exitCode = 1; });`;
+    fs.writeFileSync(path.join(folder, 'tests/scoring-resume-child.cjs'), program);
+    const result = await new Promise(resolve => {
+        const child = cp.spawn(process.execPath, ['tests/scoring-resume-child.cjs'], { cwd: folder });
+        let stdout = '', stderr = '';
+        child.stdout.on('data', chunk => { stdout += chunk; });
+        child.stderr.on('data', chunk => { stderr += chunk; });
+        child.on('close', status => resolve({ status, stdout, stderr }));
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(result.stdout, /NORMAL_SCORING_RESUME_ZERO_REQUEST_PROOF_RETAINED/);
+    assert.equal(calls, 0, '正常入口两次恢复均不得发出任何模型请求');
 });

@@ -365,7 +365,7 @@ function assessReaderTableSelectionEligibility(table) {
     return { contract: READER_TABLE_ELIGIBILITY_CONTRACT, eligible: reasons.length === 0,
         reasonCodes: [...new Set(reasons.map(reason => reason.code))],
         reasonCount: reasons.length, examples: reasons.slice(0, 8),
-        ...(!reasons.length ? {} : { action: 'Do not use selection. Use source_quotes only with exact full-text quotes and the existing numeric/unit gate; do not invent header names or normalize source evidence.' }) };
+        ...(!reasons.length ? {} : { action: '这张表不能使用 selection。旧说明中的“eligible=false 时只能使用 source_quotes”限制针对 selection；完整原表仍可按已有协议尝试 artifact_table。具体做法是：把完整原始 matrix 写成 Markdown 表，逐格绑定原始 DOM cell，sourceQuotes 写 []，不用 TABLE marker。保留原表全部行列、数值和单位，不得把非法 selection 子集转成兼容绑定，也不得清理原单元格。仍须通过现有来源、数字、粘贴和正文审查；若无法通过，只能用全文逐字引文完整覆盖数字与单位的 source_quotes，不得编造表头或改写来源。' }) };
 }
 
 // 选择结果里的行号由模型给出，但哪些是表头行由原文明确。
@@ -440,7 +440,7 @@ function renderReaderTableSelection(binding, artifacts) {
             && assessReaderTableSelectionEligibility(candidate).eligible).map(candidate => candidate.ordinal);
         throw new Error(`${label} selection eligible=false: ${eligibility.reasonCodes.join(', ')}。`
             + `sourceTableOrdinal=${sourceTableOrdinal}；其他可选择原表序号=${JSON.stringify(alternatives)}。`
-            + '当前原表不能逐字安全渲染为 Markdown；可根据对应原文证据改选合格原表，或仅使用有完整逐字证据的 source_quotes 路线，不得编造表头或改写来源。');
+            + '当前原表不能使用 selection。旧说明中的“eligible=false 时只能使用 source_quotes”限制针对 selection，完整原表仍可按已有协议尝试 artifact_table。可改选合格原表，或按以下方式逐格绑定当前原表：完整复制原始 matrix 为 Markdown 表，覆盖全部原始行列并逐格绑定原始 DOM cell，sourceQuotes 为 []，不用 TABLE marker。不得将非法 selection 子集转成兼容绑定，不得清理原单元格或改数字与单位；现有单元格、数字、粘贴与编辑审查仍须通过。否则仅使用有完整逐字证据的 source_quotes 路线，不得编造表头或改写来源。');
     }
     for (const [values, limit, minimum] of [[requestedSourceRows, table.matrix.length, 2], [sourceColumns, width, 2]]) {
         if (!Array.isArray(values) || values.length < minimum || new Set(values).size !== values.length

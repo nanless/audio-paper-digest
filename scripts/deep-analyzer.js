@@ -934,6 +934,9 @@ function hasAffirmativeDemoEvidence(sourceText) {
 }
 
 async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', options = {}) {
+    const scoringFactReview = require('./lib/daily-fact-review');
+    scoringFactReview.assertScoringRequestAllowed(options.declaredStage);
+    const factFeedback = scoringFactReview.reviewFeedback('scoringAudit');
     let lastError = null;
     let validationFeedback = '这是第一次输出，没有上一次校验错误。';
     // 没有另外提供证据上下文时，评分审查会把已有分析章节整理成带引用 ID 的内容。
@@ -952,7 +955,7 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', opti
             existingAnalysis: auditInputAnalysis,
             sourceEvidence: evidenceContext,
             validationFeedback
-        });
+        }) + (factFeedback ? `\n来源绑定的事实纠错（评分理由不得重新引入已证实错误）：\n${factFeedback}` : '');
         const raw = await callModel(
             [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
             16000,
@@ -975,8 +978,10 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', opti
                     ? { capsApplied: normalizedAudit.capsApplied }
                     : {})
             };
+            const appliedAnalysis = applyScoringAuditResult(analysis, audit);
+            scoringFactReview.validateRepairedClaims('scoringAudit', appliedAnalysis);
             return {
-                analysis: applyScoringAuditResult(analysis, audit),
+                analysis: appliedAnalysis,
                 audit,
                 attempts: attempt,
                 model: DEEP_CONFIG.model,
@@ -14016,6 +14021,12 @@ async function analyzePaperDeepInternal(paper) {
             || !String(paper.analysisStageCheckpoints?.primaryAnalysis || paper.analysisCheckpoint || '').trim())) {
         throw new Error('带事实纠错证明的主分析尚未完成，须重新提供同一份受控反馈后才能请求模型');
     }
+    // 已完成的纠错主分析尚未评分时，在任何下游请求前要求原反馈。
+    // 不能因中断恢复丢掉事实约束，也不能先支付无约束的后处理请求。
+    if (savedPrimaryFactStage?.factReview && !activePrimaryFactReview
+        && !isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
+        require('./lib/daily-fact-review').assertScoringRequestAllowed(savedPrimaryFactStage);
+    }
     console.log(`    [deep] 获取全文: ${arxivId}`);
 
     // 历史直接运行只能消费自己运行器注入的来源。它绝不会退回到调用方旧的 fullText、
@@ -15061,6 +15072,13 @@ async function analyzePaperDeepInternal(paper) {
 
     // 主模型只审计文档类型和八维评分，避免长文审校时发生重复扣分。
     const scoringStage = analysisManifest.stages.scoringAudit;
+    const scoringFactReview = require('./lib/daily-fact-review');
+    // 完成主分析后的中断也不能丢失事实约束；仅核验旧证明，不给旧评分补签。
+    const scoringRequestDeclaration = analysisManifest.stages.primaryAnalysis?.factReview
+        ? { factReview: analysisManifest.stages.primaryAnalysis.factReview } : scoringStage;
+    const expectedScoringFactFields = scoringFactReview.fingerprintFields('scoringAudit', scoringRequestDeclaration);
+    const activePrimaryClaims = scoringFactReview.current(paper.arxivId)?.feedback.primaryFeedback?.trim()
+        ? scoringFactReview.current(paper.arxivId).feedback.rejectedPrimaryClaims : [];
     const scoringInputSha256 = crypto.createHash('sha256').update(scoringInputAnalysis).digest('hex');
     const scoringEvidenceContext = buildStageEvidenceContext(
         'scoringAudit',
@@ -15083,7 +15101,10 @@ async function analyzePaperDeepInternal(paper) {
         const currentEvidenceSha256 = crypto.createHash('sha256')
             .update(scoringEvidenceContext)
             .digest('hex');
-        const fingerprintChanged = !!auxiliaryRequestPolicyFields('scoringAudit', scoringStage).auxiliaryRequestPolicyMismatch
+        const fingerprintChanged = stableFingerprint(expectedScoringFactFields)
+                !== stableFingerprint(scoringStage.factReview ? { factReview: scoringStage.factReview } : {})
+            || activePrimaryClaims.some(claim => String(paper.analysisStageCheckpoints?.scoringAudit || '').includes(claim))
+            || !!auxiliaryRequestPolicyFields('scoringAudit', scoringStage).auxiliaryRequestPolicyMismatch
             || scoringStage.modelTextSanitizationContract
                 !== modelTextFingerprintFields(scoringInputAnalysis, scoringEvidenceContext).modelTextSanitizationContract
             || scoringStage.model !== DEEP_CONFIG.model
@@ -15114,6 +15135,11 @@ async function analyzePaperDeepInternal(paper) {
                 String(paper.analysisStageCheckpoints?.scoringAudit || '')
             ).digest('hex');
         if (fingerprintChanged) {
+            scoringFactReview.assertScoringRequestAllowed(scoringRequestDeclaration);
+            if (scoringStage.factReview || expectedScoringFactFields.factReview) {
+                captureStaleAnalysisSnapshot(paper, analysisManifest, 'scoringAudit', stableFingerprint({
+                    scoringInputSha256, ...expectedScoringFactFields }));
+            }
             if (typeof paper.analysisStageCheckpoints?.coreSummaryRepair === 'string') {
                 paper.analysisCheckpoint = paper.analysisStageCheckpoints.coreSummaryRepair;
                 analysis = paper.analysisCheckpoint;
@@ -15130,15 +15156,18 @@ async function analyzePaperDeepInternal(paper) {
         }
     }
     if (!isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
+        // 缺少原反馈时先停止，不能由下面的失败保存覆盖已签名证明。
+        scoringFactReview.assertScoringRequestAllowed(scoringRequestDeclaration);
         try {
             let scoringResult = await auditTypeAwareScoringDetailed(
                 scoringInputAnalysis,
                 rawTextForAnalysis,
                 { evidenceContext: scoringEvidenceContext,
-                    verifiedResourceIdentity: paper.apiReaderResources }
+                    verifiedResourceIdentity: paper.apiReaderResources, declaredStage: scoringRequestDeclaration }
             );
             analysis = scoringResult.analysis;
             const validateScoringOutput = candidateAnalysis => {
+                scoringFactReview.validateRepairedClaims('scoringAudit', candidateAnalysis, paper.arxivId);
                 const parsed = parseAnalysis(candidateAnalysis);
                 const invalidReason = getInvalidAnalysisReason(candidateAnalysis, parsed, {
                     enforceExperimentTableContract: true,
@@ -15174,7 +15203,7 @@ async function analyzePaperDeepInternal(paper) {
                     scoringInputAnalysis,
                     rawTextForAnalysis,
                     { evidenceContext: scoringEvidenceContext,
-                        verifiedResourceIdentity: paper.apiReaderResources }
+                        verifiedResourceIdentity: paper.apiReaderResources, declaredStage: scoringRequestDeclaration }
                 );
                 const secondParsed = validateScoringOutput(secondResult.analysis);
                 const secondScore = Number(secondParsed?.score);
@@ -15205,7 +15234,7 @@ async function analyzePaperDeepInternal(paper) {
                         scoringInputAnalysis,
                         rawTextForAnalysis,
                         { evidenceContext: scoringEvidenceContext,
-                            verifiedResourceIdentity: paper.apiReaderResources }
+                            verifiedResourceIdentity: paper.apiReaderResources, declaredStage: scoringRequestDeclaration }
                     );
                     const thirdParsed = validateScoringOutput(thirdResult.analysis);
                     const thirdScore = Number(thirdParsed?.score);
@@ -15270,6 +15299,7 @@ async function analyzePaperDeepInternal(paper) {
             const stabilityWarning = scoreDelta !== null
                 && Math.abs(scoreDelta) > SCORING_STABILITY_THRESHOLD;
             markRecoveryStage(analysisManifest, 'scoringAudit', 'complete', {
+                ...scoringFactReview.fingerprintFields('scoringAudit'),
                 ...(resolveAuxiliaryRequestPolicy('scoringAudit')
                     ? { auxiliaryRequestPolicy: resolveAuxiliaryRequestPolicy('scoringAudit') } : {}),
                 attempts: totalScoringAttempts,
@@ -15313,6 +15343,7 @@ async function analyzePaperDeepInternal(paper) {
                 error.code === 'CONTRACT_REJECTED' ? 'contract_rejected' : 'transient_failure',
                 {
                     error: error.message,
+                    ...expectedScoringFactFields,
                     ...(error.stabilityResolution
                         ? { stabilityResolution: error.stabilityResolution }
                         : {})

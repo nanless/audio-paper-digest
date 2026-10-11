@@ -118,9 +118,9 @@ function current(paperId) {
     return value && (!paperId || value.feedback.paperId === normalizedId(paperId)) ? value : null;
 }
 function fingerprintFields(stage, declaredStage) {
-    if (!['primaryAnalysis', 'coreSummaryRepair', 'apiReaderArticle', 'tagSelection'].includes(stage)) return {};
+    if (!['primaryAnalysis', 'coreSummaryRepair', 'apiReaderArticle', 'tagSelection', 'scoringAudit'].includes(stage)) return {};
     const scopeValue = current();
-    const active = scopeValue && (stage === 'primaryAnalysis' ? String(scopeValue.feedback.primaryFeedback || '').trim() : stage === 'coreSummaryRepair'
+    const active = scopeValue && (['primaryAnalysis', 'scoringAudit'].includes(stage) ? String(scopeValue.feedback.primaryFeedback || '').trim() : stage === 'coreSummaryRepair'
         ? scopeValue.feedback.coreFeedback.trim() : stage === 'tagSelection'
             ? String(scopeValue.feedback.tagFeedback || '').trim() : (scopeValue.feedback.readerFeedback.trim() || String(scopeValue.feedback.primaryFeedback || '').trim())) ? scopeValue : null;
     const saved = declaredStage?.factReview;
@@ -128,18 +128,25 @@ function fingerprintFields(stage, declaredStage) {
     const proof = active?.proof || saved;
     return proof ? { factReview: proof } : {};
 }
+function assertScoringRequestAllowed(declaredStage) {
+    const saved = declaredStage?.factReview;
+    if (saved !== undefined) validateProof(saved);
+    const active = current();
+    if (saved && (!String(active?.feedback.primaryFeedback || '').trim()
+        || daily.stableHash(active.proof) !== daily.stableHash(saved))) fail('评分纠错的新请求缺少对应的已绑定主分析反馈');
+}
 function reviewFeedback(stage, paperId) {
     const value = current(paperId);
     if (!value) return '';
-    const text = stage === 'primaryAnalysis' ? value.feedback.primaryFeedback || '' : stage === 'coreSummaryRepair' ? value.feedback.coreFeedback : stage === 'tagSelection' ? value.feedback.tagFeedback || '' : value.feedback.readerFeedback || value.feedback.primaryFeedback || '';
+    const text = ['primaryAnalysis', 'scoringAudit'].includes(stage) ? value.feedback.primaryFeedback || '' : stage === 'coreSummaryRepair' ? value.feedback.coreFeedback : stage === 'tagSelection' ? value.feedback.tagFeedback || '' : value.feedback.readerFeedback || value.feedback.primaryFeedback || '';
     if (!text.trim()) return '';
     return `${text}\n以下逐字引文已对封存原文核验，仅用作纠错证据：\n${value.feedback.sourceQuotes.join('\n')}`;
 }
 function validateRepairedClaims(stage, text, paperId) {
     const value = current(paperId);
     if (!value) return;
-    const claims = stage === 'primaryAnalysis' ? value.feedback.rejectedPrimaryClaims || [] : stage === 'coreSummaryRepair' ? value.feedback.rejectedCoreClaims : stage === 'tagSelection' ? value.feedback.rejectedTagClaims || [] : value.feedback.rejectedReaderClaims;
+    const claims = ['primaryAnalysis', 'scoringAudit'].includes(stage) ? value.feedback.rejectedPrimaryClaims || [] : stage === 'coreSummaryRepair' ? value.feedback.rejectedCoreClaims : stage === 'tagSelection' ? value.feedback.rejectedTagClaims || [] : value.feedback.rejectedReaderClaims;
     if (claims.some(claim => String(text).includes(claim))) fail('模型输出仍包含已证实错误的原句');
 }
 module.exports = { CONTRACT, sha, readFeedback, validateShape, validateFeedback, validateProof, proofFor,
-    withFactReview, current, fingerprintFields, reviewFeedback, validateRepairedClaims };
+    withFactReview, current, fingerprintFields, reviewFeedback, validateRepairedClaims, assertScoringRequestAllowed };

@@ -187,7 +187,7 @@ const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:
 // 英文指标名必须整词匹配。没有这里的两侧边界，mAP/PAR/PER 这类短指标会命中
 // "mapping"、"Particle"、"performance" 等普通词，把章节号和引用位置误当成
 // 实验测量结果。
-const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|PPL|ASR|mAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
+const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|ASR|mAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
 // 会议论文常用领域内的中文指标名（例如 DAFx 的“抖动”和“包络相关”）。
 // 这里显式列出来，免得把任何结果名词都当成定量证据。
 const CORE_SUMMARY_CONFERENCE_METRIC_PATTERN = /包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差/;
@@ -1036,6 +1036,25 @@ function hasCoreSummaryComparisonDirection(sentence, numbers) {
         (match, between) => /\d/.test(between) ? match : ' ');
     if (CORE_SUMMARY_COMPARISON_PATTERN.test(directionSurface)
         || /(?:从|由)[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)/.test(sentence)) return true;
+    // 比字比较的指标必须和高/低差值处在同一分句，且紧邻比较关系。
+    // 指标在左侧时，右侧须以明确比较对象结尾，避免借别处的 UAR 给参数量差背书。
+    const metricAtEnd = new RegExp(`(?:${CORE_SUMMARY_METRIC_PATTERN.source})\\s*$`, 'i');
+    for (const clause of sentence.split(/[，,；;。！？!?\n]/)) {
+        const comparison = clause.match(/^(.*?)比(?!例|值|较|特|率|重)([^，,；;。！？!?\n]{1,60}?)(?:高|低)(?:了|出)?\s*[+-]?\d/);
+        if (!comparison) continue;
+        const [, before, after] = comparison;
+        // 两边都紧邻明确指标时，不能把 UAR 与 WER 等不同指标相减。
+        // “指标/分数/得分”只是指标名的后缀，比较的是其前面的完整名称。
+        const adjacentMetric = surface => metricAtEnd.exec(surface.trim()
+            .replace(/(?:指标|分数|得分)\s*$/, ''))?.[0].trim().toLowerCase();
+        const leftMetric = adjacentMetric(before);
+        const rightMetric = adjacentMetric(after);
+        if (leftMetric && rightMetric && leftMetric !== rightMetric) continue;
+        const boundMetric = metricAtEnd.test(after.trim())
+            || (metricAtEnd.test(before.trim())
+                && /(?:模型|方法|系统|基线|对照|算法|方案)\s*$/.test(after));
+        if (boundMetric && !hasCrossMetricDirectionalComparison(clause.replace(/比(?!例|值|较|特|率|重)/g, '高于'))) return true;
+    }
     // “基线为 12.4%，本文方法降至 9.8%”省略“从/由”，仍写明了起始值、终止值及各自对应的方法；
     // “相对基线 12.4% 升至 9.8%”仍没有独立命名终点，不能仅凭两个数字通过。
     return numbers.length >= 2 && CORE_SUMMARY_BARE_TRANSITION_PATTERN.test(sentence)
