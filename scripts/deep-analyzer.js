@@ -7030,8 +7030,15 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     let readerRecoveryRevisions = [];
     let candidate = null;
     let draftOrderMappings = [];
+    let mechanicalNoFigureCleanupChanged = false;
     const normalizeCandidate = () => {
         if (!candidate) return;
+        const noFigureCleanup = repair.normalizeUnavailableReaderFigures(candidate, pixelFigureOrdinals);
+        if (noFigureCleanup) {
+            candidate = noFigureCleanup.draft;
+            draftOrderMappings.push(noFigureCleanup.mapping);
+            mechanicalNoFigureCleanupChanged = true;
+        }
         const normalizationIssues = currentIssues.filter(issue => issue?.code !== repair.TABLE_COUNT_ISSUE_CODE
             && !repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair);
         normalizeReaderConceptBridgeTerms(candidate);
@@ -7309,6 +7316,13 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         maxAttempts, completedAttempts, candidate, boundedRecoveryAllowance);
     if (completedAttempts >= attemptLimit
         || !useEscalatedRepairBudget && (noProgress >= 2 || validationFailureStreak >= 2)) {
+        if (mechanicalNoFigureCleanupChanged) {
+            const latestFailure = repair.loadFailedCandidate(candidateDirectory, identity) || {};
+            repair.saveFailedCandidate(candidateDirectory, identity, {
+                ...latestFailure, status: 'failed', draft: candidate, draftOrderMappings,
+                issues: currentIssues
+            });
+        }
         throw new Error('Reader failed candidate exhausted its bounded attempts; inspect recovery evidence before changing inputs');
     }
     for (let attempt = completedAttempts + 1; attempt <= attemptLimit; attempt++) {

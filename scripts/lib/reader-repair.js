@@ -1416,6 +1416,34 @@ function buildRepairTargets(draft, issues) {
         oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
 }
 
+function normalizeUnavailableReaderFigures(draft, availableFigureOrdinals) {
+    if (!Array.isArray(availableFigureOrdinals) || availableFigureOrdinals.length !== 0
+        || !Array.isArray(draft?.figurePlacements) || !draft.figurePlacements.length
+        || !Array.isArray(draft?.sections)) return null;
+    for (const section of draft.sections) {
+        const body = String(section?.body || '');
+        let fence = null;
+        for (const line of body.split(/\r?\n/)) {
+            const boundary = line.match(/^ {0,3}(`{3,}|~{3,})/);
+            if (boundary) {
+                if (!fence) fence = boundary[1];
+                else if (boundary[1][0] === fence[0] && boundary[1].length >= fence.length
+                    && line.slice(boundary[0].length).trim() === '') fence = null;
+            }
+            if (/\[\[FIGURE_\d+\]\]/.test(line)
+                && (fence || !/^[ \t]*\[\[FIGURE_\d+\]\][ \t]*$/.test(line))) return null;
+        }
+    }
+    const targets = buildRepairTargets(draft, [{ message: '论文没有可用 Figure，figurePlacements 必须为空' }]);
+    if (!targets.length || targets.some(target => target.expectedCleanupValue === undefined)) return null;
+    const patch = { version: 1, draftSha256: hashDraft(draft), replacements: targets.map(target => ({
+        path: target.path, oldSha256: target.oldSha256, value: target.expectedCleanupValue })) };
+    const cleaned = applyReaderPatch(draft, patch, targets.map(target => target.path), { availableFigureOrdinals });
+    return { draft: cleaned, mapping: { contract: 'reader-no-figure-marker-cleanup-v1',
+        changed: true, inputSha256: hashDraft(draft), outputSha256: hashDraft(cleaned),
+        paths: targets.map(target => target.path), contentValidated: false } };
+}
+
 function buildRepairContext(draft, issues, sourceEvidence, sourceText = '') {
     const targets = buildRepairTargets(draft, issues);
     const requestedOperation = buildUniqueMissingQuoteTableOperation(draft, issues)
@@ -1596,5 +1624,5 @@ module.exports = { REPAIR_VERSION, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     validationFailureHasNoProgress, readerAttemptLimit,
     validateImplementationAllowance,
     parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
-    buildRepairTargets, applyReaderPatch, buildRepairContext, loadFailedCandidate, saveFailedCandidate,
+    buildRepairTargets, applyReaderPatch, normalizeUnavailableReaderFigures, buildRepairContext, loadFailedCandidate, saveFailedCandidate,
     retireFailedCandidate };

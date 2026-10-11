@@ -2,6 +2,7 @@
 """把无外部资源的官方内联 SVG 转成当前调用使用的真实像素。"""
 
 import hashlib
+from html.entities import html5
 import math
 import os
 from pathlib import Path
@@ -15,7 +16,7 @@ MAX_SOURCE_BYTES = 2 * 1024 * 1024
 MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 ALLOWED_TAGS = set(('svg g path rect circle ellipse line polyline polygon text tspan defs '
                     'clipPath mask marker linearGradient radialGradient stop pattern symbol use '
-                    'foreignObject span div p br b strong i em sub sup math semantics annotation '
+                    'foreignObject span div p br b strong i em sub sup a math semantics annotation '
                     'mrow mi mn mo mtext mspace msup msub msubsup mfrac msqrt mroot mover '
                     'munder munderover mtable mtr mtd').lower().split())
 ALLOWED_ATTRIBUTES = set(('id class style x y x1 y1 x2 y2 cx cy r rx ry dx dy d points '
@@ -25,14 +26,29 @@ ALLOWED_ATTRIBUTES = set(('id class style x y x1 y1 x2 y2 cx cy r rx ry dx dy d 
                           'font-family font-size font-weight font-style text-anchor dominant-baseline '
                           'clip-path clip-rule mask marker-start marker-mid marker-end offset '
                           'stop-color stop-opacity gradientunits gradienttransform patternunits '
-                          'patterncontentunits patterntransform href alt alttext display mathcolor '
-                          'mathvariant mathsize intent encoding rowalign columnalign').split())
+                          'patterncontentunits patterntransform href title alt alttext display mathcolor '
+                          'mathvariant mathsize maxsize minsize lspace rspace intent encoding rowalign columnalign').split())
+
+
+
+def normalize_html_svg_entities(text):
+    if re.search(r'<!DOCTYPE|<!ENTITY|<\?', text, re.I):
+        raise ValueError('内联 SVG 不允许实体或处理指令')
+    def replace(match):
+        name = match.group(1)
+        if name in {'amp', 'lt', 'gt', 'quot', 'apos'}:
+            return match.group(0)
+        value = html5.get(name + ';')
+        if value is None:
+            raise ValueError('内联 SVG 含未知的命名实体')
+        return ''.join(f'&#{ord(character)};' for character in value)
+    return re.sub(r'&([A-Za-z][A-Za-z0-9]+);', replace, text)
 
 
 def validate_svg(raw):
     if not raw or len(raw) > MAX_SOURCE_BYTES:
         raise ValueError('内联 SVG 字节为空或超过受控上限')
-    text = raw.decode('utf-8')
+    text = normalize_html_svg_entities(raw.decode('utf-8'))
     if re.search(r'<!DOCTYPE|<!ENTITY|<\?', text, re.I):
         raise ValueError('内联 SVG 不允许实体或处理指令')
     root = ET.fromstring(text)
@@ -77,7 +93,7 @@ def source_descriptor(resource, arxiv_id):
         raise ValueError('内联 SVG 的封存原字节不符')
     if not raw or len(raw) > MAX_SOURCE_BYTES or re.search(r'<!DOCTYPE|<!ENTITY|<\?', text, re.I):
         raise ValueError('内联 SVG 不允许实体、处理指令或超限来源')
-    root = ET.fromstring(text)
+    root = ET.fromstring(normalize_html_svg_entities(text))
     element_id = root.attrib.get('id')
     if root.tag.split('}')[-1] != 'svg' or not re.fullmatch(r'[A-Za-z0-9_.:-]+', str(element_id or '')):
         raise ValueError('内联 SVG 没有原文元素定位')
