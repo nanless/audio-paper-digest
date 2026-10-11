@@ -4971,10 +4971,15 @@ function normalizeApiReaderTablePasteArtifacts(article) {
                 .replace(/\\bf\b\s*/g, '');
             cleaned = cleaned.replace(
                 /\\(?:mathrm|text)\{([^}]*)\}(?:\^\{[^}]*\})?/g,
-                (whole, inner, offset, input) => (
-                    canonicalLabel(input.slice(0, offset)).includes(canonicalLabel(inner))
-                        ? '' : inner
-                )
+                (whole, inner, offset, input) => {
+                    // 嵌套 TeX 组中的文字是公式的一部分，不能按前面可见别名删除。
+                    const prefix = input.slice(0, offset);
+                    const depth = (prefix.match(/\\.|[^\\{}]|[{}]/g) || []).reduce(
+                        (value, token) => value + (token === '{' ? 1 : token === '}' ? -1 : 0), 0
+                    );
+                    if (depth > 0) return whole;
+                    return canonicalLabel(prefix).includes(canonicalLabel(inner)) ? '' : inner;
+                }
             );
             cleaned = cleaned
                 .replace(/\s+/g, ' ')
@@ -8063,6 +8068,12 @@ async function refreshApiScoringAndReaderFromSource(paper, sourceDetails, option
 async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options = {}) {
     if (!paper || typeof paper !== 'object') throw new Error('评分复验需要 canonical paper');
     const manifest = paper.analysisManifest;
+    const scoringFactReview = require('./lib/daily-fact-review');
+    const scoringRequestDeclaration = manifest?.stages?.primaryAnalysis?.factReview
+        ? { factReview: manifest.stages.primaryAnalysis.factReview } : manifest?.stages?.scoringAudit;
+    // 评分刷新也必须遵守原主分析纠错约束；在资源验证或模型请求前阻断无反馈恢复。
+    scoringFactReview.assertScoringRequestAllowed(scoringRequestDeclaration);
+    const scoringFactFields = scoringFactReview.fingerprintFields('scoringAudit', scoringRequestDeclaration);
     require('./lib/fresh-analysis-context.js')
         .attachFreshSourceRecord(paper, manifest, sourceDetails);
     let analysis = String(paper.analysis || '');
@@ -8132,7 +8143,8 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
     let scoringResult = await auditTypeAwareScoringDetailed(
         analysis,
         sourceText,
-        { evidenceContext: scoringEvidenceContext, verifiedResourceIdentity: readerResources }
+        { evidenceContext: scoringEvidenceContext, verifiedResourceIdentity: readerResources,
+            declaredStage: scoringRequestDeclaration }
     );
     let auditedAnalysis = scoringResult.analysis;
     let auditedParsed = parseAnalysis(auditedAnalysis);
@@ -8161,7 +8173,8 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         const secondResult = await auditTypeAwareScoringDetailed(
             analysis, sourceText, {
                 evidenceContext: scoringEvidenceContext,
-                verifiedResourceIdentity: readerResources
+                verifiedResourceIdentity: readerResources,
+                declaredStage: scoringRequestDeclaration
             }
         );
         const secondParsed = parseAnalysis(secondResult.analysis);
@@ -8204,6 +8217,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         totalAttempts += secondResult.attempts;
     }
     auditedAnalysis = applyApiReaderResourceAvailability(auditedAnalysis, readerResources);
+    scoringFactReview.validateRepairedClaims('scoringAudit', auditedAnalysis, getPaperArxivId(paper));
     auditedParsed = parseAnalysis(auditedAnalysis);
     const sealedInvalidReason = getInvalidAnalysisReason(auditedAnalysis, auditedParsed, {
         enforceExperimentTableContract: true,
@@ -8215,6 +8229,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         throw new Error(`更新资源可用状态后，分析仍未通过最终检查：${sealedInvalidReason}`);
     }
     manifest.stages.scoringAudit = {
+        ...scoringFactFields,
         status: 'complete',
         attempts: totalAttempts,
         model: scoringResult.model,

@@ -125,14 +125,44 @@ function repositoryClassificationQuote(sourceText, start, end) {
     return sentence.slice(clauseStart, clauseEnd).trim();
 }
 
+// 仅恢复同一作者软件声明内被脚注分开的仓库及明确开源句。
+function presentedLibraryRepositoryQuote(source, token, start) {
+    const url = normalizePaperSourceRepositoryToken(token);
+    if (!url || /\r?\n/.test(token)) return '';
+    const parsed = new URL(url);
+    if (parsed.hostname !== 'github.com' || parsed.pathname.split('/').filter(Boolean).length !== 2) return '';
+    const name = parsed.pathname.split('/').filter(Boolean)[1];
+    if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(name)) return '';
+    const lower = source.lastIndexOf('We present ', start);
+    if (lower < 0 || (lower > 0 && source[lower - 1] !== '\n')) return '';
+    const prefix = source.slice(lower, start);
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!new RegExp(`^We present ${escapedName}(?:\\d{1,3})?\\s*(?:\\d{1,3}\\s*)?$`).test(prefix)
+        || /\n\s*\n/.test(prefix)) return '';
+    const endOfLine = source.indexOf('\n', start + token.length);
+    const quote = source.slice(lower, endOfLine < 0 ? source.length : endOfLine);
+    const after = quote.slice(prefix.length + token.length);
+    if (!/^:\s*given\b/i.test(after) || quote.length > 1600
+        || RESOURCE_NOT_RELEASED.test(quote) || THIRD_PARTY_RESOURCE.test(quote)
+        || (quote.match(/https?:\/\//gi) || []).length !== 1
+        || /\b(?:github\.com|gitlab\.com|huggingface\.co|modelscope\.cn)\b/gi.test(after)
+        || !/^:\s*given a score–performance alignment, it places independently generated components onto this shared axis and merges them into a single, self-contained visualization\.\s+(?:Each is handled as an independent layer that can be added, combined, or removed, making such composites straightforward to build and adapt\.\s+)?The library is open-source\b/.test(after)) return '';
+    return quote;
+}
+
 function paperSourceResourceQuote(sourceText, sourceToken) {
     const source = String(sourceText || '');
     const token = String(sourceToken || '');
     const start = token ? source.indexOf(token) : -1;
-    return start < 0 ? '' : repositoryClassificationQuote(source, start, start + token.length);
+    return start < 0 ? '' : presentedLibraryRepositoryQuote(source, token, start)
+        || repositoryClassificationQuote(source, start, start + token.length);
 }
 
 function paperSourceResourceFacets(sourceText, sourceToken) {
+    const source = String(sourceText || '');
+    const token = String(sourceToken || '');
+    const start = token ? source.indexOf(token) : -1;
+    if (start >= 0 && presentedLibraryRepositoryQuote(source, token, start)) return ['code'];
     const quote = paperSourceResourceQuote(sourceText, sourceToken)
         .split(String(sourceToken || '')).join('[RESOURCE_URL]');
     return classifyPaperSourceResourceFacets(quote);
@@ -173,6 +203,11 @@ function extractPaperSourceRepositoryCandidates(sourceText) {
         for (const type of facets) {
             candidates.push({ type, url, sourceToken, line: sourceQuote });
         }
+    }
+    // 原仓库提取拒绝紧邻冒号；只为已通过完整作者软件声明的原字节恢复。
+    for (const match of source.matchAll(/https:\/\/github\.com\/[A-Za-z0-9._~-]+\/[A-Za-z0-9_-]+(?=:\s*given\b)/g)) {
+        const line = presentedLibraryRepositoryQuote(source, match[0], match.index);
+        if (line) candidates.push({ type: 'code', url: match[0], sourceToken: match[0], line });
     }
     return [...new Map(candidates.map(candidate => [
         `${candidate.type}:${candidate.url}:${candidate.sourceToken}`, candidate

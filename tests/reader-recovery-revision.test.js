@@ -629,3 +629,29 @@ test('真实失败候选恢复只更正完整数词，不改较长数词内的�
         migrated.readerRecoveryRevisions[0].archivedName), 'utf8'));
     assert.equal(archived.payload.draft.sections[0].body, original);
 });
+
+test('完整原表标记的旧付费候选迁移不在无来源上下文中生成原表', t => {
+    const sample = fixture(t);
+    const resultSection = sample.payload.draft.sections.find(section => section.kind === 'result');
+    resultSection.body += '\n\n[[TABLE_1]]';
+    sample.payload.draft.tableBindings = [{
+        tableIndex: 1, sourceType: 'artifact_table', sourceTableOrdinal: 1,
+        sourceQuotes: [],
+        cellBindings: [0, 1].flatMap(row => [0, 1].map(column => ({
+            renderedRow: row, renderedColumn: column, sourceRow: row, sourceColumn: column
+        })))
+    }];
+    sample.payload.rawDraft = JSON.stringify(sample.payload.draft);
+    const filename = saveFailedCandidate(sample.directory, sample.oldIdentity, sample.payload);
+    const originalBytes = fs.readFileSync(filename);
+    const recovered = sample.enabled(() => loadReaderRecoveryRevision(sample.directory, sample.identity));
+    assert.equal(recovered.attempts, sample.payload.attempts);
+    assert.equal(recovered.fullAttempts, sample.payload.fullAttempts);
+    assert.equal(recovered.status, 'failed');
+    assert.deepEqual(recovered.draft, sample.payload.draft);
+    assert.equal(recovered.rawDraft, sample.payload.rawDraft);
+    assert.deepEqual(
+        fs.readFileSync(path.join(sample.directory, recovered.readerRecoveryRevisions[0].archivedName)),
+        originalBytes
+    );
+});

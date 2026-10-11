@@ -19,7 +19,7 @@ ALLOWED_TAGS = set(('svg g path rect circle ellipse line polyline polygon text t
                     'clipPath mask marker linearGradient radialGradient stop pattern symbol use '
                     'foreignObject span div p br b strong i em sub sup a math semantics annotation '
                     'mrow mi mn mo mtext mspace msup msub msubsup mfrac msqrt mroot mover '
-                    'munder munderover mtable mtr mtd').lower().split())
+                    'munder munderover mtable mtr mtd mphantom').lower().split())
 ALLOWED_ATTRIBUTES = set(('id class style x y x1 y1 x2 y2 cx cy r rx ry dx dy d points '
                           'width height viewbox preserveaspectratio transform version overflow '
                           'fill fill-rule fill-opacity stroke stroke-width stroke-linecap stroke-linejoin '
@@ -89,9 +89,23 @@ def validate_svg(raw):
     if root.tag.split('}')[-1].lower() != 'svg':
         raise ValueError('内联 SVG 根元素无效')
     parents = {child: parent for parent in root.iter() for child in parent}
+    ids = {}
+    for node in root.iter():
+        identifier = node.attrib.get('id')
+        if identifier is not None:
+            if identifier in ids:
+                raise ValueError('内联 SVG 含重复的元素标识符')
+            ids[identifier] = node
     for element in root.iter():
         if element.tag.split('}')[-1].lower() not in ALLOWED_TAGS:
             raise ValueError('内联 SVG 含不允许的元素')
+        if element.tag.split('}')[-1].lower() == 'mphantom':
+            ancestor = parents.get(element)
+            while ancestor is not None and ancestor.tag not in {'math', '{http://www.w3.org/1998/Math/MathML}math'}:
+                ancestor = parents.get(ancestor)
+            if (element.tag not in {'mphantom', '{http://www.w3.org/1998/Math/MathML}mphantom'}
+                    or ancestor is None):
+                raise ValueError('内联 SVG 的数学占位元素无效')
         for name, value in element.attrib.items():
             original_name = name
             name = name.split('}')[-1].lower()
@@ -112,6 +126,13 @@ def validate_svg(raw):
                 raise ValueError('内联 SVG 含事件或资源请求')
             if name == 'href' and not re.fullmatch(r'#[A-Za-z_][\w.:-]*', value):
                 raise ValueError('内联 SVG 引用只能指向本图元素')
+            if name == 'clip-path' and original_name == name:
+                local_clip = re.fullmatch(r'url\(#([A-Za-z_][\w.:-]*)\)', value)
+                if local_clip:
+                    target = ids.get(local_clip.group(1))
+                    if target is None or target.tag not in {'clipPath', '{http://www.w3.org/2000/svg}clipPath'}:
+                        raise ValueError('内联 SVG 裁剪引用必须对应本图裁剪元素')
+                    continue
             if re.search(r'url\s*\(|@import|expression\s*\(|javascript\s*:|data\s*:|https?\s*:|file\s*:', value, re.I):
                 raise ValueError('内联 SVG 含外部资源或动态样式')
             if name == 'style' and ('\\' in value or '@' in value):

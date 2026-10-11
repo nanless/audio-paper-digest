@@ -560,9 +560,67 @@ function pruneTrailingUnboundSourceQuoteBindings(draft, tables) {
     return true;
 }
 
+// 只补齐完整原表的确定性展示。这里不创建selection、不推断字段或数值；
+// 完整来源SHA以及后续逐格绑定、粘贴和正文检查仍由正式解析器执行。
+function restoreCompleteArtifactTableMarkers(draft, artifacts) {
+    // 恢复身份迁移尚未传入来源，留给带封存来源的正式解析器校验和恢复。
+    if (artifacts === null || artifacts === undefined) return;
+    if (!Array.isArray(draft?.sections) || !Array.isArray(draft?.tableBindings)) return;
+    for (const [index, binding] of draft.tableBindings.entries()) {
+        const marker = `[[TABLE_${binding?.tableIndex}]]`;
+        const matching = draft.sections.filter(section => typeof section?.body === 'string'
+            && section.body.includes(marker));
+        if (!matching.length || binding?.sourceType !== 'artifact_table'
+            || Object.prototype.hasOwnProperty.call(binding, 'selection')) continue;
+        const fail = () => { throw new Error(`完整原表 ${marker} 的坐标、来源或独占标记不完整，不能自动恢复`); };
+        if (Object.keys(binding).sort().join(',') !== 'cellBindings,sourceQuotes,sourceTableOrdinal,sourceType,tableIndex'
+            || binding.tableIndex !== index + 1 || !Number.isInteger(binding.sourceTableOrdinal)
+            || !Array.isArray(binding.sourceQuotes) || binding.sourceQuotes.length !== 0
+            || !Array.isArray(binding.cellBindings) || matching.length !== 1
+            || matching[0].body.split(marker).length !== 2
+            || !matching[0].body.split(/\n\s*\n/).some(block => block.trim() === marker)) fail();
+        const candidates = (artifacts?.tables || []).filter(t => t?.ordinal === binding.sourceTableOrdinal);
+        if (candidates.length !== 1) fail();
+        const source = candidates[0], matrix = source.matrix;
+        const validSha = value => /^[a-f0-9]{64}$/.test(String(value || ''));
+        if (source.recoveryStatus !== 'complete' || !validSha(source.sourceDomSha256)
+            || !Array.isArray(matrix) || matrix.length < 2 || !Array.isArray(matrix[0])) fail();
+        const width = matrix[0].length;
+        if (width < 2 || matrix.some(row => !Array.isArray(row) || row.length !== width)
+            || binding.cellBindings.length !== matrix.length * width) fail();
+        const seen = new Set();
+        for (const cell of binding.cellBindings) {
+            if (!cell || Object.keys(cell).sort().join(',') !== 'renderedColumn,renderedRow,sourceColumn,sourceRow'
+                || !Number.isInteger(cell.renderedRow) || !Number.isInteger(cell.renderedColumn)
+                || cell.renderedRow !== cell.sourceRow || cell.renderedColumn !== cell.sourceColumn) fail();
+            const row = cell.sourceRow, column = cell.sourceColumn, key = `${row}:${column}`;
+            const text = matrix[row]?.[column];
+            const dom = (source.cells || []).filter(item => Number.isInteger(item?.row)
+                && Number.isInteger(item?.column) && row >= item.row
+                && row < item.row + Number(item.rowspan || 1) && column >= item.column
+                && column < item.column + Number(item.colspan || 1));
+            if (seen.has(key) || typeof text !== 'string' || dom.length !== 1
+                || !validSha(dom[0].sourceDomSha256) || dom[0].text !== text
+                || /[|\r\n]|\[\[|<\/?[A-Za-z!]|!?\[[^\]]*\]\(/.test(text)
+                || /^\s*:?-{3,}:?\s*$/.test(text)) fail();
+            seen.add(key);
+        }
+        const nodes = locateReaderDraftTables(draft);
+        const position = nodes.findIndex(node => node.marker === marker);
+        if (position !== index || nodes.filter(node => node.marker === marker).length !== 1) fail();
+        const line = cells => `| ${cells.join(' | ')} |`;
+        const markdown = [line(matrix[0]), line(matrix[0].map(() => '---')),
+            ...matrix.slice(1).map(line)].join('\n');
+        const parsed = extractMarkdownTables(markdown);
+        if (parsed.length !== 1 || JSON.stringify([parsed[0].header, ...parsed[0].rows]) !== JSON.stringify(matrix)) fail();
+        matching[0].body = matching[0].body.replace(marker, markdown);
+    }
+}
+
 function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
     const draft = structuredClone(input);
     const inputSha256 = sha(input);
+    restoreCompleteArtifactTableMarkers(draft, structuredArtifacts);
     const sections = Array.isArray(draft?.sections) ? draft.sections : [];
     const ranked = sections.map((section, index) => ({ section, index }));
     // 未知或格式错误的小节类型由解析器检查；在它报告错误之前，不要自己
