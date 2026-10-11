@@ -3225,6 +3225,17 @@ function getApiReaderFigureInventory(structuredArtifacts, arxivId = '') {
             if (inventory.length >= API_READER_FIGURE_LIMIT) break;
             continue;
         }
+        if (resource?.kind === 'inline_svg') {
+            const descriptor = require('./lib/reader-inline-svg.js')
+                .inlineSvgSourceDescriptor(resource, expectedId);
+            if (!descriptor) continue;
+            inventory.push({ ordinal: figure.ordinal,
+                label: String(figure.label || `Figure ${figure.ordinal}`).replace(/\s+/g, ' ').trim(),
+                caption: String(figure.caption || '').replace(/\s+/g, ' ').trim().slice(0, 1200),
+                sourceDomSha256: figure.sourceDomSha256, ...descriptor });
+            if (inventory.length >= API_READER_FIGURE_LIMIT) break;
+            continue;
+        }
         if (resource?.kind !== 'external_url') continue;
         let parsed;
         try {
@@ -3257,6 +3268,8 @@ function getApiReaderFigureInventory(structuredArtifacts, arxivId = '') {
 const LEGACY_READER_FIGURE_CAPTIONS = {"method.png": "Figure 1: Overview of the study.", "overview.png": "Figure 2: Controlled procedural source and pre-training pipeline. FormulaBank separates formula-class coverage C from rendering diversity I, with N(C,I)=C\\times I clips."};
 const LEGACY_READER_PIXEL_NARRATIVES = ["官方 HTML 将此资源标为 Figure 3，图注称七种声音在语音或停顿中的放置比例相近；但绑定 URL 的实际像素对应 Figure 4，左侧显示四个语料上表示漂移比与任务损伤比随信噪比变化，右侧显示停顿位移后的语音帧漂移随距离衰减。图注与像素错配，本段按绑定图像说明，不把原图注当成图像事实。", "绑定图像：四个语料的表示漂移比与任务损伤比随信噪比变化；右侧为停顿位移后的语音帧漂移随距离衰减。原 HTML 图注与像素错配。"];
 function readerFigureNeedsSourcePayload(figure, paperId) {
+    if (figure?.inlineSvgSourceSha256 !== undefined || figure?.inlineSvgRenderContract !== undefined
+        || String(figure?.url || '').includes('#')) return true;
     if (String(paperId || '').trim().toLowerCase().replace(/^arxiv:/, '').replace(/v\d+$/i, '') !== '2609.15067') return false;
     const name = String(figure?.url || '').match(/^https:\/\/(?:www\.)?arxiv\.org\/html\/2609\.15067(?:v\d+)?\/(method\.png|overview\.png)$/i)?.[1]?.toLowerCase();
     return Boolean(name && figure.caption === LEGACY_READER_FIGURE_CAPTIONS[name]);
@@ -3273,7 +3286,10 @@ function readerFigureSourcePayloadValid(paper, structuredSha, sourceSha) {
     const inventory = getApiReaderFigureInventory(artifacts, id);
     return affected.every(figure => {
         const matches = inventory.filter(source => source.url === figure.url);
-        return matches.length === 1 && ['ordinal', 'label', 'caption', 'sourceDomSha256'].every(key => matches[0][key] === figure[key]);
+        return matches.length === 1 && ['ordinal', 'label', 'caption', 'sourceDomSha256'].every(key => matches[0][key] === figure[key])
+            && (!matches[0].inlineSvgSourceSha256 || (recoverySha256(figure.assetSha256)
+                && ['inlineSvgSourceSha256', 'inlineSvgRenderContract', 'sourceLocationUrl']
+                    .every(key => matches[0][key] === figure[key])));
     });
 }
 
@@ -5090,8 +5106,11 @@ function normalizeDeclaredReaderMarkerParagraphs(value) {
         const markerSections = value.sections.filter(section => (
             typeof section?.body === 'string' && section.body.includes(marker)
         ));
+        const uniqueDeclaredSection = ['figure', 'formula'].includes(declaration.type)
+            && markerSections.length === 1 && markerSections[0].kind === declaration.kind
+            && markerSections[0].body.split(marker).length - 1 === 1 ? markerSections[0] : null;
         const declaredSection = kindBound
-            ? value.sections.find(section => section?.kind === declaration.kind)
+            ? uniqueDeclaredSection || value.sections.find(section => section?.kind === declaration.kind)
             : markerSections.length === 1 ? markerSections[0] : null;
         if (declaredSection && typeof declaredSection.body === 'string') {
             declaredSection.body = normalizeReaderStructuralLineBreaks(declaredSection.body, marker);
@@ -6974,7 +6993,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(__filename, 'utf8'),
             fs.readFileSync(path.join(__dirname, 'analysis-contract.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'utils.js'), 'utf8'),
-            fs.readFileSync(path.join(__dirname, 'lib/analysis-section-titles.js'), 'utf8')
+            fs.readFileSync(path.join(__dirname, 'lib/analysis-section-titles.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-inline-svg.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'reader_inline_svg.py'), 'utf8')
         ].join('\0')),
         readerRecoveryEpochSha256: repair.shaText(READER_RECOVERY_EPOCH),
         editorialImplementationSha256: repair.shaText(fs.readFileSync(path.join(__dirname, 'editorial-quality.js'), 'utf8')),
@@ -13098,7 +13119,10 @@ function isCorruptedMultimodalError(error) {
 
 function modelImageEvidence(image, status = 'ready') {
     return { inputId: image.inputId, kind: image.kind, ordinal: image.ordinal,
-        ...(image.url ? { url: image.url } : {}), sha256: image.sourceSha256, sourceSha256: image.sourceSha256,
+        ...(image.url ? { url: image.url } : {}),
+        ...(image.inlineSvgSourceSha256 ? { inlineSvgSourceSha256: image.inlineSvgSourceSha256,
+            inlineSvgRenderContract: image.inlineSvgRenderContract, sourceLocationUrl: image.sourceLocationUrl } : {}),
+        sha256: image.sourceSha256, sourceSha256: image.sourceSha256,
         sourceBytes: image.sourceBytes, sourceWidth: image.sourceWidth, sourceHeight: image.sourceHeight,
         modelPayloadSha256: image.modelPayloadSha256, modelPayloadBytes: image.modelPayloadBytes,
         modelPayloadWidth: image.modelPayloadWidth, modelPayloadHeight: image.modelPayloadHeight,
@@ -16295,6 +16319,17 @@ async function repairCoreSummarySection(
                 + `必须保持在 ${CORE_SUMMARY_MIN_CHINESE_CHARS}–${CORE_SUMMARY_MAX_CHINESE_CHARS} 个以内；`
                 + `${lengthAction}。没有被指出问题的量化结果句、边界句和成本句仍逐字保留，`
                 + '在其余允许修改的内容中调整长度');
+        }
+        const sentenceCountIssue = feedback.match(/句数必须为 (\d+)–(\d+)，当前 (\d+)/);
+        if (sentenceCountIssue) {
+            const currentCount = Number(sentenceCountIssue[3]);
+            const maximumCount = Number(sentenceCountIssue[2]);
+            const sentenceAction = currentCount > maximumCount
+                ? '合并未受保护的重复任务介绍或方法说明句'
+                : '把未受保护的任务或方法说明按实际内容分开，补充必要衔接，不拆空句';
+            retryTargets.push(`当前摘要为 ${currentCount} 句，须为 ${sentenceCountIssue[1]}–${sentenceCountIssue[2]} 句；`
+                + `${sentenceAction}。没有被指出问题的量化结果句、边界句和成本句仍逐字保留，`
+                + '不得为调整句数删去事实或改变数字');
         }
         const requiresUnavailableResultStatement = feedback.includes(
             `原文无可核定量结果时必须明确写“${CORE_SUMMARY_RESULT_UNAVAILABLE}”`

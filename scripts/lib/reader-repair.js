@@ -502,6 +502,7 @@ function nodeAt(draft, pointer) {
         return draft[pointer.slice(1)];
     }
     if (pointer === '/tableBindings') return draft.tableBindings;
+    if (pointer === '/figurePlacements') return draft.figurePlacements;
     const match = /^\/(sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(0|[1-9]\d*)(\/body)?$/.exec(pointer);
     if (!match || (match[3] && match[1] !== 'sections')) throw new Error(`Reader patch path is not allowed: ${pointer}`);
     const list = draft[match[1]];
@@ -549,7 +550,12 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         if (item.path === '/tableBindings' && !Array.isArray(item.value)) {
             throw new Error('Reader patch tableBindings replacement must be an array');
         }
-        if (item.path !== '/tableBindings' && !item.path.endsWith('/body')
+        if (item.path === '/figurePlacements' && (!Array.isArray(options.availableFigureOrdinals)
+            || options.availableFigureOrdinals.length !== 0 || !Array.isArray(item.value)
+            || item.value.length !== 0)) {
+            throw new Error('无图清除只允许在本次没有可用像素时清空图绑定');
+        }
+        if (item.path !== '/tableBindings' && item.path !== '/figurePlacements' && !item.path.endsWith('/body')
             && !['/readerTitle', '/oneSentenceThesis'].includes(item.path)
             && (!item.value || typeof item.value !== 'object' || Array.isArray(item.value))) {
             throw new Error('Reader patch node replacement must be an object');
@@ -572,6 +578,15 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             }
         }
         seen.push(item.path);
+    }
+    if (patch.replacements.some(item => item.path === '/figurePlacements')) {
+        for (const item of patch.replacements) {
+            if (item.path === '/figurePlacements') continue;
+            if (!/^\/sections\/\d+\/body$/.test(item.path)
+                || item.value !== removeUnavailableFigureProse(nodeAt(draft, item.path))) {
+                throw new Error('无图清除必须保留其他正文、表格、数字与来源记录');
+            }
+        }
     }
     const operation = options.atomicOperation;
     if (operation?.kind === 'relocate_result_table_v1') {
@@ -603,6 +618,10 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         target[parts.at(-1)] = structuredClone(item.value);
     }
     assertSafeJson(merged);
+    if (patch.replacements.some(item => item.path === '/figurePlacements')
+        && merged.sections.some(section => /\[\[FIGURE_\d+\]\]/.test(String(section?.body || '')))) {
+        throw new Error('无图清除必须同时移除全部正文图标记，不得只清空图绑定');
+    }
     if (operation?.kind === 'relocate_result_table_v1') {
         const beforeTables = locateReaderDraftTables(draft);
         const afterTables = locateReaderDraftTables(merged);
@@ -641,11 +660,12 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         const binding = merged.tableBindings?.[operation.bindingIndex];
         // 一次只补一张表。若原稿缺了多张，不能同时要求这一次就补齐全部。
         // 原有表格和其他来源记录必须保持，剩余缺口仍由完整解析器拒绝。
-        const oldTablesPreserved = beforeTables.every((table, index) => (
-            afterTables[index]?.sectionIndex === table.sectionIndex
-            && hashDraft(afterTables[index]?.table ?? null) === hashDraft(table.table ?? null)
-            && afterTables[index]?.marker === table.marker
-        ));
+        const oldTablesPreserved = beforeTables.every((table, index) => {
+            const afterIndex = operation.insertionBeforeMarker && index >= operation.bindingIndex ? index + 1 : index;
+            return afterTables[afterIndex]?.sectionIndex === table.sectionIndex
+                && hashDraft(afterTables[afterIndex]?.table ?? null) === hashDraft(table.table ?? null)
+                && afterTables[afterIndex]?.marker === table.marker;
+        });
         const otherBindingsPreserved = draft.tableBindings.every((oldBinding, index) => (
             index === operation.bindingIndex
             || hashDraft(merged.tableBindings?.[index]) === hashDraft(oldBinding)
@@ -657,6 +677,8 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             || !oldTablesPreserved || !otherBindingsPreserved
             || destinationAfter !== destinationBefore + 1
             || added?.sectionIndex !== operation.destinationSectionIndex
+            || (operation.insertionBeforeMarker
+                && afterTables[operation.bindingIndex + 1]?.marker !== operation.insertionBeforeMarker)
             || !added?.table
             || (String(added.table.markdown).match(/\d+/g) || []).length < 4
             || binding?.tableIndex !== operation.tableIndex
@@ -753,6 +775,7 @@ function collectDraftIssues(draft, parserError, options = {}) {
                 issues.push({ path: `/${field}/${index}`, message: `${field}[${index}] marker 必须唯一独占一段并位于声明 kind 小节；`
                     + `声明 kind=${JSON.stringify(expectedKind)}，实际独占行出现 ${matches.length} 次，`
                     + `所在小节=${JSON.stringify(matches.map(sectionIndex => ({ index: sectionIndex, kind: draft.sections[sectionIndex]?.kind })))}。`
+                    + (field === 'figurePlacements' ? '图标记必须单独一行，不能与“下图展示”等句子同一行；已有内联标记须分段，保留原有说明和证据。' : '')
                     + '请依据原文修正绑定声明或已授权正文的位置，不得原样回传失败项或自动改变论文含义。' });
             }
         });
@@ -870,6 +893,39 @@ function collectTableBindingIssues(draft, options = {}) {
                 + '能否用已有的原文引文自动补齐来源对应记录，仍由完整文章解析器检查。' });
     }
     return issues;
+}
+
+function buildUniqueMissingQuoteTableOperation(draft, issues) {
+    if (!issues.some(issue => classifyTableBindingOrderIssue(issue).actionable)) return null;
+    const tables = locateReaderDraftTables(draft);
+    const bindings = draft.tableBindings;
+    if (!Array.isArray(bindings) || tables.length + 1 !== bindings.length
+        || bindings.some((binding, index) => binding?.tableIndex !== index + 1)) return null;
+    const candidates = [];
+    for (let index = 1; index < bindings.length - 1; index += 1) {
+        const binding = bindings[index];
+        if (binding?.sourceType !== 'source_quotes' || !Array.isArray(binding.sourceQuotes)
+            || !binding.sourceQuotes.length || !bindings[index + 1]?.selection) continue;
+        const remaining = bindings.filter((_item, ordinal) => ordinal !== index);
+        const matches = remaining.every((item, ordinal) => item.selection
+            ? tables[ordinal]?.marker === `[[TABLE_${item.tableIndex}]]`
+                && draft.sections.reduce((count, section) => count
+                    + String(section?.body || '').split(`[[TABLE_${item.tableIndex}]]`).length - 1, 0) === 1
+            : !tables[ordinal]?.marker && Boolean(tables[ordinal]?.table));
+        const next = tables[index];
+        if (!matches || !next?.marker
+            || !['result', 'ablation'].includes(draft.sections[next.sectionIndex]?.kind)) continue;
+        const destinationSectionPath = `/sections/${next.sectionIndex}/body`;
+        const bindingPath = `/tableBindings/${index}`;
+        candidates.push({ kind: 'add_result_table_v1', destinationSectionIndex: next.sectionIndex,
+            bindingIndex: index, tableIndex: index + 1, destinationSectionPath, bindingPath,
+            insertionBeforeMarker: next.marker,
+            requiredReplacementPaths: [destinationSectionPath, bindingPath],
+            requiredPostconditions: ['insert exactly one source-backed Markdown table before insertionBeforeMarker',
+                'all existing tables, selection markers and other bindings remain byte-identical',
+                'replace sourceQuotes only with exact continuous source text; final source parser remains mandatory'] });
+    }
+    return candidates.length === 1 ? candidates[0] : null;
 }
 
 function buildMissingResultTableOperation(draft, issues) {
@@ -995,6 +1051,11 @@ function buildMissingNarrativeTableOperation(draft, issues) {
     return null;
 }
 
+// 没有传入像素时，只删除独立图标记；其余正文逐字保留，内容问题仍须后续核验。
+function removeUnavailableFigureProse(body) {
+    return String(body).replace(/^[ \t]*\[\[FIGURE_\d+\]\][ \t]*(?:\r?\n|$)/gm, '');
+}
+
 function buildRepairTargets(draft, issues) {
     const paths = new Set();
     const add = pointer => {
@@ -1013,6 +1074,19 @@ function buildRepairTargets(draft, issues) {
                 || section?.kind === (binding.targetKind || binding.sectionKind)) add(`/sections/${sectionIndex}/body`);
         });
     };
+    if (issues.some(issue => /论文没有可用 Figure，figurePlacements\s*必须为空/.test(String(issue?.message || '')))
+        && draft.figurePlacements?.length) {
+        add('/figurePlacements');
+        draft.sections.forEach((section, index) => {
+            if (removeUnavailableFigureProse(section.body) !== section.body) add(`/sections/${index}/body`);
+        });
+        if (paths.size > 8) return [];
+        return [...paths].map(pointer => ({ path: pointer,
+            oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
+            repairInstruction: pointer === '/figurePlacements' ? '本次没有可用图像素，只清空为 []；不新增图或图解。'
+                : '只移除独立图标记；包括数字、方法、表格与图解在内的其他正文逐字保留。此操作不认证残留图解的内容正确性。',
+            expectedCleanupValue: pointer === '/figurePlacements' ? [] : removeUnavailableFigureProse(nodeAt(draft, pointer)) }));
+    }
     const conceptBridgePlacementGroup = issue => {
         const message = String(issue?.message || '');
         if (!(/marker 必须唯一独占一段并位于声明 kind 小节/.test(message)
@@ -1111,7 +1185,8 @@ function buildRepairTargets(draft, issues) {
     const ambiguousTableOrderIssue = blockingIssues.find(issue => (
         classifyTableBindingOrderIssue(issue).actionable
     ));
-    const missingResultTableOperation = buildMissingResultTableOperation(draft, issues);
+    const missingResultTableOperation = buildUniqueMissingQuoteTableOperation(draft, issues)
+        || buildMissingResultTableOperation(draft, issues);
     if (ambiguousTableOrderIssue && missingResultTableOperation) {
         // 表格数量尚未对应时，补表或搬表指令与允许修改的路径必须一致。
         // 不能先授权最后一个实验小节，再要求模型修改第一个结果小节。
@@ -1343,7 +1418,8 @@ function buildRepairTargets(draft, issues) {
 
 function buildRepairContext(draft, issues, sourceEvidence, sourceText = '') {
     const targets = buildRepairTargets(draft, issues);
-    const requestedOperation = buildMissingResultTableOperation(draft, issues)
+    const requestedOperation = buildUniqueMissingQuoteTableOperation(draft, issues)
+        || buildMissingResultTableOperation(draft, issues)
         || buildMissingNarrativeTableOperation(draft, issues);
     // 当前先修术语解释等其他问题时，不夹带一条没有授权修改范围的表格指令。
     const atomicOperation = requestedOperation

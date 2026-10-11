@@ -246,7 +246,7 @@ npm run visual:status -- --date YYYY-MM-DD
 npm run cover:status -- --date YYYY-MM-DD
 ```
 
-采用 `ephemeral-no-persisted-figure-assets-v1` 的 Reader 页面保留已记录且核验通过的 arXiv 官方 HTTPS 图片 URL，供读者查看，不复制或缓存图片字节。`visual:prepare` 处理旧版任务清单时核验 `.bin` 缓存，输出带真实扩展名的绝对路径。当前日更则核验官方 URL、图编号、DOM SHA、像素 SHA 和 MIME，返回空的 `referencedImagePaths`；生图只使用已核验的 Reader 文本，不退回旧缓存。
+采用 `ephemeral-no-persisted-figure-assets-v1` 的 Reader 页面保留已记录且核验通过的 arXiv 官方 HTTPS 图片 URL，供读者查看，不复制或缓存图片字节。`visual:prepare` 处理旧版任务清单时核验 `.bin` 缓存，输出带真实扩展名的绝对路径。当前日更则核验官方 URL、图编号、DOM SHA、像素 SHA 和 MIME，返回空的 `referencedImagePaths`；生图只使用已核验的 Reader 文本，不退回旧缓存。唯一新增例外是已封存的官方内联 SVG：HTML 的 `#id` 只定位原文图，不是可下载的图片 URL，也不能交给生图工具。模型像素仍只在当前调用的系统临时目录准备；发布器核验封存 SVG、原文 DOM、图注和素材 SHA，重新渲染并确认像素一致后，才生成博客 `static` PNG。运行目录中的 SVG XML 是来源封存材料，不是像素缓存；此例外不允许其他图片缓存。
 
 只将 `visual:prepare` 输出的绝对 `referencedImagePaths` 交给工具。登记前逐图检查标题、中文、结构关系、指标方向、数字与排行榜；`record` 必须带 `--qa-attested true`。只有用户明确取消生图时，才使用 `digest:waive-visuals` 记录与当前发布和图片任务清单绑定的豁免，不能把待完成任务改成已完成。
 

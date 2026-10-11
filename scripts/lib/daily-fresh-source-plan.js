@@ -386,6 +386,24 @@ async function ephemeralReaderFigures(arxivId, figures, plan, options = {}) {
     const materialized = [];
     for (const figure of figures) {
         try {
+            // 内联图的 URL 是原文定位，不是远程图片下载地址。每次使用前重新核验四件来源。
+            if (String(figure.url || '').includes('#')) {
+                const svg = require('./reader-inline-svg.js');
+                const details = readDailyFreshSource(plan, { arxivId });
+                const matches = (details.structuredArtifacts?.figures || []).filter(item =>
+                    item.ordinal === figure.ordinal && item.recoveryStatus === 'complete'
+                    && item.images?.length === 1
+                    && svg.inlineSvgSourceDescriptor(item.images[0], arxivId)?.url === figure.url);
+                if (matches.length !== 1) fail(`论文图 ${figure.ordinal} 的内联原图定位与封存来源不符`);
+                const sourceFigure = matches[0];
+                const descriptor = svg.inlineSvgSourceDescriptor(sourceFigure.images[0], arxivId);
+                const rendered = await svg.renderOfficialInlineSvg(sourceFigure.images[0]);
+                materialized.push({ ...figure, ...descriptor,
+                    sourceDomSha256: sourceFigure.sourceDomSha256,
+                    rawBytes: rendered.rawBytes, assetSha256: rendered.assetSha256,
+                    assetMediaType: rendered.mediaType });
+                continue;
+            }
             const cached = options.figureCache instanceof Map
                 ? options.figureCache.get(figure.url) : null;
             if (cached) {

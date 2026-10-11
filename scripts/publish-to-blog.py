@@ -5649,6 +5649,37 @@ _LEGACY_READER_FIGURE_CAPTIONS = {'method.png': 'Figure 1: Overview of the study
 _LEGACY_READER_PIXEL_NARRATIVES = ['官方 HTML 将此资源标为 Figure 3，图注称七种声音在语音或停顿中的放置比例相近；但绑定 URL 的实际像素对应 Figure 4，左侧显示四个语料上表示漂移比与任务损伤比随信噪比变化，右侧显示停顿位移后的语音帧漂移随距离衰减。图注与像素错配，本段按绑定图像说明，不把原图注当成图像事实。', '绑定图像：四个语料的表示漂移比与任务损伤比随信噪比变化；右侧为停顿位移后的语音帧漂移随距离衰减。原 HTML 图注与像素错配。']
 
 
+def _reader_inline_svg_resource(paper, plan, figure, structured_sha, source_sha):
+    from reader_inline_svg import source_descriptor
+    artifacts = _reader_source_payload_artifacts(plan.get('structuredSourcePayload'), structured_sha, source_sha)
+    if not artifacts or not isinstance(artifacts.get('figures'), list):
+        raise PublishDataValidationError('内联论文图缺少已绑定的原始结构化来源。')
+    paper_id = normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
+    matches = []
+    for source in artifacts['figures']:
+        if (not isinstance(source, dict) or source.get('recoveryStatus') != 'complete'
+                or source.get('ordinal') != figure.get('ordinal')
+                or source.get('sourceDomSha256') != figure.get('sourceDomSha256')):
+            continue
+        images = source.get('images')
+        if not isinstance(images, list) or len(images) != 1:
+            continue
+        try:
+            descriptor = source_descriptor(images[0], paper_id)
+        except ValueError:
+            continue
+        if (descriptor['url'] == figure.get('url')
+                and figure.get('sourceLocationUrl') == descriptor['url']
+                and all(descriptor[key] == figure.get(key) for key in
+                        ('inlineSvgSourceSha256', 'inlineSvgRenderContract'))
+                and re.sub(r'\s+', ' ', source.get('label') or f"Figure {source['ordinal']}").strip() == figure.get('label')
+                and re.sub(r'\s+', ' ', source.get('caption') or '').strip()[:1200] == figure.get('caption')):
+            matches.append(images[0])
+    if len(matches) != 1:
+        raise PublishDataValidationError('内联论文图与原始 SVG、DOM、图注或来源位置不一致。')
+    return matches[0]
+
+
 def _validate_legacy_reader_figure_source(paper, plan, article, structured_sha, source_sha):
     paper_id = normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
     figures = paper.get('apiReaderFigures') or []
@@ -5658,6 +5689,10 @@ def _validate_legacy_reader_figure_source(paper, plan, article, structured_sha, 
             and any(isinstance(item, dict) and item.get('url') == 'https://arxiv.org/html/2609.27195v1/fig4_placement_ratio_readable.svg' for item in figures)
             and any(text in article for text in _LEGACY_READER_PIXEL_NARRATIVES)):
         raise PublishDataValidationError('旧论文图仍含无像素证据的固定叙述；请根据封存来源重建 Reader。')
+    for figure in figures:
+        if isinstance(figure, dict) and ('inlineSvgSourceSha256' in figure or 'inlineSvgRenderContract' in figure
+                or urlparse(str(figure.get('url') or '')).fragment):
+            _reader_inline_svg_resource(paper, plan, figure, structured_sha, source_sha)
     if paper_id != '2609.15067':
         return
     for figure in figures:
@@ -6496,6 +6531,12 @@ def _api_reader_payload(paper):
                 # 历史直接分析可保留临时像素的内容 SHA，作为图片证据；
                 # 此字段不提供可复制的图片文件路径。
                 expected_figure_fields.add('assetSha256')
+            inline_svg = 'inlineSvgSourceSha256' in item or 'inlineSvgRenderContract' in item or bool(urlparse(str(item.get('url') or '')).fragment)
+            if inline_svg:
+                expected_figure_fields.update({'inlineSvgSourceSha256', 'inlineSvgRenderContract', 'sourceLocationUrl'})
+                expected_figure_fields.add('assetSha256')
+                if not ephemeral_figures:
+                    raise PublishDataValidationError('内联论文图只能使用当前调用的临时像素记录。')
             if plan_version in {2, 3}:
                 expected_figure_fields.update({
                     'marker', 'leadQuote', 'explanationQuote',
@@ -6563,6 +6604,20 @@ def _api_reader_payload(paper):
                         '临时图片的像素证据 SHA 格式无效。'
                     )
                 _ephemeral_figure_note(item)
+                if inline_svg:
+                    from reader_inline_svg import render_svg
+                    resource = _reader_inline_svg_resource(paper, plan, item,
+                        source_binding_proof['structuredArtifactsSha256'], paper['sourceSha256'])
+                    raw_asset = render_svg(resource['inlineSvg'].encode('utf-8'))
+                    actual_sha = hashlib.sha256(raw_asset).hexdigest()
+                    if actual_sha != item.get('assetSha256'):
+                        raise PublishDataValidationError('内联论文图重新渲染的像素与 Reader 实际输入不一致。')
+                    filename = f"figure-{item['ordinal']}-{actual_sha[:16]}.png"
+                    destination = Path('static') / 'images' / 'papers' / paper_id / filename
+                    figure_assets.append({'generatedBytes': raw_asset,
+                        'destination': destination.as_posix(),
+                        'publicUrl': f'{BASE_PATH.rstrip("/")}/images/papers/{paper_id}/{filename}',
+                        'sourceUrl': item['url'], 'sha256': actual_sha})
                 continue
             declared_cache_path = Path(str(item['cachePath'] or '')).expanduser()
             if declared_cache_path.is_symlink() or declared_cache_path.parent.is_symlink():
@@ -9140,15 +9195,17 @@ def prepare_api_reader_staged_assets(papers, stage_root):
             if relative.as_posix() in seen:
                 raise PublishDataValidationError(f'API reader figure 目标路径重复: {relative}')
             seen.add(relative.as_posix())
-            source = Path(asset['sourcePath']).resolve()
+            generated = asset.get('generatedBytes')
+            source = None if generated is not None else Path(asset['sourcePath']).resolve()
             target = (stage_root / relative).resolve()
             try:
                 target.relative_to(stage_root)
             except ValueError as exc:
                 raise PublishDataValidationError(f'API reader figure staging 路径逃逸: {relative}') from exc
-            if _sha256_file(source) != asset['sha256']:
-                raise PublishDataValidationError(f'API reader figure 缓存写入前发生变化: {source.name}')
-            _atomic_write_bytes(target, source.read_bytes(), mode=0o600)
+            raw = generated if generated is not None else source.read_bytes()
+            if not isinstance(raw, bytes) or hashlib.sha256(raw).hexdigest() != asset['sha256']:
+                raise PublishDataValidationError('论文图暂存写入前的像素 SHA 不一致。')
+            _atomic_write_bytes(target, raw, mode=0o600)
             staged.append(target)
     return staged
 
