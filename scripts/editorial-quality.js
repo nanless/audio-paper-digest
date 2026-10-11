@@ -973,6 +973,20 @@ function findMissingComparisonUnits(text) {
         // 图表编号和“第 2 至 3 位”这类序号不是指标值。先做等长屏蔽，
         // 避免一句定性比较仅因包含图号/排名位置就被误判为缺少单位。
         const numericText = sentence.text
+            // 明确命名的超参数值是实验设置，不能冒充同句的百分比结果。
+            // 只屏蔽实际参数表达式；其他结果数字继续走原有单位检查。
+            .replace(
+                /(?:正则参数|超参数|参数)\s*[λε]\s*=\s*[-+]?\d+(?:\.\d+)?(?:\s*\^\s*[-+]?\d+)?(?![\d.])/gu,
+                match => ' '.repeat(match.length)
+            )
+            .replace(
+                /最高准确率出现在\s*([λε])\s*=\s*[-+]?\d+(?:\.\d+)?(?![\d.])(?=\s*[，,]\s*\1\s*更大时)/gu,
+                match => ' '.repeat(match.length)
+            )
+            .replace(
+                /(?:正则参数|超参数)\s*[λε]\s*(?:从|为|在)\s*\d+(?:\.\d+)?(?:\s*\^\s*[-+]?\d+)?\s*(?:到|至|[-–—])\s*\d+(?:\.\d+)?(?:\s*\^\s*[-+]?\d+)?(?![\d.])/gu,
+                match => ' '.repeat(match.length)
+            )
             .replace(
                 new RegExp(`\\d+(?:\\.\\d+)?\\s*(?:或|和|、|至|到|[-–—])\\s*\\d+(?:\\.\\d+)?\\s*${unit}`, 'giu'),
                 match => ' '.repeat(match.length)
