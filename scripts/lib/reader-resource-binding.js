@@ -62,7 +62,38 @@ function normalizePaperSourceRepositoryToken(value) {
     return parsed.toString().replace(/\/$/, '');
 }
 
+// 只接受完整的作者试听声明；术语提及、引文和未知具名主体不授权演示身份。
+function isAuthorAudioExamplesStatement(value) {
+    return /^Audio examples are (?:publicly )?available at (?:https:\/\/[^\s"'<>`]+|\[RESOURCE_URL\])[.]?$/i.test(String(value || '').trim());
+}
+
+function authorAudioExamplesContext(source, token, start) {
+    const paragraphStart = source.lastIndexOf('\n\n', start - 1);
+    const lower = paragraphStart < 0 ? 0 : paragraphStart + 2;
+    const previous = source.slice(0, lower).trimEnd().split(/\n\s*\n/).at(-1) || '';
+    const context = source.slice(0, start + token.length);
+    // TXT 可能没有空行。保留完整引入文字，不能由最后一句覆盖否定或未来承诺。
+    if (RESOURCE_NOT_RELEASED.test(context)
+        || /["“”‘’`]|^\s*['>]|^ {4}|<\/?(?:blockquote|pre|code)\b/im.test(context)
+        || /\b(?:quotes?|quoted|quotation|states|stated|says?|said|writes?|wrote|reported|according\s+to|following|as\s+follows|authors?|et\s+al|documentation|announcement|this\s+sentence|excerpt|mentioned|noted|claimed|describes?|description|website|contains|definition|terminology|phrase|means|for\s+example)\b|引用|第三方|术语/i.test(context)) return false;
+    // 有引入文字时必须由最近的完整句明确介绍本研究；未知项目的说明保持中性。
+    const statementStart = source.lastIndexOf('Audio examples', start);
+    const introduction = source.slice(lower, statementStart).trim();
+    const previousIntroduction = previous.trim();
+    const preceding = introduction || previousIntroduction;
+    if (preceding) {
+        const nearest = preceding.split(/[.!?]\s+/).at(-1).replace(/\s+/g, ' ').trim();
+        if (!/^(?:(?:Furthermore|Additionally|Moreover|Specifically|Therefore),?\s+)?We\s+(?:propose|present|formulate|design|estimate|introduce|develop)\b/i.test(nearest)) return false;
+        if (/\b(?:projects?|resources?)\b/i.test(nearest)
+            || THIRD_PARTY_RESOURCE.test(nearest)
+            || /\b(?:another|external|other|third[- ]party)\s+(?:projects?|systems?|works?|authors?|resources?)\b|\b(?:from|by)\s+[A-Z][A-Za-z0-9_-]+\b/.test(nearest)) return false;
+    }
+    const sentence = repositoryClassificationQuote(source, start, start + token.length);
+    return isAuthorAudioExamplesStatement(sentence);
+}
+
 function classifyPaperSourceResourceFacets(sourceQuote) {
+    if (isAuthorAudioExamplesStatement(sourceQuote)) return ['demo'];
     const quote = String(sourceQuote || '').replace(/\bavail-\s*able\b/gi, 'available')
         .replace(/\s+/g, ' ').trim()
         .replace(ATTACHED_FOOTNOTE_RESOURCE_LABEL, '');
@@ -191,13 +222,23 @@ function paperSourceResourceQuote(sourceText, sourceToken) {
         || repositoryClassificationQuote(source, start, start + token.length);
 }
 
+function resourceClassificationIsCurrent(resource, sourceText) {
+    if (resource?.origin !== 'paper_source' || resource.type !== 'third_party') return true;
+    const token = resource.sourceUrlToken || resource.originalUrl;
+    const source = String(sourceText || '');
+    const start = token ? source.indexOf(token) : -1;
+    return start < 0 || !authorAudioExamplesContext(source, token, start);
+}
+
 function paperSourceResourceFacets(sourceText, sourceToken) {
     const source = String(sourceText || '');
     const token = String(sourceToken || '');
     const start = token ? source.indexOf(token) : -1;
+    if (start >= 0 && authorAudioExamplesContext(source, token, start)) return ['demo'];
     if (start >= 0 && presentedLibraryRepositoryQuote(source, token, start)) return ['code'];
     const quote = paperSourceResourceQuote(sourceText, sourceToken)
         .split(String(sourceToken || '')).join('[RESOURCE_URL]');
+    if (isAuthorAudioExamplesStatement(quote)) return ['third_party'];
     return classifyPaperSourceResourceFacets(quote);
 }
 
@@ -274,7 +315,7 @@ module.exports = {
     SOURCE_URL_NORMALIZATION_CONTRACT,
     normalizePaperSourceRepositoryToken,
     classifyPaperSourceResourceFacets,
-    paperSourceResourceFacets,
+    paperSourceResourceFacets, resourceClassificationIsCurrent,
     paperSourceResourceQuote,
     extractPaperSourceRepositoryCandidates,
     normalizedSourceUrlBinding,

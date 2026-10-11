@@ -7222,6 +7222,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'utils.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/analysis-section-titles.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-inline-svg.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-resource-binding.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_inline_svg.py'), 'utf8')
         ].join('\0')),
         readerRecoveryEpochSha256: repair.shaText(READER_RECOVERY_EPOCH),
@@ -7921,6 +7922,8 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         && existingReaderResources.contract === API_READER_RESOURCE_IDENTITY_CONTRACT
         && existingReaderResources.sourceTextSha256 === sourceSha256
         && Array.isArray(existingReaderResources.resources)
+        && existingReaderResources.resources.every(resource => require('./lib/reader-resource-binding.js')
+            .resourceClassificationIsCurrent(resource, sourceText))
         && existingReaderResources.resources.every(resource => resource.origin !== 'paper_source'
             || paperSourceQuoteBindsOriginalUrl(resource))
         && existingReaderResources.identitySha256 === stableFingerprint(existingReaderResourceBody)
@@ -8122,6 +8125,8 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
         && existingReaderResources.contract === API_READER_RESOURCE_IDENTITY_CONTRACT
         && existingReaderResources.sourceTextSha256 === sourceSha256
         && Array.isArray(existingReaderResources.resources)
+        && existingReaderResources.resources.every(resource => require('./lib/reader-resource-binding.js')
+            .resourceClassificationIsCurrent(resource, sourceText))
         && existingReaderResources.resources.every(resource => resource.origin !== 'paper_source'
             || paperSourceQuoteBindsOriginalUrl(resource))
         && existingReaderResources.identitySha256 === stableFingerprint(existingReaderResourceBody)
