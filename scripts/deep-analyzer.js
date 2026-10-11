@@ -3406,6 +3406,57 @@ function buildApiReaderArtifactEvidence(
     return lines.length > 1 ? lines.join('\n') : '';
 }
 
+function readerVerifiedTableIndexExamples(artifacts, actualEvidence, issues, draft) {
+    const ordinals = new Set();
+    for (const issue of issues || []) {
+        const message = String(issue?.message || '');
+        const alternatives = message.match(/其他可选择原表序号=(\[[^\]\n]*\])/);
+        if (alternatives) {
+            try {
+                const values = JSON.parse(alternatives[1]);
+                if (Array.isArray(values) && values.length <= 12
+                    && values.every(value => Number.isInteger(value) && value > 0)) {
+                    for (const value of values) ordinals.add(value);
+                }
+            } catch (_error) { /* 非程序格式的数组不猜测。 */ }
+        }
+        for (const match of message.matchAll(/sourceTableOrdinal=(\d+)/g)) ordinals.add(Number(match[1]));
+        for (const match of message.matchAll(/tableBindings\[(\d+)\]/g)) {
+            const ordinal = draft?.tableBindings?.[Number(match[1])]?.selection?.sourceTableOrdinal;
+            if (Number.isInteger(ordinal)) ordinals.add(ordinal);
+        }
+    }
+    const examples = [];
+    for (const ordinal of ordinals) {
+        const tables = (artifacts?.tables || []).filter(table => table.ordinal === ordinal);
+        if (tables.length !== 1 || !assessReaderTableSelectionEligibility(tables[0]).eligible) continue;
+        const table = tables[0];
+        const evidenceLines = String(actualEvidence || '').split('\n');
+        const start = evidenceLines.findIndex(line => line.startsWith(`TABLE_${ordinal}:`));
+        if (start < 0) continue;
+        let shownMatrix;
+        for (const line of evidenceLines.slice(start + 1)) {
+            if (/^TABLE_\d+:/.test(line)) break;
+            if (!line.startsWith('[[')) continue;
+            try { shownMatrix = JSON.parse(line); } catch (_error) { /* 截断矩阵不提供示例。 */ }
+            break;
+        }
+        if (JSON.stringify(shownMatrix) !== JSON.stringify(table.matrix)) continue;
+        const rows = effectiveReaderTableRows(table);
+        const example = { tableIndex: 1, selection: {
+            sourceTableOrdinal: ordinal,
+            sourceRows: [rows.headerRows[0], ...rows.bodyRows],
+            sourceColumns: table.matrix[0].map((_cell, column) => column)
+        } };
+        try { renderReaderTableSelection(example, artifacts); } catch (_error) { continue; }
+        const line = `TABLE_${ordinal}_VERIFIED_INDEX_EXAMPLE: ${JSON.stringify(example)}；`
+            + 'tableIndex=1仅为格式示意，须对应文章实际表序号。此例保留已展示全部数据行与列，只证明索引合法，不能替代比较问题、基线与内容覆盖判断。';
+        if (examples.join('\n').length + line.length + 1 > 2000) break;
+        examples.push(line);
+    }
+    return examples.join('\n');
+}
+
 function buildApiReaderResourceEvidence(identity) {
     if (!identity) return '';
     const { identitySha256, ...identityBody } = identity;
@@ -5879,6 +5930,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
                 + `（terms=${bridge.terms.join(' × ')}`
                 + `, sectionKind=${bridge.sectionKind}`
                 + `, marker=${marker || '空'}`
+                + `, expectedMarker=[[CONCEPT_BRIDGE_${index + 1}]]`
                 + `, explanationChars=${explanation.length}`
                 + `, markerBound=${Boolean(candidate)}, markerOccurrences=${markerOccurrences}；已有占位标记须在指定小节中独占一段，且全文只能出现一次）`
             );
@@ -7390,10 +7442,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         if (!repairContext && fullAttempts >= 2 && !implementationRepairAllowanceProof) {
             throw lastError || new Error('Reader root JSON remained invalid after two full attempts');
         }
-        const prompt = repairContext ? loadPrompt(currentTextStagePromptPath('apiReaderRepair'), {
+        const buildReaderPrompt = indexExamples => repairContext ? loadPrompt(currentTextStagePromptPath('apiReaderRepair'), {
             title: paper.title || '', arxivId: getPaperArxivId(paper),
             validationFeedback: [numericSpellingGuidance, reviewFeedbackPrefix,
-                ...currentIssues.map(issueFeedback)].filter(Boolean).join('\n'),
+                ...currentIssues.map(issueFeedback), indexExamples].filter(Boolean).join('\n'),
             repairTargets: JSON.stringify({ draftSha256: repairContext.draftSha256,
                 targets: repairContext.targets,
                 ...(repairContext.atomicOperation ? { atomicOperation: repairContext.atomicOperation } : {}) }),
@@ -7403,10 +7455,19 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             title: paper.title || '',
             arxivId: getPaperArxivId(paper),
             sourceEvidence,
-            validationFeedback,
+            validationFeedback: [validationFeedback, indexExamples].filter(Boolean).join('\n'),
             previousDraft,
             mechanicalContract
         });
+        let prompt = buildReaderPrompt('');
+        const indexExamples = readerVerifiedTableIndexExamples(
+            options.structuredArtifacts, repairContext ? repairContext.evidence : sourceEvidence,
+            currentIssues, candidate
+        );
+        if (indexExamples) {
+            const promptWithExamples = buildReaderPrompt(indexExamples);
+            if (promptWithExamples.length <= API_READER_CONTEXT_MAX_CHARS) prompt = promptWithExamples;
+        }
         if (prompt.length > API_READER_CONTEXT_MAX_CHARS) {
             throw new Error(
                 `读者文章完整请求上下文超限: ${prompt.length}/${API_READER_CONTEXT_MAX_CHARS} 字符`
@@ -7536,7 +7597,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 const patch = repair.parseReaderPatchJson(extractJsonObjectText(raw));
                 candidate = repair.applyReaderPatch(candidate, patch, repairContext.targets.map(target => target.path), {
                     availableFigureOrdinals: selectedOrdinals,
-                    atomicOperation: repairContext.atomicOperation
+                    atomicOperation: repairContext.atomicOperation,
+                    structuredArtifacts: options.structuredArtifacts
                 });
                 patchApplied = true;
                 raw = JSON.stringify(candidate);
@@ -16450,7 +16512,7 @@ async function repairCoreSummarySection(
             const currentCount = Number(sentenceCountIssue[3]);
             const maximumCount = Number(sentenceCountIssue[2]);
             const sentenceAction = currentCount > maximumCount
-                ? '合并未受保护的重复任务介绍或方法说明句'
+                ? '将未受保护的任务介绍、方法步骤及与已有方法的关键差异合并表达；关键差异可接在方法句内，用分号衔接，不必另起一句。只合并这些允许修改的内容，所有事实和条件保留'
                 : '把未受保护的任务或方法说明按实际内容分开，补充必要衔接，不拆空句';
             retryTargets.push(`当前摘要为 ${currentCount} 句，须为 ${sentenceCountIssue[1]}–${sentenceCountIssue[2]} 句；`
                 + `${sentenceAction}。没有被指出问题的量化结果句、边界句和成本句仍逐字保留，`
@@ -17263,6 +17325,7 @@ module.exports = {
     makeReaderHeadingSpecific,
     getApiReaderFigureInventory,
     buildApiReaderArtifactEvidence,
+    readerVerifiedTableIndexExamples,
     replayVerifiedReaderResourceIdentity,
     conferenceReaderResourceClaimIssues,
     enforceConferenceReaderResourceClaims,

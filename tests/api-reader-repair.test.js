@@ -3245,3 +3245,47 @@ test('真实来源错误和本组参考项共同存在时，生成仍进入原�
     }), /真实来源修复已到达/);
     assert.equal(calls, 2);
 });
+
+test('表格索引提示只进入真实修复请求，原证据与候选输入指纹保持', async t => {
+    const deep = require('../scripts/deep-analyzer');
+    const cheerio = require('cheerio');
+    const html = fs.readFileSync(path.join(__dirname, 'fixtures/arxiv-reader-source-bindings.html'), 'utf8');
+    const sourceText = cheerio.load(html)('body').text();
+    const artifacts = deep.bindStructuredArtifactsToText(deep.parseArxivStructuredArtifactsFromHtml(html,
+        '2609.99862', '2609.99862'), sourceText);
+    const sourceEvidence = deep.buildApiReaderArtifactEvidence(artifacts);
+    const draft = fixture();
+    draft.sections[7].body += '\n\n[[TABLE_1]]\n\n';
+    draft.tableBindings = [{ tableIndex: 1, selection: {
+        sourceTableOrdinal: 1, sourceRows: [0, 12], sourceColumns: [0, 1, 2]
+    } }];
+    const directory = temporary(t);
+    let calls = 0;
+    let firstIdentity;
+    await assert.rejects(deep.generateApiReaderArticleDetailed({ arxivId: '2609.99862', title: '离线索引提示' },
+        'canonical', sourceEvidence, {
+            sourceText, structuredArtifacts: artifacts, readerAttemptsDir: directory,
+            readerMaterializeFigures: async () => [], readerRecordDisposition: () => {},
+            readerCallModel: async messages => {
+                calls += 1;
+                if (calls === 1) {
+                    const prompt = messages[0].content[0].text;
+                    assert.ok(prompt.includes(sourceEvidence));
+                    assert.doesNotMatch(prompt, /VERIFIED_INDEX_EXAMPLE/);
+                    return JSON.stringify(draft);
+                }
+                const envelope = JSON.parse(fs.readFileSync(path.join(directory,
+                    fs.readdirSync(directory).find(name => name.endsWith('.json'))), 'utf8'));
+                firstIdentity = envelope.identity;
+                const prompt = messages[0].content[0].text;
+                assert.match(prompt, /TABLE_1_VERIFIED_INDEX_EXAMPLE/);
+                assert.ok(prompt.includes(sourceEvidence.match(/^\[\[.+$/m)[0]));
+                throw new Error('受控索引提示请求停止');
+            }
+        }), /受控索引提示请求停止/);
+    assert.equal(calls, 2);
+    const envelope = JSON.parse(fs.readFileSync(path.join(directory,
+        fs.readdirSync(directory).find(name => name.endsWith('.json'))), 'utf8'));
+    assert.equal(envelope.identity.inputFingerprint, firstIdentity.inputFingerprint);
+    assert.equal(envelope.payload.attempts, 1);
+});

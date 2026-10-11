@@ -5683,16 +5683,16 @@ has_dataset: 否
             legacyPayload.promptTemplateSha256,
             deep.runtimePromptTemplateSha256('prompts/api-reader-article.md')
         );
-        // 新请求使用 v4；旧记录继续按其声明版本计算指纹。
+        // 新请求使用 v5；旧记录继续按其声明版本计算指纹。
         const freshPayload = capture({ version: 1, stages: {} });
-        assert.strictEqual(freshPayload.promptTextContract, 'analysis-prompt-text-v4');
+        assert.strictEqual(freshPayload.promptTextContract, 'analysis-prompt-text-v5');
         assert.strictEqual(
             freshPayload.promptTemplateSha256,
-            deep.runtimePromptTemplateSha256('prompts/api-reader-article-v4.md')
+            deep.runtimePromptTemplateSha256('prompts/api-reader-article-v5.md')
         );
         assert.strictEqual(
             deep.currentTextStagePromptPath('apiReaderArticle'),
-            'prompts/api-reader-article-v4.md'
+            'prompts/api-reader-article-v5.md'
         );
         assert.strictEqual(
             deep.promptFilePathForContract('apiReaderArticle', deep.ANALYSIS_PROMPT_TEXT_V1_CONTRACT),

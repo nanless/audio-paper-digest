@@ -658,6 +658,10 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         const destinationAfter = countInSection(afterTables, operation.destinationSectionIndex);
         const added = afterTables.find(table => table.tableIndex === operation.tableIndex);
         const binding = merged.tableBindings?.[operation.bindingIndex];
+        const selection = binding && Object.prototype.hasOwnProperty.call(binding, 'selection');
+        const selectedTable = selection
+            ? require('./reader-tables').renderReaderTableSelection(binding, options.structuredArtifacts) : null;
+        const addedMarkdown = selection ? selectedTable.markdown : added?.table?.markdown;
         // 一次只补一张表。若原稿缺了多张，不能同时要求这一次就补齐全部。
         // 原有表格和其他来源记录必须保持，剩余缺口仍由完整解析器拒绝。
         const oldTablesPreserved = beforeTables.every((table, index) => {
@@ -679,10 +683,10 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             || added?.sectionIndex !== operation.destinationSectionIndex
             || (operation.insertionBeforeMarker
                 && afterTables[operation.bindingIndex + 1]?.marker !== operation.insertionBeforeMarker)
-            || !added?.table
-            || (String(added.table.markdown).match(/\d+/g) || []).length < 4
+            || (selection ? added?.marker !== `[[TABLE_${operation.tableIndex}]]` : !added?.table)
+            || (String(addedMarkdown).match(/\d+/g) || []).length < 4
             || binding?.tableIndex !== operation.tableIndex
-            || binding?.sourceType !== 'source_quotes') {
+            || (!selection && binding?.sourceType !== 'source_quotes')) {
             throw new Error('Reader result-table addition patch failed its atomic table-add postconditions');
         }
     }
@@ -765,6 +769,10 @@ function collectDraftIssues(draft, parserError, options = {}) {
                     message: `${field}[${index}].terms 必须是恰含2个真实术语字符串的数组，每项2–48字符` });
             }
             const marker = binding?.marker;
+            if (field === 'conceptBridges' && marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`) {
+                issues.push({ path: `/${field}/${index}`,
+                    message: `${field}[${index}] marker 编号错误：actualMarker=${marker}; expectedMarker=[[CONCEPT_BRIDGE_${index + 1}]]。按数组顺序修正本项并在声明sectionKind正文增加唯一独占段；若旧marker属于其他正确绑定，保留那个绑定及其正文标记，不得全局替换。` });
+            }
             const expectedKind = field === 'conceptBridges' ? binding?.sectionKind : binding?.targetKind;
             const matches = draft.sections.flatMap((section, sectionIndex) => (
                 typeof marker === 'string' && marker && typeof section?.body === 'string'
@@ -935,6 +943,9 @@ function buildMissingResultTableOperation(draft, issues) {
     if (!blockingIssues.some(issue => issue?.code === 'reader_result_table_missing'
         || /^读者文章主结果表覆盖不足/.test(String(issue?.message || '')))) return null;
     const locatedTables = locateReaderDraftTables(draft);
+    // 无selection绑定的标记不是已存在的表；先按对应诊断修复，不能再要求新增。
+    if (locatedTables.some(table => table.marker
+        && !draft.tableBindings?.[table.markerIndex - 1]?.selection)) return null;
     const destinationSectionIndex = draft.sections.findIndex(section => (
         ['result', 'ablation'].includes(section?.kind)
     ));
@@ -960,9 +971,9 @@ function buildMissingResultTableOperation(draft, issues) {
                 bindingPath,
                 requiredReplacementPaths: [destinationSectionPath, bindingPath],
                 requiredPostconditions: [
-                    'destination result/ablation section gains exactly one numeric Markdown table',
+                    '结果或消融小节每次只补一张含数字的表；原表可用时，以selection记录所选行列并单独放置TABLE标记；否则用source_quotes记录完整逐字引文并配Markdown表格',
                     '每次补上一张已声明来源的表，剩余缺表仍须逐项修复',
-                    'the new table remains paired with the declared source_quotes binding'
+                    '新增表和对应来源记录须使用同一tableIndex；原表可用时须采用selection，并通过完整的原表来源检查'
                 ]
             };
         }

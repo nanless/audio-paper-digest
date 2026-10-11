@@ -58,7 +58,8 @@ test('句数过多与量化错误并存时第二次请求明确允许合并非�
             calls += 1;
             if (calls === 1) return `## 核心摘要\n${candidate}`;
             assert.match(messages[0].content, /当前摘要为 \d+ 句，须为 6–9 句/);
-            assert.match(messages[0].content, /合并未受保护的重复任务介绍或方法说明句/);
+            assert.match(messages[0].content, /关键差异可接在方法句内，用分号衔接，不必另起一句/);
+            assert.match(messages[0].content, /所有事实和条件保留/);
             assert.match(messages[0].content, /任务介绍与方法说明允许按下列长度或句数要求缩短、合并或补足/);
             assert.doesNotMatch(messages[0].content, /保留上一候选中已合格的句子，只编辑/);
             assert.match(messages[0].content, /量化结果句、边界句和成本句仍逐字保留/);

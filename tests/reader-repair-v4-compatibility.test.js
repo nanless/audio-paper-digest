@@ -33,7 +33,7 @@ function patchFor(draft, replacements) {
     }) };
 }
 
-test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v4', () => {
+test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v5', () => {
     const paper = { id: '2610.90037', title: '局部修复版本核验' };
     const oldStage = { status: 'complete', promptTextContract: 'analysis-prompt-text-v4',
         repairPromptTextContract: 'analysis-prompt-text-v3' };
@@ -43,7 +43,7 @@ test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v4', () => 
     const oldFingerprint = fingerprint(oldStage);
     assert.equal(versions.promptFilePathForContract('apiReaderRepair', oldStage.repairPromptTextContract),
         'prompts/api-reader-repair-v3.md');
-    assert.equal(versions.currentPromptTextContract('apiReaderRepair'), 'analysis-prompt-text-v4');
+    assert.equal(versions.currentPromptTextContract('apiReaderRepair'), 'analysis-prompt-text-v5');
     assert.notEqual(fingerprint({ status: 'pending' }), oldFingerprint);
     assert.equal(fingerprint(oldStage), oldFingerprint);
     assert.equal(JSON.stringify(oldStage), before);
@@ -51,7 +51,7 @@ test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v4', () => 
         '03baf3e0c54831c8e6e25d2fda2f223e908a54353d0a2b54c68aa7cbd41cac2a');
 });
 
-test('真实公开局部请求使用逐表修复 v4，保存的付费尝试数未清零', async t => {
+test('真实公开局部请求使用当前逐表修复 v5，保存的付费尝试数未清零', async t => {
     const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-repair-v4-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
     const draft = createReaderTestArticle();
@@ -81,7 +81,29 @@ test('真实公开局部请求使用逐表修复 v4，保存的付费尝试数�
         versions.promptFilePathForContract('apiReaderRepair', versions.currentPromptTextContract('apiReaderRepair'))));
 });
 
+// 历史迁移控制显式选冻结 v4 修复正文；不把当前 v5 当成固定 v3→v4 目标。
+function frozenV4RepairControl() {
+    const Module = require('node:module');
+    const filename = require.resolve('../scripts/deep-analyzer.js');
+    const controlled = new Module(filename, module);
+    controlled.filename = filename;
+    controlled.paths = Module._nodeModulePaths(path.dirname(filename));
+    controlled.require = function (request) {
+        const actual = Module.prototype.require.call(this, request);
+        if (request !== './lib/prompt-text-versions.js') return actual;
+        return { ...actual,
+            currentPromptTextContract: stage => stage === 'apiReaderRepair'
+                ? 'analysis-prompt-text-v4' : actual.currentPromptTextContract(stage),
+            currentTextStagePromptPath: stage => stage === 'apiReaderRepair'
+                ? actual.promptFilePathForContract(stage, 'analysis-prompt-text-v4')
+                : actual.currentTextStagePromptPath(stage) };
+    };
+    controlled._compile(fs.readFileSync(filename, 'utf8'), filename);
+    return controlled.exports;
+}
+
 async function withControlledRecoveryCandidate(t, callback) {
+    const historicalDeep = frozenV4RepairControl();
     const Config = require('../scripts/config.js');
     const fresh = require('../scripts/lib/fresh-analysis-context.js');
     const revision = require('../scripts/lib/reader-recovery-revision.js');
@@ -110,12 +132,12 @@ async function withControlledRecoveryCandidate(t, callback) {
             readerMaterializeFigures: async () => [], readerRecordDisposition: () => {},
             readerCallModel: async () => { initialCalls++; if (initialCalls === 1) return JSON.stringify(draft); throw stop; } };
         const paper = { arxivId: paperId, title: '局部提示词许可转交' };
-        await assert.rejects(deep.generateApiReaderArticleDetailed(paper, '', '', options), /受控原草稿保存后停止/);
+        await assert.rejects(historicalDeep.generateApiReaderArticleDetailed(paper, '', '', options), /受控原草稿保存后停止/);
         const originalName = fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name));
         const original = JSON.parse(fs.readFileSync(path.join(directory, originalName), 'utf8'));
         assert.equal(original.payload.attempts, 1);
         assert.equal(original.payload.fullAttempts, 1);
-        await callback({ directory, original, originalName, revision, options, paper });
+        await callback({ directory, original, originalName, revision, options, paper, historicalDeep });
     });
 }
 
@@ -138,7 +160,7 @@ test('仅固定旧修复提示词变化不发新许可、不清连续失败，�
 });
 
 test('真实未用实现许可经固定提示词转交，网络失败保存后再次只修正文并保留同一许可', async t => {
-    await withControlledRecoveryCandidate(t, async ({ directory, original, originalName, revision, options, paper }) => {
+    await withControlledRecoveryCandidate(t, async ({ directory, original, originalName, revision, options, paper, historicalDeep }) => {
         const oldCurrentIdentity = { ...original.identity, repairPromptSha256: FROZEN_REPAIR_V3_SHA };
         const oldImplementationIdentity = { ...oldCurrentIdentity, repairImplementationSha256: '0'.repeat(64) };
         repair.saveFailedCandidate(directory, oldImplementationIdentity, original.payload);
@@ -159,7 +181,7 @@ test('真实未用实现许可经固定提示词转交，网络失败保存后�
         assert.equal(revision.loadReaderRecoveryRevision(directory, oldCurrentIdentity), null);
         const stages = [];
         const transportError = Object.assign(new Error('受控网络异常'), { retryable: false, scope: 'run' });
-        await assert.rejects(deep.generateApiReaderArticleDetailed(paper, '', '', { ...options,
+        await assert.rejects(historicalDeep.generateApiReaderArticleDetailed(paper, '', '', { ...options,
             readerCallModel: async (messages, budget, requestOptions) => { stages.push(requestOptions.usageContext.stage); throw transportError; }
         }), /受控网络异常/);
         assert.deepEqual(stages, ['apiReaderRepair']);
@@ -172,7 +194,7 @@ test('真实未用实现许可经固定提示词转交，网络失败保存后�
         const restored = revision.loadReaderRecoveryRevision(directory, original.identity);
         assert.deepEqual(restored.implementationRepairAllowanceProof, saved.implementationRepairAllowanceProof);
         const resumedStages = [];
-        await assert.rejects(deep.generateApiReaderArticleDetailed(paper, '', '', { ...options,
+        await assert.rejects(historicalDeep.generateApiReaderArticleDetailed(paper, '', '', { ...options,
             readerCallModel: async (messages, budget, requestOptions) => {
                 resumedStages.push(requestOptions.usageContext.stage);
                 if (resumedStages.length > 1) throw transportError;
@@ -190,7 +212,7 @@ test('真实未用实现许可经固定提示词转交，网络失败保存后�
 });
 
 test('已耗尽的旧提示词候选不获新许可，未知提示词或来源身份变化不能迁移', async t => {
-    await withControlledRecoveryCandidate(t, async ({ directory, original, originalName, revision, options, paper }) => {
+    await withControlledRecoveryCandidate(t, async ({ directory, original, originalName, revision, options, paper, historicalDeep }) => {
         const oldIdentity = { ...original.identity, repairPromptSha256: FROZEN_REPAIR_V3_SHA };
         const exhausted = { ...original.payload, attempts: 3, fullAttempts: 3 };
         repair.saveFailedCandidate(directory, oldIdentity, exhausted);
@@ -200,7 +222,7 @@ test('已耗尽的旧提示词候选不获新许可，未知提示词或来源�
         assert.equal(migrated.fullAttempts, 3);
         assert.equal(migrated.implementationRepairAllowanceProof, null);
         let calls = 0;
-        await assert.rejects(deep.generateApiReaderArticleDetailed(paper, '', '', { ...options,
+        await assert.rejects(historicalDeep.generateApiReaderArticleDetailed(paper, '', '', { ...options,
             readerCallModel: async () => { calls++; throw new Error('不应新请求'); }
         }));
         assert.equal(calls, 0);
