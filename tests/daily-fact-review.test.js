@@ -85,6 +85,47 @@ test('反馈不可用临时论文假字段；core新指纹正常失效保留原�
     assert.deepEqual(review.fingerprintFields('primaryAnalysis',{factReview:bound.proof}).factReview,bound.proof);
 });
 
+test('成功清理保留纠错所依据的真实原输入，普通旧快照仍清除，同一反馈可以再次核验', async t => {
+    const f = await fixture(t);
+    const bound = review.validateFeedback(f.feedback, f.plan, f.paper);
+    review.withFactReview(bound, () => deep.captureStaleAnalysisSnapshot(f.paper, f.paper.analysisManifest,
+        'coreSummaryRepair', bound.proof.feedbackSha256));
+    const originalSnapshot = JSON.stringify(f.paper.analysisStaleSnapshots[0]);
+    f.paper.analysisCheckpoint = baseline;
+    deep.captureStaleAnalysisSnapshot(f.paper, f.paper.analysisManifest, 'scoringAudit', 'new-score');
+    f.paper.analysisManifest.stages.coreSummaryRepair.factReview = bound.proof;
+    f.paper.analysis = baseline;
+    delete f.paper.analysisCheckpoint;
+    assert.equal(f.paper.analysisStaleSnapshots.length, 2);
+    deep.retainFinalFactReviewInputs(f.paper, f.paper.analysisManifest);
+    assert.equal(f.paper.analysisStaleSnapshots.length, 1);
+    assert.equal(JSON.stringify(f.paper.analysisStaleSnapshots[0]), originalSnapshot);
+    assert.deepEqual(review.validateFeedback(f.feedback, f.plan, f.paper).proof, bound.proof);
+    const unrelated = structuredClone(f.paper);
+    delete unrelated.analysisManifest.stages.coreSummaryRepair.factReview;
+    deep.retainFinalFactReviewInputs(unrelated, unrelated.analysisManifest);
+    assert.equal(unrelated.analysisStaleSnapshots, undefined);
+    assert.throws(() => review.validateFeedback(f.feedback, f.plan, unrelated), /绑定已过期/);
+});
+
+test('成功清理不补造丢失或被改坏的原输入，也不接受其他论文的证明', async t => {
+    const f = await fixture(t);
+    const bound = review.validateFeedback(f.feedback, f.plan, f.paper);
+    review.withFactReview(bound, () => deep.captureStaleAnalysisSnapshot(f.paper, f.paper.analysisManifest,
+        'coreSummaryRepair', bound.proof.feedbackSha256));
+    f.paper.analysisManifest.stages.scoringAudit.scoringFactReview = bound.proof;
+    f.paper.analysis = baseline;
+    delete f.paper.analysisCheckpoint;
+    f.paper.analysisStaleSnapshots[0].payload.analysisCheckpoint += '被修改';
+    deep.retainFinalFactReviewInputs(f.paper, f.paper.analysisManifest);
+    assert.equal(f.paper.analysisStaleSnapshots, undefined);
+    assert.throws(() => review.validateFeedback(f.feedback, f.plan, f.paper), /绑定已过期/);
+    deep.retainFinalFactReviewInputs(f.paper, f.paper.analysisManifest);
+    assert.equal(f.paper.analysisStaleSnapshots, undefined);
+    f.paper.analysisManifest.stages.scoringAudit.scoringFactReview = { ...bound.proof, paperId: '2610.90032' };
+    assert.throws(() => deep.retainFinalFactReviewInputs(f.paper, f.paper.analysisManifest), /其他论文/);
+});
+
 test('事实反馈强制正常core模型修复，保护其他章节，模型复述错误或抛错不会冒成功',async t=>{
     const f=await fixture(t);const bound=review.validateFeedback(f.feedback,f.plan,f.paper);
     await review.withFactReview(bound,async()=>{

@@ -9821,6 +9821,27 @@ function validateStaleAnalysisSnapshot(snapshot) {
     return structuredClone(snapshot.payload);
 }
 
+function retainFinalFactReviewInputs(paper, manifest) {
+    const review = require('./lib/daily-fact-review');
+    const id = String(paper.arxivId || paper.id || '').replace(/^arxiv:/, '').replace(/v\d+$/i, '');
+    const inputHashes = new Set();
+    for (const stage of Object.values(manifest?.stages || {})) {
+        for (const proof of [stage?.factReview, stage?.scoringFactReview]) {
+            if (proof === undefined) continue;
+            review.validateProof(proof);
+            if (proof.paperId !== id) throw new Error('事实纠错原输入不能属于其他论文。');
+            inputHashes.add(proof.coreAnalysisSha256);
+        }
+    }
+    const retained = (paper.analysisStaleSnapshots || []).filter(snapshot => {
+        const payload = validateStaleAnalysisSnapshot(snapshot);
+        return payload && inputHashes.has(crypto.createHash('sha256')
+            .update(payload.analysisCheckpoint).digest('hex'));
+    });
+    if (retained.length) paper.analysisStaleSnapshots = retained;
+    else delete paper.analysisStaleSnapshots;
+}
+
 function coreSummaryV3MigrationPromptSetIsAllowed(observed) {
     return Object.keys(CORE_SUMMARY_V3_V1_RUNTIME_PROMPT_SHA256).every(stage => (
         observed?.[stage] === CORE_SUMMARY_V3_V1_RUNTIME_PROMPT_SHA256[stage]
@@ -16074,7 +16095,7 @@ async function analyzePaperDeepInternal(paper) {
     delete paper.analysisCheckpoint;
     delete paper.analysisRecoveryImageManifest;
     retainFinalTagCheckpoints(paper, analysisManifest);
-    delete paper.analysisStaleSnapshots;
+    retainFinalFactReviewInputs(paper, analysisManifest);
     delete paper.latestAnalysisAttemptError;
     delete paper.latestAnalysisAttemptAt;
 
@@ -17690,6 +17711,7 @@ module.exports = {
     tryMigrateCoreSummaryV3LegacyCheckpoints,
     captureStaleAnalysisSnapshot,
     validateStaleAnalysisSnapshot,
+    retainFinalFactReviewInputs,
     legacyStructureCompatibilityIsValid,
     prepareTextRecoveryStage,
     sanitizeOpenSourceEvidence,
