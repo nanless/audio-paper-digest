@@ -31,7 +31,7 @@ test('旧文本阶段仅在真实合法非 BMP 输入时失效，恢复保留前
         const source = `Evidence: ${text}. `.repeat(100);
         const evidence = legacy.buildStageEvidenceContext('revision', text, source);
         const oldFingerprint = legacy.buildTextStageFingerprint('revision', text, evidence);
-        const paper = { analysisCheckpoint: text, analysisStageCheckpoints: { demoLinkScan: text } };
+        const paper = { analysisCheckpoint: text, analysisStageCheckpoints: { demoLinkScan: text, revision: text } };
         const manifest = { version: 1, stages: { demoLinkScan: { status: 'complete' },
             revision: { status: 'complete', fingerprint: oldFingerprint } } };
         const result = deep.prepareTextRecoveryStage(paper, manifest, 'revision', text, source);
@@ -40,6 +40,11 @@ test('旧文本阶段仅在真实合法非 BMP 输入时失效，恢复保留前
         assert.equal(manifest.stages.revision?.status === 'complete', !affected, text);
         assert.equal(result.analysis, text);
         assert.equal(manifest.stages.demoLinkScan.status, 'complete');
+        if (!affected) {
+            const missing = { analysisCheckpoint: text, analysisStageCheckpoints: { demoLinkScan: text } };
+            const incomplete = { version: 1, stages: { revision: { status: 'complete', fingerprint: oldFingerprint } } };
+            assert.equal(deep.prepareTextRecoveryStage(missing, incomplete, 'revision', text, source).invalidated, true);
+        }
     }
 });
 
