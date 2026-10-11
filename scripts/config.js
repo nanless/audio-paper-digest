@@ -125,6 +125,7 @@ const ANALYSIS_CONFIG = {
     apiReaderMaxTokens: 48000,
     apiReaderThinkingMode: 'disabled',
     repairThinkingMode: 'disabled',
+    primaryThinkingMode: 'disabled',
     apiReaderRepairMaxTokens: 8000,
     apiTemperature: 0.7,
     scoringAuditTemperature: 0.1,
@@ -412,6 +413,13 @@ function applyEnvOverrides() {
             throw new Error('PD_API_READER_THINKING_MODE 只能为 enabled 或 disabled');
         }
         ANALYSIS_CONFIG.apiReaderThinkingMode = mode;
+    }
+    if (process.env.PD_ANALYSIS_PRIMARY_THINKING_MODE !== undefined) {
+        const mode = process.env.PD_ANALYSIS_PRIMARY_THINKING_MODE;
+        if (!['enabled', 'disabled'].includes(mode)) {
+            throw new Error('PD_ANALYSIS_PRIMARY_THINKING_MODE 只能为 enabled 或 disabled');
+        }
+        ANALYSIS_CONFIG.primaryThinkingMode = mode;
     }
     if (process.env.PD_ANALYSIS_REPAIR_THINKING_MODE !== undefined) {
         const mode = process.env.PD_ANALYSIS_REPAIR_THINKING_MODE;

@@ -41,6 +41,9 @@ jobs:
           python3 -m pip install --disable-pip-version-check -r requirements.txt
           bash scripts/python-runtime.sh -m pip check
 
+      - name: 安装论文图渲染所需浏览器
+        run: bash scripts/python-runtime.sh -m playwright install --with-deps chromium
+
       - name: 安装中日韩字体
         run: |
           sudo apt-get update

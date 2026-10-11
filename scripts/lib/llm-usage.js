@@ -104,6 +104,11 @@ function buildLlmUsageEvent({ protocol, model, request, response, statusCode, du
         durationMs: count(Math.round(durationMs)),
         inputSha256: hash(JSON.stringify(request || {})),
         outputTextSha256: typeof outputText === 'string' ? hash(outputText) : null,
+        ...(context?.stage === 'primaryAnalysis' && model === 'mimo-v2.6-flash'
+            && ['openai', 'openai_chat'].includes(protocol)
+            && ['enabled', 'disabled'].includes(request?.thinking?.type)
+            ? { primaryRequestPolicy: { contract: 'analysis-primary-thinking-policy-v1',
+                model, thinkingMode: request.thinking.type } } : {}),
         estimates: inputStatistics(request), usage: normalizeLlmUsage(protocol, response)
     };
 }

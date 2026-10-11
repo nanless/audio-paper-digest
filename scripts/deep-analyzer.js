@@ -8898,13 +8898,51 @@ function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourc
 // 与改动前逐字节一致；不传版本同样按 v1 的历史形状算。
 // CORE_SUMMARY_CONTRACT_VERSION 是摘要契约的版本，与正文版本是两件事，两个版本
 // 都照传，v1 的哈希输入因此保持不变。
-function buildPrimaryAnalysisBaseFingerprint(promptTextContract, paper, textForAnalysis, arxivId) {
+function resolvePrimaryRequestPolicy() {
+    if (DEEP_CONFIG.model !== 'mimo-v2.6-flash'
+        || detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model) !== 'openai') return null;
+    const thinkingMode = ANALYSIS_CONFIG.primaryThinkingMode;
+    if (!['enabled', 'disabled'].includes(thinkingMode)) throw new Error('主分析请求推理设置无效');
+    return { contract: 'analysis-primary-thinking-policy-v1', model: DEEP_CONFIG.model, thinkingMode };
+}
+
+function primaryRequestFingerprintFields(declaredStage) {
+    const declared = declaredStage?.primaryRequestPolicy;
+    if (declared !== undefined && declared !== null) {
+        if (typeof declared !== 'object' || Array.isArray(declared)
+            || Object.keys(declared).sort().join(',') !== 'contract,model,thinkingMode'
+            || declared.contract !== 'analysis-primary-thinking-policy-v1'
+            || declared.model !== 'mimo-v2.6-flash'
+            || !['enabled', 'disabled'].includes(declared.thinkingMode)) {
+            throw new Error('主分析已保存的请求推理设置无效');
+        }
+    } else if (declared === null) {
+        throw new Error('主分析已保存的请求推理设置无效');
+    }
+    // 无参数保持历史配方；已完成旧阶段没有新声明时同样只按原指纹核验。
+    // 是否真的可复用仍由来源、完整 checkpoint 和失效传播的现有检查决定。
+    if (declaredStage === undefined || (declaredStage?.status === 'complete' && declared === undefined)) return {};
+    const current = resolvePrimaryRequestPolicy();
+    if (!current) return declared ? { primaryRequestPolicyMismatch: declared } : {};
+    return { primaryRequestPolicy: current,
+        ...(declared && (declared.contract !== current.contract
+            || declared.model !== current.model || declared.thinkingMode !== current.thinkingMode)
+            ? { primaryRequestPolicyMismatch: declared } : {}) };
+}
+
+function buildPrimaryAnalysisBaseFingerprint(promptTextContract, paper, textForAnalysis, arxivId, declaredStage) {
     const freshIdentity = require('./lib/fresh-analysis-context.js').freshAnalysisIdentity(arxivId);
     const declaredPromptTextContract = String(promptTextContract || '');
+    const savedPrimaryText = paper?.analysisStageCheckpoints?.primaryAnalysis || paper?.analysisCheckpoint;
+    const effectiveStage = declaredStage?.status === 'complete'
+        && declaredStage.primaryRequestPolicy === undefined
+        && !(typeof savedPrimaryText === 'string' && savedPrimaryText.trim())
+        ? {} : declaredStage;
     return stableFingerprint({
         ...(declaredPromptTextContract
             ? { promptTextContract: declaredPromptTextContract } : {}),
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
+        ...primaryRequestFingerprintFields(effectiveStage),
         analysisSectionTitlesImplementationSha256: promptTemplateSha256('scripts/lib/analysis-section-titles.js'),
         ...modelFingerprint(DEEP_CONFIG),
         promptTemplateSha256: promptTemplateSha256(
@@ -9092,7 +9130,7 @@ function buildRecoveryFingerprints(paper, textForAnalysis, arxivId, manifest = p
     return {
         primaryAnalysis: buildPrimaryAnalysisBaseFingerprint(
             textStagePromptTextContract(paper, manifest, 'primaryAnalysis'),
-            paper, textForAnalysis, arxivId),
+            paper, textForAnalysis, arxivId, manifest?.stages?.primaryAnalysis || {}),
         demoLinkScan: stableFingerprint({
             implementation: 'demo-link-scan-v4-huggingface-project-metadata-modelscope',
             projectPages: resolveDemoPageCandidates(paper, ''),
@@ -10664,6 +10702,8 @@ async function _callModelOnce(messages, maxTokens, config, budget, apiType, time
                 ? config.readerResponseFormat : undefined,
             readerThinkingMode: ['apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe']
             .includes(config.usageContext?.stage) ? config.readerThinkingMode : undefined,
+            primaryThinkingMode: config.usageContext?.stage === 'primaryAnalysis'
+                ? config.primaryThinkingMode : undefined,
             repairThinkingMode: ['coreSummaryRepair', 'structureRepair', 'tableRepair']
                 .includes(config.usageContext?.stage) ? config.repairThinkingMode : undefined });
     if (bodyObj.thinking?.type) {
@@ -10752,6 +10792,7 @@ async function callModel(messages, maxTokens = 8000, options = {}) {
         readerThinkingMode: options.readerThinkingMode,
         readerResponseFormat: options.readerResponseFormat,
         repairThinkingMode: options.repairThinkingMode,
+        primaryThinkingMode: options.primaryThinkingMode,
         usageContext: options.usageContext,
         usageDirectory: options.usageDirectory,
         usageSink: options.usageSink,
@@ -13999,11 +14040,6 @@ async function analyzePaperDeepInternal(paper) {
     analysisManifest.sourceAcquisition = sourceAcquisitionRecord;
     const recoveryFingerprints = buildRecoveryFingerprints(
         paper, textForAnalysis, arxivId, analysisManifest);
-    // 这里要在失效传播之前记下主分析阶段自己声明的正文版本。上面的核验指纹按它
-    // 算；一旦阶段被删掉，记录就没了，之后按当前版本重建写入指纹时也就无从知道
-    // 旧记录声明的是哪一版。
-    const primaryAnalysisDeclaredContract = textStagePromptTextContract(
-        paper, analysisManifest, 'primaryAnalysis');
     if (migrateSealedSourceOnlyReaderBeforeAnalysis(
         paper,
         analysisManifest,
@@ -14224,11 +14260,9 @@ async function analyzePaperDeepInternal(paper) {
     // 声明的版本随之变成当前版本；此时必须按当前版本重建写入指纹，不能拿 v1 形状
     // 的指纹配 v2 的声明，否则下一次运行又会判不等。
     const primaryAnalysisWriteContract = currentPromptTextContract('primaryAnalysis');
-    const primaryAnalysisWriteFingerprint =
-        primaryAnalysisDeclaredContract === primaryAnalysisWriteContract
-            ? recoveryFingerprints.primaryAnalysis
-            : buildPrimaryAnalysisBaseFingerprint(
-                primaryAnalysisWriteContract, paper, textForAnalysis, arxivId);
+    const primaryAnalysisRequestPolicy = resolvePrimaryRequestPolicy();
+    const primaryAnalysisWriteFingerprint = buildPrimaryAnalysisBaseFingerprint(
+        primaryAnalysisWriteContract, paper, textForAnalysis, arxivId, {});
     // 第 1 轮：主分析
     if (analysis) {
         console.log(`    [deep] ↩ 从主分析 checkpoint 恢复 (${analysis.length} chars)`);
@@ -14240,12 +14274,15 @@ async function analyzePaperDeepInternal(paper) {
         try {
             analysis = await callModelWithConfig(
                 [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-                API_MAX_TOKENS, API_MAX_RETRIES, { ...DEEP_CONFIG, usageContext: { stage: 'primaryAnalysis' } }
+                API_MAX_TOKENS, API_MAX_RETRIES, { ...DEEP_CONFIG, usageContext: { stage: 'primaryAnalysis' },
+                    ...(primaryAnalysisRequestPolicy
+                        ? { primaryThinkingMode: primaryAnalysisRequestPolicy.thinkingMode } : {}) }
             );
             requireCurrentEvaluationTitle = true;
             markRecoveryStage(analysisManifest, 'primaryAnalysis', 'complete', {
                 fingerprint: primaryAnalysisWriteFingerprint,
-                promptTextContract: primaryAnalysisWriteContract
+                promptTextContract: primaryAnalysisWriteContract,
+                ...(primaryAnalysisRequestPolicy ? { primaryRequestPolicy: primaryAnalysisRequestPolicy } : {})
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.log(`    [deep] ✅ 主模型文本分析完成 (${analysis.length} chars)`);
@@ -14275,12 +14312,15 @@ async function analyzePaperDeepInternal(paper) {
         try {
             analysis = await callModel(
                 [{ role: 'user', content: [{ type: 'text', text: prompt }] }],
-                API_MAX_TOKENS, { usageContext: { stage: 'primaryAnalysis' } }
+                API_MAX_TOKENS, { usageContext: { stage: 'primaryAnalysis' },
+                    ...(primaryAnalysisRequestPolicy
+                        ? { primaryThinkingMode: primaryAnalysisRequestPolicy.thinkingMode } : {}) }
             );
             requireCurrentEvaluationTitle = true;
             markRecoveryStage(analysisManifest, 'primaryAnalysis', 'complete', {
                 fingerprint: primaryAnalysisWriteFingerprint,
-                promptTextContract: primaryAnalysisWriteContract
+                promptTextContract: primaryAnalysisWriteContract,
+                ...(primaryAnalysisRequestPolicy ? { primaryRequestPolicy: primaryAnalysisRequestPolicy } : {})
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             console.log(`    [deep] ✅ 文本分析完成`);
@@ -16369,7 +16409,10 @@ async function repairCoreSummarySection(
         }
         const summaryIssue = attempt === 1
             ? `${feedback}${retryTargets.length ? `\n允许修复的内容：${retryTargets.join('\n')}` : ''}`
-           : `这是第 ${attempt} 次局部修复。保留上一候选中已合格的句子，只编辑或补充下列未通过项：`
+           : `这是第 ${attempt} 次局部修复。`
+               + (lengthIssue || sentenceCountIssue
+                   ? '未被指出问题的量化结果句、边界句和成本句逐字保留；任务介绍与方法说明允许按下列长度或句数要求缩短、合并或补足，不删事实。'
+                   : '保留上一候选中已合格的句子，只编辑或补充下列未通过项：')
                + `${retryTargets.length ? retryTargets.join('\n') : '根据下方校验反馈逐项修正'}。\n`
                + `上次校验错误：${feedback}`;
         const prompt = loadPrompt(currentTextStagePromptPath('coreSummaryRepair'), {
@@ -17233,6 +17276,8 @@ module.exports = {
     calculateScoringDelta,
     stableFingerprint,
     buildRecoveryFingerprints,
+    resolvePrimaryRequestPolicy,
+    buildPrimaryAnalysisBaseFingerprint,
     hasCurrentPrimaryAnalysisCheckpoint,
     RECOVERY_STAGE_ORDER,
     RECOVERY_STAGE_DEPENDENCIES,

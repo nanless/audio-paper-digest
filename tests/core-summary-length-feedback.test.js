@@ -29,6 +29,8 @@ for(const [kind,candidate,action] of [
   if(calls===1)return `## 核心摘要\n${candidate}`;
   assert.match(messages[0].content,/320–600/);
   assert.match(messages[0].content,action);
+  assert.match(messages[0].content,/任务介绍与方法说明允许按下列长度或句数要求缩短、合并或补足/);
+  assert.doesNotMatch(messages[0].content,/保留上一候选中已合格的句子，只编辑/);
   assert.match(messages[0].content,/当前摘要按公共校验统计为 \d+ 个/);
   assert.match(messages[0].content,/比较对象、评测设置或数据集、指标、数值与方向/);
   return `## 核心摘要\n${good}`;
@@ -57,7 +59,30 @@ test('句数过多与量化错误并存时第二次请求明确允许合并非�
             if (calls === 1) return `## 核心摘要\n${candidate}`;
             assert.match(messages[0].content, /当前摘要为 \d+ 句，须为 6–9 句/);
             assert.match(messages[0].content, /合并未受保护的重复任务介绍或方法说明句/);
+            assert.match(messages[0].content, /任务介绍与方法说明允许按下列长度或句数要求缩短、合并或补足/);
+            assert.doesNotMatch(messages[0].content, /保留上一候选中已合格的句子，只编辑/);
             assert.match(messages[0].content, /量化结果句、边界句和成本句仍逐字保留/);
+            return `## 核心摘要\n${good}`;
+        }
+    });
+    assert.equal(calls, 2);
+    assert.equal(exterior(repaired), exterior(baseline));
+    assert.equal(contract.validateCoreSummarySemanticContract(repaired, { sourceText: source }), null);
+});
+
+
+test('只有量化缺项时仍保护上一轮其他合格句，不开放长度压缩', async () => {
+    const candidate = good.replace(resultSentence, '在公开测试集的相同协议下，方法的输出质量有所改善，但此句尚未说明指标名称与可核对的数值比较对象。');
+    const issue = contract.validateCoreSummarySemanticContract(replace(candidate), { sourceText: source });
+    assert.match(issue, /定量|量化|指标/);
+    assert.doesNotMatch(issue, /中文字符|句数必须/);
+    let calls = 0;
+    const repaired = await deep.repairCoreSummarySection(paper, replace(candidate), source, source, {
+        callModelFn: async messages => {
+            calls += 1;
+            if (calls === 1) return `## 核心摘要\n${candidate}`;
+            assert.match(messages[0].content, /保留上一候选中已合格的句子，只编辑或补充下列未通过项/);
+            assert.doesNotMatch(messages[0].content, /任务介绍与方法说明允许按下列长度或句数要求/);
             return `## 核心摘要\n${good}`;
         }
     });
