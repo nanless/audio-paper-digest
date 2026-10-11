@@ -5,6 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const scope = new AsyncLocalStorage();
+const verifiedBundleAuthorSources = new WeakMap();
+const verifiedBundleAuthorScope = new AsyncLocalStorage();
 const CONTRACT = 'fresh-source-analysis-v1';
 const CACHE_CONTRACT = 'fresh-source-cache-v1';
 const BUNDLE_CACHE_CONTRACT = 'fresh-source-bundle-v2';
@@ -230,7 +232,33 @@ function readBundleFreshSource(checked, id, expectation) {
         || !validSha(source.freshSourceDescriptor.sourceManifestSha256)) {
         throw fail('来源包的清单哈希无效，或与预期的论文和代次不匹配。');
     }
+    // 只有实际四文件公共读取与本次运行核验完成后，才登记这个对象；克隆或手构对象不获许可。
+    verifiedBundleAuthorSources.set(source, {
+        rootDir: root, arxivId: id, generation: expectation.sourceGeneration,
+        sourceManifestSha256: stored.sourceManifestSha256, detailsSha256: stable(source)
+    });
     return source;
+}
+
+function readVerifiedBundleReaderAuthors(details) {
+    const proof = verifiedBundleAuthorSources.get(details) || verifiedBundleAuthorScope.getStore();
+    if (!proof) return null;
+    if (stable(details) !== proof.detailsSha256) throw fail('已核验的作者来源详情被修改。');
+    const stored = require('./fresh-arxiv-rewrite-source.js').readFreshArxivRewriteSource(proof);
+    const expectedAuthors = stored.runtimeDetails.readerAuthors === null
+        ? { authors: [] } : stored.runtimeDetails.readerAuthors;
+    if (stored.sourceManifestSha256 !== proof.sourceManifestSha256
+        || stable(expectedAuthors) !== stable(details.readerAuthors)) {
+        throw fail('封存作者元数据与当前来源文件不一致。');
+    }
+    return stored.runtimeDetails.readerAuthors === null ? null : structuredClone(stored.runtimeDetails.readerAuthors);
+}
+
+function withVerifiedBundleReaderAuthorSource(details, callback) {
+    const proof = verifiedBundleAuthorSources.get(details);
+    if (!proof || typeof callback !== 'function') throw fail('作者来源作用域必须来自已核验的四文件公共读取。');
+    readVerifiedBundleReaderAuthors(details);
+    return verifiedBundleAuthorScope.run(proof, callback);
 }
 
 function readFreshSource(runDir, paper, identity) {
@@ -399,5 +427,5 @@ function freshReaderAttemptsDirectory(requestedDirectory) {
 module.exports = { CONTRACT, CACHE_CONTRACT, BUNDLE_CACHE_CONTRACT, BUNDLE_SOURCE_MODE, DAILY_SOURCE_RUN_CONTRACT, isBundleExpectation,
     withFreshAnalysisContext, getFreshAnalysisContext, isDailyFreshSourceScope,
     getSavedAnalysisRecoveryPermission,
-    readFreshSource, resolveFreshSource, fetchFreshSource, freshAnalysisIdentity, assertFreshPaper,
+    readFreshSource, readVerifiedBundleReaderAuthors, withVerifiedBundleReaderAuthorSource, resolveFreshSource, fetchFreshSource, freshAnalysisIdentity, assertFreshPaper,
     withFreshPaperContext, attachFreshSourceRecord, freshReaderAttemptsDirectory };

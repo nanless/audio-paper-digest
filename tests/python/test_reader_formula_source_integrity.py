@@ -13,6 +13,7 @@ FORMULA = r'\displaystyle S_{\text{ctc}}(y,X)=-\frac{\mathrm{CTCLoss}\big(\log p
 
 def fixture():
     paper = llm_api_publication_fixture()
+    paper['apiReaderPlan'].pop('structuredSourcePayload', None)
     binding = paper['apiReaderPlan']['formulaBindings'][0]
     old = '\\[' + binding['latex'] + '\\]'
     binding['latex'] = FORMULA
@@ -20,7 +21,8 @@ def fixture():
     binding['renderedBlockSha256'] = hashlib.sha256(block.encode()).hexdigest()
     paper['apiReaderArticle'] = paper['apiReaderArticle'].replace(old, block)
     artifacts = {'version': 4, 'flattenedTextSha256': paper['sourceSha256'], 'formulas': [{
-        'ordinal': 1, 'latex': FORMULA, 'sourceDomSha256': binding['sourceDomSha256']}]}
+        'ordinal': 1, 'recoveryStatus': 'complete', 'text': FORMULA,
+        'mathml': '<math display="block">', 'latex': FORMULA, 'sourceDomSha256': binding['sourceDomSha256']}]}
     payload = json.dumps(artifacts, ensure_ascii=False, separators=(',', ':'))
     digest = hashlib.sha256(payload.encode()).hexdigest()
     paper['analysisManifest']['sourceAcquisition']['structuredArtifactsSha256'] = digest
@@ -35,7 +37,7 @@ class ReaderFormulaSourceTests(unittest.TestCase):
             with self.subTest(claim=claim):
                 paper['apiReaderPlan']['rawTeXVerified'] = claim
                 reseal_llm_api_reader_fixture(paper)
-                with self.assertRaisesRegex(publish.PublishDataValidationError, '原始结构化内容'):
+                with self.assertRaisesRegex(publish.PublishDataValidationError, '完整结构化内容'):
                     publish._validate_api_reader_source_bindings(paper)
 
     def test_actual_same_formula_is_accepted_and_changed_payload_is_rejected(self):

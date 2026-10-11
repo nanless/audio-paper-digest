@@ -5604,8 +5604,7 @@ def _api_reader_numeric_tokens(value):
     return tokens
 
 
-# 与 Node 的窄迁移一致：仅旧实现猜补的整式须携带完整的原始结构化内容。
-_LEGACY_GUESSED_READER_FORMULA = r'\displaystyle S_{\text{ctc}}(y,X)=-\frac{\mathrm{CTCLoss}\big(\log p_{\text{ctc}}(X),\,\mathrm{tok}(y)\big)}{\max(|\mathrm{tok}(y)|,\,5)}'
+# 与 Node 一致：所有展示公式都须携带可重放来源 SHA 的完整结构化内容。
 
 
 def _reader_source_payload_artifacts(payload, structured_sha, source_sha):
@@ -5621,19 +5620,28 @@ def _reader_source_payload_artifacts(payload, structured_sha, source_sha):
                          and artifacts.get('flattenedTextSha256') == source_sha) else None
 
 
-def _validate_legacy_reader_formula_source(binding, plan, structured_sha, source_sha):
-    if str(binding.get('latex') or '').strip() != _LEGACY_GUESSED_READER_FORMULA:
-        return
+def _reader_formula_source_eligible(formula):
+    latex = str(formula.get('latex') or '').strip()
+    if formula.get('recoveryStatus') != 'complete' or not latex or re.search(r'=\s*[-+−]?\s*$', latex):
+        return False
+    inline_math = re.search(r"<math\b[^>]*\bdisplay\s*=\s*[\"']inline[\"']", str(formula.get('mathml') or ''), re.I)
+    text_has_relation = re.search(r'[=≤≥≠≈∝↦→]', str(formula.get('text') or ''))
+    latex_has_relation = re.search(r'[=<>≤≥≠≈∝↦→]|\\(?:leq?|geq?|neq?|approx|sim|propto|mapsto|to)(?![A-Za-z])', latex)
+    return not (inline_math and text_has_relation and not latex_has_relation)
+
+
+def _validate_reader_formula_source(binding, plan, structured_sha, source_sha):
     artifacts = _reader_source_payload_artifacts(plan.get('structuredSourcePayload'), structured_sha, source_sha)
     if artifacts is None or not isinstance(artifacts.get('formulas'), list):
-        raise PublishDataValidationError('旧公式缺少与既有来源 SHA 对应的原始结构化内容；请重建 Reader。')
+        raise PublishDataValidationError('展示公式缺少与既有来源 SHA 对应的完整结构化内容；请通过正常长文恢复入口重建。')
     formulas = [formula for formula in artifacts['formulas'] if isinstance(formula, dict)
                 and type(formula.get('ordinal')) is int
                 and formula['ordinal'] == binding['formulaOrdinal']]
-    if (len(formulas) != 1 or formulas[0].get('sourceDomSha256') != binding['sourceDomSha256']
+    if (len(formulas) != 1 or not _reader_formula_source_eligible(formulas[0])
+            or formulas[0].get('sourceDomSha256') != binding['sourceDomSha256']
             or not isinstance(formulas[0].get('latex'), str)
             or formulas[0]['latex'].strip() != binding['latex'].strip()):
-        raise PublishDataValidationError('旧公式与原始 TeX、公式位置或 DOM SHA 不一致；不能接受猜补结果。')
+        raise PublishDataValidationError('展示公式与完整原始 TeX、公式位置或 DOM SHA 不一致；不能接受片段或猜补结果。')
 
 
 # 仅旧 URL 硬编码图注须证明原始来源；像素断言不能靠原文字符串或自声明代替。
@@ -5903,7 +5911,7 @@ def _validate_api_reader_source_bindings(paper, article=None):
                 or formula_occurrences != 1 \
                 or binding['marker'] in article:
             raise PublishDataValidationError(f'第 {index + 1} 个公式的来源记录或正文显示内容不符合要求。')
-        _validate_legacy_reader_formula_source(binding, plan, structured_sha, paper.get('sourceSha256'))
+        _validate_reader_formula_source(binding, plan, structured_sha, paper.get('sourceSha256'))
         seen_ordinals.add(ordinal)
     _validate_legacy_reader_figure_source(paper, plan, article, structured_sha, paper.get('sourceSha256'))
     return {

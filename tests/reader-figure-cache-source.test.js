@@ -5,11 +5,11 @@ const fixture=require('./reader-signed-draft-fixture').fixture;
 const sha=value=>crypto.createHash('sha256').update(value).digest('hex');
 const caption='Figure 1: Overview of the study.';
 function affected() {
-    const {paper}=fixture();paper.arxivId='2609.15067';
+    const {paper,sourceDetails}=fixture();paper.arxivId='2609.15067';
     const figure=paper.apiReaderFigures[0],oldUrl=figure.url;
     figure.url='https://arxiv.org/html/2609.15067v1/method.png';figure.caption=caption;
     paper.apiReaderArticle=paper.apiReaderArticle.replaceAll(oldUrl,figure.url);
-    const source={flattenedTextSha256:paper.sourceSha256,tables:[],formulas:[],figures:[{
+    const source={flattenedTextSha256:paper.sourceSha256,tables:[],formulas:structuredClone(sourceDetails.structuredArtifacts.formulas),figures:[{
         ordinal:figure.ordinal,label:figure.label,caption:figure.caption,sourceDomSha256:figure.sourceDomSha256,
         recoveryStatus:'complete',images:[{kind:'external_url',url:figure.url,mediaType:'image/png'}]}]};
     const payload=JSON.stringify(source),digest=sha(payload);
@@ -43,10 +43,15 @@ test('Reader 缓存要求图注对应原始来源，不能只靠重新计算 SHA
     }
 });
 test('Reader 缓存拒绝指定图片的无像素依据描述；移除该描述后仍可使用来源记录',()=>{
-    const {paper}=affected();paper.arxivId='2609.27195';
+    const {paper,source}=affected();paper.arxivId='2609.27195';
     const before=paper.apiReaderFigures[0].url,url='https://arxiv.org/html/2609.27195v1/fig4_placement_ratio_readable.svg';
     paper.apiReaderFigures[0].url=url;paper.apiReaderFigures[0].caption='Figure 3: Original caption.';
     paper.apiReaderArticle=paper.apiReaderArticle.replaceAll(before,url);
+    source.figures[0].images[0].url=url;source.figures[0].caption=paper.apiReaderFigures[0].caption;
+    const payload=JSON.stringify(source),digest=sha(payload);
+    paper.apiReaderPlan.structuredSourcePayload=payload;
+    paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256=digest;
+    paper.analysisManifest.stages.apiReaderArticle.structuredArtifactsSha256=digest;
     const clean=paper.apiReaderArticle;
     paper.apiReaderArticle+='\n\n绑定图像：四个语料的表示漂移比与任务损伤比随信噪比变化；右侧为停顿位移后的语音帧漂移随距离衰减。原 HTML 图注与像素错配。';seal(paper);
     assert.equal(engine.hasValidApiReaderV3Records(paper),false);

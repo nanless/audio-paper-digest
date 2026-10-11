@@ -317,7 +317,8 @@ function runtimeMetadataFromDetails(details, text, arxivId) {
         warnings: Array.isArray(details.warnings) ? details.warnings.map(String) : [],
         ...(details.sourceVersion ? { sourceVersion: normalizeHistoricalVersionIdentity(details.sourceVersion, arxivId) } : {}) };
     // 保存的原始 HTML 用于核对作者和机构；不符合保留条件或总元数据超出大小限制时删除这段 HTML，
-    // 后续只能明确说明机构不可得，不能用旧解析数组替代原文。
+    // 普通旧缓存解析数组不能替代原文；只有当前公共读取逐一核验四个封存文件后，
+    // 才可使用清单绑定的作者元数据。无法取得这项证明时仍明确说明机构不可得。
     if (metadata.readerAuthors?.sourceHtml
         && (!require('./reader-author-parser.js').canRetainAuthorSourceHtml(metadata.readerAuthors.sourceHtml)
             || Buffer.byteLength(canonicalJson(metadata), 'utf8') > MAX_TEXT_BYTES)) {

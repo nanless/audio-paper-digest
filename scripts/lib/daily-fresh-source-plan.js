@@ -461,7 +461,8 @@ async function withDailyFreshPaperSource(plan, paper, callback, options = {}) {
     if (sourceVersion) paper.sourceVersion = clone(sourceVersion);
     else delete paper.sourceVersion;
     const figureCache = new Map();
-    const result = await direct.withDirectRewriteAnalysisSource({ paperId: `arxiv:${id}`,
+    const result = await fresh.withVerifiedBundleReaderAuthorSource(sourceDetails,
+        () => direct.withDirectRewriteAnalysisSource({ paperId: `arxiv:${id}`,
         route: 'arxiv-fresh-fetch', sourceDetails, runId: plan.runId,
         sourceSha256: sourceDetails.freshSourceDescriptor.sourceSha256,
         structuredArtifactsSha256: sourceDetails.freshSourceDescriptor.structuredArtifactsSha256,
@@ -480,7 +481,7 @@ async function withDailyFreshPaperSource(plan, paper, callback, options = {}) {
             figureCache.set(url, image);
             return image;
         } },
-    () => callback(sourceDetails));
+    () => callback(sourceDetails)));
     const output = result && typeof result === 'object' && !Array.isArray(result) ? { ...result } : result;
     if (output && typeof output === 'object' && !Array.isArray(output)) {
         if (sourceVersion) output.sourceVersion = clone(sourceVersion);

@@ -20,7 +20,9 @@ def fixture():
     figure['url'] = 'https://arxiv.org/html/2609.15067v1/method.png'
     figure['caption'] = 'Figure 1: Overview of the study.'
     paper['apiReaderArticle'] = paper['apiReaderArticle'].replace(old_url, figure['url'])
-    artifacts = {'flattenedTextSha256': paper['sourceSha256'], 'figures': [{
+    original = json.loads(paper['apiReaderPlan']['structuredSourcePayload'])
+    artifacts = {'flattenedTextSha256': paper['sourceSha256'],
+                 'formulas': copy.deepcopy(original['formulas']), 'figures': [{
         'ordinal': figure['ordinal'], 'label': figure['label'], 'caption': figure['caption'],
         'sourceDomSha256': figure['sourceDomSha256'], 'recoveryStatus': 'complete',
         'images': [{'kind': 'external_url', 'url': figure['url'], 'mediaType': 'image/png'}],
@@ -28,18 +30,24 @@ def fixture():
     payload = json.dumps(artifacts, ensure_ascii=False, separators=(',', ':'))
     paper['analysisManifest']['sourceAcquisition']['structuredArtifactsSha256'] = sha(payload)
     paper['analysisManifest']['stages']['apiReaderArticle']['structuredArtifactsSha256'] = sha(payload)
-    reseal_llm_api_reader_fixture(paper)
+    attach_source(paper, json.dumps({**artifacts, 'figures': []}, ensure_ascii=False, separators=(',', ':')))
     return paper, payload
+
+
+def attach_source(paper, payload):
+    paper['apiReaderPlan']['structuredSourcePayload'] = payload
+    paper['analysisManifest']['sourceAcquisition']['structuredArtifactsSha256'] = sha(payload)
+    paper['analysisManifest']['stages']['apiReaderArticle']['structuredArtifactsSha256'] = sha(payload)
+    reseal_llm_api_reader_fixture(paper)
 
 
 class ReaderFigureSourceTests(unittest.TestCase):
     def test_regular_publisher_payload_refuses_old_caption_before_rendering(self):
         paper, payload = fixture()
         paper['analysisManifest']['stages']['apiReaderArticle']['figuresSha256'] = publish._stable_json_sha256(paper['apiReaderFigures'])
-        with self.assertRaisesRegex(publish.PublishDataValidationError, '旧论文图缺少'):
+        with self.assertRaisesRegex(publish.PublishDataValidationError, '旧论文图的 URL 未唯一对应'):
             publish._api_reader_payload(paper)
-        paper['apiReaderPlan']['structuredSourcePayload'] = payload
-        reseal_llm_api_reader_fixture(paper)
+        attach_source(paper, payload)
         result = publish._api_reader_payload(paper)
         self.assertEqual(result['figurePersistence'], publish.EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT)
         self.assertIn(paper['apiReaderFigures'][0]['url'], result['renderedArticle'])
@@ -49,11 +57,10 @@ class ReaderFigureSourceTests(unittest.TestCase):
         for flag in (False, True):
             paper['apiReaderPlan']['figurePixelsVerified'] = flag
             reseal_llm_api_reader_fixture(paper)
-            with self.assertRaisesRegex(publish.PublishDataValidationError, '旧论文图缺少'):
+            with self.assertRaisesRegex(publish.PublishDataValidationError, '旧论文图的 URL 未唯一对应'):
                 publish._validate_api_reader_source_bindings(paper)
         del paper['apiReaderPlan']['figurePixelsVerified']
-        paper['apiReaderPlan']['structuredSourcePayload'] = payload
-        reseal_llm_api_reader_fixture(paper)
+        attach_source(paper, payload)
         self.assertEqual(publish._validate_api_reader_source_bindings(paper)['formulaCount'], 1)
         paper['apiReaderPlan']['structuredSourcePayload'] = payload.replace('Overview', 'Changed')
         reseal_llm_api_reader_fixture(paper)

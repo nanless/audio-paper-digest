@@ -2202,11 +2202,9 @@ function replayPersistedUnstructuredArxivPayloadSha(structuredArtifacts) {
     return crypto.createHash('sha256').update(JSON.stringify(body)).digest('hex');
 }
 
-// 旧实现曾凭 CTCLoss/max 两个词猜补这条完整公式。仅它需要补存原始来源内容，
-// 让旧缓存不能用输出自身的哈希代替原始 TeX；其他公式沿用既有来源协议。
-const LEGACY_GUESSED_READER_FORMULA = String.raw`\displaystyle S_{\text{ctc}}(y,X)=-\frac{\mathrm{CTCLoss}\big(\log p_{\text{ctc}}(X),\,\mathrm{tok}(y)\big)}{\max(|\mathrm{tok}(y)|,\,5)}`;
+// 展示公式必须重核完整结构化来源，不能用输出自身的哈希代替原始 TeX。
 function readerFormulaNeedsSourcePayload(latex) {
-    return String(latex || '').trim() === LEGACY_GUESSED_READER_FORMULA;
+    return Boolean(String(latex || '').trim());
 }
 function readerStructuredSourcePayload(artifacts) {
     const { payloadSha256, ...body } = artifacts;
@@ -2216,7 +2214,7 @@ function readerStructuredSourcePayload(artifacts) {
     const candidates = [JSON.stringify(ordered(body)), JSON.stringify(body),
         replayPersistedArxivHtmlDomV4PayloadSha(artifacts, true)];
     const payload = candidates.find(value => value && crypto.createHash('sha256').update(value).digest('hex') === payloadSha256);
-    if (!payload) throw new Error('旧公式的完整结构化来源内容不能重放既有来源 SHA；请恢复原始来源后重建 Reader');
+    if (!payload) throw new Error('展示公式的完整结构化来源内容不能重放既有来源 SHA；请通过正常长文恢复入口重建');
     return payload;
 }
 function readerSourcePayloadArtifacts(payload, structuredSha, sourceSha) {
@@ -2228,11 +2226,11 @@ function readerSourcePayloadArtifacts(payload, structuredSha, sourceSha) {
         && artifacts.flattenedTextSha256 === sourceSha ? artifacts : null;
 }
 function readerFormulaSourcePayloadValid(binding, payload, structuredSha, sourceSha) {
-    if (!readerFormulaNeedsSourcePayload(binding?.latex)) return true;
     const artifacts = readerSourcePayloadArtifacts(payload, structuredSha, sourceSha);
     if (!Array.isArray(artifacts?.formulas)) return false;
     const formulas = artifacts.formulas.filter(formula => formula?.ordinal === binding.formulaOrdinal);
-    return formulas.length === 1 && formulas[0].sourceDomSha256 === binding.sourceDomSha256
+    return formulas.length === 1 && assessReaderFormulaEligibility(formulas[0]).eligible
+        && formulas[0].sourceDomSha256 === binding.sourceDomSha256
         && typeof formulas[0].latex === 'string' && formulas[0].latex.trim() === binding.latex.trim();
 }
 
@@ -2270,6 +2268,19 @@ function readerLegacyDatasetClaimsValid(article, tableBindings) {
             readerLegacyDatasetQuoteSupportsClaim(typeof item === 'string' ? item : item?.quote)
         ));
     });
+}
+
+function assessReaderFormulaEligibility(formula) {
+    const latex = String(formula?.latex || '').trim();
+    if (formula?.recoveryStatus !== 'complete' || !latex) return { eligible: false, reason: '原始公式缺少完整 TeX' };
+    if (/=\s*[-+−]?\s*$/.test(latex)) return { eligible: false, reason: '原始 TeX 在等号后截断' };
+    const inlineMath = /<math\b[^>]*\bdisplay\s*=\s*["']inline["']/i.test(String(formula.mathml || ''));
+    const textHasRelation = /[=≤≥≠≈∝↦→]/.test(String(formula.text || ''));
+    const latexHasRelation = /[=<>≤≥≠≈∝↦→]|\\(?:leq?|geq?|neq?|approx|sim|propto|mapsto|to)(?![A-Za-z])/.test(latex);
+    if (inlineMath && textHasRelation && !latexHasRelation) {
+        return { eligible: false, reason: '原始 TeX 只恢复了行内片段，未包含原文完整等式关系' };
+    }
+    return { eligible: true };
 }
 
 function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFormulaBindings, options = {}) {
@@ -2358,8 +2369,9 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
             throw new Error(`读者文章 formulaBindings[${index}] marker 必须在正文独占且仅出现一次`);
         }
         const latex = String(formula.latex || '').trim();
-        if (/=\s*[-+−]?\s*$/.test(latex)) {
-            throw new Error(`读者文章 formulaBindings[${index}] 原始 TeX 在等号后截断；不能猜补公式，请删除该公式绑定及 marker，依据完整原文解释其含义`);
+        const eligibility = assessReaderFormulaEligibility(formula);
+        if (!eligibility.eligible) {
+            throw new Error(`读者文章 formulaBindings[${index}] ${eligibility.reason}；不能猜补公式，请删除该公式绑定及 marker，依据完整原文解释其含义`);
         }
         if (!latex || !recoverySha256(formula.sourceDomSha256)) {
             throw new Error(`读者文章 formulaBindings[${index}] 原始公式缺少 TeX/DOM SHA`);
@@ -3332,10 +3344,8 @@ function buildApiReaderArtifactEvidence(
         32
     );
     const availableFormulas = (structuredArtifacts.formulas || []).filter(formula => (
-        formula?.recoveryStatus === 'complete'
-        && Number.isInteger(formula?.ordinal)
-        && String(formula?.latex || '').trim()
-        && !/=\s*[-+−]?\s*$/.test(String(formula.latex))
+        Number.isInteger(formula?.ordinal)
+        && assessReaderFormulaEligibility(formula).eligible
     )).slice(0, 12);
     appendLine(
         `FORMULA_ORDINALS_AVAILABLE: ${JSON.stringify(availableFormulas.map(formula => formula.ordinal))}`,

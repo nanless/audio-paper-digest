@@ -525,7 +525,9 @@ function replayHtmlReaderAuthors(details) {
 
 function verifiedReaderAuthorDetails(details) {
     const readerAuthors = details?.source === 'conference_pdf_text'
-        ? parseConferencePdfAuthors(details.text) : replayHtmlReaderAuthors(details);
+        ? parseConferencePdfAuthors(details.text) : replayHtmlReaderAuthors(details)
+            || (details?.source === 'html'
+                ? require('./fresh-analysis-context.js').readVerifiedBundleReaderAuthors(details) : null);
     return { ...details, readerAuthors: readerAuthors || null };
 }
 

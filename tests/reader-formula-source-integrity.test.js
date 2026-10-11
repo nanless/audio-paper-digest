@@ -60,7 +60,10 @@ test('原文含完整公式时附结构化原始内容，核验全文 SHA 和原
         f.structuredArtifacts.payloadSha256, sha(f.sourceText)), true);
     const original = JSON.parse(result.structuredSourcePayload);
     assert.equal(original.formulas[0].latex, guessed);
-    assert.equal(fixture('x=y').bind().structuredSourcePayload, undefined);
+    const ordinary = fixture('x=y');
+    const ordinaryPayload = ordinary.bind().structuredSourcePayload;
+    assert.equal(sha(ordinaryPayload), ordinary.structuredArtifacts.payloadSha256);
+    assert.equal(JSON.parse(ordinaryPayload).formulas[0].latex, 'x=y');
 });
 
 test('Node 旧自洽猜补缓存拒绝，且新增原始内容不能用自声明或错误 TeX 蒙混', () => {

@@ -629,7 +629,7 @@ def llm_api_publication_fixture():
         **resource_identity,
         'identitySha256': publish_to_blog._stable_json_sha256(resource_identity),
     }
-    return {
+    paper = {
         'title': 'LLM API Publisher Fixture',
         'arxivId': paper_id,
         'abstract': 'A source abstract for the API publication fixture.',
@@ -720,6 +720,17 @@ def llm_api_publication_fixture():
             },
         },
     }
+
+    source_payload = json.dumps({'flattenedTextSha256': source_sha, 'formulas': [{
+        'ordinal': 1, 'recoveryStatus': 'complete', 'latex': latex,
+        'text': latex, 'mathml': '<math display="block">',
+        'sourceDomSha256': formula_binding['sourceDomSha256']} ]},
+        ensure_ascii=False, separators=(',', ':'))
+    plan['structuredSourcePayload'] = source_payload
+    structured_sha = hashlib.sha256(source_payload.encode()).hexdigest()
+    paper['analysisManifest']['sourceAcquisition']['structuredArtifactsSha256'] = structured_sha
+    paper['analysisManifest']['stages']['apiReaderArticle']['structuredArtifactsSha256'] = structured_sha
+    return reseal_llm_api_reader_fixture(paper)
 
 
 def reseal_llm_api_reader_fixture(paper):
@@ -4102,7 +4113,7 @@ title: "Bad table"
             'sha256': paper['apiReaderPlan']['sourceBindingsSha256'],
             'tableCount': 1,
             'formulaCount': 1,
-            'structuredArtifactsSha256': 'c' * 64,
+            'structuredArtifactsSha256': paper['analysisManifest']['sourceAcquisition']['structuredArtifactsSha256'],
         })
         markdown, _slug = publish_to_blog.generate_paper_page(
             paper, '2026-08-31', category='论文速递',
@@ -4180,6 +4191,14 @@ title: "Bad table"
         binding['renderedBlockSha256'] = hashlib.sha256(
             rendered_block.encode('utf-8')
         ).hexdigest()
+        source = json.loads(paper['apiReaderPlan']['structuredSourcePayload'])
+        source['formulas'][0]['latex'] = latex
+        source['formulas'][0]['text'] = latex
+        payload = json.dumps(source, ensure_ascii=False, separators=(',', ':'))
+        paper['apiReaderPlan']['structuredSourcePayload'] = payload
+        structured_sha = hashlib.sha256(payload.encode()).hexdigest()
+        paper['analysisManifest']['sourceAcquisition']['structuredArtifactsSha256'] = structured_sha
+        paper['analysisManifest']['stages']['apiReaderArticle']['structuredArtifactsSha256'] = structured_sha
         reseal_llm_api_reader_fixture(paper)
 
         markdown, _slug = publish_to_blog.generate_paper_page(
