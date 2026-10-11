@@ -39,6 +39,7 @@ npm run workspace:role -- status
 | `npm run fetch` | 归档、抓取、筛选和分析，不发布 |
 | `npm run deep -- --date DATE` | 只读取当前已保存的文本/PDF，续跑未完成分析 |
 | `npm run batch` | 批量处理正式分析结果中未完成的论文 |
+| `npm run batch -- --fact-feedback-file ABS_JSON --fact-feedback-file OTHER_JSON` | 整组来源反馈先核验，再逐篇持锁重读并纠错，同时续跑当前批次其他未完成论文；重复论文或过期反馈会停止 |
 | `npm run batch -- --refresh-reader-diagnostics` | 核验同组封存来源后恢复失败 Reader 草稿，承接原调用次数，提示词变更本身不增加请求额度 |
 | `npm run batch -- --retry-failed-readers` | 归档并停用未完成论文的失败 Reader 候选，然后续跑，不影响已完成论文 |
 | `npm run reanalyze -- --concurrency N` | 归档并停用全部旧失败 Reader 候选，清空 Reader/图片补充状态，再用绑定来源强制重分析 |

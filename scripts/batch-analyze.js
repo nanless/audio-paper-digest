@@ -23,12 +23,26 @@ const { updateAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./dige
 const Config = require('./config.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 const readerRepair = require('./lib/reader-repair.js');
+const factReview = require('./lib/daily-fact-review.js');
 
 loadEnvFile();
 
 const RESULT_FILE = Config.FILES.deepAnalysisResult;
 const RETRY_FAILED_READERS = process.argv.slice(2).includes('--retry-failed-readers');
 const REFRESH_READER_DIAGNOSTICS = process.argv.slice(2).includes('--refresh-reader-diagnostics');
+
+function parseFactFeedbackFiles(argv = process.argv.slice(2)) {
+    const files = [];
+    for (let index = 0; index < argv.length; index++) {
+        if (argv[index] !== '--fact-feedback-file') continue;
+        const filename = argv[++index];
+        if (typeof filename !== 'string' || !filename.trim() || filename.startsWith('--')) {
+            throw new Error('--fact-feedback-file 后须提供事实反馈 JSON 文件路径，可重复提供此参数。');
+        }
+        files.push(filename);
+    }
+    return files;
+}
 
 function retireIncompleteReaderCandidates(directory, paperIds, options = {}) {
     const readDir = options.readDir || fs.readdirSync;
@@ -88,6 +102,16 @@ async function main(options = {}) {
     if (refreshReaderDiagnostics && RETRY_FAILED_READERS) {
         throw new Error('--refresh-reader-diagnostics 会继续使用已有长文草稿，不能与停用旧草稿的 --retry-failed-readers 同时使用。');
     }
+    const feedbackFiles = options.factFeedbackFiles === undefined ? parseFactFeedbackFiles() : options.factFeedbackFiles;
+    if (!Array.isArray(feedbackFiles) || feedbackFiles.some(filename => (
+        typeof filename !== 'string' || !filename.trim()
+    ))) throw new Error('批量事实反馈路径须为非空字符串组成的数组。');
+    const feedbacks = new Map();
+    for (const filename of feedbackFiles) {
+        const feedback = factReview.readFeedback(filename);
+        if (feedbacks.has(feedback.paperId)) throw new Error(`同一论文不能提供两份事实反馈：${feedback.paperId}`);
+        feedbacks.set(feedback.paperId, feedback);
+    }
     // 这个入口只继续已有日更分析。旧结果文件没有对应的封存 PDF 和文本记录，
     // 不能把它迁为当前结果后，再让分析器通过旧抓取路径补取来源。
     if (!fs.existsSync(RESULT_FILE)) {
@@ -96,14 +120,21 @@ async function main(options = {}) {
     console.log('=== 批量论文分析 ===');
     console.log(`数据文件: ${RESULT_FILE}`);
 
-    const data = updateJsonFileLocked(RESULT_FILE, current =>
-        dailyFreshSources.prepareDailyFreshSourceRecoveryPayload(current,
-            readJsonFileStrict(Config.FILES.filteredPapers), { label: 'batch recovery' }));
+    const prepare = current => dailyFreshSources.prepareDailyFreshSourceRecoveryPayload(current,
+        readJsonFileStrict(Config.FILES.filteredPapers), { label: 'batch recovery' });
+    // 先只读核验整组反馈，再改写运行状态；后一个文件不合法时，前一个也不能开始请求。
+    const data = feedbacks.size ? prepare(readJsonFileStrict(RESULT_FILE))
+        : updateJsonFileLocked(RESULT_FILE, prepare);
 
     const papers = Array.isArray(data) ? data : (data.papers || []);
     const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(data, {
         papers, label: 'batch recovery'
     });
+    for (const [id, feedback] of feedbacks) {
+        const paper = papers.find(item => normalizedId(item) === id);
+        if (!paper) throw new Error(`事实反馈论文不在当前完整日更集合内：${id}`);
+        factReview.validateFeedback(feedback, dailySourcePlan, paper);
+    }
     const batchDate = inferAnalysisBatchDate(
         papers,
         Array.isArray(data) ? {} : data,
@@ -111,9 +142,10 @@ async function main(options = {}) {
     );
     console.log(`总论文数: ${papers.length}`);
 
-    const notAnalyzed = papers.filter(p => !isSuccessfulAnalysisRecord(p)
+    const notAnalyzed = papers.filter(p => feedbacks.has(normalizedId(p)) || !isSuccessfulAnalysisRecord(p)
         || !dailyFreshSources.isPaperReusableForAnalysis(p, dailySourcePlan));
-    console.log(`未分析论文: ${notAnalyzed.length}`);
+    console.log(`本次处理论文: ${notAnalyzed.length}`);
+    if (feedbacks.size) console.log(`其中 ${feedbacks.size} 篇带有已核验的事实反馈；程序检查已通过的论文也须纠正已发现错误。`);
 
     if (RETRY_FAILED_READERS) {
         const retired = retireIncompleteReaderCandidates(
@@ -158,13 +190,24 @@ async function main(options = {}) {
         saveInterval: 1,
         analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
             ...options,
-            ...(options.analyzeFn ? { analyze: options.analyzeFn } : {})
+            ...(feedbacks.size ? { analyze: paper => {
+                const feedback = feedbacks.get(normalizedId(paper));
+                const analyze = () => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper);
+                if (!feedback) return analyze();
+                const bound = factReview.validateFeedback(feedback, dailySourcePlan, paper);
+                return factReview.withFactReview(bound, analyze);
+            } } : options.analyzeFn ? { analyze: options.analyzeFn } : {})
         }),
         preparePaperLocked: paper => {
             const current = readJsonFileStrict(RESULT_FILE);
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
-            if (isSuccessfulAnalysisRecord(latest)
+            const feedback = feedbacks.get(normalizedId(paper));
+            if (feedback) {
+                const lockedPlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(current, { label: 'locked batch fact review' });
+                factReview.validateFeedback(feedback, lockedPlan, latest);
+            }
+            if (!feedback && isSuccessfulAnalysisRecord(latest)
                 && dailyFreshSources.isPaperReusableForAnalysis(latest, dailySourcePlan)) {
                 return { paper: latest, skip: true };
             }
@@ -278,4 +321,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { main, finalizeBatchZeroWorkState, retireIncompleteReaderCandidates };
+module.exports = { main, parseFactFeedbackFiles, finalizeBatchZeroWorkState, retireIncompleteReaderCandidates };

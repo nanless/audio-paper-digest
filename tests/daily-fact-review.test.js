@@ -166,6 +166,118 @@ test('CLI拒绝重复/未知参数与无明确日期或ID的反馈',()=>{
     for(const args of [['--date',DATE,'--date',DATE],['--unknown','x'],['--core-feedback-file','x'],['--id',ID,'--core-feedback-file','x'],['--date',DATE,'--id','2610.90031v1']]) assert.throws(()=>entry.parseDeepCliArgs(args));
 });
 
+test('批量入口读取重复事实反馈参数，缺文件路径时拒绝', () => {
+    const batch = require('../scripts/batch-analyze');
+    assert.deepEqual(batch.parseFactFeedbackFiles(['--refresh-reader-diagnostics',
+        '--fact-feedback-file', '/tmp/第一篇.json', '--fact-feedback-file', '/tmp/第二篇.json']),
+    ['/tmp/第一篇.json', '/tmp/第二篇.json']);
+    assert.deepEqual(batch.parseFactFeedbackFiles([]), []);
+    for (const args of [['--fact-feedback-file'], ['--fact-feedback-file', '--refresh-reader-diagnostics'],
+        ['--fact-feedback-file', '']]) assert.throws(() => batch.parseFactFeedbackFiles(args), /须提供/);
+});
+
+test('批量反馈全部只读预检：重复论文、后一个坏绑定及非法列表不写文件、不开始分析', async t => {
+    const f = await fixture(t);
+    delete require.cache[require.resolve('../scripts/batch-analyze')];
+    const batch = require('../scripts/batch-analyze');
+    const secondFile = path.join(f.root, 'second-feedback.json');
+    json(secondFile, { ...f.feedback, paperId: '2610.99999' });
+    const files = [Config.FILES.deepAnalysisResult, Config.FILES.filteredPapers, Config.FILES.papers];
+    const before = files.map(filename => fs.readFileSync(filename));
+    let calls = 0;
+    for (const factFeedbackFiles of [null, 'file.json', [42], [f.feedbackFile, f.feedbackFile],
+        [f.feedbackFile, secondFile]]) {
+        await assert.rejects(batch.main({ factFeedbackFiles,
+            analyzeBatch: async () => { calls++; assert.fail('无效反馈不可开始分析'); } }));
+        files.forEach((filename, index) => assert.deepEqual(fs.readFileSync(filename), before[index]));
+    }
+    json(secondFile, { ...f.feedback, sourceQuotes: ['编造的来源引文'] });
+    await assert.rejects(batch.main({ factFeedbackFiles: [secondFile],
+        analyzeBatch: async () => { calls++; } }), /逐字引文/);
+    assert.equal(calls, 0);
+    files.forEach((filename, index) => assert.deepEqual(fs.readFileSync(filename), before[index]));
+});
+
+test('正常批量逐篇锁内应用反馈；其他未完成论文照常分析且不收到相邻论文反馈', async t => {
+    const f = await fixture(t);
+    delete require.cache[require.resolve('../scripts/batch-analyze')];
+    const batch = require('../scripts/batch-analyze');
+    const seen = [];
+    const paidInput = f.paper.analysisCheckpoint;
+    const result = await batch.main({ factFeedbackFiles: [f.feedbackFile],
+        analyzeFn: async paper => {
+            const id = require('../scripts/utils').normalizedId(paper);
+            const active = review.current(id);
+            seen.push({ id, feedback: active?.feedback.paperId || null });
+            assert.equal(paper.coreFeedback, undefined);
+            if (id === ID) {
+                assert.equal(review.reviewFeedback('coreSummaryRepair', ID).includes(quote), true);
+                assert.equal(paper.analysisCheckpoint, paidInput);
+            } else {
+                assert.equal(active, null);
+                assert.equal(review.current(ID), null);
+            }
+            throw Object.assign(new Error('离线检查：停止在模型请求之前'), { retryable: false });
+        } });
+    assert.deepEqual(seen.sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+        [{ id: ID, feedback: ID }, { id: '2610.90032', feedback: null }]);
+    assert.equal(result.remaining, 2);
+    const saved = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult));
+    assert.equal(saved.papers.length, 2);
+    assert.equal(saved.papers.find(paper => paper.arxivId === ID).analysisCheckpoint, paidInput);
+    assert.equal(review.current(), null);
+});
+
+test('批量反馈取得论文锁后重读正式正文，预检后出现变化须在分析器之前停止', async t => {
+    const f = await fixture(t);
+    delete require.cache[require.resolve('../scripts/batch-analyze')];
+    const batch = require('../scripts/batch-analyze');
+    let calls = 0;
+    await assert.rejects(batch.main({ factFeedbackFiles: [f.feedbackFile],
+        analyzeFn: async () => { calls++; }, analyzeBatch: async (papers, options) => {
+            const changed = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult));
+            changed.papers[0].analysisCheckpoint += '并发修改的正文';
+            json(Config.FILES.deepAnalysisResult, changed);
+            options.preparePaperLocked(papers.find(paper => paper.arxivId === ID));
+            assert.fail('锁内绑定过期不能进入分析器');
+        } }), /当前核心摘要正文绑定/);
+    assert.equal(calls, 0);
+});
+
+test('两篇反馈并发续跑，各自只接收本篇已核验的纠错内容', async t => {
+    const f = await fixture(t);
+    const secondId = '2610.90032';
+    const secondPaper = { ...structuredClone(f.paper), arxivId: secondId };
+    const details = daily.readDailyFreshSource(f.plan, secondPaper);
+    daily.withDailyFreshAnalysisContext(f.plan, () => fresh.attachFreshSourceRecord(
+        secondPaper, secondPaper.analysisManifest, details));
+    assert.equal(daily.isPaperBoundToPlan(secondPaper, f.plan), true);
+    f.payload.papers[1] = secondPaper;
+    json(Config.FILES.deepAnalysisResult, f.payload);
+    const secondDirectory = path.join(f.plan.sourcesDir, secondId, 'generation-000001');
+    const secondFeedback = { ...f.feedback, paperId: secondId,
+        sourceFiles: Object.fromEntries(Object.keys(f.feedback.sourceFiles).map(name =>
+            [name, review.sha(fs.readFileSync(path.join(secondDirectory, name)))])),
+        coreFeedback: '第二篇单独修正文：文本教师使用均方误差，不能写成余弦蒸馏。' };
+    const secondFile = path.join(f.root, 'second-valid-feedback.json');
+    json(secondFile, secondFeedback);
+    delete require.cache[require.resolve('../scripts/batch-analyze')];
+    const batch = require('../scripts/batch-analyze');
+    const seen = [];
+    await batch.main({ factFeedbackFiles: [f.feedbackFile, secondFile], analyzeFn: async paper => {
+        await new Promise(resolve => setImmediate(resolve));
+        const id = require('../scripts/utils').normalizedId(paper);
+        const expected = id === ID ? f.feedback : secondFeedback;
+        assert.deepEqual(review.current(id).feedback, expected);
+        assert.equal(review.current(id === ID ? secondId : ID), null);
+        seen.push(id);
+        throw Object.assign(new Error('离线并发反馈检查完成，不调用模型'), { retryable: false });
+    } });
+    assert.deepEqual(seen.sort(), [ID, secondId]);
+    assert.equal(JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers.length, 2);
+    assert.equal(review.current(), null);
+});
+
 
 test('相同反馈失败或完成后凭真实原输入快照续跑，篡改快照不能借receipt绕过当前core绑定',async t=>{
     const f=await fixture(t);const bound=review.validateFeedback(f.feedback,f.plan,f.paper);

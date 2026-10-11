@@ -25,6 +25,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | 跑完当天可脚本化阶段（博客发布 + 视觉输入准备） | `npm run digest:prepare -- YYYY-MM-DD` |
 | 只续跑分析 | `npm run deep -- --date YYYY-MM-DD`，只读取当前批次绑定的封存来源 |
 | 单篇受控事实纠错 | `npm run deep -- --date YYYY-MM-DD --id ARXIV_ID --core-feedback-file ABS_JSON`；原文与当前正文SHA绑定反馈，正常模型重做完整主分析，或修复摘要、Reader与标签 |
+| 多篇受控事实纠错及批量续跑 | `npm run batch -- --fact-feedback-file ABS_JSON --fact-feedback-file OTHER_JSON`；可重复提供反馈文件，与当前完整批次的其他未完成论文一起处理 |
 | 校验运行数据 | `npm run validate:data` |
 | 完整离线验证代码、数据与 Hugo | `npm run verify`；CI 或干净的空检出目录须显式加 `-- --allow-empty`。 |
 | 查整轮最终状态 | `npm run digest:status -- --date YYYY-MM-DD` |
@@ -239,7 +240,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `tag_paths.py` | 集中定义标签词表及私有预览路径，按显式参数、环境变量和默认目录依次选择博客路径；目录存在与仓库身份由调用方另行检查。 |
 | `build-tag-preview.py` | 根据历史页面元数据生成私有标签索引、旧标签处理表和待评审报告，不改写博客。按名称或别名作字面对照；七种处理状态和证据要求见本页的分类词表维护说明。 |
 | `deep-analysis-only.js` | 只读取当前 `dailyFreshSourceRun` 的封存 PDF/TXT，继续分析筛选已完成但分析未完成的论文。来源缺失或不匹配时停止，不抓取，也不读取旧缓存。 |
-| `batch-analyze.js` | 用当前正式分析结果绑定的日更 PDF/TXT 批量分析未完成论文。`--refresh-reader-diagnostics` 核验同组封存来源后承接失败草稿及原调用次数，提示词变更本身不增加请求额度；它与主动归档停用旧草稿的 `--retry-failed-readers` 互斥。没有对应来源记录时停止。 |
+| `batch-analyze.js` | 用当前正式分析结果绑定的日更 PDF/TXT 批量续跑。可重复提供 `--fact-feedback-file FILE`：全部反馈在写入前核验，论文锁内再核对当前正文，已通过程序检查的反馈目标也进入正常纠错；同一论文不能提供两份反馈。`--refresh-reader-diagnostics` 核验同组封存来源后承接失败草稿及原调用次数，提示词变更本身不增加请求额度；它与主动归档停用旧草稿的 `--retry-failed-readers` 互斥。没有对应来源记录时停止。 |
 | `reanalyze.js` | 归档并停用全部旧失败 Reader 候选，清空 Reader 和图片补充状态后强制全量重分析。仍只读取正式分析结果精确绑定的日更 PDF/TXT，不恢复旧分析、正文或缓存。 |
 | `reanalyze-selected.js` | 只重分析指定 arXiv ID，并同步恢复统计。 |
 | `refresh-api-reader.js` | 刷新指定论文或日期批次的 Reader、评分、作者和图片阶段。只读取封存 PDF/TXT；图片只为本次调用在系统临时目录中准备。 |
