@@ -95,6 +95,24 @@ test('HTTP 成功不能盖过 Responses 的终态', () => {
     }
 });
 
+test('本地拦截和实际连接错误分别统计，旧预算拒绝记录不改写', () => {
+    const local = buildLlmUsageEvent({ request: {}, transportStarted: false,
+        errorCode: 'READER_EXPLICIT_ROUND_BUDGET_EXHAUSTED' });
+    const network = buildLlmUsageEvent({ request: {}, transportStarted: true, errorCode: 'ECONNRESET' });
+    assert.equal(local.outcome, 'blocked_before_transport');
+    assert.equal(network.outcome, 'transport_error');
+    const legacy = { ...local, eventId: 'older-local-budget-event', outcome: 'transport_error' };
+    delete legacy.transportStarted;
+    const original = JSON.stringify(legacy);
+    const summary = summarizeLlmUsage([local, network, legacy]).groups[0];
+    assert.equal(summary.requests, 3);
+    assert.equal(summary.blockedBeforeTransport, 2);
+    assert.equal(summary.transportErrors, 1);
+    assert.equal(summary.requestsWithUsage, 0);
+    assert.equal(summary.usage.totalTokens.sum, null);
+    assert.equal(JSON.stringify(legacy), original);
+});
+
 test('传输错误和 HTTP 错误优先于响应的终态', () => {
     const cases = [[200, 'ECONNRESET', 'transport_error'], [500, undefined, 'http_error']];
     for (const [statusCode, errorCode, outcome] of cases) {

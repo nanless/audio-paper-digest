@@ -1065,11 +1065,13 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
         const started = Date.now();
         let response;
         let failure;
+        let transportStarted = false;
         try {
             const timeoutMs = options.timeoutMs ?? 60000;
             response = await withRequestDeadline(
                 () => {
                     require('./lib/explicit-reader-retry-round').consumePhysicalRequest(bodyObj, options);
+                    transportStarted = true;
                     return transportRequestFn(apiUrl, bodyObj, headers, { ...options, timeoutMs, agent });
                 },
                 timeoutMs
@@ -1089,6 +1091,7 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
                 catch (_) { /* 内容格式错误时，这次请求的用量不能丢。 */ }
                 const input = { protocol, model, request: bodyObj, response: response?.body,
                     statusCode: response?.statusCode, durationMs: Date.now() - started,
+                    transportStarted,
                     errorCode: failure?.code || (failure ? 'NETWORK_ERROR' : null),
                     context: options.usageContext,
                     outputText };

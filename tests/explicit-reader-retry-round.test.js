@@ -159,13 +159,14 @@ test('新轮拒绝分别说明论文不符和已完成，均保留原稿', async
 test('真实公共传输层最多6次，拒绝发生在第7次传输之前', async t => {
     const f = setup(t);
     let transports = 0;
+    const usage = [];
     await f.locked(() => retry.withExplicitRound(paper, f.grant, async () => {
         const next = retry.beginExplicitRound(directory, f.identity, f.payload, paper);
         await retry.withPhysicalBudget(next.explicitReaderRetryRound, paper, async () => {
             const utils = require('../scripts/utils');
             const send = () => utils.requestLlmJson('https://example.invalid/v1/chat/completions',
                 'https://example.invalid/v1', 'test-model', { max_tokens: 100, messages: [] }, {}, {
-                    usageContext: { paperId: paper.arxivId, stage: 'apiReaderRepair' }, usageSink: () => {},
+                    usageContext: { paperId: paper.arxivId, stage: 'apiReaderRepair' }, usageSink: event => usage.push(event),
                     transportRequestFn: async () => {
                         transports += 1;
                         return { statusCode: 200, body: { choices: [{ message: { content: '{}' }, finish_reason: 'stop' }] } };
@@ -174,6 +175,15 @@ test('真实公共传输层最多6次，拒绝发生在第7次传输之前', asy
             for (let i = 0; i < 6; i += 1) await send();
             await assert.rejects(send(), /实际请求或输出预算耗尽/);
             assert.equal(transports, 6);
+            assert.equal(usage.length, 7);
+            assert.ok(usage.slice(0, 6).every(event => event.transportStarted === true));
+            assert.equal(usage[6].transportStarted, false);
+            assert.equal(usage[6].outcome, 'blocked_before_transport');
+            assert.equal(usage[6].errorCode, 'READER_EXPLICIT_ROUND_BUDGET_EXHAUSTED');
+            const summary = require('../scripts/lib/llm-usage').summarizeLlmUsage(usage).groups[0];
+            assert.equal(summary.requests, 7);
+            assert.equal(summary.blockedBeforeTransport, 1);
+            assert.equal(summary.transportErrors, 0);
         });
     }));
 });

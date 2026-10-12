@@ -79,7 +79,7 @@ function inputStatistics(body) {
     return { textCharacters, estimatedInputTextTokens: Math.ceil(textCharacters / 3), images };
 }
 
-function buildLlmUsageEvent({ protocol, model, request, response, statusCode, durationMs, errorCode,
+function buildLlmUsageEvent({ protocol, model, request, response, statusCode, durationMs, errorCode, transportStarted,
     context, outputText, eventId = crypto.randomUUID(), at = new Date().toISOString() }) {
     const terminal = response?.status === 'incomplete' || response?.stop_reason === 'max_tokens'
         || (Array.isArray(response?.choices) && response.choices.some(choice => choice?.finish_reason === 'length'));
@@ -90,7 +90,8 @@ function buildLlmUsageEvent({ protocol, model, request, response, statusCode, du
     const anthropicTerminalFailed = protocol === 'anthropic' && response?.stop_reason !== undefined
         && !['end_turn', 'stop_sequence', 'max_tokens'].includes(response.stop_reason);
     let outcome;
-    if (errorCode) outcome = 'transport_error';
+    if (transportStarted === false) outcome = 'blocked_before_transport';
+    else if (errorCode) outcome = 'transport_error';
     else if (!Number.isInteger(statusCode) || statusCode < 200 || statusCode >= 300) outcome = 'http_error';
     else if (responseStatus !== undefined && !['completed', 'incomplete'].includes(responseStatus)) outcome = 'provider_error';
     else if (chatTerminalFailed || anthropicTerminalFailed) outcome = 'provider_error';
@@ -100,6 +101,7 @@ function buildLlmUsageEvent({ protocol, model, request, response, statusCode, du
         version: VERSION, kind: 'request', eventId, at, runtime: 'node', ...usageContext(context),
         protocol: label(protocol), model: label(model),
         outcome,
+        ...(typeof transportStarted === 'boolean' ? { transportStarted } : {}),
         statusCode: count(statusCode), errorCode: label(errorCode),
         durationMs: count(Math.round(durationMs)),
         inputSha256: hash(JSON.stringify(request || {})),
@@ -192,12 +194,20 @@ function summarizeLlmUsage(events) {
         const key = JSON.stringify([event.runId || null, event.paperId || null, event.stage || 'unknown']);
         if (!groups.has(key)) groups.set(key, { runId: event.runId || null, paperId: event.paperId || null, stage: event.stage || 'unknown',
             requests: 0, unsuccessfulRequests: 0, requestsWithUsage: 0,
+            blockedBeforeTransport: 0, transportErrors: 0,
             dispositions: { accepted: 0, rejected: 0, conflicting: 0, unknown: 0 },
             usage: Object.fromEntries(['inputTokens', 'outputTokens', 'totalTokens', 'cachedInputTokens',
                 'cacheCreationInputTokens', 'reasoningTokens'].map(name => [name, { sum: 0, reportedRequests: 0 }])),
             estimatedInputTextTokens: 0, durationMs: 0 });
         const group = groups.get(key);
+        // 旧记录未区分发送前的预算拒绝；只识别这个确定的本地错误，不改写原事件。
+        const blocked = event.transportStarted === false || event.outcome === 'blocked_before_transport'
+            || (event.transportStarted === undefined && event.outcome === 'transport_error'
+                && event.errorCode === 'READER_EXPLICIT_ROUND_BUDGET_EXHAUSTED'
+                && event.statusCode == null && !event.outputTextSha256 && event.usage?.status !== 'reported');
         group.requests += 1;
+        group.blockedBeforeTransport += blocked ? 1 : 0;
+        group.transportErrors += event.outcome === 'transport_error' && !blocked ? 1 : 0;
         group.unsuccessfulRequests += event.outcome !== 'completed' ? 1 : 0;
         group.requestsWithUsage += event.usage?.status === 'reported' ? 1 : 0;
         const matches = digest(event.outputTextSha256) ? dispositions.get(dispositionKey(event)) : null;
@@ -210,7 +220,7 @@ function summarizeLlmUsage(events) {
         group.estimatedInputTextTokens += count(event.estimates?.estimatedInputTextTokens) || 0;
         group.durationMs += count(event.durationMs) || 0;
     }
-    return { version: VERSION, note: '用量总计只累加服务商已提供的数值；字符估算不等于计费 token。缓存和推理数量属于小计，不额外加到总量。',
+    return { version: VERSION, note: 'requests 是调用记录总数，包含发送前被本地拦截的 blockedBeforeTransport；transportErrors 单列连接错误。用量总计只累加服务商已提供的数值；字符估算不等于计费 token。缓存和推理数量属于小计，不额外加到总量。',
         groups: [...groups.values()].map(group => ({ ...group, usage: Object.fromEntries(Object.entries(group.usage)
             .map(([name, value]) => [name, { ...value, sum: value.reportedRequests ? value.sum : null }])) })) };
 }
