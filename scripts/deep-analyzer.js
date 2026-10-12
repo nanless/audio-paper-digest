@@ -7742,7 +7742,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             throw readerRepairStopped('READER_FULL_ATTEMPTS_EXHAUSTED',
                 lastError?.message || '长文全文生成次数已用完，现有草稿尚不能按当前允许范围修复；已保留失败记录。', lastError);
         }
-        const buildReaderPrompt = indexExamples => repairContext ? loadPrompt(currentTextStagePromptPath('apiReaderRepair'), {
+        const buildReaderPrompt = indexExamples => repairContext?.atomicOperation?.kind === 'reorganize_existing_sections_v1'
+            ? repair.buildSectionReorganizationPrompt({ context: repairContext,
+                title: paper.title || '', arxivId: getPaperArxivId(paper), mechanicalContract,
+                reviewFeedback: String(options.reviewFeedback || '').trim(), numericSpellingGuidance, indexExamples,
+                requiredKinds: API_READER_REQUIRED_KINDS })
+            : repairContext ? loadPrompt(currentTextStagePromptPath('apiReaderRepair'), {
             title: paper.title || '', arxivId: getPaperArxivId(paper),
             validationFeedback: [repairContext.targetGuidance, numericSpellingGuidance, reviewFeedbackPrefix,
                 ...currentIssues.map(issueFeedback), indexExamples].filter(Boolean).join('\n'),

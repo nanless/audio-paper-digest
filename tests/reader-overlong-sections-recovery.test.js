@@ -73,7 +73,7 @@ test('专用小节数组修复保护全部其他记录，缺授权与错误SHA�
         assert.throws(() => repair.applyReaderPatch(draft, createSectionsPatch(draft, createReaderDraftSample(count).sections), ['/sections'], { atomicOperation: context.atomicOperation }), /12–18/);
     }
     const forged = { ...context.atomicOperation, maximumSections: 64 };
-    assert.throws(() => repair.applyReaderPatch(draft, patch, ['/sections'], { atomicOperation: forged }), /12–18/);
+    assert.throws(() => repair.applyReaderPatch(draft, patch, ['/sections'], { atomicOperation: forged }), /本轮已授权/);
     const legalDraft = createReaderDraftSample(18);
     const legalContext = repair.buildRepairContext(legalDraft, [{ path: '/sections/0/body', message: '局部正文错误' }], '原文证据');
     assert.notEqual(legalContext.atomicOperation?.kind, 'reorganize_existing_sections_v1');

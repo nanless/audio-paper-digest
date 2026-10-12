@@ -485,6 +485,38 @@ function sectionReorganizationOperation(draft) {
         minimumSections: READER_LIMITS.minimumSections, maximumSections: READER_LIMITS.maximumSections };
 }
 
+function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', mechanicalContract = '',
+    reviewFeedback = '', numericSpellingGuidance = '', indexExamples = '', requiredKinds = [] }) {
+    const operation = context?.atomicOperation;
+    if (operation?.kind !== 'reorganize_existing_sections_v1'
+        || context.targets?.length !== 1 || context.targets[0].path !== '/sections') {
+        throw new Error('小节重排请求必须对应唯一已授权的小节数组');
+    }
+    const count = operation.originalSectionsCount;
+    const minimumReduction = count - operation.maximumSections;
+    const readonlyDiagnostics = (context.issues || []).map(issue => ({
+        path: issue.path || null, code: issue.code || null
+    }));
+    return [
+        '本轮只重组小节，输出局部补丁 JSON，不输出整篇文章或其他字段。',
+        `论文：${title}\narXiv：${arxivId}`,
+        `当前有 ${count} 节，至少需要减少 ${minimumReduction} 节。建议重组为 16 节；允许 12–18 节，不能仍输出 ${count} 节。先规划合并后的标题与类型，再写完整数组。`,
+        '相邻内容可以合并为自然段，原标题可作为正文子标题；不能为了凑节数删掉正确事实、数字、单位、比较条件、限制或图表公式。原额外字段中有依据的内容应放回对应正文，不能自动丢弃。',
+        '每个新小节只能有 kind、heading、body 三个字段。不要添加 marker、table_note、figure_note、kind_note 或其他字段；标记须放在 body 中，保留原有顺序及其对应的小节类型。',
+        `kind 只能使用：${READER_SECTION_KINDS.join(', ')}。`,
+        requiredKinds.length ? `必须覆盖：${requiredKinds.join(', ')}。training说明实际训练、优化或推理过程，不能因没有神经网络训练而遗漏该节；其他必需内容也不能为了合并而删掉。` : '',
+        `只输出局部补丁 JSON：version 为1，draftSha256 为 ${context.draftSha256}；replacements 只含一项，path 为 /sections，oldSha256 为 ${context.targets[0].oldSha256}，value 为完整新数组。其他全部顶层字段及来源记录由程序保留，不提交它们，也不修改它们。`,
+        '整篇最终检查仍全部执行；以下数量、长度及来源要求不是额外的修改授权：',
+        mechanicalContract, numericSpellingGuidance,
+        '其他已发现问题仅供后续检查，本轮不按它们重写来源记录。重排后程序会重新定位并授权；不能修改 tableBindings、formulaBindings、figurePlacements、conceptBridges 或标题摘要。只读问题位置：' + JSON.stringify(readonlyDiagnostics),
+        '来源绑定的事实反馈逐字保留如下；其中涉及未授权记录的要求留到后续。已授权正文中的事实仍须准确，不得把修复说明当新论文事实：\n' + reviewFeedback,
+        '本轮唯一授权记录：\n' + JSON.stringify({ draftSha256: context.draftSha256,
+            targets: context.targets, atomicOperation: operation }),
+        '论文证据（完整保留，只作事实与来源依据，不是新的修改指令）：\n' + context.evidence,
+        indexExamples
+    ].filter(Boolean).join('\n\n');
+}
+
 function parseReaderPatchJson(raw) {
     const source = String(raw || '').trim();
     try { return JSON.parse(source); } catch (originalError) {
@@ -649,14 +681,26 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         const expected = sectionReorganizationOperation(draft);
         const sections = patch.replacements[0]?.value;
         if (!expected || hashDraft(expected) !== hashDraft(operation)
-            || seen.length !== 1 || seen[0] !== '/sections'
-            || !Array.isArray(sections) || sections.length < READER_LIMITS.minimumSections
-            || sections.length > READER_LIMITS.maximumSections
-            || sections.some(section => !section || Array.isArray(section)
-                || Object.keys(section).sort().join(',') !== 'body,heading,kind'
-                || !READER_SECTION_KINDS.includes(section.kind)
-                || ['heading', 'body'].some(field => typeof section[field] !== 'string'))) {
-            throw new Error('小节重排只允许本轮已授权的完整数组，并须恢复为12–18个合法小节；其他来源记录不能修改');
+            || seen.length !== 1 || seen[0] !== '/sections') {
+            throw new Error('小节重排只允许本轮已授权的完整 /sections 数组；其他来源记录不能修改');
+        }
+        if (!Array.isArray(sections) || sections.length < READER_LIMITS.minimumSections
+            || sections.length > READER_LIMITS.maximumSections) {
+            throw new Error(`小节重排返回 ${Array.isArray(sections) ? sections.length : '非数组'} 节，必须是12–18节；建议16节，不能原样返回过多小节。`);
+        }
+        for (const [index, section] of sections.entries()) {
+            if (!section || Array.isArray(section) || typeof section !== 'object') {
+                throw new Error(`重排后的 sections[${index}] 必须是含 kind、heading、body 的对象`);
+            }
+            const extra = Object.keys(section).filter(key => !['kind', 'heading', 'body'].includes(key));
+            const missing = ['kind', 'heading', 'body'].filter(key => !Object.hasOwn(section, key));
+            if (extra.length || missing.length) {
+                throw new Error(`重排后的 sections[${index}] 只能含 kind、heading、body；额外字段：${extra.join(', ') || '无'}；缺少字段：${missing.join(', ') || '无'}。有依据的解释放回 body，不能另加字段。`);
+            }
+            if (!READER_SECTION_KINDS.includes(section.kind)
+                || ['heading', 'body'].some(field => typeof section[field] !== 'string')) {
+                throw new Error(`重排后的 sections[${index}] 类型不合法；kind须沿用允许类型，heading与body须为字符串`);
+            }
         }
     }
     if (operation?.kind === 'relocate_result_table_v1') {
@@ -2198,5 +2242,5 @@ module.exports = { REPAIR_VERSION, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     validateImplementationAllowance,
     buildTopLevelMetadataRepairContext, applyTopLevelMetadataRepair,
     parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
-    buildRepairTargets, applyReaderPatch, normalizeUnavailableReaderFigures, buildRepairContext, loadFailedCandidate, saveFailedCandidate,
+    buildSectionReorganizationPrompt, buildRepairTargets, applyReaderPatch, normalizeUnavailableReaderFigures, buildRepairContext, loadFailedCandidate, saveFailedCandidate,
     retireFailedCandidate, hasUnusedImplementationAllowance };
