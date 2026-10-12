@@ -1405,6 +1405,68 @@ function hasCrossMetricDirectionalComparison(sentence) {
     return false;
 }
 
+function hasConcreteUnnumberedMethodChain(summary) {
+    // 只接受同一机制句中的明确处理模块和数据衔接，不用泛化动作词计数代替方法说明。
+    const moduleKinds = [
+        ['encoder', /编码器|提取器/giu],
+        ['decoder', /解码器|声码器/giu],
+        ['sensor', /麦克风|传感器/giu],
+        ['circuit', /电路/giu],
+        ['network', /网络|变换器|Transformer/giu],
+        ['generator', /(?:流|生成|预测|分类|回归)头|生成器/giu]
+    ];
+    const objects = [
+        ['envelope', /幅度包络|缓慢包络|包络/gu, /(?:幅度)?包络/gu],
+        ['feature', /声学特征|音频特征|视觉特征|帧对齐特征/gu, /(?:声学|音频|视觉|这些)?特征/gu],
+        ['latent', /潜变量|潜表示/gu, /潜变量|潜表示/gu],
+        ['waveform', /波形|音频块|语音块/gu, /波形|音频块|语音块/gu],
+        ['pressure', /共振压力|声压/gu, /共振压力|声压/gu],
+        ['label', /词级标签|音素标签|类别标签|数字标签/gu, /(?:词级|音素|类别|数字|这些)?标签/gu]
+    ];
+    const operation = /(?:维护|保持|提取|拾取|编码|解码|合成|生成|预测|输出|判决|做整句平均判决)/u;
+    const excluded = /(?:并非|并未|没有|不能|不会|尚未|未曾|不再|不负责|不用于|假设|设想|假定|如果|若|可能|计划|未来|拟采用|建议|应当|应该|对比|比较|相比|优于|胜过|另一(?:种|套)|独立方法)|(?:不|未)(?:被|能|曾|直接|实际|真正|也|只|还|再|会)*\s*(?:维护|保持|提取|拾取|编码|解码|合成|生成|预测|输出|判决|送入|传递)/u;
+    for (const raw of String(summary || '').split(/[。！？!?；;\n]/u)) {
+        // 括注内的英文逗号不能把模块名与它的中文动作拆开。
+        const sentence = raw.replace(/（[^）]*）|\([^)]*\)/gu, '');
+        if (excluded.test(sentence)) continue;
+        const clauses = sentence.split(/[，,]/u);
+        const stages = [];
+        for (let index = 0; index < clauses.length; index++) {
+            const clause = clauses[index];
+            for (const [kind, pattern] of moduleKinds) {
+                pattern.lastIndex = 0;
+                const actor = pattern.exec(clause);
+                if (!actor) continue;
+                const actionText = clause.slice(actor.index + actor[0].length);
+                if (!operation.test(actionText)) continue;
+                const data = objects.filter(([, pattern]) => {
+                    pattern.lastIndex = 0;
+                    return pattern.test(actionText);
+                });
+                const state = /(?:维护|保持)[^，,]{0,16}(?:有界|固定容量|会话|历史)[^，,]{0,8}(?:记忆|状态|缓存)/u.test(actionText);
+                const decision = /做整句平均判决/u.test(actionText);
+                if (!data.length && !state && !decision) continue;
+                stages.push({ kind, actor: actor[0], index, clause, data, state, decision });
+            }
+        }
+        for (const first of stages) for (const second of stages) {
+            if (first.index >= second.index || first.kind === second.kind) continue;
+            // 明确重提上游数据，并送入后续模块；判决网络本身也必须有实际处理动作。
+            for (const [, , alias] of first.data) {
+                alias.lastIndex = 0;
+                if (!alias.test(second.clause)) continue;
+                const transfer = second.clause.match(/(?:送入|传递给|传递到|馈入|接入|交给)/u);
+                if (transfer && second.clause.indexOf(second.actor) > transfer.index) return true;
+            }
+            // 有界历史状态与块内生成属于同一分块机制，而不是两个独立模型的性能对比。
+            if (first.state && /(?:保持|维持)[^，,]{0,16}(?:语义|声学|上下文)[^，,]{0,8}连续/u.test(first.clause)
+                && second.kind === 'generator' && second.data.some(([kind]) => kind === 'latent' || kind === 'waveform')
+                && /块内/u.test(second.clause) && /(?:切块|分块|按块)/u.test(sentence)) return true;
+        }
+    }
+    return false;
+}
+
 function validateCoreSummarySemanticContract(analysis, options = {}) {
     const summary = extractSection(String(analysis || ''), '核心摘要');
     const count = chineseCharacterCount(summary);
@@ -1437,7 +1499,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     const hasNumberedMethodChain = (chain.length >= 2
         || /分(?:\d+|[一二三四五六七八九十]+)步/.test(summary)) && roles.length >= 2;
     const hasTieredMethodChain = tierRoleStages.size >= 2;
-    if (!hasNumberedMethodChain && !hasTieredMethodChain) {
+    if (!hasNumberedMethodChain && !hasTieredMethodChain && !hasConcreteUnnumberedMethodChain(summary)) {
         issues.push('缺少 2–4 步方法链的分工与衔接');
     }
     const sourceText = typeof options === 'string' ? options : String(options.sourceText || '');
@@ -2677,6 +2739,7 @@ module.exports = {
     hasSourceMeasuredLossComparison,
     classifySourceQuantitativeEvidence,
     validateCoreSummarySemanticContract,
+    hasConcreteUnnumberedMethodChain,
     hashAnalysisWithMaskedCoreSummary,
     hashTagSectionAndPrimaryTags,
     maskClassificationFields,
