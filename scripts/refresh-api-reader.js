@@ -393,7 +393,7 @@ async function refreshApiReader(targetId, options = {}) {
                 storedAnalysisRecord,
                 options.surfaceBindingsOnly ? repairSurfaceBindings : refreshFromDailySource,
                 options
-            )
+            ), { refreshReaderDiagnostics: options.refreshReaderDiagnostics }
         );
         const savedPayload = updateJsonFileLocked(resultPath, payload => {
             const rows = Array.isArray(payload) ? payload : payload.papers;

@@ -16,11 +16,13 @@ const Config = require('../scripts/config.js');
 const daily = require('../scripts/lib/daily-fresh-source-plan.js');
 const fresh = require('../scripts/lib/fresh-analysis-context.js');
 const direct = require('../scripts/lib/direct-rewrite-analysis-context.js');
-let draftResponse; let requestCalls = 0;
+let draftResponse; let requestCalls = 0; let initialRaw;
 const utils = require('../scripts/utils.js');
 utils.requestLlmJson = async () => {
     requestCalls += 1;
-    return { statusCode: 200, body: { choices: [{ message: { content: JSON.stringify(draftResponse) }, finish_reason: 'stop' }] } };
+    const content = requestCalls === 1 ? initialRaw : JSON.stringify({ version: 1,
+        rawSha256: sha(initialRaw), deleteFields: ['sourceBindingsContract', 'sourceBindingsSha256'] });
+    return { statusCode: 200, body: { choices: [{ message: { content }, finish_reason: 'stop' }] } };
 };
 const Module = require('node:module');
 const deepFile = require.resolve('../scripts/deep-analyzer.js');
@@ -86,6 +88,7 @@ test('真实 Reader 刷新装图失败保留付费稿，中央保存成功后才
     canonical.analysisManifest.contracts = { ...canonical.analysisManifest.contracts, ...signed.paper.analysisManifest.contracts };
     canonical.analysisManifest.stages = { ...canonical.analysisManifest.stages, ...signed.paper.analysisManifest.stages, scoringAudit: { status: 'complete', scoringContract: 'api-scoring-audit-v2', audit: {}, auditSha256: deep.stableFingerprint({}) } };
     draftResponse = signed.draft;
+    initialRaw = JSON.stringify({ ...draftResponse, sourceBindingsContract: 'api-reader-source-bindings-v4', sourceBindingsSha256: 'a'.repeat(64) });
     const descriptor = daily.readDailyFreshSource(plan, canonical).freshSourceDescriptor;
     canonical.sourceSha256 = descriptor.sourceSha256;
     canonical.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = sha(canonical.analysis);
@@ -105,7 +108,7 @@ test('真实 Reader 刷新装图失败保留付费稿，中央保存成功后才
     writeJson(Config.FILES.papers, { generation: 0, papers: {} });
     const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aT9sAAAAASUVORK5CYII=', 'base64');
     let mode = 'inject-failure';
-    const invoke = () => reader.refreshApiReader(ID, { scoringAndReader: true, fetchFigure: async () => ({ bytes: png, mediaType: 'image/png' }),
+    const invoke = () => reader.refreshApiReader(ID, { scoringAndReader: true, refreshReaderDiagnostics: true, fetchFigure: async () => ({ bytes: png, mediaType: 'image/png' }),
         operations: { scoringAndReader: async (paper, source) => {
             assert.equal(direct.directReaderCandidateCommitDeferred(), true);
             deep.controlInjectFailureForTest(mode === 'inject-failure');
@@ -120,17 +123,40 @@ test('真实 Reader 刷新装图失败保留付费稿，中央保存成功后才
         .filter(name => /^[a-f0-9]{64}\.json$/.test(name));
     await assert.rejects(invoke(), /测试装图失败/);
     assert.equal(candidateFiles().length, 1);
+    const candidateDirectory = path.join(plan.runDir, 'reader-attempts');
+    const currentFile = path.join(candidateDirectory, candidateFiles()[0]);
+    const originalEnvelope = JSON.parse(fs.readFileSync(currentFile));
+    assert.equal(originalEnvelope.payload.attempts, 2);
+    assert.equal(originalEnvelope.payload.fullAttempts, 1);
+    const olderIdentity = { ...originalEnvelope.identity, parserImplementationSha256: 'b'.repeat(64) };
+    const repair = require('../scripts/lib/reader-repair');
+    repair.saveFailedCandidate(candidateDirectory, olderIdentity, originalEnvelope.payload);
+    fs.unlinkSync(currentFile); // 只在测试临时目录中准备旧实现身份的完整付费稿。
+    const olderFile = path.join(candidateDirectory, repair.hashDraft(olderIdentity) + '.json');
+    const olderSha = sha(fs.readFileSync(olderFile));
+    for (const value of [undefined, false]) {
+        const options = { scoringAndReader: true, operations: { scoringAndReader: (paper, source) => {
+            assert.equal(fresh.getFreshAnalysisContext().refreshReaderDiagnostics, false);
+            assert.equal(require('../scripts/lib/reader-recovery-revision').loadReaderRecoveryRevision(
+                candidateDirectory, originalEnvelope.identity), null);
+            return { ...paper, apiReaderFigures: paper.apiReaderFigures.map(direct.stripEphemeralFigureFields) };
+        } } };
+        if (value !== undefined) options.refreshReaderDiagnostics = value;
+        await reader.refreshApiReader(ID, options);
+        assert.equal(sha(fs.readFileSync(olderFile)), olderSha);
+    }
+    writeJson(Config.FILES.deepAnalysisResult, envelope);
     mode = 'cas-failure';
     await assert.rejects(invoke(), /canonical_changed_during_refresh/);
     assert.equal(candidateFiles().length, 1);
-    assert.equal(requestCalls, 1, '失败后的恢复重用完整付费稿，不再请求模型');
+    assert.equal(requestCalls, 2, '失败后的恢复重用完整付费稿，不再请求模型');
     writeJson(Config.FILES.deepAnalysisResult, envelope);
     mode = 'success';
     const saved = await invoke();
-    assert.equal(saved.analysisManifest.stages.apiReaderArticle.attempts, 1);
+    assert.equal(saved.analysisManifest.stages.apiReaderArticle.attempts, 2);
     assert.equal(saved.analysisManifest.stages.apiReaderArticle.fullAttempts, 1);
     assert.equal(saved.analysisManifest.stages.apiReaderArticle.transportFailures, 0);
-    assert.equal(requestCalls, 1);
+    assert.equal(requestCalls, 2);
     assert.equal(candidateFiles().length, 0);
     assert.equal(fs.readdirSync(path.join(plan.runDir, 'reader-attempts'))
         .filter(name => name.endsWith('.resolved.json')).length, 1);
