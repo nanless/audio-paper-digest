@@ -1309,6 +1309,16 @@ function stripDuplicatedLineFootnoteMarkers(text) {
     );
 }
 
+// 这些组合只声明当前句的实测条件，不能替代结果指标或比较方向。
+function hasConcreteCoreSummarySetting(sentence) {
+    if (/(?:假设|如果|若在|预计|预期|可能|未在|没有|未进行|未做|不进行|不做)/.test(sentence)) return false;
+    const syntheticSetting = /(?:在|于)\s*\d+\s*(?:组|个)\s*(?:随机|随机采样的|随机采样)\s*(?:双衰减|多衰减|房间脉冲响应|混响时间|声源位置|声学房间)\s*合成配置(?:上|中)/.test(sentence);
+    const speakerSplit = /(?:在|于)\s*说话人(?:互斥|不重叠)的\s*[A-Z][A-Za-z0-9._-]{2,}\s*(?:语料)?实测(?:中|上)/.test(sentence);
+    const timedHardware = /(?:在|于)\s*(?:Raspberry\s+Pi|Jetson|MacBook|Intel|AMD|NVIDIA|Apple|CPU|GPU)(?:\s+[A-Za-z][A-Za-z0-9_-]*){0,3}\s+[A-Za-z]{0,4}\d+[A-Za-z0-9._-]*(?:\s+[A-Za-z][A-Za-z0-9_-]*){0,2}\s*上/.test(sentence)
+        && /(?:计时|耗时|时延|延迟|推理时间|运行时间|预处理时间)/.test(sentence);
+    return syntheticSetting || speakerSplit || timedHardware;
+}
+
 function coreSummaryQuantitativeResultState(text) {
     const candidates = String(text || '').split(/[。！？!?\n]/).map((rawSentence, sentenceIndex) => {
         const sentence = stripCoreSummaryNonResultNumerals(rawSentence.trim());
@@ -1330,7 +1340,7 @@ function coreSummaryQuantitativeResultState(text) {
         const hasNamedSetting = /(?:[A-Z][A-Za-z0-9._-]{2,}\s*[\u3400-\u9fff]{0,8}(?:集|数据集|语料|任务|基准)|(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}(?:\s*[上中下]))/i.test(sentence);
         const hasTimedNamedSplit = /(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}\s+\d+(?:\.\d+)?\s+s\s+[\u3400-\u9fff]{0,12}划分(?:上|中)/.test(sentence);
         const hasSetting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)/i.test(sentence)
-            || hasNamedSetting || hasTimedNamedSplit;
+            || hasNamedSetting || hasTimedNamedSplit || hasConcreteCoreSummarySetting(sentence);
         const hasComparisonObjects = numbers.length >= 2
             || /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)/.test(sentence);
         // 只补原文中实际使用的结果写法，不把同名方法或公式符号算作指标。
