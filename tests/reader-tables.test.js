@@ -22,6 +22,76 @@ const selected = (tableIndex = 1, ordinal = 1) => ({ tableIndex, selection: {
     sourceTableOrdinal: ordinal, sourceRows: ordinal === 1 ? [1, 2, 3] : [0, 1, 2], sourceColumns: [0, 1, 2]
 } });
 
+function mixedColumnHeaderExample() {
+    const sha = 'b'.repeat(64);
+    const matrix = [
+        ['Family', 'Representation', '9-way', '3-way'],
+        ['ASR', 'Whisper', '0.489 / 0.568', '0.767 / 0.788'],
+        ['Prior results', 'Prior results', 'Prior results', 'Prior results'],
+        ['Speaker', 'ECAPA', '0.243 / 0.296', '0.606 / 0.636']
+    ];
+    const cells = matrix.flatMap((row, rowIndex) => rowIndex === 2
+        ? [{ row: 2, column: 0, rowspan: 1, colspan: 4, header: true,
+            text: 'Prior results', sourceDomSha256: sha }]
+        : row.map((text, column) => ({ row: rowIndex, column, rowspan: 1, colspan: 1,
+            header: column < 2, text, sourceDomSha256: sha })));
+    return { ordinal: 1, matrix, cells, headerRows: [2], bodyRows: [0, 1, 3],
+        recoveryStatus: 'complete', sourceDomSha256: sha };
+}
+
+test('混合 th 和 td 的真实列头可从全幅分组行中区分，原单元格保持不变', () => {
+    const table = mixedColumnHeaderExample();
+    const before = JSON.stringify(table);
+    assert.deepEqual(effectiveReaderTableRows(table), {
+        headerRows: [0], bodyRows: [1, 3], inferred: true,
+        inferenceContract: 'full-width-protocol-divider-header-v1'
+    });
+    const result = renderReaderTableSelection({ tableIndex: 1, selection: {
+        sourceTableOrdinal: 1, sourceRows: [0, 1, 3], sourceColumns: [0, 1, 2, 3]
+    } }, { tables: [table] });
+    assert.match(result.markdown, /^\| Family \| Representation \| 9-way \| 3-way \|/);
+    assert.match(result.markdown, /0\.489 \/ 0\.568/);
+    assert.equal(result.binding.cellBindings.length, 12);
+    assert.equal(JSON.stringify(table), before);
+});
+
+test('全幅分组行不能被自动补列头后混入数据，也不能直接代替列头', () => {
+    const table = mixedColumnHeaderExample();
+    for (const sourceRows of [[2, 1, 3], [0, 1, 2, 3]]) {
+        assert.throws(() => renderReaderTableSelection({ tableIndex: 1, selection: {
+            sourceTableOrdinal: 1, sourceRows, sourceColumns: [0, 1, 2, 3]
+        } }, { tables: [table] }), /全幅分组标题不能作为列头或数据行/);
+    }
+});
+
+test('混合列头兼容拒绝测量值、非连续 th、跨度和不明确的来源角色', () => {
+    const controls = [
+        table => { table.matrix[0][2] = table.cells.find(cell => cell.row === 0 && cell.column === 2).text = '0.489'; },
+        table => { table.matrix[0][2] = table.cells.find(cell => cell.row === 0 && cell.column === 2).text = '148 km'; },
+        table => { table.cells.find(cell => cell.row === 0 && cell.column === 1).header = false;
+            table.cells.find(cell => cell.row === 0 && cell.column === 2).header = true; },
+        table => { table.cells.find(cell => cell.row === 0 && cell.column === 1).header = undefined; },
+        table => { table.cells.find(cell => cell.row === 0 && cell.column === 1).colspan = 2; },
+        table => { table.cells.find(cell => cell.row === 0 && cell.column === 1).rowspan = 2; },
+        table => { table.cells.find(cell => cell.row === 2).colspan = 3; },
+        table => { table.matrix[0][2] = table.matrix[0][3]; }
+    ];
+    for (const mutate of controls) {
+        const table = mixedColumnHeaderExample(); mutate(table);
+        const before = JSON.stringify(table);
+        assert.equal(effectiveReaderTableRows(table).inferred, false);
+        assert.equal(JSON.stringify(table), before);
+    }
+    for (const value of ['(0.489)', '0.489(±0.02)', '1e-3', '−1e-3', '.489',
+        '[0.489]', '(−1E−3)', '0.1–0.2', '5×10⁻³', '(0.1,0.2)',
+        '0.489†', '0.489‡', '148ms', '0.489ms', '148-ms', '0.489–way']) {
+        const table = mixedColumnHeaderExample();
+        table.matrix[0][2] = value;
+        table.cells.find(cell => cell.row === 0 && cell.column === 2).text = value;
+        assert.equal(effectiveReaderTableRows(table).inferred, false, value);
+    }
+});
+
 test('表格来源说明列出原表头、行列数量，并保留未知的表格用途', () => {
     const { artifacts } = artifactsFixture();
     const evidence = require('../scripts/deep-analyzer.js').buildApiReaderArtifactEvidence(artifacts);

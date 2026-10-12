@@ -250,6 +250,15 @@ function effectiveReaderTableRows(table) {
     // 而真正彼此不同的列标签却是普通 <td> 单元格。
     // 只有原始 DOM 的跨度能证明这种形态时，才据此推断它们的角色。
     const firstCells = cells.filter(cell => cell?.row === 0);
+    const leadingHeaders = firstCells.filter(cell => cell?.header === true);
+    // LaTeXML 也会只将列头开头的类别和方法名称写成 <th>，后面的任务列仍是 <td>。
+    // 只认连续的前置 <th> 和无测量值的列标签；数字开头只收明确的 n-way 分类标题。
+    // 带脚注、紧连单位或科学计数法的测量值不能据此成为列头。
+    const mixedColumnLabels = leadingHeaders.length > 0 && leadingHeaders.length < width
+        && firstCells.every((cell, index) => cell.column === index
+            && cell.header === (index < leadingHeaders.length))
+        && matrix[0].every(text => !/^[([{\s]*[+\-\u2212]?(?:\d|\.\d)/.test(text.trim())
+            || /^\d+-way(?:\s+(?:UAR|ACC))?$/i.test(text.trim()));
     const protocolDividers = declaredHeaders.length > 0 && declaredHeaders.every(row => {
         const rowCells = cells.filter(cell => cell?.row === row);
         return row > 0 && rowCells.length === 1 && rowCells[0].header === true
@@ -258,8 +267,8 @@ function effectiveReaderTableRows(table) {
             && matrix[row].every(text => text === rowCells[0].text);
     });
     if (protocolDividers && firstCells.length === width
-        && firstCells.every(cell => cell.header === false
-            && Number(cell.colspan || 1) === 1 && Number(cell.rowspan || 1) === 1)
+        && (firstCells.every(cell => cell.header === false) || mixedColumnLabels)
+        && firstCells.every(cell => Number(cell.colspan || 1) === 1 && Number(cell.rowspan || 1) === 1)
         && new Set(matrix[0]).size === width && matrix[0].every(text => text.trim())
         && matrix.some((row, index) => index > 0 && !declaredHeaders.includes(index)
             && row.slice(1).filter(text => /\d/.test(text)).length >= 2)) {
@@ -462,10 +471,11 @@ function renderReaderTableSelection(binding, artifacts) {
         ? effectiveRows.headerRows : effectiveReaderTableHeaderRows(table);
     const sourceRows = putReaderTableHeaderFirst(requestedSourceRows, headerRows);
     if (!headerRows.includes(sourceRows[0])
-        || sourceRows.slice(1).some(row => headerRows.includes(row))) {
+        || sourceRows.slice(1).some(row => headerRows.includes(row))
+        || (effectiveRows.inferred && sourceRows.slice(1).some(row => !effectiveRows.bodyRows.includes(row)))) {
         throw new Error(`${label} 第一行必须是原表头，其余行必须是数据行；`
             + `sourceTableOrdinal=${sourceTableOrdinal}，有效表头行=${JSON.stringify(headerRows)}，`
-            + `当前选择行=${JSON.stringify(requestedSourceRows)}。修正本项行选择错误时只修改本 binding 的 sourceRows，不得改写原表；若另有正文标记或位置错误，仍须在对应授权正文中单独修正，不能据此禁止必要的正文修复。`);
+            + `当前选择行=${JSON.stringify(requestedSourceRows)}。全幅分组标题不能作为列头或数据行。修正本项行选择错误时只修改本 binding 的 sourceRows，不得改写原表；若另有正文标记或位置错误，仍须在对应授权正文中单独修正，不能据此禁止必要的正文修复。`);
     }
     const cellBindings = [];
     const matrix = sourceRows.map((sourceRow, renderedRow) => sourceColumns.map((sourceColumn, renderedColumn) => {
