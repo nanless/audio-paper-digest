@@ -10,19 +10,27 @@ const BUDGETS = Object.freeze({
     full: Object.freeze({ maxResponses: 3, maxFullResponses: 1, maxPhysicalRequests: 6, maxReservedOutputTokens: 128000 })
 });
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
-const equal = (left, right) => require('./reader-repair').hashDraft(left) === require('./reader-repair').hashDraft(right);
+const equal = (left, right) => useModule('./reader-repair').hashDraft(left) === useModule('./reader-repair').hashDraft(right);
+// 循环依赖中的半成品导出不能固定；只记住已加载完成的模块引用。
+const moduleReferences = new Map();
+function useModule(id) {
+    if (moduleReferences.has(id)) return moduleReferences.get(id);
+    const value = require(id);
+    if (require.cache[require.resolve(id)]?.loaded) moduleReferences.set(id, value);
+    return value;
+}
 function fail(message) {
     throw Object.assign(new Error(message), { code: 'READER_PARENT_RECOVERY_PROOF_INVALID', retryable: false,
         scope: 'paper', category: 'reader_recovery', modelRequestClassified: true });
 }
 function readChecked(file) {
-    return require('./reader-proof-read-scope').readReaderProofJson(file, {
+    return useModule('./reader-proof-read-scope').readReaderProofJson(file, {
         unsafe: () => fail('父恢复证明文件不安全')
     });
 }
 
 function fullReason(payload) {
-    const repair = require('./reader-repair');
+    const repair = useModule('./reader-repair');
     if (!payload || payload.status !== 'failed' || payload.draft?.sections?.length
         || repair.parseRecoveryDraft(payload.draft) || repair.parseRecoveryDraft(payload.rawDraft)
         || repair.buildTopLevelMetadataRepairContext(payload.rawDraft)) return null;
@@ -63,7 +71,7 @@ function assertShape(grant) {
         || !grant.recoveryReason || typeof grant.recoveryReason !== 'object') fail('父恢复模式、单轮预算或整链上限不合法');
 }
 function assertLedger(receipt) {
-    const retry = require('./explicit-reader-retry-round');
+    const retry = useModule('./explicit-reader-retry-round');
     retry.assertGrant(receipt.grant);
     if (receipt.status !== 'active' || !Array.isArray(receipt.requests)
         || !Number.isSafeInteger(receipt.physicalRequests) || receipt.physicalRequests < 0
@@ -79,7 +87,7 @@ function assertLedger(receipt) {
             && receipt.requests.some(request => request.stage !== 'apiReaderRepair'))) fail('父恢复实际请求账不完整或越界');
 }
 function ancestry(directory, grant) {
-    const retry = require('./explicit-reader-retry-round');
+    const retry = useModule('./explicit-reader-retry-round');
     const root = path.join(directory, 'explicit-retry-rounds');
     if (fs.lstatSync(root).isSymbolicLink()) fail('父恢复回执目录不能是符号链接');
     const chain = [];
@@ -111,9 +119,13 @@ function ancestry(directory, grant) {
         || fullRounds + (grant.mode === 'full' ? 1 : 0) > CHAIN_BUDGET.maxAdditionalFullRounds
         || allocatedTokens > CHAIN_BUDGET.maxAdditionalReservedOutputTokens
         || allocatedRequests > CHAIN_BUDGET.maxAdditionalPhysicalRequests) fail('父恢复整链明确预算耗尽，不能规划或安装后代');
-    for (const name of fs.readdirSync(root).filter(name => /^[a-f0-9-]{36}\.json$/.test(name))) {
-        const other = readChecked(path.join(root, name)).value;
-        if (other.grant?.parentRoundId === grant.parentRoundId && other.grant.roundId !== grant.roundId) fail('同一父失败轮已授权另一恢复子轮');
+    const indexedSibling = useModule('./reader-proof-read-scope').findReaderReceiptSibling(root, grant.parentRoundId, grant.roundId);
+    if (indexedSibling === true) fail('同一父失败轮已授权另一恢复子轮');
+    if (indexedSibling === undefined) {
+        for (const name of fs.readdirSync(root).filter(name => /^[a-f0-9-]{36}\.json$/.test(name))) {
+            const other = readChecked(path.join(root, name)).value;
+            if (other.grant?.parentRoundId === grant.parentRoundId && other.grant.roundId !== grant.roundId) fail('同一父失败轮已授权另一恢复子轮');
+        }
     }
     return chain;
 }
@@ -126,9 +138,9 @@ function assertParent(directory, grant, payload, identity) {
         const archived = readChecked(path.join(directory, 'explicit-retry-rounds', grant.roundId + '.original.json')).value;
         payload = archived.payload; identity = archived.identity;
     }
-    const repair = require('./reader-repair');
+    const repair = useModule('./reader-repair');
     if (payload?.status !== 'failed' || payload.explicitReaderRetryRound?.roundId !== grant.parentRoundId) fail('父恢复缺少对应的当前失败候选');
-    require('./explicit-reader-retry-round').validatePersistedRound(directory, identity, payload);
+    useModule('./explicit-reader-retry-round').validatePersistedRound(directory, identity, payload);
     let reason;
     if (grant.mode === 'full') {
         reason = fullReason(payload);
@@ -148,20 +160,20 @@ function assertParent(directory, grant, payload, identity) {
 }
 // 仅执行既有公共诊断迁移，必须在正常论文锁与原封存来源内。它不安装付费轮。
 async function prepareParentRecoveryCandidate(options) {
-    return require('./reader-proof-read-scope').withReaderProofReadScope(
+    return useModule('./reader-proof-read-scope').withReaderProofReadScope(
         () => prepareParentRecoveryCandidateInternal(options));
 }
 async function prepareParentRecoveryCandidateInternal({ directory, originalIdentity, targetIdentity, paper, plan }) {
-    const revision = require('./reader-recovery-revision');
+    const revision = useModule('./reader-recovery-revision');
     const implementationFields = revision.ALLOWED_FIELDS.filter(field => ![
         'readerRecoveryEpochSha256', 'readerJsonRequestPolicy', 'promptSha256', 'repairPromptSha256'
     ].includes(field));
     const semantic = identity => Object.fromEntries(Object.entries(identity || {})
         .filter(([key]) => !implementationFields.includes(key)));
     if (!equal(semantic(originalIdentity), semantic(targetIdentity))) fail('诊断准备只能改变允许实现字段，epoch及真实输入必须完全相同');
-    const daily = require('./daily-fresh-source-plan');
-    const engine = require('../analysis-engine');
-    const repair = require('./reader-repair');
+    const daily = useModule('./daily-fresh-source-plan');
+    const engine = useModule('../analysis-engine');
+    const repair = useModule('./reader-repair');
     return daily.withDailyFreshAnalysisContext(plan, () => daily.withDailyFreshPaperSource(plan, paper,
         () => engine.withPaperAnalysisLock(paper, () => {
             let original = repair.loadFailedCandidate(directory, originalIdentity);
@@ -188,18 +200,18 @@ async function prepareParentRecoveryCandidateInternal({ directory, originalIdent
 }
 // 只读提案：不安装、不归档、不写候选或账，不请求模型。
 function planParentRecovery(options) {
-    return require('./reader-proof-read-scope').withReaderProofReadScope(
+    return useModule('./reader-proof-read-scope').withReaderProofReadScope(
         () => planParentRecoveryInternal(options));
 }
 function planParentRecoveryInternal({ directory, identity, paper, plan, mode, roundId = crypto.randomUUID() }) {
-    const repair = require('./reader-repair');
-    const daily = require('./daily-fresh-source-plan');
-    if (require('../analysis-engine').isSuccessfulAnalysisRecord(paper)) fail('成功论文不能规划父失败恢复');
+    const repair = useModule('./reader-repair');
+    const daily = useModule('./daily-fresh-source-plan');
+    if (useModule('../analysis-engine').isSuccessfulAnalysisRecord(paper)) fail('成功论文不能规划父失败恢复');
     if (fs.existsSync(path.join(directory, 'explicit-retry-rounds', roundId + '.json'))) fail('新恢复轮 UUID 已使用，不能重新发放');
     const payload = repair.loadFailedCandidate(directory, identity);
     if (!payload?.explicitReaderRetryRound) fail('父恢复缺少当前失败候选');
     const parent = readChecked(path.join(directory, 'explicit-retry-rounds', payload.explicitReaderRetryRound.roundId + '.json'));
-    const retry = require('./explicit-reader-retry-round');
+    const retry = useModule('./explicit-reader-retry-round');
     // 先核验当前父账与剩余额度；第三层仍有余额时不应被第四层形状校验误标为整链耗尽。
     assertLedger(parent.value);
     retry.validatePersistedRound(directory, identity, payload);
@@ -244,7 +256,7 @@ function planParentRecoveryManifest(requests) {
         newReservedOutputTokens: 0, priorPhysicalRequests: 0, priorReservedOutputTokens: 0 };
     rounds.forEach((grant, index) => {
         const checked = assertParent(requests[index].directory, grant,
-            require('./reader-repair').loadFailedCandidate(requests[index].directory, requests[index].identity), requests[index].identity);
+            useModule('./reader-repair').loadFailedCandidate(requests[index].directory, requests[index].identity), requests[index].identity);
         budget.newLogicalResponses += grant.maxResponses;
         budget.newFullResponses += grant.maxFullResponses;
         budget.newPhysicalRequests += grant.maxPhysicalRequests;

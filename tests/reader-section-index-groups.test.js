@@ -65,7 +65,7 @@ test('严格对象走小计划，未知字段仍走原完整重排且不改冻�
     assert.ok(prompt.includes(repair.SECTION_GROUP_PLAN_CONTRACT));
     assert.ok(prompt.includes('不能提交正文') || prompt.includes('不要回传body'));
     assert.ok(prompt.includes(sample.context.draftSha256));
-    sample.draft.sections[0].body2 = '待定位的续段';
+    sample.draft.sections[0].body3 = '未知的续段';
     const fallback = repair.buildRepairContext(sample.draft, [], '', '');
     assert.equal(fallback.sectionGroupPlanContract, undefined);
     assert.ok(repair.buildSectionReorganizationPrompt({ context: fallback }).includes('value 为完整新数组'));

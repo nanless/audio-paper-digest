@@ -1,0 +1,1484 @@
+{
+  "version": 3,
+  "readerTitle": "结构锚定如何让扩散模型的声音形变轨迹保持节奏与音高",
+  "oneSentenceThesis": "Smorph 用一条不随形变参数变化的结构条件与分层 classifier-free guidance，在不训练模型的前提下把时间结构与音色身份分开控制，实验显示它在 RMS/音高保持与源保持上优于基线，但代价是向目标音色的转变更保守且部分设置下音质指标略差。",
+  "conceptBridges": [
+    {
+      "terms": [
+        "结构条件 c_S",
+        "形变参数 α"
+      ],
+      "sectionKind": "component",
+      "marker": "[[CONCEPT_BRIDGE_1]]",
+      "explanation": "结构条件 c_S 指从参考音频提取的 RMS 包络或音高轮廓，负责固定声音随时间的行为；形变参数 α 只在多个文本或音频端点条件之间插值权重，负责决定音色身份往哪边走。两者分工明确：c_S 在全部 T 个去噪步中保持不变，α 沿轨迹变化；搭配后，音色可以在端点之间连续移动而节奏与音高不随之漂移，组合出的轨迹因此既有方向性又有结构锚点。"
+    },
+    {
+      "terms": [
+        "SDEdit 部分加噪初始化",
+        "结构引导方向 v_S"
+      ],
+      "sectionKind": "component",
+      "marker": "[[CONCEPT_BRIDGE_2]]",
+      "explanation": "SDEdit 部分加噪初始化把源音频的 VAE 潜变量前向加噪到 t_start，从该点开始去噪，负责在细节层面保留源；结构引导方向 v_S 是仅以 c_S 为条件的去噪预测，负责在高层时间组织上锚定输出。两者分别从初始化和引导力两个位置约束源，搭配后即使 t_start 取得较早（噪声较大），时间结构仍被 v_S 拉住，从而扩展了 SDEdit 单独使用时可用的噪声范围。"
+    },
+    {
+      "terms": [
+        "显式锚定 smorph_e",
+        "隐式锚定 smorph_i"
+      ],
+      "sectionKind": "result",
+      "marker": "[[CONCEPT_BRIDGE_3]]",
+      "explanation": "显式锚定把 v_S 单独隔离为一条独立的引导方向（式 4），隐式锚定沿用同样的结构信号和骨干但不隔离 v_S（式 2）。前者在时间上不连贯的 Clotho 动态事件上联合分数更高，后者在分布内更简单的固定音高 NSynth 上反而更好；两者搭配说明结构信号本身足够强时，是否再加一条显式方向取决于任务难度，而不是显式一定优于隐式。"
+    },
+    {
+      "terms": [
+        "FLAM 全局嵌入条件",
+        "SDEdit 潜变量初始化"
+      ],
+      "sectionKind": "result",
+      "marker": "[[CONCEPT_BRIDGE_4]]",
+      "explanation": "FLAM 全局嵌入把目标音频编码成一个向量替换文本条件，负责提供音色参照；SDEdit 潜变量初始化把源音频前向加噪后作为去噪起点，负责保留源内容。在音频到音频形变中两者可以互换角色，实验显示以潜变量初始化的 SDEdit+FLAM 在全部四个设置上源保持（mel-L1）和音质（KAD）都优于仅用嵌入条件的 FLAM→FLAM，说明初始化比嵌入条件更能携带源信息。"
+    }
+  ],
+  "figurePlacements": [
+    {
+      "figureOrdinal": 2,
+      "targetKind": "method_overview",
+      "marker": "[[FIGURE_2]]",
+      "focusPoints": [
+        "沿左侧输入框到 Diffusion Model 的箭头，确认结构、文本与音频三类条件各自进入哪个编码器",
+        "在 CFG Mixer 内比较 v_S−v_∅ 与 v_i−v_S 两条向量的方向和标注的引导系数",
+        "确认 partial noising 路径只在音频源模式下启用，文本到文本模式从纯噪声出发"
+      ]
+    },
+    {
+      "figureOrdinal": 3,
+      "targetKind": "result",
+      "marker": "[[FIGURE_3]]",
+      "focusPoints": [
+        "先看上下两排在 α=0.0 时的 RMS 曲线是否都贴合控制信号",
+        "再比较 α 增大到 1.0 时下排 RMS 与虚线控制信号的偏离程度",
+        "注意上排在 α 变化时 mel 频谱纹理改变但竖条状节奏位置基本不动"
+      ]
+    },
+    {
+      "figureOrdinal": 1,
+      "targetKind": "component",
+      "marker": "[[FIGURE_1]]",
+      "focusPoints": [
+        "先看四个角的 prompt 框，确认哪些是文本、哪些是音频文件",
+        "再看右侧 Structure 面板中 RMS 与 Pitch 两个开关是否勾选",
+        "最后看 Contribution 百分比条，确认当前光标位置四个端点的混合权重"
+      ]
+    }
+  ],
+  "tableBindings": [
+    {
+      "tableIndex": 1,
+      "sourceType": "artifact_table",
+      "sourceTableOrdinal": 1,
+      "cellBindings": [
+        {
+          "renderedRow": 0,
+          "renderedColumn": 0,
+          "sourceRow": 0,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 1,
+          "sourceRow": 0,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 2,
+          "sourceRow": 0,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 3,
+          "sourceRow": 0,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 4,
+          "sourceRow": 0,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 5,
+          "sourceRow": 0,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 6,
+          "sourceRow": 0,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 0,
+          "sourceRow": 1,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 1,
+          "sourceRow": 1,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 2,
+          "sourceRow": 1,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 3,
+          "sourceRow": 1,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 4,
+          "sourceRow": 1,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 5,
+          "sourceRow": 1,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 6,
+          "sourceRow": 1,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 0,
+          "sourceRow": 2,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 1,
+          "sourceRow": 2,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 2,
+          "sourceRow": 2,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 3,
+          "sourceRow": 2,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 4,
+          "sourceRow": 2,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 5,
+          "sourceRow": 2,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 6,
+          "sourceRow": 2,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 0,
+          "sourceRow": 3,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 1,
+          "sourceRow": 3,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 2,
+          "sourceRow": 3,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 3,
+          "sourceRow": 3,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 4,
+          "sourceRow": 3,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 5,
+          "sourceRow": 3,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 6,
+          "sourceRow": 3,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 0,
+          "sourceRow": 4,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 1,
+          "sourceRow": 4,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 2,
+          "sourceRow": 4,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 3,
+          "sourceRow": 4,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 4,
+          "sourceRow": 4,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 5,
+          "sourceRow": 4,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 6,
+          "sourceRow": 4,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 0,
+          "sourceRow": 5,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 1,
+          "sourceRow": 5,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 2,
+          "sourceRow": 5,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 3,
+          "sourceRow": 5,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 4,
+          "sourceRow": 5,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 5,
+          "sourceRow": 5,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 6,
+          "sourceRow": 5,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 0,
+          "sourceRow": 6,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 1,
+          "sourceRow": 6,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 2,
+          "sourceRow": 6,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 3,
+          "sourceRow": 6,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 4,
+          "sourceRow": 6,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 5,
+          "sourceRow": 6,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 6,
+          "sourceRow": 6,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 0,
+          "sourceRow": 7,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 1,
+          "sourceRow": 7,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 2,
+          "sourceRow": 7,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 3,
+          "sourceRow": 7,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 4,
+          "sourceRow": 7,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 5,
+          "sourceRow": 7,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 6,
+          "sourceRow": 7,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 0,
+          "sourceRow": 8,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 1,
+          "sourceRow": 8,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 2,
+          "sourceRow": 8,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 3,
+          "sourceRow": 8,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 4,
+          "sourceRow": 8,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 5,
+          "sourceRow": 8,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 6,
+          "sourceRow": 8,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 0,
+          "sourceRow": 9,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 1,
+          "sourceRow": 9,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 2,
+          "sourceRow": 9,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 3,
+          "sourceRow": 9,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 4,
+          "sourceRow": 9,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 5,
+          "sourceRow": 9,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 6,
+          "sourceRow": 9,
+          "sourceColumn": 6
+        }
+      ],
+      "sourceQuotes": []
+    },
+    {
+      "tableIndex": 2,
+      "sourceType": "artifact_table",
+      "sourceTableOrdinal": 2,
+      "cellBindings": [
+        {
+          "renderedRow": 0,
+          "renderedColumn": 0,
+          "sourceRow": 0,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 1,
+          "sourceRow": 0,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 2,
+          "sourceRow": 0,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 3,
+          "sourceRow": 0,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 4,
+          "sourceRow": 0,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 5,
+          "sourceRow": 0,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 6,
+          "sourceRow": 0,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 0,
+          "sourceRow": 1,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 1,
+          "sourceRow": 1,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 2,
+          "sourceRow": 1,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 3,
+          "sourceRow": 1,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 4,
+          "sourceRow": 1,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 5,
+          "sourceRow": 1,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 6,
+          "sourceRow": 1,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 0,
+          "sourceRow": 2,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 1,
+          "sourceRow": 2,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 2,
+          "sourceRow": 2,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 3,
+          "sourceRow": 2,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 4,
+          "sourceRow": 2,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 5,
+          "sourceRow": 2,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 6,
+          "sourceRow": 2,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 0,
+          "sourceRow": 3,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 1,
+          "sourceRow": 3,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 2,
+          "sourceRow": 3,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 3,
+          "sourceRow": 3,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 4,
+          "sourceRow": 3,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 5,
+          "sourceRow": 3,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 6,
+          "sourceRow": 3,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 0,
+          "sourceRow": 4,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 1,
+          "sourceRow": 4,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 2,
+          "sourceRow": 4,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 3,
+          "sourceRow": 4,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 4,
+          "sourceRow": 4,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 5,
+          "sourceRow": 4,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 6,
+          "sourceRow": 4,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 0,
+          "sourceRow": 5,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 1,
+          "sourceRow": 5,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 2,
+          "sourceRow": 5,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 3,
+          "sourceRow": 5,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 4,
+          "sourceRow": 5,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 5,
+          "sourceRow": 5,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 6,
+          "sourceRow": 5,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 0,
+          "sourceRow": 6,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 1,
+          "sourceRow": 6,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 2,
+          "sourceRow": 6,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 3,
+          "sourceRow": 6,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 4,
+          "sourceRow": 6,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 5,
+          "sourceRow": 6,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 6,
+          "sourceRow": 6,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 0,
+          "sourceRow": 7,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 1,
+          "sourceRow": 7,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 2,
+          "sourceRow": 7,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 3,
+          "sourceRow": 7,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 4,
+          "sourceRow": 7,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 5,
+          "sourceRow": 7,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 6,
+          "sourceRow": 7,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 0,
+          "sourceRow": 8,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 1,
+          "sourceRow": 8,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 2,
+          "sourceRow": 8,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 3,
+          "sourceRow": 8,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 4,
+          "sourceRow": 8,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 5,
+          "sourceRow": 8,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 6,
+          "sourceRow": 8,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 0,
+          "sourceRow": 9,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 1,
+          "sourceRow": 9,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 2,
+          "sourceRow": 9,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 3,
+          "sourceRow": 9,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 4,
+          "sourceRow": 9,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 5,
+          "sourceRow": 9,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 6,
+          "sourceRow": 9,
+          "sourceColumn": 6
+        }
+      ],
+      "sourceQuotes": []
+    },
+    {
+      "tableIndex": 3,
+      "sourceType": "artifact_table",
+      "sourceTableOrdinal": 3,
+      "cellBindings": [
+        {
+          "renderedRow": 0,
+          "renderedColumn": 0,
+          "sourceRow": 0,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 1,
+          "sourceRow": 0,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 2,
+          "sourceRow": 0,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 3,
+          "sourceRow": 0,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 4,
+          "sourceRow": 0,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 5,
+          "sourceRow": 0,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 0,
+          "renderedColumn": 6,
+          "sourceRow": 0,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 0,
+          "sourceRow": 1,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 1,
+          "sourceRow": 1,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 2,
+          "sourceRow": 1,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 3,
+          "sourceRow": 1,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 4,
+          "sourceRow": 1,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 5,
+          "sourceRow": 1,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 1,
+          "renderedColumn": 6,
+          "sourceRow": 1,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 0,
+          "sourceRow": 2,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 1,
+          "sourceRow": 2,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 2,
+          "sourceRow": 2,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 3,
+          "sourceRow": 2,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 4,
+          "sourceRow": 2,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 5,
+          "sourceRow": 2,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 2,
+          "renderedColumn": 6,
+          "sourceRow": 2,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 0,
+          "sourceRow": 3,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 1,
+          "sourceRow": 3,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 2,
+          "sourceRow": 3,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 3,
+          "sourceRow": 3,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 4,
+          "sourceRow": 3,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 5,
+          "sourceRow": 3,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 3,
+          "renderedColumn": 6,
+          "sourceRow": 3,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 0,
+          "sourceRow": 4,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 1,
+          "sourceRow": 4,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 2,
+          "sourceRow": 4,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 3,
+          "sourceRow": 4,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 4,
+          "sourceRow": 4,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 5,
+          "sourceRow": 4,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 4,
+          "renderedColumn": 6,
+          "sourceRow": 4,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 0,
+          "sourceRow": 5,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 1,
+          "sourceRow": 5,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 2,
+          "sourceRow": 5,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 3,
+          "sourceRow": 5,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 4,
+          "sourceRow": 5,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 5,
+          "sourceRow": 5,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 5,
+          "renderedColumn": 6,
+          "sourceRow": 5,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 0,
+          "sourceRow": 6,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 1,
+          "sourceRow": 6,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 2,
+          "sourceRow": 6,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 3,
+          "sourceRow": 6,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 4,
+          "sourceRow": 6,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 5,
+          "sourceRow": 6,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 6,
+          "renderedColumn": 6,
+          "sourceRow": 6,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 0,
+          "sourceRow": 7,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 1,
+          "sourceRow": 7,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 2,
+          "sourceRow": 7,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 3,
+          "sourceRow": 7,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 4,
+          "sourceRow": 7,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 5,
+          "sourceRow": 7,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 7,
+          "renderedColumn": 6,
+          "sourceRow": 7,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 0,
+          "sourceRow": 8,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 1,
+          "sourceRow": 8,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 2,
+          "sourceRow": 8,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 3,
+          "sourceRow": 8,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 4,
+          "sourceRow": 8,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 5,
+          "sourceRow": 8,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 8,
+          "renderedColumn": 6,
+          "sourceRow": 8,
+          "sourceColumn": 6
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 0,
+          "sourceRow": 9,
+          "sourceColumn": 0
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 1,
+          "sourceRow": 9,
+          "sourceColumn": 1
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 2,
+          "sourceRow": 9,
+          "sourceColumn": 2
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 3,
+          "sourceRow": 9,
+          "sourceColumn": 3
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 4,
+          "sourceRow": 9,
+          "sourceColumn": 4
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 5,
+          "sourceRow": 9,
+          "sourceColumn": 5
+        },
+        {
+          "renderedRow": 9,
+          "renderedColumn": 6,
+          "sourceRow": 9,
+          "sourceColumn": 6
+        }
+      ],
+      "sourceQuotes": []
+    }
+  ],
+  "formulaBindings": [
+    {
+      "formulaOrdinal": 1,
+      "targetKind": "component",
+      "marker": "[[FORMULA_1]]"
+    },
+    {
+      "formulaOrdinal": 2,
+      "targetKind": "component",
+      "marker": "[[FORMULA_2]]"
+    },
+    {
+      "formulaOrdinal": 4,
+      "targetKind": "component",
+      "marker": "[[FORMULA_4]]"
+    }
+  ],
+  "sections": [
+    {
+      "kind": "background",
+      "heading": "这篇论文要解决的输入、目标与必须保留的信息",
+      "body": "声音形变（sound morphing）指在两个声音端点之间生成一串中间样本，让听感从一个音色身份连续过渡到另一个。音乐人和声音设计师已经在用这种方式做音色设计：比如从一段锣的录音出发，再混入清脆的敲击声，把它改得更尖、更有打击感。论文指出，如果这种形变可以交互化，让演奏者在两个音色身份之间移动、同时保住正在演奏的手势或节奏，它就能成为一种新的表演维度。作者因此提出一个明确的需求：把高层的音频结构（例如节奏、大尺度音高轮廓）与低层的音色身份（例如音色）分开，使两者可以独立控制；端点可以用自然语言描述或音频样例给出，交互式地在端点之间形变，同时保持高层结构不变。本文要保留的信息就是这一层结构：RMS 包络和音高轮廓被当作高层结构的代理信号，音色身份则由文本提示或音频嵌入来指定。输出是一条结构锚定的形变轨迹，以及一个可演奏的二维形变界面。论文给出的演示地址是 smorphspace.github.io；本次未收到该地址的来源绑定与可用性验证，因此不能据此声称代码或模型已公开。"
+    },
+    {
+      "kind": "related_work",
+      "heading": "已有方法在结构与音色的分工上缺了什么",
+      "body": "作者按输入、目标和运行阶段把已有路线分成几类。基于分析-合成与特征插值的经典形变方法缺少文本控制，且基本限于有音高的声音。神经合成模型（WaveNet 风格、RAVE 风格 VAE）支持更宽的声音类别，但仍限于一组预先学好的声音类别。风格与音色迁移、解耦潜变量编辑、以及 Sketch2Sound 和 FlashFoley 这类结构条件化音频生成系统，确实把声音的行为方式与声音听起来像什么分开了，但它们只产出一个迁移或生成结果，而不是一条可在端点之间导航的形变轨迹。更近期的路线用预训练文本到音频扩散模型生成形变轨迹：MorphFader 与 ComposableArt 在文本条件之间插值，支持语义连贯的端点过渡；SoundMorpher 在音频端点之间插值，并用 log-Mel 距离重新参数化路径以改善感知间距。作者认为这些方法仍然过于宽松——它们让时间结构与音色身份一起变化，节奏和音高可能随音色一起漂移，而基于距离的重参数化只能在一条本已纠缠的路径上重新分配采样点。需要强调的是，这些对比是类别层面的定位：经典方法没有文本条件，扩散基线没有结构控制，作者并未在相同输入与监督下把它们逐一跑分；真正同条件的比较只出现在第 6 节的实验里。"
+    },
+    {
+      "kind": "problem",
+      "heading": "形变任务里结构与音色为什么会互相牵连",
+      "body": "扩散模型在每一步输出一个去噪方向，这个方向由条件信号牵引。如果只有一个文本条件，模型会同时改变节奏、音高和音色，因为这三者在训练分布里是相关的。作者把问题拆成两个轴：时间结构（一个声音随时间如何行为）与音色身份（一个声音是什么）。结构轴用一个在全部去噪步中固定不变的结构参考 c_S 来锚定，音色轴用多个端点条件 c_1 到 c_N 的加权组合来插值。关键的设计选择是：音色方向必须相对于结构条件下的预测 v_S 计算，而不是相对于完全无条件的预测 v_∅ 计算。这样，结构保持与语义引导就被解耦了——结构项先把输出拉到正确的时间组织上，音色项再在这个组织内部改变身份。论文用一个具体例子说明这种分离的价值：在固定音高下从铜管形变到弦乐，音高不该跟着音色一起走。"
+    },
+    {
+      "kind": "method_overview",
+      "heading": "整体流程：从条件输入到一次去噪步的引导速度场",
+      "body": "方法的整体流程可以沿一个样本走一遍。输入是若干端点条件（文本提示或音频片段）和一个结构控制信号（RMS 包络或音高轮廓）。文本提示经冻结的 flan-T5-xxl 编码器转成向量，音频端点经 FLAM 音频编码器转成全局嵌入，结构信号经专用预处理器以加性潜帧条件注入。在每个去噪步，模型需要做 2+N 次前向：一次完全无条件 v_∅，一次仅结构条件 v_S，以及每个文本提示一次 v_i（同时带结构与该提示）。这些前向可以批成一次执行，因此增加的计算时间很小；两提示形变时每步共 4 次前向。得到这些预测后，按引导公式合成一个速度场，交给采样器走一步，得到上一步的潜变量。整个过程不需要训练——论文明确这是一个免训练（training-free）的引导框架，只在推理时组合已有模型的预测。",
+      "body2": ""
+    },
+    {
+      "kind": "component",
+      "heading": "核心公式：分层引导如何把结构项与音色项分开",
+      "body": "先看最基础的 classifier-free guidance（CFG）。给定条件信号 c（例如文本提示），引导速度场写作下面的式子：",
+      "body2": "[[FORMULA_1]]\n\n这里 v_t(∅) 是无条件去噪预测，v_t(c) 是以 c 为条件的预测，γ 控制引导强度。更一般地，多提示 CFG 可以写成：\n\n[[FORMULA_2]]\n\n其中 v_∅ 作为单一锚点，每一项 v_i−v_∅ 都是指向提示 i 的方向。InstructPix2Pix 引入了分层扩展：一个条件充当结构锚，另一个指定目标变换，文本方向 v_t(c_I,c_T)−v_t(c_I,∅) 相对于结构条件下的预测计算而非无条件基线，从而把结构保持与语义引导解耦。Smorph 沿着这个思路，把两个轴组合成统一的引导公式。给定结构控制信号 c_S 和 N 个文本端点 {c_i}，引导速度场为：\n\n[[FORMULA_4]]\n\n其中 v_∅=v_t(∅,∅) 是完全无条件预测，v_S=v_t(c_S,∅) 是仅以结构为条件的预测，v_i=v_t(c_S,c_i) 是同时以结构和第 i 个文本提示为条件的预测。标量 s_S 与 s_T 分别控制结构与文本的引导强度。每个提示的权重 w_i(α) 由形变参数 α 决定：两个提示时 w_1=1−α、w_2=α，α∈[0,1]；N>2 时 α 推广为单纯形上的参数 [α_1,…,α_N]（α_i≥0 且和为 1），w_i(α)=α_i。默认设置是 s_T=3.0、s_S=1.0。注意式 4 中音色求和项是 v_i−v_S，这正是与式 2 的 v_i−v_∅ 的区别所在。"
+    },
+    {
+      "kind": "component",
+      "heading": "模型骨干、结构信号注入与采样配置",
+      "body": "骨干是一个约 10 亿参数的文本到音频潜空间扩散 Transformer（DiT），此前已被微调以接受时变控制信号（沿用 Sketch2Sound 的做法）。潜变量来自 KL 正则化的 DAC-VAE，把 48kHz 单声道音频压缩成 40Hz 的 1536 维序列。文本条件用冻结的 flan-T5-xxl 编码器经交叉注意力注入。这个文本到音频 DiT 预训练在大量专有、许可的音效数据集与公开 CC 许可的通用音频数据集上。时变控制信号（音高轮廓、RMS 幅度）作为高层时间结构的代理，音高提取用 CREPE，信号经专用预处理器以加性潜帧条件注入。采样用 k_diffusion 的 DPM++2MSDE 方法，Karras σ 调度（ρ=7.0，log-SNR 端点 [−8,5]），T=24 个去噪步。三种形变模式共享这套配置：提示到提示用式 4 直接生成；音频到提示在式 4 上叠加 SDEdit 式初始化，N=1、w_1=1；音频到音频把目标音频的 FLAM 全局嵌入替换式 4 中的文本条件向量，需要一个额外适配过的 DiT 检查点（微调以接受线性投影到潜维度的 FLAM 嵌入作为文本替代），CFG 公式本身不变。"
+    },
+    {
+      "kind": "component",
+      "heading": "三种形变模式的条件来源与交互界面",
+      "body": "提示到提示模式的结构信号 c_S 有两种来源。自引导设置下，先用其中一个文本提示生成一个参考声音，再从中提取结构；这形成一个不对称的形变场景——源提示决定声音的结构形状，目标提示指定音色逐渐变成的对象。外部引导设置下，用户提供一段参考音频，从中提取结构信号，让形变跟随特定的时间包络、手势或音高轮廓。两种设置用的是同一条式 4，只是 c_S 的来源不同。音频到提示模式里源音频扮演两个角色：它的结构描述符提供 c_S，它的 VAE 编码被前向扩散成 z_{t_start} 作为去噪起点；t_start 本身就是一个形变参数——从较晚的步开始保留更多源的细节，从较早（噪声更大）的步开始允许更实质的变换。作者指出，结构控制信号即使在高噪声水平下也把时间组织锚住，从而把 SDEdit 的可用范围扩展到没有结构条件时达不到的程度。音频到音频模式则给出两个变体：FLAM→FLAM 用两个录音的 FLAM 嵌入替换 (c_1,c_2) 并扫描 α，c_S 从源音频提取；SDEdit+FLAM 额外从前向扩散的源潜变量初始化，c_1=FLAM(x_tgt) 并扫描 t_start。交互层面，由于每个轨迹点都需要一次完整去噪（约 10 亿参数 DiT 加潜解码器），当前文本到声音扩散模型还无法以低于 100ms 的延迟流式输出，因此论文预先计算一个离散样本库：提示到提示在 α∈[0,1] 上均匀取点，源保持模式选取 24 步调度中的一个子集（例如第 5 到 13 个索引，索引越高加噪越少、越接近源）。交互时用户通过滑块或二维画布导航，索引样本库并可在相邻缓冲区之间做等增益交叉淡化；N=25 点、8 秒的插值空间在单张 A100 上不到 10 秒即可批量生成，端点改变时整库重算。",
+      "body2": ""
+    },
+    {
+      "kind": "training",
+      "heading": "本研究没有训练什么，实际的计算发生在哪一步",
+      "body": "论文明确把 Smorph 定义为免训练的引导框架：不训练新的扩散模型，不更新 DiT 权重，也不训练结构编码器。实际的计算发生在推理阶段。文本编码器 flan-T5-xxl 冻结，结构信号经预处理器以加性方式注入潜帧条件，FLAM 编码器只用于提取全局嵌入。每个去噪步做 2+N 次前向并批成一次执行，共 T=24 步。音高用 CREPE 提取，这是一个预训练模型的前向调用，不涉及本文的梯度更新。唯一的“适配”是音频到音频模式使用一个额外微调过的 DiT 检查点以接受 FLAM 嵌入；论文没有报告这次微调的数据规模、步数或优化器，因此复现该检查点所需的训练细节在原文中缺失。需要区分的是：免训练不等于确定性求解——采样器 DPM++2MSDE 带有随机成分，参数冻结也推不出输出确定。原文未报告随机种子控制、重复采样的方差或推理延迟的实测分布，这些是复现时需要自行补充测量的项目。"
+    },
+    {
+      "kind": "experiment_setup",
+      "heading": "实验要回答的三个问题、数据集与指标方向",
+      "body": "实验围绕三个研究问题组织。RQ1 问结构条件如何影响结构保持的形变，用提示到提示形变在两个域内设置上测试：NSynth-NSynth 检验固定音高单音的音高保持，Clotho-Clotho 检验动态音效事件的 RMS 保持。为了隔离结构条件的作用，比较两个 Smorph 变体（隐式、显式）与没有结构引导的基线。每对 (t_src, t_tgt) 生成 N=21 个样本，α∈{0.00,0.05,…,1.00}，w_1=1−α、w_2=α；c_S 从 t_src 生成的参考样本中提取（自引导设置）。RQ2 问从真实音频出发时结构条件如何影响源保持，比较普通 SDEdit 与 Smorph（SDEdit+结构控制），t_start 扫过全部 T=24 个噪声水平。RQ3 问部分噪声初始化是否比仅嵌入条件更好地保持源，比较 FLAM→FLAM（扫描 α，N=21）与 SDEdit+FLAM（扫描 t_start，T=24）。数据集方面，NSynth 提供有音高的单音器乐音色（文本说明由 NSynth 元数据经 Claude Opus 4.6 生成），Clotho 经过文本过滤以强调时间上动态的日常声音事件（去掉 Ambience、Crowds、Rain 等静态或缓变纹理类别），FSL-10K 提供真实鼓录音。共构造 100 对源-目标，包括两个域内设置（NSynth-NSynth、Clotho-Clotho）和两个跨域设置（NSynth-Clotho、Drumset-Clotho）。所有样本 4 秒，RQ2 与 RQ3 中源音频取随机 4 秒片段。指标方向：结构依从 S_ctrl 越高越好（生成形变的结构信号与参考控制信号的相关性，沿轨迹平均）；音色轨迹用 FLAM 嵌入空间中的两个互补量——平滑度 Smtgt（α 与目标相似度的 Spearman 相关，越高越好）和净变换 ΔFLAM（终点相似度减起点相似度，越高越好）；联合分数 S_ctrl×Smtgt 越高越好；源保持用输入与中间编辑样本 mel 频谱的 L1 距离，越低越好；音质用 KAD，越低越好，参照 FLAM 嵌入由 1000 条高质量声音的专有数据集计算。默认所有方法共享同一去噪骨干，s_S=1.0、s_T=3.0。"
+    },
+    {
+      "kind": "result",
+      "heading": "RQ1：提示到提示形变中结构条件带来了什么、代价是什么",
+      "body": "下表回答 RQ1：在相同骨干、相同默认引导强度下，加入结构条件（显式或隐式）与无结构控制的基线相比，结构依从、音色轨迹平滑度、净变换、联合分数和音质各发生什么变化。S_ctrl、Smtgt、ΔFLAM、联合分数越高越好，KAD 越低越好。基线包括简单音频交叉淡化（Crossfade）与 ComposableArt 式多提示 CFG（CoA，无显式高层结构控制）。",
+      "body2": "[[TABLE_1]]\n\n两个 Smorph 变体在结构依从上都显著高于 CoA，且每种设置下都有一个变体取得最好的联合分数。但两种条件化机制的优劣随数据集而变：在 NSynth-NSynth 上隐式变体领先（联合分数 0.073，CoA 为 0.005），在 Clotho-Clotho 上显式变体领先（0.522，CoA 为 0.316），不过净变换有所下降（0.359 对 CoA 的 0.415）。作者据此认为显式结构锚定最适合形变时间上不连贯的声音，代价是变换范围收窄；而隐式联合条件在更简单的保音高形变中已经够用，因为音高条件对源和目标端点可能都在分布内。实践中，RMS 包络这类结构信号本身可能强到足以约束文本引导，因此对显式引导 Smorph_e 采用较低的结构引导强度 s_S<s_T，让文本语义仍能引导输出。一个未胜出项值得注意：在 NSynth-NSynth 上 Smorph_e 的 S_ctrl（0.094）和联合分数（0.029）都低于 Smorph_i，KAD 也高于 Smorph_i（12.587 对 11.452），说明显式锚定并非在所有设置下都更好。"
+    },
+    {
+      "kind": "result",
+      "heading": "RQ2：音频到提示形变中结构控制对源保持与目标变换的取舍",
+      "body": "下表回答 RQ2：在音频到提示形变中，把结构控制加到 SDEdit 上，源保持（mel-L1，越低越好）、结构依从（S_ctrl，越高越好）、目标轨迹（Smtgt、ΔFLAM，越高越好）与音质（KAD，越低越好）各自如何变化。四个设置覆盖域内（NSynth-NSynth、Clotho-Clotho）与跨域（NSynth-Clotho、Drumset-Clotho），前两者与第四者分别用音高和 RMS 作控制信号。",
+      "body2": "[[TABLE_2]]\n\n给 SDEdit 加结构控制在全部四个数据集上都降低了 mel-L1，说明结构引导确实把生成锚定在源音频上。这种更强的锚定伴随目标到达与音质的代价：四个设置的净变换 ΔFLAM 全部下降，四个设置中有三个 SDEdit 的 KAD 更低（NSynth-NSynth 10.452 对 10.279 是例外，Smorph 略优）。作者的解释是，结构引导限制了音色从源的漂移，也限制了扩散过程自由优化感知音质的空间。跨域设置 NSynth-Clotho 上 Smorph 的 KAD（5.579）明显高于 SDEdit（4.158），这是本表中最不利的一项，说明当单个音符的音高要保持、而语义要移向非音乐纹理时，结构锚定的音质代价更大。"
+    },
+    {
+      "kind": "ablation",
+      "heading": "RQ3：音频到音频中潜变量初始化与嵌入条件的对照",
+      "body": "下表回答 RQ3：在音频到音频形变中，把源作为潜变量初始化（SDEdit+FLAM，扫描 t_start）与把源作为嵌入条件（FLAM→FLAM，扫描 α）相比，源保持、结构依从、目标轨迹和音质各如何。四个设置与 RQ2 相同，控制信号分别为音高或 RMS。",
+      "body2": "[[TABLE_3]]\n\nSDEdit+FLAM 在全部四个设置上都改善了源保持（更低的 mel-L1）和音质（更低的 KAD），这与 RQ2 中更强结构条件带来的音质代价不同——作者认为源潜变量初始化保留了源信息，却没有出现 RQ2 那种明显的质量权衡。结构依从则随控制类型而变：音高条件的两个设置上 SDEdit+FLAM 领先（NSynth-NSynth 0.204 对 0.120，NSynth-Clotho 0.159 对 0.057），RMS 条件的两个设置上 FLAM→FLAM 领先（Clotho-Clotho 0.666 对 0.650，Drumset-Clotho 0.714 对 0.693），差距都很小。目标轨迹指标随数据集而变：NSynth-NSynth 上 SDEdit+FLAM 的 Smtgt 与 ΔFLAM 更高，Clotho-Clotho 上 FLAM→FLAM 更高。这说明初始化方式的选择没有一致赢家，取决于控制信号类型与数据集。"
+    },
+    {
+      "kind": "result",
+      "heading": "一个轨迹样本里结构控制实际改变了什么",
+      "body": "下面这张图展示同一条形变轨迹在有无显式结构控制下的差异，用来直观对照上文表格中的 S_ctrl 指标。图中每格是一个 mel 频谱，橙色实线是输出的 RMS 曲线，灰色虚线是控制信号；横轴是形变参数 α 从 0.0 到 1.0，源提示是 drum beat，目标提示是 bubbles popping。",
+      "body2": "[[FIGURE_3]]\n\n上排（有结构控制）在 α 增大时，mel 频谱的竖条状节奏位置基本保持，橙色 RMS 曲线与控制信号贴合；下排（无结构控制）在 α 增大到 0.5 以上时，橙色 RMS 曲线明显偏离虚线控制信号，节奏结构随音色一起漂移。这张图是单个示例，不是统计结果，它与表 1 中 Clotho-Clotho 设置上 Smorph 变体更高的 S_ctrl（0.733 与 0.771，CoA 为 0.428）方向一致，但不能用来推断所有数据集上的表现。"
+    },
+    {
+      "kind": "result",
+      "heading": "方法流程图里三类条件如何汇入同一个 CFG 混合器",
+      "body": "这张流程图给出方法的组件连接：左侧是结构、文本与音频三类输入，中间是编码器与扩散模型，右侧是 CFG 混合器与去噪步。读图时先沿输入到输出的箭头看主路径，再比较结构分支与文本分支在哪里汇合，最后确认部分加噪路径只在音频源模式下启用。",
+      "body2": "[[FIGURE_2]]\n\n图中结构输入（fast_attack.wav）经 RMS/Pitch 结构编码器产生 c_S，文本提示经 FLAN-T5-XXL 产生 c_1 到 c_N，音频提示经 FLAM 语义音频编码器产生对应条件（图注说明只使用 FLAM 的音频头）。扩散模型内部列出 v_∅、v_S、v_1 到 v_N 各自的条件组合，CFG Mixer 框内画出 v_S−v_∅ 与 v_i−v_S 两条向量方向，并标出 α=0 与 α=1 两个端点，下方给出与式 4 一致的合成公式。VAE 路径上的 partial noising 产生 z_{t_start}，只在需要源初始化时启用；纯文本到文本模式从 ε~N(0,I) 出发。所有编码器旁画有雪花标记，表示参数冻结。"
+    },
+    {
+      "kind": "result",
+      "heading": "SoundCanvas 界面如何把预计算样本库变成可演奏的二维音色空间",
+      "body": "SoundCanvas 把一组文本或音频提示变成一个采样器乐器，演奏者用二维十字光标导航连续的音色控制。用户把四个提示分配到画布四角，可选提供一个结构参考录音，然后预计算 G_x×G_y 个音频片段，每个网格位置通过等功率双线性插值混合四个角条件。演奏时全部片段驻留在音频引擎中，光标移动时对四个相邻网格单元做实时双线性等增益混合。有音高的乐器音色在单一音高（例如 C3）上条件化音频网格，通过实时重采样演奏不同音高。下面这张界面图展示实际的交互布局。",
+      "body2": "[[FIGURE_1]]\n\n图中四个角分别是文本提示 distant rolling thunder、音频文件 wind_chimes.wav、文本提示 warm grand piano、音频文件 crystal_bells.wav；右侧 Structure 面板显示 RMS 与 Pitch 两个开关（均勾选）及其输入波形；Generated 面板显示当前输出的频谱；Contribution 面板给出当前光标位置四个端点的混合权重（19%、6%、56%、19%），与 x=0.25、y=0.75 的光标位置对应；底部 MIDI 键盘上有一个键高亮，表示当前触发的音高。这张图是界面截图，不包含性能数据。"
+    },
+    {
+      "kind": "limitation",
+      "heading": "主观研究的条件、发现与它们不支持的结论",
+      "body": "作者做了一次探索性用户研究：6 位职业音乐人（26-37 岁，2-28 年制作经验），每人 55 分钟，探索二维文本定义的形变画布并连接音高映射键盘，端点仅限文本。参与者手动指定四个端点，然后尝试不同的控制信号（RMS、音高，开或关），最后进行半结构化访谈并填写创造力支持指数（CSI）调查。从会话录音中用反身主题分析识别出两个主题：通过结构化偶遇让不确定性变得可演奏（T1），以及从离散参数到连续音色调色板（T2）。CSI 均值评分中，探索 8.3/10、享受 8.5、满意 8.5、结果值得付出 9.0、创造力 8.0、表现力 7.8。参与者认为结构锚定让穿越过程方向可预测、平滑，象限“引导你去该去的地方”，没有“移动缩放感觉不对”的点；但某些语义上不协调的提示组合产生了不均匀的“热点”。画布内部区域被描述为“有价值的惊喜”和“快乐意外”的来源，参与者希望导出并复用这些点。关于控制信号，关闭结构控制被用于构思和最大化音色多样性，RMS 开启被当作打击乐工作流的中间地带，音高开启则被明确描述为更可演奏、更像传统乐器。这些发现来自 6 人的探索性研究，端点仅限文本，没有对照组，也没有测量演奏精度或延迟，因此不能推广为一般音乐人对系统的评价，也不能证明结构控制改善了演奏表现。"
+    },
+    {
+      "kind": "limitation",
+      "heading": "结论的适用范围与原文自陈的开放问题",
+      "body": "论文的结论是：生成式声音形变可以提供可控的音乐对象，音乐人可能想在保持音乐相关结构特征（节奏或音高轮廓）的同时改变音色；作者给出一个带显式结构项的免训练 CFG 公式，在控制依从与音色推进之间取得更好的平衡，音乐人反馈也把结构约束视为轨迹可演奏性的核心。但作者同时指出，结构保持的形变仍是开放挑战：多个条件信号可能互相主导，一条在嵌入空间中看起来平滑的轨迹未必在感知上线性或在音乐上有意义。原文没有报告的内容也限定了结论范围：没有报告感知线性化的量化评测，没有报告实时延迟的实测值（只引用了低于 100ms 的一般要求），没有报告随机种子或重复采样的方差，没有报告训练该骨干与 FLAM 适配检查点的细节，也没有在音频到音频模式上做主观评测。表 2 中 Smorph 在四个设置中有三个 KAD 高于 SDEdit，表 1 中 Smorph_e 在 NSynth-NSynth 上不如 Smorph_i，这些都是结论必须保留的反例。"
+    },
+    {
+      "kind": "reproduction",
+      "heading": "复现的第一步、关键超参数与信息条件",
+      "body": "复现的第一步是拿到一个可接受时变控制信号的文本到音频 DiT（论文用的是 Sketch2Sound 式微调的约 10 亿参数骨干）以及其潜解码器，然后实现式 4 的 2+N 次前向与批处理。关键超参数：T=24 个去噪步，DPM++2MSDE 采样，Karras σ 调度 ρ=7.0、log-SNR 端点 [−8,5]，默认 s_T=3.0、s_S=1.0，文本编码器为冻结的 flan-T5-xxl，音高提取用 CREPE，结构信号以加性潜帧条件注入。信息条件方面，提示到提示需要一对文本提示和一个结构参考（自引导时先生成参考样本）；音频到提示需要源音频（同时提供结构与初始化潜变量）和目标文本；音频到音频需要源与目标音频、FLAM 编码器，以及一个接受 FLAM 嵌入的适配 DiT 检查点——这个检查点的微调细节原文未报告，是复现的主要缺口。交互部分需要预计算样本库（N=25 点、8 秒在单张 A100 上不到 10 秒）和一个支持双线性交叉淡化的音频引擎。关于开源状态需要分开说：论文给出了演示地址 smorphspace.github.io，但本次没有收到该地址的来源绑定与可用性验证；论文正文提到使用了 k_diffusion 库（github.com/crowsonkb/k-diffusion），这只证明论文引用了该链接，不证明本文代码已开源。因此，代码是否公开、权重是否可下载、系统是否可运行这三件事在本次证据下都无法确认。"
+    },
+    {
+      "kind": "synthesis",
+      "heading": "什么时候值得尝试，还需要补哪项验证",
+      "body": "什么时候值得尝试：当任务是在两个端点之间做可导航的音色形变、且节奏或音高必须保持稳定时——例如固定音高下从铜管到弦乐、或保持鼓组 RMS 动态的同时把打击音色移向日常纹理——结构锚定的 CFG 值得试；当只需要一次性的音色迁移而不需要轨迹时，普通 SDEdit 或风格迁移可能更简单。复现第一步是确认骨干是否接受时变控制信号，再实现式 4 并在 Clotho-Clotho 上对照 CoA 跑 S_ctrl 与 ΔFLAM。还需要补的验证有三项：一是感知线性化——原文自陈嵌入空间的平滑不等于感知线性，需要主观的轨迹均匀性评测；二是实时性——原文只引用了低于 100ms 的一般要求并采用预计算样本库绕开，没有实测端到端延迟；三是更广的主观评测——现有用户研究只有 6 人、端点仅限文本、无对照组，音频到音频与音频到提示模式没有主观数据。此外，表 2 中结构控制在多数设置下牺牲 KAD 与 ΔFLAM，如何在锚定强度与变换自由度之间取一个可预测的权衡，原文只给出了 s_S<s_T 的经验做法，没有系统的超参扫描。"
+    }
+  ]
+}

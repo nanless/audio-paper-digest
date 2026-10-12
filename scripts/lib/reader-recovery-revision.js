@@ -95,6 +95,7 @@ function finishRevisionArchives(directory, identity, payload) {
             if (hashDraft(loadFailedCandidate(directory, checked.envelope.identity)) !== audit.oldPayloadSha256) {
                 throw new Error('Reader diagnostic revision old payload drifted before archive');
             }
+            require('./reader-proof-read-scope').assertReaderReceiptSnapshots();
             fs.renameSync(original, archived);
             verify(archived);
         }
@@ -114,7 +115,8 @@ function assertReaderJsonRequestPolicy(policy) {
 
 function loadReaderRecoveryRevision(directory, identity, options = {}) {
     return require('./reader-proof-read-scope').withReaderProofReadScope(
-        () => loadReaderRecoveryRevisionInternal(directory, identity, options));
+        () => require('./reader-proof-read-scope').withReaderReceiptScan(
+            () => loadReaderRecoveryRevisionInternal(directory, identity, options)));
 }
 function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
     if (identity?.resourceLocalRevisionContract !== undefined
@@ -378,6 +380,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
     if (hashDraft(loadFailedCandidate(directory, old.identity)) !== hashDraft(old.payload)) {
         throw new Error('Reader diagnostic revision source changed before installation');
     }
+    require('./reader-proof-read-scope').assertReaderReceiptSnapshots();
     saveFailedCandidate(directory, identity, updated);
     finishRevisionArchives(directory, identity, updated);
     // 仍然是失败的恢复输入，不是已接受的正文，也不是证明。

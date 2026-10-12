@@ -10,6 +10,14 @@ const LOCAL_REPAIR_CONTRACT = 'reader-explicit-parent-local-repair-v1';
 const parentRecovery = require('./reader-parent-recovery');
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const idOf = paper => String(paper.arxivId || paper.paperId || '').replace(/v\d+$/, '');
+// 循环依赖中的半成品导出不能固定；只记住已加载完成的模块引用。
+const moduleReferences = new Map();
+function useModule(id) {
+    if (moduleReferences.has(id)) return moduleReferences.get(id);
+    const value = require(id);
+    if (require.cache[require.resolve(id)]?.loaded) moduleReferences.set(id, value);
+    return value;
+}
 function assertGrant(grant) {
     const local = grant?.contract === LOCAL_REPAIR_CONTRACT;
     const recovery = grant?.contract === parentRecovery.CONTRACT;
@@ -56,15 +64,20 @@ function assertLocalRepairParent(directory, grant, currentPayload, currentIdenti
             throw localRepairError('局部修复必须对应同篇、同批和同来源的原付费轮');
         }
         const root = path.dirname(parentFile);
-        for (const name of fs.readdirSync(root).filter(n => /^[a-f0-9-]{36}\.json$/.test(n))) {
-            const other = JSON.parse(fs.readFileSync(path.join(root, name)));
-            if ([LOCAL_REPAIR_CONTRACT, parentRecovery.CONTRACT].includes(other.grant?.contract)
-                && other.grant.parentRoundId === grant.parentRoundId && other.grant.roundId !== grant.roundId) {
-                throw localRepairError('同一父轮已授权另一局部修复轮');
+        const indexedSibling = useModule('./reader-proof-read-scope').findReaderReceiptSibling(root, grant.parentRoundId, grant.roundId,
+            [LOCAL_REPAIR_CONTRACT, parentRecovery.CONTRACT], { privateFile: false });
+        if (indexedSibling === true) throw localRepairError('同一父轮已授权另一局部修复轮');
+        if (indexedSibling === undefined) {
+            for (const name of fs.readdirSync(root).filter(n => /^[a-f0-9-]{36}\.json$/.test(n))) {
+                const other = JSON.parse(fs.readFileSync(path.join(root, name)));
+                if ([LOCAL_REPAIR_CONTRACT, parentRecovery.CONTRACT].includes(other.grant?.contract)
+                    && other.grant.parentRoundId === grant.parentRoundId && other.grant.roundId !== grant.roundId) {
+                    throw localRepairError('同一父轮已授权另一局部修复轮');
+                }
             }
         }
         if (currentPayload) {
-            const repair = require('./reader-repair');
+            const repair = useModule('./reader-repair');
             const draft = repair.parseRecoveryDraft(currentPayload.draft) || repair.parseRecoveryDraft(currentPayload.rawDraft);
             if (currentPayload.explicitReaderRetryRound?.roundId !== grant.parentRoundId
                 || currentPayload.status !== 'failed'
@@ -90,7 +103,7 @@ function withExplicitLocalRepairRound(paper, grant, callback) {
     return withExplicitRound(paper, grant, callback);
 }
 function readOwner(paper) {
-    const engine = require('../analysis-engine');
+    const engine = useModule('../analysis-engine');
     const owner = JSON.parse(fs.readFileSync(path.join(engine.getPaperAnalysisLockPath(paper) + '.lock', 'owner.json')));
     if (owner.pid !== process.pid || typeof owner.token !== 'string') throw new Error('明确 Reader 新轮必须持有规范论文锁');
     return owner;
@@ -100,7 +113,7 @@ function assertScopeLock(scope) {
 }
 function assertRoundSource(paper, grant) {
     assertGrant(grant);
-    const fresh = require('./fresh-analysis-context');
+    const fresh = useModule('./fresh-analysis-context');
     if (!fresh.isDailyFreshSourceScope()) throw new Error('明确 Reader 新轮只允许完整封存日更来源');
     fresh.assertFreshPaper(paper);
     const context = fresh.getFreshAnalysisContext();
@@ -139,7 +152,7 @@ function beginExplicitRound(directory, identity, recovered, paper) {
     if (!scope) {
         const root = path.join(directory, 'explicit-retry-rounds');
         if (!fs.existsSync(root)) return null;
-        const identityHash = require('./reader-repair').hashDraft(identity);
+        const identityHash = useModule('./reader-repair').hashDraft(identity);
         const matching = fs.readdirSync(root).filter(n => /^[a-f0-9-]{36}\.json$/.test(n))
             .map(n => JSON.parse(fs.readFileSync(path.join(root, n))))
             .filter(receipt => receipt.grant?.identitySha256 === identityHash);
@@ -162,20 +175,20 @@ function beginExplicitRound(directory, identity, recovered, paper) {
             () => beginExplicitRound(directory, identity, recovered, paper)) : null;
     }
     assertScopeLock(scope);
-    const repair = require('./reader-repair');
-    require('./fresh-analysis-context').freshReaderAttemptsDirectory(directory);
+    const repair = useModule('./reader-repair');
+    useModule('./fresh-analysis-context').freshReaderAttemptsDirectory(directory);
     const grant = scope.grant;
     if (idOf(paper) !== grant.paperId) {
         throw retryInputError('READER_RETRY_PAPER_MISMATCH', '长文重试许可对应另一篇论文，不能开始新一轮。');
     }
-    const currentSourceIdentity = require('./fresh-analysis-context').freshAnalysisIdentity(paper.arxivId);
+    const currentSourceIdentity = useModule('./fresh-analysis-context').freshAnalysisIdentity(paper.arxivId);
     if (repair.hashDraft(identity.freshAnalysis) !== repair.hashDraft(currentSourceIdentity)) {
         throw new Error('Reader 当前输入身份缺少完整封存来源证明');
     }
     if (repair.hashDraft(identity) !== grant.identitySha256) {
         throw retryInputError('READER_RETRY_INPUT_MISMATCH', '长文当前输入与重试许可不一致，不能沿用许可开始新一轮。');
     }
-    if (require('../analysis-engine').isSuccessfulAnalysisRecord(paper)) {
+    if (useModule('../analysis-engine').isSuccessfulAnalysisRecord(paper)) {
         throw retryInputError('READER_RETRY_ALREADY_COMPLETE', '论文已经完成分析，不能按失败稿开始长文重试。');
     }
     const loc = paths(directory, grant.roundId);
@@ -212,7 +225,7 @@ function beginExplicitRound(directory, identity, recovered, paper) {
         const original = JSON.parse(bytes);
         if (hash(bytes) !== grant.envelopeSha256 || repair.hashDraft(original.identity) !== grant.originalIdentitySha256
             || repair.hashDraft(original.payload) !== grant.payloadSha256) throw new Error('Reader 原稿 SHA 已变化');
-        const ignored = require('./reader-recovery-revision').ALLOWED_FIELDS;
+        const ignored = useModule('./reader-recovery-revision').ALLOWED_FIELDS;
         const semantic = value => Object.fromEntries(Object.entries(value).filter(([key]) => !ignored.includes(key)));
         if (original.identity.readerRecoveryEpochSha256 !== identity.readerRecoveryEpochSha256
             || repair.hashDraft(semantic(original.identity)) !== repair.hashDraft(semantic(identity))
@@ -286,15 +299,15 @@ function assertRequestLedger(receipt) {
     }
 }
 function readMigrationEnvelope(filename) {
-    const checked = require('./reader-proof-read-scope').readReaderProofJson(filename, {
+    const checked = useModule('./reader-proof-read-scope').readReaderProofJson(filename, {
         unsafeMessage: 'Reader 新轮实现恢复的原文件不安全'
     });
     return { bytes: checked.bytes, envelope: checked.value };
 }
 
 function sameRoundIdentityAfterPublicMigration(directory, identity, payload, receipt) {
-    const repair = require('./reader-repair');
-    const revision = require('./reader-recovery-revision');
+    const repair = useModule('./reader-repair');
+    const revision = useModule('./reader-recovery-revision');
     const equal = (a, b) => repair.hashDraft(a) === repair.hashDraft(b);
     const unchangedInput = value => Object.fromEntries(Object.entries(value)
         .filter(([key]) => !revision.ALLOWED_FIELDS.includes(key)));
@@ -364,7 +377,7 @@ function validatePersistedRound(directory, identity, payload) {
         const stat = fs.lstatSync(file);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('Reader 新轮原稿或证明不是安全普通文件');
     }
-    const scopedReader = require('./reader-proof-read-scope');
+    const scopedReader = useModule('./reader-proof-read-scope');
     const receipt = scopedReader.readReaderProofJson(expected, { privateFile: false }).value;
     if (path.resolve(receipt.archivedFile) !== path.resolve(directory, 'explicit-retry-rounds', `${proof.roundId}.original.json`)) throw new Error('Reader 新轮原档路径不合法');
     const originalRecord = scopedReader.readReaderProofJson(receipt.archivedFile, { privateFile: false,
@@ -389,7 +402,7 @@ function validatePersistedRound(directory, identity, payload) {
     if (!['prepared', 'active'].includes(receipt.status)
         || path.resolve(receipt.archivedFile) !== path.resolve(directory, 'explicit-retry-rounds', `${proof.roundId}.original.json`)
         || receipt.grant.roundId !== proof.roundId
-        || (require('./reader-repair').hashDraft(identity) !== receipt.grant.identitySha256
+        || (useModule('./reader-repair').hashDraft(identity) !== receipt.grant.identitySha256
             && !sameRoundIdentityAfterPublicMigration(directory, identity, payload, receipt))
         || hash(fs.readFileSync(receipt.archivedFile)) !== receipt.grant.envelopeSha256
         || !Number.isSafeInteger(receipt.physicalRequests) || receipt.physicalRequests < 0 || receipt.physicalRequests > receipt.grant.maxPhysicalRequests
@@ -408,11 +421,11 @@ function restoreExplicitRoundOriginalDraft(directory, identity, payload, paper) 
     }
 }
 function restoreExplicitRoundOriginalDraftChecked(directory, identity, payload, paper) {
-    const repair = require('./reader-repair');
+    const repair = useModule('./reader-repair');
     if (!payload?.explicitReaderRetryRound || payload.status !== 'failed'
         || payload.draft !== null || !['', '无'].includes(String(payload.rawDraft || '').trim())
         || payload.attempts !== 0 || payload.fullAttempts !== 0
-        || require('../analysis-engine').isSuccessfulAnalysisRecord(paper)) return payload;
+        || useModule('../analysis-engine').isSuccessfulAnalysisRecord(paper)) return payload;
     validatePersistedRound(directory, identity, payload);
     const receiptFile = paths(directory, payload.explicitReaderRetryRound.roundId).receipt;
     const checkedReceipt = readMigrationEnvelope(receiptFile);
@@ -422,7 +435,7 @@ function restoreExplicitRoundOriginalDraftChecked(directory, identity, payload, 
         || !receipt.requests.length || receipt.requests.some(request => request.stage !== 'apiReaderArticle')) return payload;
     const source = readMigrationEnvelope(receipt.archivedFile);
     const original = source.envelope;
-    const allowedFields = require('./reader-recovery-revision').ALLOWED_FIELDS;
+    const allowedFields = useModule('./reader-recovery-revision').ALLOWED_FIELDS;
     const semantic = value => Object.fromEntries(Object.entries(value || {}).filter(([key]) => !allowedFields.includes(key)));
     if (repair.hashDraft(semantic(original.identity)) !== repair.hashDraft(semantic(identity))
         || original.identity.readerRecoveryEpochSha256 !== identity.readerRecoveryEpochSha256
@@ -435,8 +448,8 @@ function restoreExplicitRoundOriginalDraftChecked(directory, identity, payload, 
     // 恢复已有稿件不安装新轮；实际长文输入已在上方逐项核验。
     // 主文中的评分和资源可达状态可以更新，但四份来源、论文锁和原调用账仍须完全一致。
     const owner = assertRoundSource(paper, receipt.grant);
-    require('./fresh-analysis-context').freshReaderAttemptsDirectory(directory);
-    const currentSourceIdentity = require('./fresh-analysis-context').freshAnalysisIdentity(paper.arxivId);
+    useModule('./fresh-analysis-context').freshReaderAttemptsDirectory(directory);
+    const currentSourceIdentity = useModule('./fresh-analysis-context').freshAnalysisIdentity(paper.arxivId);
     if (repair.hashDraft(identity.freshAnalysis) !== repair.hashDraft(currentSourceIdentity)) {
         throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同一轮原稿恢复缺少当前封存来源证明');
     }
@@ -535,7 +548,7 @@ function hasPreparedOrScopedRound(directory, identity) {
     if (grantScope.getStore()) return true;
     const root = path.join(directory, 'explicit-retry-rounds');
     if (!fs.existsSync(root)) return false;
-    const expected = require('./reader-repair').hashDraft(identity);
+    const expected = useModule('./reader-repair').hashDraft(identity);
     try {
         for (const name of fs.readdirSync(root)) {
             if (!/^[a-f0-9-]{36}\.json$/.test(name)) continue;

@@ -1213,3 +1213,34 @@ test('同次父准备读取缓存不缓存整链有效性，新兄弟和无关�
         assert.throws(()=>parentRecovery.assertParent(directory,grant,f.parent,f.identity),SyntaxError);
     });
 });
+
+test('公共诊断迁移在新坏链外回执出现后拒绝，候选与归档写入尚未发生',async t=>{
+    const f=await setupExhaustedParent(t);let next;
+    await f.locked(()=>retry.withExplicitLocalRepairRound(paper,f.childGrant,()=>{
+        next=retry.beginExplicitRound(directory,f.identity,f.parent,paper);
+    }));
+    const original=fs.readFileSync(f.file),target={...f.identity,repairImplementationSha256:'f'.repeat(64)};
+    const targetFile=path.join(directory,repair.hashDraft(target)+'.json');
+    const scope=require('../scripts/lib/reader-proof-read-scope'),check=scope.assertReaderReceiptSnapshots;
+    let reached=false;
+    scope.assertReaderReceiptSnapshots=function(){
+        if(!reached){reached=true;fs.writeFileSync(path.join(directory,'explicit-retry-rounds',crypto.randomUUID()+'.json'),'{new bad record',{mode:0o600});}
+        return check();
+    };
+    try {
+        await assert.rejects(parentRecovery.prepareParentRecoveryCandidate({directory,originalIdentity:f.identity,targetIdentity:target,paper,plan}),/依赖.*发生变化/);
+    }finally{scope.assertReaderReceiptSnapshots=check;}
+    assert.equal(reached,true);assert.deepEqual(fs.readFileSync(f.file),original);assert.equal(fs.existsSync(targetFile),false);
+});
+
+test('公开迁移扫描保留链外JSON null原拒绝语义，迁移前没有写入',async t=>{
+    const f=await setupExhaustedParent(t);
+    await f.locked(()=>retry.withExplicitLocalRepairRound(paper,f.childGrant,()=>retry.beginExplicitRound(directory,f.identity,f.parent,paper)));
+    const original=fs.readFileSync(f.file),target={...f.identity,repairImplementationSha256:'e'.repeat(64)};
+    const targetFile=path.join(directory,repair.hashDraft(target)+'.json');
+    fs.writeFileSync(path.join(directory,'explicit-retry-rounds',crypto.randomUUID()+'.json'),'null',{mode:0o600});
+    await f.locked(()=>daily.withDailyFreshAnalysisContext(plan,()=>{
+        assert.throws(()=>require('../scripts/lib/reader-recovery-revision').loadReaderRecoveryRevision(directory,target),/父轮调用记录或局部修复证明无法核验/);
+    },{refreshReaderDiagnostics:true}));
+    assert.deepEqual(fs.readFileSync(f.file),original);assert.equal(fs.existsSync(targetFile),false);
+});

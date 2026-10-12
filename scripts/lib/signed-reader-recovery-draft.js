@@ -1,5 +1,9 @@
 'use strict';
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const { isDeepStrictEqual } = require('node:util');
 // 此输入只由已核验的 signed Reader seed 提供；不接受来源不明的普通草稿。
 function convert(seed) {
     const { article, plan } = JSON.parse(seed.initialDraft);
@@ -30,4 +34,45 @@ function convert(seed) {
         formulaBindings: (plan.formulaBindings || []).map(binding => ({
             formulaOrdinal: binding.formulaOrdinal, targetKind: binding.targetKind, marker: binding.marker })) };
 }
-module.exports = { convert };
+const DISPLAY_CONTRACT = 'signed-reader-minimal-draft-display-v1';
+function minimalDisplay(seed) {
+    const draft = convert(seed);
+    for (const binding of draft.tableBindings) {
+        binding.sourceQuotes = (binding.sourceQuotes || []).map(value => {
+            if (typeof value === 'string') return value;
+            assert.ok(value && typeof value.quote === 'string', '原来源引文格式无效');
+            assert.equal(crypto.createHash('sha256').update(value.quote).digest('hex'),
+                value.sourceQuoteSha256, '原来源引文摘要不同');
+            return value.quote;
+        });
+    }
+    const text = JSON.stringify(draft);
+    return { text, fields: { signedRevisionDisplayContract: DISPLAY_CONTRACT,
+        signedRevisionDisplaySha256: crypto.createHash('sha256').update(text).digest('hex') } };
+}
+// 不依赖诊断迁移开关；只读核验旧实现的真实候选与已记请求，不迁移或重置任何账。
+function assertNoPaidLegacyDisplayCandidate(directory, identity) {
+    const proofReads = require('./reader-proof-read-scope');
+    return proofReads.withReaderProofReadScope(() => proofReads.withReaderReceiptScan(
+        () => assertNoPaidLegacyDisplayCandidateInternal(directory, identity)));
+}
+function assertNoPaidLegacyDisplayCandidateInternal(directory, identity) {
+    const repair = require('./reader-repair');
+    repair.readFailedCandidateEnvelope(directory, identity);
+    let names;
+    try { names = fs.readdirSync(directory); }
+    catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    for (const name of names.filter(value => /^[a-f0-9]{64}\.json$/.test(value))) {
+        const record = repair.readFailedCandidateEnvelope(directory, null, path.join(directory, name));
+        if (!record) throw new Error('旧修订候选在检查期间消失');
+        const old = record.envelope.identity;
+        if (!['paperId', 'contentMode', 'sourceSha256', 'inputFingerprint', 'freshAnalysis']
+            .every(key => isDeepStrictEqual(old[key], identity[key]))) continue;
+        const payload = record.envelope.payload;
+        if (payload.attempts > 0 || payload.fullAttempts > 0 || payload.transportFailures > 0
+            || payload.explicitReaderRetryRound || payload.draft || payload.rawDraft) {
+            throw new Error('原定向修订已有请求或恢复草稿，必须沿原输入身份续跑，不能更换输入显示来重置请求次数');
+        }
+    }
+}
+module.exports = { convert, minimalDisplay, DISPLAY_CONTRACT, assertNoPaidLegacyDisplayCandidate };

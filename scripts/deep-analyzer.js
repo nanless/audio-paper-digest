@@ -7338,12 +7338,25 @@ function buildApiReaderGenerationStart(paper, options = {}) {
             throw new Error('initialDraft 未通过当前正文、写作计划和来源记录的核验，不能用于定向修订。');
         }
     }
+    if (options.signedRevisionMinimalDisplay === true && (!seed || options.resourceLocalRevision === true)) {
+        throw new Error('精简输入只接受已核验原文章的普通定向修订，不能改变资源局部模式');
+    }
+    if (options.signedRevisionMinimalDisplay === true) {
+        const currentSeed = prepareApiReaderRevisionSeed(paper, options.sourceText, externalReviewFeedback);
+        if (seed.initialDraft !== currentSeed?.initialDraft
+            || stableFingerprint(seed.metadata) !== stableFingerprint(currentSeed?.metadata)) {
+            throw new Error('精简输入必须由当前已核验原文章重新派生，不能传入替换的参考正文');
+        }
+    }
+    const display = options.signedRevisionMinimalDisplay === true
+        ? require('./lib/signed-reader-recovery-draft').minimalDisplay(seed) : null;
     const reviewFeedbackIntro = externalReviewFeedback
         ? '上一轮只读发布审查发现以下事实或图文对应问题，请逐项修正，'
             + `不能只复述问题而不修改内容：${externalReviewFeedback}`
         : '';
     const revisionReferenceGuidance = externalReviewFeedback && seed
-        ? '\n本次基于已核验的读者文章进行定向修订。previousDraft 中的 {article,plan} '
+        ? (display ? '\n本次基于已核验的读者文章进行定向修订。previousDraft 中的标准 version=3 草稿 '
+            : '\n本次基于已核验的读者文章进行定向修订。previousDraft 中的 {article,plan} ')
             + '提供已核验正文的标记视图和写作计划，供修改时参考，不能直接作为本次输出。'
             + '图的看图路径、图像和图注及原始公式由程序按已有来源记录装配，不要在正文中复制这些生成块；'
             + '保留图前导读和图后解释。只修反馈指出的问题及必要连带内容，'
@@ -7361,7 +7374,9 @@ function buildApiReaderGenerationStart(paper, options = {}) {
     return {
         signedRecoveryDraft: options.resourceLocalRevision === true && seed
             ? require('./lib/signed-reader-recovery-draft').convert(seed) : null,
-        previousDraft: seed?.initialDraft || '无',
+        previousDraft: display?.text || seed?.initialDraft || '无',
+        legacyPreviousDraft: display ? seed.initialDraft : null,
+        signedRevisionDisplayFields: display?.fields || {},
         reviewFeedbackPrefix,
         repairReviewFeedbackPrefix,
         isRevision: Boolean(seed),
@@ -7437,9 +7452,11 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         ...apiReaderRequestPolicyFields(),
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
         contentMode,
+        ...start.signedRevisionDisplayFields,
         inputFingerprint: stableFingerprint({
             ...promptRenderingFingerprintFields(paper.title, sourceEvidence, options.reviewFeedback, start.previousDraft),
             contentMode, sourceEvidence,
+            ...start.signedRevisionDisplayFields,
             reviewFeedback: options.reviewFeedback || '', initialDraft: start.previousDraft,
             structuredArtifacts: options.structuredArtifacts?.payloadSha256 || '',
             directSupplementaryEvidence: directSupplementaryPreflightEvidence,
@@ -7499,6 +7516,22 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         ...(directScope?.readerRetryEpoch !== undefined
             ? { historicalDirectRetryEpoch: directScope.readerRetryEpoch } : {})
     };
+    if (start.legacyPreviousDraft) {
+        const legacyIdentity = { ...identity };
+        delete legacyIdentity.signedRevisionDisplayContract;
+        delete legacyIdentity.signedRevisionDisplaySha256;
+        legacyIdentity.inputFingerprint = stableFingerprint({
+            ...promptRenderingFingerprintFields(paper.title, sourceEvidence, options.reviewFeedback, start.legacyPreviousDraft),
+            contentMode, sourceEvidence, reviewFeedback: options.reviewFeedback || '',
+            initialDraft: start.legacyPreviousDraft,
+            structuredArtifacts: options.structuredArtifacts?.payloadSha256 || '',
+            directSupplementaryEvidence: directSupplementaryPreflightEvidence,
+            ...(readerCapabilityPolicy ? { readerCapabilityPolicyContract: readerCapabilityPolicy.contract,
+                readerCapabilityPolicySha256: readerCapabilityPolicy.policySha256 } : {})
+        });
+        require('./lib/signed-reader-recovery-draft').assertNoPaidLegacyDisplayCandidate(
+            candidateDirectory, legacyIdentity);
+    }
     if (options.readerIdentityOnly === true) return { identity };
     let pixelFigureOrdinals = [];
     let recovered = null;
@@ -8324,9 +8357,12 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     const revisionSeed = options.revisionSeed
         || prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback);
     const contentMode = revisionSeed ? READER_SIGNED_REVISION_CONTENT_MODE : READER_SOURCE_CONTENT_MODE;
+    const signedDisplayFields = options.signedRevisionMinimalDisplay === true && revisionSeed
+        ? require('./lib/signed-reader-recovery-draft').minimalDisplay(revisionSeed).fields : {};
     const fingerprint = stableFingerprint({
         configurationFingerprint,
         contentMode,
+        ...signedDisplayFields,
         ...(options.resourceLocalRevision === true ? { resourceLocalRevisionContract: 'signed-reader-resource-local-repair-v1' } : {}),
         analysisSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
         evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
@@ -8338,6 +8374,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         paper, analysis, evidenceContext, {
             reviewFeedback,
             resourceLocalRevision: options.resourceLocalRevision === true,
+            signedRevisionMinimalDisplay: options.signedRevisionMinimalDisplay === true,
             readerResources,
             ...(revisionSeed ? {
                 initialDraft: revisionSeed.initialDraft,
@@ -8354,7 +8391,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         } : {}),
         readerResources,
         execution: {
-            contentMode, fingerprint,
+            contentMode, fingerprint, ...signedDisplayFields,
             ...(options.resourceLocalRevision === true ? { resourceLocalRevisionContract: 'signed-reader-resource-local-repair-v1' } : {}),
             attempts: generated.attempts,
             fullAttempts: generated.fullAttempts, transportFailures: generated.transportFailures,

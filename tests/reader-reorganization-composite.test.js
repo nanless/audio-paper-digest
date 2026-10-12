@@ -55,7 +55,7 @@ test('正常生成的复合失败稿第二次仍为小节补丁，提示不要�
             assert.match(prompt, /reader-section-index-groups-v1/);
             assert.match(prompt, /不要回传body、kind、完整sections或其他根字段/);
             const fallbackDraft = structuredClone(sample.draft);
-            fallbackDraft.sections[0].body2 = '原额外正文';
+            fallbackDraft.sections[0].body3 = '原未知正文';
             const fallback = repair.buildRepairContext(fallbackDraft, [{ message: 'conceptBridges 必须包含 4-10 个术语组合解释' }], sample.sourceDetails.text);
             const fallbackPrompt = repair.buildSectionReorganizationPrompt({ context: fallback });
             assert.match(fallbackPrompt, /不能为满足它们而原样返回超量小节/);

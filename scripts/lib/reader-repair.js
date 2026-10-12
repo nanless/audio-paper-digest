@@ -10,6 +10,7 @@ const { locateReaderDraftTables, TABLE_BINDING_ORDER_ISSUE_CODE, READER_SECTION_
 
 const REPAIR_VERSION = 'reader-node-repair-v1';
 const SECTION_GROUP_PLAN_CONTRACT = 'reader-section-index-groups-v1';
+const SECTION_BODY_GROUP_PLAN_CONTRACT = 'reader-section-body-index-groups-v2';
 const ARRAY_FIELDS = ['sections', 'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings'];
 const ROOT_FIELDS = ['version', 'readerTitle', 'oneSentenceThesis', ...ARRAY_FIELDS];
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -511,7 +512,76 @@ function canUseSectionIndexGroups(draft) {
     return runs <= READER_LIMITS.maximumSections;
 }
 
+function bodyFieldNames(section) {
+    return ['body', ...['body2', 'body_after'].filter(key => own(section, key))];
+}
+function canUseBodyFieldIndexGroups(draft) {
+    if (!sectionReorganizationOperation(draft)) return false;
+    const preview = structuredClone(draft);
+    let extra = false;
+    for (const section of preview.sections) {
+        const fields = bodyFieldNames(section);
+        if (fields.length > 2 || !sectionGroupExactKeys(section, ['kind', 'heading', ...fields])
+            || fields.some(field => typeof section[field] !== 'string')) return false;
+        if (fields.length === 2) {
+            extra = true;
+            if (Object.keys(section).indexOf('body') > Object.keys(section).indexOf(fields[1])) return false;
+            delete section[fields[1]];
+        }
+    }
+    return extra && canUseSectionIndexGroups(preview);
+}
 function compileSectionIndexGroupPlan(draft, plan, context) {
+    if (context?.sectionGroupPlanContract !== SECTION_BODY_GROUP_PLAN_CONTRACT) {
+        return compileStrictSectionIndexGroupPlan(draft, plan, context);
+    }
+    if (!canUseBodyFieldIndexGroups(draft)
+        || !sectionGroupExactKeys(plan, ['contract', 'version', 'draftSha256', 'sectionsSha256', 'groups'])
+        || plan.contract !== SECTION_BODY_GROUP_PLAN_CONTRACT || plan.version !== 2
+        || plan.draftSha256 !== hashDraft(draft) || context.draftSha256 !== hashDraft(draft)
+        || plan.sectionsSha256 !== hashDraft(draft.sections)
+        || context.targets?.length !== 1 || context.targets[0].path !== '/sections'
+        || context.targets[0].oldSha256 !== hashDraft(draft.sections)
+        || !Array.isArray(plan.groups)) throw new Error('原小节字段分组协议或当前SHA不合法');
+    const preview = structuredClone(draft);
+    const seen = new Set();
+    const groups = plan.groups.map(group => {
+        if (!sectionGroupExactKeys(group, ['sectionIndexes', 'heading', 'fieldOrders'])
+            || !Array.isArray(group.sectionIndexes) || !Array.isArray(group.fieldOrders)
+            || group.fieldOrders.length !== group.sectionIndexes.length) {
+            throw new Error('字段分组必须声明本组每个原小节的字段引用');
+        }
+        group.fieldOrders.forEach((order, position) => {
+            const index = group.sectionIndexes[position];
+            const original = draft.sections[index];
+            if (!Number.isInteger(index) || !original || seen.has(index)
+                || !sectionGroupExactKeys(order, ['sectionIndex', 'fields']) || order.sectionIndex !== index
+                || !Array.isArray(order.fields)) throw new Error('字段引用不能跨小节、重复或越界');
+            const fields = bodyFieldNames(original);
+            if (order.fields.length !== fields.length || new Set(order.fields).size !== fields.length
+                || order.fields.some(field => !fields.includes(field))) {
+                throw new Error('每个原body及续文字段必须恰好引用一次，包括空字符串，不得提交新内容');
+            }
+            seen.add(index);
+            preview.sections[index].body = order.fields.map(field => original[field]).join('\n\n');
+            fields.filter(field => field !== 'body').forEach(field => delete preview.sections[index][field]);
+        });
+        return { sectionIndexes: group.sectionIndexes, heading: group.heading };
+    });
+    if (seen.size !== draft.sections.length) throw new Error('字段分组遗漏原小节');
+    const strictContext = { ...context, sectionGroupPlanContract: SECTION_GROUP_PLAN_CONTRACT,
+        draftSha256: hashDraft(preview), targets: [{ ...context.targets[0], oldSha256: hashDraft(preview.sections) }] };
+    const strictPlan = { contract: SECTION_GROUP_PLAN_CONTRACT, version: 1,
+        draftSha256: strictContext.draftSha256, sectionsSha256: strictContext.targets[0].oldSha256, groups };
+    const compiled = compileStrictSectionIndexGroupPlan(preview, strictPlan, strictContext);
+    compiled.patch.draftSha256 = hashDraft(draft);
+    compiled.patch.replacements[0].oldSha256 = hashDraft(draft.sections);
+    compiled.proof = { ...compiled.proof, contract: SECTION_BODY_GROUP_PLAN_CONTRACT,
+        inputDraftSha256: hashDraft(draft), inputSectionsSha256: hashDraft(draft.sections), planSha256: hashDraft(plan) };
+    return compiled;
+}
+
+function compileStrictSectionIndexGroupPlan(draft, plan, context) {
     if (context?.sectionGroupPlanContract !== SECTION_GROUP_PLAN_CONTRACT
         || !canUseSectionIndexGroups(draft)
         || context.atomicOperation?.kind !== 'reorganize_existing_sections_v1'
@@ -566,6 +636,19 @@ function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', m
     const readonlyDiagnostics = (context.issues || []).map(issue => ({
         path: issue.path || null, code: issue.code || null
     }));
+    if (context.sectionGroupPlanContract === SECTION_BODY_GROUP_PLAN_CONTRACT) {
+        return [
+            '本轮只返回原小节索引和原字段引用的分组计划，不重写正文或来源。',
+            `论文：${title} arXiv：${arxivId}，当前${count}节，必须合组为12–18节。`,
+            '每组只能含sectionIndexes、heading、fieldOrders。sectionIndexes从0起连续完整覆盖全部原小节，不遗漏、不重复、不重排，只能合并同kind相邻小节；kind从原小节派生。',
+            'fieldOrders按本组sectionIndexes顺序，逐小节声明sectionIndex与fields。fields指定该原小节body与唯一body2/body_after字符串的拼接次序；原字段每项恰好一次，包括空串。不能跨小节搬段，不能提交新字段/正文/值，不能省略任何图表公式标记。',
+            '程序按所选顺序保留全部原字符串字节、原标题与kind，以及全部root来源绑定。请选择符合原段导读、原图标记和图后解释关系的布局；本次真实图片和最终全部来源、数字、单位、质量校验仍必须通过。其他问题只供下一轮，不能为它们重吐超量小节。',
+            `只输出JSON：{"contract":"${SECTION_BODY_GROUP_PLAN_CONTRACT}","version":2,"draftSha256":"${context.draftSha256}","sectionsSha256":"${context.targets[0].oldSha256}","groups":[{"sectionIndexes":[0],"heading":"本组标题","fieldOrders":[{"sectionIndex":0,"fields":["body"]}]}]}。示例仅示格式，实际输出全部12–18组；有body2的小节fields须包含body2。`,
+            '唯一授权原小节及SHA：'+JSON.stringify({targets:context.targets,atomicOperation:operation}),
+            '其他只读反馈：'+reviewFeedback,mechanicalContract,numericSpellingGuidance,
+            '封存证据：'+context.evidence,indexExamples
+        ].filter(Boolean).join('\n\n');
+    }
     if (context.sectionGroupPlanContract === SECTION_GROUP_PLAN_CONTRACT) {
         return [
             '本轮只重组小节，输出局部补丁 JSON 的索引分组计划，不重写正文或来源记录。',
@@ -2480,7 +2563,9 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
         + '下面的诊断可能列出其他已发现问题，列出问题不代表授权修改。只提交本轮允许目标，逐项使用请求给出的真实 oldSha256；其余问题留待下一轮重新核验并授权，不要为未授权目标编造 SHA。' + formulaAppendGuidance + markerGuidance + noDomTableGuidance.join('\n');
     return { draftSha256: hashDraft(draft), targets, issues, evidence, atomicOperation, targetGuidance,
         ...(atomicOperation?.kind === 'reorganize_existing_sections_v1' && canUseSectionIndexGroups(draft)
-            ? { sectionGroupPlanContract: SECTION_GROUP_PLAN_CONTRACT } : {}),
+            ? { sectionGroupPlanContract: SECTION_GROUP_PLAN_CONTRACT }
+            : atomicOperation?.kind === 'reorganize_existing_sections_v1' && canUseBodyFieldIndexGroups(draft)
+                ? { sectionGroupPlanContract: SECTION_BODY_GROUP_PLAN_CONTRACT } : {}),
         exactQuotes, figureOrdinals: [...figureOrdinals], evidenceMode: 'full-evidence-local-output' };
 }
 
@@ -2773,7 +2858,7 @@ function applyTopLevelMetadataRepair(raw, patch, context) {
 }
 
 
-module.exports = { REPAIR_VERSION, SECTION_GROUP_PLAN_CONTRACT, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+module.exports = { REPAIR_VERSION, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,
