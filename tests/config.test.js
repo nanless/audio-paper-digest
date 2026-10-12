@@ -86,7 +86,6 @@ describe('config', () => {
         assert.strictEqual(Config.ARXIV_CONFIG.fetchTimeoutMs, 60000);
         assert.strictEqual(Config.ARXIV_CONFIG.fetchMaxResponseBytes, 8 * 1024 * 1024);
         assert.ok(Config.ARXIV_CONFIG.userAgents.includes(Config.ARXIV_CONFIG.userAgent));
-        assert.strictEqual(Config.ARXIV_CONFIG.categoryDelayMs, 60000);
         assert.strictEqual(Config.ARXIV_CONFIG.hostHealthyCooldownMs, 1000);
         assert.strictEqual(Config.ARXIV_CONFIG.hostTransientCooldownMs, 5000);
         assert.strictEqual(Config.ARXIV_CONFIG.hostRateLimitedCooldownMs, 60000);

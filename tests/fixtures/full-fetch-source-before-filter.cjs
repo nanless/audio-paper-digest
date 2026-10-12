@@ -15,7 +15,17 @@ for (const key of ['rawCandidates', 'filteredPapers', 'filterDecisions', 'fetchC
     config.FILES[key] = path.join(config.CURRENT_DIR, `${key}.json`);
 }
 config.ARXIV_CATEGORIES = [{ id: 'cs.SD', name: '声音', priority: 'core' }];
-config.ARXIV_CONFIG.firstRequestDelayMs = 0;
+const sharedPacing = scenario === 'shared-pacing';
+let fakeNow = Date.now(), extraWaitMs = 0;
+if (sharedPacing) {
+    config.ARXIV_CATEGORIES = ['eess.AS', 'cs.SD', 'eess.SP', 'cs.CL', 'cs.LG', 'cs.AI', 'cs.MM']
+        .map(id => ({ id, name: id, priority: 'core' }));
+    Date.now = () => fakeNow;
+    global.setTimeout = (callback, ms, ...args) => {
+        extraWaitMs += ms; fakeNow += ms;
+        queueMicrotask(() => callback(...args)); return 0;
+    };
+}
 config.FILTER_CONFIG.keywordPrefilterEnabled = false;
 Math.random = () => 0;
 let modelCalls = 0;
@@ -35,9 +45,10 @@ function health(boundary, hf) {
             window: { since: boundary.since, until: boundary.until, covered: true },
             ...(hf ? { cutoffDate: boundary.lastDigestDate, dailyCovered: true, dailySelectedAtField: 'paper.submittedOnDailyAt' } : {}) } };
 }
-fetchApi.fetchCategoryPapersSince = async (category, boundary) => {
+fetchApi.fetchCategoryPapersSince = async (category, boundary, ids, options) => {
     if (scenario === 'arxiv-failed') throw new Error('本地模拟 arXiv 后页失败');
-    const papers = [sourcePaper('arxiv', '2610.09998')];
+    if (sharedPacing) await options.requestScheduler.run('export.arxiv.org', async () => ({ status: 200 }), { minimumCooldownMs: 3000 });
+    const papers = [sourcePaper('arxiv', sharedPacing ? `2610.${99000 + config.ARXIV_CATEGORIES.findIndex(item => item.id === category)}` : '2610.09998')];
     papers._sourceHealth = health(boundary, false); return papers;
 };
 require('../../scripts/fetch-huggingface-papers').fetchHuggingFacePapers = async (ids, options) => {
@@ -97,10 +108,14 @@ async function main() {
         assert.equal(raw.fetchSourcesSha256, pipeline.getFetchSourcesSha256(checkpoint));
         assert.equal(raw.rawPapersSha256, pipeline.stableContentSha256(raw.papers));
         assert.equal(analysisCalls, 0);
-        if (scenario === 'complete') {
+        if (scenario === 'complete' || sharedPacing) {
             assert.equal(pipeline.hasCompleteSourceHealth(raw.sourceHealth), true);
             assert.ok(modelCalls > 0);
-            assert.equal(raw.papers.length, 2);
+            assert.equal(raw.papers.length, sharedPacing ? 8 : 2);
+            if (sharedPacing) {
+                assert.equal(extraWaitMs, 18000, '七类仅由公共调度器保留六次3秒间隔，不能重复等待');
+                assert.equal(Object.keys(checkpoint.arxiv).length, 7);
+            }
             assert.match(error.message, /本地筛选请求已到达/);
         } else {
             assert.equal(modelCalls, 0, '来源未完整时，不得发起筛选模型请求');

@@ -36,7 +36,6 @@ for (const key of ['rawCandidates', 'filteredPapers', 'filterDecisions', 'fetchC
     config.FILES[key] = path.join(config.CURRENT_DIR, `${key}.json`);
 }
 config.ARXIV_CATEGORIES = [{ id: 'cs.SD', name: '声音', priority: 'core' }];
-config.ARXIV_CONFIG.firstRequestDelayMs = 0;
 config.FILTER_CONFIG.keywordPrefilterEnabled = false;
 config.FILTER_CONFIG.batchSize = 1;
 config.FILTER_CONFIG.delayBetweenBatchesMs = 0;

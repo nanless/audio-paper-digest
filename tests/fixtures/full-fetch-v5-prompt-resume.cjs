@@ -39,7 +39,6 @@ for (const key of ['rawCandidates', 'filteredPapers', 'filterDecisions', 'fetchC
 }
 config.FILES.dailyFreshSourceRunsDir = path.join(folder, 'runtime/daily-fresh-source-runs');
 config.FILES.freshArxivFetchedSourcesDir = path.join(folder, 'runtime/fresh-arxiv-fetched-sources');
-config.ARXIV_CONFIG.firstRequestDelayMs = 0;
 config.FILTER_CONFIG.keywordPrefilterEnabled = true;
 config.FILTER_CONFIG.batchSize = 5;
 config.FILTER_CONFIG.delayBetweenBatchesMs = 0;

@@ -50,19 +50,6 @@ describe('full-fetch 辅助函数', () => {
         ), 3);
     });
 
-    it('仅在尚有下一个 arXiv 类别时计算类别间延迟', () => {
-        const { getArxivInterCategoryDelayMs } = require('../scripts/full-fetch.js');
-        assert.strictEqual(getArxivInterCategoryDelayMs(6, 7, 0, () => 0), 0);
-        assert.strictEqual(
-            getArxivInterCategoryDelayMs(5, 7, 0, () => 0),
-            Config.ARXIV_CONFIG.categoryDelayMs + 10000
-        );
-        assert.strictEqual(
-            getArxivInterCategoryDelayMs(5, 7, 300001, () => 0),
-            Config.ARXIV_CONFIG.categoryDelayMs + 10000 + 120000
-        );
-    });
-
     it('来源配置生成 16 位十六进制指纹', () => {
         const { getSourceConfigFingerprint } = require('../scripts/full-fetch.js');
         const fingerprint = getSourceConfigFingerprint();

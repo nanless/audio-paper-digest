@@ -59,10 +59,6 @@ const ARXIV_CONFIG = {
     hostTransientCooldownMs: 5000,
     hostRateLimitedCooldownMs: 60000,
     hostCooldownJitterMs: 1000,
-    // 保留旧抓取流程使用的类别间等待参数；Manual 原始抓取流程
-    // 不用它在正常完成的类别之间固定等待。
-    categoryDelayMs: 60000,
-    firstRequestDelayMs: 30000,
     consecutiveExistingThreshold: 20,
     userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
     userAgents: [

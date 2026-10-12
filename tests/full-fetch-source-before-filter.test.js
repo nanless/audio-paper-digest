@@ -7,6 +7,7 @@ for (const [scenario, description] of Object.entries({
     'arxiv-failed': 'arXiv 后页失败而其他来源有候选时，保留恢复依据并停止筛选请求',
     'hf-failed': 'HuggingFace 后页失败而其他来源有候选时，保留恢复依据并停止筛选请求',
     complete: '完整来源仍进入真实筛选请求封装',
+    'shared-pacing': '七类公共请求保留必要间隔，不重复等待整分钟',
     'resume-failed': '续筛选来源缺失时保留原记录且不请求模型',
     'resume-complete': '完整来源续筛选仍进入真实请求封装'
 })) {

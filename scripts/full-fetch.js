@@ -77,7 +77,6 @@ const ANALYSIS_CONCURRENCY = getEffectiveAnalysisConcurrency(
 );
 const ANALYSIS_RETRY_MAX = Config.ANALYSIS_CONFIG.maxRetries;
 const ANALYSIS_RETRY_DELAY_MS = Config.ANALYSIS_CONFIG.retryDelayMs;
-const FETCH_DELAY_MS = Config.ARXIV_CONFIG.categoryDelayMs;
 
 const ARCHIVE_DIR = Config.ARCHIVE_DIR;
 const RESULT_FILE = Config.FILES.deepAnalysisResult;
@@ -88,15 +87,6 @@ const RAW_CANDIDATES_FILE = Config.FILES.rawCandidates;
 const FILTER_DECISIONS_FILE = Config.FILES.filterDecisions;
 const FETCH_CHECKPOINT_FILE = Config.FILES.fetchCheckpoint;
 const FULL_FETCH_RUN_LOCK = path.join(Config.CURRENT_DIR, '.full-fetch-run');
-
-function getArxivInterCategoryDelayMs(categoryIndex, categoryCount, fetchDurationMs, randomFn = Math.random) {
-    if (categoryIndex >= categoryCount - 1) return 0;
-    const baseJitter = Math.floor(randomFn() * 20000) + 10000;
-    const rateLimitPenalty = fetchDurationMs > 300000
-        ? 120000
-        : (fetchDurationMs > 120000 ? 60000 : (fetchDurationMs > 60000 ? 30000 : 0));
-    return FETCH_DELAY_MS + baseJitter + rateLimitPenalty;
-}
 
 function shouldUsePaperForFetchDedup(paper) {
     const status = paper?.digestStatus?.status;
@@ -1661,7 +1651,6 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         // 全部分类共用主机调度器。分页与重试遵守至少三秒间隔及限流等待，
         // 摘要读取官方 Atom 返回内容，同批跨分类论文在本层合并。
         const arxivRequestScheduler = createProductionArxivRequestScheduler();
-        let fetchAttemptIndex = 0;
         for (let i = 0; i < shuffledCategories.length; i++) {
             const category = shuffledCategories[i];
             const cachedCategory = fetchCheckpoint.arxiv[category.id];
@@ -1681,15 +1670,6 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
                 }
                 continue;
             }
-            // 首次请求前加随机延迟
-            if (fetchAttemptIndex === 0) {
-                const baseDelay = Config.ARXIV_CONFIG.firstRequestDelayMs;
-                const jitter = Math.floor(Math.random() * 10000);
-                const firstDelay = baseDelay + jitter;
-                console.log(`  首次请求前等待 ${(firstDelay/1000).toFixed(1)} 秒...`);
-                await new Promise(resolve => setTimeout(resolve, firstDelay));
-            }
-            fetchAttemptIndex++;
             console.log(`  [${i+1}/${shuffledCategories.length}] 抓取 ${category.name} (${category.id})...`);
             const fetchStartTime = Date.now();
             let papers = [];
@@ -1762,21 +1742,9 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
                 console.log(`   继续运行，尝试其他来源...`);
             }
 
-            // 类别间延迟：基础延迟 + 随机抖动 + 限流检测补偿。
-            // 最后一个 arXiv 类别后已无“下一类别”，应立即进入 HuggingFace 抓取。
-            const totalDelay = getArxivInterCategoryDelayMs(
-                i,
-                shuffledCategories.length,
-                fetchDuration
-            );
-            if (totalDelay > 0) {
-                const rateLimitPenalty = fetchDuration > 300000 ? 120000 : (fetchDuration > 120000 ? 60000 : (fetchDuration > 60000 ? 30000 : 0));
-                if (rateLimitPenalty > 0) {
-                    console.log(`    检测到可能的限流，额外等待 ${(rateLimitPenalty/1000).toFixed(0)} 秒...`);
-                }
-                console.log(`    等待 ${(totalDelay/1000).toFixed(0)} 秒后继续下一类别...`);
-                await new Promise(resolve => setTimeout(resolve, totalDelay));
-            }
+            // 同一调度器跨分类保留下一次可请求时间；分页和失败重试已执行间隔与退避。
+            // 抓取用时长也可能只是补抓页数多，不能据此再追加“疑似限流”等待。
+
         }
 
         console.log(`\narxiv 抓取完成: ${arxivPapers.length} 篇`);
@@ -2286,7 +2254,6 @@ module.exports = {
     runFullFetch,
     getEffectiveAnalysisConcurrency,
     createProductionArxivRequestScheduler,
-    getArxivInterCategoryDelayMs,
     autoArchiveCurrentData,
     inferLegacyAnalysisArrayBatchDate,
     migrateLegacyAnalysisResultToCurrent,
