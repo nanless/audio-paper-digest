@@ -1102,6 +1102,28 @@ function findMissingComparisonUnits(text) {
                 .replace(/\bK\s*=\s*\d+(?![\d.])/gu,
                     match => ' '.repeat(match.length));
         }
+        // 明确的整数深度区间是设置条件；选择主配置只能沿用同句唯一的区间终点。
+        // 不处理负数、小数或无区间依据的配置数字，也不屏蔽旁边真正的指标结果。
+        const depthRanges = [...comparisonText.matchAll(
+            /深度\s*从\s*([1-9]\d*)(?![\d.])\s*(?:加到|增加到|增至|提高到|到|至)\s*([1-9]\d*)(?![\d.])/gu
+        )];
+        const depthEndpoints = new Set(depthRanges.map(range => range[2]));
+        const selectedDepths = [...comparisonText.matchAll(
+            /(?:选择|选用|选)\s*([^，,。；;]{1,20}?)\s*(?:为|作为)\s*主配置/gu
+        )];
+        const matchingDepthSelection = selectedDepths.length === 0
+            || depthEndpoints.size === 1 && selectedDepths.every(selection =>
+                selection[1].trim() === [...depthEndpoints][0]);
+        if (matchingDepthSelection) for (const range of depthRanges) {
+            comparisonText = comparisonText.replace(range[0], ' '.repeat(range[0].length));
+        }
+        if (matchingDepthSelection && depthEndpoints.size === 1) {
+            const endpoint = [...depthEndpoints][0];
+            comparisonText = comparisonText.replace(
+                new RegExp(`(?:选择|选用|选)\\s*${endpoint}(?![\\d.])\\s*(?:为|作为)\\s*主配置`, 'gu'),
+                match => ' '.repeat(match.length)
+            );
+        }
         for (const range of parameterRanges) {
             comparisonText = comparisonText.replace(range[0], ' '.repeat(range[0].length));
             comparisonText = comparisonText.replace(
