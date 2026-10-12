@@ -7711,7 +7711,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const implementationMigrationNeedsFullRegeneration = Boolean(
         candidate && implementationRepairAllowanceProof
         && ((Array.isArray(candidate.conceptBridges)
-            && candidate.conceptBridges.length < readerRules.minimumConceptBridges)
+            && candidate.conceptBridges.length < readerRules.minimumConceptBridges
+            && !repair.buildMissingConceptBridgesOperation(candidate, currentIssues))
             || (Array.isArray(candidate.sections)
                 && candidate.sections.length < readerRules.minimumSections))
     );

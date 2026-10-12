@@ -447,7 +447,8 @@ function parseRepairableDraft(raw) {
     const value = parseRecoveryDraft(raw);
     if (!value
         || value.sections.length < READER_LIMITS.minimumSections
-        || value.conceptBridges.length < READER_LIMITS.minimumConceptBridges) return null;
+        || (value.conceptBridges.length < READER_LIMITS.minimumConceptBridges
+            && !buildMissingConceptBridgesOperation(value, [{ message: 'conceptBridges 必须包含 4-10 个术语组合解释' }]))) return null;
     return value;
 }
 
@@ -563,6 +564,7 @@ function nodeAt(draft, pointer) {
     if (['/readerTitle', '/oneSentenceThesis'].includes(pointer)) {
         return draft[pointer.slice(1)];
     }
+    if (pointer === '/conceptBridges') return draft.conceptBridges;
     if (pointer === '/sections') return draft.sections;
     if (pointer === '/tableBindings') return draft.tableBindings;
     if (pointer === '/formulaBindings') return draft.formulaBindings;
@@ -599,6 +601,9 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         }
         if (seen.some(pointer => pointer === item.path || pointer.startsWith(`${item.path}/`)
             || item.path.startsWith(`${pointer}/`))) throw new Error('Reader patch has duplicate or overlapping targets');
+        if (item.path === '/conceptBridges' && options.atomicOperation?.kind !== 'complete_existing_concept_bridges_v1') {
+            throw new Error('整组术语组合解释缺少本轮明确补齐授权');
+        }
         if (item.path === '/formulaBindings' && options.atomicOperation?.kind !== 'complete_existing_formula_bindings_v1') {
             throw new Error('整组公式来源记录缺少本轮明确补齐授权');
         }
@@ -620,7 +625,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         }
         if ((item.path.endsWith('/body') || ['/readerTitle', '/oneSentenceThesis'].includes(item.path))
             && typeof item.value !== 'string') throw new Error('Reader patch text replacement must be a string');
-        if (['/sections', '/tableBindings', '/formulaBindings'].includes(item.path) && !Array.isArray(item.value)) {
+        if (['/sections', '/tableBindings', '/formulaBindings', '/conceptBridges'].includes(item.path) && !Array.isArray(item.value)) {
             throw new Error('Reader patch tableBindings replacement must be an array');
         }
         if (item.path === '/figurePlacements' && options.atomicOperation?.kind !== 'select_observed_figures_v1'
@@ -629,7 +634,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             || item.value.length !== 0)) {
             throw new Error('无图清除只允许在本次没有可用像素时清空图绑定');
         }
-        if (item.path !== '/sections' && item.path !== '/tableBindings' && item.path !== '/formulaBindings' && item.path !== '/figurePlacements' && !item.path.endsWith('/body')
+        if (item.path !== '/conceptBridges' && item.path !== '/sections' && item.path !== '/tableBindings' && item.path !== '/formulaBindings' && item.path !== '/figurePlacements' && !item.path.endsWith('/body')
             && !['/readerTitle', '/oneSentenceThesis'].includes(item.path)
             && (!item.value || typeof item.value !== 'object' || Array.isArray(item.value))) {
             throw new Error('Reader patch node replacement must be an object');
@@ -664,6 +669,33 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         }
     }
     const operation = options.atomicOperation;
+    if (operation?.kind === 'complete_existing_concept_bridges_v1') {
+        const expected = buildMissingConceptBridgesOperation(draft, [{ message: 'conceptBridges 必须包含 4-10 个术语组合解释' }]);
+        if (!expected || hashDraft(expected) !== hashDraft(operation)
+            || seen.length !== expected.requiredReplacementPaths.length
+            || expected.requiredReplacementPaths.some(pointer => !seen.includes(pointer))) {
+            throw new Error('补术语组合解释只允许本轮明确授权的整组记录与正文');
+        }
+        const bridges = patch.replacements.find(item => item.path === '/conceptBridges').value;
+        if (bridges.length !== 4 || draft.conceptBridges.some((bridge, index) => hashDraft(bridge) !== hashDraft(bridges[index]))) {
+            throw new Error('补术语组合解释必须保留原记录前缀，仅补齐到4组');
+        }
+        for (const [offset, bridge] of bridges.slice(draft.conceptBridges.length).entries()) {
+            if (!bridge || Object.keys(bridge).sort().join(',') !== 'explanation,marker,sectionKind,terms'
+                || bridge.marker !== expected.missingMarkers[offset] || bridge.sectionKind !== expected.sectionKind
+                || !Array.isArray(bridge.terms) || bridge.terms.length !== 2
+                || bridge.terms.some(term => typeof term !== 'string' || term.trim().length < 2 || term.length > 48)
+                || typeof bridge.explanation !== 'string' || bridge.explanation.length < 45 || bridge.explanation.length > 320
+                || bridge.terms.some(term => !bridge.explanation.includes(term))) {
+                throw new Error('新增术语组合解释的字段、术语、长度或标记不合法');
+            }
+        }
+        const expectedBody = draft.sections[expected.sectionIndex].body
+            + (expected.reuseExistingMarkers ? '' : '\n\n' + expected.missingMarkers.join('\n\n'));
+        if (patch.replacements.find(item => item.path === `/sections/${expected.sectionIndex}/body`).value !== expectedBody) {
+            throw new Error('补术语组合解释不得改原正文，只可追加本轮新标记');
+        }
+    }
     if (operation?.kind === 'select_observed_figures_v1') {
         const expected = observedFigureSelectionOperation(draft, options);
         const kept = patch.replacements.find(item => item.path === '/figurePlacements')?.value;
@@ -1543,6 +1575,59 @@ function removeUnavailableFigureProse(body) {
     return String(body).replace(/^[ \t]*\[\[FIGURE_\d+\]\][ \t]*(?:\r?\n|$)/gm, '');
 }
 
+function buildMissingConceptBridgesOperation(draft, issues) {
+    if (!issues.some(issue => issue?.diagnosticOnly !== true
+        && /conceptBridges 必须包含 4-10 个术语组合解释/.test(String(issue?.message || '')))) return null;
+    const bridges = draft.conceptBridges;
+    if (!Array.isArray(bridges) || bridges.length < 1 || bridges.length >= 4
+        || !Array.isArray(draft.sections) || draft.sections.length < 12 || draft.sections.length > 18
+        || draft.sections.some(section => !section || typeof section !== 'object' || Array.isArray(section)
+            || ['kind', 'heading', 'body'].some(field => typeof section[field] !== 'string' || !section[field].trim()))) return null;
+    for (const [index, bridge] of bridges.entries()) {
+        if (!bridge || Object.keys(bridge).sort().join(',') !== 'explanation,marker,sectionKind,terms'
+            || bridge.marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`
+            || !READER_SECTION_KINDS.includes(bridge.sectionKind)
+            || !Array.isArray(bridge.terms) || bridge.terms.length !== 2
+            || bridge.terms.some(term => typeof term !== 'string' || term.length < 2 || term.length > 48)
+            || typeof bridge.explanation !== 'string' || bridge.explanation.length < 45 || bridge.explanation.length > 320) return null;
+        const locations = draft.sections.filter(section => String(section.body || '').includes(bridge.marker));
+        if (locations.length !== 1 || locations[0].kind !== bridge.sectionKind
+            || String(locations[0].body).split(bridge.marker).length !== 2
+            || !String(locations[0].body).split(/\n\s*\n/).some(block => block.trim() === bridge.marker)) return null;
+    }
+    let sectionIndex = draft.sections.findIndex(section =>
+        ['method_overview', 'component', 'training'].includes(section.kind)
+        && Object.keys(section).sort().join(',') === 'body,heading,kind'
+        && typeof section.body === 'string' && section.body.trim()
+        // 不在代码、引用或 HTML 未知边界追加；保守选择普通正文小节。
+        && !/```|~~~|<|^[ \t]*(?:>| {4}|\t)|\[\[FIGURE_\d+\]\]/m.test(section.body));
+    if (sectionIndex < 0) return null;
+    const missingMarkers = Array.from({ length: 4 - bridges.length }, (_, index) =>
+        `[[CONCEPT_BRIDGE_${bridges.length + index + 1}]]`);
+    const existingLocations = draft.sections.flatMap((section, index) =>
+        missingMarkers.some(marker => String(section.body).includes(marker)) ? [index] : []);
+    const reuseExistingMarkers = existingLocations.length > 0;
+    if (reuseExistingMarkers) {
+        if (existingLocations.length !== 1) return null;
+        sectionIndex = existingLocations[0];
+        const section = draft.sections[sectionIndex];
+        if (!READER_SECTION_KINDS.includes(section.kind)
+            || Object.keys(section).sort().join(',') !== 'body,heading,kind'
+            || /```|~~~|<|^[ \t]*(?:>| {4}|\t)|\[\[FIGURE_\d+\]\]/m.test(section.body)
+            || missingMarkers.some(marker => String(section.body).split(marker).length !== 2
+                || !String(section.body).split(/\n\s*\n/).some(block => block.trim() === marker))) return null;
+    }
+    return { kind: 'complete_existing_concept_bridges_v1', existingBridgeCount: bridges.length,
+        expectedBridgeCount: 4, reuseExistingMarkers, sectionIndex, sectionKind: draft.sections[sectionIndex].kind, missingMarkers,
+        requiredReplacementPaths: ['/conceptBridges', `/sections/${sectionIndex}/body`],
+        requiredPostconditions: [
+            '本轮明确允许 conceptBridges 仅在末尾补齐到4组；旧记录内容和顺序逐字保留，不改其他数组',
+            `新解释只依据封存原文，使用两个术语和45–320字解释，sectionKind必须为${draft.sections[sectionIndex].kind}，marker依次为${missingMarkers.join('、')}`,
+            reuseExistingMarkers ? '正文已有缺记录的唯一独占标记，正文必须逐字不变；新解释只绑定这些标记，不重复追加'
+                : '授权正文只可原文逐字保留后按顺序追加新标记，每个标记独占一段；不得删改原事实、标题或旧标记；最终仍检查全部正文与来源'
+        ] };
+}
+
 function buildMissingFormulaBindingsOperation(draft, issues) {
     if (!issues.some(issue => issue?.diagnosticOnly !== true
         && /formulaBindings 未覆盖正文公式占位符/.test(String(issue?.message || '')))) return null;
@@ -1650,6 +1735,11 @@ function buildRepairTargets(draft, issues, options = {}) {
     if (reindexedOperation) return reindexedOperation.requiredReplacementPaths.map(pointer => ({
         path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
         repairInstruction: reindexedOperation.requiredPostconditions.join('；')
+    }));
+    const conceptOperation = buildMissingConceptBridgesOperation(draft, issues);
+    if (conceptOperation) return conceptOperation.requiredReplacementPaths.map(pointer => ({
+        path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
+        repairInstruction: conceptOperation.requiredPostconditions.join('；')
     }));
     const formulaOperation = buildMissingFormulaBindingsOperation(draft, issues);
     if (formulaOperation) return [{ path: '/formulaBindings', oldSha256: hashDraft(draft.formulaBindings),
@@ -2102,6 +2192,7 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
         || unavailableFigureCleanupOperation(draft, options)
         || sectionReorganizationOperation(draft)
         || buildReindexedTableBindingsOperation(draft, issues)
+        || buildMissingConceptBridgesOperation(draft, issues)
         || buildMissingFormulaBindingsOperation(draft, issues)
         || buildMissingTableBindingsOperation(draft, issues)
         || buildMissingTailQuoteTableOperation(draft, issues)
@@ -2172,7 +2263,9 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
                 + '保留表前问题、表后解释、正确事实和数字单位，仍由完整解析器检查每格来源。');
         }
     }
-    const targetGuidance = (atomicOperation?.kind === 'add_existing_tail_quote_table_v1'
+    const conceptGuidance = atomicOperation?.kind === 'complete_existing_concept_bridges_v1'
+        ? atomicOperation.requiredPostconditions.join('；') : '';
+    const targetGuidance = conceptGuidance + (atomicOperation?.kind === 'add_existing_tail_quote_table_v1'
         ? atomicOperation.requiredPostconditions.join('；') + '。' : '')
         + (atomicOperation?.kind === 'select_observed_figures_v1'
         ? '本轮特别允许figurePlacements缩为1–4条本次已见像素的原声明，其余数组数量不变。必须同步按来源改写全部授权小节，保留必要事实及表格公式术语标记；不得机械删图丢弃解释。' : '')
@@ -2465,6 +2558,6 @@ module.exports = { REPAIR_VERSION, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     validationFailureHasNoProgress, readerAttemptLimit,
     validateImplementationAllowance,
     buildTopLevelMetadataRepairContext, applyTopLevelMetadataRepair,
-    parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
+    buildMissingConceptBridgesOperation, parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
     buildSectionReorganizationPrompt, buildRepairTargets, applyReaderPatch, normalizeUnavailableReaderFigures, buildRepairContext, loadFailedCandidate, saveFailedCandidate,
     retireFailedCandidate, hasUnusedImplementationAllowance };
