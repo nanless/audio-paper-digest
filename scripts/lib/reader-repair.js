@@ -726,7 +726,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             || !hasStableExistingTableMarkers(draft, tables, oldBindings)
             || bindings.length !== tables.length
             || bindings.some((binding, index) => binding?.tableIndex !== index + 1)
-            || oldBindings.some((binding, index) => (binding.selection || !mutable.has(index))
+            || oldBindings.some((binding, index) => (binding.selection || binding.completeTable || !mutable.has(index))
                 && hashDraft(binding) !== hashDraft(bindings[index]))) {
             throw new Error('已有表格补绑定不能删表、改动未授权旧绑定或改变绑定缺口');
         }
@@ -1106,11 +1106,11 @@ function hasStableExistingTableMarkers(draft, tables, bindings) {
     const rawMarkers = draft.sections.flatMap(section => String(section.body || '').match(/\[\[TABLE_[^\]]*\]\]/g) || []);
     if (rawMarkers.length !== markers.length || new Set(rawMarkers).size !== markers.length) return false;
     return tables.every((table, index) => table.marker
-        ? table.marker === `[[TABLE_${index + 1}]]` && Boolean(bindings[index]?.selection)
+        ? table.marker === `[[TABLE_${index + 1}]]` && Boolean(bindings[index]?.selection || bindings[index]?.completeTable)
             && String(draft.sections[table.sectionIndex].body || '').split(/\n\s*\n/)
                 .filter(block => block.trim() === table.marker).length === 1
-        : Boolean(table.table) && !bindings[index]?.selection)
-        && bindings.every((binding, index) => !binding.selection || tables[index]?.marker === `[[TABLE_${index + 1}]]`);
+        : Boolean(table.table) && !bindings[index]?.selection && !bindings[index]?.completeTable)
+        && bindings.every((binding, index) => !(binding.selection || binding.completeTable) || tables[index]?.marker === `[[TABLE_${index + 1}]]`);
 }
 
 // 只为已经写出的普通表补足缺失绑定；正文和未被诊断的旧绑定不能改。
@@ -1174,7 +1174,7 @@ function buildMissingTableBindingsOperation(draft, issues) {
     const mutableBindingIndices = [...new Set(issues.filter(issue => issue?.diagnosticOnly !== true
         && classifyTableBindingOrderIssue(issue).actionable)
         .map(issue => /^\/tableBindings\/(0|[1-9]\d*)$/.exec(String(issue.path || ''))?.[1])
-        .filter(index => index !== undefined).map(Number))].filter(index => index < bindings.length && !bindings[index]?.selection);
+        .filter(index => index !== undefined).map(Number))].filter(index => index < bindings.length && !bindings[index]?.selection && !bindings[index]?.completeTable);
     return { kind: 'complete_existing_table_bindings_v1', expectedTableCount: tables.length,
         existingBindingCount: bindings.length, mutableBindingIndices,
         requiredReplacementPaths: ['/tableBindings'], requiredPostconditions: [
@@ -1507,6 +1507,54 @@ function buildRepairTargets(draft, issues) {
             return [...paths].map(pointer => ({ path: pointer,
                 oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
         }
+    }
+    const stableMissingTableOperation = buildMissingTableBindingsOperation(draft, issues);
+    if (stableMissingTableOperation) return [{ path: '/tableBindings',
+        oldSha256: hashDraft(draft.tableBindings), value: draft.tableBindings }];
+    // 已定位的坏绑定先与对应正文成对修复；不能被数量诊断挤出权限。
+    // 每组整体加入，八个节点上限不能把绑定与正文从中间截开。
+    const pairedTableIssues = blockingIssues.filter(issue => (
+        /^\/tableBindings\/\d+$/.test(String(issue?.path || ''))
+        && !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
+        && issue.code !== TABLE_BINDING_ORDER_ISSUE_CODE
+    ));
+    const orderPathsExceedLimit = new Set(blockingIssues.filter(issue => (
+        classifyTableBindingOrderIssue(issue).actionable && issue.path
+    )).map(issue => issue.path)).size > 8;
+    if ((pairedTableIssues.length
+        && locateReaderDraftTables(draft).length !== draft.tableBindings?.length) || orderPathsExceedLimit) {
+        const tables = locateReaderDraftTables(draft);
+        const bindingIndexes = pairedTableIssues.length
+            ? [...new Set(pairedTableIssues.map(issue => Number(issue.path.split('/').at(-1))))]
+            : (draft.tableBindings || []).map((_binding, index) => index);
+        const unboundMarkerPaths = orderPathsExceedLimit ? [...new Set(tables.filter(table => (
+            table.marker && !draft.tableBindings?.[table.markerIndex - 1]
+        )).map(table => table.path))] : [];
+        // 未绑定的末尾标记也可能暴露紧邻旧绑定的错位，先授权这一对。
+        if (unboundMarkerPaths.length && !pairedTableIssues.length && bindingIndexes.length) {
+            bindingIndexes.unshift(bindingIndexes.pop());
+        }
+        const pairedPaths = new Set(unboundMarkerPaths.slice(0, 8));
+        for (const index of bindingIndexes) {
+            const binding = draft.tableBindings?.[index];
+            if (!binding) continue;
+            const marker = `[[TABLE_${binding.tableIndex}]]`;
+            const markedSections = draft.sections.flatMap((section, sectionIndex) => (
+                String(section?.body || '').includes(marker) ? [`/sections/${sectionIndex}/body`] : []
+            ));
+            const bodyPaths = markedSections.length ? markedSections
+                : tables[index]?.path ? [tables[index].path] : [];
+            if (!bodyPaths.length) continue;
+            const group = [...new Set([...bodyPaths, `/tableBindings/${index}`])];
+            const additions = group.filter(pointer => !pairedPaths.has(pointer));
+            if (pairedPaths.size + additions.length > 8) break;
+            group.forEach(pointer => pairedPaths.add(pointer));
+        }
+        if (pairedPaths.size) return [...pairedPaths].map(pointer => ({
+            path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
+            ...(unboundMarkerPaths.includes(pointer) ? { repairInstruction:
+                '本正文存在没有对应来源记录的表标记。只按请求中的原文证据将其改为实际 Markdown 表，保留全部正确解释、数字和条件；不得猜测缺失来源或删除表格求通过。新增来源记录须等待后续明确授权。' } : {})
+        }));
     }
     const missingNarrativeTableIssue = allBlockingIssues.find(issue => (
         !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair && readTableCountIssue(issue)

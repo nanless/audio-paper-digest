@@ -3314,3 +3314,77 @@ test('最终装配拒绝残留组合标记但普通术语和完整解释保持�
     assert.equal(deep.injectApiReaderFigures(sample, { figures: [] }).article, sample.article);
     assert.equal(deep.findUnassembledApiReaderConceptMarker(sample.article), null);
 });
+
+test('表格数量不一致时优先成对授权已定位的绑定和正文错误', () => {
+    const testData = fixture();
+    testData.sections[7].body = '[[TABLE_1]]';
+    testData.sections[8].body = '[[TABLE_2]]';
+    testData.tableBindings = [1, 2, 3].map(tableIndex => ({
+        tableIndex, sourceType: 'source_quotes', sourceTableOrdinal: null,
+        cellBindings: [], sourceQuotes: ['原文中的连续实验结论与数值。']
+    }));
+    const issues = collectDraftIssues(testData, {
+        code: 'READER_DRAFT_ORDER_AMBIGUOUS',
+        message: '重排正文前，表格与来源记录不能一一对应。',
+        readerIssues: [{ path: null, code: 'reader_table_binding_order_ambiguous',
+            message: '重排正文前，表格与来源记录不能一一对应。' }]
+    });
+    const targets = buildRepairTargets(testData, issues);
+    assert.deepEqual(targets.map(target => target.path), [
+        '/sections/7/body', '/tableBindings/0', '/sections/8/body', '/tableBindings/1'
+    ]);
+    const context = buildRepairContext(testData, issues, '', '原文中的连续实验结论与数值。');
+    assert.throws(() => applyReaderPatch(testData,
+        patchFor(testData, [['/tableBindings/2', { ...testData.tableBindings[2], tableIndex: 4 }]]),
+        context.targets.map(target => target.path), { repairContext: context }), /授权|允许|范围/);
+    assert.throws(() => applyReaderPatch(testData,
+        patchFor(testData, [['/sections/0/body', '擅自替换正确背景段落']]),
+        context.targets.map(target => target.path), { repairContext: context }), /授权|允许|范围/);
+    assert.equal(testData.sections[7].body, '[[TABLE_1]]');
+    assert.equal(testData.tableBindings.length, 3);
+});
+
+test('八个修复节点不能截断一组表格正文和绑定权限', () => {
+    const testData = fixture();
+    testData.tableBindings = [1, 2, 3, 4].map(tableIndex => ({
+        tableIndex, completeTable: { sourceTableOrdinal: tableIndex }
+    }));
+    testData.sections.slice(7, 12).forEach((section, index) => {
+        section.body = `[[TABLE_${index + 1}]]`;
+    });
+    const message = '重排正文前，表格与来源记录不能一一对应。';
+    const issues = [
+        ...[7, 8, 9, 10, 11].map(index => ({ path: `/sections/${index}/body`,
+            message, code: 'reader_table_binding_order_ambiguous' })),
+        ...[0, 1, 2, 3].map(index => ({ path: `/tableBindings/${index}`,
+            message, code: 'reader_table_binding_order_ambiguous' }))
+    ];
+    const paths = buildRepairTargets(testData, issues).map(target => target.path);
+    assert.equal(paths.length, 7);
+    for (const index of [3, 0, 1]) {
+        assert.ok(paths.includes(`/tableBindings/${index}`));
+        assert.ok(paths.includes(`/sections/${index + 7}/body`));
+    }
+    assert.ok(paths.includes('/sections/11/body'));
+    assert.ok(!paths.includes('/tableBindings/2'));
+    testData.sections[11].body = '| 比较对象 | 数值 |\n| --- | --- |\n| 新增结果 | 12 |';
+    const nextTargets = buildRepairTargets(testData, issues);
+    assert.deepEqual(nextTargets.map(target => target.path), ['/tableBindings']);
+    const nextContext = buildRepairContext(testData, issues, '', '完整实验来源');
+    assert.equal(nextContext.atomicOperation.kind, 'complete_existing_table_bindings_v1');
+    assert.deepEqual(nextContext.atomicOperation.mutableBindingIndices, []);
+    assert.equal(nextContext.atomicOperation.expectedTableCount, 5);
+    const appendedBinding = { tableIndex: 5, sourceType: 'source_quotes',
+        sourceTableOrdinal: null, cellBindings: [], sourceQuotes: ['真实实验结果为12。'] };
+    const validBindings = [...testData.tableBindings, appendedBinding];
+    const merged = applyReaderPatch(testData, patchFor(testData, [['/tableBindings', validBindings]]),
+        ['/tableBindings'], { atomicOperation: nextContext.atomicOperation });
+    assert.deepEqual(merged.tableBindings.slice(0, 4), testData.tableBindings);
+    const changedBindings = structuredClone(validBindings);
+    changedBindings[0].completeTable.sourceTableOrdinal = 99;
+    assert.throws(() => applyReaderPatch(testData,
+        patchFor(testData, [['/tableBindings', changedBindings]]), ['/tableBindings'],
+        { atomicOperation: { ...nextContext.atomicOperation, mutableBindingIndices: [0] } }),
+    /未授权旧绑定/);
+
+});
