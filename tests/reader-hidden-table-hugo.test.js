@@ -27,33 +27,8 @@ test('Hugo 实际 HTML DOM 与 Reader 表格展示判断对应', {
     fs.writeFileSync(path.join(root, 'hugo.toml'),
         'baseURL = "https://offline.invalid/"\n[markup.goldmark.renderer]\nunsafe = true\n');
     fs.writeFileSync(path.join(root, 'layouts', '_default', 'single.html'), '{{ .Content }}');
-    const table = '| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |';
-    const quoted = table.split('\n').map(line => '> ' + line).join('\n');
-    const cases = [
-        { name: 'visible', body: table, dom: 1, reader: 1 },
-        { name: 'comment', body: '<!--\n' + table + '\n-->', dom: 0, reader: 0 },
-        { name: 'fence', body: '```text\n' + table + '\n```', dom: 0, reader: 0 },
-        { name: 'indent', body: table.split('\n').map(line => '    ' + line).join('\n'), dom: 0, reader: 0 },
-        { name: 'pre', body: '<pre>\n' + table + '\n</pre>', dom: 0, reader: 0 },
-        { name: 'script', body: '<script>\n' + table + '\n</script>', dom: 0, reader: 0 },
-        { name: 'style', body: '<style>\n' + table + '\n</style>', dom: 0, reader: 0 },
-        { name: 'textarea', body: '<textarea>\n' + table + '\n</textarea>', dom: 0, reader: 0 },
-        { name: 'custom', body: '<custom-box>\n' + table + '\n</custom-box>', dom: 0, reader: 0 },
-        { name: 'cdata', body: '<![CDATA[\n' + table + '\n]]>', dom: 0, reader: 0 },
-        { name: 'div', body: '<div>\n' + table + '\n</div>', dom: 0, reader: 0 },
-        { name: 'div-visible', body: '<div>\n\n' + table + '\n\n</div>', dom: 1, reader: 1 },
-        { name: 'literal-comment', body: '<script>\n<!--\n</script>\n\n' + table, dom: 1, reader: 1 },
-        { name: 'html-fence', body: '<div>\n```text\n</div>\n\n' + table, dom: 1, reader: 1 },
-        // 输出字符串虽有 <table>，但未闭合注释使 DOM 中没有表格。
-        { name: 'html-comment', body: '<div>\n<!--\n</div>\n\n' + table, dom: 0, reader: 0 },
-        { name: 'html-opening-comment', body: '<div>`<!--`\n\n' + table, dom: 0, reader: 0 },
-        { name: 'html-backtick-comment', body: '<div>\n`<!--`\n</div>\n\n' + table, dom: 0, reader: 0 },
-        { name: 'inline-tokens', body: '| Token | Value |\n| --- | --- |\n| `<!--` | 1 |\n| `-->` | 2 |', dom: 1, reader: 1 },
-        { name: 'backticks', body: '`\n' + table + '\n`', dom: 1, reader: 1 },
-        // 引用表确实在网页显示，但 Reader 协议不把引用区计作作者正文展示。
-        { name: 'quote', body: quoted, dom: 1, reader: 0 },
-        { name: 'lazy-quote', body: '> 引用说明\n' + table, dom: 1, reader: 0 }
-    ];
+    const { cases } = JSON.parse(fs.readFileSync(
+        path.join(__dirname, 'fixtures', 'reader-table-visibility.json'), 'utf8'));
     for (const item of cases) {
         fs.writeFileSync(path.join(root, 'content', item.name + '.md'),
             '---\ntitle: "' + item.name + '"\n---\n\n' + item.body + '\n');

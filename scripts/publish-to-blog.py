@@ -41,6 +41,7 @@ if str(MANUAL_SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(MANUAL_SCRIPTS_DIR))
 from publish_common import (
     load_papers, get_today_bj, score_and_sort, extract_top_tags,
+    mask_protected_markdown_table_regions,
     extract_all_tags, score_emoji, format_medal, build_paper_meta,
     fix_latex_delimiters, escape_html_like_tags, fix_image_markdown,
     truncate_base64_datauri, fix_yaml_double_commas, strip_raw_inline_html,
@@ -5364,31 +5365,13 @@ def _api_reader_display_formula_blocks(article):
 
 def _api_reader_markdown_tables(article):
     """重放 Node 的表格提取器，同时保留参与哈希的确切字节。"""
-    lines = str(article or '').split('\n')
-    fence = None
-    visible_lines = []
-    for line in lines:
-        match = re.match(r'^\s*(`{3,}|~{3,})', line)
-        if fence is None:
-            if match:
-                fence = (match.group(1)[0], len(match.group(1)))
-                visible_lines.append('')
-            else:
-                # 发布环节会转义字面的声学/生物序列符号
-                # （例如 ``*******___``），免得 Markdown
-                # 把它们解析成强调标记。核对已记录的表格 SHA 和单元格对应关系之前，
-                # 先还原出规范的来源字节。
-                visible_lines.append(re.sub(
-                    r'(?<=\|)([ \t]*)((?:\\[*_]|[*_])+)([ \t]*)(?=\|)',
-                    lambda cell: cell.group(1)
-                    + cell.group(2).replace(r'\*', '*').replace(r'\_', '_')
-                    + cell.group(3),
-                    line,
-                ))
-            continue
-        if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= fence[1]:
-            fence = None
-        visible_lines.append('')
+    # 共用展示范围判断；还原发布时转义的字面单元格符号，原来源核验继续执行。
+    visible_lines = [re.sub(
+        r'(?<=\|)([ \t]*)((?:\\[*_]|[*_])+)([ \t]*)(?=\|)',
+        lambda cell: cell.group(1)
+        + cell.group(2).replace(r'\*', '*').replace(r'\_', '_')
+        + cell.group(3), line,
+    ) for line in mask_protected_markdown_table_regions(article).split('\n')]
 
     def separator(row):
         cells = split_markdown_table_row(row)

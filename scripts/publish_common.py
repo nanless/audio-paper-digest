@@ -3215,27 +3215,120 @@ def _is_markdown_table_separator(row):
     )
 
 
-def _strip_fenced_code_blocks(text):
+_HTML_TABLE_BLOCK_START = re.compile(
+    r'^ {0,3}</?(?ai:address|article|aside|blockquote|body|caption|center|col|colgroup|dd|details|'
+    r'dialog|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|'
+    r'legend|li|main|menu|nav|ol|p|section|summary|table|tbody|td|tfoot|th|thead|title|tr|ul)'
+    r'(?=[\s/>])',
+)
+
+
+def _reader_literal_html_name(line):
+    # Goldmark 原样块采用简单大小写折叠；只接收已证的单字符 ASCII/ſ/K 候选。
+    # 不使用任意 Unicode 多字符 casefold（例如连字），也不扩大普通 HTML 标签语法。
+    match = re.match(r'^ {0,3}<([A-Za-zſK]+)(?=[\s/>])', line)
+    name = match.group(1).casefold() if match else None
+    return name if name in {'pre', 'code', 'script', 'style', 'textarea'} else None
+
+
+def _reader_literal_html_closed(line, name):
+    # Hugo 可识别 ſcript 的开始；实际 DOM 的 ASCII script 不由 </ſcript> 结束。
+    # 结束仅接收 ASCII 标签，不能与开始的候选范围合并。
+    return any(match.group(1).casefold() == name
+               for match in re.finditer(r'</([A-Za-z]+)\s*>', line))
+
+
+def mask_protected_markdown_table_regions(text):
+    """用等长空格替换隐藏内容，保留原行号；不改可见单元格或来源记录。"""
     fence = None
-    kept = []
-    for line in str(text or '').splitlines():
-        match = re.match(r'^\s*(`{3,}|~{3,})', line)
-        if fence is None:
-            if match:
-                fence = (match.group(1)[0], len(match.group(1)))
-                kept.append('')
-            else:
-                kept.append(line)
+    quote = False
+    html_block = False
+    html_literal = None
+    comment = False
+    html_terminator = None
+    output = []
+    for line in str(text or '').split('\n'):
+        blank = re.sub(r'[^\r]', ' ', line)
+        if html_literal:
+            if _reader_literal_html_closed(line, html_literal):
+                html_literal = None
+            output.append(blank)
             continue
-        if (match and match.group(1)[0] == fence[0]
-                and len(match.group(1)) >= fence[1]):
-            fence = None
-        kept.append('')
-    return '\n'.join(kept)
+        if html_terminator:
+            if html_terminator in line:
+                html_terminator = None
+            output.append(blank)
+            continue
+        if html_block and not line.strip():
+            html_block = False
+        boundary = None if html_block else re.match(r'^ {0,3}(`{3,}|~{3,})', line)
+        if fence:
+            if (boundary and boundary.group(1)[0] == fence[0]
+                    and len(boundary.group(1)) >= len(fence)
+                    and not line[boundary.end():].strip()):
+                fence = None
+            output.append(blank)
+            continue
+        if boundary and not comment:
+            fence = boundary.group(1)
+            output.append(blank)
+            continue
+        starts_html_block = bool(_HTML_TABLE_BLOCK_START.match(line))
+        # 原样 HTML 里的反引号不是代码；普通单元格里的 HTML 代码示例则须保留。
+        probe = line if html_block or comment or starts_html_block else re.sub(
+            r'(`+)(?!`)([^\n]*?)\1(?!`)', lambda match: 'x' * len(match.group(0)), line,
+        )
+        chars = list(line)
+        index = 0
+        while index < len(line):
+            if comment:
+                if probe.startswith('-->', index):
+                    chars[index:index + 3] = [' '] * 3
+                    index += 3
+                    comment = False
+                    continue
+                if line[index] != '\r':
+                    chars[index] = ' '
+            elif probe.startswith('<!--', index):
+                comment = True
+                chars[index:index + 4] = [' '] * 4
+                index += 4
+                continue
+            index += 1
+        visible = ''.join(chars)
+        if html_block:
+            output.append(blank)
+            continue
+        literal = _reader_literal_html_name(visible)
+        if literal:
+            comment = False
+            if not _reader_literal_html_closed(probe, literal):
+                html_literal = literal
+            output.append(blank)
+            continue
+        terminator = ('?>' if re.match(r'^ {0,3}<\?', visible) else
+                      ']]>' if re.match(r'^ {0,3}<!\[CDATA\[', visible) else
+                      '>' if re.match(r'^ {0,3}<![A-Z]', visible) else None)
+        if terminator:
+            if terminator not in probe:
+                html_terminator = terminator
+            output.append(blank)
+            continue
+        if not visible.strip():
+            quote = False
+            html_block = False
+        if re.match(r'^ {0,3}#{1,6}(?:[ \t]|$)', visible):
+            quote = False
+        if re.match(r'^ {0,3}>', visible):
+            quote = True
+        if (starts_html_block and visible.strip()) or re.match(r'^ {0,3}</?(?ai:[a-z][\w-]*)(?:\s+[^<>]*)?\s*/?>[ \t]*$', visible):
+            html_block = True
+        output.append(blank if quote or html_block or re.match(r'^(?: {4}|\t)', visible) else visible)
+    return '\n'.join(output)
 
 
 def extract_markdown_tables(text):
-    lines = _strip_fenced_code_blocks(text).splitlines()
+    lines = mask_protected_markdown_table_regions(text).splitlines()
     tables = []
     index = 0
     while index + 1 < len(lines):

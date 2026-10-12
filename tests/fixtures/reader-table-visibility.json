@@ -1,0 +1,185 @@
+{
+  "table": "| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+  "cases": [
+    {
+      "name": "visible",
+      "body": "| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+      "dom": 1,
+      "reader": 1
+    },
+    {
+      "name": "comment",
+      "body": "<!--\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |\n-->",
+      "dom": 0,
+      "reader": 0
+    },
+    {
+      "name": "fence",
+      "body": "```text\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |\n```",
+      "dom": 0,
+      "reader": 0
+    },
+    {
+      "name": "indent",
+      "body": "    | System | WER |\n    | --- | --- |\n    | Baseline | 4.8% |\n    | Proposed | 4.1% |",
+      "dom": 0,
+      "reader": 0
+    },
+    {
+      "name": "pre",
+      "body": "<pre>\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |\n</pre>",
+      "dom": 0,
+      "reader": 0
+    },
+    {
+      "name": "script",
+      "body": "<script>\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |\n</script>",
+      "dom": 0,
+      "reader": 0
+    },
+    {
+      "name": "style",
+      "body": "<style>\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |\n</style>",
+      "dom": 0,
+      "reader": 0
+    },
+    {
+      "name": "textarea",
+      "body": "<textarea>\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |\n</textarea>",
+      "dom": 0,
+      "reader": 0
+    },
+    {
+      "name": "custom",
+      "body": "<custom-box>\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |\n</custom-box>",
+      "dom": 0,
+      "reader": 0
+    },
+    {
+      "name": "cdata",
+      "body": "<![CDATA[\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |\n]]>",
+      "dom": 0,
+      "reader": 0
+    },
+    {
+      "name": "div",
+      "body": "<div>\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |\n</div>",
+      "dom": 0,
+      "reader": 0
+    },
+    {
+      "name": "div-visible",
+      "body": "<div>\n\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |\n\n</div>",
+      "dom": 1,
+      "reader": 1
+    },
+    {
+      "name": "literal-comment",
+      "body": "<script>\n<!--\n</script>\n\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+      "dom": 1,
+      "reader": 1
+    },
+    {
+      "name": "html-fence",
+      "body": "<div>\n```text\n</div>\n\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+      "dom": 1,
+      "reader": 1
+    },
+    {
+      "name": "html-comment",
+      "body": "<div>\n<!--\n</div>\n\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+      "dom": 0,
+      "reader": 0
+    },
+    {
+      "name": "html-opening-comment",
+      "body": "<div>`<!--`\n\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+      "dom": 0,
+      "reader": 0
+    },
+    {
+      "name": "html-backtick-comment",
+      "body": "<div>\n`<!--`\n</div>\n\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+      "dom": 0,
+      "reader": 0
+    },
+    {
+      "name": "inline-tokens",
+      "body": "| Token | Value |\n| --- | --- |\n| `<!--` | 1 |\n| `-->` | 2 |",
+      "dom": 1,
+      "reader": 1
+    },
+    {
+      "name": "backticks",
+      "body": "`\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |\n`",
+      "dom": 1,
+      "reader": 1
+    },
+    {
+      "name": "quote",
+      "body": "> | System | WER |\n> | --- | --- |\n> | Baseline | 4.8% |\n> | Proposed | 4.1% |",
+      "dom": 1,
+      "reader": 0
+    },
+    {
+      "name": "lazy-quote",
+      "body": "> 引用说明\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+      "dom": 1,
+      "reader": 0
+    },
+    {
+      "name": "comment-html-visible",
+      "body": "<!--\n<div>\n-->\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+      "dom": 1,
+      "reader": 1
+    },
+    {
+      "name": "unicode-tag",
+      "body": "<x中>\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+      "dom": 1,
+      "reader": 1
+    },
+    {
+      "name": "unicode-tag-dot-i",
+      "body": "<İ>\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+      "dom": 1,
+      "reader": 1
+    },
+    {
+      "name": "unicode-tag-dotless-i",
+      "body": "<ı>\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+      "dom": 1,
+      "reader": 1
+    },
+    {
+      "name": "unicode-tag-long-s",
+      "body": "<ſ>\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+      "dom": 1,
+      "reader": 1
+    },
+    {
+      "name": "unicode-tag-kelvin",
+      "body": "<K>\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+      "dom": 1,
+      "reader": 1
+    },
+    {
+      "name": "unicode-script",
+      "body": "<ſcript>\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+      "dom": 0,
+      "reader": 0
+    },
+    {
+      "name": "unicode-script-closed",
+      "body": "<ſcript>\nhidden\n</script>\n\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+      "dom": 1,
+      "reader": 1
+    },
+    {
+      "name": "unicode-script-closing",
+      "body": "<script>\nhidden\n</ſcript>\n\n| System | WER |\n| --- | --- |\n| Baseline | 4.8% |\n| Proposed | 4.1% |",
+      "dom": 0,
+      "reader": 0
+    }
+  ]
+}

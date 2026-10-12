@@ -477,11 +477,14 @@ function maskProtectedMarkdownTableRegions(text) {
         }
         const visible = chars.join('');
         if (htmlBlock) return blank();
-        const literal = visible.match(/^ {0,3}<(pre|code|script|style|textarea)(?=[\s/>])/i);
+        const literal = visible.match(/^ {0,3}<(pre|code|script|style|textarea)(?=[\s/>])/iu);
         if (literal) {
             // HTML 原样块的内部注释不是 Markdown 注释，不能影响块后的正文。
             comment = false;
-            if (!new RegExp(`</${literal[1]}\\s*>`, 'i').test(probe)) htmlLiteral = literal[1];
+            // Hugo 可把 ſcript 作为原样块开始；实际 DOM 中 </ſcript> 不结束 ASCII script。
+            // 开始按已证大小写折叠识别，结束仍要求普通 ASCII 标签，不能合并为同一 /iu。
+            const literalName = literal[1].toLowerCase().replace(/ſ/g, 's');
+            if (!new RegExp(`</${literalName}\\s*>`, 'i').test(probe)) htmlLiteral = literalName;
             return blank();
         }
         const terminator = /^ {0,3}<\?/.test(visible) ? '?>'
