@@ -164,6 +164,33 @@ test('完整原表的局部修复只修改真实授权记录并重新通过完�
     assert.throws(() => parseApiReaderArticleResult(JSON.stringify(invalid), sample.options));
 });
 
+test('修复来源编号时不误报合法完整原表标记，缺绑定仍须拒绝', () => {
+    const repair = require('../scripts/lib/reader-repair');
+    const { parseApiReaderArticleResult } = require('../scripts/deep-analyzer');
+    const sample = createFullReaderTableSample();
+    sample.payload.tableBindings[0].completeTable.sourceTableOrdinal = 99;
+    let error;
+    try { parseApiReaderArticleResult(JSON.stringify(sample.payload), sample.options); }
+    catch (caught) { error = caught; }
+    assert.ok(error);
+    const issues = repair.collectDraftIssues(sample.payload, error, sample.options);
+    assert.ok(issues.some(issue => issue.path === '/tableBindings/0'));
+    assert.ok(!issues.some(issue => /未绑定的 \[\[TABLE_1\]\]/.test(issue.message)));
+    const context = repair.buildRepairContext(sample.payload, issues, sample.options.sourceText);
+    const target = context.targets.find(item => item.path === '/tableBindings/0');
+    assert.ok(target);
+    const patched = repair.applyReaderPatch(sample.payload, { version: 1,
+        draftSha256: context.draftSha256, replacements: [{ path: target.path,
+            oldSha256: target.oldSha256, value: { tableIndex: 1, completeTable: { sourceTableOrdinal: 1 } } }] }, [target.path]);
+    assert.deepEqual(patched.sections, sample.payload.sections);
+    assert.equal(parseApiReaderArticleResult(JSON.stringify(patched), sample.options).plan.tableBindings.length, 2);
+    const missing = structuredClone(sample.payload);
+    missing.tableBindings.shift();
+    const missingIssues = repair.collectDraftIssues(missing, null, sample.options);
+    assert.ok(missingIssues.some(issue => /未绑定的 \[\[TABLE_1\]\]/.test(issue.message)));
+    assert.throws(() => parseApiReaderArticleResult(JSON.stringify(missing), sample.options));
+});
+
 test('仅授权来源记录时不能把缺标记或旧 Markdown 自动改成完整原表', () => {
     const repair = require('../scripts/lib/reader-repair');
     const { parseApiReaderArticleResult } = require('../scripts/deep-analyzer');

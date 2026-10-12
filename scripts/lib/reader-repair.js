@@ -1082,8 +1082,9 @@ function collectTableBindingIssues(draft, options = {}) {
         }
     });
     for (const marker of markers) {
-        if (!draft.tableBindings.some(binding => binding?.selection && binding.tableIndex === marker.tableIndex)) {
-            const message = `sections[${marker.sectionIndex}].body 存在未绑定的 ${marker.marker}；只有selection模式可以使用TABLE marker`;
+        if (!draft.tableBindings.some(binding => (binding?.selection || binding?.completeTable)
+            && binding.tableIndex === marker.tableIndex)) {
+            const message = `sections[${marker.sectionIndex}].body 存在未绑定的 ${marker.marker}；只有 selection 或 completeTable 模式可以使用 TABLE 标记`;
             if (!issues.some(issue => issue.path === `/sections/${marker.sectionIndex}/body`)) {
                 issues.push({ path: `/sections/${marker.sectionIndex}/body`, message });
             }
