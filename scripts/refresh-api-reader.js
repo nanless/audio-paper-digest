@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const Config = require('./config.js');
 const {
     refreshApiReaderArticleFromSource,
+    hasReviewedCompletedPrimaryReaderSeed,
     refreshApiScoringAndReaderFromSource,
     refreshApiReaderAuthorsFromSource,
     refreshApiReaderFiguresFromSource,
@@ -263,6 +264,18 @@ function canRepairSurfaceBinding(paper) {
         && !paper?.latestAnalysisAttemptError;
 }
 
+function canRepairCompletedPrimaryReader(paper, plan, options = {}) {
+    if (options.scoringAndReader || options.surfaceBindingsOnly
+        || options.authorsOnly || options.figuresOnly || !String(options.reviewFeedback || '').trim()) return false;
+    const facts = require('./lib/daily-fact-review');
+    const active = facts.current(normalizedId(paper));
+    if (!active || active.scoringOnly || !active.feedback.primaryFeedback?.trim()) return false;
+    const bound = facts.validateFeedback(active.feedback, plan, paper);
+    const source = dailyFreshSources.readDailyFreshSource(plan, paper);
+    return dailyFreshSources.withDailyFreshAnalysisContext(plan, () => facts.withFactReview(bound, () =>
+        hasReviewedCompletedPrimaryReaderSeed(paper, source.text, options.reviewFeedback)));
+}
+
 async function refreshApiReader(targetId, options = {}) {
     return require('./lib/analysis-stop-control').withAnalysisStopControl(async () => {
         const result = await refreshApiReaderInternal(targetId, options);
@@ -278,13 +291,14 @@ async function refreshApiReaderInternal(targetId, options = {}) {
     const resultPath = Config.FILES.deepAnalysisResult;
     const current = readJsonFileStrict(resultPath);
     const papers = Array.isArray(current) ? current : current.papers;
-    dailyFreshSources.requireDailyFreshSourceRecoveryPlan(current, {
+    const initialDailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(current, {
         papers, label: 'API Reader recovery'
     });
     const existing = papers.find(paper => normalizedId(paper) === requested);
     if (!existing || (!isSuccessfulAnalysisRecord(existing)
         && !(options.scoringAndReader && canRepairScoringBinding(existing))
-        && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(existing)))) {
+        && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(existing))
+        && !canRepairCompletedPrimaryReader(existing, initialDailySourcePlan, options))) {
         throw new Error(`${requested} 的已有分析记录不满足所选刷新模式的条件，不能开始刷新。`);
     }
 
@@ -297,7 +311,8 @@ async function refreshApiReaderInternal(targetId, options = {}) {
         const storedAnalysisRecord = latestPapers.find(paper => normalizedId(paper) === requested);
         if (!storedAnalysisRecord || (!isSuccessfulAnalysisRecord(storedAnalysisRecord)
             && !(options.scoringAndReader && canRepairScoringBinding(storedAnalysisRecord))
-            && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(storedAnalysisRecord)))) {
+            && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(storedAnalysisRecord))
+            && !canRepairCompletedPrimaryReader(storedAnalysisRecord, lockedDailySourcePlan, options))) {
             throw new Error(`取得分析锁后，${requested} 的记录已不存在，或不再满足所选刷新模式的条件。`);
         }
         if (!dailyFreshSources.isPaperBoundToPlan(storedAnalysisRecord, lockedDailySourcePlan)) {
@@ -504,5 +519,6 @@ module.exports = {
     resolveSavedAnalysisBatchDate,
     paperRefreshInputIdentity,
     canRepairScoringBinding,
+    canRepairCompletedPrimaryReader,
     MAX_REFRESH_CONCURRENCY
 };

@@ -10217,22 +10217,25 @@ function staleAnalysisSnapshotPayload(paper, manifest) {
 function captureStaleAnalysisSnapshot(paper, manifest, invalidatedStage, replacementFingerprint) {
     const activeReview = require('./lib/daily-fact-review').current(getPaperArxivId(paper));
     const finalAnalysisIsReviewInput = activeReview
-        && (typeof paper.analysisCheckpoint !== 'string' || !paper.analysisCheckpoint)
         && typeof paper.analysis === 'string'
         && crypto.createHash('sha256').update(paper.analysis).digest('hex')
             === activeReview.proof.coreAnalysisSha256;
     const snapshotInput = finalAnalysisIsReviewInput
         ? { ...paper, analysisCheckpoint: paper.analysis } : paper;
-    const payload = staleAnalysisSnapshotPayload(snapshotInput, manifest);
-    if (!payload) return null;
-    const payloadSha256 = stableFingerprint(payload);
+    const payloads = [staleAnalysisSnapshotPayload(snapshotInput, manifest)];
+    if (finalAnalysisIsReviewInput && paper.analysisCheckpoint) {
+        payloads.push(staleAnalysisSnapshotPayload(paper, manifest));
+    }
+    if (!payloads.some(Boolean)) return null;
     const existing = Array.isArray(paper.analysisStaleSnapshots)
         ? paper.analysisStaleSnapshots.filter(item => item
             && item.contract === STALE_ANALYSIS_SNAPSHOT_CONTRACT
             && /^[a-f0-9]{64}$/.test(String(item.payloadSha256 || ''))
             && validateStaleAnalysisSnapshot(item))
         : [];
-    if (!existing.some(item => item.payloadSha256 === payloadSha256)) {
+    for (const payload of payloads.filter(Boolean)) {
+        const payloadSha256 = stableFingerprint(payload);
+        if (existing.some(item => item.payloadSha256 === payloadSha256)) continue;
         existing.push({
             contract: STALE_ANALYSIS_SNAPSHOT_CONTRACT,
             invalidatedStage,
@@ -18221,6 +18224,7 @@ module.exports = {
     shouldEscalateApiReaderRepairBudget,
     readerIssuesRequireFullSourceBindingRetry,
     prepareApiReaderRevisionSeed,
+    hasReviewedCompletedPrimaryReaderSeed,
     recoverableStaleReaderRevisionStage,
     buildApiReaderGenerationStart,
     buildApiReaderValidationFeedback,

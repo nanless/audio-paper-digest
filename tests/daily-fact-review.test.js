@@ -875,3 +875,28 @@ test('只有已核验反馈匹配的最终正文可保留真实原输入快照',
         assert.notEqual(deep.validateStaleAnalysisSnapshot(ordinaryPaper.analysisStaleSnapshots.at(-1)).analysisCheckpoint, originalAnalysis);
     }
 });
+
+
+test('新检查点存在时同时保留已核反馈原正文与当前恢复进度', async t => {
+    const sample = await fixture(t);
+    const original = sample.paper.analysisCheckpoint || sample.paper.analysis;
+    const bound = review.validateFeedback(sample.feedback, sample.plan, sample.paper);
+    sample.paper.analysis = original;
+    sample.paper.analysisCheckpoint = baseline;
+    const checkpointBefore = sample.paper.analysisCheckpoint;
+    const stagesBefore = structuredClone(sample.paper.analysisStageCheckpoints);
+    review.withFactReview(bound, () => {
+        deep.captureStaleAnalysisSnapshot(sample.paper, sample.paper.analysisManifest,
+            'primaryAnalysis', bound.proof.feedbackSha256);
+    });
+    assert.equal(sample.paper.analysisStaleSnapshots.length, 2);
+    assert.deepEqual(sample.paper.analysisStaleSnapshots.map(item =>
+        deep.validateStaleAnalysisSnapshot(item).analysisCheckpoint), [original, baseline]);
+    assert.equal(sample.paper.analysisCheckpoint, checkpointBefore);
+    assert.deepEqual(sample.paper.analysisStageCheckpoints, stagesBefore);
+    sample.paper.analysisManifest.stages.primaryAnalysis.factReview = bound.proof;
+    deep.retainFinalFactReviewInputs(sample.paper, sample.paper.analysisManifest);
+    assert.equal(sample.paper.analysisStaleSnapshots.length, 1);
+    assert.equal(deep.validateStaleAnalysisSnapshot(sample.paper.analysisStaleSnapshots[0]).analysisCheckpoint, original);
+    assert.equal(review.validateFeedback(sample.feedback, sample.plan, sample.paper).proof.feedbackSha256, bound.proof.feedbackSha256);
+});
