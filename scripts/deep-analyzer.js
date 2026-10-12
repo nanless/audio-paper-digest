@@ -7551,6 +7551,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     recovered = require('./lib/reader-recovery-revision.js').loadReaderRecoveryRevision(
         candidateDirectory, identity, recoveryOptions
     );
+    recovered = require('./lib/explicit-reader-retry-round.js').restoreExplicitRoundOriginalDraft(
+        candidateDirectory, identity, recovered, paper
+    );
     readerRecoveryRevisions = recovered?.readerRecoveryRevisions || [];
     candidate = recovered?.draft || null;
     draftOrderMappings = recovered?.draftOrderMappings || [];

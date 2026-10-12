@@ -1018,10 +1018,106 @@ test('代码SHA升级经0API公有迁移准备后，真正generate首次追加�
 test('完整sections独立于恢复解析上限判断，过多图和已封装完整JSON都不能开full', () => {
     const draft = createReaderTestArticle();
     draft.figurePlacements = Array.from({ length: 8 }, (_, index) => ({ figureOrdinal: index + 1 }));
+    assert.ok(repair.parseRecoveryDraft(draft));
+    assert.equal(parentRecovery.fullReason({ status: 'failed', draft: null, rawDraft: JSON.stringify(draft) }), null);
+    draft.figurePlacements = Array.from({ length: 17 }, (_, index) => ({ figureOrdinal: index + 1 }));
     assert.equal(repair.parseRecoveryDraft(draft), null);
     const payload = { status: 'failed', draft: null, rawDraft: JSON.stringify(draft),
         issues: [{ message: '读者文章 JSON 无法解析: old diagnostic' }] };
     assert.equal(parentRecovery.fullReason(payload), null);
     payload.rawDraft = '```json\n' + JSON.stringify(draft) + '\n```';
     assert.equal(parentRecovery.fullReason(payload), null);
+});
+
+test('旧父轮占位稿从同轮原档恢复，首次真实入口只发16k局部并保留原48k账', async t => {
+    const deep = require('../scripts/deep-analyzer');
+    const previousBudget = Config.ANALYSIS_CONFIG.apiReaderRepairMaxTokens;
+    Config.ANALYSIS_CONFIG.apiReaderRepairMaxTokens = 16000;
+    t.after(() => { Config.ANALYSIS_CONFIG.apiReaderRepairMaxTokens = previousBudget; });
+    const draft = createReaderTestArticle(); draft.readerTitle = '短';
+    const raw = JSON.stringify(draft, null, 2);
+    const f = setup(t, p => { p.draft = draft; p.rawDraft = raw; p.ephemeralImageEvidence = { imageEvidence: [], directSupplementaryEvidence: [] }; });
+    const source = daily.readDailyFreshSource(plan, paper);
+    const options = { sourceText: source.text, structuredArtifacts: source.structuredArtifacts, readerRepairMaxTokens: 16000,
+        readerAttemptsDir: directory, readerMaterializeFigures: async () => [], readerRecordDisposition() {} };
+    await f.locked(async () => {
+        const prepared = await deep.prepareApiReaderRetryIdentity(paper, paper.analysisCheckpoint, '', options);
+        fs.unlinkSync(f.file); repair.saveFailedCandidate(directory, prepared.identity, f.payload);
+        const file = path.join(directory, repair.hashDraft(prepared.identity) + '.json');
+        Object.assign(f.grant, { identitySha256: repair.hashDraft(prepared.identity), originalIdentitySha256: repair.hashDraft(prepared.identity), envelopeSha256: sha(fs.readFileSync(file)) });
+        let next;
+        await retry.withExplicitRound(paper, f.grant, () => {
+            next = retry.beginExplicitRound(directory, prepared.identity, f.payload, paper);
+            retry.withPhysicalBudget(next.explicitReaderRetryRound, paper, () => retry.consumePhysicalRequest({ max_tokens: 48000 }, { usageContext: { paperId: paper.arxivId, stage: 'apiReaderArticle' } }));
+        });
+        const placeholder = { ...next, draft: null, rawDraft: '无', issues: [], transportFailures: 3,
+            lastTransportError: '明确 Reader 新轮实际请求或输出预算耗尽' };
+        repair.saveFailedCandidate(directory, prepared.identity, placeholder);
+        const placeholderBytes = fs.readFileSync(file);
+        const receiptFile = next.explicitReaderRetryRound.receiptFile;
+        const receiptBefore = fs.readFileSync(receiptFile), receipt = JSON.parse(receiptBefore);
+        const originalBytes = fs.readFileSync(receipt.archivedFile);
+        const stages = [];
+        const stop = Object.assign(new Error('已核实首个16k局部请求'), { retryable: false, scope: 'run' });
+        options.readerCallModel = async (messages, tokens, request) => {
+            stages.push(request.usageContext.stage);
+            assert.equal(tokens, 16000);
+            assert.match(JSON.stringify(messages), /从声音输入到执行输出|readerTitle/);
+            retry.consumePhysicalRequest({ max_tokens: tokens }, request);
+            throw stop;
+        };
+        await assert.rejects(deep.generateApiReaderArticleDetailed(paper, paper.analysisCheckpoint, '', options), /已核实首个16k局部请求/);
+        assert.deepEqual(stages, ['apiReaderRepair']);
+        const saved = repair.loadFailedCandidate(directory, prepared.identity);
+        assert.equal(saved.attempts, 0); assert.equal(saved.fullAttempts, 0);
+        assert.equal(saved.explicitReaderRetryRound.roundId, f.grant.roundId);
+        assert.deepEqual(saved.draft, draft); assert.equal(saved.rawDraft, JSON.stringify(draft));
+        assert.equal(saved.transportFailures, 4);
+        const audit = saved.readerOriginalDraftRestorations[0];
+        assert.equal(audit.originalEnvelopeSha256, sha(originalBytes));
+        assert.equal(audit.placeholderEnvelopeSha256, sha(placeholderBytes));
+        assert.deepEqual(fs.readFileSync(path.join(directory, audit.placeholderArchiveName)), placeholderBytes);
+        assert.deepEqual(fs.readFileSync(receipt.archivedFile), originalBytes);
+        const paid = JSON.parse(fs.readFileSync(receiptFile));
+        assert.equal(paid.physicalRequests, 2); assert.equal(paid.reservedOutputTokens, 64000);
+        assert.deepEqual(paid.requests[0], receipt.requests[0]); assert.equal(paid.oldAttempts, 6); assert.equal(paid.oldFullAttempts, 2);
+        const savedBytes = fs.readFileSync(file), paidBytes = fs.readFileSync(receiptFile);
+        assert.deepEqual(retry.restoreExplicitRoundOriginalDraft(directory, prepared.identity, saved, paper), saved);
+        assert.deepEqual(fs.readFileSync(file), savedBytes); assert.deepEqual(fs.readFileSync(receiptFile), paidBytes);
+    });
+});
+
+test('同父原档恢复拒绝覆盖真实新稿、已保存响应、局部子轮或未验证原档', async t => {
+    const draft = createReaderTestArticle();
+    const f = setup(t, p => { p.draft = draft; p.rawDraft = JSON.stringify(draft); });
+    await f.locked(() => retry.withExplicitRound(paper, f.grant, () => {
+        const next = retry.beginExplicitRound(directory, f.identity, f.payload, paper);
+        retry.withPhysicalBudget(next.explicitReaderRetryRound, paper, () => retry.consumePhysicalRequest({ max_tokens: 48000 }, { usageContext: { paperId: paper.arxivId, stage: 'apiReaderArticle' } }));
+        for (const change of [{ draft }, { rawDraft: '{"received":"new actual content"}' }, { attempts: 1 }, { fullAttempts: 1 }]) {
+            const current = { ...next, draft: null, rawDraft: '无', ...change };
+            repair.saveFailedCandidate(directory, f.identity, current);
+            const bytes = fs.readFileSync(f.file);
+            assert.deepEqual(retry.restoreExplicitRoundOriginalDraft(directory, f.identity, current, paper), current);
+            assert.deepEqual(fs.readFileSync(f.file), bytes);
+            // 每个控制独立回到0只写测试磁盘快照；生产save接口仍禁止减次数。
+            fs.writeFileSync(f.file, JSON.stringify({ version:repair.REPAIR_VERSION,identity:f.identity,payload:next,payloadSha256:repair.hashDraft(next) }), {mode:0o600});
+        }
+        const current = { ...next, draft:null, rawDraft:'无' };
+        repair.saveFailedCandidate(directory, f.identity, current);
+        const receipt = JSON.parse(fs.readFileSync(next.explicitReaderRetryRound.receiptFile));
+        fs.appendFileSync(receipt.archivedFile,' ');
+        assert.throws(() => retry.restoreExplicitRoundOriginalDraft(directory,f.identity,current,paper), error => error.code === 'READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID' && error.retryable === false && error.scope === 'paper');
+    }));
+});
+
+test('同父原稿恢复不能覆盖已经实际请求局部补丁的轮，即使当前占位状态计数为零', async t => {
+ const draft=createReaderTestArticle();const f=setup(t,p=>{p.draft=draft;p.rawDraft=JSON.stringify(draft);});
+ await f.locked(()=>retry.withExplicitRound(paper,f.grant,()=>{
+  const next=retry.beginExplicitRound(directory,f.identity,f.payload,paper);
+  retry.withPhysicalBudget(next.explicitReaderRetryRound,paper,()=>retry.consumePhysicalRequest({max_tokens:16000},{usageContext:{paperId:paper.arxivId,stage:'apiReaderRepair'}}));
+  const current={...next,draft:null,rawDraft:'无'};repair.saveFailedCandidate(directory,f.identity,current);
+  const bytes=fs.readFileSync(f.file),receiptBytes=fs.readFileSync(next.explicitReaderRetryRound.receiptFile);
+  assert.deepEqual(retry.restoreExplicitRoundOriginalDraft(directory,f.identity,current,paper),current);
+  assert.deepEqual(fs.readFileSync(f.file),bytes);assert.deepEqual(fs.readFileSync(next.explicitReaderRetryRound.receiptFile),receiptBytes);
+ }));
 });

@@ -395,6 +395,84 @@ function validatePersistedRound(directory, identity, payload) {
         throw new Error('Reader 新轮身份、原稿或实际请求预算证明不一致');
     }
 }
+// 旧首次装轮代码可能丢失仍在原档中的完整稿。只恢复同一已付轮的正文，不装新预算。
+function restoreExplicitRoundOriginalDraft(directory, identity, payload, paper) {
+    try { return restoreExplicitRoundOriginalDraftChecked(directory, identity, payload, paper); }
+    catch (cause) {
+        const error = retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID',
+            `同父原稿恢复证明无效：${cause.message}`);
+        error.cause = cause;
+        throw error;
+    }
+}
+function restoreExplicitRoundOriginalDraftChecked(directory, identity, payload, paper) {
+    const repair = require('./reader-repair');
+    if (!payload?.explicitReaderRetryRound || payload.status !== 'failed'
+        || payload.draft !== null || !['', '无'].includes(String(payload.rawDraft || '').trim())
+        || payload.attempts !== 0 || payload.fullAttempts !== 0
+        || require('../analysis-engine').isSuccessfulAnalysisRecord(paper)) return payload;
+    validatePersistedRound(directory, identity, payload);
+    const receiptFile = paths(directory, payload.explicitReaderRetryRound.roundId).receipt;
+    const checkedReceipt = readMigrationEnvelope(receiptFile);
+    const receipt = checkedReceipt.envelope;
+    // 局部子轮或已保存新内容不能借此回到祖先稿；物理请求只证明已预留，不证明收到正文。
+    if (receipt.status !== 'active' || receipt.grant.contract !== CONTRACT
+        || !receipt.requests.length || receipt.requests.some(request => request.stage !== 'apiReaderArticle')) return payload;
+    const source = readMigrationEnvelope(receipt.archivedFile);
+    const original = source.envelope;
+    const allowedFields = require('./reader-recovery-revision').ALLOWED_FIELDS;
+    const semantic = value => Object.fromEntries(Object.entries(value || {}).filter(([key]) => !allowedFields.includes(key)));
+    if (repair.hashDraft(semantic(original.identity)) !== repair.hashDraft(semantic(identity))
+        || original.identity.readerRecoveryEpochSha256 !== identity.readerRecoveryEpochSha256
+        || repair.hashDraft(original.identity.readerJsonRequestPolicy ?? null) !== repair.hashDraft(identity.readerJsonRequestPolicy ?? null)) {
+        throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同父原稿恢复的封存来源、实际输入或恢复epoch已变化');
+    }
+    const draft = repair.parseRecoveryDraft(original.payload?.draft) || repair.parseRecoveryDraft(original.payload?.rawDraft);
+    if (!draft || draft.sections.length < 12 || draft.sections.some(section => !section
+        || ['kind', 'heading', 'body'].some(key => typeof section[key] !== 'string' || !section[key].trim()))) return payload;
+    return withExplicitRound(paper, receipt.grant, () => {
+        const currentFile = path.join(directory, `${repair.hashDraft(identity)}.json`);
+        const current = readMigrationEnvelope(currentFile);
+        if (repair.hashDraft(current.envelope.identity) !== repair.hashDraft(identity)
+            || current.envelope.payloadSha256 !== repair.hashDraft(current.envelope.payload)
+            || repair.hashDraft(current.envelope.payload) !== repair.hashDraft(payload)
+            || hash(source.bytes) !== receipt.grant.envelopeSha256
+            || repair.hashDraft(original.payload) !== receipt.grant.payloadSha256
+            || repair.hashDraft(original.identity) !== receipt.grant.originalIdentitySha256
+            || hash(fs.readFileSync(receiptFile)) !== hash(checkedReceipt.bytes)) {
+            throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同父原稿恢复的当前候选、原档或付费账已变化');
+        }
+        const archivedName = `${repair.hashDraft(identity)}.round-original-restoration-${hash(current.bytes)}.json`;
+        const archivedFile = path.join(directory, archivedName);
+        if (fs.existsSync(archivedFile)) {
+            if (hash(readMigrationEnvelope(archivedFile).bytes) !== hash(current.bytes)) {
+                throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同父原稿恢复的占位稿原字节已变化');
+            }
+        } else {
+            const fd = fs.openSync(archivedFile, 'wx', 0o600);
+            try { fs.writeFileSync(fd, current.bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+        }
+        const next = { ...payload, draft, rawDraft: JSON.stringify(draft),
+            draftOrderMappings: original.payload.draftOrderMappings || [],
+            issues: original.payload.issues || [], noProgress: 0, failureSignature: '',
+            validationFailureSignature: '', validationFailureStreak: 0,
+            readerOriginalDraftRestorations: [...(payload.readerOriginalDraftRestorations || []), {
+                contract: 'reader-explicit-round-original-draft-restoration-v1', restoredAt: new Date().toISOString(),
+                roundId: receipt.grant.roundId, currentIdentitySha256: repair.hashDraft(identity),
+                placeholderArchiveName: archivedName, placeholderEnvelopeSha256: hash(current.bytes),
+                placeholderPayloadSha256: repair.hashDraft(payload), originalEnvelopeSha256: hash(source.bytes),
+                originalPayloadSha256: repair.hashDraft(original.payload), originalDraftSha256: repair.hashDraft(draft),
+                originalIdentitySha256: repair.hashDraft(original.identity), parentReceiptSha256: hash(checkedReceipt.bytes),
+                preservedAttempts: payload.attempts, preservedFullAttempts: payload.fullAttempts,
+                preservedPhysicalRequests: receipt.physicalRequests,
+                preservedReservedOutputTokens: receipt.reservedOutputTokens,
+                originalAttempts: original.payload.attempts, originalFullAttempts: original.payload.fullAttempts
+            }] };
+        repair.saveFailedCandidate(directory, identity, next);
+        return next;
+    });
+}
+
 function withPhysicalBudget(proof, paper, callback) {
     if (!proof) return callback();
     const owner = readOwner(paper);
@@ -444,4 +522,4 @@ function consumePhysicalRequest(body, options) {
     atomic(scope.proof.receiptFile, receipt);
 }
 module.exports = { CONTRACT, LOCAL_REPAIR_CONTRACT, PARENT_RECOVERY_CONTRACT: parentRecovery.CONTRACT, withExplicitLocalRepairRound, assertGrant, withExplicitRound, beginExplicitRound,
-    withPhysicalBudget, consumePhysicalRequest, validatePersistedRound };
+    withPhysicalBudget, consumePhysicalRequest, validatePersistedRound, restoreExplicitRoundOriginalDraft };

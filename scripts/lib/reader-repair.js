@@ -2204,6 +2204,13 @@ function saveFailedCandidate(directory, identity, payload) {
     const filename = candidatePath(absolute, identity);
     const previous = loadFailedCandidate(absolute, identity);
     const storedPayload = structuredClone(payload);
+    if (previous?.readerOriginalDraftRestorations) {
+        if (storedPayload.readerOriginalDraftRestorations
+            && hashDraft(storedPayload.readerOriginalDraftRestorations) !== hashDraft(previous.readerOriginalDraftRestorations)) {
+            throw new Error('同父原稿恢复记录不能改变');
+        }
+        storedPayload.readerOriginalDraftRestorations = previous.readerOriginalDraftRestorations;
+    }
     if (previous?.explicitReaderRetryRound) {
         if (storedPayload.explicitReaderRetryRound
             && hashDraft(storedPayload.explicitReaderRetryRound) !== hashDraft(previous.explicitReaderRetryRound)) {
