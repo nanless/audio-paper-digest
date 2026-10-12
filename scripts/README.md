@@ -35,6 +35,12 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 或明确豁免发布后视觉；`digest:status` 尚未自动核验部署和网页。特殊重发步骤见本页末尾的
 [同日全量重写后的重发](#同日全量重写后的重发)。
 
+排查保存进度过慢时，可在原命令前设置 `PD_CHECKPOINT_TIMING=1`。默认关闭；开启后，
+`[checkpoint-timing]` 记录进程、论文编号、保存原因、读取和解析、序列化、写入及总耗时，
+以及本次写入字节数和保存版本号。`lock_wait_ms` 包含取得文件锁及写入锁信息的开销，不能当作纯等待时间。
+日志不含正文、文件路径、网址或密钥；它不会改变保存次数、锁内合并和失败处理。
+这些是本地操作耗时，图片或模型请求的总耗时还可能包含等待本地处理的时间。
+
 索引中的文件名、字段和协议名保持代码原形。SHA 用于核验文件内容和对应关系；CAS 指写入前核对
 当前内容仍与读取时一致；`O_EXCL` 表示拒绝覆盖已存在文件。这些机制只看文件和字节，论文内容对不对仍要人判断。
 
@@ -68,7 +74,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `parse-arxiv-atom.py` | Python 解析入口 | 经 `python-runtime.sh` 读取有字节上限的标准输入，严格校验 Atom XML、官方论文 ID、标题与摘要，再输出有字节上限的 JSON；拒绝文档类型与实体声明。 |
 | `fetch-huggingface-papers.js` | Node 模块/入口 | 通过最小环境中的 `curl` 抓取 HuggingFace Papers。 |
 | `deep-analyzer.js` | Node 核心 | 获取单篇全文，执行多阶段分析、评分审计、API Reader 写作和图片规划。结构修复后，只用原文证据核验 `core-summary-detailed-v3`；按阶段依赖、SHA 和旧检查点决定恢复范围，尽量少做整篇重做。 |
-| `analysis-engine.js` | Node 共享 | 管理论文锁、重试、检查点、批量并发与结果合并，并判断每篇是否完成。 |
+| `analysis-engine.js` | Node 共享 | 管理论文锁、重试、检查点、批量并发与结果合并，并判断每篇是否完成；`PD_CHECKPOINT_TIMING=1` 可记录保存各步骤的耗时。 |
 | `analysis-contract.js` | Node 共享 | 核验 API 分析的结构、评分、方法和表格要求，同时能读历史 Manual 结果。 |
 | `lib/reanalysis-helpers.js` | Node 库 | 供指定论文重分析使用，清理 Reader 状态并更新恢复统计。 |
 | `editorial-quality.js` | Node 共享 | 检查 API/Manual 读者正文的语言、事实表述、评分和可读性。 |
