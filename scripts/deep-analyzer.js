@@ -3352,10 +3352,24 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
             );
             continue;
         }
+        // 同一个范围共用“成”时必须一起转换，不能只把“七到八成”的末端写成 80%。
+        const proportionRange = match.match(/^([一二两三四五六七八九])成?\s*(到|至|–|—|-)\s*([一二两三四五六七八九])成$/u);
+        if (proportionRange) {
+            normalized = normalized.replaceAll(match, (surface, offset, whole) => {
+                const before = whole.slice(0, offset), after = whole.slice(offset + surface.length);
+                if (/[负正零〇一二两三四五六七八九十百千万亿点\d]$/u.test(before)
+                    || /^[零〇一二两三四五六七八九十百千万亿点\d半]/u.test(after)) return surface;
+                return `${numeralMap[proportionRange[1]] * 10}%${proportionRange[2]}${numeralMap[proportionRange[3]] * 10}%`;
+            });
+            continue;
+        }
         const proportionMatch = match.match(/^([一二两三四五六七八九])成$/);
         if (proportionMatch) {
             normalized = normalized.replaceAll(match, (surface, offset, whole) => {
                 const before = whole.slice(0, offset), after = whole.slice(offset + surface.length);
+                // 旧问题记录可能只命中区间末端；保留完整范围，等重新诊断后整体转换。
+                if (/[一二两三四五六七八九]成?\s*(?:到|至|–|—|-)\s*$/u.test(before)
+                    || /^\s*(?:到|至|–|—|-)\s*[一二两三四五六七八九]成/u.test(after)) return surface;
                 if (/[负正零〇一二两三四五六七八九十百千万亿点\d]$/u.test(before)
                     || /^[零〇一二两三四五六七八九十百千万亿点\d半]/u.test(after)) return surface;
                 return `${numeralMap[proportionMatch[1]] * 10}%`;
