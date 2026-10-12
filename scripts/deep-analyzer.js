@@ -7300,13 +7300,35 @@ function hasReviewedCompletedPrimaryReaderSeed(paper, sourceText, reviewFeedback
     return true;
 }
 
-function prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback) {
+function hasReviewedReaderFactLocalSeed(paper, sourceText, reviewFeedback) {
+    const facts = require('./lib/daily-fact-review');
+    const active = facts.current(getPaperArxivId(paper));
+    const engine = require('./analysis-engine');
+    const hasFailure = Boolean(paper?.latestAnalysisAttemptError || paper?.error
+        || paper?.digestStatus?.latestAttemptStatus === 'analysis_failed');
+    const knownPreRequestRejection = paper?.latestAnalysisAttemptError === COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR
+        && paper?.latestAnalysisAttemptErrorCode === 'CONTRACT_REJECTED'
+        && (!paper.error || paper.error === COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR);
+    if (hasFailure && !knownPreRequestRejection
+        && !hasReviewedCompletedPrimaryReaderSeed(paper, sourceText, reviewFeedback)) return false;
+    return Boolean(active && !active.scoringOnly && active.feedback.readerFeedback?.trim()
+        && !['primaryFeedback', 'coreFeedback', 'tagFeedback', 'scoringFeedback']
+            .some(key => String(active.feedback[key] || '').trim())
+        && String(reviewFeedback || '').trim() === facts.reviewFeedback('apiReaderArticle', getPaperArxivId(paper)).trim()
+        && engine.getIncompleteAnalysisContentReason(paper) === null
+        && engine.hasValidApiReaderV3Records(paper)
+        && crypto.createHash('sha256').update(String(sourceText || '')).digest('hex') === paper.sourceSha256);
+}
+
+function prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback, options = {}) {
     if (!String(reviewFeedback || '').trim()) return null;
     // 复用生产环境的字节和溯源校验器，不要相信一个 complete 标志，也不要把新传进来的
     // 草稿当成已有的 Reader 接受。
     const { hasValidApiReaderV3Records } = require('./analysis-engine.js');
     const reviewedCompletedPrimary = hasReviewedCompletedPrimaryReaderSeed(paper, sourceText, reviewFeedback);
-    const currentReaderValid = (!paper?.latestAnalysisAttemptError || reviewedCompletedPrimary)
+    const reviewedFactLocal = options.readerFactLocalRevision === true
+        && hasReviewedReaderFactLocalSeed(paper, sourceText, reviewFeedback);
+    const currentReaderValid = (!paper?.latestAnalysisAttemptError || reviewedCompletedPrimary || reviewedFactLocal)
         && hasValidApiReaderV3Records(paper);
     const staleReaderStage = currentReaderValid
         ? null : recoverableStaleReaderRevisionStage(paper, sourceText);
@@ -7346,7 +7368,7 @@ function buildApiReaderGenerationStart(paper, options = {}) {
     let seed = null;
     if (options.initialDraft !== undefined) {
         seed = options.revisionSeed
-            || prepareApiReaderRevisionSeed(paper, options.sourceText, externalReviewFeedback);
+            || prepareApiReaderRevisionSeed(paper, options.sourceText, externalReviewFeedback, options);
         const draftSha256 = crypto.createHash('sha256')
             .update(String(options.initialDraft)).digest('hex');
         const sourceSha256 = crypto.createHash('sha256')
@@ -7358,6 +7380,20 @@ function buildApiReaderGenerationStart(paper, options = {}) {
             || seed.metadata?.revisionSeedPlanSha256 !== paper.apiReaderPlanSha256
             || seed.metadata?.revisionSeedSourceSha256 !== sourceSha256) {
             throw new Error('initialDraft 未通过当前正文、写作计划和来源记录的核验，不能用于定向修订。');
+        }
+    }
+    if (options.readerFactLocalRevision === true) {
+        const facts = require('./lib/daily-fact-review');
+        const active = facts.current(getPaperArxivId(paper));
+        const currentSeed = prepareApiReaderRevisionSeed(paper, options.sourceText, externalReviewFeedback, options);
+        if (!active || active.scoringOnly || !active.feedback.readerFeedback?.trim()
+            || ['primaryFeedback', 'coreFeedback', 'tagFeedback', 'scoringFeedback']
+                .some(key => String(active.feedback[key] || '').trim())
+            || !seed || seed.initialDraft !== currentSeed?.initialDraft
+            || stableFingerprint(seed.metadata) !== stableFingerprint(currentSeed?.metadata)
+            || externalReviewFeedback !== facts.reviewFeedback('apiReaderArticle', getPaperArxivId(paper)).trim()
+            || options.resourceLocalRevision === true || options.signedRevisionMinimalDisplay === true) {
+            throw new Error('事实局部修订只接受当前已核Reader单独反馈与真实签名稿');
         }
     }
     if (options.signedRevisionMinimalDisplay === true && (!seed || options.resourceLocalRevision === true)) {
@@ -7393,9 +7429,14 @@ function buildApiReaderGenerationStart(paper, options = {}) {
         + (externalReviewFeedback
             ? '\n本轮局部修复只返回提示要求的补丁 JSON 与已授权字段，不返回整篇文章 JSON 或参考用的 {article,plan}。未授权的事实问题保留反馈，等待后续重新核验并授权。全部来源与整篇检查仍须通过。'
             : '');
+    const signedRecoveryDraft = (options.resourceLocalRevision === true || options.readerFactLocalRevision === true) && seed
+        ? require('./lib/signed-reader-recovery-draft').convert(seed) : null;
+    const readerFactLocalPaths = options.readerFactLocalRevision === true
+        ? [...new Set(require('./lib/reader-repair').verifiedReaderFactIssues(signedRecoveryDraft,
+            require('./lib/daily-fact-review').current(getPaperArxivId(paper)).feedback.rejectedReaderClaims)
+            .map(issue => issue.path))] : undefined;
     return {
-        signedRecoveryDraft: options.resourceLocalRevision === true && seed
-            ? require('./lib/signed-reader-recovery-draft').convert(seed) : null,
+        signedRecoveryDraft, readerFactLocalPaths,
         previousDraft: display?.text || seed?.initialDraft || '无',
         legacyPreviousDraft: display ? seed.initialDraft : null,
         signedRevisionDisplayFields: display?.fields || {},
@@ -7471,6 +7512,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const identity = {
         paperId: getPaperArxivId(paper),
         ...(options.resourceLocalRevision === true ? { resourceLocalRevisionContract: 'signed-reader-resource-local-repair-v1' } : {}),
+        ...(options.readerFactLocalRevision === true ? { readerFactLocalRevisionContract: 'signed-reader-fact-local-repair-v1' } : {}),
         ...apiReaderRequestPolicyFields(),
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
         contentMode,
@@ -7843,7 +7885,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         : [{ type: 'text', text: `以下是论文 PDF 的临时渲染页 ${image.ordinal}。它只在本次请求中可见，`
             + '不能在文章中生成图片链接；可用它辅助理解，但正文涉及坐标、曲线或布局时仍须有可重放的文本/表格证据。' },
             buildImageContent(image.label, image.base64, image.mime)];
-    const parseCandidate = raw => parseApiReaderArticleResult(raw, {
+    const parseCandidate = raw => {
+        const parsed = parseApiReaderArticleResult(raw, {
         arxivId: getPaperArxivId(paper),
         availableFigureOrdinals: pixelFigureOrdinals,
         requireAllFigurePlacements: options.structuredArtifacts?.sourceKind === 'conference_pdf'
@@ -7861,7 +7904,17 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         enforceResourceAvailabilityClaims: options.resourceLocalRevision === true,
         structuredArtifacts: options.structuredArtifacts,
         sourceText: options.sourceText
-    });
+        });
+        try {
+            require('./lib/daily-fact-review').validateRepairedClaims('apiReaderArticle', parsed.article, getPaperArxivId(paper));
+        } catch (error) {
+            error.readerIssues = repair.verifiedReaderFactIssues(repair.parseRecoveryDraft(raw),
+                require('./lib/daily-fact-review').current(getPaperArxivId(paper))?.feedback.rejectedReaderClaims);
+            if (error.readerIssues.length) error.code = 'READER_VERIFIED_FACT_CLAIM';
+            throw error;
+        }
+        return parsed;
+    };
     // 恢复候选即使被之前的执行单元标成失败，也要重新校验。已保存的成功标志不能
     // 替代当前完整检查。
     if (candidate) {
@@ -7975,7 +8028,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             targetGuidance: '本次只授权明确删除两个顶层程序元数据字段。其他字段及全部正文逐字保留，删除后仍检查整篇。'
         } : candidate && !sourceBindingNeedsFullRetry
             ? repair.buildRepairContext(candidate, currentIssues, sourceEvidence, options.sourceText,
-                { availableFigureOrdinals: pixelFigureOrdinals, structuredArtifacts: options.structuredArtifacts }) : null;
+                { availableFigureOrdinals: pixelFigureOrdinals, structuredArtifacts: options.structuredArtifacts,
+                    ...(options.readerFactLocalRevision === true ? { readerFactLocalPaths: start.readerFactLocalPaths } : {}) }) : null;
         if (repairContext && repairContext.targets.length === 0
             && currentIssues.some(issue => repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair)) {
             const latestFailure = repair.loadFailedCandidate(candidateDirectory, identity) || {};
@@ -7990,6 +8044,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             });
             throw readerRepairStopped('READER_REPAIR_NO_ALLOWED_TARGET',
                 '没有可安全修复的表格对应节点，已保留失败草稿；本次未发送模型请求');
+        }
+        if (options.readerFactLocalRevision === true && (!repairContext || repairContext.targets.length === 0
+            || sourceBindingNeedsFullRetry || repairContext.atomicOperation
+            || repairContext.targets.some(target => !start.readerFactLocalPaths.includes(target.path)))) {
+            throw readerRepairStopped('READER_FACT_LOCAL_NO_SAFE_TARGET',
+                '事实局部修订没有安全正文目标，保留签名稿与全部已付费记录，不请求完整重写');
         }
         if (options.resourceLocalRevision === true && repairContext) {
             const resourcePaths = new Set(conferenceReaderResourceClaimIssues(
@@ -8187,6 +8247,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 } else {
                     candidate = repair.applyReaderPatch(candidate, patch, repairContext.targets.map(target => target.path), {
                         availableFigureOrdinals: selectedOrdinals,
+                        ...(options.readerFactLocalRevision === true ? {
+                            readerFactLocalClaims: Object.fromEntries(repairContext.targets
+                                .map(target => [target.path, target.authorizedClaims]))
+                        } : {}),
                         atomicOperation: repairContext.atomicOperation,
                         sourceText: options.sourceText || '',
                         structuredArtifacts: options.structuredArtifacts
@@ -8377,7 +8441,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         ? crypto.createHash('sha256').update(reviewFeedback).digest('hex')
         : null;
     const revisionSeed = options.revisionSeed
-        || prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback);
+        || prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback, options);
     const contentMode = revisionSeed ? READER_SIGNED_REVISION_CONTENT_MODE : READER_SOURCE_CONTENT_MODE;
     const signedDisplayFields = options.signedRevisionMinimalDisplay === true && revisionSeed
         ? require('./lib/signed-reader-recovery-draft').minimalDisplay(revisionSeed).fields : {};
@@ -8386,6 +8450,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         contentMode,
         ...signedDisplayFields,
         ...(options.resourceLocalRevision === true ? { resourceLocalRevisionContract: 'signed-reader-resource-local-repair-v1' } : {}),
+        ...(options.readerFactLocalRevision === true ? { readerFactLocalRevisionContract: 'signed-reader-fact-local-repair-v1' } : {}),
         analysisSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
         evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
         structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || '',
@@ -8396,6 +8461,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         paper, analysis, evidenceContext, {
             reviewFeedback,
             resourceLocalRevision: options.resourceLocalRevision === true,
+            readerFactLocalRevision: options.readerFactLocalRevision === true,
             signedRevisionMinimalDisplay: options.signedRevisionMinimalDisplay === true,
             readerResources,
             ...(revisionSeed ? {
@@ -8415,6 +8481,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         execution: {
             contentMode, fingerprint, ...signedDisplayFields,
             ...(options.resourceLocalRevision === true ? { resourceLocalRevisionContract: 'signed-reader-resource-local-repair-v1' } : {}),
+            ...(options.readerFactLocalRevision === true ? { readerFactLocalRevisionContract: 'signed-reader-fact-local-repair-v1' } : {}),
             attempts: generated.attempts,
             fullAttempts: generated.fullAttempts, transportFailures: generated.transportFailures,
             ...apiReaderRequestPolicyFields(),
@@ -8515,11 +8582,13 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     );
     const directContext = require('./lib/direct-rewrite-analysis-context.js');
     const directMaterializer = directContext.directReaderMaterializer();
-    const materializedFigures = options.reuseSignedFigures
+    const paidFigures = require('./lib/reader-paid-resolved-render')
+        .reuseVerifiedPaidResolvedFigures(injectedReaderResult.figures, paper, arxivId);
+    const materializedFigures = paidFigures ?? (options.reuseSignedFigures
         ? reuseSignedApiReaderFigureAssets(injectedReaderResult.figures, options.reuseSignedFigures, arxivId)
         : await (directMaterializer || materializeApiReaderFigures)(
             injectedReaderResult.figures, arxivId
-        );
+        ));
     const materializedFigureOrdinals = new Set(materializedFigures.map(item => item.ordinal));
     const signedFigures = directContext.getDirectRewriteAnalysisContext()
         ? materializedFigures.map(directContext.stripEphemeralFigureFields)
@@ -8539,6 +8608,8 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
         figures: signedFigures
     };
     readerResult.article = normalizeApiReaderFigureMarkdown(readerResult.article, signedFigures);
+    require('./lib/daily-fact-review').validateRepairedClaims('apiReaderArticle', readerResult.article,
+        getPaperArxivId(paper));
     const articleSha256 = crypto.createHash('sha256').update(readerResult.article).digest('hex');
     const planSha256 = stableFingerprint(readerResult.plan);
     const figuresSha256 = stableFingerprint(readerResult.figures);
@@ -8596,6 +8667,8 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     manifest.stages.apiReaderArticle = {
         status: 'complete',
         ...options.execution,
+        ...(options.execution?.readerFactLocalRevisionContract === 'signed-reader-fact-local-repair-v1'
+            ? require('./lib/daily-fact-review').fingerprintFields('apiReaderArticle') : {}),
         articleSha256,
         planSha256,
         figureCount: readerResult.figures.length,
@@ -18241,6 +18314,8 @@ module.exports = {
     buildApiReaderGenerationStart,
     buildApiReaderValidationFeedback,
     refreshApiReaderArticleFromSource,
+    hasReviewedReaderFactLocalSeed,
+    finalizeApiReaderRefresh,
     finalizeOperatorApiReaderArticleFromSource,
     refreshApiScoringAndReaderFromSource,
     refreshApiReaderAuthorsFromSource,

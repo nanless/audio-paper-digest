@@ -15,7 +15,7 @@ const CONTRACT = 'reader-recovery-diagnostics-revision-v1';
 const ALLOWED_FIELDS = Object.freeze(['repairImplementationSha256', 'tableCompilerSha256', 'draftOrderContract',
     'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
     'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256',
-    'resourceLocalRevisionContract', 'readerRecoveryEpochSha256', 'readerJsonRequestPolicy', 'repairPromptSha256', 'promptSha256']);
+    'resourceLocalRevisionContract', 'readerFactLocalRevisionContract', 'readerRecoveryEpochSha256', 'readerJsonRequestPolicy', 'repairPromptSha256', 'promptSha256']);
 const implementationFields = ALLOWED_FIELDS.filter(field => field.endsWith('Sha256')
     && !['repairPromptSha256', 'promptSha256'].includes(field));
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
@@ -124,6 +124,12 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
             || identity.contentMode !== 'reader-source-signed-revision-v1')) {
         throw new Error('资源局部修订的恢复模式记录无效');
     }
+    if (identity?.readerFactLocalRevisionContract !== undefined
+        && (identity.readerFactLocalRevisionContract !== 'signed-reader-fact-local-repair-v1'
+            || identity.contentMode !== 'reader-source-signed-revision-v1'
+            || identity.resourceLocalRevisionContract !== undefined)) {
+        throw new Error('事实局部修订的恢复模式记录无效');
+    }
     assertReaderJsonRequestPolicy(identity?.readerJsonRequestPolicy);
     const expectedPixels = options.pixelEvidenceSha256;
     if (expectedPixels !== undefined && !/^[a-f0-9]{64}$/.test(expectedPixels)) {
@@ -207,6 +213,8 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
         // 只允许从同输入的旧签名模式收紧为资源局部模式，不允许解除已保存的局部限制。
         if (envelope.identity.resourceLocalRevisionContract !== undefined
             && envelope.identity.resourceLocalRevisionContract !== identity.resourceLocalRevisionContract) continue;
+        if (envelope.identity.readerFactLocalRevisionContract !== undefined
+            && envelope.identity.readerFactLocalRevisionContract !== identity.readerFactLocalRevisionContract) continue;
         const oldJsonPolicy = envelope.identity.readerJsonRequestPolicy;
         const newJsonPolicy = identity.readerJsonRequestPolicy;
         assertReaderJsonRequestPolicy(oldJsonPolicy);
@@ -327,7 +335,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
             }
         }
     }
-    const diagnosticImplementationChanged = !old.plainChinesePromptUpgrade
+    const diagnosticImplementationChanged = !identity.readerFactLocalRevisionContract && !old.plainChinesePromptUpgrade
         && implementationFields.some(field => old.changedFields.includes(field));
     const lineageAlreadyIssued = updated.implementationRepairAllowanceLineage
         === IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT;

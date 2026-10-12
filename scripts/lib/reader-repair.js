@@ -782,6 +782,28 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             throw new Error('整组小节重排缺少本轮明确授权');
         }
         const old = nodeAt(draft, item.path);
+        if (options.readerFactLocalClaims) {
+            const claims = options.readerFactLocalClaims[item.path];
+            if (!Array.isArray(claims) || !claims.length || typeof old !== 'string'
+                || typeof item.value !== 'string') throw new Error('事实局部补丁缺少完整错误原句授权');
+            const spans = claims.map(claim => ({ claim, start: old.indexOf(claim) }))
+                .sort((a, b) => a.start - b.start);
+            let cursor = 0;
+            let pattern = '^';
+            const literal = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            for (const span of spans) {
+                if (span.start < cursor || old.split(span.claim).length !== 2) {
+                    throw new Error('事实局部补丁原句位置不唯一');
+                }
+                pattern += literal(old.slice(cursor, span.start)) + '([\\s\\S]*?)';
+                cursor = span.start + span.claim.length;
+            }
+            pattern += literal(old.slice(cursor)) + '$';
+            const match = new RegExp(pattern).exec(item.value);
+            if (!match || match.slice(1).some(value => !value.trim() || /\[\[|!\[|\|/.test(value))) {
+                throw new Error('事实局部补丁改变了错误原句以外正文或引入图表标记');
+            }
+        }
         const expectedOldSha256 = hashDraft(old);
         if (item.oldSha256 !== expectedOldSha256) {
             const receivedOldSha256 = /^[a-f0-9]{64}$/.test(String(item.oldSha256 || ''))
@@ -1247,7 +1269,9 @@ function collectDraftIssues(draft, parserError, options = {}) {
             && issue.diagnosticOnly !== true && issue.path === null
             && issue.requiredCount === parserError.requiredCount
             && issue.actualCount === parserError.actualCount);
-    if (parserError && !hasSameCountIssue && !languageError) {
+    const preciseFactError = parserError?.code === 'READER_VERIFIED_FACT_CLAIM'
+        && parserIssues.length > 0 && parserIssues.every(issue => issue?.code === 'reader_verified_fact_claim');
+    if (parserError && !hasSameCountIssue && !languageError && !preciseFactError) {
         if (orderError.ignoreMessageForRepair) {
             issues.push(orderError.summary);
         } else if (parserError.code === TABLE_COUNT_ISSUE_CODE) {
@@ -1934,7 +1958,46 @@ function unavailableFigureCleanupOperation(draft, options = {}) {
         ] };
 }
 
+function verifiedReaderFactIssues(draft, claims) {
+    const issues = [];
+    for (const claim of claims || []) {
+        if (typeof claim !== 'string' || claim.trim().length < 12) continue;
+        const matches = (draft?.sections || []).flatMap((section, index) => {
+            // 只看正文完整原句，不以来源引文、绑定元数据或零散术语授权改写。
+            const mask = value => value.replace(/[^\n]/g, ' ');
+            const prose = String(section?.body || '')
+                .replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, mask)
+                .replace(/`+[^`\n]*`+|\$\$[\s\S]*?\$\$|\$[^$\n]*\$|\\\[[\s\S]*?\\\]|\\\([^\n]*?\\\)/g, mask)
+                .replace(/“[^”]*”|「[^」]*」|"[^"\n]*"/g, mask)
+                .split('\n').map(line => /^\s*>/.test(line) || line.includes('|') ? mask(line) : line).join('\n');
+            return Array.from({ length: prose.split(claim).length - 1 },
+                () => `/sections/${index}/body`);
+        });
+        if (matches.length !== 1) continue;
+        issues.push({ path: matches[0], code: 'reader_verified_fact_claim', claim,
+            message: '已核验事实反馈指出该正文仍保留错误完整原句，按本次原文证据纠正。' });
+    }
+    return issues;
+}
+
 function buildRepairTargets(draft, issues, options = {}) {
+    if (Array.isArray(options.readerFactLocalPaths)) {
+        if (issues.some(issue => issue?.diagnosticOnly !== true
+            && issue?.code !== 'reader_verified_fact_claim')) return [];
+        const allowed = new Set(options.readerFactLocalPaths);
+        const currentIssues = verifiedReaderFactIssues(draft,
+            issues.filter(issue => issue?.diagnosticOnly !== true).map(issue => issue.claim));
+        if (issues.some(issue => issue?.diagnosticOnly !== true
+            && (!allowed.has(issue.path) || !currentIssues.some(current =>
+                current.path === issue.path && current.claim === issue.claim)))) return [];
+        const pointers = [...new Set(currentIssues.map(issue => issue.path))];
+        if (pointers.length > 8) return [];
+        return pointers
+            .map(pointer => ({ path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)),
+                value: nodeAt(draft, pointer),
+                authorizedClaims: currentIssues.filter(issue => issue.path === pointer).map(issue => issue.claim),
+                repairInstruction: '只替换列出的完整错误原句；句外正文、空白和全部标记须逐字不变。' }));
+    }
     const observedFigures = observedFigureSelectionOperation(draft, options);
     if (observedFigures) return observedFigures.requiredReplacementPaths.map(pointer => ({
         path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
@@ -2918,7 +2981,7 @@ function applyTopLevelMetadataRepair(raw, patch, context) {
 }
 
 
-module.exports = { REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+module.exports = { verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,

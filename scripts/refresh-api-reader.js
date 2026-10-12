@@ -6,6 +6,7 @@ const Config = require('./config.js');
 const {
     refreshApiReaderArticleFromSource,
     hasReviewedCompletedPrimaryReaderSeed,
+    hasReviewedReaderFactLocalSeed,
     refreshApiScoringAndReaderFromSource,
     refreshApiReaderAuthorsFromSource,
     refreshApiReaderFiguresFromSource,
@@ -269,7 +270,14 @@ function canRepairCompletedPrimaryReader(paper, plan, options = {}) {
         || options.authorsOnly || options.figuresOnly || !String(options.reviewFeedback || '').trim()) return false;
     const facts = require('./lib/daily-fact-review');
     const active = facts.current(normalizedId(paper));
-    if (!active || active.scoringOnly || !active.feedback.primaryFeedback?.trim()) return false;
+    if (!active || active.scoringOnly) return false;
+    if (options.readerFactLocalRevision === true) {
+        const bound = facts.validateFeedback(active.feedback, plan, paper);
+        const source = dailyFreshSources.readDailyFreshSource(plan, paper);
+        return dailyFreshSources.withDailyFreshAnalysisContext(plan, () => facts.withFactReview(bound, () =>
+            hasReviewedReaderFactLocalSeed(paper, source.text, options.reviewFeedback)));
+    }
+    if (!active.feedback.primaryFeedback?.trim()) return false;
     const bound = facts.validateFeedback(active.feedback, plan, paper);
     const source = dailyFreshSources.readDailyFreshSource(plan, paper);
     return dailyFreshSources.withDailyFreshAnalysisContext(plan, () => facts.withFactReview(bound, () =>
@@ -277,6 +285,10 @@ function canRepairCompletedPrimaryReader(paper, plan, options = {}) {
 }
 
 async function refreshApiReader(targetId, options = {}) {
+    if (options.readerFactLocalRevision === true && (options.scoringAndReader
+        || options.authorsOnly || options.figuresOnly || options.surfaceBindingsOnly)) {
+        throw new Error('事实局部修订只能刷新Reader正文');
+    }
     return require('./lib/analysis-stop-control').withAnalysisStopControl(async () => {
         const result = await refreshApiReaderInternal(targetId, options);
         try { require('./lib/analysis-stop-control').assertMayStartRequest(); }
@@ -327,6 +339,7 @@ function finishReviewedPrimaryReaderRefresh(previous, refreshed, plan, options =
     const requestedFeedbackSha = require('node:crypto').createHash('sha256')
         .update(String(options.reviewFeedback || '').trim()).digest('hex');
     if (stage.reviewFeedbackSha256 !== requestedFeedbackSha
+        || options.readerFactLocalRevision === true && !stage.factReview
         || stage.factReview && JSON.stringify(stage.factReview)
             !== JSON.stringify(facts.current(normalizedId(previous)).proof)) {
         throw new Error('新 Reader 的反馈身份与本次授权不同');
@@ -340,11 +353,14 @@ function finishReviewedPrimaryReaderRefresh(previous, refreshed, plan, options =
         key.startsWith('latestAnalysisAttempt') || key === 'error' || key === 'digestStatus'));
     result.readerCompletedPrimaryRecoveryHistory = [...(previous.readerCompletedPrimaryRecoveryHistory || []), {
         contract: 'reviewed-completed-primary-reader-finish-v1', failure,
+        ...(options.readerFactLocalRevision === true ? { mode: 'signed-reader-fact-local-repair-v1' } : {}),
         feedbackSha256: facts.current(normalizedId(previous)).proof.feedbackSha256,
         originalFactReview: structuredClone(facts.current(normalizedId(previous)).proof),
         readerExecution: { fingerprint: stage.fingerprint, attempts: stage.attempts,
             fullAttempts: stage.fullAttempts, transportFailures: stage.transportFailures },
-        note: '正常完成状态转换记录；沿用原事实审查与已付费Reader执行，不是新模型审查证明。',
+        note: options.readerFactLocalRevision === true
+            ? '正常Reader事实修复完成转换；保留原主文和评分证明，新Reader使用本次真实反馈与执行记录。'
+            : '正常完成状态转换记录；沿用原事实审查与已付费Reader执行，不是新模型审查证明。',
         readerArticleSha256: stage.articleSha256, completedAt: stage.refreshedAt
     }];
     for (const key of failureKeys) delete result[key];
@@ -413,7 +429,8 @@ async function refreshApiReaderInternal(targetId, options = {}) {
                         storedAnalysisRecord, sourceDetails, { reviewFeedback: options.reviewFeedback }
                     )
                     : await (refreshOperations.article || refreshApiReaderArticleFromSource)(storedAnalysisRecord, sourceDetails, {
-                        reviewFeedback: options.reviewFeedback
+                        reviewFeedback: options.reviewFeedback,
+                        readerFactLocalRevision: options.readerFactLocalRevision === true
                     });
         const repairSurfaceBindings = sourceDetails => {
                 const repaired = JSON.parse(JSON.stringify(storedAnalysisRecord));
@@ -526,6 +543,7 @@ async function refreshApiReaderInternal(targetId, options = {}) {
             if (normalizedId(refreshed) !== requested) {
                 throw new Error(`${requested} 的刷新结果对应了另一个论文 ID，不能保存。`);
             }
+            require('./lib/reader-paid-resolved-render').assertPaidResolvedRenderSnapshot();
             const updated = [...rows];
             updated[targetIndex] = refreshed;
             if (Array.isArray(payload)) return updated;

@@ -885,6 +885,31 @@ test('同输入签名Reader收紧为资源局部模式不清空任何计费计�
     }), /恢复模式记录无效/);
 });
 
+test('事实局部恢复收紧同签名输入且保留旧付费失败，不能降级或冒充全文模式', t => {
+    const sample = fixture(t);
+    sample.payload.draft = normalizeReaderDraftOrder(sample.payload.draft).draft;
+    sample.payload.rawDraft = JSON.stringify(sample.payload.draft);
+    sample.oldIdentity.contentMode = 'reader-source-signed-revision-v1';
+    sample.identity.contentMode = 'reader-source-signed-revision-v1';
+    sample.identity.readerFactLocalRevisionContract = 'signed-reader-fact-local-repair-v1';
+    saveFailedCandidate(sample.directory, sample.oldIdentity, sample.payload);
+    const recovered = sample.enabled(() => loadReaderRecoveryRevision(sample.directory, sample.identity));
+    assert.ok(recovered);
+    for (const key of ['attempts', 'fullAttempts', 'transportFailures', 'noProgress',
+        'validationFailureStreak']) assert.equal(recovered[key], sample.payload[key]);
+    assert.deepEqual(recovered.draft, sample.payload.draft);
+    assert.equal(recovered.implementationRepairAllowanceProof, null);
+    const downgrade = { ...sample.identity, parserImplementationSha256: '9'.repeat(64) };
+    delete downgrade.readerFactLocalRevisionContract;
+    assert.equal(sample.enabled(() => loadReaderRecoveryRevision(sample.directory, downgrade)), null);
+    assert.throws(() => loadReaderRecoveryRevision(sample.directory, {
+        ...sample.identity, readerFactLocalRevisionContract: '不明协议'
+    }), /事实局部修订的恢复模式记录无效/);
+    assert.throws(() => loadReaderRecoveryRevision(sample.directory, {
+        ...sample.identity, contentMode: 'reader-source-only-v1'
+    }), /事实局部修订的恢复模式记录无效/);
+});
+
 test('固定中文提示升级连同实现指纹变化仍保留已付费次数和失败计数，不新增额度', t => {
     const f = fixture(t);
     f.oldIdentity.promptSha256 = 'a41f67166a0f366a10bf23cc17aa51ca6105b246ce7964ec14c21d6b4018f380';
