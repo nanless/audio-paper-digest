@@ -97,7 +97,7 @@ Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读�
 | `PD_API_READER_REPAIR_MAX_TOKENS` | 8000 |
 | `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 字符 |
 | `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 字符 |
-| `PD_API_READER_CONCURRENCY` | 默认 5 个进程内解读生成任务，可显式设置 1–12 |
+| `PD_API_READER_CONCURRENCY` | 默认 5 个进程内解读生成任务，可显式设置 1–60 |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 5 个独立页面审查任务 |
 
 主分析可通过 `PD_ANALYSIS_PRIMARY_THINKING_MODE=disabled|enabled` 配置推理，默认关闭，仅对精确 `mimo-v2.6-flash` 的 OpenAI Chat 主分析请求生效。旧完整主分析必须同时有有效正文检查点与原指纹，才按旧配方复用；不补签新声明。新请求绑定实际策略，截断、正文及来源检查保持。厂商支持不等于 OpenCode Go 已在本次业务中验证。

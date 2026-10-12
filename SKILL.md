@@ -142,7 +142,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。npm 中的 Python 命令要求 Python 
 | `PD_API_READER_REPAIR_MAX_TOKENS` | 8000；仅受限局部补丁 |
 | `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 |
 | `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 |
-| `PD_API_READER_CONCURRENCY` | 5，限制 1–5 |
+| `PD_API_READER_CONCURRENCY` | 5，限制 1–60 |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 5，限制 1–5 |
 
 筛选和整篇分析都按各自配置并发；`muse-spark-*` 每个请求有独立隧道，当前推荐的 `mimo-v2.6-flash` 直连。账号池状态更新仍通过短时间持锁串行完成。Responses 仅在 `PD_OPENAI_RESPONSES_STREAM=1` 时使用 SSE，Chat Completions 请求不受该变量影响。返回 `incomplete/max_output_tokens` 时不得接受半截 JSON。

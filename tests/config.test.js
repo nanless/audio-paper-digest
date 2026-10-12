@@ -246,7 +246,7 @@ describe('config', () => {
     });
 
     it('积压批次可显式增加长文并发，保持默认五路与逐篇预算', () => {
-        for (const [requested, expected] of [[1, 1], [6, 6], [12, 12], [24, 12]]) {
+        for (const [requested, expected] of [[1, 1], [6, 6], [12, 12], [60, 60], [72, 60], [0, 5], [-1, 5], ['invalid', 5]]) {
             withProjectEnv(`PD_API_READER_CONCURRENCY=${requested}`, configured => {
                 assert.strictEqual(configured.ANALYSIS_CONFIG.apiReaderConcurrency, expected);
                 assert.strictEqual(configured.ANALYSIS_CONFIG.apiReaderMaxTokens, 48000);
@@ -257,6 +257,11 @@ describe('config', () => {
             });
         }
         withProjectEnv('', configured => assert.strictEqual(configured.ANALYSIS_CONFIG.apiReaderConcurrency, 5));
+        for (const requested of [60, 72]) {
+            withProjectEnv(`PD_ANALYSIS_CONCURRENCY=${requested}`, configured => {
+                assert.strictEqual(configured.ANALYSIS_CONFIG.concurrency, requested);
+            });
+        }
     });
 
     it('项目 .env 覆写各阶段证据字符预算', () => {
