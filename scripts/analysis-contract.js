@@ -1477,6 +1477,81 @@ function hasConcreteUnnumberedMethodChain(summary) {
     return false;
 }
 
+// 只认相邻两句内的具体产物交接，不以动作数量或跨段落共现替代处理链。
+function hasAdjacentConcreteMethodChain(summary) {
+    const sentences = String(summary || '').split(/[。！？!?；;\n]/u).map(s => s.trim()).filter(Boolean);
+    const excluded = /(?:并非|并未|没有|不能|不会|尚未|不再|不负责|(?:未|不)(?:以|把|将|使用)|未曾|未被|未曾被|提及输出|讨论输出|(?:未|不)(?:曾|实际|直接)?(?:输出|提取|生成|接收|选择|建立|更新|存入|处理)|假设|设想|假定|如果|若|可能|预计|预期|计划|准备(?:输出|生成|接收)|未来(?:将|会)|拟采用|建议|应当|应该|对比(?:方法|模型|网络|滤波器)|比较(?:方法|模型|网络|滤波器)|相比|优于|另一(?:种|套)|独立方法)/u;
+    const roles = [
+        ['filter', /滤波器/u], ['network', /网络|变换器/u], ['tracker', /跟踪器/u],
+        ['pool', /候选(?:说话人|程序)?池/u], ['predictor', /预测器/u],
+        ['interface', /搜索接口/u], ['backbone', /主干/u], ['selection', /散度目标|来源收集/u],
+        ['vocabulary', /词表/u], ['retention', /置信保留/u], ['editing', /人工编辑/u],
+        ['checking', /二次检查/u], ['refinement', /精炼器/u]
+    ];
+    const products = [
+        /误差信号/gu, /嵌入/gu, /质心/gu, /候选(?:说话人)?池/gu,
+        /候选(?:只读搜索)?请求/gu, /草稿/gu, /提示句池/gu,
+        /可朗读句(?:子)?/gu, /父程序/gu, /子程序/gu, /语料(?:文本)?/gu
+    ];
+    const actor = sentence => roles.map(([kind, pattern]) => ({ kind, match: pattern.exec(sentence) }))
+        .filter(item => item.match).sort((a,b) => a.match.index - b.match.index)[0]?.kind;
+    const canonical = token => token.replace('候选说话人池', '候选池')
+        .replace('候选只读搜索请求', '候选请求').replace('可朗读句子', '可朗读句').replace('语料文本', '语料');
+    for (let i = 0; i + 1 < sentences.length; i++) {
+        const first = sentences[i], second = sentences[i+1];
+        if (first.length > 320 || second.length > 320 || excluded.test(first) || excluded.test(second) || /^未来/u.test(first) || /^未来/u.test(second)) continue;
+        const firstActor = actor(first), secondActor = actor(second);
+        if (!firstActor || !secondActor || firstActor === secondActor) continue;
+        if (!/(?:提取|更新|建立|生成|输出|得到|选择|选出|送入|合并|存入)/u.test(first)
+            || !/(?:接收|输入|送入|进入|切分|聚集|提取|改写|处理|播放|截取|更新|建立|扩展)/u.test(second)) continue;
+        for (const pattern of products) {
+            pattern.lastIndex = 0;
+            for (const match of first.matchAll(pattern)) {
+                const token = canonical(match[0]);
+                const firstClauses = first.split(/[，,]/u);
+                let startOffset = 0;
+                const clauseIndex = firstClauses.findIndex(clause => {
+                    const contains = match.index >= startOffset && match.index < startOffset + clause.length;
+                    startOffset += clause.length + 1;
+                    return contains;
+                });
+                const productionClause = firstClauses[clauseIndex];
+                if (!productionClause) continue;
+                const localIndex = productionClause.indexOf(match[0]);
+                const before = productionClause.slice(0, localIndex);
+                if (!/(?:提取|更新|建立|生成|输出|得到|选择|选出|送入|合并|存入)[^。；]{0,60}$/u.test(before)) continue;
+                // 省略主语只能承接同句此前的处理角色，不能借另一个角色的产物。
+                const localActor = actor(before);
+                const priorActors = firstClauses.slice(Math.max(0, clauseIndex - 3), clauseIndex)
+                    .map(actor).filter(Boolean);
+                if (localActor ? localActor !== firstActor
+                    : priorActors.at(-1) !== firstActor) continue;
+                pattern.lastIndex = 0;
+                const consumption = [...second.matchAll(pattern)].find(next => canonical(next[0]) === token);
+                if (!consumption) continue;
+                const normalizedSecond = second.replace(/候选说话人池|候选只读搜索请求|可朗读句子|语料文本/gu, canonical);
+                const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const consumes = new RegExp(`(?:接收)(?:这些|该)?${escaped}`
+                    + `|以[^。；]{0,70}${escaped}[^。；]{0,30}为输入`
+                    + `|${escaped}[^。；]{0,70}(?:进入|送入|用于[^。；]{0,30}(?:扩展|检查))`, 'u');
+                const containerConsumes = token === '候选池'
+                    && /^候选池把[^。；]{0,50}(?:嵌入|来源)[^。；]{0,30}(?:存放|聚集)/u.test(normalizedSecond.split(/[，,]/u)[0]);
+                const ownedConsumption = normalizedSecond.split(/[，,]/u).some(clause =>
+                    actor(clause) === secondActor && consumes.test(clause));
+                if (ownedConsumption || containerConsumes) return true;
+            }
+        }
+    }
+    return false;
+}
+
+function hasConcreteCompressionPurpose(summary) {
+    return String(summary || '').split(/[。！？!?；;\n]/u).some(sentence =>
+        !/(?:假设|如果|可能|未来|计划|没有|并非|不能|尚未|不需|无需)/u.test(sentence)
+        && /(?:需|需要|旨在|目标是)把(?:原始)?(?:音频)?波形压缩为[^，,。]{0,30}(?:离散\s*(?:token|码元)|离散表示|编码)/iu.test(sentence)
+        && /(?:可传输|可重建|码率|存储|通信)/u.test(sentence));
+}
+
 function validateCoreSummarySemanticContract(analysis, options = {}) {
     const summary = extractSection(String(analysis || ''), '核心摘要');
     const count = chineseCharacterCount(summary);
@@ -1498,7 +1573,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         && !/(?:并非|并未|不是|不再|不会|不能|不曾|未曾|并不|没有|未被|不成立|不正确|不存在|不属于|不适用)/.test(clause)
         && !/(?:不|未)(?:被|直接|主要|实际|真正|仅|只|也|还|曾|能|会|再|尚)*\s*(?:用于|用来|用以)/.test(clause)
     ));
-    if (!/(?:问题|难点|任务|目标|输入|输出|旨在|针对|解决)/.test(summary) && !concretePurpose) {
+    if (!/(?:问题|难点|任务|目标|输入|输出|旨在|针对|解决)/.test(summary) && !concretePurpose && !hasConcreteCompressionPurpose(summary)) {
         issues.push('缺少任务问题、输入输出或实际难点');
     }
     const chain = summary.match(/(?:第一|第二|第三|第四|首先|其次|然后|随后|接着|最后|先|再|阶段|步骤|模块|组件|分(?:\d+|[一二三四五六七八九十]+)步)/g) || [];
@@ -1509,7 +1584,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     const hasNumberedMethodChain = (chain.length >= 2
         || /分(?:\d+|[一二三四五六七八九十]+)步/.test(summary)) && roles.length >= 2;
     const hasTieredMethodChain = tierRoleStages.size >= 2;
-    if (!hasNumberedMethodChain && !hasTieredMethodChain && !hasConcreteUnnumberedMethodChain(summary)) {
+    if (!hasNumberedMethodChain && !hasTieredMethodChain && !hasConcreteUnnumberedMethodChain(summary) && !hasAdjacentConcreteMethodChain(summary)) {
         issues.push('缺少 2–4 步方法链的分工与衔接');
     }
     const sourceText = typeof options === 'string' ? options : String(options.sourceText || '');
