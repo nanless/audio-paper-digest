@@ -45,8 +45,9 @@ function parseFactFeedbackFiles(argv = process.argv.slice(2)) {
     return files;
 }
 
-function finalizeBatchZeroWorkState(resultPath, fallbackBatchDate) {
+function finalizeBatchZeroWorkState(resultPath, fallbackBatchDate, entryPlan = null) {
     return updateJsonFileLocked(resultPath, current => {
+        if (entryPlan) dailyFreshSources.requireFinalDailyFreshSourceRecoveryPlan(current, { entryPlan });
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
         const { remaining, success, status } = getAnalysisRunSummary(currentPapers);
         const now = getBeijingISOString();
@@ -167,7 +168,7 @@ async function main(options = {}) {
     }
 
     if (notAnalyzed.length === 0) {
-        const finalPayload = finalizeBatchZeroWorkState(RESULT_FILE, batchDate);
+        const finalPayload = finalizeBatchZeroWorkState(RESULT_FILE, batchDate, dailySourcePlan);
         updateAnalysisDigestStatuses(finalPayload.papers, {
             batchDate: finalPayload.batchDate
         });
@@ -216,16 +217,15 @@ async function main(options = {}) {
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
             const feedback = feedbacks.get(normalizedId(paper));
-            let lockedPlan = dailySourcePlan;
-            if (feedback) {
-                lockedPlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(current, { label: 'locked batch fact review' });
-                factReview.validateFeedback(feedback, lockedPlan, latest);
-            }
+            const lockedPlan = dailyFreshSources.requireLockedDailyFreshSourceRecoveryPlan(current, {
+                entryPlan: dailySourcePlan, paper: latest || paper, label: '锁内批量分析恢复'
+            });
+            if (feedback) factReview.validateFeedback(feedback, lockedPlan, latest);
             if (feedback ? hasCompletedBoundFactFeedback(latest, feedback, lockedPlan)
-                : isSuccessfulAnalysisRecord(latest) && dailyFreshSources.isPaperReusableForAnalysis(latest, dailySourcePlan)) {
+                : isSuccessfulAnalysisRecord(latest) && dailyFreshSources.isPaperReusableForAnalysis(latest, lockedPlan)) {
                 return { paper: latest, skip: true };
             }
-            return { paper: dailyFreshSources.prepareDailyPaper(latest || paper, dailySourcePlan), skip: false };
+            return { paper: dailyFreshSources.prepareDailyPaper(latest || paper, lockedPlan), skip: false };
         },
         onPaperResultLocked: async (paper, result) => {
             const attempted = result.result || { ...paper, analysis: null, parsed: null, error: result.error || '分析失败' };
@@ -259,33 +259,28 @@ async function main(options = {}) {
             }
         },
         onSave: async (_results, saveStats) => {
-            const processed = saveStats.success + saveStats.failed;
             const output = updateJsonFileLocked(RESULT_FILE, current => {
                 const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
                 const {
                     remaining,
-                    success: savedAnalysisSuccess,
-                    status: savedAnalysisStatus
+                    success: savedAnalysisSuccess
                 } = getAnalysisRunSummary(currentPapers);
-                const progressStatus = processed < notAnalyzed.length
-                    ? 'running'
-                    : savedAnalysisStatus;
                 const payload = {
                     ...(!Array.isArray(current) && current ? current : {}),
                     lastUpdated: getBeijingISOString(),
                     papers: currentPapers,
-                    status: progressStatus,
+                    status: 'running',
                     stats: {
                         ...(!Array.isArray(current) ? current?.stats : {}),
                         ...saveStats,
                         analyzedSuccess: savedAnalysisSuccess,
                         analyzedFailed: remaining,
                         remainingFailed: remaining,
-                        analysisStatus: progressStatus
+                        analysisStatus: 'running'
                     }
                 };
-                if (progressStatus === 'complete') payload.deepAnalysisCompletedAt = getBeijingISOString();
-                else delete payload.deepAnalysisCompletedAt;
+                // 结束前的整批来源检查尚未通过，先保留运行状态。
+                delete payload.deepAnalysisCompletedAt;
                 return payload;
             });
             papers.splice(0, papers.length, ...(output.papers || []));
@@ -301,6 +296,7 @@ async function main(options = {}) {
     const sourceSummary = Object.entries(stats.sourceCounts || {}).map(([key, count]) => `${key}=${count}`).join(' | ');
     if (sourceSummary) console.log(`文本来源: ${sourceSummary}`);
     const finalPayload = updateJsonFileLocked(RESULT_FILE, current => {
+        dailyFreshSources.requireFinalDailyFreshSourceRecoveryPlan(current, { entryPlan: dailySourcePlan });
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
         const { remaining, success: savedAnalysisSuccess, status } = getAnalysisRunSummary(currentPapers);
         const payload = {

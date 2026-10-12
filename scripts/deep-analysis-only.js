@@ -80,8 +80,9 @@ function validateDeepAnalysisInput(existingData, filteredData, today) {
     return existingData;
 }
 
-function finalizeDeepZeroWorkState(resultPath, filteredData, today) {
+function finalizeDeepZeroWorkState(resultPath, filteredData, today, entryPlan = null) {
     return updateJsonFileLocked(resultPath, current => {
+        if (entryPlan) dailyFreshSources.requireFinalDailyFreshSourceRecoveryPlan(current, { entryPlan });
         validateDeepAnalysisInput(current, filteredData, today);
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
         const { remaining, success, status } = getAnalysisRunSummary(currentPapers);
@@ -159,7 +160,7 @@ async function runDeepAnalysis(options = {}) {
         ))
         .map(paper => dailyFreshSources.prepareDailyPaper(paper, dailySourcePlan));
     if (notAnalyzed.length === 0) {
-        const finalPayload = finalizeDeepZeroWorkState(resultPath, filteredData, today);
+        const finalPayload = finalizeDeepZeroWorkState(resultPath, filteredData, today, dailySourcePlan);
         updateAnalysisDigestStatuses(finalPayload.papers, { batchDate: today });
         const summary = getAnalysisRunSummary(finalPayload.papers);
         console.log(summary.status === 'complete'
@@ -202,11 +203,10 @@ async function runDeepAnalysis(options = {}) {
             const current = readJsonFileStrict(resultPath);
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
-            let lockedPlan = dailySourcePlan;
-            if (feedback) {
-                lockedPlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(current, { label: 'locked fact review' });
-                factReview.validateFeedback(feedback, lockedPlan, latest);
-            }
+            const lockedPlan = dailyFreshSources.requireLockedDailyFreshSourceRecoveryPlan(current, {
+                entryPlan: dailySourcePlan, paper: latest || paper, label: '锁内深度分析恢复'
+            });
+            if (feedback) factReview.validateFeedback(feedback, lockedPlan, latest);
             if (feedback ? hasCompletedBoundFactFeedback(latest, feedback, lockedPlan)
                 : isSuccessfulAnalysisRecord(latest)
                     && dailyFreshSources.isPaperReusableForAnalysis(latest, lockedPlan)) {
@@ -215,7 +215,7 @@ async function runDeepAnalysis(options = {}) {
             return {
                 paper: dailyFreshSources.prepareDailyPaper(
                     latest ? mergeStoredAnalysisState(paper, latest) : paper,
-                    dailySourcePlan
+                    lockedPlan
                 ),
                 skip: false
             };
@@ -244,33 +244,28 @@ async function runDeepAnalysis(options = {}) {
             }
         },
         onSave: async (_results, saveStats) => {
-            const processed = saveStats.success + saveStats.failed;
             const output = updateJsonFileLocked(resultPath, current => {
                 const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
                 const {
                     remaining,
-                    success: savedAnalysisSuccess,
-                    status: savedAnalysisStatus
+                    success: savedAnalysisSuccess
                 } = getAnalysisRunSummary(currentPapers);
-                const progressStatus = processed < notAnalyzed.length
-                    ? 'running'
-                    : savedAnalysisStatus;
                 const payload = {
                     ...(!Array.isArray(current) && current ? current : {}),
                     lastUpdated: getBeijingISOString(),
                     papers: currentPapers,
-                    status: progressStatus,
+                    status: 'running',
                     stats: {
                         ...(!Array.isArray(current) ? current?.stats : {}),
                         ...saveStats,
                         analyzedSuccess: savedAnalysisSuccess,
                         analyzedFailed: remaining,
                         remainingFailed: remaining,
-                        analysisStatus: progressStatus
+                        analysisStatus: 'running'
                     }
                 };
-                if (progressStatus === 'complete') payload.deepAnalysisCompletedAt = getBeijingISOString();
-                else delete payload.deepAnalysisCompletedAt;
+                // 结束前的整批来源检查尚未通过，先保留运行状态。
+                delete payload.deepAnalysisCompletedAt;
                 return payload;
             });
             papers.splice(0, papers.length, ...(output.papers || []));
@@ -280,6 +275,7 @@ async function runDeepAnalysis(options = {}) {
     const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(dailySourcePlan, runAnalysisFromDailySources);
 
     const finalPayload = updateJsonFileLocked(resultPath, current => {
+        dailyFreshSources.requireFinalDailyFreshSourceRecoveryPlan(current, { entryPlan: dailySourcePlan });
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
         const { remaining, success: savedAnalysisSuccess, status } = getAnalysisRunSummary(currentPapers);
         const payload = {

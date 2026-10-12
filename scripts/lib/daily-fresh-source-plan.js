@@ -307,7 +307,9 @@ function paperProvesBinding(paper, plan, details) {
 // 日更抓取阶段在分析开始前保存的那一组 PDF/TXT generation。把这个检查放在这里，
 // deep-only、reanalyze、batch 和 Reader 刷新就共用同一个「当前来源包是否可用」的
 // 判定，判定不通过就停下。
-function requireDailyFreshSourceRecoveryPlan(payload, { papers = null, label = '日更恢复' } = {}) {
+const recoveryEntryPlans = new WeakMap();
+
+function readRecoveryMetadata(payload, { papers = null, label = '日更恢复' } = {}) {
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
         fail(`${label} 的输入须为包含每日分析记录的对象，不能是数组或空值`);
     }
@@ -327,9 +329,45 @@ function requireDailyFreshSourceRecoveryPlan(payload, { papers = null, label = '
         || ids.slice().sort().join('\0') !== plan.paperIds.join('\0')) {
         fail(`${label} 的 papers 与封存的每日来源运行不完全吻合`);
     }
-    // 在改动任何状态、调用模型或处理图片之前，先把每个 generation 读一遍。
-    // readDailyFreshSource 会重新核对 manifest、TXT、PDF 和 runtime 元数据；
-    // 文件缺失、内容被改或包不完整都会被拒绝。
+    return { plan, rows };
+}
+
+function requireDailyFreshSourceRecoveryPlan(payload, options = {}) {
+    const { plan, rows } = readRecoveryMetadata(payload, options);
+    // 入口先核对完整集合的所有来源；这里只记录计划身份，不缓存来源内容或文件SHA。
+    for (const paper of rows) readDailyFreshSource(plan, paper);
+    recoveryEntryPlans.set(plan, { planSha256: stableHash(plan),
+        referenceSha256: stableHash(payload.dailyFreshSourceRun) });
+    return plan;
+}
+
+function readBoundRecoveryMetadata(payload, entryPlan, label) {
+    const entry = recoveryEntryPlans.get(entryPlan);
+    if (!entry || stableHash(entryPlan) !== entry.planSha256) fail(`${label} 缺少入口完整核验过且未改动的来源计划`);
+    // 锁内仍读取最新清单与完整论文集合，不能仅凭入口计划继续。
+    const checked = readRecoveryMetadata(payload, { label });
+    if (payload.batchId !== undefined && payload.batchId !== checked.plan.batchId
+        || payload.stats?.batchDate !== undefined && payload.stats.batchDate !== checked.plan.batchDate) {
+        fail(`${label} 的批次或统计日期与封存来源不同`);
+    }
+    if (stableHash(payload.dailyFreshSourceRun) !== entry.referenceSha256
+        || stableHash(checked.plan) !== entry.planSha256) fail(`${label} 的来源运行已改变，不能沿用入口计划`);
+    return checked;
+}
+
+function requireLockedDailyFreshSourceRecoveryPlan(payload, { entryPlan, paper, label = '锁内日更恢复' } = {}) {
+    const { plan, rows } = readBoundRecoveryMetadata(payload, entryPlan, label);
+    const id = normalizedId(paper);
+    const current = rows.find(row => normalizedId(row) === id);
+    if (!current) fail(`${label} 的当前论文已不在完整批次中`);
+    // 只免除其他论文的重复读取；本篇TXT/PDF/元数据/清单每次都重新核验。
+    readDailyFreshSource(plan, current);
+    return plan;
+}
+
+function requireFinalDailyFreshSourceRecoveryPlan(payload, { entryPlan, label = '结束前日更恢复' } = {}) {
+    const { plan, rows } = readBoundRecoveryMetadata(payload, entryPlan, label);
+    // 完成结果保存后、正常返回前再核整批，运行期间变坏的其他来源也须阻断。
     for (const paper of rows) readDailyFreshSource(plan, paper);
     return plan;
 }
@@ -539,5 +577,5 @@ function withDailyFreshAnalysisContext(plan, callback, options = {}) {
 module.exports = { CONTRACT, VERSION, SOURCE_GENERATION, REFERENCE_CONTRACT, REFERENCE_VERSION, DailyFreshSourcePlanError, stableHash,
     createDailyFreshSourcePlan, captureDailyFreshSources, readDailyFreshSource, isPaperBoundToPlan, isPaperReusableForAnalysis,
     prepareDailyPaper, createDailyAnalyzeFn, withDailyFreshAnalysisContext,
-    dailyFreshSourceReference, readDailyFreshSourcePlan, requireDailyFreshSourceRecoveryPlan, prepareDailyFreshSourceRecoveryPayload,
+    dailyFreshSourceReference, readDailyFreshSourcePlan, requireDailyFreshSourceRecoveryPlan, requireLockedDailyFreshSourceRecoveryPlan, requireFinalDailyFreshSourceRecoveryPlan, prepareDailyFreshSourceRecoveryPayload,
     withDailyFreshPaperSource, ephemeralReaderFigures, ephemeralPrimaryImage };
