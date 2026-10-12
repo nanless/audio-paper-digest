@@ -11,7 +11,7 @@ const os = require('os');
 const crypto = require('crypto');
 const { paperSourceQuoteBindsOriginalUrl } = require('./lib/reader-resource-binding.js');
 const { parseAnalysis, writeFileAtomic, getBeijingISOString, normalizedId } = require('./utils.js');
-const { ANALYSIS_CONFIG } = require('./config.js');
+const { ANALYSIS_CONFIG, FILES } = require('./config.js');
 const {
     getInvalidAnalysisReason,
     hasRequiredSections,
@@ -860,7 +860,10 @@ function updateJsonFileLocked(filePath, updater, options = {}) {
                 next.generation = currentGeneration + 1;
             }
             const serializeStarted = timing ? process.hrtime.bigint() : null;
-            const serialized = JSON.stringify(next, null, 2);
+            // 正式结果体积大，只省略 JSON 缩进；数据、锁内合并及每次保存均保留。
+            const compactResult = typeof FILES.deepAnalysisResult === 'string'
+                && path.resolve(filePath) === path.resolve(FILES.deepAnalysisResult);
+            const serialized = compactResult ? JSON.stringify(next) : JSON.stringify(next, null, 2);
             if (timing) {
                 timing.serialize_ms = elapsed(serializeStarted);
                 timing.bytes = typeof serialized === 'string' ? Buffer.byteLength(serialized) : 0;
