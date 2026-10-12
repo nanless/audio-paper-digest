@@ -15057,8 +15057,9 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     const boundFactReview = require('./lib/daily-fact-review').current(arxivId);
     if (boundFactReview) {
         // 保存真实付费正文和阶段；反馈只改变正常模型请求，不构造成功正文。
-        captureStaleAnalysisSnapshot(paper, analysisManifest, boundFactReview.feedback.primaryFeedback?.trim()
-            ? 'primaryAnalysis' : 'coreSummaryRepair', boundFactReview.proof.feedbackSha256);
+        const inputReview = boundFactReview.coreOnly ? boundFactReview.coreBound : boundFactReview;
+        captureStaleAnalysisSnapshot(paper, analysisManifest, !boundFactReview.coreOnly && boundFactReview.feedback.primaryFeedback?.trim()
+            ? 'primaryAnalysis' : 'coreSummaryRepair', inputReview.proof.feedbackSha256);
     }
     const recoveryFingerprints = buildRecoveryFingerprints(
         paper, textForAnalysis, arxivId, analysisManifest);

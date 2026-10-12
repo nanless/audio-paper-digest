@@ -583,3 +583,13 @@ test('没有原主文反馈的核心包保留真实输入快照，不伪补prima
         assert.equal(paper.analysisManifest.stages.primaryAnalysis.factReview,undefined);
     }))));
 });
+
+test('实际analyze入口无原parent核心scope不解引用null，保输入快照且禁止主文新请求',async t=>{
+ const sample=await createSample(t),paper=structuredClone(sample.paper);delete paper.analysisManifest.stages.primaryAnalysis.factReview;
+ const core=createCoreFeedback(sample),bound=facts.validateFeedback(core,sample.plan,paper);let result;calls.length=0;
+ await daily.withDailyFreshAnalysisContext(sample.plan,()=>engine.withPaperAnalysisLock(paper,()=>facts.withCoreSummaryFactReview(bound,paper,async()=>{result=await deep.analyzePaperDeep(paper);})),{refreshReaderDiagnostics:true});
+ assert.ok(result);assert.doesNotMatch(String(result.error||''),/Cannot read properties of null|feedbackSha256/);
+ assert.ok((paper.analysisStaleSnapshots||[]).some(s=>{const value=deep.validateStaleAnalysisSnapshot(s);return value&&facts.sha(value.analysisCheckpoint)===bound.proof.coreAnalysisSha256;}));
+ assert.equal(paper.analysisManifest.stages.primaryAnalysis?.factReview,undefined);
+ assert.equal(calls.filter(c=>c.stage==='primaryAnalysis').length,0);
+});
