@@ -1959,12 +1959,34 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
     const formulaAppendGuidance = atomicOperation?.kind === 'complete_existing_formula_bindings_v1'
         ? `公式来源数组前 ${draft.formulaBindings.length} 条是不可改动的原记录，内容和顺序必须逐字保持。不要按公式编号排序；正文标记的排列顺序不决定数组顺序。只在数组末尾追加本轮明确列出的缺失记录。原记录前缀：${JSON.stringify(draft.formulaBindings)}。本轮允许提交的完整数组：${JSON.stringify([...draft.formulaBindings, ...atomicOperation.missingBindings])}。`
         : '';
+    const protectedTableMarkers = [];
+    if (!targets.some(target => target.path === '/tableBindings')) {
+        for (const [index, binding] of (draft.tableBindings || []).entries()) {
+            if (!(binding?.selection || binding?.completeTable)
+                || !Number.isInteger(binding.tableIndex) || binding.tableIndex < 1
+                || targets.some(target => target.path === `/tableBindings/${index}`
+                    || target.path.startsWith(`/tableBindings/${index}/`))) continue;
+            const marker = `[[TABLE_${binding.tableIndex}]]`;
+            const count = draft.sections.reduce((total, section) => total
+                + (String(section.body || '').split(marker).length - 1), 0);
+            // 缺失或重复的标记仍交给原有修复处理，不把坏稿现状固定为要求。
+            if (count !== 1) continue;
+            const target = targets.find(item => /^\/sections\/\d+\/body$/.test(item.path)
+                && typeof item.value === 'string' && item.value.includes(marker));
+            if (target) protectedTableMarkers.push({ marker, sectionPath: target.path,
+                bindingPath: `/tableBindings/${index}` });
+        }
+    }
+    const markerGuidance = protectedTableMarkers.length
+        ? `以下是允许修改的小节里已有的其他表格标记，其来源记录本轮不可修改：${JSON.stringify(protectedTableMarkers)}。`
+            + '这些标记须原样保留且仍各出现一次，不能改成手写 Markdown 表，也不能因本次修复其他表而删除。这个只读说明不增加允许修改的路径。'
+        : '';
     const targetGuidance = (atomicOperation?.kind === 'cleanup_unavailable_figures_v1'
         ? '本轮明确允许清空整组figurePlacements，这是普通数组项数量不变规则的唯一图片例外；同时按来源重写全部指定图片相关小节，删除无证据图解与非法图片元数据，不留图标记。仅有文字依据的事实可以明确按作者文字报告保留，不假装看过图。其他节点逐字保留。' : '')
         + (atomicOperation?.kind === 'reorganize_existing_sections_v1'
         ? '本轮明确授权整组小节重排，只提交/sections完整数组；其他顶层信息与全部来源记录逐字保留。不能据此删除图表、公式或正确事实；重排后仍须通过完整解析与来源检查。' : '')
         + `本轮只允许修改这些目标：${JSON.stringify(targets.map(target => target.path))}。`
-        + '下面的诊断可能列出其他已发现问题，列出问题不代表授权修改。只提交本轮允许目标，逐项使用请求给出的真实 oldSha256；其余问题留待下一轮重新核验并授权，不要为未授权目标编造 SHA。' + formulaAppendGuidance;
+        + '下面的诊断可能列出其他已发现问题，列出问题不代表授权修改。只提交本轮允许目标，逐项使用请求给出的真实 oldSha256；其余问题留待下一轮重新核验并授权，不要为未授权目标编造 SHA。' + formulaAppendGuidance + markerGuidance;
     return { draftSha256: hashDraft(draft), targets, issues, evidence, atomicOperation, targetGuidance,
         exactQuotes, figureOrdinals: [...figureOrdinals], evidenceMode: 'full-evidence-local-output' };
 }

@@ -98,3 +98,30 @@ test('所有已发现问题不会扩大本轮允许范围，越界回执明确�
     assert.equal(draft.conceptBridges.length, 6);
     assert.equal(draft.conceptBridges[2].marker_note, '');
 });
+
+test('修改同节的一张表时明确保留其他表的标记，不新增来源授权', () => {
+    const draft = missingTableDraft();
+    draft.tableBindings = [1, 2, 3].map(tableIndex => ({ tableIndex,
+        selection: { sourceTableOrdinal: tableIndex, sourceRows: [0, 1], sourceColumns: [0, 1] } }));
+    draft.sections[7].body = '比较说明。\n\n[[TABLE_1]]\n\n[[TABLE_2]]\n\n[[TABLE_3]]\n\n结果说明。';
+    const issues = [{ path: '/sections/7/body', message: '解释需要补充' },
+        { path: '/tableBindings/1', message: 'tableBindings[1] 来源说明需要核对' }];
+    const before = JSON.stringify(draft);
+    const context = buildRepairContext(draft, issues, '完整来源字节');
+    assert.deepEqual(context.targets.map(target => target.path), ['/sections/7/body', '/tableBindings/1']);
+    assert.ok(context.targetGuidance.includes('"marker":"[[TABLE_1]]"'));
+    assert.ok(context.targetGuidance.includes('"marker":"[[TABLE_3]]"'));
+    assert.ok(!context.targetGuidance.includes('"marker":"[[TABLE_2]]"'));
+    assert.match(context.targetGuidance, /不能改成手写 Markdown 表/);
+    assert.equal(context.evidence, '完整来源字节');
+    const updated = applyReaderPatch(draft, patchFor(draft, [['/sections/7/body',
+        draft.sections[7].body + '\n\n新增有来源的比较解释。']]), context.targets.map(target => target.path));
+    assert.deepEqual(updated.tableBindings, draft.tableBindings);
+    assert.equal(updated.sections[7].body.match(/\[\[TABLE_\d+\]\]/g).length, 3);
+    assert.equal(JSON.stringify(draft), before);
+    const repeated = structuredClone(draft);
+    repeated.sections[8].body += '\n\n[[TABLE_1]]';
+    const duplicateContext = buildRepairContext(repeated, issues, '完整来源字节');
+    assert.ok(!duplicateContext.targetGuidance.includes('"marker":"[[TABLE_1]]"'), '不能把重复的坏标记固定成保护要求');
+    assert.ok(duplicateContext.targetGuidance.includes('"marker":"[[TABLE_3]]"'));
+});
