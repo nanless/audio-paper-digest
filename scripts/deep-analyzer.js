@@ -7154,12 +7154,49 @@ function recoverableStaleReaderRevisionStage(paper, sourceText) {
     return null;
 }
 
+const COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR =
+    '局部事实纠错没有当前错误原句，也没有同反馈已完成证明；不能扩大为完整主文请求';
+
+function hasReviewedCompletedPrimaryReaderSeed(paper, sourceText, reviewFeedback) {
+    if (paper?.latestAnalysisAttemptError !== COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR) return false;
+    const facts = require('./lib/daily-fact-review');
+    const fresh = require('./lib/fresh-analysis-context');
+    const active = facts.current(getPaperArxivId(paper));
+    const bound = active?.primaryBound || active;
+    const primary = paper.analysisManifest?.stages?.primaryAnalysis;
+    const scoring = paper.analysisManifest?.stages?.scoringAudit;
+    const feedback = bound?.feedback;
+    const requested = String(reviewFeedback || '').trim();
+    if (!bound || active.scoringOnly || !feedback?.primaryFeedback?.trim() || !feedback.readerFeedback?.trim()
+        || (requested !== feedback.readerFeedback.trim()
+            && requested !== facts.reviewFeedback('apiReaderArticle', getPaperArxivId(paper)).trim())
+        || primary?.status !== 'complete' || !primary.factReview || stableFingerprint(primary.factReview) !== stableFingerprint(bound.proof)
+        || !fresh.isDailyFreshSourceScope() || feedback.runId !== fresh.getFreshAnalysisContext()?.runId
+        || scoring?.status !== 'complete'
+        || scoring.scoringContract !== SCORING_AUDIT_CONTRACT
+        || !scoring.audit || typeof scoring.audit !== 'object' || Array.isArray(scoring.audit)
+        || scoring.auditSha256 !== stableFingerprint(scoring.audit)) return false;
+    const engine = require('./analysis-engine');
+    if (!engine.hasValidAnalysisBody(paper) || !engine.hasValidApiReaderV3Records(paper)
+        || !engine.scoringAuditBindsFinalAnalysis(paper) || !engine.scoringStabilityIsResolved(scoring)) return false;
+    const sourceSha256 = crypto.createHash('sha256').update(String(sourceText || '')).digest('hex');
+    if (sourceSha256 !== paper.sourceSha256 || sourceSha256 !== feedback.sourceFiles['source.txt']
+        || sourceSha256 !== paper.analysisManifest.sourceAcquisition.sourceSha256) return false;
+    try {
+        fresh.assertFreshPaper(paper);
+        facts.validateRepairedClaims('primaryAnalysis', paper.analysis, getPaperArxivId(paper));
+        facts.validateRepairedClaims('coreSummaryRepair', paper.analysis, getPaperArxivId(paper));
+    } catch (_) { return false; }
+    return true;
+}
+
 function prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback) {
     if (!String(reviewFeedback || '').trim()) return null;
     // 复用生产环境的字节和溯源校验器，不要相信一个 complete 标志，也不要把新传进来的
     // 草稿当成已有的 Reader 接受。
     const { hasValidApiReaderV3Records } = require('./analysis-engine.js');
-    const currentReaderValid = !paper?.latestAnalysisAttemptError
+    const reviewedCompletedPrimary = hasReviewedCompletedPrimaryReaderSeed(paper, sourceText, reviewFeedback);
+    const currentReaderValid = (!paper?.latestAnalysisAttemptError || reviewedCompletedPrimary)
         && hasValidApiReaderV3Records(paper);
     const staleReaderStage = currentReaderValid
         ? null : recoverableStaleReaderRevisionStage(paper, sourceText);
@@ -7188,7 +7225,8 @@ function prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback) {
             revisionSeedSourceSha256: sourceSha256,
             revisionTemperature: API_READER_REPAIR_TEMPERATURE,
             revisionSeedStageRecovery: staleReaderStage
-                ? 'stale-signed-reader-stage-v1' : 'current-signed-reader-stage-v1'
+                ? 'stale-signed-reader-stage-v1' : reviewedCompletedPrimary
+                    ? 'reviewed-completed-primary-reader-stage-v1' : 'current-signed-reader-stage-v1'
         }
     };
 }
@@ -14458,7 +14496,7 @@ async function analyzePaperDeepInternal(paper) {
     if (activePrimaryFactReview && !localFactRepairPlan
         && stableFingerprint(savedPrimaryFactStage?.factReview || null)
             !== stableFingerprint(initialFactReview.proof)) {
-        throw contractRejectedError('局部事实纠错没有当前错误原句，也没有同反馈已完成证明；不能扩大为完整主文请求');
+        throw contractRejectedError(COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR);
     }
     if (localFactRepairPlan) localFactRepair.validateHeadings(localFactRepairInput);
     if (activePrimaryFactReview) captureStaleAnalysisSnapshot(paper, analysisManifest, 'primaryAnalysis',
