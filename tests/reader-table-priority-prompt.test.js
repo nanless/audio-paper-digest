@@ -68,7 +68,7 @@ test('新修复提示明确完整原表优先，来源证据字节和授权目�
     assert.equal(deep.runtimePromptTemplateSha256('prompts/api-reader-repair-v8.md'), repairV8Sha);
     assert.equal(deep.runtimePromptTemplateSha256('prompts/api-reader-repair-v9.md'), repairV9Sha);
     assert.equal(versions.promptFilePathForContract('apiReaderRepair', 'analysis-prompt-text-v8'), 'prompts/api-reader-repair-v8.md');
-    assert.throws(() => versions.promptFilePathForContract('apiReaderRepair', 'analysis-prompt-text-v11'));
+    assert.throws(() => versions.promptFilePathForContract('apiReaderRepair', 'analysis-prompt-text-v99'));
 });
 
 test('固定修复提示升级保留4或5次修复及2次全篇尝试，不发放新次数', async t => {

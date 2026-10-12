@@ -128,6 +128,7 @@ const {
     ANALYSIS_PROMPT_TEXT_V3_CONTRACT,
     ANALYSIS_PROMPT_TEXT_V4_CONTRACT,
     ANALYSIS_PROMPT_TEXT_V5_CONTRACT,
+    ANALYSIS_PROMPT_TEXT_V6_CONTRACT,
     FROZEN_V1_PROMPT_FILES: RECOVERY_PROMPT_FILES,
     PROMPT_FILE_VERSIONS,
     currentPromptTextContract,
@@ -6110,6 +6111,13 @@ function parseApiReaderArticleResult(raw, options = {}) {
             throw new Error('会议 weak source 正文禁止 Markdown 表格、展示公式与 TABLE/FORMULA/FIGURE marker');
         }
     }
+    const readerRepair = require('./lib/reader-repair.js');
+    const languageIssues = readerRepair.collectReaderLanguageIssues(value);
+    if (languageIssues.length) {
+        throw Object.assign(new Error('读者正文含生硬译法或写作检查话术，须按原文改写对应字段'), {
+            code: readerRepair.LANGUAGE_ERROR_CODE, readerIssues: languageIssues
+        });
+    }
     for (const [index, section] of value.sections.entries()) {
         if (typeof section?.body !== 'string') continue;
         const visible = maskInlineMarkdownCodeSpans(maskProtectedMarkdownTableRegions(section.body));
@@ -7185,7 +7193,9 @@ function buildApiReaderValidationFeedback(error) {
         + '请按本次请求要求的格式输出，只修改请求允许修改的内容，并删除重复表达。'
         + '按内容和解释顺序安排段落，让句子长短自然变化；内容过密时，在话题转折处另起一段。'
         + '提交前逐行核对每张 Markdown 表的列数，'
-        + '并逐条确认 conceptBridges 与 figurePlacements 的 marker 和相邻正文真实存在。';
+        + '并逐条确认 conceptBridges 与 figurePlacements 的 marker 和相邻正文真实存在。'
+        + '上述数量、字段、检查与修复要求只用于完成请求，不是文章内容。'
+        + '读者正文直接解释论文的具体机制、结果和条件，不复述写作要求，也不宣布自己已满足检查。';
 }
 
 function readerRepairStopped(code, message, cause) {
@@ -9512,11 +9522,11 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext, prompt
             analysisSectionTitlesImplementationSha256: promptTemplateSha256('scripts/lib/analysis-section-titles.js')
         } : {}),
         ...modelFingerprint(DEEP_CONFIG, API_TEMPERATURE,
-            declaredPromptTextContract !== ANALYSIS_PROMPT_TEXT_V3_CONTRACT
+            ![ANALYSIS_PROMPT_TEXT_V3_CONTRACT, ANALYSIS_PROMPT_TEXT_V4_CONTRACT].includes(declaredPromptTextContract)
                 && ['revision', 'structureRepair'].includes(stage)
                 ? REPAIR_MAX_TOKENS
                 : ![ANALYSIS_PROMPT_TEXT_V3_CONTRACT, ANALYSIS_PROMPT_TEXT_V4_CONTRACT,
-                    ANALYSIS_PROMPT_TEXT_V5_CONTRACT].includes(declaredPromptTextContract)
+                    ANALYSIS_PROMPT_TEXT_V5_CONTRACT, ANALYSIS_PROMPT_TEXT_V6_CONTRACT].includes(declaredPromptTextContract)
                     && stage === 'coreSummaryRepair'
                     ? LEGACY_CURRENT_CORE_SUMMARY_REPAIR_MAX_TOKENS : config.maxTokens),
         promptTemplateSha256: promptTemplateSha256(

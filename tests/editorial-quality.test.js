@@ -7,6 +7,7 @@ const {
     normalizeIssueBoundReaderQuantitativeNumerals,
     findDoubleNumbering,
     findReaderTemplatePhrases,
+    findReaderLanguageIssues,
     normalizeDanglingReaderConnectors,
     findBrokenProse,
     findNumericTypographyDefects,
@@ -26,6 +27,247 @@ const {
     validateResultClaims,
     validateEditorialQuality
 } = require('../scripts/editorial-quality.js');
+
+describe('读者中文的精确怪译与检查话术诊断', () => {
+    it('定位真实怪译并给保留数字与来源的修正引导，不改原文', () => {
+        const text = '😀 引言。\n\n最优评论家固定时，生成器得到分数差梯度。\n'
+            + 'FID 1.04 使用弗雷歇起始距离；补丁距离用于高分辨率细节。';
+        const before = text;
+        const issues = findReaderLanguageIssues(text);
+        assert.deepEqual(issues.map(issue => issue.match),
+            ['最优评论家', '弗雷歇起始距离', '补丁距离']);
+        for (const issue of issues) {
+            assert.equal(issue.code, 'reader_awkward_translation');
+            assert.equal(text.slice(issue.index, issue.index + issue.match.length), issue.match);
+            assert.match(issue.message, /保留|保持/);
+            assert.match(issue.message, /证据|来源/);
+        }
+        assert.equal(text, before);
+    });
+
+    it('历史四稿的原句分别诊断，不把必要模型专名或数学符号当混夹', () => {
+        const samples = [
+            '评价关心三类事情：分布逼近程度，常用弗雷歇起始距离度量生成分布与参考分布的距离，越低越好。',
+            '固定噪声水平 t 和条件 c，记目标噪声边缘为 P=pt，学生噪声边缘为 Q=pθ,t，判别器 logit 为 h，sigmoid 为 S。',
+            '下表把这两类证据放在一起，列数满足核对要求。表后解释必须区分人工评价与自动指标。',
+            '教师样本限定学生不要偏离教师分布太远，真实数据则提供教师采样分布之外的监督。'
+        ];
+        assert.equal(findReaderLanguageIssues(samples[0]).length, 1);
+        assert.deepEqual(findReaderLanguageIssues(samples[1]), []);
+        assert.deepEqual(findReaderLanguageIssues(samples[2]).map(issue => issue.match),
+            ['列数满足核对要求', '表后解释必须区分']);
+        assert.deepEqual(findReaderLanguageIssues(samples[3]), []);
+    });
+
+    it('实际新稿的表前表后指令给出自然承接引导', () => {
+        for (const text of ['表前说明如下：下表比较两种方法。',
+            '表后解释需要同时看到收益与限制。',
+            '表后需强调成本与未胜出项。', '表后需补充机制解释。',
+            '表中数值均有原文连续句作为来源。']) {
+            const issues = findReaderLanguageIssues(text);
+            assert.equal(issues.length, 1, text);
+            assert.equal(issues[0].code, 'reader_workflow_leakage');
+            assert.match(issues[0].message, /自然句/);
+            assert.match(issues[0].message, /保留原数字、单位、方法归属和来源证据/);
+        }
+    });
+
+    it('普通评论、数学距离和代码游戏补丁保持原意', () => {
+        for (const text of ['评论家认为这部电影的结构更紧凑。',
+            '评委选出本届最优评论家，奖项针对影评作品。',
+            '评论区讨论 FID，但影评中的评论家没有训练模型。',
+            'Fréchet 距离用于比较两条曲线，离散弗雷歇距离同样适用。',
+            '软件补丁距离发布日期还有 2 天。',
+            '游戏补丁修复了角色移动距离，patch 操作不改存档。',
+            '蒸馏脚本补丁距离发布日期还有 2 天。',
+            '表格应区分训练集和测试集，比较结果说明局部图像指标的限制。',
+            'SDXL、Wan、ImageNet、COCO、FID 和 patch FID 是模型、数据集与指标名。']) {
+            assert.deepEqual(findReaderLanguageIssues(text), [], text);
+        }
+    });
+
+    it('引用、代码和公式不成为作者自己的解释，后续正文索引仍准确', () => {
+        const text = '> 原文引文：最优评论家使用生成器；弗雷歇起始距离。\n\n'
+            + '```text\n😀 列数满足核对要求\n```\n\n'
+            + '`最优评论家`、$弗雷歇起始距离$、\\(补丁距离\\)只是示例。\n\n'
+            + '原文写道：“表后解释必须区分人工评价与自动指标”。\n\n'
+            + '$$\n弗雷歇起始距离\n$$\n\n'
+            + '\\[\n表后需强调成本\n\\]\n\n'
+            + 'FID 的弗雷歇起始距离为 1.04。';
+        const issues = findReaderLanguageIssues(text);
+        assert.equal(issues.length, 1);
+        assert.equal(issues[0].index, text.lastIndexOf('弗雷歇起始距离'));
+        assert.equal(issues[0].match, '弗雷歇起始距离');
+    });
+
+    it('普通数学定义不因附近其他段落的生成器而误报影评术语', () => {
+        assert.deepEqual(findReaderLanguageIssues('生成器通过梯度更新。\n\n本届最优评论家获得影评奖。'), []);
+        assert.deepEqual(findReaderLanguageIssues('FID 衡量图像分布。\n\n软件补丁距离发布日期还有 2 天。'), []);
+        assert.deepEqual(findReaderLanguageIssues('FID 衡量图像分布。\r\n \r\n软件补丁距离发布日期还有 2 天。'), []);
+    });
+
+    it('同一行代码结束后不吞掉后面的真实正文', () => {
+        const text = '```弗雷歇起始距离```\n\nFID 使用弗雷歇起始距离。';
+        const issues = findReaderLanguageIssues(text);
+        assert.equal(issues.length, 1);
+        assert.equal(issues[0].index, text.lastIndexOf('弗雷歇起始距离'));
+    });
+
+    it('短标题只借对应正文判断术语，不把上下文变成授权检查目标', () => {
+        const title = '最优评论家';
+        const issues = findReaderLanguageIssues(title, {
+            contextText: 'DMD 的生成器用梯度更新；表后需补充机制解释。'
+        });
+        assert.equal(issues.length, 1);
+        assert.equal(issues[0].match, title);
+        assert.equal(issues[0].index, 0);
+        assert.deepEqual(findReaderLanguageIssues(title, {
+            contextText: '这部电影结构紧凑，评论家给出不同评价。'
+        }), []);
+        assert.deepEqual(findReaderLanguageIssues('补丁距离', {
+            contextText: '软件 patch 修复游戏中角色移动距离。'
+        }), []);
+        assert.equal(findReaderLanguageIssues('补丁距离', {
+            contextText: 'patch FID 比较局部图像块的特征分布。'
+        })[0].match, '补丁距离');
+        assert.deepEqual(findReaderLanguageIssues('正常标题', {
+            contextText: '弗雷歇起始距离用于 FID；列数满足核对要求。'
+        }), []);
+    });
+
+    it('辅助评论家只在对应技术语境下提示，不泛禁影评人物', () => {
+        assert.equal(findReaderLanguageIssues('DMD 使用辅助评论家估计学生分数。')[0].match,
+            '辅助评论家');
+        assert.deepEqual(findReaderLanguageIssues('辅助评论家整理电影采访记录。'), []);
+        assert.deepEqual(findReaderLanguageIssues('patch FID 衡量局部图像特征分布。'), []);
+    });
+
+    it('真实原表及对齐行保持完整，只定位表后的同词正文', () => {
+        const text = '😀 原表如下。\r\n\r\n'
+            + '| 指标 | 数值 |\r\n| :--- | ---: |\r\n'
+            + '| 弗雷歇起始距离 | 1.04 |\r\n'
+            + '| 表后解释必须区分 | 14.47 |\r\n\r\n'
+            + '正文将 FID 译成弗雷歇起始距离。';
+        const before = text;
+        const issues = findReaderLanguageIssues(text);
+        assert.equal(issues.length, 1);
+        assert.equal(issues[0].match, '弗雷歇起始距离');
+        assert.equal(issues[0].index, text.lastIndexOf('弗雷歇起始距离'));
+        assert.equal(text, before);
+        assert.ok(text.includes('1.04'));
+        assert.ok(text.includes('14.47'));
+    });
+
+    it('无首尾竖线的合法Markdown原表受保护，普通竖线句仍报', () => {
+        const table = '指标 | 数值\n--- | ---\n弗雷歇起始距离 | 1.04';
+        assert.deepEqual(findReaderLanguageIssues(table), []);
+        for (const text of ['普通说明 | 弗雷歇起始距离用于 FID。',
+            '| 弗雷歇起始距离只是普通竖线句，没有表头对齐行 |',
+            '列数满足核对要求 | 这是一句普通说明。',
+            '指标 | 数值\n不是对齐行 | 弗雷歇起始距离']) {
+            const issues = findReaderLanguageIssues(text);
+            assert.equal(issues.length, 1, text);
+            assert.equal(text.slice(issues[0].index, issues[0].index + issues[0].match.length),
+                issues[0].match);
+        }
+    });
+
+    it('共享主分析摘要和方法文本报告精确语言问题，不自动润色或丢证据', () => {
+        const sections = sixSections({
+            summary: 'FID 1.04 用弗雷歇起始距离评估。',
+            method: '表后解释必须区分人工评价与自动指标，原结果为 14.47。'
+        });
+        const before = JSON.stringify(sections);
+        const issues = validateEditorialQuality(sections).issues.filter(issue =>
+            ['reader_workflow_leakage', 'reader_awkward_translation'].includes(issue.code));
+        assert.equal(issues.length, 2);
+        assert.equal(issues[0].section, 'summary');
+        assert.equal(issues[0].match, '弗雷歇起始距离');
+        assert.equal(issues[1].section, 'method');
+        assert.equal(issues[1].match, '表后解释必须区分');
+        assert.equal(JSON.stringify(sections), before);
+        assert.ok(sections.summary.includes('1.04'));
+        assert.ok(sections.method.includes('14.47'));
+    });
+
+    it('共享检查沿用原表引用代码公式保护和正常术语边界', () => {
+        const sections = sixSections({
+            summary: 'Fréchet 距离是数学距离，FID 保留准确指标名。',
+            method: '> 引文：弗雷歇起始距离。\n\n'
+                + '指标 | 数值\n--- | ---\n弗雷歇起始距离 | 1.04\n\n'
+                + '`列数满足核对要求` 是代码示例。\n\n'
+                + '$最优评论家$ 是公式示例。\n\n'
+                + '评论家评价电影，软件 patch 修补代码。'
+        });
+        const issues = validateEditorialQuality(sections).issues.filter(issue =>
+            ['reader_workflow_leakage', 'reader_awkward_translation'].includes(issue.code));
+        assert.deepEqual(issues, []);
+    });
+
+    it('真实表格写作自述窄报，普通表前表后描述不误报', () => {
+        for (const text of ['表格前后需要完整的独立说明与解释。',
+            '表前已说明比较问题、公平条件与指标方向。',
+            '表前需要说明比较问题、公平条件和指标方向。',
+            '表后解释主要收益、具体代价与限制：各指标并不一致。',
+            '表后解释支持的有限判断与反例：局部细节仍受限制。',
+            '列数满足比较需要，内容全部来自原文连续句子，没有补造列。']) {
+            const issues = findReaderLanguageIssues(text);
+            assert.equal(issues.length, 1, text);
+            assert.equal(issues[0].code, 'reader_workflow_leakage');
+        }
+        for (const text of ['表前介绍了数据集，表后讨论错误类型。',
+            '表后解释了局部图像指标与整体指标为何不同。',
+            '表格前后的文字比较了两种训练条件。',
+            '该列记录每个方法的指标，不同列用于不同数据集。']) {
+            assert.deepEqual(findReaderLanguageIssues(text), [], text);
+        }
+    });
+
+    it('最终实测的照抄写作指令拒绝，直接解释概念通过', () => {
+        const leaked = '这里的分数若指对数密度对输入的梯度，要说明它不是质量评分。';
+        assert.equal(findReaderLanguageIssues(leaked)[0].code, 'reader_workflow_leakage');
+        assert.equal(findReaderLanguageIssues(leaked)[0].match, leaked.slice(0, -1));
+        assert.deepEqual(findReaderLanguageIssues(
+            '分数在这里指对数密度对输入的梯度，不是质量评分。'
+        ), []);
+        assert.deepEqual(findReaderLanguageIssues(
+            '这里的分数描述样本应往哪个方向移动，区别于质量评分。'
+        ), []);
+    });
+
+    it('明确禁止错译不算错误术语，同段真正错译仍准确定位', () => {
+        for (const text of ['patch FID 在图像块上计算，不叫补丁距离。',
+            'FID 不应被译成弗雷歇起始距离。',
+            'DMD 的辅助模型不要写成“辅助评论家”。',
+            '局部图像指标避免译为补丁距离。']) {
+            assert.deepEqual(findReaderLanguageIssues(text), [], text);
+        }
+        const text = 'patch FID 不叫补丁距离。下一句却用补丁距离比较局部图像。';
+        const issues = findReaderLanguageIssues(text);
+        assert.equal(issues.length, 1);
+        assert.equal(issues[0].index, text.lastIndexOf('补丁距离'));
+    });
+
+    it('表前表后写作指令按句法定位，正常作者说明不拦截', () => {
+        for (const text of ['表前需要说明公平条件：两组用同一测试集。',
+            '表前必须解释各指标的方向。',
+            '表后解释需结合原文细节。',
+            '表后说明需要结合测量范围。',
+            '表后需要解释误差类型。',
+            '下表解释主要收益与限制。']) {
+            const issues = findReaderLanguageIssues(text);
+            assert.equal(issues.length, 1, text);
+            assert.equal(issues[0].code, 'reader_workflow_leakage');
+        }
+        for (const text of ['作者在表后解释了误差原因。',
+            '表前说明了固定的比较条件，结果不能直接外推。',
+            '表后解释了误差为什么集中在短语边界。',
+            '表中结果需要结合原文细节理解。',
+            '上表显示主要收益与限制，较小模型仍存在误差。']) {
+            assert.deepEqual(findReaderLanguageIssues(text), [], text);
+        }
+    });
+});
 
 function sixSections(overrides = {}) {
     return {

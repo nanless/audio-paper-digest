@@ -209,7 +209,9 @@ function stagePromptBindings(promptTextVersion) {
         const declaredContract = promptTextVersion === 'v1'
             ? promptTextVersions.ANALYSIS_PROMPT_TEXT_V1_CONTRACT
             : promptTextVersion === 'v2' ? promptTextVersions.ANALYSIS_PROMPT_TEXT_V2_CONTRACT : null;
-        const relativePath = promptTextVersion === 'v4-mixed'
+        const relativePath = promptTextVersion === 'pre-plain-chinese'
+            ? promptTextVersions.FROZEN_PRE_PLAIN_CHINESE_MIXED_PROMPT_FILES[stage].path
+            : promptTextVersion === 'v4-mixed'
             ? promptTextVersions.FROZEN_V4_MIXED_PROMPT_FILES[stage].path
             : declaredContract
                 ? promptTextVersions.promptFilePathForContract(stage, declaredContract)
@@ -248,6 +250,11 @@ function specPromptTextVersion(spec, currentBindings, legacyBindings,
         && REQUIRED_RECOVERY_STAGES.every(stage => declared[stage] === frozenV2Bindings[stage].sha256)) {
         return 'v2';
     }
+    const previousBindings = stagePromptBindings('pre-plain-chinese');
+    if (Object.keys(declared).length === REQUIRED_RECOVERY_STAGES.length
+        && REQUIRED_RECOVERY_STAGES.every(stage => declared[stage] === previousBindings[stage].sha256)) {
+        return 'pre-plain-chinese';
+    }
     const frozenV4Bindings = stagePromptBindings('v4-mixed');
     if (Object.keys(declared).length === REQUIRED_RECOVERY_STAGES.length
         && REQUIRED_RECOVERY_STAGES.every(stage => declared[stage] === frozenV4Bindings[stage].sha256)) {
@@ -261,7 +268,8 @@ function selectManualSpecPromptBindings(spec, currentBindings, legacyBindings) {
     const version = specPromptTextVersion(spec, currentBindings, legacyBindings, frozenV2Bindings);
     return { version, bindings: version === 'v1' ? legacyBindings
         : version === 'v2' ? frozenV2Bindings
-            : version === 'v4-mixed' ? stagePromptBindings('v4-mixed') : currentBindings };
+            : version === 'v4-mixed' ? stagePromptBindings('v4-mixed')
+                : version === 'pre-plain-chinese' ? stagePromptBindings('pre-plain-chinese') : currentBindings };
 }
 
 function resolveManualSpecPromptBindings(spec, currentBindings = buildStagePromptBindings(),

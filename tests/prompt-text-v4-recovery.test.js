@@ -25,8 +25,8 @@ test('主分析和评分分别读取旧 v3 与 v4，旧原字节不被当前版�
             const oldPath = `prompts/${name}-v3.md`, newPath = `prompts/${name}-v4.md`;
             assert.equal(registry.promptFilePathForContract(stage, 'analysis-prompt-text-v3'), oldPath);
             assert.equal(registry.promptFilePathForContract(stage, 'analysis-prompt-text-v4'), newPath);
-            assert.equal(registry.currentTextStagePromptPath(stage), stage === 'scoringAudit' ? `prompts/${name}-v5.md` : newPath);
-            assert.equal(registry.currentPromptTextContract(stage), stage === 'scoringAudit' ? 'analysis-prompt-text-v5' : 'analysis-prompt-text-v4');
+            assert.equal(registry.currentTextStagePromptPath(stage), `prompts/${name}-v5.md`);
+            assert.equal(registry.currentPromptTextContract(stage), 'analysis-prompt-text-v5');
             const oldBytes = fs.readFileSync(path.join(__dirname, '..', oldPath));
             const sha = crypto.createHash('sha256').update(oldBytes).digest('hex');
             assert.equal(sha, originalV3Sha[stage], `${stage} 已发布的 v3 原字节必须保持`);
@@ -37,7 +37,7 @@ test('主分析和评分分别读取旧 v3 与 v4，旧原字节不被当前版�
     } finally { fs.rmSync(empty, {recursive:true, force:true}); }
 });
 
-test('主分析旧 v3 与新 v4 按各自声明计算指纹，读取不改写原记录', () => {
+test('主分析旧 v3 与当前版本按各自声明计算指纹，读取不改写原记录', () => {
     const paper = {arxivId:'2610.90001',title:'Test paper',authors:['A'],categories:['cs.SD']};
     const manifest = {version:1,stages:{primaryAnalysis:{status:'complete',promptTextContract:'analysis-prompt-text-v3'}}};
     const before = JSON.stringify({paper,manifest});
@@ -45,10 +45,10 @@ test('主分析旧 v3 与新 v4 按各自声明计算指纹，读取不改写原
     assert.equal(JSON.stringify({paper,manifest}),before);
     const current = deep.buildRecoveryFingerprints(paper,'actual full text input',paper.arxivId,{version:1,stages:{}}).primaryAnalysis;
     assert.notEqual(old,current);
-    assert.equal(deep.buildRecoveryFingerprints(paper,'actual full text input',paper.arxivId,{version:1,stages:{primaryAnalysis:{status:'complete',promptTextContract:'analysis-prompt-text-v4'}}}).primaryAnalysis,current);
+    assert.equal(deep.buildRecoveryFingerprints(paper,'actual full text input',paper.arxivId,{version:1,stages:{primaryAnalysis:{status:'complete',promptTextContract:registry.currentPromptTextContract('primaryAnalysis')}}}).primaryAnalysis,current);
 });
 
-test('只改当前 v4 主分析首块会改变当前输入指纹，旧 v3 指纹保持原样', () => {
+test('读取历史 v4 首块变化只影响 v4 指纹，旧 v3 保持原样', () => {
     const paper = {arxivId:'2610.90001',title:'Test paper',authors:['A'],categories:['cs.SD']};
     const fingerprint = contract => deep.buildRecoveryFingerprints(paper,'actual full text input',paper.arxivId,{version:1,stages:{primaryAnalysis:{status:'complete',promptTextContract:contract}}}).primaryAnalysis;
     const old = fingerprint('analysis-prompt-text-v3'), current = fingerprint('analysis-prompt-text-v4');

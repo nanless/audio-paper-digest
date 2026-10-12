@@ -26,16 +26,16 @@ const originalV4Sha = {
     scoringAudit: '2950f487c529718ff3b67dae19adcead074c0e9418e3ea3a371e758fe29a6902'
 };
 
-test('评分新请求只选 v5，主分析保持 v4，Reader 正文使用 v6、局部修复使用 v7，旧 v4 原文件仍可按 SHA 读取', () => {
+test('评分保持 v5，中文新提示使用主分析 v5 与 Reader v7/v11，旧 v4 仍按原 SHA 读取', () => {
     assert.equal(registry.currentPromptTextContract('scoringAudit'), 'analysis-prompt-text-v5');
     assert.equal(registry.currentTextStagePromptPath('scoringAudit'), 'prompts/scoring-audit-v5.md');
-    assert.equal(registry.currentPromptTextContract('primaryAnalysis'), 'analysis-prompt-text-v4');
+    assert.equal(registry.currentPromptTextContract('primaryAnalysis'), 'analysis-prompt-text-v5');
     for (const stage of ['apiReaderArticle', 'apiReaderRepair']) {
-        assert.equal(registry.currentPromptTextContract(stage), stage === 'apiReaderRepair' ? 'analysis-prompt-text-v10' : 'analysis-prompt-text-v6');
+        assert.equal(registry.currentPromptTextContract(stage), stage === 'apiReaderRepair' ? 'analysis-prompt-text-v11' : 'analysis-prompt-text-v7');
         assert.equal(registry.promptFilePathForContract(stage, 'analysis-prompt-text-v4'), `prompts/${stage === 'apiReaderArticle' ? 'api-reader-article' : 'api-reader-repair'}-v4.md`);
         assert.equal(registry.promptFilePathForContract(stage, 'analysis-prompt-text-v5'), `prompts/${stage === 'apiReaderArticle' ? 'api-reader-article' : 'api-reader-repair'}-v5.md`);
     }
-    assert.throws(() => registry.promptFilePathForContract('primaryAnalysis', 'analysis-prompt-text-v5'), /没有登记/);
+    assert.throws(() => registry.promptFilePathForContract('primaryAnalysis', 'analysis-prompt-text-v99'), /没有登记/);
     const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'scoring-v4-empty-history-'));
     try {
         for (const [stage, expected] of Object.entries(originalV4Sha)) {
@@ -61,6 +61,9 @@ test('评分恢复读取声明的 v4 首块 SHA，不把旧版本核验成当前
 test('Manual 旧主分析 v4 和评分 v4 的完整组合只读核验，混入旧 v3 评分或缺字段仍拒绝', () => {
     const current = manual.buildStagePromptBindings();
     const old = structuredClone(current);
+    for (const [stage, item] of Object.entries(registry.FROZEN_V4_MIXED_PROMPT_FILES)) {
+        if (old[stage]?.source.startsWith('prompts/')) old[stage] = {source:item.path, sha256:sha(read(item.path))};
+    }
     old.scoringAudit = {source:'prompts/scoring-audit-v4.md',sha256:originalV4Sha.scoringAudit};
     assert.equal(old.primaryAnalysis.sha256,originalV4Sha.primaryAnalysis);
     const spec = {version:6,modelPolicy:'manual-agents-sol-high-v2',promptSha256:old.primaryAnalysis.sha256,
@@ -80,6 +83,7 @@ test('Manual 旧主分析 v4 和评分 v4 的完整组合只读核验，混入�
     const extra = structuredClone(spec); extra.stagePromptSha256.unknownStage='a'.repeat(64);
     assert.throws(()=>manual.resolveManualSpecPromptBindings(extra), /SHA/);
     const fresh = structuredClone(spec);
+    fresh.promptSha256 = current.primaryAnalysis.sha256;
     fresh.stagePromptSha256 = Object.fromEntries(Object.entries(current).map(([stage,item])=>[stage,item.sha256]));
     assert.deepEqual(manual.resolveManualSpecPromptBindings(fresh),current);
 });
@@ -93,4 +97,31 @@ test('正式评分入口实际构造的新请求使用 v5 白话并保留工程�
     assert.match(text,/只声称有工程上的价值、没有测量结果或可复用的研究材料时，工程\/实践价值最高 1\.0/);
     assert.doesNotMatch(text,/只有工程叙述或间接指标/);
     assert.equal(capturedRequest.max_tokens ?? capturedRequest.max_output_tokens,16000);
+});
+
+test('中文升级前的完整 Manual 组合只读接受，新旧混搭和缺额外阶段均拒绝', () => {
+    const current = manual.buildStagePromptBindings(), old = structuredClone(current);
+    // 这份路径快照独立取自 294193b 的实际旧 current，不能拿被测登记表自产预期。
+    const oldPaths = {primaryAnalysis:'deep-analysis-v4', openSourceScan:'opensource-scan-v3',
+        revision:'gap-fill-v3', tableRepair:'table-fill-v2', methodRepair:'method-fill-v2',
+        coreSummaryRepair:'core-summary-repair-v5', structureRepair:'structure-repair-v2',
+        scoringAudit:'scoring-audit-v5', imageSupplement:'image-supplement-v3', tagSelection:'tag-repair-v3'};
+    for (const [stage, name] of Object.entries(oldPaths)) {
+        if (old[stage]?.source.startsWith('prompts/')) {
+            const file = `prompts/${name}.md`; old[stage] = {source:file, sha256:sha(read(file))};
+        }
+    }
+    const spec = {version:6,modelPolicy:'manual-agents-sol-high-v2',promptSha256:old.primaryAnalysis.sha256,
+        manualAuthoringPromptPath:'manual/prompts/manual-analysis-record-v2.md',
+        manualAuthoringPromptSha256:sha(read('manual/prompts/manual-analysis-record-v2.md')),
+        stagePromptSha256:Object.fromEntries(Object.entries(old).map(([stage,item])=>[stage,item.sha256]))};
+    const before = JSON.stringify(spec);
+    assert.deepEqual(manual.resolveManualSpecPromptBindings(spec), old);
+    assert.equal(JSON.stringify(spec), before);
+    const mixed = structuredClone(spec); mixed.stagePromptSha256.revision = current.revision.sha256;
+    assert.throws(() => manual.resolveManualSpecPromptBindings(mixed), /SHA/);
+    const missing = structuredClone(spec); delete missing.stagePromptSha256.methodRepair;
+    assert.throws(() => manual.resolveManualSpecPromptBindings(missing), /SHA/);
+    const extra = structuredClone(spec); extra.stagePromptSha256.unknownStage='a'.repeat(64);
+    assert.throws(() => manual.resolveManualSpecPromptBindings(extra), /SHA/);
 });

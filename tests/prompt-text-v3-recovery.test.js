@@ -16,38 +16,39 @@ test('改写阶段分别读取 v1、v2、v3 原路径，旧版本不能解析成
         const v1 = registry.promptFilePathForContract(stage, '');
         const v2 = registry.promptFilePathForContract(stage, 'analysis-prompt-text-v2');
         const v3 = registry.promptFilePathForContract(stage, 'analysis-prompt-text-v3');
-        assert.equal(registry.currentPromptTextContract(stage), stage === 'apiReaderRepair' ? 'analysis-prompt-text-v10' : stage === 'apiReaderArticle' ? 'analysis-prompt-text-v6' : stage === 'scoringAudit' ? 'analysis-prompt-text-v5' : stage === 'primaryAnalysis' ? 'analysis-prompt-text-v4' : 'analysis-prompt-text-v3');
+        assert.equal(registry.currentPromptTextContract(stage), stage === 'apiReaderRepair' ? 'analysis-prompt-text-v11' : stage === 'apiReaderArticle' ? 'analysis-prompt-text-v7' : stage === 'scoringAudit' ? 'analysis-prompt-text-v5' : stage === 'primaryAnalysis' ? 'analysis-prompt-text-v5' : stage === 'revision' ? 'analysis-prompt-text-v4' : 'analysis-prompt-text-v3');
         assert.equal(v2, v1.replace('.md', '-v2.md'));
         assert.equal(v3, v1.replace('.md', '-v3.md'));
         assert.notEqual(deep.runtimePromptTemplateSha256(v2), deep.runtimePromptTemplateSha256(v3));
-        assert.throws(() => registry.promptFilePathForContract(stage, 'analysis-prompt-text-v11'), /没有登记/);
+        assert.throws(() => registry.promptFilePathForContract(stage, 'analysis-prompt-text-v99'), /没有登记/);
     }
-    for (const stage of ['visualSummary','digestCover','tableRepair','methodRepair']) {
+    for (const stage of ['visualSummary','digestCover','tableRepair']) {
         assert.equal(registry.currentPromptTextContract(stage), 'analysis-prompt-text-v2');
         assert.throws(() => registry.promptFilePathForContract(stage, 'analysis-prompt-text-v3'), /没有登记/);
     }
     for (const stage of ['structureRepair']) {
         const oldPath = registry.promptFilePathForContract(stage, 'analysis-prompt-text-v2');
         const currentPath = registry.promptFilePathForContract(stage, registry.currentPromptTextContract(stage));
-        assert.equal(registry.currentPromptTextContract(stage), 'analysis-prompt-text-v3');
-        assert.equal(currentPath, oldPath);
-        assert.deepEqual(fs.readFileSync(path.resolve(__dirname, '..', currentPath)),
+        assert.equal(registry.currentPromptTextContract(stage), 'analysis-prompt-text-v4');
+        assert.notEqual(currentPath, oldPath);
+        assert.equal(registry.promptFilePathForContract(stage, 'analysis-prompt-text-v3'), oldPath);
+        assert.notDeepEqual(fs.readFileSync(path.resolve(__dirname, '..', currentPath)),
             fs.readFileSync(path.resolve(__dirname, '..', oldPath)));
         assert.throws(() => registry.promptFilePathForContract(stage, 'analysis-prompt-text-v9'), /没有登记/);
     }
     const coreOld = registry.promptFilePathForContract('coreSummaryRepair', 'analysis-prompt-text-v3');
     const coreCurrent = registry.promptFilePathForContract('coreSummaryRepair', registry.currentPromptTextContract('coreSummaryRepair'));
-    assert.equal(registry.currentPromptTextContract('coreSummaryRepair'), 'analysis-prompt-text-v5');
+    assert.equal(registry.currentPromptTextContract('coreSummaryRepair'), 'analysis-prompt-text-v6');
     assert.equal(coreOld, registry.promptFilePathForContract('coreSummaryRepair', 'analysis-prompt-text-v2'));
     assert.notEqual(coreCurrent, coreOld);
     assert.notEqual(deep.runtimePromptTemplateSha256(coreCurrent), deep.runtimePromptTemplateSha256(coreOld));
     assert.throws(() => registry.promptFilePathForContract('coreSummaryRepair', 'analysis-prompt-text-v9'), /没有登记/);
 });
-test('已完成的 v2 修订记录按原版本核验，保留 v2 身份；新请求使用不同的 v3 指纹', () => {
+test('已完成的 v2 修订记录按原版本核验，保留 v2 身份；新请求使用不同的当前版本指纹', () => {
     const input = validAnalysisText(), source = 'Speech recognition source evidence.';
     const evidence = deep.buildStageEvidenceContext('revision', input, source);
     const oldFingerprint = deep.buildTextStageFingerprint('revision', input, evidence, 'analysis-prompt-text-v2');
-    const newFingerprint = deep.buildTextStageFingerprint('revision', input, evidence, 'analysis-prompt-text-v3', {});
+    const newFingerprint = deep.buildTextStageFingerprint('revision', input, evidence, registry.currentPromptTextContract('revision'), {});
     assert.notEqual(oldFingerprint, newFingerprint);
     const paper = { analysisCheckpoint: input, analysisStageCheckpoints: { revision: input } };
     const manifest = { version: 1, stages: { revision: { status: 'complete', fingerprint: oldFingerprint,

@@ -13,6 +13,8 @@ const SECTION_GROUP_PLAN_CONTRACT = 'reader-section-index-groups-v1';
 const SECTION_BODY_GROUP_PLAN_CONTRACT = 'reader-section-body-index-groups-v2';
 const ARRAY_FIELDS = ['sections', 'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings'];
 const ROOT_FIELDS = ['version', 'readerTitle', 'oneSentenceThesis', ...ARRAY_FIELDS];
+const LANGUAGE_ISSUE_CODES = new Set(['reader_workflow_leakage', 'reader_awkward_translation']);
+const LANGUAGE_ERROR_CODE = 'READER_PROSE_LANGUAGE';
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_RECOVERY_SECTIONS = 64;
 const VALIDATION_SIGNATURE_PREFIX = 'reader-validation-v2:';
@@ -636,9 +638,13 @@ function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', m
     const readonlyDiagnostics = (context.issues || []).map(issue => ({
         path: issue.path || null, code: issue.code || null
     }));
+    const readerLanguageGuidance = '标题和获准改写的正文只讲论文的具体内容，不写节数、列数、检查通过或表前表后写作要求。'
+        + '新标题用自然中文概括本组问题。技术缩写保留准确原名；不要为了全中文杜撰直译。'
+        + '本轮要求原样保留的正文仍逐字保留，已有文风问题交回后续获准的局部修复。';
     if (context.sectionGroupPlanContract === SECTION_BODY_GROUP_PLAN_CONTRACT) {
         return [
             '本轮只返回原小节索引和原字段引用的分组计划，不重写正文或来源。',
+            readerLanguageGuidance,
             `论文：${title} arXiv：${arxivId}，当前${count}节，必须合组为12–18节。`,
             '每组只能含sectionIndexes、heading、fieldOrders。sectionIndexes从0起连续完整覆盖全部原小节，不遗漏、不重复、不重排，只能合并同kind相邻小节；kind从原小节派生。',
             'fieldOrders按本组sectionIndexes顺序，逐小节声明sectionIndex与fields。fields指定该原小节body与唯一body2/body_after字符串的拼接次序；原字段每项恰好一次，包括空串。不能跨小节搬段，不能提交新字段/正文/值，不能省略任何图表公式标记。',
@@ -652,6 +658,7 @@ function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', m
     if (context.sectionGroupPlanContract === SECTION_GROUP_PLAN_CONTRACT) {
         return [
             '本轮只重组小节，输出局部补丁 JSON 的索引分组计划，不重写正文或来源记录。',
+            readerLanguageGuidance,
             `论文：${title}\narXiv：${arxivId}`,
             `当前有 ${count} 节，至少需要减少 ${minimumReduction} 节。建议重组为 16 节；允许 12–18 节。请按教学连贯性选择同kind的相邻内容合组，不能原样返回 ${count} 组。`,
             '每组只输出sectionIndexes与heading。索引从0开始，组内及组间必须按原顺序完整覆盖0到最后一节，不能遗漏、重复、跳号或重排；只能合并同kind连续小节。新标题应概括本组内容，不能新增事实。',
@@ -670,6 +677,7 @@ function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', m
     }
     return [
         '本轮只重组小节，输出局部补丁 JSON，不输出整篇文章或其他字段。',
+        readerLanguageGuidance,
         `论文：${title}\narXiv：${arxivId}`,
         `当前有 ${count} 节，至少需要减少 ${minimumReduction} 节。建议重组为 16 节；允许 12–18 节，不能仍输出 ${count} 节。先规划合并后的标题与类型，再写完整数组。`,
         '相邻内容可以合并为自然段，原标题可作为正文子标题；不能为了凑节数删掉正确事实、数字、单位、比较条件、限制或图表公式。原额外字段中有依据的内容应放回对应正文，不能自动丢弃。',
@@ -1183,8 +1191,50 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
 }
 
 // 这些独立诊断是权威解析器的补充，不是替代。
+// 只检查模型写给读者的文字。来源引文、原表单元格、公式和记录字段不参与改写。
+// 在组装正文前保存原稿路径，避免一句带“表”的提示触发整篇表格重写。
+function collectReaderLanguageIssues(draft) {
+    if (!draft || typeof draft !== 'object' || Array.isArray(draft)) return [];
+    const { findReaderLanguageIssues } = require('../editorial-quality.js');
+    const issues = [];
+    const check = (text, pointer, contextText = '') => {
+        if (typeof text !== 'string') return;
+        for (const finding of findReaderLanguageIssues(text, { contextText })) {
+            issues.push({ code: finding.code, path: pointer, match: finding.match,
+                message: `${finding.message} 原句片段：${finding.match}` });
+        }
+    };
+    const openingContext = Array.isArray(draft.sections) ? draft.sections
+        .filter(section => ['background', 'problem', 'method_overview'].includes(section?.kind))
+        .map(section => section.body || '').join('\n\n') : '';
+    check(draft.readerTitle, '/readerTitle', openingContext);
+    check(draft.oneSentenceThesis, '/oneSentenceThesis', openingContext);
+    if (Array.isArray(draft.sections)) draft.sections.forEach((section, index) => {
+        check(section?.heading, `/sections/${index}`, section?.body || '');
+        check(section?.body, `/sections/${index}/body`);
+    });
+    if (Array.isArray(draft.conceptBridges)) draft.conceptBridges.forEach((bridge, index) => {
+        for (const term of Array.isArray(bridge?.terms) ? bridge.terms : []) {
+            check(term, `/conceptBridges/${index}`, bridge?.explanation || '');
+        }
+        check(bridge?.explanation, `/conceptBridges/${index}`);
+    });
+    if (Array.isArray(draft.figurePlacements)) draft.figurePlacements.forEach((figure, index) => {
+        const figureContext = Array.isArray(draft.sections) ? draft.sections
+            .filter(section => typeof figure?.marker === 'string' && figure.marker
+                && typeof section?.body === 'string' && section.body.includes(figure.marker))
+            .map(section => section.body).join('\n\n') : '';
+        for (const point of Array.isArray(figure?.focusPoints) ? figure.focusPoints : []) {
+            check(point, `/figurePlacements/${index}`, figureContext);
+        }
+    });
+    return issues;
+}
+
 function collectDraftIssues(draft, parserError, options = {}) {
     const issues = [];
+    const languageIssues = collectReaderLanguageIssues(draft);
+    const languageError = parserError?.code === LANGUAGE_ERROR_CODE && languageIssues.length > 0;
     const objectIssue = parserError && typeof parserError === 'object' && !(parserError instanceof Error)
         ? classifyTableBindingOrderIssue(parserError) : null;
     const orderError = objectIssue ? { ...objectIssue, summary: parserError }
@@ -1197,7 +1247,7 @@ function collectDraftIssues(draft, parserError, options = {}) {
             && issue.diagnosticOnly !== true && issue.path === null
             && issue.requiredCount === parserError.requiredCount
             && issue.actualCount === parserError.actualCount);
-    if (parserError && !hasSameCountIssue) {
+    if (parserError && !hasSameCountIssue && !languageError) {
         if (orderError.ignoreMessageForRepair) {
             issues.push(orderError.summary);
         } else if (parserError.code === TABLE_COUNT_ISSUE_CODE) {
@@ -1208,7 +1258,8 @@ function collectDraftIssues(draft, parserError, options = {}) {
             issues.push({ path: null, message: String(parserError.message || parserError) });
         }
     }
-    issues.push(...standaloneParserIssues);
+    issues.push(...standaloneParserIssues.filter(issue => !LANGUAGE_ISSUE_CODES.has(issue?.code)));
+    issues.push(...languageIssues);
     if (!draft) {
         // 原始响应只供诊断；不会成为可修复草稿，也不会获得任何修改权限。
         try {
@@ -2339,8 +2390,16 @@ function buildRepairTargets(draft, issues, options = {}) {
                 ? [{ ...globalWideTableIssue, path: `/tableBindings/${firstBindingIndex}` }]
                 : [globalWideTableIssue];
     }
+    const languageIssueKey = issue => JSON.stringify([issue.code, issue.path, issue.match]);
+    const currentLanguageIssues = new Set(actionableIssues.some(issue => LANGUAGE_ISSUE_CODES.has(issue.code))
+        ? collectReaderLanguageIssues(draft).map(languageIssueKey) : []);
     for (const issue of actionableIssues) {
         if (classifyTableBindingOrderIssue(issue).ignoreMessageForRepair) continue;
+        if (LANGUAGE_ISSUE_CODES.has(issue.code)) {
+            // 文风诊断只授权它在原稿中的确切字段，不因“表”“图”等字扩大范围。
+            if (currentLanguageIssues.has(languageIssueKey(issue))) add(issue.path);
+            continue;
+        }
         if (issue.path) add(issue.path);
         if (issue.bindingPath) add(issue.bindingPath);
         const message = issue.message || '';
@@ -2434,7 +2493,8 @@ function buildRepairTargets(draft, issues, options = {}) {
     }
     // 全局的可读性和篇幅类错误，没法靠正则消息安全地定位到某处。保留所有
     // 正文目标供审查，但每个补丁最多八个节点。
-    if (!paths.size && (actionableIssues.some(issue => !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair)
+    if (!paths.size && (actionableIssues.some(issue => !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
+        && (!LANGUAGE_ISSUE_CODES.has(issue.code) || currentLanguageIssues.has(languageIssueKey(issue))))
         || !issues.length)) {
         draft.sections.forEach((_section, index) => add(`/sections/${index}/body`));
     }
@@ -2858,7 +2918,7 @@ function applyTopLevelMetadataRepair(raw, patch, context) {
 }
 
 
-module.exports = { REPAIR_VERSION, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+module.exports = { REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,

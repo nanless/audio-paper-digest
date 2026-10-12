@@ -236,17 +236,23 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
                 '9a7e72d75fdd05f7004c132533425fa140d237c22bc98a3c6c64333e5d76e22e',
                 '5164ce17261a13a009c34bfcf8a71fc2c44f1ae2246f0651de5eda82a7645f65'].includes(envelope.identity.repairPromptSha256)
             && identity.repairPromptSha256 === 'f50f85a04017de568f8225e97d7b4e230ae40b969d99266afcef045e011829a4';
-        if (envelope.identity.promptSha256 !== identity.promptSha256 && !completeTablePromptUpgrade && !metadataPromptUpgrade && !tablePriorityPromptUpgrade && !sectionReorganizationPromptUpgrade) continue;
+        // 仅固定的中文提示升级；同源身份、原回执和预算仍由原恢复链核验。
+        const plainChinesePromptUpgrade = envelope.identity.promptSha256 === 'a41f67166a0f366a10bf23cc17aa51ca6105b246ce7964ec14c21d6b4018f380'
+            && envelope.identity.repairPromptSha256 === 'f50f85a04017de568f8225e97d7b4e230ae40b969d99266afcef045e011829a4'
+            && identity.promptSha256 === 'b4f0b864fd338cc3a58a2e061ec952947a6faa4a09971167d6daa7add9ebbd9f'
+            && identity.repairPromptSha256 === 'd3fa5851973b36e0944a9abf13f719aa34b1782f784ee086e6e637deea8979c2'
+            && isDeepStrictEqual(envelope.identity.readerRecoveryEpochSha256, identity.readerRecoveryEpochSha256);
+        if (envelope.identity.promptSha256 !== identity.promptSha256 && !completeTablePromptUpgrade && !metadataPromptUpgrade && !tablePriorityPromptUpgrade && !sectionReorganizationPromptUpgrade && !plainChinesePromptUpgrade) continue;
         if (envelope.identity.repairPromptSha256 !== identity.repairPromptSha256
             && !(envelope.identity.repairPromptSha256 === 'c63148bca8bed36a8c31b0327b87e2a1e9ddf51fd8641813827f5e8f1eb4a6ec'
                 && identity.repairPromptSha256 === '8d1483030d1167b9ac3b81602c267ae5e5ec0fc5e88fb7308aea5f1e2a52d470')
             && !(envelope.identity.repairPromptSha256 === '89faba16d2b3af5a1549e13c85800bc7301d3a4217a1d9ae362b33c76cff9a34'
                 && identity.repairPromptSha256 === '7cb7332fa3085b4497c31d73a7075eb10f8700cd84d23f68875d8341cb97f5de')
-            && !completeTablePromptUpgrade && !metadataPromptUpgrade && !tablePriorityPromptUpgrade && !sectionReorganizationPromptUpgrade) continue;
+            && !completeTablePromptUpgrade && !metadataPromptUpgrade && !tablePriorityPromptUpgrade && !sectionReorganizationPromptUpgrade && !plainChinesePromptUpgrade) continue;
         if (!isDeepStrictEqual(withoutRevisionFields(envelope.identity), withoutRevisionFields(identity))) continue;
         verifyPixels(payload);
         const changedFields = ALLOWED_FIELDS.filter(field => !isDeepStrictEqual(envelope.identity[field], identity[field]));
-        if (changedFields.length) compatible.push({ identity: envelope.identity, payload, changedFields, name, envelopeSha256 });
+        if (changedFields.length) compatible.push({ identity: envelope.identity, payload, changedFields, name, envelopeSha256, plainChinesePromptUpgrade });
     }
     if (compatible.length > 1) throw new Error('Ambiguous Reader diagnostic revision: multiple compatible candidates');
     if (!compatible.length) return null;
@@ -321,7 +327,8 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
             }
         }
     }
-    const diagnosticImplementationChanged = implementationFields.some(field => old.changedFields.includes(field));
+    const diagnosticImplementationChanged = !old.plainChinesePromptUpgrade
+        && implementationFields.some(field => old.changedFields.includes(field));
     const lineageAlreadyIssued = updated.implementationRepairAllowanceLineage
         === IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT;
     const previousActiveAllowance = hasUnusedImplementationAllowance(updated)
@@ -355,7 +362,8 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
         updated.implementationRepairAllowanceLineage = IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT;
     }
     const transferUnusedAllowance = !updated.explicitReaderRetryRound && old.changedFields.length > 0
-        && old.changedFields.every(field => ['repairPromptSha256', 'promptSha256'].includes(field))
+        && (old.plainChinesePromptUpgrade
+            || old.changedFields.every(field => ['repairPromptSha256', 'promptSha256'].includes(field)))
         && Boolean(previousActiveAllowance);
     if (previousActiveAllowance && !transferUnusedAllowance) {
         updated.consumedImplementationAllowanceSha256 = [...new Set([

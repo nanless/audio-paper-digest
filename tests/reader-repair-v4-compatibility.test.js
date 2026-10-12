@@ -43,7 +43,7 @@ test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v8', () => 
     const oldFingerprint = fingerprint(oldStage);
     assert.equal(versions.promptFilePathForContract('apiReaderRepair', oldStage.repairPromptTextContract),
         'prompts/api-reader-repair-v3.md');
-    assert.equal(versions.currentPromptTextContract('apiReaderRepair'), 'analysis-prompt-text-v10');
+    assert.equal(versions.currentPromptTextContract('apiReaderRepair'), 'analysis-prompt-text-v11');
     assert.notEqual(fingerprint({ status: 'pending' }), oldFingerprint);
     assert.equal(fingerprint(oldStage), oldFingerprint);
     assert.equal(JSON.stringify(oldStage), before);

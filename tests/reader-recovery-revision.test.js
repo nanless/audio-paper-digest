@@ -884,3 +884,32 @@ test('同输入签名Reader收紧为资源局部模式不清空任何计费计�
         ...sample.identity, contentMode: 'reader-source-only-v1'
     }), /恢复模式记录无效/);
 });
+
+test('固定中文提示升级连同实现指纹变化仍保留已付费次数和失败计数，不新增额度', t => {
+    const f = fixture(t);
+    f.oldIdentity.promptSha256 = 'a41f67166a0f366a10bf23cc17aa51ca6105b246ce7964ec14c21d6b4018f380';
+    f.oldIdentity.repairPromptSha256 = 'f50f85a04017de568f8225e97d7b4e230ae40b969d99266afcef045e011829a4';
+    f.identity.promptSha256 = 'b4f0b864fd338cc3a58a2e061ec952947a6faa4a09971167d6daa7add9ebbd9f';
+    f.identity.repairPromptSha256 = 'd3fa5851973b36e0944a9abf13f719aa34b1782f784ee086e6e637deea8979c2';
+    saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
+    const revised = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
+    for (const field of ['attempts','fullAttempts','transportFailures','noProgress','failureSignature',
+        'validationFailureStreak','validationFailureSignature']) assert.deepEqual(revised[field], f.payload[field]);
+    assert.equal(revised.implementationRepairAllowanceProof, null);
+    assert.equal(revised.readerRecoveryRevisions.at(-1).clearedNoProgress, false);
+});
+for (const field of ['sourceSha256','inputFingerprint','readerRecoveryEpochSha256','promptSha256']) {
+    test(`中文提示升级不接受改变${field}的恢复上下文`, t => {
+        const f = fixture(t);
+        f.oldIdentity.promptSha256 = 'a41f67166a0f366a10bf23cc17aa51ca6105b246ce7964ec14c21d6b4018f380';
+        f.oldIdentity.repairPromptSha256 = 'f50f85a04017de568f8225e97d7b4e230ae40b969d99266afcef045e011829a4';
+        f.identity.promptSha256 = 'b4f0b864fd338cc3a58a2e061ec952947a6faa4a09971167d6daa7add9ebbd9f';
+        f.identity.repairPromptSha256 = 'd3fa5851973b36e0944a9abf13f719aa34b1782f784ee086e6e637deea8979c2';
+        f.identity[field] = '9'.repeat(64);
+        if (field === 'readerRecoveryEpochSha256') f.oldIdentity[field] = '8'.repeat(64);
+        const file = saveFailedCandidate(f.directory, f.oldIdentity, f.payload), bytes = fs.readFileSync(file);
+        if (field === 'sourceSha256') assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), /exact fresh run\/source scope/);
+        else assert.equal(f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), null);
+        assert.deepEqual(fs.readFileSync(file), bytes);
+    });
+}

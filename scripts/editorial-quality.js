@@ -564,6 +564,105 @@ function findReaderTemplatePhrases(text) {
     return findings;
 }
 
+// 只诊断已复现的读者语言问题，不替换术语、删句或改动来源证据。
+// 等长遮盖保留原始 index；引用、代码与公式不作为作者自己的解释检查。
+function findReaderLanguageIssues(text, { contextText = '' } = {}) {
+    const original = String(text ?? '');
+    const mask = value => value.replace(/[^\r\n]/g, ' ');
+    let fence = null;
+    let mathEnd = null;
+    let visible = original.split(/(?<=\n)/u).map(line => {
+        const trimmed = line.trim();
+        const marker = trimmed.match(/^(`{3,}|~{3,})/u);
+        if (fence) {
+            if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length
+                && trimmed.slice(marker[1].length).trim() === '') fence = null;
+            return mask(line);
+        }
+        if (marker) {
+            if (trimmed.indexOf(marker[1], marker[1].length) < 0) fence = marker[1];
+            return mask(line);
+        }
+        if (mathEnd) {
+            if (trimmed.includes(mathEnd)) mathEnd = null;
+            return mask(line);
+        }
+        if (/^(?:\$\$|\\\[)/u.test(trimmed)) {
+            const end = trimmed.startsWith('$$') ? '$$' : '\\]';
+            if (!trimmed.slice(2).includes(end)) mathEnd = end;
+            return mask(line);
+        }
+        if (/^>\s?/u.test(trimmed)) return mask(line);
+        return line;
+    }).join('')
+        .replace(/(`+)[^`\n]*?\1/gu, mask)
+        .replace(/\$[^$\n]+\$|\\\([^\n]*?\\\)/gu, mask)
+        .replace(/(?:原文(?:写道|原句|引文|表述)|逐字引文|来源引文)\s*[：:]\s*[“「][^”」]*[”」]/gu, mask);
+    // 复用正文的真实表格解析边界，不把普通含竖线的句子当成来源单元格。
+    // analysis-contract 也引用本模块，因此只在完成加载后的纯检查调用中读取导出。
+    const tableLines = new Set(require('./analysis-contract.js').extractMarkdownTables(visible)
+        .flatMap(table => Array.from({ length: table.endLine - table.startLine + 1 },
+            (_, index) => table.startLine + index)));
+    visible = visible.split('\n').map((line, index) => tableLines.has(index)
+        ? mask(line) : line).join('\n');
+    const issues = [];
+    const rules = [
+        {
+            code: 'reader_workflow_leakage',
+            regex: new RegExp([
+                /列数满足(?:核对|校验)要求/,
+                /表前说明如下/,
+                /表(?:前|后)(?:解释|说明)?(?:必须|需要|需)(?:说明|解释|区分|强调|补充|同时看到|结合)/,
+                /表中数值均有原文连续句作为来源/,
+                /表格前后需要完整的独立说明与解释/,
+                /表前已说明比较问题[、，,]公平条件(?:与|和)指标方向/,
+                /表后解释(?:主要收益[、，,]具体代价与限制|支持的有限判断与反例)/,
+                /下表解释主要收益与限制/,
+                /列数满足比较需要[，,]内容全部来自原文连续句子/,
+                /这里的分数若指对数密度对输入的梯度[，,]要说明它不是质量评分/
+            ].map(pattern => pattern.source).join('|'), 'gu'),
+            message: '这句把写作或机器检查要求写进了读者正文。改成直接说明本表比较什么、结果意味着什么或有哪些条件限制的自然句；保留原数字、单位、方法归属和来源证据，不靠删除事实通过检查。'
+        },
+        {
+            code: 'reader_awkward_translation',
+            regex: /弗雷歇起始距离/gu,
+            message: '核对本段来源是否指 Fréchet Inception Distance（FID）。若是，保留准确指标名或 FID，并白话说明它比较生成与参考样本的特征分布；不要把 Inception 译成“起始”。保留原指标值、方向、条件和来源证据，不改成其他 Fréchet 数学距离。'
+        },
+        {
+            code: 'reader_awkward_translation',
+            regex: /最优评论家|辅助(?:扩散)?评论家/gu,
+            technicalContext: /DMD|扩散|判别器|生成器|分数|logit|梯度|KL|蒸馏/iu,
+            message: '核对 critic 在此处指判别器还是估计学生分布的辅助模型，用该具体职责解释“最优”所需的条件；不要直译成评价作品的人。保留论文原术语对应、公式、数字和证据，不能一律把不同 critic 改成同一模型。'
+        },
+        {
+            code: 'reader_awkward_translation',
+            regex: /补丁距离/gu,
+            technicalContext: /FID|Fr[eé]chet|图像块|局部图像|高分辨率细节/iu,
+            message: '核对本段是否指 patch FID。若是，保留 patch FID，并解释为在局部图像块上计算的指标，不译成软件补丁的距离；保持原数值、单位、方向和来源。其他数学距离或软件补丁语境不在本规则范围内。'
+        }
+    ];
+    const paragraphBreaks = [...visible.matchAll(/\r?\n[ \t]*\r?\n/gu)];
+    for (const rule of rules) {
+        for (const finding of collectRegexMatches(visible, rule.regex, rule.code)) {
+            const precedingBreak = paragraphBreaks.findLast(item => item.index < finding.index);
+            const followingBreak = paragraphBreaks.find(item => item.index > finding.index);
+            const start = precedingBreak ? precedingBreak.index + precedingBreak[0].length : 0;
+            const paragraph = visible.slice(start, followingBreak?.index ?? visible.length);
+            // 正文明确纠正译名时，提及那个错误译名并不等于使用它。
+            const prefix = visible.slice(Math.max(start, finding.index - 24), finding.index);
+            if (rule.code === 'reader_awkward_translation'
+                && /(?:不(?:应|宜|能|该)?被?(?:叫|译成|译为|译作)|不要(?:译成|译为|写成)|避免(?:称为|译为))\s*[“「"']?$/u.test(prefix)) continue;
+            // 上下文只能帮助解释这个字段的术语，不产生上下文中的检查目标。
+            if (rule.technicalContext
+                && !rule.technicalContext.test(paragraph + '\n' + String(contextText))) continue;
+            issues.push({ code: rule.code, match: original.slice(finding.index,
+                finding.index + finding.match.length), index: finding.index,
+                line: finding.line, message: rule.message });
+        }
+    }
+    return issues.sort((left, right) => left.index - right.index);
+}
+
 function normalizeDanglingReaderConnectors(text) {
     const protectedSpans = [];
     const protect = value => {
@@ -1561,6 +1660,9 @@ function validateEditorialQuality(input, options = {}) {
     }
     for (const section of QUALITY_SECTION_NAMES) {
         const body = sections[section];
+        for (const finding of findReaderLanguageIssues(body)) {
+            issues.push(issue(finding.code, finding.message, { section, ...finding }));
+        }
         for (const finding of findQuantitativeChineseNumerals(body)) {
             issues.push(issue('quantitative_chinese_numeral', '精确定量信息必须使用阿拉伯数字', { section, ...finding }));
         }
@@ -1634,6 +1736,7 @@ module.exports = {
     findQuantitativeChineseNumerals,
     normalizeIssueBoundReaderQuantitativeNumerals,
     findReaderTemplatePhrases,
+    findReaderLanguageIssues,
     normalizeDanglingReaderConnectors,
     findBrokenProse,
     findNumericTypographyDefects,

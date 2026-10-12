@@ -35,10 +35,13 @@ test('独立容量只改变新版本阶段，旧版本及主分析预算保持',
     const originalModule = require.cache[modulePath];
     const original = {
         coreSummaryRepairMaxTokens: Config.ANALYSIS_CONFIG.coreSummaryRepairMaxTokens,
-        structureMaxTokens: Config.ANALYSIS_CONFIG.structureMaxTokens
+        structureMaxTokens: Config.ANALYSIS_CONFIG.structureMaxTokens,
+        revisionMaxTokens: Config.ANALYSIS_CONFIG.revisionMaxTokens
     };
-    const values = analyzer => Object.fromEntries(['coreSummaryRepair', 'structureRepair'].map(stage => [stage, {
+    const values = analyzer => Object.fromEntries(['coreSummaryRepair', 'structureRepair', 'revision'].map(stage => [stage, {
         current: analyzer.buildTextStageFingerprint(stage, '同一输入', '同一证据', analyzer.currentPromptTextContract(stage)),
+        predecessor: analyzer.buildTextStageFingerprint(stage, '同一输入', '同一证据',
+            stage === 'coreSummaryRepair' ? 'analysis-prompt-text-v5' : 'analysis-prompt-text-v3'),
         old: ['', 'analysis-prompt-text-v1', 'analysis-prompt-text-v2'].map(contract =>
             analyzer.buildTextStageFingerprint(stage, '同一输入', '同一证据', contract)),
         migrated: analyzer.buildLegacyCoreSummaryV2TextFingerprint(stage, '同一输入', '同一证据')
@@ -46,7 +49,6 @@ test('独立容量只改变新版本阶段，旧版本及主分析预算保持',
     const unrelated = analyzer => ({
         primary: analyzer.buildRecoveryFingerprints({ arxivId: '2610.02582', title: '同一论文', authors: [], categories: [] },
             '同一来源', '2610.02582').primaryAnalysis,
-        revision: analyzer.buildTextStageFingerprint('revision', '同一输入', '同一证据', analyzer.currentPromptTextContract('revision')),
         table: analyzer.buildTextStageFingerprint('tableRepair', '同一输入', '同一证据', analyzer.currentPromptTextContract('tableRepair'))
     });
     const before = values(deep);
@@ -54,12 +56,14 @@ test('独立容量只改变新版本阶段，旧版本及主分析预算保持',
     try {
         Config.ANALYSIS_CONFIG.coreSummaryRepairMaxTokens += 1000;
         Config.ANALYSIS_CONFIG.structureMaxTokens += 1000;
+        Config.ANALYSIS_CONFIG.revisionMaxTokens += 1000;
         delete require.cache[modulePath];
         const changed = require(modulePath);
         const after = values(changed);
         assert.deepEqual(unrelated(changed), otherBefore);
         for (const stage of Object.keys(before)) {
             assert.notEqual(after[stage].current, before[stage].current);
+            assert.notEqual(after[stage].predecessor, before[stage].predecessor);
             assert.deepEqual(after[stage].old, before[stage].old);
             assert.equal(after[stage].migrated, before[stage].migrated);
         }

@@ -17,6 +17,7 @@ const ANALYSIS_PROMPT_TEXT_V7_CONTRACT = 'analysis-prompt-text-v7';
 const ANALYSIS_PROMPT_TEXT_V8_CONTRACT = 'analysis-prompt-text-v8';
 const ANALYSIS_PROMPT_TEXT_V9_CONTRACT = 'analysis-prompt-text-v9';
 const ANALYSIS_PROMPT_TEXT_V10_CONTRACT = 'analysis-prompt-text-v10';
+const ANALYSIS_PROMPT_TEXT_V11_CONTRACT = 'analysis-prompt-text-v11';
 
 // 恢复阶段的 v1 冻结路径，外加读者局部修复提示词（它不是一个恢复阶段，但同样
 // 参与读者阶段的指纹和失败草稿身份）。旧记录的指纹一律按这里复算。
@@ -133,16 +134,38 @@ const FROZEN_V4_MIXED_PROMPT_FILES = Object.freeze({
     ...FROZEN_V4_PROMPT_FILES,
 });
 
-// 评分使用 v5；主分析保持 v4。核心摘要使用 v5 正文，结构修复保留 v3 独立预算。
+// 中文表达升级前的实际阶段路径单独冻结，不改变旧 Manual 混合组合。
+// 结构修复的旧 v3 契约沿用 v2 文件，契约号和文件号不能互相猜测。
+const FROZEN_PRE_PLAIN_CHINESE_PROMPT_FILES = Object.freeze({
+    primaryAnalysis: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/deep-analysis-v4.md' }),
+    revision: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/gap-fill-v3.md' }),
+    methodRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V2_CONTRACT, path: 'prompts/method-fill-v2.md' }),
+    coreSummaryRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path: 'prompts/core-summary-repair-v5.md' }),
+    structureRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/structure-repair-v2.md' }),
+    apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V6_CONTRACT, path: 'prompts/api-reader-article-v6.md' }),
+    apiReaderRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V10_CONTRACT, path: 'prompts/api-reader-repair-v10.md' }),
+});
+
+// 中文升级前的完整 Manual 阶段组合，未改变的阶段也固定旧路径。
+const FROZEN_PRE_PLAIN_CHINESE_MIXED_PROMPT_FILES = Object.freeze({
+    ...FROZEN_V4_MIXED_PROMPT_FILES, ...FROZEN_PRE_PLAIN_CHINESE_PROMPT_FILES,
+    scoringAudit: Object.freeze({contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path:'prompts/scoring-audit-v5.md'}),
+    tagSelection: Object.freeze({contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path:'prompts/tag-repair-v3.md'}),
+});
+
+// 评分仍使用 v5；本次七个阶段新增中文表达版本，所有原文件保持冻结。
 // 旧核心摘要 v3 仍读取冻结 v2 正文，旧混合登记对象保持原样。
 const PROMPT_FILE_VERSIONS = Object.freeze({
     ...FROZEN_V4_MIXED_PROMPT_FILES,
+    primaryAnalysis: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path: 'prompts/deep-analysis-v5.md' }),
+    revision: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/gap-fill-v4.md' }),
+    methodRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/method-fill-v3.md' }),
     tagSelection: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/tag-repair-v3.md' }),
-    apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V6_CONTRACT, path: 'prompts/api-reader-article-v6.md' }),
-    apiReaderRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V10_CONTRACT, path: 'prompts/api-reader-repair-v10.md' }),
+    apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V7_CONTRACT, path: 'prompts/api-reader-article-v7.md' }),
+    apiReaderRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V11_CONTRACT, path: 'prompts/api-reader-repair-v11.md' }),
     scoringAudit: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path: 'prompts/scoring-audit-v5.md' }),
-    coreSummaryRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path: 'prompts/core-summary-repair-v5.md' }),
-    structureRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/structure-repair-v2.md' }),
+    coreSummaryRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V6_CONTRACT, path: 'prompts/core-summary-repair-v6.md' }),
+    structureRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/structure-repair-v3.md' }),
 });
 
 // v1 路径反查阶段名。会议实现清单只记路径，需要据此换成当前版本的正文。
@@ -177,6 +200,8 @@ function promptFilePathForContract(stage, promptTextContract) {
         if (!frozen) throw new Error(`阶段 ${stage} 没有冻结的 v1 提示词路径`);
         return frozen;
     }
+    const predecessor = FROZEN_PRE_PLAIN_CHINESE_PROMPT_FILES[stage];
+    if (predecessor?.contract === declared) return predecessor.path;
     const archivedV2 = FROZEN_V2_PROMPT_FILES[stage];
     if (declared === ANALYSIS_PROMPT_TEXT_V2_CONTRACT && archivedV2) return archivedV2.path;
     // 核心摘要 v3 沿用 v2 正文，仅恢复读取使用这个别名；不改旧 Manual 混合组合。
@@ -219,6 +244,7 @@ function promptFilePathForContract(stage, promptTextContract) {
     if (stage === 'apiReaderRepair') known.push(ANALYSIS_PROMPT_TEXT_V5_CONTRACT);
     if (stage === 'apiReaderArticle') known.push(ANALYSIS_PROMPT_TEXT_V5_CONTRACT);
     if (stage === 'apiReaderRepair') known.push(ANALYSIS_PROMPT_TEXT_V6_CONTRACT, ANALYSIS_PROMPT_TEXT_V7_CONTRACT, ANALYSIS_PROMPT_TEXT_V8_CONTRACT, ANALYSIS_PROMPT_TEXT_V9_CONTRACT);
+    if (predecessor && !known.includes(predecessor.contract)) known.push(predecessor.contract);
     if (entry && !known.includes(entry.contract)) known.push(entry.contract);
     throw new Error(`阶段 ${stage} 的提示词版本 ${declared} 没有登记；只认识 ${known.join(' 和 ')}。`);
 }
@@ -249,13 +275,15 @@ module.exports = {
     ANALYSIS_PROMPT_TEXT_V6_CONTRACT,
     ANALYSIS_PROMPT_TEXT_V7_CONTRACT,
     ANALYSIS_PROMPT_TEXT_V8_CONTRACT,
-    ANALYSIS_PROMPT_TEXT_V9_CONTRACT, ANALYSIS_PROMPT_TEXT_V10_CONTRACT,
+    ANALYSIS_PROMPT_TEXT_V9_CONTRACT, ANALYSIS_PROMPT_TEXT_V10_CONTRACT, ANALYSIS_PROMPT_TEXT_V11_CONTRACT,
     FROZEN_V1_PROMPT_FILES,
     FROZEN_V2_PROMPT_FILES,
     FROZEN_V3_PROMPT_FILES,
     FROZEN_V4_PROMPT_FILES,
     FROZEN_V4_MIXED_PROMPT_FILES,
     FROZEN_READER_V4_PROMPT_FILES,
+    FROZEN_PRE_PLAIN_CHINESE_PROMPT_FILES,
+    FROZEN_PRE_PLAIN_CHINESE_MIXED_PROMPT_FILES,
     PROMPT_FILE_VERSIONS,
     promptTextContractForStage,
     currentPromptTextContract,

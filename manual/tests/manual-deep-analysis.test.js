@@ -495,9 +495,8 @@ describe('manual_complete v3 深度分析约定', () => {
         assert.deepEqual(buildFrozenV2StagePromptBindings(), frozen);
         assert.equal(frozen.coreSummaryRepair.source, 'manual-stage-contract:coreSummaryRepair:v1');
         const current = buildStagePromptBindings(), legacy = buildLegacyStagePromptBindings();
-        for (const stage of ['tableRepair', 'methodRepair', 'structureRepair']) {
-            assert.deepEqual(current[stage], frozen[stage]);
-        }
+        assert.deepEqual(current.tableRepair, frozen.tableRepair);
+        for (const stage of ['methodRepair', 'structureRepair']) assert.notDeepEqual(current[stage], frozen[stage]);
         const authoringPath = 'manual/prompts/manual-analysis-record.md';
         for (const version of [4, 5, 6]) {
             const spec = {
