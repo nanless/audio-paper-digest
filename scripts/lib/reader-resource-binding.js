@@ -214,11 +214,61 @@ function presentedLibraryRepositoryQuote(source, token, start) {
     return quote;
 }
 
+// 作者直接说明提供代码、给出自己的仓库时，保留跨脚注的完整声明。
+// 用途里的 dataset collection 不等于作者同时开放数据集。
+function authorProvidedCodeRepositoryQuote(source, token, start) {
+    const url = normalizePaperSourceRepositoryToken(token);
+    if (!url || /\r?\n/.test(token)) return '';
+    const parsed = new URL(url);
+    if (parsed.hostname !== 'github.com' || parsed.pathname.split('/').filter(Boolean).length !== 2) return '';
+    const prefix = source.slice(0, start);
+    const introductions = [...prefix.matchAll(/(?:^|\n)(We provide (?:the|our) (?:source )?codes? for )/g)];
+    const last = introductions.at(-1);
+    if (!last) return '';
+    const lower = last.index + (last[0].startsWith('\n') ? 1 : 0);
+    const beforeUrl = source.slice(lower, start);
+    const end = start + token.length;
+    const after = source.slice(end);
+    if (beforeUrl.length > 1600 || /\n\s*\n/.test(beforeUrl)
+        || !/on our GitHub[ \t\u00a0]*(?:\d{1,3}[ \t\u00a0]*\r?\n[ \t]*\d{1,3}[ \t]*\r?\n[ \t]*)?$/.test(beforeUrl)
+        || !/^(?:\.)?(?:[ \t]*\r?\n|[ \t]*$)/.test(after)) return '';
+    const context = source.slice(0, end);
+    const paragraphEnd = source.indexOf('\n\n', end);
+    const following = source.slice(end + (after.startsWith('.') ? 1 : 0),
+        paragraphEnd < 0 ? source.length : paragraphEnd);
+    // 只检查同段对本声明代码的明确撤销，不把方法效果的否定当资源状态。
+    const retractsCode = following.split(/[.!?]\s+/).some(rawSentence => {
+        const sentence = rawSentence.replace(/\s+/g, ' ').trim();
+        const ownCode = /^(?:our|this|the)\s+(?:source\s+)?(?:codes?|repository|repo)\b/i.test(sentence.trim())
+            || /^We\b[^.]{0,120}\b(?:our|this|the)\s+(?:source\s+)?(?:codes?|repository|repo)\b/i.test(sentence.trim());
+        const releaseStatus = /\b(?:release[ds]?|publish(?:ed)?|provide[ds]?|share[ds]?|available|public(?:ly)?|private|unreleased)\b|open[- ]source/i.test(sentence);
+        const unclearOwnState = /^(?:our|this|the)\s+(?:source\s+)?(?:codes?|repository|repo)\s+(?:is|are|remains?|has|have|will|would|cannot|can't)\b/i.test(sentence.trim())
+            && !RESOURCE_AFFIRMATIVE.test(sentence);
+        return ownCode && (unclearOwnState || (releaseStatus && (RESOURCE_NOT_RELEASED.test(sentence)
+            || /\b(?:cannot|can't|unable\s+to|private|unreleased)\b/i.test(sentence))));
+    });
+    if (retractsCode || /:\s*$/.test(source.slice(0, lower))
+        || RESOURCE_NOT_RELEASED.test(beforeUrl)
+        || /\b(?:our|the authors[’']?)\s+(?:codes?|resources?|repository|repo)\b[^.\n]{0,120}\b(?:not|never|will|would|plan|intend)\b/i.test(context)
+        || /\b(?:quotes?|quoted|quotation|according\s+to|documentation|website|announcement|definition|terminology)\b|\b(?:states?|stated|says?|said|writes?|wrote|reported|mentioned|noted|claimed)\b[^.\n]{0,120}(?:following|statement|declaration|excerpt|:)|引用|第三方|术语/i.test(context)
+        || /^\s*['>]|^ {4}|<\/?(?:blockquote|pre|code)\b|<!--|-->/im.test(context)
+        || (prefix.match(/\"|“|”/g) || []).length % 2 === 1
+        || (prefix.match(/```|~~~/g) || []).length % 2 === 1
+        || /\b(?:provides?|provided|offers?|contains?|describes?)\b[^.\n]{0,120}\b(?:examples?|statements?|declarations?|excerpts?|resources?|codes?|repositories|another\s+author|other\s+authors?)\b/i.test(prefix.slice(0, lower))
+        || THIRD_PARTY_RESOURCE.test(beforeUrl)
+        || /\b(?:external|another|other)\b|\b(?:from|by)\s+\S+/i.test(beforeUrl)
+        || /https?:\/\//i.test(beforeUrl)) return '';
+    const purpose = beforeUrl.slice(last[1].length).replace(/on our GitHub[\s\S]*$/, '');
+    if (!/^[a-z0-9 ,\u2013\u2014\-]+$/.test(purpose.trim())) return '';
+    return source.slice(lower, end + (after.startsWith('.') ? 1 : 0));
+}
+
 function paperSourceResourceQuote(sourceText, sourceToken) {
     const source = String(sourceText || '');
     const token = String(sourceToken || '');
     const start = token ? source.indexOf(token) : -1;
-    return start < 0 ? '' : presentedLibraryRepositoryQuote(source, token, start)
+    return start < 0 ? '' : authorProvidedCodeRepositoryQuote(source, token, start)
+        || presentedLibraryRepositoryQuote(source, token, start)
         || repositoryClassificationQuote(source, start, start + token.length);
 }
 
@@ -227,7 +277,8 @@ function resourceClassificationIsCurrent(resource, sourceText) {
     const token = resource.sourceUrlToken || resource.originalUrl;
     const source = String(sourceText || '');
     const start = token ? source.indexOf(token) : -1;
-    return start < 0 || !authorAudioExamplesContext(source, token, start);
+    return start < 0 || (!authorAudioExamplesContext(source, token, start)
+        && !authorProvidedCodeRepositoryQuote(source, token, start));
 }
 
 function paperSourceResourceFacets(sourceText, sourceToken) {
@@ -235,7 +286,8 @@ function paperSourceResourceFacets(sourceText, sourceToken) {
     const token = String(sourceToken || '');
     const start = token ? source.indexOf(token) : -1;
     if (start >= 0 && authorAudioExamplesContext(source, token, start)) return ['demo'];
-    if (start >= 0 && presentedLibraryRepositoryQuote(source, token, start)) return ['code'];
+    if (start >= 0 && (authorProvidedCodeRepositoryQuote(source, token, start)
+        || presentedLibraryRepositoryQuote(source, token, start))) return ['code'];
     const quote = paperSourceResourceQuote(sourceText, sourceToken)
         .split(String(sourceToken || '')).join('[RESOURCE_URL]');
     if (isAuthorAudioExamplesStatement(quote)) return ['third_party'];
