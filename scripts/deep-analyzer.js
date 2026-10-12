@@ -7206,22 +7206,30 @@ function buildApiReaderGenerationStart(paper, options = {}) {
             throw new Error('initialDraft 未通过当前正文、写作计划和来源记录的核验，不能用于定向修订。');
         }
     }
-    const reviewFeedbackPrefix = externalReviewFeedback
+    const reviewFeedbackIntro = externalReviewFeedback
         ? '上一轮只读发布审查发现以下事实或图文对应问题，请逐项修正，'
             + `不能只复述问题而不修改内容：${externalReviewFeedback}`
-            + (seed
-                ? '\n本次基于已核验的读者文章进行定向修订。previousDraft 中的 {article,plan} '
-                    + '提供已核验正文的标记视图和写作计划，供修改时参考，不能直接作为本次输出。'
-                    + '图的看图路径、图像和图注及原始公式由程序按已有来源记录装配，不要在正文中复制这些生成块；'
-                    + '保留图前导读和图后解释。只修反馈指出的问题及必要连带内容，'
-                    + '保留已经正确的章节、解释、图表和数字，不要无端重写。'
-                    + '仍须返回本次请求要求的完整 JSON，包括所有小节、占位符和来源记录；'
-                    + '不得直接返回参考用的 {article,plan}；修改后的正文、图片、表格和公式仍须通过完整检查。'
-                : '')
         : '';
+    const revisionReferenceGuidance = externalReviewFeedback && seed
+        ? '\n本次基于已核验的读者文章进行定向修订。previousDraft 中的 {article,plan} '
+            + '提供已核验正文的标记视图和写作计划，供修改时参考，不能直接作为本次输出。'
+            + '图的看图路径、图像和图注及原始公式由程序按已有来源记录装配，不要在正文中复制这些生成块；'
+            + '保留图前导读和图后解释。只修反馈指出的问题及必要连带内容，'
+            + '保留已经正确的章节、解释、图表和数字，不要无端重写。'
+        : '';
+    const reviewFeedbackPrefix = reviewFeedbackIntro + revisionReferenceGuidance
+        + (externalReviewFeedback && seed
+            ? '仍须返回本次请求要求的完整 JSON，包括所有小节、占位符和来源记录；'
+                + '不得直接返回参考用的 {article,plan}；修改后的正文、图片、表格和公式仍须通过完整检查。'
+            : '');
+    const repairReviewFeedbackPrefix = reviewFeedbackIntro + revisionReferenceGuidance
+        + (externalReviewFeedback
+            ? '\n本轮局部修复只返回提示要求的补丁 JSON 与已授权字段，不返回整篇文章 JSON 或参考用的 {article,plan}。未授权的事实问题保留反馈，等待后续重新核验并授权。全部来源与整篇检查仍须通过。'
+            : '');
     return {
         previousDraft: seed?.initialDraft || '无',
         reviewFeedbackPrefix,
+        repairReviewFeedbackPrefix,
         isRevision: Boolean(seed),
         temperature: seed ? API_READER_REPAIR_TEMPERATURE : API_READER_INITIAL_TEMPERATURE
     };
@@ -7434,6 +7442,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     let previousValidationFailureSignature = '';
     let implementationRepairAllowanceProof = null;
     const reviewFeedbackPrefix = start.reviewFeedbackPrefix;
+    const repairReviewFeedbackPrefix = start.repairReviewFeedbackPrefix;
     // 只提供最近一次错误，可能使模型在修正一处时再次破坏此前正确的内容。
     // 本轮会累积所有尝试的错误，并在每次请求中保留外部审查反馈。
     const attemptErrorHistory = [];
@@ -7749,7 +7758,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 requiredKinds: API_READER_REQUIRED_KINDS })
             : repairContext ? loadPrompt(currentTextStagePromptPath('apiReaderRepair'), {
             title: paper.title || '', arxivId: getPaperArxivId(paper),
-            validationFeedback: [repairContext.targetGuidance, numericSpellingGuidance, reviewFeedbackPrefix,
+            validationFeedback: [repairContext.targetGuidance, numericSpellingGuidance, repairReviewFeedbackPrefix,
                 ...currentIssues.map(issueFeedback), indexExamples].filter(Boolean).join('\n'),
             repairTargets: JSON.stringify({ draftSha256: repairContext.draftSha256,
                 targets: repairContext.targets,

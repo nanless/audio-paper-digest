@@ -277,3 +277,39 @@ test('旧Reader自洽SHA仍不能给残留术语组合标记授予资格', () =>
         assert.equal(deep.findUnassembledApiReaderConceptMarker(sample.apiReaderArticle), marker);
     }
 });
+
+test('真实局部请求不沿用首次整篇输出指令，来源反馈与首次协议保持', async t => {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const os = require('node:os');
+    const deep = require('../scripts/deep-analyzer.js');
+    const paper = createReaderPaperSample();
+    const reviewFeedback = '依据已绑定原文纠正解释，其余正确事实原样保留。';
+    const seed = prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback);
+    const draft = require('./reader-signed-draft-fixture.js').fixture().draft;
+    const raw = JSON.stringify({ ...draft, sourceBindingsContract: 'api-reader-source-bindings-v4',
+        sourceBindingsSha256: 'a'.repeat(64) });
+    const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-local-prefix-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    const requests = [];
+    await assert.rejects(deep.generateApiReaderArticleDetailed(paper, '', '', {
+        sourceText, initialDraft: seed.initialDraft, revisionSeed: seed, reviewFeedback,
+        readerAttemptsDir: directory, readerMaxAttempts: 2,
+        readerMaterializeFigures: async () => [], readerRecordDisposition: () => {},
+        readerCallModel: async messages => {
+            requests.push(messages);
+            return requests.length === 1 ? raw : '{}';
+        }
+    }));
+    assert.equal(requests.length, 2);
+    const requestText = messages => messages[0].content.filter(item => item.type === 'text')
+        .map(item => item.text).join('\n');
+    const initial = requestText(requests[0]);
+    const local = requestText(requests[1]);
+    assert.match(initial, /仍须返回本次请求要求的完整 JSON，包括所有小节/);
+    assert.ok(!local.includes('仍须返回本次请求要求的完整 JSON，包括所有小节'));
+    assert.match(local, /本轮局部修复只返回提示要求的补丁 JSON 与已授权字段/);
+    assert.ok(local.includes(reviewFeedback));
+    assert.match(local, /保留已经正确的章节、解释、图表和数字/);
+    assert.match(local, /只授权明确删除两个顶层程序元数据字段/);
+});
