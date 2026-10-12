@@ -964,6 +964,36 @@ def create_verified_schema_v3_publication(date_str, posts, paper):
 
 
 class PublishToBlogReviewTest(unittest.TestCase):
+    def test_natural_product_chain_requires_actual_same_product_handoff(self):
+        encoder = '冻结编码器某层帧级表示经均值和标准差池化形成定长向量，该向量标准化后送入带平衡类别权重的逻辑回归输出类别。'
+        experts = 'CloudEar对同一提示词下两首歌曲配对比较，感知专家从30秒片段MuQ特征经Transformer适配器得到感知表示并预测质量分，以有序回归与配对排序联合训练。诊断专家将该质量分与真峰值电平、削波率及HEAR学习型质量分拼接，经线性层融合成音乐性得分。'
+        for good in (encoder, experts):
+            self.assertTrue(publish_to_blog._has_explicit_natural_product_chain(good))
+            self.assertNotIn('缺少 2–4 步方法链', publish_to_blog._detailed_core_summary_semantic_issue(good) or '')
+        bad_cases = (
+            encoder.replace('形成', '未形成'),
+            encoder.replace('池化', '未曾池化'),
+            encoder.replace('该向量', '另一向量'),
+            encoder.replace('标准化后送入', '标准化但未送入'),
+            encoder.replace('输出类别', '讨论类别'),
+            experts.replace('预测质量分', '未预测质量分'),
+            experts.replace('该质量分', '另一个质量分'),
+            experts.replace('诊断专家将', '感知专家将'),
+            experts.replace('诊断专家将', '诊断专家不将'),
+            experts.replace('并预测质量分', '，另一专家预测质量分'),
+            experts.replace('经线性层融合', '未来经线性层融合'),
+            '感知专家只负责加载音频，回归基线预测质量分。诊断专家将该质量分与真峰值拼接。',
+            '感知专家预测质量分。诊断专家将该质量分与音频分别存档，独立基线进行拼接。',
+            '感知专家不是负责预测质量分。诊断专家将该质量分与真峰值拼接。',
+            '感知专家只加载音频后由独立回归基线预测质量分。诊断专家将该质量分与真峰值拼接。',
+            '感知专家预测质量分。诊断专家将该质量分与音频交给独立基线进行拼接。',
+            '相同的感知专家预测质量分。感知专家将该质量分与真峰值拼接。',
+            '我们让感知专家预测质量分。感知专家将该质量分与真峰值拼接。',
+        )
+        for bad in bad_cases:
+            self.assertFalse(publish_to_blog._has_explicit_natural_product_chain(bad), bad)
+
+
     def setUp(self):
         # 临时博客测试不读取真实生产策略，避免合成输入冒用已批准的来源。
         policy_directory = tempfile.TemporaryDirectory()

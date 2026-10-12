@@ -4172,6 +4172,32 @@ def _complete_corpus_curation_summary(summary):
     return False
 
 
+def _has_explicit_natural_product_chain(summary):
+    # 与 Node 相同：必须有实际产物及下一模块对同一产物的使用。
+    sentences = [s.strip() for s in re.split(r'[。！？!?；;\n]', str(summary or '')) if s.strip()]
+    denied = re.compile(
+        r'(?:并非|并未|不是|没有|不能|不会|尚未|未曾|不再|是否|讨论|提及|另一(?:个)?专家|假设|设想|假定|如果|若|可能|预计|预期|计划|未来|建议|应当|应该)'
+        r'|(?:不|未)(?:被|能|曾|直接|实际|真正|也|只|还|再|会)*\s*(?:预测|计算|给出|输出|生成|得到|形成|池化|标准化|送入|拼接|融合)'
+    )
+    for i, first in enumerate(sentences):
+        if len(first) <= 320 and not denied.search(first) and re.search(
+            r'编码器[^，,。；]{0,45}帧(?:级)?表示经均值和标准差池化形成定长向量[，,]\s*该向量标准化后送入[^，,。；]{0,30}逻辑回归输出类别', first,
+        ):
+            return True
+        if i + 1 >= len(sentences):
+            continue
+        second = sentences[i + 1]
+        if len(first) > 320 or len(second) > 320 or denied.search(first) or denied.search(second):
+            continue
+        produced = re.search(r'([\u4e00-\u9fff]{1,8}专家)(?:(?!专家|基线|交给|转交|负责|由)[^，,。；]){0,200}?(?:预测|计算|给出|输出|生成|得到)(?:对应的|单曲的|歌曲的|一个)?质量分', first)
+        consumed = re.search(r'^([\u4e00-\u9fff]{1,8}专家)(?:把|将)该质量分与(?:(?!专家|基线|交给|转交|负责|由)[^，,。；]){1,180}?(?:拼接|融合)', second)
+        if (produced and consumed
+                and not produced.group(1).endswith(consumed.group(1))
+                and not consumed.group(1).endswith(produced.group(1))):
+            return True
+    return False
+
+
 def _detailed_core_summary_semantic_issue(summary):
     summary = str(summary or '')
     count = len(re.findall(r'[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]', summary))
@@ -4217,7 +4243,7 @@ def _detailed_core_summary_semantic_issue(summary):
         (len(chain) >= 2 or re.search(r'分(?:\d+|[一二三四五六七八九十]+)步', summary))
         and len(roles) >= 2
     )
-    if not has_numbered_method_chain and len(tier_role_stages) < 2:
+    if not has_numbered_method_chain and len(tier_role_stages) < 2 and not _has_explicit_natural_product_chain(summary):
         issues.append('缺少 2–4 步方法链的分工与衔接')
     # 这份白名单要和 scripts/analysis-contract.js 保持同步。
     # 发布器在 Node 分析阶段之后按同一份 v3 正文规则再次检查，

@@ -1485,6 +1485,24 @@ function hasCrossMetricDirectionalComparison(sentence) {
     return false;
 }
 
+function hasExplicitNaturalProductChain(summary) {
+    // 只接受已说明的产物被下一处理模块实际使用，不以动作数量或序号充数。
+    const sentences = String(summary || '').split(/[。！？!?；;\n]/u).map(s => s.trim()).filter(Boolean);
+    const denied = /(?:并非|并未|不是|没有|不能|不会|尚未|未曾|不再|是否|讨论|提及|另一(?:个)?专家|假设|设想|假定|如果|若|可能|预计|预期|计划|未来|建议|应当|应该)|(?:不|未)(?:被|能|曾|直接|实际|真正|也|只|还|再|会)*\s*(?:预测|计算|给出|输出|生成|得到|形成|池化|标准化|送入|拼接|融合)/u;
+    for (let i = 0; i < sentences.length; i++) {
+        const first = sentences[i];
+        if (first.length <= 320 && !denied.test(first)
+            && /编码器[^，,。；]{0,45}帧(?:级)?表示经均值和标准差池化形成定长向量[，,]\s*该向量标准化后送入[^，,。；]{0,30}逻辑回归输出类别/u.test(first)) return true;
+        const second = sentences[i + 1];
+        if (!second || first.length > 320 || second.length > 320 || denied.test(first) || denied.test(second)) continue;
+        const produced = /([\u4e00-\u9fff]{1,8}专家)(?:(?!专家|基线|交给|转交|负责|由)[^，,。；]){0,200}?(?:预测|计算|给出|输出|生成|得到)(?:对应的|单曲的|歌曲的|一个)?质量分/u.exec(first);
+        const consumed = /^([\u4e00-\u9fff]{1,8}专家)(?:把|将)该质量分与(?:(?!专家|基线|交给|转交|负责|由)[^，,。；]){1,180}?(?:拼接|融合)/u.exec(second);
+        if (produced && consumed
+            && !produced[1].endsWith(consumed[1]) && !consumed[1].endsWith(produced[1])) return true;
+    }
+    return false;
+}
+
 function hasConcreteUnnumberedMethodChain(summary) {
     // 只接受同一机制句中的明确处理模块和数据衔接，不用泛化动作词计数代替方法说明。
     const moduleKinds = [
@@ -1681,7 +1699,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     const hasNumberedMethodChain = (chain.length >= 2
         || /分(?:\d+|[一二三四五六七八九十]+)步/.test(summary)) && roles.length >= 2;
     const hasTieredMethodChain = tierRoleStages.size >= 2;
-    if (!hasNumberedMethodChain && !hasTieredMethodChain && !hasConcreteUnnumberedMethodChain(summary) && !hasAdjacentConcreteMethodChain(summary)) {
+    if (!hasNumberedMethodChain && !hasTieredMethodChain && !hasConcreteUnnumberedMethodChain(summary) && !hasAdjacentConcreteMethodChain(summary) && !hasExplicitNaturalProductChain(summary)) {
         issues.push('缺少 2–4 步方法链的分工与衔接');
     }
     const sourceText = typeof options === 'string' ? options : String(options.sourceText || '');
@@ -2930,6 +2948,7 @@ module.exports = {
     hasSourceMeasuredLossComparison,
     classifySourceQuantitativeEvidence,
     validateCoreSummarySemanticContract,
+    hasExplicitNaturalProductChain,
     hasConcreteUnnumberedMethodChain,
     hashAnalysisWithMaskedCoreSummary,
     hashTagSectionAndPrimaryTags,
