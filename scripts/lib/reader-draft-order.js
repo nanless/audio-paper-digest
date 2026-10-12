@@ -659,9 +659,41 @@ function compileCompleteReaderTableDeclarations(draft, artifacts) {
     });
 }
 
+// 只读取完整正文后唯一明确的续段字符串；原始草稿仍由恢复档案保存。
+// 未知字段、非文字或标记的放置含义不能由程序猜测。
+function normalizeReaderBodyContinuations(draft) {
+    const requiredKeys = ['version', 'readerTitle', 'oneSentenceThesis', 'conceptBridges',
+        'figurePlacements', 'sections', 'tableBindings', 'formulaBindings'];
+    if (!draft || typeof draft !== 'object' || Array.isArray(draft)
+        || Object.keys(draft).length !== requiredKeys.length
+        || requiredKeys.some(key => !Object.hasOwn(draft, key))
+        || ![2, 3].includes(draft.version)
+        || typeof draft.readerTitle !== 'string' || typeof draft.oneSentenceThesis !== 'string'
+        || ['sections', 'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings']
+            .some(key => !Array.isArray(draft[key]))) return;
+    for (const section of draft.sections) {
+        if (!section || typeof section !== 'object' || Array.isArray(section)) continue;
+        const keys = Object.keys(section);
+        const aliases = keys.filter(key => key === 'body2' || key === 'body_after');
+        if (aliases.length !== 1 || keys.length !== 4
+            || ['kind', 'heading', 'body'].some(key => !Object.hasOwn(section, key))
+            || !READER_SECTION_KINDS.includes(section.kind)
+            || typeof section.heading !== 'string' || typeof section.body !== 'string'
+            || !section.body.trim()) continue;
+        const alias = aliases[0];
+        const continuation = section[alias];
+        if (keys.indexOf('body') > keys.indexOf(alias)
+            || typeof continuation !== 'string' || !continuation.trim()
+            || /\[\[(?:TABLE|FIGURE|FORMULA|CONCEPT_BRIDGE)_[^\]]*\]\]/.test(continuation)) continue;
+        section.body += '\n\n' + continuation;
+        delete section[alias];
+    }
+}
+
 function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
     const draft = structuredClone(input);
     const inputSha256 = sha(input);
+    normalizeReaderBodyContinuations(draft);
     compileCompleteReaderTableDeclarations(draft, structuredArtifacts);
     restoreCompleteArtifactTableMarkers(draft, structuredArtifacts);
     const sections = Array.isArray(draft?.sections) ? draft.sections : [];
@@ -796,4 +828,4 @@ module.exports = { READER_DRAFT_ORDER_CONTRACT, TABLE_BINDING_ORDER_ISSUE_CODE, 
     completeSelectionMarkerPermutation, pruneUniquelyUnboundReaderMarkdownTables,
     alignMixedBindingsToCurrentTableNodes, alignSourceQuoteBindingsToCurrentTableNodes,
     pruneTrailingUnboundSourceQuoteBindings,
-    normalizeReaderDraftOrder };
+    normalizeReaderBodyContinuations, normalizeReaderDraftOrder };
