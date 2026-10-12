@@ -253,3 +253,46 @@ test('实际新提示词的完整原表规则独立于选择资格，固定版�
     assert.equal(history.promptTemplateSha256(article), 'a41f67166a0f366a10bf23cc17aa51ca6105b246ce7964ec14c21d6b4018f380');
     assert.equal(history.promptTemplateSha256(repair), 'cdbf91f9bb2fb48e085c72195000059bdb2ccc4eb6a0bd47a6f31bb9d4835965');
 });
+
+test('完整原表按唯一显式标记重排，原表内容与普通引文表不变', () => {
+    const sample = createCompleteTableSample();
+    const second = structuredClone(sample.structuredArtifacts.tables[0]);
+    second.ordinal = 3;
+    second.matrix[2][0] = 'Other'; second.cells.find(c => c.row === 2 && c.column === 0).text = 'Other';
+    sample.structuredArtifacts.tables.push(second);
+    const prose = '| 设置 | 数量 |\n| --- | --- |\n| 步数 | 8 |';
+    sample.draft.sections = [{ kind: 'result', heading: '先比较另一原表', body: '比较条件。\n\n[[TABLE_2]]\n\n结果说明。' },
+        { kind: 'ablation', heading: '再看消融', body: '比较条件。\n\n[[TABLE_1]]\n\n结果说明。' },
+        { kind: 'reproduction', heading: '复现设置', body: prose }];
+    sample.draft.tableBindings.push({ tableIndex: 2, completeTable: { sourceTableOrdinal: 3 } },
+        { tableIndex: 3, sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [], sourceQuotes: ['The number of optimization steps is 8.'] });
+    const original = JSON.stringify(sample);
+    const normalized = normalizeReaderDraftOrder(sample.draft, sample);
+    assert.deepEqual(normalized.draft.tableBindings.map(b => b.sourceTableOrdinal), [3, 2, null]);
+    assert.match(normalized.draft.sections[0].body, /\| Other \| 92.45 \| 95.19 \|/);
+    assert.match(normalized.draft.sections[1].body, /\| Baseline \| 92.45 \| 95.19 \|/);
+    assert.equal(normalized.draft.sections[2].body, prose);
+    assert.equal(JSON.stringify(sample), original);
+    const allComplete = structuredClone(sample);
+    allComplete.draft.sections.pop(); allComplete.draft.tableBindings.pop();
+    assert.deepEqual(normalizeReaderDraftOrder(allComplete.draft, allComplete).draft.tableBindings.map(b => b.sourceTableOrdinal), [3, 2]);
+    for (const change of [
+        s => { s.draft.sections[1].body = '重复。\n\n[[TABLE_2]]'; },
+        s => { s.draft.sections[1].body = '没有原表标记。'; },
+        s => { s.draft.tableBindings[1].completeTable.sourceTableOrdinal = 99; },
+        s => { s.draft.tableBindings[1].completeTable.sourceRows = [0, 1]; },
+        s => { s.structuredArtifacts.tables[1].matrix[2][1] = '999'; },
+    ]) { const invalid = structuredClone(sample); change(invalid); assert.throws(() => normalizeReaderDraftOrder(invalid.draft, invalid)); }
+});
+
+test('完整原表与选择表反序仍经整篇解析核验原来源', () => {
+    const { parseApiReaderArticleResult } = require('../scripts/deep-analyzer');
+    const sample = createFullReaderTableSample();
+    sample.payload.sections[6].body = sample.payload.sections[6].body.replace('[[TABLE_1]]', '[[TABLE_2]]');
+    sample.payload.sections[7].body = sample.payload.sections[7].body.replace('[[TABLE_2]]', '[[TABLE_1]]');
+    const before = JSON.stringify(sample);
+    const result = parseApiReaderArticleResult(JSON.stringify(sample.payload), sample.options);
+    assert.deepEqual(result.plan.tableBindings.map(b => b.sourceTableOrdinal), [2, 1]);
+    assert.doesNotMatch(result.article, /\[\[TABLE_/);
+    assert.equal(JSON.stringify(sample), before);
+});

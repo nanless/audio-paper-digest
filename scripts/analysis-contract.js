@@ -187,7 +187,7 @@ const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:
 // 英文指标名必须整词匹配。没有这里的两侧边界，mAP/PAR/PER 这类短指标会命中
 // "mapping"、"Particle"、"performance" 等普通词，把章节号和引用位置误当成
 // 实验测量结果。
-const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|ASR|mAP|gAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
+const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
 // 会议论文常用领域内的中文指标名（例如 DAFx 的“抖动”和“包络相关”）。
 // 这里显式列出来，免得把任何结果名词都当成定量证据。
 const CORE_SUMMARY_CONFERENCE_METRIC_PATTERN = /包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差/;
@@ -1340,7 +1340,8 @@ function coreSummaryQuantitativeResultState(text) {
         const hasNamedSetting = /(?:[A-Z][A-Za-z0-9._-]{2,}\s*[\u3400-\u9fff]{0,8}(?:集|数据集|语料|任务|基准)|(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}(?:\s*[上中下]))/i.test(sentence);
         const hasTimedNamedSplit = /(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}\s+\d+(?:\.\d+)?\s+s\s+[\u3400-\u9fff]{0,12}划分(?:上|中)/.test(sentence);
         const hasSetting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)/i.test(sentence)
-            || hasNamedSetting || hasTimedNamedSplit || hasConcreteCoreSummarySetting(sentence);
+            || hasNamedSetting || hasTimedNamedSplit || hasConcreteCoreSummarySetting(sentence)
+            || /(?:在|于)\s*FLEURS(?![A-Za-z0-9_])(?:[\u3400-\u9fff]{1,8}(?:到|→)[\u3400-\u9fff]{1,8}(?:上|中)|[^，,；;。！？!?\n]{0,60}(?:oracle提交决策|校准评测)上下文(?:上|中))/.test(sentence);
         const hasComparisonObjects = numbers.length >= 2
             || /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)/.test(sentence);
         // 只补原文中实际使用的结果写法，不把同名方法或公式符号算作指标。
@@ -1666,7 +1667,11 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         && /\d/.test(sentence)
         && /(?:计算量|计算复杂度|MACs?|FLOPs?|GPU|CPU|TPU|NPU|RTX|显卡|(?:训练|推理|采样|优化|迭代)步数|\d\s*(?:[kKmMgG]\s*)?\s*(?:步|轮|次))/i.test(sentence)
     ));
-    const cost = summary.includes(CORE_SUMMARY_COST_UNAVAILABLE)
+    // 原文常以 min:sec 报告训练每轮与推理耗时，不需要另重复‘成本’二字。
+    const measuredTimeDisclosure = summary.split(/[。！？!?\n]/).some(sentence =>
+        !/(?:预计|预期|可能|假设|如果|未来|尚未|没有|未曾|并非|未测|未披露|未报告|未记录|未提供|未给出|未公布|未说明|未统计|不报告|不记录|不披露|不提供|尚无|不代表)/.test(sentence)
+        && /(?:训练|推理|部署)(?:每轮|每个epoch)?时间(?:约|为|是|分别为)?\s*\d+:[0-5]\d(?![\d:])/.test(sentence));
+    const cost = measuredTimeDisclosure || summary.includes(CORE_SUMMARY_COST_UNAVAILABLE)
         || /(?:成本|代价|开销|硬件|算力|显存|内存|延迟|吞吐|实时率|能耗)/.test(summary)
         || /(?:训练|推理|部署)[^。！？!?]{0,24}(?:需要|增加|额外|占用|耗时|更高|更低|受限|负担)/.test(summary)
         || scopedResourceDisclosure;

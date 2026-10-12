@@ -15,9 +15,20 @@ const projectRoot = path.resolve(__dirname, '../..');
 const pythonFile = path.join(projectRoot, 'scripts/reader_pdf_cell_evidence.py');
 
 function supported(table) {
-    return Array.isArray(table?.matrix) && table.matrix[0]?.length >= 3
-        && table.matrix[0][0] === 'Dataset SNR Setting' && table.matrix[0][1] === 'Test set'
-        && (table.cells || []).some(cell => /^([+-]?\d+\.\d+)\1$/.test(String(cell.text || '')));
+    const matrix = table?.matrix;
+    if (!Array.isArray(matrix) || matrix[0]?.length < 3) return false;
+    if (matrix[0][0] === 'Dataset SNR Setting' && matrix[0][1] === 'Test set'
+        && (table.cells || []).some(cell => /^([+-]?\d+\.\d+)\1$/.test(String(cell.text || '')))) return true;
+    const same = expected => isDeepStrictEqual(matrix.slice(0, 2), expected);
+    const labels = matrix.slice(2).map(row => row[0]);
+    if (table.ordinal === 2 && String(table.caption || '').startsWith('Table 2: Boundary error against manual annotation (ms) over the full 125-utterance test set.')
+        && same([['', 'Raw', 'Raw', 'Bias', 'Bias', 'Calibrated', 'Calibrated'],
+            ['System', 'mean', 'med.', 'onset', 'offset', 'mean', 'med.']])
+        && isDeepStrictEqual(labels, ['Inter annotator', 'wav2vec2.0', 'M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'NFA'])) return true;
+    return table.ordinal === 3 && String(table.caption || '').startsWith('Table 3: ASR and word-boundary estimation performance on the IndicVoices-R test set.')
+        && same([['', 'ASR (%)', 'ASR (%)', '', 'vs. wav2vec2.0', 'vs. wav2vec2.0', 'vs. wav2vec2.0', 'vs. wav2vec2.0', 'Manual'],
+            ['Conf.', 'WER', 'CER', 'NwN_{w}', 'Mean', 'Med.', 'p90p_{90}', '≤50{\\leq}50', 'Mean']])
+        && isDeepStrictEqual(labels, ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'CW']);
 }
 
 function provenanceFor(paperId) {

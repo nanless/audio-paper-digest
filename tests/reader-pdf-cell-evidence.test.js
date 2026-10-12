@@ -157,3 +157,18 @@ test('普通表仅有cells时还原原单元格字节，不依赖PDF或matrix', 
     const withMatrix = { ...table, matrix: [['different', 'matrix'], ['not', 'cell']] };
     assert.equal(displayCell(withMatrix, 1, 1), '1.24');
 });
+
+test('印地语边界表仅识别已核完整结构，不把相近表头或删行当支持', () => {
+    const { supported } = require('../scripts/lib/reader-pdf-cell-evidence');
+    const table = { ordinal: 2, caption: 'Table 2: Boundary error against manual annotation (ms) over the full 125-utterance test set. Real caption is independently checked against the PDF.',
+        matrix: [['', 'Raw', 'Raw', 'Bias', 'Bias', 'Calibrated', 'Calibrated'],
+            ['System', 'mean', 'med.', 'onset', 'offset', 'mean', 'med.'],
+            ...['Inter annotator', 'wav2vec2.0', 'M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'NFA'].map(label => [label, '27.0', '18.0', '+36.4+36.4', '−92.8-92.8', '43.4', '30.3'])], cells: [] };
+    assert.equal(supported(table), true);
+    const header = structuredClone(table);header.matrix[1][3] = 'offset';
+    assert.equal(supported(header), false);
+    const missing = structuredClone(table);missing.matrix.pop();
+    assert.equal(supported(missing), false);
+    const caption = structuredClone(table);caption.caption = caption.caption.replace('(ms)', '(s)');
+    assert.equal(supported(caption), false);
+});

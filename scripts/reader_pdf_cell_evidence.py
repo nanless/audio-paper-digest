@@ -24,7 +24,7 @@ def lines(words):
         else: match[1].append(w)
     return [(cy,sorted(ws,key=lambda w:w[0])) for cy,ws in grouped]
 def text(words): return norm(' '.join(w[4] for w in words))
-def proof(pdf_bytes,table,audit,doc):
+def proof_snr(pdf_bytes,table,audit,doc):
     captions=[c for c in audit['tableCandidates'] if c.get('status')=='caption-detected' and caption(c['caption'])==caption(table['caption'])]
     need(len(captions)==1,'完整图注不能唯一对应')
     cap=captions[0]; page=doc[cap['page']-1]
@@ -122,6 +122,118 @@ def proof(pdf_bytes,table,audit,doc):
 
 
 
+def hindi_caption(value):
+    value=re.sub(r'-\s*\n\s*', '-',value)
+    for original,visible in [('N_{w}','Nw'),('p_{90}','p90'),('{\\leq}50','≤50')]:
+        value=value.replace(original,visible)
+    return caption(value)
+
+def proof_hindi(pdf_bytes,table,audit,doc,profile):
+    matrix=table['matrix'];width=len(matrix[0]);data_start=2
+    need(all(len(row)==width for row in matrix),'原DOM行列数不一致')
+    for ri,row in enumerate(matrix):
+        for ci,value in enumerate(row):
+            cells=[c for c in table['cells'] if c['row']<=ri<c['row']+c['rowspan'] and c['column']<=ci<c['column']+c['colspan']]
+            need(len(cells)==1 and cells[0]['text']==value,'原DOM完整网格或文字不能逐格重放')
+    caption_matches=[]
+    for page_index,page in enumerate(doc):
+        for block in page.get_text('blocks'):
+            if hindi_caption(block[4])==hindi_caption(table['caption']):
+                caption_matches.append((page_index,page,block))
+    need(len(caption_matches)==1,'完整图注不能唯一对应原PDF段落')
+    page_index,page,cap=caption_matches[0]
+    next_top=min([b[1] for b in page.get_text('blocks') if re.match(r'^Table\s+\d+\.',b[4]) and b[1]>cap[3]] or [page.rect.height])
+    widths=set((round(c['bbox'][0],3),round(c['bbox'][2],3)) for c in audit['tableCandidates'] if c.get('page')==page_index+1 and c.get('columns')==width and c['bbox'][1]>cap[3] and c['bbox'][3]<next_top)
+    need(len(widths)==1,'同图注区间内原表完整列宽不能唯一定位')
+    x0,x1=next(iter(widths));rules=[]
+    for drawing in page.get_drawings():
+        for item in drawing['items']:
+            if item[0]=='l' and abs(item[1].y-item[2].y)<.02 and abs(min(item[1].x,item[2].x)-x0)<.02 and abs(max(item[1].x,item[2].x)-x1)<.02 and cap[3]<item[1].y<next_top:
+                rules.append(float(item[1].y))
+    need(len(set(rules))>=3,'完整表格边界与表头分隔线不充分')
+    top,bottom=min(rules),max(rules)
+    words=words_in(page.get_text('words',sort=False),[x0,top,x1,bottom])
+    grouped=lines(words);data_lines=[]
+    for label in [row[0] for row in matrix[data_start:]]:
+        matches=[]
+        for cy,group in grouped:
+            for count in range(1,len(group)+1):
+                if text(group[:count])==label and len(group)-count==width-1:
+                    matches.append((cy,group[:count],[[word] for word in group[count:]]))
+        need(len(matches)==1,'所有数据行标签与完整列数不能唯一对应: '+label)
+        data_lines.append(matches[0])
+    need(all(data_lines[i][0]<data_lines[i+1][0] for i in range(len(data_lines)-1)),'原PDF数据行顺序与DOM不一致')
+    column_words=[[word for _,label,_ in data_lines for word in label]]
+    for ci in range(width-1):column_words.append([cell[ci][0] for _,_,cell in data_lines])
+    preliminary_headers=[word for word in words if (word[1]+word[3])/2<data_lines[0][0]-.75]
+    leaf_values=[HINDI_HEADERS.get(value,value) for value in matrix[1]]
+    leaf_lines=[group for _,group in lines(preliminary_headers) if [w[4] for w in group]==leaf_values]
+    need(len(leaf_lines)==1,'完整底层列头与列顺序不能唯一定位')
+    for ci,word in enumerate(leaf_lines[0]):column_words[ci].append(word)
+    for cell in table['cells']:
+        if cell['row']!=0 or cell['colspan']!=1 or not cell['text']:continue
+        candidates=[w for w in preliminary_headers if w[4]==cell['text']]
+        need(len(candidates)==1,'顶层单列标题不能唯一定位')
+        column_words[cell['column']].append(candidates[0])
+    edges=[x0]
+    for ci in range(width-1):
+        left=max(w[2] for w in column_words[ci]);right=min(w[0] for w in column_words[ci+1])
+        need(left<right,'PDF相邻列实际字形重叠，不能猜测列归属')
+        edges.append((left+right)/2)
+    edges.append(x1)
+    data_words={tuple(word) for _,label,cells in data_lines for word in [*label,*[c[0] for c in cells]]}
+    header_words=[word for word in words if (word[1]+word[3])/2<data_lines[0][0]-.75]
+    need(set(tuple(w) for w in words)==data_words|set(tuple(w) for w in header_words),'表格区域存在未覆盖数据、标签或其他字形')
+    header_matches=[];header_proofs=[];covered=set();confirmations=[]
+    for cell in [c for c in table['cells'] if c['row']<data_start]:
+        visible=HINDI_HEADERS.get(cell['text'],cell['text']);possible=[]
+        if not visible:
+            header_matches.append((cell,[]));header_proofs.append({'row':cell['row'],'column':cell['column'],'text':cell['text'],'glyphs':[]});continue
+        local=[w for w in header_words if w[0]>=edges[cell['column']]-.02 and w[2]<=edges[cell['column']+cell['colspan']]+.02]
+        for _,group in lines(local):
+            for start in range(len(group)):
+                for end in range(start+1,len(group)+1):
+                    if text(group[start:end])==visible:possible.append(group[start:end])
+        need(len(possible)==1,'列头单位或数学名称不能唯一对应: '+cell['text'])
+        matched=possible[0];header_matches.append((cell,matched));covered.update(tuple(w) for w in matched)
+        header_proofs.append({'row':cell['row'],'column':cell['column'],'text':cell['text'],'glyphs':[list(w[:5]) for w in matched]})
+        if visible!=cell['text']:
+            confirmations.append({'row':cell['row'],'column':cell['column'],'originalText':cell['text'],'originalCellDomSha256':cell['sourceDomSha256'],'visibleText':visible,'status':'pdf-confirmed-mathml-header','glyphs':[list(w[:5]) for w in matched]})
+    need(covered==set(tuple(w) for w in header_words),'PDF实际列头字形含未覆盖单位、组别或符号')
+    anchors=[]
+    for row in range(data_start):
+        points=[(w[1]+w[3])/2 for c,matched in header_matches if c['row']==row and c['rowspan']==1 for w in matched]
+        need(points and max(points)-min(points)<=.75,'单行表头上下层不能唯一定位')
+        anchors.append(sum(points)/len(points))
+    need(anchors[0]<anchors[1],'两层表头上下关系与DOM不同')
+    bands=[top,(anchors[0]+anchors[1])/2,data_lines[0][0]-.75]
+    for c,matched in header_matches:
+        need(all(bands[c['row']]-.02<=(w[1]+w[3])/2<=bands[c['row']+c['rowspan']]+.02 for w in matched),'表头字形或合并行层级与DOM不同')
+        if not matched:
+            need(not any(edges[c['column']]<=((w[0]+w[2])/2)<edges[c['column']+c['colspan']] and bands[c['row']]<=(w[1]+w[3])/2<bands[c['row']+c['rowspan']] for w in header_words),'DOM空表头格在PDF中不是空格')
+    corrected=[]
+    for ri,(cy,label,cells) in enumerate(data_lines,data_start):
+        output=[matrix[ri][0]]
+        for ci,matched in enumerate(cells,1):
+            word=matched[0];visible=word[4];original=matrix[ri][ci]
+            need(edges[ci]-.02<=word[0] and word[2]<=edges[ci+1]+.02,'数值字形越过原列位置')
+            status='unchanged'
+            if original!=visible:
+                need(re.fullmatch(r'[+−-]?\d+\.\d+',visible) is not None and original in [visible+visible,visible+visible.replace('−','-')],'原数值不是同一PDF完整值双分支显示，不能修补错数或符号')
+                status='pdf-confirmed-double-rendering'
+            else:need(visible=='—' or re.fullmatch(r'[+−-]?\d+(?:\.\d+)?',visible) is not None,'数值格含未知单位或文字')
+            source_cell=next(c for c in table['cells'] if c['row']==ri and c['column']==ci)
+            confirmations.append({'row':ri,'column':ci,'originalText':original,'originalCellDomSha256':source_cell['sourceDomSha256'],'visibleText':visible,'status':status,'glyph':list(word[:5])})
+            output.append(visible)
+        corrected.append(output)
+    return {'contract':'sealed-pdf-cell-confirmation-v1','origin':'program-replay-from-sealed-pdf-not-model-input','profile':profile,'pdfSha256':sha(pdf_bytes),'backend':{'name':'pymupdf','version':fitz.VersionBind},'page':page_index+1,'originalTableDomSha256':table['sourceDomSha256'],'originalCaption':table['caption'],'pdfCaption':cap[4],'pdfTableBBox':[x0,top,x1,bottom],'headerProofs':header_proofs,'confirmedCells':confirmations,'displayDataRows':corrected}
+
+def proof(pdf_bytes,table,audit,doc):
+    profile=table_profile(table)
+    need(profile is not None,'当前来源表不符合准确支持的完整结构')
+    return proof_hindi(pdf_bytes,table,audit,doc,profile) if profile.startswith('hindi-') else proof_snr(pdf_bytes,table,audit,doc)
+
+
 def stable(value):
     return sha(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode())
 
@@ -143,11 +255,26 @@ def read_stable(filename,expected_sha):
         return data
     finally: os.close(fd)
 
-def supported(table):
+HINDI_HEADERS = {
+    'NwN_{w}': 'Nw',
+    'p90p_{90}': 'p90',
+    '≤50{\\leq}50': '≤50',
+}
+
+def table_profile(table):
     matrix=table.get('matrix') or []
-    if not matrix or len(matrix[0])<3 or matrix[0][:2]!=['Dataset SNR Setting','Test set']: return False
-    # 仅筛选小数两次双写；输出仍必须由真实PDF字形逐格确认，不能凭该形状切半。
-    return any(re.fullmatch(r'([+\-]?\d+\.\d+)\1',c.get('text','')) for c in table.get('cells',[]))
+    if not matrix or len(matrix[0])<3: return None
+    if matrix[0][:2]==['Dataset SNR Setting','Test set'] and any(re.fullmatch(r'([+\-]?\d+\.\d+)\1',c.get('text','')) for c in table.get('cells',[])):
+        return 'snr-decimal-double'
+    if table.get('ordinal')==2 and table.get('caption','').startswith('Table 2: Boundary error against manual annotation (ms) over the full 125-utterance test set.') and matrix[:2]==[['','Raw','Raw','Bias','Bias','Calibrated','Calibrated'],['System','mean','med.','onset','offset','mean','med.']] and [r[0] for r in matrix[2:]]==['Inter annotator','wav2vec2.0','M1','M2','M3','M4','M5','M6','NFA']:
+        return 'hindi-boundary-offsets'
+    if table.get('ordinal')==3 and table.get('caption','').startswith('Table 3: ASR and word-boundary estimation performance on the IndicVoices-R test set.') and matrix[:2]==[['','ASR (%)','ASR (%)','','vs. wav2vec2.0','vs. wav2vec2.0','vs. wav2vec2.0','vs. wav2vec2.0','Manual'],['Conf.','WER','CER','NwN_{w}','Mean','Med.','p90p_{90}','≤50{\\leq}50','Mean']] and [r[0] for r in matrix[2:]]==['M1','M2','M3','M4','M5','M6','CW']:
+        return 'hindi-boundary-math-headers'
+    return None
+
+def supported(table):
+    return table_profile(table) is not None
+
 
 def backend_directories():
     import pymupdf

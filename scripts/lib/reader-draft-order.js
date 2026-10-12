@@ -314,24 +314,26 @@ function pruneUniquelyUnboundReaderMarkdownTables(input) {
     return unbound.length;
 }
 
-function alignMixedBindingsToCurrentTableNodes(draft, tables) {
+function alignMixedBindingsToCurrentTableNodes(draft, tables, allowCompleteDeclarations = false) {
     const bindings = Array.isArray(draft?.tableBindings) ? draft.tableBindings : [];
     if (!bindings.length || tables.length !== bindings.length) return false;
     if (!bindings.every((binding, index) => binding?.tableIndex === index + 1)) return false;
     const selectionByOrdinal = new Map();
     const proseBindings = [];
     for (const binding of bindings) {
-        if (Object.prototype.hasOwnProperty.call(binding || {}, 'selection')) {
+        if (Object.prototype.hasOwnProperty.call(binding || {}, 'selection')
+            || allowCompleteDeclarations && Object.prototype.hasOwnProperty.call(binding || {}, 'completeTable')) {
             if (selectionByOrdinal.has(binding.tableIndex)) return false;
             selectionByOrdinal.set(binding.tableIndex, binding);
         } else {
             proseBindings.push(binding);
         }
     }
-    if (!selectionByOrdinal.size || !proseBindings.length) return false;
+    if (!selectionByOrdinal.size || !allowCompleteDeclarations && !proseBindings.length) return false;
     const markerNodes = tables.filter(table => table.marker);
     const proseNodes = tables.filter(table => !table.marker);
-    if (markerNodes.length !== selectionByOrdinal.size || proseNodes.length !== proseBindings.length
+    if (new Set(markerNodes.map(node => node.markerIndex)).size !== markerNodes.length
+        || markerNodes.length !== selectionByOrdinal.size || proseNodes.length !== proseBindings.length
         || markerNodes.some(table => !selectionByOrdinal.has(table.markerIndex))) return false;
     for (const table of markerNodes) {
         const body = String(draft.sections?.[table.sectionIndex]?.body || '');
@@ -715,6 +717,11 @@ function normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts = null 
                 throw new Error(`sections[${index}].body 的 ${match[0]} 位于注释、代码或引用中，不能作为正文表格展示`);
             }
         }
+    }
+    // 完整原表的标记已明确指定来源；先按唯一标记顺序排列声明，
+    // 再逐格核验并展开，避免合法表格顺序不同就进入反复模型修复。
+    if (draft.tableBindings?.some(binding => Object.hasOwn(binding || {}, 'completeTable'))) {
+        alignMixedBindingsToCurrentTableNodes(draft, locateReaderDraftTables(draft), true);
     }
     compileCompleteReaderTableDeclarations(draft, structuredArtifacts);
     restoreCompleteArtifactTableMarkers(draft, structuredArtifacts);
