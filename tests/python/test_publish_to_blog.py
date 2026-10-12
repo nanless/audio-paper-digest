@@ -8983,6 +8983,26 @@ body
             self.assertFalse((repo / 'data' / 'tag-catalog-snapshot.json').exists())
             self.assertFalse((repo / 'static' / 'data' / 'tag-catalog-snapshot.json').exists())
 
+    def test_corpus_curation_result_does_not_force_false_no_quantitative_claim(self):
+        summary = '本文发布文本语料，检查发现100行中有20行不符合NFC，修复去重后得到96句唯一句子，结论仅适用于该文本语料。'
+        issue = publish_to_blog._detailed_core_summary_semantic_issue(summary)
+        self.assertNotIn('缺少完整关键定量结果', issue)
+        self.assertIn('不能笼统声明', publish_to_blog._detailed_core_summary_semantic_issue(
+            summary + '原文未提供可核对的关键定量结果。'))
+        for changed in [summary.replace('100行中有20行', '20行中有100行'),
+                        summary.replace('发现100行', '没有发现100行'),
+                        summary.replace('得到96句', '得到101句'),
+                        summary.replace('100行中有20行', '.100行中有20行'),
+                        summary.replace('得到96句', '得到.96句'),
+                        summary.replace('修复去重后得到96句唯一句子', '继续检查文本'),
+                        summary.replace('修复去重后', '未修复后'),
+                        summary.replace('修复去重后', '未清洗后'),
+                        summary.replace('修复去重后', '没有进行规范化后'),
+                        '训练语料有100名说话人与96小时录音，录制于2022年。']:
+            with self.subTest(summary=changed):
+                self.assertIn('缺少完整关键定量结果',
+                              publish_to_blog._detailed_core_summary_semantic_issue(changed))
+
 
 if __name__ == '__main__':
     unittest.main()

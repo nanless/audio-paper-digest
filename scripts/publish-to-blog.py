@@ -4131,6 +4131,47 @@ def _strip_core_summary_non_result_numerals(text):
     return re.sub(r'\b(?:19|20)\d{2}\b', ' ', value)
 
 
+def _complete_corpus_curation_summary(summary):
+    """这里只核清洗计数的表达完整性；真实数值由 Node 对封存来源核验。"""
+    text = re.sub(r'(?<=\d),(?=\d)', '', str(summary or ''))
+    if not re.search(r'(?:语料|句子|文本)', text):
+        return False
+    for sentence in re.split(r'[。！？!?\n]', text):
+        if re.search(r'(?:未发现|没有发现|尚未检查|计划|预计|假设|拟检查)', sentence):
+            continue
+        forward = re.search(
+            r'(?<![\d.])(\d{1,15})(?![\d.])\s*(?:行|句)[^。]{0,20}(?:中有|其中有|中)\s*'
+            r'(?<![\d.])(\d{1,15})(?![\d.])\s*(?:行|句)[^。]{0,20}(?:不符合|不满足|未采用)\s*NFC',
+            sentence, re.IGNORECASE,
+        )
+        reverse = re.search(
+            r'(?<![\d.])(\d{1,15})(?![\d.])\s*(?:行|句)[^。]{0,15}(?:不符合|不满足|未采用)\s*NFC'
+            r'[^。]{0,30}(?:原有|原始|共|全部)\s*(?<![\d.])(\d{1,15})(?![\d.])\s*(?:行|句)',
+            sentence, re.IGNORECASE,
+        )
+        clean = re.search(
+            r'(?:修复|清洗|规范化|去重)[^。]{0,30}后[^。]{0,12}'
+            r'(?:得到|保留|剩余|形成|共有)\s*(?<![\d.])(\d{1,15})(?![\d.])\s*(?:个)?(?:唯一)?(?:句子|句|行)',
+            sentence,
+        )
+        cleaning_negated = clean and re.search(
+            r'(?:未|未曾|从未|没有|尚未|不)(?:进行|完成)?\s*$',
+            sentence[max(0, clean.start() - 12):clean.start()],
+        )
+        if not clean or cleaning_negated or not re.search(r'(?:发现|检查|清洗|统计)', sentence):
+            continue
+        if forward:
+            original, invalid = map(int, forward.groups())
+        elif reverse:
+            invalid, original = map(int, reverse.groups())
+        else:
+            continue
+        cleaned = int(clean.group(1))
+        if 0 < invalid <= original and 0 < cleaned <= original:
+            return True
+    return False
+
+
 def _detailed_core_summary_semantic_issue(summary):
     summary = str(summary or '')
     count = len(re.findall(r'[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]', summary))
@@ -4234,7 +4275,10 @@ def _detailed_core_summary_semantic_issue(summary):
                 )) and not _has_cross_metric_directional_comparison(result_sentence):
             has_complete_result = True
             break
-    if not has_complete_result and '原文未提供可核对的关键定量结果' not in summary:
+    corpus_result = _complete_corpus_curation_summary(summary)
+    if corpus_result and '原文未提供可核对的关键定量结果' in summary:
+        issues.append('摘要已报告语料清洗质量结果，不能笼统声明没有关键定量结果')
+    if not has_complete_result and not corpus_result and '原文未提供可核对的关键定量结果' not in summary:
         issues.append('缺少完整关键定量结果或明确不可得声明')
     explicit_boundary = re.search(
         r'(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)',

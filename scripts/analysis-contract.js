@@ -1281,8 +1281,77 @@ function hasSourceMeasuredLossComparison(sentences) {
     });
 }
 
+// 保留原逐行表格边界；列名缩写的句点不能把数值行和真实结果表标题隔开。
+function sourceHasMeasuredMetricTable(sourceText) {
+    const lines = String(sourceText || '').split(/\r?\n/).map(line => line.trim());
+    const numericCell = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:\s*(?:%|％|dB))?$/;
+    for (let index = 0; index < lines.length; index++) {
+        const caption = lines[index];
+        if (!/^Table\s+\d+\s*:\s*(?:Comparison|Ablation|Evaluation|Benchmark|Results)\b/i.test(caption)
+            || /\b(?:hypothetical|illustrative|example|planned|expected|predicted|prior study|previous study)\b/i.test(caption)
+            || /\b(?:results?|measurements?)\b[^.;]{0,25}\b(?:not|never)\b[^.;]{0,25}\b(?:observed|measured|reported|evaluated)\b|\b(?:no|without)\s+(?:(?:observed|measured|reported|evaluated)\s+)?results?\b|\b(?:not|never)\s+(?:observed|measured|reported|evaluated)\s+results?\b/i.test(caption)) continue;
+        const rows = [];
+        let metricHeader = false, label = '', values = [];
+        const flush = () => { if (label && values.length) rows.push({ label, width: values.length }); values = []; };
+        for (let next = index + 1; next < Math.min(lines.length, index + 100); next++) {
+            const line = lines[next];
+            if (/^\d+(?:\.\d+)*\s+[A-Z][A-Za-z]/.test(line) || /^Table\s+\d+\s*:/i.test(line)) break;
+            if (!line) continue;
+            if (numericCell.test(line)) { values.push(line); continue; }
+            if (/^[–—-]$/.test(line) && values.length) continue;
+            flush();
+            const withoutCitations = line.replace(/\[[\d,\s]+\]/g, '').trim();
+            const specificMetric = withoutCitations.replace(new RegExp(CORE_SUMMARY_GENERIC_ENGLISH_METRIC_PATTERN.source, 'gi'), ' ');
+            if (!rows.length && (CORE_SUMMARY_METRIC_PATTERN.test(specificMetric)
+                || /^(?:SRCC|LRCC)$/i.test(withoutCitations))) metricHeader = true;
+            label = /^[A-Za-z][A-Za-z0-9 .+_-]{1,80}$/.test(withoutCitations)
+                && !/^(?:Method|Metric|Metrics|Parameter|Parameters|Dataset|Datasets)$/i.test(withoutCitations)
+                && !CORE_SUMMARY_METRIC_PATTERN.test(specificMetric)
+                && !/^(?:SRCC|LRCC)$/i.test(withoutCitations) ? withoutCitations : '';
+        }
+        flush();
+        if (metricHeader && rows.some((row, first) => rows.slice(first + 1)
+            .some(other => other.label !== row.label && other.width === row.width))) return true;
+    }
+    return false;
+}
+
+// 文本语料发布论文的清洗结果不是模型性能；仅识别同一发布中可核的前后计数。
+function sourceCorpusCurationResult(sourceText) {
+    const text = String(sourceText || '').replace(/\s+/g, ' ').trim();
+    if (!/\b(?:text corpus|corpus|dataset)\b/i.test(text.slice(0, 2500))
+        || !/(?:^|[.!?]\s+)(?:This paper describes the release of (?:its|our) text component|We (?:release|publish) (?:a|our|the|this) text corpus)\b/i.test(text.slice(0, 2500))) return null;
+    const count = '(?:[1-9]\\d{0,2}(?:,\\d{3})+|[1-9]\\d*)';
+    const observed = new RegExp(`\\b(?:A )?second pass was carried out for this release[^.]{0,160}\\.[\\s\\S]{0,180}?(?<![\\d.])(${count}) of the (${count}) (?:lines|rows|sentences) were not in NFC form\\b`, 'i').exec(text);
+    const removed = new RegExp(`\\bAlso corrected:\\s*(${count}) exact duplicates\\b`, 'i').exec(text);
+    const statistics = new RegExp(`\\bCorpus statistics\\b[\\s\\S]{0,100}?Rows in the \\d{4} working file\\s*(${count})\\s*Unique sentences after cleaning\\s*(${count})\\b`, 'i').exec(text);
+    if (!observed || !removed || !statistics) return null;
+    const numeric = value => Number(value.replace(/,/g, ''));
+    const result = { invalid: numeric(observed[1]), original: numeric(observed[2]), removed: numeric(removed[1]), cleaned: numeric(statistics[2]) };
+    if (Object.values(result).some(value => !Number.isSafeInteger(value) || value <= 0)
+        || numeric(statistics[1]) !== result.original || result.invalid > result.original
+        || result.original - result.removed !== result.cleaned) return null;
+    return result;
+}
+
+function hasCompleteCorpusCurationResult(summary, result) {
+    if (!result || !/(?:语料|句子|文本)/.test(summary)) return false;
+    const sentences = String(summary).replace(/(?<=\d),(?=\d)/g, '').split(/[。！？!?\n]/);
+    return sentences.some(sentence => {
+        if (/(?:未发现|没有发现|尚未检查|计划|预计|假设|拟检查)/.test(sentence)) return false;
+        const value = number => `(?<![\\d.])${number}(?![\\d.])`;
+        const counts = new RegExp(`${value(result.original)}\\s*(?:行|句)[^。]{0,20}(?:中有|其中有|中)\\s*${value(result.invalid)}\\s*(?:行|句)[^。]{0,20}(?:不符合|不满足|未采用)\\s*NFC`, 'i');
+        const reverseCounts = new RegExp(`${value(result.invalid)}\\s*(?:行|句)[^。]{0,15}(?:不符合|不满足|未采用)\\s*NFC[^。]{0,30}(?:原有|原始|共|全部)\\s*${value(result.original)}\\s*(?:行|句)`, 'i');
+        const clean = new RegExp(`(?:修复|清洗|规范化|去重)[^。]{0,30}后[^。]{0,12}(?:得到|保留|剩余|形成|共有)\\s*${value(result.cleaned)}\\s*(?:个)?(?:唯一)?(?:句子|句|行)[^。]{0,8}(?:唯一|句子|文本)?`);
+        const cleaned = clean.exec(sentence);
+        const cleaningNegated = cleaned && /(?:未|未曾|从未|没有|尚未|不)(?:进行|完成)?\s*$/.test(sentence.slice(Math.max(0, cleaned.index - 12), cleaned.index));
+        return /(?:发现|检查|清洗|统计)/.test(sentence) && (counts.test(sentence) || reverseCounts.test(sentence)) && cleaned && !cleaningNegated;
+    });
+}
+
 function classifySourceQuantitativeEvidence(sourceText, sentences = null) {
     if (!sourceText) return null;
+    if (sourceHasMeasuredMetricTable(sourceText) || sourceCorpusCurationResult(sourceText)) return true;
     const values = Array.isArray(sentences) ? sentences : String(sourceText).trim()
         .split(/[。！？!?\n]|\.(?=\s+[A-Z][A-Za-z]|$)/)
         .map(sentence => sentence.trim()).filter(Boolean);
@@ -1632,7 +1701,12 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     const sourceHasQuantitativeEvidence = classifySourceQuantitativeEvidence(
         sourceText, quantitativeSourceSentences);
     const quantitativeResultState = coreSummaryQuantitativeResultState(summary);
-    const completeQuantitativeResult = quantitativeResultState.complete;
+    const corpusCurationResult = sourceCorpusCurationResult(sourceText);
+    const completeQuantitativeResult = quantitativeResultState.complete
+        || hasCompleteCorpusCurationResult(summary, corpusCurationResult);
+    if (corpusCurationResult && summary.includes(CORE_SUMMARY_RESULT_UNAVAILABLE)) {
+        issues.push('原文已有可核的语料清洗质量结果，不能笼统声明没有关键定量结果；它们不等于模型性能实验');
+    }
     if (sourceHasQuantitativeEvidence === true && !completeQuantitativeResult) {
         issues.push('已有证据包含关键定量结果，但摘要没有写清比较对象、评测设置、指标、数值与方向'
             + `（最接近的同句量化候选缺少：${quantitativeResultState.missing.join('、')}）`
