@@ -593,3 +593,123 @@ test('实际analyze入口无原parent核心scope不解引用null，保输入快�
  assert.equal(paper.analysisManifest.stages.primaryAnalysis?.factReview,undefined);
  assert.equal(calls.filter(c=>c.stage==='primaryAnalysis').length,0);
 });
+
+function createReaderFeedback(sample) {
+    const value = createCoreFeedback(sample);
+    value.coreFeedback = '';
+    value.rejectedCoreClaims = [];
+    value.readerFeedback = sample.feedback.readerFeedback + '\n只纠正Reader中的真实错误表述；正确的来源、数字和其他阶段不改。';
+    value.rejectedReaderClaims = [...sample.feedback.rejectedReaderClaims, 'Reader中已证实错误的完整句子。'];
+    return value;
+}
+
+test('Reader双包保留原主文proof，仅Reader使用新约束并拒绝混合授权', async t => {
+    const sample = await createSample(t);
+    const before = structuredClone(sample.paper);
+    const feedback = createReaderFeedback(sample);
+    const bound = facts.validateFeedback(feedback, sample.plan, sample.paper);
+    assert.throws(() => facts.withReaderFactReview(bound, sample.paper, () => {}), /当前论文锁/);
+    await daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(sample.paper, () =>
+        facts.withFactReview(sample.bound, () => facts.withReaderFactReview(bound, sample.paper, () => {
+            assert.deepEqual(facts.current().proof, sample.bound.proof);
+            assert.deepEqual(facts.fingerprintFields('apiReaderArticle'), { factReview: bound.proof });
+            assert.deepEqual(facts.fingerprintFields('primaryAnalysis', sample.paper.analysisManifest.stages.primaryAnalysis), { factReview: sample.bound.proof });
+            assert.ok(facts.reviewFeedback('apiReaderArticle', sample.id).includes(feedback.readerFeedback));
+            assert.ok(facts.reviewFeedback('apiReaderArticle', sample.id).includes(sample.feedback.primaryFeedback));
+            assert.throws(() => facts.validateRepairedClaims('apiReaderArticle', feedback.rejectedReaderClaims[0]), /已证实错误/);
+            for (const stage of ['primaryAnalysis', 'coreSummaryRepair', 'scoringAudit', 'revision', undefined])
+                assert.throws(() => facts.assertScoringOnlyModelStageAllowed(stage), /不能调用/);
+        }))));
+    assert.deepEqual(sample.paper, before);
+    const mixed = facts.validateFeedback({ ...feedback, coreFeedback: '不得扩大', rejectedCoreClaims: ['不得扩大'] }, sample.plan, sample.paper);
+    await engine.withPaperAnalysisLock(sample.paper, () => assert.throws(() => facts.withReaderFactReview(mixed, sample.paper, () => {}), /不能授权/));
+    const bad = structuredClone(sample.paper);
+    bad.analysisManifest.stages.primaryAnalysis.factReview = { ...sample.bound.proof, feedbackSha256: 'a'.repeat(64) };
+    await engine.withPaperAnalysisLock(bad, () => assert.throws(() => facts.withFactReview(sample.bound, () => facts.withReaderFactReview(bound, bad, () => {})), /缺少原主分析/));
+});
+
+test('正常selected未完成Reader双包通过同fullrun身份并保存真实新Readerproof', async t => {
+    const sample = await createSample(t, { quantitativeSource: true });
+    let paper;
+    await inScope(sample, () => engine.withPaperAnalysisLock(sample.paper, () => facts.withFactReview(sample.bound, () => {
+        paper = policy.preparePaperLocked(sample.paper);
+        const record = paper.fullStageReanalysis, history = paper.fullStageReanalysisHistory;
+        Object.assign(paper, structuredClone(sample.paper));
+        paper.fullStageReanalysis = record; paper.fullStageReanalysisHistory = history;
+        deep.markRecoveryStage(paper.analysisManifest, 'primaryAnalysis', 'complete', { factReview: sample.bound.proof, fingerprint: '原本轮主阶段' });
+    })));
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-dual-public-'));
+    const keys = ['deepAnalysisResult', 'papers', 'papersLegacy', 'runtimeDir', 'analysisRepairAttemptsDir'];
+    const previous = Object.fromEntries(keys.map(key => [key, Config.FILES[key]]));
+    const retries = Config.ANALYSIS_CONFIG.maxRetries;
+    t.after(() => { Object.assign(Config.FILES, previous); Config.ANALYSIS_CONFIG.maxRetries = retries; fs.rmSync(root, { recursive: true, force: true }); });
+    for (const key of keys) Config.FILES[key] = path.join(root, key + '.json');
+    Config.ANALYSIS_CONFIG.maxRetries = 0;
+    fs.writeFileSync(Config.FILES.papers, JSON.stringify({ papers: [] }));
+    fs.writeFileSync(Config.FILES.papersLegacy, JSON.stringify({ papers: [] }));
+    const parentFile = path.join(root, 'parent.json'), readerFile = path.join(root, 'reader.json');
+    const reader = createReaderFeedback(sample);
+    fs.writeFileSync(parentFile, JSON.stringify(sample.feedback)); fs.writeFileSync(readerFile, JSON.stringify(reader));
+    fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify({ batchDate: sample.plan.batchDate, dailyFreshSourceRun: daily.dailyFreshSourceReference(sample.plan), papers: [paper, sample.other] }));
+    const originalPrimary = structuredClone(paper.analysisManifest.stages.primaryAnalysis), originalHistory = structuredClone(paper.fullStageReanalysisHistory);
+    let seen = 0; calls.length = 0;
+    const spy = t.mock.method(deep, 'analyzePaperDeep', async current => {
+        seen++; policy.assertPrepared(current);
+        assert.deepEqual(facts.current().proof, sample.bound.proof);
+        const proof = facts.fingerprintFields('apiReaderArticle').factReview;
+        assert.equal(proof.feedbackSha256, daily.stableHash(reader));
+        assert.notEqual(proof.feedbackSha256, sample.bound.proof.feedbackSha256);
+        const source = daily.readDailyFreshSource(sample.plan, current);
+        const identity = await deep.prepareApiReaderRetryIdentity(current, current.analysis, source.text, { sourceText: source.text, structuredArtifacts: source.structuredArtifacts, reviewFeedback: facts.reviewFeedback('apiReaderArticle', sample.id) });
+        const plainIdentity = await deep.prepareApiReaderRetryIdentity(current, current.analysis, source.text, { sourceText: source.text, structuredArtifacts: source.structuredArtifacts, reviewFeedback: '' });
+        assert.notEqual(identity.identity.inputFingerprint, plainIdentity.identity.inputFingerprint);
+        deep.markRecoveryStage(current.analysisManifest, 'apiReaderArticle', 'invalid_output', { ...facts.fingerprintFields('apiReaderArticle'), error: '模拟正常Reader来源检查失败，保留新反馈' });
+        throw Object.assign(new Error('Reader测试失败稿，未发API'), { retryable: false });
+    });
+    delete require.cache[require.resolve('../scripts/reanalyze-selected')];
+    await require('../scripts/reanalyze-selected').reanalyzeSelected([sample.id], { fullStageReanalysis: options(sample), feedbackFiles: [parentFile], readerFeedbackFiles: [readerFile] });
+    spy.mock.restore(); assert.equal(seen, 1); assert.equal(calls.length, 0);
+    const saved = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers;
+    assert.deepEqual(saved[0].analysisManifest.stages.primaryAnalysis, originalPrimary);
+    assert.deepEqual(saved[0].fullStageReanalysisHistory, originalHistory);
+    assert.equal(saved[0].analysisManifest.stages.apiReaderArticle.factReview.feedbackSha256, daily.stableHash(reader));
+    assert.deepEqual(saved[1], sample.other);
+    await assert.rejects(require('../scripts/reanalyze-selected').reanalyzeSelected([sample.id], { readerFeedbackFiles: false }), /路径数组/);
+});
+
+
+test('无原parent的Reader双包不伪造主文proof，已变Reader反馈proof必须有原包', async t => {
+    const sample = await createSample(t), paper = structuredClone(sample.paper);
+    delete paper.analysisManifest.stages.primaryAnalysis.factReview;
+    delete paper.analysisManifest.stages.apiReaderArticle.factReview;
+    const feedback = createReaderFeedback(sample), bound = facts.validateFeedback(feedback, sample.plan, paper);
+    await engine.withPaperAnalysisLock(paper, () => facts.withReaderFactReview(bound, paper, () => {
+        assert.equal(facts.current().proof, null);
+        assert.deepEqual(facts.readerRejectedClaims(sample.id), feedback.rejectedReaderClaims);
+        assert.deepEqual(facts.fingerprintFields('primaryAnalysis', paper.analysisManifest.stages.primaryAnalysis), {});
+        assert.deepEqual(facts.fingerprintFields('apiReaderArticle').factReview, bound.proof);
+    }));
+    paper.analysisManifest.stages.apiReaderArticle.factReview = { ...bound.proof, feedbackSha256: 'b'.repeat(64) };
+    await engine.withPaperAnalysisLock(paper, () => assert.throws(() => facts.withReaderFactReview(bound, paper, () => {}), /缺少原Reader/));
+});
+
+
+test('实际deep入口有无parent的Reader独立反馈都保存正确Reader快照且无新主文请求', async t => {
+    const sample = await createSample(t);
+    for (const parent of [false, true]) {
+        const paper = structuredClone(sample.paper);
+        if (!parent) { delete paper.analysisManifest.stages.primaryAnalysis.factReview; delete paper.analysisManifest.stages.apiReaderArticle.factReview; }
+        const reader = createReaderFeedback(sample), bound = facts.validateFeedback(reader, sample.plan, paper);
+        let result; calls.length = 0;
+        const run = () => facts.withReaderFactReview(bound, paper, async () => { result = await deep.analyzePaperDeep(paper); });
+        await daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(paper, () => parent ? facts.withFactReview(sample.bound, run) : run()), { refreshReaderDiagnostics: true });
+        assert.ok(result);
+        assert.doesNotMatch(String(result.error || ''), /Cannot read properties of null|feedbackSha256/);
+        assert.equal(calls.length, 0, '主文/核心/评分请求须在公共模型入口前拒绝');
+        const snapshots = (paper.analysisStaleSnapshots || []).filter(item => item.invalidatedStage === 'apiReaderArticle' && item.replacementFingerprint === bound.proof.feedbackSha256);
+        assert.ok(snapshots.length > 0, JSON.stringify({ parent, error: result.error, snapshots: (paper.analysisStaleSnapshots || []).map(x => ({ stage: x.invalidatedStage, fingerprint: x.replacementFingerprint })) }));
+        assert.ok(snapshots.some(item => { const payload = deep.validateStaleAnalysisSnapshot(item); return payload && facts.sha(payload.analysisCheckpoint) === bound.proof.coreAnalysisSha256; }));
+        if (!parent) assert.equal(paper.analysisManifest.stages.primaryAnalysis.factReview, undefined);
+        else assert.deepEqual(paper.analysisManifest.stages.primaryAnalysis.factReview, sample.bound.proof);
+    }
+});

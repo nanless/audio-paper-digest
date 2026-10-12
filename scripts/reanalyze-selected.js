@@ -96,6 +96,28 @@ async function reanalyzeSelected(ids, options = {}) {
         if (fileSha(entry.file) !== entry.sha256) throw new Error('核心反馈文件在运行中变化');
         return factReview.validateFeedback(factReview.readFeedback(entry.file), dailySourcePlan, paper);
     };
+    const readerFeedbacks = new Map();
+    if (options.readerFeedbackFiles !== undefined && !Array.isArray(options.readerFeedbackFiles))
+        throw new Error('readerFeedbackFiles 必须为反馈路径数组');
+    for (const file of options.readerFeedbackFiles || []) {
+        const feedback = factReview.readFeedback(file);
+        if (!idSet.has(feedback.paperId) || readerFeedbacks.has(feedback.paperId)) throw new Error('Reader反馈须属于唯一选定论文');
+        const paper = papers.find(item => normalizedId(item) === feedback.paperId);
+        if (!paper || paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete') throw new Error('Reader反馈须保留已完成主分析');
+        if (fullStageOptions && paper.fullStageReanalysis?.runId !== fullStageOptions.runId)
+            throw new Error('独立Reader纠错不能发起全新主分析');
+        factReview.validateFeedback(feedback, dailySourcePlan, paper);
+        readerFeedbacks.set(feedback.paperId, { file, sha256: fileSha(file) });
+    }
+    if (readerFeedbacks.size && [...idSet].some(id => !readerFeedbacks.has(id)))
+        throw new Error('独立Reader纠错须覆盖本次所有选定论文，不能混入普通主文重分析');
+    const readReaderLocked = paper => {
+        const entry = readerFeedbacks.get(normalizedId(paper));
+        if (!entry) return null;
+        if (fileSha(entry.file) !== entry.sha256) throw new Error('Reader反馈文件在运行中变化');
+        return factReview.validateFeedback(factReview.readFeedback(entry.file), dailySourcePlan, paper);
+    };
+    if (coreFeedbacks.size && readerFeedbacks.size) throw new Error('独立核心和Reader纠错不能混用');
     for (const file of options.feedbackFiles || []) {
         const feedback = factReview.readFeedback(file);
         if (feedbacks.has(feedback.paperId)) throw new Error('同篇反馈重复');
@@ -210,6 +232,7 @@ async function reanalyzeSelected(ids, options = {}) {
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
             if (!latest) return { paper, skip: false };
             readCoreLocked(latest);
+            readReaderLocked(latest);
             if (fullStageOptions) {
                 const feedback = feedbacks.get(normalizedId(latest));
                 const original = latest.fullStageReanalysis?.runId === fullStageOptions.runId
@@ -218,7 +241,7 @@ async function reanalyzeSelected(ids, options = {}) {
                     factReview.validateFeedback(feedback, dailySourcePlan, original));
                 const bound = boundFeedbacks.get(normalizedId(latest));
                 const prepare = () => {
-                    if (!coreFeedbacks.has(normalizedId(latest)) && latest.fullStageReanalysis?.runId === fullStageOptions.runId
+                    if (!coreFeedbacks.has(normalizedId(latest)) && !readerFeedbacks.has(normalizedId(latest)) && latest.fullStageReanalysis?.runId === fullStageOptions.runId
                         && fullStages.completedThisRun(latest)) {
                         fullStages.assertPrepared(latest);
                         return { paper: latest, skip: true };
@@ -230,7 +253,7 @@ async function reanalyzeSelected(ids, options = {}) {
             }
             return {
                 paper: dailyFreshSources.prepareDailyPaper(
-                    options.coreSummaryDiagnosticIds?.[normalizedId(paper)] || coreFeedbacks.has(normalizedId(paper)) ? { ...paper, ...latest } : resetReaderForSelectedReanalysis({ ...paper, ...latest }), dailySourcePlan
+                    options.coreSummaryDiagnosticIds?.[normalizedId(paper)] || coreFeedbacks.has(normalizedId(paper)) || readerFeedbacks.has(normalizedId(paper)) ? { ...paper, ...latest } : resetReaderForSelectedReanalysis({ ...paper, ...latest }), dailySourcePlan
                 ),
                 skip: false
             };
@@ -243,7 +266,9 @@ async function reanalyzeSelected(ids, options = {}) {
             const analyze = () => dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, { coreSummaryDiagnosticIds: options.coreSummaryDiagnosticIds })(paper);
             const bound = boundFeedbacks.get(normalizedId(paper));
             const core = readCoreLocked(paper);
-            const execute = () => core ? factReview.withCoreSummaryFactReview(core, paper, analyze) : analyze();
+            const reader = readReaderLocked(paper);
+            const execute = () => core ? factReview.withCoreSummaryFactReview(core, paper, analyze)
+                : reader ? factReview.withReaderFactReview(reader, paper, analyze) : analyze();
             return bound ? factReview.withFactReview(bound, execute) : execute();
         },
         onPaperResultLocked: async (paper, result) => {

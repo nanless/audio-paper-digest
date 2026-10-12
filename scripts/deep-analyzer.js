@@ -7955,7 +7955,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             require('./lib/daily-fact-review').validateRepairedClaims('apiReaderArticle', parsed.article, getPaperArxivId(paper));
         } catch (error) {
             error.readerIssues = repair.verifiedReaderFactIssues(repair.parseRecoveryDraft(raw),
-                require('./lib/daily-fact-review').current(getPaperArxivId(paper))?.feedback.rejectedReaderClaims);
+                require('./lib/daily-fact-review').readerRejectedClaims(getPaperArxivId(paper)));
             if (error.readerIssues.length) error.code = 'READER_VERIFIED_FACT_CLAIM';
             throw error;
         }
@@ -10356,7 +10356,8 @@ function staleAnalysisSnapshotPayload(paper, manifest) {
 
 function captureStaleAnalysisSnapshot(paper, manifest, invalidatedStage, replacementFingerprint) {
     const activeReview = require('./lib/daily-fact-review').current(getPaperArxivId(paper));
-    const activeReviewInputProof = activeReview?.coreOnly ? activeReview.coreBound.proof : activeReview?.proof;
+    const activeReviewInputProof = activeReview?.coreOnly ? activeReview.coreBound.proof
+        : activeReview?.readerOnly ? activeReview.readerBound.proof : activeReview?.proof;
     const finalAnalysisIsReviewInput = activeReviewInputProof
         && typeof paper.analysis === 'string'
         && crypto.createHash('sha256').update(paper.analysis).digest('hex')
@@ -14869,7 +14870,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     const analysisManifest = createAnalysisRecoveryManifest(recoveryPreparation);
     const savedPrimaryFactStage = analysisManifest.stages.primaryAnalysis;
     const localFactRepairInput = String(paper.analysisCheckpoint || paper.analysis || '');
-    const activePrimaryFactReview = require('./lib/daily-fact-review').current(arxivId)?.feedback.primaryFeedback?.trim();
+    const primaryReviewScope = require('./lib/daily-fact-review').current(arxivId);
+    const activePrimaryFactReview = primaryReviewScope?.readerOnly ? '' : primaryReviewScope?.feedback.primaryFeedback?.trim();
     const localFactRepair = require('./lib/primary-fact-local-repair');
     const initialFactReview = require('./lib/daily-fact-review').current(arxivId);
     const localFactRepairPlan = !fullStageReanalysis && activePrimaryFactReview
@@ -15057,9 +15059,11 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     const boundFactReview = require('./lib/daily-fact-review').current(arxivId);
     if (boundFactReview) {
         // 保存真实付费正文和阶段；反馈只改变正常模型请求，不构造成功正文。
-        const inputReview = boundFactReview.coreOnly ? boundFactReview.coreBound : boundFactReview;
-        captureStaleAnalysisSnapshot(paper, analysisManifest, !boundFactReview.coreOnly && boundFactReview.feedback.primaryFeedback?.trim()
-            ? 'primaryAnalysis' : 'coreSummaryRepair', inputReview.proof.feedbackSha256);
+        const inputReview = boundFactReview.coreOnly ? boundFactReview.coreBound
+            : boundFactReview.readerOnly ? boundFactReview.readerBound : boundFactReview;
+        captureStaleAnalysisSnapshot(paper, analysisManifest, boundFactReview.readerOnly ? 'apiReaderArticle'
+            : !boundFactReview.coreOnly && boundFactReview.feedback.primaryFeedback?.trim()
+                ? 'primaryAnalysis' : 'coreSummaryRepair', inputReview.proof.feedbackSha256);
     }
     const recoveryFingerprints = buildRecoveryFingerprints(
         paper, textForAnalysis, arxivId, analysisManifest);
