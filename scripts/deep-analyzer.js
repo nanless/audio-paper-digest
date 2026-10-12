@@ -108,7 +108,8 @@ const {
     normalizedSourceUrlBinding,
     paperSourceQuoteBindsOriginalUrl,
     paperSourceResourceFacets,
-    paperSourceResourceQuote
+    paperSourceResourceQuote,
+    resourceClassificationIsCurrent
 } = require('./lib/reader-resource-binding.js');
 const { READER_TABLE_SELECTION_CONTRACT, compileReaderTableSelections,
     assessReaderTableSelectionEligibility, bracketedNumericVectors,
@@ -12169,9 +12170,19 @@ async function buildApiReaderResourceIdentity(analysis, sourceText, demoStage = 
         );
         const origin = sourceLine ? 'paper_source' : demoLinks.has(candidate.url)
             ? 'validated_demo' : null;
-        const type = origin === 'paper_source'
-            && !paperSourceResourceFacets(sourceText, candidate.sourceToken || candidate.url).includes(candidate.type)
-            ? 'third_party' : candidate.type;
+        const sourceFacets = origin === 'paper_source'
+            ? paperSourceResourceFacets(sourceText, candidate.sourceToken || candidate.url) : [];
+        const staleAuthorCodeClassification = origin === 'paper_source'
+            && candidate.type === 'third_party' && sourceFacets.includes('code')
+            && !resourceClassificationIsCurrent({
+                ...candidate,
+                origin,
+                originalUrl: candidate.url,
+                sourceUrlToken: candidate.sourceToken || candidate.url
+            }, sourceText);
+        const type = staleAuthorCodeClassification ? 'code'
+            : origin === 'paper_source' && !sourceFacets.includes(candidate.type)
+                ? 'third_party' : candidate.type;
         return { ...candidate, type, sourceLine, origin };
     }).filter(candidate => candidate.origin);
     const candidates = boundCandidates.slice(0, 12);
@@ -12327,6 +12338,15 @@ function applyApiReaderResourceAvailability(analysis, identity) {
     let cleaned = String(section || '').replace(/^[-*]\s*资源可达性验证[：:].*$/gm, '').trim();
     cleaned = cleaned.split('\n').map(line => {
         const candidates = extractApiReaderResourceCandidates(`## 开源详情\n${line}`);
+        const generatedThirdPartyLine = /^- 其他资源链接：<https:\/\/[^<>\s]+>（(?:已验证可访问|当前不可用|本次暂时无法确认可达)(?:，HTTP \d{3})?）（未据此确认作者已开放资源）$/.test(line.trim());
+        if (generatedThirdPartyLine && candidates.length === 1 && candidates.every(candidate => candidate.type === 'third_party'
+            && identity.resources.some(resource => resource.originalUrl === candidate.url
+                && resource.origin === 'paper_source' && resource.type === 'code'
+                && !resourceClassificationIsCurrent({
+                    ...resource, type: 'third_party'
+                }, resource.sourceQuote)))) {
+            return '';
+        }
         return candidates.some(candidate => candidate.type !== 'third_party'
             && !identity.resources.some(resource => resource.originalUrl === candidate.url
                 && resource.type === candidate.type))
