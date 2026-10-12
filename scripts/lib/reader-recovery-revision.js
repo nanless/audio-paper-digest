@@ -5,7 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const { getFreshAnalysisContext } = require('./fresh-analysis-context.js');
-const { loadFailedCandidate, saveFailedCandidate, hashDraft, shaText, parseRecoveryDraft,
+const { loadFailedCandidate, readFailedCandidateEnvelope, saveFailedCandidate, hashDraft, shaText, parseRecoveryDraft,
     IMPLEMENTATION_ALLOWANCE_CONTRACT, IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT,
     hasUnusedImplementationAllowance, TABLE_COUNT_ISSUE_CODE, classifyTableBindingOrderIssue, readTableBindingOrderError } = require('./reader-repair.js');
 const { normalizeReaderDraftOrder, pruneUniquelyUnboundReaderMarkdownTables } = require('./reader-draft-order.js');
@@ -189,16 +189,10 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     const compatible = [];
     for (const name of names) {
-        const { envelope, envelopeSha256 } = readEnvelope(path.join(directory, name));
-        if (!envelope?.identity || name !== `${hashDraft(envelope.identity)}.json`) {
-            throw new Error('Corrupt Reader diagnostic revision identity/filename');
-        }
-        // 原加载器继续检查外层对象、文件权限、JSON、失败候选内容哈希、
-        // 根结构与已保存的计数。
-        const payload = loadFailedCandidate(directory, envelope.identity);
-        if (!payload || hashDraft(payload) !== envelope.payloadSha256) {
-            throw new Error('Reader diagnostic revision candidate changed during audit');
-        }
+        const checked = readFailedCandidateEnvelope(directory, null, path.join(directory, name));
+        if (!checked) throw new Error('Reader 恢复候选在审查期间消失');
+        const { envelope, envelopeSha256 } = checked;
+        const payload = envelope.payload;
         const oldJsonPolicy = envelope.identity.readerJsonRequestPolicy;
         const newJsonPolicy = identity.readerJsonRequestPolicy;
         assertReaderJsonRequestPolicy(oldJsonPolicy);

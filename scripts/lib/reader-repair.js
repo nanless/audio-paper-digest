@@ -2336,9 +2336,13 @@ function candidatePath(directory, identity) {
     return path.join(directory, `${hashDraft(identity)}.json`);
 }
 
-function loadFailedCandidate(directory, identity) {
-    try { assertSafeDirectory(directory); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
-    const filename = candidatePath(directory, identity);
+function readFailedCandidateEnvelope(directory, identity, candidateFilename = null) {
+    let absolute;
+    try { absolute = assertSafeDirectory(directory); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    const filename = candidateFilename === null ? candidatePath(absolute, identity) : path.resolve(candidateFilename);
+    if (path.dirname(filename) !== absolute) {
+        throw new Error('Reader 候选路径必须位于当前私有目录');
+    }
     let fd;
     try {
         fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
@@ -2346,9 +2350,12 @@ function loadFailedCandidate(directory, identity) {
         if (!stat.isFile() || stat.nlink !== 1 || stat.size > MAX_FILE_BYTES || (stat.mode & 0o777) !== 0o600) {
             throw new Error('Unsafe Reader candidate file or permissions');
         }
-        const envelope = JSON.parse(fs.readFileSync(fd, 'utf8'));
+        const bytes = fs.readFileSync(fd);
+        const envelope = JSON.parse(bytes.toString('utf8'));
         assertSafeJson(envelope);
-        if (envelope.version !== REPAIR_VERSION || hashDraft(envelope.identity) !== hashDraft(identity)
+        if (!envelope.identity || typeof envelope.identity !== 'object' || Array.isArray(envelope.identity)
+            || envelope.version !== REPAIR_VERSION || (identity !== null && hashDraft(envelope.identity) !== hashDraft(identity))
+            || path.basename(filename) !== `${hashDraft(envelope.identity)}.json`
             || envelope.payloadSha256 !== hashDraft(envelope.payload)
             || envelope.payload?.status !== 'failed'
             || !Number.isInteger(envelope.payload.attempts) || envelope.payload.attempts < 0
@@ -2380,11 +2387,22 @@ function loadFailedCandidate(directory, identity) {
         }
         validateImplementationAllowance(envelope.payload, envelope.identity, directory);
         require('./explicit-reader-retry-round').validatePersistedRound(directory, envelope.identity, envelope.payload);
-        return envelope.payload;
+        const after = fs.fstatSync(fd);
+        const named = fs.lstatSync(filename);
+        if (['dev', 'ino', 'size', 'mtimeMs', 'ctimeMs', 'mode', 'nlink']
+            .some(key => stat[key] !== after[key])
+            || named.isSymbolicLink() || named.dev !== after.dev || named.ino !== after.ino) {
+            throw new Error('Reader 候选读取期间文件发生变化');
+        }
+        return { envelope, envelopeSha256: crypto.createHash('sha256').update(bytes).digest('hex') };
     } catch (error) {
         if (error.code === 'ENOENT') return null;
         throw new Error(`Reader candidate refused: ${error.message}`, { cause: error });
     } finally { if (fd !== undefined) fs.closeSync(fd); }
+}
+
+function loadFailedCandidate(directory, identity) {
+    return readFailedCandidateEnvelope(directory, identity)?.envelope.payload || null;
 }
 
 function saveFailedCandidate(directory, identity, payload) {
@@ -2596,5 +2614,5 @@ module.exports = { REPAIR_VERSION, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     validateImplementationAllowance,
     buildTopLevelMetadataRepairContext, applyTopLevelMetadataRepair,
     sectionReorganizationOperation, buildMissingConceptBridgesOperation, parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
-    buildSectionReorganizationPrompt, buildRepairTargets, applyReaderPatch, normalizeUnavailableReaderFigures, buildRepairContext, loadFailedCandidate, saveFailedCandidate,
+    buildSectionReorganizationPrompt, buildRepairTargets, applyReaderPatch, normalizeUnavailableReaderFigures, buildRepairContext, loadFailedCandidate, readFailedCandidateEnvelope, saveFailedCandidate,
     retireFailedCandidate, hasUnusedImplementationAllowance };

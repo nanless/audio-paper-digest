@@ -589,7 +589,7 @@ test('归档中断后重试，即使草稿和次数不变，也拒绝旧诊断�
 test('归档或旧证据缺失就拒绝重入，之后加载时归档字节仍保持已核验', t => {
     const f = fixture(t); const filename = interruptArchival(f);
     fs.unlinkSync(filename);
-    assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), /ENOENT|changed during audit/);
+    assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity)), /ENOENT|changed during audit|审查期间消失/);
     saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
     const resumed = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity));
     const archived = path.join(f.directory, resumed.readerRecoveryRevisions[0].archivedName);
