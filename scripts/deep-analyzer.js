@@ -7587,6 +7587,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-inline-svg.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-resource-binding.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/signed-reader-recovery-draft.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-paid-response-replay.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/explicit-reader-retry-round.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-parent-recovery.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-proof-read-scope.js'), 'utf8'),
@@ -7870,7 +7871,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const recoveryOptions = useEphemeralFigureEvidence
         ? { ephemeralImageEvidenceSha256: modelImagePreflightEvidenceSha256 } : undefined;
     recovered = require('./lib/reader-recovery-revision.js').loadReaderRecoveryRevision(
-        candidateDirectory, identity, recoveryOptions
+        candidateDirectory, identity, { ...recoveryOptions,
+            ...(options.paidReaderResponseReplay !== undefined
+                ? { paidReaderResponseReplay: options.paidReaderResponseReplay } : {}) }
     );
     recovered = require('./lib/explicit-reader-retry-round.js').restoreExplicitRoundOriginalDraft(
         candidateDirectory, identity, recovered, paper
@@ -8518,6 +8521,8 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             resourceLocalRevision: options.resourceLocalRevision === true,
             readerFactLocalRevision: options.readerFactLocalRevision === true,
             signedRevisionMinimalDisplay: options.signedRevisionMinimalDisplay === true,
+            ...(options.paidReaderResponseReplay !== undefined
+                ? { paidReaderResponseReplay: options.paidReaderResponseReplay } : {}),
             readerResources,
             ...(revisionSeed ? {
                 initialDraft: revisionSeed.initialDraft,

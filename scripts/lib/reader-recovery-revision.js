@@ -148,6 +148,49 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
             throw new Error('Reader failed candidate ephemeral image evidence drifted; refusing to migrate pixel-dependent narration');
         }
     };
+    if (options.paidReaderResponseReplay !== undefined) {
+        const request = options.paidReaderResponseReplay;
+        if (!/^[a-f0-9]{64}$/.test(request?.candidateIdentitySha256 || '')) {
+            throw new Error('原付费响应复验须指定唯一原候选');
+        }
+        const filename = path.join(directory, request.candidateIdentitySha256 + '.json');
+        const old = readFailedCandidateEnvelope(directory, null, filename);
+        if (!old || hashDraft(identity) === hashDraft(old.envelope.identity)
+            || loadFailedCandidate(directory, identity)) {
+            throw new Error('原付费响应复验不能覆盖原记录或其他当前候选');
+        }
+        verifyPixels(old.envelope.payload);
+        const replay = require('./reader-paid-response-replay').replayPaidReaderResponse(
+            directory, old, identity, request
+        );
+        const updated = structuredClone(old.envelope.payload);
+        updated.draft = replay.draft;
+        updated.rawDraft = replay.rawDraft;
+        const changedFields = ALLOWED_FIELDS.filter(field =>
+            !isDeepStrictEqual(old.envelope.identity[field], identity[field]));
+        const audit = {
+            contract: CONTRACT, runId: identity.freshAnalysis.runId,
+            scope: 'daily-fresh-source', paperId: identity.paperId,
+            fromIdentitySha256: hashDraft(old.envelope.identity), toIdentitySha256: hashDraft(identity),
+            oldPayloadSha256: old.envelope.payloadSha256, oldEnvelopeSha256: old.envelopeSha256,
+            archivedName: `${hashDraft(old.envelope.identity)}.migrated-${crypto.randomUUID()}.json`,
+            changedFields, clearedNoProgress: false,
+            attempts: updated.attempts, fullAttempts: updated.fullAttempts,
+            transportFailures: updated.transportFailures || 0,
+            inputDraftSha256: hashDraft(old.envelope.payload.draft), outputDraftSha256: hashDraft(updated.draft),
+            paidResponseReplay: replay.proof
+        };
+        updated.readerRecoveryRevisions = [...(updated.readerRecoveryRevisions || []), audit];
+        replay.assertUnchanged();
+        const stillOld = readFailedCandidateEnvelope(directory, null, filename);
+        if (stillOld.envelopeSha256 !== old.envelopeSha256) {
+            throw new Error('原付费响应保存前候选已变化');
+        }
+        require('./reader-proof-read-scope').assertReaderReceiptSnapshots();
+        saveFailedCandidate(directory, identity, updated);
+        finishRevisionArchives(directory, identity, updated);
+        return loadFailedCandidate(directory, identity);
+    }
     const exact = loadFailedCandidate(directory, identity);
     if (exact) {
         verifyPixels(exact);
