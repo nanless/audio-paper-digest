@@ -1,7 +1,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
-const { extractMarkdownTables, maskProtectedMarkdownTableRegions } = require('../analysis-contract.js');
+const { extractMarkdownTables, maskProtectedMarkdownTableRegions, maskInlineMarkdownCodeSpans } = require('../analysis-contract.js');
 const READER_DRAFT_ORDER_CONTRACT = 'reader-draft-order-v4';
 const TABLE_BINDING_ORDER_ISSUE_CODE = 'reader_table_binding_order_ambiguous';
 const READER_SECTION_KINDS = Object.freeze([
@@ -696,7 +696,7 @@ function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
     normalizeReaderBodyContinuations(draft);
     for (const [index, section] of (Array.isArray(draft?.sections) ? draft.sections : []).entries()) {
         if (typeof section?.body !== 'string') continue;
-        const visible = maskProtectedMarkdownTableRegions(section.body);
+        const visible = maskInlineMarkdownCodeSpans(maskProtectedMarkdownTableRegions(section.body));
         for (const match of section.body.matchAll(/\[\[TABLE_\d+\]\]/g)) {
             if (visible.slice(match.index, match.index + match[0].length) !== match[0]) {
                 throw new Error(`sections[${index}].body 的 ${match[0]} 位于注释、代码或引用中，不能作为正文表格展示`);

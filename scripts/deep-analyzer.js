@@ -50,6 +50,9 @@ const {
     METHOD_DETAIL_CONTRACT_VERSION,
     ANALYSIS_EDITORIAL_LEAKAGE_CONTRACT_VERSION,
     extractMarkdownTables,
+    maskProtectedMarkdownTableRegions,
+    extractVisibleMarkdownImages,
+    maskInlineMarkdownCodeSpans,
     validateExperimentTableContract,
     normalizeExperimentTableNumericFormatting,
     capExperimentTableMetricColumns,
@@ -4625,9 +4628,7 @@ function readerSectionContainsMarker(article, heading, marker) {
 
 function orderApiReaderFiguresByArticle(article, figures) {
     if (!Array.isArray(figures)) return null;
-    const articleUrls = [...String(article || '')
-        .matchAll(/!\[(?:\\.|[^\]\\])*\]\(([^\s)]+)\)/g)]
-        .map(match => match[1]);
+    const articleUrls = extractVisibleMarkdownImages(article).map(image => image.url);
     if (articleUrls.length !== figures.length
         || new Set(articleUrls).size !== articleUrls.length) return null;
     const byUrl = new Map();
@@ -6050,6 +6051,15 @@ function parseApiReaderArticleResult(raw, options = {}) {
             || /(?:\\\[[\s\S]*?\\\]|\$\$[\s\S]*?\$\$)/.test(weakSurface)
             || /\[\[(?:TABLE|FORMULA|FIGURE)_\d+\]\]/.test(weakSurface)) {
             throw new Error('会议 weak source 正文禁止 Markdown 表格、展示公式与 TABLE/FORMULA/FIGURE marker');
+        }
+    }
+    for (const [index, section] of value.sections.entries()) {
+        if (typeof section?.body !== 'string') continue;
+        const visible = maskInlineMarkdownCodeSpans(maskProtectedMarkdownTableRegions(section.body));
+        for (const match of section.body.matchAll(/\[\[(?:FORMULA|FIGURE|CONCEPT_BRIDGE)_\d+\]\]/g)) {
+            if (visible.slice(match.index, match.index + match[0].length) !== match[0]) {
+                throw new Error(`sections[${index}].body 的 ${match[0]} 位于注释、代码或引用中，不能作为正文装配标记`);
+            }
         }
     }
     removeOrphanReaderTableMarkers(value);
@@ -7537,7 +7547,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         : '';
     const mechanicalContract = [buildReaderContractNotice({ version: 3, minimumIntegratedTables, availableTableCount,
         ...readerResultTableRequirement(options.structuredArtifacts) }), capabilityNotice,
-        completeFigureBindingNotice].filter(Boolean).join('\n');
+        completeFigureBindingNotice,
+        'TABLE、FORMULA、FIGURE、CONCEPT_BRIDGE 装配标记必须放在可见正文中，独占一个空行分隔的段落；不得放入 HTML 注释、代码块、行内代码或引用中。表格、原图、公式和术语解释的示例或隐藏副本不能算作正文展示。'].filter(Boolean).join('\n');
     const figureEvidenceEntries = [...String(sourceEvidence || '')
         .matchAll(/^FIGURE_(\d+):\s*([^\n]*)\nFIGURE_\1_URL:\s*([^\s]+)$/gm)]
         .map(match => ({
@@ -17169,7 +17180,11 @@ async function repairTagSelection(paper, analysis, evidenceContext, issue, optio
             return repaired;
         } catch (error) {
             feedback = error.message;
-            if (attempt === 2) throw error;
+            if (attempt === 2) {
+                // 已用完本次标签内容修复次数，整篇重试不能再次发送同一原稿。
+                if (error.code === 'CONTRACT_REJECTED') error.retryable = false;
+                throw error;
+            }
         }
     }
     throw contractRejectedError(`标签局部修复失败：${feedback}`);

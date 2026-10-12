@@ -3238,7 +3238,7 @@ def _reader_literal_html_closed(line, name):
                for match in re.finditer(r'</([A-Za-z]+)\s*>', line))
 
 
-def mask_protected_markdown_table_regions(text):
+def mask_protected_markdown_table_regions(text, *, protect_quotes=True):
     """用等长空格替换隐藏内容，保留原行号；不改可见单元格或来源记录。"""
     fence = None
     quote = False
@@ -3261,11 +3261,12 @@ def mask_protected_markdown_table_regions(text):
             continue
         if html_block and not line.strip():
             html_block = False
-        boundary = None if html_block else re.match(r'^ {0,3}(`{3,}|~{3,})', line)
+        markup_line = line if protect_quotes else re.sub(r'^ {0,3}(?:>[ \t]?)+', '', line)
+        boundary = None if html_block else re.match(r'^ {0,3}(`{3,}|~{3,})', markup_line)
         if fence:
             if (boundary and boundary.group(1)[0] == fence[0]
                     and len(boundary.group(1)) >= len(fence)
-                    and not line[boundary.end():].strip()):
+                    and not markup_line[boundary.end():].strip()):
                 fence = None
             output.append(blank)
             continue
@@ -3273,7 +3274,7 @@ def mask_protected_markdown_table_regions(text):
             fence = boundary.group(1)
             output.append(blank)
             continue
-        starts_html_block = bool(_HTML_TABLE_BLOCK_START.match(line))
+        starts_html_block = bool(_HTML_TABLE_BLOCK_START.match(markup_line))
         # 原样 HTML 里的反引号不是代码；普通单元格里的 HTML 代码示例则须保留。
         probe = line if html_block or comment or starts_html_block else re.sub(
             r'(`+)(?!`)([^\n]*?)\1(?!`)', lambda match: 'x' * len(match.group(0)), line,
@@ -3299,16 +3300,17 @@ def mask_protected_markdown_table_regions(text):
         if html_block:
             output.append(blank)
             continue
-        literal = _reader_literal_html_name(visible)
+        markup_visible = visible if protect_quotes else re.sub(r'^ {0,3}(?:>[ \t]?)+', '', visible)
+        literal = _reader_literal_html_name(markup_visible)
         if literal:
             comment = False
             if not _reader_literal_html_closed(probe, literal):
                 html_literal = literal
             output.append(blank)
             continue
-        terminator = ('?>' if re.match(r'^ {0,3}<\?', visible) else
-                      ']]>' if re.match(r'^ {0,3}<!\[CDATA\[', visible) else
-                      '>' if re.match(r'^ {0,3}<![A-Z]', visible) else None)
+        terminator = ('?>' if re.match(r'^ {0,3}<\?', markup_visible) else
+                      ']]>' if re.match(r'^ {0,3}<!\[CDATA\[', markup_visible) else
+                      '>' if re.match(r'^ {0,3}<![A-Z]', markup_visible) else None)
         if terminator:
             if terminator not in probe:
                 html_terminator = terminator
@@ -3319,11 +3321,11 @@ def mask_protected_markdown_table_regions(text):
             html_block = False
         if re.match(r'^ {0,3}#{1,6}(?:[ \t]|$)', visible):
             quote = False
-        if re.match(r'^ {0,3}>', visible):
+        if protect_quotes and re.match(r'^ {0,3}>', visible):
             quote = True
-        if (starts_html_block and visible.strip()) or re.match(r'^ {0,3}</?(?ai:[a-z][\w-]*)(?:\s+[^<>]*)?\s*/?>[ \t]*$', visible):
+        if (starts_html_block and visible.strip()) or re.match(r'^ {0,3}</?(?ai:[a-z][\w-]*)(?:\s+[^<>]*)?\s*/?>[ \t]*$', markup_visible):
             html_block = True
-        output.append(blank if quote or html_block or re.match(r'^(?: {4}|\t)', visible) else visible)
+        output.append(blank if quote or html_block or re.match(r'^(?: {4}|\t)', markup_visible) else visible)
     return '\n'.join(output)
 
 

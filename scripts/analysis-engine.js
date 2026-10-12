@@ -18,6 +18,9 @@ const {
     analysisManifestRequiresExperimentTableContract,
     analysisManifestRequiresMethodDetailContract,
     extractMarkdownTables,
+    maskProtectedMarkdownTableRegions,
+    extractVisibleMarkdownImages,
+    maskInlineMarkdownCodeSpans,
     REQUIRED_RECOVERY_STAGES,
     isRecoveryStageTerminal,
     validateCoreSummaryStageBinding,
@@ -1143,10 +1146,32 @@ function hasValidApiReaderV3Records(paper) {
     const tableBindings = plan?.tableBindings;
     const formulaBindings = plan?.formulaBindings;
     const sourceBindingsSha256 = stableSha256({ tableBindings, formulaBindings });
+    const visibleArticle = maskProtectedMarkdownTableRegions(article, { excludeQuotes: false });
+    const visibleContent = maskInlineMarkdownCodeSpans(visibleArticle);
+    const visibleImages = extractVisibleMarkdownImages(article);
+    const assembledContentVisible = (!Array.isArray(plan.conceptBridges)
+        || plan.conceptBridges.every(bridge => {
+            if (typeof bridge?.explanation !== 'string' || !bridge.explanation.trim()) return false;
+            const explanation = bridge.explanation.trim();
+            const index = visibleArticle.indexOf(explanation);
+            return index >= 0 && /[\p{L}]/u.test(visibleContent.slice(index, index + explanation.length));
+        }))
+        && visibleImages.length === figures.length
+        && new Set(visibleImages.map(image => image.url)).size === visibleImages.length
+        && figures.every(figure => typeof figure?.url === 'string'
+            && visibleImages.some(image => image.url === figure.url));
     const renderedTables = extractMarkdownTables(article);
-    const renderedFormulaBlocks = String(article || '')
-        .replace(/!\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)/g, '')
-        .match(/\\\[[\s\S]*?\\\]/g) || [];
+    // TeX 内部缩进和字符属于原公式，不应按 Markdown 代码或 HTML 重新解释。
+    // 仅用等长探针检查公式边界；后续哈希和来源核验仍使用原始完整 TeX。
+    const formulaProbe = String(article || '').replace(/\\\[([\s\S]*?)\\\]/g,
+        (_block, latex) => `\\[${latex.replace(/[^\r\n]/g, 'x')}\\]`);
+    const visibleFormulaBoundaries = maskInlineMarkdownCodeSpans(
+        maskProtectedMarkdownTableRegions(formulaProbe, { excludeQuotes: false }));
+    const renderedFormulaBlocks = [...String(article || '').matchAll(/\\\[[\s\S]*?\\\]/g)]
+        .filter(match => !visibleImages.some(image => match.index >= image.start && match.index < image.end)
+            && visibleFormulaBoundaries.slice(match.index, match.index + 2) === '\\['
+            && visibleFormulaBoundaries.slice(match.index + match[0].length - 2, match.index + match[0].length) === '\\]')
+        .map(match => match[0]);
     const sourceBindingsBindArticle = Array.isArray(tableBindings)
         && Array.isArray(formulaBindings)
         && tableBindings.length === renderedTables.length
@@ -1192,6 +1217,7 @@ function hasValidApiReaderV3Records(paper) {
                 && /^[a-f0-9]{64}$/.test(String(binding?.sourceDomSha256 || ''))
                 && binding?.renderedBlockSha256 === crypto.createHash('sha256')
                     .update(block).digest('hex')
+                && renderedFormulaBlocks.filter(value => value === block).length === 1
                 && article.split(block).length === 2
                 && require('./deep-analyzer.js').readerFormulaSourcePayloadValid(binding,
                     plan.structuredSourcePayload, manifest.sourceAcquisition?.structuredArtifactsSha256,
@@ -1209,6 +1235,7 @@ function hasValidApiReaderV3Records(paper) {
     const figurePersistenceValid = figurePersistence === undefined
         || figurePersistence === EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT;
     const diagnosticChecks = {
+        assembled_content_visible: assembledContentVisible,
         concept_markers_assembled: !require('./deep-analyzer.js').findUnassembledApiReaderConceptMarker(article),
         figure_markers_assembled: !require('./deep-analyzer.js').findUnassembledApiReaderFigureMarker(article),
         article_hash: paper.apiReaderArticleSha256 === articleSha256
@@ -1265,7 +1292,8 @@ function hasValidApiReaderV3Records(paper) {
         console.warn(`[analysis-engine] 读者文章 v3 的以下核验项未通过：${failedDiagnosticChecks.join(', ')}`);
     }
     return Boolean(
-        diagnosticChecks.figure_markers_assembled
+        diagnosticChecks.assembled_content_visible
+        && diagnosticChecks.figure_markers_assembled
         && diagnosticChecks.concept_markers_assembled
         && paper.apiReaderArticleSha256 === articleSha256
         && paper.apiReaderPlanSha256 === planSha256

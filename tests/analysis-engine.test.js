@@ -1113,7 +1113,7 @@ describe('analyzePaperWithRetry', () => {
             emptyAuthors.apiReaderAuthors.identitySha256;
         assert.strictEqual(hasValidApiReaderV3Records(emptyAuthors), false,
             'a self-consistent but empty author identity must fail closed');
-        const ephemeral = structuredClone(automatic);
+        const { paper: ephemeral } = require('./reader-signed-draft-fixture').fixture();
         const stable = value => Array.isArray(value) ? value.map(stable)
             : value && typeof value === 'object'
                 ? Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])]))
@@ -1122,8 +1122,9 @@ describe('analyzePaperWithRetry', () => {
             .update(JSON.stringify(stable(value))).digest('hex');
         ephemeral.analysisManifest.contracts.apiReaderFigurePersistence =
             'ephemeral-no-persisted-figure-assets-v1';
-        ephemeral.apiReaderFigures = [{ ordinal: 1, assetSha256: 'a'.repeat(64) }];
-        ephemeral.apiReaderPlan.figurePlacements = [{ figureOrdinal: 1 }];
+        ephemeral.apiReaderFigures = ephemeral.apiReaderFigures.map(
+            require('../scripts/lib/direct-rewrite-analysis-context').stripEphemeralFigureFields
+        );
         ephemeral.apiReaderPlanSha256 = stableHash(ephemeral.apiReaderPlan);
         ephemeral.analysisManifest.stages.apiReaderArticle.planSha256 = ephemeral.apiReaderPlanSha256;
         ephemeral.analysisManifest.stages.apiReaderArticle.figureCount = 1;
@@ -1178,18 +1179,24 @@ describe('analyzePaperWithRetry', () => {
         automatic.analysisManifest.stages.apiReaderArticle.structuredArtifactsSha256 = '2'.repeat(64);
         assert.strictEqual(isSuccessfulAnalysisRecord(automatic), true);
 
-        const resealArticle = () => {
+        const resealArticle = (record = automatic) => {
             const articleSha256 = crypto.createHash('sha256')
-                .update(automatic.apiReaderArticle).digest('hex');
-            automatic.apiReaderArticleSha256 = articleSha256;
-            automatic.analysisManifest.stages.apiReaderArticle.articleSha256 = articleSha256;
+                .update(record.apiReaderArticle).digest('hex');
+            record.apiReaderArticleSha256 = articleSha256;
+            record.analysisManifest.stages.apiReaderArticle.articleSha256 = articleSha256;
         };
-        automatic.apiReaderArticle += '\n\n![Figure under laboratory \\[28\\]](https://arxiv.org/html/2403.14817v1/figure.png)';
+        automatic.apiReaderArticle += '\n\n![未绑定图片](https://arxiv.org/html/2403.14817v1/figure.png)';
         resealArticle();
-        assert.strictEqual(hasValidApiReaderV3Records(automatic), true);
-        automatic.apiReaderArticle += '\n\n\\[x=1\\]';
-        resealArticle();
-        assert.strictEqual(hasValidApiReaderV3Records(automatic), false);
+        assert.strictEqual(hasValidApiReaderV3Records(automatic), false, '未绑定的额外图片不能取得展示资格');
+        const { paper: figureFormula } = require('./reader-signed-draft-fixture').fixture();
+        const originalImage = figureFormula.apiReaderArticle.match(/!\[[^\n]*\]\([^\n]*\)/)[0];
+        figureFormula.apiReaderArticle = figureFormula.apiReaderArticle.replace(originalImage,
+            `![Figure under laboratory \\[28\\]](${figureFormula.apiReaderFigures[0].url})`);
+        resealArticle(figureFormula);
+        assert.strictEqual(hasValidApiReaderV3Records(figureFormula), true);
+        figureFormula.apiReaderArticle += '\n\n\\[x=1\\]';
+        resealArticle(figureFormula);
+        assert.strictEqual(hasValidApiReaderV3Records(figureFormula), false);
 
         const nonApi = validAnalysisPaper('2604.00021v5');
         assert.strictEqual(isSuccessfulAnalysisRecord(nonApi), true);

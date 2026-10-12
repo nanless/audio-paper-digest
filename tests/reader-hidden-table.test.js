@@ -116,3 +116,38 @@ test('普通HTML标签名不能冒充原样区块，原HTML内未闭合注释仍
     assert.equal(extractMarkdownTables('<div>`<!--`\n\n' + table).length, 0);
     assert.equal(extractMarkdownTables('<div>\n<!--\n</div>\n\n-->\n\n' + table)[0].markdown, table);
 });
+
+for (const marker of ['[[CONCEPT_BRIDGE_1]]', '[[FORMULA_1]]', '[[FIGURE_1]]']) {
+    test(`已绑定 ${marker} 不能在HTML注释中装配，正常标记仍通过完整解析`, () => {
+        const sample = require('./reader-signed-draft-fixture').fixture();
+        const options = { requiredVersion: 3, requireIntegratedTables: true,
+            minimumIntegratedTables: 2, availableFigureOrdinals: [1], requireSourceBindings: true,
+            allowDeterministicQuoteRepair: true, structuredArtifacts: sample.sourceDetails.structuredArtifacts,
+            sourceText: sample.sourceDetails.text };
+        assert.doesNotThrow(() => parseApiReaderArticleResult(JSON.stringify(sample.draft), options));
+        const section = sample.draft.sections.find(item => item.body.includes(marker));
+        if (marker === '[[FIGURE_1]]') {
+            const index = section.body.indexOf('\n\n这张图用于确认');
+            section.body = section.body.slice(0, index) + '\n\n<!--\n\n' + section.body.slice(index) + '\n\n-->';
+        } else {
+            section.body = section.body.replace(marker, `<!--\n\n${marker}\n\n-->`);
+        }
+        const original = JSON.stringify(sample.draft);
+        assert.throws(() => parseApiReaderArticleResult(original, options), /注释、代码或引用/);
+        assert.equal(JSON.stringify(sample.draft), original);
+    });
+}
+
+test('同一段落跨行代码中的四类标记必须在装配前被拒绝', () => {
+    for (const marker of ['[[TABLE_1]]', '[[FORMULA_1]]', '[[FIGURE_1]]', '[[CONCEPT_BRIDGE_1]]']) {
+        const sample = marker === '[[TABLE_1]]' ? createFullReaderTableSample()
+            : (() => { const sample = require('./reader-signed-draft-fixture').fixture(); return {
+                payload: sample.draft, options: { requiredVersion: 3, requireIntegratedTables: true,
+                    minimumIntegratedTables: 2, availableFigureOrdinals: [1], requireSourceBindings: true,
+                    allowDeterministicQuoteRepair: true, structuredArtifacts: sample.sourceDetails.structuredArtifacts,
+                    sourceText: sample.sourceDetails.text } }; })();
+        const section = sample.payload.sections.find(item => item.body.includes(marker));
+        section.body = section.body.replace(marker, '`\n' + marker + '\n`');
+        assert.throws(() => parseApiReaderArticleResult(JSON.stringify(sample.payload), sample.options), /注释、代码或引用/);
+    }
+});

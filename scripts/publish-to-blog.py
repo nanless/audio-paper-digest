@@ -5345,22 +5345,78 @@ def _manual_v6_reader_payload(paper):
     return {**payload, 'plan': plan}
 
 
-def _api_reader_article_image_urls(article):
-    """返回 HTTPS 的 Markdown 图片 URL，同时尊重已转义的替代文本字符。"""
-    return re.findall(
-        r'!\[(?:\\.|[^\]\\])*\]\((https://[^\s)]+)\)',
-        article,
+def _api_reader_visible_article(article):
+    # 引用内容仍可见；表格协议单独排除引用，不能借用它隐藏正常图解或公式。
+    return mask_protected_markdown_table_regions(article, protect_quotes=False)
+
+
+def _api_reader_inline_code_ranges(article):
+    text = str(article or '')
+    ranges = []
+    cursor = 0
+    paragraph_boundary = re.compile(
+        r'\n(?:[ \t]*\n| {0,3}(?:#{1,6}(?:[ \t]|$)|>|[-+*][ \t]+(?=\S)|'
+        r'0{0,8}1[.)][ \t]+(?=\S)|(?:-+|\*{3,}|_{3,}|=+)[ \t]*(?=\n|$)))'
     )
+    while cursor < len(text):
+        opening = re.search(r'(?<!`)(`+)(?!`)', text[cursor:])
+        if not opening:
+            break
+        start = cursor + opening.start()
+        end = cursor + opening.end()
+        escaped = start
+        while escaped > 0 and text[escaped - 1] == '\\':
+            escaped -= 1
+        if (start - escaped) % 2:
+            cursor = end
+            continue
+        boundary = paragraph_boundary.search(text, end)
+        limit = boundary.start() if boundary else len(text)
+        closing = re.search(r'(?<!`)`{' + str(end - start) + r'}(?!`)', text[end:limit])
+        if closing:
+            closed = end + closing.end()
+            ranges.append((start, closed))
+            cursor = closed
+        else:
+            cursor = end
+    return ranges
+
+
+def _api_reader_visible_phrase(article, phrase):
+    visible = _api_reader_visible_article(article)
+    code = _api_reader_inline_code_ranges(visible)
+    start = visible.find(phrase)
+    while start >= 0:
+        end = start + len(phrase)
+        remaining = list(visible[start:end])
+        for left, right in code:
+            lower, upper = max(start, left), min(end, right)
+            if lower < upper:
+                remaining[lower - start:upper - start] = [' '] * (upper - lower)
+        if any(char.isalpha() for char in remaining):
+            return True
+        start = visible.find(phrase, start + 1)
+    return False
+
+
+def _api_reader_article_image_urls(article):
+    """只统计可见图片，复用已有平衡括号与行内代码解析。"""
+    # 全部可见地址交给原记录比较和官方 HTTPS 检查；未知地址不能静默过滤。
+    return [image['url'] for image in parse_markdown_images(_api_reader_visible_article(article))]
 
 
 def _api_reader_display_formula_blocks(article):
-    """只统计正文里的展示数学，不统计图片替代文本里转义过的引用。"""
-    visible = re.sub(
-        r'!\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)',
-        '',
-        str(article or ''),
-    )
-    return re.findall(r'\\\[[\s\S]*?\\\]', visible)
+    """只核对可见展示块的位置，返回原始 TeX 字节，保留多行缩进。"""
+    original = str(article or '')
+    visible = _api_reader_visible_article(original)
+    chars = list(visible)
+    for image in parse_markdown_images(visible):
+        chars[image['start']:image['end']] = [' '] * (image['end'] - image['start'])
+    projection = ''.join(chars)
+    code = _api_reader_inline_code_ranges(projection)
+    return [match.group(0) for match in re.finditer(r'\\\[[\s\S]*?\\\]', original)
+            if projection[match.start():match.start() + 2] == r'\['
+            and not any(left <= match.start() < right for left, right in code)]
 
 
 def _api_reader_markdown_tables(article):
@@ -6352,6 +6408,8 @@ def render_ephemeral_api_reader_figures(article, figures):
     if not isinstance(article, str) or not isinstance(figures, list):
         raise PublishDataValidationError('临时图片显示所需的正文必须是字符串，图片记录必须是列表。')
     rendered = article
+    visible = _api_reader_visible_article(rendered)
+    visible_images = parse_markdown_images(visible)
     for figure in figures:
         if not isinstance(figure, dict) or not isinstance(figure.get('url'), str):
             raise PublishDataValidationError('临时图片记录缺失或格式无效，或 URL 不是字符串。')
@@ -6360,12 +6418,22 @@ def render_ephemeral_api_reader_figures(article, figures):
             flags=re.MULTILINE,
         )
         _ephemeral_figure_note(figure)
-        if len(pattern.findall(rendered)) != 1:
+        matching = []
+        for image in visible_images:
+            line_start = visible.rfind('\n', 0, image['start']) + 1
+            line_end = visible.find('\n', image['end'])
+            if line_end < 0:
+                line_end = len(visible)
+            if image['url'] == figure['url'] and pattern.fullmatch(image['raw']) \
+                    and visible[line_start:image['start']] == '' \
+                    and visible[image['end']:line_end] == '':
+                matching.append(image)
+        if len(matching) != 1:
             raise PublishDataValidationError(
                 f'临时使用的论文图 {figure.get("ordinal")} 未在保存的读者正文中恰好出现一次。'
             )
     expected_urls = [figure['url'] for figure in figures]
-    if _api_reader_article_image_urls(rendered) != expected_urls:
+    if [image['url'] for image in visible_images] != expected_urls:
         raise PublishDataValidationError('发布正文中的图片 URL 与保存的图片记录在内容或顺序上不一致。')
     return rendered
 
@@ -6487,7 +6555,7 @@ def _api_reader_payload(paper):
                     or bridge.get('sectionKind') not in allowed_kinds \
                     or bridge.get('marker') != f'[[CONCEPT_BRIDGE_{index}]]' \
                     or not isinstance(bridge.get('explanation'), str) \
-                    or bridge['explanation'] not in article \
+                    or not _api_reader_visible_phrase(article, bridge['explanation']) \
                     or bridge['marker'] in article:
                 raise PublishDataValidationError(
                     f'v{plan_version} 术语说明的字段、适用小节或占位标记不符合要求，或说明内容未完整出现在正文中。'
@@ -6523,6 +6591,9 @@ def _api_reader_payload(paper):
                 raise PublishDataValidationError(
                     f'v{plan_version} 图片位置计划的字段、序号、适用小节、占位标记、导读、解释或观察点不符合要求。'
                 )
+            if not _api_reader_visible_phrase(article, placement['leadQuote']) \
+                    or not _api_reader_visible_phrase(article, placement['explanationQuote']):
+                raise PublishDataValidationError('图片导读或解释未完整出现在可见正文中。')
             seen_placement_ordinals.add(placement['figureOrdinal'])
     figures = paper.get('apiReaderFigures')
     if reader_contract in LLM_API_READER_STRUCTURED_CONTRACTS:

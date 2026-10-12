@@ -430,11 +430,28 @@ function validateAnalysisEditorialLeakageContract(analysis) {
         : null;
 }
 
+function maskMarkdownCodeSpanParagraph(text, fill = ' ') {
+    const output = text.split('');
+    const ticks = [...text.matchAll(/`+/g)];
+    for (let index = 0; index < ticks.length; index += 1) {
+        const start = ticks[index].index;
+        let escaped = 0;
+        for (let before = start - 1; before >= 0 && text[before] === '\\'; before -= 1) escaped += 1;
+        if (escaped % 2) continue;
+        const closing = ticks.findIndex((match, next) => next > index && match[0].length === ticks[index][0].length);
+        if (closing < 0) continue;
+        const end = ticks[closing].index + ticks[closing][0].length;
+        for (let offset = start; offset < end; offset += 1) if (!/[\r\n]/.test(text[offset])) output[offset] = fill;
+        index = closing;
+    }
+    return output.join('');
+}
+
 // 保留字符位置和换行；只遮罩代码、引用及 Markdown 原样 HTML 区域。
 // 优先处理已开始的 HTML 原样块/声明和围栏，其内部不再启动其他 Markdown 状态。
 // 普通 HTML 块到空行结束：忽略内部围栏，但继续跟踪真实 HTML 注释。
 // 行内代码先作等长探针，防止单元格中的 HTML 示例触发注释或区块状态。
-function maskProtectedMarkdownTableRegions(text) {
+function maskProtectedMarkdownTableRegions(text, { excludeQuotes = true } = {}) {
     let fence = null;
     let quote = false;
     let htmlBlock = false;
@@ -443,6 +460,8 @@ function maskProtectedMarkdownTableRegions(text) {
     let htmlTerminator = null;
     return String(text || '').split('\n').map(line => {
         const blank = () => line.replace(/[^\r]/g, ' ');
+        const syntaxLine = excludeQuotes ? line : line.replace(/^ {0,3}(?:>[ \t]?)+/, '');
+        const quotePrefixLength = line.length - syntaxLine.length;
         if (htmlLiteral) {
             if (new RegExp(`</${htmlLiteral}\\s*>`, 'i').test(line)) htmlLiteral = null;
             return blank();
@@ -452,16 +471,16 @@ function maskProtectedMarkdownTableRegions(text) {
             return blank();
         }
         if (htmlBlock && !line.trim()) htmlBlock = false;
-        const boundary = htmlBlock ? null : line.match(/^ {0,3}(`{3,}|~{3,})/);
+        const boundary = htmlBlock ? null : syntaxLine.match(/^ {0,3}(`{3,}|~{3,})/);
         if (fence) {
             if (boundary && boundary[1][0] === fence[0] && boundary[1].length >= fence.length
-                && line.slice(boundary[0].length).trim() === '') fence = null;
+                && syntaxLine.slice(boundary[0].length).trim() === '') fence = null;
             return blank();
         }
         if (boundary && !comment && !htmlLiteral) { fence = boundary[1]; return blank(); }
         // 行内代码里的 HTML 字样是单元格内容，不是注释或 HTML 区块。
-        const startsHtmlBlock = /^ {0,3}<\/?(?:address|article|aside|blockquote|body|caption|center|col|colgroup|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|main|menu|nav|ol|p|section|summary|table|tbody|td|tfoot|th|thead|title|tr|ul)(?=[\s/>])/i.test(line);
-        const probe = (htmlBlock || comment || startsHtmlBlock) ? line : line.replace(/(`+)(?!`)([^\n]*?)\1(?!`)/g, value => 'x'.repeat(value.length));
+        const startsHtmlBlock = /^ {0,3}<\/?(?:address|article|aside|blockquote|body|caption|center|col|colgroup|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|main|menu|nav|ol|p|section|summary|table|tbody|td|tfoot|th|thead|title|tr|ul)(?=[\s/>])/i.test(syntaxLine);
+        const probe = (htmlBlock || comment || startsHtmlBlock) ? line : maskMarkdownCodeSpanParagraph(line, 'x');
         const chars = line.split('');
         for (let index = 0; index < line.length; index += 1) {
             if (comment) {
@@ -476,8 +495,9 @@ function maskProtectedMarkdownTableRegions(text) {
             }
         }
         const visible = chars.join('');
+        const syntaxVisible = visible.slice(quotePrefixLength);
         if (htmlBlock) return blank();
-        const literal = visible.match(/^ {0,3}<(pre|code|script|style|textarea)(?=[\s/>])/iu);
+        const literal = syntaxVisible.match(/^ {0,3}<(pre|code|script|style|textarea)(?=[\s/>])/iu);
         if (literal) {
             // HTML 原样块的内部注释不是 Markdown 注释，不能影响块后的正文。
             comment = false;
@@ -487,21 +507,73 @@ function maskProtectedMarkdownTableRegions(text) {
             if (!new RegExp(`</${literalName}\\s*>`, 'i').test(probe)) htmlLiteral = literalName;
             return blank();
         }
-        const terminator = /^ {0,3}<\?/.test(visible) ? '?>'
-            : /^ {0,3}<!\[CDATA\[/.test(visible) ? ']]>'
-                : /^ {0,3}<![A-Z]/.test(visible) ? '>' : null;
+        const terminator = /^ {0,3}<\?/.test(syntaxVisible) ? '?>'
+            : /^ {0,3}<!\[CDATA\[/.test(syntaxVisible) ? ']]>'
+                : /^ {0,3}<![A-Z]/.test(syntaxVisible) ? '>' : null;
         if (terminator) {
             if (!probe.includes(terminator)) htmlTerminator = terminator;
             return blank();
         }
         if (!visible.trim()) { quote = false; htmlBlock = false; }
-        if (/^ {0,3}#{1,6}(?:[ \t]|$)/.test(visible)) quote = false;
+        if (/^ {0,3}#{1,6}(?:[ \t]|$)/.test(syntaxVisible)) quote = false;
         if (/^ {0,3}>/.test(visible)) quote = true;
         if (startsHtmlBlock && visible.trim()) htmlBlock = true;
-        if (/^ {0,3}<\/?[a-z][\w-]*(?:\s+[^<>]*)?\s*\/?>[ \t]*$/i.test(visible)) htmlBlock = true;
-        if (quote || htmlBlock || /^(?: {4}|\t)/.test(visible)) return blank();
+        if (/^ {0,3}<\/?[a-z][\w-]*(?:\s+[^<>]*)?\s*\/?>[ \t]*$/i.test(syntaxVisible)) htmlBlock = true;
+        if (excludeQuotes && quote || htmlBlock || /^(?: {4}|\t)/.test(syntaxVisible)) return blank();
         return visible;
     }).join('\n');
+}
+
+// 行内代码可以跨一个段落的换行，不能跨空段落、真实标题或表格区块。
+function maskInlineMarkdownCodeSpans(text) {
+    const lines = String(text || '').split('\n');
+    const tableLines = new Set(extractMarkdownTables(text).flatMap(table =>
+        Array.from({ length: table.endLine - table.startLine + 1 }, (_, index) => table.startLine + index)));
+    const output = lines.slice();
+    let first = 0;
+    const flush = end => {
+        if (end <= first) return;
+        const paragraph = maskMarkdownCodeSpanParagraph(lines.slice(first, end).join('\n'));
+        output.splice(first, end - first, ...paragraph.split('\n'));
+    };
+    for (let index = 0; index < lines.length; index += 1) {
+        if (!lines[index].trim() || tableLines.has(index)
+            || /^ {0,3}(?:#{1,6}[ \t]|(?:[-+*]|\d+[.)])[ \t])/.test(lines[index])) {
+            flush(index);
+            output[index] = maskMarkdownCodeSpanParagraph(lines[index]);
+            first = index + 1;
+        }
+    }
+    flush(lines.length);
+    return output.join('\n');
+}
+
+// Markdown 图片的地址允许平衡括号；共享扫描用于图的排序和可见性核验。
+function extractVisibleMarkdownImages(text) {
+    const original = String(text || '');
+    const visible = maskInlineMarkdownCodeSpans(
+        maskProtectedMarkdownTableRegions(original, { excludeQuotes: false }));
+    const images = [];
+    for (const match of visible.matchAll(/!\[(?:\\.|[^\]\\\n])*\]\(/g)) {
+        const start = match.index;
+        let backslashes = 0;
+        for (let index = start - 1; index >= 0 && visible[index] === '\\'; index -= 1) backslashes += 1;
+        if (backslashes % 2 === 1) continue;
+        let index = start + match[0].length;
+        const urlStart = index;
+        let depth = 1;
+        for (; index < visible.length && !/[\r\n]/.test(visible[index]); index += 1) {
+            if (visible[index] === '\\') { index += 1; continue; }
+            if (visible[index] === '(') depth += 1;
+            if (visible[index] === ')' && --depth === 0) break;
+        }
+        if (depth !== 0) continue;
+        const destination = visible.slice(urlStart, index).trim();
+        // 现有装配器使用无标题的 URL；遇未知地址也返回给调用者核对，不能静默忽略。
+        const url = destination.replace(/^<([^>]+)>$/, '$1').replace(/\\([()])/g, '$1');
+        images.push({ url, markdown: original.slice(start, index + 1), start, end: index + 1 });
+    }
+    return images;
 }
 
 function extractMarkdownTables(text) {
@@ -2574,6 +2646,8 @@ module.exports = {
     splitMarkdownTableRow,
     extractMarkdownTables,
     maskProtectedMarkdownTableRegions,
+    extractVisibleMarkdownImages,
+    maskInlineMarkdownCodeSpans,
     repairMissingMarkdownTableSeparators,
     normalizeExperimentTableNumericFormatting,
     capExperimentTableMetricColumns,

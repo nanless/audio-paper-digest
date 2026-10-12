@@ -207,19 +207,24 @@ test('修订参考只逆转精确来源图块，保留导读、解释和旧计�
     assert.equal(JSON.stringify(paper), originalPaper);
 });
 
-test('不精确或重复的完整图块不能靠修订参考猜测删改', () => {
-    for (const scenario of ['修改图注', '重复整块']) {
-        const paper = createReaderPaperSample();
-        const figureSample = addBoundFigure(paper, 1);
-        if (scenario === '修改图注') {
-            paper.apiReaderArticle = paper.apiReaderArticle.replace('：“原始图注”。*', '：“另一解释”。*');
-        } else {
-            paper.apiReaderArticle += `\n\n${figureSample.block}`;
-        }
-        refreshBoundSample(paper);
-        assert.throws(() => prepareApiReaderRevisionSeed(paper, sourceText, '修事实'),
-            /无法精确重放 Figure 1 注入块/);
-    }
+test('图注被修改但图片资格仍有效时，修订参考必须精确拒绝错误图块', () => {
+    const paper = createReaderPaperSample();
+    addBoundFigure(paper, 1);
+    paper.apiReaderArticle = paper.apiReaderArticle.replace('：“原始图注”。*', '：“另一解释”。*');
+    refreshBoundSample(paper);
+    assert.equal(hasValidApiReaderV3Records(paper), true);
+    assert.throws(() => prepareApiReaderRevisionSeed(paper, sourceText, '修事实'),
+        /无法精确重放 Figure 1 注入块/);
+});
+
+test('重复完整图块先因图片不一一对应而失去资格，不能进入修订参考', () => {
+    const paper = createReaderPaperSample();
+    const figureSample = addBoundFigure(paper, 1);
+    paper.apiReaderArticle += `\n\n${figureSample.block}`;
+    refreshBoundSample(paper);
+    assert.equal(hasValidApiReaderV3Records(paper), false);
+    assert.throws(() => prepareApiReaderRevisionSeed(paper, sourceText, '修事实'),
+        /^Error: 定向修订需要完整的读者文章，且正文、写作计划和分析阶段的 SHA 记录须一致。$/);
 });
 
 test('原始公式只从修订正文逆回标记，TeX 和来源记录仍保留在计划', () => {
