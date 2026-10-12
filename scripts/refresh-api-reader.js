@@ -344,9 +344,23 @@ function finishReviewedPrimaryReaderRefresh(previous, refreshed, plan, options =
             !== JSON.stringify(facts.current(normalizedId(previous)).proof)) {
         throw new Error('新 Reader 的反馈身份与本次授权不同');
     }
-    if (!Number.isFinite(Date.parse(stage.refreshedAt))
-        || !(Date.parse(stage.refreshedAt) > Date.parse(previous.latestAnalysisAttemptAt))) {
-        throw new Error('Reader 成功收尾没有晚于原失败的完成记录');
+    const completedAt = Date.parse(stage.refreshedAt);
+    const hadFailure = Boolean(previous.latestAnalysisAttemptError || previous.error
+        || previous.digestStatus?.latestAttemptStatus === 'analysis_failed');
+    const previousReader = previous.analysisManifest?.stages?.apiReaderArticle;
+    const oldCompletionKey = Object.hasOwn(previousReader || {}, 'refreshedAt')
+        ? 'refreshedAt' : Object.hasOwn(previousReader || {}, 'updatedAt') ? 'updatedAt' : null;
+    const previousCompletedAt = oldCompletionKey ? previousReader[oldCompletionKey] : undefined;
+    // 正常成功稿没有失败时间；不能把不存在的失败转成 NaN 后拒绝已付费修订。
+    // 有失败仍严格核原失败时间，存在旧 Reader 完成时间时也必须晚于它。
+    if (!Number.isFinite(completedAt)
+        || (hadFailure || options.readerFactLocalRevision !== true)
+            && (!Number.isFinite(Date.parse(previous.latestAnalysisAttemptAt))
+                || !(completedAt > Date.parse(previous.latestAnalysisAttemptAt)))
+        || oldCompletionKey !== null
+            && (!Number.isFinite(Date.parse(previousCompletedAt))
+                || !(completedAt > Date.parse(previousCompletedAt)))) {
+        throw new Error('Reader 成功收尾没有晚于原失败或旧 Reader 的有效完成记录');
     }
     const result = structuredClone(refreshed);
     const failure = Object.fromEntries(Object.entries(previous).filter(([key]) =>

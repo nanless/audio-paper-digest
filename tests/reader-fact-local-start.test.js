@@ -336,7 +336,7 @@ test('正常生成器只发一次有界正文补丁，不发全文并记真实�
     });
 });
 
-test('真实公共入口在新Reader纠正后才归档旧失败，主文及原proof不变', async (t) => {
+test('真实公共入口拒坏旧时间并保存无旧失败成功稿，主文及原proof不变', async (t) => {
     const sample = await createLocalSample(t);
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reader-fact-public-'));
     const keys = ['deepAnalysisResult', 'papers', 'papersLegacy', 'runtimeDir'];
@@ -497,6 +497,44 @@ test('真实公共入口在新Reader纠正后才归档旧失败，主文及原pr
             before,
         );
     }
+    // 原有旧失败成功保存路径保留；归档失败时间、费用阶段与主文 proof 不变。
+    writeInput(sample.paper);
+    await facts.withFactReview(sample.bound, () => publicRefresh(sample.id, {
+        readerFactLocalRevision: true,
+        reviewFeedback: facts.reviewFeedback('apiReaderArticle', sample.id),
+        operations: { article: async (paper, _source, options) => {
+            calls++;
+            return correctedPaper(paper, options.reviewFeedback);
+        } },
+    }));
+    const withFailureSaved = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[0];
+    assert.equal(engine.isSuccessfulAnalysisRecord(withFailureSaved), true);
+    assert.equal(withFailureSaved.readerCompletedPrimaryRecoveryHistory.at(-1).failure.latestAnalysisAttemptError,
+        sample.paper.latestAnalysisAttemptError);
+    assert.equal(withFailureSaved.analysis, sample.paper.analysis);
+    assert.deepEqual(withFailureSaved.analysisManifest.stages.scoringAudit, sample.paper.analysisManifest.stages.scoringAudit);
+    assert.deepEqual(withFailureSaved.analysisManifest.stages.primaryAnalysis.factReview, originalMainProof);
+    // 公共入口必须能保存没有旧失败的成功稿，仍保留其他阶段与费用。
+    for (const key of ['latestAnalysisAttemptError', 'latestAnalysisAttemptAt',
+        'latestAnalysisAttemptErrorCode', 'latestAnalysisAttemptRetryable', 'error']) {
+        delete sample.paper[key];
+    }
+    sample.paper.digestStatus = { latestAttemptStatus: 'analysis_success' };
+    sample.paper.analysisManifest.stages.apiReaderArticle.refreshedAt = '2026-10-11T00:00:00.000Z';
+    for (const invalidOldTime of ['', null, '无效时间', '2026-10-13T00:00:00.000Z']) {
+        const invalid = structuredClone(sample.paper);
+        invalid.analysisManifest.stages.apiReaderArticle.refreshedAt = invalidOldTime;
+        writeInput(invalid);
+        const bytes = fs.readFileSync(Config.FILES.deepAnalysisResult);
+        await facts.withFactReview(sample.bound, () => assert.rejects(
+            publicRefresh(sample.id, {
+                readerFactLocalRevision: true,
+                reviewFeedback: facts.reviewFeedback('apiReaderArticle', sample.id),
+                operations: { article: async (paper, _source, options) => correctedPaper(paper, options.reviewFeedback) },
+            }), /有效完成记录/,
+        ));
+        assert.deepEqual(fs.readFileSync(Config.FILES.deepAnalysisResult), bytes);
+    }
     writeInput(sample.paper);
     await facts.withFactReview(sample.bound, () =>
         publicRefresh(sample.id, {
@@ -512,7 +550,7 @@ test('真实公共入口在新Reader纠正后才归档旧失败，主文及原pr
             },
         }),
     );
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
     const saved = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult))
         .papers[0];
     assert.equal(engine.isSuccessfulAnalysisRecord(saved), true);

@@ -1965,11 +1965,28 @@ function verifiedReaderFactIssues(draft, claims) {
         const matches = (draft?.sections || []).flatMap((section, index) => {
             // 只看正文完整原句，不以来源引文、绑定元数据或零散术语授权改写。
             const mask = value => value.replace(/[^\n]/g, ' ');
-            const prose = String(section?.body || '')
+            const protectedBody = String(section?.body || '')
                 .replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, mask)
                 .replace(/`+[^`\n]*`+|\$\$[\s\S]*?\$\$|\$[^$\n]*\$|\\\[[\s\S]*?\\\]|\\\([^\n]*?\\\)/g, mask)
-                .replace(/“[^”]*”|「[^」]*」|"[^"\n]*"/g, mask)
-                .split('\n').map(line => /^\s*>/.test(line) || line.includes('|') ? mask(line) : line).join('\n');
+                .replace(/“[^”]*”|「[^」]*」|"[^"\n]*"/g, mask);
+            // 普通段落中的绝对值、分隔符不是表格。沿用完整解析器的表块识别，
+            // 仅保护有列头和分隔行的 Markdown 表格，保持原行号及字节位置。
+            const tableLines = new Set(require('../analysis-contract').extractMarkdownTables(protectedBody)
+                .flatMap(table => Array.from({ length: table.endLine - table.startLine + 1 },
+                    (_, offset) => table.startLine + offset)));
+            // 一列表也可能承载原文；完整解析器只收至少两列，这里仍保护其严格表块。
+            const lines = protectedBody.split('\n');
+            for (let lineIndex = 0; lineIndex + 1 < lines.length; lineIndex++) {
+                if (!/^\s*\|[^|\n]+\|\s*$/.test(lines[lineIndex])
+                    || !/^\s*\|\s*:?-{3,}:?\s*\|\s*$/.test(lines[lineIndex + 1])) continue;
+                tableLines.add(lineIndex);
+                tableLines.add(lineIndex + 1);
+                for (let row = lineIndex + 2; row < lines.length
+                    && /^\s*\|[^|\n]+\|\s*$/.test(lines[row]); row++) tableLines.add(row);
+            }
+            const prose = lines.map((line, lineIndex) => (
+                /^\s*>/.test(line) || tableLines.has(lineIndex) ? mask(line) : line
+            )).join('\n');
             return Array.from({ length: prose.split(claim).length - 1 },
                 () => `/sections/${index}/body`);
         });
