@@ -98,7 +98,7 @@ function readOwner(paper) {
 function assertScopeLock(scope) {
     if (readOwner(scope.paper).token !== scope.token) throw new Error('Reader 新轮论文锁已变化');
 }
-function withExplicitRound(paper, grant, callback) {
+function assertRoundSource(paper, grant) {
     assertGrant(grant);
     const fresh = require('./fresh-analysis-context');
     if (!fresh.isDailyFreshSourceScope()) throw new Error('明确 Reader 新轮只允许完整封存日更来源');
@@ -111,11 +111,14 @@ function withExplicitRound(paper, grant, callback) {
     for (const [name, expected] of Object.entries(grant.sourceFiles)) {
         if (hash(fs.readFileSync(path.join(sourceDirectory, name))) !== expected) throw new Error('Reader 新轮四份来源 SHA 不匹配');
     }
-    if (grant.paperId !== idOf(paper)
-        || hash(paper.analysisCheckpoint || paper.analysis || '') !== grant.wholeSha256) {
+    if (grant.paperId !== idOf(paper)) throw new Error('Reader 付费轮与当前论文不匹配');
+    return readOwner(paper);
+}
+function withExplicitRound(paper, grant, callback) {
+    const owner = assertRoundSource(paper, grant);
+    if (hash(paper.analysisCheckpoint || paper.analysis || '') !== grant.wholeSha256) {
         throw new Error('Reader 新轮授权与锁内当前论文不匹配');
     }
-    const owner = readOwner(paper);
     return grantScope.run({ paper, grant, token: owner.token }, callback);
 }
 function paths(directory, roundId) {
@@ -430,47 +433,54 @@ function restoreExplicitRoundOriginalDraftChecked(directory, identity, payload, 
     const draft = repair.parseRecoveryDraft(original.payload?.draft) || repair.parseRecoveryDraft(original.payload?.rawDraft);
     if (!draft || draft.sections.length < 12 || draft.sections.some(section => !section
         || ['kind', 'heading', 'body'].some(key => typeof section[key] !== 'string' || !section[key].trim()))) return payload;
-    return withExplicitRound(paper, receipt.grant, () => {
-        const currentFile = path.join(directory, `${repair.hashDraft(identity)}.json`);
-        const current = readMigrationEnvelope(currentFile);
-        if (repair.hashDraft(current.envelope.identity) !== repair.hashDraft(identity)
-            || current.envelope.payloadSha256 !== repair.hashDraft(current.envelope.payload)
-            || repair.hashDraft(current.envelope.payload) !== repair.hashDraft(payload)
-            || hash(source.bytes) !== receipt.grant.envelopeSha256
-            || repair.hashDraft(original.payload) !== receipt.grant.payloadSha256
-            || repair.hashDraft(original.identity) !== receipt.grant.originalIdentitySha256
-            || hash(fs.readFileSync(receiptFile)) !== hash(checkedReceipt.bytes)) {
-            throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同一轮原稿恢复的当前候选、原档或付费账已变化');
+    // 恢复已有稿件不安装新轮；实际长文输入已在上方逐项核验。
+    // 主文中的评分和资源可达状态可以更新，但四份来源、论文锁和原调用账仍须完全一致。
+    const owner = assertRoundSource(paper, receipt.grant);
+    require('./fresh-analysis-context').freshReaderAttemptsDirectory(directory);
+    const currentSourceIdentity = require('./fresh-analysis-context').freshAnalysisIdentity(paper.arxivId);
+    if (repair.hashDraft(identity.freshAnalysis) !== repair.hashDraft(currentSourceIdentity)) {
+        throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同一轮原稿恢复缺少当前封存来源证明');
+    }
+    const currentFile = path.join(directory, `${repair.hashDraft(identity)}.json`);
+    const current = readMigrationEnvelope(currentFile);
+    if (repair.hashDraft(current.envelope.identity) !== repair.hashDraft(identity)
+        || current.envelope.payloadSha256 !== repair.hashDraft(current.envelope.payload)
+        || repair.hashDraft(current.envelope.payload) !== repair.hashDraft(payload)
+        || hash(source.bytes) !== receipt.grant.envelopeSha256
+        || repair.hashDraft(original.payload) !== receipt.grant.payloadSha256
+        || repair.hashDraft(original.identity) !== receipt.grant.originalIdentitySha256
+        || hash(fs.readFileSync(receiptFile)) !== hash(checkedReceipt.bytes)) {
+        throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同一轮原稿恢复的当前候选、原档或付费账已变化');
+    }
+    const archivedName = `${repair.hashDraft(identity)}.round-original-restoration-${hash(current.bytes)}.json`;
+    const archivedFile = path.join(directory, archivedName);
+    if (fs.existsSync(archivedFile)) {
+        if (hash(readMigrationEnvelope(archivedFile).bytes) !== hash(current.bytes)) {
+            throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同一轮原稿恢复的占位稿原字节已变化');
         }
-        const archivedName = `${repair.hashDraft(identity)}.round-original-restoration-${hash(current.bytes)}.json`;
-        const archivedFile = path.join(directory, archivedName);
-        if (fs.existsSync(archivedFile)) {
-            if (hash(readMigrationEnvelope(archivedFile).bytes) !== hash(current.bytes)) {
-                throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同一轮原稿恢复的占位稿原字节已变化');
-            }
-        } else {
-            const fd = fs.openSync(archivedFile, 'wx', 0o600);
-            try { fs.writeFileSync(fd, current.bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
-        }
-        const next = { ...payload, draft, rawDraft: JSON.stringify(draft),
-            draftOrderMappings: original.payload.draftOrderMappings || [],
-            issues: original.payload.issues || [], noProgress: 0, failureSignature: '',
-            validationFailureSignature: '', validationFailureStreak: 0,
-            readerOriginalDraftRestorations: [...(payload.readerOriginalDraftRestorations || []), {
-                contract: 'reader-explicit-round-original-draft-restoration-v1', restoredAt: new Date().toISOString(),
-                roundId: receipt.grant.roundId, currentIdentitySha256: repair.hashDraft(identity),
-                placeholderArchiveName: archivedName, placeholderEnvelopeSha256: hash(current.bytes),
-                placeholderPayloadSha256: repair.hashDraft(payload), originalEnvelopeSha256: hash(source.bytes),
-                originalPayloadSha256: repair.hashDraft(original.payload), originalDraftSha256: repair.hashDraft(draft),
-                originalIdentitySha256: repair.hashDraft(original.identity), parentReceiptSha256: hash(checkedReceipt.bytes),
-                preservedAttempts: payload.attempts, preservedFullAttempts: payload.fullAttempts,
-                preservedPhysicalRequests: receipt.physicalRequests,
-                preservedReservedOutputTokens: receipt.reservedOutputTokens,
-                originalAttempts: original.payload.attempts, originalFullAttempts: original.payload.fullAttempts
-            }] };
-        repair.saveFailedCandidate(directory, identity, next);
-        return next;
-    });
+    } else {
+        const fd = fs.openSync(archivedFile, 'wx', 0o600);
+        try { fs.writeFileSync(fd, current.bytes); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+    }
+    const next = { ...payload, draft, rawDraft: JSON.stringify(draft),
+        draftOrderMappings: original.payload.draftOrderMappings || [],
+        issues: original.payload.issues || [], noProgress: 0, failureSignature: '',
+        validationFailureSignature: '', validationFailureStreak: 0,
+        readerOriginalDraftRestorations: [...(payload.readerOriginalDraftRestorations || []), {
+            contract: 'reader-explicit-round-original-draft-restoration-v1', restoredAt: new Date().toISOString(),
+            roundId: receipt.grant.roundId, currentIdentitySha256: repair.hashDraft(identity),
+            placeholderArchiveName: archivedName, placeholderEnvelopeSha256: hash(current.bytes),
+            placeholderPayloadSha256: repair.hashDraft(payload), originalEnvelopeSha256: hash(source.bytes),
+            originalPayloadSha256: repair.hashDraft(original.payload), originalDraftSha256: repair.hashDraft(draft),
+            originalIdentitySha256: repair.hashDraft(original.identity), parentReceiptSha256: hash(checkedReceipt.bytes),
+            preservedAttempts: payload.attempts, preservedFullAttempts: payload.fullAttempts,
+            preservedPhysicalRequests: receipt.physicalRequests,
+            preservedReservedOutputTokens: receipt.reservedOutputTokens,
+            originalAttempts: original.payload.attempts, originalFullAttempts: original.payload.fullAttempts
+        }] };
+    assertScopeLock({ paper, token: owner.token });
+    repair.saveFailedCandidate(directory, identity, next);
+    return next;
 }
 
 function withPhysicalBudget(proof, paper, callback) {
