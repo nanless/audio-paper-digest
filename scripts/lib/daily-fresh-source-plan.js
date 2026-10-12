@@ -251,25 +251,31 @@ function readDailyFreshSource(plan, paper) {
     return details;
 }
 
-function isPaperBoundToPlan(paper, plan) {
+function readBoundDailySource(paper, plan) {
     const id = normalizedId(paper);
     // 这篇不在计划里就谈不上绑定，保持原来的结论，交给调用方按未绑定处理。
-    if (!plan || !Array.isArray(plan.paperIds) || !plan.paperIds.includes(id)) return false;
+    if (!plan || !Array.isArray(plan.paperIds) || !plan.paperIds.includes(id)) return null;
     let details;
     try {
         details = readDailyFreshSource(plan, paper);
     } catch (error) {
-        if (isSourceAbsent(error)) return false;
+        if (isSourceAbsent(error)) return null;
         // 来源在，只是读不出来。这里必须抛：返回 false 会让 prepareDailyPaper 删掉
         // GENERATED_FIELDS，把读取失败伪装成来源换新。
         fail(`${id} 的封存来源读不出来（${error.message}）；读取失败不等于来源换新，已停止`);
     }
-    return paperProvesBinding(paper, plan, details);
+    return paperProvesBinding(paper, plan, details) ? details : null;
+}
+
+function isPaperBoundToPlan(paper, plan) {
+    return Boolean(readBoundDailySource(paper, plan));
 }
 
 function isPaperReusableForAnalysis(paper, plan) {
-    return isPaperBoundToPlan(paper, plan)
-        && require('./reader-author-source.js').canReuseReaderAuthorInputs(paper, readDailyFreshSource(plan, paper));
+    // 同一次同步判断共用刚核验的来源；下次调用仍重新读取四份文件。
+    const details = readBoundDailySource(paper, plan);
+    return Boolean(details)
+        && require('./reader-author-source.js').canReuseReaderAuthorInputs(paper, details);
 }
 
 // 这一步只比内存里的记录。比对本身出错（证明字段缺失、类型不对）说明这篇给不出

@@ -345,6 +345,30 @@ async function capturedPlanWithBoundPaper(t, id, batchId) {
     return { plan, bound, generation: path.join(plan.sourcesDir, id, 'generation-000001') };
 }
 
+test('同次复用判断只读一次来源，下次判断仍发现文件变化', async t => {
+    const { plan, bound, generation } = await capturedPlanWithBoundPaper(t, '2609.12353', 'reuse-source-read');
+    const originalRead = fresh.readFreshSource;
+    let reads = 0;
+    t.mock.method(fresh, 'readFreshSource', (...args) => { reads++; return originalRead(...args); });
+    assert.equal(daily.isPaperReusableForAnalysis(bound, plan), true);
+    assert.equal(reads, 1);
+    assert.equal(daily.isPaperReusableForAnalysis(bound, plan), true);
+    assert.equal(reads, 2, '独立调用不能沿用上一次来源检查');
+    fs.appendFileSync(path.join(generation, 'source.pdf'), 'changed');
+    assert.throws(() => daily.isPaperReusableForAnalysis(bound, plan), /封存来源读不出来/);
+    assert.equal(reads, 3);
+    assert.equal(bound.analysis, '已完成的整篇分析');
+});
+
+test('复用判断仍拒绝不符的来源证明和作者记录', async t => {
+    const { plan, bound } = await capturedPlanWithBoundPaper(t, '2609.12354', 'reuse-source-proof');
+    const wrongProof = structuredClone(bound);
+    wrongProof.freshRewriteProvenance.sourceSha256 = '0'.repeat(64);
+    assert.equal(daily.isPaperReusableForAnalysis(wrongProof, plan), false);
+    bound.analysisManifest.contracts = { apiReaderArticle: 'beginner-researcher-v3' };
+    assert.equal(daily.isPaperReusableForAnalysis(bound, plan), false, '来源绑定通过不能代替作者身份核验');
+});
+
 test('来源存在但读不出来时，日更绑定判定报错，不把读取失败当成来源换新', async t => {
     const id = '2609.12351';
     const { plan, bound, generation } = await capturedPlanWithBoundPaper(t, id, 'read-failure-binding');
