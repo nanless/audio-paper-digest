@@ -475,7 +475,7 @@ function renderReaderTableSelection(binding, artifacts) {
         || (effectiveRows.inferred && sourceRows.slice(1).some(row => !effectiveRows.bodyRows.includes(row)))) {
         throw new Error(`${label} 第一行必须是原表头，其余行必须是数据行；`
             + `sourceTableOrdinal=${sourceTableOrdinal}，有效表头行=${JSON.stringify(headerRows)}，`
-            + `当前选择行=${JSON.stringify(requestedSourceRows)}。全幅分组标题不能作为列头或数据行。修正本项行选择错误时只修改本 binding 的 sourceRows，不得改写原表；若另有正文标记或位置错误，仍须在对应授权正文中单独修正，不能据此禁止必要的正文修复。`);
+            + `当前选择行=${JSON.stringify(requestedSourceRows)}。全幅分组标题不能作为列头或数据行。优先只修正本 binding 的 sourceRows，不得改写原表。若原HTML将数据行标成表头，或列头、单位及分组信息跨行，无法通过选择一行列头无损保留比较条件，不要猜测或篡改行角色：本 binding 已获整项修复授权时，可保留 tableIndex 和 sourceTableOrdinal，改为已有 completeTable 声明，让程序逐原始DOM坐标复制完整原表。不得混入 sourceRows/sourceColumns、手写单元格或删减原表；完整表仍须通过全部来源、数字、单位和正文校验。若另有正文标记或位置错误，仍须在对应授权正文中单独修正，不能据此禁止必要的正文修复。`);
     }
     const cellBindings = [];
     const matrix = sourceRows.map((sourceRow, renderedRow) => sourceColumns.map((sourceColumn, renderedColumn) => {
