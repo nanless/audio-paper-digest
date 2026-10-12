@@ -1752,6 +1752,22 @@ class PublishToBlogReviewTest(unittest.TestCase):
             )
         )
 
+    def test_core_summary_accepts_nll_but_rejects_missing_metric(self):
+        sample = subprocess.check_output(
+            ['node', '-e', "process.stdout.write(require('./tests/valid-analysis-fixture').validAnalysisText())"],
+            cwd=ROOT, text=True,
+        )
+        summary = re.search(r'## 核心摘要\n([\s\S]*?)(?=\n## 方法概述和架构)', sample).group(1)
+        original = '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。'
+        padding = '上述对比仅适用于该评测范围，不同输入质量与真实使用环境中的可靠程度仍需要进一步核验。'
+        result = '在 Nottingham 测试集上，测试 NLL 从 1.2 bits per token 降至 0.6 bits per token，本文模型优于基线。'
+        self.assertIsNone(publish_to_blog._detailed_core_summary_semantic_issue(
+            summary.replace(original, result + padding)))
+        for invalid in [result.replace('测试 NLL ', '').replace(' bits per token', ''),
+                        result.replace('测试 NLL', 'NLL模型').replace(' bits per token', '')]:
+            self.assertIsNotNone(publish_to_blog._detailed_core_summary_semantic_issue(
+                summary.replace(original, invalid + padding)))
+
     def test_core_summary_accepts_bounded_fvd_but_keeps_other_result_gates(self):
         summary = (
             '任务以粗糙实例掩码、文本描述与原始音视频为输入，输出在保留背景与非目标音频前提下对指定实例的视听同步编辑，难点在于粗掩码导致背景泄露与音频时序不可控。'

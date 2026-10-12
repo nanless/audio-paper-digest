@@ -2878,6 +2878,27 @@ function isReaderHeadingIssue(issue, article) {
     return /^###\s+/.test(line) && line.includes(String(issue.match || '').trim());
 }
 
+function demoteReaderBodySectionHeadings(body) {
+    let fence = null;
+    let quoted = false;
+    return String(body).split('\n').map(line => {
+        const boundary = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+        if (fence) {
+            if (boundary && boundary[1][0] === fence.character
+                && boundary[1].length >= fence.length && !boundary[2].trim()) fence = null;
+            return line;
+        }
+        if (boundary) {
+            fence = { character: boundary[1][0], length: boundary[1].length };
+            return line;
+        }
+        if (!line.trim()) quoted = false;
+        if (/^ {0,3}>/.test(line)) quoted = true;
+        if (quoted || /^(?: {4}|\t)/.test(line)) return line;
+        return line.replace(/^( {0,3})###(?=[ \t]+\S)/, '$1####');
+    }).join('\n');
+}
+
 function restoreReaderSectionHeadings(article, sections) {
     let index = 0;
     return String(article || '').replace(/^###\s+.+?\s*$/gm, () => {
@@ -6037,7 +6058,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
     const normalizedSections = value.sections.map(section => ({
         ...section,
         heading: normalizeReaderProseFormatting(section.heading.trim()),
-        body: splitReaderLongParagraphs(section.body)
+        body: splitReaderLongParagraphs(demoteReaderBodySectionHeadings(section.body))
     }));
     const kinds = new Set(normalizedSections.map(section => section.kind));
     const missing = API_READER_REQUIRED_KINDS.filter(kind => !kinds.has(kind));
@@ -17116,7 +17137,11 @@ async function repairCoreSummarySection(
         console.warn(`    [deep] ⚠️  本次核心摘要局部修复仍未通过校验（${attempt}/3）：${issue}`);
         feedback = [issue, externalFeedback].filter(Boolean).join('\n');
     }
-    throw contractRejectedError(`核心摘要局部修复失败：${feedback}`);
+    const exhausted = contractRejectedError(`核心摘要局部修复失败：${feedback}`);
+    // 本阶段已经完成三次内容修复，整篇自动重试不能再从相同原稿重新付费。
+    // 实际请求、响应和最后候选仍保存在原诊断记录中，原正文保持不变。
+    exhausted.retryable = false;
+    throw exhausted;
 }
 
 async function repairMissingAnalysisSections(
@@ -17817,6 +17842,7 @@ module.exports = {
     isAllowedReaderDefensiveNegationIssue,
     splitReaderLongParagraphs,
     normalizeReaderProseFormatting,
+    demoteReaderBodySectionHeadings,
     normalizeApiReaderFigureMarkdown,
     normalizeReaderFigureMetricUnits,
     repairApiReaderArticleAndPlanBindings,
