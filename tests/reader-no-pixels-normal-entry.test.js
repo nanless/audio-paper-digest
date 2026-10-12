@@ -55,14 +55,13 @@ test('有像素、行内图标记、代码围栏或超过八个目标时不做�
     assert.equal(repair.normalizeUnavailableReaderFigures(tooMany, []), null);
 });
 
-test('机械删除标记不改颜色曲线陈述，不给正文合格证明', () => {
+test('有颜色曲线陈述时拒绝机械删图并完整保留原稿', () => {
     const repair = require('../scripts/lib/reader-repair.js');
     const body = '蓝色曲线下降且指标值512保持。\n\n[[FIGURE_1]]\n\n其余事实不变。';
     const draft = { figurePlacements: [{ figureOrdinal: 1 }], sections: [{ kind: 'result', body }] };
-    const cleaned = repair.normalizeUnavailableReaderFigures(draft, []);
-    assert.equal(cleaned.draft.sections[0].body, body.replace('[[FIGURE_1]]\n', ''));
-    assert.equal(cleaned.mapping.contentValidated, false);
-    assert.deepEqual(cleaned.mapping.paths, ['/figurePlacements', '/sections/0/body']);
+    const before = repair.hashDraft(draft);
+    assert.equal(repair.normalizeUnavailableReaderFigures(draft, []), null);
+    assert.equal(repair.hashDraft(draft), before);
     assert.equal(draft.sections[0].body, body);
 });
 

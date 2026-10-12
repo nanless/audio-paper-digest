@@ -613,7 +613,8 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         }
         seen.push(item.path);
     }
-    if (patch.replacements.some(item => item.path === '/figurePlacements')) {
+    if (patch.replacements.some(item => item.path === '/figurePlacements')
+        && options.atomicOperation?.kind !== 'cleanup_unavailable_figures_v1') {
         for (const item of patch.replacements) {
             if (item.path === '/figurePlacements') continue;
             if (!/^\/sections\/\d+\/body$/.test(item.path)
@@ -623,6 +624,27 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         }
     }
     const operation = options.atomicOperation;
+    if (operation?.kind === 'cleanup_unavailable_figures_v1') {
+        const expected = unavailableFigureCleanupOperation(draft, options);
+        if (!expected || hashDraft(expected) !== hashDraft(operation)
+            || seen.length !== expected.requiredReplacementPaths.length
+            || expected.requiredReplacementPaths.some(pointer => !seen.includes(pointer))) {
+            throw new Error('无像素图片修复只允许本次完整且精确的受控节点');
+        }
+        for (const index of expected.affectedSectionIndexes) {
+            const section = patch.replacements.find(item => item.path === `/sections/${index}`)?.value;
+            if (!section || Object.keys(section).sort().join(',') !== 'body,heading,kind'
+                || section.kind !== draft.sections[index].kind
+                || ['heading', 'body'].some(field => typeof section[field] !== 'string' || !section[field].trim())) {
+                throw new Error('无像素图片小节必须保留原kind，并按来源输出非空标题和正文');
+            }
+            const markerPattern = /\[\[(?:TABLE|FORMULA|CONCEPT_BRIDGE)_\d+\]\]/g;
+            if (hashDraft(String(section.body).match(markerPattern) || [])
+                !== hashDraft(String(draft.sections[index].body).match(markerPattern) || [])) {
+                throw new Error('无像素图片修复不能改变表格、公式或术语桥标记');
+            }
+        }
+    }
     if (operation?.kind === 'reorganize_existing_sections_v1') {
         const expected = sectionReorganizationOperation(draft);
         const sections = patch.replacements[0]?.value;
@@ -1375,7 +1397,41 @@ function buildMissingFormulaBindingsOperation(draft, issues) {
         ] };
 }
 
-function buildRepairTargets(draft, issues) {
+function unavailableFigureCleanupOperation(draft, options = {}) {
+    if (!Array.isArray(options.availableFigureOrdinals) || options.availableFigureOrdinals.length
+        || !Array.isArray(draft?.figurePlacements) || !draft.figurePlacements.length
+        || !Array.isArray(draft.sections)) return null;
+    const ordinals = draft.figurePlacements.map(item => item?.figureOrdinal);
+    if (ordinals.some(ordinal => !Number.isInteger(ordinal) || ordinal < 1)) return null;
+    const targetKinds = new Set(draft.figurePlacements.map(item => item.targetKind));
+    const affectedSectionIndexes = draft.sections.flatMap((section, index) => {
+        const text = `${section.heading || ''}\n${section.body || ''}`;
+        const mentionsFigure = ordinals.some(ordinal => new RegExp(
+            `(?:图|Figure)\\s*${ordinal}(?!\\d)`, 'i').test(text));
+        const visualInterpretation = targetKinds.has(section.kind)
+            && /看图|读图|图中|横轴|纵轴|坐标轴|颜色|热图|曲线|图注|图解|误差棒|红色|蓝色|绿色/.test(text);
+        return mentionsFigure || visualInterpretation
+            || /\[\[FIGURE_\d+\]\]/.test(JSON.stringify(section)) ? [index] : [];
+    });
+    if (affectedSectionIndexes.length > 7 || affectedSectionIndexes.some(index => (
+        Object.keys(draft.sections[index]).some(key => !['kind', 'heading', 'body', 'marker', 'targetKind'].includes(key))
+    ))) return null;
+    return { kind: 'cleanup_unavailable_figures_v1', affectedSectionIndexes,
+        requiredReplacementPaths: ['/figurePlacements', ...affectedSectionIndexes.map(index => `/sections/${index}`)],
+        requiredPostconditions: [
+            '本次没有图片像素，清空图片声明，并按封存文本重写列出的图片相关小节',
+            '删除无证据的颜色、坐标、曲线和看图解读，不能只删图标记而保留臆测图解',
+            '小节只保留kind、heading、body，kind原样；保留有原文证据的事实、数字、单位和条件',
+            '其他小节、表格、公式、术语桥和全部来源记录逐字保留；不得新增图或图标记'
+        ] };
+}
+
+function buildRepairTargets(draft, issues, options = {}) {
+    const unavailableFigures = unavailableFigureCleanupOperation(draft, options);
+    if (unavailableFigures) return unavailableFigures.requiredReplacementPaths.map(pointer => ({
+        path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
+        repairInstruction: unavailableFigures.requiredPostconditions.join('；')
+    }));
     if (sectionReorganizationOperation(draft)) return [{ path: '/sections',
         oldSha256: hashDraft(draft.sections), value: draft.sections,
         repairInstruction: '只将过多小节重组为12–18节，合并的标题改作正文子标题；保留全部正确文字、数字、单位、图表公式标记与对应顺序。额外字段中的内容须依原文核对后归入正文，不能直接丢弃。' }];
@@ -1803,6 +1859,9 @@ function normalizeUnavailableReaderFigures(draft, availableFigureOrdinals) {
         || !Array.isArray(draft?.sections)) return null;
     for (const section of draft.sections) {
         const body = String(section?.body || '');
+        if (Object.keys(section).some(key => !['kind', 'heading', 'body'].includes(key))
+            || /看图|读图|图中|横轴|纵轴|坐标轴|颜色|热图|曲线|图注|图解|误差棒|红色|蓝色|绿色/.test(
+                `${section.heading || ''} ${body}`)) return null;
         let fence = null;
         for (const line of body.split(/\r?\n/)) {
             const boundary = line.match(/^ {0,3}(`{3,}|~{3,})/);
@@ -1825,9 +1884,10 @@ function normalizeUnavailableReaderFigures(draft, availableFigureOrdinals) {
         paths: targets.map(target => target.path), contentValidated: false } };
 }
 
-function buildRepairContext(draft, issues, sourceEvidence, sourceText = '') {
-    const targets = buildRepairTargets(draft, issues);
-    const requestedOperation = sectionReorganizationOperation(draft)
+function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', options = {}) {
+    const targets = buildRepairTargets(draft, issues, options);
+    const requestedOperation = unavailableFigureCleanupOperation(draft, options)
+        || sectionReorganizationOperation(draft)
         || buildReindexedTableBindingsOperation(draft, issues)
         || buildMissingFormulaBindingsOperation(draft, issues)
         || buildMissingTableBindingsOperation(draft, issues)
@@ -1855,7 +1915,9 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '') {
     const formulaAppendGuidance = atomicOperation?.kind === 'complete_existing_formula_bindings_v1'
         ? `公式来源数组前 ${draft.formulaBindings.length} 条是不可改动的原记录，内容和顺序必须逐字保持。不要按公式编号排序；正文标记的排列顺序不决定数组顺序。只在数组末尾追加本轮明确列出的缺失记录。原记录前缀：${JSON.stringify(draft.formulaBindings)}。本轮允许提交的完整数组：${JSON.stringify([...draft.formulaBindings, ...atomicOperation.missingBindings])}。`
         : '';
-    const targetGuidance = (atomicOperation?.kind === 'reorganize_existing_sections_v1'
+    const targetGuidance = (atomicOperation?.kind === 'cleanup_unavailable_figures_v1'
+        ? '本轮明确允许清空整组figurePlacements，这是普通数组项数量不变规则的唯一图片例外；同时按来源重写全部指定图片相关小节，删除无证据图解与非法图片元数据，不留图标记。仅有文字依据的事实可以明确按作者文字报告保留，不假装看过图。其他节点逐字保留。' : '')
+        + (atomicOperation?.kind === 'reorganize_existing_sections_v1'
         ? '本轮明确授权整组小节重排，只提交/sections完整数组；其他顶层信息与全部来源记录逐字保留。不能据此删除图表、公式或正确事实；重排后仍须通过完整解析与来源检查。' : '')
         + `本轮只允许修改这些目标：${JSON.stringify(targets.map(target => target.path))}。`
         + '下面的诊断可能列出其他已发现问题，列出问题不代表授权修改。只提交本轮允许目标，逐项使用请求给出的真实 oldSha256；其余问题留待下一轮重新核验并授权，不要为未授权目标编造 SHA。' + formulaAppendGuidance;

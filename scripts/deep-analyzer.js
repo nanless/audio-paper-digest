@@ -7718,7 +7718,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             evidence: sourceEvidence, atomicOperation: metadataOperation,
             targetGuidance: '本次只授权明确删除两个顶层程序元数据字段。其他字段及全部正文逐字保留，删除后仍检查整篇。'
         } : candidate && !sourceBindingNeedsFullRetry
-            ? repair.buildRepairContext(candidate, currentIssues, sourceEvidence, options.sourceText) : null;
+            ? repair.buildRepairContext(candidate, currentIssues, sourceEvidence, options.sourceText,
+                { availableFigureOrdinals: pixelFigureOrdinals }) : null;
         if (repairContext && repairContext.targets.length === 0
             && currentIssues.some(issue => repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair)) {
             const latestFailure = repair.loadFailedCandidate(candidateDirectory, identity) || {};
