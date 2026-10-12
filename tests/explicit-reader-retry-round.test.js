@@ -797,3 +797,21 @@ test('父轮实际80k耗尽但保存逻辑仅一次时允许局部轮，保留�
         assert.deepEqual(fs.readFileSync(f.parent.explicitReaderRetryRound.receiptFile), f.parentReceipt);
     }));
 });
+
+test('内存中恢复原始文章后，仍按磁盘原记录SHA核验新轮许可', async t => {
+    const draft = { version: 3, readerTitle: '受控原稿', oneSentenceThesis: '保留原稿。',
+        sections: Array.from({ length: 37 }, () => ({ kind: 'result', heading: '原文结果', body: '来源报告。'.repeat(30) })),
+        conceptBridges: Array.from({ length: 4 }, () => ({})), figurePlacements: [], tableBindings: [], formulaBindings: [] };
+    const f = setup(t, payload => { payload.rawDraft = JSON.stringify(draft); });
+    await f.locked(() => retry.withExplicitRound(paper, f.grant, () => {
+        const recovered = require('../scripts/lib/reader-recovery-revision').loadReaderRecoveryRevision(directory, f.identity);
+        assert.deepEqual(recovered.draft, draft);
+        assert.notEqual(repair.hashDraft(recovered), f.grant.payloadSha256);
+        const next = retry.beginExplicitRound(directory, f.identity, recovered, paper);
+        const receipt = JSON.parse(fs.readFileSync(next.explicitReaderRetryRound.receiptFile));
+        assert.equal(sha(fs.readFileSync(receipt.archivedFile)), f.grant.envelopeSha256);
+        assert.equal(receipt.oldAttempts, 6);
+        assert.equal(receipt.oldFullAttempts, 2);
+        assert.equal(retry.beginExplicitRound(directory, f.identity, next, paper), null);
+    }));
+});

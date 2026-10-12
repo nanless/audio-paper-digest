@@ -132,7 +132,17 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
         }
     };
     const exact = loadFailedCandidate(directory, identity);
-    if (exact) { verifyPixels(exact); return finishRevisionArchives(directory, identity, exact); }
+    if (exact) {
+        verifyPixels(exact);
+        const recovered = finishRevisionArchives(directory, identity, exact);
+        // 同身份续跑也可能保存了旧解析器拒绝的完整原始稿。仅恢复有界结构，
+        // 不修改存档、次数或验证凭证；调用方仍须完整校验并按明确目标修复。
+        if (!recovered.draft && recovered.rawDraft) {
+            const draft = parseRecoveryDraft(recovered.rawDraft);
+            if (draft) return { ...recovered, draft };
+        }
+        return recovered;
+    }
     const context = getFreshAnalysisContext();
     const direct = require('./direct-rewrite-analysis-context.js').getDirectRewriteAnalysisContext();
     const conference = getConferenceAnalysisContext();

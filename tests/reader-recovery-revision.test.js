@@ -791,3 +791,28 @@ test('固定 v9 到 v10 升级保留完整超节数草稿、次数和归档字�
     assert.deepEqual(fs.readFileSync(path.join(sample.directory,
         recovered.readerRecoveryRevisions[0].archivedName)), originalBytes);
 });
+
+test('输入未变时从完整原始响应恢复草稿，不改存档和调用预算', t => {
+    const f = fixture(t);
+    const draft = structuredClone(f.payload.draft);
+    draft.sections = Array.from({ length: 37 }, (_, index) => ({ ...draft.sections[index % draft.sections.length] }));
+    f.payload.draft = null;
+    f.payload.rawDraft = JSON.stringify(draft);
+    saveFailedCandidate(f.directory, f.identity, f.payload);
+    const filename = path.join(f.directory, `${hashDraft(f.identity)}.json`);
+    const before = fs.readFileSync(filename);
+    const loaded = loadReaderRecoveryRevision(f.directory, f.identity);
+    assert.deepEqual(loaded.draft, draft);
+    for (const key of Object.keys(f.payload).filter(key => key !== 'draft')) assert.deepEqual(loaded[key], f.payload[key]);
+    assert.deepEqual(fs.readFileSync(filename), before);
+    assert.equal(loadFailedCandidate(f.directory, f.identity).draft, null);
+});
+
+test('输入未变的恢复仍拒绝缺失正文、损坏JSON和超过64节', t => {
+    const f = fixture(t);
+    for (const rawDraft of ['{"version":3}', '{', JSON.stringify({ ...f.payload.draft,
+        sections: Array.from({ length: 65 }, () => f.payload.draft.sections[0]) })]) {
+        saveFailedCandidate(f.directory, f.identity, { ...f.payload, draft: null, rawDraft });
+        assert.equal(loadReaderRecoveryRevision(f.directory, f.identity).draft, null);
+    }
+});
