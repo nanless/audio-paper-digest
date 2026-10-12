@@ -43,7 +43,7 @@ describe('Reader 明确量级是完整数值，不是可单独替换的后缀', 
     });
 
     it('不可确定的复合量级/分数/科学记号/数字碎片不局部乘或换后缀', () => {
-        for (const raw of ['5.5百万参数', '1/2万词', '1 / 2万词',
+        for (const raw of ['1/2万词', '1 / 2万词',
                            '1e3万词', 'v2万词', '1.2.5万词']) {
             const spaced = normalizeReaderProseFormatting(raw);
             assert.equal(repair(raw), spaced, raw);

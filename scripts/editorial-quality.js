@@ -347,10 +347,10 @@ function findQuantitativeChineseNumerals(text) {
         [new RegExp(`[${CHINESE_DIGITS}]+点[${CHINESE_DIGITS}]*\\d+`, 'gu'), 'mixed_decimal'],
         [new RegExp(`[${CHINESE_DIGITS}]+\\d+(?=\\s*(?:${unitAlternation}))`, 'giu'), 'mixed_integer'],
         [new RegExp(`[${CHINESE_DIGITS}]+\\s*(?:到|至|–|—|-)\\s*\\d+(?=\\s*(?:${unitAlternation}))`, 'giu'), 'mixed_range'],
-        [new RegExp(`\\d+(?:\\.\\d+)?\\s*[万亿](?=\\s*(?:${scaledArabicUnitAlternation}))`, 'giu'), 'mixed_magnitude'],
+        [new RegExp(`\\d+(?:\\.\\d+)?\\s*(?:万亿|百万|千万|万|亿)(?=\\s*(?:${scaledArabicUnitAlternation}))`, 'giu'), 'mixed_magnitude'],
         [new RegExp(`(?:至少)?一半|半宽|四分之一(?:宽)?|[一二两三四五六七八九]成(?=(?:左右|上下|或|以内|以上|比例|占比|水平|样本|数据|案例|[，,。；;、]|$))`, 'gu'), 'exact_fraction'],
         [new RegExp(`(?:排名第[${CHINESE_DIGITS}]+|第[${CHINESE_DIGITS}]+名)`, 'gu'), 'exact_rank'],
-        [new RegExp(`(?:最高|满分|得分|评分|至少|超过|低于|高于|达到)\\s*[一二两三四五六七八九]\\s*分|[一二两三四五六七八九]\\s*分(?:制|量表|以上|以下|满分)|[一二两三四五六七八九]\\s*分(?=\\s*(?:[，,。；;、]|$))`, 'gu'), 'exact_score'],
+        [new RegExp(`(?:最高|满分|得分|评分|至少|超过|低于|高于|达到)\\s*[${CHINESE_DIGITS}]+\\s*分|[${CHINESE_DIGITS}]+\\s*分(?:制|量表|以上|以下|满分)|[${CHINESE_DIGITS}]+\\s*分(?=\\s*(?:[，,。；;、]|$))`, 'gu'), 'exact_score'],
         [/[几数]\s*\d+(?=\s*(?:毫秒|秒|分钟|小时|天|Hz|kHz|MHz|MB|GB|KB|mJ|dB|帧|步|倍))/giu, 'vague_arabic_magnitude'],
         [TECHNICAL_NUMERAL_PREFIX_RE, 'technical_parameter']
     ];

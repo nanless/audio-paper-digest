@@ -422,8 +422,9 @@ function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables, structuredAr
                     || !Array.isArray(row) || typeof row[columnIndex] !== 'string'
                     || typeof sourceCell?.text !== 'string'
                     || seenCells.has(key)
-                    || normalize(sourceCell.text.replace(/<br\s*\/?>/gi, ' ').replace(/[％]/g, '%'))
-                        !== normalize(row[columnIndex].replace(/<br\s*\/?>/gi, ' ').replace(/[％]/g, '%'))) {
+                    || ![sourceCell.text, require('./reader-pdf-cell-evidence').displayCell(sourceTable, sourceRow, sourceColumn)]
+                        .some(value => normalize(value.replace(/<br\s*\/?>/gi, ' ').replace(/[％]/g, '%'))
+                            === normalize(row[columnIndex].replace(/<br\s*\/?>/gi, ' ').replace(/[％]/g, '%')))) {
                     return false;
                 }
                 seenCells.add(key);
@@ -609,10 +610,11 @@ function restoreCompleteArtifactTableMarkers(draft, artifacts) {
         const position = nodes.findIndex(node => node.marker === marker);
         if (position !== index || nodes.filter(node => node.marker === marker).length !== 1) fail();
         const line = cells => `| ${cells.join(' | ')} |`;
-        const markdown = [line(matrix[0]), line(matrix[0].map(() => '---')),
-            ...matrix.slice(1).map(line)].join('\n');
+        const displayMatrix = require('./reader-pdf-cell-evidence').displayMatrix(source);
+        const markdown = [line(displayMatrix[0]), line(displayMatrix[0].map(() => '---')),
+            ...displayMatrix.slice(1).map(line)].join('\n');
         const parsed = extractMarkdownTables(markdown);
-        if (parsed.length !== 1 || JSON.stringify([parsed[0].header, ...parsed[0].rows]) !== JSON.stringify(matrix)) fail();
+        if (parsed.length !== 1 || JSON.stringify([parsed[0].header, ...parsed[0].rows]) !== JSON.stringify(displayMatrix)) fail();
         matching[0].body = matching[0].body.replace(marker, markdown);
     }
 }
@@ -697,6 +699,10 @@ function normalizeReaderBodyContinuations(draft) {
 }
 
 function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
+    return require('./reader-pdf-cell-evidence').withArtifacts(structuredArtifacts, structuredArtifacts?.paperId,
+        () => normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts }));
+}
+function normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts = null } = {}) {
     const draft = structuredClone(input);
     const inputSha256 = sha(input);
     normalizeReaderBodyContinuations(draft);

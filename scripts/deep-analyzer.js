@@ -1644,7 +1644,8 @@ function restoreReaderSelectedTableBytes(article, tableBindings, structuredArtif
                 || rows[cellBinding?.renderedRow]?.[cellBinding?.renderedColumn] === undefined) {
                 throw new Error(`Reader selection table ${binding.tableIndex} 的 cell 坐标无法重放`);
             }
-            mapped.set(key, normalizeReaderSourceDisplayArtifacts(sourceCell.text));
+            mapped.set(key, normalizeReaderSourceDisplayArtifacts(require('./lib/reader-pdf-cell-evidence')
+                .displayCell(sourceTable, cellBinding.sourceRow, cellBinding.sourceColumn)));
         }
         const rebuiltRows = rows.map((row, rowIndex) => row.map((_cell, columnIndex) => {
             const key = `${rowIndex}:${columnIndex}`;
@@ -2264,7 +2265,7 @@ function artifactTableBindingCanReplay(binding, renderedRows, structuredArtifact
         if (renderedText === undefined || seen.has(key) || !sourceCell
             || !recoverySha256(sourceCell.sourceDomSha256)
             || normalizeReaderSourceCell(renderedText)
-                !== normalizeReaderSourceCell(sourceCell.text)) return false;
+                !== normalizeReaderSourceCell(require('./lib/reader-pdf-cell-evidence').displayCell(sourceTable, cellBinding.sourceRow, cellBinding.sourceColumn))) return false;
         seen.add(key);
         return true;
     }) && seen.size === expectedCount;
@@ -2727,6 +2728,14 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                 || !Array.isArray(binding.cellBindings) || binding.sourceQuotes?.length !== 0) {
                 throw new Error(`读者文章 tableBindings[${index}] 原始表绑定不完整`);
             }
+            const pdfEvidence = require('./lib/reader-pdf-cell-evidence').evidence(sourceTable);
+            if (pdfEvidence && (renderedRows.length !== sourceTable.matrix.length
+                || renderedRows.some(row => row.length !== sourceTable.matrix[0].length)
+                || binding.cellBindings.length !== sourceTable.matrix.length * sourceTable.matrix[0].length
+                || binding.cellBindings.some(cell => cell.renderedRow !== cell.sourceRow
+                    || cell.renderedColumn !== cell.sourceColumn))) {
+                throw new Error('PDF逐格确认只允许展示完整原表，不能删列、删行或重排行列');
+            }
             const expectedCells = renderedRows.flatMap((row, renderedRow) => (
                 row.map((_cell, renderedColumn) => ({ renderedRow, renderedColumn }))
             ));
@@ -2752,7 +2761,8 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                     throw new Error(`读者文章 tableBindings[${index}] 单元格坐标或 DOM SHA 非法`);
                 }
                 if (normalizeReaderSourceCell(renderedText)
-                    !== normalizeReaderSourceCell(sourceCell.text)) {
+                    !== normalizeReaderSourceCell(require('./lib/reader-pdf-cell-evidence')
+                        .displayCell(sourceTable, cellBinding.sourceRow, cellBinding.sourceColumn))) {
                     throw new Error(
                         `读者文章 tableBindings[${index}] 渲染单元格与原始 cell 不一致: ${key}`
                     );
@@ -2773,6 +2783,8 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                 sourceType: binding.sourceType,
                 sourceTableOrdinal: binding.sourceTableOrdinal,
                 sourceTableDomSha256: sourceTable.sourceDomSha256,
+                ...(require('./lib/reader-pdf-cell-evidence').evidence(sourceTable)
+                    ? { pdfCellConfirmation: require('./lib/reader-pdf-cell-evidence').evidence(sourceTable) } : {}),
                 renderedTableSha256,
                 cellBindings,
                 sourceQuotes: []
@@ -2863,7 +2875,8 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         article: boundArticle,
         tableBindings,
         formulaBindings,
-        ...(formulaBindings.some(binding => readerFormulaNeedsSourcePayload(binding.latex))
+        ...((tableBindings.some(binding => binding.pdfCellConfirmation)
+            || formulaBindings.some(binding => readerFormulaNeedsSourcePayload(binding.latex)))
             ? { structuredSourcePayload: readerStructuredSourcePayload(options.structuredArtifacts) } : {}),
         sourceBindingsSha256: stableFingerprint({ tableBindings, formulaBindings })
     };
@@ -3271,15 +3284,16 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         const units = `(?:${SCALED_ARABIC_MEASUREMENT_UNITS
             .slice().sort((a, b) => b.length - a.length)
             .map(item => item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?![A-Za-z])`;
-        const range = `(?:[-–—至到][ \\t]*${amount}[ \\t]*[万亿][ \\t]*${units})`;
-        const pattern = new RegExp(`(?<![A-Za-z0-9.,/])(${amount})[ \\t]*(万亿|万|亿)(?=[ \\t]*(?:${units}|${range}|[，。；：,.;:]|$))`, 'g');
+        const scales = '(?:万亿|百万|千万|万|亿)';
+        const range = `(?:[-–—至到][ \\t]*${amount}[ \\t]*${scales}[ \\t]*${units})`;
+        const pattern = new RegExp(`(?<![A-Za-z0-9.,/])(${amount})[ \\t]*(万亿|百万|千万|万|亿)(?=[ \\t]*(?:${units}|${range}|[，。；：、,.;:]|与(?=[ \\t]*[+-]?\\d)|$))`, 'g');
         normalized = normalized.replace(pattern, (surface, value, scale, offset, whole) => {
             const before = whole.slice(0, offset).trimEnd();
             if (/[A-Za-z0-9.,/^×*]$/.test(before)
                 || (/[万亿]$/.test(before) && !/^[+-]/.test(value))) return surface;
             const sign = /^[+-]/.test(value) ? value[0] : '';
             const [integer, fraction = ''] = value.replace(/^[+-]/, '').split('.');
-            const shift = scale === '万亿' ? 12 : scale === '万' ? 4 : 8;
+            const shift = { 万亿: 12, 亿: 8, 千万: 7, 百万: 6, 万: 4 }[scale];
             const digits = (integer + fraction).padEnd(integer.length + shift, '0');
             const wholePart = digits.slice(0, integer.length + shift).replace(/^0+(?=\d)/, '');
             const fractionalPart = digits.slice(integer.length + shift).replace(/0+$/, '');
@@ -3295,7 +3309,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         const match = String(issue.match || '').trim();
         if (!match) continue;
         // 显式的混合量级上面已经整段处理过。不支持的复合量级保留原文，交给后续定量检查拒绝。
-        if (/\d[ \t]*[万亿]/.test(match)) continue;
+        if (/\d[ \t]*(?:万亿|百万|千万|万|亿)/.test(match)) continue;
         // 「百分之X」只有一种精确的阿拉伯数字写法，可以就地安全归一化。其他分数和有歧义
         // 的带量级单位仍要做语义修复，不能靠猜一个显示形式。
         const percentMatch = match.match(/^百分之([负正零〇一二两三四五六七八九十百千万亿点]+)$/);
@@ -3305,7 +3319,8 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
                 const before = whole.slice(0, offset), after = whole.slice(offset + surface.length);
                 // 同段较短的百分数不能覆盖较长数字的前缀，例如把“百分之十八”改成“10%八”。
                 if (/[负正零〇一二两三四五六七八九十百千万亿点\d]$/u.test(before)
-                    || /^[零〇一二两三四五六七八九十百千万亿点\d]/u.test(after)) return surface;
+                    || /^[零〇一二两三四五六七八九十百千万亿点\d]/u.test(after)
+                    || /^分之/u.test(after)) return surface;
                 return `${exactPercent}%`;
             });
             continue;
@@ -3367,7 +3382,8 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         normalized = normalized.replaceAll(match, (surface, offset, whole) => {
             const before = whole.slice(0, offset), after = whole.slice(offset + surface.length);
             // 一个问题可能只指出更长数字或分数当中的一个后缀。
-            if (/[零〇一二两三四五六七八九十百千万亿]$|分之$/.test(before.trimEnd())
+            if ((/[零〇一二两三四五六七八九十百千万亿]$|分之$/.test(before.trimEnd())
+                    && !/(?:同一|统一|唯一|单一)$/.test(before.trimEnd()))
                 || (/\d$/.test(before.trimEnd())
                     && (!/^[一二两三四五六七八九](?:个|种)$/.test(surface) || !/[ \t]$/.test(before)))
                 || ((/^[零〇一二两三四五六七八九十百千万亿\d]|^点[零〇一二两三四五六七八九\d]/.test(after))
@@ -6047,6 +6063,10 @@ function repairConferenceReaderQuoteTables(draft, sourceText, structuredArtifact
 }
 
 function parseApiReaderArticleResult(raw, options = {}) {
+    return require('./lib/reader-pdf-cell-evidence').withArtifacts(options.structuredArtifacts,
+        options.arxivId, () => parseApiReaderArticleResultUnchecked(raw, options));
+}
+function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     let value;
     try {
         value = JSON.parse(extractJsonObjectText(raw));
@@ -6443,6 +6463,31 @@ function parseApiReaderArticleResult(raw, options = {}) {
     if (workflowLeak) {
         throw new Error(`读者文章泄漏了流程或证据元话语：${workflowLeak[0]}`);
     }
+    const pdfDisplayBindings = (Array.isArray(value.tableBindings) ? value.tableBindings : [])
+        .filter(binding => binding?.sourceType === 'artifact_table'
+        && require('./lib/reader-pdf-cell-evidence').evidence((options.structuredArtifacts?.tables || [])
+            .find(table => table.ordinal === binding.sourceTableOrdinal)));
+    if (pdfDisplayBindings.length) {
+        for (const binding of pdfDisplayBindings) {
+            const table = extractMarkdownTables(article)[binding.tableIndex - 1];
+            const original = options.structuredArtifacts.tables.find(item => item.ordinal === binding.sourceTableOrdinal);
+            const rows = table && [table.header, ...table.rows];
+            const confirmed = require('./lib/reader-pdf-cell-evidence');
+            if (!rows || rows.length !== original.matrix.length
+                || rows.some(row => row.length !== original.matrix[0].length)
+                || binding.cellBindings.length !== rows.length * rows[0].length
+                || binding.cellBindings.some(cell => cell.sourceRow !== cell.renderedRow
+                    || cell.sourceColumn !== cell.renderedColumn)
+                || rows.some((row, ri) => row.some((value, ci) => (
+                    value !== original.matrix[ri][ci] && value !== confirmed.displayCell(original, ri, ci)
+                )))) {
+                throw new Error('PDF逐格显示校正只接受原表双写或已确认的完整值，不能修补模型错值或改变坐标');
+            }
+        }
+        // 只有已逐格核验的PDF表先恢复显示，避免把来源的双写当成正文数字错误。
+        // 最终来源绑定仍核完整坐标和原DOM，其他正文不参与这一校正。
+        article = restoreReaderSelectedTableBytes(article, pdfDisplayBindings, options.structuredArtifacts);
+    }
     const qualityView = () => omitReaderSelectedTablesForProseCheck(
         article, compiledTables.selectionTableIndexes
     );
@@ -6743,6 +6788,10 @@ function repairShortApiReaderFigureLeadBindings(article, plan, figures = []) {
 }
 
 function repairApiReaderArticleAndPlanBindings(paper, analysisManifest) {
+    return require('./lib/reader-pdf-cell-evidence').withSavedPaper(paper,
+        () => repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest));
+}
+function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest) {
     const plan = paper?.apiReaderPlan;
     const originalArticle = paper?.apiReaderArticle;
     let article = typeof originalArticle === 'string'
@@ -6782,8 +6831,9 @@ function repairApiReaderArticleAndPlanBindings(paper, analysisManifest) {
                     const rows = [articleTables[index].header, ...articleTables[index].rows];
                     const renderedText = rows[cell.renderedRow]?.[cell.renderedColumn];
                     if (typeof renderedText !== 'string'
-                        || normalizeReaderSourceCell(renderedText)
-                            !== normalizeReaderSourceCell(cell.sourceText)) {
+                        || (binding.pdfCellConfirmation
+                        ? !require('./lib/reader-pdf-cell-evidence').savedCellMatches(binding, cell, renderedText)
+                        : normalizeReaderSourceCell(renderedText) !== normalizeReaderSourceCell(cell.sourceText))) {
                         throw new Error('文章文字规范化后，表格单元格与绑定的原始来源不一致。');
                     }
                     return { ...cell, renderedText };
@@ -7550,6 +7600,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-parent-recovery.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-proof-read-scope.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-pre-image-check.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-pdf-cell-evidence.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'reader_pdf_cell_evidence.py'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'conference_extractor.py'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'python-runtime.sh'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_inline_svg.py'), 'utf8')
         ].join('\0')),
         readerRecoveryEpochSha256: repair.shaText(READER_RECOVERY_EPOCH),

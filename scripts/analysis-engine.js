@@ -1070,6 +1070,12 @@ function scoringStabilityIsResolved(scoring) {
 }
 
 function hasValidApiReaderV3Records(paper) {
+    try {
+        return require('./lib/reader-pdf-cell-evidence').withSavedPaper(paper,
+            () => hasValidApiReaderV3RecordsUnchecked(paper));
+    } catch (_error) { return false; }
+}
+function hasValidApiReaderV3RecordsUnchecked(paper) {
     const manifest = paper?.analysisManifest;
     const stage = manifest?.stages?.apiReaderArticle;
     const plan = paper?.apiReaderPlan;
@@ -1201,7 +1207,9 @@ function hasValidApiReaderV3Records(paper) {
                             && typeof text === 'string' && typeof cell.renderedText === 'string'
                             && typeof cell.sourceText === 'string'
                             && normalize(text) === normalize(cell.renderedText)
-                            && normalize(text) === normalize(cell.sourceText);
+                            && (binding.pdfCellConfirmation
+                                ? require('./lib/reader-pdf-cell-evidence').savedCellMatches(binding, cell, text)
+                                : normalize(text) === normalize(cell.sourceText));
                     })
                 : binding?.sourceType === 'source_quotes'
                     && Array.isArray(binding?.sourceQuotes)

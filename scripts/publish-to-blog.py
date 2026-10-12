@@ -5891,6 +5891,14 @@ def _validate_api_reader_source_bindings(paper, article=None):
             or stage.get('formulaBindingCount') != len(formula_bindings):
         raise PublishDataValidationError('读者文章的表格或公式来源记录条数与阶段记录不一致。')
 
+    pdf_values = {}
+    if any(isinstance(b, dict) and 'pdfCellConfirmation' in b for b in table_bindings):
+        from reader_pdf_cell_evidence import verify_saved_bindings
+        try:
+            pdf_values = verify_saved_bindings(paper, DAILY_FRESH_SOURCE_RUNS_DIR)
+        except Exception as error:
+            raise PublishDataValidationError('封存PDF逐格来源不能重放：' + str(error)) from error
+
     rendered_tables = _api_reader_markdown_tables(article)
     saved_reader_article = paper.get('apiReaderArticle')
     saved_reader_tables = _api_reader_markdown_tables(saved_reader_article) \
@@ -5902,7 +5910,7 @@ def _validate_api_reader_source_bindings(paper, article=None):
             'tableIndex', 'sourceType', 'sourceTableOrdinal',
             'renderedTableSha256', 'cellBindings', 'sourceQuotes',
         }
-        if not isinstance(binding, dict) or set(binding) not in (required, required | {'sourceTableDomSha256'}):
+        if not isinstance(binding, dict) or set(binding) not in (required, required | {'sourceTableDomSha256'}, required | {'sourceTableDomSha256', 'pdfCellConfirmation'}):
             raise PublishDataValidationError(f'表格来源记录 tableBindings[{index - 1}] 格式无效、缺少必要字段，或含有不允许的字段。')
         saved_rendered_table = saved_reader_tables[index - 1] \
             if index <= len(saved_reader_tables) else None
@@ -5913,7 +5921,7 @@ def _validate_api_reader_source_bindings(paper, article=None):
             raise PublishDataValidationError(f'第 {index} 个表格的序号、保存正文中的表格或渲染 SHA 与来源记录不一致。')
         rendered_rows = [rendered['header'], *rendered['rows']]
         if binding.get('sourceType') == 'artifact_table':
-            if set(binding) != required | {'sourceTableDomSha256'} \
+            if set(binding) not in (required | {'sourceTableDomSha256'}, required | {'sourceTableDomSha256', 'pdfCellConfirmation'}) \
                     or not isinstance(binding.get('sourceTableOrdinal'), int) \
                     or isinstance(binding.get('sourceTableOrdinal'), bool) \
                     or binding['sourceTableOrdinal'] < 1 \
@@ -5949,7 +5957,7 @@ def _validate_api_reader_source_bindings(paper, article=None):
                 if _normalize_api_reader_source_cell(cell.get('renderedText')) \
                         != _normalize_api_reader_source_cell(actual_text) \
                         or _normalize_api_reader_source_cell(actual_text) \
-                        != _normalize_api_reader_source_cell(cell.get('sourceText')) \
+                        != _normalize_api_reader_source_cell(pdf_values[index][(rendered_row, rendered_column)] if index in pdf_values else cell.get('sourceText')) \
                         or not re.fullmatch(r'[0-9a-f]{64}', str(cell.get('sourceDomSha256') or '')):
                     raise PublishDataValidationError(f'第 {index} 个表格的单元格文本与显示内容或来源文本不一致，或来源 DOM 的 SHA 无效。')
                 seen.add(key)

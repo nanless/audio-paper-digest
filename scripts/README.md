@@ -603,3 +603,11 @@ npm run history:tag-checkpoint-export -- --plan ABS --registry ABS --blog ABS --
 和 `preservedOriginalCompletePaperIds`，供再次核验。结果已提升（`promoted`）的进程只能查看 `--status`
 或发布；再次执行 `--apply` 会抛出 `CONFERENCE_SOURCE_UPGRADE_REBIND_REQUIRED`。保留原结果时，旧来源证明
 `sourceProof` 也须保持原样，不能改成尚未核验的升级来源。
+
+### 根据封存 PDF 核对重复显示的数字
+
+`lib/reader-pdf-cell-evidence.js` 与 `reader_pdf_cell_evidence.py` 在正常 Reader 解析和发布核验中共同使用。仅当完整原 DOM 表符合准确支持的 SNR 数据表结构时，重新读取同一组封存来源的 PDF，逐一核对完整图注、各层列头、行标签和数值位置。只有原单元格等于 PDF 完整可见数值恰好重复两次时，程序才校正显示；原 DOM、原文本、模型输入与输入指纹保持原样。补充证明明确记录这项程序核验，不宣称模型曾收到 PDF。
+
+保存的 `pdfCellConfirmation` 进入既有表格绑定指纹。JS 和 Python 发布器均从真实封存 PDF 重新提取，不接受仅填写的证明。单次调用内两张表共享提取；本进程可复用实际提取结果，但每次先重新读取并核对四个封存文件、规则与完整提取后端字节，保存或发布不得仅信已填证明。缓存不写磁盘，无此证明或候选结构的普通文章不启动 PDF 提取。此版本不支持数学标签双写、前导小数点值，也不会修正正文沿用污染数字的事实错误。
+
+正文数字排版须识别完整数值，例如“二十六分”不能只处理末尾的“六分”。带阿拉伯数字系数的“百万”“千万”按完整量级精确换算；科学记号、分数、版本号、公式、逐字引文和链接保持原样。排版转换只改变写法，不能代替对照论文核验数值。
