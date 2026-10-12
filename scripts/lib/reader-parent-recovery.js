@@ -195,6 +195,15 @@ function planParentRecovery({ directory, identity, paper, plan, mode, roundId = 
     if (!payload?.explicitReaderRetryRound) fail('父恢复缺少当前失败候选');
     const parent = readChecked(path.join(directory, 'explicit-retry-rounds', payload.explicitReaderRetryRound.roundId + '.json'));
     const retry = require('./explicit-reader-retry-round');
+    // 先核验当前父账与剩余额度；第三层仍有余额时不应被第四层形状校验误标为整链耗尽。
+    assertLedger(parent.value);
+    retry.validatePersistedRound(directory, identity, payload);
+    if (mode === 'local' && payload.attempts < parent.value.grant.maxResponses
+        && parent.value.physicalRequests < parent.value.grant.maxPhysicalRequests
+        && parent.value.reservedOutputTokens < parent.value.grant.maxReservedOutputTokens
+        && Number(payload.noProgress || 0) < 2 && Number(payload.validationFailureStreak || 0) < 2) {
+        fail('父轮仍有合法尝试，不能开追加局部轮');
+    }
     let chainRootRoundId = parent.value.grant.roundId;
     let chainDepth = 1;
     if (parent.value.grant.contract === retry.LOCAL_REPAIR_CONTRACT) { chainRootRoundId = parent.value.grant.parentRoundId; chainDepth = 2; }

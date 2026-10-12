@@ -181,8 +181,8 @@ npm run deep -- --date YYYY-MM-DD
 # 只续正式分析结果中未完成的论文
 npm run batch
 
-# 只归档并停用当前未完成论文的失败 Reader 候选，然后续跑
-npm run batch -- --retry-failed-readers
+# 对已核验清单内的失败 Reader 开始有限次数的新一轮，保留旧稿和费用记录
+npm run batch -- --retry-failed-readers --reader-retry-manifest /absolute/path/to/reader-retry-manifest.json
 
 # 强制重分析
 npm run reanalyze -- --concurrency 5
@@ -199,7 +199,7 @@ npm run digest:status -- --date YYYY-MM-DD
 
 `deep`、`batch`、`reanalyze` 与 `api:reader:refresh` 只恢复当前默认 API 日更的封存来源。它们读取 `deep-analysis-result.json.dailyFreshSourceRun` 指定的论文集合和每篇 PDF、TXT、来源元数据与清单，不重新抓取，也不使用旧文本或缓存。文件缺少、损坏，或与正式分析结果的 `batchDate`、论文集合不一致时，命令会在任何 LLM 或图片请求前停止。目标仍为北京时间当天时，重新执行 `npm run digest:prepare -- YYYY-MM-DD` 建立来源文件；历史日期保留失败记录，按历史维护流程处理。Reader 图片仅在本次调用的系统临时目录中准备。
 
-`batch --retry-failed-readers` 只归档并停用当前未完成论文的失败 Reader 候选。`reanalyze` 则归档并停用全部旧失败候选，并显式清空 Reader 和图片补充状态，确保旧成功或旧失败记录不会跳过强制全量重分析。
+`batch --retry-failed-readers` 必须同时提供 `--reader-retry-manifest FILE`。清单绑定当前论文正文、封存来源、失败草稿和调用额度；旧稿、旧轮次和费用记录保留，不能用它清零重试次数。普通续跑不需要新清单，优先使用已有稿件和剩余次数；详见[长文明确重试说明](docs/reader-explicit-retry.md)。`reanalyze` 则归档并停用全部旧失败候选，并显式清空 Reader 和图片补充状态，确保旧成功或旧失败记录不会跳过强制全量重分析。
 
 ## 6. 博客发布事务
 

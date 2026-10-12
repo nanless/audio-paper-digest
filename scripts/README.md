@@ -127,6 +127,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/scoring-third-party-resource-replay.js` | Node 库 | 精确回放原评分输入，仅第三方依赖可达状态抖动时保留原付费评分与审计时正文；作者资源变化仍正常重审。 |
 | `lib/explicit-reader-retry-round.js` | Node 库 | 为已核验且用完原有额度的失败长文执行明确的新一轮重试，核对论文锁、四份封存来源、实际输入和原稿 SHA；完整保留旧稿与旧次数，发送请求前登记新轮费用预算。重复运行只接续剩余额度，不授予发布资格。 |
 | `lib/reader-parent-recovery.js` | Node 库 | 为已付费失败稿规划有累计上限的后续修复，核对每轮原稿、费用和父回执；公开诊断准备只允许实现变化，保留旧账，不自动添加请求额度。 |
+| `lib/reader-pre-image-check.js` | Node 库 | 下载图片前，只读判断已用完修复次数且当前纯文本或原表检查仍失败的草稿；有新授权、剩余次数或已被当前检查接受时继续正常下载和完整验收，不复用旧像素证明。 |
 | `lib/reader-request-diagnostics.js` | Node 库 | 在 Reader 修复付费请求前保存当前草稿、准确 SHA、允许修改的内容与提示词，响应后保留原文和请求关联 SHA；逐次记录不可覆写，写入失败停止，不授予正文或发布资格。 |
 | `lib/reader-inline-svg.js` | Node 库 | 核对官方内嵌 SVG 的原始字节和来源定位，调用受控渲染器生成本次阅读所需图片。 |
 | `reader_inline_svg.py` | Python 共享 | 校验内嵌 SVG 的元素、属性和本地引用，在禁用脚本与网络的浏览器中渲染 PNG，供阅读和发布共用。 |

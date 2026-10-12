@@ -846,6 +846,12 @@ test('已用一补丁的旧局部子轮可显式追加至三轮，原账不变�
         assert.equal(grant.envelopeSha256, sha(before));
         await f.locked(() => retry.withExplicitRound(paper, grant, async () => {
             const next = retry.beginExplicitRound(directory, f.identity, previous, paper);
+            if (depth === 3) {
+                repair.saveFailedCandidate(directory, f.identity, next);
+                const before = fs.readFileSync(path.join(directory, repair.hashDraft(f.identity) + '.json'));
+                assert.throws(() => parentRecovery.planParentRecovery({ directory, identity: f.identity, paper, plan, mode: 'local' }), /仍有合法尝试/);
+                assert.deepEqual(fs.readFileSync(path.join(directory, repair.hashDraft(f.identity) + '.json')), before);
+            }
             let calls = 0;
             await retry.withPhysicalBudget(next.explicitReaderRetryRound, paper, async () => {
                 await assert.rejects(sendLocalRepairRequest(paper, 48000, 'apiReaderArticle'), /不允许全文请求/);

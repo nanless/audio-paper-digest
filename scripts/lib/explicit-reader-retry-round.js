@@ -531,5 +531,25 @@ function consumePhysicalRequest(body, options) {
     receipt.requests.push({ at: new Date().toISOString(), stage: options.usageContext.stage, tokens });
     atomic(scope.proof.receiptFile, receipt);
 }
-module.exports = { CONTRACT, LOCAL_REPAIR_CONTRACT, PARENT_RECOVERY_CONTRACT: parentRecovery.CONTRACT, withExplicitLocalRepairRound, assertGrant, withExplicitRound, beginExplicitRound,
+// 只读查询；任何明确新授权均保留原事务路径，不提前消费或改签。
+function hasPreparedOrScopedRound(directory, identity) {
+    if (grantScope.getStore()) return true;
+    const root = path.join(directory, 'explicit-retry-rounds');
+    if (!fs.existsSync(root)) return false;
+    const expected = require('./reader-repair').hashDraft(identity);
+    try {
+        for (const name of fs.readdirSync(root)) {
+            if (!/^[a-f0-9-]{36}\.json$/.test(name)) continue;
+            let receipt;
+            try { receipt = JSON.parse(fs.readFileSync(path.join(root, name))); }
+            catch (_) { return true; }
+            if (!receipt || !['prepared', 'active'].includes(receipt.status)
+                || !/^[a-f0-9]{64}$/.test(receipt.grant?.identitySha256 || '')) return true;
+            if (receipt.status === 'prepared' && receipt.grant.identitySha256 === expected) return true;
+        }
+        return false;
+    } catch (_) { return true; }
+}
+
+module.exports = { hasPreparedOrScopedRound, CONTRACT, LOCAL_REPAIR_CONTRACT, PARENT_RECOVERY_CONTRACT: parentRecovery.CONTRACT, withExplicitLocalRepairRound, assertGrant, withExplicitRound, beginExplicitRound,
     withPhysicalBudget, consumePhysicalRequest, validatePersistedRound, restoreExplicitRoundOriginalDraft };

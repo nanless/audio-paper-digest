@@ -1781,6 +1781,34 @@ function buildRepairTargets(draft, issues, options = {}) {
     const formulaOperation = buildMissingFormulaBindingsOperation(draft, issues);
     if (formulaOperation) return [{ path: '/formulaBindings', oldSha256: hashDraft(draft.formulaBindings),
         value: draft.formulaBindings, repairInstruction: formulaOperation.requiredPostconditions.join('；') }];
+    // 观察提示过长时不让模型重写整节正文。图片、导读与解释已能对应，
+    // 只授权这条图片记录，并继续随请求提供该图的真实像素。
+    const focusIssue = issues.find(issue => issue?.diagnosticOnly !== true
+        && /figurePlacements\[\d+\].*focusPoints\[\d+\]=/.test(String(issue?.message || '')));
+    if (focusIssue) {
+        const index = Number(/figurePlacements\[(\d+)\]/.exec(focusIssue.message)?.[1]);
+        const placement = draft.figurePlacements?.[index];
+        const marker = placement?.marker;
+        const matchingSections = draft.sections.filter(section => String(section?.body || '').includes(marker));
+        const section = matchingSections.length === 1 ? matchingSections[0] : null;
+        const blocks = String(section?.body || '').split(/\n\s*\n/).map(block => block.trim());
+        const at = blocks.indexOf(marker);
+        const points = placement?.focusPoints;
+        if (placement && Object.keys(placement).sort().join(',') === 'figureOrdinal,focusPoints,marker,targetKind'
+            && Array.isArray(options.availableFigureOrdinals) && options.availableFigureOrdinals.includes(placement.figureOrdinal)
+            && marker === `[[FIGURE_${placement.figureOrdinal}]]` && section?.kind === placement.targetKind
+            && String(section.body).split(marker).length === 2 && at > 0 && at < blocks.length - 1
+            && blocks[at - 1].length >= READER_LIMITS.figureLeadChars
+            && blocks[at + 1].length >= READER_LIMITS.figureExplanationChars
+            && Array.isArray(points) && points.length >= READER_LIMITS.minimumFocusPoints
+            && points.length <= READER_LIMITS.maximumFocusPoints) {
+            const invalid = points.flatMap((point, pointIndex) => typeof point !== 'string'
+                || point.trim().length < 12 || point.trim().length > 120 ? [pointIndex] : []);
+            if (invalid.length) return [{ path: `/figurePlacements/${index}`,
+                oldSha256: hashDraft(placement), value: placement,
+                repairInstruction: `只改 focusPoints 中索引为 ${invalid.join('、')} 的观察提示，每项12–120字符。依据本次图片与论文原文精简或补全表达，不增加视觉事实；其余观察提示、图号、类型和标记逐字保留。正文导读和解释已经满足位置及长度要求，本轮不可修改正文。` }];
+        }
+    }
     const paths = new Set();
     const add = pointer => {
         try {
@@ -1860,6 +1888,35 @@ function buildRepairTargets(draft, issues, options = {}) {
     ));
     const firstPlacementGroup = classifyTableBindingOrderIssue(firstSubstantiveIssue).ignoreMessageForRepair
         ? null : conceptBridgePlacementGroup(firstSubstantiveIssue);
+    // source_quotes 与 TABLE 标记不兼容时，绑定和正文必须一起修。
+    // 通用八节点截断曾留下绑定、丢掉对应正文，使“同步修改”指令越过许可。
+    // 只处理可唯一定位且独占段落的标记，不推断缺失表格或扩展其他节点。
+    const pairedTableTargets = () => {
+        for (const issue of blockingIssues) {
+            if (!/使用 source_quotes 时正文必须直接写 Markdown 表，不能使用 \[\[TABLE_\d+\]\]/.test(String(issue?.message || ''))) continue;
+            const matchedIndex = /^\/tableBindings\/(\d+)$/.exec(String(issue?.path || ''))?.[1]
+                ?? /tableBindings\[(\d+)\]/.exec(String(issue?.message || ''))?.[1];
+            const index = Number(matchedIndex);
+            const binding = Number.isInteger(index) ? draft.tableBindings?.[index] : null;
+            if (!binding || binding.sourceType !== 'source_quotes' || binding.tableIndex !== index + 1
+                || binding.selection || binding.completeTable) continue;
+            const marker = `[[TABLE_${binding.tableIndex}]]`;
+            const occurrences = draft.sections.reduce((count, section) => count
+                + String(section?.body || '').split(marker).length - 1, 0);
+            const matches = locateReaderDraftTables(draft).filter(table => table.marker === marker);
+            if (occurrences !== 1 || matches.length !== 1) continue;
+            const bodyPath = matches[0].path;
+            if (String(nodeAt(draft, bodyPath)).split(/\n\s*\n/)
+                .filter(block => block.trim() === marker).length !== 1) continue;
+            return [`/tableBindings/${index}`, bodyPath].map(pointer => ({ path: pointer,
+                oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
+                repairInstruction: '本轮成对修复此绑定与对应正文：有合法原DOM选区时可使用selection并保留对应TABLE标记，完整原表可用completeTable；否则按封存全文逐字引文写实际Markdown表并同步source_quotes。保留表前问题、表后解释、已有正确事实、数字和完整单位；不得编造原表、坐标或引文。其他节点本轮只读，剩余问题下一轮重新核验与授权。' }));
+        }
+        return null;
+    };
+    const boundedTargets = () => paths.size > 8 ? pairedTableTargets() || [...paths].slice(0, 8).map(pointer => ({ path: pointer,
+        oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }))
+        : [...paths].map(pointer => ({ path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
     if (firstPlacementGroup) {
         // 桥接位置不对，不等于可以改一个本来有效的桥接定义。一次可能同时诊断出
         // 好几个重复 marker，所以在稳定顺序下收集正文分组，但仍要守在八个节点
@@ -1987,8 +2044,7 @@ function buildRepairTargets(draft, issues, options = {}) {
             bindings.forEach((_binding, index) => add(`/tableBindings/${index}`));
         }
         if (paths.size) {
-            return [...paths].slice(0, 8).map(pointer => ({ path: pointer,
-                oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
+            return boundedTargets();
         }
     }
     if (missingNarrativeTableIssue) {
@@ -2188,8 +2244,7 @@ function buildRepairTargets(draft, issues, options = {}) {
         || !issues.length)) {
         draft.sections.forEach((_section, index) => add(`/sections/${index}/body`));
     }
-    return [...paths].slice(0, 8).map(pointer => ({ path: pointer,
-        oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
+    return boundedTargets();
 }
 
 function normalizeUnavailableReaderFigures(draft, availableFigureOrdinals) {

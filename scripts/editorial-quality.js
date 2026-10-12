@@ -357,6 +357,14 @@ function findQuantitativeChineseNumerals(text) {
     const candidates = [];
     for (const [regex, reason] of patterns) {
         for (const finding of collectRegexMatches(value, regex, reason)) {
+            // “这是一位说话人”是在介绍人物，不是在报告位宽或实验人数。
+            // 保留真正的人数报告和“八位量化”等技术数值检查。
+            if (reason === 'measured_simple_integer' && finding.match === '一位'
+                && /(?:这|那)是\s*$/u.test(value.slice(0, finding.index))) {
+                const clause = value.slice(finding.index + finding.match.length).split(/[。！？；;\n]/u)[0];
+                const introduction = clause.match(/^.{0,64}?(?:说话人|听者|读者|用户|研究者|作者)/u)?.[0];
+                if (introduction && !/(?:量化|比特|位宽|编码|精度|实验|样本|人数|统计|均值|平均|错误率|数量)/u.test(clause)) continue;
+            }
             // 枚举句「问题有三：一是……；二是……」经 NFKC 归一化后，
             // 全角冒号会变成 `三:一`，这并不是 3:1 的配比。
             // 只有「有 N：一是」这种明确语境才放过；「配比为 三：一」

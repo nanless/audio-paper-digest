@@ -700,6 +700,7 @@ function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
     const draft = structuredClone(input);
     const inputSha256 = sha(input);
     normalizeReaderBodyContinuations(draft);
+    normalizeUniqueRenderedReaderSelections(draft, structuredArtifacts);
     for (const [index, section] of (Array.isArray(draft?.sections) ? draft.sections : []).entries()) {
         if (typeof section?.body !== 'string') continue;
         const visible = maskInlineMarkdownCodeSpans(maskProtectedMarkdownTableRegions(section.body));
@@ -837,6 +838,45 @@ function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
     return { draft, mapping: { contract: READER_DRAFT_ORDER_CONTRACT, inputSha256, outputSha256,
         changed: inputSha256 !== outputSha256, sections: sectionMap, tables: tableMap,
         conceptBridges: bridgeMap, conceptMarkerLocations } };
+}
+
+// 模型有时已逐格抄出 selection 指定的表，却漏写 TABLE 占位符。
+// 只在现成表与公共表格生成程序的原 DOM 选区完全一致且唯一时恢复声明形式；
+// 不推断坐标、不翻译表头、不改数字，也不选择重复的表。
+function normalizeUniqueRenderedReaderSelections(draft, structuredArtifacts) {
+    if (!structuredArtifacts || !Array.isArray(draft?.tableBindings)
+        || !Array.isArray(draft.sections)) return;
+    const tables = locateReaderDraftTables(draft);
+    const plans = [];
+    const { renderReaderTableSelection } = require('./reader-tables');
+    const cells = table => [table.header, ...table.rows];
+    for (const [index, binding] of draft.tableBindings.entries()) {
+        if (!binding?.selection || binding.tableIndex !== index + 1) continue;
+        const marker = `[[TABLE_${binding.tableIndex}]]`;
+        if (draft.sections.some(section => String(section?.body || '').includes(marker))) continue;
+        let rendered;
+        try { rendered = renderReaderTableSelection(binding, structuredArtifacts); } catch (_) { continue; }
+        const expected = extractMarkdownTables(rendered.markdown);
+        if (expected.length !== 1) continue;
+        const matches = tables.filter(node => node.table
+            && JSON.stringify(cells(node.table)) === JSON.stringify(cells(expected[0])));
+        if (matches.length !== 1) continue;
+        const node = matches[0];
+        const body = String(draft.sections[node.sectionIndex]?.body || '');
+        if (body.split(/\n\s*\n/).filter(block => block.trim() === node.table.markdown).length !== 1) continue;
+        plans.push({ node, marker });
+    }
+    // 两条声明争用同一现成表也不具备唯一身份。
+    for (const { node, marker } of plans.filter(plan => plans.filter(other =>
+        other.node.sectionIndex === plan.node.sectionIndex && other.node.line === plan.node.line).length === 1)
+        .sort((a, b) => b.node.line - a.node.line)) {
+        const section = draft.sections[node.sectionIndex];
+        const lines = section.body.split('\n');
+        const end = node.table.endLine;
+        if (lines.slice(node.table.startLine, end + 1).join('\n') !== node.table.markdown) continue;
+        lines.splice(node.table.startLine, end - node.table.startLine + 1, marker);
+        section.body = lines.join('\n');
+    }
 }
 
 module.exports = { READER_DRAFT_ORDER_CONTRACT, TABLE_BINDING_ORDER_ISSUE_CODE, READER_SECTION_KINDS, locateReaderDraftTables,

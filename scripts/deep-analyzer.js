@@ -7459,6 +7459,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-resource-binding.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/explicit-reader-retry-round.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-parent-recovery.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-pre-image-check.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_inline_svg.py'), 'utf8')
         ].join('\0')),
         readerRecoveryEpochSha256: repair.shaText(READER_RECOVERY_EPOCH),
@@ -7491,6 +7492,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             ? { historicalDirectRetryEpoch: directScope.readerRetryEpoch } : {})
     };
     if (options.readerIdentityOnly === true) return { identity };
+    let pixelFigureOrdinals = [];
     let recovered = null;
     let readerRecoveryRevisions = [];
     let candidate = null;
@@ -7628,6 +7630,46 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             url: match[3].trim()
         }))
         .filter(item => Number.isInteger(item.ordinal));
+    // 只读提前检查同身份候选。纯文本/DOM 仍失败且预算确实用完时，不先下载图片。
+    // 不复用旧像素事实；新实现已能接受的候选仍进入下方原下载及完整校验。
+    const priorCandidate = repair.loadFailedCandidate(candidateDirectory, identity);
+    if (priorCandidate) {
+        const retryApi = require('./lib/explicit-reader-retry-round');
+        const oldCandidate = candidate; const oldIssues = currentIssues;
+        const oldMappings = draftOrderMappings; const oldOrdinals = pixelFigureOrdinals;
+        const oldCleanupChanged = mechanicalNoFigureCleanupChanged;
+        let earlyDecision;
+        try {
+            earlyDecision = require('./lib/reader-pre-image-check').checkReaderBeforeImages({
+                recovered: priorCandidate, maxAttempts,
+                hasPendingGrant: () => retryApi.hasPreparedOrScopedRound(candidateDirectory, identity),
+                hasUnusedAllowance: repair.hasUnusedImplementationAllowance(priorCandidate),
+                canEscalate: shouldEscalateApiReaderRepairBudget(priorCandidate, priorCandidate.draft,
+                    repairMaxTokens, repairTruncationRetryMaxTokens, maxAttempts, {
+                        lineageIssued: priorCandidate.implementationRepairAllowanceLineage
+                            === repair.IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT,
+                        activeProof: Boolean(priorCandidate.implementationRepairAllowanceProof)
+                    }),
+                readerAttemptLimit: repair.readerAttemptLimit,
+                normalizeCandidate: (draft, issues) => {
+                    candidate = draft; currentIssues = issues; draftOrderMappings = [];
+                    // 使用原文全部图号作为最宽松的诊断条件，不能据此宣称已收到像素。
+                    pixelFigureOrdinals = availableFigureOrdinals;
+                    normalizeCandidate();
+                },
+                isIndependentFailure: error => error?.code === 'READER_DRAFT_ORDER_AMBIGUOUS'
+                    && Array.isArray(error.readerIssues) && error.readerIssues.length > 0
+                    && error.readerIssues.every(issue => issue.code === repair.TABLE_BINDING_ORDER_ISSUE_CODE)
+            });
+        } finally {
+            candidate = oldCandidate; currentIssues = oldIssues; draftOrderMappings = oldMappings;
+            pixelFigureOrdinals = oldOrdinals; mechanicalNoFigureCleanupChanged = oldCleanupChanged;
+        }
+        if (earlyDecision.action === 'stop') throw readerRepairStopped(
+            'READER_REPAIR_ATTEMPTS_EXHAUSTED',
+            '当前纯文本/封存表格检查仍失败且修复预算已用完；未下载图片，原候选保留。',
+            earlyDecision.cause);
+    }
     const materializedReaderImages = figureEvidenceEntries.length > 0
         ? await materializeFigures(
             figureEvidenceEntries.map(item => ({
@@ -7715,7 +7757,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     validationFeedback = buildAttemptFeedback();
     previousDraft = recovered?.rawDraft || start.previousDraft;
     let providerImageExclusions = normalizeProviderImageExclusions(recovered?.providerImageExclusions, allImageInputs);
-    let activeImageInputs; let imageEvidence; let pixelFigureOrdinals;
+    let activeImageInputs; let imageEvidence;
     const refreshActiveImageState = () => {
         const excluded = new Set(providerImageExclusions.map(item => item.inputId));
         activeImageInputs = allImageInputs.filter(image => !excluded.has(image.inputId));
