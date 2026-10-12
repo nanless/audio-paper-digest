@@ -8292,6 +8292,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     if (!candidate) throw new Error('Reader 删除程序元数据后仍不满足恢复结构');
                 } else {
                     candidate = repair.applyReaderPatch(candidate, patch, repairContext.targets.map(target => target.path), {
+                        rejectUnchanged: repairContext.issues.some(issue =>
+                            ['reader_workflow_leakage', 'reader_awkward_translation'].includes(issue.code)
+                            && repairContext.targets.some(target => target.path === issue.path)),
                         availableFigureOrdinals: selectedOrdinals,
                         ...(options.readerFactLocalRevision === true ? {
                             readerFactLocalClaims: Object.fromEntries(repairContext.targets
@@ -8348,7 +8351,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             lastError = error;
             previousDraft = candidate ? JSON.stringify(candidate)
                 : metadataOperation && !patchApplied ? previousDraft : raw;
-            currentIssues = repairContext && !patchApplied
+            currentIssues = error.code === 'READER_PATCH_NO_PROGRESS' ? currentIssues
+                : repairContext && !patchApplied
                 ? [...currentIssues.map(issue => typeof issue.message === 'string'
                     ? issue : { ...issue, message: '' }).filter(issue => issue.code === repair.TABLE_COUNT_ISSUE_CODE
                     || repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
@@ -8366,6 +8370,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             noProgress = failureSignature === previousFailureSignature
                 || (patchApplied && candidate && repair.hashDraft(candidate) === priorCandidateSha)
                 ? noProgress + 1 : 0;
+            if (error.code === 'READER_PATCH_NO_PROGRESS') noProgress = Math.max(2, noProgress);
             previousFailureSignature = failureSignature;
             const normalizedFailureSignature = repair.validationFailureSignature(currentIssues);
             validationFailureStreak = repair.validationFailureHasNoProgress(
@@ -8392,6 +8397,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             }
             validationFeedback = buildAttemptFeedback();
             console.log(`    [deep] ⚠️  读者文章校验失败 (${attempt}/${maxAttempts}): ${error.message}`);
+            if (error.code === 'READER_PATCH_NO_PROGRESS') {
+                throw readerRepairStopped('READER_REPAIR_NO_PROGRESS',
+                    `模型补丁逐字返回原值，已保留原草稿及校验问题，停止重复修复：${error.message}`, error);
+            }
             if (validationFailureStreak >= 2) {
                 throw readerRepairStopped('READER_REPAIR_NO_PROGRESS',
                     `读者文章同一组校验问题连续两次未改善，已停止修复并保留草稿：${error.message}`, error);

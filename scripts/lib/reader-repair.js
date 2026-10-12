@@ -1209,6 +1209,12 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             throw new Error('Reader narrative-table patch failed its atomic append/bind postconditions');
         }
     }
+    if (options.rejectUnchanged === true && hashDraft(merged) === hashDraft(draft)) {
+        const error = new Error('Reader patch未修改任何授权字段；原草稿及校验问题保持，停止重复请求');
+        error.code = 'READER_PATCH_NO_PROGRESS';
+        error.retryable = false;
+        throw error;
+    }
     return merged;
 }
 
@@ -1388,7 +1394,8 @@ function collectDraftIssues(draft, parserError, options = {}) {
             }
         });
     }
-    collectTableBindingIssues(draft, options).forEach(issue => issues.push(issue));
+    collectTableBindingIssues(draft, { ...options, actionableInvalidSourceQuotes: languageError })
+        .forEach(issue => issues.push(issue));
     require('./reader-source-diagnostics.js').buildReaderSourceDiagnostics({ draft,
         sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts,
         parserError: orderError.ignoreMessageForRepair ? null : parserError
@@ -1494,7 +1501,9 @@ function collectTableBindingIssues(draft, options = {}) {
                 ));
                 if (invalid.length) add(index, `sourceQuotes 中以下数组项不是全文中12–4000字符的连续原句：${invalid.slice(0, 12).join(', ')}；`
                     + '不要只摘独立数值或把引文写成对象。原文双写数值可留在引文中，正文写法仍须通过原有的来源检查。',
-                { diagnosticOnly: true });
+                options.actionableInvalidSourceQuotes === true
+                    ? { code: 'reader_invalid_source_quotes', invalidSourceQuoteIndices: invalid }
+                    : { diagnosticOnly: true });
             }
         } else if (binding.sourceType === 'artifact_table') {
             if (!Array.isArray(binding.cellBindings) || binding.sourceQuotes?.length !== 0) {
@@ -2214,8 +2223,10 @@ function buildRepairTargets(draft, issues, options = {}) {
             return [...(direct ? [Number(direct[1])] : []),
                 ...[...message.matchAll(/tableBindings\[(\d+)\]/g)].map(match => Number(match[1]))];
         }))];
-        if (indexes.length < 2) return null;
+        const hasInvalidQuotes = actionableIssues.some(issue => issue.code === 'reader_invalid_source_quotes' && issue.diagnosticOnly !== true);
+        if (!indexes.length || indexes.length < 2 && !hasInvalidQuotes) return null;
         const tables = locateReaderDraftTables(draft);
+        if (hasInvalidQuotes && tables.length !== draft.tableBindings?.length) return [];
         const groups = [];
         for (const index of indexes) {
             const binding = draft.tableBindings?.[index];
@@ -2235,13 +2246,30 @@ function buildRepairTargets(draft, issues, options = {}) {
             if (new Set([...selected, ...group]).size > 8) break;
             group.forEach(pointer => selected.add(pointer));
         }
+        if (hasInvalidQuotes) {
+            const pairedPaths = new Set(groups.flat());
+            for (const pointer of paths) {
+                if (!pairedPaths.has(pointer) && !pointer.startsWith('/tableBindings/') && selected.size < 8) selected.add(pointer);
+            }
+        }
         return [...selected].map(pointer => ({ path: pointer,
-            oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
+            oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
+            ...(hasInvalidQuotes ? {repairInstruction: '本轮来源引文与唯一对应正文一起修订。只用请求中的完整原文连续句，保留正确数字、单位、方法和表前后解释；正文中的文风问题也只在授权字段内修复。不能回传原值假称已修复，其他字段只读，最后仍核验完整来源。'} : {}) }));
     };
     const boundedTargets = () => multipleTablePairs() || (paths.size > 8 ? pairedTableTargets() || [...paths].slice(0, 8).map(pointer => ({ path: pointer,
         oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }))
         : [...paths].map(pointer => ({ path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) })));
 
+    if (actionableIssues.some(issue => issue.code === 'reader_invalid_source_quotes' && issue.diagnosticOnly !== true)) {
+        const presentLanguage = new Set(collectReaderLanguageIssues(draft)
+            .map(issue => JSON.stringify([issue.code, issue.path, issue.match])));
+        for (const issue of actionableIssues) {
+            if (LANGUAGE_ISSUE_CODES.has(issue.code)
+                && presentLanguage.has(JSON.stringify([issue.code, issue.path, issue.match]))) add(issue.path);
+        }
+        // 已确定的坏引文不能只藏在提示文字里；找不到唯一表位置就交给正常完整修复。
+        return multipleTablePairs() || [];
+    }
     if (firstPlacementGroup) {
         // 桥接位置不对，不等于可以改一个本来有效的桥接定义。一次可能同时诊断出
         // 好几个重复 marker，所以在稳定顺序下收集正文分组，但仍要守在八个节点
