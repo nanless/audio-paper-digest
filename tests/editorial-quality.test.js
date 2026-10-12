@@ -506,6 +506,37 @@ describe('Manual v4 编辑质量的基础函数', () => {
         assert.ok(asvspoofMissingUnits.some(
             item => item.reason === 'percentage_metric_delta_without_unit'
         ));
+        assert.deepEqual(findMissingComparisonUnits(
+            '复现第一步做什么：先按上一节顺序打通文本侧对齐与 MelMAE 预训练，'
+            + '再实现 drift 目标与同策略展开，用 λR 监控训练是否接近平衡，'
+            + '最后在 NFE∈{1,2,4}上跑 MCD 与 WER，确认 K=4 相对 K=2 的改善能复现。'
+        ), []);
+        for (const text of [
+            '在 NFE∈{1,2,4} 上比较 K=4 与 K=2，WER 从 4.18 降到 3.75。',
+            '在 NFE∈{1,2,4} 上比较 K=4 与 K=2，CER=4.18 降低到 3.75。',
+            '在 NFE∈{1,2,4} 上比较 K=4 与 K=2，错误率从 24.5 降至 18.2。',
+            'WER 相对 K=4 的基线从 4.18 降到 3.75。'
+        ]) {
+            assert.ok(findMissingComparisonUnits(text).some(
+                item => item.reason === 'percentage_metric_delta_without_unit'
+            ), text);
+        }
+        assert.deepEqual(findMissingComparisonUnits(
+            '端到端 Qwen 3-o 微调后的帧级准确率 0.633 已接近人工参考的 0.646，但描述 F1 0.422 仍低于 0.550。'
+        ), []);
+        assert.deepEqual(findMissingComparisonUnits(
+            'EgoLife 上级联 Gemma 4 微调前的描述召回率、精确率、F1 依次为 0.085、0.560、0.147，微调后为 0.044、0.706、0.084，召回率下降而精确率上升，与论文的解释一致。'
+        ), []);
+        for (const text of [
+            'Qwen 3-o 的 WER 从 4.18 降到 3.75。',
+            'Gemma 4 微调后的错误率从 24.5 降至 18.2。',
+            '未知型号 3-o 的准确率从 79.6 降到 72.8。',
+            'Qwen 3-o 的 CER=4.18 降低到 3.75。'
+        ]) {
+            assert.ok(findMissingComparisonUnits(text).some(
+                item => item.reason === 'percentage_metric_delta_without_unit'
+            ), text);
+        }
     });
 
     it('按配置的论文数阈值找出整批共用的句子模板', () => {

@@ -1631,7 +1631,8 @@ function restoreReaderSelectedTableBytes(article, tableBindings, structuredArtif
         if (!table || !sourceTable) {
             throw new Error(`Reader selection table ${binding.tableIndex} 无法从原始表重放`);
         }
-        const rows = [table.header, ...table.rows];
+        let rows = [table.header, ...table.rows];
+        rows = restoreUniquelyMergedReaderHeaderRows(rows, binding, sourceTable) || rows;
         const mapped = new Map();
         for (const cellBinding of binding.cellBindings) {
             const key = `${cellBinding?.renderedRow}:${cellBinding?.renderedColumn}`;
@@ -1671,6 +1672,62 @@ function restoreReaderSelectedTableBytes(article, tableBindings, structuredArtif
         }
     }
     return output;
+}
+
+// 仅恢复已被模型合并的一对原表头。完整 identity 绑定表明请求的是整表，
+// 但正文的一行复合列头会使原两行坐标全部错位。数据必须逐格保留，
+// 且合并列头必须由唯一 DOM 跨行/跨列结构证明；不修复缺数据或错数字。
+function restoreUniquelyMergedReaderHeaderRows(rows, binding, sourceTable) {
+    const matrix = sourceTable?.matrix;
+    if (!Array.isArray(matrix) || matrix.length < 3 || !Array.isArray(matrix[0])
+        || matrix[0].length < 2 || matrix.some(row => !Array.isArray(row)
+            || row.length !== matrix[0].length || row.some(cell => typeof cell !== 'string'))
+        || rows.length !== matrix.length - 1
+        || rows.some(row => row.length !== matrix[0].length)
+        || !Array.isArray(binding?.cellBindings)
+        || binding.cellBindings.length !== matrix.length * matrix[0].length) return null;
+    const cells = Array.isArray(sourceTable.cells) ? sourceTable.cells : [];
+    const width = matrix[0].length;
+    const seen = new Set();
+    for (const item of binding.cellBindings) {
+        if (!Number.isInteger(item?.renderedRow) || !Number.isInteger(item?.renderedColumn)
+            || item.renderedRow !== item.sourceRow || item.renderedColumn !== item.sourceColumn
+            || item.sourceRow < 0 || item.sourceRow >= matrix.length
+            || item.sourceColumn < 0 || item.sourceColumn >= width) return null;
+        const key = `${item.sourceRow}:${item.sourceColumn}`;
+        if (seen.has(key)) return null;
+        seen.add(key);
+        const dom = cells.filter(cell => item.sourceRow >= cell.row
+            && item.sourceRow < cell.row + Number(cell.rowspan || 1)
+            && item.sourceColumn >= cell.column
+            && item.sourceColumn < cell.column + Number(cell.colspan || 1));
+        if (dom.length !== 1 || !/^[a-f0-9]{64}$/.test(dom[0].sourceDomSha256 || '')
+            || dom[0].text !== matrix[item.sourceRow][item.sourceColumn]) return null;
+    }
+    // 混合 th/td 的 LaTeXML 表头：第一列 th 跨两行，其他列至少有一个
+    // 第一行分组头跨列；第二行每格来源仍必须唯一。
+    const anchor = cells.filter(cell => cell.row === 0 && cell.column === 0
+        && cell.header === true && Number(cell.rowspan) === 2 && Number(cell.colspan || 1) === 1);
+    if (anchor.length !== 1 || !cells.some(cell => cell.row === 0
+        && Number(cell.rowspan || 1) === 1 && Number(cell.colspan) > 1)
+        || cells.some(cell => cell.row < 2 && cell.row + Number(cell.rowspan || 1) > 2)) return null;
+    const canonical = value => normalizeReaderSourceCell(value);
+    const dataCanonical = value => normalizeReaderSourceDisplayArtifacts(value)
+        .normalize('NFKC').replace(/\s+/g, ' ').trim();
+    for (let row = 2; row < matrix.length; row++) {
+        for (let column = 0; column < width; column++) {
+            if (dataCanonical(rows[row - 1][column]) !== dataCanonical(matrix[row][column])) return null;
+        }
+    }
+    for (let column = 0; column < width; column++) {
+        const top = canonical(matrix[0][column]), bottom = canonical(matrix[1][column]);
+        const merged = top === bottom ? top : `${top} ${bottom}`;
+        // 单位括号可在合并时移到复合列名末尾；文字与单位本身完全保留。
+        const unit = /^(.*) (\([^()]+\))$/.exec(top);
+        const alternate = unit && top !== bottom ? `${unit[1]} ${bottom} ${unit[2]}` : merged;
+        if (canonical(rows[0][column]) !== merged && canonical(rows[0][column]) !== alternate) return null;
+    }
+    return matrix.map(row => [...row]);
 }
 
 function normalizeReaderWorkflowLeakageSurface(article) {
@@ -6268,7 +6325,13 @@ function parseApiReaderArticleResult(raw, options = {}) {
                 + `, markerIndex=${markerIndex}`
                 + `, leadChars=${leadNarrative.length}/${API_READER_FIGURE_LEAD_MIN_CHARS}`
                 + `, explanationChars=${explanationNarrative.length}/${API_READER_FIGURE_EXPLANATION_MIN_CHARS}`
-                + `, focusCount=${Array.isArray(focusPoints) ? focusPoints.length : 'invalid'}）`
+                + `, focusCount=${Array.isArray(focusPoints) ? focusPoints.length : 'invalid'}`
+                + (Array.isArray(focusPoints) ? focusPoints.map((item, pointIndex) => {
+                    const length = typeof item === 'string' ? item.trim().length : null;
+                    return length === null || length < 12 || length > 120
+                        ? `, focusPoints[${pointIndex}]=${length === null ? '非字符串' : `${length}字`}，须为12–120字` : '';
+                }).join('') : '')
+                + '）'
             );
         }
         return {
@@ -7184,8 +7247,16 @@ function hasReviewedCompletedPrimaryReaderSeed(paper, sourceText, reviewFeedback
     const scoring = paper.analysisManifest?.stages?.scoringAudit;
     const feedback = bound?.feedback;
     const requested = String(reviewFeedback || '').trim();
-    if (!bound || active.scoringOnly || !feedback?.primaryFeedback?.trim() || !feedback.readerFeedback?.trim()
-        || (requested !== feedback.readerFeedback.trim()
+    if (!bound || active.scoringOnly || !feedback?.primaryFeedback?.trim()) return false;
+    const primaryFallback = !feedback.readerFeedback.trim();
+    const effectiveReaderFeedback = facts.reviewFeedback('apiReaderArticle', getPaperArxivId(paper)).trim();
+    const savedReader = paper.analysisManifest?.stages?.apiReaderArticle;
+    // Reader 已按同一主文反馈写作时，沿用公共路由的主文反馈 fallback。
+    // 空 Reader 反馈不能授权新范围，必须核对现有 Reader 的反馈证明与逐字输入 SHA。
+    if (primaryFallback && (requested !== effectiveReaderFeedback
+        || stableFingerprint(savedReader?.factReview || null) !== stableFingerprint(bound?.proof || null)
+        || savedReader?.reviewFeedbackSha256 !== crypto.createHash('sha256').update(requested).digest('hex'))) return false;
+    if ((requested !== feedback.readerFeedback.trim()
             && requested !== facts.reviewFeedback('apiReaderArticle', getPaperArxivId(paper)).trim())
         || primary?.status !== 'complete' || !primary.factReview || stableFingerprint(primary.factReview) !== stableFingerprint(bound.proof)
         || !fresh.isDailyFreshSourceScope() || feedback.runId !== fresh.getFreshAnalysisContext()?.runId
@@ -8476,14 +8547,17 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
     let analysis = String(paper.analysis || '');
     const sourceText = String(sourceDetails?.text || '');
     const sourceSha256 = crypto.createHash('sha256').update(sourceText).digest('hex');
-    const requestedReviewFeedback = String(options.reviewFeedback || '').trim();
+    const rawRequestedReviewFeedback = String(options.reviewFeedback || '');
+    const requestedReviewFeedback = rawRequestedReviewFeedback.trim();
     const requestedReviewFeedbackSha256 = requestedReviewFeedback
         ? crypto.createHash('sha256').update(requestedReviewFeedback).digest('hex')
         : null;
     const existingReaderReusable = require('./analysis-engine.js').hasValidApiReaderV3Records(paper)
         && require('./lib/reader-author-source.js').canReuseReaderAuthorInputs(paper, sourceDetails)
-        && paper.analysisManifest?.stages?.apiReaderArticle?.reviewFeedbackSha256
-            === requestedReviewFeedbackSha256;
+        && (paper.analysisManifest?.stages?.apiReaderArticle?.reviewFeedbackSha256
+            === requestedReviewFeedbackSha256
+            || (requestedReviewFeedback && paper.analysisManifest?.stages?.apiReaderArticle?.reviewFeedbackSha256
+                === crypto.createHash('sha256').update(rawRequestedReviewFeedback).digest('hex')));
     const existingReaderResourceSha256 = paper.apiReaderResources?.identitySha256 || '';
     if (!analysis || sourceText.length <= FULL_TEXT_MIN_CHARS_FOR_FULL) {
         throw new Error('评分复验需要已完成 analysis 与可验证全文');
@@ -8529,7 +8603,11 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
         captureStaleAnalysisSnapshot(paper, manifest, 'scoringAudit',
             scoringFactReview.current(getPaperArxivId(paper)).proof.feedbackSha256);
     }
-    const readerRevisionSeed = prepareApiReaderRevisionSeed(
+    const scoringOnly = scoringFactReview.current(getPaperArxivId(paper))?.scoringOnly === true;
+    if (scoringOnly && !existingReaderReusable) {
+        throw new Error('独立评分范围需要保持已核验Reader和资源身份，不能请求正文重写');
+    }
+    const readerRevisionSeed = scoringOnly ? null : prepareApiReaderRevisionSeed(
         paper, sourceText, options.reviewFeedback || ''
     );
     const readerResources = await buildApiReaderResourceIdentity(

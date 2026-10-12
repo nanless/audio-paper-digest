@@ -978,6 +978,16 @@ function findMissingComparisonUnits(text) {
             /([λε])\s*在\s*[-+]?\d+(?:\.\d+)?\s*(?:到|至)\s*[-+]?\d+(?:\.\d+)?\s*之间/gu
         )];
         let comparisonText = sentence.text;
+        // NFE 的显式取值集合与同句展开步数 K 是设置条件。
+        // 只屏蔽完整表达式，不能把同句裸露的 WER/CER 结果一并当作参数。
+        const hasExplicitNfeSettings = /\bNFE\s*(?:∈|in\b|=)\s*\{\s*\d+(?:\s*[,，]\s*\d+)*\s*\}/iu.test(comparisonText);
+        if (hasExplicitNfeSettings) {
+            comparisonText = comparisonText
+                .replace(/\bNFE\s*(?:∈|in\b|=)\s*\{\s*\d+(?:\s*[,，]\s*\d+)*\s*\}/giu,
+                    match => ' '.repeat(match.length))
+                .replace(/\bK\s*=\s*\d+(?![\d.])/gu,
+                    match => ' '.repeat(match.length));
+        }
         for (const range of parameterRanges) {
             comparisonText = comparisonText.replace(range[0], ' '.repeat(range[0].length));
             comparisonText = comparisonText.replace(
@@ -986,6 +996,10 @@ function findMissingComparisonUnits(text) {
             );
         }
         const numericText = comparisonText
+            // 有空格的完整型号版本仍是产品标识，不是邻近指标的结果。
+            // 只识别实际遇到的两类命名型号，保留同句的其他裸指标数字。
+            .replace(/\b(?:Qwen\s+\d+(?:\.\d+)?(?:-[A-Za-z][A-Za-z0-9-]*)?|Gemma\s+\d+(?:\.\d+)?)(?![\d.])/giu,
+                match => ' '.repeat(match.length))
             // 明确命名的超参数值是实验设置，不能冒充同句的百分比结果。
             // 只屏蔽实际参数表达式；其他结果数字继续走原有单位检查。
             .replace(

@@ -4,8 +4,17 @@ const CONTRACT = 'primary-local-fact-repair-v1';
 const VALIDATION_CONTRACT = 'primary-local-fact-validation-v1';
 const sha = value => crypto.createHash('sha256').update(String(value)).digest('hex');
 function validateHeadings(analysis) {
-    const issue = require('../analysis-contract').validateTopLevelSectionContract(analysis);
-    if (issue) reject(`原正文固定章节不合法：${issue}`);
+    const contract = require('../analysis-contract');
+    const issue = contract.validateTopLevelSectionContract(analysis);
+    if (!issue) return;
+    // 原始主分析的标签由后续结构修复与独立标签阶段补齐。
+    // 局部事实修复可保留这一种中间稿；其他缺节、乱序或重复仍拒绝。
+    const headings = require('./analysis-section-titles').analysisSectionHeadings(analysis)
+        .map(heading => heading.section);
+    const pendingTags = contract.REQUIRED_ANALYSIS_SECTIONS.filter(title => title !== '标签');
+    if (headings.length === pendingTags.length
+        && headings.every((heading, index) => heading === pendingTags[index])) return;
+    reject(`原正文固定章节不合法：${issue}`);
 }
 function reject(message) {
     const error = new Error(`局部主文事实纠错拒绝：${message}`);

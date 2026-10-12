@@ -41,6 +41,12 @@ test('完整原表声明由程序保留双层表头和合并单元格投影', ()
 });
 
 const invalidCases = {
+    '不一致的模式标签': sample => { sample.draft.tableBindings[0].sourceType = 'source_quotes'; },
+    '非精确的模式标签': sample => { sample.draft.tableBindings[0].sourceType = 'complete_table'; },
+    '冗余模式标签与额外字段': sample => {
+        sample.draft.tableBindings[0].sourceType = 'completeTable';
+        sample.draft.tableBindings[0].sourceQuotes = [];
+    },
     '混入手写单元格': sample => { sample.draft.tableBindings[0].cellBindings = []; },
     '混入选择子集': sample => { sample.draft.tableBindings[0].completeTable.sourceRows = [0, 2]; },
     '缺失标记': sample => { sample.draft.sections[0].body = '结果说明。'; },
@@ -65,6 +71,22 @@ for (const [name, change] of Object.entries(invalidCases)) {
         assert.throws(() => normalizeReaderDraftOrder(sample.draft, sample));
     });
 }
+
+test('完整原表精确冗余模式标签不改变原表或来源核验', () => {
+    const plain = createCompleteTableSample();
+    const expected = normalizeReaderDraftOrder(plain.draft, plain);
+    const sample = createCompleteTableSample();
+    sample.draft.tableBindings[0].sourceType = 'completeTable';
+    const frozen = JSON.stringify(sample);
+    assert.deepEqual(normalizeReaderDraftOrder(sample.draft, sample).draft, expected.draft);
+    assert.equal(JSON.stringify(sample), frozen);
+    for (const change of Object.values(invalidCases)) {
+        const invalid = createCompleteTableSample();
+        invalid.draft.tableBindings[0].sourceType = 'completeTable';
+        change(invalid);
+        assert.throws(() => normalizeReaderDraftOrder(invalid.draft, invalid));
+    }
+});
 
 function createFullReaderTableSample() {
     const { parseArxivStructuredArtifactsFromHtml, bindStructuredArtifactsToText, parseApiReaderArticleResult } = require('../scripts/deep-analyzer.js');

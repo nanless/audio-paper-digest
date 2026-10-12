@@ -101,3 +101,46 @@ test('不同反馈、来源、评分或普通失败一律不借此恢复 Reader 
         })));
     assert.throws(() => deep.prepareApiReaderRevisionSeed(sample.paper, sample.source.text, sample.feedback.readerFeedback), /定向修订需要完整/);
 });
+
+
+test('主文反馈fallback必须绑定现有Reader同证明与准确反馈SHA', async t => {
+    const sample = await createReviewedReaderSample(t);
+    sample.feedback.readerFeedback = '';
+    sample.feedback.rejectedReaderClaims = [];
+    sample.bound = facts.validateFeedback(sample.feedback, sample.plan, sample.paper);
+    sample.paper.analysisManifest.stages.primaryAnalysis.factReview = sample.bound.proof;
+    await daily.withDailyFreshAnalysisContext(sample.plan, () => daily.withDailyFreshPaperSource(sample.plan, sample.paper,
+        () => facts.withFactReview(sample.bound, () => {
+            const feedback = facts.reviewFeedback('apiReaderArticle', sample.id);
+            const stage = sample.paper.analysisManifest.stages.apiReaderArticle;
+            stage.factReview = sample.bound.proof;
+            stage.reviewFeedbackSha256 = facts.sha(feedback.trim());
+            const before = JSON.stringify(sample.paper);
+            const seed = deep.prepareApiReaderRevisionSeed(sample.paper, sample.source.text, feedback);
+            assert.equal(seed.metadata.revisionSeedStageRecovery, 'reviewed-completed-primary-reader-stage-v1');
+            assert.equal(JSON.stringify(sample.paper), before);
+            for (const alter of [
+                paper => { paper.analysisManifest.stages.apiReaderArticle.factReview.feedbackSha256 = 'a'.repeat(64); },
+                paper => { paper.analysisManifest.stages.apiReaderArticle.reviewFeedbackSha256 = 'b'.repeat(64); },
+                paper => { delete paper.analysisManifest.stages.apiReaderArticle.factReview; }
+            ]) {
+                const changed = structuredClone(sample.paper);
+                alter(changed);
+                assert.throws(() => deep.prepareApiReaderRevisionSeed(changed, sample.source.text, feedback), /定向修订需要完整/);
+            }
+        })));
+});
+
+
+test('独立评分上下文不能借主文fallback申请Reader修订', async t => {
+    const sample = await createReviewedReaderSample(t);
+    const scoringFeedback = { ...sample.feedback, primaryFeedback: '', rejectedPrimaryClaims: [],
+        readerFeedback: '', rejectedReaderClaims: [], scoringFeedback: '只核验现有评分。',
+        rejectedScoringClaims: ['已拒绝的旧评分结论'] };
+    const scoringBound = facts.validateFeedback(scoringFeedback, sample.plan, sample.paper);
+    await daily.withDailyFreshAnalysisContext(sample.plan, () => daily.withDailyFreshPaperSource(sample.plan, sample.paper,
+        () => facts.withScoringFactReviews(scoringBound, sample.bound, sample.paper, () => {
+            assert.throws(() => deep.prepareApiReaderRevisionSeed(sample.paper, sample.source.text,
+                sample.feedback.readerFeedback), /定向修订需要完整/);
+        })));
+});

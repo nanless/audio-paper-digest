@@ -625,7 +625,13 @@ function compileCompleteReaderTableDeclarations(draft, artifacts) {
     draft.tableBindings = draft.tableBindings.map((binding, index) => {
         if (!binding || !Object.prototype.hasOwnProperty.call(binding, 'completeTable')) return binding;
         const fail = () => { throw new Error('完整原表声明的字段或原表身份非法，不能推断表格'); };
-        if (Object.keys(binding).sort().join(',') !== 'completeTable,tableIndex'
+        // 某些模型显式重复写出模式名；它只是一条冗余判别标签，
+        // 不提供来源或单元格证据。只接受与声明一致的精确标签，
+        // 后面仍核验唯一标记、完整原矩阵及每个 DOM 单元格。
+        const fields = Object.keys(binding).sort().join(',');
+        const redundantModeLabel = fields === 'completeTable,sourceType,tableIndex'
+            && binding.sourceType === 'completeTable';
+        if ((fields !== 'completeTable,tableIndex' && !redundantModeLabel)
             || binding.tableIndex !== index + 1
             || !binding.completeTable || typeof binding.completeTable !== 'object'
             || Array.isArray(binding.completeTable)

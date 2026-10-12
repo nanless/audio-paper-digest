@@ -2568,6 +2568,19 @@ primary_task_tag: #音视频生成
             /语义锚点 1.*声学证据 1/);
         assert.doesNotMatch(conceptLeadFigureResult.plan.figurePlacements[0].leadQuote,
             /CONCEPT_BRIDGE/);
+        for (const [point, detail] of [['看图', '2字'], ['观察'.repeat(61), '122字'], [null, '非字符串']]) {
+            const invalidFocus = structuredClone(conceptLeadFigurePayload);
+            invalidFocus.figurePlacements[0].focusPoints[1] = point;
+            assert.throws(() => parseApiReaderArticleResult(JSON.stringify(invalidFocus), {
+                requiredVersion: 3, requireIntegratedTables: true,
+                minimumIntegratedTables: 4, availableFigureOrdinals: [1]
+            }), error => {
+                assert.ok(error.message.includes(`focusPoints[1]=${detail}，须为12–120字`));
+                assert.ok(!error.message.includes('focusPoints[0]='));
+                assert.ok(require('../scripts/deep-analyzer').buildApiReaderValidationFeedback(error).includes(`focusPoints[1]=${detail}`));
+                return true;
+            });
+        }
         const splitThenMergeFigurePayload = structuredClone(v3Payload);
         const splitThenMergeSection = splitThenMergeFigurePayload.sections.find(
             section => section.kind === 'result'
