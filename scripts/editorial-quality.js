@@ -316,7 +316,7 @@ function findQuantitativeChineseNumerals(text) {
         .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))/gu,
             match => ' '.repeat(match.length))
         // 「另一路」是承接上文的指代，不是量出来的计数。
-        .replace(/另一个流/gu, match => ' '.repeat(match.length))
+        .replace(/另一个流|另一个条件(?=改动)/gu, match => ' '.repeat(match.length))
         .replace(
             /(?:进一步|这一步|下一步|上一步|每一步|一次性|这一类|有趣二分)|(?:同一|统一|唯一|单一)(?=[\p{Script=Han}])|一个(?=(?:好看|漂亮|笼统|粗糙|清晰|完整|简单|直接|孤立|统一))|二分(?=(?:解释|结构|视角|框架|法))/gu,
             match => ' '.repeat(match.length)
@@ -522,8 +522,13 @@ function normalizeIssueBoundReaderQuantitativeNumerals(text, issues = []) {
     const replaceCompleteNumeral = (value, surface, replacement) => value.replaceAll(
         surface, (match, offset, whole) => {
             const before = whole.slice(0, offset);
-            if (new RegExp(`[${CHINESE_DIGITS}点负正\\d.,+−-]$`, 'u').test(before)) return match;
-            return replacement(match, offset, whole);
+            // 紧接设备型号的核数不是混合长数词；只认当前问题绑定的核单位和明确 CPU 型号。
+            const deviceCoreBoundary = /^[一二两三四五六七八九]核$/u.test(surface)
+                && /(?:树莓派|Raspberry\s+Pi)\s*[1-9]\d*$/u.test(before)
+                && /^\s*Cortex-[A-Za-z]\d/u.test(whole.slice(offset + match.length));
+            if (!deviceCoreBoundary
+                && new RegExp(`[${CHINESE_DIGITS}点负正\\d.,+−-]$`, 'u').test(before)) return match;
+            return `${deviceCoreBoundary ? ' ' : ''}${replacement(match, offset, whole)}`;
         }
     );
     const digits = Object.freeze({ 一: 1, 二: 2, 两: 2, 三: 3, 四: 4,
