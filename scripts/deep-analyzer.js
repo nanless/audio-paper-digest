@@ -1198,31 +1198,8 @@ function normalizeReaderConceptBridgeTerms(candidate) {
             bridge.terms = terms.slice(0, 2);
             changed = true;
         }
-        // 修复模型会把第一个 bridge 术语重复成第二个的后缀，比如
-        // ["声音事件定位与检测", "六自由度声音事件定位与检测"]。只有剩下的前缀在文章里
-        // 也可见时，才按这个固定的形态恢复。这样 bridge 仍落在草稿上，不用靠半截子串
-        // 去猜术语。
-        if (Array.isArray(bridge.terms) && bridge.terms.length === 2) {
-            const repairedTerms = bridge.terms.map(term => (
-                typeof term === 'string' ? term.trim() : term
-            ));
-            for (let index = 0; index < repairedTerms.length; index += 1) {
-                const otherIndex = index === 0 ? 1 : 0;
-                const value = repairedTerms[index];
-                const other = repairedTerms[otherIndex];
-                if (typeof value !== 'string' || typeof other !== 'string'
-                    || value.length <= other.length || !value.endsWith(other)) continue;
-                const prefix = value.slice(0, -other.length).trim();
-                if (prefix.length < 2 || prefix.length > 48 || prefix === other
-                    || !article.includes(prefix)) continue;
-                if (typeof bridge.explanation === 'string') {
-                    bridge.explanation = bridge.explanation.replaceAll(value, prefix);
-                }
-                bridge.terms[index] = prefix;
-                changed = true;
-                break;
-            }
-        }
+        // 两个术语共享后缀并不代表重复；例如 SI-SDRi 与 SDRi 是不同指标。
+        // 不按字符串包含关系删词或改写解释，完整语义交给正文与来源核验。
         bridge.terms = bridge.terms.map(term => {
             const value = typeof term === 'string' ? term.trim() : term;
             if (value !== '熵' || !article.includes('问题熵')) return term;

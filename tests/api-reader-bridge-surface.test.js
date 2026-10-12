@@ -71,29 +71,20 @@ test('只去掉已知的桥接字段尾部泄漏，其它数组仍做严格术�
     assert.equal(unrelated.conceptBridges[0].terms.length, 3);
 });
 
-test('只有前缀在文章里可见时，才修复重复的桥接术语后缀', () => {
-    const candidate = {
-        sections: [{ body: '本文比较声音事件定位与检测和六自由度，并说明两者如何协同。' }],
-        conceptBridges: [{
-            terms: ['声音事件定位与检测', '六自由度声音事件定位与检测'],
-            explanation: '六自由度声音事件定位与检测负责描述运动听者。'
-        }]
-    };
-    assert.equal(normalizeReaderConceptBridgeTerms(candidate), true);
-    assert.deepEqual(candidate.conceptBridges[0].terms, ['声音事件定位与检测', '六自由度']);
-    assert.equal(candidate.conceptBridges[0].explanation, '六自由度负责描述运动听者。');
-
-    const unrelated = {
-        sections: [{ body: '本文只出现了声音事件定位与检测。' }],
-        conceptBridges: [{
-            terms: ['声音事件定位与检测', '六自由度声音事件定位与检测'],
-            explanation: '重复词组不应在正文缺少前缀时被猜测修复。'
-        }]
-    };
-    assert.equal(normalizeReaderConceptBridgeTerms(unrelated), false);
-    assert.deepEqual(unrelated.conceptBridges[0].terms, [
-        '声音事件定位与检测', '六自由度声音事件定位与检测'
-    ]);
+test('共享后缀不能证明术语重复，完整缩写及中文复合术语都保持原样', () => {
+    for (const terms of [
+        ['SI-SDRi', 'SDRi'], ['SDRi', 'SI-SDRi'],
+        ['语音识别', '端到端语音识别'],
+        ['声音事件定位与检测', '六自由度声音事件定位与检测']
+    ]) {
+        const candidate = {
+            sections: [{ body: `${terms.join('与')}是需要分别说明的完整术语。正文还出现六自由度、端到端。` }],
+            conceptBridges: [{ terms, explanation: `${terms[0]}和${terms[1]}有各自含义，不能删掉后缀。` }]
+        };
+        const before = structuredClone(candidate);
+        assert.equal(normalizeReaderConceptBridgeTerms(candidate), false);
+        assert.deepEqual(candidate, before);
+    }
 });
 
 test('中文数字排版做有限归一化之后重新绑定桥接', () => {
