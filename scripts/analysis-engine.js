@@ -2093,6 +2093,7 @@ module.exports = {
     updateJsonFileLocked,
     persistAnalysisCheckpoint,
     isSuccessfulAnalysisRecord,
+    getIncompleteAnalysisContentReason,
     scoringAuditBindsFinalAnalysis,
     scoringStabilityIsResolved,
     hasValidApiReaderV3Records,

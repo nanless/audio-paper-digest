@@ -285,6 +285,78 @@ async function refreshApiReader(targetId, options = {}) {
     });
 }
 
+function finishReviewedPrimaryReaderRefresh(previous, refreshed, plan, options = {}) {
+    if (!canRepairCompletedPrimaryReader(previous, plan, options)) {
+        throw new Error('已完成主文的 Reader 成功收尾缺少原授权');
+    }
+    const facts = require('./lib/daily-fact-review');
+    const engine = require('./analysis-engine');
+    const sameMainStages = value => Object.fromEntries(Object.entries(value.analysisManifest.stages)
+        .filter(([key]) => key !== 'apiReaderArticle'));
+    const protectedKeys = ['parsed', 'analysisCheckpoint', 'analysisStageCheckpoints',
+        'freshRewriteProvenance', 'sourceSha256', 'usedTextSha256', 'scoringRubricVersion',
+        'analysisSource', 'sourceId', 'sourceTextChars', 'digestStatus', 'error'];
+    for (const key of protectedKeys) {
+        if (Object.hasOwn(previous, key) !== Object.hasOwn(refreshed, key)
+            || JSON.stringify(previous[key]) !== JSON.stringify(refreshed[key])) {
+            throw new Error(`Reader 成功收尾改变了受保护字段 ${key}`);
+        }
+    }
+    const failureKeys = ['latestAnalysisAttemptError', 'latestAnalysisAttemptAt',
+        'latestAnalysisAttemptErrorCode', 'latestAnalysisAttemptRetryable'];
+    for (const key of failureKeys) {
+        if (Object.hasOwn(previous, key) !== Object.hasOwn(refreshed, key)
+            || JSON.stringify(previous[key]) !== JSON.stringify(refreshed[key])) {
+            throw new Error('Reader 成功收尾的原失败身份不同');
+        }
+    }
+    if (normalizedId(previous) !== normalizedId(refreshed)
+        || JSON.stringify(previous.analysisManifest.sourceAcquisition)
+            !== JSON.stringify(refreshed.analysisManifest.sourceAcquisition)) {
+        throw new Error('Reader 成功收尾改变了论文或来源身份');
+    }
+    if (refreshed.analysis !== previous.analysis
+        || JSON.stringify(sameMainStages(refreshed)) !== JSON.stringify(sameMainStages(previous))
+        || refreshed.latestAnalysisAttemptError !== previous.latestAnalysisAttemptError) {
+        throw new Error('Reader 成功收尾改变了主文、其他阶段或原失败身份');
+    }
+    facts.validateRepairedClaims('apiReaderArticle', refreshed.apiReaderArticle, normalizedId(refreshed));
+    const reason = engine.getIncompleteAnalysisContentReason(refreshed);
+    if (reason) throw new Error(`Reader 成功收尾仍有未完成内容：${reason}`);
+    const stage = refreshed.analysisManifest.stages.apiReaderArticle;
+    const requestedFeedbackSha = require('node:crypto').createHash('sha256')
+        .update(String(options.reviewFeedback || '').trim()).digest('hex');
+    if (stage.reviewFeedbackSha256 !== requestedFeedbackSha
+        || stage.factReview && JSON.stringify(stage.factReview)
+            !== JSON.stringify(facts.current(normalizedId(previous)).proof)) {
+        throw new Error('新 Reader 的反馈身份与本次授权不同');
+    }
+    if (!Number.isFinite(Date.parse(stage.refreshedAt))
+        || !(Date.parse(stage.refreshedAt) > Date.parse(previous.latestAnalysisAttemptAt))) {
+        throw new Error('Reader 成功收尾没有晚于原失败的完成记录');
+    }
+    const result = structuredClone(refreshed);
+    const failure = Object.fromEntries(Object.entries(previous).filter(([key]) =>
+        key.startsWith('latestAnalysisAttempt') || key === 'error' || key === 'digestStatus'));
+    result.readerCompletedPrimaryRecoveryHistory = [...(previous.readerCompletedPrimaryRecoveryHistory || []), {
+        contract: 'reviewed-completed-primary-reader-finish-v1', failure,
+        feedbackSha256: facts.current(normalizedId(previous)).proof.feedbackSha256,
+        originalFactReview: structuredClone(facts.current(normalizedId(previous)).proof),
+        readerExecution: { fingerprint: stage.fingerprint, attempts: stage.attempts,
+            fullAttempts: stage.fullAttempts, transportFailures: stage.transportFailures },
+        note: '正常完成状态转换记录；沿用原事实审查与已付费Reader执行，不是新模型审查证明。',
+        readerArticleSha256: stage.articleSha256, completedAt: stage.refreshedAt
+    }];
+    for (const key of failureKeys) delete result[key];
+    if (result.error === previous.latestAnalysisAttemptError) result.error = null;
+    if (result.digestStatus?.latestAttemptStatus === 'analysis_failed') {
+        result.digestStatus = { ...result.digestStatus, latestAttemptStatus: 'analyzed', error: null };
+    }
+    if (!engine.isSuccessfulAnalysisRecord(result)) throw new Error('Reader 收尾后仍不满足完整成功资格');
+    require('./lib/reader-candidate-transactions').transferDeferredReaderCandidate(refreshed, result);
+    return result;
+}
+
 async function refreshApiReaderInternal(targetId, options = {}) {
     const requested = normalizedId(targetId);
     if (!requested) throw new Error('用法: node scripts/refresh-api-reader.js <arxiv-id>');
@@ -319,6 +391,8 @@ async function refreshApiReaderInternal(targetId, options = {}) {
             throw new Error(`${requested} 的分析结果与当前封存的日更来源不一致；请使用 npm run reanalyze 根据已封存来源重新分析。`);
         }
         const inputIdentity = paperRefreshInputIdentity(storedAnalysisRecord);
+        const completedPrimaryRecoveryInput = canRepairCompletedPrimaryReader(
+            storedAnalysisRecord, lockedDailySourcePlan, options) ? structuredClone(storedAnalysisRecord) : null;
         const refreshLabel = options.authorsOnly
             ? '作者与机构信息'
             : options.figuresOnly
@@ -424,7 +498,7 @@ async function refreshApiReaderInternal(targetId, options = {}) {
             };
         // 即使只调整正文与计划记录的对应关系，也要使用已核验的日更来源和图片。
         // 修改已保存的结果前，必须核对对应的封存文件，不能改用旧图片或缓存。
-        const refreshed = await dailyFreshSources.withDailyFreshAnalysisContext(lockedDailySourcePlan, () =>
+        let refreshed = await dailyFreshSources.withDailyFreshAnalysisContext(lockedDailySourcePlan, () =>
             dailyFreshSources.withDailyFreshPaperSource(
                 lockedDailySourcePlan,
                 storedAnalysisRecord,
@@ -432,6 +506,10 @@ async function refreshApiReaderInternal(targetId, options = {}) {
                 options
             ), { refreshReaderDiagnostics: options.refreshReaderDiagnostics }
         );
+        if (completedPrimaryRecoveryInput) {
+            refreshed = finishReviewedPrimaryReaderRefresh(completedPrimaryRecoveryInput,
+                refreshed, lockedDailySourcePlan, options);
+        }
         const savedPayload = updateJsonFileLocked(resultPath, payload => {
             const rows = Array.isArray(payload) ? payload : payload.papers;
             if (!Array.isArray(rows)) throw new Error('分析结果中的论文列表 papers 不是数组。');
@@ -520,5 +598,6 @@ module.exports = {
     paperRefreshInputIdentity,
     canRepairScoringBinding,
     canRepairCompletedPrimaryReader,
+    finishReviewedPrimaryReaderRefresh,
     MAX_REFRESH_CONCURRENCY
 };
