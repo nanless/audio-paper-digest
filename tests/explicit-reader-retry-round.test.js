@@ -592,16 +592,13 @@ test('新轮保留完整原稿，真实 Reader 首次请求走局部修复，原
         f.grant.originalIdentitySha256 = f.grant.identitySha256;
         f.grant.envelopeSha256 = sha(fs.readFileSync(file));
         await retry.withExplicitRound(paper, f.grant, async () => {
-            const next = retry.beginExplicitRound(directory, prepared.identity, f.payload, paper);
-            assert.equal(next.rawDraft, raw);
-            assert.deepEqual(next.draft, draft);
             await assert.rejects(deep.generateApiReaderArticleDetailed(paper, paper.analysisCheckpoint, '', options), /实际局部请求受控停止/);
             assert.deepEqual(stages, ['apiReaderRepair']);
-            const receipt = JSON.parse(fs.readFileSync(next.explicitReaderRetryRound.receiptFile));
+            const saved = repair.loadFailedCandidate(directory, prepared.identity);
+            const receipt = JSON.parse(fs.readFileSync(saved.explicitReaderRetryRound.receiptFile));
             assert.equal(receipt.oldAttempts, 6);
             assert.equal(receipt.oldFullAttempts, 2);
             assert.equal(sha(fs.readFileSync(receipt.archivedFile)), f.grant.envelopeSha256);
-            const saved = repair.loadFailedCandidate(directory, prepared.identity);
             assert.equal(saved.fullAttempts, 0);
             assert.equal(saved.rawDraft, raw);
         });
@@ -637,6 +634,64 @@ async function setupExhaustedParent(t, tokensUsed = [48000, 16000, 16000], saved
         maxPhysicalRequests: 2, maxReservedOutputTokens: 32000 };
     return { ...f, parent, parentReceipt, childGrant, raw };
 }
+test('首次经真实长文入口开始父轮局部修复，不丢原稿或请求全文', async t => {
+    const deep = require('../scripts/deep-analyzer');
+    const draft = createReaderTestArticle();
+    draft.readerTitle = '短';
+    const raw = JSON.stringify(draft);
+    const f = setup(t, p => {
+        p.draft = draft; p.rawDraft = raw;
+        p.ephemeralImageEvidence = { imageEvidence: [], directSupplementaryEvidence: [] };
+    });
+    await f.locked(async () => {
+        const source = daily.readDailyFreshSource(plan, paper);
+        const stages = [];
+        const stop = Object.assign(new Error('首次局部调用受控停止'), { retryable: false, scope: 'run' });
+        const options = { sourceText: source.text, structuredArtifacts: source.structuredArtifacts,
+            readerAttemptsDir: directory, readerMaterializeFigures: async () => [],
+            readerRecordDisposition: () => {}, readerCallModel: async (_messages, _budget, request) => {
+                stages.push(request.usageContext.stage); throw stop;
+            } };
+        const { identity } = await deep.prepareApiReaderRetryIdentity(paper, paper.analysisCheckpoint, '', options);
+        fs.unlinkSync(f.file);
+        repair.saveFailedCandidate(directory, identity, f.payload);
+        const file = path.join(directory, repair.hashDraft(identity) + '.json');
+        f.grant.identitySha256 = repair.hashDraft(identity);
+        f.grant.originalIdentitySha256 = f.grant.identitySha256;
+        f.grant.envelopeSha256 = sha(fs.readFileSync(file));
+        let parent;
+        await retry.withExplicitRound(paper, f.grant, async () => {
+            parent = retry.beginExplicitRound(directory, identity, f.payload, paper);
+            await retry.withPhysicalBudget(parent.explicitReaderRetryRound, paper, async () => {
+                for (const tokens of [48000, 16000, 16000]) {
+                    await sendLocalRepairRequest(paper, tokens, tokens === 48000 ? 'apiReaderArticle' : 'apiReaderRepair');
+                }
+            });
+            parent = { ...parent, attempts: 3, fullAttempts: 1 };
+            repair.saveFailedCandidate(directory, identity, parent);
+        });
+        const parentReceipt = fs.readFileSync(parent.explicitReaderRetryRound.receiptFile);
+        const originalBytes = fs.readFileSync(file);
+        const child = { ...f.grant, contract: retry.LOCAL_REPAIR_CONTRACT,
+            roundId: crypto.randomUUID(), parentRoundId: f.grant.roundId,
+            parentReceiptSha256: sha(parentReceipt), envelopeSha256: sha(originalBytes),
+            payloadSha256: repair.hashDraft(parent), maxResponses: 1, maxFullResponses: 0,
+            maxPhysicalRequests: 2, maxReservedOutputTokens: 32000 };
+        await retry.withExplicitLocalRepairRound(paper, child, async () => {
+            await assert.rejects(deep.generateApiReaderArticleDetailed(paper, paper.analysisCheckpoint, '', options), /首次局部调用受控停止/);
+        });
+        assert.deepEqual(stages, ['apiReaderRepair']);
+        assert.deepEqual(fs.readFileSync(parent.explicitReaderRetryRound.receiptFile), parentReceipt);
+        const saved = repair.loadFailedCandidate(directory, identity);
+        assert.equal(saved.explicitReaderRetryRound.roundId, child.roundId);
+        assert.equal(saved.fullAttempts, 0);
+        assert.equal(saved.rawDraft, raw);
+        const receipt = JSON.parse(fs.readFileSync(saved.explicitReaderRetryRound.receiptFile));
+        assert.deepEqual(fs.readFileSync(receipt.archivedFile), originalBytes);
+        assert.equal(receipt.oldAttempts, 3);
+        assert.equal(receipt.oldFullAttempts, 1);
+    });
+});
 function sendLocalRepairRequest(paper, tokens, stage = 'apiReaderRepair', transport = async () => ({
     statusCode: 200, body: { choices: [{ message: { content: '{}' }, finish_reason: 'stop' }] }
 })) {

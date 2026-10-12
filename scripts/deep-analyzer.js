@@ -7631,7 +7631,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     if (!repair.hasUnusedImplementationAllowance(recovered)) {
         const newRound = explicitRetry.beginExplicitRound(candidateDirectory, identity, recovered, paper);
         if (newRound) {
-            recovered = newRound; candidate = null; previousDraft = start.previousDraft; currentIssues = [];
+            recovered = newRound;
+            candidate = recovered.draft || null;
+            previousDraft = recovered.rawDraft || start.previousDraft;
+            currentIssues = recovered.issues || [];
+            draftOrderMappings = recovered.draftOrderMappings || [];
+            readerRecoveryRevisions = recovered.readerRecoveryRevisions || [];
             useEscalatedRepairBudget = false;
             completedAttempts = 0; fullAttempts = 0; transportFailures = 0;
             noProgress = 0; validationFailureStreak = 0;
