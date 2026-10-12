@@ -128,15 +128,27 @@ function replayPaidReaderResponse(directory, old, identity, options) {
         || (payload.transportFailures || 0) !== 0 || payload.explicitReaderRetryRound
         || payload.implementationRepairAllowanceProof || payload.readerRecoveryRevisions?.length
         || oldIdentity.contentMode !== 'reader-source-signed-revision-v1'
-        || oldIdentity.model?.model !== 'muse-spark-1.3-contributor'
-        || oldIdentity.tableCompilerSha256 !== identity.tableCompilerSha256) fail('原候选身份、次数或恢复范围不符');
+        || oldIdentity.model?.model !== 'muse-spark-1.3-contributor') fail('原候选身份、次数或恢复范围不符');
     const implementationFields = ['parserImplementationSha256', 'editorialImplementationSha256',
         'mechanicalContractSha256', 'repairImplementationSha256', 'sourceDiagnosticsImplementationSha256',
-        'draftOrderImplementationSha256'];
+        'draftOrderImplementationSha256', 'tableCompilerSha256'];
     const omitImplementation = value => Object.fromEntries(Object.entries(value)
         .filter(([key]) => !implementationFields.includes(key)));
     if (!isDeepStrictEqual(omitImplementation(oldIdentity), omitImplementation(identity)))
         fail('不能更换原模型、提示、反馈、来源或逻辑输入');
+    let tableCoverageCompatibility = null;
+    if (oldIdentity.tableCompilerSha256 !== identity.tableCompilerSha256) {
+        const oldSha = '3871a15e747273452e6358c6c37b66fff14f4cde5ab2e4160751ae8e5a267b9a';
+        const currentSha = 'eb0f2ec9800e1d3707be8f95c34e417d954618b04df96d483f97bf5193ee456f';
+        const currentSource = fs.readFileSync(path.join(__dirname, 'reader-tables.js'), 'utf8');
+        const added = ".trim()\n            .replace(/^约\\s*(?=[+−-]?(?:\\d|\\.\\d))/, '')";
+        const restored = currentSource.replace(added, '.trim()');
+        if (oldIdentity.tableCompilerSha256 !== oldSha || identity.tableCompilerSha256 !== currentSha
+            || sha(currentSource) !== currentSha || restored === currentSource || sha(restored) !== oldSha)
+            fail('表格校验实现差异不是已核的约数结果识别');
+        tableCoverageCompatibility = { oldSha256: oldSha, currentSha256: currentSha,
+            change: '仅结果覆盖校验识别约数前缀，表格构造与原单元格不变' };
+    }
     if (sha(normalizeReaderConceptBridgeTerms.toString()) !== HISTORICAL_NORMALIZER.functionSha256
         || sha(fs.readFileSync(path.join(__dirname, 'reader-draft-order.js'))) !== HISTORICAL_NORMALIZER.draftOrderFileSha256
         || oldIdentity.draftOrderImplementationSha256 !== HISTORICAL_NORMALIZER.draftOrderFileSha256
@@ -189,7 +201,7 @@ function replayPaidReaderResponse(directory, old, identity, options) {
     const review = require('./daily-fact-review').reviewFeedback('apiReaderArticle', identity.paperId);
     if (!active || !active.feedback.readerFeedback?.trim() || !review || !req.prompt.includes(review))
         fail('必须保留同一次已公验事实反馈');
-    return { draft, rawDraft: raw, proof: { contract: CONTRACT, historicalNormalizer: HISTORICAL_NORMALIZER, usageEventId: event.eventId,
+    return { draft, rawDraft: raw, proof: { contract: CONTRACT, historicalNormalizer: HISTORICAL_NORMALIZER, tableCoverageCompatibility, usageEventId: event.eventId,
         outputTextSha256: sha(raw), usageFileSha256: options.usageFileSha256,
         repairDiagnosticId: req.id, repairRequestSha256: options.repairRequestSha256,
         repairResponseSha256: options.repairResponseSha256, originalEnvelopeSha256: old.envelopeSha256,
