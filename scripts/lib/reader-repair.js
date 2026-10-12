@@ -2207,7 +2207,7 @@ function saveFailedCandidate(directory, identity, payload) {
     if (previous?.readerOriginalDraftRestorations) {
         if (storedPayload.readerOriginalDraftRestorations
             && hashDraft(storedPayload.readerOriginalDraftRestorations) !== hashDraft(previous.readerOriginalDraftRestorations)) {
-            throw new Error('同父原稿恢复记录不能改变');
+            throw new Error('同一轮原稿恢复记录不能改变');
         }
         storedPayload.readerOriginalDraftRestorations = previous.readerOriginalDraftRestorations;
     }

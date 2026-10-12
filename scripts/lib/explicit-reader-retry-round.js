@@ -400,7 +400,7 @@ function restoreExplicitRoundOriginalDraft(directory, identity, payload, paper) 
     try { return restoreExplicitRoundOriginalDraftChecked(directory, identity, payload, paper); }
     catch (cause) {
         const error = retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID',
-            `同父原稿恢复证明无效：${cause.message}`);
+            `同一轮原稿恢复证明无效：${cause.message}`);
         error.cause = cause;
         throw error;
     }
@@ -425,7 +425,7 @@ function restoreExplicitRoundOriginalDraftChecked(directory, identity, payload, 
     if (repair.hashDraft(semantic(original.identity)) !== repair.hashDraft(semantic(identity))
         || original.identity.readerRecoveryEpochSha256 !== identity.readerRecoveryEpochSha256
         || repair.hashDraft(original.identity.readerJsonRequestPolicy ?? null) !== repair.hashDraft(identity.readerJsonRequestPolicy ?? null)) {
-        throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同父原稿恢复的封存来源、实际输入或恢复epoch已变化');
+        throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同一轮原稿恢复的封存来源、实际输入或恢复epoch已变化');
     }
     const draft = repair.parseRecoveryDraft(original.payload?.draft) || repair.parseRecoveryDraft(original.payload?.rawDraft);
     if (!draft || draft.sections.length < 12 || draft.sections.some(section => !section
@@ -440,13 +440,13 @@ function restoreExplicitRoundOriginalDraftChecked(directory, identity, payload, 
             || repair.hashDraft(original.payload) !== receipt.grant.payloadSha256
             || repair.hashDraft(original.identity) !== receipt.grant.originalIdentitySha256
             || hash(fs.readFileSync(receiptFile)) !== hash(checkedReceipt.bytes)) {
-            throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同父原稿恢复的当前候选、原档或付费账已变化');
+            throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同一轮原稿恢复的当前候选、原档或付费账已变化');
         }
         const archivedName = `${repair.hashDraft(identity)}.round-original-restoration-${hash(current.bytes)}.json`;
         const archivedFile = path.join(directory, archivedName);
         if (fs.existsSync(archivedFile)) {
             if (hash(readMigrationEnvelope(archivedFile).bytes) !== hash(current.bytes)) {
-                throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同父原稿恢复的占位稿原字节已变化');
+                throw retryInputError('READER_ORIGINAL_DRAFT_RESTORATION_PROOF_INVALID', '同一轮原稿恢复的占位稿原字节已变化');
             }
         } else {
             const fd = fs.openSync(archivedFile, 'wx', 0o600);

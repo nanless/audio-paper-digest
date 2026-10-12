@@ -1087,7 +1087,7 @@ test('旧父轮占位稿从同轮原档恢复，首次真实入口只发16k局�
     });
 });
 
-test('同父原档恢复拒绝覆盖真实新稿、已保存响应、局部子轮或未验证原档', async t => {
+test('同一轮原档恢复拒绝覆盖真实新稿、已保存响应、局部子轮或未验证原档', async t => {
     const draft = createReaderTestArticle();
     const f = setup(t, p => { p.draft = draft; p.rawDraft = JSON.stringify(draft); });
     await f.locked(() => retry.withExplicitRound(paper, f.grant, () => {
@@ -1110,7 +1110,7 @@ test('同父原档恢复拒绝覆盖真实新稿、已保存响应、局部子�
     }));
 });
 
-test('同父原稿恢复不能覆盖已经实际请求局部补丁的轮，即使当前占位状态计数为零', async t => {
+test('同一轮原稿恢复不能覆盖已经实际请求局部补丁的轮，即使当前占位状态计数为零', async t => {
  const draft=createReaderTestArticle();const f=setup(t,p=>{p.draft=draft;p.rawDraft=JSON.stringify(draft);});
  await f.locked(()=>retry.withExplicitRound(paper,f.grant,()=>{
   const next=retry.beginExplicitRound(directory,f.identity,f.payload,paper);
