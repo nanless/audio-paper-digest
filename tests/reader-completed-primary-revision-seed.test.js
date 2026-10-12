@@ -15,60 +15,6 @@ const { validAnalysisPaper } = require('./valid-analysis-fixture');
 
 const failure = '局部事实纠错没有当前错误原句，也没有同反馈已完成证明；不能扩大为完整主文请求';
 
-test('已完成主文的 Reader 单独修订通过公共入口两次资格核验，预检不调用模型或保存', async t => {
-    const sample = await createReviewedReaderSample(t);
-    const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-public-entry-'));
-    const previous = Config.FILES.deepAnalysisResult;
-    Config.FILES.deepAnalysisResult = path.join(directory, 'analysis.json');
-    t.after(() => {
-        Config.FILES.deepAnalysisResult = previous;
-        fs.rmSync(directory, { recursive: true, force: true });
-    });
-    const payload = { batchDate: sample.plan.batchDate,
-        dailyFreshSourceRun: daily.dailyFreshSourceReference(sample.plan), papers: [sample.paper] };
-    const bytes = JSON.stringify(payload);
-    fs.writeFileSync(Config.FILES.deepAnalysisResult, bytes);
-    const refresh = require('../scripts/refresh-api-reader');
-    let calls = 0;
-    await assert.rejects(facts.withFactReview(sample.bound, () => refresh.refreshApiReader(sample.id, {
-        reviewFeedback: sample.feedback.readerFeedback,
-        operations: { article: async (paper, source) => {
-            calls += 1;
-            const seed = deep.prepareApiReaderRevisionSeed(paper, source.text, sample.feedback.readerFeedback);
-            assert.equal(seed.metadata.revisionSeedStageRecovery, 'reviewed-completed-primary-reader-stage-v1');
-            assert.deepEqual(paper.analysisManifest.stages, sample.paper.analysisManifest.stages);
-            throw new Error('只读公共入口预检完成');
-        } },
-    })), /只读公共入口预检完成/);
-    assert.equal(calls, 1);
-    assert.equal(fs.readFileSync(Config.FILES.deepAnalysisResult, 'utf8'), bytes);
-});
-
-test('公共单独修订资格拒绝普通失败、坏证明、其他模式、错反馈和无事实作用域', async t => {
-    const sample = await createReviewedReaderSample(t);
-    const refresh = require('../scripts/refresh-api-reader');
-    const options = { reviewFeedback: sample.feedback.readerFeedback };
-    await facts.withFactReview(sample.bound, () => {
-        assert.equal(refresh.canRepairCompletedPrimaryReader(sample.paper, sample.plan, options), true);
-        for (const alter of [
-            paper => { paper.latestAnalysisAttemptError = '普通网络失败'; },
-            paper => { paper.analysisManifest.stages.primaryAnalysis.factReview.feedbackSha256 = 'a'.repeat(64); },
-            paper => { paper.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = 'b'.repeat(64); },
-            paper => { paper.apiReaderArticle += '未记录的变更'; },
-        ]) {
-            const changed = structuredClone(sample.paper);
-            alter(changed);
-            assert.equal(refresh.canRepairCompletedPrimaryReader(changed, sample.plan, options), false);
-        }
-        for (const mode of ['authorsOnly', 'figuresOnly', 'surfaceBindingsOnly', 'scoringAndReader']) {
-            assert.equal(refresh.canRepairCompletedPrimaryReader(sample.paper, sample.plan, { ...options, [mode]: true }), false);
-        }
-        assert.equal(refresh.canRepairCompletedPrimaryReader(sample.paper, sample.plan, { reviewFeedback: '其他未授权反馈' }), false);
-        assert.equal(refresh.canRepairCompletedPrimaryReader(sample.paper, sample.plan, {}), false);
-    });
-    assert.equal(refresh.canRepairCompletedPrimaryReader(sample.paper, sample.plan, options), false);
-});
-
 async function createReviewedReaderSample(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reviewed-reader-seed-'));
     const previous = Config.FILES.dailyFreshSourceRunsDir;
@@ -197,4 +143,58 @@ test('独立评分上下文不能借主文fallback申请Reader修订', async t =
             assert.throws(() => deep.prepareApiReaderRevisionSeed(sample.paper, sample.source.text,
                 sample.feedback.readerFeedback), /定向修订需要完整/);
         })));
+});
+
+test('已完成主文的 Reader 单独修订通过公共入口两次资格核验，预检不调用模型或保存', async t => {
+    const sample = await createReviewedReaderSample(t);
+    const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-public-entry-'));
+    const previous = Config.FILES.deepAnalysisResult;
+    Config.FILES.deepAnalysisResult = path.join(directory, 'analysis.json');
+    t.after(() => {
+        Config.FILES.deepAnalysisResult = previous;
+        fs.rmSync(directory, { recursive: true, force: true });
+    });
+    const payload = { batchDate: sample.plan.batchDate,
+        dailyFreshSourceRun: daily.dailyFreshSourceReference(sample.plan), papers: [sample.paper] };
+    const bytes = JSON.stringify(payload);
+    fs.writeFileSync(Config.FILES.deepAnalysisResult, bytes);
+    const refresh = require('../scripts/refresh-api-reader');
+    let calls = 0;
+    await assert.rejects(facts.withFactReview(sample.bound, () => refresh.refreshApiReader(sample.id, {
+        reviewFeedback: sample.feedback.readerFeedback,
+        operations: { article: async (paper, source) => {
+            calls += 1;
+            const seed = deep.prepareApiReaderRevisionSeed(paper, source.text, sample.feedback.readerFeedback);
+            assert.equal(seed.metadata.revisionSeedStageRecovery, 'reviewed-completed-primary-reader-stage-v1');
+            assert.deepEqual(paper.analysisManifest.stages, sample.paper.analysisManifest.stages);
+            throw new Error('只读公共入口预检完成');
+        } },
+    })), /只读公共入口预检完成/);
+    assert.equal(calls, 1);
+    assert.equal(fs.readFileSync(Config.FILES.deepAnalysisResult, 'utf8'), bytes);
+});
+
+test('公共单独修订资格拒绝普通失败、坏证明、其他模式、错反馈和无事实作用域', async t => {
+    const sample = await createReviewedReaderSample(t);
+    const refresh = require('../scripts/refresh-api-reader');
+    const options = { reviewFeedback: sample.feedback.readerFeedback };
+    await facts.withFactReview(sample.bound, () => {
+        assert.equal(refresh.canRepairCompletedPrimaryReader(sample.paper, sample.plan, options), true);
+        for (const alter of [
+            paper => { paper.latestAnalysisAttemptError = '普通网络失败'; },
+            paper => { paper.analysisManifest.stages.primaryAnalysis.factReview.feedbackSha256 = 'a'.repeat(64); },
+            paper => { paper.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = 'b'.repeat(64); },
+            paper => { paper.apiReaderArticle += '未记录的变更'; },
+        ]) {
+            const changed = structuredClone(sample.paper);
+            alter(changed);
+            assert.equal(refresh.canRepairCompletedPrimaryReader(changed, sample.plan, options), false);
+        }
+        for (const mode of ['authorsOnly', 'figuresOnly', 'surfaceBindingsOnly', 'scoringAndReader']) {
+            assert.equal(refresh.canRepairCompletedPrimaryReader(sample.paper, sample.plan, { ...options, [mode]: true }), false);
+        }
+        assert.equal(refresh.canRepairCompletedPrimaryReader(sample.paper, sample.plan, { reviewFeedback: '其他未授权反馈' }), false);
+        assert.equal(refresh.canRepairCompletedPrimaryReader(sample.paper, sample.plan, {}), false);
+    });
+    assert.equal(refresh.canRepairCompletedPrimaryReader(sample.paper, sample.plan, options), false);
 });
