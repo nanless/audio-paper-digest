@@ -74,6 +74,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/daily-fetch-boundary.js` | Node 库 | 从已核验远端日更及受控归档确定补抓窗口，读取正式页字段去重；见[边界说明](../docs/daily-fetch-boundary.md)。 |
 | `full-fetch.js` | Node 入口 | 按顺序执行默认数据流程，依次归档、抓取、筛选、去重、深度分析，并逐篇保存结果。 |
 | `lib/daily-fresh-source-plan.js` | Node 库 | 日更筛选结束后，为每篇 arXiv 论文封存本次官方 TXT、PDF 和清单；分析只读取这组文件，图片只在当前请求里临时准备。 |
+| `lib/completed-bound-fact-feedback.js` | Node 库 | 供普通批量和单篇续跑共用，核验同一事实反馈已完成、来源仍一致且错误原句未残留；不改变显式强制重分析。 |
 | `lib/daily-fact-review.js` | Node 库 | 只读外部事实反馈，严格核验论文、日期、runId、四份封存来源SHA、当前核心摘要及全文SHA与逐字引文；锁内重读后将反馈传入正常完整主分析、摘要、Reader或标签模型阶段；全文纠错先保存原付费记录，并拒绝无反馈重生成，不写手工成功正文。 |
 | `lib/fresh-arxiv-rewrite-source.js` | Node 库 | 每轮 arXiv 来源获取时，用原子写入保存官方文本、PDF、不含像素的来源元数据和清单。只有当前稿 PDF 明确返回 404，才允许改用同一论文的官方 `vN` PDF；文本必须从该 PDF 提取，并按条件生成可自校验的 `sourceVersion`。普通来源文件仍按原结构读取。 |
 | `lib/direct-rewrite-analysis-context.js` | Node 库 | 用 AsyncLocalStorage 隔离历史重写和日更的来源文件，让旧正文和缓存进不了分析，Reader 图片只能用临时文件；论文历史版本的身份 SHA 随来源记录进入所有分析阶段。 |
@@ -88,7 +89,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `digest-status.js` | Node 共享 | 同步 `papers.json` 的分析状态、批次日期和恢复状态。 |
 | `lib/fetch-scheduler.js` | Node 库 | 按主机串行调度抓取，记录冷却时间并识别失败类型。 |
 | `lib/filter-input-contract.js` | Node 库 | 算出筛选决定对应的输入 SHA；使用官方范围证据时，一并绑定实际交给模型的证据。 |
-| `lib/filter-修改范围-evidence.js` | Node 库 | 为仅命中泛多模态词、且未明确声音模态的候选获取同篇官方 TXT、PDF、来源元数据和清单；读取时核验文件，并保存模型所用原文及其 SHA。它不直接判定论文相关。 |
+| `lib/filter-scope-evidence.js` | Node 库 | 为仅命中泛多模态词、且未明确声音模态的候选获取同篇官方 TXT、PDF、来源元数据和清单；读取时核验文件，并保存模型所用原文及其 SHA。它不直接判定论文相关。 |
 | `lib/tag-catalog.js` | Node 库 | `loadTagCatalog` 加载共享标签词表，`validateTagCatalog` 检查字段与层级；另外可按别名解析，也能查上下级。Node/Python 解析器和发布检查都用词表原始字节计算 SHA。 |
 | `lib/tag-rules.js` | Node 库 | `createTagRules` 创建标签解析与选择规则，`getDefaultTagRules` 复用默认规则，`buildTagPromptText` 默认生成新版模型标签提示，指定旧版本时，也能生成核验文本。默认选择协议为 `paper-tag-selection-v2`，旧阶段按保存的版本读取，详见本页的分类词表维护说明。 |
 | `lib/page-tag-metadata.js` | Node 库 | 解析页面的 YAML 页首字段，识别新旧标签字段，拒绝混用与重复键；只认实际存在的顶层字段，描述或正文里的文字不算标签声明。 |
@@ -424,7 +425,7 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 
 新会议汇总使用 `conference-aggregate-staging-v2`、`version=2`，标签信息和层级统计分别保存在 `tagMetadata`、`tagHierarchy`，成员的标签分配 SHA 为 `tagAssignmentSha256`。层级格式为 `conference-tag-hierarchy-v2`。Python 发布器先核对汇总记录的规范对象 SHA、完成记录和 Markdown 原字节，再按明确版本读取字段；旧 v1 汇总按原字段读取，新旧字段混用会被拒绝。汇总版本与子论文页、标签分配的版本分别管理，旧证明和已保存的阶段文件保持不变。
 
-页面的标签字段有六项：`contract`、`selection_contract`、`registry_version`、`registry_sha256`、`concepts` 和 `修改范围`。
+页面的标签字段有六项：`contract`、`selection_contract`、`registry_version`、`registry_sha256`、`concepts` 和 `scope`。
 同一页只能使用 `paper_digest_tags_*` 或旧 `paper_digest_taxonomy_*` 中的一组，混用会被拒绝，即使值相同或为空。
 历史补充和导出的字段判断不会改写旧页面或保存证明，原页面 SHA 与来源绑定仍须通过；网站模板也会阻止混用页面构建。
 新会议子论文页保存为 `conference-paper-page-staging-v2`、`version=2`，使用 `tagMetadata` 和 `tagAssignmentFileSha256`；标签分配保存为 `conference-tag-assignment-v2`、`version=2`。生成器只写新版，保留阶段读取器核对原页面、分配记录和证明后，分别读取明确的新旧格式，不改写旧对象。汇总可使用两版已核成员。修正旧图注时，按原分配格式重新计算期望并比较完整记录及原文件 SHA，避免版本改名影响恢复。发布器核对原页面和完成证明后读取格式；它不读取 `assignment.json`，不能把格式检查当作该文件的原字节核验。
@@ -517,8 +518,8 @@ Node 的 `parseAnalysis` 和 Python 的 `parse_analysis` 现在只输出 `tagVal
 ### 历史标签预览
 
 `build-tag-preview.py` 按七种状态输出 `disposition` 与 `evidence`：
-`keep/alias/broader/split_review/move_facet/deprecated/out_of_修改范围`，并保留
-`status/conceptId/facet/semanticReview` 列。默认不重新判断语义。`deprecated/out_of_修改范围` 必须附上
+`keep/alias/broader/split_review/move_facet/deprecated/out_of_scope`，并保留
+`status/conceptId/facet/semanticReview` 列。默认不重新判断语义。`deprecated/out_of_scope` 必须附上
 跨会议零命中扫描证据和人工评审署名；`split_review` 必须列出候选词。缺少这些依据时停止。
 
 标签预览的候选查找函数为 `find_contained_tag_concepts`，只按文字包含关系查找概念。Python 预览函数的可选词表路径参数为 `tag_catalog_path`；仓库内调用均按位置传参，使用旧关键词名的外部调用须同步修改。保存的 `source`、`upperConceptId` 等字段及七种状态保持原格式。

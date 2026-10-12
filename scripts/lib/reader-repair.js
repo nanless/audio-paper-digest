@@ -1634,7 +1634,9 @@ function buildMissingFormulaBindingsOperation(draft, issues) {
     if (!issues.some(issue => issue?.diagnosticOnly !== true
         && /formulaBindings 未覆盖正文公式占位符/.test(String(issue?.message || '')))) return null;
     const bindings = draft.formulaBindings;
-    if (!Array.isArray(bindings) || !bindings.length) return null;
+    if (!Array.isArray(bindings) || !bindings.length
+        || !Array.isArray(draft.sections) || draft.sections.some(section => !section
+            || typeof section.body !== 'string' || !READER_SECTION_KINDS.includes(section.kind))) return null;
     const markers = [];
     for (const section of draft.sections || []) {
         for (const match of String(section.body || '').matchAll(/\[\[FORMULA_(\d+)\]\]/g)) {
@@ -1643,11 +1645,12 @@ function buildMissingFormulaBindingsOperation(draft, issues) {
         }
     }
     if (new Set(markers.map(item => item.marker)).size !== markers.length
-        || bindings.some(binding => Object.keys(binding).sort().join(',') !== 'formulaOrdinal,marker,targetKind'
+        || bindings.some(binding => !binding || typeof binding !== 'object' || Array.isArray(binding)
+            || Object.keys(binding).sort().join(',') !== 'formulaOrdinal,marker,targetKind'
             || !markers.some(marker => hashDraft(marker) === hashDraft(binding)))
         || new Set(bindings.map(item => item.marker)).size !== bindings.length) return null;
     const missingBindings = markers.filter(marker => !bindings.some(binding => binding.marker === marker.marker));
-    if (!missingBindings.length || missingBindings.length > 4) return null;
+    if (!missingBindings.length || markers.length > 16) return null;
     return { kind: 'complete_existing_formula_bindings_v1', expectedBindingCount: markers.length,
         missingBindings, requiredReplacementPaths: ['/formulaBindings'], requiredPostconditions: [
             '本轮特别允许补齐整组公式来源记录（formulaBindings），其余数组数量限制保持不变',
