@@ -74,6 +74,10 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 
 `lib/reader-paid-resolved-render.js` 的 `rerenderPaidResolvedReader()` 是原付费初稿的窄重渲染程序入口，没有 CLI 参数。它只接受固定 `e2a275a87ee1c277e69d0be2d0978c53e00d4ede` 原渲染器、原 Muse 1.3 Responses 身份及一次完整初稿的已归档记录；不能安装新授权或重置费用。须显式指定独审的论文、原档完整 SHA 与冻结旧代码，先以相同封存来源重放原响应，文章和计划 SHA 必须逐字等于当前签名记录，再由当前正常解析器和锁内保存流程重算排版。原图说明、位置和像素证明全部不变时才可复用原签名图，整个过程不请求模型或网络。原档字节、旧代码及四份来源仍须核验，保存前改变会拒绝；新实现 SHA 与原费用如实留档。此入口不修事实，不接受新稿，不代替独立事实核验。
 
+`reanalyzeSelected(ids, options)` 的可选 `fullStageReanalysis: {runId, sourceRunId, paperIds}` 只用于用户明确要求以当前 Muse 1.3 与改进中文提示词重新生成选定论文。`paperIds` 须为规范化且精确等于 `ids` 的集合，`sourceRunId` 须等于当前日更封存运行；主副模型均须为 Muse 1.3。`feedbackFiles` 提供本次当前输入绑定的新生成约束，`originalFeedbackFiles` 提供旧阶段真实反馈原包；旧各阶段证明须逐个匹配原包，新约束完整继承原指导、错误原句与逐字来源。原包和旧证明不改签，新约束不代表生成结果事实合格。
+
+此范围在单篇锁内保存完整旧论文、阶段、失败和费用的 SHA 归档，沿用主分析及 Reader 的正常失效闭包，实际从封存全文发当前完整主提示及下游请求；不使用旧主文局部纠错或核心摘要兼容路线，不改动旧 Reader 费用文件。Reader 新输入身份包含可核验持久重生成记录，退出作用域后不漂移。同一 `runId` 中断后继续本轮新阶段和费用，已完整成功者再次进入会跳过；只有明确的新 `runId` 才表示新一轮。未选论文不改变，普通入口不启用此策略。该接口没有新增 CLI 默认行为；不能通过旧机器成功数替代新要求验收，也不能仅因正常 HTTP 返回便宣告论文事实合格。
+
 ## 默认 LLM/API：抓取、筛选与分析
 
 会议恢复与发布维护：
@@ -138,6 +142,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/reader-draft-order.js` | Node 库 | 调整同一草稿的小节顺序，同步表格绑定和标记，保存原始路径与调整后路径的 SHA 对应关系；无法唯一确定顺序时拒绝调整。 |
 | `lib/reader-source-diagnostics.js` | Node 库 | 把数字或单位来源不匹配的问题定位到正文单元格与原表行列，给出百分号、千分位及可能舍入的修复建议，但只读；不会自动改数字，也不会放宽来源检查。 |
 | `lib/signed-reader-recovery-draft.js` | Node 库 | 将已核验签名长文恢复为可局部修改的文章数据，保留章节、术语及图表公式对应关系；不接受来源不明的正文。 |
+| `lib/selected-full-stage-reanalysis.js` | Node 库 | 将明确选定论文从当前封存全文完整重生成，锁内归档旧阶段、费用与事实反馈；同轮续跑保留新费用，普通恢复不启用。 |
 | `lib/reader-paid-resolved-render.js` | Node 库 | 通过正常论文锁校验原付费响应与当前文章的对应关系，重算排版，保留原费用、图片与其他阶段；保存前再次核对原档和旧代码。 |
 | `lib/reader-paid-resolved-replay-worker.js` | Node 内部子进程 | 在无生产密钥且禁止网络的独立进程中运行固定旧渲染器，验证原响应能逐字恢复当前文章及计划；不直接接受发布任务。 |
 | `lib/reader-proof-read-scope.js` | Node 库 | 在一次恢复准备期间复用未变化的证明文件读取；每次核对文件状态，结束即清空，完整恢复链仍重新核验。 |

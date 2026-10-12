@@ -1,0 +1,359 @@
+'use strict';
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+// 测试自行提供假账号与路由，不读取开发者 .env，也不依赖 CI 模型配置。
+const testEnvironment = {
+    PAPER_ANALYZER_MODEL: 'muse-spark-1.3-contributor',
+    PAPER_ANALYZER_ENDPOINT: 'https://invalid.example/v1',
+    PAPER_ANALYZER_API_KEY: 'unused-test-no-network',
+    PAPER_ANALYZER_FALLBACK_API_KEYS: '',
+    PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY: '',
+    PAPER_ANALYZER_SECONDARY_MODEL: 'muse-spark-1.3-contributor',
+    PAPER_ANALYZER_SECONDARY_ENDPOINT: 'https://invalid.example/v1',
+    PAPER_ANALYZER_SECONDARY_API_KEY: 'unused-test-no-network',
+    PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS: '',
+    HTTPS_PROXY: 'http://127.0.0.1:9',
+    HTTP_PROXY: 'http://127.0.0.1:9',
+    PD_ANALYSIS_API_MAX_RETRIES: '1',
+};
+test.mock.method(require('../scripts/env-loader'), 'loadProjectEnv', () => {
+    Object.assign(process.env, testEnvironment);
+    return { ...testEnvironment };
+});
+const Config = require('../scripts/config');
+const daily = require('../scripts/lib/daily-fresh-source-plan');
+const fresh = require('../scripts/lib/fresh-analysis-context');
+const sourceApi = require('../scripts/lib/fresh-arxiv-rewrite-source');
+const facts = require('../scripts/lib/daily-fact-review');
+const utils = require('../scripts/utils');
+const calls = [];
+utils.requestLlmJson = async (_url, _endpoint, model, body, _headers, options) => {
+    calls.push({ model, body, stage: options.usageContext?.stage });
+    const error = new Error('测试在正常主分析模型传输入口停止');
+    error.code = 'MODEL_AUTH_ERROR'; error.retryable = false;
+    throw error;
+};
+const deep = require('../scripts/deep-analyzer');
+const engine = require('../scripts/analysis-engine');
+const policy = require('../scripts/lib/selected-full-stage-reanalysis');
+const { validAnalysisPaper } = require('./valid-analysis-fixture');
+async function createSample(t, { fullSource = true } = {}) {
+    const root = fs.mkdtempSync(
+        path.join(fs.realpathSync(os.tmpdir()), 'reviewed-reader-seed-'),
+    );
+    const previous = Config.FILES.dailyFreshSourceRunsDir;
+    Config.FILES.dailyFreshSourceRunsDir = path.join(root, 'runs');
+    t.after(() => {
+        Config.FILES.dailyFreshSourceRunsDir = previous;
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+    const signed = require('./reader-signed-draft-fixture').fixture({
+        noFigures: true,
+    });
+    const id = signed.paper.arxivId.replace(/v\d+$/, '');
+    const plan = daily.createDailyFreshSourcePlan({
+        batchDate: '2026-10-11',
+        batchId: 'reader-seed',
+        papers: [
+            {
+                arxivId: signed.paper.arxivId,
+                title: '正文已纠正的修订参考',
+                authors: signed.paper.authors,
+            },
+            { arxivId: '2609.99999', title: '未选择的论文', authors: signed.paper.authors },
+        ],
+    });
+    await daily.captureDailyFreshSources(plan, {
+        concurrency: 1,
+        capture: (options) =>
+            sourceApi.captureFreshArxivRewriteSource(options, {
+                fetchText: async (sourceId) => ({
+                    ...signed.sourceDetails,
+                    text: fullSource ? signed.sourceDetails.text + '\n' + '本测试全文研究噪声语音识别方法及实验边界。'.repeat(800) : signed.sourceDetails.text,
+                    imageInfos: [{ ordinal: 1, url: `https://arxiv.org/html/${sourceId}/x1.png`, caption: '测试结构图' }],
+                    source: 'html',
+                    htmlAvailability: 'available',
+                    htmlAttempts: 1,
+                    warnings: [],
+                    sourceId,
+                    url: `https://arxiv.org/html/${sourceId}`,
+                    fetchedAt: '2026-10-11T00:00:00.000Z',
+                }),
+                fetchPdf: async (sourceId) => ({
+                    bytes: Buffer.from('%PDF-1.7\n%%EOF\n'),
+                    url: `https://arxiv.org/pdf/${sourceId}`,
+                    fetchedAt: '2026-10-11T00:00:00.000Z',
+                }),
+            }),
+    });
+    const paper = {
+        ...validAnalysisPaper(signed.paper.arxivId, {}, signed.paper.analysis),
+        ...signed.paper,
+    };
+    const validManifest = validAnalysisPaper(
+        signed.paper.arxivId,
+        {},
+        signed.paper.analysis,
+    ).analysisManifest;
+    paper.analysisManifest.contracts = {
+        ...validManifest.contracts,
+        ...paper.analysisManifest.contracts,
+    };
+    paper.analysisManifest.stages = {
+        ...validManifest.stages,
+        ...paper.analysisManifest.stages,
+    };
+    paper.analysisManifest.stages.taxonomySeal =
+        validManifest.stages.taxonomySeal;
+    paper.analysisManifest.stages.coreSummaryRepair =
+        validManifest.stages.coreSummaryRepair;
+    paper.analysisManifest.stages.structureRepair =
+        validManifest.stages.structureRepair;
+    delete paper.analysisManifest.stages.tagSelection;
+    for (const key of [
+        'coreSummaryInputAnalysisSha256',
+        'inputCoreSummarySha256',
+        'outputCoreSummarySha256',
+    ]) {
+        paper.analysisManifest.stages.scoringAudit[key] =
+            validManifest.stages.scoringAudit[key];
+    }
+    paper.analysisManifest.contracts.taxonomy =
+        validManifest.contracts.taxonomy;
+    paper.analysisManifest.contracts.coreSummary =
+        validManifest.contracts.coreSummary;
+    paper.analysisManifest.stages.scoringAudit.scoringContract =
+        'api-scoring-audit-v2';
+    paper.analysisManifest.stages.scoringAudit.audit = {};
+    paper.analysisManifest.stages.scoringAudit.auditSha256 =
+        deep.stableFingerprint({});
+    paper.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = facts.sha(
+        paper.analysis,
+    );
+    paper.digestStatus = { latestAttemptStatus: 'analysis_success' };
+    const source = daily.readDailyFreshSource(plan, paper);
+    paper.sourceSha256 = facts.sha(source.text);
+    paper.analysisManifest.sourceAcquisition.sourceSha256 = paper.sourceSha256;
+    await daily.withDailyFreshAnalysisContext(plan, () =>
+        fresh.attachFreshSourceRecord(paper, paper.analysisManifest, source),
+    );
+    const folder = path.join(plan.sourcesDir, id, 'generation-000001');
+    const feedback = {
+        contract: facts.CONTRACT,
+        paperId: id,
+        runId: plan.runId,
+        batchDate: plan.batchDate,
+        sourceFiles: Object.fromEntries(
+            [
+                'source.txt',
+                'source.pdf',
+                'source-runtime.json',
+                'source-manifest.json',
+            ].map((name) => [
+                name,
+                facts.sha(fs.readFileSync(path.join(folder, name))),
+            ]),
+        ),
+        coreAnalysisSha256: facts.sha(paper.analysis),
+        coreSummarySha256: facts.sha(
+            deep.extractSectionByTitle(paper.analysis, '核心摘要'),
+        ),
+        primaryFeedback: '保留已经纠正的主文，只按原证据解释。',
+        coreFeedback: '',
+        readerFeedback: '只修本次明确的读者文章问题。',
+        rejectedPrimaryClaims: ['本文解决噪声语音输入到文字输出时声学线索受损的问题，难点是局部干扰与长程语义错误会彼此放大。'],
+        rejectedCoreClaims: [],
+        rejectedReaderClaims: ['已纠正的旧Reader错误'],
+        sourceQuotes: [source.text.slice(0, 100)],
+    };
+    const bound = facts.validateFeedback(feedback, plan, paper);
+    paper.analysisManifest.stages.primaryAnalysis.factReview = bound.proof;
+    const other = { arxivId: '2609.99999', title: '未选择的论文', authors: signed.paper.authors,
+        originalFees: { attempts: 2, fullAttempts: 1 }, analysisManifest: { sourceAcquisition: {} } };
+    const otherSource = daily.readDailyFreshSource(plan, other);
+    other.sourceSha256 = facts.sha(otherSource.text);
+    other.analysisManifest.sourceAcquisition.sourceSha256 = other.sourceSha256;
+    await daily.withDailyFreshAnalysisContext(plan, () => fresh.attachFreshSourceRecord(other, other.analysisManifest, otherSource));
+    return { paper, other, plan, source, feedback, bound, id };
+}
+
+
+function options(sample) { return { runId: 'muse-current-test', sourceRunId: sample.plan.runId, paperIds: [sample.id] }; }
+function inScope(sample, callback) {
+    return daily.withDailyFreshAnalysisContext(sample.plan, () =>
+        policy.withSelectedFullStageReanalysis(options(sample), callback));
+}
+test('选定论文锁内归档完整原账、普通论文不变、同轮中断不重置已付费阶段', async t => {
+    const sample = await createSample(t);
+    const before = structuredClone(sample.paper);
+    await inScope(sample, async () => {
+        assert.throws(() => policy.preparePaperLocked(sample.paper), /真实分析锁/);
+        await engine.withPaperAnalysisLock(sample.paper, () => facts.withFactReview(sample.bound, () => {
+            const next = policy.preparePaperLocked(sample.paper);
+            assert.deepEqual(sample.paper, before);
+            assert.deepEqual(next.fullStageReanalysisHistory[0].originalPaper, before);
+            assert.equal(next.analysisManifest.stages.primaryAnalysis, undefined);
+            assert.equal(next.analysisManifest.stages.apiReaderArticle, undefined);
+            assert.equal(next.analysisCheckpoint, undefined);
+            const other = { ...sample.paper, arxivId: '2609.99999' };
+            assert.deepEqual(policy.preparePaperLocked(other), other);
+            next.analysisManifest.stages.primaryAnalysis = { status: 'transient_failure', attempts: 1, model: policy.MODEL };
+            const resumed = policy.preparePaperLocked(next);
+            assert.deepEqual(resumed, next);
+            const changedReview = facts.validateFeedback({ ...sample.feedback,
+                primaryFeedback: sample.feedback.primaryFeedback + '这是不同的新反馈。' }, sample.plan, sample.paper);
+            facts.withFactReview(changedReview, () => assert.throws(() => policy.preparePaperLocked(next), /当前反馈身份变化/));
+
+            next.fullStageReanalysisHistory[0].originalPaper.analysis = '篡改原账';
+            assert.throws(() => policy.preparePaperLocked(next), /费用档/);
+        }));
+        assert.equal(engine.paperAnalysisLockHeld(sample.paper), false);
+    });
+});
+test('错误模型、未知或重复 ID、错误封存来源、缺原事实反馈在模型前拒绝', async t => {
+    const sample = await createSample(t);
+    for (const alter of [v => v.paperIds = [], v => v.paperIds.push(sample.id), v => v.paperIds = ['非法'], v => v.sourceRunId = 'bad']) {
+        const value = options(sample); alter(value);
+        assert.throws(() => policy.withSelectedFullStageReanalysis(value, () => {}));
+    }
+    const oldModel = process.env.PAPER_ANALYZER_MODEL;
+    process.env.PAPER_ANALYZER_MODEL = 'mimo-v2.6-flash';
+    assert.throws(() => policy.withSelectedFullStageReanalysis(options(sample), () => {}), /Muse/);
+    process.env.PAPER_ANALYZER_MODEL = oldModel;
+    await inScope(sample, () => engine.withPaperAnalysisLock(sample.paper, () => {
+        assert.throws(() => policy.preparePaperLocked(sample.paper), /原受控反馈/);
+    }));
+    for (const altered of [
+        { ...sample.feedback, primaryFeedback: '泛泛说明方法即可。' },
+        { ...sample.feedback, rejectedPrimaryClaims: ['这是另一个完整但未保留原约束的测试原句。'] },
+        { ...sample.feedback, sourceQuotes: [sample.source.text.slice(10, 100)] },
+    ]) {
+        const accepted = facts.validateFeedback(altered, sample.plan, sample.paper);
+        await daily.withDailyFreshAnalysisContext(sample.plan, () => policy.withSelectedFullStageReanalysis({ ...options(sample),
+            originalFeedbacks: { [sample.id]: [{ feedback: sample.feedback }] } }, () =>
+            engine.withPaperAnalysisLock(sample.paper, () => facts.withFactReview(accepted,
+                () => assert.throws(() => policy.preparePaperLocked(sample.paper), /新生成约束漏掉/)))));
+    }
+
+    await daily.withDailyFreshAnalysisContext(sample.plan, () => policy.withSelectedFullStageReanalysis({ ...options(sample),
+        sourceRunId: '132fc843-0afe-434c-b0b7-4d98e2235b3e' }, () => engine.withPaperAnalysisLock(sample.paper,
+        () => facts.withFactReview(sample.bound, () => assert.throws(() => policy.preparePaperLocked(sample.paper), /封存来源身份/)))));
+});
+test('真实公共分析入口发完整当前主提示而非旧局部修复，原反馈仍在请求中', async t => {
+    const sample = await createSample(t);
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jR1kAAAAASUVORK5CYII=', 'base64');
+    const before = structuredClone(sample.paper);
+    calls.length = 0;
+    await inScope(sample, () => engine.withPaperAnalysisLock(sample.paper, () => facts.withFactReview(sample.bound, async () => {
+        const prepared = policy.preparePaperLocked(sample.paper);
+        const analyze = daily.createDailyAnalyzeFn(sample.plan, { fetchFigure: async () => ({ bytes: png,
+            contentType: 'image/png', finalUrl: `https://arxiv.org/html/${sample.paper.arxivId}/x1.png` }) });
+        const result = await analyze(prepared);
+        assert.match(result.error, /主分析模型传输入口停止/);
+        assert.deepEqual(prepared.fullStageReanalysisHistory[0].originalPaper, before);
+        assert.equal(prepared.analysisManifest.stages.primaryAnalysis.status, 'transient_failure');
+        assert.equal(prepared.analysisManifest.stages.primaryAnalysis.primaryLocalFactRepair, undefined);
+    })));
+    assert.ok(calls.length >= 1);
+    assert.ok(calls.every(call => call.model === policy.MODEL && call.stage === 'primaryAnalysis'));
+    const request = JSON.stringify(calls[0].body);
+    assert.ok(request.includes(sample.feedback.primaryFeedback));
+    assert.ok(request.includes('textForAnalysis') === false);
+    assert.ok(request.includes('只替换') === false);
+});
+
+test('指定论文公共重分析入口保存首请求失败及原账，未选记录原字节字段不变', async t => {
+    const sample = await createSample(t);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'full-stage-public-'));
+    const keys = ['deepAnalysisResult', 'papers', 'papersLegacy', 'runtimeDir'];
+    const previous = Object.fromEntries(keys.map(key => [key, Config.FILES[key]]));
+    const oldRetries = Config.ANALYSIS_CONFIG.maxRetries;
+    t.after(() => { Object.assign(Config.FILES, previous); Config.ANALYSIS_CONFIG.maxRetries = oldRetries;
+        fs.rmSync(root, { recursive: true, force: true }); });
+    Config.FILES.deepAnalysisResult = path.join(root, 'analysis.json');
+    Config.FILES.papers = path.join(root, 'papers.json');
+    Config.FILES.papersLegacy = path.join(root, 'legacy.json');
+    Config.FILES.runtimeDir = path.join(root, 'runtime');
+    Config.ANALYSIS_CONFIG.maxRetries = 1;
+    fs.writeFileSync(Config.FILES.papers, JSON.stringify({ papers: [] }));
+    fs.writeFileSync(Config.FILES.papersLegacy, JSON.stringify({ papers: [] }));
+    const feedbackFile = path.join(root, 'feedback.json');
+    fs.writeFileSync(feedbackFile, JSON.stringify(sample.feedback));
+    const input = { batchDate: sample.plan.batchDate, dailyFreshSourceRun: daily.dailyFreshSourceReference(sample.plan), papers: [sample.paper, sample.other] };
+    fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify(input));
+    const original = structuredClone(sample.paper);
+    calls.length = 0;
+    const result = await require('../scripts/reanalyze-selected').reanalyzeSelected([sample.id], {
+        fullStageReanalysis: options(sample), feedbackFiles: [feedbackFile],
+    });
+    const savedPayload = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult));
+    assert.deepEqual(savedPayload.papers[1], sample.other);
+    const saved = savedPayload.papers[0];
+    assert.equal(result.failed, 1);
+    assert.deepEqual(saved.fullStageReanalysisHistory[0].originalPaper, original);
+    assert.equal(saved.fullStageReanalysis.runId, options(sample).runId);
+    assert.match(saved.latestAnalysisAttemptError || saved.error, /主分析模型传输入口停止/);
+    assert.equal(saved.analysisManifest.stages.primaryAnalysis.primaryLocalFactRepair, undefined);
+    assert.ok(calls.length >= 1 && calls.every(call => call.stage === 'primaryAnalysis'));
+    const outside = policy.fingerprintFields(saved);
+    const inside = await inScope(sample, () => policy.fingerprintFields(saved));
+    assert.deepEqual(outside, inside);
+    calls.length = 0;
+    // 第二次正常调用同run应继续新失败阶段，而不是再次归档旧canonical/清掉新费用。
+    const historyLength = saved.fullStageReanalysisHistory.length;
+    await require('../scripts/reanalyze-selected').reanalyzeSelected([sample.id], {
+        fullStageReanalysis: options(sample), feedbackFiles: [feedbackFile],
+    });
+    const resumed = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[0];
+    assert.deepEqual(JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[1], sample.other);
+    assert.equal(resumed.fullStageReanalysisHistory.length, historyLength);
+    assert.deepEqual(resumed.fullStageReanalysisHistory[0].originalPaper, original);
+});
+
+test('签名完整成功样本退出作用域仍合格，同run公共再次进入零模型请求且不改两篇记录', async t => {
+    const sample = await createSample(t, { fullSource: false });
+    sample.paper.analysisManifest.version = 1;
+    sample.paper.analysisManifest.stages.openSourceScan.status = 'complete';
+    assert.equal(engine.getIncompleteAnalysisContentReason(sample.paper), null);
+    let completed;
+    await inScope(sample, () => engine.withPaperAnalysisLock(sample.paper, () => facts.withFactReview(sample.bound, () => {
+        const prepared = policy.preparePaperLocked(sample.paper);
+        completed = structuredClone(sample.paper);
+        completed.fullStageReanalysis = prepared.fullStageReanalysis;
+        completed.fullStageReanalysisHistory = prepared.fullStageReanalysisHistory;
+        // 使用既有签名正文验证完成资格与入口跳过，不声称测试模型生成了这篇正文。
+        fresh.withFreshPaperContext(completed, () => {
+            for (const name of ['primaryAnalysis', 'scoringAudit', 'apiReaderArticle']) {
+                deep.markRecoveryStage(completed.analysisManifest, name, 'complete', completed.analysisManifest.stages[name]);
+            }
+        });
+    })));
+    assert.equal(engine.isSuccessfulAnalysisRecord(completed), true);
+    assert.equal(policy.completedThisRun(completed), true);
+    const outside = policy.fingerprintFields(completed);
+    assert.deepEqual(outside, await inScope(sample, () => policy.fingerprintFields(completed)));
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'full-stage-complete-'));
+    const keys = ['deepAnalysisResult', 'papers', 'papersLegacy', 'runtimeDir'];
+    const previous = Object.fromEntries(keys.map(key => [key, Config.FILES[key]]));
+    t.after(() => { Object.assign(Config.FILES, previous); fs.rmSync(root, { recursive: true, force: true }); });
+    Config.FILES.deepAnalysisResult = path.join(root, 'analysis.json');
+    Config.FILES.papers = path.join(root, 'papers.json');
+    Config.FILES.papersLegacy = path.join(root, 'legacy.json');
+    Config.FILES.runtimeDir = path.join(root, 'runtime');
+    fs.writeFileSync(Config.FILES.papers, JSON.stringify({ papers: [] }));
+    fs.writeFileSync(Config.FILES.papersLegacy, JSON.stringify({ papers: [] }));
+    fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify({ batchDate: sample.plan.batchDate,
+        dailyFreshSourceRun: daily.dailyFreshSourceReference(sample.plan), papers: [completed, sample.other] }));
+    const feedbackFile = path.join(root, 'feedback.json');
+    fs.writeFileSync(feedbackFile, JSON.stringify(sample.feedback));
+    calls.length = 0;
+    delete require.cache[require.resolve('../scripts/reanalyze-selected')];
+    await require('../scripts/reanalyze-selected').reanalyzeSelected([sample.id], {
+        fullStageReanalysis: options(sample), feedbackFiles: [feedbackFile],
+    });
+    assert.equal(calls.length, 0);
+    assert.deepEqual(JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers, [completed, sample.other]);
+});

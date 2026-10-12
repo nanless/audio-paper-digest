@@ -7518,6 +7518,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         contentMode,
         ...start.signedRevisionDisplayFields,
         inputFingerprint: stableFingerprint({
+            ...require('./lib/selected-full-stage-reanalysis').fingerprintFields(paper),
             ...promptRenderingFingerprintFields(paper.title, sourceEvidence, options.reviewFeedback, start.previousDraft),
             contentMode, sourceEvidence,
             ...start.signedRevisionDisplayFields,
@@ -10818,10 +10819,14 @@ function tryMigrateCoreSummaryV3LegacyCheckpoints(
 }
 
 
-function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint) {
+function invalidateRecoveryStageIfChanged(paper, manifest, stage, fingerprint, options = {}) {
     const physicalStage = physicalRecoveryStage(manifest, stage, paper.analysisStageCheckpoints);
     const current = manifest.stages?.[physicalStage];
-    if (!current || !isRecoveryStageComplete(manifest, stage) || current.fingerprint === fingerprint) return false;
+    const forcePrimary = options.fullStageReanalysis === true && ['primaryAnalysis', 'demoLinkScan'].includes(stage)
+        && require('./lib/selected-full-stage-reanalysis').current(paper)
+        && require('./analysis-engine').paperAnalysisLockHeld(paper);
+    if (!forcePrimary && (!current || !isRecoveryStageComplete(manifest, stage)
+        || current.fingerprint === fingerprint)) return false;
     captureStaleAnalysisSnapshot(paper, manifest, physicalStage, fingerprint);
     const logicalStage = stage === 'taxonomySeal' ? 'tagSelection' : stage;
     const stagesToDelete = RECOVERY_STAGE_DEPENDENCIES[logicalStage]
@@ -11050,7 +11055,8 @@ function removeManualAnalysisFields(paper) {
 function markRecoveryStage(manifest, stage, status, details = {}) {
     if (!RECOVERY_STAGE_STATUSES.has(status)) throw new Error(`恢复阶段的状态 ${status} 不在允许的状态列表中。`);
     const updatedAt = getBeijingISOString();
-    manifest.stages[stage] = { status, ...details, updatedAt };
+    manifest.stages[stage] = { status, ...details,
+        ...require('./lib/selected-full-stage-reanalysis').stageFields(), updatedAt };
     manifest.updatedAt = updatedAt;
     return manifest.stages[stage];
 }
@@ -14785,6 +14791,7 @@ async function analyzePaperDeep(paper) {
 }
 
 async function analyzePaperDeepInternal(paper) {
+    const fullStageReanalysis = require('./lib/selected-full-stage-reanalysis').assertPrepared(paper);
     removeManualAnalysisFields(paper);
     sanitizePaperImageRecovery(paper);
     const arxivId = getPaperArxivId(paper);
@@ -14797,7 +14804,7 @@ async function analyzePaperDeepInternal(paper) {
         throw new Error('Direct rewrite source and conference source cannot both be active');
     }
     const previousScore = Number.parseFloat(paper?.parsed?.score);
-    let savedCoreSummaryRepairCandidate = captureSavedAnalysisForCoreSummaryRepair(paper);
+    let savedCoreSummaryRepairCandidate = fullStageReanalysis ? null : captureSavedAnalysisForCoreSummaryRepair(paper);
     const modelTextRecoveryCandidate = paper.analysisManifest?.sourceAcquisition?.modelTextSanitizationContract
         === MODEL_TEXT_SANITIZATION_CONTRACT ? null : structuredClone(paper);
     // 准备恢复状态时可能删除旧检查点；先在副本中处理，
@@ -14810,10 +14817,10 @@ async function analyzePaperDeepInternal(paper) {
     const activePrimaryFactReview = require('./lib/daily-fact-review').current(arxivId)?.feedback.primaryFeedback?.trim();
     const localFactRepair = require('./lib/primary-fact-local-repair');
     const initialFactReview = require('./lib/daily-fact-review').current(arxivId);
-    const localFactRepairPlan = activePrimaryFactReview
+    const localFactRepairPlan = !fullStageReanalysis && activePrimaryFactReview
         && initialFactReview.feedback.rejectedPrimaryClaims.some(claim => localFactRepairInput.includes(claim))
         ? localFactRepair.buildPlan(localFactRepairInput, initialFactReview.feedback) : null;
-    if (activePrimaryFactReview && !localFactRepairPlan
+    if (!fullStageReanalysis && activePrimaryFactReview && !localFactRepairPlan
         && stableFingerprint(savedPrimaryFactStage?.factReview || null)
             !== stableFingerprint(initialFactReview.proof)) {
         throw contractRejectedError(COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR);
@@ -15000,7 +15007,7 @@ async function analyzePaperDeepInternal(paper) {
     }
     const recoveryFingerprints = buildRecoveryFingerprints(
         paper, textForAnalysis, arxivId, analysisManifest);
-    if (!boundFactReview && !analysisManifest.stages.primaryAnalysis?.factReview
+    if (!fullStageReanalysis && !boundFactReview && !analysisManifest.stages.primaryAnalysis?.factReview
         && !analysisManifest.stages.apiReaderArticle?.factReview
         && migrateSealedSourceOnlyReaderBeforeAnalysis(
         paper,
@@ -15014,21 +15021,21 @@ async function analyzePaperDeepInternal(paper) {
     }
     const primaryFactReview = Boolean(boundFactReview?.feedback.primaryFeedback?.trim()
         || analysisManifest.stages.primaryAnalysis?.factReview);
-    const restoredSavedStagesForSummaryRepair = !primaryFactReview && restoreSavedStagesForCoreSummaryRepair(
+    const restoredSavedStagesForSummaryRepair = !fullStageReanalysis && !primaryFactReview && restoreSavedStagesForCoreSummaryRepair(
         savedCoreSummaryRepairCandidate,
         paper,
         analysisManifest,
         sourceAcquisitionRecord,
         rawTextForAnalysis
     );
-    const savedCoreSummaryRepairActive = !primaryFactReview && (restoredSavedStagesForSummaryRepair
+    const savedCoreSummaryRepairActive = !fullStageReanalysis && !primaryFactReview && (restoredSavedStagesForSummaryRepair
         || canReuseStageForCoreSummaryRecovery(
             paper, analysisManifest, rawTextForAnalysis, 'primaryAnalysis'
         ));
     if (restoredSavedStagesForSummaryRepair) {
         console.log('    [deep] ♻️  已核验并复用旧分析阶段，本次只修复核心摘要并重新审查评分');
     }
-    const migratedCoreSummaryV3 = !primaryFactReview && (savedCoreSummaryRepairActive
+    const migratedCoreSummaryV3 = !fullStageReanalysis && !primaryFactReview && (savedCoreSummaryRepairActive
         || tryMigrateCoreSummaryV3LegacyCheckpoints(
         paper,
         analysisManifest,

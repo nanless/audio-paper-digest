@@ -34,7 +34,7 @@ const readerRepair = require('./lib/reader-repair.js');
 
 const RESULT_FILE = Config.FILES.deepAnalysisResult;
 
-async function reanalyzeSelected(ids) {
+async function reanalyzeSelected(ids, options = {}) {
     console.log(`=== 重新分析 ${ids.length} 篇论文 ===\n`);
 
     if (!fs.existsSync(RESULT_FILE) && fs.existsSync(Config.FILES.deepAnalysisResultLegacy)) {
@@ -52,9 +52,41 @@ async function reanalyzeSelected(ids) {
     const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(data, {
         papers, label: 'selected reanalyze recovery'
     });
+    const fullStages = require('./lib/selected-full-stage-reanalysis');
+    let fullStageOptions = options.fullStageReanalysis;
+    if (fullStageOptions && (fullStageOptions.sourceRunId !== dailySourcePlan.runId
+        || JSON.stringify([...fullStageOptions.paperIds].sort()) !== JSON.stringify([...idSet].sort()))) {
+        throw new Error('全阶段重跑选定 ID 或封存运行与本次入口不一致');
+    }
+    const factReview = require('./lib/daily-fact-review');
+    const feedbacks = new Map();
+    const boundFeedbacks = new Map();
+    for (const file of options.feedbackFiles || []) {
+        const feedback = factReview.readFeedback(file);
+        if (feedbacks.has(feedback.paperId)) throw new Error('同篇反馈重复');
+        feedbacks.set(feedback.paperId, feedback);
+    }
+    for (const [id, feedback] of feedbacks) {
+        const paper = papers.find(item => normalizedId(item) === id);
+        if (!paper || !idSet.has(id)) throw new Error('反馈不属于本次明确选定论文');
+        const original = fullStageOptions && paper.fullStageReanalysis?.runId === fullStageOptions.runId
+            ? paper.fullStageReanalysisHistory.find(item => item.runId === fullStageOptions.runId)?.originalPaper : paper;
+        boundFeedbacks.set(id, factReview.validateFeedback(feedback, dailySourcePlan, original));
+    }
+    if (fullStageOptions) {
+        const originalFeedbacks = {};
+        for (const file of options.originalFeedbackFiles || []) {
+            const feedback = factReview.readFeedback(file);
+            if (!idSet.has(feedback.paperId)) throw new Error('原反馈不属于选定论文');
+            (originalFeedbacks[feedback.paperId] ||= []).push({ path: file,
+                fileSha256: require('node:crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex'),
+                feedback });
+        }
+        fullStageOptions = { ...fullStageOptions, originalFeedbacks };
+    }
     let retiredReaderCandidates = 0;
     try {
-        const names = fs.readdirSync(dailySourcePlan.readerAttemptsDir)
+        const names = fullStageOptions ? [] : fs.readdirSync(dailySourcePlan.readerAttemptsDir)
             .filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort();
         for (const name of names) {
             const envelope = JSON.parse(fs.readFileSync(
@@ -89,7 +121,7 @@ async function reanalyzeSelected(ids) {
         const aid = normalizedId(p);
         if (idSet.has(aid)) {
             const cleanPaper = dailyFreshSources.prepareDailyPaper(
-                resetReaderForSelectedReanalysis(p), dailySourcePlan
+                fullStageOptions ? p : resetReaderForSelectedReanalysis(p), dailySourcePlan
             );
             toReanalyze.push(cleanPaper);
         }
@@ -110,6 +142,8 @@ async function reanalyzeSelected(ids) {
         console.log(`  - ${p.arxivId}: ${p.title?.substring(0, 60)}...`);
     }
     console.log();
+
+    if (fullStageOptions) fullStages.withSelectedFullStageReanalysis(fullStageOptions, () => {});
 
     updateJsonFileLocked(RESULT_FILE, current => {
         const payload = {
@@ -138,6 +172,24 @@ async function reanalyzeSelected(ids) {
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
             if (!latest) return { paper, skip: false };
+            if (fullStageOptions) {
+                const feedback = feedbacks.get(normalizedId(latest));
+                const original = latest.fullStageReanalysis?.runId === fullStageOptions.runId
+                    ? latest.fullStageReanalysisHistory.find(item => item.runId === fullStageOptions.runId)?.originalPaper : latest;
+                if (feedback) boundFeedbacks.set(normalizedId(latest),
+                    factReview.validateFeedback(feedback, dailySourcePlan, original));
+                const bound = boundFeedbacks.get(normalizedId(latest));
+                const prepare = () => {
+                    if (latest.fullStageReanalysis?.runId === fullStageOptions.runId
+                        && fullStages.completedThisRun(latest)) {
+                        fullStages.assertPrepared(latest);
+                        return { paper: latest, skip: true };
+                    }
+                    return { paper: dailyFreshSources.prepareDailyPaper(
+                        fullStages.preparePaperLocked(latest), dailySourcePlan), skip: false };
+                };
+                return bound ? factReview.withFactReview(bound, prepare) : prepare();
+            }
             return {
                 paper: dailyFreshSources.prepareDailyPaper(
                     resetReaderForSelectedReanalysis({ ...paper, ...latest }), dailySourcePlan
@@ -149,7 +201,11 @@ async function reanalyzeSelected(ids) {
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
         saveInterval: 0,
-        analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan),
+        analyzeFn: async paper => {
+            const analyze = () => dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan)(paper);
+            const bound = boundFeedbacks.get(normalizedId(paper));
+            return bound ? factReview.withFactReview(bound, analyze) : analyze();
+        },
         onPaperResultLocked: async (paper, result) => {
             const attempted = result.result || {
                 ...paper,
@@ -171,6 +227,10 @@ async function reanalyzeSelected(ids) {
             console.log(`  [${idx + 1}/${total}] ▶ 开始: ${paper.title?.substring(0, 50)}...`);
         },
         onPaperDone: (idx, total, paper, result, duration) => {
+            if (result.skipped) {
+                console.log(`  [${idx + 1}/${total}] ↩ 本轮已完成，保留现有结果`);
+                return;
+            }
             const durSec = (duration / 1000).toFixed(1);
             if (result.success) {
                 const score = result.parsed?.score ? `[${result.parsed.score}分]` : '[N/A]';
@@ -181,7 +241,9 @@ async function reanalyzeSelected(ids) {
         }
     });
     const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(
-        dailySourcePlan, runAnalysisFromDailySources
+        dailySourcePlan, () => fullStageOptions
+            ? fullStages.withSelectedFullStageReanalysis(fullStageOptions, runAnalysisFromDailySources)
+            : runAnalysisFromDailySources()
     );
 
     // 合并结果：用新结果替换旧结果

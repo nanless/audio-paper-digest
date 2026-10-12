@@ -43,7 +43,7 @@ const LOCK_HEARTBEAT_MS = 30 * 1000;
 const ANALYSIS_CHECKPOINT_CALLBACK = Symbol.for('audio-paper-digest.analysisCheckpointCallback');
 const ANALYSIS_RECOVERY_FIELDS = Object.freeze([
     'analysis', 'parsed', 'analysisManifest', 'analysisCheckpoint', 'analysisStageCheckpoints',
-    'analysisStaleSnapshots',
+    'analysisStaleSnapshots', 'fullStageReanalysis', 'fullStageReanalysisHistory',
     'analysisRecoveryImageManifest', 'imageManifest', 'selectedImageUrls', 'imageUrls', 'allImageUrls',
     'analysisSource', 'sourceId', 'sourceTextChars', 'usedTextChars', 'fullTextChars',
     'fullTextAvailable', 'truncated', 'sourceSha256', 'usedTextSha256', 'analysisConfidence',
@@ -823,8 +823,17 @@ function getPaperAnalysisLockPath(paper) {
     return path.join(__dirname, '..', 'data', 'current', '.analysis-runs', id);
 }
 
+const heldPaperAnalysisLock = new (require('node:async_hooks').AsyncLocalStorage)();
+function paperAnalysisLockHeld(paper) {
+    const held = heldPaperAnalysisLock.getStore();
+    return Boolean(held?.active && held.id === normalizedId(paper));
+}
 async function withPaperAnalysisLock(paper, callback, options = {}) {
-    return withFileLock(getPaperAnalysisLockPath(paper), callback, {
+    return withFileLock(getPaperAnalysisLockPath(paper), async () => {
+        const held = { id: normalizedId(paper), active: true };
+        try { return await heldPaperAnalysisLock.run(held, callback); }
+        finally { held.active = false; }
+    }, {
         timeoutMs: PAPER_ANALYSIS_LOCK_TIMEOUT_MS,
         staleMs: PAPER_ANALYSIS_LOCK_STALE_MS,
         recoveryPolicy: LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY,
@@ -2004,6 +2013,8 @@ function mergePapersById(existingPapers, newPapers, options = {}) {
                     ...(typeof p.analysisCheckpoint === 'string' ? { analysisCheckpoint: p.analysisCheckpoint } : {}),
                     ...(p.analysisStageCheckpoints ? { analysisStageCheckpoints: p.analysisStageCheckpoints } : {}),
                     ...(p.analysisStaleSnapshots ? { analysisStaleSnapshots: p.analysisStaleSnapshots } : {}),
+                    ...(p.fullStageReanalysis ? { fullStageReanalysis: p.fullStageReanalysis,
+                        fullStageReanalysisHistory: p.fullStageReanalysisHistory } : {}),
                     ...(p.analysisRecoveryImageManifest || p.imageManifest
                         ? { analysisRecoveryImageManifest: p.analysisRecoveryImageManifest || p.imageManifest }
                         : {}),
@@ -2067,6 +2078,7 @@ function sleep(ms) {
 }
 
 module.exports = {
+    paperAnalysisLockHeld,
     analyzePaperWithRetry,
     analyzeBatch,
     mergeAndSaveResults,
