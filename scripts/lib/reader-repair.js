@@ -2640,6 +2640,44 @@ function normalizeUnavailableReaderFigures(draft, availableFigureOrdinals) {
         paths: targets.map(target => target.path), contentValidated: false } };
 }
 
+function scientificDoubleRenderingGuidance(draft, issues, targets, sourceText) {
+    if (typeof sourceText !== 'string' || !issues.some(issue => /粘连复写/.test(String(issue.message || '')))) return '';
+    const sourcePairs = [];
+    const pattern = /(?<![A-Za-z0-9.])([+−-]?\d+(?:\.\d+)?)\s*×\s*10\s*([+−-]\d+)\s*([+−-]?\d+(?:\.\d+)?)\s*\\(?:times|cdot)\s*10\s*\^\s*\{([+-]?\d+)\}/gu;
+    const sign = value => value.replace(/−/g, '-').replace(/^\+/, '');
+    for (const match of sourceText.matchAll(pattern)) {
+        if (sign(match[1]) !== sign(match[3]) || sign(match[2]) !== sign(match[4])) continue;
+        const visible = `${match[1]}×10${match[2]}`;
+        let start = 0, end = sourceText.length;
+        for (const boundary of sourceText.matchAll(/[.!?](?=\s|$)/g)) {
+            if (boundary.index < match.index) start = boundary.index + 1;
+            else if (boundary.index >= match.index + match[0].length) { end = boundary.index + 1; break; }
+        }
+        const quote = sourceText.slice(start, end).trim();
+        if (quote.length < 12 || quote.length > 4000 || !quote.includes(match[0])) continue;
+        sourcePairs.push({ visible, duplicated: visible + visible, quote });
+    }
+    const guidance = [];
+    const tables = locateReaderDraftTables(draft);
+    for (const [index, binding] of (draft.tableBindings || []).entries()) {
+        if (binding.sourceType !== 'source_quotes' || binding.tableIndex !== index + 1
+            || !targets.some(target => target.path === `/tableBindings/${index}`)) continue;
+        const matched = tables.filter(table => table.tableIndex === binding.tableIndex);
+        if (matched.length !== 1 || matched[0].marker || !targets.some(target => target.path === matched[0].path)) continue;
+        const cells = [matched[0].table.header, ...matched[0].table.rows].flat();
+        const candidates = sourcePairs.filter(pair => cells.some(cell => String(cell).includes(pair.duplicated))
+            && issues.some(issue => /粘连复写/.test(String(issue.message || '')) && String(issue.message).includes(pair.duplicated)));
+        if (candidates.length !== 1) continue;
+        const pair = candidates[0];
+        guidance.push(`仅在已授权 /tableBindings/${index} 与 ${matched[0].path} 中：封存全文含数值与指数都相同的可见数学分支及 TeX 分支。`
+            + `本表科学计数显示可写一次 ${pair.visible}；这不是改数字或按重复形状切半。`
+            + `sourceQuotes 则必须保留原句全部字符，包括两分支、反斜杠、换行与空白，不能照显示值改写引文。可用的连续原句为 ${JSON.stringify(pair.quote)}。`
+            + '其他数值与引用不能据此删减，最后仍执行原完整来源、单位和表格检查。');
+    }
+    return guidance.join('\n');
+}
+
+
 function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', options = {}) {
     const targets = buildRepairTargets(draft, issues, options);
     const requestedOperation = observedFigureSelectionOperation(draft, options)
@@ -2728,7 +2766,8 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
         + (atomicOperation?.kind === 'reorganize_existing_sections_v1'
         ? '本轮明确授权整组小节重排，只提交/sections完整数组；其他顶层信息与全部来源记录逐字保留。不能据此删除图表、公式或正确事实；重排后仍须通过完整解析与来源检查。' : '')
         + `本轮只允许修改这些目标：${JSON.stringify(targets.map(target => target.path))}。`
-        + '下面的诊断可能列出其他已发现问题，列出问题不代表授权修改。只提交本轮允许目标，逐项使用请求给出的真实 oldSha256；其余问题留待下一轮重新核验并授权，不要为未授权目标编造 SHA。' + formulaAppendGuidance + markerGuidance + noDomTableGuidance.join('\n');
+        + '下面的诊断可能列出其他已发现问题，列出问题不代表授权修改。只提交本轮允许目标，逐项使用请求给出的真实 oldSha256；其余问题留待下一轮重新核验并授权，不要为未授权目标编造 SHA。' + formulaAppendGuidance + markerGuidance + noDomTableGuidance.join('\n')
+        + '\n' + scientificDoubleRenderingGuidance(draft, issues, targets, sourceText);
     return { draftSha256: hashDraft(draft), targets, issues, evidence, atomicOperation, targetGuidance,
         ...(atomicOperation?.kind === 'reorganize_existing_sections_v1' && canUseSectionIndexGroups(draft)
             ? { sectionGroupPlanContract: SECTION_GROUP_PLAN_CONTRACT }
