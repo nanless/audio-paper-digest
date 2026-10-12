@@ -118,7 +118,42 @@ test('普通恢复携带新轮证明，三次已耗尽不会被同授权清零',
         assert.equal(retry.beginExplicitRound(directory, f.identity, stored, paper), null);
         assert.equal(stored.attempts, 3);
         assert.equal(stored.explicitReaderRetryRound.roundId, f.grant.roundId);
-        assert.throws(() => retry.beginExplicitRound(directory, { ...f.identity, inputFingerprint: '0'.repeat(64) }, stored, paper), /不同当前输入/);
+        assert.throws(() => retry.beginExplicitRound(directory, { ...f.identity, inputFingerprint: '0'.repeat(64) }, stored, paper), /当前输入与重试许可不一致/);
+    }));
+});
+test('新轮输入不符只检查一次，保留原稿且不开新轮', async t => {
+    const f = setup(t);
+    let attempts = 0;
+    await f.locked(() => retry.withExplicitRound(paper, f.grant, async () => {
+        const result = await engine.analyzePaperWithRetry(structuredClone(paper), {
+            maxRetries: 2, retryDelayMs: 0,
+            analyzeFn: async () => {
+                attempts++;
+                return retry.beginExplicitRound(directory,
+                    { ...f.identity, inputFingerprint: '0'.repeat(64) }, f.payload, paper);
+            }
+        });
+        assert.equal(result.success, false);
+        assert.equal(attempts, 1);
+        assert.equal(result.result.latestAnalysisAttemptErrorCode, 'READER_RETRY_INPUT_MISMATCH');
+        assert.equal(result.result.latestAnalysisAttemptRetryable, false);
+        assert.equal(result.result.latestAnalysisAttemptErrorScope, 'paper');
+        assert.match(result.error, /当前输入/);
+        assert.equal(sha(fs.readFileSync(f.file)), f.grant.envelopeSha256);
+        assert.equal(fs.existsSync(path.join(directory, 'explicit-retry-rounds')), false);
+    }));
+});
+test('新轮拒绝分别说明论文不符和已完成，均保留原稿', async t => {
+    const f = setup(t);
+    await f.locked(() => retry.withExplicitRound(paper, f.grant, () => {
+        assert.throws(() => retry.beginExplicitRound(directory, f.identity, f.payload,
+            { ...paper, arxivId: '2610.90072v1' }), error =>
+            error.code === 'READER_RETRY_PAPER_MISMATCH' && error.retryable === false);
+        t.mock.method(engine, 'isSuccessfulAnalysisRecord', () => true);
+        assert.throws(() => retry.beginExplicitRound(directory, f.identity, f.payload, paper), error =>
+            error.code === 'READER_RETRY_ALREADY_COMPLETE' && error.retryable === false);
+        assert.equal(sha(fs.readFileSync(f.file)), f.grant.envelopeSha256);
+        assert.equal(fs.existsSync(path.join(directory, 'explicit-retry-rounds')), false);
     }));
 });
 test('真实公共传输层最多6次，拒绝发生在第7次传输之前', async t => {

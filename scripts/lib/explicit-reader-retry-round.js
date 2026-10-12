@@ -33,6 +33,10 @@ function localRepairError(message) {
     return Object.assign(new Error(message), { code: 'READER_LOCAL_REPAIR_PROOF_INVALID', retryable: false,
         scope: 'paper', category: 'reader_recovery', modelRequestClassified: true });
 }
+function retryInputError(code, message) {
+    return Object.assign(new Error(message), { code, retryable: false,
+        scope: 'paper', category: 'reader_recovery', modelRequestClassified: true });
+}
 function assertLocalRepairParent(directory, grant, currentPayload, currentIdentity) {
     assertGrant(grant);
     if (grant.contract !== LOCAL_REPAIR_CONTRACT) return;
@@ -151,13 +155,18 @@ function beginExplicitRound(directory, identity, recovered, paper) {
     const repair = require('./reader-repair');
     require('./fresh-analysis-context').freshReaderAttemptsDirectory(directory);
     const grant = scope.grant;
+    if (idOf(paper) !== grant.paperId) {
+        throw retryInputError('READER_RETRY_PAPER_MISMATCH', '长文重试许可对应另一篇论文，不能开始新一轮。');
+    }
     const currentSourceIdentity = require('./fresh-analysis-context').freshAnalysisIdentity(paper.arxivId);
     if (repair.hashDraft(identity.freshAnalysis) !== repair.hashDraft(currentSourceIdentity)) {
         throw new Error('Reader 当前输入身份缺少完整封存来源证明');
     }
-    if (idOf(paper) !== grant.paperId || repair.hashDraft(identity) !== grant.identitySha256
-        || require('../analysis-engine').isSuccessfulAnalysisRecord(paper)) {
-        throw new Error('不能停用成功草稿或不同当前输入的 Reader 候选');
+    if (repair.hashDraft(identity) !== grant.identitySha256) {
+        throw retryInputError('READER_RETRY_INPUT_MISMATCH', '长文当前输入与重试许可不一致，不能沿用许可开始新一轮。');
+    }
+    if (require('../analysis-engine').isSuccessfulAnalysisRecord(paper)) {
+        throw retryInputError('READER_RETRY_ALREADY_COMPLETE', '论文已经完成分析，不能按失败稿开始长文重试。');
     }
     const loc = paths(directory, grant.roundId);
     let receipt = fs.existsSync(loc.receipt) ? JSON.parse(fs.readFileSync(loc.receipt)) : null;
