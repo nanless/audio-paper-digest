@@ -2447,6 +2447,7 @@ function assessReaderFormulaEligibility(formula) {
     const latex = String(formula?.latex || '').trim();
     if (formula?.recoveryStatus !== 'complete' || !latex) return { eligible: false, reason: '原始公式缺少完整 TeX' };
     if (/=\s*[-+−]?\s*$/.test(latex)) return { eligible: false, reason: '原始 TeX 在等号后截断' };
+    if (/\(\s*$/.test(latex)) return { eligible: false, reason: '原始 TeX 在左圆括号后截断，只有跨行公式的前半段' };
     const inlineMath = /<math\b[^>]*\bdisplay\s*=\s*["']inline["']/i.test(String(formula.mathml || ''));
     const textHasRelation = /[=≤≥≠≈∝↦→]/.test(String(formula.text || ''));
     const latexHasRelation = /[=<>≤≥≠≈∝↦→]|\\(?:leq?|geq?|neq?|approx|sim|propto|mapsto|to)(?![A-Za-z])/.test(latex);

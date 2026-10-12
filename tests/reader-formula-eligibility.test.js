@@ -28,6 +28,21 @@ test('完整块表达式与完整块或行内等式保留原始TeX，不强加�
  }
 });
 
+test('跨行损失公式只恢复到左圆括号时，不进入可用目录和正文', () => {
+ for (const name of ['DPO', 'CoPO']) {
+  const latex = String.raw`\displaystyle\mathcal{L}_{\mathrm{${name}}}=-\log\sigma\Bigg(`;
+  const f = source('inline', latex, 'L = -log sigma(reward_chosen - reward_rejected)');
+  const before = JSON.stringify(f.artifacts);
+  assert.match(deep.buildApiReaderArtifactEvidence(f.artifacts), /FORMULA_ORDINALS_AVAILABLE: \[\]/);
+  assert.throws(f.bind, /左圆括号后截断/);
+  assert.equal(JSON.stringify(f.artifacts), before);
+ }
+ for (const latex of [String.raw`\mathcal L=-\log\sigma(a-b)`, 'x \\in [0,1[']) {
+  const f = source('block', latex, latex);
+  assert.equal(f.bind().formulaBindings[0].latex, latex);
+ }
+});
+
 const crypto = require('node:crypto');
 const sha = text => crypto.createHash('sha256').update(text).digest('hex');
 test('保存后的完整长文资格复核拒绝缺原始内容或自洽的左侧片段，只保留合法完整来源', () => {

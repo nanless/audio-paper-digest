@@ -45,6 +45,22 @@ class ReaderFormulaEligibilityTest(unittest.TestCase):
                 reseal_llm_api_reader_fixture(paper)
                 publish_to_blog._validate_api_reader_source_bindings(paper)
 
+    def test_multiline_loss_prefix_is_not_a_complete_formula(self):
+        for name in ['DPO', 'CoPO']:
+            latex = r'\displaystyle\mathcal{L}_{\mathrm{' + name + r'}}=-\log\sigma\Bigg('
+            paper, payload = self.paper(latex, 'L = -log sigma(a-b)', 'inline')
+            paper['apiReaderPlan']['structuredSourcePayload'] = payload
+            reseal_llm_api_reader_fixture(paper)
+            before = copy.deepcopy(paper)
+            with self.assertRaisesRegex(PublishDataValidationError, '片段|完整原始'):
+                publish_to_blog._validate_api_reader_source_bindings(paper)
+            self.assertEqual(paper, before)
+        for latex in [r'\mathcal L=-\log\sigma(a-b)', r'x \in [0,1[']:
+            paper, payload = self.paper(latex, latex, 'block')
+            paper['apiReaderPlan']['structuredSourcePayload'] = payload
+            reseal_llm_api_reader_fixture(paper)
+            publish_to_blog._validate_api_reader_source_bindings(paper)
+
 
 if __name__ == '__main__':
     unittest.main()

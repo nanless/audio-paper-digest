@@ -5700,6 +5700,8 @@ def _reader_formula_source_eligible(formula):
     latex = str(formula.get('latex') or '').strip()
     if formula.get('recoveryStatus') != 'complete' or not latex or re.search(r'=\s*[-+−]?\s*$', latex):
         return False
+    if re.search(r'\(\s*$', latex):
+        return False
     inline_math = re.search(r"<math\b[^>]*\bdisplay\s*=\s*[\"']inline[\"']", str(formula.get('mathml') or ''), re.I)
     text_has_relation = re.search(r'[=≤≥≠≈∝↦→]', str(formula.get('text') or ''))
     latex_has_relation = re.search(r'[=<>≤≥≠≈∝↦→]|\\(?:leq?|geq?|neq?|approx|sim|propto|mapsto|to)(?![A-Za-z])', latex)
