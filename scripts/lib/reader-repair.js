@@ -1996,18 +1996,56 @@ function verifiedReaderFactIssues(draft, claims) {
             const prose = lines.map((line, lineIndex) => (
                 /^\s*>/.test(line) || tableLines.has(lineIndex) ? mask(line) : line
             )).join('\n');
-            return Array.from({ length: prose.split(claim).length - 1 },
-                () => `/sections/${index}/body`);
+            const occurrences = [];
+            let position = prose.indexOf(claim);
+            while (position >= 0) {
+                occurrences.push({ path: `/sections/${index}/body`, index: position });
+                position = prose.indexOf(claim, position + claim.length);
+            }
+            return occurrences;
         });
         if (matches.length !== 1) continue;
-        issues.push({ path: matches[0], code: 'reader_verified_fact_claim', claim,
+        issues.push({ path: matches[0].path, index: matches[0].index, code: 'reader_verified_fact_claim', claim,
             message: '已核验事实反馈指出该正文仍保留错误完整原句，按本次原文证据纠正。' });
     }
     return issues;
 }
 
+function readerFactLocalSelectionIssues(draft, issues, allowedPaths, claims) {
+    const verified = verifiedReaderFactIssues(draft, claims);
+    const allowed = new Set(allowedPaths);
+    if (!verified.length || verified.some(issue => !allowed.has(issue.path))) return issues;
+    const { findReaderLanguageIssues } = require('../editorial-quality');
+    const selected = [];
+    for (const issue of issues) {
+        if (!LANGUAGE_ISSUE_CODES.has(issue?.code)) {
+            selected.push(issue);
+            continue;
+        }
+        if (!allowed.has(issue.path) || typeof issue.match !== 'string') {
+            selected.push(issue);
+            continue;
+        }
+        const body = nodeAt(draft, issue.path);
+        const findings = typeof body === 'string' ? findReaderLanguageIssues(body)
+            .filter(finding => finding.code === issue.code && finding.match === issue.match) : [];
+        const authorized = verified.filter(fact => fact.path === issue.path);
+        const covered = findings.length > 0 && findings.every(finding => authorized.some(fact =>
+            finding.index >= fact.index
+            && finding.index + finding.match.length <= fact.index + fact.claim.length));
+        // 只在选目标时合并同一已授权完整原句内的语言诊断；原诊断仍保留，最终整篇校验照常执行。
+        if (!covered) selected.push(issue);
+    }
+    for (const fact of verified) {
+        if (!selected.some(issue => issue.code === fact.code && issue.path === fact.path && issue.claim === fact.claim))
+            selected.push(fact);
+    }
+    return selected;
+}
+
 function buildRepairTargets(draft, issues, options = {}) {
     if (Array.isArray(options.readerFactLocalPaths)) {
+        issues = readerFactLocalSelectionIssues(draft, issues, options.readerFactLocalPaths, options.readerFactLocalClaims || []);
         if (issues.some(issue => issue?.diagnosticOnly !== true
             && issue?.code !== 'reader_verified_fact_claim')) return [];
         const allowed = new Set(options.readerFactLocalPaths);

@@ -8078,7 +8078,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         } : candidate && !sourceBindingNeedsFullRetry
             ? repair.buildRepairContext(candidate, currentIssues, sourceEvidence, options.sourceText,
                 { availableFigureOrdinals: pixelFigureOrdinals, structuredArtifacts: options.structuredArtifacts,
-                    ...(options.readerFactLocalRevision === true ? { readerFactLocalPaths: start.readerFactLocalPaths } : {}) }) : null;
+                    ...(options.readerFactLocalRevision === true ? { readerFactLocalPaths: start.readerFactLocalPaths,
+                        readerFactLocalClaims: require('./lib/daily-fact-review').readerRejectedClaims(getPaperArxivId(paper)) } : {}) }) : null;
         if (repairContext && repairContext.targets.length === 0
             && currentIssues.some(issue => repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair)) {
             const latestFailure = repair.loadFailedCandidate(candidateDirectory, identity) || {};
