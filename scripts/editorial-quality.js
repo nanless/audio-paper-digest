@@ -972,7 +972,20 @@ function findMissingComparisonUnits(text) {
         // 模型名或产品名里的数字（例如 wav2vec-U、Qwen2-Audio）不算裸露的百分比数值。
         // 图表编号和“第 2 至 3 位”这类序号不是指标值。先做等长屏蔽，
         // 避免一句定性比较仅因包含图号/排名位置就被误判为缺少单位。
-        const numericText = sentence.text
+        // 明确的变量区间是设置条件，区间端点不能冒充附近的百分比结果。
+        // 只处理同句中实际出现区间声明的变量；其他裸结果数仍照常检查。
+        const parameterRanges = [...sentence.text.matchAll(
+            /([λε])\s*在\s*[-+]?\d+(?:\.\d+)?\s*(?:到|至)\s*[-+]?\d+(?:\.\d+)?\s*之间/gu
+        )];
+        let comparisonText = sentence.text;
+        for (const range of parameterRanges) {
+            comparisonText = comparisonText.replace(range[0], ' '.repeat(range[0].length));
+            comparisonText = comparisonText.replace(
+                new RegExp(`${range[1]}\\s*=\\s*[-+]?\\d+(?:\\.\\d+)?(?![\\d.])`, 'gu'),
+                match => ' '.repeat(match.length)
+            );
+        }
+        const numericText = comparisonText
             // 明确命名的超参数值是实验设置，不能冒充同句的百分比结果。
             // 只屏蔽实际参数表达式；其他结果数字继续走原有单位检查。
             .replace(
