@@ -111,3 +111,28 @@ test('Reader 普通单篇正文失败继续其他论文，仍以失败退出且�
     assert.equal(f.read().papers[1].refreshMarker, 'saved');
     assert.equal(f.read().papers[2].refreshMarker, 'saved');
 });
+
+test('单篇已返回刷新结果保存后仍传播停止，后续流程不得启动', async t => {
+    const f = await fixture(t);
+    const stop = require('../scripts/lib/analysis-stop-control');
+    let following = 0;
+    await assert.rejects(reader.refreshApiReader(ids[0], { operations: { article: f.operation(paper => {
+        stop.requestAnalysisStop();
+        return { ...paper, refreshMarker: 'returned-before-stop', apiReaderPlan: { sections: [] }, apiReaderFigures: [] };
+    }) } }).then(() => { following++; }), error => error.code === stop.CODE && error.result.refreshMarker === 'returned-before-stop');
+    assert.equal(following, 0);
+    assert.equal(f.read().papers[0].refreshMarker, 'returned-before-stop');
+});
+
+test('批量最后成功响应仍保存但传播停止，结果清单保留已保存论文', async t => {
+    const f = await fixture(t);
+    const stop = require('../scripts/lib/analysis-stop-control');
+    let following = 0;
+    await assert.rejects(reader.refreshApiReaders(ids, { concurrency: 1, operations: { article: f.operation(paper => {
+        stop.requestAnalysisStop();
+        return { ...paper, refreshMarker: 'returned-before-stop', apiReaderPlan: { sections: [] }, apiReaderFigures: [] };
+    }) } }).then(() => { following++; }), error => error.code === stop.CODE && error.results.length === 1 && error.failures.length === 0);
+    assert.equal(following, 0);
+    assert.equal(f.read().papers[0].refreshMarker, 'returned-before-stop');
+    assert.equal(f.read().papers[1].refreshMarker, undefined);
+});

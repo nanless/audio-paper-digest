@@ -83,6 +83,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `fetch-huggingface-papers.js` | Node 模块/入口 | 通过最小环境中的 `curl` 抓取 HuggingFace Papers。 |
 | `deep-analyzer.js` | Node 核心 | 获取单篇全文，执行多阶段分析、评分审计、API Reader 写作和图片规划。结构修复后，只用原文证据核验 `core-summary-detailed-v3`；按阶段依赖、SHA 和旧检查点决定恢复范围，尽量少做整篇重做。 |
 | `analysis-engine.js` | Node 共享 | 管理论文锁、重试、检查点、批量并发与结果合并，并判断每篇是否完成；`PD_CHECKPOINT_TIMING=1` 可记录保存各步骤的耗时。 |
+| `lib/analysis-stop-control.js` | Node 库 | 在批量分析和 Reader 刷新期间处理温和停止，停止领取新论文和发送新模型请求，保留已返回内容与原费用账；嵌套调用共用停止状态，并行调用分开记录，完成后移除信号监听器。详见[分析停止说明](../docs/analysis-stop.md)。 |
 | `analysis-contract.js` | Node 共享 | 核验 API 分析的结构、评分、方法和表格要求，同时能读历史 Manual 结果。 |
 | `lib/reanalysis-helpers.js` | Node 库 | 供指定论文重分析使用，清理 Reader 状态并更新恢复统计。 |
 | `editorial-quality.js` | Node 共享 | 检查 API/Manual 读者正文的语言、事实表述、评分和可读性。 |

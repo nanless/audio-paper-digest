@@ -1070,6 +1070,7 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
             const timeoutMs = options.timeoutMs ?? 60000;
             response = await withRequestDeadline(
                 () => {
+                    require('./lib/analysis-stop-control').assertMayStartRequest();
                     require('./lib/explicit-reader-retry-round').consumePhysicalRequest(bodyObj, options);
                     transportStarted = true;
                     return transportRequestFn(apiUrl, bodyObj, headers, { ...options, timeoutMs, agent });
@@ -1112,6 +1113,7 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
  * 每次请求创建并销毁独立的 HTTP 连接对象；MiMo/Kimi 仍使用直连。
  */
 async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options = {}) {
+    require('./lib/analysis-stop-control').assertMayStartRequest();
     let expectedApiUrl;
     try {
         expectedApiUrl = buildApiUrl(detectApiType(endpoint, model), endpoint);
@@ -1181,6 +1183,7 @@ async function requestLlmJson(apiUrl, endpoint, model, bodyObj, headers, options
     const blockedUntilValues = [];
     const attemptedAccountIds = new Set();
     for (let accountAttempt = 0; accountAttempt < apiKeys.length; accountAttempt += 1) {
+        require('./lib/analysis-stop-control').assertMayStartRequest();
         const remainingMs = totalTimeoutMs - (Date.now() - startedAt);
         if (remainingMs <= 0) {
             const error = new Error(`请求超过 ${totalTimeoutMs}ms 的总等待时间`);

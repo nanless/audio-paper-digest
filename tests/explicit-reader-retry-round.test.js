@@ -1151,3 +1151,38 @@ test('同轮原稿恢复仍拒绝变化的实际输入、来源字节和缺失�
  }));
  assert.deepEqual(fs.readFileSync(f.file),saved);assert.deepEqual(fs.readFileSync(receiptFile),paid);
 });
+
+test('温和停止保留已返回原稿和真实48k账，下一16k请求不登记也不发送', async t => {
+    const f = setup(t);
+    const stop = require('../scripts/lib/analysis-stop-control');
+    const utils = require('../scripts/utils');
+    let sent = 0;
+    await f.locked(() => retry.withExplicitRound(paper, f.grant, () => {
+        const next = retry.beginExplicitRound(directory, f.identity, f.payload, paper);
+        return retry.withPhysicalBudget(next.explicitReaderRetryRound, paper, () => stop.withAnalysisStopControl(async () => {
+            const endpoint = 'http://127.0.0.1:9/v1', model = 'ci-test-model';
+            const request = tokens => utils.requestLlmJson(utils.buildApiUrl(utils.detectApiType(endpoint, model), endpoint),
+                endpoint, model, { model, max_tokens: tokens, messages: [{ role: 'user', content: '离线原稿保存测试' }] }, {},
+                { recordUsage: false, timeoutMs: 1000, usageContext: { paperId: paper.arxivId, stage: 'apiReaderArticle' },
+                    transportRequestFn: async () => { sent++; return { statusCode: 200, body: { choices: [{ message: { content: '已经返回、尚未通过解析的真实测试响应。' } }] } }; } });
+            const response = await request(48000);
+            repair.saveFailedCandidate(directory, f.identity, { ...next, attempts: 1, fullAttempts: 1,
+                rawDraft: response.body.choices[0].message.content });
+            const receiptFile = next.explicitReaderRetryRound.receiptFile;
+            const receipt = JSON.parse(fs.readFileSync(receiptFile));
+            const original = fs.readFileSync(receipt.archivedFile), candidate = fs.readFileSync(f.file), paid = fs.readFileSync(receiptFile);
+            assert.equal(receipt.physicalRequests, 1);
+            assert.equal(receipt.reservedOutputTokens, 48000);
+            stop.requestAnalysisStop();
+            await assert.rejects(request(16000), { code: stop.CODE, retryable: false });
+            assert.equal(sent, 1);
+            assert.deepEqual(fs.readFileSync(receiptFile), paid);
+            assert.deepEqual(fs.readFileSync(f.file), candidate);
+            assert.deepEqual(fs.readFileSync(receipt.archivedFile), original);
+            const retained = JSON.parse(fs.readFileSync(f.file)).payload;
+            assert.equal(retained.attempts, 1);
+            assert.equal(retained.fullAttempts, 1);
+            assert.equal(retained.rawDraft, response.body.choices[0].message.content);
+        }));
+    }));
+});

@@ -7908,6 +7908,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 selectedOrdinals = isolated.activeInputs.filter(image => image.kind === 'figure').map(image => image.ordinal);
             }
         } catch (error) {
+            if (error?.code === require('./lib/analysis-stop-control').CODE) throw error;
             if (Array.isArray(error?.providerImageExclusions)) {
                 providerImageExclusions = normalizeProviderImageExclusions([
                     ...providerImageExclusions, ...error.providerImageExclusions

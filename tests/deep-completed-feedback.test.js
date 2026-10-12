@@ -142,3 +142,39 @@ test('预检拒绝经正常论文锁与中央保存后仍保留原合格正文�
  assert.equal(JSON.stringify(stored.analysisStageCheckpoints),checkpoints);
  assert.equal(engine.isSuccessfulAnalysisRecord(stored),false);
 });
+
+test('deep 最后一篇真实合格结果保存后传播停止，不进入后续生成发布流程', async t => {
+    const f = await createReviewedReaderSample(t);
+    const previous = Object.fromEntries(['deepAnalysisResult', 'filteredPapers', 'papers'].map(key => [key, Config.FILES[key]]));
+    t.after(() => Object.assign(Config.FILES, previous));
+    for (const key of Object.keys(previous)) Config.FILES[key] = path.join(f.plan.runDir, 'stop-current', key + '.json');
+    f.paper.latestAnalysisAttemptError = '测试所需的上一轮中断';
+    const feedbackFile = path.join(f.plan.runDir, 'stop-feedback.json'); save(feedbackFile, f.feedback);
+    save(Config.FILES.deepAnalysisResult, { batchDate: f.plan.batchDate, batchId: f.plan.batchId,
+        dailyFreshSourceRun: daily.dailyFreshSourceReference(f.plan), papers: [f.paper] });
+    save(Config.FILES.filteredPapers, { batchDate: f.plan.batchDate, batchId: f.plan.batchId, status: 'complete',
+        papers: [{ arxivId: f.paper.arxivId, title: f.paper.title }] });
+    save(Config.FILES.papers, { generation: 0, papers: {} });
+    const stop = require('../scripts/lib/analysis-stop-control');
+    const utils = require('../scripts/utils');
+    let requests = 0, following = 0;
+    await assert.rejects(entry.runDeepAnalysis({ date: f.plan.batchDate, id: f.id, coreFeedbackFile: feedbackFile,
+        analyzeFn: async paper => {
+            const endpoint = 'http://127.0.0.1:9/v1', model = 'ci-test-model';
+            await utils.requestLlmJson(utils.buildApiUrl(utils.detectApiType(endpoint, model), endpoint), endpoint, model,
+                { model, max_tokens: 16, messages: [{ role: 'user', content: '本地最后响应测试' }] }, {},
+                { recordUsage: false, timeoutMs: 1000, transportRequestFn: async () => {
+                    requests++; stop.requestAnalysisStop();
+                    return { statusCode: 200, body: { choices: [{ message: { content: '本地返回结果' } }] } };
+                } });
+            const result = { ...paper };
+            for (const key of Object.keys(result)) if (key.startsWith('latestAnalysisAttempt')) delete result[key];
+            return result;
+        }
+    }).then(() => { following++; }), error => error.code === stop.CODE && error.stats.success === 1);
+    assert.equal(requests, 1); assert.equal(following, 0);
+    const saved = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[0];
+    assert.equal(engine.isSuccessfulAnalysisRecord(saved), true);
+    assert.equal(saved.analysis, f.paper.analysis);
+    assert.equal(saved.apiReaderArticle, f.paper.apiReaderArticle);
+});

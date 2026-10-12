@@ -1605,6 +1605,10 @@ async function analyzePaperWithRetry(paper, options = {}) {
  * @returns {Promise<Object>} { results: Object[], stats: Object }
  */
 async function analyzeBatch(papers, options = {}) {
+    return require('./lib/analysis-stop-control').withAnalysisStopControl(() => analyzeBatchInternal(papers, options));
+}
+
+async function analyzeBatchInternal(papers, options = {}) {
     const {
         concurrency = DEFAULT_CONCURRENCY,
         maxRetries = DEFAULT_MAX_RETRIES,
@@ -1811,7 +1815,8 @@ async function analyzeBatch(papers, options = {}) {
     };
 
     const worker = async () => {
-        while (!fatalError && !runStopError) {
+        while (!fatalError && !runStopError
+            && !require('./lib/analysis-stop-control').isAnalysisStopRequested()) {
             const idx = nextIndex++;
             if (idx >= papers.length) return;
             try {
@@ -1835,11 +1840,20 @@ async function analyzeBatch(papers, options = {}) {
 
     const results = snapshotResults();
 
+    if (require('./lib/analysis-stop-control').isAnalysisStopRequested()) stats.stopped = true;
     // 最终保存
     if (onSave) {
         await onSave(results, { ...stats, savedAt: getBeijingISOString() });
     }
 
+    // 保存期间也可能收到停止信号；成功保存后再核对，不能返回成功继续发布。
+    if (require('./lib/analysis-stop-control').isAnalysisStopRequested()) {
+        stats.stopped = true;
+        if (!runStopError) {
+            try { require('./lib/analysis-stop-control').assertMayStartRequest(); }
+            catch (error) { runStopError = error; }
+        }
+    }
     if (runStopError) {
         runStopError.results = results;
         runStopError.stats = stats;

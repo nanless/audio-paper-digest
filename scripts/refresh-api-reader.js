@@ -181,6 +181,10 @@ function resolveBatchRefreshIds(options) {
 }
 
 async function refreshApiReaders(targetIds, options = {}) {
+    return require('./lib/analysis-stop-control').withAnalysisStopControl(() => refreshApiReadersInternal(targetIds, options));
+}
+
+async function refreshApiReadersInternal(targetIds, options = {}) {
     const ids = [...new Set(targetIds.map(normalizedId).filter(Boolean))];
     const concurrency = Math.min(options.concurrency || 1, ids.length || 1);
     const results = new Array(ids.length);
@@ -188,7 +192,7 @@ async function refreshApiReaders(targetIds, options = {}) {
     let cursor = 0;
     let runStopError = null;
     async function worker() {
-        while (!runStopError) {
+        while (!runStopError && !require('./lib/analysis-stop-control').isAnalysisStopRequested()) {
             const index = cursor;
             cursor += 1;
             if (index >= ids.length) return;
@@ -197,12 +201,21 @@ async function refreshApiReaders(targetIds, options = {}) {
                 results[index] = await refreshApiReader(id, options);
             } catch (error) {
                 if (error?.scope === 'run') runStopError ||= error;
-                failures.push({ id, error: error.message });
-                console.error(`❌ ${id} 刷新失败: ${error.message}`);
+                if (error?.code === require('./lib/analysis-stop-control').CODE && error.result) {
+                    results[index] = error.result;
+                    console.log(`✅ ${id} 已保存结果，停止后续请求`);
+                } else {
+                    failures.push({ id, error: error.message });
+                    console.error(`❌ ${id} 刷新失败: ${error.message}`);
+                }
             }
         }
     }
     await Promise.all(Array.from({ length: concurrency }, () => worker()));
+    if (!runStopError && require('./lib/analysis-stop-control').isAnalysisStopRequested()) {
+        try { require('./lib/analysis-stop-control').assertMayStartRequest(); }
+        catch (error) { runStopError = error; }
+    }
     // 已开始的刷新仍须完成保存并释放锁，再把首个运行级错误原样交回调用方。
     if (runStopError) {
         runStopError.failures = failures;
@@ -251,6 +264,15 @@ function canRepairSurfaceBinding(paper) {
 }
 
 async function refreshApiReader(targetId, options = {}) {
+    return require('./lib/analysis-stop-control').withAnalysisStopControl(async () => {
+        const result = await refreshApiReaderInternal(targetId, options);
+        try { require('./lib/analysis-stop-control').assertMayStartRequest(); }
+        catch (error) { error.result = result; throw error; }
+        return result;
+    });
+}
+
+async function refreshApiReaderInternal(targetId, options = {}) {
     const requested = normalizedId(targetId);
     if (!requested) throw new Error('用法: node scripts/refresh-api-reader.js <arxiv-id>');
     const resultPath = Config.FILES.deepAnalysisResult;
