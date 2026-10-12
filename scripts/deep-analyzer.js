@@ -15184,7 +15184,7 @@ async function analyzePaperDeepInternal(paper) {
                 primaryRepairSha256: stableFingerprint(localPrimaryReceipt),
                 remainingChecks: 'normal-table-method-structure-core-scoring-source-gates'
             } : null;
-            markRecoveryStage(analysisManifest, 'revision', localFactValidation ? 'not_needed' : 'complete', {
+            markRecoveryStage(analysisManifest, 'revision', 'complete', {
                 ...(localFactValidation ? { localFactValidation } : {}),
                 ...(resolveAuxiliaryRequestPolicy('revision')
                     ? { auxiliaryRequestPolicy: resolveAuxiliaryRequestPolicy('revision') } : {}),

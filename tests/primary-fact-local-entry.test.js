@@ -78,7 +78,12 @@ test('正常主分析入口发送局部JSON并保存新证明，完整审校不�
     assert.ok(primarySaved);
     assert.equal(primarySaved.analysisCheckpoint, original.replace(wrong, '蒸馏使用冻结文本教师的MSE。'));
     assert.deepEqual(primarySaved.analysisManifest.stages.primaryAnalysis.factReview, bound.proof);
-    assert.equal(localValidationSaved.analysisManifest.stages.revision.status, 'not_needed');
+    assert.equal(localValidationSaved.analysisManifest.stages.revision.status, 'complete');
+    assert.equal(require('../scripts/analysis-contract').isRecoveryStageTerminal('revision',
+        localValidationSaved.analysisManifest.stages.revision.status), true);
+    assert.equal(deep.isRecoveryStageComplete({ stages: {
+        revision: localValidationSaved.analysisManifest.stages.revision
+    } }, 'revision'), true);
     assert.equal(localValidationSaved.analysisManifest.stages.revision.localFactValidation.contract,
         'primary-local-fact-validation-v1');
     assert.ok(review.validateFeedback(sample.feedback, sample.plan, primarySaved));
