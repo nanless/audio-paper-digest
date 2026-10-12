@@ -14,6 +14,22 @@ function sourceTables(caption = 'Table 1: Quantitative enhancement results acros
 }
 const markdown = '| Model | OVRL | SIG |\n| --- | --- | --- |\n| Baseline | 3.09 | 3.50 |\n| Adapted | 3.14 | 3.48 |';
 
+test('结果表中的约数仍是测量值，配置和不足四格的数字不能充数', () => {
+    const artifacts = sourceTables();
+    const body = '| 比较 | 指标 | 增量 |\n|---|---|---|\n'
+        + '| 滤波器 | SI-SNR | 约 1.2 dB 提升 |\n'
+        + '| 滤波器 | SDR | 约 0.9 dB 提升 |\n'
+        + '| 后处理 | SI-SNR | 约 11.5 dB 提升 |\n'
+        + '| 后处理 | SDR | 约 10 dB 提升 |';
+    assert.equal(validateReaderResultTableCoverage([{ kind: 'result', body }], artifacts).numericResultTables, 1);
+    for (const invalid of [
+        body.split('\n').slice(0, -1).join('\n'),
+        body.replaceAll('约 ', '模型约 '),
+        '| 配置 | A | B |\n|---|---|---|\n| 学习率 | 约 0.001 | 约 0.002 |\n| 批量大小 | 约 64 | 约 128 |'
+    ]) assert.throws(() => validateReaderResultTableCoverage([{ kind: 'result', body: invalid }], artifacts), /主结果表覆盖不足/);
+    assert.throws(() => validateReaderResultTableCoverage([{ kind: 'experiment_setup', body }], artifacts), /主结果表覆盖不足/);
+});
+
 test('只有明确的量化来源结果表题才触发额外的结果表要求', () => {
     assert.equal(readerResultTableRequirement(sourceTables()).minimumResultTables, 1);
     for (const caption of ['', 'Authors and affiliations', 'Training configuration results', 'Dataset statistics comparison']) {
