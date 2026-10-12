@@ -22,13 +22,13 @@ const {
 const { updateAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./digest-status.js');
 const Config = require('./config.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
-const readerRepair = require('./lib/reader-repair.js');
 const factReview = require('./lib/daily-fact-review.js');
 
 loadEnvFile();
 
 const RESULT_FILE = Config.FILES.deepAnalysisResult;
 const RETRY_FAILED_READERS = process.argv.slice(2).includes('--retry-failed-readers');
+const readerExplicitRound = require('./lib/explicit-reader-retry-round');
 const REFRESH_READER_DIAGNOSTICS = process.argv.slice(2).includes('--refresh-reader-diagnostics');
 
 function parseFactFeedbackFiles(argv = process.argv.slice(2)) {
@@ -42,25 +42,6 @@ function parseFactFeedbackFiles(argv = process.argv.slice(2)) {
         files.push(filename);
     }
     return files;
-}
-
-function retireIncompleteReaderCandidates(directory, paperIds, options = {}) {
-    const readDir = options.readDir || fs.readdirSync;
-    const readFile = options.readFile || fs.readFileSync;
-    const retire = options.retire || readerRepair.retireFailedCandidate;
-    let retired = 0;
-    try {
-        const names = readDir(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort();
-        for (const name of names) {
-            const envelope = JSON.parse(readFile(path.join(directory, name), 'utf8'));
-            const paperId = normalizedId({ arxivId: envelope?.identity?.paperId });
-            if (!paperId || !paperIds.has(paperId)) continue;
-            if (retire(directory, envelope.identity)) retired += 1;
-        }
-    } catch (error) {
-        if (error.code !== 'ENOENT') throw error;
-    }
-    return retired;
 }
 
 function finalizeBatchZeroWorkState(resultPath, fallbackBatchDate) {
@@ -99,8 +80,17 @@ async function main(options = {}) {
         throw new Error('长文恢复检查设置必须为 true 或 false。');
     }
     const refreshReaderDiagnostics = REFRESH_READER_DIAGNOSTICS || options.refreshReaderDiagnostics === true;
-    if (refreshReaderDiagnostics && RETRY_FAILED_READERS) {
-        throw new Error('--refresh-reader-diagnostics 会继续使用已有长文草稿，不能与停用旧草稿的 --retry-failed-readers 同时使用。');
+    let explicitManifest;
+    const manifestIndex = process.argv.indexOf('--reader-retry-manifest');
+    const manifestPath = options.readerRetryManifestPath !== undefined
+        ? options.readerRetryManifestPath : manifestIndex < 0 ? undefined : process.argv[manifestIndex + 1];
+    if (RETRY_FAILED_READERS || manifestPath !== undefined) {
+        if (typeof manifestPath !== 'string' || !manifestPath.trim() || manifestPath.startsWith('--')) {
+            throw new Error('明确新轮重试必须提供 readerRetryManifestPath 或 --reader-retry-manifest');
+        }
+        explicitManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        if (!Array.isArray(explicitManifest.rounds)) throw new Error('Reader 重试清单的格式不符合要求');
+        for (const grant of explicitManifest.rounds) readerExplicitRound.assertGrant(grant);
     }
     const feedbackFiles = options.factFeedbackFiles === undefined ? parseFactFeedbackFiles() : options.factFeedbackFiles;
     if (!Array.isArray(feedbackFiles) || feedbackFiles.some(filename => (
@@ -123,7 +113,7 @@ async function main(options = {}) {
     const prepare = current => dailyFreshSources.prepareDailyFreshSourceRecoveryPayload(current,
         readJsonFileStrict(Config.FILES.filteredPapers), { label: 'batch recovery' });
     // 先只读核验整组反馈，再改写运行状态；后一个文件不合法时，前一个也不能开始请求。
-    const data = feedbacks.size ? prepare(readJsonFileStrict(RESULT_FILE))
+    const data = (feedbacks.size || explicitManifest) ? prepare(readJsonFileStrict(RESULT_FILE))
         : updateJsonFileLocked(RESULT_FILE, prepare);
 
     const papers = Array.isArray(data) ? data : (data.papers || []);
@@ -147,12 +137,29 @@ async function main(options = {}) {
     console.log(`本次处理论文: ${notAnalyzed.length}`);
     if (feedbacks.size) console.log(`其中 ${feedbacks.size} 篇带有已核验的事实反馈；程序检查已通过的论文也须纠正已发现错误。`);
 
-    if (RETRY_FAILED_READERS) {
-        const retired = retireIncompleteReaderCandidates(
-            dailySourcePlan.readerAttemptsDir,
-            new Set(notAnalyzed.map(normalizedId).filter(Boolean))
-        );
-        if (retired > 0) console.log(`已保留并停用 ${retired} 份未完成论文的旧读者文章草稿`);
+    const explicitRounds = new Map();
+    if (explicitManifest) {
+        const manifest = explicitManifest;
+        if (manifest.batchDate !== batchDate || manifest.runId !== dailySourcePlan.runId
+            || !Array.isArray(manifest.rounds)) throw new Error('Reader 新轮清单批次不匹配');
+        for (const grant of manifest.rounds) {
+            readerExplicitRound.assertGrant(grant);
+            if (explicitRounds.has(grant.paperId) || !notAnalyzed.some(p => normalizedId(p) === grant.paperId)) {
+                throw new Error('Reader 新轮目标重复或不是未完成论文');
+            }
+            const target = papers.find(p => normalizedId(p) === grant.paperId);
+            if (target && isSuccessfulAnalysisRecord(target)
+                && dailyFreshSources.isPaperReusableForAnalysis(target, dailySourcePlan)) throw new Error('不能对已通过的论文开 Reader 新轮');
+            if (require('./lib/daily-fact-review').sha(target.analysisCheckpoint || target.analysis || '') !== grant.wholeSha256
+                || grant.batchDate !== batchDate || grant.runId !== dailySourcePlan.runId) throw new Error('Reader 新轮当前正文或批次不匹配');
+            const details = dailyFreshSources.readDailyFreshSource(dailySourcePlan, target);
+            const sourceDir = path.join(dailySourcePlan.sourcesDir, grant.paperId,
+                `generation-${String(details.freshSourceDescriptor.sourceGeneration).padStart(6, '0')}`);
+            for (const [name, expected] of Object.entries(grant.sourceFiles)) {
+                if (require('./lib/daily-fact-review').sha(fs.readFileSync(path.join(sourceDir, name))) !== expected) throw new Error('Reader 新轮四来源不匹配');
+            }
+            explicitRounds.set(grant.paperId, grant);
+        }
     }
 
     if (notAnalyzed.length === 0) {
@@ -190,9 +197,11 @@ async function main(options = {}) {
         saveInterval: 1,
         analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
             ...options,
-            ...(feedbacks.size ? { analyze: paper => {
+            ...((feedbacks.size || explicitRounds.size) ? { analyze: paper => {
                 const feedback = feedbacks.get(normalizedId(paper));
-                const analyze = () => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper);
+                const normalAnalyze = () => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper);
+                const grant = explicitRounds.get(normalizedId(paper));
+                const analyze = () => grant ? readerExplicitRound.withExplicitRound(paper, grant, normalAnalyze) : normalAnalyze();
                 if (!feedback) return analyze();
                 const bound = factReview.validateFeedback(feedback, dailySourcePlan, paper);
                 return factReview.withFactReview(bound, analyze);
@@ -321,4 +330,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { main, parseFactFeedbackFiles, finalizeBatchZeroWorkState, retireIncompleteReaderCandidates };
+module.exports = { main, parseFactFeedbackFiles, finalizeBatchZeroWorkState };

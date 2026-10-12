@@ -268,6 +268,16 @@ function validationFailureHasNoProgress(previousSignature, currentSignature) {
     return !improved;
 }
 
+function hasUnusedImplementationAllowance(payload) {
+    const proof = payload?.implementationRepairAllowanceProof;
+    if (!proof || (payload.consumedImplementationAllowanceSha256 || []).includes(proof.allowanceSha256)) return false;
+    const audit = (payload.readerRecoveryRevisions || []).find(item => hashDraft(item) === proof.revisionAuditSha256);
+    if (!audit || !Number.isSafeInteger(audit.attempts) || !Number.isSafeInteger(audit.fullAttempts)) {
+        throw new Error('Reader 实现许可缺少原始已用次数');
+    }
+    return payload.attempts <= audit.attempts && payload.fullAttempts <= audit.fullAttempts;
+}
+
 function readerAttemptLimit(maxAttempts, completedAttempts, candidate, implementationRepairAllowance) {
     if (!Number.isInteger(maxAttempts) || maxAttempts < 1
         || !Number.isInteger(completedAttempts) || completedAttempts < 0
@@ -1830,6 +1840,7 @@ function loadFailedCandidate(directory, identity) {
             throw new Error('Corrupt or drifted Reader candidate');
         }
         validateImplementationAllowance(envelope.payload, envelope.identity, directory);
+        require('./explicit-reader-retry-round').validatePersistedRound(directory, envelope.identity, envelope.payload);
         return envelope.payload;
     } catch (error) {
         if (error.code === 'ENOENT') return null;
@@ -1856,6 +1867,16 @@ function saveFailedCandidate(directory, identity, payload) {
     const filename = candidatePath(absolute, identity);
     const previous = loadFailedCandidate(absolute, identity);
     const storedPayload = structuredClone(payload);
+    if (previous?.explicitReaderRetryRound) {
+        if (storedPayload.explicitReaderRetryRound
+            && hashDraft(storedPayload.explicitReaderRetryRound) !== hashDraft(previous.explicitReaderRetryRound)) {
+            throw new Error('明确 Reader 新轮凭证不能变化');
+        }
+        if (storedPayload.attempts < previous.attempts || storedPayload.fullAttempts < previous.fullAttempts) {
+            throw new Error('同一明确 Reader 新轮调用次数不能减少');
+        }
+        storedPayload.explicitReaderRetryRound = previous.explicitReaderRetryRound;
+    }
     if (previous?.implementationRepairAllowanceLineage) {
         if (storedPayload.implementationRepairAllowanceLineage !== undefined
             && storedPayload.implementationRepairAllowanceLineage
@@ -1879,6 +1900,7 @@ function saveFailedCandidate(directory, identity, payload) {
     if (consumed.size) storedPayload.consumedImplementationAllowanceSha256 = [...consumed].sort();
     else delete storedPayload.consumedImplementationAllowanceSha256;
     validateImplementationAllowance(storedPayload, identity, absolute);
+    require('./explicit-reader-retry-round').validatePersistedRound(absolute, identity, storedPayload);
     try {
         const stat = fs.lstatSync(filename);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('Unsafe Reader candidate destination');
@@ -2029,4 +2051,4 @@ module.exports = { REPAIR_VERSION, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     buildTopLevelMetadataRepairContext, applyTopLevelMetadataRepair,
     parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
     buildRepairTargets, applyReaderPatch, normalizeUnavailableReaderFigures, buildRepairContext, loadFailedCandidate, saveFailedCandidate,
-    retireFailedCandidate };
+    retireFailedCandidate, hasUnusedImplementationAllowance };

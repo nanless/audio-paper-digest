@@ -1068,7 +1068,10 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
         try {
             const timeoutMs = options.timeoutMs ?? 60000;
             response = await withRequestDeadline(
-                () => transportRequestFn(apiUrl, bodyObj, headers, { ...options, timeoutMs, agent }),
+                () => {
+                    require('./lib/explicit-reader-retry-round').consumePhysicalRequest(bodyObj, options);
+                    return transportRequestFn(apiUrl, bodyObj, headers, { ...options, timeoutMs, agent });
+                },
                 timeoutMs
             );
             return response;

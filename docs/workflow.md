@@ -154,7 +154,7 @@ npm run batch
 npm run batch -- --refresh-reader-diagnostics
 
 # 主动停用旧草稿后续跑
-npm run batch -- --retry-failed-readers
+npm run batch -- --retry-failed-readers --reader-retry-manifest /absolute/path/reader-rounds.json
 
 # 清空旧解读与图片补充状态，强制重分析
 npm run reanalyze -- --concurrency 5
@@ -169,6 +169,6 @@ npm run digest:status -- --date YYYY-MM-DD
 
 `deep`、`batch`、`reanalyze` 和 `api:reader:refresh` 只能使用当前正式分析结果中 `dailyFreshSourceRun` 指向的来源。批次日期、完整论文集合，以及每篇 PDF、文本、来源信息和清单必须全部匹配。命令不补抓来源、不读取旧缓存；来源缺失或发生变化时，会在模型或图片请求前停止。目标仍为北京时间当天时，可重新运行同日 `digest:prepare` 获取并保存来源；历史日期须保留失败记录，按历史维护流程处理，不能从抓取阶段重跑。
 
-`batch --refresh-reader-diagnostics` 只接续同组已核验封存来源的失败草稿，保留原调用次数，提示词变更本身不增加请求额度；它与主动停用旧草稿的 `--retry-failed-readers` 不能同时使用。`batch --retry-failed-readers` 只使当前未完成论文的失败候选不再被复用；`reanalyze` 会处理全部旧失败候选，并清空解读及图片补充状态，再强制重分析。两者都须满足相同来源要求。
+明确重试必须提供 `--reader-retry-manifest /绝对路径/reader-rounds.json`，不能按论文批量停用旧稿。程序在规范论文锁内核对当前批次、四份封存来源、正文和实际 Reader 输入，只为清单中确实耗尽的失败稿开一轮。原稿、原调用次数和费用记录完整保留；新轮最多 3 次已保存内容尝试、1 次全文、6 次实际请求，输出预留合计不超过 80000 tokens。同一授权续跑只用剩余额度，普通恢复和实现版本变化不自动开新轮。它可以与 `--refresh-reader-diagnostics` 同用：无授权论文仍按原次数正常恢复。详见[有预算的 Reader 重试](reader-explicit-retry.md)。
 
 最后一次推送、图片登记或取消配图后，重新生成最终报告。报告只反映读取时的状态，不会自动更新。只有数据、审查、远端发布和上线核验全部完成，且配图已完成或有仍适用于当前发布的用户配图取消记录时，才能宣告整批完成。

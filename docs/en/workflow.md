@@ -148,7 +148,7 @@ npm run deep -- --date YYYY-MM-DD
 npm run batch
 
 # Stop reusing failed Reader candidates for unfinished papers, then resume
-npm run batch -- --retry-failed-readers
+npm run batch -- --retry-failed-readers --reader-retry-manifest /absolute/path/reader-rounds.json
 
 # Clear old Reader/image-supplement state and force full analysis
 npm run reanalyze -- --concurrency 5
@@ -163,6 +163,6 @@ npm run digest:status -- --date YYYY-MM-DD
 
 `deep`, `batch`, `reanalyze`, and `api:reader:refresh` use only the sources the recorded `dailyFreshSourceRun` points to. The batch date, the exact paper set, and every PDF, text, runtime record, and manifest have to match. These commands never fetch missing sources or fall back to old caches, and missing or changed sources stop them before any model or image request. If the target is still Beijing today, rerun the same dated `digest:prepare` to establish the sources. For historical dates, keep the failure records and follow the historical maintenance workflow; do not restart at fetch.
 
-`batch --retry-failed-readers` stops reusing failed candidates only for papers that are still unfinished. `reanalyze` covers all old failed candidates and clears Reader/image-supplement state before forcing analysis. Both keep the same source requirements.
+Explicit retry requires `--reader-retry-manifest /absolute/path/reader-rounds.json`; it no longer disables every old draft for a paper. Under the normal paper lock, the program verifies the batch, four sealed source files, current article and actual Reader input, and starts one round only for the listed exhausted failed record. Original drafts, attempt counts and usage records remain intact. Each round permits at most 3 saved content attempts and 1 saved full rewrite, with hard limits of 6 actual requests and 80000 reserved output tokens. A crash after a model response but before saving may leave the saved attempt count unchanged; that request remains charged to the persistent request budget. Resuming the same authorization uses only its remaining budget; ordinary resume and implementation changes do not create another round. It may be combined with `--refresh-reader-diagnostics`, which continues unlisted papers with their existing counters. See [bounded Reader retry](../reader-explicit-retry.md).
 
 Regenerate the final status after the last push, image record, or waiver. Reports are read-time snapshots. Call the batch complete only when data, review, remote publication, and live-site verification have all finished, and the visuals either passed or are covered by a user-requested waiver that is still valid for the current publication.

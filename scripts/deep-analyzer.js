@@ -7219,9 +7219,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         // 否则失败草稿的身份会指向一份本次并没有真正读的提示词。
         promptSha256: promptTemplateSha256(currentTextStagePromptPath('apiReaderArticle')),
         repairPromptSha256: promptTemplateSha256(currentTextStagePromptPath('apiReaderRepair')),
-        // Reader 闸门也会执行共享的分析约定。把这个依赖算进解析器指纹，修好约定之后就能
-        // 名正言顺地给已经用尽配额的候选项发一次有上限的实现层修复，而不是悄悄把它当成
-        // 没变化。
+        // Reader 检查依赖共享的正文规则，输入身份须包含实际读取的实现。
+        // 实现变化后的恢复按已有保存记录核验，只使用获准的剩余尝试，
+        // 不把旧付费记录当成没有发生。
         parserImplementationSha256: repair.shaText([
             fs.readFileSync(__filename, 'utf8'),
             fs.readFileSync(path.join(__dirname, 'analysis-contract.js'), 'utf8'),
@@ -7229,6 +7229,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/analysis-section-titles.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-inline-svg.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-resource-binding.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/explicit-reader-retry-round.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_inline_svg.py'), 'utf8')
         ].join('\0')),
         readerRecoveryEpochSha256: repair.shaText(READER_RECOVERY_EPOCH),
@@ -7260,6 +7261,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         ...(directScope?.readerRetryEpoch !== undefined
             ? { historicalDirectRetryEpoch: directScope.readerRetryEpoch } : {})
     };
+    if (options.readerIdentityOnly === true) return { identity };
     let recovered = null;
     let readerRecoveryRevisions = [];
     let candidate = null;
@@ -7537,11 +7539,23 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts
         }); }
     }
+    const explicitRetry = require('./lib/explicit-reader-retry-round');
+    if (!repair.hasUnusedImplementationAllowance(recovered)) {
+        const newRound = explicitRetry.beginExplicitRound(candidateDirectory, identity, recovered, paper);
+        if (newRound) {
+            recovered = newRound; candidate = null; previousDraft = start.previousDraft; currentIssues = [];
+            useEscalatedRepairBudget = false;
+            completedAttempts = 0; fullAttempts = 0; transportFailures = 0;
+            noProgress = 0; validationFailureStreak = 0;
+            previousFailureSignature = ''; previousValidationFailureSignature = '';
+        }
+    }
+    const explicitRound = recovered?.explicitReaderRetryRound || null;
     // 补丁正好在基础预算处被截断时，下一次显式恢复可以换一次更大的响应，而不是把剩下的
     // 普通 8000 token 配额继续浪费在同一个重推理的补丁上。重试预算被截断之后不会重复
     // 升级，因为 shouldEscalate 只认基础上限。已保存的内容尝试计数只增不减，每次返回的响应
     // 仍然消耗一次尝试。
-    const boundedRecoveryAllowance = implementationRepairAllowanceProof
+    const boundedRecoveryAllowance = repair.hasUnusedImplementationAllowance(recovered)
         || useEscalatedRepairBudget ? 1 : 0;
     const readerRules = readerRequirements({ version: 3, availableTableCount });
     const implementationMigrationNeedsFullRegeneration = Boolean(
@@ -7551,7 +7565,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             || (Array.isArray(candidate.sections)
                 && candidate.sections.length < readerRules.minimumSections))
     );
-    const attemptLimit = repair.readerAttemptLimit(
+    const attemptLimit = explicitRound ? explicitRound.maxResponses : repair.readerAttemptLimit(
         maxAttempts, completedAttempts, candidate, boundedRecoveryAllowance);
     if (completedAttempts >= attemptLimit
         || !useEscalatedRepairBudget && (noProgress >= 2 || validationFailureStreak >= 2)) {
@@ -7626,7 +7640,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             throw new Error('没有可安全修复的表格对应节点，已保留失败草稿；本次未发送模型请求');
         }
         if (sourceBindingNeedsFullRetry) previousDraft = JSON.stringify(candidate);
-        if (!repairContext && fullAttempts >= 2 && !implementationRepairAllowanceProof) {
+        if (!repairContext && fullAttempts >= (explicitRound?.maxFullResponses || 2)
+            && (explicitRound || !repair.hasUnusedImplementationAllowance({ ...recovered,
+                attempts: attempt - 1, fullAttempts, implementationRepairAllowanceProof }))) {
             throw lastError || new Error('Reader root JSON remained invalid after two full attempts');
         }
         const buildReaderPrompt = indexExamples => repairContext ? loadPrompt(currentTextStagePromptPath('apiReaderRepair'), {
@@ -7684,7 +7700,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 usageContext: { paperId: getPaperArxivId(paper),
                     stage: repairContext ? 'apiReaderRepair' : 'apiReaderArticle', contentAttempt: attempt }
             };
-            const isolated = await requestReaderModelWithImageIsolation({ requestModel,
+            const isolated = await explicitRetry.withPhysicalBudget(explicitRound, paper, () => requestReaderModelWithImageIsolation({ requestModel,
                 buildMessages: inputs => {
                     const visibilityNotice = visibilityNoticeFor(inputs, repairContext);
                     const messages = [{ role: 'user', content: [
@@ -7709,7 +7725,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 maxTokens: repairContext
                     ? requestUsesEscalatedRepairBudget ? repairTruncationRetryMaxTokens : repairMaxTokens
                     : API_READER_MAX_TOKENS,
-                requestOptions });
+                requestOptions }));
             raw = isolated.raw;
             if (requestUsesEscalatedRepairBudget) {
                 // 收到一个 16000 token 的响应，就占用了实现层恢复同一条单次配额。后面
@@ -17642,6 +17658,8 @@ module.exports = {
     separateApiReaderTableBlocks,
     rebindApiReaderFigurePlacementQuotes,
     removeDuplicateReaderLongSentences,
+    prepareApiReaderRetryIdentity: (paper, analysis, sourceEvidence, options = {}) =>
+        generateApiReaderArticleDetailed(paper, analysis, sourceEvidence, { ...options, readerIdentityOnly: true }),
     generateApiReaderArticleDetailed,
     resolveApiReaderBaseRepairMaxTokens,
     resolveApiReaderRepairRetryMaxTokens,

@@ -178,20 +178,6 @@ test('正式记录里没有已保存打包引用时，日更恢复来源计划�
     }), /缺少本次封存来源的引用 dailyFreshSourceRun/);
 });
 
-test('batch 只停用明确未完成论文的旧读者文章草稿', () => {
-    const { retireIncompleteReaderCandidates } = require('../scripts/batch-analyze.js');
-    const names = ['a'.repeat(64) + '.json', 'b'.repeat(64) + '.json', 'ignored.txt'];
-    const envelopes = new Map([
-        [names[0], { identity: { paperId: '2609.00001' } }],
-        [names[1], { identity: { paperId: '2609.00002' } }]
-    ]);
-    const retired = [];
-    const count = retireIncompleteReaderCandidates('/sealed/reader-attempts',
-        new Set(['2609.00002']), {
-            readDir: () => names,
-            readFile: filename => JSON.stringify(envelopes.get(path.basename(filename))),
-            retire: (_directory, identity) => { retired.push(identity.paperId); return 'retired'; }
-        });
-    assert.equal(count, 1);
-    assert.deepEqual(retired, ['2609.00002']);
+test('旧按论文批量停用接口已删除，不能绕过精确新轮授权', () => {
+    assert.equal(require('../scripts/batch-analyze.js').retireIncompleteReaderCandidates, undefined);
 });

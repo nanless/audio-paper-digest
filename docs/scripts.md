@@ -41,7 +41,7 @@ npm run workspace:role -- status
 | `npm run batch` | 批量处理正式分析结果中未完成的论文 |
 | `npm run batch -- --fact-feedback-file ABS_JSON --fact-feedback-file OTHER_JSON` | 整组来源反馈先核验，再逐篇持锁重读并纠错，同时续跑当前批次其他未完成论文；重复论文或过期反馈会停止 |
 | `npm run batch -- --refresh-reader-diagnostics` | 核验同组封存来源后恢复失败 Reader 草稿，承接原调用次数，提示词变更本身不增加请求额度 |
-| `npm run batch -- --retry-failed-readers` | 归档并停用未完成论文的失败 Reader 候选，然后续跑，不影响已完成论文 |
+| `npm run batch -- --retry-failed-readers --reader-retry-manifest FILE` | 明确重试必须提供 `--reader-retry-manifest /绝对路径/reader-rounds.json`，不能按论文批量停用旧稿。程序在规范论文锁内核对当前批次、四份封存来源、正文和实际 Reader 输入，只为清单中确实耗尽的失败稿开一轮。原稿、原调用次数和费用记录完整保留；新轮最多 3 次已保存内容尝试、1 次全文、6 次实际请求，输出预留合计不超过 80000 tokens。同一授权续跑只用剩余额度，普通恢复和实现版本变化不自动开新轮。它可以与 `--refresh-reader-diagnostics` 同用：无授权论文仍按原次数正常恢复。详见[有预算的 Reader 重试](reader-explicit-retry.md)。 |
 | `npm run reanalyze -- --concurrency N` | 归档并停用全部旧失败 Reader 候选，清空 Reader/图片补充状态，再用绑定来源强制重分析 |
 | `node scripts/reanalyze-selected.js ID...` | 重分析指定集合；统计口径实现见 `scripts/lib/reanalysis-helpers.js` |
 | `npm run api:reader:refresh -- --all --date DATE --concurrency N --scoring-and-reader` | 从绑定来源批量刷新评分和 Reader，图片只为本次调用临时准备 |

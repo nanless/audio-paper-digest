@@ -1,0 +1,19 @@
+# 有预算的 Reader 重试
+
+这个入口为已核对的失败稿开启明确的新一轮付费尝试。它不改旧费用，不将旧次数说成没有发生，也不因为改了代码或提示词自动新增一轮。
+
+先在没有其他写入进程的冷态，完整核对当前批次来源与正文，再使用实际 Reader 输入构造生成、审查重试清单。`prepareApiReaderRetryIdentity(paper, analysis, sourceEvidence, options)` 使用正常 Reader 的身份构造，必须传入与正式调用相同的来源证据、事实反馈和预算；它不请求模型、不下载论文图，也不改变保存稿。不能手工改旧 SHA 让清单通过。
+
+```bash
+npm run batch -- --retry-failed-readers --reader-retry-manifest /absolute/path/reader-rounds.json --refresh-reader-diagnostics
+```
+
+程序调用支持 `main({ readerRetryManifestPath: '/absolute/path/reader-rounds.json', refreshReaderDiagnostics: true })`，不用改进程参数。清单外论文正常接续原草稿与次数；清单内论文在规范论文锁中重读当前正文与完整四来源，再核对真正 Reader 身份、原稿字节与恢复历史。已成功、仍有合法尝试、输入发生实质变化或缺少证明的稿件不能借旧稿开新轮。实现元数据变化只接现有公开恢复程序的可核对历史，不更改 epoch。
+
+清单顶层写实际 `batchDate`、`runId` 和 `rounds`。每项包含 `contract: reader-explicit-paid-retry-round-v1`、规范 `paperId`、唯一 UUID `roundId`、同一批次和运行、四个 `sourceFiles` SHA、当前 `wholeSha256`、实际最终 `identitySha256`，以及旧记录的 `originalIdentitySha256`、`envelopeSha256`、`payloadSha256`。这几项表示不同对象，不能互换。预算固定为 `maxResponses: 3`、`maxFullResponses: 1`、`maxPhysicalRequests: 6`、`maxReservedOutputTokens: 80000`。
+
+原稿及当前实现下的失败记录各按原字节保存，原响应次数、完整生成次数和网络失败次数写入新轮记录。新轮自己的逻辑尝试计数在响应保存时递增，旧费用账仍在原处；累计花费应合计旧账与新账。每个实际请求在发出前先记入新轮预算，网络重试、账号切换和图片兼容性尝试也占实际请求额度。单次请求的 token 上限仍由正常配置决定，累计预留输出预算先达到80000时也会提前停止。输入和图片费用另按真实用量记录，不能承诺固定金额。
+
+新轮最多保存3次内容尝试，其中已保存的完整重写最多1次；格式错误或被拒但已保存的内容也计数。这不是最多3个实际响应的保证：模型返回后、保存前进程中断，实际响应可能没有进入逻辑尝试计数。请求已在发送前持久登记，因此中断恢复也仍受累计最多6次实际请求和80000输出 token 预留限制；不退还已登记请求额度。已用完的新轮不会因普通恢复再次从零开始。同一授权重复运行只能接续剩余额度；当前记录或原稿丢失、费用明细与总数矛盾时直接停止。准备记录写入后若中断，恢复只完成同一笔有来源、原稿SHA和唯一编号的事务，不自行生成另一个编号。
+
+这个入口没有自动允许发布。新正文仍必须通过来源、结构、评分、Reader和完整批次资格检查，并由人核对事实后进入正常博客流程。

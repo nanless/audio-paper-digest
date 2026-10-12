@@ -7,7 +7,7 @@ const { isDeepStrictEqual } = require('node:util');
 const { getFreshAnalysisContext } = require('./fresh-analysis-context.js');
 const { loadFailedCandidate, saveFailedCandidate, hashDraft, shaText, parseRecoveryDraft,
     IMPLEMENTATION_ALLOWANCE_CONTRACT, IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT,
-    TABLE_COUNT_ISSUE_CODE, classifyTableBindingOrderIssue, readTableBindingOrderError } = require('./reader-repair.js');
+    hasUnusedImplementationAllowance, TABLE_COUNT_ISSUE_CODE, classifyTableBindingOrderIssue, readTableBindingOrderError } = require('./reader-repair.js');
 const { normalizeReaderDraftOrder, pruneUniquelyUnboundReaderMarkdownTables } = require('./reader-draft-order.js');
 const { normalizeDanglingReaderConnectors,
     normalizeIssueBoundReaderQuantitativeNumerals } = require('../editorial-quality.js');
@@ -300,7 +300,8 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
     const diagnosticImplementationChanged = implementationFields.some(field => old.changedFields.includes(field));
     const lineageAlreadyIssued = updated.implementationRepairAllowanceLineage
         === IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT;
-    const previousActiveAllowance = updated.implementationRepairAllowanceProof || null;
+    const previousActiveAllowance = hasUnusedImplementationAllowance(updated)
+        ? updated.implementationRepairAllowanceProof : null;
     // 实现变化时，只有尚未发放过许可、仍有未使用的许可，或恢复规则版本变化，
     // 才会新增或转交一次正文尝试的许可。用过的许可不会因普通实现变化再次发放。
     const recoveryEpochChanged = old.changedFields.includes('readerRecoveryEpochSha256');

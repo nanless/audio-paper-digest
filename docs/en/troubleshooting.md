@@ -53,11 +53,11 @@ Reader repair normally allows 8000 output tokens. If a repair truncates exactly 
 
 ```bash
 npm run deep -- --date YYYY-MM-DD
-npm run batch -- --retry-failed-readers
+npm run batch -- --retry-failed-readers --reader-retry-manifest /absolute/path/reader-rounds.json
 npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader
 ```
 
-Source SHA, prompt, or model changes rerun the affected stages and the downstream work that depends on them. An older successful article cannot hide the latest failure. `batch --retry-failed-readers` stops reusing failed candidates only for unfinished papers. Use `reanalyze` to force all analysis again and clear old Reader/image-supplement state.
+Explicit retry requires `--reader-retry-manifest /absolute/path/reader-rounds.json`; it no longer disables every old draft for a paper. Under the normal paper lock, the program verifies the batch, four sealed source files, current article and actual Reader input, and starts one round only for the listed exhausted failed record. Original drafts, attempt counts and usage records remain intact. Each round permits at most 3 saved content attempts and 1 saved full rewrite, with hard limits of 6 actual requests and 80000 reserved output tokens. A crash after a model response but before saving may leave the saved attempt count unchanged; that request remains charged to the persistent request budget. Resuming the same authorization uses only its remaining budget; ordinary resume and implementation changes do not create another round. It may be combined with `--refresh-reader-diagnostics`, which continues unlisted papers with their existing counters. See [bounded Reader retry](../reader-explicit-retry.md).
 
 If a recovery command reports missing or changed daily sources, do not edit checkpoints or paste in old `data/current` text. While the target is still Beijing today, rerun the same dated `npm run digest:prepare -- YYYY-MM-DD` to establish the sources. Historical dates cannot restart at fetch. Keep the failure records and follow the historical maintenance workflow.
 

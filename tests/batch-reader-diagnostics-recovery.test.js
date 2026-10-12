@@ -62,7 +62,7 @@ test('正常 batch 入口默认不迁移，显式恢复向真实日更上下文�
     assert.deepEqual(fs.readdirSync(plan.readerAttemptsDir), [path.basename(sentinel)]);
 });
 
-test('非法恢复类型及与停用选项冲突在读取或改写正式结果前拒绝', async t => {
+test('非法恢复类型及缺少明确新轮清单在改写结果前拒绝', async t => {
     const { batch } = await prepareControlledBatch(t);
     const paths = ['deepAnalysisResult', 'filteredPapers', 'papers'].map(key => Config.FILES[key]);
     const before = paths.map(filename => fs.readFileSync(filename));
@@ -73,7 +73,7 @@ test('非法恢复类型及与停用选项冲突在读取或改写正式结果�
     delete require.cache[modulePath];
     const conflictingBatch = require(modulePath);
     t.after(() => { process.argv.splice(0, process.argv.length, ...originalArgv); delete require.cache[modulePath]; });
-    await assert.rejects(conflictingBatch.main(), /不能.*同时使用/);
+    await assert.rejects(conflictingBatch.main(), /必须提供/);
     for (let index = 0; index < paths.length; index++) assert.deepEqual(fs.readFileSync(paths[index]), before[index]);
 });
 
