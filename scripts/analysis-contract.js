@@ -1272,7 +1272,15 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     if (sentences < CORE_SUMMARY_MIN_SENTENCES || sentences > CORE_SUMMARY_MAX_SENTENCES) {
         issues.push(`句数必须为 ${CORE_SUMMARY_MIN_SENTENCES}–${CORE_SUMMARY_MAX_SENTENCES}，当前 ${sentences}`);
     }
-    if (!/(?:问题|难点|任务|目标|输入|输出|旨在|针对|解决)/.test(summary)) {
+    // 明确写了材料用于哪项具体处理，就不必再强塞“任务”或“输入输出”这些词。
+    const purposePattern = /(?:用于|用来|用以)(?:从[^。！？!?.;；,，\n]{1,24}中)?(?:筛查|诊断|检测|识别|转写|翻译|分离|定位|合成|预测|估计)(?![的了地得吧呢而但并或不未没非])(?:[“‘"\'「『])?[A-Za-z0-9\u4e00-\u9fff]{2,48}/;
+    // 只在同一分句里判断用途，明确否定的说法和只有一个字的对象不能充数。
+    const concretePurpose = summary.split(/[。！？!?.;；,，\n]|而(?:不是|是)|但(?=不能替代)/).some(clause => (
+        purposePattern.test(clause)
+        && !/(?:并非|并未|不是|不再|不会|不能|不曾|未曾|并不|没有|未被|不成立|不正确|不存在|不属于|不适用)/.test(clause)
+        && !/(?:不|未)(?:被|直接|主要|实际|真正|仅|只|也|还|曾|能|会|再|尚)*\s*(?:用于|用来|用以)/.test(clause)
+    ));
+    if (!/(?:问题|难点|任务|目标|输入|输出|旨在|针对|解决)/.test(summary) && !concretePurpose) {
         issues.push('缺少任务问题、输入输出或实际难点');
     }
     const chain = summary.match(/(?:第一|第二|第三|第四|首先|其次|然后|随后|接着|最后|先|再|阶段|步骤|模块|组件|分(?:\d+|[一二三四五六七八九十]+)步)/g) || [];

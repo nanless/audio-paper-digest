@@ -96,3 +96,70 @@ test('统计摘要仍须同时写清设置、比较对象和方向', () => {
     assert.match(issue, /评测设置/);
     assert.match(issue, /比较方向/);
 });
+
+
+test('具体用途已写明时，不强求摘要出现任务或输入输出这些字眼', () => {
+    const { validAnalysisText } = require('./valid-analysis-fixture.js');
+    const first = '本文解决噪声语音输入到文字输出时声学线索受损的问题，难点是局部干扰与长程语义错误会彼此放大。';
+    const purpose = '声学与上下文表示用于从含有噪声的语音片段中识别说出的文字，局部干扰会削弱声音线索，长程语义错误也会降低文字结果的可靠性。';
+    const analysis = validAnalysisText().replace(first, purpose).replace('具体目标硬件', '具体实际硬件');
+    const summary = analysis.match(/## 核心摘要\n([\s\S]*?)(?=\n## )/)[1];
+    assert.doesNotMatch(summary, /问题|难点|任务|目标|输入|输出|旨在|针对|解决/);
+    assert.equal(validateCoreSummarySemanticContract(analysis), null);
+});
+
+test('明确筛查用途仍须通过摘要篇幅与其他完整性要求', () => {
+    const issue = validateCoreSummarySemanticContract('## 核心摘要\n这些表示用于从临床访谈语音中筛查抑郁。');
+    assert.doesNotMatch(issue, /缺少任务问题/);
+    assert.match(issue, /中文字符不足/);
+    assert.match(issue, /缺少 2–4 步方法链/);
+});
+
+test('泛泛用途、只有表示处理动作或空的用途不会替代论文的具体目的', () => {
+    for (const summary of ['这些表示用于进一步分析。', '从临床访谈语音中提取表示。', '这些表示用于筛查。']) {
+        assert.match(validateCoreSummarySemanticContract('## 核心摘要\n' + summary), /缺少任务问题/);
+    }
+});
+
+
+test('具体用途不能借后句、不属于本篇的用途、否定或空助词通过', () => {
+    const { validAnalysisText } = require('./valid-analysis-fixture.js');
+    const first = '本文解决噪声语音输入到文字输出时声学线索受损的问题，难点是局部干扰与长程语义错误会彼此放大。';
+    const neutral = '录音条件、声音线索与表示分布之间存在多种差异，局部变化和长程联系可能相互影响，因此单凭名称无法说明这些表示在本篇研究中的具体用途。';
+    const cases = [
+        '这些表示用于进一步分析.筛查抑郁只是另一篇论文的用途。',
+        '这些表示用于研究分类系统的训练行为，筛查抑郁不属于本研究。',
+        '这些表示并非用于从临床访谈语音中筛查抑郁。',
+        '这些表示用于识别的。',
+        '这些表示用于训练筛查器。',
+        '这些表示未被用于从临床访谈语音中筛查抑郁。',
+        '这些表示用于筛查抑郁的说法并不成立。',
+        '这些表示不是实际直接用于从临床访谈语音中筛查抑郁。',
+        '这些表示并未直接被用于从临床访谈语音中筛查抑郁。',
+        '这些表示用于筛查器。',
+        '这些表示用于筛查抑郁的说法不正确。',
+        '这些表示用于识别“”。',
+        '这些表示用于筛查抑郁但不成立。',
+    ];
+    for (const purpose of cases) {
+        const analysis = validAnalysisText().replace(first, purpose + neutral).replace('具体目标硬件', '具体实际硬件');
+        assert.match(validateCoreSummarySemanticContract(analysis), /缺少任务问题/, purpose);
+    }
+});
+
+
+test('其他分句的否定不掩盖本句明确肯定的具体用途', () => {
+    for (const summary of [
+        '这些表示用来识别文字。',
+        '这些表示用以估计时长。',
+        '这些表示并非用于筛查焦虑，而是用于筛查抑郁。',
+        '这些表示仅用于筛查抑郁，不能外推到焦虑。',
+        '这些表示用于筛查抑郁而不是诊断躁狂。',
+        '这些表示用于筛查抑郁但不能替代临床诊断。',
+        '这些表示用于识别“文字”。',
+    ]) {
+        const issue = validateCoreSummarySemanticContract('## 核心摘要\n' + summary);
+        assert.doesNotMatch(issue, /缺少任务问题/, summary);
+        assert.match(issue, /中文字符不足/, summary);
+    }
+});

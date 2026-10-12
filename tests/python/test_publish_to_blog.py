@@ -1268,6 +1268,65 @@ class PublishToBlogReviewTest(unittest.TestCase):
                 incomplete, publish_to_blog.parse_analysis(incomplete['analysis'])
             )
 
+    def test_core_summary_concrete_purpose_does_not_require_fixed_task_words(self):
+        first = '本文解决噪声语音输入到文字输出时声学线索受损的问题，难点是局部干扰与长程语义错误会彼此放大。'
+        purpose = '声学与上下文表示用于从含有噪声的语音片段中识别说出的文字，局部干扰会削弱声音线索，长程语义错误也会降低文字结果的可靠性。'
+        script = "const text = require('./tests/valid-analysis-fixture.js').validAnalysisText(); process.stdout.write(text.match(/## 核心摘要\\n([\\s\\S]*?)(?=\\n## )/)[1]);"
+        summary = subprocess.check_output(['node', '-e', script], cwd=ROOT, text=True)
+        self.assertEqual(summary.count(first), 1)
+        summary = summary.replace(first, purpose).replace('具体目标硬件', '具体实际硬件')
+        self.assertNotRegex(summary, r'问题|难点|任务|目标|输入|输出|旨在|针对|解决')
+        self.assertIsNone(publish_to_blog._detailed_core_summary_semantic_issue(summary))
+
+    def test_core_summary_concrete_purpose_keeps_other_completeness_checks(self):
+        issue = publish_to_blog._detailed_core_summary_semantic_issue('这些表示用于从临床访谈语音中筛查抑郁。')
+        self.assertNotIn('缺少任务问题', issue)
+        self.assertIn('中文字符必须为', issue)
+        self.assertIn('缺少 2–4 步方法链', issue)
+        for summary in ['这些表示用于进一步分析。', '从临床访谈语音中提取表示。', '这些表示用于筛查。']:
+            with self.subTest(summary=summary):
+                self.assertIn('缺少任务问题', publish_to_blog._detailed_core_summary_semantic_issue(summary))
+
+    def test_core_summary_purpose_rejects_cross_clause_negation_and_empty_object(self):
+        first = '本文解决噪声语音输入到文字输出时声学线索受损的问题，难点是局部干扰与长程语义错误会彼此放大。'
+        neutral = '录音条件、声音线索与表示分布之间存在多种差异，局部变化和长程联系可能相互影响，因此单凭名称无法说明这些表示在本篇研究中的具体用途。'
+        script = "const text = require('./tests/valid-analysis-fixture.js').validAnalysisText(); process.stdout.write(text.match(/## 核心摘要\\n([\\s\\S]*?)(?=\\n## )/)[1]);"
+        original = subprocess.check_output(['node', '-e', script], cwd=ROOT, text=True)
+        cases = [
+            '这些表示用于进一步分析.筛查抑郁只是另一篇论文的用途。',
+            '这些表示用于研究分类系统的训练行为，筛查抑郁不属于本研究。',
+            '这些表示并非用于从临床访谈语音中筛查抑郁。',
+            '这些表示用于识别的。',
+            '这些表示用于训练筛查器。',
+            '这些表示未被用于从临床访谈语音中筛查抑郁。',
+            '这些表示用于筛查抑郁的说法并不成立。',
+            '这些表示不是实际直接用于从临床访谈语音中筛查抑郁。',
+            '这些表示并未直接被用于从临床访谈语音中筛查抑郁。',
+            '这些表示用于筛查器。',
+            '这些表示用于筛查抑郁的说法不正确。',
+            '这些表示用于识别“”。',
+            '这些表示用于筛查抑郁但不成立。',
+        ]
+        for purpose in cases:
+            with self.subTest(purpose=purpose):
+                summary = original.replace(first, purpose + neutral).replace('具体目标硬件', '具体实际硬件')
+                self.assertIn('缺少任务问题', publish_to_blog._detailed_core_summary_semantic_issue(summary))
+
+    def test_core_summary_purpose_keeps_positive_clause_with_other_negative_clause(self):
+        for summary in [
+            '这些表示用来识别文字。',
+            '这些表示用以估计时长。',
+            '这些表示并非用于筛查焦虑，而是用于筛查抑郁。',
+            '这些表示仅用于筛查抑郁，不能外推到焦虑。',
+            '这些表示用于筛查抑郁而不是诊断躁狂。',
+            '这些表示用于筛查抑郁但不能替代临床诊断。',
+            '这些表示用于识别“文字”。',
+        ]:
+            with self.subTest(summary=summary):
+                issue = publish_to_blog._detailed_core_summary_semantic_issue(summary)
+                self.assertNotIn('缺少任务问题', issue)
+                self.assertIn('中文字符必须为', issue)
+
     def test_core_summary_accepts_auroc_only_with_distinct_action_bearing_tiers(self):
         summary = (
             '输入为单段听诊录音（含咳嗽、呼气、肺音），输出为对应任务的类别标签，难点在于录音质量、设备与病理细微度差异大且零样本下无目标域标注可用。'
