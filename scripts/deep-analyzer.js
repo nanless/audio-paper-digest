@@ -7968,6 +7968,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     candidate = repair.applyReaderPatch(candidate, patch, repairContext.targets.map(target => target.path), {
                         availableFigureOrdinals: selectedOrdinals,
                         atomicOperation: repairContext.atomicOperation,
+                        sourceText: options.sourceText || '',
                         structuredArtifacts: options.structuredArtifacts
                     });
                     raw = JSON.stringify(candidate);

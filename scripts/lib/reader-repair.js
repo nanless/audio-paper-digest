@@ -880,6 +880,38 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             throw new Error('Reader result-table relocation patch failed its atomic table-move postconditions');
         }
     }
+    if (operation?.kind === 'add_existing_tail_quote_table_v1') {
+        const expected = buildMissingTailQuoteTableOperation(draft, [{ path: '/tableBindings/0',
+            code: TABLE_BINDING_ORDER_ISSUE_CODE, message: '正文表格与来源记录不能一一对应' }]);
+        const before = locateReaderDraftTables(draft);
+        const after = locateReaderDraftTables(merged);
+        const originalBody = draft.sections[operation.destinationSectionIndex]?.body;
+        const body = merged.sections[operation.destinationSectionIndex]?.body;
+        const binding = merged.tableBindings?.[operation.bindingIndex];
+        const originalBinding = draft.tableBindings[operation.bindingIndex];
+        const quoteOnly = value => Object.fromEntries(Object.entries(value || {}).filter(([key]) => key !== 'sourceQuotes'));
+        const added = after.at(-1);
+        const oldMarkers = String(originalBody).match(/\[\[(?:TABLE|FIGURE|FORMULA|CONCEPT_BRIDGE)_\d+\]\]/g) || [];
+        const newMarkers = String(body).match(/\[\[(?:TABLE|FIGURE|FORMULA|CONCEPT_BRIDGE)_\d+\]\]/g) || [];
+        if (!expected || hashDraft(expected) !== hashDraft(operation)
+            || seen.length !== 2 || expected.requiredReplacementPaths.some(pointer => !seen.includes(pointer))
+            || typeof body !== 'string' || !body.startsWith(originalBody + '\n\n')
+            || hashDraft(oldMarkers) !== hashDraft(newMarkers)
+            || after.length !== before.length + 1 || after.length !== merged.tableBindings.length
+            || !before.every((table, index) => after[index]?.sectionIndex === table.sectionIndex
+                && hashDraft(after[index]?.table ?? null) === hashDraft(table.table ?? null)
+                && after[index]?.marker === table.marker)
+            || draft.tableBindings.some((old, index) => index !== operation.bindingIndex
+                && hashDraft(old) !== hashDraft(merged.tableBindings[index]))
+            || hashDraft(quoteOnly(binding)) !== hashDraft(quoteOnly(originalBinding))
+            || !added?.table || added.sectionIndex !== operation.destinationSectionIndex
+            || !/\d/.test(added.table.markdown)
+            || !Array.isArray(binding?.sourceQuotes) || !binding.sourceQuotes.length
+            || typeof options.sourceText !== 'string' || binding.sourceQuotes.some(quote => typeof quote !== 'string'
+                || quote.length < 12 || quote.length > 4000 || !options.sourceText.includes(quote))) {
+            throw new Error('唯一尾部引文表修复必须保留旧正文与来源，只追加一张表并纠正末尾逐字引文');
+        }
+    }
     if (operation?.kind === 'add_result_table_v1') {
         const beforeTables = locateReaderDraftTables(draft);
         const afterTables = locateReaderDraftTables(merged);
@@ -1312,6 +1344,38 @@ function buildMissingTableBindingsOperation(draft, issues) {
             '只有mutableBindingIndices明确列出的旧绑定可修正，其余旧绑定逐字保留',
             '新数组按正文表序连续编号，新增绑定数量恰好等于已有表的缺口',
             '不得编造证据，全部绑定仍须通过完整来源、排序和正文解析器'
+        ] };
+}
+
+function buildMissingTailQuoteTableOperation(draft, issues) {
+    if (!issues.some(issue => classifyTableBindingOrderIssue(issue).actionable)) return null;
+    const tables = locateReaderDraftTables(draft);
+    const bindings = draft.tableBindings;
+    if (!Array.isArray(bindings) || !tables.length || tables.length + 1 !== bindings.length
+        || bindings.some((binding, index) => binding?.tableIndex !== index + 1)) return null;
+    const bindingIndex = bindings.length - 1;
+    const binding = bindings[bindingIndex];
+    if (!binding || Object.keys(binding).sort().join(',') !== 'cellBindings,sourceQuotes,sourceTableOrdinal,sourceType,tableIndex'
+        || binding.sourceType !== 'source_quotes' || binding.sourceTableOrdinal !== null
+        || !Array.isArray(binding.cellBindings) || binding.cellBindings.length
+        || !Array.isArray(binding.sourceQuotes) || !binding.sourceQuotes.length) return null;
+    const prefixStable = bindings.slice(0, -1).every((item, index) => item.selection
+        ? tables[index]?.marker === `[[TABLE_${index + 1}]]`
+            && draft.sections.reduce((count, section) => count
+                + String(section.body || '').split(`[[TABLE_${index + 1}]]`).length - 1, 0) === 1
+        : !item.completeTable && !tables[index]?.marker && Boolean(tables[index]?.table));
+    const last = tables.at(-1);
+    if (!prefixStable || !['result', 'ablation'].includes(draft.sections[last.sectionIndex]?.kind)) return null;
+    const destinationSectionIndex = last.sectionIndex;
+    const destinationSectionPath = `/sections/${destinationSectionIndex}/body`;
+    const bindingPath = `/tableBindings/${bindingIndex}`;
+    return { kind: 'add_existing_tail_quote_table_v1', bindingIndex, tableIndex: bindings.length,
+        destinationSectionIndex, destinationSectionPath, bindingPath,
+        requiredReplacementPaths: [destinationSectionPath, bindingPath], requiredPostconditions: [
+            `正文已有${tables.length}张表，对应来源前缀已稳定；只缺末尾第${bindings.length}张source_quotes表`,
+            '原目标body逐字作为新body前缀保留，在其末尾追加比较问题、唯一有数字的Markdown表及结果和限制解释；不得修改或搬动旧内容',
+            '只纠正末尾binding的sourceQuotes为封存全文的12–4000字符连续原句；其他字段和所有旧表、标记、来源绑定逐字保留',
+            '不能再回传仅有散文或只补引文而无新增表；不得编数字或单位，不使用TABLE标记替代source_quotes表，全部单元格仍须最终来源核验'
         ] };
 }
 
@@ -1766,7 +1830,8 @@ function buildRepairTargets(draft, issues, options = {}) {
     const ambiguousTableOrderIssue = blockingIssues.find(issue => (
         classifyTableBindingOrderIssue(issue).actionable
     ));
-    const missingResultTableOperation = buildUniqueMissingQuoteTableOperation(draft, issues)
+    const missingResultTableOperation = buildMissingTailQuoteTableOperation(draft, issues)
+        || buildUniqueMissingQuoteTableOperation(draft, issues)
         || buildMissingResultTableOperation(draft, issues);
     if (ambiguousTableOrderIssue && missingResultTableOperation) {
         // 表格数量尚未对应时，补表或搬表指令与允许修改的路径必须一致。
@@ -2039,6 +2104,7 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
         || buildReindexedTableBindingsOperation(draft, issues)
         || buildMissingFormulaBindingsOperation(draft, issues)
         || buildMissingTableBindingsOperation(draft, issues)
+        || buildMissingTailQuoteTableOperation(draft, issues)
         || buildUniqueMissingQuoteTableOperation(draft, issues)
         || buildMissingResultTableOperation(draft, issues)
         || buildMissingNarrativeTableOperation(draft, issues);
@@ -2106,7 +2172,9 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
                 + '保留表前问题、表后解释、正确事实和数字单位，仍由完整解析器检查每格来源。');
         }
     }
-    const targetGuidance = (atomicOperation?.kind === 'select_observed_figures_v1'
+    const targetGuidance = (atomicOperation?.kind === 'add_existing_tail_quote_table_v1'
+        ? atomicOperation.requiredPostconditions.join('；') + '。' : '')
+        + (atomicOperation?.kind === 'select_observed_figures_v1'
         ? '本轮特别允许figurePlacements缩为1–4条本次已见像素的原声明，其余数组数量不变。必须同步按来源改写全部授权小节，保留必要事实及表格公式术语标记；不得机械删图丢弃解释。' : '')
         + (atomicOperation?.kind === 'cleanup_unavailable_figures_v1'
         ? '本轮明确允许清空整组figurePlacements，这是普通数组项数量不变规则的唯一图片例外；同时按来源重写全部指定图片相关小节，删除无证据图解与非法图片元数据，不留图标记。仅有文字依据的事实可以明确按作者文字报告保留，不假装看过图。其他节点逐字保留。' : '')
