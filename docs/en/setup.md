@@ -95,7 +95,7 @@ Historical rewriting saves the same four files for each arXiv source capture, us
 | `PD_API_READER_REPAIR_MAX_TOKENS` | 8000 |
 | `PD_API_READER_EVIDENCE_MAX_CHARS` | 180000 characters |
 | `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 characters |
-| `PD_API_READER_CONCURRENCY` | 5 in-process Reader generation tasks |
+| `PD_API_READER_CONCURRENCY` | 5 in-process Reader generation tasks by default; explicitly configurable from 1 to 12 |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 5 independent page-review tasks |
 
 `PD_ANALYSIS_REPAIR_THINKING_MODE=disabled|enabled` independently controls core-summary, full-structure, and table repairs; the default is disabled. It applies only to the exact `mimo-v2.6-flash` OpenAI Chat route, leaving primary analysis, revision, scoring, and other models unchanged. New repair fingerprints bind the actual request policy. Completed records without that declaration retain their original fingerprint recipe without being re-signed; invalidated stages execute with the current policy. Truncation and source/content checks remain strict. [MiMo documents this parameter](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/other/deep-thinking); OpenCode Go acceptance must be observed in normal business responses, not inferred from parameter logs.

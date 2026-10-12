@@ -396,7 +396,7 @@ function applyEnvOverrides() {
     }
     const apiReaderConcurrency = readPositiveInt('PD_API_READER_CONCURRENCY');
     if (apiReaderConcurrency) {
-        ANALYSIS_CONFIG.apiReaderConcurrency = Math.min(5, apiReaderConcurrency);
+        ANALYSIS_CONFIG.apiReaderConcurrency = Math.min(12, apiReaderConcurrency);
     }
     const repairMaxTokens = readPositiveInt('PD_ANALYSIS_REPAIR_MAX_TOKENS');
     if (repairMaxTokens) {
