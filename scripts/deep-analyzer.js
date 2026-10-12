@@ -1698,6 +1698,16 @@ function buildApiReaderQualityMetrics(quality, article) {
 // 证明它们来自同一个值；来源绑定仍以原始 DOM 字节为准。
 function normalizeReaderSourceDisplayArtifacts(value) {
     let output = String(value ?? '');
+    // 科学计数也可能同时含可见文字与 TeX 注解。两份系数和指数必须完全一致；
+    // 不从裸数字重复、不同符号或近似数值猜测原值。
+    output = output.replace(
+        /(?<![A-Za-z0-9.+−-])([+−-]?\d+(?:\.\d+)?)×10([−+-]?)(\d+)\1\{\\times\}10\^\{([−+-]?)(\d+)\}(?![A-Za-z0-9.])/g,
+        (whole, coefficient, visibleSign, exponent, texSign, texExponent) => {
+            const sign = visibleSign.replace('−', '-');
+            if (sign !== texSign.replace('−', '-') || exponent !== texExponent) return whole;
+            return `\\(${coefficient.replace('−', '-')}\\times10^{${sign}${exponent}}\\)`;
+        }
+    );
     // LaTeXML 会把同一个置信区间输出两次：一次是可见文字，一次是花括号编码的逗号注解。
     // 保留可见的那个区间，只丢弃端点与它完全重复的注解。
     output = output.replace(

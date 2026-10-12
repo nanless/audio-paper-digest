@@ -288,3 +288,220 @@ test('模型返回后保存前中断仍累计请求账，8000 token 恢复最多
         assert.equal(receipt.reservedOutputTokens, 48000);
     }));
 });
+
+
+test('本地新轮预算耗尽经真实公共模型入口立即停止，零传输且零重试等待', async t => {
+    const utils = require('../scripts/utils');
+    const deep = require('../scripts/deep-analyzer');
+    for (const budget of ['requests', 'tokens']) {
+        const f = setup(t);
+        let transports = 0;
+        let logicalRequests = 0;
+        let retryWaits = 0;
+        await f.locked(() => retry.withExplicitRound(paper, f.grant, async () => {
+            const next = retry.beginExplicitRound(directory, f.identity, f.payload, paper);
+            await retry.withPhysicalBudget(next.explicitReaderRetryRound, paper, async () => {
+                const context = { paperId: paper.arxivId, stage: 'apiReaderRepair' };
+                for (let i = 0; i < (budget === 'requests' ? 6 : 2); i += 1) {
+                    // 持久登记此前可能已发送但未保存响应的请求，不退回额度。
+                    retry.consumePhysicalRequest({ max_tokens: budget === 'requests' ? 100 : 40000 }, { usageContext: context });
+                }
+                const transport = async () => { transports += 1; throw new Error('耗尽后不应进入传输'); };
+                const send = (url, endpoint, model, body, headers, options) => utils.requestLlmJson(
+                    url, endpoint, model, body, headers, { ...options, usageContext: context, usageSink() {}, transportRequestFn: transport }
+                );
+                const terminal = error => error.code === 'READER_EXPLICIT_ROUND_BUDGET_EXHAUSTED'
+                    && error.retryable === false && error.scope === 'paper';
+                await assert.rejects(send('https://example.invalid/v1/chat/completions',
+                    'https://example.invalid/v1', 'test-model', { max_tokens: 100 }, {}, {}), terminal);
+                const originalTimer = global.setTimeout;
+                global.setTimeout = (callback, milliseconds, ...args) => {
+                    if (milliseconds >= 10000 && milliseconds <= 30000) {
+                        retryWaits += 1;
+                        throw new Error('本地预算错误不能等待网络重试');
+                    }
+                    return originalTimer(callback, milliseconds, ...args);
+                };
+                try {
+                    await assert.rejects(deep.callModelWithConfig([], 100, 3, {
+                        endpoint: 'https://example.invalid/v1', model: 'test-model', key: 'test-only',
+                        overallTimeoutMs: 60000, usageContext: context,
+                        requestFn: (...args) => { logicalRequests += 1; return send(...args); }
+                    }), terminal);
+                } finally {
+                    global.setTimeout = originalTimer;
+                }
+                assert.equal(logicalRequests, 1);
+                assert.equal(transports, 0);
+                assert.equal(retryWaits, 0);
+            });
+        }));
+    }
+});
+
+
+test('已开始的新轮公共实现迁移保原许可与64000预算，只能继续剩余16000', async t => {
+    const f = setup(t);
+    await f.locked(() => retry.withExplicitRound(paper, f.grant, async () => {
+        const next = retry.beginExplicitRound(directory, f.identity, f.payload, paper);
+        const proof = next.explicitReaderRetryRound;
+        const receiptBefore = fs.readFileSync(proof.receiptFile);
+        await retry.withPhysicalBudget(proof, paper, () => {
+            for (let i = 0; i < 2; i += 1) retry.consumePhysicalRequest({ max_tokens: 32000 }, {
+                usageContext: { paperId: paper.arxivId, stage: 'apiReaderRepair' }
+            });
+        });
+        repair.saveFailedCandidate(directory, f.identity, { ...next, attempts: 2, fullAttempts: 1 });
+        const chargedReceipt = fs.readFileSync(proof.receiptFile);
+        const current = { ...f.identity, parserImplementationSha256: 'f'.repeat(64) };
+        const revised = await daily.withDailyFreshAnalysisContext(plan, () =>
+            require('../scripts/lib/reader-recovery-revision').loadReaderRecoveryRevision(directory, current),
+            { refreshReaderDiagnostics: true });
+        assert.ok(revised);
+        assert.equal(revised.attempts, 2);
+        assert.equal(revised.fullAttempts, 1);
+        assert.equal(revised.implementationRepairAllowanceProof, null);
+        assert.deepEqual(revised.explicitReaderRetryRound, proof);
+        assert.deepEqual(fs.readFileSync(proof.receiptFile), chargedReceipt);
+        assert.equal(sha(fs.readFileSync(JSON.parse(receiptBefore).archivedFile)), f.grant.envelopeSha256);
+        assert.equal(repair.loadFailedCandidate(directory, current).attempts, 2);
+        await retry.withPhysicalBudget(proof, paper, async () => {
+            let transports = 0;
+            const request = tokens => require('../scripts/utils').requestLlmJson(
+                'https://example.invalid/v1/chat/completions', 'https://example.invalid/v1', 'test-model',
+                { max_tokens: tokens, messages: [] }, {}, {
+                    usageContext: { paperId: paper.arxivId, stage: 'apiReaderRepair' }, usageSink() {},
+                    transportRequestFn: async () => {
+                        transports += 1;
+                        return { statusCode: 200, body: { choices: [{ message: { content: '{}' }, finish_reason: 'stop' }] } };
+                    }
+                });
+            await request(16000);
+            repair.saveFailedCandidate(directory, current, { ...revised, attempts: 3 });
+            await assert.rejects(request(1), error => error.code === 'READER_EXPLICIT_ROUND_BUDGET_EXHAUSTED');
+            assert.equal(transports, 1);
+        });
+    }));
+});
+
+test('三次内容一次完整及80000已耗尽的新轮再迁移不获额外实现许可', async t => {
+    const f = setup(t);
+    await f.locked(() => retry.withExplicitRound(paper, f.grant, async () => {
+        const next = retry.beginExplicitRound(directory, f.identity, f.payload, paper);
+        const proof = next.explicitReaderRetryRound;
+        await retry.withPhysicalBudget(proof, paper, () => retry.consumePhysicalRequest({ max_tokens: 80000 }, {
+            usageContext: { paperId: paper.arxivId, stage: 'apiReaderRepair' }
+        }));
+        repair.saveFailedCandidate(directory, f.identity, { ...next, attempts: 3, fullAttempts: 1 });
+        const current = { ...f.identity, parserImplementationSha256: 'e'.repeat(64) };
+        const revised = await daily.withDailyFreshAnalysisContext(plan, () =>
+            require('../scripts/lib/reader-recovery-revision').loadReaderRecoveryRevision(directory, current),
+            { refreshReaderDiagnostics: true });
+        assert.equal(revised.attempts, 3);
+        assert.equal(revised.fullAttempts, 1);
+        assert.equal(revised.implementationRepairAllowanceProof, null);
+        const second = { ...current, parserImplementationSha256: 'd'.repeat(64) };
+        const twice = await daily.withDailyFreshAnalysisContext(plan, () =>
+            require('../scripts/lib/reader-recovery-revision').loadReaderRecoveryRevision(directory, second),
+            { refreshReaderDiagnostics: true });
+        assert.equal(twice.attempts, 3);
+        retry.validatePersistedRound(directory, second, twice);
+        await retry.withPhysicalBudget(proof, paper, () => assert.throws(() => retry.consumePhysicalRequest({ max_tokens: 1 }, {
+            usageContext: { paperId: paper.arxivId, stage: 'apiReaderRepair' }
+        }), error => error.retryable === false));
+    }));
+});
+
+
+test('新轮实现恢复拒绝坏原档、断链、别轮证明与真实输入变化', async t => {
+    const f = setup(t);
+    await f.locked(() => retry.withExplicitRound(paper, f.grant, async () => {
+        const next = retry.beginExplicitRound(directory, f.identity, f.payload, paper);
+        repair.saveFailedCandidate(directory, f.identity, { ...next, attempts: 1, fullAttempts: 1, transportFailures: 2 });
+        const current = { ...f.identity, parserImplementationSha256: 'c'.repeat(64) };
+        const revised = await daily.withDailyFreshAnalysisContext(plan, () =>
+            require('../scripts/lib/reader-recovery-revision').loadReaderRecoveryRevision(directory, current),
+            { refreshReaderDiagnostics: true });
+        const last = revised.readerRecoveryRevisions.at(-1);
+        const archive = path.join(directory, last.archivedName);
+        const bytes = fs.readFileSync(archive);
+        fs.writeFileSync(archive, Buffer.concat([bytes, Buffer.from(' ')]));
+        assert.throws(() => retry.validatePersistedRound(directory, current, revised), /改变实际输入/);
+        fs.writeFileSync(archive, bytes);
+        for (const mutation of [
+            value => { value.readerRecoveryRevisions = []; },
+            value => { value.readerRecoveryRevisions.at(-1).runId = crypto.randomUUID(); },
+            value => { value.readerRecoveryRevisions.at(-1).oldEnvelopeSha256 = '0'.repeat(64); },
+            value => { value.readerRecoveryRevisions.at(-1).changedFields = ['model']; },
+            value => { value.transportFailures = 1; }
+        ]) {
+            const altered = structuredClone(revised);
+            mutation(altered);
+            assert.throws(() => retry.validatePersistedRound(directory, current, altered), /Reader 新轮/);
+        }
+        for (const changed of [
+            { ...current, inputFingerprint: '1'.repeat(64) },
+            { ...current, readerRecoveryEpochSha256: '2'.repeat(64) },
+            { ...current, sourceSha256: '3'.repeat(64) },
+            { ...current, model: { changed: true } }
+        ]) assert.throws(() => retry.validatePersistedRound(directory, changed, revised), /Reader 新轮/);
+        const beforeReceipt = fs.readFileSync(next.explicitReaderRetryRound.receiptFile);
+        retry.validatePersistedRound(directory, current, revised);
+        assert.deepEqual(fs.readFileSync(next.explicitReaderRetryRound.receiptFile), beforeReceipt);
+    }));
+});
+
+
+test('请求先登记而响应未保存的中断，公共迁移不退还48000预留', async t => {
+    const f = setup(t);
+    await f.locked(() => retry.withExplicitRound(paper, f.grant, async () => {
+        const next = retry.beginExplicitRound(directory, f.identity, f.payload, paper);
+        await retry.withPhysicalBudget(next.explicitReaderRetryRound, paper, () => retry.consumePhysicalRequest(
+            { max_tokens: 48000 }, { usageContext: { paperId: paper.arxivId, stage: 'apiReaderArticle' } }
+        ));
+        const receiptBefore = fs.readFileSync(next.explicitReaderRetryRound.receiptFile);
+        const current = { ...f.identity, parserImplementationSha256: 'b'.repeat(64) };
+        const revised = await daily.withDailyFreshAnalysisContext(plan, () =>
+            require('../scripts/lib/reader-recovery-revision').loadReaderRecoveryRevision(directory, current),
+            { refreshReaderDiagnostics: true });
+        assert.equal(revised.attempts, 0);
+        assert.equal(revised.fullAttempts, 0);
+        assert.equal(revised.implementationRepairAllowanceProof, null);
+        assert.deepEqual(fs.readFileSync(next.explicitReaderRetryRound.receiptFile), receiptBefore);
+        let transports = 0;
+        await retry.withPhysicalBudget(revised.explicitReaderRetryRound, paper, () => assert.rejects(
+            require('../scripts/utils').requestLlmJson('https://example.invalid/v1/chat/completions',
+                'https://example.invalid/v1', 'test-model', { max_tokens: 48000 }, {}, {
+                    usageContext: { paperId: paper.arxivId, stage: 'apiReaderArticle' }, usageSink() {},
+                    transportRequestFn: async () => { transports += 1; throw Error('不应传输'); }
+                }), error => error.code === 'READER_EXPLICIT_ROUND_BUDGET_EXHAUSTED'
+        ));
+        assert.equal(transports, 0);
+        assert.equal(JSON.parse(fs.readFileSync(next.explicitReaderRetryRound.receiptFile)).reservedOutputTokens, 48000);
+    }));
+});
+
+test('新轮只允许已审V9到固定V10修复能力，未知提示词升级仍拒', async t => {
+    const previous = oldEnvelope.identity;
+    oldEnvelope.identity = { ...previous,
+        promptSha256: 'a41f67166a0f366a10bf23cc17aa51ca6105b246ce7964ec14c21d6b4018f380',
+        repairPromptSha256: '5164ce17261a13a009c34bfcf8a71fc2c44f1ae2246f0651de5eda82a7645f65' };
+    const f = setup(t);
+    oldEnvelope.identity = previous;
+    await f.locked(() => retry.withExplicitRound(paper, f.grant, async () => {
+        const next = retry.beginExplicitRound(directory, f.identity, f.payload, paper);
+        const revision = require('../scripts/lib/reader-recovery-revision');
+        const unknown = { ...f.identity, repairPromptSha256: 'a'.repeat(64) };
+        assert.equal(await daily.withDailyFreshAnalysisContext(plan, () =>
+            revision.loadReaderRecoveryRevision(directory, unknown), { refreshReaderDiagnostics: true }), null);
+        const allowed = { ...f.identity,
+            repairPromptSha256: 'f50f85a04017de568f8225e97d7b4e230ae40b969d99266afcef045e011829a4' };
+        const revised = await daily.withDailyFreshAnalysisContext(plan, () =>
+            revision.loadReaderRecoveryRevision(directory, allowed), { refreshReaderDiagnostics: true });
+        assert.ok(revised);
+        assert.equal(revised.implementationRepairAllowanceProof, null);
+        assert.deepEqual(revised.explicitReaderRetryRound, next.explicitReaderRetryRound);
+        assert.equal(revised.attempts, 0);
+        assert.equal(revised.fullAttempts, 0);
+    }));
+});

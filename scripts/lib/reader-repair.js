@@ -6,12 +6,13 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { READER_LIMITS } = require('./reader-contract.js');
-const { locateReaderDraftTables, TABLE_BINDING_ORDER_ISSUE_CODE } = require('./reader-draft-order.js');
+const { locateReaderDraftTables, TABLE_BINDING_ORDER_ISSUE_CODE, READER_SECTION_KINDS } = require('./reader-draft-order.js');
 
 const REPAIR_VERSION = 'reader-node-repair-v1';
 const ARRAY_FIELDS = ['sections', 'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings'];
 const ROOT_FIELDS = ['version', 'readerTitle', 'oneSentenceThesis', ...ARRAY_FIELDS];
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
+const MAX_RECOVERY_SECTIONS = 64;
 const VALIDATION_SIGNATURE_PREFIX = 'reader-validation-v2:';
 const IMPLEMENTATION_ALLOWANCE_CONTRACT = 'reader-implementation-repair-allowance-v1';
 const IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT = 'reader-implementation-repair-lineage-v1';
@@ -466,10 +467,22 @@ function parseRecoveryDraft(raw) {
         || value.version !== 3
         || typeof value.readerTitle !== 'string' || typeof value.oneSentenceThesis !== 'string'
         || ARRAY_FIELDS.some(field => !Array.isArray(value[field]))
-        || value.sections.length < 1 || value.sections.length > READER_LIMITS.maximumSections
+        || value.sections.length < 1 || value.sections.length > MAX_RECOVERY_SECTIONS
         || value.conceptBridges.length > READER_LIMITS.maximumConceptBridges
         || value.figurePlacements.length > READER_LIMITS.maximumFigures) return null;
+    if (value.sections.length > READER_LIMITS.maximumSections
+        && (!value.sections.every(section => section && typeof section === 'object'
+            && !Array.isArray(section)
+            && ['kind', 'heading', 'body'].every(field => typeof section[field] === 'string'))
+            || Buffer.byteLength(JSON.stringify(value)) > MAX_FILE_BYTES)) return null;
     return value;
+}
+
+function sectionReorganizationOperation(draft) {
+    if (!parseRepairableDraft(draft) || draft.sections.length <= READER_LIMITS.maximumSections) return null;
+    return { kind: 'reorganize_existing_sections_v1',
+        requiredReplacementPaths: ['/sections'], originalSectionsCount: draft.sections.length,
+        minimumSections: READER_LIMITS.minimumSections, maximumSections: READER_LIMITS.maximumSections };
 }
 
 function parseReaderPatchJson(raw) {
@@ -511,6 +524,7 @@ function nodeAt(draft, pointer) {
     if (['/readerTitle', '/oneSentenceThesis'].includes(pointer)) {
         return draft[pointer.slice(1)];
     }
+    if (pointer === '/sections') return draft.sections;
     if (pointer === '/tableBindings') return draft.tableBindings;
     if (pointer === '/formulaBindings') return draft.formulaBindings;
     if (pointer === '/figurePlacements') return draft.figurePlacements;
@@ -549,6 +563,9 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         if (item.path === '/formulaBindings' && options.atomicOperation?.kind !== 'complete_existing_formula_bindings_v1') {
             throw new Error('整组公式来源记录缺少本轮明确补齐授权');
         }
+        if (item.path === '/sections' && options.atomicOperation?.kind !== 'reorganize_existing_sections_v1') {
+            throw new Error('整组小节重排缺少本轮明确授权');
+        }
         const old = nodeAt(draft, item.path);
         const expectedOldSha256 = hashDraft(old);
         if (item.oldSha256 !== expectedOldSha256) {
@@ -564,7 +581,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         }
         if ((item.path.endsWith('/body') || ['/readerTitle', '/oneSentenceThesis'].includes(item.path))
             && typeof item.value !== 'string') throw new Error('Reader patch text replacement must be a string');
-        if (['/tableBindings', '/formulaBindings'].includes(item.path) && !Array.isArray(item.value)) {
+        if (['/sections', '/tableBindings', '/formulaBindings'].includes(item.path) && !Array.isArray(item.value)) {
             throw new Error('Reader patch tableBindings replacement must be an array');
         }
         if (item.path === '/figurePlacements' && (!Array.isArray(options.availableFigureOrdinals)
@@ -572,7 +589,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             || item.value.length !== 0)) {
             throw new Error('无图清除只允许在本次没有可用像素时清空图绑定');
         }
-        if (item.path !== '/tableBindings' && item.path !== '/formulaBindings' && item.path !== '/figurePlacements' && !item.path.endsWith('/body')
+        if (item.path !== '/sections' && item.path !== '/tableBindings' && item.path !== '/formulaBindings' && item.path !== '/figurePlacements' && !item.path.endsWith('/body')
             && !['/readerTitle', '/oneSentenceThesis'].includes(item.path)
             && (!item.value || typeof item.value !== 'object' || Array.isArray(item.value))) {
             throw new Error('Reader patch node replacement must be an object');
@@ -606,6 +623,20 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         }
     }
     const operation = options.atomicOperation;
+    if (operation?.kind === 'reorganize_existing_sections_v1') {
+        const expected = sectionReorganizationOperation(draft);
+        const sections = patch.replacements[0]?.value;
+        if (!expected || hashDraft(expected) !== hashDraft(operation)
+            || seen.length !== 1 || seen[0] !== '/sections'
+            || !Array.isArray(sections) || sections.length < READER_LIMITS.minimumSections
+            || sections.length > READER_LIMITS.maximumSections
+            || sections.some(section => !section || Array.isArray(section)
+                || Object.keys(section).sort().join(',') !== 'body,heading,kind'
+                || !READER_SECTION_KINDS.includes(section.kind)
+                || ['heading', 'body'].some(field => typeof section[field] !== 'string'))) {
+            throw new Error('小节重排只允许本轮已授权的完整数组，并须恢复为12–18个合法小节；其他来源记录不能修改');
+        }
+    }
     if (operation?.kind === 'relocate_result_table_v1') {
         const required = operation.requiredReplacementPaths || [];
         if (required.some(pointer => !allowed.has(pointer))
@@ -1344,6 +1375,9 @@ function buildMissingFormulaBindingsOperation(draft, issues) {
 }
 
 function buildRepairTargets(draft, issues) {
+    if (sectionReorganizationOperation(draft)) return [{ path: '/sections',
+        oldSha256: hashDraft(draft.sections), value: draft.sections,
+        repairInstruction: '只将过多小节重组为12–18节，合并的标题改作正文子标题；保留全部正确文字、数字、单位、图表公式标记与对应顺序。额外字段中的内容须依原文核对后归入正文，不能直接丢弃。' }];
     const reindexedOperation = buildReindexedTableBindingsOperation(draft, issues);
     if (reindexedOperation) return reindexedOperation.requiredReplacementPaths.map(pointer => ({
         path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
@@ -1744,7 +1778,8 @@ function normalizeUnavailableReaderFigures(draft, availableFigureOrdinals) {
 
 function buildRepairContext(draft, issues, sourceEvidence, sourceText = '') {
     const targets = buildRepairTargets(draft, issues);
-    const requestedOperation = buildReindexedTableBindingsOperation(draft, issues)
+    const requestedOperation = sectionReorganizationOperation(draft)
+        || buildReindexedTableBindingsOperation(draft, issues)
         || buildMissingFormulaBindingsOperation(draft, issues)
         || buildMissingTableBindingsOperation(draft, issues)
         || buildUniqueMissingQuoteTableOperation(draft, issues)
@@ -1771,7 +1806,9 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '') {
     const formulaAppendGuidance = atomicOperation?.kind === 'complete_existing_formula_bindings_v1'
         ? `公式来源数组前 ${draft.formulaBindings.length} 条是不可改动的原记录，内容和顺序必须逐字保持。不要按公式编号排序；正文标记的排列顺序不决定数组顺序。只在数组末尾追加本轮明确列出的缺失记录。原记录前缀：${JSON.stringify(draft.formulaBindings)}。本轮允许提交的完整数组：${JSON.stringify([...draft.formulaBindings, ...atomicOperation.missingBindings])}。`
         : '';
-    const targetGuidance = `本轮只允许修改这些目标：${JSON.stringify(targets.map(target => target.path))}。`
+    const targetGuidance = (atomicOperation?.kind === 'reorganize_existing_sections_v1'
+        ? '本轮明确授权整组小节重排，只提交/sections完整数组；其他顶层信息与全部来源记录逐字保留。不能据此删除图表、公式或正确事实；重排后仍须通过完整解析与来源检查。' : '')
+        + `本轮只允许修改这些目标：${JSON.stringify(targets.map(target => target.path))}。`
         + '下面的诊断可能列出其他已发现问题，列出问题不代表授权修改。只提交本轮允许目标，逐项使用请求给出的真实 oldSha256；其余问题留待下一轮重新核验并授权，不要为未授权目标编造 SHA。' + formulaAppendGuidance;
     return { draftSha256: hashDraft(draft), targets, issues, evidence, atomicOperation, targetGuidance,
         exactQuotes, figureOrdinals: [...figureOrdinals], evidenceMode: 'full-evidence-local-output' };

@@ -186,6 +186,75 @@ function assertRequestLedger(receipt) {
         throw new Error('Reader 新轮实际请求明细与次数或输出预算不一致');
     }
 }
+function readMigrationEnvelope(filename) {
+    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600 || stat.size > 64 * 1024 * 1024) {
+            throw new Error('Reader 新轮实现恢复的原文件不安全');
+        }
+        const bytes = fs.readFileSync(fd);
+        return { bytes, envelope: JSON.parse(bytes) };
+    } finally { fs.closeSync(fd); }
+}
+function sameRoundIdentityAfterPublicMigration(directory, identity, payload, receipt) {
+    const repair = require('./reader-repair');
+    const revision = require('./reader-recovery-revision');
+    const equal = (a, b) => repair.hashDraft(a) === repair.hashDraft(b);
+    const unchangedInput = value => Object.fromEntries(Object.entries(value)
+        .filter(([key]) => !revision.ALLOWED_FIELDS.includes(key)));
+    let current = identity;
+    let currentPayload = payload;
+    const visited = new Set();
+    while (repair.hashDraft(current) !== receipt.grant.identitySha256) {
+        const currentHash = repair.hashDraft(current);
+        if (visited.has(currentHash)) throw new Error('Reader 新轮实现恢复记录出现循环');
+        visited.add(currentHash);
+        const matching = (currentPayload.readerRecoveryRevisions || []).filter(audit => audit.toIdentitySha256 === currentHash);
+        if (matching.length !== 1) throw new Error('Reader 新轮缺少唯一的公共实现恢复记录');
+        const audit = matching[0];
+        const archivePattern = new RegExp(`^${audit.fromIdentitySha256}\\.migrated-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json$`);
+        if (audit.contract !== revision.CONTRACT || audit.scope !== 'fresh-run'
+            || audit.runId !== receipt.grant.runId || audit.paperId !== identity.paperId
+            || !/^[a-f0-9]{64}$/.test(audit.fromIdentitySha256 || '')
+            || !archivePattern.test(audit.archivedName || '')) throw new Error('Reader 新轮实现恢复来源记录不符合要求');
+        let original;
+        try { original = readMigrationEnvelope(path.join(directory, audit.archivedName)); }
+        catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+            original = readMigrationEnvelope(path.join(directory, `${audit.fromIdentitySha256}.json`));
+        }
+        const old = original.envelope;
+        const changedFields = [...new Set([...Object.keys(old.identity), ...Object.keys(current)])]
+            .filter(key => !equal(old.identity[key] ?? null, current[key] ?? null)).sort();
+        if (hash(original.bytes) !== audit.oldEnvelopeSha256
+            || repair.hashDraft(old.identity) !== audit.fromIdentitySha256
+            || old.payloadSha256 !== audit.oldPayloadSha256 || repair.hashDraft(old.payload) !== audit.oldPayloadSha256
+            || !equal(changedFields, [...audit.changedFields].sort()) || !changedFields.length
+            || changedFields.some(field => !revision.ALLOWED_FIELDS.includes(field))
+            || old.identity.readerRecoveryEpochSha256 !== current.readerRecoveryEpochSha256
+            || !equal(old.identity.readerJsonRequestPolicy ?? null, current.readerJsonRequestPolicy ?? null)
+            || old.identity.promptSha256 !== current.promptSha256
+            || (old.identity.repairPromptSha256 !== current.repairPromptSha256
+                && !(current.promptSha256 === 'a41f67166a0f366a10bf23cc17aa51ca6105b246ce7964ec14c21d6b4018f380'
+                    && ['cdbf91f9bb2fb48e085c72195000059bdb2ccc4eb6a0bd47a6f31bb9d4835965',
+                        '9a7e72d75fdd05f7004c132533425fa140d237c22bc98a3c6c64333e5d76e22e',
+                        '5164ce17261a13a009c34bfcf8a71fc2c44f1ae2246f0651de5eda82a7645f65'].includes(old.identity.repairPromptSha256)
+                    && current.repairPromptSha256 === 'f50f85a04017de568f8225e97d7b4e230ae40b969d99266afcef045e011829a4'))
+            || !equal(unchangedInput(old.identity), unchangedInput(current))
+            || !equal(old.payload.explicitReaderRetryRound, payload.explicitReaderRetryRound)
+            || old.payload.status !== 'failed' || old.payload.attempts !== audit.attempts
+            || old.payload.fullAttempts !== audit.fullAttempts
+            || (old.payload.transportFailures || 0) !== audit.transportFailures
+            || (currentPayload.transportFailures || 0) < (old.payload.transportFailures || 0)
+            || currentPayload.attempts < old.payload.attempts || currentPayload.fullAttempts < old.payload.fullAttempts) {
+            throw new Error('Reader 新轮实现恢复改变实际输入、原证明或已用次数');
+        }
+        current = old.identity;
+        currentPayload = old.payload;
+    }
+    return true;
+}
 function validatePersistedRound(directory, identity, payload) {
     const proof = payload.explicitReaderRetryRound;
     if (!proof) return;
@@ -213,7 +282,8 @@ function validatePersistedRound(directory, identity, payload) {
     if (!['prepared', 'active'].includes(receipt.status)
         || path.resolve(receipt.archivedFile) !== path.resolve(directory, 'explicit-retry-rounds', `${proof.roundId}.original.json`)
         || receipt.grant.roundId !== proof.roundId
-        || require('./reader-repair').hashDraft(identity) !== receipt.grant.identitySha256
+        || (require('./reader-repair').hashDraft(identity) !== receipt.grant.identitySha256
+            && !sameRoundIdentityAfterPublicMigration(directory, identity, payload, receipt))
         || hash(fs.readFileSync(receipt.archivedFile)) !== receipt.grant.envelopeSha256
         || !Number.isSafeInteger(receipt.physicalRequests) || receipt.physicalRequests < 0 || receipt.physicalRequests > 6
         || !Number.isSafeInteger(receipt.reservedOutputTokens) || receipt.reservedOutputTokens < 0 || receipt.reservedOutputTokens > 80000) {
@@ -242,7 +312,13 @@ function consumePhysicalRequest(body, options) {
     if (!Number.isSafeInteger(tokens) || tokens < 1
         || receipt.physicalRequests >= receipt.grant.maxPhysicalRequests
         || receipt.reservedOutputTokens + tokens > receipt.grant.maxReservedOutputTokens) {
-        throw new Error('明确 Reader 新轮实际请求或输出预算耗尽');
+        const error = new Error('明确 Reader 新轮实际请求或输出预算耗尽');
+        error.code = 'READER_EXPLICIT_ROUND_BUDGET_EXHAUSTED';
+        error.retryable = false;
+        error.scope = 'paper';
+        error.category = 'reader_budget_exhausted';
+        error.modelRequestClassified = true;
+        throw error;
     }
     receipt.physicalRequests += 1;
     receipt.reservedOutputTokens += tokens;
