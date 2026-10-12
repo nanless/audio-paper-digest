@@ -79,9 +79,24 @@ test('即使重新计算 SHA，段落匹配不唯一或无法按原字节还原�
     for(const mutate of [
         f=>{f.paper.apiReaderPlan.sections[1].heading=f.paper.apiReaderPlan.sections[0].heading;},
         f=>{f.paper.apiReaderArticle+='\n\n'+f.paper.apiReaderPlan.conceptBridges[0].explanation;},
-        f=>{f.paper.apiReaderPlan.conceptBridges[0].explanation='**different heading** '+f.paper.apiReaderPlan.conceptBridges[0].explanation;},
         f=>{f.paper.apiReaderArticle+='\n';},
         f=>{f.paper.apiReaderPlan.unrecoverableExtra='must not silently discard';},
         f=>{f.paper.apiReaderFigures[0].unrecoverableExtra='must not silently discard';}
     ]) {const f=fixture();mutate(f);sign(f.paper);assert.throws(()=>reconstructReaderDraftFromVerifiedArticle(f),/Signed Reader inverse refused/);}
+});
+
+test('计划中的术语解释与实际正文不同，即使重算计划SHA也先失去资格且不改输入', () => {
+    const sample = fixture();
+    sample.paper.apiReaderPlan.conceptBridges[0].explanation = '**different heading** '
+        + sample.paper.apiReaderPlan.conceptBridges[0].explanation;
+    const { stableHash } = require('../scripts/lib/fresh-rewrite-run');
+    sample.paper.apiReaderPlanSha256 = stableHash(sample.paper.apiReaderPlan);
+    sample.paper.analysisManifest.stages.apiReaderArticle.planSha256 = sample.paper.apiReaderPlanSha256;
+    assert.equal(require('../scripts/analysis-engine').hasValidApiReaderV3Records(sample.paper), false);
+    const before = JSON.stringify(sample);
+    assert.throws(() => reconstructReaderDraftFromVerifiedArticle(sample), error => (
+        error.code === 'READER_SIGNED_DRAFT_NOT_REVERSIBLE'
+        && error.message === 'Signed Reader inverse refused: invalid signed parent or run'
+    ));
+    assert.equal(JSON.stringify(sample), before);
 });

@@ -15,6 +15,8 @@
 | 清理晦涩的代码命名和生硬表达 | [当前修正与验收记录](refactor-audit-2026-10-09.md) | [2026-10-06 重构总览](refactor-overview.md)、[当时的修正进度](refactor-progress.txt)、[最初命名研究](naming-review.txt) |
 | 核对 2026-10-09 全项目审查的修复、验证与未完成范围 | [本次审查记录](refactor-audit-2026-10-09.md) | 每轮提交、独立审查、真实数据限制与远端 CI 结果 |
 | 排查日更耗时、重复分析与无效修补 | [日更耗时检查与修复记录](daily-performance-audit.md) | 实测范围、已修问题及未完成验证 |
+| 停止分析，保留在途结果并阻止后续请求 | [分析停止说明](analysis-stop.md) | 信号处理、费用保存、适用范围及强制结束的限制 |
+| 理解批量恢复怎样检查封存来源 | [锁内来源检查](locked-source-validation.md) | 入口全批、锁内当前论文和结束前全批的检查顺序 |
 | 执行离线验证或排查故障恢复 | [验证矩阵](maintenance.md#验证矩阵) | `npm run verify` |
 | 根据原文重写一个已有日批次 | [从原文完整重写](fresh-rewrite.md) | `npm run rewrite:source` 的分阶段入口 |
 | 重写全部历史论文与汇总页 | [历史重写流程](history-rewrite.md) | 本地会议来源、论文计划、来源准备和逐篇重写命令 |

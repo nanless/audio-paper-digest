@@ -251,12 +251,23 @@ describe('当前读者文章的视觉任务来源检查', () => {
     it('即使重新计算校验信息，章节不符、私网或其他论文的图片地址以及任意缓存路径仍被拒绝', () => withReader((reader, sign) => {
         for (const mutate of [
             p => { p.apiReaderPlan.sections[0].heading += 'drift'; },
-            p => { p.apiReaderFigures[0].url = 'https://127.0.0.1/a.png'; },
-            p => { p.apiReaderFigures[0].url = 'https://arxiv.org/html/2609.99999v1/a.png'; },
+            p => {
+                const previousUrl = p.apiReaderFigures[0].url;
+                p.apiReaderFigures[0].url = 'https://127.0.0.1/a.png';
+                p.apiReaderArticle = p.apiReaderArticle.replace(`](${previousUrl})`, `](${p.apiReaderFigures[0].url})`);
+            },
+            p => {
+                const previousUrl = p.apiReaderFigures[0].url;
+                p.apiReaderFigures[0].url = 'https://arxiv.org/html/2609.99999v1/a.png';
+                p.apiReaderArticle = p.apiReaderArticle.replace(`](${previousUrl})`, `](${p.apiReaderFigures[0].url})`);
+            },
             p => { p.apiReaderFigures[0].cachePath = '/private/tmp/arbitrary.png'; }
         ]) {
             const bad = structuredClone(reader); mutate(bad); sign(bad);
+            assert.equal(require('../scripts/analysis-engine').hasValidApiReaderV3Records(bad), true);
+            const before = JSON.stringify(bad);
             assert.throws(() => buildGenerationContext(bad), /Reader/);
+            assert.equal(JSON.stringify(bad), before);
         }
     }));
 
