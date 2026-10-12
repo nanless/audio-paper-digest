@@ -81,7 +81,7 @@ function inspectReaderRecovery({ runId, rootDir, now = new Date().toISOString() 
     const validationFailureStreak = Number.isSafeInteger(payload.validationFailureStreak)
         ? payload.validationFailureStreak : 0;
     const implementationRepairAllowance = Boolean(payload.implementationRepairAllowanceProof);
-    const exhausted = /failed candidate exhausted|bounded attempts|连续无进展/i.test(error)
+    const exhausted = /failed candidate exhausted|bounded attempts|连续无进展|长文(?:草稿的修复|全文生成)次数已用完/i.test(error)
         || (attempts >= 6 && !implementationRepairAllowance) || noProgress >= 2 || validationFailureStreak >= 2;
     const transportOnly = /HTTP 429|rate_limit_exceeded|SSE.*(?:终态|terminal)|SSE_TERMINAL/i.test(error);
     const baseFingerprint = String(reader.fingerprint || loaded.run.sourceExpectations?.[loaded.run.paperIds[0]]?.sourceSnapshotSha256 || '');

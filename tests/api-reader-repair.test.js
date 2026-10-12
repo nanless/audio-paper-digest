@@ -524,7 +524,7 @@ test('用尽的候选可以免费重跑一次完整解析：有效就退场，�
     const noMoreCalls = async () => { calls++; throw new Error('must not call'); };
     await assert.rejects(generateApiReaderArticleDetailed(paper, '', '', {
         ...base, readerCallModel: noMoreCalls
-    }), /exhausted/);
+    }), error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED' && error.retryable === false);
     assert.equal(calls, 0);
     const valid = fixture();
     valid.sections.forEach((section, index) => {
@@ -583,7 +583,7 @@ test('生产遇到没带来变化的补丁就停下，恢复用尽后不再调�
             : JSON.stringify(patchFor(draft, [['/readerTitle', '短']]))) };
     await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /连续无进展|同一组校验问题连续两次未改善/);
     assert.equal(calls, 2);
-    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED' && error.retryable === false);
     assert.equal(calls, 2);
 });
 
@@ -1196,6 +1196,72 @@ test('结果表修复不会把选择标记当成 Markdown 来源小节', () => {
     assert.ok(context.targets.length > 0);
 });
 
+test('长文修复已停止时，整篇重试不重复下载与检查同一失败稿', async t => {
+    const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
+    const engine = require('../scripts/analysis-engine.js');
+    const directory = temporary(t);
+    const paper = { arxivId: '2609.99972', title: '修复停止后保留原稿' };
+    const draft = fixture(); draft.readerTitle = '短';
+    let calls = 0, outerCalls = 0;
+    const options = { sourceText: 'source', readerAttemptsDir: directory, readerMaxAttempts: 6,
+        readerMaterializeFigures: async () => [], readerRecordDisposition: () => {},
+        readerCallModel: async () => {
+            calls++;
+            return calls === 1 ? JSON.stringify(draft)
+                : JSON.stringify(patchFor(draft, [['/readerTitle', '短短']]));
+        } };
+    const run = () => engine.analyzePaperWithRetry(structuredClone(paper), {
+        maxRetries: 2, retryDelayMs: 0, analyzeFn: async () => {
+            outerCalls++;
+            return generateApiReaderArticleDetailed(paper, 'canonical', '', options);
+        }
+    });
+    const result = await run();
+    assert.equal(result.success, false);
+    assert.equal(calls, 2);
+    assert.equal(outerCalls, 1);
+    assert.equal(result.result.latestAnalysisAttemptRetryable, false);
+    assert.equal(result.result.latestAnalysisAttemptErrorCode, 'READER_REPAIR_NO_PROGRESS');
+    const filename = path.join(directory, fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name)));
+    const original = fs.readFileSync(filename);
+    const saved = JSON.parse(original);
+    assert.equal(saved.payload.attempts, 2);
+    assert.equal(saved.payload.fullAttempts, 1);
+    outerCalls = 0;
+    const resumed = await run();
+    assert.equal(outerCalls, 1);
+    assert.equal(calls, 2);
+    assert.equal(resumed.result.latestAnalysisAttemptErrorCode, 'READER_REPAIR_ATTEMPTS_EXHAUSTED');
+    assert.deepEqual(fs.readFileSync(filename), original);
+});
+
+test('长文网络失败仍可由整篇重试恢复，不增加内容尝试次数', async t => {
+    const { generateApiReaderArticleDetailed } = require('../scripts/deep-analyzer.js');
+    const engine = require('../scripts/analysis-engine.js');
+    const directory = temporary(t);
+    const paper = { arxivId: '2609.99973', title: '保留网络重试' };
+    let calls = 0;
+    const result = await engine.analyzePaperWithRetry(structuredClone(paper), {
+        maxRetries: 2, retryDelayMs: 0,
+        analyzeFn: () => generateApiReaderArticleDetailed(paper, 'canonical', '', {
+            sourceText: 'source', readerAttemptsDir: directory, readerMaxAttempts: 6,
+            readerMaterializeFigures: async () => [], readerRecordDisposition: () => {},
+            readerCallModel: async () => {
+                calls++;
+                throw Object.assign(new Error('连接临时中断'), { code: 'ECONNRESET', retryable: true });
+            }
+        })
+    });
+    assert.equal(calls, 3);
+    assert.equal(result.result.latestAnalysisAttemptRetryable, true);
+    assert.equal(result.result.latestAnalysisAttemptErrorCode, 'ECONNRESET');
+    const filename = path.join(directory, fs.readdirSync(directory).find(name => /^[a-f0-9]{64}\.json$/.test(name)));
+    const saved = JSON.parse(fs.readFileSync(filename));
+    assert.equal(saved.payload.attempts, 0);
+    assert.equal(saved.payload.fullAttempts, 0);
+    assert.equal(saved.payload.transportFailures, 3);
+});
+
 test('归一化校验签名在两次草稿变化之后叫停同一个绑定问题', async t => {
     const first = [{ path: null, message: '读者文章 tableBindings[0] 关键数字缺少 exact quote/cell 证据: 200；未绑定单元格（行列从 0 开始，表头为第 0 行）：row=1,column=1 text="dev 划分约 200–430 utterances" missing=200。' }];
     const second = [{ path: null, message: '读者文章 tableBindings[0] 关键数字缺少 exact quote/cell 证据: 430；未绑定单元格（行列从 0 开始，表头为第 0 行）：row=1,column=1 text="dev 划分约 200–430 utterances" missing=430。' }];
@@ -1576,7 +1642,8 @@ test('收到截断或不完整的整篇回复会跨多次调用消耗内容和�
             assert.equal(envelope.payload.transportFailures || 0, 0);
             assert.equal(envelope.payload.draft, null, '不完整输出不得保存为候选草稿');
         }
-        await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /root JSON|exhausted/);
+        await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), error =>
+            error.code === 'READER_FULL_ATTEMPTS_EXHAUSTED' && error.retryable === false);
         assert.equal(calls, 2, '第三次调用不得再次请求相同额度的整篇回复');
     }
 });
@@ -1616,10 +1683,10 @@ test('收到截断或不完整的补丁回复只消耗内容额度，不改动�
             const retried = JSON.parse(fs.readFileSync(path.join(directory, fs.readdirSync(directory)[0]), 'utf8'));
             assert.equal(retried.payload.attempts, 3);
             assert.equal(retried.payload.lastContentError.maxOutputTokens, 16000);
-            await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
+            await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED' && error.retryable === false);
             assert.equal(calls, 3, '扩大额度后的回复仍截断时，不再请求另一份回复');
         } else {
-            await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
+            await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED' && error.retryable === false);
             assert.equal(calls, 2, '未达到输出上限的不完整回复，不获得扩大额度的机会');
         }
     }
@@ -1724,7 +1791,7 @@ test('最后一次普通补丁在 8000 token 截断后，只能再请求一次 1
     assert.equal(envelope.payload.lastContentError, undefined);
     assert.equal(envelope.payload.implementationRepairAllowanceLineage,
         'reader-implementation-repair-lineage-v1');
-    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED' && error.retryable === false);
     assert.equal(calls.length, 3, '唯一一次扩大额度的重试不能再次使用');
 });
 
@@ -1756,7 +1823,7 @@ test('补丁在 8000 token 截断后，已标记使用实现恢复额度的草�
         ...envelope.payload,
         implementationRepairAllowanceLineage: 'reader-implementation-repair-lineage-v1'
     });
-    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED' && error.retryable === false);
     assert.equal(calls, 2, '已使用的实现恢复额度不能再叠加一次 16000 token 回复');
 });
 
@@ -1804,7 +1871,7 @@ test('最后一次 16000 token 补丁遇到传输失败时，保留重试且不�
     assert.equal(envelope.payload.lastContentError.maxOutputTokens, 16000);
     assert.equal(envelope.payload.implementationRepairAllowanceLineage,
         'reader-implementation-repair-lineage-v1');
-    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), /exhausted/);
+    await assert.rejects(generateApiReaderArticleDetailed(paper, 'canonical', '', options), error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED' && error.retryable === false);
     assert.deepEqual(calls.map(call => call.tokens), [48000, 8000, 16000, 16000]);
 });
 

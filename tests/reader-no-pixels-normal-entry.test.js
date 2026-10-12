@@ -92,7 +92,7 @@ test('已耗尽候选机械清理仍不合格时保存新草稿而不增加请�
     repair.saveFailedCandidate(directory, envelope.identity, { ...envelope.payload,
         draft: standalone, rawDraft: JSON.stringify(standalone), noProgress: 2 });
     const before = repair.loadFailedCandidate(directory, envelope.identity);
-    await assert.rejects(deep.generateApiReaderArticleDetailed(signed.paper, '', '来源证据', options), /exhausted/);
+    await assert.rejects(deep.generateApiReaderArticleDetailed(signed.paper, '', '来源证据', options), error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED' && error.retryable === false);
     const after = repair.loadFailedCandidate(directory, envelope.identity);
     assert.equal(calls, 1);
     assert.deepEqual(after.draft.figurePlacements, []);

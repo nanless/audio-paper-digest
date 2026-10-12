@@ -7113,6 +7113,15 @@ function buildApiReaderValidationFeedback(error) {
         + '并逐条确认 conceptBridges 与 figurePlacements 的 marker 和相邻正文真实存在。';
 }
 
+function readerRepairStopped(code, message, cause) {
+    // 保存故障和已要求停止整批的错误必须保留原分类，不能降成单篇内容问题。
+    if (cause && (cause.scope === 'run'
+        || ['EIO', 'ENOSPC', 'EDQUOT', 'EROFS', 'EMFILE', 'ENFILE', 'EACCES', 'EPERM'].includes(cause.code))) return cause;
+    return Object.assign(new Error(message, cause ? { cause } : undefined), {
+        code, retryable: false, scope: 'paper', category: 'reader_recovery', modelRequestClassified: true
+    });
+}
+
 const API_READER_REVISION_MODE = 'api-reader-signed-revision-v1';
 
 function recoverableStaleReaderRevisionStage(paper, sourceText) {
@@ -7666,7 +7675,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 issues: currentIssues
             });
         }
-        throw new Error('Reader failed candidate exhausted its bounded attempts; inspect recovery evidence before changing inputs');
+        throw readerRepairStopped('READER_REPAIR_ATTEMPTS_EXHAUSTED',
+            '长文草稿的修复次数已用完或连续未改善，已保留恢复记录；继续前须处理失败原因。');
     }
     for (let attempt = completedAttempts + 1; attempt <= attemptLimit; attempt++) {
         // 构造下一个提示词之前，先做一次有上限、绑定具体问题的恢复归一化。少了这一遍，
@@ -7727,13 +7737,15 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 implementationRepairAllowanceProof, imageEvidence, providerImageExclusions,
                 ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {})
             });
-            throw new Error('没有可安全修复的表格对应节点，已保留失败草稿；本次未发送模型请求');
+            throw readerRepairStopped('READER_REPAIR_NO_ALLOWED_TARGET',
+                '没有可安全修复的表格对应节点，已保留失败草稿；本次未发送模型请求');
         }
         if (sourceBindingNeedsFullRetry) previousDraft = JSON.stringify(candidate);
         if (!repairContext && fullAttempts >= (explicitRound?.maxFullResponses ?? 2)
             && (explicitRound || !repair.hasUnusedImplementationAllowance({ ...recovered,
                 attempts: attempt - 1, fullAttempts, implementationRepairAllowanceProof }))) {
-            throw lastError || new Error('Reader root JSON remained invalid after two full attempts');
+            throw readerRepairStopped('READER_FULL_ATTEMPTS_EXHAUSTED',
+                lastError?.message || '长文全文生成次数已用完，现有草稿尚不能按当前允许范围修复；已保留失败记录。', lastError);
         }
         const buildReaderPrompt = indexExamples => repairContext ? loadPrompt(currentTextStagePromptPath('apiReaderRepair'), {
             title: paper.title || '', arxivId: getPaperArxivId(paper),
@@ -7991,14 +8003,17 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             validationFeedback = buildAttemptFeedback();
             console.log(`    [deep] ⚠️  读者文章校验失败 (${attempt}/${maxAttempts}): ${error.message}`);
             if (validationFailureStreak >= 2) {
-                throw new Error(`读者文章同一组校验问题连续两次未改善，已停止修复并保留草稿：${error.message}`, { cause: error });
+                throw readerRepairStopped('READER_REPAIR_NO_PROGRESS',
+                    `读者文章同一组校验问题连续两次未改善，已停止修复并保留草稿：${error.message}`, error);
             }
             if (noProgress >= 2) {
-                throw new Error(`Reader 局部修复连续无进展，已保留失败候选：${error.message}`, { cause: error });
+                throw readerRepairStopped('READER_REPAIR_NO_PROGRESS',
+                    `长文局部修复连续无进展，已保留失败草稿：${error.message}`, error);
             }
         }
     }
-    throw lastError || new Error('读者文章生成失败');
+    throw readerRepairStopped('READER_REPAIR_ATTEMPTS_EXHAUSTED',
+        lastError?.message || '读者文章生成失败，修复次数已用完。', lastError);
 }
 
 function normalizeApiReaderFigureMarkdown(article, figures = []) {

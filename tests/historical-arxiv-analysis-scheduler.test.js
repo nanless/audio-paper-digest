@@ -492,6 +492,30 @@ test('已保存并核验的运行缺失时，检查点的完成状态会被降�
     assert.equal(prepared, 1);
 });
 
+test('历史恢复识别中英文次数用完的报错，网络失败仍可续跑', t => {
+    const root = fixture(t);
+    const fresh = require('../scripts/lib/fresh-rewrite-run.js');
+    let message = '';
+    t.mock.method(fresh, 'loadRun', () => ({ runDir: root,
+        run: { paperIds: ['2610.99973'] },
+        analysis: { papers: [{ analysisManifest: { stages: {
+            primaryAnalysis: { status: 'complete' }, scoringAudit: { status: 'complete' },
+            apiReaderArticle: { status: 'failed', error: message }
+        } } }] }
+    }));
+    for (message of [
+        'Reader failed candidate exhausted its bounded attempts',
+        '长文草稿的修复次数已用完或连续未改善，已保留恢复记录；继续前须处理失败原因。',
+        '长文全文生成次数已用完，现有草稿尚不能按当前允许范围修复；已保留失败记录。'
+    ]) {
+        assert.equal(scheduler.inspectReaderRecovery({ runId: 'test-run', rootDir: root }).exhausted, true);
+    }
+    message = 'HTTP 429';
+    const network = scheduler.inspectReaderRecovery({ runId: 'test-run', rootDir: root });
+    assert.equal(network.exhausted, false);
+    assert.equal(network.transportOnly, true);
+});
+
 test('new-full 先分类再限流，绝不为跳过的 Reader 半成品做实时准备', async t => {
     const root = fixture(t); const files = { pageSourceCrosswalkDir: path.join(root, 'crosswalk'),
         paperSourceAuthorityDir: path.join(root, 'authority'), freshRewriteRunsDir: path.join(root, 'runs'),
