@@ -49,6 +49,19 @@ async function reanalyzeSelected(ids, options = {}) {
 
     const papers = data.papers || [];
     const idSet = new Set(ids.map(id => normalizedId(id)).filter(Boolean));
+    if (options.refreshReaderDiagnostics !== undefined && typeof options.refreshReaderDiagnostics !== 'boolean')
+        throw new Error('refreshReaderDiagnostics 必须为布尔值');
+    if (options.coreSummaryDiagnosticIds !== undefined) {
+        if (!options.coreSummaryDiagnosticIds || typeof options.coreSummaryDiagnosticIds !== 'object' || Array.isArray(options.coreSummaryDiagnosticIds)
+            || Object.entries(options.coreSummaryDiagnosticIds).some(([id, value]) => !idSet.has(id) || normalizedId(id) !== id || !/^[a-f0-9-]{36}$/.test(String(value))))
+            throw new Error('付费摘要复用必须明确指定本次选定论文及原请求 ID');
+        if (options.fullStageReanalysis && Object.keys(options.coreSummaryDiagnosticIds).some(id => {
+            const paper = papers.find(item => normalizedId(item) === id);
+            return !paper?.fullStageReanalysis || paper.fullStageReanalysis.runId !== options.fullStageReanalysis.runId
+                || paper.fullStageReanalysis.sourceRunId !== options.fullStageReanalysis.sourceRunId
+                || paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete';
+        })) throw new Error('付费摘要仅可继续同轮已完成主分析，不能强制全新生成');
+    }
     const dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(data, {
         papers, label: 'selected reanalyze recovery'
     });
@@ -93,6 +106,7 @@ async function reanalyzeSelected(ids, options = {}) {
                 path.join(dailySourcePlan.readerAttemptsDir, name), 'utf8'
             ));
             if (idSet.has(normalizedId(envelope.identity?.paperId))
+                && !options.coreSummaryDiagnosticIds?.[normalizedId(envelope.identity?.paperId)]
                 && readerRepair.retireFailedCandidate(dailySourcePlan.readerAttemptsDir, envelope.identity)) {
                 retiredReaderCandidates += 1;
             }
@@ -121,7 +135,7 @@ async function reanalyzeSelected(ids, options = {}) {
         const aid = normalizedId(p);
         if (idSet.has(aid)) {
             const cleanPaper = dailyFreshSources.prepareDailyPaper(
-                fullStageOptions ? p : resetReaderForSelectedReanalysis(p), dailySourcePlan
+                fullStageOptions || options.coreSummaryDiagnosticIds?.[aid] ? p : resetReaderForSelectedReanalysis(p), dailySourcePlan
             );
             toReanalyze.push(cleanPaper);
         }
@@ -192,7 +206,7 @@ async function reanalyzeSelected(ids, options = {}) {
             }
             return {
                 paper: dailyFreshSources.prepareDailyPaper(
-                    resetReaderForSelectedReanalysis({ ...paper, ...latest }), dailySourcePlan
+                    options.coreSummaryDiagnosticIds?.[normalizedId(paper)] ? { ...paper, ...latest } : resetReaderForSelectedReanalysis({ ...paper, ...latest }), dailySourcePlan
                 ),
                 skip: false
             };
@@ -202,7 +216,7 @@ async function reanalyzeSelected(ids, options = {}) {
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
         saveInterval: 0,
         analyzeFn: async paper => {
-            const analyze = () => dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan)(paper);
+            const analyze = () => dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, { coreSummaryDiagnosticIds: options.coreSummaryDiagnosticIds })(paper);
             const bound = boundFeedbacks.get(normalizedId(paper));
             return bound ? factReview.withFactReview(bound, analyze) : analyze();
         },
@@ -243,7 +257,8 @@ async function reanalyzeSelected(ids, options = {}) {
     const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(
         dailySourcePlan, () => fullStageOptions
             ? fullStages.withSelectedFullStageReanalysis(fullStageOptions, runAnalysisFromDailySources)
-            : runAnalysisFromDailySources()
+            : runAnalysisFromDailySources(),
+        { ...(options.refreshReaderDiagnostics !== undefined ? { refreshReaderDiagnostics: options.refreshReaderDiagnostics } : {}) }
     );
 
     // 合并结果：用新结果替换旧结果

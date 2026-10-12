@@ -6,6 +6,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+test.mock.method(require('../scripts/env-loader'), 'loadProjectEnv', () => {
+    Object.assign(process.env, { PAPER_ANALYZER_ENDPOINT: 'https://example.invalid/v1', PAPER_ANALYZER_API_KEY: 'test-only-no-network', PAPER_ANALYZER_MODEL: 'muse-spark-1.3-contributor', HTTPS_PROXY: 'http://127.0.0.1:9' });
+    return process.env;
+});
 const Config = require('../scripts/config');
 const deep = require('../scripts/deep-analyzer');
 const diagnostics = require('../scripts/lib/reader-request-diagnostics');
@@ -156,4 +160,52 @@ test('公开记录权威字段不可覆盖，坏状态和SHA以及保存后状�
     fs.writeFileSync(file, JSON.stringify({ ...loaded.disposition, status: 'complete' }));
     assert.throws(() => diagnostics.readCoreSummaryDiagnostic(root, diagnostic.id, identity),
         /当前来源或输入不一致|结果记录格式无效/);
+});
+
+
+test('明确原付费记录可正常重验且原拒绝记录和费用不改，错身份及坏响应先拒绝', async t => {
+    const root = isolated(t);
+    await deep.repairCoreSummarySection(paper, incompleteAnalysis, sourceText, sourceText, {
+        callModelFn: async () => `## 核心摘要\n${goodSummary}`
+    });
+    const [saved] = readRecords(root);
+    const dispositionPath = path.join(root, 'request-diagnostics', `${saved.request.id}.disposition.json`);
+    const rejected = JSON.parse(fs.readFileSync(dispositionPath));
+    rejected.status = 'rejected'; rejected.error = '旧实现方法链误拒';
+    fs.writeFileSync(dispositionPath, JSON.stringify(rejected));
+    const before = snapshot(root);
+    let calls = 0;
+    const options = { coreSummaryDiagnosticId: saved.request.id, callModelFn: async () => { calls++; throw Error('不得新请求'); } };
+    assert.equal(await deep.repairCoreSummarySection(paper, incompleteAnalysis, sourceText, sourceText, options), baseline);
+    assert.deepEqual(snapshot(root), before);
+    await assert.rejects(deep.repairCoreSummarySection(paper, incompleteAnalysis + '\n输入变化', sourceText, sourceText, options), /当前来源或输入不一致/);
+    await assert.rejects(deep.repairCoreSummarySection(paper, incompleteAnalysis, sourceText + '变化', sourceText, options), /当前来源或输入不一致/);
+    await assert.rejects(deep.repairCoreSummarySection(paper, incompleteAnalysis, sourceText, sourceText, { ...options, coreSummaryDiagnosticId: '错ID' }), /身份无效|原请求 ID 无效/);
+    const responsePath = path.join(root, 'request-diagnostics', `${saved.request.id}.response.json`);
+    const response = JSON.parse(fs.readFileSync(responsePath)); response.rawResponse += '篡改';
+    fs.writeFileSync(responsePath, JSON.stringify(response));
+    await assert.rejects(deep.repairCoreSummarySection(paper, incompleteAnalysis, sourceText, sourceText, options), /当前来源或输入不一致/);
+    assert.equal(calls, 0);
+});
+
+test('原付费响应仍有真实摘要质量错误时拒绝复用且不发新请求', async t => {
+    const root = isolated(t);
+    await assert.rejects(deep.repairCoreSummarySection(paper, incompleteAnalysis, sourceText, sourceText, {
+        callModelFn: async () => '## 核心摘要\n摘要太短，缺少具体机制与结果。'
+    }), /核心摘要局部修复失败/);
+    const [saved] = readRecords(root);
+    const before = snapshot(root); let calls = 0;
+    await assert.rejects(deep.repairCoreSummarySection(paper, incompleteAnalysis, sourceText, sourceText, {
+        coreSummaryDiagnosticId: saved.request.id,
+        callModelFn: async () => { calls++; throw Error('不应新请求'); }
+    }), /原付费摘要仍未通过当前检查/);
+    assert.equal(calls, 0); assert.deepEqual(snapshot(root), before);
+});
+
+test('普通无需修复的合格摘要不增加论文身份要求', async () => {
+    assert.equal(await deep.repairCoreSummarySection({ title: '原无ID普通纯校验' }, baseline, sourceText, sourceText), baseline);
+});
+
+test('非arXiv身份显式付费摘要不能绕过记录核验', async () => {
+    await assert.rejects(deep.repairCoreSummarySection({ title: '无ID' }, baseline, sourceText, sourceText, { coreSummaryDiagnosticId: 'd9077527-0d59-4d92-8d0c-0e3d7b10007f' }), /规范论文身份/);
 });

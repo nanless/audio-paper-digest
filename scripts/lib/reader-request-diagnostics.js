@@ -153,7 +153,8 @@ function readCoreSummaryDiagnostic(root, id, expectedIdentity) {
             || response.value.outputTextSha256 !== sha(response.value.rawResponse)
             || disposition.value.outputTextSha256 !== response.value.outputTextSha256)
             throw new Error('摘要修复记录与当前来源或输入不一致');
-        return { request: request.value, response: response.value, disposition: disposition.value };
+        return { request: request.value, response: response.value, disposition: disposition.value,
+            fileSha256: { request: request.sha256, response: response.sha256, disposition: disposition.sha256 } };
     });
 }
 module.exports = { beginReaderRepairDiagnostic, saveReaderRepairResponse,

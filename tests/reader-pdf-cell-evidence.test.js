@@ -141,3 +141,19 @@ test('运行时启动脚本、PATH及虚拟环境选择变化必须重新提取'
         fs.rmSync(root, { recursive: true, force: true });
     }
 });
+
+
+test('普通表仅有cells时还原原单元格字节，不依赖PDF或matrix', () => {
+    const table = { ordinal: 1, cells: [
+        { row: 0, column: 0, rowspan: 1, colspan: 1, text: 'Model' },
+        { row: 0, column: 1, rowspan: 1, colspan: 1, text: '0–12 kHz' },
+        { row: 1, column: 0, rowspan: 1, colspan: 1, text: 'Ours' },
+        { row: 1, column: 1, rowspan: 1, colspan: 1, text: '1.24' }
+    ] };
+    assert.equal(displayCell(table, 0, 0), 'Model');
+    assert.equal(displayCell(table, 0, 1), '0–12 kHz');
+    assert.equal(displayCell(table, 1, 0), 'Ours');
+    assert.equal(displayCell(table, 1, 1), '1.24');
+    const withMatrix = { ...table, matrix: [['different', 'matrix'], ['not', 'cell']] };
+    assert.equal(displayCell(withMatrix, 1, 1), '1.24');
+});

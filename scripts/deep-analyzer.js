@@ -14833,18 +14833,18 @@ async function applyImageSupplement(paper, arxivId, analysis, imageInfos, downlo
 /**
  * 深度分析单篇论文（全文 + 图片）
  */
-async function analyzePaperDeep(paper) {
+async function analyzePaperDeep(paper, options = {}) {
     const { withLlmUsageContext } = require('./lib/llm-usage.js');
     const fresh = require('./lib/fresh-analysis-context.js');
     return fresh.withFreshPaperContext(paper, () => withLlmUsageContext(
         { paperId: getPaperArxivId(paper) }, async () => {
-            const result = await analyzePaperDeepInternal(paper);
+            const result = await analyzePaperDeepInternal(paper, options);
             return transferDeferredReaderCandidate(paper, result);
         }
     ));
 }
 
-async function analyzePaperDeepInternal(paper) {
+async function analyzePaperDeepInternal(paper, options = {}) {
     const fullStageReanalysis = require('./lib/selected-full-stage-reanalysis').assertPrepared(paper);
     removeManualAnalysisFields(paper);
     sanitizePaperImageRecovery(paper);
@@ -15918,14 +15918,16 @@ async function analyzePaperDeepInternal(paper) {
                 );
             }
             let changed = false;
-            if (summaryIssue) {
+            const paidCoreReplay = {};
+            if (summaryIssue || options.coreSummaryDiagnosticId !== undefined) {
                 console.log(`    [deep] 🔧 结构检查后，只修复核心摘要这一节：${summaryIssue}`);
                 const fixed = await repairCoreSummarySection(
                     paper,
                     analysis,
                     rawTextForAnalysis,
                     coreSummaryRepairStage.evidenceContext,
-                    { diagnosticStage: coreSummaryRepairStage, reviewFeedback: coreReviewFeedback }
+                    { diagnosticStage: coreSummaryRepairStage, reviewFeedback: coreReviewFeedback,
+                        coreSummaryDiagnosticId: options.coreSummaryDiagnosticId, paidCoreReplay }
                 );
                 changed = fixed !== analysis;
                 analysis = fixed;
@@ -15973,6 +15975,7 @@ async function analyzePaperDeepInternal(paper) {
                 ...(coreSummaryRepairStage.repairRequestPolicy
                     ? { repairRequestPolicy: coreSummaryRepairStage.repairRequestPolicy } : {}),
                 fingerprint: coreSummaryRepairStage.fingerprint,
+                ...(paidCoreReplay.id ? { paidDiagnosticReplay: paidCoreReplay } : {}),
                 ...require('./lib/daily-fact-review').fingerprintFields('coreSummaryRepair')
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
@@ -17559,7 +17562,44 @@ async function repairCoreSummarySection(
         throw contractRejectedError('核心摘要事实反馈尚未绑定当前日更封存来源与正文');
     }
     let issue = getCoreSummaryDetailIssue(original, { sourceText });
-    if (!issue && !externalFeedback) return original;
+    if (!issue && !externalFeedback && options.coreSummaryDiagnosticId === undefined) return original;
+    const diagnosticStage = options.diagnosticStage || {};
+    const diagnosticIdentity = {
+        paperId: getPaperArxivId(paper),
+        sourceIdentity: require('./lib/fresh-analysis-context').freshAnalysisIdentity(getPaperArxivId(paper)),
+        sourceTextSha256: crypto.createHash('sha256').update(String(sourceText)).digest('hex'),
+        inputAnalysisSha256: crypto.createHash('sha256').update(original).digest('hex'),
+        evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
+        stageFingerprint: diagnosticStage.fingerprint || null,
+        maxTokens: TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens,
+        repairRequestPolicy: resolveRepairRequestPolicy('coreSummaryRepair') || null,
+        promptTextContract: diagnosticStage.promptTextContract || currentPromptTextContract('coreSummaryRepair')
+    };
+    const diagnosticPaperId = getPaperArxivId(paper).replace(/v\d+$/, '');
+    if (!/^\d{4}\.\d{4,5}$/.test(diagnosticPaperId)) throw contractRejectedError('摘要修复记录需要规范论文身份');
+    const recordRoot = path.join(require('./config.js').FILES.analysisRepairAttemptsDir, diagnosticPaperId);
+    // 仅复用调用者明确指定的原付费响应，仍运行当前完整摘要与事实检查。
+    if (options.coreSummaryDiagnosticId !== undefined) {
+        try {
+            if (!/^[a-f0-9-]{36}$/.test(String(options.coreSummaryDiagnosticId)))
+                throw contractRejectedError('付费摘要原请求 ID 无效');
+            const saved = require('./lib/reader-request-diagnostics').readCoreSummaryDiagnostic(
+                recordRoot, options.coreSummaryDiagnosticId, diagnosticIdentity);
+            const match = String(saved.response.rawResponse).trim().match(/^##\s*核心摘要[：:\s]*\n([\s\S]+)$/);
+            if (!match || /^#{1,6}\s/m.test(match[1])) throw contractRejectedError('原付费摘要响应结构不合法');
+            const updated = mergeSectionByTitle(original, '核心摘要', match[1]);
+            if (sectionExteriorBytes(updated, '核心摘要') !== originalExterior)
+                throw contractRejectedError('原付费摘要响应改变了其他章节');
+            const issue = getCoreSummaryDetailIssue(updated, { sourceText });
+            if (issue) throw contractRejectedError(`原付费摘要仍未通过当前检查：${issue}`);
+            require('./lib/daily-fact-review').validateRepairedClaims('coreSummaryRepair', match[1], getPaperArxivId(paper));
+            if (options.paidCoreReplay) Object.assign(options.paidCoreReplay, {
+                id: saved.request.id, ...saved.fileSha256, outputTextSha256: saved.response.outputTextSha256,
+                validatorImplementationSha256: crypto.createHash('sha256').update(fs.readFileSync(require.resolve('./analysis-contract'))).digest('hex')
+            });
+            return updated;
+        } catch (error) { error.retryable = false; throw error; }
+    }
     let feedback = [issue, externalFeedback].filter(Boolean).join('\n');
     let candidateSummary = existingSummary;
     const repairCallModel = options.callModelFn || callModel;
@@ -17634,21 +17674,6 @@ async function repairCoreSummarySection(
             textForAnalysis: evidenceContext
         });
         const diagnosticApi = require('./lib/reader-request-diagnostics');
-        const diagnosticStage = options.diagnosticStage || {};
-        const diagnosticIdentity = {
-            paperId: getPaperArxivId(paper),
-            sourceIdentity: require('./lib/fresh-analysis-context').freshAnalysisIdentity(getPaperArxivId(paper)),
-            sourceTextSha256: crypto.createHash('sha256').update(String(sourceText)).digest('hex'),
-            inputAnalysisSha256: crypto.createHash('sha256').update(original).digest('hex'),
-            evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
-            stageFingerprint: diagnosticStage.fingerprint || null,
-            maxTokens: TEXT_RECOVERY_STAGE_CONFIG.coreSummaryRepair.maxTokens,
-            repairRequestPolicy: resolveRepairRequestPolicy('coreSummaryRepair') || null,
-            promptTextContract: diagnosticStage.promptTextContract || currentPromptTextContract('coreSummaryRepair')
-        };
-        const diagnosticPaperId = getPaperArxivId(paper).replace(/v\d+$/, '');
-        if (!/^\d{4}\.\d{4,5}$/.test(diagnosticPaperId)) throw contractRejectedError('摘要修复记录需要规范论文身份');
-        const recordRoot = path.join(require('./config.js').FILES.analysisRepairAttemptsDir, diagnosticPaperId);
         const diagnostic = diagnosticApi.beginCoreSummaryDiagnostic(recordRoot, {
             identity: diagnosticIdentity, attempt, prompt, inputAnalysis: original,
             sourceText, evidenceText: evidenceContext, candidateSummary,

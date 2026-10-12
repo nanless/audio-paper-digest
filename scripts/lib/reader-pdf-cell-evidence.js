@@ -178,15 +178,22 @@ function evidence(table) {
 }
 
 function displayCell(table, row, column) {
-    const original = table?.matrix?.[row]?.[column];
+    const sourceCell = (table?.cells || []).find(cell => Number.isInteger(cell?.row)
+        && Number.isInteger(cell?.column) && row >= cell.row
+        && row < cell.row + Number(cell.rowspan || 1)
+        && column >= cell.column && column < cell.column + Number(cell.colspan || 1));
     const proof = evidence(table);
-    const cell = proof?.confirmedCells.find(cell => cell.row === row && cell.column === column);
+    // 普通表沿用原单元格字节；旧合法记录可能没有matrix，不能变成空白。
+    if (!proof) return sourceCell ? sourceCell.text : table?.matrix?.[row]?.[column];
+    const original = table?.matrix?.[row]?.[column];
+    const cell = proof.confirmedCells.find(cell => cell.row === row && cell.column === column);
     if (!cell) return original;
     if (cell.originalText !== original) throw new Error('PDF逐格确认的原cell文本发生变化');
     return cell.visibleText;
 }
 
 function displayMatrix(table) {
+    if (!evidence(table)) return (table?.matrix || []).map(row => [...row]);
     return (table?.matrix || []).map((row, ri) => row.map((_, ci) => displayCell(table, ri, ci)));
 }
 

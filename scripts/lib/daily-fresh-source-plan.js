@@ -563,7 +563,7 @@ function createDailyAnalyzeFn(plan, options = {}) {
     const analyze = options.analyze || require('../deep-analyzer.js').analyzePaperDeep;
     if (typeof analyze !== 'function') fail('需要每日分析器');
     return async paper => {
-        const result = await withDailyFreshPaperSource(plan, paper, () => analyze(paper), options);
+        const result = await withDailyFreshPaperSource(plan, paper, () => analyze(paper, { coreSummaryDiagnosticId: options.coreSummaryDiagnosticIds?.[normalizedId(paper)] }), options);
         // 来源上下文会在引擎保存输出之前去掉图片字节和路径字段，避免分析器改动后，
         // 默认流程悄悄重建 data/current 下的图片缓存。
         return result;

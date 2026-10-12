@@ -223,6 +223,31 @@ describe('读者中文的精确怪译与检查话术诊断', () => {
         }
     });
 
+    it('实际新稿中的段首写作自述拒绝，作者说明与原文表格仍保留', () => {
+        const leaked = ['表前说明比较问题与公平条件：两种系统用相同输入。',
+            '表后解释结果与限制。主结果和子集结果要分别理解。',
+            '表后解释主要收益与限制：两项指标并不一致。',
+            '表后解释第一组结论：测试只包含同一数据集。',
+            '表后解释需要看两个攻击者的基线差异。',
+            '表后解释要分开看两个系统。'];
+        for (const text of leaked) {
+            for (const prefix of ['', '这里有两项结果。', '\n**']) {
+                const issues = findReaderLanguageIssues(prefix + text);
+                assert.equal(issues.length, 1, prefix + text);
+                assert.equal(issues[0].code, 'reader_workflow_leakage');
+            }
+            assert.deepEqual(findReaderLanguageIssues('> ' + text), []);
+            assert.deepEqual(findReaderLanguageIssues('原文写道：“' + text + '”'), []);
+        }
+        for (const text of ['作者在表后解释结果与限制，并明确只测单个数据集。',
+            '表后解释了两个系统结果不同的原因。',
+            '表前说明了比较问题与公平条件：两组使用相同输入。',
+            '| 原文标题 | 结果 |\n| --- | --- |\n| 表后解释结果与限制。 | 12 |',
+            '`表后解释需要看两个攻击者的基线差异。`']) {
+            assert.deepEqual(findReaderLanguageIssues(text), [], text);
+        }
+    });
+
     it('最终实测的照抄写作指令拒绝，直接解释概念通过', () => {
         const leaked = '这里的分数若指对数密度对输入的梯度，要说明它不是质量评分。';
         assert.equal(findReaderLanguageIssues(leaked)[0].code, 'reader_workflow_leakage');

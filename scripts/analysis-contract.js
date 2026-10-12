@@ -1434,11 +1434,18 @@ function hasConcreteUnnumberedMethodChain(summary) {
         ['label', /词级标签|音素标签|类别标签|数字标签/gu, /(?:词级|音素|类别|数字|这些)?标签/gu]
     ];
     const operation = /(?:维护|保持|提取|拾取|编码|解码|合成|生成|预测|输出|判决|做整句平均判决)/u;
-    const excluded = /(?:并非|并未|没有|不能|不会|尚未|未曾|不再|不负责|不用于|假设|设想|假定|如果|若|可能|计划|未来|拟采用|建议|应当|应该|对比|比较|相比|优于|胜过|另一(?:种|套)|独立方法)|(?:不|未)(?:被|能|曾|直接|实际|真正|也|只|还|再|会)*\s*(?:维护|保持|提取|拾取|编码|解码|合成|生成|预测|输出|判决|送入|传递)/u;
+    const excluded = /(?:并非|并未|没有|不能|不会|尚未|未曾|不再|不负责|不用于|假设|设想|假定|如果|若|可能|计划|未来|拟采用|建议|应当|应该|对比|比较|相比|优于|胜过|另一(?:种|套)|独立方法)|(?:不|未)(?:被|能|曾|直接|实际|真正|也|只|还|再|会)*\s*(?:维护|保持|提取|拾取|编码|解码|合成|生成|预测|输出|判决|送入|传递|映射|注入|缩放)/u;
     for (const raw of String(summary || '').split(/[。！？!?；;\n]/u)) {
         // 括注内的英文逗号不能把模块名与它的中文动作拆开。
         const sentence = raw.replace(/（[^）]*）|\([^)]*\)/gu, '');
         if (excluded.test(sentence)) continue;
+        // 半径条件先被编码为明确表示，再由该表示控制相邻时频块的输入。
+        // 只有产物和实际交接同时出现才接受；提及模块或动作列表不能充数。
+        const radiusProduct = sentence.match(/半径编码器[^，,。；]{0,32}映射(?:为|成|到)频率相关表示/u);
+        if (radiusProduct) {
+            const following = sentence.slice(radiusProduct.index + radiusProduct[0].length);
+            if (/(?:该|此|频率相关)表示经(?:特征调制|FiLM)[^，,。；]{0,100}(?:注入[^，,。；]{0,40}块间传递|上一块输出[^，,。；]{0,40}下一块输入)/u.test(following)) return true;
+        }
         const clauses = sentence.split(/[，,]/u);
         const stages = [];
         for (let index = 0; index < clauses.length; index++) {
@@ -1480,34 +1487,44 @@ function hasConcreteUnnumberedMethodChain(summary) {
 // 只认相邻两句内的具体产物交接，不以动作数量或跨段落共现替代处理链。
 function hasAdjacentConcreteMethodChain(summary) {
     const sentences = String(summary || '').split(/[。！？!?；;\n]/u).map(s => s.trim()).filter(Boolean);
-    const excluded = /(?:并非|并未|没有|不能|不会|尚未|不再|不负责|(?:未|不)(?:以|把|将|使用)|未曾|未被|未曾被|提及输出|讨论输出|(?:未|不)(?:曾|实际|直接)?(?:输出|提取|生成|接收|选择|建立|更新|存入|处理)|假设|设想|假定|如果|若|可能|预计|预期|计划|准备(?:输出|生成|接收)|未来(?:将|会)|拟采用|建议|应当|应该|对比(?:方法|模型|网络|滤波器)|比较(?:方法|模型|网络|滤波器)|相比|优于|另一(?:种|套)|独立方法)/u;
+    const excluded = /(?:并非|并未|没有|不能|不会|尚未|不再|不负责|(?:未|不)(?:以|把|将|使用)|未曾|未被|未曾被|提及输出|讨论输出|(?:未|不)(?:曾|实际|直接)?(?:输出|提取|生成|接收|选择|建立|更新|存入|处理|映射|注入|缩放)|假设|设想|假定|如果|若|可能|预计|预期|计划|准备(?:输出|生成|接收)|未来(?:将|会)|拟采用|建议|应当|应该|对比(?:方法|模型|网络|滤波器)|比较(?:方法|模型|网络|滤波器)|相比|优于|另一(?:种|套)|独立方法)/u;
     const roles = [
         ['filter', /滤波器/u], ['network', /网络|变换器/u], ['tracker', /跟踪器/u],
+        ['expert', /[\u4e00-\u9fff]{1,8}专家/u],
+        ['encoder', /半径编码器/u], ['conditioning', /特征调制|FiLM/u],
         ['pool', /候选(?:说话人|程序)?池/u], ['predictor', /预测器/u],
         ['interface', /搜索接口/u], ['backbone', /主干/u], ['selection', /散度目标|来源收集/u],
         ['vocabulary', /词表/u], ['retention', /置信保留/u], ['editing', /人工编辑/u],
         ['checking', /二次检查/u], ['refinement', /精炼器/u]
     ];
     const products = [
-        /误差信号/gu, /嵌入/gu, /质心/gu, /候选(?:说话人)?池/gu,
+        /误差信号/gu, /(?:频率相关表示|该表示)/gu, /质量分/gu, /嵌入/gu, /质心/gu, /候选(?:说话人)?池/gu,
         /候选(?:只读搜索)?请求/gu, /草稿/gu, /提示句池/gu,
         /可朗读句(?:子)?/gu, /父程序/gu, /子程序/gu, /语料(?:文本)?/gu
     ];
     const actor = sentence => roles.map(([kind, pattern]) => ({ kind, match: pattern.exec(sentence) }))
-        .filter(item => item.match).sort((a,b) => a.match.index - b.match.index)[0]?.kind;
-    const canonical = token => token.replace('候选说话人池', '候选池')
+        .filter(item => item.match).sort((a,b) => a.match.index - b.match.index)
+        .map(item => item.kind === 'expert' ? `expert:${item.match[0]}` : item.kind)[0];
+    const canonical = token => token.replace('该表示', '频率相关表示').replace('候选说话人池', '候选池')
         .replace('候选只读搜索请求', '候选请求').replace('可朗读句子', '可朗读句').replace('语料文本', '语料');
     for (let i = 0; i + 1 < sentences.length; i++) {
         const first = sentences[i], second = sentences[i+1];
         if (first.length > 320 || second.length > 320 || excluded.test(first) || excluded.test(second) || /^未来/u.test(first) || /^未来/u.test(second)) continue;
         const firstActor = actor(first), secondActor = actor(second);
         if (!firstActor || !secondActor || firstActor === secondActor) continue;
-        if (!/(?:提取|更新|建立|生成|输出|得到|选择|选出|送入|合并|存入)/u.test(first)
-            || !/(?:接收|输入|送入|进入|切分|聚集|提取|改写|处理|播放|截取|更新|建立|扩展)/u.test(second)) continue;
+        if (!/(?:提取|更新|建立|生成|输出|得到|选择|选出|送入|合并|存入|映射)/u.test(first)
+            || !/(?:接收|输入|送入|进入|切分|聚集|提取|改写|处理|播放|截取|更新|建立|扩展|拼接|融合|注入|缩放)/u.test(second)) continue;
         for (const pattern of products) {
             pattern.lastIndex = 0;
             for (const match of first.matchAll(pattern)) {
                 const token = canonical(match[0]);
+                if (token === '频率相关表示') {
+                    if (firstActor === 'encoder' && secondActor === 'conditioning'
+                        && /半径编码器[^，,。；]{0,32}映射(?:为|成|到)频率相关表示/u.test(first)
+                        && /(?:该|此|频率相关)表示经(?:特征调制|FiLM)[^，,。；]{0,100}(?:注入[^，,。；]{0,40}块间传递|上一块输出[^，,。；]{0,40}下一块输入)/u.test(second)) return true;
+                    continue;
+                }
+
                 const firstClauses = first.split(/[，,]/u);
                 let startOffset = 0;
                 const clauseIndex = firstClauses.findIndex(clause => {
@@ -1517,6 +1534,7 @@ function hasAdjacentConcreteMethodChain(summary) {
                 });
                 const productionClause = firstClauses[clauseIndex];
                 if (!productionClause) continue;
+                if (token === '质量分' && !/(?:输出|得到|生成|计算|预测|给出)(?:对应的|单曲的|歌曲的|一个)?质量分/u.test(productionClause)) continue;
                 const localIndex = productionClause.indexOf(match[0]);
                 const before = productionClause.slice(0, localIndex);
                 if (!/(?:提取|更新|建立|生成|输出|得到|选择|选出|送入|合并|存入)[^。；]{0,60}$/u.test(before)) continue;
@@ -1533,11 +1551,20 @@ function hasAdjacentConcreteMethodChain(summary) {
                 const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 const consumes = new RegExp(`(?:接收)(?:这些|该)?${escaped}`
                     + `|以[^。；]{0,70}${escaped}[^。；]{0,30}为输入`
-                    + `|${escaped}[^。；]{0,70}(?:进入|送入|用于[^。；]{0,30}(?:扩展|检查))`, 'u');
+                    + `|${escaped}[^。；]{0,70}(?:进入|送入|用于[^。；]{0,30}(?:扩展|检查))`
+                    + (token === '质量分' && firstActor.startsWith('expert:') && secondActor.startsWith('expert:')
+                        ? `|以(?:上一步|该|这些)?${escaped}为(?:基础|输入|依据)` : ''), 'u');
                 const containerConsumes = token === '候选池'
                     && /^候选池把[^。；]{0,50}(?:嵌入|来源)[^。；]{0,30}(?:存放|聚集)/u.test(normalizedSecond.split(/[，,]/u)[0]);
                 const ownedConsumption = normalizedSecond.split(/[，,]/u).some(clause =>
                     actor(clause) === secondActor && consumes.test(clause));
+                if (ownedConsumption && token === '质量分' && secondActor.startsWith('expert:')) {
+                    const clauses = normalizedSecond.split(/[，,]/u);
+                    const hasOwnedFusion = clauses.some((clause, index) =>
+                        /(?:拼接|融合|校准)/u.test(clause)
+                        && (actor(clause) || clauses.slice(Math.max(0, index - 3), index).map(actor).filter(Boolean).at(-1)) === secondActor);
+                    if (!hasOwnedFusion) continue;
+                }
                 if (ownedConsumption || containerConsumes) return true;
             }
         }

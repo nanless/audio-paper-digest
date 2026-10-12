@@ -60,7 +60,9 @@ test('历史版本信息进入日更分析和结果，两条来源证明保持�
     assert.deepEqual(source.sourceVersion, runtime.sourceVersion);
 
     const analyze = daily.createDailyAnalyzeFn(plan, {
-        analyze: async paper => {
+        coreSummaryDiagnosticIds: { [id]: "d9077527-0d59-4d92-8d0c-0e3d7b10007f" },
+        analyze: async (paper, options) => {
+            assert.equal(options.coreSummaryDiagnosticId, "d9077527-0d59-4d92-8d0c-0e3d7b10007f");
             const directSource = direct.getDirectRewriteSource(paper);
             assert.deepEqual(paper.sourceVersion, runtime.sourceVersion);
             assert.deepEqual(directSource.sourceVersion, runtime.sourceVersion);

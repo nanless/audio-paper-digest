@@ -357,3 +357,68 @@ test('签名完整成功样本退出作用域仍合格，同run公共再次进�
     assert.equal(calls.length, 0);
     assert.deepEqual(JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers, [completed, sample.other]);
 });
+
+test('正常指定论文付费摘要入口逐层传明确ID且保原稿，未选论文不变', async t => {
+    const sample = await createSample(t);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'paid-core-selected-'));
+    const keys = ['deepAnalysisResult', 'papers', 'papersLegacy', 'runtimeDir'];
+    const previous = Object.fromEntries(keys.map(key => [key, Config.FILES[key]]));
+    const retries = Config.ANALYSIS_CONFIG.maxRetries;
+    t.after(() => { Object.assign(Config.FILES, previous); Config.ANALYSIS_CONFIG.maxRetries = retries; fs.rmSync(root, { recursive: true, force: true }); });
+    for (const key of keys) Config.FILES[key] = path.join(root, key + '.json');
+    Config.ANALYSIS_CONFIG.maxRetries = 1;
+    fs.writeFileSync(Config.FILES.papers, JSON.stringify({ papers: [] }));
+    fs.writeFileSync(Config.FILES.papersLegacy, JSON.stringify({ papers: [] }));
+    const input = { batchDate: sample.plan.batchDate, dailyFreshSourceRun: daily.dailyFreshSourceReference(sample.plan), papers: [sample.paper, sample.other] };
+    fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify(input));
+    const id = 'd9077527-0d59-4d92-8d0c-0e3d7b10007f'; let seen = 0;
+    const spy = t.mock.method(deep, 'analyzePaperDeep', async (paper, options) => {
+        seen++; assert.equal(options.coreSummaryDiagnosticId, id);
+        assert.equal(fresh.getFreshAnalysisContext().refreshReaderDiagnostics, true);
+        assert.equal(paper.analysis, sample.paper.analysis);
+        assert.deepEqual(paper.apiReaderPlan, sample.paper.apiReaderPlan);
+        assert.deepEqual(paper.analysisManifest.stages.apiReaderArticle, sample.paper.analysisManifest.stages.apiReaderArticle);
+        const error = new Error('测试只验证正常公开参数链，无模型请求'); error.retryable = false; throw error;
+    });
+    const modulePath = require.resolve('../scripts/reanalyze-selected');
+    delete require.cache[modulePath];
+    const selected = require(modulePath);
+    await selected.reanalyzeSelected([sample.id], { refreshReaderDiagnostics: true, coreSummaryDiagnosticIds: { [sample.id]: id } });
+    spy.mock.restore();
+    assert.equal(seen, 1);
+    await assert.rejects(selected.reanalyzeSelected([sample.id], { refreshReaderDiagnostics: 'true' }), /必须为布尔值/);
+    assert.deepEqual(JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[1], sample.other);
+    await assert.rejects(selected.reanalyzeSelected([sample.id], { coreSummaryDiagnosticIds: { [sample.other.arxivId.replace(/v\d+$/, '')]: id } }), /本次选定论文/);
+    let continued;
+    await inScope(sample, () => engine.withPaperAnalysisLock(sample.paper, () => facts.withFactReview(sample.bound, () => {
+        continued = policy.preparePaperLocked(sample.paper);
+        const record = continued.fullStageReanalysis, history = continued.fullStageReanalysisHistory;
+        Object.assign(continued, structuredClone(sample.paper));
+        continued.fullStageReanalysis = record; continued.fullStageReanalysisHistory = history;
+        deep.markRecoveryStage(continued.analysisManifest, 'primaryAnalysis', 'complete', { fingerprint: '测试本轮已付费主阶段' });
+    })));
+    const history = structuredClone(continued.fullStageReanalysisHistory);
+    fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify({ ...input, papers: [continued, sample.other] }));
+    const feedbackFile = path.join(root, 'feedback.json'); fs.writeFileSync(feedbackFile, JSON.stringify(sample.feedback));
+    let sameRun = 0;
+    const sameRunSpy = t.mock.method(deep, 'analyzePaperDeep', async (paper, callOptions) => {
+        sameRun++; assert.equal(callOptions.coreSummaryDiagnosticId, id);
+        assert.deepEqual(paper.fullStageReanalysisHistory, history);
+        assert.equal(paper.analysisManifest.stages.primaryAnalysis.fingerprint, '测试本轮已付费主阶段');
+        policy.assertPrepared(paper);
+        fresh.withFreshPaperContext(paper, () => {
+        const manifest = structuredClone(paper.analysisManifest);
+        for (const stage of ['coreSummaryRepair', 'scoringAudit', 'apiReaderArticle']) {
+            deep.markRecoveryStage(manifest, stage, 'complete');
+            assert.equal(manifest.stages[stage].fullStageReanalysisRunId, options(sample).runId);
+        }
+        });
+        const error = new Error('同轮真实作用域及正常stage stamp检查后停止'); error.retryable = false; throw error;
+    });
+    await selected.reanalyzeSelected([sample.id], { fullStageReanalysis: options(sample), feedbackFiles: [feedbackFile], coreSummaryDiagnosticIds: { [sample.id]: id } });
+    sameRunSpy.mock.restore(); assert.equal(sameRun, 1);
+    const retained = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult));
+    assert.deepEqual(retained.papers[0].fullStageReanalysisHistory, history);
+    assert.deepEqual(retained.papers[1], sample.other);
+
+});
