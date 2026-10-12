@@ -249,7 +249,13 @@ describe('当前读者文章的视觉任务来源检查', () => {
     }));
 
     it('即使重新计算校验信息，章节不符、私网或其他论文的图片地址以及任意缓存路径仍被拒绝', () => withReader((reader, sign) => {
-        for (const mutate of [
+        const expectedErrors = [
+            'Reader 配图所用正文的章节标题或顺序与已保存计划不一致',
+            'Reader 视觉原图 URL/ordinal/DOM/SHA 身份非法',
+            'Reader 视觉原图 URL/ordinal/DOM/SHA 身份非法',
+            'Reader 视觉原图缓存路径不受控'
+        ];
+        for (const [index, mutate] of [
             p => { p.apiReaderPlan.sections[0].heading += 'drift'; },
             p => {
                 const previousUrl = p.apiReaderFigures[0].url;
@@ -262,11 +268,11 @@ describe('当前读者文章的视觉任务来源检查', () => {
                 p.apiReaderArticle = p.apiReaderArticle.replace(`](${previousUrl})`, `](${p.apiReaderFigures[0].url})`);
             },
             p => { p.apiReaderFigures[0].cachePath = '/private/tmp/arbitrary.png'; }
-        ]) {
+        ].entries()) {
             const bad = structuredClone(reader); mutate(bad); sign(bad);
             assert.equal(require('../scripts/analysis-engine').hasValidApiReaderV3Records(bad), true);
             const before = JSON.stringify(bad);
-            assert.throws(() => buildGenerationContext(bad), /Reader/);
+            assert.throws(() => buildGenerationContext(bad), { message: expectedErrors[index] });
             assert.equal(JSON.stringify(bad), before);
         }
     }));
