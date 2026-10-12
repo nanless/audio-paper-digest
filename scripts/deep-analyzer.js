@@ -7332,6 +7332,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-inline-svg.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-resource-binding.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/explicit-reader-retry-round.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-parent-recovery.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_inline_svg.py'), 'utf8')
         ].join('\0')),
         readerRecoveryEpochSha256: repair.shaText(READER_RECOVERY_EPOCH),

@@ -124,6 +124,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/primary-fact-local-repair.js` | Node 库 | 为来源绑定的主文事实纠错限定唯一原段落，严格核验 JSON 的 from/to、原稿 SHA 和修改范围；未授权正文逐字保留，完整正文与评分检查仍由正常分析入口执行。 |
 | `lib/scoring-third-party-resource-replay.js` | Node 库 | 精确回放原评分输入，仅第三方依赖可达状态抖动时保留原付费评分与审计时正文；作者资源变化仍正常重审。 |
 | `lib/explicit-reader-retry-round.js` | Node 库 | 为已核验且用完原有额度的失败长文执行明确的新一轮重试，核对论文锁、四份封存来源、实际输入和原稿 SHA；完整保留旧稿与旧次数，发送请求前登记新轮费用预算。重复运行只接续剩余额度，不授予发布资格。 |
+| `lib/reader-parent-recovery.js` | Node 库 | 为已付费失败稿规划有累计上限的后续修复，核对每轮原稿、费用和父回执；公开诊断准备只允许实现变化，保留旧账，不自动添加请求额度。 |
 | `lib/reader-request-diagnostics.js` | Node 库 | 在 Reader 修复付费请求前保存当前草稿、准确 SHA、允许修改的内容与提示词，响应后保留原文和请求关联 SHA；逐次记录不可覆写，写入失败停止，不授予正文或发布资格。 |
 | `lib/reader-inline-svg.js` | Node 库 | 核对官方内嵌 SVG 的原始字节和来源定位，调用受控渲染器生成本次阅读所需图片。 |
 | `reader_inline_svg.py` | Python 共享 | 校验内嵌 SVG 的元素、属性和本地引用，在禁用脚本与网络的浏览器中渲染 PNG，供阅读和发布共用。 |
@@ -257,7 +258,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `tag_paths.py` | 集中定义标签词表及私有预览路径，按显式参数、环境变量和默认目录依次选择博客路径；目录存在与仓库身份由调用方另行检查。 |
 | `build-tag-preview.py` | 根据历史页面元数据生成私有标签索引、旧标签处理表和待评审报告，不改写博客。按名称或别名作字面对照；七种处理状态和证据要求见本页的分类词表维护说明。 |
 | `deep-analysis-only.js` | 只读取当前 `dailyFreshSourceRun` 的封存 PDF/TXT，继续分析筛选已完成但分析未完成的论文。来源缺失或不匹配时停止，不抓取，也不读取旧缓存。 |
-| `batch-analyze.js` | 正常读取完整封存日更来源并逐篇锁内续跑；可重复 `--fact-feedback-file FILE`。`--refresh-reader-diagnostics` 保留原草稿与调用次数。明确有预算重试须同时提供 `--retry-failed-readers --reader-retry-manifest FILE`，或程序传入 `main({ readerRetryManifestPath: FILE, refreshReaderDiagnostics: true })`；只处理清单中同输入且耗尽的失败稿，旧稿与费用保留，新轮最多3次已保存尝试/1次已保存完整重写/6实际请求/80k预留输出。无清单、坏绑定、仍有次数或成功稿拒绝。见 [恢复说明](../docs/reader-explicit-retry.md)。 |
+| `batch-analyze.js` | 正常读取完整封存日更来源并逐篇锁内续跑；可重复 `--fact-feedback-file FILE`。`--refresh-reader-diagnostics` 保留原草稿与调用次数。明确有预算重试须同时提供 `--retry-failed-readers --reader-retry-manifest FILE`，或程序传入 `main({ readerRetryManifestPath: FILE, refreshReaderDiagnostics: true })`；只处理清单中同输入且耗尽的失败稿，旧稿与费用保留，初次明确付费轮最多3次已保存尝试/1次已保存完整重写/6实际请求/80k预留输出；后续局部或缺正文恢复使用单独的有界追加清单，原账和累计上限继续核验。无清单、坏绑定、仍有次数或成功稿拒绝。见 [恢复说明](../docs/reader-explicit-retry.md)。 |
 | `reanalyze.js` | 归档并停用全部旧失败 Reader 候选，清空 Reader 和图片补充状态后强制全量重分析。仍只读取正式分析结果精确绑定的日更 PDF/TXT，不恢复旧分析、正文或缓存。 |
 | `reanalyze-selected.js` | 只重分析指定 arXiv ID，并同步恢复统计。 |
 | `refresh-api-reader.js` | 刷新指定论文或日期批次的 Reader、评分、作者和图片阶段。只读取封存 PDF/TXT；图片只为本次调用在系统临时目录中准备。 |
