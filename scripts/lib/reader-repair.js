@@ -1159,7 +1159,16 @@ function collectTableBindingIssues(draft, options = {}) {
                 add(index, 'selection 只含 sourceTableOrdinal/sourceRows/sourceColumns，不能混入 sourceType/cellBindings/sourceQuotes');
             } else if (options.structuredArtifacts) {
                 try { renderReaderTableSelection(binding, options.structuredArtifacts); }
-                catch (error) { add(index, error.message); }
+                catch (error) {
+                    const noDomTables = Array.isArray(options.structuredArtifacts.tables)
+                        && options.structuredArtifacts.tables.length === 0;
+                    add(index, error.message + (noDomTables
+                        ? '。本次没有 DOM 原表，旧 sourceTableOrdinal 不能重放；不能继续提交 selection 或 completeTable。'
+                            + '只有对应来源记录和正文都获本轮授权时，才可改成 source_quotes 与标准 Markdown 表；'
+                            + 'sourceTableOrdinal 必须为 null，cellBindings 必须为空数组，'
+                            + '每个数字和单位仍须由全文连续原句逐字支持，不能编表格坐标或来源。'
+                        : ''));
+                }
             }
             const marker = `[[TABLE_${binding.tableIndex}]]`;
             const occurrences = draft.sections.reduce((count, section) => count
@@ -2072,6 +2081,27 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
         ? `以下是允许修改的小节里已有的其他表格标记，其来源记录本轮不可修改：${JSON.stringify(protectedTableMarkers)}。`
             + '这些标记须原样保留且仍各出现一次，不能改成手写 Markdown 表，也不能因本次修复其他表而删除。这个只读说明不增加允许修改的路径。'
         : '';
+    const noDomTableGuidance = [];
+    if (Array.isArray(options.structuredArtifacts?.tables) && options.structuredArtifacts.tables.length === 0) {
+        for (const [index, binding] of (draft.tableBindings || []).entries()) {
+            const bindingPath = `/tableBindings/${index}`;
+            if (!binding?.selection || !Number.isInteger(binding.tableIndex)
+                || !targets.some(target => target.path === bindingPath)) continue;
+            const marker = `[[TABLE_${binding.tableIndex}]]`;
+            const locations = draft.sections.flatMap((section, sectionIndex) =>
+                String(section.body || '').includes(marker) ? [sectionIndex] : []);
+            if (locations.length !== 1) continue;
+            const bodyPath = `/sections/${locations[0]}/body`;
+            const body = String(draft.sections[locations[0]].body || '');
+            if (!targets.some(target => target.path === bodyPath) || body.split(marker).length !== 2
+                || !body.split(/\n\s*\n/).some(block => block.trim() === marker)) continue;
+            noDomTableGuidance.push(`本次 TABLE_ORDINALS_AVAILABLE 为空，旧稿中的 selection 只是待修错误，不能作为来源。`
+                + `在已授权 ${bindingPath} 与 ${bodyPath} 内，用全文连续原句支持的标准 Markdown 表替换 ${marker}，`
+                + '对应记录改为 source_quotes（sourceTableOrdinal:null、cellBindings:[]、sourceQuotes 为逐字连续原句数组）。'
+                + '不得回传旧 selection、改用 completeTable、编造 DOM 或增加未经授权路径；'
+                + '保留表前问题、表后解释、正确事实和数字单位，仍由完整解析器检查每格来源。');
+        }
+    }
     const targetGuidance = (atomicOperation?.kind === 'select_observed_figures_v1'
         ? '本轮特别允许figurePlacements缩为1–4条本次已见像素的原声明，其余数组数量不变。必须同步按来源改写全部授权小节，保留必要事实及表格公式术语标记；不得机械删图丢弃解释。' : '')
         + (atomicOperation?.kind === 'cleanup_unavailable_figures_v1'
@@ -2079,7 +2109,7 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
         + (atomicOperation?.kind === 'reorganize_existing_sections_v1'
         ? '本轮明确授权整组小节重排，只提交/sections完整数组；其他顶层信息与全部来源记录逐字保留。不能据此删除图表、公式或正确事实；重排后仍须通过完整解析与来源检查。' : '')
         + `本轮只允许修改这些目标：${JSON.stringify(targets.map(target => target.path))}。`
-        + '下面的诊断可能列出其他已发现问题，列出问题不代表授权修改。只提交本轮允许目标，逐项使用请求给出的真实 oldSha256；其余问题留待下一轮重新核验并授权，不要为未授权目标编造 SHA。' + formulaAppendGuidance + markerGuidance;
+        + '下面的诊断可能列出其他已发现问题，列出问题不代表授权修改。只提交本轮允许目标，逐项使用请求给出的真实 oldSha256；其余问题留待下一轮重新核验并授权，不要为未授权目标编造 SHA。' + formulaAppendGuidance + markerGuidance + noDomTableGuidance.join('\n');
     return { draftSha256: hashDraft(draft), targets, issues, evidence, atomicOperation, targetGuidance,
         exactQuotes, figureOrdinals: [...figureOrdinals], evidenceMode: 'full-evidence-local-output' };
 }
