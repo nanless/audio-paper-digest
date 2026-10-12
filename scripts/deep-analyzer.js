@@ -1064,7 +1064,11 @@ async function auditTypeAwareScoringDetailed(analysis, sourceEvidence = '', opti
             console.log(`    [deep] ⚠️  评分审计结构校验失败 (${attempt}/3): ${error.message}`);
         }
     }
-    throw lastError || new Error('评分审计失败');
+    const exhausted = lastError || new Error('评分审计失败');
+    // 三次内容修复已经用尽，整篇重试不能再从相同输入重开评分。
+    // 请求错误在上方直接抛出，仍沿用原网络重试策略。
+    exhausted.retryable = false;
+    throw exhausted;
 }
 
 async function auditTypeAwareScoring(analysis, sourceEvidence = '', options = {}) {
