@@ -2878,7 +2878,7 @@ function isReaderHeadingIssue(issue, article) {
     return /^###\s+/.test(line) && line.includes(String(issue.match || '').trim());
 }
 
-function demoteReaderBodySectionHeadings(body) {
+function transformReaderThirdLevelHeadings(body, transform) {
     let fence = null;
     let quoted = false;
     return String(body).split('\n').map(line => {
@@ -2892,16 +2892,21 @@ function demoteReaderBodySectionHeadings(body) {
             fence = { character: boundary[1][0], length: boundary[1].length };
             return line;
         }
-        if (!line.trim()) quoted = false;
+        // 无引用符的 ATX 标题会结束引用段落，不属于引用的续行。
+        if (!line.trim() || /^ {0,3}#{1,6}(?=[ \t]+\S)/.test(line)) quoted = false;
         if (/^ {0,3}>/.test(line)) quoted = true;
         if (quoted || /^(?: {4}|\t)/.test(line)) return line;
-        return line.replace(/^( {0,3})###(?=[ \t]+\S)/, '$1####');
+        return /^ {0,3}###(?=[ \t]+\S)/.test(line) ? transform(line) : line;
     }).join('\n');
+}
+
+function demoteReaderBodySectionHeadings(body) {
+    return transformReaderThirdLevelHeadings(body, line => line.replace(/^( {0,3})###/, '$1####'));
 }
 
 function restoreReaderSectionHeadings(article, sections) {
     let index = 0;
-    return String(article || '').replace(/^###\s+.+?\s*$/gm, () => {
+    return transformReaderThirdLevelHeadings(String(article || ''), () => {
         const heading = sections[index]?.heading;
         index += 1;
         return heading ? `### ${heading.trim()}` : '';
@@ -17846,6 +17851,7 @@ module.exports = {
     splitReaderLongParagraphs,
     normalizeReaderProseFormatting,
     demoteReaderBodySectionHeadings,
+    restoreReaderSectionHeadings,
     normalizeApiReaderFigureMarkdown,
     normalizeReaderFigureMetricUnits,
     repairApiReaderArticleAndPlanBindings,

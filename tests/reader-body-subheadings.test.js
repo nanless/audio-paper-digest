@@ -12,7 +12,7 @@ test('正文三级子标题只降一级，所有文字、空白和图标记保�
 });
 
 test('代码围栏、缩进代码与引用中的标题字节不改', () => {
-    const protectedBody = '```markdown\n### 代码标题\n```\n\n~~~\n### 波浪围栏标题\n~~~\n\n    ### 缩进代码\n\t### 制表符代码\n\n> 引用开始\n### 引用续行\n> ### 引用标题\n\n普通正文。';
+    const protectedBody = '```markdown\n### 代码标题\n```\n\n~~~\n### 波浪围栏标题\n~~~\n\n    ### 缩进代码\n\t### 制表符代码\n\n> 引用开始\n引用续行正文\n> ### 引用标题\n\n普通正文。';
     assert.equal(demoteReaderBodySectionHeadings(protectedBody), protectedBody);
 });
 
