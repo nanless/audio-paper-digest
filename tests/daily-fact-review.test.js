@@ -432,7 +432,7 @@ test('主分析反馈独立绑定配方，正常失效全下游且完整保留�
 });
 
 
-test('正常封存来源主分析真实HTTP请求带绑定纠错，旧成功checkpoint不可复用，失败保留原付费档',async t=>{
+test('正常封存来源局部主文请求拒绝整篇输出并保留原付费档',async t=>{
  const http=require('node:http'),cp=require('node:child_process');const bodies=[];
  const server=http.createServer((req,res)=>{let input='';req.on('data',c=>input+=c);req.on('end',()=>{bodies.push(JSON.parse(input));res.setHeader('content-type','application/json');res.end(JSON.stringify({choices:[{message:{content:original},finish_reason:'stop'}]}));});});
  await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
@@ -441,13 +441,41 @@ test('正常封存来源主分析真实HTTP请求带绑定纠错，旧成功chec
  fs.symlinkSync(path.resolve(__dirname,'../node_modules'),path.join(folder,'node_modules'),'dir');
  fs.writeFileSync(path.join(folder,'.env'),`PAPER_ANALYZER_API_KEY=synthetic-local-only\nPAPER_ANALYZER_MODEL=ci-test-model\nPAPER_ANALYZER_ENDPOINT=http://127.0.0.1:${server.address().port}/v1\n`,{mode:0o600});
  const prefix=fs.readFileSync(__filename,'utf8').split("test('只读反馈严格绑定")[0].replace("imageInfos:[],structuredArtifacts:artifacts", "imageInfos:[{url:'https://example.invalid/synthetic-test.png'}],structuredArtifacts:artifacts");
- const program=prefix+`
-(async()=>{const f=await fixture({after:()=>{}});Object.assign(f.paper.analysisManifest.sourceAcquisition,{usedTextSha256:review.sha(sourceText),sourceId:ID,analysisSource:'html'});f.feedback.coreFeedback='';f.feedback.readerFeedback='';f.feedback.rejectedCoreClaims=[];f.feedback.rejectedReaderClaims=[];f.feedback.primaryFeedback='旧一轮主分析事实反馈。';f.feedback.rejectedPrimaryClaims=[wrong];const oldBound=review.validateFeedback(f.feedback,f.plan,f.paper);f.paper.analysisManifest.stages.primaryAnalysis.factReview=oldBound.proof;review.withFactReview(oldBound,()=>deep.captureStaleAnalysisSnapshot(f.paper,f.paper.analysisManifest,'primaryAnalysis',oldBound.proof.feedbackSha256));f.feedback.primaryFeedback='主分析重生成全部13节：蒸馏使用MSE，实验中的旧余弦说明必须纠正。';f.feedback.rejectedPrimaryClaims=[wrong];const bound=review.validateFeedback(f.feedback,f.plan,f.paper);const result=await daily.withDailyFreshAnalysisContext(f.plan,()=>daily.createDailyAnalyzeFn(f.plan,{analyze:paper=>review.withFactReview(bound,()=>deep.analyzePaperDeep(paper))})(f.paper));assert.equal(result.analysis,null);assert.match(result.error,/仍包含/);assert.equal(result.analysisManifest.stages.primaryAnalysis.status,'transient_failure');assert.deepEqual(result.analysisManifest.stages.primaryAnalysis.factReview,bound.proof);assert.ok(result.analysisStaleSnapshots.some(x=>deep.validateStaleAnalysisSnapshot(x)?.analysisCheckpoint===original));assert.ok(review.validateFeedback(f.feedback,f.plan,result));const noFeedback=structuredClone(result);await assert.rejects(daily.withDailyFreshAnalysisContext(f.plan,()=>daily.createDailyAnalyzeFn(f.plan)(noFeedback)),/须重新提供同一份受控反馈/);console.log('NORMAL_PRIMARY_HTTP_NEGATIVE_CONFIRMED');fs.rmSync(f.root,{recursive:true,force:true});})().catch(e=>{console.error(e);process.exitCode=1;});`;
+ const localPrefix=prefix.replace("baseline.replace('## 核心摘要\\n', `## 核心摘要\\n${wrong}`)",
+     "baseline.replace('## 实验结果\\n', `## 实验结果\\n${wrong}\\n\\n`)");
+ const program=localPrefix+`
+(async () => {
+ const sample = await fixture({ after() {} });
+ Object.assign(sample.paper.analysisManifest.sourceAcquisition, { usedTextSha256: review.sha(sourceText), sourceId: ID, analysisSource: 'html' });
+ sample.feedback.coreFeedback = '';
+ sample.feedback.readerFeedback = '';
+ sample.feedback.rejectedCoreClaims = [];
+ sample.feedback.rejectedReaderClaims = [];
+ sample.feedback.primaryFeedback = '旧一轮主分析事实反馈。';
+ sample.feedback.rejectedPrimaryClaims = [wrong];
+ const oldBound = review.validateFeedback(sample.feedback, sample.plan, sample.paper);
+ sample.paper.analysisManifest.stages.primaryAnalysis.factReview = oldBound.proof;
+ review.withFactReview(oldBound, () => deep.captureStaleAnalysisSnapshot(sample.paper, sample.paper.analysisManifest, 'primaryAnalysis', oldBound.proof.feedbackSha256));
+ sample.feedback.primaryFeedback = '主分析重生成全部13节：蒸馏使用MSE，实验中的旧余弦说明必须纠正。';
+ const bound = review.validateFeedback(sample.feedback, sample.plan, sample.paper);
+ await assert.rejects(daily.withDailyFreshAnalysisContext(sample.plan, () => daily.createDailyAnalyzeFn(sample.plan, {
+     analyze: paper => review.withFactReview(bound, () => deep.analyzePaperDeep(paper))
+ })(sample.paper)), /完整JSON/);
+ assert.equal(sample.paper.analysisCheckpoint, original);
+ assert.equal(sample.paper.analysisManifest.stages.primaryAnalysis.status, 'contract_rejected');
+ assert.deepEqual(sample.paper.analysisManifest.stages.primaryAnalysis.factReview, bound.proof);
+ assert.ok(sample.paper.analysisStaleSnapshots.some(snapshot => deep.validateStaleAnalysisSnapshot(snapshot)?.analysisCheckpoint === original));
+ assert.ok(review.validateFeedback(sample.feedback, sample.plan, sample.paper));
+ const noFeedback = structuredClone(sample.paper);
+ await assert.rejects(daily.withDailyFreshAnalysisContext(sample.plan, () => daily.createDailyAnalyzeFn(sample.plan)(noFeedback)), /须重新提供同一份受控反馈/);
+ console.log('NORMAL_PRIMARY_HTTP_NEGATIVE_CONFIRMED');
+ fs.rmSync(sample.root, { recursive: true, force: true });
+})().catch(error => { console.error(error); process.exitCode = 1; });`;
  fs.writeFileSync(path.join(folder,'tests/primary-fact-http-child.cjs'),program);
  const result=await new Promise(resolve=>{const child=cp.spawn(process.execPath,['tests/primary-fact-http-child.cjs'],{cwd:folder});let stdout='',stderr='';child.stdout.on('data',c=>stdout+=c);child.stderr.on('data',c=>stderr+=c);child.on('close',status=>resolve({status,stdout,stderr}));});
  assert.equal(result.status,0,result.stdout+result.stderr);assert.match(result.stdout,/NORMAL_PRIMARY_HTTP_NEGATIVE_CONFIRMED/);
  assert.equal(bodies.length,1,'旧primary必须正常请求一次，而非旧成功补签或先请求其他阶段');
- const content=JSON.stringify(bodies[0].messages);assert.match(content,/主分析重生成全部13节/);assert.ok(content.includes(quote));
+ const content=JSON.stringify(bodies[0].messages);assert.match(content,/replacements/);assert.match(content,/局部/);assert.ok(content.includes(quote));
 });
 
 

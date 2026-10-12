@@ -24,7 +24,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 |---|---|
 | 跑完当天可脚本化阶段（博客发布 + 视觉输入准备） | `npm run digest:prepare -- YYYY-MM-DD` |
 | 只续跑分析 | `npm run deep -- --date YYYY-MM-DD`，只读取当前批次绑定的封存来源 |
-| 单篇受控事实纠错 | `npm run deep -- --date YYYY-MM-DD --id ARXIV_ID --core-feedback-file ABS_JSON`；原文与当前正文SHA绑定反馈，正常模型重做完整主分析，或修复摘要、Reader与标签 |
+| 单篇受控事实纠错 | `npm run deep -- --date YYYY-MM-DD --id ARXIV_ID --core-feedback-file ABS_JSON`；原文与当前正文SHA绑定反馈，正常模型局部纠正唯一可定位主文段落，或修复摘要、Reader与标签；无法唯一定位时明确拒绝，不追加整文重写 |
 | 多篇受控事实纠错及批量续跑 | `npm run batch -- --fact-feedback-file ABS_JSON --fact-feedback-file OTHER_JSON`；可重复提供反馈文件，与当前完整批次的其他未完成论文一起处理 |
 | 校验运行数据 | `npm run validate:data` |
 | 完整离线验证代码、数据与 Hugo | `npm run verify`；CI 或干净的空检出目录须显式加 `-- --allow-empty`。 |
@@ -107,6 +107,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/reader-draft-order.js` | Node 库 | 调整同一草稿的小节顺序，同步表格绑定和标记，保存原始路径与调整后路径的 SHA 对应关系；无法唯一确定顺序时拒绝调整。 |
 | `lib/reader-source-diagnostics.js` | Node 库 | 把数字或单位来源不匹配的问题定位到正文单元格与原表行列，给出百分号、千分位及可能舍入的修复建议，但只读；不会自动改数字，也不会放宽来源检查。 |
 | `lib/reader-recovery-revision.js` | Node 库 | 显式迁移同源失败候选的诊断，保留付费请求计数、索引调整与旧无进展状态，归档原字节；表数量文案不能触发正文规范化。迁移不会产出成功凭证。 |
+| `lib/primary-fact-local-repair.js` | Node 库 | 为来源绑定的主文事实纠错限定唯一原段落，严格核验 JSON 的 from/to、原稿 SHA 和修改范围；未授权正文逐字保留，完整正文与评分检查仍由正常分析入口执行。 |
 | `lib/explicit-reader-retry-round.js` | Node 库 | 为已核验且用完原有额度的失败长文执行明确的新一轮重试，核对论文锁、四份封存来源、实际输入和原稿 SHA；完整保留旧稿与旧次数，发送请求前登记新轮费用预算。重复运行只接续剩余额度，不授予发布资格。 |
 | `lib/reader-request-diagnostics.js` | Node 库 | 在 Reader 修复付费请求前保存当前草稿、准确 SHA、允许修改的内容与提示词，响应后保留原文和请求关联 SHA；逐次记录不可覆写，写入失败停止，不授予正文或发布资格。 |
 | `lib/reader-inline-svg.js` | Node 库 | 核对官方内嵌 SVG 的原始字节和来源定位，调用受控渲染器生成本次阅读所需图片。 |

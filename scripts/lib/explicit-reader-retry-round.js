@@ -164,7 +164,15 @@ function beginExplicitRound(directory, identity, recovered, paper) {
     } else {
         // 原记录在独立位置完整保留，新轮计数明确独立，不冒充旧次数继续。
         const old = oldEnvelope.payload;
-        const next = { status: 'failed', draft: null, rawDraft: '', issues: [], attempts: 0,
+        const retainedDraft = repair.parseRecoveryDraft(old.rawDraft) || repair.parseRecoveryDraft(old.draft);
+        const next = { status: 'failed',
+            draft: retainedDraft ? (repair.parseRecoveryDraft(old.draft) || retainedDraft) : null,
+            rawDraft: retainedDraft && typeof old.rawDraft === 'string' ? old.rawDraft : '',
+            issues: retainedDraft && Array.isArray(old.issues) ? structuredClone(old.issues) : [],
+            ...(retainedDraft && old.ephemeralImageEvidence ? { ephemeralImageEvidence: structuredClone(old.ephemeralImageEvidence) } : {}),
+            ...(retainedDraft && old.imageEvidence ? { imageEvidence: structuredClone(old.imageEvidence) } : {}),
+            ...(retainedDraft && old.providerImageExclusions ? { providerImageExclusions: structuredClone(old.providerImageExclusions) } : {}),
+            attempts: 0,
             fullAttempts: 0, noProgress: 0, failureSignature: '', validationFailureSignature: '',
             validationFailureStreak: 0, transportFailures: 0, implementationRepairAllowanceProof: null,
             ...(old.implementationRepairAllowanceLineage ? { implementationRepairAllowanceLineage: old.implementationRepairAllowanceLineage } : {}),

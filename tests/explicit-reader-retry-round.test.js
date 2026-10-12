@@ -505,3 +505,60 @@ test('新轮只允许已审V9到固定V10修复能力，未知提示词升级仍
         assert.equal(revised.fullAttempts, 0);
     }));
 });
+
+function createReaderTestArticle() {
+    const kinds = ['background', 'related_work', 'problem', 'method_overview', 'component',
+        'training', 'experiment_setup', 'result', 'ablation', 'limitation', 'reproduction', 'synthesis'];
+    const draft = { version: 3, readerTitle: '从声音输入到执行输出的机制解释',
+        oneSentenceThesis: '语音方法依次处理输入表征与条件约束，实验需保持对照设置一致，再解释指标变化支持的有限结论。',
+        sections: kinds.map((kind, index) => ({ kind, heading: `声音处理中步骤 ${index + 1} 的输入输出如何衔接？`,
+            body: `这一部分解释声音处理的${kind}环节，先限定输入信号，再描述信息如何沿组件传递。`.repeat(6) })),
+        conceptBridges: Array.from({ length: 4 }, (_, index) => ({
+            terms: ['声学表示', '语义条件'], sectionKind: 'method_overview',
+            marker: `[[CONCEPT_BRIDGE_${index + 1}]]`,
+            explanation: '声学表示保存输入信号的发音结构，语义条件限定合理的内容范围，两者分工使预测既遵循声音证据也满足当前任务约束。'
+        })), figurePlacements: [], tableBindings: [], formulaBindings: [] };
+    draft.sections[3].body += '\n\n' + draft.conceptBridges.map(item => item.marker).join('\n\n');
+    return draft;
+}
+
+test('新轮保留完整原稿，真实 Reader 首次请求走局部修复，原次数和账不重置', async t => {
+    const deep = require('../scripts/deep-analyzer');
+    const draft = createReaderTestArticle();
+    draft.readerTitle = '短';
+    const raw = JSON.stringify(draft, null, 2);
+    const f = setup(t, p => { p.draft = draft; p.rawDraft = raw; p.ephemeralImageEvidence = { imageEvidence: [], directSupplementaryEvidence: [] }; });
+    await f.locked(() => retry.withExplicitRound(paper, f.grant, async () => {
+        const source = daily.readDailyFreshSource(plan, paper);
+        const stages = [];
+        const stop = Object.assign(new Error('实际局部请求受控停止'), { retryable: false, scope: 'run' });
+        const options = { sourceText: source.text, structuredArtifacts: source.structuredArtifacts,
+            readerAttemptsDir: directory, readerMaterializeFigures: async () => [],
+            readerRecordDisposition: () => {},
+            readerCallModel: async (_messages, _budget, request) => {
+                stages.push(request.usageContext.stage);
+                throw stop;
+            } };
+        const prepared = await deep.prepareApiReaderRetryIdentity(paper, paper.analysisCheckpoint, '', options);
+        fs.unlinkSync(f.file);
+        repair.saveFailedCandidate(directory, prepared.identity, f.payload);
+        const file = path.join(directory, repair.hashDraft(prepared.identity) + '.json');
+        f.grant.identitySha256 = repair.hashDraft(prepared.identity);
+        f.grant.originalIdentitySha256 = f.grant.identitySha256;
+        f.grant.envelopeSha256 = sha(fs.readFileSync(file));
+        await retry.withExplicitRound(paper, f.grant, async () => {
+            const next = retry.beginExplicitRound(directory, prepared.identity, f.payload, paper);
+            assert.equal(next.rawDraft, raw);
+            assert.deepEqual(next.draft, draft);
+            await assert.rejects(deep.generateApiReaderArticleDetailed(paper, paper.analysisCheckpoint, '', options), /实际局部请求受控停止/);
+            assert.deepEqual(stages, ['apiReaderRepair']);
+            const receipt = JSON.parse(fs.readFileSync(next.explicitReaderRetryRound.receiptFile));
+            assert.equal(receipt.oldAttempts, 6);
+            assert.equal(receipt.oldFullAttempts, 2);
+            assert.equal(sha(fs.readFileSync(receipt.archivedFile)), f.grant.envelopeSha256);
+            const saved = repair.loadFailedCandidate(directory, prepared.identity);
+            assert.equal(saved.fullAttempts, 0);
+            assert.equal(saved.rawDraft, raw);
+        });
+    }));
+});

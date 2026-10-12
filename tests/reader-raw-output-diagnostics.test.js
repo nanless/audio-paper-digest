@@ -49,7 +49,7 @@ test('原始字段诊断不能授权局部修改或让假SHA通过', () => {
     assert.throws(() => applyReaderPatch(draft, patch, []), /unknown or unauthorized target/);
 });
 
-test('同一运行第二次全篇请求和旧空草稿恢复都收到完整原始诊断', async t => {
+test('超过可局部整理范围的65节稿，完整重试和旧空稿恢复都收到原始诊断', async t => {
     const fs = require('node:fs');
     const os = require('node:os');
     const path = require('node:path');
@@ -63,7 +63,7 @@ test('同一运行第二次全篇请求和旧空草稿恢复都收到完整原�
         flattenedTextSha256: crypto.createHash('sha256').update(sourceText).digest('hex') };
     artifacts.payloadSha256 = deep.stableFingerprint(artifacts);
     const draft = createReaderDraft();
-    draft.sections.push(...structuredClone(draft.sections.slice(0, 8)));
+    draft.sections = Array.from({ length: 65 }, (_, index) => structuredClone(draft.sections[index % 12]));
     draft.sections[5].body2 = '保留待核对的解释';
     draft.sections[13].tableIntro = '保留待核对的表前说明';
     const raw = JSON.stringify(draft);
@@ -73,7 +73,7 @@ test('同一运行第二次全篇请求和旧空草稿恢复都收到完整原�
     const assertFullPrompt = messages => {
         const prompt = messages[0].content[0].text;
         assert.match(prompt, /提交时仍要输出完整 JSON/);
-        assert.match(prompt, /原始输出 sections 实际 20 节/);
+        assert.match(prompt, /原始输出 sections 实际 65 节/);
         assert.match(prompt, /sections\[5\].*body2/);
         assert.match(prompt, /sections\[13\].*tableIntro/);
     };

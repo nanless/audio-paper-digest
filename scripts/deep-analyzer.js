@@ -9124,6 +9124,9 @@ function buildTextStageFingerprint(stage, inputAnalysis, evidenceContext, prompt
     const freshIdentity = require('./lib/fresh-analysis-context.js').freshAnalysisIdentity();
     const declaredPromptTextContract = String(promptTextContract || '');
     return stableFingerprint({
+        ...(stage === 'revision' && declaredStage?.localFactValidation ? {
+            localFactValidation: declaredStage.localFactValidation
+        } : {}),
         ...repairRequestPolicyFields(stage, declaredStage),
         ...require('./lib/daily-fact-review').fingerprintFields(stage, declaredStage),
         ...auxiliaryRequestPolicyFields(stage, declaredStage),
@@ -9313,6 +9316,12 @@ function buildPrimaryAnalysisBaseFingerprint(promptTextContract, paper, textForA
             ? { promptTextContract: declaredPromptTextContract } : {}),
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
         ...primaryRequestFingerprintFields(effectiveStage),
+        ...(declaredStage?.primaryLocalFactRepair ? {
+            ...require('./lib/primary-fact-local-repair').fingerprintFields(declaredStage.primaryLocalFactRepair),
+            localFactRepairPromptSha256: promptTemplateSha256('prompts/primary-fact-local-repair-v1.md'),
+            localFactRepairImplementationSha256: promptTemplateSha256('scripts/lib/primary-fact-local-repair.js'),
+            localFactRepairMaxTokens: REPAIR_MAX_TOKENS
+        } : {}),
         ...require('./lib/daily-fact-review').fingerprintFields('primaryAnalysis', declaredStage),
         analysisSectionTitlesImplementationSha256: promptTemplateSha256('scripts/lib/analysis-section-titles.js'),
         ...modelFingerprint(DEEP_CONFIG),
@@ -14321,7 +14330,19 @@ async function analyzePaperDeepInternal(paper) {
         === MODEL_TEXT_SANITIZATION_CONTRACT ? null : structuredClone(paper);
     const analysisManifest = createAnalysisRecoveryManifest(paper);
     const savedPrimaryFactStage = analysisManifest.stages.primaryAnalysis;
+    const localFactRepairInput = String(paper.analysisCheckpoint || paper.analysis || '');
     const activePrimaryFactReview = require('./lib/daily-fact-review').current(arxivId)?.feedback.primaryFeedback?.trim();
+    const localFactRepair = require('./lib/primary-fact-local-repair');
+    const initialFactReview = require('./lib/daily-fact-review').current(arxivId);
+    const localFactRepairPlan = activePrimaryFactReview
+        && initialFactReview.feedback.rejectedPrimaryClaims.some(claim => localFactRepairInput.includes(claim))
+        ? localFactRepair.buildPlan(localFactRepairInput, initialFactReview.feedback) : null;
+    if (activePrimaryFactReview && !localFactRepairPlan
+        && stableFingerprint(savedPrimaryFactStage?.factReview || null)
+            !== stableFingerprint(initialFactReview.proof)) {
+        throw contractRejectedError('局部事实纠错没有当前错误原句，也没有同反馈已完成证明；不能扩大为完整主文请求');
+    }
+    if (localFactRepairPlan) localFactRepair.validateHeadings(localFactRepairInput);
     if (activePrimaryFactReview) captureStaleAnalysisSnapshot(paper, analysisManifest, 'primaryAnalysis',
         require('./lib/daily-fact-review').current(arxivId).proof.feedbackSha256);
     if (savedPrimaryFactStage?.factReview && !activePrimaryFactReview
@@ -14711,7 +14732,7 @@ async function analyzePaperDeepInternal(paper) {
     // 历史兼容检查点的原指纹不同，局部修复仍保留其旧标题。
     let requireCurrentEvaluationTitle = hasCurrentPrimaryAnalysisCheckpoint(
         analysisManifest, recoveryFingerprints.primaryAnalysis
-    );
+    ) && !analysisManifest.stages.primaryAnalysis?.primaryLocalFactRepair;
     let analysis = isRecoveryStageComplete(analysisManifest, 'primaryAnalysis')
         ? String(paper.analysisCheckpoint || '')
         : '';
@@ -14728,6 +14749,38 @@ async function analyzePaperDeepInternal(paper) {
     // 第 1 轮：主分析
     if (analysis) {
         console.log(`    [deep] ↩ 从主分析 checkpoint 恢复 (${analysis.length} chars)`);
+    } else if (localFactRepairPlan) {
+        const localPrompt = loadPrompt('prompts/primary-fact-local-repair-v1.md', {
+            inputSha256: localFactRepairPlan.inputSha256,
+            targets: JSON.stringify(localFactRepairPlan.targets),
+            analysis: localFactRepairInput,
+            feedback: primaryReviewFeedback
+        });
+        try {
+            const rawPatch = await callModel([{ role: 'user', content: localPrompt }],
+                REPAIR_MAX_TOKENS, { usageContext: { stage: 'primaryAnalysis' } });
+            const repaired = localFactRepair.applyPatch(localFactRepairInput, localFactRepairPlan, rawPatch);
+            require('./lib/daily-fact-review').validateRepairedClaims('primaryAnalysis', repaired.analysis, arxivId);
+            localFactRepair.validateHeadings(repaired.analysis);
+            analysis = repaired.analysis;
+            const localDeclaration = { primaryLocalFactRepair: repaired.receipt };
+            markRecoveryStage(analysisManifest, 'primaryAnalysis', 'complete', {
+                ...require('./lib/daily-fact-review').fingerprintFields('primaryAnalysis'),
+                ...localDeclaration,
+                fingerprint: buildPrimaryAnalysisBaseFingerprint(primaryAnalysisWriteContract,
+                    paper, textForAnalysis, arxivId, localDeclaration),
+                promptTextContract: primaryAnalysisWriteContract,
+                ...(primaryAnalysisRequestPolicy ? { primaryRequestPolicy: primaryAnalysisRequestPolicy } : {})
+            });
+            saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
+        } catch (error) {
+            markRecoveryStage(analysisManifest, 'primaryAnalysis', 'contract_rejected', {
+                error: error.message,
+                ...require('./lib/daily-fact-review').fingerprintFields('primaryAnalysis')
+            });
+            saveAnalysisCheckpoint(paper, localFactRepairInput, analysisManifest, imageManifest);
+            throw error;
+        }
     } else if (isDualModel && downloadedImages.length > 0) {
         // ========== 双模型模式 ==========
         console.log(`    [deep] 🧠 双模型模式：主模型(${DEEP_CONFIG.model})先做文本分析，后续由副模型(${SECONDARY_CONFIG.model})最终筛图补充`);
@@ -14928,7 +14981,12 @@ async function analyzePaperDeepInternal(paper) {
     analysis = revisionStage.analysis;
     if (!isRecoveryStageComplete(analysisManifest, 'revision')) {
         try {
-            const revisedText = await reviseAnalysis(
+            const localPrimaryReceipt = analysisManifest.stages.primaryAnalysis?.primaryLocalFactRepair;
+            if (localPrimaryReceipt) {
+                require('./lib/primary-fact-local-repair').fingerprintFields(localPrimaryReceipt);
+                localFactRepair.validateHeadings(analysis);
+            }
+            const revisedText = localPrimaryReceipt ? analysis : await reviseAnalysis(
                 paper,
                 analysis,
                 rawTextForAnalysis,
@@ -14942,20 +15000,29 @@ async function analyzePaperDeepInternal(paper) {
                 error.code = 'INVALID_STAGE_OUTPUT';
                 throw error;
             }
-            const evaluationIssue = getCurrentPaperEvaluationHeadingIssue(cleaned);
+            const evaluationIssue = localPrimaryReceipt ? null : getCurrentPaperEvaluationHeadingIssue(cleaned);
             if (evaluationIssue) {
                 const error = new Error(evaluationIssue);
                 error.code = 'INVALID_STAGE_OUTPUT';
                 throw error;
             }
             analysis = cleaned;
-            requireCurrentEvaluationTitle = true;
+            if (!localPrimaryReceipt) requireCurrentEvaluationTitle = true;
             analysis = syncResourceFieldsFromOpenSource(
                 analysis,
                 extractSectionByTitle(analysis, '开源详情')
             );
             require('./lib/daily-fact-review').validateRepairedClaims('revision', analysis, arxivId);
-            markRecoveryStage(analysisManifest, 'revision', 'complete', {
+            const localFactValidation = localPrimaryReceipt ? {
+                contract: localFactRepair.VALIDATION_CONTRACT,
+                inputAnalysisSha256: revisionStage.inputAnalysisSha256,
+                outputAnalysisSha256: localFactRepair.sha(analysis),
+                sourceTextSha256: localFactRepair.sha(rawTextForAnalysis),
+                primaryRepairSha256: stableFingerprint(localPrimaryReceipt),
+                remainingChecks: 'normal-table-method-structure-core-scoring-source-gates'
+            } : null;
+            markRecoveryStage(analysisManifest, 'revision', localFactValidation ? 'not_needed' : 'complete', {
+                ...(localFactValidation ? { localFactValidation } : {}),
                 ...(resolveAuxiliaryRequestPolicy('revision')
                     ? { auxiliaryRequestPolicy: resolveAuxiliaryRequestPolicy('revision') } : {}),
                 ...revisionStage.factReviewFields,
@@ -14964,10 +15031,14 @@ async function analyzePaperDeepInternal(paper) {
                 inputAnalysisSha256: revisionStage.inputAnalysisSha256,
                 ...(revisionStage.promptTextContract
                     ? { promptTextContract: revisionStage.promptTextContract } : {}),
-                fingerprint: revisionStage.fingerprint
+                fingerprint: localFactValidation ? buildTextStageFingerprint('revision',
+                    revisionStage.analysis, revisionStage.evidenceContext, revisionStage.promptTextContract,
+                    { localFactValidation }) : revisionStage.fingerprint
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
-            console.log(`    [deep] ✅ 审校重写完成`);
+            console.log(localFactValidation
+                ? '    [deep] ✅ 局部纠错已核验，继续后续检查'
+                : '    [deep] ✅ 审校重写完成');
         } catch (e) {
             markRecoveryStage(analysisManifest, 'revision', e.code === 'INVALID_STAGE_OUTPUT' ? 'invalid_output' : 'transient_failure', { error: e.message });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
