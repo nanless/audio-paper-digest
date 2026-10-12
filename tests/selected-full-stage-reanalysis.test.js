@@ -40,7 +40,7 @@ const deep = require('../scripts/deep-analyzer');
 const engine = require('../scripts/analysis-engine');
 const policy = require('../scripts/lib/selected-full-stage-reanalysis');
 const { validAnalysisPaper } = require('./valid-analysis-fixture');
-async function createSample(t, { fullSource = true } = {}) {
+async function createSample(t, { fullSource = true, quantitativeSource = false } = {}) {
     const root = fs.mkdtempSync(
         path.join(fs.realpathSync(os.tmpdir()), 'reviewed-reader-seed-'),
     );
@@ -72,7 +72,7 @@ async function createSample(t, { fullSource = true } = {}) {
             sourceApi.captureFreshArxivRewriteSource(options, {
                 fetchText: async (sourceId) => ({
                     ...signed.sourceDetails,
-                    text: fullSource ? signed.sourceDetails.text + '\n' + '本测试全文研究噪声语音识别方法及实验边界。'.repeat(800) : signed.sourceDetails.text,
+                    text: fullSource ? signed.sourceDetails.text + '\n' + (quantitativeSource ? 'Table 1 reports word error rate (WER) of 9.4% for our model versus 12.3% for the baseline.\n' : '') + '本测试全文研究噪声语音识别方法及实验边界。'.repeat(800) : signed.sourceDetails.text,
                     imageInfos: [{ ordinal: 1, url: `https://arxiv.org/html/${sourceId}/x1.png`, caption: '测试结构图' }],
                     source: 'html',
                     htmlAvailability: 'available',
@@ -421,4 +421,165 @@ test('正常指定论文付费摘要入口逐层传明确ID且保原稿，未选
     assert.deepEqual(retained.papers[0].fullStageReanalysisHistory, history);
     assert.deepEqual(retained.papers[1], sample.other);
 
+});
+
+function createCoreFeedback(sample) {
+    const core = structuredClone(sample.feedback);
+    for (const key of ['primaryFeedback', 'rejectedPrimaryClaims', 'tagFeedback', 'rejectedTagClaims', 'scoringFeedback', 'rejectedScoringClaims']) delete core[key];
+    core.readerFeedback = ''; core.rejectedReaderClaims = [];
+    core.coreFeedback = '仅修核心摘要，原文有量化结果，保留原主文其他十二节与旧事实约束。';
+    core.rejectedCoreClaims = ['原文未提供可核对的关键定量结果。'];
+    return core;
+}
+
+test('独立核心反馈保原主文proof，当前核心新proof仅影响核心且禁止主文请求', async t => {
+    const sample = await createSample(t);
+    const core = createCoreFeedback(sample);
+    const bound = facts.validateFeedback(core, sample.plan, sample.paper);
+    const before = structuredClone(sample.paper);
+    assert.throws(() => facts.withCoreSummaryFactReview(bound, sample.paper, () => {}), /当前论文锁/);
+    await daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(sample.paper, () => facts.withFactReview(sample.bound, () =>
+        facts.withCoreSummaryFactReview(bound, sample.paper, async () => {
+            assert.deepEqual(facts.current().proof, sample.bound.proof);
+            assert.deepEqual(facts.fingerprintFields('primaryAnalysis', sample.paper.analysisManifest.stages.primaryAnalysis), { factReview: sample.bound.proof });
+            assert.deepEqual(facts.fingerprintFields('coreSummaryRepair'), { factReview: bound.proof });
+            assert.ok(facts.reviewFeedback('coreSummaryRepair', sample.id).includes(core.coreFeedback));
+            assert.ok(facts.reviewFeedback('coreSummaryRepair', sample.id).includes(sample.feedback.primaryFeedback));
+            assert.throws(() => facts.validateRepairedClaims('coreSummaryRepair', core.rejectedCoreClaims[0]), /已证实错误/);
+            assert.throws(() => facts.validateRepairedClaims('coreSummaryRepair', sample.feedback.rejectedPrimaryClaims[0]), /已证实错误/);
+            for (const stage of ['primaryAnalysis', 'revision', 'structureRepair', 'methodRepair', 'tableRepair', 'openSourceScan', undefined])
+                await assert.rejects(deep.callModelWithConfig([{role:'user',content:'不得请求'}], 16, 1, {usageContext:{stage}}), /不能调用主分析/);
+            for (const stage of ['coreSummaryRepair','scoringAudit','apiReaderArticle','apiReaderRepair','apiReaderImageProbe'])
+                assert.doesNotThrow(() => facts.assertScoringOnlyModelStageAllowed(stage));
+        }))));
+    assert.deepEqual(sample.paper, before);
+    const unauthorized = { ...core, readerFeedback: '越权Reader', rejectedReaderClaims: ['错误Reader'] };
+    const otherBound = facts.validateFeedback(unauthorized, sample.plan, sample.paper);
+    await daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(sample.paper, () =>
+        assert.throws(() => facts.withCoreSummaryFactReview(otherBound, sample.paper, () => {}), /不能授权/)));
+});
+
+
+test('正常selected同轮核心双包实际核验且不换primary或原账，旧主文模型入口零调用', async t => {
+    const sample = await createSample(t, { quantitativeSource: true });
+    let continued;
+    await inScope(sample, () => engine.withPaperAnalysisLock(sample.paper, () => facts.withFactReview(sample.bound, () => {
+        continued = policy.preparePaperLocked(sample.paper);
+        const record = continued.fullStageReanalysis, history = continued.fullStageReanalysisHistory;
+        Object.assign(continued, structuredClone(sample.paper));
+        continued.fullStageReanalysis = record; continued.fullStageReanalysisHistory = history;
+        deep.markRecoveryStage(continued.analysisManifest,'primaryAnalysis','complete', { factReview:sample.bound.proof, fingerprint:'本轮真实测试主阶段' });
+    })));
+    const root=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'core-dual-public-'));
+    const keys=['deepAnalysisResult','papers','papersLegacy','runtimeDir','analysisRepairAttemptsDir'];
+    const previous=Object.fromEntries(keys.map(key=>[key,Config.FILES[key]])); const retries=Config.ANALYSIS_CONFIG.maxRetries;
+    t.after(()=>{Object.assign(Config.FILES,previous);Config.ANALYSIS_CONFIG.maxRetries=retries;fs.rmSync(root,{recursive:true,force:true});});
+    for(const key of keys) Config.FILES[key]=path.join(root,key+'.json'); Config.ANALYSIS_CONFIG.maxRetries=0;
+    fs.writeFileSync(Config.FILES.papers,JSON.stringify({papers:[]}));fs.writeFileSync(Config.FILES.papersLegacy,JSON.stringify({papers:[]}));
+    const parentFile=path.join(root,'parent.json'),coreFile=path.join(root,'core.json');
+    fs.writeFileSync(parentFile,JSON.stringify(sample.feedback));fs.writeFileSync(coreFile,JSON.stringify(createCoreFeedback(sample)));
+    const input={batchDate:sample.plan.batchDate,dailyFreshSourceRun:daily.dailyFreshSourceReference(sample.plan),papers:[continued,sample.other]};
+    fs.writeFileSync(Config.FILES.deepAnalysisResult,JSON.stringify(input));
+    const expectedPrimary=structuredClone(continued.analysisManifest.stages.primaryAnalysis), history=structuredClone(continued.fullStageReanalysisHistory);
+    let seen=0, verifiedCore=false;calls.length=0;
+    const spy=t.mock.method(deep,'analyzePaperDeep',async paper=> {
+        seen++; policy.assertPrepared(paper);
+        assert.deepEqual(facts.current().proof,sample.bound.proof);
+        assert.deepEqual(paper.analysisManifest.stages.primaryAnalysis,expectedPrimary);
+        assert.deepEqual(paper.fullStageReanalysisHistory,history);
+        let coreCalls=0;
+        const good=deep.extractSectionByTitle(paper.analysis,'核心摘要').replace(sample.feedback.rejectedPrimaryClaims[0],
+            '本文研究噪声条件下语音识别的稳健性，输入为声学序列，输出为文字序列，局部干扰与长程语义错误是主要难点。');
+        const source=daily.readDailyFreshSource(sample.plan,paper);
+        const repaired=await deep.repairCoreSummarySection(paper,paper.analysis,source.text,source.text,{
+            reviewFeedback:facts.reviewFeedback('coreSummaryRepair',sample.id),
+            callModelFn:async()=> {coreCalls++;return '## 核心摘要\n'+(coreCalls===1?good.replace('本文研究','原文未提供可核对的关键定量结果。本文研究'):good);}
+        });
+        assert.equal(coreCalls,2); verifiedCore=true;
+        assert.ok(!repaired.includes('原文未提供可核对的关键定量结果。'));
+        const exterior=text=>text.replace(/## 核心摘要\n[\s\S]*?(?=\n## )/,'## 核心摘要\n[仅此节]');
+        assert.equal(exterior(repaired),exterior(paper.analysis));
+        const newCore=facts.fingerprintFields('coreSummaryRepair').factReview;
+        assert.notEqual(newCore.feedbackSha256,sample.bound.proof.feedbackSha256);
+        fresh.withFreshPaperContext(paper,()=> {
+            const manifest=structuredClone(paper.analysisManifest);
+            deep.markRecoveryStage(manifest,'coreSummaryRepair','complete',{...facts.fingerprintFields('coreSummaryRepair')});
+            assert.equal(manifest.stages.coreSummaryRepair.fullStageReanalysisRunId,options(sample).runId);
+            assert.deepEqual(manifest.stages.primaryAnalysis,expectedPrimary);
+        });
+        const error=new Error('正常双包进入核心范围后测试停止，未发模型');error.retryable=false;throw error;
+    });
+    delete require.cache[require.resolve('../scripts/reanalyze-selected')];const selected=require('../scripts/reanalyze-selected');
+    await selected.reanalyzeSelected([sample.id],{fullStageReanalysis:options(sample),feedbackFiles:[parentFile],coreFeedbackFiles:[coreFile]});
+    spy.mock.restore();assert.equal(seen,1);assert.equal(verifiedCore,true);assert.equal(calls.length,0);
+    const saved=JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult));
+    assert.deepEqual(saved.papers[0].fullStageReanalysisHistory,history);
+    assert.deepEqual(saved.papers[0].analysisManifest.stages.primaryAnalysis,expectedPrimary);
+    assert.deepEqual(saved.papers[1],sample.other);
+    await assert.rejects(selected.reanalyzeSelected([sample.id],{coreFeedbackFiles:false}),/路径数组/);
+    const coreBytes=fs.readFileSync(coreFile);
+    const batchSpy=t.mock.method(engine,'analyzeBatch',async (papers,config)=>
+        engine.withPaperAnalysisLock(papers[0],async()=>{
+            const prepared=await config.preparePaperLocked(papers[0]);
+            fs.appendFileSync(coreFile,' ');
+            return config.analyzeFn(prepared.paper);
+        }));
+    delete require.cache[require.resolve('../scripts/reanalyze-selected')];
+    await assert.rejects(require('../scripts/reanalyze-selected').reanalyzeSelected([sample.id],{
+        fullStageReanalysis:options(sample),feedbackFiles:[parentFile],coreFeedbackFiles:[coreFile]
+    }),/核心反馈文件在运行中变化/);
+    batchSpy.mock.restore();fs.writeFileSync(coreFile,coreBytes);
+    assert.equal(calls.length,0);
+    const invalid={...createCoreFeedback(sample),sourceQuotes:['不是封存原句']};
+    fs.writeFileSync(coreFile,JSON.stringify(invalid));
+    await assert.rejects(selected.reanalyzeSelected([sample.id],{coreFeedbackFiles:[coreFile]}),/不是封存来源逐字引文/);
+
+});
+
+test('核心真实变更并保存后，同一原输入包可在下游失败后复用新proof且不再请求核心', async t => {
+    const sample=await createSample(t),core=createCoreFeedback(sample);
+    core.coreFeedback='仅按来源修核心摘要，保留其他章节。';
+    core.rejectedCoreClaims=[sample.feedback.rejectedPrimaryClaims[0]];
+    const original=structuredClone(sample.paper),bound=facts.validateFeedback(core,sample.plan,original);
+    const paper=structuredClone(original),source=daily.readDailyFreshSource(sample.plan,paper);
+    let modelCalls=0;
+    await daily.withDailyFreshAnalysisContext(sample.plan,()=>engine.withPaperAnalysisLock(paper,()=>fresh.withFreshPaperContext(paper,()=>facts.withFactReview(sample.bound,()=>facts.withCoreSummaryFactReview(bound,paper,async()=>{
+        deep.saveAnalysisCheckpoint(paper,paper.analysis,paper.analysisManifest);
+        const prepared=deep.prepareTextRecoveryStage(paper,paper.analysisManifest,'coreSummaryRepair',paper.analysis,source.text);
+        const good=deep.extractSectionByTitle(paper.analysisCheckpoint,'核心摘要').replace(sample.feedback.rejectedPrimaryClaims[0],
+            '本文研究噪声条件下语音识别的稳健性，输入为声学序列，输出为文字序列，局部干扰与长程语义错误是主要难点。');
+        const repaired=await deep.repairCoreSummarySection(paper,prepared.inputAnalysis,source.text,prepared.evidenceContext,{
+            reviewFeedback:facts.reviewFeedback('coreSummaryRepair',sample.id),callModelFn:async()=>{modelCalls++;return '## 核心摘要\n'+good+'原文未提供可核对的关键定量结果。';}});
+        deep.markRecoveryStage(paper.analysisManifest,'coreSummaryRepair','complete',{
+            fingerprint:prepared.fingerprint,promptTextContract:prepared.promptTextContract,...facts.fingerprintFields('coreSummaryRepair')});
+        deep.saveAnalysisCheckpoint(paper,repaired,paper.analysisManifest);
+        paper.analysis=repaired;
+        deep.markRecoveryStage(paper.analysisManifest,'apiReaderArticle','transient_failure',{error:'下游网络失败，原核心保留'});
+    })))));
+    assert.equal(modelCalls,1);assert.notEqual(facts.sha(paper.analysis),core.coreAnalysisSha256);
+    const saved=JSON.parse(JSON.stringify(paper));
+    const rebound=facts.validateFeedback(core,sample.plan,saved);
+    await daily.withDailyFreshAnalysisContext(sample.plan,()=>engine.withPaperAnalysisLock(saved,()=>fresh.withFreshPaperContext(saved,()=>facts.withFactReview(sample.bound,()=>facts.withCoreSummaryFactReview(rebound,saved,()=>{
+        const next=deep.prepareTextRecoveryStage(saved,saved.analysisManifest,'coreSummaryRepair',saved.analysis,source.text);
+        assert.equal(saved.analysisManifest.stages.coreSummaryRepair.status,'complete');
+        assert.equal(next.fingerprint,saved.analysisManifest.stages.coreSummaryRepair.fingerprint);
+        assert.deepEqual(facts.current().proof,sample.bound.proof);
+    })))));
+    assert.equal(modelCalls,1);
+    const invalid=structuredClone(saved);invalid.analysisManifest.stages.coreSummaryRepair.factReview={...bound.proof,feedbackSha256:'a'.repeat(64)};
+    await daily.withDailyFreshAnalysisContext(sample.plan,()=>engine.withPaperAnalysisLock(invalid,()=>assert.throws(()=>facts.withFactReview(sample.bound,()=>facts.withCoreSummaryFactReview(rebound,invalid,()=>{})),/缺少原核心|绑定已过期/)));
+});
+
+test('没有原主文反馈的核心包保留真实输入快照，不伪补primary proof', async t => {
+    const sample=await createSample(t),paper=structuredClone(sample.paper);
+    delete paper.analysisManifest.stages.primaryAnalysis.factReview;
+    const bound=facts.validateFeedback(createCoreFeedback(sample),sample.plan,paper);
+    await daily.withDailyFreshAnalysisContext(sample.plan,()=>engine.withPaperAnalysisLock(paper,()=>fresh.withFreshPaperContext(paper,()=>facts.withCoreSummaryFactReview(bound,paper,()=>{
+        assert.equal(facts.current().proof,null);
+        deep.saveAnalysisCheckpoint(paper,paper.analysis,paper.analysisManifest);
+        const result=deep.captureStaleAnalysisSnapshot(paper,paper.analysisManifest,'coreSummaryRepair','a'.repeat(64));
+        assert.ok(result);assert.ok(deep.validateStaleAnalysisSnapshot(result));
+        assert.equal(facts.sha(result.payload.analysisCheckpoint),bound.proof.coreAnalysisSha256);
+        assert.equal(paper.analysisManifest.stages.primaryAnalysis.factReview,undefined);
+    }))));
 });

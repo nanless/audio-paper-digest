@@ -10356,10 +10356,11 @@ function staleAnalysisSnapshotPayload(paper, manifest) {
 
 function captureStaleAnalysisSnapshot(paper, manifest, invalidatedStage, replacementFingerprint) {
     const activeReview = require('./lib/daily-fact-review').current(getPaperArxivId(paper));
-    const finalAnalysisIsReviewInput = activeReview
+    const activeReviewInputProof = activeReview?.coreOnly ? activeReview.coreBound.proof : activeReview?.proof;
+    const finalAnalysisIsReviewInput = activeReviewInputProof
         && typeof paper.analysis === 'string'
         && crypto.createHash('sha256').update(paper.analysis).digest('hex')
-            === activeReview.proof.coreAnalysisSha256;
+            === activeReviewInputProof.coreAnalysisSha256;
     const snapshotInput = finalAnalysisIsReviewInput
         ? { ...paper, analysisCheckpoint: paper.analysis } : paper;
     const payloads = [staleAnalysisSnapshotPayload(snapshotInput, manifest)];
@@ -10386,7 +10387,7 @@ function captureStaleAnalysisSnapshot(paper, manifest, invalidatedStage, replace
             capturedAt: getBeijingISOString()
         });
     }
-    const reviewedInput = require('./lib/daily-fact-review').current()?.proof.coreAnalysisSha256;
+    const reviewedInput = activeReviewInputProof?.coreAnalysisSha256;
     const originalReviewInput = reviewedInput && existing.find(item =>
         crypto.createHash('sha256').update(item.payload.analysisCheckpoint).digest('hex') === reviewedInput);
     paper.analysisStaleSnapshots = originalReviewInput
