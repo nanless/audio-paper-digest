@@ -53,8 +53,8 @@ function minimalDisplay(seed) {
 // 不依赖诊断迁移开关；只读核验旧实现的真实候选与已记请求，不迁移或重置任何账。
 function assertNoPaidLegacyDisplayCandidate(directory, identity) {
     const proofReads = require('./reader-proof-read-scope');
-    return proofReads.withReaderProofReadScope(() => proofReads.withReaderReceiptScan(
-        () => assertNoPaidLegacyDisplayCandidateInternal(directory, identity)));
+    return proofReads.withReadOnlyReaderReceiptRetry(
+        () => assertNoPaidLegacyDisplayCandidateInternal(directory, identity));
 }
 function assertNoPaidLegacyDisplayCandidateInternal(directory, identity) {
     const repair = require('./reader-repair');

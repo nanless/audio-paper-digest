@@ -5,6 +5,12 @@ const crypto = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const scopes = new AsyncLocalStorage();
 const receiptScans = new AsyncLocalStorage();
+class ReaderReceiptSnapshotChangedError extends Error {
+    constructor(message) {
+        super(message);
+        this.name = 'ReaderReceiptSnapshotChangedError';
+    }
+}
 const MAX_SCOPE_BYTES = 64 * 1024 * 1024;
 const statFields = ['dev', 'ino', 'mode', 'nlink', 'uid', 'gid', 'size', 'mtimeNs', 'ctimeNs'];
 const sameStat = (a, b) => statFields.every(key => a[key] === b[key]);
@@ -95,7 +101,7 @@ function receiptSnapshot(root) {
     const names = fs.readdirSync(root).filter(name => /^[a-f0-9-]{36}\.json$/.test(name)).sort();
     const files = names.map(name => [name, fs.lstatSync(path.join(root, name), { bigint: true })]);
     const after = fs.lstatSync(root, { bigint: true });
-    if (!sameStat(before, after)) throw new Error('Reader 回执目录在快照期间发生变化');
+    if (!sameStat(before, after)) throw new ReaderReceiptSnapshotChangedError('Reader 回执目录在快照期间发生变化');
     return { root, directoryStat: after, files };
 }
 function sameReceiptSnapshot(a, b) {
@@ -115,7 +121,7 @@ function withReaderReceiptScan(callback) {
 function assertReaderReceiptSnapshots() {
     const scan = receiptScans.getStore();
     for (const snapshot of scan?.snapshots.values() || []) {
-        if (!sameReceiptSnapshot(snapshot, receiptSnapshot(snapshot.root))) throw new Error('Reader 回执依赖在扫描期间发生变化');
+        if (!sameReceiptSnapshot(snapshot, receiptSnapshot(snapshot.root))) throw new ReaderReceiptSnapshotChangedError('Reader 回执依赖在扫描期间发生变化');
     }
 }
 function findReaderReceiptSibling(root, parentRoundId, roundId, contracts, options = {}) {
@@ -137,16 +143,27 @@ function findReaderReceiptSibling(root, parentRoundId, roundId, contracts, optio
                 if (!index.has(parent)) index.set(parent, []);
                 index.get(parent).push(receipt);
             }
-            if (!sameReceiptSnapshot(snapshot, receiptSnapshot(root))) throw new Error('Reader 回执依赖在索引期间发生变化');
+            if (!sameReceiptSnapshot(snapshot, receiptSnapshot(root))) throw new ReaderReceiptSnapshotChangedError('Reader 回执依赖在索引期间发生变化');
             state.receiptIndexes.set(key, { ...snapshot, index });
         }
         scan.snapshots.set(key, { ...snapshot, index });
     }
     // 每次查询仍核目录身份；新兄弟不会等到最终写入才发现。
     if (!sameStat(scan.snapshots.get(key).directoryStat, fs.lstatSync(root, { bigint: true }))) {
-        throw new Error('Reader 回执目录在索引查询期间发生变化');
+        throw new ReaderReceiptSnapshotChangedError('Reader 回执目录在索引查询期间发生变化');
     }
     return (index.get(parentRoundId) || []).some(other => other.grant?.roundId !== roundId
         && (!contracts || contracts.includes(other.grant?.contract)));
 }
-module.exports = { withReaderProofReadScope, readReaderProofJson, readerProofReadScopeStats, withReaderReceiptScan, assertReaderReceiptSnapshots, findReaderReceiptSibling };
+// 仅供没有保存或迁移动作的检查使用；变化后丢弃整次作用域，完整重读。
+function withReadOnlyReaderReceiptRetry(callback) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+            return scopes.run(undefined, () => receiptScans.run(undefined,
+                () => withReaderProofReadScope(() => withReaderReceiptScan(callback))));
+        } catch (error) {
+            if (!(error instanceof ReaderReceiptSnapshotChangedError) || attempt === 2) throw error;
+        }
+    }
+}
+module.exports = { ReaderReceiptSnapshotChangedError, withReadOnlyReaderReceiptRetry, withReaderProofReadScope, readReaderProofJson, readerProofReadScopeStats, withReaderReceiptScan, assertReaderReceiptSnapshots, findReaderReceiptSibling };
