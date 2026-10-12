@@ -1447,7 +1447,18 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
     for (const section of candidate.sections) {
         if (typeof section?.body !== 'string') continue;
         let previousLine = '';
+        const protectedUnicodeRanges = [];
+        const unicodeProtectionSurface = section.body.replace(
+            /^ {0,3}(`{3,}|~{3,})[^\n]*\n[\s\S]*?^ {0,3}\1[`~]*[ \t]*(?=\n|$)|<!--[\s\S]*?(?:-->|$)|<(code|pre)\b[^>]*>[\s\S]*?<\/\2\s*>|(?<!`)(`{1,2})(?!`)[^\n]*?\3(?!`)|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$\$[\s\S]*?\$\$|(?<!\\)\$(?!\$)[^\n$]*?(?<!\\)\$/gmi,
+            (literal, _fence, _htmlTag, _ticks, offset) => {
+                protectedUnicodeRanges.push([offset, offset + literal.length]);
+                return literal.replace(/[^\n]/g, 'x');
+            }
+        );
+        let bodyOffset = 0;
         const next = section.body.split('\n').map(line => {
+            const lineStart = bodyOffset;
+            bodyOffset += line.length + 1;
             const trimmed = line.trimStart();
             // compileReaderTableSelections 把 TABLE 标记换成已签名的 PDF 表格之前，
             // 这个标记在绑定流里占着一个位置。这里也要把它算进去，否则后面某个
@@ -1466,7 +1477,18 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
                 previousLine = line;
                 return line;
             }
-            let updated = line;
+            // 诊断使用归一文本，修复仍按原行的真实位置定位，只补边界空格。
+            let updated = line.replace(/\d+[⁰¹²³⁴⁵⁶⁷⁸⁹]+[\p{Script=Han}]/gu, (token, offset) => {
+                if (!reportedNumericFragments.has(token.normalize('NFKC'))) return token;
+                const absoluteOffset = lineStart + offset;
+                if (protectedUnicodeRanges.some(([start, end]) => absoluteOffset < end
+                    && absoluteOffset + token.length > start)) return token;
+                const sentinel = '[[NUMERIC_TYPOGRAPHY_PROTECTION_PROBE]]';
+                const probe = unicodeProtectionSurface.slice(0, absoluteOffset) + sentinel
+                    + unicodeProtectionSurface.slice(absoluteOffset + token.length);
+                if (readerConceptMarkerIsProtected(probe, sentinel)) return token;
+                return token.replace(/([⁰¹²³⁴⁵⁶⁷⁸⁹])(?=[\p{Script=Han}])/u, '$1 ');
+            });
             for (const numericFragment of reportedNumericFragments) {
                 if (!updated.includes(numericFragment)) continue;
                 const escaped = numericFragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
