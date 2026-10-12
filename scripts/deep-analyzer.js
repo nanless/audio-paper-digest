@@ -6823,6 +6823,33 @@ function deferOrRetireReaderCandidate(result, repair, candidateDirectory, identi
     return null;
 }
 
+function transferDeferredReaderCandidate(from, to) {
+    const transaction = deferredReaderCandidateTransactions.get(from);
+    if (!transaction || from === to) return to;
+    if (!to || typeof to !== 'object' || Array.isArray(to)) {
+        throw new Error('Reader 保存事务需要对应的分析结果对象');
+    }
+    deferredReaderCandidateTransactions.set(to, transaction);
+    deferredReaderCandidateTransactions.delete(from);
+    return to;
+}
+
+function hasDeferredReaderCandidate(result) {
+    return deferredReaderCandidateTransactions.has(result);
+}
+
+function commitDeferredReaderCandidateIfSaved(result, saved) {
+    if (!deferredReaderCandidateTransactions.has(result)) return null;
+    const readerSnapshot = value => ({
+        fields: Object.fromEntries(Object.entries(value || {}).filter(([key]) => key.startsWith('apiReader'))),
+        stage: value?.analysisManifest?.stages?.apiReaderArticle,
+        source: value?.freshRewriteProvenance
+    });
+    if (!saved || getPaperArxivId(result) !== getPaperArxivId(saved)
+        || stableFingerprint(readerSnapshot(result)) !== stableFingerprint(readerSnapshot(saved))) return null;
+    return commitDeferredReaderCandidate(result);
+}
+
 function commitDeferredReaderCandidate(result) {
     const transaction = deferredReaderCandidateTransactions.get(result);
     if (!transaction) return null;
@@ -7567,7 +7594,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         try {
             normalizeCandidate();
             const parsed = parseCandidate(JSON.stringify(candidate));
-            const result = { ...parsed, contentMode, attempts: completedAttempts, imageEvidence,
+            const result = { ...parsed, contentMode, attempts: completedAttempts, fullAttempts, transportFailures, imageEvidence,
                 modelImagePreflightEvidenceSha256,
                 providerImageExclusions, resumedCandidate: true, draftOrderMappings };
             const retiredCandidate = deferOrRetireReaderCandidate(
@@ -8055,7 +8082,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             sourceText
         }
     );
-    return finalizeApiReaderRefresh(paper, sourceDetails, generated, {
+    const finalized = await finalizeApiReaderRefresh(paper, sourceDetails, generated, {
         ...options,
         ...(revisionSeed ? {
             readerAuthors: structuredClone(paper.apiReaderAuthors)
@@ -8063,6 +8090,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         readerResources,
         execution: {
             contentMode, fingerprint, attempts: generated.attempts,
+            fullAttempts: generated.fullAttempts, transportFailures: generated.transportFailures,
             ...apiReaderRequestPolicyFields(),
             model: DEEP_CONFIG.model, protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
             temperature: revisionSeed ? API_READER_REPAIR_TEMPERATURE : API_READER_INITIAL_TEMPERATURE,
@@ -8085,6 +8113,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             reviewFeedbackSha256, ...(revisionSeed?.metadata || {})
         }
     });
+    return transferDeferredReaderCandidate(generated, finalized);
 }
 
 async function finalizeOperatorApiReaderArticleFromSource(paper, sourceDetails, draft, operatorRevisionRecord) {
@@ -14338,7 +14367,10 @@ async function analyzePaperDeep(paper) {
     const { withLlmUsageContext } = require('./lib/llm-usage.js');
     const fresh = require('./lib/fresh-analysis-context.js');
     return fresh.withFreshPaperContext(paper, () => withLlmUsageContext(
-        { paperId: getPaperArxivId(paper) }, () => analyzePaperDeepInternal(paper)
+        { paperId: getPaperArxivId(paper) }, async () => {
+            const result = await analyzePaperDeepInternal(paper);
+            return transferDeferredReaderCandidate(paper, result);
+        }
     ));
 }
 
@@ -16091,7 +16123,7 @@ async function analyzePaperDeepInternal(paper) {
                 } : {})
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
-            commitDeferredReaderCandidate(generatedReaderResult);
+            transferDeferredReaderCandidate(generatedReaderResult, paper);
             console.log(`    [deep] ✅ 初学研究者读者文章已生成`);
         } catch (error) {
             markRecoveryStage(
@@ -17951,6 +17983,9 @@ module.exports = {
     suppressOuterRetryAfterReaderExhaustion,
     checkpointImageSupplementFailure,
     commitDeferredReaderCandidate,
+    transferDeferredReaderCandidate,
+    commitDeferredReaderCandidateIfSaved,
+    hasDeferredReaderCandidate,
     saveAnalysisCheckpoint,
     shouldRetainFullTextCheckpoint,
     calculateScoringDelta,

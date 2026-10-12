@@ -14,7 +14,8 @@ const {
     restoreReaderSelectedTableBytes,
     rewriteApiReaderFigureNarratives,
     normalizeApiReaderTablePasteArtifacts,
-    normalizeReaderProseFormatting
+    normalizeReaderProseFormatting,
+    commitDeferredReaderCandidate
 } = require('./deep-analyzer.js');
 const {
     readJsonFileStrict,
@@ -432,6 +433,7 @@ async function refreshApiReader(targetId, options = {}) {
             else delete next.deepAnalysisCompletedAt;
             return next;
         });
+        commitDeferredReaderCandidate(refreshed);
         const savedRows = Array.isArray(savedPayload) ? savedPayload : savedPayload.papers;
         const savedRecord = savedRows.find(paper => normalizedId(paper) === requested);
         const batchDate = inferAnalysisBatchDate(

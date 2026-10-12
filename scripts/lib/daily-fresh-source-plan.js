@@ -501,6 +501,7 @@ async function withDailyFreshPaperSource(plan, paper, callback, options = {}) {
             sourceVersionIdentitySha256: sourceVersion.identitySha256
         } : {}),
         readerAttemptsDir: plan.readerAttemptsDir,
+        deferReaderCandidateCommit: true,
         materializeReaderFigures: (figures, requestedId) => ephemeralReaderFigures(
             requestedId, figures, plan, { ...options, figureCache }
         ),
@@ -515,6 +516,7 @@ async function withDailyFreshPaperSource(plan, paper, callback, options = {}) {
         if (sourceVersion) output.sourceVersion = clone(sourceVersion);
         else delete output.sourceVersion;
     }
+    require('../deep-analyzer').transferDeferredReaderCandidate(result, output);
     direct.assertNoPersistentFigureFields(output);
     return output;
 }

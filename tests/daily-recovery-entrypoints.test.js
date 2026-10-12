@@ -181,3 +181,83 @@ test('正式记录里没有已保存打包引用时，日更恢复来源计划�
 test('旧按论文批量停用接口已删除，不能绕过精确新轮授权', () => {
     assert.equal(require('../scripts/batch-analyze.js').retireIncompleteReaderCandidates, undefined);
 });
+
+
+test('日更 Reader 接受稿在装图和中央保存失败后保留，成功保存才标为已用', async t => {
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'daily-reader-commit-'));
+    const keys = ['dailyFreshSourceRunsDir', 'deepAnalysisResult', 'filteredPapers', 'papers'];
+    const previous = Object.fromEntries(keys.map(key => [key, Config.FILES[key]]));
+    for (const key of keys) Config.FILES[key] = key === 'dailyFreshSourceRunsDir'
+        ? path.join(root, 'runs') : path.join(root, 'current', `${key}.json`);
+    t.after(() => { Object.assign(Config.FILES, previous); fs.rmSync(root, { recursive: true, force: true }); });
+    const deep = require('../scripts/deep-analyzer.js');
+    const reader = require('../scripts/refresh-api-reader.js');
+    const signed = require('./reader-signed-draft-fixture.js').fixture();
+    const metadata = { arxivId: ID, title: 'Accepted Reader central save' };
+    const plan = daily.createDailyFreshSourcePlan({ batchDate: DATE, batchId: 'reader-save', papers: [metadata] });
+    await daily.captureDailyFreshSources(plan, { concurrency: 1, capture: options =>
+        require('../scripts/lib/fresh-arxiv-rewrite-source.js').captureFreshArxivRewriteSource(options, {
+            fetchText: async () => ({ ...sourcePayload(ID), text: signed.sourceDetails.text,
+                structuredArtifacts: signed.sourceDetails.structuredArtifacts }),
+            fetchPdf: async () => ({ bytes: Buffer.from('%PDF-1.7\n%%EOF\n'),
+                url: `https://arxiv.org/pdf/${ID}.pdf`, fetchedAt: '2026-09-07T00:00:00.000Z' })
+        }) });
+    const canonical = validAnalysisPaper(ID, { title: metadata.title });
+    const descriptor = daily.readDailyFreshSource(plan, canonical).freshSourceDescriptor;
+    canonical.sourceSha256 = descriptor.sourceSha256;
+    canonical.analysisManifest.sourceAcquisition = { sourceSha256: descriptor.sourceSha256 };
+    canonical.freshRewriteProvenance = { contract: 'fresh-source-analysis-v1', runId: plan.runId,
+        structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
+        sourceGeneration: descriptor.sourceGeneration, sourceManifestSha256: descriptor.sourceManifestSha256,
+        sourceSha256: descriptor.sourceSha256, sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
+        sourceOnly: true, oldGeneratedTextIncluded: false };
+    canonical.analysisManifest.freshRewriteProvenance = structuredClone(canonical.freshRewriteProvenance);
+    const envelope = { batchDate: DATE, dailyFreshSourceRun: daily.dailyFreshSourceReference(plan), papers: [canonical] };
+    writeJson(Config.FILES.deepAnalysisResult, envelope);
+    writeJson(Config.FILES.filteredPapers, { batchDate: DATE, papers: [metadata] });
+    writeJson(Config.FILES.papers, { generation: 0, papers: {} });
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aT9sAAAAASUVORK5CYII=', 'base64');
+    let calls = 0;
+    let mode = 'inject-failure';
+    const invoke = () => reader.refreshApiReader(ID, { fetchFigure: async () => ({ bytes: png, mediaType: 'image/png' }),
+        operations: { article: async (paper, source) => {
+            assert.equal(direct.directReaderCandidateCommitDeferred(), true);
+            const generated = await deep.generateApiReaderArticleDetailed(paper, '',
+                deep.buildApiReaderEvidenceContext('', source.text, source.structuredArtifacts, ID), {
+                    sourceText: source.text, structuredArtifacts: source.structuredArtifacts,
+                    readerMaxAttempts: 1, readerRecordDisposition: () => {},
+                    readerCallModel: async () => { calls += 1; return JSON.stringify(signed.draft); }
+                });
+            assert.equal(generated.attempts, 1);
+            assert.equal(generated.fullAttempts, 1);
+            assert.equal(generated.transportFailures, 0);
+            if (mode === 'inject-failure') throw new Error('测试装图失败');
+            const refreshed = deep.transferDeferredReaderCandidate(generated, { ...paper, apiReaderPlan: generated.plan, apiReaderFigures: [] });
+            if (mode === 'cas-failure') {
+                const checkpointFile = path.join(root, 'checkpoint-proof.json');
+                writeJson(checkpointFile, { papers: [paper] });
+                const checkpoint = require('../scripts/analysis-engine.js')
+                    .persistAnalysisCheckpoint(checkpointFile, refreshed);
+                assert.equal(deep.commitDeferredReaderCandidateIfSaved(refreshed, checkpoint.papers[0]), null,
+                    '旧成功正文保留分支没有保存新 Reader，不能因 checkpoint callback 完成而退役');
+                const changed = structuredClone(envelope); changed.papers[0].analysis += '\nchanged concurrently';
+                writeJson(Config.FILES.deepAnalysisResult, changed);
+            }
+            return refreshed;
+        } } });
+    const candidateFiles = () => fs.readdirSync(path.join(plan.runDir, 'reader-attempts'))
+        .filter(name => /^[a-f0-9]{64}\.json$/.test(name));
+    await assert.rejects(invoke(), /测试装图失败/);
+    assert.equal(candidateFiles().length, 1);
+    mode = 'cas-failure';
+    await assert.rejects(invoke(), /canonical_changed_during_refresh/);
+    assert.equal(candidateFiles().length, 1);
+    assert.equal(calls, 1, '失败后的恢复重用完整付费稿，不再请求模型');
+    writeJson(Config.FILES.deepAnalysisResult, envelope);
+    mode = 'success';
+    await invoke();
+    assert.equal(calls, 1);
+    assert.equal(candidateFiles().length, 0);
+    assert.equal(fs.readdirSync(path.join(plan.runDir, 'reader-attempts'))
+        .filter(name => name.endsWith('.resolved.json')).length, 1);
+});
