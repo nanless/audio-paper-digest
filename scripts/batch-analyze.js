@@ -31,6 +31,45 @@ const RETRY_FAILED_READERS = process.argv.slice(2).includes('--retry-failed-read
 const readerExplicitRound = require('./lib/explicit-reader-retry-round');
 const REFRESH_READER_DIAGNOSTICS = process.argv.slice(2).includes('--refresh-reader-diagnostics');
 
+function hasCompletedBoundFactFeedback(paper, feedback, plan) {
+    if (!paper || !feedback || !isSuccessfulAnalysisRecord(paper)
+        || !dailyFreshSources.isPaperReusableForAnalysis(paper, plan)) return false;
+    // 来源或反馈绑定失败仍必须阻断；不把这类失败转换为可跳过的结果。
+    const bound = factReview.validateFeedback(feedback, plan, paper);
+    return factReview.withFactReview(bound, () => {
+        const stages = paper.analysisManifest?.stages || {};
+        const primaryActive = Boolean(String(feedback.primaryFeedback || '').trim());
+        const required = [
+            ['primaryAnalysis', primaryActive, paper.analysis],
+            ['coreSummaryRepair', Boolean(feedback.coreFeedback.trim()), require('./analysis-contract').extractSection(paper.analysis, '核心摘要')],
+            ['tagSelection', Boolean(String(feedback.tagFeedback || '').trim()), paper.analysis],
+            ['apiReaderArticle', Boolean(feedback.readerFeedback.trim() || primaryActive), paper.apiReaderArticle],
+            ['scoringAudit', Boolean(String(feedback.scoringFeedback || '').trim() || primaryActive),
+                String(paper.analysis || '') + '\n' + JSON.stringify(stages.scoringAudit?.audit || {})]
+        ];
+        try {
+            for (const [stageName, active, text] of required) {
+                if (!active) continue;
+                const stage = stages[stageName];
+                if (stage?.status !== 'complete') return false;
+                const expected = factReview.fingerprintFields(stageName, stage);
+                if (!Object.keys(expected).length || Object.entries(expected).some(([field, value]) =>
+                    !require('node:util').isDeepStrictEqual(stage[field], value))) return false;
+                factReview.validateRepairedClaims(stageName, text || '', feedback.paperId);
+                if (stageName === 'apiReaderArticle') {
+                    const raw = String(feedback.readerFeedback || feedback.primaryFeedback || '').trim();
+                    const rendered = factReview.reviewFeedback(stageName, feedback.paperId).trim();
+                    if (![factReview.sha(raw), factReview.sha(rendered)].includes(stage.reviewFeedbackSha256)) return false;
+                }
+            }
+            return true;
+        } catch (_) {
+            // 旧或未知证明、仍含错误原句的成功记录仍走正常纠错流程。
+            return false;
+        }
+    });
+}
+
 function parseFactFeedbackFiles(argv = process.argv.slice(2)) {
     const files = [];
     for (let index = 0; index < argv.length; index++) {
@@ -132,10 +171,13 @@ async function main(options = {}) {
     );
     console.log(`总论文数: ${papers.length}`);
 
-    const notAnalyzed = papers.filter(p => feedbacks.has(normalizedId(p)) || !isSuccessfulAnalysisRecord(p)
-        || !dailyFreshSources.isPaperReusableForAnalysis(p, dailySourcePlan));
+    const notAnalyzed = papers.filter(p => {
+        const feedback = feedbacks.get(normalizedId(p));
+        return feedback ? !hasCompletedBoundFactFeedback(p, feedback, dailySourcePlan)
+            : !isSuccessfulAnalysisRecord(p) || !dailyFreshSources.isPaperReusableForAnalysis(p, dailySourcePlan);
+    });
     console.log(`本次处理论文: ${notAnalyzed.length}`);
-    if (feedbacks.size) console.log(`其中 ${feedbacks.size} 篇带有已核验的事实反馈；程序检查已通过的论文也须纠正已发现错误。`);
+    if (feedbacks.size) console.log(`其中 ${feedbacks.size} 篇带有已核验的事实反馈；只有同反馈全部纠正并通过检查的论文才跳过。`);
 
     const explicitRounds = new Map();
     if (explicitManifest) {
@@ -212,12 +254,13 @@ async function main(options = {}) {
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
             const feedback = feedbacks.get(normalizedId(paper));
+            let lockedPlan = dailySourcePlan;
             if (feedback) {
-                const lockedPlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(current, { label: 'locked batch fact review' });
+                lockedPlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(current, { label: 'locked batch fact review' });
                 factReview.validateFeedback(feedback, lockedPlan, latest);
             }
-            if (!feedback && isSuccessfulAnalysisRecord(latest)
-                && dailyFreshSources.isPaperReusableForAnalysis(latest, dailySourcePlan)) {
+            if (feedback ? hasCompletedBoundFactFeedback(latest, feedback, lockedPlan)
+                : isSuccessfulAnalysisRecord(latest) && dailyFreshSources.isPaperReusableForAnalysis(latest, dailySourcePlan)) {
                 return { paper: latest, skip: true };
             }
             return { paper: dailyFreshSources.prepareDailyPaper(latest || paper, dailySourcePlan), skip: false };
@@ -330,4 +373,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { main, parseFactFeedbackFiles, finalizeBatchZeroWorkState };
+module.exports = { hasCompletedBoundFactFeedback, main, parseFactFeedbackFiles, finalizeBatchZeroWorkState };
