@@ -10420,6 +10420,132 @@ function validateStaleAnalysisSnapshot(snapshot) {
     return structuredClone(snapshot.payload);
 }
 
+
+// 只恢复被调用方丢弃的 Reader 输入；所有阶段仍由正常分析入口核验和保存。
+function restoreReviewedReaderInputSnapshot(paper, plan, readerFeedback, expected) {
+    const engine = require('./analysis-engine');
+    const { normalizedId } = require('./utils');
+    const facts = require('./lib/daily-fact-review');
+    const daily = require('./lib/daily-fresh-source-plan');
+    const full = require('./lib/selected-full-stage-reanalysis');
+    const fail = message => {
+        const error = new Error(`长文原始正文恢复检查未通过：${message}`);
+        error.code = 'READER_INPUT_SNAPSHOT_REJECTED'; error.retryable = false; throw error;
+    };
+    if (!engine.paperAnalysisLockHeld(paper)) fail('须持有当前论文锁');
+    if (!expected || expected.paperSha256 !== stableFingerprint(paper)
+        || !/^[a-f0-9]{64}$/.test(expected.snapshotSha256 || '')) fail('当前损坏记录或指定快照身份不符');
+    if (paper.analysis || paper.analysisCheckpoint) fail('不能覆盖现有主文或检查点');
+    if (paper.analysisManifest?.version !== 1) fail('当前阶段记录版本无效');
+    if (paper.analysisManifest.sourceAcquisitionLatestFailure) fail('来源仍有未解决的失败');
+    const primary = paper.analysisManifest?.stages?.primaryAnalysis;
+    const prefix = '事实反馈绑定检查未通过：';
+    if (primary?.status !== 'transient_failure'
+        || primary.error !== prefix + facts.READER_SCOPE_MODEL_REJECTED
+        || paper.latestAnalysisAttemptErrorCode !== 'DAILY_FACT_REVIEW_INTEGRITY'
+        || ![facts.READER_SCOPE_MODEL_REJECTED, facts.READER_PRIMARY_REQUIRED]
+            .some(message => paper.latestAnalysisAttemptError === prefix + message)) fail('不是已确认的长文纠错调用范围拒绝');
+    full.assertPrepared(paper);
+    const parent = facts.current(normalizedId(paper));
+    if (!parent?.proof || parent.readerOnly || parent.coreOnly || parent.scoringOnly
+        || stableFingerprint(primary.factReview) !== stableFingerprint(parent.proof)) fail('缺少原主文反馈作用域');
+    const details = daily.readDailyFreshSource(plan, paper);
+    if (!daily.isPaperBoundToPlan(paper, plan)) fail('当前记录未绑定封存来源');
+    const bound = facts.validateFeedback(readerFeedback, plan, paper);
+    const stage = paper.analysisManifest.stages.apiReaderArticle;
+    if (stage?.status !== 'complete' || stage.fullStageReanalysisRunId !== paper.fullStageReanalysis.runId
+        || stableFingerprint(stage.factReview) !== stableFingerprint(bound.proof)
+        || stage.articleSha256 !== crypto.createHash('sha256').update(String(paper.apiReaderArticle || '')).digest('hex')
+        || stage.planSha256 !== stableFingerprint(paper.apiReaderPlan)) fail('新长文产物或反馈身份不符');
+    const snapshots = (paper.analysisStaleSnapshots || []).filter(snapshot =>
+        snapshot.invalidatedStage === 'apiReaderArticle'
+        && snapshot.replacementFingerprint === bound.proof.feedbackSha256
+        && validateStaleAnalysisSnapshot(snapshot)
+        && crypto.createHash('sha256').update(snapshot.payload.analysisCheckpoint).digest('hex') === bound.proof.coreAnalysisSha256);
+    if (snapshots.length !== 1) fail('原始正文检查记录不唯一或哈希不符');
+    if (snapshots[0].payloadSha256 !== expected.snapshotSha256) fail('指定原快照不同');
+    const payload = validateStaleAnalysisSnapshot(snapshots[0]);
+    const oldPrimary = payload.stages.primaryAnalysis;
+    if (oldPrimary?.status !== 'complete' || stableFingerprint(oldPrimary.factReview) !== stableFingerprint(parent.proof)
+        || oldPrimary.fullStageReanalysisRunId !== paper.fullStageReanalysis.runId) fail('原主文阶段身份不符');
+    const oldManifest = { stages: payload.stages, contracts: payload.contracts };
+    const missingAllowed = new Set(recoveryInvalidationClosure('primaryAnalysis').map(name =>
+        physicalRecoveryStage(oldManifest, name, payload.analysisStageCheckpoints)));
+    for (const [name, currentStage] of Object.entries(paper.analysisManifest.stages)) {
+        if (['primaryAnalysis', 'apiReaderArticle'].includes(name)) continue;
+        if (!Object.hasOwn(payload.stages, name)) fail(`当前阶段不属于原检查记录：${name}`);
+        const old = structuredClone(payload.stages[name]), current = structuredClone(currentStage);
+        if (['imageDiscovery', 'imageDownload'].includes(name)) { delete old.updatedAt; delete current.updatedAt; }
+        if (stableFingerprint(old) !== stableFingerprint(current)) fail(`不能覆盖当前阶段：${name}`);
+    }
+    for (const name of Object.keys(payload.stages)) {
+        if (!Object.hasOwn(paper.analysisManifest.stages, name) && !missingAllowed.has(name))
+            fail(`缺失阶段不在原主分析失效范围：${name}`);
+    }
+    const recoverableContracts = new Set(['experimentTables', 'methodDetail', 'editorialLeakage', 'coreSummary',
+        readTagStageRecord(oldManifest, payload.analysisStageCheckpoints).contractKey]);
+    for (const [name, value] of Object.entries(payload.contracts)) {
+        if (Object.hasOwn(paper.analysisManifest.contracts || {}, name)) {
+            if (stableFingerprint(paper.analysisManifest.contracts[name]) !== stableFingerprint(value))
+                fail(`不能覆盖当前协议：${name}`);
+        } else if (!recoverableContracts.has(name)) fail(`缺失协议不在原主分析失效范围：${name}`);
+    }
+    for (const [name, value] of Object.entries(paper.analysisStageCheckpoints || {})) {
+        if (name === 'demoLinkScan' && value === ''
+            && stableFingerprint(paper.analysisManifest.stages.demoLinkScan) === stableFingerprint(payload.stages.demoLinkScan)) continue;
+        if (name === 'apiReaderArticle') {
+            if (value !== '' && value !== paper.apiReaderArticle) fail('当前长文阶段检查点与新产物不符');
+            continue;
+        }
+        if (!Object.hasOwn(payload.analysisStageCheckpoints, name)
+            || stableFingerprint(value) !== stableFingerprint(payload.analysisStageCheckpoints[name]))
+            fail(`不能覆盖当前阶段检查点：${name}`);
+    }
+    for (const name of Object.keys(payload.analysisStageCheckpoints)) {
+        if (name === 'apiReaderArticle') continue;
+        if (!Object.hasOwn(paper.analysisStageCheckpoints || {}, name) && !missingAllowed.has(name))
+            fail(`缺失检查点不在原主分析失效范围：${name}`);
+    }
+    const candidate = structuredClone(paper);
+    candidate.analysis = payload.analysisCheckpoint;
+    candidate.analysisCheckpoint = payload.analysisCheckpoint;
+    candidate.parsed = parseAnalysis(payload.analysisCheckpoint);
+    const originalCheckpoints = structuredClone(payload.analysisStageCheckpoints);
+    delete originalCheckpoints.apiReaderArticle;
+    candidate.analysisStageCheckpoints = { ...originalCheckpoints, ...paper.analysisStageCheckpoints };
+    candidate.analysisManifest.stages = { ...payload.stages, ...paper.analysisManifest.stages, primaryAnalysis: oldPrimary };
+    candidate.analysisManifest.contracts = { ...payload.contracts, ...paper.analysisManifest.contracts };
+    const evidence = buildTaskEvidenceContext(details.text, FULL_TEXT_MAX_CHARS, BROAD_EVIDENCE_PATTERNS, 'PRIMARY');
+    if (!hasCurrentPrimaryAnalysisCheckpoint(candidate.analysisManifest,
+        buildRecoveryFingerprints(candidate, evidence, getPaperArxivId(candidate)).primaryAnalysis)) fail('原主分析真实输入指纹不符');
+    const contracts = require('./analysis-contract');
+    if (!engine.hasValidAnalysisBody(candidate)) fail('原主文内容无效');
+    const tagIssue = contracts.validateTagStageProof(candidate, { parsed: candidate.parsed });
+    if (tagIssue) fail(`原标签证明无效：${tagIssue}`);
+    const coreIssue = contracts.validateCoreSummaryStageBinding(candidate);
+    if (coreIssue) fail(`原摘要证明无效：${coreIssue}`);
+    if (!engine.scoringAuditBindsFinalAnalysis(candidate)
+        || !engine.scoringStabilityIsResolved(candidate.analysisManifest.stages.scoringAudit)) fail('原评分证明或稳定性检查无效');
+    if (!engine.hasValidApiReaderV3Records(candidate)) fail('新长文来源证明无效');
+    for (const name of contracts.REQUIRED_RECOVERY_STAGES) {
+        if (['apiReaderArticle', 'imageDownload', 'imageSupplement'].includes(name)) continue;
+        if (!contracts.isRecoveryStageTerminal(name, candidate.analysisManifest.stages[name]?.status)) fail(`原阶段未完成：${name}`);
+    }
+    // 如实保留调用方丢弃结果后的旧失败，而非重签当时的模型执行证明。
+    const failure = Object.fromEntries(Object.entries(paper).filter(([key]) =>
+        key === 'error' || key === 'digestStatus' || key.startsWith('latestAnalysisAttempt')));
+    candidate.readerInputSnapshotRecoveries = [...(paper.readerInputSnapshotRecoveries || []), {
+        contract: 'reader-original-input-snapshot-recovery-v1',
+        originalPaperSha256: expected.paperSha256, snapshotSha256: expected.snapshotSha256,
+        readerArticleSha256: stage.articleSha256, parentFactReview: structuredClone(parent.proof),
+        readerFactReview: structuredClone(bound.proof), originalPrimaryStage: structuredClone(primary),
+        originalStages: structuredClone(paper.analysisManifest.stages),
+        failure, restoredAt: getBeijingISOString(),
+        note: '核验原输入快照后交回正常分析；未补签模型证明，未清除失败或改写付费候选。'
+    }];
+    return candidate;
+}
+
 function retainFinalFactReviewInputs(paper, manifest) {
     const review = require('./lib/daily-fact-review');
     const id = String(paper.arxivId || paper.id || '').replace(/^arxiv:/, '').replace(/v\d+$/i, '');
@@ -18517,6 +18643,7 @@ module.exports = {
     tryMigrateCoreSummaryV3LegacyCheckpoints,
     captureStaleAnalysisSnapshot,
     validateStaleAnalysisSnapshot,
+    restoreReviewedReaderInputSnapshot,
     retainFinalFactReviewInputs,
     legacyStructureCompatibilityIsValid,
     prepareTextRecoveryStage,

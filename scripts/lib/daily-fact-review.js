@@ -11,6 +11,8 @@ const scope = new AsyncLocalStorage();
 const accepted = new WeakSet();
 const validatedContexts = new WeakMap();
 const CONTRACT = 'daily-bound-fact-review-v1';
+const READER_SCOPE_MODEL_REJECTED = '独立Reader纠错范围不能调用主文、摘要或评分模型';
+const READER_PRIMARY_REQUIRED = 'Reader纠错须保留已完成主分析';
 const SOURCE_FILES = ['source.txt', 'source.pdf', 'source-runtime.json', 'source-manifest.json'];
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const SHA = /^[a-f0-9]{64}$/;
@@ -211,7 +213,7 @@ function withReaderFactReview(readerBound, paper, callback) {
         || ['primaryFeedback', 'coreFeedback', 'tagFeedback', 'scoringFeedback'].some(key => String(reader[key] || '').trim())
         || ['rejectedPrimaryClaims', 'rejectedCoreClaims', 'rejectedTagClaims', 'rejectedScoringClaims'].some(key => (reader[key] || []).length))
         fail('独立Reader反馈不能授权主文、摘要、评分或标签修改');
-    if (paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete') fail('Reader纠错须保留已完成主分析');
+    if (paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete') fail(READER_PRIMARY_REQUIRED);
     const freshBound = validateFeedback(reader, context.plan, paper);
     const savedPrimary = paper.analysisManifest.stages.primaryAnalysis.factReview;
     if (savedPrimary !== undefined && (!previous || daily.stableHash(validateProof(savedPrimary)) !== daily.stableHash(previous.proof)))
@@ -237,7 +239,7 @@ function withReaderFactReview(readerBound, paper, callback) {
 }
 function assertScoringOnlyModelStageAllowed(stage) {
     if (current()?.readerOnly && !['apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe'].includes(stage))
-        fail('独立Reader纠错范围不能调用主文、摘要或评分模型');
+        fail(READER_SCOPE_MODEL_REJECTED);
     if (current()?.coreOnly && !['coreSummaryRepair', 'scoringAudit', 'apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe'].includes(stage))
         fail('独立核心纠错范围不能调用主分析或其他主文重写模型');
     if (current()?.scoringOnly && stage !== 'scoringAudit') fail('独立评分范围不允许正文或Reader模型请求');
@@ -333,5 +335,5 @@ function validateRepairedClaims(stage, text, paperId) {
     const scoringClaims = stage === 'scoringAudit' ? value.feedback.rejectedScoringClaims || [] : [];
     if ([...claims, ...scoringClaims, ...inheritedCoreClaims].some(claim => String(text).includes(claim))) fail('模型输出仍包含已证实错误的原句');
 }
-module.exports = { CONTRACT, sha, readFeedback, validateShape, validateFeedback, validateProof, proofFor,
+module.exports = { CONTRACT, READER_SCOPE_MODEL_REJECTED, READER_PRIMARY_REQUIRED, sha, readFeedback, validateShape, validateFeedback, validateProof, proofFor,
     withFactReview, withScoringFactReviews, withCoreSummaryFactReview, withReaderFactReview, assertScoringOnlyModelStageAllowed, current, fingerprintFields, reviewFeedback, validateRepairedClaims, assertScoringRequestAllowed, readerRejectedClaims };

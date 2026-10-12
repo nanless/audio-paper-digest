@@ -103,7 +103,8 @@ async function reanalyzeSelected(ids, options = {}) {
         const feedback = factReview.readFeedback(file);
         if (!idSet.has(feedback.paperId) || readerFeedbacks.has(feedback.paperId)) throw new Error('Reader反馈须属于唯一选定论文');
         const paper = papers.find(item => normalizedId(item) === feedback.paperId);
-        if (!paper || paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete') throw new Error('Reader反馈须保留已完成主分析');
+        if (!paper || (paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete'
+            && !options.readerInputSnapshotRecovery?.[feedback.paperId])) throw new Error('Reader反馈须保留已完成主分析');
         if (fullStageOptions && paper.fullStageReanalysis?.runId !== fullStageOptions.runId)
             throw new Error('独立Reader纠错不能发起全新主分析');
         factReview.validateFeedback(feedback, dailySourcePlan, paper);
@@ -117,6 +118,17 @@ async function reanalyzeSelected(ids, options = {}) {
         if (fileSha(entry.file) !== entry.sha256) throw new Error('Reader反馈文件在运行中变化');
         return factReview.validateFeedback(factReview.readFeedback(entry.file), dailySourcePlan, paper);
     };
+    if (options.readerInputSnapshotRecovery !== undefined) {
+        const recovery = options.readerInputSnapshotRecovery;
+        if (!fullStageOptions || !recovery || typeof recovery !== 'object' || Array.isArray(recovery)
+            || Object.entries(recovery).some(([id, value]) => !readerFeedbacks.has(id)
+                || !value || typeof value !== 'object' || Array.isArray(value)
+                || Object.keys(value).sort().join(',') !== 'paperSha256,snapshotSha256'
+                || !/^[a-f0-9]{64}$/.test(value.paperSha256 || '')
+                || !/^[a-f0-9]{64}$/.test(value.snapshotSha256 || ''))) {
+            throw new Error('Reader原输入恢复须指定原全阶段运行、独立反馈及准确的当前记录与快照SHA');
+        }
+    }
     if (coreFeedbacks.size && readerFeedbacks.size) throw new Error('独立核心和Reader纠错不能混用');
     for (const file of options.feedbackFiles || []) {
         const feedback = factReview.readFeedback(file);
@@ -229,7 +241,7 @@ async function reanalyzeSelected(ids, options = {}) {
         preparePaperLocked: paper => {
             const current = readJsonFileStrict(RESULT_FILE);
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
-            const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
+            let latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
             if (!latest) return { paper, skip: false };
             readCoreLocked(latest);
             readReaderLocked(latest);
@@ -241,6 +253,13 @@ async function reanalyzeSelected(ids, options = {}) {
                     factReview.validateFeedback(feedback, dailySourcePlan, original));
                 const bound = boundFeedbacks.get(normalizedId(latest));
                 const prepare = () => {
+                    const restoration = options.readerInputSnapshotRecovery?.[normalizedId(latest)];
+                    if (restoration) {
+                        const reader = readReaderLocked(latest);
+                        if (!reader) throw new Error('原Reader输入恢复须携带当前独立Reader反馈');
+                        latest = require('./deep-analyzer').restoreReviewedReaderInputSnapshot(
+                            latest, dailySourcePlan, reader.feedback, restoration);
+                    }
                     if (!coreFeedbacks.has(normalizedId(latest)) && !readerFeedbacks.has(normalizedId(latest)) && latest.fullStageReanalysis?.runId === fullStageOptions.runId
                         && fullStages.completedThisRun(latest)) {
                         fullStages.assertPrepared(latest);
