@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const cheerio = require('cheerio');
 const deep = require('../scripts/deep-analyzer');
 const tables = require('../scripts/lib/reader-tables');
-test('selection 拒绝后提示完整原矩阵兼容绑定，来源和全部校验保持原样', () => {
+test('选择表被拒绝后提示由程序保留完整原表，来源和全部校验保持原样', () => {
  const html = '<html><body><figure class="ltx_table"><figcaption>Table 1: Results</figcaption><table><tr><th></th><th>EER (%)</th></tr><tr><td>Baseline</td><td>2.34</td></tr><tr><td>Ours</td><td>1.23</td></tr></table></figure></body></html>';
  const sourceText = cheerio.load(html)('body').text();
  const artifacts = deep.bindStructuredArtifactsToText(deep.parseArxivStructuredArtifactsFromHtml(html, '2609.00001v1', '2609.00001v1'), sourceText);
@@ -18,7 +18,14 @@ test('selection 拒绝后提示完整原矩阵兼容绑定，来源和全部校�
  assert.match(eligibility.action, /完整原始 matrix/);
  assert.match(eligibility.action, /非法 selection 子集/);
  assert.match(deep.buildApiReaderArtifactEvidence(artifacts), /完整原表仍可按已有协议尝试 artifact_table/);
- assert.throws(() => tables.renderReaderTableSelection({ tableIndex: 1, selection: {sourceTableOrdinal: table.ordinal, sourceRows: [0,1], sourceColumns: [0,1]}}, artifacts), /完整复制原始 matrix/);
+ assert.throws(() => tables.renderReaderTableSelection({ tableIndex: 1, selection: {sourceTableOrdinal: table.ordinal, sourceRows: [0,1], sourceColumns: [0,1]}}, artifacts), /使用已有 completeTable 声明/);
+ const compiled = require('../scripts/lib/reader-draft-order').normalizeReaderDraftOrder({
+  sections: [{ kind: 'result', body: '比较问题。\n\n[[TABLE_1]]\n\n结果范围。' }],
+  tableBindings: [{tableIndex: 1, completeTable: {sourceTableOrdinal: table.ordinal}}]
+ }, {structuredArtifacts: artifacts}).draft;
+ assert.doesNotThrow(() => deep.bindApiReaderSourceEvidence(compiled.sections[0].body,
+  compiled.tableBindings, [], {sourceText, structuredArtifacts: artifacts}));
+ assert.equal(compiled.tableBindings[0].cellBindings.length, table.matrix.length * table.matrix[0].length);
  const matrix = table.matrix;
  const lines = matrix.map(row => '| ' + row.join(' | ') + ' |');
  lines.splice(1,0,'| '+matrix[0].map(()=>'---').join(' | ')+' |');

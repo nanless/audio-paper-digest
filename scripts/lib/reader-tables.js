@@ -377,6 +377,15 @@ function assessReaderTableSelectionEligibility(table) {
         ...(!reasons.length ? {} : { action: '这张表不能使用 selection。旧说明中的“eligible=false 时只能使用 source_quotes”限制针对 selection；完整原表仍可按已有协议尝试 artifact_table。具体做法是：把完整原始 matrix 写成 Markdown 表，逐格绑定原始 DOM cell，sourceQuotes 写 []，不用 TABLE marker。保留原表全部行列、数值和单位，不得把非法 selection 子集转成兼容绑定，也不得清理原单元格。仍须通过现有来源、数字、粘贴和正文审查；若无法通过，只能用全文逐字引文完整覆盖数字与单位的 source_quotes，不得编造表头或改写来源。' }) };
 }
 
+function completeReaderTableRecoveryGuidance() {
+    return '这张原表不能使用 selection。可以改选合格原表；需要展示当前完整原表时，使用已有 completeTable 声明：'
+        + '{"tableIndex":N,"completeTable":{"sourceTableOrdinal":J}}，N 是正文表号，J 是当前原表序号。'
+        + '本项来源记录必须已获修改授权；正文保留唯一独占一段的 [[TABLE_N]]。如果要把旧 Markdown 换成这个标记，对应正文也必须已获修改授权。'
+        + '程序按原始 DOM 坐标生成完整行列，不手写 matrix、cellBindings 或单元格，不混入 sourceRows、sourceColumns、sourceType、sourceQuotes。'
+        + '保留其他表格的既有标记与来源记录，不因修复本表改动其他表。完整表仍须通过全部来源、数字、单位和正文检查，不能清理原格、补造表头或删减原表。'
+        + '旧式 artifact_table 仍按原协议校验，但不能把非法 selection 子集转成兼容绑定。完整原表无法通过检查时，只能改选合格原表，或在对应授权内使用全文逐字引文覆盖全部数字与单位的 source_quotes。';
+}
+
 // 选择结果里的行号由模型给出，但哪些是表头行由原文明确。
 // 因此有两种错误可以不凭空造单元格就直接修：把唯一被选中的表头移到最前，
 // 或者模型只选了数据行时把唯一声明的表头补到最前。
@@ -449,7 +458,7 @@ function renderReaderTableSelection(binding, artifacts) {
             && assessReaderTableSelectionEligibility(candidate).eligible).map(candidate => candidate.ordinal);
         throw new Error(`${label} selection eligible=false: ${eligibility.reasonCodes.join(', ')}。`
             + `sourceTableOrdinal=${sourceTableOrdinal}；其他可选择原表序号=${JSON.stringify(alternatives)}。`
-            + '当前原表不能使用 selection。旧说明中的“eligible=false 时只能使用 source_quotes”限制针对 selection，完整原表仍可按已有协议尝试 artifact_table。可改选合格原表，或按以下方式逐格绑定当前原表：完整复制原始 matrix 为 Markdown 表，覆盖全部原始行列并逐格绑定原始 DOM cell，sourceQuotes 为 []，不用 TABLE marker。不得将非法 selection 子集转成兼容绑定，不得清理原单元格或改数字与单位；现有单元格、数字、粘贴与编辑审查仍须通过。否则仅使用有完整逐字证据的 source_quotes 路线，不得编造表头或改写来源。');
+            + completeReaderTableRecoveryGuidance());
     }
     for (const [values, limit, minimum] of [[requestedSourceRows, table.matrix.length, 2], [sourceColumns, width, 2]]) {
         if (!Array.isArray(values) || values.length < minimum || new Set(values).size !== values.length
