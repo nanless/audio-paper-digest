@@ -1508,10 +1508,14 @@ function buildMissingFormulaBindingsOperation(draft, issues) {
 function observedFigureSelectionOperation(draft, options = {}) {
     if (!Array.isArray(options.availableFigureOrdinals) || !options.availableFigureOrdinals.length
         || options.availableFigureOrdinals.some(ordinal => !Number.isInteger(ordinal) || ordinal < 1)
-        || !Array.isArray(draft?.figurePlacements) || draft.figurePlacements.length <= READER_LIMITS.maximumFigures
+        || !Array.isArray(draft?.figurePlacements) || !draft.figurePlacements.length
         || draft.figurePlacements.length > 16 || !Array.isArray(draft.sections)) return null;
     const ordinals = draft.figurePlacements.map(item => item?.figureOrdinal);
     if (ordinals.some(ordinal => !Number.isInteger(ordinal) || ordinal < 1)) return null;
+    const needsSelection = ordinals.length > READER_LIMITS.maximumFigures
+        || new Set(ordinals).size !== ordinals.length
+        || ordinals.some(ordinal => !options.availableFigureOrdinals.includes(ordinal));
+    if (!needsSelection) return null;
     const allowedFigureOrdinals = [...new Set(ordinals.filter(ordinal => options.availableFigureOrdinals.includes(ordinal)))];
     if (!allowedFigureOrdinals.length) return null;
     const targetKinds = new Set(draft.figurePlacements.map(item => item.targetKind));

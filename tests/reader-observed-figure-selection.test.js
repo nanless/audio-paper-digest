@@ -56,3 +56,34 @@ test('选图不能顺带去重原正文的表格或公式标记，额外placehol
  p.patch.replacements[1].value.body=p.patch.replacements[1].value.body.replace('[[TABLE_1]]','[[TABLE_1]]\n\n[[TABLE_1]]');
  const result=repair.applyReaderPatch(draft,p.patch,p.context.targets.map(x=>x.path),p.options);assert.equal((result.sections[0].body.match(/\[\[TABLE_1\]\]/g)||[]).length,2);
 });
+
+
+test('三图稿含一张本次没有像素的图时也能按来源局部选图，正常三图稿保持不动', () => {
+ const draft = createDraftSample();
+ draft.figurePlacements = draft.figurePlacements.slice(0, 3);
+ for (const index of [3, 4]) draft.sections[index].body = '原文报告数值512及相同条件。';
+ const p = proposal(draft, [1, 2], [1, 2]);
+ assert.equal(p.context.atomicOperation?.kind, 'select_observed_figures_v1');
+ assert.deepEqual(p.context.atomicOperation.allowedFigureOrdinals, [1, 2]);
+ const result = repair.applyReaderPatch(draft, p.patch, p.context.targets.map(item => item.path), p.options);
+ assert.deepEqual(result.figurePlacements, draft.figurePlacements.slice(0, 2));
+ assert.doesNotMatch(result.sections[2].body, /FIGURE_3|曲线/);
+ assert.deepEqual(result.sections.slice(3), draft.sections.slice(3));
+ assert.notEqual(proposal(draft, [1, 2, 3], [1, 2, 3]).context.atomicOperation?.kind, 'select_observed_figures_v1');
+ const invalid = proposal(draft, [1, 2], [1, 2, 3]);
+ assert.throws(() => repair.applyReaderPatch(draft, invalid.patch, invalid.context.targets.map(item => item.path), invalid.options), /figure was not included as pixels/);
+});
+
+
+test('真实生成入口三图稿遇到仅两张可用像素时授权局部删去无依据图声明',async t=>{
+ const fs=require('node:fs'),os=require('node:os'),path=require('node:path'),crypto=require('node:crypto');
+ const deep=require('../scripts/deep-analyzer');const directory=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'reader-selection-entry-'));t.after(()=>fs.rmSync(directory,{recursive:true,force:true}));
+ const imagePath=path.join(directory,'figure.png');fs.writeFileSync(imagePath,Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aT9sAAAAASUVORK5CYII=','base64'));
+ const assetSha256=crypto.createHash('sha256').update(fs.readFileSync(imagePath)).digest('hex');
+ const draft=createDraftSample();draft.figurePlacements=draft.figurePlacements.slice(0,3);for(const index of [3,4])draft.sections[index].body='原文报告数值512及相同条件。';draft.conceptBridges=Array.from({length:4},(_,i)=>({marker:`[[CONCEPT_BRIDGE_${i+1}]]`,sectionKind:'result',terms:['输入','输出'],relationship:'二者形成系统流程'}));
+ const stages=[];await assert.rejects(deep.generateApiReaderArticleDetailed({arxivId:'2610.90006',title:'受控超图恢复'},'canonical',Array.from({length:2},(_,i)=>`FIGURE_${i+1}: 方法图\nFIGURE_${i+1}_URL: https://arxiv.org/html/2610.90006/figure${i+1}.png`).join('\n'),{
+ sourceText:'原文报告数值512及相同条件。',readerAttemptsDir:directory,readerRecordDisposition(){},readerMaxAttempts:2,
+ readerMaterializeFigures:async()=>Array.from({length:2},(_,i)=>({ordinal:i+1,url:`https://arxiv.org/html/2610.90006/figure${i+1}.png`,cachePath:imagePath,assetSha256})),
+ readerCallModel:async(messages,tokens,options)=>{stages.push(options.usageContext.stage);if(stages.length===1)return JSON.stringify(draft);assert.equal(options.usageContext.stage,'apiReaderRepair');const request=JSON.stringify(messages);assert.match(request,/select_observed_figures_v1/);assert.match(request,/figurePlacements/);assert.match(request,/1–4/);throw Error('公共选图局部入口已核实');}
+ }),/公共选图局部入口已核实/);assert.deepEqual(stages,['apiReaderArticle','apiReaderRepair']);
+});
