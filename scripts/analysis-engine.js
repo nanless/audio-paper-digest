@@ -830,20 +830,57 @@ async function withPaperAnalysisLock(paper, callback, options = {}) {
 }
 
 function updateJsonFileLocked(filePath, updater, options = {}) {
-    return withFileLockSync(filePath, () => {
-        const current = readJsonFileStrict(filePath, { allowMissing: options.allowMissing !== false });
-        const next = updater(current);
-        if (next && typeof next.then === 'function') {
-            throw new Error('updateJsonFileLocked 的 updater 回调必须同步返回更新结果。');
+    const enabled = process.env.PD_CHECKPOINT_TIMING === '1';
+    const started = enabled ? process.hrtime.bigint() : null;
+    const elapsed = since => Number(process.hrtime.bigint() - since) / 1e6;
+    const timing = enabled ? { pid: process.pid,
+        paperId: /^\d{4}\.\d{4,5}$/.test(options.checkpointPaperId || '') ? options.checkpointPaperId : null,
+        reason: /^[a-z_]{1,40}$/.test(options.checkpointTimingReason || '') ? options.checkpointTimingReason : 'json_update',
+        lock_wait_ms: 0, read_parse_ms: 0, serialize_ms: 0, write_ms: 0,
+        bytes: 0, generation: null, result: 'failed' } : null;
+    try {
+        return withFileLockSync(filePath, () => {
+            if (timing) timing.lock_wait_ms = elapsed(started);
+            const readStarted = timing ? process.hrtime.bigint() : null;
+            const current = readJsonFileStrict(filePath, { allowMissing: options.allowMissing !== false });
+            if (timing) {
+                timing.read_parse_ms = elapsed(readStarted);
+                timing.generation = Number.isInteger(current?.generation) ? current.generation : 0;
+            }
+            const next = updater(current);
+            if (next && typeof next.then === 'function') {
+                throw new Error('updateJsonFileLocked 的 updater 回调必须同步返回更新结果。');
+            }
+            if (next === undefined) {
+                if (timing) timing.result = 'unchanged';
+                return current;
+            }
+            const currentGeneration = Number.isInteger(current?.generation) ? current.generation : 0;
+            if (next && !Array.isArray(next) && typeof next === 'object') {
+                next.generation = currentGeneration + 1;
+            }
+            const serializeStarted = timing ? process.hrtime.bigint() : null;
+            const serialized = JSON.stringify(next, null, 2);
+            if (timing) {
+                timing.serialize_ms = elapsed(serializeStarted);
+                timing.bytes = typeof serialized === 'string' ? Buffer.byteLength(serialized) : 0;
+            }
+            const writeStarted = timing ? process.hrtime.bigint() : null;
+            writeFileAtomic(filePath, serialized);
+            if (timing) {
+                timing.write_ms = elapsed(writeStarted);
+                timing.generation = next?.generation ?? currentGeneration;
+                timing.result = 'saved';
+            }
+            return next;
+        }, options);
+    } finally {
+        if (timing) {
+            timing.total_ms = elapsed(started);
+            // 计时不能覆盖原结果或异常；不记录正文、文件路径、网址和请求配置。
+            try { console.log(`[checkpoint-timing] ${JSON.stringify(timing)}`); } catch (_) {}
         }
-        if (next === undefined) return current;
-        const currentGeneration = Number.isInteger(current?.generation) ? current.generation : 0;
-        if (next && !Array.isArray(next) && typeof next === 'object') {
-            next.generation = currentGeneration + 1;
-        }
-        writeFileAtomic(filePath, JSON.stringify(next, null, 2));
-        return next;
-    }, options);
+    }
 }
 
 function initializeJsonFileLocked(filePath, fallbackValue, options = {}) {
@@ -1826,7 +1863,7 @@ function persistAnalysisCheckpoint(filePath, paper) {
         };
         delete payload.deepAnalysisCompletedAt;
         return payload;
-    });
+    }, { checkpointTimingReason: 'analysis_checkpoint', checkpointPaperId: normalizedId(paper) });
 }
 
 // ═══════════════════════════════════════════════════════
