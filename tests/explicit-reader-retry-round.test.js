@@ -562,3 +562,138 @@ test('新轮保留完整原稿，真实 Reader 首次请求走局部修复，原
         });
     }));
 });
+
+async function setupExhaustedParent(t, tokensUsed = [48000, 16000, 16000], savedAttempts = tokensUsed.length) {
+    const draft = createReaderTestArticle();
+    draft.readerTitle = '短';
+    const raw = JSON.stringify(draft, null, 2);
+    const f = setup(t, p => {
+        p.draft = draft;
+        p.rawDraft = raw;
+        p.ephemeralImageEvidence = { imageEvidence: [], directSupplementaryEvidence: [] };
+    });
+    let parent;
+    await f.locked(() => retry.withExplicitRound(paper, f.grant, async () => {
+        parent = retry.beginExplicitRound(directory, f.identity, f.payload, paper);
+        await retry.withPhysicalBudget(parent.explicitReaderRetryRound, paper, async () => {
+            for (const tokens of tokensUsed) {
+                await sendLocalRepairRequest(paper, tokens, tokens === 48000 ? 'apiReaderArticle' : 'apiReaderRepair');
+            }
+        });
+        parent = { ...parent, attempts: savedAttempts, fullAttempts: 1 };
+        repair.saveFailedCandidate(directory, f.identity, parent);
+    }));
+    const parentReceipt = fs.readFileSync(parent.explicitReaderRetryRound.receiptFile);
+    const file = path.join(directory, repair.hashDraft(f.identity) + '.json');
+    const childGrant = { ...f.grant, contract: retry.LOCAL_REPAIR_CONTRACT,
+        roundId: crypto.randomUUID(), parentRoundId: f.grant.roundId,
+        parentReceiptSha256: sha(parentReceipt), envelopeSha256: sha(fs.readFileSync(file)),
+        payloadSha256: repair.hashDraft(parent), maxResponses: 1, maxFullResponses: 0,
+        maxPhysicalRequests: 2, maxReservedOutputTokens: 32000 };
+    return { ...f, parent, parentReceipt, childGrant, raw };
+}
+function sendLocalRepairRequest(paper, tokens, stage = 'apiReaderRepair', transport = async () => ({
+    statusCode: 200, body: { choices: [{ message: { content: '{}' }, finish_reason: 'stop' }] }
+})) {
+    return require('../scripts/utils').requestLlmJson('https://example.invalid/v1/chat/completions',
+        'https://example.invalid/v1', 'test-model', { max_tokens: tokens, messages: [] }, {}, {
+            usageContext: { paperId: paper.arxivId, stage }, usageSink() {}, transportRequestFn: transport
+        });
+}
+test('父轮局部修复真实请求最多2次32k，父80k账与原稿字节不动，全文0传输', async t => {
+    const f = await setupExhaustedParent(t);
+    await f.locked(() => retry.withExplicitLocalRepairRound(paper, f.childGrant, async () => {
+        const next = retry.beginExplicitRound(directory, f.identity, f.parent, paper);
+        assert.equal(next.rawDraft, f.raw);
+        assert.equal(next.explicitReaderRetryRound.maxResponses, 1);
+        assert.equal(next.explicitReaderRetryRound.maxFullResponses, 0);
+        let actual = 0;
+        await retry.withPhysicalBudget(next.explicitReaderRetryRound, paper, async () => {
+            const transport = async () => {
+                actual += 1;
+                return { statusCode: 200, body: { choices: [{ message: { content: '{}' }, finish_reason: 'stop' }] } };
+            };
+            await assert.rejects(sendLocalRepairRequest(paper, 48000, 'apiReaderArticle', transport),
+                error => error.code === 'READER_LOCAL_REPAIR_FULL_REQUEST_FORBIDDEN' && error.retryable === false);
+            assert.equal(actual, 0);
+            await sendLocalRepairRequest(paper, 16000, 'apiReaderRepair', transport);
+            await sendLocalRepairRequest(paper, 16000, 'apiReaderRepair', transport);
+            await assert.rejects(sendLocalRepairRequest(paper, 1, 'apiReaderRepair', transport),
+                error => error.code === 'READER_EXPLICIT_ROUND_BUDGET_EXHAUSTED');
+            assert.equal(actual, 2);
+        });
+        assert.deepEqual(fs.readFileSync(f.parent.explicitReaderRetryRound.receiptFile), f.parentReceipt);
+        const receipt = JSON.parse(fs.readFileSync(next.explicitReaderRetryRound.receiptFile));
+        assert.equal(receipt.oldAttempts, 3);
+        assert.equal(receipt.oldFullAttempts, 1);
+        assert.equal(sha(fs.readFileSync(receipt.archivedFile)), f.childGrant.envelopeSha256);
+        assert.throws(() => repair.saveFailedCandidate(directory, f.identity, { ...next, fullAttempts: 1 }), /正文预算/);
+        repair.saveFailedCandidate(directory, f.identity, { ...next, attempts: 1 });
+        assert.throws(() => repair.saveFailedCandidate(directory, f.identity, { ...next, attempts: 2 }), /正文预算/);
+    }));
+});
+test('父轮证据变化与同父第二授权拒绝，普通恢复续子轮，不重复安装', async t => {
+    const f = await setupExhaustedParent(t);
+    await f.locked(() => {
+        assert.throws(() => retry.withExplicitLocalRepairRound(paper,
+            { ...f.childGrant, parentReceiptSha256: '0'.repeat(64) }, () =>
+                retry.beginExplicitRound(directory, f.identity, f.parent, paper)), /父轮调用记录已变化/);
+        const next = retry.withExplicitLocalRepairRound(paper, f.childGrant, () =>
+            retry.beginExplicitRound(directory, f.identity, f.parent, paper));
+        assert.equal(retry.beginExplicitRound(directory, f.identity, next, paper), null);
+        assert.throws(() => retry.withExplicitLocalRepairRound(paper,
+            { ...f.childGrant, roundId: crypto.randomUUID() }, () =>
+                retry.beginExplicitRound(directory, f.identity, next, paper)), /另一局部修复轮/);
+        assert.deepEqual(fs.readFileSync(f.parent.explicitReaderRetryRound.receiptFile), f.parentReceipt);
+    });
+});
+test('请求返回但子稿尚未保存的崩溃保留16k，恢复只续剩余16k', async t => {
+    const f = await setupExhaustedParent(t);
+    await f.locked(() => retry.withExplicitLocalRepairRound(paper, f.childGrant, async () => {
+        const next = retry.beginExplicitRound(directory, f.identity, f.parent, paper);
+        await retry.withPhysicalBudget(next.explicitReaderRetryRound, paper, () => sendLocalRepairRequest(paper, 16000));
+        const restored = repair.loadFailedCandidate(directory, f.identity);
+        assert.equal(restored.attempts, 0);
+        assert.equal(retry.beginExplicitRound(directory, f.identity, restored, paper), null);
+        await retry.withPhysicalBudget(restored.explicitReaderRetryRound, paper, async () => {
+            let actual = 0;
+            const transport = async () => {
+                actual += 1;
+                return { statusCode: 200, body: { choices: [{ message: { content: '{}' }, finish_reason: 'stop' }] } };
+            };
+            await sendLocalRepairRequest(paper, 16000, 'apiReaderRepair', transport);
+            await assert.rejects(sendLocalRepairRequest(paper, 1, 'apiReaderRepair', transport), /预算耗尽/);
+            assert.equal(actual, 1);
+        });
+        assert.deepEqual(fs.readFileSync(f.parent.explicitReaderRetryRound.receiptFile), f.parentReceipt);
+    }));
+});
+
+
+test('父轮仍有正常余额时拒绝后续授权，不改变原稿和原调用账', async t => {
+    const f = await setupExhaustedParent(t, [48000, 16000]);
+    await f.locked(() => {
+        const before = fs.readFileSync(path.join(directory, repair.hashDraft(f.identity) + '.json'));
+        assert.throws(() => retry.withExplicitLocalRepairRound(paper, f.childGrant, () =>
+            retry.beginExplicitRound(directory, f.identity, f.parent, paper)), /仍有正常剩余额度/);
+        assert.deepEqual(fs.readFileSync(path.join(directory, repair.hashDraft(f.identity) + '.json')), before);
+        assert.deepEqual(fs.readFileSync(f.parent.explicitReaderRetryRound.receiptFile), f.parentReceipt);
+    });
+});
+
+test('父轮实际80k耗尽但保存逻辑仅一次时允许局部轮，保留真实1次旧计数', async t => {
+    const f = await setupExhaustedParent(t, [48000, 16000, 16000], 1);
+    const currentFile = path.join(directory, repair.hashDraft(f.identity) + '.json');
+    f.childGrant.envelopeSha256 = sha(fs.readFileSync(currentFile));
+    f.childGrant.payloadSha256 = repair.hashDraft(f.parent);
+    await f.locked(() => retry.withExplicitLocalRepairRound(paper, f.childGrant, () => {
+        const next = retry.beginExplicitRound(directory, f.identity, f.parent, paper);
+        assert.equal(next.attempts, 0);
+        assert.equal(next.fullAttempts, 0);
+        assert.equal(next.rawDraft, f.raw);
+        const receipt = JSON.parse(fs.readFileSync(next.explicitReaderRetryRound.receiptFile));
+        assert.equal(receipt.oldAttempts, 1);
+        assert.equal(receipt.oldFullAttempts, 1);
+        assert.deepEqual(fs.readFileSync(f.parent.explicitReaderRetryRound.receiptFile), f.parentReceipt);
+    }));
+});

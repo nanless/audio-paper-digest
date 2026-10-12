@@ -7651,7 +7651,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             throw new Error('没有可安全修复的表格对应节点，已保留失败草稿；本次未发送模型请求');
         }
         if (sourceBindingNeedsFullRetry) previousDraft = JSON.stringify(candidate);
-        if (!repairContext && fullAttempts >= (explicitRound?.maxFullResponses || 2)
+        if (!repairContext && fullAttempts >= (explicitRound?.maxFullResponses ?? 2)
             && (explicitRound || !repair.hasUnusedImplementationAllowance({ ...recovered,
                 attempts: attempt - 1, fullAttempts, implementationRepairAllowanceProof }))) {
             throw lastError || new Error('Reader root JSON remained invalid after two full attempts');
@@ -15446,12 +15446,20 @@ async function analyzePaperDeepInternal(paper) {
     const structuralAnalysis = typeof paper.analysisStageCheckpoints?.coreSummaryRepair === 'string'
         ? paper.analysisStageCheckpoints.coreSummaryRepair
         : analysis;
+    const previousReaderResources = paper.apiReaderResources;
     const verifiedReaderResources = await buildApiReaderResourceIdentity(
         structuralAnalysis, rawTextForAnalysis, analysisManifest.stages.demoLinkScan,
         { paper, structuredArtifacts: sourceDetails.structuredArtifacts }
     );
     paper.apiReaderResources = verifiedReaderResources;
-    const scoringInputAnalysis = applyApiReaderResourceAvailability(
+    const thirdPartyScoringReplay = require('./lib/scoring-third-party-resource-replay').prepareReplay(
+        paper, previousReaderResources, verifiedReaderResources, structuralAnalysis, rawTextForAnalysis, {
+            verify: replayVerifiedReaderResourceIdentity,
+            apply: applyApiReaderResourceAvailability,
+            evidence: (input, source) => buildStageEvidenceContext('scoringAudit', input, source)
+        }
+    );
+    const scoringInputAnalysis = thirdPartyScoringReplay?.analysis || applyApiReaderResourceAvailability(
         structuralAnalysis, paper.apiReaderResources
     );
     analysisManifest.stages.openSourceScan.resourceEvidenceContract =
@@ -15545,6 +15553,7 @@ async function analyzePaperDeepInternal(paper) {
             } else {
                 analysis = scoringInputAnalysis;
             }
+            delete analysisManifest.scoringResourceInputReplay;
             delete analysisManifest.stages.scoringAudit;
             delete analysisManifest.stages.imageSupplement;
             if (paper.analysisStageCheckpoints) {
@@ -15554,7 +15563,14 @@ async function analyzePaperDeepInternal(paper) {
             console.log(`    [deep] ⚠️  评分审查的输入指纹发生变化，已清除评分和插图阶段记录；只使用论文来源证据的读者文章不受影响`);
         }
     }
+    if (thirdPartyScoringReplay && isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
+        // 上面的原有检查已逐项核对其他评分输入。保留原付费阶段及其完整输出，
+        // 最新核验的资源身份仍交给读者文章展示。
+        analysis = thirdPartyScoringReplay.output;
+        analysisManifest.scoringResourceInputReplay = thirdPartyScoringReplay.metadata;
+    }
     if (!isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
+        delete analysisManifest.scoringResourceInputReplay;
         // 缺少原反馈时先停止，不能由下面的失败保存覆盖已签名证明。
         scoringFactReview.assertScoringRequestAllowed(scoringRequestDeclaration);
         try {

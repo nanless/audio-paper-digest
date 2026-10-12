@@ -6,21 +6,82 @@ const { AsyncLocalStorage } = require('node:async_hooks');
 const grantScope = new AsyncLocalStorage();
 const requestScope = new AsyncLocalStorage();
 const CONTRACT = 'reader-explicit-paid-retry-round-v1';
+const LOCAL_REPAIR_CONTRACT = 'reader-explicit-parent-local-repair-v1';
 const hash = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const idOf = paper => String(paper.arxivId || paper.paperId || '').replace(/v\d+$/, '');
 function assertGrant(grant) {
-    if (!grant || grant.contract !== CONTRACT || !/^\d{4}\.\d{4,5}$/.test(grant.paperId)
+    const local = grant?.contract === LOCAL_REPAIR_CONTRACT;
+    if (!grant || ![CONTRACT, LOCAL_REPAIR_CONTRACT].includes(grant.contract) || !/^\d{4}\.\d{4,5}$/.test(grant.paperId)
         || !/^[a-f0-9-]{36}$/.test(grant.roundId)
         || ['identitySha256', 'originalIdentitySha256', 'envelopeSha256', 'payloadSha256', 'wholeSha256']
             .some(key => !/^[a-f0-9]{64}$/.test(grant[key] || ''))
         || !/^\d{4}-\d{2}-\d{2}$/.test(grant.batchDate || '') || !/^[a-f0-9-]{36}$/.test(grant.runId || '')
         || !grant.sourceFiles || Object.keys(grant.sourceFiles).sort().join('|') !== ['source-manifest.json', 'source-runtime.json', 'source.pdf', 'source.txt'].sort().join('|')
         || Object.values(grant.sourceFiles).some(value => !/^[a-f0-9]{64}$/.test(value))
-        || grant.maxResponses !== 3 || grant.maxFullResponses !== 1
-        || grant.maxPhysicalRequests !== 6 || grant.maxReservedOutputTokens !== 80000) {
+        || (local ? (grant.maxResponses !== 1 || grant.maxFullResponses !== 0
+            || grant.maxPhysicalRequests !== 2 || grant.maxReservedOutputTokens !== 32000
+            || !/^[a-f0-9-]{36}$/.test(grant.parentRoundId || '')
+            || !/^[a-f0-9]{64}$/.test(grant.parentReceiptSha256 || '')
+            || grant.parentRoundId === grant.roundId)
+            : (grant.maxResponses !== 3 || grant.maxFullResponses !== 1
+                || grant.maxPhysicalRequests !== 6 || grant.maxReservedOutputTokens !== 80000))) {
         throw new Error('Reader 重试许可的内容或预算不符合要求');
     }
     return grant;
+}
+function localRepairError(message) {
+    return Object.assign(new Error(message), { code: 'READER_LOCAL_REPAIR_PROOF_INVALID', retryable: false,
+        scope: 'paper', category: 'reader_recovery', modelRequestClassified: true });
+}
+function assertLocalRepairParent(directory, grant, currentPayload, currentIdentity) {
+    assertGrant(grant);
+    if (grant.contract !== LOCAL_REPAIR_CONTRACT) return;
+    try {
+        const parentFile = paths(directory, grant.parentRoundId).receipt;
+        const checked = readMigrationEnvelope(parentFile);
+        if (hash(checked.bytes) !== grant.parentReceiptSha256) throw localRepairError('局部修复父轮调用记录已变化');
+        const parent = checked.envelope;
+        assertGrant(parent.grant);
+        assertRequestLedger(parent);
+        if (parent.grant.contract !== CONTRACT || parent.status !== 'active'
+            || parent.grant.paperId !== grant.paperId || parent.grant.runId !== grant.runId
+            || parent.grant.batchDate !== grant.batchDate
+            || JSON.stringify(parent.grant.sourceFiles) !== JSON.stringify(grant.sourceFiles)) {
+            throw localRepairError('局部修复必须对应同篇、同批和同来源的原付费轮');
+        }
+        const root = path.dirname(parentFile);
+        for (const name of fs.readdirSync(root).filter(n => /^[a-f0-9-]{36}\.json$/.test(n))) {
+            const other = JSON.parse(fs.readFileSync(path.join(root, name)));
+            if (other.grant?.contract === LOCAL_REPAIR_CONTRACT
+                && other.grant.parentRoundId === grant.parentRoundId && other.grant.roundId !== grant.roundId) {
+                throw localRepairError('同一父轮已授权另一局部修复轮');
+            }
+        }
+        if (currentPayload) {
+            const repair = require('./reader-repair');
+            const draft = repair.parseRecoveryDraft(currentPayload.draft) || repair.parseRecoveryDraft(currentPayload.rawDraft);
+            if (currentPayload.explicitReaderRetryRound?.roundId !== grant.parentRoundId
+                || currentPayload.status !== 'failed'
+                || !draft || draft.sections.length < 12
+                || draft.sections.some(section => !section || ['kind', 'heading', 'body'].some(key =>
+                    typeof section[key] !== 'string' || !section[key].trim()))) {
+                throw localRepairError('局部修复只接受父轮已保存的完整失败稿');
+            }
+            validatePersistedRound(directory, currentIdentity, currentPayload);
+            if (currentPayload.attempts < parent.grant.maxResponses
+                && parent.physicalRequests < parent.grant.maxPhysicalRequests
+                && parent.reservedOutputTokens < parent.grant.maxReservedOutputTokens) {
+                throw localRepairError('父轮仍有正常剩余额度，不开局部修复轮');
+            }
+        }
+    } catch (error) {
+        if (error?.modelRequestClassified) throw error;
+        throw localRepairError('父轮调用记录或局部修复证明无法核验');
+    }
+}
+function withExplicitLocalRepairRound(paper, grant, callback) {
+    if (grant?.contract !== LOCAL_REPAIR_CONTRACT) throw new Error('局部修复需要明确父轮授权');
+    return withExplicitRound(paper, grant, callback);
 }
 function readOwner(paper) {
     const engine = require('../analysis-engine');
@@ -73,11 +134,15 @@ function beginExplicitRound(directory, identity, recovered, paper) {
         const matching = fs.readdirSync(root).filter(n => /^[a-f0-9-]{36}\.json$/.test(n))
             .map(n => JSON.parse(fs.readFileSync(path.join(root, n))))
             .filter(receipt => receipt.grant?.identitySha256 === identityHash);
-        if (matching.some(receipt => receipt.status === 'active'
+        const parentIds = new Set(matching.filter(receipt => receipt.grant?.contract === LOCAL_REPAIR_CONTRACT
+            && ['prepared', 'active'].includes(receipt.status))
+            .map(receipt => { assertLocalRepairParent(directory, receipt.grant); return receipt.grant.parentRoundId; }));
+        const effective = matching.filter(receipt => !parentIds.has(receipt.grant?.roundId));
+        if (effective.some(receipt => receipt.status === 'active'
             && recovered?.explicitReaderRetryRound?.roundId !== receipt.grant.roundId)) {
             throw new Error('明确 Reader 新轮当前记录缺失或凭证不同，拒绝自动首次生成');
         }
-        const pending = matching.filter(receipt => receipt.status === 'prepared');
+        const pending = effective.filter(receipt => receipt.status === 'prepared');
         if (pending.length > 1) throw new Error('Reader 新轮准备事务不唯一');
         return pending.length ? withExplicitRound(paper, pending[0].grant,
             () => beginExplicitRound(directory, identity, recovered, paper)) : null;
@@ -105,9 +170,12 @@ function beginExplicitRound(directory, identity, recovered, paper) {
     }
     if (!receipt) {
         const old = repair.loadFailedCandidate(directory, identity);
-        if (old?.explicitReaderRetryRound) throw new Error('同一当前输入不能再次开明确付费新轮');
+        if (grant.contract === LOCAL_REPAIR_CONTRACT) assertLocalRepairParent(directory, grant, old, identity);
+        else if (old?.explicitReaderRetryRound) throw new Error('同一当前输入不能再次开明确付费新轮');
         if (!old || repair.hasUnusedImplementationAllowance(old)
-            || (old.attempts < (old.explicitReaderRetryRound?.maxResponses || 6) && old.noProgress < 2 && old.validationFailureStreak < 2)) {
+            || (grant.contract !== LOCAL_REPAIR_CONTRACT
+                && old.attempts < (old.explicitReaderRetryRound?.maxResponses || 6)
+                && old.noProgress < 2 && old.validationFailureStreak < 2)) {
             throw new Error('Reader 候选仍有合法尝试或并非经过校验的失败');
         }
         const originalFile = path.join(directory, `${grant.originalIdentitySha256}.json`);
@@ -190,7 +258,9 @@ function assertRequestLedger(receipt) {
         || receipt.requests.some(request => !request || !['apiReaderArticle', 'apiReaderRepair'].includes(request.stage)
             || !Number.isFinite(Date.parse(request.at)) || !Number.isSafeInteger(request.tokens) || request.tokens < 1)
         || receipt.requests.length !== receipt.physicalRequests
-        || receipt.requests.reduce((sum, request) => sum + request.tokens, 0) !== receipt.reservedOutputTokens) {
+        || receipt.requests.reduce((sum, request) => sum + request.tokens, 0) !== receipt.reservedOutputTokens
+        || (receipt.grant?.contract === LOCAL_REPAIR_CONTRACT
+            && receipt.requests.some(request => request.stage !== 'apiReaderRepair'))) {
         throw new Error('Reader 新轮实际请求明细与次数或输出预算不一致');
     }
 }
@@ -267,8 +337,9 @@ function validatePersistedRound(directory, identity, payload) {
     const proof = payload.explicitReaderRetryRound;
     if (!proof) return;
     if (proof.contract !== CONTRACT || !/^[a-f0-9-]{36}$/.test(proof.roundId || '')
-        || proof.maxResponses !== 3 || proof.maxFullResponses !== 1
-        || payload.attempts > 3 || payload.fullAttempts > 1) throw new Error('明确 Reader 新轮正文预算或证明不合法');
+        || !((proof.maxResponses === 3 && proof.maxFullResponses === 1)
+            || (proof.maxResponses === 1 && proof.maxFullResponses === 0))
+        || payload.attempts > proof.maxResponses || payload.fullAttempts > proof.maxFullResponses) throw new Error('明确 Reader 新轮正文预算或证明不合法');
     const expected = path.join(directory, 'explicit-retry-rounds', `${proof.roundId}.json`);
     if (path.resolve(proof.receiptFile) !== path.resolve(expected)) throw new Error('Reader 新轮证明路径不合法');
     for (const file of [expected, path.join(directory, 'explicit-retry-rounds', `${proof.roundId}.original.json`)]) {
@@ -287,14 +358,19 @@ function validatePersistedRound(directory, identity, payload) {
     }
     assertGrant(receipt.grant);
     assertRequestLedger(receipt);
+    if (receipt.grant.contract === LOCAL_REPAIR_CONTRACT) {
+        assertLocalRepairParent(directory, receipt.grant, original.payload, original.identity);
+    }
+    if (proof.maxResponses !== receipt.grant.maxResponses || proof.maxFullResponses !== receipt.grant.maxFullResponses)
+        throw new Error('Reader 保存次数与授权预算不匹配');
     if (!['prepared', 'active'].includes(receipt.status)
         || path.resolve(receipt.archivedFile) !== path.resolve(directory, 'explicit-retry-rounds', `${proof.roundId}.original.json`)
         || receipt.grant.roundId !== proof.roundId
         || (require('./reader-repair').hashDraft(identity) !== receipt.grant.identitySha256
             && !sameRoundIdentityAfterPublicMigration(directory, identity, payload, receipt))
         || hash(fs.readFileSync(receipt.archivedFile)) !== receipt.grant.envelopeSha256
-        || !Number.isSafeInteger(receipt.physicalRequests) || receipt.physicalRequests < 0 || receipt.physicalRequests > 6
-        || !Number.isSafeInteger(receipt.reservedOutputTokens) || receipt.reservedOutputTokens < 0 || receipt.reservedOutputTokens > 80000) {
+        || !Number.isSafeInteger(receipt.physicalRequests) || receipt.physicalRequests < 0 || receipt.physicalRequests > receipt.grant.maxPhysicalRequests
+        || !Number.isSafeInteger(receipt.reservedOutputTokens) || receipt.reservedOutputTokens < 0 || receipt.reservedOutputTokens > receipt.grant.maxReservedOutputTokens) {
         throw new Error('Reader 新轮身份、原稿或实际请求预算证明不一致');
     }
 }
@@ -316,6 +392,15 @@ function consumePhysicalRequest(body, options) {
         || !['apiReaderArticle', 'apiReaderRepair'].includes(options.usageContext?.stage)) {
         throw new Error('明确 Reader 新轮请求范围不合法');
     }
+    if (receipt.grant.contract === LOCAL_REPAIR_CONTRACT) {
+        assertLocalRepairParent(path.dirname(path.dirname(scope.proof.receiptFile)), receipt.grant);
+        if (options.usageContext.stage !== 'apiReaderRepair') {
+            const error = new Error('父轮后续局部修复不允许全文请求');
+            Object.assign(error, { code: 'READER_LOCAL_REPAIR_FULL_REQUEST_FORBIDDEN', retryable: false,
+                scope: 'paper', category: 'reader_budget_exhausted', modelRequestClassified: true });
+            throw error;
+        }
+    }
     const tokens = body.max_tokens ?? body.max_output_tokens;
     if (!Number.isSafeInteger(tokens) || tokens < 1
         || receipt.physicalRequests >= receipt.grant.maxPhysicalRequests
@@ -333,5 +418,5 @@ function consumePhysicalRequest(body, options) {
     receipt.requests.push({ at: new Date().toISOString(), stage: options.usageContext.stage, tokens });
     atomic(scope.proof.receiptFile, receipt);
 }
-module.exports = { CONTRACT, assertGrant, withExplicitRound, beginExplicitRound,
+module.exports = { CONTRACT, LOCAL_REPAIR_CONTRACT, withExplicitLocalRepairRound, assertGrant, withExplicitRound, beginExplicitRound,
     withPhysicalBudget, consumePhysicalRequest, validatePersistedRound };
