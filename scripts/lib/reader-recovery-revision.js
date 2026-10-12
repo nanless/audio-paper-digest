@@ -15,7 +15,7 @@ const CONTRACT = 'reader-recovery-diagnostics-revision-v1';
 const ALLOWED_FIELDS = Object.freeze(['repairImplementationSha256', 'tableCompilerSha256', 'draftOrderContract',
     'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
     'parserImplementationSha256', 'editorialImplementationSha256', 'mechanicalContractSha256',
-    'readerRecoveryEpochSha256', 'readerJsonRequestPolicy', 'repairPromptSha256', 'promptSha256']);
+    'resourceLocalRevisionContract', 'readerRecoveryEpochSha256', 'readerJsonRequestPolicy', 'repairPromptSha256', 'promptSha256']);
 const implementationFields = ALLOWED_FIELDS.filter(field => field.endsWith('Sha256')
     && !['repairPromptSha256', 'promptSha256'].includes(field));
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i;
@@ -113,6 +113,11 @@ function assertReaderJsonRequestPolicy(policy) {
 }
 
 function loadReaderRecoveryRevision(directory, identity, options = {}) {
+    if (identity?.resourceLocalRevisionContract !== undefined
+        && (identity.resourceLocalRevisionContract !== 'signed-reader-resource-local-repair-v1'
+            || identity.contentMode !== 'reader-source-signed-revision-v1')) {
+        throw new Error('资源局部修订的恢复模式记录无效');
+    }
     assertReaderJsonRequestPolicy(identity?.readerJsonRequestPolicy);
     const expectedPixels = options.pixelEvidenceSha256;
     if (expectedPixels !== undefined && !/^[a-f0-9]{64}$/.test(expectedPixels)) {
@@ -193,6 +198,9 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
         if (!checked) throw new Error('Reader 恢复候选在审查期间消失');
         const { envelope, envelopeSha256 } = checked;
         const payload = envelope.payload;
+        // 只允许从同输入的旧签名模式收紧为资源局部模式，不允许解除已保存的局部限制。
+        if (envelope.identity.resourceLocalRevisionContract !== undefined
+            && envelope.identity.resourceLocalRevisionContract !== identity.resourceLocalRevisionContract) continue;
         const oldJsonPolicy = envelope.identity.readerJsonRequestPolicy;
         const newJsonPolicy = identity.readerJsonRequestPolicy;
         assertReaderJsonRequestPolicy(oldJsonPolicy);

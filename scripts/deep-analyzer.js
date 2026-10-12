@@ -6241,7 +6241,7 @@ function parseApiReaderArticleResult(raw, options = {}) {
             )
         };
     });
-    if (readerCapabilityPolicy) {
+    if (readerCapabilityPolicy || options.enforceResourceAvailabilityClaims === true) {
         enforceConferenceReaderResourceClaims(
             value,
             options.verifiedResourceIdentity,
@@ -7359,6 +7359,8 @@ function buildApiReaderGenerationStart(paper, options = {}) {
             ? '\n本轮局部修复只返回提示要求的补丁 JSON 与已授权字段，不返回整篇文章 JSON 或参考用的 {article,plan}。未授权的事实问题保留反馈，等待后续重新核验并授权。全部来源与整篇检查仍须通过。'
             : '');
     return {
+        signedRecoveryDraft: options.resourceLocalRevision === true && seed
+            ? require('./lib/signed-reader-recovery-draft').convert(seed) : null,
         previousDraft: seed?.initialDraft || '无',
         reviewFeedbackPrefix,
         repairReviewFeedbackPrefix,
@@ -7375,6 +7377,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const { buildReaderContractNotice, readerRequirements } = require('./lib/reader-contract.js');
     const { FILES } = require('./config.js');
     const start = buildApiReaderGenerationStart(paper, options);
+    if (options.resourceLocalRevision === true && !start.signedRecoveryDraft) {
+        throw new Error('资源局部修订必须保有当前已核验签名Reader，不能扩大为全文生成');
+    }
     const contentMode = start.isRevision ? READER_SIGNED_REVISION_CONTENT_MODE : READER_SOURCE_CONTENT_MODE;
     const requestModel = options.readerCallModel || callModel;
     const recordDisposition = options.readerRecordDisposition || require('./lib/llm-usage.js').recordLlmDisposition;
@@ -7428,6 +7433,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         ? Math.min(6, Math.max(1, options.readerMaxAttempts)) : 6;
     const identity = {
         paperId: getPaperArxivId(paper),
+        ...(options.resourceLocalRevision === true ? { resourceLocalRevisionContract: 'signed-reader-resource-local-repair-v1' } : {}),
         ...apiReaderRequestPolicyFields(),
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
         contentMode,
@@ -7457,6 +7463,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/analysis-section-titles.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-inline-svg.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-resource-binding.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/signed-reader-recovery-draft.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/explicit-reader-retry-round.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-parent-recovery.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-pre-image-check.js'), 'utf8'),
@@ -7495,6 +7502,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     let pixelFigureOrdinals = [];
     let recovered = null;
     let readerRecoveryRevisions = [];
+    const sectionGroupCompilations = [];
     let candidate = null;
     let draftOrderMappings = [];
     let mechanicalNoFigureCleanupChanged = false;
@@ -7724,7 +7732,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         candidateDirectory, identity, recovered, paper
     );
     readerRecoveryRevisions = recovered?.readerRecoveryRevisions || [];
-    candidate = recovered?.draft || null;
+    candidate = recovered?.draft || start.signedRecoveryDraft || null;
     draftOrderMappings = recovered?.draftOrderMappings || [];
     currentIssues = recovered?.issues || [];
     if (!candidate && recovered?.rawDraft) {
@@ -7792,7 +7800,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         allowDeterministicQuoteRepair: true,
         allowDeterministicUnsupportedClaimPruning: true,
         readerCapabilityPolicy,
-        verifiedResourceIdentity: verifiedConferenceReaderResources,
+        verifiedResourceIdentity: options.resourceLocalRevision === true
+            ? options.readerResources : verifiedConferenceReaderResources,
+        enforceResourceAvailabilityClaims: options.resourceLocalRevision === true,
         structuredArtifacts: options.structuredArtifacts,
         sourceText: options.sourceText
     });
@@ -7925,6 +7935,18 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             throw readerRepairStopped('READER_REPAIR_NO_ALLOWED_TARGET',
                 '没有可安全修复的表格对应节点，已保留失败草稿；本次未发送模型请求');
         }
+        if (options.resourceLocalRevision === true && repairContext) {
+            const resourcePaths = new Set(conferenceReaderResourceClaimIssues(
+                start.signedRecoveryDraft, options.readerResources, options.sourceText
+            ).map(issue => issue.path));
+            if (repairContext.targets.some(target => !resourcePaths.has(target.path))) {
+                throw readerRepairStopped('READER_RESOURCE_LOCAL_SCOPE_MISMATCH',
+                    '资源局部修订不能扩大到原签名稿中未发生资源冲突的节点');
+            }
+        }
+        if (options.resourceLocalRevision === true && (!repairContext || sourceBindingNeedsFullRetry)) {
+            throw readerRepairStopped('READER_RESOURCE_LOCAL_NO_SAFE_TARGET', '资源局部修订缺少安全补丁范围，保留已签Reader与现有付费记录');
+        }
         if (sourceBindingNeedsFullRetry) previousDraft = JSON.stringify(candidate);
         if (!repairContext && fullAttempts >= (explicitRound?.maxFullResponses ?? 2)
             && (explicitRound || !repair.hasUnusedImplementationAllowance({ ...recovered,
@@ -8007,6 +8029,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                             ...(metadataOperation ? { rawDraft: previousDraft } : {}),
                             repairTargets: repairContext.targets,
                             atomicOperation: repairContext.atomicOperation || null,
+                            ...(repairContext.sectionGroupPlanContract
+                                ? { sectionGroupPlanContract: repairContext.sectionGroupPlanContract } : {}),
                             inputMessagesSha256: repair.shaText(JSON.stringify(messages)),
                             images: inputs.map(image => ({ inputId: image.inputId, kind: image.kind,
                                 ordinal: image.ordinal, mime: image.mime,
@@ -8093,7 +8117,13 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         let patchApplied = false;
         try {
             if (repairContext) {
-                const patch = repair.parseReaderPatchJson(extractJsonObjectText(raw));
+                let patch = repair.parseReaderPatchJson(extractJsonObjectText(raw));
+                let sectionGroupProof = null;
+                if (repairContext.sectionGroupPlanContract) {
+                    const compiled = repair.compileSectionIndexGroupPlan(candidate, patch, repairContext);
+                    patch = compiled.patch;
+                    sectionGroupProof = compiled.proof;
+                }
                 if (metadataOperation) {
                     raw = metadataRepair.applyTopLevelMetadataRepair(previousDraft, patch, metadataOperation);
                     candidate = repair.parseRecoveryDraft(raw);
@@ -8106,6 +8136,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                         structuredArtifacts: options.structuredArtifacts
                     });
                     raw = JSON.stringify(candidate);
+                    if (sectionGroupProof) sectionGroupCompilations.push(sectionGroupProof);
                 }
                 patchApplied = true;
             } else {
@@ -8124,6 +8155,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 providerImageExclusions,
                 repairVersion: repair.REPAIR_VERSION,
                 draftOrderMappings,
+                ...(sectionGroupCompilations.length ? { sectionGroupCompilations } : {}),
                 fullAttempts,
                 transportFailures,
                 resumedCandidate: Boolean(recovered)
@@ -8294,6 +8326,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     const fingerprint = stableFingerprint({
         configurationFingerprint,
         contentMode,
+        ...(options.resourceLocalRevision === true ? { resourceLocalRevisionContract: 'signed-reader-resource-local-repair-v1' } : {}),
         analysisSha256: crypto.createHash('sha256').update(analysis).digest('hex'),
         evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
         structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || '',
@@ -8303,6 +8336,8 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     const generated = await generateApiReaderArticleDetailed(
         paper, analysis, evidenceContext, {
             reviewFeedback,
+            resourceLocalRevision: options.resourceLocalRevision === true,
+            readerResources,
             ...(revisionSeed ? {
                 initialDraft: revisionSeed.initialDraft,
                 revisionSeed
@@ -8318,7 +8353,9 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         } : {}),
         readerResources,
         execution: {
-            contentMode, fingerprint, attempts: generated.attempts,
+            contentMode, fingerprint,
+            ...(options.resourceLocalRevision === true ? { resourceLocalRevisionContract: 'signed-reader-resource-local-repair-v1' } : {}),
+            attempts: generated.attempts,
             fullAttempts: generated.fullAttempts, transportFailures: generated.transportFailures,
             ...apiReaderRequestPolicyFields(),
             model: DEEP_CONFIG.model, protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
@@ -8799,6 +8836,7 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
     } else {
         await refreshApiReaderArticleFromSource(paper, sourceDetails, {
             readerResources,
+            resourceLocalRevision: options.resourceLocalRevision === true,
             revisionSeed: readerRevisionSeed,
             reviewFeedback: requestedReviewFeedback
         });

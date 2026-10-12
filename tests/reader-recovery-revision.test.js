@@ -816,3 +816,71 @@ test('输入未变的恢复仍拒绝缺失正文、损坏JSON和超过64节', t 
         assert.equal(loadReaderRecoveryRevision(f.directory, f.identity).draft, null);
     }
 });
+
+test('实现许可后的索引分组与后续失败不污染迁移审计，下一次读取及再次迁移可恢复', t => {
+    const repair = require('../scripts/lib/reader-repair');
+    const f = fixture(t);
+    f.payload.draft.sections.push(...Array.from({ length: 8 }, (_, index) => ({
+        kind: 'component', heading: `补充组件 ${index}`, body: '原组件正文与条件保持。'.repeat(20)
+    })));
+    f.payload.rawDraft = JSON.stringify(f.payload.draft);
+    saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
+    const pixels = { pixelEvidenceSha256: hashDraft(f.payload.imageEvidence) };
+    const migrated = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity, pixels));
+    const allowance = migrated.implementationRepairAllowanceProof;
+    assert.ok(allowance?.allowanceSha256);
+    assert.equal(repair.validateImplementationAllowance(migrated, f.identity, f.directory), true);
+    const context = repair.buildRepairContext(migrated.draft, [], '', '');
+    const groups = [];
+    migrated.draft.sections.forEach((section, index) => {
+        if (index && section.kind === migrated.draft.sections[index - 1].kind) groups.at(-1).sectionIndexes.push(index);
+        else groups.push({ sectionIndexes: [index], heading: section.heading });
+    });
+    assert.equal(groups.length, 12);
+    const plan = { contract: repair.SECTION_GROUP_PLAN_CONTRACT, version: 1,
+        draftSha256: context.draftSha256, sectionsSha256: context.targets[0].oldSha256, groups };
+    const compiled = repair.compileSectionIndexGroupPlan(migrated.draft, plan, context);
+    const draft = repair.applyReaderPatch(migrated.draft, compiled.patch, ['/sections'], { atomicOperation: context.atomicOperation });
+    // 新模型回包占用原许可；编译证明仅在真实请求/响应日志或返回值里，不混入迁移审计。
+    const failed = { ...migrated, draft, rawDraft: JSON.stringify(draft),
+        attempts: migrated.attempts + 1, implementationRepairAllowanceProof: null,
+        noProgress: 0, validationFailureStreak: 0, failureSignature: '后续完整来源检查仍失败',
+        issues: [{ path: '/sections/0/body', message: '后续完整来源检查仍失败' }] };
+    saveFailedCandidate(f.directory, f.identity, failed);
+    const loaded = loadFailedCandidate(f.directory, f.identity);
+    assert.equal(loaded.draft.sections.length, 12);
+    assert.deepEqual(loaded.readerRecoveryRevisions, migrated.readerRecoveryRevisions);
+    assert.ok(loaded.readerRecoveryRevisions.every(audit => audit.contract === 'reader-recovery-diagnostics-revision-v1'));
+    const again = f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity, pixels));
+    assert.deepEqual(again, loaded);
+    const nextIdentity = { ...f.identity, parserImplementationSha256: '9'.repeat(64) };
+    const next = f.enabled(() => loadReaderRecoveryRevision(f.directory, nextIdentity, pixels));
+    assert.equal(next.attempts, failed.attempts);
+    assert.equal(next.fullAttempts, failed.fullAttempts);
+    assert.equal(next.transportFailures, failed.transportFailures);
+    assert.equal(next.implementationRepairAllowanceProof, null);
+    assert.ok(next.consumedImplementationAllowanceSha256.includes(allowance.allowanceSha256));
+    assert.deepEqual(next.draft, draft);
+    assert.ok(next.readerRecoveryRevisions.every(audit => audit.contract === 'reader-recovery-diagnostics-revision-v1'));
+});
+
+
+test('同输入签名Reader收紧为资源局部模式不清空任何计费计数，禁止降级', t => {
+    const sample = fixture(t);
+    sample.oldIdentity.contentMode = 'reader-source-signed-revision-v1';
+    sample.identity.contentMode = 'reader-source-signed-revision-v1';
+    sample.identity.resourceLocalRevisionContract = 'signed-reader-resource-local-repair-v1';
+    saveFailedCandidate(sample.directory, sample.oldIdentity, sample.payload);
+    const recovered = sample.enabled(() => loadReaderRecoveryRevision(sample.directory, sample.identity));
+    assert.ok(recovered);
+    for (const key of ['attempts', 'fullAttempts', 'transportFailures']) assert.equal(recovered[key], sample.payload[key]);
+    const downgrade = { ...sample.identity, parserImplementationSha256: '9'.repeat(64) };
+    delete downgrade.resourceLocalRevisionContract;
+    assert.equal(sample.enabled(() => loadReaderRecoveryRevision(sample.directory, downgrade)), null);
+    assert.throws(() => loadReaderRecoveryRevision(sample.directory, {
+        ...sample.identity, resourceLocalRevisionContract: '其它模式'
+    }), /恢复模式记录无效/);
+    assert.throws(() => loadReaderRecoveryRevision(sample.directory, {
+        ...sample.identity, contentMode: 'reader-source-only-v1'
+    }), /恢复模式记录无效/);
+});

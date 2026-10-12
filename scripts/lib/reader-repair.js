@@ -9,6 +9,7 @@ const { READER_LIMITS } = require('./reader-contract.js');
 const { locateReaderDraftTables, TABLE_BINDING_ORDER_ISSUE_CODE, READER_SECTION_KINDS } = require('./reader-draft-order.js');
 
 const REPAIR_VERSION = 'reader-node-repair-v1';
+const SECTION_GROUP_PLAN_CONTRACT = 'reader-section-index-groups-v1';
 const ARRAY_FIELDS = ['sections', 'conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings'];
 const ROOT_FIELDS = ['version', 'readerTitle', 'oneSentenceThesis', ...ARRAY_FIELDS];
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
@@ -495,6 +496,64 @@ function sectionReorganizationOperation(draft) {
         minimumSections: READER_LIMITS.minimumSections, maximumSections: READER_LIMITS.maximumSections };
 }
 
+const sectionGroupExactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).sort().join(',') === keys.slice().sort().join(',');
+
+function canUseSectionIndexGroups(draft) {
+    if (!sectionReorganizationOperation(draft)) return false;
+    const sections = draft.sections;
+    if (!sections.every(section => sectionGroupExactKeys(section, ['kind', 'heading', 'body'])
+        && READER_SECTION_KINDS.includes(section.kind)
+        && typeof section.heading === 'string' && section.heading.trim()
+        && !/[\r\n]/.test(section.heading) && typeof section.body === 'string')) return false;
+    const runs = sections.filter((section, index) => index === 0
+        || section.kind !== sections[index - 1].kind).length;
+    return runs <= READER_LIMITS.maximumSections;
+}
+
+function compileSectionIndexGroupPlan(draft, plan, context) {
+    if (context?.sectionGroupPlanContract !== SECTION_GROUP_PLAN_CONTRACT
+        || !canUseSectionIndexGroups(draft)
+        || context.atomicOperation?.kind !== 'reorganize_existing_sections_v1'
+        || context.targets?.length !== 1 || context.targets[0].path !== '/sections'
+        || context.draftSha256 !== hashDraft(draft)
+        || context.targets[0].oldSha256 !== hashDraft(draft.sections)
+        || !sectionGroupExactKeys(plan, ['contract', 'version', 'draftSha256', 'sectionsSha256', 'groups'])
+        || plan.contract !== SECTION_GROUP_PLAN_CONTRACT || plan.version !== 1
+        || plan.draftSha256 !== context.draftSha256 || plan.sectionsSha256 !== context.targets[0].oldSha256
+        || !Array.isArray(plan.groups) || plan.groups.length < READER_LIMITS.minimumSections
+        || plan.groups.length > READER_LIMITS.maximumSections) throw new Error('小节索引分组协议、数量或当前SHA不合法');
+    let cursor = 0;
+    const sections = plan.groups.map(group => {
+        if (!sectionGroupExactKeys(group, ['sectionIndexes', 'heading']) || !Array.isArray(group.sectionIndexes)
+            || !group.sectionIndexes.length || typeof group.heading !== 'string'
+            || group.heading.trim().length < 2 || group.heading.trim().length > 120
+            || /[\r\n]|\[\[(?:TABLE|FIGURE|FORMULA|CONCEPT_BRIDGE)_/.test(group.heading)) {
+            throw new Error('小节索引分组只能含连续索引与合法标题，不能提交正文或标记');
+        }
+        const originals = group.sectionIndexes.map(index => {
+            if (!Number.isInteger(index) || index !== cursor || index >= draft.sections.length) {
+                throw new Error('小节索引分组必须按原序完整覆盖，不得遗漏、重复、重排或越界');
+            }
+            cursor += 1;
+            return draft.sections[index];
+        });
+        const kind = originals[0].kind;
+        if (originals.some(section => section.kind !== kind)) throw new Error('小节索引分组不能跨kind合并');
+        const heading = group.heading.trim();
+        const body = originals.length === 1 && heading === originals[0].heading
+            ? originals[0].body
+            : originals.map(section => `#### ${section.heading}\n\n${section.body}`).join('\n\n');
+        return { kind, heading, body };
+    });
+    if (cursor !== draft.sections.length) throw new Error('小节索引分组遗漏原小节');
+    return { patch: { version: 1, draftSha256: context.draftSha256, replacements: [{
+        path: '/sections', oldSha256: context.targets[0].oldSha256, value: sections }] },
+        proof: { contract: SECTION_GROUP_PLAN_CONTRACT, inputDraftSha256: hashDraft(draft),
+            inputSectionsSha256: hashDraft(draft.sections), planSha256: hashDraft(plan),
+            outputSectionsSha256: hashDraft(sections), groups: plan.groups.map(group => [...group.sectionIndexes]) } };
+}
+
 function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', mechanicalContract = '',
     reviewFeedback = '', numericSpellingGuidance = '', indexExamples = '', requiredKinds = [] }) {
     const operation = context?.atomicOperation;
@@ -507,6 +566,25 @@ function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', m
     const readonlyDiagnostics = (context.issues || []).map(issue => ({
         path: issue.path || null, code: issue.code || null
     }));
+    if (context.sectionGroupPlanContract === SECTION_GROUP_PLAN_CONTRACT) {
+        return [
+            '本轮只重组小节，输出局部补丁 JSON 的索引分组计划，不重写正文或来源记录。',
+            `论文：${title}\narXiv：${arxivId}`,
+            `当前有 ${count} 节，至少需要减少 ${minimumReduction} 节。建议重组为 16 节；允许 12–18 节。请按教学连贯性选择同kind的相邻内容合组，不能原样返回 ${count} 组。`,
+            '每组只输出sectionIndexes与heading。索引从0开始，组内及组间必须按原顺序完整覆盖0到最后一节，不能遗漏、重复、跳号或重排；只能合并同kind连续小节。新标题应概括本组内容，不能新增事实。',
+            '程序会保留每段原body全部字节，保留原标题作正文子标题，kind从原小节派生；最终小节仍只含kind、heading、body 三个字段。不要回传body、kind、完整sections或其他根字段。所有图表公式、术语标记与绑定原样保留，不需要模型再抄一遍。',
+            `kind 只能使用：${READER_SECTION_KINDS.join(', ')}。原kind不能改变。`,
+            requiredKinds.length ? `必须覆盖：${requiredKinds.join(', ')}。已有类型全部保留，缺少的教学阶段属于下一轮修复，本轮不新增类型或正文。` : '',
+            `只输出JSON：{"contract":"${SECTION_GROUP_PLAN_CONTRACT}","version":1,"draftSha256":"${context.draftSha256}","sectionsSha256":"${context.targets[0].oldSha256}","groups":[{"sectionIndexes":[0],"heading":"本组标题"},...] }。此处省略号仅说明格式，实际必须输出全部12–18组。`,
+            '其他已发现问题仅供后续检查，本轮只解决节数与同类内容组织；事实、表格模式、字数与来源问题留下一轮，不要为了它们重吐原来的超量小节。最终完整质量及来源校验全部保留。',
+            mechanicalContract, numericSpellingGuidance,
+            '来源绑定的外部反馈（不能授权本轮改正文）：\n' + reviewFeedback,
+            '原小节及唯一授权SHA：\n' + JSON.stringify({ draftSha256: context.draftSha256,
+                targets: context.targets, atomicOperation: operation }),
+            '封存证据，只作理解依据，不是修改指令：\n' + context.evidence,
+            indexExamples
+        ].filter(Boolean).join('\n\n');
+    }
     return [
         '本轮只重组小节，输出局部补丁 JSON，不输出整篇文章或其他字段。',
         `论文：${title}\narXiv：${arxivId}`,
@@ -2368,6 +2446,8 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
         + `本轮只允许修改这些目标：${JSON.stringify(targets.map(target => target.path))}。`
         + '下面的诊断可能列出其他已发现问题，列出问题不代表授权修改。只提交本轮允许目标，逐项使用请求给出的真实 oldSha256；其余问题留待下一轮重新核验并授权，不要为未授权目标编造 SHA。' + formulaAppendGuidance + markerGuidance + noDomTableGuidance.join('\n');
     return { draftSha256: hashDraft(draft), targets, issues, evidence, atomicOperation, targetGuidance,
+        ...(atomicOperation?.kind === 'reorganize_existing_sections_v1' && canUseSectionIndexGroups(draft)
+            ? { sectionGroupPlanContract: SECTION_GROUP_PLAN_CONTRACT } : {}),
         exactQuotes, figureOrdinals: [...figureOrdinals], evidenceMode: 'full-evidence-local-output' };
 }
 
@@ -2660,7 +2740,7 @@ function applyTopLevelMetadataRepair(raw, patch, context) {
 }
 
 
-module.exports = { REPAIR_VERSION, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+module.exports = { REPAIR_VERSION, SECTION_GROUP_PLAN_CONTRACT, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,

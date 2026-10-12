@@ -45,8 +45,21 @@ test('正常生成的复合失败稿第二次仍为小节补丁，提示不要�
             assert.equal(options.usageContext.stage, 'apiReaderRepair');
             const prompt = messages[0].content[0].text;
             assert.match(prompt, /当前有 19 节/);
-            assert.match(prompt, /不能为满足它们而原样返回超量小节/);
-            assert.match(prompt, /replacements 只含一项，path 为 \/sections/);
+            assert.match(prompt, /不能原样返回 19 组/);
+            assert.match(prompt, /只能合并同kind连续小节/);
+            assert.match(prompt, /完整覆盖0到最后一节/);
+            assert.match(prompt, /程序会保留每段原body全部字节/);
+            assert.match(prompt, /所有图表公式、术语标记与绑定原样保留/);
+            assert.match(prompt, /事实、表格模式、字数与来源问题留下一轮/);
+            assert.match(prompt, /最终完整质量及来源校验全部保留/);
+            assert.match(prompt, /reader-section-index-groups-v1/);
+            assert.match(prompt, /不要回传body、kind、完整sections或其他根字段/);
+            const fallbackDraft = structuredClone(sample.draft);
+            fallbackDraft.sections[0].body2 = '原额外正文';
+            const fallback = repair.buildRepairContext(fallbackDraft, [{ message: 'conceptBridges 必须包含 4-10 个术语组合解释' }], sample.sourceDetails.text);
+            const fallbackPrompt = repair.buildSectionReorganizationPrompt({ context: fallback });
+            assert.match(fallbackPrompt, /不能为满足它们而原样返回超量小节/);
+            assert.match(fallbackPrompt, /replacements 只含一项，path 为 \/sections/);
             throw new Error('复合补丁请求已核验');
         }
     }), /复合补丁请求已核验/);
