@@ -313,3 +313,18 @@ test('内容指标只把已绑定的图和 TeX 注入复核回解析器质量视
     const unboundProse = '> **看图路径：** 正文声称四个未绑定面板';
     assert.equal(restoreApiReaderInjectionMarkers(unboundProse, {}, []), unboundProse);
 });
+
+test('圈号和上标数字只补排版空格，原符号、代码、引文和来源地址保持不变', () => {
+    const raw = '按公式②-a给出参照，按公式⑥计算二阶矩，规模为10⁴个样本。';
+    const fixed = normalizeReaderProseFormatting(raw);
+    assert.equal(fixed, '按公式 ②-a 给出参照，按公式 ⑥ 计算二阶矩，规模为 10⁴ 个样本。');
+    assert.equal(normalizeReaderProseFormatting(fixed), fixed);
+    const beforeIssues = validateEditorialQuality({ method: raw }).issues.filter(item => item.code === 'numeric_typography');
+    const afterIssues = validateEditorialQuality({ method: fixed }).issues.filter(item => item.code === 'numeric_typography');
+    assert.ok(beforeIssues.length > 0);
+    assert.deepEqual(afterIssues, []);
+    for (const protectedText of ['`公式②`', '“公式②”', '> 原文公式②', '$x^{②}$',
+        'https://example.org/公式②', '[公式②](https://example.org/公式②)', '```text\n公式②\n```']) {
+        assert.equal(normalizeReaderProseFormatting(protectedText), protectedText);
+    }
+});

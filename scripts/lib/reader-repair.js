@@ -448,7 +448,8 @@ function parseRepairableDraft(raw) {
     if (!value
         || value.sections.length < READER_LIMITS.minimumSections
         || (value.conceptBridges.length < READER_LIMITS.minimumConceptBridges
-            && !buildMissingConceptBridgesOperation(value, [{ message: 'conceptBridges 必须包含 4-10 个术语组合解释' }]))) return null;
+            && !buildMissingConceptBridgesOperation(value, [{ message: 'conceptBridges 必须包含 4-10 个术语组合解释' }])
+            && !sectionReorganizationOperation(value))) return null;
     return value;
 }
 
@@ -487,7 +488,8 @@ function parseRecoveryDraft(raw) {
 }
 
 function sectionReorganizationOperation(draft) {
-    if (!parseRepairableDraft(draft) || draft.sections.length <= READER_LIMITS.maximumSections) return null;
+    // 术语组数等语义下限由最终解析器检查，不能让另一个待修问题阻断已有小节重排。
+    if (!parseRecoveryDraft(draft) || draft.sections.length <= READER_LIMITS.maximumSections) return null;
     return { kind: 'reorganize_existing_sections_v1',
         requiredReplacementPaths: ['/sections'], originalSectionsCount: draft.sections.length,
         minimumSections: READER_LIMITS.minimumSections, maximumSections: READER_LIMITS.maximumSections };
@@ -514,7 +516,7 @@ function buildSectionReorganizationPrompt({ context, title = '', arxivId = '', m
         `kind 只能使用：${READER_SECTION_KINDS.join(', ')}。`,
         requiredKinds.length ? `必须覆盖：${requiredKinds.join(', ')}。training说明实际训练、优化或推理过程，不能因没有神经网络训练而遗漏该节；其他必需内容也不能为了合并而删掉。` : '',
         `只输出局部补丁 JSON：version 为1，draftSha256 为 ${context.draftSha256}；replacements 只含一项，path 为 /sections，oldSha256 为 ${context.targets[0].oldSha256}，value 为完整新数组。其他全部顶层字段及来源记录由程序保留，不提交它们，也不修改它们。`,
-        '整篇最终检查仍全部执行；以下数量、长度及来源要求不是额外的修改授权：',
+        '本轮只解决小节数量与已授权小节结构。现有术语组合不足、表格缺少或来源记录错误不会授权修改其他数组，不能为满足它们而原样返回超量小节；这些问题留到下一轮重新定位、授权和核验。整篇最终检查仍全部执行；以下数量、长度及来源要求不是额外的修改授权：',
         mechanicalContract, numericSpellingGuidance,
         '其他已发现问题仅供后续检查，本轮不按它们重写来源记录。重排后程序会重新定位并授权；不能修改 tableBindings、formulaBindings、figurePlacements、conceptBridges 或标题摘要。只读问题位置：' + JSON.stringify(readonlyDiagnostics),
         '来源绑定的事实反馈逐字保留如下；其中涉及未授权记录的要求留到后续。已授权正文中的事实仍须准确，不得把修复说明当新论文事实：\n' + reviewFeedback,
@@ -1731,6 +1733,38 @@ function buildRepairTargets(draft, issues, options = {}) {
     if (sectionReorganizationOperation(draft)) return [{ path: '/sections',
         oldSha256: hashDraft(draft.sections), value: draft.sections,
         repairInstruction: '只将过多小节重组为12–18节，合并的标题改作正文子标题；保留全部正确文字、数字、单位、图表公式标记与对应顺序。额外字段中的内容须依原文核对后归入正文，不能直接丢弃。' }];
+    // 缺少某类小节时，只改 body 永远无法补上 kind。允许模型按原文改写相邻的
+    // 可替代小节，保留唯一必需小节和全部已有图表/公式/术语绑定。
+    const missingKindsIssue = issues.find(issue => issue?.diagnosticOnly !== true && issue?.code === 'reader_missing_required_kinds')
+        || issues.find(issue => issue?.diagnosticOnly !== true && /^读者文章缺少教学阶段: /.test(String(issue?.message || '')));
+    if (missingKindsIssue) {
+        const missing = missingKindsIssue.code === 'reader_missing_required_kinds'
+            ? missingKindsIssue.missingKinds
+            : String(missingKindsIssue.message).slice('读者文章缺少教学阶段: '.length).split(', ');
+        if (!Array.isArray(missing) || !Array.isArray(draft.sections)
+            || draft.sections.some(section => !section || Array.isArray(section)
+                || typeof section !== 'object' || Object.keys(section).sort().join(',') !== 'body,heading,kind'
+                || ['kind', 'heading', 'body'].some(field => typeof section[field] !== 'string'))) return [];
+        const counts = new Map();
+        for (const section of draft.sections) counts.set(section.kind, (counts.get(section.kind) || 0) + 1);
+        if (missing.length !== 1 || !READER_SECTION_KINDS.includes(missing[0]) || counts.has(missing[0])) return [];
+        const ranks = draft.sections.map(section => READER_SECTION_KINDS.indexOf(section?.kind));
+        if (ranks.some((value, index) => value < 0 || index > 0 && value < ranks[index - 1])) return [];
+        const wanted = missing[0], rank = READER_SECTION_KINDS.indexOf(wanted);
+        const targets = draft.sections.flatMap((section, index) => {
+            if (!['problem', 'component', 'ablation'].includes(section.kind) && counts.get(section.kind) < 2) return [];
+            if (Object.keys(section).sort().join(',') !== 'body,heading,kind'
+                || typeof section.body !== 'string' || typeof section.heading !== 'string'
+                || /\[\[(?:FIGURE|TABLE|FORMULA|CONCEPT_BRIDGE)_/.test(section.body)) return [];
+            const previous = index > 0 ? READER_SECTION_KINDS.indexOf(draft.sections[index - 1].kind) : -1;
+            const next = index + 1 < draft.sections.length ? READER_SECTION_KINDS.indexOf(draft.sections[index + 1].kind) : READER_SECTION_KINDS.length;
+            if (previous > rank || next < rank || previous < -1 || next < 0) return [];
+            const pointer = `/sections/${index}`;
+            return [{ path: pointer, oldSha256: hashDraft(section), value: section,
+                repairInstruction: `按封存原文改写这一节，补写 ${wanted}，并把该节 kind 改为 ${wanted}。不能只改类型名而保留不相关正文；保留原有正确事实、数字、单位与限制，不编造训练或比较过程。小节仍只含kind、heading、body。` }];
+        });
+        return targets.slice(0, 1);
+    }
     const reindexedOperation = buildReindexedTableBindingsOperation(draft, issues);
     if (reindexedOperation) return reindexedOperation.requiredReplacementPaths.map(pointer => ({
         path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
@@ -2558,6 +2592,6 @@ module.exports = { REPAIR_VERSION, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     validationFailureHasNoProgress, readerAttemptLimit,
     validateImplementationAllowance,
     buildTopLevelMetadataRepairContext, applyTopLevelMetadataRepair,
-    buildMissingConceptBridgesOperation, parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
+    sectionReorganizationOperation, buildMissingConceptBridgesOperation, parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
     buildSectionReorganizationPrompt, buildRepairTargets, applyReaderPatch, normalizeUnavailableReaderFigures, buildRepairContext, loadFailedCandidate, saveFailedCandidate,
     retireFailedCandidate, hasUnusedImplementationAllowance };

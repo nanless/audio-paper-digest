@@ -3324,8 +3324,10 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         )
         .replace(/([\u3400-\u9fff])([-+]\d)/g, '$1 $2')
         .replace(/([-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)(?=(?:MWh|mW|mJ|ms|dB|Hz|kHz|MHz|KiB|KB|MB|GB|kbps?|Mbps?|Gbps?|MACs?|tokens?|FPS|bit)\b)/gi, '$1 ')
-        .replace(/([\u3400-\u9fff])(\d)/g, '$1 $2')
-        .replace(/(\d)([\u3400-\u9fff])/g, '$1 $2')
+        // 检查器会将②、⑥、上标等数字归一化；排版保留原数字，只补汉字边界空格。
+        // 否则它报出的“式2”无法在原稿“式②”中定位，模型会反复修同一处。
+        .replace(/([\p{Script=Han}])(?=\p{N})/gu, '$1 ')
+        .replace(/(\p{N})(?=[\p{Script=Han}])/gu, '$1 ')
         // 频率和单位的替换发生在第一遍排版之后（例如 十六千赫兹 -> 16 kHz）。再跑一次
         // 拉丁字母到汉字的边界处理，免得新生成的单位和下一个词粘在一起。
         .replace(/([A-Za-z0-9.%+*)\]α-ωΑ-Ω])([\u3400-\u9fff])/g, '$1 $2');
@@ -6099,7 +6101,12 @@ function parseApiReaderArticleResult(raw, options = {}) {
     }));
     const kinds = new Set(normalizedSections.map(section => section.kind));
     const missing = API_READER_REQUIRED_KINDS.filter(kind => !kinds.has(kind));
-    if (missing.length > 0) throw new Error(`读者文章缺少教学阶段: ${missing.join(', ')}`);
+    if (missing.length > 0) {
+        const error = new Error(`读者文章缺少教学阶段: ${missing.join(', ')}`);
+        error.readerIssues = [{ path: null, code: 'reader_missing_required_kinds',
+            missingKinds: [...missing], message: error.message }];
+        throw error;
+    }
     if (options.requireIntegratedTables === true && value.version === 3) {
         validateReaderResultTableCoverage(normalizedSections, options.structuredArtifacts);
     }
@@ -7712,7 +7719,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         candidate && implementationRepairAllowanceProof
         && ((Array.isArray(candidate.conceptBridges)
             && candidate.conceptBridges.length < readerRules.minimumConceptBridges
-            && !repair.buildMissingConceptBridgesOperation(candidate, currentIssues))
+            && !repair.buildMissingConceptBridgesOperation(candidate, currentIssues)
+            && !repair.sectionReorganizationOperation(candidate))
             || (Array.isArray(candidate.sections)
                 && candidate.sections.length < readerRules.minimumSections))
     );

@@ -3455,3 +3455,53 @@ test('八个修复节点不能截断一组表格正文和绑定权限', () => {
     /未授权旧绑定/);
 
 });
+
+test('缺少教学类型时可修改相邻可替代小节的类型和正文，不再只授权正文', () => {
+    const draft = fixture();
+    draft.sections[5].kind = 'component';
+    const issues = [{ path: null, message: '读者文章缺少教学阶段: training' }];
+    const targets = buildRepairTargets(draft, issues);
+    assert.deepEqual(targets.map(item => item.path), ['/sections/5']);
+    assert.match(targets[0].repairInstruction, /不能只改类型名/);
+    const next = { ...draft.sections[5], kind: 'training', body: '按论文原文说明实际优化步骤及其限制。'.repeat(12) };
+    const result = applyReaderPatch(draft, patchFor(draft, [['/sections/5', next]]), targets.map(item => item.path));
+    assert.equal(result.sections[5].kind, 'training');
+    for (const [index, section] of draft.sections.entries()) if (index !== 5) assert.deepEqual(result.sections[index], section);
+    for (const field of ['conceptBridges', 'figurePlacements', 'tableBindings', 'formulaBindings']) assert.deepEqual(result[field], draft[field]);
+    assert.throws(() => applyReaderPatch(draft, patchFor(draft, [['/sections/0', next]]), targets.map(item => item.path)), /unauthorized/);
+    const context = buildRepairContext(draft, issues, '原文证据保持完整');
+    assert.deepEqual(context.targets, targets);
+    assert.equal(context.evidence, '原文证据保持完整');
+});
+
+test('缺类型修复不改唯一必需小节，不改已有图表标记，不靠旧错误扩大范围', () => {
+    const draft = fixture();
+    draft.sections[5].kind = 'component';
+    const issues = [{ message: '读者文章缺少教学阶段: training' }];
+    const withMarker = structuredClone(draft);
+    withMarker.sections[5].body += '\n\n[[FORMULA_1]]';
+    assert.deepEqual(buildRepairTargets(withMarker, issues), []);
+    const withTable = structuredClone(draft);
+    withTable.sections[5].body += '\n\n| 方法 | 误差 |\n| --- | --- |\n| 基线 | 2 |';
+    assert.deepEqual(buildRepairTargets(withTable, issues).map(item => item.path), ['/sections/5']);
+    assert.deepEqual(buildRepairTargets(fixture(), issues), []);
+    assert.deepEqual(buildRepairTargets(draft, [{ message: '读者文章缺少教学阶段: invented_kind' }]), []);
+    assert.deepEqual(buildRepairTargets(draft, [{ message: '读者文章缺少教学阶段: training, result' }]), []);
+    const outOfOrder = structuredClone(draft);
+    outOfOrder.sections[6].kind = 'background';
+    assert.deepEqual(buildRepairTargets(outOfOrder, issues), []);
+});
+
+test('缺教学类型的结构化诊断拒绝损坏小节并只给出一个可改对象', () => {
+    const draft = fixture(); draft.sections[5].kind = 'component';
+    const issue = { code: 'reader_missing_required_kinds', missingKinds: ['training'], message: '结构化字段给出缺失类型' };
+    assert.deepEqual(buildRepairTargets(draft, [issue]).map(item => item.path), ['/sections/5']);
+    assert.equal(buildRepairTargets(draft, [{ ...issue, diagnosticOnly: true }]).some(item => item.path === '/sections/5'), false);
+    const broken = structuredClone(draft); broken.sections[4] = null;
+    assert.deepEqual(buildRepairTargets(broken, [issue]), []);
+    assert.deepEqual(buildRepairTargets(draft, [{ ...issue, missingKinds: 'training' }]), []);
+    const two = fixture(); two.sections[1].kind = 'background';
+    const targets = buildRepairTargets(two, [{ code: 'reader_missing_required_kinds', missingKinds: ['related_work'] }]);
+    assert.equal(targets.length, 1);
+    assert.throws(() => applyReaderPatch(two, patchFor(two, [['/sections/2', {...two.sections[2], kind:'related_work'}]]), targets.map(item => item.path)), /unauthorized/);
+});
