@@ -26,6 +26,29 @@ function payload(openScore = 0.5) {
 function parse(value) {
     return parseScoringAuditResult(JSON.stringify(value), allowed);
 }
+
+test('与闭源基线比较不误算为本论文缺少开源材料，真实缺失仍不能跨维度扣分', () => {
+    const value = payload();
+    const realReason = '[A_METHOD] 面向音频研究领域，开源统一空间音频语言模型与配套数据管线对空间音频语言模型方向有推动作用，在 MMAU-Pro 与 STAR-Bench 空间子集上大幅领先闭源与开源基线。';
+    for (const reason of [
+        '[A_METHOD] 优于开源基线但本模型仍为闭源竞品，因此降低影响力。',
+        '[A_METHOD] 领先基线但本模型属于闭源竞品，因此降低影响力。',
+        '[A_METHOD] 本文未开源但优于闭源基线，因此降低影响力。'
+    ]) {
+        value.dimensions.impact.reason = reason;
+        assert.throws(() => parse(value), /其他维度.*违规分句/);
+    }
+    for (const comparison of ['领先闭源与开源基线', '优于闭源基线', '超过闭源竞品', '对比主流闭源和开源基线']) {
+        value.dimensions.impact.reason = realReason.replace('领先闭源与开源基线', comparison);
+        const audit = parse(value);
+        assert.equal(audit.dimensions.impact.reason, value.dimensions.impact.reason);
+        assert.equal(audit.dimensions.impact.score, 1);
+        for (const deficit of ['本文未开源，因此降低影响力', '缺少代码，因此降低影响力', '本模型闭源，因此降低影响力']) {
+            value.dimensions.impact.reason = realReason.replace('领先闭源与开源基线', comparison).replace('。', `，${deficit}。`);
+            assert.throws(() => parse(value), /其他维度.*违规分句/);
+        }
+    }
+});
 function identity(resources) {
     const body = {
         contract: 'api-reader-resource-identity-v1',

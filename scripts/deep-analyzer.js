@@ -558,7 +558,13 @@ function findForbiddenDeductionClauses(reason, patterns) {
         if (EXPLICIT_NON_DEDUCTION.test(clause)) return false;
         return patterns.some(pattern => {
             pattern.lastIndex = 0;
-            return pattern.test(clause);
+            // “优于闭源基线”是在说明对比对象，不是在以本论文不开源为由扣分。
+            // 只移除这类明确比较短语中的状态词，其他缺失材料的表述仍须检查。
+            const checked = pattern === OPEN_SOURCE_DEFICIT
+                ? clause.replace(/((?:领先|优于|超过|对比|比较|相比)(?:当前|现有|主流|其他|部分|已有|最强|多种|多个|所有|的|了|于){0,3})闭源((?:(?:与|和|及)开源)?(?:基线|竞品))/gu,
+                    '$1对照$2')
+                : clause;
+            return pattern.test(checked);
         });
     });
 }
