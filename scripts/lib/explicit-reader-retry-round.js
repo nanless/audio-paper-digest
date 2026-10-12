@@ -286,16 +286,12 @@ function assertRequestLedger(receipt) {
     }
 }
 function readMigrationEnvelope(filename) {
-    const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
-    try {
-        const stat = fs.fstatSync(fd);
-        if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600 || stat.size > 64 * 1024 * 1024) {
-            throw new Error('Reader 新轮实现恢复的原文件不安全');
-        }
-        const bytes = fs.readFileSync(fd);
-        return { bytes, envelope: JSON.parse(bytes) };
-    } finally { fs.closeSync(fd); }
+    const checked = require('./reader-proof-read-scope').readReaderProofJson(filename, {
+        unsafeMessage: 'Reader 新轮实现恢复的原文件不安全'
+    });
+    return { bytes: checked.bytes, envelope: checked.value };
 }
+
 function sameRoundIdentityAfterPublicMigration(directory, identity, payload, receipt) {
     const repair = require('./reader-repair');
     const revision = require('./reader-recovery-revision');
@@ -368,11 +364,14 @@ function validatePersistedRound(directory, identity, payload) {
         const stat = fs.lstatSync(file);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('Reader 新轮原稿或证明不是安全普通文件');
     }
-    const receipt = JSON.parse(fs.readFileSync(expected));
+    const scopedReader = require('./reader-proof-read-scope');
+    const receipt = scopedReader.readReaderProofJson(expected, { privateFile: false }).value;
     if (path.resolve(receipt.archivedFile) !== path.resolve(directory, 'explicit-retry-rounds', `${proof.roundId}.original.json`)) throw new Error('Reader 新轮原档路径不合法');
-    const originalBytes = fs.readFileSync(receipt.archivedFile);
-    if (hash(originalBytes) !== receipt.grant.envelopeSha256) throw new Error('Reader 新轮原稿或实际请求预算证明不一致');
-    const original = JSON.parse(originalBytes);
+    const originalRecord = scopedReader.readReaderProofJson(receipt.archivedFile, { privateFile: false,
+        expectedSha256: receipt.grant.envelopeSha256,
+        shaMismatchMessage: 'Reader 新轮原稿或实际请求预算证明不一致' });
+    if (originalRecord.sha256 !== receipt.grant.envelopeSha256) throw new Error('Reader 新轮原稿或实际请求预算证明不一致');
+    const original = originalRecord.value;
     if (receipt.oldAttempts !== original.payload.attempts
         || receipt.oldFullAttempts !== original.payload.fullAttempts
         || receipt.oldTransportFailures !== (original.payload.transportFailures || 0)) {

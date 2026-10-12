@@ -123,6 +123,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `lib/reader-draft-order.js` | Node 库 | 调整同一草稿的小节顺序，同步表格绑定和标记，保存原始路径与调整后路径的 SHA 对应关系；无法唯一确定顺序时拒绝调整。 |
 | `lib/reader-source-diagnostics.js` | Node 库 | 把数字或单位来源不匹配的问题定位到正文单元格与原表行列，给出百分号、千分位及可能舍入的修复建议，但只读；不会自动改数字，也不会放宽来源检查。 |
 | `lib/signed-reader-recovery-draft.js` | Node 库 | 将已核验签名长文恢复为可局部修改的文章数据，保留章节、术语及图表公式对应关系；不接受来源不明的正文。 |
+| `lib/reader-proof-read-scope.js` | Node 库 | 在一次恢复准备期间复用未变化的证明文件读取；每次核对文件状态，结束即清空，完整恢复链仍重新核验。 |
 | `lib/reader-recovery-revision.js` | Node 库 | 显式迁移同源失败候选的诊断，保留付费请求计数、索引调整与旧无进展状态，归档原字节；表数量文案不能触发正文规范化。迁移不会产出成功凭证。 |
 | `lib/primary-fact-local-repair.js` | Node 库 | 为来源绑定的主文事实纠错限定唯一原段落，严格核验 JSON 的 from/to、原稿 SHA 和修改范围；未授权正文逐字保留，完整正文与评分检查仍由正常分析入口执行。 |
 | `lib/scoring-third-party-resource-replay.js` | Node 库 | 精确回放原评分输入，仅第三方依赖可达状态抖动时保留原付费评分与审计时正文；作者资源变化仍正常重审。 |

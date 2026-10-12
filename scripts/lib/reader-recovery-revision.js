@@ -113,6 +113,10 @@ function assertReaderJsonRequestPolicy(policy) {
 }
 
 function loadReaderRecoveryRevision(directory, identity, options = {}) {
+    return require('./reader-proof-read-scope').withReaderProofReadScope(
+        () => loadReaderRecoveryRevisionInternal(directory, identity, options));
+}
+function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
     if (identity?.resourceLocalRevisionContract !== undefined
         && (identity.resourceLocalRevisionContract !== 'signed-reader-resource-local-repair-v1'
             || identity.contentMode !== 'reader-source-signed-revision-v1')) {

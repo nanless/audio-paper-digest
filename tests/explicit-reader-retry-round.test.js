@@ -1192,3 +1192,24 @@ test('温和停止保留已返回原稿和真实48k账，下一16k请求不登�
         }));
     }));
 });
+
+
+test('同次父准备读取缓存不缓存整链有效性，新兄弟和无关坏账仍重新拒绝',async t=>{
+    const f=await setupExhaustedParent(t);bindPlannerPaper();
+    const grant=parentRecovery.planParentRecovery({directory,identity:f.identity,paper,plan,mode:'local'});
+    const readScope=require('../scripts/lib/reader-proof-read-scope');
+    readScope.withReaderProofReadScope(()=>{
+        parentRecovery.assertParent(directory,grant,f.parent,f.identity);
+        const before=readScope.readerProofReadScopeStats();
+        parentRecovery.assertParent(directory,grant,f.parent,f.identity);
+        assert.ok(readScope.readerProofReadScopeStats().hits>before.hits);
+        const siblingId=crypto.randomUUID(),siblingFile=path.join(directory,'explicit-retry-rounds',siblingId+'.json');
+        fs.writeFileSync(siblingFile,JSON.stringify({grant:{roundId:siblingId,parentRoundId:grant.parentRoundId}}),{mode:0o600});
+        assert.throws(()=>parentRecovery.assertParent(directory,grant,f.parent,f.identity),/另一恢复子轮/);
+        fs.unlinkSync(siblingFile);
+        parentRecovery.assertParent(directory,grant,f.parent,f.identity);
+        const badFile=path.join(directory,'explicit-retry-rounds',crypto.randomUUID()+'.json');
+        fs.writeFileSync(badFile,'{broken unrelated record',{mode:0o600});
+        assert.throws(()=>parentRecovery.assertParent(directory,grant,f.parent,f.identity),SyntaxError);
+    });
+});

@@ -16,14 +16,11 @@ function fail(message) {
         scope: 'paper', category: 'reader_recovery', modelRequestClassified: true });
 }
 function readChecked(file) {
-    const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
-    try {
-        const stat = fs.fstatSync(fd);
-        if (!stat.isFile() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600 || stat.size > 64 * 1024 * 1024) fail('父恢复证明文件不安全');
-        const bytes = fs.readFileSync(fd);
-        return { bytes, value: JSON.parse(bytes) };
-    } finally { fs.closeSync(fd); }
+    return require('./reader-proof-read-scope').readReaderProofJson(file, {
+        unsafe: () => fail('父恢复证明文件不安全')
+    });
 }
+
 function fullReason(payload) {
     const repair = require('./reader-repair');
     if (!payload || payload.status !== 'failed' || payload.draft?.sections?.length
@@ -150,7 +147,11 @@ function assertParent(directory, grant, payload, identity) {
     return { chain, reason };
 }
 // 仅执行既有公共诊断迁移，必须在正常论文锁与原封存来源内。它不安装付费轮。
-async function prepareParentRecoveryCandidate({ directory, originalIdentity, targetIdentity, paper, plan }) {
+async function prepareParentRecoveryCandidate(options) {
+    return require('./reader-proof-read-scope').withReaderProofReadScope(
+        () => prepareParentRecoveryCandidateInternal(options));
+}
+async function prepareParentRecoveryCandidateInternal({ directory, originalIdentity, targetIdentity, paper, plan }) {
     const revision = require('./reader-recovery-revision');
     const implementationFields = revision.ALLOWED_FIELDS.filter(field => ![
         'readerRecoveryEpochSha256', 'readerJsonRequestPolicy', 'promptSha256', 'repairPromptSha256'
@@ -186,7 +187,11 @@ async function prepareParentRecoveryCandidate({ directory, originalIdentity, tar
         })), { refreshReaderDiagnostics: true });
 }
 // 只读提案：不安装、不归档、不写候选或账，不请求模型。
-function planParentRecovery({ directory, identity, paper, plan, mode, roundId = crypto.randomUUID() }) {
+function planParentRecovery(options) {
+    return require('./reader-proof-read-scope').withReaderProofReadScope(
+        () => planParentRecoveryInternal(options));
+}
+function planParentRecoveryInternal({ directory, identity, paper, plan, mode, roundId = crypto.randomUUID() }) {
     const repair = require('./reader-repair');
     const daily = require('./daily-fresh-source-plan');
     if (require('../analysis-engine').isSuccessfulAnalysisRecord(paper)) fail('成功论文不能规划父失败恢复');
