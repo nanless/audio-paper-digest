@@ -1449,7 +1449,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
             if (checkpointFailed) throw checkpointFailure;
             if (analyzed && typeof analyzed === 'object') {
                 Object.assign(paper, analyzed);
-                require('./deep-analyzer').transferDeferredReaderCandidate(analyzed, paper);
+                require('./lib/reader-candidate-transactions.js').transferDeferredReaderCandidate(analyzed, paper);
             }
 
             if (analyzed && analyzed.analysis) {
@@ -1713,7 +1713,7 @@ async function analyzeBatch(papers, options = {}) {
             }
             if (onPaperResultLocked) {
                 await onPaperResultLocked(paperForAnalysis, result);
-                if (checkpointFilePath && require('./deep-analyzer').hasDeferredReaderCandidate(paperForAnalysis)) {
+                if (checkpointFilePath && require('./lib/reader-candidate-transactions.js').hasDeferredReaderCandidate(paperForAnalysis)) {
                     const saved = readJsonFileStrict(checkpointFilePath);
                     const rows = Array.isArray(saved) ? saved : saved.papers;
                     const matched = rows.filter(item => normalizedId(item) === normalizedId(paperForAnalysis));

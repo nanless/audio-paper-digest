@@ -6825,7 +6825,11 @@ function repairApiReaderArticleAndPlanBindings(paper, analysisManifest) {
 
 const apiReaderGenerationQueue = [];
 let activeApiReaderGenerations = 0;
-const deferredReaderCandidateTransactions = new WeakMap();
+const {
+    deferredReaderCandidateTransactions,
+    transferDeferredReaderCandidate,
+    hasDeferredReaderCandidate
+} = require('./lib/reader-candidate-transactions.js');
 
 function deferOrRetireReaderCandidate(result, repair, candidateDirectory, identity, payload = null) {
     const direct = require('./lib/direct-rewrite-analysis-context.js');
@@ -6843,21 +6847,6 @@ function deferOrRetireReaderCandidate(result, repair, candidateDirectory, identi
         identity: structuredClone(identity)
     });
     return null;
-}
-
-function transferDeferredReaderCandidate(from, to) {
-    const transaction = deferredReaderCandidateTransactions.get(from);
-    if (!transaction || from === to) return to;
-    if (!to || typeof to !== 'object' || Array.isArray(to)) {
-        throw new Error('Reader 保存事务需要对应的分析结果对象');
-    }
-    deferredReaderCandidateTransactions.set(to, transaction);
-    deferredReaderCandidateTransactions.delete(from);
-    return to;
-}
-
-function hasDeferredReaderCandidate(result) {
-    return deferredReaderCandidateTransactions.has(result);
 }
 
 function commitDeferredReaderCandidateIfSaved(result, saved) {

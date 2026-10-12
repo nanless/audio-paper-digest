@@ -62,6 +62,10 @@ const sha = value => crypto.createHash('sha256').update(value).digest('hex');
         }
     });
     const paper = await daily.withDailyFreshAnalysisContext(plan, () => analyze({ arxivId: id }));
+    require('node:assert/strict').equal(
+        require.cache[require.resolve('./scripts/deep-analyzer.js')], undefined,
+        '读取来源并使用指定分析函数时，不得加载正式分析器或改写标准输出'
+    );
     process.stdout.write(JSON.stringify({ batchDate: plan.batchDate,
         dailyFreshSourceRun: daily.dailyFreshSourceReference(plan), papers: [paper] }));
 })().catch(error => { process.stderr.write(String(error.stack)); process.exitCode = 1; });

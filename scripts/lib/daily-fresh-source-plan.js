@@ -516,7 +516,7 @@ async function withDailyFreshPaperSource(plan, paper, callback, options = {}) {
         if (sourceVersion) output.sourceVersion = clone(sourceVersion);
         else delete output.sourceVersion;
     }
-    require('../deep-analyzer').transferDeferredReaderCandidate(result, output);
+    require('./reader-candidate-transactions.js').transferDeferredReaderCandidate(result, output);
     direct.assertNoPersistentFigureFields(output);
     return output;
 }
