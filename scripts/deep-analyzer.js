@@ -17182,7 +17182,10 @@ async function repairMissingAnalysisSections(
         console.log(`    [deep] ⚠️  最终结构修复未通过 (${attempt}/2): ${structureIssues.join('、')}`);
     }
 
-    throw contractRejectedError(`最终结构修复失败: ${structureIssues.join('、')}`);
+    const exhausted = contractRejectedError(`最终结构修复失败: ${structureIssues.join('、')}`);
+    // 已完成两次结构内容修复，不能由整篇自动重试再次发送同一原稿。
+    exhausted.retryable = false;
+    throw exhausted;
 }
 
 function contractRejectedError(message) {
