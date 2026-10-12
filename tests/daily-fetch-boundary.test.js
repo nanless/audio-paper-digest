@@ -10,7 +10,8 @@ const { resolveDailyFetchBoundary, validateDailyFetchBoundary, readCommittedPubl
 const until = '2026-10-10T07:00:00.000Z';
 function createPublishedBlogRepo(t) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-boundary-'));
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    // Git 退出后可能仍有短暂的目录写入；有限重试清理，持续失败仍让测试报错。
+    t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }));
     const git = (...args) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' });
     git('init'); git('config', 'user.email', 'test@example.invalid'); git('config', 'user.name', 'test');
     const put = (name, value) => { const f = path.join(root, name); fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, value); };
