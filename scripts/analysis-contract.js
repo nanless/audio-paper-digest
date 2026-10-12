@@ -430,8 +430,79 @@ function validateAnalysisEditorialLeakageContract(analysis) {
         : null;
 }
 
+// 保留字符位置和换行；只遮罩代码、引用及 Markdown 原样 HTML 区域。
+// 优先处理已开始的 HTML 原样块/声明和围栏，其内部不再启动其他 Markdown 状态。
+// 普通 HTML 块到空行结束：忽略内部围栏，但继续跟踪真实 HTML 注释。
+// 行内代码先作等长探针，防止单元格中的 HTML 示例触发注释或区块状态。
+function maskProtectedMarkdownTableRegions(text) {
+    let fence = null;
+    let quote = false;
+    let htmlBlock = false;
+    let htmlLiteral = null;
+    let comment = false;
+    let htmlTerminator = null;
+    return String(text || '').split('\n').map(line => {
+        const blank = () => line.replace(/[^\r]/g, ' ');
+        if (htmlLiteral) {
+            if (new RegExp(`</${htmlLiteral}\\s*>`, 'i').test(line)) htmlLiteral = null;
+            return blank();
+        }
+        if (htmlTerminator) {
+            if (line.includes(htmlTerminator)) htmlTerminator = null;
+            return blank();
+        }
+        if (htmlBlock && !line.trim()) htmlBlock = false;
+        const boundary = htmlBlock ? null : line.match(/^ {0,3}(`{3,}|~{3,})/);
+        if (fence) {
+            if (boundary && boundary[1][0] === fence[0] && boundary[1].length >= fence.length
+                && line.slice(boundary[0].length).trim() === '') fence = null;
+            return blank();
+        }
+        if (boundary && !comment && !htmlLiteral) { fence = boundary[1]; return blank(); }
+        // 行内代码里的 HTML 字样是单元格内容，不是注释或 HTML 区块。
+        const startsHtmlBlock = /^ {0,3}<\/?(?:address|article|aside|blockquote|body|caption|center|col|colgroup|dd|details|dialog|div|dl|dt|fieldset|figcaption|figure|footer|form|h[1-6]|head|header|hr|html|iframe|legend|li|main|menu|nav|ol|p|section|summary|table|tbody|td|tfoot|th|thead|title|tr|ul)(?=[\s/>])/i.test(line);
+        const probe = (htmlBlock || comment || startsHtmlBlock) ? line : line.replace(/(`+)(?!`)([^\n]*?)\1(?!`)/g, value => 'x'.repeat(value.length));
+        const chars = line.split('');
+        for (let index = 0; index < line.length; index += 1) {
+            if (comment) {
+                if (probe.startsWith('-->', index)) {
+                    for (let offset = 0; offset < 3; offset += 1) chars[index + offset] = ' ';
+                    index += 2; comment = false;
+                } else if (line[index] !== '\r') chars[index] = ' ';
+            } else if (probe.startsWith('<!--', index)) {
+                comment = true;
+                for (let offset = 0; offset < 4; offset += 1) chars[index + offset] = ' ';
+                index += 3;
+            }
+        }
+        const visible = chars.join('');
+        if (htmlBlock) return blank();
+        const literal = visible.match(/^ {0,3}<(pre|code|script|style|textarea)(?=[\s/>])/i);
+        if (literal) {
+            // HTML 原样块的内部注释不是 Markdown 注释，不能影响块后的正文。
+            comment = false;
+            if (!new RegExp(`</${literal[1]}\\s*>`, 'i').test(probe)) htmlLiteral = literal[1];
+            return blank();
+        }
+        const terminator = /^ {0,3}<\?/.test(visible) ? '?>'
+            : /^ {0,3}<!\[CDATA\[/.test(visible) ? ']]>'
+                : /^ {0,3}<![A-Z]/.test(visible) ? '>' : null;
+        if (terminator) {
+            if (!probe.includes(terminator)) htmlTerminator = terminator;
+            return blank();
+        }
+        if (!visible.trim()) { quote = false; htmlBlock = false; }
+        if (/^ {0,3}#{1,6}(?:[ \t]|$)/.test(visible)) quote = false;
+        if (/^ {0,3}>/.test(visible)) quote = true;
+        if (startsHtmlBlock && visible.trim()) htmlBlock = true;
+        if (/^ {0,3}<\/?[a-z][\w-]*(?:\s+[^<>]*)?\s*\/?>[ \t]*$/i.test(visible)) htmlBlock = true;
+        if (quote || htmlBlock || /^(?: {4}|\t)/.test(visible)) return blank();
+        return visible;
+    }).join('\n');
+}
+
 function extractMarkdownTables(text) {
-    const lines = stripFencedCodeBlocks(text).split('\n');
+    const lines = maskProtectedMarkdownTableRegions(text).split('\n');
     const tables = [];
     for (let index = 0; index + 1 < lines.length;) {
         const header = splitMarkdownTableRow(lines[index]);
@@ -2499,6 +2570,7 @@ module.exports = {
     EXPERIMENT_TABLE_LIMITS,
     splitMarkdownTableRow,
     extractMarkdownTables,
+    maskProtectedMarkdownTableRegions,
     repairMissingMarkdownTableSeparators,
     normalizeExperimentTableNumericFormatting,
     capExperimentTableMetricColumns,
