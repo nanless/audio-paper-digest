@@ -200,18 +200,25 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
             && identity.promptSha256 === 'a41f67166a0f366a10bf23cc17aa51ca6105b246ce7964ec14c21d6b4018f380'
             && envelope.identity.repairPromptSha256 === '7cb7332fa3085b4497c31d73a7075eb10f8700cd84d23f68875d8341cb97f5de'
             && ['cdbf91f9bb2fb48e085c72195000059bdb2ccc4eb6a0bd47a6f31bb9d4835965',
-                '9a7e72d75fdd05f7004c132533425fa140d237c22bc98a3c6c64333e5d76e22e'].includes(identity.repairPromptSha256);
+                '9a7e72d75fdd05f7004c132533425fa140d237c22bc98a3c6c64333e5d76e22e',
+                '5164ce17261a13a009c34bfcf8a71fc2c44f1ae2246f0651de5eda82a7645f65'].includes(identity.repairPromptSha256);
         const metadataPromptUpgrade = envelope.identity.promptSha256 === identity.promptSha256
             && identity.promptSha256 === 'a41f67166a0f366a10bf23cc17aa51ca6105b246ce7964ec14c21d6b4018f380'
             && envelope.identity.repairPromptSha256 === 'cdbf91f9bb2fb48e085c72195000059bdb2ccc4eb6a0bd47a6f31bb9d4835965'
             && identity.repairPromptSha256 === '9a7e72d75fdd05f7004c132533425fa140d237c22bc98a3c6c64333e5d76e22e';
-        if (envelope.identity.promptSha256 !== identity.promptSha256 && !completeTablePromptUpgrade && !metadataPromptUpgrade) continue;
+        // 表格方式优先说明只接受这组已冻结模板；提示变化不增加任何尝试额度。
+        const tablePriorityPromptUpgrade = envelope.identity.promptSha256 === identity.promptSha256
+            && identity.promptSha256 === 'a41f67166a0f366a10bf23cc17aa51ca6105b246ce7964ec14c21d6b4018f380'
+            && ['cdbf91f9bb2fb48e085c72195000059bdb2ccc4eb6a0bd47a6f31bb9d4835965',
+                '9a7e72d75fdd05f7004c132533425fa140d237c22bc98a3c6c64333e5d76e22e'].includes(envelope.identity.repairPromptSha256)
+            && identity.repairPromptSha256 === '5164ce17261a13a009c34bfcf8a71fc2c44f1ae2246f0651de5eda82a7645f65';
+        if (envelope.identity.promptSha256 !== identity.promptSha256 && !completeTablePromptUpgrade && !metadataPromptUpgrade && !tablePriorityPromptUpgrade) continue;
         if (envelope.identity.repairPromptSha256 !== identity.repairPromptSha256
             && !(envelope.identity.repairPromptSha256 === 'c63148bca8bed36a8c31b0327b87e2a1e9ddf51fd8641813827f5e8f1eb4a6ec'
                 && identity.repairPromptSha256 === '8d1483030d1167b9ac3b81602c267ae5e5ec0fc5e88fb7308aea5f1e2a52d470')
             && !(envelope.identity.repairPromptSha256 === '89faba16d2b3af5a1549e13c85800bc7301d3a4217a1d9ae362b33c76cff9a34'
                 && identity.repairPromptSha256 === '7cb7332fa3085b4497c31d73a7075eb10f8700cd84d23f68875d8341cb97f5de')
-            && !completeTablePromptUpgrade && !metadataPromptUpgrade) continue;
+            && !completeTablePromptUpgrade && !metadataPromptUpgrade && !tablePriorityPromptUpgrade) continue;
         if (!isDeepStrictEqual(withoutRevisionFields(envelope.identity), withoutRevisionFields(identity))) continue;
         verifyPixels(payload);
         const changedFields = ALLOWED_FIELDS.filter(field => !isDeepStrictEqual(envelope.identity[field], identity[field]));

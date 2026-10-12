@@ -31,7 +31,7 @@ test('评分新请求只选 v5，主分析保持 v4，Reader 正文使用 v6、�
     assert.equal(registry.currentTextStagePromptPath('scoringAudit'), 'prompts/scoring-audit-v5.md');
     assert.equal(registry.currentPromptTextContract('primaryAnalysis'), 'analysis-prompt-text-v4');
     for (const stage of ['apiReaderArticle', 'apiReaderRepair']) {
-        assert.equal(registry.currentPromptTextContract(stage), stage === 'apiReaderRepair' ? 'analysis-prompt-text-v8' : 'analysis-prompt-text-v6');
+        assert.equal(registry.currentPromptTextContract(stage), stage === 'apiReaderRepair' ? 'analysis-prompt-text-v9' : 'analysis-prompt-text-v6');
         assert.equal(registry.promptFilePathForContract(stage, 'analysis-prompt-text-v4'), `prompts/${stage === 'apiReaderArticle' ? 'api-reader-article' : 'api-reader-repair'}-v4.md`);
         assert.equal(registry.promptFilePathForContract(stage, 'analysis-prompt-text-v5'), `prompts/${stage === 'apiReaderArticle' ? 'api-reader-article' : 'api-reader-repair'}-v5.md`);
     }

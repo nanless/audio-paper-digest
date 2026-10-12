@@ -123,8 +123,11 @@ test('正常恢复第二次请求只删两字段，仍执行完整检查且保�
 test('新版本的第一围栏 SHA 与迁移配对一致，旧局部修复原路径仍可复算', () => {
     const registry = require('../scripts/lib/prompt-text-versions');
     const promptPath = registry.currentTextStagePromptPath('apiReaderRepair');
-    assert.equal(promptPath, 'prompts/api-reader-repair-v8.md');
-    assert.equal(deep.runtimePromptTemplateSha256(promptPath), '9a7e72d75fdd05f7004c132533425fa140d237c22bc98a3c6c64333e5d76e22e');
+    assert.equal(promptPath, 'prompts/api-reader-repair-v9.md');
+    assert.equal(deep.runtimePromptTemplateSha256(promptPath), '5164ce17261a13a009c34bfcf8a71fc2c44f1ae2246f0651de5eda82a7645f65');
+    const frozenV8Path = registry.promptFilePathForContract('apiReaderRepair', 'analysis-prompt-text-v8');
+    assert.equal(frozenV8Path, 'prompts/api-reader-repair-v8.md');
+    assert.equal(deep.runtimePromptTemplateSha256(frozenV8Path), '9a7e72d75fdd05f7004c132533425fa140d237c22bc98a3c6c64333e5d76e22e');
     const oldPath = registry.promptFilePathForContract('apiReaderRepair', 'analysis-prompt-text-v7');
     assert.equal(oldPath, 'prompts/api-reader-repair-v7.md');
     assert.equal(deep.runtimePromptTemplateSha256(oldPath),

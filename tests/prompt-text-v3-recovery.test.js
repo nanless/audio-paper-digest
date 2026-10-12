@@ -16,11 +16,11 @@ test('改写阶段分别读取 v1、v2、v3 原路径，旧版本不能解析成
         const v1 = registry.promptFilePathForContract(stage, '');
         const v2 = registry.promptFilePathForContract(stage, 'analysis-prompt-text-v2');
         const v3 = registry.promptFilePathForContract(stage, 'analysis-prompt-text-v3');
-        assert.equal(registry.currentPromptTextContract(stage), stage === 'apiReaderRepair' ? 'analysis-prompt-text-v8' : stage === 'apiReaderArticle' ? 'analysis-prompt-text-v6' : stage === 'scoringAudit' ? 'analysis-prompt-text-v5' : stage === 'primaryAnalysis' ? 'analysis-prompt-text-v4' : 'analysis-prompt-text-v3');
+        assert.equal(registry.currentPromptTextContract(stage), stage === 'apiReaderRepair' ? 'analysis-prompt-text-v9' : stage === 'apiReaderArticle' ? 'analysis-prompt-text-v6' : stage === 'scoringAudit' ? 'analysis-prompt-text-v5' : stage === 'primaryAnalysis' ? 'analysis-prompt-text-v4' : 'analysis-prompt-text-v3');
         assert.equal(v2, v1.replace('.md', '-v2.md'));
         assert.equal(v3, v1.replace('.md', '-v3.md'));
         assert.notEqual(deep.runtimePromptTemplateSha256(v2), deep.runtimePromptTemplateSha256(v3));
-        assert.throws(() => registry.promptFilePathForContract(stage, 'analysis-prompt-text-v9'), /没有登记/);
+        assert.throws(() => registry.promptFilePathForContract(stage, 'analysis-prompt-text-v10'), /没有登记/);
     }
     for (const stage of ['visualSummary','digestCover','tableRepair','methodRepair']) {
         assert.equal(registry.currentPromptTextContract(stage), 'analysis-prompt-text-v2');
