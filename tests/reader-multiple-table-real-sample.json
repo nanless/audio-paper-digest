@@ -1,0 +1,57 @@
+{
+  "message": "读者文章 tableBindings[0] 关键数字缺少 exact quote/cell 证据: 4959, 1824, 5331, 9015, 2021, 12000, 8399, 200, 1100, 1544, 7859, 3961, 19785, 2483, 6110；未绑定单元格（行列从 0 开始，表头为第 0 行）：row=1,column=2 text=\"4,959\" missing=4959；row=1,column=3 text=\"1,824\" missing=1824；row=2,column=2 text=\"5,331\" missing=5331；row=2,column=3 text=\"9,015\" missing=9015；row=3,column=0 text=\"Tencent-AVS (Wang et al., 2021)\" missing=2021；row=3,column=2 text=\"12,000\" missing=12000；另有 tableBindings[3] 关键数字缺少 exact quote/cell 证据: 75, 74.4, 70.6, 72.8, 74.6, 74, 73.57, 67.4, 60.8, 63.6, 65.6, 66.2, 64.07, 77, 73.4, 70.8, 75.6, 74.8, 74.2, 74.3, 63.8, 61.2, 65.8, 63, 63.97, 58.2, 67.2, 65.03；未绑定单元格（行列从 0 开始，表头为第 0 行）：row=2,column=1 text=\"75.0\" missing=75；row=2,column=2 text=\"74.4\" missing=74.4；row=2,column=3 text=\"70.6\" missing=70.6；row=2,column=4 text=\"72.8\" missing=72.8；row=2,column=5 text=\"74.6\" missing=74.6；row=2,column=6 text=\"74.0\" missing=74。请一次核对并修复上述全部表格的数字、完整单位与对应来源句；时长应保留如“1 s”的单位写法，不要只写“1”或改成“1 秒”；若原句仅在比较组末尾写单位，正文必须保留同组写法，不能逐值补单位；也不要用其他语境中的同一数字补证据。",
+  "sections": [
+    {
+      "kind": "related_work",
+      "heading": "已有基准与本文定位的差别",
+      "body": "论文把已有工作分成三类。第一类是通用跨视频基准，如 CrossVid 与 MVU-Eval，评测视频集合的联合理解，但领域不是电商广告。第二类是广告理解基准，如 MM-AU、VideoAds、AdsQA，多数按单视频评测。第三类是电商广告基准，如 E-VAds，同样以单视频为主。下表按领域、规模、视频数量、任务格式以及是否显式覆盖时序与意图进行对照，用于说明 AdsCVR 在“电商 + 多视频 + 时序与意图”这一组合上的位置。比较时需注意各基准的任务格式不同（选择题、开放式、分割、分类），规模差异也不代表难度差异，因此表中数字只反映覆盖范围而非同条件下的性能高低。\n\n| Benchmark | Domain | #Videos | #QA | Video Count | Task format | Temporal | Intent |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| MVU-Eval (Peng et al., 2025) | General | 4,959 | 1,824 | Multiple | MCQ | ✓ | — |\n| CrossVid (Li et al., 2026) | General | 5,331 | 9,015 | Multiple | MCQ / Open | ✓ | — |\n| Tencent-AVS (Wang et al., 2021) | Ads | 12,000 | N/A | Single | Seg. + Cls. | ✓ | — |\n| MM-AU (Bose et al., 2023) | Ads | 8,399 | N/A | Single | Cls. | ✓ | ✓ |\n| VideoAds (Zhang et al., 2025) | Ads | 200 | 1,100 | Single | MCQ | ✓ | ✓ |\n| AdsQA (Long et al., 2025) | Ads | 1,544 | 7,859 | Single | Open | — | ✓ |\n| E-VAds (Liu et al., 2026) | E-commerce | 3,961 | 19,785 | Single | Open | — | ✓ |\n| AdsCVR | E-commerce | 2,483 | 6,110 | Multiple | MCQ | ✓ | ✓ |\n\n从表中可见，MVU-Eval 与 CrossVid 属于通用领域且视频数量为多视频，但 Intent 一列为“—”；Tencent-AVS、MM-AU、VideoAds、AdsQA 属于广告领域且均为单视频；E-VAds 属于电商领域但同样为单视频；AdsCVR 是表中唯一同时满足电商领域、多视频、MCQ 任务格式且 Temporal 与 Intent 均被显式覆盖的基准。这一对照说明 AdsCVR 填补的是“电商 + 多视频 + 时序与意图”三者组合上的空白，但表中数字仅反映覆盖范围，不代表同条件下的性能高低。"
+    },
+    {
+      "kind": "ablation",
+      "heading": "训练数据与动作空间消融",
+      "body": "下表回答两个问题：训练数据的领域匹配是否重要，以及视觉与语音工具是否需要同时保留。比较在同一 3,000 题测试划分上进行，指标为准确率，Average 为六维度无权平均；MVU-Eval-only 与受限动作变体评测时无法解析的答案计为错误。\n\n| Variant | TS | CS | ID | IC | OD | VC | Average |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| Training data |  |  |  |  |  |  |  |\n| In-domain only (AdsCVR) | 75.0 | 74.4 | 70.6 | 72.8 | 74.6 | 74.0 | 73.57 |\n| MVU-Eval only | 67.4 | 60.8 | 60.8 | 63.6 | 65.6 | 66.2 | 64.07 |\n| Mixed | 77.0 | 73.4 | 70.8 | 75.6 | 74.8 | 74.2 | 74.30 |\n| Action space |  |  |  |  |  |  |  |\n| frame_select only | 66.2 | 63.8 | 61.2 | 63.8 | 65.8 | 63.0 | 63.97 |\n| audio_select only | 67.4 | 65.6 | 65.6 | 58.2 | 66.2 | 67.2 | 65.03 |\n| AdSeek | 77.0 | 73.4 | 70.8 | 75.6 | 74.8 | 74.2 | 74.30 |\n\n训练数据方面，仅用 AdsCVR 训练平均 73.57%，仅用 MVU-Eval 训练 64.07%，域内数据高出 9.50 个百分点；混合数据（AdsCVR 加 MVU-Eval 视频与脚本模拟的 AgentCVR 样例）为 74.30%，增益集中在 IC（+2.8）与 TS（+2.0），而 CS 下降 1.0 个百分点，说明混合来源并非在所有维度都有利。动作空间方面，只保留 frame_select 平均 63.97%，只保留 audio_select 平均 65.03%，相对完整模型分别下降 10.33 与 9.27 个百分点；视觉单独访问在 IC 上更好（63.8 对 58.2），语音单独访问在其余五个维度更好，完整模型在全部六个维度上都超过两个受限变体。这些结果支持视觉与语音证据互补，但消融只在 AdsCVR 测试划分上进行，未在 CrossVid 上重复，因此“互补”结论的适用范围限于该基准。"
+    }
+  ],
+  "bindings": [
+    {
+      "tableIndex": 1,
+      "sourceType": "source_quotes",
+      "sourceTableOrdinal": null,
+      "cellBindings": [],
+      "sourceQuotes": [
+        "Beyond single videos, benchmarks like CrossVid (Li et al., 2026), MVU-Eval (Peng et al., 2025), and CVBench (Zhu et al., 2025) evaluate joint understanding of video collections, requiring models to aggregate distributed evidence and compare entities across videos.",
+        "However, existing advertising benchmarks such as MM-AU, AdsQA, and E-VAds (Bose et al., 2023; Long et al., 2025; Liu et al., 2026) predominantly focus on single-video understanding and do not adequately capture this practical need or the challenges of identifying key differences across videos.",
+        "Unlike general-domain CVR benchmarks such as CrossVid and MVU-Eval (Li et al., 2026; Peng et al., 2025), AdsCVR focuses on commercial reasoning over advertisements, where decisive evidence is scattered across videos, non-contiguous temporal intervals, and visual and audio modalities amid distracting dense content.",
+        "We introduce AdsCVR, an e-commerce cross-video reasoning benchmark comprising 2,483 videos and 6,110 QA pairs spanning 86 product categories (see Table 1 for a comparison). It evaluates models’ understanding of complex commercial analysis and their ability to identify fine-grained differences across information-dense videos.",
+        "Table 1: Comparison of video understanding benchmarks. Temporal and Intent denote explicit temporal and intent understanding coverage (✓\\checkmark); —: not explicitly targeted. MCQ: multiple-choice QA; Open: open-ended QA; Seg.: segmentation; Cls.: classification.",
+        "MVU-Eval (Peng et al., 2025) General 4,959 1,824 Multiple MCQ ✓\\checkmark —",
+        "CrossVid (Li et al., 2026) General 5,331 9,015 Multiple MCQ / Open ✓\\checkmark —",
+        "Tencent-AVS (Wang et al., 2021) Ads 12,000 N/A Single Seg. + Cls. ✓\\checkmark —",
+        "MM-AU (Bose et al., 2023) Ads 8,399 N/A Single Cls. ✓\\checkmark ✓\\checkmark",
+        "VideoAds (Zhang et al., 2025) Ads 200 1,100 Single MCQ ✓\\checkmark ✓\\checkmark",
+        "AdsQA (Long et al., 2025) Ads 1,544 7,859 Single Open — ✓\\checkmark",
+        "E-VAds (Liu et al., 2026) E-commerce 3,961 19,785 Single Open — ✓\\checkmark",
+        "AdsCVR E-commerce 2,483 6,110 Multiple MCQ ✓\\checkmark ✓\\checkmark"
+      ]
+    },
+    {
+      "tableIndex": 4,
+      "sourceType": "source_quotes",
+      "sourceTableOrdinal": null,
+      "cellBindings": [],
+      "sourceQuotes": [
+        "Table 5: Training-data and action-space ablations on AdsCVR test accuracy (%). Average denotes the unweighted mean across dimensions. MVU-Eval-only and restricted-action variants are evaluated on the 3,000-question test split, with unparsed answers counted as incorrect.",
+        "Table 5 shows that AdsCVR-only training outperforms MVU-Eval-only training by 9.50 percentage points (73.57% vs. 64.07%), supporting the value of domain-specific data for e-commerce video comparison.",
+        "Our mixed-source dataset, AdSeek-train, supplements AdsCVR with MVU-Eval videos and script-simulated AgentCVR examples, further improving accuracy to 74.30%. The additional gains are concentrated in IC (+2.8 points) and TS (+2.0 points), while CS decreases by 1.0 point.",
+        "Restricting AdSeek to frame_select or audio_select reduces average accuracy to 63.97% and 65.03%, respectively, corresponding to drops of 10.33 and 9.27 points from the full model.",
+        "The two modalities exhibit different strengths: visual-only access performs better on IC (63.8% vs. 58.2%), whereas speech-only access performs better on the other five dimensions.",
+        "In-domain only (AdsCVR) 75.0 74.4 70.6 72.8 74.6 74.0 73.57",
+        "MVU-Eval only 67.4 60.8 60.8 63.6 65.6 66.2 64.07",
+        "Mixed 77.0 73.4 70.8 75.6 74.8 74.2 74.30",
+        "frame_select only 66.2 63.8 61.2 63.8 65.8 63.0 63.97",
+        "audio_select only 67.4 65.6 65.6 58.2 66.2 67.2 65.03",
+        "AdSeek 77.0 73.4 70.8 75.6 74.8 74.2 74.30"
+      ]
+    }
+  ]
+}

@@ -1992,9 +1992,42 @@ function buildRepairTargets(draft, issues, options = {}) {
         }
         return null;
     };
-    const boundedTargets = () => paths.size > 8 ? pairedTableTargets() || [...paths].slice(0, 8).map(pointer => ({ path: pointer,
+    const multipleTablePairs = () => {
+        const indexes = [...new Set(actionableIssues.flatMap(issue => {
+            const message = String(issue?.message || '');
+            if (!/缺少|单元格|cell|quote|单位/i.test(message)) return [];
+            const direct = /^\/tableBindings\/(\d+)$/.exec(issue.path || issue.bindingPath || '');
+            return [...(direct ? [Number(direct[1])] : []),
+                ...[...message.matchAll(/tableBindings\[(\d+)\]/g)].map(match => Number(match[1]))];
+        }))];
+        if (indexes.length < 2) return null;
+        const tables = locateReaderDraftTables(draft);
+        const groups = [];
+        for (const index of indexes) {
+            const binding = draft.tableBindings?.[index];
+            if (!binding || !Number.isInteger(binding.tableIndex) || binding.tableIndex < 1
+                || draft.tableBindings.filter(item => item.tableIndex === binding.tableIndex).length !== 1) return [];
+            const matches = tables.filter(table => table.tableIndex === binding.tableIndex);
+            if (matches.length !== 1) return [];
+            const marker = `[[TABLE_${binding.tableIndex}]]`;
+            const occurrences = draft.sections.reduce((total, section) => total
+                + String(section.body || '').split(marker).length - 1, 0);
+            if (occurrences > 1 || (matches[0].marker && occurrences !== 1)) return [];
+            groups.push([`/tableBindings/${index}`, matches[0].path]);
+        }
+        // 每个来源记录与唯一正文位置同时授权；八节点放不下的整对留给下一轮。
+        const selected = new Set();
+        for (const group of groups) {
+            if (new Set([...selected, ...group]).size > 8) break;
+            group.forEach(pointer => selected.add(pointer));
+        }
+        return [...selected].map(pointer => ({ path: pointer,
+            oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
+    };
+    const boundedTargets = () => multipleTablePairs() || (paths.size > 8 ? pairedTableTargets() || [...paths].slice(0, 8).map(pointer => ({ path: pointer,
         oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }))
-        : [...paths].map(pointer => ({ path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) }));
+        : [...paths].map(pointer => ({ path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer) })));
+
     if (firstPlacementGroup) {
         // 桥接位置不对，不等于可以改一个本来有效的桥接定义。一次可能同时诊断出
         // 好几个重复 marker，所以在稳定顺序下收集正文分组，但仍要守在八个节点
