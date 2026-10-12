@@ -14779,11 +14779,14 @@ async function analyzePaperDeepInternal(paper) {
     }
     // 历史直接分析绝不碰旧格式的 data/current 图片缓存。它们的下载器只返回来自运行器
     // 自有来源路线的临时内存字节；普通每日分析仍用自己的缓存。
-    const downloadedImages = isDualModel
+    const deferDailyLegacyImages = require('./lib/fresh-analysis-context.js').isDailyFreshSourceScope()
+        && (hasCompleteApiReaderFigureBinding(paper, analysisManifest)
+            || !isRecoveryStageTerminal('imageSupplement', analysisManifest.stages.imageSupplement?.status));
+    let downloadedImages = isDualModel && !deferDailyLegacyImages
         ? await downloadImagesSerial(candidateImageUrls, IMAGE_MAX_COUNT, IMAGE_MAX_BASE64_CHARS,
             IMAGE_TOTAL_BASE64_CHARS, directSource ? { downloadImageDetailed: directPrimaryImageDownloader } : {})
         : [];
-    const downloadOutcomes = downloadedImages.outcomes || [];
+    let downloadOutcomes = downloadedImages.outcomes || [];
     imageManifest.downloaded = downloadedImages.map(img => ({
         url: img.url,
         mime: img.mime,
@@ -14792,12 +14795,14 @@ async function analyzePaperDeepInternal(paper) {
         cacheHit: Boolean(img.cacheHit)
     }));
     imageManifest.downloadOutcomes = downloadOutcomes;
-    if (isDualModel) {
+    if (deferDailyLegacyImages) {
+        console.log('    [deep] 日更先分析正文，旧插图仅在确需补充时下载');
+    } else if (isDualModel) {
         console.log(`    [deep] 成功下载 ${downloadedImages.length}/${candidateImageUrls.length} 张候选图片（总图片 ${imageUrls.length} 张）`);
     } else if (candidateImageUrls.length > 0) {
         console.log(`    [deep] 单模型模式：跳过 ${candidateImageUrls.length} 张候选图片下载，仅保存候选元数据`);
     }
-    const downloadStatus = classifyImageDownloadStatus({
+    let downloadStatus = deferDailyLegacyImages && isDualModel ? 'pending' : classifyImageDownloadStatus({
         discoveryError: imageDiscoveryError,
         isDualModel,
         candidateCount: candidateImageUrls.length,
@@ -14815,7 +14820,8 @@ async function analyzePaperDeepInternal(paper) {
         imageTotalBase64Chars: IMAGE_TOTAL_BASE64_CHARS
     });
     markRecoveryStage(analysisManifest, 'imageDownload', downloadStatus, {
-        attempted: candidateImageUrls.length,
+        ...(deferDailyLegacyImages && isDualModel ? { reason: 'deferred_until_legacy_image_supplement' } : {}),
+        attempted: deferDailyLegacyImages ? 0 : candidateImageUrls.length,
         downloaded: downloadedImages.length,
         outcomes: downloadOutcomes,
         fingerprint: imageDownloadFingerprint
@@ -16209,9 +16215,10 @@ async function analyzePaperDeepInternal(paper) {
         : analysis;
     // 核验用旧记录自己声明的版本重算，写入用当前版本。两者分开：如果只换加载路径、
     // 核验仍按 v1 算，或者反过来的话，每次运行都会判不等，删掉插图阶段后立刻重做。
+    const hasBoundApiReaderFigures = hasCompleteApiReaderFigureBinding(paper, analysisManifest);
     const imageSupplementDeclaredContract = textStagePromptTextContract(
         paper, analysisManifest, 'imageSupplement');
-    const imageSupplementFingerprint = buildImageSupplementFingerprint(
+    let imageSupplementFingerprint = buildImageSupplementFingerprint(
         recoveryFingerprints.imageSupplement,
         candidateImageInfos,
         downloadedImages,
@@ -16223,6 +16230,33 @@ async function analyzePaperDeepInternal(paper) {
         'imageSupplement',
         imageSupplementFingerprint
     );
+    if (deferDailyLegacyImages && isDualModel) {
+        if (hasBoundApiReaderFigures || savedCoreSummaryRepairActive) {
+            markRecoveryStage(analysisManifest, 'imageDownload', 'skipped', {
+                reason: hasBoundApiReaderFigures ? 'api_reader_v3_official_figures_bound'
+                    : 'sealed_core_summary_recovery_preserves_source_only_reader',
+                attempted: 0, downloaded: 0, outcomes: [], fingerprint: imageDownloadFingerprint
+            });
+        } else if (!isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
+            downloadedImages = await downloadImagesSerial(candidateImageUrls, IMAGE_MAX_COUNT,
+                IMAGE_MAX_BASE64_CHARS, IMAGE_TOTAL_BASE64_CHARS,
+                directSource ? { downloadImageDetailed: directPrimaryImageDownloader } : {});
+            downloadOutcomes = downloadedImages.outcomes || [];
+            imageManifest.downloaded = downloadedImages.map(img => ({ url: img.url, mime: img.mime,
+                base64Chars: img.base64.length, sha256: img.sha256, cacheHit: Boolean(img.cacheHit) }));
+            imageManifest.downloadOutcomes = downloadOutcomes;
+            downloadStatus = classifyImageDownloadStatus({ discoveryError: imageDiscoveryError, isDualModel,
+                candidateCount: candidateImageUrls.length, downloadedCount: downloadedImages.length,
+                outcomes: downloadOutcomes });
+            imageSupplementFingerprint = buildImageSupplementFingerprint(
+                recoveryFingerprints.imageSupplement, candidateImageInfos, downloadedImages, preImageAnalysis);
+            invalidateRecoveryStageIfChanged(paper, analysisManifest, 'imageSupplement', imageSupplementFingerprint);
+            markRecoveryStage(analysisManifest, 'imageDownload', downloadStatus, {
+                attempted: candidateImageUrls.length, downloaded: downloadedImages.length,
+                outcomes: downloadOutcomes, fingerprint: imageDownloadFingerprint
+            });
+        }
+    }
     // 失效后阶段已被删除，声明的版本随之变成当前版本；此时必须按当前版本重建写入
     // 指纹，不能拿 v1 形状的指纹配 v2 的声明，否则下一次运行又会判不等。
     const imageSupplementWriteContract = currentPromptTextContract('imageSupplement');
@@ -16238,7 +16272,6 @@ async function analyzePaperDeepInternal(paper) {
     if (isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
         analysis = preImageAnalysis;
     }
-    const hasBoundApiReaderFigures = hasCompleteApiReaderFigureBinding(paper, analysisManifest);
     if (savedCoreSummaryRepairActive
         && !isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
         analysis = preImageAnalysis;
