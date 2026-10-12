@@ -24,6 +24,7 @@ const { updateAnalysisDigestStatuses } = require('./digest-status.js');
 const Config = require('./config.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 const factReview = require('./lib/daily-fact-review.js');
+const { hasCompletedBoundFactFeedback } = require('./lib/completed-bound-fact-feedback');
 
 loadEnvFile();
 
@@ -149,8 +150,9 @@ async function runDeepAnalysis(options = {}) {
     if (feedback) factReview.validateFeedback(feedback, dailySourcePlan, papers.find(paper => normalizedId(paper) === cli.id));
     const notAnalyzed = papers
         .filter(p => !cli.id || normalizedId(p) === cli.id)
-        .filter(p => feedback || !isSuccessfulAnalysisRecord(p)
-            || !dailyFreshSources.isPaperReusableForAnalysis(p, dailySourcePlan))
+        .filter(p => feedback ? !hasCompletedBoundFactFeedback(p, feedback, dailySourcePlan)
+            : !isSuccessfulAnalysisRecord(p)
+                || !dailyFreshSources.isPaperReusableForAnalysis(p, dailySourcePlan))
         .map(storedAnalysisRecord => mergeStoredAnalysisState(
             freshById.get(normalizedId(storedAnalysisRecord)) || storedAnalysisRecord,
             storedAnalysisRecord
@@ -200,12 +202,14 @@ async function runDeepAnalysis(options = {}) {
             const current = readJsonFileStrict(resultPath);
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
+            let lockedPlan = dailySourcePlan;
             if (feedback) {
-                const lockedPlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(current, { label: 'locked fact review' });
+                lockedPlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(current, { label: 'locked fact review' });
                 factReview.validateFeedback(feedback, lockedPlan, latest);
             }
-            if (!feedback && isSuccessfulAnalysisRecord(latest)
-                && dailyFreshSources.isPaperReusableForAnalysis(latest, dailySourcePlan)) {
+            if (feedback ? hasCompletedBoundFactFeedback(latest, feedback, lockedPlan)
+                : isSuccessfulAnalysisRecord(latest)
+                    && dailyFreshSources.isPaperReusableForAnalysis(latest, lockedPlan)) {
                 return { paper: latest, skip: true };
             }
             return {

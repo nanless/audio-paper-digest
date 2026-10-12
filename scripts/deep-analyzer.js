@@ -14494,7 +14494,11 @@ async function analyzePaperDeepInternal(paper) {
     let savedCoreSummaryRepairCandidate = captureSavedAnalysisForCoreSummaryRepair(paper);
     const modelTextRecoveryCandidate = paper.analysisManifest?.sourceAcquisition?.modelTextSanitizationContract
         === MODEL_TEXT_SANITIZATION_CONTRACT ? null : structuredClone(paper);
-    const analysisManifest = createAnalysisRecoveryManifest(paper);
+    // 准备恢复状态时可能删除旧检查点；先在副本中处理，
+    // 事实反馈预检接受修改范围后，才将变化应用到本次分析。
+    const recoveryPreparation = { ...paper,
+        ...(paper.analysisStageCheckpoints ? { analysisStageCheckpoints: { ...paper.analysisStageCheckpoints } } : {}) };
+    const analysisManifest = createAnalysisRecoveryManifest(recoveryPreparation);
     const savedPrimaryFactStage = analysisManifest.stages.primaryAnalysis;
     const localFactRepairInput = String(paper.analysisCheckpoint || paper.analysis || '');
     const activePrimaryFactReview = require('./lib/daily-fact-review').current(arxivId)?.feedback.primaryFeedback?.trim();
@@ -14509,8 +14513,6 @@ async function analyzePaperDeepInternal(paper) {
         throw contractRejectedError(COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR);
     }
     if (localFactRepairPlan) localFactRepair.validateHeadings(localFactRepairInput);
-    if (activePrimaryFactReview) captureStaleAnalysisSnapshot(paper, analysisManifest, 'primaryAnalysis',
-        require('./lib/daily-fact-review').current(arxivId).proof.feedbackSha256);
     if (savedPrimaryFactStage?.factReview && !activePrimaryFactReview
         && (!isRecoveryStageComplete(analysisManifest, 'primaryAnalysis')
             || !String(paper.analysisStageCheckpoints?.primaryAnalysis || paper.analysisCheckpoint || '').trim())) {
@@ -14522,6 +14524,14 @@ async function analyzePaperDeepInternal(paper) {
         && !isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
         require('./lib/daily-fact-review').assertScoringRequestAllowed(savedPrimaryFactStage);
     }
+    for (const key of ['analysisStageCheckpoints', 'apiReaderArticle', 'apiReaderPlan',
+        'apiReaderFigures', 'apiReaderAuthors', 'apiReaderResources',
+        'apiReaderArticleSha256', 'apiReaderPlanSha256']) {
+        if (Object.hasOwn(recoveryPreparation, key)) paper[key] = recoveryPreparation[key];
+        else delete paper[key];
+    }
+    if (activePrimaryFactReview) captureStaleAnalysisSnapshot(paper, analysisManifest, 'primaryAnalysis',
+        require('./lib/daily-fact-review').current(arxivId).proof.feedbackSha256);
     console.log(`    [deep] 获取全文: ${arxivId}`);
 
     // 历史直接运行只能消费自己运行器注入的来源。它绝不会退回到调用方旧的 fullText、
