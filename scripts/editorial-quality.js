@@ -981,7 +981,7 @@ function findMissingComparisonUnits(text) {
         for (const range of parameterRanges) {
             comparisonText = comparisonText.replace(range[0], ' '.repeat(range[0].length));
             comparisonText = comparisonText.replace(
-                new RegExp(`${range[1]}\\s*=\\s*[-+]?\\d+(?:\\.\\d+)?(?![\\d.])`, 'gu'),
+                new RegExp(`${range[1]}\\s*=\\s*[-+]?\\d+(?:\\.\\d+)?(?![\\d.])(?=\\s*(?:时|的\\s*虚线))`, 'gu'),
                 match => ' '.repeat(match.length)
             );
         }

@@ -412,6 +412,7 @@ async function ephemeralReaderFigures(arxivId, figures, plan, options = {}) {
                     || !/^image\/(?:png|jpeg|webp|svg\+xml)$/.test(String(cached.mime || ''))) {
                     fail(`论文图 ${figure.ordinal} 在本次调用内保存的图片字节或 MIME 类型与记录不符`);
                 }
+                console.log(`    [deep] 图片本次调用缓存命中: url_sha256=${sha256(String(figure.url))}`);
                 materialized.push({
                     ...figure,
                     rawBytes: bytes,

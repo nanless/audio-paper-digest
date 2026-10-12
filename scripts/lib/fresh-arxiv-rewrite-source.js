@@ -505,7 +505,20 @@ function isTransientEphemeralFigureFetchError(error) {
 async function fetchEphemeralFigureWithRetry(fetchFigure, url, options = {}) {
     const sleep = options.sleep || (ms => new Promise(resolve => setTimeout(resolve, ms)));
     for (let attempt = 1; attempt <= EPHEMERAL_FIGURE_FETCH_MAX_ATTEMPTS; attempt++) {
-        try { return await fetchFigure(url); }
+        const imageKey = sha256(String(url));
+        const started = process.hrtime.bigint();
+        let succeeded = false;
+        console.log(`    [deep] 图片请求开始: url_sha256=${imageKey} attempt=${attempt}`);
+        try {
+            try {
+                const result = await fetchFigure(url);
+                succeeded = true;
+                return result;
+            } finally {
+                const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+                console.log(`    [deep] 图片请求结束: url_sha256=${imageKey} attempt=${attempt} status=${succeeded ? 'success' : 'failed'} elapsed_ms=${elapsedMs.toFixed(1)}`);
+            }
+        }
         catch (error) {
             if (!isTransientEphemeralFigureFetchError(error)) throw error;
             if (attempt < EPHEMERAL_FIGURE_FETCH_MAX_ATTEMPTS) {
