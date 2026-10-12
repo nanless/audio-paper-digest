@@ -1110,6 +1110,11 @@ function findMissingComparisonUnits(text) {
             );
         }
         const numericText = comparisonText
+            // 音频输入的整数通道数是实验条件，不能当作错误率的变化幅度。
+            // 只遮蔽完整通道计数；附近没有单位的 WER/CER 数值仍须拒绝。
+            .replace(/(?<![A-Za-z0-9_.+\-−零〇一二两三四五六七八九十百千万亿])\d+\s*通道/gu,
+                (match, offset, whole) => /(?:负|[+\-−])\s*$/u.test(whole.slice(0, offset))
+                    ? match : ' '.repeat(match.length))
             // 有空格的完整型号版本仍是产品标识，不是邻近指标的结果。
             // 只识别实际遇到的两类命名型号，保留同句的其他裸指标数字。
             .replace(/\b(?:Qwen\s+\d+(?:\.\d+)?(?:-[A-Za-z][A-Za-z0-9-]*)?|Gemma\s+\d+(?:\.\d+)?)(?![\d.])/giu,
