@@ -6,6 +6,8 @@ English · **[中文](README.md)**
 
 Fetch candidate papers from arXiv and HuggingFace Papers, filter and analyze them with an LLM, publish a daily index plus beginner-oriented Chinese deep dives, then create post-publication TOP 10 infographics and a digest cover.
 
+Subsequent paper LLM calls use `muse-spark-1.3-contributor` as selected by the user. Check both primary and secondary settings. Muse requires OpenAI Responses and the project HTTP CONNECT proxy; MiMo compatibility remains available.
+
 ## What you get
 
 - Resumable, auditable candidate, filter-decision, and deep-analysis data for each day.

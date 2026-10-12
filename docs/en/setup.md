@@ -31,7 +31,9 @@ PAPER_ANALYZER_API_KEY=your-key
 # Optional comma-separated fallback accounts for the same route
 PAPER_ANALYZER_FALLBACK_API_KEYS=your-second-key
 PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY=your-third-key
-PAPER_ANALYZER_MODEL=mimo-v2.6-flash
+PAPER_ANALYZER_MODEL=muse-spark-1.3-contributor
+# Use the same model if legacy secondary figure planning is enabled
+PAPER_ANALYZER_SECONDARY_MODEL=muse-spark-1.3-contributor
 PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
 HTTP_PROXY=http://127.0.0.1:7897
@@ -40,7 +42,7 @@ PAPER_DIGEST_BLOG_REPO=/absolute/path/to/audio-paper-digest-blog
 PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT=/absolute/path/to/iclr2026-paper-scraper
 ```
 
-The current example uses OpenCode Go `mimo-v2.6-flash` through OpenAI Chat Completions, with the `/v1` endpoint used as-is; `muse-spark-*` models still use OpenAI Responses. The project configuration is what actually selects the model. Public endpoints require HTTPS. HTTP is allowed only for loopback test services.
+The user has selected `muse-spark-1.3-contributor` for subsequent paper LLM calls. Check both primary and secondary model settings. Muse uses OpenAI Responses, converts a base `/v1` endpoint to `/v1/responses`, and requires the project HTTP CONNECT proxy. MiMo Chat Completions compatibility remains available. The project configuration is what actually selects the model. Public endpoints require HTTPS. HTTP is allowed only for loopback test services.
 
 `PAPER_DIGEST_ICLR_2026_ACCEPTED_ROOT` is used only by the historical ICLR 2026 source collector. It must point at retained local official accepted-paper metadata and PDFs. When unset, it defaults to `~/code/github_repos/iclr2026-paper-scraper`. Daily fetching and arXiv writing both ignore it, and setting it triggers no download.
 
@@ -67,7 +69,7 @@ Do not count on `.zshrc`, the IDE, Trae, or Codex to supply missing project valu
 | Muse requests (`muse-spark-*`) | Project HTTP CONNECT through `HTTPS_PROXY` or `HTTP_PROXY`; create a separate proxy connection object for each request and destroy it afterward |
 | arXiv metadata, HTML, PDF, and images | Project HTTP CONNECT is required |
 | HuggingFace curl | Inherit HTTP(S) proxy settings; SOCKS `ALL_PROXY` is optional |
-| Other model providers | Connect directly with `agent:false` by default; the recommended `mimo-v2.6-flash` falls in this group |
+| Other model providers | Connect directly with `agent:false` by default; the compatible `mimo-v2.6-flash` falls in this group |
 | External images and demos | HTTPS only; validate public IP addresses at every redirect |
 
 If a required proxy is missing, the request stops rather than silently connecting directly. All project scripts and tests must run outside the sandbox, including diagnostics that use a local proxy.
@@ -106,7 +108,7 @@ A local Reader repair normally allows 8000 output tokens. If a repair truncates 
 
 ## Optional Secondary Model
 
-Reader v3 sends safely prepared official figures directly to the primary model, so the model and the chosen protocol must support image inputs. The documented `mimo-v2.6-flash` example uses Chat Completions, and `muse-spark-*` uses Responses. The shared request layer also supports Chat and Anthropic image formats. `PAPER_ANALYZER_SECONDARY_MODEL` only enables the legacy analysis image-supplement selection and insertion plan. It neither writes the primary prose nor scores the paper. An omitted secondary endpoint falls back to the primary endpoint, and a secondary key can be reused only for the same service.
+Reader v3 sends safely prepared official figures directly to the primary model, so the model and the chosen protocol must support image inputs. The current Muse example uses Responses; compatible `mimo-v2.6-flash` uses Chat Completions. The shared request layer also supports Chat and Anthropic image formats. `PAPER_ANALYZER_SECONDARY_MODEL` only enables the legacy analysis image-supplement selection and insertion plan. It neither writes the primary prose nor scores the paper. An omitted secondary endpoint falls back to the primary endpoint, and a secondary key can be reused only for the same service.
 
 `PD_API_READER_CONCURRENCY` limits heavy Reader stages inside one process. The refresh command's `--concurrency N` limits how many papers are processed at once, and those papers may still wait for Reader capacity. The two limits are separate.
 

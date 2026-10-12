@@ -35,14 +35,16 @@ cp env.example .env
 
 本机日更目录已在 `.env` 设 `PD_WORKSPACE_ALLOW_CROSS_ROLE=1`：`history:*` 入口会跨角色放行并打印提示。这个开关只放宽「daily 工作区执行 history 命令」，反向仍拒绝，也不允许日更、会议和历史任务同时生成、审查或推送博客；执行者负责错峰。
 
-在 `.env` 至少配置以下字段。仓库文档当前推荐模型为 `mimo-v2.6-flash`，实际模型由项目配置指定：
+在 `.env` 至少配置以下字段。用户已指定后续论文 LLM 统一使用 `muse-spark-1.3-contributor`，实际模型由项目配置指定；主、副模型都须核对：
 
 ```dotenv
 PAPER_ANALYZER_API_KEY=your-key
 # 可选；同一 OpenCode Go 路由的备用账号，逗号分隔
 PAPER_ANALYZER_FALLBACK_API_KEYS=your-second-key
 PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY=your-third-key
-PAPER_ANALYZER_MODEL=mimo-v2.6-flash
+PAPER_ANALYZER_MODEL=muse-spark-1.3-contributor
+# 配置旧版插图副模型时也统一使用该模型；key/endpoint 复用规则见下文
+PAPER_ANALYZER_SECONDARY_MODEL=muse-spark-1.3-contributor
 PAPER_ANALYZER_ENDPOINT=https://opencode.ai/zen/go/v1
 HTTPS_PROXY=http://127.0.0.1:7897
 HTTP_PROXY=http://127.0.0.1:7897
@@ -114,9 +116,9 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。npm 中的 Python 命令要求 Python 
 | `token-plan` + MiMo | Anthropic | `/anthropic/v1/messages` |
 | Kimi coding | Anthropic | `/coding/v1/messages` |
 | 其他 `/anthropic` | Anthropic | `{base}/messages` |
-| 其他（含当前推荐的 `mimo-v2.6-flash`） | OpenAI Chat | `/v1/chat/completions` |
+| 其他（含兼容的 `mimo-v2.6-flash`） | OpenAI Chat | `/v1/chat/completions` |
 
-所有 Node LLM 调用经 `requestLlmJson()`。`muse-spark-*` 每次请求都创建独立的 HTTP CONNECT 连接对象，结束后销毁；这里的 `agent` 指连接对象，并非参与论文分析的独立助手。其他模型默认以 `agent:false` 直连，当前推荐的 `mimo-v2.6-flash` 不含 `muse-spark-` 前缀，走直连。Python 发布请求遵守同样的 Muse 代理规则。
+所有 Node LLM 调用经 `requestLlmJson()`。`muse-spark-*` 每次请求都创建独立的 HTTP CONNECT 连接对象，结束后销毁；这里的 `agent` 指连接对象，并非参与论文分析的独立助手。其他模型默认以 `agent:false` 直连，兼容的 `mimo-v2.6-flash` 不含 `muse-spark-` 前缀，走直连。Python 发布请求遵守同样的 Muse 代理规则。
 
 配置 `PAPER_ANALYZER_FALLBACK_API_KEYS` 后启用 OpenCode Go 备用账号。初始使用主密钥；明确 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 时，记录账号冷却并按配置顺序向后切换，不返回前面已冷却的账号。普通认证 401 不切号，而是上报运行级错误；所有后续账号不可用时停止派发并保留断点。
 
@@ -145,7 +147,7 @@ Node 要求 `>=20.18.1 <21 || >=22.3.0`。npm 中的 Python 命令要求 Python 
 | `PD_API_READER_CONCURRENCY` | 5，限制 1–60 |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 5，限制 1–5 |
 
-筛选和整篇分析都按各自配置并发；`muse-spark-*` 每个请求有独立隧道，当前推荐的 `mimo-v2.6-flash` 直连。账号池状态更新仍通过短时间持锁串行完成。Responses 仅在 `PD_OPENAI_RESPONSES_STREAM=1` 时使用 SSE，Chat Completions 请求不受该变量影响。返回 `incomplete/max_output_tokens` 时不得接受半截 JSON。
+筛选和整篇分析都按各自配置并发；`muse-spark-*` 每个请求有独立隧道，兼容的 `mimo-v2.6-flash` 直连。账号池状态更新仍通过短时间持锁串行完成。Responses 仅在 `PD_OPENAI_RESPONSES_STREAM=1` 时使用 SSE，Chat Completions 请求不受该变量影响。返回 `incomplete/max_output_tokens` 时不得接受半截 JSON。
 
 ## 5. 权威数据与恢复
 

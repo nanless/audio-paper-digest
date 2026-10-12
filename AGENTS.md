@@ -30,8 +30,8 @@ npm run digest:prepare -- YYYY-MM-DD
 1. Node 满足 `>=20.18.1 <21 || >=22.3.0`，依赖已安装。
    npm 中的 Python 命令还要求 Python 3.11+ 与 OpenSSL；`scripts/python-runtime.sh` 优先使用项目 `.venv`，再选择并校验 `python3.11` / `python3`。
 2. 项目根 `.env` 存在，加载器会将文件权限收紧为 `0600`。
-3. `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT` 完整；仓库文档当前推荐 OpenCode Go `mimo-v2.6-flash`，实际模型仍由项目配置指定。可选 `PAPER_ANALYZER_FALLBACK_API_KEYS` 为同一路由提供备用账号；切换后持续使用成功账号，不能代替副模型配置。
-4. `HTTPS_PROXY` 或 `HTTP_PROXY` 是项目 `.env` 内的 HTTP CONNECT 地址；`muse-spark-*` 模型与 arXiv 缺代理立即失败，当前推荐的 `mimo-v2.6-flash` 不含该前缀，走直连。
+3. `PAPER_ANALYZER_API_KEY/MODEL/ENDPOINT` 完整；用户已指定后续论文 LLM 统一使用 `muse-spark-1.3-contributor`，主、副模型配置均须核对；实际模型仍由项目配置指定。可选 `PAPER_ANALYZER_FALLBACK_API_KEYS` 为同一路由提供备用账号；切换后持续使用成功账号，不能代替副模型配置。
+4. `HTTPS_PROXY` 或 `HTTP_PROXY` 是项目 `.env` 内的 HTTP CONNECT 地址；`muse-spark-*` 模型与 arXiv 缺代理立即失败，当前统一使用的 `muse-spark-1.3-contributor` 必须走该代理。
 5. `PAPER_DIGEST_BLOG_REPO` 指向真实 Hugo 仓库，工作区没有与目标日期重叠的人工修改。
 
 所有项目脚本、测试、语法检查和数据校验必须在沙箱外执行。脚本会在业务逻辑、日志、网络和写入前拒绝可靠的 `CODEX_SANDBOX` 标志；生产 npm 入口和直接 Node/Python 入口还会核验工作区角色。不得绕过检查或伪造结果。
@@ -70,10 +70,10 @@ npm run digest:prepare -- YYYY-MM-DD
 
 ## 模型、代理、并发与预算
 
-`muse-spark-*` 模型使用 OpenAI Responses，`/v1` 转为 `/v1/responses`；当前推荐的 `mimo-v2.6-flash` 在 OpenCode Go 上走 OpenAI Chat Completions，基础端点原样使用。所有 Node LLM 请求必须经 `requestLlmJson()`；Python 发布请求必须经 `call_publish_llm_api()`。
+`muse-spark-*` 模型使用 OpenAI Responses，`/v1` 转为 `/v1/responses`；兼容的 `mimo-v2.6-flash` 在 OpenCode Go 上走 OpenAI Chat Completions，基础端点原样使用。所有 Node LLM 请求必须经 `requestLlmJson()`；Python 发布请求必须经 `call_publish_llm_api()`。
 
 - Muse：强制使用项目 HTTP CONNECT 代理。每次请求创建独立连接对象，请求结束后销毁；这里的 `agent` 指 HTTP 连接对象。禁止静默改为直连。
-- 当前推荐的 `mimo-v2.6-flash` 不含 `muse-spark-` 前缀，按直连处理，不复用上面的代理设置。
+- 兼容的 `mimo-v2.6-flash` 不含 `muse-spark-` 前缀，按直连处理，不复用上面的代理设置。
 - OpenCode Go 账号池：成功时持续使用当前账号。只有明确的 HTTP 429 `GoUsageLimitError` 或 HTTP 401 `Insufficient balance` 才在同一逻辑请求内按配置顺序向后切换，并保存冷却状态；不返回前面已冷却的账号。普通认证 401 会停止本次运行，不切换账号；普通 429、5xx、网络错误、输出截断和正文校验失败也不得切换。全部后续账号不可用时保存断点并停止新请求，避免整批论文反复遭遇同一服务故障。
 - 其他 LLM：默认以 `agent:false` 直连，防止误用 Muse 的代理设置影响 MiMo/Kimi。
 - arXiv 元数据、HTML、PDF、图片：强制项目 HTTP CONNECT。

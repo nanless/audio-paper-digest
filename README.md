@@ -62,6 +62,8 @@ python3.11 -m venv .venv
 cp env.example .env
 ```
 
+用户已指定后续论文 LLM 统一使用 `muse-spark-1.3-contributor`，主、副模型均须核对。Muse 使用 OpenAI Responses，并强制经项目 HTTP CONNECT 代理；MiMo 的 Chat Completions 兼容支持仍保留。
+
 `.env` 至少配置模型密钥、型号、API 地址、HTTP CONNECT 代理和博客路径。字段与备用账号规则见
 [环境配置](docs/setup.md)。所有项目命令必须在沙箱外运行。先确认当前目录用途，再检查工作区角色：
 
