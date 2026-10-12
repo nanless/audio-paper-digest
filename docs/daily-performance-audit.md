@@ -1,0 +1,49 @@
+# 日更耗时检查与修复记录
+
+本轮按用户要求停止生产日更，只做离线审查、代码修复和验证。不得依据这份报告自动启动抓取、分析、恢复或发布。停止时保留了 245 篇正式记录；中断中的请求可能尚未返回或保存，不能把已有草稿当作完成结果。博客中原有的 1355 个未提交页面保持不动。
+
+## 比较方法
+
+速度以通过完整分析和来源核验的论文数计算。模型返回 HTTP 200、写入草稿、阶段完成或测试通过，都不能计入整篇完成数。比较至少区分抓取等待、准备、模型等待、修补轮数、保存耗时和最终成功数；并行请求的时长总和不能当作墙钟时间。
+
+十倍是优化目标，不是已经取得的端到端结果。生产已停止，本轮的本地计时、旧响应重放和请求数验证不能替代下一次真实运行的吞吐验证。
+
+## 停机前的实际耗时
+
+2026-10-12 最后一轮（R16）的日志覆盖窗口约 620 秒，并非整个日更生命周期。日志记录 195 次请求启动、183 条请求终态；中断时有缺口，不能把未记账的请求当作免费或已经保存。166 次 HTTP 200 中，149 次 Reader 结果被拒绝，未记录到新增整篇完成；50 次因连续两轮没有改善而停止。请求时长的并行累计为 10939 秒，其完成请求覆盖的墙钟区间约 560 秒，两者不能相混。
+
+中央结果文件保存了 326 次，累计序列化约 27.2 GB。读取解析约 87.2 秒、序列化约 27.5 秒、写入约 21.5 秒，合计约 136.3 秒，占本轮墙钟约 22%。锁等待累计约 7.6 秒，会与其他任务重叠。即使完全消除这部分保存成本，按此比例推算也只有约 1.28 倍，不能据此承诺十倍。
+
+本轮启动前的恢复计划另耗时 368 秒，192 项诊断迁移反复扫描近 522 份候选记录；这是待修复的重复工作。上一轮同类准备耗时 273 秒。后续应分别比较准备时间、每次有用模型请求数和整篇成功数。
+
+发布侧也已只读测量：现有博客的审查协议指纹首次约 0.40 秒、后两次约 0.11 秒。它不是此次十分钟零新增完成的主因，本轮不为缩短这部分时间削弱文件变更检查。
+
+## 已确认的问题
+
+| 问题 | 原因与影响 | 修复与验证范围 |
+| --- | --- | --- |
+| 完成同一事实纠错后仍重复入队 | 批次只看“有反馈”，成功论文也重新分析；早失败又会把它标成失败 | 初筛和论文锁内重读使用同一严格完成判断，核验完整资格、当前来源、反馈证明及残留错误句。新反馈和不完整记录仍处理 |
+| 预检报错删除已有检查点 | 恢复状态准备先改动原记录，随后事实范围预检报错，外层又将缺失检查点的状态保存 | 先在私有副本准备，预检接受后才应用；公共入口、论文锁与失败保存的反例确认保留旧正文和检查点，并继续保留失败标记 |
+| 小节过多与术语解释不足互相阻断 | 重排入口先要求术语数量达标；完整旧稿无法进入局部重排 | 先按有界完整结构允许仅重排小节，再单独处理其余问题。其他根数组不改，最终检查保留 |
+| 缺教学类型却只能改正文 | 修改正文不能改变小节类型，连续重试不可能消除该错误 | 结构化诊断只允许改写一个相邻可替代小节的完整对象；唯一必需小节和已有图表、公式、术语标记不受此授权影响 |
+| 圈号数字的排版反复失败 | 检查器把“式②”归一化成“式2”，修复程序只找 ASCII 数字 | 保留②、⑥、上标等原符号，仅补汉字边界空格；引用、代码、公式和 URL 不动。真实旧稿重放消除了此项错误，其他宽表问题仍被拒绝 |
+| 分类切换重复等待 | 请求调度器已有间隔和失败退避，外层仍首次等 30 秒、每类再等 70–90 秒，还把分页用时长误作限流 | 删除重复等待及无用配置。七分类真实流程的虚拟时钟回放：旧 450 秒，新 18 秒；3 秒最小间隔、503 与 429 冷却仍核验。这是等待部分减少 96%，不代表整条日更提速 25 倍 |
+
+## 代码与检查入口
+
+- 抓取与范围：`run-daily-digest.sh`、`scripts/full-fetch.js`、`scripts/fetch-papers.js`、`scripts/lib/fetch-scheduler.js`、`scripts/lib/daily-fetch-boundary.js`、`scripts/config.js`。
+- 恢复与保存：`scripts/batch-analyze.js`、`scripts/deep-analysis-only.js`、`scripts/reanalyze.js`、`scripts/refresh-api-reader.js`、`scripts/analysis-engine.js`、`scripts/deep-analyzer.js` 及其来源、反馈、草稿恢复模块。
+- 修补与提示词：`scripts/lib/reader-repair.js`、`scripts/lib/reader-recovery-revision.js`、`scripts/lib/reader-draft-order.js`、`scripts/lib/reader-contract.js`、`scripts/editorial-quality.js`，以及当前实际加载的 Reader 提示词。历史提示词仍有旧指纹核验用途，不能按版本号删除。
+- 发布与复用：`scripts/generate-blog.py`、`scripts/review-blog.py`、`scripts/push-blog.py`、`scripts/publish-to-blog.py`、`scripts/publish_common.py`。现有逐页内容 SHA 复用、付费前程序检查及有界并发继续保留；不为了提速跳过 Hugo、Git、部署或网页检查。
+
+针对性回归可运行：
+
+```bash
+node --test tests/full-fetch-source-before-filter.test.js tests/full-fetch.test.js tests/config.test.js
+node --test tests/batch-completed-feedback.test.js tests/deep-completed-feedback.test.js tests/daily-fact-review.test.js
+node --test tests/reader-reorganization-composite.test.js tests/reader-overlong-sections-recovery.test.js tests/api-reader-repair.test.js tests/api-reader-bridge-surface.test.js tests/api-reader-scaled-numerals.test.js
+```
+
+## 仍需完成的审查
+
+恢复候选索引、停止新请求的处理、公式缺失记录的修补范围仍在独立验证；中央结果文件的保存成本已测量，尚未改写其存储格式。所有问题解决前仍须保留具体未完成项。不能把以上文件清单理解成每一行均已审完，也不能因局部测试通过宣称所有问题已清除。
