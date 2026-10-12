@@ -625,6 +625,11 @@ function findReaderLanguageIssues(text, { contextText = '' } = {}) {
         },
         {
             code: 'reader_awkward_translation',
+            regex: /额外\s*memory\s*(?:与|和|及|以及)\s*computation\s+cost/giu,
+            message: '这句把普通开销说明夹写成英文碎片。用自然中文说明额外显存占用与计算开销，保留原测量对象、数字、单位和限制；不要把更新次数推成显存或耗时的线性关系，也不要修改来源引文或代码。'
+        },
+        {
+            code: 'reader_awkward_translation',
             regex: /弗雷歇起始距离/gu,
             message: '核对本段来源是否指 Fréchet Inception Distance（FID）。若是，保留准确指标名或 FID，并白话说明它比较生成与参考样本的特征分布；不要把 Inception 译成“起始”。保留原指标值、方向、条件和来源证据，不改成其他 Fréchet 数学距离。'
         },

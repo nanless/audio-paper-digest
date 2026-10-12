@@ -1165,3 +1165,35 @@ describe('已记录数词问题的完整边界', () => {
         assert.equal(normalizeIssueBoundReaderQuantitativeNumerals(source, []), source);
     });
 });
+
+
+describe('普通开销说明的英文碎片', () => {
+    it('定位真实中英夹写，空格变化不改变判定', () => {
+        for (const text of [
+            '辅助模型带来额外memory与computation cost，更新比为5:1。',
+            '辅助模型带来额外 memory 与 computation cost，更新比为5:1。'
+        ]) {
+            const issues = findReaderLanguageIssues(text);
+            assert.equal(issues.length, 1);
+            assert.equal(issues[0].code, 'reader_awkward_translation');
+            assert.equal(text.slice(issues[0].index, issues[0].index + issues[0].match.length), issues[0].match);
+            assert.match(issues[0].message, /数字、单位/);
+        }
+    });
+
+    it('不拦科学边界、必要英文专名或正常中文计算解释', () => {
+        const text = 'MemoryBank 是模型名。额外显存占用与计算开销分别测量，不作超出原文的线性外推。'
+            + '原始权重除以归一化分母C，得到归一化权重。现有数据无法证明显存与更新次数存在线性关系。';
+        assert.deepEqual(findReaderLanguageIssues(text), []);
+    });
+
+    it('原表、引文、代码和公式不变，表后普通正文仍定位', () => {
+        const fragment = '额外 memory 与 computation cost';
+        const text = `| 指标 | 说明 |\n| --- | --- |\n| 开销 | ${fragment} |\n\n`
+            + `原文写道：“${fragment}”。\n\n\`${fragment}\`\n\n$${fragment}$\n\n`
+            + `辅助模型带来${fragment}。`;
+        const issues = findReaderLanguageIssues(text);
+        assert.equal(issues.length, 1);
+        assert.equal(issues[0].index, text.lastIndexOf(fragment));
+    });
+});
