@@ -3300,7 +3300,13 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         const percentMatch = match.match(/^百分之([负正零〇一二两三四五六七八九十百千万亿点]+)$/);
         const exactPercent = percentMatch ? chineseNumber(percentMatch[1]) : null;
         if (percentMatch && exactPercent !== null) {
-            normalized = normalized.replaceAll(match, `${exactPercent}%`);
+            normalized = normalized.replaceAll(match, (surface, offset, whole) => {
+                const before = whole.slice(0, offset), after = whole.slice(offset + surface.length);
+                // 同段较短的百分数不能覆盖较长数字的前缀，例如把“百分之十八”改成“10%八”。
+                if (/[负正零〇一二两三四五六七八九十百千万亿点\d]$/u.test(before)
+                    || /^[零〇一二两三四五六七八九十百千万亿点\d]/u.test(after)) return surface;
+                return `${exactPercent}%`;
+            });
             continue;
         }
         const fractionMatch = match.match(/^([一二两三四五六七八九十百千万亿]+)分之([一二两三四五六七八九十百千万亿]+)$/);
@@ -3332,7 +3338,12 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         }
         const proportionMatch = match.match(/^([一二两三四五六七八九])成$/);
         if (proportionMatch) {
-            normalized = normalized.replaceAll(match, `${numeralMap[proportionMatch[1]] * 10}%`);
+            normalized = normalized.replaceAll(match, (surface, offset, whole) => {
+                const before = whole.slice(0, offset), after = whole.slice(offset + surface.length);
+                if (/[负正零〇一二两三四五六七八九十百千万亿点\d]$/u.test(before)
+                    || /^[零〇一二两三四五六七八九十百千万亿点\d半]/u.test(after)) return surface;
+                return `${numeralMap[proportionMatch[1]] * 10}%`;
+            });
             continue;
         }
         if (/分之|一半|半宽|千分贝|毫分贝/.test(match)) continue;

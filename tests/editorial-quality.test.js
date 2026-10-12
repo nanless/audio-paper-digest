@@ -235,6 +235,27 @@ describe('读者中文的精确怪译与检查话术诊断', () => {
         ), []);
     });
 
+    it('真实长文中的来源检查话术拒绝，资源状态与逐字引文说明保留', () => {
+        const examples = [
+            '论文没有绑定经校验可用的代码与权重资源，因此不能声称作者资源已公开。',
+            'LibriSpeech 上原文只说趋势类似，没有在正文中给出可逐字覆盖的完整句子，因此不在此表展开。'
+        ];
+        for (const text of examples) {
+            const issues = findReaderLanguageIssues(text);
+            assert.equal(issues.length, 1);
+            assert.equal(issues[0].code, 'reader_workflow_leakage');
+            assert.equal(text.slice(issues[0].index, issues[0].index + issues[0].match.length), issues[0].match);
+            assert.deepEqual(findReaderLanguageIssues('> 原文引文：' + text), []);
+            assert.deepEqual(findReaderLanguageIssues('```text\n' + text + '\n```'), []);
+        }
+        for (const text of [
+            '目前没有找到作者公开的代码与模型权重。',
+            '作者未在正文中给出完整训练参数。',
+            '这份逐字引文保留了作者的完整句子。',
+            '本表只展示 CSJ；原论文表 4 另有 LibriSpeech 的结果。'
+        ]) assert.deepEqual(findReaderLanguageIssues(text), []);
+    });
+
     it('明确禁止错译不算错误术语，同段真正错译仍准确定位', () => {
         for (const text of ['patch FID 在图像块上计算，不叫补丁距离。',
             'FID 不应被译成弗雷歇起始距离。',
