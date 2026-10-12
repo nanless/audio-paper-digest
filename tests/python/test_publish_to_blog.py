@@ -963,7 +963,20 @@ def create_verified_schema_v3_publication(date_str, posts, paper):
     }
 
 
+SAMPLE_METHOD_EXCLAMATION_SUMMARY = '主旋律谱转录要求从多声部混合录音恢复节拍与小节线、调号与和弦、旋律音高与时值、段落结构，并让它们落在同一张可读谱面上，难点是完整对齐标注稀少、局部预测准确仍可能互相矛盾而破坏长时一致性。SheetSage2先用符号音乐分析加伪标签扩展对大规模MIDI集合做旋律、和弦与调性标注，再渲染成音频，形成覆盖多项音乐理解任务的可扩展合成监督，使声学模型能从符号明确的乐谱结构中迁移理解能力。SheetSage2-Prober在此混合数据上学习帧级概率，对缺失目标做掩码，再用结构化解码依次固定全局速度锚点、脉冲与局部速度、节拍网格、调与段落、和弦、旋律的依赖顺序，以综合互补线索并维持时序一致性。SheetSage2-AR即自回归学生模型，只学习教师解码出的完整事件序列，推理时用贪心解码加事件语法约束，不再运行任务相关的动态规划，从而以单一事件生成接口保留转录精度。在GTZAN数据集的评测设置下以下拍F1为指标，SheetSage2-AR为80.45%，高于比较对象Beat This!的78.28%。该结论只适用于以西方调性流行音乐为主的训练与评测，该风格可能更适用。原文未披露训练、推理或部署成本。'
+
 class PublishToBlogReviewTest(unittest.TestCase):
+    def test_method_internal_exclamation_is_not_sentence_end(self):
+        for name in ('Beat This', 'Echo Stack'):
+            text = f'方法{name}!的准确率高于基线。'
+            self.assertEqual(publish_to_blog._core_summary_sentence_view(text), text.replace('!', '\uE000'))
+        for text in ('方法Beat This! 高于基线。', '方法Beat This!', '太棒了!的确很好。', 'Great! The result improves.'):
+            self.assertEqual(publish_to_blog._core_summary_sentence_view(text), text)
+        summary = SAMPLE_METHOD_EXCLAMATION_SUMMARY
+        self.assertIsNone(publish_to_blog._detailed_core_summary_semantic_issue(summary))
+        self.assertIn('缺少完整关键定量', publish_to_blog._detailed_core_summary_semantic_issue(summary.replace('的78.28%', '')))
+
+
     def test_natural_product_chain_requires_actual_same_product_handoff(self):
         encoder = '冻结编码器某层帧级表示经均值和标准差池化形成定长向量，该向量标准化后送入带平衡类别权重的逻辑回归输出类别。'
         experts = 'CloudEar对同一提示词下两首歌曲配对比较，感知专家从30秒片段MuQ特征经Transformer适配器得到感知表示并预测质量分，以有序回归与配对排序联合训练。诊断专家将该质量分与真峰值电平、削波率及HEAR学习型质量分拼接，经线性层融合成音乐性得分。'

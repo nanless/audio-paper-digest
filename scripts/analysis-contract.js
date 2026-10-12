@@ -1667,8 +1667,18 @@ function hasConcreteCompressionPurpose(summary) {
         && /(?:可传输|可重建|码率|存储|通信)/u.test(sentence));
 }
 
+function coreSummarySentenceView(text, sourceText) {
+    // 方法名内的感叹号不是句末；只保护原文确有同名且后接中文属格的写法。
+    return String(text || '').replace(/(?<![A-Za-z0-9_])([A-Z][A-Za-z0-9_-]{0,39}(?:[ \t]+[A-Za-z][A-Za-z0-9_-]{0,39}){0,3})!(?=的)/gu, (match, name) => {
+        const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`(?<![A-Za-z0-9_])${escaped}!(?![A-Za-z0-9_])`, 'u').test(String(sourceText || ''))
+            ? match.slice(0, -1) + '\uE000' : match;
+    });
+}
+
 function validateCoreSummarySemanticContract(analysis, options = {}) {
-    const summary = extractSection(String(analysis || ''), '核心摘要');
+    const sourceText = typeof options === 'string' ? options : String(options.sourceText || '');
+    const summary = coreSummarySentenceView(extractSection(String(analysis || ''), '核心摘要'), sourceText);
     const count = chineseCharacterCount(summary);
     const sentences = (summary.match(/[。！？!?]/g) || []).length;
     const issues = [];
@@ -1702,7 +1712,6 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     if (!hasNumberedMethodChain && !hasTieredMethodChain && !hasConcreteUnnumberedMethodChain(summary) && !hasAdjacentConcreteMethodChain(summary) && !hasExplicitNaturalProductChain(summary)) {
         issues.push('缺少 2–4 步方法链的分工与衔接');
     }
-    const sourceText = typeof options === 'string' ? options : String(options.sourceText || '');
     // LaTeXML/PDF 抽取会把脚注标记重复一次：正文里一次，下一行又单独出现一遍
     // （观察到的 "11\n1" 就是标记 1 的双重渲染）。合并软换行前只删掉完全相同的
     // 这一对；普通的行尾测量值只要下一行不同，仍然是证据。
@@ -2947,6 +2956,7 @@ module.exports = {
     hasCoreSummaryQuantitativeEvidence,
     hasSourceMeasuredLossComparison,
     classifySourceQuantitativeEvidence,
+    coreSummarySentenceView,
     validateCoreSummarySemanticContract,
     hasExplicitNaturalProductChain,
     hasConcreteUnnumberedMethodChain,

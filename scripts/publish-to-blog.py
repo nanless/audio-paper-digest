@@ -4198,8 +4198,16 @@ def _has_explicit_natural_product_chain(summary):
     return False
 
 
+def _core_summary_sentence_view(text):
+    # 发布器只做同一窄句法识别；实际同名来源由 Node 摘要阶段和既有来源证明核验。
+    return re.sub(
+        r'(?<![A-Za-z0-9_])([A-Z][A-Za-z0-9_-]{0,39}(?:[ \t]+[A-Za-z][A-Za-z0-9_-]{0,39}){0,3})!(?=的)',
+        lambda match: match.group(0)[:-1] + '\uE000', str(text or ''),
+    )
+
+
 def _detailed_core_summary_semantic_issue(summary):
-    summary = str(summary or '')
+    summary = _core_summary_sentence_view(summary)
     count = len(re.findall(r'[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]', summary))
     sentences = len(re.findall(r'[。！？!?]', summary))
     issues = []
