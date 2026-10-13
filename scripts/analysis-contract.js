@@ -1958,6 +1958,28 @@ function validateTagStageProof(paper, options = {}) {
     return null;
 }
 
+function coreSummaryBoundMethodSource(paper) {
+    const fresh = require('./lib/fresh-analysis-context');
+    const context = fresh.getFreshAnalysisContext();
+    let source;
+    if (context) {
+        // 使用原有完整 fresh 身份核验；另一个论文或来源上下文不能借来解释方法名。
+        fresh.assertFreshPaper(paper);
+        source = fresh.readFreshSource(context.runDir, paper, context);
+    } else {
+        const daily = require('./lib/daily-fresh-source-plan');
+        const data = require('./analysis-engine').readJsonFileStrict(require('./config').FILES.deepAnalysisResult);
+        const plan = daily.requireDailyFreshSourceRecoveryPlan(data);
+        if (!daily.isPaperBoundToPlan(paper, plan)) throw new Error('论文未与当前封存来源计划绑定');
+        source = daily.readDailyFreshSource(plan, paper);
+    }
+    if (!source || crypto.createHash('sha256').update(String(source.text || '')).digest('hex') !== paper.sourceSha256
+        || paper.sourceSha256 !== paper.analysisManifest?.sourceAcquisition?.sourceSha256) {
+        throw new Error('原封存来源未与当前论文完整绑定');
+    }
+    return source.text;
+}
+
 function validateCoreSummaryStageBinding(paper, options = {}) {
     const manifest = paper?.analysisManifest;
     const stage = manifest?.stages?.coreSummaryRepair;
@@ -1970,7 +1992,13 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
     if (!/^[a-f0-9]{64}$/.test(String(stage.fingerprint || ''))) return '核心摘要阶段的输入指纹缺失，或格式无效。';
     if (!/^[a-f0-9]{64}$/.test(String(stage.outputAnalysisSha256 || ''))) return '核心摘要阶段的输出正文哈希缺失，或格式无效。';
     if (options.skipSemantic !== true) {
-        const semanticIssue = validateCoreSummarySemanticContract(paper?.analysis, options);
+        let semanticOptions = options;
+        const hasExplicitSource = typeof options === 'string' || Object.hasOwn(options, 'sourceText');
+        if (!hasExplicitSource && /(?<![A-Za-z0-9_])[A-Z][A-Za-z0-9_-]{0,39}(?:[ \t]+[A-Za-z][A-Za-z0-9_-]{0,39}){0,3}!(?=的)/u.test(summary)) {
+            try { semanticOptions = { ...options, sourceText: coreSummaryBoundMethodSource(paper) }; }
+            catch (error) { return `核心摘要方法名的原封存来源未通过核验：${error.message}`; }
+        }
+        const semanticIssue = validateCoreSummarySemanticContract(paper?.analysis, semanticOptions);
         if (semanticIssue) return semanticIssue;
     }
     if (stage.summarySha256 !== summarySha256) return '核心摘要正文的哈希与阶段记录不一致。';
