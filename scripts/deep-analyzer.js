@@ -1139,6 +1139,15 @@ function isAllowedReaderNarrativeNumeralIssue(issue, article = '') {
     if (issue?.code !== 'quantitative_chinese_numeral') return false;
     const match = String(issue.match || '').trim();
     const articleText = String(article);
+    // 普通计数的中文写法不是事实错误。只保留无混写的简单数量和整十/百/千
+    // 计数；百分比、小数、范围、配比、物理单位和混合数字仍走原有校验。
+    const naturalCount = /^(?:[一二两三四五六七八九]|[一二两三四五六七八九]?[十百千])\s*(?:个数据集|数据集|层|次|核|步)$/u;
+    if (['measured_simple_integer', 'measured_large_integer'].includes(issue.reason)
+        && naturalCount.test(match)
+        && Number.isInteger(issue.index) && issue.index >= 0
+        && articleText.slice(issue.index, issue.index + match.length) === match
+        && !/[零〇一二两三四五六七八九十百千万亿点\d]$/u.test(articleText.slice(0, issue.index))
+        && !/^[零〇一二两三四五六七八九十百千万亿点\d]/u.test(articleText.slice(issue.index + match.length))) return true;
     if (match === '一对' && Number.isInteger(issue.index)
         && /^一对一(?:分配|匹配|映射|对应|关联|对齐|约束|配对)/u.test(
             articleText.slice(issue.index))) return true;
