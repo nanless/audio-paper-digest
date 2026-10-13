@@ -1769,6 +1769,17 @@ function buildApiReaderQualityMetrics(quality, article) {
 // 证明它们来自同一个值；来源绑定仍以原始 DOM 字节为准。
 function normalizeReaderSourceDisplayArtifacts(value) {
     let output = String(value ?? '');
+    // 同一字母标记与整数下标的明确 TeX 副本，如 F0F_{0}。
+    output = output.replace(/(?<![A-Za-z0-9_])([A-Za-z]+)(\d+)\1_\{\2\}(?![A-Za-z0-9_])/g, '$1$2');
+    // 误差项的可见值与明确 TeX 注解逐字相同时，仅合并显示副本。
+    // 保留前导小数点、正负号和尾零；裸数字重复或不一致的误差不在此处理。
+    output = output.replace(
+        /(?<![A-Za-z0-9.+−-])([+−-]?(?:\d+(?:\.\d+)?|\.\d+))\s*±\s*((?:\d+(?:\.\d+)?|\.\d+))\s*\1\s*\\pm\s*\2(?![A-Za-z0-9.])/g,
+        (_whole, mean, uncertainty) => `${mean} ± ${uncertainty}`
+    ).replace(
+        /(?<![A-Za-z0-9.+−-])([+−-]?(?:\d+(?:\.\d+)?|\.\d+))\s*±\s*((?:\d+(?:\.\d+)?|\.\d+))\s*\\mathbf\{\1\}\s*\\scriptscriptstyle\{\s*\\pm\s*\2\s*\}(?![A-Za-z0-9.])/g,
+        (_whole, mean, uncertainty) => `${mean} ± ${uncertainty}`
+    );
     // 科学计数也可能同时含可见文字与 TeX 注解。两份系数和指数必须完全一致；
     // 不从裸数字重复、不同符号或近似数值猜测原值。
     output = output.replace(

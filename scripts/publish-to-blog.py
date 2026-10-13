@@ -5542,8 +5542,19 @@ def _api_reader_markdown_tables(article):
 
 
 def _normalize_api_reader_display_artifacts(value):
-    """清理显示文本中重复的置信区间注释，以及连续重复的加粗说明标题。"""
+    """合并数值一致的明确 TeX 显示副本，以及连续重复的加粗说明标题。"""
     value = str(value or '')
+    # 与 Reader 相同：只合并数值、符号和精度完全相同的明确 TeX 误差副本。
+    value = re.sub(r'(?<![A-Za-z0-9_])([A-Za-z]+)([0-9]+)\1_\{\2\}(?![A-Za-z0-9_])', r'\1\2', value)
+    scalar = r'[+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)'
+    uncertainty = r'(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)'
+    for suffix in (r'\1\s*\\pm\s*\2',
+                   r'\\mathbf\{\1\}\s*\\scriptscriptstyle\{\s*\\pm\s*\2\s*\}'):
+        value = re.sub(
+            rf'(?<![A-Za-z0-9.+−-])({scalar})\s*±\s*({uncertainty})\s*'
+            + suffix + r'(?![A-Za-z0-9.])',
+            lambda match: f'{match[1]} ± {match[2]}', value,
+        )
     value = re.sub(
         r'(\[\s*([+−-]?\d+(?:\.\d+)?)\s*,\s*([+−-]?\d+(?:\.\d+)?)\s*\])'
         r'\[\s*([+−-]?\d+(?:\.\d+)?)\{\}\{,\}\s*([+−-]?\d+(?:\.\d+)?)\{\}\s*\]',
