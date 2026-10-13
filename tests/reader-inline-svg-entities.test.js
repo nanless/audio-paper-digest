@@ -30,3 +30,20 @@ test('允许静态链接标签仍拒外链、事件与实体编码的动态样�
         await assert.rejects(renderer.renderOfficialInlineSvg(resource(body)), error => error.code === 'READER_INLINE_SVG_INTEGRITY');
     }
 });
+test('原图可见范围超出画布时完整保留负坐标和边缘内容', async () => {
+    const source = resource('<rect x="-10" y="-5" width="190" height="100" fill="black"/>');
+    source.inlineSvg = source.inlineSvg.replace('viewBox=', 'overflow="visible" viewBox=');
+    const bytes = Buffer.from(source.inlineSvg);
+    source.inlineSvgBytes = bytes.length;
+    source.inlineSvgSha256 = crypto.createHash('sha256').update(bytes).digest('hex');
+    const rendered = await renderer.renderOfficialInlineSvg(source);
+    assert.equal(rendered.width, 190);
+    assert.equal(rendered.height, 100);
+    assert.equal(rendered.inlineSvgSourceSha256, source.inlineSvgSha256);
+});
+test('原始画布较小时仍拒绝超出受控尺寸的实际绘制范围', async () => {
+    const source = resource('<rect x="-10" y="0" width="5000" height="10"/>');
+    await assert.rejects(renderer.renderOfficialInlineSvg(source), error =>
+        error.code === 'READER_INLINE_SVG_INTEGRITY'
+        && /实际绘制范围超过受控上限/.test(error.cause?.message || ''));
+});

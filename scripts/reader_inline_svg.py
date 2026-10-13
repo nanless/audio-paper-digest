@@ -19,7 +19,7 @@ ALLOWED_TAGS = set(('svg g path rect circle ellipse line polyline polygon text t
                     'clipPath mask marker linearGradient radialGradient stop pattern symbol use '
                     'foreignObject span div p br b strong i em sub sup a math semantics annotation '
                     'mrow mi mn mo mtext mspace msup msub msubsup mfrac msqrt mroot mover '
-                    'munder munderover mtable mtr mtd mphantom').lower().split())
+                    'munder munderover mtable mtr mtd mphantom mstyle').lower().split())
 ALLOWED_ATTRIBUTES = set(('id class style x y x1 y1 x2 y2 cx cy r rx ry dx dy d points '
                           'width height viewbox preserveaspectratio transform version overflow '
                           'fill fill-rule fill-opacity stroke stroke-width stroke-linecap stroke-linejoin '
@@ -99,17 +99,18 @@ def validate_svg(raw):
     for element in root.iter():
         if element.tag.split('}')[-1].lower() not in ALLOWED_TAGS:
             raise ValueError('内联 SVG 含不允许的元素')
-        if element.tag.split('}')[-1].lower() == 'mphantom':
+        if element.tag.split('}')[-1].lower() in {'mphantom', 'mstyle'}:
             ancestor = parents.get(element)
             while ancestor is not None and ancestor.tag not in {'math', '{http://www.w3.org/1998/Math/MathML}math'}:
                 ancestor = parents.get(ancestor)
-            if (element.tag not in {'mphantom', '{http://www.w3.org/1998/Math/MathML}mphantom'}
+            math_tag = element.tag.split('}')[-1]
+            if (element.tag not in {math_tag, '{http://www.w3.org/1998/Math/MathML}' + math_tag}
                     or ancestor is None):
-                raise ValueError('内联 SVG 的数学占位元素无效')
+                raise ValueError('内联 SVG 的数学排版元素无效')
         for name, value in element.attrib.items():
             original_name = name
             name = name.split('}')[-1].lower()
-            if name in {'accent', 'stretchy'}:
+            if name in {'accent', 'stretchy', 'symmetric', 'movablelimits', 'displaystyle'}:
                 ancestor = element
                 in_math = False
                 while ancestor is not None:
@@ -117,7 +118,7 @@ def validate_svg(raw):
                         in_math = True
                         break
                     ancestor = parents.get(ancestor)
-                allowed_tag = 'mover' if name == 'accent' else 'mo'
+                allowed_tag = {'accent': 'mover', 'displaystyle': 'mstyle'}.get(name, 'mo')
                 if (original_name != name or element.tag not in {allowed_tag, '{http://www.w3.org/1998/Math/MathML}' + allowed_tag}
                         or not in_math or value not in {'true', 'false'}):
                     raise ValueError('内联 SVG 的数学布尔设置无效')
@@ -133,7 +134,30 @@ def validate_svg(raw):
                     if target is None or target.tag not in {'clipPath', '{http://www.w3.org/2000/svg}clipPath'}:
                         raise ValueError('内联 SVG 裁剪引用必须对应本图裁剪元素')
                     continue
-            if re.search(r'url\s*\(|@import|expression\s*\(|javascript\s*:|data\s*:|https?\s*:|file\s*:', value, re.I):
+            checked_value = value
+            if original_name == name and name in {'fill', 'style'}:
+                # 只接受本图中已核对的填充节点，不放行其他 CSS 资源引用。
+                def check_local_paint(reference):
+                    match = re.fullmatch(r'url\(#([A-Za-z_][\w.:-]*)\)', reference)
+                    target = ids.get(match.group(1)) if match else None
+                    paint_tags = {'pattern', 'linearGradient', 'radialGradient'}
+                    if target is None or target.tag not in paint_tags | {
+                            '{http://www.w3.org/2000/svg}' + tag for tag in paint_tags}:
+                        raise ValueError('内联 SVG 填充引用必须对应本图填充元素')
+                if name == 'fill' and value.startswith('url('):
+                    check_local_paint(value)
+                    checked_value = ''
+                elif name == 'style':
+                    declarations = []
+                    for declaration in value.split(';'):
+                        if re.match(r'^\s*--ltx-fill-color\s*:', declaration):
+                            reference = declaration.split(':', 1)[1].strip()
+                            if reference.startswith('url('):
+                                check_local_paint(reference)
+                                declaration = ''
+                        declarations.append(declaration)
+                    checked_value = ';'.join(declarations)
+            if re.search(r'url\s*\(|@import|expression\s*\(|javascript\s*:|data\s*:|https?\s*:|file\s*:', checked_value, re.I):
                 raise ValueError('内联 SVG 含外部资源或动态样式')
             if name == 'style' and ('\\' in value or '@' in value):
                 raise ValueError('内联 SVG 样式不允许转义资源或规则')
@@ -207,7 +231,73 @@ def render_svg(raw):
                     or not 0 < bounds['width'] <= 4096 or not 0 < bounds['height'] <= 4096
                     or bounds['width'] * bounds['height'] > 16_000_000):
                 raise ValueError('内联 SVG 实际显示尺寸超过受控上限')
-            png = figure.screenshot(type='png', animations='disabled', timeout=30_000)
+            # 原图允许内容超出 viewBox 时，元素截图会裁掉文字和公式。
+            # 在页面内量取真实渲染范围，不猜测字号或改写封存图形。
+            painted = figure.evaluate("""svg => {
+                const boxes = [svg.getBoundingClientRect()];
+                for (const element of [svg, ...svg.querySelectorAll('*')]) {
+                    if (element.closest('defs')) continue;
+                    const style = getComputedStyle(element);
+                    if (style.display === 'none' || style.visibility === 'hidden') continue;
+                    if (['filter', 'boxShadow', 'textShadow'].some(key =>
+                        style[key] && style[key] !== 'none')) {
+                        throw new Error('内联 SVG 不接受无法界定绘制范围的滤镜或阴影');
+                    }
+                    const bounds = element.getBoundingClientRect();
+                    boxes.push(bounds);
+                    const paintedTags = new Set(['path', 'rect', 'circle', 'ellipse',
+                        'line', 'polyline', 'polygon', 'text', 'tspan', 'use']);
+                    if (paintedTags.has(element.localName) && typeof element.getScreenCTM === 'function'
+                        && style.stroke !== 'none' && Number(style.strokeOpacity) !== 0) {
+                        if (!style.strokeWidth.endsWith('px')) {
+                            throw new Error('内联 SVG 描边范围不能从非像素单位推定');
+                        }
+                        const stroke = Number(style.strokeWidth.slice(0, -2));
+                        const matrix = element.getScreenCTM();
+                        const miter = style.strokeLinejoin === 'miter'
+                            ? Math.max(1, Number(style.strokeMiterlimit)) : 1;
+                        const xScale = style.vectorEffect === 'non-scaling-stroke'
+                            ? 1 : Math.hypot(matrix.a, matrix.c);
+                        const yScale = style.vectorEffect === 'non-scaling-stroke'
+                            ? 1 : Math.hypot(matrix.b, matrix.d);
+                        // 保守包住尖角描边；实际像素仍来自浏览器，不重绘路径。
+                        const dx = stroke * miter * xScale;
+                        const dy = stroke * miter * yScale;
+                        if (![dx, dy].every(value => Number.isFinite(value) && value >= 0)) {
+                            throw new Error('内联 SVG 描边范围无效');
+                        }
+                        boxes.push({left: bounds.left - dx, top: bounds.top - dy,
+                            right: bounds.right + dx, bottom: bounds.bottom + dy});
+                    }
+                    for (const node of element.childNodes) {
+                        if (node.nodeType !== Node.TEXT_NODE || !node.textContent.trim()) continue;
+                        const range = document.createRange();
+                        range.selectNodeContents(node);
+                        boxes.push(...range.getClientRects());
+                    }
+                }
+                return {
+                    left: Math.min(...boxes.map(box => box.left)),
+                    top: Math.min(...boxes.map(box => box.top)),
+                    right: Math.max(...boxes.map(box => box.right)),
+                    bottom: Math.max(...boxes.map(box => box.bottom))
+                };
+            }""")
+            if not all(math.isfinite(painted[k]) for k in ('left', 'top', 'right', 'bottom')):
+                raise ValueError('内联 SVG 实际绘制范围无效')
+            left, top = math.floor(painted['left']), math.floor(painted['top'])
+            width, height = math.ceil(painted['right']) - left, math.ceil(painted['bottom']) - top
+            if not 0 < width <= 4096 or not 0 < height <= 4096 or width * height > 16_000_000:
+                raise ValueError('内联 SVG 实际绘制范围超过受控上限')
+            if left < 0 or top < 0:
+                # 移动整张图给负坐标留出页面空间，图内坐标和布局不变。
+                page.locator('body').evaluate(
+                    '(body, offset) => { body.style.transform = '
+                    '`translate(${offset.x}px, ${offset.y}px)`; }',
+                    {'x': max(0, -left), 'y': max(0, -top)})
+            png = page.screenshot(type='png', animations='disabled', timeout=30_000,
+                                  clip={'x': max(0, left), 'y': max(0, top),
+                                        'width': width, 'height': height})
         finally:
             browser.close()
     if not png.startswith(b'\x89PNG\r\n\x1a\n') or len(png) > MAX_OUTPUT_BYTES:

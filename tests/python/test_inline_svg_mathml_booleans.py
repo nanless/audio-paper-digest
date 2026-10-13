@@ -29,6 +29,26 @@ class MathmlBooleanTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     renderer.validate_svg(invalid_source.encode())
 
+    def test_math_style_and_operator_booleans_require_real_math_context(self):
+        source = ('<svg width="100" height="100" viewBox="0 0 100 100">'
+                  '<foreignObject><math><mstyle displaystyle="true"><munderover>'
+                  '<mo symmetric="true" movablelimits="false" stretchy="true">∑</mo>'
+                  '<mi>k</mi><mi>K</mi></munderover></mstyle></math></foreignObject></svg>')
+        for valid in [source, source.replace('<math>', '<math xmlns="http://www.w3.org/1998/Math/MathML">')]:
+            self.assertEqual(renderer.validate_svg(valid.encode()), valid)
+        for invalid in [
+            source.replace('<math>', '<g>').replace('</math>', '</g>'),
+            source.replace('mstyle', 'mrow'),
+            source.replace('symmetric="true"', 'symmetric="url(https://evil)"'),
+            source.replace('movablelimits="false"', 'movablelimits="1"'),
+            source.replace('<mo ', '<mi ').replace('</mo>', '</mi>'),
+            source.replace('<mstyle ', '<mstyle xmlns="urn:evil" '),
+            source.replace('displaystyle="true"', 'xmlns:e="urn:evil" e:displaystyle="true"'),
+        ]:
+            with self.subTest(source=invalid):
+                with self.assertRaises(ValueError):
+                    renderer.validate_svg(invalid.encode())
+
     def test_static_break_tokens_preserve_attribute_text_and_reject_missing_structure(self):
         source = '<svg width="100" height="100" viewBox="0 0 100 100"><foreignObject><span title="literal &lt;br&gt;">before<br class="ltx_break">after</span></foreignObject></svg>'
         normalized = renderer.validate_svg(source.encode())
