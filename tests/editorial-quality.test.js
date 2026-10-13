@@ -1283,3 +1283,47 @@ describe('已恢复长文的表格标签与资源检查口吻', () => {
         }
     });
 });
+
+
+describe('百分比指标与同一裸数值就近绑定', () => {
+    it('真实评估模型名和训练设置不能跨位置拼成缺百分比单位', () => {
+        const examples = [
+            '训练用专家是 emotion2vec 做情感分类、WavLM 做说话人验证、Whisper 做语音识别，评估用另一套模型，即基于 XLSR-53 的情感分类器、ECAPA-TDNN 做说话人验证、wav2vec2.0 算词错误率、UTMOS 评估自然度，这种训练与评估模型不一致的设计减少了自卖自夸，更能说明泛化。',
+            '论文直接报告的是在 3 个 7B 模型和 3 个基准子集上的准确率提升，训练数据固定为 50,000 条工具库问答，路由固定取前 2，K 固定为 6。'
+        ];
+        for (const text of examples) assert.deepEqual(findMissingComparisonUnits(text), [], text);
+    });
+    it('同句模型设置旁仍有真实裸准确率或错误率时继续拒绝', () => {
+        for (const text of ['wav2vec2.0 的词错误率降低到 12.5。',
+            '三个模型在相同设置下准确率提高到 88.75。',
+            'XLSR-53 与另一套模型相比，准确率提高到 87.5。',
+            '模型固定取前 2，词错误率从 7.3 降至 5.4。',
+            '真实测试集词错误率为 5.23 对 5.97%。',
+            '准确率提高到 5,000。',
+            '准确率提高到 0,005。']) {
+            assert.ok(findMissingComparisonUnits(text).length > 0, text);
+        }
+    });
+});
+
+
+describe('远距指标的显式成对比较', () => {
+    it('模型和基准计数不能遮蔽真实裸结果比较', () => {
+        assert.ok(findMissingComparisonUnits('准确率在3个基准子集上与另外2个模型相比从88.75提高到90.25。').length > 0);
+        assert.deepEqual(findMissingComparisonUnits('准确率在3个基准子集上与另外2个模型相比从88.75%提高到90.25%。'), []);
+        assert.deepEqual(findMissingComparisonUnits('准确率在3个基准子集上与另外2个模型相比有所提高。'), []);
+    });
+});
+
+it('其他分句的网络层数不得作为指标比较值', () => {
+    assert.deepEqual(findMissingComparisonUnits('准确率相比基线有所提升，其他训练参数保持同样的选择策略，网络层数从3增加到6。'), []);
+    assert.ok(findMissingComparisonUnits('网络层数从3增加到6，词错误率在3个基准子集上与另外2个模型相比从88.75降低到90.25。').length > 0);
+});
+
+it('同分句远距单结果提升仍须有单位', () => {
+    for (const verb of ['提升至', '提高到']) {
+        assert.ok(findMissingComparisonUnits(`准确率在3个基准子集上与另外2个模型相比${verb}90.25。`).length > 0);
+        assert.deepEqual(findMissingComparisonUnits(`准确率在3个基准子集上与另外2个模型相比${verb}90.25%。`), []);
+        assert.deepEqual(findMissingComparisonUnits(`准确率有所提升，网络层数${verb}6。`), []);
+    }
+});

@@ -1085,7 +1085,8 @@ function findMissingComparisonUnits(text) {
         .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])(?:一|1)\s*对\s*(?:一|1)(?=\s*(?:分配|匹配|映射|对应|关联|对齐|约束|配对))/gu,
             match => ' '.repeat(match.length));
     const findings = [];
-    const quantity = `(?:\\d+(?:\\.\\d+)?|[${CHINESE_DIGITS}]+(?:点[${CHINESE_DIGITS}]+)?)`;
+    // 千分位计数作为一个数值读取，避免把“50,000 条”中的 50 当成另一裸数。
+    const quantity = `(?:\\d+(?:,\\d{3})*(?:\\.\\d+)?|[${CHINESE_DIGITS}]+(?:点[${CHINESE_DIGITS}]+)?)`;
     const unit = '(?:%|个百分点|点|分|毫秒|秒|分钟|小时|毫焦|Hz|kHz|MHz|dB|mJ|GB|MB|KB|倍)';
     const asymmetric = new RegExp(`${quantity}\\s*(?:对|vs\\.?|相比)\\s*${quantity}\\s*${unit}`, 'giu');
     for (const match of collectRegexMatches(value, asymmetric, 'comparison_unit_only_on_second_value')) {
@@ -1229,14 +1230,33 @@ function findMissingComparisonUnits(text) {
                 match => ' '.repeat(match.length)
             );
         const barePattern = new RegExp(`(?<![A-Za-z0-9_.])${quantity}(?![A-Za-z0-9_.])`, 'gu');
-        const bareValues = [...numericText.matchAll(barePattern)]
+        const bareMatches = [...numericText.matchAll(barePattern)]
             .filter(match => {
                 const before = numericText.slice(0, match.index);
                 const after = numericText.slice(match.index + match[0].length);
                 if (/第\s*$/.test(before)) return false;
                 return !/^\s*(?:个|条|段|篇|张|种|类|组|套|块|步|轮|层|题|份|例|名|人|台|所|对|倍|阶段|数据集|测试集|验证集|时|小时|路|模型|系统|骨干|样本|片段|词元|接口|分支|特征|维度|维)/.test(after);
-            })
-            .map(match => match[0]);
+            });
+        const bareValues = bareMatches.map(match => match[0]);
+        // 显式比较中的两个测量值即使距指标较远，也不能漏掉单位。
+        // 只选“从数值提高/降到数值”的数值位置，不选中间的模型和条件计数。
+        const explicitComparisonValueIndexes = new Set();
+        const comparisonPattern = new RegExp(`从\\s*(${quantity})\\s*(?:提高到|提升到|增加到|下降到|降低到|减少到|降至|升至|到|至)\\s*(${quantity})`, 'gu');
+        for (const comparison of numericText.matchAll(comparisonPattern)) {
+            const prefix = numericText.slice(0, comparison.index).split(/[，,；;]/).at(-1);
+            if (!PERCENT_METRICS_RE.test(prefix)) continue;
+            const first = comparison.index + comparison[0].indexOf(comparison[1]);
+            const second = comparison.index + comparison[0].lastIndexOf(comparison[2]);
+            explicitComparisonValueIndexes.add(first);
+            explicitComparisonValueIndexes.add(second);
+        }
+        const resultPattern = new RegExp(`(?:提高到|提升至|提升到|升至|降低到|下降到|降至)\\s*(${quantity})`, 'gu');
+        for (const result of numericText.matchAll(resultPattern)) {
+            const prefix = numericText.slice(0, result.index).split(/[，,；;]/).at(-1);
+            if (PERCENT_METRICS_RE.test(prefix)) {
+                explicitComparisonValueIndexes.add(result.index + result[0].lastIndexOf(result[1]));
+            }
+        }
         const percentageMetricHasNearbyPercentageScaleValue = [...numericText.matchAll(
             new RegExp(PERCENT_METRICS_RE.source, 'gi')
         )].some(metricMatch => {
@@ -1245,19 +1265,20 @@ function findMissingComparisonUnits(text) {
                 numericText.length,
                 metricMatch.index + metricMatch[0].length + 12
             );
-            const nearbyNumbers = numericText.slice(start, end).match(
-                new RegExp(quantity, 'gu')
-            ) || [];
+            // 就近绑定必须使用同一组已筛出的裸数值；不能把远处的数字与
+            // 指标旁的型号、计数或设置拼成一条缺单位诊断。
+            const nearbyNumbers = bareMatches.filter(match => match.index < end
+                && match.index + match[0].length > start || explicitComparisonValueIndexes.has(match.index)).map(match => match[0]);
             return nearbyNumbers.some(raw => (
                 /^\d/.test(raw)
-                    ? Number.parseFloat(raw) > 1
+                    ? Number.parseFloat(raw.replace(/,/g, '')) > 1
                     : /[十百千万亿]/.test(raw)
                         || (raw.includes('点') && !/^[负正]?零点/.test(raw))
             ));
         });
         const likelyPercentageScale = bareValues.some(raw => (
             /^\d/.test(raw)
-                ? Number.parseFloat(raw) > 1
+                ? Number.parseFloat(raw.replace(/,/g, '')) > 1
                 : raw.includes('点') && !/^[负正]?零点/.test(raw)
         ));
         if (likelyPercentageScale && percentageMetricHasNearbyPercentageScaleValue) {
