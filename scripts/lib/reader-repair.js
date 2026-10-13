@@ -2728,6 +2728,33 @@ function scientificDoubleRenderingGuidance(draft, issues, targets, sourceText) {
 }
 
 
+const FACT_LOCAL_PROMPT_CONTRACT = 'reader-fact-local-body-prompt-v1';
+function factLocalPromptVariables(context, reviewFeedback, sourceText, sourceQuotes) {
+    if (!context || context.atomicOperation || !Array.isArray(context.targets)
+        || context.targets.length === 0 || context.targets.length > 8
+        || typeof reviewFeedback !== 'string' || !reviewFeedback.trim()
+        || !Array.isArray(sourceQuotes) || sourceQuotes.length === 0
+        || sourceQuotes.some(quote => typeof quote !== 'string' || !sourceText.includes(quote))) {
+        throw new Error('事实局部修订缺少已核验原句和原文证据');
+    }
+    const paths = new Set();
+    for (const target of context.targets) {
+        if (!/^\/sections\/\d+\/body$/.test(target.path) || paths.has(target.path)
+            || typeof target.value !== 'string' || target.oldSha256 !== hashDraft(target.value)
+            || !Array.isArray(target.authorizedClaims) || target.authorizedClaims.length === 0
+            || target.authorizedClaims.some(claim => typeof claim !== 'string'
+                || !claim || target.value.split(claim).length !== 2)) {
+            throw new Error('事实局部修订只能修改唯一获准正文中的完整错误原句');
+        }
+        paths.add(target.path);
+    }
+    const missingQuotes = [...new Set(sourceQuotes)].filter(quote => !reviewFeedback.includes(quote));
+    const factFeedback = [reviewFeedback, missingQuotes.length
+        ? '以下逐字原文已经核验，仅用于纠正获准原句：\n' + missingQuotes.join('\n') : ''].filter(Boolean).join('\n');
+    return { factFeedback,
+        repairTargets: JSON.stringify({ draftSha256: context.draftSha256, targets: context.targets }) };
+}
+
 function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', options = {}) {
     const targets = buildRepairTargets(draft, issues, options);
     const requestedOperation = observedFigureSelectionOperation(draft, options)
@@ -3115,7 +3142,7 @@ function applyTopLevelMetadataRepair(raw, patch, context) {
 }
 
 
-module.exports = { conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+module.exports = { FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,

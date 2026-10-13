@@ -7681,6 +7681,15 @@ function buildApiReaderGenerationStart(paper, options = {}) {
     };
 }
 
+function readerRepairPromptContract(options = {}) {
+    return options.readerFactLocalRevision === true
+        ? require('./lib/reader-repair').FACT_LOCAL_PROMPT_CONTRACT
+        : currentPromptTextContract('apiReaderRepair');
+}
+function readerRepairPromptPath(options = {}) {
+    return promptFilePathForContract('apiReaderRepair', readerRepairPromptContract(options));
+}
+
 async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceEvidence, options = {}) {
     const repair = require('./lib/reader-repair.js');
     const fresh = require('./lib/fresh-analysis-context.js');
@@ -7757,6 +7766,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             ...require('./lib/selected-full-stage-reanalysis').fingerprintFields(paper),
             ...promptRenderingFingerprintFields(paper.title, sourceEvidence, options.reviewFeedback, start.previousDraft),
             contentMode, sourceEvidence,
+            ...(options.readerFactLocalRevision === true ? { readerFactLocalPromptContract: readerRepairPromptContract(options), readerFactLocalPromptSha256: promptTemplateSha256(readerRepairPromptPath(options)) } : {}),
             ...require('./lib/reader-resource-prose').fields(naturalResourceProse),
             ...start.signedRevisionDisplayFields,
             reviewFeedback: options.reviewFeedback || '', initialDraft: start.previousDraft,
@@ -7771,7 +7781,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         // 正文和修复提示词各按当前版本加载，身份里也必须记当前版本算出的 SHA，
         // 否则失败草稿的身份会指向一份本次并没有真正读的提示词。
         promptSha256: promptTemplateSha256(currentTextStagePromptPath('apiReaderArticle')),
-        repairPromptSha256: promptTemplateSha256(currentTextStagePromptPath('apiReaderRepair')),
+        repairPromptSha256: promptTemplateSha256(readerRepairPromptPath(options)),
         // Reader 检查依赖共享的正文规则，输入身份须包含实际读取的实现。
         // 实现变化后的恢复按已有保存记录核验，只使用获准的剩余尝试，
         // 不把旧付费记录当成没有发生。
@@ -8341,6 +8351,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 title: paper.title || '', arxivId: getPaperArxivId(paper), mechanicalContract,
                 reviewFeedback: String(options.reviewFeedback || '').trim(), numericSpellingGuidance, indexExamples,
                 requiredKinds: API_READER_REQUIRED_KINDS })
+            : repairContext && options.readerFactLocalRevision === true
+            ? loadPrompt(readerRepairPromptPath(options), { title: paper.title || '', arxivId: getPaperArxivId(paper),
+                ...repair.factLocalPromptVariables(repairContext, String(options.reviewFeedback || '').trim(),
+                    options.sourceText || '', require('./lib/daily-fact-review').current(getPaperArxivId(paper)).feedback.sourceQuotes) })
             : repairContext ? loadPrompt(currentTextStagePromptPath('apiReaderRepair'), {
             title: paper.title || '', arxivId: getPaperArxivId(paper),
             validationFeedback: [repairContext.targetGuidance, numericSpellingGuidance, repairReviewFeedbackPrefix,
@@ -8712,7 +8726,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     // 修复提示词同理。
     const configurationFingerprint = buildApiReaderBaseFingerprint(
         currentPromptTextContract('apiReaderArticle'),
-        currentPromptTextContract('apiReaderRepair')
+        readerRepairPromptContract(options)
     );
     const reviewFeedback = String(options.reviewFeedback || '').trim();
     if (reviewFeedback.length > 4000) throw new Error('读者文章 review feedback 超过 4000 字符');
@@ -8781,9 +8795,9 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             ),
             promptTextContract: currentPromptTextContract('apiReaderArticle'),
             repairPromptTemplateSha256: promptTemplateSha256(
-                currentTextStagePromptPath('apiReaderRepair')
+                readerRepairPromptPath(options)
             ),
-            repairPromptTextContract: currentPromptTextContract('apiReaderRepair'),
+            repairPromptTextContract: readerRepairPromptContract(options),
             evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION, evidenceMaxChars: API_READER_EVIDENCE_MAX_CHARS,
             contextMaxChars: API_READER_CONTEXT_MAX_CHARS,
             evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),

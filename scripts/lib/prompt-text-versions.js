@@ -195,6 +195,7 @@ function currentPromptTextContract(stage) {
 // 否则升到 v2 之后旧记录会被按 v2 文件重算。
 function promptFilePathForContract(stage, promptTextContract) {
     const declared = String(promptTextContract || '') || ANALYSIS_PROMPT_TEXT_V1_CONTRACT;
+    if (stage === 'apiReaderRepair' && declared === 'reader-fact-local-body-prompt-v1') return 'prompts/api-reader-fact-local-v1.md';
     if (declared === ANALYSIS_PROMPT_TEXT_V1_CONTRACT) {
         const frozen = FROZEN_V1_PROMPT_FILES[stage];
         if (!frozen) throw new Error(`阶段 ${stage} 没有冻结的 v1 提示词路径`);
