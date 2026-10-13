@@ -212,6 +212,62 @@ function displayMatrix(table) {
     return (table?.matrix || []).map((row, ri) => row.map((_, ci) => displayCell(table, ri, ci)));
 }
 
+// 既有表格逐格重新核验完全相同、仅规则文件SHA变化时，更新程序检查元数据。
+function replaySavedProofMetadata(paper, manifest = paper?.analysisManifest) {
+    const normalize = value => Array.isArray(value) ? value.map(normalize) : value && typeof value === 'object'
+        ? Object.fromEntries(Object.keys(value).sort().map(key => [key, normalize(value[key])])) : value;
+    const recordHash = value => sha(JSON.stringify(normalize(value)));
+    const plan = paper?.apiReaderPlan, stage = manifest?.stages?.apiReaderArticle;
+    const bindings = plan?.tableBindings;
+    if (!Array.isArray(bindings) || !bindings.some(binding => binding.pdfCellConfirmation)) return false;
+    if (stage?.status !== 'complete' || paper.apiReaderPlanSha256 !== recordHash(plan)
+        || stage.planSha256 !== recordHash(plan) || paper.apiReaderArticleSha256 !== sha(paper.apiReaderArticle)
+        || stage.articleSha256 !== paper.apiReaderArticleSha256
+        || plan.sourceBindingsSha256 !== recordHash({tableBindings:bindings,formulaBindings:plan.formulaBindings})
+        || stage.sourceBindingsSha256 !== plan.sourceBindingsSha256) {
+        throw new Error('PDF检查记录更新缺少原长文和来源记录的完整身份');
+    }
+    if (!isDeepStrictEqual(paper.freshRewriteProvenance, manifest.freshRewriteProvenance)) {
+        throw new Error('PDF检查记录更新的封存来源证明不同');
+    }
+    const artifacts = JSON.parse(plan.structuredSourcePayload);
+    const proofs = derive(artifacts, paper.arxivId, paper.freshRewriteProvenance);
+    const nextPlan = structuredClone(plan), changes = [];
+    for (const binding of nextPlan.tableBindings.filter(binding => binding.pdfCellConfirmation)) {
+        const previous = binding.pdfCellConfirmation;
+        const matches = proofs.filter(proof => proof.sourceTableOrdinal === binding.sourceTableOrdinal);
+        if (matches.length !== 1) throw new Error('PDF检查记录更新的原表位置不唯一');
+        const current = matches[0];
+        if (isDeepStrictEqual(previous, current)) continue;
+        const {ruleSha256:oldRule,...oldContent}=previous;
+        const {ruleSha256:newRule,...newContent}=current;
+        if (!/^[a-f0-9]{64}$/.test(oldRule || '') || newRule !== sha(fs.readFileSync(pythonFile))
+            || !isDeepStrictEqual(oldContent,newContent)) {
+            throw new Error('PDF重新核验的字形、表头、数值或来源已改变，不能只更新检查记录');
+        }
+        changes.push({sourceTableOrdinal:binding.sourceTableOrdinal,oldRuleSha256:oldRule,
+            newRuleSha256:newRule,oldProofSha256:recordHash(previous),newProofSha256:recordHash(current)});
+        binding.pdfCellConfirmation = current;
+    }
+    if (!changes.length) return false;
+    nextPlan.sourceBindingsSha256=recordHash({tableBindings:nextPlan.tableBindings,formulaBindings:nextPlan.formulaBindings});
+    const candidate=structuredClone(paper),nextManifest=structuredClone(manifest);
+    candidate.apiReaderPlan=nextPlan;candidate.apiReaderPlanSha256=recordHash(nextPlan);
+    nextManifest.stages.apiReaderArticle={...stage,planSha256:candidate.apiReaderPlanSha256,
+        sourceBindingsSha256:nextPlan.sourceBindingsSha256,
+        pdfCellConfirmationReplays:[...(stage.pdfCellConfirmationReplays || []),{
+            note:'重新核验原封存PDF得到相同显示内容，仅更新程序检查记录；没有新模型请求或重新签署旧请求。',
+            articleSha256:paper.apiReaderArticleSha256,oldPlanSha256:paper.apiReaderPlanSha256,
+            newPlanSha256:candidate.apiReaderPlanSha256,changes}]};
+    candidate.analysisManifest=nextManifest;
+    if (!require('../analysis-engine').hasValidApiReaderV3Records(candidate)) {
+        throw new Error('PDF检查记录更新后，长文的完整来源资格仍未通过');
+    }
+    paper.apiReaderPlan=nextPlan;paper.apiReaderPlanSha256=candidate.apiReaderPlanSha256;
+    manifest.stages.apiReaderArticle=nextManifest.stages.apiReaderArticle;
+    return true;
+}
+
 function withSavedPaper(paper, fn) {
     const bindings = paper?.apiReaderPlan?.tableBindings || [];
     if (!bindings.some(binding => binding?.pdfCellConfirmation !== undefined)) return fn();
@@ -254,5 +310,5 @@ function savedCellMatches(binding, cell, displayed) {
         && displayCell(table, cell.sourceRow, cell.sourceColumn) === displayed;
 }
 
-module.exports = { CONTRACT, supported, withArtifacts, withSavedPaper, evidence,
+module.exports = { CONTRACT, replaySavedProofMetadata, supported, withArtifacts, withSavedPaper, evidence,
     displayCell, displayMatrix, savedCellMatches };

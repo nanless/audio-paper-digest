@@ -6795,8 +6795,9 @@ function repairShortApiReaderFigureLeadBindings(article, plan, figures = []) {
 }
 
 function repairApiReaderArticleAndPlanBindings(paper, analysisManifest) {
+    const renewed = require('./lib/reader-pdf-cell-evidence').replaySavedProofMetadata(paper, analysisManifest);
     return require('./lib/reader-pdf-cell-evidence').withSavedPaper(paper,
-        () => repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest));
+        () => repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest) || renewed);
 }
 function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest) {
     const plan = paper?.apiReaderPlan;

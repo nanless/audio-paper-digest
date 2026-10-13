@@ -634,3 +634,5 @@ Reader 实现变更后的合法诊断恢复可在上述公共选定入口显式�
 CHiME 的三层主结果表与两层 MC 对照表使用同一封存 PDF 逐格确认入口；保留方法行、输入麦克风数、数据集、完整列头与表下注释，不改来源或模型原稿。将 `PD_PDF_CHIME_REAL_SOURCE_DIR` 指向 `2610.05155/generation-000001` 后运行 `tests/reader_pdf_chime_table_evidence_test.py`，可重放两表及错单位、组别、方法、数据集、数值、注释、PDF SHA 反例。未提供真实来源时明确跳过。
 
 资源表述的可选新输入由 `lib/reader-resource-prose.js` 处理。公共刷新或选定论文续跑显式设置 `naturalResourceProse: true` 时，先保持原资源来源、引文、可达性和文档校验，再提供自然的可确认状态；新规则版本和规则SHA进入Reader身份及阶段记录，完整实际提示仍保存于请求诊断。旧v7模板、默认输入和原付费记录不改；不能把外部链接可访问推断为作者开源、权重可下载或完整系统可运行。`tests/reader-natural-resource-evidence.test.js` 与 `tests/reader-natural-resource-public-option.test.js` 验证旧字节、新身份及真实模型前入口，未调用模型，不代表新文章已验收。
+
+保存稿的 PDF 检查规则文件变化时，现有长文确定性修复入口先重新读取封存四来源。`lib/reader-pdf-cell-evidence.js` 的 `replaySavedProofMetadata` 仅在全部字形、表头、数值、DOM、PDF 与后端记录精确相同、唯一变化为规则SHA时更新程序检查元数据并记录旧新SHA；文章、旧执行次数与状态保持原样。仍须通过原有完整来源资格检查，任何内容变化均拒绝。真实回归运行 `tests/reader-saved-pdf-proof-replay.test.js`，显式提供 `PD_SAVED_PDF_REPLAY_RECORDS` 和 `PD_SAVED_PDF_REPLAY_SOURCE_ROOT`；缺来源时明确跳过，不代表保存稿已恢复。
