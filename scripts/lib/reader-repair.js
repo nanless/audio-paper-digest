@@ -796,12 +796,20 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
                 if (span.start < cursor || old.split(span.claim).length !== 2) {
                     throw new Error('事实局部补丁原句位置不唯一');
                 }
-                pattern += literal(old.slice(cursor, span.start)) + '([\\s\\S]*?)';
+                pattern += literal(old.slice(cursor, span.start)) + '([\\s\\S]*?\\S[\\s\\S]*?)';
                 cursor = span.start + span.claim.length;
             }
             pattern += literal(old.slice(cursor)) + '$';
             const match = new RegExp(pattern).exec(item.value);
-            if (!match || match.slice(1).some(value => !value.trim() || /\[\[|!\[|\|/.test(value))) {
+            if (!match || match.slice(1).some(value => !value.trim() || /\[\[|!\[|\|/.test(value))
+                || match.slice(1).some((value, index, values) => {
+                    let adjacent = value;
+                    for (let next = index + 1; next < spans.length
+                        && spans[next].start === spans[next - 1].start + spans[next - 1].claim.length; next++) {
+                        adjacent += values[next];
+                    }
+                    return /\[\[|!\[|\|/.test(adjacent);
+                })) {
                 throw new Error('事实局部补丁改变了错误原句以外正文或引入图表标记');
             }
         }
