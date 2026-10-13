@@ -1,4 +1,6 @@
 'use strict';
+process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
+const { localLlmResponse } = require('./local-llm-response.cjs');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -7,6 +9,12 @@ const scenario = process.argv[2];
 const folder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'explicit-refilter-')));
 const config = require('../../scripts/config');
 const crypto = require('node:crypto');
+// 用有实际内容的本地默认目录检验越界写入，不读取用户正式来源。
+for (const key of ['dailyFreshSourceRunsDir', 'freshArxivFetchedSourcesDir']) {
+    config.FILES[key] = path.join(folder, 'protected-defaults', key);
+    fs.mkdirSync(config.FILES[key], { recursive: true });
+    fs.writeFileSync(path.join(config.FILES[key], '保留来源.txt'), '测试不能改动的既有来源。');
+}
 const defaultSourceRuns = config.FILES.dailyFreshSourceRunsDir;
 function directoryBytes(root) {
     if (!fs.existsSync(root)) return [];
@@ -63,7 +71,7 @@ utils.requestLlmJson = async (url, endpoint, model, body) => {
     if (phase === 'failure') return { statusCode: 401, body: { error: { message: '本地认证失败' } }, raw: '', headers: {} };
     const response = JSON.stringify({ related: phase !== 'initial' || index !== 0,
         reason: phase === 'initial' ? `原决定${index}` : `重新核验${index}` });
-    return { statusCode: 200, body: { choices: [{ message: { content: response }, finish_reason: 'stop' }] }, raw: response, headers: {} };
+    return localLlmResponse(endpoint, model, response);
 };
 const papers = ids.map((arxivId, index) => ({ arxivId, title: `本地声音论文${index}`,
     abstract: 'Audio speech recognition', categories: ['cs.SD'], sources: ['arxiv'] }));

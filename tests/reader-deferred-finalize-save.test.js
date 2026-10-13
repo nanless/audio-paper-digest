@@ -18,11 +18,11 @@ const fresh = require('../scripts/lib/fresh-analysis-context.js');
 const direct = require('../scripts/lib/direct-rewrite-analysis-context.js');
 let draftResponse; let requestCalls = 0; let initialRaw;
 const utils = require('../scripts/utils.js');
-utils.requestLlmJson = async () => {
+utils.requestLlmJson = async (url, endpoint, model) => {
     requestCalls += 1;
     const content = requestCalls === 1 ? initialRaw : JSON.stringify({ version: 1,
         rawSha256: sha(initialRaw), deleteFields: ['sourceBindingsContract', 'sourceBindingsSha256'] });
-    return { statusCode: 200, body: { choices: [{ message: { content }, finish_reason: 'stop' }] } };
+    return require('./fixtures/local-llm-response.cjs').localLlmResponse(endpoint, model, content);
 };
 const Module = require('node:module');
 const deepFile = require.resolve('../scripts/deep-analyzer.js');

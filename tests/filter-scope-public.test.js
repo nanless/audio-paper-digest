@@ -14,20 +14,29 @@ const batchDate = '2026-10-11';
 // 各测试仍须证明它没有改动自己未获授权的默认文件。
 const savedFiles = { ...Config.FILES };
 const savedDataDir = Config.DATA_DIR;
+const savedArchiveDir = Config.ARCHIVE_DIR;
+const savedCurrentDir = Config.CURRENT_DIR;
 let isolatedDefaults;
 test.before(() => {
     isolatedDefaults = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'filter-scope-defaults-'));
     Config.DATA_DIR = isolatedDefaults;
+    Config.ARCHIVE_DIR = path.join(isolatedDefaults, 'archive');
+    Config.CURRENT_DIR = path.join(isolatedDefaults, 'current');
     for (const key of Object.keys(Config.FILES)) {
         if (typeof Config.FILES[key] === 'string') Config.FILES[key] = path.join(isolatedDefaults, key);
     }
     fs.mkdirSync(Config.FILES.freshArxivFetchedSourcesDir, { recursive: true });
     fs.writeFileSync(path.join(Config.FILES.freshArxivFetchedSourcesDir, '保留来源.txt'), '未经授权不能改动的原始来源。');
     fs.writeFileSync(path.join(isolatedDefaults, '保留记录.json'), JSON.stringify({ note: '已有论文和付费记录必须保留' }));
+    const archiveDay = path.join(Config.ARCHIVE_DIR, '2026-10-01');
+    fs.mkdirSync(archiveDay, { recursive: true });
+    fs.writeFileSync(path.join(archiveDay, 'deep-analysis-result.json'), JSON.stringify({ papers: [] }));
 });
 test.after(() => {
     Object.assign(Config.FILES, savedFiles);
     Config.DATA_DIR = savedDataDir;
+    Config.ARCHIVE_DIR = savedArchiveDir;
+    Config.CURRENT_DIR = savedCurrentDir;
     if (isolatedDefaults) fs.rmSync(isolatedDefaults, { recursive: true, force: true });
 });
 function treeSnapshot(root) {

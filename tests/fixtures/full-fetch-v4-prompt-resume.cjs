@@ -1,4 +1,6 @@
 'use strict';
+process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
+const { localLlmResponse, requestText } = require('./local-llm-response.cjs');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -7,6 +9,12 @@ const crypto = require('node:crypto');
 const scenario = process.argv[2];
 const folder = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'prompt-version-resume-')));
 const config = require('../../scripts/config');
+// 用有实际内容的本地默认目录检验越界写入，不读取用户正式来源。
+for (const key of ['dailyFreshSourceRunsDir', 'freshArxivFetchedSourcesDir']) {
+    config.FILES[key] = path.join(folder, 'protected-defaults', key);
+    fs.mkdirSync(config.FILES[key], { recursive: true });
+    fs.writeFileSync(path.join(config.FILES[key], '保留来源.txt'), '测试不能改动的既有来源。');
+}
 const defaultSourceRuns = config.FILES.dailyFreshSourceRunsDir;
 const defaultFetchedSources = config.FILES.freshArxivFetchedSourcesDir;
 function directoryBytes(root) {
@@ -60,7 +68,7 @@ const papers = Array.from({ length: 4171 }, (_, index) => ({ arxivId: `2610.${10
 let phase = 'old';
 const requests = [];
 utils.requestLlmJson = async (url, endpoint, model, body) => {
-    const prompt = body.messages[0].content;
+    const prompt = requestText(body);
     const index = Number(prompt.match(/本地语音论文(\d+)/)?.[1]);
     assert.ok(Number.isInteger(index) && index < 425);
     const actualPath = phase === 'old' ? oldPromptPath : (scenario === 'changed' ? newPromptPath : oldPromptPath);
@@ -69,7 +77,7 @@ utils.requestLlmJson = async (url, endpoint, model, body) => {
     }), '请求必须传递所选真实提示词首块及论文输入');
     requests.push(papers[index].arxivId);
     const content = JSON.stringify({ related: true, reason: `${phase === 'old' ? '原' : '新'}本地响应${index}` });
-    return { statusCode: 200, body: { choices: [{ message: { content }, finish_reason: 'stop' }] }, raw: content, headers: {} };
+    return localLlmResponse(endpoint, model, content);
 };
 let arxivCalls = 0;
 let hfCalls = 0;
