@@ -33,6 +33,11 @@ test('符号图节点映射不作量值方向，真实性能量值仍须完整�
     assert.equal(contract.stripSymbolicPatternRelation(measured), measured);
     for (const raw of summaries) {
         assert.equal(contract.validateCoreSummarySemanticContract(raw, { sourceText: sourceDefinition }), null);
+        for (const metric of ['准确率达到99%', 'WER为1.5%', 'F1为0.9', '准确率达到百分之九十九', '得分达到99%', '性能提高99%', 'score is 99%', 'metric is 99%']) {
+            const invented = raw.replace('跨作品检索', metric + '，跨作品检索');
+            assert.equal(contract.hasScopedSymbolicDemonstration(invented), false);
+            assert.match(contract.validateCoreSummarySemanticContract(invented, { sourceText: sourceDefinition }), /关键定量结果/);
+        }
         assert.match(contract.validateCoreSummarySemanticContract(raw, { sourceText: sourceDefinition + '\n' + measured }), /关键定量结果/);
     }
 });
@@ -65,8 +70,10 @@ values = json.load(sys.stdin)
 print(json.dumps({'summaries': [environment['_detailed_core_summary_semantic_issue'](text.replace('## 核心摘要', '').strip()) for text in values['summaries']], 'chains': [environment['_has_symbolic_geometry_method_chain'](text) for text in values['chains']]}, ensure_ascii=False))`;
     const deniedLimits = ['跨作品已经得到验证，并非尚未验证', '跨作品并非尚未验证', '跨作品不是尚未验证']
         .map(value => summaries[0].replace(/跨作品[^。]*尚未验证/, value));
+    const inventedMetrics = ['准确率达到99%', 'WER为1.5%', 'F1为0.9', '准确率达到百分之九十九', '得分达到99%', '性能提高99%', 'score is 99%', 'metric is 99%']
+        .map(metric => summaries[0].replace('跨作品检索', metric + '，跨作品检索'));
     const result = spawnSync('bash', ['scripts/python-runtime.sh', '-c', script], {
-        cwd: path.resolve(__dirname, '..'), input: JSON.stringify({ summaries: [...summaries, ...deniedLimits], chains: [chain, ...refused] }), encoding: 'utf8'
+        cwd: path.resolve(__dirname, '..'), input: JSON.stringify({ summaries: [...summaries, ...deniedLimits, ...inventedMetrics], chains: [chain, ...refused] }), encoding: 'utf8'
     });
     assert.equal(result.status, 0, result.stderr);
     const values = JSON.parse(result.stdout);

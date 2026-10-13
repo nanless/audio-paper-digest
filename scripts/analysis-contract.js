@@ -1248,6 +1248,14 @@ function hasSymbolicGeometryMethodChain(summary) {
 function hasScopedSymbolicDemonstration(summary) {
     if (!hasSymbolicGeometryMethodChain(summary)) return false;
     const sentences = String(summary || '').split(/[。！？!?；;\n]/u);
+    // 实例结构中的组规模不是性能指标；具体标量性能主张仍须有实测来源。
+    const performanceClaims = sentences.some(sentence => {
+        const metricSurface = sentence.replace(/(?:变换)?等价组规模为指标/gu, ' ');
+        return CORE_SUMMARY_METRIC_PATTERN.test(metricSurface)
+            && ((sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || []).length > 0
+                || /(?:百分之|千分之|零点)[零一二两三四五六七八九十百千万点]+/u.test(sentence));
+    });
+    if (performanceClaims) return false;
     const scoped = sentences.some(sentence => !/假设|假想|预计|可能|未来|讨论|提及|不只|并非|不是/u.test(sentence)
         && /结论(?:只|仅)在[^。]{0,55}(?:该曲|作品|主题实例|实例)[^。]{0,25}(?:有证据|成立|得到支持|得到验证)/u.test(sentence));
     const limit = sentences.flatMap(sentence => sentence.split(/[，,]/u)).some(clause =>
