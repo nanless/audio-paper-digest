@@ -311,6 +311,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `utils.js` | 提供 Node 原子文件写入、时间、ID、分析解析、提示词、LLM 协议和代理工具；`readTagValidation` 读取新旧解析结果中的标签检查对象，拒绝混用字段。 |
 | `lib/analysis-section-titles.js` | 识别分析章节及代码围栏，读取唯一的论文评价章节，并兼容旧标题而不改写原文。 |
 | `lib/analysis-terminal-summary.js` | 为分析结束时的状态、文本来源和计数提供中文显示，未知值显示原值。 |
+| `lib/cancelled-reader-audit-recovery.js` | 在正常分析入口确认已取消步骤留下的失败，核验现有正文、来源及原请求记录后复用结果，由分析引擎收尾；不新增模型请求，不删除原阶段错误和费用记录。 |
 | `llm-account-pool.js` | 管理 Node OpenCode Go 账号池，持续使用成功账号，识别额度错误，并保存跨进程账号状态。 |
 | `log-setup.js` | 记录 Node 终端和文件日志，加时间戳，并对敏感信息脱敏。 |
 | `runtime-storage.js` | 只读统计运行存储，按文件引用关系预览受控缓存或日志清理；只有显式 `--apply` 才清理。 |
