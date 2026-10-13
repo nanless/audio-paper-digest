@@ -187,7 +187,7 @@ const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:
 // 英文指标名必须整词匹配。没有这里的两侧边界，mAP/PAR/PER 这类短指标会命中
 // "mapping"、"Particle"、"performance" 等普通词，把章节号和引用位置误当成
 // 实验测量结果。
-const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
+const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
 // 会议论文常用领域内的中文指标名（例如 DAFx 的“抖动”和“包络相关”）。
 // 这里显式列出来，免得把任何结果名词都当成定量证据。
 const CORE_SUMMARY_CONFERENCE_METRIC_PATTERN = /包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差/;
@@ -1385,7 +1385,9 @@ function hasConcreteCoreSummarySetting(sentence) {
     const speakerSplit = /(?:在|于)\s*说话人(?:互斥|不重叠)的\s*[A-Z][A-Za-z0-9._-]{2,}\s*(?:语料)?实测(?:中|上)/.test(sentence);
     const timedHardware = /(?:在|于)\s*(?:Raspberry\s+Pi|Jetson|MacBook|Intel|AMD|NVIDIA|Apple|CPU|GPU)(?:\s+[A-Za-z][A-Za-z0-9_-]*){0,3}\s+[A-Za-z]{0,4}\d+[A-Za-z0-9._-]*(?:\s+[A-Za-z][A-Za-z0-9_-]*){0,2}\s*上/.test(sentence)
         && /(?:计时|耗时|时延|延迟|推理时间|运行时间|预处理时间)/.test(sentence);
-    return syntheticSetting || speakerSplit || timedHardware;
+    const namedRequestEvaluation = !/(?:讨论|提及|并非|不是|不能|假想|设想|假设|预计|预期|可能|计划|未来|无关|文件目录)/u.test(sentence) && /(?<![A-Za-z0-9_])[A-Z][A-Za-z0-9._-]{1,39}-Bench(?![A-Za-z0-9_])全部\s*[1-9][0-9]*个请求的评估中/iu.test(sentence);
+    const heldOutSpeakerComparison = !/(?:讨论|提及|并非|不是|不能|假想|设想|假设|预计|预期|可能|计划|未来|无关|文件目录)/u.test(sentence) && /(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}\s*标准(?:[1-9][0-9]*|[一二两三四五六七八九十]+)名留出说话人[^，,。！？!?；;\n]{0,100}比较中/u.test(sentence);
+    return syntheticSetting || speakerSplit || timedHardware || namedRequestEvaluation || heldOutSpeakerComparison;
 }
 
 function coreSummaryQuantitativeResultState(text) {
@@ -1493,7 +1495,16 @@ function hasBlockLayoutProductChain(summary) {
     });
 }
 
+function hasPosteriorUpdateProductChain(summary) {
+    // 当前模型先产生后验功率，再把同一产物交给参数更新。
+    return String(summary || '').split(/[。！？!?；;\n]/u).some(sentence =>
+        sentence.length <= 320
+        && !/(?:假定|是否|讨论|提及|并非|并未|不是|没有|不能|不会|尚未|未曾|假设|如果|可能|计划|未来)|(?:不|未)(?:曾|实际|直接|真正|确实|被)*\s*(?:算出|计算|进入|更新)/u.test(sentence)
+        && /由当前模型方差(?:算出|计算)(?:成分占模型方差的)?贡献比与后验功率[，,]\s*(?:该|此)后验功率作为固定输入进入同一成分的幅度与衰减率更新/u.test(sentence));
+}
+
 function hasExplicitNaturalProductChain(summary) {
+    if (hasPosteriorUpdateProductChain(summary)) return true;
     if (hasBlockLayoutProductChain(summary)) return true;
     // 只接受已说明的产物被下一处理模块实际使用，不以动作数量或序号充数。
     const sentences = String(summary || '').split(/[。！？!?；;\n]/u).map(s => s.trim()).filter(Boolean);
@@ -3008,6 +3019,7 @@ module.exports = {
     hasExplicitNaturalProductChain,
     hasConcreteUnnumberedMethodChain,
     hasBlockLayoutProductChain,
+    hasPosteriorUpdateProductChain,
     hashAnalysisWithMaskedCoreSummary,
     hashTagSectionAndPrimaryTags,
     maskClassificationFields,
