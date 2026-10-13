@@ -551,6 +551,52 @@ function updateAnalysisDigestStatuses(analyzedPapers, options = {}) {
     }, { recoveryPolicy: LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
 }
 
+// 只补论文库中未同步的成功状态；先锁规范论文ID，再读取正式结果，避免陈旧成功覆盖新失败。
+async function synchronizeCompletedAnalysisDigestStatuses(resultPath, entryPlan, options = {}) {
+    const engine = require('./analysis-engine');
+    const daily = require('./lib/daily-fresh-source-plan');
+    const filePath = options.filePath || Config.FILES.papers;
+    const needsSync = (database, id) => {
+        const status = database.papers[id]?.digestStatus;
+        return status?.status !== 'analyzed'
+            || status?.latestAttemptStatus !== undefined && status.latestAttemptStatus !== 'analyzed';
+    };
+    const collectIds = () => {
+        const initial = readJsonFileStrict(resultPath);
+        const database = loadPapersDatabase(filePath, options.legacyPath || Config.FILES.papersLegacy);
+        const initialPapers = Array.isArray(initial) ? initial : initial.papers || [];
+        return [...new Set(initialPapers.filter(paper => needsSync(database, normalizedId(paper))
+            && isSuccessfulAnalysisRecord(paper)).map(normalizedId))].sort();
+    };
+    // 等待论文锁时只保留ID，不让完整论文库与锁内的新读副本同时存活。
+    const ids = collectIds();
+    if (!ids.length) return { updated: 0 };
+    const synchronizeLocked = () => withFileLockSync(filePath, () => {
+        const latest = readJsonFileStrict(resultPath);
+        const plan = daily.requireFinalDailyFreshSourceRecoveryPlan(latest, { entryPlan,
+            label: '成功分析状态同步' });
+        const currentDatabase = loadPapersDatabase(filePath, options.legacyPath || Config.FILES.papersLegacy);
+        const targets = new Set(ids);
+        const currentPapers = Array.isArray(latest) ? latest : latest.papers || [];
+        const completed = currentPapers.filter(paper => targets.has(normalizedId(paper))
+            && needsSync(currentDatabase, normalizedId(paper))
+            && isSuccessfulAnalysisRecord(paper)
+            && daily.isPaperReusableForAnalysis(paper, plan));
+        const updated = applyAnalysisDigestStatuses(currentDatabase, completed, {
+            ...options, batchDate: options.batchDate || plan.batchDate
+        });
+        if (updated) {
+            currentDatabase.lastUpdated = options.updatedAt || getBeijingISOString();
+            currentDatabase.generation = (currentDatabase.generation || 0) + 1;
+            writeFileAtomic(filePath, serializePapersDatabase(currentDatabase));
+        }
+        return { updated };
+    }, { recoveryPolicy: LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
+    const lockNext = index => index === ids.length ? synchronizeLocked()
+        : engine.withPaperAnalysisLock({ arxivId: ids[index] }, () => lockNext(index + 1));
+    return lockNext(0);
+}
+
 module.exports = {
     normalizeCompatibleBatchDate,
     inferAnalysisBatchDate,
@@ -564,6 +610,7 @@ module.exports = {
     mergeAnalysisDigestPaper,
     applyAnalysisDigestStatuses,
     updateAnalysisDigestStatuses,
+    synchronizeCompletedAnalysisDigestStatuses,
     serializePapersDatabase,
     backupPapersJson,
     verifyPapersBackup,

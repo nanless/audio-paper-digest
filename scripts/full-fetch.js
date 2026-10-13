@@ -39,6 +39,7 @@ const {
     savePapersDatabase,
     loadPapersDatabase,
     updateAnalysisDigestStatuses,
+    synchronizeCompletedAnalysisDigestStatuses,
     backupPapersJson
 } = require('./digest-status.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
@@ -2021,16 +2022,14 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
     // 日更 API 分析以来源为先：入选集合先固化成一份独立的运行计划，每篇论文都抓到
     // 官方 HTML 与 PDF，之后才进入 LLM 各阶段。旧的分析结果即使当时成功过也不能直接
     // 复用，必须能对上这一天的 PDF/TXT 清单。
-    const dailySourcePlan = filteredNew.length ? dailyFreshSources.createDailyFreshSourcePlan({
+    let dailySourcePlan = filteredNew.length ? dailyFreshSources.createDailyFreshSourcePlan({
         batchDate: today, batchId, papers: filteredNew
     }) : null;
     const dailyFreshSourceRun = dailySourcePlan
         ? dailyFreshSources.dailyFreshSourceReference(dailySourcePlan) : null;
     if (dailySourcePlan) {
         console.log(`  📚 日更 source phase：封存 ${dailySourcePlan.paperIds.length} 篇官方 arXiv PDF/TXT 后再分析`);
-        await dailyFreshSources.captureDailyFreshSources(dailySourcePlan, {
-            concurrency: ANALYSIS_CONCURRENCY
-        });
+        await dailyFreshSources.captureDailyFreshSources(dailySourcePlan);
     }
     const papersToAnalyze = filteredNew.map(paper => {
         const storedAnalysisRecord = mergeStoredAnalysisState(paper, loadStoredAnalysisRecord(outputFile, paper));
@@ -2047,7 +2046,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
     }
     const analyzedPapers = [];
 
-    updateJsonFileLocked(outputFile, current => {
+    const initializedAnalysis = updateJsonFileLocked(outputFile, current => {
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             batchDate: today, batchId,
@@ -2069,6 +2068,11 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         delete payload.deepAnalysisCompletedAt;
         return payload;
     });
+    if (dailySourcePlan) {
+        dailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(initializedAnalysis, {
+            label: '正常日更分析前来源核验'
+        });
+    }
 
     const runDailyAnalysis = () => analyzeBatch(papersToAnalyze, {
         checkpointFilePath: outputFile,
@@ -2196,6 +2200,10 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
     } catch (e) {
         console.error(`\n❌ 保存结果失败: ${e.message}`);
         throw e;
+    }
+
+    if (dailySourcePlan) {
+        await synchronizeCompletedAnalysisDigestStatuses(outputFile, dailySourcePlan, { batchDate: today });
     }
 
     const finalStatus = result.stats.analysisStatus;

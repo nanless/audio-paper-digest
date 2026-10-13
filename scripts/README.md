@@ -107,7 +107,7 @@ Manual 子系统已经集中到 [`manual/`](../manual/README.md)，本目录不�
 | `analysis-contract.js` | Node 共享 | 核验 API 分析的结构、评分、方法和表格要求，同时能读历史 Manual 结果。 |
 | `lib/reanalysis-helpers.js` | Node 库 | 供指定论文重分析使用，清理 Reader 状态并更新恢复统计。 |
 | `editorial-quality.js` | Node 共享 | 检查 API/Manual 读者正文的语言、事实表述、评分和可读性。 |
-| `digest-status.js` | Node 共享 | 同步 `papers.json` 的分析状态、批次日期和恢复状态。 |
+| `digest-status.js` | Node 共享 | 同步 `papers.json` 的分析状态、批次日期和恢复状态。正常日更、deep 与 batch 收尾通过 `synchronizeCompletedAnalysisDigestStatuses` 补齐被跳过旧成功记录的状态；先持规范论文锁，再重读正式结果与封存来源，仅一次保存状态不符的成功记录，不覆盖最新失败。 |
 | `lib/fetch-scheduler.js` | Node 库 | 按主机串行调度抓取，记录冷却时间并识别失败类型。 |
 | `lib/filter-input-contract.js` | Node 库 | 算出筛选决定对应的输入 SHA；使用官方范围证据时，一并绑定实际交给模型的证据。 |
 | `lib/filter-scope-evidence.js` | Node 库 | 为仅命中泛多模态词、且未明确声音模态的候选获取同篇官方 TXT、PDF、来源元数据和清单；读取时核验文件，并保存模型所用原文及其 SHA。它不直接判定论文相关。 |

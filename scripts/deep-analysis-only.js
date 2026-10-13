@@ -20,7 +20,7 @@ const {
     getAnalysisRunSummary,
     getAnalysisExitCode
 } = require('./analysis-engine.js');
-const { updateAnalysisDigestStatuses } = require('./digest-status.js');
+const { updateAnalysisDigestStatuses, synchronizeCompletedAnalysisDigestStatuses } = require('./digest-status.js');
 const Config = require('./config.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 const factReview = require('./lib/daily-fact-review.js');
@@ -315,6 +315,7 @@ async function runDeepAnalysis(options = {}) {
         else delete payload.deepAnalysisCompletedAt;
         return payload;
     });
+    await synchronizeCompletedAnalysisDigestStatuses(resultPath, dailySourcePlan, { batchDate: today });
     const { remaining, status } = getAnalysisRunSummary(finalPayload.papers);
 
     console.log(`\n${status === 'complete' ? '✅' : '⚠️'} 深度分析状态: ${formatAnalysisStatus(status)}`);

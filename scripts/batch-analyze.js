@@ -19,7 +19,7 @@ const {
     getAnalysisRunSummary,
     getAnalysisExitCode
 } = require('./analysis-engine.js');
-const { updateAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./digest-status.js');
+const { updateAnalysisDigestStatuses, synchronizeCompletedAnalysisDigestStatuses, inferAnalysisBatchDate } = require('./digest-status.js');
 const Config = require('./config.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 const factReview = require('./lib/daily-fact-review.js');
@@ -316,6 +316,7 @@ async function main(options = {}) {
         else delete payload.deepAnalysisCompletedAt;
         return payload;
     });
+    await synchronizeCompletedAnalysisDigestStatuses(RESULT_FILE, dailySourcePlan, { batchDate });
     const { remaining, status } = getAnalysisRunSummary(finalPayload.papers);
     console.log(`剩余未分析: ${remaining}`);
     console.log(`运行状态: ${status}`);
