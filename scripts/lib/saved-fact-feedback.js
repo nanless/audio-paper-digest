@@ -66,4 +66,80 @@ function withRecoveredFeedback(paper, plan, callback, explicitFeedback = null) {
         ? facts.withCoreSummaryFactReview(facts.validateFeedback(original.coreFeedback, plan, paper), paper, callback)
         : callback());
 }
-module.exports = { hasSavedProof, readSavedFeedback, withRecoveredFeedback };
+function readerOnlyFeedback(feedback) {
+    return Boolean(feedback?.readerFeedback?.trim())
+        && ['primaryFeedback', 'coreFeedback', 'tagFeedback', 'scoringFeedback'].every(key => !String(feedback[key] || '').trim())
+        && ['rejectedPrimaryClaims', 'rejectedCoreClaims', 'rejectedTagClaims', 'rejectedScoringClaims'].every(key => !(feedback[key] || []).length);
+}
+function completedReaderUpstream(paper, plan) {
+    const engine = require('../analysis-engine'), contract = require('../analysis-contract');
+    const stages = paper?.analysisManifest?.stages;
+    if (!stages || stages.primaryAnalysis?.status !== 'complete'
+        || !daily.isPaperBoundToPlan(paper, plan) || !engine.hasValidAnalysisBody(paper)
+        || contract.REQUIRED_RECOVERY_STAGES.some(stage => !['apiReaderArticle', 'apiReaderTableAudit', 'imageSupplement'].includes(stage)
+            && !contract.isRecoveryStageTerminal(stage, stages[stage]?.status))
+        || contract.validateTagStageProof(paper, { parsed: require('../utils').parseAnalysis(paper.analysis) })
+        || contract.validateCoreSummaryStageBinding(paper)) return false;
+    return stages.scoringAudit?.scoringContract === 'api-scoring-audit-v2'
+        && engine.scoringAuditBindsFinalAnalysis(paper) && engine.scoringStabilityIsResolved(stages.scoringAudit);
+}
+function protectedReaderUpstream(paper) {
+    const copy = structuredClone(paper);
+    for (const key of Object.keys(copy)) if (/^apiReader/.test(key)) delete copy[key];
+    for (const key of Object.keys(copy.analysisManifest?.contracts || {}))
+        if (/^apiReader/.test(key)) delete copy.analysisManifest.contracts[key];
+    delete copy.analysisManifest?.stages?.apiReaderArticle;
+    delete copy.analysisManifest?.stages?.apiReaderTableAudit;
+    delete copy.analysisManifest?.stages?.imageSupplement;
+    if (copy.analysisStageCheckpoints) delete copy.analysisStageCheckpoints.apiReaderArticle;
+    return copy;
+}
+function analyzeWithRecoveredFeedback(paper, plan, analyze, explicitFeedback = null, options = {}) {
+    return require('./fresh-analysis-context').withFreshPaperContext(paper, () =>
+        analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explicitFeedback, options));
+}
+async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explicitFeedback, options) {
+    const original = explicitFeedback ? null : readSavedFeedback(paper, plan);
+    const feedback = explicitFeedback || original?.feedback;
+    if (!readerOnlyFeedback(feedback))
+        return withRecoveredFeedback(paper, plan, analyze, explicitFeedback);
+    if (!completedReaderUpstream(paper, plan)) {
+        const error = new Error('独立Reader纠错缺少已完成的主文、摘要或评分');
+        error.code = 'READER_UPSTREAM_INCOMPLETE'; error.retryable = false; throw error;
+    }
+    const engine = require('../analysis-engine');
+    if (!engine.paperAnalysisLockHeld(paper)) throw new Error('Reader纠错须持有当前论文锁');
+    const parent = explicitFeedback ? readSavedFeedback(paper, plan) : original;
+    if (!parent && hasSavedProof(paper)) {
+        const error = new Error('缺少之前的纠错说明，保留未完成记录');
+        error.code = 'READER_PARENT_FEEDBACK_MISSING'; error.retryable = false; throw error;
+    }
+    const bound = facts.validateFeedback(feedback, plan, paper);
+    const refresh = () => facts.withReaderFactReview(bound, paper, async () => {
+        facts.withFactReview(bound, () => undefined);
+        const target = structuredClone(paper);
+        require('../deep-analyzer').captureStaleAnalysisSnapshot(target, target.analysisManifest,
+            'apiReaderArticle', bound.proof.feedbackSha256);
+        const before = protectedReaderUpstream(target);
+        const fresh = require('./fresh-analysis-context');
+        const source = require('./model-text-sanitization').currentModelInputSource(paper);
+        if (!source) throw new Error('Reader纠错缺少当前已核验封存来源');
+        const result = await fresh.withFreshPaperContext(target, () =>
+            require('./llm-usage').withLlmUsageContext({ paperId: feedback.paperId }, () =>
+                require('../deep-analyzer').refreshApiReaderArticleFromSource(target, source, {
+                    reviewFeedback: facts.reviewFeedback('apiReaderArticle', feedback.paperId),
+                    naturalResourceProse: options.naturalResourceProse === true
+                })));
+        if (daily.stableHash(protectedReaderUpstream(result)) !== daily.stableHash(before)) {
+            const error = new Error('独立Reader纠错改变了原主文、摘要、评分、阶段或费用历史');
+            error.code = 'READER_RETURN_PROTECTION_REJECTED'; error.retryable = false; throw error;
+        }
+        return result;
+    });
+    if (!parent) return refresh();
+    const parentBound = facts.validateFeedback(parent.feedback, plan, parent.paper);
+    // 原摘要包已独立验证，本次只读取其已完成产物，不进入摘要修改作用域。
+    return facts.withFactReview(parentBound, refresh);
+}
+module.exports = { hasSavedProof, readSavedFeedback, withRecoveredFeedback,
+    readerOnlyFeedback, completedReaderUpstream, analyzeWithRecoveredFeedback };

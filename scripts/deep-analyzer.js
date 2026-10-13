@@ -9069,6 +9069,7 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
         status: 'complete',
         ...options.execution,
         ...(options.execution?.readerFactLocalRevisionContract === 'signed-reader-fact-local-repair-v1'
+            || require('./lib/daily-fact-review').current(getPaperArxivId(paper))?.readerOnly
             ? require('./lib/daily-fact-review').fingerprintFields('apiReaderArticle') : {}),
         articleSha256,
         planSha256,
@@ -9105,7 +9106,8 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
         refreshedAt: options.execution.executionKind === 'operator'
             ? options.execution.operatorProvenance.appliedAt : getBeijingISOString()
     };
-    if (paper.analysis && manifest.stages.scoringAudit?.status === 'complete') {
+    if (paper.analysis && manifest.stages.scoringAudit?.status === 'complete'
+        && !require('./lib/daily-fact-review').current(getPaperArxivId(paper))?.readerOnly) {
         require('./lib/reader-resource-sync.js').synchronizeReaderResourceAvailability(paper, sourceDetails);
     }
     return paper;

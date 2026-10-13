@@ -203,9 +203,9 @@ async function runDeepAnalysis(options = {}) {
         saveInterval: Config.ANALYSIS_CONFIG.concurrency,
         analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
             ...options,
-            analyze: paper => {
-                return savedFacts.withRecoveredFeedback(paper, dailySourcePlan,
-                    () => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper), feedback);
+            analyze: (paper, sourceOptions) => {
+                return savedFacts.analyzeWithRecoveredFeedback(paper, dailySourcePlan,
+                    () => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper), feedback, sourceOptions);
             }
         }),
         preparePaperLocked: paper => {

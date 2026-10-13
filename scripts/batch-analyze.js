@@ -208,11 +208,11 @@ async function main(options = {}) {
         saveInterval: 1,
         analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
             ...options,
-            analyze: paper => {
+            analyze: (paper, sourceOptions) => {
                 const normalAnalyze = () => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper);
                 const grant = explicitRounds.get(normalizedId(paper));
                 const analyze = () => grant ? readerExplicitRound.withExplicitRound(paper, grant, normalAnalyze) : normalAnalyze();
-                return savedFacts.withRecoveredFeedback(paper, dailySourcePlan, analyze, feedbacks.get(normalizedId(paper)));
+                return savedFacts.analyzeWithRecoveredFeedback(paper, dailySourcePlan, analyze, feedbacks.get(normalizedId(paper)), sourceOptions);
             }
         }),
         preparePaperLocked: paper => {
