@@ -1151,7 +1151,84 @@ function scoringStabilityResolutionIsValid(stage) {
         && /^[a-f0-9]{64}$/.test(String(resolution?.secondAuditSha256 || ''));
 }
 
-function isAllowedReaderNarrativeNumeralIssue(issue, article = '') {
+// 只有同一原文条件和完整数量元组都明确时，保留对应位置的自然中文写法。
+// 这不是全局中文数词转数字；未获来源支持、单位改变或数量改变仍保留原诊断。
+function isSourceSupportedReaderQuantityIssue(issue, article, evidence) {
+    if (issue?.code !== 'quantitative_chinese_numeral' || !Number.isInteger(issue.index)) return false;
+    const text = String(article || ''), source = String(evidence?.sourceText || '');
+    const surface = String(issue.match || '').trim();
+    if (!source) return false;
+    if (!surface || text.slice(issue.index, issue.index + surface.length) !== surface) return false;
+    const within = match => issue.index >= match.index
+        && issue.index + surface.length <= match.index + match[0].length;
+    const denied = prefix => /(?:不|未|没有|并非|假设|假想|计划)[^，。；;\n]{0,12}$/u.test(prefix);
+    const deniedBodyTail = (match) => /(?:并非|不是|未|没有|尚未)[^，。；;\n]{0,12}(?:实测|测量|评估|记录|报告)|(?:假设|假想|计划)/u.test(text.slice(match.index + match[0].length).split(/[。；;\n]/u)[0]);
+    // 「四五成」只有对应原表同一库内列的三种归一化方法均在40–50%时才成立。
+    for (const match of text.matchAll(/库内[^，。；;\n]{0,30}掉到约四五成/gu)) {
+        if (!within(match) || denied(match[0].slice(0, match[0].indexOf('掉到'))) || deniedBodyTail(match)) continue;
+        if (!/With the enrolled cohort, however, the same methods lose roughly half of the baseline accuracy on that corpus\./.test(source)) continue;
+        const candidates = (evidence?.structuredArtifacts?.tables || []).filter(table => /Score normalization under two cohort choices/.test(table.caption || ''));
+        if (candidates.length !== 1) continue;
+        const supported = candidates.every(table => {
+            if (!/Score normalization under two cohort choices/.test(table.caption || '')
+                || !/\[%\]/.test(table.caption || '') || !Array.isArray(table.matrix)) return false;
+            const matrix = table.matrix;
+            const columns = (matrix[0] || []).map((name, column) => ({ name, column }))
+                .filter(({name,column}) => name === 'In-house' && matrix[1]?.[column] === 'Enr.');
+            if (columns.length !== 1) return false;
+            return ['Z-norm','T-norm','S-norm'].every(method => {
+                const rows = matrix.filter(row => row?.[0] === method);
+                if (rows.length !== 1) return false;
+                const raw = String(rows[0][columns[0].column] || '');
+                return /^\d+(?:\.\d+)?$/.test(raw) && Number(raw) >= 40 && Number(raw) <= 50;
+            });
+        });
+        if (supported) return true;
+    }
+    const chineseInteger = number => {
+        if (!Number.isSafeInteger(number) || number <= 0 || number >= 100000) return null;
+        const digits = '零一二三四五六七八九';
+        const small = n => {
+            let result = '', pendingZero = false;
+            for (const [base,unit] of [[1000,'千'],[100,'百'],[10,'十'],[1,'']]) {
+                const digit = Math.floor(n/base); n %= base;
+                if (digit) { if (pendingZero) result += '零'; result += (base === 10 && digit === 1 && !result ? '' : digits[digit]) + unit; pendingZero = false; }
+                else if (result && n) pendingZero = true;
+            }
+            return result;
+        };
+        if (number < 10000) return small(number);
+        const high = Math.floor(number/10000), low = number%10000;
+        return digits[high]+'万'+(low ? (low<1000?'零':'')+small(low) : '');
+    };
+    const sourceCount = raw => {
+        if (!/^\d+(?:\.\d+)?k?$/.test(raw)) return null;
+        const n = Number(raw.replace(/k$/,'')) * (raw.endsWith('k') ? 1000 : 1);
+        return Number.isSafeInteger(n) ? n : null;
+    };
+    const spellings = n => {
+        const full = chineseInteger(n);
+        if (!full) return [];
+        // 只从已明确的来源整数生成口语别名。8009的标准写法含零，不能猜成「八千九」。
+        return [full, ...(n%100===0 && /[一二三四五六七八九]百$/.test(full) ? [full.slice(0,-1)] : [])];
+    };
+    for (const sourceMatch of source.matchAll(/replay buffer (\d+(?:\.\d+)?k?) to (\d+(?:\.\d+)?k?) pairs against (\d+(?:\.\d+)?k?) random pairs/g)) {
+        const prefix = source.slice(0,sourceMatch.index).split(/[();.!?\n]/).pop();
+        if (/\b(?:not|no|without|unobserved|hypothetical|planned)\b/i.test(prefix)) continue;
+        const tail = source.slice(sourceMatch.index + sourceMatch[0].length).split(/[.!?;\n]/)[0];
+        if (/\b(?:not|never|without)\b[^.!?;\n]{0,24}\b(?:evaluated|measured|observed|collected|reported|recorded|used)\b|\b(?:unobserved|hypothetical|planned)\b/i.test(tail)) continue;
+        const values = sourceMatch.slice(1).map(sourceCount);
+        if (values.some(value => value === null)) continue;
+        for (const match of text.matchAll(/回放池([零一二两三四五六七八九十百千万]+)(?:到|至)([零一二两三四五六七八九十百千万]+)对而随机对有([零一二两三四五六七八九十百千万]+)对/gu)) {
+            if (!within(match) || denied(text.slice(0,match.index).split(/[，。；;\n]/).pop()) || deniedBodyTail(match)) continue;
+            if (values.every((value,index) => spellings(value).includes(match[index+1]))) return true;
+        }
+    }
+    return false;
+}
+
+function isAllowedReaderNarrativeNumeralIssue(issue, article = '', evidence = null) {
+    if (isSourceSupportedReaderQuantityIssue(issue, article, evidence)) return true;
     if (issue?.code !== 'quantitative_chinese_numeral') return false;
     const match = String(issue.match || '').trim();
     const articleText = String(article);
@@ -6601,7 +6678,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     const repairableSurfaceIssues = quality.issues.filter(issue => (
         issue.code === 'numeric_typography'
         || (issue.code === 'quantitative_chinese_numeral'
-            && !isAllowedReaderNarrativeNumeralIssue(issue, article))
+            && !isAllowedReaderNarrativeNumeralIssue(issue, article, options))
     ));
     if (repairableSurfaceIssues.length > 0) {
         article = withProtectedBridgeSurfaces(article, repairableSurfaceIssues);
@@ -6614,7 +6691,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     const finalSurfaceIssues = quality.issues.filter(issue => (
         issue.code === 'numeric_typography'
         || (issue.code === 'quantitative_chinese_numeral'
-            && !isAllowedReaderNarrativeNumeralIssue(issue, article))
+            && !isAllowedReaderNarrativeNumeralIssue(issue, article, options))
     ));
     if (finalSurfaceIssues.length > 0) {
         article = withProtectedBridgeSurfaces(article, finalSurfaceIssues);
@@ -6659,7 +6736,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     const blockingQualityIssues = quality.issues.filter(issue => !(
         issueFallsWithinReaderBridgeLine(issue, qualityArticle)
         || issueInProtectedReaderQuote(issue, qualityArticle)
-        || isAllowedReaderNarrativeNumeralIssue(issue, qualityArticle)
+        || isAllowedReaderNarrativeNumeralIssue(issue, qualityArticle, options)
         || isAllowedReaderDefensiveNegationIssue(issue, qualityArticle)
         || isReaderHeadingIssue(issue, qualityArticle)
     ));
