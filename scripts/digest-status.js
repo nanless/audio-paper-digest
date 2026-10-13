@@ -15,6 +15,7 @@ const {
     readJsonFileStrict,
     withFileLock,
     withFileLockSync,
+    LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY,
     isSuccessfulAnalysisRecord,
     hasValidAnalysisBody
 } = require('./analysis-engine.js');
@@ -547,7 +548,7 @@ function updateAnalysisDigestStatuses(analyzedPapers, options = {}) {
             writeFileAtomic(filePath, serializePapersDatabase(papersData));
         }
         return { updated, papersData };
-    });
+    }, { recoveryPolicy: LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
 }
 
 module.exports = {
