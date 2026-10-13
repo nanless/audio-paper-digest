@@ -1159,6 +1159,14 @@ function findMissingComparisonUnits(text) {
             );
         }
         const numericText = comparisonText
+            // 候选库大小、渲染链长和输入流数是实验设置，不是附近准确率的值。
+            // 只遮住明确带设置名称的完整整数，真正的结果数字仍逐个检查。
+            .replace(/(?<![A-Za-z0-9_.+\-−])\d+\s*候选库/gu,
+                match => ' '.repeat(match.length))
+            .replace(/链长\s*从\s*[1-9]\d*(?![\d.])\s*(?:到|至)\s*[1-9]\d*(?![\d.])/gu,
+                match => ' '.repeat(match.length))
+            .replace(/(?<![A-Za-z0-9_.+\-−])[1-9]\d*\s*流(?=\s*(?:在|模型|系统|配置|结构|输入|方案|融合|[，。；,.;]))/gu,
+                match => ' '.repeat(match.length))
             // 束搜索的完整整数束宽是解码条件，不能当成附近字错误率的裸结果。
             // 只遮住明确绑定的值；同句其他没有单位的指标数仍按原规则拒绝。
             .replace(/束宽\s*(?:为|取|=)?\s*[1-9]\d*(?![\d.])(?=\s*(?:的|时|[，。；：、,.;:]|$))/gu,
