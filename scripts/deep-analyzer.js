@@ -9721,6 +9721,8 @@ function getTextStageInputAnalysis(paper, stage, currentAnalysis) {
     // 假定紧邻的前一个阶段在那次旧运行里存在。
     for (let candidate = index - 1; candidate >= 0; candidate--) {
         const checkpoint = paper.analysisStageCheckpoints?.[physicalRecoveryStage(paper.analysisManifest, RECOVERY_STAGE_ORDER[candidate], paper.analysisStageCheckpoints)];
+        // 资源扫描不改正文；空占位不能作为后续文本输入或正文回退点。
+        if (RECOVERY_STAGE_ORDER[candidate] === 'demoLinkScan' && checkpoint === '') continue;
         if (typeof checkpoint === 'string') return checkpoint;
     }
     return String(currentAnalysis || '');
@@ -9730,6 +9732,8 @@ function previousStageCheckpoint(paper, stage) {
     const index = RECOVERY_STAGE_ORDER.indexOf(stage === 'taxonomySeal' ? 'tagSelection' : stage);
     for (let candidate = index - 1; candidate >= 0; candidate--) {
         const checkpoint = paper.analysisStageCheckpoints?.[physicalRecoveryStage(paper.analysisManifest, RECOVERY_STAGE_ORDER[candidate], paper.analysisStageCheckpoints)];
+        // 资源扫描不改正文；空占位不能作为后续文本输入或正文回退点。
+        if (RECOVERY_STAGE_ORDER[candidate] === 'demoLinkScan' && checkpoint === '') continue;
         if (typeof checkpoint === 'string') return checkpoint;
     }
     return null;
