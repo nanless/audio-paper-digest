@@ -243,7 +243,7 @@ const TABLE_NUMERIC_CELL_RE = /(?:^|[^A-Za-z])[-+]?\d(?:[\d,]*)(?:\.\d+)?(?:\s*(
 // 第一列也可能描述训练条件而不是指标。这里显式列出来，
 // 好让“训练损失 × evaluation metrics”这类表格按对比表处理，
 // 又不硬给条件列加上 ↑/↓ 标记。
-const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)$/i;
+const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?|目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)$/i;
 function isTableIdentifierHeader(value) {
     const normalized = String(value || '').trim();
     if (TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE.test(normalized)) return true;
@@ -749,6 +749,34 @@ function hasAffirmedOverfittingEvidence(text) {
     return false;
 }
 
+function sourceBackedIdentityColumns(table, sourceText) {
+    const rawSource = String(sourceText || '');
+    const source = rawSource.replace(/\s+/g, '');
+    const captions = [...rawSource.matchAll(/(?:^|\n)(?:Table\s+(?:[A-Z]?\d+|[IVXLCDM]+)|表\s*\d+)\s*[:：]/gmi)];
+    const blocks = captions.map((match, index) => {
+        const block = rawSource.slice(match.index,
+            Math.min(captions[index + 1]?.index ?? rawSource.length, match.index + 20000));
+        const heading = /(?:^|\n)\s*(?:(?:\d+(?:\.\d+)*|[IVXLCDM]+)\.?\s+[A-Z][^\n]{0,100}|(?:conclusions?|discussion|references?|appendix)(?:[ :：][^\n]{0,80})?)(?:\n|$)/im.exec(block);
+        return heading ? block.slice(0, heading.index) : block;
+    });
+    return new Set(table.header.flatMap((header, index) => {
+        if (table.rows.length < 2) return [];
+        const labels = table.rows.map(row => String(row[index] || '').trim());
+        if (String(header).trim() === '来源') {
+            const completeLabels = labels.every(label => label.length >= 1 && label.length <= 80 && /\p{L}/u.test(label));
+            return completeLabels && blocks.some(block => {
+                const lines = new Set(block.split('\n').map(line => line.trim()));
+                return lines.has('Source') && labels.every(label => lines.has(label));
+            }) ? [index] : [];
+        }
+        if (!/^(?:损失|loss)$/i.test(String(header).trim())) return [];
+        return labels.every(label => {
+            const match = /^\$?(\\mathcal\{L\}_\{\\(?:text|mathrm)\{[A-Za-z]{1,24}\}\})\$?$/.exec(label);
+            return match && source.includes(match[1]);
+        }) ? [index] : [];
+    }));
+}
+
 function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     const results = extractSection(analysis, '实验结果');
     if (!results) return null;
@@ -766,12 +794,13 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     let numericCells = 0;
     const resultLines = results.split('\n');
     for (const [index, table] of tables.entries()) {
-        if (table.identifierColumns < 1) {
+        const categoricalLossColumns = sourceBackedIdentityColumns(table, options.sourceText);
+        if (table.identifierColumns < 1 && categoricalLossColumns.size === 0) {
             return `实验结果第 ${index + 1} 张表缺少方法、数据集或设置识别列`;
         }
-        for (const header of table.header) {
+        for (const [column, header] of table.header.entries()) {
             const normalized = header.replace(/[*_`]/g, '').trim();
-            const identifier = isTableIdentifierHeader(normalized);
+            const identifier = isTableIdentifierHeader(normalized) || categoricalLossColumns.has(column);
             if (!identifier && TABLE_VAGUE_METRIC_HEADER_RE.test(normalized)) {
                 return `实验结果第 ${index + 1} 张表含叙述型伪指标列“${normalized}”，应改为可核对指标、设置或比较对象`;
             }
@@ -782,7 +811,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
             }
         }
         const metricIndexes = table.header.flatMap((header, index) => (
-            isTableIdentifierHeader(header.replace(/<br\s*\/?>/gi, ' ').replace(/[*_`]/g, '').trim())
+            isTableIdentifierHeader(header.replace(/<br\s*\/?>/gi, ' ').replace(/[*_`]/g, '').trim()) || categoricalLossColumns.has(index)
                 ? [] : [index]
         ));
         for (const row of table.rows) {

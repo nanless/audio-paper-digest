@@ -255,7 +255,7 @@ TABLE_IDENTIFIER_HEADER_RE = re.compile(
     r'config(?:uration)?|dataset|corpus|benchmark|task|experiment|evaluation|test|'
     r'comparison|control|boundary|slice|subset|input|query|language|scenario|condition|setting|split|category|'
     r'type|modality|version|stage|phase|step|round|epoch|decoder|decode|context|metric|'
-    r'measure)(?:\b|$)|^编辑操作$|方法|算法|方案|策略|方式|机制|聚合|模型|系统|骨干|前端|流程|变体|消融(?:项|设置|变体)?|表征|嵌入|特征|编码器|基线|'
+    r'measure)(?:\b|$)|^(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?$|^编辑操作$|方法|算法|方案|策略|方式|机制|聚合|模型|系统|骨干|前端|流程|变体|消融(?:项|设置|变体)?|表征|嵌入|特征|编码器|基线|'
     r'配置|数据集|语料|基准|任务|实验|检验|评估|测试|比较|对照|边界|切片|子集|输入|查询|题数|语言|场景|条件|设置|划分|类别|'
     r'类型|模态|版本|阶段|阶数|步骤|轮次|训练轮|解码|上下文|指标|度量)',
     flags=re.IGNORECASE,
@@ -298,7 +298,7 @@ def _is_table_identifier_header(value):
     """与 Node 对带方向指标表头的处理保持一致。"""
     normalized = str(value or '').strip()
     # 与 Node 显式列出的训练条件识别符保持一致。
-    if re.fullmatch(r'(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)', normalized, flags=re.IGNORECASE):
+    if re.fullmatch(r'(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)', normalized, flags=re.IGNORECASE):
         return True
     if not normalized:
         return True
@@ -3397,11 +3397,41 @@ def _source_experiment_evidence(source_text):
     return tail[:end.start()] if end and end.start() > 0 else tail
 
 
+def _source_backed_identity_columns(table, source_text):
+    raw_source = str(source_text or '')
+    source = re.sub(r'\s+', '', raw_source)
+    captions = list(re.finditer(r'(?:^|\n)(?:Table\s+(?:[A-Z]?\d+|[IVXLCDM]+)|表\s*\d+)\s*[:：]', raw_source, re.I))
+    blocks = []
+    for index, match in enumerate(captions):
+        block = raw_source[match.start():min(captions[index + 1].start() if index + 1 < len(captions) else len(raw_source), match.start() + 20000)]
+        heading = re.search(r'(?:^|\n)\s*(?:(?:\d+(?:\.\d+)*|[IVXLCDM]+)\.?\s+[A-Z][^\n]{0,100}|(?:conclusions?|discussion|references?|appendix)(?:[ :：][^\n]{0,80})?)(?:\n|$)', block, re.I)
+        blocks.append(block[:heading.start()] if heading else block)
+    columns = set()
+    for index, header in enumerate(table['header']):
+        if len(table['rows']) < 2:
+            continue
+        labels = [str(row[index] if index < len(row) else '').strip() for row in table['rows']]
+        if str(header).strip() == '来源':
+            complete_labels = all(1 <= len(label) <= 80 and any(character.isalpha() for character in label) for label in labels)
+            for block in blocks:
+                lines = set(line.strip() for line in block.split('\n'))
+                if complete_labels and 'Source' in lines and all(label in lines for label in labels):
+                    columns.add(index)
+            continue
+        if not re.fullmatch(r'(?:损失|loss)', str(header).strip(), re.I):
+            continue
+        matches = [re.fullmatch(r'\$?(\\mathcal\{L\}_\{\\(?:text|mathrm)\{[A-Za-z]{1,24}\}\})\$?', label) for label in labels]
+        if all(match and match[1] in source for match in matches):
+            columns.add(index)
+    return columns
+
+
 def _validate_experiment_table_evidence_depth(
         analysis, document_type='', source_text=''):
     results = _extract_analysis_section(analysis, '实验结果')
     tables = extract_markdown_tables(results)
     empirical = document_type not in {'综述', '理论研究'}
+    complete_source_text = source_text
     source_text = _source_experiment_evidence(source_text)
     source_has_table = re.search(
         r'\b(?:table|tbl)\.?\s*(?:[a-z]?\d+|[ivxlcdm]+)\b|'
@@ -3418,11 +3448,12 @@ def _validate_experiment_table_evidence_depth(
     numeric_cells = 0
     result_lines = results.splitlines()
     for index, table in enumerate(tables, start=1):
-        if table['identifier_columns'] < 1:
+        categorical_loss_columns = _source_backed_identity_columns(table, complete_source_text)
+        if table['identifier_columns'] < 1 and not categorical_loss_columns:
             return f'实验结果第 {index} 张表缺少方法、数据集或设置识别列'
-        for header in table['header']:
+        for column, header in enumerate(table['header']):
             normalized = re.sub(r'[*_`]', '', header).strip()
-            identifier = _is_table_identifier_header(normalized)
+            identifier = _is_table_identifier_header(normalized) or column in categorical_loss_columns
             if not identifier and TABLE_VAGUE_METRIC_HEADER_RE.search(normalized):
                 return f'实验结果第 {index} 张表含叙述型伪指标列“{normalized}”，应改为可核对指标、设置或比较对象'
             if (not identifier
@@ -3430,8 +3461,15 @@ def _validate_experiment_table_evidence_depth(
                     and not TABLE_DIRECTION_MARK_RE.search(normalized)
                     and not TABLE_NON_DIRECTIONAL_MEASURE_RE.search(normalized)):
                 return f'实验结果第 {index} 张表指标“{normalized}”缺少 ↑/↓ 方向'
+        metric_indexes = [
+            column for column, header in enumerate(table['header'])
+            if not _is_table_identifier_header(
+                re.sub(r'[*_`]', '', re.sub(r'<br\s*/?>', ' ', header, flags=re.I)).strip())
+            and column not in categorical_loss_columns
+        ]
         for row in table['rows']:
-            for cell in row[min(table['identifier_columns'], len(row)):]:
+            for column in metric_indexes:
+                cell = row[column] if column < len(row) else ''
                 normalized = re.sub(r'[*_`]', '', str(cell or '')).strip()
                 if TABLE_NUMERIC_CELL_RE.search(normalized):
                     numeric_cells += 1
