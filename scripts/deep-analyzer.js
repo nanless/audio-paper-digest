@@ -1890,6 +1890,13 @@ function normalizeExplicitReaderSymbolProjection(value) {
     output = output.replace(/(?<![A-Za-z0-9_.+−-])([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))%\s*([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))\\%(?![\p{L}\p{N}._^\\({])/gu,
         (whole, visible, tex, offset, input) => hasContinuation(input, offset + whole.length)
             || visible.replace('−', '-') !== tex.replace('−', '-') ? whole : `${visible}%`);
+    // 范数符号只接受完整可见下标与明确 TeX 同义，不从裸重复或续式猜值。
+    output = output.replace(/(?<![\p{L}\p{N}_])ℓ(∞|[0-9]+)\\ell_\{(\\infty|[0-9]+)\}(?![\p{L}\p{N}_^\\({+−=×÷/*<>≤≥-])/gu,
+        (whole, visibleIndex, texIndex, offset, input) => {
+            if (/^\s*[\p{L}\p{N}_^\\({+−=×÷/*<>≤≥-]/u.test(input.slice(offset + whole.length))) return whole;
+            const projectedIndex = texIndex === '\\infty' ? '∞' : texIndex;
+            return visibleIndex === projectedIndex ? 'ℓ' + visibleIndex : whole;
+        });
     const greek = { Delta:'Δ', alpha:'α', beta:'β', gamma:'γ', tau:'τ', lambda:'λ', omega:'ω' };
     const baseProjection = base => {
         const command = /^\\([A-Za-z]{1,24})$/.exec(base);

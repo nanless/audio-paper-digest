@@ -5710,6 +5710,18 @@ def _normalize_api_reader_explicit_symbol_projection(value):
         percentage_stars, output,
     )
 
+    def norm_symbol(match):
+        tail = match.string[match.end():].lstrip()
+        if tail and (unicodedata.category(tail[0])[0] in ('L', 'N')
+                     or tail[0] in '_^\\({+−=×÷/*<>≤≥-'):
+            return match[0]
+        projected_index = '∞' if match[2] == '\\infty' else match[2]
+        return 'ℓ' + match[1] if match[1] == projected_index else match[0]
+    output = re.sub(
+        r'(?<![^\W_])(?<!_)ℓ(∞|[0-9]+)\\ell_\{(\\infty|[0-9]+)\}(?![^\W_]|[_^\\({+−=×÷/*<>≤≥-])',
+        norm_symbol, output,
+    )
+
     greek = {'Delta': 'Δ', 'alpha': 'α', 'beta': 'β', 'gamma': 'γ',
              'tau': 'τ', 'lambda': 'λ', 'omega': 'ω'}
     atom = re.compile(
