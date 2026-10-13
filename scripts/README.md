@@ -670,3 +670,5 @@ Reader 普通草稿在语言诊断前，只用已有完整原句补回来源的�
 `prompts/api-reader-concept-terms-v1.md` 只在正常 Reader 修复中、术语单符号长度是唯一阻断时自动采用。程序先在临时副本上检查其他正文、来源与结构，再只发送原术语、既有解释和逐字相关原文；响应只允许获准 terms 叶值。其余字段逐字保留，仍完整解析文章。窄模板实际字节进入 `repairImplementationSha256`，请求与成功阶段另记录实际协议、路径、模板 SHA 和术语前后 SHA，原 v11 保留作为普通修复模板。旧费用、尝试与剩余额度保持，不为这个分流增加预算。可选真实11792重放使用 `PD_READER_CONCEPT_TERMS_SOURCE_PROJECT`；缺少该环境变量明确跳过。
 
 正常 `npm run deep -- --date YYYY-MM-DD` 续跑会读取当前来源运行目录 `fact-feedback/` 中保存的原纠错说明。只有各阶段保存的证明全部对应同一份说明，并通过来源、原始输入和引文检查时才恢复；获取论文锁后还会重新读取。文件缺失或各阶段说明不同的论文保留未完成记录，不清除付费次数，也不影响其他论文继续。正常使用已核验纠错说明时会保存原文件，已有文件不覆盖；无需单篇临时调用脚本。分析并发由 `PD_ANALYSIS_CONCURRENCY` 设置，该命令不接受 `--concurrency` 参数。
+
+Reader 表格事实审校由 `lib/reader-table-semantic-audit.js` 和 `../prompts/api-reader-table-audit-v1.md` 提供，挂接正常深度分析和 Reader 刷新；独立请求及费用、来源硬核验、旧正文复用和局部修复说明见 [Reader 表格事实审校](../docs/reader-table-semantic-audit.md)。

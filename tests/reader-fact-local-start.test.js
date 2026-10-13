@@ -179,7 +179,7 @@ test('完整主文的旧失败允许真实Reader-only反馈派生局部seed而�
         const feedback = facts.reviewFeedback('apiReaderArticle', sample.id);
         assert.equal(
             engine.getIncompleteAnalysisContentReason(sample.paper),
-            null,
+            require('../scripts/lib/reader-table-semantic-audit').PENDING_REASON,
         );
         assert.equal(
             deep.hasReviewedReaderFactLocalSeed(
@@ -446,7 +446,7 @@ test('真实公共入口拒坏旧时间并保存无旧失败成功稿，主文�
     const originalMainProof = structuredClone(
         sample.paper.analysisManifest.stages.primaryAnalysis.factReview,
     );
-    const correctedPaper = (paper, feedback) => {
+    const correctedPaper = async (paper, feedback) => {
         const updated = structuredClone(paper);
         updated.apiReaderArticle = updated.apiReaderArticle.replace(
             sample.feedback.rejectedReaderClaims[0],
@@ -457,6 +457,7 @@ test('真实公共入口拒坏旧时间并保存无旧失败成功稿，主文�
         stage.reviewFeedbackSha256 = facts.sha(feedback.trim());
         stage.factReview = sample.bound.proof;
         stage.refreshedAt = '2026-10-12T00:00:00.000Z';
+        await require('./fixtures/local-reader-table-audit.cjs').attachValidReaderTableAudit(updated, sample.source, sample.bound);
         return updated;
     };
     for (const alter of [
@@ -479,11 +480,12 @@ test('真实公共入口拒坏旧时间并保存无旧失败成功稿，主文�
                     ),
                     operations: {
                         article: async (paper, _source, options) => {
-                            const updated = correctedPaper(
+                            const updated = await correctedPaper(
                                 paper,
                                 options.reviewFeedback,
                             );
                             alter(updated);
+                            await require('./fixtures/local-reader-table-audit.cjs').attachValidReaderTableAudit(updated, sample.source, sample.bound);
                             return updated;
                         },
                     },

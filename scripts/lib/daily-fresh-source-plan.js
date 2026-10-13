@@ -124,6 +124,7 @@ function uuidFromHash(value) {
 
 function sourceIds(papers) {
     if (!Array.isArray(papers)) fail('papers 必须是数组');
+    if (papers.some(paper => Object.hasOwn(paper, 'directPaperId'))) fail('日更论文不能夹带历史直改身份');
     const ids = papers.map(paper => normalizedId(paper));
     if (ids.some(id => !ARXIV_ID.test(id))) fail('每日入选论文缺少规范化的 arXiv 身份');
     if (new Set(ids).size !== ids.length) fail('每日入选论文集合含重复的 arXiv 身份');
@@ -250,6 +251,7 @@ async function captureDailyFreshSources(plan, options = {}) {
 }
 
 function readDailyFreshSource(plan, paper) {
+    if (paper && typeof paper === 'object' && Object.hasOwn(paper, 'directPaperId')) fail('日更论文不能夹带历史直改身份');
     const id = normalizedId(paper);
     if (!plan.paperIds.includes(id)) fail('论文不在该每日来源计划内');
     const details = fresh.readFreshSource(plan.runDir, { arxivId: id }, analysisIdentity(plan));
@@ -329,7 +331,7 @@ function readRecoveryMetadata(payload, { papers = null, label = '日更恢复' }
     if (payload.batchDate !== plan.batchDate) {
         fail(`${label} 的 batchDate 与封存的每日来源运行不同`);
     }
-    const ids = rows.map(normalizedId);
+    const ids = sourceIds(rows);
     if (ids.some(id => !ARXIV_ID.test(id)) || new Set(ids).size !== ids.length
         || ids.length !== plan.paperIds.length
         || ids.slice().sort().join('\0') !== plan.paperIds.join('\0')) {

@@ -99,6 +99,15 @@ function analyzeWithRecoveredFeedback(paper, plan, analyze, explicitFeedback = n
         analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explicitFeedback, options));
 }
 async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explicitFeedback, options) {
+    if (explicitFeedback) {
+        const bound = facts.validateFeedback(explicitFeedback, plan, paper);
+        if (savedProofs(paper).some(proof => daily.stableHash(proof) === daily.stableHash(bound.proof))) {
+            if (!require('../analysis-engine').paperAnalysisLockHeld(paper)) throw new Error('原纠错说明恢复须持有当前论文锁');
+            // 只保存与真实旧阶段证明完全相同的原包，不把它当作新增Reader授权。
+            facts.withFactReview(bound, () => undefined);
+            explicitFeedback = null;
+        }
+    }
     const original = explicitFeedback ? null : readSavedFeedback(paper, plan);
     const feedback = explicitFeedback || original?.feedback;
     if (!readerOnlyFeedback(feedback))
@@ -123,6 +132,20 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
         require('../deep-analyzer').captureStaleAnalysisSnapshot(target, target.analysisManifest,
             'apiReaderArticle', bound.proof.feedbackSha256);
         const before = protectedReaderUpstream(target);
+        const checkpointKey = Symbol.for('audio-paper-digest.analysisCheckpointCallback');
+        const originalPersist = paper[checkpointKey];
+        Object.defineProperty(target, checkpointKey, {
+            configurable: true,
+            value: checkpoint => {
+                if (daily.stableHash(protectedReaderUpstream(checkpoint)) !== daily.stableHash(before)) {
+                    const error = new Error('独立Reader纠错的检查点改变了原主文、摘要、评分或费用历史');
+                    error.code = 'READER_CHECKPOINT_PROTECTION_REJECTED'; error.retryable = false; throw error;
+                }
+                // 正常引擎失败收尾仍读取原对象，必须保留已返回的真实文章与审校记录。
+                Object.assign(paper, checkpoint);
+                return typeof originalPersist === 'function' ? originalPersist(paper) : undefined;
+            }
+        });
         const fresh = require('./fresh-analysis-context');
         const source = require('./model-text-sanitization').currentModelInputSource(paper);
         if (!source) throw new Error('Reader纠错缺少当前已核验封存来源');

@@ -248,11 +248,11 @@ function withReaderFactReview(readerBound, paper, callback) {
     return scope.run(Object.freeze({ ...(previous || { feedback: reader, proof: null }), readerBound: freshBound, readerOnly: true, readerText }), callback);
 }
 function assertScoringOnlyModelStageAllowed(stage) {
-    if (current()?.readerOnly && !['apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe'].includes(stage))
+    if (current()?.readerOnly && !['apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe', 'apiReaderTableAudit'].includes(stage))
         fail(READER_SCOPE_MODEL_REJECTED);
-    if (current()?.coreOnly && !['coreSummaryRepair', 'scoringAudit', 'apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe'].includes(stage))
+    if (current()?.coreOnly && !['coreSummaryRepair', 'scoringAudit', 'apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe', 'apiReaderTableAudit'].includes(stage))
         fail('独立核心纠错范围不能调用主分析或其他主文重写模型');
-    if (current()?.scoringOnly && stage !== 'scoringAudit') fail('独立评分范围不允许正文或Reader模型请求');
+    if (current()?.scoringOnly && !['scoringAudit', 'apiReaderTableAudit'].includes(stage)) fail('独立评分范围不允许正文或Reader模型请求');
 }
 function current(paperId) {
     const value = scope.getStore();

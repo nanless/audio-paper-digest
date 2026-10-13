@@ -40,14 +40,18 @@ const deep = require('../scripts/deep-analyzer');
 const engine = require('../scripts/analysis-engine');
 const policy = require('../scripts/lib/selected-full-stage-reanalysis');
 const { validAnalysisPaper } = require('./valid-analysis-fixture');
+const { attachValidReaderTableAudit } = require('./fixtures/local-reader-table-audit.cjs');
 async function createSample(t, { fullSource = true, quantitativeSource = false } = {}) {
     const root = fs.mkdtempSync(
         path.join(fs.realpathSync(os.tmpdir()), 'reviewed-reader-seed-'),
     );
     const previous = Config.FILES.dailyFreshSourceRunsDir;
+    const previousUsage = Config.FILES.llmUsageDir;
+    Config.FILES.llmUsageDir = path.join(root, 'usage');
     Config.FILES.dailyFreshSourceRunsDir = path.join(root, 'runs');
     t.after(() => {
         Config.FILES.dailyFreshSourceRunsDir = previous;
+        Config.FILES.llmUsageDir = previousUsage;
         fs.rmSync(root, { recursive: true, force: true });
     });
     const signed = require('./reader-signed-draft-fixture').fixture({
@@ -317,9 +321,10 @@ test('签名完整成功样本退出作用域仍合格，同run公共再次进�
     const sample = await createSample(t, { fullSource: false });
     sample.paper.analysisManifest.version = 1;
     sample.paper.analysisManifest.stages.openSourceScan.status = 'complete';
+    await attachValidReaderTableAudit(sample.paper, sample.source, sample.bound);
     assert.equal(engine.getIncompleteAnalysisContentReason(sample.paper), null);
     let completed;
-    await inScope(sample, () => engine.withPaperAnalysisLock(sample.paper, () => facts.withFactReview(sample.bound, () => {
+    await inScope(sample, () => engine.withPaperAnalysisLock(sample.paper, () => facts.withFactReview(sample.bound, async () => {
         const prepared = policy.preparePaperLocked(sample.paper);
         completed = structuredClone(sample.paper);
         completed.fullStageReanalysis = prepared.fullStageReanalysis;
@@ -330,6 +335,7 @@ test('签名完整成功样本退出作用域仍合格，同run公共再次进�
                 deep.markRecoveryStage(completed.analysisManifest, name, 'complete', completed.analysisManifest.stages[name]);
             }
         });
+        await attachValidReaderTableAudit(completed, sample.source);
     })));
     assert.equal(engine.isSuccessfulAnalysisRecord(completed), true);
     assert.equal(policy.completedThisRun(completed), true);
@@ -860,6 +866,7 @@ test('Reader原输入恢复只核指定快照，不清旧失败或旧候选，�
         delete final.analysisCheckpoint;
         delete current.analysisCheckpoint;
         // 模拟正常 deep 的返回方式；返回正文后删除暂存检查点并不是改写主文。
+        await attachValidReaderTableAudit(final, sample.source);
         return final;
     });
     delete require.cache[require.resolve('../scripts/reanalyze-selected')];

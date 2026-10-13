@@ -124,6 +124,7 @@ const ANALYSIS_CONFIG = {
     primaryThinkingMode: 'disabled',
     auxiliaryThinkingMode: 'disabled',
     apiReaderRepairMaxTokens: 8000,
+    apiReaderTableAuditMaxTokens: 12000,
     apiTemperature: 0.7,
     scoringAuditTemperature: 0.1,
     imagePlanTemperature: 0.2,
@@ -436,6 +437,8 @@ function applyEnvOverrides() {
     if (apiReaderMaxTokens) {
         ANALYSIS_CONFIG.apiReaderMaxTokens = apiReaderMaxTokens;
     }
+    const apiReaderTableAuditMaxTokens = readPositiveInt('PD_API_READER_TABLE_AUDIT_MAX_TOKENS');
+    if (apiReaderTableAuditMaxTokens) ANALYSIS_CONFIG.apiReaderTableAuditMaxTokens = apiReaderTableAuditMaxTokens;
     const apiReaderRepairMaxTokens = readPositiveInt('PD_API_READER_REPAIR_MAX_TOKENS');
     if (apiReaderRepairMaxTokens) ANALYSIS_CONFIG.apiReaderRepairMaxTokens = apiReaderRepairMaxTokens;
     const evidenceCharOverrides = {

@@ -14,9 +14,11 @@ const status = require('../scripts/digest-status');
 const utils = require('../scripts/utils');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const write = (file, value) => fs.writeFileSync(file, JSON.stringify(value), { mode: 0o600 });
+const { attachValidReaderTableAudit: completeLocalTableAudit } = require('./fixtures/local-reader-table-audit.cjs');
+
 async function createSample(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'completed-status-sync-'));
-    const keys = ['dailyFreshSourceRunsDir', 'deepAnalysisResult', 'filteredPapers', 'papers', 'papersLegacy'];
+    const keys = ['dailyFreshSourceRunsDir', 'deepAnalysisResult', 'filteredPapers', 'papers', 'papersLegacy', 'llmUsageDir'];
     const previous = Object.fromEntries(keys.map(key => [key, Config.FILES[key]]));
     Config.FILES.dailyFreshSourceRunsDir = path.join(root, 'sources');
     for (const key of keys.slice(1)) Config.FILES[key] = path.join(root, key + '.json');
@@ -51,6 +53,7 @@ async function createSample(t) {
         for (const paper of papers) fresh.attachFreshSourceRecord(paper, paper.analysisManifest, daily.readDailyFreshSource(plan, paper));
     });
     for (const paper of papers) {
+        await completeLocalTableAudit(paper, daily.readDailyFreshSource(plan, paper));
         assert.equal(engine.isSuccessfulAnalysisRecord(paper), true, engine.getIncompleteAnalysisContentReason(paper));
         assert.equal(daily.isPaperReusableForAnalysis(paper, plan), true);
     }

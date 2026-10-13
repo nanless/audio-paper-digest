@@ -191,7 +191,24 @@ function evidence(table) {
     return proof;
 }
 
+function fullWidthLabelRow(table, row) {
+    const matrix = table?.matrix;
+    const values = matrix?.[row];
+    if (table?.recoveryStatus !== 'complete' || !/^[a-f0-9]{64}$/.test(table.sourceDomSha256 || '')
+        || !Array.isArray(values) || values.length < 2 || !Array.isArray(table.cells)
+        || matrix.some(value => !Array.isArray(value) || value.length !== values.length)) return false;
+    const cells = table.cells.filter(cell => Number.isInteger(cell?.row)
+        && row >= cell.row && row < cell.row + Number(cell.rowspan || 1));
+    const cell = cells[0];
+    return cells.length === 1 && cell.row === row && cell.column === 0
+        && cell.colspan === values.length && (cell.rowspan === undefined || cell.rowspan === 1)
+        && /^[a-f0-9]{64}$/.test(cell.sourceDomSha256 || '')
+        && typeof cell.text === 'string' && /[\p{L}]/u.test(cell.text)
+        && values.every(value => value === cell.text);
+}
+
 function displayCell(table, row, column) {
+    if (column > 0 && fullWidthLabelRow(table, row)) return '';
     const sourceCell = (table?.cells || []).find(cell => Number.isInteger(cell?.row)
         && Number.isInteger(cell?.column) && row >= cell.row
         && row < cell.row + Number(cell.rowspan || 1)
@@ -208,8 +225,33 @@ function displayCell(table, row, column) {
 }
 
 function displayMatrix(table) {
-    if (!evidence(table)) return (table?.matrix || []).map(row => [...row]);
     return (table?.matrix || []).map((row, ri) => row.map((_, ci) => displayCell(table, ri, ci)));
+}
+
+// 旧完整表的重复展示仍可只读核验；新展示仅折叠DOM证明的全幅文字行。
+function displayCellMatches(table, row, column, text, normalize = value => value) {
+    const current = normalize(displayCell(table, row, column));
+    return normalize(text) === current || column > 0 && fullWidthLabelRow(table, row)
+        && normalize(text) === normalize(table.matrix[row][column]);
+}
+
+function savedMergedCellMatches(paper, binding, cell, displayed) {
+    if (displayed !== '' || cell?.renderedText !== ''
+        || !Number.isInteger(cell?.sourceRow) || cell.sourceRow < 0
+        || !Number.isInteger(cell?.sourceColumn) || cell.sourceColumn <= 0) return false;
+    const payload = paper?.apiReaderPlan?.structuredSourcePayload;
+    const source = paper?.analysisManifest?.sourceAcquisition;
+    if (typeof payload !== 'string' || sha(payload) !== source?.structuredArtifactsSha256
+        || paper.sourceSha256 !== source?.sourceSha256) return false;
+    let artifacts;
+    try { artifacts = JSON.parse(payload); } catch (_) { return false; }
+    if (artifacts.flattenedTextSha256 !== source.sourceSha256) return false;
+    const tables = (artifacts.tables || []).filter(table => table.ordinal === binding.sourceTableOrdinal
+        && table.sourceDomSha256 === binding.sourceTableDomSha256);
+    if (tables.length !== 1 || !fullWidthLabelRow(tables[0], cell.sourceRow)) return false;
+    const original = tables[0].cells.find(value => value.row === cell.sourceRow);
+    return original.text === cell.sourceText && original.sourceDomSha256 === cell.sourceDomSha256
+        && cell.sourceColumn < tables[0].matrix[cell.sourceRow].length;
 }
 
 // 既有表格逐格重新核验完全相同、仅规则文件SHA变化时，更新程序检查元数据。
@@ -311,4 +353,4 @@ function savedCellMatches(binding, cell, displayed) {
 }
 
 module.exports = { CONTRACT, replaySavedProofMetadata, supported, withArtifacts, withSavedPaper, evidence,
-    displayCell, displayMatrix, savedCellMatches };
+    displayCell, displayMatrix, displayCellMatches, fullWidthLabelRow, savedMergedCellMatches, savedCellMatches };

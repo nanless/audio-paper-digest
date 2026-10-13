@@ -17,7 +17,9 @@ const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const DATE = '2026-09-07';
 const IDS = ['2609.10001', '2609.10002'];
 
-function sourceBoundPaper(plan, id) {
+const { attachValidReaderTableAudit: completeLocalTableAudit } = require('./fixtures/local-reader-table-audit.cjs');
+
+async function sourceBoundPaper(plan, id) {
     const source = daily.readDailyFreshSource(plan, { arxivId: id });
     const base = validAnalysisPaper(id);
     const reader = validLegacyApiAnalysisPaper(id);
@@ -32,6 +34,7 @@ function sourceBoundPaper(plan, id) {
     const sourceSha = source.freshSourceDescriptor.sourceSha256;
     reader.sourceSha256 = sourceSha;
     reader.analysisManifest.sourceAcquisition.sourceSha256 = sourceSha;
+    reader.analysisManifest.sourceAcquisition.structuredArtifactsSha256 = source.freshSourceDescriptor.structuredArtifactsSha256;
     const authorIdentity = reader.apiReaderAuthors.identity;
     authorIdentity.sourceTextSha256 = sourceSha;
     for (const author of authorIdentity.authors) {
@@ -45,6 +48,7 @@ function sourceBoundPaper(plan, id) {
     reader.analysisManifest.stages.openSourceScan.resourceEvidenceSha256 = reader.apiReaderResources.identitySha256;
     Object.assign(reader.analysisManifest.stages.apiReaderArticle, {
         sourceBindingsSourceTextSha256: sourceSha,
+        structuredArtifactsSha256: source.freshSourceDescriptor.structuredArtifactsSha256,
         readerAuthorIdentitySha256: reader.apiReaderAuthors.identitySha256,
         readerAuthorsSha256: stableSha256(reader.apiReaderAuthors),
         resourceIdentitySha256: reader.apiReaderResources.identitySha256
@@ -52,9 +56,11 @@ function sourceBoundPaper(plan, id) {
     const proof = { contract: 'fresh-source-analysis-v1', runId: plan.runId, sourceGeneration: 1,
         sourceManifestSha256: source.freshSourceDescriptor.sourceManifestSha256,
         sourceSha256: sourceSha, sourceSnapshotSha256: source.freshSourceDescriptor.sourceSnapshotSha256,
+        structuredArtifactsSha256: source.freshSourceDescriptor.structuredArtifactsSha256,
         sourceOnly: true, oldGeneratedTextIncluded: false };
     reader.freshRewriteProvenance = proof;
     reader.analysisManifest.freshRewriteProvenance = structuredClone(proof);
+    await completeLocalTableAudit(reader, source);
     assert.equal(isSuccessfulAnalysisRecord(reader), true, '正常测试样例数据必须通过实际分析完成校验');
     assert.equal(llmApiPaperComplete(reader), true, '正常测试样例数据必须通过实际 API Reader、评分与来源核验');
     return reader;
@@ -70,7 +76,7 @@ async function fixture(t) {
         filteredPapers: 'filtered-papers.json', deepAnalysisResult: 'deep-analysis-result.json',
         papers: 'papers.json', analysisWaiverDir: 'analysis-waivers',
         visualSummaryManifestDir: 'visuals', digestCoverManifestDir: 'covers',
-        postPublishVisualWaiverDir: 'visual-waivers', dailyFreshSourceRunsDir: 'daily-runs' };
+        postPublishVisualWaiverDir: 'visual-waivers', dailyFreshSourceRunsDir: 'daily-runs', llmUsageDir: 'usage' };
     for (const [key, name] of Object.entries(names)) Config.FILES[key] = path.join(Config.CURRENT_DIR, name);
     t.after(() => {
         Config.CURRENT_DIR = previousDir;
@@ -93,7 +99,7 @@ async function fixture(t) {
             fetchPdf: async id => ({ bytes: Buffer.from(`%PDF-1.4\n${id}\n%%EOF\n`),
                 url: `https://arxiv.org/pdf/${id}.pdf`, fetchedAt: `${DATE}T00:00:01.000Z` })
         }) });
-    const papers = IDS.map(id => sourceBoundPaper(plan, id));
+    const papers = await Promise.all(IDS.map(id => sourceBoundPaper(plan, id)));
     const deep = { batchDate: DATE, papers, dailyFreshSourceRun: daily.dailyFreshSourceReference(plan) };
     const filtered = { batchDate: DATE, status: 'complete', papers: IDS.map(arxivId => ({ arxivId, fetchBatchDate: DATE })),
         stats: { afterBlogSkip: 2, decisionCount: 2, afterFilter: 2, afterArchiveSkip: 2, skippedFromArchive: 0 } };

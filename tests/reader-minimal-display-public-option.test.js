@@ -99,7 +99,7 @@ test('公共长文刷新把精简显示选项交给真实文章入口，缺省�
             signedRevisionMinimalDisplay: value,
             operations: { article: async (paper, source, options) => {
                 calls++;
-                assert.equal(options.signedRevisionMinimalDisplay, value === true);
+                assert.equal(options.signedRevisionMinimalDisplay, value);
                 assert.equal(options.readerFactLocalRevision, false);
                 assert.equal(source.text, direct.getDirectRewriteSource(paper).text);
                 throw sentinel;
@@ -165,7 +165,7 @@ test('公共刷新经真实分析器与生成器使用精简显示到模型前�
         throw sentinel;
     };
     t.after(() => { requestBoundaryHandler = null; });
-    await assert.rejects(reader.refreshApiReader(id, { signedRevisionMinimalDisplay: true, reviewFeedback: '按原文修正当前表达，保留其余事实。',
+    await assert.rejects(reader.refreshApiReader(id, { reviewFeedback: '按原文修正当前表达，保留其余事实。',
         refreshReaderDiagnostics: true }), error => error.code === sentinel.code);
     assert.equal(requestBoundaries, 1);
     assert.deepEqual(fs.readFileSync(Config.FILES.deepAnalysisResult), before);

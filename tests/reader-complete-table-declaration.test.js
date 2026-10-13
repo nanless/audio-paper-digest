@@ -88,10 +88,12 @@ test('完整原表精确冗余模式标签不改变原表或来源核验', () =>
     }
 });
 
-function createFullReaderTableSample() {
+function createFullReaderTableSample(mergedRows = false) {
     const { parseArxivStructuredArtifactsFromHtml, bindStructuredArtifactsToText, parseApiReaderArticleResult } = require('../scripts/deep-analyzer.js');
     const header = '<thead><tr><th>System</th><th>WER</th><th>CER</th><th>Latency</th><th>Memory</th></tr></thead>';
-    const rows = '<tbody><tr><td>Baseline</td><td>4.8%</td><td>3.1%</td><td>2 ms</td><td>8 GB</td></tr><tr><td>Proposed</td><td>4.1%</td><td>2.9%</td><td>3 ms</td><td>9 GB</td></tr></tbody>';
+    const ordinaryRows = '<tbody><tr><td>Baseline</td><td>4.8%</td><td>3.1%</td><td>2 ms</td><td>8 GB</td></tr><tr><td>Proposed</td><td>4.1%</td><td>2.9%</td><td>3 ms</td><td>9 GB</td></tr></tbody>';
+    const rows = mergedRows ? ordinaryRows.replace('<tbody>', '<tbody><tr><th colspan="5">Control group</th></tr>')
+        .replace('</tbody>', '<tr><td colspan="5">Footnote: controlled setting retained.</td></tr></tbody>') : ordinaryRows;
     const html = `<article>${[1, 2].map(ordinal => `<figure class="ltx_table"><figcaption>Table ${ordinal}: Matched conditions.</figcaption><table class="ltx_tabular">${header}${rows}</table></figure>`).join('')}</article>`;
     const sourceText = require('cheerio').load(html)('body').text();
     const artifacts = bindStructuredArtifactsToText(parseArxivStructuredArtifactsFromHtml(html, '2609.00001v1', '2609.00001v1'), sourceText);
@@ -114,6 +116,7 @@ function createFullReaderTableSample() {
         tableBindings: [1, 2].map(tableIndex => ({ tableIndex, selection: { sourceTableOrdinal: tableIndex,
             sourceRows: [0, 1, 2], sourceColumns: [0, 1, 2, 3, 4] } })) };
     payload.tableBindings[0] = { tableIndex: 1, completeTable: { sourceTableOrdinal: 1 } };
+    if (mergedRows) payload.tableBindings[1].selection.sourceRows = [0, 2, 3];
     return { payload, options: { requiredVersion: 3, requireSourceBindings: true,
         requireIntegratedTables: true, minimumIntegratedTables: 2, structuredArtifacts: artifacts, sourceText } };
 }
@@ -295,4 +298,18 @@ test('完整原表与选择表反序仍经整篇解析核验原来源', () => {
     assert.deepEqual(result.plan.tableBindings.map(b => b.sourceTableOrdinal), [2, 1]);
     assert.doesNotMatch(result.article, /\[\[TABLE_/);
     assert.equal(JSON.stringify(sample), before);
+});
+
+test('完整表的DOM全幅标签和脚注只显示一次，原矩阵与全部坐标不改', () => {
+    const sample = createFullReaderTableSample(true);
+    const before = JSON.stringify(sample.options.structuredArtifacts);
+    const parsed = require('../scripts/deep-analyzer').parseApiReaderArticleResult(JSON.stringify(sample.payload), sample.options);
+    assert.match(parsed.article, /\| Control group \|  \|  \|  \|  \|/);
+    assert.match(parsed.article, /\| Footnote: controlled setting retained\. \|  \|  \|  \|  \|/);
+    assert.equal(parsed.plan.tableBindings[0].cellBindings.length, 25);
+    assert.equal(JSON.stringify(sample.options.structuredArtifacts), before);
+    const binding = parsed.plan.tableBindings[0];
+    const cells = binding.cellBindings.filter(cell => cell.sourceRow === 1);
+    assert.equal(cells.filter(cell => cell.renderedText === '').length, 4);
+    assert.ok(cells.every(cell => cell.sourceText === 'Control group'));
 });

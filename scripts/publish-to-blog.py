@@ -6171,6 +6171,46 @@ def _validate_legacy_reader_dataset_claims(tables, table_bindings):
             raise PublishDataValidationError('旧 TidyVoice/validation set 对应关系缺少逐字原文依据；请根据封存来源重建 Reader。')
 
 
+def _reader_merged_cell_matches(paper, binding, cell, displayed):
+    if displayed != '' or cell.get('renderedText') != '' or type(cell.get('sourceRow')) is not int \
+            or cell['sourceRow'] < 0 or type(cell.get('sourceColumn')) is not int or cell['sourceColumn'] <= 0:
+        return False
+    source = (paper.get('analysisManifest') or {}).get('sourceAcquisition') or {}
+    if paper.get('sourceSha256') != source.get('sourceSha256'):
+        return False
+    artifacts = _reader_source_payload_artifacts((paper.get('apiReaderPlan') or {}).get('structuredSourcePayload'),
+        source.get('structuredArtifactsSha256'), source.get('sourceSha256'))
+    if not artifacts:
+        return False
+    tables = [table for table in artifacts.get('tables', []) if table.get('ordinal') == binding.get('sourceTableOrdinal')
+              and table.get('sourceDomSha256') == binding.get('sourceTableDomSha256')]
+    if len(tables) != 1:
+        return False
+    table = tables[0]
+    row, column = cell['sourceRow'], cell['sourceColumn']
+    matrix = table.get('matrix') or []
+    if row >= len(matrix) or not isinstance(matrix[row], list) or len(matrix[row]) < 2 \
+            or any(not isinstance(values, list) or len(values) != len(matrix[row]) for values in matrix):
+        return False
+    cells = [item for item in table.get('cells', []) if isinstance(item, dict)
+             and type(item.get('row')) is int and type(item.get('rowspan', 1)) is int
+             and item.get('rowspan', 1) > 0
+             and item['row'] <= row < item['row'] + item.get('rowspan', 1)]
+    if len(cells) != 1:
+        return False
+    original = cells[0]
+    text = original.get('text')
+    return (table.get('recoveryStatus') == 'complete'
+            and re.fullmatch(r'[a-f0-9]{64}', str(table.get('sourceDomSha256') or '')) is not None
+            and original['row'] == row and original.get('column') == 0
+            and original.get('colspan') == len(matrix[row]) and original.get('rowspan', 1) == 1
+            and isinstance(text, str) and any(char.isalpha() for char in text)
+            and all(value == text for value in matrix[row]) and column < len(matrix[row])
+            and original.get('sourceDomSha256') == cell.get('sourceDomSha256')
+            and re.fullmatch(r'[a-f0-9]{64}', str(original.get('sourceDomSha256') or '')) is not None
+            and text == cell.get('sourceText'))
+
+
 def _validate_api_reader_source_bindings(paper, article=None):
     """按 v4 来源记录核对读者文章中的表格和公式，并返回核验结果。"""
     manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
@@ -6285,8 +6325,9 @@ def _validate_api_reader_source_bindings(paper, article=None):
                 actual_text = rendered_rows[rendered_row][rendered_column]
                 if _normalize_api_reader_source_cell(cell.get('renderedText')) \
                         != _normalize_api_reader_source_cell(actual_text) \
-                        or _normalize_api_reader_source_cell(actual_text) \
+                        or (_normalize_api_reader_source_cell(actual_text) \
                         != _normalize_api_reader_source_cell(pdf_values[index][(rendered_row, rendered_column)] if index in pdf_values else cell.get('sourceText')) \
+                        and not _reader_merged_cell_matches(paper, binding, cell, actual_text)) \
                         or not re.fullmatch(r'[0-9a-f]{64}', str(cell.get('sourceDomSha256') or '')):
                     raise PublishDataValidationError(f'第 {index} 个表格的单元格文本与显示内容或来源文本不一致，或来源 DOM 的 SHA 无效。')
                 seen.add(key)

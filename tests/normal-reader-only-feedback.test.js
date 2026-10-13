@@ -102,9 +102,32 @@ for (const mode of ['deep', 'batch']) {
         t.mock.method(require('../scripts/utils'), 'requestLlmJson', async (_url, _endpoint, model, _body, _headers, requestOptions) => {
             assert.equal(model, 'muse-spark-1.3-contributor');
             stages.push(requestOptions.usageContext.stage);
-            assert.equal(requestOptions.usageContext.stage, 'apiReaderArticle');
-            return { statusCode: 200, body: { status: 'completed', output: [{ type: 'message', role: 'assistant',
-                content: [{ type: 'output_text', text: JSON.stringify(signed.draft) }] }] } };
+            assert.ok(['apiReaderArticle', 'apiReaderTableAudit'].includes(requestOptions.usageContext.stage),
+                '文章纠错和审校不能请求主分析、摘要或评分');
+            const prompt = _body.input[0].content.find(part => part.type === 'input_text').text;
+            let text;
+            if (requestOptions.usageContext.stage === 'apiReaderArticle') {
+                assert.equal(prompt.includes('structuredSourcePayload'), false);
+                assert.ok(prompt.includes('\"version\":3'));
+                text = JSON.stringify(signed.draft);
+            } else {
+                const marker = '待审输入：';
+                assert.ok(prompt.includes(marker));
+                const input = JSON.parse(prompt.slice(prompt.indexOf(marker) + marker.length).trim());
+                assert.equal(input.inputSha256, requestOptions.usageContext.unitId);
+                text = JSON.stringify({ version: 1, inputSha256: input.inputSha256,
+                    tables: input.tables.map(table => ({ tableIndex: table.tableIndex, issues: [] })) });
+            }
+            const response = { statusCode: 200, body: { status: 'completed', output: [{ type: 'message', role: 'assistant',
+                content: [{ type: 'output_text', text }] }] } };
+            if (requestOptions.usageSink) {
+                const event = require('../scripts/lib/llm-usage').buildLlmUsageEvent({
+                    protocol: 'openai_responses', model, request: _body, response: response.body,
+                    statusCode: 200, durationMs: 1, context: requestOptions.usageContext, outputText: text
+                });
+                requestOptions.usageSink(event);
+            }
+            return response;
         });
         const moduleFile = require.resolve('../scripts/deep-analyzer');
         const originalModule = require.cache[moduleFile];
@@ -129,12 +152,15 @@ for (const mode of ['deep', 'batch']) {
                 resultPaper = outcome.result;
                 return { stats: { success: 1, failed: 0, skipped: 0, sourceCounts: {} } };
             }) });
-        assert.deepEqual(stages, ['apiReaderArticle']);
+        assert.deepEqual(stages, ['apiReaderArticle', 'apiReaderTableAudit']);
         assert.equal(resultPaper.analysis, originalAnalysis);
         for (const stage of ['primaryAnalysis', 'coreSummaryRepair', 'scoringAudit']) assert.deepEqual(resultPaper.analysisManifest.stages[stage], priorStages[stage]);
         assert.deepEqual(resultPaper.paidResponseHistory, sample.paper.paidResponseHistory);
         assert.ok(resultPaper.analysisStaleSnapshots.some(snapshot => snapshot.payload.stages.apiReaderArticle));
         assert.deepEqual(resultPaper.analysisManifest.stages.apiReaderArticle.factReview, child.proof);
+        assert.equal(resultPaper.analysisManifest.stages.apiReaderArticle.signedRevisionDisplayContract,
+            'signed-reader-minimal-draft-display-v1');
+        assert.match(resultPaper.analysisManifest.stages.apiReaderArticle.signedRevisionDisplaySha256, /^[a-f0-9]{64}$/);
         assert.equal(resultPaper.latestAnalysisAttemptError, undefined, '真实引擎成功收尾清除旧失败');
         assert.equal(resultPaper.apiReaderArticle.length > 5000, true);
         assert.ok(result);
@@ -196,4 +222,76 @@ test('正常深度分析的旧Reader恢复主检查点不可复用时不请求�
                 options => analyzer.analyzePaperDeep(sample.paper, options)))),
         { code: 'READER_UPSTREAM_PRIMARY_NOT_REUSABLE' });
     assert.equal(requests, 0);
+});
+
+test('显式提供同旧proof原包仅公共保存并按默认缺阶段恢复，正文费用证明不变', async t => {
+    const sample = await createReviewedReaderSample(t);
+    const feedback = { ...sample.feedback, rejectedPrimaryClaims: [] };
+    const bound = facts.validateFeedback(feedback, sample.plan, sample.paper);
+    sample.paper.analysisManifest.stages.apiReaderArticle.factReview = bound.proof;
+    sample.paper.analysisManifest.stages.scoringAudit.status = 'failed';
+    const before = structuredClone(sample.paper);
+    let called = 0;
+    await daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(sample.paper, () =>
+        saved.analyzeWithRecoveredFeedback(sample.paper, sample.plan, options => {
+            called++;
+            assert.deepEqual(options, { requireCompletedPrimaryCheckpoint: true });
+            assert.deepEqual(facts.current(sample.id).proof, bound.proof);
+            assert.equal(facts.current(sample.id).readerOnly, undefined);
+        }, feedback)));
+    assert.equal(called, 1);
+    assert.deepEqual(sample.paper, before);
+    assert.deepEqual(saved.readSavedFeedback(sample.paper, sample.plan).feedback, feedback);
+});
+
+test('正常Reader纠错收到无效审校响应仍保存原始记录，重启不重复请求', async t => {
+    const sample = await createReviewedReaderSample(t);
+    const parent = { ...sample.feedback, rejectedPrimaryClaims: [] };
+    const bound = facts.validateFeedback(parent, sample.plan, sample.paper);
+    sample.paper.analysisManifest.stages.apiReaderArticle.factReview = bound.proof;
+    facts.withFactReview(bound, () => undefined);
+    const child = { ...parent, readerFeedback: parent.readerFeedback + ' 纠正当前文章的具体表述。' };
+    const before = structuredClone(sample.paper.analysisManifest.stages);
+    const signed = require('./reader-signed-draft-fixture').fixture({ noFigures: true });
+    const checkpointFile = path.join(sample.plan.runDir, 'failed-audit-checkpoint.json');
+    let auditRequests = 0;
+    t.mock.method(require('../scripts/utils'), 'requestLlmJson', async (_url, _endpoint, model, body, _headers, options) => {
+        assert.ok(['apiReaderArticle', 'apiReaderTableAudit'].includes(options.usageContext.stage));
+        const text = options.usageContext.stage === 'apiReaderTableAudit'
+            ? (auditRequests++, '{"version":') : JSON.stringify(signed.draft);
+        const response = { statusCode: 200, body: { status: 'completed', output: [{ type: 'message', role: 'assistant',
+            content: [{ type: 'output_text', text }] }] } };
+        if (options.usageSink) options.usageSink(require('../scripts/lib/llm-usage').buildLlmUsageEvent({
+            protocol: 'openai_responses', model, request: body, response: response.body,
+            statusCode: 200, durationMs: 1, context: options.usageContext, outputText: text
+        }));
+        return response;
+    });
+    const file = require.resolve('../scripts/deep-analyzer');
+    const prior = require.cache[file]; delete require.cache[file]; require(file);
+    t.after(() => { require.cache[file] = prior; });
+    const invoke = paper => daily.withDailyFreshAnalysisContext(sample.plan, () =>
+        engine.withPaperAnalysisLock(paper, () => engine.analyzePaperWithRetry(paper, {
+            maxRetries: 0,
+            analyzeFn: current => saved.analyzeWithRecoveredFeedback(current, sample.plan,
+                () => assert.fail('不能重新调用主分析'), child),
+            onCheckpoint: current => fs.writeFileSync(checkpointFile, JSON.stringify(current))
+        })));
+    const first = await invoke(sample.paper);
+    assert.equal(first.success, false);
+    assert.match(first.error, /表格审校响应不是完整JSON/);
+    const stored = JSON.parse(fs.readFileSync(checkpointFile));
+    const record = stored.analysisManifest.stages.apiReaderTableAudit.records[0];
+    assert.equal(record.rawResponse, '{"version":');
+    assert.equal(record.responseSha256, facts.sha(record.rawResponse));
+    assert.equal(record.requestReceipts[0].outcome, 'completed');
+    for (const stage of ['primaryAnalysis', 'coreSummaryRepair', 'scoringAudit']) {
+        assert.deepEqual(stored.analysisManifest.stages[stage], before[stage]);
+    }
+    assert.equal(stored.analysisCheckpoint, undefined);
+    assert.equal(auditRequests, 1);
+    const second = await invoke(stored);
+    assert.equal(second.success, false);
+    assert.match(second.error, /表格审校响应不是完整JSON/);
+    assert.equal(auditRequests, 1, '已保存的同一付费响应不能因失败重启再次请求');
 });
