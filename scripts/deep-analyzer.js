@@ -3383,6 +3383,8 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         if (!valid) continue;
         normalized = normalized.replaceAll(match, (surface, offset, whole) => {
             const before = whole.slice(0, offset), after = whole.slice(offset + surface.length);
+            // 旧诊断可能把“一致”“一般”“一定”的开头当成参数值；不能破坏自然词。
+            if (surface.endsWith('一') && /^[致般定]/u.test(after)) return surface;
             // 一个问题可能只指出更长数字或分数当中的一个后缀。
             if ((/[零〇一二两三四五六七八九十百千万亿]$|分之$/.test(before.trimEnd())
                     && !/(?:同一|统一|唯一|单一)$/.test(before.trimEnd()))

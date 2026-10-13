@@ -107,7 +107,7 @@ const SCALED_ARABIC_MEASUREMENT_UNITS = Object.freeze([
 const TECHNICAL_NUMERAL_PREFIX_RE = new RegExp(
     `(?:LoRA\\s*)?(?:秩|rank|alpha|缩放系数|阈值|beam|batch(?:\\s*size)?|hop|`
     + `窗口|采样率|分辨率|上下文长度|时间步|通道数|层数|维度)\\s*(?:=|为|:)?\\s*`
-    + `[${CHINESE_DIGITS}]+`,
+    + `[${CHINESE_DIGITS}]+(?![${CHINESE_DIGITS}致般定])`,
     'giu'
 );
 const READER_TEMPLATE_PATTERNS = Object.freeze([
