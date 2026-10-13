@@ -1219,9 +1219,46 @@ function hasCoreSummaryStatisticalResult(sentence) {
     return metricValue.test(sentence) && interval.test(sentence) && observed.test(sentence);
 }
 
+// 图的有向边连接的是符号节点，不是两个标量测量值。
+function stripSymbolicPatternRelation(text) {
+    const identifier = String.raw`(?:[A-Z]\d+(?:[A-Z]_\{\d+\})?|[A-Z]_\{\d+\})`;
+    const relation = new RegExp(String.raw`\bedge\s+from\s+pattern\s+${identifier}\s+to\s+pattern\s+${identifier}(?![A-Za-z0-9_])`, 'g');
+    return String(text || '').replace(relation, match => ' '.repeat(match.length));
+}
+
+function hasSymbolicGeometryMethodChain(summary) {
+    const sentences = String(summary || '').split(/[。！？!?；;\n]/u).map(text => text.trim()).filter(Boolean);
+    const denied = /讨论|提及|如果|若|是否|应该|应当|建议|假设|假想|假定|设想|预计|预期|可能|计划|拟将|拟把|未来|准备|并非|不是|另一(?:个|种|套|组|批)|(?:不同|其他|无关)的?点集|独立方法|(?:不|未|没有)(?:曾|实际|直接|真正|进行|再|被|确实|把|将|会|能|以)*\s*(?:转为|转成|转换|编码|生成|输出|进入|作为|检验|判断|收成|映射)/u;
+    for (let index = 0; index < sentences.length; index++) {
+        const producer = sentences[index];
+        const encoding = producer.split(/[，,]/u)[0];
+        if (denied.test(encoding) || !/^编码(?:先)?(?:把|将)(?:每个|每一|各个)?音(?:符)?(?:转为|转成|转换为|编码为)(?:二维|音高时间平面上的)点(?:集)?/u.test(encoding)) continue;
+        const transfers = producer.split(/[，,]/u).filter(clause =>
+            !denied.test(clause) && /(?:输出的|得到的|形成的|组合的)?点集(?:直接)?(?:进入几何(?:匹配|判定)|作为(?:下一步)?几何(?:匹配|判定)的输入)/u.test(clause));
+        if (!transfers.length) continue;
+        // 下游必须在当前句或紧邻下一句实际检验变换重合，不能从远处借模块词。
+        const next = sentences[index + 1] || '';
+        const processors = [producer, next].flatMap(sentence => sentence.split(/[，,]/u));
+        if (processors.some(clause => !denied.test(clause)
+            && /^(?:几何(?:匹配|判定)|匹配)(?:在[^，,]{1,75}上(?:以)?)?(?:检验|判断|能否)[^，,]{0,80}变换[^，,]{0,50}(?:重合|映射)/u.test(clause))) return true;
+    }
+    return false;
+}
+
+function hasScopedSymbolicDemonstration(summary) {
+    if (!hasSymbolicGeometryMethodChain(summary)) return false;
+    const sentences = String(summary || '').split(/[。！？!?；;\n]/u);
+    const scoped = sentences.some(sentence => !/假设|假想|预计|可能|未来|讨论|提及|不只|并非|不是/u.test(sentence)
+        && /结论(?:只|仅)在[^。]{0,55}(?:该曲|作品|主题实例|实例)[^。]{0,25}(?:有证据|成立|得到支持|得到验证)/u.test(sentence));
+    const limit = sentences.flatMap(sentence => sentence.split(/[，,]/u)).some(clause =>
+        !/并非|不是|不能|已经|已(?:经|得到)?验证/u.test(clause)
+        && /跨作品[^，,。]{0,45}(?:尚未|未)(?:得到)?验证/u.test(clause));
+    return scoped && limit;
+}
+
 function hasCoreSummaryQuantitativeEvidence(text) {
     return String(text || '').split(/[。！？!?\n]/).some(rawSentence => {
-        const sentence = stripCoreSummaryNonResultNumerals(rawSentence.trim());
+        const sentence = stripCoreSummaryNonResultNumerals(stripSymbolicPatternRelation(rawSentence.trim()));
         if (!sentence) return false;
         const numbers = sentence.match(CORE_SUMMARY_NUMBER_PATTERN) || [];
         if (!numbers.length) return false;
@@ -1739,7 +1776,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     const hasNumberedMethodChain = (chain.length >= 2
         || /分(?:\d+|[一二三四五六七八九十]+)步/.test(summary)) && roles.length >= 2;
     const hasTieredMethodChain = tierRoleStages.size >= 2;
-    if (!hasNumberedMethodChain && !hasTieredMethodChain && !hasConcreteUnnumberedMethodChain(summary) && !hasAdjacentConcreteMethodChain(summary) && !hasExplicitNaturalProductChain(summary)) {
+    if (!hasNumberedMethodChain && !hasTieredMethodChain && !hasConcreteUnnumberedMethodChain(summary) && !hasAdjacentConcreteMethodChain(summary) && !hasExplicitNaturalProductChain(summary) && !hasSymbolicGeometryMethodChain(summary)) {
         issues.push('缺少 2–4 步方法链的分工与衔接');
     }
     // LaTeXML/PDF 抽取会把脚注标记重复一次：正文里一次，下一行又单独出现一遍
@@ -1758,6 +1795,11 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     const sourceHasQuantitativeEvidence = classifySourceQuantitativeEvidence(
         sourceText, quantitativeSourceSentences);
     const quantitativeResultState = coreSummaryQuantitativeResultState(summary);
+    const scopedSymbolicDemonstration = sourceHasQuantitativeEvidence === false
+        && /point[- ](?:set|pattern)/i.test(sourceText)
+        && /transformation class/i.test(sourceText)
+        && /inter[- ]pattern transformation graph/i.test(sourceText)
+        && hasScopedSymbolicDemonstration(summary);
     const corpusCurationResult = sourceCorpusCurationResult(sourceText);
     const completeQuantitativeResult = quantitativeResultState.complete
         || hasCompleteCorpusCurationResult(summary, corpusCurationResult);
@@ -1772,7 +1814,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
                     `第${candidate.sentenceNumber}句缺少${candidate.missing.join('、')}`).join('；')}。这些句子不一定都是结果，不得为运行参数编造指标或结论`
                 : ''));
     } else if (sourceHasQuantitativeEvidence === false
-        && !summary.includes(CORE_SUMMARY_RESULT_UNAVAILABLE)) {
+        && !scopedSymbolicDemonstration && !summary.includes(CORE_SUMMARY_RESULT_UNAVAILABLE)) {
         issues.push(`原文无可核定量结果时必须明确写“${CORE_SUMMARY_RESULT_UNAVAILABLE}”`);
     } else if (sourceHasQuantitativeEvidence === null && !completeQuantitativeResult
         && !summary.includes(CORE_SUMMARY_RESULT_UNAVAILABLE)) {
@@ -3017,6 +3059,9 @@ module.exports = {
     coreSummarySentenceView,
     validateCoreSummarySemanticContract,
     hasExplicitNaturalProductChain,
+    stripSymbolicPatternRelation,
+    hasSymbolicGeometryMethodChain,
+    hasScopedSymbolicDemonstration,
     hasConcreteUnnumberedMethodChain,
     hasBlockLayoutProductChain,
     hasPosteriorUpdateProductChain,

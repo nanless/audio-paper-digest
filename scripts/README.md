@@ -636,3 +636,5 @@ CHiME 的三层主结果表与两层 MC 对照表使用同一封存 PDF 逐格�
 资源表述的可选新输入由 `lib/reader-resource-prose.js` 处理。公共刷新或选定论文续跑显式设置 `naturalResourceProse: true` 时，先保持原资源来源、引文、可达性和文档校验，再提供自然的可确认状态；新规则版本和规则SHA进入Reader身份及阶段记录，完整实际提示仍保存于请求诊断。旧v7模板、默认输入和原付费记录不改；不能把外部链接可访问推断为作者开源、权重可下载或完整系统可运行。`tests/reader-natural-resource-evidence.test.js` 与 `tests/reader-natural-resource-public-option.test.js` 验证旧字节、新身份及真实模型前入口，未调用模型，不代表新文章已验收。
 
 保存稿的 PDF 检查规则文件变化时，现有长文确定性修复入口先重新读取封存四来源。`lib/reader-pdf-cell-evidence.js` 的 `replaySavedProofMetadata` 仅在全部字形、表头、数值、DOM、PDF 与后端记录精确相同、唯一变化为规则SHA时更新程序检查元数据并记录旧新SHA；文章、旧执行次数与状态保持原样。仍须通过原有完整来源资格检查，任何内容变化均拒绝。真实回归运行 `tests/reader-saved-pdf-proof-replay.test.js`，显式提供 `PD_SAVED_PDF_REPLAY_RECORDS` 和 `PD_SAVED_PDF_REPLAY_SOURCE_ROOT`；缺来源时明确跳过，不代表保存稿已恢复。
+
+符号音乐的点集变换论文可以用有范围的实例结论解释结果。摘要检查只在封存来源没有实测性能结果且明确包含点集、变换类和变换图定义时接受这类表述；摘要还须写清实际音符编码到点集、点集进入几何判定并检验变换重合的交接，以及单作品实例和未验证的跨作品范围。图边连接符号模式节点不算标量性能升降。`tests/core-summary-symbolic-geometry.test.js` 与 `tests/fixtures/core-symbolic-geometry-paid-summaries.json` 保留真实失败摘要和相同规则的正反例；这不替代原始来源、付费身份或逐篇事实核验。

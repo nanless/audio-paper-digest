@@ -4211,6 +4211,39 @@ def _has_concrete_core_summary_setting(sentence):
     ))
 
 
+def _has_symbolic_geometry_method_chain(summary):
+    sentences = [text.strip() for text in re.split(r'[。！？!?；;\n]', str(summary or '')) if text.strip()]
+    denied = re.compile(r'讨论|提及|如果|若|是否|应该|应当|建议|假设|假想|假定|设想|预计|预期|可能|计划|拟将|拟把|未来|准备|并非|不是|另一(?:个|种|套|组|批)|(?:不同|其他|无关)的?点集|独立方法|(?:不|未|没有)(?:曾|实际|直接|真正|进行|再|被|确实|把|将|会|能|以)*\s*(?:转为|转成|转换|编码|生成|输出|进入|作为|检验|判断|收成|映射)')
+    producer = re.compile(r'^编码(?:先)?(?:把|将)(?:每个|每一|各个)?音(?:符)?(?:转为|转成|转换为|编码为)(?:二维|音高时间平面上的)点(?:集)?')
+    transfer = re.compile(r'(?:输出的|得到的|形成的|组合的)?点集(?:直接)?(?:进入几何(?:匹配|判定)|作为(?:下一步)?几何(?:匹配|判定)的输入)')
+    process = re.compile(r'^(?:几何(?:匹配|判定)|匹配)(?:在[^，,]{1,75}上(?:以)?)?(?:检验|判断|能否)[^，,]{0,80}变换[^，,]{0,50}(?:重合|映射)')
+    for index, sentence in enumerate(sentences):
+        encoding = re.split(r'[，,]', sentence)[0]
+        if denied.search(encoding) or not producer.search(encoding):
+            continue
+        if not any(not denied.search(clause) and transfer.search(clause) for clause in re.split(r'[，,]', sentence)):
+            continue
+        next_sentence = sentences[index + 1] if index + 1 < len(sentences) else ''
+        clauses = [clause for text in [sentence, next_sentence] for clause in re.split(r'[，,]', text)]
+        if any(not denied.search(clause) and process.search(clause) for clause in clauses):
+            return True
+    return False
+
+
+def _has_scoped_symbolic_demonstration(summary):
+    # 这里只镜像摘要的表达完整性；无实测来源分类仍由Node绑定来源门核验。
+    if not _has_symbolic_geometry_method_chain(summary):
+        return False
+    sentences = re.split(r'[。！？!?；;\n]', str(summary or ''))
+    scoped = any(not re.search(r'假设|假想|预计|可能|未来|讨论|提及|不只|并非|不是', sentence)
+                 and re.search(r'结论(?:只|仅)在[^。]{0,55}(?:该曲|作品|主题实例|实例)[^。]{0,25}(?:有证据|成立|得到支持|得到验证)', sentence)
+                 for sentence in sentences)
+    limit = any(not re.search(r'并非|不是|不能|已经|已(?:经|得到)?验证', clause)
+                and re.search(r'跨作品[^，,。]{0,45}(?:尚未|未)(?:得到)?验证', clause)
+                for sentence in sentences for clause in re.split(r'[，,]', sentence))
+    return bool(scoped and limit)
+
+
 def _has_explicit_natural_product_chain(summary):
     if _has_posterior_update_product_chain(summary):
         return True
@@ -4308,7 +4341,7 @@ def _detailed_core_summary_semantic_issue(summary):
         (len(chain) >= 2 or re.search(r'分(?:\d+|[一二三四五六七八九十]+)步', summary))
         and len(roles) >= 2
     )
-    if not has_numbered_method_chain and len(tier_role_stages) < 2 and not _has_explicit_natural_product_chain(summary):
+    if not has_numbered_method_chain and len(tier_role_stages) < 2 and not _has_explicit_natural_product_chain(summary) and not _has_symbolic_geometry_method_chain(summary):
         issues.append('缺少 2–4 步方法链的分工与衔接')
     # 这份白名单要和 scripts/analysis-contract.js 保持同步。
     # 发布器在 Node 分析阶段之后按同一份 v3 正文规则再次检查，
@@ -4371,7 +4404,7 @@ def _detailed_core_summary_semantic_issue(summary):
     corpus_result = _complete_corpus_curation_summary(summary)
     if corpus_result and '原文未提供可核对的关键定量结果' in summary:
         issues.append('摘要已报告语料清洗质量结果，不能笼统声明没有关键定量结果')
-    if not has_complete_result and not corpus_result and '原文未提供可核对的关键定量结果' not in summary:
+    if not has_complete_result and not corpus_result and not _has_scoped_symbolic_demonstration(summary) and '原文未提供可核对的关键定量结果' not in summary:
         issues.append('缺少完整关键定量结果或明确不可得声明')
     explicit_boundary = re.search(
         r'(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)',
