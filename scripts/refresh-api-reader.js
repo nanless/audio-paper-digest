@@ -2,6 +2,7 @@
 'use strict';
 
 const crypto = require('node:crypto');
+const refreshRecoveryEntryScope = new (require('node:async_hooks').AsyncLocalStorage)();
 const Config = require('./config.js');
 const {
     refreshApiReaderArticleFromSource,
@@ -186,7 +187,32 @@ async function refreshApiReaders(targetIds, options = {}) {
     return require('./lib/analysis-stop-control').withAnalysisStopControl(() => refreshApiReadersInternal(targetIds, options));
 }
 
+function readRefreshEntryPlan(resultPath) {
+    const payload = readJsonFileStrict(resultPath);
+    return dailyFreshSources.requireDailyFreshSourceRecoveryPlan(payload, {
+        label: '读者文章批次入口'
+    });
+}
+
+function validateRefreshFinalSources(resultPath, entryPlan) {
+    const payload = readJsonFileStrict(resultPath);
+    dailyFreshSources.requireFinalDailyFreshSourceRecoveryPlan(payload, {
+        entryPlan, label: '读者文章结束来源核验'
+    });
+}
+
 async function refreshApiReadersInternal(targetIds, options = {}) {
+    const entryPlan = readRefreshEntryPlan(Config.FILES.deepAnalysisResult);
+    return refreshRecoveryEntryScope.run(entryPlan, async () => {
+        try {
+            return await refreshApiReadersWithEntryPlan(targetIds, options);
+        } finally {
+            validateRefreshFinalSources(Config.FILES.deepAnalysisResult, entryPlan);
+        }
+    });
+}
+
+async function refreshApiReadersWithEntryPlan(targetIds, options = {}) {
     const ids = [...new Set(targetIds.map(normalizedId).filter(Boolean))];
     const concurrency = Math.min(options.concurrency || 1, ids.length || 1);
     const results = new Array(ids.length);
@@ -392,13 +418,18 @@ function finishReviewedPrimaryReaderRefresh(previous, refreshed, plan, options =
 
 // 在同步读取范围内核验整批，只让当前论文和来源计划进入异步刷新。
 // 其他论文的正文不应随模型请求一起留在内存中。
-function readRefreshTargetAndPlan(resultPath, requested) {
+function readRefreshTargetAndPlan(resultPath, requested, entryPlan = null) {
     const payload = readJsonFileStrict(resultPath);
     const papers = Array.isArray(payload) ? payload : payload.papers;
-    const plan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(payload, {
-        papers, label: 'API Reader recovery'
-    });
-    return { paper: papers.find(paper => normalizedId(paper) === requested), plan };
+    const paper = papers.find(paper => normalizedId(paper) === requested);
+    const plan = entryPlan
+        ? dailyFreshSources.requireLockedDailyFreshSourceRecoveryPlan(payload, {
+            entryPlan, paper, label: '读者文章当前论文'
+        })
+        : dailyFreshSources.requireDailyFreshSourceRecoveryPlan(payload, {
+            papers, label: 'API Reader recovery'
+        });
+    return { paper, plan };
 }
 
 async function refreshApiReaderInternal(targetId, options = {}) {
@@ -406,7 +437,7 @@ async function refreshApiReaderInternal(targetId, options = {}) {
     if (!requested) throw new Error('用法: node scripts/refresh-api-reader.js <arxiv-id>');
     const resultPath = Config.FILES.deepAnalysisResult;
     const { paper: existing, plan: initialDailySourcePlan } =
-        readRefreshTargetAndPlan(resultPath, requested);
+        readRefreshTargetAndPlan(resultPath, requested, refreshRecoveryEntryScope.getStore());
     if (!existing || (!isSuccessfulAnalysisRecord(existing)
         && !(options.scoringAndReader && canRepairScoringBinding(existing))
         && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(existing))
@@ -414,9 +445,10 @@ async function refreshApiReaderInternal(targetId, options = {}) {
         throw new Error(`${requested} 的已有分析记录不满足所选刷新模式的条件，不能开始刷新。`);
     }
 
-    return withPaperAnalysisLock(existing, async () => {
+    try {
+        return await withPaperAnalysisLock(existing, async () => {
         const { paper: storedAnalysisRecord, plan: lockedDailySourcePlan } =
-            readRefreshTargetAndPlan(resultPath, requested);
+            readRefreshTargetAndPlan(resultPath, requested, refreshRecoveryEntryScope.getStore() || initialDailySourcePlan);
         if (!storedAnalysisRecord || (!isSuccessfulAnalysisRecord(storedAnalysisRecord)
             && !(options.scoringAndReader && canRepairScoringBinding(storedAnalysisRecord))
             && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(storedAnalysisRecord))
@@ -609,7 +641,12 @@ async function refreshApiReaderInternal(targetId, options = {}) {
                 + ` | article_sha=${refreshed.apiReaderArticleSha256}`
                 + ` | papers_sync=${sync.updated}`);
         return savedRecord;
-    });
+        });
+    } finally {
+        if (!refreshRecoveryEntryScope.getStore()) {
+            validateRefreshFinalSources(resultPath, initialDailySourcePlan);
+        }
+    }
 }
 
 if (require.main === module) {

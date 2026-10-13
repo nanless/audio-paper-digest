@@ -34,6 +34,17 @@ async function probe() {
                 verified += payload.papers.length;
                 return { paperIds: payload.papers.map(paper => paper.arxivId) };
             },
+            requireLockedDailyFreshSourceRecoveryPlan(payload, { entryPlan, paper }) {
+                assert.equal(payload.papers.length, 245);
+                assert.ok(payload.papers.some(row => row.arxivId === paper.arxivId));
+                verified++;
+                return entryPlan;
+            },
+            requireFinalDailyFreshSourceRecoveryPlan(payload, { entryPlan }) {
+                assert.equal(payload.papers.length, 245);
+                verified += payload.papers.length;
+                return entryPlan;
+            },
             isPaperBoundToPlan: () => true,
             withDailyFreshAnalysisContext: (_, fn) => fn(),
             withDailyFreshPaperSource: (_, paper, fn) => fn({ text: paper.analysis })
@@ -64,7 +75,7 @@ async function probe() {
     ).catch(error => error));
     assert.equal(arrived, 10);
     assert.equal(reads, 20, '每篇锁前和锁内都重新读取');
-    assert.equal(verified, 20 * 245, '全部来源核验未缩减');
+    assert.equal(verified, 10 * 245 + 10, '锁前全批核验、锁内只免除其他论文重复核验');
     await new Promise(resolve => setImmediate(resolve));
     for (let i = 0; i < 5; i++) {
         global.gc();
@@ -76,13 +87,15 @@ async function probe() {
         retainedUnselectedRecords: 0, heapUsed: process.memoryUsage().heapUsed }));
     pending.forEach(resolve => resolve());
     await Promise.all(calls);
+    assert.equal(reads, 30, '结束时仍读最新中央记录');
+    assert.equal(verified, 20 * 245 + 10, '即使刷新失败，结束时仍重新核验全批来源');
 }
 
 if (process.argv.includes('--memory-probe')) {
     probe().catch(error => { console.error(error.stack); process.exitCode = 1; });
 } else {
     const test = require('node:test');
-    test('十篇公共刷新等待期间释放非目标记录，仍保留两次完整核验', () => {
+    test('十篇公共刷新释放非目标记录，锁内检查当前来源且结束复核全批', () => {
         const result = spawnSync(process.execPath, ['--expose-gc', __filename, '--memory-probe'],
             { encoding: 'utf8', timeout: 30000 });
         assert.equal(result.status, 0, result.stderr + result.stdout);
