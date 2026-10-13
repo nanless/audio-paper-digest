@@ -222,3 +222,68 @@ test('普通 deep 自动复用已核验保存的原纠错说明，锁内重新�
     await assert.rejects(entry.runDeepAnalysis({ date: sample.plan.batchDate,
         analyzeBatch: async () => assert.fail('变更原包不得开始分析') }), /保存的证明不一致/);
 });
+
+test('普通 deep 分别恢复原整篇说明与摘要说明，不混成一份新说明', async t => {
+    const sample = await createReviewedReaderSample(t);
+    const policy = require('../scripts/lib/selected-full-stage-reanalysis');
+    const parentBound = facts.validateFeedback(sample.feedback, sample.plan, sample.paper);
+    let prepared;
+    await daily.withDailyFreshAnalysisContext(sample.plan, () =>
+        policy.withSelectedFullStageReanalysis({ runId: 'normal-dual-core-test',
+            sourceRunId: sample.plan.runId, paperIds: [sample.id] }, () =>
+            engine.withPaperAnalysisLock(sample.paper, () => facts.withFactReview(parentBound, () => {
+                prepared = policy.preparePaperLocked(sample.paper);
+            }))));
+    // 样例表示同轮主文完成后新增摘要纠错；原费用档仍来自公共prepare函数。
+    const current = { ...structuredClone(sample.paper),
+        fullStageReanalysis: prepared.fullStageReanalysis,
+        fullStageReanalysisHistory: prepared.fullStageReanalysisHistory,
+        latestAnalysisAttemptError: '摘要尚未完成' };
+    const coreFeedback = { ...sample.feedback, primaryFeedback: '', rejectedPrimaryClaims: [],
+        readerFeedback: '', rejectedReaderClaims: [], coreFeedback: '依据原证据补全摘要解释。',
+        rejectedCoreClaims: ['样例中被拒的摘要原句'] };
+    const coreBound = facts.validateFeedback(coreFeedback, sample.plan, current);
+    current.analysisManifest.stages.coreSummaryRepair.factReview = coreBound.proof;
+    const previous = { deepAnalysisResult: Config.FILES.deepAnalysisResult,
+        filteredPapers: Config.FILES.filteredPapers, papers: Config.FILES.papers };
+    t.after(() => Object.assign(Config.FILES, previous));
+    for (const key of Object.keys(previous)) Config.FILES[key] = path.join(sample.plan.runDir, 'dual-' + key + '.json');
+    const payload = { batchDate: sample.plan.batchDate, batchId: sample.plan.batchId,
+        dailyFreshSourceRun: daily.dailyFreshSourceReference(sample.plan), papers: [current] };
+    const coreFile = path.join(daily.factFeedbackDirectory(sample.plan), coreBound.proof.feedbackSha256 + '.json');
+    save(coreFile, coreFeedback);
+    save(Config.FILES.filteredPapers, { batchDate: sample.plan.batchDate, batchId: sample.plan.batchId,
+        status: 'complete', papers: [{ arxivId: current.arxivId, title: current.title }] });
+    save(Config.FILES.deepAnalysisResult, payload);
+    let calls = 0;
+    await assert.rejects(entry.runDeepAnalysis({ date: sample.plan.batchDate,
+        analyzeFn: async paper => {
+            calls += 1;
+            const active = facts.current(sample.id);
+            assert.equal(active.coreOnly, true);
+            assert.deepEqual(active.proof, parentBound.proof);
+            assert.deepEqual(active.coreBound.proof, coreBound.proof);
+            assert.deepEqual(facts.fingerprintFields('coreSummaryRepair', paper.analysisManifest.stages.coreSummaryRepair),
+                { factReview: coreBound.proof });
+            assert.throws(() => facts.assertScoringOnlyModelStageAllowed('primaryAnalysis'), /不能调用主分析/);
+            throw new Error('已有双说明正常恢复');
+        }, analyzeBatch: async (papers, options) => engine.withPaperAnalysisLock(papers[0], () => {
+            const locked = options.preparePaperLocked(papers[0]);
+            assert.equal(locked.skip, false);
+            return options.analyzeFn(locked.paper);
+        }) }), /已有双说明正常恢复/);
+    assert.equal(calls, 1);
+    assert.deepEqual(JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[0].fullStageReanalysisHistory,
+        current.fullStageReanalysisHistory);
+    const wrong = structuredClone(payload);
+    wrong.papers[0].analysisManifest.stages.methodRepair.factReview = coreBound.proof;
+    save(Config.FILES.deepAnalysisResult, wrong);
+    const skipped = await entry.runDeepAnalysis({ date: sample.plan.batchDate,
+        analyzeBatch: async () => assert.fail('摘要包不能授权其他阶段') });
+    assert.notEqual(skipped.status, 'complete');
+    assert.equal(skipped.remaining, 1);
+    save(Config.FILES.deepAnalysisResult, payload);
+    save(coreFile, { ...coreFeedback, coreFeedback: '被替换的摘要指导' });
+    await assert.rejects(entry.runDeepAnalysis({ date: sample.plan.batchDate,
+        analyzeBatch: async () => assert.fail('改变原摘要包不能请求') }), /保存证明不同/);
+});

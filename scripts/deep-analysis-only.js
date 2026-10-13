@@ -151,7 +151,7 @@ async function runDeepAnalysis(options = {}) {
     // 未取得论文锁时只作只读预检；取得锁后仍重新读取正式记录并核验同一反馈。
     if (feedback) factReview.validateFeedback(feedback, dailySourcePlan, papers.find(paper => normalizedId(paper) === cli.id));
     // 没有原反馈作用域时，不让续跑把已保存的事实约束替换为空指导。
-    const restoredFeedback = paper => feedback || savedFacts.readSavedFeedback(paper, dailySourcePlan);
+    const restoredFeedback = paper => feedback ? { feedback, paper } : savedFacts.readSavedFeedback(paper, dailySourcePlan);
     const missingFactContext = paper => savedFacts.hasSavedProof(paper) && !restoredFeedback(paper);
     const blockedFacts = papers.filter(p => (!cli.id || normalizedId(p) === cli.id)
         && (!isSuccessfulAnalysisRecord(p) || !dailyFreshSources.isPaperReusableForAnalysis(p, dailySourcePlan))
@@ -207,8 +207,11 @@ async function runDeepAnalysis(options = {}) {
                 const original = restoredFeedback(paper);
                 const analyze = () => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper);
                 if (!original) return analyze();
-                const bound = factReview.validateFeedback(original, dailySourcePlan, paper);
-                return factReview.withFactReview(bound, analyze);
+                const bound = factReview.validateFeedback(original.feedback, dailySourcePlan, original.paper);
+                return factReview.withFactReview(bound, () => original.coreFeedback
+                    ? factReview.withCoreSummaryFactReview(
+                        factReview.validateFeedback(original.coreFeedback, dailySourcePlan, paper), paper, analyze)
+                    : analyze());
             }
         }),
         preparePaperLocked: paper => {
