@@ -104,6 +104,8 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
     if (!readerOnlyFeedback(feedback))
         return withRecoveredFeedback(paper, plan, analyze, explicitFeedback);
     if (!completedReaderUpstream(paper, plan)) {
+        if (!explicitFeedback) return withRecoveredFeedback(paper, plan,
+            () => analyze({ requireCompletedPrimaryCheckpoint: true }));
         const error = new Error('独立Reader纠错缺少已完成的主文、摘要或评分');
         error.code = 'READER_UPSTREAM_INCOMPLETE'; error.retryable = false; throw error;
     }

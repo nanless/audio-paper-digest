@@ -15819,6 +15819,11 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     const primaryAnalysisRequestPolicy = resolvePrimaryRequestPolicy();
     const primaryAnalysisWriteFingerprint = buildPrimaryAnalysisBaseFingerprint(
         primaryAnalysisWriteContract, paper, textForAnalysis, arxivId, {});
+    // 原Reader纠错恢复只可复用已核验主分析，不能因缺下游阶段重新支付主分析。
+    if (options.requireCompletedPrimaryCheckpoint === true && !analysis) {
+        const error = new Error('原Reader纠错恢复缺少可复用的主分析检查点，保留未完成记录');
+        error.code = 'READER_UPSTREAM_PRIMARY_NOT_REUSABLE'; error.retryable = false; throw error;
+    }
     // 第 1 轮：主分析
     if (analysis) {
         console.log(`    [deep] ↩ 从主分析 checkpoint 恢复 (${analysis.length} chars)`);

@@ -158,3 +158,42 @@ test('Reader-only缺前置、原父包或过期绑定均在模型请求前拒绝
         { code: 'DAILY_FACT_REVIEW_INTEGRITY' });
     assert.equal(requests, 0);
 });
+
+test('已保存的纯Reader旧包缺下游时进入原恢复并硬性要求复用主分析', async t => {
+    const sample = await createReviewedReaderSample(t);
+    const feedback = { ...sample.feedback, rejectedPrimaryClaims: [] };
+    const bound = facts.validateFeedback(feedback, sample.plan, sample.paper);
+    sample.paper.analysisManifest.stages.apiReaderArticle.factReview = bound.proof;
+    facts.withFactReview(bound, () => undefined);
+    sample.paper.analysisManifest.stages.scoringAudit.status = 'failed';
+    let entered = 0;
+    await daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(sample.paper, () =>
+        saved.analyzeWithRecoveredFeedback(sample.paper, sample.plan, recoveryOptions => {
+            entered++;
+            assert.deepEqual(recoveryOptions, { requireCompletedPrimaryCheckpoint: true });
+            assert.equal(facts.current(sample.id).readerOnly, undefined);
+            assert.deepEqual(facts.current(sample.id).proof, bound.proof);
+        })));
+    assert.equal(entered, 1);
+});
+
+test('正常深度分析的旧Reader恢复主检查点不可复用时不请求新primary', async t => {
+    const sample = await createReviewedReaderSample(t);
+    const feedback = { ...sample.feedback, rejectedPrimaryClaims: [] };
+    const bound = facts.validateFeedback(feedback, sample.plan, sample.paper);
+    sample.paper.analysisManifest.stages.apiReaderArticle.factReview = bound.proof;
+    facts.withFactReview(bound, () => undefined);
+    sample.paper.analysisManifest.stages.scoringAudit.status = 'failed';
+    let requests = 0;
+    t.mock.method(require('../scripts/utils'), 'requestLlmJson', () => { requests++; assert.fail('不得重新付费主分析'); });
+    const file = require.resolve('../scripts/deep-analyzer');
+    const previous = require.cache[file]; delete require.cache[file];
+    const analyzer = require(file);
+    t.after(() => { require.cache[file] = previous; });
+    await assert.rejects(daily.withDailyFreshAnalysisContext(sample.plan, () =>
+        engine.withPaperAnalysisLock(sample.paper, () =>
+            saved.analyzeWithRecoveredFeedback(sample.paper, sample.plan,
+                options => analyzer.analyzePaperDeep(sample.paper, options)))),
+        { code: 'READER_UPSTREAM_PRIMARY_NOT_REUSABLE' });
+    assert.equal(requests, 0);
+});

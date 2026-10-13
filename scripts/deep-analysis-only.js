@@ -205,7 +205,7 @@ async function runDeepAnalysis(options = {}) {
             ...options,
             analyze: (paper, sourceOptions) => {
                 return savedFacts.analyzeWithRecoveredFeedback(paper, dailySourcePlan,
-                    () => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper), feedback, sourceOptions);
+                    recoveryOptions => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper, recoveryOptions), feedback, sourceOptions);
             }
         }),
         preparePaperLocked: paper => {
