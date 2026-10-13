@@ -358,6 +358,13 @@ function findQuantitativeChineseNumerals(text) {
     const candidates = [];
     for (const [regex, reason] of patterns) {
         for (const finding of collectRegexMatches(value, regex, reason)) {
+            // 连续两档十位的时长是近似口语（如“二三十分钟”），不是精确的230。
+            // 不转换、不猜数值；精确数词、百分比与其他测量单位继续检查。
+            if (reason === 'measured_large_integer') {
+                const approximateTime = /^([一二两三四五六七八])([二三四五六七八九])十\s*(?:分钟|小时|秒|天)$/u.exec(finding.match);
+                const digits = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+                if (approximateTime && digits[approximateTime[2]] === digits[approximateTime[1]] + 1) continue;
+            }
             // “这是一位说话人”是在介绍人物，不是在报告位宽或实验人数。
             // 保留真正的人数报告和“八位量化”等技术数值检查。
             if (reason === 'measured_simple_integer' && finding.match === '一位'
@@ -1232,6 +1239,16 @@ function findMissingComparisonUnits(text) {
                 /(?:图|表|公式|式|章节|阶段|步骤|版本|实验|配置|设置|位置|序位)\s*\d+(?:\s*(?:至|到|[-–—])\s*\d+)?/gu,
                 match => ' '.repeat(match.length)
             )
+            // 明确奖励/权重的配比不是四个裸百分比；只遮蔽配比数值本身。
+            .replace(
+                /(?<![A-Za-z0-9_.:])\d+(?:\s*[:：]\s*\d+){1,}(?![A-Za-z0-9_.:])/gu,
+                (match, offset, whole) => {
+                    const prefix = whole.slice(0, offset).split(/[，,；;]/u).at(-1);
+                    const suffix = whole.slice(offset + match.length);
+                    return /(?:奖励按|权重|配比)/u.test(prefix) && /^\s*(?:加权|的权重|的配比|配比|权重)/u.test(suffix)
+                        ? ' '.repeat(match.length) : match;
+                }
+            )
             // T12 的 12-8-3 这类复合标识是实验或配置标签，不是百分比数值。
             // 就近指标规则看第一个数字之前，先把它们屏蔽掉。
             .replace(
@@ -1253,6 +1270,10 @@ function findMissingComparisonUnits(text) {
                 const before = numericText.slice(0, match.index);
                 const after = numericText.slice(match.index + match[0].length);
                 if (/第\s*$/.test(before)) return false;
+                if (/^\d+$/.test(match[0]) && /^\s*句(?=$|[^A-Za-z0-9_.])/u.test(after)) return false;
+                // 明确的人数不是准确率值；仅整数配合完整人员名称时排除。
+                if (/^(?:\d+|[零〇一二两三四五六七八九十百千万]+)$/.test(match[0])
+                    && /^\s*位\s*(?:评分者|评审者|受试者)/u.test(after)) return false;
                 return !/^\s*(?:个|条|段|篇|张|种|类|组|套|块|步|轮|层|题|份|例|名|人|台|所|对|倍|阶段|数据集|测试集|验证集|时|小时|路|模型|系统|骨干|样本|片段|词元|接口|分支|特征|维度|维)/.test(after);
             });
         const bareValues = bareMatches.map(match => match[0]);
