@@ -444,7 +444,11 @@ function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables, structuredAr
             const quote = normalize(typeof raw === 'string' ? raw : raw?.quote);
             if (!quote) continue;
             if (tableText.includes(quote) || quote.includes(tableText)) best = Math.max(best, 100000);
-            const quoteNumbers = new Set(numbers(quote));
+            // 明确的来源表图编号只用于定位引文，不是当前表格必须展示的观测值。
+            // 原引文不改；表格结果数字和最终逐字来源核验仍按原规则检查。
+            const quoteData = quote.replace(/(?<![a-z0-9])(?:table|figure)\s*\d+(?![a-z0-9_.%])|(?:表|图)\s*\d+(?![a-z0-9_.%])/gu,
+                match => ' '.repeat(match.length));
+            const quoteNumbers = new Set(numbers(quoteData));
             const tableNumbers = new Set(numbers(tableText));
             const numericOverlap = [...quoteNumbers].filter(token => tableNumbers.has(token)).length;
             const quoteTokens = new Set(tokens(quote));
