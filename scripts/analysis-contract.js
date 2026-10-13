@@ -2074,7 +2074,7 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
     if (options.skipSemantic !== true) {
         let semanticOptions = options;
         const hasExplicitSource = typeof options === 'string' || Object.hasOwn(options, 'sourceText');
-        if (!hasExplicitSource && /(?<![A-Za-z0-9_])[A-Z][A-Za-z0-9_-]{0,39}(?:[ \t]+[A-Za-z][A-Za-z0-9_-]{0,39}){0,3}!(?=的)/u.test(summary)) {
+        if (!hasExplicitSource && (hasScopedSymbolicDemonstration(summary) || /(?<![A-Za-z0-9_])[A-Z][A-Za-z0-9_-]{0,39}(?:[ \t]+[A-Za-z][A-Za-z0-9_-]{0,39}){0,3}!(?=的)/u.test(summary))) {
             try { semanticOptions = { ...options, sourceText: coreSummaryBoundMethodSource(paper) }; }
             catch (error) { return `核心摘要方法名的原封存来源未通过核验：${error.message}`; }
         }
