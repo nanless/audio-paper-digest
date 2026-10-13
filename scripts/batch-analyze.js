@@ -23,6 +23,7 @@ const { updateAnalysisDigestStatuses, synchronizeCompletedAnalysisDigestStatuses
 const Config = require('./config.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 const factReview = require('./lib/daily-fact-review.js');
+const savedFacts = require('./lib/saved-fact-feedback');
 const { hasCompletedBoundFactFeedback } = require('./lib/completed-bound-fact-feedback');
 
 loadEnvFile();
@@ -134,11 +135,16 @@ async function main(options = {}) {
     );
     console.log(`总论文数: ${papers.length}`);
 
+    const missingFactContext = paper => !feedbacks.has(normalizedId(paper))
+        && savedFacts.hasSavedProof(paper) && !savedFacts.readSavedFeedback(paper, dailySourcePlan);
+    const blockedFacts = papers.filter(p => (!isSuccessfulAnalysisRecord(p)
+        || !dailyFreshSources.isPaperReusableForAnalysis(p, dailySourcePlan)) && missingFactContext(p));
+    if (blockedFacts.length) console.log(`⚠️ 保留 ${blockedFacts.length} 篇缺少之前纠错说明的未完成记录，本次跳过：${blockedFacts.map(normalizedId).join(', ')}`);
     const notAnalyzed = papers.filter(p => {
         const feedback = feedbacks.get(normalizedId(p));
         return feedback ? !hasCompletedBoundFactFeedback(p, feedback, dailySourcePlan)
             : !isSuccessfulAnalysisRecord(p) || !dailyFreshSources.isPaperReusableForAnalysis(p, dailySourcePlan);
-    });
+    }).filter(p => !missingFactContext(p));
     console.log(`本次处理论文: ${notAnalyzed.length}`);
     if (feedbacks.size) console.log(`其中 ${feedbacks.size} 篇带有已核验的事实反馈；只有同反馈全部纠正并通过检查的论文才跳过。`);
 
@@ -202,15 +208,12 @@ async function main(options = {}) {
         saveInterval: 1,
         analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
             ...options,
-            ...((feedbacks.size || explicitRounds.size) ? { analyze: paper => {
-                const feedback = feedbacks.get(normalizedId(paper));
+            analyze: paper => {
                 const normalAnalyze = () => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper);
                 const grant = explicitRounds.get(normalizedId(paper));
                 const analyze = () => grant ? readerExplicitRound.withExplicitRound(paper, grant, normalAnalyze) : normalAnalyze();
-                if (!feedback) return analyze();
-                const bound = factReview.validateFeedback(feedback, dailySourcePlan, paper);
-                return factReview.withFactReview(bound, analyze);
-            } } : options.analyzeFn ? { analyze: options.analyzeFn } : {})
+                return savedFacts.withRecoveredFeedback(paper, dailySourcePlan, analyze, feedbacks.get(normalizedId(paper)));
+            }
         }),
         preparePaperLocked: paper => {
             const current = readJsonFileStrict(RESULT_FILE);
@@ -221,6 +224,10 @@ async function main(options = {}) {
                 entryPlan: dailySourcePlan, paper: latest || paper, label: '锁内批量分析恢复'
             });
             if (feedback) factReview.validateFeedback(feedback, lockedPlan, latest);
+            if (missingFactContext(latest || paper)) {
+                console.log(`⚠️ ${normalizedId(paper)} 缺少之前的纠错说明，保留未完成记录，本次跳过`);
+                return { paper: latest || paper, skip: true };
+            }
             if (feedback ? hasCompletedBoundFactFeedback(latest, feedback, lockedPlan)
                 : isSuccessfulAnalysisRecord(latest) && dailyFreshSources.isPaperReusableForAnalysis(latest, lockedPlan)) {
                 return { paper: latest, skip: true };

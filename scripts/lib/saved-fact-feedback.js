@@ -55,4 +55,15 @@ function readSavedCoreFeedback(paper, plan, proofs) {
         || ['rejectedPrimaryClaims', 'rejectedReaderClaims', 'rejectedTagClaims', 'rejectedScoringClaims'].some(key => (coreFeedback[key] || []).length)) return null;
     return { feedback: inherited.feedback, paper: original, coreFeedback };
 }
-module.exports = { hasSavedProof, readSavedFeedback };
+function withRecoveredFeedback(paper, plan, callback, explicitFeedback = null) {
+    const original = explicitFeedback ? { feedback: explicitFeedback, paper } : readSavedFeedback(paper, plan);
+    if (!original) {
+        if (hasSavedProof(paper)) throw new Error('缺少之前的纠错说明，保留未完成记录');
+        return callback();
+    }
+    const bound = facts.validateFeedback(original.feedback, plan, original.paper);
+    return facts.withFactReview(bound, () => original.coreFeedback
+        ? facts.withCoreSummaryFactReview(facts.validateFeedback(original.coreFeedback, plan, paper), paper, callback)
+        : callback());
+}
+module.exports = { hasSavedProof, readSavedFeedback, withRecoveredFeedback };

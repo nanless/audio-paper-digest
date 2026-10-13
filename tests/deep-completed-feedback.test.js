@@ -179,7 +179,15 @@ test('deep 最后一篇真实合格结果保存后传播停止，不进入后续
     assert.equal(saved.apiReaderArticle, f.paper.apiReaderArticle);
 });
 
-test('普通 deep 自动复用已核验保存的原纠错说明，锁内重新读取且不清失败', async t => {
+for (const normalEntry of [
+    { name: 'deep', run: options => entry.runDeepAnalysis(options) },
+    { name: 'batch', run: options => {
+        const file = require.resolve('../scripts/batch-analyze');
+        delete require.cache[file];
+        return require(file).main(options);
+    } }
+]) {
+test(`普通 ${normalEntry.name} 自动复用已核验保存的原纠错说明，锁内重新读取且不清失败`, async t => {
     const sample = await createReviewedReaderSample(t);
     const previous = { deepAnalysisResult: Config.FILES.deepAnalysisResult,
         filteredPapers: Config.FILES.filteredPapers, papers: Config.FILES.papers };
@@ -200,7 +208,7 @@ test('普通 deep 自动复用已核验保存的原纠错说明，锁内重新�
     const stored = path.join(daily.factFeedbackDirectory(sample.plan), bound.proof.feedbackSha256 + '.json');
     assert.deepEqual(fs.readFileSync(stored), originalBytes);
     let calls = 0;
-    await assert.rejects(entry.runDeepAnalysis({ date: sample.plan.batchDate,
+    await assert.rejects(normalEntry.run({ date: sample.plan.batchDate,
         analyzeFn: async paper => {
             calls += 1;
             assert.deepEqual(facts.current(sample.id).proof, bound.proof);
@@ -219,11 +227,11 @@ test('普通 deep 自动复用已核验保存的原纠错说明，锁内重新�
     assert.deepEqual(saved.papers[0].analysisManifest, failed.analysisManifest);
     assert.equal(saved.papers[0].latestAnalysisAttemptError, failed.latestAnalysisAttemptError);
     fs.writeFileSync(stored, JSON.stringify({ ...sample.feedback, readerFeedback: '被改写的说明' }));
-    await assert.rejects(entry.runDeepAnalysis({ date: sample.plan.batchDate,
+    await assert.rejects(normalEntry.run({ date: sample.plan.batchDate,
         analyzeBatch: async () => assert.fail('变更原包不得开始分析') }), /保存的证明不一致/);
 });
 
-test('普通 deep 分别恢复原整篇说明与摘要说明，不混成一份新说明', async t => {
+test(`普通 ${normalEntry.name} 分别恢复原整篇说明与摘要说明，不混成一份新说明`, async t => {
     const sample = await createReviewedReaderSample(t);
     const policy = require('../scripts/lib/selected-full-stage-reanalysis');
     const parentBound = facts.validateFeedback(sample.feedback, sample.plan, sample.paper);
@@ -256,7 +264,7 @@ test('普通 deep 分别恢复原整篇说明与摘要说明，不混成一份�
         status: 'complete', papers: [{ arxivId: current.arxivId, title: current.title }] });
     save(Config.FILES.deepAnalysisResult, payload);
     let calls = 0;
-    await assert.rejects(entry.runDeepAnalysis({ date: sample.plan.batchDate,
+    await assert.rejects(normalEntry.run({ date: sample.plan.batchDate,
         analyzeFn: async paper => {
             calls += 1;
             const active = facts.current(sample.id);
@@ -278,12 +286,14 @@ test('普通 deep 分别恢复原整篇说明与摘要说明，不混成一份�
     const wrong = structuredClone(payload);
     wrong.papers[0].analysisManifest.stages.methodRepair.factReview = coreBound.proof;
     save(Config.FILES.deepAnalysisResult, wrong);
-    const skipped = await entry.runDeepAnalysis({ date: sample.plan.batchDate,
+    const skipped = await normalEntry.run({ date: sample.plan.batchDate,
         analyzeBatch: async () => assert.fail('摘要包不能授权其他阶段') });
     assert.notEqual(skipped.status, 'complete');
     assert.equal(skipped.remaining, 1);
     save(Config.FILES.deepAnalysisResult, payload);
     save(coreFile, { ...coreFeedback, coreFeedback: '被替换的摘要指导' });
-    await assert.rejects(entry.runDeepAnalysis({ date: sample.plan.batchDate,
+    await assert.rejects(normalEntry.run({ date: sample.plan.batchDate,
         analyzeBatch: async () => assert.fail('改变原摘要包不能请求') }), /保存证明不同/);
 });
+
+}

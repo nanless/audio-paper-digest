@@ -204,14 +204,8 @@ async function runDeepAnalysis(options = {}) {
         analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
             ...options,
             analyze: paper => {
-                const original = restoredFeedback(paper);
-                const analyze = () => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper);
-                if (!original) return analyze();
-                const bound = factReview.validateFeedback(original.feedback, dailySourcePlan, original.paper);
-                return factReview.withFactReview(bound, () => original.coreFeedback
-                    ? factReview.withCoreSummaryFactReview(
-                        factReview.validateFeedback(original.coreFeedback, dailySourcePlan, paper), paper, analyze)
-                    : analyze());
+                return savedFacts.withRecoveredFeedback(paper, dailySourcePlan,
+                    () => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper), feedback);
             }
         }),
         preparePaperLocked: paper => {

@@ -15445,12 +15445,12 @@ async function analyzePaperDeepInternal(paper, options = {}) {
         BROAD_EVIDENCE_PATTERNS,
         'PRIMARY'
     );
+    const sourceWarnings = [...sourceDetails.warnings];
     if (rawTextForAnalysis.length > textForAnalysis.length) {
-        sourceDetails.warnings.push(`输入文本由 ${rawTextForAnalysis.length} 字符按跨全文任务证据取样为 ${textForAnalysis.length} 字符`);
+        sourceWarnings.push(`输入文本由 ${rawTextForAnalysis.length} 字符按跨全文任务证据取样为 ${textForAnalysis.length} 字符`);
         console.log(`    [deep] 全文过长，跨开头/中段/末尾和高价值证据取样到 ${textForAnalysis.length}/${rawTextForAnalysis.length} 字符`);
     }
     const analysisSource = hasFullText ? sourceDetails.source : 'abstract';
-    const sourceWarnings = [...sourceDetails.warnings];
     if (textProfile.shortProceedings) {
         sourceWarnings.push(`官方会议 PDF 属于短篇 proceedings（${fullText.length} 字符），仍使用完整 PDF 正文；未降级为摘要。`);
     }

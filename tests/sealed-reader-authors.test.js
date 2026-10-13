@@ -15,13 +15,13 @@ const fresh = require('../scripts/lib/fresh-analysis-context.js');
 const direct = require('../scripts/lib/direct-rewrite-analysis-context.js');
 const { spawnSync } = require('node:child_process');
 const expected = ['Alice Brown', 'Bob White', 'Carol Green'].map((name, i) => ({ name, affiliations: ['University ' + ['A','B','C'][i]] }));
-async function sealed(t, noAuthors = false, captureSet = expected) {
+async function sealed(t, noAuthors = false, captureSet = expected, repeatCount = 160) {
     const folder = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'sealed-authors-'));
     const previous = Config.FILES.dailyFreshSourceRunsDir;
     Config.FILES.dailyFreshSourceRunsDir = path.join(folder, 'daily-runs');
     t.after(() => { Config.FILES.dailyFreshSourceRunsDir = previous; fs.rmSync(folder, { recursive: true, force: true }); });
     const id = '2610.12345';
-    const html = '<html><head>' + (noAuthors ? '' : captureSet.map(author => '<meta name="citation_author" content="' + author.name + '"><meta name="citation_author_institution" content="' + author.affiliations[0] + '">').join('')) + '</head><body><section>' + 'Methods, controlled observations, experiments and limitations. '.repeat(160) + '</section></body></html>';
+    const html = '<html><head>' + (noAuthors ? '' : captureSet.map(author => '<meta name="citation_author" content="' + author.name + '"><meta name="citation_author_institution" content="' + author.affiliations[0] + '">').join('')) + '</head><body><section>' + 'Methods, controlled observations, experiments and limitations. '.repeat(repeatCount) + '</section></body></html>';
     const text = cheerio.load(html).text();
     const structuredArtifacts = deep.bindStructuredArtifactsToText(deep.parseArxivStructuredArtifactsFromHtml(html, id + 'v1', id), text);
     const readerAuthors = noAuthors ? null : parser.parseArxivReaderAuthors(cheerio.load(html));
@@ -184,4 +184,47 @@ test('作者发布重放逐次核实际封存文件，物理文件损坏后拒�
     const damaged = fs.readFileSync(runtimePath);
     assert.equal(runPrivateAuthorReplay(input).output, '{"verified":false}');
     assert.deepEqual(fs.readFileSync(runtimePath), damaged);
+});
+
+test('真实长封存来源正常分析取样只记录局部警告，作者来源字节不变且禁止API', async t => {
+    const { plan, id, source } = await sealed(t, false, expected, 4000);
+    assert.ok(source.text.length > 200000);
+    let actual;
+    const readDirect = direct.getDirectRewriteSource;
+    t.mock.method(direct, 'getDirectRewriteSource', paper => {
+        const result = readDirect(paper);
+        if (!actual) actual = result;
+        return result;
+    });
+    let calls = 0;
+    t.mock.method(require('../scripts/utils'), 'requestLlmJson', async () => {
+        calls++;
+        assert.deepEqual(actual.warnings, source.warnings);
+        assert.deepEqual(parser.verifiedReaderAuthorDetails(actual).readerAuthors.authors, expected);
+        for (const mutate of [
+            value => { value.text += 'changed'; },
+            value => { value.readerAuthors.authors[0].name = 'Wrong Author'; },
+            value => { value.freshSourceDescriptor.sourceManifestSha256 = '0'.repeat(64); }
+        ]) {
+            const changed = structuredClone(actual);
+            mutate(changed);
+            assert.throws(() => parser.verifiedReaderAuthorDetails(changed));
+        }
+        const error = new Error('长来源只读验证哨兵，不发模型请求');
+        error.retryable = false;
+        throw error;
+    });
+    const file = require.resolve('../scripts/deep-analyzer');
+    const previous = require.cache[file];
+    const previousRetries = Config.ANALYSIS_CONFIG.apiMaxRetries;
+    Config.ANALYSIS_CONFIG.apiMaxRetries = 1;
+    delete require.cache[file];
+    const analyzer = require(file);
+    t.after(() => { require.cache[file] = previous; Config.ANALYSIS_CONFIG.apiMaxRetries = previousRetries; });
+    const analyze = daily.createDailyAnalyzeFn(plan, { analyze: paper => analyzer.analyzePaperDeep(paper) });
+    const result = await daily.withDailyFreshAnalysisContext(plan, () => analyze({
+        arxivId: id, title: 'Long sealed source', authors: expected.map(author => author.name)
+    }));
+    assert.match(result.error, /长来源只读验证哨兵/);
+    assert.equal(calls, 1);
 });
