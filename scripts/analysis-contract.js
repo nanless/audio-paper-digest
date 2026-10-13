@@ -1477,6 +1477,30 @@ function hasConcreteCoreSummarySetting(sentence) {
     return syntheticSetting || speakerSplit || timedHardware || namedRequestEvaluation || heldOutSpeakerComparison;
 }
 
+function hasRecordedDissonanceComparison(sentence) {
+    if (/(?:假设|假想|假定|如果|若|预计|预期|可能|讨论|提及|计划|未来|并非|不是|未测|未报告|未记录|未实测|尚未|没有|(?:不|未)(?:曾|实际|真正)?(?:在|于|进行|测|报告|记录)|将(?:会|要)?(?:在|于|进行))/u.test(sentence)) return false;
+    if (!/(?:在|于)[^，,。！？!?\n]{1,100}(?:录音|听辨|听测|实验|测试)(?:比较|评测)?中/u.test(sentence)) return false;
+    const pair = /(?:塞萨里斯|Sethares)\s*(?:感觉)?不协和度(?:从|由)\s*(\d+(?:\.\d+)?)(?:\s*任意单位)?\s*(增至|升至|降至|减至)\s*(\d+(?:\.\d+)?)(?:\s*任意单位)?(?=\s*(?:[，,；;]|$))/iu.exec(sentence);
+    return Boolean(pair && (/(?:增|升)至/u.test(pair[2])
+        ? Number(pair[3]) > Number(pair[1]) : Number(pair[3]) < Number(pair[1])));
+}
+
+function hasMeanRoomSimulationComparison(sentence) {
+    if (/(?:假设|假想|假定|如果|若|预计|预期|可能|讨论|提及|计划|未来|并非|不是|未测|未报告|未记录|未实测|尚未|没有|(?:不|未)(?:曾|实际|真正)?(?:在|于|进行|测|报告|记录)|将(?:会|要)?(?:在|于|进行))/u.test(sentence)) return false;
+    const context = /(?:在|于)([^，,。！？!?\n]{1,120})上(?:按|以)\s*[1-9]\d*\s*个房间平均(?:的)?(?:单房间)?(?:平均)?空间房间脉冲响应仿真耗时/u.exec(sentence);
+    if (!context || !/(?:Apple|MacBook|Intel|AMD|NVIDIA|CPU|GPU|Jetson|Raspberry)/iu.test(context[1])) return false;
+    const values = [...sentence.matchAll(/(?:镜像源)?([1-9]\d*)阶\s*(\d+(?:\.\d+)?)\s*(秒|毫秒|s|ms)(?![A-Za-z\d.])/giu)];
+    if (values.length < 2 || new Set(values.map(value => value[1])).size !== values.length
+        || values.some(value => Number(value[2]) <= 0)) return false;
+    const seconds = new Map(values.map(value => [value[1], Number(value[2]) * (/^(?:毫秒|ms)$/i.test(value[3]) ? 0.001 : 1)]));
+    const comparison = /([1-9]\d*)阶(?:明显)?(高于|低于)([1-9]\d*)阶(?:和([1-9]\d*)阶)?(?![\d.])/u.exec(sentence);
+    if (!comparison) return false;
+    const compared = [comparison[3], comparison[4]].filter(Boolean);
+    return seconds.has(comparison[1]) && compared.every(order => seconds.has(order)
+        && (comparison[2] === '高于' ? seconds.get(comparison[1]) > seconds.get(order)
+            : seconds.get(comparison[1]) < seconds.get(order)));
+}
+
 function coreSummaryQuantitativeResultState(text) {
     const candidates = String(text || '').split(/[。！？!?\n]/).map((rawSentence, sentenceIndex) => {
         const sentence = stripCoreSummaryNonResultNumerals(rawSentence.trim());
@@ -1497,7 +1521,8 @@ function coreSummaryQuantitativeResultState(text) {
         // 上面那套通用设置词表不变。
         const hasNamedSetting = /(?:[A-Z][A-Za-z0-9._-]{2,}\s*[\u3400-\u9fff]{0,8}(?:集|数据集|语料|任务|基准)|(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}(?:\s*[上中下]))/i.test(sentence);
         const hasTimedNamedSplit = /(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}\s+\d+(?:\.\d+)?\s+s\s+[\u3400-\u9fff]{0,12}划分(?:上|中)/.test(sentence);
-        const hasSetting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)/i.test(sentence)
+        const narrowMeasuredResult = hasRecordedDissonanceComparison(sentence) || hasMeanRoomSimulationComparison(sentence);
+        const hasSetting = narrowMeasuredResult || /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)/i.test(sentence)
             || hasNamedSetting || /(?<![A-Za-z0-9_])[1-9][0-9]*[A-Za-z][A-Za-z0-9._-]{0,39}-(?:Bench|Benchmark)(?![A-Za-z0-9_])(?:上|中|下)/i.test(rawSentence) || hasTimedNamedSplit || hasConcreteCoreSummarySetting(sentence)
             || /(?:在|于)\s*FLEURS(?![A-Za-z0-9_])(?:[\u3400-\u9fff]{1,8}(?:到|→)[\u3400-\u9fff]{1,8}(?:上|中)|[^，,；;。！？!?\n]{0,60}(?:oracle提交决策|校准评测)上下文(?:上|中))/.test(sentence);
         const hasComparisonObjects = numbers.length >= 2
@@ -1520,7 +1545,7 @@ function coreSummaryQuantitativeResultState(text) {
             || CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.test(comparedLabel)));
         const addedMetricIsNonResult = /(?:公式|符号|定义为|假设|预计|预期|可能|将会|若|如果|先前工作|相关工作|文献)/.test(sentence);
         const fadComparisonObjectIsValue = /(?:^$|(?:的|为|是|=|:|：|基线|对照|FAD)\s*$)/.test(String(fadComparison?.[3] || '').trim());
-        const hasMetric = hasRecognizedMetric || Boolean(hasSetting && hasDirection
+        const hasMetric = narrowMeasuredResult || hasRecognizedMetric || Boolean(hasSetting && hasDirection
             && hasComparisonObjects && !addedMetricHasConflictingLabel
             && !addedMetricIsNonResult && ((fadValue && fadComparisonObjectIsValue) || dirResult));
         const crossMetricComparison = hasCrossMetricDirectionalComparison(sentence)

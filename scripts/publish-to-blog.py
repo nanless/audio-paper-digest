@@ -4202,6 +4202,32 @@ def _has_posterior_update_product_chain(summary):
     return False
 
 
+def _has_recorded_dissonance_comparison(sentence):
+    if re.search(r'(?:假设|假想|假定|如果|若|预计|预期|可能|讨论|提及|计划|未来|并非|不是|未测|未报告|未记录|未实测|尚未|没有|(?:不|未)(?:曾|实际|真正)?(?:在|于|进行|测|报告|记录)|将(?:会|要)?(?:在|于|进行))', sentence):
+        return False
+    if not re.search(r'(?:在|于)[^，,。！？!?\n]{1,100}(?:录音|听辨|听测|实验|测试)(?:比较|评测)?中', sentence):
+        return False
+    pair = re.search(r'(?:塞萨里斯|Sethares)\s*(?:感觉)?不协和度(?:从|由)\s*(\d+(?:\.\d+)?)(?:\s*任意单位)?\s*(增至|升至|降至|减至)\s*(\d+(?:\.\d+)?)(?:\s*任意单位)?(?=\s*(?:[，,；;]|$))', sentence, re.I)
+    return bool(pair and (float(pair[3]) > float(pair[1]) if pair[2] in ('增至', '升至') else float(pair[3]) < float(pair[1])))
+
+
+def _has_mean_room_simulation_comparison(sentence):
+    if re.search(r'(?:假设|假想|假定|如果|若|预计|预期|可能|讨论|提及|计划|未来|并非|不是|未测|未报告|未记录|未实测|尚未|没有|(?:不|未)(?:曾|实际|真正)?(?:在|于|进行|测|报告|记录)|将(?:会|要)?(?:在|于|进行))', sentence):
+        return False
+    context = re.search(r'(?:在|于)([^，,。！？!?\n]{1,120})上(?:按|以)\s*[1-9]\d*\s*个房间平均(?:的)?(?:单房间)?(?:平均)?空间房间脉冲响应仿真耗时', sentence)
+    if not context or not re.search(r'(?:Apple|MacBook|Intel|AMD|NVIDIA|CPU|GPU|Jetson|Raspberry)', context[1], re.I):
+        return False
+    values = list(re.finditer(r'(?:镜像源)?([1-9]\d*)阶\s*(\d+(?:\.\d+)?)\s*(秒|毫秒|s|ms)(?![A-Za-z\d.])', sentence, re.I))
+    if len(values) < 2 or len({value[1] for value in values}) != len(values) or any(float(value[2]) <= 0 for value in values):
+        return False
+    seconds = {value[1]: float(value[2]) * (0.001 if value[3].lower() in ('毫秒', 'ms') else 1) for value in values}
+    comparison = re.search(r'([1-9]\d*)阶(?:明显)?(高于|低于)([1-9]\d*)阶(?:和([1-9]\d*)阶)?(?![\d.])', sentence)
+    if not comparison:
+        return False
+    compared = [order for order in (comparison[3], comparison[4]) if order]
+    return bool(comparison[1] in seconds and all(order in seconds and (seconds[comparison[1]] > seconds[order] if comparison[2] == '高于' else seconds[comparison[1]] < seconds[order]) for order in compared))
+
+
 def _has_concrete_core_summary_setting(sentence):
     if re.search(r'(?:讨论|提及|并非|不是|不能|假想|设想|假设|计划|未来|无关|文件目录|如果|若在|预计|预期|可能|未在|没有|未进行|未做|不进行|不做)', sentence):
         return False
@@ -4398,9 +4424,10 @@ def _detailed_core_summary_semantic_issue(summary):
         has_direction = comparison.search(result_sentence) or (
             len(numbers) >= 2 and baseline_transition.search(result_sentence)
         )
-        has_metric = metric.search(metric_sentence) or conference_metric.search(metric_sentence)
+        narrow_measured_result = _has_recorded_dissonance_comparison(result_sentence) or _has_mean_room_simulation_comparison(result_sentence)
+        has_metric = narrow_measured_result or metric.search(metric_sentence) or conference_metric.search(metric_sentence)
         if has_metric and has_direction and numbers \
-                and (setting.search(result_sentence) or named_setting.search(result_sentence) or numeric_named_setting.search(sentence) or _has_concrete_core_summary_setting(result_sentence)) \
+                and (narrow_measured_result or setting.search(result_sentence) or named_setting.search(result_sentence) or numeric_named_setting.search(sentence) or _has_concrete_core_summary_setting(result_sentence)) \
                 and (len(numbers) >= 2 or re.search(
                     r'(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|本方法|所提方法|移除|完整模型|竞品)', result_sentence
                 )) and not _has_cross_metric_directional_comparison(result_sentence):
