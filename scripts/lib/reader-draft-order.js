@@ -738,15 +738,16 @@ function normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts = null 
     const sectionOrderChanged = sectionMap.some(item => item.rawIndex !== item.canonicalIndex);
     let originalTables = locateReaderDraftTables(draft);
     pruneTrailingUnboundSourceQuoteBindings(draft, originalTables);
+    // 小节顺序正确也可能把来源声明留在旧表序；仅按唯一的原格或引文对应重排。
+    if (Array.isArray(draft.tableBindings)
+        && alignSourceQuoteBindingsToCurrentTableNodes(draft, originalTables, structuredArtifacts)) {
+        originalTables = locateReaderDraftTables(draft);
+    }
     let tableMap = originalTables.map(table => ({ rawIndex: table.bindingIndex, canonicalIndex: table.bindingIndex,
         rawSectionIndex: table.sectionIndex, canonicalSectionIndex: table.sectionIndex }));
     if (sectionOrderChanged && Array.isArray(draft.tableBindings)) {
         // 先尝试按来源引文或原表单元格内容匹配，而非直接沿用位置序号；
         // 位置序号可能看似有效，实际对应的表却属于另一个原始小节。
-        const sourceQuoteAligned = alignSourceQuoteBindingsToCurrentTableNodes(
-            draft, originalTables, structuredArtifacts
-        );
-        if (sourceQuoteAligned) originalTables = locateReaderDraftTables(draft);
         let valid = originalTables.length === draft.tableBindings.length
             && draft.tableBindings.every((binding, index) => binding?.tableIndex === index + 1
                 && (Object.prototype.hasOwnProperty.call(binding, 'selection')
