@@ -1471,23 +1471,34 @@ async function analyzePaperWithRetry(paper, options = {}) {
 
         let checkpointFailed = false;
         let checkpointFailure;
+        let finalCheckpoint = null;
         try {
             const analyzePaperDeep = analyzeFn || require('./deep-analyzer.js').analyzePaperDeep;
-            if (onCheckpoint) {
-                Object.defineProperty(paper, ANALYSIS_CHECKPOINT_CALLBACK, {
-                    value: checkpoint => {
-                        if (checkpointFailed) throw checkpointFailure;
+            Object.defineProperty(paper, ANALYSIS_CHECKPOINT_CALLBACK, {
+                value: checkpoint => {
+                    if (checkpointFailed) throw checkpointFailure;
+                    // 分析器成功返回前会压缩阶段检查点；最终资格尚未确认，
+                    // 这里只保留内存中的真实原集，不写额外文件或制造阶段记录。
+                    if (typeof checkpoint?.analysisCheckpoint === 'string') {
+                        finalCheckpoint = {
+                            analysis: checkpoint.analysisCheckpoint,
+                            checkpoints: structuredClone(checkpoint.analysisStageCheckpoints || {}),
+                            sourceSha256: checkpoint.sourceSha256,
+                            acquisitionSourceSha256: checkpoint.analysisManifest?.sourceAcquisition?.sourceSha256
+                        };
+                    }
+                    if (onCheckpoint) {
                         try { return onCheckpoint(checkpoint); }
                         catch (error) {
                             checkpointFailed = true;
                             checkpointFailure = error;
                             throw error;
                         }
-                    },
-                    configurable: true,
-                    enumerable: false
-                });
-            }
+                    }
+                },
+                configurable: true,
+                enumerable: false
+            });
             let analyzed;
             try {
                 analyzed = await analyzePaperDeep(paper);
@@ -1516,6 +1527,37 @@ async function analyzePaperWithRetry(paper, options = {}) {
                 const recoveryReason = getIncompleteAnalysisContentReason(analyzed);
                 const rejectionReason = invalidReason || recoveryReason;
                 if (rejectionReason) {
+                    // 正文已生成但最终阶段证明不完整时，保留真实输出供正常续跑。
+                    // 失败仍然失败；不能把未经核验的正文或来源放进恢复检查点。
+                    if (!invalidReason && hasValidAnalysisBody(analyzed)) {
+                        try {
+                            const fresh = require('./lib/fresh-analysis-context');
+                            const context = fresh.getFreshAnalysisContext();
+                            let source;
+                            if (context) {
+                                fresh.assertFreshPaper(analyzed);
+                                source = fresh.readFreshSource(context.runDir, analyzed, context);
+                            } else {
+                                const daily = require('./lib/daily-fresh-source-plan');
+                                const data = readJsonFileStrict(require('./config').FILES.deepAnalysisResult);
+                                const plan = daily.requireDailyFreshSourceRecoveryPlan(data);
+                                if (!daily.isPaperBoundToPlan(analyzed, plan)) throw new Error('正文未绑定当前封存来源');
+                                source = daily.readDailyFreshSource(plan, analyzed);
+                            }
+                            const sourceSha256 = crypto.createHash('sha256').update(String(source?.text || '')).digest('hex');
+                            if (sourceSha256 === analyzed.sourceSha256
+                                && sourceSha256 === analyzed.analysisManifest?.sourceAcquisition?.sourceSha256) {
+                                paper.analysisCheckpoint = analyzed.analysis;
+                                if (finalCheckpoint?.analysis === analyzed.analysis
+                                    && finalCheckpoint.sourceSha256 === sourceSha256
+                                    && finalCheckpoint.acquisitionSourceSha256 === sourceSha256) {
+                                    paper.analysisStageCheckpoints = finalCheckpoint.checkpoints;
+                                }
+                            }
+                        } catch (_) {
+                            // 来源不完整时不创建新的恢复正文，原失败原因仍由正常流程保存。
+                        }
+                    }
                     lastError = rejectionReason;
                     console.warn(`[analysis-engine] 分析结果未通过完整性检查：${rejectionReason}`);
                     if (attempt < maxRetries) {
