@@ -49,6 +49,36 @@ async function captureHistoricalSource(plan, id, pdfSuffix = '') {
     });
 }
 
+test('分析并发十路时来源封存仍正常执行，下载最多八路且非法显式值在请求前拒绝', async t => {
+    fixture(t);
+    const previousConcurrency = Config.ANALYSIS_CONFIG.concurrency;
+    Config.ANALYSIS_CONFIG.concurrency = 10;
+    t.after(() => { Config.ANALYSIS_CONFIG.concurrency = previousConcurrency; });
+    const papers = Array.from({ length: 12 }, (_, index) => ({ arxivId: `2610.${String(80000 + index)}` }));
+    const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-10-09', batchId: 'ten-analysis', papers });
+    let active = 0, peak = 0, calls = 0;
+    const capture = async options => {
+        calls++; active++; peak = Math.max(peak, active);
+        try {
+            await new Promise(resolve => setImmediate(resolve));
+            return await require('../scripts/lib/fresh-arxiv-rewrite-source.js').captureFreshArxivRewriteSource(options, {
+                fetchText: async () => sourcePayload(options.arxivId),
+                fetchPdf: async () => ({ bytes: Buffer.from('%PDF-1.7\nControlled source\n%%EOF\n'),
+                    url: `https://arxiv.org/pdf/${options.arxivId}` })
+            });
+        } finally { active--; }
+    };
+    const results = await daily.captureDailyFreshSources(plan, { capture });
+    assert.equal(results.length, 12);
+    assert.equal(calls, 12);
+    assert.equal(peak, 8);
+    assert.equal(Config.ANALYSIS_CONFIG.concurrency, 10);
+    for (const concurrency of [0, 9, -1, 1.5]) {
+        await assert.rejects(daily.captureDailyFreshSources(plan, { concurrency, capture }), /1 到 8/);
+        assert.equal(calls, 12);
+    }
+});
+
 test('历史版本信息进入日更分析和结果，两条来源证明保持一致', async t => {
     fixture(t); const id = '2609.12401';
     const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-09-07', batchId: 'historical-source', papers: [{ arxivId: id }] });

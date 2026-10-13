@@ -110,6 +110,8 @@ Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读�
 
 筛选批次大小由 `PD_FILTER_BATCH_SIZE` 控制，整篇分析并发由 `PD_ANALYSIS_CONCURRENCY` 控制。账号池只在选择账号和更新状态时短暂持锁，发送网络请求时不持锁。Responses 仅在 `PD_OPENAI_RESPONSES_STREAM=1` 时启用 SSE；`PD_OPENAI_RESPONSES_STREAM` 和 `PD_OPENAI_RESPONSES_REASONING_EFFORT` 对当前主模型的 Chat Completions 请求没有作用。
 
+日更开始时的原文和 PDF 封存下载保留独立的八路上限。未显式指定下载并发时，使用整篇分析并发与 8 中较小的值；因此把模型分析设为 10 路不会阻止来源下载，也不会把模型分析自动降为 8 路。程序显式传入下载并发时仍须为 1–8 的整数。
+
 解读正文的局部修复通常最多输出 8000 tokens。如果一次局部修复恰好在该上限截断，且候选尚可获得一次额外恢复机会，程序会保存失败草稿并停止；下次显式续跑可提高修复上限，默认最多 16000 tokens。这次机会与实现升级提供的额外尝试共用，不能叠加。自定义预算下，上限按正文预算和基础修复预算计算，最高为 16000，且不超过 `PD_API_READER_MAX_TOKENS`；不能据此无限追加尝试。模型返回任何内容后即消耗这次机会，纯网络故障不消耗。截断的 JSON 仍不能作为有效候选，也不能绕过内容检查。
 
 ## 可选副模型

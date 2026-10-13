@@ -222,7 +222,9 @@ async function captureDailyFreshSources(plan, options = {}) {
     if (!plan || plan.contract !== CONTRACT || plan.version !== VERSION || !Array.isArray(plan.paperIds)) fail('每日来源计划无效');
     const capture = options.capture || arxivSource.captureFreshArxivRewriteSource;
     if (typeof capture !== 'function') fail('需要来源捕获函数');
-    const concurrency = options.concurrency || Config.ANALYSIS_CONFIG.concurrency;
+    // 来源下载独立保留八路上限，增加模型分析并发不应使新日更在下载前失败。
+    // 显式传入的非法值仍交给 bounded 拒绝，不把 0 当作默认配置。
+    const concurrency = options.concurrency ?? Math.min(8, Config.ANALYSIS_CONFIG.concurrency);
     const identity = analysisIdentity(plan);
     const results = await bounded(plan.paperIds, concurrency, async arxivId => {
         const captured = await capture({ rootDir: plan.sourcesDir, arxivId, generation: SOURCE_GENERATION });

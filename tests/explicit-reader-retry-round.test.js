@@ -941,6 +941,9 @@ test('有完整稿或原因不明丢失不能偷开完整轮，模式与整链�
 });
 
 test('代码SHA升级经0API公有迁移准备后，真正generate首次追加旧子轮仍只发局部请求', async t => {
+    const previousRepairBudget = Config.ANALYSIS_CONFIG.apiReaderRepairMaxTokens;
+    Config.ANALYSIS_CONFIG.apiReaderRepairMaxTokens = 8000;
+    t.after(() => { Config.ANALYSIS_CONFIG.apiReaderRepairMaxTokens = previousRepairBudget; });
     const deep = require('../scripts/deep-analyzer');
     const draft = createReaderTestArticle();
     draft.readerTitle = '短';
