@@ -16,22 +16,9 @@ const Config = require('../scripts/config.js');
 const daily = require('../scripts/lib/daily-fresh-source-plan.js');
 const fresh = require('../scripts/lib/fresh-analysis-context.js');
 const direct = require('../scripts/lib/direct-rewrite-analysis-context.js');
-let draftResponse; let requestCalls = 0; let auditCalls = 0; let initialRaw;
+let draftResponse; let requestCalls = 0; let initialRaw;
 const utils = require('../scripts/utils.js');
 utils.requestLlmJson = async (url, endpoint, model, request, headers, options) => {
-    if (options?.usageContext?.stage === 'apiReaderTableAudit') {
-        auditCalls++;
-        const text = require('./fixtures/local-llm-response.cjs').requestText(request);
-        const marker = '待审输入：';
-        const input = JSON.parse(text.slice(text.lastIndexOf(marker) + marker.length).trim());
-        const content = JSON.stringify({ version: 1, inputSha256: input.inputSha256,
-            tables: input.tables.map(table => ({ tableIndex: table.tableIndex, issues: [] })) });
-        const response = require('./fixtures/local-llm-response.cjs').localLlmResponse(endpoint, model, content);
-        options.usageSink(require('../scripts/lib/llm-usage').buildLlmUsageEvent({ model,
-            protocol: utils.detectApiType(endpoint, model), request, response: response.body,
-            statusCode: 200, outputText: content, context: options.usageContext }));
-        return response;
-    }
     requestCalls += 1;
     const content = requestCalls === 1 ? initialRaw : JSON.stringify({ version: 1,
         rawSha256: sha(initialRaw), deleteFields: ['sourceBindingsContract', 'sourceBindingsSha256'] });
@@ -170,7 +157,6 @@ test('真实 Reader 刷新装图失败保留付费稿，中央保存成功后才
     assert.equal(saved.analysisManifest.stages.apiReaderArticle.fullAttempts, 1);
     assert.equal(saved.analysisManifest.stages.apiReaderArticle.transportFailures, 0);
     assert.equal(requestCalls, 2);
-    assert.equal(auditCalls, 2, '两次独立刷新分别产生真实审校回执，不计入原Reader请求');
     assert.equal(candidateFiles().length, 0);
     assert.equal(fs.readdirSync(path.join(plan.runDir, 'reader-attempts'))
         .filter(name => name.endsWith('.resolved.json')).length, 1);

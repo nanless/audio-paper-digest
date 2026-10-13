@@ -161,7 +161,6 @@ function successfulRefreshSample(sample) {
 test('同反馈主文已完成且全内容有效时，公共收尾归档原失败并保主文和付费阶段', async (t) => {
     const sample = await createReviewedReaderSample(t);
     const updated = successfulRefreshSample(sample);
-    await require('./fixtures/local-reader-table-audit.cjs').attachValidReaderTableAudit(updated, sample.source, sample.bound);
     const before = JSON.stringify(updated);
     const refresh = require('../scripts/refresh-api-reader');
     const reason = engine.getIncompleteAnalysisContentReason(updated);

@@ -14,7 +14,7 @@ function readSavedFeedback(paper, plan) {
     if (!proofs.length) return null;
     const hashes = [...new Set(proofs.map(proof => proof.feedbackSha256))];
     // 不把多阶段不同的纠错说明合成一份，也不扩大任何旧阶段的授权。
-    if (hashes.length !== 1) return readSavedCoreFeedback(paper, plan, proofs);
+    if (hashes.length !== 1) return readSavedReaderFeedback(paper, plan, proofs) || readSavedStageReaderFeedback(paper, plan, proofs) || readSavedCoreFeedback(paper, plan, proofs);
     if (!/^[a-f0-9]{64}$/.test(hashes[0])) return null;
     const filename = path.join(daily.factFeedbackDirectory(plan), hashes[0] + '.json');
     if (!fs.existsSync(filename)) return null;
@@ -26,6 +26,62 @@ function readSavedFeedback(paper, plan) {
     }
     facts.validateFeedback(feedback, plan, paper);
     return { feedback, paper };
+}
+function readSavedStageReaderFeedback(paper, plan, proofs) {
+    if (paper.fullStageReanalysis) return null;
+    const stages = paper.analysisManifest?.stages || {};
+    const parentStage = stages.primaryAnalysis?.factReview ? 'primaryAnalysis' : 'coreSummaryRepair';
+    const parentProof = stages[parentStage]?.factReview;
+    const readerProof = stages.apiReaderArticle?.factReview;
+    if (!parentProof || !readerProof || parentProof.feedbackSha256 === readerProof.feedbackSha256) return null;
+    for (const [stage, value] of Object.entries(stages)) {
+        for (const proof of [value?.factReview, value?.scoringFactReview].filter(Boolean)) {
+            facts.validateProof(proof);
+            const expected = ['apiReaderArticle', 'apiReaderTableAudit'].includes(stage) ? readerProof : parentProof;
+            if (daily.stableHash(proof) !== daily.stableHash(expected)) return null;
+        }
+    }
+    if (proofs.some(proof => ![parentProof.feedbackSha256, readerProof.feedbackSha256].includes(proof.feedbackSha256))) return null;
+    const filenames = [parentProof, readerProof].map(proof => path.join(daily.factFeedbackDirectory(plan), proof.feedbackSha256 + '.json'));
+    if (filenames.some(filename => !fs.existsSync(filename))) return null;
+    const [parent, reader] = filenames.map(filename => facts.readFeedback(filename));
+    const parentBound = facts.validateFeedback(parent, plan, paper);
+    const readerBound = facts.validateFeedback(reader, plan, paper);
+    if (daily.stableHash(parentBound.proof) !== daily.stableHash(parentProof)
+        || daily.stableHash(readerBound.proof) !== daily.stableHash(readerProof) || !readerOnlyFeedback(reader)) return null;
+    if (parentStage === 'primaryAnalysis' && !String(parent.primaryFeedback || '').trim()) return null;
+    if (parentStage === 'coreSummaryRepair' && (!parent.coreFeedback.trim()
+        || ['primaryFeedback', 'readerFeedback', 'tagFeedback', 'scoringFeedback'].some(key => String(parent[key] || '').trim())
+        || ['rejectedPrimaryClaims', 'rejectedReaderClaims', 'rejectedTagClaims', 'rejectedScoringClaims'].some(key => (parent[key] || []).length))) return null;
+    return { feedback: parentBound.feedback, paper, readerFeedback: reader, savedParentStage: parentStage };
+}
+function readSavedReaderFeedback(paper, plan, proofs) {
+    const record = paper.fullStageReanalysis;
+    const parentProof = record?.currentFeedbackProof;
+    const readerProof = paper.analysisManifest?.stages?.apiReaderArticle?.factReview;
+    if (!parentProof || !readerProof || parentProof.feedbackSha256 === readerProof.feedbackSha256
+        || proofs.some(proof => ![parentProof.feedbackSha256, readerProof.feedbackSha256].includes(proof.feedbackSha256))) return null;
+    for (const [stage, value] of Object.entries(paper.analysisManifest?.stages || {})) {
+        for (const proof of [value?.factReview, value?.scoringFactReview].filter(Boolean)) {
+            if (proof.feedbackSha256 === readerProof.feedbackSha256 && stage !== 'apiReaderArticle' && stage !== 'apiReaderTableAudit') return null;
+        }
+    }
+    // 先核原档案与费用，再读取两份原包；不拼接或改签原文件。
+    require('./selected-full-stage-reanalysis').fingerprintFields(paper);
+    const original = paper.fullStageReanalysisHistory.find(item => item.runId === record.runId).originalPaper;
+    const inherited = record.inheritedFeedbacks.find(item => daily.stableHash(item.proof) === daily.stableHash(parentProof));
+    const filename = path.join(daily.factFeedbackDirectory(plan), readerProof.feedbackSha256 + '.json');
+    if (!inherited || !fs.existsSync(filename)) return null;
+    const readerFeedback = facts.readFeedback(filename);
+    if (!readerOnlyFeedback(readerFeedback)) return null;
+    const parentBound = facts.validateFeedback(inherited.feedback, plan, original);
+    const readerBound = facts.validateFeedback(readerFeedback, plan, paper);
+    for (const proof of proofs) {
+        facts.validateProof(proof);
+        if (daily.stableHash(proof) !== daily.stableHash(proof.feedbackSha256 === readerProof.feedbackSha256 ? readerBound.proof : parentBound.proof))
+            throw new Error('历史Reader或原全阶段反馈与保存证明不同');
+    }
+    return { feedback: parentBound.feedback, paper: original, readerFeedback };
 }
 function readSavedCoreFeedback(paper, plan, proofs) {
     const record = paper.fullStageReanalysis;
@@ -109,11 +165,11 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
         }
     }
     const original = explicitFeedback ? null : readSavedFeedback(paper, plan);
-    const feedback = explicitFeedback || original?.feedback;
+    const feedback = explicitFeedback || original?.readerFeedback || original?.feedback;
     if (!readerOnlyFeedback(feedback))
         return withRecoveredFeedback(paper, plan, analyze, explicitFeedback);
     if (!completedReaderUpstream(paper, plan)) {
-        if (!explicitFeedback) return withRecoveredFeedback(paper, plan,
+        if (!explicitFeedback && !original?.readerFeedback) return withRecoveredFeedback(paper, plan,
             () => analyze({ requireCompletedPrimaryCheckpoint: true }));
         const error = new Error('独立Reader纠错缺少已完成的主文、摘要或评分');
         error.code = 'READER_UPSTREAM_INCOMPLETE'; error.retryable = false; throw error;
@@ -126,8 +182,9 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
         error.code = 'READER_PARENT_FEEDBACK_MISSING'; error.retryable = false; throw error;
     }
     const bound = facts.validateFeedback(feedback, plan, paper);
-    const refresh = () => facts.withReaderFactReview(bound, paper, async () => {
+    const refresh = () => (original?.readerFeedback && !explicitFeedback ? facts.withSavedReaderFactReview : facts.withReaderFactReview)(bound, paper, async () => {
         facts.withFactReview(bound, () => undefined);
+        if (require('./cancelled-reader-audit-recovery').reusableCancelledReaderAuditResult(paper)) return analyze();
         const target = structuredClone(paper);
         require('../deep-analyzer').captureStaleAnalysisSnapshot(target, target.analysisManifest,
             'apiReaderArticle', bound.proof.feedbackSha256);

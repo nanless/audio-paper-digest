@@ -7604,8 +7604,7 @@ function hasReviewedReaderFactLocalSeed(paper, sourceText, reviewFeedback) {
         && !['primaryFeedback', 'coreFeedback', 'tagFeedback', 'scoringFeedback']
             .some(key => String(active.feedback[key] || '').trim())
         && String(reviewFeedback || '').trim() === facts.reviewFeedback('apiReaderArticle', getPaperArxivId(paper)).trim()
-        && [null, require('./lib/reader-table-semantic-audit').PENDING_REASON]
-            .includes(engine.getIncompleteAnalysisContentReason(paper))
+        && engine.getIncompleteAnalysisContentReason(paper) === null
         && engine.hasValidApiReaderV3Records(paper)
         && crypto.createHash('sha256').update(String(sourceText || '')).digest('hex') === paper.sourceSha256);
 }
@@ -7618,8 +7617,7 @@ function prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback, options
     const reviewedCompletedPrimary = hasReviewedCompletedPrimaryReaderSeed(paper, sourceText, reviewFeedback);
     const reviewedFactLocal = options.readerFactLocalRevision === true
         && hasReviewedReaderFactLocalSeed(paper, sourceText, reviewFeedback);
-    const reviewedTableAudit = require('./lib/reader-table-semantic-audit').repairIssues(paper, sourceText);
-    const currentReaderValid = (!paper?.latestAnalysisAttemptError || reviewedCompletedPrimary || reviewedFactLocal || reviewedTableAudit)
+    const currentReaderValid = (!paper?.latestAnalysisAttemptError || reviewedCompletedPrimary || reviewedFactLocal)
         && hasValidApiReaderV3Records(paper);
     const staleReaderStage = currentReaderValid
         ? null : recoverableStaleReaderRevisionStage(paper, sourceText);
@@ -7720,8 +7718,7 @@ function buildApiReaderGenerationStart(paper, options = {}) {
         + (externalReviewFeedback
             ? '\n本轮局部修复只返回提示要求的补丁 JSON 与已授权字段，不返回整篇文章 JSON 或参考用的 {article,plan}。未授权的事实问题保留反馈，等待后续重新核验并授权。全部来源与整篇检查仍须通过。'
             : '');
-    const signedRecoveryDraft = (options.resourceLocalRevision === true || options.readerFactLocalRevision === true
-        || require('./lib/reader-table-semantic-audit').repairIssues(paper, options.sourceText)) && seed
+    const signedRecoveryDraft = (options.resourceLocalRevision === true || options.readerFactLocalRevision === true) && seed
         ? require('./lib/signed-reader-recovery-draft').convert(seed) : null;
     const readerFactLocalPaths = options.readerFactLocalRevision === true
         ? [...new Set(require('./lib/reader-repair').assertReaderFactLocalCoverage(signedRecoveryDraft,
@@ -8155,7 +8152,6 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     );
     readerRecoveryRevisions = recovered?.readerRecoveryRevisions || [];
     candidate = recovered?.draft || start.signedRecoveryDraft || null;
-    let semanticRepairPending = Boolean(require('./lib/reader-table-semantic-audit').repairIssues(paper, options.sourceText));
     draftOrderMappings = recovered?.draftOrderMappings || [];
     currentIssues = recovered?.issues || [];
     if (!candidate && recovered?.rawDraft) {
@@ -8246,8 +8242,6 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         try {
             normalizeCandidate();
             const parsed = parseCandidate(JSON.stringify(candidate));
-            const semanticIssues = require('./lib/reader-table-semantic-audit').repairIssues(paper, options.sourceText);
-            if (semanticRepairPending && semanticIssues) throw Object.assign(new Error('表格事实审校要求修复已定位错误'), { readerIssues: require('./lib/reader-table-semantic-audit').issuesForDraft(candidate, semanticIssues) });
             const result = { ...parsed, contentMode, attempts: completedAttempts, fullAttempts, transportFailures, imageEvidence,
                 modelImagePreflightEvidenceSha256,
                 providerImageExclusions, resumedCandidate: true, draftOrderMappings,
@@ -8337,10 +8331,6 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         if (candidate && !normalizationError) {
             try {
                 const parsed = parseCandidate(JSON.stringify(candidate));
-                if (semanticRepairPending) throw Object.assign(new Error('表格事实审校要求修复已定位错误'), {
-                    readerIssues: require('./lib/reader-table-semantic-audit').issuesForDraft(candidate,
-                        require('./lib/reader-table-semantic-audit').repairIssues(paper, options.sourceText))
-                });
                 const result = { ...parsed, contentMode, attempts: completedAttempts,
                     imageEvidence, modelImagePreflightEvidenceSha256,
                     providerImageExclusions, resumedCandidate: true, draftOrderMappings };
@@ -8645,7 +8635,6 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     });
                     raw = JSON.stringify(candidate);
                     if (sectionGroupProof) sectionGroupCompilations.push(sectionGroupProof);
-                    semanticRepairPending = false;
                 }
                 if (conceptTermsContext) draftOrderMappings.push({ contract: conceptTermsContext.promptContract,
                     promptPath: conceptTermsContext.promptPath, promptTemplateSha256: conceptTermsContext.promptTemplateSha256,
@@ -8773,24 +8762,6 @@ function normalizeApiReaderFigureMarkdown(article, figures = []) {
     return normalized;
 }
 
-async function auditApiReaderTablesNormally(paper, sourceDetails, save) {
-    const audit = require('./lib/reader-table-semantic-audit');
-    if (!audit.requiresAudit(paper)) return paper;
-    if (audit.repairInProgress(paper.arxivId)) return paper;
-    return audit.run(paper, sourceDetails, {
-        modelConfiguration: { model: DEEP_CONFIG.model, endpoint: DEEP_CONFIG.endpoint },
-        assertHardBindings(current) {
-            if (!require('./analysis-engine').hasValidApiReaderV3Records(current)) {
-                throw Object.assign(new Error('表格事实审校前的正文来源硬检查未通过'), { code: 'CONTRACT_REJECTED', retryable: false });
-            }
-        }, callModel: (...args) => withApiReaderGenerationSlot(() => callModel(...args)), save,
-        async repair(current, issues) {
-            const reviewFeedback = [audit.originalRepairConstraints(current.arxivId), ...issues.map(issue => issue.message)].filter(Boolean).join('\n');
-            return refreshApiReaderArticleFromSource(current, sourceDetails, { reviewFeedback });
-        }
-    });
-}
-
 async function refreshApiReaderArticleFromSource(paper, sourceDetails, options = {}) {
     if (!paper || typeof paper !== 'object') throw new Error('刷新读者文章需要 canonical paper');
     const analysis = String(paper.analysis || '');
@@ -8811,18 +8782,6 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     }
     if (!require('./lib/model-text-sanitization.js').canReuseModelTextInputs(paper, sourceDetails)) {
         throw new Error('旧 Unicode 模型输入需完整重分析，不能只刷新 Reader、评分或图片');
-    }
-    const requestedFeedback = String(options.reviewFeedback || '').trim();
-    const requestedFeedbackSha = requestedFeedback ? crypto.createHash('sha256').update(requestedFeedback).digest('hex') : null;
-    if (require('./lib/reader-table-semantic-audit').requiresAudit(paper)
-        && require('./analysis-engine').hasValidApiReaderV3Records(paper)
-        && !require('./lib/reader-table-semantic-audit').repairInProgress(paper.arxivId)
-        && (manifest.stages.apiReaderArticle.reviewFeedbackSha256 ?? null) === requestedFeedbackSha
-        && !require('./lib/reader-table-semantic-audit').hasValidProof(paper)) {
-        return auditApiReaderTablesNormally(paper, sourceDetails, async current => {
-            const persist = current[Symbol.for('audio-paper-digest.analysisCheckpointCallback')];
-            if (typeof persist === 'function') await persist(current);
-        });
     }
     const conference = require('./lib/conference-analysis-context.js');
     const readerCapabilityPolicy = validateReaderCapabilityPolicy(
@@ -8870,7 +8829,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         readerRepairPromptContract(options)
     );
     const reviewFeedback = String(options.reviewFeedback || '').trim();
-    if (reviewFeedback.length > 4000) throw new Error('读者文章 review feedback 超过 4000 字符');
+    require('./lib/daily-fact-review').validateReaderReviewFeedbackLength(reviewFeedback, arxivId);
     const reviewFeedbackSha256 = reviewFeedback
         ? crypto.createHash('sha256').update(reviewFeedback).digest('hex')
         : null;
@@ -8884,8 +8843,10 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     const contentMode = revisionSeed ? READER_SIGNED_REVISION_CONTENT_MODE : READER_SOURCE_CONTENT_MODE;
     const signedDisplayFields = options.signedRevisionMinimalDisplay === true && revisionSeed
         ? require('./lib/signed-reader-recovery-draft').minimalDisplay(revisionSeed).fields : {};
+    const restoredReaderConstraints = require('./lib/daily-fact-review').current(arxivId)?.restoredReaderConstraints;
     const fingerprint = stableFingerprint({
         configurationFingerprint,
+        ...(restoredReaderConstraints ? { restoredReaderConstraints } : {}),
         ...require('./lib/reader-resource-prose').fields(naturalResourceProse),
         contentMode,
         ...signedDisplayFields,
@@ -8952,11 +8913,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             reviewFeedbackSha256, ...(revisionSeed?.metadata || {})
         }
     });
-    const transferred = transferDeferredReaderCandidate(generated, finalized);
-    return auditApiReaderTablesNormally(transferred, sourceDetails, async current => {
-        const persist = current[Symbol.for('audio-paper-digest.analysisCheckpointCallback')];
-        if (typeof persist === 'function') await persist(current);
-    });
+    return transferDeferredReaderCandidate(generated, finalized);
 }
 
 async function finalizeOperatorApiReaderArticleFromSource(paper, sourceDetails, draft, operatorRevisionRecord) {
@@ -9117,8 +9074,6 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     manifest.stages.apiReaderArticle = {
         status: 'complete',
         ...options.execution,
-        ...(require('./lib/reader-table-semantic-audit').originalRepairFactReview(paper.arxivId)
-            ? { factReview: require('./lib/reader-table-semantic-audit').originalRepairFactReview(paper.arxivId) } : {}),
         ...(options.execution?.readerFactLocalRevisionContract === 'signed-reader-fact-local-repair-v1'
             || require('./lib/daily-fact-review').current(getPaperArxivId(paper))?.readerOnly
             ? require('./lib/daily-fact-review').fingerprintFields('apiReaderArticle') : {}),
@@ -9158,8 +9113,7 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
             ? options.execution.operatorProvenance.appliedAt : getBeijingISOString()
     };
     if (paper.analysis && manifest.stages.scoringAudit?.status === 'complete'
-        && !require('./lib/daily-fact-review').current(getPaperArxivId(paper))?.readerOnly
-        && !require('./lib/reader-table-semantic-audit').repairInProgress(getPaperArxivId(paper))) {
+        && !require('./lib/daily-fact-review').current(getPaperArxivId(paper))?.readerOnly) {
         require('./lib/reader-resource-sync.js').synchronizeReaderResourceAvailability(paper, sourceDetails);
     }
     return paper;
@@ -12217,9 +12171,9 @@ async function _callModelOnce(messages, maxTokens, config, budget, apiType, time
     const bodyObj = buildRequestBody(apiType, config.model, messages, maxTokens, temperature,
         { usageContext: config.usageContext,
             auxiliaryThinkingMode: resolveAuxiliaryRequestPolicy(config.usageContext?.stage, config)?.thinkingMode,
-            readerResponseFormat: ['apiReaderArticle', 'apiReaderRepair', 'apiReaderTableAudit'].includes(config.usageContext?.stage)
+            readerResponseFormat: ['apiReaderArticle', 'apiReaderRepair'].includes(config.usageContext?.stage)
                 ? config.readerResponseFormat : undefined,
-            readerThinkingMode: ['apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe', 'apiReaderTableAudit']
+            readerThinkingMode: ['apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe']
             .includes(config.usageContext?.stage) ? config.readerThinkingMode : undefined,
             primaryThinkingMode: config.usageContext?.stage === 'primaryAnalysis'
                 ? config.primaryThinkingMode : undefined,
@@ -15418,15 +15372,10 @@ async function analyzePaperDeep(paper, options = {}) {
 async function analyzePaperDeepInternal(paper, options = {}) {
     const resolvedReaderCandidateParent = options.resolvedReaderCandidate !== undefined ? structuredClone(paper) : null;
     const fullStageReanalysis = require('./lib/selected-full-stage-reanalysis').assertPrepared(paper);
-    const tableAudit = require('./lib/reader-table-semantic-audit');
-    if (!fullStageReanalysis && tableAudit.canAuditSavedReader(paper) && tableAudit.factInputsUnchanged(paper)) {
-        const source = tableAudit.sourceForPaper(paper);
-        return auditApiReaderTablesNormally(paper, source, async current => {
-            const persist = current[Symbol.for('audio-paper-digest.analysisCheckpointCallback')];
-            if (typeof persist === 'function') await persist(current);
-        });
+    if (!fullStageReanalysis) {
+        const reused = require('./lib/cancelled-reader-audit-recovery').reusableCancelledReaderAuditResult(paper);
+        if (reused) return reused;
     }
-
     removeManualAnalysisFields(paper);
     sanitizePaperImageRecovery(paper);
     const arxivId = getPaperArxivId(paper);
@@ -17231,11 +17180,6 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 : suppressOuterRetryAfterReaderExhaustion(error);
         }
     }
-
-    paper.analysis = analysis;
-    await auditApiReaderTablesNormally(paper, sourceDetails, async current => {
-        saveAnalysisCheckpoint(current, analysis, analysisManifest, imageManifest);
-    });
 
     // 最后一轮：副模型基于最终文本筛选高价值图片，代码按 JSON 计划做受限局部插图合并。
     // 必须放在纯文本修复之后，否则 gap-fill / 表格补充 / 方法补充可能删掉图片。

@@ -16,7 +16,6 @@ const { validAnalysisPaper } = require('./valid-analysis-fixture');
 
 const failure = '局部事实纠错没有当前错误原句，也没有同反馈已完成证明；不能扩大为完整主文请求';
 
-const { attachValidReaderTableAudit } = require('./fixtures/local-reader-table-audit.cjs');
 
 async function createReviewedReaderSample(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reviewed-reader-seed-'));
@@ -72,7 +71,6 @@ async function createReviewedReaderSample(t) {
     fs.writeFileSync(originalFeedbackFile, JSON.stringify(feedback));
     const finalBound = facts.validateFeedback(facts.readFeedback(originalFeedbackFile), plan, paper);
     paper.analysisManifest.stages.apiReaderArticle.factReview = finalBound.proof;
-    await attachValidReaderTableAudit(paper, source, finalBound);
     assert.equal(engine.isSuccessfulAnalysisRecord(paper), true);
     return { paper, plan, source, feedback, bound, id };
 }
@@ -105,15 +103,8 @@ test('deep 公共入口真实合格同反馈零请求，新反馈仍进入且锁
   batches++;assert.equal(papers.length,1);assert.equal(opts.preparePaperLocked(papers[0]).skip,false);
   const latest=JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult));
   const bound=facts.validateFeedback(changed,f.plan,latest.papers[0]);
-  const oldAuditRecords=structuredClone(latest.papers[0].analysisManifest.stages.apiReaderTableAudit.records);
   latest.papers[0].analysisManifest.stages.apiReaderArticle.factReview=bound.proof;
   latest.papers[0].analysisManifest.stages.apiReaderArticle.reviewFeedbackSha256=facts.sha(changed.readerFeedback.trim());
-  assert.equal(facts.withFactReview(bound,()=>require('../scripts/lib/reader-table-semantic-audit').currentProof(latest.papers[0],f.source)),false);
-  await attachValidReaderTableAudit(latest.papers[0],f.source,bound);
-  const newAuditRecords=latest.papers[0].analysisManifest.stages.apiReaderTableAudit.records;
-  assert.equal(newAuditRecords.length,oldAuditRecords.length+1);
-  assert.deepEqual(newAuditRecords.slice(0,oldAuditRecords.length),oldAuditRecords);
-  assert.notEqual(newAuditRecords.at(-1).inputSha256,oldAuditRecords.at(-1).inputSha256);
   save(Config.FILES.deepAnalysisResult,latest);
   assert.equal(opts.preparePaperLocked(papers[0]).skip,true);
   latest.papers[0].apiReaderArticle += changed.rejectedReaderClaims[0];save(Config.FILES.deepAnalysisResult,latest);

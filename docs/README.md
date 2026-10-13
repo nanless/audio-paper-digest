@@ -56,5 +56,3 @@ Start with the English [project README](../README.en.md), then use
 [Architecture](en/architecture.md), [Data formats](en/data-format.md),
 [Compatibility](en/compatibility.md), [Maintenance](en/maintenance.md), and
 [Troubleshooting](en/troubleshooting.md).
-
-- [Reader 表格事实审校](reader-table-semantic-audit.md)：正常入口的表格、条件与关联解释审校，独立费用及冷启动证明。

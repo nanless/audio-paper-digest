@@ -14,7 +14,6 @@ const status = require('../scripts/digest-status');
 const utils = require('../scripts/utils');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const write = (file, value) => fs.writeFileSync(file, JSON.stringify(value), { mode: 0o600 });
-const { attachValidReaderTableAudit: completeLocalTableAudit } = require('./fixtures/local-reader-table-audit.cjs');
 
 async function createSample(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'completed-status-sync-'));
@@ -53,7 +52,6 @@ async function createSample(t) {
         for (const paper of papers) fresh.attachFreshSourceRecord(paper, paper.analysisManifest, daily.readDailyFreshSource(plan, paper));
     });
     for (const paper of papers) {
-        await completeLocalTableAudit(paper, daily.readDailyFreshSource(plan, paper));
         assert.equal(engine.isSuccessfulAnalysisRecord(paper), true, engine.getIncompleteAnalysisContentReason(paper));
         assert.equal(daily.isPaperReusableForAnalysis(paper, plan), true);
     }

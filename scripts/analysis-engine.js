@@ -930,8 +930,6 @@ function getIncompleteAnalysisContentReason(paper) {
         if (!scoringAuditBindsFinalAnalysis(paper)) return '评分审查记录与最终正文不一致。';
         if (!scoringStabilityIsResolved(scoring)) return '评分稳定性检查未通过。';
         if (!hasValidApiReaderV3Records(paper)) return '读者文章与论文来源及分析记录的对应关系未通过核验。';
-        if (require('./lib/reader-table-semantic-audit').requiresAudit(paper)
-            && !require('./lib/reader-table-semantic-audit').hasValidProof(paper)) return require('./lib/reader-table-semantic-audit').PENDING_REASON;
     }
     return null;
 }

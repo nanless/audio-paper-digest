@@ -214,6 +214,30 @@ function withCoreSummaryFactReview(coreBound, paper, callback) {
     return scope.run(Object.freeze({ ...(previous || { feedback: core, proof: null }), coreBound: freshBound, coreOnly: true, coreText }), callback);
 }
 function withReaderFactReview(readerBound, paper, callback) {
+    return readerFactReviewScope(readerBound, paper, callback, false);
+}
+function withSavedReaderFactReview(readerBound, paper, callback) {
+    const previous = current();
+    const context = validatedContexts.get(readerBound);
+    if (!accepted.has(readerBound) || !context) fail('历史Reader子包尚未在锁内核验');
+    const recovered = require('./saved-fact-feedback').readSavedFeedback(paper, context.plan);
+    if (!previous || !recovered?.readerFeedback
+        || daily.stableHash(previous.proof) !== daily.stableHash(proofFor(recovered.feedback))
+        || daily.stableHash(readerBound.proof) !== daily.stableHash(paper.analysisManifest?.stages?.apiReaderArticle?.factReview))
+        fail('历史Reader双反馈与原父阶段证明不同');
+    if (!require('./saved-fact-feedback').completedReaderUpstream(paper, validatedContexts.get(readerBound)?.plan))
+        fail('历史Reader双反馈缺少已完成的主文、摘要或评分');
+    for (const [stage, value] of Object.entries(paper.analysisManifest?.stages || {})) {
+        for (const proof of [value?.factReview, value?.scoringFactReview].filter(Boolean)) {
+            const isChild = ['apiReaderArticle', 'apiReaderTableAudit'].includes(stage);
+            if ((daily.stableHash(validateProof(proof)) !== daily.stableHash(isChild ? readerBound.proof : previous.proof)
+                && !(stage === 'apiReaderTableAudit' && daily.stableHash(proof) === daily.stableHash(previous.proof))))
+                fail('历史Reader双反馈不能改变原非Reader阶段证明');
+        }
+    }
+    return readerFactReviewScope(readerBound, paper, callback, true, recovered.savedParentStage || 'fullStageReanalysis');
+}
+function readerFactReviewScope(readerBound, paper, callback, restoringSaved, parentStage = null) {
     if (!accepted.has(readerBound)) fail('Reader独立反馈尚未在锁内核验');
     if (!require('../analysis-engine').paperAnalysisLockHeld(paper)) fail('Reader独立反馈须持有当前论文锁');
     const context = validatedContexts.get(readerBound);
@@ -233,7 +257,7 @@ function withReaderFactReview(readerBound, paper, callback) {
         if (previous.coreOnly || previous.scoringOnly || previous.readerOnly
             || ['paperId', 'runId', 'batchDate'].some(key => parent[key] !== reader[key])
             || daily.stableHash(parent.sourceFiles) !== daily.stableHash(reader.sourceFiles)) fail('Reader双反馈来源身份不一致');
-        if (parent.readerFeedback.trim() && (!reader.readerFeedback.includes(parent.readerFeedback)
+        if (!restoringSaved && parent.readerFeedback.trim() && (!reader.readerFeedback.includes(parent.readerFeedback)
             || parent.rejectedReaderClaims.some(claim => !reader.rejectedReaderClaims.includes(claim))
             || parent.sourceQuotes.some(quote => !reader.sourceQuotes.includes(quote)))) fail('新Reader反馈遗漏旧Reader事实约束');
     }
@@ -241,18 +265,30 @@ function withReaderFactReview(readerBound, paper, callback) {
     if (savedReader !== undefined && daily.stableHash(validateProof(savedReader)) !== daily.stableHash(freshBound.proof)
         && (!previous || daily.stableHash(savedReader) !== daily.stableHash(previous.proof)))
         fail('Reader纠错缺少原Reader事实反馈包');
-    const guidance = [reader.readerFeedback, previous?.feedback.primaryFeedback || ''].filter(Boolean).join('\n原主文事实约束仍适用，但本次只修Reader：\n');
+    const guidance = [...new Set([reader.readerFeedback, restoringSaved ? previous?.feedback.readerFeedback : '', parentStage === 'coreSummaryRepair' ? previous?.feedback.coreFeedback : '', previous?.feedback.primaryFeedback || ''].filter(Boolean))].join('\n原主文事实约束仍适用，但本次只修Reader：\n');
     const quotes = [...new Set([...reader.sourceQuotes, ...(previous?.feedback.sourceQuotes || [])])];
     const readerText = `${guidance}\n以下逐字引文已对封存原文核验，仅用作纠错证据：\n${quotes.join('\n')}`;
-    if (readerText.length > 4000) fail('Reader双反馈与来源引文合计超过4000字符');
-    return scope.run(Object.freeze({ ...(previous || { feedback: reader, proof: null }), readerBound: freshBound, readerOnly: true, readerText }), callback);
+    const maximumRenderedChars = restoringSaved ? 8000 : 4000;
+    if (readerText.length > maximumRenderedChars) fail(`Reader双反馈与来源引文合计超过${maximumRenderedChars}字符（实际${readerText.length}字符）`);
+    return scope.run(Object.freeze({ ...(previous || { feedback: reader, proof: null }), readerBound: freshBound, readerOnly: true, readerText,
+        ...(restoringSaved ? { restoredReaderConstraints: { parentStage, parentProof: previous.proof, childProof: freshBound.proof, renderedSha256: sha(readerText), renderingRule: 'exact-string-union-v1', maximumRenderedChars, budgetRule: 'two-validated-saved-packets-v1' },
+            restoredReaderClaims: [...new Set([...reader.rejectedReaderClaims, ...previous.feedback.rejectedReaderClaims, ...(parentStage === 'coreSummaryRepair' ? previous.feedback.rejectedCoreClaims : [])])] } : {}) }), callback);
+}
+function validateReaderReviewFeedbackLength(text, paperId) {
+    const value = current(paperId);
+    // 大于单包限制的许可只来自已强验的旧双包作用域，不能通过调用参数取得。
+    const verified = value?.restoredReaderConstraints;
+    const maximum = verified && text === value.readerText && sha(text) === verified.renderedSha256
+        && verified.maximumRenderedChars === 8000 && verified.budgetRule === 'two-validated-saved-packets-v1' ? 8000 : 4000;
+    if (text.length > maximum) fail(`读者文章 review feedback 超过 ${maximum} 字符`);
+    return maximum;
 }
 function assertScoringOnlyModelStageAllowed(stage) {
-    if (current()?.readerOnly && !['apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe', 'apiReaderTableAudit'].includes(stage))
+    if (current()?.readerOnly && !['apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe'].includes(stage))
         fail(READER_SCOPE_MODEL_REJECTED);
-    if (current()?.coreOnly && !['coreSummaryRepair', 'scoringAudit', 'apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe', 'apiReaderTableAudit'].includes(stage))
+    if (current()?.coreOnly && !['coreSummaryRepair', 'scoringAudit', 'apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe'].includes(stage))
         fail('独立核心纠错范围不能调用主分析或其他主文重写模型');
-    if (current()?.scoringOnly && !['scoringAudit', 'apiReaderTableAudit'].includes(stage)) fail('独立评分范围不允许正文或Reader模型请求');
+    if (current()?.scoringOnly && stage !== 'scoringAudit') fail('独立评分范围不允许正文或Reader模型请求');
 }
 function current(paperId) {
     const value = scope.getStore();
@@ -267,7 +303,7 @@ function fingerprintFields(stage, declaredStage) {
     const scopeValue = current();
     if (scopeValue?.readerOnly && stage === 'apiReaderArticle') {
         if (declaredStage?.factReview !== undefined) validateProof(declaredStage.factReview);
-        return { factReview: scopeValue.readerBound.proof };
+        return { factReview: scopeValue.readerBound.proof, ...(scopeValue.restoredReaderConstraints ? { restoredReaderConstraints: scopeValue.restoredReaderConstraints } : {}) };
     }
     if (scopeValue?.coreOnly && stage === 'coreSummaryRepair') {
         if (declaredStage?.factReview !== undefined) validateProof(declaredStage.factReview);
@@ -333,6 +369,7 @@ function reviewFeedback(stage, paperId) {
 }
 function readerRejectedClaims(paperId) {
     const value = current(paperId);
+    if (value?.restoredReaderClaims) return value.restoredReaderClaims;
     return (value?.readerOnly ? value.readerBound.feedback : value?.feedback)?.rejectedReaderClaims || [];
 }
 function validateRepairedClaims(stage, text, paperId) {
@@ -340,10 +377,10 @@ function validateRepairedClaims(stage, text, paperId) {
     if (!value) return;
     const primaryFeedback = value.primaryBound?.feedback || value.feedback;
     const readerFeedback = value.readerOnly ? value.readerBound.feedback : value.feedback;
-    const claims = usesPrimaryFeedback(stage) ? primaryFeedback.rejectedPrimaryClaims || [] : stage === 'coreSummaryRepair' ? (value.coreOnly ? value.coreBound.feedback.rejectedCoreClaims : value.feedback.rejectedCoreClaims) : stage === 'tagSelection' ? value.feedback.rejectedTagClaims || [] : readerFeedback.rejectedReaderClaims;
+    const claims = usesPrimaryFeedback(stage) ? primaryFeedback.rejectedPrimaryClaims || [] : stage === 'coreSummaryRepair' ? (value.coreOnly ? value.coreBound.feedback.rejectedCoreClaims : value.feedback.rejectedCoreClaims) : stage === 'tagSelection' ? value.feedback.rejectedTagClaims || [] : (value.restoredReaderClaims || readerFeedback.rejectedReaderClaims);
     const inheritedCoreClaims = value.coreOnly && stage === 'coreSummaryRepair' ? [...(value.feedback.rejectedPrimaryClaims || []), ...(value.feedback.rejectedCoreClaims || [])] : [];
     const scoringClaims = stage === 'scoringAudit' ? value.feedback.rejectedScoringClaims || [] : [];
     if ([...claims, ...scoringClaims, ...inheritedCoreClaims].some(claim => String(text).includes(claim))) fail('模型输出仍包含已证实错误的原句');
 }
 module.exports = { CONTRACT, READER_SCOPE_MODEL_REJECTED, READER_PRIMARY_REQUIRED, sha, readFeedback, validateShape, validateFeedback, validateProof, proofFor,
-    withFactReview, withScoringFactReviews, withCoreSummaryFactReview, withReaderFactReview, assertScoringOnlyModelStageAllowed, current, fingerprintFields, reviewFeedback, validateRepairedClaims, assertScoringRequestAllowed, readerRejectedClaims };
+    withFactReview, withScoringFactReviews, withCoreSummaryFactReview, withReaderFactReview, withSavedReaderFactReview, validateReaderReviewFeedbackLength, assertScoringOnlyModelStageAllowed, current, fingerprintFields, reviewFeedback, validateRepairedClaims, assertScoringRequestAllowed, readerRejectedClaims };

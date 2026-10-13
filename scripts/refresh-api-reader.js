@@ -333,7 +333,7 @@ function finishReviewedPrimaryReaderRefresh(previous, refreshed, plan, options =
     const facts = require('./lib/daily-fact-review');
     const engine = require('./analysis-engine');
     const sameMainStages = value => Object.fromEntries(Object.entries(value.analysisManifest.stages)
-        .filter(([key]) => !['apiReaderArticle', 'apiReaderTableAudit'].includes(key)));
+        .filter(([key]) => key !== 'apiReaderArticle'));
     const protectedKeys = ['parsed', 'analysisCheckpoint', 'analysisStageCheckpoints',
         'freshRewriteProvenance', 'sourceSha256', 'usedTextSha256', 'scoringRubricVersion',
         'analysisSource', 'sourceId', 'sourceTextChars', 'digestStatus', 'error'];
@@ -439,7 +439,6 @@ async function refreshApiReaderInternal(targetId, options = {}) {
     const { paper: existing, plan: initialDailySourcePlan } =
         readRefreshTargetAndPlan(resultPath, requested, refreshRecoveryEntryScope.getStore());
     if (!existing || (!isSuccessfulAnalysisRecord(existing)
-        && !require('./lib/reader-table-semantic-audit').canAuditSavedReader(existing)
         && !(options.scoringAndReader && canRepairScoringBinding(existing))
         && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(existing))
         && !canRepairCompletedPrimaryReader(existing, initialDailySourcePlan, options))) {
@@ -451,7 +450,6 @@ async function refreshApiReaderInternal(targetId, options = {}) {
         const { paper: storedAnalysisRecord, plan: lockedDailySourcePlan } =
             readRefreshTargetAndPlan(resultPath, requested, refreshRecoveryEntryScope.getStore() || initialDailySourcePlan);
         if (!storedAnalysisRecord || (!isSuccessfulAnalysisRecord(storedAnalysisRecord)
-            && !require('./lib/reader-table-semantic-audit').canAuditSavedReader(storedAnalysisRecord)
             && !(options.scoringAndReader && canRepairScoringBinding(storedAnalysisRecord))
             && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(storedAnalysisRecord))
             && !canRepairCompletedPrimaryReader(storedAnalysisRecord, lockedDailySourcePlan, options))) {
@@ -461,37 +459,6 @@ async function refreshApiReaderInternal(targetId, options = {}) {
             throw new Error(`${requested} 的分析结果与当前封存的日更来源不一致；请使用 npm run reanalyze 根据已封存来源重新分析。`);
         }
         const inputIdentity = paperRefreshInputIdentity(storedAnalysisRecord);
-        // 独立表格审校的付费响应和网络失败须及时保存；只更新该阶段记录，
-        // 不把完整正文补成原主分析检查点，也不改变上游阶段或旧文章。
-        const auditCheckpoint = Symbol.for('audio-paper-digest.analysisCheckpointCallback');
-        Object.defineProperty(storedAnalysisRecord, auditCheckpoint, {
-            configurable: true, enumerable: false,
-            value: checkpoint => {
-                if (!require('./analysis-engine').paperAnalysisLockHeld(storedAnalysisRecord)) {
-                    throw new Error('表格审校检查记录只能在当前论文锁内保存');
-                }
-                const stage = checkpoint?.analysisManifest?.stages?.apiReaderTableAudit;
-                if (!stage) return;
-                if (normalizedId(checkpoint) !== requested) {
-                    throw new Error('表格审校检查记录对应了另一篇论文，不能保存');
-                }
-                updateJsonFileLocked(resultPath, payload => {
-                    const rows = Array.isArray(payload) ? payload : payload.papers;
-                    if (!Array.isArray(rows)) throw new Error('表格审校保存时论文列表不是数组');
-                    const indexes = rows.flatMap((row, index) => normalizedId(row) === requested ? [index] : []);
-                    if (indexes.length !== 1 || paperRefreshInputIdentity(rows[indexes[0]]) !== inputIdentity) {
-                        throw new Error(`${requested} canonical_changed_during_refresh`);
-                    }
-                    const index = indexes[0];
-                    const current = rows[index];
-                    const updated = [...rows];
-                    updated[index] = { ...current, analysisManifest: { ...current.analysisManifest,
-                        stages: { ...current.analysisManifest.stages,
-                            apiReaderTableAudit: structuredClone(stage) } } };
-                    return Array.isArray(payload) ? updated : { ...payload, papers: updated };
-                });
-            }
-        });
         const completedPrimaryRecoveryInput = canRepairCompletedPrimaryReader(
             storedAnalysisRecord, lockedDailySourcePlan, options) ? structuredClone(storedAnalysisRecord) : null;
         const refreshLabel = options.authorsOnly

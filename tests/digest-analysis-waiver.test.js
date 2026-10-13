@@ -17,7 +17,6 @@ const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const DATE = '2026-09-07';
 const IDS = ['2609.10001', '2609.10002'];
 
-const { attachValidReaderTableAudit: completeLocalTableAudit } = require('./fixtures/local-reader-table-audit.cjs');
 
 async function sourceBoundPaper(plan, id) {
     const source = daily.readDailyFreshSource(plan, { arxivId: id });
@@ -60,7 +59,6 @@ async function sourceBoundPaper(plan, id) {
         sourceOnly: true, oldGeneratedTextIncluded: false };
     reader.freshRewriteProvenance = proof;
     reader.analysisManifest.freshRewriteProvenance = structuredClone(proof);
-    await completeLocalTableAudit(reader, source);
     assert.equal(isSuccessfulAnalysisRecord(reader), true, '正常测试样例数据必须通过实际分析完成校验');
     assert.equal(llmApiPaperComplete(reader), true, '正常测试样例数据必须通过实际 API Reader、评分与来源核验');
     return reader;

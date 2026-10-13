@@ -5,11 +5,28 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+test.mock.method(require('../scripts/env-loader'), 'loadProjectEnv', () => {
+    const environment = {
+        PAPER_ANALYZER_MODEL: 'muse-spark-1.3-contributor', PAPER_ANALYZER_ENDPOINT: 'https://invalid.example/v1',
+        PAPER_ANALYZER_API_KEY: 'unused-test-no-network', PAPER_ANALYZER_FALLBACK_API_KEYS: '',
+        PAPER_ANALYZER_SECONDARY_MODEL: 'muse-spark-1.3-contributor', PAPER_ANALYZER_SECONDARY_ENDPOINT: 'https://invalid.example/v1',
+        PAPER_ANALYZER_SECONDARY_API_KEY: 'unused-test-no-network', PAPER_ANALYZER_SECONDARY_FALLBACK_API_KEYS: '',
+        PAPER_ANALYZER_TERTIARY_FALLBACK_API_KEY: '', HTTPS_PROXY: 'http://127.0.0.1:9', HTTP_PROXY: 'http://127.0.0.1:9'
+    };
+    Object.assign(process.env, environment);
+    return environment;
+});
 const Config = require('../scripts/config');
 const daily = require('../scripts/lib/daily-fresh-source-plan');
 const fresh = require('../scripts/lib/fresh-analysis-context');
 const sourceApi = require('../scripts/lib/fresh-arxiv-rewrite-source');
 const facts = require('../scripts/lib/daily-fact-review');
+const requestApi = require('../scripts/utils');
+const originalRequestLlmJson = requestApi.requestLlmJson;
+let publicReaderRequestObserver = null;
+// 深度模块会捕获请求函数，须在加载前安装测试边界。
+requestApi.requestLlmJson = (...args) => publicReaderRequestObserver
+    ? publicReaderRequestObserver(...args) : originalRequestLlmJson(...args);
 const deep = require('../scripts/deep-analyzer');
 const engine = require('../scripts/analysis-engine');
 const { validAnalysisPaper } = require('./valid-analysis-fixture');
@@ -102,22 +119,12 @@ for (const mode of ['deep', 'batch']) {
         t.mock.method(require('../scripts/utils'), 'requestLlmJson', async (_url, _endpoint, model, _body, _headers, requestOptions) => {
             assert.equal(model, 'muse-spark-1.3-contributor');
             stages.push(requestOptions.usageContext.stage);
-            assert.ok(['apiReaderArticle', 'apiReaderTableAudit'].includes(requestOptions.usageContext.stage),
-                '文章纠错和审校不能请求主分析、摘要或评分');
+            assert.equal(requestOptions.usageContext.stage, 'apiReaderArticle',
+                '文章纠错不能请求主分析、摘要或评分');
             const prompt = _body.input[0].content.find(part => part.type === 'input_text').text;
-            let text;
-            if (requestOptions.usageContext.stage === 'apiReaderArticle') {
-                assert.equal(prompt.includes('structuredSourcePayload'), false);
-                assert.ok(prompt.includes('\"version\":3'));
-                text = JSON.stringify(signed.draft);
-            } else {
-                const marker = '待审输入：';
-                assert.ok(prompt.includes(marker));
-                const input = JSON.parse(prompt.slice(prompt.indexOf(marker) + marker.length).trim());
-                assert.equal(input.inputSha256, requestOptions.usageContext.unitId);
-                text = JSON.stringify({ version: 1, inputSha256: input.inputSha256,
-                    tables: input.tables.map(table => ({ tableIndex: table.tableIndex, issues: [] })) });
-            }
+            assert.equal(prompt.includes('structuredSourcePayload'), false);
+            assert.ok(prompt.includes('"version":3'));
+            const text = JSON.stringify(signed.draft);
             const response = { statusCode: 200, body: { status: 'completed', output: [{ type: 'message', role: 'assistant',
                 content: [{ type: 'output_text', text }] }] } };
             if (requestOptions.usageSink) {
@@ -152,7 +159,7 @@ for (const mode of ['deep', 'batch']) {
                 resultPaper = outcome.result;
                 return { stats: { success: 1, failed: 0, skipped: 0, sourceCounts: {} } };
             }) });
-        assert.deepEqual(stages, ['apiReaderArticle', 'apiReaderTableAudit']);
+        assert.deepEqual(stages, ['apiReaderArticle']);
         assert.equal(resultPaper.analysis, originalAnalysis);
         for (const stage of ['primaryAnalysis', 'coreSummaryRepair', 'scoringAudit']) assert.deepEqual(resultPaper.analysisManifest.stages[stage], priorStages[stage]);
         assert.deepEqual(resultPaper.paidResponseHistory, sample.paper.paidResponseHistory);
@@ -204,6 +211,7 @@ test('已保存的纯Reader旧包缺下游时进入原恢复并硬性要求复�
 });
 
 test('正常深度分析的旧Reader恢复主检查点不可复用时不请求新primary', async t => {
+    t.mock.method(global, 'fetch', async () => ({ ok: false, status: 404, text: async () => '' }));
     const sample = await createReviewedReaderSample(t);
     const feedback = { ...sample.feedback, rejectedPrimaryClaims: [] };
     const bound = facts.validateFeedback(feedback, sample.plan, sample.paper);
@@ -244,54 +252,150 @@ test('显式提供同旧proof原包仅公共保存并按默认缺阶段恢复，
     assert.deepEqual(saved.readSavedFeedback(sample.paper, sample.plan).feedback, feedback);
 });
 
-test('正常Reader纠错收到无效审校响应仍保存原始记录，重启不重复请求', async t => {
+test('历史父与Reader子恢复只为真实新输入合并约束，新子仍须继承', async t => {
     const sample = await createReviewedReaderSample(t);
-    const parent = { ...sample.feedback, rejectedPrimaryClaims: [] };
-    const bound = facts.validateFeedback(parent, sample.plan, sample.paper);
-    sample.paper.analysisManifest.stages.apiReaderArticle.factReview = bound.proof;
-    facts.withFactReview(bound, () => undefined);
-    const child = { ...parent, readerFeedback: parent.readerFeedback + ' 纠正当前文章的具体表述。' };
-    const before = structuredClone(sample.paper.analysisManifest.stages);
-    const signed = require('./reader-signed-draft-fixture').fixture({ noFigures: true });
-    const checkpointFile = path.join(sample.plan.runDir, 'failed-audit-checkpoint.json');
-    let auditRequests = 0;
-    t.mock.method(require('../scripts/utils'), 'requestLlmJson', async (_url, _endpoint, model, body, _headers, options) => {
-        assert.ok(['apiReaderArticle', 'apiReaderTableAudit'].includes(options.usageContext.stage));
-        const text = options.usageContext.stage === 'apiReaderTableAudit'
-            ? (auditRequests++, '{"version":') : JSON.stringify(signed.draft);
-        const response = { statusCode: 200, body: { status: 'completed', output: [{ type: 'message', role: 'assistant',
-            content: [{ type: 'output_text', text }] }] } };
-        if (options.usageSink) options.usageSink(require('../scripts/lib/llm-usage').buildLlmUsageEvent({
-            protocol: 'openai_responses', model, request: body, response: response.body,
-            statusCode: 200, durationMs: 1, context: options.usageContext, outputText: text
-        }));
-        return response;
-    });
-    const file = require.resolve('../scripts/deep-analyzer');
-    const prior = require.cache[file]; delete require.cache[file]; require(file);
-    t.after(() => { require.cache[file] = prior; });
-    const invoke = paper => daily.withDailyFreshAnalysisContext(sample.plan, () =>
-        engine.withPaperAnalysisLock(paper, () => engine.analyzePaperWithRetry(paper, {
-            maxRetries: 0,
-            analyzeFn: current => saved.analyzeWithRecoveredFeedback(current, sample.plan,
-                () => assert.fail('不能重新调用主分析'), child),
-            onCheckpoint: current => fs.writeFileSync(checkpointFile, JSON.stringify(current))
-        })));
-    const first = await invoke(sample.paper);
-    assert.equal(first.success, false);
-    assert.match(first.error, /表格审校响应不是完整JSON/);
-    const stored = JSON.parse(fs.readFileSync(checkpointFile));
-    const record = stored.analysisManifest.stages.apiReaderTableAudit.records[0];
-    assert.equal(record.rawResponse, '{"version":');
-    assert.equal(record.responseSha256, facts.sha(record.rawResponse));
-    assert.equal(record.requestReceipts[0].outcome, 'completed');
-    for (const stage of ['primaryAnalysis', 'coreSummaryRepair', 'scoringAudit']) {
-        assert.deepEqual(stored.analysisManifest.stages[stage], before[stage]);
+    const policy = require('../scripts/lib/selected-full-stage-reanalysis');
+    const parent = { ...sample.feedback, primaryFeedback: '保留原主文事实条件。',
+        readerFeedback: '保留原Reader边界条件。'.repeat(150), rejectedPrimaryClaims: ['原来的错误已消失'],
+        rejectedReaderClaims: ['父包已证实错误的句子'] };
+    const child = { ...sample.feedback, primaryFeedback: '', rejectedPrimaryClaims: [],
+        readerFeedback: '原子包纠正另一处Reader解释。'.repeat(150), rejectedReaderClaims: ['子包已证实错误的句子'] };
+    const parentBound = facts.validateFeedback(parent, sample.plan, sample.paper);
+    const childBound = facts.validateFeedback(child, sample.plan, sample.paper);
+    for (const [stage, value] of Object.entries(sample.paper.analysisManifest.stages)) {
+        value.factReview = stage === 'apiReaderArticle' ? childBound.proof : parentBound.proof;
     }
-    assert.equal(stored.analysisCheckpoint, undefined);
-    assert.equal(auditRequests, 1);
-    const second = await invoke(stored);
-    assert.equal(second.success, false);
-    assert.match(second.error, /表格审校响应不是完整JSON/);
-    assert.equal(auditRequests, 1, '已保存的同一付费响应不能因失败重启再次请求');
+    const originalPaper = structuredClone(sample.paper);
+    const record = { contract: policy.CONTRACT, model: policy.MODEL, runId: 'local-reviewed-run',
+        sourceRunId: sample.plan.runId, promptBindings: {}, originalPaperSha256: facts.sha(JSON.stringify(originalPaper)),
+        inheritedFeedbacks: [{ feedback: parent, proof: parentBound.proof }], currentFeedbackProof: parentBound.proof };
+    sample.paper.fullStageReanalysis = record;
+    sample.paper.fullStageReanalysisHistory = [{ ...structuredClone(record), originalPaper }];
+    facts.withFactReview(childBound, () => undefined);
+    const before = structuredClone(sample.paper);
+    let readerCalls = 0;
+    let requestBoundaries = 0;
+    let renderedFixedChars = 0;
+    const actualRefresh = deep.refreshApiReaderArticleFromSource;
+    const stop = Object.assign(new Error('测试在真实Reader请求边界停止'), {
+        code: 'LLM_ACCOUNT_AUTH_ERROR', retryable: false, scope: 'run'
+    });
+    t.after(() => { publicReaderRequestObserver = null; });
+    t.mock.method(global, 'fetch', async () => assert.fail('新增public refresh测试禁止真实网络'));
+    t.mock.method(require('node:http'), 'request', () => assert.fail('新增public refresh测试禁止HTTP/CONNECT'));
+    t.mock.method(require('node:https'), 'request', () => assert.fail('新增public refresh测试禁止HTTPS'));
+    publicReaderRequestObserver = async (_url, _endpoint, _model, body, _headers, options) => {
+        requestBoundaries++;
+        assert.equal(options.usageContext.stage, 'apiReaderArticle');
+        const prompt = body.input[0].content.find(part => part.type === 'input_text').text;
+        assert.ok(prompt.length < 240000);
+        assert.ok(prompt.includes(parent.readerFeedback));
+        assert.ok(prompt.includes(child.readerFeedback));
+        throw stop;
+    };
+    t.mock.method(deep, 'refreshApiReaderArticleFromSource', async (paper, source, options) => {
+        readerCalls++;
+        renderedFixedChars = options.reviewFeedback.length - parent.primaryFeedback.length - parent.readerFeedback.length - child.readerFeedback.length;
+        const scope = facts.current(sample.id);
+        const fields = facts.fingerprintFields('apiReaderArticle');
+        assert.deepEqual(fields.restoredReaderConstraints.parentProof, parentBound.proof);
+        assert.deepEqual(fields.restoredReaderConstraints.childProof, childBound.proof);
+        assert.equal(fields.restoredReaderConstraints.renderedSha256, facts.sha(options.reviewFeedback));
+        for (const packet of [parent, child]) {
+            assert.ok(options.reviewFeedback.includes(packet.readerFeedback));
+            for (const quote of packet.sourceQuotes) assert.ok(options.reviewFeedback.includes(quote));
+            for (const claim of packet.rejectedReaderClaims) assert.ok(facts.readerRejectedClaims(sample.id).includes(claim));
+        }
+        assert.equal(scope.readerOnly, true);
+        assert.ok(options.reviewFeedback.length > 4000 && options.reviewFeedback.length <= 8000);
+        assert.equal(facts.validateReaderReviewFeedbackLength(options.reviewFeedback, sample.id), 8000);
+        assert.throws(() => facts.validateReaderReviewFeedbackLength(options.reviewFeedback + '额外字符', sample.id), /4000/);
+        assert.throws(() => facts.validateReaderReviewFeedbackLength('字'.repeat(8001), sample.id), /4000/);
+        assert.throws(() => facts.assertScoringOnlyModelStageAllowed('primaryAnalysis'));
+        deep.prepareApiReaderRevisionSeed(paper, source.text, options.reviewFeedback);
+        await assert.rejects(actualRefresh(paper, source, options), error => error.code === stop.code);
+        return paper;
+    });
+    const run = feedback => daily.withDailyFreshAnalysisContext(sample.plan, () =>
+        engine.withPaperAnalysisLock(sample.paper, () => saved.analyzeWithRecoveredFeedback(
+            sample.paper, sample.plan, () => assert.fail('不应进入主分析'), feedback)));
+    assert.throws(() => facts.validateReaderReviewFeedbackLength('字'.repeat(4001), sample.id), /4000/);
+    await run(null);
+    assert.equal(readerCalls, 1);
+    assert.equal(requestBoundaries, 1);
+    assert.deepEqual(sample.paper, before);
+    await assert.rejects(run({ ...child, readerFeedback: '新反馈没有继承原Reader限制。' }), /遗漏旧Reader事实约束/);
+    assert.equal(readerCalls, 1);
+    assert.deepEqual(sample.paper, before);
+    const longPaper = structuredClone(originalPaper);
+    const longParent = { ...parent, readerFeedback: '父'.repeat(2500),
+        primaryFeedback: '主'.repeat(8001 - renderedFixedChars - 5000) };
+    const longChild = { ...child, readerFeedback: '子'.repeat(2500) };
+    const longParentBound = facts.validateFeedback(longParent, sample.plan, longPaper);
+    const longChildBound = facts.validateFeedback(longChild, sample.plan, longPaper);
+    for (const [stage, value] of Object.entries(longPaper.analysisManifest.stages)) {
+        value.factReview = stage === 'apiReaderArticle' ? longChildBound.proof : longParentBound.proof;
+    }
+    const longOriginal = structuredClone(longPaper);
+    const longRecord = { ...structuredClone(record), originalPaperSha256: facts.sha(JSON.stringify(longOriginal)),
+        inheritedFeedbacks: [{ feedback: longParent, proof: longParentBound.proof }], currentFeedbackProof: longParentBound.proof };
+    longPaper.fullStageReanalysis = longRecord;
+    longPaper.fullStageReanalysisHistory = [{ ...structuredClone(longRecord), originalPaper: longOriginal }];
+    facts.withFactReview(longChildBound, () => undefined);
+    await assert.rejects(daily.withDailyFreshAnalysisContext(sample.plan, () =>
+        engine.withPaperAnalysisLock(longPaper, () => saved.analyzeWithRecoveredFeedback(
+            longPaper, sample.plan, () => assert.fail('不应进入主分析')))), /超过8000字符（实际8001字符）/);
+    assert.equal(requestBoundaries, 1);
 });
+
+for (const parentStage of ['primaryAnalysis', 'coreSummaryRepair']) {
+    test(`无全阶段档案的旧Reader子从真实${parentStage}父恢复且明确记录父类型`, async t => {
+        const sample = await createReviewedReaderSample(t);
+        const parent = { ...sample.feedback, primaryFeedback: '', readerFeedback: '', coreFeedback: '',
+            rejectedPrimaryClaims: [], rejectedReaderClaims: [], rejectedCoreClaims: [] };
+        if (parentStage === 'primaryAnalysis') {
+            parent.primaryFeedback = '保留旧主文事实条件。';
+            parent.rejectedPrimaryClaims = ['旧主文错误已改正'];
+            parent.readerFeedback = '保留旧Reader的适用条件。';
+            parent.rejectedReaderClaims = ['旧Reader错误已改正'];
+        } else {
+            parent.coreFeedback = '保留旧核心摘要的适用条件。';
+            parent.rejectedCoreClaims = ['旧核心摘要错误已改正'];
+        }
+        const child = { ...sample.feedback, rejectedPrimaryClaims: [], readerFeedback: '原Reader子包补充解释另一处细节。' };
+        for (const value of Object.values(sample.paper.analysisManifest.stages)) {
+            delete value.factReview;
+            delete value.scoringFactReview;
+        }
+        const parentBound = facts.validateFeedback(parent, sample.plan, sample.paper);
+        const childBound = facts.validateFeedback(child, sample.plan, sample.paper);
+        sample.paper.analysisManifest.stages[parentStage].factReview = parentBound.proof;
+        sample.paper.analysisManifest.stages.apiReaderArticle.factReview = childBound.proof;
+        facts.withFactReview(parentBound, () => undefined);
+        facts.withFactReview(childBound, () => undefined);
+        const before = structuredClone(sample.paper);
+        let boundaries = 0;
+        t.mock.method(deep, 'refreshApiReaderArticleFromSource', async (paper, source, options) => {
+            boundaries++;
+            const fields = facts.fingerprintFields('apiReaderArticle');
+            assert.equal(fields.restoredReaderConstraints.parentStage, parentStage);
+            assert.deepEqual(fields.restoredReaderConstraints.parentProof, parentBound.proof);
+            assert.deepEqual(fields.restoredReaderConstraints.childProof, childBound.proof);
+            assert.ok(options.reviewFeedback.includes(parentStage === 'primaryAnalysis' ? parent.readerFeedback : parent.coreFeedback));
+            deep.prepareApiReaderRevisionSeed(paper, source.text, options.reviewFeedback);
+            return paper;
+        });
+        await daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(sample.paper, () =>
+            saved.analyzeWithRecoveredFeedback(sample.paper, sample.plan, () => assert.fail('不得重写主文'))));
+        assert.equal(boundaries, 1);
+        assert.deepEqual(sample.paper, before);
+        if (parentStage === 'coreSummaryRepair') {
+            const wrongRole = structuredClone(sample.paper);
+            wrongRole.analysisManifest.stages.primaryAnalysis.factReview = parentBound.proof;
+            await assert.rejects(daily.withDailyFreshAnalysisContext(sample.plan, () =>
+                engine.withPaperAnalysisLock(wrongRole, () => saved.analyzeWithRecoveredFeedback(
+                    wrongRole, sample.plan, () => assert.fail('不能把摘要包当主文父反馈')))), /缺少之前的纠错说明/);
+            assert.equal(boundaries, 1);
+        }
+    });
+}
