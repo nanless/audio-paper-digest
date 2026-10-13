@@ -137,3 +137,49 @@ test('实际生成入口把话术失败交给一次精确局部修复，保留�
     assert.doesNotMatch(result.article, /表后解释必须/);
     assert.equal(result.plan.tableBindings.length, 2);
 });
+
+test('真实裸表后标签及资源指令各只授权原正文，其他来源和数字保留', () => {
+    for (const leaked of ['表后解释：该表的作用是对齐数据与评估。',
+        '来源方面，原文未给出可直接使用的代码、模型或数据下载，复现需自行准备，不得声称已公开。',
+        '资源方面，未发现来源绑定且完成 HTTPS 验证的资源，不得声称代码、模型或数据已公开。',
+        '表前需要确认公平条件。']) {
+        const example = makeExample({ noFigures: true });
+        example.draft.sections[7].body += '\n\n' + leaked;
+        const original = structuredClone(example.draft);
+        const error = rejection(example.draft, example);
+        const issues = repair.collectDraftIssues(example.draft, error, {
+            sourceText: example.sourceDetails.text,
+            structuredArtifacts: example.sourceDetails.structuredArtifacts
+        });
+        assert.deepEqual(repair.buildRepairTargets(example.draft, issues).map(target => target.path),
+            ['/sections/7/body']);
+        assert.deepEqual(example.draft, original);
+        if (/^(来源|资源)方面/.test(leaked)) {
+            assert.match(issues.find(issue => issue.code === 'reader_workflow_leakage').message,
+                /资源是否公开/);
+        }
+    }
+});
+
+
+test('已签引文对象恢复为逐字字符串，不能把派生格式误当来源失败', () => {
+    const convert = require('../scripts/lib/signed-reader-recovery-draft').convert;
+    const crypto = require('node:crypto');
+    const quote = 'The learning rate is 0.001 and the batch size is 8.';
+    const hash = crypto.createHash('sha256').update(quote).digest('hex');
+    const article = '### 原标题\n原始正文。';
+    const plan = { readerTitle: '原题', oneSentenceThesis: '原结论',
+        sections: [{ kind: 'reproduction', heading: '原标题' }], conceptBridges: [],
+        figurePlacements: [], formulaBindings: [], tableBindings: [{ tableIndex: 1,
+            sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [],
+            sourceQuotes: [{ quote, sourceQuoteSha256: hash }] }] };
+    const before = structuredClone(plan);
+    const seed = { initialDraft: JSON.stringify({ article, plan }) };
+    assert.deepEqual(convert(seed).tableBindings[0].sourceQuotes, [quote]);
+    assert.deepEqual(plan, before);
+    for (const changed of [{ quote: quote + ' changed', sourceQuoteSha256: hash },
+        { quote, sourceQuoteSha256: '0'.repeat(64) }, { sourceQuoteSha256: hash }]) {
+        const bad = structuredClone(plan); bad.tableBindings[0].sourceQuotes = [changed];
+        assert.throws(() => convert({ initialDraft: JSON.stringify({ article, plan: bad }) }), /原来源引文/);
+    }
+});

@@ -1243,3 +1243,43 @@ describe('普通开销说明的英文碎片', () => {
         assert.equal(issues[0].index, text.lastIndexOf(fragment));
     });
 });
+
+
+describe('已恢复长文的表格标签与资源检查口吻', () => {
+    it('真实正文标签与资源指导被拦，资源问题返回专用说明', () => {
+        for (const text of ['表后解释：该表的作用是让后来者先对齐数据与评估。',
+            '本文设置已对齐。表后解释：限制是只有一个数据集。',
+            '表前说明该表只看法官为独立评估器的交换成功率。',
+            '表前需要确认公平条件。']) {
+            const issues = findReaderLanguageIssues(text);
+            assert.equal(issues.length, 1, text);
+            assert.equal(issues[0].code, 'reader_workflow_leakage');
+        }
+        for (const text of ['来源方面，原文未给出可直接使用的代码、模型或数据下载，复现需按原文引用自行准备，并区分代码、权重与可运行系统三件事，不得声称已公开。',
+            '关于资源公开，依据本次收到的来源核查，没有发现完成 HTTPS 验证的作者代码、模型或数据资源，因此不能声称代码或权重已公开。',
+            '关于可用性，本次没有收到经校验的作者代码、模型或数据链接，不得声称已公开。',
+            '资源方面，未发现来源绑定且完成 HTTPS 验证的资源，不得声称代码、模型或数据已公开。']) {
+            const issues = findReaderLanguageIssues(text);
+            assert.equal(issues.length, 1, text);
+            assert.match(issues[0].message, /资源是否公开/);
+            assert.ok(!issues[0].message.includes('本表比较'));
+        }
+    });
+    it('合理限制说明、作者描述及受保护原句继续保留', () => {
+        for (const text of ['作者在表后解释了两种条件的差异。',
+            '作者在表后解释：本实验只测一个数据集。',
+            '没有对照实验，不能声称该方法更优。',
+            '代码未公开，复现需要依照论文实现。',
+            '来源方面，作者提供了代码，但没有发布模型权重。',
+            '资源方面，论文没有提供代码链接。',
+            '作者在表前需要确认公平条件，并在正文说明这项限制。',
+            '> 资源方面，未发现来源绑定且完成 HTTPS 验证的资源，不得声称代码已公开。',
+            '`表前需要确认公平条件` 是字符串。',
+            '> 表后解释：该表比较两种条件。',
+            '`表后解释：` 是字符串示例。',
+            '原文写道：“来源方面，不得声称已公开。”',
+            '| 原句 | 数值 |\n| --- | --- |\n| 表后解释：该表比较两组。 | 12 |']) {
+            assert.deepEqual(findReaderLanguageIssues(text), [], text);
+        }
+    });
+});

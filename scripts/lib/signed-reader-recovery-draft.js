@@ -27,7 +27,13 @@ function convert(seed) {
                 .map(key => [key, structuredClone(placement[key])]))),
         tableBindings: plan.tableBindings.map(binding => ({ tableIndex: binding.tableIndex,
             sourceType: binding.sourceType, sourceTableOrdinal: binding.sourceTableOrdinal,
-            sourceQuotes: structuredClone(binding.sourceQuotes),
+            sourceQuotes: (binding.sourceQuotes || []).map(value => {
+                if (typeof value === 'string') return value;
+                assert.ok(value && typeof value.quote === 'string', '原来源引文格式无效');
+                assert.equal(crypto.createHash('sha256').update(value.quote).digest('hex'),
+                    value.sourceQuoteSha256, '原来源引文摘要不同');
+                return value.quote;
+            }),
             cellBindings: binding.cellBindings.map(cell => Object.fromEntries(
                 ['renderedRow', 'renderedColumn', 'sourceRow', 'sourceColumn']
                     .map(key => [key, cell[key]]))) })),
