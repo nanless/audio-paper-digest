@@ -2016,6 +2016,7 @@ function normalizeReaderSourceDisplayArtifacts(value) {
 
 function normalizeReaderSourceCell(value) {
     return normalizeReaderSourceDisplayArtifacts(String(value ?? '')).normalize('NFKC')
+        .replace(/\{=\}/g, '=')
         .replace(/<br\s*\/?>/gi, ' ')
         .replace(/[*_`]/g, '')
         .replace(/[％]/g, '%')
@@ -7414,6 +7415,7 @@ function buildApiReaderValidationFeedback(error) {
             '逐张按正文顺序重建 tableBindings：原表模式必须让每个渲染单元格逐字等于绑定坐标的原始 cell，'
             + '并覆盖表头和所有数据格；正文整理模式必须复制全文中的连续原句，且覆盖表内每个数字与单位。'
             + '不要翻译原表 cell、沿用调列前坐标或自行计算 SHA；'
+            + '若缺证据的是整理表行标签中的配置或样本量数字，可在同一已授权小节正文保留有来源的设置说明，表格标签改为原文可核的实验名称；同步保留真实结果单元格、全部结果数字与单位，以及对应原表或连续引文绑定。不得向引文补写原文没有的数值，不得删除主要结果、减少表数或降低宽表列数来绕过校验。'
             + '报错列出的每个数字都必须改成原文逐字写法（保留千分位逗号、百分号、小数位数和单位，'
             + '不得四舍五入），或删掉原文没有的数字；'
             + '若数字明明在原文表格 DOM 里以独立单元格存在、却因正文排版拼合找不到连续 quote，'
@@ -7445,7 +7447,7 @@ function buildApiReaderValidationFeedback(error) {
     if (/宽表/.test(message)) {
         fixes.push(
             '本轮只修当前授权的表与绑定，使实际来源核验后的表达到 5 列；若无证据列被删除，应重新选择有原表 DOM 或完整逐字引文支持的合法列，不能恢复无证据旧列，'
-            + '并同步更新同一 tableBindings 项。列中应覆盖比较条件、关键控制变量、两个数据集或指标、'
+            + '并同步更新同一 tableBindings 项。已授权的绑定整项可改选另一张有证据的原表，使用 selection 或 completeTable；保留 tableIndex，并在同一授权正文位置同步替换该表或 TABLE 标记。也可改为 source_quotes，但逐字连续引文必须覆盖新表每个数字和完整单位。不要给只有 3 个合法来源列的旧表反复补无证据列；其他表格与绑定保持不变。列中应覆盖比较条件、关键控制变量、两个数据集或指标、'
             + '解释或成本；不要试图改动未授权的另一张表，也不要只列方法与数值两列'
         );
     }
@@ -16865,6 +16867,12 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             throw error;
         }
+    }
+
+    if (options.resumeSavedReaderUpstreamOnly === true) {
+        // 原父子反馈恢复先补齐实际摘要与评分，再进入 Reader 的原有范围。
+        return { ...paper, ...sourceAcquisitionRecord, sourceWarnings, analysis,
+            analysisManifest, apiReaderResources: verifiedReaderResources };
     }
 
     // 保留 13 节 analysis 与评分作为机器兼容层。Reader 在评分后调度，

@@ -46,3 +46,11 @@ test('来源及正文后置否定不能为中文数量提供实测支持', () =>
  const cohort='库内同样方法掉到约四五成，并非实测。';
  assert.equal(deep.isAllowedReaderNarrativeNumeralIssue(issue(cohort,'五成'),cohort,createSample()),false);
 });
+
+
+test('来源比较容许等号的 TeX 分组排版，数值与裸重复串保持区分', () => {
+    const normalize = require('../scripts/deep-analyzer').normalizeReaderSourceCell;
+    assert.equal(normalize('λ=0.10\\lambda{=}0.10'), normalize('λ=0.10\\lambda=0.10'));
+    assert.notEqual(normalize('λ=0.11\\lambda{=}0.10'), normalize('λ=0.10\\lambda=0.10'));
+    assert.equal(normalize('K=1K=1'), 'K=1K=1');
+});

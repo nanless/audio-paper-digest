@@ -100,5 +100,121 @@ class EvidenceTests(unittest.TestCase):
             with self.subTest(extra=extra), self.assertRaises(ValueError):
                 self.checked(doc=Document(extra))
 
+
+
+SPATIAL_BASE = Path(os.environ.get('PD_PDF_SPATIAL_REAL_SOURCE_DIR', '/nonexistent'))
+
+@unittest.skipUnless((SPATIAL_BASE / 'source.pdf').is_file(), '需显式指定空间音频封存 PDF 来源')
+class SpatialEvidenceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.pdf = (SPATIAL_BASE / 'source.pdf').read_bytes()
+        cls.artifacts = json.loads((SPATIAL_BASE / 'source-runtime.json').read_text())['structuredArtifacts']
+        cls.table = cls.artifacts['tables'][0]
+        cls.audit = evidence.load_pypdf_backend().extract_visual_audit(cls.pdf)
+        cls.doc = evidence.fitz.open(stream=cls.pdf, filetype='pdf')
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.doc.close()
+
+    def test_full_grid_and_real_pdf_display(self):
+        proof = evidence.proof(self.pdf, self.table, self.audit, self.doc)
+        self.assertEqual(proof['profile'], 'spatial-sdnr-double')
+        self.assertEqual(proof['page'], 7)
+        self.assertEqual(len(proof['headerProofs']), 13)
+        self.assertEqual(len(proof['confirmedCells']), 30)
+        self.assertEqual(proof['pdfSha256'], evidence.sha(self.pdf))
+        self.assertEqual(proof['displayDataRows'][1][1:3], ['19.1', '19.1'])
+        self.assertEqual(proof['displayDataRows'][0][1], '−7.1')
+
+    def test_every_changed_numeric_cell_rejected(self):
+        for row in range(2, 5):
+            for column in range(1, 10):
+                with self.subTest(row=row, column=column), self.assertRaises(ValueError):
+                    table = copy.deepcopy(self.table)
+                    EvidenceTests.change(table, row, column, '999.1999.1')
+                    evidence.proof(self.pdf, table, self.audit, self.doc)
+
+    def test_wrong_caption_shape_unit_or_row_rejected(self):
+        mutations = [lambda t: t.update(caption=t['caption'] + ' changed'),
+                     lambda t: t['matrix'][0].__setitem__(1, 'SDNR = 1010 ms'),
+                     lambda t: t['matrix'][2].__setitem__(0, 'SDR'),
+                     lambda t: t['matrix'][0].pop()]
+        for mutate in mutations:
+            with self.subTest(mutate=mutate), self.assertRaises(ValueError):
+                table = copy.deepcopy(self.table)
+                mutate(table)
+                evidence.proof(self.pdf, table, self.audit, self.doc)
+
+    def test_changed_source_or_dom_proof_rejected(self):
+        manifest = json.loads((SPATIAL_BASE / 'source-manifest.json').read_text())
+        provenance = {'contract': 'fresh-source-analysis-v1',
+                      'sourceManifestSha256': evidence.sha((SPATIAL_BASE / 'source-manifest.json').read_bytes()),
+                      'sourceSha256': manifest['text']['responseSha256'],
+                      'structuredArtifactsSha256': self.artifacts['payloadSha256']}
+        request = {'paperId': '2610.09701', 'sourceDirectory': str(SPATIAL_BASE),
+                   'artifacts': self.artifacts, 'provenance': provenance}
+        for mutate in [lambda r: r['artifacts']['tables'][0]['cells'][0].update(sourceDomSha256='0' * 64),
+                       lambda r: r['provenance'].update(sourceSha256='0' * 64)]:
+            with self.subTest(mutate=mutate), self.assertRaises(ValueError):
+                changed = copy.deepcopy(request)
+                mutate(changed)
+                evidence.derive(changed)
+
+
+
+COMPOSITION_BASE = Path(os.environ.get('PD_PDF_COMPOSITION_REAL_SOURCE_DIR', '/nonexistent'))
+
+@unittest.skipUnless((COMPOSITION_BASE / 'source.pdf').is_file(), '需显式指定模型组合论文的封存 PDF 来源')
+class CompositionEvidenceTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.pdf = (COMPOSITION_BASE / 'source.pdf').read_bytes()
+        cls.artifacts = json.loads((COMPOSITION_BASE / 'source-runtime.json').read_text())['structuredArtifacts']
+        cls.tables = cls.artifacts['tables'][:3]
+        cls.audit = evidence.load_pypdf_backend().extract_visual_audit(cls.pdf)
+        cls.doc = evidence.fitz.open(stream=cls.pdf, filetype='pdf')
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.doc.close()
+
+    def test_complete_three_tables_from_original_pdf(self):
+        proofs = [evidence.proof(self.pdf, table, self.audit, self.doc) for table in self.tables]
+        self.assertEqual([proof['page'] for proof in proofs], [8, 9, 9])
+        self.assertEqual([len(proof['confirmedCells']) for proof in proofs], [78, 51, 39])
+        self.assertEqual(sum(len(proof['headerProofs']) for proof in proofs), 15)
+        self.assertTrue(all(proof['pdfSha256'] == evidence.sha(self.pdf) for proof in proofs))
+        self.assertEqual(proofs[0]['displayDataRows'][1][1], '58.70')
+
+    def test_all_153_changed_numbers_rejected(self):
+        checked = 0
+        for table in self.tables:
+            groups = evidence.PLATONIC_SPECS[table['ordinal']]['groups']
+            first_numeric_column = 2 if table['ordinal'] == 3 else 1
+            for row in range(1, len(table['matrix'])):
+                if row in groups:
+                    continue
+                for column in range(first_numeric_column, len(table['matrix'][0])):
+                    with self.subTest(table=table['ordinal'], row=row, column=column), self.assertRaises(ValueError):
+                        changed = copy.deepcopy(table)
+                        EvidenceTests.change(changed, row, column, '999.99999.99')
+                        evidence.proof(self.pdf, changed, self.audit, self.doc)
+                    checked += 1
+        self.assertEqual(checked, 153)
+
+    def test_each_table_caption_headers_labels_shape_rejected(self):
+        for table in self.tables:
+            mutations = [lambda t: t.update(caption=t['caption'].replace('percent', 'ms')),
+                         lambda t: t['matrix'][0].__setitem__(1, t['matrix'][0][1] + ' (ms)'),
+                         lambda t: t['matrix'][1].__setitem__(0, 'wrong method'),
+                         lambda t: t['matrix'][0].pop()]
+            for mutate in mutations:
+                with self.subTest(table=table['ordinal'], mutate=mutate), self.assertRaises(ValueError):
+                    changed = copy.deepcopy(table)
+                    mutate(changed)
+                    evidence.proof(self.pdf, changed, self.audit, self.doc)
+
 if __name__ == '__main__':
     unittest.main()

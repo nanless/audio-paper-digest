@@ -163,3 +163,25 @@ test('其他分句的否定不掩盖本句明确肯定的具体用途', () => {
         assert.match(issue, /中文字符不足/, summary);
     }
 });
+
+test('真实三折交叉验证与表示比较构成摘要评测设置，假设设置不算实测', () => {
+    const { validAnalysisText } = require('./valid-analysis-fixture.js');
+    const oldResult = '在公开测试集的相同协议下，词错误率从 12.4% 降至 9.8%，指标方向和比较对象都能由原文结果核对。';
+    const measured = '在斑胸草雀个体识别、狨猴个体识别及斑胸草雀叫声类型分类的三折交叉验证下，最强语音预训练表示以非加权平均召回率计比最强动物预训练表示分别高0.119 UAR、0.086 UAR和0.036 UAR，经Holm-Bonferroni校正后显著。';
+    const sourceText = 'Cross-validation results report unweighted average recall (UAR) for speech representations versus animal representations: improvements 0.119, 0.086 and 0.036.';
+    const analysis = validAnalysisText().replace(oldResult, measured);
+    assert.equal(validateCoreSummarySemanticContract(analysis, { sourceText }), null);
+    assert.match(validateCoreSummarySemanticContract(analysis.replace('在斑胸草雀', '如果在斑胸草雀'), { sourceText }), /评测设置/);
+    assert.match(validateCoreSummarySemanticContract(analysis.replace('三折交叉验证下', '假设的比较中'), { sourceText }), /评测设置/);
+});
+
+test('条件下具体指标回落属于结论边界，提高、否定回落和泛依赖不算', () => {
+    const { validAnalysisText } = require('./valid-analysis-fixture.js');
+    const oldBoundary = '结论仅适用于论文覆盖的噪声类型与语种，对极低信噪比、未见录音环境和跨语言外推尚未验证。';
+    const base = validAnalysisText().replace(oldBoundary, '研究逐项比较各视图的表示质量，并在相同设置下报告不同模型的表现和测量结果。');
+    const analysis = base.replace('测量结果。', '测量结果。若各视图改从独立隐变量解码一致性回落到随机水平。');
+    assert.equal(validateCoreSummarySemanticContract(analysis), null);
+    for (const statement of ['若各视图改从独立隐变量解码一致性提高到更高水平', '若各视图改从独立隐变量解码一致性不会回落到随机水平', '若各视图改从独立隐变量解码一致性不回落到随机水平', '仅依赖冻结验证器打分']) {
+        assert.match(validateCoreSummarySemanticContract(base.replace('测量结果。', '测量结果。' + statement + '。')), /缺少结论适用边界/);
+    }
+});

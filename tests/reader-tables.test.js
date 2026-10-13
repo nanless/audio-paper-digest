@@ -505,3 +505,14 @@ test('Reader 解析器编译两张选中宽表后，保留 v3 计划和 v4 来�
     assert.doesNotMatch(result.article, /\[\[TABLE_/);
     assert.ok(result.plan.tableBindings.every(binding => binding.sourceType === 'artifact_table' && !('selection' in binding)));
 });
+
+
+test('斜杠展示的完整计数组合须逐项对应来源，不能凭重复形状误拒或放行', () => {
+    const context = { sourceTexts: ['For overall preference the counts are 28, 26 and 26 for dance.'] };
+    assert.equal(findReaderTablePasteDuplication('条件胜数 28/26/26', context), null);
+    for (const value of ['条件胜数 26/26/28', '条件胜数 28/26/26/26',
+        '条件胜数 28/26/26 28/26/26', '58.7058.70', '28/26/2628/26/26']) {
+        assert.ok(findReaderTablePasteDuplication(value, context), value);
+    }
+    assert.ok(findReaderTablePasteDuplication('条件胜数28/26/26', { sourceTexts: [] }));
+});

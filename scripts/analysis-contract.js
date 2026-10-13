@@ -1239,8 +1239,8 @@ function hasCoreSummaryComparisonDirection(sentence, numbers) {
         const rightMetric = adjacentMetric(after);
         if (leftMetric && rightMetric && leftMetric !== rightMetric) continue;
         const boundMetric = metricAtEnd.test(after.trim())
-            || (metricAtEnd.test(before.trim())
-                && /(?:模型|方法|系统|基线|对照|算法|方案)\s*$/.test(after));
+            || (metricAtEnd.test(before.trim().replace(/计\s*$/, ''))
+                && /(?:模型|方法|系统|基线|对照|算法|方案|编码器|表示)\s*$/.test(after.trim().replace(/分别\s*$/, '')));
         if (boundMetric && !hasCrossMetricDirectionalComparison(clause.replace(/比(?!例|值|较|特|率|重)/g, '高于'))) return true;
     }
     // “基线为 12.4%，本文方法降至 9.8%”省略“从/由”，仍写明了起始值、终止值及各自对应的方法；
@@ -1522,7 +1522,9 @@ function coreSummaryQuantitativeResultState(text) {
         const hasNamedSetting = /(?:[A-Z][A-Za-z0-9._-]{2,}\s*[\u3400-\u9fff]{0,8}(?:集|数据集|语料|任务|基准)|(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}(?:\s*[上中下]))/i.test(sentence);
         const hasTimedNamedSplit = /(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}\s+\d+(?:\.\d+)?\s+s\s+[\u3400-\u9fff]{0,12}划分(?:上|中)/.test(sentence);
         const narrowMeasuredResult = hasRecordedDissonanceComparison(sentence) || hasMeanRoomSimulationComparison(sentence);
-        const hasSetting = narrowMeasuredResult || /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)/i.test(sentence)
+        const hasMeasuredCrossValidation = !/(?:假设|假想|如果|若在|预计|预期|可能|计划|未来|并非|不是|未进行|未做|没有)/u.test(sentence)
+            && /(?:在|于)[^。！？!?\n]{1,160}(?:[1-9][0-9]*|[一二两三四五六七八九十]+)折交叉验证(?:下|中|上)/u.test(sentence);
+        const hasSetting = hasMeasuredCrossValidation || narrowMeasuredResult || /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)/i.test(sentence)
             || hasNamedSetting || /(?<![A-Za-z0-9_])[1-9][0-9]*[A-Za-z][A-Za-z0-9._-]{0,39}-(?:Bench|Benchmark)(?![A-Za-z0-9_])(?:上|中|下)/i.test(rawSentence) || hasTimedNamedSplit || hasConcreteCoreSummarySetting(sentence)
             || /(?:在|于)\s*FLEURS(?![A-Za-z0-9_])(?:[\u3400-\u9fff]{1,8}(?:到|→)[\u3400-\u9fff]{1,8}(?:上|中)|[^，,；;。！？!?\n]{0,60}(?:oracle提交决策|校准评测)上下文(?:上|中))/.test(sentence);
         const hasComparisonObjects = numbers.length >= 2
@@ -1898,6 +1900,9 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     const explicitBoundary = /(?:边界|局限|适用|失败|尚未|未覆盖|未验证|外推|仅限|受限)/.test(summary);
     const separatedUnverifiedBoundary = /(?:尚未|未曾|未能|未|没有)[^。！？!?\n]{0,60}(?:验证|覆盖|评估|测试)/.test(summary);
     const conditionalFailure = /(?:但|不过|然而)[^。！？!?\n]{0,80}(?:在|对)[^。！？!?\n]{1,60}(?:时|下|中|上)[^。！？!?\n]{0,60}(?:可能|易|会|明显)?(?:失真|退化|恶化|不稳定|不可靠|失效|下降|受损|偏差)/.test(summary);
+    const conditionalMetricFailure = summary.split(/[，,；;。！？!?\n]/u).some(clause =>
+        /^(?:若|如果|当)[^。！？!?\n]{1,100}(?:一致性|准确率|召回率|识别率|辨识率|性能|结果)[^。！？!?\n]{0,30}(?:回落|下降|退化|恶化|失效|受损)/u.test(clause.trim())
+        && !/(?:不会|不再|不能|不曾|没有|不意味着|并非|不是|无法|不|未|无须)[^。！？!?\n]{0,20}(?:回落|下降|退化|恶化|失效|受损)/u.test(clause));
     const scopedConclusionBoundary = /(?:结论|研究结果|研究发现)[^。！？!?\n]{0,40}(?<!不)(?<!非)限于[^。！？!?\n]{1,80}(?:语音|语料|数据|场景|条件|设置|样本|任务)/.test(summary);
     const attentionScopeBoundary = summary.split(/[。！？!?\n]/u).some(sentence =>
         !/(?:并非|不是|不能认为|不可认为|不应认为|没有)|(?:并不|不|未|没有|不会|不能)(?:曾|实际|一直|始终|确实|能|会)*保持不变/u.test(sentence)
@@ -1911,7 +1916,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         && !/未涵盖[^。！？!?\n]{0,60}(?:并非事实|不是事实|并不属实|不属实|不是真的)/.test(sentence)
     ));
     if (!explicitBoundary && !separatedUnverifiedBoundary && !conditionalFailure
-        && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary) {
+        && !conditionalMetricFailure && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary) {
         issues.push('缺少结论适用边界、失败条件或未验证范围');
     }
     const scopedResourceDisclosure = summary.split(/[。！？!?\n]/).some(sentence => (

@@ -130,6 +130,8 @@ def hindi_caption(value):
 
 def proof_hindi(pdf_bytes,table,audit,doc,profile):
     matrix=table['matrix'];width=len(matrix[0]);data_start=2
+    header_map=SPATIAL_HEADERS if profile=='spatial-sdnr-double' else HINDI_HEADERS
+    caption_normalizer=caption if profile=='spatial-sdnr-double' else hindi_caption
     need(all(len(row)==width for row in matrix),'原DOM行列数不一致')
     for ri,row in enumerate(matrix):
         for ci,value in enumerate(row):
@@ -138,11 +140,11 @@ def proof_hindi(pdf_bytes,table,audit,doc,profile):
     caption_matches=[]
     for page_index,page in enumerate(doc):
         for block in page.get_text('blocks'):
-            if hindi_caption(block[4])==hindi_caption(table['caption']):
+            if caption_normalizer(block[4])==caption_normalizer(table['caption']):
                 caption_matches.append((page_index,page,block))
     need(len(caption_matches)==1,'完整图注不能唯一对应原PDF段落')
     page_index,page,cap=caption_matches[0]
-    next_top=min([b[1] for b in page.get_text('blocks') if re.match(r'^Table\s+\d+\.',b[4]) and b[1]>cap[3]] or [page.rect.height])
+    next_top=min([b[1] for b in page.get_text('blocks') if re.match(r'^Table\s+\d+[.:]' if profile=='spatial-sdnr-double' else r'^Table\s+\d+\.',b[4]) and b[1]>cap[3]] or [page.rect.height])
     widths=set((round(c['bbox'][0],3),round(c['bbox'][2],3)) for c in audit['tableCandidates'] if c.get('page')==page_index+1 and c.get('columns')==width and c['bbox'][1]>cap[3] and c['bbox'][3]<next_top)
     need(len(widths)==1,'同图注区间内原表完整列宽不能唯一定位')
     x0,x1=next(iter(widths));rules=[]
@@ -166,10 +168,11 @@ def proof_hindi(pdf_bytes,table,audit,doc,profile):
     column_words=[[word for _,label,_ in data_lines for word in label]]
     for ci in range(width-1):column_words.append([cell[ci][0] for _,_,cell in data_lines])
     preliminary_headers=[word for word in words if (word[1]+word[3])/2<data_lines[0][0]-.75]
-    leaf_values=[HINDI_HEADERS.get(value,value) for value in matrix[1]]
-    leaf_lines=[group for _,group in lines(preliminary_headers) if [w[4] for w in group]==leaf_values]
+    leaf_values=[header_map.get(value,value) for value in matrix[1]]
+    leaf_columns=[ci for ci,value in enumerate(leaf_values) if value]
+    leaf_lines=[group for _,group in lines(preliminary_headers) if [w[4] for w in group]==[leaf_values[ci] for ci in leaf_columns]]
     need(len(leaf_lines)==1,'完整底层列头与列顺序不能唯一定位')
-    for ci,word in enumerate(leaf_lines[0]):column_words[ci].append(word)
+    for ci,word in zip(leaf_columns,leaf_lines[0]):column_words[ci].append(word)
     for cell in table['cells']:
         if cell['row']!=0 or cell['colspan']!=1 or not cell['text']:continue
         candidates=[w for w in preliminary_headers if w[4]==cell['text']]
@@ -186,7 +189,7 @@ def proof_hindi(pdf_bytes,table,audit,doc,profile):
     need(set(tuple(w) for w in words)==data_words|set(tuple(w) for w in header_words),'表格区域存在未覆盖数据、标签或其他字形')
     header_matches=[];header_proofs=[];covered=set();confirmations=[]
     for cell in [c for c in table['cells'] if c['row']<data_start]:
-        visible=HINDI_HEADERS.get(cell['text'],cell['text']);possible=[]
+        visible=header_map.get(cell['text'],cell['text']);possible=[]
         if not visible:
             header_matches.append((cell,[]));header_proofs.append({'row':cell['row'],'column':cell['column'],'text':cell['text'],'glyphs':[]});continue
         local=[w for w in header_words if w[0]>=edges[cell['column']]-.02 and w[2]<=edges[cell['column']+cell['colspan']]+.02]
@@ -572,10 +575,101 @@ def proof_chime_mc(pdf_bytes,table,audit,doc,profile):
     corrected.insert(1,copy.deepcopy(matrix[3]))
     return {'contract':'sealed-pdf-cell-confirmation-v1','origin':'program-replay-from-sealed-pdf-not-model-input','profile':profile,'pdfSha256':sha(pdf_bytes),'backend':{'name':'pymupdf','version':fitz.VersionBind},'page':page_index+1,'originalTableDomSha256':table['sourceDomSha256'],'originalCaption':table['caption'],'pdfCaption':cap[4],'pdfTableBBox':[x0,top,x1,bottom],'headerProofs':header_proofs,'confirmedCells':confirmations,'displayDataRows':corrected}
 
+PLATONIC_SPECS={1: {'caption': 'Table 1: Addition in percent, each block read against its own zero-shot row. Task A and Task B are the two composed tasks, the closed form acts at \\alpha=0.5, the adapter at full strength and the weight-space routes at 0.5 on the mean of the two updates. Random-UTD, Oracle and the last two rows cover 168 cells.', 'width': 5, 'headers': ['Method', 'Task A ↑\\uparrow', 'Task B ↑\\uparrow', 'CIFAR-100', 'ImageNet'], 'labels': [['Method'], ['Source and target are the same model (112112 cells)'], ['Zero-shot'], ['Weight-space arithmetic'], ['Ours, closed form'], ['Ours, adapter'], ['Different models within one architecture (168168 cells)'], ['Zero-shot'], ['Weight-space transport'], ['GradFix'], ['Theseus'], ['Ours, closed form'], ['Ours, adapter'], ['Different models, any pair of families (3,3603{,}360 cells)'], ['Zero-shot'], ['Random-UTD'], ['Single-A'], ['Single-B'], ['Ours, closed form'], ['Oracle'], ['On the adapter’s 168168 cells'], ['Ours, closed form'], ['Ours, adapter']], 'groups': {1: ['Source and target are the same model (112112 cells)', 'Source and target are the same model (112 cells)'], 6: ['Different models within one architecture (168168 cells)', 'Different models within one architecture (168 cells)'], 13: ['Different models, any pair of families (3,3603{,}360 cells)', 'Different models, any pair of families (3,360 cells)'], 20: ['On the adapter’s 168168 cells', 'On the adapter’s 168 cells']}}, 2: {'caption': 'Table 2: Negation at \\lambda=1 in percent, grouped as in Table 1. Theseus and GradFix read ImageNet on one image per class, where zero-shot is 70.70.', 'width': 4, 'headers': ['Method', 'Removed task ↓\\downarrow', 'CIFAR-100', 'ImageNet'], 'labels': [['Method'], ['Source and target are the same model (3232 cells)'], ['Zero-shot'], ['Weight-space negation'], ['Ours, closed form'], ['Ours, adapter'], ['Different models within one architecture (4848 cells)'], ['Zero-shot'], ['Theseus'], ['GradFix'], ['Ours, closed form'], ['Ours, adapter'], ['Different models, any pair of families (240240 cells)'], ['Zero-shot'], ['Ours, closed form'], ['On the adapter’s 4848 cells'], ['Ours, closed form'], ['Ours, adapter'], ['Each target as its own source, same tasks'], ['Closed form'], ['Adapter']], 'groups': {1: ['Source and target are the same model (3232 cells)', 'Source and target are the same model (32 cells)'], 6: ['Different models within one architecture (4848 cells)', 'Different models within one architecture (48 cells)'], 12: ['Different models, any pair of families (240240 cells)', 'Different models, any pair of families (240 cells)'], 15: ['On the adapter’s 4848 cells', 'On the adapter’s 48 cells'], 18: ['Each target as its own source, same tasks', 'Each target as its own source, same tasks']}}, 3: {'caption': 'Table 3: Composition evaluated on a dataset that enters no fit, in percent, over three targets and by the models k_{1} and k_{2} supplying the two summed terms, with the closed form at \\alpha=0.5 and the adapter at full strength. Both terms come from one other family when k_{1}=k_{2}, from the two other families when k_{1}\\neq k_{2} and from the target itself in the within-model rows.', 'width': 6, 'headers': ['Assignment', 'Route', 'RESISC45', 'UCMerced', 'AID', 'Mean'], 'labels': [['Assignment', 'Route'], ['None', 'Zero-shot'], ['k1=k2k_{1}=k_{2}', 'Closed form'], ['', 'Adapter'], ['k1≠k2k_{1}\\neq k_{2}', 'Closed form'], ['', 'Adapter'], ['k1k_{1} alone', 'Closed form'], ['', 'Adapter'], ['Within model', 'Closed form'], ['', 'Adapter']], 'groups': {}}}
+
+def platonic_supported(table):
+    spec=PLATONIC_SPECS.get(table.get('ordinal'));matrix=table.get('matrix') or []
+    return bool(spec and table.get('caption')==spec['caption'] and len(matrix)==len(spec['labels']) and all(isinstance(row,list) and len(row)==spec['width'] for row in matrix) and matrix[0]==spec['headers'] and [row[:len(expected)] for row,expected in zip(matrix,spec['labels'])]==spec['labels'])
+
+def platonic_label(value):
+    return {'Task A ↑\\uparrow':'Task A ↑','Task B ↑\\uparrow':'Task B ↑','Removed task ↓\\downarrow':'Removed task ↓','k1=k2k_{1}=k_{2}':'k1 = k2','k1≠k2k_{1}\\neq k_{2}':'k1 ̸= k2','k1k_{1} alone':'k1 alone'}.get(value,value)
+
+def platonic_caption(value):
+    value=re.sub(r'-\s*\n\s*','',value)
+    value=value.replace('\\alpha','α').replace('\\lambda','λ').replace('k_{1}','k1').replace('k_{2}','k2').replace('\\neq','≠').replace('̸=','≠')
+    return re.sub(r'\s*([=≠])\s*',r'\1',caption(value))
+
+def proof_platonic(pdf_bytes,table,audit,doc,profile):
+    matrix=table['matrix'];spec=PLATONIC_SPECS[table['ordinal']];width=spec['width'];groups=spec['groups'];label_count=2 if table['ordinal']==3 else 1
+    for ri,row in enumerate(matrix):
+        for ci,value in enumerate(row):
+            covers=[c for c in table['cells'] if c['row']<=ri<c['row']+c['rowspan'] and c['column']<=ci<c['column']+c['colspan']]
+            need(len(covers)==1 and covers[0]['text']==value,'原DOM完整网格/文字不能逐格重放')
+    canonical=platonic_caption
+    captions=[(pi,p,b) for pi,p in enumerate(doc) for b in p.get_text('blocks') if canonical(b[4])==canonical(table['caption'])]
+    need(len(captions)==1,'完整图注不能唯一对应原PDF段落')
+    page_index,page,cap=captions[0]
+    next_top=min([b[1] for b in page.get_text('blocks') if re.match(r'^Table\s+\d+[.:]',b[4]) and b[1]>cap[3]] or [page.rect.height])
+    rules=[(min(item[1].x,item[2].x),max(item[1].x,item[2].x),float(item[1].y)) for d in page.get_drawings() for item in d['items'] if item[0]=='l' and abs(item[1].y-item[2].y)<.02 and cap[3]<item[1].y<next_top]
+    need(rules,'原表完整边界缺失');widest=max(x1-x0 for x0,x1,_ in rules)
+    widths={(x0,x1) for x0,x1,_ in rules if abs(x1-x0-widest)<.02};need(len(widths)==1,'完整列宽不能唯一对应')
+    x0,x1=next(iter(widths));ys=[y for a,b,y in rules if abs(a-x0)<.02 and abs(b-x1)<.02]
+    need(len(set(ys))>=3,'原表边界与表头分隔线不充分');top,bottom=min(ys),max(ys)
+    words=words_in(page.get_text('words',sort=False),[x0,top,x1,bottom]);grouped=lines(words)
+    expected_headers=[platonic_label(value) for value in spec['headers']];header_line=[(cy,g) for cy,g in grouped if text(g)==' '.join(expected_headers)]
+    need(len(header_line)==1,'完整指标列头与箭头不能唯一对应');header_y,header_words=header_line[0]
+    header_cells=[];offset=0
+    for value in expected_headers:
+        count=len(value.split());header_cells.append(header_words[offset:offset+count]);offset+=count
+    need(offset==len(header_words),'完整列头字形未逐格覆盖')
+    rows=[];cursor=header_y;used=set(tuple(w) for w in header_words)
+    for ri,row in enumerate(matrix[1:],1):
+        matches=[]
+        for cy,g in grouped:
+            if cy<=cursor:continue
+            if ri in groups:
+                if text(g)==groups[ri][1]:matches.append((cy,[g]))
+            else:
+                numeric_count=width-label_count
+                if len(g)<numeric_count:continue
+                labels=g[:-numeric_count];parts=[];offset=0
+                for original in row[:label_count]:
+                    visible=platonic_label(original);count=len(visible.split());parts.append(labels[offset:offset+count]);offset+=count
+                if offset==len(labels) and all(platonic_label(text(c))==platonic_label(original) for c,original in zip(parts,row[:label_count])):
+                    matches.append((cy,[*parts,*[[w] for w in g[-numeric_count:]]]))
+        # 重复方法标签按原表全部行顺序消费；最终字形覆盖确保没有漏行或额外行。
+        need(matches,'完整类别/方法行不能对应原PDF');cy,cells=min(matches,key=lambda v:v[0]);cursor=cy
+        rows.append((ri,cy,cells));used.update(tuple(w) for c in cells for w in c)
+    need(used==set(tuple(w) for w in words),'表格区域存在未覆盖的标题、单位、类别或数据')
+    column_words=[list(h) for h in header_cells]
+    for ri,cy,cells in rows:
+        if ri not in groups:
+            for ci,c in enumerate(cells):column_words[ci].extend(c)
+    edges=[x0]
+    for ci in range(width-1):
+        left=max(w[2] for w in column_words[ci]);right=min(w[0] for w in column_words[ci+1]);need(left<right,'实际列字形交叉，不能猜测列归属');edges.append((left+right)/2)
+    edges.append(x1);confirmations=[];header_proofs=[]
+    for ci,c in enumerate(header_cells):
+        cell=next(c for c in table['cells'] if c['row']==0 and c['column']==ci)
+        need(cell['colspan']==1 and cell['rowspan']==1 and text(c)==expected_headers[ci],'原DOM列头或合并结构不同')
+        header_proofs.append({'row':0,'column':ci,'text':cell['text'],'glyphs':[list(w[:5]) for w in c]})
+        if cell['text']!=expected_headers[ci]:confirmations.append({'row':0,'column':ci,'originalText':cell['text'],'originalCellDomSha256':cell['sourceDomSha256'],'visibleText':expected_headers[ci],'status':'pdf-confirmed-mathml-header','glyphs':[list(w[:5]) for w in c]})
+    corrected=[]
+    for ri,cy,cells in rows:
+        if ri in groups:
+            original,visible=groups[ri];cell=next(c for c in table['cells'] if c['row']==ri)
+            need(cell['column']==0 and cell['colspan']==width and cell['rowspan']==1 and all(v==original for v in matrix[ri]),'完整类别合并行不同')
+            confirmations.append({'row':ri,'column':0,'originalText':original,'originalCellDomSha256':cell['sourceDomSha256'],'visibleText':visible,'status':'pdf-confirmed-mathml-header','glyphs':[list(w[:5]) for w in cells[0]]});corrected.append([visible]*width);continue
+        output=[platonic_label(value) for value in matrix[ri][:label_count]]
+        for ci,c in enumerate(cells):
+            need(all(edges[ci]-.02<=w[0] and w[2]<=edges[ci+1]+.02 for w in c),'真实字形越过对应列')
+            if ci<label_count:
+                cell=next(c for c in table['cells'] if c['row']==ri and c['column']==ci)
+                need(cell['colspan']==1 and cell['rowspan']==1,'原标签坐标/合并结构不同')
+                if matrix[ri][ci]!=output[ci]:confirmations.append({'row':ri,'column':ci,'originalText':matrix[ri][ci],'originalCellDomSha256':cell['sourceDomSha256'],'visibleText':output[ci],'status':'pdf-confirmed-mathml-header','glyphs':[list(w[:5]) for w in c]})
+                continue
+            visible=text(c);original=matrix[ri][ci];need(re.fullmatch(r'\d+\.\d+',visible) and original in [visible,visible+visible],'原格不是PDF完整小数单值或同值双写')
+            cell=next(c for c in table['cells'] if c['row']==ri and c['column']==ci);need(cell['colspan']==1 and cell['rowspan']==1,'原数值格坐标/合并结构不同')
+            confirmations.append({'row':ri,'column':ci,'originalText':original,'originalCellDomSha256':cell['sourceDomSha256'],'visibleText':visible,'status':'unchanged' if original==visible else 'pdf-confirmed-double-rendering','glyph':list(c[0][:5])});output.append(visible)
+        corrected.append(output)
+    return {'contract':'sealed-pdf-cell-confirmation-v1','origin':'program-replay-from-sealed-pdf-not-model-input','profile':profile,'pdfSha256':sha(pdf_bytes),'backend':{'name':'pymupdf','version':fitz.VersionBind},'page':page_index+1,'originalTableDomSha256':table['sourceDomSha256'],'originalCaption':table['caption'],'pdfCaption':cap[4],'pdfTableBBox':[x0,top,x1,bottom],'headerProofs':header_proofs,'confirmedCells':confirmations,'displayDataRows':corrected}
+
+
 def proof(pdf_bytes,table,audit,doc):
     profile=table_profile(table)
     need(profile is not None,'当前来源表不符合准确支持的完整结构')
-    return proof_chime_mc(pdf_bytes,table,audit,doc,profile) if profile=='chime-mc-double' else proof_chime(pdf_bytes,table,audit,doc,profile) if profile=='chime-dnsmos-wer-double' else proof_steering(pdf_bytes,table,audit,doc,profile) if profile=='steering-strength-double' else proof_hindi(pdf_bytes,table,audit,doc,profile) if profile.startswith('hindi-') else proof_snr(pdf_bytes,table,audit,doc)
+    if profile=='platonic-three-tables-double': return proof_platonic(pdf_bytes,table,audit,doc,profile)
+    return proof_hindi(pdf_bytes,table,audit,doc,profile) if profile=='spatial-sdnr-double' else proof_chime_mc(pdf_bytes,table,audit,doc,profile) if profile=='chime-mc-double' else proof_chime(pdf_bytes,table,audit,doc,profile) if profile=='chime-dnsmos-wer-double' else proof_steering(pdf_bytes,table,audit,doc,profile) if profile=='steering-strength-double' else proof_hindi(pdf_bytes,table,audit,doc,profile) if profile.startswith('hindi-') else proof_snr(pdf_bytes,table,audit,doc)
 
 
 def stable(value):
@@ -605,8 +699,15 @@ HINDI_HEADERS = {
     '≤50{\\leq}50': '≤50',
 }
 
+
+SPATIAL_CAPTION='Table 1: The performance comparison across 200 time frames against different SDNR levels: (a) the proposed algorithm, (b) the existing SASE algorithm, and (c) the modified SASE algorithm.'
+SPATIAL_HEADS=[['',*(['SDNR = 1010 dB']*3),*(['SDNR = 2020 dB']*3),*(['SDNR = 3030 dB']*3)],['','(a)','(b)','(c)','(a)','(b)','(c)','(a)','(b)','(c)']]
+SPATIAL_HEADERS={'SDNR = 1010 dB':'SDNR = 10 dB','SDNR = 2020 dB':'SDNR = 20 dB','SDNR = 3030 dB':'SDNR = 30 dB'}
+
 def table_profile(table):
+    if platonic_supported(table): return 'platonic-three-tables-double'
     matrix=table.get('matrix') or []
+    if table.get('ordinal')==1 and table.get('caption')==SPATIAL_CAPTION and len(matrix)==5 and all(len(row)==10 for row in matrix) and matrix[:2]==SPATIAL_HEADS and [row[0] for row in matrix[2:]]==['Error','SDR','NR']: return 'spatial-sdnr-double'
     if not matrix or len(matrix[0])<3: return None
     if table.get('ordinal')==2 and table.get('caption')=='Table 2: Evaluation of MC loss on CHiME-4 REAL sets with UltraM2M-Whis variants. Rows 2 and 6 are respectively the 6- and 1-channel UltraM2M-Whis systems of Table 1.' and len(matrix)==10 and all(len(row)==8 for row in matrix): return 'chime-mc-double'
     if table.get('ordinal')==1 and table.get('caption')=='Table 1: DNSMOS and WER results on CHiME-4.' and len(matrix)==26 and all(len(row)==9 for row in matrix): return 'chime-dnsmos-wer-double'

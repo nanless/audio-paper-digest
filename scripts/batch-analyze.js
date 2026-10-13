@@ -82,7 +82,9 @@ function finalizeBatchZeroWorkState(resultPath, fallbackBatchDate, entryPlan = n
 async function reconcileCompletedFailureMarkers(resultPath, entryPlan, feedbacks = new Map()) {
     const initial = readJsonFileStrict(resultPath);
     const candidates = (Array.isArray(initial) ? initial : initial.papers || []).filter(paper =>
-        paper.latestAnalysisAttemptError || paper.digestStatus?.latestAttemptStatus === 'analysis_failed');
+        paper.latestAnalysisAttemptError || paper.digestStatus?.latestAttemptStatus === 'analysis_failed'
+        || (paper.analysisManifest?.stages?.apiReaderArticle?.status === 'complete'
+            && paper.apiReaderPlan?.tableBindings?.some(binding => binding.pdfCellConfirmation)));
     for (const candidate of candidates) {
         // 与正常分析保持相同锁顺序：论文锁内重读，再取得结果文件短锁。
         await withPaperAnalysisLock(candidate, () => updateJsonFileLocked(resultPath, current => {
@@ -94,10 +96,17 @@ async function reconcileCompletedFailureMarkers(resultPath, entryPlan, feedbacks
             });
             const feedback = feedbacks.get(normalizedId(paper));
             if (feedback) factReview.validateFeedback(feedback, plan, paper);
+            let proofReplayed = false;
+            if (paper.analysisManifest?.stages?.apiReaderArticle?.status === 'complete'
+                && paper.apiReaderPlan?.tableBindings?.some(binding => binding.pdfCellConfirmation)) {
+                if (!dailyFreshSources.isPaperBoundToPlan(paper, plan)) throw new Error('PDF检查记录重放的论文封存来源不一致');
+                dailyFreshSources.readDailyFreshSource(plan, paper);
+                proofReplayed = require('./lib/reader-pdf-cell-evidence').replaySavedProofMetadata(paper);
+            }
             const completed = feedback ? hasCompletedBoundFactFeedback(paper, feedback, plan)
                 : isSuccessfulAnalysisRecord(paper) && dailyFreshSources.isPaperReusableForAnalysis(paper, plan);
-            if (!completed) return undefined;
-            const normalized = mergePapersById([], [paper])[0];
+            if (!completed && !proofReplayed) return undefined;
+            const normalized = completed ? mergePapersById([], [paper])[0] : paper;
             const nextPapers = papers.map(item => normalizedId(item) === normalizedId(paper) ? normalized : item);
             return Array.isArray(current) ? nextPapers : { ...current, papers: nextPapers };
         }));

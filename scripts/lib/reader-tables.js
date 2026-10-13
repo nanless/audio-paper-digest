@@ -127,6 +127,26 @@ function hasSourceBoundRepeatedColonVector(cell, context = {}, duplicate = null)
     return sourceSequences.has(candidate.sequence);
 }
 
+function hasSourceBoundRepeatedSlashVector(cell, context = {}, duplicate = null) {
+    const number = '[+\\-\\u2212]?\\d+(?:\\.\\d+)?(?:[eE][+\\-\\u2212]?\\d+)?';
+    const separator = '(?:\\s*[/,，、]\\s*|\\s*(?:,\\s*)?and\\s*)';
+    const vectors = value => [...String(value || '').matchAll(new RegExp(
+        `(?<![\\d.])${number}(?:${separator}${number}){2,}(?![\\d.])`, 'g'
+    ))].map(match => ({ index: match.index, length: match[0].length,
+        sequence: JSON.stringify(match[0].normalize('NFKC').replace(/\u2212/g, '-')
+            .match(/[+\-]?\d+(?:\.\d+)?(?:[eE][+\-]?\d+)?/g)
+            .map(value => value.toLowerCase())) }));
+    const candidates = vectors(cell).filter(vector => String(cell).slice(vector.index,
+        vector.index + vector.length).includes('/'));
+    if (candidates.length !== 1) return false;
+    const candidate = candidates[0];
+    if (duplicate && !(duplicate.index >= candidate.index
+        && duplicate.index + duplicate.length <= candidate.index + candidate.length)) return false;
+    // 比较完整顺序与次数；源句可用英文列举，显示可用斜杠，不能只比数字集合。
+    return (Array.isArray(context.sourceTexts) ? context.sourceTexts : [])
+        .flatMap(vectors).some(vector => vector.sequence === candidate.sequence);
+}
+
 function hasSourceBoundRepeatedRangeChain(cell, context = {}, duplicate = null) {
     const text = String(cell || '').normalize('NFKC');
     const compact = text.replace(/\s+/g, '').replace(/\\times/gi, '×');
@@ -190,6 +210,8 @@ function findReaderTablePasteDuplication(cell, context = {}) {
         if (hasSourceBoundRepeatedNumericVector(compact, context,
             { index: doubled.index, length: doubled[0].length })) continue;
         if (hasSourceBoundRepeatedColonVector(compact, context,
+            { index: doubled.index, length: doubled[0].length })) continue;
+        if (hasSourceBoundRepeatedSlashVector(compact, context,
             { index: doubled.index, length: doubled[0].length })) continue;
         return `单元格存在疑似粘连复写“${doubled[0].slice(0, 40)}”，须核对完整原始值与绑定，不能仅按重复形状删减数字`;
     }

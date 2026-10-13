@@ -216,6 +216,18 @@ function withCoreSummaryFactReview(coreBound, paper, callback) {
 function withReaderFactReview(readerBound, paper, callback) {
     return readerFactReviewScope(readerBound, paper, callback, false);
 }
+function withSavedReaderUpstreamRecovery(parentBound, paper, callback) {
+    if (!accepted.has(parentBound) || !require('../analysis-engine').paperAnalysisLockHeld(paper)) fail('原Reader上游恢复须核验父包并持锁');
+    const context = validatedContexts.get(parentBound);
+    const recovered = require('./saved-fact-feedback').readSavedFeedback(paper, context.plan);
+    if (!recovered?.readerFeedback || daily.stableHash(parentBound.proof) !== daily.stableHash(proofFor(recovered.feedback)))
+        fail('原Reader上游恢复的祖先反馈身份不同');
+    const upstream = Object.entries(paper.analysisManifest?.stages || {}).filter(([stage]) => !['apiReaderArticle', 'apiReaderTableAudit'].includes(stage));
+    if (upstream.some(([, stage]) => stage?.factReview || stage?.scoringFactReview)) return withFactReview(parentBound, callback);
+    // 当前上游实际未绑定祖先反馈，按其原有普通作用域恢复；祖先包仍用于后续Reader继承约束。
+    validateRepairedClaims('primaryAnalysis', paper.analysisCheckpoint || paper.analysis || '', paper.arxivId);
+    return scope.run(null, callback);
+}
 function withSavedReaderFactReview(readerBound, paper, callback) {
     const previous = current();
     const context = validatedContexts.get(readerBound);
@@ -271,6 +283,9 @@ function readerFactReviewScope(readerBound, paper, callback, restoringSaved, par
     const maximumRenderedChars = restoringSaved ? 8000 : 4000;
     if (readerText.length > maximumRenderedChars) fail(`Reader双反馈与来源引文合计超过${maximumRenderedChars}字符（实际${readerText.length}字符）`);
     return scope.run(Object.freeze({ ...(previous || { feedback: reader, proof: null }), readerBound: freshBound, readerOnly: true, readerText,
+        ...(restoringSaved ? { restoredUpstreamFacts: Object.fromEntries(Object.entries(paper.analysisManifest?.stages || {})
+            .filter(([name]) => !['apiReaderArticle', 'apiReaderTableAudit'].includes(name))
+            .map(([name, value]) => [name, Object.fromEntries(['factReview', 'scoringFactReview'].filter(key => value[key] !== undefined).map(key => [key, structuredClone(value[key])]))])) } : {}),
         ...(restoringSaved ? { restoredReaderConstraints: { parentStage, parentProof: previous.proof, childProof: freshBound.proof, renderedSha256: sha(readerText), renderingRule: 'exact-string-union-v1', maximumRenderedChars, budgetRule: 'two-validated-saved-packets-v1' },
             restoredReaderClaims: [...new Set([...reader.rejectedReaderClaims, ...previous.feedback.rejectedReaderClaims, ...(parentStage === 'coreSummaryRepair' ? previous.feedback.rejectedCoreClaims : [])])] } : {}) }), callback);
 }
@@ -301,6 +316,8 @@ function usesPrimaryFeedback(stage) {
 function fingerprintFields(stage, declaredStage) {
     if (!['primaryAnalysis', 'coreSummaryRepair', 'apiReaderArticle', 'tagSelection', 'scoringAudit', ...PRIMARY_BODY_REWRITE_STAGES].includes(stage)) return {};
     const scopeValue = current();
+    if (scopeValue?.readerOnly && scopeValue.restoredUpstreamFacts && stage !== 'apiReaderArticle')
+        return scopeValue.restoredUpstreamFacts[stage] || {};
     if (scopeValue?.readerOnly && stage === 'apiReaderArticle') {
         if (declaredStage?.factReview !== undefined) validateProof(declaredStage.factReview);
         return { factReview: scopeValue.readerBound.proof, ...(scopeValue.restoredReaderConstraints ? { restoredReaderConstraints: scopeValue.restoredReaderConstraints } : {}) };
@@ -383,4 +400,4 @@ function validateRepairedClaims(stage, text, paperId) {
     if ([...claims, ...scoringClaims, ...inheritedCoreClaims].some(claim => String(text).includes(claim))) fail('模型输出仍包含已证实错误的原句');
 }
 module.exports = { CONTRACT, READER_SCOPE_MODEL_REJECTED, READER_PRIMARY_REQUIRED, sha, readFeedback, validateShape, validateFeedback, validateProof, proofFor,
-    withFactReview, withScoringFactReviews, withCoreSummaryFactReview, withReaderFactReview, withSavedReaderFactReview, validateReaderReviewFeedbackLength, assertScoringOnlyModelStageAllowed, current, fingerprintFields, reviewFeedback, validateRepairedClaims, assertScoringRequestAllowed, readerRejectedClaims };
+    withFactReview, withScoringFactReviews, withCoreSummaryFactReview, withReaderFactReview, withSavedReaderFactReview, withSavedReaderUpstreamRecovery, validateReaderReviewFeedbackLength, assertScoringOnlyModelStageAllowed, current, fingerprintFields, reviewFeedback, validateRepairedClaims, assertScoringRequestAllowed, readerRejectedClaims };

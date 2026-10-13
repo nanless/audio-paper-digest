@@ -201,3 +201,20 @@ test('真实PDF合并列头所有展开格都沿用同一原DOM确认', {
         }, provenance);
     } finally { Config.FILES.dailyFreshSourceRunsDir = previousRoot; }
 });
+
+test('未选的未恢复空布局表不会让正常Reader的PDF能力探测崩溃', t => {
+    t.mock.method(child, 'execFileSync', () => assert.fail('未支持表不能启动PDF提取'));
+    const ordinary = { ordinal: 1, matrix: [['Model', 'EER', 'Params'], ['baseline', '2.3', '1.0']], cells: [] };
+    const tables = [ordinary,
+        { ordinal: 2, matrix: [], recoveryStatus: 'unrecovered', cells: [] },
+        { ordinal: 3, matrix: [undefined], recoveryStatus: 'unrecovered', cells: [] },
+        { ordinal: 4, matrix: [['a', 'b', 'c'], null], recoveryStatus: 'unrecovered', cells: [] }];
+    const before = structuredClone(tables);
+    let parsed = 0;
+    withArtifacts({ tables }, '2610.12345', () => {
+        parsed++;
+        assert.equal(displayCell(ordinary, 1, 1), '2.3');
+    });
+    assert.equal(parsed, 1);
+    assert.deepEqual(tables, before);
+});

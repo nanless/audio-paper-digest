@@ -499,3 +499,110 @@ test('正常失败合并保新paidReader同代bundle，坏Reader保旧bundle并�
   assert.equal(sourceRejected.apiReaderFailedBundleHistory.length,1);
  }));
 });
+
+test('原父子Reader恢复先真实父范围补上游，再子范围Reader及正常收尾',async t=>{
+ const sample=await createReviewedReaderSample(t),paper=sample.paper;
+ const parentFeedback={...sample.feedback,primaryFeedback:'沿用已纠正的父范围主文。',readerFeedback:'',rejectedReaderClaims:[]};
+ const parent=facts.validateFeedback(parentFeedback,sample.plan,paper);facts.withFactReview(parent,()=>undefined);
+ paper.analysisManifest.stages.primaryAnalysis.factReview=parent.proof;paper.analysisManifest.stages.scoringAudit.factReview=parent.proof;
+ const childFeedback={...sample.feedback,rejectedPrimaryClaims:[]};
+ const child=facts.validateFeedback(childFeedback,sample.plan,paper);facts.withFactReview(child,()=>undefined);paper.analysisManifest.stages.apiReaderArticle.factReview=child.proof;
+ const actualComplete=structuredClone(paper);
+ paper.analysisManifest.stages.coreSummaryRepair.summarySha256='0'.repeat(64);
+ paper.analysisManifest.stages.imageDownload.status='pending';
+ paper.apiReaderArticleSha256='0'.repeat(64);
+ paper.latestAnalysisAttemptError='独立Reader纠错缺少已完成的主文、摘要或评分';
+ let parentCalls=0,readerCalls=0,normalFinal=0;
+ t.mock.method(deep,'refreshApiReaderArticleFromSource',async p=>{
+  readerCalls++;assert.equal(facts.current().readerOnly,true);assert.equal(facts.current().readerBound.proof.feedbackSha256,child.proof.feedbackSha256);
+  p.apiReaderArticleSha256=actualComplete.apiReaderArticleSha256;return p;
+ });
+ await daily.withDailyFreshAnalysisContext(sample.plan,()=>engine.withPaperAnalysisLock(paper,async()=>{
+  const result=await saved.analyzeWithRecoveredFeedback(paper,sample.plan,async options=>{
+   assert.equal(options.requireCompletedPrimaryCheckpoint,true);
+   if(options.resumeSavedReaderUpstreamOnly){parentCalls++;assert.equal(facts.current().readerOnly,undefined);assert.equal(facts.current().proof.feedbackSha256,parent.proof.feedbackSha256);
+    return {...paper,analysisManifest:{...paper.analysisManifest,stages:{...paper.analysisManifest.stages,coreSummaryRepair:structuredClone(actualComplete.analysisManifest.stages.coreSummaryRepair)}}};}
+   normalFinal++;assert.equal(facts.current().readerOnly,true);assert.throws(()=>facts.assertScoringOnlyModelStageAllowed('scoringAudit'));return paper;
+  });
+  assert.equal(result.analysis,actualComplete.analysis);
+ }));
+ assert.equal(parentCalls,1);assert.equal(readerCalls,1);assert.equal(normalFinal,1);
+});
+
+test('祖先包不倒灌无旧proof上游，旧Reader子保祖先约束；未补好评分不得进Reader',async t=>{
+ for(const fixScore of [true,false]){
+  const sample=await createReviewedReaderSample(t),paper=sample.paper;
+  const parentFeedback={...sample.feedback,primaryFeedback:'原祖先反馈，已经纠正。',readerFeedback:'原祖先Reader解释约束。'};
+  const parent=facts.validateFeedback(parentFeedback,sample.plan,paper);
+  const childFeedback={...sample.feedback,rejectedPrimaryClaims:[]};
+  const child=facts.validateFeedback(childFeedback,sample.plan,paper);facts.withFactReview(child,()=>undefined);
+  paper.analysisManifest.stages.apiReaderArticle.factReview=child.proof;
+  const originalPaper=structuredClone(paper),policy=require('../scripts/lib/selected-full-stage-reanalysis');
+  const record={contract:policy.CONTRACT,model:policy.MODEL,runId:'old-paid-parent-run',sourceRunId:sample.plan.runId,promptBindings:{},originalPaperSha256:facts.sha(JSON.stringify(originalPaper)),inheritedFeedbacks:[{feedback:parentFeedback,proof:parent.proof}],currentFeedbackProof:parent.proof};
+  paper.fullStageReanalysis=record;paper.fullStageReanalysisHistory=[{...structuredClone(record),originalPaper}];
+  const oldScore=structuredClone(paper.analysisManifest.stages.scoringAudit);
+  paper.analysisManifest.stages.scoringAudit.outputAnalysisSha256='0'.repeat(64);paper.apiReaderArticleSha256='0'.repeat(64);
+  let readers=0,upstream=0,finals=0;
+  const refresh=t.mock.method(deep,'refreshApiReaderArticleFromSource',async p=>{readers++;assert.equal(facts.current().readerOnly,true);assert.equal(facts.fingerprintFields('primaryAnalysis',p.analysisManifest.stages.primaryAnalysis).factReview,undefined);assert.deepEqual(facts.current().restoredReaderConstraints.parentProof,parent.proof);p.apiReaderArticleSha256=originalPaper.apiReaderArticleSha256;return p;});
+  const run=()=>daily.withDailyFreshAnalysisContext(sample.plan,()=>engine.withPaperAnalysisLock(paper,()=>saved.analyzeWithRecoveredFeedback(paper,sample.plan,async options=>{
+   if(options.resumeSavedReaderUpstreamOnly){upstream++;assert.equal(facts.current(),null);if(fixScore)paper.analysisManifest.stages.scoringAudit=oldScore;return paper;}
+   finals++;assert.equal(facts.current().readerOnly,true);assert.throws(()=>facts.assertScoringOnlyModelStageAllowed('primaryAnalysis'));return paper;
+  })));
+  if(fixScore){await run();assert.equal(readers,1);assert.equal(finals,1);}else{await assert.rejects(run(),e=>e.code==='READER_UPSTREAM_INCOMPLETE');assert.equal(readers,0);assert.equal(finals,0);}
+  assert.equal(upstream,1);refresh.mock.restore();
+ }
+});
+
+test('已有完整PDF Reader锁内先公开原记录重放，坏身份原错误阻断；草稿不提前重放',async t=>{
+ const sample=await createReviewedReaderSample(t),paper=sample.paper;
+ facts.withFactReview(facts.validateFeedback(sample.feedback,sample.plan,paper),()=>undefined);
+ paper.apiReaderPlan.tableBindings[0].pdfCellConfirmation={explicitTestMarker:true};
+ const stop=Object.assign(Error('PDF原完整身份或来源不一致'),{code:'TEST_PDF_IDENTITY_REJECTED'});
+ let replayCalls=0,normalCalls=0;
+ t.mock.method(require('../scripts/lib/reader-pdf-cell-evidence'),'replaySavedProofMetadata',p=>{replayCalls++;assert.equal(engine.paperAnalysisLockHeld(p),true);throw stop;});
+ await assert.rejects(daily.withDailyFreshAnalysisContext(sample.plan,()=>engine.withPaperAnalysisLock(paper,()=>saved.analyzeWithRecoveredFeedback(paper,sample.plan,()=>{normalCalls++;return paper;}))),e=>e===stop);
+ assert.equal(replayCalls,1);assert.equal(normalCalls,0);
+ t.mock.method(deep,'refreshApiReaderArticleFromSource',async p=>{normalCalls++;return p;});
+ paper.analysisManifest.stages.apiReaderArticle.status='invalid_output';
+ await daily.withDailyFreshAnalysisContext(sample.plan,()=>engine.withPaperAnalysisLock(paper,()=>saved.analyzeWithRecoveredFeedback(paper,sample.plan,()=>{normalCalls++;return paper;})));
+ assert.equal(replayCalls,1);assert.equal(normalCalls,1);
+});
+
+test('正常batch锁内保存已成PDF元数据，真实评分未成仅存proof并保原失败费用',async t=>{
+ for(const incomplete of [false,true]){
+  const sample=await createReviewedReaderSample(t),p=sample.paper;
+  p.apiReaderPlan.tableBindings[0].pdfCellConfirmation={explicitTestRecord:true,ruleSha256:'0'.repeat(64)};
+  p.paidResponseHistory=[{id:'original-paid-reader',tokens:74}];
+  if(incomplete){p.analysisManifest.stages.scoringAudit.status='contract_rejected';p.latestAnalysisAttemptError='真实评分尚未完成';}
+  const file=path.join(sample.plan.runDir,'reconcile-'+incomplete+'.json');
+  const payload={batchDate:sample.plan.batchDate,batchId:sample.plan.batchId,dailyFreshSourceRun:daily.dailyFreshSourceReference(sample.plan),papers:[p]};
+  fs.writeFileSync(file,JSON.stringify(payload));let calls=0;
+  const replay=t.mock.method(require('../scripts/lib/reader-pdf-cell-evidence'),'replaySavedProofMetadata',paper=>{
+   calls++;assert.equal(engine.paperAnalysisLockHeld(paper),true);
+   // 此处验证锁内保存流程，PDF 逐格重放另有真实来源验证。
+   delete paper.apiReaderPlan.tableBindings[0].pdfCellConfirmation;
+   paper.analysisManifest.stages.apiReaderArticle.pdfProofMetadataReplayTest='current';return true;
+  });
+  await require('../scripts/batch-analyze').reconcileCompletedFailureMarkers(file,daily.requireDailyFreshSourceRecoveryPlan(payload));
+  const stored=JSON.parse(fs.readFileSync(file)).papers[0];
+  assert.equal(calls,1);assert.equal(stored.analysisManifest.stages.apiReaderArticle.pdfProofMetadataReplayTest,'current');
+  assert.equal(stored.analysis,p.analysis);assert.equal(stored.apiReaderArticle,p.apiReaderArticle);assert.deepEqual(stored.paidResponseHistory,p.paidResponseHistory);
+  if(incomplete)assert.equal(stored.latestAnalysisAttemptError,p.latestAnalysisAttemptError);else assert.equal(stored.latestAnalysisAttemptError,undefined);
+  replay.mock.restore();
+ }
+});
+
+test('正常batch PDF source坏或public重放原错时锁内不写故障目标',async t=>{
+ for(const mode of ['source','proof']){
+  const sample=await createReviewedReaderSample(t),p=sample.paper;
+  p.apiReaderPlan.tableBindings[0].pdfCellConfirmation={explicitTestRecord:true};
+  if(mode==='source')p.freshRewriteProvenance.sourceManifestSha256='0'.repeat(64);
+  const file=path.join(sample.plan.runDir,'reconcile-bad-'+mode+'.json');
+  const payload={batchDate:sample.plan.batchDate,batchId:sample.plan.batchId,dailyFreshSourceRun:daily.dailyFreshSourceReference(sample.plan),papers:[p]};
+  fs.writeFileSync(file,JSON.stringify(payload));const bytes=fs.readFileSync(file);const entryPlan=daily.requireDailyFreshSourceRecoveryPlan(payload);
+  const stop=Error('PDF原字形或来源已变化，不能重签');let calls=0;
+  const replay=t.mock.method(require('../scripts/lib/reader-pdf-cell-evidence'),'replaySavedProofMetadata',paper=>{calls++;assert.equal(engine.paperAnalysisLockHeld(paper),true);throw stop;});
+  await assert.rejects(require('../scripts/batch-analyze').reconcileCompletedFailureMarkers(file,entryPlan),mode==='proof'?e=>e===stop:/来源/);
+  assert.equal(fs.readFileSync(file).equals(bytes),true);assert.equal(calls,mode==='proof'?1:0);replay.mock.restore();
+ }
+});

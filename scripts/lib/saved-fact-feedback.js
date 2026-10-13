@@ -132,7 +132,7 @@ function completedReaderUpstream(paper, plan) {
     const stages = paper?.analysisManifest?.stages;
     if (!stages || stages.primaryAnalysis?.status !== 'complete'
         || !daily.isPaperBoundToPlan(paper, plan) || !engine.hasValidAnalysisBody(paper)
-        || contract.REQUIRED_RECOVERY_STAGES.some(stage => !['apiReaderArticle', 'apiReaderTableAudit', 'imageSupplement'].includes(stage)
+        || contract.REQUIRED_RECOVERY_STAGES.some(stage => !['apiReaderArticle', 'apiReaderTableAudit', 'imageSupplement', 'imageDownload'].includes(stage)
             && !contract.isRecoveryStageTerminal(stage, stages[stage]?.status))
         || contract.validateTagStageProof(paper, { parsed: require('../utils').parseAnalysis(paper.analysis) })
         || contract.validateCoreSummaryStageBinding(paper)) return false;
@@ -195,6 +195,11 @@ async function refreshProtectedReader(paper, options = {}, feedbackSha256 = null
     return result;
 }
 async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explicitFeedback, options) {
+    if (paper.analysisManifest?.stages?.apiReaderArticle?.status === 'complete'
+        && paper.apiReaderPlan?.tableBindings?.some(binding => binding.pdfCellConfirmation)) {
+        if (!require('../analysis-engine').paperAnalysisLockHeld(paper)) throw new Error('原PDF检查记录重放须持有当前论文锁');
+        require('./reader-pdf-cell-evidence').replaySavedProofMetadata(paper);
+    }
     if (explicitFeedback) {
         const bound = facts.validateFeedback(explicitFeedback, plan, paper);
         if (savedProofs(paper).some(proof => daily.stableHash(proof) === daily.stableHash(bound.proof))) {
@@ -216,6 +221,34 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
         return withRecoveredFeedback(paper, plan, analyze, explicitFeedback);
     }
     if (!completedReaderUpstream(paper, plan)) {
+        if (!explicitFeedback && original?.readerFeedback) {
+            const parentBound = facts.validateFeedback(original.feedback, plan, original.paper);
+            const childBound = facts.validateFeedback(original.readerFeedback, plan, paper);
+            return facts.withFactReview(parentBound, async () => {
+                if (!require('../analysis-engine').paperAnalysisLockHeld(paper)) throw new Error('原Reader上游恢复须持有当前论文锁');
+                const retained = structuredClone(paper);
+                if (facts.sha(paper.analysis || '') === childBound.proof.coreAnalysisSha256) retained.analysisCheckpoint = paper.analysis;
+                require('../deep-analyzer').captureStaleAnalysisSnapshot(retained, retained.analysisManifest,
+                    'apiReaderArticle', childBound.proof.feedbackSha256);
+                if (retained.analysisStaleSnapshots) paper.analysisStaleSnapshots = retained.analysisStaleSnapshots;
+                await facts.withSavedReaderUpstreamRecovery(parentBound, paper, async () => {
+                    const resumed = await analyze({ resumeSavedReaderUpstreamOnly: true, requireCompletedPrimaryCheckpoint: true });
+                    if (!resumed || typeof resumed.analysis !== 'string' || resumed.error)
+                        throw new Error('原Reader父范围没有返回真实完整上游，保留原失败');
+                    Object.assign(paper, resumed);
+                    if (!strongCompletedReaderUpstream(paper, plan)) {
+                        const error = new Error('原Reader父范围恢复后摘要、评分或来源仍未完整绑定');
+                        error.code = 'READER_UPSTREAM_INCOMPLETE'; error.retryable = false; throw error;
+                    }
+                });
+                const readerResult = await analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, null, options);
+                Object.assign(paper, readerResult);
+                const completedChild = facts.validateFeedback(original.readerFeedback, plan, paper);
+                // 让正常深分析完成原图片阶段和整体收尾，仍禁止新主分析且沿用原子范围。
+                return facts.withSavedReaderFactReview(completedChild, paper,
+                    () => analyze({ requireCompletedPrimaryCheckpoint: true }));
+            });
+        }
         if (!explicitFeedback && !original?.readerFeedback) return withRecoveredFeedback(paper, plan,
             () => analyze({ requireCompletedPrimaryCheckpoint: true }));
         const error = new Error('独立Reader纠错缺少已完成的主文、摘要或评分');
