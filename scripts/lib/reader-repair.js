@@ -740,16 +740,17 @@ function nodeAt(draft, pointer) {
     if (pointer === '/tableBindings') return draft.tableBindings;
     if (pointer === '/formulaBindings') return draft.formulaBindings;
     if (pointer === '/figurePlacements') return draft.figurePlacements;
-    const match = /^\/(sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(0|[1-9]\d*)(\/body)?$/.exec(pointer);
-    if (!match || (match[3] && match[1] !== 'sections')) throw new Error(`Reader patch path is not allowed: ${pointer}`);
+    const match = /^\/(sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(0|[1-9]\d*)(\/(?:body|explanation))?$/.exec(pointer);
+    if (!match || (match[3] && !((match[1] === 'sections' && match[3] === '/body') || (match[1] === 'conceptBridges' && match[3] === '/explanation')))) throw new Error(`Reader patch path is not allowed: ${pointer}`);
     const list = draft[match[1]];
     const index = Number(match[2]);
     if (!Array.isArray(list) || index >= list.length || !own(list, index)) {
         throw new Error(`Reader patch index is out of bounds: ${pointer}`);
     }
     if (match[3]) {
-        if (!list[index] || !own(list[index], 'body')) throw new Error(`Reader patch body is missing: ${pointer}`);
-        return list[index].body;
+        const field = match[3].slice(1);
+        if (!list[index] || !own(list[index], field)) throw new Error(`Reader 局部修订缺少文字字段: ${pointer}`);
+        return list[index][field];
     }
     return list[index];
 }
@@ -816,7 +817,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
                     + '下一次只能使用当前 repair target 中的 expected-current SHA。' };
             throw error;
         }
-        if ((item.path.endsWith('/body') || ['/readerTitle', '/oneSentenceThesis'].includes(item.path))
+        if ((item.path.endsWith('/body') || item.path.endsWith('/explanation') || ['/readerTitle', '/oneSentenceThesis'].includes(item.path))
             && typeof item.value !== 'string') throw new Error('Reader patch text replacement must be a string');
         if (['/sections', '/tableBindings', '/formulaBindings', '/conceptBridges'].includes(item.path) && !Array.isArray(item.value)) {
             throw new Error('Reader patch tableBindings replacement must be an array');
@@ -827,7 +828,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             || item.value.length !== 0)) {
             throw new Error('无图清除只允许在本次没有可用像素时清空图绑定');
         }
-        if (item.path !== '/conceptBridges' && item.path !== '/sections' && item.path !== '/tableBindings' && item.path !== '/formulaBindings' && item.path !== '/figurePlacements' && !item.path.endsWith('/body')
+        if (item.path !== '/conceptBridges' && item.path !== '/sections' && item.path !== '/tableBindings' && item.path !== '/formulaBindings' && item.path !== '/figurePlacements' && !item.path.endsWith('/body') && !item.path.endsWith('/explanation')
             && !['/readerTitle', '/oneSentenceThesis'].includes(item.path)
             && (!item.value || typeof item.value !== 'object' || Array.isArray(item.value))) {
             throw new Error('Reader patch node replacement must be an object');
@@ -1983,10 +1984,12 @@ function verifiedReaderFactIssues(draft, claims) {
     const issues = [];
     for (const claim of claims || []) {
         if (typeof claim !== 'string' || claim.trim().length < 12) continue;
-        const matches = (draft?.sections || []).flatMap((section, index) => {
+        const nodes = [...(draft?.sections || []).map((section, index) => ({ path: `/sections/${index}/body`, value: section?.body })),
+            ...(draft?.conceptBridges || []).map((bridge, index) => ({ path: `/conceptBridges/${index}/explanation`, value: bridge?.explanation }))];
+        const matches = nodes.flatMap(node => {
             // 只看正文完整原句，不以来源引文、绑定元数据或零散术语授权改写。
             const mask = value => value.replace(/[^\n]/g, ' ');
-            const protectedBody = String(section?.body || '')
+            const protectedBody = String(node.value || '')
                 .replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, mask)
                 .replace(/`+[^`\n]*`+|\$\$[\s\S]*?\$\$|\$[^$\n]*\$|\\\[[\s\S]*?\\\]|\\\([^\n]*?\\\)/g, mask)
                 .replace(/“[^”]*”|「[^」]*」|"[^"\n]*"/g, mask);
@@ -2011,7 +2014,7 @@ function verifiedReaderFactIssues(draft, claims) {
             const occurrences = [];
             let position = prose.indexOf(claim);
             while (position >= 0) {
-                occurrences.push({ path: `/sections/${index}/body`, index: position });
+                occurrences.push({ path: node.path, index: position });
                 position = prose.indexOf(claim, position + claim.length);
             }
             return occurrences;
@@ -2019,6 +2022,32 @@ function verifiedReaderFactIssues(draft, claims) {
         if (matches.length !== 1) continue;
         issues.push({ path: matches[0].path, index: matches[0].index, code: 'reader_verified_fact_claim', claim,
             message: '已核验事实反馈指出该正文仍保留错误完整原句，按本次原文证据纠正。' });
+    }
+    return issues;
+}
+
+
+function assertReaderFactLocalCoverage(draft, claims) {
+    const issues = verifiedReaderFactIssues(draft, claims);
+    const strings = [];
+    const visit = (value, path = '') => {
+        if (typeof value === 'string') strings.push({ path, value });
+        else if (Array.isArray(value)) value.forEach((item, index) => visit(item, `${path}/${index}`));
+        else if (value && typeof value === 'object') Object.entries(value).forEach(([key, item]) => visit(item, `${path}/${key}`));
+    };
+    visit(draft);
+    for (const claim of claims || []) {
+        if (typeof claim !== 'string' || !claim) continue;
+        const matches = strings.flatMap(node => {
+            const found = [];
+            let index = node.value.indexOf(claim);
+            while (index >= 0) { found.push({ path: node.path, index }); index = node.value.indexOf(claim, index + claim.length); }
+            return found;
+        });
+        if (matches.length && (matches.length !== 1 || !issues.some(issue => issue.claim === claim
+            && issue.path === matches[0].path && issue.index === matches[0].index))) {
+            throw new Error('事实局部修订的错误原句存在重复或未获准位置，未发送模型请求');
+        }
     }
     return issues;
 }
@@ -2728,7 +2757,7 @@ function scientificDoubleRenderingGuidance(draft, issues, targets, sourceText) {
 }
 
 
-const FACT_LOCAL_PROMPT_CONTRACT = 'reader-fact-local-body-prompt-v1';
+const FACT_LOCAL_PROMPT_CONTRACT = 'reader-fact-local-text-prompt-v2';
 function factLocalPromptVariables(context, reviewFeedback, sourceText, sourceQuotes) {
     if (!context || context.atomicOperation || !Array.isArray(context.targets)
         || context.targets.length === 0 || context.targets.length > 8
@@ -2739,7 +2768,7 @@ function factLocalPromptVariables(context, reviewFeedback, sourceText, sourceQuo
     }
     const paths = new Set();
     for (const target of context.targets) {
-        if (!/^\/sections\/\d+\/body$/.test(target.path) || paths.has(target.path)
+        if (!/^\/(?:sections\/\d+\/body|conceptBridges\/\d+\/explanation)$/.test(target.path) || paths.has(target.path)
             || typeof target.value !== 'string' || target.oldSha256 !== hashDraft(target.value)
             || !Array.isArray(target.authorizedClaims) || target.authorizedClaims.length === 0
             || target.authorizedClaims.some(claim => typeof claim !== 'string'
@@ -3142,7 +3171,7 @@ function applyTopLevelMetadataRepair(raw, patch, context) {
 }
 
 
-module.exports = { FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+module.exports = { assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,

@@ -573,3 +573,80 @@ test('真实公共入口拒坏旧时间并保存无旧失败成功稿，主文�
         sample.paper.latestAnalysisAttemptError,
     );
 });
+
+test('真实公共刷新进入新解释补丁提示，未覆盖引文中的错句在模型前拒绝', async (t) => {
+    const sample = await createLocalSample(t);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'reader-fact-bridge-public-'));
+    const keys = ['deepAnalysisResult', 'papers', 'papersLegacy', 'runtimeDir'];
+    const previous = Object.fromEntries(keys.map(key => [key, Config.FILES[key]]));
+    t.after(() => {
+        Object.assign(Config.FILES, previous);
+        fs.rmSync(root, { recursive: true, force: true });
+    });
+    Config.FILES.deepAnalysisResult = path.join(root, 'analysis.json');
+    Config.FILES.papers = path.join(root, 'papers.json');
+    Config.FILES.papersLegacy = path.join(root, 'legacy.json');
+    Config.FILES.runtimeDir = path.join(root, 'runtime');
+    fs.writeFileSync(Config.FILES.papers, JSON.stringify({ papers: [] }));
+    fs.writeFileSync(Config.FILES.papersLegacy, JSON.stringify({ papers: [] }));
+    const repair = require('../scripts/lib/reader-repair');
+    const prompts = require('../scripts/lib/prompt-text-versions');
+    const bridgeClaim = '这条术语组合解释的完整原句包含已经核实的错误事实。';
+    const paper = structuredClone(sample.paper);
+    const bridge = paper.apiReaderPlan.conceptBridges[0];
+    const oldExplanation = bridge.explanation;
+    bridge.explanation += bridgeClaim;
+    paper.apiReaderArticle = paper.apiReaderArticle.replace(oldExplanation, bridge.explanation);
+    require('./reader-signed-draft-fixture').sign(paper);
+    const feedback = { ...sample.feedback, rejectedReaderClaims: [...sample.feedback.rejectedReaderClaims, bridgeClaim] };
+    let calls = 0;
+    const sentinel = Object.assign(new Error('已到获准局部模型请求，测试不发网络'), { code: 'TEST_MODEL_BOUNDARY', retryable: false });
+    const publicRefresh = require('../scripts/refresh-api-reader').refreshApiReader;
+    for (const quoted of [false, true]) {
+        const input = structuredClone(paper);
+        if (quoted) {
+            input.apiReaderPlan.conceptBridges[0].explanation = oldExplanation + `“${bridgeClaim}”`;
+            input.apiReaderArticle = input.apiReaderArticle.replace(bridge.explanation, input.apiReaderPlan.conceptBridges[0].explanation);
+            require('./reader-signed-draft-fixture').sign(input);
+        }
+        const bound = facts.validateFeedback(feedback, sample.plan, input);
+        fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify({ batchDate: sample.plan.batchDate,
+            dailyFreshSourceRun: daily.dailyFreshSourceReference(sample.plan), papers: [input] }));
+        const before = fs.readFileSync(Config.FILES.deepAnalysisResult);
+        const callsBefore = calls;
+        await facts.withFactReview(bound, () => assert.rejects(publicRefresh(sample.id, {
+            readerFactLocalRevision: true,
+            reviewFeedback: facts.reviewFeedback('apiReaderArticle', sample.id),
+            operations: { article: async (current, source, publicOptions) => {
+                const seed = deep.prepareApiReaderRevisionSeed(current, source.text, publicOptions.reviewFeedback,
+                    { readerFactLocalRevision: true });
+                const options = { ...publicOptions, sourceText: source.text, structuredArtifacts: source.structuredArtifacts,
+                    revisionSeed: seed, initialDraft: seed.initialDraft };
+                const start = deep.buildApiReaderGenerationStart(current, options);
+                assert.equal(start.readerFactLocalPaths.length, 2);
+                assert.ok(start.readerFactLocalPaths.includes('/conceptBridges/0/explanation'));
+                const identity = await deep.prepareApiReaderRetryIdentity(current, current.analysis, '已封存证据', options);
+                assert.equal(identity.identity.repairPromptSha256,
+                    deep.runtimePromptTemplateSha256(prompts.promptFilePathForContract('apiReaderRepair', repair.FACT_LOCAL_PROMPT_CONTRACT)));
+                assert.notEqual(identity.identity.repairPromptSha256,
+                    deep.runtimePromptTemplateSha256('prompts/api-reader-fact-local-v1.md'));
+                return deep.generateApiReaderArticleDetailed(current, current.analysis, '已封存证据', {
+                    ...options,
+                    readerCallModel: async (messages, tokens, request) => {
+                        calls++;
+                        assert.equal(request.usageContext.stage, 'apiReaderRepair');
+                        assert.ok(tokens <= 16000);
+                        const prompt = typeof messages[0].content === 'string' ? messages[0].content
+                            : messages[0].content.filter(item => item.type === 'text').map(item => item.text).join('\n');
+                        assert.ok(prompt.includes('/conceptBridges/0/explanation'));
+                        assert.ok(prompt.includes('terms、其他字段'));
+                        throw sentinel;
+                    },
+                    readerRecordDisposition: async () => {},
+                });
+            } },
+        }), quoted ? /未获准位置/ : /获准局部模型请求/));
+        assert.equal(calls - callsBefore, quoted ? 0 : 1);
+        assert.deepEqual(fs.readFileSync(Config.FILES.deepAnalysisResult), before);
+    }
+});

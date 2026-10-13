@@ -7666,7 +7666,7 @@ function buildApiReaderGenerationStart(paper, options = {}) {
     const signedRecoveryDraft = (options.resourceLocalRevision === true || options.readerFactLocalRevision === true) && seed
         ? require('./lib/signed-reader-recovery-draft').convert(seed) : null;
     const readerFactLocalPaths = options.readerFactLocalRevision === true
-        ? [...new Set(require('./lib/reader-repair').verifiedReaderFactIssues(signedRecoveryDraft,
+        ? [...new Set(require('./lib/reader-repair').assertReaderFactLocalCoverage(signedRecoveryDraft,
             require('./lib/daily-fact-review').current(getPaperArxivId(paper)).feedback.rejectedReaderClaims)
             .map(issue => issue.path))] : undefined;
     return {
