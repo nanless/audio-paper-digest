@@ -36,7 +36,7 @@ const {
 } = require('./digest-status.js');
 const { normalizedId, getBeijingISOString } = require('./utils.js');
 
-const MAX_REFRESH_CONCURRENCY = 5;
+const MAX_REFRESH_CONCURRENCY = 60;
 
 function parseRefreshCliArgs(args) {
     const options = {
@@ -390,16 +390,23 @@ function finishReviewedPrimaryReaderRefresh(previous, refreshed, plan, options =
     return result;
 }
 
+// 在同步读取范围内核验整批，只让当前论文和来源计划进入异步刷新。
+// 其他论文的正文不应随模型请求一起留在内存中。
+function readRefreshTargetAndPlan(resultPath, requested) {
+    const payload = readJsonFileStrict(resultPath);
+    const papers = Array.isArray(payload) ? payload : payload.papers;
+    const plan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(payload, {
+        papers, label: 'API Reader recovery'
+    });
+    return { paper: papers.find(paper => normalizedId(paper) === requested), plan };
+}
+
 async function refreshApiReaderInternal(targetId, options = {}) {
     const requested = normalizedId(targetId);
     if (!requested) throw new Error('用法: node scripts/refresh-api-reader.js <arxiv-id>');
     const resultPath = Config.FILES.deepAnalysisResult;
-    const current = readJsonFileStrict(resultPath);
-    const papers = Array.isArray(current) ? current : current.papers;
-    const initialDailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(current, {
-        papers, label: 'API Reader recovery'
-    });
-    const existing = papers.find(paper => normalizedId(paper) === requested);
+    const { paper: existing, plan: initialDailySourcePlan } =
+        readRefreshTargetAndPlan(resultPath, requested);
     if (!existing || (!isSuccessfulAnalysisRecord(existing)
         && !(options.scoringAndReader && canRepairScoringBinding(existing))
         && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(existing))
@@ -408,12 +415,8 @@ async function refreshApiReaderInternal(targetId, options = {}) {
     }
 
     return withPaperAnalysisLock(existing, async () => {
-        const latest = readJsonFileStrict(resultPath);
-        const latestPapers = Array.isArray(latest) ? latest : latest.papers;
-        const lockedDailySourcePlan = dailyFreshSources.requireDailyFreshSourceRecoveryPlan(latest, {
-            papers: latestPapers, label: 'API Reader recovery'
-        });
-        const storedAnalysisRecord = latestPapers.find(paper => normalizedId(paper) === requested);
+        const { paper: storedAnalysisRecord, plan: lockedDailySourcePlan } =
+            readRefreshTargetAndPlan(resultPath, requested);
         if (!storedAnalysisRecord || (!isSuccessfulAnalysisRecord(storedAnalysisRecord)
             && !(options.scoringAndReader && canRepairScoringBinding(storedAnalysisRecord))
             && !(options.surfaceBindingsOnly && canRepairSurfaceBinding(storedAnalysisRecord))

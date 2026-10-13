@@ -22,7 +22,11 @@ describe('refresh-api-reader 批量命令行', () => {
         ]);
         assert.strictEqual(parsed.all, true);
         assert.strictEqual(parsed.date, '2026-09-01');
-        assert.strictEqual(parsed.concurrency, MAX_REFRESH_CONCURRENCY);
+        assert.strictEqual(parsed.concurrency, 5);
+        assert.strictEqual(MAX_REFRESH_CONCURRENCY, 60);
+        assert.strictEqual(parseRefreshCliArgs(['2608.28630']).concurrency, 1);
+        assert.strictEqual(parseRefreshCliArgs(['--all', '--date', '2026-09-01', '--concurrency', '10']).concurrency, 10);
+        assert.strictEqual(parseRefreshCliArgs(['--concurrency', '60', '2608.28630']).concurrency, 60);
         assert.strictEqual(parsed.scoringAndReader, true);
         assert.deepStrictEqual(parsed.ids, []);
         const bindings = parseRefreshCliArgs([
@@ -42,9 +46,9 @@ describe('refresh-api-reader 批量命令行', () => {
         );
         assert.throws(
             () => parseRefreshCliArgs([
-                '--all', '--date', '2026-09-01', '--concurrency', '6'
+                '--all', '--date', '2026-09-01', '--concurrency', '61'
             ]),
-            /1-5/
+            /1-60/
         );
         assert.throws(() => parseRefreshCliArgs(['--unknown']), /无法识别参数/);
         assert.throws(

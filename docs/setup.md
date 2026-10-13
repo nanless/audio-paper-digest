@@ -116,7 +116,7 @@ Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读�
 
 API Reader v3 会直接把安全准备的官方论文图交给主模型，因此主模型及所选协议须支持图片输入。当前统一的 `muse-spark-1.3-contributor` 通过 Responses 接收图片，兼容的 `mimo-v2.6-flash` 通过 Chat Completions 接收图片；公共请求封装也支持 Chat 和 Anthropic 的图片格式。`PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧正式分析结果的额外图片补充：副模型选择候选图并规划局部插入，不替换主模型正文，也不参与评分。副模型端点未设置时复用主端点；密钥只有在主副属于同一规范服务时才能复用。
 
-`PD_API_READER_CONCURRENCY` 限制进程内解读生成的重阶段并发，`api:reader:refresh --concurrency N` 限制刷新命令同时处理的论文数。刷新任务仍可能等待前者提供的空闲容量，两项不能混为同一个限制。
+`PD_API_READER_CONCURRENCY` 限制进程内解读生成的重阶段并发，`api:reader:refresh --concurrency N` 限制刷新命令同时处理的论文数（命令默认 1，可显式设为 1–60，例如 `--concurrency 10`）。刷新任务仍可能等待前者提供的空闲容量，两项不能混为同一个限制。
 
 补积压时可以增加长文并发。这个设置只改变同时执行的任务数，不增加单篇尝试次数、输出预算或超时；整篇并发较小时仍受整篇数量限制。增加后应观察实际响应时间、超时和限流，出现服务压力时降低下一次运行的并发，不能通过切换账号绕过普通限流。
 
