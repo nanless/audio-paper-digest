@@ -1848,6 +1848,15 @@ function normalizeReaderSourceDisplayArtifacts(value) {
         /(?<![A-Za-z0-9.+−-])([+−-]?(?:\d+(?:\.\d+)?|\.\d+))\s*±\s*((?:\d+(?:\.\d+)?|\.\d+))\s*\\mathbf\{\1\}\s*\\scriptscriptstyle\{\s*\\pm\s*\2\s*\}(?![A-Za-z0-9.])/g,
         (_whole, mean, uncertainty) => `${mean} ± ${uncertainty}`
     );
+    // 同一均值/误差之间的可见 ± 与明确 \pm 是同一个运算符的两种显示。
+    // 只规范完整数值对；不删数值、不改符号，续尾有下标、幂或未知命令时保留原样。
+    output = output.replace(
+        /(?<![A-Za-z0-9.+−-])([+−-]?(?:\d+(?:\.\d+)?|\.\d+))\s*±\s*(?:\\pm\s*)?((?:\d+(?:\.\d+)?|\.\d+))/g,
+        (whole, mean, uncertainty, offset, input) => {
+            if (/^\s*[\p{L}\p{N}._^\\({]/u.test(input.slice(offset + whole.length))) return whole;
+            return `${mean} ± ${uncertainty}`;
+        }
+    );
     // 科学计数也可能同时含可见文字与 TeX 注解。两份系数和指数必须完全一致；
     // 不从裸数字重复、不同符号或近似数值猜测原值。
     output = output.replace(
