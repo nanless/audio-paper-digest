@@ -3395,7 +3395,23 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         }
         return smallChineseInteger(raw);
     };
+    const expandExactDecimalScale = (value, scale) => {
+        const sign = /^[+-]/.test(value) ? value[0] : '';
+        const [integer, fraction = ''] = value.replace(/^[+-]/, '').split('.');
+        const shift = { 万亿: 12, 亿: 8, 千万: 7, 百万: 6, 万: 4 }[scale];
+        const digits = (integer + fraction).padEnd(integer.length + shift, '0');
+        const whole = digits.slice(0, integer.length + shift).replace(/^0+(?=\d)/, '');
+        const remainder = digits.slice(integer.length + shift).replace(/0+$/, '');
+        return sign + whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
+            + (remainder ? `.${remainder}` : '');
+    };
     const chineseNumber = raw => {
+        // 小数系数和量级须作为一个完整数词解析，不能把“二点六百万”拆成 2.6 和 1000000。
+        const scaled = /^([负正]?[零〇一二两三四五六七八九十百千万亿]+点[零〇一二两三四五六七八九]+)(万亿|百万|千万|万|亿)$/.exec(raw);
+        if (scaled) {
+            const coefficient = chineseNumber(scaled[1]);
+            return coefficient === null ? null : expandExactDecimalScale(coefficient, scaled[2]);
+        }
         const sign = /^[负正]/.test(raw) ? (raw[0] === '负' ? '-' : '+') : '';
         const unsigned = raw.replace(/^[负正]/, '');
         const parts = unsigned.split('点');
@@ -3450,16 +3466,8 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
             const before = whole.slice(0, offset).trimEnd();
             if (/[A-Za-z0-9.,/^×*]$/.test(before)
                 || (/[万亿]$/.test(before) && !/^[+-]/.test(value))) return surface;
-            const sign = /^[+-]/.test(value) ? value[0] : '';
-            const [integer, fraction = ''] = value.replace(/^[+-]/, '').split('.');
-            const shift = { 万亿: 12, 亿: 8, 千万: 7, 百万: 6, 万: 4 }[scale];
-            const digits = (integer + fraction).padEnd(integer.length + shift, '0');
-            const wholePart = digits.slice(0, integer.length + shift).replace(/^0+(?=\d)/, '');
-            const fractionalPart = digits.slice(integer.length + shift).replace(/0+$/, '');
-            // 小数点移位是精确操作；不能让 Number 乘法或本地化舍入悄悄改动科学计数法的
-            // 小数尾部。
-            return sign + wholePart.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-                + (fractionalPart ? `.${fractionalPart}` : '');
+            // 以十进制字符串移位，不使用浮点乘法或舍入。
+            return expandExactDecimalScale(value, scale);
         });
     }
     for (const issue of quantitativeIssues) {
@@ -3545,7 +3553,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
                     .replace(/(\d+(?:\.\d+)?)\s*万/g, (_, value) => (
                         Number(value) * 10000
                     ).toLocaleString('en-US', { maximumFractionDigits: 10 }))
-                    .replace(/[负正]?[零〇一二两三四五六七八九十百千万亿]+(?:点[零〇一二两三四五六七八九]+)?/g, raw => {
+                    .replace(/[负正]?[零〇一二两三四五六七八九十百千万亿]+(?:点[零〇一二两三四五六七八九十百千万亿]+)?/g, raw => {
                         const parsed = chineseNumber(raw);
                         if (parsed === null) { valid = false; return raw; }
                         return parsed;
@@ -6409,11 +6417,8 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             bridge, ['terms', 'sectionKind', 'marker', 'explanation'],
             `读者文章 conceptBridges[${index}]`
         );
-        if (!Array.isArray(bridge.terms) || bridge.terms.length !== 2
-            || bridge.terms.some(term => typeof term !== 'string'
-                || term.trim().length < 2 || term.trim().length > 48)) {
-            throw new Error(`读者文章 conceptBridges[${index}].terms 必须包含 2 个真实术语`);
-        }
+        const termsDiagnostic = require('./lib/reader-repair').conceptBridgeTermsDiagnostic(bridge.terms, index);
+        if (termsDiagnostic) throw new Error(`读者文章 ${termsDiagnostic}`);
         if (!API_READER_KINDS.includes(bridge.sectionKind)) {
             throw new Error(`读者文章 conceptBridges[${index}].sectionKind 非法`);
         }

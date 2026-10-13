@@ -1259,6 +1259,20 @@ function collectReaderLanguageIssues(draft) {
     return issues;
 }
 
+function conceptBridgeTermsDiagnostic(terms, index) {
+    const label = `conceptBridges[${index}].terms`;
+    if (!Array.isArray(terms) || terms.length !== 2) {
+        return `${label} 必须是恰含2个真实术语字符串的数组，当前${Array.isArray(terms) ? `有${terms.length}项` : '不是数组'}；每项去除首尾空白后须为2–48字符。只写本篇实际涉及的概念，保留数学含义与已有解释，不补造术语。`;
+    }
+    const invalid = terms.flatMap((term, termIndex) => {
+        const length = typeof term === 'string' ? term.trim().length : null;
+        return length !== null && length >= 2 && length <= 48 ? [] : [
+            `${label}[${termIndex}] 实际值=${JSON.stringify(term)}，${length === null ? '不是字符串' : `去除首尾空白后${length}字符`}，要求2–48字符`
+        ];
+    });
+    return invalid.length ? `${invalid.join('；')}。请按原文解释该术语或符号实际指代的概念；单字母符号须连同所指概念写清，保留原符号、数学含义与已有解释，不凭空换成另一术语。` : null;
+}
+
 function collectDraftIssues(draft, parserError, options = {}) {
     const issues = [];
     const languageIssues = collectReaderLanguageIssues(draft);
@@ -1369,11 +1383,9 @@ function collectDraftIssues(draft, parserError, options = {}) {
                             + '保留有依据的事实和原有标记，不要直接丢弃内容或改动未授权字段。' });
                 }
             }
-            if (field === 'conceptBridges' && (!Array.isArray(binding?.terms) || binding.terms.length !== 2
-                || binding.terms.some(term => typeof term !== 'string' || term.trim().length < 2 || term.trim().length > 48))) {
-                issues.push({ path: `/${field}/${index}`,
-                    message: `${field}[${index}].terms 必须是恰含2个真实术语字符串的数组，每项2–48字符` });
-            }
+            const termsDiagnostic = field === 'conceptBridges'
+                ? conceptBridgeTermsDiagnostic(binding?.terms, index) : null;
+            if (termsDiagnostic) issues.push({ path: `/${field}/${index}`, message: termsDiagnostic });
             const marker = binding?.marker;
             if (field === 'conceptBridges' && marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`) {
                 issues.push({ path: `/${field}/${index}`,
@@ -3103,7 +3115,7 @@ function applyTopLevelMetadataRepair(raw, patch, context) {
 }
 
 
-module.exports = { verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+module.exports = { conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,
