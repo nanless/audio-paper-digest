@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const child = require('node:child_process');
+const realChimeDirectory = process.env.PD_PDF_CHIME_REAL_SOURCE_DIR;
 const { withArtifacts, withSavedPaper, displayCell } = require('../scripts/lib/reader-pdf-cell-evidence');
 
 test('普通原DOM表不启动PDF提取，逐字保留数字', () => {
@@ -171,4 +172,32 @@ test('印地语边界表仅识别已核完整结构，不把相近表头或删�
     assert.equal(supported(missing), false);
     const caption = structuredClone(table);caption.caption = caption.caption.replace('(ms)', '(s)');
     assert.equal(supported(caption), false);
+});
+
+test('真实PDF合并列头所有展开格都沿用同一原DOM确认', {
+    skip: !realChimeDirectory && '需显式提供真实封存CHiME来源'
+}, () => {
+    const directory = fs.realpathSync(realChimeDirectory);
+    const crypto = require('node:crypto');
+    const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
+    const Config = require('../scripts/config');
+    const previousRoot = Config.FILES.dailyFreshSourceRunsDir;
+    const artifacts = JSON.parse(fs.readFileSync(path.join(directory, 'source-runtime.json'))).structuredArtifacts;
+    const manifest = JSON.parse(fs.readFileSync(path.join(directory, 'source-manifest.json')));
+    const provenance = { contract: 'fresh-source-analysis-v1', runId: path.basename(path.resolve(directory, '../../..')),
+        sourceGeneration: 1, sourceSha256: manifest.text.responseSha256,
+        sourceManifestSha256: sha(fs.readFileSync(path.join(directory, 'source-manifest.json'))),
+        structuredArtifactsSha256: artifacts.payloadSha256 };
+    Config.FILES.dailyFreshSourceRunsDir = path.resolve(directory, '../../../..');
+    try {
+        withArtifacts(artifacts, '2610.05155', () => {
+            for (const column of [3, 4]) assert.equal(displayCell(artifacts.tables[0], 0, column), 'DNSMOS OVRL↑');
+            for (const column of [5, 6, 7, 8]) assert.equal(displayCell(artifacts.tables[0], 0, column), 'WER (%)↓');
+            const cell = artifacts.tables[0].cells.find(cell => cell.row === 0 && cell.column === 3);
+            const original = cell.sourceDomSha256;
+            cell.sourceDomSha256 = '0'.repeat(64);
+            assert.throws(() => displayCell(artifacts.tables[0], 0, 4), /改变/);
+            cell.sourceDomSha256 = original;
+        }, provenance);
+    } finally { Config.FILES.dailyFreshSourceRunsDir = previousRoot; }
 });

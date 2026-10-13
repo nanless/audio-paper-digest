@@ -32,6 +32,18 @@ class ChimeTableTests(unittest.TestCase):
         for name, original in self.original.items():
             self.assertEqual((BASE / name).read_bytes(), original)
 
+    def test_span_display_matches_all_header_columns_and_rejects_bad_identity(self):
+        proofs = evidence.derive({'paperId': '2610.05155', 'sourceDirectory': str(BASE), 'provenance': self.expected, 'artifacts': self.artifacts})
+        table = self.artifacts['tables'][0]
+        for column in [3, 4]:
+            self.assertEqual(evidence.confirmed_display_cell(table, proofs[0], 0, column), 'DNSMOS OVRL↑')
+        for column in [5, 6, 7, 8]:
+            self.assertEqual(evidence.confirmed_display_cell(table, proofs[0], 0, column), 'WER (%)↓')
+        bad = copy.deepcopy(table)
+        next(c for c in bad['cells'] if c['row'] == 0 and c['column'] == 3)['sourceDomSha256'] = '0' * 64
+        with self.assertRaises(ValueError):
+            evidence.confirmed_display_cell(bad, proofs[0], 0, 4)
+
     def test_header_method_dataset_sign_and_count_changes_rejected(self):
         cases = [(0, 0, 3, 'WER (%)↓\\downarrow'), (0, 0, 5, 'DNSMOS OVRL↑\\uparrow'), (0, 0, 3, 'DNSMOS OVRL'), (0, 0, 5, 'WER↓\\downarrow'), (0, 2, 5, 'REAL'), (0, 3, 1, 'IRIS [30]'), (0, 3, 2, '12'), (0, 3, 3, '1.521.53'), (0, 24, 0, 'Notes: changed'), (1, 2, 3, 'REAL'), (1, 2, 4, '-41.76-41.76'), (1, 3, 1, 'Another method'), (1, 4, 2, '11')]
         for index, row, col, value in cases:

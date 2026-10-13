@@ -200,9 +200,10 @@ function displayCell(table, row, column) {
     // 普通表沿用原单元格字节；旧合法记录可能没有matrix，不能变成空白。
     if (!proof) return sourceCell ? sourceCell.text : table?.matrix?.[row]?.[column];
     const original = table?.matrix?.[row]?.[column];
-    const cell = proof.confirmedCells.find(cell => cell.row === row && cell.column === column);
+    const cell = proof.confirmedCells.find(cell => cell.row === sourceCell?.row && cell.column === sourceCell?.column);
     if (!cell) return original;
-    if (cell.originalText !== original) throw new Error('PDF逐格确认的原cell文本发生变化');
+    if (cell.originalText !== original || cell.originalText !== sourceCell.text
+        || cell.originalCellDomSha256 !== sourceCell.sourceDomSha256) throw new Error('PDF逐格确认的原cell文本发生变化');
     return cell.visibleText;
 }
 

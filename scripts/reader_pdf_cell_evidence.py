@@ -669,6 +669,17 @@ def derive(request):
     need(backend_files()==backend_record,'PDF提取后端清单或字节在重放期间变化')
     return result
 
+def confirmed_display_cell(table, proof, row, column):
+    originals=[cell for cell in table['cells'] if cell['row']<=row<cell['row']+cell['rowspan'] and cell['column']<=column<cell['column']+cell['colspan']]
+    need(len(originals)==1,'PDF显示的原单元格位置不唯一')
+    original=originals[0]
+    matches=[cell for cell in proof['confirmedCells'] if cell['row']==original['row'] and cell['column']==original['column']]
+    if not matches:return table['matrix'][row][column]
+    need(len(matches)==1,'PDF显示确认位置不唯一')
+    confirmed=matches[0]
+    need(confirmed['originalText']==table['matrix'][row][column]==original['text'] and confirmed['originalCellDomSha256']==original['sourceDomSha256'],'PDF显示确认的原文本或DOM身份改变')
+    return confirmed['visibleText']
+
 def verify_saved_bindings(paper, runtime_root):
     bindings=paper.get('apiReaderPlan',{}).get('tableBindings',[])
     marked=[b for b in bindings if 'pdfCellConfirmation' in b]
@@ -688,7 +699,7 @@ def verify_saved_bindings(paper, runtime_root):
         need(binding['pdfCellConfirmation']==confirmed and binding.get('sourceTableDomSha256')==table['sourceDomSha256'],'保存证明不能由当前真实PDF重放')
         cells=binding.get('cellBindings',[]);matrix=table['matrix']
         need(len(cells)==sum(map(len,matrix)),'PDF显示校正必须覆盖完整原表')
-        seen=set();display={(c['row'],c['column']):c['visibleText'] for c in confirmed['confirmedCells']}
+        seen=set()
         values={}
         for c in cells:
             r,cidx=c.get('sourceRow'),c.get('sourceColumn')
@@ -696,7 +707,7 @@ def verify_saved_bindings(paper, runtime_root):
             need(c.get('renderedRow')==r and c.get('renderedColumn')==cidx and (r,cidx) not in seen,'原表不得删列、重排或重复坐标')
             originals=[x for x in table['cells'] if x['row']<=r<x['row']+x['rowspan'] and x['column']<=cidx<x['column']+x['colspan']]
             need(len(originals)==1 and originals[0]['text']==c.get('sourceText') and originals[0]['sourceDomSha256']==c.get('sourceDomSha256'),'原DOM文本或身份改变')
-            values[(r,cidx)]=display.get((r,cidx),matrix[r][cidx]);seen.add((r,cidx))
+            values[(r,cidx)]=confirmed_display_cell(table,confirmed,r,cidx);seen.add((r,cidx))
         result[binding['tableIndex']]=values
     return result
 
