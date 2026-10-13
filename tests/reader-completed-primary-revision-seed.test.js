@@ -15,7 +15,7 @@ const { validAnalysisPaper } = require('./valid-analysis-fixture');
 
 const failure = '局部事实纠错没有当前错误原句，也没有同反馈已完成证明；不能扩大为完整主文请求';
 
-async function createReviewedReaderSample(t) {
+async function createReviewedReaderSample(t, options = {}) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reviewed-reader-seed-'));
     const previous = Config.FILES.dailyFreshSourceRunsDir;
     Config.FILES.dailyFreshSourceRunsDir = path.join(root, 'runs');
@@ -23,7 +23,7 @@ async function createReviewedReaderSample(t) {
         Config.FILES.dailyFreshSourceRunsDir = previous;
         fs.rmSync(root, { recursive: true, force: true });
     });
-    const signed = require('./reader-signed-draft-fixture').fixture({ noFigures: true });
+    const signed = require('./reader-signed-draft-fixture').fixture({ ...options, noFigures: true });
     const id = signed.paper.arxivId.replace(/v\d+$/, '');
     const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-10-11', batchId: 'reader-seed',
         papers: [{ arxivId: signed.paper.arxivId, title: '正文已纠正的修订参考', authors: signed.paper.authors }] });

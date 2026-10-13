@@ -29,12 +29,10 @@ test('公开评分刷新入口保留已签Reader并到达评分调用，零网�
  const helper=new Module(helperFile,module);helper.filename=helperFile;helper.paths=Module._nodeModulePaths(path.dirname(helperFile));
  const helperSource=fs.readFileSync(helperFile,'utf8').split("test('同一已核验反馈")[0];
  helper._compile(helperSource+'\nmodule.exports={createReviewedReaderSample};',helperFile);
- const signedFile=path.resolve(__dirname,'reader-signed-draft-fixture.js');
- const savedSigned=require.cache[signedFile];
- const extendedSigned=new Module(signedFile,module);extendedSigned.filename=signedFile;extendedSigned.paths=Module._nodeModulePaths(path.dirname(signedFile));
- extendedSigned._compile(fs.readFileSync(signedFile,'utf8').replace("const text='The source reports a controlled measurement of 1.0 under the same protocol.';","const text='The source reports a controlled measurement of 1.0 under the same protocol.'.repeat(100);"),signedFile);
- require.cache[signedFile]=extendedSigned;
- let sample;try{sample=await helper.exports.createReviewedReaderSample(t);}finally{if(savedSigned)require.cache[signedFile]=savedSigned;else delete require.cache[signedFile];}
+ const sourceText = 'The source reports a controlled measurement of 1.0 under the same protocol.'.repeat(100);
+ const sample = await helper.exports.createReviewedReaderSample(t, { sourceText });
+ assert.equal(sample.source.text, sourceText);
+ assert.ok(sample.source.text.length > 5000);
  const deepFile=path.resolve(__dirname,'../scripts/deep-analyzer.js');
  const runtime=new Module(deepFile,module);runtime.filename=deepFile;runtime.paths=Module._nodeModulePaths(path.dirname(deepFile));
  runtime._compile(fs.readFileSync(deepFile,'utf8')+`\nmodule.exports.setOfflineScoringBoundary=function(identity){buildApiReaderResourceIdentity=async()=>identity;auditTypeAwareScoringDetailed=async()=>{throw Object.assign(new Error('OFFLINE_SCORING_BOUNDARY'),{code:'OFFLINE_SCORING_BOUNDARY'});};};`,deepFile);
