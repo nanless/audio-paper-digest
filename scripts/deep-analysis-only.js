@@ -24,6 +24,7 @@ const { updateAnalysisDigestStatuses } = require('./digest-status.js');
 const Config = require('./config.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
 const factReview = require('./lib/daily-fact-review.js');
+const savedFacts = require('./lib/saved-fact-feedback');
 const { hasCompletedBoundFactFeedback } = require('./lib/completed-bound-fact-feedback');
 
 loadEnvFile();
@@ -149,11 +150,19 @@ async function runDeepAnalysis(options = {}) {
     if (cli.id && !papers.some(paper => normalizedId(paper) === cli.id)) throw new Error('指定论文不在完整日更集合内');
     // 未取得论文锁时只作只读预检；取得锁后仍重新读取正式记录并核验同一反馈。
     if (feedback) factReview.validateFeedback(feedback, dailySourcePlan, papers.find(paper => normalizedId(paper) === cli.id));
+    // 没有原反馈作用域时，不让续跑把已保存的事实约束替换为空指导。
+    const restoredFeedback = paper => feedback || savedFacts.readSavedFeedback(paper, dailySourcePlan);
+    const missingFactContext = paper => savedFacts.hasSavedProof(paper) && !restoredFeedback(paper);
+    const blockedFacts = papers.filter(p => (!cli.id || normalizedId(p) === cli.id)
+        && (!isSuccessfulAnalysisRecord(p) || !dailyFreshSources.isPaperReusableForAnalysis(p, dailySourcePlan))
+        && missingFactContext(p));
+    if (blockedFacts.length) console.log(`⚠️ 保留 ${blockedFacts.length} 篇缺少之前纠错说明的未完成记录，本次跳过：${blockedFacts.map(normalizedId).join(', ')}`);
     const notAnalyzed = papers
         .filter(p => !cli.id || normalizedId(p) === cli.id)
         .filter(p => feedback ? !hasCompletedBoundFactFeedback(p, feedback, dailySourcePlan)
             : !isSuccessfulAnalysisRecord(p)
                 || !dailyFreshSources.isPaperReusableForAnalysis(p, dailySourcePlan))
+        .filter(p => !missingFactContext(p))
         .map(storedAnalysisRecord => mergeStoredAnalysisState(
             freshById.get(normalizedId(storedAnalysisRecord)) || storedAnalysisRecord,
             storedAnalysisRecord
@@ -194,10 +203,13 @@ async function runDeepAnalysis(options = {}) {
         saveInterval: Config.ANALYSIS_CONFIG.concurrency,
         analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
             ...options,
-            ...(feedback ? { analyze: paper => {
-                const bound = factReview.validateFeedback(feedback, dailySourcePlan, paper);
-                return factReview.withFactReview(bound, () => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper));
-            } } : options.analyzeFn ? { analyze: options.analyzeFn } : {})
+            analyze: paper => {
+                const original = restoredFeedback(paper);
+                const analyze = () => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper);
+                if (!original) return analyze();
+                const bound = factReview.validateFeedback(original, dailySourcePlan, paper);
+                return factReview.withFactReview(bound, analyze);
+            }
         }),
         preparePaperLocked: paper => {
             const current = readJsonFileStrict(resultPath);
@@ -207,6 +219,10 @@ async function runDeepAnalysis(options = {}) {
                 entryPlan: dailySourcePlan, paper: latest || paper, label: '锁内深度分析恢复'
             });
             if (feedback) factReview.validateFeedback(feedback, lockedPlan, latest);
+            if (missingFactContext(latest || paper)) {
+                console.log(`⚠️ ${normalizedId(paper)} 出现新的纠错证明，保留未完成记录，本次跳过`);
+                return { paper: latest || paper, skip: true };
+            }
             if (feedback ? hasCompletedBoundFactFeedback(latest, feedback, lockedPlan)
                 : isSuccessfulAnalysisRecord(latest)
                     && dailyFreshSources.isPaperReusableForAnalysis(latest, lockedPlan)) {

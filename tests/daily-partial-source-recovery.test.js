@@ -59,6 +59,43 @@ test('中断分析从完整筛选与本次封存来源恢复，错误身份或�
     assert.equal(analysisCalls, 1);
     assert.equal(captures, 2, '恢复不重新获取来源');
     assert.equal(JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers.length, 2);
+    // 某篇缺少原事实包不阻断其他正常待办，也不能清除它的失败与付费记录。
+    for (const proofField of ['factReview', 'scoringFactReview']) {
+        const factPending = structuredClone(prepared);
+        factPending.papers[0].analysisManifest = { version: 1, stages: {
+            methodRepair: { status: 'complete', attempts: 2, [proofField]: { feedbackSha256: 'saved-proof' } }
+        } };
+        write(Config.FILES.deepAnalysisResult, factPending);
+        await assert.rejects(entry.runDeepAnalysis({ date, analyzeBatch: async recovered => {
+            assert.deepEqual(recovered.map(p => p.arxivId), [papers[1].arxivId]);
+            throw new Error('无事实包论文已跳过');
+        } }), /无事实包论文已跳过/);
+        const saved = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[0];
+        assert.equal(saved.latestAnalysisAttemptError, '保留原失败');
+        assert.deepEqual(saved.analysisManifest, factPending.papers[0].analysisManifest);
+    }
+    write(Config.FILES.deepAnalysisResult, prepared);
+    await assert.rejects(entry.runDeepAnalysis({ date, analyzeBatch: async (recovered, batchOptions) => {
+        const latest = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult));
+        latest.papers[1].analysisManifest = { stages: {
+            revision: null,
+            apiReaderArticle: { status: 'invalid_output', attempts: 4,
+                scoringFactReview: { feedbackSha256: 'new-proof-under-lock' } }
+        } };
+        write(Config.FILES.deepAnalysisResult, latest);
+        const locked = batchOptions.preparePaperLocked(recovered.find(p => p.arxivId === papers[1].arxivId));
+        assert.equal(locked.skip, true);
+        assert.deepEqual(locked.paper.analysisManifest, latest.papers[1].analysisManifest);
+        throw new Error('锁内新证明已保留');
+    } }), /锁内新证明已保留/);
+    const allFactPending = structuredClone(prepared);
+    for (const paper of allFactPending.papers) paper.analysisManifest = { stages: {
+        apiReaderArticle: { status: 'invalid_output', attempts: 3, factReview: { feedbackSha256: 'saved-proof' } }
+    } };
+    write(Config.FILES.deepAnalysisResult, allFactPending);
+    const blocked = await entry.runDeepAnalysis({ date, analyzeBatch: async () => assert.fail('缺事实包不得请求') });
+    assert.equal(blocked.status, 'failed');
+    assert.equal(blocked.remaining, 2);
     const variants = [
         { name: '明确错误日期', payload: { ...partial, batchDate: '2026-10-10' } },
         { name: '统计日期冲突', payload: { ...partial, stats: { batchDate: '2026-10-10' } } },

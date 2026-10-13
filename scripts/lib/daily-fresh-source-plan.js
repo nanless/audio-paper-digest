@@ -134,6 +134,10 @@ function sourceRunDirectory(rootDir, runId) {
     return path.join(safeDirectory(rootDir, true, '每日来源存放目录'), runId);
 }
 
+function factFeedbackDirectory(plan) {
+    return path.join(plan.runDir, 'fact-feedback');
+}
+
 function createDailyFreshSourcePlan({ batchDate, batchId, papers, rootDir = Config.FILES.dailyFreshSourceRunsDir } = {}) {
     if (!validDate(batchDate)) fail('batchDate 无效');
     if (typeof batchId !== 'string' || !batchId.trim() || batchId.length > 200) fail('batchId 无效');
@@ -583,7 +587,7 @@ function withDailyFreshAnalysisContext(plan, callback, options = {}) {
     return fresh.withFreshAnalysisContext(analysisIdentity(plan, options), callback);
 }
 
-module.exports = { CONTRACT, VERSION, SOURCE_GENERATION, REFERENCE_CONTRACT, REFERENCE_VERSION, DailyFreshSourcePlanError, stableHash,
+module.exports = { factFeedbackDirectory, CONTRACT, VERSION, SOURCE_GENERATION, REFERENCE_CONTRACT, REFERENCE_VERSION, DailyFreshSourcePlanError, stableHash,
     createDailyFreshSourcePlan, captureDailyFreshSources, readDailyFreshSource, isPaperBoundToPlan, isPaperReusableForAnalysis,
     prepareDailyPaper, createDailyAnalyzeFn, withDailyFreshAnalysisContext,
     dailyFreshSourceReference, readDailyFreshSourcePlan, requireDailyFreshSourceRecoveryPlan, requireLockedDailyFreshSourceRecoveryPlan, requireFinalDailyFreshSourceRecoveryPlan, prepareDailyFreshSourceRecoveryPayload,

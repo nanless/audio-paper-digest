@@ -8,6 +8,7 @@ const daily = require('./daily-fresh-source-plan');
 const sourceApi = require('./fresh-arxiv-rewrite-source');
 const { normalizedId } = require('../utils');
 const scope = new AsyncLocalStorage();
+const originalBytes = new WeakMap();
 const accepted = new WeakSet();
 const validatedContexts = new WeakMap();
 const CONTRACT = 'daily-bound-fact-review-v1';
@@ -29,6 +30,7 @@ function readFeedback(filename) {
         let value;
         try { value = JSON.parse(bytes.toString('utf8')); } catch { fail('反馈不是有效JSON'); }
         validateShape(value);
+        originalBytes.set(value, bytes);
         return value;
     } finally { fs.closeSync(fd); }
 }
@@ -122,11 +124,19 @@ function validateFeedback(feedback, plan, paper) {
     };
     const bound = freeze({ feedback: structuredClone(feedback), proof });
     accepted.add(bound);
-    validatedContexts.set(bound, { plan, paper });
+    validatedContexts.set(bound, { plan, paper, bytes: originalBytes.get(feedback) });
     return bound;
 }
 function withFactReview(bound, callback) {
     if (!accepted.has(bound)) fail('反馈尚未在锁内核验');
+    const context = validatedContexts.get(bound);
+    const directory = daily.factFeedbackDirectory(context.plan);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const filename = require('node:path').join(directory, bound.proof.feedbackSha256 + '.json');
+    const bytes = context.bytes || Buffer.from(JSON.stringify(bound.feedback, null, 2) + '\n');
+    try { fs.writeFileSync(filename, bytes, { flag: 'wx', mode: 0o600 }); }
+    catch (error) { if (error.code !== 'EEXIST') throw error; }
+    if (daily.stableHash(readFeedback(filename)) !== bound.proof.feedbackSha256) fail('保存的原纠错说明不一致');
     return scope.run(bound, callback);
 }
 function withScoringFactReviews(scoringBound, primaryBound, paper, callback) {

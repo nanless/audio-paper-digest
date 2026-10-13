@@ -178,3 +178,47 @@ test('deep 最后一篇真实合格结果保存后传播停止，不进入后续
     assert.equal(saved.analysis, f.paper.analysis);
     assert.equal(saved.apiReaderArticle, f.paper.apiReaderArticle);
 });
+
+test('普通 deep 自动复用已核验保存的原纠错说明，锁内重新读取且不清失败', async t => {
+    const sample = await createReviewedReaderSample(t);
+    const previous = { deepAnalysisResult: Config.FILES.deepAnalysisResult,
+        filteredPapers: Config.FILES.filteredPapers, papers: Config.FILES.papers };
+    t.after(() => Object.assign(Config.FILES, previous));
+    for (const key of Object.keys(previous)) Config.FILES[key] = path.join(sample.plan.runDir, key + '.json');
+    const failed = structuredClone(sample.paper);
+    failed.latestAnalysisAttemptError = '保留旧Reader失败';
+    const payload = { batchDate: sample.plan.batchDate, batchId: sample.plan.batchId,
+        dailyFreshSourceRun: daily.dailyFreshSourceReference(sample.plan), papers: [failed] };
+    save(Config.FILES.deepAnalysisResult, payload);
+    save(Config.FILES.filteredPapers, { batchDate: sample.plan.batchDate, batchId: sample.plan.batchId,
+        status: 'complete', papers: [{ arxivId: failed.arxivId, title: failed.title }] });
+    const input = path.join(sample.plan.runDir, 'original-feedback.json');
+    save(input, sample.feedback);
+    const originalBytes = fs.readFileSync(input);
+    const bound = facts.validateFeedback(facts.readFeedback(input), sample.plan, failed);
+    facts.withFactReview(bound, () => {});
+    const stored = path.join(daily.factFeedbackDirectory(sample.plan), bound.proof.feedbackSha256 + '.json');
+    assert.deepEqual(fs.readFileSync(stored), originalBytes);
+    let calls = 0;
+    await assert.rejects(entry.runDeepAnalysis({ date: sample.plan.batchDate,
+        analyzeFn: async paper => {
+            calls += 1;
+            assert.deepEqual(facts.current(sample.id).proof, bound.proof);
+            assert.equal(paper.latestAnalysisAttemptError, '保留旧Reader失败');
+            throw new Error('正常恢复已携带原说明');
+        },
+        analyzeBatch: async (papers, options) => {
+            assert.equal(papers.length, 1);
+            const locked = options.preparePaperLocked(papers[0]);
+            assert.equal(locked.skip, false);
+            return options.analyzeFn(locked.paper);
+        }
+    }), /正常恢复已携带原说明/);
+    assert.equal(calls, 1);
+    const saved = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult));
+    assert.deepEqual(saved.papers[0].analysisManifest, failed.analysisManifest);
+    assert.equal(saved.papers[0].latestAnalysisAttemptError, failed.latestAnalysisAttemptError);
+    fs.writeFileSync(stored, JSON.stringify({ ...sample.feedback, readerFeedback: '被改写的说明' }));
+    await assert.rejects(entry.runDeepAnalysis({ date: sample.plan.batchDate,
+        analyzeBatch: async () => assert.fail('变更原包不得开始分析') }), /保存的证明不一致/);
+});
