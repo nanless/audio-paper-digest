@@ -31,7 +31,7 @@ class ComparisonLabelsTest(unittest.TestCase):
                    'Domain', 'Merge point', 'Prompt', 'Comparison object', 'Participant ID',
                    'Pretraining objective', 'Training data', 'Tokenizer', 'Vocabulary size',
                    '声源', '音源', '乐器', 'Sound source', 'Sound sources', 'Audio source',
-                   'Audio sources', 'Instrument', 'Instruments')
+                   'Audio sources', 'Instrument', 'Instruments', '表示', '检测器')
         for header in headers:
             with self.subTest(header=header):
                 self.assertIsNone(validate(article(header)))
@@ -40,7 +40,7 @@ class ComparisonLabelsTest(unittest.TestCase):
         for header in ('领域平均分 ↑', '提示词评分 ↑', '分割规则准确率 ↑', '对比对象错误率 ↓',
                        '被试 ID 准确率 ↑', '预训练目标损失 ↓', '训练数据吞吐 ↑', '分词器 WER ↓',
                        '家族评分 ↑', '词表大小误差 ↓', 'Domain accuracy ↑', 'Prompt score ↑',
-                       'Tokenizer WER ↓', 'Training data throughput ↑'):
+                       'Tokenizer WER ↓', 'Training data throughput ↑', '表示准确率 ↑', '检测器误差 ↓'):
             with self.subTest(header=header):
                 self.assertRegex(validate(article(header)), '缺少方法、数据集或设置识别列')
 

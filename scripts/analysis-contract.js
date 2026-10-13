@@ -243,7 +243,7 @@ const TABLE_NUMERIC_CELL_RE = /(?:^|[^A-Za-z])[-+]?\d(?:[\d,]*)(?:\.\d+)?(?:\s*(
 // 第一列也可能描述训练条件而不是指标。这里显式列出来，
 // 好让“训练损失 × evaluation metrics”这类表格按对比表处理，
 // 又不硬给条件列加上 ↑/↓ 标记。
-const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)$/i;
+const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)$/i;
 function isTableIdentifierHeader(value) {
     const normalized = String(value || '').trim();
     if (TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE.test(normalized)) return true;

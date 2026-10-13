@@ -10,7 +10,7 @@ const options = { contractVersion: EXPERIMENT_TABLE_CONTRACT_VERSION, documentTy
 const validate = text => validateExperimentTableContract(text, options);
 
 test('分割规则、领域和提示词等可以明确说明每行比较的对象', () => {
-    for (const header of ['分割规则', '领域', '合并点', '提示词', '对比对象', '被试 ID', '预训练目标', '训练数据', '分词器', '家族', '词表大小 $\\|V\\|$', '声源', '音源', '乐器']) {
+    for (const header of ['分割规则', '领域', '合并点', '提示词', '对比对象', '被试 ID', '预训练目标', '训练数据', '分词器', '家族', '词表大小 $\\|V\\|$', '声源', '音源', '乐器', '表示', '检测器']) {
         assert.equal(validate(article(header)), null, header);
     }
 });
@@ -22,7 +22,7 @@ test('对应英文名称也能说明比较对象', () => {
 });
 
 test('在名称后写分数或误差不能让指标冒充比较对象', () => {
-    for (const header of ['领域平均分 ↑', '提示词评分 ↑', '分割规则准确率 ↑', '对比对象错误率 ↓', '被试 ID 准确率 ↑', '预训练目标损失 ↓', '训练数据吞吐 ↑', '分词器 WER ↓', '家族评分 ↑', '词表大小误差 ↓', 'Domain accuracy ↑', 'Prompt score ↑', 'Tokenizer WER ↓', 'Training data throughput ↑']) {
+    for (const header of ['领域平均分 ↑', '提示词评分 ↑', '分割规则准确率 ↑', '对比对象错误率 ↓', '被试 ID 准确率 ↑', '预训练目标损失 ↓', '训练数据吞吐 ↑', '分词器 WER ↓', '家族评分 ↑', '词表大小误差 ↓', 'Domain accuracy ↑', 'Prompt score ↑', 'Tokenizer WER ↓', 'Training data throughput ↑', '表示准确率 ↑', '检测器误差 ↓']) {
         assert.match(validate(article(header)), /缺少方法、数据集或设置识别列/, header);
     }
 });
