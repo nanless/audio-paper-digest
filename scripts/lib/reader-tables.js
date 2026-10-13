@@ -316,6 +316,10 @@ function validateReaderResultTableCoverage(sections, artifacts) {
     const measurementValue = value => {
         const text = String(value || '').normalize('NFKC').replace(/[*`]/g, '').trim()
             .replace(/^约\s*(?=[+−-]?(?:\d|\.\d))/, '');
+        // 同格明确报告两个结果值的升降，不把远处的方法型号或日期借作结果。
+        const number = '[+−-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:[eE][+−-]?\\d+)?';
+        const transition = new RegExp(`^(?:从|由)\\s*${number}\\s*%?\\s*(?:到|至|升至|降至|提高到|降低到)\\s*${number}(?=$|[%，,;；。]|\\s*(?:%|对照|相比|相对|，|,|;|；|。|$))`, 'u');
+        if (transition.test(text)) return true;
         return /^(?:[($（]\s*)?[≈~<>≤≥]?\s*[+−-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+−-]?\d+)?(?=$|[\s%±(),，）;:/]|[–—-]\s*\d|(?:ms|s|hz|khz|mhz|ghz|db|mb|gb|kb|fps)\b)/i.test(text);
     };
     const numericResultTables = results.flatMap(section => extractMarkdownTables(String(section.body || '')))

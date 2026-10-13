@@ -86,3 +86,32 @@ test('提示词约定在任何模型调用之前说明来源结果表要求', ()
     assert.match(buildReaderContractNotice(readerResultTableRequirement(sourceTables())), /result 或 ablation 小节须呈现至少 1 张带数字的结果表/);
     assert.doesNotMatch(buildReaderContractNotice(readerResultTableRequirement({ tables: [] })), /result 或 ablation.*带数字的结果表/);
 });
+
+
+test('同格明确结果变化计为测量，日期型号与编号不能替代结果', () => {
+    const body = '| 比较对象 | 结果比较 |\n| --- | --- |\n'
+        + '| A | 从67.6到76.3，对照模型为75.9 |\n'
+        + '| B | 从73.6到81.9 |\n'
+        + '| C | 由5.1降至4.2 |\n'
+        + '| D | 从88.75%提高到90.25% |';
+    assert.equal(validateReaderResultTableCoverage([{kind:'result',body}],sourceTables()).numericResultTables,1);
+    for (const value of ['从2024年到2025年','从2024-01-01到2025-01-01','从Model1到Model2','从1号到2号','从编号1到编号2']) {
+        const invalid = body.replace(/(?:从|由)[^|\n]+/g,value+' ');
+        assert.throws(()=>validateReaderResultTableCoverage([{kind:'result',body:invalid}],sourceTables()),/覆盖不足/,value);
+    }
+});
+
+test('结果变化格式不免除逐字来源检查', () => {
+    const { bindApiReaderSourceEvidence } = require('../scripts/deep-analyzer');
+    const body = '| 方法 | 结果比较 |\n| --- | --- |\n| A | 从67.6到76.3 |\n| B | 从73.6到81.9 |\n| C | 从5.1到4.2 |\n| D | 从88.75到90.25 |';
+    assert.equal(validateReaderResultTableCoverage([{kind:'result',body}],sourceTables()).numericResultTables,1);
+    const artifacts = sourceTables();
+    artifacts.flattenedTextSha256 = require('node:crypto').createHash('sha256').update('Only unrelated source text is present.').digest('hex');
+    const normalize = value => Array.isArray(value) ? value.map(normalize) : value && typeof value === 'object'
+        ? Object.fromEntries(Object.keys(value).sort().map(key => [key, normalize(value[key])])) : value;
+    artifacts.payloadSha256 = require('node:crypto').createHash('sha256').update(JSON.stringify(normalize(artifacts))).digest('hex');
+    assert.throws(() => bindApiReaderSourceEvidence(body, [{tableIndex:1,sourceType:'source_quotes',
+        sourceTableOrdinal:null,cellBindings:[],sourceQuotes:['This quoted result is absent from the original source.']}], [], {
+        sourceText:'Only unrelated source text is present.',structuredArtifacts:artifacts
+    }), /不是全文中的 exact sourceQuote/);
+});
