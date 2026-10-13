@@ -4206,6 +4206,20 @@ def _core_summary_sentence_view(text):
     )
 
 
+def _has_concrete_runtime_disclosure(summary):
+    """按明确运行次数或实测时间识别运行负担。"""
+    for sentence in re.split(r'[。！？!?\n]', str(summary or '')):
+        if re.search(r'(?:(?:未|不)(?:曾|实际|直接)?(?:需|需要|进行|执行)|讨论|假说|预计|预期|可能|假设|如果|未来|计划|建议|不需|无需|不能|不会|不进行|不执行|不耗|尚未|没有|未曾|并非|未测|未披露|未报告|未记录|未提供|未给出|未公布|未说明|未统计|不报告|不记录|不披露|不提供|尚无|不代表)', sentence):
+            continue
+        if any(re.search(pattern, sentence) for pattern in (
+            r'(?:训练|推理|部署)[^。！？!?；;]{0,40}(?:需要|需|进行|执行)(?:[1-9][0-9]*|[一二两三四五六七八九十]+)次(?:完整(?:的)?|(?:经过|通过)(?:共享)?(?:[A-Za-z0-9_-]+\s*)?(?:编码器|主干|网络|模型)(?:的)?(?:提示条件)?|提示条件(?:的)?)?前向(?:传播|计算)?',
+            r'(?:训练|推理|部署)(?:平均|每轮|每个epoch)?时间(?:约|为|是|分别为)?\s*[0-9]+:[0-5][0-9](?![0-9:])',
+            r'(?:训练|推理|部署)(?:平均|每轮|每个epoch)?时间[（(](?:毫秒|秒|分钟)(?:/文件)?[）)](?:约|为|是|分别为)?\s*[0-9]+(?:\.[0-9]+)?(?![0-9.])',
+        )):
+            return True
+    return False
+
+
 def _detailed_core_summary_semantic_issue(summary):
     summary = _core_summary_sentence_view(summary)
     count = len(re.findall(r'[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]', summary))
@@ -4360,7 +4374,8 @@ def _detailed_core_summary_semantic_issue(summary):
         )
         for sentence in re.split(r'[。！？!?\n]', summary)
     )
-    cost = '原文未披露训练、推理或部署成本' in summary \
+    cost = _has_concrete_runtime_disclosure(summary) \
+        or '原文未披露训练、推理或部署成本' in summary \
         or re.search(r'(?:成本|代价|开销|硬件|算力|显存|内存|延迟|吞吐|实时率|能耗)', summary) \
         or re.search(r'(?:训练|推理|部署)[^。！？!?]{0,24}(?:需要|增加|额外|占用|耗时|更高|更低|受限|负担)', summary) \
         or scoped_resource_disclosure

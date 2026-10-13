@@ -1676,6 +1676,16 @@ function coreSummarySentenceView(text, sourceText) {
     });
 }
 
+// 前向次数和实测时间本身就是运行负担，不要求作者再加“成本”二字。
+function hasConcreteRuntimeDisclosure(summary) {
+    return String(summary || '').split(/[。！？!?\n]/u).some(sentence => {
+        if (/(?:(?:未|不)(?:曾|实际|直接)?(?:需|需要|进行|执行)|讨论|假说|预计|预期|可能|假设|如果|未来|计划|建议|不需|无需|不能|不会|不进行|不执行|不耗|尚未|没有|未曾|并非|未测|未披露|未报告|未记录|未提供|未给出|未公布|未说明|未统计|不报告|不记录|不披露|不提供|尚无|不代表)/u.test(sentence)) return false;
+        return /(?:训练|推理|部署)[^。！？!?；;]{0,40}(?:需要|需|进行|执行)(?:[1-9][0-9]*|[一二两三四五六七八九十]+)次(?:完整(?:的)?|(?:经过|通过)(?:共享)?(?:[A-Za-z0-9_-]+\s*)?(?:编码器|主干|网络|模型)(?:的)?(?:提示条件)?|提示条件(?:的)?)?前向(?:传播|计算)?/u.test(sentence)
+            || /(?:训练|推理|部署)(?:平均|每轮|每个epoch)?时间(?:约|为|是|分别为)?\s*[0-9]+:[0-5][0-9](?![0-9:])/u.test(sentence)
+            || /(?:训练|推理|部署)(?:平均|每轮|每个epoch)?时间[（(](?:毫秒|秒|分钟)(?:\/文件)?[）)](?:约|为|是|分别为)?\s*[0-9]+(?:\.[0-9]+)?(?![0-9.])/u.test(sentence);
+    });
+}
+
 function validateCoreSummarySemanticContract(analysis, options = {}) {
     const sourceText = typeof options === 'string' ? options : String(options.sourceText || '');
     const summary = coreSummarySentenceView(extractSection(String(analysis || ''), '核心摘要'), sourceText);
@@ -1768,11 +1778,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         && /\d/.test(sentence)
         && /(?:计算量|计算复杂度|MACs?|FLOPs?|GPU|CPU|TPU|NPU|RTX|显卡|(?:训练|推理|采样|优化|迭代)步数|\d\s*(?:[kKmMgG]\s*)?\s*(?:步|轮|次))/i.test(sentence)
     ));
-    // 原文常以 min:sec 报告训练每轮与推理耗时，不需要另重复‘成本’二字。
-    const measuredTimeDisclosure = summary.split(/[。！？!?\n]/).some(sentence =>
-        !/(?:预计|预期|可能|假设|如果|未来|尚未|没有|未曾|并非|未测|未披露|未报告|未记录|未提供|未给出|未公布|未说明|未统计|不报告|不记录|不披露|不提供|尚无|不代表)/.test(sentence)
-        && /(?:训练|推理|部署)(?:每轮|每个epoch)?时间(?:约|为|是|分别为)?\s*\d+:[0-5]\d(?![\d:])/.test(sentence));
-    const cost = measuredTimeDisclosure || summary.includes(CORE_SUMMARY_COST_UNAVAILABLE)
+    const cost = hasConcreteRuntimeDisclosure(summary) || summary.includes(CORE_SUMMARY_COST_UNAVAILABLE)
         || /(?:成本|代价|开销|硬件|算力|显存|内存|延迟|吞吐|实时率|能耗)/.test(summary)
         || /(?:训练|推理|部署)[^。！？!?]{0,24}(?:需要|增加|额外|占用|耗时|更高|更低|受限|负担)/.test(summary)
         || scopedResourceDisclosure;
