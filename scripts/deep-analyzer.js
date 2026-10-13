@@ -1873,6 +1873,23 @@ function normalizeExplicitReaderSymbolProjection(value) {
     let output = String(value ?? '');
     if (!output.includes('\\')) return output;
     const hasContinuation = (input, end) => /^\s*[\p{L}\p{N}_^\\({]/u.test(input.slice(end));
+    // 只有完整的可见变量与明确 TeX 同值时才合并，不能从裸重复猜测。
+    const compound = [
+        /(?<![A-Za-z0-9_])([A-Za-z])([0-9]+)([A-Za-z]{1,24})\1_\{\2\}\^\{\\mathrm\{\3\}\}(\s+\(multi-space\))?(?![\p{L}\p{N}_^\\({])/gu,
+        /(?<![A-Za-z0-9_])([A-Za-z]{1,24})([A-Za-z]{1,24})×([A-Za-z]{1,24})([A-Za-z]{1,24})\1_\{\\(?:mathrm|text)\{\2\}\}(?:\\!)*\\times(?:\\!)*(?:\\mathrm\{\3\}|\3)_\{\\(?:mathrm|text)\{\4\}\}(?![\p{L}\p{N}_^\\({])/gu
+    ];
+    output = output.replace(compound[0], (whole, base, index, power, label, offset, input) =>
+        hasContinuation(input, offset + whole.length) ? whole : `${base}${index}${power}${label || ''}`);
+    output = output.replace(compound[1], (whole, left, leftIndex, right, rightIndex, offset, input) =>
+        hasContinuation(input, offset + whole.length) ? whole : `${left}${leftIndex}×${right}${rightIndex}`);
+    output = output.replace(/(?<![A-Za-z0-9_.+−-])([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))%([∗*]{1,3})\s*([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))\\%\^\{([*]{1,3})\}(?![\p{L}\p{N}._^\\({])/gu,
+        (whole, visible, stars, tex, texStars, offset, input) =>
+            hasContinuation(input, offset + whole.length)
+            || visible.replace('−', '-') !== tex.replace('−', '-')
+            || stars.replace(/∗/g, '*') !== texStars ? whole : `${visible}%${stars}`);
+    output = output.replace(/(?<![A-Za-z0-9_.+−-])([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))%\s*([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))\\%(?![\p{L}\p{N}._^\\({])/gu,
+        (whole, visible, tex, offset, input) => hasContinuation(input, offset + whole.length)
+            || visible.replace('−', '-') !== tex.replace('−', '-') ? whole : `${visible}%`);
     const greek = { Delta:'Δ', alpha:'α', beta:'β', gamma:'γ', tau:'τ', lambda:'λ', omega:'ω' };
     const baseProjection = base => {
         const command = /^\\([A-Za-z]{1,24})$/.exec(base);

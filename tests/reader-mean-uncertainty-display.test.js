@@ -50,7 +50,7 @@ test('整数下标显示合并仍保留原格，错字母和错下标不能借�
     }
 });
 test('Python发布显示与Reader对同一组正反例结果一致', () => {
-    const script = `import ast,json,pathlib,re,sys
+    const script = `import ast,json,pathlib,re,sys,unicodedata
 p=pathlib.Path(sys.argv[1])/'scripts/publish-to-blog.py'
 tree=ast.parse(p.read_text())
 fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_normalize_api_reader_display_artifacts')

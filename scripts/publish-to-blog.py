@@ -5645,6 +5645,86 @@ def _api_reader_markdown_tables(article):
     return tables
 
 
+def _normalize_api_reader_explicit_symbol_projection(value):
+    """仅合并可见完整变量与明确 TeX 注解完全一致的显示副本。"""
+    output = str(value or '')
+    if '\\' not in output:
+        return output
+
+    def continuation(text, end):
+        tail = text[end:].lstrip()
+        return bool(tail and (unicodedata.category(tail[0])[0] in ('L', 'N')
+                              or tail[0] in '_^\\({'))
+
+    patterns = (
+        r'(?<![A-Za-z0-9_])([A-Za-z])([0-9]+)([A-Za-z]{1,24})\1_\{\2\}\^\{\\mathrm\{\3\}\}(\s+\(multi-space\))?(?![^\W_]|[_^\\({])',
+        r'(?<![A-Za-z0-9_])([A-Za-z]{1,24})([A-Za-z]{1,24})×([A-Za-z]{1,24})([A-Za-z]{1,24})\1_\{\\(?:mathrm|text)\{\2\}\}(?:\\!)*\\times(?:\\!)*(?:\\mathrm\{\3\}|\3)_\{\\(?:mathrm|text)\{\4\}\}(?![^\W_]|[_^\\({])',
+        r'(?<![A-Za-z0-9_.+−-])([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))%\s*([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))\\%(?![^\W_]|[._^\\({])',
+    )
+    for index, pattern in enumerate(patterns):
+        def replace(match):
+            if continuation(match.string, match.end()):
+                return match[0]
+            if index == 0:
+                return match[1] + match[2] + match[3] + (match[4] or '')
+            if index == 1:
+                return match[1] + match[2] + '×' + match[3] + match[4]
+            return match[1] + '%' if match[1].replace('−', '-') == match[2].replace('−', '-') else match[0]
+        output = re.sub(pattern, replace, output)
+
+    def percentage_stars(match):
+        if continuation(match.string, match.end()) \
+                or match[1].replace('−', '-') != match[3].replace('−', '-') \
+                or match[2].replace('∗', '*') != match[4]:
+            return match[0]
+        return match[1] + '%' + match[2]
+    output = re.sub(
+        r'(?<![A-Za-z0-9_.+−-])([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))%([∗*]{1,3})\s*([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))\\%\^\{([*]{1,3})\}(?![^\W_]|[._^\\({])',
+        percentage_stars, output,
+    )
+
+    greek = {'Delta': 'Δ', 'alpha': 'α', 'beta': 'β', 'gamma': 'γ',
+             'tau': 'τ', 'lambda': 'λ', 'omega': 'ω'}
+    atom = re.compile(
+        r'^(?:\\boldsymbol\{\\Delta_\{\\mathrm\{([A-Za-z]{1,24})\}\}\}'
+        r'|(\\mathcal\{[A-Za-z]\}|\\mathrm\{[A-Za-z]{1,24}\}|\\Delta|[A-Za-z]{1,24})_\{\\(?:mathrm|text)\{([A-Za-z]{1,24})\}\}(?:\(\\(tau|alpha|beta|gamma|lambda|omega)\))?'
+        r'|\\(Delta|alpha|beta|gamma|tau|lambda|omega))'
+        r'(?:\\(uparrow|downarrow))?(?![^\W_]|[_^\\({])'
+    )
+
+    def canonical(text):
+        return re.sub('[\u200b\u200c\u200d\ufeff]', '', unicodedata.normalize('NFKC', text))
+
+    for index in range(len(output) - 1, -1, -1):
+        match = atom.match(output[index:index + 160])
+        if not match or continuation(output, index + len(match[0])):
+            continue
+        if match[1]:
+            projection = 'Δ' + match[1]
+        elif match[5]:
+            projection = greek[match[5]]
+        else:
+            command = re.fullmatch(r'\\([A-Za-z]{1,24})', match[2])
+            styled = re.fullmatch(r'\\(?:mathcal|mathrm)\{([A-Za-z]{1,24})\}', match[2])
+            base = greek.get(command[1]) if command else styled[1] if styled else match[2]
+            if not base:
+                continue
+            projection = base + match[3] + ('(' + greek[match[4]] + ')' if match[4] else '')
+        if match[6]:
+            projection += '↑' if match[6] == 'uparrow' else '↓'
+        visible = re.search(r'(?:[^\W_]|[()↑↓\u200b\u200c\u200d\ufeff])*$', output[:index])[0]
+        if canonical(visible) == projection:
+            start = index - len(visible)
+            output = output[:start] + visible + output[index + len(match[0]):]
+
+    def arrow(match):
+        if continuation(match.string, match.end()) or match[1] != ('↑' if match[2] == 'uparrow' else '↓'):
+            return match[0]
+        return match[1]
+    output = re.sub(r'([↑↓])\\(uparrow|downarrow)(?![A-Za-z])', arrow, output)
+    return re.sub(r'([+/])\\;\1\\;', r'\1', output)
+
+
 def _normalize_api_reader_display_artifacts(value):
     """合并数值一致的明确 TeX 显示副本，以及连续重复的加粗说明标题。"""
     value = str(value or '')
@@ -5668,6 +5748,16 @@ def _normalize_api_reader_display_artifacts(value):
         ) else match[0],
         value,
     )
+    # 与 Node 相同：同一均值与误差之间的 ± 和明确 \pm 是同一运算符。
+    def mean_uncertainty(match):
+        tail = match.string[match.end():].lstrip()
+        if tail and (unicodedata.category(tail[0])[0] in ('L', 'N') or tail[0] in '._^\\({+−-'):
+            return match[0]
+        return match[1] + ' ± ' + match[2]
+    value = re.sub(
+        rf'(?<![A-Za-z0-9.+−-])({scalar})\s*±\s*(?:\\pm\s*)?({uncertainty})',
+        mean_uncertainty, value,
+    )
     # 连续重复的加粗说明标题可能使 Hugo 错误解析第二处加粗标记。
     # 这里只合并标题文字和冒号完全相同的重复部分，后面的解释正文保持不变。
     return re.sub(
@@ -5678,7 +5768,8 @@ def _normalize_api_reader_display_artifacts(value):
 
 
 def _normalize_api_reader_source_cell(value):
-    value = unicodedata.normalize('NFKC', str(value or ''))
+    value = _normalize_api_reader_explicit_symbol_projection(value)
+    value = unicodedata.normalize('NFKC', value)
     value = _normalize_api_reader_display_artifacts(value)
     value = re.sub(
         r'(?<![\d,])(\d{1,3}(?:,\d{3})+)(\d{1,3}(?:\{,\}\d{3})+)(?![\d,])',
