@@ -663,3 +663,5 @@ CHiME 的三层主结果表与两层 MC 对照表使用同一封存 PDF 逐格�
 `tests/reader-norm-symbol-display.test.js` 校验完整范数符号与明确 TeX 的同义显示（ℓ∞ / ℓ2），与 Python 发布检查逐项保持一致。异下标、额外运算、数学续尾及裸重复不合并，来源与 DOM 字节不变。真实封存稿的可选测试须明确提供 `PD_READER_NORM_SOURCE_PROJECT` 和 `PD_READER_NORM_PAID_FILE`；缺少时只跳过真实样本测试，不宣称重放成功。
 
 Reader 普通草稿在语言诊断前，只用已有完整原句补回来源的换行或其他空白，并在 `draftOrderMappings` 记录来源及草稿的前后 SHA。原响应、封存来源和费用记录不变；缺词、异值或错单位仍由原检查拒绝。正文/资源局部修订不因此得到改来源字段的权限。`tests/reader-source-quote-whitespace.test.js` 的真实样本重放使用 `PD_READER_QUOTE_REQUEST_DIR` 与 `PD_READER_QUOTE_SOURCE_PROJECT`，未提供时明确跳过该样本。
+
+`lib/reader-table-narrative-labels.js` 仅在普通草稿正规化时删除紧邻唯一已声明表格的“表前说明：”“表后解释：”“表后解释主要收益与限制：”标签。其后文字、表格、来源和原付费记录保持不变，删除位置及 SHA 记入 `draftOrderMappings`；正文或资源局部修订不采用该处理，真正检查指令仍须正常修订。可选真实付费稿测试使用 `PD_READER_TABLE_LABEL_SOURCE_PROJECT` 指向已有封存来源的项目，未提供时明确跳过。

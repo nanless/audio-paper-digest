@@ -1938,6 +1938,12 @@ function normalizeExplicitReaderSymbolProjection(value) {
 
 function normalizeReaderSourceDisplayArtifacts(value) {
     let output = normalizeExplicitReaderSymbolProjection(value);
+    // 仅合并同变量、同数值且带明确 TeX {=} 注解的等式副本。
+    // 裸重复、不同变量/数值、额外下标或数字尾部不具备此证据。
+    output = output.replace(
+        /(?<![A-Za-z0-9._])([A-Za-z])\s*=\s*([+−-]?(?:\d+(?:\.\d+)?|\.\d+))\s*\1\s*\{=\}\s*\2(?!\s*[A-Za-z0-9._^\\{%℃°+−*\/=<>-])/g,
+        (_whole, variable, value) => `${variable}=${value}`
+    );
     // 同一字母标记与整数下标的明确 TeX 副本，如 F0F_{0}。
     output = output.replace(/(?<![A-Za-z0-9_])([A-Za-z]+)(\d+)\1_\{\2\}(?![A-Za-z0-9_])/g, '$1$2');
     // 误差项的可见值与明确 TeX 注解逐字相同时，仅合并显示副本。
@@ -7826,6 +7832,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-parent-recovery.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-proof-read-scope.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-pre-image-check.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-table-narrative-labels.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-pdf-cell-evidence.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_pdf_cell_evidence.py'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'conference_extractor.py'), 'utf8'),
@@ -7958,6 +7965,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         });
         candidate = normalized.draft;
         if (normalized.mapping.changed) draftOrderMappings.push(normalized.mapping);
+        if (!options.readerFactLocalRevision && !options.resourceLocalRevision) {
+            const labels = require('./lib/reader-table-narrative-labels').normalizeReaderTableNarrativeLabels(candidate);
+            if (labels) draftOrderMappings.push(labels);
+        }
     };
     let currentIssues = [];
     let completedAttempts = 0;

@@ -5767,6 +5767,12 @@ def _normalize_api_reader_explicit_symbol_projection(value):
 def _normalize_api_reader_display_artifacts(value):
     """合并数值一致的明确 TeX 显示副本，以及连续重复的加粗说明标题。"""
     value = str(value or '')
+    # 与 Reader 相同：只合并同变量同数值、带明确 TeX {=} 注解的等式副本。
+    value = re.sub(
+        r'(?<![A-Za-z0-9._])([A-Za-z])\s*=\s*([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))'
+        r'\s*\1\s*\{=\}\s*\2(?!\s*[A-Za-z0-9._^\\{%℃°+−*/=<>-])',
+        lambda match: match[1] + '=' + match[2], value,
+    )
     # 与 Reader 相同：只合并数值、符号和精度完全相同的明确 TeX 误差副本。
     value = re.sub(r'(?<![A-Za-z0-9_])([A-Za-z]+)([0-9]+)\1_\{\2\}(?![A-Za-z0-9_])', r'\1\2', value)
     scalar = r'[+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)'
