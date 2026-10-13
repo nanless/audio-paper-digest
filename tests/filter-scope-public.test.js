@@ -1,4 +1,5 @@
 'use strict';
+process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
