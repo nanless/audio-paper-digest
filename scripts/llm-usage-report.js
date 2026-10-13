@@ -18,7 +18,7 @@ function readUsageEvents(directory) {
         const stat = fs.lstatSync(file);
         if (!stat.isFile() || stat.isSymbolicLink() || stat.size > 32768) throw new Error('用量事件必须是普通文件，不能是符号链接或超过 32 KiB');
         const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-        if (value?.version !== VERSION || !['request', 'disposition'].includes(value.kind)) throw new Error('用量事件格式不对：version 或 kind 不是这个版本认识的取值');
+        if (value?.version !== VERSION || !['request', 'request_started', 'disposition'].includes(value.kind)) throw new Error('用量事件格式不对：version 或 kind 不是这个版本认识的取值');
         events.push(value);
     }
     return events;
@@ -40,7 +40,8 @@ function main(args = process.argv.slice(2)) {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(parsed.getTime())
             || parsed.toISOString().slice(0, 10) !== date) throw new Error('日期必须是有效的 YYYY-MM-DD 日历日期');
     }
-    const events = readUsageEvents(path.resolve(options['--dir'] || Config.FILES.llmUsageDir)).filter(event => {
+    const allEvents = readUsageEvents(path.resolve(options['--dir'] || Config.FILES.llmUsageDir));
+    const events = allEvents.filter(event => {
         if (options['--run'] && event.runId !== options['--run']) return false;
         if (options['--paper'] && usagePaperKey(event.paperId) !== usagePaperKey(options['--paper'])) return false;
         if (options['--stage'] && event.stage !== options['--stage']) return false;
@@ -51,7 +52,7 @@ function main(args = process.argv.slice(2)) {
         }
         return true;
     });
-    const result = summarizeLlmUsage(events);
+    const result = summarizeLlmUsage(events, { pairingEvents: allEvents });
     console.log(JSON.stringify(result, null, 2));
     return result;
 }

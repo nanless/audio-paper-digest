@@ -147,6 +147,8 @@ function writeLlmUsageEvent(event, options = {}) {
         fs.fsyncSync(fd);
     } finally { fs.closeSync(fd); }
     fs.renameSync(temp, target);
+    const directoryFd = fs.openSync(directory, 'r');
+    try { fs.fsyncSync(directoryFd); } finally { fs.closeSync(directoryFd); }
     return true;
 }
 
@@ -174,7 +176,7 @@ function recordLlmDisposition(input, options = {}) {
     return event;
 }
 
-function summarizeLlmUsage(events) {
+function summarizeLlmUsage(events, options = {}) {
     const groups = new Map();
     const seen = new Set();
     const dispositionKey = event => JSON.stringify([event.runId || null, event.paperId || null, event.stage || 'unknown',
@@ -220,7 +222,8 @@ function summarizeLlmUsage(events) {
         group.estimatedInputTextTokens += count(event.estimates?.estimatedInputTextTokens) || 0;
         group.durationMs += count(event.durationMs) || 0;
     }
-    return { version: VERSION, note: 'requests 是调用记录总数，包含发送前被本地拦截的 blockedBeforeTransport；transportErrors 单列连接错误。用量总计只累加服务商已提供的数值；字符估算不等于计费 token。缓存和推理数量属于小计，不额外加到总量。',
+    const pendingUnknownRequests = require('./llm-pending-request').orphanedPendingLlmRequests(events, options.pairingEvents || events);
+    return { version: VERSION, pendingUnknownRequestCount: pendingUnknownRequests.length, pendingUnknownRequests, note: 'pendingUnknownRequests 是已授权但缺终态的传输记录，结果与费用未知；requests 是已有终态的调用记录总数，包含发送前被本地拦截的 blockedBeforeTransport；transportErrors 单列连接错误。用量总计只累加服务商已提供的数值；字符估算不等于计费 token。缓存和推理数量属于小计，不额外加到总量。',
         groups: [...groups.values()].map(group => ({ ...group, usage: Object.fromEntries(Object.entries(group.usage)
             .map(([name, value]) => [name, { ...value, sum: value.reportedRequests ? value.sum : null }])) })) };
 }

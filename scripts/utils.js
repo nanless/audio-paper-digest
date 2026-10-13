@@ -1066,12 +1066,17 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
         let response;
         let failure;
         let transportStarted = false;
+        let pendingRequest = null;
         try {
             const timeoutMs = options.timeoutMs ?? 60000;
             response = await withRequestDeadline(
                 () => {
                     require('./lib/analysis-stop-control').assertMayStartRequest();
                     require('./lib/explicit-reader-retry-round').consumePhysicalRequest(bodyObj, options);
+                    pendingRequest = require('./lib/llm-pending-request').beginPendingLlmRequest({
+                        protocol: detectApiType(endpoint, model), model, request: bodyObj,
+                        context: options.usageContext
+                    }, { enabled: options.recordUsage !== false, directory: options.usageDirectory });
                     transportStarted = true;
                     return transportRequestFn(apiUrl, bodyObj, headers, { ...options, timeoutMs, agent });
                 },
@@ -1090,7 +1095,9 @@ async function requestLlmOnce(apiUrl, endpoint, model, bodyObj, headers, options
                 let outputText = null;
                 try { outputText = response?.body ? parseResponseText(protocol, response.body) : null; }
                 catch (_) { /* 内容格式错误时，这次请求的用量不能丢。 */ }
-                const input = { protocol, model, request: bodyObj, response: response?.body,
+                const input = { ...(pendingRequest ? { eventId: pendingRequest.eventId }
+                    : failure?.pendingRequestEventId ? { eventId: failure.pendingRequestEventId } : {}),
+                    protocol, model, request: bodyObj, response: response?.body,
                     statusCode: response?.statusCode, durationMs: Date.now() - started,
                     transportStarted,
                     errorCode: failure?.code || (failure ? 'NETWORK_ERROR' : null),
