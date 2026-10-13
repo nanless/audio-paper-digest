@@ -777,6 +777,14 @@ function sourceBackedIdentityColumns(table, sourceText) {
     }));
 }
 
+function hasReportedExperimentPhrase(text, pattern) {
+    return [...String(text).matchAll(pattern)].some(match => {
+        const prefix = String(text).slice(Math.max(0, match.index - 60), match.index)
+            .split(/[。！？；\n]/).at(-1);
+        return !/(?:并非|不是|未能|没有|尚未|未曾|不能|不应|如果|假设|假如|倘若|若|未|不|计划|讨论|建议|拟|将|未来|有待|打算|设想)[^，,]{0,30}$/.test(prefix);
+    });
+}
+
 function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     const results = extractSection(analysis, '实验结果');
     if (!results) return null;
@@ -859,7 +867,9 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         // 有的论文只用 `+ L_j`、`+ L_s` … 标注消融行，正文里说是逐级叠加。
         // 只要原文确实有消融，这仍然算显式的组件对照。
         || /(?:逐级|逐步|依次)(?:叠加|加入|添加|移除|比较)|(?:组件|约束|模块|损失|监督目标|局部配对|竞争归一化)[^。；\n]{0,24}(?:对照|贡献|差异|是否必要|必要性)/i.test(results)
-        || /\+\s*L[_\s]?[A-Za-z](?:\s*\+\s*L[_\s]?[A-Za-z])+/i.test(results);
+        || /\+\s*L[_\s]?[A-Za-z](?:\s*\+\s*L[_\s]?[A-Za-z])+/i.test(results)
+        || hasReportedExperimentPhrase(results,
+            /(?:分离|隔离)[^。；\n]{1,24}(?:贡献|影响|作用)|(?:比较|对照)[^。；\n]{0,24}(?:组件|模块|门控)[^。；\n]{0,12}(?:组合|配置)/g);
     if (empirical && sourceHasAblation && !resultHasAblation) {
         return '全文包含消融实验，但实验结果没有保留关键消融或组件对照';
     }
@@ -881,8 +891,11 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     ).test(results) || new RegExp(
         `(?:下降|下滑|降低|受损)[^。；\\n]{0,40}(?:${explicitHigherIsBetterMetric}|转写|关键点覆盖)`
     ).test(results);
+    const reportedLowerScore = hasReportedExperimentPhrase(results, new RegExp(
+        `${explicitHigherIsBetterMetric}(?:\\s|[0-9.%:：=（）()，,]|为|是|都|均|仍|却|也|则|反而|明显|显著|略|要){0,40}(?:更低|低于|不及)`, 'g'));
     const resultHasNegative = contextualNegative
         || explicitMetricDecline
+        || reportedLowerScore
         || /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|降幅|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)|(?:例外|反例)[^。；\n]{0,80}(?:低于|下降|更差)/i.test(results)
         || hasAffirmedOverfittingEvidence(results);
     if (empirical && sourceHasNegative && !resultHasNegative) {

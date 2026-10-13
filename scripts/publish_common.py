@@ -3426,6 +3426,14 @@ def _source_backed_identity_columns(table, source_text):
     return columns
 
 
+def _has_reported_experiment_phrase(text, pattern):
+    for match in re.finditer(pattern, text):
+        prefix = re.split(r'[。！？；\n]', text[max(0, match.start() - 60):match.start()])[-1]
+        if not re.search(r'(?:并非|不是|未能|没有|尚未|未曾|不能|不应|如果|假设|假如|倘若|若|未|不|计划|讨论|建议|拟|将|未来|有待|打算|设想)[^，,]{0,30}$', prefix):
+            return True
+    return False
+
+
 def _validate_experiment_table_evidence_depth(
         analysis, document_type='', source_text=''):
     results = _extract_analysis_section(analysis, '实验结果')
@@ -3534,6 +3542,9 @@ def _validate_experiment_table_evidence_depth(
         results,
         re.I,
     )
+    result_has_ablation = result_has_ablation or _has_reported_experiment_phrase(
+        results, r'(?:分离|隔离)[^。；\n]{1,24}(?:贡献|影响|作用)|'
+        r'(?:比较|对照)[^。；\n]{0,24}(?:组件|模块|门控)[^。；\n]{0,12}(?:组合|配置)')
     if empirical and source_has_ablation and not result_has_ablation:
         return '全文包含消融实验，但实验结果没有保留关键消融或组件对照'
     source_negative_evidence = re.sub(
@@ -3572,7 +3583,9 @@ def _validate_experiment_table_evidence_depth(
         rf'(?:{explicit_higher_is_better_metric}|转写|关键点覆盖)',
         results,
     )
-    result_has_negative = contextual_negative or explicit_metric_decline or re.search(
+    reported_lower_score = _has_reported_experiment_phrase(results,
+        rf'{explicit_higher_is_better_metric}(?:\s|[0-9.%:：=（）()，,]|为|是|都|均|仍|却|也|则|反而|明显|显著|略|要){{0,40}}(?:更低|低于|不及)')
+    result_has_negative = contextual_negative or explicit_metric_decline or reported_lower_score or re.search(
         r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
         r'未显著|不显著|退化|恶化|失败|失效|崩溃|接近随机|低于随机|'
