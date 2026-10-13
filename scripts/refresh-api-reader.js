@@ -444,7 +444,8 @@ async function refreshApiReaderInternal(targetId, options = {}) {
                     )
                     : await (refreshOperations.article || refreshApiReaderArticleFromSource)(storedAnalysisRecord, sourceDetails, {
                         reviewFeedback: options.reviewFeedback,
-                        readerFactLocalRevision: options.readerFactLocalRevision === true
+                        readerFactLocalRevision: options.readerFactLocalRevision === true,
+                        signedRevisionMinimalDisplay: options.signedRevisionMinimalDisplay === true
                     });
         const repairSurfaceBindings = sourceDetails => {
                 const repaired = JSON.parse(JSON.stringify(storedAnalysisRecord));

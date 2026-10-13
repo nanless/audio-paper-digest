@@ -35,7 +35,7 @@ function fixture(options = {}) {
             `因此，“${heading}”最终要交给下一节的不是一句重复摘要，而是一份可执行的核对清单：哪些事实来自原文，哪些解释需要消融，哪些判断还缺对照或测量。沿着这份清单，文章才能逐步收紧中心问题。`
         ].map(paragraph=>paragraph.split('。').filter(Boolean).map(sentence=>`${kind} 阶段的判断是：${sentence}。`).join('')).join('\n\n')};}) };
     draft.sections[3].body+='\n\n'+draft.conceptBridges.map(x=>x.marker).join('\n\n');
-    const text='The source reports a controlled measurement of 1.0 under the same protocol.';
+    const text=options.sourceText || 'The source reports a controlled measurement of 1.0 under the same protocol.';
     for(const [i,kind] of ['training','result'].entries()) {
         draft.sections.find(s=>s.kind===kind).body+='\n\n'+[
             '下表要回答当前比较是否在统一条件下成立，因此先固定控制变量、数据集、指标方向和对照系统。',
