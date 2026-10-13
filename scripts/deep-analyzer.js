@@ -7843,7 +7843,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         editorialImplementationSha256: repair.shaText(fs.readFileSync(path.join(__dirname, 'editorial-quality.js'), 'utf8')),
         mechanicalContractSha256: repair.shaText(fs.readFileSync(path.join(__dirname, 'lib/reader-contract.js'), 'utf8')),
         tableCompilerSha256: repair.shaText(fs.readFileSync(path.join(__dirname, 'lib/reader-tables.js'), 'utf8')),
-        repairImplementationSha256: repair.shaText(fs.readFileSync(path.join(__dirname, 'lib/reader-repair.js'), 'utf8')),
+        repairImplementationSha256: repair.readerRepairImplementationSha256(),
         draftOrderContract: READER_DRAFT_ORDER_CONTRACT,
         draftOrderImplementationSha256: promptTemplateSha256('scripts/lib/reader-draft-order.js'),
         sourceDiagnosticsImplementationSha256: promptTemplateSha256('scripts/lib/reader-source-diagnostics.js'),
@@ -8389,8 +8389,28 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             throw readerRepairStopped('READER_FULL_ATTEMPTS_EXHAUSTED',
                 lastError?.message || '长文全文生成次数已用完，现有草稿尚不能按当前允许范围修复；已保留失败记录。', lastError);
         }
+        let conceptTermsContext = repairContext && !options.readerFactLocalRevision && !options.resourceLocalRevision
+            ? repair.buildConceptTermsRepairContext(candidate, currentIssues, options.sourceText || '') : null;
+        if (conceptTermsContext) {
+            // 仅用不增加论文事实的符号标签作临时完整性探针，不写回候选或发送模型。
+            const probe = structuredClone(candidate);
+            for (const target of conceptTermsContext.targets) {
+                const parts = target.path.split('/');
+                probe.conceptBridges[Number(parts[2])].terms[Number(parts[4])] = `符号 ${target.value.trim()}`;
+            }
+            try { parseCandidate(JSON.stringify(probe)); } catch { conceptTermsContext = null; }
+        }
+        if (conceptTermsContext) {
+            repairContext.targets = [...new Set(conceptTermsContext.targets.map(target => target.path.split('/terms/')[0]))]
+                .map(pointer => ({ path: pointer, value: candidate.conceptBridges[Number(pointer.split('/').at(-1))],
+                    oldSha256: repair.hashDraft(candidate.conceptBridges[Number(pointer.split('/').at(-1))]) }));
+            repairContext.figureOrdinals = [];
+        }
         const buildReaderPrompt = indexExamples => require('./lib/reader-resource-prose').renderPrompt(
-            repairContext?.atomicOperation?.kind === 'reorganize_existing_sections_v1'
+            conceptTermsContext
+            ? loadPrompt(conceptTermsContext.promptPath, { title: paper.title || '', arxivId: getPaperArxivId(paper),
+                ...repair.conceptTermsPromptVariables(conceptTermsContext) })
+            : repairContext?.atomicOperation?.kind === 'reorganize_existing_sections_v1'
             ? repair.buildSectionReorganizationPrompt({ context: repairContext,
                 title: paper.title || '', arxivId: getPaperArxivId(paper), mechanicalContract,
                 reviewFeedback: String(options.reviewFeedback || '').trim(), numericSpellingGuidance, indexExamples,
@@ -8468,6 +8488,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                             draftSha256: repairContext.draftSha256, draft: candidate,
                             ...(metadataOperation ? { rawDraft: previousDraft } : {}),
                             repairTargets: repairContext.targets,
+                            ...(conceptTermsContext ? { actualRepairPromptContract: conceptTermsContext.promptContract,
+                                actualRepairPromptPath: conceptTermsContext.promptPath,
+                                actualRepairPromptTemplateSha256: conceptTermsContext.promptTemplateSha256,
+                                termTargets: conceptTermsContext.targets } : {}),
                             atomicOperation: repairContext.atomicOperation || null,
                             ...(repairContext.sectionGroupPlanContract
                                 ? { sectionGroupPlanContract: repairContext.sectionGroupPlanContract } : {}),
@@ -8558,6 +8582,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         try {
             if (repairContext) {
                 let patch = repair.parseReaderPatchJson(extractJsonObjectText(raw));
+                if (conceptTermsContext) {
+                    patch = repair.compileConceptTermsPatch(candidate, patch, conceptTermsContext);
+                }
                 if (options.readerFactLocalRevision === true) patch = repair.compileFactLocalSentencePatch(
                     candidate, patch, repairContext, { readerFactLocalRevision: true });
                 let sectionGroupProof = null;
@@ -8587,6 +8614,11 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     raw = JSON.stringify(candidate);
                     if (sectionGroupProof) sectionGroupCompilations.push(sectionGroupProof);
                 }
+                if (conceptTermsContext) draftOrderMappings.push({ contract: conceptTermsContext.promptContract,
+                    promptPath: conceptTermsContext.promptPath, promptTemplateSha256: conceptTermsContext.promptTemplateSha256,
+                    beforeDraftSha256: conceptTermsContext.draftSha256, afterDraftSha256: repair.hashDraft(candidate),
+                    terms: conceptTermsContext.targets.map(target => ({ path: target.path, oldSha256: target.oldSha256,
+                        newSha256: repair.hashDraft(candidate.conceptBridges[Number(target.path.split('/')[2])].terms[Number(target.path.split('/')[4])]) })) });
                 patchApplied = true;
             } else {
                 candidate = repair.parseRepairableDraft(extractJsonObjectText(raw));
@@ -8828,6 +8860,8 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             ...(options.readerFactLocalRevision === true ? { readerFactLocalRevisionContract: 'signed-reader-fact-local-repair-v1' } : {}),
             attempts: generated.attempts,
             fullAttempts: generated.fullAttempts, transportFailures: generated.transportFailures,
+            ...(generated.draftOrderMappings?.some(item => item.contract === require('./lib/reader-repair').CONCEPT_TERMS_PROMPT_CONTRACT)
+                ? { conceptTermsRepairPromptBindings: generated.draftOrderMappings.filter(item => item.contract === require('./lib/reader-repair').CONCEPT_TERMS_PROMPT_CONTRACT) } : {}),
             ...apiReaderRequestPolicyFields(),
             model: DEEP_CONFIG.model, protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
             temperature: revisionSeed ? API_READER_REPAIR_TEMPERATURE : API_READER_INITIAL_TEMPERATURE,
@@ -10302,7 +10336,7 @@ function buildApiReaderBaseFingerprint(
         repairPromptSha256: readerPromptTemplateSha256(
             declaredPrompt?.repairPromptTemplateSha256, 'apiReaderRepair',
             declaredRepairPromptTextContract || ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
-        repairImplementationSha256: promptTemplateSha256('scripts/lib/reader-repair.js'),
+        repairImplementationSha256: require('./lib/reader-repair').readerRepairImplementationSha256(),
         draftOrderContract: READER_DRAFT_ORDER_CONTRACT,
         draftOrderImplementationSha256: promptTemplateSha256('scripts/lib/reader-draft-order.js'),
         sourceDiagnosticsImplementationSha256: promptTemplateSha256('scripts/lib/reader-source-diagnostics.js'),
@@ -17029,6 +17063,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 contentMode: READER_SOURCE_CONTENT_MODE,
                 ...require('./lib/reader-resource-prose').fields(naturalResourceProse),
                 attempts: readerResult.attempts,
+                ...(readerResult.draftOrderMappings?.some(item => item.contract === require('./lib/reader-repair').CONCEPT_TERMS_PROMPT_CONTRACT)
+                    ? { conceptTermsRepairPromptBindings: readerResult.draftOrderMappings.filter(item => item.contract === require('./lib/reader-repair').CONCEPT_TERMS_PROMPT_CONTRACT) } : {}),
                 model: DEEP_CONFIG.model,
                 protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
                 temperature: API_READER_INITIAL_TEMPERATURE,

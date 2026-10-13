@@ -665,3 +665,5 @@ CHiME 的三层主结果表与两层 MC 对照表使用同一封存 PDF 逐格�
 Reader 普通草稿在语言诊断前，只用已有完整原句补回来源的换行或其他空白，并在 `draftOrderMappings` 记录来源及草稿的前后 SHA。原响应、封存来源和费用记录不变；缺词、异值或错单位仍由原检查拒绝。正文/资源局部修订不因此得到改来源字段的权限。`tests/reader-source-quote-whitespace.test.js` 的真实样本重放使用 `PD_READER_QUOTE_REQUEST_DIR` 与 `PD_READER_QUOTE_SOURCE_PROJECT`，未提供时明确跳过该样本。
 
 `lib/reader-table-narrative-labels.js` 仅在普通草稿正规化时删除紧邻唯一已声明表格的“表前说明：”“表后解释：”“表后解释主要收益与限制：”标签。其后文字、表格、来源和原付费记录保持不变，删除位置及 SHA 记入 `draftOrderMappings`；正文或资源局部修订不采用该处理，真正检查指令仍须正常修订。可选真实付费稿测试使用 `PD_READER_TABLE_LABEL_SOURCE_PROJECT` 指向已有封存来源的项目，未提供时明确跳过。
+
+`prompts/api-reader-concept-terms-v1.md` 只在正常 Reader 修复中、术语单符号长度是唯一阻断时自动采用。程序先在临时副本上检查其他正文、来源与结构，再只发送原术语、既有解释和逐字相关原文；响应只允许获准 terms 叶值。其余字段逐字保留，仍完整解析文章。窄模板实际字节进入 `repairImplementationSha256`，请求与成功阶段另记录实际协议、路径、模板 SHA 和术语前后 SHA，原 v11 保留作为普通修复模板。旧费用、尝试与剩余额度保持，不为这个分流增加预算。可选真实11792重放使用 `PD_READER_CONCEPT_TERMS_SOURCE_PROJECT`；缺少该环境变量明确跳过。

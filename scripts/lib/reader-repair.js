@@ -3248,7 +3248,95 @@ function applyTopLevelMetadataRepair(raw, patch, context) {
 }
 
 
-module.exports = { factLocalSentenceTargets, factLocalSentencePromptVariables, compileFactLocalSentencePatch, assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+const CONCEPT_TERMS_PROMPT_CONTRACT = 'reader-concept-terms-prompt-v1';
+const CONCEPT_TERMS_PROMPT_PATH = 'prompts/api-reader-concept-terms-v1.md';
+function readerRepairImplementationSha256() {
+    return shaText([fs.readFileSync(__filename, 'utf8'),
+        fs.readFileSync(path.join(__dirname, '../..', CONCEPT_TERMS_PROMPT_PATH), 'utf8')].join('\0'));
+}
+function buildConceptTermsRepairContext(draft, issues, sourceText) {
+    const blocking = issues.filter(issue => issue?.diagnosticOnly !== true);
+    if (!blocking.length || typeof sourceText !== 'string') return null;
+    const indexes = new Set();
+    for (const issue of blocking) {
+        if (issue.code) return null;
+        const match = /conceptBridges\[(\d+)\]\.terms\[(\d+)\]/.exec(String(issue.message || ''));
+        if (!match) return null;
+        const index = Number(match[1]), bridge = draft?.conceptBridges?.[index];
+        const diagnostic = conceptBridgeTermsDiagnostic(bridge?.terms, index);
+        if (!diagnostic || ![diagnostic, '读者文章 ' + diagnostic].includes(issue.message)) return null;
+        if (!Array.isArray(bridge.terms) || bridge.terms.length !== 2
+            || bridge.terms.some(term => typeof term !== 'string' || term.trim().length > 48 || term.trim().length === 0)) return null;
+        indexes.add(index);
+    }
+    const targets = [], excerpts = [], explanations = [];
+    for (const index of [...indexes].sort((a,b) => a-b)) {
+        const bridge = draft.conceptBridges[index];
+        explanations.push({ path: `/conceptBridges/${index}`, terms: bridge.terms, explanation: bridge.explanation });
+        for (const name of bridge.terms.filter(term => term.trim().length >= 2)) {
+            const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, character => '\\' + character);
+            for (const match of [...sourceText.matchAll(new RegExp(escaped, 'gu'))].slice(0, 4)) {
+                const start = Math.max(0, sourceText.lastIndexOf('\n', match.index) + 1);
+                const end = sourceText.indexOf('\n', match.index + name.length);
+                const quote = sourceText.slice(start, end < 0 ? sourceText.length : end);
+                if (quote.length <= 4000 && !excerpts.includes(quote)) excerpts.push(quote);
+            }
+        }
+        for (const [termIndex, term] of bridge.terms.entries()) {
+            if (term.trim().length >= 2) continue;
+            const escaped = term.trim().replace(/[.*+?^${}()|[\]\\]/g, character => '\\' + character);
+            const pattern = new RegExp(`(?<![A-Za-z0-9_])${escaped}(?![A-Za-z0-9_])`, 'gu');
+            const found = [...sourceText.matchAll(pattern)];
+            if (!found.length) return null;
+            for (const match of found.slice(0, 4)) {
+                const start = Math.max(0, sourceText.lastIndexOf('\n', match.index) + 1);
+                const end = sourceText.indexOf('\n', match.index + term.length);
+                const quote = sourceText.slice(start, end < 0 ? sourceText.length : end);
+                if (quote.length > 4000) return null;
+                if (!excerpts.includes(quote)) excerpts.push(quote);
+            }
+            targets.push({ path: `/conceptBridges/${index}/terms/${termIndex}`, oldSha256: hashDraft(term), value: term });
+        }
+    }
+    if (!targets.length || targets.length > 8 || excerpts.join('\n').length > 12000) return null;
+    return { draftSha256: hashDraft(draft), targets, issues: blocking, explanations, sourceQuotes: excerpts,
+        promptContract: CONCEPT_TERMS_PROMPT_CONTRACT, promptPath: CONCEPT_TERMS_PROMPT_PATH,
+        promptTemplateSha256: shaText(fs.readFileSync(path.join(__dirname, '../..', CONCEPT_TERMS_PROMPT_PATH), 'utf8')) };
+}
+function conceptTermsPromptVariables(context) {
+    return { validationFeedback: context.issues.map(issue => issue.message).join('\n'),
+        termsTargets: JSON.stringify({ draftSha256: context.draftSha256, targets: context.targets }),
+        explanationContext: JSON.stringify(context.explanations), sourceQuotes: context.sourceQuotes.join('\n\n') };
+}
+function compileConceptTermsPatch(draft, response, context) {
+    const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
+        && JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
+    if (!exactKeys(response, ['version','draftSha256','termReplacements']) || response.version !== 1
+        || response.draftSha256 !== context.draftSha256 || hashDraft(draft) !== context.draftSha256
+        || !Array.isArray(response.termReplacements) || response.termReplacements.length !== context.targets.length) {
+        throw new Error('术语修订响应字段或原稿SHA不符');
+    }
+    const changed = new Map(), seen = new Set();
+    for (const replacement of response.termReplacements) {
+        if (!exactKeys(replacement, ['path','oldSha256','value']) || seen.has(replacement.path)) throw new Error('术语修订路径重复或字段不符');
+        const target = context.targets.find(target => target.path === replacement.path);
+        const match = /^\/conceptBridges\/(\d+)\/terms\/(\d+)$/.exec(replacement.path);
+        if (!target || !match || replacement.oldSha256 !== target.oldSha256) throw new Error('术语修订超出获准路径或SHA不符');
+        const index = Number(match[1]), termIndex = Number(match[2]), bridge = draft.conceptBridges[index];
+        const value = replacement.value;
+        if (value === target.value) throw Object.assign(new Error('术语补丁逐字返回原值'), { code: 'READER_PATCH_NO_PROGRESS' });
+        if (hashDraft(bridge.terms[termIndex]) !== target.oldSha256 || typeof value !== 'string'
+            || value.trim().length < 2 || value.trim().length > 48 || value === target.value
+            || /[\r\n`|#*]|\[\[/.test(value) || !value.includes(target.value.trim())) throw new Error('术语修订须保留原符号并写清概念，不得原样返回或加入结构标记');
+        if (!changed.has(index)) changed.set(index, structuredClone(bridge));
+        changed.get(index).terms[termIndex] = value;
+        seen.add(replacement.path);
+    }
+    return { version: 1, draftSha256: context.draftSha256, replacements: [...changed].map(([index, value]) => ({
+        path: `/conceptBridges/${index}`, oldSha256: hashDraft(draft.conceptBridges[index]), value })) };
+}
+
+module.exports = { buildConceptTermsRepairContext, conceptTermsPromptVariables, compileConceptTermsPatch, readerRepairImplementationSha256, CONCEPT_TERMS_PROMPT_CONTRACT, CONCEPT_TERMS_PROMPT_PATH, factLocalSentenceTargets, factLocalSentencePromptVariables, compileFactLocalSentencePatch, assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,
