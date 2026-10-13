@@ -17,6 +17,7 @@ const cases = [
     ['83.3±0.3\\mathbf{83.3}\\scriptscriptstyle{\\pm 0.4}'],
     ['83.3±0.3\\mathbf{83.30}\\scriptscriptstyle{\\pm 0.3}'],
     ['3.8±.0113.8\\pm.0112'], ['−1.2±.03+1.2\\pm.03'],
+    ['1±.2-3\\pm.2'], ['1±.2−3\\pm.2'], ['1±.2+.3'],
     ['DDSP+F0F_{0}', 'DDSP+F0'], ['Mean F1F_{1}', 'Mean F1'],
     ['Slow speech (c1c_{1})', 'Slow speech (c1)'],
     ['F0F_{1}'], ['F0G_{0}'], ['F0F0'], ['c01c_{1}'], ['F0F_{00}'],

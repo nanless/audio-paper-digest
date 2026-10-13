@@ -1853,7 +1853,7 @@ function normalizeReaderSourceDisplayArtifacts(value) {
     output = output.replace(
         /(?<![A-Za-z0-9.+−-])([+−-]?(?:\d+(?:\.\d+)?|\.\d+))\s*±\s*(?:\\pm\s*)?((?:\d+(?:\.\d+)?|\.\d+))/g,
         (whole, mean, uncertainty, offset, input) => {
-            if (/^\s*[\p{L}\p{N}._^\\({]/u.test(input.slice(offset + whole.length))) return whole;
+            if (/^\s*[\p{L}\p{N}._^\\({+−-]/u.test(input.slice(offset + whole.length))) return whole;
             return `${mean} ± ${uncertainty}`;
         }
     );
