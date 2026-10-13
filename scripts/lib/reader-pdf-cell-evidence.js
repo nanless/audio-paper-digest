@@ -19,6 +19,7 @@ function supported(table) {
     if (!Array.isArray(matrix) || matrix[0]?.length < 3) return false;
     if (matrix[0][0] === 'Dataset SNR Setting' && matrix[0][1] === 'Test set'
         && (table.cells || []).some(cell => /^([+-]?\d+\.\d+)\1$/.test(String(cell.text || '')))) return true;
+    if (table.ordinal === 3 && table.caption === 'Table 3: Subjective Evaluation: Effect of steering strength. SteerSpeech better preserves speaker identity at high intensity (\\alpha).' && matrix.length === 7 && matrix.every(row => row.length === 7)) return true;
     const same = expected => isDeepStrictEqual(matrix.slice(0, 2), expected);
     const labels = matrix.slice(2).map(row => row[0]);
     if (table.ordinal === 2 && String(table.caption || '').startsWith('Table 2: Boundary error against manual annotation (ms) over the full 125-utterance test set.')

@@ -626,3 +626,7 @@ Reader 实现变更后的合法诊断恢复可在上述公共选定入口显式�
 摘要检查识别 GMR、GMC、ECE 和“期望校准误差”，英文名称仍须整词匹配。明确报告的训练或推理 `分:秒` 耗时可作为成本说明；未报告、未记录、假设或预计的耗时不能据此通过。指标名称能被识别不代表数值、实验条件或结论已经核对正确。
 
 真实离线 Hindi 表反例见 `tests/reader_pdf_hindi_table_evidence_test.py`，须显式设置 `PD_PDF_HINDI_REAL_SOURCE_DIR` 指向完整封存四文件目录；未提供来源时这些真实 PDF 测试明确跳过。
+
+强度比较表的 PDF 逐格确认由 `reader_pdf_cell_evidence.py` 与 `lib/reader-pdf-cell-evidence.js` 共同核验。仅完整图注和原表结构符合时，重新读取封存 PDF，核对全部行、两层表头、单位与数据格；数字必须等于 PDF 原值或其明确同值双分支显示。原来源、DOM 和模型输入不变。`tests/reader_pdf_steering_profile_test.py` 验证标签与适用范围；实际论文的完整格值还须独立重放，不能以单元测试替代。
+
+真实强度表集成验证：将 `PD_PDF_STEERING_REAL_SOURCE_DIR` 指向已封存的 `2610.10415/generation-000001` 目录，再用项目 Python 运行 `tests/reader_pdf_steering_profile_test.py`。测试重新提取四来源、完整35格及列头，并拒绝八类来源不一致；未设置真实目录时该组明确跳过，不能算真实来源已验收。
