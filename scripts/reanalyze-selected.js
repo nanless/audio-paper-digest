@@ -98,6 +98,7 @@ async function reanalyzeSelected(ids, options = {}) {
         if (fileSha(entry.file) !== entry.sha256) throw new Error('核心反馈文件在运行中变化');
         return factReview.validateFeedback(factReview.readFeedback(entry.file), dailySourcePlan, paper);
     };
+    if (options.resolvedReaderCandidates !== undefined && (!options.resolvedReaderCandidates || typeof options.resolvedReaderCandidates !== 'object' || Array.isArray(options.resolvedReaderCandidates) || Object.keys(options.resolvedReaderCandidates).some(id=>!idSet.has(id)))) throw new Error('resolvedReaderCandidates 必须只包含明确选定论文');
     const readerFeedbacks = new Map();
     if (options.readerFeedbackFiles !== undefined && !Array.isArray(options.readerFeedbackFiles))
         throw new Error('readerFeedbackFiles 必须为反馈路径数组');
@@ -196,7 +197,7 @@ async function reanalyzeSelected(ids, options = {}) {
         const aid = normalizedId(p);
         if (idSet.has(aid)) {
             const cleanPaper = dailyFreshSources.prepareDailyPaper(
-                fullStageOptions || options.coreSummaryDiagnosticIds?.[aid] || coreFeedbacks.has(aid) ? p : resetReaderForSelectedReanalysis(p), dailySourcePlan
+                fullStageOptions || options.resolvedReaderCandidates?.[aid] || options.coreSummaryDiagnosticIds?.[aid] || coreFeedbacks.has(aid) ? p : resetReaderForSelectedReanalysis(p), dailySourcePlan
             );
             toReanalyze.push(cleanPaper);
         }
@@ -278,7 +279,7 @@ async function reanalyzeSelected(ids, options = {}) {
             }
             return {
                 paper: dailyFreshSources.prepareDailyPaper(
-                    options.paidFinalAnalysisRecovery?.[normalizedId(paper)] || options.coreSummaryDiagnosticIds?.[normalizedId(paper)] || coreFeedbacks.has(normalizedId(paper)) || readerFeedbacks.has(normalizedId(paper)) ? { ...paper, ...latest } : resetReaderForSelectedReanalysis({ ...paper, ...latest }), dailySourcePlan
+                    options.resolvedReaderCandidates?.[normalizedId(paper)] || options.paidFinalAnalysisRecovery?.[normalizedId(paper)] || options.coreSummaryDiagnosticIds?.[normalizedId(paper)] || coreFeedbacks.has(normalizedId(paper)) || readerFeedbacks.has(normalizedId(paper)) ? { ...paper, ...latest } : resetReaderForSelectedReanalysis({ ...paper, ...latest }), dailySourcePlan
                 ),
                 skip: false
             };
@@ -288,7 +289,8 @@ async function reanalyzeSelected(ids, options = {}) {
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
         saveInterval: 0,
         analyzeFn: async paper => {
-            const analyze = () => dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, { coreSummaryDiagnosticIds: options.coreSummaryDiagnosticIds, naturalResourceProse: options.naturalResourceProse === true })(paper);
+            const analyze = () => dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, { coreSummaryDiagnosticIds: options.coreSummaryDiagnosticIds,
+                resolvedReaderCandidates: options.resolvedReaderCandidates, naturalResourceProse: options.naturalResourceProse === true })(paper);
             const bound = boundFeedbacks.get(normalizedId(paper));
             const core = readCoreLocked(paper);
             const reader = readReaderLocked(paper);

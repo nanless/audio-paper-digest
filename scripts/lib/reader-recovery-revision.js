@@ -7,10 +7,62 @@ const { isDeepStrictEqual } = require('node:util');
 const { getFreshAnalysisContext } = require('./fresh-analysis-context.js');
 const { loadFailedCandidate, readFailedCandidateEnvelope, saveFailedCandidate, hashDraft, shaText, parseRecoveryDraft,
     IMPLEMENTATION_ALLOWANCE_CONTRACT, IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT,
-    hasUnusedImplementationAllowance, TABLE_COUNT_ISSUE_CODE, classifyTableBindingOrderIssue, readTableBindingOrderError } = require('./reader-repair.js');
+    hasUnusedImplementationAllowance, TABLE_COUNT_ISSUE_CODE, classifyTableBindingOrderIssue, readTableBindingOrderError,
+    REPAIR_VERSION, validateImplementationAllowance, TABLE_BINDING_ORDER_ISSUE_CODE, readTableBindingOrderIssue, readTableCountIssue } = require('./reader-repair.js');
 const { normalizeReaderDraftOrder, pruneUniquelyUnboundReaderMarkdownTables } = require('./reader-draft-order.js');
 const { normalizeDanglingReaderConnectors,
     normalizeIssueBoundReaderQuantitativeNumerals } = require('../editorial-quality.js');
+
+function assertSafeResolvedJson(value) {
+    if (!value || typeof value !== 'object') return;
+    if (!Array.isArray(value) && Object.getPrototypeOf(value) !== Object.prototype) throw new Error('已归档读者稿含非普通对象');
+    for (const key of Object.keys(value)) {
+        if (['__proto__','prototype','constructor'].includes(key)) throw new Error('已归档读者稿含危险对象字段');
+        assertSafeResolvedJson(value[key]);
+    }
+}
+function readFullResolvedReader(directory, filename, expectedSha) {
+    const checked = require('./reader-paid-resolved-render').readResolvedFile(directory,filename,expectedSha);
+    if (fs.statSync(filename).size > 20 * 1024 * 1024) throw new Error('已归档读者稿超过原候选大小上限');
+    const envelope = checked.envelope;
+    assertSafeResolvedJson(envelope);
+    if (!envelope.identity || typeof envelope.identity !== 'object' || Array.isArray(envelope.identity)
+        || envelope.version !== REPAIR_VERSION
+        || envelope.payloadSha256 !== hashDraft(envelope.payload)
+        || envelope.payload?.status !== 'failed'
+        || !Number.isInteger(envelope.payload.attempts) || envelope.payload.attempts < 0
+        || !Number.isInteger(envelope.payload.fullAttempts) || envelope.payload.fullAttempts < 0
+        || (envelope.payload.transportFailures !== undefined
+            && (!Number.isInteger(envelope.payload.transportFailures) || envelope.payload.transportFailures < 0))
+        || !Number.isInteger(envelope.payload.noProgress) || envelope.payload.noProgress < 0
+        || typeof envelope.payload.failureSignature !== 'string'
+        || (envelope.payload.validationFailureSignature !== undefined
+            && typeof envelope.payload.validationFailureSignature !== 'string')
+        || (envelope.payload.validationFailureStreak !== undefined
+            && (!Number.isInteger(envelope.payload.validationFailureStreak)
+                || envelope.payload.validationFailureStreak < 0))
+        || Object.prototype.hasOwnProperty.call(envelope.payload, 'implementationRepairAllowance')
+        || (envelope.payload.implementationRepairAllowanceLineage !== undefined
+            && envelope.payload.implementationRepairAllowanceLineage
+                !== IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT)
+        || (envelope.payload.consumedImplementationAllowanceSha256 !== undefined
+            && (!Array.isArray(envelope.payload.consumedImplementationAllowanceSha256)
+                || envelope.payload.consumedImplementationAllowanceSha256.some(value => !/^[a-f0-9]{64}$/.test(value))
+                || new Set(envelope.payload.consumedImplementationAllowanceSha256).size !== envelope.payload.consumedImplementationAllowanceSha256.length))
+        || !Array.isArray(envelope.payload.issues)
+        || envelope.payload.issues.some(issue => !issue || typeof issue.message !== 'string'
+            || (issue.path !== null && typeof issue.path !== 'string')
+            || (issue.code === TABLE_BINDING_ORDER_ISSUE_CODE && !readTableBindingOrderIssue(issue))
+            || (issue.code === TABLE_COUNT_ISSUE_CODE && !readTableCountIssue(issue)))
+        || (envelope.payload.draft && !parseRecoveryDraft(envelope.payload.draft))) {
+        throw new Error('已归档读者稿的内容或次数证明损坏');
+    }
+    validateImplementationAllowance(envelope.payload, envelope.identity, directory);
+    require('./explicit-reader-retry-round').validatePersistedRound(directory, envelope.identity, envelope.payload);
+    checked.assertUnchanged();
+    return { ...checked, envelopeSha256:expectedSha };
+}
+
 const CONTRACT = 'reader-recovery-diagnostics-revision-v1';
 const ALLOWED_FIELDS = Object.freeze(['repairImplementationSha256', 'tableCompilerSha256', 'draftOrderContract',
     'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256',
@@ -115,8 +167,16 @@ function assertReaderJsonRequestPolicy(policy) {
 
 function loadReaderRecoveryRevision(directory, identity, options = {}) {
     return require('./reader-proof-read-scope').withReaderProofReadScope(
-        () => require('./reader-proof-read-scope').withReaderReceiptScan(
-            () => loadReaderRecoveryRevisionInternal(directory, identity, options)));
+        () => require('./reader-proof-read-scope').withReaderReceiptScan(() => {
+            try { return loadReaderRecoveryRevisionInternal(directory, identity, options); }
+            catch (cause) {
+                if (options.resolvedReaderCandidate === undefined) throw cause;
+                throw Object.assign(new Error(`已归档读者稿复验输入不合法：${cause.message}`, { cause }), {
+                    code: 'RESOLVED_READER_REVALIDATION_INPUT_INVALID', category: 'config',
+                    retryable: false, scope: 'run', modelRequestClassified: true
+                });
+            }
+        }));
 }
 function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
     if (identity?.resourceLocalRevisionContract !== undefined
@@ -193,6 +253,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
     }
     const exact = loadFailedCandidate(directory, identity);
     if (exact) {
+        if (options.resolvedReaderCandidate !== undefined) throw new Error('显式归档复验不能覆盖现有活动候选');
         verifyPixels(exact);
         const recovered = finishRevisionArchives(directory, identity, exact);
         // 同身份续跑也可能保存了旧解析器拒绝的完整原始稿。仅恢复有界结构，
@@ -208,7 +269,10 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
     const conference = getConferenceAnalysisContext();
     let revisionRunId; let revisionScope;
     if (context) {
-        if (context.refreshReaderDiagnostics !== true) return null;
+        if (context.refreshReaderDiagnostics !== true) {
+            if (options.resolvedReaderCandidate !== undefined) throw new Error('显式归档复验须启用当前封存来源的恢复诊断');
+            return null;
+        }
         const canonicalMatch = /^(\d{4}\.\d{4,5})(?:v[1-9]\d*)?$/.exec(String(identity.paperId || ''));
         if (!canonicalMatch) throw new Error('长文恢复的 arXiv 身份格式无效');
         const canonicalPaperId = canonicalMatch[1];
@@ -243,7 +307,66 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
             throw new Error('Reader diagnostic revision must remain in the exact conference execution/source scope');
         }
         revisionRunId = conference.executionId; revisionScope = 'conference-process';
-    } else return null;
+    } else {
+        if (options.resolvedReaderCandidate !== undefined) throw new Error('显式归档复验须在当前封存来源作用域内');
+        return null;
+    }
+    if (options.resolvedReaderCandidate !== undefined) {
+        const request = options.resolvedReaderCandidate;
+        const paper = options.paper;
+        const allowed = ['parserImplementationSha256','editorialImplementationSha256','draftOrderImplementationSha256'];
+        if (!request || Object.keys(request).sort().join(',') !== 'basename,envelopeSha256,readerArticleSha256,readerPlanSha256'
+            || !/^[a-f0-9]{64}\.[a-f0-9-]{36}\.resolved\.json$/.test(request.basename || '')
+            || ['envelopeSha256','readerArticleSha256','readerPlanSha256'].some(key=>!/^[a-f0-9]{64}$/.test(request[key] || ''))
+            || !context || context.refreshReaderDiagnostics !== true
+            || (expectedPixels === undefined && expectedEphemeralPixels === undefined)
+            || !paper?.latestAnalysisAttemptError
+            || !(paper.analysisManifest?.stages?.apiReaderArticle?.qualityMetrics?.blockingIssueCount > 0)
+            || paper.apiReaderArticleSha256 !== request.readerArticleSha256
+            || paper.apiReaderPlanSha256 !== request.readerPlanSha256
+            || shaText(paper.apiReaderArticle) !== request.readerArticleSha256
+            || require('./fresh-rewrite-run').stableHash(paper.apiReaderPlan) !== request.readerPlanSha256) {
+            throw new Error('显式归档复验须绑定未改变且质量计数失败的正式读者稿');
+        }
+        if (loadFailedCandidate(directory, identity)) throw new Error('显式归档复验不能覆盖现有活动候选');
+        const checked = require('./reader-paid-resolved-render').readResolvedFile(directory,
+            path.join(directory,request.basename), request.envelopeSha256);
+        const full = readFullResolvedReader(directory,path.join(directory,request.basename),request.envelopeSha256);
+        if (!full || full.envelopeSha256 !== request.envelopeSha256) throw new Error('已归档读者稿的完整证明与指定字节不一致');
+        const old = full.envelope;
+        const strip = value => Object.fromEntries(Object.entries(value).filter(([key])=>!allowed.includes(key)));
+        const changedFields = allowed.filter(field=>!isDeepStrictEqual(old.identity[field],identity[field]));
+        if (!isDeepStrictEqual(strip(old.identity),strip(identity)) || !changedFields.length
+            || old.identity.model?.model !== 'muse-spark-1.3-contributor'
+            || request.basename.slice(0,64) !== hashDraft(old.identity)
+            || !old.payload.draft || typeof old.payload.rawDraft !== 'string') {
+            throw new Error('已归档读者稿的原身份或完整草稿无效');
+        }
+        const stage = paper.analysisManifest?.stages?.apiReaderArticle;
+        if (String(paper.arxivId || paper.id || '').replace(/v[1-9]\d*$/, '') !== identity.paperId.replace(/v[1-9]\d*$/, '')
+            || paper.sourceSha256 !== identity.sourceSha256
+            || stage?.sourceBindingsSourceTextSha256 !== identity.sourceSha256
+            || stage?.model !== old.identity.model.model || stage?.protocol !== old.identity.model.protocol
+            || stage?.promptTemplateSha256 !== old.identity.promptSha256
+            || stage?.repairPromptTemplateSha256 !== old.identity.repairPromptSha256
+            || stage?.imageEvidenceSha256 !== hashDraft(old.payload.imageEvidence || [])
+            || stage?.modelImagePreflightEvidenceSha256 !== hashDraft(old.payload.ephemeralImageEvidence)) {
+            throw new Error('已归档读者稿与当前正式执行证明不一致');
+        }
+        verifyPixels(old.payload);
+        const updated = structuredClone(old.payload);
+        const audit = { contract:CONTRACT,runId:revisionRunId,scope:revisionScope,paperId:identity.paperId,
+            fromIdentitySha256:hashDraft(old.identity),toIdentitySha256:hashDraft(identity),
+            oldPayloadSha256:old.payloadSha256,oldEnvelopeSha256:request.envelopeSha256,
+            resolvedSourceName:request.basename,changedFields,clearedNoProgress:false,
+            attempts:updated.attempts,fullAttempts:updated.fullAttempts,transportFailures:updated.transportFailures || 0,
+            inputDraftSha256:hashDraft(updated.draft),outputDraftSha256:hashDraft(updated.draft) };
+        // 已归档的费用证明仍按原身份保存；只读重验不新建候选、不转交或增发许可。
+        updated.resolvedReaderCandidateReplayProof = audit;
+        checked.assertUnchanged();
+        require('./reader-proof-read-scope').assertReaderReceiptSnapshots();
+        return updated;
+    }
     let names;
     try { names = fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).sort(); }
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }

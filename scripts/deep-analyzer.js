@@ -8063,6 +8063,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         ? { ephemeralImageEvidenceSha256: modelImagePreflightEvidenceSha256 } : undefined;
     recovered = require('./lib/reader-recovery-revision.js').loadReaderRecoveryRevision(
         candidateDirectory, identity, { ...recoveryOptions,
+            ...(options.resolvedReaderCandidate !== undefined ? { resolvedReaderCandidate:options.resolvedReaderCandidate, paper:options.resolvedReaderCandidateParent || paper } : {}),
             ...(options.paidReaderResponseReplay !== undefined
                 ? { paidReaderResponseReplay: options.paidReaderResponseReplay } : {}) }
     );
@@ -8163,14 +8164,23 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             const parsed = parseCandidate(JSON.stringify(candidate));
             const result = { ...parsed, contentMode, attempts: completedAttempts, fullAttempts, transportFailures, imageEvidence,
                 modelImagePreflightEvidenceSha256,
-                providerImageExclusions, resumedCandidate: true, draftOrderMappings };
-            const retiredCandidate = deferOrRetireReaderCandidate(
+                providerImageExclusions, resumedCandidate: true, draftOrderMappings,
+                ...(recovered?.resolvedReaderCandidateReplayProof ? { resolvedReaderCandidateReplayProof: recovered.resolvedReaderCandidateReplayProof } : {}) };
+            const retiredCandidate = recovered?.resolvedReaderCandidateReplayProof ? null : deferOrRetireReaderCandidate(
                 result, repair, candidateDirectory, identity
             );
             if (retiredCandidate) result.retiredCandidate = retiredCandidate;
             return result;
         }
-        catch (error) { currentIssues = repair.collectDraftIssues(candidate, error, {
+        catch (error) {
+            if (recovered?.resolvedReaderCandidateReplayProof) {
+                throw Object.assign(new Error('已归档付费稿未通过当前完整解析，禁止继续模型请求', { cause: error }), {
+                    code: 'RESOLVED_READER_REVALIDATION_REJECTED', category: 'config',
+                    retryable: false, scope: 'run', modelRequestClassified: true,
+                    readerIssues: error.readerIssues
+                });
+            }
+            currentIssues = repair.collectDraftIssues(candidate, error, {
             sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts
         }); }
     }
@@ -8950,6 +8960,7 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
         resourceCount: readerResources.resources.length,
         structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || '',
         qualityMetrics: readerResult.qualityMetrics,
+        ...(readerResult.resolvedReaderCandidateReplayProof ? { resolvedReaderCandidateReplayProof: readerResult.resolvedReaderCandidateReplayProof } : {}),
         qualityMetricsContractVersion: API_READER_QUALITY_METRICS_CONTRACT,
         sourceBindingsContractVersion: API_READER_SOURCE_BINDING_CONTRACT,
         sourceBindingRepairVersion: API_READER_SOURCE_BINDING_REPAIR_VERSION,
@@ -15229,6 +15240,7 @@ async function analyzePaperDeep(paper, options = {}) {
 }
 
 async function analyzePaperDeepInternal(paper, options = {}) {
+    const resolvedReaderCandidateParent = options.resolvedReaderCandidate !== undefined ? structuredClone(paper) : null;
     const fullStageReanalysis = require('./lib/selected-full-stage-reanalysis').assertPrepared(paper);
     removeManualAnalysisFields(paper);
     sanitizePaperImageRecovery(paper);
@@ -16841,6 +16853,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             generatedReaderResult = await generateApiReaderArticleDetailed(
                 paper, analysis, apiReaderEvidenceContext, {
                     naturalResourceProse,
+                    ...(options.resolvedReaderCandidate !== undefined ? { resolvedReaderCandidate: options.resolvedReaderCandidate, resolvedReaderCandidateParent } : {}),
                     structuredArtifacts: sourceDetails.structuredArtifacts,
                     sourceText: rawTextForAnalysis,
                     reviewFeedback: require('./lib/daily-fact-review').reviewFeedback('apiReaderArticle', arxivId)
@@ -16984,6 +16997,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 resourceCount: paper.apiReaderResources.resources.length,
                 structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || '',
                 qualityMetrics: readerResult.qualityMetrics,
+        ...(readerResult.resolvedReaderCandidateReplayProof ? { resolvedReaderCandidateReplayProof: readerResult.resolvedReaderCandidateReplayProof } : {}),
                 qualityMetricsContractVersion: API_READER_QUALITY_METRICS_CONTRACT,
                 sourceBindingsContractVersion: API_READER_SOURCE_BINDING_CONTRACT,
                 sourceBindingRepairVersion: API_READER_SOURCE_BINDING_REPAIR_VERSION,
