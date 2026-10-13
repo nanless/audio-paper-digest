@@ -77,3 +77,26 @@ test('缺少来源上下文时延期恢复，错误来源上下文仍拒绝', ()
     assert.equal(JSON.stringify(draft), original);
     assert.throws(() => normalizeReaderDraftOrder(draft, { structuredArtifacts: { tables: [] } }), /不能自动恢复/);
 });
+
+test('原矩阵空白处没有原始单元格时拒绝补造，并只授权对应表及正文修复', () => {
+    const input = createTableSample();
+    Object.assign(input.draft, { conceptBridges: [], figurePlacements: [], formulaBindings: [] });
+    input.structuredArtifacts.tables[0].matrix[1][1] = '';
+    input.structuredArtifacts.tables[0].cells = input.structuredArtifacts.tables[0].cells
+        .filter(cell => cell.row !== 1 || cell.column !== 1);
+    input.draft.sections.push({ kind: 'ablation', body: '其他已经核对的事实保持不变。' });
+    input.draft.sections.forEach((section, index) => {
+        section.heading = index ? '其他实验' : '主要结果';
+        section.body += '这一段解释比较条件与实际结果，保持来源支持的事实和限制。'.repeat(6);
+    });
+    const original = JSON.stringify(input);
+    let error;
+    try { normalizeReaderDraftOrder(input.draft, input); } catch (caught) { error = caught; }
+    assert.match(error.message, /row=1,column=1 对应 0 个原始单元格/);
+    assert.equal(error.readerIssues[0].path, '/tableBindings/0');
+    const repair = require('../scripts/lib/reader-repair');
+    const issues = repair.collectDraftIssues(input.draft, error);
+    assert.deepEqual(repair.buildRepairTargets(input.draft, issues).map(target => target.path).sort(),
+        ['/sections/0/body', '/tableBindings/0']);
+    assert.equal(JSON.stringify(input), original);
+});

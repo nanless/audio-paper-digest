@@ -579,7 +579,11 @@ function restoreCompleteArtifactTableMarkers(draft, artifacts) {
             && section.body.includes(marker));
         if (!matching.length || binding?.sourceType !== 'artifact_table'
             || Object.prototype.hasOwnProperty.call(binding, 'selection')) continue;
-        const fail = () => { throw new Error(`完整原表 ${marker} 的坐标、来源或独占标记不完整，不能自动恢复`); };
+        const fail = (reason = '坐标、来源或独占标记不完整') => {
+            const error = new Error(`完整原表 ${marker} 的${reason}，不能自动恢复；tableBindings[${index}] 应核对 sourceTableOrdinal=${binding.sourceTableOrdinal}，只修对应来源记录和正文，不补造原格。`);
+            error.readerIssues = [{ path: `/tableBindings/${index}`, message: error.message }];
+            throw error;
+        };
         if (Object.keys(binding).sort().join(',') !== 'cellBindings,sourceQuotes,sourceTableOrdinal,sourceType,tableIndex'
             || binding.tableIndex !== index + 1 || !Number.isInteger(binding.sourceTableOrdinal)
             || !Array.isArray(binding.sourceQuotes) || binding.sourceQuotes.length !== 0
@@ -606,7 +610,8 @@ function restoreCompleteArtifactTableMarkers(draft, artifacts) {
                 && Number.isInteger(item?.column) && row >= item.row
                 && row < item.row + Number(item.rowspan || 1) && column >= item.column
                 && column < item.column + Number(item.colspan || 1));
-            if (seen.has(key) || typeof text !== 'string' || dom.length !== 1
+            if (dom.length !== 1) fail(`来源坐标 row=${row},column=${column} 对应 ${dom.length} 个原始单元格`);
+            if (seen.has(key) || typeof text !== 'string'
                 || !validSha(dom[0].sourceDomSha256) || dom[0].text !== text
                 || /[|\r\n]|\[\[|<\/?[A-Za-z!]|!?\[[^\]]*\]\(/.test(text)
                 || /^\s*:?-{3,}:?\s*$/.test(text)) fail();
