@@ -58,9 +58,11 @@ const validator = require('../scripts/validate-data-files');
 const { resolveDailyFetchBoundary, readCommittedPublishedPaperIds } = require('../scripts/lib/daily-fetch-boundary');
 function blogFixture(t) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fetch-window-blog-'));
-    t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+    t.after(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 }));
     const git = (...args) => execFileSync('git', ['-C', root, ...args], { stdio: 'pipe' });
     git('init'); git('config', 'user.email', 'test@example.invalid'); git('config', 'user.name', 'test');
+    // 临时仓库不启动后台维护，避免测试结束后仍有进程写入待清理目录。
+    git('config', 'maintenance.auto', 'false'); git('config', 'gc.auto', '0');
     const put = (name, value) => {
         const filename = path.join(root, name);
         fs.mkdirSync(path.dirname(filename), { recursive: true }); fs.writeFileSync(filename, value);
@@ -173,6 +175,8 @@ test('真实入口更新本地 Git 远端后采用新发布批次，未推送第
     const blog = blogFixture(t);
     const origin = path.join(blog.root, 'origin.git');
     execFileSync('git', ['init', '--bare', origin], { stdio: 'pipe' });
+    execFileSync('git', ['-C', origin, 'config', 'maintenance.auto', 'false'], { stdio: 'pipe' });
+    execFileSync('git', ['-C', origin, 'config', 'gc.auto', '0'], { stdio: 'pipe' });
     blog.git('remote', 'add', 'origin', origin);
     blog.git('push', 'origin', 'HEAD:main');
     const first = blog.git('rev-parse', 'HEAD').toString().trim();
