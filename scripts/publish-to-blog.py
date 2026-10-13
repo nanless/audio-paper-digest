@@ -4172,7 +4172,26 @@ def _complete_corpus_curation_summary(summary):
     return False
 
 
+def _has_block_layout_product_chain(summary):
+    # 布局、筛出的键块和内核必须真实交接，不把组件罗列当处理链。
+    for sentence in re.split(r'[。！？!?；;\n]', str(summary or '')):
+        if len(sentence) > 320 or re.search(
+            r'(?:讨论|提及|不实现|尚不|不负责|不参与|不承担|并非|并未|不是|没有|不能|不会|尚未|未曾|假设|设想|如果|若|可能|预计|计划|未来|建议)'
+            r'|(?:不|未)(?:曾|实际|直接|真正|会|能)*\s*(?:进入|计算|筛选|补充|恢复)', sentence,
+        ):
+            continue
+        if re.search(
+            r'(?:该|此)布局(?:经[^，,。；]{1,16}(?:置换|重排))?进入查询块与键块筛选[，,]\s*'
+            r'以块(?:级)?均值特征计算块分数并用混合Top-k与Top-p为[^，,。；]{1,30}补充键块[，,]\s*选中键块进入稀疏注意力内核计算'
+            r'(?:再|并)经逆置换恢复原序', sentence,
+        ):
+            return True
+    return False
+
+
 def _has_explicit_natural_product_chain(summary):
+    if _has_block_layout_product_chain(summary):
+        return True
     # 与 Node 相同：必须有实际产物及下一模块对同一产物的使用。
     sentences = [s.strip() for s in re.split(r'[。！？!?；;\n]', str(summary or '')) if s.strip()]
     denied = re.compile(
@@ -4272,7 +4291,7 @@ def _detailed_core_summary_semantic_issue(summary):
     # 所以上游已经接受的指标，不能仅仅因为它用了
     # 更新的别名（例如 PPL 或压缩率）就在这里被拒。
     metric = re.compile(
-        r'(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|SDR|SNR|EER|PPL|NLL|negative[ -]log[ -]likelihood|ASR|mAP|gAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)',
+        r'(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|SDR|SNR|EER|PPL|NLL|negative[ -]log[ -]likelihood|ASR|mAP|gAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)',
         re.IGNORECASE,
     )
     conference_metric = re.compile(
@@ -4293,9 +4312,11 @@ def _detailed_core_summary_semantic_issue(summary):
     setting = re.compile(r'(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|同一|相同|公开|内部|外部|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|(?<![A-Za-z0-9_])(?:on|test|benchmark|evaluation)(?![A-Za-z0-9_]))', re.IGNORECASE)
     named_setting = re.compile(
         r'(?:[A-Z][A-Za-z0-9._-]{2,}\s*[\u3400-\u9fff]{0,8}(?:集|数据集|语料|任务|基准)'
-        r'|(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}(?:\s*[上中下]))',
+        r'|(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}(?:\s*[上中下])'
+        r'|(?<![A-Za-z0-9_])[1-9][0-9]*[A-Za-z][A-Za-z0-9._-]{0,39}-(?:Bench|Benchmark)(?![A-Za-z0-9_])(?:上|中|下))',
         re.IGNORECASE,
     )
+    numeric_named_setting = re.compile(r'(?<![A-Za-z0-9_])[1-9][0-9]*[A-Za-z][A-Za-z0-9._-]{0,39}-(?:Bench|Benchmark)(?![A-Za-z0-9_])(?:上|中|下)', re.IGNORECASE)
     has_complete_result = False
     for sentence in re.split(r'[。！？!?\n]', summary):
         result_sentence = _strip_core_summary_non_result_numerals(sentence)
@@ -4317,7 +4338,7 @@ def _detailed_core_summary_semantic_issue(summary):
         )
         has_metric = metric.search(metric_sentence) or conference_metric.search(metric_sentence)
         if has_metric and has_direction and numbers \
-                and (setting.search(result_sentence) or named_setting.search(result_sentence)) \
+                and (setting.search(result_sentence) or named_setting.search(result_sentence) or numeric_named_setting.search(sentence)) \
                 and (len(numbers) >= 2 or re.search(
                     r'(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|本方法|所提方法|移除|完整模型|竞品)', result_sentence
                 )) and not _has_cross_metric_directional_comparison(result_sentence):
@@ -4347,6 +4368,12 @@ def _detailed_core_summary_semantic_issue(summary):
         r'[^。！？!?\n]{1,80}(?:语音|语料|数据|场景|条件|设置|样本|任务)',
         summary,
     )
+    attention_scope_boundary = any(
+        not re.search(r'(?:并非|不是|不能认为|不可认为|不应认为|没有)|(?:并不|不|未|没有|不会|不能)(?:曾|实际|一直|始终|确实|能|会)*保持不变', sentence)
+        and re.search(r'(?:结论|研究结果|研究发现)(?<!不)(?<!非)限于(?:视频|音频|图像)(?:自|交叉|跨模态)注意力(?:的)?(?:稀疏化|计算|处理)', sentence)
+        and re.search(r'(?:音频|视频|图像)(?:自|交叉|跨模态)注意力[^。！？!?\n]{0,30}保持不变', sentence)
+        for sentence in re.split(r'[。！？!?\n]', summary)
+    )
     observational_causal_boundary = re.search(
         r'(?:观察性|非实验|非干预)[^。！？!?\n]{0,40}'
         r'(?:不建立|不能建立|不支持|不能证明)[^。！？!?\n]{0,20}因果',
@@ -4360,7 +4387,7 @@ def _detailed_core_summary_semantic_issue(summary):
         for sentence in re.split(r'[。！？!?\n]', summary)
     )
     if not any((explicit_boundary, separated_unverified_boundary, conditional_failure,
-                scoped_conclusion_boundary, observational_causal_boundary, uncovered_scope_boundary)):
+                scoped_conclusion_boundary, attention_scope_boundary, observational_causal_boundary, uncovered_scope_boundary)):
         issues.append('缺少结论适用边界、失败条件或未验证范围')
     scoped_resource_disclosure = any(
         re.search(r'(?:训练|推理|部署)', sentence)

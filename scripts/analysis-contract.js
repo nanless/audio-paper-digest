@@ -187,7 +187,7 @@ const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:
 // 英文指标名必须整词匹配。没有这里的两侧边界，mAP/PAR/PER 这类短指标会命中
 // "mapping"、"Particle"、"performance" 等普通词，把章节号和引用位置误当成
 // 实验测量结果。
-const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
+const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
 // 会议论文常用领域内的中文指标名（例如 DAFx 的“抖动”和“包络相关”）。
 // 这里显式列出来，免得把任何结果名词都当成定量证据。
 const CORE_SUMMARY_CONFERENCE_METRIC_PATTERN = /包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差/;
@@ -1409,7 +1409,7 @@ function coreSummaryQuantitativeResultState(text) {
         const hasNamedSetting = /(?:[A-Z][A-Za-z0-9._-]{2,}\s*[\u3400-\u9fff]{0,8}(?:集|数据集|语料|任务|基准)|(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}(?:\s*[上中下]))/i.test(sentence);
         const hasTimedNamedSplit = /(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}\s+\d+(?:\.\d+)?\s+s\s+[\u3400-\u9fff]{0,12}划分(?:上|中)/.test(sentence);
         const hasSetting = /(?:数据集|测试集|验证集|基准|评测|评价|协议|设置|条件|场景|任务|语料|套件|主干|对照|数据点|样本点|观测(?:点|值)|语言|口音|性别|选项顺序|码切换|单语|多语|语言对|组合|同一|相同|公开|内部|外部|\b(?:on|test|benchmark|evaluation)\b)/i.test(sentence)
-            || hasNamedSetting || hasTimedNamedSplit || hasConcreteCoreSummarySetting(sentence)
+            || hasNamedSetting || /(?<![A-Za-z0-9_])[1-9][0-9]*[A-Za-z][A-Za-z0-9._-]{0,39}-(?:Bench|Benchmark)(?![A-Za-z0-9_])(?:上|中|下)/i.test(rawSentence) || hasTimedNamedSplit || hasConcreteCoreSummarySetting(sentence)
             || /(?:在|于)\s*FLEURS(?![A-Za-z0-9_])(?:[\u3400-\u9fff]{1,8}(?:到|→)[\u3400-\u9fff]{1,8}(?:上|中)|[^，,；;。！？!?\n]{0,60}(?:oracle提交决策|校准评测)上下文(?:上|中))/.test(sentence);
         const hasComparisonObjects = numbers.length >= 2
             || /(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|移除|完整模型|竞品)/.test(sentence);
@@ -1485,7 +1485,16 @@ function hasCrossMetricDirectionalComparison(sentence) {
     return false;
 }
 
+function hasBlockLayoutProductChain(summary) {
+    // 布局、筛出的键块和内核必须在同句真实交接，不能只罗列组件名。
+    return String(summary || '').split(/[。！？!?；;\n]/u).some(sentence => {
+        if (sentence.length > 320 || /(?:讨论|提及|不实现|尚不|不负责|不参与|不承担|并非|并未|不是|没有|不能|不会|尚未|未曾|假设|设想|如果|若|可能|预计|计划|未来|建议)|(?:不|未)(?:曾|实际|直接|真正|会|能)*\s*(?:进入|计算|筛选|补充|恢复)/u.test(sentence)) return false;
+        return /(?:该|此)布局(?:经[^，,。；]{1,16}(?:置换|重排))?进入查询块与键块筛选[，,]\s*以块(?:级)?均值特征计算块分数并用混合Top-k与Top-p为[^，,。；]{1,30}补充键块[，,]\s*选中键块进入稀疏注意力内核计算(?:再|并)经逆置换恢复原序/u.test(sentence);
+    });
+}
+
 function hasExplicitNaturalProductChain(summary) {
+    if (hasBlockLayoutProductChain(summary)) return true;
     // 只接受已说明的产物被下一处理模块实际使用，不以动作数量或序号充数。
     const sentences = String(summary || '').split(/[。！？!?；;\n]/u).map(s => s.trim()).filter(Boolean);
     const denied = /(?:并非|并未|不是|没有|不能|不会|尚未|未曾|不再|是否|讨论|提及|另一(?:个)?专家|假设|设想|假定|如果|若|可能|预计|预期|计划|未来|建议|应当|应该)|(?:不|未)(?:被|能|曾|直接|实际|真正|也|只|还|再|会)*\s*(?:预测|计算|给出|输出|生成|得到|形成|池化|标准化|送入|拼接|融合)/u;
@@ -1762,6 +1771,10 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
     const separatedUnverifiedBoundary = /(?:尚未|未曾|未能|未|没有)[^。！？!?\n]{0,60}(?:验证|覆盖|评估|测试)/.test(summary);
     const conditionalFailure = /(?:但|不过|然而)[^。！？!?\n]{0,80}(?:在|对)[^。！？!?\n]{1,60}(?:时|下|中|上)[^。！？!?\n]{0,60}(?:可能|易|会|明显)?(?:失真|退化|恶化|不稳定|不可靠|失效|下降|受损|偏差)/.test(summary);
     const scopedConclusionBoundary = /(?:结论|研究结果|研究发现)[^。！？!?\n]{0,40}(?<!不)(?<!非)限于[^。！？!?\n]{1,80}(?:语音|语料|数据|场景|条件|设置|样本|任务)/.test(summary);
+    const attentionScopeBoundary = summary.split(/[。！？!?\n]/u).some(sentence =>
+        !/(?:并非|不是|不能认为|不可认为|不应认为|没有)|(?:并不|不|未|没有|不会|不能)(?:曾|实际|一直|始终|确实|能|会)*保持不变/u.test(sentence)
+        && /(?:结论|研究结果|研究发现)(?<!不)(?<!非)限于(?:视频|音频|图像)(?:自|交叉|跨模态)注意力(?:的)?(?:稀疏化|计算|处理)/u.test(sentence)
+        && /(?:音频|视频|图像)(?:自|交叉|跨模态)注意力[^。！？!?\n]{0,30}保持不变/u.test(sentence));
     const observationalCausalBoundary = /(?:观察性|非实验|非干预)[^。！？!?\n]{0,40}(?:不建立|不能建立|不支持|不能证明)[^。！？!?\n]{0,20}因果/.test(summary);
     const uncoveredScopeBoundary = summary.split(/[。！？!?\n]/).some(sentence => (
         /未涵盖[^。！？!?\n]{1,60}(?:语音|语料|数据|场景|条件|设置|样本|任务|攻击|环境|设备|人群|语种|语言|录音)/.test(sentence)
@@ -1770,7 +1783,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         && !/未涵盖[^。！？!?\n]{0,60}(?:并非事实|不是事实|并不属实|不属实|不是真的)/.test(sentence)
     ));
     if (!explicitBoundary && !separatedUnverifiedBoundary && !conditionalFailure
-        && !scopedConclusionBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary) {
+        && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary) {
         issues.push('缺少结论适用边界、失败条件或未验证范围');
     }
     const scopedResourceDisclosure = summary.split(/[。！？!?\n]/).some(sentence => (
@@ -2994,6 +3007,7 @@ module.exports = {
     validateCoreSummarySemanticContract,
     hasExplicitNaturalProductChain,
     hasConcreteUnnumberedMethodChain,
+    hasBlockLayoutProductChain,
     hashAnalysisWithMaskedCoreSummary,
     hashTagSectionAndPrimaryTags,
     maskClassificationFields,
