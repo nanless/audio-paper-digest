@@ -638,3 +638,11 @@ CHiME 的三层主结果表与两层 MC 对照表使用同一封存 PDF 逐格�
 保存稿的 PDF 检查规则文件变化时，现有长文确定性修复入口先重新读取封存四来源。`lib/reader-pdf-cell-evidence.js` 的 `replaySavedProofMetadata` 仅在全部字形、表头、数值、DOM、PDF 与后端记录精确相同、唯一变化为规则SHA时更新程序检查元数据并记录旧新SHA；文章、旧执行次数与状态保持原样。仍须通过原有完整来源资格检查，任何内容变化均拒绝。真实回归运行 `tests/reader-saved-pdf-proof-replay.test.js`，显式提供 `PD_SAVED_PDF_REPLAY_RECORDS` 和 `PD_SAVED_PDF_REPLAY_SOURCE_ROOT`；缺来源时明确跳过，不代表保存稿已恢复。
 
 符号音乐的点集变换论文可以用有范围的实例结论解释结果。摘要检查只在封存来源没有实测性能结果且明确包含点集、变换类和变换图定义时接受这类表述；摘要还须写清实际音符编码到点集、点集进入几何判定并检验变换重合的交接，以及单作品实例和未验证的跨作品范围。图边连接符号模式节点不算标量性能升降。`tests/core-summary-symbolic-geometry.test.js` 与 `tests/fixtures/core-symbolic-geometry-paid-summaries.json` 保留真实失败摘要和相同规则的正反例；这不替代原始来源、付费身份或逐篇事实核验。
+
+### 最终检查拒绝后的原付费正文恢复
+
+`lib/paid-final-analysis-recovery.js` 由选定论文的公共恢复入口通过显式 `paidFinalAnalysisRecovery` 选项调用。仅处理已有完整付费摘要、评分和长文因最终检查拒绝而丢失正文，随后零模型保护阻止了重新生成主文的情况。必须提供当前失败记录哈希、两份原检查记录文件路径和文件哈希，以及确切原付费摘要检查记录编号；程序逐阶段重核封存来源、输入指纹、原正文和评分输出，再保存恢复检查点。旧长文、来源、费用和失败记录保留，是否完成仍由正常分析流程决定。该选项不是命令行参数，不允许扩大到一般主文或来源失败。
+
+可用 `PD_PAID_FINAL_RECOVERY_SOURCE_PROJECT` 指定真实封存来源项目，另以 `PD_PAID_FINAL_RECOVERY_TEST_MANIFEST` 提供只读测试样本清单（论文 ID、两份原检查记录文件路径及 SHA、原付费摘要记录编号），运行 `node --test tests/paid-final-analysis-recovery.test.js`。没有显式样本时，真实来源正例明确跳过；无锁、错误文件哈希、错论文及一般失败等负例照常执行。
+
+真实恢复测试清单还必须携带 `analysisDataFile: {path, sha256}`，指向独立稳定的中央记录副本；封存四文件仍从明确指定的真实来源项目核验。测试用小 SHA 比较复核副本，不对正在写入的正式中央文件打印巨大字节差异。

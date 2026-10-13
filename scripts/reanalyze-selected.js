@@ -242,11 +242,13 @@ async function reanalyzeSelected(ids, options = {}) {
     let digestStatusUpdated = 0;
     const runAnalysisFromDailySources = () => analyzeBatch(toReanalyze, {
         checkpointFilePath: RESULT_FILE,
-        preparePaperLocked: paper => {
+        preparePaperLocked: async paper => {
             const current = readJsonFileStrict(RESULT_FILE);
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             let latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
             if (!latest) return { paper, skip: false };
+            const paidFinalRecovery = options.paidFinalAnalysisRecovery?.[normalizedId(latest)];
+            if (paidFinalRecovery) latest = await require('./lib/paid-final-analysis-recovery').restorePaidFinalAnalysis(latest, dailySourcePlan, paidFinalRecovery);
             readCoreLocked(latest);
             readReaderLocked(latest);
             if (fullStageOptions) {
@@ -276,7 +278,7 @@ async function reanalyzeSelected(ids, options = {}) {
             }
             return {
                 paper: dailyFreshSources.prepareDailyPaper(
-                    options.coreSummaryDiagnosticIds?.[normalizedId(paper)] || coreFeedbacks.has(normalizedId(paper)) || readerFeedbacks.has(normalizedId(paper)) ? { ...paper, ...latest } : resetReaderForSelectedReanalysis({ ...paper, ...latest }), dailySourcePlan
+                    options.paidFinalAnalysisRecovery?.[normalizedId(paper)] || options.coreSummaryDiagnosticIds?.[normalizedId(paper)] || coreFeedbacks.has(normalizedId(paper)) || readerFeedbacks.has(normalizedId(paper)) ? { ...paper, ...latest } : resetReaderForSelectedReanalysis({ ...paper, ...latest }), dailySourcePlan
                 ),
                 skip: false
             };
