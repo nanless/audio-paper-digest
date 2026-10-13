@@ -18,6 +18,7 @@ const ANALYSIS_PROMPT_TEXT_V8_CONTRACT = 'analysis-prompt-text-v8';
 const ANALYSIS_PROMPT_TEXT_V9_CONTRACT = 'analysis-prompt-text-v9';
 const ANALYSIS_PROMPT_TEXT_V10_CONTRACT = 'analysis-prompt-text-v10';
 const ANALYSIS_PROMPT_TEXT_V11_CONTRACT = 'analysis-prompt-text-v11';
+const ANALYSIS_PROMPT_TEXT_V12_CONTRACT = 'analysis-prompt-text-v12';
 
 // 恢复阶段的 v1 冻结路径，外加读者局部修复提示词（它不是一个恢复阶段，但同样
 // 参与读者阶段的指纹和失败草稿身份）。旧记录的指纹一律按这里复算。
@@ -161,8 +162,8 @@ const PROMPT_FILE_VERSIONS = Object.freeze({
     revision: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/gap-fill-v4.md' }),
     methodRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/method-fill-v3.md' }),
     tagSelection: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/tag-repair-v3.md' }),
-    apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V7_CONTRACT, path: 'prompts/api-reader-article-v7.md' }),
-    apiReaderRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V11_CONTRACT, path: 'prompts/api-reader-repair-v11.md' }),
+    apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V8_CONTRACT, path: 'prompts/api-reader-article-v8.md' }),
+    apiReaderRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V12_CONTRACT, path: 'prompts/api-reader-repair-v12.md' }),
     scoringAudit: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V5_CONTRACT, path: 'prompts/scoring-audit-v5.md' }),
     coreSummaryRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V6_CONTRACT, path: 'prompts/core-summary-repair-v6.md' }),
     structureRepair: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/structure-repair-v3.md' }),
@@ -237,6 +238,8 @@ function promptFilePathForContract(stage, promptTextContract) {
     if (stage === 'apiReaderRepair' && declared === ANALYSIS_PROMPT_TEXT_V7_CONTRACT) {
         return 'prompts/api-reader-repair-v7.md';
     }
+    if (stage === 'apiReaderArticle' && declared === ANALYSIS_PROMPT_TEXT_V7_CONTRACT) return 'prompts/api-reader-article-v7.md';
+    if (stage === 'apiReaderRepair' && declared === ANALYSIS_PROMPT_TEXT_V11_CONTRACT) return 'prompts/api-reader-repair-v11.md';
     const entry = PROMPT_FILE_VERSIONS[stage];
     if (entry && declared === entry.contract) return entry.path;
     const known = [ANALYSIS_PROMPT_TEXT_V1_CONTRACT];

@@ -290,14 +290,14 @@ test('实现指纹绑定显式的分析、Reader、身份和提示词依赖', ()
     const fingerprint = () => processApi.implementationSha256({ root,
         readFileSync: filename => sources.get(path.relative(root, filename)) });
     const baseline = fingerprint();
-    // 当前 Reader 使用 v6、开源提示词使用 v3，主分析使用 v4、评分使用 v5；v1 清单保留原路径。
-    for (const name of ['prompts/api-reader-article-v7.md', 'prompts/deep-analysis-v5.md', 'prompts/scoring-audit-v5.md', 'prompts/opensource-scan-v3.md']) {
+    // 当前文章使用 v8、开源提示词使用 v3、主分析与评分使用 v5；v1 清单保留原路径。
+    for (const name of ['prompts/api-reader-article-v8.md', 'prompts/deep-analysis-v5.md', 'prompts/scoring-audit-v5.md', 'prompts/opensource-scan-v3.md']) {
         assert.ok(processApi.currentImplementationFiles().includes(name), name);
     }
     assert.equal(processApi.currentImplementationFiles().includes('prompts/api-reader-article-v2.md'), false);
     for (const name of ['scripts/deep-analyzer.js', 'scripts/config.js', 'scripts/env-loader.js',
         'scripts/llm-account-pool.js', 'scripts/paper_identity.py', 'scripts/utils.py',
-        'scripts/lib/reader-resource-sync.js', 'prompts/api-reader-article-v7.md',
+        'scripts/lib/reader-resource-sync.js', 'prompts/api-reader-article-v8.md',
         'prompts/deep-analysis-v5.md', 'prompts/scoring-audit-v5.md']) {
         const original = sources.get(name); sources.set(name, Buffer.concat([original, Buffer.from('\nrepresentative drift')]));
         assert.notEqual(fingerprint(), baseline, name); sources.set(name, original);

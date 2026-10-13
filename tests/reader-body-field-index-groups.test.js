@@ -262,10 +262,11 @@ test('公开生成器把续段计划绑定实际请求SHA和v2协议，不增加
     assert.equal(
         requestRecord.identity.repairImplementationSha256,
         repair.shaText(
-            fs.readFileSync(
-                require.resolve('../scripts/lib/reader-repair'),
-                'utf8',
-            ),
+            [
+                '../scripts/lib/reader-repair.js',
+                '../prompts/api-reader-concept-terms-v1.md',
+                '../prompts/api-reader-repair-v11.md',
+            ].map(file => fs.readFileSync(require.resolve(file), 'utf8')).join('\0'),
         ),
     );
     const envelopes = fs

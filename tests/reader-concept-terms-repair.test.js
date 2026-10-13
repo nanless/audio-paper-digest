@@ -129,7 +129,7 @@ test('真实11792两次付费原请求只需一项术语，正文表图及原档
         }
     });
 
-test('实际准备身份包含窄模板实现SHA，而普通v11模板声明不冒充窄请求', async () => {
+test('实际准备身份包含窄模板实现SHA，而普通v12模板声明不冒充窄请求', async () => {
     const fs = require('node:fs'), crypto = require('node:crypto'), path = require('node:path');
     const deep = require('../scripts/deep-analyzer');
     const fixture = require('./reader-signed-draft-fixture').fixture({ noFigures: true, sourceText: source });
@@ -137,7 +137,8 @@ test('实际准备身份包含窄模板实现SHA，而普通v11模板声明不�
         sourceText: source, structuredArtifacts: fixture.sourceDetails.structuredArtifacts });
     const expected = crypto.createHash('sha256').update([
         fs.readFileSync(path.join(__dirname, '../scripts/lib/reader-repair.js'), 'utf8'),
-        fs.readFileSync(path.join(__dirname, '../', repair.CONCEPT_TERMS_PROMPT_PATH), 'utf8')].join('\0')).digest('hex');
+        fs.readFileSync(path.join(__dirname, '../', repair.CONCEPT_TERMS_PROMPT_PATH), 'utf8'),
+        fs.readFileSync(path.join(__dirname, '../prompts/api-reader-repair-v11.md'), 'utf8')].join('\0')).digest('hex');
     assert.equal(context.identity.repairImplementationSha256, expected);
     assert.equal(context.identity.repairImplementationSha256, repair.readerRepairImplementationSha256());
 });

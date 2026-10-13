@@ -16,7 +16,7 @@ function bindings() {
     const versions = require('./prompt-text-versions').PROMPT_FILE_VERSIONS;
     const result = {};
     for (const [stage, expected] of Object.entries({ primaryAnalysis: 'prompts/deep-analysis-v5.md',
-        apiReaderArticle: 'prompts/api-reader-article-v7.md', apiReaderRepair: 'prompts/api-reader-repair-v11.md',
+        apiReaderArticle: 'prompts/api-reader-article-v8.md', apiReaderRepair: 'prompts/api-reader-repair-v12.md',
         revision: 'prompts/gap-fill-v4.md', methodRepair: 'prompts/method-fill-v3.md',
         coreSummaryRepair: 'prompts/core-summary-repair-v6.md', structureRepair: 'prompts/structure-repair-v3.md' })) {
         if (versions[stage]?.path !== expected) fail('全阶段重跑必须使用当前已改进中文提示词');

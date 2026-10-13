@@ -6890,10 +6890,13 @@ def _api_reader_payload(paper):
             if not isinstance(bridge, dict) or set(bridge) != {
                     'terms', 'sectionKind', 'marker', 'explanation'} \
                     or not isinstance(bridge.get('terms'), list) \
-                    or len(bridge['terms']) != 2 \
+                    or not 2 <= len(bridge['terms']) <= 4 \
+                    or any(not isinstance(term, str) or not 2 <= len(term.strip()) <= 48 for term in bridge['terms']) \
+                    or len({term.strip() for term in bridge['terms']}) != len(bridge['terms']) \
                     or bridge.get('sectionKind') not in allowed_kinds \
                     or bridge.get('marker') != f'[[CONCEPT_BRIDGE_{index}]]' \
                     or not isinstance(bridge.get('explanation'), str) \
+                    or any(term.strip() not in bridge['explanation'] for term in bridge['terms']) \
                     or not _api_reader_visible_phrase(article, bridge['explanation']) \
                     or bridge['marker'] in article:
                 raise PublishDataValidationError(

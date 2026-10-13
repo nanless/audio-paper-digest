@@ -109,7 +109,11 @@ test('公开请求记录绑定索引协议与实现SHA，只用原两次额度�
     assert.equal(calls, 2);
     assert.equal(requestRecord.sectionGroupPlanContract, repair.SECTION_GROUP_PLAN_CONTRACT);
     assert.equal(requestRecord.identity.repairImplementationSha256,
-        repair.shaText(fs.readFileSync(require.resolve('../scripts/lib/reader-repair'), 'utf8')));
+        repair.shaText([
+            '../scripts/lib/reader-repair.js',
+            '../prompts/api-reader-concept-terms-v1.md',
+            '../prompts/api-reader-repair-v11.md'
+        ].map(file => fs.readFileSync(require.resolve(file), 'utf8')).join('\0')));
     const envelopes = fs.readdirSync(directory).filter(name => name.endsWith('.json')).map(name =>
         JSON.parse(fs.readFileSync(path.join(directory, name)))).filter(item => item.payload?.draft);
     const proofs = result?.sectionGroupCompilations || [];

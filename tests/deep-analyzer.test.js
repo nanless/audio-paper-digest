@@ -5696,17 +5696,23 @@ has_dataset: 否
             legacyPayload.promptTemplateSha256,
             deep.runtimePromptTemplateSha256('prompts/api-reader-article.md')
         );
-        // 新请求使用 v7；旧记录继续按其声明版本计算指纹。
+        // 新请求使用 v8；旧记录继续按其声明版本计算指纹。
         const freshPayload = capture({ version: 1, stages: {} });
-        assert.strictEqual(freshPayload.promptTextContract, 'analysis-prompt-text-v7');
+        assert.strictEqual(freshPayload.promptTextContract, 'analysis-prompt-text-v8');
         assert.strictEqual(
             freshPayload.promptTemplateSha256,
-            deep.runtimePromptTemplateSha256('prompts/api-reader-article-v7.md')
+            deep.runtimePromptTemplateSha256('prompts/api-reader-article-v8.md')
         );
         assert.strictEqual(
             deep.currentTextStagePromptPath('apiReaderArticle'),
-            'prompts/api-reader-article-v7.md'
+            'prompts/api-reader-article-v8.md'
         );
+        const previousPayload = capture({ version: 1, stages: { apiReaderArticle: {
+            status: 'complete', promptTextContract: 'analysis-prompt-text-v7',
+            fingerprint: 'previous', updatedAt: 't' } } });
+        assert.strictEqual(previousPayload.promptTextContract, 'analysis-prompt-text-v7');
+        assert.strictEqual(previousPayload.promptTemplateSha256,
+            deep.runtimePromptTemplateSha256('prompts/api-reader-article-v7.md'));
         assert.strictEqual(
             deep.promptFilePathForContract('apiReaderArticle', deep.ANALYSIS_PROMPT_TEXT_V1_CONTRACT),
             'prompts/api-reader-article.md'

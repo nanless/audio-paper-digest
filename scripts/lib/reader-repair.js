@@ -885,7 +885,7 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
         for (const [offset, bridge] of bridges.slice(draft.conceptBridges.length).entries()) {
             if (!bridge || Object.keys(bridge).sort().join(',') !== 'explanation,marker,sectionKind,terms'
                 || bridge.marker !== expected.missingMarkers[offset] || bridge.sectionKind !== expected.sectionKind
-                || !Array.isArray(bridge.terms) || bridge.terms.length !== 2
+                || !Array.isArray(bridge.terms) || (bridge.terms.length < 2 || bridge.terms.length > 4)
                 || bridge.terms.some(term => typeof term !== 'string' || term.trim().length < 2 || term.length > 48)
                 || typeof bridge.explanation !== 'string' || bridge.explanation.length < 45 || bridge.explanation.length > 320
                 || bridge.terms.some(term => !bridge.explanation.includes(term))) {
@@ -1270,9 +1270,10 @@ function collectReaderLanguageIssues(draft) {
 
 function conceptBridgeTermsDiagnostic(terms, index) {
     const label = `conceptBridges[${index}].terms`;
-    if (!Array.isArray(terms) || terms.length !== 2) {
-        return `${label} 必须是恰含2个真实术语字符串的数组，当前${Array.isArray(terms) ? `有${terms.length}项` : '不是数组'}；每项去除首尾空白后须为2–48字符。只写本篇实际涉及的概念，保留数学含义与已有解释，不补造术语。`;
+    if (!Array.isArray(terms) || (terms.length < 2 || terms.length > 4)) {
+        return `${label} 必须是含2–4个不同真实术语字符串的数组，当前${Array.isArray(terms) ? `有${terms.length}项` : '不是数组'}；每项去除首尾空白后须为2–48字符。只写本篇实际涉及的概念，保留数学含义与已有解释，不补造术语。`;
     }
+    if (new Set(terms.map(term => typeof term === 'string' ? term.trim() : term)).size !== terms.length) return `${label} 中的术语不能重复`;
     const invalid = terms.flatMap((term, termIndex) => {
         const length = typeof term === 'string' ? term.trim().length : null;
         return length !== null && length >= 2 && length <= 48 ? [] : [
@@ -1855,7 +1856,7 @@ function buildMissingConceptBridgesOperation(draft, issues) {
         if (!bridge || Object.keys(bridge).sort().join(',') !== 'explanation,marker,sectionKind,terms'
             || bridge.marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`
             || !READER_SECTION_KINDS.includes(bridge.sectionKind)
-            || !Array.isArray(bridge.terms) || bridge.terms.length !== 2
+            || !Array.isArray(bridge.terms) || (bridge.terms.length < 2 || bridge.terms.length > 4)
             || bridge.terms.some(term => typeof term !== 'string' || term.length < 2 || term.length > 48)
             || typeof bridge.explanation !== 'string' || bridge.explanation.length < 45 || bridge.explanation.length > 320) return null;
         const locations = draft.sections.filter(section => String(section.body || '').includes(bridge.marker));
@@ -1890,7 +1891,7 @@ function buildMissingConceptBridgesOperation(draft, issues) {
         requiredReplacementPaths: ['/conceptBridges', `/sections/${sectionIndex}/body`],
         requiredPostconditions: [
             '本轮明确允许 conceptBridges 仅在末尾补齐到4组；旧记录内容和顺序逐字保留，不改其他数组',
-            `新解释只依据封存原文，使用两个术语和45–320字解释，sectionKind必须为${draft.sections[sectionIndex].kind}，marker依次为${missingMarkers.join('、')}`,
+            `新解释只依据封存原文，使用2–4个不同术语和45–320字解释，sectionKind必须为${draft.sections[sectionIndex].kind}，marker依次为${missingMarkers.join('、')}`,
             reuseExistingMarkers ? '正文已有缺记录的唯一独占标记，正文必须逐字不变；新解释只绑定这些标记，不重复追加'
                 : '授权正文只可原文逐字保留后按顺序追加新标记，每个标记独占一段；不得删改原事实、标题或旧标记；最终仍检查全部正文与来源'
         ] };
@@ -2239,7 +2240,7 @@ function buildRepairTargets(draft, issues, options = {}) {
         const index = Number(pathIndex ?? messageIndex);
         const binding = Number.isInteger(index) ? draft.conceptBridges?.[index] : null;
         if (!binding || binding.marker !== `[[CONCEPT_BRIDGE_${index + 1}]]`
-            || !Array.isArray(binding.terms) || binding.terms.length !== 2
+            || !Array.isArray(binding.terms) || (binding.terms.length < 2 || binding.terms.length > 4)
             || binding.terms.some(term => typeof term !== 'string'
                 || term.trim().length < 2 || term.trim().length > 48)
             || typeof binding.explanation !== 'string'
@@ -2667,7 +2668,16 @@ function buildRepairTargets(draft, issues, options = {}) {
         if (/读者标题|readerTitle/.test(message)) add('/readerTitle');
         if (/oneSentenceThesis/.test(message)) add('/oneSentenceThesis');
         if (issue.code === 'reader_length_preflight' || /中文字数|篇幅预估/.test(message)) {
-            draft.sections.forEach((_section, index) => add(`/sections/${index}/body`));
+            const methodKinds = ['method_overview', 'component', 'training'];
+            const expandable = readerLengthShortfall(issue) > 0
+                ? draft.sections.map((section, index) => ({ section, index }))
+                    .filter(({ section }) => typeof section.body === 'string'
+                        && !/\[\[(?:TABLE|FIGURE|FORMULA)_\d+\]\]|^\s*\|/m.test(section.body))
+                    .sort((a, b) => Number(methodKinds.includes(b.section.kind))
+                        - Number(methodKinds.includes(a.section.kind)) || b.section.body.length - a.section.body.length)
+                : [];
+            if (expandable.length) add(`/sections/${expandable[0].index}/body`);
+            else draft.sections.forEach((_section, index) => add(`/sections/${index}/body`));
         }
         if (!localizedComparisonUnit && /表|tableBindings|cell|quote/i.test(message)) {
             const boundIndex = /^\/tableBindings\/(\d+)$/.exec(issue.bindingPath || issue.path || '');
@@ -2861,6 +2871,28 @@ function compileFactLocalSentencePatch(draft, response, context, options = {}) {
     return { version: 1, draftSha256: context.draftSha256, replacements };
 }
 
+function readerLengthShortfall(issue) {
+    const message = String(issue?.message || '');
+    const exact = /中文字数必须为 (\d+)[–-](\d+)，当前 (\d+)/.exec(message);
+    if (exact) return Math.max(0, Number(exact[1]) - Number(exact[3]));
+    const estimated = /篇幅预估为 (\d+) 个汉字[^\n]*完整文章要求 (\d+)[–-](\d+)/.exec(message);
+    return estimated ? Math.max(0, Number(estimated[2]) - Number(estimated[1])) : 0;
+}
+
+function repairOperationProtocol(context) {
+    if (!context.atomicOperation && context.targets.every(target => /^\/(?:sections\/\d+\/body|conceptBridges\/\d+)$/.test(target.path))) return '本轮不修改表格、公式、图片及其来源声明；已有标记保持原样。';
+    // 复杂结构仍使用冻结的完整来源协议，其正文同时进入实现指纹。
+    const frozen = fs.readFileSync(path.join(__dirname, '../../prompts/api-reader-repair-v11.md'), 'utf8');
+    const blocks = frozen.split('~~~');
+    const marker = '\n如果本次 `atomicOperation.kind` 明确为 `delete_top_level_program_metadata_v1`';
+    if (blocks.length !== 3 || blocks[1].split(marker).length !== 2) throw new Error('局部修复的来源操作协议缺失或边界不唯一');
+    const tableStart = '\n介绍组合术语时，';
+    const tableEnd = '\n当前校验问题和有来源的外部修订反馈：';
+    if (blocks[1].split(tableStart).length !== 2 || blocks[1].split(tableEnd).length !== 2) throw new Error('局部修复的表格操作协议边界不唯一');
+    const tableRules = tableStart.trimStart() + blocks[1].split(tableStart)[1].split(tableEnd)[0];
+    return tableRules + '\n' + marker.trimStart() + blocks[1].split(marker)[1];
+}
+
 function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', options = {}) {
     const targets = buildRepairTargets(draft, issues, options);
     const requestedOperation = observedFigureSelectionOperation(draft, options)
@@ -2940,7 +2972,9 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
     }
     const conceptGuidance = atomicOperation?.kind === 'complete_existing_concept_bridges_v1'
         ? atomicOperation.requiredPostconditions.join('；') : '';
-    const targetGuidance = conceptGuidance + (atomicOperation?.kind === 'add_existing_tail_quote_table_v1'
+    const lengthGuidance = issues.some(issue => readerLengthShortfall(issue) > 0)
+        ? '篇幅不足时，在允许正文内补充原文支持的机制分工或执行过程，按当前诊断缺额补足并多留至少100中文字余量；保留正确旧文，不回传仍低于下限的原段，也不复制其他小节凑数。' : '';
+    const targetGuidance = lengthGuidance + conceptGuidance + (atomicOperation?.kind === 'add_existing_tail_quote_table_v1'
         ? atomicOperation.requiredPostconditions.join('；') + '。' : '')
         + (atomicOperation?.kind === 'select_observed_figures_v1'
         ? '本轮特别允许figurePlacements缩为1–4条本次已见像素的原声明，其余数组数量不变。必须同步按来源改写全部授权小节，保留必要事实及表格公式术语标记；不得机械删图丢弃解释。' : '')
@@ -3252,7 +3286,8 @@ const CONCEPT_TERMS_PROMPT_CONTRACT = 'reader-concept-terms-prompt-v1';
 const CONCEPT_TERMS_PROMPT_PATH = 'prompts/api-reader-concept-terms-v1.md';
 function readerRepairImplementationSha256() {
     return shaText([fs.readFileSync(__filename, 'utf8'),
-        fs.readFileSync(path.join(__dirname, '../..', CONCEPT_TERMS_PROMPT_PATH), 'utf8')].join('\0'));
+        fs.readFileSync(path.join(__dirname, '../..', CONCEPT_TERMS_PROMPT_PATH), 'utf8'),
+        fs.readFileSync(path.join(__dirname, '../../prompts/api-reader-repair-v11.md'), 'utf8')].join('\0'));
 }
 function buildConceptTermsRepairContext(draft, issues, sourceText) {
     const blocking = issues.filter(issue => issue?.diagnosticOnly !== true);
@@ -3265,7 +3300,7 @@ function buildConceptTermsRepairContext(draft, issues, sourceText) {
         const index = Number(match[1]), bridge = draft?.conceptBridges?.[index];
         const diagnostic = conceptBridgeTermsDiagnostic(bridge?.terms, index);
         if (!diagnostic || ![diagnostic, '读者文章 ' + diagnostic].includes(issue.message)) return null;
-        if (!Array.isArray(bridge.terms) || bridge.terms.length !== 2
+        if (!Array.isArray(bridge.terms) || (bridge.terms.length < 2 || bridge.terms.length > 4)
             || bridge.terms.some(term => typeof term !== 'string' || term.trim().length > 48 || term.trim().length === 0)) return null;
         indexes.add(index);
     }
@@ -3336,7 +3371,7 @@ function compileConceptTermsPatch(draft, response, context) {
         path: `/conceptBridges/${index}`, oldSha256: hashDraft(draft.conceptBridges[index]), value })) };
 }
 
-module.exports = { buildConceptTermsRepairContext, conceptTermsPromptVariables, compileConceptTermsPatch, readerRepairImplementationSha256, CONCEPT_TERMS_PROMPT_CONTRACT, CONCEPT_TERMS_PROMPT_PATH, factLocalSentenceTargets, factLocalSentencePromptVariables, compileFactLocalSentencePatch, assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+module.exports = { repairOperationProtocol, buildConceptTermsRepairContext, conceptTermsPromptVariables, compileConceptTermsPatch, readerRepairImplementationSha256, CONCEPT_TERMS_PROMPT_CONTRACT, CONCEPT_TERMS_PROMPT_PATH, factLocalSentenceTargets, factLocalSentencePromptVariables, compileFactLocalSentencePatch, assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,

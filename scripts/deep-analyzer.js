@@ -3155,16 +3155,16 @@ function issueInProtectedReaderQuote(issue, article) {
 }
 
 function findReaderBridgeParagraph(articleBlocks, terms) {
-    if (!Array.isArray(terms) || terms.length !== 2) return null;
+    if (!Array.isArray(terms) || (terms.length < 2 || terms.length > 4)) return null;
     const expected = terms.map(normalizeReaderBridgeTerm);
     const matches = articleBlocks.filter(block => {
         const heading = /^\s*(?:\*\*\s*)?(.+?)\s*(?:：|:)\s*(?:\*\*)?/.exec(String(block).trim())?.[1];
         if (!heading) return false;
         const actualTerms = heading.split(/\s*×\s*|\s+x\s+/iu);
-        if (actualTerms.length !== 2) return false;
+        if (actualTerms.length !== expected.length) return false;
         const normalizedActualTerms = actualTerms.map(normalizeReaderBridgeTerm);
         const sameOrder = normalizedActualTerms.every((value, index) => value === expected[index]);
-        const reverseOrder = normalizedActualTerms.every((value, index) => value === expected[1 - index]);
+        const reverseOrder = normalizedActualTerms.every((value, index) => value === expected[expected.length - 1 - index]);
         return sameOrder || reverseOrder;
     });
     return matches.length === 1 ? matches[0] : null;
@@ -6493,7 +6493,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             marker,
             explanation: exactBridgeParagraph || collapseRepeatedReaderBridgeHeadings(
                 normalizeReaderProseFormatting(
-                    `**${bridge.terms[0].trim()} × ${bridge.terms[1].trim()}：** ${explanation}`
+                    `**${bridge.terms.map(term => term.trim()).join(' × ')}：** ${explanation}`
                 )
             )
         };
@@ -7070,7 +7070,7 @@ function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest)
     if (Array.isArray(plan.conceptBridges)) {
         repairedConceptBridges = [];
         for (const bridge of plan.conceptBridges) {
-            if (!bridge || !Array.isArray(bridge.terms) || bridge.terms.length !== 2) {
+            if (!bridge || !Array.isArray(bridge.terms) || (bridge.terms.length < 2 || bridge.terms.length > 4)) {
                 return false;
             }
             const terms = bridge.terms.map(term => (
@@ -7348,7 +7348,7 @@ function buildApiReaderValidationFeedback(error) {
     }
     if (/conceptBridges\[\d+\]/.test(message)) {
         fixes.push(
-            '对应 concept bridge marker 必须独占一个段落；explanation 必须逐字同时包含 terms 中的两个术语，'
+            '对应 concept bridge marker 必须独占一个段落；explanation 必须逐字同时包含 terms 中的全部术语，'
             + '依次说明各自分工、搭配原因和组合后新增的含义'
         );
     }
@@ -8427,6 +8427,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 targets: repairContext.targets,
                 ...(repairContext.atomicOperation ? { atomicOperation: repairContext.atomicOperation } : {}) }),
             sourceEvidence: repairContext.evidence,
+            operationProtocol: repair.repairOperationProtocol(repairContext),
             mechanicalContract
         }) : loadPrompt(currentTextStagePromptPath('apiReaderArticle'), {
             title: paper.title || '',
