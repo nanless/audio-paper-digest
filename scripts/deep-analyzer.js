@@ -1834,11 +1834,11 @@ function isAllowedReaderDefensiveNegationIssue(issue, article) {
     return count <= readerLimit;
 }
 
-function buildApiReaderQualityMetrics(quality, article) {
+function buildApiReaderQualityMetrics(quality, article, evidence = null) {
     const rawIssues = Array.isArray(quality?.issues) ? quality.issues : [];
     const warnings = Array.isArray(quality?.warnings) ? quality.warnings : [];
     const waivedIssues = rawIssues.filter(issue => (
-        isAllowedReaderNarrativeNumeralIssue(issue, article)
+        isAllowedReaderNarrativeNumeralIssue(issue, article, evidence)
         || isAllowedReaderDefensiveNegationIssue(issue, article)
         || isReaderHeadingIssue(issue, article)
         || issueFallsWithinReaderBridgeLine(issue, article)
@@ -6729,7 +6729,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         )
         : null;
     if (sourceBindingResult) article = sourceBindingResult.article;
-    const qualityMetrics = buildApiReaderQualityMetrics(quality, qualityArticle);
+    const qualityMetrics = buildApiReaderQualityMetrics(quality, qualityArticle, options);
     // 概念 bridge 表层带计划签名：它们的字节必须留到最后的重新绑定，所以表层修复从不
     // 改写它们（见上面的 withProtectedBridgeSurfaces）。落在这些已签名区段里的风格问题，
     // 因此在这里永远修不了——照现有的叙述数字豁免那样精确豁免掉，不要让流程永远失败。
