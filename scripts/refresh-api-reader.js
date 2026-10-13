@@ -285,6 +285,9 @@ function canRepairCompletedPrimaryReader(paper, plan, options = {}) {
 }
 
 async function refreshApiReader(targetId, options = {}) {
+    if (options.naturalResourceProse !== undefined && typeof options.naturalResourceProse !== 'boolean') {
+        throw new Error('naturalResourceProse 必须为布尔值');
+    }
     if (options.readerFactLocalRevision === true && (options.scoringAndReader
         || options.authorsOnly || options.figuresOnly || options.surfaceBindingsOnly)) {
         throw new Error('事实局部修订只能刷新Reader正文');
@@ -445,7 +448,8 @@ async function refreshApiReaderInternal(targetId, options = {}) {
                     : await (refreshOperations.article || refreshApiReaderArticleFromSource)(storedAnalysisRecord, sourceDetails, {
                         reviewFeedback: options.reviewFeedback,
                         readerFactLocalRevision: options.readerFactLocalRevision === true,
-                        signedRevisionMinimalDisplay: options.signedRevisionMinimalDisplay === true
+                        signedRevisionMinimalDisplay: options.signedRevisionMinimalDisplay === true,
+                        naturalResourceProse: options.naturalResourceProse === true
                     });
         const repairSurfaceBindings = sourceDetails => {
                 const repaired = JSON.parse(JSON.stringify(storedAnalysisRecord));

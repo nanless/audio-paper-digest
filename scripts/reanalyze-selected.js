@@ -49,6 +49,8 @@ async function reanalyzeSelected(ids, options = {}) {
 
     const papers = data.papers || [];
     const idSet = new Set(ids.map(id => normalizedId(id)).filter(Boolean));
+    if (options.naturalResourceProse !== undefined && typeof options.naturalResourceProse !== 'boolean')
+        throw new Error('naturalResourceProse 必须为布尔值');
     if (options.refreshReaderDiagnostics !== undefined && typeof options.refreshReaderDiagnostics !== 'boolean')
         throw new Error('refreshReaderDiagnostics 必须为布尔值');
     if (options.coreSummaryDiagnosticIds !== undefined) {
@@ -284,7 +286,7 @@ async function reanalyzeSelected(ids, options = {}) {
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
         saveInterval: 0,
         analyzeFn: async paper => {
-            const analyze = () => dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, { coreSummaryDiagnosticIds: options.coreSummaryDiagnosticIds })(paper);
+            const analyze = () => dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, { coreSummaryDiagnosticIds: options.coreSummaryDiagnosticIds, naturalResourceProse: options.naturalResourceProse === true })(paper);
             const bound = boundFeedbacks.get(normalizedId(paper));
             const core = readCoreLocked(paper);
             const reader = readReaderLocked(paper);

@@ -632,3 +632,5 @@ Reader 实现变更后的合法诊断恢复可在上述公共选定入口显式�
 真实强度表集成验证：将 `PD_PDF_STEERING_REAL_SOURCE_DIR` 指向已封存的 `2610.10415/generation-000001` 目录，再用项目 Python 运行 `tests/reader_pdf_steering_profile_test.py`。测试重新提取四来源、完整35格及列头，并拒绝八类来源不一致；未设置真实目录时该组明确跳过，不能算真实来源已验收。
 
 CHiME 的三层主结果表与两层 MC 对照表使用同一封存 PDF 逐格确认入口；保留方法行、输入麦克风数、数据集、完整列头与表下注释，不改来源或模型原稿。将 `PD_PDF_CHIME_REAL_SOURCE_DIR` 指向 `2610.05155/generation-000001` 后运行 `tests/reader_pdf_chime_table_evidence_test.py`，可重放两表及错单位、组别、方法、数据集、数值、注释、PDF SHA 反例。未提供真实来源时明确跳过。
+
+资源表述的可选新输入由 `lib/reader-resource-prose.js` 处理。公共刷新或选定论文续跑显式设置 `naturalResourceProse: true` 时，先保持原资源来源、引文、可达性和文档校验，再提供自然的可确认状态；新规则版本和规则SHA进入Reader身份及阶段记录，完整实际提示仍保存于请求诊断。旧v7模板、默认输入和原付费记录不改；不能把外部链接可访问推断为作者开源、权重可下载或完整系统可运行。`tests/reader-natural-resource-evidence.test.js` 与 `tests/reader-natural-resource-public-option.test.js` 验证旧字节、新身份及真实模型前入口，未调用模型，不代表新文章已验收。

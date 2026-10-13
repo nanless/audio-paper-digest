@@ -3707,7 +3707,7 @@ function readerVerifiedTableIndexExamples(artifacts, actualEvidence, issues, dra
     return examples.join('\n');
 }
 
-function buildApiReaderResourceEvidence(identity) {
+function buildApiReaderResourceEvidence(identity, naturalResourceProse = false) {
     if (!identity) return '';
     const { identitySha256, ...identityBody } = identity;
     if (identity.contract !== API_READER_RESOURCE_IDENTITY_CONTRACT
@@ -3744,7 +3744,9 @@ function buildApiReaderResourceEvidence(identity) {
                 + `sha256=${resource.documentationEvidence.sourceSha256}`);
         }
     }
-    return lines.join('\n');
+    const evidence = lines.join('\n');
+    return naturalResourceProse
+        ? require('./lib/reader-resource-prose').naturalEvidence(evidence, identity) : evidence;
 }
 
 const CONFERENCE_READER_RESOURCE_CLAIM_SPECS = Object.freeze({
@@ -4487,10 +4489,11 @@ function buildApiReaderEvidenceContext(
     structuredArtifacts,
     arxivId = '',
     readerCapabilityPolicy = null,
-    verifiedResourceIdentity = null
+    verifiedResourceIdentity = null,
+    naturalResourceProse = false
 ) {
     const capabilityEvidence = readerCapabilityPolicyNotice(readerCapabilityPolicy);
-    const resourceEvidence = buildApiReaderResourceEvidence(verifiedResourceIdentity);
+    const resourceEvidence = buildApiReaderResourceEvidence(verifiedResourceIdentity, naturalResourceProse);
     const separatorReserve = [capabilityEvidence, resourceEvidence].filter(Boolean).length * 2 + 2;
     const artifactBudget = Math.min(
         60000,
@@ -7513,6 +7516,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         throw new Error('资源局部修订必须保有当前已核验签名Reader，不能扩大为全文生成');
     }
     const contentMode = start.isRevision ? READER_SIGNED_REVISION_CONTENT_MODE : READER_SOURCE_CONTENT_MODE;
+    const naturalResourceProse = options.naturalResourceProse === true;
     const requestModel = options.readerCallModel || callModel;
     const recordDisposition = options.readerRecordDisposition || require('./lib/llm-usage.js').recordLlmDisposition;
     const direct = require('./lib/direct-rewrite-analysis-context.js');
@@ -7570,11 +7574,13 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         ...apiReaderRequestPolicyFields(),
         ...(freshIdentity ? { freshAnalysis: freshIdentity } : {}),
         contentMode,
+        ...require('./lib/reader-resource-prose').fields(naturalResourceProse),
         ...start.signedRevisionDisplayFields,
         inputFingerprint: stableFingerprint({
             ...require('./lib/selected-full-stage-reanalysis').fingerprintFields(paper),
             ...promptRenderingFingerprintFields(paper.title, sourceEvidence, options.reviewFeedback, start.previousDraft),
             contentMode, sourceEvidence,
+            ...require('./lib/reader-resource-prose').fields(naturalResourceProse),
             ...start.signedRevisionDisplayFields,
             reviewFeedback: options.reviewFeedback || '', initialDraft: start.previousDraft,
             structuredArtifacts: options.structuredArtifacts?.payloadSha256 || '',
@@ -8133,7 +8139,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             throw readerRepairStopped('READER_FULL_ATTEMPTS_EXHAUSTED',
                 lastError?.message || '长文全文生成次数已用完，现有草稿尚不能按当前允许范围修复；已保留失败记录。', lastError);
         }
-        const buildReaderPrompt = indexExamples => repairContext?.atomicOperation?.kind === 'reorganize_existing_sections_v1'
+        const buildReaderPrompt = indexExamples => require('./lib/reader-resource-prose').renderPrompt(
+            repairContext?.atomicOperation?.kind === 'reorganize_existing_sections_v1'
             ? repair.buildSectionReorganizationPrompt({ context: repairContext,
                 title: paper.title || '', arxivId: getPaperArxivId(paper), mechanicalContract,
                 reviewFeedback: String(options.reviewFeedback || '').trim(), numericSpellingGuidance, indexExamples,
@@ -8156,7 +8163,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 indexExamples].filter(Boolean).join('\n'),
             previousDraft,
             mechanicalContract
-        });
+        }), naturalResourceProse);
         let prompt = buildReaderPrompt('');
         const indexExamples = readerVerifiedTableIndexExamples(
             options.structuredArtifacts, repairContext ? repairContext.evidence : sourceEvidence,
@@ -8492,13 +8499,17 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             manifest?.stages?.demoLinkScan,
             { paper, structuredArtifacts: sourceDetails.structuredArtifacts }
         );
+    const naturalResourceProse = require('./lib/reader-resource-prose').enabled(
+        options, manifest?.stages?.apiReaderArticle
+    );
     const evidenceContext = buildApiReaderEvidenceContext(
         analysis,
         sourceText,
         sourceDetails.structuredArtifacts,
         arxivId,
         readerCapabilityPolicy,
-        readerResources
+        readerResources,
+        naturalResourceProse
     );
     // 刷新一定会重新生成正文，加载路径也按当前版本走，所以配置指纹必须按当前
     // 版本算，不能按这条记录原来声明的版本算，否则指纹和实际用的正文对不上。
@@ -8519,6 +8530,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         ? require('./lib/signed-reader-recovery-draft').minimalDisplay(revisionSeed).fields : {};
     const fingerprint = stableFingerprint({
         configurationFingerprint,
+        ...require('./lib/reader-resource-prose').fields(naturalResourceProse),
         contentMode,
         ...signedDisplayFields,
         ...(options.resourceLocalRevision === true ? { resourceLocalRevisionContract: 'signed-reader-resource-local-repair-v1' } : {}),
@@ -8532,6 +8544,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     const generated = await generateApiReaderArticleDetailed(
         paper, analysis, evidenceContext, {
             reviewFeedback,
+            naturalResourceProse,
             resourceLocalRevision: options.resourceLocalRevision === true,
             readerFactLocalRevision: options.readerFactLocalRevision === true,
             signedRevisionMinimalDisplay: options.signedRevisionMinimalDisplay === true,
@@ -8554,6 +8567,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         readerResources,
         execution: {
             contentMode, fingerprint, ...signedDisplayFields,
+            ...require('./lib/reader-resource-prose').fields(naturalResourceProse),
             ...(options.resourceLocalRevision === true ? { resourceLocalRevisionContract: 'signed-reader-resource-local-repair-v1' } : {}),
             ...(options.readerFactLocalRevision === true ? { readerFactLocalRevisionContract: 'signed-reader-fact-local-repair-v1' } : {}),
             attempts: generated.attempts,
@@ -10090,9 +10104,12 @@ function buildImageSupplementFingerprint(baseFingerprint, candidateImageInfos, d
     });
 }
 
-function buildApiReaderExecutionFingerprint(baseFingerprint, evidenceContext, structuredArtifacts, readerCapabilityPolicy = null, declaredStage) {
+function buildApiReaderExecutionFingerprint(baseFingerprint, evidenceContext, structuredArtifacts, readerCapabilityPolicy = null, declaredStage, naturalResourceProse = false) {
     const checkedPolicy = validateReaderCapabilityPolicy(readerCapabilityPolicy);
     return stableFingerprint({
+        ...require('./lib/reader-resource-prose').fields(
+            require('./lib/reader-resource-prose').enabled({ naturalResourceProse }, declaredStage)
+        ),
         ...promptRenderingFingerprintFields(evidenceContext),
         ...modelTextFingerprintFields(evidenceContext),
         configurationFingerprint: baseFingerprint,
@@ -16524,13 +16541,17 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             paper, sourceDetails.structuredArtifacts
         )
     );
+    const naturalResourceProse = require('./lib/reader-resource-prose').enabled(
+        options, analysisManifest.stages.apiReaderArticle
+    );
     const apiReaderEvidenceContext = buildApiReaderEvidenceContext(
         analysis,
         rawTextForAnalysis,
         sourceDetails.structuredArtifacts,
         arxivId,
         readerCapabilityPolicy,
-        verifiedReaderResources
+        verifiedReaderResources,
+        naturalResourceProse
     );
     // 核验按记录声明的版本重算，写入按当前版本。旧记录没有这个字段，所以核验
     // 指纹里不带 promptTextContract，与改动前逐字节一致；一旦这条记录被失效后
@@ -16540,7 +16561,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
         apiReaderEvidenceContext,
         sourceDetails.structuredArtifacts,
         readerCapabilityPolicy,
-        analysisManifest.stages.apiReaderArticle
+        analysisManifest.stages.apiReaderArticle,
+        naturalResourceProse
     );
     const legacyApiReaderFingerprint = buildLegacyAnalysisBoundApiReaderFingerprint(
         buildLegacyApiReaderV3ConfigurationFingerprint(arxivId),
@@ -16637,6 +16659,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             paper.apiReaderResources = verifiedReaderResources;
             generatedReaderResult = await generateApiReaderArticleDetailed(
                 paper, analysis, apiReaderEvidenceContext, {
+                    naturalResourceProse,
                     structuredArtifacts: sourceDetails.structuredArtifacts,
                     sourceText: rawTextForAnalysis,
                     reviewFeedback: require('./lib/daily-fact-review').reviewFeedback('apiReaderArticle', arxivId)
@@ -16733,7 +16756,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 apiReaderEvidenceContext,
                 sourceDetails.structuredArtifacts,
                 readerCapabilityPolicy,
-                analysisManifest.stages.apiReaderArticle
+                analysisManifest.stages.apiReaderArticle,
+                naturalResourceProse
             );
             markRecoveryStage(analysisManifest, 'apiReaderArticle', 'complete', {
                 fingerprint: apiReaderWriteFingerprint,
@@ -16744,6 +16768,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 promptTextContract: apiReaderWriteContract,
                 repairPromptTextContract: apiReaderWriteRepairContract,
                 contentMode: READER_SOURCE_CONTENT_MODE,
+                ...require('./lib/reader-resource-prose').fields(naturalResourceProse),
                 attempts: readerResult.attempts,
                 model: DEEP_CONFIG.model,
                 protocol: detectApiType(DEEP_CONFIG.endpoint, DEEP_CONFIG.model),
