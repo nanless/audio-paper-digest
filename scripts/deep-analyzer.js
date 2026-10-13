@@ -237,7 +237,7 @@ function shouldEscalateApiReaderRepairBudget(
 
 function readerIssuesRequireFullSourceBindingRetry(
     recovered, candidate, fullAttempts, issues, readerCapabilityPolicy = null,
-    requireAllFigurePlacements = false
+    requireAllFigurePlacements = false, localRepairContext = null
 ) {
     const { classifyTableBindingOrderIssue } = require('./lib/reader-repair.js');
     const blocking = (Array.isArray(issues) ? issues : [])
@@ -262,9 +262,25 @@ function readerIssuesRequireFullSourceBindingRetry(
     const conferenceWideTableNeedsFullRetry = Boolean(requireAllFigurePlacements
         && candidate && fullAttempts < 2
         && otherBlocking.some(issue => /宽表/.test(String(issue?.message || ''))));
+    // 坏引文及同段措辞已能精确定位时，复用后面真正提交的局部范围。
+    // 所有阻塞问题都必须覆盖；任何未知问题、整组操作或超范围目标仍走原流程。
+    const repair = require('./lib/reader-repair.js');
+    const localIssues = (Array.isArray(issues) ? issues : []).filter(issue => issue?.diagnosticOnly !== true);
+    const targets = localRepairContext?.targets;
+    const languageKeys = new Set(candidate ? repair.collectReaderLanguageIssues(candidate)
+        .map(issue => JSON.stringify([issue.code, issue.path, issue.match])) : []);
+    const allQuoteIssuesCovered = candidate && !localRepairContext?.atomicOperation
+        && Array.isArray(targets) && targets.length > 0 && targets.length <= 8
+        && new Set(targets.map(target => target.path)).size === targets.length
+        && targets.every(target => /^\/(?:tableBindings\/\d+|sections\/\d+\/body)$/.test(target.path))
+        && localIssues.some(issue => issue?.code === 'reader_invalid_source_quotes')
+        && localIssues.every(issue => targets.some(target => target.path === issue?.path)
+            && (issue?.code === 'reader_invalid_source_quotes'
+                && /^\/tableBindings\/\d+$/.test(issue.path)
+                || languageKeys.has(JSON.stringify([issue?.code, issue?.path, issue?.match]))));
     return weakStructureNeedsFullRetry || completeFigureBindingNeedsFullRetry
         || conferenceWideTableNeedsFullRetry
-        || Boolean(!recovered && candidate && fullAttempts < 2
+        || Boolean(!recovered && candidate && fullAttempts < 2 && !allQuoteIssuesCovered
         && otherBlocking.some(issue => (
             /source-binding|tableBindings|sourceQuote|selection|TABLE_\d+/.test(
                 String(issue?.message || '')
@@ -8136,9 +8152,20 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 });
             }
         }
+        const blockingForLocalQuotes = currentIssues.filter(issue => issue?.diagnosticOnly !== true);
+        const canPlanLocalQuotes = blockingForLocalQuotes.some(issue => issue?.code === 'reader_invalid_source_quotes')
+            && blockingForLocalQuotes.every(issue => ['reader_invalid_source_quotes',
+                'reader_workflow_leakage', 'reader_awkward_translation'].includes(issue?.code))
+            && candidate && repair.parseRecoveryDraft(candidate);
+        const repairOptions = { availableFigureOrdinals: pixelFigureOrdinals, structuredArtifacts: options.structuredArtifacts,
+            ...(options.readerFactLocalRevision === true ? { readerFactLocalPaths: start.readerFactLocalPaths,
+                readerFactLocalClaims: require('./lib/daily-fact-review').readerRejectedClaims(getPaperArxivId(paper)) } : {}) };
+        const proposedRepairContext = canPlanLocalQuotes
+            ? repair.buildRepairContext(candidate, currentIssues, sourceEvidence, options.sourceText, repairOptions) : null;
         const sourceBindingNeedsFullRetry = readerIssuesRequireFullSourceBindingRetry(
             recovered, candidate, fullAttempts, currentIssues, readerCapabilityPolicy,
-            options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy
+            options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy,
+            proposedRepairContext
         ) || implementationMigrationNeedsFullRegeneration;
         const metadataRepair = repair;
         const metadataOperation = !candidate && !sourceBindingNeedsFullRetry
@@ -8148,10 +8175,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             evidence: sourceEvidence, atomicOperation: metadataOperation,
             targetGuidance: '本次只授权明确删除两个顶层程序元数据字段。其他字段及全部正文逐字保留，删除后仍检查整篇。'
         } : candidate && !sourceBindingNeedsFullRetry
-            ? repair.buildRepairContext(candidate, currentIssues, sourceEvidence, options.sourceText,
-                { availableFigureOrdinals: pixelFigureOrdinals, structuredArtifacts: options.structuredArtifacts,
-                    ...(options.readerFactLocalRevision === true ? { readerFactLocalPaths: start.readerFactLocalPaths,
-                        readerFactLocalClaims: require('./lib/daily-fact-review').readerRejectedClaims(getPaperArxivId(paper)) } : {}) }) : null;
+            ? proposedRepairContext || repair.buildRepairContext(candidate, currentIssues,
+                sourceEvidence, options.sourceText, repairOptions) : null;
         if (repairContext && repairContext.targets.length === 0
             && currentIssues.some(issue => repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair)) {
             const latestFailure = repair.loadFailedCandidate(candidateDirectory, identity) || {};
