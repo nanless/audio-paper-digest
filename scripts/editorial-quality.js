@@ -1183,6 +1183,10 @@ function findMissingComparisonUnits(text) {
             // 只识别实际遇到的两类命名型号，保留同句的其他裸指标数字。
             .replace(/\b(?:Qwen\s+\d+(?:\.\d+)?(?:-[A-Za-z][A-Za-z0-9-]*)?|Gemma\s+\d+(?:\.\d+)?)(?![\d.])/giu,
                 match => ' '.repeat(match.length))
+            // XLSR 的语言数型号与 wav2vec 2.0 的版本号属于完整模型名。
+            // 只屏蔽这两类实际名称；旁边的错误率结果仍须有单位。
+            .replace(/(?<![A-Za-z0-9_.-])(?:XLSR-[1-9]\d*(?![A-Za-z0-9_.-])|wav2vec\s+2\.0(?![A-Za-z0-9_.]))/giu,
+                match => ' '.repeat(match.length))
             // 明确命名的超参数值是实验设置，不能冒充同句的百分比结果。
             // 只屏蔽实际参数表达式；其他结果数字继续走原有单位检查。
             .replace(
