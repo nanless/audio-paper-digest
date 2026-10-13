@@ -1393,6 +1393,7 @@ function hasValidAnalysisBody(paper, options = {}) {
             legacyTags: options.legacyTags === true
         });
         return !getInvalidAnalysisReason(paper.analysis, parsed, {
+            paper,
             enforceExperimentTableContract: analysisManifestRequiresExperimentTableContract(
                 paper.analysisManifest
             ),
@@ -1514,6 +1515,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
             if (analyzed && analyzed.analysis) {
                 const parsed = parseAnalysis(analyzed.analysis);
                 const invalidReason = getInvalidAnalysisReason(analyzed.analysis, parsed, {
+                    paper: analyzed,
                     enforceExperimentTableContract: analysisManifestRequiresExperimentTableContract(
                         analyzed.analysisManifest || paper.analysisManifest
                     ),

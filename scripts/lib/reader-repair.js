@@ -1309,7 +1309,9 @@ function collectDraftIssues(draft, parserError, options = {}) {
                 requiredCount: parserError.requiredCount, actualCount: parserError.actualCount,
                 message: String(parserError.message || parserError) });
         } else {
-            issues.push({ path: null, message: String(parserError.message || parserError) });
+            issues.push({ path: null, message: String(parserError.message || parserError),
+                ...(parserError.renderedTableDiagnostics
+                    ? { renderedTableDiagnostics: parserError.renderedTableDiagnostics } : {}) });
         }
     }
     issues.push(...standaloneParserIssues.filter(issue => !LANGUAGE_ISSUE_CODES.has(issue?.code)));
@@ -2572,7 +2574,22 @@ function buildRepairTargets(draft, issues, options = {}) {
                     ? binding.selection.sourceColumns.length : 0;
             return columnCount < READER_LIMITS.minimumWideColumns;
         });
-        const firstTable = (narrowTables.length ? narrowTables : repairableTables).sort((left, right) => (
+        const renderedDiagnostic = globalWideTableIssue.renderedTableDiagnostics;
+        const prunedTables = renderedDiagnostic?.draftSha256 === hashDraft(draft)
+            && Array.isArray(renderedDiagnostic.tables)
+            ? repairableTables.filter(table => renderedDiagnostic.tables.some(item => (
+                item.reason === 'source_quote_unsupported_columns'
+                && item.bindingIndex === table.bindingIndex
+                && Number.isInteger(item.originalColumnCount)
+                && Array.isArray(table.table?.header)
+                && table.table.header.length === item.originalColumnCount
+                && Number.isInteger(item.renderedColumnCount)
+                && item.renderedColumnCount >= 2
+                && item.renderedColumnCount < READER_LIMITS.minimumWideColumns
+                && item.renderedColumnCount < item.originalColumnCount
+            ))) : [];
+        const firstTable = (prunedTables.length ? prunedTables
+            : narrowTables.length ? narrowTables : repairableTables).sort((left, right) => (
             (sectionTableCounts.get(left.sectionIndex) || 0) - (sectionTableCounts.get(right.sectionIndex) || 0)
             || String(draft.sections?.[left.sectionIndex]?.body || '').length
                 - String(draft.sections?.[right.sectionIndex]?.body || '').length

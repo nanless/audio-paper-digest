@@ -3033,12 +3033,19 @@ function getInvalidAnalysisReason(analysis, parsed, options = {}) {
     const tagIssue = validateTagSectionContract(analysis, parsed, options);
     if (tagIssue) return `分析结果标签契约无效: ${tagIssue}`;
     if (options.enforceExperimentTableContract === true) {
-        const tableIssue = validateExperimentTableContract(analysis, {
+        const tableOptions = {
             contractVersion: options.experimentTableContractVersion
                 || EXPERIMENT_TABLE_LEGACY_CONTRACT_VERSION,
             documentType: parsed?.documentType,
             sourceText: options.sourceText
-        });
+        };
+        let tableIssue = validateExperimentTableContract(analysis, tableOptions);
+        // 仅损失名称列的方向歧义需要重放封存证据，普通正文不额外读取来源。
+        if (options.paper && tableIssue
+            && /^实验结果第 \d+ 张表指标“(?:损失|loss)”缺少 ↑\/↓ 方向$/i.test(tableIssue)) {
+            const sourceText = coreSummaryBoundMethodSource(options.paper);
+            tableIssue = validateExperimentTableContract(analysis, { ...tableOptions, sourceText });
+        }
         if (tableIssue) return `分析结果表格契约无效: ${tableIssue}`;
     }
     if (options.enforceMethodDetailContract === true) {

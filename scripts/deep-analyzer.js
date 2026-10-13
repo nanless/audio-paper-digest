@@ -2775,6 +2775,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         ))) {
         throw new Error('Reader source-binding v4 检测到未绑定、重复或被改写的展示公式');
     }
+    const tablePruningDiagnostics = [];
     if (options.allowDeterministicUnsupportedClaimPruning === true) {
         for (let index = 0; index < renderedTables.length; index += 1) {
             const declared = declaredTableBindings[index];
@@ -2791,6 +2792,14 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                 renderedTables[index], [...new Set([...validQuotes, ...derivedQuotes])].join('\n')
             );
             if (!pruned || boundArticle.split(renderedTables[index].markdown).length !== 2) continue;
+            const after = extractMarkdownTables(pruned)[0];
+            if (after && after.header.length < renderedTables[index].header.length) {
+                tablePruningDiagnostics.push({ bindingIndex: index,
+                    originalColumnCount: renderedTables[index].header.length,
+                    renderedColumnCount: after.header.length,
+                    removedHeaders: renderedTables[index].header.filter(header => !after.header.includes(header)),
+                    reason: 'source_quote_unsupported_columns' });
+            }
             boundArticle = boundArticle.replace(renderedTables[index].markdown, pruned);
         }
         renderedTables = extractMarkdownTables(boundArticle);
@@ -3066,6 +3075,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
     }
     return {
         article: boundArticle,
+        ...(tablePruningDiagnostics.length ? { tablePruningDiagnostics } : {}),
         tableBindings,
         formulaBindings,
         ...((tableBindings.some(binding => binding.pdfCellConfirmation)
@@ -6293,6 +6303,7 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     } catch (error) {
         throw new Error(`读者文章 JSON 无法解析: ${error.message}`);
     }
+    const inputDraftSha256 = crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex');
     const hasSourceBindings = Object.prototype.hasOwnProperty.call(value, 'tableBindings')
         || Object.prototype.hasOwnProperty.call(value, 'formulaBindings');
     const readerCapabilityPolicy = validateReaderCapabilityPolicy(options.readerCapabilityPolicy);
@@ -6828,7 +6839,18 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             table.header.length >= requirements.minimumWideColumns
         )).length;
         if (wideTableCount < minimumWideTables) {
-            throw new Error(`读者文章至少需要 ${minimumWideTables} 张 ${requirements.minimumWideColumns} 列以上的宽表，当前 ${wideTableCount} 张`);
+            const message = `读者文章至少需要 ${minimumWideTables} 张 ${requirements.minimumWideColumns} 列以上的宽表，当前 ${wideTableCount} 张`;
+            const pruned = (sourceBindingResult?.tablePruningDiagnostics || [])
+                .filter(item => item.renderedColumnCount < requirements.minimumWideColumns);
+            const error = new Error(message + (pruned.length ? '；来源核验删除无证据列：'
+                + pruned.map(item => `绑定${item.bindingIndex}候选${item.originalColumnCount}列→实际${item.renderedColumnCount}列（${item.removedHeaders.join('、')}）`).join('；') : ''));
+            if (pruned.length) error.renderedTableDiagnostics = {
+                draftSha256: inputDraftSha256, tables: pruned
+            };
+            error.readerIssues = [{ path: null, message: error.message,
+                ...(error.renderedTableDiagnostics
+                    ? { renderedTableDiagnostics: error.renderedTableDiagnostics } : {}) }];
+            throw error;
         }
     }
     // 表格和图归一化之后可能只剩下一段很短的引导，而它前面那段普通正文其实正是同一段插图
@@ -7423,7 +7445,7 @@ function buildApiReaderValidationFeedback(error) {
     }
     if (/宽表/.test(message)) {
         fixes.push(
-            '当前允许修改的窄表就是本轮唯一需要扩为 5 列以上的表；在该表中增加有原文证据的第 5 列，'
+            '本轮只修当前授权的表与绑定，使实际来源核验后的表达到 5 列；若无证据列被删除，应重新选择有原表 DOM 或完整逐字引文支持的合法列，不能恢复无证据旧列，'
             + '并同步更新同一 tableBindings 项。列中应覆盖比较条件、关键控制变量、两个数据集或指标、'
             + '解释或成本；不要试图改动未授权的另一张表，也不要只列方法与数值两列'
         );
