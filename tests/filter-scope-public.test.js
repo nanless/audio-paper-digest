@@ -9,6 +9,26 @@ const Config = require('../scripts/config.js');
 const pipeline = require('../scripts/fetch-papers.js');
 const scope = require('../scripts/lib/filter-scope-evidence.js');
 const batchDate = '2026-10-11';
+// 默认路径的保护检查也在独立目录完成，不遍历用户累积的论文、PDF 和付费记录。
+// 各测试仍须证明它没有改动自己未获授权的默认文件。
+const savedFiles = { ...Config.FILES };
+const savedDataDir = Config.DATA_DIR;
+let isolatedDefaults;
+test.before(() => {
+    isolatedDefaults = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'filter-scope-defaults-'));
+    Config.DATA_DIR = isolatedDefaults;
+    for (const key of Object.keys(Config.FILES)) {
+        if (typeof Config.FILES[key] === 'string') Config.FILES[key] = path.join(isolatedDefaults, key);
+    }
+    fs.mkdirSync(Config.FILES.freshArxivFetchedSourcesDir, { recursive: true });
+    fs.writeFileSync(path.join(Config.FILES.freshArxivFetchedSourcesDir, '保留来源.txt'), '未经授权不能改动的原始来源。');
+    fs.writeFileSync(path.join(isolatedDefaults, '保留记录.json'), JSON.stringify({ note: '已有论文和付费记录必须保留' }));
+});
+test.after(() => {
+    Object.assign(Config.FILES, savedFiles);
+    Config.DATA_DIR = savedDataDir;
+    if (isolatedDefaults) fs.rmSync(isolatedDefaults, { recursive: true, force: true });
+});
 function treeSnapshot(root) {
     if (!fs.existsSync(root)) return null;
     const rows = [];
