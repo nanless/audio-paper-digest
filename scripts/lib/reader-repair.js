@@ -2669,7 +2669,9 @@ function buildRepairTargets(draft, issues, options = {}) {
         if (/oneSentenceThesis/.test(message)) add('/oneSentenceThesis');
         if (issue.code === 'reader_length_preflight' || /中文字数|篇幅预估/.test(message)) {
             const methodKinds = ['method_overview', 'component', 'training'];
-            const expandable = readerLengthShortfall(issue) > 0
+            const onlyLengthIssues = issues.every(item => item.code === 'reader_length_preflight'
+                || /中文字数|篇幅预估/.test(String(item.message || '')));
+            const expandable = onlyLengthIssues && readerLengthShortfall(issue) > 0
                 ? draft.sections.map((section, index) => ({ section, index }))
                     .filter(({ section }) => typeof section.body === 'string'
                         && !/\[\[(?:TABLE|FIGURE|FORMULA)_\d+\]\]|^\s*\|/m.test(section.body))

@@ -61,3 +61,12 @@ test('超长文章不误走扩写，方法段有手写表格时选择其他正�
     ], '完整来源');
     assert.deepEqual(shorter.targets.map(target => target.path), ['/sections/0/body']);
 });
+
+test('正文长度与其他错误并存时，不让窄扩写吞掉其他段落的修改范围', () => {
+    const context = repair.buildRepairContext(sampleDraft(), [
+        { message: '读者文章中文字数必须为 5000-18000，当前 4982' },
+        { path: '/sections/0/body', message: '背景说明中有需按原文核对的错误。' }
+    ], '完整来源');
+    assert.ok(context.targets.some(target => target.path === '/sections/0/body'));
+    assert.ok(context.targets.some(target => target.path === '/sections/2/body'));
+});

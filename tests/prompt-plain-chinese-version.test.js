@@ -24,7 +24,16 @@ for (const [stage, old] of Object.entries(registry.FROZEN_PRE_PLAIN_CHINESE_PROM
         const newBytes = fs.readFileSync(path.join(root, current.path));
         const oldBlock = first(oldBytes.toString()), newBlock = first(newBytes.toString());
         assert.ok(variables(oldBlock).length > 0);
-        assert.deepEqual(variables(oldBlock), variables(newBlock));
+        if (stage === 'apiReaderRepair') {
+            assert.deepEqual(variables(oldBlock), [
+                'arxivId', 'mechanicalContract', 'repairTargets',
+                'sourceEvidence', 'title', 'validationFeedback'
+            ]);
+            assert.deepEqual(variables(newBlock), [
+                'arxivId', 'mechanicalContract', 'operationProtocol', 'repairTargets',
+                'sourceEvidence', 'title', 'validationFeedback'
+            ]);
+        } else assert.deepEqual(variables(oldBlock), variables(newBlock));
         const filled = newBlock.replace(/\{([A-Za-z][A-Za-z0-9_]+)\}/g, (_all, key) => `样本${key}`);
         assert.deepEqual(variables(filled), []);
         assert.notEqual(sha(oldBlock), sha(newBlock));

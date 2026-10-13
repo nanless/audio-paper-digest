@@ -26,12 +26,12 @@ const originalV4Sha = {
     scoringAudit: '2950f487c529718ff3b67dae19adcead074c0e9418e3ea3a371e758fe29a6902'
 };
 
-test('评分保持 v5，中文新提示使用主分析 v5 与 Reader v7/v11，旧 v4 仍按原 SHA 读取', () => {
+test('评分保持 v5，中文新提示使用主分析 v5 与 Reader v8/v12，旧 v4 仍按原 SHA 读取', () => {
     assert.equal(registry.currentPromptTextContract('scoringAudit'), 'analysis-prompt-text-v5');
     assert.equal(registry.currentTextStagePromptPath('scoringAudit'), 'prompts/scoring-audit-v5.md');
     assert.equal(registry.currentPromptTextContract('primaryAnalysis'), 'analysis-prompt-text-v5');
     for (const stage of ['apiReaderArticle', 'apiReaderRepair']) {
-        assert.equal(registry.currentPromptTextContract(stage), stage === 'apiReaderRepair' ? 'analysis-prompt-text-v11' : 'analysis-prompt-text-v7');
+        assert.equal(registry.currentPromptTextContract(stage), stage === 'apiReaderRepair' ? 'analysis-prompt-text-v12' : 'analysis-prompt-text-v8');
         assert.equal(registry.promptFilePathForContract(stage, 'analysis-prompt-text-v4'), `prompts/${stage === 'apiReaderArticle' ? 'api-reader-article' : 'api-reader-repair'}-v4.md`);
         assert.equal(registry.promptFilePathForContract(stage, 'analysis-prompt-text-v5'), `prompts/${stage === 'apiReaderArticle' ? 'api-reader-article' : 'api-reader-repair'}-v5.md`);
     }

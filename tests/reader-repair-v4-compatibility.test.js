@@ -33,7 +33,7 @@ function patchFor(draft, replacements) {
     }) };
 }
 
-test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v8', () => {
+test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v12', () => {
     const paper = { id: '2610.90037', title: '局部修复版本核验' };
     const oldStage = { status: 'complete', promptTextContract: 'analysis-prompt-text-v4',
         repairPromptTextContract: 'analysis-prompt-text-v3' };
@@ -43,7 +43,7 @@ test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v8', () => 
     const oldFingerprint = fingerprint(oldStage);
     assert.equal(versions.promptFilePathForContract('apiReaderRepair', oldStage.repairPromptTextContract),
         'prompts/api-reader-repair-v3.md');
-    assert.equal(versions.currentPromptTextContract('apiReaderRepair'), 'analysis-prompt-text-v11');
+    assert.equal(versions.currentPromptTextContract('apiReaderRepair'), 'analysis-prompt-text-v12');
     assert.notEqual(fingerprint({ status: 'pending' }), oldFingerprint);
     assert.equal(fingerprint(oldStage), oldFingerprint);
     assert.equal(JSON.stringify(oldStage), before);
@@ -51,7 +51,7 @@ test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v8', () => 
         '03baf3e0c54831c8e6e25d2fda2f223e908a54353d0a2b54c68aa7cbd41cac2a');
 });
 
-test('真实公开局部请求使用当前完整原表修复 v8，保存的付费尝试数未清零', async t => {
+test('真实公开局部请求使用当前按目标修复 v12，保存的付费尝试数未清零', async t => {
     const directory = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-repair-v4-'));
     t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
     const draft = createReaderTestArticle();
@@ -65,7 +65,18 @@ test('真实公开局部请求使用当前完整原表修复 v8，保存的付�
             stages.push(options.usageContext.stage);
             if (stages.length === 1) return JSON.stringify(draft);
             const prompt = messages[0].content[0].text;
-            assert.match(prompt, /本次只补这一张，剩余已声明的缺表在后续修复中逐项补齐/);
+            const targetLine = prompt.split('\n').find(line => line.startsWith('{"draftSha256":'));
+            assert.ok(targetLine, '正常请求须包含真实修复目标');
+            const context = JSON.parse(targetLine);
+            const modifiesTables = context.targets.some(target => target.path.startsWith('/tableBindings/'))
+                || Boolean(context.atomicOperation);
+            if (modifiesTables) {
+                assert.match(prompt, /本次只补这一张，剩余已声明的缺表在后续修复中逐项补齐/);
+                assert.match(prompt, /completeTable/);
+                assert.match(prompt, /source_quotes/);
+            } else {
+                assert.match(prompt, /修复论文解读中明确列出的错误，只输出获准修改项/);
+            }
             assert.doesNotMatch(prompt, /新增.*1.*总数.*等于/);
             if (stages.length === 2) return JSON.stringify(patchFor(draft, [['/readerTitle', '声音表示如何与语义条件连接起来']]));
             throw stop;

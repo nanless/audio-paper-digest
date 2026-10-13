@@ -58,7 +58,8 @@ test('新修复提示明确完整原表优先，来源证据字节和授权目�
     assert.equal(context.evidence, sourceEvidence);
     assert.deepEqual(context.targets.map(target => target.path), ['/tableBindings/0', '/sections/0/body']);
     const values = { title: '原论文', arxivId: '2610.99971', mechanicalContract: '原检查不变',
-        validationFeedback: context.targetGuidance, repairTargets: JSON.stringify(context), sourceEvidence };
+        validationFeedback: context.targetGuidance, repairTargets: JSON.stringify(context), sourceEvidence,
+        operationProtocol: repair.repairOperationProtocol(context) };
     const oldPrompt = loadPrompt('prompts/api-reader-repair-v8.md', values);
     const newPrompt = loadPrompt(versions.currentTextStagePromptPath('apiReaderRepair'), values);
     assert.doesNotMatch(oldPrompt, /表格输出方式以本提示词和本轮授权路径为准/);
