@@ -123,7 +123,9 @@ async function reanalyzeSelected(ids, options = {}) {
         if (!fullStageOptions || !recovery || typeof recovery !== 'object' || Array.isArray(recovery)
             || Object.entries(recovery).some(([id, value]) => !readerFeedbacks.has(id)
                 || !value || typeof value !== 'object' || Array.isArray(value)
-                || Object.keys(value).sort().join(',') !== 'paperSha256,snapshotSha256'
+                || !['paperSha256,snapshotSha256', 'paperSha256,recoveryHistorySha256,snapshotSha256']
+                    .includes(Object.keys(value).sort().join(','))
+                || (Object.hasOwn(value, 'recoveryHistorySha256') && !/^[a-f0-9]{64}$/.test(value.recoveryHistorySha256 || ''))
                 || !/^[a-f0-9]{64}$/.test(value.paperSha256 || '')
                 || !/^[a-f0-9]{64}$/.test(value.snapshotSha256 || ''))) {
             throw new Error('Reader原输入恢复须指定原全阶段运行、独立反馈及准确的当前记录与快照SHA');

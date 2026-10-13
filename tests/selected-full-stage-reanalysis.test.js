@@ -765,6 +765,34 @@ test('Reader原输入恢复只核指定快照，不清旧失败或旧候选，�
                                 { ...expected, paperSha256: deep.stableFingerprint(emptyScan) });
                             assert.equal(kept.analysisStageCheckpoints.demoLinkScan, '');
                         }
+                        const continued = structuredClone(damaged);
+                        continued.readerInputSnapshotRecoveries = [structuredClone(deep.restoreReviewedReaderInputSnapshot(
+                            damaged, sample.plan, feedback, expected).readerInputSnapshotRecoveries[0])];
+                        continued.latestAnalysisAttemptErrorCode = 'READER_RETURN_PROTECTION_REJECTED';
+                        continued.latestAnalysisAttemptError = '完整非Reader阶段不得改写：primaryAnalysis\n真实调用保护拒绝';
+                        const continuation = { ...expected, paperSha256: deep.stableFingerprint(continued),
+                            recoveryHistorySha256: deep.stableFingerprint(continued.readerInputSnapshotRecoveries[0]) };
+                        const resumed = deep.restoreReviewedReaderInputSnapshot(continued, sample.plan, feedback, continuation);
+                        assert.equal(resumed.analysis, original.analysis);
+                        assert.deepEqual(resumed.readerInputSnapshotRecoveries[0], continued.readerInputSnapshotRecoveries[0]);
+                        for (const alter of [
+                            value => { delete value.readerInputSnapshotRecoveries; },
+                            value => { value.readerInputSnapshotRecoveries[0].readerArticleSha256 = '0'.repeat(64); },
+                            value => { value.readerInputSnapshotRecoveries[0].parentFactReview.feedbackSha256 = '1'.repeat(64); },
+                            value => { value.readerInputSnapshotRecoveries[0].readerFactReview.sourceFiles['source.txt'] = '2'.repeat(64); },
+                            value => { value.readerInputSnapshotRecoveries[0].failure.latestAnalysisAttemptErrorCode = 'MODEL_AUTH_ERROR'; },
+                            value => { value.readerInputSnapshotRecoveries[0].originalPrimaryStage.error = '真正主文失败'; },
+                            value => { value.readerInputSnapshotRecoveries[0].originalStages.scoringAudit = { status: 'complete', changed: true }; },
+                            value => { value.latestAnalysisAttemptError = '完整非Reader阶段不得改写：scoringAudit'; },
+                        ]) {
+                            const bad = structuredClone(continued); alter(bad);
+                            assert.throws(() => deep.restoreReviewedReaderInputSnapshot(bad, sample.plan, feedback, {
+                                ...continuation, paperSha256: deep.stableFingerprint(bad),
+                                recoveryHistorySha256: deep.stableFingerprint(bad.readerInputSnapshotRecoveries?.[0] || null),
+                            }), /恢复检查未通过/);
+                        }
+                        assert.throws(() => deep.restoreReviewedReaderInputSnapshot(continued, sample.plan, feedback,
+                            { ...continuation, recoveryHistorySha256: '3'.repeat(64) }), /原恢复记录/);
                         const before = structuredClone(damaged);
                         const restored = deep.restoreReviewedReaderInputSnapshot(damaged, sample.plan, feedback, expected);
                         assert.equal(restored.analysis, original.analysis);

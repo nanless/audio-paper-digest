@@ -10455,11 +10455,14 @@ function restoreReviewedReaderInputSnapshot(paper, plan, readerFeedback, expecte
     if (paper.analysisManifest.sourceAcquisitionLatestFailure) fail('来源仍有未解决的失败');
     const primary = paper.analysisManifest?.stages?.primaryAnalysis;
     const prefix = '事实反馈绑定检查未通过：';
+    const oldScopeFailure = paper.latestAnalysisAttemptErrorCode === 'DAILY_FACT_REVIEW_INTEGRITY'
+        && [facts.READER_SCOPE_MODEL_REJECTED, facts.READER_PRIMARY_REQUIRED]
+            .some(message => paper.latestAnalysisAttemptError === prefix + message);
+    const returnedGuardFailure = paper.latestAnalysisAttemptErrorCode === 'READER_RETURN_PROTECTION_REJECTED'
+        && String(paper.latestAnalysisAttemptError || '').startsWith('完整非Reader阶段不得改写：primaryAnalysis\n');
     if (primary?.status !== 'transient_failure'
         || primary.error !== prefix + facts.READER_SCOPE_MODEL_REJECTED
-        || paper.latestAnalysisAttemptErrorCode !== 'DAILY_FACT_REVIEW_INTEGRITY'
-        || ![facts.READER_SCOPE_MODEL_REJECTED, facts.READER_PRIMARY_REQUIRED]
-            .some(message => paper.latestAnalysisAttemptError === prefix + message)) fail('不是已确认的长文纠错调用范围拒绝');
+        || (!oldScopeFailure && !returnedGuardFailure)) fail('不是已确认的长文纠错调用范围拒绝');
     full.assertPrepared(paper);
     const parent = facts.current(normalizedId(paper));
     if (!parent?.proof || parent.readerOnly || parent.coreOnly || parent.scoringOnly
@@ -10472,6 +10475,25 @@ function restoreReviewedReaderInputSnapshot(paper, plan, readerFeedback, expecte
         || stableFingerprint(stage.factReview) !== stableFingerprint(bound.proof)
         || stage.articleSha256 !== crypto.createHash('sha256').update(String(paper.apiReaderArticle || '')).digest('hex')
         || stage.planSha256 !== stableFingerprint(paper.apiReaderPlan)) fail('新长文产物或反馈身份不符');
+    const previousRecovery = returnedGuardFailure ? paper.readerInputSnapshotRecoveries?.at(-1) : null;
+    if (returnedGuardFailure) {
+        const previous = previousRecovery;
+        if (!expected.recoveryHistorySha256 || !previous
+            || stableFingerprint(previous) !== expected.recoveryHistorySha256
+            || previous.contract !== 'reader-original-input-snapshot-recovery-v1'
+            || !/^[a-f0-9]{64}$/.test(previous.originalPaperSha256 || '')
+            || !/^[a-f0-9]{64}$/.test(previous.snapshotSha256 || '')
+            || previous.readerArticleSha256 !== stage.articleSha256
+            || stableFingerprint(previous.parentFactReview) !== stableFingerprint(parent.proof)
+            || stableFingerprint(previous.readerFactReview) !== stableFingerprint(bound.proof)
+            || previous.originalPrimaryStage?.status !== 'transient_failure'
+            || previous.originalPrimaryStage.error !== prefix + facts.READER_SCOPE_MODEL_REJECTED
+            || stableFingerprint(previous.originalPrimaryStage.factReview) !== stableFingerprint(parent.proof)
+            || previous.failure?.latestAnalysisAttemptErrorCode !== 'DAILY_FACT_REVIEW_INTEGRITY'
+            || ![facts.READER_SCOPE_MODEL_REJECTED, facts.READER_PRIMARY_REQUIRED]
+                .some(message => previous.failure.latestAnalysisAttemptError === prefix + message))
+            fail('调用返回保护失败没有同一来源、反馈和长文的原恢复记录');
+    } else if (expected.recoveryHistorySha256 !== undefined) fail('非续恢复不能附带历史恢复身份');
     const snapshots = (paper.analysisStaleSnapshots || []).filter(snapshot =>
         snapshot.invalidatedStage === 'apiReaderArticle'
         && snapshot.replacementFingerprint === bound.proof.feedbackSha256
@@ -10480,6 +10502,19 @@ function restoreReviewedReaderInputSnapshot(paper, plan, readerFeedback, expecte
     if (snapshots.length !== 1) fail('原始正文检查记录不唯一或哈希不符');
     if (snapshots[0].payloadSha256 !== expected.snapshotSha256) fail('指定原快照不同');
     const payload = validateStaleAnalysisSnapshot(snapshots[0]);
+    if (previousRecovery) {
+        const originalBodySha256 = crypto.createHash('sha256').update(payload.analysisCheckpoint).digest('hex');
+        if (previousRecovery.readerFactReview.coreAnalysisSha256 !== originalBodySha256)
+            fail('前次恢复记录与本次原始正文不同');
+        for (const [name, previousStage] of Object.entries(previousRecovery.originalStages || {})) {
+            if (['primaryAnalysis', 'apiReaderArticle'].includes(name)) continue;
+            if (!Object.hasOwn(payload.stages, name)) fail(`前次恢复阶段不属于本次检查记录：${name}`);
+            const previous = structuredClone(previousStage), selected = structuredClone(payload.stages[name]);
+            if (['imageDiscovery', 'imageDownload'].includes(name)) { delete previous.updatedAt; delete selected.updatedAt; }
+            if (stableFingerprint(previous) !== stableFingerprint(selected))
+                fail(`前次恢复阶段与本次检查记录不同：${name}`);
+        }
+    }
     const oldPrimary = payload.stages.primaryAnalysis;
     if (oldPrimary?.status !== 'complete' || stableFingerprint(oldPrimary.factReview) !== stableFingerprint(parent.proof)
         || oldPrimary.fullStageReanalysisRunId !== paper.fullStageReanalysis.runId) fail('原主文阶段身份不符');
