@@ -266,7 +266,7 @@ test('完整主文局部资格拒真实主文、评分、来源损坏及未签Re
 test('正常生成器只发一次有界正文补丁，不发全文并记真实局部次数', async (t) => {
     const sample = await createLocalSample(t);
     const root = fs.mkdtempSync(
-        path.join(os.tmpdir(), 'reader-fact-generator-'),
+        path.join(fs.realpathSync(os.tmpdir()), 'reader-fact-generator-'),
     );
     const previousRuntime = Config.FILES.runtimeDir;
     Config.FILES.runtimeDir = root;
@@ -284,6 +284,7 @@ test('正常生成器只发一次有界正文补丁，不发全文并记真实�
             { readerFactLocalRevision: true },
         );
         const options = {
+            readerAttemptsDir: path.join(root, 'attempts'),
             sourceText: sample.source.text,
             structuredArtifacts: sample.source.structuredArtifacts,
             reviewFeedback: feedback,
@@ -314,13 +315,11 @@ test('正常生成器只发一次有界正文补丁，不发全文并记真实�
                     return JSON.stringify({
                         version: 1,
                         draftSha256: repair.hashDraft(draft),
-                        replacements: targets.map((target) => ({
-                            path: target.path,
-                            oldSha256: target.oldSha256,
-                            value: target.value.replace(
-                                sample.feedback.rejectedReaderClaims[0],
-                                '论文未报告该闭源模型的计算成本，因此不能据此核算开销。',
-                            ),
+                        sentenceReplacements: repair.factLocalSentenceTargets({
+                            draftSha256: repair.hashDraft(draft), targets,
+                        }).map(({ originalSentence, ...identity }) => ({
+                            ...identity,
+                            value: '论文未报告该闭源模型的计算成本，因此不能据此核算开销。',
                         })),
                     });
                 },
@@ -639,7 +638,9 @@ test('真实公共刷新进入新解释补丁提示，未覆盖引文中的错�
                         const prompt = typeof messages[0].content === 'string' ? messages[0].content
                             : messages[0].content.filter(item => item.type === 'text').map(item => item.text).join('\n');
                         assert.ok(prompt.includes('/conceptBridges/0/explanation'));
-                        assert.ok(prompt.includes('terms、其他字段'));
+                        assert.ok(prompt.includes('sentenceReplacements'));
+                        assert.ok(prompt.includes('claimSha256'));
+                        assert.ok(!prompt.includes('当前完整文字字段'));
                         throw sentinel;
                     },
                     readerRecordDisposition: async () => {},

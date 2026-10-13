@@ -195,6 +195,7 @@ function currentPromptTextContract(stage) {
 // 否则升到 v2 之后旧记录会被按 v2 文件重算。
 function promptFilePathForContract(stage, promptTextContract) {
     const declared = String(promptTextContract || '') || ANALYSIS_PROMPT_TEXT_V1_CONTRACT;
+    if (stage === 'apiReaderRepair' && declared === 'reader-fact-local-sentence-prompt-v3') return 'prompts/api-reader-fact-local-v3.md';
     if (stage === 'apiReaderRepair' && declared === 'reader-fact-local-text-prompt-v2') return 'prompts/api-reader-fact-local-v2.md';
     if (stage === 'apiReaderRepair' && declared === 'reader-fact-local-body-prompt-v1') return 'prompts/api-reader-fact-local-v1.md';
     if (declared === ANALYSIS_PROMPT_TEXT_V1_CONTRACT) {

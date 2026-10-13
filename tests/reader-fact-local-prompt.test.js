@@ -40,7 +40,8 @@ test('公共调用未代拼引文也显式携带原文，已有逐字引文不�
 
 test('独立合同登记不改变默认或历史提示词路径', () => {
     assert.equal(prompts.currentTextStagePromptPath('apiReaderRepair'), 'prompts/api-reader-repair-v11.md');
-    assert.equal(prompts.promptFilePathForContract('apiReaderRepair', repair.FACT_LOCAL_PROMPT_CONTRACT), 'prompts/api-reader-fact-local-v2.md');
+    assert.equal(prompts.promptFilePathForContract('apiReaderRepair', repair.FACT_LOCAL_PROMPT_CONTRACT), 'prompts/api-reader-fact-local-v3.md');
+    assert.equal(prompts.promptFilePathForContract('apiReaderRepair', 'reader-fact-local-text-prompt-v2'), 'prompts/api-reader-fact-local-v2.md');
     assert.equal(prompts.promptFilePathForContract('apiReaderRepair', 'reader-fact-local-body-prompt-v1'), 'prompts/api-reader-fact-local-v1.md');
     assert.throws(() => prompts.promptFilePathForContract('primaryAnalysis', repair.FACT_LOCAL_PROMPT_CONTRACT));
 });

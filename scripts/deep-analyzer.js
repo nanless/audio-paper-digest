@@ -2350,6 +2350,27 @@ function rehydrateWhitespaceEquivalentSourceQuote(rawQuote, sourceText) {
     return match[0];
 }
 
+// 仅把已经逐字存在的完整引文恢复为原文空白，先去除无须模型改写的格式诊断。
+// 不补词、不改数字或单位，不缩短引文；原始付费响应与封存来源均不改动。
+function normalizeReaderSourceQuoteWhitespace(candidate, sourceText) {
+    if (!candidate || !Array.isArray(candidate.tableBindings) || typeof sourceText !== 'string') return null;
+    const beforeDraftSha256 = stableFingerprint(candidate);
+    const quotes = [];
+    for (const [bindingIndex, binding] of candidate.tableBindings.entries()) {
+        if (binding?.sourceType !== 'source_quotes' || !Array.isArray(binding.sourceQuotes)) continue;
+        binding.sourceQuotes = binding.sourceQuotes.map((quote, quoteIndex) => {
+            const exact = rehydrateWhitespaceEquivalentSourceQuote(quote, sourceText);
+            if (exact === null || exact === quote) return quote;
+            quotes.push({ bindingIndex, quoteIndex, beforeSha256: stableFingerprint(quote), afterSha256: stableFingerprint(exact) });
+            return exact;
+        });
+    }
+    if (quotes.length === 0) return null;
+    return { contract: 'reader-source-quote-whitespace-v1', changed: true,
+        sourceTextSha256: crypto.createHash('sha256').update(sourceText).digest('hex'),
+        beforeDraftSha256, afterDraftSha256: stableFingerprint(candidate), quotes };
+}
+
 function resolvedDeclaredSourceQuotes(binding, sourceText, allowWhitespaceRepair) {
     if (!Array.isArray(binding?.sourceQuotes)) return [];
     return [...new Set(binding.sourceQuotes.flatMap(quote => {
@@ -7872,6 +7893,11 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             draftOrderMappings.push(noFigureCleanup.mapping);
             mechanicalNoFigureCleanupChanged = true;
         }
+        // 明确只修正文或资源的模式不授权改来源字段，继续由原有完整校验决定。
+        if (options.readerFactLocalRevision !== true && options.resourceLocalRevision !== true) {
+            const quoteWhitespace = normalizeReaderSourceQuoteWhitespace(candidate, options.sourceText);
+            if (quoteWhitespace) draftOrderMappings.push(quoteWhitespace);
+        }
         const normalizationIssues = currentIssues.filter(issue => issue?.code !== repair.TABLE_COUNT_ISSUE_CODE
             && !repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair);
         normalizeReaderConceptBridgeTerms(candidate);
@@ -8360,7 +8386,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 requiredKinds: API_READER_REQUIRED_KINDS })
             : repairContext && options.readerFactLocalRevision === true
             ? loadPrompt(readerRepairPromptPath(options), { title: paper.title || '', arxivId: getPaperArxivId(paper),
-                ...repair.factLocalPromptVariables(repairContext, String(options.reviewFeedback || '').trim(),
+                ...repair.factLocalSentencePromptVariables(repairContext, String(options.reviewFeedback || '').trim(),
                     options.sourceText || '', require('./lib/daily-fact-review').current(getPaperArxivId(paper)).feedback.sourceQuotes) })
             : repairContext ? loadPrompt(currentTextStagePromptPath('apiReaderRepair'), {
             title: paper.title || '', arxivId: getPaperArxivId(paper),
@@ -8521,6 +8547,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         try {
             if (repairContext) {
                 let patch = repair.parseReaderPatchJson(extractJsonObjectText(raw));
+                if (options.readerFactLocalRevision === true) patch = repair.compileFactLocalSentencePatch(
+                    candidate, patch, repairContext, { readerFactLocalRevision: true });
                 let sectionGroupProof = null;
                 if (repairContext.sectionGroupPlanContract) {
                     const compiled = repair.compileSectionIndexGroupPlan(candidate, patch, repairContext);
@@ -18823,6 +18851,7 @@ module.exports = {
     separateApiReaderTableBlocks,
     rebindApiReaderFigurePlacementQuotes,
     removeDuplicateReaderLongSentences,
+    normalizeReaderSourceQuoteWhitespace,
     prepareApiReaderRetryIdentity: (paper, analysis, sourceEvidence, options = {}) =>
         generateApiReaderArticleDetailed(paper, analysis, sourceEvidence, { ...options, readerIdentityOnly: true }),
     generateApiReaderArticleDetailed,

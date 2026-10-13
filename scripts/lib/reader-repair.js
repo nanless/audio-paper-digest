@@ -2757,7 +2757,7 @@ function scientificDoubleRenderingGuidance(draft, issues, targets, sourceText) {
 }
 
 
-const FACT_LOCAL_PROMPT_CONTRACT = 'reader-fact-local-text-prompt-v2';
+const FACT_LOCAL_PROMPT_CONTRACT = 'reader-fact-local-sentence-prompt-v3';
 function factLocalPromptVariables(context, reviewFeedback, sourceText, sourceQuotes) {
     if (!context || context.atomicOperation || !Array.isArray(context.targets)
         || context.targets.length === 0 || context.targets.length > 8
@@ -2782,6 +2782,75 @@ function factLocalPromptVariables(context, reviewFeedback, sourceText, sourceQuo
         ? '以下逐字原文已经核验，仅用于纠正获准原句：\n' + missingQuotes.join('\n') : ''].filter(Boolean).join('\n');
     return { factFeedback,
         repairTargets: JSON.stringify({ draftSha256: context.draftSha256, targets: context.targets }) };
+}
+
+// 只有显式获准的事实局部调用可以编译这组原句回应。
+function factLocalSentenceTargets(context) {
+    if (!context || context.atomicOperation || !Array.isArray(context.targets)
+        || !context.targets.length || context.targets.length > 8) throw new Error('事实原句请求缺少受控目标');
+    const sentences = [];
+    const paths = new Set();
+    for (const target of context.targets) {
+        if (!/^\/(?:sections\/\d+\/body|conceptBridges\/\d+\/explanation)$/.test(target.path)
+            || paths.has(target.path) || typeof target.value !== 'string'
+            || target.oldSha256 !== hashDraft(target.value)
+            || !Array.isArray(target.authorizedClaims) || !target.authorizedClaims.length) {
+            throw new Error('事实原句请求含未授权目标');
+        }
+        paths.add(target.path);
+        let end = 0;
+        const spans = target.authorizedClaims.map(claim => ({ claim, start: target.value.indexOf(claim) }))
+            .sort((a, b) => a.start - b.start);
+        for (const span of spans) {
+            if (typeof span.claim !== 'string' || !span.claim || span.start < end
+                || target.value.split(span.claim).length !== 2) throw new Error('事实原句位置不唯一或重叠');
+            sentences.push({ path: target.path, oldSha256: target.oldSha256,
+                claimSha256: shaText(span.claim), start: span.start, originalSentence: span.claim });
+            end = span.start + span.claim.length;
+        }
+    }
+    if (sentences.length > 32) throw new Error('事实原句请求超过范围上限');
+    return sentences;
+}
+function factLocalSentencePromptVariables(context, reviewFeedback, sourceText, sourceQuotes) {
+    const { factFeedback } = factLocalPromptVariables(context, reviewFeedback, sourceText, sourceQuotes);
+    return { factFeedback, repairTargets: JSON.stringify({ draftSha256: context.draftSha256,
+        sentences: factLocalSentenceTargets(context) }) };
+}
+function compileFactLocalSentencePatch(draft, response, context, options = {}) {
+    assertSafeJson(response);
+    if (options.readerFactLocalRevision !== true || context.draftSha256 !== hashDraft(draft)
+        || !response || Object.keys(response).sort().join(',') !== 'draftSha256,sentenceReplacements,version'
+        || response.version !== 1 || response.draftSha256 !== context.draftSha256
+        || !Array.isArray(response.sentenceReplacements)) throw new Error('事实原句补丁缺少显式授权或稿件SHA过期');
+    const targets = factLocalSentenceTargets(context);
+    const allClaims = targets.map(target => target.originalSentence);
+    // 检查实际草稿的全部字符串，包括引用保护区和未授权节点。
+    assertReaderFactLocalCoverage(draft, allClaims);
+    if (response.sentenceReplacements.length !== targets.length) throw new Error('事实原句补丁必须覆盖全部获准原句');
+    const bound = new Map();
+    const key = item => JSON.stringify([item.path, item.oldSha256, item.claimSha256, item.start]);
+    for (const item of response.sentenceReplacements) {
+        if (!item || Object.keys(item).sort().join(',') !== 'claimSha256,oldSha256,path,start,value'
+            || !Number.isInteger(item.start) || typeof item.value !== 'string'
+            || !item.value.trim() || item.value.length > 4000
+            || /[\r\n]|\[\[|!\[|\||`|^\s*#|\*\*|__/.test(item.value)) {
+            throw new Error('事实原句补丁不得引入图表标记、标题或非原句结构');
+        }
+        const target = targets.find(target => key(target) === key(item));
+        if (!target || bound.has(key(item)) || nodeAt(draft, item.path) !== context.targets.find(t => t.path === item.path).value
+            || item.value === target.originalSentence) throw new Error('事实原句补丁目标未知、重复、过期或未修改');
+        bound.set(key(item), item.value);
+    }
+    const replacements = context.targets.map(target => {
+        const spans = targets.filter(sentence => sentence.path === target.path).sort((a, b) => b.start - a.start);
+        let value = target.value;
+        for (const sentence of spans) value = value.slice(0, sentence.start) + bound.get(key(sentence))
+            + value.slice(sentence.start + sentence.originalSentence.length);
+        return { path: target.path, oldSha256: target.oldSha256, value };
+    });
+    // 编译后复用原补丁范围约束与完整解析，不创建另一套恢复协议。
+    return { version: 1, draftSha256: context.draftSha256, replacements };
 }
 
 function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', options = {}) {
@@ -3171,7 +3240,7 @@ function applyTopLevelMetadataRepair(raw, patch, context) {
 }
 
 
-module.exports = { assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
+module.exports = { factLocalSentenceTargets, factLocalSentencePromptVariables, compileFactLocalSentencePatch, assertReaderFactLocalCoverage, FACT_LOCAL_PROMPT_CONTRACT, factLocalPromptVariables, conceptBridgeTermsDiagnostic, verifiedReaderFactIssues, REPAIR_VERSION, LANGUAGE_ERROR_CODE, collectReaderLanguageIssues, SECTION_GROUP_PLAN_CONTRACT, SECTION_BODY_GROUP_PLAN_CONTRACT, canUseBodyFieldIndexGroups, canUseSectionIndexGroups, compileSectionIndexGroupPlan, IMPLEMENTATION_ALLOWANCE_CONTRACT,
     IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT, TABLE_COUNT_ISSUE_CODE, TABLE_BINDING_ORDER_ISSUE_CODE,
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,
