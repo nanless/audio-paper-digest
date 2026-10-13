@@ -317,6 +317,8 @@ function findQuantitativeChineseNumerals(text) {
             match => ' '.repeat(match.length))
         // 「另一路」是承接上文的指代，不是量出来的计数。
         .replace(/另一个流|另一个条件(?=改动)/gu, match => ' '.repeat(match.length))
+        // “哪一个类别”是泛指选项，不是在报告实验类别数量。
+        .replace(/(?:哪|某|这|那)一个(?=类别)/gu, match => ' '.repeat(match.length))
         .replace(
             /(?:进一步|这一步|下一步|上一步|每一步|一次性|这一类|有趣二分)|(?:同一|统一|唯一|单一)(?=[\p{Script=Han}])|一个(?=(?:好看|漂亮|笼统|粗糙|清晰|完整|简单|直接|孤立|统一))|二分(?=(?:解释|结构|视角|框架|法))/gu,
             match => ' '.repeat(match.length)
@@ -364,6 +366,14 @@ function findQuantitativeChineseNumerals(text) {
                 const approximateTime = /^([一二两三四五六七八])([二三四五六七八九])十\s*(?:分钟|小时|秒|天)$/u.exec(finding.match);
                 const digits = { 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
                 if (approximateTime && digits[approximateTime[2]] === digits[approximateTime[1]] + 1) continue;
+            }
+            // 明确列出N个名称后接“N组”是普通枚举，检查名称数而非强制换成数码。
+            if (reason === 'measured_simple_integer' && /^[二三四五六七八九]组$/u.test(finding.match)) {
+                const count = { 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 }[finding.match[0]];
+                const prefix = value.slice(0, finding.index).split(/[，,。！？；;\n]/u).at(-1);
+                const names = prefix.split('、');
+                if (names.length === count && names.every(name => name.trim().length > 0
+                    && name.length <= 80 && /[\p{L}]/u.test(name))) continue;
             }
             // “这是一位说话人”是在介绍人物，不是在报告位宽或实验人数。
             // 保留真正的人数报告和“八位量化”等技术数值检查。
