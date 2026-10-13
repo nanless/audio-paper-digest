@@ -357,10 +357,225 @@ def proof_steering(pdf_bytes,table,audit,doc,profile):
         corrected.append(output)
     return {'contract':'sealed-pdf-cell-confirmation-v1','origin':'program-replay-from-sealed-pdf-not-model-input','profile':profile,'pdfSha256':sha(pdf_bytes),'backend':{'name':'pymupdf','version':fitz.VersionBind},'page':page_index+1,'originalTableDomSha256':table['sourceDomSha256'],'originalCaption':table['caption'],'pdfCaption':cap[4],'pdfTableBBox':[x0,top,x1,bottom],'headerProofs':header_proofs,'confirmedCells':confirmations,'displayDataRows':corrected}
 
+CHIME_HEADERS={'DNSMOS OVRL↑\\uparrow':'DNSMOS OVRL↑','WER (%)↓\\downarrow':'WER (%)↓'}
+def proof_chime(pdf_bytes,table,audit,doc,profile):
+    matrix=table['matrix'];width=len(matrix[0]);data_start=3
+    need(all(len(row)==width for row in matrix),'原DOM行列数不一致')
+    for ri,row in enumerate(matrix):
+        for ci,value in enumerate(row):
+            cells=[c for c in table['cells'] if c['row']<=ri<c['row']+c['rowspan'] and c['column']<=ci<c['column']+c['colspan']]
+            need(len(cells)==1 and cells[0]['text']==value,'原DOM完整网格或文字不能逐格重放')
+    caption_matches=[]
+    for page_index,page in enumerate(doc):
+        for block in page.get_text('blocks'):
+            if caption(block[4])==caption(table['caption']):
+                caption_matches.append((page_index,page,block))
+    need(len(caption_matches)==1,'完整图注不能唯一对应原PDF段落')
+    page_index,page,cap=caption_matches[0]
+    next_top=min([b[1] for b in page.get_text('blocks') if re.match(r'^Table\s+\d+[.:]',b[4]) and b[1]>cap[3]] or [page.rect.height])
+    full_rules=[]
+    for drawing in page.get_drawings():
+        for item in drawing['items']:
+            if item[0]=='l' and abs(item[1].y-item[2].y)<.02 and cap[3]<item[1].y<next_top:
+                full_rules.append((float(min(item[1].x,item[2].x)),float(max(item[1].x,item[2].x)),float(item[1].y)))
+    need(full_rules,'原表边界缺失')
+    widest=max(x1-x0 for x0,x1,_ in full_rules)
+    widths={(x0,x1) for x0,x1,_ in full_rules if abs(x1-x0-widest)<.02}
+    need(len(widths)==1,'原表完整边界不能唯一定位')
+    x0,x1=next(iter(widths));rules=[]
+    for drawing in page.get_drawings():
+        for item in drawing['items']:
+            if item[0]=='l' and abs(item[1].y-item[2].y)<.02 and abs(min(item[1].x,item[2].x)-x0)<.02 and abs(max(item[1].x,item[2].x)-x1)<.02 and cap[3]<item[1].y<next_top:
+                rules.append(float(item[1].y))
+    need(len(set(rules))>=3,'完整表格边界与表头分隔线不充分')
+    top,bottom=min(rules),max(rules)
+    words=words_in(page.get_text('words',sort=False),[x0,top,x1,bottom])
+    grouped=lines(words);data_lines=[]
+    for row in matrix[data_start:24]:
+        matches=[]
+        for cy,group in grouped:
+            if len(group)<9 or group[0][4]!=row[0]:continue
+            method_count=len(group)-8
+            if text(group[1:method_count+1])==row[1]:
+                matches.append((cy,[[group[0]],group[1:method_count+1]],[[word] for word in group[method_count+1:]]))
+        need(len(matches)==1,'完整方法行/列数不能唯一对应: '+row[0])
+        data_lines.append(matches[0])
+    need(all(data_lines[i][0]<data_lines[i+1][0] for i in range(len(data_lines)-1)),'原PDF行顺序不同')
+    column_words=[]
+    for ci in range(2):column_words.append([word for _,labels,_ in data_lines for word in labels[ci]])
+    for ci in range(width-2):column_words.append([cells[ci][0] for _,_,cells in data_lines])
+    edges=[x0]
+    for ci in range(width-1):
+        left=max(w[2] for w in column_words[ci]);right=min(w[0] for w in column_words[ci+1])
+        need(left<right,'PDF相邻列实际字形重叠，不能猜测列归属')
+        edges.append((left+right)/2)
+    edges.append(x1)
+    data_words={tuple(word) for _,label,cells in data_lines for word in [*[word for group in label for word in group],*[c[0] for c in cells]]}
+    header_words=[word for word in words if (word[1]+word[3])/2<data_lines[0][0]-.75]
+    need(set(tuple(w) for w in words)==data_words|set(tuple(w) for w in header_words),'表格区域存在未覆盖数据、标签或其他字形')
+    header_matches=[];header_proofs=[];covered=set();confirmations=[]
+    for cell in [c for c in table['cells'] if c['row']<data_start]:
+        visible=CHIME_HEADERS.get(cell['text'],cell['text']);possible=[]
+        if not visible:
+            header_matches.append((cell,[]));header_proofs.append({'row':cell['row'],'column':cell['column'],'text':cell['text'],'glyphs':[]});continue
+        local=[w for w in header_words if edges[cell['column']]<=((w[0]+w[2])/2)<=edges[cell['column']+cell['colspan']]]
+        for _,group in lines(local):
+            for start in range(len(group)):
+                for end in range(start+1,len(group)+1):
+                    if text(group[start:end])==visible:possible.append(group[start:end])
+        if visible=='Input #mics' and text([w for _,group in lines(local) for w in group])==visible:possible=[local]
+        need(len(possible)==1,'列头单位或数学名称不能唯一对应: '+cell['text'])
+        matched=possible[0];header_matches.append((cell,matched));covered.update(tuple(w) for w in matched)
+        header_proofs.append({'row':cell['row'],'column':cell['column'],'text':cell['text'],'glyphs':[list(w[:5]) for w in matched]})
+        if visible!=cell['text']:
+            confirmations.append({'row':cell['row'],'column':cell['column'],'originalText':cell['text'],'originalCellDomSha256':cell['sourceDomSha256'],'visibleText':visible,'status':'pdf-confirmed-mathml-header','glyphs':[list(w[:5]) for w in matched]})
+    need(covered==set(tuple(w) for w in header_words),'PDF实际列头字形含未覆盖单位、组别或符号')
+    anchors=[]
+    for row in range(data_start):
+        points=[(w[1]+w[3])/2 for c,matched in header_matches if c['row']==row and c['rowspan']==1 for w in matched]
+        need(points and max(points)-min(points)<=.75,'单行表头上下层不能唯一定位')
+        anchors.append(sum(points)/len(points))
+    need(all(anchors[i]<anchors[i+1] for i in range(2)),'三层表头上下关系与DOM不同')
+    bands=[top,(anchors[0]+anchors[1])/2,(anchors[1]+anchors[2])/2,data_lines[0][0]-.75]
+    for c,matched in header_matches:
+        need(all(bands[c['row']]-.02<=(w[1]+w[3])/2<=bands[c['row']+c['rowspan']]+.02 for w in matched),'表头字形或合并行层级与DOM不同')
+        if not matched:
+            need(not any(edges[c['column']]<=((w[0]+w[2])/2)<edges[c['column']+c['colspan']] and bands[c['row']]<=(w[1]+w[3])/2<bands[c['row']+c['rowspan']] for w in header_words),'DOM空表头格在PDF中不是空格')
+    corrected=[]
+    for ri,(cy,label,cells) in enumerate(data_lines,data_start):
+        output=matrix[ri][:2]
+        for ci in range(2):
+            need(text(label[ci])==matrix[ri][ci],'原PDF行标签不同')
+        for ci,matched in enumerate(cells,2):
+            word=matched[0];visible=word[4];original=matrix[ri][ci]
+            need(edges[ci]-.02<=word[0] and word[2]<=edges[ci+1]+.02,'数值字形越过原列位置')
+            status='unchanged'
+            if original!=visible:
+                need(re.fullmatch(r'[+−-]?\d+(?:\.\d+)?',visible) is not None and original in [visible+visible,visible+visible.replace('−','-')],'原数值不是同一PDF完整值双分支显示，不能修补错数或符号')
+                status='pdf-confirmed-double-rendering'
+            else:need(visible in ['—','-'] or re.fullmatch(r'[+−-]?\d+(?:\.\d+)?',visible) is not None,'数值格含未知单位或文字')
+            source_cell=next(c for c in table['cells'] if c['row']==ri and c['column']==ci)
+            confirmations.append({'row':ri,'column':ci,'originalText':original,'originalCellDomSha256':source_cell['sourceDomSha256'],'visibleText':visible,'status':status,'glyph':list(word[:5])})
+            output.append(visible)
+        corrected.append(output)
+    note_words=[w for w in page.get_text('words',sort=False) if bottom<w[1] and w[3]<next_top and x0<=w[0] and w[2]<=x1]
+    note_lines=lines(note_words)
+    need([text(group) for _,group in note_lines]==[matrix[24][0],matrix[25][0]],'原表注释必须完整逐字覆盖')
+    corrected.extend(copy.deepcopy(matrix[24:]))
+    return {'contract':'sealed-pdf-cell-confirmation-v1','origin':'program-replay-from-sealed-pdf-not-model-input','profile':profile,'pdfSha256':sha(pdf_bytes),'backend':{'name':'pymupdf','version':fitz.VersionBind},'page':page_index+1,'originalTableDomSha256':table['sourceDomSha256'],'originalCaption':table['caption'],'pdfCaption':cap[4],'pdfTableBBox':[x0,top,x1,bottom],'headerProofs':header_proofs,'confirmedCells':confirmations,'displayDataRows':corrected}
+def proof_chime_mc(pdf_bytes,table,audit,doc,profile):
+    matrix=table['matrix'];width=len(matrix[0]);data_start=2
+    need(matrix[3]==['','UltraM2M-Whis','','','','','',''],'独立方法类别行必须完整保留，其他格保持原PDF空白')
+    need(all(len(row)==width for row in matrix),'原DOM行列数不一致')
+    for ri,row in enumerate(matrix):
+        for ci,value in enumerate(row):
+            cells=[c for c in table['cells'] if c['row']<=ri<c['row']+c['rowspan'] and c['column']<=ci<c['column']+c['colspan']]
+            need(len(cells)==1 and cells[0]['text']==value,'原DOM完整网格或文字不能逐格重放')
+    caption_matches=[]
+    for page_index,page in enumerate(doc):
+        for block in page.get_text('blocks'):
+            if caption(block[4].replace('UltraM2M-\nWhis','UltraM2M-Whis'))==caption(table['caption']):
+                caption_matches.append((page_index,page,block))
+    need(len(caption_matches)==1,'完整图注不能唯一对应原PDF段落')
+    page_index,page,cap=caption_matches[0]
+    next_top=min([b[1] for b in page.get_text('blocks') if re.match(r'^Table\s+\d+[.:]',b[4]) and b[1]>cap[3]] or [page.rect.height])
+    full_rules=[]
+    for drawing in page.get_drawings():
+        for item in drawing['items']:
+            if item[0]=='l' and abs(item[1].y-item[2].y)<.02 and cap[3]<item[1].y<next_top:
+                full_rules.append((float(min(item[1].x,item[2].x)),float(max(item[1].x,item[2].x)),float(item[1].y)))
+    need(full_rules,'原表边界缺失')
+    widest=max(x1-x0 for x0,x1,_ in full_rules)
+    widths={(x0,x1) for x0,x1,_ in full_rules if abs(x1-x0-widest)<.02}
+    need(len(widths)==1,'原表完整边界不能唯一定位')
+    x0,x1=next(iter(widths));rules=[]
+    for drawing in page.get_drawings():
+        for item in drawing['items']:
+            if item[0]=='l' and abs(item[1].y-item[2].y)<.02 and abs(min(item[1].x,item[2].x)-x0)<.02 and abs(max(item[1].x,item[2].x)-x1)<.02 and cap[3]<item[1].y<next_top:
+                rules.append(float(item[1].y))
+    need(len(set(rules))>=3,'完整表格边界与表头分隔线不充分')
+    top,bottom=min(rules),max(rules)
+    words=words_in(page.get_text('words',sort=False),[x0,top,x1,bottom])
+    grouped=lines(words);data_lines=[]
+    data_indexes=[2,4,5,6,7,8,9]
+    for index in data_indexes:
+        row=matrix[index];matches=[]
+        for cy,group in grouped:
+            if group[0][4]!=row[0] or len(group)<8:continue
+            prefix=group[:-4]
+            for method_end in range(2,len(prefix)-1):
+                if text(prefix[1:method_end])==row[1] and text(prefix[method_end+1:])==row[3]:
+                    matches.append((cy,[[group[0]],prefix[1:method_end],[prefix[method_end]],prefix[method_end+1:]],[[word] for word in group[-4:]]))
+        need(len(matches)==1,'原PDF方法/输入数/数据集与完整列数不能唯一对应: '+row[0])
+        data_lines.append(matches[0])
+    need(all(data_lines[i][0]<data_lines[i+1][0] for i in range(len(data_lines)-1)),'原PDF方法顺序不同')
+    column_words=[]
+    for ci in range(4):column_words.append([word for _,labels,_ in data_lines for word in labels[ci]])
+    for ci in range(width-4):column_words.append([cells[ci][0] for _,_,cells in data_lines])
+    edges=[x0]
+    for ci in range(width-1):
+        left=max(w[2] for w in column_words[ci]);right=min(w[0] for w in column_words[ci+1])
+        need(left<right,'PDF相邻列实际字形重叠，不能猜测列归属')
+        edges.append((left+right)/2)
+    edges.append(x1)
+    data_words={tuple(word) for _,label,cells in data_lines for word in [*[word for group in label for word in group],*[c[0] for c in cells]]}
+    header_words=[word for word in words if (word[1]+word[3])/2<data_lines[0][0]-.75]
+    category_words=[w for w in words if w[4]=='UltraM2M-Whis'];need(all(edges[1]<(word[0]+word[2])/2<edges[2] for word in category_words),'方法类别字形必须落在原方法列内');need(len(category_words)==1 and text(category_words)==matrix[3][1],'独立方法类别行不能完整对应');need(data_lines[0][0]<(category_words[0][1]+category_words[0][3])/2<data_lines[1][0],'方法类别行位置不对应');need(set(tuple(w) for w in words)==data_words|set(tuple(w) for w in header_words)|set(tuple(w) for w in category_words),'表格区域存在未覆盖数据、标签或其他字形')
+    header_matches=[];header_proofs=[];covered=set();confirmations=[]
+    for cell in [c for c in table['cells'] if c['row']<data_start]:
+        visible=CHIME_HEADERS.get(cell['text'],cell['text']);possible=[]
+        if not visible:
+            header_matches.append((cell,[]));header_proofs.append({'row':cell['row'],'column':cell['column'],'text':cell['text'],'glyphs':[]});continue
+        local=[w for w in header_words if edges[cell['column']]<=((w[0]+w[2])/2)<=edges[cell['column']+cell['colspan']]]
+        for _,group in lines(local):
+            for start in range(len(group)):
+                for end in range(start+1,len(group)+1):
+                    if text(group[start:end])==visible:possible.append(group[start:end])
+        if visible=='#input mics' and text([w for _,group in lines(local) for w in group])==visible:possible=[local]
+        need(len(possible)==1,'列头单位或数学名称不能唯一对应: '+cell['text'])
+        matched=possible[0];header_matches.append((cell,matched));covered.update(tuple(w) for w in matched)
+        header_proofs.append({'row':cell['row'],'column':cell['column'],'text':cell['text'],'glyphs':[list(w[:5]) for w in matched]})
+        if visible!=cell['text']:
+            confirmations.append({'row':cell['row'],'column':cell['column'],'originalText':cell['text'],'originalCellDomSha256':cell['sourceDomSha256'],'visibleText':visible,'status':'pdf-confirmed-mathml-header','glyphs':[list(w[:5]) for w in matched]})
+    need(covered==set(tuple(w) for w in header_words),'PDF实际列头字形含未覆盖单位、组别或符号')
+    anchors=[]
+    for row in range(data_start):
+        points=[(w[1]+w[3])/2 for c,matched in header_matches if c['row']==row and c['rowspan']==1 for w in matched]
+        need(points and max(points)-min(points)<=.75,'单行表头上下层不能唯一定位')
+        anchors.append(sum(points)/len(points))
+    need(anchors[0]<anchors[1],'两层表头上下关系与DOM不同')
+    bands=[top,(anchors[0]+anchors[1])/2,data_lines[0][0]-.75]
+    for c,matched in header_matches:
+        need(all(bands[c['row']]-.02<=(w[1]+w[3])/2<=bands[c['row']+c['rowspan']]+.02 for w in matched),'表头字形或合并行层级与DOM不同')
+        if not matched:
+            need(not any(edges[c['column']]<=((w[0]+w[2])/2)<edges[c['column']+c['colspan']] and bands[c['row']]<=(w[1]+w[3])/2<bands[c['row']+c['rowspan']] for w in header_words),'DOM空表头格在PDF中不是空格')
+    corrected=[]
+    for ri,(cy,label,cells) in zip(data_indexes,data_lines):
+        output=matrix[ri][:4]
+        for ci in [0,1,3]:
+            need(text(label[ci])==matrix[ri][ci],'原PDF行标签不同')
+        visible_mics=text(label[2]);need(re.fullmatch(r'[0-9]+',visible_mics) and matrix[ri][2] in [visible_mics,visible_mics+visible_mics],'输入麦克风数不是原PDF明确同值双写');output[2]=visible_mics
+        source_mics=next(c for c in table['cells'] if c['row']==ri and c['column']==2)
+        confirmations.append({'row':ri,'column':2,'originalText':matrix[ri][2],'originalCellDomSha256':source_mics['sourceDomSha256'],'visibleText':visible_mics,'status':'pdf-confirmed-double-rendering','glyphs':[list(w[:5]) for w in label[2]]})
+        for ci,matched in enumerate(cells,4):
+            word=matched[0];visible=word[4];original=matrix[ri][ci]
+            need(edges[ci]-.02<=word[0] and word[2]<=edges[ci+1]+.02,'数值字形越过原列位置')
+            status='unchanged'
+            if original!=visible:
+                need(re.fullmatch(r'[+−-]?\d+(?:\.\d+)?',visible) is not None and original in [visible+visible,visible+visible.replace('−','-')],'原数值不是同一PDF完整值双分支显示，不能修补错数或符号')
+                status='pdf-confirmed-double-rendering'
+            else:need(visible in ['—','-'] or re.fullmatch(r'[+−-]?\d+(?:\.\d+)?',visible) is not None,'数值格含未知单位或文字')
+            source_cell=next(c for c in table['cells'] if c['row']==ri and c['column']==ci)
+            confirmations.append({'row':ri,'column':ci,'originalText':original,'originalCellDomSha256':source_cell['sourceDomSha256'],'visibleText':visible,'status':status,'glyph':list(word[:5])})
+            output.append(visible)
+        corrected.append(output)
+    corrected.insert(1,copy.deepcopy(matrix[3]))
+    return {'contract':'sealed-pdf-cell-confirmation-v1','origin':'program-replay-from-sealed-pdf-not-model-input','profile':profile,'pdfSha256':sha(pdf_bytes),'backend':{'name':'pymupdf','version':fitz.VersionBind},'page':page_index+1,'originalTableDomSha256':table['sourceDomSha256'],'originalCaption':table['caption'],'pdfCaption':cap[4],'pdfTableBBox':[x0,top,x1,bottom],'headerProofs':header_proofs,'confirmedCells':confirmations,'displayDataRows':corrected}
+
 def proof(pdf_bytes,table,audit,doc):
     profile=table_profile(table)
     need(profile is not None,'当前来源表不符合准确支持的完整结构')
-    return proof_steering(pdf_bytes,table,audit,doc,profile) if profile=='steering-strength-double' else proof_hindi(pdf_bytes,table,audit,doc,profile) if profile.startswith('hindi-') else proof_snr(pdf_bytes,table,audit,doc)
+    return proof_chime_mc(pdf_bytes,table,audit,doc,profile) if profile=='chime-mc-double' else proof_chime(pdf_bytes,table,audit,doc,profile) if profile=='chime-dnsmos-wer-double' else proof_steering(pdf_bytes,table,audit,doc,profile) if profile=='steering-strength-double' else proof_hindi(pdf_bytes,table,audit,doc,profile) if profile.startswith('hindi-') else proof_snr(pdf_bytes,table,audit,doc)
 
 
 def stable(value):
@@ -393,6 +608,8 @@ HINDI_HEADERS = {
 def table_profile(table):
     matrix=table.get('matrix') or []
     if not matrix or len(matrix[0])<3: return None
+    if table.get('ordinal')==2 and table.get('caption')=='Table 2: Evaluation of MC loss on CHiME-4 REAL sets with UltraM2M-Whis variants. Rows 2 and 6 are respectively the 6- and 1-channel UltraM2M-Whis systems of Table 1.' and len(matrix)==10 and all(len(row)==8 for row in matrix): return 'chime-mc-double'
+    if table.get('ordinal')==1 and table.get('caption')=='Table 1: DNSMOS and WER results on CHiME-4.' and len(matrix)==26 and all(len(row)==9 for row in matrix): return 'chime-dnsmos-wer-double'
     if table.get('ordinal')==3 and table.get('caption')=='Table 3: Subjective Evaluation: Effect of steering strength. SteerSpeech better preserves speaker identity at high intensity (\\alpha).' and len(matrix)==7 and all(len(r)==7 for r in matrix): return 'steering-strength-double'
     if matrix[0][:2]==['Dataset SNR Setting','Test set'] and any(re.fullmatch(r'([+\-]?\d+\.\d+)\1',c.get('text','')) for c in table.get('cells',[])):
         return 'snr-decimal-double'

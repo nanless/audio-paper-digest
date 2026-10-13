@@ -630,3 +630,5 @@ Reader 实现变更后的合法诊断恢复可在上述公共选定入口显式�
 强度比较表的 PDF 逐格确认由 `reader_pdf_cell_evidence.py` 与 `lib/reader-pdf-cell-evidence.js` 共同核验。仅完整图注和原表结构符合时，重新读取封存 PDF，核对全部行、两层表头、单位与数据格；数字必须等于 PDF 原值或其明确同值双分支显示。原来源、DOM 和模型输入不变。`tests/reader_pdf_steering_profile_test.py` 验证标签与适用范围；实际论文的完整格值还须独立重放，不能以单元测试替代。
 
 真实强度表集成验证：将 `PD_PDF_STEERING_REAL_SOURCE_DIR` 指向已封存的 `2610.10415/generation-000001` 目录，再用项目 Python 运行 `tests/reader_pdf_steering_profile_test.py`。测试重新提取四来源、完整35格及列头，并拒绝八类来源不一致；未设置真实目录时该组明确跳过，不能算真实来源已验收。
+
+CHiME 的三层主结果表与两层 MC 对照表使用同一封存 PDF 逐格确认入口；保留方法行、输入麦克风数、数据集、完整列头与表下注释，不改来源或模型原稿。将 `PD_PDF_CHIME_REAL_SOURCE_DIR` 指向 `2610.05155/generation-000001` 后运行 `tests/reader_pdf_chime_table_evidence_test.py`，可重放两表及错单位、组别、方法、数据集、数值、注释、PDF SHA 反例。未提供真实来源时明确跳过。

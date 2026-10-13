@@ -20,6 +20,8 @@ function supported(table) {
     if (matrix[0][0] === 'Dataset SNR Setting' && matrix[0][1] === 'Test set'
         && (table.cells || []).some(cell => /^([+-]?\d+\.\d+)\1$/.test(String(cell.text || '')))) return true;
     if (table.ordinal === 3 && table.caption === 'Table 3: Subjective Evaluation: Effect of steering strength. SteerSpeech better preserves speaker identity at high intensity (\\alpha).' && matrix.length === 7 && matrix.every(row => row.length === 7)) return true;
+    if (table.ordinal === 1 && table.caption === 'Table 1: DNSMOS and WER results on CHiME-4.' && matrix.length === 26 && matrix.every(row => row.length === 9)) return true;
+    if (table.ordinal === 2 && table.caption === 'Table 2: Evaluation of MC loss on CHiME-4 REAL sets with UltraM2M-Whis variants. Rows 2 and 6 are respectively the 6- and 1-channel UltraM2M-Whis systems of Table 1.' && matrix.length === 10 && matrix.every(row => row.length === 8)) return true;
     const same = expected => isDeepStrictEqual(matrix.slice(0, 2), expected);
     const labels = matrix.slice(2).map(row => row[0]);
     if (table.ordinal === 2 && String(table.caption || '').startsWith('Table 2: Boundary error against manual annotation (ms) over the full 125-utterance test set.')
