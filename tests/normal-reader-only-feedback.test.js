@@ -399,3 +399,103 @@ for (const parentStage of ['primaryAnalysis', 'coreSummaryRepair']) {
         }
     });
 }
+
+test('正常旧完整上游缺primaryCP走受保护公共Reader刷新，保原父范围与费用', async t => {
+ const sample=await createReviewedReaderSample(t);
+ const feedback={...sample.feedback,primaryFeedback:'沿用已纠正的原主文事实，不扩大修改。',readerFeedback:'保留原Reader事实纠错。'};
+ const bound=facts.validateFeedback(feedback,sample.plan,sample.paper);
+ facts.withFactReview(bound,()=>undefined);
+ sample.paper.analysisManifest.stages.primaryAnalysis.factReview=bound.proof;
+ sample.paper.analysisManifest.stages.scoringAudit.factReview=bound.proof;
+ sample.paper.analysisManifest.stages.apiReaderArticle.factReview=bound.proof;
+ sample.paper.apiReaderArticleSha256='0'.repeat(64);
+ sample.paper.latestAnalysisAttemptError='旧Reader真实失败';
+ delete sample.paper.analysisStageCheckpoints.primaryAnalysis;
+ sample.paper.paidResponseHistory=[{stage:'primaryAnalysis',totalTokens:41}];
+ const original=structuredClone(sample.paper);let normal=0,refresh=0;
+ t.mock.method(deep,'refreshApiReaderArticleFromSource',async p=>{refresh++;assert.equal(facts.current().proof.feedbackSha256,bound.proof.feedbackSha256);return p;});
+ assert.equal(saved.completedReaderUpstream(sample.paper,sample.plan),true);
+ const result=await daily.withDailyFreshAnalysisContext(sample.plan,()=>engine.withPaperAnalysisLock(sample.paper,()=>saved.analyzeWithRecoveredFeedback(sample.paper,sample.plan,()=>{normal++;throw Error('不应付费主分析');})));
+ assert.equal(normal,0);assert.equal(refresh,1);assert.equal(result.analysis,original.analysis);assert.deepEqual(result.paidResponseHistory,original.paidResponseHistory);
+ for(const stage of ['primaryAnalysis','coreSummaryRepair','scoringAudit'])assert.deepEqual(result.analysisManifest.stages[stage],original.analysisManifest.stages[stage]);
+});
+
+test('共享上游门拒坏source/core/scoring，Reader返回不得改变主阶段或费用', async t => {
+ const sample=await createReviewedReaderSample(t);
+ delete sample.paper.analysisManifest.stages.apiReaderArticle.factReview;
+ sample.paper.apiReaderArticleSha256='0'.repeat(64);
+ delete sample.paper.analysisStageCheckpoints.primaryAnalysis;
+ sample.paper.analysisManifest.stages.imageDownload.status='pending';
+ let requests=0;
+ t.mock.method(deep,'refreshApiReaderArticleFromSource',async p=>{requests++;p.paidResponseHistory=[{forged:true}];return p;});
+ await daily.withDailyFreshAnalysisContext(sample.plan,()=>engine.withPaperAnalysisLock(sample.paper,async()=>{
+  const gate=require('../scripts/lib/completed-reader-upstream').completedReaderUpstream;
+  const source=daily.readDailyFreshSource(sample.plan,sample.paper);
+  assert.equal(gate(sample.paper,source),true);
+  assert.equal(gate(sample.paper,{...source,text:source.text+'坏源'}),false);
+  for(const alter of [p=>{p.analysisManifest.stages.coreSummaryRepair.summarySha256='0'.repeat(64);},p=>{p.analysisManifest.stages.scoringAudit.outputAnalysisSha256='0'.repeat(64);}]){const p=structuredClone(sample.paper);alter(p);assert.equal(gate(p,source),false);}
+  await assert.rejects(saved.analyzeWithRecoveredFeedback(sample.paper,sample.plan,()=>{throw Error('不得进主阶段');}),e=>e.code==='READER_RETURN_PROTECTION_REJECTED');
+ }));
+ assert.equal(requests,1);
+});
+
+test('generic正常Reader公共实际请求边界仅Reader，无primary/core/scoring请求', async t => {
+ const sample=await createReviewedReaderSample(t);
+ delete sample.paper.analysisManifest.stages.apiReaderArticle.factReview;
+ delete sample.paper.analysisStageCheckpoints.primaryAnalysis;
+ sample.paper.apiReaderArticleSha256='0'.repeat(64);
+ const calls=[];
+ t.mock.method(require('../scripts/utils'),'requestLlmJson',async (_u,_e,_m,_b,_h,o)=>{
+  calls.push(o.usageContext.stage);assert.equal(o.usageContext.stage,'apiReaderArticle');
+  throw Object.assign(new Error('测试在真实Reader模型边界停止'),{code:'LLM_ACCOUNT_AUTH_ERROR',retryable:false,scope:'run'});
+ });
+ const file=require.resolve('../scripts/deep-analyzer'),prior=require.cache[file];delete require.cache[file];require(file);t.after(()=>{require.cache[file]=prior;});
+ await assert.rejects(daily.withDailyFreshAnalysisContext(sample.plan,()=>engine.withPaperAnalysisLock(sample.paper,()=>saved.analyzeWithRecoveredFeedback(sample.paper,sample.plan,()=>assert.fail('不得请求正常主阶段')))),/真实Reader模型边界停止/);
+ assert.deepEqual(calls,['apiReaderArticle']);
+});
+
+test('已审主文Reader种子共享源核验异常保持布尔false，不扩大请求',async t=>{
+ const sample=await createReviewedReaderSample(t);
+ const feedback={...sample.feedback,primaryFeedback:'沿用已纠正的原主文。'};
+ const bound=facts.validateFeedback(feedback,sample.plan,sample.paper);
+ sample.paper.analysisManifest.stages.primaryAnalysis.factReview=bound.proof;
+ sample.paper.latestAnalysisAttemptError='局部事实纠错没有当前错误原句，也没有同反馈已完成证明；不能扩大为完整主文请求';
+ let sourceChecks=0;
+ t.mock.method(require('../scripts/lib/completed-reader-upstream'),'completedReaderUpstream',()=>{sourceChecks++;throw Error('测试封存源损坏');});
+ await daily.withDailyFreshAnalysisContext(sample.plan,()=>engine.withPaperAnalysisLock(sample.paper,()=>facts.withFactReview(bound,()=>{
+  assert.equal(require('../scripts/deep-analyzer').hasReviewedCompletedPrimaryReaderSeed(sample.paper,sample.source.text,feedback.readerFeedback),false);
+ })));
+ assert.equal(sourceChecks,1);
+});
+
+test('正常失败合并保新paidReader同代bundle，坏Reader保旧bundle并封存真实失败包',async t=>{
+ const sample=await createReviewedReaderSample(t);
+ const existing=structuredClone(sample.paper);delete existing.analysisManifest.stages.apiReaderArticle.factReview;
+ existing.paidResponseHistory=[{id:'earlier-other-checkpoint-paid',tokens:31}];
+ const incoming=structuredClone(existing);incoming.analysis=null;incoming.analysisCheckpoint=existing.analysis;
+ incoming.analysisManifest.stages.scoringAudit.status='contract_rejected';
+ incoming.error='深度分析阶段未完成: scoringAudit:contract_rejected';
+ incoming.apiReaderArticle+='\n\n真实付费 Reader 的补充解释。';
+ incoming.apiReaderArticleSha256=facts.sha(incoming.apiReaderArticle);
+ incoming.analysisManifest.stages.apiReaderArticle.articleSha256=incoming.apiReaderArticleSha256;
+ incoming.paidResponseHistory=[{id:'new-reader-paid',tokens:77}];
+ // 此测试真实补充段落会被正文绑定契约核验；不伪签 table/formula/figures 证明。
+ assert.equal(engine.hasValidApiReaderV3Records(incoming),true);
+ await daily.withDailyFreshAnalysisContext(sample.plan,()=>engine.withPaperAnalysisLock(incoming,()=>{
+  const [merged]=engine.mergePapersById([existing],[incoming],{preserveSuccessfulAnalysis:true});
+  assert.equal(merged.analysis,existing.analysis);assert.equal(merged.analysisCheckpoint,incoming.analysisCheckpoint);
+  assert.equal(merged.apiReaderArticle,incoming.apiReaderArticle);assert.equal(merged.analysisManifest.stages.apiReaderArticle.articleSha256,incoming.apiReaderArticleSha256);
+  assert.deepEqual(merged.paidResponseHistory,[...existing.paidResponseHistory,...incoming.paidResponseHistory]);assert.equal(engine.isSuccessfulAnalysisRecord(merged),false);
+  const bad=structuredClone(incoming);bad.apiReaderArticleSha256='0'.repeat(64);
+  const [failed]=engine.mergePapersById([existing],[bad],{preserveSuccessfulAnalysis:true});
+  assert.equal(failed.apiReaderArticle,existing.apiReaderArticle);assert.deepEqual(failed.analysisManifest.stages.apiReaderArticle,existing.analysisManifest.stages.apiReaderArticle);
+  assert.equal(failed.apiReaderFailedBundleHistory.at(-1).fields.apiReaderArticle,incoming.apiReaderArticle);
+  assert.equal(failed.apiReaderFailedBundleHistory.at(-1).stages.apiReaderArticle.articleSha256,incoming.apiReaderArticleSha256);
+  assert.equal(engine.isSuccessfulAnalysisRecord(failed),false);
+  const wrongSource=structuredClone(incoming);wrongSource.freshRewriteProvenance.sourceManifestSha256='0'.repeat(64);
+  const [sourceRejected]=engine.mergePapersById([existing],[wrongSource],{preserveSuccessfulAnalysis:true});
+  assert.equal(sourceRejected.apiReaderArticle,existing.apiReaderArticle);
+  assert.deepEqual(sourceRejected.analysisManifest.stages.apiReaderArticle,existing.analysisManifest.stages.apiReaderArticle);
+  assert.equal(sourceRejected.apiReaderFailedBundleHistory.length,1);
+ }));
+});

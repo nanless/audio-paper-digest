@@ -467,7 +467,8 @@ function validateAnalysisManifest(filePath, manifest, paperIndex, issues, analys
         if (!ALLOWED_RECOVERY_STAGE_STATUSES.has(state.status)) {
             addIssue(issues, filePath, `${prefix}.stages.${stage}.status 非法: ${state.status}`);
         }
-        if (['pending', 'transient_failure', 'invalid_output', 'contract_rejected'].includes(state.status)) {
+        if (stage !== 'apiReaderTableAudit'
+            && ['pending', 'transient_failure', 'invalid_output', 'contract_rejected'].includes(state.status)) {
             hasRecoverableFailure = true;
         }
         if (state.updatedAt !== undefined && typeof state.updatedAt !== 'string') {

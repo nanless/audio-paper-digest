@@ -7576,8 +7576,11 @@ function hasReviewedCompletedPrimaryReaderSeed(paper, sourceText, reviewFeedback
         || !scoring.audit || typeof scoring.audit !== 'object' || Array.isArray(scoring.audit)
         || scoring.auditSha256 !== stableFingerprint(scoring.audit)) return false;
     const engine = require('./analysis-engine');
-    if (!engine.hasValidAnalysisBody(paper) || !engine.hasValidApiReaderV3Records(paper)
-        || !engine.scoringAuditBindsFinalAnalysis(paper) || !engine.scoringStabilityIsResolved(scoring)) return false;
+    try {
+        const source = require('./lib/model-text-sanitization').currentModelInputSource(paper);
+        if (!require('./lib/completed-reader-upstream').completedReaderUpstream(paper, source)
+            || !engine.hasValidApiReaderV3Records(paper)) return false;
+    } catch (_) { return false; }
     const sourceSha256 = crypto.createHash('sha256').update(String(sourceText || '')).digest('hex');
     if (sourceSha256 !== paper.sourceSha256 || sourceSha256 !== feedback.sourceFiles['source.txt']
         || sourceSha256 !== paper.analysisManifest.sourceAcquisition.sourceSha256) return false;
@@ -11660,7 +11663,7 @@ function suppressOuterRetryAfterReaderExhaustion(error) {
 
 function hasIncompleteRecoveryStage(manifest) {
     return Object.entries(manifest?.stages || {}).some(([stage, details]) =>
-        details && !isRecoveryStageTerminal(stage, details.status)
+        stage !== 'apiReaderTableAudit' && details && !isRecoveryStageTerminal(stage, details.status)
     );
 }
 
@@ -15370,6 +15373,8 @@ async function analyzePaperDeep(paper, options = {}) {
 }
 
 async function analyzePaperDeepInternal(paper, options = {}) {
+    const finalCheckpoint = require('./lib/cancelled-reader-final-checkpoint').reusableFinalCheckpoint(paper);
+    if (finalCheckpoint) return finalCheckpoint;
     const resolvedReaderCandidateParent = options.resolvedReaderCandidate !== undefined ? structuredClone(paper) : null;
     const fullStageReanalysis = require('./lib/selected-full-stage-reanalysis').assertPrepared(paper);
     if (!fullStageReanalysis) {
@@ -17370,7 +17375,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
     if (hasIncompleteRecoveryStage(analysisManifest)) {
         const incompleteStages = Object.entries(analysisManifest.stages)
-            .filter(([stage, details]) => !isRecoveryStageTerminal(stage, details?.status))
+            .filter(([stage, details]) => stage !== 'apiReaderTableAudit' && !isRecoveryStageTerminal(stage, details?.status))
             .map(([stage, details]) => `${stage}:${details.status}`);
         return {
             ...paper,

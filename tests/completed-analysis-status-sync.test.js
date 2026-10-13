@@ -15,6 +15,16 @@ const utils = require('../scripts/utils');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 const write = (file, value) => fs.writeFileSync(file, JSON.stringify(value), { mode: 0o600 });
 
+test.beforeEach(t => {
+    const rejectNetwork = () => assert.fail('状态同步测试禁止真实网络请求');
+    for (const module of [require('node:http'), require('node:https')]) {
+        t.mock.method(module, 'request', rejectNetwork);
+        t.mock.method(module, 'get', rejectNetwork);
+    }
+    t.mock.method(require('node:net').Socket.prototype, 'connect', rejectNetwork);
+    t.mock.method(globalThis, 'fetch', rejectNetwork);
+});
+
 async function createSample(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'completed-status-sync-'));
     const keys = ['dailyFreshSourceRunsDir', 'deepAnalysisResult', 'filteredPapers', 'papers', 'papersLegacy', 'llmUsageDir'];
@@ -57,6 +67,7 @@ async function createSample(t) {
     }
     papers[2].latestAnalysisAttemptError = '本次Reader真实失败';
     papers[2].error = '本次Reader真实失败';
+    papers[2].analysisManifest.stages.apiReaderArticle.status = 'contract_rejected';
     const payload = { batchDate: plan.batchDate, batchId: plan.batchId,
         dailyFreshSourceRun: daily.dailyFreshSourceReference(plan), papers };
     write(Config.FILES.deepAnalysisResult, payload);
@@ -107,7 +118,10 @@ test('取得锁前成功变为最新失败，不用旧成功覆盖新失败', as
         if (!switched) {
             switched = true;
             const latest = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult));
-            for (const current of latest.papers) current.latestAnalysisAttemptError = '等待锁期间的新失败';
+            for (const current of latest.papers) {
+                current.latestAnalysisAttemptError = '等待锁期间的新失败';
+                current.analysisManifest.stages.apiReaderArticle.status = 'contract_rejected';
+            }
             write(Config.FILES.deepAnalysisResult, latest);
         }
         return callback();

@@ -139,6 +139,11 @@ function completedReaderUpstream(paper, plan) {
     return stages.scoringAudit?.scoringContract === 'api-scoring-audit-v2'
         && engine.scoringAuditBindsFinalAnalysis(paper) && engine.scoringStabilityIsResolved(stages.scoringAudit);
 }
+function strongCompletedReaderUpstream(paper, plan) {
+    if (!daily.isPaperBoundToPlan(paper, plan)) return false;
+    return require('./completed-reader-upstream').completedReaderUpstream(paper, daily.readDailyFreshSource(plan, paper));
+}
+
 function protectedReaderUpstream(paper) {
     const copy = structuredClone(paper);
     for (const key of Object.keys(copy)) if (/^apiReader/.test(key)) delete copy[key];
@@ -154,6 +159,41 @@ function analyzeWithRecoveredFeedback(paper, plan, analyze, explicitFeedback = n
     return require('./fresh-analysis-context').withFreshPaperContext(paper, () =>
         analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explicitFeedback, options));
 }
+
+async function refreshProtectedReader(paper, options = {}, feedbackSha256 = null) {
+    const target = structuredClone(paper);
+    require('../deep-analyzer').captureStaleAnalysisSnapshot(target, target.analysisManifest,
+        'apiReaderArticle', feedbackSha256);
+    const before = protectedReaderUpstream(target);
+    const checkpointKey = Symbol.for('audio-paper-digest.analysisCheckpointCallback');
+    const originalPersist = paper[checkpointKey];
+    Object.defineProperty(target, checkpointKey, {
+        configurable: true,
+        value: checkpoint => {
+            if (daily.stableHash(protectedReaderUpstream(checkpoint)) !== daily.stableHash(before)) {
+                const error = new Error('独立Reader纠错的检查点改变了原主文、摘要、评分或费用历史');
+                error.code = 'READER_CHECKPOINT_PROTECTION_REJECTED'; error.retryable = false; throw error;
+            }
+            // 正常引擎失败收尾仍读取原对象，必须保留已返回的真实文章与审校记录。
+            Object.assign(paper, checkpoint);
+            return typeof originalPersist === 'function' ? originalPersist(paper) : undefined;
+        }
+    });
+    const fresh = require('./fresh-analysis-context');
+    const source = require('./model-text-sanitization').currentModelInputSource(paper);
+    if (!source) throw new Error('Reader纠错缺少当前已核验封存来源');
+    const result = await fresh.withFreshPaperContext(target, () =>
+        require('./llm-usage').withLlmUsageContext({ paperId: require('../utils').normalizedId(paper) }, () =>
+            require('../deep-analyzer').refreshApiReaderArticleFromSource(target, source, {
+                reviewFeedback: facts.reviewFeedback('apiReaderArticle', require('../utils').normalizedId(paper)),
+                naturalResourceProse: options.naturalResourceProse === true
+            })));
+    if (daily.stableHash(protectedReaderUpstream(result)) !== daily.stableHash(before)) {
+        const error = new Error('独立Reader纠错改变了原主文、摘要、评分、阶段或费用历史');
+        error.code = 'READER_RETURN_PROTECTION_REJECTED'; error.retryable = false; throw error;
+    }
+    return result;
+}
 async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explicitFeedback, options) {
     if (explicitFeedback) {
         const bound = facts.validateFeedback(explicitFeedback, plan, paper);
@@ -166,8 +206,15 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
     }
     const original = explicitFeedback ? null : readSavedFeedback(paper, plan);
     const feedback = explicitFeedback || original?.readerFeedback || original?.feedback;
-    if (!readerOnlyFeedback(feedback))
+    if (!readerOnlyFeedback(feedback)) {
+        // 原完整上游只缺 Reader 时走公共刷新；不依赖已清理的主分析初稿检查点。
+        if (!explicitFeedback && withRecoveredFeedback(paper, plan, () => strongCompletedReaderUpstream(paper, plan))
+            && require('../analysis-engine').getIncompleteAnalysisContentReason(paper) !== null) {
+            if (!require('../analysis-engine').paperAnalysisLockHeld(paper)) throw new Error('正常Reader恢复须持有当前论文锁');
+            return withRecoveredFeedback(paper, plan, () => refreshProtectedReader(paper, options));
+        }
         return withRecoveredFeedback(paper, plan, analyze, explicitFeedback);
+    }
     if (!completedReaderUpstream(paper, plan)) {
         if (!explicitFeedback && !original?.readerFeedback) return withRecoveredFeedback(paper, plan,
             () => analyze({ requireCompletedPrimaryCheckpoint: true }));
@@ -185,38 +232,7 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
     const refresh = () => (original?.readerFeedback && !explicitFeedback ? facts.withSavedReaderFactReview : facts.withReaderFactReview)(bound, paper, async () => {
         facts.withFactReview(bound, () => undefined);
         if (require('./cancelled-reader-audit-recovery').reusableCancelledReaderAuditResult(paper)) return analyze();
-        const target = structuredClone(paper);
-        require('../deep-analyzer').captureStaleAnalysisSnapshot(target, target.analysisManifest,
-            'apiReaderArticle', bound.proof.feedbackSha256);
-        const before = protectedReaderUpstream(target);
-        const checkpointKey = Symbol.for('audio-paper-digest.analysisCheckpointCallback');
-        const originalPersist = paper[checkpointKey];
-        Object.defineProperty(target, checkpointKey, {
-            configurable: true,
-            value: checkpoint => {
-                if (daily.stableHash(protectedReaderUpstream(checkpoint)) !== daily.stableHash(before)) {
-                    const error = new Error('独立Reader纠错的检查点改变了原主文、摘要、评分或费用历史');
-                    error.code = 'READER_CHECKPOINT_PROTECTION_REJECTED'; error.retryable = false; throw error;
-                }
-                // 正常引擎失败收尾仍读取原对象，必须保留已返回的真实文章与审校记录。
-                Object.assign(paper, checkpoint);
-                return typeof originalPersist === 'function' ? originalPersist(paper) : undefined;
-            }
-        });
-        const fresh = require('./fresh-analysis-context');
-        const source = require('./model-text-sanitization').currentModelInputSource(paper);
-        if (!source) throw new Error('Reader纠错缺少当前已核验封存来源');
-        const result = await fresh.withFreshPaperContext(target, () =>
-            require('./llm-usage').withLlmUsageContext({ paperId: feedback.paperId }, () =>
-                require('../deep-analyzer').refreshApiReaderArticleFromSource(target, source, {
-                    reviewFeedback: facts.reviewFeedback('apiReaderArticle', feedback.paperId),
-                    naturalResourceProse: options.naturalResourceProse === true
-                })));
-        if (daily.stableHash(protectedReaderUpstream(result)) !== daily.stableHash(before)) {
-            const error = new Error('独立Reader纠错改变了原主文、摘要、评分、阶段或费用历史');
-            error.code = 'READER_RETURN_PROTECTION_REJECTED'; error.retryable = false; throw error;
-        }
-        return result;
+        return refreshProtectedReader(paper, options, bound.proof.feedbackSha256);
     });
     if (!parent) return refresh();
     const parentBound = facts.validateFeedback(parent.feedback, plan, parent.paper);

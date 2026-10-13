@@ -349,7 +349,7 @@ function savedCellMatches(binding, cell, displayed) {
         && cell.sourceColumn < item.column + item.colspan);
     return originals.length === 1 && originals[0].sourceDomSha256 === cell.sourceDomSha256
         && originals[0].text === cell.sourceText
-        && displayCell(table, cell.sourceRow, cell.sourceColumn) === displayed;
+        && displayCellMatches(table, cell.sourceRow, cell.sourceColumn, displayed);
 }
 
 module.exports = { CONTRACT, replaySavedProofMetadata, supported, withArtifacts, withSavedPaper, evidence,

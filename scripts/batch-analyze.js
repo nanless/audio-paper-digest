@@ -12,6 +12,7 @@ const path = require('path');
 const { loadEnvFile, getBeijingISOString, normalizedId } = require('./utils.js');
 const {
     analyzeBatch,
+    withPaperAnalysisLock,
     readJsonFileStrict,
     updateJsonFileLocked,
     mergePapersById,
@@ -76,6 +77,31 @@ function finalizeBatchZeroWorkState(resultPath, fallbackBatchDate, entryPlan = n
         else delete payload.deepAnalysisCompletedAt;
         return payload;
     });
+}
+
+async function reconcileCompletedFailureMarkers(resultPath, entryPlan, feedbacks = new Map()) {
+    const initial = readJsonFileStrict(resultPath);
+    const candidates = (Array.isArray(initial) ? initial : initial.papers || []).filter(paper =>
+        paper.latestAnalysisAttemptError || paper.digestStatus?.latestAttemptStatus === 'analysis_failed');
+    for (const candidate of candidates) {
+        // 与正常分析保持相同锁顺序：论文锁内重读，再取得结果文件短锁。
+        await withPaperAnalysisLock(candidate, () => updateJsonFileLocked(resultPath, current => {
+            const papers = Array.isArray(current) ? current : current.papers || [];
+            const paper = papers.find(item => normalizedId(item) === normalizedId(candidate));
+            if (!paper) throw new Error('完成态规范化时论文已离开当前集合');
+            const plan = dailyFreshSources.requireLockedDailyFreshSourceRecoveryPlan(current, {
+                entryPlan, paper, label: '锁内完成态规范化'
+            });
+            const feedback = feedbacks.get(normalizedId(paper));
+            if (feedback) factReview.validateFeedback(feedback, plan, paper);
+            const completed = feedback ? hasCompletedBoundFactFeedback(paper, feedback, plan)
+                : isSuccessfulAnalysisRecord(paper) && dailyFreshSources.isPaperReusableForAnalysis(paper, plan);
+            if (!completed) return undefined;
+            const normalized = mergePapersById([], [paper])[0];
+            const nextPapers = papers.map(item => normalizedId(item) === normalizedId(paper) ? normalized : item);
+            return Array.isArray(current) ? nextPapers : { ...current, papers: nextPapers };
+        }));
+    }
 }
 
 async function main(options = {}) {
@@ -172,6 +198,8 @@ async function main(options = {}) {
             explicitRounds.set(grant.paperId, grant);
         }
     }
+
+    await reconcileCompletedFailureMarkers(RESULT_FILE, dailySourcePlan, feedbacks);
 
     if (notAnalyzed.length === 0) {
         const finalPayload = finalizeBatchZeroWorkState(RESULT_FILE, batchDate, dailySourcePlan);
@@ -339,4 +367,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { hasCompletedBoundFactFeedback, main, parseFactFeedbackFiles, finalizeBatchZeroWorkState };
+module.exports = { reconcileCompletedFailureMarkers, hasCompletedBoundFactFeedback, main, parseFactFeedbackFiles, finalizeBatchZeroWorkState };

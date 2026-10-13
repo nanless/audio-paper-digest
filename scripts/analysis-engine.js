@@ -1378,11 +1378,52 @@ function scoringAuditBindsFinalAnalysis(paper) {
 }
 
 function isSuccessfulAnalysisRecord(paper) {
-    if (paper?.latestAnalysisAttemptError
-        || paper?.digestStatus?.latestAttemptStatus === 'analysis_failed') {
-        return false;
-    }
-    return isCompleteAnalysisContent(paper);
+    if (!isCompleteAnalysisContent(paper)) return false;
+    const facts = require('./lib/daily-fact-review');
+    const stages = paper.analysisManifest?.stages || {};
+    const feedbackSatisfied = () => {
+        for (const name of ['primaryAnalysis', 'coreSummaryRepair', 'tagSelection', 'scoringAudit', 'apiReaderArticle']) {
+            const stage = stages[name];
+            const expected = facts.fingerprintFields(name, stage);
+            if (Object.entries(expected).some(([field, value]) =>
+                !require('node:util').isDeepStrictEqual(stage?.[field], value))) return false;
+            const text = name === 'apiReaderArticle' ? paper.apiReaderArticle
+                : name === 'coreSummaryRepair' ? require('./analysis-contract').extractSection(paper.analysis, '核心摘要')
+                : name === 'scoringAudit' ? paper.analysis + '\n' + JSON.stringify(stage?.audit || {}) : paper.analysis;
+            facts.validateRepairedClaims(name, text || '', paper.arxivId);
+        }
+        return true;
+    };
+    try {
+        if (!feedbackSatisfied()) return false;
+        if (paper.latestAnalysisAttemptError === '深度分析仍在进行，已保存阶段记录。') return false;
+        if (!paper.latestAnalysisAttemptError
+            && paper.digestStatus?.latestAttemptStatus !== 'analysis_failed') return true;
+        if (!paper.freshRewriteProvenance || !paper.arxivId) return false;
+        const fs = require('node:fs'), path = require('node:path');
+        const daily = require('./lib/daily-fresh-source-plan');
+        const runId = paper.freshRewriteProvenance.runId;
+        if (!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(runId || '')) return false;
+        const runDir = path.join(require('./config').FILES.dailyFreshSourceRunsDir, runId);
+        const run = JSON.parse(fs.readFileSync(path.join(runDir, 'run.json'), 'utf8'));
+        const plan = daily.readDailyFreshSourcePlan(daily.dailyFreshSourceReference({ ...run, runDir }));
+        if (!daily.isPaperReusableForAnalysis(paper, plan)) return false;
+        // 已取消阶段的事实字段仅留档，不成为正常完成资格的新门槛。
+        const normal = { ...paper, analysisManifest: { ...paper.analysisManifest, stages: { ...stages } } };
+        delete normal.analysisManifest.stages.apiReaderTableAudit;
+        const saved = require('./lib/saved-fact-feedback');
+        const original = saved.readSavedFeedback(normal, plan);
+        if (!original) return !saved.hasSavedProof(normal);
+        // 已有恢复器核验原fullStage档案、原父包及Reader/core子包；这里只读其实际约束。
+        const packets = [original.feedback, original.readerFeedback, original.coreFeedback].filter(Boolean);
+        return packets.every(feedback => [
+            [feedback.rejectedPrimaryClaims, paper.analysis],
+            [feedback.rejectedCoreClaims, require('./analysis-contract').extractSection(paper.analysis, '核心摘要')],
+            [feedback.rejectedTagClaims, paper.analysis],
+            [feedback.rejectedScoringClaims, paper.analysis + '\n' + JSON.stringify(stages.scoringAudit?.audit || {})],
+            [feedback.rejectedReaderClaims, paper.apiReaderArticle]
+        ].every(([claims, text]) => !(claims || []).some(claim => String(text || '').includes(claim))));
+    } catch (_) { return false; }
 }
 
 function hasValidAnalysisBody(paper, options = {}) {
@@ -2074,6 +2115,7 @@ function mergePapersById(existingPapers, newPapers, options = {}) {
                     ...(p.manualIngestionCheckpoint
                         ? { manualIngestionCheckpoint: p.manualIngestionCheckpoint }
                         : {}),
+                    ...require('./lib/merge-failed-reader-bundle').mergeFailedReaderBundle(existing, p),
                     latestAnalysisAttemptError: p.error || '分析未完成',
                     latestAnalysisAttemptAt: getBeijingISOString(),
                     latestAnalysisAttemptErrorCode: p.latestAnalysisAttemptErrorCode ?? p.errorCode ?? null,

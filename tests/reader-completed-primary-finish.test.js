@@ -143,6 +143,7 @@ async function createReviewedReaderSample(t) {
     };
     const bound = facts.validateFeedback(feedback, plan, paper);
     paper.analysisManifest.stages.primaryAnalysis.factReview = bound.proof;
+    paper.analysisManifest.stages.scoringAudit.factReview = bound.proof;
     return { paper, plan, source, feedback, bound, id };
 }
 
@@ -151,6 +152,7 @@ function successfulRefreshSample(sample) {
     sample.paper.analysisManifest.stages.openSourceScan.status = 'complete';
     sample.paper.latestAnalysisAttemptAt = '2026-10-11T00:00:00.000Z';
     const updated = structuredClone(sample.paper);
+    updated.analysisManifest.stages.apiReaderArticle.factReview = sample.bound.proof;
     updated.analysisManifest.stages.apiReaderArticle.reviewFeedbackSha256 =
         facts.sha(sample.feedback.readerFeedback);
     updated.analysisManifest.stages.apiReaderArticle.refreshedAt =

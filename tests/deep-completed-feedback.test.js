@@ -16,6 +16,16 @@ const { validAnalysisPaper } = require('./valid-analysis-fixture');
 
 const failure = '局部事实纠错没有当前错误原句，也没有同反馈已完成证明；不能扩大为完整主文请求';
 
+test.beforeEach(t => {
+    const rejectNetwork = () => assert.fail('保存反馈恢复测试禁止真实网络请求');
+    for (const module of [require('node:http'), require('node:https')]) {
+        t.mock.method(module, 'request', rejectNetwork);
+        t.mock.method(module, 'get', rejectNetwork);
+    }
+    t.mock.method(require('node:net').Socket.prototype, 'connect', rejectNetwork);
+    t.mock.method(globalThis, 'fetch', rejectNetwork);
+});
+
 
 async function createReviewedReaderSample(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reviewed-reader-seed-'));
@@ -156,6 +166,7 @@ test('deep 最后一篇真实合格结果保存后传播停止，不进入后续
     t.after(() => Object.assign(Config.FILES, previous));
     for (const key of Object.keys(previous)) Config.FILES[key] = path.join(f.plan.runDir, 'stop-current', key + '.json');
     f.paper.latestAnalysisAttemptError = '测试所需的上一轮中断';
+    f.paper.analysisManifest.stages.scoringAudit.status = 'transient_failure';
     const feedbackFile = path.join(f.plan.runDir, 'stop-feedback.json'); save(feedbackFile, f.feedback);
     save(Config.FILES.deepAnalysisResult, { batchDate: f.plan.batchDate, batchId: f.plan.batchId,
         dailyFreshSourceRun: daily.dailyFreshSourceReference(f.plan), papers: [f.paper] });
@@ -175,6 +186,8 @@ test('deep 最后一篇真实合格结果保存后传播停止，不进入后续
                     return { statusCode: 200, body: { choices: [{ message: { content: '本地返回结果' } }] } };
                 } });
             const result = { ...paper };
+            result.analysisManifest = structuredClone(paper.analysisManifest);
+            result.analysisManifest.stages.scoringAudit.status = 'complete';
             for (const key of Object.keys(result)) if (key.startsWith('latestAnalysisAttempt')) delete result[key];
             return result;
         }
@@ -202,6 +215,7 @@ test(`普通 ${normalEntry.name} 自动复用已核验保存的原纠错说明�
     for (const key of Object.keys(previous)) Config.FILES[key] = path.join(sample.plan.runDir, key + '.json');
     const failed = structuredClone(sample.paper);
     failed.latestAnalysisAttemptError = '保留旧Reader失败';
+    failed.analysisManifest.stages.coreSummaryRepair.status = 'contract_rejected';
     const payload = { batchDate: sample.plan.batchDate, batchId: sample.plan.batchId,
         dailyFreshSourceRun: daily.dailyFreshSourceReference(sample.plan), papers: [failed] };
     save(Config.FILES.deepAnalysisResult, payload);
@@ -259,6 +273,7 @@ test(`普通 ${normalEntry.name} 分别恢复原整篇说明与摘要说明，�
         rejectedCoreClaims: ['样例中被拒的摘要原句'] };
     const coreBound = facts.validateFeedback(coreFeedback, sample.plan, current);
     current.analysisManifest.stages.coreSummaryRepair.factReview = coreBound.proof;
+    current.analysisManifest.stages.coreSummaryRepair.status = 'contract_rejected';
     const previous = { deepAnalysisResult: Config.FILES.deepAnalysisResult,
         filteredPapers: Config.FILES.filteredPapers, papers: Config.FILES.papers };
     t.after(() => Object.assign(Config.FILES, previous));
