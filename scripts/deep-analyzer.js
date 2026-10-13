@@ -1776,8 +1776,51 @@ function buildApiReaderQualityMetrics(quality, article) {
 // arXiv 的 LaTeXML 文本投影会把可见公式和它的 TeX 注解放进同一个表格单元。这一步
 // 只合并带明确 TeX 语法、两侧数值完全一致的显示副本。裸数字或符号的重复不能
 // 证明它们来自同一个值；来源绑定仍以原始 DOM 字节为准。
-function normalizeReaderSourceDisplayArtifacts(value) {
+function normalizeExplicitReaderSymbolProjection(value) {
     let output = String(value ?? '');
+    if (!output.includes('\\')) return output;
+    const hasContinuation = (input, end) => /^\s*[\p{L}\p{N}_^\\({]/u.test(input.slice(end));
+    const greek = { Delta:'Δ', alpha:'α', beta:'β', gamma:'γ', tau:'τ', lambda:'λ', omega:'ω' };
+    const baseProjection = base => {
+        const command = /^\\([A-Za-z]{1,24})$/.exec(base);
+        if (command) return greek[command[1]] || null;
+        const styled = /^\\(?:mathcal|mathrm)\{([A-Za-z]{1,24})\}$/.exec(base);
+        return styled ? styled[1] : /^[A-Za-z]{1,24}$/.test(base) ? base : null;
+    };
+    const atom = /^(?:\\boldsymbol\{\\Delta_\{\\mathrm\{([A-Za-z]{1,24})\}\}\}|(\\mathcal\{[A-Za-z]\}|\\mathrm\{[A-Za-z]{1,24}\}|\\Delta|[A-Za-z]{1,24})_\{\\(?:mathrm|text)\{([A-Za-z]{1,24})\}\}(?:\(\\(tau|alpha|beta|gamma|lambda|omega)\))?|\\(Delta|alpha|beta|gamma|tau|lambda|omega))(?:\\(uparrow|downarrow))?(?![\p{L}\p{N}_^\\({])/u;
+    const canonical = text => text.normalize('NFKC').replace(/[\u200b\u200c\u200d\ufeff]/g, '');
+    // 逐起点识别完整受限原子，避免贪婪地把可见副本当成 TeX 的字母基底。
+    for (let index = output.length - 1; index >= 0; index--) {
+        const match = atom.exec(output.slice(index, index + 160));
+        if (!match) continue;
+        // 数学续尾前的空白不是结束边界；任何继续命令都保留原注解。
+        if (hasContinuation(output, index + match[0].length)) continue;
+        let projection;
+        if (match[1]) projection = 'Δ' + match[1];
+        else if (match[5]) projection = greek[match[5]];
+        else {
+            const base = baseProjection(match[2]);
+            if (!base) continue;
+            projection = base + match[3] + (match[4] ? '(' + greek[match[4]] + ')' : '');
+        }
+        if (match[6]) projection += match[6] === 'uparrow' ? '↑' : '↓';
+        const visible = output.slice(0, index).match(/[\p{L}\p{N}()↑↓\u200b\u200c\u200d\ufeff]*$/u)?.[0] || '';
+        const start = index - visible.length;
+        if (canonical(visible) !== projection) continue;
+        output = output.slice(0, start) + visible + output.slice(index + match[0].length);
+        index = start;
+    }
+    return output.replace(/([↑↓])\\(uparrow|downarrow)(?![A-Za-z])/g,
+        (whole, visible, command, offset, input) => {
+            if (hasContinuation(input, offset + whole.length)
+                || visible !== (command === 'uparrow' ? '↑' : '↓')) return whole;
+            return visible;
+        })
+        .replace(/([+/])\\;\1\\;/g, '$1');
+}
+
+function normalizeReaderSourceDisplayArtifacts(value) {
+    let output = normalizeExplicitReaderSymbolProjection(value);
     // 同一字母标记与整数下标的明确 TeX 副本，如 F0F_{0}。
     output = output.replace(/(?<![A-Za-z0-9_])([A-Za-z]+)(\d+)\1_\{\2\}(?![A-Za-z0-9_])/g, '$1$2');
     // 误差项的可见值与明确 TeX 注解逐字相同时，仅合并显示副本。
