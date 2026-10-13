@@ -481,6 +481,8 @@ async function ephemeralReaderFigures(arxivId, figures, plan, options = {}) {
                     break;
                 } catch (error) {
                     lastError = error;
+                    // 图片下载层已用完本次网络重试，不能在外层再开启三轮下载。
+                    if (error?.ephemeralFigureFetch === true) throw error;
                     const transient = error?.name === 'AbortError'
                         || /(?:timeout|timed out|fetch failed|ECONNRESET|EAI_AGAIN|socket)/i
                             .test(String(error?.message || ''));

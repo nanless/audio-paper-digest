@@ -121,6 +121,41 @@ test('传递标题和历史版本信息不改变已有来源快照的字段与�
     assert.deepEqual(source.sourceVersion, runtime.sourceVersion);
 });
 
+test('日更图片网络重试耗尽后保留错误，不在外层再放大为九次请求', async t => {
+    const { root } = fixture(t);
+    const error = Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' });
+    let requests = 0;
+    await assert.rejects(daily.ephemeralReaderFigures('2609.12345', [
+        { ordinal: 1, url: 'https://arxiv.org/html/2609.12345/figure.png' }
+    ], { sourcesDir: path.join(root, 'sources'), runDir: path.join(root, 'run') }, {
+        temporaryRoot: path.join(root, 'temporary'),
+        fetchFigure: async () => { requests++; throw error; }
+    }), failure => failure === error && failure.code === 'ECONNRESET'
+        && failure.attempts === 3 && failure.retryable === true);
+    assert.equal(requests, 3);
+    assert.deepEqual(fs.readdirSync(path.join(root, 'temporary')), []);
+});
+
+test('日更图片短暂失败仍可在下载层恢复，返回真实图片字节', async t => {
+    const { root } = fixture(t);
+    let requests = 0;
+    const bytes = Buffer.from('recovered-image-bytes');
+    const figures = await daily.ephemeralReaderFigures('2609.12345', [
+        { ordinal: 1, url: 'https://arxiv.org/html/2609.12345/figure.png' }
+    ], { sourcesDir: path.join(root, 'sources'), runDir: path.join(root, 'run') }, {
+        temporaryRoot: path.join(root, 'temporary'),
+        fetchFigure: async () => {
+            if (++requests === 1) throw Object.assign(new Error('fetch failed'), { code: 'ECONNRESET' });
+            return { bytes, mediaType: 'image/png' };
+        }
+    });
+    assert.equal(requests, 2);
+    assert.equal(figures.length, 1);
+    assert.deepEqual(figures[0].rawBytes, bytes);
+    assert.equal(figures[0].assetSha256, sha(bytes));
+    assert.deepEqual(fs.readdirSync(path.join(root, 'temporary')), []);
+});
+
 test('日更 Reader 生成器复用同一次调用里抓到的图片字节', async () => {
     const bytes = Buffer.from('same-invocation-image-bytes');
     const url = 'https://arxiv.org/html/2609.12345/figure.png';
