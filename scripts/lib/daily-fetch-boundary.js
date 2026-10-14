@@ -126,6 +126,42 @@ function hasVerifiedFetchContinuity(health, boundary, huggingface = false) {
             && typeof record[field] === 'string' && Number.isFinite(Date.parse(record[field]))
             && Date.parse(record[field]) === Date.parse(timestamp));
 }
+function archivedAnalysisFile(dataRoot, directory, date) {
+    const expected = path.join(directory, 'deep-analysis-result.json');
+    try {
+        const stat = fs.lstatSync(expected);
+        if (!stat.isFile() || stat.isSymbolicLink()) throw new Error('上一发布分析证明不是普通文件');
+        // An existing target, including one with damaged bytes, is authoritative.
+        // Never hide its corruption by selecting a copy from another directory.
+        return expected;
+    } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    const archiveRoot = path.join(dataRoot, 'archive');
+    if (directory !== path.join(archiveRoot, date)) return expected;
+    const manifestPath = path.join(dataRoot, 'current', `blog-generation-manifest-${date}.json`);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath));
+    const expectedSha = manifest.inputSourceReference?.sha256;
+    if (manifest.date !== date || manifest.schemaVersion !== 3 || !/^[a-f0-9]{64}$/.test(expectedSha || '')) {
+        throw new Error('上一已发布生成清单不能证明异日归档的分析结果');
+    }
+    // Earlier archives used the last refresh timestamp rather than batchDate.
+    // Only the exact reviewed input bytes from this project's date archives can
+    // recover that layout; no files or paid records are moved or merged here.
+    const days = fs.readdirSync(archiveRoot, { withFileTypes: true })
+        .filter(entry => entry.isDirectory() && validDate(entry.name)).map(entry => entry.name).sort();
+    for (const day of days) {
+        if (day === date) continue;
+        const filename = path.join(archiveRoot, day, 'deep-analysis-result.json');
+        let stat;
+        try { stat = fs.lstatSync(filename); }
+        catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+        if (!stat.isFile() || stat.isSymbolicLink()) continue;
+        const bytes = fs.readFileSync(filename);
+        if (hash(bytes) !== expectedSha) continue;
+        const payload = JSON.parse(bytes);
+        if (payload.batchDate === date) return filename;
+    }
+    throw new Error('上一已发布分析证明缺失，其他日期归档没有与已审清单 SHA 和批次日期精确对应的普通文件');
+}
 function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) {
     let directory = path.join(dataRoot, 'archive', date);
     let cpPath = path.join(directory, 'fetch-checkpoint.json');
@@ -150,7 +186,9 @@ function verifiedPreviousWindow(dataRoot, date, papers, indexPath, indexSha256) 
     }
     const cp = JSON.parse(fs.readFileSync(cpPath));
     if (cp.sourceContractVersion !== 7) return null;
-    const read = name => { const filename = path.join(directory, name); return { filename, bytes: fs.readFileSync(filename) }; };
+    const read = name => { const filename = name === 'deep-analysis-result.json'
+        ? archivedAnalysisFile(dataRoot, directory, date) : path.join(directory, name);
+        return { filename, bytes: fs.readFileSync(filename) }; };
     const records = ['fetch-checkpoint.json', 'raw-candidates.json', 'filtered-papers.json', 'deep-analysis-result.json'].map(read);
     const [checkpoint, raw, filtered, deep] = records.map(r => JSON.parse(r.bytes));
     const fail = () => { throw new Error('上一已发布 v7 抓取窗口的来源或发布证明不完整，拒绝缩短补抓范围'); };

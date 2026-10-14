@@ -180,3 +180,6 @@ npm run digest:status -- --date YYYY-MM-DD
 - `visuals.status`：同样由实际检查结果确定（v3 起）。清单自称 `complete` 而资产校验或发布绑定已经失败时，这里说 `incomplete`；清单自己写的是 `pending`／`partial_failed` 就照说；清单根本不在才是 `missing`。v2 直接镜像清单内层的 `overallStatus`，当时的归档日期里有 29 天打出过 `长图 incomplete | status=complete | complete=10/10 | pending=0 | failed=0`（归档随日更增长，这里不写死当时的日期总数）。
 - `fetch.rawCandidateCount`：候选快照读不到时是 **`null`**，摘要打印 `?`（v3 起）。快照在、候选确实为空才是 `0`。v2 把两种情形都写成 `0`，于是出现过 `candidates=0` 同屏 `selected=53`。
 - `readProblems`：列出「文件存在但读不出来」的项，`kind` 为 `invalid-json` 或 `unreadable`（后者带 `code`，例如 `EISDIR`）。文件不存在不会进这个数组，也不算错误——那只是这一步还没跑。v2 把损坏与不存在都返回 `null`，运维分不出该重跑还是该修文件。
+
+
+归档优先使用显式 `batchDate`，刷新时间和 `lastUpdated` 不改变批次归属；缺显式日期的旧记录才按已有时间字段处理。归档仅移动原字节，不重写原稿、费用或发布输入 SHA。异日刷新过的旧分析若曾按时间戳存到其他日期目录，上一发布证明只能按当前已审生成清单的输入 SHA 和原 `batchDate` 冷查找；目标文件已存在但损坏时必须拒绝，不能用其他目录掩盖损坏。

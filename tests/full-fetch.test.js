@@ -1082,3 +1082,19 @@ describe('full-fetch 辅助函数', () => {
         assert.strictEqual(fs.existsSync(legacy), false);
     });
 });
+
+
+it('归档以正式batchDate为准，异日刷新时间不拆散同批来源与分析证明', () => {
+    const { autoArchiveCurrentData } = require('../scripts/full-fetch.js');
+    const dir=fs.mkdtempSync(path.join(os.tmpdir(),'batch-date-archive-'));
+    try {
+        const input=path.join(dir,'current','deep-analysis-result.json');
+        fs.mkdirSync(path.dirname(input),{recursive:true});
+        const bytes=JSON.stringify({batchDate:'2026-10-11',timestamp:'2026-10-13T00:00:00+08:00',papers:[],paidFee:7});
+        fs.writeFileSync(input,bytes);
+        autoArchiveCurrentData('2026-10-15',{archiveDir:path.join(dir,'archive'),targets:[input]});
+        assert.equal(fs.readFileSync(path.join(dir,'archive','2026-10-11','deep-analysis-result.json'),'utf8'),bytes);
+        assert.equal(fs.existsSync(path.join(dir,'archive','2026-10-13','deep-analysis-result.json')),false);
+        assert.equal(fs.existsSync(input),false);
+    }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});

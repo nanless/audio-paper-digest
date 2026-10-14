@@ -99,7 +99,8 @@ test('合法v7发布窗口继续上次结束时间，损坏来源证明不退回
     const papers = mergeAndDeduplicate(sourcePapers, []);
     const raw = { ...pipeline.buildCandidateFingerprints(new Set(), new Set(), old), sourceContractVersion: 7, batchDate: '2026-10-03', fetchBoundary: old, papers, rawPapersSha256: stable(papers), fetchSourcesSha256: cp.fetchSourcesSha256 };
     const selected = papers.filter(p => String(p.arxivId).replace(/v\d+$/, '') === '2610.00026');
-    const filtered = { ...raw, papers: selected, status: 'complete' }; const deep = { batchDate: '2026-10-03', papers: selected };
+    const filtered = { ...raw, papers: selected, status: 'complete' }; const deep = {
+        batchDate: '2026-10-03', timestamp: '2026-10-05T12:00:00+08:00', papers: selected };
     const put = (relative, value) => { const file = path.join(dataRoot, relative); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(value)); };
     put('archive/2026-10-03/fetch-checkpoint.json', cp); put('archive/2026-10-03/raw-candidates.json', raw);
     put('archive/2026-10-03/filtered-papers.json', filtered); put('archive/2026-10-03/deep-analysis-result.json', deep);
@@ -185,6 +186,45 @@ test('合法v7发布窗口继续上次结束时间，损坏来源证明不退回
     put('archive/2026-10-03/fetch-checkpoint.json', cp);
     put('archive/2026-10-03/raw-candidates.json', raw);
     put('archive/2026-10-03/filtered-papers.json', filtered);
+    // The old archive classifier used a later refresh timestamp and split a
+    // batch's exact paid analysis bytes from its source checkpoint directory.
+    const correctAnalysis = path.join(dataRoot, 'archive/2026-10-03/deep-analysis-result.json');
+    const refreshedAnalysis = path.join(dataRoot, 'archive/2026-10-05/deep-analysis-result.json');
+    const beforeArchiveBytes = fs.readFileSync(correctAnalysis);
+    fs.mkdirSync(path.dirname(refreshedAnalysis), { recursive: true });
+    fs.renameSync(correctAnalysis, refreshedAnalysis);
+    const splitArchive = resolveDailyFetchBoundary(f.root, { until, dataRoot, requirePreviouslyFetched: true });
+    assert.deepEqual(splitArchive, overlapping);
+    assert.equal(splitArchive.identitySha256, overlapping.identitySha256);
+    assert.equal(splitArchive.until, overlapping.until);
+    assert.deepEqual(fs.readFileSync(refreshedAnalysis), beforeArchiveBytes);
+    assert.equal(fs.existsSync(correctAnalysis), false);
+    // Even with a matching secondary archive, an existing damaged target must
+    // fail; it cannot be papered over by choosing another copy.
+    put('archive/2026-10-03/deep-analysis-result.json', { ...deep, damaged: true });
+    assert.throws(() => resolveDailyFetchBoundary(f.root, { until, dataRoot, requirePreviouslyFetched: true }), /拒绝缩短/);
+    fs.rmSync(correctAnalysis);
+    fs.writeFileSync(refreshedAnalysis, JSON.stringify({ ...deep, batchDate: '2026-10-05' }));
+    assert.throws(() => resolveDailyFetchBoundary(f.root, { until, dataRoot, requirePreviouslyFetched: true }), /精确对应/);
+    const reviewedManifestFile = path.join(dataRoot, 'current/blog-generation-manifest-2026-10-03.json');
+    const reviewedManifestBytes = fs.readFileSync(reviewedManifestFile);
+    const incorrectBatchManifest = JSON.parse(reviewedManifestBytes);
+    incorrectBatchManifest.inputSourceReference.sha256 = crypto.createHash('sha256')
+        .update(fs.readFileSync(refreshedAnalysis)).digest('hex');
+    fs.writeFileSync(reviewedManifestFile, JSON.stringify(incorrectBatchManifest));
+    assert.throws(() => resolveDailyFetchBoundary(f.root, { until, dataRoot, requirePreviouslyFetched: true }), /精确对应/);
+    fs.writeFileSync(reviewedManifestFile, reviewedManifestBytes);
+    fs.writeFileSync(refreshedAnalysis, beforeArchiveBytes);
+    const alternative = path.join(dataRoot, 'archive/2026-10-06/deep-analysis-result.json');
+    fs.mkdirSync(path.dirname(alternative), { recursive: true });
+    fs.renameSync(refreshedAnalysis, alternative);
+    fs.symlinkSync(alternative, refreshedAnalysis);
+    const linkedArchive = resolveDailyFetchBoundary(f.root, { until, dataRoot, requirePreviouslyFetched: true });
+    assert.deepEqual(linkedArchive, overlapping);
+    fs.rmSync(alternative);
+    assert.throws(() => resolveDailyFetchBoundary(f.root, { until, dataRoot, requirePreviouslyFetched: true }), /精确对应/);
+    fs.rmSync(refreshedAnalysis);
+    fs.writeFileSync(correctAnalysis, beforeArchiveBytes);
     const missingSelectedField = structuredClone(cp);
     delete missingSelectedField.huggingface.health.provider.dailySelectedAtField;
     missingSelectedField.fetchSourcesSha256 = pipeline.getFetchSourcesSha256(missingSelectedField);

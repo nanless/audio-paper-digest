@@ -1019,7 +1019,11 @@ function autoArchiveCurrentData(batchDate = getBeijingDateString(), options = {}
         withFileLockSync(filePath, () => {
             if (!fs.existsSync(filePath)) return;
             const data = readJsonSafe(filePath);
-            const recordDate = getRecordDate(data);
+            // A refresh timestamp may be days newer than the formal batch.
+            // Keep its immutable bytes with the batch whose source/publication
+            // proofs refer to them; an invalid explicit date must stop archival.
+            const recordDate = data?.batchDate !== undefined
+                ? parseFullFetchArgs(['--date', data.batchDate]).date : getRecordDate(data);
 
             if (!recordDate) {
                 console.log(`  [归档] 跳过 ${path.basename(filePath)}（缺少可识别日期字段）`);
