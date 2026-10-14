@@ -424,7 +424,7 @@ function alignSourceQuoteBindingsToCurrentTableNodes(draft, tables, structuredAr
                     || !Array.isArray(row) || typeof row[columnIndex] !== 'string'
                     || typeof sourceCell?.text !== 'string'
                     || seenCells.has(key)
-                    || ![sourceCell.text, require('./reader-pdf-cell-evidence').displayCell(sourceTable, sourceRow, sourceColumn)]
+                    || ![sourceCell.text, require('./reader-table-pdf-evidence').displayCell(sourceTable, sourceRow, sourceColumn)]
                         .some(value => normalize(value.replace(/<br\s*\/?>/gi, ' ').replace(/[％]/g, '%'))
                             === normalize(row[columnIndex].replace(/<br\s*\/?>/gi, ' ').replace(/[％]/g, '%')))) {
                     return false;
@@ -593,6 +593,14 @@ function restoreCompleteArtifactTableMarkers(draft, artifacts) {
         const candidates = (artifacts?.tables || []).filter(t => t?.ordinal === binding.sourceTableOrdinal);
         if (candidates.length !== 1) fail();
         const source = candidates[0], matrix = source.matrix;
+        const completeEligibility = require('./reader-tables').assessReaderCompleteTableEligibility(source);
+        if (!completeEligibility.eligible) {
+            const error = require('./reader-tables').readerSourceTableError(binding.tableIndex, source, completeEligibility);
+            const sectionIndex = draft.sections.indexOf(matching[0]);
+            error.readerIssues.push({ ...error.readerIssues[0], path: `/sections/${sectionIndex}/body`,
+                bindingPath: `/tableBindings/${index}` });
+            throw error;
+        }
         const validSha = value => /^[a-f0-9]{64}$/.test(String(value || ''));
         if (source.recoveryStatus !== 'complete' || !validSha(source.sourceDomSha256)
             || !Array.isArray(matrix) || matrix.length < 2 || !Array.isArray(matrix[0])) fail();
@@ -621,7 +629,8 @@ function restoreCompleteArtifactTableMarkers(draft, artifacts) {
         const position = nodes.findIndex(node => node.marker === marker);
         if (position !== index || nodes.filter(node => node.marker === marker).length !== 1) fail();
         const line = cells => `| ${cells.join(' | ')} |`;
-        const displayMatrix = require('./reader-pdf-cell-evidence').displayMatrix(source);
+        const displayMatrix = require('./reader-table-pdf-evidence').displayMatrix(source)
+            .map(row => row.map(require('./reader-source-display').normalizeReaderSourceDisplayArtifacts));
         const markdown = [line(displayMatrix[0]), line(displayMatrix[0].map(() => '---')),
             ...displayMatrix.slice(1).map(line)].join('\n');
         const parsed = extractMarkdownTables(markdown);
@@ -655,26 +664,16 @@ function compileCompleteReaderTableDeclarations(draft, artifacts) {
             && section.body.includes(marker));
         if (matching.length !== 1 || matching[0].body.split(marker).length !== 2
             || !matching[0].body.split(/\n\s*\n/).some(block => block.trim() === marker)) fail();
-        const candidates = (artifacts.tables || []).filter(table => (
-            table?.ordinal === binding.completeTable.sourceTableOrdinal
-        ));
-        if (candidates.length !== 1) fail();
-        const matrix = candidates[0].matrix;
-        if (!Array.isArray(matrix) || matrix.length < 2 || !Array.isArray(matrix[0])
-            || matrix[0].length < 2 || matrix.some(row => !Array.isArray(row)
-                || row.length !== matrix[0].length)) fail();
-        return {
-            tableIndex: binding.tableIndex,
-            sourceType: 'artifact_table',
-            sourceTableOrdinal: binding.completeTable.sourceTableOrdinal,
-            cellBindings: matrix.flatMap((row, rowIndex) => row.map((_cell, columnIndex) => ({
-                renderedRow: rowIndex,
-                renderedColumn: columnIndex,
-                sourceRow: rowIndex,
-                sourceColumn: columnIndex
-            }))),
-            sourceQuotes: []
-        };
+        try {
+            return require('./reader-tables').renderReaderCompleteTable(binding, artifacts).binding;
+        } catch (error) {
+            if (error.code === 'READER_SOURCE_TABLE_UNRENDERABLE') {
+                const sectionIndex = (draft.sections || []).indexOf(matching[0]);
+                error.readerIssues.push({ ...error.readerIssues[0], path: `/sections/${sectionIndex}/body`,
+                    bindingPath: `/tableBindings/${index}` });
+            }
+            throw error;
+        }
     });
 }
 
@@ -710,7 +709,7 @@ function normalizeReaderBodyContinuations(draft) {
 }
 
 function normalizeReaderDraftOrder(input, { structuredArtifacts = null } = {}) {
-    return require('./reader-pdf-cell-evidence').withArtifacts(structuredArtifacts, structuredArtifacts?.paperId,
+    return require('./reader-table-pdf-evidence').withArtifacts(structuredArtifacts, structuredArtifacts?.paperId,
         () => normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts }));
 }
 function normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts = null } = {}) {
@@ -732,8 +731,19 @@ function normalizeReaderDraftOrderUnchecked(input, { structuredArtifacts = null 
     if (draft.tableBindings?.some(binding => Object.hasOwn(binding || {}, 'completeTable'))) {
         alignMixedBindingsToCurrentTableNodes(draft, locateReaderDraftTables(draft), true);
     }
-    compileCompleteReaderTableDeclarations(draft, structuredArtifacts);
-    restoreCompleteArtifactTableMarkers(draft, structuredArtifacts);
+    try {
+        compileCompleteReaderTableDeclarations(draft, structuredArtifacts);
+        restoreCompleteArtifactTableMarkers(draft, structuredArtifacts);
+    } catch (error) {
+        if (error.code === 'READER_SOURCE_TABLE_UNRENDERABLE') {
+            // Indices may already have been deterministically aligned to the
+            // visible stream. Keep the failed draft in that exact index space.
+            error.normalizationInputSha256 = inputSha256;
+            error.blockedNormalizationDraft = structuredClone(draft);
+            error.blockedNormalizationDraftSha256 = sha(draft);
+        }
+        throw error;
+    }
     const sections = Array.isArray(draft?.sections) ? draft.sections : [];
     const ranked = sections.map((section, index) => ({ section, index }));
     // 未知或格式错误的小节类型由解析器检查；在它报告错误之前，不要自己

@@ -28,6 +28,85 @@ def stable_sha(value):
 
 
 class ConferencePageRenderTest(unittest.TestCase):
+    def test_conference_workbench_exports_real_identity_without_inventing_arxiv_or_abstract(self):
+        publisher = MODULE.load_publish_to_blog()
+        paper = self.packet()['paper']
+        parsed = {**paper['parsed'], 'primaryTaskTag': '#语音识别', 'primaryMethodTag': '#Transformer'}
+        paper.pop('conferencePublication')
+        original = copy.deepcopy(paper)
+        bundle = publisher.build_verified_conference_workbench_bundle(
+            paper, '2026-09-07', paper_id=paper['id'], reader_plan=paper['apiReaderPlan'],
+            parsed=parsed, authors=paper['apiReaderAuthors']['authors'])
+        exports = {path.name: raw for path, raw in bundle['sidecars'].items()}
+        citation = json.loads(exports['citation.json'])
+        context = json.loads(exports['rethink-context.json'])
+        self.assertEqual(citation['paperId'], paper['id'])
+        self.assertEqual(citation['sourceSha256'], paper['sourceSha256'])
+        self.assertEqual(citation['publicUrlAvailability'], 'unavailable')
+        self.assertIsNone(citation['recordUrl'])
+        self.assertIsNone(citation['pdfUrl'])
+        self.assertIsNone(context['abstract'])
+        self.assertIsNone(context['abstractSha256'])
+        self.assertEqual(context['abstractStatus'], 'unavailable')
+        self.assertNotIn('arxivId', citation)
+        self.assertNotIn('archivePrefix', exports['citation.bib'].decode())
+        self.assertTrue(exports['citation.bib'].startswith(b'@inproceedings'))
+        self.assertTrue(exports['citation.ris'].startswith(b'TY  - CONF\n'))
+        self.assertNotIn('paper_digest_arxiv', publisher._researcher_workbench_frontmatter(bundle))
+        self.assertEqual(paper, original)
+
+    def test_conference_workbench_rejects_identity_author_and_source_substitution(self):
+        publisher = MODULE.load_publish_to_blog()
+        for mutation, error in [
+                (lambda p, options: options.update(paper_id='conference:icassp:2026:icassp-arnumber:999'), '身份'),
+                (lambda p, options: options.update(authors=[{'name': '替换', 'affiliations': ['测试大学']}]), '作者来源'),
+                (lambda p, options: p.update(sourceSha256='f' * 64), '全文 SHA'),
+                (lambda p, options: options.update(publication={**p['conferencePublication'], 'recordUrl': 'https://example.com/another'}), '公开来源')]:
+            paper = self.packet()['paper']
+            options = {'paper_id': paper['id'], 'publication': paper['conferencePublication'],
+                       'reader_plan': paper['apiReaderPlan'],
+                       'parsed': {**paper['parsed'], 'primaryTaskTag': '#语音识别', 'primaryMethodTag': '#Transformer'},
+                       'authors': paper['apiReaderAuthors']['authors']}
+            mutation(paper, options)
+            with self.assertRaisesRegex(publisher.PublishDataValidationError, error):
+                publisher.build_verified_conference_workbench_bundle(paper, '2026-09-07', **options)
+
+    def test_shared_resource_projection_deduplicates_only_verified_full_objects(self):
+        packet = self.packet()
+        resource = {
+            'origin': 'paper_source', 'type': 'code',
+            'originalUrl': 'https://github.com/example/research',
+            'finalUrl': 'https://github.com/example/research',
+            'redirects': [], 'status': 200, 'availability': 'available',
+            'sourceQuote': 'Code https://github.com/example/research',
+        }
+        resource['sourceQuoteSha256'] = hashlib.sha256(resource['sourceQuote'].encode()).hexdigest()
+        records = [resource, copy.deepcopy(resource)]
+        identity = {'contract': 'api-reader-resource-identity-v1',
+                    'sourceTextSha256': '1' * 64, 'resources': records}
+        paper = packet['paper']
+        paper['apiReaderResources'] = {**identity, 'identitySha256': stable_sha(identity)}
+        stage = paper['analysisManifest']['stages']['apiReaderArticle']
+        stage.update(resourceIdentitySha256=stable_sha(identity), resourceCount=2)
+        original = copy.deepcopy(packet)
+        page = MODULE.render_packet(packet)['markdown']
+        self.assertEqual(page.count('- 代码相关资源：'), 1)
+        self.assertEqual(packet, original)
+        # A source change keeps the same URL but is a different verified object.
+        records[1]['sourceQuote'] = 'Implementation https://github.com/example/research'
+        records[1]['sourceQuoteSha256'] = hashlib.sha256(records[1]['sourceQuote'].encode()).hexdigest()
+        paper['apiReaderResources']['identitySha256'] = stable_sha(identity)
+        stage['resourceIdentitySha256'] = stable_sha(identity)
+        self.assertEqual(MODULE.render_packet(packet)['markdown'].count('- 代码相关资源：'), 2)
+
+    def test_shared_projection_does_not_accept_replacement_author_evidence(self):
+        from paper_reader_presentation import build_reader_presentation
+        paper = self.packet()['paper']
+        with self.assertRaisesRegex(ValueError, '原作者记录'):
+            build_reader_presentation(paper, plan=paper['apiReaderPlan'],
+                                      resources=paper['apiReaderResources']['resources'],
+                                      authors=[{'name': '替换作者', 'affiliations': ['测试大学']}])
+
     def test_stable_sha_accepts_lone_surrogate(self):
         value = {'text': '\udc53'}
         expected = hashlib.sha256(
@@ -163,7 +242,7 @@ class ConferencePageRenderTest(unittest.TestCase):
                        'recordUrl': 'https://ieeexplore.ieee.org/document/100',
                        'pdfUrl': 'https://ieeexplore.ieee.org/stamp/stamp.jsp?arnumber=100'}
         paper = {'id': paper_id, 'conferencePaperId': paper_id, 'paper_id': paper_id, 'title': '会议论文',
-                 'analysis': analysis, 'conferencePublication': publication,
+                 'analysis': analysis, 'sourceSha256': '1' * 64, 'conferencePublication': publication,
                  'parsed': {'summary': '本次分析生成的摘要。', 'score': '8.2',
                             'rankBucket': '前25%', 'documentType': '方法研究', 'scoringReason': '八维证据完整。',
                             'innovationScore': '1.7', 'technicalRigorScore': '1.3',
@@ -263,7 +342,8 @@ class ConferencePageRenderTest(unittest.TestCase):
         self.assertIn('## 🔗 开源与复现资源', result['markdown'])
         self.assertIn('可达状态仅表示本次链接检查结果', result['markdown'])
         self.assertIn('## ⚖️ 评分明细', result['markdown'])
-        self.assertEqual(result['assets'], [])
+        self.assertEqual(len(result['assets']), 4)
+        self.assertTrue(all(asset['path'].startswith('static/data/papers/') for asset in result['assets']))
 
     def test_short_proceedings_profile_is_visible_without_abstract_downgrade(self):
         packet = self.packet()

@@ -32,6 +32,12 @@ test.before(async () => {
     }) });
     const details = daily.readDailyFreshSource(plan, paper);
     paper.sourceSha256 = details.freshSourceDescriptor.sourceSha256;
+    // 这份封存原文没有资源链接；真实 Reader 预检仍需要其完整、可回放的资源身份。
+    const resourceIdentity = { contract: 'api-reader-resource-identity-v1',
+        sourceTextSha256: sha(details.text), resources: [] };
+    paper.apiReaderResources = { ...resourceIdentity,
+        identitySha256: require('../scripts/lib/fresh-rewrite-run').stableHash(resourceIdentity) };
+    assert.equal(paper.apiReaderResources.sourceTextSha256, paper.sourceSha256);
     daily.withDailyFreshAnalysisContext(plan, () => fresh.attachFreshSourceRecord(paper, paper.analysisManifest, details));
     const sourceIdentity = daily.withDailyFreshAnalysisContext(plan, () => fresh.freshAnalysisIdentity(paper.arxivId));
     oldEnvelope = { identity: { paperId: paper.arxivId, maxAttempts: 6, freshAnalysis: sourceIdentity,
@@ -924,7 +930,109 @@ test('缺sections父稿的只读完整再生计划绑定原账原因，首次真
     });
 });
 
-test('有完整稿或原因不明丢失不能偷开完整轮，模式与整链预算不可改', async t => {
+test('首个显式轮可明确选择无进展整篇再生，旧稿和旧次数保留且预算仍为80k', async t => {
+    const deep = require('../scripts/deep-analyzer');
+    const draft = createReaderTestArticle(); draft.readerTitle = '短';
+    const issues = [{ path: '/readerTitle', message: '读者标题过短' }];
+    const f = setup(t, p => { Object.assign(p, { draft, rawDraft: JSON.stringify(draft), issues,
+        noProgress: 2, failureSignature: repair.hashRecoveryIssues(issues),
+        ephemeralImageEvidence: { imageEvidence: [], directSupplementaryEvidence: [] } }); });
+    const stages = [], stop = Object.assign(new Error('首轮全文边界受控停止'), { retryable: false, scope: 'run' });
+    await f.locked(async () => {
+        const source = daily.readDailyFreshSource(plan, paper);
+        const options = { sourceText: source.text, structuredArtifacts: source.structuredArtifacts,
+            readerAttemptsDir: directory, readerMaterializeFigures: async () => [], readerRecordDisposition: () => {},
+            readerCallModel: async (_messages, tokens, request) => {
+                stages.push(request.usageContext.stage);
+                await sendLocalRepairRequest(paper, tokens, request.usageContext.stage); throw stop;
+            } };
+        const { identity } = await deep.prepareApiReaderRetryIdentity(paper, paper.analysisCheckpoint, '', options);
+        fs.unlinkSync(f.file); repair.saveFailedCandidate(directory, identity, f.payload);
+        const file = path.join(directory, repair.hashDraft(identity) + '.json'), bytes = fs.readFileSync(file);
+        Object.assign(f.grant, { identitySha256: repair.hashDraft(identity), originalIdentitySha256: repair.hashDraft(identity),
+            envelopeSha256: sha(bytes), fullRegenerationReason: parentRecovery.fullReason(f.payload) });
+        await retry.withExplicitRound(paper, { ...f.grant, fullRegenerationReason: {
+            ...f.grant.fullRegenerationReason, draftSha256: '0'.repeat(64) } }, () => {
+            assert.throws(() => retry.beginExplicitRound(directory, identity, f.payload, paper), /真实原失败稿/);
+        });
+        assert.deepEqual(fs.readFileSync(file), bytes);
+        await retry.withExplicitRound(paper, f.grant, () => assert.rejects(
+            deep.generateApiReaderArticleDetailed(paper, paper.analysisCheckpoint, '', options), /首轮全文边界受控停止/));
+        assert.deepEqual(stages, ['apiReaderArticle']);
+        const saved = repair.loadFailedCandidate(directory, identity);
+        const receipt = JSON.parse(fs.readFileSync(saved.explicitReaderRetryRound.receiptFile));
+        assert.deepEqual(saved.draft, draft); assert.deepEqual(fs.readFileSync(receipt.archivedFile), bytes);
+        assert.equal(receipt.oldAttempts, 6); assert.equal(receipt.oldFullAttempts, 2);
+        assert.equal(receipt.grant.maxReservedOutputTokens, 80000); assert.equal(receipt.reservedOutputTokens, 48000);
+        assert.throws(() => retry.assertGrant({ ...f.grant, contract: retry.LOCAL_REPAIR_CONTRACT }), /授权类型/);
+    });
+});
+
+test('真实连续无进展父稿只准整链内一次完整再生，首次走全文且保留旧完整稿及账', async t => {
+    const deep = require('../scripts/deep-analyzer');
+    const draft = createReaderTestArticle(); draft.readerTitle = '短';
+    const raw = JSON.stringify(draft);
+    const issues = [{ path: '/readerTitle', message: '读者标题过短' }];
+    const f = setup(t, p => { p.draft = draft; p.rawDraft = raw; p.issues = issues;
+        p.ephemeralImageEvidence = { imageEvidence: [], directSupplementaryEvidence: [] }; });
+    bindPlannerPaper();
+    await f.locked(async () => {
+        const source = daily.readDailyFreshSource(plan, paper), stages = [];
+        const stop = Object.assign(new Error('完整再生边界受控停止'), { retryable: false, scope: 'run' });
+        const options = { sourceText: source.text, structuredArtifacts: source.structuredArtifacts,
+            readerAttemptsDir: directory, readerMaterializeFigures: async () => [], readerRecordDisposition: () => {},
+            readerCallModel: async (_messages, tokens, request) => {
+                stages.push(request.usageContext.stage);
+                await sendLocalRepairRequest(paper, tokens, request.usageContext.stage); throw stop;
+            } };
+        const { identity } = await deep.prepareApiReaderRetryIdentity(paper, paper.analysisCheckpoint, '', options);
+        fs.unlinkSync(f.file); repair.saveFailedCandidate(directory, identity, f.payload);
+        const file = path.join(directory, repair.hashDraft(identity) + '.json');
+        Object.assign(f.grant, { identitySha256: repair.hashDraft(identity), originalIdentitySha256: repair.hashDraft(identity),
+            envelopeSha256: sha(fs.readFileSync(file)) });
+        let parent;
+        await retry.withExplicitRound(paper, f.grant, async () => {
+            parent = retry.beginExplicitRound(directory, identity, f.payload, paper);
+            await retry.withPhysicalBudget(parent.explicitReaderRetryRound, paper, async () => {
+                for (let i = 0; i < 2; i++) await sendLocalRepairRequest(paper, 16000, 'apiReaderRepair');
+            });
+            parent = { ...parent, attempts: 2, noProgress: 1, failureSignature: repair.hashRecoveryIssues(issues),
+                validationFailureStreak: 2, validationFailureSignature: repair.validationFailureSignature(issues) };
+            repair.saveFailedCandidate(directory, identity, parent);
+        });
+        const oldBytes = fs.readFileSync(file), oldReceipt = fs.readFileSync(parent.explicitReaderRetryRound.receiptFile);
+        const grant = parentRecovery.planParentRecovery({ directory, identity, paper, plan, mode: 'full' });
+        assert.equal(grant.recoveryReason.code, 'complete_failed_draft_no_progress');
+        assert.equal(grant.recoveryReason.draftSha256, repair.hashDraft(draft));
+        assert.deepEqual(fs.readFileSync(file), oldBytes);
+        await retry.withExplicitRound(paper, grant, async () => {
+            await assert.rejects(deep.generateApiReaderArticleDetailed(paper, paper.analysisCheckpoint, '', options), /完整再生边界受控停止/);
+        });
+        assert.deepEqual(stages, ['apiReaderArticle']);
+        assert.deepEqual(fs.readFileSync(parent.explicitReaderRetryRound.receiptFile), oldReceipt);
+        const saved = repair.loadFailedCandidate(directory, identity);
+        const receipt = JSON.parse(fs.readFileSync(saved.explicitReaderRetryRound.receiptFile));
+        assert.deepEqual(fs.readFileSync(receipt.archivedFile), oldBytes);
+        assert.deepEqual(saved.draft, draft);
+        assert.equal(receipt.oldAttempts, 2); assert.equal(receipt.oldFullAttempts, 0);
+        assert.equal(receipt.physicalRequests, 1); assert.equal(receipt.reservedOutputTokens, 48000);
+        assert.equal(saved.explicitReaderRetryRound.fullRegenerationReasonSha256, repair.hashDraft(grant.recoveryReason));
+        assert.throws(() => retry.validatePersistedRound(directory, identity, { ...saved,
+            explicitReaderRetryRound: { ...saved.explicitReaderRetryRound, fullRegenerationReasonSha256: '0'.repeat(64) } }), /再生原因/);
+        assert.equal(parentRecovery.fullReason({ ...parent, noProgress: 1, validationFailureStreak: 0 }), null);
+        assert.equal(parentRecovery.fullReason({ ...parent, noProgress: 2, validationFailureStreak: 0 }).code,
+            'complete_failed_draft_no_progress');
+        assert.equal(parentRecovery.fullReason({ ...parent, failureSignature: '' }), null);
+        assert.equal(parentRecovery.fullReason({ ...parent, issues: [{ diagnosticOnly: true }] }), null);
+        const normalizedFailure = { ...parent, noProgress: 1, validationFailureStreak: 2,
+            validationFailureSignature: repair.validationFailureSignature(issues) };
+        assert.equal(parentRecovery.fullReason(normalizedFailure).code, 'complete_failed_draft_no_progress');
+        assert.equal(parentRecovery.fullReason({ ...normalizedFailure, validationFailureSignature: 'forged' }), null);
+        assert.equal(parentRecovery.fullReason({ ...normalizedFailure, validationFailureStreak: 1 }), null);
+    });
+});
+
+test('有完整稿但没有连续无进展证明或原因不明丢失不能偷开完整轮，模式与整链预算不可改', async t => {
     const f = await setupExhaustedParent(t);
     bindPlannerPaper();
     assert.throws(() => parentRecovery.planParentRecovery({ directory, identity: f.identity, paper, plan, mode: 'full' }), /完整再生|父恢复原因/);

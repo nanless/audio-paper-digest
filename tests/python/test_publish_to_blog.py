@@ -3137,7 +3137,15 @@ title: "Score rows"
             'https://arxiv.org/abs/2608.30002',
         )
 
-    def test_historical_source_pages_and_indexes_show_selected_version_and_notice(self):
+    # This is a display-shape fixture: its temporary source is intentionally
+    # discarded, then its version metadata is attached to a separate fictional
+    # publication record. Actual sealed-source eligibility is covered by the
+    # historical-source and semantic-replay suites; retain the real standalone
+    # semantic rule and all summary/upstream stage binding checks here.
+    @mock.patch.object(publish_to_blog, '_source_bound_core_summary_semantic_issue',
+                       side_effect=lambda paper, summary:
+                       publish_to_blog._detailed_core_summary_semantic_issue(summary))
+    def test_historical_source_pages_and_indexes_show_selected_version_and_notice(self, _semantic_boundary):
         from test_daily_historical_version_publish import _node_payload
         with tempfile.TemporaryDirectory() as temporary:
             source_paper = _node_payload(Path(temporary).resolve() / 'sources')['papers'][0]

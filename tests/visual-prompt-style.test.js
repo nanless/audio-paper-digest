@@ -57,12 +57,9 @@ describe('发布后长图与封面提示词的风格要求', () => {
         assert.doesNotMatch(prompt, /luminous cyan/i);
     });
 
-    it('图片绘制脚本只提供调试命令，不作为默认生图入口', () => {
+    it('已退休的调试绘制入口不会替代正式生图工具', () => {
         const pkg = JSON.parse(fs.readFileSync(path.join(PROJECT_ROOT, 'package.json'), 'utf8'));
-        assert.strictEqual(
-            pkg.scripts['visual:render:debug'],
-            'bash scripts/python-runtime.sh scripts/render-visual-summary.py'
-        );
+        assert.ok(!Object.hasOwn(pkg.scripts, 'visual:render:debug'));
         assert.ok(!Object.hasOwn(pkg.scripts, 'visual:render'));
     });
 

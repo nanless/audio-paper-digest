@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TESTS = ROOT / 'tests' / 'python'
 SCRIPTS = ROOT / 'scripts'
 
-# 会加载 publish-to-blog.py、发布通道入口或调真实 main()，因而会读 .env 的模块。
+# 会加载公共发布器或调真实 main()，因而会读 .env 的现行模块。
 ENV_READING_MODULES = (
     'test_project_env',
     'test_publication_activation',
@@ -34,9 +34,6 @@ ENV_READING_MODULES = (
     'test_daily_fresh_publish_gate',
     'test_daily_historical_version_publish',
     'test_markdown_image_parser',
-    'test_atomic_publish_writes',
-    'test_publish_xiaohongshu',
-    'test_channel_snapshot_entries',
     'test_conference_formula_layout',
     'test_conference_page_render',
     'test_publish_conference',

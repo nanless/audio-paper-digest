@@ -22,7 +22,15 @@ const originalRequest = utils.requestLlmJson;
 let llmRequests = 0;
 utils.requestLlmJson = async () => { llmRequests++; throw new Error('本地测试不能请求模型'); };
 const { fixture, sign } = require(path.join(code, 'tests/reader-signed-draft-fixture.js'));
-const data = fixture(), paper = data.paper;
+const data = fixture({ sourceText: 'The source reports a controlled measurement of 1.0 under the same protocol. '.repeat(100) }), paper = data.paper;
+const runner = require(path.join(code, 'scripts/lib/fresh-rewrite-run.js'));
+paper.title = 'Signed PNG controlled source';
+paper.abstract = 'Original metadata for the controlled PNG source.';
+Object.assign(data.sourceDetails, { source: 'html', sourceId: paper.arxivId });
+const { freshSourceDescriptor: descriptor, ...sourceSnapshot } = data.sourceDetails;
+descriptor.sourceSnapshotSha256 = runner.sha256(JSON.stringify(sourceSnapshot));
+paper.freshRewriteProvenance.sourceSnapshotSha256 = descriptor.sourceSnapshotSha256;
+paper.analysisManifest.freshRewriteProvenance = structuredClone(paper.freshRewriteProvenance);
 for (const figure of paper.apiReaderFigures) {
     const filename = 'figure-' + figure.ordinal + '-' + sha.slice(0, 16) + '.png';
     Object.assign(figure, { assetSha256: sha, assetBytes: bytes.length, assetFilename: filename,
@@ -50,11 +58,33 @@ const request = { version: 1, runId: data.runId, paperId: paper.arxivId,
     parentPaperSha256: stableHash(paper), parentArticleSha256: paper.apiReaderArticleSha256,
     parentPlanSha256: paper.apiReaderPlanSha256, sourceSha256: paper.sourceSha256,
     reason: '按原文补充已审查的实验条件边界。', patch };
-const run = { runId: data.runId, paperIds: [paper.arxivId],
-    sourceExpectations: { [paper.arxivId]: { sourceSha256: paper.sourceSha256 } } };
+// Source 能力必须来自实际受控目录中的运行清单与四份缓存文件。
+Config.FILES.freshRewriteRunsDir = path.join(directory, 'fresh-runs');
+const runDir = path.join(Config.FILES.freshRewriteRunsDir, data.runId);
+const sourceDir = path.join(runDir, 'sources', paper.arxivId);
+fs.mkdirSync(sourceDir, { recursive: true, mode: 0o700 });
+const inputs = { contract: runner.INPUT_CONTRACT, runId: data.runId, date: '2026-09-06',
+    papers: [runner.metadataOnly(paper)] };
+const inputBytes = JSON.stringify(inputs);
+const run = { version: 1, contract: runner.RUN_CONTRACT, runId: data.runId, date: inputs.date,
+    status: 'complete', paperIds: [paper.arxivId], paperSetSha256: stableHash([paper.arxivId]),
+    inputsSha256: runner.sha256(inputBytes),
+    sourceExpectations: { [paper.arxivId]: { sourceSha256: paper.sourceSha256,
+        structuredArtifactsSha256: data.sourceDetails.structuredArtifacts.payloadSha256 } } };
+run.identitySha256 = stableHash({ version: run.version, contract: run.contract, runId: run.runId,
+    date: run.date, paperIds: run.paperIds, paperSetSha256: run.paperSetSha256, inputsSha256: run.inputsSha256,
+    baseline: run.baseline, sourceExpectations: run.sourceExpectations, metadataSources: run.metadataSources });
+for (const [filename, content] of Object.entries({ 'run.json': JSON.stringify(run), 'inputs.json': inputBytes,
+    'analysis.json': JSON.stringify({ contract: runner.ANALYSIS_CONTRACT, runId: data.runId,
+        batchDate: run.date, status: 'complete', papers: [paper] }) }))
+    fs.writeFileSync(path.join(runDir, filename), content, { mode: 0o600 });
+for (const [filename, content] of Object.entries({ 'source.json': JSON.stringify(descriptor),
+    'source-details.json': JSON.stringify(sourceSnapshot), 'source.txt': sourceSnapshot.text,
+    'artifacts.json': JSON.stringify(sourceSnapshot.structuredArtifacts) }))
+    fs.writeFileSync(path.join(sourceDir, filename), content, { mode: 0o600 });
 const target = paper.apiReaderFigures[0].cachePath;
-const originalOpen = fs.openSync, originalRead = fs.readFileSync;
-let replaced = false, targetFd, pixelReads = 0, replacementIdentity, publicReadStack;
+const originalOpen = fs.openSync, originalRead = fs.readFileSync, originalClose = fs.closeSync;
+let replaced = false, targetFd, activePixelFd, pixelReads = 0, replacementIdentity, publicReadStack;
 fs.openSync = function (filename, ...args) {
     if (filename === target && mode === 'fifo' && !replaced) {
         replaced = true;
@@ -65,12 +95,18 @@ fs.openSync = function (filename, ...args) {
     }
     if (filename === target) publicReadStack = new Error().stack;
     const fd = originalOpen.call(fs, filename, ...args);
-    if (filename === target) targetFd = fd;
+    if (filename === target) { targetFd = fd; activePixelFd = fd; }
     return fd;
 };
 fs.readFileSync = function (filename, ...args) {
-    if (filename === targetFd) pixelReads++;
+    if (filename === activePixelFd) pixelReads++;
     return originalRead.call(fs, filename, ...args);
+};
+// 来源回放会复用已经关闭的数字 FD；只统计仍打开的 PNG 描述符。
+fs.closeSync = function (fd) {
+    const result = originalClose.call(fs, fd);
+    if (fd === activePixelFd) activePixelFd = undefined;
+    return result;
 };
 (async () => {
     let observation;
@@ -78,13 +114,19 @@ fs.readFileSync = function (filename, ...args) {
         const result = await require(path.join(code, 'scripts/lib/reader-signed-operator.js'))
             .prepareReaderOperatorPatchResult({ parent: paper, sourceDetails: data.sourceDetails, run, request,
                 patchFileSha256: 'e'.repeat(64), appliedAt: '2026-09-06T08:00:00Z' });
-        observation = { valid: require(path.join(code, 'scripts/analysis-engine.js')).hasValidApiReaderV3Records(result.paper),
+        const engine = require(path.join(code, 'scripts/analysis-engine.js'));
+        const coldValid = engine.hasValidApiReaderV3Records(result.paper);
+        const valid = require(path.join(code, 'scripts/lib/fresh-analysis-context.js')).withFreshAnalysisContext({
+            runDir, runId: run.runId, sourceExpectations: run.sourceExpectations
+        }, () => engine.hasValidApiReaderV3Records(result.paper));
+        observation = { valid, coldValid,
             figures: result.paper.apiReaderFigures.length, newApiRequests: result.provenance.newApiRequests };
     } catch (error) {
         observation = { rejected: true, name: error.name, message: error.message };
     } finally {
         fs.openSync = originalOpen;
         fs.readFileSync = originalRead;
+        fs.closeSync = originalClose;
         utils.requestLlmJson = originalRequest;
     }
     let fdClosed = false;
@@ -120,6 +162,7 @@ for (const mode of ['normal', 'fifo']) {
         assert.equal(observation.originalBytesUnchanged, true);
         assert.equal(observation.fdClosed, true);
         if (mode === 'normal') {
+            assert.equal(observation.coldValid, false, '新合同的对象不能代替物理封存来源能力');
             assert.equal(observation.valid, true);
             assert.equal(observation.figures, 1);
             assert.equal(observation.newApiRequests, 0);

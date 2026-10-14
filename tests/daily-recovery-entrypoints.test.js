@@ -205,6 +205,9 @@ test('日更 Reader 接受稿在装图和中央保存失败后保留，成功保
     const canonical = validAnalysisPaper(ID, { title: metadata.title });
     const descriptor = daily.readDailyFreshSource(plan, canonical).freshSourceDescriptor;
     canonical.sourceSha256 = descriptor.sourceSha256;
+    // 接受稿的恢复仍走正式资源校验，身份必须绑定上面封存的同一份原文。
+    canonical.apiReaderResources = structuredClone(signed.paper.apiReaderResources);
+    assert.equal(canonical.apiReaderResources.sourceTextSha256, descriptor.sourceSha256);
     canonical.analysisManifest.sourceAcquisition = { sourceSha256: descriptor.sourceSha256 };
     canonical.freshRewriteProvenance = { contract: 'fresh-source-analysis-v1', runId: plan.runId,
         structuredArtifactsSha256: descriptor.structuredArtifactsSha256,

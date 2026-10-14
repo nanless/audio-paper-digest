@@ -1542,7 +1542,7 @@ primary_method_tag: #基准测试
         fixed = dedupe_image_alts(fix_empty_markdown_links(text))
         self.assertIn('![图](image_not_available)', fixed)
         self.assertIn('![same](a.png)', fixed)
-        self.assertIn('![same - 图2](b.png)', fixed)
+        self.assertIn('![same - 图 2](b.png)', fixed)
         self.assertIn('空', fixed)
         self.assertNotIn('[空]()', fixed)
 
@@ -1594,6 +1594,36 @@ primary_method_tag: #基准测试
         self.assertEqual(fixed, text)
         self.assertEqual(escape_html_like_tags(fixed), fixed)
 
+    def test_escape_html_like_tags_restores_exact_multi_digit_literal_indices(self):
+        codes = [f'`<token_{index}>`' for index in range(145)]
+        containers = ['<details><summary>评分</summary></details>'] * 15
+        text = '\n'.join(codes + containers)
+        self.assertEqual(escape_html_like_tags(text), text)
+        self.assertEqual(sanitize_markdown_for_publish(text), text)
+        self.assertEqual(sanitize_markdown_for_publish(sanitize_markdown_for_publish(text)), text)
+
+    def test_escape_html_like_tags_cannot_restore_literal_source_marker_text(self):
+        text = ('PD_PUBLISH_HTML_LITERAL_CODE_0_END '
+                'PD_PROTECTED_INLINE_CODE_1 PD_SAFE_HTML_CONTAINER_10 '
+                '`<p>` `<w>` <details><summary>评分</summary></details>')
+        self.assertEqual(escape_html_like_tags(text), text)
+        prefix = '`another_control` ' * 30
+        self.assertEqual(escape_html_like_tags(prefix + text), prefix + text)
+
+    def test_inline_literal_restoration_matches_full_page_and_standalone_reader(self):
+        article = ('```text\np=1 w=2 PD_PUBLISH_HTML_LITERAL_CODE_10_END\n```\n\n'
+                   + '\n'.join(f'`<token_{index}>`' for index in range(45))
+                   + '\n\n[来源](https://example.org/PD_PROTECTED_INLINE_CODE_1)\n')
+        expected = sanitize_markdown_for_publish(article)
+        frontmatter = '---\ntitle: "合法标题"\ndraft: false\n---\n'
+        header = '`header` ' * 35 + '\n\n'
+        page = sanitize_markdown_for_publish(frontmatter + header + article)
+        self.assertTrue(page.startswith(frontmatter))
+        self.assertTrue(page.endswith(expected))
+        self.assertEqual(sanitize_markdown_for_publish(page), page)
+        self.assertIn('```text\np=1 w=2 PD_PUBLISH_HTML_LITERAL_CODE_10_END\n```', page)
+        self.assertIn('https://example.org/PD_PROTECTED_INLINE_CODE_1', page)
+
     def test_escape_html_like_tags_preserves_text_before_inline_control_token(self):
         text = '目标命令是 `turn off <EOT>`。'
         fixed = escape_html_like_tags(text)
@@ -1620,7 +1650,7 @@ primary_method_tag: #基准测试
         upstream = text
         fixed = sanitize_markdown_for_publish(text)
         self.assertNotIn('<u>', fixed)
-        self.assertIn('![same - 图2](b.png)', fixed)
+        self.assertIn('![same - 图 2](b.png)', fixed)
         self.assertNotIn('[empty]()', fixed)
         self.assertIn('title: "Bad"', fixed)
         self.assertIn('配置', fixed)
@@ -1655,6 +1685,15 @@ primary_method_tag: #基准测试
         # 数学 tilde 游离时只去标记、保留空格，避免 where ̃vf 粘成 wherevf
         self.assertIn('where vf', fix_extraction_diacritic_damage('where ̃vf denotes'))
         self.assertNotIn('wherevf', fix_extraction_diacritic_damage('where ̃vf denotes'))
+
+    def test_diacritic_repair_preserves_source_bound_mathematical_negation(self):
+        for overlay in ('\u0337', '\u0338'):
+            cell = f'k1 {overlay}= k2'
+            text = f'关系为 {cell}。\n\n| 条件 | 数值 |\n| --- | --- |\n| {cell} | 73.35 |'
+            with self.subTest(overlay=overlay):
+                self.assertEqual(fix_extraction_diacritic_damage(text), text)
+                self.assertEqual(sanitize_markdown_for_publish(text), text)
+                self.assertEqual(sanitize_markdown_for_publish(sanitize_markdown_for_publish(text)), text)
 
     def test_sanitize_escapes_literal_sequence_symbols_only_in_table_cells(self):
         markdown = (

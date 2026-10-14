@@ -20,7 +20,7 @@ const {
     promptFilePathForContract
 } = require('../scripts/lib/prompt-text-versions.js');
 const { IMPLEMENTATION_FILES } = require('../scripts/lib/conference-process.js');
-const { RENDERER_IMPLEMENTATION_FILES } = require('../scripts/lib/historical-page-staging.js');
+const RENDERER_IMPLEMENTATION_FILES = require('../scripts/lib/paper-page-staging.js').rendererImplementationFiles();
 
 function sha256(buffer) {
     return crypto.createHash('sha256').update(buffer).digest('hex');
@@ -144,10 +144,10 @@ test('写归档：内容与文件名一致，不留临时文件，替换时保�
 // 这些清单里，否则「加一份历史字节」会改变别的身份指纹。
 test('prompts/history/ 不进任何实现清单', () => {
     for (const name of IMPLEMENTATION_FILES) {
-        assert.ok(!String(name).includes('history'), `IMPLEMENTATION_FILES 含 ${name}`);
+        assert.ok(!String(name).startsWith('prompts/history/'), `IMPLEMENTATION_FILES 含 ${name}`);
     }
     for (const name of RENDERER_IMPLEMENTATION_FILES) {
-        assert.ok(!String(name).includes('history'), `RENDERER_IMPLEMENTATION_FILES 含 ${name}`);
+        assert.ok(!String(name).startsWith('prompts/history/'), `RENDERER_IMPLEMENTATION_FILES 含 ${name}`);
     }
     const scripts = path.join(PROJECT, 'scripts');
     const offenders = [];

@@ -28,25 +28,19 @@ from path_config import (  # noqa: E402
     atomic_write_bytes,
     atomic_write_json,
     atomic_write_text,
-    backfill_result_path,
     file_lock,
     resolve_deep_analysis_result_for_date,
     resolve_deep_analysis_result_path,
     update_json_file_locked,
-    wechat_preview_path,
-    xiaohongshu_markdown_path,
-    xiaohongshu_oneliner_cache_path,
     validate_date_component,
 )
 
 
 class PathConfigTest(unittest.TestCase):
-    def test_xiaohongshu_paths_reject_invalid_or_escaping_date(self):
+    def test_date_components_reject_invalid_or_escaping_dates(self):
         for value in ['2026-02-30', '../2026-07-08', '/../../escape', '20260708']:
             with self.subTest(value=value), self.assertRaises(ValueError):
                 validate_date_component(value)
-            with self.subTest(path=value), self.assertRaises(ValueError):
-                xiaohongshu_oneliner_cache_path(value)
 
     def test_runtime_json_paths_match_expected_names(self):
         self.assertEqual(str(PROJECT_ROOT), os.path.abspath(ROOT))
@@ -59,21 +53,6 @@ class PathConfigTest(unittest.TestCase):
         self.assertEqual(VISUAL_SUMMARY_ASSET_DIR, ARCHIVE_DIR)
         self.assertEqual(DIGEST_COVER_MANIFEST_DIR, CURRENT_DIR / 'digest-cover-manifests')
         self.assertEqual(DIGEST_COVER_ASSET_DIR, ARCHIVE_DIR)
-
-    def test_publish_output_helpers(self):
-        self.assertEqual(
-            xiaohongshu_markdown_path('2026-07-08', 'top5'),
-            CURRENT_DIR / 'xiaohongshu-2026-07-08-top5.md'
-        )
-        self.assertEqual(
-            xiaohongshu_oneliner_cache_path('2026-07-08'),
-            CURRENT_DIR / 'xiaohongshu-oneliners-2026-07-08.json'
-        )
-        self.assertEqual(
-            wechat_preview_path('2026-07-08'),
-            CURRENT_DIR / 'wechat-preview-2026-07-08.html'
-        )
-        self.assertEqual(backfill_result_path().name, 'backfill-result.json')
 
     def test_resolve_deep_analysis_result_prefers_current_then_legacy(self):
         with tempfile.TemporaryDirectory() as tmp:

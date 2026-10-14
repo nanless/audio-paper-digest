@@ -2,7 +2,7 @@
 """
 Paper Digest 发布公共模块 (Python)
 统一封装：数据加载、评分排序、标签提取、格式化工具
-消除 publish-to-blog.py / publish-wechat-full.py / publish-xiaohongshu.py 的重复逻辑
+三流程共用的发布请求、来源核验与审查工具
 """
 
 import concurrent.futures
@@ -4512,26 +4512,37 @@ def validate_digest_index_reader_quality(markdown, required=False):
     # 汇总页会复用单篇的作者机构、摘要和资源内容。下面先在校验副本中
     # 替换匹配到的内容块，再检查汇总页自身的文字，避免把不同论文的表达合并判断。
     # 复用内容是否一致，由相应生成和页面核验负责。
-    index_owned_body = re.sub(
-        r'^👥 \*\*作者与机构\*\*\n\n[\s\S]*?'
-        r'(?=\n\n(?:💡 \*\*(?:论文评价|毒舌点评)\*\*|📌 \*\*核心摘要\*\*))',
-        '👥 **作者与机构**\n\n已绑定单篇作者机构。\n\n',
-        body,
-        flags=re.MULTILINE,
+    component_end = (
+        r'(?=^(?:👥 \*\*作者与机构\*\*|📌 \*\*核心摘要\*\*|'
+        r'🔗 \*\*开源资源\*\*|💡 \*\*(?:论文评价|毒舌点评)\*\*)$|'
+        r'^---[ \t]*$|^#{1,3}[ \t]+|'
+        r'\n\n[^\n]*\*\*\d+(?:\.\d+)?/10\*\*|\Z)'
     )
-    index_owned_body = re.sub(
-        r'^📌 \*\*核心摘要\*\*\n\n[\s\S]*?(?=^🔗 \*\*开源资源\*\*$)',
-        '📌 **核心摘要**\n\n单篇已审核心摘要。\n\n',
-        index_owned_body,
-        flags=re.MULTILINE,
-    )
-    index_owned_body = re.sub(
-        r'^🔗 \*\*开源资源\*\*\n\n[\s\S]*?'
-        r'(?=\n\n[^\n]*\*\*\d+(?:\.\d+)?/10\*\*|^---$)',
-        '🔗 **开源资源**\n\n单篇已审开源资源。\n\n',
-        index_owned_body,
-        flags=re.MULTILINE,
-    )
+    def mask_component(match, label, placeholder):
+        # Image alt text remains subject to the index typography guard even
+        # when an image occurs inside a copied decision block.
+        images = re.findall(r'!\[(?:\\.|[^\]\\\n])*\]\((?:\\.|[^)\\\n])*\)',
+                            match.group(0))
+        return label + '\n\n' + placeholder + '\n\n' + (
+            '\n\n'.join(images) + '\n\n' if images else '')
+    owned_entries = []
+    for entry in entries:
+        if re.match(r'^###\s+[^\n]*?\[[^\]]+\]\([^)]+/posts/[^)]+\)\s*$',
+                    entry, flags=re.MULTILINE):
+            for label, placeholder in (
+                ('👥 **作者与机构**', '已绑定单篇作者机构。'),
+                ('📌 **核心摘要**', '单篇已审核心摘要。'),
+                ('🔗 **开源资源**', '单篇已审开源资源。'),
+            ):
+                component_body = (r'(?:- [^\n]*\n)+(?:\n|\Z)'
+                    if label == '👥 **作者与机构**' else r'[\s\S]*?' + component_end)
+                entry = re.sub('^' + re.escape(label) + r'\n\n' + component_body,
+                    lambda match, label=label, placeholder=placeholder:
+                        mask_component(match, label, placeholder),
+                    entry, flags=re.MULTILINE)
+        owned_entries.append(entry)
+    list_heading = re.search(r'^##\s+.*论文列表\s*$', body, re.MULTILINE)
+    index_owned_body = body[:list_heading.end()] + ''.join(owned_entries)
     # 把整页放进一个合成章节：否则它自己的 H2 标题会让通用 Manual 读者
     # 校验器只检查标题前的引言部分。
     synthetic = '## 核心摘要\n' + re.sub(
@@ -6292,10 +6303,13 @@ def escape_html_like_tags(text):
         text,
     )
     protected_code = []
+    marker_prefix = 'PD_PUBLISH_HTML_LITERAL_'
+    while marker_prefix in text:
+        marker_prefix += 'X'
 
     def protect_inline_code(match):
         protected_code.append(match.group(0))
-        return f'PD_PROTECTED_INLINE_CODE_{len(protected_code) - 1}'
+        return f'{marker_prefix}CODE_{len(protected_code) - 1}_END'
 
     # 先保护完整的单行行内代码段，再去找原始 HTML 式标签。否则像
     # `` `turn off <EOT>` `` 这样的合法代码段会被当成正文，标签处理再插一对
@@ -6309,7 +6323,7 @@ def escape_html_like_tags(text):
 
     def protect_safe_container(match):
         safe_containers.append(match.group(0))
-        return f'PD_SAFE_HTML_CONTAINER_{len(safe_containers) - 1}'
+        return f'{marker_prefix}CONTAINER_{len(safe_containers) - 1}_END'
 
     text = re.sub(
         r'</?(?:details|summary)>',
@@ -6333,10 +6347,16 @@ def escape_html_like_tags(text):
         r'`<\1\2>`',
         text
     )
-    for index, tag in enumerate(safe_containers):
-        text = text.replace(f'PD_SAFE_HTML_CONTAINER_{index}', tag)
-    for index, code in enumerate(protected_code):
-        text = text.replace(f'PD_PROTECTED_INLINE_CODE_{index}', code)
+    literals = {
+        **{f'{marker_prefix}CONTAINER_{index}_END': tag
+           for index, tag in enumerate(safe_containers)},
+        **{f'{marker_prefix}CODE_{index}_END': code
+           for index, code in enumerate(protected_code)},
+    }
+    # Restore whole tokens once: a token for index 1 must never replace the
+    # prefix of index 10, and original literal marker text must stay literal.
+    text = re.sub(re.escape(marker_prefix) + r'(?:CODE|CONTAINER)_\d+_END',
+                  lambda match: literals[match.group(0)], text)
     return text
 
 
@@ -6431,10 +6451,12 @@ def fix_extraction_diacritic_damage(text):
     # 提取器会把重音撕成“空格 + 组合音标”的孤儿。锐音/扬抑符（U+0300/U+0301）
     # 处于这种孤儿位置时是撕裂的字母重音，连同空格一起删除即可还原干净拼写
     # （Yorub ́a → Yoruba）；其余组合符（如数学 tilde “ ̃vf”）只去掉游离标记
-    # 本身并保留空格，避免 where ̃vf 被粘成 wherevf。
+    # 本身并保留空格，避免 where ̃vf 被粘成 wherevf。数学否定斜线
+    # U+0337/U+0338 有独立语义，即使提取时出现在空格后也必须原样保留。
     text = re.sub(
         r' [̀-ͯ]',
-        lambda match: '' if match.group(0)[1] in '̀́' else ' ',
+        lambda match: match.group(0) if match.group(0)[1] in '\u0337\u0338'
+        else ('' if match.group(0)[1] in '̀́' else ' '),
         text,
     )
     return text
@@ -6462,11 +6484,11 @@ def dedupe_image_alts(text):
         alt = (m.group(1) or '').strip()
         url = m.group(2)
         if not alt:
-            alt = f"论文图{index}"
+            alt = f"论文图 {index}"
         count = seen.get(alt, 0) + 1
         seen[alt] = count
         if count > 1:
-            alt = f"{alt} - 图{count}"
+            alt = f"{alt} - 图 {count}"
         return f"![{alt}]({url})"
 
     return re.sub(r'!\[([^\]]*)\]\(([^)\n]+)\)', repl, text)
@@ -6744,6 +6766,36 @@ def escape_statistical_significance_stars(text):
     return ''.join(output)
 
 
+def normalize_bold_label_prefix_spacing(text):
+    """Trim delimiter whitespace in leading explanation labels, preserving their words."""
+    label = r'\*\*[ \t]*([^*\r\n`|$\[\]<> \t][^*\r\n`|$\[\]<>]{0,239}[:：])\*\*'
+    label_pattern = re.compile(label)
+    prefix_pattern = re.compile(r'^([ \t]{0,3}(?:>[ \t]*)?)((?:' + label + r'[ \t]*)+)')
+    output = []
+    fence = None
+    for line in text.splitlines(keepends=True):
+        marker = re.match(r'^[ \t]{0,3}(?:>[ \t]*)?(`{3,}|~{3,})', line)
+        if marker:
+            token = marker[1]
+            if fence is None:
+                fence = (token[0], len(token))
+            elif token[0] == fence[0] and len(token) >= fence[1] \
+                    and not line[marker.end():].strip():
+                fence = None
+            output.append(line)
+            continue
+        if fence is None:
+            # Keep the existing repair for the first label, and additionally
+            # repair each explicitly delimited label in a contiguous prefix.
+            line = re.sub(r'^([ \t]{0,3}(?:>[ \t]*)?)\*\*[ \t]+(?=\S)', r'\1**', line)
+            prefix = prefix_pattern.match(line)
+            if prefix:
+                labels = label_pattern.sub(lambda match: '**' + match[1] + '**', prefix[2])
+                line = prefix[1] + labels + line[prefix.end():]
+        output.append(line)
+    return ''.join(output)
+
+
 def sanitize_markdown_for_publish(text):
     """发布前通用 Markdown 清洗。"""
     # LLM 输出偶尔会携带 UTF-8 替换字符；先清理后再进入 staging，
@@ -6775,12 +6827,9 @@ def sanitize_markdown_for_publish(text):
         r'\1',
         latex_body,
     )
-    # 读者向的概念桥接偶尔会写出 ``** label：**``。CommonMark 把起始定界符
-    # 后面的空白当字面文本，于是 Hugo 会同时保留两个标记。这个确定性修复只
-    # 针对行首定界符；收尾定界符和来源绑定的表格保持字节不变。
-    latex_body = re.sub(
-        r'(?m)^([ \t]*(?:>\s*)?)\*\*[ \t]+(?=\S)', r'\1**', latex_body,
-    )
+    # CommonMark cannot open emphasis after delimiter whitespace. Adjacent
+    # explanation labels can have different words; retain all of those words.
+    latex_body = normalize_bold_label_prefix_spacing(latex_body)
     # 核心摘要里曾观察到重复的中文 MOS 标签。只修复这个正文前缀，
     # 来源引文和表格单元格不动。
     latex_body = re.sub(

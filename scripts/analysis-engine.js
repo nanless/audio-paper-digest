@@ -1071,8 +1071,10 @@ function scoringStabilityIsResolved(scoring) {
 
 function hasValidApiReaderV3Records(paper) {
     try {
-        return require('./lib/reader-pdf-cell-evidence').withSavedPaper(paper,
-            () => hasValidApiReaderV3RecordsUnchecked(paper));
+        return require('./lib/reader-dom-span-projection').withSavedPaper(paper, () =>
+            require('./lib/reader-table-pdf-evidence').withSavedPaper(paper,
+                () => require('./lib/reader-sealed-pdf-quote-evidence').withSavedPaper(paper,
+                    () => hasValidApiReaderV3RecordsUnchecked(paper))));
     } catch (_error) { return false; }
 }
 function hasValidApiReaderV3RecordsUnchecked(paper) {
@@ -1155,6 +1157,38 @@ function hasValidApiReaderV3RecordsUnchecked(paper) {
             && resource.sourceQuoteSha256 === crypto.createHash('sha256')
                 .update(String(resource?.sourceQuote || '')).digest('hex')
         ));
+    // 生产封存来源下的复用与发布，不能只认可资源记录自身的哈希。
+    // 旧低层格式检查没有来源能力时保持只读；新四文件来源必须实际重读，
+    // 不接受正文或草稿附带的文本代替 source.txt。
+    let resourceClaimsValid = true;
+    const claimsContract = require('./deep-analyzer').API_READER_RESOURCE_CLAIMS_CONTRACT;
+    const declaredResourceClaims = manifest.contracts.readerResourceClaims;
+    const declaredStageResourceClaims = stage.readerResourceClaimsContractVersion;
+    const requiresResourceClaimsReplay = declaredResourceClaims !== undefined || declaredStageResourceClaims !== undefined;
+    if (requiresResourceClaimsReplay && (declaredResourceClaims !== claimsContract
+        || declaredStageResourceClaims !== claimsContract)) return false;
+    let resourceClaimSource = requiresResourceClaimsReplay
+        ? require('./lib/model-text-sanitization').currentModelInputSource(paper) : null;
+    const resourceSourceProof = paper.freshRewriteProvenance;
+    if (requiresResourceClaimsReplay && !resourceClaimSource && Number.isInteger(resourceSourceProof?.sourceGeneration)
+        && /^[a-f0-9]{64}$/.test(String(resourceSourceProof?.sourceManifestSha256 || ''))) {
+        const fresh = require('./lib/fresh-analysis-context');
+        if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(String(resourceSourceProof.runId || ''))
+            || stableSha256(resourceSourceProof) !== stableSha256(manifest.freshRewriteProvenance)) return false;
+        const runDir = path.join(FILES.dailyFreshSourceRunsDir, resourceSourceProof.runId);
+        const run = require('./lib/reader-proof-read-scope').readReaderProofJson(path.join(runDir, 'run.json')).value;
+        if (run.contract !== fresh.DAILY_SOURCE_RUN_CONTRACT || run.runId !== resourceSourceProof.runId) return false;
+        resourceClaimSource = fresh.readFreshSource(runDir, paper, {
+            runId: run.runId, sourceExpectations: run.sourceExpectations
+        });
+    }
+    if (requiresResourceClaimsReplay && !resourceClaimSource) return false;
+    if (resourceClaimSource) {
+        const deep = require('./deep-analyzer');
+        resourceClaimsValid = crypto.createHash('sha256').update(resourceClaimSource.text).digest('hex') === paper.sourceSha256
+            && deep.readerResourceClaimIssues(deep.readerResourceClaimDraftFromArticle(plan, article),
+                resources, resourceClaimSource.text).length === 0;
+    }
     const placements = Array.isArray(plan.figurePlacements) ? plan.figurePlacements : null;
     const figureOrdinals = figures.map(item => item?.ordinal);
     const placementOrdinals = placements?.map(item => item?.figureOrdinal);
@@ -1207,25 +1241,30 @@ function hasValidApiReaderV3RecordsUnchecked(paper) {
                             && typeof text === 'string' && typeof cell.renderedText === 'string'
                             && typeof cell.sourceText === 'string'
                             && normalize(text) === normalize(cell.renderedText)
-                            && (binding.pdfCellConfirmation
-                                ? require('./lib/reader-pdf-cell-evidence').savedCellMatches(binding, cell, text)
+                            && ((binding.pdfCellConfirmation || binding.sealedPdfTableEvidence)
+                                ? require('./lib/reader-table-pdf-evidence').savedCellMatches(binding, cell, text)
                                 : normalize(text) === normalize(cell.sourceText)
-                                    || require('./lib/reader-pdf-cell-evidence').savedMergedCellMatches(paper, binding, cell, text));
+                                    || require('./lib/reader-pdf-cell-evidence').savedMergedCellMatches(paper, binding, cell, text)
+                                    || require('./lib/reader-dom-span-projection').savedCellMatches(paper, binding, cell, text, renderedTables[index]));
                     })
                 : binding?.sourceType === 'source_quotes'
                     && Array.isArray(binding?.sourceQuotes)
-                    && binding.sourceQuotes.length > 0
+                    && binding.sourceQuotes.length + (binding.sealedPdfQuoteEvidence?.length || 0) > 0
                     && binding.sourceQuotes.every(item => (
                         /^[a-f0-9]{64}$/.test(String(item?.sourceQuoteSha256 || ''))
                         && item.sourceQuoteSha256 === crypto.createHash('sha256')
                             .update(String(item?.quote || '')).digest('hex')
                     ))
                     && require('./deep-analyzer.js').readerTableHeaderUnitEvidenceFailures(
-                        renderedTables[index], binding.sourceQuotes).length === 0
+                        renderedTables[index], [...binding.sourceQuotes,
+                            ...(binding.sealedPdfQuoteEvidence || [])]).length === 0
                     // 旧记录也重核数字对应关系；保留已有会议 PDF 拆单位的窄兼容。
                     && require('./deep-analyzer.js').readerNumericTokens(renderedTables[index].markdown).every(token => (
-                        require('./deep-analyzer.js').readerSourceQuoteCoversNumericToken(token,
-                            binding.sourceQuotes.map(item => item.quote).join('\n'), true)
+                        binding.sealedPdfQuoteEvidence
+                            ? require('./deep-analyzer.js').readerSourceQuotesCoverNumericToken(token,
+                                binding.sourceQuotes, binding.sealedPdfQuoteEvidence, true)
+                            : require('./deep-analyzer.js').readerSourceQuoteCoversNumericToken(token,
+                                binding.sourceQuotes.map(item => item.quote).join('\n'), true)
                     ))
             )
         ))
@@ -1275,7 +1314,7 @@ function hasValidApiReaderV3RecordsUnchecked(paper) {
                 === API_READER_RESOURCE_IDENTITY_CONTRACT
             && manifest?.stages?.openSourceScan?.resourceEvidenceSha256 === resourceIdentitySha256
             && resourceIdentity.sourceTextSha256 === paper.sourceSha256
-            && resourceIdentityValid,
+            && resourceIdentityValid && resourceClaimsValid,
         execution: typeof stage.model === 'string' && stage.model.trim()
             && typeof stage.protocol === 'string' && stage.protocol.trim()
             && stage.parserVersion === 'api-reader-parser-v3'
@@ -1333,6 +1372,7 @@ function hasValidApiReaderV3RecordsUnchecked(paper) {
         && manifest?.stages?.openSourceScan?.resourceEvidenceSha256 === resourceIdentitySha256
         && resourceIdentity.sourceTextSha256 === paper.sourceSha256
         && resourceIdentityValid
+        && resourceClaimsValid
         && typeof stage.model === 'string' && stage.model.trim()
         && typeof stage.protocol === 'string' && stage.protocol.trim()
         && stage.parserVersion === 'api-reader-parser-v3'

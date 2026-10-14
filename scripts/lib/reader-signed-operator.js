@@ -36,9 +36,33 @@ function readerOperatorImplementationHashes() {
         .map(name => [name, sha(fs.readFileSync(path.join(__dirname, name)))]));
 }
 
+// 只从配置的真实旧来源运行取得能力；调用方传来的同 SHA 对象不能自行授权。
+function withOperatorSourceScope(run, paper, sourceDetails, callback) {
+    const rootDir = require('../config.js').FILES.freshRewriteRunsDir;
+    const loaded = runner.loadRun(run.runId, { rootDir });
+    if (loaded.run.identitySha256 !== run.identitySha256
+        || runner.stableHash(loaded.run.sourceExpectations) !== runner.stableHash(run.sourceExpectations)) {
+        throw new Error('Signed operator physical run/source identity drift');
+    }
+    const fresh = require('./fresh-analysis-context.js');
+    const verified = fresh.readFreshSource(loaded.runDir, paper, loaded.run);
+    if (!verified || runner.stableHash(verified) !== runner.stableHash(sourceDetails)) {
+        throw new Error('Signed operator physical source differs from supplied snapshot');
+    }
+    runner.assertFreshSourceRecordMatchesRun(paper, loaded.run, verified.freshSourceDescriptor);
+    return fresh.withFreshAnalysisContext({ runDir: loaded.runDir, runId: loaded.run.runId,
+        sourceExpectations: loaded.run.sourceExpectations }, () => callback(verified));
+}
+
 async function prepareReaderOperatorPatchResult({ parent, sourceDetails, run, request, patchFileSha256, appliedAt }) {
     validateReaderOperatorPatchRequest(request, run); checkParent(parent, request);
     if (!validSha(patchFileSha256) || !Number.isFinite(Date.parse(appliedAt))) throw new Error('Invalid operator execution audit');
+    return withOperatorSourceScope(run, parent, sourceDetails, verified =>
+        prepareReaderOperatorPatchResultFromVerifiedSource({ parent, sourceDetails: verified, run,
+            request, patchFileSha256, appliedAt }));
+}
+
+async function prepareReaderOperatorPatchResultFromVerifiedSource({ parent, sourceDetails, run, request, patchFileSha256, appliedAt }) {
     const draftRecovery = reconstructReaderDraftFromVerifiedArticle({ paper: parent, sourceDetails, runId: run.runId });
     const allowedPaths = request.patch.replacements.map(item => item?.path).filter(pointer =>
         /^\/(?:readerTitle|oneSentenceThesis)$|^\/(?:sections|conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/body)?$/.test(pointer || ''));
@@ -119,7 +143,8 @@ async function applyReaderOperatorPatch({ loaded, patchFile }, deps) {
                 throw new Error('Signed operator intent/request drift');
             }
             checkParent(before, request);
-            reconstructReaderDraftFromVerifiedArticle({ paper: before, sourceDetails, runId: run.runId });
+            withOperatorSourceScope(current.run, before, sourceDetails, () =>
+                reconstructReaderDraftFromVerifiedArticle({ paper: before, sourceDetails, runId: run.runId }));
             try { output = readPrivate(path.join(directory, 'output.json')).value; }
             catch (error) { if (error.code !== 'ENOENT') throw error; }
         } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -150,7 +175,8 @@ async function applyReaderOperatorPatch({ loaded, patchFile }, deps) {
             || output.provenance.parentPaperSha256 !== request.parentPaperSha256
             || output.provenance.patchFileSha256 !== requestFile.sha256
             || output.provenance.sourceSnapshotSha256 !== sourceDetails.freshSourceDescriptor.sourceSnapshotSha256
-            || !require('../analysis-engine.js').hasValidApiReaderV3Records(output.paper)) throw new Error('Signed operator durable output drift');
+            || !withOperatorSourceScope(current.run, output.paper, sourceDetails,
+                () => require('../analysis-engine.js').hasValidApiReaderV3Records(output.paper))) throw new Error('Signed operator durable output drift');
         immutable(path.join(directory, 'output.json'), output);
         if (deps.afterOutput) await deps.afterOutput();
         if (readPrivate(filename).sha256 !== requestFile.sha256) throw new Error('Signed operator patch bytes changed');
@@ -215,7 +241,8 @@ async function acceptReaderOperatorFactReview({ loaded, request }, deps) {
                 || parent.apiReaderArticleSha256 !== request.articleSha256 || parent.apiReaderPlanSha256 !== request.planSha256) {
                 throw new Error('Fact acceptance requires the exact pending operator Reader');
             }
-            reconstructReaderDraftFromVerifiedArticle({ paper: parent, sourceDetails: source, runId: run.runId });
+            withOperatorSourceScope(current.run, parent, source, () =>
+                reconstructReaderDraftFromVerifiedArticle({ paper: parent, sourceDetails: source, runId: run.runId }));
             const accepted = structuredClone(parent);
             accepted.readerFactReview = { ...parent.readerFactReview, status: 'complete',
                 contract: 'reader-operator-fact-review-v1', parentPaperSha256: request.parentPaperSha256,
@@ -232,7 +259,8 @@ async function acceptReaderOperatorFactReview({ loaded, request }, deps) {
             || receipt.paper.apiReaderArticleSha256 !== request.articleSha256
             || receipt.paper.apiReaderPlanSha256 !== request.planSha256
             || receipt.paper.sourceSha256 !== request.sourceSha256
-            || !require('../analysis-engine.js').hasValidApiReaderV3Records(receipt.paper)) throw new Error('Fact acceptance durable receipt drift');
+            || !withOperatorSourceScope(current.run, receipt.paper, source,
+                () => require('../analysis-engine.js').hasValidApiReaderV3Records(receipt.paper))) throw new Error('Fact acceptance durable receipt drift');
         if (deps.afterFactReceipt) await deps.afterFactReceipt();
         if (readPrivate(path.join(runDir, 'source-audits', request.reportFile), false).sha256 !== request.reportSha256) {
             throw new Error('Fact report bytes changed before installation');
@@ -248,7 +276,9 @@ async function acceptReaderOperatorFactReview({ loaded, request }, deps) {
             const baseline = [analysis.operatorFactReviewBaseStatus, current.run.operatorFactReviewBaseStatus]
                 .find(value => /^fact_review/.test(String(value || ''))) || analysis.operatorFactReviewBaseStatus;
             const status = externalFailure || (pending ? 'fact_review_pending'
-                : baseline === 'complete' ? (papers.every(deps.isSuccessfulAnalysisRecord) ? 'complete' : 'partial')
+                : baseline === 'complete' ? (require('./fresh-analysis-context.js').withFreshAnalysisContext({
+                    runDir, runId: current.run.runId, sourceExpectations: current.run.sourceExpectations
+                }, () => papers.every(deps.isSuccessfulAnalysisRecord)) ? 'complete' : 'partial')
                     : baseline || analysis.status);
             if (currentSha === receipt.afterPaperSha256 && analysis.status === status) return undefined;
             return { ...analysis, papers, status };

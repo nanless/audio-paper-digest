@@ -213,7 +213,6 @@ const FILES = {
     conferenceStagingSourceDir: path.join(DATA_DIR, 'runtime', 'conference-staging-sources'),
     conferenceStagingDir: path.join(DATA_DIR, 'runtime', 'conference-staging'),
     conferenceRunsDir: path.join(DATA_DIR, 'runtime', 'conference-runs'),
-    conferenceExecutionsDir: path.join(DATA_DIR, 'runtime', 'conference-executions'),
     conferenceAnalysisDir: path.join(DATA_DIR, 'runtime', 'conference-analysis-executions'),
     conferencePageStagingDir: path.join(DATA_DIR, 'runtime', 'conference-page-staging'),
     conferenceAggregateDir: path.join(DATA_DIR, 'runtime', 'conference-aggregates'),
@@ -264,7 +263,6 @@ const FILES = {
     legacyHistoricalTagAssignmentDir: path.join(DATA_DIR, 'runtime', 'historical-taxonomy-assignments'),
     historicalPageStagingDir: path.join(DATA_DIR, 'runtime', 'historical-page-staging'),
     historicalDailyAggregateDir: path.join(DATA_DIR, 'runtime', 'historical-daily-aggregates'),
-    historicalPublicationDir: path.join(DATA_DIR, 'runtime', 'historical-publications'),
     historicalAnalysisSchedulerDir: path.join(DATA_DIR, 'runtime', 'historical-analysis-schedulers'),
     historicalPostprocessSchedulerDir: path.join(DATA_DIR, 'runtime', 'historical-postprocess-schedulers'),
     // 历史页面 crosswalk 使用的官方来源请求/快照/全文/凭证包，不可更改。
@@ -279,7 +277,6 @@ const FILES = {
     filterDecisions: path.join(CURRENT_DIR, 'filter-decisions.json'),
     filteredPapers: path.join(CURRENT_DIR, 'filtered-papers.json'),
     deepAnalysisResult: path.join(CURRENT_DIR, 'deep-analysis-result.json'),
-    manualExternalResourceCache: path.join(CURRENT_DIR, 'manual-external-resource-cache.json'),
     deepAnalysisResultLegacy: path.join(DATA_DIR, 'deep-analysis-result.json'),
     visualSummaryManifestDir: path.join(CURRENT_DIR, 'visual-summary-manifests'),
     // 发布后生成的图片属于已完成批次，直接写入
@@ -292,18 +289,11 @@ const FILES = {
     postPublishVisualWaiverDir: path.join(CURRENT_DIR, 'post-publish-visual-waivers'),
     digestRunReportDir: path.join(CURRENT_DIR, 'digest-run-reports'),
     // 正式 Manual v6 工作流状态、记录/规范和观测指标。
-    manualV6Dir: path.join(CURRENT_DIR, 'manual-v6'),
     // 显式的兼容/审计运行与生产隔离。
-    manualV6ShadowDir: path.join(CURRENT_DIR, 'manual-v6-shadow'),
-    manualV6MetricsDir: path.join(CURRENT_DIR, 'manual-v6'),
-    manualV6ShadowMetricsDir: path.join(CURRENT_DIR, 'manual-v6-shadow'),
     // 旧 v5 只读队列观测和性能快照。
-    manualV5ObservabilityDir: path.join(CURRENT_DIR, 'manual-v5-observability'),
     // 每个日期/论文一份默认拒绝的单篇作者包。这些文件只是供只读检查使用的旧作者任务输入资料，
     // 从不是正式分析状态。
-    manualV5AuthorInputDir: path.join(CURRENT_DIR, 'manual-v5-author-inputs'),
     // 跨批次报告是可选的、不可更改的纯观测汇总。
-    manualPerformanceReportDir: path.join(CURRENT_DIR, 'manual-performance-reports'),
     digestCoverAssetDir: ARCHIVE_DIR,
     // 旧单文件位置，只为迁移旧状态的调用方保留。
     visualSummaryManifest: path.join(CURRENT_DIR, 'visual-summary-manifest.json'),

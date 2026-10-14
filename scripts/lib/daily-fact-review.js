@@ -275,8 +275,24 @@ function readerFactReviewScope(readerBound, paper, callback, restoringSaved, par
     }
     const savedReader = paper.analysisManifest.stages.apiReaderArticle?.factReview;
     if (savedReader !== undefined && daily.stableHash(validateProof(savedReader)) !== daily.stableHash(freshBound.proof)
-        && (!previous || daily.stableHash(savedReader) !== daily.stableHash(previous.proof)))
-        fail('Reader纠错缺少原Reader事实反馈包');
+        && (!previous || daily.stableHash(savedReader) !== daily.stableHash(previous.proof))) {
+        // A new Reader correction may follow an already verified parent/child
+        // pair. Recover both actual packets; the new child never impersonates
+        // either old proof and must retain every old child constraint.
+        const recovered = require('./saved-fact-feedback').readSavedFeedback(paper, context.plan);
+        if (restoringSaved || !previous || !recovered?.readerFeedback
+            || daily.stableHash(previous.proof) !== daily.stableHash(proofFor(recovered.feedback)))
+            fail('Reader纠错缺少原Reader事实反馈包');
+        const oldReader = validateFeedback(recovered.readerFeedback, context.plan, paper);
+        if (daily.stableHash(oldReader.proof) !== daily.stableHash(savedReader)
+            || !require('./saved-fact-feedback').completedReaderUpstream(paper, context.plan))
+            fail('Reader纠错缺少原Reader事实反馈包');
+        if (!reader.readerFeedback.includes(oldReader.feedback.readerFeedback)
+            || oldReader.feedback.rejectedReaderClaims.some(claim => !reader.rejectedReaderClaims.includes(claim))
+            || oldReader.feedback.sourceQuotes.some(quote => !reader.sourceQuotes.includes(quote)))
+            fail('新Reader反馈遗漏旧Reader事实约束');
+        parentStage = recovered.savedParentStage || 'fullStageReanalysis';
+    }
     const guidance = [...new Set([reader.readerFeedback, restoringSaved ? previous?.feedback.readerFeedback : '', parentStage === 'coreSummaryRepair' ? previous?.feedback.coreFeedback : '', previous?.feedback.primaryFeedback || ''].filter(Boolean))].join('\n原主文事实约束仍适用，但本次只修Reader：\n');
     const quotes = [...new Set([...reader.sourceQuotes, ...(previous?.feedback.sourceQuotes || [])])];
     const readerText = `${guidance}\n以下逐字引文已对封存原文核验，仅用作纠错证据：\n${quotes.join('\n')}`;

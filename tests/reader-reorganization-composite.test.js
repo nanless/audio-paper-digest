@@ -85,7 +85,8 @@ test('旧实现迁移的超节数少术语复合稿仍走受限重排，不退�
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const directory = path.join(root, 'reader-attempts');
     const paperId = '2609.99965';
-    const paper = { arxivId: paperId, title: '复合原付费稿迁移' };
+    const paper = { arxivId: paperId, title: '复合原付费稿迁移',
+        apiReaderResources: structuredClone(sample.paper.apiReaderResources) };
     const sourceDetails = { ...sample.sourceDetails, paperId: `arxiv:${paperId}`, source: 'html', sourceId: paperId };
     const scope = { paperId: `arxiv:${paperId}`, runId: crypto.randomUUID(), route: 'arxiv-fresh-fetch', sourceDetails,
         sourceSha256: repair.shaText(sourceDetails.text), structuredArtifactsSha256: sourceDetails.structuredArtifacts.payloadSha256,

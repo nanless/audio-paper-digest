@@ -118,6 +118,12 @@ async function main(options = {}) {
         throw new Error('长文恢复检查设置必须为 true 或 false。');
     }
     const refreshReaderDiagnostics = REFRESH_READER_DIAGNOSTICS || options.refreshReaderDiagnostics === true;
+    const operatorIndex = process.argv.indexOf('--reader-operator-corrections');
+    const operatorManifestPath = options.readerOperatorCorrectionsPath !== undefined
+        ? options.readerOperatorCorrectionsPath : operatorIndex < 0 ? undefined : process.argv[operatorIndex+1];
+    if (operatorManifestPath !== undefined && (typeof operatorManifestPath !== 'string'
+        || !operatorManifestPath.trim() || operatorManifestPath.startsWith('--')))
+        throw new Error('人工修正须提供 --reader-operator-corrections 清单路径');
     let explicitManifest;
     const manifestIndex = process.argv.indexOf('--reader-retry-manifest');
     const manifestPath = options.readerRetryManifestPath !== undefined
@@ -248,8 +254,11 @@ async function main(options = {}) {
             analyze: (paper, sourceOptions) => {
                 const normalAnalyze = recoveryOptions => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper, recoveryOptions);
                 const grant = explicitRounds.get(normalizedId(paper));
-                const analyze = recoveryOptions => grant ? readerExplicitRound.withExplicitRound(paper, grant, () => normalAnalyze(recoveryOptions)) : normalAnalyze(recoveryOptions);
-                return savedFacts.analyzeWithRecoveredFeedback(paper, dailySourcePlan, analyze, feedbacks.get(normalizedId(paper)), sourceOptions);
+                // Reader恢复可直接刷新正文，不必调用整篇分析回调；新轮范围须覆盖整个恢复入口。
+                const recover = () => savedFacts.analyzeWithRecoveredFeedback(paper, dailySourcePlan, normalAnalyze,
+                    feedbacks.get(normalizedId(paper)), sourceOptions);
+                if (operatorManifestPath !== undefined && grant) throw new Error('人工修正不能混用收费重试授权');
+                return grant ? readerExplicitRound.withExplicitRound(paper, grant, recover) : recover();
             }
         }),
         preparePaperLocked: paper => {
@@ -332,7 +341,10 @@ async function main(options = {}) {
         }
     });
     const { stats } = await dailyFreshSources.withDailyFreshAnalysisContext(
-        dailySourcePlan, runAnalysisFromDailySources, { refreshReaderDiagnostics }
+        dailySourcePlan, () => operatorManifestPath !== undefined
+            ? require('./lib/daily-reader-operator-correction').withCorrections(
+                operatorManifestPath,dailySourcePlan,papers,runAnalysisFromDailySources,{factFeedbacks:feedbacks})
+            : runAnalysisFromDailySources(), { refreshReaderDiagnostics }
     );
 
     console.log('\n=== 批量分析完成 ===');

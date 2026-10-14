@@ -15,6 +15,7 @@ import tempfile
 import io
 import tarfile
 from datetime import datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -23,7 +24,7 @@ from blog_entry_loader import load_publish_to_blog
 from publish_common import run_bounded_llm_tasks
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env
 from runtime_guard import require_external_runtime, require_workspace_role
-from conference_publication_gate import inspect_html, verify_publication_urls, validate_png, GATE_CONTRACT
+from conference_publication_gate import inspect_html, verify_publication_urls, validate_png, fetch_public, GATE_CONTRACT
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -533,6 +534,66 @@ def validate_staged_authors(manifest, content, proof):
         raise ConferencePublicationError('会议页面可见作者机构与已重放来源不一致')
 
 
+CONFERENCE_WORKBENCH_NAMES = {'citation.json', 'citation.bib', 'citation.ris', 'rethink-context.json'}
+
+
+def validate_conference_workbench_assets(paper_id, manifest, text, asset_records, analysis):
+    """Validate the complete source-bound export set before blog Git admission."""
+    from markdown_hugo_gate import parse_frontmatter_content
+    frontmatter, _ = parse_frontmatter_content('conference-workbench.md', text)
+    records = [record for record in asset_records if record['path'].startswith('static/data/papers/')]
+    if not records and frontmatter.get('paper_digest_workbench_contract') is None:
+        return []  # Already sealed pages without exports remain readable.
+    paper = analysis['papers'][0]
+    date = str(manifest.get('date'))
+    prefix = f'static/data/papers/{date}/conference-{sha_bytes(paper_id.encode())[:24]}/'
+    if len(records) != 4 or {record['path'][len(prefix):] for record in records
+                            if record['path'].startswith(prefix)} != CONFERENCE_WORKBENCH_NAMES:
+        raise ConferencePublicationError('会议研究工作区导出路径或四文件集合不完整')
+    bound = frontmatter.get('paper_digest_sidecars')
+    if not isinstance(bound, dict) or set(bound) != CONFERENCE_WORKBENCH_NAMES:
+        raise ConferencePublicationError('会议研究工作区页面缺少精确四文件记录')
+    expected_authors = [{'name': re.sub(r'\s+', ' ', author['name']).strip(),
+                         'affiliations': [re.sub(r'\s+', ' ', value).strip() for value in author['affiliations']]}
+                        for author in paper['apiReaderAuthors']['authors']]
+    assignment = manifest.get('tagMetadata') or manifest.get('taxonomy') or {}
+    concepts = {concept['id']: concept for concept in assignment.get('concepts', [])}
+    try:
+        parsed = dict(paper['parsed'])
+        parsed['primaryTaskTag'] = '#' + concepts[assignment['primaryTaskId']]['preferredLabel']['zh']
+        parsed['primaryMethodTag'] = '#' + concepts[assignment['primaryMethodId']]['preferredLabel']['zh']
+        expected_bundle = load_publish_to_blog().build_verified_conference_workbench_bundle(
+            paper, date, paper_id=paper_id, publication=manifest['publication'],
+            reader_plan=paper['apiReaderPlan'], parsed=parsed,
+            authors=paper['apiReaderAuthors']['authors'])
+    except (KeyError, ValueError, TypeError) as error:
+        raise ConferencePublicationError('会议研究工作区不能从已认证分析重建') from error
+    source = paper['sourceSha256']
+    if frontmatter.get('paper_digest_workbench_source_kind') != 'conference' \
+            or frontmatter.get('paper_digest_workbench_paper_id') != paper_id \
+            or frontmatter.get('paper_digest_workbench_source_sha256') != source:
+        raise ConferencePublicationError('会议研究工作区页面身份未绑定本篇已核验来源')
+    for record in records:
+        name = Path(record['path']).name
+        raw = read_bytes(record['sourcePath'])
+        expected_url = load_publish_to_blog()._researcher_public_url(Path(record['path']))
+        if sha_bytes(raw) != record['sourceSha256'] or bound[name].get('sha256') != sha_bytes(raw) \
+                or bound[name].get('url') != expected_url or len(raw) > 256 * 1024 \
+                or not raw.endswith(b'\n') or b'\r' in raw \
+                or expected_bundle['sidecars'].get(Path(record['path'])) != raw:
+            raise ConferencePublicationError('会议研究工作区导出字节未绑定已审页面')
+        if name.endswith('.json'):
+            data = read_json(record['sourcePath'])
+            if data.get('paperId') != paper_id or data.get('sourceKind') != 'conference' \
+                    or data.get('sourceSha256') != source or data.get('authors') != expected_authors \
+                    or data.get('originalTitle') != re.sub(r'\s+', ' ', paper['title']).strip() \
+                    or data.get('recordUrl') != manifest['publication']['recordUrl'] \
+                    or data.get('pdfUrl') != manifest['publication']['pdfUrl'] \
+                    or any(key.lower().startswith('arxiv') for key in data):
+                raise ConferencePublicationError('会议研究工作区导出原文身份或作者不一致')
+    return records
+
+
 def process_bundle(conference_id, process_id):
     safe_uuid(process_id, 'processId')
     if not re.fullmatch(r'[a-z0-9][a-z0-9-]{0,80}', conference_id or ''):
@@ -619,6 +680,7 @@ def process_bundle(conference_id, process_id):
         if not isinstance(assets, list):
             raise ConferencePublicationError(f'论文资产清单非法: {paper_id}')
         declared_asset_paths = set()
+        workbench_assets = []
         for asset in assets:
             if not isinstance(asset, dict) or set(asset) != {'path', 'sha256', 'size'}:
                 raise ConferencePublicationError(f'论文资产记录非法: {paper_id}')
@@ -626,6 +688,17 @@ def process_bundle(conference_id, process_id):
             asset_bytes = read_bytes(manifest_path.parent / 'assets' / asset_path)
             if asset.get('sha256') != sha_bytes(asset_bytes) or asset.get('size') != len(asset_bytes):
                 raise ConferencePublicationError(f'论文资产与 staging 不一致: {paper_id} {asset_path}')
+            if asset_path.startswith('static/data/papers/'):
+                if asset_path in seen_targets:
+                    raise ConferencePublicationError(f'研究工作区目标路径重复: {asset_path}')
+                seen_targets.add(asset_path)
+                record = {'kind': 'sidecar', 'paperId': paper_id, 'path': asset_path,
+                          'sourcePath': str(manifest_path.parent / 'assets' / asset_path),
+                          'manifestSha256': proof['manifestSha256'],
+                          'sourceSha256': sha_bytes(asset_bytes), 'size': len(asset_bytes)}
+                workbench_assets.append(record)
+                files.append(record)
+                continue
             image_target = safe_image_relative('/'.join(Path(asset_path).parts[3:]),
                                                f'{paper_id} image asset path')
             if image_target in seen_image_targets:
@@ -636,6 +709,14 @@ def process_bundle(conference_id, process_id):
                                 'sourcePath': str(manifest_path.parent / 'assets' / asset_path),
                                 'manifestSha256': proof['manifestSha256'],
                                 'sourceSha256': sha_bytes(asset_bytes), 'size': len(asset_bytes)})
+
+        if workbench_assets or 'paper_digest_workbench_contract:' in text:
+            analysis_path = RUNTIME / 'conference-analysis-executions' / item['analysisRunId'] / 'analysis.json'
+            analysis_bytes = read_bytes(analysis_path)
+            if sha_bytes(analysis_bytes) != item['analysisProof']['analysisSha256']:
+                raise ConferencePublicationError('会议研究工作区来源分析与完成凭证 SHA 不一致')
+            validate_conference_workbench_assets(paper_id, manifest, text, workbench_assets,
+                                                 json.loads(analysis_bytes))
 
         # 页面自身没问题，它引用的 PNG 却可能不在本次发布增量里。第一次 EACL
         # 发布就出过这事：Markdown 页面提交了，static/images/ 却没跟踪，
@@ -769,6 +850,20 @@ def replace_exact(filename, data):
 def can_replace_conference_target(target, data, conference_id, kind):
     if kind == 'asset':
         return False
+    if kind == 'sidecar':
+        target = Path(target)
+        if target.name not in CONFERENCE_WORKBENCH_NAMES:
+            return False
+        try:
+            citation = read_json(target.parent / 'citation.json')
+            paper_id = citation['paperId']
+            return (citation.get('sourceKind') == 'conference'
+                    and re.fullmatch(r'conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+', paper_id) is not None
+                    and target.parent.name == 'conference-' + sha_bytes(paper_id.encode())[:24]
+                    and SHA_RE.fullmatch(str(citation.get('sourceSha256') or '')) is not None
+                    and citation.get('contract') == 'researcher-sidecars-v1')
+        except (ConferencePublicationError, ValueError, KeyError, TypeError):
+            return False
     try:
         text = read_bytes(target).decode('utf-8')
     except (UnicodeDecodeError, ConferencePublicationError):
@@ -1200,7 +1295,7 @@ def gate_fingerprint():
 def publication_page_files(generation):
     """返回可渲染的页面记录，排除旧式内联图片资产。"""
     return [record for record in generation['files']
-            if record.get('kind') != 'asset']
+            if record.get('kind') not in {'asset', 'sidecar'}]
 
 
 def publication_image_files(generation):
@@ -1476,7 +1571,7 @@ def review(conference_id, process_id):
         generation, _, _ = validate_generation(
             conference_id, process_id, repo, images, allow_committed=True)
         require_content_review_runtime(repo)
-        content_review = review_pages(repo, generation['files'])
+        content_review = review_pages(repo, publication_page_files(generation))
         # 按已认证的 generation 重建 Hugo，跑完语义与多模态 review 之后再封凭证。
         # 整个 review 对博客仓库和图片仓库都是只读的。
         hugo = run_hugo(repo, generation)
@@ -1538,7 +1633,7 @@ def validate_review(generation, receipt, *, current=True):
         raise ConferencePublicationError('会议页面语义 review 凭证无效')
     reviewed = content.get('pages')
     if [(p.get('path'), p.get('sha256'), p.get('passed')) for p in reviewed or []] != [
-            (r['path'], r['sourceSha256'], True) for r in generation['files']]:
+            (r['path'], r['sourceSha256'], True) for r in publication_page_files(generation)]:
         raise ConferencePublicationError('逐页内容 review 与 generation 不一致')
     protocol = content.get('protocol')
     if current:
@@ -1554,6 +1649,37 @@ def validate_review(generation, receipt, *, current=True):
         raise ConferencePublicationError('会议页面语义 review 协议字段不闭合')
 
 
+def conference_sidecar_urls(pages, generation):
+    records = [record for record in generation.get('files', []) if record.get('kind') == 'sidecar']
+    if not records:
+        return []
+    origins = {(urlsplit(page['url']).scheme, urlsplit(page['url']).netloc) for page in pages}
+    if len(origins) != 1:
+        raise ConferencePublicationError('会议研究工作区公开地址缺少唯一已审页面站点')
+    scheme, hostname = next(iter(origins))
+    return [(f'{scheme}://{hostname}' + load_publish_to_blog()._researcher_public_url(Path(record['path'])), record)
+            for record in records]
+
+
+def verify_conference_publication_urls(pages, image_records, generation):
+    result = verify_publication_urls(pages, image_records, IMAGE_BASE_URL)
+    if result.get('status') != 'passed':
+        return result
+    checks = list(result.get('checks', []))
+    def check_sidecar(item):
+        url, record = item
+        observed = fetch_public(url)
+        if observed['url'] != url or sha_bytes(observed['body']) != record['sourceSha256'] \
+                or len(observed['body']) != record['size']:
+            raise ConferencePublicationError('会议研究工作区线上地址或实际字节与已审文件不一致')
+        return {'url': url, 'sha256': sha_bytes(observed['body']), 'kind': 'sidecar'}
+    urls = conference_sidecar_urls(pages, generation)
+    if urls:
+        with ThreadPoolExecutor(max_workers=4, thread_name_prefix='conference-sidecar-verify') as pool:
+            checks.extend(pool.map(check_sidecar, urls))
+    return {**result, 'checks': checks}
+
+
 def accept_publication(conference_id, process_id, generation, receipt, commit, image_commit, remote):
     """只有实际部署的字节通过 GET 验收之后，才签完成凭证。"""
     existing = publication_dir(conference_id, process_id) / 'publish.json'
@@ -1562,8 +1688,8 @@ def accept_publication(conference_id, process_id, generation, receipt, commit, i
         validate_publication(generation, receipt, published, commit, image_commit)
         return published
     try:
-        acceptance = verify_publication_urls(receipt['hugo']['pages'],
-                                              generation['imageFiles'], IMAGE_BASE_URL)
+        acceptance = verify_conference_publication_urls(receipt['hugo']['pages'],
+                                                         generation['imageFiles'], generation)
     except Exception as exc:
         # 绝不把传输层异常文本写出去：重定向地址和代理里可能带密钥。
         raise ConferencePublicationError('远端已推送，但实际 URL 验收未通过；可重试 verify') from exc
@@ -1588,7 +1714,8 @@ def validate_publication(generation, review_receipt, published, commit, image_co
     declared = body.pop('publishSha256', None)
     acceptance = published.get('urlAcceptance') or {}
     expected_urls = {p['url'] for p in review_receipt['hugo']['pages']} | {
-        f'{IMAGE_BASE_URL}/{r["path"]}' for r in generation['imageFiles']}
+        f'{IMAGE_BASE_URL}/{r["path"]}' for r in generation['imageFiles']} | {
+        url for url, _ in conference_sidecar_urls(review_receipt['hugo']['pages'], generation)}
     if declared != stable(body) or published.get('contract') != 'conference-blog-publish-v1' \
             or published.get('version') != 2 or published.get('publicationCommit') != commit \
             or published.get('generationSha256') != generation['generationSha256'] \
@@ -1647,9 +1774,10 @@ def fresh_online_acceptance(directory, repo, images, generation, published, mech
         write_exact(intent_path, json_bytes(intent))
         failure = None
         try:
-            acceptance = verify_publication_urls(mechanical['pages'], image_files, IMAGE_BASE_URL)
+            acceptance = verify_conference_publication_urls(mechanical['pages'], image_files, generation)
             expected_urls = {p['url'] for p in mechanical['pages']} | {
-                f'{IMAGE_BASE_URL}/{r["path"]}' for r in image_files}
+                f'{IMAGE_BASE_URL}/{r["path"]}' for r in image_files} | {
+                url for url, _ in conference_sidecar_urls(mechanical['pages'], generation)}
             if acceptance.get('status') != 'passed' or acceptance.get('contract') != GATE_CONTRACT \
                     or {c.get('url') for c in acceptance.get('checks', [])} != expected_urls:
                 raise ConferencePublicationError('线上再验收集合不闭合')
@@ -1753,7 +1881,7 @@ def published_state(conference_id, process_id, repo, images, result, *, verify_u
                                  'renderImageTree': image_commit}
             mechanical = run_hugo(repo, render_generation)
             try:
-                acceptance = verify_publication_urls(mechanical['pages'], image_files, IMAGE_BASE_URL)
+                acceptance = verify_conference_publication_urls(mechanical['pages'], image_files, generation)
             except Exception as exc:
                 raise ConferencePublicationError('legacy 实际 URL 验收未通过；旧发布凭证保持不变') from exc
             verify_published_tree(repo, commit, generation['remoteIdentitySha256'], generation['files'])
@@ -1768,7 +1896,8 @@ def published_state(conference_id, process_id, repo, images, result, *, verify_u
         acceptance = proof.get('urlAcceptance') or {}
         mechanical = proof.get('hugo') or {}
         urls = {p['url'] for p in mechanical.get('pages', [])} | {
-            f'{IMAGE_BASE_URL}/{r["path"]}' for r in image_files}
+            f'{IMAGE_BASE_URL}/{r["path"]}' for r in image_files} | {
+                url for url, _ in conference_sidecar_urls(mechanical['pages'], generation)}
         if proof.get('contract') != 'conference-legacy-publication-verification-v2' \
                 or proof.get('publishSha256') != published['publishSha256'] \
                 or mechanical.get('contract') != GATE_CONTRACT or mechanical.get('status') != 'passed' \

@@ -31,6 +31,23 @@ function readChecked(file) {
 
 function fullReason(payload) {
     const repair = useModule('./reader-repair');
+    const complete = repair.parseRecoveryDraft(payload?.draft) || repair.parseRecoveryDraft(payload?.rawDraft);
+    const repeatedValidation = Number.isSafeInteger(payload?.validationFailureStreak)
+        && payload.validationFailureStreak >= 2 && typeof payload.validationFailureSignature === 'string'
+        && payload.validationFailureSignature === repair.validationFailureSignature(payload.issues);
+    if (payload?.status === 'failed' && complete?.sections?.length >= 12
+        && complete.sections.every(section => section && ['kind', 'heading', 'body']
+            .every(key => typeof section[key] === 'string' && section[key].trim()))
+        && Number.isSafeInteger(payload.attempts) && payload.attempts >= 2
+        && ((Number.isSafeInteger(payload.noProgress) && payload.noProgress >= 2) || repeatedValidation)
+        && /^[a-f0-9]{64}$/.test(payload.failureSignature || '')
+        && Array.isArray(payload.issues) && payload.issues.some(issue => issue?.diagnosticOnly !== true)) {
+        return { code: 'complete_failed_draft_no_progress', draftSha256: repair.hashDraft(complete),
+            issuesSha256: repair.hashDraft(payload.issues), failureSignature: payload.failureSignature,
+            attempts: payload.attempts, noProgress: payload.noProgress,
+            validationFailureStreak: payload.validationFailureStreak || 0,
+            validationFailureSignature: payload.validationFailureSignature || '' };
+    }
     if (!payload || payload.status !== 'failed' || payload.draft?.sections?.length
         || repair.parseRecoveryDraft(payload.draft) || repair.parseRecoveryDraft(payload.rawDraft)
         || repair.buildTopLevelMetadataRepairContext(payload.rawDraft)) return null;
@@ -144,8 +161,13 @@ function assertParent(directory, grant, payload, identity) {
     let reason;
     if (grant.mode === 'full') {
         reason = fullReason(payload);
-        if (!reason || payload.fullAttempts !== parent.grant.maxFullResponses
-            || parent.grant.maxFullResponses < 1 || !parent.requests.some(request => request.stage === 'apiReaderArticle')) fail('完整再生只接受已用完全文额度且缺失或不可解析正文的失败稿');
+        const noProgress = reason?.code === 'complete_failed_draft_no_progress';
+        const eligible = noProgress
+            ? parent.requests.filter(request => request.stage === 'apiReaderRepair').length >= 2
+                && payload.attempts >= 2
+            : reason && payload.fullAttempts === parent.grant.maxFullResponses
+                && parent.grant.maxFullResponses >= 1 && parent.requests.some(request => request.stage === 'apiReaderArticle');
+        if (!eligible) fail('完整再生只接受有真实连续无进展补丁账，或已用完全文额度且缺失或不可解析正文的失败稿');
     } else {
         const draft = repair.parseRecoveryDraft(payload.draft) || repair.parseRecoveryDraft(payload.rawDraft);
         if (!draft || draft.sections.length < 12 || draft.sections.some(section => !section

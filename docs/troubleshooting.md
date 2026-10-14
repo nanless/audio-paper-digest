@@ -67,7 +67,7 @@ npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-
 
 ## 6.1 历史来源获取或暂存页面失败
 
-先确认失败的是哪种来源。历史 arXiv 的当前这组已保存文件保存在 `data/runtime/fetched-arxiv-sources/<arxivId>/generation-XXXXXX/`，应包含文本、PDF、来源信息和清单；`generation` 是获取序号，不是论文的 `vN` 版本号。重新运行同一 `history:direct-scheduler`，直到当前计划所选论文均已在对应获取序号下达到 `ready`，再运行 `history:direct-run --apply`。
+先确认失败的是哪种来源。历史 arXiv 的当前这组已保存文件保存在 `data/runtime/fetched-arxiv-sources/<arxivId>/generation-XXXXXX/`，应包含文本、PDF、来源信息和清单；`generation` 是获取序号，不是论文的 `vN` 版本号。重新运行同一 `history:sources`，直到当前计划所选论文均已在对应获取序号下达到 `ready`，再运行 `history:run --apply`。
 
 `direct-run` 不补抓来源，来源状态缺失、为 `handoff` 或 `failed` 时，会在模型请求前停止。再次运行会核对来源，并复用 `analysis-recovery.json` 中仍与来源相符的阶段结果。若渲染实现已变化，它可使用匹配的分析结果重新生成暂存页，不再请求模型，也不覆盖旧暂存文件。
 

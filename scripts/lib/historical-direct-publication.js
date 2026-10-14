@@ -8,7 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
-const legacyPublication = require('./historical-publication.js');
+const publicationFiles = require('./publication-file-primitives.js');
 const planApi = require('./historical-direct-rewrite-plan.js');
 const runnerApi = require('./historical-direct-rewrite-runner.js');
 const aggregateApi = require('./historical-direct-aggregate.js');
@@ -85,7 +85,7 @@ function inside(root, relative, label) {
     return target;
 }
 function readRegular(filename, maximum = MAX_ARTIFACT_BYTES) {
-    try { return legacyPublication.readRegular(filename, maximum); }
+    try { return publicationFiles.readRegular(filename, maximum); }
     catch (error) { fail(error.message); }
 }
 function strictJsonFile(filename, label) {
@@ -96,7 +96,7 @@ function strictJsonFile(filename, label) {
     return { value, fileSha256: loaded.sha256, bytes: loaded.bytes };
 }
 function writeExact(filename, bytes) {
-    try { return legacyPublication.writeExact(filename, bytes); }
+    try { return publicationFiles.writeExact(filename, bytes); }
     catch (error) { fail(error.message); }
 }
 function publicationDirectory(outputRoot, publicationId, create = false) {
@@ -306,8 +306,8 @@ function validateBlogState(value, label = '博客状态') {
         || !SHA_RE.test(value.hugoConfig.sha256 || '')) fail(`${label} 必须位于 main 分支，无未提交改动，HEAD 等于当前远端提交 OID，且 Git OID、远端身份及 Hugo 配置记录均有效`);
     return clone(value);
 }
-function defaultBlogState(blogRepo, remoteName = 'origin') { return validateBlogState(legacyPublication.defaultBlogState(blogRepo, remoteName)); }
-function defaultGitBlob(blogRepo, head, relative) { return legacyPublication.defaultGitBlob(blogRepo, head, relative); }
+function defaultBlogState(blogRepo, remoteName = 'origin') { return validateBlogState(publicationFiles.defaultBlogState(blogRepo, remoteName)); }
+function defaultGitBlob(blogRepo, head, relative) { return publicationFiles.defaultGitBlob(blogRepo, head, relative); }
 function worktreeSha(blogRepo, relative) {
     const target = inside(blogRepo, relative, '博客工作区目标文件');
     if (!fs.existsSync(target)) return null;

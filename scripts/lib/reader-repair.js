@@ -1213,7 +1213,8 @@ function applyReaderPatch(draft, patch, allowedPaths, options = {}) {
             || (String(addedTable.table.markdown).match(/\d+/g) || []).length < 4
             || addedBinding?.tableIndex !== operation.tableIndex
             || addedBinding?.sourceType !== 'source_quotes'
-            || !Array.isArray(addedBinding.sourceQuotes) || addedBinding.sourceQuotes.length === 0
+            || !Array.isArray(addedBinding.sourceQuotes)
+            || !(addedBinding.sourceQuotes.length || hasVerifiedPdfSourceQuotes(addedBinding))
             || Object.prototype.hasOwnProperty.call(addedBinding, 'selection')) {
             throw new Error('Reader narrative-table patch failed its atomic append/bind postconditions');
         }
@@ -1352,7 +1353,9 @@ function collectDraftIssues(draft, parserError, options = {}) {
                         const allowed = binding && own(binding, 'selection')
                             ? ['tableIndex', 'selection']
                             : binding && own(binding, 'completeTable') ? ['tableIndex', 'completeTable']
-                            : ['tableIndex', 'sourceType', 'sourceTableOrdinal', 'cellBindings', 'sourceQuotes'];
+                            : ['tableIndex', 'sourceType', 'sourceTableOrdinal', 'cellBindings', 'sourceQuotes',
+                                ...(binding?.sourceType === 'source_quotes' && own(binding, 'pdfSourceQuotes')
+                                    ? ['pdfSourceQuotes'] : [])];
                         addUnknownFields(binding, allowed, `tableBindings[${index}]`);
                         if (binding?.selection) addUnknownFields(binding.selection,
                             ['sourceTableOrdinal', 'sourceRows', 'sourceColumns'], `tableBindings[${index}].selection`);
@@ -1450,6 +1453,17 @@ function collectDraftIssues(draft, parserError, options = {}) {
     return issues;
 }
 
+function hasVerifiedPdfSourceQuotes(binding) {
+    const quotes = binding?.pdfSourceQuotes;
+    if (binding?.sourceType !== 'source_quotes' || !Array.isArray(quotes)
+        || !quotes.length || quotes.length > 64 || quotes.some(quote =>
+            typeof quote !== 'string' || Array.from(quote).length < 12
+            || Array.from(quote).length > 4000)) return false;
+    try {
+        return require('./reader-sealed-pdf-quote-evidence').evidenceForQuotes(quotes).length === quotes.length;
+    } catch (_) { return false; }
+}
+
 function collectTableBindingIssues(draft, options = {}) {
     const { extractMarkdownTables } = require('../analysis-contract.js');
     const { renderReaderTableSelection } = require('./reader-tables.js');
@@ -1509,12 +1523,18 @@ function collectTableBindingIssues(draft, options = {}) {
             if (occurrences !== 1) add(index, `的 ${marker} 必须在正文中唯一独占一段`);
             return;
         }
-        if (!exactKeys(binding, ['tableIndex', 'sourceType', 'sourceTableOrdinal', 'cellBindings', 'sourceQuotes'])) {
+        if (!exactKeys(binding, ['tableIndex', 'sourceType', 'sourceTableOrdinal', 'cellBindings', 'sourceQuotes',
+            ...(binding.sourceType === 'source_quotes' && own(binding, 'pdfSourceQuotes') ? ['pdfSourceQuotes'] : [])])) {
             add(index, '普通绑定必须且仅含 tableIndex/sourceType/sourceTableOrdinal/cellBindings/sourceQuotes');
         }
         if (binding.sourceType === 'source_quotes') {
+            const pdfValid = hasVerifiedPdfSourceQuotes(binding);
+            if (own(binding, 'pdfSourceQuotes') && !pdfValid) {
+                add(index, 'pdfSourceQuotes 必须在当前真实封存 PDF 作用域中，逐项核验为12–4000字符、未裁数字与单位的唯一连续原文引文；不能用模型自签证明。');
+            }
             if (binding.sourceTableOrdinal !== null || !Array.isArray(binding.cellBindings)
-                || binding.cellBindings.length !== 0 || !Array.isArray(binding.sourceQuotes) || binding.sourceQuotes.length < 1) {
+                || binding.cellBindings.length !== 0 || !Array.isArray(binding.sourceQuotes)
+                || !(binding.sourceQuotes.length || pdfValid)) {
                 add(index, 'source_quotes 结构非法：sourceTableOrdinal 必须为 null；cellBindings 必须是 []，'
                     + '不接受 quoteIndex/value/渲染坐标；sourceQuotes 必须为非空原文字符串数组');
             }
@@ -2267,12 +2287,46 @@ function buildRepairTargets(draft, issues, options = {}) {
     const isCountDiagnostic = issue => issue?.code === TABLE_COUNT_ISSUE_CODE || readTableCountIssue(issue);
     const selectableIssues = issues.filter(issue => {
         const orderIssue = classifyTableBindingOrderIssue(issue);
+        if (issue?.code === 'reader_source_table_unrenderable' && issue.diagnosticOnly === true) return false;
         return !orderIssue.ignoreMessageForRepair || orderIssue.actionable;
     });
     const allBlockingIssues = selectableIssues.filter(issue => issue?.diagnosticOnly !== true);
     const blockingIssues = allBlockingIssues.filter(issue => !isCountDiagnostic(issue));
     let actionableIssues = (allBlockingIssues.length ? blockingIssues : selectableIssues)
         .filter(issue => !isCountDiagnostic(issue));
+    const sourceTableIssues = blockingIssues.filter(issue => issue?.code === 'reader_source_table_unrenderable');
+    if (sourceTableIssues.length) {
+        const selected = new Set();
+        const indexes = [...new Set(sourceTableIssues.flatMap(issue => {
+            const match = /^\/tableBindings\/(0|[1-9]\d*)$/.exec(issue.path || issue.bindingPath || '');
+            return match ? [Number(match[1])] : [];
+        }))];
+        if (!indexes.length) return [];
+        for (const index of indexes) {
+            const binding = draft.tableBindings?.[index];
+            const ordinal = binding?.completeTable?.sourceTableOrdinal ?? binding?.selection?.sourceTableOrdinal ?? binding?.sourceTableOrdinal;
+            const tables = (options.structuredArtifacts?.tables || []).filter(table => table.ordinal === ordinal);
+            if (!Number.isSafeInteger(index) || binding?.tableIndex !== index + 1 || tables.length !== 1
+                || require('./reader-tables').assessReaderCompleteTableEligibility(tables[0]).eligible
+                || !sourceTableIssues.some(issue => issue.path === `/tableBindings/${index}`
+                    && issue.sourceTableOrdinal === ordinal)) return [];
+            const expectedMarker = `[[TABLE_${binding.tableIndex}]]`;
+            const matches = locateReaderDraftTables(draft).filter(table => binding.completeTable || binding.selection
+                ? table.marker === expectedMarker : table.tableIndex === index + 1);
+            if (matches.length !== 1 || !/^\/sections\/\d+\/body$/.test(matches[0].path)) return [];
+            const bodyPath = matches[0].path;
+            const marker = matches[0].marker;
+            if (marker && (draft.sections.reduce((count, section) => count
+                + String(section?.body || '').split(marker).length - 1, 0) !== 1
+                || !String(nodeAt(draft, bodyPath)).split(/\n\s*\n/).some(block => block.trim() === marker))) return [];
+            if (sourceTableIssues.some(issue => issue.bindingPath === `/tableBindings/${index}` && issue.path !== bodyPath)) return [];
+            const group = [`/tableBindings/${index}`, bodyPath];
+            if (new Set([...selected, ...group]).size > 8) break;
+            group.forEach(pointer => selected.add(pointer));
+        }
+        return [...selected].map(pointer => ({ path: pointer, oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
+            repairInstruction: '原格无法安全显示，本轮只成对修复此绑定和唯一承载正文。按给出的完整来源改选合法原表，或以连续逐字原文完整覆盖新表数字、单位和比较条件并改为source_quotes实际Markdown。保留所有正确事实、结果对比、表数与必要宽列；不得猜半值、编造原表、删除结果或修改其他节点。' }));
+    }
     const firstSubstantiveIssue = actionableIssues.find(issue => (
         classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
             || !String(issue?.message || '').startsWith('Reader patch rejected:')
@@ -2909,7 +2963,114 @@ function repairOperationProtocol(context) {
     const tableEnd = '\n当前校验问题和有来源的外部修订反馈：';
     if (blocks[1].split(tableStart).length !== 2 || blocks[1].split(tableEnd).length !== 2) throw new Error('局部修复的表格操作协议边界不唯一');
     const tableRules = tableStart.trimStart() + blocks[1].split(tableStart)[1].split(tableEnd)[0];
-    return tableRules + '\n' + marker.trimStart() + blocks[1].split(marker)[1];
+    return tableRules + '\n' + marker.trimStart() + blocks[1].split(marker)[1]
+        + (context.sealedPdfQuoteDocumentAvailable === true
+        ? '\n仅当本次证据提供了独立的封存 PDF 原字符全文时，source_quotes 绑定可额外声明 pdfSourceQuotes:[连续逐字原文字符串]。'
+        + 'HTML 引文仍写 sourceQuotes，不得把 PDF 引文冒充 HTML；两数组至少一项非空。PDF 引文只合并空白，每项12–4000字符，必须唯一连续且不能裁数字、符号、精度或单位；'
+        + '模型不得输出 sealedPdfQuoteEvidence，它仅由程序重读官方封存 PDF 生成。现有表格每格数字、单位、比较条件和全部正文校验仍完整执行。' : '');
+}
+
+function repairTableEvidenceGuidance(draft, issues, targets, sourceText, options) {
+    if (!Array.isArray(options.structuredArtifacts?.tables) || !String(sourceText)) return '';
+    if (!issues.some(issue => /宽表|source_table|粘连复写|关键数字缺少|sourceQuotes/.test(String(issue?.message || ''))
+        || issue?.code === 'reader_source_table_unrenderable')) return '';
+    const tables = require('./reader-tables');
+    const locations = require('./reader-draft-order').locateReaderDraftTables(draft);
+    const numericTokens = require('../deep-analyzer').readerNumericTokens;
+    const inventory = options.structuredArtifacts.tables;
+    const alternatives = inventory.filter(table => inventory.filter(other => other?.ordinal === table?.ordinal).length === 1
+        && tables.assessReaderCompleteTableEligibility(table).eligible).map(table => ({
+        sourceTableOrdinal: table.ordinal, caption: table.caption, sourceDomSha256: table.sourceDomSha256,
+        matrix: table.matrix, completeTableEligibility: tables.assessReaderCompleteTableEligibility(table),
+        selectionEligibility: tables.assessReaderTableSelectionEligibility(table),
+        ...(require('./reader-table-pdf-evidence').evidence(table) ? {
+            displayMatrix: require('./reader-table-pdf-evidence').displayMatrix(table),
+            [require('./reader-table-pdf-evidence').sealedEvidence(table) ? 'sealedPdfTableEvidence' : 'pdfCellConfirmation']:
+            { contract: require('./reader-table-pdf-evidence').evidence(table).contract,
+                proofSha256: hashDraft(require('./reader-table-pdf-evidence').evidence(table)),
+                pdfSha256: require('./reader-table-pdf-evidence').evidence(table).pdfSha256,
+                originalTableDomSha256: table.sourceDomSha256 }
+        } : {})
+    }));
+    const packets = [];
+    for (const target of targets) {
+        const match = /^\/tableBindings\/(\d+)$/.exec(target.path);
+        if (!match) continue;
+        const index = Number(match[1]);
+        const binding = draft.tableBindings[index];
+        const located = locations.filter(location => binding.completeTable || binding.selection
+            ? location.marker === `[[TABLE_${binding.tableIndex}]]` : location.bindingIndex === index);
+        if (located.length !== 1 || !targets.some(item => item.path === `/sections/${located[0].sectionIndex}/body`)) continue;
+        const quotes = (binding.sourceQuotes || []).map(quote => ({ quote, exact: typeof quote === 'string'
+            && quote.length >= 12 && quote.length <= 4000 && sourceText.includes(quote) }));
+        const supported = new Set(quotes.filter(row => row.exact).flatMap(row => numericTokens(row.quote)));
+        const rows = located[0].table ? [located[0].table.header, ...located[0].table.rows] : [];
+        const missingCells = rows.flatMap((row, rowIndex) => row.flatMap((text, column) => {
+            const missingTokens = [...new Set(numericTokens(text))].filter(token => !supported.has(token));
+            return binding.sourceType === 'source_quotes' && missingTokens.length
+                ? [{ row: rowIndex, column, text, missingTokens }] : [];
+        })).slice(0, 8);
+        // A unique shared textual prefix locates a raw source window for review;
+        // it never certifies the rewritten quote or the numeric claim.
+        const rawQuoteWindows = quotes.filter(row => !row.exact && typeof row.quote === 'string').flatMap(row => {
+            const prefix = row.quote.trim().slice(0, 48).trim().split(/\s+/u);
+            if (prefix.join(' ').length < 24) return [];
+            const pattern = prefix.map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+');
+            const matches = [...sourceText.matchAll(new RegExp(pattern, 'gu'))];
+            if (matches.length !== 1) return [];
+            const start = matches[0].index;
+            const quote = sourceText.slice(start, Math.min(sourceText.length, start + 1200));
+            return [{ quote, sourceOffset: start, coverageAttested: false }];
+        }).slice(0, 2);
+        const ordinal = binding.completeTable?.sourceTableOrdinal ?? binding.selection?.sourceTableOrdinal ?? binding.sourceTableOrdinal;
+        const original = inventory.filter(table => table.ordinal === ordinal);
+        const sourceCapability = original.length === 1
+            ? require('./reader-source-diagnostics').buildReaderSourceTableCapabilityDiagnostics({
+                draft, sourceText, structuredArtifacts: options.structuredArtifacts,
+                parserError: { readerIssues: [{code:'reader_source_table_unrenderable', path:target.path}] }
+            }).find(row => row.bindingPath === target.path) : null;
+        const usableSourceTables = [];
+        for (const table of alternatives) {
+            if (JSON.stringify(table).length <= 6000 && JSON.stringify(usableSourceTables).length + JSON.stringify(table).length <= 9000) {
+                usableSourceTables.push(table);
+            }
+        }
+        const packet = { diagnosticOnly: true, bindingPath: target.path,
+            sectionPath: `/sections/${located[0].sectionIndex}/body`,
+            ...(original.length === 1 ? { originalSourceTableOrdinal: ordinal,
+                originalCompleteTableEligibility: tables.assessReaderCompleteTableEligibility(original[0]) } : {}),
+            usableSourceTables, omittedCompleteSourceTableCount: alternatives.length - usableSourceTables.length,
+            declaredQuotes: quotes.map(row => ({ exact: row.exact, quote: row.quote })),
+            missingCells, rawQuoteWindows,
+            originalSourceQuoteWindows: (sourceCapability?.sourceQuotes || []).slice(0, 4),
+            sourceQuoteCoverageAttested: false };
+        if (JSON.stringify(packet).length <= 14000 && JSON.stringify(packets).length + JSON.stringify(packet).length <= 18000) packets.push(packet);
+    }
+    const pdfDocument = require('./reader-sealed-pdf-quote-evidence').document();
+    const pdfGuidance = pdfDocument?.available
+        ? '\n独立的官方封存 PDF 原字符全文（只合并空白，与 HTML 全文来源分开；不改变当前生成身份、已收费次数或允许修改路径）：'
+            + JSON.stringify({contract:pdfDocument.contract,pdfSha256:pdfDocument.pdfSha256,
+                rawFullTextSha256:pdfDocument.rawFullTextSha256,
+                normalizedFullTextSha256:pdfDocument.normalizedFullTextSha256,
+                extraction:pdfDocument.extraction,
+                text:pdfDocument.normalizedFullText.slice(0,60000),
+                truncated:pdfDocument.normalizedFullText.length>60000})
+            + '\nsource_quotes 绑定可额外声明独立 pdfSourceQuotes:[连续逐字字符串]，HTML来源仍是 sourceQuotes，两数组至少一项非空；不能输出程序专属sealedPdfQuoteEvidence。'
+            + '可从该原字符文本选择 pdfSourceQuotes，不能去连字符、改标点、删重复数字、换单位或猜测值。'
+            + '原表可完整展示时优先用上述真实 completeTable 与程序 PDF 显示矩阵；不要把表格共享列头单位当作任意裸值的证明。'
+        : '';
+    if (!packets.length) return pdfGuidance;
+    return '\n当前封存来源的只读表格诊断（不扩大允许路径，也不证明替代表支持同一比较问题）：'
+        + JSON.stringify(packets) + '\n完整候选 matrix 保留全部原行列；只有 completeTableEligibility.eligible=true 可尝试 completeTable，'
+        + 'selection 另须 selectionEligibility.eligible=true。有 pdfCellConfirmation 或 sealedPdfTableEvidence 时，displayMatrix 是程序从同组封存PDF逐格确认的显示值，'
+        + 'matrix 仍是未修改的原DOM；按 completeTable 声明由程序注入并核验，不手写半值，也不能将这些PDF显示值冒充HTML全文逐字引文。'
+        + 'exact=false 的旧引文不能作为来源；rawQuoteWindows 是逐字原文核对窗口，'
+        + '不得删副本、猜半值或改写后冒充原句。'
+        + (options.fullDraftRegenerationDiagnostics === true
+            ? '本次完整再生的范围由真实请求单独授权；下列旧稿坐标只定位失败原因，不要求复制旧坏表。重选每张表时必须使用有证据的原表或 source_quotes，'
+            : '只在已成对授权的绑定和正文中改用有证据的原表或 source_quotes，')
+        + '全部数字、单位与比较条件仍须通过完整核验。不要用“数值来源说明”等凑列；新增列须说明原文支持的独立比较条件、设置或结果，'
+        + '没有证据不能恢复已删除的列；原表与引用字节保持不变。' + pdfGuidance;
 }
 
 function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', options = {}) {
@@ -3003,12 +3164,15 @@ function buildRepairContext(draft, issues, sourceEvidence, sourceText = '', opti
         ? '本轮明确授权整组小节重排，只提交/sections完整数组；其他顶层信息与全部来源记录逐字保留。不能据此删除图表、公式或正确事实；重排后仍须通过完整解析与来源检查。' : '')
         + `本轮只允许修改这些目标：${JSON.stringify(targets.map(target => target.path))}。`
         + '下面的诊断可能列出其他已发现问题，列出问题不代表授权修改。只提交本轮允许目标，逐项使用请求给出的真实 oldSha256；其余问题留待下一轮重新核验并授权，不要为未授权目标编造 SHA。' + formulaAppendGuidance + markerGuidance + noDomTableGuidance.join('\n')
-        + '\n' + scientificDoubleRenderingGuidance(draft, issues, targets, sourceText);
+        + '\n' + scientificDoubleRenderingGuidance(draft, issues, targets, sourceText)
+        + repairTableEvidenceGuidance(draft, issues, targets, sourceText, options);
     return { draftSha256: hashDraft(draft), targets, issues, evidence, atomicOperation, targetGuidance,
         ...(atomicOperation?.kind === 'reorganize_existing_sections_v1' && canUseSectionIndexGroups(draft)
             ? { sectionGroupPlanContract: SECTION_GROUP_PLAN_CONTRACT }
             : atomicOperation?.kind === 'reorganize_existing_sections_v1' && canUseBodyFieldIndexGroups(draft)
                 ? { sectionGroupPlanContract: SECTION_BODY_GROUP_PLAN_CONTRACT } : {}),
+        ...(require('./reader-sealed-pdf-quote-evidence').document()?.available
+            ? { sealedPdfQuoteDocumentAvailable: true } : {}),
         exactQuotes, figureOrdinals: [...figureOrdinals], evidenceMode: 'full-evidence-local-output' };
 }
 
@@ -3399,5 +3563,5 @@ module.exports = { repairOperationProtocol, buildConceptTermsRepairContext, conc
     validateImplementationAllowance,
     buildTopLevelMetadataRepairContext, applyTopLevelMetadataRepair,
     sectionReorganizationOperation, buildMissingConceptBridgesOperation, parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,
-    buildSectionReorganizationPrompt, buildRepairTargets, applyReaderPatch, normalizeUnavailableReaderFigures, buildRepairContext, loadFailedCandidate, readFailedCandidateEnvelope, saveFailedCandidate,
+    buildSectionReorganizationPrompt, buildRepairTargets, applyReaderPatch, normalizeUnavailableReaderFigures, buildRepairContext, repairTableEvidenceGuidance, loadFailedCandidate, readFailedCandidateEnvelope, saveFailedCandidate,
     retireFailedCandidate, hasUnusedImplementationAllowance };

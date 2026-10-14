@@ -5,12 +5,8 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const {
-    buildManifestContext,
-    buildCompleteEntry,
-    initializeManifestLocked,
-    isReusableStructuredSnapshotForCurrentParser
-} = require('../scripts/manual-fetch-fulltext.js');
+const { buildManifestContext } = require('../../scripts/lib/legacy-manual-source.js');
+const { buildCompleteEntry, writeLegacyFulltextManifestFixture } = require('./helpers/legacy-fulltext-fixture.js');
 const {
     ARTIFACT_PARSER_VERSION,
     computeStructuredPayloadSha256,
@@ -91,33 +87,6 @@ describe('Manual 结构化来源索引 v1', () => {
         const left = { version: 1, parserVersion: 'arxiv-html-dom-v4', nested: { b: 2, a: 1 } };
         const right = { nested: { a: 1, b: 2 }, parserVersion: 'arxiv-html-dom-v4', version: 1 };
         assert.equal(computeStructuredPayloadSha256(left), computeStructuredPayloadSha256(right));
-    });
-
-    it('表格清单升级到 v4 后，不复用旧 HTML 解析器保存的结果', () => {
-        assert.equal(isReusableStructuredSnapshotForCurrentParser(
-            { source: 'html' },
-            { parserVersion: 'arxiv-html-dom-v2', health: { status: 'complete' } }
-        ), false);
-        assert.equal(isReusableStructuredSnapshotForCurrentParser(
-            { source: 'html' },
-            { parserVersion: 'arxiv-html-dom-v2', health: { status: 'incomplete' } }
-        ), false);
-        assert.equal(isReusableStructuredSnapshotForCurrentParser(
-            { source: 'html' },
-            { parserVersion: 'arxiv-html-dom-v3', health: { status: 'incomplete' } }
-        ), false);
-        assert.equal(isReusableStructuredSnapshotForCurrentParser(
-            { source: 'html' },
-            { parserVersion: 'arxiv-html-dom-v3', health: { status: 'complete' } }
-        ), false);
-        assert.equal(isReusableStructuredSnapshotForCurrentParser(
-            { source: 'html' },
-            { parserVersion: 'arxiv-html-dom-v4', health: { status: 'incomplete' } }
-        ), true);
-        assert.equal(isReusableStructuredSnapshotForCurrentParser(
-            { source: 'pdf' },
-            { parserVersion: 'unstructured-text-signals-v1', health: { status: 'incomplete' } }
-        ), true);
     });
 
     it('相同输入生成相同单篇清单，包含表格、图片、公式和来源引文', () => {
@@ -224,7 +193,7 @@ describe('Manual 结构化来源索引 v1', () => {
     it('在 manifest v2 旁边存检查点，校验文件字节，只续跑失败的那篇', () => {
         const { dir, context, input, text, sourceEntry, structuredArtifacts } = fixture();
         const fullManifestPath = path.join(dir, 'manifest.json');
-        initializeManifestLocked(fullManifestPath, context);
+        writeLegacyFulltextManifestFixture(fullManifestPath, context);
         const historicalBytes = fs.readFileSync(fullManifestPath);
 
         const artifactContext = buildArtifactManifestContext(context, dir);

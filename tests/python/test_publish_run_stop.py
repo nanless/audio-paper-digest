@@ -31,7 +31,6 @@ with project_env_scope():
     from blog_entry_loader import load_publish_to_blog
     blog = load_publish_to_blog()
     conference = load('conference_run_stop', 'publish-conference.py')
-    xhs = load('xhs_run_stop', 'publish-xiaohongshu.py')
 
 
 class RunStopTests(unittest.TestCase):
@@ -239,18 +238,6 @@ class RunStopTests(unittest.TestCase):
             self.assertEqual(len(passes), 1)
             self.assertEqual(json.loads(passes[0].read_text())['path'], 'content/posts/1.md')
 
-    def test_xhs_run_failure_is_not_local_fallback_and_does_not_dispatch_more(self):
-        papers = [(9.0, {'title': title, 'abstract': '原文'}, {}) for title in ['甲', '乙', '丙']]
-        for cls in [common.LlmAccountAuthError, common.LlmAccountPoolConfigError,
-                    common.LlmAccountPoolStateError, common.LlmAccountPoolExhaustedError]:
-            with self.subTest(error=cls.__name__):
-                failure = cls() if cls is common.LlmAccountAuthError else cls('账号不可用')
-                with mock.patch.object(xhs, 'get_oneliner_concurrency', return_value=1), \
-                        mock.patch.object(xhs, 'call_publish_llm_api', side_effect=failure) as request:
-                    with self.assertRaises(cls) as caught:
-                        xhs.generate_llm_oneliners(papers)
-                self.assertIs(caught.exception, failure)
-                self.assertEqual(request.call_count, 1)
 
 
 if __name__ == '__main__':

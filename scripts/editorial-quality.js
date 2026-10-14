@@ -1115,7 +1115,7 @@ function findMissingComparisonUnits(text) {
     // 千分位计数作为一个数值读取，避免把“50,000 条”中的 50 当成另一裸数。
     const quantity = `(?:\\d+(?:,\\d{3})*(?:\\.\\d+)?|[${CHINESE_DIGITS}]+(?:点[${CHINESE_DIGITS}]+)?)`;
     const unit = '(?:%|个百分点|点|分|毫秒|秒|分钟|小时|毫焦|Hz|kHz|MHz|dB|mJ|GB|MB|KB|倍)';
-    const asymmetric = new RegExp(`${quantity}\\s*(?:对|vs\\.?|相比)\\s*${quantity}\\s*${unit}`, 'giu');
+    const asymmetric = new RegExp(`(?<![A-Za-z0-9_.])${quantity}\\s*(?:对|vs\\.?|相比)\\s*${quantity}\\s*${unit}(?!之)`, 'giu');
     for (const match of collectRegexMatches(value, asymmetric, 'comparison_unit_only_on_second_value')) {
         findings.push(match);
     }
@@ -1186,6 +1186,9 @@ function findMissingComparisonUnits(text) {
             );
         }
         const numericText = comparisonText
+            // 词表的完整整数范围是设置计数；同句错误率结果仍须有单位。
+            .replace(/词表\s*(?:大小|规模)?\s*范围\s*从\s*(?:[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)(?![\d.,])\s*(?:到|至)\s*(?:[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)(?![\d.,])\s*个\s*词元/gu,
+                match => ' '.repeat(match.length))
             // 候选库大小、渲染链长和输入流数是实验设置，不是附近准确率的值。
             // 只遮住明确带设置名称的完整整数，真正的结果数字仍逐个检查。
             .replace(/(?<![A-Za-z0-9_.+\-−])\d+\s*候选库/gu,

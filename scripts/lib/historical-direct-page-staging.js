@@ -1,13 +1,13 @@
 'use strict';
 
 // 使用直接来源运行已保存并核验的来源、分析和论文解读记录生成页面文件。
-// historical-page-staging 从页面对应表、旧分析运行和标签分配记录读取输入；
-// 本模块使用直接来源运行提供的输入。两种输入必须按各自的规则核验。
+// 当前直接来源主链共用日更发布器；旧 crosswalk 运行的兼容读取由独立恢复适配器处理。
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
-const renderer = require('./historical-page-staging.js');
+const renderer = require('./paper-page-staging.js');
+const publicationFiles = require('./publication-file-primitives.js');
 
 const CONTRACT = 'historical-direct-paper-page-staging-v1';
 const VERSION = 1;
@@ -195,6 +195,79 @@ function normalizeRendererResult(value, page) {
         return { bytes, record: { path: asset.path, sha256: sha256(bytes), size: bytes.length } };
     }) };
 }
+
+const CONFERENCE_SIDECAR_NAMES = Object.freeze(['citation.bib', 'citation.json', 'citation.ris', 'rethink-context.json']);
+function conferenceWorkbenchRoot(item, page) {
+    return `static/data/papers/${page.cohortDate}/conference-${sha256(item.paperId).slice(0, 24)}/`;
+}
+function validateConferenceWorkbenchAssets({ item, sourceDescriptor, analysis, page, markdown, assets }) {
+    if (item.route.kind !== 'conference-local-pdf') return;
+    const prefix = conferenceWorkbenchRoot(item, page);
+    const data = assets.filter(asset => asset.record.path.startsWith('static/data/'));
+    const marked = /^paper_digest_workbench_contract:\s*"?researcher-workbench-v1"?\s*$/m.test(markdown);
+    // 已保存的旧渲染结果无工作区声明；兼容核验不把它们冒充新导出。
+    if (!marked && data.length === 0) return;
+    if (!marked || data.length !== 4 || data.map(asset => asset.record.path.slice(prefix.length)).sort().join('\0')
+        !== CONFERENCE_SIDECAR_NAMES.join('\0') || data.some(asset => !asset.record.path.startsWith(prefix))) {
+        fail(`论文 ${item.paperId} 的研究工作区只允许本篇本日期的四个固定附属文件。`);
+    }
+    const byName = new Map(data.map(asset => [asset.record.path.slice(prefix.length), asset]));
+    for (const asset of data) {
+        if (!asset.bytes.length || asset.bytes.length > 256 * 1024 || asset.bytes.includes(13)
+            || asset.bytes[asset.bytes.length - 1] !== 10) fail('会议研究工作区附属文件不是受限的规范 UTF-8 文本。');
+        new TextDecoder('utf-8', { fatal: true }).decode(asset.bytes);
+    }
+    const text = value => String(value || '').normalize('NFC').replace(/\s+/gu, ' ').trim();
+    const authors = analysis.apiReaderAuthors?.authors?.map(author => ({ name: text(author.name),
+        affiliations: author.affiliations.map(text) }));
+    if (!authors?.length || analysis.sourceSha256 !== sourceDescriptor.textSha256) {
+        fail('会议研究工作区的作者或全文 SHA 与已核验分析来源不一致。');
+    }
+    const publication = analysis.conferencePublication;
+    const identity = { sourceKind: 'conference', paperId: item.paperId, sourceSha256: sourceDescriptor.textSha256,
+        recordUrl: publication?.recordUrl || null, pdfUrl: publication?.pdfUrl || null,
+        publicUrlAvailability: publication ? 'available' : 'unavailable' };
+    const common = { ...identity, originalTitle: text(analysis.title), authors };
+    const read = name => publicationFiles.strictJson(byName.get(name).bytes, `会议工作区 ${name}`);
+    const citation = read('citation.json');
+    const expectedCitation = { ...common, contract: 'researcher-sidecars-v1', schemaVersion: 1,
+        id: item.paperId, type: 'conference-paper' };
+    if (stableHash(citation) !== stableHash(expectedCitation)) fail('会议引用 JSON 与真实论文身份、作者或来源 SHA 不一致。');
+    const parsed = require('../utils.js').parseAnalysis(analysis.analysis);
+    if (!parsed || !Number.isFinite(Number(parsed.score)) || Number(parsed.score) < 0 || Number(parsed.score) > 10) {
+        fail('会议研究工作区缺少有效的正式评分。');
+    }
+    const abstract = typeof analysis.abstract === 'string' && analysis.abstract.trim() ? analysis.abstract : null;
+    const expectedContext = { ...common, contract: 'paper-research-context-v2', schemaVersion: 2,
+        readerTitle: text(analysis.apiReaderPlan?.readerTitle), oneSentenceThesis: text(analysis.apiReaderPlan?.oneSentenceThesis),
+        abstract, abstractSha256: abstract === null ? null : sha256(abstract),
+        abstractStatus: abstract === null ? 'unavailable' : 'available',
+        assessment: { primaryTask: String(parsed.primaryTaskTag || '').replace(/^#/, ''),
+            primaryMethod: String(parsed.primaryMethodTag || '').replace(/^#/, ''), score: Number(parsed.score),
+            rankBucket: text(parsed.rankBucket), documentType: text(parsed.documentType) } };
+    if (stableHash(read('rethink-context.json')) !== stableHash(expectedContext)) {
+        fail('会议研究上下文与来源身份、Reader 计划、评分或原摘要可得状态不一致。');
+    }
+    const ris = ['TY  - CONF', `TI  - ${common.originalTitle}`, ...authors.map(author => `AU  - ${author.name}`),
+        `ID  - ${item.paperId}`, ...(identity.recordUrl ? [`UR  - ${identity.recordUrl}`] : []),
+        ...(identity.pdfUrl ? [`L1  - ${identity.pdfUrl}`] : []), 'ER  - ', ''].join('\n');
+    if (byName.get('citation.ris').bytes.toString('utf8') !== ris) fail('会议 RIS 与真实题目、作者或来源 URL 不一致。');
+    const escapes = { '\\': '{\\textbackslash{}}', '{': '\\{', '}': '\\}', '&': '\\&', '%': '\\%',
+        '$': '\\$', '#': '\\#', '_': '\\_', '~': '\\textasciitilde{}', '^': '\\textasciicircum{}' };
+    const bibText = value => [...text(value)].map(character => escapes[character] || character).join('');
+    const key = 'conference_' + item.paperId.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+    const bib = [`@inproceedings{${key},`, `  title = {${bibText(common.originalTitle)}},`,
+        `  author = {${authors.map(author => `{${bibText(author.name)}}`).join(' and ')}}${identity.recordUrl ? ',' : ''}`,
+        ...(identity.recordUrl ? [`  url = {${bibText(identity.recordUrl)}}`] : []), '}', ''].join('\n');
+    if (byName.get('citation.bib').bytes.toString('utf8') !== bib) fail('会议 BibTeX 与真实题目、作者或来源 URL 不一致。');
+    const sidecarMatch = markdown.match(/^paper_digest_sidecars:\s*(\{[^\n]*\})\s*$/m);
+    const records = sidecarMatch ? publicationFiles.strictJson(Buffer.from(sidecarMatch[1]), '会议页附属文件字段') : null;
+    const basePath = require('../config.js').PUBLISH_CONFIG.basePath.replace(/\/$/, '');
+    const expectedRecords = Object.fromEntries(CONFERENCE_SIDECAR_NAMES.map(name => [name,
+        { url: `${basePath}/${prefix.slice('static/'.length)}${name}`, sha256: byName.get(name).record.sha256,
+            ...(name === 'rethink-context.json' ? { contract: 'paper-research-context-v2' } : {}) }]));
+    if (stableHash(records) !== stableHash(expectedRecords)) fail('会议页附属文件声明的 URL、SHA 或集合不一致。');
+}
 function markdownInline(value) {
     return String(value).replace(/\s+/g, ' ').trim().replace(/([\\`*_[\]<>])/g, '\\$1');
 }
@@ -341,6 +414,7 @@ function validateManifest({ value, item, sourceDescriptor, publicationSource, ar
         fail(`论文 ${item.paperId} 的页面生成清单自身或其中的来源、分析、页面和资源记录哈希不一致。`);
     }
     const expectedByKey = new Map(projection.pages.map(page => [page.pageKey, page])); const seen = new Set();
+    const pageMarkdown = new Map();
     for (const page of value.pages) {
         const expected = expectedByKey.get(page?.pageKey);
         if (!expected || seen.has(page.pageKey) || page.pagePath !== expected.pagePath || page.primaryUrl !== expected.primaryUrl
@@ -354,10 +428,11 @@ function validateManifest({ value, item, sourceDescriptor, publicationSource, ar
         if (!hasExactTopDisclosure(bytes.bytes.toString('utf8'), pageDisclosure)) {
             fail(`论文 ${item.paperId} 的来源版本说明缺失、内容不一致或未位于页面正文开头。`);
         }
+        pageMarkdown.set(page.pageKey, bytes.bytes.toString('utf8'));
         seen.add(page.pageKey);
     }
     if (seen.size !== expectedByKey.size) fail(`论文 ${item.paperId} 的生成页面记录未覆盖全部目标页面。`);
-    const assets = new Set();
+    const assets = new Set(); const assetBytes = [];
     for (const asset of value.assets) {
         if (!asset || typeof asset.path !== 'string' || assets.has(asset.path) || !SHA.test(String(asset.sha256 || ''))
             || !Number.isSafeInteger(asset.size) || asset.size < 0) fail(`论文 ${item.paperId} 的生成资源记录格式无效，或资源路径重复。`);
@@ -365,6 +440,18 @@ function validateManifest({ value, item, sourceDescriptor, publicationSource, ar
             64 * 1024 * 1024, `论文 ${item.paperId} 的生成资源文件`);
         if (bytes.fileSha256 !== asset.sha256 || bytes.bytes.length !== asset.size) fail(`论文 ${item.paperId} 的生成资源 SHA 或字节数与清单不一致。`);
         assets.add(asset.path);
+        assetBytes.push({ record: asset, bytes: bytes.bytes });
+    }
+    for (const page of value.pages) {
+        const prefix = conferenceWorkbenchRoot(item, page);
+        validateConferenceWorkbenchAssets({ item, sourceDescriptor, analysis, page,
+            markdown: pageMarkdown.get(page.pageKey),
+            assets: assetBytes.filter(asset => !asset.record.path.startsWith('static/data/')
+                || asset.record.path.startsWith(prefix)) });
+    }
+    if (item.route.kind === 'conference-local-pdf' && assetBytes.some(asset => asset.record.path.startsWith('static/data/')
+        && !value.pages.some(page => CONFERENCE_SIDECAR_NAMES.some(name => asset.record.path === conferenceWorkbenchRoot(item, page) + name)))) {
+        fail('会议页面清单包含不属于本篇真实身份或日期的附属文件。');
     }
     return clone(value);
 }
@@ -390,6 +477,8 @@ function stageDirectPages({ item, sourceDescriptor, publicationSource, artifact,
     for (const page of projection.pages) {
         const result = normalizeRendererResult(render({ directStaging: true, paper: directPaper(item, analysis),
             publicationSource: publication, cohortDate: page.cohortDate }), page);
+        validateConferenceWorkbenchAssets({ item, sourceDescriptor, analysis, page,
+            markdown: result.markdown, assets: result.assets });
         for (const asset of result.assets) {
             const previous = assets.get(asset.record.path);
             if (previous && previous.record.sha256 !== asset.record.sha256) fail(`页面生成器为论文 ${item.paperId} 的同一资源路径返回了不同内容。`);
@@ -428,4 +517,5 @@ module.exports = { CONTRACT, VERSION, PUBLICATION_SOURCE_CONTRACT, HistoricalDir
     arxivHistoricalVersionDisclosureProof, arxivHistoricalVersionPageDisclosure,
     sourceDisclosureProof, pageDisclosureFor, injectTopDisclosure, hasExactTopDisclosure,
     buildManifest, receipt, validateManifest, stageDirectPages,
+    conferenceWorkbenchRoot, validateConferenceWorkbenchAssets,
     currentRendererImplementationSha256: dependencies => renderer.currentRendererImplementationSha256(dependencies) };

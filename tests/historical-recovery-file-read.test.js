@@ -31,7 +31,7 @@ function prepareDirectRecovery() {
 
 function prepareArxivRecovery() {
     const fresh = require(path.join(code, 'scripts/lib/fresh-rewrite-run.js'));
-    const api = require(path.join(code, 'scripts/lib/historical-arxiv-analysis.js'));
+    const api = require(path.join(code, 'scripts/lib/legacy-history-run.js'));
     const runId = '77777777-7777-4777-8777-777777777777';
     const arxivId = '2609.03622';
     const date = '2026-09-04';
@@ -67,7 +67,7 @@ function prepareArxivRecovery() {
         contract: fresh.ANALYSIS_CONTRACT, runId, batchDate: date, status: 'pending', papers: [paper]
     }), { mode: 0o600 });
     return { filename,
-        read: () => api.recoverHistoricalArxivRun({ runId, date, arxivId, rootDir: directory }) };
+        read: () => api.assertSavedLegacyRun(fresh.loadRun(runId, { rootDir: directory })) };
 }
 
 const prepared = kind === 'direct' ? prepareDirectRecovery() : prepareArxivRecovery();
@@ -155,7 +155,7 @@ for (const kind of ['direct', 'arxiv']) {
                 } else {
                     assert.equal(observation.failure.code, 'HISTORICAL_ARXIV_ANALYSIS_INTEGRITY');
                     assert.equal(observation.failure.retryable, false);
-                    assert.match(observation.failure.message, /官方元数据文件必须是普通文件/);
+                    assert.match(observation.failure.message, /不安全|普通文件/);
                 }
             }
         });

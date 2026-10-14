@@ -3,6 +3,8 @@
 const READER_TABLE_SELECTION_CONTRACT = 'reader-table-selection-v2';
 const READER_TABLE_ELIGIBILITY_CONTRACT = 'reader-table-eligibility-v1';
 const READER_RESULT_COVERAGE_CONTRACT = 'reader-result-table-coverage-v1';
+const READER_COMPLETE_TABLE_ELIGIBILITY_CONTRACT = 'reader-complete-table-eligibility-v1';
+const READER_SOURCE_TABLE_ISSUE_CODE = 'reader_source_table_unrenderable';
 const sha256 = value => /^[a-f0-9]{64}$/.test(String(value || ''));
 const exactKeys = (value, keys) => value && typeof value === 'object' && !Array.isArray(value)
     && Object.keys(value).sort().join(',') === keys.slice().sort().join(',');
@@ -398,19 +400,115 @@ function assessReaderTableSelectionEligibility(table) {
             }
         }
     }
+    const complete = reasons.length ? assessReaderCompleteTableEligibility(table) : null;
     return { contract: READER_TABLE_ELIGIBILITY_CONTRACT, eligible: reasons.length === 0,
         reasonCodes: [...new Set(reasons.map(reason => reason.code))],
         reasonCount: reasons.length, examples: reasons.slice(0, 8),
-        ...(!reasons.length ? {} : { action: '这张表不能使用 selection。旧说明中的“eligible=false 时只能使用 source_quotes”限制针对 selection；完整原表仍可按已有协议尝试 artifact_table。具体做法是：把完整原始 matrix 写成 Markdown 表，逐格绑定原始 DOM cell，sourceQuotes 写 []，不用 TABLE marker。保留原表全部行列、数值和单位，不得把非法 selection 子集转成兼容绑定，也不得清理原单元格。仍须通过现有来源、数字、粘贴和正文审查；若无法通过，只能用全文逐字引文完整覆盖数字与单位的 source_quotes，不得编造表头或改写来源。' }) };
+        ...(!reasons.length ? {} : { completeTableEligible: complete.eligible,
+            completeTableReasonCodes: complete.reasonCodes,
+            action: completeReaderTableRecoveryGuidance(table) }) };
 }
 
-function completeReaderTableRecoveryGuidance() {
-    return '这张原表不能使用 selection。可以改选合格原表；需要展示当前完整原表时，使用已有 completeTable 声明：'
+function completeReaderTableRecoveryGuidance(table = null) {
+    if (table && !assessReaderCompleteTableEligibility(table).eligible) {
+        return '这张原表有来源显示或原DOM完整性问题，不能使用 selection、completeTable 或手写 artifact_table 反复复制坏格。'
+            + '正文补丁不能修正封存来源。仅在本轮同时授权对应绑定及承载正文时，改选已通过来源显示检查的原表，'
+            + '或用封存全文中的连续逐字引文完整覆盖新表数字、单位及比较条件，改为 source_quotes 并直接写 Markdown 表。'
+            + '保留正确事实、必要基线及结果；不能删结果避检、猜重复数值的半值、补造单位或声称原来源已修好。'
+            + '没有完整可用证据时保留 source_table 障碍，不能只改正文后再次绑定同一坏原格。';
+    }
+    return '这张原表不能使用 selection。可以改选合格原表；仅当完整原DOM网格及实际显示字节通过程序检查时，使用已有 completeTable 声明：'
         + '{"tableIndex":N,"completeTable":{"sourceTableOrdinal":J}}，N 是正文表号，J 是当前原表序号。'
         + '本项来源记录必须已获修改授权；正文保留唯一独占一段的 [[TABLE_N]]。如果要把旧 Markdown 换成这个标记，对应正文也必须已获修改授权。'
         + '程序按原始 DOM 坐标生成完整行列，不手写 matrix、cellBindings 或单元格，不混入 sourceRows、sourceColumns、sourceType、sourceQuotes。'
         + '保留其他表格的既有标记与来源记录，不因修复本表改动其他表。完整表仍须通过全部来源、数字、单位和正文检查，不能清理原格、补造表头或删减原表。'
         + '旧式 artifact_table 仍按原协议校验，但不能把非法 selection 子集转成兼容绑定。完整原表无法通过检查时，只能改选合格原表，或在对应授权内使用全文逐字引文覆盖全部数字与单位的 source_quotes。';
+}
+
+// Full-table rendering preserves source roles and merged/empty headers. It does
+// not inherit selection's one-header-row constraint, but every displayed cell
+// still needs unique source identity and a safe, source-proved display surface.
+function assessReaderCompleteTableEligibility(table) {
+    const reasons = [];
+    const add = (code, detail = {}) => reasons.push({ code, ...detail });
+    const matrix = table?.matrix;
+    const width = matrix?.[0]?.length;
+    if (table?.recoveryStatus !== 'complete' || !sha256(table?.sourceDomSha256)) add('source_identity_unavailable');
+    if (!Array.isArray(matrix) || matrix.length < 2 || !Number.isInteger(width) || width < 2
+        || matrix.some(row => !Array.isArray(row) || row.length !== width
+            || row.some(cell => typeof cell !== 'string'))) {
+        add('invalid_source_matrix');
+    } else {
+        const display = require('./reader-table-pdf-evidence').displayMatrix(table);
+        const normalize = require('./reader-source-display').normalizeReaderSourceDisplayArtifacts;
+        if (display.length !== matrix.length || display.some(row => !Array.isArray(row) || row.length !== width)) {
+            add('invalid_display_matrix');
+        } else {
+            const surfaces = display.map(row => row.map(normalize));
+            for (const [row, values] of matrix.entries()) {
+                for (const [column, text] of values.entries()) {
+                    const cells = (table.cells || []).filter(cell => Number.isInteger(cell?.row)
+                        && Number.isInteger(cell?.column) && row >= cell.row
+                        && row < cell.row + Number(cell.rowspan || 1) && column >= cell.column
+                        && column < cell.column + Number(cell.colspan || 1));
+                    if (cells.length !== 1 || !sha256(cells[0]?.sourceDomSha256) || cells[0].text !== text) {
+                        add('source_cell_identity_unavailable', { row, column, domCellCount: cells.length });
+                    }
+                    const visible = surfaces[row][column];
+                    if (findReaderTablePasteDuplication(visible, { header: surfaces[0], row: surfaces[row],
+                        rowIndex: row, columnIndex: column, sourceTexts: [text] })) {
+                        add('source_display_cleanup_required', { row, column });
+                    }
+                    if (/\\[A-Za-z]+/.test(visible)) add('unresolved_source_tex', { row, column });
+                    if (unsafeMarkdownCell(visible)) add('unsafe_markdown_cell', { row, column });
+                }
+            }
+        }
+    }
+    return { contract: READER_COMPLETE_TABLE_ELIGIBILITY_CONTRACT, eligible: reasons.length === 0,
+        reasonCodes: [...new Set(reasons.map(reason => reason.code))], reasonCount: reasons.length,
+        examples: reasons.slice(0, 8) };
+}
+
+function readerSourceTableError(tableIndex, table, eligibility) {
+    const coordinates = eligibility.examples.filter(reason => Number.isInteger(reason.row) && Number.isInteger(reason.column))
+        .map(reason => `来源坐标 row=${reason.row},column=${reason.column}`
+            + (Number.isInteger(reason.domCellCount) ? ` 对应 ${reason.domCellCount} 个原始单元格` : '')
+            + `（${reason.code}）`).join('；');
+    const error = new Error(`读者文章 tableBindings[${tableIndex - 1}] source_table 无法安全显示完整原表，不能自动恢复：`
+        + `${eligibility.reasonCodes.join(', ')}；sourceTableOrdinal=${table?.ordinal}。`
+        + (coordinates ? `${coordinates}。` : '')
+        + completeReaderTableRecoveryGuidance(table));
+    error.code = 'READER_SOURCE_TABLE_UNRENDERABLE';
+    error.readerIssues = [{ code: READER_SOURCE_TABLE_ISSUE_CODE, path: `/tableBindings/${tableIndex - 1}`,
+        sourceTableOrdinal: table?.ordinal, reasonCodes: eligibility.reasonCodes,
+        sourceTableEligibility: eligibility, message: error.message }];
+    return error;
+}
+
+function renderReaderCompleteTable(binding, artifacts) {
+    const fields = binding && Object.keys(binding).sort().join(',');
+    const modeLabel = fields === 'completeTable,sourceType,tableIndex' && binding.sourceType === 'completeTable';
+    if ((!exactKeys(binding, ['tableIndex', 'completeTable']) && !modeLabel)
+        || !Number.isSafeInteger(binding?.tableIndex) || binding.tableIndex < 1
+        || !exactKeys(binding.completeTable, ['sourceTableOrdinal'])
+        || !Number.isSafeInteger(binding.completeTable.sourceTableOrdinal)) {
+        throw new Error('完整原表声明的字段或原表身份非法，不能推断表格');
+    }
+    const candidates = (artifacts?.tables || []).filter(table => table?.ordinal === binding.completeTable.sourceTableOrdinal);
+    if (candidates.length !== 1) throw new Error('完整原表声明不能唯一定位原表身份');
+    const table = candidates[0];
+    const eligibility = assessReaderCompleteTableEligibility(table);
+    if (!eligibility.eligible) throw readerSourceTableError(binding.tableIndex, table, eligibility);
+    const normalize = require('./reader-source-display').normalizeReaderSourceDisplayArtifacts;
+    const displayMatrix = require('./reader-table-pdf-evidence').displayMatrix(table).map(row => row.map(normalize));
+    const line = cells => `| ${cells.join(' | ')} |`;
+    return { markdown: [line(displayMatrix[0]), line(displayMatrix[0].map(() => '---')),
+        ...displayMatrix.slice(1).map(line)].join('\n'),
+    binding: { tableIndex: binding.tableIndex, sourceType: 'artifact_table',
+        sourceTableOrdinal: binding.completeTable.sourceTableOrdinal,
+        cellBindings: table.matrix.flatMap((row, sourceRow) => row.map((_cell, sourceColumn) => ({
+            renderedRow: sourceRow, renderedColumn: sourceColumn, sourceRow, sourceColumn }))), sourceQuotes: [] } };
 }
 
 // 选择结果里的行号由模型给出，但哪些是表头行由原文明确。
@@ -485,7 +583,7 @@ function renderReaderTableSelection(binding, artifacts) {
             && assessReaderTableSelectionEligibility(candidate).eligible).map(candidate => candidate.ordinal);
         throw new Error(`${label} selection eligible=false: ${eligibility.reasonCodes.join(', ')}。`
             + `sourceTableOrdinal=${sourceTableOrdinal}；其他可选择原表序号=${JSON.stringify(alternatives)}。`
-            + completeReaderTableRecoveryGuidance());
+            + completeReaderTableRecoveryGuidance(table));
     }
     for (const [values, limit, minimum] of [[requestedSourceRows, table.matrix.length, 2], [sourceColumns, width, 2]]) {
         if (!Array.isArray(values) || values.length < minimum || new Set(values).size !== values.length
@@ -580,7 +678,8 @@ function compileReaderTableSelections(sections, bindings, artifacts) {
     const selectionTableIndexes = [];
     const tableBindings = bindings.map((declaredBinding, index) => {
         const binding = repairUniqueReaderTableSelectionHeader(declaredBinding, artifacts);
-        if (!binding || !Object.prototype.hasOwnProperty.call(binding, 'selection')) return binding;
+        const complete = binding && Object.prototype.hasOwnProperty.call(binding, 'completeTable');
+        if (!binding || (!complete && !Object.prototype.hasOwnProperty.call(binding, 'selection'))) return binding;
         if (binding.tableIndex !== index + 1) throw new Error(`读者文章 tableBindings[${index}] selection tableIndex 必须按正文顺序递增`);
         const marker = `[[TABLE_${binding.tableIndex}]]`;
         const matchingSections = copiedSections.filter(section => typeof section.body === 'string' && section.body.includes(marker));
@@ -595,7 +694,17 @@ function compileReaderTableSelections(sections, bindings, artifacts) {
         if (priorTables + 1 !== binding.tableIndex) {
             throw new Error(`读者文章 tableBindings[${index}] ${marker} 与实际正文表格顺序不一致`);
         }
-        const rendered = renderReaderTableSelection(binding, artifacts);
+        let rendered;
+        try {
+            rendered = complete ? renderReaderCompleteTable(binding, artifacts) : renderReaderTableSelection(binding, artifacts);
+        } catch (error) {
+            if (error.code === 'READER_SOURCE_TABLE_UNRENDERABLE') {
+                const sectionIndex = copiedSections.indexOf(matchingSections[0]);
+                error.readerIssues.push({ ...error.readerIssues[0], path: `/sections/${sectionIndex}/body`,
+                    bindingPath: `/tableBindings/${index}` });
+            }
+            throw error;
+        }
         matchingSections[0].body = matchingSections[0].body.replace(marker, rendered.markdown);
         selectionTableIndexes.push(binding.tableIndex);
         return rendered.binding;
@@ -607,6 +716,8 @@ function compileReaderTableSelections(sections, bindings, artifacts) {
 }
 
 module.exports = { READER_TABLE_SELECTION_CONTRACT, READER_TABLE_ELIGIBILITY_CONTRACT,
+    READER_COMPLETE_TABLE_ELIGIBILITY_CONTRACT, READER_SOURCE_TABLE_ISSUE_CODE,
+    assessReaderCompleteTableEligibility, renderReaderCompleteTable, readerSourceTableError,
     READER_RESULT_COVERAGE_CONTRACT, readerResultTableRequirement, validateReaderResultTableCoverage,
     hasExplicitRepeatedScientificMeasurement, bracketedNumericVectors,
     hasSourceBoundRepeatedNumericVector, hasSourceBoundRepeatedRangeChain,

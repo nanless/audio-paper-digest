@@ -19,6 +19,38 @@ with project_env_scope():
     publisher = load_publish_to_blog()
 
 
+def attach_source_bound_resource_claim_fixture(paper, source_text):
+    """Complete author-only samples with honest, source-bound resource evidence.
+
+    These controlled sources disclose no resource links. The Reader makes only
+    an explicit unconfirmed-status statement; it cannot acquire open-source
+    eligibility from this empty evidence record.
+    """
+    source_sha = hashlib.sha256(source_text.encode('utf-8')).hexdigest()
+    if paper['sourceSha256'] != source_sha:
+        raise ValueError('作者测试的资源证据必须来自本篇实际来源文本。')
+    identity = {'contract': 'api-reader-resource-identity-v1',
+                'sourceTextSha256': source_sha, 'resources': []}
+    identity['identitySha256'] = publisher._reader_record_sha256(identity, 'test resource identity')
+    paper['apiReaderResources'] = identity
+    paper['apiReaderPlan'] = {
+        'readerTitle': '作者身份与原文证据核验',
+        'oneSentenceThesis': '本文核验作者来源，资源发布状态尚未确认。',
+        'conceptBridges': [],
+        'sections': [{'kind': 'reproduction', 'heading': '资源状态与证据边界'}],
+    }
+    paper['apiReaderArticle'] = ('### 资源状态与证据边界\n\n'
+                                 '本次尚未确认作者代码、模型权重或数据的可用状态，不能声称已经开源。')
+    stage = paper['analysisManifest']['stages']['apiReaderArticle']
+    stage['resourceIdentitySha256'] = identity['identitySha256']
+    stage['resourceCount'] = 0
+    stage['planSha256'] = publisher._reader_record_sha256(paper['apiReaderPlan'], 'test reader plan')
+    stage['articleSha256'] = hashlib.sha256(paper['apiReaderArticle'].encode()).hexdigest()
+    paper['apiReaderPlanSha256'] = stage['planSha256']
+    paper['apiReaderArticleSha256'] = stage['articleSha256']
+    paper['analysisManifest']['contracts']['apiReaderResourceIdentity'] = identity['contract']
+
+
 class ReaderAuthorSourceReplayTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -44,6 +76,7 @@ process.stdout.write(JSON.stringify({paper,sourceDetails:details}));
         result = subprocess.run(['node', '-e', code], cwd=ROOT, env=env,
                                 capture_output=True, text=True, check=True, timeout=30)
         cls.fixture = json.loads(result.stdout)
+        attach_source_bound_resource_claim_fixture(cls.fixture['paper'], cls.fixture['sourceDetails']['text'])
 
     def test_current_production_gate_accepts_source_replay_before_unicode_marker(self):
         value = copy.deepcopy(self.fixture)
@@ -95,6 +128,7 @@ process.stdout.write(JSON.stringify({paper,sourceDetails:details}));
             paper['apiReaderAuthors'] = json.loads(result.stdout)
             stage['readerAuthorIdentitySha256'] = paper['apiReaderAuthors']['identitySha256']
             stage['readerAuthorsSha256'] = gate._reader_record_sha256(paper['apiReaderAuthors'], 'test')
+            attach_source_bound_resource_claim_fixture(paper, details['text'])
             data_file = Path(tmp) / 'analysis.json'
             data_file.write_text(json.dumps(payload))
             with mock.patch.object(gate, 'DAILY_FRESH_SOURCE_RUNS_DIR', source_root):

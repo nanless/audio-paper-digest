@@ -64,6 +64,19 @@ function ambiguousLegacyFixture(t) {
     return f;
 }
 
+test('机械双反馈续接不能用伪造 opaque handle 跳过原诊断和额度守卫', t => {
+    const f = fixture(t);
+    const file = saveFailedCandidate(f.directory, f.oldIdentity, f.payload);
+    const bytes = fs.readFileSync(file);
+    for (const handle of [null, true, {}, { identity: f.identity, proof: { retainedAttempts: 4 } }]) {
+        assert.throws(() => f.enabled(() => loadReaderRecoveryRevision(f.directory, f.identity, {
+            paper: { arxivId: f.identity.paperId }, savedReaderInputContinuity: handle
+        })), /opaque handle|来源|source|daily|Cannot read|undefined/i);
+        assert.deepEqual(fs.readFileSync(file), bytes);
+        assert.equal(fs.existsSync(path.join(f.directory, hashDraft(f.identity) + '.json')), false);
+    }
+});
+
 test('真实表格歧义的旧失败仍以失败状态迁移，原草稿、归档和已付费计数保持', t => {
     const f = ambiguousLegacyFixture(t);
     const oldDraft = structuredClone(f.payload.draft);

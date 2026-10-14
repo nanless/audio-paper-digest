@@ -9,7 +9,15 @@ const adapter = require('./conference-analysis-adapter.js');
 const tagCatalogApi = require('./tag-catalog.js');
 const identityApi = require('./paper-identity.js');
 const planApi = require('./conference-plan.js');
-const pageApi = require('./historical-page-staging.js');
+const publicationFiles = require('./publication-file-primitives.js');
+const pageApi = {
+    strictJson(...args) { return publicationFiles.strictJson(...args); },
+    writeExact(...args) { return publicationFiles.writeExact(...args); },
+    readRegular(filename, maximum) {
+        const record = publicationFiles.readRegular(filename, maximum);
+        return { ...record, fileSha256: record.sha256 };
+    }
+};
 const fresh = require('./fresh-rewrite-run.js');
 const analysisEngine = require('../analysis-engine.js');
 const analysisContract = require('../analysis-contract.js');
@@ -24,8 +32,10 @@ const AGGREGATE_VERSION = 2;
 const ASSIGNMENT_CONTRACT = 'conference-tag-assignment-v2';
 const ASSIGNMENT_VERSION = 2;
 const LEGACY_ASSIGNMENT_CONTRACT = 'conference-taxonomy-assignment-v1';
-const PROJECTION_CONTRACT = 'conference-page-projection-v2';
-const PROJECTION_VERSION = 2;
+const LEGACY_PROJECTION_CONTRACT = 'conference-page-projection-v2';
+const LEGACY_PROJECTION_VERSION = 2;
+const PROJECTION_CONTRACT = 'conference-page-projection-v3';
+const PROJECTION_VERSION = 3;
 const HIERARCHY_CONTRACT = 'conference-tag-hierarchy-v2';
 const VERSION = 1;
 const ID_RE = /^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+$/;
@@ -326,7 +336,16 @@ function implementationFingerprint() {
         analysisSectionTitlesSourceSha256: pageApi.readRegular(path.join(__dirname, 'analysis-section-titles.js'), 2 * 1024 * 1024, 'conference analysis headings parser source').fileSha256,
         tagCatalogSourceSha256: pageApi.readRegular(path.join(__dirname, 'tag-catalog.js'), 4 * 1024 * 1024, 'conference tag catalog source').fileSha256,
         identitySourceSha256: pageApi.readRegular(path.join(__dirname, 'paper-identity.js'), 4 * 1024 * 1024, 'conference identity source').fileSha256 };
-    const body = { contract: PROJECTION_CONTRACT, version: PROJECTION_VERSION, ...sources };
+    const implementationFiles = require('./workflow-implementation-files.js').collectWorkflowImplementationFiles({
+        root: path.join(__dirname, '..', '..'), entryFiles: [
+            'scripts/conference-page-render.py', 'scripts/paper_reader_presentation.py',
+            'scripts/publish-to-blog.py', 'scripts/lib/conference-postprocess.js'
+        ] });
+    const implementationDependencies = implementationFiles.map(relativePath => ({ relativePath,
+        fileSha256: pageApi.readRegular(path.join(__dirname, '..', '..', relativePath),
+            16 * 1024 * 1024, 'conference projection dependency').fileSha256 }));
+    const body = { contract: PROJECTION_CONTRACT, version: PROJECTION_VERSION, ...sources,
+        implementationDependenciesSha256: stableHash(implementationDependencies) };
     return { ...body, implementationSha256: stableHash(body) };
 }
 function fingerprint(dependencies) {
@@ -335,9 +354,12 @@ function fingerprint(dependencies) {
         'publisherCommonSourceSha256', 'analysisSectionsSourceSha256', 'analysisSectionTitlesSourceSha256',
         'tagStageRecordSourceSha256', 'pythonTagStageRecordSourceSha256',
         'loaderSourceSha256', 'parserSourceSha256', 'pythonParserSourceSha256', 'tagCatalogSourceSha256', 'identitySourceSha256', 'implementationSha256'];
+    const current = value?.contract === PROJECTION_CONTRACT && value.version === PROJECTION_VERSION;
+    const legacy = value?.contract === LEGACY_PROJECTION_CONTRACT && value.version === LEGACY_PROJECTION_VERSION;
+    if (current) expectedKeys.push('implementationDependenciesSha256');
     if (!value || typeof value !== 'object' || Array.isArray(value)
         || Object.keys(value).sort().join('\0') !== expectedKeys.sort().join('\0')
-        || value.contract !== PROJECTION_CONTRACT || value.version !== PROJECTION_VERSION || value.implementationSha256 !== stableHash(body)
+        || (!current && !legacy) || value.implementationSha256 !== stableHash(body)
         || Object.entries(value).filter(([key]) => key.endsWith('Sha256')).some(([, sha]) => !/^[a-f0-9]{64}$/.test(sha || ''))) fail('会议页面生成程序的实现指纹不符合要求。');
     return value;
 }
@@ -392,20 +414,48 @@ function buildConferencePageArtifacts(loaded, tagCatalog, renderFn, implementati
     if (JSON.stringify(rendered).includes('paper_digest_arxiv_id') || /arxiv\.org/i.test(rendered.markdown)) {
         fail('arXiv identity leaked into conference renderer output');
     }
-    if (stableHash(loaded.run.capabilities) === stableHash(WEAK) && rendered.assets.length) {
-        fail('weak assets are not permitted for weak conference sources');
-    }
+    const sidecarRoot = `static/data/papers/${date}/conference-${sha256(loaded.run.paperId).slice(0, 24)}/`;
+    const sidecarNames = ['citation.json', 'citation.bib', 'citation.ris', 'rethink-context.json'];
+    const sidecarRecordsLine = rendered.markdown.match(/^paper_digest_sidecars: (.+)$/m);
+    const sidecarRecords = sidecarRecordsLine ? pageApi.strictJson(Buffer.from(sidecarRecordsLine[1]), 'conference workbench sidecar records') : null;
+    const paper = loaded.analysis.papers[0];
     const assetFiles = rendered.assets.map((asset, index) => {
-        if (!asset || typeof asset.path !== 'string'
-            || !/^static\/images\/conference\/[a-z0-9-]+\/[a-f0-9]{12}\/figure-\d+\.png$/.test(asset.path)
-            || typeof asset.base64 !== 'string'
+        const image = asset && typeof asset.path === 'string'
+            && /^static\/images\/conference\/[a-z0-9-]+\/[a-f0-9]{12}\/figure-\d+\.png$/.test(asset.path);
+        const sidecarName = asset?.path?.startsWith(sidecarRoot) ? asset.path.slice(sidecarRoot.length) : null;
+        const sidecar = sidecarNames.includes(sidecarName);
+        if (!asset || (!image && !sidecar) || typeof asset.base64 !== 'string'
             || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(asset.base64)) {
             fail(`conference renderer returned unsafe asset ${index + 1}`);
         }
+        if (image && stableHash(loaded.run.capabilities) === stableHash(WEAK)) {
+            fail('weak image assets are not permitted for weak conference sources');
+        }
         const bytes = Buffer.from(asset.base64, 'base64');
         if (!bytes.length) fail(`conference renderer returned empty asset ${index + 1}`);
+        if (sidecar) {
+            if (!sidecarRecords || Object.keys(sidecarRecords).sort().join('\0') !== [...sidecarNames].sort().join('\0')
+                || sidecarRecords[sidecarName]?.sha256 !== sha256(bytes)
+                || bytes.length > 256 * 1024 || bytes.includes(13)) fail('conference workbench export is not bound to page records');
+            if (sidecarName.endsWith('.json')) {
+                const record = pageApi.strictJson(bytes, 'conference workbench source-bound JSON');
+                const cleanAuthors = paper.apiReaderAuthors.authors.map(author => ({
+                    name: author.name.replace(/\s+/g, ' ').trim(),
+                    affiliations: author.affiliations.map(value => value.replace(/\s+/g, ' ').trim()) }));
+                if (record.paperId !== loaded.run.paperId || record.sourceKind !== 'conference'
+                    || record.sourceSha256 !== paper.sourceSha256
+                    || record.originalTitle !== paper.title.replace(/\s+/g, ' ').trim()
+                    || stableHash(record.authors) !== stableHash(cleanAuthors)
+                    || record.recordUrl !== loaded.publication.recordUrl || record.pdfUrl !== loaded.publication.pdfUrl
+                    || record.publicUrlAvailability !== 'available'
+                    || Object.keys(record).some(key => /^arxiv/i.test(key))) fail('conference workbench export source identity differs');
+            }
+        }
         return { path: asset.path, bytes, sha256: sha256(bytes), size: bytes.length };
     });
+    if (sidecarRecords && sidecarNames.some(name => !assetFiles.some(asset => asset.path === sidecarRoot + name))) {
+        fail('conference workbench export set is incomplete');
+    }
     if (new Set(assetFiles.map(asset => asset.path)).size !== assetFiles.length) fail('conference renderer returned duplicate assets');
     const pageBytes = Buffer.from(rendered.markdown, 'utf8'); const assignmentBytes = canonicalBytes(assignment);
     const body = { contract: CONTRACT, version: PAGE_VERSION, status: 'complete', paperId: loaded.run.paperId,
@@ -1067,7 +1117,7 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
 }
 
 module.exports = { CONTRACT, PAGE_VERSION, LEGACY_PAGE_CONTRACT, AGGREGATE_CONTRACT, AGGREGATE_VERSION,
-    ASSIGNMENT_CONTRACT, ASSIGNMENT_VERSION, LEGACY_ASSIGNMENT_CONTRACT, PROJECTION_CONTRACT, PROJECTION_VERSION, HIERARCHY_CONTRACT,
+    ASSIGNMENT_CONTRACT, ASSIGNMENT_VERSION, LEGACY_ASSIGNMENT_CONTRACT, PROJECTION_CONTRACT, PROJECTION_VERSION, LEGACY_PROJECTION_CONTRACT, LEGACY_PROJECTION_VERSION, HIERARCHY_CONTRACT,
     VERSION, stableHash, planProof,
     loadCompleted, getConsistentPublicationFields, buildAssignment, safeStem, render, implementationFingerprint, fingerprint, buildFormulaEvidenceRecord,
     repairFormulaDelimiters, repairCurrencyDollars, repairTechnicalNotationAsterisks,

@@ -82,7 +82,7 @@ describe('env-loader', () => {
 
     it('识别共享脚本和 Manual 脚本中的 JS 命令入口，测试文件不属于命令入口', () => {
         assert.strictEqual(isScriptsEntrypoint(path.join(__dirname, '../scripts/full-fetch.js')), true);
-        assert.strictEqual(isScriptsEntrypoint(path.join(__dirname, '../manual/scripts/manual-fetch.js')), true);
+        assert.strictEqual(isScriptsEntrypoint(path.join(__dirname, '../manual/scripts/manual-artifact-index.js')), true);
         assert.strictEqual(isScriptsEntrypoint(path.join(__dirname, 'env-loader.test.js')), false);
     });
 

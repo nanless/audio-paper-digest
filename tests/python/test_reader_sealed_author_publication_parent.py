@@ -17,6 +17,7 @@ from test_daily_fresh_publish_gate import (
     _write_private,
     publish_to_blog as publisher,
 )
+from test_reader_author_source_replay import attach_source_bound_resource_claim_fixture
 
 
 class SealedAuthorPublicationParentTest(unittest.TestCase):
@@ -93,6 +94,7 @@ fresh.withVerifiedBundleReaderAuthorFiles(input.source, details => {
         stage['readerAuthorsSha256'] = publisher._reader_record_sha256(paper['apiReaderAuthors'], 'test')
         self.assertEqual(paper['apiReaderAuthors']['authors'][0]['affiliations'], ['University A'])
         self.assertNotIn('sourceHtml', runtime['readerAuthors'])
+        attach_source_bound_resource_claim_fixture(paper, details['text'])
         return run_dir, paper, runtime_path
 
     def test_parent_publication_accepts_actual_sealed_authors_without_html_string(self):

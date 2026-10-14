@@ -214,7 +214,11 @@ test('公共新正文经真实生成器采用自然资源输入，不借旧签�
     fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify({ batchDate: date,
         dailyFreshSourceRun: daily.dailyFreshSourceReference(plan), papers: [paper] }));
     fs.writeFileSync(Config.FILES.papers, JSON.stringify({ papers: {} }));
-    for (const key of ['apiReaderArticle', 'apiReaderArticleSha256', 'apiReaderPlan', 'apiReaderPlanSha256', 'apiReaderAuthors', 'apiReaderResources', 'apiReaderFigures']) delete paper[key];
+    // 资源身份属于已经核验的本篇来源，不能随旧 Reader 正文一起移除。
+    // 保留实际封存原文绑定的空资源记录，仍删除全部旧文章与计划。
+    assert.equal(paper.apiReaderResources.sourceTextSha256, descriptor.sourceSha256);
+    assert.deepEqual(paper.apiReaderResources.resources, []);
+    for (const key of ['apiReaderArticle', 'apiReaderArticleSha256', 'apiReaderPlan', 'apiReaderPlanSha256', 'apiReaderAuthors', 'apiReaderFigures']) delete paper[key];
     delete paper.analysisManifest.stages.apiReaderArticle;
     fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify({ batchDate: date, dailyFreshSourceRun: daily.dailyFreshSourceReference(plan), papers: [paper] }));
     const before = fs.readFileSync(Config.FILES.deepAnalysisResult);

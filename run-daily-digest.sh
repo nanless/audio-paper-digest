@@ -1,5 +1,5 @@
 #!/bin/bash
-# Codex 默认“某日论文速递”的入口脚本。默认使用 LLM/API；Manual v6 须显式 --manual。
+# 日更唯一入口：共享 LLM/API 流程，单篇人工修正通过受控恢复入口处理。
 #
 # 本脚本负责项目脚本能自动跑完的所有阶段：
 # 抓取/筛选/深度分析 → 博客生成 → 审查 → 推送 → 发布后视觉任务规划与参考图准备。
@@ -10,10 +10,10 @@ set -eu
 usage() {
   cat <<'EOF'
 用法:
-  ./run-daily-digest.sh YYYY-MM-DD [--from fetch|tasks|spec|analyze|generate|review|push|visual] [--api|--manual]
+  ./run-daily-digest.sh YYYY-MM-DD [--from fetch|generate|review|push|visual] [--api]
 
-默认运行 LLM/API 自动抓取、筛选、深度分析和博客审查。只有显式 --manual
-才切换正式人工流程 Manual v6，并在需要逐篇人工记录时停下。
+运行 LLM/API 抓取、筛选、深度分析和博客审查。已退役整批 Manual 写作链；
+单篇受控人工修正与独立审查仍可用于三个流程的失败恢复。
 某一阶段失败后，修复问题并用 --from 从该阶段续跑：
   ./run-daily-digest.sh 2026-07-23 --from review
 
@@ -70,7 +70,10 @@ fi
 shift
 
 start_stage="fetch"
-api_mode="${PD_DAILY_API_MODE:-1}"
+if [ "${PD_DAILY_API_MODE:-1}" != "1" ]; then
+  echo "整批 Manual 流程已退役，请使用日更 API 流程或受控单篇恢复。" >&2
+  exit 2
+fi
 while [ "$#" -gt 0 ]; do
   case "${1:-}" in
     --from)
@@ -82,12 +85,11 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     --api)
-      api_mode=1
       shift
       ;;
     --manual)
-      api_mode=0
-      shift
+      echo "整批 Manual 流程已退役，请使用日更 API 流程或受控单篇恢复。" >&2
+      exit 2
       ;;
     *)
       usage >&2
@@ -98,9 +100,6 @@ done
 
 case "$start_stage" in
   fetch) start_index=1 ;;
-  tasks) start_index=2 ;;
-  spec) start_index=3 ;;
-  analyze) start_index=4 ;;
   generate) start_index=5 ;;
   review) start_index=6 ;;
   push) start_index=7 ;;
@@ -114,26 +113,17 @@ esac
 
 # full-fetch.js 将新抓取绑定到启动时的北京时间日期，不能指定历史日期。
 # 在归档或覆盖当前运行数据前拒绝日期不符的请求。历史批次可从已有数据续跑；
-# tasks/spec/analyze 只属于人工流程，API 流程仅允许后面的生成和发布阶段。
+# 历史日批次只允许从现有生成或发布阶段恢复；重写走 history 流程。
 if [ "$start_index" -eq 1 ]; then
   beijing_today="$(TZ=Asia/Shanghai date +%Y-%m-%d)"
   if [ "$target_date" != "$beijing_today" ]; then
     echo "抓取阶段只允许北京时间当天（今天 ${beijing_today}，请求 ${target_date}）。" >&2
-    echo "历史批次只能使用 --from tasks|spec|analyze|generate|review|push|visual 续跑。" >&2
+    echo "历史批次只能使用 --from generate|review|push|visual 续跑，重写使用 history:run。" >&2
     exit 2
   fi
 fi
 
-if [ "$api_mode" -eq 1 ] && [ "$start_index" -ge 2 ] && [ "$start_index" -le 4 ]; then
-  echo "默认 LLM/API 模式不使用 Manual v6 的 tasks/spec/analyze 阶段；请从 fetch 或 generate/review/push/visual 续跑，或显式传 --manual。" >&2
-  exit 2
-fi
-
 cd "$(dirname "$0")"
-
-v6_root="data/current/manual-v6/${target_date}"
-records_v4="${v6_root}/records-v4.json"
-spec_v6="${v6_root}/spec.json"
 
 run_stage() {
   stage_index="$1"
@@ -149,52 +139,12 @@ run_stage() {
   fi
 }
 
-if [ "$start_index" -eq 1 ] && [ "$api_mode" -ne 1 ]; then
-  run_stage 1 "Manual 联网抓取候选（不调用筛选模型）" \
-    npm run manual:fetch -- --date "$target_date" --raw
-  echo "==> Manual v6 已完成候选抓取，接下来需要逐篇人工筛选。"
-  echo "==> 下一步：每篇候选由独立助手审核，完成 manual_offline spec 后运行："
-  echo "    npm run manual:fetch -- --date ${target_date} --select FILTER_SPEC.json"
-  echo "    npm run manual:fulltext -- ${target_date}"
-  echo "    npm run manual:tasks -- init --date ${target_date}"
-  echo "    npm run manual:packet -- --date ${target_date} --paper ARXIV_ID --role author"
-  echo "    npm run manual:tasks -- status --date ${target_date}"
-  echo "==> 任务管理器只保存任务、记录领取情况并校验提交结果；不会自动创建子任务、准备单篇任务材料，也不会汇总生成 records-v4.json。"
-  echo "==> 主助手必须逐篇创建 gpt-6.1-sol/high 单篇助手；四类任务全部通过校验后，由 manual:records 汇总生成 records v4。"
-  echo "==> 全部任务通过校验且 records-v4.json 就绪后，用 --from spec 续跑，生成正式 spec v6 并写入正式分析结果（canonical）。"
-  exit 3
-fi
-
 if [ "$start_index" -eq 1 ]; then
   run_stage 1 "默认 LLM/API 抓取、筛选、深度分析" node scripts/full-fetch.js --date "$target_date"
 fi
 
-if [ "$api_mode" -ne 1 ]; then
-  if [ "$start_index" -le 2 ]; then
-    run_stage 2 "初始化生产 Manual v6 task runner" \
-      npm run manual:tasks -- init --date "$target_date"
-    npm run manual:tasks -- status --date "$target_date"
-    echo "==> 任务管理器已停在需要人工接手的步骤；它不会自动创建子任务、准备单篇任务材料，也不会汇总生成 records-v4.json。"
-    echo "==> 主助手用 manual:packet 准备各类单篇任务材料，并逐篇完成任务登记、领取、开始和提交（register/claim/start/submit）；随后用 --from spec 续跑。"
-    exit 3
-  fi
-  run_stage 3 "汇总生成生产 Manual records v4" \
-    npm run manual:records -- --date "$target_date"
-  run_stage 3 "组装生产 Manual spec v6" \
-    npm run manual:spec -- --date "$target_date" --records "$records_v4"
-  run_stage 4 "写入生产 Manual v6 canonical" \
-    npm run manual:analyze -- --date "$target_date" --spec "$spec_v6"
-fi
-
 run_stage 5 "生成博客" bash scripts/python-runtime.sh scripts/generate-blog.py --date "$target_date"
-if [ "$api_mode" -eq 1 ]; then
-  run_stage 6 "模型审查博客" bash scripts/python-runtime.sh scripts/review-blog.py --date "$target_date"
-elif [ "$start_index" -le 6 ]; then
-  echo "==> Manual 接下来需要逐页检查已生成页面的正文和图片。"
-  echo "==> 页面生成清单中的每个页面必须由主助手直接安排独立的单页助手审查，生成逐图审查凭证（attestation v3）；不得通过其他助手转派，以免额外占用并发任务名额。"
-  echo "==> 逐页记录汇总后运行 blog:manual-attest 与 manual-review-blog.py，再用 --from push 续跑。"
-  exit 3
-fi
+run_stage 6 "模型审查博客" bash scripts/python-runtime.sh scripts/review-blog.py --date "$target_date"
 if [ "$start_index" -le 7 ]; then
   run_stage 7 "发布博客并规划视觉任务" bash scripts/python-runtime.sh scripts/push-blog.py --date "$target_date" --require-visual-plan
 else

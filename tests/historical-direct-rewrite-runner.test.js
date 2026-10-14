@@ -1735,6 +1735,9 @@ test('真实 Reader 请求从直连作用域拿到一页会议 PDF，被拒绝�
     const temporaryRoot = path.join(f.root, 'os-temporary'); const executionDirectory = path.join(f.root, 'runtime', 'execution');
     const extracted = await runner.extractConferenceSource(item, { extractPdfText: async () => 'conference source '.repeat(100) });
     const descriptor = { sourceSnapshotSha256: runner.stableHash(extracted.sourceDetails) };
+    const resourceIdentityBody = { contract: 'api-reader-resource-identity-v1',
+        sourceTextSha256: sha(extracted.sourceDetails.text), resources: [] };
+    const apiReaderResources = { ...resourceIdentityBody, identitySha256: runner.stableHash(resourceIdentityBody) };
     let temporaryDirectory = null; let requestSawPage = false; const deep = require('../scripts/deep-analyzer.js');
     await runner.withEphemeralConferenceFigures({ pdfPath: item.route.writerInputs[0].pdf.absolutePath }, async pages => {
         await context.withDirectRewriteAnalysisSource({ paperId: item.paperId, route: item.route.kind,
@@ -1742,7 +1745,7 @@ test('真实 Reader 请求从直连作用域拿到一页会议 PDF，被拒绝�
             readerAttemptsDir: path.join(executionDirectory, 'reader-attempts'), supplementaryReaderImages: pages,
             materializeReaderFigures: async () => [], readerRetryEpoch: 7 }, async () => {
             let rejection; try { await deep.generateApiReaderArticleDetailed({ directPaperId: item.paperId, id: item.paperId,
-                title: 'conference source', authors: [] }, 'canonical analysis', 'SOURCE_EVIDENCE', {
+                title: 'conference source', authors: [], apiReaderResources }, 'canonical analysis', 'SOURCE_EVIDENCE', {
                 sourceText: extracted.sourceDetails.text, structuredArtifacts: extracted.sourceDetails.structuredArtifacts,
                 readerMaxAttempts: 1, readerRecordDisposition: () => {}, readerCallModel: async messages => {
                     const flattened = JSON.stringify(messages);

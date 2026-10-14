@@ -22,6 +22,12 @@ function assertGrant(grant) {
     const local = grant?.contract === LOCAL_REPAIR_CONTRACT;
     const recovery = grant?.contract === parentRecovery.CONTRACT;
     if (recovery) parentRecovery.assertShape(grant);
+    if (grant?.fullRegenerationReason !== undefined && (grant.contract !== CONTRACT
+        || grant.fullRegenerationReason?.code !== 'complete_failed_draft_no_progress'
+        || !/^[a-f0-9]{64}$/.test(grant.fullRegenerationReason.draftSha256 || '')
+        || !/^[a-f0-9]{64}$/.test(grant.fullRegenerationReason.issuesSha256 || ''))) {
+        throw new Error('Reader 首轮完整再生原因或授权类型不合法');
+    }
     if (!grant || ![CONTRACT, LOCAL_REPAIR_CONTRACT, parentRecovery.CONTRACT].includes(grant.contract) || !/^\d{4}\.\d{4,5}$/.test(grant.paperId)
         || !/^[a-f0-9-]{36}$/.test(grant.roundId)
         || ['identitySha256', 'originalIdentitySha256', 'envelopeSha256', 'payloadSha256', 'wholeSha256']
@@ -38,6 +44,14 @@ function assertGrant(grant) {
         throw new Error('Reader 重试许可的内容或预算不符合要求');
     }
     return grant;
+}
+function assertFirstFullRegeneration(grant, payload) {
+    if (grant.fullRegenerationReason === undefined) return;
+    const actual = parentRecovery.fullReason(payload), repair = useModule('./reader-repair');
+    if (grant.contract !== CONTRACT || actual?.code !== 'complete_failed_draft_no_progress'
+        || repair.hashDraft(actual) !== repair.hashDraft(grant.fullRegenerationReason)) {
+        throw new Error('Reader 首轮完整再生原因与真实原失败稿不匹配');
+    }
 }
 function localRepairError(message) {
     return Object.assign(new Error(message), { code: 'READER_LOCAL_REPAIR_PROOF_INVALID', retryable: false,
@@ -202,6 +216,7 @@ function beginExplicitRound(directory, identity, recovered, paper) {
     }
     if (!receipt) {
         const old = repair.loadFailedCandidate(directory, identity);
+        assertFirstFullRegeneration(grant, old);
         if (grant.contract === parentRecovery.CONTRACT) parentRecovery.assertParent(directory, grant, old, identity);
         else if (grant.contract === LOCAL_REPAIR_CONTRACT) assertLocalRepairParent(directory, grant, old, identity);
         else if (old?.explicitReaderRetryRound) throw new Error('同一当前输入不能再次开明确付费新轮');
@@ -265,6 +280,7 @@ function beginExplicitRound(directory, identity, recovered, paper) {
     } else {
         // 原记录在独立位置完整保留，新轮计数明确独立，不冒充旧次数继续。
         const old = oldEnvelope.payload;
+        assertFirstFullRegeneration(grant, old);
         const retainedDraft = repair.parseRecoveryDraft(old.rawDraft) || repair.parseRecoveryDraft(old.draft);
         const next = { status: 'failed',
             draft: retainedDraft ? (repair.parseRecoveryDraft(old.draft) || retainedDraft) : null,
@@ -279,7 +295,12 @@ function beginExplicitRound(directory, identity, recovered, paper) {
             ...(old.implementationRepairAllowanceLineage ? { implementationRepairAllowanceLineage: old.implementationRepairAllowanceLineage } : {}),
             ...(old.consumedImplementationAllowanceSha256 ? { consumedImplementationAllowanceSha256: old.consumedImplementationAllowanceSha256 } : {}),
             explicitReaderRetryRound: { contract: CONTRACT, roundId: grant.roundId, receiptFile: loc.receipt,
-                maxResponses: grant.maxResponses, maxFullResponses: grant.maxFullResponses } };
+                maxResponses: grant.maxResponses, maxFullResponses: grant.maxFullResponses,
+                ...(grant.fullRegenerationReason !== undefined
+                    ? { fullRegenerationReasonSha256: repair.hashDraft(grant.fullRegenerationReason) }
+                    : grant.contract === parentRecovery.CONTRACT && grant.mode === 'full'
+                    && grant.recoveryReason.code === 'complete_failed_draft_no_progress'
+                    ? { fullRegenerationReasonSha256: repair.hashDraft(grant.recoveryReason) } : {}) } };
         repair.saveFailedCandidate(directory, identity, next);
     }
     receipt.status = 'active';
@@ -391,6 +412,7 @@ function validatePersistedRound(directory, identity, payload) {
         throw new Error('Reader 新轮历史调用次数与原档不一致');
     }
     assertGrant(receipt.grant);
+    assertFirstFullRegeneration(receipt.grant, original.payload);
     assertRequestLedger(receipt);
     if (receipt.grant.contract === parentRecovery.CONTRACT) {
         parentRecovery.assertParent(directory, receipt.grant, original.payload, original.identity);
@@ -399,6 +421,13 @@ function validatePersistedRound(directory, identity, payload) {
     }
     if (proof.maxResponses !== receipt.grant.maxResponses || proof.maxFullResponses !== receipt.grant.maxFullResponses)
         throw new Error('Reader 保存次数与授权预算不匹配');
+    const regenerationReason = receipt.grant.fullRegenerationReason !== undefined
+        ? useModule('./reader-repair').hashDraft(receipt.grant.fullRegenerationReason)
+        : receipt.grant.contract === parentRecovery.CONTRACT && receipt.grant.mode === 'full'
+        && receipt.grant.recoveryReason.code === 'complete_failed_draft_no_progress'
+        ? useModule('./reader-repair').hashDraft(receipt.grant.recoveryReason) : undefined;
+    if (proof.fullRegenerationReasonSha256 !== regenerationReason)
+        throw new Error('Reader 完整无进展再生原因与已核验父账不匹配');
     if (!['prepared', 'active'].includes(receipt.status)
         || path.resolve(receipt.archivedFile) !== path.resolve(directory, 'explicit-retry-rounds', `${proof.roundId}.original.json`)
         || receipt.grant.roundId !== proof.roundId

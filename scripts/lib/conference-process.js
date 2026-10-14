@@ -125,7 +125,7 @@ const SOURCE_VERIFICATION_FILES = Object.freeze([
     'scripts/lib/conference-pdf-source.js',
     'scripts/lib/conference-importer.js'
 ]);
-// 当前实现清单：按版本登记表选择各阶段路径；评分使用 v5、主分析使用 v4，其他阶段按登记表使用 v3 或 v2。
+// 当前实现清单：按公共版本登记表选择每个阶段的当前路径，与日更共用。
 // 提示词正文本身仍在清单里，所以改正文或改版本映射都会改变指纹。
 function currentImplementationFiles() {
     const files = IMPLEMENTATION_FILES.map(name => {
@@ -137,7 +137,8 @@ function currentImplementationFiles() {
     files.push('scripts/lib/immutable-file.js');
     files.push('scripts/lib/model-text-sanitization.js');
     files.push(...SOURCE_VERIFICATION_FILES);
-    return files;
+    return require('./workflow-implementation-files.js').collectWorkflowImplementationFiles({
+        root: path.join(__dirname, '..', '..'), entryFiles: files });
 }
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const clone = value => JSON.parse(JSON.stringify(value));

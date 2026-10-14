@@ -1426,6 +1426,11 @@ test('直连来源范围单独保存临时的像素绑定，回调图片一变�
     const invalid = fixture(); invalid.readerTitle = '短';
     const sourceDetails = { paperId: 'arxiv:2609.99985', source: 'html', sourceId: '2609.99985', text: 'source',
         structuredArtifacts: { tables: [], formulas: [], figures: [] } };
+    // 直连 Reader 与正式流程一样，必须携带绑定当前原文的资源身份；此原文没有资源链接。
+    const { stableHash, sha256 } = require('../scripts/lib/fresh-rewrite-run.js');
+    const resourceIdentity = { contract: 'api-reader-resource-identity-v1',
+        sourceTextSha256: sha256(sourceDetails.text), resources: [] };
+    paper.apiReaderResources = { ...resourceIdentity, identitySha256: stableHash(resourceIdentity) };
     let calls = 0;
     const invoke = async (pixels, callModel) => direct.withDirectRewriteAnalysisSource({
         paperId: 'arxiv:2609.99985', route: 'arxiv-fresh-fetch', sourceDetails,
@@ -1477,7 +1482,8 @@ test('历史直连只准备一次图片，保存已接受草稿供恢复，提�
                 assetSha256: pixelSha256, assetMediaType: 'image/png' }));
         }
     }, () => deep.generateApiReaderArticleDetailed(
-        { directPaperId: paperId, arxivId: id, title: 'Transactional Reader' },
+        { directPaperId: paperId, arxivId: id, title: 'Transactional Reader',
+            apiReaderResources: structuredClone(signed.paper.apiReaderResources) },
         '', sourceEvidence, { sourceText: sourceDetails.text,
             structuredArtifacts: sourceDetails.structuredArtifacts,
             readerMaxAttempts: 1, readerRecordDisposition: () => {}, readerCallModel }

@@ -686,7 +686,7 @@ function loadBoundManualV4SourceText(filePath, batchDate, paper, paperIndex) {
             buildManifestContext,
             isReusableFullTextCheckpoint,
             stableSha256
-        } = require('../manual/scripts/manual-fetch-fulltext.js');
+        } = require('./lib/legacy-manual-source.js');
         let context;
         try {
             context = buildManifestContext(filtered, batchDate, realRoot);

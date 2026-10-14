@@ -245,6 +245,8 @@ function readerIssuesRequireFullSourceBindingRetry(
             && issue?.code !== 'reader_table_count_insufficient');
     if (blocking.some(issue => classifyTableBindingOrderIssue(issue).actionable)) return false;
     const otherBlocking = blocking.filter(issue => !classifyTableBindingOrderIssue(issue).ignoreMessageForRepair);
+    // 坏原表可由来源绑定和承载正文的受限成对补丁处理，不能因包含TABLE文字扩大为全文。
+    if (otherBlocking.some(issue => issue?.code === 'reader_source_table_unrenderable')) return false;
     // 一份合法草稿只是把所有表格放到了 result/ablation 之外，本地挪一下表格、重新
     // 绑定就行。TABLE_N 在闸门里只是证据清单；把它当成绑定损坏，会白白再跑一次 48k
     // 的完整生成，还可能在补丁动手前就撞上「闸门未变化」的截止。
@@ -1113,6 +1115,7 @@ const API_READER_SOURCE_BINDING_REPAIR_VERSION = 'api-reader-source-repair-v4';
 const API_READER_SURFACE_REPAIR_VERSION = 'api-reader-surface-repair-v2';
 const API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1';
 const API_READER_RESOURCE_IDENTITY_CONTRACT = 'api-reader-resource-identity-v1';
+const API_READER_RESOURCE_CLAIMS_CONTRACT = 'reader-resource-availability-claims-v1';
 const REPOSITORY_DOCUMENTATION_EVIDENCE_CONTRACT = 'repository-documentation-evidence-v1';
 const API_READER_INITIAL_TEMPERATURE = 0.6;
 const API_READER_REPAIR_TEMPERATURE = 0.1;
@@ -1228,6 +1231,8 @@ function isSourceSupportedReaderQuantityIssue(issue, article, evidence) {
 }
 
 function isAllowedReaderNarrativeNumeralIssue(issue, article = '', evidence = null) {
+    if (require('./lib/reader-source-metric-units').isSourceSupportedEventDistanceComparison(
+        issue, article, evidence)) return true;
     if (isSourceSupportedReaderQuantityIssue(issue, article, evidence)) return true;
     if (issue?.code !== 'quantitative_chinese_numeral') return false;
     const match = String(issue.match || '').trim();
@@ -1723,7 +1728,7 @@ function restoreReaderSelectedTableBytes(article, tableBindings, structuredArtif
                 || rows[cellBinding?.renderedRow]?.[cellBinding?.renderedColumn] === undefined) {
                 throw new Error(`Reader selection table ${binding.tableIndex} 的 cell 坐标无法重放`);
             }
-            mapped.set(key, normalizeReaderSourceDisplayArtifacts(require('./lib/reader-pdf-cell-evidence')
+            mapped.set(key, normalizeReaderSourceDisplayArtifacts(require('./lib/reader-table-pdf-evidence')
                 .displayCell(sourceTable, cellBinding.sourceRow, cellBinding.sourceColumn)));
         }
         const rebuiltRows = rows.map((row, rowIndex) => row.map((_cell, columnIndex) => {
@@ -1869,150 +1874,7 @@ function buildApiReaderQualityMetrics(quality, article, evidence = null) {
 // arXiv 的 LaTeXML 文本投影会把可见公式和它的 TeX 注解放进同一个表格单元。这一步
 // 只合并带明确 TeX 语法、两侧数值完全一致的显示副本。裸数字或符号的重复不能
 // 证明它们来自同一个值；来源绑定仍以原始 DOM 字节为准。
-function normalizeExplicitReaderSymbolProjection(value) {
-    let output = String(value ?? '');
-    if (!output.includes('\\')) return output;
-    const hasContinuation = (input, end) => /^\s*[\p{L}\p{N}_^\\({]/u.test(input.slice(end));
-    // 只有完整的可见变量与明确 TeX 同值时才合并，不能从裸重复猜测。
-    const compound = [
-        /(?<![A-Za-z0-9_])([A-Za-z])([0-9]+)([A-Za-z]{1,24})\1_\{\2\}\^\{\\mathrm\{\3\}\}(\s+\(multi-space\))?(?![\p{L}\p{N}_^\\({])/gu,
-        /(?<![A-Za-z0-9_])([A-Za-z]{1,24})([A-Za-z]{1,24})×([A-Za-z]{1,24})([A-Za-z]{1,24})\1_\{\\(?:mathrm|text)\{\2\}\}(?:\\!)*\\times(?:\\!)*(?:\\mathrm\{\3\}|\3)_\{\\(?:mathrm|text)\{\4\}\}(?![\p{L}\p{N}_^\\({])/gu
-    ];
-    output = output.replace(compound[0], (whole, base, index, power, label, offset, input) =>
-        hasContinuation(input, offset + whole.length) ? whole : `${base}${index}${power}${label || ''}`);
-    output = output.replace(compound[1], (whole, left, leftIndex, right, rightIndex, offset, input) =>
-        hasContinuation(input, offset + whole.length) ? whole : `${left}${leftIndex}×${right}${rightIndex}`);
-    output = output.replace(/(?<![A-Za-z0-9_.+−-])([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))%([∗*]{1,3})\s*([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))\\%\^\{([*]{1,3})\}(?![\p{L}\p{N}._^\\({])/gu,
-        (whole, visible, stars, tex, texStars, offset, input) =>
-            hasContinuation(input, offset + whole.length)
-            || visible.replace('−', '-') !== tex.replace('−', '-')
-            || stars.replace(/∗/g, '*') !== texStars ? whole : `${visible}%${stars}`);
-    output = output.replace(/(?<![A-Za-z0-9_.+−-])([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))%\s*([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))\\%(?![\p{L}\p{N}._^\\({])/gu,
-        (whole, visible, tex, offset, input) => hasContinuation(input, offset + whole.length)
-            || visible.replace('−', '-') !== tex.replace('−', '-') ? whole : `${visible}%`);
-    // 范数符号只接受完整可见下标与明确 TeX 同义，不从裸重复或续式猜值。
-    output = output.replace(/(?<![\p{L}\p{N}_])ℓ(∞|[0-9]+)\\ell_\{(\\infty|[0-9]+)\}(?![\p{L}\p{N}_^\\({+−=×÷/*<>≤≥-])/gu,
-        (whole, visibleIndex, texIndex, offset, input) => {
-            if (/^\s*[\p{L}\p{N}_^\\({+−=×÷/*<>≤≥-]/u.test(input.slice(offset + whole.length))) return whole;
-            const projectedIndex = texIndex === '\\infty' ? '∞' : texIndex;
-            return visibleIndex === projectedIndex ? 'ℓ' + visibleIndex : whole;
-        });
-    const greek = { Delta:'Δ', alpha:'α', beta:'β', gamma:'γ', tau:'τ', lambda:'λ', omega:'ω' };
-    const baseProjection = base => {
-        const command = /^\\([A-Za-z]{1,24})$/.exec(base);
-        if (command) return greek[command[1]] || null;
-        const styled = /^\\(?:mathcal|mathrm)\{([A-Za-z]{1,24})\}$/.exec(base);
-        return styled ? styled[1] : /^[A-Za-z]{1,24}$/.test(base) ? base : null;
-    };
-    const atom = /^(?:\\boldsymbol\{\\Delta_\{\\mathrm\{([A-Za-z]{1,24})\}\}\}|(\\mathcal\{[A-Za-z]\}|\\mathrm\{[A-Za-z]{1,24}\}|\\Delta|[A-Za-z]{1,24})_\{\\(?:mathrm|text)\{([A-Za-z]{1,24})\}\}(?:\(\\(tau|alpha|beta|gamma|lambda|omega)\))?|\\(Delta|alpha|beta|gamma|tau|lambda|omega))(?:\\(uparrow|downarrow))?(?![\p{L}\p{N}_^\\({])/u;
-    const canonical = text => text.normalize('NFKC').replace(/[\u200b\u200c\u200d\ufeff]/g, '');
-    // 逐起点识别完整受限原子，避免贪婪地把可见副本当成 TeX 的字母基底。
-    for (let index = output.length - 1; index >= 0; index--) {
-        const match = atom.exec(output.slice(index, index + 160));
-        if (!match) continue;
-        // 数学续尾前的空白不是结束边界；任何继续命令都保留原注解。
-        if (hasContinuation(output, index + match[0].length)) continue;
-        let projection;
-        if (match[1]) projection = 'Δ' + match[1];
-        else if (match[5]) projection = greek[match[5]];
-        else {
-            const base = baseProjection(match[2]);
-            if (!base) continue;
-            projection = base + match[3] + (match[4] ? '(' + greek[match[4]] + ')' : '');
-        }
-        if (match[6]) projection += match[6] === 'uparrow' ? '↑' : '↓';
-        const visible = output.slice(0, index).match(/[\p{L}\p{N}()↑↓\u200b\u200c\u200d\ufeff]*$/u)?.[0] || '';
-        const start = index - visible.length;
-        if (canonical(visible) !== projection) continue;
-        output = output.slice(0, start) + visible + output.slice(index + match[0].length);
-        index = start;
-    }
-    return output.replace(/([↑↓])\\(uparrow|downarrow)(?![A-Za-z])/g,
-        (whole, visible, command, offset, input) => {
-            if (hasContinuation(input, offset + whole.length)
-                || visible !== (command === 'uparrow' ? '↑' : '↓')) return whole;
-            return visible;
-        })
-        .replace(/([+/])\\;\1\\;/g, '$1');
-}
-
-function normalizeReaderSourceDisplayArtifacts(value) {
-    let output = normalizeExplicitReaderSymbolProjection(value);
-    // 仅合并同变量、同数值且带明确 TeX {=} 注解的等式副本。
-    // 裸重复、不同变量/数值、额外下标或数字尾部不具备此证据。
-    output = output.replace(
-        /(?<![A-Za-z0-9._])([A-Za-z])\s*=\s*([+−-]?(?:\d+(?:\.\d+)?|\.\d+))\s*\1\s*\{=\}\s*\2(?!\s*[A-Za-z0-9._^\\{%℃°+−*\/=<>-])/g,
-        (_whole, variable, value) => `${variable}=${value}`
-    );
-    // 同一字母标记与整数下标的明确 TeX 副本，如 F0F_{0}。
-    output = output.replace(/(?<![A-Za-z0-9_])([A-Za-z]+)(\d+)\1_\{\2\}(?![A-Za-z0-9_])/g, '$1$2');
-    // 误差项的可见值与明确 TeX 注解逐字相同时，仅合并显示副本。
-    // 保留前导小数点、正负号和尾零；裸数字重复或不一致的误差不在此处理。
-    output = output.replace(
-        /(?<![A-Za-z0-9.+−-])([+−-]?(?:\d+(?:\.\d+)?|\.\d+))\s*±\s*((?:\d+(?:\.\d+)?|\.\d+))\s*\1\s*\\pm\s*\2(?![A-Za-z0-9.])/g,
-        (_whole, mean, uncertainty) => `${mean} ± ${uncertainty}`
-    ).replace(
-        /(?<![A-Za-z0-9.+−-])([+−-]?(?:\d+(?:\.\d+)?|\.\d+))\s*±\s*((?:\d+(?:\.\d+)?|\.\d+))\s*\\mathbf\{\1\}\s*\\scriptscriptstyle\{\s*\\pm\s*\2\s*\}(?![A-Za-z0-9.])/g,
-        (_whole, mean, uncertainty) => `${mean} ± ${uncertainty}`
-    );
-    // 同一均值/误差之间的可见 ± 与明确 \pm 是同一个运算符的两种显示。
-    // 只规范完整数值对；不删数值、不改符号，续尾有下标、幂或未知命令时保留原样。
-    output = output.replace(
-        /(?<![A-Za-z0-9.+−-])([+−-]?(?:\d+(?:\.\d+)?|\.\d+))\s*±\s*(?:\\pm\s*)?((?:\d+(?:\.\d+)?|\.\d+))/g,
-        (whole, mean, uncertainty, offset, input) => {
-            if (/^\s*[\p{L}\p{N}._^\\({+−-]/u.test(input.slice(offset + whole.length))) return whole;
-            return `${mean} ± ${uncertainty}`;
-        }
-    );
-    // 科学计数也可能同时含可见文字与 TeX 注解。两份系数和指数必须完全一致；
-    // 不从裸数字重复、不同符号或近似数值猜测原值。
-    output = output.replace(
-        /(?<![A-Za-z0-9.+−-])([+−-]?\d+(?:\.\d+)?)×10([−+-]?)(\d+)\1\{\\times\}10\^\{([−+-]?)(\d+)\}(?![A-Za-z0-9.])/g,
-        (whole, coefficient, visibleSign, exponent, texSign, texExponent) => {
-            const sign = visibleSign.replace('−', '-');
-            if (sign !== texSign.replace('−', '-') || exponent !== texExponent) return whole;
-            return `\\(${coefficient.replace('−', '-')}\\times10^{${sign}${exponent}}\\)`;
-        }
-    );
-    // LaTeXML 会把同一个置信区间输出两次：一次是可见文字，一次是花括号编码的逗号注解。
-    // 保留可见的那个区间，只丢弃端点与它完全重复的注解。
-    output = output.replace(
-        /(\[\s*([+−-]?\d+(?:\.\d+)?)\s*,\s*([+−-]?\d+(?:\.\d+)?)\s*\])\[\s*([+−-]?\d+(?:\.\d+)?)\{\}\{,\}\s*([+−-]?\d+(?:\.\d+)?)\{\}\s*\]/g,
-        (whole, visible, low, high, annotatedLow, annotatedHigh) => (
-            low.replaceAll('-', '−') === annotatedLow.replaceAll('-', '−')
-                && high.replaceAll('-', '−') === annotatedHigh.replaceAll('-', '−')
-                ? visible : whole
-        )
-    );
-    output = output.replace(
-        /(?<![\d,])(\d{1,3}(?:,\d{3})+)(\d{1,3}(?:\{,\}\d{3})+)(?![\d,])/g,
-        (whole, visible, annotation) => annotation.replaceAll('{,}', ',') === visible
-            ? visible : whole
-    );
-    const scalar = '[+−-]?\\d+(?:\\.\\d+)?';
-    const repeatedInterval = new RegExp(
-        `(?<![A-Za-z0-9])(${scalar})[\\s\\u200b]*\\[\\s*(${scalar})\\s*,\\s*(${scalar})\\s*\\]`
-        + `[\\s\\u200b]*(${scalar})\\\\;\\s*\\[\\s*(${scalar})\\s*,\\s*(${scalar})\\s*\\]`, 'g'
-    );
-    output = output.replace(repeatedInterval, (whole, mean, low, high, texMean, texLow, texHigh) => {
-        const same = (left, right) => left.replace('−', '-') === right.replace('−', '-');
-        if (!same(mean, texMean) || !same(low, texLow) || !same(high, texHigh)) return whole;
-        return `${mean} [${low}, ${high}]`;
-    });
-    output = output.replace(
-        /(?<![A-Za-z0-9])([1-9]\d*)([−+-])(\d+)\1\^\{([−+-])\3\}(?![A-Za-z0-9])/g,
-        (whole, base, visibleSign, exponent, texSign) => {
-            const sign = visibleSign.replace('−', '-');
-            if (sign !== texSign.replace('−', '-')) return whole;
-            return `\\(${base}^{${sign}${exponent}}\\)`;
-        }
-    );
-    output = output.replace(
-        /l[\u200b\u200c\u200d\ufeff]*r\s*=\s*([0-9]+(?:\.[0-9]+)?)[\u200b\u200c\u200d\ufeff]*e[−-](\d+)\s*lr\s*=\s*\1e\^\{[-−]\2\}/gi,
-        (_whole, base, exponent) => `lr=${base}e-${exponent}`
-    );
-    return output;
-}
+const { normalizeReaderSourceDisplayArtifacts } = require('./lib/reader-source-display');
 
 function normalizeReaderSourceCell(value) {
     return normalizeReaderSourceDisplayArtifacts(String(value ?? '')).normalize('NFKC')
@@ -2235,6 +2097,7 @@ function readerSourceQuoteCoversNumericToken(token, quoteCorpus, allowSplitUnit 
 // 列头单位也是数值含义的一部分。只有单元格里出现数值、原文却没有对应单位时，
 // 不能因数字相同就把比率显示成百分数，或把秒显示成毫秒。
 function readerTableHeaderUnitEvidenceFailures(table, sourceQuotes) {
+    const pdfColumns = require('./lib/reader-sealed-pdf-column-units').coverage(table, sourceQuotes);
     const quotes = sourceQuotes.map(item => typeof item === 'string' ? item : item?.quote)
         .filter(value => typeof value === 'string');
     const surface = value => String(value || '').normalize('NFKC').toLowerCase()
@@ -2268,7 +2131,9 @@ function readerTableHeaderUnitEvidenceFailures(table, sourceQuotes) {
                         });
                     })
                 ))));
-                if (!covered) failures.push({ row: row + 1, column, token, unit });
+                if (!covered && !pdfColumns.some(item => item.row === row + 1 && item.column === column
+                    && item.unit === unit && readerNumericTokens(item.value).includes(token)))
+                    failures.push({ row: row + 1, column, token, unit });
             }
         }
     }
@@ -2389,10 +2254,40 @@ function resolvedDeclaredSourceQuotes(binding, sourceText, allowWhitespaceRepair
     }))];
 }
 
+// PDF quotations remain a separate input channel. Only the program may turn
+// them into saved evidence, using the actual four-file source scope.
+function resolvedDeclaredPdfSourceQuotes(binding) {
+    if (!Object.prototype.hasOwnProperty.call(binding || {}, 'pdfSourceQuotes')) return [];
+    if (binding.sourceType !== 'source_quotes' || !Array.isArray(binding.pdfSourceQuotes)
+        || binding.pdfSourceQuotes.length > 64 || binding.pdfSourceQuotes.some(quote => (
+            typeof quote !== 'string' || quote.length < 12 || quote.length > 4000
+        ))) throw new Error('Reader pdfSourceQuotes 必须是独立 PDF 连续逐字引文数组');
+    if (!binding.pdfSourceQuotes.length) return [];
+    return require('./lib/reader-sealed-pdf-quote-evidence').evidenceForQuotes(binding.pdfSourceQuotes);
+}
+
+function readerSourceQuotesCoverNumericToken(token, htmlQuotes, pdfQuotes, allowHtmlSplitUnit = false) {
+    const text = item => typeof item === 'string' ? item : item?.quote;
+    // Preserve the historical HTML/conference channel. PDF proof never joins
+    // another quotation to invent a value-unit pair at a fragment boundary.
+    return readerSourceQuoteCoversNumericToken(token, htmlQuotes.map(text).join('\n'), allowHtmlSplitUnit)
+        || pdfQuotes.some(item => readerSourceQuoteCoversNumericToken(token, text(item), false));
+}
+
+function withReaderSourceQuoteEvidence(artifacts, paperId, callback) {
+    const actualPaperId = paperId || artifacts?.paperId
+        || require('./lib/fresh-analysis-context').getFreshAnalysisContext()?.paperId;
+    if (!/^(?:\d{4}\.\d{4,5}|[a-z][a-z0-9.-]*\/\d{7})(?:v\d+)?$/i.test(actualPaperId || '')) {
+        return callback();
+    }
+    return require('./lib/reader-sealed-pdf-quote-evidence').withArtifacts(artifacts, actualPaperId, callback);
+}
+
 function pruneUnsupportedSourceQuoteTable(rendered, quoteCorpus) {
     const rows = [rendered?.header, ...(rendered?.rows || [])];
     if (!Array.isArray(rows[0]) || rows.length < 2) return null;
-    const supported = new Set(readerNumericTokens(quoteCorpus));
+    const supported = new Set(Array.isArray(quoteCorpus)
+        ? quoteCorpus.flatMap(quote => readerNumericTokens(quote)) : readerNumericTokens(quoteCorpus));
     const missingByCell = rows.map(row => row.map(cell => (
         [...new Set(readerNumericTokens(cell))].filter(token => !supported.has(token))
     )));
@@ -2458,7 +2353,7 @@ function artifactTableBindingCanReplay(binding, renderedRows, structuredArtifact
         );
         if (renderedText === undefined || seen.has(key) || !sourceCell
             || !recoverySha256(sourceCell.sourceDomSha256)
-            || !require('./lib/reader-pdf-cell-evidence').displayCellMatches(
+            || !require('./lib/reader-table-pdf-evidence').displayCellMatches(
                 sourceTable, cellBinding.sourceRow, cellBinding.sourceColumn, renderedText, normalizeReaderSourceCell)) return false;
         seen.add(key);
         return true;
@@ -2655,6 +2550,13 @@ function assessReaderFormulaEligibility(formula) {
 function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFormulaBindings, options = {}) {
     let structuredArtifacts = options.structuredArtifacts;
     const sourceText = String(options.sourceText || '');
+    const pdfQuoteEvidenceCache = new Map();
+    const pdfQuotesFor = binding => {
+        if (!pdfQuoteEvidenceCache.has(binding)) {
+            pdfQuoteEvidenceCache.set(binding, resolvedDeclaredPdfSourceQuotes(binding));
+        }
+        return pdfQuoteEvidenceCache.get(binding);
+    };
     if (!structuredArtifacts || typeof structuredArtifacts !== 'object') {
         throw new Error('Reader source-binding v4 需要 structuredArtifacts');
     }
@@ -2789,8 +2691,11 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                 binding, sourceText, options.allowDeterministicQuoteRepair === true
             );
             const derivedQuotes = deriveReaderSourceQuotes(renderedTables[index].markdown);
+            const pdfQuotes = pdfQuotesFor(binding).map(item => item.quote);
+            const htmlQuotes = [...new Set([...validQuotes, ...derivedQuotes])];
             const pruned = pruneUnsupportedSourceQuoteTable(
-                renderedTables[index], [...new Set([...validQuotes, ...derivedQuotes])].join('\n')
+                renderedTables[index], pdfQuotes.length
+                    ? [htmlQuotes.join('\n'), ...pdfQuotes] : htmlQuotes.join('\n')
             );
             if (!pruned || boundArticle.split(renderedTables[index].markdown).length !== 2) continue;
             const after = extractMarkdownTables(pruned)[0];
@@ -2846,19 +2751,19 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         }
         if (!binding || binding.sourceType !== 'source_quotes'
             || binding.sourceTableOrdinal !== null || !Array.isArray(binding.cellBindings)
-            || binding.cellBindings.length !== 0 || !Array.isArray(binding.sourceQuotes)
-            || binding.sourceQuotes.length < 1) continue;
+            || binding.cellBindings.length !== 0 || !Array.isArray(binding.sourceQuotes)) continue;
         const validDeclaredQuotes = resolvedDeclaredSourceQuotes(
             binding, sourceText, options.allowDeterministicQuoteRepair === true
         );
         const repairedQuotes = options.allowDeterministicQuoteRepair === true
             ? deriveReaderSourceQuotes(rendered.markdown) : [];
-        const exactQuotes = [...new Set([...validDeclaredQuotes, ...repairedQuotes])];
+        const htmlQuotes = [...new Set([...validDeclaredQuotes, ...repairedQuotes])];
+        const pdfQuotes = pdfQuotesFor(binding);
+        const exactQuotes = [...htmlQuotes, ...pdfQuotes];
         if (exactQuotes.length === 0) continue;
-        const quoteCorpus = exactQuotes.join('\n');
         const missingNumbers = readerNumericTokens(rendered.markdown).filter(token => (
-            !readerSourceQuoteCoversNumericToken(
-                token, quoteCorpus, structuredArtifacts.sourceKind === 'conference_pdf'
+            !readerSourceQuotesCoverNumericToken(
+                token, htmlQuotes, pdfQuotes, structuredArtifacts.sourceKind === 'conference_pdf'
             )
         ));
         const missingHeaderUnits = readerTableHeaderUnitEvidenceFailures(rendered, exactQuotes);
@@ -2894,7 +2799,10 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
     const tableBindings = effectiveTableBindings.map((declaredBinding, index) => {
         assertExactObjectKeys(
             declaredBinding,
-            ['tableIndex', 'sourceType', 'sourceTableOrdinal', 'cellBindings', 'sourceQuotes'],
+            ['tableIndex', 'sourceType', 'sourceTableOrdinal', 'cellBindings', 'sourceQuotes',
+                ...(declaredBinding?.sourceType === 'source_quotes'
+                    && Object.prototype.hasOwnProperty.call(declaredBinding, 'pdfSourceQuotes')
+                    ? ['pdfSourceQuotes'] : [])],
             `读者文章 tableBindings[${index}]`
         );
         const rendered = renderedTables[index];
@@ -2931,7 +2839,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                 || !Array.isArray(binding.cellBindings) || binding.sourceQuotes?.length !== 0) {
                 throw new Error(`读者文章 tableBindings[${index}] 原始表绑定不完整`);
             }
-            const pdfEvidence = require('./lib/reader-pdf-cell-evidence').evidence(sourceTable);
+            const pdfEvidence = require('./lib/reader-table-pdf-evidence').evidence(sourceTable);
             if (pdfEvidence && (renderedRows.length !== sourceTable.matrix.length
                 || renderedRows.some(row => row.length !== sourceTable.matrix[0].length)
                 || binding.cellBindings.length !== sourceTable.matrix.length * sourceTable.matrix[0].length
@@ -2963,7 +2871,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                     || !recoverySha256(sourceCell.sourceDomSha256)) {
                     throw new Error(`读者文章 tableBindings[${index}] 单元格坐标或 DOM SHA 非法`);
                 }
-                if (!require('./lib/reader-pdf-cell-evidence').displayCellMatches(
+                if (!require('./lib/reader-table-pdf-evidence').displayCellMatches(
                     sourceTable, cellBinding.sourceRow, cellBinding.sourceColumn, renderedText, normalizeReaderSourceCell)) {
                     throw new Error(
                         `读者文章 tableBindings[${index}] 渲染单元格与原始 cell 不一致: ${key}`
@@ -2985,8 +2893,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                 sourceType: binding.sourceType,
                 sourceTableOrdinal: binding.sourceTableOrdinal,
                 sourceTableDomSha256: sourceTable.sourceDomSha256,
-                ...(require('./lib/reader-pdf-cell-evidence').evidence(sourceTable)
-                    ? { pdfCellConfirmation: require('./lib/reader-pdf-cell-evidence').evidence(sourceTable) } : {}),
+                ...require('./lib/reader-table-pdf-evidence').bindingEvidence(sourceTable),
                 renderedTableSha256,
                 cellBindings,
                 sourceQuotes: []
@@ -2994,7 +2901,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         }
         if (binding.sourceType !== 'source_quotes' || binding.sourceTableOrdinal !== null
             || !Array.isArray(binding.cellBindings) || binding.cellBindings.length !== 0
-            || !Array.isArray(binding.sourceQuotes) || binding.sourceQuotes.length < 1) {
+            || !Array.isArray(binding.sourceQuotes)) {
             throw new Error(`读者文章 tableBindings[${index}] 正文 quote 绑定结构非法`);
         }
         const validDeclaredQuotes = resolvedDeclaredSourceQuotes(
@@ -3014,7 +2921,8 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         const repairedQuotes = options.allowDeterministicQuoteRepair === true
             ? deriveReaderSourceQuotes(rendered.markdown) : [];
         const exactQuotes = [...new Set([...validDeclaredQuotes, ...repairedQuotes])];
-        if (exactQuotes.length === 0) {
+        const sealedPdfQuoteEvidence = pdfQuotesFor(binding);
+        if (exactQuotes.length === 0 && sealedPdfQuoteEvidence.length === 0) {
             throw new Error(`读者文章 tableBindings[${index}] 无法确定性绑定 exact sourceQuote`);
         }
         const sourceQuotes = exactQuotes.map((quote, quoteIndex) => {
@@ -3029,15 +2937,15 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
                 sourceQuoteSha256: crypto.createHash('sha256').update(quote).digest('hex')
             };
         });
-        const quoteCorpus = sourceQuotes.map(item => item.quote).join('\n');
-        const missingHeaderUnits = readerTableHeaderUnitEvidenceFailures(rendered, sourceQuotes);
+        const allQuotes = [...sourceQuotes, ...sealedPdfQuoteEvidence];
+        const missingHeaderUnits = readerTableHeaderUnitEvidenceFailures(rendered, allQuotes);
         if (missingHeaderUnits.length) throw new Error(
             `tableBindings[${index}] 列头单位缺少对应原文证据：` + missingHeaderUnits
                 .map(item => `row=${item.row},column=${item.column} value=${item.token} unit=${item.unit}`).join('；')
         );
         const missingNumbers = readerNumericTokens(rendered.markdown).filter(token => (
-            !readerSourceQuoteCoversNumericToken(
-                token, quoteCorpus, structuredArtifacts.sourceKind === 'conference_pdf'
+            !readerSourceQuotesCoverNumericToken(
+                token, sourceQuotes, sealedPdfQuoteEvidence, structuredArtifacts.sourceKind === 'conference_pdf'
             )
         ));
         if (missingNumbers.length > 0) {
@@ -3067,18 +2975,21 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
             sourceTableOrdinal: null,
             renderedTableSha256,
             cellBindings: [],
-            sourceQuotes
+            sourceQuotes,
+            ...(sealedPdfQuoteEvidence.length ? { sealedPdfQuoteEvidence } : {})
         };
     });
     if (!readerLegacyDatasetClaimsValid(boundArticle, tableBindings)) {
         throw new Error('读者文章的 TidyVoice/validation set 对应关系缺少逐字原文依据；请按原文修复数据集及其表格来源记录');
     }
+    boundArticle = require('./lib/reader-table-pdf-evidence').appendSourceOriginNotes(boundArticle, tableBindings);
     return {
         article: boundArticle,
         ...(tablePruningDiagnostics.length ? { tablePruningDiagnostics } : {}),
         tableBindings,
         formulaBindings,
-        ...((tableBindings.some(binding => binding.pdfCellConfirmation)
+        ...((tableBindings.some(binding => binding.pdfCellConfirmation || binding.sealedPdfTableEvidence
+            || binding.sealedPdfQuoteEvidence)
             || formulaBindings.some(binding => readerFormulaNeedsSourcePayload(binding.latex)))
             ? { structuredSourcePayload: readerStructuredSourcePayload(options.structuredArtifacts) } : {}),
         sourceBindingsSha256: stableFingerprint({ tableBindings, formulaBindings })
@@ -3791,6 +3702,14 @@ function readerCapabilityPolicyNotice(policy) {
     ].join('\n');
 }
 
+function generationReaderTableSelectionProfile(table) {
+    // 保持已有source-only生成输入的原始字节和指纹；真实修复能力由新版来源诊断提供。
+    const { contract, eligible, reasonCodes, reasonCount, examples } = assessReaderTableSelectionEligibility(table);
+    return { contract, eligible, reasonCodes, reasonCount, examples, ...(!eligible ? {
+        action: '这张表不能使用 selection。旧说明中的“eligible=false 时只能使用 source_quotes”限制针对 selection；完整原表仍可按已有协议尝试 artifact_table。具体做法是：把完整原始 matrix 写成 Markdown 表，逐格绑定原始 DOM cell，sourceQuotes 写 []，不用 TABLE marker。保留原表全部行列、数值和单位，不得把非法 selection 子集转成兼容绑定，也不得清理原单元格。仍须通过现有来源、数字、粘贴和正文审查；若无法通过，只能用全文逐字引文完整覆盖数字与单位的 source_quotes，不得编造表头或改写来源。'
+    } : {}) };
+}
+
 function buildApiReaderArtifactEvidence(
     structuredArtifacts,
     arxivId = '',
@@ -3851,7 +3770,7 @@ function buildApiReaderArtifactEvidence(
         const header = `TABLE_${table.ordinal}: ${String(table?.caption || '').replace(/\s+/g, ' ').trim()}`;
         if (!appendLine(header, 24)) break;
         const tableMetadata = [
-            `TABLE_${table.ordinal}_SELECTION: ${JSON.stringify(assessReaderTableSelectionEligibility(table))}`,
+            `TABLE_${table.ordinal}_SELECTION: ${JSON.stringify(generationReaderTableSelectionProfile(table))}`,
             `TABLE_${table.ordinal}_HEADER_ROWS: ${JSON.stringify(effectiveRows.headerRows)}`,
             `TABLE_${table.ordinal}_INDEX_RULES: ${JSON.stringify({
                 indexBase: 0, minimumSelectedRows: 2, minimumSelectedColumns: 2,
@@ -3976,7 +3895,7 @@ const CONFERENCE_READER_RESOURCE_CLAIM_SPECS = Object.freeze({
     code: /(?:\b(?:source\s+code|code(?!\s*[- ]\s*(?:switch(?:ing)?|mix(?:ing)?))|repository|repo)\b|源代码|代码仓库|仓库|代码(?!\s*(?:切换|混合)))/i,
     model: /(?:\b(?:model\s+weights?|weights?|checkpoints?)\b|模型权重|权重|检查点|模型(?=\s*(?:均|都)?\s*(?:已经|已|现已|目前已|当前已|正式)(?:经)?(?:开源|公开|发布|提供|开放|上线)))/i,
     dataset: /(?:\b(?:datasets?|corpus|corpora)\b|数据集|语料库)/i,
-    demo: /(?:\b(?:demo|demonstration)\b|在线演示|演示页面)/i,
+    demo: /(?:\b(?:demo|demonstration)\b|在线演示|演示页面|演示链接)/i,
     reproduction: /(?:\b(?:artifacts?|reproduction\s+materials?)\b|复现材料|复现工件)/i
 });
 
@@ -4003,7 +3922,9 @@ function replayVerifiedReaderResourceIdentity(identity, sourceText) {
                     && !validRepositoryDocumentationEvidence(
                         resource.documentationEvidence, resource.originalUrl
                     ))
-                || (resource.origin === 'paper_source' && !paperSourceQuoteBindsOriginalUrl(resource))
+                || (resource.origin === 'paper_source' && (!paperSourceQuoteBindsOriginalUrl(resource)
+                    || !String(sourceText || '').replace(/\s+/g, ' ').includes(
+                        String(resource.sourceQuote || '').replace(/\s+/g, ' ').trim())))
                 || !(available || unavailable || temporary)
                 || (available && (!Number.isInteger(resource.status)
                     || resource.status < 200 || resource.status >= 400))
@@ -4015,12 +3936,14 @@ function replayVerifiedReaderResourceIdentity(identity, sourceText) {
                         || [408, 425, 429].includes(resource.status)
                         || (Number.isInteger(resource.status) && resource.status >= 500))));
         })) {
-        throw new Error('会议读者文章的资源身份记录与原文不一致，或其中的资源、来源与可达状态记录不符合要求。');
+        throw Object.assign(new Error('会议读者文章的资源身份记录与原文不一致，或其中的资源、来源与可达状态记录不符合要求。'), {
+            code: 'READER_RESOURCE_IDENTITY_INVALID', retryable: false
+        });
     }
     return identity;
 }
 
-function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
+function readerResourceClaimIssues(draft, identity, sourceText) {
     const verified = replayVerifiedReaderResourceIdentity(identity, sourceText);
     const availableTypes = new Set(verified.resources
         .filter(resource => resource.availability === 'available')
@@ -4036,23 +3959,44 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
             path: `/conceptBridges/${index}`, text: bridge?.explanation, kind: 'concept_bridge'
         })) : [])
     ];
-    const affirmative = /(?:已经|已|现已|目前已|当前已|正式)(?:经)?(?:开源|公开|发布|提供|开放|上线|可用)|(?<![不未])可(?:访问|下载|获取|用)(?!性|状态|于)|(?:为|是|属于)(?:一个)?(?:开源|公开|开放)(?:项目|资源|仓库)?|(?:代码|源代码|代码仓库|仓库|模型权重|权重|检查点|数据集|语料库|在线演示|演示页面|复现材料)(?:为|是|属于)?(?:一个)?(?:开源|公开|开放)(?:项目|资源|仓库)?|开源地址|公开仓库|\b(?:public|open[- ]source(?:d)?)\b|\b(?:is|are|was|were|has\s+been|have\s+been)\s+(?:now\s+|publicly\s+)?(?:available|released|open[- ]sourced|accessible|downloadable)\b|\b(?:we|the\s+authors?)\s+(?:release|provide|publish)\b/i;
+    const affirmative = /(?:已经|已|现已|目前已|当前已|正式)(?:经)?(?:开源|公开|发布|提供|开放|上线|可用)|(?<![不未许])可(?:访问|下载|获取|用)(?!性|状态|于)|(?:为|是|属于)(?:一个)?(?:开源|公开|开放)(?:项目|资源|仓库)?|(?:代码|源代码|代码仓库|仓库|模型权重|权重|检查点|数据集|语料库|在线演示|演示页面|复现材料)(?:为|是|属于)?(?:一个)?(?:开源|公开|开放)(?:项目|资源|仓库)?|开源地址|公开仓库|\b(?:public|open[- ]source(?:d)?)\b|\b(?:is|are|was|were|has\s+been|have\s+been)\s+(?:now\s+|publicly\s+)?(?:available|released|open[- ]sourced|accessible|downloadable)\b|\b(?:we|the\s+authors?)\s+(?:release|provide|publish)\b/i;
     const directDenialPrefix = /(?:(?:不(?!但|仅|只)|不能|不应(?:当)?|不可|不宜|不得)(?:再|另行|据此|据此直接)?(?:声称|表示|说明|证明|确认|写|默认|意味着|代表|认为|断言|等同于|视为|当作)[^。！？!?；;，,]{0,36}|(?:不(?!但|仅|只)|不能|不应(?:当)?|不可|不宜|不得)(?:把|将)[^。！？!?；;，,]{0,36}(?:等同于|视为|当作)[^。！？!?；;，,]{0,16}|(?:不含|未含|不包含|没有包含|不包括)[^。！？!?；;，,]{0,24}|(?:没有|尚无|并无|不存在)(?:任何)?(?:该|此|对应)?(?:代码|模型|模型权重|权重|检查点|数据集|语料|演示|复现材料|资源)(?:类型)?(?:的)?|(?:没有|尚无|并无|不存在)(?:公开|开源|开放|当前可用|公开可用)$|(?:没有|未曾|尚未)(?:发现|找到|看到|确认|证明|表明|显示|提供|给出)[^。！？!?；;，,]{0,24}|(?:未|尚未|并未|没有|无)[^。！？!?；;，,]{0,24}(?:记为|标为|列为|判为)[^。！？!?；;，,]{0,16}|(?:未|尚未|并未|没有|无|并非|不是|不(?!但|仅|只)|not\s*))$/i;
     const conditionalPrefix = /(?:是否|能否|若|如果|假设)[^。！？!?；;，,]{0,36}$/i;
     const isConceptDistinction = (value, matchIndex) => {
+        // 「代码开源、权重可下载、系统可运行是三件事」列举待核对概念，
+        // 不是把三个条件断言为已经满足。仅豁免概念列举的字节范围；其后
+        // 「本文权重已经公开」仍单独判断，不能用前面的限定吞掉真实声明。
+        const distinctions = /(?:(?:是)?(?:三|两|二|3|2)件(?:不同|独立|不同的|独立的)?事|是(?:三|两|二|3|2)回事|(?:要|应|需)?(?:分开|分别)(?:看|确认|核实|核对|验证|判断))/g;
+        for (const distinction of value.matchAll(distinctions)) {
+            if (matchIndex >= distinction.index) continue;
+            const start = Math.max(value.lastIndexOf('。', distinction.index),
+                value.lastIndexOf('；', distinction.index), value.lastIndexOf(';', distinction.index)) + 1;
+            const scope = value.slice(start, distinction.index);
+            if (matchIndex < start || scope.length > 180
+                || /(?:本文|本论文|作者团队|本研究|本工作)[^。；;]{0,28}(?:代码|权重|检查点)[^。；;]{0,16}(?:已|现已|已经)(?:开源|公开|发布)/.test(scope)) continue;
+            const properties = [
+                /代码(?:开源|公开|可用|可运行|可访问)/,
+                /(?:模型)?权重(?:可下载|可获取|公开|可用)/,
+                /(?:系统|环境|端到端|在线)(?:可(?:一键|端到端)?运行|可复现|可用)/
+            ].filter(pattern => pattern.test(scope));
+            if (properties.length >= 2) return true;
+        }
         const prefix = value.slice(0, matchIndex);
-        const markers = [...prefix.matchAll(/(?:区分|区别|辨别)/g)];
+        const markers = [...prefix.matchAll(/(?:区分|区别|辨别|分开看待|分开说|分三件(?:不同的)?事)/g)];
         const marker = markers.at(-1);
         if (!marker || matchIndex - marker.index > 180) return false;
-        const scope = value.slice(marker.index);
+        const end = /[，,；;]/.exec(value.slice(marker.index));
+        const scope = value.slice(marker.index, end ? marker.index + end.index : undefined);
+        if (matchIndex > marker.index + scope.length) return false;
         const contrastedProperties = [
-            /(?:源代码|代码仓库|代码)[^。！？!?；;]{0,20}(?:开源|公开|可用)/,
+            /(?:源代码|代码仓库|代码)[^。！？!?；;]{0,20}(?:开源|公开|可用|可运行|可访问)/,
             /(?:模型)?权重[^。！？!?；;]{0,20}(?:可下载|下载|可获取|获取|公开|开放|可用)/,
-            /(?:端到端|系统)[^。！？!?；;]{0,20}(?:可运行|能运行|可复现)/
+            /(?:端到端|系统)[^。！？!?；;]{0,20}(?:可(?:一键|端到端)?运行|能运行|可复现)/
         ].filter(pattern => pattern.test(scope));
-        return contrastedProperties.length >= 2;
+        return contrastedProperties.length >= 2
+            || /分开说三件事[^。！？!?；;]{0,80}未来提供[^。！？!?；;]{0,24}不同状态/.test(scope);
     };
-    const unavailableStatus = '(?:不可用|无法访问|未能确认|暂时无法|HTTP\\s*[45]\\d\\d|unavailable|temporarily[_ -]unreachable|could not verify|not accessible)';
+    const unavailableStatus = '(?:不可用|不可达|无法访问|未能确认|暂时无法|HTTP\\s*[45]\\d\\d|unavailable|temporarily[_ -]unreachable|could not verify|not accessible)';
     const resourceTokenEntries = verified.resources.flatMap(resource => [
         resource.originalUrl, resource.finalUrl, resource.sourceUrlToken
     ].filter(Boolean).map(token => ({ resource, token: String(token) })));
@@ -4205,7 +4149,7 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
         // 报出校验失败是明确的否认，不是声明。这里刻意比笼统的「不可用」匹配更窄，后面
         // 转折里出现的正面声明仍然拦截。
         if (new RegExp(`(?:${noun})[^。！？!?；;]{0,96}`
-            + `(?:当前不可用|暂时无法访问|本次(?:核验|验证|检查)[^。！？!?；;]{0,48}`
+            + `(?:当前不可用|当前不可达|暂时无法访问|本次(?:核验|验证|检查)[^。！？!?；;]{0,48}`
             + `(?:未能确认|无法确认|不可用)|无法据此确认[^。！？!?；;]{0,36}`
             + `(?:公开|开源|可用|可下载|可获取))`, 'i').test(segment)) {
             const denialEnd = Math.max(
@@ -4492,8 +4436,39 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
             && /^[^。！？!?；;，,]{0,24}(?:等同于|视为|当作)/.test(tail);
     };
     const isDependencyResourceAttribution = (segment, matchIndex, type) => type === 'model'
-        && /(?:调用|使用|采用|加载|依赖)(?:的|的是)?(?:第三方|外部|基础|预训练|现成)?[^。！？!?；;，,]{0,24}$/
+        && /(?:调用|使用|采用|加载|依赖|初始化(?:为)?|模型用|用的就)(?:的|的是)?(?:第三方|外部|基础|预训练|现成)?[^。！？!?；;，,]{0,24}$/
             .test(segment.slice(Math.max(0, matchIndex - 48), matchIndex));
+    const isScopedResourceNonClaim = (segment, matchIndex, type) => {
+        const prefix = segment.slice(Math.max(0, matchIndex - 56), matchIndex);
+        if (/(?:否定|反驳|证伪)[^。！？!?；;，,]{0,48}$/.test(prefix)) return false;
+        if (/(?:无法确认|尚无法确认|未确认|未证明|未报告|不证明|不涉及|不讨论|不等于|不代表|不要(?:把|将|默认|声称|写|表示|推断|断言)|不能(?:据此)?(?:確認|确认|认定|推断|断言|宣告|说)|不能仅凭[^。！？!?；;，,]{1,28}就(?:确认|认定|推断|断言))[^。！？!?；;，,]{0,48}$/.test(prefix)) return true;
+        if (/(?:未|没有|未曾|尚未)(?:实际|独立|完整|可靠|明确|直接)?(?:发现|找到|看到|确认|证明|表明|显示|提供|给出|收到|声明|绑定|验证)[^。！？!?；;，,]{0,48}$/.test(prefix)) return true;
+        if (/需要补(?:充)?(?:的)?(?:验证|检查|步骤)(?:是|包括)?[^。！？!?；;，,]{0,36}$/.test(prefix)) return true;
+        if (/(?:先|再|应|需)(?:单独|分别|实际)?(?:验证|核对|确认)[^。！？!?；;，,]{0,16}$/.test(prefix)) return true;
+        if (/属于第三方[^。！？!?；;，,]{0,16}$/.test(prefix) && availableTypes.has('third_party')) return true;
+        if (/^(?:的)?(?:情况|状况|状态)[^。！？!?；;，,]{0,20}(?:尚无法确认|无法确认|未确认)/
+            .test(segment.slice(matchIndex + 2))) return true;
+        if (type === 'model' && /(?:权重方差|注意力权重|目标权重|损失权重)[^。！？!?；;]{0,64}(?:开放问题|公开讨论)/.test(segment)) return true;
+        if (type === 'dataset' && /(?:数据集|语料库)(?:中|内|里|上)[^。！？!?；;]{0,32}(?:标签|真值|标注|样本)/.test(segment)
+            && !/(?:本文|本论文|作者团队)[^。！？!?；;]{0,32}(?:数据集|语料库)[^。！？!?；;]{0,16}(?:已|现已|已经)(?:公开|发布|开放)/.test(segment)) return true;
+        if (type === 'dataset' && /全量可用下(?:论文)?(?:报告|评测|测试)/.test(segment)) return true;
+        return false;
+    };
+    const isReportedReleaseWithCurrentQualification = value =>
+        /(?:论文(?:称|说|声明)|原文(?:称|说|声明))/.test(value)
+        && /(?:本次[^。！？!?；;]{0,80}(?:当前不可达|当前不可用|未能确认|未確認)|动手前[^。！？!?；;]{0,20}先核对当前可用性)/.test(value)
+        && !/(?:但|然而|不过|事实上)[^。！？!?；;，,]{0,24}(?:本文|本研究|本工作|作者团队)[^。！？!?；;，,]{0,24}(?:已|现已|已经)(?:开源|公开|发布)/.test(value);
+    const isSourceBackedPriorModelEvaluation = (value, type) => {
+        if (type !== 'model'
+            || /(?:本文|本论文|本研究|本工作|作者团队)[^。！？!?；;，,]{0,24}(?:模型|权重|检查点)[^。！？!?；;，,]{0,16}(?:已|现已|已经)(?:开源|公开|发布)/.test(value)) return false;
+        if (/(?:已发布检查点)[^。！？!?；;]{0,80}(?:校准参照|校准参考|外推诊断)/.test(value)
+            && /\b(?:released|published)\s+checkpoints?\b/i.test(String(sourceText || ''))) return true;
+        if (/^(?:前[两三二]者|前者|这些基线)是开放权重/.test(value)) {
+            const names = value.match(/(?:Qwen[ -]?3(?:[- ]Omni)?|Audio Flamingo|Whisper|HuBERT|WavLM)/g) || [];
+            return names.length > 0 && names.every(name => String(sourceText || '').includes(name));
+        }
+        return false;
+    };
     const hasUnqualifiedTypeAffirmative = (
         value, type, noun, { qualificationResource = null } = {}
     ) => {
@@ -4519,7 +4494,8 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
                 }
                 exactOccurrence = byDistance[0].occurrence;
             }
-            const commaBefore = Math.max(value.lastIndexOf('，', match.index), value.lastIndexOf(',', match.index));
+            const commaBefore = Math.max(value.lastIndexOf('，', match.index), value.lastIndexOf(',', match.index),
+                value.lastIndexOf('：', match.index));
             const chineseCommaAfter = value.indexOf('，', match.index + match[0].length);
             const asciiCommaAfter = value.indexOf(',', match.index + match[0].length);
             const commaAfter = [chineseCommaAfter, asciiCommaAfter]
@@ -4554,6 +4530,8 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
                 : mention.index >= localMatchEnd ? mention.index - localMatchEnd : 0;
             const nearbyMentions = mentions.filter(mention => (
                 mentionDistance(mention) <= claimAssociationMaxChars
+                && !(mention.index >= localMatchEnd
+                    && /(?:但|然而|不过|而)/.test(segment.slice(localMatchEnd, mention.index)))
             ));
             const minimumDistance = nearbyMentions.reduce(
                 (minimum, mention) => Math.min(minimum, mentionDistance(mention)),
@@ -4588,6 +4566,9 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
                     segment, localMatchIndex, localMatchEnd, type
                 )
                 || isDependencyResourceAttribution(segment, localMatchIndex, type)
+                || isScopedResourceNonClaim(segment, localMatchIndex, type)
+                || isReportedReleaseWithCurrentQualification(value)
+                || isSourceBackedPriorModelEvaluation(value, type)
                 || isPostfixedNonEquivalence(
                     value.slice(segmentStart), localMatchIndex, localMatchEnd
                 )) continue;
@@ -4646,7 +4627,11 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
         return !/(?:但|然而|不过|事实上)[^。！？!?；;，,]{0,48}(?:本文|本论文|本研究|本工作|作者团队|项目团队)?[^。！？!?；;，,]{0,20}代码(?![^。！？!?；;，,]{0,24}(?:没有|无|未见|不存在))[^。！？!?；;，,]{0,24}(?:已|现已|当前)?(?:开源|公开|开放|可用)/i.test(text);
     };
     for (const node of nodes) {
-        const text = String(node.text || '').replace(/\s+/g, ' ').trim();
+        // 原表标题和单元格（例如 Dataset / Open Source）是来源展示，不能
+        // 把相邻单元格拼成作者资源的现在时声明；表外正文仍完整核验。
+        let prose = maskProtectedMarkdownTableRegions(String(node.text || ''), { excludeQuotes: false });
+        for (const table of extractMarkdownTables(prose)) prose = prose.replace(table.markdown, '\n');
+        const text = prose.replace(/\s+/g, ' ').trim();
         if (!text) continue;
         const clauses = text.split(/(?<=[。！？!?；;])/u).map(item => item.trim()).filter(Boolean);
         for (const resource of unavailableResources) {
@@ -4694,16 +4679,41 @@ function conferenceReaderResourceClaimIssues(draft, identity, sourceText) {
             }
         }
     }
-    return [...new Map(issues.map(issue => [`${issue.path}:${issue.message}`, issue])).values()];
+    return [...new Map(issues.map(issue => [`${issue.path}:${issue.message}`, {
+        ...issue, code: 'reader_resource_availability_claim'
+    }])).values()];
 }
 
-function enforceConferenceReaderResourceClaims(draft, identity, sourceText) {
-    const issues = conferenceReaderResourceClaimIssues(draft, identity, sourceText);
+// 日更、会议及历史读取同一份语义规则；来源能力限制仍由各自 capability policy 判断。
+function enforceReaderResourceClaims(draft, identity, sourceText) {
+    const issues = readerResourceClaimIssues(draft, identity, sourceText);
     if (!issues.length) return;
-    const error = new Error(`会议读者文章中的资源声明与已验证的可达状态不一致：${issues[0].message}; `
+    const error = new Error(`读者文章中的资源声明与已验证的可达状态不一致：${issues[0].message}; `
         + `conflictExcerpt=${JSON.stringify(issues[0].conflictExcerpt)}`);
+    error.code = 'READER_RESOURCE_AVAILABILITY_CLAIM';
     error.readerIssues = issues;
     throw error;
+}
+
+// 已保存的调用方与测试仍可读取旧会议导出名，避免复制另一套规则。
+const conferenceReaderResourceClaimIssues = readerResourceClaimIssues;
+const enforceConferenceReaderResourceClaims = enforceReaderResourceClaims;
+
+function readerResourceClaimDraftFromArticle(plan, article) {
+    const headings = [...String(article || '').matchAll(/^### ([^\n]+)\n\n/gm)];
+    if (!Array.isArray(plan?.sections) || headings.length !== plan.sections.length
+        || headings.some((heading, index) => heading[1] !== plan.sections[index]?.heading)) {
+        throw Object.assign(new Error('资源声明复核需要与正式计划逐节对应的已装配文章'), {
+            code: 'READER_RESOURCE_ARTICLE_STRUCTURE_INVALID', retryable: false
+        });
+    }
+    return { readerTitle: plan.readerTitle, oneSentenceThesis: plan.oneSentenceThesis,
+        conceptBridges: plan.conceptBridges,
+        sections: plan.sections.map((section, index) => ({ kind: section.kind,
+            heading: section.heading,
+            body: String(article).slice(headings[index].index + headings[index][0].length,
+                index + 1 < headings.length ? headings[index + 1].index : String(article).length)
+        })) };
 }
 
 function buildApiReaderEvidenceContext(
@@ -5530,7 +5540,7 @@ function validateApiReaderTablePasteDuplication(article, options = {}) {
         for (const [rowIndex, row] of rows.entries()) {
             for (const [columnIndex, cell] of row.entries()) {
                 const sourceTexts = binding?.sourceType === 'source_quotes'
-                    ? (binding.sourceQuotes || []).map(item => typeof item === 'string'
+                    ? [...(binding.sourceQuotes || []), ...(binding.sealedPdfQuoteEvidence || [])].map(item => typeof item === 'string'
                         ? item : item?.quote).filter(Boolean)
                     : (binding?.cellBindings || []).filter(item => (
                         item?.renderedRow === rowIndex && item?.renderedColumn === columnIndex
@@ -6293,8 +6303,9 @@ function repairConferenceReaderQuoteTables(draft, sourceText, structuredArtifact
 }
 
 function parseApiReaderArticleResult(raw, options = {}) {
-    return require('./lib/reader-pdf-cell-evidence').withArtifacts(options.structuredArtifacts,
-        options.arxivId, () => parseApiReaderArticleResultUnchecked(raw, options));
+    return require('./lib/reader-table-pdf-evidence').withArtifacts(options.structuredArtifacts,
+        options.arxivId, () => withReaderSourceQuoteEvidence(options.structuredArtifacts,
+            options.arxivId, () => parseApiReaderArticleResultUnchecked(raw, options)));
 }
 function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     let value;
@@ -6509,8 +6520,9 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
             )
         };
     });
-    if (readerCapabilityPolicy || options.enforceResourceAvailabilityClaims === true) {
-        enforceConferenceReaderResourceClaims(
+    if (readerCapabilityPolicy || options.enforceResourceAvailabilityClaims === true
+        || value.version === 3 && options.verifiedResourceIdentity) {
+        enforceReaderResourceClaims(
             value,
             options.verifiedResourceIdentity,
             options.sourceText
@@ -6693,14 +6705,14 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
     }
     const pdfDisplayBindings = (Array.isArray(value.tableBindings) ? value.tableBindings : [])
         .filter(binding => binding?.sourceType === 'artifact_table'
-        && require('./lib/reader-pdf-cell-evidence').evidence((options.structuredArtifacts?.tables || [])
+        && require('./lib/reader-table-pdf-evidence').evidence((options.structuredArtifacts?.tables || [])
             .find(table => table.ordinal === binding.sourceTableOrdinal)));
     if (pdfDisplayBindings.length) {
         for (const binding of pdfDisplayBindings) {
             const table = extractMarkdownTables(article)[binding.tableIndex - 1];
             const original = options.structuredArtifacts.tables.find(item => item.ordinal === binding.sourceTableOrdinal);
             const rows = table && [table.header, ...table.rows];
-            const confirmed = require('./lib/reader-pdf-cell-evidence');
+            const confirmed = require('./lib/reader-table-pdf-evidence');
             if (!rows || rows.length !== original.matrix.length
                 || rows.some(row => row.length !== original.matrix[0].length)
                 || binding.cellBindings.length !== rows.length * rows[0].length
@@ -7028,7 +7040,7 @@ function repairShortApiReaderFigureLeadBindings(article, plan, figures = []) {
 
 function repairApiReaderArticleAndPlanBindings(paper, analysisManifest) {
     const renewed = require('./lib/reader-pdf-cell-evidence').replaySavedProofMetadata(paper, analysisManifest);
-    return require('./lib/reader-pdf-cell-evidence').withSavedPaper(paper,
+    return require('./lib/reader-table-pdf-evidence').withSavedPaper(paper,
         () => repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest) || renewed);
 }
 function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest) {
@@ -7071,8 +7083,8 @@ function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest)
                     const rows = [articleTables[index].header, ...articleTables[index].rows];
                     const renderedText = rows[cell.renderedRow]?.[cell.renderedColumn];
                     if (typeof renderedText !== 'string'
-                        || (binding.pdfCellConfirmation
-                        ? !require('./lib/reader-pdf-cell-evidence').savedCellMatches(binding, cell, renderedText)
+                        || ((binding.pdfCellConfirmation || binding.sealedPdfTableEvidence)
+                        ? !require('./lib/reader-table-pdf-evidence').savedCellMatches(binding, cell, renderedText)
                         : normalizeReaderSourceCell(renderedText) !== normalizeReaderSourceCell(cell.sourceText))) {
                         throw new Error('文章文字规范化后，表格单元格与绑定的原始来源不一致。');
                     }
@@ -7480,9 +7492,18 @@ function buildApiReaderValidationFeedback(error) {
         fixes.push(
             '先核对报错单元格对应的原始 DOM 或连续原文；裸数字重复不能证明它是粘贴错误，不得猜测半值。'
             + '只有明确 TeX 语法证明是同一数值及同一单位的显示副本时才删除副本；合法完整数字原样保留。'
-            + '无法证明时保留原始值并补齐来源绑定，或按来源重建该单元格；不要自行折半或补单位；'
-            + '不要整表重写，不要动其他已通过的单元格'
+            + 'artifact_table 会按 cellBindings 从封存 DOM 恢复每格；仅修改正文显示或继续绑定同一裸双写原格，不能消除这个错误。'
+            + '若本轮同时授权该 tableBindings 项及承载表格的小节正文，可按给出的完整来源改选同论文其他合法原表或原行列，并同步绑定与正文解释；'
+            + '必须保留全部正确事实、数字单位、结果对比、现有表数和必要宽列。不能删掉结果、改数字或只留无关配置表来避开检查。'
+            + '未授权路径不可改；找不到完整可核验替代时，不能猜半值、补单位或声称已修复。其他已通过的内容保持不变'
         );
+    }
+    if (error?.code === 'reader_source_table_unrenderable' || error?.code === 'READER_SOURCE_TABLE_UNRENDERABLE'
+        || /source_table 无法安全显示完整原表/.test(message)) {
+        fixes.push('原表显示能力已由程序检查，不能继续绑定坏原格或仅改正文显示。只在本轮成对授权的绑定与承载正文中，'
+            + '生成证据里的旧_SELECTION说明仅保留原输入兼容视图；本轮以新来源诊断中的sourceTableEligibility、usableSourceTables及其完整表能力为准，不能据旧说明重复复制坏格。'
+            + '改选证据里具有合法完整表或合法选区能力的原表；或用连续逐字原文完整覆盖所有数字、单位与比较条件，改为source_quotes实际Markdown。'
+            + '保留正确事实、结果对比、现有表数与必要宽列；来源诊断只提供证据，不能自行扩大授权、猜半值或删除结果。');
     }
     if (/中文字数必须/.test(message)) {
         fixes.push(
@@ -7790,8 +7811,13 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const readerCapabilityPolicy = validateReaderCapabilityPolicy(
         conference.conferenceWeakReaderCapabilityPolicy(paper, options.structuredArtifacts)
     );
-    const verifiedConferenceReaderResources = readerCapabilityPolicy
-        ? replayVerifiedReaderResourceIdentity(paper.apiReaderResources, options.sourceText)
+    const resourceIdentity = options.resourceLocalRevision === true
+        ? options.readerResources : paper.apiReaderResources;
+    const requiresResourceIdentity = Boolean(readerCapabilityPolicy
+        || fresh.isDailyFreshSourceScope() || directScope
+        || conference.getConferenceAnalysisContext());
+    const verifiedReaderResources = resourceIdentity || requiresResourceIdentity
+        ? replayVerifiedReaderResourceIdentity(resourceIdentity, options.sourceText)
         : null;
     const capabilityNotice = readerCapabilityPolicyNotice(readerCapabilityPolicy);
     if (capabilityNotice && !String(sourceEvidence || '').includes(
@@ -7859,7 +7885,22 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-proof-read-scope.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-pre-image-check.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-table-narrative-labels.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-source-display.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-source-metric-units.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-pdf-quote-evidence.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-pdf-column-units.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'reader_sealed_pdf_column_units.py'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'reader_sealed_pdf_quote_evidence.py'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-source-blocked-normalization.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-dom-span-projection.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-parent-upstream-preflight.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-resource-input-admission.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-saved-feedback-input-continuity.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/daily-reader-operator-correction.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-pdf-cell-evidence.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-table-pdf-evidence.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-pdf-table-evidence.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'reader_sealed_pdf_table_evidence.py'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_pdf_cell_evidence.py'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'conference_extractor.py'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'python-runtime.sh'), 'utf8'),
@@ -7910,7 +7951,17 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         require('./lib/signed-reader-recovery-draft').assertNoPaidLegacyDisplayCandidate(
             candidateDirectory, legacyIdentity);
     }
-    if (options.readerIdentityOnly === true) return { identity };
+    if (options.readerIdentityOnly === true && options.readerReplayPreparationOnly !== true) return { identity };
+    const savedInputContinuity = options.savedReaderInputContinuity
+        ? require('./lib/reader-saved-feedback-input-continuity').readSavedReaderInputContinuity(
+            options.savedReaderInputContinuity, paper,
+            require('./lib/model-text-sanitization').currentModelInputSource(paper), identity) : null;
+    const withReaderSourceTableEvidence = callback => require('./lib/reader-table-pdf-evidence')
+        .withArtifacts(options.structuredArtifacts, getPaperArxivId(paper), () =>
+            withReaderSourceQuoteEvidence(options.structuredArtifacts, getPaperArxivId(paper), callback));
+    const collectReaderDraftIssues = (draft, error, extra = {}) => withReaderSourceTableEvidence(() =>
+        repair.collectDraftIssues(draft, error, { sourceText: options.sourceText,
+            structuredArtifacts: options.structuredArtifacts, ...extra }));
     let pixelFigureOrdinals = [];
     let recovered = null;
     let readerRecoveryRevisions = [];
@@ -7918,7 +7969,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     let candidate = null;
     let draftOrderMappings = [];
     let mechanicalNoFigureCleanupChanged = false;
-    const normalizeCandidate = () => {
+    const normalizeCandidate = () => withReaderSourceTableEvidence(() => {
         if (!candidate) return;
         const noFigureCleanup = repair.normalizeUnavailableReaderFigures(candidate, pixelFigureOrdinals);
         if (noFigureCleanup) {
@@ -7986,17 +8037,91 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             const tableOrderRepair = normalizeConferenceMixedTableBindings(candidate);
             if (tableOrderRepair) draftOrderMappings.push(tableOrderRepair);
         }
-        const normalized = normalizeReaderDraftOrder(candidate, {
-            structuredArtifacts: options.structuredArtifacts || null
-        });
+        let normalized;
+        try {
+            normalized = normalizeReaderDraftOrder(candidate, {
+                structuredArtifacts: options.structuredArtifacts || null
+            });
+        } catch (error) {
+            const blocked = require('./lib/reader-source-blocked-normalization')
+                .readSourceTableNormalizationError(error, candidate, options.structuredArtifacts);
+            if (blocked) {
+                // This is the actual failed input after deterministic preparation,
+                // with the same binding and body indices as the blocking issues.
+                candidate = blocked.draft;
+                error.readerIssues = blocked.blockingIssues;
+            }
+            throw error;
+        }
         candidate = normalized.draft;
         if (normalized.mapping.changed) draftOrderMappings.push(normalized.mapping);
         if (!options.readerFactLocalRevision && !options.resourceLocalRevision) {
             const labels = require('./lib/reader-table-narrative-labels').normalizeReaderTableNarrativeLabels(candidate);
             if (labels) draftOrderMappings.push(labels);
         }
-    };
+    });
     let currentIssues = [];
+    const normalizeReplayDraft = (draft, issues, imageEvidence = [], verifySealedImages = true) => {
+        if (!Array.isArray(imageEvidence)) throw new Error('Reader付费回放的像素证据必须是数组');
+        const readyImages = verifySealedImages
+            ? imageEvidence.filter(image => image?.status === 'ready') : imageEvidence;
+        const replayImageOrdinals = new Set();
+        if (verifySealedImages) for (const image of readyImages) {
+            const figures = (options.structuredArtifacts?.figures || []).filter(figure => figure?.ordinal === image?.ordinal);
+            const inlineSource = figures.length === 1 && figures[0].recoveryStatus === 'complete'
+                && recoverySha256(figures[0].sourceDomSha256) && figures[0].images?.length === 1
+                ? require('./lib/reader-inline-svg').inlineSvgSourceDescriptor(figures[0].images[0], getPaperArxivId(paper)) : null;
+            const validInline = inlineSource && ['url', 'sourceLocationUrl', 'inlineSvgSourceSha256', 'inlineSvgRenderContract']
+                .every(key => image[key] === inlineSource[key])
+                && image.sourceSha256 === image.sha256 && recoverySha256(image.modelPayloadSha256)
+                && image.inputId === `figure:${image.ordinal}:${image.sourceSha256}`
+                && image.modelPayloadTransform === API_READER_MODEL_IMAGE_TRANSFORM
+                && ['sourceBytes', 'sourceWidth', 'sourceHeight', 'modelPayloadBytes', 'modelPayloadWidth', 'modelPayloadHeight']
+                    .every(key => Number.isSafeInteger(image[key]) && image[key] > 0)
+                && image.sourceBytes <= API_READER_FIGURE_MAX_BYTES
+                && image.sourceWidth * image.sourceHeight <= API_READER_MODEL_IMAGE_SOURCE_MAX_PIXELS
+                && image.modelPayloadBytes <= API_READER_MODEL_IMAGE_MAX_BYTES
+                && image.modelPayloadWidth <= Math.min(API_READER_MODEL_IMAGE_MAX_DIMENSION, image.sourceWidth)
+                && image.modelPayloadHeight <= Math.min(API_READER_MODEL_IMAGE_MAX_DIMENSION, image.sourceHeight)
+                && image.modelPayloadWidth * image.modelPayloadHeight <= API_READER_MODEL_IMAGE_MAX_PIXELS;
+            if (image?.kind !== 'figure' || !Number.isSafeInteger(image.ordinal) || image.ordinal <= 0 || figures.length !== 1
+                || replayImageOrdinals.has(image.ordinal)
+                || !/^[a-f0-9]{64}$/.test(String(image.sha256 || ''))
+                || !(validInline || (!inlineSource && !image.inlineSvgSourceSha256 && !image.inlineSvgRenderContract
+                    && !image.sourceLocationUrl && figures[0].images?.some(sourceImage => sourceImage?.kind !== 'inline_svg'
+                        && sourceImage?.url === image.url)))) {
+                throw new Error('Reader付费回放的已见像素未绑定唯一封存原图');
+            }
+            replayImageOrdinals.add(image.ordinal);
+        }
+
+        const saved = { candidate, currentIssues, draftOrderMappings, pixelFigureOrdinals,
+            mechanicalNoFigureCleanupChanged };
+        try {
+            candidate = structuredClone(draft);
+            currentIssues = structuredClone(issues || []);
+            draftOrderMappings = [];
+            pixelFigureOrdinals = readyImages.filter(image => image.kind === 'figure').map(image => image.ordinal);
+            mechanicalNoFigureCleanupChanged = false;
+            try { normalizeCandidate(); }
+            catch (error) {
+                // The paid replay input must also be the exact input to the
+                // public order normalizer. If preprocessing changed it,
+                // do not infer an unrecorded intermediate draft here.
+                const blocked = require('./lib/reader-source-blocked-normalization')
+                    .readSourceTableNormalizationError(error, draft, options.structuredArtifacts);
+                if (!blocked) throw error;
+                return blocked;
+            }
+            return candidate;
+        } finally {
+            ({ candidate, currentIssues, draftOrderMappings, pixelFigureOrdinals,
+                mechanicalNoFigureCleanupChanged } = saved);
+        }
+    };
+    if (options.readerReplayPreparationOnly === true) return { identity,
+        normalizeReplayDraft: (draft, issues, images) => normalizeReplayDraft(draft, issues, images, true) };
+
     let completedAttempts = 0;
     let fullAttempts = 0;
     let transportFailures = 0;
@@ -8061,7 +8186,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         .filter(item => Number.isInteger(item.ordinal));
     // 只读提前检查同身份候选。纯文本/DOM 仍失败且预算确实用完时，不先下载图片。
     // 不复用旧像素事实；新实现已能接受的候选仍进入下方原下载及完整校验。
-    const priorCandidate = repair.loadFailedCandidate(candidateDirectory, identity);
+    const operatorCorrection = require('./lib/daily-reader-operator-correction').current(paper,identity);
+    const priorCandidate = operatorCorrection?.payload || repair.loadFailedCandidate(candidateDirectory, identity);
     if (priorCandidate) {
         const retryApi = require('./lib/explicit-reader-retry-round');
         const oldCandidate = candidate; const oldIssues = currentIssues;
@@ -8146,21 +8272,26 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const modelImagePreflightEvidenceSha256 = repair.hashDraft(ephemeralImageEvidence);
     const recoveryOptions = useEphemeralFigureEvidence
         ? { ephemeralImageEvidenceSha256: modelImagePreflightEvidenceSha256 } : undefined;
-    recovered = require('./lib/reader-recovery-revision.js').loadReaderRecoveryRevision(
+    recovered = operatorCorrection?.payload || require('./lib/reader-recovery-revision.js').loadReaderRecoveryRevision(
         candidateDirectory, identity, { ...recoveryOptions,
+            ...(options.savedReaderInputContinuity ? { savedReaderInputContinuity: options.savedReaderInputContinuity, paper } : {}),
+            normalizeReplayDraft: (draft, issues) => normalizeReplayDraft(draft, issues, allImageInputs, false),
             ...(options.resolvedReaderCandidate !== undefined ? { resolvedReaderCandidate:options.resolvedReaderCandidate, paper:options.resolvedReaderCandidateParent || paper } : {}),
             ...(options.paidReaderResponseReplay !== undefined
                 ? { paidReaderResponseReplay: options.paidReaderResponseReplay } : {}) }
     );
-    recovered = require('./lib/explicit-reader-retry-round.js').restoreExplicitRoundOriginalDraft(
-        candidateDirectory, identity, recovered, paper
-    );
+    if (options.requireExistingSourceCandidate === true && (!recovered || contentMode !== READER_SOURCE_CONTENT_MODE)) {
+        throw Object.assign(new Error('原Reader来源模式恢复缺少同输入身份的真实失败候选，禁止首次生成或重置旧次数。'),
+            { code: 'READER_SOURCE_RECOVERY_CANDIDATE_MISSING', retryable: false });
+    }
+    if (!operatorCorrection) recovered = require('./lib/explicit-reader-retry-round.js').restoreExplicitRoundOriginalDraft(
+        candidateDirectory, identity, recovered, paper);
     readerRecoveryRevisions = recovered?.readerRecoveryRevisions || [];
     candidate = recovered?.draft || start.signedRecoveryDraft || null;
     draftOrderMappings = recovered?.draftOrderMappings || [];
     currentIssues = recovered?.issues || [];
     if (!candidate && recovered?.rawDraft) {
-        const rawIssues = repair.collectDraftIssues(null, null, { rawDraft: recovered.rawDraft });
+        const rawIssues = collectReaderDraftIssues(null, null, { rawDraft: recovered.rawDraft });
         currentIssues = [...currentIssues, ...rawIssues.filter(issue => !currentIssues.some(existing =>
             existing.path === issue.path && existing.message === issue.message))];
     }
@@ -8225,9 +8356,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         allowDeterministicQuoteRepair: true,
         allowDeterministicUnsupportedClaimPruning: true,
         readerCapabilityPolicy,
-        verifiedResourceIdentity: options.resourceLocalRevision === true
-            ? options.readerResources : verifiedConferenceReaderResources,
-        enforceResourceAvailabilityClaims: options.resourceLocalRevision === true,
+        verifiedResourceIdentity: verifiedReaderResources,
+        enforceResourceAvailabilityClaims: requiresResourceIdentity
+            || options.resourceLocalRevision === true,
         structuredArtifacts: options.structuredArtifacts,
         sourceText: options.sourceText
         });
@@ -8250,14 +8381,17 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             const result = { ...parsed, contentMode, attempts: completedAttempts, fullAttempts, transportFailures, imageEvidence,
                 modelImagePreflightEvidenceSha256,
                 providerImageExclusions, resumedCandidate: true, draftOrderMappings,
+                ...(operatorCorrection ? {operatorCorrectionProof:operatorCorrection.proof} : {}),
                 ...(recovered?.resolvedReaderCandidateReplayProof ? { resolvedReaderCandidateReplayProof: recovered.resolvedReaderCandidateReplayProof } : {}) };
-            const retiredCandidate = recovered?.resolvedReaderCandidateReplayProof ? null : deferOrRetireReaderCandidate(
+            const retiredCandidate = operatorCorrection || recovered?.resolvedReaderCandidateReplayProof ? null : deferOrRetireReaderCandidate(
                 result, repair, candidateDirectory, identity
             );
             if (retiredCandidate) result.retiredCandidate = retiredCandidate;
             return result;
         }
         catch (error) {
+            if (operatorCorrection) throw Object.assign(new Error('人工修正未通过完整 Reader 解析，保留原稿并停止新的 Reader 请求', {cause:error}),
+                {code:'READER_OPERATOR_CORRECTION_REJECTED',retryable:false,readerIssues:error.readerIssues});
             if (recovered?.resolvedReaderCandidateReplayProof) {
                 throw Object.assign(new Error('已归档付费稿未通过当前完整解析，禁止继续模型请求', { cause: error }), {
                     code: 'RESOLVED_READER_REVALIDATION_REJECTED', category: 'config',
@@ -8265,9 +8399,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     readerIssues: error.readerIssues
                 });
             }
-            currentIssues = repair.collectDraftIssues(candidate, error, {
-            sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts
-        }); }
+            currentIssues = collectReaderDraftIssues(candidate, error); }
     }
     const explicitRetry = require('./lib/explicit-reader-retry-round');
     if (!repair.hasUnusedImplementationAllowance(recovered)) {
@@ -8329,9 +8461,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         } catch (error) {
             normalizationError = error;
             lastError = error;
-            currentIssues = repair.collectDraftIssues(candidate, error, {
-                sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts
-            });
+            currentIssues = collectReaderDraftIssues(candidate, error);
         }
         if (candidate && !normalizationError) {
             try {
@@ -8345,9 +8475,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 if (retiredCandidate) result.retiredCandidate = retiredCandidate;
                 return result;
             } catch (error) {
-                currentIssues = repair.collectDraftIssues(candidate, error, {
-                    sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts
-                });
+                currentIssues = collectReaderDraftIssues(candidate, error);
             }
         }
         const blockingForLocalQuotes = currentIssues.filter(issue => issue?.diagnosticOnly !== true);
@@ -8359,12 +8487,14 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             ...(options.readerFactLocalRevision === true ? { readerFactLocalPaths: start.readerFactLocalPaths,
                 readerFactLocalClaims: require('./lib/daily-fact-review').readerRejectedClaims(getPaperArxivId(paper)) } : {}) };
         const proposedRepairContext = canPlanLocalQuotes
-            ? repair.buildRepairContext(candidate, currentIssues, sourceEvidence, options.sourceText, repairOptions) : null;
+            ? withReaderSourceTableEvidence(() => repair.buildRepairContext(candidate, currentIssues,
+                sourceEvidence, options.sourceText, repairOptions)) : null;
         const sourceBindingNeedsFullRetry = readerIssuesRequireFullSourceBindingRetry(
             recovered, candidate, fullAttempts, currentIssues, readerCapabilityPolicy,
             options.structuredArtifacts?.sourceKind === 'conference_pdf' && !readerCapabilityPolicy,
             proposedRepairContext
-        ) || implementationMigrationNeedsFullRegeneration;
+        ) || implementationMigrationNeedsFullRegeneration
+            || Boolean(explicitRound?.fullRegenerationReasonSha256 && fullAttempts === 0);
         const metadataRepair = repair;
         const metadataOperation = !candidate && !sourceBindingNeedsFullRetry
             ? metadataRepair.buildTopLevelMetadataRepairContext(previousDraft) : null;
@@ -8373,10 +8503,11 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             evidence: sourceEvidence, atomicOperation: metadataOperation,
             targetGuidance: '本次只授权明确删除两个顶层程序元数据字段。其他字段及全部正文逐字保留，删除后仍检查整篇。'
         } : candidate && !sourceBindingNeedsFullRetry
-            ? proposedRepairContext || repair.buildRepairContext(candidate, currentIssues,
-                sourceEvidence, options.sourceText, repairOptions) : null;
+            ? proposedRepairContext || withReaderSourceTableEvidence(() => repair.buildRepairContext(candidate, currentIssues,
+                sourceEvidence, options.sourceText, repairOptions)) : null;
         if (repairContext && repairContext.targets.length === 0
-            && currentIssues.some(issue => repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair)) {
+            && currentIssues.some(issue => repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
+                || issue?.code === 'reader_source_table_unrenderable' && issue.diagnosticOnly !== true)) {
             const latestFailure = repair.loadFailedCandidate(candidateDirectory, identity) || {};
             repair.saveFailedCandidate(candidateDirectory, identity, {
                 ...latestFailure,
@@ -8432,6 +8563,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     oldSha256: repair.hashDraft(candidate.conceptBridges[Number(pointer.split('/').at(-1))]) }));
             repairContext.figureOrdinals = [];
         }
+        const fullRegenerationTableFeedback = candidate && explicitRound?.fullRegenerationReasonSha256 && fullAttempts === 0
+            ? withReaderSourceTableEvidence(() => repair.repairTableEvidenceGuidance(candidate, currentIssues,
+                repair.buildRepairTargets(candidate, currentIssues, repairOptions), options.sourceText,
+                { ...repairOptions, fullDraftRegenerationDiagnostics: true })) : '';
         const buildReaderPrompt = indexExamples => require('./lib/reader-resource-prose').renderPrompt(
             conceptTermsContext
             ? loadPrompt(conceptTermsContext.promptPath, { title: paper.title || '', arxivId: getPaperArxivId(paper),
@@ -8448,6 +8583,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             : repairContext ? loadPrompt(currentTextStagePromptPath('apiReaderRepair'), {
             title: paper.title || '', arxivId: getPaperArxivId(paper),
             validationFeedback: [repairContext.targetGuidance, numericSpellingGuidance, repairReviewFeedbackPrefix,
+                savedInputContinuity?.validationFeedback,
                 ...currentIssues.map(issueFeedback), indexExamples].filter(Boolean).join('\n'),
             repairTargets: JSON.stringify({ draftSha256: repairContext.draftSha256,
                 targets: repairContext.targets,
@@ -8459,7 +8595,8 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             title: paper.title || '',
             arxivId: getPaperArxivId(paper),
             sourceEvidence,
-            validationFeedback: [validationFeedback,
+            validationFeedback: [validationFeedback, fullRegenerationTableFeedback,
+                savedInputContinuity?.validationFeedback,
                 ...(!candidate ? currentIssues.filter(issue => issue.diagnosticOnly === true).map(issueFeedback) : []),
                 indexExamples].filter(Boolean).join('\n'),
             previousDraft,
@@ -8697,8 +8834,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     || repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
                     || !String(issue.message || '').startsWith('Reader patch')),
                     { path: null, message: `Reader patch rejected: ${error.message}` }]
-                : repair.collectDraftIssues(candidate, error, {
-                    sourceText: options.sourceText, structuredArtifacts: options.structuredArtifacts,
+                : collectReaderDraftIssues(candidate, error, {
                     rawDraft: !candidate ? previousDraft : undefined
                 });
             const failureSignature = repair.hashRecoveryIssues(currentIssues);
@@ -8788,17 +8924,29 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     if (!require('./lib/model-text-sanitization.js').canReuseModelTextInputs(paper, sourceDetails)) {
         throw new Error('旧 Unicode 模型输入需完整重分析，不能只刷新 Reader、评分或图片');
     }
+    if (options.parentUpstreamProof !== undefined) {
+        require('./lib/reader-parent-upstream-preflight')
+            .assertSavedReaderParentUpstream(options.parentUpstreamProof, paper, sourceDetails);
+    }
     const conference = require('./lib/conference-analysis-context.js');
     const readerCapabilityPolicy = validateReaderCapabilityPolicy(
         conference.conferenceWeakReaderCapabilityPolicy(paper, sourceDetails.structuredArtifacts)
     );
     const existingReaderResources = paper.apiReaderResources;
+    const resourceRecoveryHandle = options.recoveryReaderResources;
+    if (resourceRecoveryHandle !== undefined && (options.resumeSavedSourceReader !== true
+        || options.readerFactLocalRevision === true || options.resourceLocalRevision === true
+        || options.signedRevisionMinimalDisplay === true)) {
+        throw new Error('原失败资源束只允许普通source-only恢复，不能用于签名或局部修订。');
+    }
     const existingReaderResourceBody = existingReaderResources && {
         contract: existingReaderResources.contract,
         sourceTextSha256: existingReaderResources.sourceTextSha256,
         resources: existingReaderResources.resources
     };
-    const readerResources = existingReaderResources
+    const readerResources = resourceRecoveryHandle !== undefined
+        ? require('./lib/reader-failed-bundle-resource-replay').readRecoveryReaderResources(resourceRecoveryHandle, paper, sourceDetails)
+        : existingReaderResources
         && existingReaderResources.contract === API_READER_RESOURCE_IDENTITY_CONTRACT
         && existingReaderResources.sourceTextSha256 === sourceSha256
         && Array.isArray(existingReaderResources.resources)
@@ -8838,8 +8986,26 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
     const reviewFeedbackSha256 = reviewFeedback
         ? crypto.createHash('sha256').update(reviewFeedback).digest('hex')
         : null;
-    const revisionSeed = options.revisionSeed
-        || prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback, options);
+    let revisionSeed = options.revisionSeed;
+    let requireExistingSourceCandidate = false;
+    if (!revisionSeed) {
+        try { revisionSeed = prepareApiReaderRevisionSeed(paper, sourceText, reviewFeedback, options); }
+        catch (error) {
+            const facts = require('./lib/daily-fact-review');
+            const active = facts.current(arxivId);
+            if (options.resumeSavedSourceReader !== true || !active?.readerOnly
+                || options.readerFactLocalRevision === true || options.resourceLocalRevision === true
+                || options.signedRevisionMinimalDisplay === true
+                || !reviewFeedback || reviewFeedback !== facts.reviewFeedback('apiReaderArticle', arxivId).trim()
+                || error.message !== '定向修订需要完整的读者文章，且正文、写作计划和分析阶段的 SHA 记录须一致。') throw error;
+            // 原反馈的source-only失败稿不冒充签名成品；下游必须核验真实旧候选并沿用其次数。
+            requireExistingSourceCandidate = true;
+        }
+    }
+    if (resourceRecoveryHandle !== undefined) {
+        if (revisionSeed) throw new Error('原失败资源束不能混签已有Reader；须沿真实source-only失败候选恢复。');
+        requireExistingSourceCandidate = true;
+    }
     // 正常定向刷新只展示已核稿的正文与来源记录，避免再次发送完整DOM归档。
     if (revisionSeed && options.signedRevisionMinimalDisplay === undefined
         && options.readerFactLocalRevision !== true && options.resourceLocalRevision !== true) {
@@ -8863,9 +9029,9 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         reviewFeedbackSha256,
         ...(revisionSeed?.metadata || {})
     });
-    const generated = await generateApiReaderArticleDetailed(
-        paper, analysis, evidenceContext, {
+    const generatorOptions = {
             reviewFeedback,
+            ...(requireExistingSourceCandidate ? { requireExistingSourceCandidate: true } : {}),
             naturalResourceProse,
             resourceLocalRevision: options.resourceLocalRevision === true,
             readerFactLocalRevision: options.readerFactLocalRevision === true,
@@ -8879,8 +9045,54 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             } : {}),
             structuredArtifacts: sourceDetails.structuredArtifacts,
             sourceText
+        };
+    let resourceInputAdmissionProof = null;
+    let savedReaderInputContinuityProof = null;
+    if (requireExistingSourceCandidate && resourceRecoveryHandle !== undefined && options.parentUpstreamProof) {
+        const fresh = require('./lib/fresh-analysis-context');
+        const candidateDirectory = fresh.freshReaderAttemptsDirectory();
+        const replayIdentity = async (resources, feedback) => {
+            const sourceEvidence = buildApiReaderEvidenceContext(analysis, sourceText,
+                sourceDetails.structuredArtifacts, arxivId, readerCapabilityPolicy, resources, naturalResourceProse);
+            const prepared = await generateApiReaderArticleDetailed(paper, analysis, sourceEvidence, {
+                ...generatorOptions, reviewFeedback: feedback, readerResources: resources,
+                readerIdentityOnly: true, readerReplayPreparationOnly: true
+            });
+            return { ...prepared, sourceEvidence };
+        };
+        // Identity/paid-input replay completes outside the actual generation slot.
+        // A verified resource fact change is the only authority to start a new
+        // source-only input; an implementation change keeps the previous ledger.
+        const target = await replayIdentity(readerResources, reviewFeedback);
+        const continuity = require('./lib/reader-saved-feedback-input-continuity');
+        const activeReaderFacts = require('./lib/daily-fact-review').current(arxivId);
+        const continued = activeReaderFacts?.restoredReaderConstraints
+            ? await continuity.prepareSavedReaderInputContinuity({ directory: candidateDirectory, paper,
+                source: sourceDetails, resourceRecoveryHandle, parentUpstreamProof: options.parentUpstreamProof,
+                reviewFeedback, replayIdentity }) : null;
+        if (continued) {
+            const checked = continuity.readSavedReaderInputContinuity(continued, paper, sourceDetails);
+            generatorOptions.reviewFeedback = checked.modelFeedback;
+            generatorOptions.savedReaderInputContinuity = continued;
+            savedReaderInputContinuityProof = checked.proof;
         }
-    );
+        const admissions = require('./lib/reader-resource-input-admission');
+        const handle = continued ? null : await admissions.prepareResourceInputAdmission({
+            directory: candidateDirectory, paper, source: sourceDetails,
+            resourceRecoveryHandle, parentUpstreamProof: options.parentUpstreamProof,
+            targetIdentity: target.identity, reviewFeedback, replayIdentity
+        });
+        if (handle) {
+            const checked = admissions.readResourceInputAdmission(handle, paper, sourceDetails);
+            if (checked.resources.identitySha256 !== readerResources.identitySha256
+                || !require('node:util').isDeepStrictEqual(checked.identity, target.identity)) {
+                throw new Error('资源新输入与当前真实来源或输入身份不同，保留原次数');
+            }
+            resourceInputAdmissionProof = admissions.commitResourceInputAdmission(handle, paper, sourceDetails);
+            delete generatorOptions.requireExistingSourceCandidate;
+        }
+    }
+    const generated = await generateApiReaderArticleDetailed(paper, analysis, evidenceContext, generatorOptions);
     const finalized = await finalizeApiReaderRefresh(paper, sourceDetails, generated, {
         ...options,
         ...(revisionSeed ? {
@@ -8888,6 +9100,8 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         } : {}),
         readerResources,
         execution: {
+            ...(resourceInputAdmissionProof ? { resourceInputAdmissionProof } : {}),
+            ...(savedReaderInputContinuityProof ? { savedReaderInputContinuityProof } : {}),
             contentMode, fingerprint, ...signedDisplayFields,
             ...require('./lib/reader-resource-prose').fields(naturalResourceProse),
             ...(options.resourceLocalRevision === true ? { resourceLocalRevisionContract: 'signed-reader-resource-local-repair-v1' } : {}),
@@ -8915,7 +9129,8 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             evidenceSelectionVersion: EVIDENCE_SELECTION_VERSION, evidenceMaxChars: API_READER_EVIDENCE_MAX_CHARS,
             contextMaxChars: API_READER_CONTEXT_MAX_CHARS,
             evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
-            reviewFeedbackSha256, ...(revisionSeed?.metadata || {})
+            reviewFeedbackSha256, ...(revisionSeed?.metadata || {}),
+            ...require('./lib/daily-reader-operator-correction').execution(generated.operatorCorrectionProof)
         }
     });
     return transferDeferredReaderCandidate(generated, finalized);
@@ -9053,6 +9268,8 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
             analysis, sourceText, manifest.stages.demoLinkScan,
             { paper, structuredArtifacts: sourceDetails.structuredArtifacts }
         );
+    enforceReaderResourceClaims(readerResourceClaimDraftFromArticle(readerResult.plan, readerResult.article),
+        readerResources, sourceText);
     manifest.stages.openSourceScan.resourceEvidenceContract = API_READER_RESOURCE_IDENTITY_CONTRACT;
     manifest.stages.openSourceScan.resourceEvidenceSha256 = readerResources.identitySha256;
     paper.apiReaderArticle = readerResult.article;
@@ -9068,6 +9285,7 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
         apiReaderSourceBindings: API_READER_SOURCE_BINDING_CONTRACT,
         apiReaderAuthorIdentity: API_READER_AUTHOR_IDENTITY_CONTRACT,
         apiReaderResourceIdentity: API_READER_RESOURCE_IDENTITY_CONTRACT,
+        readerResourceClaims: API_READER_RESOURCE_CLAIMS_CONTRACT,
         ...(directContext.getDirectRewriteAnalysisContext()
             ? { apiReaderFigurePersistence: directContext.EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT }
             : {})
@@ -9091,6 +9309,7 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
         readerAuthorIdentitySha256: readerAuthors.identitySha256,
         resourceIdentityContractVersion: API_READER_RESOURCE_IDENTITY_CONTRACT,
         resourceIdentitySha256: readerResources.identitySha256,
+        readerResourceClaimsContractVersion: API_READER_RESOURCE_CLAIMS_CONTRACT,
         resourceCount: readerResources.resources.length,
         structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || '',
         qualityMetrics: readerResult.qualityMetrics,
@@ -16871,7 +17090,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
 
     if (options.resumeSavedReaderUpstreamOnly === true) {
         // 原父子反馈恢复先补齐实际摘要与评分，再进入 Reader 的原有范围。
-        return { ...paper, ...sourceAcquisitionRecord, sourceWarnings, analysis,
+        return { ...paper, ...sourceAcquisitionRecord, sourceWarnings, analysis, parsed: parseAnalysis(analysis),
             analysisManifest, apiReaderResources: verifiedReaderResources };
     }
 
@@ -16969,7 +17188,9 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             || extractMarkdownTables(paper.apiReaderArticle).some((table, index) => {
                 const binding = paper.apiReaderPlan?.tableBindings?.[index];
                 return binding?.sourceType === 'source_quotes'
-                    && readerTableHeaderUnitEvidenceFailures(table, binding.sourceQuotes || []).length > 0;
+                    && withReaderSourceQuoteEvidence(sourceDetails.structuredArtifacts, getPaperArxivId(paper), () =>
+                        readerTableHeaderUnitEvidenceFailures(table, [...(binding.sourceQuotes || []),
+                            ...(binding.sealedPdfQuoteEvidence || [])])).length > 0;
             })
             || !readerFigureSourcePayloadValid(paper, sourceDetails.structuredArtifacts?.payloadSha256,
                 crypto.createHash('sha256').update(rawTextForAnalysis).digest('hex'))
@@ -17061,6 +17282,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                     : materializedFigures
             };
             require('./lib/daily-fact-review').validateRepairedClaims('apiReaderArticle', readerResult.article, arxivId);
+            enforceReaderResourceClaims(readerResourceClaimDraftFromArticle(readerResult.plan, readerResult.article),
+                verifiedReaderResources, rawTextForAnalysis);
             paper.apiReaderArticle = readerResult.article;
             paper.apiReaderPlan = readerResult.plan;
             paper.apiReaderFigures = readerResult.figures;
@@ -17085,6 +17308,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 apiReaderSourceBindings: API_READER_SOURCE_BINDING_CONTRACT,
                 apiReaderAuthorIdentity: API_READER_AUTHOR_IDENTITY_CONTRACT,
                 apiReaderResourceIdentity: API_READER_RESOURCE_IDENTITY_CONTRACT,
+                readerResourceClaims: API_READER_RESOURCE_CLAIMS_CONTRACT,
                 ...(directContext.getDirectRewriteAnalysisContext()
                     ? { apiReaderFigurePersistence: directContext.EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT }
                     : {})
@@ -17148,6 +17372,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 readerAuthorIdentitySha256: paper.apiReaderAuthors.identitySha256,
                 resourceIdentityContractVersion: API_READER_RESOURCE_IDENTITY_CONTRACT,
                 resourceIdentitySha256: paper.apiReaderResources.identitySha256,
+                readerResourceClaimsContractVersion: API_READER_RESOURCE_CLAIMS_CONTRACT,
                 resourceCount: paper.apiReaderResources.resources.length,
                 structuredArtifactsSha256: sourceDetails.structuredArtifacts?.payloadSha256 || '',
                 qualityMetrics: readerResult.qualityMetrics,
@@ -17174,7 +17399,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                     providerImageExclusions: structuredClone(readerResult.providerImageExclusions || []),
                     providerImageExclusionCount: readerResult.providerImageExclusions?.length || 0,
                     providerImageExclusionSha256: stableFingerprint(readerResult.providerImageExclusions || [])
-                } : {})
+                } : {}),
+                ...require('./lib/daily-reader-operator-correction').execution(readerResult.operatorCorrectionProof)
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
             transferDeferredReaderCandidate(generatedReaderResult, paper);
@@ -17412,6 +17638,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
         ...sourceAcquisitionRecord,
         sourceWarnings,
         analysis: analysis,
+        parsed: parseAnalysis(analysis),
         imageUrls: selectedImageUrls,
         selectedImageUrls,
         allImageUrls: imageUrls,
@@ -18930,6 +19157,7 @@ module.exports = {
     normalizeConferenceGeneratedEvidenceTableLabels,
     normalizeReaderSourceQuotes,
     readerSourceQuoteCoversNumericToken,
+    readerSourceQuotesCoverNumericToken,
     readerTableHeaderUnitEvidenceFailures,
     readerLegacyDatasetClaimsValid,
     readerFormulaNeedsSourcePayload,
@@ -18955,6 +19183,7 @@ module.exports = {
     prepareApiReaderRetryIdentity: (paper, analysis, sourceEvidence, options = {}) =>
         generateApiReaderArticleDetailed(paper, analysis, sourceEvidence, { ...options, readerIdentityOnly: true }),
     generateApiReaderArticleDetailed,
+    apiReaderTransportMaxRetries: () => API_READER_TRANSPORT_MAX_RETRIES,
     resolveApiReaderBaseRepairMaxTokens,
     resolveApiReaderRepairRetryMaxTokens,
     shouldEscalateApiReaderRepairBudget,
@@ -18977,6 +19206,7 @@ module.exports = {
     API_READER_SOURCE_BINDING_CONTRACT,
     API_READER_AUTHOR_IDENTITY_CONTRACT,
     API_READER_RESOURCE_IDENTITY_CONTRACT,
+    API_READER_RESOURCE_CLAIMS_CONTRACT,
     REPOSITORY_DOCUMENTATION_EVIDENCE_CONTRACT,
     API_READER_FIGURE_SELECTION_LIMIT,
     SCORING_STABILITY_RESOLUTION_CONTRACT,
@@ -19011,6 +19241,10 @@ module.exports = {
     buildApiReaderArtifactEvidence,
     readerVerifiedTableIndexExamples,
     replayVerifiedReaderResourceIdentity,
+    readerResourceClaimIssues,
+    enforceReaderResourceClaims,
+    replayVerifiedReaderResourceIdentity,
+    readerResourceClaimDraftFromArticle,
     conferenceReaderResourceClaimIssues,
     enforceConferenceReaderResourceClaims,
     buildApiReaderEvidenceContext,

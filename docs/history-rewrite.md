@@ -37,14 +37,14 @@ npm run history:inventory -- --apply \
 
 ## 建立来源清单和重写计划
 
-先用 `history:conference-local-sources` 建立会议论文信息与 PDF 的来源清单。该步不联网、不读博客正文、不调用模型；缺失 PDF 的处理见下一节。随后 `history:direct-inputs` 从冻结清单中已有的单一 arXiv ID 线索建立获取任务，并合并会议来源。
+先用 `history:conference-local-sources` 建立会议论文信息与 PDF 的来源清单。该步不联网、不读博客正文、不调用模型；缺失 PDF 的处理见下一节。随后 `history:inputs` 从冻结清单中已有的单一 arXiv ID 线索建立获取任务，并合并会议来源。
 
 ```bash
 npm run history:conference-local-sources -- --apply \
   --icml-poster-snapshot /absolute/path/data/icml2026/papers.json \
   --icml-pdf-root /absolute/path/data/pdfs/icml2026
 
-npm run history:direct-inputs -- --apply \
+npm run history:inputs -- --apply \
   --conference-manifest /absolute/path/conference-local-sources-v2.json \
   --inventory /absolute/path/all-history.json \
   --blog-root /absolute/path/audio-paper-digest-blog
@@ -53,7 +53,7 @@ npm run history:conference-projections -- --apply \
   --catalog /absolute/path/scoped-historical-local-data-v5.json \
   --inventory /absolute/path/all-history.json
 
-npm run history:direct-plan -- --apply \
+npm run history:plan -- --apply \
   --catalog /absolute/path/scoped-historical-local-data-v5.json \
   --inventory /absolute/path/all-history.json \
   --conference-projections /absolute/path/conference-page-projections-v3.json
@@ -67,7 +67,7 @@ npm run history:direct-plan -- --apply \
 
 `history:conference-projections` 记录论文与历史会议页面的对应关系。它核对冻结页面、论文信息和 PDF 的 SHA；如果完整 inline TeX 曾被 Hugo 确定性省略，还会检查论文信息中对应省略形式的指纹。任一形式对应多个会议论文身份时都会拒绝，不能用标题相似度选择。这种页面对应关系不赋予旧 crosswalk 身份确认权限。
 
-`history:direct-plan` 生成 `historical-direct-rewrite-plan-v5`。页面对应关系和计划都使用生成来源清单时使用的完整严格校验，v3 及更旧清单会被拒绝。v5 对部分 `conflict/multiple` 日汇总页，只使用唯一严格评分行中的主 arXiv 链接，并记录字节区间和 SHA。计划重新核对该记录的自哈希、页面 SHA、原身份状态及候选集合，不能按候选优先级猜测。
+`history:plan` 生成 `historical-direct-rewrite-plan-v5`。页面对应关系和计划都使用生成来源清单时使用的完整严格校验，v3 及更旧清单会被拒绝。v5 对部分 `conflict/multiple` 日汇总页，只使用唯一严格评分行中的主 arXiv 链接，并记录字节区间和 SHA。计划重新核对该记录的自哈希、页面 SHA、原身份状态及候选集合，不能按候选优先级猜测。
 
 主评分行路线抓取失败时写入 v2 交接，附完整评分行绑定；原单提示路线仍使用原字节格式的 v1 交接。备用 `history:arxiv-batch` 在新请求前读取当前配置下的冻结清单与凭证，核对 crosswalk 的完整候选集合，再按原页面 SHA 和评分行字节重建绑定。只有这些检查全部通过，才生成携带该绑定的 v2 crosswalk 决策，并在锁内应用前再次重核；普通多候选页面仍须走显式身份裁定。缺少冻结清单、原页或证明时明确停止，不按候选优先级选择论文。
 
@@ -97,16 +97,16 @@ ICML Daily 页使用 catalog v5 保存的 poster 对应记录。冻结单篇页�
 
 ## 获取和检查论文来源
 
-`history:direct-scheduler` 准备来源，不调用分析或 Reader，也不生成博客。arXiv 的 `generation` 是来源获取序号，不是论文修订号；新序号重新获取官方正文和 PDF，保存到 `data/runtime/fetched-arxiv-sources/<arxivId>/generation-000001/`。该目录只能有 `source.txt`、`source.pdf`、`source-runtime.json` 和 `source-manifest.json` 四文件。标题来自同批官方来源保存的运行信息，不能沿用旧博客标题。会议论文核对清单已绑定的本地论文信息及 PDF SHA，标题取自对应论文信息。
+`history:sources` 准备来源，不调用分析或 Reader，也不生成博客。arXiv 的 `generation` 是来源获取序号，不是论文修订号；新序号重新获取官方正文和 PDF，保存到 `data/runtime/fetched-arxiv-sources/<arxivId>/generation-000001/`。该目录只能有 `source.txt`、`source.pdf`、`source-runtime.json` 和 `source-manifest.json` 四文件。标题来自同批官方来源保存的运行信息，不能沿用旧博客标题。会议论文核对清单已绑定的本地论文信息及 PDF SHA，标题取自对应论文信息。
 
 ```bash
-npm run history:direct-scheduler -- --apply --plan /absolute/path/direct-rewrite-plan-v5.json \
+npm run history:sources -- --apply --plan /absolute/path/direct-rewrite-plan-v5.json \
   --queue all --generation 1 --max-papers 100 --arxiv-concurrency 3 --conference-concurrency 5
 ```
 
 arXiv 来源并发默认 3，会议来源并发默认 5，各可设为 1–8。未显式选择 ID 的限量续跑会严格核验并跳过同一获取序号已有的 arXiv 四文件，会议项按稳定计划顺序继续检查。本地会议文件缺失或损坏只使对应项失败，不能进入 arXiv 备用获取或写入 crosswalk。只有新 arXiv 获取失败、由 scheduler/run 保存的有固定名称、保存后不再改写的交接文件可进入后文备用流程，其余会议来源继续处理。
 
-每项结果在同一调度锁内更新带自哈希的 `historical-direct-source-status-v1`，另一进程的 `history:status` 可查看会议核验和 arXiv 文件状态。该记录也是分析的必需前提：`history:direct-run --apply` 在任何来源抓取、PDF 提取或模型调用前，要求选中论文在同一计划及获取序号中均为 `ready`。缺记录、`handoff` 或 `failed` 都拒绝；后续仍核对实际来源字节，不能只信状态记录。
+每项结果在同一调度锁内更新带自哈希的 `historical-direct-source-status-v1`，另一进程的 `history:status` 可查看会议核验和 arXiv 文件状态。该记录也是分析的必需前提：`history:run --apply` 在任何来源抓取、PDF 提取或模型调用前，要求选中论文在同一计划及获取序号中均为 `ready`。缺记录、`handoff` 或 `failed` 都拒绝；后续仍核对实际来源字节，不能只信状态记录。
 
 ### 当前 PDF 不可用时的历史版本
 
@@ -116,14 +116,20 @@ arXiv 来源并发默认 3，会议来源并发默认 5，各可设为 1–8。�
 
 ## 分析、图片和发布用元数据
 
+历史更新与日更共用 `analysis-engine.js` 和 `deep-analyzer.js`，采用同一当前提示词登记表、正式分析、八维评分、标签、`beginner-researcher-v3` Reader 与来源核验。新模型请求使用当前登记版本；已保存阶段继续按其原版本、内容 SHA、来源与费用恢复，不把旧调用冒充新版本。
+
+页面渲染通过 `paper-page-staging.js` 使用同一日更发布器；真实会议身份的作者、资源、摘要和评分展示通过 `paper_reader_presentation.py` 复用，保留历史 URL、论文身份与特殊来源披露。渲染实现 SHA 根据实际本地依赖闭包计算，包含共享 Python/Node 校验器；共享修复升级后旧暂存页重新生成。
+
+日更、会议和历史单篇共用研究工作区及四份导出：`citation.json`、`citation.bib`、`citation.ris`、`rethink-context.json`。会议导出绑定真实会议 ID、来源全文 SHA、题目、原作者和 Reader 计划；路径按日期及会议 ID 的 SHA 隔离。暂存和恢复均校验固定文件集合、导出内容及页面声明的 SHA，不接受异篇引用或额外 JSON。未保存独立原摘要或公开来源 URL 时如实记录 `unavailable`，不造 arXiv 别名、不猜链接，也不把私有文件路径公开。
+
 ### 官方摘要与论文信息
 
 arXiv 单篇页研究工作区展示的原始摘要统一来自官方 Atom 附属文件。从 `source.txt` 中限定范围提取 Abstract 只作诊断，不能替代发布来源。计划中的 arXiv 论文都不得使用旧博客、爬虫或模型生成的摘要。
 
 ```bash
-npm run history:publication-metadata -- --dry-run --plan /absolute/path/direct-rewrite-plan-v5.json \
+npm run history:metadata -- --dry-run --plan /absolute/path/direct-rewrite-plan-v5.json \
   --generation 1 --all-plan-arxiv
-npm run history:publication-metadata -- --apply --plan /absolute/path/direct-rewrite-plan-v5.json \
+npm run history:metadata -- --apply --plan /absolute/path/direct-rewrite-plan-v5.json \
   --generation 1 --all-plan-arxiv --concurrency 3
 ```
 
@@ -140,7 +146,7 @@ socket、DNS、超时和 HTTP 408/425/429/5xx 在共享主机调度器内最多�
 ### 分析与暂存页面
 
 ```bash
-npm run history:direct-run -- --apply --plan /absolute/path/direct-rewrite-plan-v5.json \
+npm run history:run -- --apply --plan /absolute/path/direct-rewrite-plan-v5.json \
   --queue all --generation 1 --max-papers 50 --concurrency 3
 ```
 
@@ -198,13 +204,13 @@ Node 历史分析读取错误代码和作用范围，识别账号池耗尽、认
 
 ## 生成每日和会议汇总
 
-`history:direct-aggregate projection` 从计划与冻结博客清单生成 `historical-direct-aggregate-projection-v3`。随后 `aggregate` 读取该文件、执行记录和完整单篇暂存 manifest，核对同一日期或会议的完整论文集合与每页 SHA，生成 `historical-direct-aggregate-v2` 汇总及 `pages/content/posts/...` 的实际暂存 Markdown。仅有 `analysis.json` 或 `staging-input.json` 不能生成汇总，旧汇总正文也不能用于补写内容。
+`history:aggregate projection` 从计划与冻结博客清单生成 `historical-direct-aggregate-projection-v3`。随后 `aggregate` 读取该文件、执行记录和完整单篇暂存 manifest，核对同一日期或会议的完整论文集合与每页 SHA，生成 `historical-direct-aggregate-v2` 汇总及 `pages/content/posts/...` 的实际暂存 Markdown。仅有 `analysis.json` 或 `staging-input.json` 不能生成汇总，旧汇总正文也不能用于补写内容。
 
 ```bash
-npm run history:direct-aggregate -- projection --apply \
+npm run history:aggregate -- projection --apply \
   --plan-file /absolute/path/direct-rewrite-plan-v5.json \
   --inventory-file /absolute/path/all-history.json --output-name direct-aggregate-projection-v3.json
-npm run history:direct-aggregate -- aggregate --apply \
+npm run history:aggregate -- aggregate --apply \
   --plan-file /absolute/path/direct-rewrite-plan-v5.json \
   --registry-file /absolute/path/direct-run-registry.json \
   --projection-file /absolute/path/direct-aggregate-projection-v3.json --daily YYYY-MM-DD
@@ -234,7 +240,7 @@ npm run history:status -- --plan /absolute/path/direct-rewrite-plan-v5.json --ge
 
 不传 `--publication-id` 时，不读取发布事务或访问远端，状态不会把未选择发布的任务算作完整发布。指定后深核全部来源，要求发布计划 SHA 对应当前历史计划，默认实时核验远端身份及 OID；发布终验不能与 watch 同用。`--live-remote false` 仅作离线诊断，不能产生完整发布状态。
 
-当前 `history:direct-publication` 已有会议和任务汇总发布能力；实际页面或汇总文件缺失、校验失败时仍拒绝发布。Git 远端 OID 只证明推送，不证明网页已上线。向用户确认完成前，还须按[历史发布说明](history-direct-publication.md)核验对应部署及全部目标页面，并完成用户本次范围内的视觉要求。状态是读取时快照，发布后应重新查询。
+当前 `history:publication` 已有会议和任务汇总发布能力；实际页面或汇总文件缺失、校验失败时仍拒绝发布。Git 远端 OID 只证明推送，不证明网页已上线。向用户确认完成前，还须按[历史发布说明](history-direct-publication.md)核验对应部署及全部目标页面，并完成用户本次范围内的视觉要求。状态是读取时快照，发布后应重新查询。
 
 ## arXiv 获取失败的备用处理
 
@@ -247,105 +253,37 @@ npm run history:arxiv-batch -- --dry-run --crosswalk UUID --owner fallback.worke
   --handoffs arxiv-fresh-failure-2609.03622-g000001-0123456789abcdef01234567.json --concurrency 2
 ```
 
-正常重写不调用 `history:crosswalk prepare/apply/apply-verified/finalize`，也不调用任意单篇 `arxiv-source --crosswalk` 组合。当前备用批处理的写入由 `history:arxiv-batch` 在核验命名交接之后完成；显式旧状态维护仍可按下一节限制写入，不能泛称 crosswalk 全部只读。
+正常重写不调用任意 `crosswalk` 或单篇 `arxiv-source --crosswalk` 组合。备用批处理只有在核验本次获取失败的命名交接及冻结页面身份后才可写入；标题不能作为论文身份依据。
 
-## 旧来源和 crosswalk 状态维护
+## 已保存旧运行的恢复
 
-以下入口维护既有旧状态，不代替当前计划、来源准备与分析。`history:resolve-conflict` 也属于旧工具；当前任务不能把 `conflict/multiple` 页面交给它自动恢复身份，须取得明确可用来源或保留阻断。运行快照见[全历史重写交接](historical-rewrite-handoff-2026-09-07.md)，仅供定位旧记录，不能照旧命令建立当前队列。
+历史更新只有上面的当前主链。旧的独立分析、调度、标签、暂存、汇总及私有发布命令已移除；真实已有运行的来源、失败候选、费用、预算及凭证继续保留，内部兼容读取不赋予新任务发布资格。
 
-### 官方来源与旧隔离分析
-
-旧 arXiv 页面标为 `verified` 前须取得官方来源的完整授权记录。以下 `--dry-run` 不联网、不写盘，`--apply` 使用项目 HTTP CONNECT 获取公共全文来源：
+`history:resume` 有两种明确模式。现行计划仍使用原控制协议恢复暂停阶段：
 
 ```bash
-npm run history:arxiv-source -- --dry-run --id 2609.03622 --authority arxiv-2609.03622.json
-npm run history:arxiv-source -- --apply --id 2609.03622 --authority arxiv-2609.03622.json
-npm run history:arxiv-analyze -- prepare --apply --run-id UUID --id 2609.03622 --date 2026-09-04 \
-  --authority arxiv-2609.03622.json
-npm run history:arxiv-analyze -- analyze --run-id UUID --concurrency 1
-npm run history:arxiv-analyze -- status --run-id UUID
+npm run history:resume -- --plan /absolute/path/direct-rewrite-plan-v5.json --phase analysis --generation 1
 ```
 
-抓取时分别完整保存请求、来源响应记录、全文、快照、来源凭证和授权记录（`authority`），权限均为 `0600`，拒绝覆盖不同字节。新写入还先保存私有的 `.<authority 名称去掉 .json>.source-pair.json`，其中完整来源响应记录与全文绑定原请求 SHA；它保留一份来源副本，供中断后逐字补齐原有两份正式文件，恢复时不重新抓取。重试写入只回收同机已退出写者留下、与正式文件 inode 相同的临时硬链接；旧半截文件、未知或仍活跃写者的文件均保留并拒绝继续。续跑已有完整文件只能恢复磁盘完整性证据；组合命令再次访问官方来源并逐字比较后，才在本进程取得不能序列化的生产授权对象。如果 HTTP 已返回但来源配对记录尚未保存，下次可再次抓取该非模型公共来源。孤立请求不表示成功，不能据此标 `verified` 或生成最终凭证；旧来源只保存了一侧且没有合格配对记录时，仍须人工检查。旧博客、分析、Reader 或自行拼出的快照/receipt 均不能获得生产授权。
-
-`arxiv-analyze prepare` 经项目代理重新获取精确单篇 Atom 元数据，结合本进程核验的官方全文创建独立、只含论文来源的分析任务，按 SHA 保存原始 Atom XML，不读旧正文、分析、Reader 或 checkpoint。`analyze` 才调用多阶段模型并产生用量；结果保存在该任务 `analysis.json`，不覆盖 `data/current/deep-analysis-result.json`。
-
-`history:analyze-batch` 与 `history:postprocess` 只维护旧备用任务。`new-full` 选择尚未进入旧分析的完整备用来源，`reader-recovery` 选择上游已完成而 Reader 尚未完整保存的记录。其 `--paper-ids` 支持重复 flag 或逗号列表，每项必须为规范 `arxiv:YYMM.NNNNN`；空、重复或身份未解决的项在联网前拒绝。正常任务仍用 `direct-scheduler/direct-run`。
-
-核心摘要遵守 `core-summary-detailed-v3`。正文写 6–9 句，按程序规定的汉字、中文标点及全角字符计数，共 320–600 个字符，说明实际问题、2–4 步方法及分工、原文关键定量结果、结论边界和训练/推理/部署成本。无定量证据或成本未披露时须明说。修复只读论文来源，只替摘要节并逐字保护其余 12 节，顺序为结构修复、标签确认、核心摘要、评分。旧 v2 checkpoint 只有旧/新 Prompt 双白名单、模型、来源、证据与阶段 SHA 均可核验时才迁移摘要。阶段失效前最多保留两份有 SHA 校验的旧分析快照，替代全链成功后才清除。
-
-### 旧任务后处理
-
-后处理不再调用模型或写博客，仅接受调度器状态 `complete` 且实际来源/分析能核验为 `sealed-complete` 的单篇任务：
+旧 `fresh-rewrite-run-v1` 必须已经保存在当前项目 `data/runtime/fresh-rewrites/<runId>/`；先只读查询，再恢复原分析：
 
 ```bash
-npm run history:postprocess -- --dry-run --crosswalk UUID --concurrency 3
-npm run history:postprocess -- --apply --crosswalk UUID --concurrency 3
-# 指定日期有任一论文未暂存时，仍保持 blocked
-npm run history:postprocess -- --apply --crosswalk UUID --date YYYY-MM-DD --concurrency 3
+npm run history:resume -- status --run-id UUID
+npm run history:resume -- analyze --run-id UUID --concurrency 3
+# 同一旧运行中只恢复已存在的失败子集
+npm run history:resume -- analyze --run-id UUID --ids 2609.03586 --concurrency 1
 ```
 
-预演只略过明确尚未封存或尚未完成的分析；磁盘读取、权限和内容完整性错误会中止并保留原原因。暂存后的完成集合复查也遵守这一规则，已保存的单篇成果保留，不能把读取失败报成普通缺页。
-
-每篇先按当前标签注册表生成以 SHA 命名的标签分配记录；`blocked` 记录保留供审计，不能写入页面。暂存 run ID 由 crosswalk、分析任务、注册表、调度项及渲染实现 SHA 稳定推导，后者包括页面渲染、发布页面对应关系、标签生成、每日汇总和直接配置。实现改变会建立新的不可变暂存文件和 checkpoint，旧文件保留，但不能当作当前结果。
-
-渲染先在内存完成，复核实现身份后原子写入；若写文件后、保存 manifest 前中断，同一写入计划（intent）及分析任务只能续用逐字一致的部分文件，未知文件或内容与写入计划不一致的文件会拒绝。每日汇总要求全部成员使用同一渲染 SHA，且该日期全部历史论文页已核验暂存；它合并逐篇 manifest，只写受保护 runtime。后处理 checkpoint 按 crosswalk 及注册表 SHA 隔离并自哈希，注册表升级不能覆盖旧审计记录。
-
-暂存文件先完整写入临时文件并同步，再以不可覆盖的硬链接建立正式路径。显式续跑先核对原输入、来源、页面集合和完整 SHA，才可清理同机已退出写者留下的已知同 inode 临时硬链接；只读检查、未知链接和活写者链接仍拒绝。正式路径建立前留下的未知临时文件保留并阻断续跑；运行目录顶层的未知条目会报告绝对路径，不能自动删除；此次实现变化正常进入渲染指纹，旧页面须按正常路径重新生成。
-
-### 旧 crosswalk 标签、暂存与日汇总
-
-旧后处理链上的三个入口也可以手工分步运行。它们只写私有 runtime，不发布博客：
+旧 scheduler/postprocess 记录可先只读定位现存运行：
 
 ```bash
-npm run history:tags -- assign --dry-run --analysis-run UUID [--paper-id arxiv:YYMM.NNNNN]
-npm run history:tags -- assign --apply --analysis-run UUID [--paper-id arxiv:YYMM.NNNNN]
-npm run history:stage -- --dry-run --crosswalk UUID --analysis-run UUID [--limit pilot|N]
-npm run history:stage -- --apply --crosswalk UUID --analysis-run UUID --run-id UUID [--limit pilot|N]
-npm run history:aggregate -- --dry-run --staging-runs UUID[,UUID...] [--date YYYY-MM-DD]
-npm run history:aggregate -- --apply --staging-runs UUID[,UUID...] [--date YYYY-MM-DD]
+npm run history:resume -- locate --scheduler /absolute/path/data/runtime/historical-analysis-schedulers/UUID.json
 ```
 
-`history:tags assign` 从已完成的历史分析按当前词表逐篇或批量生成独立标签分配记录；dry-run 不写文件，apply 只保存分类结果，不调用模型。`history:stage` 按指定的分析运行和词表 SHA 选取标签记录，再依据已核验的页面对应表生成私有单篇页面。`history:aggregate` 读取一份或多份已生成的暂存结果，重建每日汇总及清单并保留原路径与网址，默认只检查，加 `--apply` 才写入私有目录。
+该入口只接受当前项目两个已保存调度目录，核对结构、后处理记录自哈希及真实运行论文身份。缺失或损坏运行列为 `unavailable` 并非零退出，不新建运行、不重新执行旧队列。取得真实 `runId` 后使用上面的查询/分析恢复。
 
-`history:tags` 当前只实现 `assign`。[实施路线图](history-rewrite-roadmap.md) 7.3 节列出的 `snapshot-routes`、`prepare`、`classify`、`review`、`status` 和 `finalize` 属于那份已废止的 crosswalk 方案，不是现在的入口，不能照抄执行。
+恢复沿用原 `run/inputs/analysis`、精确论文集及封存来源，完整核验 SHA 与锁后进入同一个分析引擎。不接受 `prepare`、`sources`、任意路径、日期变更或预算重置。缺失、损坏或跨运行来源须停止；不能创建一个新的运行来冒充旧断点续跑。只恢复分析不会修改当前正式日更数据或博客，不生成新的发布凭证。
 
-### 页面身份与写入限制
+旧 crosswalk、标签、暂存、私有发布及调度数据文件保留原样；已退休的新建、调度和发布写入实现已删除。旧成功或通过凭证不能冒充当前来源及当前页面的发布资格。新历史更新始终由冻结页面、当前计划与本次核验来源建立直接对应关系。
 
-`page-source-crosswalk-v1` 核验原清单/凭证字节及自哈希，以本进程受控对象为每个 `kind=paper` 页面建立独立、可恢复的 `pending` 状态。页面分配记录（`assignment`）只保存页面路径与整页 SHA，不保存标题、标签或旧正文。受控修改记录（`decision`）与写前一致性检查（CAS）可记录 `needs-review`、`blocked` 或 `conflict`；只有核验 `paper-source-authority-v1` 的受控来源对象后才可记 `verified`。
-
-来源授权记录须绑定完整 `paper-identity-v1`、身份核心与完整记录 SHA、authority 文件 SHA/自哈希、证据类型、全文及来源快照 SHA。arXiv 兼容测试来源核对官方摘要页（abs）URL、来源快照、receipt 与全部全文字节；会议来源核对真实计划、导入记录、清单和来源上下文对象（`plan/import/ledger/source-context`）的逐级对应关系。页面须有与来源精确对应的 ID 线索，来自文件名、显式 front matter ID 或正文官方链接；标题永远不能作为 `verified` 身份证据。
-
-`history:crosswalk prepare --apply`、`apply`、`apply-verified` 和 `finalize` 仍可显式维护旧状态，均受来源授权与一致性检查限制。decision 只能位于 `data/runtime/page-source-crosswalks/<UUID>/decisions/`，authority 及其直接命名证明文件只能位于 `data/runtime/paper-source-authorities/`。CLI 不接受任意路径或序列化伪授权对象，普通 `apply` 拒绝 `verified`。
-
-通用 `apply-verified` 从磁盘重载 arXiv 来源时得到 `productionAuthorized=false`，不能以旧测试文件或自行构造的新磁盘链取得生产权限。会议来源还须本进程内已核验的 plan 对象，CLI 不能仅凭保存文件恢复这项生产授权，相应写入或 finalize 会拒绝。旧流程所需页面 decision 必须精确绑定，不能按标题自动确认。
-
-同论文的多个页面按 `paperId`、`pageKey` 排序形成 `identityGroups`，只有全部页面通过授权核验且为 `verified` 才算完整。`finalize` 逐项核对来源，独占创建不可变 `page-source-crosswalk-final-receipt-v1`；证明缺失、被替换或 SHA 不一致均拒绝。会议来源在命令行下无法核验时直接拒绝：用于加载会议计划授权文件的生产代码还没有接入，只要完成状态里出现会议来源上下文（`conference-plan-source-context`），`finalize` 就直接报错退出，不会写出最终凭证。后续使用最终凭证（`final receipt`）仍须当前生产授权解析器/对象再次核验，只持有状态和凭证文件不构成持久生产授权。
-
-### 锁与中断恢复
-
-`prepare --apply` 只可自动恢复三种已核实中断状态：安全空目录、只有空 `decisions/` 的目录、或只有初始规范 `state.json` 的目录。额外文件、非空孤立 decision、符号链接及不可核验状态均拒绝。
-
-旧修改记录写入使用目录锁和规范 `owner.json`，记录持锁者（`owner`）、PID、主机名（`hostname`）、UUID token、开始和定时更新时间、有效期限（`lease`），以及按记录内容计算的 SHA。活 PID 永不抢占；同机死 PID 只有在证据完整、文件时间和心跳都超过 lease 时，才在独占 reclaim marker 下回收。远主机不能用本机 PID 探测，但也要求完整 owner、心跳与 mtime 均过期，先独占取得回收标记，再确认锁目录与 owner 文件的 inode 和 SHA 仍与先前读取一致后回收。新建、心跳新鲜、篡改或多余内容的锁不能猜测删除。SIGINT/SIGTERM 释放锁时须 token、PID、hostname、锁目录/owner inode 和 owner SHA 仍属于本进程，持锁者或锁内容变化则拒绝删除；不得手工删除旧死锁。
-
-单篇历史分析另有范围很窄、不能序列化的恢复权限：只在已有封存分析任务和来源的当前单篇上下文中，处理超过 24 小时、hostname 已改变、严格保持旧 `0755/0644` 四字段格式的论文锁。回收逐次检查目录及 owner 的 inode、SHA、mtime、硬链接、符号链接、额外项及 reclaim marker，事件原子保存到该篇 execution 目录并绑定 paper/run/source SHA。先按锁 inode 与 owner SHA 追加不可变 intent，回收后再追加 completion；后者保存中断时，下一次同来源任务只有在公共锁快照证明原 owner 已离开规范路径后才补写记录，不能覆盖旧事件或猜测仍存在的 owner 已回收。近期旧锁、当前 `0700/0600` 锁和普通论文分析调用均无此权限。
-
-`history:local-crawl-batch` 是 `history:archive-crawl-batch` 的别名，两者在 `package.json` 里各有一个入口，调用同一个已停用的实现。它们和 `history:conference-crawl-batch` 都已停用并拒绝写入，不启用旧本地/会议爬虫的特殊锁恢复能力。通用 crosswalk CLI 也不能猜测删除远程、活 PID、权限不明、空或畸形锁；前述按有效期限检查的锁恢复和特殊单篇权限不能扩大到这些调用。
-
-## 旧私有发布文件
-
-旧 `history:publication` 仅支持 plan/generate，保存计划及私有文件，不写博客，不执行审查、提交或推送。它不能代替当前 `history:direct-publication`：
-
-```bash
-npm run history:publication -- plan --dry-run --plan-id UUID \
-  --page-staging-runs UUID[,UUID...] --daily-aggregates UUID@YYYY-MM-DD[,UUID@YYYY-MM-DD...]
-npm run history:publication -- plan --apply --plan-id UUID \
-  --page-staging-runs UUID[,UUID...] --daily-aggregates UUID@YYYY-MM-DD[,UUID@YYYY-MM-DD...]
-npm run history:publication -- generate --apply --plan-id UUID --batch-id daily-YYYY-MM-DD
-```
-
-plan/generate 核验 `selectedBindings`、crosswalk/inventory、封存分析来源、当前标签注册表及确定性每日汇总。plan 固定干净 `main`、HEAD/tree、远端身份及 OID、Hugo 配置、逐路径 Git/工作树基线及创建、替换、保留原样（`create/replace/unchanged`）操作；未知资产只允许目标不存在或已有完全同 SHA。generate 再核生成文件及前序批次完整 manifest，独占写入 `data/runtime/historical-publications/`，保存 manifest 前再次检查基线一致性及私有文件集合。
-
-`oldGeneratedTextIncluded:false` 表示旧正文不进入创作或新生成的页面，事务仍会短暂读取旧 Git/工作树字节计算基线 SHA。旧入口不支持会议汇总，非空会议引用（`conference refs`）被拒绝；这项限制不适用于当前独立历史发布。私有文件完整不等于已允许改写博客或已发布。
-
-当前历史发布按相对路径与最终内容 SHA 复用逐页通过记录；模型、代码、Hugo、审查协议或生成清单元数据变化仍须重做当前批次检查并生成新的审查凭证。只有内容 SHA 改变才重审页面，基线及远端校验不放宽。完整发布与上线验收见[历史发布说明](history-direct-publication.md)。
+锁恢复仍检查完整 owner、PID、主机、有效期、inode 与 SHA；活 PID、新鲜或畸形锁不自动删除。特定远主机旧四字段论文锁回收仅在已核验的同篇直接来源运行内开放，事件绑定 paper/run/source 并保留不可变审计，不向普通分析或来源维护推广。

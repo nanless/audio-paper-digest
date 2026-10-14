@@ -132,7 +132,8 @@ test('实际旧候选实现迁移仍请求受限术语补丁，不因少于四�
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const directory = path.join(root, 'reader-attempts');
     const paperId = '2609.99963';
-    const paper = { arxivId: paperId, title: '术语组合原付费稿迁移' };
+    const paper = { arxivId: paperId, title: '术语组合原付费稿迁移',
+        apiReaderResources: structuredClone(sample.paper.apiReaderResources) };
     const sourceDetails = { ...sample.sourceDetails, paperId: `arxiv:${paperId}`, source: 'html', sourceId: paperId };
     const scope = { paperId: `arxiv:${paperId}`, runId: crypto.randomUUID(), route: 'arxiv-fresh-fetch', sourceDetails,
         sourceSha256: repair.shaText(sourceDetails.text), structuredArtifactsSha256: sourceDetails.structuredArtifacts.payloadSha256,

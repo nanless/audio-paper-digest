@@ -7,13 +7,9 @@ const assert = require('node:assert/strict');
 const scriptPath = path.resolve(__dirname, '../run-daily-digest.sh');
 const source = fs.readFileSync(scriptPath, 'utf8');
 
-test('默认论文速递脚本保留 API、显式 Manual、博客三阶段和视觉阶段顺序', () => {
+test('日更只保留 API、博客三阶段和视觉阶段顺序', () => {
     const expected = [
         'node scripts/full-fetch.js --date "$target_date"',
-        'npm run manual:tasks -- init --date "$target_date"',
-        'npm run manual:records -- --date "$target_date"',
-        'npm run manual:spec -- --date "$target_date" --records "$records_v4"',
-        'npm run manual:analyze -- --date "$target_date" --spec "$spec_v6"',
         'bash scripts/python-runtime.sh scripts/generate-blog.py --date "$target_date"',
         'bash scripts/python-runtime.sh scripts/review-blog.py --date "$target_date"',
         'bash scripts/python-runtime.sh scripts/push-blog.py --date "$target_date" --require-visual-plan',
@@ -39,8 +35,8 @@ test('默认论文速递脚本不调用图像 API，并明确要求 Codex 继续
 test('默认论文速递脚本要求显式日期并支持从 review 续跑', () => {
     assert.match(source, /\^\[0-9\]\{4\}-\[0-9\]\{2\}-\[0-9\]\{2\}\$/);
     assert.match(source, /review\) start_index=6/);
-    assert.match(source, /--from fetch\|tasks\|spec\|analyze\|generate\|review\|push\|visual/);
-    assert.match(source, /--api\|--manual/);
+    assert.match(source, /--from fetch\|generate\|review\|push\|visual/);
+    assert.match(source, /\[--api\]/);
     assert.match(source, /PD_DAILY_API_MODE:-1/);
 });
 
@@ -49,37 +45,20 @@ test('默认论文速递脚本校验真实公历日期，且新抓取只能绑�
     assert.match(source, /10#\$year % 400/);
     assert.match(source, /TZ=Asia\/Shanghai date \+%Y-%m-%d/);
     assert.match(source, /抓取阶段只允许北京时间当天/);
-    assert.match(source, /历史批次只能使用 --from tasks\|spec\|analyze\|generate\|review\|push\|visual/);
+    assert.match(source, /历史批次只能使用 --from generate\|review\|push\|visual/);
 });
 
-test('显式 Manual 入口声明 records v4/spec v6，但不自动创建子任务', () => {
-    assert.match(source, /data\/current\/manual-v6\/\$\{target_date\}/);
-    assert.match(source, /records-v4\.json/);
-    assert.match(source, /生成正式 spec v6 并写入正式分析结果（canonical）/);
-    assert.match(source, /不会自动创建子任务、准备单篇任务材料，也不会汇总生成 records-v4\.json/);
-    assert.match(source, /逐篇创建 gpt-6\.1-sol\/high 单篇助手/);
-    assert.doesNotMatch(source, /每篇由独立 paper subagent 写 records v3/);
-    assert.doesNotMatch(source, /manual-v6-shadow\/\$\{target_date\}/);
-});
-
-test('默认 Manual 命令使用正式 v6，旧 v5 和隔离运行命令须显式指定', () => {
+test('三流程不再暴露整批 Manual、旧拆分分析和渠道发布入口', () => {
     const scripts = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../package.json'), 'utf8')).scripts;
     assert.equal(scripts['digest:prepare'], 'PD_DAILY_API_MODE=1 node scripts/workspace-role.js exec daily -- bash run-daily-digest.sh');
-    assert.equal(scripts['digest:api'], 'PD_DAILY_API_MODE=1 node scripts/workspace-role.js exec daily -- bash run-daily-digest.sh');
-    assert.equal(scripts['digest:manual'], 'PD_DAILY_API_MODE=0 node scripts/workspace-role.js exec daily -- bash run-daily-digest.sh');
-    assert.equal(scripts['manual:spec'], 'node manual/scripts/create-manual-analysis-spec-v6.js --production');
-    assert.equal(scripts['manual:analyze'], 'node manual/scripts/manual-deep-analysis.js --v6-production');
-    assert.equal(scripts['manual:packet'], 'node manual/scripts/manual-v6-production-packet.js');
-    assert.equal(scripts['manual:records'], 'node manual/scripts/manual-v6-production-records.js');
-    assert.equal(scripts['manual:work-queue'], 'node manual/scripts/manual-v6-task-runner.js status');
-    assert.equal(scripts['manual:v5:spec'], 'node manual/scripts/create-manual-analysis-spec.js');
-    assert.equal(scripts['manual:v5:analyze'], 'node manual/scripts/manual-deep-analysis.js');
-    assert.equal(scripts['manual:v6:shadow:spec'], 'node manual/scripts/create-manual-analysis-spec-v6.js --shadow');
-    assert.equal(scripts['manual:v6:shadow:analyze'], 'node manual/scripts/manual-deep-analysis.js --v6-shadow');
-    assert.equal(scripts['manual:template'], undefined);
-    assert.equal(scripts['manual:record-validate'], undefined);
-    assert.equal(scripts['manual:tutorial-preview'], undefined);
-    assert.equal(scripts['manual:author-packet'], undefined);
+    assert.equal(scripts['digest:api'], scripts['digest:prepare']);
+    assert(scripts['conference:process']);
+    assert(scripts['history:run']);
+    assert(scripts['history:resume']);
+    assert(scripts['blog:manual-review']);
+    for (const name of ['digest:manual', 'conference:analyze', 'conference:execution', 'conference:postprocess',
+        'history:arxiv-analyze', 'history:analyze-batch', 'wechat', 'xiaohongshu', 'visual:render:debug']) assert.equal(scripts[name], undefined, name);
+    assert(!Object.keys(scripts).some(name => name.startsWith('manual:') || name.startsWith('conference:new:')));
 });
 
 test('默认论文速递脚本在启动业务阶段前实际拒绝非法日期与历史抓取', () => {
@@ -131,30 +110,12 @@ test('push 续跑只由 push 规划一次，visual 续跑才直接调用独立�
     assert.doesNotMatch(commands, /push-blog\.py/);
 });
 
-test('tasks 续跑只调用任务初始化与状态命令，并以退出码 3 停止', () => {
-    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'daily-digest-tasks-'));
-    const logPath = path.join(dir, 'commands.log');
-    const fake = path.join(dir, 'npm');
-    fs.writeFileSync(fake, `#!/bin/sh\nprintf '%s %s\\n' 'npm' "$*" >> '${logPath}'\n`);
-    fs.chmodSync(fake, 0o755);
-    const env = { ...process.env, PATH: `${dir}:${process.env.PATH || ''}`, PD_DAILY_API_MODE: '0' };
-    const result = spawnSync('bash', [scriptPath, '2026-07-13', '--from', 'tasks'], {
-        cwd: path.dirname(scriptPath), env, encoding: 'utf8'
-    });
-    assert.equal(result.status, 3, result.stderr);
-    const commands = fs.readFileSync(logPath, 'utf8');
-    assert.match(commands, /npm run manual:tasks -- init --date 2026-07-13/);
-    assert.match(commands, /npm run manual:tasks -- status --date 2026-07-13/);
-    assert.match(result.stdout, /不会自动创建子任务、准备单篇任务材料，也不会汇总生成 records-v4\.json/);
-    assert.doesNotMatch(commands, /manual:spec|manual:analyze|generate-blog/);
-    fs.rmSync(dir, { recursive: true, force: true });
-});
-
-test('默认 API 模式拒绝 Manual v6 专属 tasks/spec/analyze 续跑阶段', () => {
-    const env = { ...process.env };
-    const result = spawnSync('bash', [scriptPath, '2026-07-13', '--api', '--from', 'spec'], {
-        cwd: path.dirname(scriptPath), env, encoding: 'utf8'
-    });
-    assert.equal(result.status, 2);
-    assert.match(result.stderr, /默认 LLM\/API 模式不使用 Manual v6 的 tasks\/spec\/analyze/);
+test('已退役 Manual 和旧写作阶段在业务调用前被拒绝', () => {
+    for (const args of [['2026-07-13', '--manual', '--from', 'generate'],
+        ['2026-07-13', '--api', '--from', 'spec'], ['2026-07-13', '--from', 'tasks']]) {
+        const result = spawnSync('bash', [scriptPath, ...args], { cwd: path.dirname(scriptPath), env: process.env, encoding: 'utf8' });
+        assert.equal(result.status, 2);
+        assert.match(result.stderr, /已退役|未知阶段/);
+        assert.doesNotMatch(result.stdout, /论文速递阶段:/);
+    }
 });

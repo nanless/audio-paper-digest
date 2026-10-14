@@ -1327,3 +1327,18 @@ it('同分句远距单结果提升仍须有单位', () => {
         assert.deepEqual(findMissingComparisonUnits(`准确率有所提升，网络层数${verb}6。`), []);
     }
 });
+
+
+it('词表整数范围属于实验设置，错误率和裸比分仍须完整单位', () => {
+    const find = require('../scripts/editorial-quality').findMissingComparisonUnits;
+    for (const text of ['词错误率不可比，词表范围从 43 到 10,288 个词元。',
+        '词错误率不可比，词表范围从 43 到 10288 个词元。',
+        'FFHQ64 对四分之三样本做遮蔽。', '64 对四分之三样本做遮蔽。']) {
+        assert.equal(find(text).length, 0, text);
+    }
+    for (const text of ['WER 从 43 到 10,288 降低。',
+        '词表范围从 43 到 10,288 个词元，WER 从 43 到 10,288 降低。',
+        'WER 从 1000000 到 999999 降低。', '64 对四分', '准确率 64 对 4 分']) {
+        assert.ok(find(text).length > 0, text);
+    }
+});

@@ -5,11 +5,21 @@ const {fixture,sign}=require('./reader-signed-draft-fixture.js');
 const runner=require('../scripts/lib/fresh-rewrite-run.js');
 const engine=require('../scripts/analysis-engine.js');
 const repair=require('../scripts/lib/reader-repair.js');
+const Config=require('../scripts/config.js');
+const fresh=require('../scripts/lib/fresh-analysis-context.js');
 const {reconstructReaderDraftFromVerifiedArticle}=require('../scripts/lib/reader-signed-draft.js');
 const {prepareReaderOperatorPatchResult,applyReaderOperatorPatch,acceptReaderOperatorFactReview}=require('../scripts/lib/reader-signed-operator.js');
 
 function setup(t, options={}) {
-    const f=fixture({noFigures:options.noFigures!==false});
+    const f=fixture({noFigures:options.noFigures!==false,
+        sourceText:'The source reports a controlled measurement of 1.0 under the same protocol. '.repeat(100)});
+    f.paper.title='Signed operator controlled source';
+    f.paper.abstract='Original metadata for the controlled source.';
+    Object.assign(f.sourceDetails,{source:'html',sourceId:f.paper.arxivId});
+    const {freshSourceDescriptor,...snapshot}=f.sourceDetails;
+    freshSourceDescriptor.sourceSnapshotSha256=runner.sha256(JSON.stringify(snapshot));
+    f.paper.freshRewriteProvenance.sourceSnapshotSha256=freshSourceDescriptor.sourceSnapshotSha256;
+    f.paper.analysisManifest.freshRewriteProvenance=structuredClone(f.paper.freshRewriteProvenance);
     const stage=f.paper.analysisManifest.stages.apiReaderArticle;
     Object.assign(stage,{attempts:6,fullAttempts:2,transportFailures:3,promptTemplateSha256:'e'.repeat(64),
         temperature:1,apiUsageHistory:[{requests:4,totalTokens:12345}]});sign(f.paper);
@@ -21,15 +31,35 @@ function setup(t, options={}) {
         parentArticleSha256:f.paper.apiReaderArticleSha256,parentPlanSha256:f.paper.apiReaderPlanSha256,
         sourceSha256:f.paper.sourceSha256,reason:'按原文补充已审查的实验条件边界。',patch};
     const rootDir=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'signed-operator-'));
-    t.after(()=>fs.rmSync(rootDir,{recursive:true,force:true}));
+    const previousRoot=Config.FILES.freshRewriteRunsDir;
+    Config.FILES.freshRewriteRunsDir=rootDir;
+    t.after(()=>{Config.FILES.freshRewriteRunsDir=previousRoot;fs.rmSync(rootDir,{recursive:true,force:true});});
     const runDir=path.join(rootDir,f.runId);fs.mkdirSync(path.join(runDir,'patches'),{recursive:true,mode:0o700});
-    const run={runId:f.runId,status:'complete',identitySha256:'a'.repeat(64),paperIds:[f.paper.arxivId],
+    const other={arxivId:'2609.99999',title:'Other controlled paper',abstract:'Untouched original abstract.',
+        opaqueBudget:{attempts:9,keep:'other paper untouched'}};
+    const papers=[f.paper,other];
+    const inputs={contract:runner.INPUT_CONTRACT,runId:f.runId,date:'2026-09-06',papers:papers.map(runner.metadataOnly)};
+    const inputBytes=JSON.stringify(inputs);
+    const run={version:1,contract:runner.RUN_CONTRACT,date:inputs.date,runId:f.runId,status:'complete',
+        inputsSha256:runner.sha256(inputBytes),paperIds:papers.map(p=>p.arxivId).sort(),
+        paperSetSha256:runner.stableHash(papers.map(p=>p.arxivId).sort()),
         sourceExpectations:{[f.paper.arxivId]:{sourceSha256:f.paper.sourceSha256,
-            structuredArtifactsSha256:f.sourceDetails.structuredArtifacts.payloadSha256}}};
-    const other={arxivId:'2609.99999',opaqueBudget:{attempts:9,keep:'other paper untouched'}};
-    const analysis={status:'complete',generation:7,papers:[f.paper,other]};
+            structuredArtifactsSha256:f.sourceDetails.structuredArtifacts.payloadSha256},
+            [other.arxivId]:{sourceSha256:'a'.repeat(64),structuredArtifactsSha256:'b'.repeat(64)}}};
+    run.identitySha256=runner.stableHash({version:run.version,contract:run.contract,runId:run.runId,date:run.date,
+        paperIds:run.paperIds,paperSetSha256:run.paperSetSha256,inputsSha256:run.inputsSha256,
+        baseline:run.baseline,sourceExpectations:run.sourceExpectations,metadataSources:run.metadataSources});
+    const analysis={contract:runner.ANALYSIS_CONTRACT,runId:f.runId,batchDate:run.date,
+        status:'complete',generation:7,papers};
     fs.writeFileSync(path.join(runDir,'analysis.json'),JSON.stringify(analysis),{mode:0o600});
     fs.writeFileSync(path.join(runDir,'run.json'),JSON.stringify(run),{mode:0o600});
+    fs.writeFileSync(path.join(runDir,'inputs.json'),inputBytes,{mode:0o600});
+    const sourceDir=path.join(runDir,'sources',f.paper.arxivId);
+    fs.mkdirSync(sourceDir,{recursive:true,mode:0o700});
+    for(const [filename,bytes] of Object.entries({'source.json':JSON.stringify(freshSourceDescriptor),
+        'source-details.json':JSON.stringify(snapshot),'source.txt':snapshot.text,
+        'artifacts.json':JSON.stringify(snapshot.structuredArtifacts)}))
+        fs.writeFileSync(path.join(sourceDir,filename),bytes,{mode:0o600});
     const patchFile=path.join(runDir,'patches','reviewed.json');
     const writeRequest=()=>fs.writeFileSync(patchFile,JSON.stringify(request),{mode:0o600});writeRequest();
     const read=name=>JSON.parse(fs.readFileSync(path.join(runDir,name+'.json')));
@@ -45,7 +75,10 @@ function setup(t, options={}) {
         {loaded:reload(),patchFile:'reviewed.json'},{...deps,...hooks}));
     const accept=(request,hooks)=>engine.withFileLock(path.join(runDir,'.operation'),()=>acceptReaderOperatorFactReview(
         {loaded:reload(),request},{...deps,isSuccessfulAnalysisRecord:()=>true,...hooks}));
-    return {...f,request,run,rootDir,runDir,other,patchFile,writeRequest,read,reload,apply,accept};
+    const withSource=callback=>fresh.withFreshAnalysisContext({runDir,runId:f.runId,
+        sourceExpectations:run.sourceExpectations},callback);
+    const valid=paper=>withSource(()=>engine.hasValidApiReaderV3Records(paper));
+    return {...f,request,run,rootDir,runDir,sourceDir,other,patchFile,writeRequest,read,reload,apply,accept,withSource,valid};
 }
 
 test('真实解析器和共用保存核验会写入人工来源、保留 API 出处，并要求事实复核，全程不抓取',async t=>{
@@ -53,7 +86,8 @@ test('真实解析器和共用保存核验会写入人工来源、保留 API 出
     global.fetch=async()=>{calls++;throw new Error('no network is authorized');};t.after(()=>{global.fetch=oldFetch;});
     const result=await f.apply();assert.equal(result.status,'fact_review_pending');assert.equal(calls,0);
     const analysis=f.read('analysis'),paper=analysis.papers[0],stage=paper.analysisManifest.stages.apiReaderArticle;
-    assert.equal(engine.hasValidApiReaderV3Records(paper),true);assert.equal(JSON.stringify(f.paper),parent);
+    assert.equal(engine.hasValidApiReaderV3Records(paper),false,'新合同的冷态对象不能代替真实来源能力');
+    assert.equal(f.valid(paper),true);assert.equal(JSON.stringify(f.paper),parent);
     assert.equal(stage.executionKind,'operator');assert.equal(stage.model,'operator-local');
     assert.equal(stage.promptTemplateSha256,undefined);assert.equal(stage.temperature,undefined);
     assert.deepEqual(stage.originApiStage,f.paper.analysisManifest.stages.apiReaderArticle);
@@ -96,7 +130,7 @@ test('当前实现 SHA 不同时，归档的人工输出原样恢复', async t =
         const output = JSON.parse(outputBytes), intent = JSON.parse(intentBytes);
         assert.equal(runner.stableHash(output), intent.outputSha256);
         assert.equal(output.paperSha256, runner.stableHash(output.paper));
-        assert.equal(engine.hasValidApiReaderV3Records(output.paper), true);
+        assert.equal(f.valid(output.paper), true);
         assert.equal(f.read('analysis').status, 'complete');
         assert.equal(f.read('run').status, 'complete');
 
@@ -120,7 +154,7 @@ test('当前实现 SHA 不同时，归档的人工输出原样恢复', async t =
             assert.equal(result.newApiRequests, 0);
             assert.equal(result.paperSha256, output.paperSha256);
             assert.equal(runner.stableHash(f.read('analysis').papers[0]), output.paperSha256);
-            assert.equal(engine.hasValidApiReaderV3Records(f.read('analysis').papers[0]), true);
+            assert.equal(f.valid(f.read('analysis').papers[0]), true);
             assert.equal(f.read('run').analysisSha256, runner.readRegularJson(path.join(f.runDir, 'analysis.json')).sha256);
             assert.deepEqual(fs.readFileSync(outputPath), outputBytes);
             assert.deepEqual(fs.readFileSync(path.join(archive, 'intent.json')), intentBytes);
@@ -186,7 +220,7 @@ test('只有意图没有输出的人工记录只拒绝变化过的输出 SHA，�
             assert.equal(candidate.provenance.patchFileSha256, patchSha256);
             assert.equal(candidate.provenance.sourceSnapshotSha256, f.sourceDetails.freshSourceDescriptor.sourceSnapshotSha256);
             assert.equal(candidate.provenance.appliedAt, intent.appliedAt);
-            assert.equal(engine.hasValidApiReaderV3Records(candidate.paper), true);
+            assert.equal(f.valid(candidate.paper), true);
             assert.notEqual(runner.stableHash(candidate), intent.outputSha256);
             await assert.rejects(f.apply(), { message: 'Signed operator durable output drift' });
             for (const [filename, bytes] of originalFiles) assert.deepEqual(fs.readFileSync(filename), bytes);
@@ -201,7 +235,7 @@ test('只有意图没有输出的人工记录只拒绝变化过的输出 SHA，�
         assert.equal(result.newApiRequests, 0);
         assert.equal(runner.stableHash(restoredOutput), intent.outputSha256);
         assert.equal(restoredOutput.provenance.implementationIdentity['reader-signed-operator.js'], runner.sha256(originalBytes));
-        assert.equal(engine.hasValidApiReaderV3Records(f.read('analysis').papers[0]), true);
+        assert.equal(f.valid(f.read('analysis').papers[0]), true);
         assert.equal(f.read('run').analysisSha256, runner.readRegularJson(path.join(f.runDir, 'analysis.json')).sha256);
         for (const filename of paths.slice(2)) assert.deepEqual(fs.readFileSync(filename), originalFiles.get(filename));
         assert.equal(fetchCalls, 0);
@@ -263,6 +297,31 @@ test('已签名补丁命令行要求显式参数，拒绝其他阶段的标志�
     assert.throws(()=>runner.parseRewriteArgs(['signed-patch','--run-id',id,'--patch','../reviewed.json']));
 });
 
+test('新合同必须重读物理Source，篡改、缺失与FIFO在模型和归档前拒绝',async t=>{
+    let requests=0,finalizations=0;
+    t.mock.method(require('../scripts/utils.js'),'requestLlmJson',async()=>{
+        requests++;throw new Error('source failure must not call a model');
+    });
+    t.mock.method(require('../scripts/deep-analyzer.js'),'finalizeOperatorApiReaderArticleFromSource',async()=>{
+        finalizations++;throw new Error('source failure must precede finalization');
+    });
+    for(const kind of ['tamper','missing','fifo']) {
+        const f=setup(t);
+        const before=fs.readFileSync(path.join(f.runDir,'analysis.json'));
+        if(kind==='tamper')fs.appendFileSync(path.join(f.sourceDir,'source.txt'),'changed physical source');
+        if(kind==='missing')fs.unlinkSync(path.join(f.sourceDir,'source-details.json'));
+        if(kind==='fifo') {
+            const filename=path.join(f.sourceDir,'source-details.json');
+            fs.unlinkSync(filename);
+            require('node:child_process').execFileSync('mkfifo',[filename]);
+        }
+        await assert.rejects(f.apply(),/SHA|来源|source|ENOENT|ordinary|普通|格式/);
+        assert.deepEqual(fs.readFileSync(path.join(f.runDir,'analysis.json')),before);
+        assert.equal(fs.existsSync(path.join(f.runDir,'patches','signed-operator-archive')),false);
+    }
+    assert.equal(requests,0);assert.equal(finalizations,0);
+});
+
 function reportRequest(f) {
     const paper=f.read('analysis').papers[0];
     const request={runId:f.runId,paperId:paper.arxivId,parentPaperSha256:runner.stableHash(paper),
@@ -277,7 +336,8 @@ function reportRequest(f) {
 
 test('显式绑定 SHA 的独立事实验收恢复为完成，并保留文章、计划和 API 出处',async t=>{
     const f=setup(t);await f.apply();const request=reportRequest(f),before=f.read('analysis').papers[0];
-    const result=await f.accept(request),after=f.read('analysis').papers[0];
+    const result=await f.accept(request,{isSuccessfulAnalysisRecord:paper=>paper.arxivId===f.paper.arxivId
+        ? engine.hasValidApiReaderV3Records(paper) : true}),after=f.read('analysis').papers[0];
     assert.equal(result.status,'complete');assert.equal(after.readerFactReview.status,'complete');
     assert.equal(after.apiReaderArticle,before.apiReaderArticle);assert.deepEqual(after.apiReaderPlan,before.apiReaderPlan);
     assert.deepEqual(after.analysisManifest,before.analysisManifest);

@@ -34,14 +34,7 @@ fs.closeSync = function (descriptor) {
 let error;
 try {
     if (target === 'publication') {
-        require(path.join(projectRoot, 'scripts/lib/historical-publication')).readRegular(filename);
-    } else if (target === 'page') {
-        require(path.join(projectRoot, 'scripts/lib/historical-page-staging')).readRegular(filename, 1024, '测试文件');
-    } else if (target === 'daily') {
-        require(path.join(projectRoot, 'scripts/lib/historical-daily-aggregate')).loadCompletedPageStaging({
-            stagingRoot: directory,
-            stagingRunId: '11111111-1111-4111-8111-111111111111'
-        });
+        require(path.join(projectRoot, 'scripts/lib/publication-file-primitives')).readRegular(filename);
     } else {
         require(path.join(projectRoot, 'scripts/lib/historical-direct-page-staging')).stageDirectPages({
             directory,
@@ -70,8 +63,6 @@ test('历史读取入口拒绝检查后被替换的无写入方 FIFO，保留原
     t.after(() => fs.rmSync(temporary, { recursive: true, force: true }));
     const readers = [
         ['publication', '历史发布来源文件读取'],
-        ['page', '历史页面生成文件读取'],
-        ['daily', '历史每日汇总的已完成清单读取'],
         ['direct', '直接来源历史页面的已保存清单读取']
     ];
     for (const [target, title] of readers) {
@@ -106,17 +97,11 @@ test('历史普通文件保留 0644 权限与原字节，只有显式许可才�
     const filename = path.join(directory, 'record.json');
     const bytes = Buffer.from('{"value":"未改"}');
     fs.writeFileSync(filename, bytes, { mode: 0o644 });
-    const publication = require('../scripts/lib/historical-publication');
-    const page = require('../scripts/lib/historical-page-staging');
+    const publication = require('../scripts/lib/publication-file-primitives');
     assert.deepEqual(publication.readRegular(filename).bytes, bytes);
-    assert.deepEqual(page.readRegular(filename, 1024, '测试文件').bytes, bytes);
     fs.linkSync(filename, path.join(directory, 'record-link.json'));
     assert.throws(() => publication.readRegular(filename), /不安全/);
-    assert.throws(() => page.readRegular(filename, 1024, '测试文件'), /不安全/);
     assert.deepEqual(publication.readRegular(filename, 1024, { allowPendingLink: true }).bytes, bytes);
-    const pending = page.readRegular(filename, 1024, '测试文件', true);
-    assert.deepEqual(pending.bytes, bytes);
-    assert.equal(pending.pendingLink, true);
     assert.equal(fs.lstatSync(filename).mode & 0o777, 0o644);
     assert.deepEqual(fs.readFileSync(filename), bytes);
 });

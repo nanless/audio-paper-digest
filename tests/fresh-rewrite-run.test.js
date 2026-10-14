@@ -581,7 +581,7 @@ test('符号链接逃出运行目录或文件，以及在沙箱内启动，都�
     const saved = path.join(prepared.runDir, 'inputs.saved.json');
     fs.renameSync(inputs, saved); fs.symlinkSync(saved, inputs);
     assert.throws(() => runner.rewriteStatus({ runId: RUN_ID }, f.deps), /ELOOP|symbolic/i);
-    const child = spawnSync(process.execPath, [path.resolve(__dirname, '../scripts/rewrite-from-source.js'), 'status', '--run-id', RUN_ID],
+    const child = spawnSync(process.execPath, [path.resolve(__dirname, '../scripts/history-resume.js'), 'status', '--run-id', RUN_ID],
         { env: { ...process.env, CODEX_SANDBOX: 'fixture-sandbox' }, encoding: 'utf8' });
     assert.notEqual(child.status, 0); assert.match(child.stderr, /必须在沙箱外运行/);
 });

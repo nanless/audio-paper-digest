@@ -40,7 +40,7 @@ const deep = require('../scripts/deep-analyzer');
 const engine = require('../scripts/analysis-engine');
 const policy = require('../scripts/lib/selected-full-stage-reanalysis');
 const { validAnalysisPaper } = require('./valid-analysis-fixture');
-async function createSample(t, { fullSource = true, quantitativeSource = false } = {}) {
+async function createSample(t, { fullSource = true, quantitativeSource = false, alreadyCorrected = false } = {}) {
     const root = fs.mkdtempSync(
         path.join(fs.realpathSync(os.tmpdir()), 'reviewed-reader-seed-'),
     );
@@ -167,7 +167,8 @@ async function createSample(t, { fullSource = true, quantitativeSource = false }
         primaryFeedback: '保留已经纠正的主文，只按原证据解释。',
         coreFeedback: '',
         readerFeedback: '只修本次明确的读者文章问题。',
-        rejectedPrimaryClaims: ['本文解决噪声语音输入到文字输出时声学线索受损的问题，难点是局部干扰与长程语义错误会彼此放大。'],
+        rejectedPrimaryClaims: alreadyCorrected ? ['本测试已纠正且不再出现的旧主文断言']
+            : ['本文解决噪声语音输入到文字输出时声学线索受损的问题，难点是局部干扰与长程语义错误会彼此放大。'],
         rejectedCoreClaims: [],
         rejectedReaderClaims: ['已纠正的旧Reader错误'],
         sourceQuotes: [source.text.slice(0, 100)],
@@ -317,7 +318,7 @@ test('指定论文公共重分析入口保存首请求失败及原账，未选�
 });
 
 test('签名完整成功样本退出作用域仍合格，同run公共再次进入零模型请求且不改两篇记录', async t => {
-    const sample = await createSample(t, { fullSource: false });
+    const sample = await createSample(t, { fullSource: false, alreadyCorrected: true });
     sample.paper.analysisManifest.version = 1;
     sample.paper.analysisManifest.stages.openSourceScan.status = 'complete';
     assert.equal(engine.getIncompleteAnalysisContentReason(sample.paper), null);
@@ -329,8 +330,10 @@ test('签名完整成功样本退出作用域仍合格，同run公共再次进�
         completed.fullStageReanalysisHistory = prepared.fullStageReanalysisHistory;
         // 使用既有签名正文验证完成资格与入口跳过，不声称测试模型生成了这篇正文。
         fresh.withFreshPaperContext(completed, () => {
-            for (const name of ['primaryAnalysis', 'scoringAudit', 'apiReaderArticle']) {
-                deep.markRecoveryStage(completed.analysisManifest, name, 'complete', completed.analysisManifest.stages[name]);
+            for (const name of ['primaryAnalysis', 'coreSummaryRepair', 'scoringAudit', 'apiReaderArticle']) {
+                deep.markRecoveryStage(completed.analysisManifest, name, 'complete', {
+                    ...completed.analysisManifest.stages[name], ...facts.fingerprintFields(name, completed.analysisManifest.stages[name])
+                });
             }
         });
     })));
@@ -632,7 +635,19 @@ test('Reader双包保留原主文proof，仅Reader使用新约束并拒绝混合
 });
 
 test('正常selected未完成Reader双包通过同fullrun身份并保存真实新Readerproof', async t => {
-    const sample = await createSample(t, { quantitativeSource: true });
+    const sample = await createSample(t, { quantitativeSource: true, alreadyCorrected: true });
+    // 当前真实 Reader 输入必须绑定扩展后的封存原文；该原文没有资源链接。
+    // 不补签旧主文、作者、表格或新的资源宣称协议。
+    const resourceIdentity = { contract: 'api-reader-resource-identity-v1',
+        sourceTextSha256: facts.sha(sample.source.text), resources: [] };
+    const identitySha256 = daily.stableHash(resourceIdentity);
+    sample.paper.apiReaderResources = { ...resourceIdentity, identitySha256 };
+    Object.assign(sample.paper.analysisManifest.stages.openSourceScan, {
+        resourceEvidenceContract: resourceIdentity.contract, resourceEvidenceSha256: identitySha256 });
+    Object.assign(sample.paper.analysisManifest.stages.apiReaderArticle, {
+        resourceIdentityContractVersion: resourceIdentity.contract, resourceIdentitySha256: identitySha256,
+        resourceCount: 0 });
+    assert.equal(sample.paper.analysisManifest.contracts.readerResourceClaims, undefined);
     let paper;
     await inScope(sample, () => engine.withPaperAnalysisLock(sample.paper, () => facts.withFactReview(sample.bound, () => {
         paper = policy.preparePaperLocked(sample.paper);
@@ -675,7 +690,9 @@ test('正常selected未完成Reader双包通过同fullrun身份并保存真实�
     const saved = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers;
     assert.deepEqual(saved[0].analysisManifest.stages.primaryAnalysis, originalPrimary);
     assert.deepEqual(saved[0].fullStageReanalysisHistory, originalHistory);
-    assert.equal(saved[0].analysisManifest.stages.apiReaderArticle.factReview.feedbackSha256, daily.stableHash(reader));
+    // 失败的新Reader证明与候选同代留档；当前完整旧Reader不可被failed阶段覆盖。
+    assert.deepEqual(saved[0].analysisManifest.stages.apiReaderArticle, paper.analysisManifest.stages.apiReaderArticle);
+    assert.equal(saved[0].apiReaderFailedBundleHistory.at(-1).stages.apiReaderArticle.factReview.feedbackSha256, daily.stableHash(reader));
     assert.deepEqual(saved[1], sample.other);
     await assert.rejects(require('../scripts/reanalyze-selected').reanalyzeSelected([sample.id], { readerFeedbackFiles: false }), /路径数组/);
 });

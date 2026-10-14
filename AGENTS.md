@@ -22,7 +22,7 @@ npm run digest:prepare -- YYYY-MM-DD
 
 这项请求已授权联网抓取、关键词预筛、LLM 筛选、多阶段全文分析与评分、面向初学研究者的 API Reader 长文、博客生成与审查、推送与远端 OID 验证、发布后图片任务和最终验收。完成 Git 发布后还须核验部署及网页。不要在分析、审查或推送后提前结束，也不要再次询问是否发布博客。
 
-只有用户明确说“Manual/人工流程”时才运行 `npm run digest:manual -- YYYY-MM-DD`。进入前完整阅读 [manual/README.md](manual/README.md)；API、网络或配额失败绝不自动切换 Manual。微信、飞书、小红书不属于默认日更。
+整批 Manual 作者、任务与 spec/records 生产链已退役，新任务仅使用日更、官方会议和历史博客更新。API、网络或配额失败保留断点并停止，不另启写作流程。用户明确授权的单篇人工修正和独立审查仍可使用受控恢复入口；`manual/` 中剩余模块只核验旧来源、签名和正文记录。微信、飞书、小红书发布已退役。
 
 ## 运行前六项检查
 
@@ -161,5 +161,5 @@ npm run digest:status -- --date YYYY-MM-DD
 - 文件编辑使用可恢复方式，保留用户无关改动；禁止未授权 `git reset --hard`、强推或批量删除。
 - 提示词文件的第一个围栏代码块是 `loadPrompt()` 实际读取的内容；修改后检查占位符、解析器、SHA 和阶段指纹。
 - 新 LLM 调用复用公共路由/请求封装；新分析入口复用 `analysis-engine.js`；新路径进入集中配置。
-- CI 运行 `npm test`、`npm run validate:data -- --allow-empty`、默认与 Manual JS/Python 检查及全仓 shell 语法检查。
+- CI 运行 `npm test`、`npm run validate:data -- --allow-empty`、三流程及旧记录兼容 JS/Python 检查及全仓 shell 语法检查。
 - 提交信息使用具体中文，说明原因、范围与影响；提交前确认 `data/`、`logs/`、`.env`、缓存和密钥未被跟踪。

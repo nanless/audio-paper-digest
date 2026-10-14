@@ -187,7 +187,7 @@ def source_descriptor(resource, arxiv_id):
         raise ValueError('内联 SVG 的封存原字节不符')
     if not raw or len(raw) > MAX_SOURCE_BYTES or re.search(r'<!DOCTYPE|<!ENTITY|<\?', text, re.I):
         raise ValueError('内联 SVG 不允许实体、处理指令或超限来源')
-    root = ET.fromstring(normalize_html_svg_entities(text))
+    root = ET.fromstring(normalize_static_html_breaks(normalize_html_svg_entities(text)))
     element_id = root.attrib.get('id')
     if root.tag.split('}')[-1] != 'svg' or not re.fullmatch(r'[A-Za-z0-9_.:-]+', str(element_id or '')):
         raise ValueError('内联 SVG 没有原文元素定位')

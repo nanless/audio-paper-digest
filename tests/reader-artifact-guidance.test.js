@@ -13,9 +13,10 @@ test('选择表被拒绝后提示由程序保留完整原表，来源和全部�
  const before = JSON.stringify(artifacts);
  const eligibility = tables.assessReaderTableSelectionEligibility(table);
  assert.equal(eligibility.eligible, false);
- assert.match(eligibility.action, /旧说明中的.*限制针对 selection/);
- assert.match(eligibility.action, /完整原表仍可按已有协议尝试 artifact_table/);
- assert.match(eligibility.action, /完整原始 matrix/);
+ assert.equal(eligibility.completeTableEligible, true);
+ assert.match(eligibility.action, /完整原DOM网格及实际显示字节通过程序检查/);
+ assert.match(eligibility.action, /使用已有 completeTable 声明/);
+ assert.match(eligibility.action, /程序按原始 DOM 坐标生成完整行列/);
  assert.match(eligibility.action, /非法 selection 子集/);
  assert.match(deep.buildApiReaderArtifactEvidence(artifacts), /完整原表仍可按已有协议尝试 artifact_table/);
  assert.throws(() => tables.renderReaderTableSelection({ tableIndex: 1, selection: {sourceTableOrdinal: table.ordinal, sourceRows: [0,1], sourceColumns: [0,1]}}, artifacts), /使用已有 completeTable 声明/);

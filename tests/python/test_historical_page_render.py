@@ -168,6 +168,10 @@ else:
             '\n\n## 标签\n#语音识别 #Transformer #低资源\n'
             '主任务标签: #语音识别\n主方法标签: #Transformer\n补充标签: #低资源'
         )
+        paper['analysisManifest']['stages']['scoringAudit']['outputAnalysisSha256'] = (
+            hashlib.sha256(paper['analysis'].encode()).hexdigest()
+        )
+        saved_paper = copy.deepcopy(paper)
         result = renderer.render_packet({
             'directStaging': True, 'paper': paper, 'cohortDate': '2026-09-04',
         })
@@ -176,8 +180,34 @@ else:
         self.assertIn('paper_digest_primary_method: "Transformer"', result['markdown'])
         self.assertIn('conference:icassp:2026:icassp-arnumber:100', result['markdown'])
         self.assertIn('## 🧭 深度解读', result['markdown'])
+        self.assertIn('## 👥 作者与机构', result['markdown'])
+        self.assertIn('Researcher A', result['markdown'])
+        self.assertIn('Institute A', result['markdown'])
+        self.assertIn('## 🔗 论文资源', result['markdown'])
+        self.assertIn('github.com', result['markdown'])
+        self.assertIn('## 📊 评分说明', result['markdown'])
+        self.assertIn('评分：**6.1/10**', result['markdown'])
         self.assertNotIn('paper_digest_arxiv_id:', result['markdown'])
-        self.assertEqual(result['assets'], [])
+        self.assertEqual(len(result['assets']), 4)
+        self.assertEqual({Path(asset['path']).name for asset in result['assets']},
+                         {'citation.json', 'citation.bib', 'citation.ris', 'rethink-context.json'})
+        citation = next(json.loads(base64.b64decode(asset['base64']))
+                        for asset in result['assets'] if asset['path'].endswith('/citation.json'))
+        self.assertEqual(citation['sourceKind'], 'conference')
+        self.assertEqual(citation['paperId'], paper['directPaperId'])
+        self.assertEqual(citation['sourceSha256'], paper['sourceSha256'])
+        self.assertEqual(citation['authors'], paper['apiReaderAuthors']['authors'])
+        self.assertEqual(citation['publicUrlAvailability'], 'unavailable')
+        self.assertIsNone(citation['recordUrl'])
+        self.assertIsNone(citation['pdfUrl'])
+        self.assertEqual(paper, saved_paper)
+        self.assertEqual(result['markdown'].count('paper_digest_primary_task:'), 1)
+        self.assertNotIn('paper_digest_arxiv_', result['markdown'])
+        paper['analysisManifest']['stages']['scoringAudit']['outputAnalysisSha256'] = '0' * 64
+        with self.assertRaisesRegex(ValueError, '评分阶段记录'):
+            renderer.render_packet({
+                'directStaging': True, 'paper': paper, 'cohortDate': '2026-09-04',
+            })
 
     def test_direct_arxiv_renderer_keeps_ephemeral_figure_evidence_without_staging_pixels(self):
         restore_environment_after(self)  # renderer.load_publish_to_blog() 会把 .env 写进 os.environ

@@ -4,22 +4,87 @@ import os
 import sys
 import tempfile
 import threading
+import concurrent.futures
+import subprocess
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_publish_xiaohongshu import publish_xiaohongshu as publisher
+from test_publish_to_blog import publish_to_blog as publisher
 import path_config
 
 
 class FileLockContentionTest(unittest.TestCase):
+    def test_separate_processes_share_the_publication_lock_and_release_it(self):
+        child = r'''
+import json,sys,time
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+from blog_entry_loader import load_publish_to_blog
+import path_config
+publisher=load_publish_to_blog()
+cache=Path(sys.argv[2]);root=cache.parent;mode=sys.argv[3]
+if mode=='owner':
+    with publisher.file_lock(cache,timeout_seconds=5):
+        (root/'owner-ready').write_text('ready')
+        deadline=time.monotonic()+5
+        while not (root/'release-owner').exists():
+            if time.monotonic()>deadline: raise TimeoutError('owner release missing')
+            time.sleep(.01)
+        publisher._atomic_write_json(cache,{'entries':{'owner':'saved'},'generation':1})
+else:
+    (root/'waiter-started').write_text('started')
+    path_config.update_json_file_locked(cache,lambda current:{
+        **current,'entries':{**current['entries'],'waiter':'saved'}})
+    (root/'waiter-done').write_text('done')
+'''
+        scripts = str(Path(__file__).resolve().parents[2] / 'scripts')
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            cache = root / 'cache.json'
+            processes = []
+            def wait_for(name):
+                deadline = time.monotonic() + 5
+                while not (root / name).exists():
+                    if time.monotonic() > deadline:
+                        self.fail(f'独立写者未达到等待点：{name}')
+                    time.sleep(.01)
+            try:
+                owner = subprocess.Popen([sys.executable, '-c', child, scripts, str(cache), 'owner'],
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                processes.append(owner)
+                wait_for('owner-ready')
+                waiter = subprocess.Popen([sys.executable, '-c', child, scripts, str(cache), 'waiter'],
+                                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                processes.append(waiter)
+                wait_for('waiter-started')
+                time.sleep(.1)
+                self.assertFalse((root / 'waiter-done').exists(), '另一进程不能绕过仍存活的发布锁')
+                self.assertFalse(cache.exists(), '持有人尚未写入时等待方不能制造缓存结果')
+                (root / 'release-owner').write_text('release')
+                for process in processes:
+                    output, error = process.communicate(timeout=5)
+                    self.assertEqual(process.returncode, 0, output + error)
+                self.assertEqual(json.loads(cache.read_text()), {
+                    'entries': {'owner': 'saved', 'waiter': 'saved'}, 'generation': 2})
+                self.assertFalse(Path(str(cache) + '.lock').exists())
+                with publisher.file_lock(cache, timeout_seconds=.1):
+                    self.assertTrue(cache.exists(), '释放后的共享发布锁应能再次获取')
+                self.assertFalse(Path(str(cache) + '.lock').exists())
+            finally:
+                for process in processes:
+                    if process.poll() is None:
+                        process.kill()
+                    process.communicate(timeout=5)
+
     def check_cache_race(self, phase):
         original_open = path_config.os.open
         original_read = path_config.os.read
         original_listdir = path_config.os.listdir
         original_write = path_config._lock_write_all
-        original_save = publisher._save_oneliner_cache_entry
+        original_save = path_config.update_json_file_locked
         ownership = threading.Lock()
         owner_thread = None
         owner_ready = threading.Event()
@@ -79,32 +144,39 @@ class FileLockContentionTest(unittest.TestCase):
                 failures.append(error)
                 raise
 
-        def generate(title, *_args):
+        def save_entry(cache, paper_id, title):
             start.wait(5)
-            return f'论文{title}第一次生成的完整亮点。'
+            def update(current):
+                current = current or {'entries': {}}
+                return {**current, 'entries': {**current['entries'], paper_id: title}}
+            return path_config.update_json_file_locked(cache, update)
 
-        papers = [(9., {'arxivId': '2607.00003', 'title': 'A', 'analysis': '旧分析'}, {}),
-                  (8., {'arxivId': '2607.00004', 'title': 'B', 'analysis': '稳定分析'}, {})]
         with tempfile.TemporaryDirectory() as temporary:
             cache = Path(temporary) / 'cache.json'
             with mock.patch.object(path_config.os, 'open', side_effect=open_owner), \
                     mock.patch.object(path_config.os, 'read', side_effect=read_owner), \
                     mock.patch.object(path_config.os, 'listdir', side_effect=list_directory), \
                     mock.patch.object(path_config, '_lock_write_all', side_effect=write_owner), \
-                    mock.patch.object(publisher, '_save_oneliner_cache_entry', side_effect=save), \
-                    mock.patch.object(publisher, 'get_oneliner_concurrency', return_value=2), \
-                    mock.patch.object(publisher, 'call_llm_for_oneliner', side_effect=generate):
-                first = publisher.generate_llm_oneliners(papers, date_str='2026-07-13', cache_path=cache)
+                    mock.patch.object(path_config, 'update_json_file_locked', side_effect=save):
+                self.assertIs(publisher.file_lock, path_config.file_lock)
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+                    pending = [executor.submit(save_entry, cache, '2607.00003', 'A'),
+                               executor.submit(save_entry, cache, '2607.00004', 'B')]
+                    for future in pending:
+                        future.result(timeout=5)
             self.assertTrue(reader_observed.is_set())
             self.assertEqual(failures, [])
             saved = json.loads(cache.read_text())
             self.assertEqual(set(saved['entries']), {'2607.00003', '2607.00004'})
-            self.assertEqual(first, {0: '论文A第一次生成的完整亮点。', 1: '论文B第一次生成的完整亮点。'})
-            papers[0][1]['analysis'] = '新分析'
-            with mock.patch.object(publisher, 'call_llm_for_oneliner', return_value='论文A分析变化后重新生成亮点。') as call:
-                result = publisher.generate_llm_oneliners(papers, date_str='2026-07-13', cache_path=cache)
-            self.assertEqual(call.call_count, 1)
-            self.assertEqual(result[1], '论文B第一次生成的完整亮点。')
+            self.assertEqual(saved['entries'], {'2607.00003': 'A', '2607.00004': 'B'})
+            self.assertEqual(saved['generation'], 2)
+            # 再次获取同一把发布共享锁，证明两个真实写者已释放它；
+            # 定向更新只改变 A，不能丢掉另一个写者已保存的 B。
+            path_config.update_json_file_locked(cache, lambda current: {
+                **current, 'entries': {**current['entries'], '2607.00003': 'A updated'}})
+            after = json.loads(cache.read_text())
+            self.assertEqual(after['entries'], {'2607.00003': 'A updated', '2607.00004': 'B'})
+            self.assertEqual(after['generation'], 3)
             self.assertFalse(Path(str(cache) + '.lock').exists())
 
     def test_owner_content_creation_does_not_lose_parallel_cache_save(self):

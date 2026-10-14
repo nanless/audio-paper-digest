@@ -312,6 +312,8 @@ function diagnoseReaderTableSource({ binding, bindingIndex, sectionIndex, render
 }
 
 function buildReaderSourceDiagnostics({ draft, sourceText, structuredArtifacts, parserError }) {
+    const capability = buildReaderSourceTableCapabilityDiagnostics({ draft, sourceText, structuredArtifacts, parserError });
+    if (capability.length) return capability;
     const message = String(parserError?.message || parserError || '');
     if (!draft || !/关键数字缺少|渲染单元格与原始 cell 不一致/.test(message)) return [];
     const bindingIndex = Number(/tableBindings\[(\d+)\]/.exec(message)?.[1]);
@@ -332,5 +334,71 @@ function buildReaderSourceDiagnostics({ draft, sourceText, structuredArtifacts, 
         failures, structuredArtifacts, sourceText });
 }
 
+// Diagnose a source capability failure before asking for another prose patch.
+// Full alternative tables and exact source slices are evidence, never grants:
+// the caller must separately authorize the binding and its containing section.
+function buildReaderSourceTableCapabilityDiagnostics({ draft, sourceText, structuredArtifacts, parserError }) {
+    if (!Array.isArray(draft?.tableBindings) || !Array.isArray(structuredArtifacts?.tables)) return [];
+    const tablesApi = require('./reader-tables');
+    const { locateReaderDraftTables } = require('./reader-draft-order');
+    const locations = locateReaderDraftTables(draft);
+    const declared = (Array.isArray(parserError?.readerIssues) ? parserError.readerIssues : [])
+        .filter(issue => issue?.code === tablesApi.READER_SOURCE_TABLE_ISSUE_CODE);
+    const indexes = new Set(declared.flatMap(issue => {
+        const match = /^\/tableBindings\/(\d+)$/.exec(String(issue?.path || ''));
+        return match ? [Number(match[1])] : [];
+    }));
+    const message = String(parserError?.message || parserError || '');
+    if (!indexes.size && /粘连复写|完整原表|source_table/.test(message)) {
+        const binding = /tableBindings\[(\d+)\]/.exec(message);
+        const visible = /(?:读者文章)?第\s*(\d+)\s*张表/.exec(message);
+        if (binding) indexes.add(Number(binding[1]));
+        else if (visible) indexes.add(Number(visible[1]) - 1);
+    }
+    const inventory = structuredArtifacts.tables;
+    const usable = inventory.filter(table => Number.isInteger(table?.ordinal)
+        && inventory.filter(other => other?.ordinal === table.ordinal).length === 1
+        && tablesApi.assessReaderCompleteTableEligibility(table).eligible);
+    return [...indexes].flatMap(bindingIndex => {
+        const binding = draft.tableBindings[bindingIndex];
+        const ordinal = binding?.completeTable?.sourceTableOrdinal ?? binding?.selection?.sourceTableOrdinal
+            ?? binding?.sourceTableOrdinal;
+        const sources = inventory.filter(table => table?.ordinal === ordinal);
+        const location = locations.find(node => node.bindingIndex === bindingIndex);
+        if (sources.length !== 1 || !location) return [];
+        const source = sources[0];
+        const eligibility = tablesApi.assessReaderCompleteTableEligibility(source);
+        if (eligibility.eligible) return [];
+        const sourceQuotes = [];
+        for (const [row, values] of (Array.isArray(source.matrix) ? source.matrix : []).entries()) {
+            if (!Array.isArray(values)) continue;
+            for (const [column, value] of values.entries()) {
+                const candidate = candidateAt(source, row, column, value, 'exact_bound_original_cell');
+                if (!candidate) continue;
+                for (const context of sourceContexts(sourceText, candidate)) {
+                    if (!sourceQuotes.some(saved => saved.quote === context.quote)) sourceQuotes.push(context);
+                }
+            }
+        }
+        const alternatives = usable.map(table => ({ sourceTableOrdinal: table.ordinal, caption: table.caption,
+            sourceDomSha256: table.sourceDomSha256, matrix: structuredClone(table.matrix),
+            cells: structuredClone(table.cells), completeTableEligibility: tablesApi.assessReaderCompleteTableEligibility(table),
+            selectionEligibility: tablesApi.assessReaderTableSelectionEligibility(table) }));
+        return [{ code: tablesApi.READER_SOURCE_TABLE_ISSUE_CODE, diagnosticOnly: true,
+            path: `/tableBindings/${bindingIndex}`, bindingPath: `/tableBindings/${bindingIndex}`,
+            sectionPath: `/sections/${location.sectionIndex}/body`, sourceTableOrdinal: ordinal,
+            sourceTableDomSha256: source.sourceDomSha256, reasonCodes: eligibility.reasonCodes,
+            sourceTableEligibility: eligibility, usableSourceTables: alternatives, sourceQuotes,
+            sourceQuoteCoverageAttested: false,
+            message: `source_table ${ordinal} 的来源显示或原格身份不允许完整表回填；`
+                + `${eligibility.reasonCodes.join(', ')}。只有同时授权 /tableBindings/${bindingIndex}`
+                + ` 与 /sections/${location.sectionIndex}/body 才可改选有完整证据的表或写 source_quotes。`
+                + '提供的原文切片与完整替代表只用于核对，尚不证明新的结果表覆盖全部数字单位与必要比较条件。'
+                + '不能只改显示正文后保留同一坏绑定，不能删结果逃检查或猜重复数字的半值。'
+                + (alternatives.length ? '完整可显示候选包含原表全部行列，是否支持同一比较问题仍需核对。'
+                    : '当前没有完整可显示的替代原表；没有完整逐字证据时保留来源障碍，不发送无效正文补丁。') }];
+    });
+}
+
 module.exports = { READER_SOURCE_DIAGNOSTICS_VERSION, describeDifference, diagnoseReaderTableSource,
-    buildReaderSourceDiagnostics, readerNumericSpellingGuidance };
+    buildReaderSourceDiagnostics, buildReaderSourceTableCapabilityDiagnostics, readerNumericSpellingGuidance };

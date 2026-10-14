@@ -59,7 +59,7 @@ function buildVerificationPlan(options, files) {
         plan.push({ group: 'Shell 语法检查', command: 'bash', args: ['-n', file] });
     }
     if (!options.quick) {
-        plan.push({ group: '默认流程与人工流程的全部 JavaScript 测试', command: 'npm', args: ['test'] });
+        plan.push({ group: '三流程与旧记录兼容的全部 JavaScript 测试', command: 'npm', args: ['test'] });
         for (const directory of ['tests/python', 'manual/tests/python']) {
             plan.push({ group: `Python 测试：${directory}`, command: 'bash', args: [
                 'scripts/python-runtime.sh', '-m', 'unittest', 'discover', '-s', directory, '-p', 'test_*.py'
@@ -108,7 +108,7 @@ function main(args = process.argv.slice(2)) {
     }
     console.log(options.quick
         ? '[verify] 快速检查（非完整验收）：仅检查 JavaScript、Python、Shell 语法与数据；不运行单元测试和 Hugo。'
-        : '[verify] 完整验证：固定版本 Hugo、全部语法、默认与人工流程的 JavaScript/Python 测试、只读数据校验。');
+        : '[verify] 完整验证：固定版本 Hugo、全部语法、三流程及旧记录兼容的 JavaScript/Python 测试、只读数据校验。');
     if (!options.quick) console.log(`[verify] ${assertPinnedHugo()}`);
     const files = collectSourceFiles();
     const plan = buildVerificationPlan(options, files);

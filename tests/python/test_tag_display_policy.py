@@ -155,6 +155,106 @@ class PresentationPolicyTests(unittest.TestCase):
         self.assertEqual(len(assets), 8)
         self.assertEqual(json.loads(assets['data/taxonomy-registry.json']), self.base)
 
+    def description_only_current(self):
+        self.prepare()
+        self.env['_PAGE_TAG_CATALOG']['registrySha256'] = 'f' * 64
+        self.env['_PAGE_TAG_CATALOG']['concepts'][0]['definition'] += ' 当前说明修正。'
+        self.env['_PAGE_TAG_CATALOG']['concepts'][0]['scopeNote'] += ' 当前范围说明。'
+        return self.call('build_tag_catalog_snapshot',
+                         snapshot_contract='paper-taxonomy-registry-snapshot-v1')
+
+    def test_historical_policy_replays_issued_base_and_keeps_current_description_separate(self):
+        current = self.description_only_current()
+        before = copy.deepcopy(self.env['_PAGE_TAG_CATALOG'])
+        assets = self.call('_legacy_tag_catalog_file_contents', self.repo)
+        self.assertEqual(json.loads(assets['data/taxonomy-registry.json']), self.preferred)
+        self.assertEqual(assets[self.policy_paths[0]], self.policy_bytes)
+        self.assertEqual(assets[self.policy_paths[1]], self.policy_bytes)
+        for prefix in ('data', 'static/data'):
+            self.assertEqual(json.loads(assets[f'{prefix}/taxonomy-snapshots/{"f" * 64}.json']), current)
+            self.assertEqual(json.loads(assets[f'{prefix}/taxonomy-snapshots/{BASE}.json']), self.base)
+        self.assertEqual(self.env['_PAGE_TAG_CATALOG'], before)
+        self.assertNotEqual(current['concepts'][0]['definition'], self.base['concepts'][0]['definition'])
+
+    def test_historical_policy_rejects_every_identity_change_and_unknown_difference(self):
+        for change in (
+            lambda c: c['concepts'][0].update(zh='另一个标签'),
+            lambda c: c['concepts'][0].update(en='Unapproved name'),
+            lambda c: c['concepts'][0].update(id='task.unapproved'),
+            lambda c: c['concepts'][0].update(facet='method'),
+            lambda c: c['concepts'][0]['ancestorIds'].append('task.unapproved'),
+            lambda c: c['concepts'][0]['aliases'].append('新增别名'),
+            lambda c: c['concepts'][0].update(status='deprecated'),
+            lambda c: c['concepts'][0].update(unknownField='unapproved'),
+            lambda c: c['concepts'][0].pop('definition'),
+            lambda c: c['concepts'].reverse(),
+            lambda c: c['concepts'].pop(),
+            lambda c: c['concepts'].append(copy.deepcopy(c['concepts'][0])),
+            lambda c: c.update(registryVersion='unapproved-version'),
+            lambda c: c.update(unknownField='unapproved'),
+        ):
+            with self.subTest(change=change):
+                current = self.description_only_current()
+                change(current)
+                with self.assertRaises(self.error):
+                    self.call('_select_tag_display_version', self.repo, current,
+                              {BASE: self.base, self.preferred['registrySha256']: self.preferred}, legacy=True)
+                self.assertEqual(list(self.stage.iterdir()), [])
+
+    def test_historical_policy_requires_both_original_base_archives_and_version_membership(self):
+        for kind in ('missing', 'wrong_bytes', 'missing_catalog_base'):
+            with self.subTest(kind=kind):
+                current = self.description_only_current()
+                if kind == 'missing':
+                    (self.repo / f'static/data/taxonomy-snapshots/{BASE}.json').unlink()
+                elif kind == 'wrong_bytes':
+                    target = self.repo / f'static/data/taxonomy-snapshots/{BASE}.json'
+                    target.write_bytes(target.read_bytes() + b' ')
+                else:
+                    catalog = json.loads((self.repo / 'static/data/taxonomy-catalog.json').read_text())
+                    catalog['snapshots'] = [self.preferred]
+                    self.put('static/data/taxonomy-catalog.json', catalog)
+                with self.assertRaises(self.error):
+                    self.call('_select_tag_display_version', self.repo, current,
+                              {BASE: self.base, self.preferred['registrySha256']: self.preferred}, legacy=True)
+                self.assertEqual(list(self.stage.iterdir()), [])
+
+    def test_historical_policy_cannot_relabel_its_base_or_edit_preferred_prefix(self):
+        current = self.description_only_current()
+        bad_base = copy.deepcopy(self.base)
+        bad_base['concepts'][0]['definition'] += ' 伪造签发说明。'
+        with self.assertRaises(self.error):
+            self.call('_select_tag_display_version', self.repo, current,
+                      {BASE: bad_base, self.preferred['registrySha256']: self.preferred}, legacy=True)
+        altered = copy.deepcopy(self.preferred)
+        altered['concepts'][0]['definition'] = current['concepts'][0]['definition']
+        self.policy['preferredSnapshotSha256'] = hashlib.sha256(self.call('tag_catalog_snapshot_bytes', altered)).hexdigest()
+        self.policy['preferredProjectionSha256'] = self.call('_historical_tag_prompt_text_sha256', altered)
+        self.policy_write(json.dumps(self.policy).encode())
+        with self.assertRaisesRegex(self.error, '只允许在原列表末尾追加概念'):
+            self.call('_select_tag_display_version', self.repo, current,
+                      {BASE: self.base, altered['registrySha256']: altered}, legacy=True)
+
+    def test_historical_base_rejects_link_aliases_and_same_sha_changed_description(self):
+        current = self.description_only_current()
+        versions = {BASE: self.base, self.preferred['registrySha256']: self.preferred}
+        same_sha = copy.deepcopy(current)
+        same_sha['registrySha256'] = BASE
+        with self.assertRaisesRegex(self.error, '同 SHA'):
+            self.call('_select_tag_display_version', self.repo, same_sha, versions, legacy=True)
+        target = self.repo / f'data/taxonomy-snapshots/{BASE}.json'
+        alias = self.root / 'base-alias'
+        raw = target.read_bytes()
+        os.link(target, alias)
+        with self.assertRaisesRegex(self.error, '硬链接'):
+            self.call('_select_tag_display_version', self.repo, current, versions, legacy=True)
+        alias.unlink()
+        target.unlink()
+        self.write(alias, raw)
+        target.symlink_to(alias)
+        with self.assertRaisesRegex(self.error, '符号链接'):
+            self.call('_select_tag_display_version', self.repo, current, versions, legacy=True)
+
     def test_each_binding_and_unknown_field_fail_before_stage_writes(self):
         self.prepare()
         for key in self.policy:
@@ -250,7 +350,8 @@ class PresentationPolicyTests(unittest.TestCase):
     def test_source_registry_advance_is_unknown_even_if_richer(self):
         self.prepare()
         self.env['_PAGE_TAG_CATALOG']['registrySha256']='1'*64
-        with self.assertRaisesRegex(self.error,'实际签发来源'):
+        self.env['_PAGE_TAG_CATALOG']['concepts'][0]['preferredLabel']['zh'] += ' 新身份'
+        with self.assertRaisesRegex(self.error,'概念身份不一致'):
             self.call('_legacy_tag_catalog_file_contents',self.repo)
 
     def test_policy_and_archive_paths_only_exact_whitelist(self):
@@ -334,7 +435,8 @@ class PresentationPolicyTests(unittest.TestCase):
         self.assertEqual((self.repo / relative).read_bytes(),
                          (self.repo/'data/taxonomy-snapshots'/(self.preferred['registrySha256']+'.json')).read_bytes())
         self.env['_PAGE_TAG_CATALOG']['registrySha256'] = '1'*64
-        with self.assertRaisesRegex(self.error, '实际签发来源'):
+        self.env['_PAGE_TAG_CATALOG']['version'] = 'unknown-registry-version'
+        with self.assertRaisesRegex(self.error, '概念身份不一致'):
             self.call('tag_catalog_file_contents', self.repo)
 
     def test_old_policy_bytes_restore_after_current_source_changes(self):

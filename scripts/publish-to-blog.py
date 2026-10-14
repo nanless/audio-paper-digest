@@ -70,7 +70,7 @@ from path_config import (
     VISUAL_SUMMARY_ASSET_DIR,
     VISUAL_SUMMARY_MANIFEST_DIR,
     RESEARCHER_SIDECAR_RELATIVE_ROOT,
-    atomic_write_json,
+    atomic_write_json as _atomic_write_json,
     atomic_write_text,
     file_lock,
 )
@@ -112,6 +112,19 @@ from markdown_hugo_gate import (
     rendered_page_candidates as _rendered_page_candidates,
     rendered_article_fragment as _rendered_article_fragment,
 )
+
+
+def atomic_write_json(path, data, *, ensure_ascii=False, indent=2, mode=None):
+    """Keep JSON UTF-16 values intact while writing valid UTF-8 atomically."""
+    if ensure_ascii:
+        return _atomic_write_json(path, data, ensure_ascii=True, indent=indent, mode=mode)
+    serialized = json.dumps(data, ensure_ascii=False, indent=indent) + '\n'
+    # Escaping a lone surrogate preserves the original JSON string and source SHA.
+    # Literal backslash-u text and all ordinary Unicode characters stay unchanged.
+    serialized = re.sub(r'[\ud800-\udfff]',
+        lambda match: f'\\u{ord(match.group(0)):04x}', serialized)
+    atomic_write_text(path, serialized, mode=mode)
+
 
 BLOG_REPO = os.path.expanduser(
     os.environ.get("PAPER_DIGEST_BLOG_REPO", "~/code/github_repos/audio-paper-digest-blog")
@@ -562,7 +575,7 @@ def blog_publication_lock(date_str, *, timeout_seconds=30):
 
 
 def get_blog_review_concurrency():
-    """返回项目级并发数，用于相互独立的文章审查。"""
+    """独立论文页与单独汇总页文字/图片单元共用并发数；论文页内图片仍串行。"""
     raw = os.environ.get("PD_BLOG_REVIEW_CONCURRENCY", "5").strip()
     try:
         value = int(raw)
@@ -2087,8 +2100,11 @@ def _linked_image_source_url(content, image_end):
     return match.group(1).strip() if match else ''
 
 
-def multimodal_review_images(content, title="", required=False):
+def multimodal_review_images(content, title="", required=False, *, image_concurrency=1):
     """把真实的图片字节发给路由后的多模态发布 API。"""
+    if isinstance(image_concurrency, bool) or not isinstance(image_concurrency, int) \
+            or not 1 <= image_concurrency <= 5:
+        raise ValueError('图片审查并发数必须是 1–5 的整数')
     title = plain_title_for_publish(title) if title else title
     image_matches = parse_markdown_images(content)
 
@@ -2248,19 +2264,27 @@ def multimodal_review_images(content, title="", required=False):
                 return True, []
             return True, []
 
-    passed_all = True
-    all_issues = list(load_issues)
     # 每次请求只带一张图片，能让经代理的上传量可控，
     # 同时保持图片与上下文严格对应，并覆盖到页面里的每一张。
-    for index, (summary, image_payload) in enumerate(zip(img_summary, image_payloads), 1):
+    def review_one_image(unit):
+        index, (summary, image_payload) = unit
         batch_prompt = prompt.replace(summary_blob, summary, 1)
-        passed, issues = review_cached_unit(
+        return review_cached_unit(
             'image', {'prompt': batch_prompt, 'images': [image_payload], 'required': required},
             lambda: review_image_batch(
                 batch_prompt, [image_payload],
                 f"多模态图片 review: {title} [图 {index}/{len(image_payloads)}]",
             ),
         )
+    units = list(enumerate(zip(img_summary, image_payloads), 1))
+    if image_concurrency > 1 and len(units) > 1:
+        print(f"    🔀 汇总页图片单元 review 并发度: {image_concurrency}")
+        results = run_bounded_llm_tasks(units, review_one_image, image_concurrency)
+    else:
+        results = [review_one_image(unit) for unit in units]
+    passed_all = True
+    all_issues = list(load_issues)
+    for passed, issues in results:
         passed_all = passed_all and passed
         all_issues.extend(issues)
     return passed_all, all_issues
@@ -2755,15 +2779,85 @@ def _validated_workbench_text(
     return normalized
 
 
+
+_API_READER_AUTHOR_METADATA_SEPARATORS = frozenset({':', '：', ';', '；', ',', '，', '、'})
+
+
+def _api_reader_author_display(paper, api_reader):
+    """Project verified authors for display without replacing the raw proof."""
+    raw = api_reader.get('readerAuthors') if isinstance(api_reader, dict) else None
+    if not isinstance(raw, dict) or not isinstance(raw.get('authors'), list):
+        if isinstance(api_reader, dict) and api_reader.get('contract') == LLM_API_READER_CONTRACT:
+            raise PublishDataValidationError('作者展示缺少已验证的原作者记录。')
+        return {'authors': [], 'sourceNote': ''}
+    if api_reader.get('contract') != LLM_API_READER_CONTRACT:
+        return {'authors': copy.deepcopy(raw['authors']), 'sourceNote': ''}
+    if raw != paper.get('apiReaderAuthors'):
+        raise PublishDataValidationError('作者展示输入与本篇原作者记录不一致。')
+    # This validation remains mandatory and its original count and SHAs stay
+    # untouched. The filtered view is never returned as authorIdentityProof.
+    proof = _validate_api_reader_author_identity(paper)
+    identity = raw['identity']
+    authors, skipped = [], []
+    for index, (author, bound) in enumerate(zip(raw['authors'], identity['authors'])):
+        name = author['name']
+        binding = bound['nameBinding']
+        separator = (
+            name in _API_READER_AUTHOR_METADATA_SEPARATORS
+            and binding == {'sourceKind': 'paper_metadata', 'sourceValue': name,
+                            'metadataSha256': identity['metadataSha256']}
+            and name in paper.get('authors', [])
+        )
+        if name in _API_READER_AUTHOR_METADATA_SEPARATORS and not separator:
+            raise PublishDataValidationError('作者分隔标点没有对应本篇原元数据来源。')
+        if separator:
+            skipped.append(index)
+        else:
+            authors.append(copy.deepcopy(author))
+    note = ''
+    if skipped:
+        note = (f'原作者元数据中有 {len(skipped)} 项仅为分隔标点，未列为作者；'
+                '其他作者与机构按原来源记录展示。') if authors else (
+            '作者姓名未在这份可验证的元数据中可靠披露；原记录仅含分隔标点。')
+    return {'authors': authors, 'sourceNote': note, 'originalCount': proof['count'],
+            'originalIdentitySha256': proof['sha256'],
+            'originalPayloadSha256': proof['payloadSha256'], 'omittedSourceIndices': skipped}
+
+
+def _render_api_reader_author_block(paper, api_reader):
+    view = _api_reader_author_display(paper, api_reader)
+    return render_verified_reader_authors(view['authors'], source_note=view['sourceNote'])
+
+
+def render_verified_reader_authors(authors, *, source_note=''):
+    """Format source-verified authors; source admission remains with each adapter."""
+    if not isinstance(authors, list) or any(
+            not isinstance(author, dict) or not isinstance(author.get('name'), str)
+            or not isinstance(author.get('affiliations'), list)
+            or any(not isinstance(value, str) for value in author['affiliations'])
+            for author in authors):
+        raise PublishDataValidationError('作者展示需要已核验的姓名和机构列表。')
+    block = '\n'.join(f'- {author["name"]}：{"；".join(author["affiliations"])}' for author in authors)
+    if source_note:
+        block += ('\n\n' if block else '') + source_note
+    return block
+
+
 def _workbench_authors(paper, api_reader_payload=None):
     reader_authors = (
         api_reader_payload.get('readerAuthors')
         if isinstance(api_reader_payload, dict) else None
     )
-    source = reader_authors.get('authors') \
-        if isinstance(reader_authors, dict) else paper.get('authors')
+    # A current Reader citation must use the same verified raw author record;
+    # missing input cannot silently fall back to paper metadata.
+    if isinstance(api_reader_payload, dict) \
+            and api_reader_payload.get('contract') == LLM_API_READER_CONTRACT:
+        source = _api_reader_author_display(paper, api_reader_payload)['authors']
+    else:
+        source = reader_authors.get('authors') \
+            if isinstance(reader_authors, dict) else paper.get('authors')
     if not isinstance(source, list) or not source:
-        raise PublishDataValidationError('researcher workbench 缺少结构化作者来源')
+        raise PublishDataValidationError('researcher workbench 缺少可展示的结构化作者来源，不能生成引用作者。')
     authors = []
     for index, item in enumerate(source):
         if isinstance(item, str):
@@ -3087,10 +3181,29 @@ def _select_tag_display_version(repo, current, versions, *, legacy=False, approv
         raise PublishDataValidationError('标签展示策略的文件路径与格式版本不一致。')
     base_sha = policy['baseRegistrySha256']
     preferred_sha = policy['preferredRegistrySha256']
-    if (current['registrySha256'] != base_sha
-            or hashlib.sha256(tag_catalog_snapshot_bytes(current)).hexdigest()
+    issued_base = versions.get(base_sha)
+    if (issued_base is None
+            or hashlib.sha256(tag_catalog_snapshot_bytes(issued_base)).hexdigest()
             != policy['baseSnapshotSha256']):
         raise PublishDataValidationError('标签展示策略记录的基础词表 SHA 或快照 SHA 与实际签发来源不一致。')
+    historical_base = current['registrySha256'] != base_sha
+    if not historical_base:
+        if current != issued_base:
+            raise PublishDataValidationError('当前基础词表与策略签发时的同 SHA 快照不一致。')
+    else:
+        # The approved display policy remains bound to its original issued bytes.
+        # Classification still uses the independent current catalog and its SHA.
+        # Only description values may differ; field presence, every identity field,
+        # order, count, version and unknown fields must remain exactly equal.
+        if (set(current) != set(issued_base)
+                or any(current[key] != issued_base[key] for key in current
+                       if key not in {'registrySha256', 'concepts'})
+                or len(current['concepts']) != len(issued_base['concepts'])
+                or any(set(actual) != set(original)
+                       or any(actual[key] != original[key] for key in actual
+                              if key not in {'definition', 'scopeNote'})
+                       for actual, original in zip(current['concepts'], issued_base['concepts']))):
+            raise PublishDataValidationError('当前分类词表与展示策略签发基础的概念身份不一致；只允许定义和范围说明的值不同。')
     preferred = versions.get(preferred_sha)
     if preferred is None:
         raise PublishDataValidationError('标签展示策略选用的版本没有保存对应的词表快照。')
@@ -3099,7 +3212,7 @@ def _select_tag_display_version(repo, current, versions, *, legacy=False, approv
             or _historical_tag_prompt_text_sha256(preferred)
             != policy['preferredProjectionSha256']):
         raise PublishDataValidationError('标签展示策略记录的快照 SHA 或提示文本 SHA 与重新计算的结果不一致。')
-    if preferred['concepts'][:len(current['concepts'])] != current['concepts']:
+    if preferred['concepts'][:len(issued_base['concepts'])] != issued_base['concepts']:
         raise PublishDataValidationError('标签展示策略选用的词表修改了已有概念，或改变了它们的顺序；只允许在原列表末尾追加概念。')
     # 新归档目录已存在时，只核新目录；不能用旧目录掩盖缺失或损坏的新副本。
     archive_name = 'taxonomy-snapshots'
@@ -3107,15 +3220,18 @@ def _select_tag_display_version(repo, current, versions, *, legacy=False, approv
                           or (repo / prefix / 'tag-catalog-history').is_symlink()
                           for prefix in ('data', 'static/data')):
         archive_name = 'tag-catalog-history'
+    required_snapshots = [issued_base, preferred] if historical_base else [preferred]
     for prefix in ('data', 'static/data'):
-        if read_regular(f'{prefix}/{archive_name}/{preferred_sha}.json') != raw:
-            raise PublishDataValidationError('标签展示策略选用版本的归档副本缺失，或文件内容与对应快照不完全一致。')
+        for snapshot in required_snapshots:
+            if read_regular(f'{prefix}/{archive_name}/{snapshot["registrySha256"]}.json') != tag_catalog_snapshot_bytes(snapshot):
+                raise PublishDataValidationError('标签展示策略签发基础或选用版本的归档副本缺失，或文件内容与对应快照不完全一致。')
         catalog_name = 'taxonomy-catalog.json' if legacy else 'tag-catalog-versions.json'
         catalog = _read_tag_catalog_file(repo, f'{prefix}/{catalog_name}')
         if not legacy and catalog is None:
             catalog = _read_tag_catalog_file(repo, f'{prefix}/taxonomy-catalog.json')
-        if catalog is None or _validate_tag_version_catalog(catalog).get(preferred_sha) != preferred:
-            raise PublishDataValidationError('标签展示策略选用的版本未在对应版本目录中保存，或目录中的快照内容不一致。')
+        saved_versions = _validate_tag_version_catalog(catalog) if catalog is not None else {}
+        if any(saved_versions.get(snapshot['registrySha256']) != snapshot for snapshot in required_snapshots):
+            raise PublishDataValidationError('标签展示策略签发基础或选用版本未在对应版本目录中保存，或目录中的快照内容不一致。')
     return preferred, dict(zip(relatives, raw_mirrors))
 
 
@@ -3518,6 +3634,54 @@ def build_flat_tag_compat_metadata(
     }
 
 
+def _serialize_verified_workbench_sidecars(*, original_title, authors, citation_id,
+                                          identity, citation, context, root,
+                                          source_kind='arxiv'):
+    """One export implementation for verified arXiv and conference identities."""
+    author_bibtex = ' and '.join(
+        '{' + _bibtex_escape(author['name'], 'BibTeX author') + '}'
+        for author in authors
+    )
+    citation_key = source_kind + '_' + re.sub(r'[^a-z0-9]+', '_', citation_id.lower()).strip('_')
+    if source_kind == 'arxiv':
+        bibtex = (
+            f'@misc{{{citation_key},\n'
+            f'  title = {{{_bibtex_escape(original_title, "BibTeX title")}}},\n'
+            f'  author = {{{author_bibtex}}},\n'
+            f'  eprint = {{{_bibtex_escape(citation_id, "BibTeX eprint")}}},\n'
+            '  archivePrefix = {arXiv},\n'
+            f'  url = {{{_bibtex_escape(identity["absUrl"], "BibTeX URL")}}}\n'
+            '}\n'
+        ).encode('utf-8')
+        record_url, pdf_url = identity['absUrl'], identity['pdfUrl']
+        ris_type = 'UNPB'
+    else:
+        lines = [f'@inproceedings{{{citation_key},',
+                 f'  title = {{{_bibtex_escape(original_title, "BibTeX title")}}},',
+                 f'  author = {{{author_bibtex}}}']
+        record_url, pdf_url = identity.get('recordUrl'), identity.get('pdfUrl')
+        if record_url:
+            lines[-1] += ','
+            lines.append(f'  url = {{{_bibtex_escape(record_url, "BibTeX URL")}}}')
+        lines.extend(['}', ''])
+        bibtex = '\n'.join(lines).encode('utf-8')
+        ris_type = 'CONF'
+    ris_lines = [f'TY  - {ris_type}', f'TI  - {original_title}']
+    ris_lines.extend(f'AU  - {author["name"]}' for author in authors)
+    ris_lines.append(f'ID  - {citation_id}')
+    if record_url:
+        ris_lines.append(f'UR  - {record_url}')
+    if pdf_url:
+        ris_lines.append(f'L1  - {pdf_url}')
+    ris_lines.extend(['ER  - ', ''])
+    return {
+        root / 'citation.json': _json_sidecar_bytes(citation),
+        root / 'citation.bib': bibtex,
+        root / 'citation.ris': '\n'.join(ris_lines).encode('utf-8'),
+        root / 'rethink-context.json': _json_sidecar_bytes(context),
+    }
+
+
 def build_researcher_workbench_bundle(
         paper, date_str, *, parsed=None, reader_plan=None,
         api_reader_payload=None, require_reader=False,
@@ -3620,34 +3784,11 @@ def build_researcher_workbench_bundle(
             'documentType': document_type,
         },
     })
-    author_bibtex = ' and '.join(
-        '{' + _bibtex_escape(author['name'], 'BibTeX author') + '}'
-        for author in authors
-    )
-    citation_key = 'arxiv_' + re.sub(r'[^a-z0-9]+', '_', citation_id.lower()).strip('_')
-    bibtex = (
-        f'@misc{{{citation_key},\n'
-        f'  title = {{{_bibtex_escape(original_title, "BibTeX title")}}},\n'
-        f'  author = {{{author_bibtex}}},\n'
-        f'  eprint = {{{_bibtex_escape(citation_id, "BibTeX eprint")}}},\n'
-        '  archivePrefix = {arXiv},\n'
-        f'  url = {{{_bibtex_escape(identity["absUrl"], "BibTeX URL")}}}\n'
-        '}\n'
-    ).encode('utf-8')
-    ris_lines = ['TY  - UNPB', f'TI  - {original_title}']
-    ris_lines.extend(f'AU  - {author["name"]}' for author in authors)
-    ris_lines.extend([
-        f'ID  - {citation_id}', f'UR  - {identity["absUrl"]}',
-        f'L1  - {identity["pdfUrl"]}', 'ER  - ', '',
-    ])
-    ris = '\n'.join(ris_lines).encode('utf-8')
     root = _researcher_sidecar_relative_root(date_str, identity['baseId'])
-    sidecars = {
-        root / 'citation.json': _json_sidecar_bytes(citation),
-        root / 'citation.bib': bibtex,
-        root / 'citation.ris': ris,
-        root / 'rethink-context.json': _json_sidecar_bytes(context),
-    }
+    sidecars = _serialize_verified_workbench_sidecars(
+        original_title=original_title, authors=authors, citation_id=citation_id,
+        identity=identity, citation=citation, context=context, root=root,
+    )
     for relative, raw in sidecars.items():
         if b'\r' in raw or not raw.endswith(b'\n') \
                 or not raw or len(raw) > RESEARCHER_SIDECAR_MAX_BYTES:
@@ -3680,6 +3821,123 @@ def build_researcher_workbench_bundle(
     }
 
 
+def build_verified_conference_workbench_bundle(paper, date_str, *, paper_id,
+                                                publication=None, reader_plan,
+                                                parsed, authors):
+    """Project an already source-authenticated conference record into exports.
+
+    Source authentication remains the caller's normal analysis/publication guard.
+    This builder accepts only its saved identity, plan, authors and publication;
+    unavailable public metadata is represented explicitly, never synthesized.
+    """
+    if not isinstance(paper, dict) or paper.get('arxivId') \
+            or not isinstance(paper_id, str) or not re.fullmatch(
+                r'conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+', paper_id):
+        raise PublishDataValidationError('研究工作区需要真实会议身份，不能携带 arXiv 别名。')
+    identities = [paper.get(key) for key in ('id', 'conferencePaperId', 'directPaperId')
+                  if paper.get(key)]
+    if not identities or any(value != paper_id for value in identities):
+        raise PublishDataValidationError('会议研究工作区身份与保存的论文记录不一致。')
+    raw_authors = paper.get('apiReaderAuthors')
+    if reader_plan != paper.get('apiReaderPlan') or not isinstance(raw_authors, dict) \
+            or authors != raw_authors.get('authors') or not isinstance(authors, list) or not authors:
+        raise PublishDataValidationError('会议研究工作区不能替换保存的 Reader 计划或作者来源。')
+    stage = ((paper.get('analysisManifest') or {}).get('stages') or {}).get('apiReaderArticle') or {}
+    if stage.get('status') != 'complete' \
+            or paper.get('apiReaderPlanSha256') != _reader_record_sha256(reader_plan, '会议工作区 Reader 计划') \
+            or stage.get('readerAuthorsSha256') != _reader_record_sha256(raw_authors, '会议工作区原作者记录'):
+        raise PublishDataValidationError('会议工作区 Reader 计划或原作者记录未与完成阶段绑定。')
+    source_sha = paper.get('sourceSha256')
+    if not re.fullmatch(r'[a-f0-9]{64}', str(source_sha or '')):
+        raise PublishDataValidationError('会议研究工作区缺少已核验全文 SHA。')
+    acquisition = (paper.get('analysisManifest') or {}).get('sourceAcquisition') or {}
+    if (raw_authors.get('identity') or {}).get('sourceTextSha256') != source_sha \
+            or (paper.get('apiReaderResources') or {}).get('sourceTextSha256') != source_sha \
+            or acquisition.get('sourceSha256', source_sha) != source_sha:
+        raise PublishDataValidationError('会议工作区全文 SHA 与作者、资源或获取阶段保存的来源不一致。')
+    if publication is not None and publication != paper.get('conferencePublication'):
+        raise PublishDataValidationError('会议研究工作区公开来源与保存的发布记录不一致。')
+    if publication is None and paper.get('conferencePublication') is not None:
+        raise PublishDataValidationError('会议研究工作区不能删除保存的公开来源记录。')
+    urls = {'recordUrl': None, 'pdfUrl': None}
+    if publication is not None:
+        if not isinstance(publication, dict) or publication.get('contract') != 'conference-official-publication-v1':
+            raise PublishDataValidationError('会议研究工作区公开来源格式不受支持。')
+        for field in urls:
+            urls[field] = _validated_https_identity_url(publication.get(field), '会议工作区 ' + field)
+            host = urlsplit(urls[field]).hostname.lower().rstrip('.')
+            if host == 'localhost' or host.endswith(('.local', '.localhost')):
+                raise PublishDataValidationError('会议工作区公开 URL 不能指向本地主机。')
+            try:
+                address = ipaddress.ip_address(host)
+            except ValueError:
+                address = None
+            if address is not None and not address.is_global:
+                raise PublishDataValidationError('会议工作区公开 URL 不能指向保留地址。')
+    reader_title = _validated_workbench_text(reader_plan.get('readerTitle'), '会议工作区 readerTitle', maximum=500)
+    one_sentence = _validated_workbench_text(reader_plan.get('oneSentenceThesis'), '会议工作区 oneSentence', maximum=2000)
+    original_title = _validated_workbench_text(paper.get('title'), '会议工作区 originalTitle', maximum=2000)
+    clean_authors = []
+    for index, author in enumerate(authors):
+        if not isinstance(author, dict) or set(author) != {'name', 'affiliations'} \
+                or not isinstance(author['affiliations'], list) or not author['affiliations']:
+            raise PublishDataValidationError('会议工作区作者或机构结构不符合已核验记录。')
+        clean_authors.append({
+            'name': _validated_workbench_text(author['name'], f'会议工作区作者 {index}', maximum=500),
+            'affiliations': [_validated_workbench_text(value, '会议工作区机构', maximum=1000)
+                             for value in author['affiliations']],
+        })
+    if len(clean_authors) > 1000:
+        raise PublishDataValidationError('会议工作区作者超过 1000 人上限。')
+    if not isinstance(parsed, dict):
+        raise PublishDataValidationError('会议工作区缺少已解析评分记录。')
+    try:
+        score = float(parsed.get('score'))
+    except (TypeError, ValueError) as error:
+        raise PublishDataValidationError('会议工作区评分必须是数值。') from error
+    if not math.isfinite(score) or not 0 <= score <= 10:
+        raise PublishDataValidationError('会议工作区评分超出 0–10。')
+    primary_task = _validated_workbench_text(str(parsed.get('primaryTaskTag') or '').lstrip('#'),
+                                            '会议工作区主任务', maximum=200)
+    primary_method = _validated_workbench_text(str(parsed.get('primaryMethodTag') or '').lstrip('#'),
+                                              '会议工作区主方法', maximum=200)
+    rank_bucket = _validated_workbench_text(parsed.get('rankBucket'), '会议工作区 rankBucket', maximum=100)
+    document_type = _validated_workbench_text(parsed.get('documentType'), '会议工作区 documentType', maximum=100)
+    identity = {'sourceKind': 'conference', 'paperId': paper_id, 'sourceSha256': source_sha,
+                **urls, 'publicUrlAvailability': 'available' if publication is not None else 'unavailable'}
+    common = {'contract': RESEARCHER_SIDECAR_CONTRACT, **identity,
+              'originalTitle': original_title, 'authors': clean_authors}
+    citation = {**common, 'schemaVersion': 1, 'id': paper_id, 'type': 'conference-paper'}
+    raw_abstract = paper.get('abstract')
+    abstract = _validated_workbench_text(raw_abstract, '会议工作区摘要', maximum=200000, preserve_newlines=True) \
+        if isinstance(raw_abstract, str) and raw_abstract.strip() else None
+    abstract_sha = hashlib.sha256(abstract.encode()).hexdigest() if abstract is not None else None
+    context = {**common, 'contract': RESEARCH_CONTEXT_CONTRACT, 'schemaVersion': 2,
+               'readerTitle': reader_title, 'oneSentenceThesis': one_sentence,
+               'abstract': abstract, 'abstractSha256': abstract_sha,
+               'abstractStatus': 'available' if abstract is not None else 'unavailable',
+               'assessment': {'primaryTask': primary_task, 'primaryMethod': primary_method,
+                              'score': score, 'rankBucket': rank_bucket, 'documentType': document_type}}
+    root = RESEARCHER_SIDECAR_RELATIVE_ROOT / validate_publish_date(date_str) / (
+        'conference-' + hashlib.sha256(paper_id.encode()).hexdigest()[:24])
+    sidecars = _serialize_verified_workbench_sidecars(
+        original_title=original_title, authors=clean_authors, citation_id=paper_id,
+        identity=identity, citation=citation, context=context, root=root, source_kind='conference')
+    sidecar_records = {}
+    for relative, raw in sidecars.items():
+        if not raw or b'\r' in raw or not raw.endswith(b'\n') or len(raw) > RESEARCHER_SIDECAR_MAX_BYTES:
+            raise PublishDataValidationError('会议工作区附属文件格式或大小无效。')
+        sidecar_records[relative.name] = {'url': _researcher_public_url(relative),
+                                        'sha256': hashlib.sha256(raw).hexdigest()}
+    sidecar_records['rethink-context.json']['contract'] = RESEARCH_CONTEXT_CONTRACT
+    return {'contract': RESEARCHER_WORKBENCH_CONTRACT, 'readerTitle': reader_title,
+            'originalTitle': original_title, 'oneSentenceThesis': one_sentence,
+            'abstractSha256': abstract_sha, 'identity': identity, 'authors': clean_authors,
+            'primaryTask': primary_task, 'primaryMethod': primary_method, 'tagMetadata': None,
+            'score': score, 'rankBucket': rank_bucket, 'documentType': document_type,
+            'sidecars': sidecars, 'sidecarRecords': sidecar_records}
+
+
 def _workbench_display_original_title(title):
     """转换 YAML 展示标题里的行内数学美元定界符。"""
     if not isinstance(title, str):
@@ -3704,11 +3962,29 @@ def _researcher_workbench_frontmatter(bundle):
     if len(authors_json.encode('utf-8')) > 32 * 1024:
         raise PublishDataValidationError('researcher workbench frontmatter 作者超过 32 KiB')
     identity = bundle['identity']
-    version = 'null' if identity['version'] is None else str(identity['version'])
+    conference = identity.get('sourceKind') == 'conference'
+    version = 'null' if conference or identity['version'] is None else str(identity['version'])
     versioned_id = (
-        'null' if identity['versionedId'] is None
+        'null' if conference or identity['versionedId'] is None
         else json.dumps(identity['versionedId'], ensure_ascii=False)
     )
+    if conference:
+        identity_frontmatter = (
+            'paper_digest_workbench_source_kind: conference\n'
+            f'paper_digest_workbench_paper_id: {json.dumps(identity["paperId"], ensure_ascii=False)}\n'
+            f'paper_digest_workbench_source_sha256: "{identity["sourceSha256"]}"\n'
+            f'paper_digest_workbench_record_url: {json.dumps(identity["recordUrl"])}\n'
+            f'paper_digest_workbench_pdf_url: {json.dumps(identity["pdfUrl"])}\n'
+            f'paper_digest_workbench_public_url_availability: {identity["publicUrlAvailability"]}\n'
+            f'paper_digest_abstract_status: {"available" if bundle["abstractSha256"] else "unavailable"}\n'
+        )
+    else:
+        identity_frontmatter = (
+            f'paper_digest_arxiv_version: {version}\n'
+            f'paper_digest_arxiv_versioned_id: {versioned_id}\n'
+            f'paper_digest_arxiv_abs_url: {json.dumps(identity["absUrl"], ensure_ascii=False)}\n'
+            f'paper_digest_arxiv_pdf_url: {json.dumps(identity["pdfUrl"], ensure_ascii=False)}\n'
+        )
     tag_metadata = bundle.get('tagMetadata')
     tag_frontmatter = ''
     if tag_metadata:
@@ -3721,14 +3997,13 @@ def _researcher_workbench_frontmatter(bundle):
             f'{json.dumps(tag_metadata["concepts"], ensure_ascii=False, separators=(",", ":"), sort_keys=True)}\n'
             f'paper_digest_primary_method: {json.dumps(tag_metadata["primaryMethod"], ensure_ascii=False)}\n'
         )
+    abstract_marker = (f'paper_digest_abstract_sha256: {json.dumps(bundle["abstractSha256"])}\n' if conference
+                       else f'paper_digest_abstract_sha256: "{bundle["abstractSha256"]}"\n')
     return (
         f'paper_digest_workbench_contract: "{RESEARCHER_WORKBENCH_CONTRACT}"\n'
         f'paper_digest_reader_title: {json.dumps(bundle["readerTitle"], ensure_ascii=False)}\n'
         f'paper_digest_original_title: {json.dumps(_workbench_display_original_title(bundle["originalTitle"]), ensure_ascii=False)}\n'
-        f'paper_digest_arxiv_version: {version}\n'
-        f'paper_digest_arxiv_versioned_id: {versioned_id}\n'
-        f'paper_digest_arxiv_abs_url: {json.dumps(identity["absUrl"], ensure_ascii=False)}\n'
-        f'paper_digest_arxiv_pdf_url: {json.dumps(identity["pdfUrl"], ensure_ascii=False)}\n'
+        f'{identity_frontmatter}'
         f'paper_digest_primary_task: {json.dumps(bundle["primaryTask"], ensure_ascii=False)}\n'
         f'{tag_frontmatter}'
         f'paper_digest_score: {json.dumps(bundle["score"], allow_nan=False)}\n'
@@ -3736,7 +4011,7 @@ def _researcher_workbench_frontmatter(bundle):
         f'paper_digest_document_type: {json.dumps(bundle["documentType"], ensure_ascii=False)}\n'
         f'paper_digest_one_sentence: {json.dumps(bundle["oneSentenceThesis"], ensure_ascii=False)}\n'
         f'paper_digest_authors: {authors_json}\n'
-        f'paper_digest_abstract_sha256: "{bundle["abstractSha256"]}"\n'
+        f'{abstract_marker}'
         f'paper_digest_sidecars: {sidecars_json}\n'
     )
 
@@ -4500,6 +4775,64 @@ def _detailed_core_summary_semantic_issue(summary):
     return '；'.join(issues) if issues else None
 
 
+_CORE_SUMMARY_NODE_REPLAY_CACHE = {}
+
+
+def _source_bound_core_summary_semantic_issue(paper, summary):
+    """Use the same current semantic rules as analysis for an actual sealed source."""
+    proof = paper.get('freshRewriteProvenance') or {}
+    if proof.get('contract') != 'fresh-source-analysis-v1':
+        return _detailed_core_summary_semantic_issue(summary)
+    run_id = proof.get('runId')
+    if not isinstance(run_id, str) or not re.fullmatch(
+            r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id) \
+            or proof.get('sourceGeneration') != 1:
+        raise PublishDataValidationError('核心摘要重放缺少日更封存来源身份。')
+    paper_id = _daily_fresh_normalized_paper_id(paper)
+    source_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id / 'sources' / paper_id / 'generation-000001'
+    for directory in (DAILY_FRESH_SOURCE_RUNS_DIR, DAILY_FRESH_SOURCE_RUNS_DIR / run_id,
+                      source_dir.parent.parent, source_dir.parent, source_dir):
+        _daily_fresh_safe_directory(directory, '核心摘要来源目录')
+    source_bytes = _daily_fresh_read_private_file(source_dir / 'source.txt',
+        '核心摘要原文', 64 * 1024 * 1024)
+    if _daily_fresh_sha256(source_bytes) != proof.get('sourceSha256') \
+            or paper.get('sourceSha256') != proof.get('sourceSha256'):
+        raise PublishDataValidationError('核心摘要重放原文 SHA 与本篇记录不一致。')
+    source_text = source_bytes.decode('utf-8')
+    cli = SHARED_SCRIPTS_DIR / 'lib' / 'core-summary-semantic-replay-cli.js'
+    implementations = (
+        _sha256_file(cli),
+        _sha256_file(SHARED_SCRIPTS_DIR / 'analysis-contract.js'),
+        _sha256_file(SHARED_SCRIPTS_DIR / 'lib' / 'analysis-section-titles.js'),
+    )
+    key = (_javascript_string_sha256(summary), _daily_fresh_sha256(source_bytes), implementations)
+    if key in _CORE_SUMMARY_NODE_REPLAY_CACHE:
+        return _CORE_SUMMARY_NODE_REPLAY_CACHE[key]
+    payload = _daily_fresh_compact_json_bytes({'summary': summary, 'sourceText': source_text})
+    if len(payload) > 16 * 1024 * 1024:
+        raise PublishDataValidationError('核心摘要只读重放输入超过上限。')
+    node = shutil.which('node')
+    if not node:
+        raise PublishDataValidationError('核心摘要规则重放需要 Node.js。')
+    with tempfile.NamedTemporaryFile(mode='w+b') as source_file:
+        source_file.write(payload); source_file.flush(); source_file.seek(0)
+        result = _run_bounded_subprocess([node, str(cli), str(source_file.fileno())],
+            cwd=str(SHARED_SCRIPTS_DIR.parent),
+            env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
+            timeout_seconds=30, max_output_bytes=64 * 1024, pass_fds=(source_file.fileno(),))
+    if result.returncode != 0 or result.timed_out or result.output_truncated:
+        raise PublishDataValidationError('核心摘要当前语义规则无法完整重放。')
+    try:
+        response = json.loads(result.stdout)
+    except (ValueError, TypeError) as error:
+        raise PublishDataValidationError('核心摘要当前语义规则返回无效结果。') from error
+    if not isinstance(response, dict) or set(response) != {'issue'} \
+            or not (response['issue'] is None or isinstance(response['issue'], str)):
+        raise PublishDataValidationError('核心摘要当前语义规则返回字段无效。')
+    _CORE_SUMMARY_NODE_REPLAY_CACHE[key] = response['issue']
+    return response['issue']
+
+
 def _validated_detailed_core_summary(paper, parsed):
     """核验详细摘要的正文和阶段记录，并返回摘要文本。
 
@@ -4528,7 +4861,7 @@ def _validated_detailed_core_summary(paper, parsed):
     if not isinstance(summary, str) or not summary.strip():
         raise PublishDataValidationError('读者文章缺少有效的详细核心摘要正文。')
     summary = summary.strip()
-    semantic_issue = _detailed_core_summary_semantic_issue(summary)
+    semantic_issue = _source_bound_core_summary_semantic_issue(paper, summary)
     if semantic_issue:
         raise PublishDataValidationError(
             f'读者文章的详细核心摘要未达到 {CORE_SUMMARY_DETAILED_CONTRACT}: '
@@ -4629,11 +4962,63 @@ def _validated_detailed_core_summary(paper, parsed):
     return summary
 
 
-def _build_api_reader_display_fields(paper, payload=None):
-    """返回读者文章页面使用的摘要、资源情况和评分说明；未使用对应格式时返回 None。"""
-    payload = _api_reader_payload(paper) if payload is None else payload
-    if not payload or payload.get('contract') != LLM_API_READER_CONTRACT:
+def _paper_header_resource_display_label(paper, resource):
+    """A header URL is a source location, never a repository ownership claim."""
+    if resource.get('type') != 'third_party' or resource.get('origin') != 'paper_source':
         return None
+    quote_text = resource.get('sourceQuote')
+    if not isinstance(quote_text, str) or resource.get('sourceQuoteSha256') != _javascript_string_sha256(quote_text):
+        raise PublishDataValidationError('首页资源展示的原引文 SHA 不一致。')
+    metadata_authors = paper.get('authors')
+    if not isinstance(metadata_authors, list) or not metadata_authors \
+            or not all(isinstance(name, str) and name.strip() for name in metadata_authors):
+        return None
+    first_author = '\n' + metadata_authors[0] + '\n'
+    first_at = quote_text.find(first_author)
+    if first_at < 0 or re.sub(r'\s+', ' ', quote_text[:first_at]).strip() \
+            != re.sub(r'\s+', ' ', str(paper.get('title') or '')).strip():
+        return None
+    proof = paper.get('freshRewriteProvenance')
+    if not isinstance(proof, dict):
+        raise PublishDataValidationError('首页资源展示缺少封存来源证明。')
+    run_id = proof.get('runId')
+    if not isinstance(run_id, str) or not re.fullmatch(
+            r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id):
+        raise PublishDataValidationError('首页资源展示来源运行 ID 无效。')
+    paper_id = _daily_fresh_normalized_paper_id(paper)
+    run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id
+    _daily_fresh_safe_directory(run_dir, '首页资源封存来源运行目录')
+    _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper)
+    raw = _daily_fresh_read_private_file(run_dir / 'sources' / paper_id / 'generation-000001' / 'source.txt',
+                                        '首页资源封存文本', 64 * 1024 * 1024)
+    if _daily_fresh_sha256(raw) != proof.get('sourceSha256') or proof.get('sourceSha256') != paper.get('sourceSha256'):
+        raise PublishDataValidationError('首页资源展示重读的封存文本 SHA 漂移。')
+    text = raw.decode('utf-8')
+    if not text.startswith(quote_text):
+        return None
+    abstract = re.search(r'^Abstract[ \t]*$', text, flags=re.MULTILINE)
+    if abstract is None or len(quote_text) > abstract.start():
+        return None
+    header = text[:abstract.start()]
+    cursor = 0
+    for name in metadata_authors:
+        match = re.search(r'^' + re.escape(name) + r'$', header[cursor:], flags=re.MULTILINE)
+        if match is None:
+            return None
+        cursor += match.end()
+    url = resource.get('originalUrl')
+    if not isinstance(url, str) or url not in quote_text:
+        return None
+    url_lines = [line for line in header.splitlines() if url in line]
+    if not url_lines or not all(line.startswith('Affiliation:') for line in url_lines):
+        return None
+    return '论文首页资源'
+
+
+def render_verified_reader_resources(resources, *, paper=None):
+    """Render verified resource records without changing their evidence or count."""
+    if not isinstance(resources, list):
+        raise PublishDataValidationError('资源展示需要已核验的资源列表。')
     labels = {
         'code': '代码相关资源', 'model': '模型相关资源', 'dataset': '数据相关资源',
         'demo': '演示资源', 'reproduction': '复现相关资源', 'third_party': '第三方资源',
@@ -4642,9 +5027,14 @@ def _build_api_reader_display_fields(paper, payload=None):
         'available': '链接可访问', 'unavailable': '链接不可用',
         'temporarily_unreachable': '暂时无法访问',
     }
-    resources = payload['resourceIdentityProof']['resources']
     lines = []
+    displayed_resources = set()
     for resource in resources:
+        # 只去重完整已验证对象的展示；来源计数、证据及可达性证明保持原样。
+        identity = _stable_json_sha256(resource)
+        if identity in displayed_resources:
+            continue
+        displayed_resources.add(identity)
         # 保持来源 URL 可点击，同时不允许 Markdown/HTML 转义。
         def link(url):
             return '<' + re.sub(r'[<>"\\\s]', lambda m: quote(m.group(0), safe=''), url) + '>'
@@ -4658,11 +5048,17 @@ def _build_api_reader_display_fields(paper, payload=None):
         if isinstance(documentation, dict) \
                 and documentation.get('completeness') == 'complete':
             status += '；README 已验证包含安装、推理与微调文档'
-        lines.append(f'- {labels[resource["type"]]}：{url_text} — {status}')
+        label = (_paper_header_resource_display_label(paper, resource) if paper else None) or labels[resource['type']]
+        lines.append(f'- {label}：{url_text} — {status}')
     if not lines:
         lines.append('本次未形成可展示的已核验资源记录，开放状态尚未核实。')
     lines.append('可达状态仅表示本次链接检查结果，不代表许可证、本文权重或运行复现已验证。')
-    parsed = paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
+    return '\n\n'.join(lines)
+
+
+def render_verified_reader_scoring_notes(paper, parsed=None):
+    """Use the same assessment explanation in all three publication adapters."""
+    parsed = parsed or paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
     scoring_note_lines = ['评分属于系统判断，不是论文实验结果；八维数值与总分见页首，原始审计记录保留在后端。']
     stages = (paper.get('analysisManifest') or {}).get('stages') or {}
     scoring = stages.get('scoringAudit') or {}
@@ -4672,6 +5068,18 @@ def _build_api_reader_display_fields(paper, payload=None):
         if isinstance(value, str) and value.strip():
             safe_value = html.escape(re.sub(r'\s+', ' ', value.strip()))
             scoring_note_lines.append(f'- {label}：{safe_value}')
+    return '\n\n'.join(scoring_note_lines)
+
+
+def _build_api_reader_display_fields(paper, payload=None):
+    """返回读者文章页面使用的摘要、资源情况和评分说明；未使用对应格式时返回 None。"""
+    payload = _api_reader_payload(paper) if payload is None else payload
+    if not payload or payload.get('contract') != LLM_API_READER_CONTRACT:
+        return None
+    resource_display = render_verified_reader_resources(
+        payload['resourceIdentityProof']['resources'], paper=paper)
+    parsed = paper.get('parsed') or parse_analysis(paper.get('analysis', '')) or {}
+    scoring_display = render_verified_reader_scoring_notes(paper, parsed)
     detailed_summary = _validated_detailed_core_summary(paper, parsed)
     visible_summary = detailed_summary or payload['plan']['oneSentenceThesis'].strip()
     # 这里只在发布视图中修正这处重复的中英文术语，不改写论文记录中的摘要。
@@ -4681,8 +5089,8 @@ def _build_api_reader_display_fields(paper, payload=None):
     )
     return {
         'summary': visible_summary,
-        'opensource': '\n\n'.join(lines),
-        'scoringReason': '\n\n'.join(scoring_note_lines),
+        'opensource': resource_display,
+        'scoringReason': scoring_display,
     }
 
 
@@ -4749,10 +5157,7 @@ def index_author_institution_block(paper, parsed_analysis, api_reader=None):
     reader_authors = api_reader.get('readerAuthors') if isinstance(api_reader, dict) else None
     authors = reader_authors.get('authors') if isinstance(reader_authors, dict) else None
     if isinstance(authors, list) and authors:
-        return '\n'.join(
-            f'- {author["name"]}：{"；".join(author["affiliations"])}'
-            for author in authors
-        )
+        return _render_api_reader_author_block(paper, api_reader)
     fallback = parsed_analysis.get('authors', '') if isinstance(parsed_analysis, dict) else ''
     return fallback.strip() if isinstance(fallback, str) else ''
 
@@ -4834,6 +5239,80 @@ def _current_batch_tag_metadata(papers):
         'registrySha256': first['registrySha256'],
         'primaryTasks': primary_tasks,
     }
+
+
+def _index_figure_preview(paper, reader_article, api_reader=None):
+    """把第一张与来源绑定的论文图投影成汇总页缩略图。
+
+    已签名的 Reader 文章仍然是权威来源。复用它完整的
+    Markdown 图片行，能让替代文本和 arXiv URL 绑定到
+    同一份证据，同时由 Hugo 的图片钩子提供本地镜像。
+    """
+    if not isinstance(reader_article, str):
+        return ''
+    for line in reader_article.splitlines():
+        stripped = line.strip()
+        match = re.fullmatch(
+            r'!\[(?:\\.|[^\]\\\n])*\]\((https://[^)\s]+)\)',
+            stripped,
+        )
+        if not match:
+            continue
+        source_url = match.group(1)
+        figure = next(
+            (
+                item for item in (paper.get('apiReaderFigures') or [])
+                if isinstance(item, dict) and item.get('url') == source_url
+            ),
+            None,
+        )
+        if isinstance(figure, dict) and (
+                'inlineSvgSourceSha256' in figure or 'inlineSvgRenderContract' in figure
+                or bool(urlparse(source_url).fragment)):
+            if not isinstance(api_reader, dict) or api_reader.get('figures') != paper.get('apiReaderFigures'):
+                raise PublishDataValidationError('汇总内联图缺少本篇已验证的图片 payload。')
+            candidates = [asset for asset in api_reader.get('assets', [])
+                          if isinstance(asset, dict) and asset.get('sourceUrl') == source_url]
+            if len(candidates) != 1:
+                raise PublishDataValidationError('汇总内联图必须对应唯一已验证的像素资产。')
+            asset = candidates[0]
+            pixel_sha = figure.get('assetSha256')
+            raw = asset.get('generatedBytes')
+            ordinal = figure.get('ordinal')
+            paper_id = normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
+            filename = f'figure-{ordinal}-{str(pixel_sha)[:16]}.png'
+            destination = (Path('static') / 'images' / 'papers' / paper_id / filename).as_posix()
+            public_url = f'{BASE_PATH.rstrip("/")}/images/papers/{paper_id}/{filename}'
+            if (not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1
+                    or not re.fullmatch(r'[0-9a-f]{64}', str(pixel_sha or ''))
+                    or not isinstance(raw, bytes) or not raw.startswith(b'\x89PNG\r\n\x1a\n')
+                    or hashlib.sha256(raw).hexdigest() != pixel_sha
+                    or asset.get('sha256') != pixel_sha
+                    or asset.get('destination') != destination
+                    or asset.get('publicUrl') != public_url):
+                raise PublishDataValidationError('汇总内联图的像素 SHA、目标路径或 URL 与原图片记录不一致。')
+            local_image = stripped.replace(f'({source_url})', f'({public_url})', 1)
+            return f'[{local_image}]({source_url})'
+        ordinal = figure.get('ordinal') if isinstance(figure, dict) else 1
+        if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1:
+            return ''
+        extension = '.svg' if urlparse(source_url).path.lower().endswith('.svg') else '.png'
+        digest = hashlib.sha256(source_url.encode('utf-8')).hexdigest()[:16]
+        # API Reader v3 的图片是临时的：它们的像素只能在
+        # 当次调用中生成，绝不写进
+        # 博客仓库。按此规则，官方 HTTPS 来源仍要留在
+        # 汇总页里；只有已保存的 Reader 配图文件
+        # 才能使用本地图片地址。
+        if figure is not None and figure.get('cachePath'):
+            local_url = (
+                f'{BASE_PATH}/images/papers/{normalize_arxiv_id(paper.get("arxivId"))}/'
+                f'figure-{ordinal}-{digest}{extension}'
+            )
+            local_image = stripped.replace(f'({source_url})', f'({local_url})', 1)
+        else:
+            local_image = stripped
+        return local_image
+    return ''
 
 
 def generate_index_page(scored, unscored, date_str, paper_slugs, category='论文速递'):
@@ -4920,51 +5399,6 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         "> 🖼️ 有图的论文会在这里展示首张原论文图；原图链接见对应独立页面。\n\n"
     )
 
-    def index_figure_preview(paper, reader_article):
-        """把第一张与来源绑定的论文图投影成汇总页缩略图。
-
-        已签名的 Reader 文章仍然是权威来源。复用它完整的
-        Markdown 图片行，能让替代文本和 arXiv URL 绑定到
-        同一份证据，同时由 Hugo 的图片钩子提供本地镜像。
-        """
-        if not isinstance(reader_article, str):
-            return ''
-        for line in reader_article.splitlines():
-            stripped = line.strip()
-            match = re.fullmatch(
-                r'!\[(?:\\.|[^\]\\\n])*\]\((https://[^)\s]+)\)',
-                stripped,
-            )
-            if not match:
-                continue
-            source_url = match.group(1)
-            figure = next(
-                (
-                    item for item in (paper.get('apiReaderFigures') or [])
-                    if isinstance(item, dict) and item.get('url') == source_url
-                ),
-                None,
-            )
-            ordinal = figure.get('ordinal') if isinstance(figure, dict) else 1
-            if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1:
-                return ''
-            extension = '.svg' if urlparse(source_url).path.lower().endswith('.svg') else '.png'
-            digest = hashlib.sha256(source_url.encode('utf-8')).hexdigest()[:16]
-            # API Reader v3 的图片是临时的：它们的像素只能在
-            # 当次调用中生成，绝不写进
-            # 博客仓库。按此规则，官方 HTTPS 来源仍要留在
-            # 汇总页里；只有已保存的 Reader 配图文件
-            # 才能使用本地图片地址。
-            if figure is not None and figure.get('cachePath'):
-                local_url = (
-                    f'{BASE_PATH}/images/papers/{normalize_arxiv_id(paper.get("arxivId"))}/'
-                    f'figure-{ordinal}-{digest}{extension}'
-                )
-                local_image = stripped.replace(f'({source_url})', f'({local_url})', 1)
-            else:
-                local_image = stripped
-            return local_image
-        return ''
 
     for i, (score, p, parsed_analysis) in enumerate(scored):
         title = p.get('title', 'Unknown')
@@ -4991,7 +5425,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             md += f"### {m} [{reader_title}]({blog_url})\n\n"
         else:
             md += f"### {m} {reader_title}\n\n"
-        preview = index_figure_preview(p, reader_article)
+        preview = _index_figure_preview(p, reader_article, api_reader)
         if preview:
             md += f"{preview}\n\n"
         if reader_article:
@@ -5061,7 +5495,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             md += f"### {len(scored)+i+1}. [{reader_title}]({blog_url})\n\n"
         else:
             md += f"### {len(scored)+i+1}. {reader_title}\n\n"
-        preview = index_figure_preview(p, reader_article)
+        preview = _index_figure_preview(p, reader_article, api_reader)
         if preview:
             md += f"{preview}\n\n"
         if reader_article:
@@ -5804,9 +6238,12 @@ def _normalize_api_reader_display_artifacts(value):
         mean_uncertainty, value,
     )
     # 连续重复的加粗说明标题可能使 Hugo 错误解析第二处加粗标记。
-    # 这里只合并标题文字和冒号完全相同的重复部分，后面的解释正文保持不变。
+    # 一次合并全部连续副本，保证完整页面和独立 Reader 使用同一固定点。
+    # 这里只合并同一行标题文字和冒号完全相同的重复部分，不跨段落；
+    # 仅标题定界符内外的横向空白属于排版，后面的解释正文保持不变。
     return re.sub(
-        r'\*\*([^*\n]+?)([：:])\*\*\s*\*\*\s*\1\2\*\*\s*',
+        r'\*\*[ \t]*([^*\n]+?)([：:])\*\*'
+        r'(?:[ \t]*\*\*[ \t]*\1\2\*\*)+[ \t]*',
         r'**\1\2** ',
         value,
     )
@@ -6211,6 +6648,220 @@ def _reader_merged_cell_matches(paper, binding, cell, displayed):
             and text == cell.get('sourceText'))
 
 
+def _reader_html_blank_span_keys(paper, article, rendered_tables):
+    """Batch replay only actual blank/source mismatches through the shared Node DOM rule."""
+    bindings = (paper.get('apiReaderPlan') or {}).get('tableBindings') or []
+    proof = paper.get('freshRewriteProvenance') or {}
+    if not proof or not isinstance(bindings, list):
+        return set()
+    needed = False
+    for binding, table in zip(bindings, rendered_tables):
+        if not isinstance(binding, dict) or binding.get('sourceType') != 'artifact_table' or binding.get('pdfCellConfirmation'):
+            continue
+        rows = [table['header'], *table['rows']]
+        for cell in binding.get('cellBindings') or []:
+            if not isinstance(cell, dict):
+                continue
+            row, column = cell.get('renderedRow'), cell.get('renderedColumn')
+            if type(row) is int and type(column) is int and 0 <= row < len(rows) and 0 <= column < len(rows[row]) \
+                    and rows[row][column] == '' and cell.get('renderedText') == '' \
+                    and _normalize_api_reader_source_cell(cell.get('sourceText')) != '':
+                needed = True
+    if not needed:
+        return set()
+    node = shutil.which('node')
+    if not node:
+        raise PublishDataValidationError('HTML 合并分类行来源重放需要 Node.js')
+    payload = _daily_fresh_compact_json_bytes({'paper': paper, 'article': article,
+        'sealedBundleRoot': str(DAILY_FRESH_SOURCE_RUNS_DIR / str(proof.get('runId')) / 'sources')})
+    if len(payload) > 128 * 1024 * 1024:
+        raise PublishDataValidationError('HTML 合并分类行来源重放输入超过上限')
+    with tempfile.TemporaryFile() as source_file:
+        source_file.write(payload)
+        source_file.flush()
+        source_file.seek(0)
+        result = _run_bounded_subprocess(
+            [node, str(SHARED_SCRIPTS_DIR / 'lib' / 'reader-dom-span-replay-cli.js'), str(source_file.fileno())],
+            cwd=str(SHARED_SCRIPTS_DIR.parent),
+            env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
+            timeout_seconds=30, max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
+    if result.returncode != 0 or result.timed_out or result.output_truncated:
+        return set()
+    try:
+        keys = json.loads(result.stdout)['keys']
+        if not isinstance(keys, list) or any(not isinstance(key, list) or len(key) != 3
+                or any(type(value) is not int or value < 0 for value in key) for key in keys):
+            return set()
+        return {tuple(key) for key in keys}
+    except (ValueError, KeyError, TypeError):
+        return set()
+
+
+def _verify_reader_sealed_pdf_grid_bindings(paper):
+    """Replay the independent PDF protocol against all four official sealed sources."""
+    from reader_sealed_pdf_table_evidence import CONTRACT, prove_pdf_bytes
+    bindings = (paper.get('apiReaderPlan') or {}).get('tableBindings') or []
+    marked = [binding for binding in bindings if 'sealedPdfTableEvidence' in binding]
+    if not marked:
+        return {}
+    proof = paper.get('freshRewriteProvenance') or {}
+    run_id = proof.get('runId')
+    if not isinstance(run_id, str) or not re.fullmatch(
+            r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id):
+        raise PublishDataValidationError('独立 PDF 表格证明缺少受控封存运行。')
+    paper_id = _daily_fresh_normalized_paper_id(paper)
+    run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id
+    _daily_fresh_safe_directory(DAILY_FRESH_SOURCE_RUNS_DIR, '独立 PDF 来源根目录')
+    _daily_fresh_safe_directory(run_dir, '独立 PDF 来源运行目录')
+    _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper)
+    source_dir = run_dir / 'sources' / paper_id / 'generation-000001'
+    _, runtime = _daily_fresh_read_canonical_json(source_dir / 'source-runtime.json',
+        '独立 PDF 表格来源元数据', 64 * 1024 * 1024)
+    source = paper['analysisManifest']['sourceAcquisition']
+    artifacts = _reader_source_payload_artifacts(paper['apiReaderPlan'].get('structuredSourcePayload'),
+        source['structuredArtifactsSha256'], paper['sourceSha256'])
+    sealed_artifacts = {key: value for key, value in runtime['structuredArtifacts'].items()
+                        if key != 'payloadSha256'}
+    if artifacts != sealed_artifacts:
+        raise PublishDataValidationError('独立 PDF 表格输入与封存结构化来源不一致。')
+    pdf_bytes = _daily_fresh_read_private_file(source_dir / 'source.pdf',
+        '独立 PDF 表格来源文件', 64 * 1024 * 1024)
+    result = {}
+    for binding in marked:
+        if binding.get('sourceType') != 'artifact_table' \
+                or type(binding.get('tableIndex')) is not int or binding['tableIndex'] < 1:
+            raise PublishDataValidationError('独立 PDF 证明只能绑定完整原表及正整数序号。')
+        saved = binding['sealedPdfTableEvidence']
+        tables = [table for table in artifacts['tables']
+                  if table.get('ordinal') == binding.get('sourceTableOrdinal')]
+        if (len(tables) != 1 or not isinstance(saved, dict) or saved.get('contract') != CONTRACT
+                or binding.get('sourceTableDomSha256') != tables[0].get('sourceDomSha256')):
+            raise PublishDataValidationError('独立 PDF 表格来源、协议或 DOM 身份不唯一。')
+        table = tables[0]
+        replayed = prove_pdf_bytes(pdf_bytes, [table])[0]
+        if not replayed.get('eligible') or replayed.get('evidence') != saved:
+            raise PublishDataValidationError('独立 PDF 表格证明不能由封存原文件完整重放。')
+        matrix = table['matrix']
+        cells = binding.get('cellBindings') or []
+        if len(cells) != sum(map(len, matrix)):
+            raise PublishDataValidationError('独立 PDF 表格必须保留完整原表。')
+        seen, values = set(), {}
+        for cell in cells:
+            row, column = cell.get('sourceRow'), cell.get('sourceColumn')
+            if (type(row) is not int or type(column) is not int or not 0 <= row < len(matrix)
+                    or not 0 <= column < len(matrix[row])
+                    or cell.get('renderedRow') != row or cell.get('renderedColumn') != column
+                    or (row, column) in seen):
+                raise PublishDataValidationError('独立 PDF 原表坐标不可重排、重复或越界。')
+            originals = [item for item in table['cells'] if item['row'] == row and item['column'] == column]
+            if (len(originals) != 1 or cell.get('sourceText') != originals[0]['text']
+                    or cell.get('sourceDomSha256') != originals[0]['sourceDomSha256']):
+                raise PublishDataValidationError('独立 PDF 单元格未对应封存原 DOM。')
+            seen.add((row, column))
+            values[(row, column)] = saved['displayMatrix'][row][column]
+        if binding['tableIndex'] in result:
+            raise PublishDataValidationError('独立 PDF 表格绑定序号重复。')
+        result[binding['tableIndex']] = values
+    return result
+
+
+def _verify_reader_sealed_pdf_quote_bindings(paper):
+    """Verify separate PDF quotations by re-extracting the official sealed file."""
+    from reader_sealed_pdf_quote_evidence import extract_pdf_quote_document, quote_evidence
+    bindings = (paper.get('apiReaderPlan') or {}).get('tableBindings') or []
+    marked = [binding for binding in bindings
+              if isinstance(binding, dict) and 'sealedPdfQuoteEvidence' in binding]
+    if not marked:
+        return {}
+    proof = paper.get('freshRewriteProvenance') or {}
+    run_id = proof.get('runId')
+    if not isinstance(run_id, str) or not re.fullmatch(
+            r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id):
+        raise PublishDataValidationError('独立 PDF 引文缺少受控封存运行。')
+    paper_id = _daily_fresh_normalized_paper_id(paper)
+    run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id
+    _daily_fresh_safe_directory(DAILY_FRESH_SOURCE_RUNS_DIR, '独立 PDF 来源根目录')
+    _daily_fresh_safe_directory(run_dir, '独立 PDF 来源运行目录')
+    _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper)
+    source_dir = run_dir / 'sources' / paper_id / 'generation-000001'
+    _, runtime = _daily_fresh_read_canonical_json(source_dir / 'source-runtime.json',
+        '独立 PDF 引文来源元数据', 64 * 1024 * 1024)
+    source = paper['analysisManifest']['sourceAcquisition']
+    artifacts = _reader_source_payload_artifacts(
+        paper['apiReaderPlan'].get('structuredSourcePayload'),
+        source['structuredArtifactsSha256'], paper['sourceSha256'])
+    if artifacts != {key: value for key, value in runtime['structuredArtifacts'].items()
+                     if key != 'payloadSha256'}:
+        raise PublishDataValidationError('独立 PDF 引文输入与封存结构化来源不一致。')
+    document = extract_pdf_quote_document(_daily_fresh_read_private_file(
+        source_dir / 'source.pdf', '独立 PDF 引文来源文件', 64 * 1024 * 1024))
+    if sum(len(binding.get('sealedPdfQuoteEvidence', []))
+           for binding in marked if isinstance(binding.get('sealedPdfQuoteEvidence'), list)) > 64:
+        raise PublishDataValidationError('独立 PDF 引文总数超过来源核验上限。')
+    source_text = _daily_fresh_read_private_file(source_dir / 'source.txt',
+        '独立 PDF 引文对应 HTML 全文', 64 * 1024 * 1024).decode('utf-8')
+    result = {}
+    for binding in marked:
+        index = binding.get('tableIndex')
+        quotes = binding['sealedPdfQuoteEvidence']
+        if (binding.get('sourceType') != 'source_quotes' or type(index) is not int
+                or index < 1 or index in result or not isinstance(quotes, list)
+                or not 1 <= len(quotes) <= 64):
+            raise PublishDataValidationError('独立 PDF 引文只能绑定唯一序号的逐字引文表格。')
+        actual_quotes = []
+        html_quotes = binding.get('sourceQuotes')
+        if not isinstance(html_quotes, list) or any(
+                not isinstance(item, dict) or set(item) != {'quote', 'sourceQuoteSha256'}
+                or not isinstance(item.get('quote'), str) or not 12 <= len(item['quote']) <= 4000
+                or item['quote'] not in source_text or item.get('sourceQuoteSha256')
+                != _javascript_string_sha256(item['quote']) for item in html_quotes):
+            raise PublishDataValidationError('混合来源的 HTML 引文未逐字对应封存全文。')
+        for saved in quotes:
+            if not isinstance(saved, dict) or not isinstance(saved.get('quote'), str) \
+                    or quote_evidence(document, saved['quote']) != saved:
+                raise PublishDataValidationError('独立 PDF 引文不能由封存原文件完整重放。')
+            actual_quotes.append(saved['quote'])
+        result[index] = actual_quotes
+    return result
+
+
+def _reader_sealed_pdf_column_unit_coverage(paper, rendered, binding):
+    """Only a replayed full PDF matrix can assign a bare value its column unit."""
+    from reader_sealed_pdf_column_units import prove_pdf_bytes
+    saved_quotes = binding.get('sealedPdfQuoteEvidence')
+    if not isinstance(saved_quotes, list) or not saved_quotes:
+        return set()
+    proof = paper.get('freshRewriteProvenance') or {}
+    run_id = proof.get('runId')
+    if not isinstance(run_id, str) or not re.fullmatch(
+            r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id):
+        raise PublishDataValidationError('列单位缺少封存来源运行。')
+    run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id
+    _daily_fresh_safe_directory(DAILY_FRESH_SOURCE_RUNS_DIR, '列单位来源根目录')
+    _daily_fresh_safe_directory(run_dir, '列单位来源运行目录')
+    paper_id = _daily_fresh_normalized_paper_id(paper)
+    _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper)
+    source_dir = run_dir / 'sources' / paper_id / 'generation-000001'
+    _, runtime = _daily_fresh_read_canonical_json(source_dir / 'source-runtime.json',
+        '列单位结构化来源', 64 * 1024 * 1024)
+    source = paper['analysisManifest']['sourceAcquisition']
+    artifacts = _reader_source_payload_artifacts(paper['apiReaderPlan'].get('structuredSourcePayload'),
+        source['structuredArtifactsSha256'], paper['sourceSha256'])
+    if artifacts != {key: value for key, value in runtime['structuredArtifacts'].items()
+                     if key != 'payloadSha256'}:
+        raise PublishDataValidationError('列单位的完整原表与封存结构化来源不一致。')
+    pdf_bytes = _daily_fresh_read_private_file(source_dir / 'source.pdf',
+        '列单位来源 PDF', 64 * 1024 * 1024)
+    try:
+        actual = prove_pdf_bytes(pdf_bytes, artifacts['tables'],
+            [rendered['header']] + rendered['rows'], [item['quote'] for item in saved_quotes])
+    except ValueError:
+        return set()
+    return {(row + 1, column['column'], token, column['unit'])
+            for column in actual['units'] for row, value in enumerate(column['values'])
+            for token in _api_reader_numeric_tokens(value)}
+
+
 def _validate_api_reader_source_bindings(paper, article=None):
     """按 v4 来源记录核对读者文章中的表格和公式，并返回核验结果。"""
     manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
@@ -6262,11 +6913,25 @@ def _validate_api_reader_source_bindings(paper, article=None):
 
     pdf_values = {}
     if any(isinstance(b, dict) and 'pdfCellConfirmation' in b for b in table_bindings):
-        from reader_pdf_cell_evidence import verify_saved_bindings
+        import reader_pdf_cell_evidence
+        from reader_pdf_visual_audit_cache import verify_saved_bindings_cached
         try:
-            pdf_values = verify_saved_bindings(paper, DAILY_FRESH_SOURCE_RUNS_DIR)
+            legacy_view = {**paper, 'apiReaderPlan': {**plan, 'tableBindings': [
+                binding for binding in table_bindings if 'pdfCellConfirmation' in binding]}}
+            pdf_values = verify_saved_bindings_cached(reader_pdf_cell_evidence, legacy_view, DAILY_FRESH_SOURCE_RUNS_DIR)
         except Exception as error:
             raise PublishDataValidationError('封存PDF逐格来源不能重放：' + str(error)) from error
+    try:
+        generic_pdf_values = _verify_reader_sealed_pdf_grid_bindings(paper)
+    except Exception as error:
+        raise PublishDataValidationError('独立封存 PDF 整表证据不能重放：' + str(error)) from error
+    if pdf_values.keys() & generic_pdf_values.keys():
+        raise PublishDataValidationError('同一表格不能混用两种 PDF 来源证明。')
+    pdf_values.update(generic_pdf_values)
+    try:
+        pdf_quote_values = _verify_reader_sealed_pdf_quote_bindings(paper)
+    except Exception as error:
+        raise PublishDataValidationError('独立封存 PDF 逐字引文不能重放：' + str(error)) from error
 
     rendered_tables = _api_reader_markdown_tables(article)
     saved_reader_article = paper.get('apiReaderArticle')
@@ -6274,12 +6939,13 @@ def _validate_api_reader_source_bindings(paper, article=None):
         if isinstance(saved_reader_article, str) else rendered_tables
     if len(rendered_tables) != len(table_bindings):
         raise PublishDataValidationError('Reader 正文中的表格数与 plan.tableBindings 条目数不一致。')
+    html_blank_span_keys = _reader_html_blank_span_keys(paper, article, rendered_tables)
     for index, (binding, rendered) in enumerate(zip(table_bindings, rendered_tables), 1):
         required = {
             'tableIndex', 'sourceType', 'sourceTableOrdinal',
             'renderedTableSha256', 'cellBindings', 'sourceQuotes',
         }
-        if not isinstance(binding, dict) or set(binding) not in (required, required | {'sourceTableDomSha256'}, required | {'sourceTableDomSha256', 'pdfCellConfirmation'}):
+        if not isinstance(binding, dict) or set(binding) not in (required, required | {'sealedPdfQuoteEvidence'}, required | {'sourceTableDomSha256'}, required | {'sourceTableDomSha256', 'pdfCellConfirmation'}, required | {'sourceTableDomSha256', 'sealedPdfTableEvidence'}):
             raise PublishDataValidationError(f'表格来源记录 tableBindings[{index - 1}] 格式无效、缺少必要字段，或含有不允许的字段。')
         saved_rendered_table = saved_reader_tables[index - 1] \
             if index <= len(saved_reader_tables) else None
@@ -6290,7 +6956,7 @@ def _validate_api_reader_source_bindings(paper, article=None):
             raise PublishDataValidationError(f'第 {index} 个表格的序号、保存正文中的表格或渲染 SHA 与来源记录不一致。')
         rendered_rows = [rendered['header'], *rendered['rows']]
         if binding.get('sourceType') == 'artifact_table':
-            if set(binding) not in (required | {'sourceTableDomSha256'}, required | {'sourceTableDomSha256', 'pdfCellConfirmation'}) \
+            if set(binding) not in (required | {'sourceTableDomSha256'}, required | {'sourceTableDomSha256', 'pdfCellConfirmation'}, required | {'sourceTableDomSha256', 'sealedPdfTableEvidence'}) \
                     or not isinstance(binding.get('sourceTableOrdinal'), int) \
                     or isinstance(binding.get('sourceTableOrdinal'), bool) \
                     or binding['sourceTableOrdinal'] < 1 \
@@ -6327,17 +6993,19 @@ def _validate_api_reader_source_bindings(paper, article=None):
                         != _normalize_api_reader_source_cell(actual_text) \
                         or (_normalize_api_reader_source_cell(actual_text) \
                         != _normalize_api_reader_source_cell(pdf_values[index][(rendered_row, rendered_column)] if index in pdf_values else cell.get('sourceText')) \
-                        and not _reader_merged_cell_matches(paper, binding, cell, actual_text)) \
+                        and not (_reader_merged_cell_matches(paper, binding, cell, actual_text)
+                            if index in pdf_values or not paper.get('freshRewriteProvenance')
+                            else (index, rendered_row, rendered_column) in html_blank_span_keys)) \
                         or not re.fullmatch(r'[0-9a-f]{64}', str(cell.get('sourceDomSha256') or '')):
                     raise PublishDataValidationError(f'第 {index} 个表格的单元格文本与显示内容或来源文本不一致，或来源 DOM 的 SHA 无效。')
                 seen.add(key)
             if len(seen) != expected_cells:
                 raise PublishDataValidationError(f'第 {index} 个表格仍有单元格缺少来源记录。')
         elif binding.get('sourceType') == 'source_quotes':
-            if set(binding) != required or binding.get('sourceTableOrdinal') is not None \
+            if set(binding) not in (required, required | {'sealedPdfQuoteEvidence'}) or binding.get('sourceTableOrdinal') is not None \
                     or binding.get('cellBindings') != [] \
                     or not isinstance(binding.get('sourceQuotes'), list) \
-                    or not binding['sourceQuotes']:
+                    or not (binding['sourceQuotes'] or pdf_quote_values.get(index)):
                 raise PublishDataValidationError(f'第 {index} 个表格的逐字引文来源记录缺失或不符合要求。')
             quote_corpus = []
             for quote_index, quote_binding in enumerate(binding['sourceQuotes']):
@@ -6351,9 +7019,18 @@ def _validate_api_reader_source_bindings(paper, article=None):
                         f'第 {index} 个表格的引文记录 sourceQuotes[{quote_index}] 字段、长度或 SHA 不符合要求。'
                     )
                 quote_corpus.append(quote_binding['quote'])
-            if _reader_table_header_unit_evidence_failures(rendered, quote_corpus):
+            quote_corpus.extend(pdf_quote_values.get(index, []))
+            unit_failures = _reader_table_header_unit_evidence_failures(rendered, quote_corpus)
+            if unit_failures and index in pdf_quote_values:
+                column_units = _reader_sealed_pdf_column_unit_coverage(paper, rendered, binding)
+                unit_failures = [failure for failure in unit_failures if failure not in column_units]
+            if unit_failures:
                 raise PublishDataValidationError(f'第 {index} 个表格的列头单位缺少对应原文证据。')
-            quote_tokens = set(_api_reader_numeric_tokens('\n'.join(quote_corpus)))
+            quote_tokens = (set(_api_reader_numeric_tokens('\n'.join(
+                item['quote'] for item in binding['sourceQuotes']))).union(
+                *[set(_api_reader_numeric_tokens(quote)) for quote in pdf_quote_values[index]])
+                if index in pdf_quote_values
+                else set(_api_reader_numeric_tokens('\n'.join(quote_corpus))))
             missing = set(_api_reader_numeric_tokens(rendered['markdown'])) - quote_tokens
             if missing:
                 raise PublishDataValidationError(
@@ -6773,10 +7450,82 @@ def _ephemeral_figure_note(figure):
     ordinal = figure.get('ordinal') if isinstance(figure, dict) else None
     caption = figure.get('caption') if isinstance(figure, dict) else None
     if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1 \
-            or not isinstance(caption, str) or not caption.strip() \
-            or '\n' in caption or '\r' in caption:
-        raise PublishDataValidationError('临时图片的序号必须是正整数，图注必须是非空且不含换行的字符串。')
-    return f'> **论文图 {ordinal}（像素未随页面持久化）**：{caption.strip()}'
+            or not isinstance(caption, str):
+        raise PublishDataValidationError('临时图片的序号必须是正整数，图注必须是字符串。')
+    display_caption = re.sub(r'\s+', ' ', caption).strip() or '原始来源未提供图注。'
+    return f'> **论文图 {ordinal}（像素未随页面持久化）**：{display_caption}'
+
+
+def _reader_missing_figure_caption_matches(paper, plan, figure, source_proof):
+    """An empty caption is an explicit source state, never a guessed caption."""
+    artifacts = _reader_source_payload_artifacts(plan.get('structuredSourcePayload'),
+        source_proof['structuredArtifactsSha256'], paper['sourceSha256'])
+    if artifacts is None:
+        proof = paper.get('freshRewriteProvenance') or {}
+        run_id = proof.get('runId')
+        if not isinstance(run_id, str) or not re.fullmatch(
+                r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id):
+            return False
+        paper_id = _daily_fresh_normalized_paper_id(paper)
+        run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id
+        _daily_fresh_safe_directory(run_dir, '空图注封存来源运行目录')
+        _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper)
+        _, runtime = _daily_fresh_read_canonical_json(
+            run_dir / 'sources' / paper_id / 'generation-000001' / 'source-runtime.json',
+            '空图注封存来源', 64 * 1024 * 1024)
+        artifacts = runtime['structuredArtifacts']
+    matches = []
+    for source in (artifacts or {}).get('figures', []):
+        if (not isinstance(source, dict) or source.get('recoveryStatus') != 'complete'
+                or source.get('ordinal') != figure.get('ordinal')
+                or source.get('sourceDomSha256') != figure.get('sourceDomSha256')
+                or not isinstance(source.get('caption'), str) or source['caption'].strip()):
+            continue
+        if any(isinstance(image, dict) and image.get('url') == figure.get('url')
+               for image in source.get('images', [])):
+            matches.append(source)
+    return len(matches) == 1
+
+
+def _source_bound_figure_math_note(paragraph, figure):
+    """Restore a legacy program-generated short note, only from its exact caption.
+
+    No body-wide star replacement: the complete quoted note must equal the
+    caption's old deterministic display projection, and only TeX star atoms
+    actually present in that same validated caption are restored as code.
+    """
+    caption = figure.get('caption')
+    if not isinstance(caption, str):
+        return paragraph
+    atoms = re.findall(r'\\[A-Za-z]+(?:[_^]\{\\?\*+\}|[_^]\\?\*+)', caption)
+    if not atoms:
+        return paragraph
+    normalized = unicodedata.normalize('NFKC', caption)
+    normalized = re.sub(r'[\u200b-\u200d\u2061\ufeff]', '', normalized)
+    normalized = re.sub(r'^Fig(?:ure)?\.?\s*\d+[a-z]?\s*[:.]?\s*', '', normalized, flags=re.I)
+    normalized = re.sub(r'[{}]', '', normalized)
+    normalized = re.sub(r'\s+', ' ', normalized).strip()
+    if len(normalized) > 180:
+        sentence = re.match(r'^(.{36,}?[.!?。！？])(?:\s|$)', normalized[:181])
+        if sentence:
+            normalized = sentence[1].strip()
+        else:
+            prefix = normalized[:179]
+            boundary = max(prefix.rfind(' '), prefix.rfind('，'), prefix.rfind(','))
+            normalized = (prefix[:boundary] if boundary >= 48 else prefix).strip() + '…'
+    legacy = normalized.replace('***', '三个星号').replace('**', '两个星号').replace('*', '一个星号')
+    label = re.sub(r'\s+', ' ', str(figure.get('label') or f'Figure {figure.get("ordinal", "")}')).strip()
+    expected = f'*论文图 {figure["ordinal"]}。原论文 {label}：“{legacy}”。*'
+    if paragraph != expected:
+        return paragraph
+    projected = legacy
+    for atom in atoms:
+        bare = re.sub(r'[{}]', '', unicodedata.normalize('NFKC', atom))
+        damaged = bare.replace('***', '三个星号').replace('**', '两个星号').replace('*', '一个星号')
+        if damaged in projected:
+            # Original source TeX is literal, not a new display-formula binding.
+            projected = projected.replace(damaged, f'`{atom}`')
+    return f'*论文图 {figure["ordinal"]}。原论文 {label}：“{projected}”。*'
 
 
 def render_ephemeral_api_reader_figures(article, figures):
@@ -6815,7 +7564,21 @@ def render_ephemeral_api_reader_figures(article, figures):
     expected_urls = [figure['url'] for figure in figures]
     if [image['url'] for image in visible_images] != expected_urls:
         raise PublishDataValidationError('发布正文中的图片 URL 与保存的图片记录在内容或顺序上不一致。')
-    return rendered
+    paragraphs = re.split(r'(\n(?:[ \t]*\n)+)', rendered)
+    paragraph_offsets = []
+    cursor = 0
+    for paragraph in paragraphs:
+        paragraph_offsets.append((cursor, cursor + len(paragraph)))
+        cursor += len(paragraph)
+    for figure in figures:
+        image_pattern = re.compile(rf'^!\[(?:\\.|[^\]\\\n])*\]\({re.escape(figure["url"])}\)$')
+        for index in range(0, len(paragraphs) - 2, 2):
+            begin, end = paragraph_offsets[index]
+            note_begin, note_end = paragraph_offsets[index + 2]
+            if image_pattern.fullmatch(visible[begin:end].strip()) \
+                    and visible[note_begin:note_end] == paragraphs[index + 2]:
+                paragraphs[index + 2] = _source_bound_figure_math_note(paragraphs[index + 2], figure)
+    return ''.join(paragraphs)
 
 
 def _api_reader_payload(paper):
@@ -7079,12 +7842,17 @@ def _api_reader_payload(paper):
                     raise PublishDataValidationError(
                         '临时图片的像素证据 SHA 格式无效。'
                     )
+                if isinstance(item.get('caption'), str) and not item['caption'].strip() \
+                        and not _reader_missing_figure_caption_matches(
+                        paper, plan, item, source_binding_proof):
+                    raise PublishDataValidationError('空图注没有对应唯一封存原图的明确缺失状态。')
                 _ephemeral_figure_note(item)
                 if inline_svg:
-                    from reader_inline_svg import render_svg
+                    from reader_inline_svg_pixel_replay import replay_saved_inline_svg_pixels
                     resource = _reader_inline_svg_resource(paper, plan, item,
                         source_binding_proof['structuredArtifactsSha256'], paper['sourceSha256'])
-                    raw_asset = render_svg(resource['inlineSvg'].encode('utf-8'))
+                    raw_asset, pixel_replay = replay_saved_inline_svg_pixels(
+                        resource['inlineSvg'].encode('utf-8'), item.get('assetSha256'))
                     actual_sha = hashlib.sha256(raw_asset).hexdigest()
                     if actual_sha != item.get('assetSha256'):
                         raise PublishDataValidationError('内联论文图重新渲染的像素与 Reader 实际输入不一致。')
@@ -7093,7 +7861,8 @@ def _api_reader_payload(paper):
                     figure_assets.append({'generatedBytes': raw_asset,
                         'destination': destination.as_posix(),
                         'publicUrl': f'{BASE_PATH.rstrip("/")}/images/papers/{paper_id}/{filename}',
-                        'sourceUrl': item['url'], 'sha256': actual_sha})
+                        'sourceUrl': item['url'], 'sha256': actual_sha,
+                        **({'pixelReplayProof': pixel_replay} if pixel_replay else {})})
                 continue
             declared_cache_path = Path(str(item['cachePath'] or '')).expanduser()
             if declared_cache_path.is_symlink() or declared_cache_path.parent.is_symlink():
@@ -7311,10 +8080,9 @@ def _api_reader_page_binding_issue(content, paper):
             return content[start:end].strip()
 
         actual_authors = h2_section('👥 作者与机构')
-        expected_authors = sanitize_markdown_for_publish('\n'.join(
-            f'- {author["name"]}：{"；".join(author["affiliations"])}'
-            for author in author_proof['authors']
-        )).strip()
+        expected_authors = sanitize_markdown_for_publish(
+            _render_api_reader_author_block(paper, payload)
+        ).strip()
         if actual_authors != expected_authors:
             raise PublishDataValidationError('页面中的作者和机构与已绑定来源的作者记录不一致。')
         reader_display_fields = _build_api_reader_display_fields(paper, payload)
@@ -7673,10 +8441,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
     md += _historical_source_notice(paper)
     reader_authors_content = ''
     if api_reader_v2 and api_reader_payload.get('readerAuthors'):
-        reader_authors_content = '\n'.join(
-            f'- {author["name"]}：{"；".join(author["affiliations"])}'
-            for author in api_reader_payload['readerAuthors']['authors']
-        )
+        reader_authors_content = _render_api_reader_author_block(paper, api_reader_payload)
     if paper.get('analysisSource') == 'abstract':
         md += '> ⚠️ 本文仅基于论文摘要生成，未能取得可验证的全文，技术细节与评分置信度有限。\n\n'
     elif paper.get('analysisConfidence') == 'full_text' and paper.get('sourceTextChars', 0) > paper.get('usedTextChars', paper.get('sourceTextChars', 0)):
@@ -8344,9 +9109,19 @@ def _daily_fresh_canonical_json_bytes(value):
 def _daily_fresh_compact_json_bytes(value):
     """对已经由 Node 规范化定稿的对象，复刻 JSON.stringify 的序列化结果。"""
     try:
-        return json.dumps(
+        text = json.dumps(
             value, ensure_ascii=False, separators=(',', ':'), allow_nan=False,
-        ).encode('utf-8')
+        )
+        # JSON.stringify preserves unpaired UTF-16 code units as escapes.
+        # Do the same for the private replay transport instead of replacing
+        # source characters or changing the actual source record.
+        def well_formed(match):
+            units = match.group()
+            if len(units) == 2:
+                return chr(0x10000 + ((ord(units[0])-0xD800)<<10) + ord(units[1])-0xDC00)
+            return '\\u' + format(ord(units), '04x')
+        text = re.sub('[\ud800-\udbff][\udc00-\udfff]|[\ud800-\udfff]', well_formed, text)
+        return text.encode('utf-8')
     except (TypeError, ValueError) as exc:
         raise PublishDataValidationError('daily sealed source JSON 不可重放') from exc
 
@@ -8737,6 +9512,7 @@ def _validate_current_model_text_reuse_for_publish(paper, source_details, paper_
     # 只用于当前生产发布，旧记录的只读结构、状态和封存 SHA 保持原样。
     _validate_reader_author_source_replay(paper, source_details, paper_id,
                                          sealed_bundle_root=sealed_bundle_root)
+    _validate_reader_resource_claim_source_replay(paper, source_details, paper_id)
     acquisition = paper.get('analysisManifest', {}).get('sourceAcquisition', {})
     if acquisition.get('modelTextSanitizationContract') == 'model-text-unicode-scalars-v1':
         return
@@ -8746,6 +9522,42 @@ def _validate_current_model_text_reuse_for_publish(paper, source_details, paper_
         raise PublishDataValidationError(
             f'{paper_id} 旧 Unicode 模型输入可能被清洗改写，须按封存来源重新分析后再发布'
         )
+
+
+_READER_RESOURCE_CLAIM_REPLAY_CACHE = set()
+
+
+def _validate_reader_resource_claim_source_replay(paper, source_details, paper_id):
+    """Production publication uses the same source-bound claim guard as writing."""
+    if paper.get('analysisManifest', {}).get('contracts', {}).get('apiReaderArticle') \
+            != 'beginner-researcher-v3':
+        return
+    source_text = source_details.get('text')
+    if not isinstance(source_text, str) or _javascript_string_sha256(source_text) != paper.get('sourceSha256'):
+        raise PublishDataValidationError(f'{paper_id} 资源宣称重放缺少对应的封存全文。')
+    cli = SHARED_SCRIPTS_DIR / 'lib' / 'reader-resource-claims-replay-cli.js'
+    key = (_stable_json_sha256({'plan': paper.get('apiReaderPlan'), 'article': paper.get('apiReaderArticle'),
+                              'resources': paper.get('apiReaderResources')}), paper.get('sourceSha256'),
+           _sha256_file(cli), _sha256_file(SHARED_SCRIPTS_DIR / 'deep-analyzer.js'),
+           _sha256_file(SHARED_SCRIPTS_DIR / 'lib' / 'reader-resource-binding.js'))
+    if key in _READER_RESOURCE_CLAIM_REPLAY_CACHE:
+        return
+    node = shutil.which('node')
+    if not node:
+        raise PublishDataValidationError('资源宣称规则重放需要 Node.js。')
+    payload = _daily_fresh_compact_json_bytes({'paper': paper, 'sourceText': source_text})
+    if len(payload) > 128 * 1024 * 1024:
+        raise PublishDataValidationError('资源宣称规则重放输入超过上限。')
+    with tempfile.TemporaryFile() as source_file:
+        source_file.write(payload); source_file.flush(); source_file.seek(0)
+        result = _run_bounded_subprocess(
+            [node, str(cli), str(source_file.fileno())], cwd=str(SHARED_SCRIPTS_DIR.parent),
+            env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
+            timeout_seconds=30, max_output_bytes=1024 * 1024, pass_fds=(source_file.fileno(),))
+    if result.returncode != 0 or result.timed_out or result.output_truncated \
+            or result.stdout.strip() != '{"verified":true}':
+        raise PublishDataValidationError(f'{paper_id} 读者正文的资源可用性宣称未通过封存来源核验。')
+    _READER_RESOURCE_CLAIM_REPLAY_CACHE.add(key)
 
 
 
@@ -9083,7 +9895,10 @@ def review_all_posts(
 
         # 汇总页同样可能包含论文图片，必须经过与独立论文页一致的多模态审查。
         with review_unit_cache(date_str, index_file, required=require_llm, run_id=index_run_id):
-            _img_passed, img_issues = multimodal_review_images(content, '汇总页面', required=require_llm)
+            _img_passed, img_issues = multimodal_review_images(
+                content, '汇总页面', required=require_llm,
+                image_concurrency=get_blog_review_concurrency(),
+            )
         if _img_passed is False and count_blocking_review_issues(img_issues) == 0:
             img_issues = list(img_issues or []) + [{
                 'severity': 'error',
@@ -11176,6 +11991,18 @@ def generation_template_fingerprint():
         'tag_stage_record.py': script_dir / 'tag_stage_record.py',
         'path_config.py': script_dir / 'path_config.py',
         'markdown_hugo_gate.py': script_dir / 'markdown_hugo_gate.py',
+        'reader_inline_svg.py': script_dir / 'reader_inline_svg.py',
+        'reader_inline_svg_pixel_replay.py': script_dir / 'reader_inline_svg_pixel_replay.py',
+        'reader_pdf_visual_audit_cache.py': script_dir / 'reader_pdf_visual_audit_cache.py',
+        'reader_sealed_pdf_table_evidence.py': script_dir / 'reader_sealed_pdf_table_evidence.py',
+        'reader_sealed_pdf_quote_evidence.py': script_dir / 'reader_sealed_pdf_quote_evidence.py',
+        'reader_sealed_pdf_column_units.py': script_dir / 'reader_sealed_pdf_column_units.py',
+        'analysis-contract.js': script_dir / 'analysis-contract.js',
+        'lib/analysis-section-titles.js': script_dir / 'lib' / 'analysis-section-titles.js',
+        'lib/core-summary-semantic-replay-cli.js': script_dir / 'lib' / 'core-summary-semantic-replay-cli.js',
+        'lib/reader-sealed-pdf-quote-evidence.js': script_dir / 'lib' / 'reader-sealed-pdf-quote-evidence.js',
+        'lib/reader-sealed-pdf-table-evidence.js': script_dir / 'lib' / 'reader-sealed-pdf-table-evidence.js',
+        'lib/reader-table-pdf-evidence.js': script_dir / 'lib' / 'reader-table-pdf-evidence.js',
         'manual/sealed_tutorial_preview.py': MANUAL_SCRIPTS_DIR / 'sealed_tutorial_preview.py',
         'manual/tutorial_payload_verifier.py': MANUAL_SCRIPTS_DIR / 'tutorial_payload_verifier.py',
     }

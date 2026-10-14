@@ -111,16 +111,16 @@ JSON 损坏、符号链接、路径逃逸或计划后文件变化会在删除前
 
 ## 验证矩阵
 
-用户明确要求重写既有日批次、完全不使用旧生成正文时，使用 [现有日批次重写的分阶段流程](fresh-rewrite.md)。全历史使用 [会议优先使用本地来源的历史流程](history-rewrite.md)：会议核验本地元数据/PDF，arXiv 每次获取新的官方文本/PDF。备用 `history:arxiv-batch` 只接受有明确文件名、写入后不再改动的新 arXiv 抓取失败记录文件；这不意味着其他旧来源对照表（crosswalk）入口全部只读。普通 `reanalyze`、刷新 Reader 或清除个别 analysis 字段不能提供这两种隔离保证。`rewrite:source` 的 `prepare` 和 `status` 都不调用模型，`sources` 与 `analyze` 必须显式执行；`promote` 只有在同一运行、同一来源的证据齐全，正式分析文件的 SHA 和 `generation` 仍与准备时记录一致，抓取与筛选输入文件的 SHA 及博客 Git 提交也未变化时，才替换正式结果；替换前再次核验文件字节，替换后核验新文件的 SHA。
+用户明确要求重写既有日批次、完全不使用旧生成正文时，使用 [现有日批次重写的分阶段流程](history-rewrite.md)。全历史使用 [会议优先使用本地来源的历史流程](history-rewrite.md)：会议核验本地元数据/PDF，arXiv 每次获取新的官方文本/PDF。备用 `history:arxiv-batch` 只接受有明确文件名、写入后不再改动的新 arXiv 抓取失败记录文件；这不意味着其他旧来源对照表（crosswalk）入口全部只读。普通 `reanalyze`、刷新 Reader 或清除个别 analysis 字段不能提供这两种隔离保证。`history:resume` 的 `prepare` 和 `status` 都不调用模型，`sources` 与 `analyze` 必须显式执行；`promote` 只有在同一运行、同一来源的证据齐全，正式分析文件的 SHA 和 `generation` 仍与准备时记录一致，抓取与筛选输入文件的 SHA 及博客 Git 提交也未变化时，才替换正式结果；替换前再次核验文件字节，替换后核验新文件的 SHA。
 
 ```bash
 npm run verify
 git diff --check
 ```
 
-完整 `verify` 必须在沙箱外运行，先检查与博客部署一致的 Hugo **0.160.1**，再检查全仓 JS/Python/shell 语法、运行一次 `npm test`（含默认与 Manual JS）、两处 Python 单测和只读 `validate:data`。任何步骤失败都非零退出。Hugo 资源管线样例必须真正构建，缺少 Hugo 不能算完整通过。遍历排除 `node_modules`、`.venv`、`data`、`logs`、`.git` 等依赖、运行数据和 Git 记录目录，不跟随符号链接；Python 字节码写入独立临时目录。
+完整 `verify` 必须在沙箱外运行，先检查与博客部署一致的 Hugo **0.160.1**，再检查全仓 JS/Python/shell 语法、运行一次 `npm test`（含三流程与旧记录兼容 JS）、两处 Python 单测和只读 `validate:data`。任何步骤失败都非零退出。Hugo 资源管线样例必须真正构建，缺少 Hugo 不能算完整通过。遍历排除 `node_modules`、`.venv`、`data`、`logs`、`.git` 等依赖、运行数据和 Git 记录目录，不跟随符号链接；Python 字节码写入独立临时目录。
 
-只有 CI 或无数据的干净检出仓库才显式使用 `npm run verify -- --allow-empty`。普通维护默认复验已有数据。`npm run verify -- --quick` 仅检查语法和数据，不运行单测或 Hugo，不能代替完整验收。定向调试可单独运行 `test:default`、`test:manual` 或选定测试；完整验证通过后无须重复这些子集。
+只有 CI 或无数据的干净检出仓库才显式使用 `npm run verify -- --allow-empty`。普通维护默认复验已有数据。`npm run verify -- --quick` 仅检查语法和数据，不运行单测或 Hugo，不能代替完整验收。定向调试可单独运行 `test:default`、`test:compat` 或选定测试；完整验证通过后无须重复这些子集。
 
 CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装，再执行同一个 `verify --allow-empty`。本地入口仅检查已安装版本，不自动下载或升级。
 

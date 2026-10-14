@@ -14,6 +14,7 @@ from urllib.parse import quote, urlsplit
 
 from analysis_sections import analysis_heading_titles, normalize_analysis_section_title, evaluation_heading_issue
 from blog_entry_loader import load_publish_to_blog
+from paper_reader_presentation import build_reader_presentation
 from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, read_tag_stage_record
 from tag_catalog import (TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT,
                          TAG_FLAT_COMPAT_CONTRACT, LEGACY_TAG_FLAT_COMPAT_CONTRACT)
@@ -269,45 +270,6 @@ def score_line(parsed):
         raise ValueError('总分或评分维度的数值不在允许范围内。')
     detail = ' | '.join(f'{label} {value:.1f}/{maximum}' for label, value, maximum in dimensions)
     return f'**{score:.1f}/10** | {detail}'
-
-
-def render_resource_lines(resources):
-    labels = {'code': '代码相关资源', 'model': '模型相关资源', 'dataset': '数据相关资源',
-              'demo': '演示资源', 'reproduction': '复现相关资源', 'third_party': '第三方资源'}
-    statuses = {'available': '链接可访问', 'unavailable': '链接不可用',
-                'temporarily_unreachable': '暂时无法访问'}
-
-    def link(url):
-        return '<' + re.sub(r'[<>"\\\s]', lambda match: quote(match.group(0), safe=''), url) + '>'
-
-    visible_resources = [resource for resource in resources
-                         if not is_arxiv_url(resource.get('originalUrl'))
-                         and not is_arxiv_url(resource.get('finalUrl'))]
-    lines = []
-    for resource in visible_resources:
-        original = resource['originalUrl']
-        final = resource['finalUrl']
-        urls = link(original) + (f' → {link(final)}' if final != original else '')
-        status = statuses[resource['availability']]
-        if resource.get('status') is not None:
-            status += f'（HTTP {resource["status"]}）'
-        lines.append(f'- {labels[resource["type"]]}：{urls} — {status}')
-    if len(visible_resources) != len(resources):
-        lines.append('预印本/扩展版链接未在会议页展示；会议版来源见页首官方记录与 PDF。')
-    if not lines:
-        lines.append('本次未形成可展示的已核验资源记录，开放状态尚未核实。')
-    lines.append('可达状态仅表示本次链接检查结果，不代表许可证、本文权重或运行复现已验证。')
-    return lines
-
-
-def render_scoring_notes(paper, parsed, stage):
-    lines = ['评分属于系统判断，不是论文实验结果；八维数值与总分见页首，原始审计记录保留在后端。']
-    for label, value in (('评分规则', paper.get('scoringRubricVersion') or parsed.get('scoringRubricVersion')),
-                         ('评分模型', stage.get('model')), ('评分请求协议', stage.get('protocol'))):
-        if isinstance(value, str) and value.strip():
-            clean = re.sub(r'\s+', ' ', value.strip())
-            lines.append(f'- {label}：{html.escape(clean)}')
-    return lines
 
 
 def scoring_stability_is_resolved(stage):
@@ -613,11 +575,22 @@ def render_packet(packet):
         packet.get('formulaEvidence'), paper_id, conference['id'], pdf_url)
     assets.extend(formula_assets)
     publisher = load_publish_to_blog()
+    presentation = build_reader_presentation(paper, plan=plan, resources=resources,
+                                             authors=authors, exclude_resource_url=is_arxiv_url)
+    workbench_parsed = dict(parsed)
+    workbench_parsed['primaryTaskTag'] = '#' + concepts[assignment['primaryTaskId']]['preferredLabel']['zh']
+    workbench_parsed['primaryMethodTag'] = '#' + concepts[assignment['primaryMethodId']]['preferredLabel']['zh']
+    workbench = publisher.build_verified_conference_workbench_bundle(
+        paper, packet['date'], paper_id=paper_id, publication=publication,
+        reader_plan=plan, parsed=workbench_parsed, authors=authors)
+    assets.extend({'path': relative.as_posix(), 'base64': base64.b64encode(raw).decode('ascii')}
+                  for relative, raw in workbench['sidecars'].items())
     category = f'{conference["id"]} 论文'
     lines = ['---', f'title: "{publisher.yaml_escape(title)}"', f'date: {packet["date"]}', 'draft: false',
              f'description: "{publisher.yaml_escape(one_sentence)}"',
              f'tags: {json.dumps(labels, ensure_ascii=False)}', f'categories: {json.dumps([category], ensure_ascii=False)}',
              'paper_digest_pipeline_owned: true', 'paper_digest_page_type: paper',
+             publisher._researcher_workbench_frontmatter(workbench).rstrip(),
              f'paper_digest_paper_id: {json.dumps(paper_id, ensure_ascii=False)}', 'paper_digest_source_kind: conference',
              f'paper_digest_conference_id: {json.dumps(conference["id"])}',
              f'paper_digest_conference_record_url: {json.dumps(record_url)}',
@@ -645,11 +618,7 @@ def render_packet(packet):
              'paper_digest_tags_concepts: ' + json.dumps([
                  {'id': cid, 'facet': concepts[cid]['facet'], 'label': concepts[cid]['preferredLabel']['zh']}
                  for cid in assignment['conceptIds']], ensure_ascii=False, separators=(',', ':'), sort_keys=True),
-             f'paper_digest_primary_task: {json.dumps(concepts[assignment["primaryTaskId"]]["preferredLabel"]["zh"], ensure_ascii=False)}',
              f'paper_digest_primary_method: {json.dumps(concepts[assignment["primaryMethodId"]]["preferredLabel"]["zh"], ensure_ascii=False)}',
-             f'paper_digest_score: {float(parsed["score"]):.1f}',
-             f'paper_digest_rank_bucket: {json.dumps(rank_bucket, ensure_ascii=False)}',
-             f'paper_digest_document_type: {json.dumps(document_type, ensure_ascii=False)}',
              f'paper_digest_conference_structure: {"pdf-visual-quote-evidence-v1" if capabilities == PDF_VISUAL else "replayable-pdf-layout-v1" if capabilities == FULL else "weak-text-only-v1"}', '---', '',
              f'# 📄 {reader_title}', '', f'> 英文题目：*{title}*', '',
              f'> 会议身份：`{paper_id}`', '',
@@ -660,12 +629,11 @@ def render_packet(packet):
              f'> 会议来源：[官方记录]({record_url}) · [官方 PDF]({pdf_url})', '',
              f'标签：{" ".join("#" + label for label in labels)}', '', f'评分：{complete_score}', '',
              f'排名：{rank_bucket} | 文档类型：{document_type}', '', '## 👥 作者与机构', '']
-    for author in authors:
-        lines.append(f'- {author["name"]}：{"；".join(author["affiliations"])}')
-    lines.extend(['', '## 📌 核心摘要', '', summary, '', '## 🔗 开源与复现资源', '',
-                  *render_resource_lines(resources), '', '## 🧭 深度解读', '', article.strip(), '',
+    lines.extend([presentation['authorBlock']])
+    lines.extend(['', '## 📌 核心摘要', '', presentation['summary'], '', '## 🔗 开源与复现资源', '',
+                  presentation['resourceBlock'], '', '## 🧭 深度解读', '', article.strip(), '',
                   *formula_lines,
-                  '## ⚖️ 评分明细', '', *render_scoring_notes(paper, parsed, scoring_stage), ''])
+                  '## ⚖️ 评分明细', '', presentation['scoringBlock'], ''])
     lines.extend(['---', '', f'[← 返回 {conference["id"]} 论文汇总]({packet["aggregateUrl"]})', ''])
     lines[-1:] = [hide_arxiv_links(line) for line in lines[-1:]]
     markdown = repair_formula_delimiters(hide_arxiv_links('\n'.join(lines)))

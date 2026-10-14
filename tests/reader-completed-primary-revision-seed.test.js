@@ -39,6 +39,8 @@ async function createReviewedReaderSample(t, options = {}) {
     const validManifest = validAnalysisPaper(signed.paper.arxivId).analysisManifest;
     paper.analysisManifest.contracts = { ...validManifest.contracts, ...paper.analysisManifest.contracts };
     paper.analysisManifest.stages = { ...validManifest.stages, ...paper.analysisManifest.stages };
+    // signed Reader样本只保存资源绑定；正常上游须另外已有资源扫描终态。
+    paper.analysisManifest.stages.openSourceScan.status = 'complete';
     paper.analysisManifest.stages.scoringAudit.scoringContract = 'api-scoring-audit-v2';
     paper.analysisManifest.stages.scoringAudit.audit = {};
     paper.analysisManifest.stages.scoringAudit.auditSha256 = deep.stableFingerprint({});
@@ -56,7 +58,13 @@ async function createReviewedReaderSample(t, options = {}) {
         rejectedPrimaryClaims: ['原来的错误已消失'], rejectedCoreClaims: [], rejectedReaderClaims: ['已纠正的旧Reader错误'],
         sourceQuotes: [source.text.slice(0, 100)] };
     const bound = facts.validateFeedback(feedback, plan, paper);
-    paper.analysisManifest.stages.primaryAnalysis.factReview = bound.proof;
+    await daily.withDailyFreshAnalysisContext(plan, () => daily.withDailyFreshPaperSource(plan, paper,
+        () => facts.withFactReview(bound, () => {
+            for (const stage of ['primaryAnalysis', 'coreSummaryRepair', 'scoringAudit'])
+                deep.markRecoveryStage(paper.analysisManifest, stage, 'complete', {
+                    ...paper.analysisManifest.stages[stage], ...facts.fingerprintFields(stage, paper.analysisManifest.stages[stage])
+                });
+        })));
     return { paper, plan, source, feedback, bound, id };
 }
 
@@ -85,6 +93,7 @@ test('不同反馈、来源、评分或普通失败一律不借此恢复 Reader 
                 paper => { paper.latestAnalysisAttemptError = '普通网络失败'; },
                 paper => { paper.analysisManifest.stages.primaryAnalysis.factReview = { ...sample.bound.proof, feedbackSha256: 'a'.repeat(64) }; },
                 paper => { paper.analysisManifest.stages.primaryAnalysis.status = 'pending'; },
+                paper => { delete paper.analysisManifest.stages.openSourceScan.status; },
                 paper => { paper.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = 'b'.repeat(64); },
                 paper => { paper.analysisManifest.stages.scoringAudit.auditSha256 = 'c'.repeat(64); },
                 paper => { paper.sourceSha256 = 'd'.repeat(64); },
@@ -112,6 +121,10 @@ test('主文反馈fallback必须绑定现有Reader同证明与准确反馈SHA', 
     await daily.withDailyFreshAnalysisContext(sample.plan, () => daily.withDailyFreshPaperSource(sample.plan, sample.paper,
         () => facts.withFactReview(sample.bound, () => {
             const feedback = facts.reviewFeedback('apiReaderArticle', sample.id);
+            deep.markRecoveryStage(sample.paper.analysisManifest, 'scoringAudit', 'complete', {
+                ...sample.paper.analysisManifest.stages.scoringAudit,
+                ...facts.fingerprintFields('scoringAudit', sample.paper.analysisManifest.stages.scoringAudit)
+            });
             const stage = sample.paper.analysisManifest.stages.apiReaderArticle;
             stage.factReview = sample.bound.proof;
             stage.reviewFeedbackSha256 = facts.sha(feedback.trim());

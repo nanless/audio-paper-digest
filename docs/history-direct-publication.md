@@ -1,6 +1,6 @@
 # 历史重写结果的审查与发布
 
-`history:direct-publication` 发布当前[全历史重写流程](history-rewrite.md)生成的页面。它读取 `historical-direct-rewrite-plan-v5`、对应执行记录、`historical-direct-aggregate-projection-v3`、完整单篇暂存页和 `historical-direct-aggregate-v2` 汇总，逐项核对实际文件。它不读取日更正式分析，不生成日更 schema-v3 凭证，也不接受旧 `history:publication` 私有文件作为当前来源证明。
+`history:publication` 发布当前[全历史重写流程](history-rewrite.md)生成的页面。它读取 `historical-direct-rewrite-plan-v5`、对应执行记录、`historical-direct-aggregate-projection-v3`、完整单篇暂存页和 `historical-direct-aggregate-v2` 汇总，逐项核对实际文件。它不读取日更正式分析，不生成日更 schema-v3 凭证，旧私有发布文件仅供兼容核验，不能作为当前来源证明。
 
 全历史发布在当前工作区进行，发布前停止其他日更、会议和历史发布任务，同步代码与博客最新远端 `main`，按 [AGENTS.md](../AGENTS.md) 核对角色、基线和任务范围。入口已经存在，不表示某次历史现场已完成重写或发布。
 
@@ -33,7 +33,7 @@
 下面示例仅适用于用户已经明确确认“本次只发布历史正文，视觉不在本次范围内”。`--reason` 必须替换为真实范围说明，不能把示例文字当授权；若用户明确豁免，应改用 `--mode waived` 并记录实际豁免。
 
 ```bash
-npm run history:direct-publication -- visual-disposition --apply \
+npm run history:publication -- visual-disposition --apply \
   --plan-file /absolute/path/direct-plan.json \
   --mode excluded --scope full-history-publication \
   --reason '用户已明确确认本次只发布历史正文，视觉任务不属于本次范围。' \
@@ -45,23 +45,23 @@ npm run history:direct-publication -- visual-disposition --apply \
 ## 生成、审查与发布命令
 
 ```bash
-npm run history:direct-publication -- plan --apply \
+npm run history:publication -- plan --apply \
   --publication-id UUID \
   --plan-file /absolute/path/direct-plan.json \
   --registry-file /absolute/path/direct-registry.json \
   --projection-file /absolute/path/direct-aggregate-projection-v3.json \
   --visual-disposition /absolute/project/data/runtime/historical-direct-visual-dispositions/full-history.json
 
-npm run history:direct-publication -- generate --apply \
+npm run history:publication -- generate --apply \
   --publication-id UUID \
   --plan-file /absolute/path/direct-plan.json \
   --registry-file /absolute/path/direct-registry.json \
   --projection-file /absolute/path/direct-aggregate-projection-v3.json \
   --visual-disposition /absolute/project/data/runtime/historical-direct-visual-dispositions/full-history.json
 
-npm run history:direct-publication -- review --apply --publication-id UUID
-npm run history:direct-publication -- publish --apply --publication-id UUID
-npm run history:direct-publication -- status --publication-id UUID
+npm run history:publication -- review --apply --publication-id UUID
+npm run history:publication -- publish --apply --publication-id UUID
+npm run history:publication -- status --publication-id UUID
 ```
 
 所有路径和 UUID 应使用该轮实际值。上述四个阶段都有 `--dry-run`，用于预览对应阶段；审查预览只执行程序检查与 Hugo 构建，不运行语义模型，不能当作正式审查通过。`--blog-repo ABS` 可显式指定博客仓库；review/publish 支持可选 `--message TEXT`，其中提交说明由发布阶段使用。
@@ -69,6 +69,8 @@ npm run history:direct-publication -- status --publication-id UUID
 只有用户明确选择部分论文时，plan/generate 才传 `--paper-ids ID,ID,...`。此时视觉文件必须使用 `--scope selected-sample-publication`，且只能证明所选单篇的发布，不能冒充全部历史页面及汇总已覆盖。完整发布不传该参数，使用 `full-history-publication`。
 
 ## 审查内容和续跑
+
+页面正文、图片、模型路由及展示规则复用日更的 `publish-to-blog.py`/`publish_common.py`；不可变文件读写、Git 基线和远端读取统一由 `publication-file-primitives.js` 执行。历史适配保留冻结 URL、论文与页面集合、来源及计划 SHA，因而使用与日更不同的外层凭证，不能把这份凭证冒充日更批次。
 
 历史审查生成独立的 `historical-semantic-multimodal-v1` 凭证。模型审查前，程序先核对逐文件 SHA、front matter、标签协议、链接协议及特殊来源的非会议终稿披露；之后执行真实 Hugo 构建检查，再由独立 Python 协调器通过发布公共模型接口审查逐页文本分块及存在图片时的图文关系。它不能复用或冒充日更 schema-v3 凭证。
 

@@ -15,6 +15,10 @@ function markdownFiles() {
     ], { cwd: ROOT, encoding: 'utf8' });
     return [...new Set(output.trim().split('\n'))]
         .filter(Boolean)
+        // These two immutable protocol artifacts are hashed by the legacy
+        // record verifier. Their historical links are provenance, not current
+        // operation instructions; editing them would invalidate saved records.
+        .filter(relative => !/^manual\/docs\/editorial-reference-contract(?:-v2)?\.md$/.test(relative))
         .filter(relative => fs.existsSync(path.join(ROOT, relative)));
 }
 
@@ -47,7 +51,7 @@ test('所有文档的相对链接与 npm 命令都指向当前仓库权威入口
     assert.deepEqual(unknownCommands, []);
 });
 
-test('首页保持任务导向且默认流程与 Manual 边界清楚', () => {
+test('首页保持任务导向且三流程与旧记录兼容边界清楚', () => {
     const readme = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
     const lines = readme.split('\n').length;
     assert.ok(lines <= 200, `README.md 不应重新膨胀为内部协议手册: ${lines} 行`);
@@ -65,11 +69,13 @@ test('首页保持任务导向且默认流程与 Manual 边界清楚', () => {
     assert.doesNotMatch(readme, /node scripts\/manual-|prompts\/manual-|docs\/manual-v6/);
 });
 
-test('默认文档与 Manual 文档各有唯一导航入口', () => {
+test('现行三流程与旧记录核验各有唯一导航入口', () => {
     const docsIndex = fs.readFileSync(path.join(ROOT, 'docs', 'README.md'), 'utf8');
     const manualReadme = fs.readFileSync(path.join(ROOT, 'manual', 'README.md'), 'utf8');
     assert.match(docsIndex, /默认[^\n]*LLM\/API/);
     assert.match(docsIndex, /manual\/README\.md/);
     assert.match(manualReadme, /只有.*明确/);
-    assert.match(manualReadme, /npm run digest:manual/);
+    assert.match(manualReadme, /整批 Manual.*已退役/);
+    assert.match(manualReadme, /npm run blog:manual-review/);
+    assert.doesNotMatch(manualReadme, /npm run digest:manual/);
 });

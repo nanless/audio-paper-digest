@@ -10,7 +10,6 @@ const ledgerApi = require('../scripts/lib/conference-source-ledger.js');
 const runApi = require('../scripts/lib/conference-run.js');
 const planApi = require('../scripts/lib/conference-plan.js');
 const execution = require('../scripts/lib/conference-execution.js');
-const cli = require('../scripts/conference-execution.js');
 const paperIdentity = require('../scripts/lib/paper-identity.js');
 const { productionPlanFixture, loadOriginalConferenceApis } = require('./helpers/conference-production-plan-fixture.js');
 
@@ -343,17 +342,6 @@ test('不安全的旧版执行来源和已完成的转换仍然拒绝', t => {
     assert.throws(() => execution.transitionExecution({ executionRoot: f.root, executionId, planHandle: f.handle,
         owner: 'worker', patch: { operationId, expectedStateSha256: state.stateSha256, paperId,
             nextState: { status: 'completed', usage: {}, projection: {} } } }), /完成状态需要会议最终核验凭证；当前入口尚不支持/);
-});
-
-test('执行阶段的每条 CLI 命令都要求完整的上游授权链', () => {
-    const authority = ['--run', 'run.json', '--plan-receipt', 'run.plan-receipt.json', '--plan', 'plan.json',
-        '--ledger', 'ledger.json', '--import-receipt', 'ledger.import-receipt.json', '--import', 'import.json',
-        '--staging-receipt', 'staging.json', '--filter', executionId, '--catalog', 'catalog.json', '--report', 'report.json'];
-    assert.equal(cli.parseArgs(['prepare', ...authority, '--execution', executionId]).executionId, executionId);
-    assert.equal(cli.parseArgs(['status', ...authority, '--execution', executionId]).runName, 'run.json');
-    assert.equal(cli.parseArgs(['transition', ...authority, '--execution', executionId, '--patch', 'step.json', '--owner', 'worker']).patchName, 'step.json');
-    for (const args of [['status', '--execution', executionId], ['transition', '--execution', executionId,
-        '--patch', 'step.json', '--owner', 'worker']]) assert.throws(() => cli.parseArgs(args), /complete/);
 });
 
 for (const command of ['read', 'prepare', 'transition']) {

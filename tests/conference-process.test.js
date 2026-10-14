@@ -305,6 +305,25 @@ test('实现指纹绑定显式的分析、Reader、身份和提示词依赖', ()
     assert.equal(fingerprint(), baseline);
 });
 
+test('会议当前执行身份覆盖公共 Reader 来源守卫与共享展示的传递依赖', () => {
+    const files = processApi.currentImplementationFiles();
+    const required = ['scripts/lib/reader-author-source.js',
+        'scripts/lib/reader-resource-binding.js', 'scripts/lib/reader-sealed-pdf-column-units.js',
+        'scripts/reader_sealed_pdf_column_units.py', 'scripts/paper_reader_presentation.py'];
+    for (const name of required) assert.ok(files.includes(name), name);
+    const root = '/virtual/conference-shared-reader-implementation';
+    const sources = new Map(files.map(name => [name, Buffer.from(`source:${name}`)]));
+    const fingerprint = () => processApi.implementationSha256({ root,
+        readFileSync: filename => sources.get(path.relative(root, filename)) });
+    const baseline = fingerprint();
+    for (const name of required) {
+        const original = sources.get(name);
+        sources.set(name, Buffer.concat([original, Buffer.from('\nreal dependency changed')]));
+        assert.notEqual(fingerprint(), baseline, name);
+        sources.set(name, original);
+    }
+});
+
 test('会议实现指纹按版本绑定提示词正文，v1 冻结清单仍可复算', () => {
     const root = '/virtual/conference-prompt-versions';
     const files = [...new Set([...processApi.currentImplementationFiles(), ...processApi.IMPLEMENTATION_FILES, 'prompts/opensource-scan-v2.md'])];

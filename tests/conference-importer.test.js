@@ -19,7 +19,6 @@ const executionApi = require('../scripts/lib/conference-execution.js');
 const sourceContextApi = require('../scripts/lib/conference-source-context.js');
 const cli = require('../scripts/conference-import.js');
 const planCli = require('../scripts/conference-plan.js');
-const executionCli = require('../scripts/conference-execution.js');
 const evidenceFixture = require('./helpers/conference-filter-evidence-fixture.js');
 
 const NOW = '2026-09-06T12:00:00.000Z';
@@ -341,14 +340,12 @@ test('已核验的导入、计划和执行保留完整的选择凭证链', t => 
     assert.equal(execution.source.importReceiptSha256, planned.receipt.import.receiptSha256);
     assert.equal(execution.source.planReceiptSha256, planned.receipt.receiptSha256);
     assert.equal(fs.existsSync(path.join(executions, execution.executionId, 'authority.json')), true);
-    const statusArgs = ['--run', 'run.json', '--plan-receipt', 'run.plan-receipt.json', '--plan', 'plan.json',
-        '--ledger', 'ledger.json', '--import-receipt', 'ledger.import-receipt.json', '--import', 'import.json',
-        '--staging-receipt', 'receipt.json', '--filter', f.filterId, '--catalog', 'catalog.json', '--report', 'report.json',
-        '--execution', execution.executionId];
-    const status = executionCli.main(['status', ...statusArgs], {
-        files: { ...planFiles, conferenceExecutionsDir: executions }, executionRoot: executions });
-    assert.equal(status.planReceiptSha256, planned.receipt.receiptSha256);
-    assert.equal(status.selectionReceiptSha256, planned.receipt.filter.selectionReceiptSha256);
+    const status = executionApi.readExecution({ executionRoot: executions,
+        executionId: execution.executionId, planHandle });
+    assert.equal(status.source.planReceiptSha256, planned.receipt.receiptSha256);
+    assert.equal(status.source.selectionReceiptSha256, planned.receipt.filter.selectionReceiptSha256);
+    assert.throws(() => executionApi.readExecution({ executionRoot: executions,
+        executionId: execution.executionId, planHandle: {} }), /经过核验并登记的计划对象/);
     assert.throws(() => planApi.loadPlanHandle(path.join(runs, 'run.json'), path.join(runs, 'missing.json'),
         path.join(f.output, 'plan.json'), importHandle, tagCatalogPath), /cannot be read safely|ENOENT/);
     assert.throws(() => executionApi.prepareExecutionFromPlan({ executionRoot: executions, planHandle: {},

@@ -129,8 +129,13 @@ test('空表头、没有数据行及数字重复的表格在选择前被拒绝�
     assert.throws(() => renderReaderTableSelection(selected(1, 2), { tables: [table] }), /eligible=false/);
     const evidence = require('../scripts/deep-analyzer.js').buildApiReaderArtifactEvidence({ tables: [table] });
     const visible = JSON.parse(evidence.match(/^TABLE_2_SELECTION: (.+)$/m)[1]);
-    assert.deepEqual(visible, result);
-    assert.match(visible.action, /source_quotes/);
+    const { contract, eligible, reasonCodes, reasonCount, examples } = result;
+    const legacyAction = '这张表不能使用 selection。旧说明中的“eligible=false 时只能使用 source_quotes”限制针对 selection；完整原表仍可按已有协议尝试 artifact_table。具体做法是：把完整原始 matrix 写成 Markdown 表，逐格绑定原始 DOM cell，sourceQuotes 写 []，不用 TABLE marker。保留原表全部行列、数值和单位，不得把非法 selection 子集转成兼容绑定，也不得清理原单元格。仍须通过现有来源、数字、粘贴和正文审查；若无法通过，只能用全文逐字引文完整覆盖数字与单位的 source_quotes，不得编造表头或改写来源。';
+    assert.deepEqual(visible, { contract, eligible, reasonCodes, reasonCount, examples, action: legacyAction });
+    assert.equal(Object.hasOwn(visible, 'completeTableEligible'), false, '原生成证据字节不得增加修复能力字段');
+    assert.equal(result.completeTableEligible, false);
+    assert.match(result.action, /不能使用 selection、completeTable/);
+    assert.doesNotMatch(result.action, /完整原表仍可/);
 });
 
 test('需要清理的数值或未处理的 TeX 不能直接选用，合法数值和单位保持原样', () => {

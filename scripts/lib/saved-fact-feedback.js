@@ -144,11 +144,21 @@ function strongCompletedReaderUpstream(paper, plan) {
     return require('./completed-reader-upstream').completedReaderUpstream(paper, daily.readDailyFreshSource(plan, paper));
 }
 
+function inspectRecoveredReaderParent(paper, plan, original) {
+    const parentBound = facts.validateFeedback(original.feedback, plan, original.paper);
+    return facts.withFactReview(parentBound, () => facts.withSavedReaderUpstreamRecovery(parentBound, paper, () => {
+        const source = require('./model-text-sanitization').currentModelInputSource(paper);
+        return require('./reader-parent-upstream-preflight').inspectSavedReaderParentUpstream(paper, source);
+    }));
+}
+
 function protectedReaderUpstream(paper) {
     const copy = structuredClone(paper);
     for (const key of Object.keys(copy)) if (/^apiReader/.test(key)) delete copy[key];
     for (const key of Object.keys(copy.analysisManifest?.contracts || {}))
         if (/^apiReader/.test(key)) delete copy.analysisManifest.contracts[key];
+    // 资源宣称合同只属于 Reader；完成旧稿的当前来源审校时允许新增该合同。
+    if (copy.analysisManifest?.contracts) delete copy.analysisManifest.contracts.readerResourceClaims;
     delete copy.analysisManifest?.stages?.apiReaderArticle;
     delete copy.analysisManifest?.stages?.apiReaderTableAudit;
     delete copy.analysisManifest?.stages?.imageSupplement;
@@ -160,7 +170,7 @@ function analyzeWithRecoveredFeedback(paper, plan, analyze, explicitFeedback = n
         analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explicitFeedback, options));
 }
 
-async function refreshProtectedReader(paper, options = {}, feedbackSha256 = null) {
+async function refreshProtectedReader(paper, options = {}, feedbackSha256 = null, parentUpstreamProof = null) {
     const target = structuredClone(paper);
     require('../deep-analyzer').captureStaleAnalysisSnapshot(target, target.analysisManifest,
         'apiReaderArticle', feedbackSha256);
@@ -182,10 +192,16 @@ async function refreshProtectedReader(paper, options = {}, feedbackSha256 = null
     const fresh = require('./fresh-analysis-context');
     const source = require('./model-text-sanitization').currentModelInputSource(paper);
     if (!source) throw new Error('Reader纠错缺少当前已核验封存来源');
+    const reviewFeedback = facts.reviewFeedback('apiReaderArticle', require('../utils').normalizedId(paper));
+    const recoveryReaderResources = require('./reader-failed-bundle-resource-replay').prepareRecoveryReaderResources(
+        target, source, { reviewFeedback });
     const result = await fresh.withFreshPaperContext(target, () =>
         require('./llm-usage').withLlmUsageContext({ paperId: require('../utils').normalizedId(paper) }, () =>
             require('../deep-analyzer').refreshApiReaderArticleFromSource(target, source, {
-                reviewFeedback: facts.reviewFeedback('apiReaderArticle', require('../utils').normalizedId(paper)),
+                reviewFeedback,
+                ...(recoveryReaderResources ? { recoveryReaderResources } : {}),
+                resumeSavedSourceReader: true,
+                ...(parentUpstreamProof ? { parentUpstreamProof } : {}),
                 naturalResourceProse: options.naturalResourceProse === true
             })));
     if (daily.stableHash(protectedReaderUpstream(result)) !== daily.stableHash(before)) {
@@ -194,7 +210,52 @@ async function refreshProtectedReader(paper, options = {}, feedbackSha256 = null
     }
     return result;
 }
+function recoverArchivedCompletedReader(paper, plan) {
+    const engine = require('../analysis-engine'), repair = require('./reader-repair');
+    if (!engine.paperAnalysisLockHeld(paper) || engine.hasValidApiReaderV3Records(paper)
+        || !daily.isPaperReusableForAnalysis(paper, plan)) return null;
+    const oldStage = paper.analysisManifest?.stages?.apiReaderArticle;
+    const directory = plan.readerAttemptsDir;
+    if (!oldStage || typeof directory !== 'string' || !fs.existsSync(directory)) return null;
+    for (const snapshot of [...(paper.analysisStaleSnapshots || [])].reverse()) {
+        const stage = snapshot?.payload?.stages?.apiReaderArticle;
+        if (snapshot.contract !== 'stale-analysis-snapshot-v1' || snapshot.invalidatedStage !== 'apiReaderArticle'
+            || snapshot.payloadSha256 !== daily.stableHash(snapshot.payload) || stage?.status !== 'complete'
+            || stage.articleSha256 !== paper.apiReaderArticleSha256 || stage.planSha256 !== paper.apiReaderPlanSha256
+            || !(paper.analysisStaleSnapshots || []).some(parent => parent.payloadSha256 === daily.stableHash(parent.payload)
+                && parent.payload?.stages?.apiReaderArticle?.articleSha256 === stage.revisionSeedArticleSha256
+                && parent.payload.stages.apiReaderArticle.sourceBindingsSourceTextSha256 === paper.sourceSha256)
+            || stage.revisionSeedSourceSha256 !== paper.sourceSha256) continue;
+        const candidate = structuredClone(paper);
+        candidate.analysisManifest.stages.apiReaderArticle = structuredClone(stage);
+        const active = facts.current(require('../utils').normalizedId(paper));
+        if ([active?.proof, active?.readerBound?.proof, active?.coreBound?.proof, active?.primaryBound?.proof].filter(Boolean)
+            .some(proof => !savedProofs(candidate).some(saved => daily.stableHash(saved) === daily.stableHash(proof)))) continue;
+        if (!engine.hasValidApiReaderV3Records(candidate)
+            || !withRecoveredFeedback(candidate, plan, () => engine.isSuccessfulAnalysisRecord(candidate))) continue;
+        const receipt = fs.readdirSync(directory).filter(name => /^[a-f0-9]{64}\.json$/.test(name)).some(name => {
+            const checked = repair.readFailedCandidateEnvelope(directory, null, path.join(directory, name));
+            const record = checked?.envelope, identity = record?.identity, payload = record?.payload;
+            return identity?.paperId === paper.arxivId && identity.sourceSha256 === paper.sourceSha256
+                && identity.freshAnalysis?.sourceManifestSha256 === paper.freshRewriteProvenance.sourceManifestSha256
+                && identity.signedRevisionDisplaySha256 === oldStage.signedRevisionDisplaySha256
+                && identity.model?.model === stage.model && identity.promptSha256 === stage.promptTemplateSha256
+                && payload?.draft && payload.attempts === stage.attempts && payload.fullAttempts === stage.fullAttempts;
+        });
+        if (!receipt) continue;
+        // 只恢复真实归档整阶段；错配旧阶段继续留档，不补签正文或改费用。
+        require('../deep-analyzer').captureStaleAnalysisSnapshot(paper, paper.analysisManifest, 'apiReaderArticle', stage.fingerprint);
+        candidate.analysisStaleSnapshots = structuredClone(paper.analysisStaleSnapshots);
+        return engine.mergePapersById([], [candidate])[0];
+    }
+    return null;
+}
+
 async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explicitFeedback, options) {
+    if (!explicitFeedback) {
+        const archived = recoverArchivedCompletedReader(paper, plan);
+        if (archived) return archived;
+    }
     if (paper.analysisManifest?.stages?.apiReaderArticle?.status === 'complete'
         && paper.apiReaderPlan?.tableBindings?.some(binding => binding.pdfCellConfirmation)) {
         if (!require('../analysis-engine').paperAnalysisLockHeld(paper)) throw new Error('原PDF检查记录重放须持有当前论文锁');
@@ -220,7 +281,11 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
         }
         return withRecoveredFeedback(paper, plan, analyze, explicitFeedback);
     }
-    if (!completedReaderUpstream(paper, plan)) {
+    const upstreamComplete = completedReaderUpstream(paper, plan);
+    const parentUpstreamPreflight = !explicitFeedback && original?.readerFeedback && upstreamComplete
+        ? inspectRecoveredReaderParent(paper, plan, original) : null;
+    const savedParentCurrent = parentUpstreamPreflight ? parentUpstreamPreflight.current : upstreamComplete;
+    if (!savedParentCurrent) {
         if (!explicitFeedback && original?.readerFeedback) {
             const parentBound = facts.validateFeedback(original.feedback, plan, original.paper);
             const childBound = facts.validateFeedback(original.readerFeedback, plan, paper);
@@ -236,7 +301,10 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
                     if (!resumed || typeof resumed.analysis !== 'string' || resumed.error)
                         throw new Error('原Reader父范围没有返回真实完整上游，保留原失败');
                     Object.assign(paper, resumed);
-                    if (!strongCompletedReaderUpstream(paper, plan)) {
+                    const restoredSource = require('./model-text-sanitization').currentModelInputSource(paper);
+                    if (!strongCompletedReaderUpstream(paper, plan)
+                        || !require('./reader-parent-upstream-preflight')
+                            .inspectSavedReaderParentUpstream(paper, restoredSource).current) {
                         const error = new Error('原Reader父范围恢复后摘要、评分或来源仍未完整绑定');
                         error.code = 'READER_UPSTREAM_INCOMPLETE'; error.retryable = false; throw error;
                     }
@@ -265,12 +333,12 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
     const refresh = () => (original?.readerFeedback && !explicitFeedback ? facts.withSavedReaderFactReview : facts.withReaderFactReview)(bound, paper, async () => {
         facts.withFactReview(bound, () => undefined);
         if (require('./cancelled-reader-audit-recovery').reusableCancelledReaderAuditResult(paper)) return analyze();
-        return refreshProtectedReader(paper, options, bound.proof.feedbackSha256);
+        return refreshProtectedReader(paper, options, bound.proof.feedbackSha256, parentUpstreamPreflight);
     });
     if (!parent) return refresh();
     const parentBound = facts.validateFeedback(parent.feedback, plan, parent.paper);
     // 原摘要包已独立验证，本次只读取其已完成产物，不进入摘要修改作用域。
     return facts.withFactReview(parentBound, refresh);
 }
-module.exports = { hasSavedProof, readSavedFeedback, withRecoveredFeedback,
+module.exports = { recoverArchivedCompletedReader, hasSavedProof, readSavedFeedback, withRecoveredFeedback,
     readerOnlyFeedback, completedReaderUpstream, analyzeWithRecoveredFeedback };

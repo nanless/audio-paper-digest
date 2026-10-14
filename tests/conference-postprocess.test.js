@@ -9,10 +9,8 @@ const path = require('node:path');
 const api = require('../scripts/lib/conference-postprocess.js');
 const tagCatalogApi = require('../scripts/lib/tag-catalog.js');
 const { createTagRules } = require('../scripts/lib/tag-rules.js');
-const cli = require('../scripts/conference-postprocess.js');
-const executionCli = require('../scripts/conference-execution.js');
 const adapter = require('../scripts/lib/conference-analysis-adapter.js');
-const pageApi = require('../scripts/lib/historical-page-staging.js');
+const pageApi = require('../scripts/lib/publication-file-primitives.js');
 const { productionPlanFixture } = require('./helpers/conference-production-plan-fixture.js');
 const { validAnalysisPaper, validAnalysisText } = require('./valid-analysis-fixture.js');
 
@@ -251,7 +249,8 @@ print(json.dumps({'structuredArtifacts':a,'sourceBinding':{'pdfSha256':hashlib.s
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, dependencies);
     assert.equal(result.status, 'staged');
     assert.match(result.markdown, /!\[原文数学表达区域 1，PDF 第 1 页\]/);
-    assert.equal(result.manifest.assets.length, 1);
+    assert.equal(result.manifest.assets.filter(asset => asset.path.startsWith('static/images/')).length, 1);
+    assert.equal(result.manifest.assets.filter(asset => asset.path.startsWith('static/data/papers/')).length, 4);
     const asset = result.manifest.assets[0];
     assert.match(asset.path, /^static\/images\/conference\/icassp-2026\/[a-f0-9]{12}\/figure-1\.png$/);
     const directory = path.join(stagingRoot, f.one, result.manifest.tagMetadata.registrySha256,
@@ -303,7 +302,7 @@ test('完成状态与记录不符、误用 arXiv 渲染器或素材不足时一�
     assert.throws(() => api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, { ...f.dependencies, render: () => ({ markdown: 'https://arxiv.org/abs/1234.5678', assets: [] }) }), /arXiv identity/);
     assert.throws(() => api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
-        stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, { ...f.dependencies, render: () => ({ markdown: 'generic', assets: [{ path: 'x' }] }) }), /weak assets/);
+        stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, { ...f.dependencies, render: () => ({ markdown: 'generic', assets: [{ path: 'x' }] }) }), /unsafe asset/);
 });
 
 test('生产 Node 阶段调用通用 Python 渲染器，不带 arXiv 身份', t => {
@@ -700,15 +699,15 @@ test('页面生成程序升级后，使用新的暂存身份，不覆盖原文�
         tagStageRecordSourceSha256: '6'.repeat(64), pythonTagStageRecordSourceSha256: '7'.repeat(64),
         analysisSectionsSourceSha256: '3'.repeat(64), analysisSectionTitlesSourceSha256: '4'.repeat(64),
         loaderSourceSha256: 'd'.repeat(64), parserSourceSha256: 'e'.repeat(64), pythonParserSourceSha256: '5'.repeat(64), tagCatalogSourceSha256: 'f'.repeat(64),
-        identitySourceSha256: '1'.repeat(64) };
+        identitySourceSha256: '1'.repeat(64), implementationDependenciesSha256: '8'.repeat(64) };
         return { ...body, implementationSha256: api.stableHash(body) }; };
     const firstDeps = { ...f.dependencies, implementationFingerprint: () => implementation('a') };
     const secondDeps = { ...f.dependencies, implementationFingerprint: () => implementation('d'),
         render: packet => ({ markdown: `---\npaper_digest_paper_id: "${packet.paper_id}"\n---\n\nUPGRADED\n`, assets: [] }) };
     const first = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, firstDeps);
-    assert.equal(first.manifest.implementation.contract, 'conference-page-projection-v2');
-    assert.equal(first.manifest.implementation.version, 2);
+    assert.equal(first.manifest.implementation.contract, 'conference-page-projection-v3');
+    assert.equal(first.manifest.implementation.version, 3);
     assert.equal(first.manifest.implementation.tagCatalogSourceSha256, 'f'.repeat(64));
     assert.equal(Object.hasOwn(first.manifest.implementation, 'taxonomySourceSha256'), false);
     assert.equal(api.VERSION, 1);
@@ -719,6 +718,24 @@ test('页面生成程序升级后，使用新的暂存身份，不覆盖原文�
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, firstDeps).directory,
     api.loadStage({ analysisRoot: 'ignored', executionId: f.one, tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, secondDeps).directory);
+});
+
+test('当前会议投影绑定共享展示闭包，旧 v2 已封存指纹仍可完整核验', t => {
+    const f = fixture(t);
+    const current = api.implementationFingerprint();
+    assert.equal(current.contract, 'conference-page-projection-v3');
+    assert.match(current.implementationDependenciesSha256, /^[a-f0-9]{64}$/);
+    const legacy = { ...current, contract: api.LEGACY_PROJECTION_CONTRACT,
+        version: api.LEGACY_PROJECTION_VERSION };
+    delete legacy.implementationDependenciesSha256;
+    delete legacy.implementationSha256;
+    legacy.implementationSha256 = api.stableHash(legacy);
+    const staged = api.stagePaper({ analysisRoot: 'ignored', executionId: f.one,
+        tagCatalogPath: TAG_CATALOG_PATH, stagingRoot: path.join(f.root, 'legacy-projection'),
+        planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true },
+    { ...f.dependencies, implementationFingerprint: () => legacy });
+    assert.equal(staged.manifest.implementation.contract, 'conference-page-projection-v2');
+    assert.equal(Object.hasOwn(staged.manifest.implementation, 'implementationDependenciesSha256'), false);
 });
 
 test('真实计划授权、来源复核和已保存并核验的分析，可以暂存一篇会议论文', async t => {
@@ -866,16 +883,6 @@ test('旧记录确实不在时，blocked 分配照旧被顶替', t => {
     assert.deepEqual(fs.readdirSync(implementationRoot).sort(), ['assignment.json', 'manifest.json', 'page.md']);
 });
 
-test('命令行要求完整授权、已配置的根目录和互不相同的 UUID 选择', () => {
-    const authority = executionCli.AUTHORITY_FLAGS.flatMap(flag => [flag, flag === '--filter' ? '33333333-3333-4333-8333-333333333333' : 'proof.json']);
-    const parsed = cli.parseArgs(['aggregate', '--dry-run', ...authority,
-        '--analysis-runs', '11111111-1111-4111-8111-111111111111,22222222-2222-4222-8222-222222222222']);
-    assert.equal(parsed.executionIds.length, 2);
-    assert.throws(() => cli.parseArgs(['paper', '--apply', '--analysis-run', '11111111-1111-4111-8111-111111111111']), /Use/);
-    assert.throws(() => cli.configured({ conferenceAnalysisDir: 'relative' }), /configured absolute path/);
-});
-
-
 test('会议缓存兼容旧标签字段，但不能混用新旧字段', () => {
     const current = completed('88888888-8888-4888-8888-888888888888').analysis.papers[0];
     const expected = api.getConsistentPublicationFields(current);
@@ -904,14 +911,14 @@ test('会议实现身份实际包含 Python 解析器全文，单独变化使身
             const result = originalRead(file, ...args);
             if (path.resolve(file) !== parserPath) return result;
             const bytes = Buffer.concat([result.bytes, Buffer.from('\n# changed Python parser dependency')]);
-            return { ...result, bytes, fileSha256: sha256(bytes) };
+            return { ...result, bytes, sha256: sha256(bytes) };
         };
         const changed = api.implementationFingerprint();
         assert.notEqual(changed.pythonParserSourceSha256, baseline.pythonParserSourceSha256);
         assert.notEqual(changed.implementationSha256, baseline.implementationSha256);
         assert.equal(changed.parserSourceSha256, baseline.parserSourceSha256);
-        const { pythonParserSourceSha256: _changedPython, implementationSha256: _changedHash, ...otherChanged } = changed;
-        const { pythonParserSourceSha256: _originalPython, implementationSha256: _originalHash, ...otherOriginal } = baseline;
+        const { pythonParserSourceSha256: _changedPython, implementationDependenciesSha256: _changedDependencies, implementationSha256: _changedHash, ...otherChanged } = changed;
+        const { pythonParserSourceSha256: _originalPython, implementationDependenciesSha256: _originalDependencies, implementationSha256: _originalHash, ...otherOriginal } = baseline;
         assert.deepEqual(otherChanged, otherOriginal);
     } finally { pageApi.readRegular = originalRead; }
 });
@@ -931,13 +938,13 @@ test('会议页面实现身份包含标签词表及两端标签格式读取器�
                 const result = originalRead(file, ...args);
                 if (path.resolve(file) !== target) return result;
                 const bytes = Buffer.concat([result.bytes, Buffer.from('\nchanged tag record dependency')]);
-                return { ...result, bytes, fileSha256: sha256(bytes) };
+                return { ...result, bytes, sha256: sha256(bytes) };
             };
             const changed = api.implementationFingerprint();
             assert.notEqual(changed[field], baseline[field]);
             assert.notEqual(changed.implementationSha256, baseline.implementationSha256);
             for (const key of Object.keys(baseline)) {
-                if (key !== field && key !== 'implementationSha256') assert.equal(changed[key], baseline[key]);
+                if (key !== field && key !== 'implementationSha256' && key !== 'implementationDependenciesSha256') assert.equal(changed[key], baseline[key]);
             }
         } finally { pageApi.readRegular = originalRead; }
     }

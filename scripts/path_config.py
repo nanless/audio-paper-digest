@@ -128,26 +128,6 @@ def validate_date_component(target_date):
     return value
 
 
-def xiaohongshu_markdown_path(target_date, suffix):
-    target_date = validate_date_component(target_date)
-    if not re.fullmatch(r'[A-Za-z0-9_-]+', str(suffix or '')):
-        raise ValueError(f'小红书输出后缀非法: {suffix!r}')
-    return CURRENT_DIR / f"xiaohongshu-{target_date}-{suffix}.md"
-
-
-def xiaohongshu_oneliner_cache_path(target_date):
-    target_date = validate_date_component(target_date)
-    return CURRENT_DIR / f"xiaohongshu-oneliners-{target_date}.json"
-
-
-def wechat_preview_path(target_date):
-    return CURRENT_DIR / f"wechat-preview-{target_date}.html"
-
-
-def backfill_result_path():
-    return DATA_DIR / "backfill-result.json"
-
-
 def atomic_write_bytes(path, content, *, mode=None, dir_mode=None):
     """可靠地替换二进制文件，不暴露写了一半的目标文件。
 

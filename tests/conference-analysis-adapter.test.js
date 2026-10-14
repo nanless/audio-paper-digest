@@ -8,8 +8,6 @@ const os = require('node:os');
 const path = require('node:path');
 const adapter = require('../scripts/lib/conference-analysis-adapter.js');
 const context = require('../scripts/lib/conference-analysis-context.js');
-const cli = require('../scripts/conference-analyze.js');
-const executionCli = require('../scripts/conference-execution.js');
 const deep = require('../scripts/deep-analyzer.js');
 const { productionPlanFixture } = require('./helpers/conference-production-plan-fixture.js');
 
@@ -275,30 +273,6 @@ test('会议来源上下文保留含点的官方论文 ID', () => {
     const value = context.withConferenceAnalysisSource({ executionId: EXECUTION, executionDir: '/tmp/conference-analysis',
         paperId, sourceDetails: details }, () => context.getConferenceAnalysisSource({ id: paperId }));
     assert.deepEqual(value, details);
-});
-
-test('会议分析命令行要求准备阶段有完整授权，并支持隔离的状态和 analyze', async () => {
-    const authorityPairs = executionCli.AUTHORITY_FLAGS.flatMap(flag => [flag,
-        flag === '--filter' ? '11111111-1111-4111-8111-111111111111' : `${flag.slice(2)}.json`]);
-    const paperId = 'conference:icassp:2026:icassp-arnumber:100';
-    const prepared = cli.parseArgs(['prepare', ...authorityPairs, '--paper-id', paperId, '--analysis-run', EXECUTION]);
-    assert.equal(prepared.paperId, paperId);
-    const officialPaperId = 'conference:acl:2026:conference-paper-id:2026.acl-long.17';
-    assert.equal(cli.parseArgs(['prepare', ...authorityPairs, '--paper-id', officialPaperId,
-        '--analysis-run', EXECUTION]).paperId, officialPaperId);
-    assert.throws(() => cli.parseArgs(['prepare', ...authorityPairs, '--paper-id',
-        'conference:acl:2026:conference-paper-id:2026/acl/17', '--analysis-run', EXECUTION]), /canonical paperId/);
-    assert.equal(cli.parseArgs(['analyze', ...authorityPairs, '--analysis-run', EXECUTION, '--concurrency', '3']).concurrency, 3);
-    assert.throws(() => cli.parseArgs(['prepare', '--paper-id', paperId, '--analysis-run', EXECUTION]), /complete/);
-    assert.throws(() => cli.parseArgs(['status', '--analysis-run', EXECUTION]), /complete live plan authority/);
-    let called = false;
-    const result = await cli.main(['status', ...authorityPairs, '--analysis-run', EXECUTION], {
-        files: { conferenceAnalysisDir: '/tmp/conference-analysis', conferenceSourceCacheDir: '/tmp/conference-source' },
-        loadBoundPlan: () => ({}), adapter: { loadConferenceAnalysis: () => { called = true; return { run: { executionId: EXECUTION,
-            paperId, status: 'source_ready', capabilities: { fullText: 'weak' } }, completionPending: false }; },
-        verifyPlanAuthority: () => true }
-    });
-    assert.equal(called, true); assert.equal(result.paperId, paperId);
 });
 
 test('真实 Reader 入口按本次执行记尝试次数，空图片直接短路，作者回退是会议专属的', async t => {

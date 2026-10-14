@@ -119,6 +119,7 @@ module.exports.createScoringReplaySampleStage = function(sample) {
  audit,auditSha256:stableFingerprint(audit),outputAnalysisSha256:crypto.createHash('sha256').update(sample.output).digest('hex')};
 };
 module.exports.executeScoringReplaySample = async function(paper, rawTextForAnalysis, latestIdentity) {
+ const options={};
  const analysisManifest=paper.analysisManifest;
  const imageManifest=[];
  const sourceDetails={structuredArtifacts:null};

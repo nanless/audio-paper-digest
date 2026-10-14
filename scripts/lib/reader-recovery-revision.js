@@ -165,6 +165,76 @@ function assertReaderJsonRequestPolicy(policy) {
     }
 }
 
+function restoreUnfundedDiagnosticFailureState(directory, identity, payload) {
+    const last = payload.readerRecoveryRevisions?.at(-1), fresh = require('./fresh-analysis-context');
+    const fields = ['noProgress','failureSignature','validationFailureStreak','validationFailureSignature'];
+    if (!last || !payload.readerRecoveryRevisions.some(audit => audit.clearedNoProgress === true)
+        || payload.implementationRepairAllowanceProof || payload.noProgress !== 0 || payload.failureSignature !== ''
+        || payload.validationFailureStreak !== 0 || payload.validationFailureSignature !== '') return payload;
+    const context = getFreshAnalysisContext();
+    if (!fresh.isDailyFreshSourceScope() || !context?.refreshReaderDiagnostics
+        || !require('../analysis-engine').paperAnalysisLockHeld({ arxivId: identity.paperId })
+        || path.resolve(directory) !== path.join(context.runDir, 'reader-attempts')
+        || !isDeepStrictEqual(fresh.freshAnalysisIdentity(identity.paperId), identity.freshAnalysis)) return payload;
+    const same = require('./reader-compatible-candidate-replay');
+    const source = require('./model-text-sanitization').currentModelInputSource({ arxivId: identity.paperId });
+    if (!source || shaText(source.text) !== identity.sourceSha256) throw new Error('Unfunded diagnostic state recovery scope drift');
+    const chain = [], seen = new Set();
+    let nodeIdentity = identity, node = payload, originalState;
+    while (chain.length < 32) {
+        const audit = node.readerRecoveryRevisions?.at(-1);
+        if (!audit || audit.scope !== 'fresh-run' || audit.toIdentitySha256 !== hashDraft(nodeIdentity)
+            || audit.paperId !== identity.paperId || audit.runId !== context.runId
+            || !/^[a-f0-9]{64}$/.test(audit.fromIdentitySha256 || '')
+            || !new RegExp(`^${audit.fromIdentitySha256}\\.migrated-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\\.json$`).test(audit.archivedName || '')
+            || seen.has(audit.archivedName)) throw new Error('Unfunded diagnostic state recovery scope or archive drift');
+        seen.add(audit.archivedName);
+        const file = path.join(directory, audit.archivedName), checked = readEnvelope(file), envelope = checked.envelope;
+        const old = envelope.payload, oldIdentity = envelope.identity;
+        const changed = [...new Set([...Object.keys(oldIdentity || {}), ...Object.keys(nodeIdentity)])]
+            .filter(key => !isDeepStrictEqual(oldIdentity?.[key], nodeIdentity[key])).sort();
+        if (checked.envelopeSha256 !== audit.oldEnvelopeSha256 || envelope.version !== REPAIR_VERSION
+            || envelope.payloadSha256 !== hashDraft(old) || old?.status !== 'failed' || !parseRecoveryDraft(old?.draft)
+            || hashDraft(oldIdentity) !== audit.fromIdentitySha256 || hashDraft(old) !== audit.oldPayloadSha256
+            || !same.sameInput(oldIdentity, nodeIdentity) || !isDeepStrictEqual([...audit.changedFields].sort(), changed)
+            || changed.some(key => !implementationFields.includes(key) || key === 'readerRecoveryEpochSha256')
+            || old.implementationRepairAllowanceProof || old.implementationRepairAllowanceLineage !== IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT
+            || node.implementationRepairAllowanceLineage !== old.implementationRepairAllowanceLineage
+            || ['attempts','fullAttempts','transportFailures'].some(key => (node[key] || 0) !== (old[key] || 0) || audit[key] !== (old[key] || 0))
+            || audit.oldNoProgress !== old.noProgress || audit.oldFailureSignature !== old.failureSignature
+            || audit.inputDraftSha256 !== hashDraft(old.draft) || audit.outputDraftSha256 !== hashDraft(node.draft)
+            || hashDraft(old.draft) !== hashDraft(node.draft)
+            || !isDeepStrictEqual(old.explicitReaderRetryRound, node.explicitReaderRetryRound))
+            throw new Error('Unfunded diagnostic state recovery requires unchanged original draft, input and paid budget');
+        chain.push({ file, sha256: checked.envelopeSha256, audit, oldPayloadSha256: hashDraft(old) });
+        if (audit.clearedNoProgress === true) { originalState = Object.fromEntries(fields.map(key => [key, old[key]])); break; }
+        if (audit.clearedNoProgress !== false || fields.some(key => !isDeepStrictEqual(node[key], old[key])))
+            throw new Error('Intermediate diagnostic migration changed failure state');
+        node = old; nodeIdentity = oldIdentity;
+    }
+    if (!originalState) throw new Error('Unfunded diagnostic state recovery lacks a bounded original archive');
+    const latest = same.latestReaderRequest(require('../config').FILES.llmUsageDir, identity.paperId, context.runId);
+    if (!latest || latest.value.contentAttempt !== payload.attempts
+        || chain.some(edge => !Number.isFinite(Date.parse(edge.audit.revisedAt)) || latest.at > Date.parse(edge.audit.revisedAt)))
+        throw new Error('Unfunded diagnostic state recovery has a later or unproven Reader request');
+    const checked = readFailedCandidateEnvelope(directory, identity);
+    if (!checked || hashDraft(checked.envelope.payload) !== hashDraft(payload)) throw new Error('Diagnostic candidate changed before state recovery');
+    const restored = { ...structuredClone(payload), ...originalState };
+    restored.diagnosticFailureStateRestorations = [...(restored.diagnosticFailureStateRestorations || []), {
+        contract: 'reader-unfunded-diagnostic-state-restoration-v1', restoredAt: new Date().toISOString(),
+        identitySha256: hashDraft(identity), migrationAuditSha256: hashDraft(last),
+        originalFailureState: originalState, previousEnvelopeSha256: checked.envelopeSha256,
+        archiveChain: chain.map(edge => ({ archivedName: path.basename(edge.file), originalEnvelopeSha256: edge.sha256,
+            originalPayloadSha256: edge.oldPayloadSha256, migrationAuditSha256: hashDraft(edge.audit) })),
+        latestUsageFileName: path.basename(latest.file), latestUsageSha256: latest.sha256, latestUsageEventId: latest.value.eventId
+    }];
+    for (const edge of chain) if (readEnvelope(edge.file).envelopeSha256 !== edge.sha256) throw new Error('Original diagnostic archive changed before restoration');
+    require('./reader-proof-read-scope').readReaderProofJson(latest.file, { expectedSha256: latest.sha256 });
+    require('./reader-proof-read-scope').assertReaderReceiptSnapshots();
+    saveFailedCandidate(directory, identity, restored);
+    return loadFailedCandidate(directory, identity);
+}
+
 function loadReaderRecoveryRevision(directory, identity, options = {}) {
     return require('./reader-proof-read-scope').withReaderProofReadScope(
         () => require('./reader-proof-read-scope').withReaderReceiptScan(() => {
@@ -179,6 +249,11 @@ function loadReaderRecoveryRevision(directory, identity, options = {}) {
         }));
 }
 function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
+    if (options.savedReaderInputContinuity !== undefined) {
+        const source = require('./model-text-sanitization').currentModelInputSource(options.paper);
+        require('./reader-saved-feedback-input-continuity').readSavedReaderInputContinuity(
+            options.savedReaderInputContinuity, options.paper, source, identity);
+    }
     if (identity?.resourceLocalRevisionContract !== undefined
         && (identity.resourceLocalRevisionContract !== 'signed-reader-resource-local-repair-v1'
             || identity.contentMode !== 'reader-source-signed-revision-v1')) {
@@ -255,7 +330,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
     if (exact) {
         if (options.resolvedReaderCandidate !== undefined) throw new Error('显式归档复验不能覆盖现有活动候选');
         verifyPixels(exact);
-        const recovered = finishRevisionArchives(directory, identity, exact);
+        const recovered = restoreUnfundedDiagnosticFailureState(directory, identity, finishRevisionArchives(directory, identity, exact));
         // 同身份续跑也可能保存了旧解析器拒绝的完整原始稿。仅恢复有界结构，
         // 不修改存档、次数或验证凭证；调用方仍须完整校验并按明确目标修复。
         if (!recovered.draft && recovered.rawDraft) {
@@ -372,7 +447,11 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
     catch (error) { if (error.code === 'ENOENT') return null; throw error; }
     const compatible = [];
     for (const name of names) {
-        const checked = readFailedCandidateEnvelope(directory, null, path.join(directory, name));
+        let checked = readFailedCandidateEnvelope(directory, null, path.join(directory, name));
+        if (checked && require('./reader-compatible-candidate-replay').sameInput(checked.envelope.identity, identity)) {
+            restoreUnfundedDiagnosticFailureState(directory, checked.envelope.identity, checked.envelope.payload);
+            checked = readFailedCandidateEnvelope(directory, null, path.join(directory, name));
+        }
         if (!checked) throw new Error('Reader 恢复候选在审查期间消失');
         const { envelope, envelopeSha256 } = checked;
         const payload = envelope.payload;
@@ -428,7 +507,13 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
         const changedFields = ALLOWED_FIELDS.filter(field => !isDeepStrictEqual(envelope.identity[field], identity[field]));
         if (changedFields.length) compatible.push({ identity: envelope.identity, payload, changedFields, name, envelopeSha256, plainChinesePromptUpgrade });
     }
-    if (compatible.length > 1) throw new Error('Ambiguous Reader diagnostic revision: multiple compatible candidates');
+    let compatibleReplay;
+    if (compatible.length > 1) {
+        compatibleReplay = require('./reader-compatible-candidate-replay').resolveCompatibleCandidates(
+            directory, identity, compatible, options);
+        if (!compatibleReplay) throw new Error('Ambiguous Reader diagnostic revision: multiple compatible candidates');
+        compatible.splice(0, compatible.length, compatibleReplay.selected);
+    }
     if (!compatible.length) return null;
     const old = compatible[0];
     const updated = structuredClone(old.payload);
@@ -488,20 +573,46 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
             }
         }
         let normalized;
+        const sourceBlocked = require('./reader-source-blocked-normalization');
+        let currentSource = null;
+        if (typeof options.normalizeReplayDraft === 'function'
+            || require('./fresh-analysis-context').isDailyFreshSourceScope()) {
+            currentSource = require('./model-text-sanitization').currentModelInputSource({ arxivId: identity.paperId });
+            if (currentSource && shaText(currentSource.text) !== identity.sourceSha256) {
+                throw new Error('来源阻塞恢复的当前正文与候选身份不同');
+            }
+        }
         try {
-            normalized = normalizeReaderDraftOrder(updated.draft);
+            normalized = typeof options.normalizeReplayDraft === 'function'
+                ? options.normalizeReplayDraft(structuredClone(updated.draft), structuredClone(updated.issues), structuredClone(updated.imageEvidence || []))
+                : normalizeReaderDraftOrder(updated.draft, { structuredArtifacts: currentSource?.structuredArtifacts });
         } catch (error) {
-            if (!readTableBindingOrderError(error)) throw error;
+            const blocked = sourceBlocked.readSourceTableNormalizationError(error, updated.draft, currentSource?.structuredArtifacts);
+            if (blocked) normalized = blocked;
+            else if (!readTableBindingOrderError(error)) throw error;
+        }
+        if (normalized?.contract === sourceBlocked.CONTRACT) {
+            const blocked = sourceBlocked.assertBlockedNormalizationResult(normalized, currentSource?.structuredArtifacts);
+            updated.blockedSourceTableNormalization = { contract: sourceBlocked.CONTRACT,
+                inputDraftSha256: hashDraft(updated.draft), outputDraftSha256: blocked.draftSha256,
+                blockingIssuesSha256: hashDraft(blocked.blockingIssues), artifactsSha256: blocked.artifactsSha256 };
+            updated.draft = blocked.draft;
+            updated.issues = require('./reader-repair').collectDraftIssues(updated.draft,
+                Object.assign(new Error('来源完整表仍阻塞，交回正常约束修复'), {
+                    code: 'READER_SOURCE_TABLE_UNRENDERABLE', readerIssues: blocked.blockingIssues }),
+                { sourceText: currentSource.text, structuredArtifacts: currentSource.structuredArtifacts });
+            updated.status = 'failed';
+            normalized = null;
         }
         if (normalized) {
-            updated.draft = normalized.draft;
+            updated.draft = normalized.draft || normalized;
             updated.rawDraft = JSON.stringify(updated.draft);
-            if (normalized.mapping.changed) {
+            if (normalized.mapping?.changed) {
                 updated.draftOrderMappings = [...(updated.draftOrderMappings || []), normalized.mapping];
             }
         }
     }
-    const diagnosticImplementationChanged = !identity.readerFactLocalRevisionContract && !old.plainChinesePromptUpgrade
+    const diagnosticImplementationChanged = options.savedReaderInputContinuity === undefined && !compatibleReplay && !identity.readerFactLocalRevisionContract && !old.plainChinesePromptUpgrade
         && implementationFields.some(field => old.changedFields.includes(field));
     const lineageAlreadyIssued = updated.implementationRepairAllowanceLineage
         === IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT;
@@ -510,8 +621,11 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
     // 实现变化时，只有尚未发放过许可、仍有未使用的许可，或恢复规则版本变化，
     // 才会新增或转交一次正文尝试的许可。用过的许可不会因普通实现变化再次发放。
     const recoveryEpochChanged = old.changedFields.includes('readerRecoveryEpochSha256');
-    const grantOrTransferAllowance = !updated.explicitReaderRetryRound && diagnosticImplementationChanged
+    const transferExistingCompatibleAllowance = Boolean(options.savedReaderInputContinuity === undefined && compatibleReplay && previousActiveAllowance
+        && !updated.explicitReaderRetryRound && old.changedFields.some(field => implementationFields.includes(field)));
+    const grantOrTransferAllowance = transferExistingCompatibleAllowance || !compatibleReplay && !updated.explicitReaderRetryRound && diagnosticImplementationChanged
         && (!lineageAlreadyIssued || Boolean(previousActiveAllowance) || recoveryEpochChanged);
+    const clearDiagnosticState = diagnosticImplementationChanged && grantOrTransferAllowance;
     const archivedName = `${hashDraft(old.identity)}.migrated-${crypto.randomUUID()}.json`;
     const audit = { contract: CONTRACT, revisedAt: new Date().toISOString(), scope: revisionScope,
         runId: revisionRunId, paperId: identity.paperId,
@@ -519,12 +633,14 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
         changedFields: old.changedFields, archivedName,
         oldPayloadSha256: hashDraft(old.payload), oldEnvelopeSha256: old.envelopeSha256,
         oldNoProgress: updated.noProgress, oldFailureSignature: updated.failureSignature,
-        clearedNoProgress: diagnosticImplementationChanged,
+        clearedNoProgress: clearDiagnosticState,
         attempts: updated.attempts, fullAttempts: updated.fullAttempts,
         transportFailures: updated.transportFailures ?? 0,
         inputDraftSha256: old.payload.draft ? hashDraft(old.payload.draft) : null,
-        outputDraftSha256: updated.draft ? hashDraft(updated.draft) : null };
-    if (diagnosticImplementationChanged) {
+        outputDraftSha256: updated.draft ? hashDraft(updated.draft) : null,
+        ...(compatibleReplay ? { compatibleCandidateReplay: compatibleReplay.proof } : {}),
+        ...(transferExistingCompatibleAllowance ? { transferredExistingImplementationAllowanceSha256: previousActiveAllowance.allowanceSha256 } : {}) };
+    if (clearDiagnosticState) {
         updated.noProgress = 0; updated.failureSignature = '';
         updated.validationFailureStreak = 0; updated.validationFailureSignature = '';
         // 保留已有调用次数，清除旧检查留下的连续失败计数；
@@ -563,6 +679,7 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
         throw new Error('Reader diagnostic revision source changed before installation');
     }
     require('./reader-proof-read-scope').assertReaderReceiptSnapshots();
+    if (compatibleReplay) compatibleReplay.assertUnchanged();
     saveFailedCandidate(directory, identity, updated);
     finishRevisionArchives(directory, identity, updated);
     // 仍然是失败的恢复输入，不是已接受的正文，也不是证明。

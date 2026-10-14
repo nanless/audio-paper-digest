@@ -95,8 +95,9 @@ test('原矩阵空白处没有原始单元格时拒绝补造，并只授权对�
     assert.match(error.message, /row=1,column=1 对应 0 个原始单元格/);
     assert.equal(error.readerIssues[0].path, '/tableBindings/0');
     const repair = require('../scripts/lib/reader-repair');
-    const issues = repair.collectDraftIssues(input.draft, error);
-    assert.deepEqual(repair.buildRepairTargets(input.draft, issues).map(target => target.path).sort(),
+    const context = { structuredArtifacts: input.structuredArtifacts };
+    const issues = repair.collectDraftIssues(input.draft, error, context);
+    assert.deepEqual(repair.buildRepairTargets(input.draft, issues, context).map(target => target.path).sort(),
         ['/sections/0/body', '/tableBindings/0']);
     assert.equal(JSON.stringify(input), original);
 });

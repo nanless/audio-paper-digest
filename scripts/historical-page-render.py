@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from blog_entry_loader import load_publish_to_blog
+from paper_reader_presentation import build_reader_presentation
 from runtime_guard import require_external_runtime
 
 
@@ -175,9 +176,8 @@ def render_packet(packet):
         projected = dict(paper)
     publisher = load_publish_to_blog()
     if direct and not projected.get('arxivId'):
-        # 直接生成的会议论文没有 arXiv 标识，常规发布器生成引用资料时却需要它。
-        # 因此这里直接生成会议论文的页面，不伪造 ID，也不修改已有会议页面。
-        # 调用前，上游 Node 已核对解读正文、来源及展示记录的对应关系。
+        # 保留真实会议身份和冻结页面路径；共享日更的作者、资源、摘要与评分展示。
+        # 上游 Node 已先核验来源、Reader 和完整分析；展示函数不赋予发布资格。
         parsed = publisher.parse_analysis(projected.get('analysis', ''))
         if not isinstance(parsed, dict):
             raise ValueError('无法将历史会议论文的分析正文解析为对象。')
@@ -194,8 +194,21 @@ def render_packet(packet):
             article, [] if figures is None else figures
         )
         tags = [str(item).lstrip('#') for item in parsed.get('tags', []) if str(item).strip()]
-        score = parsed.get('score')
-        summary = str(parsed.get('summary') or '').strip()
+        score_line = publisher.format_complete_score_line(parsed)
+        presentation = build_reader_presentation(
+            projected,
+            plan=projected.get('apiReaderPlan'),
+            resources=(projected.get('apiReaderResources') or {}).get('resources'),
+            authors=(projected.get('apiReaderAuthors') or {}).get('authors'),
+        )
+        workbench = publisher.build_verified_conference_workbench_bundle(
+            projected, date,
+            paper_id=projected['directPaperId'],
+            publication=projected.get('conferencePublication'),
+            reader_plan=projected.get('apiReaderPlan'), parsed=parsed,
+            authors=(projected.get('apiReaderAuthors') or {}).get('authors'),
+        )
+        summary = presentation['summary']
         frontmatter = [
             '---', f'title: {json.dumps(title, ensure_ascii=False)}', f'date: {date}',
             'draft: false', f'tags: {json.dumps(tags, ensure_ascii=False)}',
@@ -206,19 +219,34 @@ def render_packet(packet):
             f'paper_digest_tags_registry_version: {json.dumps(tag_metadata["registryVersion"])}',
             f'paper_digest_tags_registry_sha256: {json.dumps(tag_metadata["registrySha256"])}',
             f'paper_digest_tags_concepts: {json.dumps(tag_metadata["concepts"], ensure_ascii=False, separators=(",", ":"), sort_keys=True)}',
-            f'paper_digest_primary_task: {json.dumps(tag_metadata["primaryTask"], ensure_ascii=False)}',
             f'paper_digest_primary_method: {json.dumps(tag_metadata["primaryMethod"], ensure_ascii=False)}',
+            publisher._researcher_workbench_frontmatter(workbench).rstrip(),
             '---', '', f'# 📄 {reader_title}', '', f'> 会议论文 ID：`{projected["directPaperId"]}`', ''
         ]
         if tags:
             frontmatter.extend([f'标签：{" ".join("#" + tag for tag in tags)}', ''])
-        if isinstance(score, (int, float)):
-            frontmatter.extend([f'评分：{score:.1f}/10', ''])
+        if score_line:
+            frontmatter.extend([f'评分：{score_line}', ''])
+        for label, field in (('分档', 'rankBucket'), ('文档类型', 'documentType')):
+            value = str(parsed.get(field) or '').strip()
+            if value:
+                frontmatter.extend([f'{label}：{value}', ''])
         if summary:
             frontmatter.extend(['## 📌 核心摘要', '', summary, ''])
+        if presentation['authorBlock']:
+            frontmatter.extend(['## 👥 作者与机构', '', presentation['authorBlock'], ''])
+        if presentation['resourceBlock']:
+            frontmatter.extend(['## 🔗 论文资源', '', presentation['resourceBlock'], ''])
+        if presentation['scoringBlock']:
+            frontmatter.extend(['## 📊 评分说明', '', presentation['scoringBlock'], ''])
         frontmatter.extend(['## 🧭 深度解读', '', article, '', '---',
             f'[← 返回 {date} 语音/音乐/音频论文速递](/posts/{date}/)', ''])
-        return {'markdown': publisher.sanitize_markdown_for_publish('\n'.join(frontmatter)), 'assets': []}
+        return {
+            'markdown': publisher.sanitize_markdown_for_publish('\n'.join(frontmatter)),
+            'assets': [{'path': relative.as_posix(),
+                        'base64': base64.b64encode(raw).decode('ascii')}
+                       for relative, raw in workbench['sidecars'].items()],
+        }
     # 评分、摘要和正文须重新从保存的分析正文解析，不能直接使用缓存 parsed。
     # 非直接生成分支随后按已核对的标签记录更新标签元数据。
     projected['parsed'] = publisher.parse_analysis(paper.get('analysis', ''))

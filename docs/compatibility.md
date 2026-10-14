@@ -26,7 +26,7 @@ Reader 的正文结构版本和表格、公式来源版本负责不同检查，�
 
 Manual 包内保存的旧提示词和编辑规范副本不代表当前任务可以继续。当前读取程序会与仓库中的现行 `manual/prompts/manual-tutorial-article.md`、`manual/docs/editorial-reference-contract.md` 的 SHA 比较，不符时拒绝旧包；分析规范还检查对应阶段提示词及成稿规范。旧正式结果的显示与旧任务包继续运行是两件事，不能据此宣布所有历史文件都不可读。
 
-独立历史发布入口已经存在，但计划或暂存文件齐全不证明全历史任务已发布。详细操作及来源限制见[历史重写](history-rewrite.md)和[历史发布](history-direct-publication.md)。已有批次重写的人工补丁还受旧运行身份限制，见[从原文重写](fresh-rewrite.md)；不能手填缺失 SHA 扩大兼容范围。
+独立历史发布入口已经存在，但计划或暂存文件齐全不证明全历史任务已发布。详细操作及来源限制见[历史重写](history-rewrite.md)和[历史发布](history-direct-publication.md)。已有批次重写的人工补丁还受旧运行身份限制，见[从原文重写](history-rewrite.md)；不能手填缺失 SHA 扩大兼容范围。
 
 旧 `sealed_tutorial_preview` 只保留材料读取，停止新页面生成、审查声明与推送。其旧加载器验证的局部哈希不能替代完整文章、来源和当前发布资格核验。
 
