@@ -25,6 +25,7 @@ for (const [scenario, description] of Object.entries(scenarios)) {
         for (const directory of ['scripts', 'manual', 'prompts', 'config']) {
             fs.cpSync(path.join(project, directory), path.join(folder, directory), { recursive: true });
         }
+        require('./helpers/git-prompt-evidence-workspace.cjs').installFixtureGitObjectStore(folder, project);
         fs.symlinkSync(path.join(project, 'node_modules'), path.join(folder, 'node_modules'), 'dir');
         const engine = require(path.join(folder, 'scripts/analysis-engine.js'));
         const exited = childProcess.spawnSync(process.execPath,

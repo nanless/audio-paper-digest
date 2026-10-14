@@ -2955,7 +2955,7 @@ function readerLengthShortfall(issue) {
 function repairOperationProtocol(context) {
     if (!context.atomicOperation && context.targets.every(target => /^\/(?:sections\/\d+\/body|conceptBridges\/\d+)$/.test(target.path))) return '本轮不修改表格、公式、图片及其来源声明；已有标记保持原样。';
     // 复杂结构仍使用冻结的完整来源协议，其正文同时进入实现指纹。
-    const frozen = fs.readFileSync(path.join(__dirname, '../../prompts/api-reader-repair-v11.md'), 'utf8');
+    const frozen = require('./prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-repair-v11.md').toString('utf8');
     const blocks = frozen.split('~~~');
     const marker = '\n如果本次 `atomicOperation.kind` 明确为 `delete_top_level_program_metadata_v1`';
     if (blocks.length !== 3 || blocks[1].split(marker).length !== 2) throw new Error('局部修复的来源操作协议缺失或边界不唯一');
@@ -3469,8 +3469,8 @@ const CONCEPT_TERMS_PROMPT_CONTRACT = 'reader-concept-terms-prompt-v1';
 const CONCEPT_TERMS_PROMPT_PATH = 'prompts/api-reader-concept-terms-v1.md';
 function readerRepairImplementationSha256() {
     return shaText([fs.readFileSync(__filename, 'utf8'),
-        fs.readFileSync(path.join(__dirname, '../..', CONCEPT_TERMS_PROMPT_PATH), 'utf8'),
-        fs.readFileSync(path.join(__dirname, '../../prompts/api-reader-repair-v11.md'), 'utf8')].join('\0'));
+        require('./prompt-evidence.js').readPromptEvidenceBytes(CONCEPT_TERMS_PROMPT_PATH).toString('utf8'),
+        require('./prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-repair-v11.md').toString('utf8')].join('\0'));
 }
 function buildConceptTermsRepairContext(draft, issues, sourceText) {
     const blocking = issues.filter(issue => issue?.diagnosticOnly !== true);
@@ -3519,7 +3519,7 @@ function buildConceptTermsRepairContext(draft, issues, sourceText) {
     if (!targets.length || targets.length > 8 || excerpts.join('\n').length > 12000) return null;
     return { draftSha256: hashDraft(draft), targets, issues: blocking, explanations, sourceQuotes: excerpts,
         promptContract: CONCEPT_TERMS_PROMPT_CONTRACT, promptPath: CONCEPT_TERMS_PROMPT_PATH,
-        promptTemplateSha256: shaText(fs.readFileSync(path.join(__dirname, '../..', CONCEPT_TERMS_PROMPT_PATH), 'utf8')) };
+        promptTemplateSha256: shaText(require('./prompt-evidence.js').readPromptEvidenceBytes(CONCEPT_TERMS_PROMPT_PATH).toString('utf8')) };
 }
 function conceptTermsPromptVariables(context) {
     return { validationFeedback: context.issues.map(issue => issue.message).join('\n'),

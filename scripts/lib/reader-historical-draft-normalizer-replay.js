@@ -8,7 +8,15 @@ const normalizerPath = 'scripts/lib/reader-draft-order.js';
 const dependencies = ['scripts/analysis-contract.js', 'scripts/lib/reader-pdf-cell-evidence.js',
     'scripts/reader_pdf_cell_evidence.py'];
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
-function git(args) { return child.execFileSync('git', args, { cwd: repository, maxBuffer: 8 * 1024 * 1024 }); }
+class UnsupportedHistoricalDependencyError extends Error {}
+function git(args) {
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('GIT_')));
+    Object.assign(env, { GIT_NO_LAZY_FETCH: '1', GIT_TERMINAL_PROMPT: '0',
+        GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' });
+    return child.execFileSync('git', ['--no-lazy-fetch', '--no-replace-objects', ...args], {
+        cwd: repository, env, timeout: 10000, maxBuffer: 8 * 1024 * 1024
+    });
+}
 function object(commit, file) {
     const blob = git(['rev-parse', `${commit}:${file}`]).toString().trim();
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(blob)) throw new Error('Historical normalizer Git blob is invalid');
@@ -19,9 +27,24 @@ function resolveHistoricalNormalizer(expectedSha256) {
     if (!/^[a-f0-9]{64}$/.test(expectedSha256 || '')) return null;
     const head = git(['rev-parse', 'HEAD^{commit}']).toString().trim();
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(head)) return null;
-    const commits = [...new Set([head, ...git(['rev-list', '--max-count=128', head, '--', normalizerPath]).toString().trim().split('\n')])];
+    const changes = [...new Set([head, ...git(['rev-list', '--max-count=128', head, '--', normalizerPath])
+        .toString().trim().split('\n')])].filter(commit => /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit));
+    // A later normalizer commit may retire bytes that were used at its real
+    // parent without changing the normalizer at that parent. Path-only history
+    // omits that snapshot, including its final matching dependency versions.
+    // No path simplification here: these are the actual parents of the bounded
+    // named commits; every candidate still passes all original byte guards.
+    const commits = [...new Set(git(['rev-list', '--parents', '--no-walk', ...changes])
+        .toString().trim().split(/\s+/))];
     for (const commit of commits) {
         if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(commit)) continue;
+        const entry = git(['ls-tree', commit, '--', normalizerPath]).toString().trim();
+        // The parent of the introduction commit legitimately has no program.
+        // Only a proven absent tree entry is skipped; Git/object errors surface.
+        if (!entry) continue;
+        if (!/^100(?:644|755) blob [a-f0-9]{40}(?:[a-f0-9]{24})?\tscripts\/lib\/reader-draft-order\.js$/.test(entry)) {
+            throw new Error('Historical normalizer tree entry is not a regular Git blob');
+        }
         const program = object(commit, normalizerPath);
         if (program.sha256 !== expectedSha256) continue;
         const runtime = dependencies.map(file => object(commit, file));
@@ -49,18 +72,27 @@ function replayHistoricalDraftNormalizer(draft, requestIdentity, source, expecte
     tables.require = spec => {
         if (spec === '../analysis-contract.js') return require('../analysis-contract');
         if (spec === './reader-pdf-cell-evidence') return pdf;
-        throw new Error('Historical table replay requires an unverified dependency');
+        throw new UnsupportedHistoricalDependencyError('Historical table replay requires an unverified dependency');
     };
-    tables._compile(selected.tableProgram.bytes.toString('utf8'), tablesFilename);
     compiled.require = spec => {
         if (spec === 'node:crypto') return crypto;
         if (spec === '../analysis-contract.js') return require('../analysis-contract');
         if (spec === './reader-pdf-cell-evidence') return pdf;
         if (spec === './reader-tables') return tables.exports;
-        throw new Error('Historical normalizer replay requires an unverified dependency');
+        throw new UnsupportedHistoricalDependencyError('Historical normalizer replay requires an unverified dependency');
     };
-    compiled._compile(selected.program.bytes.toString('utf8'), filename);
-    const result = compiled.exports.normalizeReaderDraftOrder(structuredClone(draft), { structuredArtifacts: source.structuredArtifacts });
+    let result;
+    try {
+        tables._compile(selected.tableProgram.bytes.toString('utf8'), tablesFilename);
+        compiled._compile(selected.program.bytes.toString('utf8'), filename);
+        result = compiled.exports.normalizeReaderDraftOrder(structuredClone(draft), { structuredArtifacts: source.structuredArtifacts });
+    } catch (error) {
+        // An unsupported program supplies no provenance proof. Only our own
+        // controlled-loader rejection becomes null; Git, syntax, source and
+        // integrity errors must retain their original failure behavior.
+        if (error instanceof UnsupportedHistoricalDependencyError) return null;
+        throw error;
+    }
     if (repair.hashDraft(result?.draft || result) !== expectedSavedDraftSha256) return null;
     const proof = { contract: CONTRACT, purpose: 'paid-failed-draft-provenance-only', gitCommitOid: selected.commit,
         normalizerBlobOid: selected.program.blobOid, normalizerSha256: selected.program.sha256,

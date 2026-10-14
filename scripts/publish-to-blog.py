@@ -5689,30 +5689,42 @@ def _visual_prompt_path(stage, manifest):
     return PROJECT_ROOT / 'prompts' / filename
 
 
-def _historical_prompt_bytes(declared_sha256):
-    """prompts/history/<sha256>.md 是按整文件字节 SHA-256 命名的历史提示词归档。"""
+def _historical_prompt_bytes(declared_sha256, relative_path=None):
+    """Read exact historical bytes from the controlled Git evidence index."""
     value = str(declared_sha256 or '').lower()
     if not re.fullmatch(r'[0-9a-f]{64}', value):
         return None
-    path = PROJECT_ROOT / 'prompts' / 'history' / f'{value}.md'
-    if not path.is_file():
-        return None
-    return path.read_bytes()
+    from prompt_evidence import historical_prompt_evidence_bytes_for_sha256
+    return historical_prompt_evidence_bytes_for_sha256(
+        value, project_root=PROJECT_ROOT, relative_path=relative_path)
 
 
 def _resolved_visual_prompt_sha256(stage, manifest, prompt_path):
-    """记录声明的 promptSha256 可能指向 prompts/history/ 归档的历史字节：v1 提示词在设计上
-    要冻结，实际被就地改写过。声明值与当前文件不符时，只有归档里确有这份字节（文件名就是
-    整文件 SHA-256，这里再重算一遍）才按声明值走；归档里没有就返回当前值，保持改动前那句
-    「prompt SHA 已失效」的判定。用上归档会打一行日志，复用不是无声发生的。"""
-    current = _sha256_file(prompt_path)
+    """Verify the declared historical SHA without restoring old checkout files."""
     declared = str(manifest.get('promptSha256') or '')
+    canonical_paths = {PROJECT_ROOT / 'prompts' / filename
+                       for versions in _VISUAL_PROMPT_TEXT_FILES.values()
+                       for filename in versions.values()}
+    if Path(prompt_path) in canonical_paths:
+        from prompt_evidence import read_prompt_evidence_bytes
+        relative = Path(prompt_path).relative_to(PROJECT_ROOT).as_posix()
+        try:
+            raw = read_prompt_evidence_bytes(relative, project_root=PROJECT_ROOT)
+        except (ValueError, OSError) as missing:
+            raise PublishDataValidationError(f'{stage} 原提示词证据缺失或 SHA 不一致。') from missing
+        current = hashlib.sha256(raw).hexdigest()
+    else:
+        current = _sha256_file(prompt_path)
     if declared == current:
         return current
     value = declared.lower()
-    archived = _historical_prompt_bytes(value)
+    # Historical bytes must belong to this stage's declared prompt version.
+    # A genuine analysis/other visual blob cannot prove this visual manifest.
+    expected_path = _visual_prompt_path(stage, manifest)
+    relative = expected_path.relative_to(PROJECT_ROOT).as_posix()
+    archived = _historical_prompt_bytes(value, relative_path=relative)
     if archived is not None and hashlib.sha256(archived).hexdigest() == value:
-        print(f'  ℹ️  {stage} manifest 声明的提示词 SHA 按 prompts/history 归档字节核验：{value}')
+        print(f'  ℹ️  {stage} manifest 声明的提示词 SHA 已按 Git 历史原字节核验：{value}')
         return declared
     return current
 

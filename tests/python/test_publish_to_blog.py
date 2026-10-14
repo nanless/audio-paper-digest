@@ -32,6 +32,7 @@ from publish_common import (  # noqa: E402
 )
 import markdown_hugo_gate  # noqa: E402
 import tutorial_payload_verifier  # noqa: E402
+from prompt_evidence import read_prompt_evidence_bytes  # noqa: E402
 # 从仓库根按点分路径单跑（python -m unittest tests.python.<模块>）时，tests/python
 # 不在 sys.path 上；补一条引导，让三种运行方式都能导入这个平级 helper。
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -145,7 +146,10 @@ def manual_v5_fresh_files(paper, date_str, *, official_project_evidence=False,
             'prohibitedProseInputs': [],
             'inputs': [{
                 'kind': kind, 'path': str(target.resolve()),
-                'sha256': hashlib.sha256(target.read_bytes()).hexdigest(),
+                'sha256': hashlib.sha256(
+                    read_prompt_evidence_bytes(
+                        'manual/prompts/manual-tutorial-article.md', project_root=project_root)
+                    if kind == 'authoring_prompt' else target.read_bytes()).hexdigest(),
             } for kind, target in paths.items()],
         }
         receipt['receiptSha256'] = publish_to_blog._stable_json_sha256(receipt)
@@ -4886,12 +4890,13 @@ title: "Bad table"
             with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as temporary:
                 project_root = Path(temporary) / 'project'
                 for relative in (
-                        'manual/prompts/manual-tutorial-article.md',
                         'manual/docs/editorial-reference-contract.md',
                         'manual/scripts/manual-tutorial-quality-contract.js'):
                     target = project_root / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes((Path(ROOT) / relative).read_bytes())
+                from prompt_evidence_fixtures import install_git_prompt_evidence_fixture
+                install_git_prompt_evidence_fixture(project_root)
                 contract_path = project_root / 'manual/docs/editorial-reference-contract.md'
                 old_bytes = contract_path.read_bytes()
                 old_copy = Path(temporary) / 'previous-editorial-contract.md'
@@ -8154,7 +8159,8 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             source_root.mkdir(parents=True)
             paper = {'arxivId': '2607.00001', 'analysis': 'audited', 'parsed': {'score': '8'}}
             analysis_sha = publish_to_blog._visual_summary_analysis_sha256(paper)
-            prompt_sha = publish_to_blog._sha256_file(Path(ROOT) / 'prompts' / 'visual-summary.md')
+            prompt_sha = hashlib.sha256(read_prompt_evidence_bytes(
+                'prompts/visual-summary.md', project_root=ROOT)).hexdigest()
             cards = {}
             for kind in publish_to_blog.VISUAL_SUMMARY_KINDS:
                 source = source_root / '01-2607.00001-paper.png'
@@ -8262,7 +8268,8 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
             data_sha = hashlib.sha256(json.dumps(
                 context, ensure_ascii=False, sort_keys=True, separators=(',', ':'),
             ).encode('utf-8')).hexdigest()
-            prompt_sha = publish_to_blog._sha256_file(Path(ROOT) / 'prompts' / 'digest-cover.md')
+            prompt_sha = hashlib.sha256(read_prompt_evidence_bytes(
+                'prompts/digest-cover.md', project_root=ROOT)).hexdigest()
             manifest = current / 'digest-cover-manifests' / '2026-07-10.json'
             manifest.parent.mkdir(parents=True)
             manifest.write_text(json.dumps({

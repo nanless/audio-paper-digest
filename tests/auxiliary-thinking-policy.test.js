@@ -23,6 +23,7 @@ test('旧完整检查点原配方不补签，缺保存和伪新声明不能复�
  const folder=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'aux-thinking-legacy-'));
  t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));
  for(const dir of ['scripts','manual','prompts','config'])fs.cpSync(path.resolve(__dirname,'..',dir),path.join(folder,dir),{recursive:true});
+ require('./helpers/git-prompt-evidence-workspace.cjs').installFixtureGitObjectStore(folder);
  fs.symlinkSync(path.resolve(__dirname,'../node_modules'),path.join(folder,'node_modules'),'dir');
  fs.writeFileSync(path.join(folder,'.env'),'PAPER_ANALYZER_API_KEY=synthetic\nPAPER_ANALYZER_MODEL=mimo-v2.6-flash\nPAPER_ANALYZER_ENDPOINT=http://127.0.0.1:9/v1\n',{mode:0o600});
  const program="const assert=require('node:assert/strict');const deep=require('./scripts/deep-analyzer.js');\n"+legacyControls.toString()+"\nlegacyControls();";

@@ -10,6 +10,7 @@
 | 历史来源准备与重写 | [历史流程](history-rewrite.md) |
 | 历史最终审查、发布与上线 | [历史发布](history-direct-publication.md) |
 | 代码与命令对应 | [三流程对应表](three-workflows.md)、[脚本索引](../scripts/README.md) |
+| 当前 18 份提示词与旧记录原字节核验 | [Prompt 索引](../prompts/README.md)、[维护规则](maintenance.md#prompt-修改) |
 | Reader 结构、表格、公式与写作 | [Reader](reader-writing.md) |
 | Reader 显式重试及付费草稿恢复 | [恢复说明](reader-explicit-retry.md) |
 | 数据结构与旧记录核验 | [数据格式](data-format.md)、[兼容规则](compatibility.md)、[旧记录与独立人工审查](../manual/README.md) |

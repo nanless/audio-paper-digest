@@ -65,17 +65,28 @@ def _load_json_regular(path, label):
 def _exact_bound_file(binding, expected_path, label):
     if not isinstance(binding, dict):
         raise PublishDataValidationError(f'{label} 的文件记录缺失，或不是对象。')
+    project_root = Path(__file__).resolve().parents[2]
+    historical_prompt = Path(expected_path).absolute() == (
+        project_root / 'manual' / 'prompts' / 'manual-tutorial-article.md')
     try:
         candidate = Path(str(binding.get('path') or ''))
         if candidate.is_symlink():
             raise PublishDataValidationError(f'{label} 不得使用符号链接。')
-        actual_path = candidate.resolve(strict=True)
-        expected_path = Path(expected_path).resolve(strict=True)
+        actual_path = candidate.resolve(strict=not historical_prompt)
+        expected_path = Path(expected_path).resolve(strict=not historical_prompt)
     except (OSError, RuntimeError) as exc:
         raise PublishDataValidationError(f'{label} 记录的路径或指定文件路径不存在，或无法解析。') from exc
     if actual_path != expected_path:
         raise PublishDataValidationError(f'{label} 记录的路径与指定文件路径不一致。')
-    raw = _read_regular(actual_path, label)
+    if historical_prompt:
+        from prompt_evidence import read_prompt_evidence_bytes
+        try:
+            raw = read_prompt_evidence_bytes('manual/prompts/manual-tutorial-article.md',
+                                            binding.get('sha256'), project_root=project_root)
+        except (ValueError, OSError) as exc:
+            raise PublishDataValidationError(f'{label} 原提示词证据缺失或 SHA 不一致。') from exc
+    else:
+        raw = _read_regular(actual_path, label)
     digest = _sha256_bytes(raw)
     if binding.get('sha256') != digest:
         raise PublishDataValidationError(f'{label} 的 SHA-256 与记录不一致。')

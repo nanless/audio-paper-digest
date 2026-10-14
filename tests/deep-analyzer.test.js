@@ -135,9 +135,8 @@ describe('标签规则的运行时分析集成', () => {
     });
 
     it('标签修复提示词里没有 2403 那篇的专属答案示例', () => {
-        const prompt = fs.readFileSync(
-            path.join(__dirname, '../prompts/tag-repair.md'), 'utf8'
-        );
+        const prompt = require('../scripts/lib/prompt-evidence.js')
+            .readPromptEvidenceBytes('prompts/tag-repair.md').toString('utf8');
         assert.doesNotMatch(prompt, /task\.intelligibility|method\.crowdsourced-evaluation/);
     });
 
@@ -5570,7 +5569,7 @@ has_dataset: 否
         const crypto = require('node:crypto');
         const { runtimePromptTemplateSha256 } = require('../scripts/deep-analyzer.js');
         const relativePath = 'prompts/core-summary-repair.md';
-        const raw = fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
+        const raw = require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes(relativePath).toString('utf8');
         const block = raw.match(/^(`{3,}|~{3,})(?:text)?\r?\n([\s\S]*?)\r?\n\1/m)[2];
         assert.match(block, /两个数值及各自单位、正负号和小数精度必须逐字来自同一原表行/);
         assert.match(block, /同一段连续原文证据/);
@@ -5795,7 +5794,7 @@ has_dataset: 否
 
     it('核心摘要 Prompt 字节漂移只改变 coreSummaryRepair 阶段指纹', () => {
         const deep = require('../scripts/deep-analyzer.js');
-        const promptPath = path.resolve(__dirname, '../prompts/core-summary-repair.md');
+        const promptPath = 'prompts/core-summary-repair.md';
         const stages = [
             'revision', 'tableRepair', 'methodRepair', 'structureRepair',
             'coreSummaryRepair'
@@ -5806,18 +5805,20 @@ has_dataset: 否
             stage, deep.buildTextStageFingerprint(stage, inputAnalysis, evidence)
         ]));
         const before = fingerprints();
-        const originalReadFileSync = fs.readFileSync;
+        const evidenceReader = require('../scripts/lib/prompt-evidence.js');
+        const originalReadPrompt = evidenceReader.readPromptEvidenceBytes;
         try {
-            fs.readFileSync = function readWithCoreSummaryPromptDrift(filename, ...args) {
-                const value = originalReadFileSync.call(this, filename, ...args);
-                if (path.resolve(String(filename)) !== promptPath || typeof value !== 'string') {
+            evidenceReader.readPromptEvidenceBytes = function readWithCoreSummaryPromptDrift(filename, ...args) {
+                const value = originalReadPrompt.call(this, filename, ...args);
+                if (filename !== promptPath) {
                     return value;
                 }
-                assert.match(value, /禁止把 `0\.85` 改成 `85\.00`/);
-                return value.replace(
+                const text = value.toString('utf8');
+                assert.match(text, /禁止把 `0\.85` 改成 `85\.00`/);
+                return Buffer.from(text.replace(
                     '禁止把 `0.85` 改成 `85.00`',
                     '禁止把 `0.85` 改成 `85.000`'
-                );
+                ));
             };
             const after = fingerprints();
             for (const stage of stages) {
@@ -5828,7 +5829,7 @@ has_dataset: 否
                 }
             }
         } finally {
-            fs.readFileSync = originalReadFileSync;
+            evidenceReader.readPromptEvidenceBytes = originalReadPrompt;
         }
     });
 

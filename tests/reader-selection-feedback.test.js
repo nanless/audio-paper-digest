@@ -35,13 +35,13 @@ test('Reader旧v4路径保留，正文使用v8、局部修复使用v12而不改M
   const old=registry.promptFilePathForContract(stage,'analysis-prompt-text-v4'),current=registry.currentTextStagePromptPath(stage);
   assert.equal(old,'prompts/api-reader-'+kind+'-v4.md');assert.equal(current,'prompts/api-reader-'+kind+(stage==='apiReaderRepair'?'-v12.md':'-v8.md'));
   assert.equal(registry.promptFilePathForContract(stage,'analysis-prompt-text-v5'),'prompts/api-reader-'+kind+'-v5.md');
-  const oldBytes = fs.readFileSync(path.resolve(__dirname, '..', old), 'utf8');
+  const oldBytes = require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes(old).toString('utf8');
   const newBytes = stage === 'apiReaderRepair'
       ? require('../scripts/utils').loadPrompt(current, {
           title: '当前来源操作测试', arxivId: '2609.00001', validationFeedback: '',
           repairTargets: '', sourceEvidence: '', mechanicalContract: '保留正式表格与长度要求',
           operationProtocol: repair.repairOperationProtocol({ targets: [{ path: '/tableBindings/0' }] })
-      }) : fs.readFileSync(path.resolve(__dirname, '..', current), 'utf8');
+      }) : require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes(current).toString('utf8');
   const frozenHashes={article:'d96df82739d1f384a04d13e4c1c92e039678c2933215a459c200bb320d5f52fb',repair:'2146434c1712f6062dc017a6ab4799b678f957cadcf2e92908710c9e8adba9f5'};
   assert.equal(require('node:crypto').createHash('sha256').update(oldBytes).digest('hex'),frozenHashes[kind]);
   assert.notEqual(deep.runtimePromptTemplateSha256(old),deep.runtimePromptTemplateSha256(current));

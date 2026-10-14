@@ -1,19 +1,17 @@
 'use strict';
 
-// prompts/history/<sha256>.md 是历史提示词字节的归档。v1 提示词本来设计成永久冻结，
-// 实际被多次就地改写，存量记录里声明的 SHA 大多指向只存在于 git 历史里的字节。
-// 这里按记录声明的 SHA 取回那份字节，让旧记录仍可复算。
+// 工作树只保留现行Prompt。历史原字节按已登记Git blob及整文件SHA读取，
+// 用来核验旧检查点，不重新生成旧文件、不改变旧声明或把旧结果补签成新版本。
 //
-// 这是补充读取方式：只有当声明的 SHA 与当前文件（含 -v2）都不符时才会查归档；查不到就返回
-// null，调用方保持原行为。文件名就是整文件字节的 SHA-256。
-//
-// 文件名和内容必须对得上才认。写归档时被中断会留下内容不全、却仍顶着那个 SHA 名字的
-// <sha>.md；只看文件名就会把半截内容当成历史提示词发出去。所以每次读取都重算一遍 SHA，
-// 不符就不使用这份归档，返回 null，由调用方按原有规则处理未找到提示词的情况。
+// 声明的 SHA 与当前文件不符时，按索引读取原 Git 对象并重算整文件 SHA。
+// 未登记的 SHA 返回 null；已登记对象缺失或内容不符则停止核验。
+// 显式传入的私有证据目录沿用旧只读协议，每次重新核对文件名声明的 SHA。
 
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { readPromptEvidenceBytes, historicalPromptEvidenceBytesForSha256,
+    listHistoricalPromptEvidence, promptEvidenceIndexFingerprint } = require('./prompt-evidence');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 const HISTORY_DIR = path.join(PROJECT_ROOT, 'prompts', 'history');
@@ -40,8 +38,9 @@ function promptTemplateSha256(text, contractVersion = '') {
 }
 
 const templateIndex = new Map();
+const gitTemplateIndexes = new Map();
 
-// directory 默认是 prompts/history/。测试把它指到临时目录，就不用往真归档里塞坏文件。
+// 默认逻辑目录使用Git；显式临时目录仅供旧私有证据和隔离读守卫测试。
 function historyFileIndex(directory = HISTORY_DIR) {
     const index = new Map();
     let names = [];
@@ -72,6 +71,7 @@ function archivedBytes(file, expectedSha256) {
 function historicalPromptBytesForSha256(sha256, directory = HISTORY_DIR) {
     const value = String(sha256 || '').toLowerCase();
     if (!SHA256_RE.test(value)) return null;
+    if (path.resolve(directory) === HISTORY_DIR) return historicalPromptEvidenceBytesForSha256(value);
     return archivedBytes(path.join(directory, `${value}.md`), value);
 }
 
@@ -81,6 +81,20 @@ function historicalPromptBytesForSha256(sha256, directory = HISTORY_DIR) {
 function historicalPromptTemplateBytesForSha256(sha256, contractVersion = '', directory = HISTORY_DIR) {
     const value = String(sha256 || '').toLowerCase();
     if (!SHA256_RE.test(value)) return null;
+    if (path.resolve(directory) === HISTORY_DIR) {
+        const key = `${promptEvidenceIndexFingerprint()}:${String(contractVersion || '')}`;
+        let lookup = gitTemplateIndexes.get(key);
+        if (!lookup) {
+            lookup = new Map();
+            for (const entry of listHistoricalPromptEvidence()) {
+                const bytes = historicalPromptEvidenceBytesForSha256(entry.sha256);
+                const template = bytes && promptTemplateSha256(bytes.toString('utf8'), contractVersion);
+                if (template && !lookup.has(template)) lookup.set(template, entry.sha256);
+            }
+            gitTemplateIndexes.set(key, lookup);
+        }
+        return lookup.has(value) ? historicalPromptEvidenceBytesForSha256(lookup.get(value)) : null;
+    }
     const cacheKey = `${directory}:${value}:${String(contractVersion || '')}`;
     const cached = templateIndex.get(cacheKey);
     if (cached) {
@@ -139,7 +153,7 @@ function promptBytesForSha256(stage, sha256, directory = HISTORY_DIR) {
     }
     for (const candidate of candidates) {
         try {
-            const bytes = fs.readFileSync(candidate);
+            const bytes = readPromptEvidenceBytes(path.relative(PROJECT_ROOT, candidate).split(path.sep).join('/'));
             if (sha256Buffer(bytes) === value) return bytes;
         } catch (_error) { /* 路径不存在 */ }
     }
@@ -150,6 +164,7 @@ function promptBytesForSha256(stage, sha256, directory = HISTORY_DIR) {
 
 function resetCache() {
     templateIndex.clear();
+    gitTemplateIndexes.clear();
 }
 
 module.exports = {

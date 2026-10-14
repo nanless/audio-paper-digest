@@ -28,7 +28,7 @@ const {
     promptFilePathForContract,
     currentPromptTextContract
 } = require('./lib/prompt-text-versions.js');
-const promptHistory = require('./lib/prompt-history.js');
+const { historicalPromptEvidenceBytesForSha256 } = require('./lib/prompt-evidence.js');
 
 const MANIFEST_VERSION = 3;
 const VISUAL_QA_CHECKLIST_VERSION = 'visual-semantic-v1';
@@ -466,14 +466,17 @@ function visualSummaryPromptContractForPath(promptPath) {
 }
 
 function promptSha256(promptPath = null) {
-    return sha256Buffer(fs.readFileSync(
-        promptPath || visualSummaryPromptPath(currentPromptTextContract(VISUAL_SUMMARY_PROMPT_STAGE))
-    ));
+    const filename = promptPath || visualSummaryPromptPath(currentPromptTextContract(VISUAL_SUMMARY_PROMPT_STAGE));
+    const relative = path.relative(Config.PROJECT_ROOT, path.resolve(filename)).split(path.sep).join('/');
+    return sha256Buffer(/^prompts\//.test(relative)
+        ? require('./lib/prompt-evidence.js').readPromptEvidenceBytes(relative)
+        : fs.readFileSync(filename));
 }
 
-// 记录里声明的 promptSha256 可能指向 prompts/history/ 里归档的历史字节：v1 提示词
+// 记录里声明的 promptSha256 可能指向 Git 对象里登记的历史字节：v1 提示词
 // 设计上要冻结，实际被就地改写过，所以旧 manifest 声明的 SHA 与当前文件不符。声明值
-// 与当前文件不一致时，先确认归档里真有这份字节，再按声明值走；归档里没有就返回当前值，
+// 与当前文件不一致时，只接受同阶段、同声明版本路径的原字节；其他阶段的真实 Git SHA
+// 也不能证明本任务。没有匹配证据就返回当前值，
 // 与改动前完全一样（继续报「prompt 已失效」）。
 // 测试显式传入 promptPath 时不查询归档，保持测试资料路径原有的处理方式。
 function resolvedPromptSha256(declaredSha256, promptPath = null, promptTextContract = null) {
@@ -483,7 +486,8 @@ function resolvedPromptSha256(declaredSha256, promptPath = null, promptTextContr
     if (promptPath) return current;
     const declared = String(declaredSha256 || '');
     if (declared === current) return current;
-    return promptHistory.historicalPromptBytesForSha256(declared) ? declared : current;
+    const relativePath = promptFilePathForContract(VISUAL_SUMMARY_PROMPT_STAGE, promptTextContract);
+    return historicalPromptEvidenceBytesForSha256(declared, { relativePath }) ? declared : current;
 }
 
 function referenceFigureRole(caption) {

@@ -55,6 +55,7 @@ test('当前长文策略改变指纹，旧完整阶段不补策略，伪声明�
     for (const directory of ['scripts', 'manual', 'prompts', 'config']) {
         fs.cpSync(path.join(project, directory), path.join(folder, directory), { recursive: true });
     }
+    require('./helpers/git-prompt-evidence-workspace.cjs').installFixtureGitObjectStore(folder, project);
     fs.symlinkSync(path.join(project, 'node_modules'), path.join(folder, 'node_modules'), 'dir');
     fs.writeFileSync(path.join(folder, '.env'), 'PAPER_ANALYZER_API_KEY=synthetic\nPAPER_ANALYZER_MODEL=mimo-v2.6-flash\nPAPER_ANALYZER_ENDPOINT=http://127.0.0.1:9/v1\n', { mode: 0o600 });
     const program = `

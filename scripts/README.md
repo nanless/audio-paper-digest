@@ -29,7 +29,7 @@
 
 `manual/scripts` 是共享兼容边界，只保留旧来源/签名/正文与Prompt合同核验、单页独立人工审查。完整作者/任务/spec生产、社交发布、backfill及实验/视觉调试入口已删除。
 
-安装后的显式路由诊断使用 `test-api-key.js`，它会发送真实请求；Prompt归档维护使用 `build-prompt-history-archive.js`；这两个支撑工具不创建另一条生产流程。
+安装后的显式路由诊断使用 `test-api-key.js`，它会发送真实请求。历史 Prompt 通过原 Git blob 和 SHA 只读核验，不生成工作树中的旧正文归档。
 
 ## 验证
 
@@ -57,7 +57,6 @@ npm run test:compat
 | `batch-analyze.js` | 正常读取完整封存日更来源并逐篇锁内续跑；可重复 `--fact-feedback-file FILE`。`--refresh-reader-diagnostics` 保留原草稿与调用次数。明确有预算重试须同时提供 `--retry-failed-readers --reader-retry-manifest FILE`，或程序传入 `main({ readerRetryManifestPath: FILE, refreshReaderDiagnostics: true })`；只处理清单中同输入且耗尽的失败稿，旧稿与费用保留，初次明确付费轮最多3次已保存尝试/1次已保存完整重写/6实际请求/80k预留输出；后续局部或缺正文恢复使用单独的有界追加清单，原账和累计上限继续核验。无清单、坏绑定、仍有次数或成功稿拒绝。见 恢复说明。 |
 | `blog_entry_loader.py` | Python 桥 | 以固定路径加载文件名含连字符的 `publish-to-blog.py`。 |
 | `blog_repository_lock.py` | 管理共享博客锁，以 Git common-dir 协调不同项目工作区；核对 PID、hostname、token、lease、inode 和 SHA 后才回收或释放，不污染博客 Git。 |
-| `build-prompt-history-archive.js` | 从 git 历史抽取存量数据引用过的历史提示词字节，落到 `prompts/history/<sha256>.md`。默认只报告，`--write` 才保存文件，可重复运行。 |
 | `build-tag-preview.py` | 根据历史页面元数据生成私有标签索引、旧标签处理表和待评审报告，不改写博客。按名称或别名作字面对照；七种处理状态和证据要求见本页的分类词表维护说明。 |
 | `conference-discover.js` | 只读扫描显式会议元数据/PDF 目录，按 `O_EXCL` 保存候选与报告；不确认身份，不调用模型。 |
 | `conference-extract.py` | 从暂存来源中的一篇显式 PDF 提取页文本和视觉审计。`--verify --source-root ABS` 用固定 PyMuPDF 临时重新提取，比较已有文件的全部字节；公式缺少原始 TeX 时不能发布为展示公式。 |
@@ -201,9 +200,11 @@ npm run test:compat
 | `lib/paper-source-authority.js` | Node 库 | 核验规范论文身份、完整身份记录、来源快照、凭证和全文 SHA，返回只含来源、且只能由实际核验过程生成的引用对象。普通磁盘 arXiv 加载器不能恢复发布授权；会议路径还要求当前进程持有实际核验生成的计划引用对象。 |
 | `lib/pdf-layout.js` | 调用 PDF 布局 worker，取得单元格和图表证据。 |
 | `lib/primary-fact-local-repair.js` | Node 库 | 为来源绑定的主文事实纠错限定唯一原段落，严格核验 JSON 的 from/to、原稿 SHA 和修改范围；未授权正文逐字保留，完整正文与评分检查仍由正常分析入口执行。 |
-| `lib/prompt-history.js` | Node 库 | 按记录声明的 SHA 从 `prompts/history/` 取历史提示词字节。先按原 v1、已发布 v2 和当前阶段路径逐一核对文件字节的 SHA，不符才查归档，查不到返回 `null` 让调用方维持原行为。 |
+| `lib/prompt-history.js` | Node 库 | 按原记录整文件或首围栏模板 SHA 读取、核验 Git 历史原字节；查不到返回 `null`，不把当前正文伪装成旧版本。 |
+| `lib/prompt-evidence.js` | Node 库 | 受控读取当前 Prompt 或索引声明的 Git blob，严格核验原路径、OID、整文件 SHA 与可选声明 SHA；不写旧正文。 |
+| `lib/git-prompt-evidence-index.json` | 只读元数据 | 仅保存历史 Prompt 的原路径、Git blob OID 与整文件 SHA，没有旧正文。 |
 | `lib/prompt-rendering-contract.js` | Node 库 | 识别旧提示词替换可能改写的输入，仅使受影响论文的旧阶段失效；正常输入继续沿用原指纹和恢复记录。 |
-| `lib/prompt-text-versions.js` | Node 库 | 登记每个分析阶段当前使用的提示词正文路径和版本标识。旧记录按自己声明的版本选择对应提示词文件重新核验，未声明版本时按 v1 读取，未知版本直接报错；深度分析按它选正文，会议与 manual 的指纹也按它决定要哈希哪份文件。 |
+| `lib/prompt-text-versions.js` | Node 库 | 登记每个分析阶段当前使用的提示词正文路径和版本标识。导出当前 18 份正文名单；旧记录按自己声明的版本选择原路径，通过 Git 证据读取器重新核验，未声明版本时按 v1 身份读取，未知版本直接报错。 |
 | `lib/publication-file-primitives.js` | 三流程共用的严格文件、JSON、不可变写入与回读 SHA 守卫。 |
 | `lib/reader-author-parser.js` | Node 库 | 从原始材料重新解析并核验作者：校验完整原 HTML、结构化解析结果及全文 SHA，或从会议 PDF 文本重新解析作者上标；原文不可得时只使用元数据姓名和明确不可得机构。不会加载配置或请求模型。 |
 | `lib/reader-author-replay-cli.js` | Node 子进程入口 | 供 Python 发布器调用的本地作者核验入口；只读取调用方传入的私有文件，限制输入字节并只输出布尔核验结果。 |
@@ -314,3 +315,5 @@ npm run test:compat
 | `waive-analysis-failures.js` | CLI | 记录用户明确同意跳过的当前日更分析失败项，保存对应现有文件的豁免记录；不覆盖失败尝试。 |
 | `waive-post-publish-visuals.js` | Node 入口 | 用户明确取消生图时，记录与当前发布绑定的视觉豁免。 |
 | `workspace-role.js` | 入口与共享运行检查 | 用不跟踪入 Git、权限为 `0600` 且绑定仓库真实路径的标记区分 `daily` 与 `history`。`set` 原子保存或显式切换角色，`exec` 在 npm 生产入口启动前检查角色；直接 Node/Python 入口再由公共运行检查核验。`PD_WORKSPACE_ALLOW_CROSS_ROLE=1` 只放行 daily 工作区执行 history 命令（读进程环境或工作区 `.env`，放行时打印提示）；反向和 realpath 不符照旧拒绝。 |
+
+| `prompt_evidence.py` | Python旧凭证严格读取本地Git原始Prompt物件，当前模板必须来自工作树。 |

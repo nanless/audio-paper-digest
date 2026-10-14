@@ -1960,11 +1960,15 @@ function loadPrompt(mdPath, vars = {}) {
     }
     const fullPath = resolved;
 
-    if (!fs.existsSync(fullPath)) {
+    const relativePath = path.relative(projectRoot, fullPath).split(path.sep).join('/');
+    const registeredPromptPath = /^(?:manual\/)?prompts\//.test(relativePath);
+    if (!registeredPromptPath && !fs.existsSync(fullPath)) {
         throw new Error(`Prompt 文件不存在: ${fullPath}`);
     }
 
-    const content = fs.readFileSync(fullPath, 'utf8');
+    const content = registeredPromptPath
+        ? require('./lib/prompt-evidence.js').readPromptEvidenceBytes(relativePath).toString('utf8')
+        : fs.readFileSync(fullPath, 'utf8');
 
     // 提取第一个围栏代码块内的内容（兼容 CRLF 换行和更长的围栏标记）
     const blockMatch = content.match(/^(`{3,}|~{3,})(?:text)?\r?\n([\s\S]*?)\r?\n\1/m);

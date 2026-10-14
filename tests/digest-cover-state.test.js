@@ -394,6 +394,34 @@ describe('汇总封面提示词版本机制', () => {
         }
     }
 
+    it('旧封面 SHA 只接受同版本路径，真实分析及长图 SHA 重新签任务也拒绝', () => withDirs(dir => {
+        const { listHistoricalPromptEvidence } = require('../scripts/lib/prompt-evidence.js');
+        const { coverTaskToken } = require('../scripts/digest-cover-state.js');
+        const published = paper('2607.12345', 9, '#语音识别', 'Cover paper');
+        const publication = { ...TEST_PUBLICATION, publishedPapers: [published] };
+        const planned = planDigestCover({ targetDate: '2026-07-13', papers: [published],
+            manifestPath: path.join(dir, 'legacy-stage-proof.json'),
+            promptPath: digestCoverPromptPath(V1) });
+        const evidence = listHistoricalPromptEvidence();
+        const bindSha = sha => {
+            const manifest = structuredClone(planned);
+            manifest.promptSha256 = sha;
+            manifest.cover.promptSha256 = sha;
+            manifest.cover.taskToken = coverTaskToken(manifest.dataSha256, sha, publication);
+            return manifest;
+        };
+        const prior = evidence.find(item => item.paths.includes('prompts/digest-cover.md')
+            && item.sha256 !== planned.promptSha256);
+        assert.ok(prior, '真实 Git 历史包含同路径原封面版本');
+        assert.doesNotThrow(() => assertDigestCoverManifestCurrent(bindSha(prior.sha256), publication, '2026-07-13'));
+        for (const relative of ['prompts/deep-analysis.md', 'prompts/visual-summary.md']) {
+            const other = evidence.find(item => item.paths.includes(relative));
+            assert.ok(other, `真实 Git 历史包含 ${relative}`);
+            assert.throws(() => assertDigestCoverManifestCurrent(bindSha(other.sha256), publication, '2026-07-13'),
+                /prompt 已失效/);
+        }
+    }));
+
     it('旧记录缺版本字段时按 v1 复算，新请求走 v2，未登记版本抛错', () => withDirs(dir => {
         const published = paper('2607.12345', 9, '#语音识别', 'Cover paper');
         const publication = { ...TEST_PUBLICATION, publishedPapers: [published] };

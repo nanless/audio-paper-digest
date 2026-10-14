@@ -8,10 +8,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const registry = require('../scripts/lib/prompt-text-versions.js');
+const evidence = require('../scripts/lib/prompt-evidence');
 const deep = require('../scripts/deep-analyzer.js');
 const { validAnalysisText } = require('./valid-analysis-fixture.js');
 const changed = ['primaryAnalysis','openSourceScan','revision','apiReaderArticle','apiReaderRepair','scoringAudit','imageSupplement','tagSelection'];
-test('改写阶段分别读取 v1、v2、v3 原路径，旧版本不能解析成当前版本', () => {
+test('改写阶段分别按 v1、v2、v3 原路径身份读取Git证据，旧版本不能解析成当前版本', () => {
     for (const stage of changed) {
         const v1 = registry.promptFilePathForContract(stage, '');
         const v2 = registry.promptFilePathForContract(stage, 'analysis-prompt-text-v2');
@@ -32,8 +33,8 @@ test('改写阶段分别读取 v1、v2、v3 原路径，旧版本不能解析成
         assert.equal(registry.currentPromptTextContract(stage), 'analysis-prompt-text-v4');
         assert.notEqual(currentPath, oldPath);
         assert.equal(registry.promptFilePathForContract(stage, 'analysis-prompt-text-v3'), oldPath);
-        assert.notDeepEqual(fs.readFileSync(path.resolve(__dirname, '..', currentPath)),
-            fs.readFileSync(path.resolve(__dirname, '..', oldPath)));
+        assert.notDeepEqual(evidence.readPromptEvidenceBytes(currentPath),
+            evidence.readPromptEvidenceBytes(oldPath));
         assert.throws(() => registry.promptFilePathForContract(stage, 'analysis-prompt-text-v9'), /没有登记/);
     }
     const coreOld = registry.promptFilePathForContract('coreSummaryRepair', 'analysis-prompt-text-v3');
@@ -71,7 +72,7 @@ test('旧摘要修正使用真实归档字节通过原 SHA 门槛，只迁移到
         const contract = ['primaryAnalysis','coreSummaryRepair'].includes(stage) ? 'core-summary-detailed-v3' : '';
         const bytes = history.historicalPromptTemplateBytesForSha256(expected, contract);
         assert.ok(bytes, `原许可的提示词 ${stage} 必须存在真实归档字节`);
-        archived.set(path.resolve(__dirname,'../prompts',names[stage]+'.md'), bytes);
+        archived.set('prompts/'+names[stage]+'.md', bytes);
     }
     const source = 'source evidence without experimental tables', text = 'actual primary input with sufficient source evidence';
     const body = validAnalysisText(), id = '2602.05847';
@@ -92,10 +93,10 @@ test('旧摘要修正使用真实归档字节通过原 SHA 门槛，只迁移到
         status:'complete',promptTextContract:contract}}}).primaryAnalysis;
     const v2Target=targetFor('analysis-prompt-text-v2'), v3Target=targetFor('analysis-prompt-text-v3');
     assert.notEqual(v2Target,v3Target);
-    const originalRead=fs.readFileSync;
-    fs.readFileSync=function(file,options){const bytes=archived.get(path.resolve(String(file)));
+    const originalRead=evidence.readPromptEvidenceBytes;
+    evidence.readPromptEvidenceBytes=function(file,options){const bytes=archived.get(String(file));
         if(!bytes)return originalRead.apply(this,arguments);
-        return typeof options==='string'||options?.encoding ? bytes.toString(typeof options==='string'?options:options.encoding) : Buffer.from(bytes);};
+        return Buffer.from(bytes);};
     try {
         assert.equal(deep.currentCoreSummaryV3MigrationPromptsAreExact(),true);
         const untouched=JSON.stringify({paper,manifest});
@@ -106,16 +107,16 @@ test('旧摘要修正使用真实归档字节通过原 SHA 门槛，只迁移到
             assert.equal(manifest.stages[stage].promptTextContract,'analysis-prompt-text-v2');
         assert.equal(manifest.stages.primaryAnalysis.fingerprint,v2Target);
         assert.notEqual(manifest.stages.primaryAnalysis.fingerprint,v3Target);
-    } finally {fs.readFileSync=originalRead;}
+    } finally {evidence.readPromptEvidenceBytes=originalRead;}
 });
 
-test('旧 v2 文件 SHA 在空归档目录下仍可找到原文件，未知 SHA 不会被当前版本替代', () => {
+test('旧 v2 文件 SHA 在空归档目录下仍可找到Git原字节，未知 SHA 不会被当前版本替代', () => {
     const history = require('../scripts/lib/prompt-history.js');
     const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(),'prompt-v2-no-archive-'));
     try {
         for (const stage of changed) {
             const filename = registry.promptFilePathForContract(stage,'analysis-prompt-text-v2');
-            const original = fs.readFileSync(path.resolve(__dirname,'..',filename));
+            const original = evidence.readPromptEvidenceBytes(filename);
             const declaredSha = crypto.createHash('sha256').update(original).digest('hex');
             assert.deepEqual(history.promptBytesForSha256(stage,declaredSha,dir),original);
             assert.equal(history.promptBytesForSha256(stage,'0'.repeat(64),dir),null);

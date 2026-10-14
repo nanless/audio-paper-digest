@@ -75,7 +75,7 @@ test('第一次真正的 Reader 请求排除正式记录和已有 Reader，同�
 });
 
 test('只用来源的提示词去掉正式记录上下文，也不去提示未经检验的因果解释', () => {
-    const prompt = fs.readFileSync(path.resolve(__dirname, '../prompts/api-reader-article.md'), 'utf8');
+    const prompt = require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-article.md').toString('utf8');
     assert.doesNotMatch(prompt, /\{existingAnalysis\}|现有 canonical 分析/);
     assert.match(prompt, /原文给出的安排理由和已验证对照/);
     assert.match(prompt, /区分分布曲线和单样本标记/);

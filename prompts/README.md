@@ -1,6 +1,6 @@
 # Prompt 索引
 
-三流程新任务按 `scripts/lib/prompt-text-versions.js` 选择下列当前文件；运行时读取第一个围栏代码块，不能凭文件名版本号大小自行选取。
+工作树只保存下列 18 份当前正文与本索引。14 个通用阶段和筛选按 `scripts/lib/prompt-text-versions.js` 选择，3 个受控修复模板由公共引擎在对应修复模式下选择；运行时读取第一个围栏代码块，不能凭文件名版本号大小自行选取。
 
 | 阶段 | 当前文件 |
 |---|---|
@@ -19,7 +19,12 @@
 | 图片补充 | [image-supplement-v3.md](image-supplement-v3.md) |
 | 长图规划 | [visual-summary-v2.md](visual-summary-v2.md) |
 | 封面规划 | [digest-cover-v2.md](digest-cover-v2.md) |
+| 主分析事实局部修复 | [primary-fact-local-repair-v1.md](primary-fact-local-repair-v1.md) |
+| Reader 已核验事实原句修复 | [api-reader-fact-local-v3.md](api-reader-fact-local-v3.md) |
+| Reader 术语组合列表修复 | [api-reader-concept-terms-v1.md](api-reader-concept-terms-v1.md) |
 
 日更与会议筛选共同使用登记的 `filter-v5.md`，各入口填入对应来源和会议配置；发布审查由公共发布器构建页面上下文，均使用同一公共请求封装。不存在独立会议或历史Reader长文Prompt。
 
-旧版本以及 `history/<sha>.md` 是已付费草稿、旧阶段和发布记录的不可变SHA恢复证据。它们不作为新任务写作版本，但当前恢复/旧记录核验仍读取；没有迁移全部绑定前不能删或改字节。`manual/prompts/`与其编辑依据合同也只用于旧记录核验。
+旧提示词正文不再保存在工作树；`scripts/lib/git-prompt-evidence-index.json` 只登记原路径、Git blob OID 和整文件 SHA。旧记录通过受控读取器从 Git 取回原字节，复核整文件及首围栏模板 SHA，并保留原声明、来源、检查点和付费记录；缺失或不符就停止，不能用当前正文补签旧结果。新请求只读取当前登记的 18 份 Prompt。旧 Manual 模板同样只用于原记录核验，不恢复已退役的生产入口。
+
+历史凭证读取要求 Git 2.45 或更新版本及完整仓库历史；CI 已使用完整检出。读取器禁止自动联网补取对象，也不会把旧正文写回工作树。浅克隆缺少原对象时，先同步完整 Git 历史，再重新核验。

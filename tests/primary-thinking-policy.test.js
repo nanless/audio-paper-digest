@@ -45,6 +45,7 @@ test('旧完整检查点按原配方保留，新声明与指纹不符及缺检�
     for (const directory of ['scripts', 'manual', 'prompts', 'config']) {
         fs.cpSync(path.resolve(__dirname, '..', directory), path.join(folder, directory), { recursive: true });
     }
+    require('./helpers/git-prompt-evidence-workspace.cjs').installFixtureGitObjectStore(folder);
     fs.symlinkSync(path.resolve(__dirname, '../node_modules'), path.join(folder, 'node_modules'), 'dir');
     fs.writeFileSync(path.join(folder, '.env'), 'PAPER_ANALYZER_API_KEY=synthetic-primary-policy\nPAPER_ANALYZER_MODEL=mimo-v2.6-flash\nPAPER_ANALYZER_ENDPOINT=http://127.0.0.1:9/v1\n', { mode: 0o600 });
     const program = `

@@ -25,7 +25,7 @@ const {
     promptFilePathForContract,
     currentPromptTextContract
 } = require('./lib/prompt-text-versions.js');
-const promptHistory = require('./lib/prompt-history.js');
+const { historicalPromptEvidenceBytesForSha256 } = require('./lib/prompt-evidence.js');
 
 const COVER_MANIFEST_VERSION = 1;
 const COVER_QA_CHECKLIST_VERSION = 'digest-cover-semantic-v1';
@@ -73,13 +73,16 @@ function digestCoverPromptContractForPath(promptPath) {
 }
 
 function promptSha256(promptPath = null) {
-    return sha256Buffer(fs.readFileSync(
-        promptPath || digestCoverPromptPath(currentPromptTextContract(DIGEST_COVER_PROMPT_STAGE))
-    ));
+    const filename = promptPath || digestCoverPromptPath(currentPromptTextContract(DIGEST_COVER_PROMPT_STAGE));
+    const relative = path.relative(Config.PROJECT_ROOT, path.resolve(filename)).split(path.sep).join('/');
+    return sha256Buffer(/^prompts\//.test(relative)
+        ? require('./lib/prompt-evidence.js').readPromptEvidenceBytes(relative)
+        : fs.readFileSync(filename));
 }
 
-// 同 visual-summary-state.js：记录声明的 promptSha256 可能指向 prompts/history/ 里归档
-// 的历史字节。声明值与当前文件不符时，只有归档里确实有这份字节才按声明值走，否则返回
+// 同 visual-summary-state.js：记录声明的 promptSha256 可能指向 Git 对象里登记
+// 的历史字节。声明值与当前文件不符时，只有同封面阶段、同声明版本路径登记了这份
+// 原字节才按声明值走，否则返回
 // 当前值，保持改动前的失败行为。测试显式传入 promptPath 时不查询归档。
 function resolvedPromptSha256(declaredSha256, promptPath = null, promptTextContract = null) {
     const current = promptPath
@@ -88,7 +91,8 @@ function resolvedPromptSha256(declaredSha256, promptPath = null, promptTextContr
     if (promptPath) return current;
     const declared = String(declaredSha256 || '');
     if (declared === current) return current;
-    return promptHistory.historicalPromptBytesForSha256(declared) ? declared : current;
+    const relativePath = promptFilePathForContract(DIGEST_COVER_PROMPT_STAGE, promptTextContract);
+    return historicalPromptEvidenceBytesForSha256(declared, { relativePath }) ? declared : current;
 }
 
 function digestTitle(targetDate, category = '论文速递') {

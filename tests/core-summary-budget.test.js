@@ -44,8 +44,8 @@ test('每次摘要修复请求使用当前候选真实字数与剩余空间，�
 test('旧核心摘要第四版正文仍按原路径和原字节读取，新版本不改变旧正文', () => {
     const oldPath = versions.promptFilePathForContract('coreSummaryRepair', 'analysis-prompt-text-v4');
     assert.equal(oldPath, 'prompts/core-summary-repair-v4.md');
-    const oldBytes = fs.readFileSync(oldPath);
+    const oldBytes = require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes(oldPath);
     assert.equal(crypto.createHash('sha256').update(oldBytes).digest('hex'), '65cf4a3656fabab76a8203b35c7b01aa1417350f7eb0fe0e304528262e6f5d7e');
     assert.equal(versions.currentTextStagePromptPath('coreSummaryRepair'), 'prompts/core-summary-repair-v6.md');
-    assert.notDeepEqual(fs.readFileSync('prompts/core-summary-repair-v5.md'), oldBytes);
+    assert.notDeepEqual(require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes('prompts/core-summary-repair-v5.md'), oldBytes);
 });

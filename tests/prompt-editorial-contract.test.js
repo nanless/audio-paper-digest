@@ -23,7 +23,7 @@ const placeholders = text => [...String(text).matchAll(/\{([a-z][a-zA-Z0-9]*)\}/
 test('五份旧正文仍可按整文件和模板 SHA 核验，新首围栏保留全部输入占位符', () => {
     for (const [stage, sha] of Object.entries(previous)) {
         const old = history.promptBytesForSha256(stage, sha);
-        assert.ok(old, `${stage} 的旧字节应存在于归档`);
+        assert.ok(old, `${stage} 的原SHA应能读取Git历史字节`);
         assert.equal(history.sha256Buffer(old), sha);
         const relative = versions.currentTextStagePromptPath(stage);
         const current = fs.readFileSync(path.join(ROOT, relative));

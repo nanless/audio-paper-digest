@@ -438,6 +438,7 @@ test('正常封存来源局部主文请求拒绝整篇输出并保留原付费�
  await new Promise(r=>server.listen(0,'127.0.0.1',r));t.after(()=>new Promise(r=>server.close(r)));
  const folder=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'primary-fact-http-'));t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));
  for(const dir of ['scripts','manual','prompts','config','tests'])fs.cpSync(path.resolve(__dirname,'..',dir),path.join(folder,dir),{recursive:true});
+ require('./helpers/git-prompt-evidence-workspace.cjs').installFixtureGitObjectStore(folder);
  fs.symlinkSync(path.resolve(__dirname,'../node_modules'),path.join(folder,'node_modules'),'dir');
  fs.writeFileSync(path.join(folder,'.env'),`PAPER_ANALYZER_API_KEY=synthetic-local-only\nPAPER_ANALYZER_MODEL=ci-test-model\nPAPER_ANALYZER_ENDPOINT=http://127.0.0.1:${server.address().port}/v1\n`,{mode:0o600});
  const prefix=fs.readFileSync(__filename,'utf8').split("test('只读反馈严格绑定")[0].replace("imageInfos:[],structuredArtifacts:artifacts", "imageInfos:[{url:'https://example.invalid/synthetic-test.png'}],structuredArtifacts:artifacts");
@@ -495,6 +496,7 @@ test('纠错主分析完成而评分缺失时正常入口两次无反馈恢复�
     for (const dir of ['scripts', 'manual', 'prompts', 'config', 'tests']) {
         fs.cpSync(path.resolve(__dirname, '..', dir), path.join(folder, dir), { recursive: true });
     }
+    require('./helpers/git-prompt-evidence-workspace.cjs').installFixtureGitObjectStore(folder);
     fs.symlinkSync(path.resolve(__dirname, '../node_modules'), path.join(folder, 'node_modules'), 'dir');
     fs.writeFileSync(path.join(folder, '.env'), `PAPER_ANALYZER_API_KEY=synthetic-local-only\nPAPER_ANALYZER_MODEL=ci-test-model\nPAPER_ANALYZER_ENDPOINT=http://127.0.0.1:${server.address().port}/v1\n`, { mode: 0o600 });
     const prefix = fs.readFileSync(__filename, 'utf8').split("test('只读反馈严格绑定")[0];

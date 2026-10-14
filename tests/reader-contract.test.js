@@ -18,14 +18,14 @@ test('Reader 提示词告知与解析器共用同一组阈值，并按每次请�
     assert.match(notice, /至少 2 张的列数应不少于 5 列/);
     assert.match(notice, /5000–18000/);
     assert.match(notice, /没有收到像素时，figurePlacements 必须为空/);
-    const prompt = fs.readFileSync(path.resolve(__dirname, '../prompts/api-reader-article.md'), 'utf8');
+    const prompt = require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-article.md').toString('utf8');
     assert.match(prompt, /\{mechanicalContract\}/);
     assert.doesNotMatch(prompt, /未附像素但允许/);
     assert.throws(() => readerRequirements({ minimumIntegratedTables: 2.5 }), /integer/);
 });
 
 test('Reader 提示词区分表格输入模式，并说明字符与图片方向的语义', () => {
-    const prompt = fs.readFileSync(path.resolve(__dirname, '../prompts/api-reader-article.md'), 'utf8');
+    const prompt = require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-article.md').toString('utf8');
     assert.match(prompt, /`selection`：正文独占一段写 `\[\[TABLE_<tableIndex>\]\]`，不手写该表的 Markdown/);
     assert.match(prompt, /`artifact_table` 是既有兼容模式。.*完整 Markdown 表，不使用 `TABLE` 占位符/);
     assert.match(prompt, /`source_quotes` 用于直接整理原文句子。.*完整 Markdown 表，不使用 `TABLE` 占位符/);

@@ -174,6 +174,11 @@ function buildAuthorityInputs(paths) {
         kinds.push('official_project_evidence');
     }
     return Object.fromEntries(kinds.map(kind => {
+        if (kind === 'authoring_prompt' && path.resolve(expected[kind]) === AUTHORING_PROMPT_PATH) {
+            const bytes = require('../../scripts/lib/prompt-evidence.js')
+                .readPromptEvidenceBytes('manual/prompts/manual-tutorial-article.md');
+            return [kind, { kind, path: AUTHORING_PROMPT_PATH, sha256: sha256(bytes) }];
+        }
         const filePath = assertPlainFile(expected[kind], `fresh authority ${kind}`);
         return [kind, { kind, path: filePath, sha256: rawFileSha256(filePath, `fresh authority ${kind}`) }];
     }));
@@ -222,7 +227,12 @@ function validateFreshAuthoringReceipt(receipt, options) {
     for (const kind of expectedKinds) {
         const actual = actualByKind.get(kind);
         const expected = expectedInputs[kind];
-        assertExactPath(actual?.path, expected.path, `${label}.inputs.${kind}.path`);
+        if (kind === 'authoring_prompt' && expected.path === AUTHORING_PROMPT_PATH) {
+            // 历史 Prompt 仍绑定原逻辑路径；buildAuthorityInputs 已从 Git 重放其精确字节。
+            if (path.resolve(String(actual?.path || '')) !== AUTHORING_PROMPT_PATH) {
+                throw new Error(`${label}.inputs.${kind}.path 未绑定当前受控路径: expected=${AUTHORING_PROMPT_PATH} actual=${actual?.path}`);
+            }
+        } else assertExactPath(actual?.path, expected.path, `${label}.inputs.${kind}.path`);
         if (actual.sha256 !== expected.sha256) {
             throw new Error(`${label}.inputs.${kind}.sha256 与当前权威文件不一致`);
         }

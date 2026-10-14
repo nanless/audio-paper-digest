@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const {
     FRESH_AUTHORING_CONTRACT,
     FRESH_AUTHORING_MODE,
+    AUTHORING_PROMPT_PATH,
     articleSha256,
     stableSha256,
     rawFileSha256,
@@ -91,6 +92,29 @@ function fixture() {
 }
 
 describe('Manual v5 fresh-authoring-v1 文件约定', () => {
+    it('已退作者Prompt从原Git证据复核原路径和SHA，不接受另一路径或重签哈希', context => {
+        const f = fixture();
+        context.after(() => fs.rmSync(f.root, { recursive: true, force: true }));
+        const authorityPaths = { ...f.files, authoringPromptPath: AUTHORING_PROMPT_PATH };
+        const inputs = buildAuthorityInputs({ paperId: ID, ...authorityPaths });
+        const prompt = inputs.authoring_prompt;
+        assert.equal(prompt.path, AUTHORING_PROMPT_PATH);
+        assert.equal(prompt.sha256, sha256(require('../../scripts/lib/prompt-evidence.js')
+            .readPromptEvidenceBytes('manual/prompts/manual-tutorial-article.md')));
+        const receipt = { ...f.receipt, inputs: Object.values(inputs) };
+        delete receipt.receiptSha256;
+        receipt.receiptSha256 = stableSha256(receipt);
+        const options = { paperId: ID, articlePath: f.files.articlePath, readerArticle: f.article, authorityPaths };
+        assert.doesNotThrow(() => validateFreshAuthoringReceipt(receipt, options));
+        for (const [field, value] of [['path', f.files.authoringPromptPath], ['sha256', 'a'.repeat(64)]]) {
+            const altered = structuredClone(receipt);
+            altered.inputs.find(input => input.kind === 'authoring_prompt')[field] = value;
+            delete altered.receiptSha256;
+            altered.receiptSha256 = stableSha256(altered);
+            assert.throws(() => validateFreshAuthoringReceipt(altered, options), /authoring_prompt\.(?:path|sha256)/);
+        }
+    });
+
     it('接受原样字节和 NFKC 字节，以及可选的官方项目证据', () => {
         const f = fixture();
         const normalized = validateFreshAuthoringReceipt(f.receipt, {

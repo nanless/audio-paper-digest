@@ -9939,7 +9939,7 @@ function stableFingerprint(value) {
 }
 
 function runtimePromptTemplateSha256(relativePath, contractVersion = '') {
-    const content = fs.readFileSync(path.join(__dirname, '..', relativePath), 'utf8');
+    const content = require('./lib/prompt-evidence.js').readPromptEvidenceBytes(relativePath).toString('utf8');
     const blockMatch = content.match(/^(`{3,}|~{3,})(?:text)?\r?\n([\s\S]*?)\r?\n\1/m);
     if (!blockMatch) throw new Error(`Prompt 文件 ${relativePath} 中未找到 fenced code block`);
     return crypto.createHash('sha256')
@@ -9959,7 +9959,7 @@ function promptTemplateSha256(relativePath, contractVersion = '') {
         .digest('hex');
 }
 
-// 记录声明的提示词 SHA 可能指向只存在于 prompts/history/ 的历史字节：v1 提示词在设计上
+// 记录声明的提示词 SHA 可能指向 Git 对象中的历史字节：v1 提示词在设计上
 // 要永久冻结，实际被就地改写过。先按声明契约选路径、重算当前文件的首块模板哈希；不符时
 // 只在归档里确实有那份字节、重算哈希也等于声明值时才改用声明值。归档里没有就返回当前值，
 // 与改动前逐字节一致（继续判定指纹变化、清掉阶段重跑）。每次真用上归档都留一行日志，
@@ -9970,7 +9970,7 @@ function resolvedRuntimePromptTemplateSha256(declaredSha256, relativePath, contr
     if (declared === current) return current;
     const value = declared.toLowerCase();
     if (promptHistory.historicalPromptTemplateBytesForSha256(value, contractVersion)) {
-        console.log(`    [deep] ℹ️  提示词 ${relativePath} 按 prompts/history 归档的声明字节核验：${value}`);
+        console.log(`    [deep] ℹ️  提示词 ${relativePath} 按 Git 原始提示词的声明字节核验：${value}`);
         return declared;
     }
     return current;
@@ -10475,7 +10475,7 @@ function buildImageSupplementBaseFingerprint(promptTextContract) {
 // 逐字节一致；不传版本同样按 v1 的历史形状算。
 //
 // declaredPrompt 只在核验旧记录时传入，装的是那份记录自己声明的两个提示词 SHA；声明值
-// 对着 prompts/history/ 归档里确实存在的字节时按声明值算，否则仍按当前文件算。写回新
+// 对着 Git 对象里确实存在的原始字节时按声明值算，否则仍按当前文件算。写回新
 // 记录时必须不传，否则核验指纹会把这次并没有读的历史 SHA 带进写出的身份里。
 function resolveApiReaderRequestPolicy() {
     if (DEEP_CONFIG.model !== 'mimo-v2.6-flash'
@@ -16806,7 +16806,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     if (isRecoveryStageComplete(analysisManifest, 'scoringAudit')) {
         // 已完成记录按它自己声明的提示词版本选文件重算：缺字段按 v1 冻结路径，
         // 未知版本由 promptFilePathForContract 直接抛错，不静默退化成不校验。
-        // 声明的模板 SHA 对着 prompts/history/ 归档里也确实存在的字节时按声明值算，
+        // 声明的模板 SHA 对着 Git 对象里也确实存在的原始字节时按声明值算，
         // 归档里没有就退回当前文件，跟改动前一样清掉阶段重跑。
         const currentPromptTemplateSha256 = resolvedRuntimePromptTemplateSha256(
             scoringStage.promptTemplateSha256,
@@ -17315,7 +17315,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
             };
             // 走到这里说明阶段是本次新建的，正文和修复提示词都一定来自当前版本。
             // 写回的身份一律按当前文件重算，不复用上面那枚核验指纹：核验按记录声明的
-            // 历史 SHA 算（可能来自 prompts/history 归档），把它写进新记录就等于声明
+            // 历史 SHA 算（可能来自 Git 原始对象），把它写进新记录就等于声明
             // 了一份这次并没有读的提示词；下次运行按新记录声明值复算又会判不等，Reader
             // 会每一轮都被清掉重写。正文和修复提示词要分别按各自当前版本算。
             const apiReaderWriteContract = currentPromptTextContract('apiReaderArticle');

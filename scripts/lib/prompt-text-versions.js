@@ -3,9 +3,9 @@
 // prompts/*.md 的提示词正文版本登记表。各阶段实际加载的路径以这张表为准：deep-analyzer 按它
 // 选正文，会议与 manual 的指纹也按它决定要哈希哪一份文件。
 //
-// 已发布的 v1 正文永久冻结在原路径，改文字时新增对应版本文件。读取旧记录时按记录里
-// 声明的版本选路径重算：字段缺失按 v1 处理，未知版本直接报错，不退化成「只校验
-// 64 位十六进制」。
+// 当前正文只保留 CURRENT_PROMPT_FILES。旧路径是存量记录的逻辑身份：由
+// prompt-evidence 从 SHA 固定的原 Git blob 取字节，不要求旧文件留在工作树。
+// 字段缺失按 v1 解码，未知版本直接报错；不补签旧记录或仅认可哈希形状。
 
 const ANALYSIS_PROMPT_TEXT_V1_CONTRACT = 'analysis-prompt-text-v1';
 const ANALYSIS_PROMPT_TEXT_V2_CONTRACT = 'analysis-prompt-text-v2';
@@ -105,7 +105,7 @@ const FROZEN_V2_PROMPT_FILES = Object.freeze({
     })
 });
 
-// 已发布的 v3 文件保留原路径，旧记录仍按它们核验。
+// 已发布的 v3 记录保留原逻辑路径，原字节由 Git 证据读取器核验。
 const FROZEN_V3_PROMPT_FILES = Object.freeze({
     primaryAnalysis: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/deep-analysis-v3.md' }),
     apiReaderArticle: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/api-reader-article-v3.md' }),
@@ -116,7 +116,7 @@ const FROZEN_V3_PROMPT_FILES = Object.freeze({
     imageSupplement: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V3_CONTRACT, path: 'prompts/image-supplement-v3.md' }),
 });
 
-// 已发布的 v4 文件永久保留，旧记录按原路径读取。
+// 已发布的 v4 记录保留原路径声明，退休正文只从 Git 原对象读取。
 const FROZEN_V4_PROMPT_FILES = Object.freeze({
     primaryAnalysis: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/deep-analysis-v4.md' }),
     scoringAudit: Object.freeze({ contract: ANALYSIS_PROMPT_TEXT_V4_CONTRACT, path: 'prompts/scoring-audit-v4.md' }),
@@ -175,8 +175,18 @@ const STAGE_BY_FROZEN_V1_PATH = Object.freeze(Object.fromEntries(
 ));
 
 // 筛选提示词不进上面那张阶段表：它的身份是「渲染占位符之后的首块」，算法和阶段指纹
-// 那套不一样。新请求读取 v5；v1、v2、v3 和 v4 原文保留，供已有请求核验。
+// 那套不一样。新请求读取 v5；旧版本只通过 Git 原字节核验已有请求。
 const LLM_FILTER_PROMPT_PATH = 'prompts/filter-v5.md';
+// 当前请求还使用三份受限局部模板；版本号较小不代表已退役。
+const CURRENT_SPECIAL_PROMPT_FILES = Object.freeze([
+    'prompts/primary-fact-local-repair-v1.md',
+    'prompts/api-reader-fact-local-v3.md',
+    'prompts/api-reader-concept-terms-v1.md'
+]);
+const CURRENT_PROMPT_FILES = Object.freeze([...new Set([
+    ...Object.values(PROMPT_FILE_VERSIONS).map(entry => entry.path),
+    LLM_FILTER_PROMPT_PATH, ...CURRENT_SPECIAL_PROMPT_FILES
+])].sort());
 const FROZEN_V4_LLM_FILTER_PROMPT_PATH = 'prompts/filter-v4.md';
 const FROZEN_V3_LLM_FILTER_PROMPT_PATH = 'prompts/filter-v3.md';
 const FROZEN_V2_LLM_FILTER_PROMPT_PATH = 'prompts/filter-v2.md';
@@ -298,6 +308,7 @@ module.exports = {
     currentOrFrozenPromptPath,
     stageForFrozenPromptPath,
     LLM_FILTER_PROMPT_PATH,
+    CURRENT_PROMPT_FILES, CURRENT_SPECIAL_PROMPT_FILES,
     FROZEN_LLM_FILTER_PROMPT_PATH,
     FROZEN_V2_LLM_FILTER_PROMPT_PATH,
     FROZEN_V3_LLM_FILTER_PROMPT_PATH,

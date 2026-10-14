@@ -569,7 +569,9 @@ function implementationSha256(options = {}) {
     }
     const files = version === 'v1' ? IMPLEMENTATION_FILES : currentImplementationFiles();
     return sha256(files.map(name => (
-        `${name}\0${sha256(readFileSync(path.join(root, name)))}\0`
+        `${name}\0${sha256(!options.readFileSync && /^(?:manual\/)?prompts\/.*\.md$/.test(name)
+            ? require('./prompt-evidence.js').readPromptEvidenceBytes(name, { root })
+            : readFileSync(path.join(root, name)))}\0`
     )).join(''));
 }
 function loadAuthority(options, deps) {

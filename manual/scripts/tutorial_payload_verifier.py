@@ -131,13 +131,17 @@ def validate_manual_v5_fresh_authoring(
     evidence_root = (current_dir / 'manual-full-text' / date_str).resolve()
     for kind in expected_kinds:
         item = by_kind[kind]
+        historical_prompt = kind == 'authoring_prompt'
         try:
-            bound_path = Path(str(item.get('path') or '')).resolve(strict=True)
+            candidate = Path(str(item.get('path') or ''))
+            if candidate.is_symlink():
+                raise PublishDataValidationError(f'{paper_id} 新写作所需的 {kind} 材料不得使用符号链接。')
+            bound_path = candidate.resolve(strict=not historical_prompt)
         except (OSError, RuntimeError) as exc:
             raise PublishDataValidationError(
                 f'{paper_id} 新写作所需的 {kind} 材料路径不存在，或无法解析。'
             ) from exc
-        if bound_path.is_symlink() or not bound_path.is_file():
+        if not historical_prompt and (bound_path.is_symlink() or not bound_path.is_file()):
             raise PublishDataValidationError(
                 f'{paper_id} 新写作所需的 {kind} 材料解析后的路径必须指向普通文件。'
             )
@@ -186,7 +190,19 @@ def validate_manual_v5_fresh_authoring(
                 raise PublishDataValidationError(
                     f'{paper_id} 官方项目证据中的论文 ID、材料类型或 HTTPS URL 不符合要求。'
                 )
-        actual_sha = hashlib.sha256(bound_path.read_bytes()).hexdigest()
+        if historical_prompt:
+            from prompt_evidence import read_prompt_evidence_bytes
+            try:
+                raw = read_prompt_evidence_bytes(
+                    'manual/prompts/manual-tutorial-article.md', item.get('sha256'),
+                    project_root=project_root)
+            except (ValueError, OSError) as exc:
+                raise PublishDataValidationError(
+                    f'{paper_id} 新写作所需的 {kind} 原提示词证据缺失或 SHA 不一致。'
+                ) from exc
+        else:
+            raw = bound_path.read_bytes()
+        actual_sha = hashlib.sha256(raw).hexdigest()
         if item.get('sha256') != actual_sha:
             raise PublishDataValidationError(
                 f'{paper_id} 新写作所需的 {kind} 材料文件 SHA 与输入记录不一致。'

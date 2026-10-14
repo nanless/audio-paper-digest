@@ -32,7 +32,7 @@ async function sealed(t, noAuthors = false, captureSet = expected, repeatCount =
         fetchPdf: async () => ({ bytes: Buffer.from('%PDF-1.7\nFixture\n%%EOF\n'), url: 'https://arxiv.org/pdf/' + id, sourceId: id }),
         extractPdfText: async () => ({ text: 'PDF methods, experiments and limitations. '.repeat(160) })
     }) });
-    return { plan, id, source: daily.readDailyFreshSource(plan, { arxivId: id }), runtimePath: path.join(plan.sourcesDir, id, 'generation-000001', 'source-runtime.json') };
+    return { plan, id, html, source: daily.readDailyFreshSource(plan, { arxivId: id }), runtimePath: path.join(plan.sourcesDir, id, 'generation-000001', 'source-runtime.json') };
 }
 test('公开封存来源在不保留 HTML 字符串时仍提供三位作者机构，复制对象没有封存许可', async t => {
     const { source } = await sealed(t);
@@ -187,8 +187,23 @@ test('作者发布重放逐次核实际封存文件，物理文件损坏后拒�
 });
 
 test('真实长封存来源正常分析取样只记录局部警告，作者来源字节不变且禁止API', async t => {
-    const { plan, id, source } = await sealed(t, false, expected, 4000);
+    const { plan, id, html, source, runtimePath } = await sealed(t, false, expected, 4000);
     assert.ok(source.text.length > 200000);
+    const sourceBytes = fs.readFileSync(runtimePath);
+    const imageDiscoveryRequests = [];
+    // 实际图发现仍解析同一份无图HTML，但任何模型配置都不能访问网络。
+    t.mock.method(globalThis, 'fetch', async url => {
+        assert.equal(String(url), `https://arxiv.org/html/${id}`);
+        imageDiscoveryRequests.push(String(url));
+        return new Response(html, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
+    });
+    let rawNetworkCalls = 0;
+    for (const protocol of ['node:http', 'node:https']) {
+        t.mock.method(require(protocol), 'request', () => {
+            rawNetworkCalls++;
+            throw new Error('长来源作者测试禁止实际网络请求');
+        });
+    }
     let actual;
     const readDirect = direct.getDirectRewriteSource;
     t.mock.method(direct, 'getDirectRewriteSource', paper => {
@@ -227,4 +242,7 @@ test('真实长封存来源正常分析取样只记录局部警告，作者来�
     }));
     assert.match(result.error, /长来源只读验证哨兵/);
     assert.equal(calls, 1);
+    assert.ok(imageDiscoveryRequests.length <= 1);
+    assert.equal(rawNetworkCalls, 0);
+    assert.deepEqual(fs.readFileSync(runtimePath), sourceBytes);
 });

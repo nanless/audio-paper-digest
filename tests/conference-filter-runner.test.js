@@ -748,8 +748,8 @@ test('旧筛选请求仅按明确登记的原提示归档恢复，并拒绝正�
     assert.throws(() => filter.normalizeLlmIntent(boundIntent(unknownEnvelope, request)),
         /请求不是其 envelope 绑定的单用户日更筛选提示/);
     const otherFamily = structuredClone(envelope);
-    const otherArchive = fs.readFileSync(path.join(__dirname,
-        '../prompts/history/008fe925b5a610501ae5f1c5451e6594909e3a8149137c7bd4c55b49d3b773c3.md'), 'utf8');
+    const otherArchive = require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes(
+        'prompts/history/008fe925b5a610501ae5f1c5451e6594909e3a8149137c7bd4c55b49d3b773c3.md').toString('utf8');
     const otherBlock = otherArchive.match(/^(`{3,}|~{3,})(?:text)?\r?\n([\s\S]*?)\r?\n\1/m)[2];
     otherFamily.filter.promptSha256 = sha(otherBlock);
     const otherRequest = structuredClone(request);
@@ -757,16 +757,17 @@ test('旧筛选请求仅按明确登记的原提示归档恢复，并拒绝正�
         placeholder => String(fields[placeholder.slice(1, -1)]));
     assert.throws(() => filter.normalizeLlmIntent(boundIntent(otherFamily, otherRequest)),
         /请求不是其 envelope 绑定的单用户日更筛选提示/);
-    const readFile = fs.readFileSync;
-    fs.readFileSync = function (filename, ...rest) {
-        const bytes = readFile.call(this, filename, ...rest);
-        return String(filename).endsWith(archivePath) ? bytes.subarray(0, bytes.length - 1) : bytes;
-    };
+    // 无法取得 whole-SHA 核验通过的历史证据时，旧请求不能仅凭首块 SHA 复用。
+    const history = require('../scripts/lib/prompt-history.js');
+    const originalHistoricalBytes = history.historicalPromptBytesForSha256;
+    const unavailable = t.mock.method(history, 'historicalPromptBytesForSha256', (sha, ...rest) =>
+        sha === 'e8678d07c58b38862dafa5b74a715db667d29db2a4e20664423208cff2f3cd8f'
+            ? null : originalHistoricalBytes(sha, ...rest));
     try {
         assert.throws(() => filter.normalizeLlmIntent(retained),
             /请求不是其 envelope 绑定的单用户日更筛选提示/);
     } finally {
-        fs.readFileSync = readFile;
+        unavailable.mock.restore();
     }
     assert.deepEqual(fs.readFileSync(intentFile), originalBytes);
     assert.equal(service.calls.length, 1);

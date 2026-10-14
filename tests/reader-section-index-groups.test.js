@@ -113,7 +113,9 @@ test('公开请求记录绑定索引协议与实现SHA，只用原两次额度�
             '../scripts/lib/reader-repair.js',
             '../prompts/api-reader-concept-terms-v1.md',
             '../prompts/api-reader-repair-v11.md'
-        ].map(file => fs.readFileSync(require.resolve(file), 'utf8')).join('\0')));
+        ].map(file => file.startsWith('../prompts/')
+            ? require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes(file.slice(3)).toString('utf8')
+            : fs.readFileSync(require.resolve(file), 'utf8')).join('\0')));
     const envelopes = fs.readdirSync(directory).filter(name => name.endsWith('.json')).map(name =>
         JSON.parse(fs.readFileSync(path.join(directory, name)))).filter(item => item.payload?.draft);
     const proofs = result?.sectionGroupCompilations || [];

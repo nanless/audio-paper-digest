@@ -7,6 +7,7 @@ const os = require('node:os');
 const crypto = require('node:crypto');
 const root = path.resolve(__dirname, '..');
 const registry = require('../scripts/lib/prompt-text-versions.js');
+const evidence = require('../scripts/lib/prompt-evidence');
 const history = require('../scripts/lib/prompt-history.js');
 const utils = require('../scripts/utils.js');
 let capturedRequest;
@@ -18,7 +19,7 @@ utils.requestLlmJson = async (_url, _endpoint, _model, body) => {
 const deep = require('../scripts/deep-analyzer.js');
 const { validAnalysisText } = require('./valid-analysis-fixture.js');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
-const read = file => fs.readFileSync(path.join(root, file));
+const read = file => evidence.readPromptEvidenceBytes(file);
 
 const originalV4Sha = {
     primaryAnalysis: '5aaf208891833809e7cb01a43342a2ef289d6b7a265b9819cca99edc32c2c600',

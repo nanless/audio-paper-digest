@@ -247,8 +247,8 @@ test('实际新提示词的完整原表规则独立于选择资格，固定版�
     const fs = require('node:fs');
     const path = require('node:path');
     const history = require('../scripts/lib/prompt-history');
-    const article = fs.readFileSync(path.join(__dirname, '../prompts/api-reader-article-v6.md'), 'utf8');
-    const repair = fs.readFileSync(path.join(__dirname, '../prompts/api-reader-repair-v7.md'), 'utf8');
+    const article = require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-article-v6.md').toString('utf8');
+    const repair = require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-repair-v7.md').toString('utf8');
     assert.match(article, /四种表格记录方式/);
     assert.doesNotMatch(article, /三种表格记录方式|原表可用性及三种结构/);
     assert.match(repair, /selection` 只能选择 `TABLE_J_SELECTION` 明确标为 `eligible=true`/);

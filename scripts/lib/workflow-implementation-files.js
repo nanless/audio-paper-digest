@@ -60,6 +60,9 @@ function collectWorkflowImplementationFiles({ root, entryFiles }) {
     add('scripts/lib/workflow-implementation-files.js');
     while (pending.length) {
         const filename = pending.shift();
+        if (['scripts/lib/prompt-evidence.js', 'scripts/prompt_evidence.py'].includes(filename)) {
+            add('scripts/lib/git-prompt-evidence-index.json', true);
+        }
         if (!CODE.test(filename)) continue;
         const text = fs.readFileSync(path.join(base, filename), 'utf8');
         for (const match of text.matchAll(JS_IMPORT)) resolveImport(match[2], filename);

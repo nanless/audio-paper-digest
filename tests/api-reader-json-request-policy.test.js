@@ -50,6 +50,7 @@ test('JSON 策略绑定当前阶段，旧完整阶段不补签，非法声明拒
     t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
     const project = path.resolve(__dirname, '..');
     for (const name of ['scripts', 'manual', 'prompts', 'config']) fs.cpSync(path.join(project, name), path.join(folder, name), { recursive: true });
+    require('./helpers/git-prompt-evidence-workspace.cjs').installFixtureGitObjectStore(folder, project);
     fs.symlinkSync(path.join(project, 'node_modules'), path.join(folder, 'node_modules'), 'dir');
     fs.writeFileSync(path.join(folder, '.env'), 'PAPER_ANALYZER_API_KEY=local-only-key\nPAPER_ANALYZER_MODEL=mimo-v2.6-flash\nPAPER_ANALYZER_ENDPOINT=http://127.0.0.1:9/v1\n', { mode: 0o600 });
     const program = `
@@ -81,6 +82,7 @@ test('旧省略 JSON 声明的失败草稿正常迁移且付费计数不清，�
         t.after(()=>fs.rmSync(folder,{recursive:true,force:true}));
         const project = path.resolve(__dirname,'..');
         for(const name of ['scripts','manual','prompts','config'])fs.cpSync(path.join(project,name),path.join(folder,name),{recursive:true});
+        require('./helpers/git-prompt-evidence-workspace.cjs').installFixtureGitObjectStore(folder, project);
         fs.mkdirSync(path.join(folder,'tests'));fs.copyFileSync(__filename,path.join(folder,'tests',path.basename(__filename)));
         fs.symlinkSync(path.join(project,'node_modules'),path.join(folder,'node_modules'),'dir');
         fs.writeFileSync(path.join(folder,'.env'),'PAPER_ANALYZER_API_KEY=local-only-key\nPAPER_ANALYZER_MODEL=mimo-v2.6-flash\nPAPER_ANALYZER_ENDPOINT=http://127.0.0.1:9/v1\n',{mode:0o600});

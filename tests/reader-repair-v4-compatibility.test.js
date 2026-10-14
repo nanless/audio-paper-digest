@@ -47,7 +47,8 @@ test('旧完成 Reader 冻结局部修复 v3，待处理请求采用 v12', () =>
     assert.notEqual(fingerprint({ status: 'pending' }), oldFingerprint);
     assert.equal(fingerprint(oldStage), oldFingerprint);
     assert.equal(JSON.stringify(oldStage), before);
-    assert.equal(crypto.createHash('sha256').update(fs.readFileSync(path.resolve(__dirname, '../prompts/api-reader-repair-v3.md'))).digest('hex'),
+    assert.equal(crypto.createHash('sha256').update(require('../scripts/lib/prompt-evidence.js')
+        .readPromptEvidenceBytes('prompts/api-reader-repair-v3.md')).digest('hex'),
         '03baf3e0c54831c8e6e25d2fda2f223e908a54353d0a2b54c68aa7cbd41cac2a');
 });
 

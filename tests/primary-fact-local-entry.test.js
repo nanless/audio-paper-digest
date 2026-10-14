@@ -38,6 +38,7 @@ test('正常主分析入口发送局部JSON并保存新证明，完整审校不�
     for (const directory of ['scripts', 'prompts', 'manual', 'config']) {
         fs.cpSync(path.join(project, directory), path.join(folder, directory), { recursive: true });
     }
+    require('./helpers/git-prompt-evidence-workspace.cjs').installFixtureGitObjectStore(folder, project);
     fs.mkdirSync(path.join(folder, 'tests'));
     fs.copyFileSync(path.join(__dirname, 'valid-analysis-fixture.js'), path.join(folder, 'tests/valid-analysis-fixture.js'));
     fs.symlinkSync(path.join(project, 'node_modules'), path.join(folder, 'node_modules'), 'dir');

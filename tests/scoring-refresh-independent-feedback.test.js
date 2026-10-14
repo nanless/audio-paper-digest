@@ -71,6 +71,7 @@ test('独立评分刷新保留真实原输入快照且无反馈恢复零请求',
         .cpSync(path.resolve(__dirname, '..', dir), path.join(testWorkspace, dir), {
             recursive: true
         });
+    require('./helpers/git-prompt-evidence-workspace.cjs').installFixtureGitObjectStore(testWorkspace);
     fs.symlinkSync(path.resolve(__dirname, '../node_modules'), path.join(
         testWorkspace, 'node_modules'), 'dir');
     fs.writeFileSync(path.join(testWorkspace, '.env'),

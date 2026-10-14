@@ -1,6 +1,6 @@
 'use strict';
 
-// 提示词历史字节归档接到 deep-analyzer 的评分审计指纹与读者阶段记录之后，这里锁定四件事：
+// 提示词历史原字节读取接到 deep-analyzer 的评分审计指纹与读者阶段记录之后，这里锁定四件事：
 // 声明值就是当前文件时解析结果不变；归档里确有声明字节时按声明值走；归档里没有就退回
 // 当前值（保持改动前「指纹变化、清掉阶段重跑」的判定）；写回新记录的身份一律按当前文件
 // 算，不会把核验用的历史 SHA 带进去。
@@ -15,7 +15,7 @@ const {
     currentPromptTextContract
 } = require('../scripts/lib/prompt-text-versions.js');
 
-// 存量记录里真实出现过、且 prompts/history/ 归档里确有对应字节的两个模板 SHA。
+// 存量记录里真实出现过、且 Git 历史里确有对应字节的两个模板 SHA。
 const ARCHIVED_SCORING_TEMPLATE =
     '12a6f804bcdb1f3e1caaf915a8e886221bef583c512f322ebecd8d5bac38ddf0';
 const ARCHIVED_READER_TEMPLATE =

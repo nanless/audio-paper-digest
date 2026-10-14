@@ -1,8 +1,6 @@
 'use strict';
 
-// prompts/history/<sha256>.md 是按记录声明的 SHA 取历史提示词字节的归档。这里锁定
-// 五件事：归档文件名就是内容 SHA、解析器只在当前文件不符时才回退、内容被截断的归档
-// 一律不认、写归档走临时文件加 rename、归档不进任何哈希清单。
+// 旧提示词只读原Git字节，保留原整文件和模板SHA；不在工作树重新生成旧文件。
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -13,7 +11,7 @@ const crypto = require('node:crypto');
 
 const PROJECT = path.join(__dirname, '..');
 const history = require('../scripts/lib/prompt-history.js');
-const archive = require('../scripts/build-prompt-history-archive.js');
+const evidence = require('../scripts/lib/prompt-evidence.js');
 const {
     FROZEN_V1_PROMPT_FILES,
     PROMPT_FILE_VERSIONS,
@@ -26,14 +24,13 @@ function sha256(buffer) {
     return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
-test('归档文件名就是内容字节的 SHA-256', () => {
-    assert.ok(fs.existsSync(history.HISTORY_DIR), 'prompts/history/ 不存在');
-    const names = fs.readdirSync(history.HISTORY_DIR).filter(name => name.endsWith('.md'));
-    assert.ok(names.length > 0, 'prompts/history/ 是空的');
-    for (const name of names) {
-        const bytes = fs.readFileSync(path.join(history.HISTORY_DIR, name));
-        assert.equal(sha256(bytes), name.replace(/\.md$/, ''),
-            `${name} 的文件名与内容 SHA 不符`);
+test('工作树无旧Prompt，Git原字节逐份按整文件SHA核验', () => {
+    assert.equal(fs.existsSync(history.HISTORY_DIR), false);
+    const entries = evidence.listHistoricalPromptEvidence();
+    assert.ok(entries.length > 0);
+    for (const entry of entries) {
+        const bytes = history.historicalPromptBytesForSha256(entry.sha256);
+        assert.equal(sha256(bytes), entry.sha256);
     }
 });
 
@@ -54,19 +51,18 @@ test('未知 SHA 返回 null，不伪造字节', () => {
     assert.equal(history.historicalPromptTemplateBytesForSha256('0'.repeat(64), ''), null);
 });
 
-test('归档里存的是原始字节，首块模板哈希可与 deep-analyzer 的算法对上', () => {
-    const names = fs.readdirSync(history.HISTORY_DIR).filter(name => name.endsWith('.md'));
+test('Git模板SHA与首围栏算法一致，不物化旧正文', () => {
     let matched = 0;
-    for (const name of names) {
-        const text = fs.readFileSync(path.join(history.HISTORY_DIR, name), 'utf8');
-        const template = history.promptTemplateSha256(text, '');
+    for (const entry of evidence.listHistoricalPromptEvidence()) {
+        const original = history.historicalPromptBytesForSha256(entry.sha256);
+        const template = history.promptTemplateSha256(original.toString('utf8'), '');
         if (!template) continue;
         const bytes = history.historicalPromptTemplateBytesForSha256(template, '');
-        assert.ok(bytes, `${name} 的首块模板哈希查不回自己`);
-        assert.equal(sha256(bytes), name.replace(/\.md$/, ''));
+        assert.equal(history.promptTemplateSha256(bytes.toString('utf8'), ''), template);
         matched += 1;
     }
-    assert.ok(matched > 0, '没有一份归档文件能算首块模板哈希');
+    assert.ok(matched > 0);
+    assert.equal(fs.existsSync(history.HISTORY_DIR), false);
 });
 
 // 写归档被中断时，磁盘上会留下内容不全、却仍顶着完整字节 SHA 文件名的 <sha>.md。
@@ -96,48 +92,6 @@ test('截断的归档不被接受，当作没有这份归档', t => {
     assert.deepEqual(history.historicalPromptBytesForSha256(declared, directory), full);
     assert.deepEqual(history.promptBytesForSha256('deepAnalysis', declared, directory), full);
     assert.deepEqual(history.historicalPromptTemplateBytesForSha256(template, '', directory), full);
-});
-
-test('写归档：临时文件加 rename，fsync 失败时目标文件保持原样', t => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'prompt-history-write-'));
-    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-    const bytes = Buffer.from('```text\n新归档\n```\n', 'utf8');
-    const file = path.join(directory, `${sha256(bytes)}.md`);
-    fs.writeFileSync(file, '旧的完整字节\n', { mode: 0o644 });
-
-    const realFsyncSync = fs.fsyncSync;
-    fs.fsyncSync = () => { throw Object.assign(new Error('模拟断电'), { code: 'EIO' }); };
-    try {
-        assert.throws(() => archive.writeArchiveFile(file, bytes), /模拟断电/);
-    } finally {
-        fs.fsyncSync = realFsyncSync;
-    }
-    assert.equal(fs.readFileSync(file, 'utf8'), '旧的完整字节\n', '写入失败后目标文件被改动了');
-    assert.deepEqual(fs.readdirSync(directory), [path.basename(file)], '写入失败后留下了临时文件');
-});
-
-test('写归档：内容与文件名一致，不留临时文件，替换时保留原权限位', t => {
-    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'prompt-history-write-'));
-    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-    const first = Buffer.from('```text\n第一版\n```\n', 'utf8');
-    const second = Buffer.from('```text\n第二版\n```\n', 'utf8');
-    const firstFile = path.join(directory, `${sha256(first)}.md`);
-
-    assert.deepEqual(archive.writeArchive([{ sha256: sha256(first), bytes: first }], directory),
-        { written: 1, unchanged: 0 });
-    assert.deepEqual(fs.readFileSync(firstFile), first);
-    assert.equal(fs.statSync(firstFile).mode & 0o777, 0o600, '新归档文件的权限不是 0600');
-    assert.deepEqual(fs.readdirSync(directory), [path.basename(firstFile)], '留下了临时文件');
-
-    fs.chmodSync(firstFile, 0o644);
-    const secondFile = path.join(directory, `${sha256(second)}.md`);
-    assert.deepEqual(archive.writeArchive([
-        { sha256: sha256(second), bytes: second },
-        { sha256: sha256(first), bytes: first }
-    ], directory), { written: 1, unchanged: 1 });
-    assert.equal(fs.statSync(firstFile).mode & 0o777, 0o644, '替换已有归档时改了权限位');
-    assert.deepEqual(fs.readFileSync(secondFile), second);
-    assert.deepEqual(fs.readdirSync(directory).sort(), [path.basename(firstFile), path.basename(secondFile)].sort());
 });
 
 // 四种形态里最容易被漏掉的一种：清单在文件里，且清单含自己。归档目录绝不能出现在

@@ -14,13 +14,19 @@ jobs:
     env:
       PAPER_ANALYZER_ENDPOINT: https://example.invalid/v1
       PAPER_ANALYZER_API_KEY: ci-placeholder-not-a-secret
-      PAPER_ANALYZER_MODEL: ci-test-model
+      PAPER_ANALYZER_MODEL: muse-spark-1.3-contributor
+      PAPER_ANALYZER_SECONDARY_ENDPOINT: https://example.invalid/v1
+      PAPER_ANALYZER_SECONDARY_API_KEY: ci-secondary-placeholder-not-a-secret
+      PAPER_ANALYZER_SECONDARY_MODEL: muse-spark-1.3-contributor
     strategy:
       matrix:
         node-version: [20.x, 22.x]
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 旧已付费记录只读核验需要原 Git blob，当前工作树不保存旧 Prompt。
+          fetch-depth: 0
 
       - name: 配置 Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
@@ -75,7 +81,16 @@ jobs:
             "PAPER_ANALYZER_ENDPOINT=$PAPER_ANALYZER_ENDPOINT" \
             "PAPER_ANALYZER_API_KEY=$PAPER_ANALYZER_API_KEY" \
             "PAPER_ANALYZER_MODEL=$PAPER_ANALYZER_MODEL" \
+            "PAPER_ANALYZER_SECONDARY_ENDPOINT=$PAPER_ANALYZER_SECONDARY_ENDPOINT" \
+            "PAPER_ANALYZER_SECONDARY_API_KEY=$PAPER_ANALYZER_SECONDARY_API_KEY" \
+            "PAPER_ANALYZER_SECONDARY_MODEL=$PAPER_ANALYZER_SECONDARY_MODEL" \
+            "PD_WORKSPACE_ALLOW_CROSS_ROLE=1" \
             "HTTPS_PROXY=http://127.0.0.1:9" > .env
+
+      - name: 绑定并核验 CI 工作区角色
+        run: |
+          npm run workspace:role -- set daily
+          npm run workspace:role -- status
 
       - name: 运行完整离线验证
         # data/ 不纳入版本控制，因此 CI 显式允许空数据；

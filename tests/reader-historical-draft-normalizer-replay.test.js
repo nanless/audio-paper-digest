@@ -4,16 +4,27 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), child = require('node:child_process'), Module = require('node:module');
 const repair = require('../scripts/lib/reader-repair'), historical = require('../scripts/lib/reader-historical-draft-normalizer-replay');
 const repository = path.resolve(__dirname, '..');
+// 历史失败稿产生时的真实Git版本；提交新guard后不能把HEAD当作旧程序。
+const legacyCommit = 'cba0e47ae170b52a9dc42f2364297289c8174ec1';
 function fixture() {
-    const code = child.execFileSync('git', ['show','HEAD:scripts/lib/reader-draft-order.js'], {cwd:repository});
+    const code = child.execFileSync('git', ['show',`${legacyCommit}:scripts/lib/reader-draft-order.js`], {cwd:repository});
+    const tableCode = child.execFileSync('git', ['show',`${legacyCommit}:scripts/lib/reader-tables.js`], {cwd:repository});
+    assert.equal(repair.shaText(code), '81eebbd475a4bc68201db5ca232e187338cb2f43f046738800c79e76c0a3b7c5');
+    assert.equal(repair.shaText(tableCode), 'affc5145cf360f8492f3c8b1bcc0bb3abc3d3d05e67bba7092d4fccd3c2bc727');
+    const tableFilename=path.join(repository,'scripts/lib/reader-tables.js'),legacyTables=new Module(tableFilename,module);
+    legacyTables.filename=tableFilename;legacyTables.paths=Module._nodeModulePaths(path.dirname(tableFilename));
+    legacyTables._compile(tableCode.toString(),tableFilename);
     const filename=path.join(repository,'scripts/lib/reader-draft-order.js'),legacy=new Module(filename,module);
-    legacy.filename=filename;legacy.paths=Module._nodeModulePaths(path.dirname(filename));legacy._compile(code.toString(),filename);
+    legacy.filename=filename;legacy.paths=Module._nodeModulePaths(path.dirname(filename));
+    const normalRequire=legacy.require.bind(legacy);
+    legacy.require=spec=>spec==='./reader-tables'?legacyTables.exports:normalRequire(spec);
+    legacy._compile(code.toString(),filename);
     const sourceText='The sealed corpus preserves original evidence.';
     const table={ordinal:1,caption:'Generic original benchmark',recoveryStatus:'complete',sourceDomSha256:'a'.repeat(64),headerRows:[0],bodyRows:[1],matrix:[['Method','Score'],['Baseline','0.10.1']]};
     table.cells=table.matrix.flatMap((row,r)=>row.map((text,c)=>({row:r,column:c,rowspan:1,colspan:1,text,header:r===0,sourceDomSha256:'b'.repeat(64)})));
     const source={text:sourceText,structuredArtifacts:{sourceKind:'arxiv_html',tables:[table],figures:[],formulas:[]}};
     const identity={sourceSha256:repair.shaText(sourceText),draftOrderImplementationSha256:repair.shaText(code),
-        tableCompilerSha256:repair.shaText(child.execFileSync('git',['show','HEAD:scripts/lib/reader-tables.js'],{cwd:repository}))};
+        tableCompilerSha256:repair.shaText(tableCode)};
     const draft={version:3,readerTitle:'保留来源限定的失败稿',oneSentenceThesis:'真实已付费稿继续严格核验。',conceptBridges:[],figurePlacements:[],formulaBindings:[],
         tableBindings:[{tableIndex:1,completeTable:{sourceTableOrdinal:1}}],
         sections:require('../scripts/lib/reader-draft-order').READER_SECTION_KINDS.map((kind,index)=>({kind,heading:kind,body:index===0?'比较问题。\n\n[[TABLE_1]]\n\n只解释原数据。':kind.repeat(130)}))};
@@ -22,6 +33,9 @@ function fixture() {
 }
 test('真实Git绑定原程序逐字确认失败稿来源，当前完整原表guard仍拒，不增加预算',()=>{
     const f=fixture(),before=repair.hashDraft(f.draft);
+    const headProgram=child.execFileSync('git',['show','HEAD:scripts/lib/reader-draft-order.js'],{cwd:repository});
+    assert.notEqual(repair.shaText(headProgram),f.identity.draftOrderImplementationSha256,
+        '本回归必须在提交新guard之后复验原Git失败稿，不能把HEAD当成旧程序');
     const replay=historical.replayHistoricalDraftNormalizer(f.draft,f.identity,f.source,repair.hashDraft(f.saved));assert.ok(replay);
     assert.equal(replay.proof.purpose,'paid-failed-draft-provenance-only');assert.equal(replay.proof.normalizerSha256,f.identity.draftOrderImplementationSha256);
     assert.equal(replay.proof.outputDraftSha256,repair.hashDraft(f.saved));assert.equal(repair.hashDraft(f.draft),before);
@@ -43,4 +57,45 @@ test('历史proof不能改Git字节、依赖身份或注入任意文件路径',(
         p=>{p.dependencies[0].path='../../untrusted.js';},p=>{p.dependencies[1]=p.dependencies[0];}]){
         const bad=structuredClone(replay.proof);change(bad);assert.throws(()=>historical.assertHistoricalNormalizerProof(bad),/historical|Historical/);
     }
+});
+test('实际Git重放拒绝继承替换配置且禁止联网，仍只认证原SHA失败稿',t=>{
+    const f=fixture(),run=child.execFileSync,calls=[];
+    const original=process.env.GIT_DIR;
+    process.env.GIT_DIR='/nonexistent-untrusted-git-directory';
+    t.mock.method(child,'execFileSync',function(command,args,options){
+        if(command==='git')calls.push({args:[...args],options});
+        return run.apply(this,arguments);
+    });
+    try {
+        const replay=historical.replayHistoricalDraftNormalizer(f.draft,f.identity,f.source,repair.hashDraft(f.saved));
+        assert.ok(replay);replay.assertUnchanged();
+        assert.ok(calls.length>0);
+        for(const {args,options} of calls){
+            assert.deepEqual(args.slice(0,2),['--no-lazy-fetch','--no-replace-objects']);
+            assert.equal(options.env.GIT_DIR,undefined);
+            assert.equal(options.env.GIT_NO_LAZY_FETCH,'1');
+            assert.equal(options.env.GIT_TERMINAL_PROMPT,'0');
+            assert.equal(options.env.GIT_CONFIG_GLOBAL,'/dev/null');
+            assert.equal(options.timeout,10000);assert.equal(options.maxBuffer,8*1024*1024);
+        }
+    } finally {if(original===undefined)delete process.env.GIT_DIR;else process.env.GIT_DIR=original;}
+});
+test('新Git程序需要未核验依赖时明确不复用，Git读取损坏仍原错误停止',t=>{
+    const f=fixture(),before=JSON.stringify(f);
+    const identity={...f.identity,
+        draftOrderImplementationSha256:repair.shaText(child.execFileSync('git',
+            ['show','HEAD:scripts/lib/reader-draft-order.js'],{cwd:repository})),
+        tableCompilerSha256:repair.shaText(child.execFileSync('git',
+            ['show','HEAD:scripts/lib/reader-tables.js'],{cwd:repository}))};
+    assert.notEqual(identity.draftOrderImplementationSha256,f.identity.draftOrderImplementationSha256);
+    assert.equal(historical.replayHistoricalDraftNormalizer(f.draft,identity,f.source,repair.hashDraft(f.saved)),null);
+    assert.equal(JSON.stringify(f),before);
+    const run=child.execFileSync,failure=new Error('模拟Git物件读取损坏');
+    t.mock.method(child,'execFileSync',function(command,args){
+        if(command==='git'&&args.includes('cat-file'))throw failure;
+        return run.apply(this,arguments);
+    });
+    assert.throws(()=>historical.replayHistoricalDraftNormalizer(f.draft,f.identity,f.source,
+        repair.hashDraft(f.saved)),error=>error===failure);
+    assert.equal(JSON.stringify(f),before);
 });

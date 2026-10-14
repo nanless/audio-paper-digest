@@ -71,6 +71,7 @@ test('评分刷新无反馈及错证明零请求不修改；合法反馈绑定�
         .cpSync(path.resolve(__dirname, '..', dir), path.join(testWorkspace, dir), {
             recursive: true
         });
+    require('./helpers/git-prompt-evidence-workspace.cjs').installFixtureGitObjectStore(testWorkspace);
     fs.symlinkSync(path.resolve(__dirname, '../node_modules'), path.join(
         testWorkspace, 'node_modules'), 'dir');
     fs.writeFileSync(path.join(testWorkspace, '.env'),

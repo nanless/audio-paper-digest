@@ -12,6 +12,9 @@ SCRIPTS = ROOT / 'scripts'
 MANUAL_SCRIPTS = ROOT / 'manual' / 'scripts'
 sys.path.insert(0, str(SCRIPTS))
 sys.path.insert(0, str(MANUAL_SCRIPTS))
+sys.path.insert(0, str(ROOT / 'tests/python'))
+from prompt_evidence import read_prompt_evidence_bytes
+from prompt_evidence_fixtures import install_git_prompt_evidence_fixture
 
 import sealed_tutorial_preview as sealed
 
@@ -94,7 +97,9 @@ class SealedTutorialPreviewTest(unittest.TestCase):
             'paperId': paper_id,
             'inputs': {
                 **{
-                    key: {'path': str(path), 'sha256': sha(path.read_bytes())}
+                    key: {'path': str(path), 'sha256': sha(
+                        read_prompt_evidence_bytes('manual/prompts/manual-tutorial-article.md', project_root=authority_root)
+                        if key == 'editorialContract' else path.read_bytes())}
                     for key, path in controlled.items()
                 },
                 'tutorialPayload': payload,
@@ -143,13 +148,13 @@ class SealedTutorialPreviewTest(unittest.TestCase):
             with self.subTest(boundary=boundary), tempfile.TemporaryDirectory() as temporary_root:
                 authority_root = Path(temporary_root) / 'project'
                 for relative in (
-                        'manual/prompts/manual-tutorial-article.md',
                         'manual/docs/editorial-reference-contract.md',
                         'manual/scripts/manual-tutorial-quality-contract.js',
                         'manual/scripts/sealed_tutorial_preview.py'):
                     target = authority_root / relative
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes((ROOT / relative).read_bytes())
+                install_git_prompt_evidence_fixture(authority_root)
                 temporary, current, date_str, paper_id, post_path = self.make_fixture(authority_root)
                 self.addCleanup(temporary.cleanup)
                 manifest_path = post_path.parent / 'manifest.json'

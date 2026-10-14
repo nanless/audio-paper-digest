@@ -281,7 +281,11 @@ test('实现指纹绑定显式的分析、Reader、身份和提示词依赖', ()
     assert.equal(new Set(processApi.IMPLEMENTATION_FILES).size, processApi.IMPLEMENTATION_FILES.length);
     for (const name of required) assert.ok(processApi.IMPLEMENTATION_FILES.includes(name), name);
     for (const name of processApi.IMPLEMENTATION_FILES) {
-        assert.equal(fs.statSync(path.join(__dirname, '..', name)).isFile(), true, name);
+        if (name.startsWith('prompts/')) {
+            assert.ok(require('../scripts/lib/prompt-evidence').readPromptEvidenceBytes(name).length, name);
+        } else {
+            assert.equal(fs.statSync(path.join(__dirname, '..', name)).isFile(), true, name);
+        }
     }
     assert.match(processApi.implementationSha256(), /^[a-f0-9]{64}$/);
     const root = '/virtual/conference-process-implementation';

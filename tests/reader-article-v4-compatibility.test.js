@@ -23,7 +23,7 @@ test('旧完成 Reader 保留冻结 v3 正文，新待处理记录使用 v8', ()
     assert.notEqual(fingerprint({ status: 'pending' }), oldFingerprint);
     assert.equal(fingerprint(old), oldFingerprint);
     assert.equal(JSON.stringify(old), bytes);
-    assert.equal(sha(fs.readFileSync(path.resolve(__dirname, '../prompts/api-reader-article-v3.md'))),
+    assert.equal(sha(require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes('prompts/api-reader-article-v3.md')),
         'ebb4c613fa60464f826f41a931c9bce5998559a685cd11ab16f7a6f4290ace63');
 });
 

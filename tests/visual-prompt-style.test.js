@@ -6,7 +6,7 @@ const assert = require('node:assert');
 const PROJECT_ROOT = path.join(__dirname, '..');
 
 function readPrompt(name) {
-    return fs.readFileSync(path.join(PROJECT_ROOT, 'prompts', name), 'utf8');
+    return require('../scripts/lib/prompt-evidence.js').readPromptEvidenceBytes(`prompts/${name}`).toString('utf8');
 }
 
 describe('发布后长图与封面提示词的风格要求', () => {

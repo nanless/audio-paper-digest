@@ -15,7 +15,7 @@
 | 历史直接重写来源及页面对应 | `historical-direct-*`、`historical-conference-*-sources/projections` | 来源目录、计划、队列、执行、汇总、arXiv 失败交接入口及历史文档 |
 | 分析恢复 | `analysis-engine.js`、`deep-analyzer.js` | 所有分析入口与 digest 状态 |
 | 分析结构或评分 | `analysis-contract.js` 与提示词 | Node/Python 解析器和发布器 |
-| Reader 写作、图表或修复 | `api-reader-article-v4.md`、`api-reader-repair-v3.md`（当前生效；旧 v1/v2/v3 文件保持原字节供已有记录恢复核验）、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
+| Reader 写作、图表或修复 | 当前登记的 `api-reader-article-v8.md`、`api-reader-repair-v12.md`（旧版本通过 Git 原字节核验）、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
 | 博客事务 | `publish-to-blog.py` | 三个独立入口与审查凭证测试 |
 | 视觉状态 | 两个 state JS 与 integration | 规划、status 与 record |
 | 命令别名 | `package.json` | README、AGENTS、SKILL 与 docs |
@@ -44,13 +44,13 @@
 5. 重试反馈能定位问题并限制修改范围，不使整篇内容无故变化。
 6. 读者正文没有模板句、证据 ID 或流程说明。
 
-提示词正文按版本分文件，实际路径和对应协议以 `scripts/lib/prompt-text-versions.js` 的登记表为准，不能只从文件名推断协议。主分析使用 `deep-analysis-v4.md`，评分审查和核心摘要修复使用各自的 v5 正文，Reader 文章使用 `api-reader-article-v6.md`，局部修复使用 `api-reader-repair-v10.md`。结构修复虽然保留 `structure-repair-v2.md` 路径，却使用独立的 v3 阶段预算；其他阶段也应按登记表逐项核对，避免文档中的旧版本号误导运行。
+工作树只保留当前登记的 18 份正文；实际路径和对应协议以 `scripts/lib/prompt-text-versions.js` 为准，不能只从文件名推断协议。主分析 v5、评分 v5、核心摘要 v6、Reader 文章 v8、局部修复 v12、结构修复路径 v3，以及 3 份事实/术语专项修复模板见 [Prompt 索引](../prompts/README.md)。所有新请求使用当前模板。
 
-筛选使用 `filter-v5.md`，明确实际音频输入与评测、音乐生成输入、口语轮次控制和说话人分段错误的相关范围，并区分实际声音方法或系统的贡献与固定现成基准验证；推理采样、解码等贡献不要求新增训练模块。通用理论、表示、算法或采样与音频线索交界的候选，按当前关键词规则先核验官方方法和实验材料再筛选；`filter-v2.md`、`filter-v3.md`、`filter-v4.md` 保持原字节，供旧会议请求按声明版本、模板 SHA 和原正文核验，不能与新版正文混用。提示词正文版本不代替 Reader 文章等内容协议，只有正文发生变化的阶段才新增版本。
+筛选使用 `filter-v5.md`，明确实际音频输入与评测、音乐生成输入、口语轮次控制和说话人分段错误的相关范围，并区分实际声音方法或系统的贡献与固定现成基准验证；推理采样、解码等贡献不要求新增训练模块。通用理论、表示、算法或采样与音频线索交界的候选，按当前关键词规则先核验官方方法和实验材料再筛选。旧会议筛选仍核验原声明版本、原模板 SHA 和原正文，通过 Git 证据读取器取回旧字节，不能与新版正文混用。提示词正文版本不代替 Reader 文章等内容协议。
 
-v1 永久保留在无版本后缀的原路径，已发布 v2、v3 和 v4 也保持原字节；旧文件只读，不能修改后给旧记录重新计算凭证。需要保存旧提示词时，按原始整文件字节的 SHA 存入 `prompts/history/<sha256>.md`。旧记录按声明版本取路径；SHA 不同且实现支持历史读取时，只能读取并核验对应原字节，不能只因 SHA 形式合法就认可。字段缺失按 v1 处理，未知版本直接报错。旧 v2、v3、v4 可以按原声明读取，不会自动认可为当前版本；原允许的旧核心摘要修正仍须通过原模板 SHA 和真实 v2 主分析指纹检查，不能把旧输出改标为 v3、v4 或 v5。升级版本后要同步核对阶段指纹，以及会议和 manual 的提示词清单。
+旧提示词正文不再保存在工作树；`scripts/lib/git-prompt-evidence-index.json` 只登记原路径、Git blob OID 和整文件 SHA。旧记录通过受控读取器从 Git 取回原字节，复核整文件及首围栏模板 SHA，并保留原声明、来源、检查点和付费记录；缺失或不符就停止，不能用当前正文补签旧结果。新请求只读取当前登记的 18 份 Prompt。字段缺失按原 v1 身份处理，未知版本直接报错；原允许的旧核心摘要修正仍须通过原模板 SHA 和真实 v2 主分析指纹检查，不能把旧输出改标为新版。
 
-提示词历史归档扫描只将检索退出码 1 视为没有匹配项。工具失败、候选 JSON 损坏或已有归档读取失败都会保留错误并中止，不能跳过后报告归档完整；只有文件确实不存在才进入新文件写入。
+Git 证据索引不保存旧全文，也不授权新建旧任务。读取失败、Git blob 缺失或整文件/模板 SHA 不符须保留错误并停止，不因文件名或 SHA 形式合法而放行。测试使用严格读取器核验真实历史字节，不要求退休 Markdown 文件仍在工作树。
 
 评分提示词还须保留八维顺序、范围、开源状态对应的六个固定分值、证据 ID 和代码计算的上限。Reader 提示词须抽检术语组合的解释、表格前后的说明和相邻图文，并保留未传入像素时不能猜图的限制。
 
