@@ -84,6 +84,35 @@ function officialSources(counts, text = 'The model has an audio tokenizer and ev
         }
     };
 }
+
+test('scope windows preserve complete mathematical Unicode code points and bind the corrected selection', async t => {
+    fixture(t);
+    const candidate = paper('2610.90091');
+    const text = 'a'.repeat(23999) + '𝐱' + ('audio 𝐲 speech 𝛽 '.repeat(11000));
+    assert.equal(text.isWellFormed(), true);
+    const evidence = await scope.captureFilterScopeEvidence(candidate, batchDate, officialSources({ text: 0, pdf: 0 }, text));
+    assert.equal(evidence.text.isWellFormed(), true);
+    assert.ok(evidence.text.length <= scope.MAX_SCOPE_CHARACTERS);
+    assert.equal(evidence.selectionVersion, 'official-modality-scope-codepoints-v2');
+    assert.equal(evidence.selectedTextSha256, crypto.createHash('sha256').update(evidence.text).digest('hex'));
+    scope.assertFilterScopeEvidence(candidate, evidence, batchDate);
+    const corrupt = { ...evidence, text: evidence.text + '\ud835' };
+    assert.throws(() => scope.assertFilterScopeEvidence(candidate, corrupt, batchDate), /来源四文件/);
+});
+
+test('unaffected scope selection retains its input version and safely samples varying Unicode boundaries', async t => {
+    fixture(t);
+    const candidate = paper('2610.90092');
+    const evidence = await scope.captureFilterScopeEvidence(candidate, batchDate,
+        officialSources({ text: 0, pdf: 0 }, 'audio and speech '.repeat(11000)));
+    assert.equal(evidence.selectionVersion, 'official-modality-scope-v1');
+    for (let prefix = 0; prefix < 12; prefix++) {
+        const text = 'x'.repeat(prefix) + '𝐱𝛽 audio speech '.repeat(12000);
+        const selected = scope.selectScopeText(text);
+        assert.equal(selected.isWellFormed(), true, `prefix ${prefix}`);
+        assert.ok(selected.length <= scope.MAX_SCOPE_CHARACTERS);
+    }
+});
 function options(overrides, decisionFn, initialDecisions) {
     return { batchSize: 2, delayBetweenBatches: 0, decisionMetadata: { batchDate, filterModel: 'local-test-model', filterPromptHash: require('../scripts/full-fetch.js').getFilterPromptHash() },
         decisionOptions: { scopeSourceOverrides: overrides }, decisionFn, initialDecisions };

@@ -6,6 +6,7 @@ const sources = require('./fresh-arxiv-rewrite-source.js');
 const { evaluateKeywordPrefilter } = require('./keyword-prefilter.js');
 
 const FILTER_SCOPE_EVIDENCE_VERSION = 'official-modality-scope-v1';
+const CODEPOINT_SELECTION_VERSION = 'official-modality-scope-codepoints-v2';
 const MAX_SCOPE_CHARACTERS = 120000;
 function canonical(value) {
     if (Array.isArray(value)) return value.map(canonical);
@@ -23,8 +24,8 @@ function sourceRoot(paper, batchDate) {
     return path.join(require('../config.js').FILES.freshArxivFetchedSourcesDir,
         'filter-scope-v1', batchDate, buildFilterInputSha256(paper));
 }
-function selectScopeText(text) {
-    if (text.length <= MAX_SCOPE_CHARACTERS) return text;
+function selectScopeTextDetails(text) {
+    if (text.length <= MAX_SCOPE_CHARACTERS) return { text, changed: false };
     const ranges = [[0, Math.min(24000, text.length)]];
     const anchors = [...text.matchAll(/\b(?:audio|speech|music|microphones?|waveforms?|diari[sz]ation|IEMOCAP|Qwen2Audio|Whisper|MusicGen|acoustic)\b/gi)]
         .map(match => match.index);
@@ -46,17 +47,27 @@ function selectScopeText(text) {
         else merged.push(range.slice());
     }
     let result = '';
-    for (const [start, end] of merged) {
+    let changed = false;
+    const splitsCodePoint = offset => offset > 0 && offset < text.length
+        && /[\uD800-\uDBFF]/.test(text[offset - 1]) && /[\uDC00-\uDFFF]/.test(text[offset]);
+    for (const range of merged) {
+        let [start, end] = range;
+        if (splitsCodePoint(start)) { start++; changed = true; }
+        if (splitsCodePoint(end)) { end--; changed = true; }
         const marker = `\n\n[原文字符位置 ${start}–${end}]\n\n`;
         const remaining = MAX_SCOPE_CHARACTERS - result.length - marker.length;
         if (remaining <= 0) break;
-        result += marker + text.slice(start, Math.min(end, start + remaining));
+        let selectedEnd = Math.min(end, start + remaining);
+        if (splitsCodePoint(selectedEnd)) { selectedEnd--; changed = true; }
+        result += marker + text.slice(start, selectedEnd);
     }
-    return result;
+    return { text: result, changed };
 }
+function selectScopeText(text) { return selectScopeTextDetails(text).text; }
 
 function makeEvidence(paper, batchDate, stored) {
-    const text = selectScopeText(stored.text);
+    const selection = selectScopeTextDetails(stored.text);
+    const text = selection.text;
     return { contract: FILTER_SCOPE_EVIDENCE_VERSION, batchDate,
         candidateInputSha256: buildFilterInputSha256(paper),
         rootDir: stored.rootDir, arxivId: stored.arxivId, generation: stored.generation,
@@ -65,7 +76,8 @@ function makeEvidence(paper, batchDate, stored) {
         pdfSha256: stored.manifest.pdf.responseSha256,
         runtimeSha256: stored.manifest.runtimeMetadata.responseSha256,
         officialUrl: stored.manifest.text.url, source: stored.manifest.text.source,
-        text, selectedTextSha256: sha(text), selectionVersion: FILTER_SCOPE_EVIDENCE_VERSION };
+        text, selectedTextSha256: sha(text), selectionVersion: selection.changed
+            ? CODEPOINT_SELECTION_VERSION : FILTER_SCOPE_EVIDENCE_VERSION };
 }
 function assertFilterScopeEvidence(paper, evidence, batchDate = evidence?.batchDate) {
     if (!evidence || evidence.contract !== FILTER_SCOPE_EVIDENCE_VERSION
