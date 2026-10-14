@@ -24,9 +24,12 @@ describe('refresh-api-reader 批量命令行', () => {
         assert.strictEqual(parsed.date, '2026-09-01');
         assert.strictEqual(parsed.concurrency, 5);
         assert.strictEqual(MAX_REFRESH_CONCURRENCY, 60);
-        assert.strictEqual(parseRefreshCliArgs(['2608.28630']).concurrency, 1);
+        assert.strictEqual(parseRefreshCliArgs(['2608.28630']).concurrency, Config.ANALYSIS_CONFIG.apiReaderConcurrency);
         assert.strictEqual(parseRefreshCliArgs(['--all', '--date', '2026-09-01', '--concurrency', '10']).concurrency, 10);
         assert.strictEqual(parseRefreshCliArgs(['--concurrency', '60', '2608.28630']).concurrency, 60);
+        assert.strictEqual(parsed.maxRounds, Config.ANALYSIS_CONFIG.batchMaxRounds);
+        assert.strictEqual(parseRefreshCliArgs(['--rounds', '4', '2608.28630']).maxRounds, 4);
+        for (const value of ['0', '11', '1.5']) assert.throws(() => parseRefreshCliArgs(['--rounds', value, '2608.28630']), /--rounds/);
         assert.strictEqual(parsed.scoringAndReader, true);
         assert.deepStrictEqual(parsed.ids, []);
         const bindings = parseRefreshCliArgs([

@@ -12,6 +12,7 @@ const crypto = require('crypto');
 const { paperSourceQuoteBindsOriginalUrl } = require('./lib/reader-resource-binding.js');
 const { parseAnalysis, writeFileAtomic, getBeijingISOString, normalizedId } = require('./utils.js');
 const { ANALYSIS_CONFIG, FILES } = require('./config.js');
+const { runFailureRounds } = require('./lib/analysis-failure-rounds.js');
 const {
     getInvalidAnalysisReason,
     hasRequiredSections,
@@ -1798,6 +1799,11 @@ async function analyzeBatchInternal(papers, options = {}) {
         checkpointFilePath = null,
         paperLockOptions = null
     } = options;
+    const maxRounds = options.maxRounds ?? (Object.hasOwn(options, 'maxRetries')
+        ? maxRetries + 1 : ANALYSIS_CONFIG.batchMaxRounds);
+    if (!Number.isSafeInteger(maxRounds) || maxRounds < 1 || maxRounds > 10) {
+        throw new RangeError('[analyzeBatch] maxRounds 必须是 1..10 的整数；maxRetries 表示额外全批轮次。');
+    }
 
     if (!Number.isInteger(concurrency) || concurrency < 1) {
         throw new RangeError(`[analyzeBatch] 并发数 concurrency 必须是正整数，当前值为 ${concurrency}。`);
@@ -1819,6 +1825,21 @@ async function analyzeBatchInternal(papers, options = {}) {
     let processedCount = 0;
     let runStopError = null;
     const skipDecisions = new Map();
+    const updateOutcome = (idx, result) => {
+        const adjust = (outcome, delta) => {
+            if (!outcome) return;
+            if (outcome.skipped) stats.skipped += delta;
+            else if (outcome.success) {
+                stats.success += delta;
+                const source = outcome.result?.analysisSource || 'unknown';
+                stats.sourceCounts[source] = (stats.sourceCounts[source] || 0) + delta;
+                if (!stats.sourceCounts[source]) delete stats.sourceCounts[source];
+            } else stats.failed += delta;
+        };
+        adjust(outcomes[idx], -1);
+        outcomes[idx] = result;
+        adjust(result, 1);
+    };
 
     const shouldSkipCached = (paper) => {
         if (!shouldSkip) return false;
@@ -1831,18 +1852,17 @@ async function analyzeBatchInternal(papers, options = {}) {
         return value;
     };
 
-    const runOne = async (paper, idx) => {
+    const runOne = async (paper, idx, context) => {
+        let skip = false;
         try {
-            if (shouldSkip) {
-                const skip = shouldSkipCached(paper);
-                if (skip) {
-                    stats.skipped++;
-                    if (onPaperDone) await onPaperDone(idx, papers.length, paper, { skipped: true }, 0);
-                    return { skipped: true, paper };
-                }
-            }
+            if (shouldSkip) skip = shouldSkipCached(paper);
         } catch (e) {
             console.error(`[analyzeBatch] 判断是否跳过论文的 shouldSkip 回调失败：${e.message}`);
+        }
+        if (skip) {
+            updateOutcome(idx, { skipped: true, paper });
+            if (onPaperDone) await onPaperDone(idx, papers.length, paper, { skipped: true }, 0);
+            return { skipped: true, paper };
         }
 
         if (onPaperStart) {
@@ -1860,7 +1880,8 @@ async function analyzeBatchInternal(papers, options = {}) {
             }
             const paperForAnalysis = prepared?.paper || paper;
             const result = await analyzePaperWithRetry(paperForAnalysis, {
-                maxRetries,
+                // One normal pipeline per round. Stage and Reader budgets remain unchanged.
+                maxRetries: 0,
                 retryDelayMs,
                 analyzeFn,
                 onCheckpoint: checkpoint => {
@@ -1875,7 +1896,8 @@ async function analyzeBatchInternal(papers, options = {}) {
                 },
                 onAttempt: (att, max) => {
                     if (onAttempt) {
-                        try { onAttempt(att, max, paper); } catch (e) { /* 忽略 */ }
+                        try { onAttempt(context.attempt - 1, maxRounds - 1, paper,
+                            { round: context.round, maxRounds }); } catch (e) { /* 忽略 */ }
                     }
                 }
             });
@@ -1888,6 +1910,7 @@ async function analyzeBatchInternal(papers, options = {}) {
                     scope: 'run',
                     retryable: failure.latestAnalysisAttemptRetryable
                 });
+                require('./lib/analysis-stop-control').requestAnalysisStop(runStopError.code || 'service_failure');
             }
             if (onPaperResultLocked) {
                 await onPaperResultLocked(paperForAnalysis, result);
@@ -1904,18 +1927,24 @@ async function analyzeBatchInternal(papers, options = {}) {
         }, paperLockOptions || {});
         const duration = Date.now() - startTime;
         if (r.skipped) {
-            stats.skipped++;
+            updateOutcome(idx, r);
             if (onPaperDone) await onPaperDone(idx, papers.length, paper, r, duration);
             return r;
         }
         stats.durationTotal += duration;
 
-        if (r.success) {
-            stats.success++;
-            const source = r.result?.analysisSource || 'unknown';
-            stats.sourceCounts[source] = (stats.sourceCounts[source] || 0) + 1;
-        } else {
-            stats.failed++;
+        updateOutcome(idx, r);
+
+        // The next round retains completed stages, failed drafts and accumulated fees.
+        // Keep the original object so source capabilities and identity-bound state survive.
+        for (const [key, value] of Object.entries(r.result || {})) {
+            if (!r.success && ['analysis', 'parsed'].includes(key) && value === null) continue;
+            paper[key] = value;
+        }
+        if (r.success) for (const key of Object.keys(paper)) {
+            if ((/^latestAnalysisAttempt(?:Error|Retryable|At)/.test(key)
+                || /^error(?:Code|Category|Status|Scope|Retryable)?$/.test(key))
+                && !Object.hasOwn(r.result, key)) delete paper[key];
         }
 
         if (onPaperDone) await onPaperDone(idx, papers.length, paper, r, duration);
@@ -1923,15 +1952,9 @@ async function analyzeBatchInternal(papers, options = {}) {
         return r;
     };
 
-    // 每篇完成后启动下一篇；运行级错误会停止领取新任务。
-    // 逻辑批次仍按输入顺序划分，已开始的论文会继续保存结果。
-    const totalBatches = Math.ceil(papers.length / concurrency);
-    const batchStates = Array.from({ length: totalBatches }, (_, batchIndex) => {
-        const start = batchIndex * concurrency;
-        const size = Math.min(concurrency, papers.length - start);
-        return { start, size, settled: 0, results: new Array(size) };
-    });
-    let nextIndex = 0;
+    // Dynamic workers finish the entire round before any failed paper is retried.
+    // Chunk notifications preserve input order within each round.
+    let batchStates = [], positions = new Map(), currentRound = 1;
     let nextBatchToFinalize = 0;
     let fatalError = null;
     let finalizer = Promise.resolve();
@@ -1941,7 +1964,7 @@ async function analyzeBatchInternal(papers, options = {}) {
         .map(r => r.result || r);
 
     const wrapFatal = (error, batchIndex) => Object.assign(new Error(
-        `[analyzeBatch] 批次 ${batchIndex + 1}/${totalBatches} 关键回调或执行失败: ${error.message}`,
+        `[analyzeBatch] 第 ${currentRound} 轮批次 ${batchIndex + 1}/${batchStates.length} 关键回调或执行失败: ${error.message}`,
         { cause: error }
     ), {
         code: error.code, category: error.category, status: error.status,
@@ -1949,10 +1972,10 @@ async function analyzeBatchInternal(papers, options = {}) {
     });
 
     const recordOutcome = (idx, result) => {
-        const batchIndex = Math.floor(idx / concurrency);
+        const { batchIndex, slot } = positions.get(idx);
         const state = batchStates[batchIndex];
         outcomes[idx] = result;
-        state.results[idx - state.start] = result;
+        state.results[slot] = result;
         state.settled++;
 
         const task = finalizer.then(async () => {
@@ -1962,13 +1985,9 @@ async function analyzeBatchInternal(papers, options = {}) {
                 if (ready.settled !== ready.size) break;
                 const batchNum = nextBatchToFinalize + 1;
                 if (onBatchDone) {
-                    await onBatchDone(batchNum, ready.results.slice());
+                    await onBatchDone(batchNum, ready.results.slice(), { round: currentRound, maxRounds });
                 }
-                const batchPapers = papers.slice(ready.start, ready.start + ready.size);
-                processedCount += batchPapers.filter(p => {
-                    if (!shouldSkip) return true;
-                    try { return !shouldSkipCached(p); } catch (e) { return true; }
-                }).length;
+                processedCount += ready.results.filter(result => !result.skipped).length;
                 if (saveInterval > 0 && onSave && processedCount > 0
                     && processedCount % saveInterval === 0) {
                     await onSave(snapshotResults(), {
@@ -1985,53 +2004,74 @@ async function analyzeBatchInternal(papers, options = {}) {
         return task;
     };
 
-    const worker = async () => {
-        while (!fatalError && !runStopError
-            && !require('./lib/analysis-stop-control').isAnalysisStopRequested()) {
-            const idx = nextIndex++;
-            if (idx >= papers.length) return;
-            try {
-                const result = await runOne(papers[idx], idx);
-                await recordOutcome(idx, result);
-            } catch (error) {
-                fatalError = fatalError || wrapFatal(error, Math.floor(idx / concurrency));
-                return;
+    const stopControl = require('./lib/analysis-stop-control');
+    const ids = papers.map((paper, index) => normalizedId(paper) || String(index));
+    const repeatedIds = new Set(ids.filter((id, index) => ids.indexOf(id) !== index));
+    let roundResult;
+    try {
+        roundResult = await runFailureRounds(papers, {
+            concurrency, maxRounds,
+            getProgressKey: options.getProgressKey,
+            // Alias rows still share the canonical paper lock and locked latest-state read.
+            getItemId: (_paper, index) => repeatedIds.has(ids[index]) ? `${ids[index]}#${index}` : ids[index],
+            manualHandoffMaxItems: options.manualHandoffMaxItems ?? ANALYSIS_CONFIG.manualHandoffMaxItems,
+            manualHandoffMinRounds: options.manualHandoffMinRounds ?? ANALYSIS_CONFIG.manualHandoffMinRounds,
+            manualHandoffNoProgressRounds: options.manualHandoffNoProgressRounds ?? ANALYSIS_CONFIG.manualHandoffNoProgressRounds,
+            roundDelayMs: options.roundDelayMs ?? (Object.hasOwn(options, 'retryDelayMs') ? retryDelayMs : 0),
+            shouldStop: () => {
+                if (runStopError || fatalError) return fatalError || runStopError;
+                try { stopControl.assertMayStartRequest(); } catch (error) { return error; }
+                return false;
+            },
+            onRunStop: error => stopControl.requestAnalysisStop(error.code || 'batch_failure'),
+            onRoundStart: async context => {
+                currentRound = context.round;
+                skipDecisions.clear(); positions = new Map(); nextBatchToFinalize = 0;
+                batchStates = [];
+                for (let start = 0; start < context.indices.length; start += concurrency) {
+                    const indices = context.indices.slice(start, start + concurrency), batchIndex = batchStates.length;
+                    indices.forEach((index, slot) => positions.set(index, { batchIndex, slot }));
+                    batchStates.push({ size: indices.length, settled: 0, results: new Array(indices.length) });
+                }
+                if (options.onRoundStart) await options.onRoundStart(context);
+            },
+            runItem: async (paper, context) => {
+                try {
+                    const result = await runOne(paper, context.index, context);
+                    await recordOutcome(context.index, result);
+                    return result;
+                } catch (error) {
+                    let wrapped = error === fatalError || fatalError?.cause === error
+                        ? fatalError : wrapFatal(error, positions.get(context.index).batchIndex);
+                    if (runStopError && wrapped.scope !== 'run') {
+                        wrapped = Object.assign(new AggregateError([wrapped, runStopError], wrapped.message,
+                            { cause: wrapped }), { code: wrapped.code, scope: 'run', retryable: false });
+                    }
+                    fatalError ||= wrapped;
+                    throw wrapped;
+                }
+            },
+            onRoundDone: async context => {
+                await finalizer;
+                if (fatalError) throw fatalError;
+                stats.roundsCompleted = context.round;
+                if (context.stopped || stopControl.isAnalysisStopRequested()) stats.stopped = true;
+                // Durable barrier: no next round until all started results and this save finish.
+                if (onSave) await onSave(snapshotResults(), { ...stats, savedAt: getBeijingISOString(),
+                    retryRound: context.round, manualHandoff: context.manualHandoff });
+                if (options.onRoundDone) await options.onRoundDone(context);
             }
-        }
-    };
-
-    const workers = Array.from(
-        { length: Math.min(concurrency, papers.length) },
-        () => worker()
-    );
-    await Promise.allSettled(workers);
-    await finalizer;
-
-    if (fatalError) throw fatalError;
-
-    const results = snapshotResults();
-
-    if (require('./lib/analysis-stop-control').isAnalysisStopRequested()) stats.stopped = true;
-    // 最终保存
-    if (onSave) {
-        await onSave(results, { ...stats, savedAt: getBeijingISOString() });
-    }
-
-    // 保存期间也可能收到停止信号；成功保存后再核对，不能返回成功继续发布。
-    if (require('./lib/analysis-stop-control').isAnalysisStopRequested()) {
+        });
+        if (!papers.length && onSave) await onSave([], { ...stats, savedAt: getBeijingISOString() });
+    } catch (error) {
         stats.stopped = true;
-        if (!runStopError) {
-            try { require('./lib/analysis-stop-control').assertMayStartRequest(); }
-            catch (error) { runStopError = error; }
-        }
+        Object.assign(error, { results: snapshotResults(), stats });
+        throw error;
     }
-    if (runStopError) {
-        runStopError.results = results;
-        runStopError.stats = stats;
-        throw runStopError;
-    }
-
-    return { results, stats };
+    stats.roundsCompleted = roundResult.rounds.length;
+    return { results: snapshotResults(), stats, rounds: roundResult.rounds,
+        manualHandoff: roundResult.manualHandoff, failedIds: roundResult.failedIds,
+        unstartedIds: roundResult.unstartedIds };
 }
 
 function persistAnalysisCheckpoint(filePath, paper) {

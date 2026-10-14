@@ -17,11 +17,12 @@ const date = '2026-09-07';
 
 async function fixture(t) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-stop-'));
-    const previous = Object.fromEntries(['dailyFreshSourceRunsDir', 'deepAnalysisResult', 'papers']
+    const previous = Object.fromEntries(['dailyFreshSourceRunsDir', 'deepAnalysisResult', 'papers', 'analysisBatchReportsDir']
         .map(key => [key, Config.FILES[key]]));
     Config.FILES.dailyFreshSourceRunsDir = path.join(root, 'sources');
     Config.FILES.deepAnalysisResult = path.join(root, 'analysis.json');
     Config.FILES.papers = path.join(root, 'papers.json');
+    Config.FILES.analysisBatchReportsDir = path.join(root, 'batch-reports');
     t.after(() => { Object.assign(Config.FILES, previous); fs.rmSync(root, { recursive: true, force: true }); });
     const plan = daily.createDailyFreshSourcePlan({ batchDate: date, batchId: 'reader-stop',
         papers: ids.map(arxivId => ({ arxivId, title: arxivId })) });
@@ -135,4 +136,44 @@ test('批量最后成功响应仍保存但传播停止，结果清单保留已�
     assert.equal(following, 0);
     assert.equal(f.read().papers[0].refreshMarker, 'returned-before-stop');
     assert.equal(f.read().papers[1].refreshMarker, undefined);
+});
+
+
+test('Reader 整批首轮先完成，只重试失败论文；不重复成功或增加授权 epoch', async t => {
+    const f = await fixture(t), seen = [], attempts = new Map();
+    const before = f.read().papers[0];
+    const results = await reader.refreshApiReaders(ids, { concurrency: 1, maxRounds: 3,
+        operations: { article: f.operation(paper => {
+            seen.push(paper.arxivId);
+            const count = (attempts.get(paper.arxivId) || 0) + 1;
+            attempts.set(paper.arxivId, count);
+            assert.equal(paper.historicalDirectRetryEpoch, before.historicalDirectRetryEpoch);
+            if (paper.arxivId === ids[0] && count === 1) throw Object.assign(new Error('正文普通失败'), { retryable: true });
+            return { ...paper, refreshMarker: 'saved', apiReaderPlan: { sections: [] }, apiReaderFigures: [] };
+        }) }
+    });
+    assert.deepEqual(seen, [...ids, ids[0]]);
+    assert.equal(results.length, 3);
+    const reports = fs.readdirSync(Config.FILES.analysisBatchReportsDir);
+    const report = JSON.parse(fs.readFileSync(path.join(Config.FILES.analysisBatchReportsDir, reports[0])));
+    assert.deepEqual(report.rounds.map(round => round.inputIds), [ids, [ids[0]]]);
+    assert.equal(report.diagnosticOnly, true);
+    assert.equal(report.newApiRequestsAuthorized, false);
+});
+
+test('Reader 小失败集合三轮后报告受控人工交接，正式成功状态不能由诊断替代', async t => {
+    const f = await fixture(t), seen = [];
+    await assert.rejects(reader.refreshApiReaders(ids, { concurrency: 1, maxRounds: 3,
+        operations: { article: f.operation(paper => {
+            seen.push(paper.arxivId);
+            throw Object.assign(new Error('持续正文失败'), { retryable: true });
+        }) }
+    }), error => {
+        assert.equal(error.manualHandoff.eligible, true);
+        assert.equal(error.manualHandoff.newApiRequestsAuthorized, false);
+        assert.equal(error.failures.length, 3);
+        assert.equal(error.results.length, 0);
+        return true;
+    });
+    assert.deepEqual(seen, [...ids, ...ids, ...ids]);
 });

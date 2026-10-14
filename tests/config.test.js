@@ -188,7 +188,33 @@ describe('config', () => {
     it('项目 .env 覆写 PD_ANALYSIS_MAX_RETRIES', () => {
         withProjectEnv('PD_ANALYSIS_MAX_RETRIES=5', (Config) => {
             assert.strictEqual(Config.ANALYSIS_CONFIG.maxRetries, 5);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.batchMaxRounds, 6);
         });
+    });
+
+    it('全批轮次与人工交接上限独立于单阶段和 Reader 预算', () => {
+        withProjectEnv('', Config => {
+            assert.strictEqual(Config.ANALYSIS_CONFIG.batchMaxRounds, 3);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.manualHandoffMaxItems, 5);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.manualHandoffMinRounds, 3);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.manualHandoffNoProgressRounds, 3);
+        });
+        withProjectEnv(['PD_ANALYSIS_MAX_RETRIES=5', 'PD_ANALYSIS_BATCH_MAX_ROUNDS=4',
+            'PD_ANALYSIS_MANUAL_HANDOFF_MAX_ITEMS=0', 'PD_ANALYSIS_MANUAL_HANDOFF_MIN_ROUNDS=4',
+            'PD_ANALYSIS_MANUAL_HANDOFF_NO_PROGRESS_ROUNDS=5'].join('\n'), Config => {
+            assert.strictEqual(Config.ANALYSIS_CONFIG.batchMaxRounds, 4);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.maxRetries, 5);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.manualHandoffMaxItems, 0);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.manualHandoffMinRounds, 4);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.manualHandoffNoProgressRounds, 5);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.apiMaxRetries, 3);
+            assert.strictEqual(Config.ANALYSIS_CONFIG.apiReaderMaxTokens, 48000);
+        });
+        for (const config of ['PD_ANALYSIS_BATCH_MAX_ROUNDS=0', 'PD_ANALYSIS_BATCH_MAX_ROUNDS=11',
+            'PD_ANALYSIS_BATCH_MAX_ROUNDS=2oops', 'PD_ANALYSIS_MANUAL_HANDOFF_MAX_ITEMS=6',
+            'PD_ANALYSIS_MANUAL_HANDOFF_MIN_ROUNDS=2', 'PD_ANALYSIS_MANUAL_HANDOFF_NO_PROGRESS_ROUNDS=2']) {
+            assert.throws(() => withProjectEnv(config, () => {}), /必须是.*整数/);
+        }
     });
 
     it('项目 .env 覆写 PD_ANALYSIS_API_MAX_RETRIES', () => {

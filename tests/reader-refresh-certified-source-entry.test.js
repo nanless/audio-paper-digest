@@ -53,6 +53,8 @@ function loadRefresh(f, mutateAtLock = () => {}) {
         },
         './lib/daily-fresh-source-plan.js': wrappedDaily,
         './lib/reader-tables.js': {}, './digest-status.js': {},
+        './lib/analysis-failure-rounds.js': require('../scripts/lib/analysis-failure-rounds'),
+        './lib/analysis-batch-report.js': { writeAnalysisBatchReport: () => 'test-diagnostics' },
         './utils.js': { normalizedId: item => typeof item === 'string' ? item : item.arxivId },
         './lib/analysis-stop-control': { withAnalysisStopControl: fn => fn(), assertMayStartRequest() {}, isAnalysisStopRequested: () => false }
     };

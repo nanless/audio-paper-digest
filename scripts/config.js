@@ -100,6 +100,10 @@ const FILTER_CONFIG = {
 const ANALYSIS_CONFIG = {
     concurrency: 3,
     maxRetries: 2,
+    batchMaxRounds: 3,
+    manualHandoffMaxItems: 5,
+    manualHandoffMinRounds: 3,
+    manualHandoffNoProgressRounds: 3,
     retryDelayMs: 3000,
     apiOverallTimeoutMs: 20 * 60 * 1000,  // 20 分钟
     apiReaderOverallTimeoutMs: 40 * 60 * 1000,
@@ -270,6 +274,7 @@ const FILES = {
     paperSourceAuthorityDir: path.join(DATA_DIR, 'runtime', 'paper-source-authorities'),
     apiReaderAttemptsDir: path.join(DATA_DIR, 'runtime', 'reader-attempts'),
     analysisRepairAttemptsDir: path.join(DATA_DIR, 'runtime', 'analysis-repair-attempts'),
+    analysisBatchReportsDir: path.join(DATA_DIR, 'runtime', 'analysis-batch-reports'),
     papers: path.join(CURRENT_DIR, 'papers.json'),
     papersLegacy: path.join(DATA_DIR, 'papers.json'),
     rawCandidates: path.join(CURRENT_DIR, 'raw-candidates.json'),
@@ -362,6 +367,22 @@ function applyEnvOverrides() {
         if (!Number.isNaN(val) && val >= 0) {
             ANALYSIS_CONFIG.maxRetries = val;
         }
+    }
+    ANALYSIS_CONFIG.batchMaxRounds = ANALYSIS_CONFIG.maxRetries + 1;
+    const roundLimits = {
+        PD_ANALYSIS_BATCH_MAX_ROUNDS: ['batchMaxRounds', 1, 10],
+        PD_ANALYSIS_MANUAL_HANDOFF_MAX_ITEMS: ['manualHandoffMaxItems', 0, 5],
+        PD_ANALYSIS_MANUAL_HANDOFF_MIN_ROUNDS: ['manualHandoffMinRounds', 3, 10],
+        PD_ANALYSIS_MANUAL_HANDOFF_NO_PROGRESS_ROUNDS: ['manualHandoffNoProgressRounds', 3, 10]
+    };
+    for (const [name, [key, low, high]] of Object.entries(roundLimits)) {
+        if (process.env[name] === undefined) continue;
+        const raw = String(process.env[name]);
+        const value = Number(raw);
+        if (!/^\d+$/.test(raw) || !Number.isSafeInteger(value) || value < low || value > high) {
+            throw new RangeError(`${name} 必须是 ${low}..${high} 的整数`);
+        }
+        ANALYSIS_CONFIG[key] = value;
     }
     // 单次 LLM 阶段内部的 HTTP 请求尝试次数（不同于整篇分析重试次数）
     const analysisApiMaxRetries = readPositiveInt('PD_ANALYSIS_API_MAX_RETRIES');

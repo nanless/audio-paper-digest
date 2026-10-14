@@ -36,6 +36,8 @@ const {
     normalizeCompatibleBatchDate
 } = require('./digest-status.js');
 const { normalizedId, getBeijingISOString } = require('./utils.js');
+const { runFailureRounds } = require('./lib/analysis-failure-rounds.js');
+const { writeAnalysisBatchReport } = require('./lib/analysis-batch-report.js');
 
 const MAX_REFRESH_CONCURRENCY = 60;
 
@@ -48,7 +50,8 @@ function parseRefreshCliArgs(args) {
         reviewFeedback: '',
         all: false,
         date: null,
-        concurrency: 1,
+        concurrency: Config.ANALYSIS_CONFIG?.apiReaderConcurrency ?? 5,
+        maxRounds: Config.ANALYSIS_CONFIG?.batchMaxRounds ?? 3,
         ids: []
     };
     const seenFlags = new Set();
@@ -63,15 +66,15 @@ function parseRefreshCliArgs(args) {
         else if (value === '--figures-only') options.figuresOnly = true;
         else if (value === '--surface-bindings-only') options.surfaceBindingsOnly = true;
         else if (value === '--all') options.all = true;
-        else if (value === '--date' || value === '--concurrency' || value === '--feedback') {
+        else if (value === '--date' || value === '--concurrency' || value === '--rounds' || value === '--feedback') {
             const next = args[index + 1];
             if (!next || next.startsWith('--')) throw new Error(`参数 ${value} 缺少对应的值。`);
             index += 1;
             if (value === '--date') options.date = next;
             else if (value === '--feedback') options.reviewFeedback = next.trim();
             else {
-                if (!/^\d+$/.test(next)) throw new Error('--concurrency 的值必须是整数。');
-                options.concurrency = Number.parseInt(next, 10);
+                if (!/^\d+$/.test(next)) throw new Error(`${value} 的值必须是整数。`);
+                options[value === '--rounds' ? 'maxRounds' : 'concurrency'] = Number.parseInt(next, 10);
             }
         } else if (value.startsWith('--')) {
             throw new Error(`无法识别参数 ${value}。`);
@@ -87,6 +90,9 @@ function parseRefreshCliArgs(args) {
     if (!Number.isInteger(options.concurrency)
         || options.concurrency < 1 || options.concurrency > MAX_REFRESH_CONCURRENCY) {
         throw new Error(`--concurrency 的值必须是 1-${MAX_REFRESH_CONCURRENCY} 之间的整数。`);
+    }
+    if (!Number.isInteger(options.maxRounds) || options.maxRounds < 1 || options.maxRounds > 10) {
+        throw new Error('--rounds 的值必须是 1-10 之间的整数。');
     }
     if (options.all) {
         if (options.ids.length > 0) throw new Error('--all 不能与指定的论文 ID 同时使用。');
@@ -204,61 +210,94 @@ function validateRefreshFinalSources(resultPath, entryPlan) {
 async function refreshApiReadersInternal(targetIds, options = {}) {
     const entryPlan = readRefreshEntryPlan(Config.FILES.deepAnalysisResult);
     return refreshRecoveryEntryScope.run(entryPlan, async () => {
-        try {
-            return await refreshApiReadersWithEntryPlan(targetIds, options);
-        } finally {
-            validateRefreshFinalSources(Config.FILES.deepAnalysisResult, entryPlan);
+        let result, failure;
+        try { result = await refreshApiReadersWithEntryPlan(targetIds, options); }
+        catch (error) { failure = error; }
+        try { validateRefreshFinalSources(Config.FILES.deepAnalysisResult, entryPlan); }
+        catch (error) {
+            if (failure) throw new AggregateError([failure, error],
+                `Reader 刷新失败，结束来源核验亦失败：${error.message}`, { cause: failure });
+            throw error;
         }
+        if (failure) throw failure;
+        return result;
     });
 }
 
 async function refreshApiReadersWithEntryPlan(targetIds, options = {}) {
     const ids = [...new Set(targetIds.map(normalizedId).filter(Boolean))];
-    const concurrency = Math.min(options.concurrency || 1, ids.length || 1);
-    const results = new Array(ids.length);
-    const failures = [];
-    let cursor = 0;
-    let runStopError = null;
-    async function worker() {
-        while (!runStopError && !require('./lib/analysis-stop-control').isAnalysisStopRequested()) {
-            const index = cursor;
-            cursor += 1;
-            if (index >= ids.length) return;
-            const id = ids[index];
-            try {
-                results[index] = await refreshApiReader(id, options);
-            } catch (error) {
-                if (error?.scope === 'run') runStopError ||= error;
-                if (error?.code === require('./lib/analysis-stop-control').CODE && error.result) {
-                    results[index] = error.result;
-                    console.log(`✅ ${id} 已保存结果，停止后续请求`);
-                } else {
-                    failures.push({ id, error: error.message });
+    const config = Config.ANALYSIS_CONFIG || {};
+    const concurrency = options.concurrency ?? config.apiReaderConcurrency ?? 5;
+    if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > MAX_REFRESH_CONCURRENCY) {
+        throw new RangeError(`concurrency must be an integer in 1..${MAX_REFRESH_CONCURRENCY}`);
+    }
+    const failures = new Map();
+    const stop = require('./lib/analysis-stop-control');
+    let runStopError = null, roundResult;
+    const runId = crypto.randomUUID();
+    const report = state => writeAnalysisBatchReport({ runId, flow: 'reader-refresh',
+        sourceRun: dailyFreshSources.dailyFreshSourceReference(refreshRecoveryEntryScope.getStore()),
+        targetIds: ids, ...state });
+    try {
+        roundResult = await runFailureRounds(ids, {
+            concurrency,
+            maxRounds: options.maxRounds ?? config.batchMaxRounds ?? 3,
+            getItemId: id => id,
+            manualHandoffMaxItems: config.manualHandoffMaxItems ?? 5,
+            manualHandoffMinRounds: config.manualHandoffMinRounds ?? 3,
+            manualHandoffNoProgressRounds: config.manualHandoffNoProgressRounds ?? 3,
+            shouldStop: () => {
+                if (runStopError) return runStopError;
+                if (stop.isAnalysisStopRequested()) stop.assertMayStartRequest();
+                return false;
+            },
+            runItem: async id => {
+                try {
+                    const result = await refreshApiReader(id, options);
+                    failures.delete(id);
+                    return { success: true, result };
+                } catch (error) {
+                    if (error?.code === stop.CODE && error.result) {
+                        runStopError ||= error;
+                        failures.delete(id);
+                        return { success: true, result: error.result };
+                    }
+                    failures.set(id, { id, error: error.message, code: error.code || null });
                     console.error(`❌ ${id} 刷新失败: ${error.message}`);
+                    // Only explicitly classified content failures may repeat. Source,
+                    // storage and provider errors stop dispatch and retain their identity.
+                    if (error.scope === 'run' || error.code === 'DAILY_FRESH_SOURCE_PLAN_INTEGRITY'
+                        || ['EIO', 'ENOSPC', 'EROFS', 'EACCES', 'EPERM'].includes(error.code)) throw error;
+                    return { success: false, error: error.message, code: error.code,
+                        retryable: error.retryable === true, result: error.result };
                 }
-            }
-        }
-    }
-    await Promise.all(Array.from({ length: concurrency }, () => worker()));
-    if (!runStopError && require('./lib/analysis-stop-control').isAnalysisStopRequested()) {
-        try { require('./lib/analysis-stop-control').assertMayStartRequest(); }
-        catch (error) { runStopError = error; }
-    }
-    // 已开始的刷新仍须完成保存并释放锁，再把首个运行级错误原样交回调用方。
-    if (runStopError) {
-        runStopError.failures = failures;
-        runStopError.results = results.filter(Boolean);
-        throw runStopError;
-    }
-    if (failures.length > 0) {
-        const error = new Error(
-            `API reader 批量刷新失败 ${failures.length}/${ids.length}: `
-            + failures.map(item => item.id).join(', ')
-        );
-        error.failures = failures;
+            },
+            onRoundStart: context => {
+                console.log(`📋 Reader 第 ${context.round}/${context.maxRounds} 轮 | pending=${context.inputIds.length}`);
+            },
+            onRoundDone: context => report({ roundsCompleted: context.round,
+                latestRound: { ...context, outcomes: undefined }, manualHandoff: context.manualHandoff })
+        });
+    } catch (error) {
+        error.failures = [...failures.values()];
+        error.results = (error.outcomes || []).filter(item => item?.success === true).map(item => item.result);
+        try { error.batchReportPath = report({ stopped: true, rounds: error.rounds || [],
+            failedIds: [...failures.keys()], unstartedIds: error.unstartedIds || [],
+            manualHandoff: error.manualHandoff || null }); }
+        catch (reportError) { throw new AggregateError([error, reportError], 'Reader 刷新与诊断保存均失败', { cause: error }); }
         throw error;
     }
-    return results.filter(Boolean);
+    const results = roundResult.outcomes.filter(item => item?.success === true).map(item => item.result);
+    const batchReportPath = report({ rounds: roundResult.rounds, stopped: false,
+        failedIds: roundResult.failedIds, unstartedIds: roundResult.unstartedIds,
+        manualHandoff: roundResult.manualHandoff });
+    if (failures.size) {
+        const error = new Error(`API reader 批量刷新失败 ${failures.size}/${ids.length}: ${[...failures.keys()].join(', ')}`);
+        Object.assign(error, { failures: [...failures.values()], results, rounds: roundResult.rounds,
+            manualHandoff: roundResult.manualHandoff, batchReportPath });
+        throw error;
+    }
+    return results;
 }
 
 function canRepairScoringBinding(paper) {
