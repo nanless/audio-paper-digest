@@ -40,6 +40,14 @@ const { runFailureRounds } = require('./lib/analysis-failure-rounds.js');
 const { writeAnalysisBatchReport } = require('./lib/analysis-batch-report.js');
 
 const MAX_REFRESH_CONCURRENCY = 60;
+const persistenceErrors = new WeakSet();
+function persistRefresh(write) {
+    try { return write(); }
+    catch (error) {
+        if (error && (typeof error === 'object' || typeof error === 'function')) persistenceErrors.add(error);
+        throw error;
+    }
+}
 
 function parseRefreshCliArgs(args) {
     const options = {
@@ -234,6 +242,7 @@ async function refreshApiReadersWithEntryPlan(targetIds, options = {}) {
     const failures = new Map();
     const stop = require('./lib/analysis-stop-control');
     let runStopError = null, roundResult;
+    const completedRounds = [];
     const runId = crypto.randomUUID();
     const report = state => writeAnalysisBatchReport({ runId, flow: 'reader-refresh',
         sourceRun: dailyFreshSources.dailyFreshSourceReference(refreshRecoveryEntryScope.getStore()),
@@ -243,6 +252,7 @@ async function refreshApiReadersWithEntryPlan(targetIds, options = {}) {
             concurrency,
             maxRounds: options.maxRounds ?? config.batchMaxRounds ?? 3,
             getItemId: id => id,
+            onRunStop: error => stop.requestAnalysisStop(error.code || 'reader_batch_failure'),
             manualHandoffMaxItems: config.manualHandoffMaxItems ?? 5,
             manualHandoffMinRounds: config.manualHandoffMinRounds ?? 3,
             manualHandoffNoProgressRounds: config.manualHandoffNoProgressRounds ?? 3,
@@ -266,8 +276,10 @@ async function refreshApiReadersWithEntryPlan(targetIds, options = {}) {
                     console.error(`❌ ${id} 刷新失败: ${error.message}`);
                     // Only explicitly classified content failures may repeat. Source,
                     // storage and provider errors stop dispatch and retain their identity.
-                    if (error.scope === 'run' || error.code === 'DAILY_FRESH_SOURCE_PLAN_INTEGRITY'
-                        || ['EIO', 'ENOSPC', 'EROFS', 'EACCES', 'EPERM'].includes(error.code)) throw error;
+                    if (persistenceErrors.has(error) || error.scope === 'run'
+                        || error.code === 'DAILY_FRESH_SOURCE_PLAN_INTEGRITY'
+                        || /^(?:EIO|ENOSPC|EROFS|EACCES|EPERM|EMFILE|ENFILE|EDQUOT|EFBIG|ENOENT|ESTALE|EISDIR|ENOTDIR|ELOOP)$/.test(error.code || '')
+                        || /^ERR_FS_/.test(error.code || '')) throw error;
                     return { success: false, error: error.message, code: error.code,
                         retryable: error.retryable === true, result: error.result };
                 }
@@ -275,8 +287,11 @@ async function refreshApiReadersWithEntryPlan(targetIds, options = {}) {
             onRoundStart: context => {
                 console.log(`📋 Reader 第 ${context.round}/${context.maxRounds} 轮 | pending=${context.inputIds.length}`);
             },
-            onRoundDone: context => report({ roundsCompleted: context.round,
-                latestRound: { ...context, outcomes: undefined }, manualHandoff: context.manualHandoff })
+            onRoundDone: context => {
+                const { outcomes, manualHandoff, ...record } = context;
+                completedRounds.push(record);
+                report({ roundsCompleted: context.round, rounds: completedRounds, manualHandoff });
+            }
         });
     } catch (error) {
         error.failures = [...failures.values()];
@@ -620,7 +635,7 @@ async function refreshApiReaderInternal(targetId, options = {}) {
             refreshed = finishReviewedPrimaryReaderRefresh(completedPrimaryRecoveryInput,
                 refreshed, lockedDailySourcePlan, options);
         }
-        const savedPayload = updateJsonFileLocked(resultPath, payload => {
+        const savedPayload = persistRefresh(() => updateJsonFileLocked(resultPath, payload => {
             const rows = Array.isArray(payload) ? payload : payload.papers;
             if (!Array.isArray(rows)) throw new Error('分析结果中的论文列表 papers 不是数组。');
             const matches = rows.map((paper, index) => (
@@ -658,14 +673,14 @@ async function refreshApiReaderInternal(targetId, options = {}) {
             if (analysisRunSummary.status === 'complete') next.deepAnalysisCompletedAt = now;
             else delete next.deepAnalysisCompletedAt;
             return next;
-        });
-        commitDeferredReaderCandidate(refreshed);
+        }));
+        persistRefresh(() => commitDeferredReaderCandidate(refreshed));
         const savedRows = Array.isArray(savedPayload) ? savedPayload : savedPayload.papers;
         const savedRecord = savedRows.find(paper => normalizedId(paper) === requested);
         const batchDate = inferAnalysisBatchDate(
             [savedRecord], Array.isArray(savedPayload) ? {} : savedPayload
         );
-        const sync = updateAnalysisDigestStatuses([savedRecord], { batchDate });
+        const sync = persistRefresh(() => updateAnalysisDigestStatuses([savedRecord], { batchDate }));
         console.log(options.surfaceBindingsOnly
             ? `✅ 文章内容与计划记录已对应 | plan_sha=${savedRecord.apiReaderPlanSha256}`
                 + ` | papers_sync=${sync.updated}`

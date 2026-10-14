@@ -47,7 +47,7 @@ npm run validate:data
 
 ## 6. 分析慢或反复失败
 
-先查看失败阶段及其已有记录，避免无差别重做整篇。整篇分析默认并发为 3，解读重阶段默认并发为 5，筛选批次由 `PD_FILTER_BATCH_SIZE` 控制。主分析、局部修复和解读正文分别使用自己的输出与上下文预算。
+先查看本次选定集合、轮次报告和失败阶段。首轮先统一跑完正常流程，下一轮只续可重试失败项；默认最多3轮，完成项按当前资格复用，不先逐篇人工精改。整篇分析默认并发为3，Reader重阶段及批量刷新的配置并发默认5，筛选批次由 `PD_FILTER_BATCH_SIZE` 控制。主分析、局部修复和解读正文分别使用自己的输出与上下文预算。
 
 解读局部修复通常最多输出 8000 tokens。某次修复精确在基础上限截断、候选仍有额外恢复资格时，程序保存失败草稿并停止；下一次显式续跑可使用一次提高预算的修复，默认最多 16000 tokens。这个机会与实现升级的额外尝试共用，不能叠加；自定义上限仍受正文与基础修复预算限制。模型返回任何内容就会消耗这次机会，纯网络故障不消耗，截断的正文仍不接受。
 
@@ -56,10 +56,14 @@ npm run deep -- --date YYYY-MM-DD
 # 保留已付费草稿及原调用次数，只更新核验后的修复诊断
 npm run batch -- --refresh-reader-diagnostics
 
-# 主动停用旧草稿后续跑
+# 仅在原候选额度已耗尽、重试清单已核验且有明确授权时，开启有界付费轮
 npm run batch -- --retry-failed-readers --reader-retry-manifest /absolute/path/reader-rounds.json
 npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader
 ```
+
+Reader 刷新可以用 `--rounds N`（1–10）覆写本次总轮数，未传时使用 `PD_ANALYSIS_BATCH_MAX_ROUNDS`（默认3）。它只续明确 `retryable=true` 的失败项；未知或不可重试错误不自动重跑，来源计划、运行级和存储故障停止补派。诊断保存在 `data/runtime/analysis-batch-reports/`，错误携带本次报告路径；诊断不能授予请求或发布资格。
+
+普通批次轮数不是付费 Reader 追加轮，不能因前者结束而清计数、换epoch或自动加重试清单。`manualHandoff` 的 `eligibleIds` 只是多轮小失败集合建议；`blockedIds`/`budgetExhaustedIds` 应先查真实阻断。服务故障先修服务，来源或身份不符先保留现场，预算耗尽只走明确受控修正或有界追加。人工修正后的正文仍须通过正常完整校验及发布审查，不手填成功。详见 [共同处理顺序](three-workflows.md#全批轮次与失败集合)。
 
 明确重试必须提供 `--reader-retry-manifest /绝对路径/reader-rounds.json`，不能按论文批量停用旧稿。程序在规范论文锁内核对当前批次、四份封存来源、正文和实际 Reader 输入，只为清单中确实耗尽的失败稿开一轮。原稿、原调用次数和费用记录完整保留；新轮最多 3 次已保存内容尝试、1 次全文、6 次实际请求，输出预留合计不超过 80000 tokens。同一授权续跑只用剩余额度，普通恢复和实现版本变化不自动开新轮。它可以与 `--refresh-reader-diagnostics` 同用：无授权论文仍按原次数正常恢复。详见[有预算的 Reader 重试](reader-explicit-retry.md)。
 
@@ -69,7 +73,7 @@ npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-
 
 先确认失败的是哪种来源。历史 arXiv 的当前这组已保存文件保存在 `data/runtime/fetched-arxiv-sources/<arxivId>/generation-XXXXXX/`，应包含文本、PDF、来源信息和清单；`generation` 是获取序号，不是论文的 `vN` 版本号。重新运行同一 `history:sources`，直到当前计划所选论文均已在对应获取序号下达到 `ready`，再运行 `history:run --apply`。
 
-`direct-run` 不补抓来源，来源状态缺失、为 `handoff` 或 `failed` 时，会在模型请求前停止。再次运行会核对来源，并复用 `analysis-recovery.json` 中仍与来源相符的阶段结果。若渲染实现已变化，它可使用匹配的分析结果重新生成暂存页，不再请求模型，也不覆盖旧暂存文件。
+`history:run` 不补抓来源，来源状态缺失、为 `handoff` 或 `failed` 时，会在模型请求前停止。再次运行会核对来源，并复用 `analysis-recovery.json` 中仍与来源相符的阶段结果。若渲染实现已变化，它可使用匹配的分析结果重新生成暂存页，不再请求模型，也不覆盖旧暂存文件。
 
 无版本号的当前 arXiv PDF 明确返回 HTTP 404 时，可以保持参数不变，重跑同一获取序号的来源任务。程序只会尝试同一论文的官方历史版本，不会猜测另一 arXiv ID。成功后，应有记录当前稿 404 的 `sourceVersion`、从所选 PDF 提取的 `source.txt`、分析输入顶部的版本警告，以及最终页面的“当前稿不可用”提示。来源身份和哈希必须一致。
 

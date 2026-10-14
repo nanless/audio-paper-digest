@@ -22,7 +22,7 @@ npm run digest:prepare -- YYYY-MM-DD
 
 这项请求已授权联网抓取、关键词预筛、LLM 筛选、多阶段全文分析与评分、面向初学研究者的 API Reader 长文、博客生成与审查、推送与远端 OID 验证、发布后图片任务和最终验收。完成 Git 发布后还须核验部署及网页。不要在分析、审查或推送后提前结束，也不要再次询问是否发布博客。
 
-整批 Manual 作者、任务与 spec/records 生产链已退役，新任务仅使用日更、官方会议和历史博客更新。API、网络或配额失败保留断点并停止，不另启写作流程。用户明确授权的单篇人工修正和独立审查仍可使用受控恢复入口；`manual/` 中剩余模块只核验旧来源、签名和正文记录。微信、飞书、小红书发布已退役。
+整批 Manual 作者、任务与 spec/records 生产链已退役，新任务仅使用日更、官方会议和历史博客更新。普通单篇失败保留断点，先完成本轮其余论文，再仅对可重试失败集合走正常轮次；认证、配额、配置、保存或其它运行级故障停止新派发并保存在途结果，不另启写作流程。用户明确授权的单篇人工修正和独立审查仍可使用受控恢复入口；`manual/` 中剩余模块只核验旧来源、签名和正文记录。微信、飞书、小红书发布已退役。
 
 ## 运行前六项检查
 
@@ -84,7 +84,10 @@ npm run digest:prepare -- YYYY-MM-DD
 |---|---:|---|
 | 整篇分析并发 | 3 | `PD_ANALYSIS_CONCURRENCY` |
 | 筛选配置批次 | 5；主模型同样使用配置值 | `PD_FILTER_BATCH_SIZE` |
-| 整篇重试 / 单阶段尝试 | 2 / 3 | `PD_ANALYSIS_MAX_RETRIES` / `PD_ANALYSIS_API_MAX_RETRIES` |
+| 批次总轮数 | 3，范围 1–10；旧额外重试 2 对应 3 轮 | `PD_ANALYSIS_BATCH_MAX_ROUNDS`；兼容 `PD_ANALYSIS_MAX_RETRIES` |
+| 单阶段请求尝试 | 3 | `PD_ANALYSIS_API_MAX_RETRIES` |
+| 人工建议的失败集合上限 | 5，范围 0–5；0关闭建议 | `PD_ANALYSIS_MANUAL_HANDOFF_MAX_ITEMS` |
+| 人工建议最低失败轮 / 无进展观察轮 | 3 / 3，各范围 3–10 | `PD_ANALYSIS_MANUAL_HANDOFF_MIN_ROUNDS` / `PD_ANALYSIS_MANUAL_HANDOFF_NO_PROGRESS_ROUNDS` |
 | 主分析输出 | 64000 tokens | `PD_ANALYSIS_API_MAX_TOKENS` |
 | 完整正文审校重写输出 | 64000 tokens | `PD_ANALYSIS_REVISION_MAX_TOKENS` |
 | 完整正文结构重写输出 | 64000 tokens | `PD_ANALYSIS_STRUCTURE_MAX_TOKENS` |
@@ -100,11 +103,13 @@ npm run digest:prepare -- YYYY-MM-DD
 
 ## 恢复原则
 
-- 普通续跑：重新运行同一入口，由检查点指纹决定从哪个阶段继续。
+- 普通批次先让选定集合统一走完整正常流程，首轮全部结束并保存结果后，再仅对可重试失败集合重复；每轮每篇一次，默认最多3轮，由来源和检查点指纹决定恢复阶段，不先对每篇做人工精改。通过当前资格检查的成功项保留。
+- 批次轮次不重置 Reader 候选、原尝试、失败或费用，不自动授权新的付费轮。运行级故障阻止新论文和新轮；预算、来源或身份阻断仍须受控处理。
+- 多轮后只剩少量顽固项时，`manualHandoff` 仅报告人工接手建议；须绑定原来源、失败稿SHA和获准修改范围，修正后重跑正常完整校验与审查。不能手填成功、删失败或跳过Source/Reader检查，详见 [三流程恢复](docs/three-workflows.md#全批轮次与失败集合)。
 - `npm run deep`、`npm run batch`、`npm run reanalyze` 和 `npm run api:reader:refresh` 都是**日更封存来源的恢复入口**。它们只读取当前正式分析结果的 `dailyFreshSourceRun`，并核验 `batchDate`、完整论文集合及每篇 `source.txt`、`source.pdf`、来源元数据和清单的对应关系。它们不重新抓取、不补建来源文件，也不读取旧文本或缓存。旧成功记录未绑定当前这组封存文件时必须重分析；Reader 刷新会直接拒绝。文件缺失或 SHA 不符时，在模型和图片请求前停止。目标日期仍为北京时间当天时，重新运行 `npm run digest:prepare -- YYYY-MM-DD`；历史日期保留失败记录，按历史维护流程处理，不重新抓取。
 - 只续深度分析：`npm run deep -- --date YYYY-MM-DD`。
-- 强制全量重分析：`npm run reanalyze -- --concurrency N`。
-- 刷新 Reader/评分：`npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader`；Reader 图片仍只在当前调用的系统临时目录中准备。
+- 强制全量重分析：`npm run reanalyze -- --concurrency N`；本次首次准备每篇时执行获准的重置，后续失败轮继续同一候选和预算。选定重分析也不按轮重复重置。
+- 刷新 Reader/评分：`npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader`；未传并发时使用配置默认5，可覆写1–60，总轮数默认3，可用 `--rounds N` 覆写1–10。只重跑明确可重试项，来源计划/运行级/存储故障停止补派；Reader 图片仍只在当前调用的系统临时目录中准备。
 - 历史日期不能从抓取阶段开始；只可使用已有受控数据，运行 `./run-daily-digest.sh DATE --from generate|review|push|visual` 等代码允许的阶段。
 - 失败记录必须保留 `analysisManifest`、检查点和恢复图片清单。旧成功正文可保留，但最新失败必须强制后续重试；成功后才清除失败标记。
 - 同篇分析必须持有规范化 arXiv ID 锁，在锁内重读数据、合并结果并递增 `generation`，禁止用锁外读取的陈旧对象覆盖正式分析结果。

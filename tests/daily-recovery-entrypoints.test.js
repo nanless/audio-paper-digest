@@ -46,10 +46,38 @@ function writeJson(filename, value) {
 function mockBatch(label, seen) {
     return async (papers, options) => {
         assert.equal(papers.length, 1, `${label} receives the pending canonical paper`);
+        assert.equal(options.maxRounds, Config.ANALYSIS_CONFIG.batchMaxRounds, `${label} obeys global whole-batch rounds`);
         const prepared = await options.preparePaperLocked(papers[0]);
         assert.equal(prepared.skip, false, `${label} does not preserve unbound legacy analysis`);
         assert.equal(prepared.paper.fullText, undefined, `${label} never injects legacy caller text`);
         await options.analyzeFn(prepared.paper);
+        const saved = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult, 'utf8'));
+        Object.assign(saved.papers[0], prepared.paper);
+        saved.papers[0].analysisManifest ||= { version: 1, stages: {} };
+        saved.papers[0].analysisManifest.stages ||= {};
+        const plan = daily.requireDailyFreshSourceRecoveryPlan(saved);
+        const descriptor = daily.readDailyFreshSource(plan, saved.papers[0]).freshSourceDescriptor;
+        saved.papers[0].sourceSha256 = descriptor.sourceSha256;
+        saved.papers[0].freshRewriteProvenance = { contract: 'fresh-source-analysis-v1', runId: plan.runId,
+            sourceGeneration: descriptor.sourceGeneration, sourceManifestSha256: descriptor.sourceManifestSha256,
+            sourceSha256: descriptor.sourceSha256, sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
+            sourceOnly: true, oldGeneratedTextIncluded: false };
+        saved.papers[0].analysisManifest.freshRewriteProvenance = structuredClone(saved.papers[0].freshRewriteProvenance);
+        saved.papers[0].analysisManifest.sourceAcquisition = { sourceSha256: descriptor.sourceSha256 };
+        saved.papers[0].analysisManifest.stages.apiReaderArticle = {
+            status: 'failed', attempts: 4, paidCandidateSha256: 'a'.repeat(64), retryEpoch: 0, totalCost: 0.7
+        };
+        writeJson(Config.FILES.deepAnalysisResult, saved);
+        const retryPrepared = await options.preparePaperLocked(papers[0]);
+        assert.deepEqual(retryPrepared.paper.analysisManifest.stages.apiReaderArticle,
+            saved.papers[0].analysisManifest.stages.apiReaderArticle, `${label} preserves current paid Reader state in subsequent rounds`);
+        await options.onRoundDone({ round: 1, maxRounds: options.maxRounds, inputIds: [ID], attemptedIds: [ID],
+            successIds: [], failedIds: [ID], retryableFailedIds: [ID], unstartedIds: [], skippedIds: [],
+            noProgressById: { [ID]: 0 }, stopped: false, durationMs: 1,
+            manualHandoff: { eligible: false, eligibleIds: [], newApiRequestsAuthorized: false } });
+        const diagnostic = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult, 'utf8')).stats.analysisBatchRetry;
+        assert.equal(diagnostic.diagnosticOnly, true); assert.equal(diagnostic.roundsCompleted, 1);
+        assert.equal(diagnostic.maxRounds, Config.ANALYSIS_CONFIG.batchMaxRounds);
         return { stats: { total: 1, success: 0, failed: 1, skipped: 0, durationTotal: 0, sourceCounts: {} } };
     };
 }
@@ -58,12 +86,15 @@ test('日更恢复入口只复核当前已保存的 PDF/TXT 来源，Reader 刷�
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'daily-recovery-entrypoints-'));
     const previous = Object.fromEntries(['dailyFreshSourceRunsDir', 'deepAnalysisResult', 'filteredPapers', 'papers']
         .map(key => [key, Config.FILES[key]]));
+    const previousMaxRounds = Config.ANALYSIS_CONFIG.batchMaxRounds;
+    Config.ANALYSIS_CONFIG.batchMaxRounds = 2;
     Config.FILES.dailyFreshSourceRunsDir = path.join(root, 'daily-source-runs');
     Config.FILES.deepAnalysisResult = path.join(root, 'current', 'deep-analysis-result.json');
     Config.FILES.filteredPapers = path.join(root, 'current', 'filtered-papers.json');
     Config.FILES.papers = path.join(root, 'current', 'papers.json');
     t.after(() => {
         Object.assign(Config.FILES, previous);
+        Config.ANALYSIS_CONFIG.batchMaxRounds = previousMaxRounds;
         fs.rmSync(root, { recursive: true, force: true });
     });
 
@@ -113,7 +144,9 @@ test('日更恢复入口只复核当前已保存的 PDF/TXT 来源，Reader 刷�
         return { analysis: '' };
     };
     await deepOnly.runDeepAnalysis({ date: DATE, analyzeFn: analyze, analyzeBatch: mockBatch('deep-only', seen) });
+    writeJson(Config.FILES.deepAnalysisResult, envelope);
     await batch.main({ analyzeFn: analyze, analyzeBatch: mockBatch('batch', seen) });
+    writeJson(Config.FILES.deepAnalysisResult, envelope);
     await reanalyze.reanalyzeAll({ analyzeFn: analyze, analyzeBatch: mockBatch('reanalyze', seen) });
     assert.equal(seen.length, 3);
     for (const item of seen) {

@@ -1764,7 +1764,8 @@ async function analyzePaperWithRetry(paper, options = {}) {
  * @param {Object[]} papers - 论文列表
  * @param {Object} options - 选项
  * @param {number} options.concurrency - 并发数，默认 3
- * @param {number} options.maxRetries - 单篇最大重试次数，默认 2
+ * @param {number} options.maxRetries - 兼容选项：额外整批失败轮数，总轮数为 N+1
+ * @param {number} options.maxRounds - 整批总轮数，优先于 maxRetries，默认使用配置（3轮）
  * @param {number} options.retryDelayMs - 重试间隔(ms)，默认 3000
  * @param {number} options.saveInterval - 每 N 篇保存一次（0=不自动保存），默认 0
  * @param {Function} options.onPaperStart - 单篇开始回调 (index, total, paper) => void

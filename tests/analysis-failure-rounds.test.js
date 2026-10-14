@@ -176,3 +176,16 @@ it('fatal callback on a skipped paper is propagated without analyzing it', async
         onPaperDone: () => { throw new Error('skipped result save failed'); } }), /skipped result save failed/);
     assert.equal(calls, 0);
 });
+
+
+it('另一个worker在停止检查await恢复前停止时，不得领取新论文', async () => {
+    let checks = 0;
+    const seen = [];
+    const failure = Object.assign(new Error('stop during check microtask'), { scope: 'run' });
+    await assert.rejects(runFailureRounds([{ id: 'a' }, { id: 'b' }, { id: 'c' }], {
+        concurrency: 2, maxRounds: 1,
+        shouldStop: () => ++checks === 3 ? failure : false,
+        runItem: async item => { seen.push(item.id); return { success: true }; }
+    }), error => error === failure);
+    assert.deepEqual(seen, []);
+});

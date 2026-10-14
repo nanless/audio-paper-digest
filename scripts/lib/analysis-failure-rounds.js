@@ -140,6 +140,9 @@ async function runFailureRounds(items, options = {}) {
         let cursor = 0;
         const worker = async () => {
             while (!(await checkStop())) {
+                // Another worker can halt after checkStop resolves but before
+                // this awaiting worker resumes. Recheck before claiming work.
+                if (halted) return;
                 const index = input[cursor++];
                 if (index === undefined) return;
                 attempted.push(index);

@@ -33,7 +33,7 @@ async function createSourceSet(t) {
     return { payload, plan, ids, sourceFile: id => path.join(plan.sourcesDir, id, 'generation-000001', 'source.pdf') };
 }
 
-function loadRefresh(f, mutateAtLock = () => {}) {
+function loadRefresh(f, mutateAtLock = () => {}, saveError = null) {
     const counts = { reads: 0, fullEntry: 0, target: 0, fullFinal: 0, operations: 0 };
     const wrappedDaily = { ...daily,
         requireDailyFreshSourceRecoveryPlan(...args) { counts.fullEntry++; return daily.requireDailyFreshSourceRecoveryPlan(...args); },
@@ -49,6 +49,7 @@ function loadRefresh(f, mutateAtLock = () => {}) {
         './analysis-engine.js': {
             readJsonFileStrict: () => { counts.reads++; return structuredClone(f.payload); },
             isSuccessfulAnalysisRecord: () => true,
+            updateJsonFileLocked: () => { throw saveError || new Error('unexpected save'); },
             withPaperAnalysisLock: (_, fn) => { mutateAtLock(); return fn(); }
         },
         './lib/daily-fresh-source-plan.js': wrappedDaily,
@@ -56,7 +57,7 @@ function loadRefresh(f, mutateAtLock = () => {}) {
         './lib/analysis-failure-rounds.js': require('../scripts/lib/analysis-failure-rounds'),
         './lib/analysis-batch-report.js': { writeAnalysisBatchReport: () => 'test-diagnostics' },
         './utils.js': { normalizedId: item => typeof item === 'string' ? item : item.arxivId },
-        './lib/analysis-stop-control': { withAnalysisStopControl: fn => fn(), assertMayStartRequest() {}, isAnalysisStopRequested: () => false }
+        './lib/analysis-stop-control': { withAnalysisStopControl: fn => fn(), assertMayStartRequest() {}, requestAnalysisStop() {}, isAnalysisStopRequested: () => false }
     };
     const filename = path.resolve(__dirname, '../scripts/refresh-api-reader.js');
     const source = fs.readFileSync(filename, 'utf8').replace(/^#![^\n]*\n/, '');
@@ -110,3 +111,21 @@ test('来源运行引用变化不能沿用批入口；外部提供未认证计�
     await assert.rejects(r.refresh.refreshApiReader(f.ids[0], r.options), /封存|来源|运行|ENOENT/);
     assert.equal(r.counts.operations, 0);
 });
+
+
+for (const code of [undefined, 'EMFILE', 'EDQUOT']) {
+    test(`Reader 保存边界 ${code || '普通事务错误'} 原样停止后续派发`, async t => {
+        const f = await createSourceSet(t);
+        const failure = Object.assign(new Error('controlled canonical persistence failure'), { code });
+        const r = loadRefresh(f, () => {}, failure), seen = [];
+        r.options.concurrency = 1;
+        r.options.operations.article = async paper => {
+            seen.push(paper.arxivId);
+            return { ...paper, apiReaderPlan: { sections: [] }, apiReaderFigures: [] };
+        };
+        await assert.rejects(r.refresh.refreshApiReaders(f.ids, r.options), error => error === failure);
+        assert.deepEqual(seen, [f.ids[0]]);
+        assert.equal(r.counts.fullFinal, 1);
+        assert.equal(failure.failures.length, 1);
+    });
+}

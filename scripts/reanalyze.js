@@ -126,6 +126,7 @@ async function reanalyzeAll(options = {}) {
         getBeijingISOString()
     );
     const attemptResults = [];
+    const preparedIds = new Set();
     let digestStatusUpdated = 0;
     const doSave = attempted => {
         updateJsonFileLocked(DATA_FILE, current => ({
@@ -152,6 +153,7 @@ async function reanalyzeAll(options = {}) {
             stats: {
                 ...(!Array.isArray(current) ? current?.stats : {}),
                 analysisStatus: 'running',
+                analysisBatchRetry: null,
                 reanalyzeStatus: 'running'
             }
         };
@@ -165,9 +167,13 @@ async function reanalyzeAll(options = {}) {
             const current = readJsonFileStrict(DATA_FILE);
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             const latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
+            const id = normalizedId(paper);
+            const firstPreparation = !preparedIds.has(id);
+            preparedIds.add(id);
+            const currentPaper = latest ? { ...paper, ...latest } : paper;
             return {
                 paper: dailyFreshSources.prepareDailyPaper(
-                    resetReaderForForcedReanalysis(latest ? { ...paper, ...latest } : paper),
+                    firstPreparation ? resetReaderForForcedReanalysis(currentPaper) : currentPaper,
                     dailySourcePlan
                 ),
                 skip: false
@@ -175,7 +181,12 @@ async function reanalyzeAll(options = {}) {
         },
         concurrency: CONCURRENCY,
         maxRetries: 2,
+        maxRounds: Config.ANALYSIS_CONFIG.batchMaxRounds,
         retryDelayMs: 2000,
+        onRoundDone: require('./digest-run-report').createAnalysisBatchRetryReporter(DATA_FILE, {
+            workflow: 'daily-forced-reanalysis', batchDate,
+            sourceReference: dailyFreshSources.dailyFreshSourceReference(dailySourcePlan), papers
+        }),
         saveInterval: 0,
         analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
             ...options,

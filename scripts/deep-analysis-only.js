@@ -189,7 +189,7 @@ async function runDeepAnalysis(options = {}) {
             papers: Array.isArray(current) ? current : (current?.papers || []),
             status: 'running',
             deepAnalysisLastAttemptAt: getBeijingISOString(),
-            stats: { ...(!Array.isArray(current) ? current?.stats : {}), analysisStatus: 'running' }
+            stats: { ...(!Array.isArray(current) ? current?.stats : {}), analysisStatus: 'running', analysisBatchRetry: null }
         };
         delete payload.deepAnalysisCompletedAt;
         return payload;
@@ -199,7 +199,12 @@ async function runDeepAnalysis(options = {}) {
         checkpointFilePath: resultPath,
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
+        maxRounds: Config.ANALYSIS_CONFIG.batchMaxRounds,
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
+        onRoundDone: require('./digest-run-report').createAnalysisBatchRetryReporter(resultPath, {
+            workflow: 'daily-deep-recovery', batchDate: today,
+            sourceReference: dailyFreshSources.dailyFreshSourceReference(dailySourcePlan), papers: notAnalyzed
+        }),
         saveInterval: Config.ANALYSIS_CONFIG.concurrency,
         analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
             ...options,

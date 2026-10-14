@@ -13,7 +13,11 @@
 
 ## 日更与受控恢复
 
+三流程先统一跑本次选定全批，整轮保存后只续可重试失败集合，默认总共3轮。公共轮次、Reader原预算及人工建议的区别见 [共享规则](../docs/three-workflows.md#全批轮次与失败集合)。
+
 默认 LLM/API 日更的 `digest:prepare` 是完整入口；`deep`、`batch`、`reanalyze`、`reanalyze:selected`、`api:reader:refresh` 只消费正式日更来源封存，不重新获取历史来源。Reader重试、已付费稿恢复和人工修正保留原稿、预算与费用，见 [恢复说明](../docs/reader-explicit-retry.md)。
+
+Reader 刷新默认使用配置并发5和总轮数3，`--concurrency N` 范围1–60，`--rounds N` 范围1–10。仅明确可重试失败进入下一轮；同次正常轮不改 Reader epoch。强制重分析首次按单篇执行已授权重置，后续失败轮保持原候选、次数及费用。
 
 ## 官方会议
 
@@ -50,7 +54,7 @@ npm run test:compat
 |---|---|
 | `activate-fresh-publication.js` | Node 入口：显式接替同日已提升重写结果的旧发布，持有本运行操作锁后调用 Python 归档旧凭证；不生成内容或推送。 |
 | `analysis-contract.js` | Node 共享：核验 API 分析的结构、评分、方法和表格要求，同时能读历史 Manual 结果。 |
-| `analysis-engine.js` | Node 共享：管理论文锁、重试、检查点、批量并发与结果合并，并判断每篇是否完成；`PD_CHECKPOINT_TIMING=1` 可记录保存各步骤的耗时。 |
+| `analysis-engine.js` | Node 共享：用公共失败轮次调度，首轮全批、下一轮只失败集合，等待每轮结果和保存完成；管理论文锁、重试、检查点、批量并发与结果合并，并判断每篇是否完成；`PD_CHECKPOINT_TIMING=1` 可记录保存各步骤的耗时。 |
 | `analysis-waiver.js` | Node 库：核验用户针对当前日更批次的分析豁免，检查 deep、filtered、papers 三份文件的精确字节和逐篇来源 SHA；不修改分析正文。 |
 | `analysis_sections.py` | 在 Python 解析和发布检查中识别论文评价章节，兼容旧标题并拒绝重复或混用。 |
 | `arxiv-source-authority.js` | 按规范 arXiv ID 规划或获取官方全文，用来维护来源授权；它不是 direct 路线或 arXiv 获取失败备用批次的选择器。dry-run 不联网、不写文件。 |
@@ -78,14 +82,14 @@ npm run test:compat
 | `deep-analysis-only.js` | 只读取当前 `dailyFreshSourceRun` 的封存 PDF/TXT，继续分析筛选已完成但分析未完成的论文。来源缺失或不匹配时停止，不抓取，也不读取旧缓存。 |
 | `deep-analyzer.js` | Node 核心：获取单篇全文，执行多阶段分析、评分审计、API Reader 写作和图片规划。结构修复后，只用原文证据核验 `core-summary-detailed-v3`；按阶段依赖、SHA 和旧检查点决定恢复范围，尽量少做整篇重做。 |
 | `digest-cover-state.js` | Node 入口/状态机：规划、校验、登记每日汇总封面任务，处理失败并归档历史记录。 |
-| `digest-run-report.js` | Node 入口：汇总抓取、筛选、分析、远端发布和两类视觉状态；尚未自动核验部署与网页。 |
+| `digest-run-report.js` | Node 入口：汇总抓取、筛选、分析、远端发布和两类视觉状态，按当前日期、来源及范围保存/读取日更正常轮次和人工建议诊断；尚未自动核验部署与网页。 |
 | `digest-status.js` | Node 共享：同步 `papers.json` 的分析状态、批次日期和恢复状态。正常日更、deep 与 batch 收尾通过 `synchronizeCompletedAnalysisDigestStatuses` 补齐被跳过旧成功记录的状态；先持规范论文锁，再重读正式结果与封存来源，仅一次保存状态不符的成功记录，不覆盖最新失败。 |
 | `editorial-quality.js` | Node 共享：检查 API/Manual 读者正文的语言、事实表述、评分和可读性。 |
 | `env-loader.js` | 从项目 `.env` 建立受控运行环境，检查直接 Node 和 Manual 入口的运行条件。 |
 | `evaluate-keyword-prefilter.js` | 只读取人工判定的样例和历史入选记录，用当前关键词预筛规则检查是否通过预筛。裁决后的正样本召回与原始命中率分开统计，已裁决负样本误放单列；缺少有效样本或存在误放时非零退出，读取及格式错误不按空样本处理。 |
 | `fetch-huggingface-papers.js` | Node 模块/入口：通过最小环境中的 `curl` 抓取 HuggingFace Papers。 |
 | `fetch-papers.js` | Node 模块/入口：负责 arXiv 抓取、摘要补全、关键词预筛和逐篇 LLM 筛选；独立使用抓取模块也需要项目 Python 3.11+ 运行器来严格解析 Atom。 |
-| `full-fetch.js` | Node 入口：按顺序执行默认数据流程，依次归档、抓取、筛选、去重、深度分析，并逐篇保存结果。 |
+| `full-fetch.js` | Node 入口：按顺序执行默认数据流程，依次归档、抓取、筛选、去重、深度分析，并逐篇保存结果。旧结果首遍用ID索引，初始化按映射合并，内存只保留每篇最新尝试；逐次失败、检查点及费用仍持久保存。 |
 | `generate-blog.py` | Python 入口：只生成并安装 Hugo Markdown。 |
 | `historical-archive-crawl-batch.js` | 已停用的兼容入口，调用时直接拒绝；已有归档抓取数据只能由 direct 路线读取。 |
 | `historical-arxiv-batch.js` | 备用入口只接收 `--handoffs NAME.json[,NAME.json...]` 命名、不可变的 arXiv 获取失败交接文件，逐页核验冻结清单、页面 SHA 和非标题链接；不扫描 crosswalk pending 页、不调用模型，也不阻断 direct 队列。 |
@@ -117,6 +121,8 @@ npm run test:compat
 | `lib/analysis-section-titles.js` | 识别分析章节及代码围栏，读取唯一的论文评价章节，并兼容旧标题而不改写原文。 |
 | `lib/analysis-stop-control.js` | Node 库：在批量分析和 Reader 刷新期间处理温和停止，停止领取新论文和发送新模型请求，保留已返回内容与原费用账；嵌套调用共用停止状态，并行调用分开记录，完成后移除信号监听器。详见分析停止说明。 |
 | `lib/analysis-terminal-summary.js` | 为分析结束时的状态、文本来源和计数提供中文显示，未知值显示原值。 |
+| `lib/analysis-failure-rounds.js` | Node共享：固定首轮范围、全批轮次屏障、可重试失败集合、运行级停止及人工接手建议；不操作来源文件、正文、费用或发布资格。 |
+| `lib/analysis-batch-report.js` | Node共享：将 Reader 刷新固定范围、来源引用、轮次和人工建议保存为私有诊断；不签来源、成功正文或发布凭证，不授权新请求。 |
 | `lib/arxiv-metadata-source.js` | Node 库：通过项目 HTTP CONNECT 获取单篇 arXiv Atom 元数据，核验原始响应 SHA，并提取白名单中的标题、摘要、作者与类别。现行 v1 先严格校验 XML，再按既有规则保留字段中的实体和作者空白，以按原规则重新计算并核验旧封存 SHA；正常日更抓取使用解码后的 XML 字段。 |
 | `lib/arxiv-source-authority.js` | Node 库：使用默认强制代理抓取器获取官方 arXiv 全文，依次分别保存请求、来源配对、来源响应记录、全文、快照、凭证和授权。每份文件写入后核验其字节，已保存的文件不能覆盖；续跑重核原请求与完整来源字节，拒绝旧博客正文。 |
 | `lib/cancelled-reader-audit-recovery.js` | 在正常分析入口确认已取消步骤留下的失败，核验现有正文、来源及原请求记录后复用结果，由分析引擎收尾；不新增模型请求，不删除原阶段错误和费用记录。 |
@@ -295,7 +301,7 @@ npm run test:compat
 | `reanalyze-selected.js` | 只重分析指定 arXiv ID，并同步恢复统计。 |
 | `reanalyze.js` | 归档并停用全部旧失败 Reader 候选，清空 Reader 和图片补充状态后强制全量重分析。仍只读取正式分析结果精确绑定的日更 PDF/TXT，不恢复旧分析、正文或缓存。 |
 | `recover-conference-process-locks.js` | CLI：只在操作者确认本工作区、且锁的持有进程 PID 已经退出时，按文件锁协议恢复旧操作锁；活锁和不完整的锁一律跳过。 |
-| `refresh-api-reader.js` | 刷新指定论文或日期批次的 Reader、评分、作者和图片阶段。只读取封存 PDF/TXT；图片只为本次调用在系统临时目录中准备。 |
+| `refresh-api-reader.js` | 刷新指定论文或日期批次的 Reader、评分、作者和图片阶段。未指定并发时使用 `ANALYSIS_CONFIG.apiReaderConcurrency`（默认5），`--concurrency N` 可覆写为1–60；总轮数使用 `batchMaxRounds`（默认3），`--rounds N` 可覆写为1–10。先全批再仅续明确可重试失败，诊断保存到 `analysis-batch-reports`；只读取封存 PDF/TXT，图片只为本次调用在系统临时目录中准备。 |
 | `review-blog.py` | Python 入口：审查本批最终页面，执行程序检查、模型正文审查、图片审查和 Hugo 构建，通过后生成 receipt。 |
 | `runtime-storage.js` | 只读统计运行存储，按文件引用关系预览受控缓存或日志清理；只有显式 `--apply` 才清理。 |
 | `runtime_guard.py` | 拒绝在沙箱内运行 Python 项目入口。 |

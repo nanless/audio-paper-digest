@@ -12,7 +12,8 @@ const {
     isSuccessfulAnalysisRecord,
     scoringAuditBindsFinalAnalysis,
     scoringStabilityIsResolved,
-    hasValidApiReaderV3Records
+    hasValidApiReaderV3Records,
+    updateJsonFileLocked
 } = require('./analysis-engine.js');
 const { setupScriptLogging } = require('./log-setup.js');
 const { validateDailyFreshSourceRun } = require('./validate-data-files.js');
@@ -133,6 +134,74 @@ function stableSha256(value) {
 
 function textSha256(value) {
     return crypto.createHash('sha256').update(Buffer.from(String(value), 'utf8')).digest('hex');
+}
+
+const BATCH_RETRY_DIAGNOSTIC_CONTRACT = 'analysis-batch-retry-diagnostics-v1';
+function createAnalysisBatchRetryReporter(filePath, { workflow, batchDate, sourceReference, papers }) {
+    const scopeIds = papers.map(normalizedId).filter(Boolean).sort();
+    if (scopeIds.length !== papers.length || new Set(scopeIds).size !== scopeIds.length) {
+        throw new Error('批次轮次诊断要求唯一完整论文范围');
+    }
+    const sourceReferenceSha256 = stableSha256(sourceReference || null);
+    const rounds = [];
+    return async context => {
+        const fields = ['round', 'inputIds', 'attemptedIds', 'successIds', 'skippedIds', 'failedIds',
+            'retryableFailedIds', 'unstartedIds', 'noProgressById', 'durationMs', 'stopped'];
+        rounds.push(Object.fromEntries(fields.filter(key => Object.hasOwn(context, key)).map(key => [key, context[key]])));
+        const diagnostic = { contract: BATCH_RETRY_DIAGNOSTIC_CONTRACT, diagnosticOnly: true,
+            workflow, batchDate, sourceReferenceSha256, scopeIds, scopeSha256: stableSha256(scopeIds),
+            maxRounds: context.maxRounds, roundsCompleted: rounds.length, rounds: structuredClone(rounds),
+            manualHandoff: structuredClone(context.manualHandoff), newApiRequestsAuthorized: false };
+        updateJsonFileLocked(filePath, current => {
+            const canonicalRows = papersFrom(current), canonicalIds = canonicalRows.map(normalizedId).filter(Boolean);
+            const canonicalIdSet = new Set(canonicalIds);
+            if (!current || Array.isArray(current)
+                || current.batchDate && current.batchDate !== batchDate
+                || stableSha256(current.dailyFreshSourceRun || null) !== sourceReferenceSha256
+                || canonicalIds.length !== canonicalRows.length || canonicalIdSet.size !== canonicalIds.length
+                || !scopeIds.every(id => canonicalIdSet.has(id))) {
+                throw new Error('批次轮次诊断的日期、来源或论文范围已变化，拒绝写入其他批次');
+            }
+            return { ...current, stats: { ...(current.stats || {}), analysisBatchRetry: diagnostic } };
+        });
+    };
+}
+
+function currentAnalysisBatchRetryDiagnostic(snapshot, batchDate, failedIds = []) {
+    const diagnostic = snapshot?.stats?.analysisBatchRetry;
+    const scopeIdSet = new Set(Array.isArray(diagnostic?.scopeIds) ? diagnostic.scopeIds : []);
+    const canonicalRows = papersFrom(snapshot), canonicalIds = canonicalRows.map(normalizedId).filter(Boolean);
+    const canonicalIdSet = new Set(canonicalIds);
+    if (diagnostic?.contract !== BATCH_RETRY_DIAGNOSTIC_CONTRACT || diagnostic.diagnosticOnly !== true
+        || diagnostic.batchDate !== batchDate || diagnostic.newApiRequestsAuthorized !== false
+        || diagnostic.sourceReferenceSha256 !== stableSha256(snapshot.dailyFreshSourceRun || null)
+        || !Array.isArray(diagnostic.scopeIds) || diagnostic.scopeSha256 !== stableSha256(diagnostic.scopeIds)
+        || scopeIdSet.size !== diagnostic.scopeIds.length
+        || diagnostic.scopeIds.some(id => typeof id !== 'string' || !id)
+        || canonicalIds.length !== canonicalRows.length || canonicalIdSet.size !== canonicalIds.length
+        || !diagnostic.scopeIds.every(id => canonicalIdSet.has(id))
+        || !Array.isArray(diagnostic.rounds) || diagnostic.roundsCompleted !== diagnostic.rounds.length
+        || !Number.isSafeInteger(diagnostic.maxRounds) || diagnostic.maxRounds < 1 || diagnostic.maxRounds > 10
+        || diagnostic.roundsCompleted < 1 || diagnostic.roundsCompleted > diagnostic.maxRounds
+        || diagnostic.rounds.some((round, index) => round?.round !== index + 1
+            || !Array.isArray(round.failedIds) || round.failedIds.some(id => !scopeIdSet.has(id)))
+        || !diagnostic.manualHandoff || typeof diagnostic.manualHandoff !== 'object'
+        || Array.isArray(diagnostic.manualHandoff)
+        || !Array.isArray(diagnostic.manualHandoff.eligibleIds)
+        || diagnostic.manualHandoff.eligibleIds.some(id => !scopeIdSet.has(id))) return null;
+    const result = structuredClone(diagnostic);
+    const failed = new Set(failedIds);
+    const reportedFailed = result.rounds.at(-1)?.failedIds || [];
+    const actualFailed = result.scopeIds.filter(id => failed.has(id));
+    // A later successful repair cannot inherit an older manual-handoff recommendation.
+    if (result.manualHandoff && (result.manualHandoff.eligibleIds?.some(id => !failed.has(id))
+        || actualFailed.length !== reportedFailed.length || reportedFailed.some(id => !failed.has(id)))) {
+        result.manualHandoff.eligible = false;
+        result.manualHandoff.status = 'not_ready';
+        result.manualHandoff.reason = 'failed_set_changed_since_report';
+        result.manualHandoff.eligibleIds = result.manualHandoff.eligibleIds.filter(id => failed.has(id));
+    }
+    return result;
 }
 
 function llmApiPaperComplete(paper) {
@@ -659,6 +728,7 @@ function buildDigestRunReport(targetDate, options = {}) {
             waivedIds: waived.map(normalizedId).filter(Boolean),
             failed: failed.length,
             failedIds,
+            batchRetry: currentAnalysisBatchRetryDiagnostic(deep, targetDate, failedIds),
             waiver: analysisWaiverCheck.valid && analysisWaiver ? {
                 contract: analysisWaiver.contract,
                 reason: analysisWaiver.reason,
@@ -742,6 +812,7 @@ function formatDigestRunSummary(report) {
         ...(report.analysis.scoringStabilityUnresolvedIds?.length
             ? [`  评分稳定性 尚未解决的论文=${report.analysis.scoringStabilityUnresolvedIds.join(',')}`]
             : []),
+        ...(report.analysis.batchRetry ? [`  正常分析轮次=${report.analysis.batchRetry.roundsCompleted}/${report.analysis.batchRetry.maxRounds} | 人工交接诊断=${report.analysis.batchRetry.manualHandoff?.eligible ? '建议受控修正' : '未达到或已阻断'}（仅诊断，不授予发布或新增请求权限）`] : []),
         `  博客 ${state(report.blog.complete)} | 严格审查记录=${displayBoolean(report.blog.strictReview)} | 发布提交与已存远端提交一致=${displayBoolean(report.blog.remoteOidVerified === true)} | 发布凭证有效=${displayBoolean(report.blog.publicationVerified)}`,
         `  长图 ${report.visuals.waived ? '已豁免' : state(report.visuals.gateComplete === true)} | 状态=${displayStatus(printedVisualStatus(report.visuals))} | 清单记录的完成数=${report.visuals.complete ?? '?'}/${report.visuals.total ?? '?'} | 待处理数=${report.visuals.pending ?? '?'} | 失败数=${report.visuals.failed ?? '?'}`,
         `  封面 ${report.cover.waived ? '已豁免' : state(report.cover.complete)} | 状态=${displayStatus(printedCoverStatus(report.cover))}`,
@@ -773,6 +844,8 @@ function main(argv = process.argv.slice(2)) {
 if (require.main === module) main();
 
 module.exports = {
+    createAnalysisBatchRetryReporter,
+    currentAnalysisBatchRetryDiagnostic,
     parseDate,
     snapshotMatchesDate,
     resolveDigestRuntimeSnapshot,

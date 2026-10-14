@@ -231,6 +231,7 @@ async function reanalyzeSelected(ids, options = {}) {
             stats: {
                 ...(!Array.isArray(current) ? current?.stats : {}),
                 analysisStatus: 'running',
+                analysisBatchRetry: null,
                 selectedReanalyzeStatus: 'running'
             }
         };
@@ -240,6 +241,7 @@ async function reanalyzeSelected(ids, options = {}) {
 
     // 重新分析
     const analyzedResults = [];
+    const preparedIds = new Set();
     let digestStatusUpdated = 0;
     const runAnalysisFromDailySources = () => analyzeBatch(toReanalyze, {
         checkpointFilePath: RESULT_FILE,
@@ -248,7 +250,9 @@ async function reanalyzeSelected(ids, options = {}) {
             const currentPapers = Array.isArray(current) ? current : (current.papers || []);
             let latest = currentPapers.find(item => normalizedId(item) === normalizedId(paper));
             if (!latest) return { paper, skip: false };
-            const paidFinalRecovery = options.paidFinalAnalysisRecovery?.[normalizedId(latest)];
+            const firstPreparation = !preparedIds.has(normalizedId(paper));
+            preparedIds.add(normalizedId(paper));
+            const paidFinalRecovery = firstPreparation && options.paidFinalAnalysisRecovery?.[normalizedId(latest)];
             if (paidFinalRecovery) latest = await require('./lib/paid-final-analysis-recovery').restorePaidFinalAnalysis(latest, dailySourcePlan, paidFinalRecovery);
             readCoreLocked(latest);
             readReaderLocked(latest);
@@ -260,7 +264,7 @@ async function reanalyzeSelected(ids, options = {}) {
                     factReview.validateFeedback(feedback, dailySourcePlan, original));
                 const bound = boundFeedbacks.get(normalizedId(latest));
                 const prepare = () => {
-                    const restoration = options.readerInputSnapshotRecovery?.[normalizedId(latest)];
+                    const restoration = firstPreparation && options.readerInputSnapshotRecovery?.[normalizedId(latest)];
                     if (restoration) {
                         const reader = readReaderLocked(latest);
                         if (!reader) throw new Error('原Reader输入恢复须携带当前独立Reader反馈');
@@ -279,14 +283,19 @@ async function reanalyzeSelected(ids, options = {}) {
             }
             return {
                 paper: dailyFreshSources.prepareDailyPaper(
-                    options.resolvedReaderCandidates?.[normalizedId(paper)] || options.paidFinalAnalysisRecovery?.[normalizedId(paper)] || options.coreSummaryDiagnosticIds?.[normalizedId(paper)] || coreFeedbacks.has(normalizedId(paper)) || readerFeedbacks.has(normalizedId(paper)) ? { ...paper, ...latest } : resetReaderForSelectedReanalysis({ ...paper, ...latest }), dailySourcePlan
+                    !firstPreparation || options.resolvedReaderCandidates?.[normalizedId(paper)] || options.paidFinalAnalysisRecovery?.[normalizedId(paper)] || options.coreSummaryDiagnosticIds?.[normalizedId(paper)] || coreFeedbacks.has(normalizedId(paper)) || readerFeedbacks.has(normalizedId(paper)) ? { ...paper, ...latest } : resetReaderForSelectedReanalysis({ ...paper, ...latest }), dailySourcePlan
                 ),
                 skip: false
             };
         },
         concurrency: Config.ANALYSIS_CONFIG.concurrency,
         maxRetries: Config.ANALYSIS_CONFIG.maxRetries,
+        maxRounds: Config.ANALYSIS_CONFIG.batchMaxRounds,
         retryDelayMs: Config.ANALYSIS_CONFIG.retryDelayMs,
+        onRoundDone: require('./digest-run-report').createAnalysisBatchRetryReporter(RESULT_FILE, {
+            workflow: 'daily-selected-reanalysis', batchDate,
+            sourceReference: dailyFreshSources.dailyFreshSourceReference(dailySourcePlan), papers: toReanalyze
+        }),
         saveInterval: 0,
         analyzeFn: async paper => {
             const analyze = () => dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, { coreSummaryDiagnosticIds: options.coreSummaryDiagnosticIds,
@@ -378,6 +387,7 @@ async function reanalyzeSelected(ids, options = {}) {
             stats: {
                 ...(!Array.isArray(current) ? current?.stats : {}),
                 ...data.stats,
+                analysisBatchRetry: current?.stats?.analysisBatchRetry || null,
                 analysisStatus: analysisRunSummary.status,
                 remainingFailed: analysisRunSummary.remaining,
                 selectedReanalyzeStatus: status,

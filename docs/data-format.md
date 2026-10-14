@@ -82,6 +82,16 @@ Node 与 Python 使用同一目录锁和原子写入方式；锁只覆盖账号�
 
 解读失败候选只供恢复，不能作为成功分析或发布依据。新版表格数量诊断使用 `code=reader_table_count_insufficient`、`requiredCount` 和 `actualCount`。计数必须是安全整数，满足 `requiredCount >= 1`、`0 <= actualCount < requiredCount`；带该错误代码却缺少有效计数时，不得从说明文字补出计数。`diagnosticOnly: true` 的记录仅供参考，不触发修复动作。旧保存诊断只由限定的兼容读取处理，不能让新的自然语言报错决定修复动作。通用草稿哈希及已有恢复身份的计算规则不变。
 
+## 批次轮次与人工建议的诊断
+
+共享批量调用返回 `rounds`、`failedIds`、`unstartedIds` 和 `manualHandoff`。每轮的 `inputIds` 是该轮固定集合；`attemptedIds`、`successIds`、`skippedIds`、`failedIds`、`retryableFailedIds` 和 `unstartedIds` 分开记录。下一轮只取可重试失败项，不把尚未启动或被预算/来源阻断的论文算成成功。结果数组保留每篇最近一次真实结果，`stats.roundsCompleted` 是已结束轮数；成功/失败数量按最新结果计算，不能把同篇多次尝试当成多篇成功。
+
+每篇结果和费用仍逐次保存，轮次边界等待所有在途结果与保存回调结束。会议另写不可变的 `conference-process-round-v1` 回执，绑定 process、当前 state SHA、generation 与本轮输入/成功/失败集合；历史在进入下一轮前保存原 registry 和恢复记录。轮次报告用于解释调度，不替代来源、Reader、页面、审查或发布凭证。
+
+日更分析和恢复入口将 `analysis-batch-retry-diagnostics-v1` 写入正式结果的 `stats.analysisBatchRetry`，绑定日期、当前封存来源引用 SHA 和本次论文范围 SHA。`digest:status` 只展示仍对应当前日期、来源和范围的诊断；后续修正已改变失败集合时，旧人工建议不能继续显示为就绪。Reader 刷新另以 `0600` 保存 `data/runtime/analysis-batch-reports/<runId>.json`，使用 `analysis-batch-diagnostics-v1`，记录本次固定论文集合、封存来源引用、轮次、失败和未启动项。两者均声明 `diagnosticOnly=true`、`newApiRequestsAuthorized=false`，不能补签成功或解锁费用。
+
+`manualHandoff` 使用 `analysis-batch-manual-handoff-v1`，包含 `eligible`、`status`、`reason`、逐项 `attempts`/`noProgressRounds`/错误作用域及预算状态，以及 `eligibleIds`、`blockedIds`、`budgetExhaustedIds`。阶段完成与正文/草稿 SHA 的实质变化才算进展，时间、次数、费用变化不算。`ready` 只表示少量持续失败达到建议阈值；`newApiRequestsAuthorized=false`，失败仍是失败，额度仍按原账。服务故障、不可重试和耗尽项保留原阻断，不授予发布资格，见 [统一恢复规则](three-workflows.md#全批轮次与失败集合)。
+
 ## 正式分析结果与发布正文
 
 `analysis` 的 13 个中文一级标题是解析锚点。`parsed` 是解析缓存，发布前须从正文重新解析并逐字段比较，不能把它作为独立事实来源。

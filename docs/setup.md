@@ -87,6 +87,12 @@ Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读�
 | 变量 | 默认值 |
 |---|---:|
 | `PD_ANALYSIS_CONCURRENCY` | 3 篇论文 |
+| `PD_ANALYSIS_BATCH_MAX_ROUNDS` | 最多 3 轮，范围 1–10；每轮结束后只续可重试失败集合 |
+| `PD_ANALYSIS_MAX_RETRIES` | 旧兼容值 2，映射为总共3轮；新配置优先用上项 |
+| `PD_ANALYSIS_API_MAX_RETRIES` | 单阶段请求最多3次，独立于批次总轮数 |
+| `PD_ANALYSIS_MANUAL_HANDOFF_MAX_ITEMS` | 人工建议最多5篇，范围0–5；0关闭建议 |
+| `PD_ANALYSIS_MANUAL_HANDOFF_MIN_ROUNDS` | 每项至少失败3轮，范围3–10 |
+| `PD_ANALYSIS_MANUAL_HANDOFF_NO_PROGRESS_ROUNDS` | 无语义进展观察3轮，范围3–10；更多总轮时可提前结束自动轮 |
 | `PD_ANALYSIS_API_MAX_TOKENS` | 64000 |
 | `PD_ANALYSIS_REVISION_MAX_TOKENS` | 64000；完整13章正文审校重写 |
 | `PD_ANALYSIS_STRUCTURE_MAX_TOKENS` | 64000；完整13章结构重写 |
@@ -101,6 +107,8 @@ Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读�
 | `PD_API_READER_CONTEXT_MAX_CHARS` | 240000 字符 |
 | `PD_API_READER_CONCURRENCY` | 默认 5 个进程内解读生成任务，可显式设置 1–60 |
 | `PD_BLOG_REVIEW_CONCURRENCY` | 5 个独立页面审查任务 |
+
+这些环境变量写入项目 `.env`。Reader 刷新另可用 `--rounds N` 覆写本次总轮数，范围 1–10；会议和历史分析使用公共配置，没有新增同名参数。总轮数、同时处理的论文数和单阶段/Reader预算各自独立；改变批次轮数不重开已耗尽的候选额度。会议还受原单篇3次尝试窗口约束，历史保持首次选定范围；人工建议不会发请求或将失败改成通过，见 [三流程批次规则](three-workflows.md#全批轮次与失败集合)。
 
 主分析可通过 `PD_ANALYSIS_PRIMARY_THINKING_MODE=disabled|enabled` 配置推理，默认关闭，仅对精确 `mimo-v2.6-flash` 的 OpenAI Chat 主分析请求生效。旧完整主分析必须同时有有效正文检查点与原指纹，才按旧配方复用；不补签新声明。新请求绑定实际策略，截断、正文及来源检查保持。厂商支持不等于 OpenCode Go 已在本次业务中验证。
 
@@ -118,7 +126,7 @@ Node 的 `scripts/env-loader.js` 和 Python 的 `scripts/project_env.py` 都读�
 
 API Reader v3 会直接把安全准备的官方论文图交给主模型，因此主模型及所选协议须支持图片输入。当前统一的 `muse-spark-1.3-contributor` 通过 Responses 接收图片，兼容的 `mimo-v2.6-flash` 通过 Chat Completions 接收图片；公共请求封装也支持 Chat 和 Anthropic 的图片格式。`PAPER_ANALYZER_SECONDARY_MODEL` 只启用旧正式分析结果的额外图片补充：副模型选择候选图并规划局部插入，不替换主模型正文，也不参与评分。副模型端点未设置时复用主端点；密钥只有在主副属于同一规范服务时才能复用。
 
-`PD_API_READER_CONCURRENCY` 限制进程内解读生成的重阶段并发，`api:reader:refresh --concurrency N` 限制刷新命令同时处理的论文数（命令默认 1，可显式设为 1–60，例如 `--concurrency 10`）。刷新任务仍可能等待前者提供的空闲容量，两项不能混为同一个限制。
+`PD_API_READER_CONCURRENCY` 限制进程内解读生成的重阶段并发，`api:reader:refresh --concurrency N` 限制刷新命令同时处理的论文数（未传参数时使用 `ANALYSIS_CONFIG.apiReaderConcurrency`，默认 5；可显式设为 1–60，例如 `--concurrency 10`）。刷新任务仍可能等待前者提供的空闲容量，两项不能混为同一个限制。
 
 补积压时可以增加长文并发。这个设置只改变同时执行的任务数，不增加单篇尝试次数、输出预算或超时；整篇并发较小时仍受整篇数量限制。增加后应观察实际响应时间、超时和限流，出现服务压力时降低下一次运行的并发，不能通过切换账号绕过普通限流。
 

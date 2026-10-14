@@ -23,7 +23,7 @@
 | Reader 已核验事实原句修复 | [api-reader-fact-local-v3.md](api-reader-fact-local-v3.md) |
 | Reader 术语组合列表修复 | [api-reader-concept-terms-v1.md](api-reader-concept-terms-v1.md) |
 
-日更与会议筛选共同使用登记的 `filter-v5.md`，各入口填入对应来源和会议配置；发布审查由公共发布器构建页面上下文，均使用同一公共请求封装。不存在独立会议或历史Reader长文Prompt。
+日更与会议筛选共同使用登记的 `filter-v5.md`，各入口填入对应来源和会议配置；发布审查由公共发布器构建页面上下文，均使用同一公共请求封装。不存在独立会议或历史Reader长文Prompt。全批与失败集合的各轮使用同一当前模板和内容检查；调度轮次不修改正文协议，不重置已付费候选或补签旧Prompt身份。
 
 旧提示词正文不再保存在工作树；`scripts/lib/git-prompt-evidence-index.json` 只登记原路径、Git blob OID 和整文件 SHA。旧记录通过受控读取器从 Git 取回原字节，复核整文件及首围栏模板 SHA，并保留原声明、来源、检查点和付费记录；缺失或不符就停止，不能用当前正文补签旧结果。新请求只读取当前登记的 18 份 Prompt。旧 Manual 模板同样只用于原记录核验，不恢复已退役的生产入口。
 

@@ -2082,6 +2082,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         };
         if (dailyFreshSourceRun) payload.dailyFreshSourceRun = dailyFreshSourceRun;
         else delete payload.dailyFreshSourceRun;
+        payload.stats.analysisBatchRetry = null;
         delete payload.deepAnalysisCompletedAt;
         return payload;
     });
@@ -2095,7 +2096,12 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         checkpointFilePath: outputFile,
         concurrency: ANALYSIS_CONCURRENCY,
         maxRetries: ANALYSIS_RETRY_MAX,
+        maxRounds: Config.ANALYSIS_CONFIG.batchMaxRounds,
         retryDelayMs: ANALYSIS_RETRY_DELAY_MS,
+        onRoundDone: require('./digest-run-report').createAnalysisBatchRetryReporter(outputFile, {
+            workflow: 'daily', batchDate: today, sourceReference: dailyFreshSourceRun,
+            papers: papersToAnalyze
+        }),
         analyzeFn: dailySourcePlan ? dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan) : null,
         preparePaperLocked: paper => {
             const storedAnalysisRecord = loadStoredAnalysisRecord(outputFile, paper);
@@ -2131,17 +2137,18 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
                 const extra = primaryTask ? ` ${primaryTask}` : '';
                 console.log(`  [${idx + 1}/${total}] ✅ 完成 ${score} ${rank}${extra} | ${durSec}s | ${paper.title.substring(0, 50)}...`);
             } else {
-                console.log(`  [${idx + 1}/${total}] ❌ 最终失败 | ${durSec}s | ${paper.title.substring(0, 50)}... | ${result.error}`);
+                console.log(`  [${idx + 1}/${total}] ❌ 本轮失败 | ${durSec}s | ${paper.title.substring(0, 50)}... | ${result.error}`);
             }
         },
-        onBatchDone: async (batchNum, batchResults) => {
+        onBatchDone: async (batchNum, batchResults, context = {}) => {
             const batchSuccess = batchResults.filter(r => r.success).length;
             const batchSkipped = batchResults.filter(r => r.skipped).length;
             const batchFailed = batchResults.length - batchSuccess - batchSkipped;
             const batchScores = batchResults.filter(r => r.success && r.parsed?.score).map(r => r.parsed.score);
             const batchScoreInfo = batchScores.length > 0 ? ` 评分: ${batchScores.join(', ')}` : '';
             const totalBatches = Math.ceil(papersToAnalyze.length / ANALYSIS_CONCURRENCY);
-            console.log(`  ── 批次 ${batchNum}/${totalBatches} 完成: 成功 ${batchSuccess}/${batchResults.length}${batchScoreInfo}${batchSkipped > 0 ? ` | 跳过 ${batchSkipped}` : ''}${batchFailed > 0 ? ` | 失败 ${batchFailed}` : ''}\n`);
+            const round = context.round || 1;
+            console.log(`  ── 第 ${round}/${Config.ANALYSIS_CONFIG.batchMaxRounds} 轮，分组 ${batchNum}${round === 1 ? `/${totalBatches}` : ''} 完成: 成功 ${batchSuccess}/${batchResults.length}${batchScoreInfo}${batchSkipped > 0 ? ` | 跳过 ${batchSkipped}` : ''}${batchFailed > 0 ? ` | 失败 ${batchFailed}` : ''}\n`);
 
             const snapshot = readJsonFileStrict(outputFile, { allowMissing: true });
             const savedAnalysisPapers = Array.isArray(snapshot) ? snapshot : (snapshot?.papers || []);
