@@ -29,3 +29,36 @@ test('空白投影只核真实全幅DOM且保留首格，拒错SHA、span、坐�
  const file=path.join(f.plan.sourcesDir,f.paper.arxivId,'generation-000001','source-runtime.json');const bytes=fs.readFileSync(file);fs.appendFileSync(file,' ');assert.equal(engine.hasValidApiReaderV3Records(f.paper),false);fs.writeFileSync(file,bytes);
  const wrong=structuredClone(f.paper);wrong.freshRewriteProvenance.sourceManifestSha256='d'.repeat(64);wrong.analysisManifest.freshRewriteProvenance=structuredClone(wrong.freshRewriteProvenance);assert.equal(engine.hasValidApiReaderV3Records(wrong),false);
 });
+
+test('分组行作为选中表头且选取部分列时，逐格核完整且唯一的行列投影', async t => {
+ const f=await fixture(t),sourceRows=[1,0,2],sourceColumns=[0,2,5];
+ const rows=sourceRows.map(r=>sourceColumns.map(c=>require('../scripts/lib/reader-pdf-cell-evidence').displayCell(f.table,r,c)));
+ const binding={tableIndex:1,sourceType:'artifact_table',sourceTableOrdinal:f.table.ordinal,sourceTableDomSha256:f.table.sourceDomSha256,
+  cellBindings:sourceRows.flatMap((r,ri)=>sourceColumns.map((c,ci)=>{
+   const source=f.table.cells.find(v=>r>=v.row&&r<v.row+v.rowspan&&c>=v.column&&c<v.column+v.colspan);
+   return{renderedRow:ri,renderedColumn:ci,sourceRow:r,sourceColumn:c,renderedText:rows[ri][ci],sourceText:source.text,sourceDomSha256:source.sourceDomSha256};
+  }))};
+ const rendered={header:rows[0],rows:rows.slice(1)},cell=binding.cellBindings[1];
+ assert.equal(span.fullWidthLabelBlankMatches(f.table,binding,cell,'',rendered),true);
+ for(const mutate of [
+  (b,r)=>{b.sourceTableDomSha256='0'.repeat(64);},
+  (b,r)=>{b.cellBindings[1].sourceDomSha256='0'.repeat(64);},
+  (b,r)=>{b.cellBindings[2]={...b.cellBindings[1]};},
+  (b,r)=>{b.cellBindings[4].sourceColumn=3;},
+  (b,r)=>{b.cellBindings.pop();},
+  (b,r)=>{r.rows[1][1]='';b.cellBindings[7].renderedText='';},
+  (b,r)=>{r.rows[1][1]='9.9';b.cellBindings[7].renderedText='9.9';}
+ ]){
+  const b=structuredClone(binding),r=structuredClone(rendered);mutate(b,r);
+  assert.equal(span.fullWidthLabelBlankMatches(f.table,b,b.cellBindings[1],'',r),false);
+ }
+});
+
+test('保存的选择身份SHA变化不能沿用全幅行空白投影', async t => {
+ const f=await fixture(t),paper=structuredClone(f.paper),binding=paper.apiReaderPlan.tableBindings[1];
+ const cell=binding.cellBindings.find(c=>c.sourceRow===1&&c.sourceColumn===1);
+ const rendered=require('../scripts/analysis-contract').extractMarkdownTables(paper.apiReaderArticle)[1];
+ assert.equal(span.withSavedPaper(paper,()=>span.savedCellMatches(paper,binding,cell,'',rendered)),true);
+ binding.cellBindings[0].sourceColumn=1;
+ assert.equal(span.withSavedPaper(paper,()=>span.savedCellMatches(paper,binding,cell,'',rendered)),false);
+});

@@ -224,25 +224,29 @@ function authorProvidedCodeRepositoryQuote(source, token, start) {
     const prefix = source.slice(0, start);
     const introductions = [
         ...prefix.matchAll(/(?:^|\n)(We provide (?:the|our) (?:source )?codes? for )/g),
-        ...prefix.matchAll(/(?:^|[.!?]\s+|\n)(Public release of our evaluation code\.\d{1,3}[ \t\u00a0]*\r?\n[ \t]*\d{1,3}[ \t]*\r?\n[ \t]*Code and results:[ \t]*)/g)
+        ...prefix.matchAll(/(?:^|[.!?]\s+|\n)(Public release of our evaluation code\.\d{1,3}[ \t\u00a0]*\r?\n[ \t]*\d{1,3}[ \t]*\r?\n[ \t]*Code and results:[ \t]*)/g),
+        ...prefix.matchAll(/(?:^|[.!?]\s+|\n)(We share our (?:source )?code(?: and invite others to [A-Za-z][A-Za-z -]{0,80})?\.\d{1,3}[ \t\u00a0]*\r?\n[ \t]*\d{1,3}[ \t]*\r?\n[ \t]*)/g)
     ].sort((left, right) => left.index - right.index);
     const last = introductions.at(-1);
     if (!last) return '';
     const lower = last.index + last[0].length - last[1].length;
-    const publicEvaluationRelease = last[1].startsWith('Public release of our evaluation code.');
+    const standaloneAuthorCodeRelease = /^(?:Public release of our evaluation code\.|We share our (?:source )?code\b)/.test(last[1]);
     const beforeUrl = source.slice(lower, start);
     const end = start + token.length;
     const after = source.slice(end);
     if (beforeUrl.length > 1600 || /\n\s*\n/.test(beforeUrl)
-        || (publicEvaluationRelease ? beforeUrl !== last[1]
+        || (standaloneAuthorCodeRelease ? beforeUrl !== last[1]
             : !/on our GitHub[ \t\u00a0]*(?:\d{1,3}[ \t\u00a0]*\r?\n[ \t]*\d{1,3}[ \t]*\r?\n[ \t]*)?$/.test(beforeUrl))
         || !/^(?:\.)?(?:[ \t]*\r?\n|[ \t]*$)/.test(after)) return '';
     const context = source.slice(0, end);
+    // 一篇论文早先定义技术术语，并不是在引用当前代码声明；显式引述仍核整段来源。
+    const terminologyContext = standaloneAuthorCodeRelease
+        ? source.slice(Math.max(0, lower - 240), end) : context;
     const paragraphEnd = source.indexOf('\n\n', end);
     const nextParagraphStart = paragraphEnd < 0 ? -1
         : paragraphEnd + source.slice(paragraphEnd).match(/^\s*/)[0].length;
     const nextParagraphEnd = nextParagraphStart < 0 ? -1 : source.indexOf('\n\n', nextParagraphStart);
-    const followingEnd = publicEvaluationRelease && nextParagraphStart >= 0
+    const followingEnd = standaloneAuthorCodeRelease && nextParagraphStart >= 0
         ? (nextParagraphEnd < 0 ? source.length : nextParagraphEnd)
         : (paragraphEnd < 0 ? source.length : paragraphEnd);
     const following = source.slice(end + (after.startsWith('.') ? 1 : 0), followingEnd);
@@ -254,17 +258,18 @@ function authorProvidedCodeRepositoryQuote(source, token, start) {
         const releaseStatus = /\b(?:release[ds]?|publish(?:ed)?|provide[ds]?|share[ds]?|available|public(?:ly)?|private|unreleased)\b|open[- ]source/i.test(sentence);
         const unclearOwnState = /^(?:our|this|the)\s+(?:source\s+)?(?:codes?|repository|repo)\s+(?:is|are|remains?|has|have|will|would|cannot|can't)\b/i.test(sentence.trim())
             && !RESOURCE_AFFIRMATIVE.test(sentence);
-        const externalOwnership = publicEvaluationRelease
+        const externalOwnership = standaloneAuthorCodeRelease
             && /\b(?:belongs?\s+to|(?:owned|maintained|provided|developed)\s+by)\b/i.test(sentence);
         return ownCode && (externalOwnership || unclearOwnState || (releaseStatus && (RESOURCE_NOT_RELEASED.test(sentence)
             || /\b(?:cannot|can't|unable\s+to|private|unreleased)\b/i.test(sentence))));
     });
-    if (retractsCode || (publicEvaluationRelease
+    if (retractsCode || (standaloneAuthorCodeRelease
         && /\b(?:cited|quoted)\s+(?:article|abstract|paper|work)\b/i.test(context))
         || /:\s*$/.test(source.slice(0, lower))
         || RESOURCE_NOT_RELEASED.test(beforeUrl)
         || /\b(?:our|the authors[’']?)\s+(?:codes?|resources?|repository|repo)\b[^.\n]{0,120}\b(?:not|never|will|would|plan|intend)\b/i.test(context)
-        || /\b(?:quotes?|quoted|quotation|according\s+to|documentation|website|announcement|definition|terminology)\b|\b(?:states?|stated|says?|said|writes?|wrote|reported|mentioned|noted|claimed)\b[^.\n]{0,120}(?:following|statement|declaration|excerpt|:)|引用|第三方|术语/i.test(context)
+        || /\b(?:quotes?|quoted|quotation|according\s+to|documentation|website|announcement)\b|\b(?:states?|stated|says?|said|writes?|wrote|reported|mentioned|noted|claimed)\b[^.\n]{0,120}(?:following|statement|declaration|excerpt|:)|引用|第三方|术语/i.test(context)
+        || /\b(?:definition|terminology)\b/i.test(terminologyContext)
         || /^\s*['>]|^ {4}|<\/?(?:blockquote|pre|code)\b|<!--|-->/im.test(context)
         || (prefix.match(/\"|“|”/g) || []).length % 2 === 1
         || (prefix.match(/```|~~~/g) || []).length % 2 === 1
@@ -273,7 +278,7 @@ function authorProvidedCodeRepositoryQuote(source, token, start) {
         || /\b(?:external|another|other)\b|\b(?:from|by)\s+\S+/i.test(beforeUrl)
         || /https?:\/\//i.test(beforeUrl)) return '';
     const purpose = beforeUrl.slice(last[1].length).replace(/on our GitHub[\s\S]*$/, '');
-    if (!publicEvaluationRelease && !/^[a-z0-9 ,\u2013\u2014\-]+$/.test(purpose.trim())) return '';
+    if (!standaloneAuthorCodeRelease && !/^[a-z0-9 ,\u2013\u2014\-]+$/.test(purpose.trim())) return '';
     return source.slice(lower, end + (after.startsWith('.') ? 1 : 0));
 }
 

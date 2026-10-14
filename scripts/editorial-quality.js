@@ -1117,6 +1117,14 @@ function findMissingComparisonUnits(text) {
     const unit = '(?:%|个百分点|点|分|毫秒|秒|分钟|小时|毫焦|Hz|kHz|MHz|dB|mJ|GB|MB|KB|倍)';
     const asymmetric = new RegExp(`(?<![A-Za-z0-9_.])${quantity}\\s*(?:对|vs\\.?|相比)\\s*${quantity}\\s*${unit}(?!之)`, 'giu');
     for (const match of collectRegexMatches(value, asymmetric, 'comparison_unit_only_on_second_value')) {
+        // “对”也可量化共轭零点；明确声学/滤波上下文中的零点是术语，不是零分。
+        const end = match.index + match.match.length;
+        const sentenceStart = Math.max(value.lastIndexOf('。', match.index), value.lastIndexOf('；', match.index)) + 1;
+        const sentenceEnd = value.slice(end).search(/[。！？!?；;]/u);
+        const context = value.slice(sentenceStart, sentenceEnd < 0 ? value.length : end + sentenceEnd);
+        if (/对\s*零点$/u.test(match.match)
+            && /(?:共轭|极点|鼻音|反共振|滤波器|传递函数)/u.test(context)
+            && !/(?:比分|得分|准确率|错误率|百分|\b(?:WER|CER|PER)\b)/iu.test(context)) continue;
         findings.push(match);
     }
     for (const sentence of proseSentences(value)) {

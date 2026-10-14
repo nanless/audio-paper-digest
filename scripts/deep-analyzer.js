@@ -1572,7 +1572,7 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
                 return line;
             }
             // 诊断使用归一文本，修复仍按原行的真实位置定位，只补边界空格。
-            let updated = line.replace(/\d+[⁰¹²³⁴⁵⁶⁷⁸⁹]+[\p{Script=Han}]/gu, (token, offset) => {
+            let updated = line.replace(/\d+[⁰¹²³⁴⁵⁶⁷⁸⁹]+[\p{Script=Han}]|[-+]?\p{N}+(?:\.\p{N}+)?(?:(?!\p{Script=Han})\p{L})+/gu, (token, offset) => {
                 if (!reportedNumericFragments.has(token.normalize('NFKC'))) return token;
                 const absoluteOffset = lineStart + offset;
                 if (protectedUnicodeRanges.some(([start, end]) => absoluteOffset < end
@@ -1580,7 +1580,21 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
                 const sentinel = '[[NUMERIC_TYPOGRAPHY_PROTECTION_PROBE]]';
                 const probe = unicodeProtectionSurface.slice(0, absoluteOffset) + sentinel
                     + unicodeProtectionSurface.slice(absoluteOffset + token.length);
-                if (readerConceptMarkerIsProtected(probe, sentinel)) return token;
+                // 编辑诊断按 NFKC 匹配 1mW，原稿可能是 1𝑚𝑊；只补单位边界空格，
+                // 保留数值与数学字母的原字节，避免归一诊断永远找不到真实表面。
+                const measurement = token.match(/^([-+]?\p{N}+(?:\.\p{N}+)?)(\p{L}+)$/u);
+                const knownUnit = measurement && /^(?:kHz|MHz|Hz|dB|mW|mJ|ms|KiB|GB|MB|KB|s|h)$/iu
+                    .test(measurement[2].normalize('NFKC'));
+                const quotedSourceTable = editableTable && candidate.tableBindings?.some(binding =>
+                    binding.tableIndex === tableIndex && binding.sourceType === 'source_quotes');
+                // 只有显式 source_quotes 表格是作者可编辑正文。保留代码、公式、引用等
+                // 其他保护，不能因表格可编辑就改写 selection 的签名单元格。
+                const protectionProbe = knownUnit && quotedSourceTable
+                    ? probe.replace(/^[ \t]*\|/gm, surface => ' '.repeat(surface.length)) : probe;
+                if (readerConceptMarkerIsProtected(protectionProbe, sentinel)) return token;
+                if (knownUnit) {
+                    return `${measurement[1]} ${measurement[2]}`;
+                }
                 return token.replace(/([⁰¹²³⁴⁵⁶⁷⁸⁹])(?=[\p{Script=Han}])/u, '$1 ');
             });
             for (const numericFragment of reportedNumericFragments) {
@@ -1593,7 +1607,7 @@ function normalizeIssueBoundReaderNumericTypography(candidate, issues = []) {
                         // 编辑闸门把紧跟拉丁计量单位的数字看成一个粘连的 token（例如
                         // `16kHz`）。只修明确报出的表层，而且只认已知单位；`3e-7` 这类
                         // 科学记数法保持原样。
-                        .replace(/(\d)(?=(?:kHz|MHz|Hz|dB|ms|GB|MB|KB|s|h)\b)/giu, '$1 ');
+                        .replace(/(\d)(?=(?:kHz|MHz|Hz|dB|mW|mJ|ms|KiB|GB|MB|KB|s|h)\b)/giu, '$1 ');
                     const before = whole[offset - 1] || '';
                     const after = whole[offset + match.length] || '';
                     if (/^\d/.test(result) && /[\p{Script=Han}]/u.test(before)
@@ -3963,6 +3977,14 @@ function readerResourceClaimIssues(draft, identity, sourceText) {
     const directDenialPrefix = /(?:(?:不(?!但|仅|只)|不能|不应(?:当)?|不可|不宜|不得)(?:再|另行|据此|据此直接)?(?:声称|表示|说明|证明|确认|写|默认|意味着|代表|认为|断言|等同于|视为|当作)[^。！？!?；;，,]{0,36}|(?:不(?!但|仅|只)|不能|不应(?:当)?|不可|不宜|不得)(?:把|将)[^。！？!?；;，,]{0,36}(?:等同于|视为|当作)[^。！？!?；;，,]{0,16}|(?:不含|未含|不包含|没有包含|不包括)[^。！？!?；;，,]{0,24}|(?:没有|尚无|并无|不存在)(?:任何)?(?:该|此|对应)?(?:代码|模型|模型权重|权重|检查点|数据集|语料|演示|复现材料|资源)(?:类型)?(?:的)?|(?:没有|尚无|并无|不存在)(?:公开|开源|开放|当前可用|公开可用)$|(?:没有|未曾|尚未)(?:发现|找到|看到|确认|证明|表明|显示|提供|给出)[^。！？!?；;，,]{0,24}|(?:未|尚未|并未|没有|无)[^。！？!?；;，,]{0,24}(?:记为|标为|列为|判为)[^。！？!?；;，,]{0,16}|(?:未|尚未|并未|没有|无|并非|不是|不(?!但|仅|只)|not\s*))$/i;
     const conditionalPrefix = /(?:是否|能否|若|如果|假设)[^。！？!?；;，,]{0,36}$/i;
     const isConceptDistinction = (value, matchIndex) => {
+        // 显式列举“不同主张”只豁免列表本身；前后实际发布声明不能借此免责。
+        const explicitClaimLists = /分清(?:三|3|两|2)件事[：:]([^。！？!?；;]{1,160}?)是(?:不同|不同的|独立|独立的)主张/gu;
+        for (const list of value.matchAll(explicitClaimLists)) {
+            const items = list[1].split(/、/u).map(item => item.trim());
+            if (items.length < 2 || items.length > 3 || !items.every(item => /^(?:论文提到(?:地址|链接)|(?:模型)?权重可(?:下载|获取)|(?:系统|端到端系统)可运行)$/u.test(item))) continue;
+            const listStart = list.index + list[0].indexOf(list[1]);
+            if (matchIndex >= listStart && matchIndex < listStart + list[1].length) return true;
+        }
         // 「代码开源、权重可下载、系统可运行是三件事」列举待核对概念，
         // 不是把三个条件断言为已经满足。仅豁免概念列举的字节范围；其后
         // 「本文权重已经公开」仍单独判断，不能用前面的限定吞掉真实声明。
@@ -4441,6 +4463,10 @@ function readerResourceClaimIssues(draft, identity, sourceText) {
     const isScopedResourceNonClaim = (segment, matchIndex, type) => {
         const prefix = segment.slice(Math.max(0, matchIndex - 56), matchIndex);
         if (/(?:否定|反驳|证伪)[^。！？!?；;，,]{0,48}$/.test(prefix)) return false;
+        // 限定当前肯定词之前的否定作用域；后续转折中的实际发布声明仍要核验。
+        const currentAssertionPrefix = prefix.split(/(?:但是|然而|不过|事实上|却|(?<!不)但)/u).at(-1);
+        if (/(?:不能(?:据此)?直接写成|未能(?:直接|可靠|独立|明确)?确认)[^。！？!?；;，,]{0,48}$/u
+            .test(currentAssertionPrefix)) return true;
         if (/(?:无法确认|尚无法确认|未确认|未证明|未报告|不证明|不涉及|不讨论|不等于|不代表|不要(?:把|将|默认|声称|写|表示|推断|断言)|不能(?:据此)?(?:確認|确认|认定|推断|断言|宣告|说)|不能仅凭[^。！？!?；;，,]{1,28}就(?:确认|认定|推断|断言))[^。！？!?；;，,]{0,48}$/.test(prefix)) return true;
         if (/(?:未|没有|未曾|尚未)(?:实际|独立|完整|可靠|明确|直接)?(?:发现|找到|看到|确认|证明|表明|显示|提供|给出|收到|声明|绑定|验证)[^。！？!?；;，,]{0,48}$/.test(prefix)) return true;
         if (/需要补(?:充)?(?:的)?(?:验证|检查|步骤)(?:是|包括)?[^。！？!?；;，,]{0,36}$/.test(prefix)) return true;
@@ -7040,8 +7066,9 @@ function repairShortApiReaderFigureLeadBindings(article, plan, figures = []) {
 
 function repairApiReaderArticleAndPlanBindings(paper, analysisManifest) {
     const renewed = require('./lib/reader-pdf-cell-evidence').replaySavedProofMetadata(paper, analysisManifest);
-    return require('./lib/reader-table-pdf-evidence').withSavedPaper(paper,
-        () => repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest) || renewed);
+    return require('./lib/reader-dom-span-projection').withSavedPaper(paper, () =>
+        require('./lib/reader-table-pdf-evidence').withSavedPaper(paper,
+            () => repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest) || renewed));
 }
 function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest) {
     const plan = paper?.apiReaderPlan;
@@ -7085,7 +7112,10 @@ function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest)
                     if (typeof renderedText !== 'string'
                         || ((binding.pdfCellConfirmation || binding.sealedPdfTableEvidence)
                         ? !require('./lib/reader-table-pdf-evidence').savedCellMatches(binding, cell, renderedText)
-                        : normalizeReaderSourceCell(renderedText) !== normalizeReaderSourceCell(cell.sourceText))) {
+                        : normalizeReaderSourceCell(renderedText) !== normalizeReaderSourceCell(cell.sourceText)
+                            && !require('./lib/reader-pdf-cell-evidence').savedMergedCellMatches(paper, binding, cell, renderedText)
+                            && !require('./lib/reader-dom-span-projection').savedCellMatches(
+                                paper, binding, cell, renderedText, articleTables[index]))) {
                         throw new Error('文章文字规范化后，表格单元格与绑定的原始来源不一致。');
                     }
                     return { ...cell, renderedText };
