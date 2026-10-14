@@ -19,6 +19,7 @@
 
 ```bash
 npm run digest:prepare -- YYYY-MM-DD
+# 仅用户已明确取消视觉时：npm run digest:prepare -- YYYY-MM-DD --no-visuals
 # digest:api 完全等价
 ```
 

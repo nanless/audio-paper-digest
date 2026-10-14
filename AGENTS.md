@@ -17,6 +17,7 @@
 
 ```bash
 npm run digest:prepare -- YYYY-MM-DD
+# 仅用户已明确取消视觉时：npm run digest:prepare -- YYYY-MM-DD --no-visuals
 # digest:api 是完全等价的显式别名
 ```
 

@@ -10,7 +10,7 @@ set -eu
 usage() {
   cat <<'EOF'
 用法:
-  ./run-daily-digest.sh YYYY-MM-DD [--from fetch|generate|review|push|visual] [--api]
+  ./run-daily-digest.sh YYYY-MM-DD [--from fetch|generate|review|push|visual] [--api] [--no-visuals]
 
 运行 LLM/API 抓取、筛选、深度分析和博客审查。已退役整批 Manual 写作链；
 单篇受控人工修正与独立审查仍可用于三个流程的失败恢复。
@@ -70,6 +70,7 @@ fi
 shift
 
 start_stage="fetch"
+no_visuals=0
 if [ "${PD_DAILY_API_MODE:-1}" != "1" ]; then
   echo "整批 Manual 流程已退役，请使用日更 API 流程或受控单篇恢复。" >&2
   exit 2
@@ -85,6 +86,14 @@ while [ "$#" -gt 0 ]; do
       shift 2
       ;;
     --api)
+      shift
+      ;;
+    --no-visuals)
+      if [ "$no_visuals" -eq 1 ]; then
+        echo "--no-visuals 不能重复使用" >&2
+        exit 2
+      fi
+      no_visuals=1
       shift
       ;;
     --manual)
@@ -150,13 +159,17 @@ if [ "$start_index" -le 7 ]; then
 else
   run_stage 8 "规划发布后视觉任务" bash scripts/python-runtime.sh scripts/plan-post-publish-visuals.py --date "$target_date"
 fi
-run_stage 8 "准备论文关键图输入" node scripts/visual-summary-state.js prepare --date "$target_date"
-
-echo "==> digest:prepare 仅完成博客发布与视觉输入准备；退出成功不代表整条论文速递完成。"
-echo "==> Codex 现在必须继续生成、目检并登记 TOP 10 论文长图和汇总封面。"
-echo "==> 若用户明确取消视觉，改运行 digest:waive-visuals，禁止调用 image_gen 或伪造 complete。"
-echo "==> 最终检查: npm run visual:status -- --date ${target_date}"
-echo "==> 最终检查: npm run cover:status -- --date ${target_date}"
+if [ "$no_visuals" -eq 1 ]; then
+  run_stage 8 "登记用户授权的本次视觉豁免" node scripts/waive-post-publish-visuals.js --date "$target_date" --reason "用户明确要求本次完整日更不执行视觉任务，保留与当前已验证发布版本绑定的豁免。"
+  echo "==> 已登记当前发布版本的视觉豁免；继续完成部署与逐页上线核验。"
+else
+  run_stage 8 "准备论文关键图输入" node scripts/visual-summary-state.js prepare --date "$target_date"
+  echo "==> digest:prepare 仅完成博客发布与视觉输入准备；退出成功不代表整条论文速递完成。"
+  echo "==> Codex 现在必须继续生成、目检并登记 TOP 10 论文长图和汇总封面。"
+  echo "==> 若用户明确取消视觉，改运行 digest:waive-visuals，禁止调用 image_gen 或伪造 complete。"
+  echo "==> 最终检查: npm run visual:status -- --date ${target_date}"
+  echo "==> 最终检查: npm run cover:status -- --date ${target_date}"
+fi
 
 echo "==> 还须确认对应提交的 GitHub Pages 构建、部署成功，并逐页核对正式地址、HTTP 200 与标题。"
 echo "==> 完成图片登记或后续推送后重新读取: npm run digest:status -- --date ${target_date}"

@@ -15,7 +15,7 @@
 
 三流程先统一跑本次选定全批，整轮保存后只续可重试失败集合，默认总共3轮。公共轮次、Reader原预算及人工建议的区别见 [共享规则](../docs/three-workflows.md#全批轮次与失败集合)。
 
-默认 LLM/API 日更的 `digest:prepare` 是完整入口，抓取调用 `full-fetch --require-previously-fetched`，以核验旧检查点派生重叠见证并检查各源实际命中；页内/窗口完整覆盖和仅已发布去重仍保留；`deep`、`batch`、`reanalyze`、`reanalyze:selected`、`api:reader:refresh` 只消费正式日更来源封存，不重新获取历史来源。Reader重试、已付费稿恢复和人工修正保留原稿、预算与费用，见 [恢复说明](../docs/reader-explicit-retry.md)。
+默认 LLM/API 日更的 `digest:prepare` 是完整入口；用户明确取消视觉时可加 `--no-visuals`，推送后只建立豁免所需清单并登记当前发布版本的声明，跳过实际参考图准备和生成；抓取调用 `full-fetch --require-previously-fetched`，以核验旧检查点派生重叠见证并检查各源实际命中；页内/窗口完整覆盖和仅已发布去重仍保留；`deep`、`batch`、`reanalyze`、`reanalyze:selected`、`api:reader:refresh` 只消费正式日更来源封存，不重新获取历史来源。Reader重试、已付费稿恢复和人工修正保留原稿、预算与费用，见 [恢复说明](../docs/reader-explicit-retry.md)。
 
 Reader 刷新默认使用配置并发5和总轮数3，`--concurrency N` 范围1–60，`--rounds N` 范围1–10。仅明确可重试失败进入下一轮；同次正常轮不改 Reader epoch。强制重分析首次按单篇执行已授权重置，后续失败轮保持原候选、次数及费用。
 

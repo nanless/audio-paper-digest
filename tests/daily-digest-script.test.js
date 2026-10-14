@@ -119,3 +119,24 @@ test('已退役 Manual 和旧写作阶段在业务调用前被拒绝', () => {
         assert.doesNotMatch(result.stdout, /论文速递阶段:/);
     }
 });
+
+
+test('显式取消视觉仍按发布版本登记豁免，并跳过实际图片准备', () => {
+    const dir=fs.mkdtempSync(path.join(require('node:os').tmpdir(),'daily-digest-waiver-'));
+    const log=path.join(dir,'commands.log');
+    try {
+        for(const command of ['python3.11','node']){
+            const fake=path.join(dir,command);
+            fs.writeFileSync(fake,`#!/bin/sh\nprintf '%s %s\\n' '${command}' "$*" >> '${log}'\n`);
+            fs.chmodSync(fake,0o755);
+        }
+        const result=spawnSync('bash',[scriptPath,'2026-07-13','--from','push','--no-visuals'],{
+            cwd:path.dirname(scriptPath),env:{...process.env,PATH:`${dir}:${process.env.PATH||''}`,PD_PYTHON_RUNTIME_DISABLE_VENV:'1'},encoding:'utf8'});
+        assert.equal(result.status,0,result.stderr);
+        const commands=fs.readFileSync(log,'utf8');
+        assert.match(commands,/scripts\/push-blog\.py --date 2026-07-13 --require-visual-plan/);
+        assert.match(commands,/scripts\/waive-post-publish-visuals\.js --date 2026-07-13 --reason/);
+        assert.doesNotMatch(commands,/visual-summary-state\.js prepare/);
+        assert.match(result.stdout,/当前发布版本的视觉豁免/);
+    }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
