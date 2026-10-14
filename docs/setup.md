@@ -13,7 +13,7 @@ python3.11 -m venv .venv
 cp env.example .env
 ```
 
-Node 版本须满足 `>=20.18.1 <21 || >=22.3.0`。Python 须为 3.11 或更高版本，并使用 OpenSSL 提供 TLS；macOS 自带的 Python 3.9/LibreSSL 不受支持。npm 中的 Python 命令（包括博客、视觉、人工流程和可选渠道）通过 `scripts/python-runtime.sh` 选择 Python，优先使用项目 `.venv`，其次是 `python3.11`，最后才检查 `python3`。项目使用 Node 内置测试框架，Python 依赖用于博客生成、Hugo 构建检查和视觉辅助。
+Node 版本须满足 `>=20.18.1 <21 || >=22.3.0`。Python 须为 3.11 或更高版本，并使用 OpenSSL 提供 TLS；macOS 自带的 Python 3.9/LibreSSL 不受支持。npm 中的 Python 命令（包括三流程博客发布、视觉辅助和独立人工审查）通过 `scripts/python-runtime.sh` 选择 Python，优先使用项目 `.venv`，其次是 `python3.11`，最后才检查 `python3`。项目使用 Node 内置测试框架，Python 依赖用于博客生成、Hugo 构建检查和视觉辅助。
 
 安装后先确认当前目录及工作区角色：
 
@@ -146,6 +146,6 @@ npm run validate:data -- --allow-empty
 
 `.env`、`data/`、`logs/`、缓存和密钥不得提交。公开模型端点须使用 HTTPS，日志须隐藏密钥、认证头、Cookie、密码、URL 中的用户认证信息及其他敏感信息。
 
-非 dry-run 微信发布还要求 `WECHAT_APP_ID`、`WECHAT_APP_SECRET` 和 `WECHAT_THUMB_MEDIA_ID`。这些可选渠道不属于默认日更。人工流程的环境与命令见 [Manual 入口](../manual/README.md)。
+整批 Manual 与微信、飞书、小红书发布已退役，不配置或启动这些旧入口。正常流程多轮后仍失败的少量论文，只能在原来源和失败记录约束下进行受控人工修正或独立审查，见 [旧记录核验与独立人工审查](../manual/README.md)。
 
 [MiMo 官方推理说明](https://mimo.mi.com/docs/en-US/quick-start/usage-guide/other/deep-thinking)支持通过 `thinking.type` 关闭推理；长文推理开关仅用于长文相关的 Chat 请求，不影响主分析与筛选；主分析使用上文独立开关。OpenCode Go 是否实际接受该字段须由真实响应核验，不能把官方模型文档当作网关已验证。普通参数错误不会自动更换模型或账号；输出截断及内容检查仍会拒绝不完整文章。

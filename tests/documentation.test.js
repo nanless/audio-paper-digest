@@ -79,3 +79,11 @@ test('现行三流程与旧记录核验各有唯一导航入口', () => {
     assert.match(manualReadme, /npm run blog:manual-review/);
     assert.doesNotMatch(manualReadme, /npm run digest:manual/);
 });
+
+test('操作文档行内流程也不得使用已退休的历史公共别名', () => {
+    const retired = /\bhistory:(?:direct-(?:inputs|plan|scheduler|run|aggregate|publication)|publication-metadata)\b/;
+    for (const relative of markdownFiles()) {
+        assert.doesNotMatch(fs.readFileSync(path.join(ROOT, relative), 'utf8'), retired,
+            `${relative} 的行内流程含已退休入口；应使用 package.json 中的当前名称`);
+    }
+});

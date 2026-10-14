@@ -559,11 +559,21 @@ function loadCurrentSuccessfulAnalysisIds(filePath = RESULT_FILE, today = null) 
     return ids;
 }
 
-function loadStoredAnalysisRecord(filePath, paper) {
+function readStoredAnalysisIndex(filePath) {
     const data = readJsonFileStrict(filePath, { allowMissing: true });
     const papers = Array.isArray(data) ? data : (data?.papers || []);
-    const id = normalizedId(paper);
-    return papers.find(item => normalizedId(item) === id) || null;
+    if (!Array.isArray(papers)) throw new Error('已有分析记录的 papers 须为数组。');
+    const byId = new Map();
+    for (const paper of papers) {
+        const id = normalizedId(paper);
+        // 与原 find() 保持相同的首条记录语义；锁内仍独立重读正式文件。
+        if (!byId.has(id)) byId.set(id, paper);
+    }
+    return byId;
+}
+
+function loadStoredAnalysisRecord(filePath, paper) {
+    return readStoredAnalysisIndex(filePath).get(normalizedId(paper)) || null;
 }
 
 function saveFinalAnalysisResults(filePath, newResults, expectedPapers, stats = {}) {
@@ -2031,28 +2041,35 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         console.log(`  📚 日更 source phase：封存 ${dailySourcePlan.paperIds.length} 篇官方 arXiv PDF/TXT 后再分析`);
         await dailyFreshSources.captureDailyFreshSources(dailySourcePlan);
     }
+    // 首遍规划只读同一快照，避免按篇反复解析整批；实际处理仍在论文锁内重读。
+    const initialStoredById = readStoredAnalysisIndex(outputFile);
     const papersToAnalyze = filteredNew.map(paper => {
-        const storedAnalysisRecord = mergeStoredAnalysisState(paper, loadStoredAnalysisRecord(outputFile, paper));
+        const storedAnalysisRecord = mergeStoredAnalysisState(paper, initialStoredById.get(normalizedId(paper)));
         return dailySourcePlan ? dailyFreshSources.prepareDailyPaper(storedAnalysisRecord, dailySourcePlan) : storedAnalysisRecord;
     });
     const skippedAlreadyAnalyzed = dailySourcePlan
         ? filteredNew.filter(paper => {
-            const storedAnalysisRecord = loadStoredAnalysisRecord(outputFile, paper);
+            const storedAnalysisRecord = initialStoredById.get(normalizedId(paper));
             return isSuccessfulAnalysisRecord(storedAnalysisRecord) && dailyFreshSources.isPaperReusableForAnalysis(storedAnalysisRecord, dailySourcePlan);
         }).length
         : 0;
     if (skippedAlreadyAnalyzed > 0) {
         console.log(`  ⏭️ 跳过 ${skippedAlreadyAnalyzed} 篇已有成功分析的论文，仅续跑剩余 ${filteredNew.length - skippedAlreadyAnalyzed} 篇`);
     }
-    const analyzedPapers = [];
+    const analyzedPapers = new Map();
 
     const initializedAnalysis = updateJsonFileLocked(outputFile, current => {
+        const currentRows = Array.isArray(current) ? current : (current?.papers || []);
+        const currentById = new Map();
+        for (const row of currentRows) {
+            const id = normalizedId(row);
+            if (!currentById.has(id)) currentById.set(id, row);
+        }
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             batchDate: today, batchId,
             papers: filteredNew.map(paper => {
-                const currentRows = Array.isArray(current) ? current : (current?.papers || []);
-                const stored = currentRows.find(row => normalizedId(row) === normalizedId(paper));
+                const stored = currentById.get(normalizedId(paper));
                 const merged = mergeStoredAnalysisState(paper, stored);
                 return dailySourcePlan ? dailyFreshSources.prepareDailyPaper(merged, dailySourcePlan) : merged;
             }),
@@ -2092,7 +2109,8 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
         onPaperResultLocked: async (paper, result) => {
             if (result.skipped) return;
             const attempted = result.result || { ...paper, analysis: null, parsed: null, error: result.error || '分析失败' };
-            analyzedPapers.push(attempted);
+            // 原始失败与费用已经逐次落盘；内存只保留每篇最新状态。
+            analyzedPapers.set(normalizedId(attempted), attempted);
             await mergeAndSaveResults([attempted], outputFile, {
                 timestamp: getBeijingISOString(),
                 status: 'running'
@@ -2190,7 +2208,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
             hfFetched: hfFetchedCount,
             totalMerged: allPapers.length,
             afterFilter: filtered.length,
-            newlyAnalyzed: analyzedPapers.filter(isSuccessfulAnalysisRecord).length,
+            newlyAnalyzed: [...analyzedPapers.values()].filter(isSuccessfulAnalysisRecord).length,
             preservedExisting: existingPapers.length,
             arxivOnly,
             hfOnly,
@@ -2219,7 +2237,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
     console.log(`  - 模型筛选后入选: ${filtered.length} 篇`);
     if (skippedCount > 0) console.log(`  - 归档去重: -${skippedCount} 篇`);
     if (blogSkippedCount > 0) console.log(`  - 博客去重: -${blogSkippedCount} 篇`);
-    console.log(`  - 本次分析成功: ${analyzedPapers.filter(isSuccessfulAnalysisRecord).length} 篇`);
+    console.log(`  - 本次分析成功: ${[...analyzedPapers.values()].filter(isSuccessfulAnalysisRecord).length} 篇`);
     console.log(`  - 保留已有: ${existingPapers.length} 篇`);
     console.log(`  - 合并后总计: ${result.papers.length} 篇`);
     if (result.stats.remainingFailed > 0) console.log(`  - 尚未完成: ${result.stats.remainingFailed} 篇`);
@@ -2303,6 +2321,7 @@ module.exports = {
     loadCompleteFilteredForToday,
     loadCurrentSuccessfulAnalysisIds,
     loadStoredAnalysisRecord,
+    readStoredAnalysisIndex,
     mergeStoredAnalysisState,
     loadAnalyzedIdsFromArchive,
     loadTodayPapersFromDatabase,
