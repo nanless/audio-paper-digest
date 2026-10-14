@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
-// history:direct-scheduler 只准备来源文件，不调用模型；
+// history:sources 只准备来源文件，不调用模型；
 // 显式传入 --apply 时，执行分析、Reader 写作和私有页面保存；
 // --dry-run 只检查并报告论文选择、来源准备情况以及暂停和操作锁路径。
 

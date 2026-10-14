@@ -41,6 +41,13 @@ class ConferencePublicationError(RuntimeError):
     pass
 
 
+class ConferenceContentReviewFailure(ConferencePublicationError):
+    """A saved page-level rejection; other pages may finish their normal pass."""
+    def __init__(self, message, result):
+        super().__init__(message)
+        self.result = result
+
+
 def stable(value):
     def normalize(item):
         if isinstance(item, list):
@@ -1473,7 +1480,32 @@ def raise_content_review_failure(record, digest, protocol, stage, findings, mess
     failure_sha = stable(body)
     target = PUBLICATION_ROOT / 'page-review-failures' / f'{failure_sha}.json'
     write_exact(target, json_bytes({**body, 'failureSha256': failure_sha}))
-    raise ConferencePublicationError(f'{message}；失败原因记录: {target}')
+    result = {**body, 'failureSha256': failure_sha, 'message': message}
+    raise ConferenceContentReviewFailure(f'{message}；失败原因记录: {target}', result)
+
+
+def text_review_unit_pass(record, page_sha, index, chunk_sha, *, issues=None, protocol=None):
+    """Keep immutable passing chunks bound to the entire original page."""
+    identity = {'path': safe_relative(record['path'], 'review 页面'),
+                'pageSha256': page_sha, 'unit': 'text', 'index': index,
+                'inputSha256': chunk_sha}
+    target = PUBLICATION_ROOT / 'page-review-unit-passes' / f'{stable(identity)}.json'
+    if issues is None:
+        if not target.exists():
+            return None
+        saved = read_json(target)
+        body = dict(saved)
+        declared = body.pop('resultSha256', None)
+        if declared != stable(body) or saved.get('contract') != 'conference-page-review-unit-pass-v1' \
+                or any(saved.get(key) != value for key, value in identity.items()) \
+                or saved.get('passed') is not True or not isinstance(saved.get('issues'), list):
+            raise ConferencePublicationError(f'正文分块 review 缓存损坏: {identity["path"]}')
+        return saved
+    body = {'contract': 'conference-page-review-unit-pass-v1', **identity,
+            'passed': True, 'issues': issues, 'protocol': protocol}
+    saved = {**body, 'resultSha256': stable(body)}
+    write_exact(target, json_bytes(saved))
+    return saved
 
 
 def review_pages(repo, records, workers=None):
@@ -1499,7 +1531,8 @@ def review_pages(repo, records, workers=None):
         frontmatter, body = parse_frontmatter_content(relative, content)
         issues = validate_markdown_format_gate(relative, frontmatter, body)
         if issues:
-            raise ConferencePublicationError(f'Markdown gate 失败: {relative}: {issues}')
+            raise_content_review_failure(record, digest, protocol, 'markdown', issues,
+                f'Markdown gate 失败: {relative}: {issues}')
         key = stable({'path': relative, 'sha256': digest})
         cache = PUBLICATION_ROOT / 'page-review-passes' / f'{key}.json'
         if cache.exists():
@@ -1516,9 +1549,15 @@ def review_pages(repo, records, workers=None):
         title = frontmatter.get('title', relative)
         chunks = module.split_review_content(content, module.get_blog_review_chunk_chars())
         if not chunks:
-            raise ConferencePublicationError(f'没有可审查正文: {relative}')
+            raise_content_review_failure(record, digest, protocol, 'text', [],
+                f'没有可审查正文: {relative}')
         found = []
         for index, chunk in enumerate(chunks):
+            chunk_sha = sha_bytes(chunk.encode('utf-8'))
+            saved_unit = text_review_unit_pass(record, digest, index, chunk_sha)
+            if saved_unit is not None:
+                found.extend(saved_unit['issues'])
+                continue
             passed, findings, proposed = module._llm_review_post_chunk(
                 chunk, title, required=True, chunk_label=f'{index + 1}/{len(chunks)}')
             if passed is not True or proposed != chunk:
@@ -1527,6 +1566,13 @@ def review_pages(repo, records, workers=None):
                     f'正文语义 review 未通过或建议修改: {relative}',
                     chunkIndex=index + 1, chunkCount=len(chunks),
                     proposedChanged=proposed != chunk)
+            if module.count_blocking_review_issues(findings):
+                raise_content_review_failure(record, digest, protocol, 'text', findings,
+                    f'正文分块 review 存在阻断问题: {relative}',
+                    chunkIndex=index + 1, chunkCount=len(chunks))
+            if sha_bytes(target_bytes(repo, record)) != digest:
+                raise ConferencePublicationError(f'只读 review 期间页面变化: {relative}')
+            text_review_unit_pass(record, digest, index, chunk_sha, issues=findings, protocol=protocol)
             found.extend(findings)
         matches = module.parse_markdown_images(content)
         if matches:
@@ -1556,7 +1602,25 @@ def review_pages(repo, records, workers=None):
         workers = 5
     # 遵循独立博客页 review 的明确 1–5 并发范围；默认保持 5。
     workers = max(1, min(int(workers), 5))
-    results = run_bounded_llm_tasks(records, _review_one, workers)
+    def _collect_page(record):
+        try:
+            return _review_one(record)
+        except ConferenceContentReviewFailure as rejected:
+            return rejected.result
+
+    # Only explicit, durably recorded content rejections are collected. Provider,
+    # storage, changed bytes and corrupt receipts still escape the worker and
+    # stop new dispatch while already-started reviews settle and save passes.
+    results = run_bounded_llm_tasks(records, _collect_page, workers)
+    failures = [result for result in results if result.get('passed') is not True]
+    if failures:
+        body = {'contract': 'conference-page-content-review-batch-failure-v1',
+                'status': 'blocked', 'protocol': protocol, 'pages': results}
+        digest = stable(body)
+        write_exact(PUBLICATION_ROOT / 'page-review-batch-failures' / f'{digest}.json',
+                    json_bytes({**body, 'batchSha256': digest}))
+        raise ConferencePublicationError('；'.join(result['message'] for result in failures)
+            + f'；整批正常审查已结束，仍有 {len(failures)} 页拒稿，失败原因记录: {digest}')
     return {'status': 'passed', 'protocol': protocol, 'pages': results}
 
 

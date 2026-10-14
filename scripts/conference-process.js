@@ -10,7 +10,7 @@ const recovery = require('./lib/conference-process-recovery.js');
 
 const USAGE = '--dry-run|--apply|--status|--source-upgrade-plan|--source-upgrade-apply|--source-upgrade-promote --catalog NAME.json --report NAME.json --filter UUID [--concurrency 1|2|3|4|5] [--retry-failed]; --status 可搭配 [--verify-files]; 来源更新需要 --from UUID; --source-upgrade-apply 必须提供 --plan-sha SHA --paper-ids ID,ID --authorize-new-analysis; --source-upgrade-promote 必须提供 --plan-sha SHA [--preserve-original-complete|--prefer-upgrade]; --source-upgrade-plan 和 --source-upgrade-promote 可搭配 [--page-repair-mode caption-only]';
 function parseArgs(argv) {
-    if (argv[0] === '--legacy-disabled') throw new Error('新会议的执行、分析和页面处理必须使用 conference:new:process');
+    if (argv[0] === '--legacy-disabled') throw new Error('新会议的执行、分析和页面处理必须使用 conference:process');
     const mode = argv[0]; if (!['--dry-run', '--apply', '--status', '--source-upgrade-plan', '--source-upgrade-apply', '--source-upgrade-promote'].includes(mode)) throw new Error(`参数不符合要求。用法：${USAGE}`);
     const upgrade = mode.startsWith('--source-upgrade-');
     const values = {};

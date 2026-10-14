@@ -457,7 +457,9 @@ function validateManifest({ value, item, sourceDescriptor, publicationSource, ar
 }
 function stageDirectPages({ item, sourceDescriptor, publicationSource, artifact, analysis, directory, stagingInputSha256, stagingBindingSha256,
     expectedRendererImplementationSha256 = null, dependencies = {} } = {}) {
-    const root = safeDirectory(directory, '直接来源论文的页面生成目录', true);
+    const root = (dependencies.createDirectory || (operation => operation()))(() =>
+        safeDirectory(directory, '直接来源论文的页面生成目录', true));
+    const writeExact = dependencies.writeExact || renderer.writeExact;
     if (!SHA.test(String(stagingInputSha256 || '')) || !SHA.test(String(stagingBindingSha256 || ''))) fail('直接来源页面生成的输入 SHA 或对应记录 SHA 缺失或格式无效。');
     const rendererImplementationSha256 = renderer.currentRendererImplementationSha256(dependencies);
     if (expectedRendererImplementationSha256 !== null
@@ -486,7 +488,7 @@ function stageDirectPages({ item, sourceDescriptor, publicationSource, artifact,
         }
         const markdown = injectTopDisclosure(result.markdown, pageDisclosure);
         const relative = renderedPath(page); const bytes = Buffer.from(markdown, 'utf8'); const contentSha256 = sha256(bytes);
-        if (renderer.writeExact(safeTarget(root, relative, `论文 ${item.paperId} 的生成页面`), bytes) !== contentSha256) {
+        if (writeExact(safeTarget(root, relative, `论文 ${item.paperId} 的生成页面`), bytes) !== contentSha256) {
             fail(`论文 ${item.paperId} 的页面写入 SHA 与待写入内容不一致。`);
         }
         pages.push({ pageKey: page.pageKey, pagePath: page.pagePath, primaryUrl: page.primaryUrl, cohortDate: page.cohortDate,
@@ -494,7 +496,7 @@ function stageDirectPages({ item, sourceDescriptor, publicationSource, artifact,
     }
     for (const asset of assets.values()) {
         const rootAssets = path.join(root, 'assets');
-        if (renderer.writeExact(safeTarget(rootAssets, asset.record.path, `论文 ${item.paperId} 的生成资源`), asset.bytes) !== asset.record.sha256) {
+        if (writeExact(safeTarget(rootAssets, asset.record.path, `论文 ${item.paperId} 的生成资源`), asset.bytes) !== asset.record.sha256) {
             fail(`论文 ${item.paperId} 的资源写入 SHA 与待写入内容不一致。`);
         }
     }
@@ -505,7 +507,7 @@ function stageDirectPages({ item, sourceDescriptor, publicationSource, artifact,
         analysis: analysisProof, sourceDisclosure,
         stagingInputSha256, stagingBindingSha256,
         rendererImplementationSha256, pages, assets: [...assets.values()].map(asset => asset.record) });
-    renderer.writeExact(manifestFile, Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8'));
+    writeExact(manifestFile, Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8'));
     return validateManifest({ value: manifest, item, sourceDescriptor, publicationSource: publication,
         artifact, analysis, stagingInputSha256, stagingBindingSha256,
         directory: root, rendererImplementationSha256, assertCompleteAnalysis: dependencies.assertCompleteAnalysis });

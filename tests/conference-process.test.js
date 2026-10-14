@@ -55,7 +55,8 @@ function fixture(t, count = 1, original = null) {
     const files = { conferenceProcessDir: path.join(root, 'processes') };
     const context = { authority, members, files };
     let tick = 0;
-    const deps = { files, engine, now: () => new Date(Date.parse('2026-09-09T00:00:00.000Z') + tick++ * 1000).toISOString(),
+    // Existing recovery cases intentionally stop after one normal batch pass.
+    const deps = { files, engine, maxRounds: 1, now: () => new Date(Date.parse('2026-09-09T00:00:00.000Z') + tick++ * 1000).toISOString(),
         loadAuthority: () => context,
         implementationSha256: () => runtimeAuthority.implementationSha256,
         deepExecutionConfigIdentity: () => runtimeAuthority.deepExecutionConfig,
@@ -75,6 +76,69 @@ function success(item) {
     pageProof: { manifestSha256: H(`page:${item.paperId}`), contentSha256: H(`content:${item.paperId}`),
         pagePath: `content/posts/${item.paperId.split(':').at(-1)}.md` } };
 }
+test('会议先完成所有首轮成员再只续失败集，成功成员与重试预算不重签', async t => {
+    const f = fixture(t, 3); const order = []; let failedOnce = false;
+    const result = await processApi.runConferenceProcess({ apply: true, catalogName: 'catalog.json',
+        reportName: 'report.json', filterId: f.authority.filterId, concurrency: 1 }, {
+        ...f.deps, maxRounds: 3, processPaper: async (_context, _shared, item) => {
+            order.push(item.paperId);
+            if (!failedOnce) { failedOnce = true; throw new Error('normal paper failure'); }
+            return success(item);
+        }
+    });
+    assert.equal(result.status, 'complete');
+    assert.deepEqual(order, [...f.members.map(item => item.paperId), f.members[0].paperId]);
+    const state = processApi.assertState(JSON.parse(fs.readFileSync(path.join(
+        f.files.conferenceProcessDir, result.processId, 'state.json'))));
+    assert.deepEqual(Object.values(state.items).map(item => item.attempts), [2, 1, 1]);
+    assert.ok(Object.values(state.items).every(item => !item.retryReleases && !item.retryBudgetStart));
+});
+test('会议重复失败只用原三次预算，禁用人工建议配置不重开 Reader 或通过资格', async t => {
+    const f = fixture(t); let calls = 0;
+    const result = await processApi.runConferenceProcess({ apply: true, catalogName: 'catalog.json',
+        reportName: 'report.json', filterId: f.authority.filterId, concurrency: 1 }, {
+        ...f.deps, maxRounds: 3,
+        analysisConfig: { ...processApi.defaultDependencies().analysisConfig, manualHandoffMaxItems: 0 },
+        processPaper: async (_context, _shared, item) => {
+            calls += 1; assert.equal(item.retryReleases, undefined);
+            throw new Error('paper remains rejected');
+        }
+    });
+    assert.equal(result.status, 'partial'); assert.equal(calls, 3);
+    assert.equal(result.manualHandoff.maxItems, 0);
+    assert.equal(result.manualHandoff.eligible, false);
+    assert.equal(result.manualHandoff.newApiRequestsAuthorized, false);
+    assert.deepEqual(result.manualHandoff.budgetExhaustedIds, [f.members[0].paperId]);
+    const state = processApi.assertState(JSON.parse(fs.readFileSync(path.join(
+        f.files.conferenceProcessDir, result.processId, 'state.json'))));
+    assert.equal(state.completionReceiptSha256, null);
+    assert.equal(state.items[f.members[0].paperId].attempts, 3);
+});
+test('共享来源集合只做一次全批绑定事务，所有成员在付费前已有来源证明', async t => {
+    const f = fixture(t, 5); let sourceTransactions = 0;
+    const wrappedEngine = { ...engine, updateJsonFileLocked(filename, updater, options) {
+        return engine.updateJsonFileLocked(filename, current => {
+            const next = updater(current);
+            if (current && next && Object.values(current.items).some(item => item.status === 'pending')
+                && Object.values(next.items).every(item => item.status === 'source_sealed')) {
+                sourceTransactions += 1;
+            }
+            return next;
+        }, options);
+    } };
+    const result = await processApi.runConferenceProcess({ apply: true, catalogName: 'catalog.json',
+        reportName: 'report.json', filterId: f.authority.filterId, concurrency: 3 }, {
+        ...f.deps, engine: wrappedEngine, processPaper: async (_context, _shared, item) => {
+            const stateFile = path.join(f.files.conferenceProcessDir,
+                processApi.deterministicUuid(processApi.stableHash(f.authority), processApi.CONTRACT), 'state.json');
+            const state = processApi.assertState(JSON.parse(fs.readFileSync(stateFile)));
+            assert.ok(Object.values(state.items).every(entry => entry.sourceProof));
+            return success(item);
+        }
+    });
+    assert.equal(result.status, 'complete');
+    assert.equal(sourceTransactions, 1);
+});
 // 写真实的 analysis.json 和 staging page.md/manifest.json，proof 由实际字节算出，
 // 这样 --verify-files 的通过与失败都能用同一套测试样例数据区分。
 function writeConferenceArtifacts(files, item) {
@@ -737,7 +801,7 @@ test('真实的官方精确 PDF 来源保存后，能在不声称人工审查的
     const upgradeApi = require('../scripts/lib/conference-source-upgrade.js');
     const upgradeOptions = { fromProcessId: origin.processId, concurrency: 1 };
     let modelCalls = 0;
-    const forkDeps = { ...upgradedDeps, loadAuthority: () => context, processPaper: async (_c, newShared, item) => {
+    const forkDeps = { ...upgradedDeps, maxRounds: 1, loadAuthority: () => context, processPaper: async (_c, newShared, item) => {
         modelCalls += 1;
         assert.notEqual(item.analysisRunId, Object.values(JSON.parse(originalStateBytes).items)[0].analysisRunId);
         assert.equal(newShared.sealed[0].proof.pdfSha256, legacyShared.sealed[0].proof.pdfSha256);
@@ -784,7 +848,7 @@ test('命令行给并发设上限，并关掉旧版新建会议的绕过口子',
     assert.equal(raised.concurrency, 5);
     assert.throws(() => cli.parseArgs(['--apply', '--catalog', 'catalog.json', '--report', 'report.json',
         '--filter', '11111111-1111-4111-8111-111111111111', '--concurrency', '6']), /参数不符合要求。用法：/);
-    assert.throws(() => cli.parseArgs(['--legacy-disabled', 'analyze']), /新会议的执行、分析和页面处理必须使用 conference:new:process/);
+    assert.throws(() => cli.parseArgs(['--legacy-disabled', 'analyze']), /新会议的执行、分析和页面处理必须使用 conference:process/);
 });
 
 test('401 余额失败会停止派发，能跨续跑保留，并且只显式释放未完成的工作', async t => {
@@ -1310,6 +1374,48 @@ function sourceUpgradeFixture(t, count = 3, original = null) {
     };
     return { ...f, deps, sources, control, stagedByExecution, rememberOriginal };
 }
+
+test('来源升级完成保存瞬态失败也停止派发，不能转成单篇重试或覆盖原批次', async t => {
+    for (const code of ['EMFILE', 'EDQUOT', null]) {
+        await t.test(code || '普通保存 Error', async t => {
+            const upgrade = require('../scripts/lib/conference-source-upgrade.js');
+            const f = require('./helpers/conference-upgrade-publication-fixture.cjs')
+                .bindUpgradePublicationFixture(sourceUpgradeFixture(t, 2));
+            const original = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, f.deps);
+            const parentFile = path.join(f.files.conferenceProcessDir, original.processId, 'state.json');
+            const parentBytes = fs.readFileSync(parentFile); f.rememberOriginal(parentFile);
+            f.control.creatingNewGeneration = true; f.control.calls = [];
+            const options = { fromProcessId: original.processId, concurrency: 1 };
+            const plan = upgrade.planSourceUpgrade(options, f.deps);
+            const error = Object.assign(new Error('transient completion state save failed'), code ? { code } : {});
+            let injected = false, lastStateFile;
+            const deps = { ...f.deps, maxRounds: 3, engine: { ...f.deps.engine,
+                updateJsonFileLocked(filename, updater, lockOptions) {
+                    return f.deps.engine.updateJsonFileLocked(filename, current => {
+                        const next = updater(current);
+                        if (next?.contract === 'conference-source-upgrade-state-v1') lastStateFile = filename;
+                        if (!injected && next?.contract === 'conference-source-upgrade-state-v1'
+                            && Object.values(next.items).some(item => item.status === 'complete')) {
+                            injected = true; throw error;
+                        }
+                        return next;
+                    }, lockOptions);
+                } } };
+            const authorized = { ...options, authorizeNewAnalysis: true, planSha256: plan.planSha256,
+                paperIds: f.members.map(item => item.paperId) };
+            let caught;
+            try { await upgrade.applySourceUpgrade(authorized, deps); } catch (failure) { caught = failure; }
+            const contains = failure => failure === error || failure?.errors?.some(contains)
+                || (failure?.cause ? contains(failure.cause) : false);
+            assert.ok(caught && contains(caught)); assert.equal(injected, true);
+            assert.equal(f.control.calls.length, 1);
+            const state = JSON.parse(fs.readFileSync(lastStateFile));
+            assert.deepEqual(Object.values(state.items).map(item => item.status), ['analyzing', 'pending']);
+            assert.ok(Object.values(state.items).every(item => item.lastFailure === null));
+            assert.deepEqual(fs.readFileSync(parentFile), parentBytes);
+        });
+    }
+});
 
 test('来源升级只授权显式子集，并保留未选中的和原始的结果', async t => {
     const upgrade = require('../scripts/lib/conference-source-upgrade.js');

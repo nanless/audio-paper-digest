@@ -74,7 +74,7 @@ const USAGE = [
     "  每一步写入前都核对规划时的 SHA，任何不一致都会立即停止并报错。",
     "  存在 blocked 论文时，整个命令以退出码 1 结束。",
     "  此命令不更新 pageProof。之后还须运行页面后处理，更新页面证明和完成凭证；",
-    "  推荐使用 npm run conference:new:migrate-process。",
+    "  推荐使用 npm run conference:migrate-process。",
     "",
     "--mark-stale（只读）：",
     "  默认扫描新旧历史标签分配目录，列出词表 SHA 与当前值不同的记录。",
@@ -558,7 +558,7 @@ function nextStepFor(state) {
     // 改为 running，仍需重新生成页面和完成凭证，不能因这个状态变化省略下一步。
     if (state.status !== 'complete' && state.status !== 'running') return null;
     if (!authority.catalogName || !state.processId) return null;
-    return 'npm run conference:new:migrate-process -- --apply'
+    return 'npm run conference:migrate-process -- --apply'
         + ` --catalog ${authority.catalogName} --report ${authority.reportName}`
         + ` --filter ${authority.filterId} --from ${state.processId}`;
 }

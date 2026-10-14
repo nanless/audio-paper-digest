@@ -315,6 +315,50 @@ class ConferencePublishTests(unittest.TestCase):
             M.review_pages(self.repo, [r])
             self.assertEqual(reviewer.image_calls, 2)
 
+    def test_late_chunk_failure_retries_only_failed_chunk_with_original_page_sha(self):
+        r = self.record(data=b'---\ntitle: test\n---\noriginal page\n')
+        reviewer = FakeReviewer()
+        calls = []
+        fail_last = [True]
+        def review_chunk(chunk, _title, **_kwargs):
+            calls.append(chunk)
+            return (not (chunk == 'second' and fail_last[0]), [], chunk)
+        with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
+                mock.patch.object(reviewer, 'split_review_content', return_value=['first', 'second']), \
+                mock.patch.object(reviewer, '_llm_review_post_chunk', side_effect=review_chunk), \
+                mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
+            with self.assertRaises(M.ConferencePublicationError):
+                M.review_pages(self.repo, [r])
+            self.assertEqual(calls, ['first', 'second'])
+            fail_last[0] = False
+            self.assertEqual(M.review_pages(self.repo, [r])['status'], 'passed')
+            self.assertEqual(calls, ['first', 'second', 'second'])
+            # Even identical split chunks cannot reuse passes from a changed page.
+            changed = self.record(data=b'---\ntitle: changed\n---\nchanged page\n')
+            M.review_pages(self.repo, [changed])
+            self.assertEqual(calls, ['first', 'second', 'second', 'first', 'second'])
+        self.assertEqual(len(list((M.PUBLICATION_ROOT / 'page-review-failures').glob('*.json'))), 1)
+
+    def test_chunk_pass_refuses_tampered_identity_without_new_model_request(self):
+        r = self.record()
+        reviewer = FakeReviewer()
+        with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
+                mock.patch.object(reviewer, 'split_review_content', return_value=['first', 'second']), \
+                mock.patch.object(reviewer, '_llm_review_post_chunk',
+                    side_effect=[(True, [], 'first'), (False, [], 'second')]) as model, \
+                mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
+            with self.assertRaises(M.ConferencePublicationError):
+                M.review_pages(self.repo, [r])
+            cache, = (M.PUBLICATION_ROOT / 'page-review-unit-passes').glob('*.json')
+            value = json.loads(cache.read_text())
+            value['path'] = 'content/posts/another.md'
+            value.pop('resultSha256')
+            value['resultSha256'] = M.stable(value)
+            cache.write_bytes(M.json_bytes(value))
+            with self.assertRaisesRegex(M.ConferencePublicationError, '分块 review 缓存损坏'):
+                M.review_pages(self.repo, [r])
+            self.assertEqual(model.call_count, 2)
+
     def test_failed_image_findings_persist_exactly_without_editing_or_pass_cache(self):
         r = self.record(data=b'---\ntitle: test\n---\n![figure](https://example.invalid/a.png)\n')
         original = (self.repo / r['path']).read_bytes()
@@ -341,19 +385,23 @@ class ConferencePublishTests(unittest.TestCase):
         self.assertFalse(list((M.PUBLICATION_ROOT / 'page-review-passes').glob('*.json')))
         self.assertEqual(self.command('-C', self.repo, 'status', '--porcelain'), '?? content/')
 
-    def test_text_suggested_change_records_identity_not_replacement_or_next_page(self):
+    def test_text_suggested_change_records_identity_and_finishes_next_page_without_edits(self):
         r = self.record()
         next_page = self.record('content/posts/next.md')
         reviewer = FakeReviewer()
         findings = [{'severity': 'warning', 'description': 'Correct the quoted number'}]
         proposed = 'PRIVATE-PROPOSED-REPLACEMENT'
+        calls = []
+        def response(chunk, *_args, **_kwargs):
+            calls.append(chunk)
+            return (True, findings, proposed) if len(calls) == 1 else (True, [], chunk)
         with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
                 mock.patch.object(reviewer, '_llm_review_post_chunk',
-                                  return_value=(True, findings, proposed)) as text, \
+                                  side_effect=response) as text, \
                 mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
             with self.assertRaisesRegex(M.ConferencePublicationError, '正文语义'):
                 M.review_pages(self.repo, [r, next_page], workers=1)
-        self.assertEqual(text.call_count, 1)
+        self.assertEqual(text.call_count, 2)
         failure_file, = (M.PUBLICATION_ROOT / 'page-review-failures').glob('*.json')
         failure = json.loads(failure_file.read_text())
         self.assertEqual(failure['issues'], findings)
@@ -361,7 +409,42 @@ class ConferencePublishTests(unittest.TestCase):
                           failure['proposedChanged']), ('text', 1, 1, True))
         self.assertNotIn(proposed, failure_file.read_text())
         self.assertEqual(reviewer.image_calls, 0)
-        self.assertFalse(list((M.PUBLICATION_ROOT / 'page-review-passes').glob('*.json')))
+        passes = list((M.PUBLICATION_ROOT / 'page-review-passes').glob('*.json'))
+        self.assertEqual(len(passes), 1)
+        self.assertEqual(json.loads(passes[0].read_text())['path'], next_page['path'])
+        batch, = (M.PUBLICATION_ROOT / 'page-review-batch-failures').glob('*.json')
+        value = json.loads(batch.read_text())
+        self.assertEqual([page['passed'] for page in value['pages']], [False, True])
+        self.assertNotIn(proposed, batch.read_text())
+
+    def test_normal_batch_reviews_all_pages_then_retries_only_failed_page(self):
+        pages = [self.record(f'content/posts/batch-{index}.md') for index in range(3)]
+        reviewer = FakeReviewer()
+        calls = []
+        def response(chunk, *_args, **_kwargs):
+            calls.append(chunk)
+            return (len(calls) not in {1, 4}, [], chunk)
+        with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
+                mock.patch.object(reviewer, '_llm_review_post_chunk', side_effect=response), \
+                mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
+            for expected_calls in (3, 4):
+                with self.assertRaisesRegex(M.ConferencePublicationError, '整批正常审查已结束.*1 页拒稿'):
+                    M.review_pages(self.repo, pages, workers=1)
+                self.assertEqual(len(calls), expected_calls)
+        self.assertEqual(len(list((M.PUBLICATION_ROOT / 'page-review-passes').glob('*.json'))), 2)
+        self.assertEqual(len(list((M.PUBLICATION_ROOT / 'page-review-failures').glob('*.json'))), 1)
+
+    def test_storage_failure_stops_new_pages_and_preserves_original_error(self):
+        pages = [self.record(f'content/posts/storage-{index}.md') for index in range(2)]
+        reviewer = FakeReviewer()
+        error = OSError(5, 'fixture EIO while saving paid chunk result')
+        with mock.patch.object(M, 'load_publish_to_blog', return_value=reviewer), \
+                mock.patch.object(M, 'write_exact', side_effect=error), \
+                mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'offline-mock'}):
+            with self.assertRaises(OSError) as raised:
+                M.review_pages(self.repo, pages, workers=1)
+        self.assertIs(raised.exception, error)
+        self.assertEqual(reviewer.calls, 1)
 
     def test_failed_findings_never_reused_as_success_or_erased_after_pass(self):
         r = self.record()

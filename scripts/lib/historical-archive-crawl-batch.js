@@ -53,7 +53,7 @@ async function runLocalCrawlBatch({ crosswalkRoot, identityRoot, snapshotRoot, d
     limit = null, apply = true, concurrency = 3, recoveryPolicy = null } = {}, overrides = {}) {
     void crosswalkRoot; void identityRoot; void snapshotRoot; void dataRoot; void batchRoot; void crosswalkId; void owner;
     void limit; void apply; void concurrency; void recoveryPolicy; void overrides;
-    fail('已停用通过本地爬虫修改来源对照表的流程；请使用 history:direct-inputs 和 history:direct-plan');
+    fail('已停用通过本地爬虫修改来源对照表的流程；请使用 history:inputs 和 history:plan');
 
 }
 

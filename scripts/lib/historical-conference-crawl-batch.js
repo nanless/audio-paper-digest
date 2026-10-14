@@ -52,7 +52,7 @@ function writeAttemptRecord(root, record) { const body = { contract: RECORD_CONT
 async function runConferenceCrawlBatch({ crosswalkRoot, identityRoot, dataRoot, batchRoot, blogRoot = null, iclrAcceptedRoot = null, crosswalkId, owner, limit = null, apply = true, concurrency = 3, recoveryPolicy = null } = {}, overrides = {}) {
     void crosswalkRoot; void identityRoot; void dataRoot; void batchRoot; void blogRoot; void iclrAcceptedRoot;
     void crosswalkId; void owner; void limit; void apply; void concurrency; void recoveryPolicy; void overrides;
-    throw new Error('已停用旧会议爬虫批次；请使用 history:conference-local-sources、history:conference-projections 和 history:direct-plan');
+    throw new Error('已停用旧会议爬虫批次；请使用 history:conference-local-sources、history:conference-projections 和 history:plan');
 
 }
 module.exports = { RECORD_CONTRACT, VERSION, keyFor, explicitHintGroups, eligibleGroups, mergeMatches, missingIclrTitleFingerprints, attemptDirectory, writeAttemptRecord, runConferenceCrawlBatch };

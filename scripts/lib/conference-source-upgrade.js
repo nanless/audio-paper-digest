@@ -433,10 +433,13 @@ async function applySourceUpgrade(options, overrides = {}) {
         if (state.status === 'complete') return { status: 'complete', upgradeId, selectedPaperIds: selected,
             stateFile: filename, originalProcessPreserved: true, conferenceCompletion: false };
         if (state.batchFailure && !options.retryFailed) return { status: 'partial', upgradeId, stopped: true, batchFailure: state.batchFailure };
-        const mutate = callback => deps.engine.updateJsonFileLocked(filename, previous => {
-            validateState(previous, plan, selected, upgradeId); const next = structuredClone(previous);
-            callback(next); next.generation = previous.generation + 1; next.stateSha256 = api.stateDigest(next); return next;
-        });
+        let stopped = false; const saveErrors = new Set();
+        const mutate = callback => {
+            try { return deps.engine.updateJsonFileLocked(filename, previous => {
+                validateState(previous, plan, selected, upgradeId); const next = structuredClone(previous);
+                callback(next); next.generation = previous.generation + 1; next.stateSha256 = api.stateDigest(next); return next;
+            }); } catch (error) { stopped = true; saveErrors.add(error); throw error; }
+        };
         if (options.retryFailed) state = mutate(next => {
             next.batchFailure = null;
             for (const item of Object.values(next.items)) if (item.status !== 'complete') {
@@ -454,25 +457,61 @@ async function applySourceUpgrade(options, overrides = {}) {
                 throw new Error('Source upgrade generation changed during recovery');
             }
         }
-        let stopped = false;
-        await api.runWorkers(Object.values(state.items).filter(item => recovery.eligible(item, deps.now())), options.concurrency, async item => {
-            mutate(next => { Object.assign(next.items[item.paperId], { status: 'analyzing', attempts: next.items[item.paperId].attempts + 1,
-                sourceProof: proofs.get(item.paperId) }); next.status = 'running'; });
-            try {
-                api.assertRuntimeAuthorityUnchanged(current.context, deps, 'before source upgrade analysis');
-                const proof = await (deps.processPaper || api.processOne)(current.context, shared, item, deps);
-                api.assertRuntimeAuthorityUnchanged(current.context, deps, 'after source upgrade analysis');
-                mutate(next => Object.assign(next.items[item.paperId], proof, { status: 'complete', lastFailure: null }));
-            } catch (error) {
-                const failure = recovery.classifyFailure(error, deps.now()); if (failure.systemic) stopped = true;
-                mutate(next => { Object.assign(next.items[item.paperId], { status: 'analysis_partial', lastFailure: failure,
-                    retryNotBefore: new Date(Date.parse(failure.at) + recovery.RETRY_COOLDOWN_MS).toISOString() });
-                if (failure.systemic) next.batchFailure = failure; });
-            }
-        }, () => stopped);
+        let rounds;
+        const selectedItems = Object.values(state.items).filter(item => recovery.eligible(item, deps.now()));
+        try {
+            rounds = await require('./analysis-failure-rounds.js').runFailureRounds(selectedItems, {
+                concurrency: options.concurrency,
+                maxRounds: deps.maxRounds ?? Math.min(recovery.MAX_ATTEMPTS,
+                    deps.analysisConfig?.batchMaxRounds ?? 3),
+                manualHandoffMaxItems: deps.analysisConfig?.manualHandoffMaxItems ?? 5,
+                manualHandoffMinRounds: deps.analysisConfig?.manualHandoffMinRounds ?? 3,
+                manualHandoffNoProgressRounds: deps.analysisConfig?.manualHandoffNoProgressRounds ?? 3,
+                getItemId: item => item.paperId,
+                getProgressKey: (item, outcome) => outcome?.progressKey || api.stableHash(item.analysisProof || null),
+                shouldStop: () => stopped,
+                onRoundDone: () => {
+                    if (saveErrors.size) throw saveErrors.values().next().value;
+                    state = mutate(() => {});
+                },
+                runItem: async originalItem => {
+                    const latest = JSON.parse(fs.readFileSync(filename));
+                    validateState(latest, plan, selected, upgradeId);
+                    const item = latest.items[originalItem.paperId];
+                    mutate(next => { Object.assign(next.items[item.paperId], { status: 'analyzing', attempts: next.items[item.paperId].attempts + 1,
+                        sourceProof: proofs.get(item.paperId) }); next.status = 'running'; });
+                    try {
+                        api.assertRuntimeAuthorityUnchanged(current.context, deps, 'before source upgrade analysis');
+                        const proof = await (deps.processPaper || api.processOne)(current.context, shared, item, deps);
+                        api.assertRuntimeAuthorityUnchanged(current.context, deps, 'after source upgrade analysis');
+                        mutate(next => Object.assign(next.items[item.paperId], proof, { status: 'complete', lastFailure: null }));
+                        return { success: true };
+                    } catch (error) {
+                        if (saveErrors.has(error)) throw error;
+                        const failure = recovery.classifyFailure(error, deps.now()); if (failure.systemic) stopped = true;
+                        mutate(next => { Object.assign(next.items[item.paperId], { status: 'analysis_partial', lastFailure: failure,
+                            retryNotBefore: new Date(Date.parse(failure.at) + recovery.RETRY_COOLDOWN_MS).toISOString() });
+                        if (failure.systemic) next.batchFailure = failure; });
+                        const savedState = JSON.parse(fs.readFileSync(filename));
+                        validateState(savedState, plan, selected, upgradeId);
+                        const saved = savedState.items[item.paperId];
+                        return { success: false, error, retryable: failure.retryable && !failure.systemic
+                            && saved.attempts - (saved.retryBudgetStart || 0) < recovery.MAX_ATTEMPTS,
+                            budgetExhausted: saved.attempts - (saved.retryBudgetStart || 0) >= recovery.MAX_ATTEMPTS,
+                            scope: failure.systemic ? 'run' : 'paper',
+                            progressKey: error.progressKey || api.stableHash(item.analysisProof || null) };
+                    }
+                }
+            });
+        } catch (error) {
+            if (saveErrors.size) throw error;
+            if (!stopped || error.scope !== 'run' || !Array.isArray(error.outcomes)) throw error;
+            rounds = { manualHandoff: error.manualHandoff };
+        }
         state = mutate(next => { next.status = Object.values(next.items).every(item => item.status === 'complete') ? 'complete' : 'partial'; });
         return { status: state.status, upgradeId, selectedPaperIds: selected, stateFile: filename,
             originalProcessPreserved: true, conferenceCompletion: false,
+            ...(rounds?.manualHandoff ? { manualHandoff: rounds.manualHandoff } : {}),
             ...(state.batchFailure ? { stopped: true, batchFailure: state.batchFailure } : {}) };
     }, { recoveryPolicy: deps.engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY });
 }

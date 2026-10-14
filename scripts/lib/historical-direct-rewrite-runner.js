@@ -8,6 +8,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const conferenceLocalSources = require('./historical-conference-local-sources.js');
 const planApi = require('./historical-direct-rewrite-plan.js');
 const freshArxiv = require('./fresh-arxiv-rewrite-source.js');
@@ -47,6 +48,14 @@ class HistoricalDirectRewriteRunnerError extends Error {
 const fail = message => { throw new HistoricalDirectRewriteRunnerError(message); };
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const clone = value => structuredClone(value);
+const persistenceScope = new AsyncLocalStorage();
+function persistenceOperation(operation) {
+    const mark = error => { persistenceScope.getStore()?.add(error); throw error; };
+    try {
+        const result = operation();
+        return result && typeof result.then === 'function' ? result.catch(mark) : result;
+    } catch (error) { return mark(error); }
+}
 function canonical(value) {
     if (Array.isArray(value)) return value.map(canonical);
     if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
@@ -95,7 +104,8 @@ function safeDirectory(value, create = false, label = 'directory') {
     for (const part of absolute.slice(cursor.length).split(path.sep).filter(Boolean)) {
         cursor = path.join(cursor, part); let stat;
         try { stat = fs.lstatSync(cursor); }
-        catch (error) { if (error.code !== 'ENOENT' || !create) throw error; fs.mkdirSync(cursor, { mode: 0o700 }); stat = fs.lstatSync(cursor); }
+        catch (error) { if (error.code !== 'ENOENT' || !create) throw error;
+            persistenceOperation(() => fs.mkdirSync(cursor, { mode: 0o700 })); stat = fs.lstatSync(cursor); }
         if (!stat.isDirectory() || stat.isSymbolicLink()) fail(`unsafe ${label}: ${cursor}`);
     }
     return absolute;
@@ -117,6 +127,9 @@ function readRegular(filename, maximum = 64 * 1024 * 1024) {
 }
 
 function writeAtomic(filename, value) {
+    return persistenceOperation(() => writeAtomicImpl(filename, value));
+}
+function writeAtomicImpl(filename, value) {
     const directory = safeDirectory(path.dirname(filename), true, 'output directory');
     const bytes = Buffer.from(`${JSON.stringify(canonical(value), null, 2)}\n`, 'utf8');
     const temporary = path.join(directory, `.${path.basename(filename)}.${crypto.randomUUID()}.tmp`);
@@ -133,6 +146,9 @@ function writeAtomic(filename, value) {
 }
 
 function writeExclusiveAtomic(filename, value) {
+    return persistenceOperation(() => writeExclusiveAtomicImpl(filename, value));
+}
+function writeExclusiveAtomicImpl(filename, value) {
     const directory = safeDirectory(path.dirname(filename), true, 'output directory');
     const bytes = Buffer.from(`${JSON.stringify(canonical(value), null, 2)}\n`, 'utf8');
     const temporary = path.join(directory, `.${path.basename(filename)}.${crypto.randomUUID()}.tmp`);
@@ -379,7 +395,7 @@ function sourcePrerequisiteSnapshot({ sourceRoot, plan, generation, selected, re
     const loaded = control.readSourceStatus({ sourceRoot, plan, generation });
     if (!loaded) {
         if (required && selected.length) {
-            fail('source scheduler checkpoint is missing; run history:direct-scheduler --apply for this plan/generation first');
+            fail('source scheduler checkpoint is missing; run history:sources --apply for this plan/generation first');
         }
         return { status: selected.length ? 'missing' : 'not-required', statusFile: control.sourceControlPaths({
             sourceRoot, plan, generation }).statusFile, statusSha256: null, selectedReady: 0,
@@ -455,10 +471,10 @@ function selectDirectItems(plan, options = {}, registry = null) {
     const completed = new Set(stagedEntries.filter(entry => currentRendererImplementationSha256 === undefined
         || entry.staging?.pageStaging?.rendererImplementationSha256 === currentRendererImplementationSha256)
         .map(entry => entry.paperId));
-    // 有数量上限的隐式批次在续跑时必须往前走，不能每次都挑同一批已经暂存的
-    // 前缀。显式指定的 paper ID 仍然可以重跑，方便操作者主动复核
+    // 隐式批次续跑只选择未完成或 renderer 已变化的成员，避免每轮都冷重放
+    // 已暂存的整批。显式指定的 paper ID 仍然可以重跑，方便操作者主动复核
     // 已经核验并暂存的分析与页面。
-    const candidates = maxPapers !== null && requested.size === 0
+    const candidates = requested.size === 0
         ? scoped.filter(item => !completed.has(item.paperId)) : scoped;
     const items = maxPapers === null ? candidates : candidates.slice(0, maxPapers);
     return { items, selection: { queue, requestedPaperIds: requestedPaperIds.slice().sort(), maxPapers,
@@ -940,13 +956,13 @@ async function withEphemeralConferenceFigures(source, callback, dependencies = {
     if (persistentRoots.some(base => root === base || root.startsWith(`${base}${path.sep}`))) {
         fail('conference temporary figures cannot use a persistent runtime directory');
     }
-    fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-    const directory = fs.mkdtempSync(path.join(root, 'historical-conference-figures-'));
+    persistenceOperation(() => fs.mkdirSync(root, { recursive: true, mode: 0o700 }));
+    const directory = persistenceOperation(() => fs.mkdtempSync(path.join(root, 'historical-conference-figures-')));
     try {
         const materialize = dependencies.materializeConferenceFigures || renderConferencePdfPages;
         const figures = await materialize({ pdfPath: source.pdfPath, directory, visualAudit: source.visualAudit });
         return await callback(Array.isArray(figures) ? figures : fail('conference figure extractor must return an array'));
-    } finally { fs.rmSync(directory, { recursive: true, force: true, maxRetries: 2 }); }
+    } finally { persistenceOperation(() => fs.rmSync(directory, { recursive: true, force: true, maxRetries: 2 })); }
 }
 
 function selectConferenceVisualPages(visualAudit, pageLimit = CONFERENCE_VISUAL_PAGE_LIMIT) {
@@ -1042,7 +1058,7 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
             };
         }
         return engine.analyzeBatch([paper], {
-            concurrency: 1, maxRetries: dependencies.maxRetries ?? 2, saveInterval: 0,
+            concurrency: 1, maxRetries: 0, saveInterval: 0,
             paperLockOptions,
             preparePaperLocked: () => ({ paper, skip: false }),
             onPaperCheckpointLocked: checkpoint => { persistRecovery(checkpoint); },
@@ -1078,24 +1094,16 @@ async function defaultAnalyze({ item, sourceDetails, sourceDescriptor, execution
 
 async function bounded(items, concurrency, callback, shouldPause = () => false) {
     if (!Number.isSafeInteger(concurrency) || concurrency < 1 || concurrency > 8) fail('concurrency must be between 1 and 8');
-    let cursor = 0; let paused = false; let failed = false; let fatalError;
-    const worker = async () => {
-        const values = [];
-        try {
-            while (cursor < items.length && !failed && !paused) {
-                if (await shouldPause()) { paused = true; break; }
-                // 异步暂停检查之后再复查一次：别的 worker 可能已经领走最后一项，
-                // 或者已经撞上致命错误。
-                if (cursor >= items.length || failed || paused) break;
-                const item = items[cursor++];
-                values.push(await callback(item));
-            }
-        } catch (error) { if (!failed) { failed = true; fatalError = error; } }
-        return values;
-    };
-    const groups = await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
-    if (failed) throw fatalError;
-    return { values: groups.flat(), paused };
+    const values = outcome => outcome.filter(Boolean).map(item => item.result);
+    try {
+        const result = await require('./analysis-failure-rounds.js').runFailureRounds(items, {
+            concurrency, maxRounds: 1, getItemId: (_item, index) => String(index), shouldStop: shouldPause,
+            runItem: async item => ({ success: true, result: await callback(item) }) });
+        return { values: values(result.outcomes), paused: false };
+    } catch (error) {
+        if (error.code !== 'ANALYSIS_BATCH_STOP_REQUESTED') throw error;
+        return { values: values(error.outcomes), paused: true };
+    }
 }
 
 function executionDirectory(root, item, sourceDescriptor) {
@@ -1376,7 +1384,7 @@ function stageDirectExecution({ plan, registry, item, sourceDescriptor, sourceDe
     const binding = planApi.directStagingBinding({ plan, registry: stageRegistry, paperId: item.paperId, analysisArtifact: artifact });
     directContext.assertNoPersistentFigureFields(binding);
     const rendererImplementationSha256 = directPages.currentRendererImplementationSha256(dependencies);
-    const routeDirectory = path.join(safeDirectory(stagingRoot, true, 'staging root'), item.runId,
+    const routeDirectory = path.join(persistenceOperation(() => safeDirectory(stagingRoot, true, 'staging root')), item.runId,
         item.route.kind === 'arxiv-fresh-fetch' ? sourceDescriptor.sourceRunIdentitySha256 : 'conference-local',
         `renderer-${rendererImplementationSha256}`);
     const body = { contract: STAGING_CONTRACT, version: 1, paperId: item.paperId, runId: item.runId,
@@ -1392,13 +1400,23 @@ function stageDirectExecution({ plan, registry, item, sourceDescriptor, sourceDe
             directory = `${routeDirectory}-analysis-${artifact.analysisRecordSha256}`;
         }
     }
-    safeDirectory(directory, true, 'direct staging directory');
+    persistenceOperation(() => safeDirectory(directory, true, 'direct staging directory'));
     const stagingInputSha256 = writeAtomic(path.join(directory, 'staging-input.json'), body);
+    const originalIO = dependencies.io || fs;
+    const guardedIO = Object.create(originalIO);
+    for (const name of ['writeFileSync', 'mkdirSync', 'mkdtempSync', 'unlinkSync', 'rmdirSync']) {
+        if (typeof originalIO[name] === 'function') guardedIO[name] = (...args) =>
+            persistenceOperation(() => originalIO[name](...args));
+    }
     const pageManifest = directPages.stageDirectPages({ item, sourceDescriptor, publicationSource,
         artifact, analysis, directory,
         stagingInputSha256, stagingBindingSha256: body.stagingBindingSha256,
         expectedRendererImplementationSha256: rendererImplementationSha256,
-        dependencies: { ...dependencies, assertCompleteAnalysis: candidate =>
+        dependencies: { ...dependencies, io: guardedIO,
+            writeExact: (filename, bytes) => persistenceOperation(() =>
+                (dependencies.writeExact || require('./paper-page-staging.js').writeExact)(filename, bytes)),
+            createDirectory: operation => persistenceOperation(operation),
+            assertCompleteAnalysis: candidate =>
             assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis: candidate, sourceDetails }) } });
     return { directory, stagingBindingSha256: body.stagingBindingSha256, analysisArtifact: artifact,
         pageStaging: directPages.receipt(pageManifest) };
@@ -1502,6 +1520,7 @@ async function sealedFailureHandoff({ root, plan, item, generation, error, obser
 
 async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
     lockTarget }, dependencies = {}) {
+    const saveErrors = persistenceScope.getStore() || new Set();
     const arxivGeneration = checkedArxivGeneration(options.arxivGeneration || 1);
     const clock = dependencies.now || (() => new Date().toISOString());
     const filename = registryPath(options.registryRoot, plan, arxivGeneration);
@@ -1530,7 +1549,12 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
         if (!pauseFileRequested(pauseFile, plan, arxivGeneration)) {
             const record = require('./historical-direct-control.js').pauseRecord(plan, arxivGeneration, clock(), pauseReason);
             try { writeExclusiveAtomic(pauseFile, record); }
-            catch (error) { if (error.code !== 'EEXIST') throw error; pauseFileRequested(pauseFile, plan, arxivGeneration); }
+            catch (error) {
+                if (error.code !== 'EEXIST') throw error;
+                pauseFileRequested(pauseFile, plan, arxivGeneration);
+                // A validated concurrent pause request satisfied this write.
+                saveErrors.delete(error);
+            }
         }
     };
     const pauseForAccountFailure = (...errors) => {
@@ -1546,7 +1570,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
     const analyze = dependencies.analyze || defaultAnalyze;
     const runOne = async item => {
         let active = registry.entries.find(entry => entry.paperId === item.paperId);
-        let executionDir = null; let descriptor = null;
+        let executionDir = null; let descriptor = null; let attemptedAnalysis = null;
         let rendererRestaging = false; let previousRendererImplementationSha256 = null;
         if (active.status === 'staged'
             && active.staging?.pageStaging?.rendererImplementationSha256
@@ -1581,6 +1605,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                     active = registry.entries.find(entry => entry.paperId === item.paperId);
                 }
             } catch (error) {
+                if (saveErrors.has(error)) throw error;
                 const detail = `${replayFromStatus} completed-analysis replay rejected: ${safeErrorText(error, 1200)}`;
                 registry = transition(registry, plan, item.paperId, 'failed', {
                     analysis: undefined, analysisRecovery: undefined, staging: undefined,
@@ -1634,6 +1659,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 }
                 return { paperId: item.paperId, status: rendererRestaging ? 'restaged' : 'staged' };
             } catch (error) {
+                if (saveErrors.has(error)) throw error;
                 const detail = `${replayFromStatus} completed-analysis staging failed: ${safeErrorText(error, 1200)}`;
                 registry = transition(registry, plan, item.paperId, 'failed', {
                     latestError: `[crash-recovery] ${detail}`
@@ -1689,6 +1715,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                     publicationMetadataRoot: options.publicationMetadataRoot,
                     readPublicationMetadata: dependencies.readPublicationMetadata });
             } catch (error) {
+                if (saveErrors.has(error)) throw error;
                 registry = transition(registry, plan, item.paperId, 'failed', {
                     latestError: safeErrorText(error)
                 }, clock()); persist();
@@ -1729,11 +1756,8 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             executionDir = executionDirectory(options.executionRoot, item, descriptor); safeDirectory(executionDir, true, 'paper execution directory');
             const executionDependencies = { ...dependencies, freshArxivSourceRoot: options.freshArxivSourceRoot,
                 ...(publicationMetadataAuthors ? { publicationMetadataAuthors } : {}),
-                // 历史分析没做完就构成外层重试边界。旧 Reader 候选保留着，但这次
-                // 重试要绑到一个新身份上，免得已经耗尽的候选把下一次有界的模型
-                // 尝试短路掉。
-                ...(active.status === 'analysis_partial'
-                    ? { historicalDirectRetryEpoch: active.attempts + 1 } : {}),
+                // Normal failure rounds reuse the same candidate and paid
+                // ledger. Attempt counters never authorize a fresh Reader epoch.
                 persistentRoots: [options.registryRoot, options.executionRoot, options.stagingRoot] };
             const readerAttemptsDir = path.join(executionDir, 'reader-attempts');
             const materializeReaderFigures = async (figures, id) => item.route.kind === 'arxiv-fresh-fetch'
@@ -1765,6 +1789,10 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                     visualAudit: sourceDetails.pdfVisualAudit },
                     invokeAnalysis, executionDependencies)
                 : await invokeAnalysis([]);
+            // A nested analyzer may have retained a callback error in its
+            // failure result. The marked save failure still stops the batch.
+            if (saveErrors.size) throw saveErrors.values().next().value;
+            attemptedAnalysis = analysis;
             pauseForAccountFailure(analysis);
             // 保存分析文件前先检查结果是否满足暂存要求，stageDirectExecution
             // 内部也会检查。引擎返回 failed/partial 时，将失败或可恢复状态写入
@@ -1788,6 +1816,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             registry = transition(registry, plan, item.paperId, 'staged', { staging }, clock()); persist();
             return { paperId: item.paperId, status: 'staged' };
         } catch (error) {
+            if (saveErrors.has(error)) throw error;
             pauseForAccountFailure(error);
             active = registry.entries.find(entry => entry.paperId === item.paperId);
             if (active && active.status !== 'staged' && TRANSITIONS.get(active.status)?.has('failed')) {
@@ -1804,19 +1833,34 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 } : null;
                 const recoverablePartial = active.status === 'analyzing' && recoveryReceipt
                     && TRANSITIONS.get(active.status)?.has('analysis_partial');
+                const analysisFailure = attemptedAnalysis?.directPaperId === item.paperId
+                    && !require('../analysis-engine.js').isSuccessfulAnalysisRecord(attemptedAnalysis);
+                const failure = require('./conference-process-recovery.js').classifyFailure(
+                    analysisFailure ? Object.assign(new Error(attemptedAnalysis.latestAnalysisAttemptError
+                        || attemptedAnalysis.error || safeErrorText(error)), {
+                        code: attemptedAnalysis.latestAnalysisAttemptErrorCode,
+                        retryable: attemptedAnalysis.latestAnalysisAttemptRetryable }) : error, clock());
+                const retryable = (analysisFailure || !(error instanceof HistoricalDirectRewriteRunnerError))
+                    && failure.retryable && !failure.systemic;
                 registry = transition(registry, plan, item.paperId,
                     recoverablePartial ? 'analysis_partial' : 'failed', {
                         latestError: safeErrorText(error),
+                        latestFailure: { ...failure, retryable },
                         ...(recoveryReceipt ? { analysisRecovery: recoveryReceipt } : {})
                     }, clock()); persist();
                 return { paperId: item.paperId, status: recoverablePartial ? 'analysis_partial' : 'failed',
+                    retryable, scope: failure.systemic ? 'run' : 'paper',
+                    progressKey: require('./analysis-failure-rounds.js').semanticAnalysisProgress(
+                        recovery?.record || attemptedAnalysis || {}),
                     error: safeErrorText(error) };
             }
             return { paperId: item.paperId, status: 'failed', error: safeErrorText(error) };
         }
     };
-    let completedThisRun = 0;
+    let completedThisRun = 0; let attemptsThisRun = 0;
+    const processedPaperIds = new Set();
     const pauseRequested = async () => {
+        if (saveErrors.size) return saveErrors.values().next().value;
         const requested = await dependencies.shouldPause?.();
         if (requested) requestPause(typeof requested === 'object' ? requested
             : { code: 'external-pause', detail: 'External graceful pause requested' });
@@ -1825,24 +1869,67 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             .readPauseFile(pauseFile, plan, arxivGeneration)?.record.reason || null;
         return Boolean(pauseReason) || persisted;
     };
-    const boundedResult = await bounded(selected, options.concurrency || 3, async item => {
-        const result = await runOne(item); completedThisRun += 1;
-        const current = normalizeRegistry(registry, plan); const counts = registryCounts(current);
-        const event = { contract: 'historical-direct-rewrite-progress-v1', version: 1,
-            planSha256: plan.planSha256, arxivGeneration, queue: selection.queue,
-            selectedCount: selected.length, completedThisRun, remainingSelected: selected.length - completedThisRun,
-            paperId: item.paperId, outcome: result.status, registrySha256: current.registrySha256,
-            registryCounts: counts, pauseRequested: await pauseRequested(), pauseReason,
-            updatedAt: clock() };
-        if (dependencies.onProgress) await dependencies.onProgress(event);
-        // onProgress 回调可能保存暂停文件；回调返回后再更新同一个 event 对象。
-        // 进程内监控和测试由此能读取最新暂停状态，已输出的命令行信息仍对应输出时的状态。
-        event.pauseRequested = await pauseRequested();
-        return result;
-    }, pauseRequested);
-    const results = boundedResult.values;
+    let boundedResult;
+    const analysisConfig = dependencies.analysisConfig || require('../config.js').ANALYSIS_CONFIG;
+    const roundApi = require('./analysis-failure-rounds.js');
+    const initialProgress = new Map(selected.map(item => {
+        const entry = registry.entries.find(candidate => candidate.paperId === item.paperId);
+        let recovery = null;
+        if (entry.source && entry.analysisRecovery) {
+            try { recovery = readAnalysisRecovery({ executionDirectory: executionDirectory(options.executionRoot, item, entry.source),
+                item, sourceDescriptor: entry.source, allowMissing: false }); }
+            // This snapshot only measures semantic progress. runOne still owns
+            // the strict replay and durable rejection of an invalid recovery.
+            catch (_) { /* no progress proof */ }
+        }
+        return [item.paperId, roundApi.semanticAnalysisProgress(recovery?.record || {})];
+    }));
+    try {
+        boundedResult = await roundApi.runFailureRounds(selected, {
+            concurrency: options.concurrency || 3,
+            maxRounds: dependencies.maxRounds ?? analysisConfig.batchMaxRounds ?? 3,
+            manualHandoffMaxItems: analysisConfig.manualHandoffMaxItems ?? 5,
+            manualHandoffMinRounds: analysisConfig.manualHandoffMinRounds ?? 3,
+            manualHandoffNoProgressRounds: analysisConfig.manualHandoffNoProgressRounds ?? 3,
+            getItemId: item => item.paperId,
+            getProgressKey: (item, outcome) => outcome?.progressKey || initialProgress.get(item.paperId),
+            shouldStop: pauseRequested,
+            onRoundDone: async round => {
+                if (saveErrors.size) throw saveErrors.values().next().value;
+                persist();
+                await dependencies.onRoundDone?.(round);
+            },
+            runItem: async (item, roundContext) => {
+                const result = await runOne(item); attemptsThisRun += 1;
+                processedPaperIds.add(item.paperId); completedThisRun = processedPaperIds.size;
+                const current = normalizeRegistry(registry, plan); const counts = registryCounts(current);
+                const event = { contract: 'historical-direct-rewrite-progress-v1', version: 1,
+                    planSha256: plan.planSha256, arxivGeneration, queue: selection.queue,
+                    selectedCount: selected.length, completedThisRun, attemptsThisRun,
+                    round: roundContext.round,
+                    remainingSelected: Math.max(0, selected.length - completedThisRun),
+                    paperId: item.paperId, outcome: result.status, registrySha256: current.registrySha256,
+                    registryCounts: counts, pauseRequested: await pauseRequested(), pauseReason,
+                    updatedAt: clock() };
+                if (dependencies.onProgress) await dependencies.onProgress(event);
+                // onProgress 回调可能保存暂停文件；回调返回后再更新同一个 event 对象。
+                // 进程内监控和测试由此能读取最新暂停状态，已输出的命令行信息仍对应输出时的状态。
+                event.pauseRequested = await pauseRequested();
+                const success = ['staged', 'restaged', 'recovered'].includes(result.status);
+                return { result, success, retryable: result.retryable === true, scope: result.scope,
+                    progressKey: result.progressKey || initialProgress.get(item.paperId) };
+            }
+        });
+    } catch (error) {
+        if (saveErrors.size) throw error;
+        if ((!pauseReason && error.code !== 'ANALYSIS_BATCH_STOP_REQUESTED')
+            || !Array.isArray(error.outcomes)) throw error;
+        boundedResult = { outcomes: error.outcomes, rounds: error.rounds,
+            manualHandoff: error.manualHandoff, stopped: true };
+    }
+    const results = boundedResult.outcomes.filter(Boolean).map(outcome => outcome.result);
     const final = normalizeRegistry(registry, plan);
-    const paused = await pauseRequested() || boundedResult.paused;
+    const paused = await pauseRequested() || boundedResult.stopped;
     const counts = registryCounts(final);
     return { status: paused ? 'paused' : results.some(item => ['failed', 'handoff', 'analysis_partial'].includes(item.status)) ? 'partial' : 'complete',
         planSha256: plan.planSha256, arxivGeneration, selection, sourcePrerequisite, pauseReason,
@@ -1852,6 +1939,8 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
         registrySha256: final.registrySha256, staged: final.entries.filter(item => item.status === 'staged').length,
         failed: final.entries.filter(item => item.status === 'failed').length,
         analysisPartial: final.entries.filter(item => item.status === 'analysis_partial').length, registryCounts: counts,
+        rounds: boundedResult.rounds,
+        ...(boundedResult.manualHandoff ? { manualHandoff: boundedResult.manualHandoff } : {}),
         results: results.sort((a, b) => a.paperId.localeCompare(b.paperId)) };
 }
 
@@ -1902,8 +1991,8 @@ async function runDirectRewrite(options = {}, dependencies = {}) {
         ...(dependencies.lockOptions || {}),
         recoveryPolicy: engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY
     };
-    const result = await withOperationLock(lockTarget, () => runDirectRewriteLocked({ options, plan,
-        registryFile, pauseFile, lockTarget }, dependencies), operationLockOptions);
+    const result = await withOperationLock(lockTarget, () => persistenceScope.run(new Set(), () =>
+        runDirectRewriteLocked({ options, plan, registryFile, pauseFile, lockTarget }, dependencies)), operationLockOptions);
     return result;
 }
 

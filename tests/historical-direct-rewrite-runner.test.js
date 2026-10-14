@@ -11,7 +11,9 @@ const localSources = require('../scripts/lib/historical-conference-local-sources
 const conferencePageMappingsApi = require('../scripts/lib/historical-conference-page-projections.js');
 const runnerModule = require('../scripts/lib/historical-direct-rewrite-runner.js');
 const runner = { ...runnerModule, runDirectRewrite: (options, dependencies = {}) =>
-    runnerModule.runDirectRewrite(options, withPublicationMetadata(dependencies)) };
+    // The existing recovery cases isolate a single normal pass; batch strategy
+    // tests explicitly request three rounds below.
+    runnerModule.runDirectRewrite(options, withPublicationMetadata({ maxRounds: 1, ...dependencies })) };
 const runnerCli = require('../scripts/historical-direct-rewrite-run.js');
 const directControl = require('../scripts/lib/historical-direct-control.js');
 const context = require('../scripts/lib/direct-rewrite-analysis-context.js');
@@ -167,7 +169,8 @@ test('数量上限选择和元数据前置条件看的是锁内注册表，不�
         analyze: async () => { assert.fail('必须拒绝实际尚未就绪的所选论文'); }
     }), /not marked every selected paper ready/);
     assert.deepEqual(checked, []);
-    await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv' }, {
+    await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'arxiv',
+        paperIds: ['arxiv:2601.00001'] }, {
         withOperationLock: async (_target, callback) => { locked = true; try { return await callback(); } finally { locked = false; } },
         assertPublicationMetadataReady: item => { assert.equal(locked, true); checked.push(item.paperId); }
     });
@@ -750,7 +753,101 @@ test('直连运行命令行解析稳定的作用域，拒绝有歧义的上限�
     assert.throws(() => runnerCli.parseArgs(['--dry-run', '--plan', plan, '--pause-file', '/tmp/custom.pause']), /用法：/);
 });
 
-test('隐式的 max-papers 会跳过已暂存的条目，显式 ID 仍然可复核', async t => {
+test('瞬态保存失败按写入边界停止后续论文，保留原异常、已付费恢复记录与上次磁盘状态', async t => {
+    for (const boundary of ['analysis', 'registry-complete', 'registry-staged', 'page', 'async-recovery']) {
+        await t.test(boundary, async t => {
+            const f = fixture(t); const roots = files(f.root);
+            const originalRename = fs.renameSync; let injected = false, armed = false, analyses = 0;
+            const error = Object.assign(new Error(`transient ${boundary} save failed`),
+                boundary === 'analysis' ? { code: 'EMFILE' } : boundary === 'registry-complete' ? { code: 'EDQUOT' } : {});
+            fs.renameSync = function(from, to) {
+                let matches = boundary === 'analysis' && path.basename(to) === 'analysis.json';
+                if (['registry-complete', 'registry-staged'].includes(boundary) && to.startsWith(roots.registryRoot + path.sep)) {
+                    const record = JSON.parse(fs.readFileSync(from));
+                    matches = record.entries.some(entry => entry.status === (boundary === 'registry-staged' ? 'staged' : 'analysis_complete'));
+                }
+                if (boundary === 'async-recovery') matches = armed && path.basename(to) === 'analysis-recovery.json';
+                if (matches && !injected) { injected = true; throw error; }
+                return originalRename.call(this, from, to);
+            };
+            t.after(() => { fs.renameSync = originalRename; });
+            const dependencies = { maxRounds: 3, captureFreshArxivRewriteSource: directArxivCapture(),
+                extractPdfText: async () => 'FRESH_CONFERENCE_PDF_TEXT '.repeat(20),
+                materializeConferenceFigures: async () => [], renderDirectPage,
+                writeExact: (filename, bytes) => {
+                    if (boundary === 'page' && !injected) { injected = true; throw error; }
+                    return require('../scripts/lib/paper-page-staging.js').writeExact(filename, bytes);
+                },
+                analyze: async ({ item, sourceDescriptor, sourceDetails, executionDirectory }) => {
+                    analyses += 1;
+                    const record = { ...sealedAnalysis(item, sourceDescriptor, sourceDetails), originalPaidRequests: 7 };
+                    runner.writeAnalysisRecovery({ executionDirectory, item, sourceDescriptor,
+                        record, updatedAt: '2026-10-15T00:00:00.000Z' });
+                    if (boundary === 'async-recovery') {
+                        armed = true;
+                        // The inner analyzer can catch a checkpoint callback;
+                        // the outer operation still observes its original error.
+                        await Promise.resolve();
+                        try { runner.writeAnalysisRecovery({ executionDirectory, item, sourceDescriptor,
+                            record: { ...record, originalPaidRequests: 8 }, updatedAt: '2026-10-15T00:00:01.000Z' }); }
+                        catch (caught) { assert.equal(caught, error); }
+                    }
+                    return record;
+                } };
+            let caught;
+            try { await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, concurrency: 1 }, dependencies); }
+            catch (failure) { caught = failure; }
+            const contains = failure => failure === error || failure?.errors?.some(contains) || containsCause(failure);
+            const containsCause = failure => failure?.cause ? contains(failure.cause) : false;
+            assert.ok(caught && contains(caught), `${boundary} 必须保留原保存异常对象`);
+            assert.equal(injected, true); assert.equal(analyses, 1);
+            const registry = JSON.parse(fs.readFileSync(runner.registryPath(roots.registryRoot, f.plan)));
+            assert.equal(registry.entries[1].status, 'pending');
+            assert.ok(['analyzing', 'analysis_complete'].includes(registry.entries[0].status));
+            assert.equal(registry.entries[0].latestFailure, undefined);
+            const recovery = allFiles(roots.executionRoot).find(file => path.basename(file) === 'analysis-recovery.json');
+            assert.equal(JSON.parse(fs.readFileSync(recovery)).record.originalPaidRequests, 7);
+        });
+    }
+});
+
+test('历史首轮全批后仅续失败，Reader身份与已付费记录不随轮次重置', async t => {
+    const f = fixture(t); const roots = files(f.root); const order = [], identities = [];
+    const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, concurrency: 1 }, {
+        maxRounds: 3, analysisConfig: { batchMaxRounds: 3, manualHandoffMaxItems: 0 },
+        captureFreshArxivRewriteSource: directArxivCapture(),
+        extractPdfText: async () => 'FRESH_CONFERENCE_PDF_TEXT '.repeat(20),
+        materializeConferenceFigures: async () => [], renderDirectPage,
+        analyze: async ({ item, sourceDescriptor, sourceDetails, executionDirectory }) => {
+            order.push(item.paperId);
+            const scope = context.getDirectRewriteAnalysisContext();
+            if (item.route.kind === 'arxiv-fresh-fetch') {
+                identities.push([scope.runId, scope.sourceSnapshotSha256, scope.readerRetryEpoch]);
+                const prior = runner.readAnalysisRecovery({ executionDirectory, item, sourceDescriptor, allowMissing: true });
+                if (!prior) {
+                    const failed = { ...sealedAnalysis(item, sourceDescriptor, sourceDetails),
+                        error: 'normal paper failure', latestAnalysisAttemptError: 'normal paper failure',
+                        latestAnalysisAttemptRetryable: true,
+                        originalPaidRequests: 7 };
+                    runner.writeAnalysisRecovery({ executionDirectory, item, sourceDescriptor,
+                        record: failed, updatedAt: '2026-10-15T00:00:00.000Z' });
+                    return failed;
+                }
+                assert.equal(prior.record.originalPaidRequests, 7);
+            }
+            return sealedAnalysis(item, sourceDescriptor, sourceDetails);
+        }
+    });
+    assert.equal(result.status, 'complete');
+    assert.deepEqual(order, [...f.plan.queue.map(item => item.paperId), f.plan.queue[0].paperId]);
+    assert.equal(identities.length, 2); assert.deepEqual(identities[0], identities[1]);
+    assert.equal(identities[1][2], undefined);
+    assert.equal(result.registryCounts.staged, 2);
+    assert.equal(result.manualHandoff.maxItems, 0);
+    assert.equal(result.manualHandoff.newApiRequestsAuthorized, false);
+});
+
+test('隐式批次包括无数量上限时跳过当前已暂存条目，显式 ID 仍然可冷复核', async t => {
     const f = fixture(t); const roots = files(f.root); const conferenceId = f.plan.queue
         .find(item => item.route.kind === 'conference-local-pdf').paperId;
     const dependencies = { extractPdfText: async () => 'FRESH_CONFERENCE_PDF_TEXT '.repeat(20),
@@ -762,6 +859,12 @@ test('隐式的 max-papers 会跳过已暂存的条目，显式 ID 仍然可复�
     const next = await runner.runDirectRewrite({ apply: false, plan: f.plan, ...roots,
         queue: 'conference', maxPapers: 1 });
     assert.deepEqual(next.paperIds, []); assert.equal(next.selection.skippedCompletedCount, 1);
+    const unlimited = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+        queue: 'conference' }, { ...dependencies,
+        analyze: () => assert.fail('已完成成员不能重复模型调用'),
+        extractPdfText: () => assert.fail('隐式续跑不能重复提取已完成来源') });
+    assert.deepEqual(unlimited.results, []);
+    assert.equal(unlimited.selection.skippedCompletedCount, 1);
     const explicit = await runner.runDirectRewrite({ apply: false, plan: f.plan, ...roots,
         queue: 'conference', paperIds: [conferenceId], maxPapers: 1 });
     assert.deepEqual(explicit.paperIds, [conferenceId]); assert.equal(explicit.selection.skippedCompletedCount, 0);
@@ -860,7 +963,8 @@ test('进展触发的暂停会做完当前论文，续跑时不重做已保存�
     fs.unlinkSync(pauseFile);
     const resumed = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
         arxivGeneration: 1, concurrency: 1 }, base);
-    assert.equal(resumed.status, 'complete'); assert.deepEqual(resumed.results.map(item => item.status), ['recovered', 'staged']);
+    assert.equal(resumed.status, 'complete'); assert.deepEqual(resumed.results.map(item => item.status), ['staged']);
+    assert.equal(resumed.selection.skippedCompletedCount, 1);
     assert.equal(resumed.registryCounts.staged, 2); assert.equal(analyses, 2, '已暂存的 arXiv 论文应恢复现有结果，不重新分析');
 });
 
@@ -940,7 +1044,8 @@ test('两个直连运行器立刻回收同一个刚死亡的同主机操作持�
     assert.equal(results.flatMap(result => result.results)
         .filter(result => result.status === 'staged').length, 1);
     assert.equal(results.flatMap(result => result.results)
-        .filter(result => result.status === 'recovered').length, 1);
+        .filter(result => result.status === 'recovered').length, 0);
+    assert.equal(results.reduce((total, result) => total + result.selection.skippedCompletedCount, 0), 1);
     assert.equal(fs.existsSync(lockPath), false);
     assert.equal(stageFiles(f.root).length, 1);
 });
@@ -1525,7 +1630,8 @@ test('会议暂存恢复在返回「已恢复」之前，拒绝暂存之后的 P
         const staged = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'conference' }, dependencies);
         assert.equal(staged.results[0].status, 'staged', `${mutation.name} 测试样例必须先完成页面暂存`);
         mutation.mutate(f);
-        const recovered = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots, queue: 'conference' }, dependencies);
+        const recovered = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...roots,
+            queue: 'conference', paperIds: [staged.results[0].paperId] }, dependencies);
         assert.equal(recovered.status, 'partial'); assert.equal(recovered.results[0].status, 'failed');
         assert.match(recovered.results[0].error, mutation.expectedError);
         assert.equal(recovered.failed, 1); assert.equal(analyses, 1, `${mutation.name} 被修改后，必须在第二次分析前失败`);
