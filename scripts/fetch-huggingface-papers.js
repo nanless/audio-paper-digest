@@ -344,23 +344,34 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         throw new Error('HuggingFace 抓取必须通过当前项目 .env 中的 HTTPS_PROXY/HTTP_PROXY/ALL_PROXY，拒绝直连');
     }
 
-    const cutoffStr = options.cutoffDate || getBeijingDateString(days);
+    const boundary = options.boundary;
+    if (options.requirePreviouslyFetched !== undefined && typeof options.requirePreviouslyFetched !== 'boolean') {
+        throw new TypeError('requirePreviouslyFetched 必须为布尔值');
+    }
+    if (boundary) require('./lib/daily-fetch-boundary.js').validateDailyFetchBoundary(boundary);
+    const continuity = boundary?.continuity;
+    if (options.requirePreviouslyFetched === true && continuity?.required !== true) {
+        throw new Error('HuggingFace 必须提供已核验的旧抓取连续性见证，不能仅凭已有论文编号停止');
+    }
+    const witness = continuity?.witnesses?.huggingface;
+    const expectedCutoff = continuity?.overlapCutoffDate || boundary?.lastDigestDate;
+    const cutoffStr = options.cutoffDate || options.overlapCutoffDate || expectedCutoff || getBeijingDateString(days);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(cutoffStr)
             || !Number.isFinite(Date.parse(cutoffStr + 'T00:00:00Z'))
             || new Date(cutoffStr + 'T00:00:00Z').toISOString().slice(0, 10) !== cutoffStr) {
         throw new Error('HuggingFace 补更截止日期无效');
     }
-    const boundary = options.boundary;
-    if (boundary) require('./lib/daily-fetch-boundary.js').validateDailyFetchBoundary(boundary);
-    if (options.cutoffDate && (!boundary || boundary.lastDigestDate !== cutoffStr
+    if ((options.cutoffDate || options.overlapCutoffDate || boundary) && (!boundary || expectedCutoff !== cutoffStr
+            || options.overlapCutoffDate && options.overlapCutoffDate !== expectedCutoff
             || !/^[a-f0-9]{64}$/.test(boundary.identitySha256 || '')
             || !Number.isFinite(Date.parse(boundary.since)) || !Number.isFinite(Date.parse(boundary.until))
             || Date.parse(boundary.since) > Date.parse(boundary.until))) {
         throw new Error('HuggingFace 补更日期必须绑定完整抓取范围');
     }
-    const maxPages = options.cutoffDate ? Infinity : HUGGINGFACE_CONFIG.maxPages;
+    const explicitBoundary = Boolean(options.cutoffDate || options.overlapCutoffDate || boundary);
+    const maxPages = explicitBoundary ? Infinity : HUGGINGFACE_CONFIG.maxPages;
 
-    console.log(options.cutoffDate
+    console.log(explicitBoundary
         ? `📥 从 HuggingFace Papers 补抓 ${cutoffStr} 当日及之后的精选论文...`
         : `📥 从 HuggingFace Papers 获取过去 ${days} 天的论文 (>= ${cutoffStr})...`);
 
@@ -372,6 +383,24 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         failures: [],
         requests: []
     };
+    if (continuity) health.continuity = {
+        contract: continuity.contract, required: true, witness: structuredClone(witness), encounters: []
+    };
+    const continuityProof = () => {
+        if (!continuity) return undefined;
+        if (witness.status === 'not-applicable') return { required: true, status: 'not-applicable',
+            reason: witness.reason, matchedIds: [], encounterVerified: false };
+        const matchedIds = [...new Set(health.continuity.encounters.map(item => item.arxivId))];
+        return { required: true, status: matchedIds.length ? 'verified' : 'expected',
+            expectedId: witness.arxivId, witnessSelectedAt: witness.selectedAt,
+            matchedIds, encounterVerified: matchedIds.includes(witness.arxivId) };
+    };
+    const continuityCovered = () => !continuity || witness.status === 'not-applicable'
+        || continuityProof().encounterVerified;
+    const provider = covered => ({ boundaryIdentity: boundary.identitySha256,
+        window: { since: boundary.since, until: boundary.until, covered },
+        cutoffDate: cutoffStr, dailyCovered: covered, dailySelectedAtField: 'paper.submittedOnDailyAt',
+        ...(continuity ? { continuity: continuityProof() } : {}) });
     const fetchTracked = async (name, url) => {
         health.attempts++;
         let rawResult;
@@ -399,8 +428,10 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
     let dailyComplete = false;
 
     const seenDailyPageSignatures = new Set();
-    let previousSelectedDate = null;
+    let previousSelectedAt = null;
     while (!reachedCutoff && page < maxPages) {
+        // This is the documented HF chronological sort option. Its name alone is not
+        // coverage proof: verify every actual submittedOnDailyAt instant below.
         const url = `https://huggingface.co/api/daily_papers?limit=${HUGGINGFACE_CONFIG.pageLimit}&p=${page}&sort=publishedAt`;
         const response = await fetchTracked(`daily_papers:${page + 1}`, url);
         const data = response.data;
@@ -430,9 +461,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
             if (boundary && (!item || typeof item !== 'object'
                     || !normalizeToBeijingISOString(item.paper?.submittedOnDailyAt || ''))) {
                 throw makeSourceFetchError('每日精选缺少有效的 paper.submittedOnDailyAt 入选时间，无法证明补更范围完整', {
-                    ...health, ok: false, provider: { boundaryIdentity: boundary.identitySha256,
-                        window: { since: boundary.since, until: boundary.until, covered: false },
-                        cutoffDate: cutoffStr, dailyCovered: false, dailySelectedAtField: 'paper.submittedOnDailyAt' }
+                    ...health, ok: false, provider: provider(false)
                 });
             }
             if (typeof item !== 'object' || !item) continue;
@@ -448,20 +477,31 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
                 oldestDate = pubDate;
             }
 
-            if (boundary && previousSelectedDate && pubDate > previousSelectedDate) {
+            const selectedAt = Date.parse(paper.hfSelectedAt);
+            if (boundary && previousSelectedAt !== null && selectedAt > previousSelectedAt) {
                 throw makeSourceFetchError('每日精选日期顺序改变，无法证明补更范围完整', {
-                    ...health, ok: false, provider: { boundaryIdentity: boundary.identitySha256,
-                        window: { since: boundary.since, until: boundary.until, covered: false },
-                        cutoffDate: cutoffStr, dailyCovered: false, dailySelectedAtField: 'paper.submittedOnDailyAt' }
+                    ...health, ok: false, provider: provider(false)
                 });
             }
-            previousSelectedDate = pubDate;
+            previousSelectedAt = selectedAt;
+            const key = normalizedId(paper);
+            if (continuity && witness.status === 'expected' && key === witness.arxivId) {
+                if (selectedAt !== Date.parse(witness.selectedAt)
+                    || pubDate !== witness.cutoffDate) {
+                    throw makeSourceFetchError('HuggingFace 旧论文的实际入选时间与已核验见证不一致，拒绝伪造连续性', {
+                        ...health, ok: false, provider: provider(false)
+                    });
+                }
+                if (!health.continuity.encounters.some(item => item.arxivId === key)) {
+                    health.continuity.encounters.push({ arxivId: key,
+                        selectedAt: item.paper.submittedOnDailyAt });
+                }
+            }
             if (boundary && Date.parse(paper.hfSelectedAt) > Date.parse(boundary.until)) continue;
             // 截止日包含同日入选的论文；旧论文后来入选也按入选日判断。
             if (pubDate && pubDate < cutoffStr) continue;
 
             // 去重
-            const key = normalizedId(paper);
             if (key && !merged.has(key)) {
                 merged.set(key, paper);
                 newCount++;
@@ -476,7 +516,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
             break;
         }
 
-        const dailySignature = data.map(item => `${item.paper?.id || item.id}:${item.publishedAt || ''}`).join('\n');
+        const dailySignature = data.map(item => `${item.paper?.id || item.id}:${item.paper?.submittedOnDailyAt || item.publishedAt || ''}`).join('\n');
         if (seenDailyPageSignatures.has(dailySignature)) {
             health.failures.push({ name: `daily_papers:${page + 1}`, error: '每日精选分页重复，无法证明补更范围完整' });
             break;
@@ -573,14 +613,13 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         await sleepFn(HUGGINGFACE_CONFIG.pageDelayMs);
     }
     health.coverage = { dailyComplete, papersComplete, reachedCutoff };
-    if (boundary) health.provider = {
-        boundaryIdentity: boundary.identitySha256,
-        window: { since: boundary.since, until: boundary.until, covered: dailyComplete && papersComplete && health.failures.length === 0 },
-        cutoffDate: cutoffStr,
-        dailyCovered: dailyComplete,
-        dailySelectedAtField: 'paper.submittedOnDailyAt'
-    };
-    health.ok = dailyComplete && papersComplete && health.failures.length === 0;
+    if (!continuityCovered()) health.failures.push({ name: 'daily_papers:continuity',
+        error: '未在官方每日精选分页中遇到时间一致的旧抓取见证' });
+    health.ok = dailyComplete && papersComplete && continuityCovered() && health.failures.length === 0;
+    if (boundary) {
+        health.provider = provider(health.ok);
+        health.provider.dailyCovered = dailyComplete && continuityCovered();
+    }
     health.allFailed = health.attempts > 0 && health.successfulRequests === 0;
     if (health.allFailed) {
         const summary = health.failures.map(item => `${item.name}:${item.error}`).join('; ');
@@ -601,7 +640,7 @@ async function fetchHuggingFacePapers(existingIds = new Set(), options = {}) {
         console.log(`  upvotes >= ${minUpvotes} 过滤: ${before} → ${papers.length} 篇`);
     }
 
-    // 排除已有论文（历史 papers.json + 博客已发布）。同批 arXiv 重叠保留给后续合并，避免丢失 HF 元数据。
+    // Caller supplies published IDs only. Previously fetched unpublished papers remain candidates.
     if (existingIds.size > 0) {
         const before = papers.length;
         const dupPapers = papers.filter(p => existingIds.has(normalizedId(p.paper_id)));

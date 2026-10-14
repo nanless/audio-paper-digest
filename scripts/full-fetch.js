@@ -43,7 +43,7 @@ const {
     backupPapersJson
 } = require('./digest-status.js');
 const dailyFreshSources = require('./lib/daily-fresh-source-plan.js');
-const { resolveDailyFetchBoundary, validateDailyFetchBoundary, readCommittedPublishedPaperIds } = require('./lib/daily-fetch-boundary.js');
+const { resolveDailyFetchBoundary, validateDailyFetchBoundary, readCommittedPublishedPaperIds, hasVerifiedFetchContinuity, validateDailyFetchContinuityCheckpoint } = require('./lib/daily-fetch-boundary.js');
 const {
     LLM_FILTER_PROMPT_PATH
 } = require('./lib/prompt-text-versions.js');
@@ -210,7 +210,8 @@ function hasCoveredFetchBoundary(health, boundary, huggingface = false) {
         && provider.window?.since === boundary.since
         && provider.window?.until === boundary.until
         && provider.window?.covered === true
-        && (!huggingface || (provider.cutoffDate === boundary.lastDigestDate && provider.dailyCovered === true
+        && hasVerifiedFetchContinuity(health, boundary, huggingface)
+        && (!huggingface || (provider.cutoffDate === (boundary.continuity?.overlapCutoffDate || boundary.lastDigestDate) && provider.dailyCovered === true
                 && provider.dailySelectedAtField === 'paper.submittedOnDailyAt')));
 }
 
@@ -235,6 +236,25 @@ function resolvePinnedFetchBoundary(blogRepo, now, checkpoint = null, publishedI
             || checkpoint.pageSize !== DAILY_ARXIV_API_PAGE_SIZE
             || stableContentSha256(checkpoint.historicalDedupIds) !== stableContentSha256([...published].sort())) return current;
     return pinned;
+}
+
+function verifyPreviousFetchWitnessArchive(boundary) {
+    if (!boundary.continuity) return true;
+    const candidates = [path.join(Config.ARCHIVE_DIR, boundary.lastDigestDate, 'fetch-checkpoint.json'),
+        Config.FILES.fetchCheckpoint];
+    for (const filename of candidates) {
+        let bytes;
+        try {
+            const fd = fs.openSync(filename, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+            try {
+                if (!fs.fstatSync(fd).isFile()) throw new Error('旧抓取检查点不是普通文件');
+                bytes = fs.readFileSync(fd);
+            } finally { fs.closeSync(fd); }
+        } catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+        if (crypto.createHash('sha256').update(bytes).digest('hex') !== boundary.continuity.archiveCheckpointSha256) continue;
+        return validateDailyFetchContinuityCheckpoint(boundary, bytes);
+    }
+    throw new Error('找不到本次旧获取见证绑定的原检查点，未开始归档、抓取或模型请求');
 }
 
 function getBeijingDateStringForInstant(value) {
@@ -688,6 +708,7 @@ function buildArxivCategoryHealth(category, options = {}) {
     const numericOrZero = value => Number.isFinite(value) && value >= 0 ? value : 0;
     const health = {
         id: category.id,
+        categoryId: category.id,
         name: category.name,
         priority: category.priority,
         fetched: failed ? 0 : papers.length,
@@ -700,6 +721,7 @@ function buildArxivCategoryHealth(category, options = {}) {
         rateLimitWaitMs: numericOrZero(fetchHealth.rateLimitWaitMs),
         totalRetryWaitMs: numericOrZero(fetchHealth.totalRetryWaitMs),
         provider: fetchHealth.provider,
+        ...(fetchHealth.continuity ? { continuity: fetchHealth.continuity } : {}),
         failures: Array.isArray(fetchHealth.failures) ? fetchHealth.failures : []
     };
     if (failed) {
@@ -1259,8 +1281,12 @@ function parseFullFetchArgs(argv = []) {
     const options = {};
     for (let index = 0; index < argv.length; index += 2) {
         const flag = argv[index]; const value = argv[index + 1];
+        if (flag === '--require-previously-fetched') {
+            if (options.requirePreviouslyFetched) throw new Error('参数不得重复：--require-previously-fetched');
+            options.requirePreviouslyFetched = true; index -= 1; continue;
+        }
         if (!value || !['--date', '--refilter', '--refilter-reason'].includes(flag)) {
-            throw new Error('用法：full-fetch.js [--date YYYY-MM-DD] [--refilter ARXIV_ID --refilter-reason 复核原因]');
+            throw new Error('用法：full-fetch.js [--date YYYY-MM-DD] [--require-previously-fetched] [--refilter ARXIV_ID --refilter-reason 复核原因]');
         }
         if (flag === '--refilter') (options.refilterIds ||= []).push(value);
         else {
@@ -1466,8 +1492,10 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
     const historicalExistingIds = new Set(historicalDedupIds);
     console.log(`正式已发布独立论文页共 ${existingIds.size} 篇；库内未发布记录仍参加补更筛选\n`);
     const fetchBoundary = resolvePinnedFetchBoundary(blogRepo, batchStartedAt,
-        loadTodayJsonFile(FETCH_CHECKPOINT_FILE, today), publishedIds);
+        loadTodayJsonFile(FETCH_CHECKPOINT_FILE, today), publishedIds, { requirePreviouslyFetched: options.requirePreviouslyFetched === true });
+    verifyPreviousFetchWitnessArchive(fetchBoundary);
     batchStartedAt = normalizeToBeijingISOString(fetchBoundary.until);
+    if (fetchBoundary.continuity) console.log(`连续性补抓：保留原边界 ${fetchBoundary.continuity.originalSince}，重叠起点 ${fetchBoundary.since}；所有来源实际遇旧见证后才筛选和分析。`);
     const candidateFingerprints = buildCandidateFingerprints(historicalExistingIds, publishedIds, fetchBoundary);
 
     const refilter = refilterRequest ? prepareExplicitRefilter(today, {
@@ -1774,7 +1802,7 @@ async function runFullFetchBody(options = {}, auditContext = {}) {
                 days: Config.HUGGINGFACE_CONFIG.defaultDays,
                 minUpvotes: Config.HUGGINGFACE_CONFIG.defaultMinUpvotes,
                 fetchedAt: batchStartedAt,
-                cutoffDate: fetchBoundary.lastDigestDate,
+                cutoffDate: fetchBoundary.continuity?.overlapCutoffDate || fetchBoundary.lastDigestDate,
                 boundary: fetchBoundary
             });
             if (!hasCoveredFetchBoundary(hfPapers._sourceHealth, fetchBoundary, true)) {
@@ -2303,6 +2331,7 @@ module.exports = {
     applyFetchSourceIntegrity,
     hasValidFetchSourceIntegrity,
     resolvePinnedFetchBoundary,
+    verifyPreviousFetchWitnessArchive,
     hasCoveredFetchBoundary,
     getSourceConfigFingerprint,
     buildCandidateFingerprints,

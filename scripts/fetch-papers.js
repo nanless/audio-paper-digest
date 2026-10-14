@@ -1527,6 +1527,18 @@ async function fetchCategoryPapersSince(categoryId, boundary, existingIds = null
     const papers = [];
     const fetchedIds = new Set();
     const historicalIds = new Set(Array.from(existingIds || [], normalizedId));
+    const continuityWitness = boundary.continuity?.required
+        ? boundary.continuity.witnesses.arxiv.find(item => item.categoryId === categoryId) : null;
+    if (boundary.continuity?.required && !continuityWitness) throw new Error('缺少当前类别的旧获取见证');
+    if (continuityWitness) {
+        const expected = continuityWitness.status === 'expected';
+        health.continuity = { required: true, encounters: [] };
+        health.provider.continuity = { required: true,
+            status: expected ? 'pending' : 'not-applicable',
+            ...(expected ? { expectedId: continuityWitness.arxivId,
+                witnessPublished: continuityWitness.published } : { reason: continuityWitness.reason }),
+            matchedIds: [], encounterVerified: false };
+    }
     const minuteKey = time => new Date(time).toISOString().slice(0, 16).replace(/[-:T]/g, '');
     const finishHealth = () => {
         health.rateLimitWaitMs = budget.waitedMs;
@@ -1546,6 +1558,7 @@ async function fetchCategoryPapersSince(categoryId, boundary, existingIds = null
             pendingWindows.push({ start: dayStart, end: dayWindowEnd });
             dayStart = dayWindowEnd + 60000;
         }
+        if (continuityWitness) pendingWindows.reverse();
         while (pendingWindows.length > 0) {
             const { start: windowStart, end: windowEnd, parentIndex = null } = pendingWindows.shift();
             const window = { since: new Date(windowStart).toISOString(), until: new Date(windowEnd).toISOString(),
@@ -1599,7 +1612,7 @@ async function fetchCategoryPapersSince(categoryId, boundary, existingIds = null
                     const children = [{ start: windowStart, end: midpoint, parentIndex: windowIndex },
                         { start: midpoint + 60000, end: windowEnd, parentIndex: windowIndex }];
                     window.childWindowIndices = [];
-                    pendingWindows.unshift(...children);
+                    pendingWindows.unshift(...(continuityWitness ? [...children].reverse() : children));
                     window.pages = 1;
                     window.observedEntries = count;
                     window.splitInto = children.map(child => ({ since: new Date(child.start).toISOString(),
@@ -1617,6 +1630,16 @@ async function fetchCategoryPapersSince(categoryId, boundary, existingIds = null
                     }
                     previousPublished = published;
                     fetchedIds.add(id);
+                    // Observe the official entry before published-page deduplication.
+                    // A known record never truncates this page or its remaining windows.
+                    if (continuityWitness?.status === 'expected' && id === continuityWitness.arxivId) {
+                        if (published !== Date.parse(continuityWitness.published)) {
+                            throw new Error('旧获取见证 ID 的官方首次提交时间发生变化');
+                        }
+                        health.continuity.encounters.push({ arxivId: id, published: paper.published });
+                        Object.assign(health.provider.continuity, { status: 'verified',
+                            matchedIds: [id], encounterVerified: true });
+                    }
                     if (published >= since && published <= until && !historicalIds.has(id)) papers.push(paper);
                 }
                 window.pages++;
@@ -1634,6 +1657,10 @@ async function fetchCategoryPapersSince(categoryId, boundary, existingIds = null
                 || children.reduce((sum, child) => sum + child.totalResults, 0) !== window.totalResults) {
                 throw new Error('API 拆分前后的论文总数不一致，不能确认完整抓取');
             }
+        }
+        if (continuityWitness?.status === 'expected'
+            && health.provider.continuity.encounterVerified !== true) {
+            throw new Error(`完整补抓未遇到以前获取的见证论文 ${continuityWitness.arxivId}，禁止进入后续模型流程`);
         }
         health.coverageComplete = true;
         health.ok = true;

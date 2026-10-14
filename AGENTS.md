@@ -62,6 +62,8 @@ npm run digest:prepare -- YYYY-MM-DD
 - `filtered-papers.json`：当日正式入选集合。
 - `deep-analysis-result.json`：正式分析结果、逐阶段检查点和发布资格证明。
 
+默认 API 日更抓取须从上次已核验检查点派生每源旧获取见证并受控重叠，实际核对旧编号与时间后才能进入筛选和分析。每页与固定窗口仍须完整覆盖，不能见第一个重复编号就丢弃后续记录；仅已发布页参与去重，库内未发布仍参加补更。原精确起点与重叠理由纳入边界身份，不手改来源计数或凭证。
+
 默认 API 日更在筛选完成后、进入深度分析前，必须为每个入选 arXiv ID 重新拉取官方 HTML 文本与 PDF，并封存为
 `data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/` 下的
 `source.txt`、`source.pdf`、`source-runtime.json` 与 `source-manifest.json`。分析只能读取这组封存文件。模型所需图片只可在当前调用的系统临时目录中准备，禁止写入 `data/current` 或运行目录的图片缓存。

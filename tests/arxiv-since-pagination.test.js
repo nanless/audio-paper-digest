@@ -227,3 +227,58 @@ describe('按已发布日更时间范围分页补抓', () => {
     });
 
 });
+
+
+describe('必须实际获取上次论文的连续性见证', () => {
+    const witnessed = { ...boundary, until: '2026-10-03T12:00:00Z',
+        continuity: { required: true, witnesses: { arxiv: [{ categoryId: 'cs.SD',
+            status: 'expected', arxivId: '2610.00001', published: '2026-10-03T01:00:00.000Z' }] } } };
+    it('已发布旧ID仍被实际观察，同页和后页的新论文都不能漏掉', async () => {
+        const records = [entry('2610.00001', '2026-10-03T01:00:00Z'),
+            entry('2610.00002', '2026-10-03T01:00:00Z'), entry('2610.00003', '2026-10-03T01:00:00Z')];
+        const starts = [];
+        const papers = await fetchCategoryPapersSince('cs.SD', witnessed, new Set(['2610.00001']),
+            requestOptions(async url => {
+                const start = Number(new URL(url).searchParams.get('start')); starts.push(start);
+                return { status: 200, data: feed(records.slice(start,start+2),3,start,2) };
+            }, { pageSize: 2 }));
+        assert.deepEqual(starts,[0,2]);
+        assert.deepEqual(papers.map(p => p.arxivId),['2610.00002v1','2610.00003v1']);
+        assert.equal(papers._sourceHealth.provider.continuity.encounterVerified,true);
+        assert.equal(papers._sourceHealth.provider.continuity.status,'verified');
+        assert.equal(papers._sourceHealth.continuity.encounters[0].arxivId,'2610.00001');
+        assert.equal(Date.parse(papers._sourceHealth.continuity.encounters[0].published),Date.parse('2026-10-03T01:00:00Z'));
+    });
+    it('连续性模式先抓新窗口，再向前抓到旧见证；保留整页完整性', async () => {
+        const queries=[];
+        const papers=await fetchCategoryPapersSince('cs.SD',{...witnessed,until:'2026-10-04T12:00:00Z'},null,
+            requestOptions(async url=>{
+                const query=new URL(url).searchParams.get('search_query');queries.push(query);
+                const records=query.includes('202610040000')
+                    ?[entry('2610.00002','2026-10-04T01:00:00Z')]
+                    :[entry('2610.00001','2026-10-03T01:00:00Z')];
+                return {status:200,data:feed(records)};
+            }));
+        assert.ok(queries[0].includes('202610040000'));
+        assert.ok(queries[1].includes('202610030000'));
+        assert.equal(papers._sourceHealth.provider.continuity.encounterVerified,true);
+        assert.equal(papers.length,2);
+    });
+    it('完整时间窗也不能替代未遇旧ID或首次提交时间不符的证明', async () => {
+        for (const records of [[entry('2610.00002','2026-10-03T01:00:00Z')],
+            [entry('2610.00001','2026-10-03T02:00:00Z')]]) {
+            await assert.rejects(fetchCategoryPapersSince('cs.SD',witnessed,null,
+                requestOptions(async()=>({status:200,data:feed(records)}))),
+                error=>error.code==='SOURCE_FETCH_FAILED' && !error.sourceHealth.coverageComplete);
+        }
+    });
+    it('上次明确为空的来源记录为不适用，不能伪造遇旧证明', async () => {
+        const emptyPrior={...witnessed,continuity:{required:true,witnesses:{arxiv:[{
+            categoryId:'cs.SD',status:'not-applicable',reason:'no-previous-records'}]}}};
+        const papers=await fetchCategoryPapersSince('cs.SD',emptyPrior,null,
+            requestOptions(async()=>({status:200,data:feed([])})));
+        assert.equal(papers._sourceHealth.provider.continuity.status,'not-applicable');
+        assert.equal(papers._sourceHealth.provider.continuity.encounterVerified,false);
+        assert.deepEqual(papers._sourceHealth.continuity.encounters,[]);
+    });
+});

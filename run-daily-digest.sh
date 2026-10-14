@@ -140,7 +140,7 @@ run_stage() {
 }
 
 if [ "$start_index" -eq 1 ]; then
-  run_stage 1 "默认 LLM/API 抓取、筛选、深度分析" node scripts/full-fetch.js --date "$target_date"
+  run_stage 1 "默认 LLM/API 抓取、筛选、深度分析" node scripts/full-fetch.js --date "$target_date" --require-previously-fetched
 fi
 
 run_stage 5 "生成博客" bash scripts/python-runtime.sh scripts/generate-blog.py --date "$target_date"

@@ -22,7 +22,7 @@ npm run digest:prepare -- YYYY-MM-DD
 # digest:api 完全等价
 ```
 
-仅北京时间当天允许从抓取开始。入口执行候选抓取、关键词预筛、LLM筛选、当次官方HTML/PDF封存、分析、Reader、评分、标签、生成、审查与推送；最后继续完成部署、网页及视觉验收。
+仅北京时间当天允许从抓取开始。默认入口要求实际遇到各来源以前获取过的论文：保留已核验的原窗口，向前重叠覆盖旧编号及时间见证，完整处理每页与窗口后才进入模型流程；缺完整旧证明、时间漂移或未遇见证须停止，详见 [抓取边界](docs/daily-fetch-boundary.md)。入口执行候选抓取、关键词预筛、LLM筛选、当次官方HTML/PDF封存、分析、Reader、评分、标签、生成、审查与推送；最后继续完成部署、网页及视觉验收。
 
 当次封存位于 `data/runtime/daily-fresh-source-runs/<runId>/sources/<arxivId>/generation-000001/`；分析只读其中TXT、PDF、元数据和清单。图片仅在当前调用的系统临时目录准备。来源缺失或SHA不符须在模型请求前停止。
 

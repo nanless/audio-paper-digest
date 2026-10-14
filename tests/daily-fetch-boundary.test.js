@@ -6,7 +6,8 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
-const { resolveDailyFetchBoundary, validateDailyFetchBoundary, readCommittedPublishedPaperIds } = require('../scripts/lib/daily-fetch-boundary.js');
+const { resolveDailyFetchBoundary, validateDailyFetchBoundary, validateDailyFetchContinuityCheckpoint,
+    hasVerifiedFetchContinuity, readCommittedPublishedPaperIds } = require('../scripts/lib/daily-fetch-boundary.js');
 const until = '2026-10-10T07:00:00.000Z';
 function createPublishedBlogRepo(t) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'daily-boundary-'));
@@ -52,6 +53,10 @@ test('只用已提交页面并按提交月份保守重叠，固定结束时间�
     assert.ok(afterSave.diagnostics.unpublishedCurrentReason);
     assert.equal(validateDailyFetchBoundary(JSON.parse(JSON.stringify(afterSave))), true);
     assert.equal(a.since, '2026-10-01T00:00:00.000Z'); assert.equal(a.lastDigestDate, '2026-10-03');
+    assert.throws(() => resolveDailyFetchBoundary(f.root, { until, dataRoot,
+        requirePreviouslyFetched: true }), /完整已发布 v7/);
+    assert.throws(() => resolveDailyFetchBoundary(f.root, { until, dataRoot,
+        requirePreviouslyFetched: 'true' }), /布尔/);
     assert.equal(validateDailyFetchBoundary(JSON.parse(JSON.stringify(a))), true);
     assert.equal(validateDailyFetchBoundary(Object.fromEntries(Object.entries(a).reverse())), true);
     assert.throws(() => validateDailyFetchBoundary({ ...a, until: '2026-10-11T07:00:00.000Z' }), /SHA/);
@@ -81,8 +86,10 @@ test('合法v7发布窗口继续上次结束时间，损坏来源证明不退回
     const { mergeAndDeduplicate } = require('../scripts/fetch-huggingface-papers.js');
     const stable = pipeline.stableContentSha256;
     const provider = { boundaryIdentity: old.identitySha256, window: { since: old.since, until: old.until, covered: true } };
-    const sourcePapers = [{ arxivId: '2610.00026v1', title: 'selected', abstract: 'speech', categories: ['cs.SD'] },
-        { arxivId: '2610.09999v1', title: 'unselected', abstract: 'speech', categories: ['cs.SD'] }];
+    const sourcePapers = [{ arxivId: '2610.00026v1', title: 'selected', abstract: 'speech', categories: ['cs.SD'],
+        published: '2026-10-02T12:12:58+08:00', hfSelectedAt: '2026-10-03T08:00:00+08:00' },
+        { arxivId: '2610.09999v1', title: 'unselected', abstract: 'speech', categories: ['cs.SD'],
+            published: '2026-10-02T03:00:00Z', hfSelectedAt: '2026-10-02T08:00:00+08:00' }];
     const entry = { status: 'complete', papers: sourcePapers, papersCount: sourcePapers.length, papersSha256: stable(sourcePapers), health: { ok: true, provider } };
     const cp = { sourceContractVersion: 7, batchDate: '2026-10-03', batchStartedAt: old.until,
         ...pipeline.buildCandidateFingerprints(new Set(), new Set(), old), historicalDedupIds: [],
@@ -101,6 +108,83 @@ test('合法v7发布窗口继续上次结束时间，损坏来源证明不退回
         files: [{ path: old.provenance.indexPath, sha256: old.provenance.indexSha256 }, ...old.provenance.papers.map(p => ({ path: p.path, sha256: p.sha256 }))] });
     const result = resolveDailyFetchBoundary(f.root, { until, dataRoot });
     assert.equal(result.since, old.until); assert.equal(result.provenance.boundaryBasis, 'verified-previous-fetch-until');
+    const overlapping = resolveDailyFetchBoundary(f.root, { until, dataRoot, requirePreviouslyFetched: true });
+    assert.equal(overlapping.lastDigestDate, '2026-10-03');
+    assert.equal(overlapping.continuity.originalSince, old.until);
+    assert.equal(overlapping.since, '2026-10-02T04:12:00.000Z');
+    assert.equal(overlapping.continuity.overlapCutoffDate, '2026-10-03');
+    assert.equal(overlapping.continuity.witnesses.arxiv.length, 7);
+    assert.ok(overlapping.continuity.witnesses.arxiv.every(w => w.arxivId === '2610.00026'
+        && w.published === '2026-10-02T04:12:58.000Z'));
+    assert.equal(overlapping.continuity.witnesses.huggingface.selectedAt, '2026-10-03T00:00:00.000Z');
+    const originalCpBytes = Buffer.from(JSON.stringify(cp));
+    assert.equal(validateDailyFetchContinuityCheckpoint(overlapping, originalCpBytes), true);
+    const Config = require('../scripts/config.js');
+    const previousArchive = Config.ARCHIVE_DIR, previousCheckpoint = Config.FILES.fetchCheckpoint;
+    try {
+        Config.ARCHIVE_DIR = path.join(dataRoot, 'archive');
+        Config.FILES.fetchCheckpoint = path.join(dataRoot, 'current/fetch-checkpoint.json');
+        assert.equal(pipeline.verifyPreviousFetchWitnessArchive(overlapping), true);
+        fs.writeFileSync(path.join(dataRoot,'archive/2026-10-03/fetch-checkpoint.json'), '{}');
+        assert.throws(() => pipeline.verifyPreviousFetchWitnessArchive(overlapping), /找不到.*原检查点/);
+        put('archive/2026-10-03/fetch-checkpoint.json',cp);
+    } finally { Config.ARCHIVE_DIR = previousArchive; Config.FILES.fetchCheckpoint = previousCheckpoint; }
+    assert.deepEqual(pipeline.parseFullFetchArgs(['--date','2026-10-15','--require-previously-fetched']),
+        {date:'2026-10-15',requirePreviouslyFetched:true});
+    assert.throws(()=>pipeline.parseFullFetchArgs(['--require-previously-fetched','--require-previously-fetched']),/重复/);
+    const resigned = mutate => { const next = structuredClone(overlapping); mutate(next);
+        const { identitySha256, ...body } = next; next.identitySha256 = stable(body); return next; };
+    assert.throws(() => validateDailyFetchBoundary(resigned(b => { b.since = old.until; })), /重叠/);
+    assert.throws(() => validateDailyFetchBoundary(resigned(b => { b.continuity.archiveCheckpointSha256 = '0'.repeat(64); })), /重叠/);
+    assert.throws(() => validateDailyFetchBoundary(resigned(b => { b.continuity.witnesses.arxiv.pop(); })), /重叠/);
+    assert.throws(() => validateDailyFetchBoundary(resigned(b => { b.continuity.overlapCutoffDate = '2026-10-02'; })), /重叠/);
+    const wrongId = resigned(b => { b.continuity.witnesses.arxiv[0].arxivId = '2610.08888'; });
+    assert.throws(() => validateDailyFetchContinuityCheckpoint(wrongId, originalCpBytes), /最新论文不一致/);
+    assert.throws(() => validateDailyFetchContinuityCheckpoint(overlapping, Buffer.from('{}')), /字节 SHA/);
+    const witness = overlapping.continuity.witnesses.arxiv[0];
+    const observed = { categoryId: witness.categoryId,
+        provider: { continuity: { required: true, status: 'verified', expectedId: witness.arxivId,
+            witnessPublished: witness.published, matchedIds: [witness.arxivId], encounterVerified: true } },
+        continuity: { encounters: [{ arxivId: `${witness.arxivId}v1`, published: '2026-10-02T12:12:58+08:00' }] } };
+    assert.equal(hasVerifiedFetchContinuity(observed, overlapping), true);
+    assert.equal(hasVerifiedFetchContinuity({ ...observed, continuity: { encounters: [] } }, overlapping), false);
+    assert.equal(hasVerifiedFetchContinuity({ ...observed, continuity: { encounters: [null] } }, overlapping), false);
+    assert.equal(hasVerifiedFetchContinuity({ ...observed, categoryId: 'invalid' }, overlapping), false);
+    assert.equal(hasVerifiedFetchContinuity({ ...observed, id: witness.categoryId }, overlapping), true);
+    assert.equal(hasVerifiedFetchContinuity({ ...observed, id: 'cs.SD' }, overlapping), false);
+    const hfWitness = overlapping.continuity.witnesses.huggingface;
+    const observedHf = { provider: { continuity: { required: true, status: 'verified', expectedId: hfWitness.arxivId,
+        witnessSelectedAt: hfWitness.selectedAt, matchedIds: [hfWitness.arxivId], encounterVerified: true } },
+        continuity: { encounters: [{ arxivId: hfWitness.arxivId, selectedAt: '2026-10-03T08:00:00+08:00' }] } };
+    assert.equal(hasVerifiedFetchContinuity(observedHf, overlapping, true), true);
+    assert.equal(hasVerifiedFetchContinuity({ ...observedHf, continuity: { encounters: [{ arxivId: hfWitness.arxivId,
+        selectedAt: '2026-10-03T09:00:00+08:00' }] } }, overlapping, true), false);
+    assert.equal(hasVerifiedFetchContinuity(null, result), true);
+    const notApplicable = resigned(b => { b.continuity.witnesses.arxiv[0] = {
+        categoryId: witness.categoryId, status: 'not-applicable', reason: 'no-previous-records' }; });
+    const absent = { categoryId: witness.categoryId, provider: { continuity: { required: true,
+        status: 'not-applicable', reason: 'no-previous-records', matchedIds: [], encounterVerified: false } },
+        continuity: { encounters: [] } };
+    assert.equal(hasVerifiedFetchContinuity(absent, notApplicable), true);
+    assert.equal(hasVerifiedFetchContinuity({ ...absent, provider: { continuity: {
+        ...absent.provider.continuity, encounterVerified: true } } }, notApplicable), false);
+    const emptyCp = structuredClone(cp);
+    emptyCp.arxiv['eess.AS'] = { ...entry, papers: [], papersCount: 0, papersSha256: stable([]) };
+    emptyCp.huggingface.papers = sourcePapers.map(p => { const { hfSelectedAt, ...rest } = p; return rest; });
+    emptyCp.huggingface.papersSha256 = stable(emptyCp.huggingface.papers);
+    emptyCp.fetchSourcesSha256 = pipeline.getFetchSourcesSha256(emptyCp);
+    put('archive/2026-10-03/fetch-checkpoint.json', emptyCp);
+    put('archive/2026-10-03/raw-candidates.json', { ...raw, fetchSourcesSha256: emptyCp.fetchSourcesSha256 });
+    put('archive/2026-10-03/filtered-papers.json', { ...filtered, fetchSourcesSha256: emptyCp.fetchSourcesSha256 });
+    const emptySourceOverlap = resolveDailyFetchBoundary(f.root, { until, dataRoot, requirePreviouslyFetched: true });
+    assert.deepEqual(emptySourceOverlap.continuity.witnesses.arxiv[0], {
+        categoryId: 'eess.AS', status: 'not-applicable', reason: 'no-previous-records' });
+    assert.deepEqual(emptySourceOverlap.continuity.witnesses.huggingface, {
+        status: 'not-applicable', reason: 'no-previous-daily-selection' });
+    assert.equal(validateDailyFetchContinuityCheckpoint(emptySourceOverlap, Buffer.from(JSON.stringify(emptyCp))), true);
+    put('archive/2026-10-03/fetch-checkpoint.json', cp);
+    put('archive/2026-10-03/raw-candidates.json', raw);
+    put('archive/2026-10-03/filtered-papers.json', filtered);
     const missingSelectedField = structuredClone(cp);
     delete missingSelectedField.huggingface.health.provider.dailySelectedAtField;
     missingSelectedField.fetchSourcesSha256 = pipeline.getFetchSourcesSha256(missingSelectedField);
