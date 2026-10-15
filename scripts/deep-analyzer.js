@@ -3977,6 +3977,12 @@ function readerResourceClaimIssues(draft, identity, sourceText) {
     const directDenialPrefix = /(?:(?:不(?!但|仅|只)|不能|不应(?:当)?|不可|不宜|不得)(?:再|另行|据此|据此直接)?(?:声称|表示|说明|证明|确认|写|默认|意味着|代表|认为|断言|等同于|视为|当作)[^。！？!?；;，,]{0,36}|(?:不(?!但|仅|只)|不能|不应(?:当)?|不可|不宜|不得)(?:把|将)[^。！？!?；;，,]{0,36}(?:等同于|视为|当作)[^。！？!?；;，,]{0,16}|(?:不含|未含|不包含|没有包含|不包括)[^。！？!?；;，,]{0,24}|(?:没有|尚无|并无|不存在)(?:任何)?(?:该|此|对应)?(?:代码|模型|模型权重|权重|检查点|数据集|语料|演示|复现材料|资源)(?:类型)?(?:的)?|(?:没有|尚无|并无|不存在)(?:公开|开源|开放|当前可用|公开可用)$|(?:没有|未曾|尚未)(?:发现|找到|看到|确认|证明|表明|显示|提供|给出)[^。！？!?；;，,]{0,24}|(?:未|尚未|并未|没有|无)[^。！？!?；;，,]{0,24}(?:记为|标为|列为|判为)[^。！？!?；;，,]{0,16}|(?:未|尚未|并未|没有|无|并非|不是|不(?!但|仅|只)|not\s*))$/i;
     const conditionalPrefix = /(?:是否|能否|若|如果|假设)[^。！？!?；;，,]{0,36}$/i;
     const isConceptDistinction = (value, matchIndex) => {
+        const pendingLists = /(代码开源\s*[、，,]\s*权重可下载\s*(?:[、，,]|和)\s*系统可运行)\s*(?:应视为|是|属于)\s*(?:三|3)件(?:未确认|待确认)的事/gu;
+        for (const list of value.matchAll(pendingLists)) {
+            const before = value.slice(Math.max(0, list.index - 32), list.index).split(/[。！？!?；;，,]/u).at(-1);
+            if (/(?:本文|本论文|本研究|本工作|作者团队|论文作者)[^。！？!?；;，,]{0,24}$/u.test(before)) continue;
+            if (matchIndex >= list.index && matchIndex < list.index + list[1].length) return true;
+        }
         // 显式列举“不同主张”只豁免列表本身；前后实际发布声明不能借此免责。
         const explicitClaimLists = /分清(?:三|3|两|2)件事[：:]([^。！？!?；;]{1,160}?)是(?:不同|不同的|独立|独立的)主张/gu;
         for (const list of value.matchAll(explicitClaimLists)) {
@@ -4484,6 +4490,25 @@ function readerResourceClaimIssues(draft, identity, sourceText) {
         /(?:论文(?:称|说|声明)|原文(?:称|说|声明))/.test(value)
         && /(?:本次[^。！？!?；;]{0,80}(?:当前不可达|当前不可用|未能确认|未確認)|动手前[^。！？!?；;]{0,20}先核对当前可用性)/.test(value)
         && !/(?:但|然而|不过|事实上)[^。！？!?；;，,]{0,24}(?:本文|本研究|本工作|作者团队)[^。！？!?；;，,]{0,24}(?:已|现已|已经)(?:开源|公开|发布)/.test(value);
+    const isSourceBackedBaselineUsage = (value, type, matchIndex) => {
+        if (type !== 'model') return false;
+        const source = String(sourceText || '').replace(/\s+/g, ' ');
+        const within = match => matchIndex >= match.index && matchIndex < match.index + match[0].length;
+        // 仅核原文明确记述的基线检查点使用，不把过去的评测输入提升为作者当前提供权重。
+        for (const use of value.matchAll(/论文(?:用的|使用的|采用的)(?:是)?已发布检查点(?:加|并采用|并使用)统一评测协议/gu)) {
+            if (within(use) && /\bBaselines?\.\s+We compare\b[\s\S]{0,1200}?\bWe use the released checkpoints and evaluate\b[\s\S]{0,160}?\bthe same protocol\b/i.test(source)) return true;
+        }
+        for (const use of value.matchAll(/([A-Za-z][A-Za-z0-9_.+-]{0,60})\s*为公开权重直接评测/gu)) {
+            if (!within(use)) continue;
+            const preceding = value.slice(0, use.index).split(/[。！？!?；;，,]/u).at(-1);
+            if (/(?:本文|本论文|本研究|本工作|作者团队|论文作者)/u.test(preceding)) continue;
+            const name = use[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const namedBaseline = new RegExp(`\\bbaseline methods?\\b[^.]{0,300}\\b${name}\\b`, 'i');
+            const usedRelease = new RegExp(`\\bFor\\s+${name},\\s+we\\s+use\\s+(?:the\\s+)?publicly\\s+released\\s+model\\s+weights\\b`, 'i');
+            if (namedBaseline.test(source) && usedRelease.test(source)) return true;
+        }
+        return false;
+    };
     const isSourceBackedPriorModelEvaluation = (value, type) => {
         if (type !== 'model'
             || /(?:本文|本论文|本研究|本工作|作者团队)[^。！？!?；;，,]{0,24}(?:模型|权重|检查点)[^。！？!?；;，,]{0,16}(?:已|现已|已经)(?:开源|公开|发布)/.test(value)) return false;
@@ -4594,6 +4619,7 @@ function readerResourceClaimIssues(draft, identity, sourceText) {
                 || isDependencyResourceAttribution(segment, localMatchIndex, type)
                 || isScopedResourceNonClaim(segment, localMatchIndex, type)
                 || isReportedReleaseWithCurrentQualification(value)
+                || isSourceBackedBaselineUsage(value, type, match.index)
                 || isSourceBackedPriorModelEvaluation(value, type)
                 || isPostfixedNonEquivalence(
                     value.slice(segmentStart), localMatchIndex, localMatchEnd

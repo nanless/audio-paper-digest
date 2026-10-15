@@ -1194,6 +1194,14 @@ function findMissingComparisonUnits(text) {
             );
         }
         const numericText = comparisonText
+            // 仅横轴每类预算的完整整数枚举是设置；枚举项数必须与“几个预算”相符。
+            // 只遮住这段设置，附近真实准确率的裸比较值继续逐项检查。
+            .replace(/横轴(?:是|为)\s*每类\s*((?:[1-9]\d*\s*、\s*){1,7}[1-9]\d*)\s+([2-9])\s*个预算/gu,
+                (surface, list, count) => {
+                    const values = list.split(/\s*、\s*/u);
+                    return Number(count) === values.length && new Set(values).size === values.length
+                        ? ' '.repeat(surface.length) : surface;
+                })
             // 词表的完整整数范围是设置计数；同句错误率结果仍须有单位。
             .replace(/词表\s*(?:大小|规模)?\s*范围\s*从\s*(?:[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)(?![\d.,])\s*(?:到|至)\s*(?:[1-9]\d{0,2}(?:,\d{3})+|[1-9]\d*)(?![\d.,])\s*个\s*词元/gu,
                 match => ' '.repeat(match.length))
