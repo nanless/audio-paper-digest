@@ -171,6 +171,42 @@ function protectedReaderUpstream(paper) {
     if (copy.analysisStageCheckpoints) delete copy.analysisStageCheckpoints.apiReaderArticle;
     return copy;
 }
+async function protectedReaderUpstreamFallback(paper, analyze, options) {
+    if (!require('../analysis-engine').paperAnalysisLockHeld(paper)) throw new Error('原Reader上游恢复须持有当前论文锁');
+    const primary = paper.analysisStageCheckpoints?.primaryAnalysis || paper.analysisCheckpoint;
+    if (paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete'
+        || typeof primary !== 'string' || !primary.trim() || primary === paper.apiReaderArticle) {
+        const error = new Error('原Reader纠错恢复缺少可复用的主分析检查点，保留未完成记录');
+        error.code = 'READER_UPSTREAM_PRIMARY_NOT_REUSABLE'; error.retryable = false; throw error;
+    }
+    const original = structuredClone(paper), before = daily.stableHash(protectedReaderUpstream(paper));
+    const key = Symbol.for('audio-paper-digest.analysisCheckpointCallback');
+    const descriptor = Object.getOwnPropertyDescriptor(paper, key), persist = paper[key];
+    const protect = candidate => {
+        if (daily.stableHash(protectedReaderUpstream(candidate)) !== before) {
+            const error = new Error('原Reader上游恢复不能改变原主文、摘要、评分、标签或阶段');
+            error.code = 'READER_UPSTREAM_PROTECTION_REJECTED'; error.retryable = false; throw error;
+        }
+    };
+    Object.defineProperty(paper, key, { configurable: true, value: checkpoint => {
+        protect(paper);
+        protect(checkpoint);
+        return typeof persist === 'function' ? persist(checkpoint) : undefined;
+    } });
+    try {
+        const result = await analyze(options);
+        protect(paper);
+        if (result && typeof result === 'object') protect(result);
+        return result;
+    } catch (error) {
+        for (const name of Object.keys(paper)) delete paper[name];
+        Object.assign(paper, original);
+        throw error;
+    } finally {
+        if (descriptor) Object.defineProperty(paper, key, descriptor);
+        else delete paper[key];
+    }
+}
 function analyzeWithRecoveredFeedback(paper, plan, analyze, explicitFeedback = null, options = {}) {
     const pending = require('./pending-fact-feedback');
     if (!explicitFeedback && Object.hasOwn(paper, pending.FIELD)) explicitFeedback = pending.read(paper, plan).feedback;
@@ -305,7 +341,8 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
                     'apiReaderArticle', childBound.proof.feedbackSha256);
                 if (retained.analysisStaleSnapshots) paper.analysisStaleSnapshots = retained.analysisStaleSnapshots;
                 await facts.withSavedReaderUpstreamRecovery(parentBound, paper, async () => {
-                    const resumed = await analyze({ resumeSavedReaderUpstreamOnly: true, requireCompletedPrimaryCheckpoint: true });
+                    const resumed = await protectedReaderUpstreamFallback(paper, analyze,
+                        { resumeSavedReaderUpstreamOnly: true, requireCompletedPrimaryCheckpoint: true });
                     if (!resumed || typeof resumed.analysis !== 'string' || resumed.error)
                         throw new Error('原Reader父范围没有返回真实完整上游，保留原失败');
                     Object.assign(paper, resumed);
@@ -322,11 +359,11 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
                 const completedChild = facts.validateFeedback(original.readerFeedback, plan, paper);
                 // 让正常深分析完成原图片阶段和整体收尾，仍禁止新主分析且沿用原子范围。
                 return facts.withSavedReaderFactReview(completedChild, paper,
-                    () => analyze({ requireCompletedPrimaryCheckpoint: true }));
+                    () => protectedReaderUpstreamFallback(paper, analyze, { requireCompletedPrimaryCheckpoint: true }));
             });
         }
         if (!explicitFeedback && !original?.readerFeedback) return withRecoveredFeedback(paper, plan,
-            () => analyze({ requireCompletedPrimaryCheckpoint: true }));
+            () => protectedReaderUpstreamFallback(paper, analyze, { requireCompletedPrimaryCheckpoint: true }));
         const error = new Error('独立Reader纠错缺少已完成的主文、摘要或评分');
         error.code = 'READER_UPSTREAM_INCOMPLETE'; error.retryable = false; throw error;
     }

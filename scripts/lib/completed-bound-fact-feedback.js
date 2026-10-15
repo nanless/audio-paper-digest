@@ -13,7 +13,7 @@ function hasCompletedBoundFactFeedbackStages(paper, feedback, plan) {
     if (!paper || !feedback || !dailyFreshSources.isPaperReusableForAnalysis(paper, plan)) return false;
     // 来源或反馈绑定失败仍必须阻断；不把这类失败转换为可跳过的结果。
     const bound = factReview.validateFeedback(feedback, plan, paper);
-    return factReview.withFactReview(bound, () => {
+    const check = () => {
         const stages = paper.analysisManifest?.stages || {};
         const primaryActive = Boolean(String(feedback.primaryFeedback || '').trim());
         const required = [
@@ -44,7 +44,12 @@ function hasCompletedBoundFactFeedbackStages(paper, feedback, plan) {
             // 旧或未知证明、仍含错误原句的成功记录仍走正常纠错流程。
             return false;
         }
-    });
+    };
+    if (require('./saved-fact-feedback').readerOnlyFeedback(feedback)) {
+        try { return factReview.withReadOnlyReaderCompletion(bound, paper, check); }
+        catch (_) { return false; }
+    }
+    return factReview.withFactReview(bound, check);
 }
 
 module.exports = { hasCompletedBoundFactFeedback, hasCompletedBoundFactFeedbackStages };

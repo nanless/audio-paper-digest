@@ -128,7 +128,7 @@ npm run test:compat
 | `lib/arxiv-source-authority.js` | Node 库：使用默认强制代理抓取器获取官方 arXiv 全文，依次分别保存请求、来源配对、来源响应记录、全文、快照、凭证和授权。每份文件写入后核验其字节，已保存的文件不能覆盖；续跑重核原请求与完整来源字节，拒绝旧博客正文。 |
 | `lib/cancelled-reader-audit-recovery.js` | 在正常分析入口确认已取消步骤留下的失败，核验现有正文、来源及原请求记录后复用结果，由分析引擎收尾；不新增模型请求，不删除原阶段错误和费用记录。 |
 | `lib/cancelled-reader-final-checkpoint.js` | 确认最终正文仅被已取消步骤阻挡时，在原完整性、来源和反馈核验通过后从真实检查点继续，不重新生成已完成内容。 |
-| `lib/completed-bound-fact-feedback.js` | Node 库：供普通批量和单篇续跑共用，核验同一事实反馈已完成、来源仍一致且错误原句未残留；不改变显式强制重分析。 |
+| `lib/completed-bound-fact-feedback.js` | Node 库：供普通批量和单篇续跑共用，按真实父子反馈签发上下文只读核验完成证明、来源与禁留原句；不写包、不授予模型请求、不改变显式强制重分析。 |
 | `lib/pending-fact-feedback.js` | Node 库：锁内核验真实反馈及原包后保存未完成纠错义务；旧成功正文不代表新反馈完成，无反馈恢复沿用原包，完整同反馈资格通过后才清除。不给模型新额度。 |
 | `lib/completed-reader-upstream.js` | 核验读者文章之前的主文、摘要、标签、评分、来源及原反馈，供正常恢复入口共用。 |
 | `lib/conference-analysis-adapter.js` | Node 库：重新核验完整会议计划与来源后调用公共深度分析引擎。准备阶段先保存写入后不再改动的准备记录，绑定计划、来源与初始分析文件的 SHA；中断恢复按准备记录、来源文件、初始分析文件、运行记录的顺序核对已有内容并补齐缺失文件。分析完成后另核结果 SHA，再保存完成凭证。旧执行记录缺少准备记录时不自动迁移，须用同一认证计划新建执行记录和 UUID。 |
@@ -259,7 +259,7 @@ npm run test:compat
 | `lib/reader-table-pdf-evidence.js` | Node 库：隔离旧 PDF 规则与新的独立 PDF 来源证明；正常 Reader 编译和冷态保存记录核验均重读受控来源，保留原 DOM 与 PDF 显示值的不同来源。 |
 | `lib/reader-tables.js` | Node 库：将 TABLE 标记与原表行列选择展开为 Markdown 和逐格来源记录，保留表头对应关系，拒绝错位和越界。 |
 | `lib/reanalysis-helpers.js` | Node 库：供指定论文重分析使用，清理 Reader 状态并更新恢复统计。 |
-| `lib/saved-fact-feedback.js` | Node 库：deep 与 batch 共用 `withRecoveredFeedback()` 从本次运行档案读取原纠错说明，显式新反馈优先，核对各阶段证明；整篇和摘要采用不同说明时分别恢复，保留原稿和费用，拒绝改包或扩大摘要修改范围。 |
+| `lib/saved-fact-feedback.js` | Node 库：deep 与 batch 共用原反馈恢复，显式新反馈优先，核对各阶段证明；整篇和摘要采用不同说明时分别恢复。Reader 旧父恢复先核真实主检查点，保存前保护原对象与传入对象的所有非 Reader 上游，错误还原内存和回调；保留原稿、失败与费用。 |
 | `lib/scoring-third-party-resource-replay.js` | Node 库：精确回放原评分输入，仅第三方依赖可达状态抖动时保留原付费评分与审计时正文；作者资源变化仍正常重审。 |
 | `lib/selected-full-stage-reanalysis.js` | Node 库：将明确选定论文从当前封存全文完整重生成，锁内归档旧阶段、费用与事实反馈；同轮续跑保留新费用，普通恢复不启用。 |
 | `lib/signed-reader-recovery-draft.js` | Node 库：将已核验签名长文恢复为可局部修改的文章数据，保留章节、术语及图表公式对应关系；不接受来源不明的正文。 |

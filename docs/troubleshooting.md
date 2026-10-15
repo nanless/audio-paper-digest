@@ -69,6 +69,8 @@ Reader 刷新可以用 `--rounds N`（1–10）覆写本次总轮数，未传时
 
 恢复命令报告日更来源缺失或变化时，不要改进度文件，也不要补入旧 `data/current` 文本。目标仍为北京时间当天时，重新运行同日 `npm run digest:prepare -- YYYY-MM-DD` 获取并保存来源；历史日期不能重新从抓取开始，应保留失败记录并按历史维护流程处理。
 
+若日更 Reader 已有完整签名却仍报告未完成，先核对原父包、子包与实际合并引文上下文，不能单用子包改签 `reviewFeedbackSha256`。只读完成核验不清除最新失败；旧父恢复缺真实主检查点或试图改变非 Reader 上游时须停止并保留原稿。若旧版本已删除阶段，只能用经来源和完整父稿 CAS 核验的真实快照恢复，再交回正常流程，详见[反馈恢复](reader-explicit-retry.md#已完成主文的独立-reader-事实反馈)。
+
 ## 6.1 历史来源获取或暂存页面失败
 
 先确认失败的是哪种来源。历史 arXiv 的当前这组已保存文件保存在 `data/runtime/fetched-arxiv-sources/<arxivId>/generation-XXXXXX/`，应包含文本、PDF、来源信息和清单；`generation` 是获取序号，不是论文的 `vN` 版本号。重新运行同一 `history:sources`，直到当前计划所选论文均已在对应获取序号下达到 `ready`，再运行 `history:run --apply`。
