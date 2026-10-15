@@ -175,6 +175,10 @@ test('无主文父包的核心纠错正常保存后跨作用域重放、完成�
     damaged.latestAnalysisAttemptErrorCode = 'DAILY_FACT_REVIEW_INTEGRITY';
     damaged.latestAnalysisAttemptError = scopeError;
     damaged.analysisFactReviewObligation = facts.proofFor(feedback);
+    const partialPayload = { analysisCheckpoint: original.analysis, analysisStageCheckpoints: {}, stages: {}, contracts: {} };
+    damaged.analysisStaleSnapshots = [{ contract: 'stale-analysis-snapshot-v1', invalidatedStage: 'coreSummaryRepair',
+        replacementFingerprint: facts.proofFor(feedback).feedbackSha256,
+        payload: partialPayload, payloadSha256: deep.stableFingerprint(partialPayload) }];
     const recovery = { originalFile, originalFileSha256: facts.sha(fs.readFileSync(originalFile)),
         paperSha256: deep.stableFingerprint(damaged) };
     await daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(damaged, () => {
@@ -215,6 +219,7 @@ test('无主文父包的核心纠错正常保存后跨作用域重放、完成�
         noFigures: true, sourceText: sample.source.text
     }).draft;
     let interruptCore = true;
+    let interruptReader = true;
     publicReaderRequestObserver = async (_url, _endpoint, _model, _body, _headers, options) => {
         const stage = options.usageContext.stage; requests.push(stage);
         assert.ok(['coreSummaryRepair', 'scoringAudit', 'apiReaderArticle'].includes(stage), stage);
@@ -232,6 +237,8 @@ test('无主文父包的核心纠错正常保存后跨作用域重放、完成�
             assert.equal(exterior(savedCore), exterior(original.analysis), '正常摘要阶段保存前逐字保护另外十二节');
             assert.equal(deep.extractSectionByTitle(savedCore, '核心摘要'), fixedSummary);
         }
+        if (stage === 'apiReaderArticle' && interruptReader)
+            return { statusCode: 401, body: { error: { message: '合成测试的Reader认证中断' } } };
         const output = stage === 'coreSummaryRepair' ? '## 核心摘要\n' + fixedSummary
             : stage === 'scoringAudit' ? JSON.stringify(audit)
                 : JSON.stringify(generatedReaderDraft);
@@ -267,7 +274,20 @@ test('无主文父包的核心纠错正常保存后跨作用域重放、完成�
     assert.deepEqual(JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[0], failed,
         '状态同步不能改写正式失败或清除其新事实义务');
     interruptCore = false;
+    await assert.rejects(selected.reanalyzeSelected([sample.id], { coreFeedbackFiles: [file] }),
+        { code: 'MODEL_HTTP_NON_RETRYABLE' });
+    const scored = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[0];
+    assert.equal(facts.sha(scored.analysisCheckpoint), scored.analysisManifest.stages.scoringAudit.outputAnalysisSha256);
+    assert.deepEqual(scored.analysisManifest.stages.coreSummaryRepair.factReview, facts.proofFor(feedback));
+    assert.ok(scored.analysisStaleSnapshots.some(snapshot => !snapshot.payload.stages.primaryAnalysis),
+        '真实旧不完整快照仍保留，不能伪补主阶段');
+    const coreRequestsBeforeReaderResume = requests.filter(stage => stage === 'coreSummaryRepair').length;
+    const scoringRequestsBeforeReaderResume = requests.filter(stage => stage === 'scoringAudit').length;
+    interruptReader = false;
     const outcome = await selected.reanalyzeSelected([sample.id], { coreFeedbackFiles: [file] });
+    assert.equal(requests.filter(stage => stage === 'coreSummaryRepair').length, coreRequestsBeforeReaderResume,
+        '真实新核心和评分已完成后，仅续Reader不重复核心费用');
+    assert.equal(requests.filter(stage => stage === 'scoringAudit').length, scoringRequestsBeforeReaderResume);
     assert.equal(outcome.exitCode, 0);
     assert.equal(outcome.success, 1);
     assert.ok(requests.includes('coreSummaryRepair'));

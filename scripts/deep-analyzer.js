@@ -10516,8 +10516,19 @@ function prepareCompletedCoreRecovery(paper, source) {
             ? [{ ...paper, analysis: payload.analysisCheckpoint,
                 analysisManifest: { ...paper.analysisManifest, stages: payload.stages, contracts: payload.contracts } }] : [];
     })];
-    const parent = facts.withOriginalCoreContext(paper, () => candidates.find(candidate => {
-        if (crypto.createHash('sha256').update(String(candidate.analysis || '')).digest('hex') !== expected
+    const checkpoint = typeof paper.analysisCheckpoint === 'string' ? paper.analysisCheckpoint : '';
+    const checkpointView = { ...paper, analysis: checkpoint, parsed: parseAnalysis(checkpoint) };
+    const checkpointCore = paper.analysisManifest?.stages?.coreSummaryRepair;
+    const checkpointScore = paper.analysisManifest?.stages?.scoringAudit;
+    // 核心和评分已正常完成、Reader尚未完成时，只复用真实新检查点，不倒退旧核心。
+    const completedCheckpoint = checkpoint && checkpointCore?.status === 'complete'
+        && stableFingerprint(checkpointCore.factReview || null) === stableFingerprint(active.coreBound.proof)
+        && crypto.createHash('sha256').update(checkpoint).digest('hex') === checkpointScore?.outputAnalysisSha256
+        && !legacyPromptRenderingNeedsReplay(checkpointView, source) && !legacyModelTextNeedsReplay(checkpointView, source)
+        && require('./lib/completed-reader-upstream').completedReaderUpstream(checkpointView, source);
+    const parent = completedCheckpoint ? checkpointView : facts.withOriginalCoreContext(paper, () => candidates.find(candidate => {
+        if (candidate.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete'
+            || crypto.createHash('sha256').update(String(candidate.analysis || '')).digest('hex') !== expected
             || stableFingerprint(candidate.analysisManifest?.stages?.primaryAnalysis)
                 !== stableFingerprint(paper.analysisManifest?.stages?.primaryAnalysis)
             || legacyPromptRenderingNeedsReplay(candidate, source) || legacyModelTextNeedsReplay(candidate, source)
