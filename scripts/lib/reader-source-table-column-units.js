@@ -1,5 +1,5 @@
 'use strict';
-// Bare numeric units may inherit only from a unique, literal, flat DOM column.
+// Bare numeric units require source-bound original DOM columns and unique paths.
 const savedScope = new (require('node:async_hooks').AsyncLocalStorage)();
 const { normalizeReaderSourceDisplayArtifacts: display } = require('./reader-source-display');
 const text = value => display(String(value ?? '')).normalize('NFKC').replace(/[*_`]/g,'').replace(/\s+/g,' ').trim();
@@ -13,6 +13,81 @@ const decimal = value => {
 function numericCell(value) {
     const match = /^([+-]?\d+(?:\.\d+)?)(?:±(\d+(?:\.\d+)?))?$/.exec(compact(value));
     return match ? [decimal(match[1]), ...(match[2] === undefined ? [] : [decimal(match[2])])] : null;
+}
+// This separate branch proves a merged DOM grid in full before selecting any
+// column. Caption units never apply without the literal metric/header path.
+function captionText(value) {
+    return text(value).replace(/\(ρ×(\d+(?:\.\d+)?)\\rho\\times\s*\1\)/g,
+        (_whole, number) => `(\\rho\\times ${number})`);
+}
+function mergedGrid(table) {
+    const matrix = table?.matrix, cells = table?.cells;
+    if (table?.recoveryStatus !== 'complete' || !Number.isSafeInteger(table.ordinal) || table.ordinal < 1
+        || !/^[a-f0-9]{64}$/.test(table.sourceDomSha256 || '') || !Array.isArray(matrix)
+        || matrix.length < 3 || matrix.length > 65 || !Array.isArray(matrix[0])
+        || matrix[0].length < 3 || matrix[0].length > 16 || !Array.isArray(cells) || cells.length > matrix.length * matrix[0].length
+        || matrix.some(row => !Array.isArray(row) || row.length !== matrix[0].length || row.some(v => typeof v !== 'string'))) return null;
+    const grid = matrix.map(row => row.map(() => null));
+    for (const cell of cells) {
+        if (!cell || !['row','column','rowspan','colspan'].every(key => Number.isSafeInteger(cell[key]))
+            || cell.row < 0 || cell.column < 0 || cell.rowspan < 1 || cell.colspan < 1
+            || cell.row + cell.rowspan > matrix.length || cell.column + cell.colspan > matrix[0].length
+            || typeof cell.text !== 'string' || !/^[a-f0-9]{64}$/.test(cell.sourceDomSha256 || '')) return null;
+        for (let r = cell.row; r < cell.row + cell.rowspan; r++) for (let c = cell.column; c < cell.column + cell.colspan; c++) {
+            if (grid[r][c] || matrix[r][c] !== cell.text) return null;
+            grid[r][c] = cell;
+        }
+    }
+    if (grid.some(row => row.some(cell => !cell))) return null;
+    const first = grid[0][0], height = first.rowspan;
+    if (first.row !== 0 || first.column !== 0 || first.colspan !== 1 || first.header !== true || text(first.text) !== 'Method'
+        || height < 2 || height > 4 || height >= grid.length) return null;
+    if (cells.some(cell => cell.row < height && cell.row + cell.rowspan > height)) return null;
+    const paths = matrix[0].map((_value, column) => [...new Set(grid.slice(0,height).map(row => row[column]))]);
+    return { grid, height, paths };
+}
+function mergedCaptionPercentCoverage(rendered, quotes, tables) {
+    const headers = rendered?.header || [], rows = rendered?.rows || [], result = [];
+    if (headers.length < 2 || !rows.length || rows.some(row => !Array.isArray(row) || row.length !== headers.length)) return result;
+    const quoteStrings = (quotes || []).filter(value => typeof value === 'string').map(captionText);
+    for (let column = 1; column < headers.length; column++) {
+        const match = /^(.+?)\s*\(%\)$/.exec(text(headers[column]).replace(/[↑↓]/g,''));
+        if (!match || headers.filter(value => compact(value) === compact(headers[column])).length !== 1) continue;
+        const wanted = compact(match[1]), candidates = [];
+        for (const table of tables || []) {
+            const expanded = mergedGrid(table), caption = captionText(table?.caption || '');
+            if (!expanded || caption.length < 24 || !quoteStrings.some(quote => quote.includes(caption))
+                || compact(headers[0]) !== compact(expanded.grid[0][0].text)) continue;
+            const declarations = [...caption.matchAll(/\(([A-Za-z][A-Za-z0-9 ._-]{0,63}?),\s*([^()]{1,16})\)/g)]
+                .map(value => ({ metric:compact(value[1].replace(/\.$/,'')), unit:value[2].trim() }));
+            for (let sourceColumn = 1; sourceColumn < expanded.paths.length; sourceColumn++) {
+                const path = expanded.paths[sourceColumn], leaf = path.at(-1);
+                if (path.length < 2 || leaf.row !== expanded.height - 1 || leaf.rowspan !== 1 || leaf.colspan !== 1
+                    || path.some(cell => !text(cell.text)) || path.map(cell => compact(cell.text)).join('') !== wanted) continue;
+                const metric = compact(leaf.text), declaration = declarations.filter(value => value.metric === metric);
+                if (declaration.length !== 1 || declaration[0].unit !== '%'
+                    || expanded.paths.filter(p => p.map(cell => compact(cell.text)).join('') === wanted).length !== 1) continue;
+                candidates.push({ table, expanded, sourceColumn, leaf, path });
+            }
+        }
+        if (candidates.length !== 1) continue;
+        const { table, expanded, sourceColumn, leaf, path } = candidates[0];
+        for (let row = 0; row < rows.length; row++) {
+            const rowName = text(rows[row][0]), values = numericCell(rows[row][column]);
+            if (!rowName || !values) continue;
+            const matches = expanded.grid.slice(expanded.height).map((cells,index) => ({cells,sourceRow:index+expanded.height}))
+                .filter(item => text(item.cells[0].text) === rowName);
+            if (matches.length !== 1) continue;
+            const {cells,sourceRow} = matches[0], label = cells[0], cell = cells[sourceColumn];
+            if ([label,cell].some(value => value.row !== sourceRow || value.rowspan !== 1 || value.colspan !== 1)
+                || cell.column !== sourceColumn || compact(cell.text) !== compact(rows[row][column])) continue;
+            for (const value of values) result.push({row:row+1,column,value,unit:'%',sourceTableOrdinal:table.ordinal,
+                sourceRow,sourceColumn,rowName,sourceTableDomSha256:table.sourceDomSha256,
+                headerCellDomSha256:leaf.sourceDomSha256,headerPathCellDomSha256:path.map(value => value.sourceDomSha256),
+                sourceCellDomSha256:cell.sourceDomSha256});
+        }
+    }
+    return result;
 }
 function coverageFromTables(rendered, quotes, tables) {
     const quoteStrings = (quotes || []).filter(item => typeof item === 'string').map(text);
@@ -50,7 +125,7 @@ function coverageFromTables(rendered, quotes, tables) {
                 headerCellDomSha256:headerCell[0].sourceDomSha256,sourceCellDomSha256:cells.find(cell=>cell.column===column).sourceDomSha256});
         }
     }
-    return result;
+    return [...result, ...mergedCaptionPercentCoverage(rendered, quotes, tables)];
 }
 function coverage(rendered, quotes) {
     const context = savedScope.getStore() || require('./reader-sealed-pdf-quote-evidence').verifiedSourceContext();

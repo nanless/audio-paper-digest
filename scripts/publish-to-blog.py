@@ -7015,8 +7015,113 @@ def _verify_reader_sealed_pdf_quote_bindings(paper):
     return result
 
 
+def _reader_merged_caption_unit_coverage(rendered, quotes, tables):
+    """Only a complete original merged DOM grid and exact caption metric path."""
+    import unicodedata
+    def text(value):
+        value = unicodedata.normalize('NFKC', _normalize_api_reader_source_cell(str(value or '')))
+        return re.sub(r'\s+', ' ', re.sub(r'[*_`]', '', value)).strip()
+    def compact(value):
+        return re.sub(r'\s+', '', text(value))
+    def caption_text(value):
+        return re.sub(r'\(ρ×(\d+(?:\.\d+)?)\\rho\\times\s*\1\)', lambda m: '(\\rho\\times ' + m[1] + ')', text(value))
+    def numbers(value):
+        match = re.fullmatch(r'([+-]?\d+(?:\.\d+)?)(?:±(\d+(?:\.\d+)?))?', compact(value))
+        if not match:
+            return None
+        result = []
+        for part in match.groups():
+            if part is None:
+                continue
+            integer, _, fraction = part.lstrip('+').partition('.')
+            negative = integer.startswith('-')
+            integer, fraction = integer.lstrip('-').lstrip('0') or '0', fraction.rstrip('0')
+            result.append(('-' if negative and (integer != '0' or fraction) else '') + integer + ('.' + fraction if fraction else ''))
+        return result
+    def expanded_grid(table):
+        matrix, cells = table.get('matrix'), table.get('cells')
+        if (table.get('recoveryStatus') != 'complete' or type(table.get('ordinal')) is not int or table['ordinal'] < 1
+                or not re.fullmatch(r'[a-f0-9]{64}', table.get('sourceDomSha256', ''))
+                or not isinstance(matrix, list) or not 3 <= len(matrix) <= 65 or not isinstance(matrix[0], list)
+                or not 3 <= len(matrix[0]) <= 16 or not isinstance(cells, list) or len(cells) > len(matrix) * len(matrix[0])
+                or any(not isinstance(row, list) or len(row) != len(matrix[0]) or any(not isinstance(v, str) for v in row) for row in matrix)):
+            return None
+        grid = [[None] * len(matrix[0]) for _ in matrix]
+        for cell in cells:
+            if (not isinstance(cell, dict) or any(type(cell.get(key)) is not int for key in ['row', 'column', 'rowspan', 'colspan'])
+                    or cell['row'] < 0 or cell['column'] < 0 or cell['rowspan'] < 1 or cell['colspan'] < 1
+                    or cell['row'] + cell['rowspan'] > len(matrix) or cell['column'] + cell['colspan'] > len(matrix[0])
+                    or not isinstance(cell.get('text'), str) or not re.fullmatch(r'[a-f0-9]{64}', cell.get('sourceDomSha256', ''))):
+                return None
+            for r in range(cell['row'], cell['row'] + cell['rowspan']):
+                for c in range(cell['column'], cell['column'] + cell['colspan']):
+                    if grid[r][c] is not None or matrix[r][c] != cell['text']:
+                        return None
+                    grid[r][c] = cell
+        if any(cell is None for row in grid for cell in row):
+            return None
+        first = grid[0][0]
+        height = first['rowspan']
+        if (first['row'] != 0 or first['column'] != 0 or first['colspan'] != 1 or first.get('header') is not True or text(first['text']) != 'Method'
+                or not 2 <= height <= 4 or height >= len(grid)
+                or any(cell['row'] < height < cell['row'] + cell['rowspan'] for cell in cells)):
+            return None
+        paths = []
+        for column in range(len(matrix[0])):
+            path = []
+            for row in grid[:height]:
+                if all(cell is not row[column] for cell in path):
+                    path.append(row[column])
+            paths.append(path)
+        return grid, height, paths
+    headers, rows = rendered.get('header', []), rendered.get('rows', [])
+    if len(headers) < 2 or not rows or any(not isinstance(row, list) or len(row) != len(headers) for row in rows):
+        return set()
+    quote_strings = [caption_text(quote) for quote in quotes if isinstance(quote, str)]
+    result = set()
+    for column in range(1, len(headers)):
+        match = re.fullmatch(r'(.+?)\s*\(%\)', re.sub('[↑↓]', '', text(headers[column])))
+        if not match or sum(compact(value) == compact(headers[column]) for value in headers) != 1:
+            continue
+        wanted, candidates = compact(match[1]), []
+        for table in tables:
+            expanded, caption = expanded_grid(table), caption_text(table.get('caption', ''))
+            if (not expanded or len(caption) < 24 or not any(caption in quote for quote in quote_strings)
+                    or compact(headers[0]) != compact(expanded[0][0][0]['text'])):
+                continue
+            grid, height, paths = expanded
+            declarations = [(compact(m[1].removesuffix('.')), m[2].strip())
+                for m in re.finditer(r'\(([A-Za-z][A-Za-z0-9 ._-]{0,63}?),\s*([^()]{1,16})\)', caption)]
+            for source_column, path in enumerate(paths[1:], 1):
+                leaf = path[-1]
+                if (len(path) < 2 or leaf['row'] != height - 1 or leaf['rowspan'] != 1 or leaf['colspan'] != 1
+                        or any(not text(cell['text']) for cell in path) or ''.join(compact(cell['text']) for cell in path) != wanted):
+                    continue
+                declaration = [unit for metric, unit in declarations if metric == compact(leaf['text'])]
+                if declaration != ['%'] or sum(''.join(compact(cell['text']) for cell in p) == wanted for p in paths) != 1:
+                    continue
+                candidates.append((table, grid, height, source_column))
+        if len(candidates) != 1:
+            continue
+        table, grid, height, source_column = candidates[0]
+        for row, values in enumerate(rows):
+            row_name, rendered_values = text(values[0]), numbers(values[column])
+            if not row_name or not rendered_values:
+                continue
+            matches = [(r, cells) for r, cells in enumerate(grid[height:], height) if text(cells[0]['text']) == row_name]
+            if len(matches) != 1:
+                continue
+            source_row, cells = matches[0]
+            label, cell = cells[0], cells[source_column]
+            if (any(item['row'] != source_row or item['rowspan'] != 1 or item['colspan'] != 1 for item in [label, cell])
+                    or cell['column'] != source_column or compact(cell['text']) != compact(values[column])):
+                continue
+            result.update((row + 1, column, value, '%') for value in rendered_values)
+    return result
+
+
 def _reader_dom_table_unit_coverage(rendered, quotes, tables):
-    """One literal flat DOM column, exact row identity, exact scalar or mean±SD."""
+    """Original DOM columns, exact rows and values, plus bounded merged paths."""
     def text(value):
         return re.sub(r'\s+', ' ', re.sub(r'[*_`]', '', _normalize_api_reader_source_cell(str(value or '')))).strip()
     def compact(value):
@@ -7073,7 +7178,7 @@ def _reader_dom_table_unit_coverage(rendered, quotes, tables):
             if len(cells) != 2 or any(compact(cell['text']) != compact(source_values[cell['column']]) for cell in cells):
                 continue
             result.update((row + 1, column, value, '%') for value in rendered_values)
-    return result
+    return result | _reader_merged_caption_unit_coverage(rendered, quotes, tables)
 
 
 def _reader_dom_column_unit_coverage(paper, rendered, binding):

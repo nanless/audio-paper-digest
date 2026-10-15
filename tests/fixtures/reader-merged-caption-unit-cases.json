@@ -1,0 +1,875 @@
+{
+  "base": {
+    "table": {
+      "header": [
+        "Method",
+        "Speech Pair Acc (%)",
+        "Ambient Pair Acc (%)"
+      ],
+      "rows": [
+        [
+          "Alpha",
+          "51.8",
+          "55.9"
+        ],
+        [
+          "Beta",
+          "85.1",
+          "85.9"
+        ]
+      ]
+    },
+    "quotes": [
+      "Table 1: Literal merged held-out metrics. We report correlation (ρ×100\\rho\\times 100) and pairwise ranking accuracy (Pair Acc., %) for Speech and Ambient."
+    ],
+    "tables": [
+      {
+        "ordinal": 1,
+        "recoveryStatus": "complete",
+        "caption": "Table 1: Literal merged held-out metrics. We report correlation (\\rho\\times 100) and pairwise ranking accuracy (Pair Acc., %) for Speech and Ambient.",
+        "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "matrix": [
+          [
+            "Method",
+            "Speech",
+            "Speech",
+            "Ambient",
+            "Ambient"
+          ],
+          [
+            "Method",
+            "Spearman",
+            "Pair Acc",
+            "Spearman",
+            "Pair Acc"
+          ],
+          [
+            "Alpha",
+            "1.0",
+            "51.8",
+            "2.0",
+            "55.9"
+          ],
+          [
+            "Beta",
+            "3.0",
+            "85.1",
+            "4.0",
+            "85.9"
+          ]
+        ],
+        "cells": [
+          {
+            "row": 0,
+            "column": 0,
+            "rowspan": 2,
+            "colspan": 1,
+            "header": true,
+            "text": "Method",
+            "sourceDomSha256": "ac72368a586a18c19088393573ce03074b8e8a4d8c21add8729af1890a407e52"
+          },
+          {
+            "row": 0,
+            "column": 1,
+            "rowspan": 1,
+            "colspan": 2,
+            "header": false,
+            "text": "Speech",
+            "sourceDomSha256": "ef134f2a180ba05de91ab32d2976f51de13b68d823ea784171b1b0dafee67be4"
+          },
+          {
+            "row": 0,
+            "column": 3,
+            "rowspan": 1,
+            "colspan": 2,
+            "header": false,
+            "text": "Ambient",
+            "sourceDomSha256": "76d3c2eeff0f7e9320cd69f952486c44d7cb4ec9903e2df44a772a3be0fb3b45"
+          },
+          {
+            "row": 1,
+            "column": 1,
+            "rowspan": 1,
+            "colspan": 1,
+            "header": false,
+            "text": "Spearman",
+            "sourceDomSha256": "d6b5915c46057bcb005f46f6433df65609dd3a7a57af75ac1a5a4a7c299ebffb"
+          },
+          {
+            "row": 1,
+            "column": 2,
+            "rowspan": 1,
+            "colspan": 1,
+            "header": false,
+            "text": "Pair Acc",
+            "sourceDomSha256": "673aeeb08cfbb00b91e5e3c60b5ba31896d55b522b1be2dccb0645a59bae8775"
+          },
+          {
+            "row": 1,
+            "column": 3,
+            "rowspan": 1,
+            "colspan": 1,
+            "header": false,
+            "text": "Spearman",
+            "sourceDomSha256": "85f2ef987b76f4c3fc081acef84e0a730f5df8a2488a5bb7ddae4f7dee721ed8"
+          },
+          {
+            "row": 1,
+            "column": 4,
+            "rowspan": 1,
+            "colspan": 1,
+            "header": false,
+            "text": "Pair Acc",
+            "sourceDomSha256": "492ab00bbe71db09cc80c473346ab2119a8573638cf8c433e3d91a1a450522fc"
+          },
+          {
+            "row": 2,
+            "column": 0,
+            "rowspan": 1,
+            "colspan": 1,
+            "header": false,
+            "text": "Alpha",
+            "sourceDomSha256": "e6b190f6cd6fa4b87b2a657937257a5712116f79f8a07baeeb24c25bba8aef81"
+          },
+          {
+            "row": 2,
+            "column": 1,
+            "rowspan": 1,
+            "colspan": 1,
+            "header": false,
+            "text": "1.0",
+            "sourceDomSha256": "70a37d8f972f2494837f9dba8364cbb418b203558cbe0166f69ae925bb544f2d"
+          },
+          {
+            "row": 2,
+            "column": 2,
+            "rowspan": 1,
+            "colspan": 1,
+            "header": false,
+            "text": "51.8",
+            "sourceDomSha256": "13113e084fdad32897173cbbfd37d75b63dace3524fe974909286fae455dad30"
+          },
+          {
+            "row": 2,
+            "column": 3,
+            "rowspan": 1,
+            "colspan": 1,
+            "header": false,
+            "text": "2.0",
+            "sourceDomSha256": "8e0375adfc1f456327247b91b11520cf9c2616e04503a43a71873485a07a6542"
+          },
+          {
+            "row": 2,
+            "column": 4,
+            "rowspan": 1,
+            "colspan": 1,
+            "header": false,
+            "text": "55.9",
+            "sourceDomSha256": "fa70b304f0b46892fd67eb02f862d07a6ce74b35b57584e2f0688d08f897bceb"
+          },
+          {
+            "row": 3,
+            "column": 0,
+            "rowspan": 1,
+            "colspan": 1,
+            "header": false,
+            "text": "Beta",
+            "sourceDomSha256": "eab817087de37b4d5920b194489c5b7f9a0b4d44e9519c08d1aaab7ed53a5b69"
+          },
+          {
+            "row": 3,
+            "column": 1,
+            "rowspan": 1,
+            "colspan": 1,
+            "header": false,
+            "text": "3.0",
+            "sourceDomSha256": "59a5a0c7c39734d9c3359438fe114555c618f012aea84f3e4933246f7795575d"
+          },
+          {
+            "row": 3,
+            "column": 2,
+            "rowspan": 1,
+            "colspan": 1,
+            "header": false,
+            "text": "85.1",
+            "sourceDomSha256": "749ce3286f349c682572e2edf21c2ad589232dfb50db31f3c07144fc5f338a86"
+          },
+          {
+            "row": 3,
+            "column": 3,
+            "rowspan": 1,
+            "colspan": 1,
+            "header": false,
+            "text": "4.0",
+            "sourceDomSha256": "bb352f840be2060216924d6f1f04994eb50075c2f98ec9b0be85e780089aa53a"
+          },
+          {
+            "row": 3,
+            "column": 4,
+            "rowspan": 1,
+            "colspan": 1,
+            "header": false,
+            "text": "85.9",
+            "sourceDomSha256": "3adf4e63cc74037434c465d9c496622f3ce0032a18a0fa328857858c33933dbb"
+          }
+        ]
+      }
+    ]
+  },
+  "cases": [
+    {
+      "name": "complete merged grid inherits only explicit caption metric and category",
+      "operations": [],
+      "expected": [
+        [
+          1,
+          1,
+          "51.8",
+          "%"
+        ],
+        [
+          2,
+          1,
+          "85.1",
+          "%"
+        ],
+        [
+          1,
+          2,
+          "55.9",
+          "%"
+        ],
+        [
+          2,
+          2,
+          "85.9",
+          "%"
+        ]
+      ]
+    },
+    {
+      "name": "literal nonduplicated full caption also valid",
+      "operations": [
+        {
+          "path": "/quotes/0",
+          "value": "Table 1: Literal merged held-out metrics. We report correlation (\\rho\\times 100) and pairwise ranking accuracy (Pair Acc., %) for Speech and Ambient."
+        }
+      ],
+      "expected": [
+        [
+          1,
+          1,
+          "51.8",
+          "%"
+        ],
+        [
+          2,
+          1,
+          "85.1",
+          "%"
+        ],
+        [
+          1,
+          2,
+          "55.9",
+          "%"
+        ],
+        [
+          2,
+          2,
+          "85.9",
+          "%"
+        ]
+      ]
+    },
+    {
+      "name": "missing full caption",
+      "operations": [
+        {
+          "path": "/quotes/0",
+          "value": "Table 1: Literal merged held-out metrics."
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "fabricated same-unit quote cannot replace actual caption",
+      "operations": [
+        {
+          "path": "/quotes/0",
+          "value": "Table 1: This invented test says Pair Acc., % and same numbers."
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "source caption word changed while original quote kept",
+      "operations": [
+        {
+          "path": "/tables/0/caption",
+          "value": "Table 1: Literal merged training metrics. We report correlation (\\rho\\times 100) and pairwise ranking accuracy (Pair Acc., %) for Speech and Ambient."
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "wrong rendered unit",
+      "operations": [
+        {
+          "path": "/table/header/1",
+          "value": "Speech Pair Acc (ms)"
+        }
+      ],
+      "expected": [
+        [
+          1,
+          2,
+          "55.9",
+          "%"
+        ],
+        [
+          2,
+          2,
+          "85.9",
+          "%"
+        ]
+      ]
+    },
+    {
+      "name": "wrong category cannot borrow equal-looking metric column",
+      "operations": [
+        {
+          "path": "/table/rows/0/1",
+          "value": "55.9"
+        }
+      ],
+      "expected": [
+        [
+          2,
+          1,
+          "85.1",
+          "%"
+        ],
+        [
+          1,
+          2,
+          "55.9",
+          "%"
+        ],
+        [
+          2,
+          2,
+          "85.9",
+          "%"
+        ]
+      ]
+    },
+    {
+      "name": "wrong leaf metric cannot borrow Pair Acc percent",
+      "operations": [
+        {
+          "path": "/table/header/1",
+          "value": "Speech Spearman (%)"
+        }
+      ],
+      "expected": [
+        [
+          1,
+          2,
+          "55.9",
+          "%"
+        ],
+        [
+          2,
+          2,
+          "85.9",
+          "%"
+        ]
+      ]
+    },
+    {
+      "name": "abbreviated row identity is rejected",
+      "operations": [
+        {
+          "path": "/table/rows/0/0",
+          "value": "Alph"
+        }
+      ],
+      "expected": [
+        [
+          2,
+          1,
+          "85.1",
+          "%"
+        ],
+        [
+          2,
+          2,
+          "85.9",
+          "%"
+        ]
+      ]
+    },
+    {
+      "name": "source numeric precision cannot be silently changed",
+      "operations": [
+        {
+          "path": "/table/rows/0/1",
+          "value": "51.80"
+        }
+      ],
+      "expected": [
+        [
+          2,
+          1,
+          "85.1",
+          "%"
+        ],
+        [
+          1,
+          2,
+          "55.9",
+          "%"
+        ],
+        [
+          2,
+          2,
+          "85.9",
+          "%"
+        ]
+      ]
+    },
+    {
+      "name": "duplicate table provenance remains ambiguous",
+      "operations": [
+        {
+          "path": "/tables/1",
+          "value": {
+            "ordinal": 1,
+            "recoveryStatus": "complete",
+            "caption": "Table 1: Literal merged held-out metrics. We report correlation (\\rho\\times 100) and pairwise ranking accuracy (Pair Acc., %) for Speech and Ambient.",
+            "sourceDomSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "matrix": [
+              [
+                "Method",
+                "Speech",
+                "Speech",
+                "Ambient",
+                "Ambient"
+              ],
+              [
+                "Method",
+                "Spearman",
+                "Pair Acc",
+                "Spearman",
+                "Pair Acc"
+              ],
+              [
+                "Alpha",
+                "1.0",
+                "51.8",
+                "2.0",
+                "55.9"
+              ],
+              [
+                "Beta",
+                "3.0",
+                "85.1",
+                "4.0",
+                "85.9"
+              ]
+            ],
+            "cells": [
+              {
+                "row": 0,
+                "column": 0,
+                "rowspan": 2,
+                "colspan": 1,
+                "header": true,
+                "text": "Method",
+                "sourceDomSha256": "ac72368a586a18c19088393573ce03074b8e8a4d8c21add8729af1890a407e52"
+              },
+              {
+                "row": 0,
+                "column": 1,
+                "rowspan": 1,
+                "colspan": 2,
+                "header": false,
+                "text": "Speech",
+                "sourceDomSha256": "ef134f2a180ba05de91ab32d2976f51de13b68d823ea784171b1b0dafee67be4"
+              },
+              {
+                "row": 0,
+                "column": 3,
+                "rowspan": 1,
+                "colspan": 2,
+                "header": false,
+                "text": "Ambient",
+                "sourceDomSha256": "76d3c2eeff0f7e9320cd69f952486c44d7cb4ec9903e2df44a772a3be0fb3b45"
+              },
+              {
+                "row": 1,
+                "column": 1,
+                "rowspan": 1,
+                "colspan": 1,
+                "header": false,
+                "text": "Spearman",
+                "sourceDomSha256": "d6b5915c46057bcb005f46f6433df65609dd3a7a57af75ac1a5a4a7c299ebffb"
+              },
+              {
+                "row": 1,
+                "column": 2,
+                "rowspan": 1,
+                "colspan": 1,
+                "header": false,
+                "text": "Pair Acc",
+                "sourceDomSha256": "673aeeb08cfbb00b91e5e3c60b5ba31896d55b522b1be2dccb0645a59bae8775"
+              },
+              {
+                "row": 1,
+                "column": 3,
+                "rowspan": 1,
+                "colspan": 1,
+                "header": false,
+                "text": "Spearman",
+                "sourceDomSha256": "85f2ef987b76f4c3fc081acef84e0a730f5df8a2488a5bb7ddae4f7dee721ed8"
+              },
+              {
+                "row": 1,
+                "column": 4,
+                "rowspan": 1,
+                "colspan": 1,
+                "header": false,
+                "text": "Pair Acc",
+                "sourceDomSha256": "492ab00bbe71db09cc80c473346ab2119a8573638cf8c433e3d91a1a450522fc"
+              },
+              {
+                "row": 2,
+                "column": 0,
+                "rowspan": 1,
+                "colspan": 1,
+                "header": false,
+                "text": "Alpha",
+                "sourceDomSha256": "e6b190f6cd6fa4b87b2a657937257a5712116f79f8a07baeeb24c25bba8aef81"
+              },
+              {
+                "row": 2,
+                "column": 1,
+                "rowspan": 1,
+                "colspan": 1,
+                "header": false,
+                "text": "1.0",
+                "sourceDomSha256": "70a37d8f972f2494837f9dba8364cbb418b203558cbe0166f69ae925bb544f2d"
+              },
+              {
+                "row": 2,
+                "column": 2,
+                "rowspan": 1,
+                "colspan": 1,
+                "header": false,
+                "text": "51.8",
+                "sourceDomSha256": "13113e084fdad32897173cbbfd37d75b63dace3524fe974909286fae455dad30"
+              },
+              {
+                "row": 2,
+                "column": 3,
+                "rowspan": 1,
+                "colspan": 1,
+                "header": false,
+                "text": "2.0",
+                "sourceDomSha256": "8e0375adfc1f456327247b91b11520cf9c2616e04503a43a71873485a07a6542"
+              },
+              {
+                "row": 2,
+                "column": 4,
+                "rowspan": 1,
+                "colspan": 1,
+                "header": false,
+                "text": "55.9",
+                "sourceDomSha256": "fa70b304f0b46892fd67eb02f862d07a6ce74b35b57584e2f0688d08f897bceb"
+              },
+              {
+                "row": 3,
+                "column": 0,
+                "rowspan": 1,
+                "colspan": 1,
+                "header": false,
+                "text": "Beta",
+                "sourceDomSha256": "eab817087de37b4d5920b194489c5b7f9a0b4d44e9519c08d1aaab7ed53a5b69"
+              },
+              {
+                "row": 3,
+                "column": 1,
+                "rowspan": 1,
+                "colspan": 1,
+                "header": false,
+                "text": "3.0",
+                "sourceDomSha256": "59a5a0c7c39734d9c3359438fe114555c618f012aea84f3e4933246f7795575d"
+              },
+              {
+                "row": 3,
+                "column": 2,
+                "rowspan": 1,
+                "colspan": 1,
+                "header": false,
+                "text": "85.1",
+                "sourceDomSha256": "749ce3286f349c682572e2edf21c2ad589232dfb50db31f3c07144fc5f338a86"
+              },
+              {
+                "row": 3,
+                "column": 3,
+                "rowspan": 1,
+                "colspan": 1,
+                "header": false,
+                "text": "4.0",
+                "sourceDomSha256": "bb352f840be2060216924d6f1f04994eb50075c2f98ec9b0be85e780089aa53a"
+              },
+              {
+                "row": 3,
+                "column": 4,
+                "rowspan": 1,
+                "colspan": 1,
+                "header": false,
+                "text": "85.9",
+                "sourceDomSha256": "3adf4e63cc74037434c465d9c496622f3ce0032a18a0fa328857858c33933dbb"
+              }
+            ]
+          }
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "matrix and DOM cell disagree",
+      "operations": [
+        {
+          "path": "/tables/0/cells/8/text",
+          "value": "51.9"
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "overlapping original cells fail closed",
+      "operations": [
+        {
+          "path": "/tables/0/cells/17",
+          "value": {
+            "row": 3,
+            "column": 4,
+            "rowspan": 1,
+            "colspan": 1,
+            "header": false,
+            "text": "85.9",
+            "sourceDomSha256": "3adf4e63cc74037434c465d9c496622f3ce0032a18a0fa328857858c33933dbb"
+          }
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "missing original cell fails full-grid completeness",
+      "operations": [
+        {
+          "path": "/tables/0/cells/16",
+          "remove": true
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "overlapping colspan fails",
+      "operations": [
+        {
+          "path": "/tables/0/cells/1/colspan",
+          "value": 3
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "header cell spans into body fails",
+      "operations": [
+        {
+          "path": "/tables/0/cells/3/rowspan",
+          "value": 2
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "Method header height outside bound fails",
+      "operations": [
+        {
+          "path": "/tables/0/cells/0/rowspan",
+          "value": 1
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "Method must be real original header cell",
+      "operations": [
+        {
+          "path": "/tables/0/cells/0/header",
+          "value": false
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "invalid source DOM identity fails",
+      "operations": [
+        {
+          "path": "/tables/0/sourceDomSha256",
+          "value": "forged"
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "invalid original cell identity fails",
+      "operations": [
+        {
+          "path": "/tables/0/cells/5/sourceDomSha256",
+          "value": "forged"
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "duplicate full header paths cannot select one by values",
+      "operations": [
+        {
+          "path": "/tables/0/cells/2/text",
+          "value": "Speech"
+        },
+        {
+          "path": "/tables/0/matrix/0/3",
+          "value": "Speech"
+        },
+        {
+          "path": "/tables/0/matrix/0/4",
+          "value": "Speech"
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "duplicate original row names remain ambiguous",
+      "operations": [
+        {
+          "path": "/tables/0/cells/12/text",
+          "value": "Alpha"
+        },
+        {
+          "path": "/tables/0/matrix/3/0",
+          "value": "Alpha"
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "conflicting metric-unit declarations fail",
+      "operations": [
+        {
+          "path": "/tables/0/caption",
+          "value": "Table 1: Literal merged held-out metrics. We report correlation (\\rho\\times 100) and pairwise ranking accuracy (Pair Acc., %) for Speech and Ambient. Extra (Pair Acc., dB)."
+        },
+        {
+          "path": "/quotes/0",
+          "value": "Table 1: Literal merged held-out metrics. We report correlation (\\rho\\times 100) and pairwise ranking accuracy (Pair Acc., %) for Speech and Ambient. Extra (Pair Acc., dB)."
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "math duplicate rejects different numeric value",
+      "operations": [
+        {
+          "path": "/quotes/0",
+          "value": "Table 1: Literal merged held-out metrics. We report correlation (ρ×200\\rho\\times 100) and pairwise ranking accuracy (Pair Acc., %) for Speech and Ambient."
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "math duplicate rejects different numeric precision",
+      "operations": [
+        {
+          "path": "/quotes/0",
+          "value": "Table 1: Literal merged held-out metrics. We report correlation (ρ×100.0\\rho\\times 100) and pairwise ranking accuracy (Pair Acc., %) for Speech and Ambient."
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "math duplicate rejects numeric prefix only",
+      "operations": [
+        {
+          "path": "/quotes/0",
+          "value": "Table 1: Literal merged held-out metrics. We report correlation (ρ×1000\\rho\\times 100) and pairwise ranking accuracy (Pair Acc., %) for Speech and Ambient."
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "math duplicate rejects extra math operation",
+      "operations": [
+        {
+          "path": "/quotes/0",
+          "value": "Table 1: Literal merged held-out metrics. We report correlation (ρ×100\\rho\\times 100+1) and pairwise ranking accuracy (Pair Acc., %) for Speech and Ambient."
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "out-of-bounds source coordinate fails",
+      "operations": [
+        {
+          "path": "/tables/0/cells/4/column",
+          "value": 5
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "missing whole row is not a complete source grid",
+      "operations": [
+        {
+          "path": "/tables/0/matrix/4",
+          "value": [
+            "Extra",
+            "Extra",
+            "Extra",
+            "Extra",
+            "Extra"
+          ]
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "Method anchor cannot be replaced by an arbitrary spanning label",
+      "operations": [
+        {
+          "path": "/table/header/0",
+          "value": "System"
+        },
+        {
+          "path": "/tables/0/cells/0/text",
+          "value": "System"
+        },
+        {
+          "path": "/tables/0/matrix/0/0",
+          "value": "System"
+        },
+        {
+          "path": "/tables/0/matrix/1/0",
+          "value": "System"
+        }
+      ],
+      "expected": []
+    }
+  ]
+}
