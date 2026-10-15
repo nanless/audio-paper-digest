@@ -45,6 +45,193 @@ def norm(value):
     return re.sub(r'\s+', ' ', value).strip()
 
 
+def _declarations(element):
+    return {(key.strip() if key.strip().startswith('--') else key.strip().lower()): value.strip()
+            for part in element.get('style', '').split(';')
+            if ':' in part for key, value in [part.split(':', 1)]}
+
+
+def _hex_color(value):
+    value = value.strip().lower()
+    if value in {'black', 'white'}:
+        value = '#000000' if value == 'black' else '#ffffff'
+    if re.fullmatch(r'#[0-9a-f]{3}', value):
+        value = '#' + ''.join(c * 2 for c in value[1:])
+    return value if re.fullmatch(r'#[0-9a-f]{6}', value) else None
+
+
+def _inherited_property(node, parents, key):
+    while node is not None:
+        values = _declarations(node)
+        if key in values:
+            return values[key].strip(), node
+        if key == 'color' and node.get('color'):
+            return node.get('color'), node
+        node = parents.get(node)
+    return None, None
+
+
+def _rounded_rectangle_core(element):
+    """Recognize one closed axis-aligned cubic rounded rectangle, not a bbox guess."""
+    if element.tag.split('}')[-1] != 'g' or element.get('transform') or len(element) != 1:
+        return None
+    shape = element[0]
+    if shape.tag.split('}')[-1] != 'path' or shape.get('transform') \
+            or _declarations(shape).get('stroke') != 'none':
+        return None
+    data = shape.get('d', '')
+    tokens = re.findall(r'[A-Za-z]|[+-]?(?:\d+(?:\.\d*)?|\.\d+)', data)
+    if ''.join(tokens) != re.sub(r'[\s,]+', '', data):
+        return None
+    commands, offset = [], 0
+    for command, count in [('M', 2), ('L', 2), ('C', 6), ('L', 2), ('C', 6),
+                           ('L', 2), ('C', 6), ('L', 2), ('C', 6), ('Z', 0), ('M', 2)]:
+        if offset >= len(tokens) or tokens[offset] != command:
+            return None
+        try:
+            values = list(map(float, tokens[offset + 1:offset + count + 1]))
+        except ValueError:
+            return None
+        if len(values) != count or not all(math.isfinite(v) for v in values):
+            return None
+        commands.append(values)
+        offset += count + 1
+    if offset != len(tokens):
+        return None
+    p0, p1, c1, p2, c2, p3, c3, p4, c4, _, final = commands
+    left, right, bottom, top = p2[0], p4[0], p3[1], p0[1]
+    if not (left < p1[0] < p0[0] < right and bottom < p2[1] < c1[5] < top
+            and p1[1] == top and c1[4] == left and c2[4:] == [p1[0], bottom]
+            and p3[0] == p0[0] and c3[4:] == [right, p2[1]]
+            and p4[1] == c1[5] and c4[4:] == p0 and final == [left, bottom]):
+        return None
+    # Monotone control points stay in their own corner. The two central strips
+    # are wholly inside the actual path, even though its outer bbox is larger.
+    if not (left <= c1[0] <= p1[0] and c1[1] == top and c1[2] == left
+            and c1[5] <= c1[3] <= top
+            and c2[0] == left and bottom <= c2[1] <= p2[1]
+            and left <= c2[2] <= p1[0] and c2[3] == bottom
+            and p0[0] <= c3[0] <= right and c3[1] == bottom
+            and c3[2] == right and bottom <= c3[3] <= p2[1]
+            and c4[0] == right and p4[1] <= c4[1] <= top
+            and p0[0] <= c4[2] <= right and c4[3] == top):
+        return None
+    paint = _hex_color(_declarations(shape).get('fill', shape.get('fill',
+                       _declarations(element).get('fill', element.get('fill', '')))))
+    return (left, bottom, right, top, p1[0], p0[0], p2[1], p4[1], paint)
+
+
+def _white_on_dark_css_failure(root):
+    """Prove unreadable black-on-dark badges without supplying missing CSS."""
+    parents = {child: parent for parent in root.iter() for child in parent}
+    witnesses = []
+    number = r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)'
+    for node in root.iter():
+        if node.tag.split('}')[-1] != 'span' or not (node.text or '').strip() \
+                or _hex_color(_declarations(node).get('--ltx-fg-color', '')) != '#ffffff':
+            continue
+        color, owner = _inherited_property(node, parents, 'color')
+        if color is None:
+            effective = '#000000'  # Exact initial HTML foreground in the isolated renderer.
+        elif re.fullmatch(r'var\(\s*--ltx-fg-color\s*\)', color):
+            value, _ = _inherited_property(owner, parents, '--ltx-fg-color')
+            effective = _hex_color(value or '')
+        else:
+            effective = _hex_color(color)
+        if effective != '#000000':
+            continue
+        ancestors, cursor = [], node
+        while cursor is not None:
+            ancestors.append(cursor)
+            cursor = parents.get(cursor)
+        if any(_declarations(a).get('display', '').lower() == 'none'
+               or _declarations(a).get('visibility', '').lower() in {'hidden', 'collapse'} for a in ancestors):
+            continue
+        foreign = next((a for a in ancestors if a.tag.split('}')[-1] == 'foreignObject'), None)
+        wrapper = parents.get(foreign)
+        if foreign is None or wrapper is None or wrapper.tag.split('}')[-1] != 'g' \
+                or len(wrapper) != 1:
+            continue
+        # No unaccounted transformations between the text and this shared plane.
+        if any(a.get('transform') for a in ancestors[:ancestors.index(foreign)]):
+            continue
+        translate = re.fullmatch(r'matrix\(1(?:\.0)? 0(?:\.0)? 0(?:\.0)? 1(?:\.0)? ('
+                                 + number + r') (' + number + r')\)', wrapper.get('transform', ''))
+        flip = re.fullmatch(r'matrix\(1 0 0 -1 0 (' + number + r')\)', foreign.get('transform', ''))
+        if not translate or not flip or foreign.get('x', '0') != '0' or foreign.get('y', '0') != '0':
+            continue
+        try:
+            width, height = float(foreign.get('width', '')), float(foreign.get('height', ''))
+        except ValueError:
+            continue
+        if not all(math.isfinite(v) and v > 0 for v in (width, height)):
+            continue
+        x, y, offset = float(translate[1]), float(translate[2]), float(flip[1])
+        box = [x, y + offset - height, x + width, y + offset]
+        plane = parents.get(wrapper)
+        if plane is None:
+            continue
+        index = list(plane).index(wrapper)
+        if index == 0:
+            continue
+        background = _rounded_rectangle_core(plane[index - 1])
+        if background is None or background[-1] is None:
+            continue
+        # Transparent, clipped, CSS-transformed, or otherwise hidden geometry
+        # cannot prove an opaque shared badge. Leave these cases to old guards.
+        controls = ancestors + [plane[index - 1], plane[index - 1][0]]
+        if any('transform' in _declarations(a)
+               or any(key in _declarations(a) or a.get(key) is not None
+                      for key in ('clip-path', 'mask', 'filter'))
+               or any(key in _declarations(a) for key in ('all', '-webkit-text-fill-color',
+                          'background', 'background-color', 'mix-blend-mode', 'text-shadow',
+                          'translate', 'rotate', 'scale', 'transform-origin', 'offset', 'offset-path',
+                          'offset-distance', 'offset-position', 'offset-rotate', 'offset-anchor', 'zoom', 'position',
+                          'inset', 'inset-inline', 'inset-block', 'inset-inline-start', 'inset-inline-end',
+                          'inset-block-start', 'inset-block-end', 'left', 'right', 'top', 'bottom',
+                          'margin', 'padding', 'width', 'height'))
+               or any(key.startswith(('margin-', 'padding-', 'inset-'))
+                      for key in _declarations(a))
+               for a in controls):
+            continue
+        if any(any(_declarations(a).get(key, a.get(key, '1')) not in {'1', '1.0'}
+                   for key in ('opacity', 'fill-opacity')) for a in controls):
+            continue
+        left, bottom, right, top, inner_left, inner_right, inner_bottom, inner_top, paint = background
+        if not (left <= box[0] <= box[2] <= right and bottom <= box[1] <= box[3] <= top
+                and (inner_left <= box[0] <= box[2] <= inner_right
+                     or inner_bottom <= box[1] <= box[3] <= inner_top)):
+            continue
+        channels = [int(paint[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+        light = sum(weight * (v / 12.92 if v <= .04045 else ((v + .055) / 1.055) ** 2.4)
+                    for weight, v in zip((.2126, .7152, .0722), channels))
+        if (light + .05) / .05 >= 3 or 1.05 / (light + .05) <= 4.5:
+            continue
+        witnesses.append({'textElementId': node.get('id'), 'declaredForeground': '#ffffff',
+                          'effectiveForeground': effective, 'background': paint,
+                          'foreignObjectBox': box, 'backgroundBox': [left, bottom, right, top],
+                          'backgroundPathSha256': sha(plane[index - 1][0].get('d', '').encode())})
+    return {'reason': 'unmapped_latexml_white_text_on_dark_badge', 'witnesses': witnesses} if witnesses else None
+
+
+def _caption_display_projection(caption):
+    # Only explicit alphabetic products with the saved TeX thin-space/cdot
+    # spelling. Keep the complete caption; unknown TeX still fails exact replay.
+    replacements = []
+    def product(match):
+        projected = match[0].replace(r'\,\cdot\,', ' · ')
+        replacements.append({'start': match.start(), 'end': match.end(),
+                             'source': match[0], 'display': projected})
+        return projected
+    displayed = re.sub(r'(?<![A-Za-z\\])(?:[A-Za-z]\\,\\cdot\\,)+[A-Za-z](?![A-Za-z\\])', product, caption)
+    if not replacements:
+        return caption, None
+    return displayed, {'contract': 'caption-explicit-tex-cdot-display-v1',
+                       'originalCaptionSha256': sha(caption.encode()),
+                       'displayCaption': displayed, 'displayCaptionSha256': sha(displayed.encode()),
+                       'replacements': replacements}
+
+
 def dependency_failure(raw):
     """Probe only; keep the historical renderer/security contract unchanged."""
     root = ET.fromstring(validate_svg(raw))
@@ -80,7 +267,7 @@ def dependency_failure(raw):
 
     if any(cycle(key) for key in graph):
         return {'reason': 'cyclic_local_fragment_dependencies', 'targets': []}
-    return None
+    return _white_on_dark_css_failure(root)
 
 
 def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, source_files):
@@ -108,6 +295,7 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
          and len(pdf_bytes) <= 512 * 1024 * 1024
          and sha(pdf_bytes) == source_files['source.pdf'], 'pdf_page_pdf_sha_changed')
     caption = norm(figure.get('caption', ''))
+    displayed_caption, caption_projection = _caption_display_projection(caption)
     numbered = re.match(r'^(?:Figure|Fig\.?)\s+(\d+)\s*[:.]\s*\S', caption, re.I)
     label = re.fullmatch(r'(?:Figure|Fig\.?)\s+(\d+)\s*[:.]?', norm(figure.get('label', '')), re.I)
     need(numbered is not None and label is not None and numbered[1] == label[1]
@@ -125,6 +313,9 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
                 'sourceFiles': dict(source_files), 'caption': caption,
                 'captionSha256': sha(caption.encode()), 'dependencyFailure': failure,
                 'renderer': renderer}
+    if caption_projection:
+        caption_projection['originalReaderCaptionSha256'] = sha(figure['caption'].encode())
+        identity['captionDisplayProjection'] = caption_projection
     key = stable(identity)
     if key in _CACHE:
         pixels, proof = _CACHE[key]
@@ -138,7 +329,7 @@ def derive_page_asset(*, paper_id, figure, resource, old_pixels, pdf_bytes, sour
                 text = norm(block[4])
                 if re.match(r'^(?:Figure|Fig\.?)\s+' + str(int(numbered[1])) + r'(?!\d)\s*[:.]', text, re.I):
                     numbers.append(page.number + 1)
-                if text == caption:
+                if text == displayed_caption:
                     matches.append((page.number, block[4]))
         need(len(matches) == 1 and numbers == [matches[0][0] + 1],
              'pdf_page_full_caption_or_figure_number_not_unique')

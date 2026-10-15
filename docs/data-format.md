@@ -136,7 +136,7 @@ schema v3 生成清单记录日期、`category`、博客基线 `HEAD`、精确�
 
 默认 API 日更使用 `llm_api_production`；会议和历史另核对各自正式来源与发布清单。旧 Manual 发布依据仅按原记录核验。混合来源资格、缺少绑定或使用旧 schema，不能用于新日更发布。
 
-新 schema v3 同时保存 `derivedFigureAssets` 及其指纹。日更封存 SVG 缺失或循环引用绘图定义时，`reader-sealed-pdf-page-asset-v1` 独立绑定原 Reader 像素 SHA、原 SVG 与 DOM SHA、同篇四份来源 SHA、唯一完整图注与图号、原 PDF 页码及完整 mediaBox、渲染实现和新 PNG SHA。页面明确标示原 PDF 页，不冒充精确裁图或旧模型输入；生成、审查和推送均重算该证明。没有这两个新字段的旧清单只按原输入语义、原来源和原 Reader 像素路径及 SHA 只读核验；不能删新证明字段，把新的替代 PNG 伪装成旧格式。替换旧资产经原清单的精确 owned 文件安装事务处理，其他图片不进入删除范围。
+新 schema v3 同时保存 `derivedFigureAssets` 及其指纹。日更封存 SVG 缺失或循环引用绘图定义时，`reader-sealed-pdf-page-asset-v1` 独立绑定原 Reader 像素 SHA、原 SVG 与 DOM SHA、同篇四份来源 SHA、唯一完整图注与图号、原 PDF 页码及完整 mediaBox、渲染实现和新 PNG SHA。另一个受限触发条件是 LaTeXML `foreignObject` 中声明白字却实际继承黑色：程序必须从相邻同坐标系的受限闭合圆角矩形、完整文字容器包围盒和不透明填色证明黑字落在深底，且黑字对比度小于 3、原声明白字对比度大于 4.5；正确的标准 `color` 映射、可读蓝橙底、未知变换、越界、透明或遮罩均不触发。程序不补猜 CSS，也不把其他字色差异统称为损坏。完整图注比对仅额外允许连续字母乘积的显式 `\,\cdot\,` 显示为居中点，保留原图注 SHA、完整投影内容及每处替换证据；其他 TeX、词句、数字及图注唯一性要求保持不变。页面明确标示原 PDF 页，不冒充精确裁图或旧模型输入；生成、审查和推送均重算该证明。没有这两个新字段的旧清单只按原输入语义、原来源和原 Reader 像素路径及 SHA 只读核验；不能删新证明字段，把新的替代 PNG 伪装成旧格式。替换旧资产经原清单的精确 owned 文件安装事务处理，其他图片不进入删除范围。
 
 当前 Reader v3 和已保存的旧 Manual v6 论文页使用 `researcher-workbench-v1` 页面元数据，保存读者标题、原始标题、规范 arXiv ID、明确输入或由已保存并核验的来源确定的 `vN`、版本一致的 abs/PDF URL、主任务、数值评分、排名分档、文档类型、一句话主线、结构化作者及原摘要 SHA。原始摘要保存在同批 `static/data/papers/<date>/<safe-arxiv-id>/rethink-context.json`，不塞入页面元数据。
 

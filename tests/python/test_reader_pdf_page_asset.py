@@ -37,6 +37,16 @@ def pdf(captions=None, crop=False, rotation=0):
         return doc.tobytes()
 
 
+def dark_badge(color='#2e2f31', text_style='--ltx-fg-color:#FFF;', wrapper='matrix(1.0 0.0 0.0 1.0 4 2)'):
+    # A generic round rectangle (0,0)..(40,20), not the real paper dimensions.
+    return (f'<g fill="{color}"><path style="stroke:none" '
+            'd="M 36 20 L 4 20 C 2 20 0 18 0 16 L 0 4 C 0 2 2 0 4 0 '
+            'L 36 0 C 38 0 40 2 40 4 L 40 16 C 40 18 38 20 36 20 Z M 0 0"/></g>'
+            f'<g transform="{wrapper}"><foreignObject width="25" height="10" '
+            'transform="matrix(1 0 0 -1 0 10)"><span><span '
+            f'style="{text_style}">X · Y</span></span></foreignObject></g>')
+
+
 class PdfPageAssetTests(unittest.TestCase):
     def setUp(self):
         _CACHE.clear()
@@ -78,6 +88,80 @@ class PdfPageAssetTests(unittest.TestCase):
             self.assertIsNone(dependency_failure(svg(body)['inlineSvg'].encode()))
         good = svg('<text>Fully self-contained</text>')
         self.assertIsNone(self.derive(resource=good))
+
+    def test_white_css_loss_requires_opaque_dark_round_rectangle_and_full_inside_box(self):
+        failure = dependency_failure(svg(dark_badge())['inlineSvg'].encode())
+        self.assertEqual(failure['reason'], 'unmapped_latexml_white_text_on_dark_badge')
+        self.assertEqual(len(failure['witnesses']), 1)
+        self.assertEqual(failure['witnesses'][0]['effectiveForeground'], '#000000')
+        self.assertEqual(failure['witnesses'][0]['foreignObjectBox'], [4, 2, 29, 12])
+        # These are actual readable bar colours in the other saved figure.
+        for background in ['#4a8cdc', '#ee7e52', '#fff']:
+            self.assertIsNone(dependency_failure(svg(dark_badge(background))['inlineSvg'].encode()))
+        for text_style in ['--ltx-fg-color:#000;', '--ltx-fg-color:#808080;',
+                           '--ltx-fg-color:#fff;color:#FFF;',
+                           '--ltx-fg-color:#fff;COLOR : white;',
+                           '--ltx-fg-color:#fff;color:var(--ltx-fg-color);',
+                           '--ltx-fg-color:#fff;color:red;',
+                           '--ltx-fg-color:#fff;color:inherit;',
+                           '--ltx-fg-color:#fff;display:none;',
+                           '--ltx-fg-color:#fff;opacity:0;',
+                           '--ltx-fg-color:#fff;background:white;',
+                           '--ltx-fg-color:#fff;translate:100px;',
+                           '--ltx-fg-color:#fff;rotate:90deg;',
+                           '--ltx-fg-color:#fff;scale:2;',
+                           '--ltx-fg-color:#fff;inset:100px;',
+                           '--ltx-fg-color:#fff;margin-left:100px;',
+                           '--ltx-fg-color:#fff;padding-left:100px;',
+                           '--ltx-fg-color:#fff;width:100px;',
+                           '--ltx-fg-color:#fff;position:relative;left:100px;',
+                           '--ltx-fg-color:#fff;-webkit-text-fill-color:white;']:
+            with self.subTest(style=text_style):
+                self.assertIsNone(dependency_failure(svg(dark_badge(text_style=text_style))['inlineSvg'].encode()))
+        mutations = [
+            dark_badge(wrapper='matrix(1 0 0 1 39 2)'),  # Mostly outside.
+            dark_badge(wrapper='translate(4 2)'),  # Unknown transform grammar.
+            dark_badge(wrapper='matrix(2 0 0 1 4 2)'),
+            dark_badge().replace('M 36 20 L 4 20', 'M 35 20 L 4 20'),
+            dark_badge().replace('C 2 20 0 18', 'C 100 20 0 18'),
+            dark_badge().replace('fill="#2e2f31"', 'fill="#2e2f31" opacity="0"'),
+            dark_badge().replace('style="stroke:none"', 'style="stroke:none;transform:scale(2)"'),
+            dark_badge().replace('<foreignObject width=', '<foreignObject style="width:100px" width='),
+            dark_badge().replace('</g><g transform=', '</g><g/><g transform='),
+        ]
+        for body in mutations:
+            with self.subTest(body=body):
+                self.assertIsNone(dependency_failure(svg(body)['inlineSvg'].encode()))
+
+    def test_white_css_mapping_is_resolved_at_the_color_declaration_not_the_child(self):
+        mapped = dark_badge().replace('<span><span ', '<span style="color:var(--ltx-fg-color);--ltx-fg-color:#FFF;"><span ')
+        self.assertIsNone(dependency_failure(svg(mapped)['inlineSvg'].encode()))
+        # A parent resolves its own black variable before a child changes it.
+        black_parent = mapped.replace('--ltx-fg-color:#FFF;\"><span', '--ltx-fg-color:#000;\"><span')
+        self.assertEqual(dependency_failure(svg(black_parent)['inlineSvg'].encode())['reason'],
+                         'unmapped_latexml_white_text_on_dark_badge')
+
+    def test_full_caption_cdot_projection_keeps_original_proof_and_all_words(self):
+        resource = svg(dark_badge())
+        caption = r'Figure 9: Modalities T\,\cdot\,I\,\cdot\,A; text T.'
+        figure = {**self.figure, **source_descriptor(resource, '2610.90001'), 'caption': caption}
+        raw, proof = self.derive(pdf(['Figure 9: Modalities T · I · A; text T.']),
+                                 figure=figure, resource=resource)
+        self.assertTrue(raw.startswith(b'\x89PNG'))
+        self.assertEqual(proof['caption'], caption)
+        self.assertEqual(proof['captionSha256'], sha(caption.encode()))
+        projection = proof['captionDisplayProjection']
+        self.assertEqual(projection['originalCaptionSha256'], proof['captionSha256'])
+        self.assertEqual(projection['displayCaption'], 'Figure 9: Modalities T · I · A; text T.')
+        for changed in ['Figure 9: Modalities T · I · B; text T.',
+                        'Figure 9: Modalities T · I · A; text missing.',
+                        'Figure 9: Modalities T · I · A; text T. Extra.',
+                        'Figure 9: Modalities T I A; text T.']:
+            with self.subTest(caption=changed), self.assertRaisesRegex(ValueError, 'not_unique'):
+                self.derive(pdf([changed]), figure=figure, resource=resource)
+        unknown = {**figure, 'caption': caption.replace(r'\cdot', r'\times')}
+        with self.assertRaisesRegex(ValueError, 'not_unique'):
+            self.derive(pdf(['Figure 9: Modalities T × I × A; text T.']), figure=unknown, resource=resource)
 
     def test_unsafe_external_duplicate_ids_and_active_svg_are_not_fallbacks(self):
         for body in ['<use href="https://example.invalid/a.svg#x"/>',
