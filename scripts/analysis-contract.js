@@ -187,7 +187,7 @@ const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:
 // 英文指标名必须整词匹配。没有这里的两侧边界，mAP/PAR/PER 这类短指标会命中
 // "mapping"、"Particle"、"performance" 等普通词，把章节号和引用位置误当成
 // 实验测量结果。
-const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
+const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
 // 会议论文常用领域内的中文指标名（例如 DAFx 的“抖动”和“包络相关”）。
 // 这里显式列出来，免得把任何结果名词都当成定量证据。
 const CORE_SUMMARY_CONFERENCE_METRIC_PATTERN = /包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差/;
@@ -243,7 +243,7 @@ const TABLE_NUMERIC_CELL_RE = /(?:^|[^A-Za-z])[-+]?\d(?:[\d,]*)(?:\.\d+)?(?:\s*(
 // 第一列也可能描述训练条件而不是指标。这里显式列出来，
 // 好让“训练损失 × evaluation metrics”这类表格按对比表处理，
 // 又不硬给条件列加上 ↑/↓ 标记。
-const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?|目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)$/i;
+const TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE = /^(?:(?:评价|问卷)项目(?:[，,]\s*N\s*=\s*\d+)?|目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)$/i;
 function isTableIdentifierHeader(value) {
     const normalized = String(value || '').trim();
     if (TABLE_ADDITIONAL_IDENTIFIER_HEADER_RE.test(normalized)) return true;
@@ -785,6 +785,89 @@ function hasReportedExperimentPhrase(text, pattern) {
     });
 }
 
+function hasSourceBackedTrainingStageAblation(tables, sourceText) {
+    const source = String(sourceText || '');
+    const removal = /\b(?:w\/?o|without)\s+(?:the\s+)?(?:two[- ]stage\s+training\b|second[- ]stage\s+(?:training|fine[- ]tuning)\b)/gi;
+    const supported = [...source.matchAll(removal)].some(match =>
+        !/\b(?:no|not|never|plans?|planning|planned|propos(?:e|ed)|hypothetical|may|might|could|would|future)\b[^.;\n]{0,80}$/i.test(
+            source.slice(Math.max(0, match.index - 100), match.index)));
+    if (!supported) return false;
+    // A translated, measured row identifies the removed training component;
+    // a generic zero-shot claim or a mention in prose does not establish it.
+    return tables.some(table => table.header.some((header, column) =>
+        isTableIdentifierHeader(String(header).replace(/[*_`]/g, '').trim())
+        && table.rows.some(row => /^(?:无|省略)第(?:二|2)阶段(?:训练|微调)$/.test(
+            String(row[column] || '').replace(/[*_`]/g, '').trim()))));
+}
+
+function hasSourceBackedZeroCorrectionAblation(results, sourceText) {
+    const source = String(sourceText || '').replace(/\s+/g, ' ');
+    // A measured correction sweep isolates this component; a zero weight in
+    // training settings, or a proposed future sweep, does not establish it.
+    const sweep = /Role of bidirectional correction\.[\s\S]{0,500}?isolates the correction signal[\s\S]{0,500}?varying only[\s\S]{0,500}?without correction/i.exec(source);
+    if (!sweep || /\b(?:future|planned|hypothetical)\b/i.test(sweep[0])) return false;
+    for (const match of String(results || '').matchAll(/修正权重\s*为\s*0(?:\.0+)?\s*时\s*(Total)\s*最高\s*[,，]\s*为\s*(\d+(?:\.\d+)?)/gi)) {
+        const value = match[2].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const prefix = String(results).slice(Math.max(0, match.index - 60), match.index);
+        if (!/(?:如果|假设|计划|未来|可能|预计|并非|不是)[^。；\n]{0,50}$/.test(prefix)
+            && /λcorr\s+Quality\s+Semantic\s+Total/i.test(sweep[0])
+            && new RegExp(`(?:^| )0 +[0-9.]+ +[0-9.]+ +${value}(?![0-9.])`).test(sweep[0])) return true;
+    }
+    return false;
+}
+
+function hasTableBoundHigherMetricRegression(results, tables, sourceText) {
+    const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const prose = String(results || '').split('\n').filter(line => !/^\s*\|/.test(line)).join('\n');
+    // Some PDF tables flatten a grouped header to `Method NFE Group↑ X↑ Y↑
+    // Overall Text Diversity ...`; the group's leaf values occupy the row tail.
+    // Accept this exact rectangular shape, never a bare metric elsewhere in text.
+    const sourceLines = String(sourceText || '').split('\n');
+    const groupedTables = [];
+    for (const [lineIndex, line] of sourceLines.entries()) {
+        if (!/^\s*Method\s+NFE\s+/i.test(line)) continue;
+        const captionContext = sourceLines.slice(Math.max(0, lineIndex - 6), lineIndex).join(' ');
+        if (!/\bTable\s+(?:\d+|[IVXLCDM]+)[.:：]/i.test(captionContext)
+            || /\b(?:hypothetical|future|planned|illustrative|example)\b/i.test(captionContext)) continue;
+        const groups = [...line.matchAll(/\b[A-Za-z][A-Za-z0-9_.-]{1,50}\s*↑/g)];
+        if (!groups.length) continue;
+        const leafHeaders = line.slice(groups.at(-1).index + groups.at(-1)[0].length).trim().split(/\s+/);
+        if (leafHeaders.length < 2 || leafHeaders.length > 12
+            || !leafHeaders.every(name => /^[A-Za-z][A-Za-z0-9_.-]{0,30}$/.test(name))) continue;
+        const rows = [];
+        for (const rowLine of sourceLines.slice(lineIndex + 1, lineIndex + 41)) {
+            const row = /^\s*(\S(?:.*?\S)?)\s+(\d+(?:\.\d+)?(?:\s*(?:×|x)\s*\d+)?(?:\s+\d+(?:\.\d+)?){2,})\s*$/.exec(rowLine);
+            if (!row) break;
+            const values = row[2].match(/\d+(?:\.\d+)?/g);
+            const minimum = leafHeaders.length + groups.length;
+            if (values.length !== minimum + (/\s[×x]\s/.test(row[2]) ? 1 : 0)) break;
+            rows.push([row[1], ...values.slice(-leafHeaders.length)]);
+        }
+        if (rows.length >= 2) groupedTables.push({header:['Method', ...leafHeaders.map(name => `${name} ↑`)], rows, sourceGrouped:true});
+    }
+    for (const table of [...tables, ...groupedTables]) for (const [column, header] of table.header.entries()) {
+        const metric = String(header).replace(/[*_`$]/g, '').replace(/(?:↑|\\uparrow)/g, '').trim();
+        if (!/^[A-Za-z][A-Za-z0-9.-]{1,30}$/.test(metric)
+            || !/(?:↑|\\uparrow)/.test(header)
+            || (!table.sourceGrouped && !new RegExp(`\\b${escape(metric)}[\\s($]*(?:↑|\\\\uparrow)`, 'i').test(String(sourceText || '')))) continue;
+        const pattern = new RegExp(`\\b${escape(metric)}(?![A-Za-z0-9_-])[^。；\\n]{0,60}?(?:为|是)\\s*(\\d+(?:\\.\\d+)?)\\s*[,，]\\s*(?:略|明显|显著)?低于\\s*([^，。；\\n]{1,60}?)\\s*的\\s*(\\d+(?:\\.\\d+)?)`, 'gi');
+        for (const match of prose.matchAll(pattern)) {
+            const prefix = prose.slice(Math.max(0, match.index - 60), match.index);
+            if (/(?:如果|假设|计划|未来|可能|预计|并非|不是|没有)[^。；\n]{0,50}$/.test(prefix)
+                || /(?:如果|假设|计划|未来|可能|预计|并非|不是|没有)/.test(match[0])
+                || !(Number(match[1]) < Number(match[3]))) continue;
+            const centralValue = cell => /^\s*(\d+(?:\.\d+)?)(?:\s|$|±)/.exec(String(cell || ''))?.[1];
+            const first = table.rows.find(row => Number(centralValue(row[column])) === Number(match[1]));
+            const second = table.rows.find(row => Number(centralValue(row[column])) === Number(match[3])
+                && row.some((cell, index) => index !== column && isTableIdentifierHeader(table.header[index])
+                    && String(cell).replace(/[*_`]/g, '').trim().replace(/^Teacher$/i, '教师')
+                        === match[2].trim().replace(/^Teacher$/i, '教师')));
+            if (first && second && first !== second) return true;
+        }
+    }
+    return false;
+}
+
 function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     const results = extractSection(analysis, '实验结果');
     if (!results) return null;
@@ -833,7 +916,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
             }
         }
         const comparisonPattern = /(?:比较|对比|基线|对照|检验|考察|回答|关键问题|差异|收益|代价|是否|能否|何种|多大|哪些)/;
-        const boundaryPattern = /(?:相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化)/;
+        const boundaryPattern = /(?:相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化|仅[^。；\n]{1,40}(?:保持|达到)?显著|只说明|不支持|(?:证据|结论)(?:范围)?限于)/;
         const before = resultLines.slice(0, table.startLine).join('\n').trim()
             .split(/\n\s*\n/).filter(Boolean).slice(-5).reverse()
             .find(paragraph => paragraph.replace(/[*_`#>\s]/g, '').length >= 20
@@ -854,7 +937,8 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     }
     const sourceText = sourceExperimentEvidence(options.sourceText);
     const sourceHasComparison = /\b(?:baseline|compared?\s+(?:to|with)|comparison|outperform(?:s|ed)?|versus|vs\.)\b|基线|对照|相比|优于|弱于/i.test(sourceText);
-    const resultHasComparison = /\b(?:baseline|compared?\s+(?:to|with)|comparison|versus|vs\.)\b|基线|对照|比较(?:对象)?是|相比|相对|优于|弱于|对比|超过|高于|低于|升至|降至|比(?!较)[^。；\n]{0,30}(?:高|低|强|弱|好|差|大|小|提升|下降)/i.test(results);
+    const resultHasComparison = /\b(?:baseline|compared?\s+(?:to|with)|comparison|versus|vs\.)\b|基线|对照|比较(?:对象)?是|相比|相对|优于|弱于|对比|超过|高于|低于|升至|降至|比(?!较)[^。；\n]{0,30}(?:高|低|强|弱|好|差|大|小|提升|下降)/i.test(results)
+        || hasReportedExperimentPhrase(results, /将[^。；\n]{2,60}(?:排序|模型|系统|方法|结果)与[^。；\n]{2,80}(?:排序|模型|系统|方法|结果)[^。；\n]{0,20}比较/g);
     if (empirical && sourceHasComparison && !resultHasComparison) {
         return '全文包含基线或对照比较，但实验结果没有保留比较对象';
     }
@@ -863,7 +947,9 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
         ' '
     );
     const sourceHasAblation = /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉/i.test(sourceAblationEvidence);
-    const resultHasAblation = /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉|不含|排除|无外推/i.test(results)
+    const resultHasAblation = hasSourceBackedTrainingStageAblation(tables, sourceAblationEvidence)
+        || hasSourceBackedZeroCorrectionAblation(results, sourceAblationEvidence)
+        || /\bablation\b|\bw\/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|消融|移除|去掉|不含|排除|无外推/i.test(results)
         // 有的论文只用 `+ L_j`、`+ L_s` … 标注消融行，正文里说是逐级叠加。
         // 只要原文确实有消融，这仍然算显式的组件对照。
         || /(?:逐级|逐步|依次)(?:叠加|加入|添加|移除|比较)|(?:组件|约束|模块|损失|监督目标|局部配对|竞争归一化)[^。；\n]{0,24}(?:对照|贡献|差异|是否必要|必要性)/i.test(results)
@@ -894,6 +980,7 @@ function validateExperimentTableEvidenceDepth(analysis, options = {}) {
     const reportedLowerScore = hasReportedExperimentPhrase(results, new RegExp(
         `${explicitHigherIsBetterMetric}(?:\\s|[0-9.%:：=（）()，,]|为|是|都|均|仍|却|也|则|反而|明显|显著|略|要){0,40}(?:更低|低于|不及)`, 'g'));
     const resultHasNegative = contextualNegative
+        || hasTableBoundHigherMetricRegression(results, tables, options.sourceText)
         || explicitMetricDecline
         || reportedLowerScore
         || /not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|未显著|不显著|无显著(?:差异)?|退化|恶化|失败|失效|崩溃|接近随机|低于随机|损失|更差|比(?!较)[^。；\n]{0,30}差|未改善|没有改善|无效|负(?:面)?结果|负增益|性能回落|回落至|降幅|负面|暴露短板|跨零|落后|回退|不单调(?:性|改进)?|不保证单调(?:改进|提升)|(?:例外|反例)[^。；\n]{0,80}(?:低于|下降|更差)/i.test(results)
@@ -1217,12 +1304,34 @@ function stripCoreSummaryNonResultNumerals(text) {
         .replace(/\b(?:Qwen|Llama|Gemma|Phi|GPT|Claude|Mistral|Whisper|HuBERT|WavLM|Wan|LTX)\s*[-_ ]?\d+(?:\.\d+)*(?:\s*[BbMmKk])?\b/gi, ' ');
 }
 
+function hasBoundFormerLatterComparison(sentence) {
+    // Resolve former/latter only for two explicit measured values under one
+    // named metric. A parameter count elsewhere cannot supply either value.
+    if (/(?:假设|假想|假定|设想|如果|预计|预期|可能|未来|计划|并非|不是|不等于|不代表|并未|未进行|未报告|未测|没有)/u.test(sentence)) return false;
+    const metric = '(?:均方根误差|平均绝对误差|RMSE|MAE|词错误率|WER)';
+    const number = '[-+]?\\d+(?:\\.\\d+)?';
+    const value = `(${number})(?:\\s*±\\s*${number})?\\s*(%|％|dB|ms|s)?`;
+    const pattern = new RegExp(`${metric}比较[，,]\\s*([^，,。；]{1,40}?)(?:为|是)\\s*${value}`
+        + `[，,]\\s*([^，,。；]{1,40}?)(?:为|是)\\s*${value}`
+        + '[，,]\\s*(前者|后者)(更高|更低)', 'iu');
+    const match = pattern.exec(sentence);
+    if (!match) return false;
+    const [, first, a, unitA = '', second, b, unitB = '', referent, direction] = match;
+    const namedObject = /拟合|模型|系统|方法|基线|对照|条件|分支|输入|编码器/u;
+    if (first.trim() === second.trim() || !namedObject.test(first) || !namedObject.test(second)
+        || unitA.replace('％', '%') !== unitB.replace('％', '%')
+        || CORE_SUMMARY_METRIC_PATTERN.test(first) || CORE_SUMMARY_METRIC_PATTERN.test(second)) return false;
+    const left = Number(referent === '前者' ? a : b), right = Number(referent === '前者' ? b : a);
+    if (!Number.isFinite(left) || !Number.isFinite(right) || left < 0 || right < 0) return false;
+    return direction === '更低' ? left < right : left > right;
+}
+
 function hasCoreSummaryComparisonDirection(sentence, numbers) {
     // 示意图里的 "from inputs to outputs" 是映射关系，不是实测提升。
     // 数字上的变化必须写明起始值。
     const directionSurface = sentence.replace(/\bfrom\b([^。！？!?]{0,50})\bto\b/gi,
         (match, between) => /\d/.test(between) ? match : ' ');
-    if (CORE_SUMMARY_COMPARISON_PATTERN.test(directionSurface)
+    if (hasBoundFormerLatterComparison(sentence) || CORE_SUMMARY_COMPARISON_PATTERN.test(directionSurface)
         || /(?:从|由)[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)/.test(sentence)) return true;
     // 比字比较的指标必须和高/低差值处在同一分句，且紧邻比较关系。
     // 指标在左侧时，右侧须以明确比较对象结尾，避免借别处的 UAR 给参数量差背书。
@@ -1617,7 +1726,34 @@ function hasPosteriorUpdateProductChain(summary) {
         && /由当前模型方差(?:算出|计算)(?:成分占模型方差的)?贡献比与后验功率[，,]\s*(?:该|此)后验功率作为固定输入进入同一成分的幅度与衰减率更新/u.test(sentence));
 }
 
+function hasConcreteProductHandoff(summary) {
+    // Typed, ordered producer/consumer handoffs. Do not count module names or
+    // action words alone, and do not stitch unrelated paragraphs together.
+    const sentences = String(summary || '').replace(/（[^）]*）|\([^)]*\)/gu, '')
+        .split(/[。！？!?；;\n]/u).map(s => s.trim()).filter(Boolean);
+    const denied = /(?:假设|设想|假定|如果|可能|未来|拟采用|计划|预计|预期|应当|应该|并非|并未|没有|不能|尚未|未曾|另一(?:种|套)|独立方法|讨论|提及|对比|比较|相关工作|先前工作|文献|未(?:实现|执行|实施)|不负责|不用于|不与|未与)|(?:^|[。；，,])\s*建议|(?:不|未)(?:被|曾|直接|实际|真正|会|能|再)*\s*(?:生成|输出|预测|提取|抽取|转成|送入|配对|拼接|作用于|统计|计算|重建|合并)/u;
+    const neuralTokens = /解码器[^。；]{0,140}(?:预测|输出|生成)(?:源内容对应的)?(?:离散)?声学令牌[^。；]{0,140}(?:所得|这些|该)(?:声学)?令牌(?:再)?送入(?:神经音频)?编解码器(?:解码器)?(?:重建|解码)(?:为|成)?波形/u;
+    const frameProduction = /编码器[^。；]{0,120}(?:输出|转成|提取|抽取)(?:为|成)?帧级(?:编码)?表示/u;
+    const frameConsumption = /听众嵌入[^。；]{0,100}与(?:每帧编码|帧级(?:编码)?表示)拼接[，,]\s*拼接序列送入[^。；]{0,45}(?:长短期记忆网络|BiLSTM|回归头)[^。；]{0,20}(?:得到|输出|预测)帧级分数/u;
+    const maskProcessing = /(?:录音|清洁语音|干净语音)[^。；]{0,90}(?:生成|得到)二值时频掩码[，,]\s*(?:再|随后)?(?:(?:将|把)(?:该|所得)?(?:二值时频)?掩码)?作用于[^。；]{0,60}统计(?:语音帧与噪声帧|语音与噪声)(?:的)?功率[^。；]{0,70}(?:算出|计算)[^。；]{0,50}信噪比/u;
+    const textProduction = /问答[^。；]{0,70}以[^。；]{0,50}为输入(?:转成|重构成)一问一答[^。；]{0,100}整体反馈[^。；]{0,90}合并成[^。；]{0,60}辅导文本/u;
+    const textConsumption = /两类文本[^。；]{0,35}与对应录音配对[^。；]{0,100}指令微调/u;
+    for (let i = 0; i < sentences.length; i++) {
+        for (const size of [1, 2]) {
+            const parts = sentences.slice(i, i + size);
+            if (parts.length !== size || parts.some(s => s.length > 320)) continue;
+            const window = parts.join('。');
+            if (denied.test(window)) continue;
+            if (neuralTokens.test(window) || maskProcessing.test(window)
+                || (frameProduction.test(parts[0]) && frameConsumption.test(parts.at(-1)))
+                || (textProduction.test(parts[0]) && textConsumption.test(parts.at(-1)))) return true;
+        }
+    }
+    return false;
+}
+
 function hasExplicitNaturalProductChain(summary) {
+    if (hasConcreteProductHandoff(summary)) return true;
     if (hasPosteriorUpdateProductChain(summary)) return true;
     if (hasBlockLayoutProductChain(summary)) return true;
     // 只接受已说明的产物被下一处理模块实际使用，不以动作数量或序号充数。
@@ -3146,6 +3282,8 @@ module.exports = {
     coreSummarySentenceView,
     validateCoreSummarySemanticContract,
     hasExplicitNaturalProductChain,
+    hasConcreteProductHandoff,
+    hasBoundFormerLatterComparison,
     stripSymbolicPatternRelation,
     hasSymbolicGeometryMethodChain,
     hasScopedSymbolicDemonstration,

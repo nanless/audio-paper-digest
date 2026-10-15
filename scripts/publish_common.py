@@ -298,7 +298,7 @@ def _is_table_identifier_header(value):
     """与 Node 对带方向指标表头的处理保持一致。"""
     normalized = str(value or '').strip()
     # 与 Node 显式列出的训练条件识别符保持一致。
-    if re.fullmatch(r'(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)', normalized, flags=re.IGNORECASE):
+    if re.fullmatch(r'(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)', normalized, flags=re.IGNORECASE):
         return True
     if not normalized:
         return True
@@ -3434,6 +3434,100 @@ def _has_reported_experiment_phrase(text, pattern):
     return False
 
 
+def _has_source_backed_training_stage_ablation(tables, source_text):
+    source = str(source_text or '')
+    removal = re.compile(
+        r'\b(?:w/?o|without)\s+(?:the\s+)?(?:two[- ]stage\s+training\b|second[- ]stage\s+(?:training|fine[- ]tuning)\b)',
+        re.I,
+    )
+    supported = any(not re.search(
+        r'\b(?:no|not|never|plans?|planning|planned|propos(?:e|ed)|hypothetical|may|might|could|would|future)\b[^.;\n]{0,80}$',
+        source[max(0, match.start() - 100):match.start()], re.I,
+    ) for match in removal.finditer(source))
+    if not supported:
+        return False
+    return any(
+        _is_table_identifier_header(re.sub(r'[*_`]', '', str(header)).strip())
+        and any(re.fullmatch(r'(?:无|省略)第(?:二|2)阶段(?:训练|微调)',
+            re.sub(r'[*_`]', '', str(row[column] if column < len(row) else '')).strip())
+            for row in table['rows'])
+        for table in tables for column, header in enumerate(table['header'])
+    )
+
+
+def _has_source_backed_zero_correction_ablation(results, source_text):
+    source = re.sub(r'\s+', ' ', str(source_text or ''))
+    sweep = re.search(r'Role of bidirectional correction\.[\s\S]{0,500}?isolates the correction signal[\s\S]{0,500}?varying only[\s\S]{0,500}?without correction', source, re.I)
+    if not sweep or re.search(r'\b(?:future|planned|hypothetical)\b', sweep[0], re.I):
+        return False
+    for match in re.finditer(r'修正权重\s*为\s*0(?:\.0+)?\s*时\s*(Total)\s*最高\s*[,，]\s*为\s*(\d+(?:\.\d+)?)', results, re.I):
+        prefix = results[max(0, match.start() - 60):match.start()]
+        if (not re.search(r'(?:如果|假设|计划|未来|可能|预计|并非|不是)[^。；\n]{0,50}$', prefix)
+                and re.search(r'λcorr\s+Quality\s+Semantic\s+Total', sweep[0], re.I)
+                and re.search(rf'(?:^| )0 +[0-9.]+ +[0-9.]+ +{re.escape(match[2])}(?![0-9.])', sweep[0])):
+            return True
+    return False
+
+
+def _has_table_bound_higher_metric_regression(results, tables, source_text):
+    prose = '\n'.join(line for line in results.split('\n') if not re.match(r'\s*\|', line))
+    denied = r'(?:如果|假设|计划|未来|可能|预计|并非|不是|没有)[^。；\n]{0,50}$'
+    source_lines = str(source_text or '').split('\n')
+    grouped_tables = []
+    for line_index, line in enumerate(source_lines):
+        if not re.match(r'\s*Method\s+NFE\s+', line, re.I):
+            continue
+        caption_context = ' '.join(source_lines[max(0, line_index - 6):line_index])
+        if (not re.search(r'\bTable\s+(?:\d+|[IVXLCDM]+)[.:：]', caption_context, re.I)
+                or re.search(r'\b(?:hypothetical|future|planned|illustrative|example)\b', caption_context, re.I)):
+            continue
+        groups = list(re.finditer(r'\b[A-Za-z][A-Za-z0-9_.-]{1,50}\s*↑', line))
+        if not groups:
+            continue
+        leaf_headers = line[groups[-1].end():].strip().split()
+        if (not 2 <= len(leaf_headers) <= 12
+                or not all(re.fullmatch(r'[A-Za-z][A-Za-z0-9_.-]{0,30}', name) for name in leaf_headers)):
+            continue
+        rows = []
+        for row_line in source_lines[line_index + 1:line_index + 41]:
+            row = re.fullmatch(r'\s*(\S(?:.*?\S)?)\s+(\d+(?:\.\d+)?(?:\s*(?:×|x)\s*\d+)?(?:\s+\d+(?:\.\d+)?){2,})\s*', row_line)
+            if not row:
+                break
+            values = re.findall(r'\d+(?:\.\d+)?', row[2])
+            minimum = len(leaf_headers) + len(groups)
+            if len(values) != minimum + (1 if re.search(r'\s[×x]\s', row[2]) else 0):
+                break
+            rows.append([row[1], *values[-len(leaf_headers):]])
+        if len(rows) >= 2:
+            grouped_tables.append({'header': ['Method', *[f'{name} ↑' for name in leaf_headers]], 'rows': rows, 'source_grouped': True})
+    def central_value(cell):
+        match = re.match(r'\s*(\d+(?:\.\d+)?)(?:\s|$|±)', str(cell or ''))
+        return float(match[1]) if match else None
+    for table in [*tables, *grouped_tables]:
+        for column, header in enumerate(table['header']):
+            metric = re.sub(r'(?:↑|\\uparrow)', '', re.sub(r'[*_`$]', '', str(header))).strip()
+            if (not re.fullmatch(r'[A-Za-z][A-Za-z0-9.-]{1,30}', metric)
+                    or not re.search(r'(?:↑|\\uparrow)', header)
+                    or (not table.get('source_grouped') and not re.search(rf'\b{re.escape(metric)}[\s($]*(?:↑|\\uparrow)', source_text, re.I))):
+                continue
+            pattern = rf'\b{re.escape(metric)}(?![A-Za-z0-9_-])[^。；\n]{{0,60}}?(?:为|是)\s*(\d+(?:\.\d+)?)\s*[,，]\s*(?:略|明显|显著)?低于\s*([^，。；\n]{{1,60}}?)\s*的\s*(\d+(?:\.\d+)?)'
+            for match in re.finditer(pattern, prose, re.I):
+                prefix = prose[max(0, match.start() - 60):match.start()]
+                if (re.search(denied, prefix)
+                        or re.search(r'如果|假设|计划|未来|可能|预计|并非|不是|没有', match[0])
+                        or not float(match[1]) < float(match[3])):
+                    continue
+                first = next((row for row in table['rows'] if column < len(row) and central_value(row[column]) == float(match[1])), None)
+                second = next((row for row in table['rows'] if column < len(row) and central_value(row[column]) == float(match[3])
+                    and any(index != column and _is_table_identifier_header(table['header'][index])
+                        and re.sub(r'^Teacher$', '教师', re.sub(r'[*_`]', '', str(cell)).strip(), flags=re.I)
+                            == re.sub(r'^Teacher$', '教师', match[2].strip(), flags=re.I)
+                        for index, cell in enumerate(row))), None)
+                if first is not None and second is not None and first is not second:
+                    return True
+    return False
+
+
 def _validate_experiment_table_evidence_depth(
         analysis, document_type='', source_text=''):
     results = _extract_analysis_section(analysis, '实验结果')
@@ -3501,7 +3595,7 @@ def _validate_experiment_table_evidence_depth(
         after = next((
             paragraph for paragraph in after_candidates
             if len(re.sub(r'[*_`#>\s]', '', paragraph)) >= 50
-            and re.search(r'相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化', paragraph)
+            and re.search(r'相比|相对|差异|提升|下降|降低|增加|减少|但|而|同时|代价|边界|未|不显著|跨零|失败|退化|仅[^。；\n]{1,40}(?:保持|达到)?显著|只说明|不支持|(?:证据|结论)(?:范围)?限于', paragraph)
         ), '')
         if not before:
             return f'实验结果第 {index} 张表前缺少与上下文衔接的具体比较问题'
@@ -3521,7 +3615,7 @@ def _validate_experiment_table_evidence_depth(
         r'比(?!较)[^。；\n]{0,30}(?:高|低|强|弱|好|差|大|小|提升|下降)',
         results,
         re.I,
-    )
+    ) or _has_reported_experiment_phrase(results, r'将[^。；\n]{2,60}(?:排序|模型|系统|方法|结果)与[^。；\n]{2,80}(?:排序|模型|系统|方法|结果)[^。；\n]{0,20}比较')
     if empirical and source_has_comparison and not result_has_comparison:
         return '全文包含基线或对照比较，但实验结果没有保留比较对象'
     source_has_ablation = re.search(
@@ -3530,7 +3624,7 @@ def _validate_experiment_table_evidence_depth(
         source_text,
         re.I,
     )
-    result_has_ablation = re.search(
+    result_has_ablation = _has_source_backed_training_stage_ablation(tables, source_text) or _has_source_backed_zero_correction_ablation(results, source_text) or re.search(
         r'\bablation\b|\bw/?o\b|without\s+(?:the\s+)?(?:module|component|loss)|'
         r'消融|移除|去掉|不含|排除|无外推',
         results,
@@ -3585,7 +3679,7 @@ def _validate_experiment_table_evidence_depth(
     )
     reported_lower_score = _has_reported_experiment_phrase(results,
         rf'{explicit_higher_is_better_metric}(?:\s|[0-9.%:：=（）()，,]|为|是|都|均|仍|却|也|则|反而|明显|显著|略|要){{0,40}}(?:更低|低于|不及)')
-    result_has_negative = contextual_negative or explicit_metric_decline or reported_lower_score or re.search(
+    result_has_negative = contextual_negative or _has_table_bound_higher_metric_regression(results, tables, complete_source_text) or explicit_metric_decline or reported_lower_score or re.search(
         r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
         r'未显著|不显著|退化|恶化|失败|失效|崩溃|接近随机|低于随机|'
