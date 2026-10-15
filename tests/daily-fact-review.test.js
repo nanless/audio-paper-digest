@@ -176,6 +176,68 @@ test('批量入口读取重复事实反馈参数，缺文件路径时拒绝', ()
         ['--fact-feedback-file', '']]) assert.throws(() => batch.parseFactFeedbackFiles(args), /须提供/);
 });
 
+test('批量公开入口将逐篇原付费摘要、Reader候选与自然资源参数传入实际分析回调且不串篇', async t => {
+    const f = await fixture(t);
+    delete require.cache[require.resolve('../scripts/batch-analyze')];
+    const batch = require('../scripts/batch-analyze');
+    const secondId = '2610.90032';
+    const diagnosticId = '11111111-1111-4111-8111-111111111111';
+    const candidate = { candidateSha256: 'c'.repeat(64), identity: { paperId: secondId } };
+    const before = structuredClone(candidate), calls = [];
+    await batch.main({
+        coreSummaryDiagnosticIds: { [ID]: diagnosticId },
+        resolvedReaderCandidates: { [secondId]: candidate },
+        naturalResourceProse: true,
+        analyzeFn: async (paper, options) => {
+            calls.push({ id: paper.arxivId, options });
+            throw Object.assign(new Error('offline parameter routing sentinel'), { retryable: false });
+        }
+    });
+    assert.equal(calls.length, 2);
+    const first = calls.find(call => call.id === ID).options;
+    const second = calls.find(call => call.id === secondId).options;
+    assert.equal(first.coreSummaryDiagnosticId, diagnosticId);
+    assert.equal(first.resolvedReaderCandidate, undefined);
+    assert.equal(second.coreSummaryDiagnosticId, undefined);
+    assert.deepEqual(second.resolvedReaderCandidate, candidate);
+    assert.equal(first.naturalResourceProse, true);
+    assert.equal(second.naturalResourceProse, true);
+    assert.deepEqual(candidate, before);
+    assert.equal(f.paper.analysisCheckpoint, original);
+});
+
+test('批量公开入口恢复上游标记与逐篇来源选项同时保留且恢复标记不泄漏到另一篇', async t => {
+    await fixture(t);
+    delete require.cache[require.resolve('../scripts/batch-analyze')];
+    const batch = require('../scripts/batch-analyze');
+    const saved = require('../scripts/lib/saved-fact-feedback');
+    const diagnosticId = '22222222-2222-4222-8222-222222222222';
+    const calls = [];
+    t.mock.method(saved, 'analyzeWithRecoveredFeedback', async (paper, plan, analyze, feedback, sourceOptions) => {
+        assert.equal(sourceOptions.coreSummaryDiagnosticId, paper.arxivId === ID ? diagnosticId : undefined);
+        return paper.arxivId === ID
+            ? analyze({ resumeSavedReaderUpstreamOnly: true, requireCompletedPrimaryCheckpoint: true })
+            : analyze();
+    });
+    await batch.main({
+        coreSummaryDiagnosticIds: { [ID]: diagnosticId }, naturalResourceProse: true,
+        analyzeFn: async (paper, options) => {
+            calls.push({ id: paper.arxivId, options });
+            throw Object.assign(new Error('offline saved-upstream routing sentinel'), { retryable: false });
+        }
+    });
+    assert.equal(calls.length, 2);
+    const first = calls.find(call => call.id === ID).options;
+    const second = calls.find(call => call.id !== ID).options;
+    assert.equal(first.coreSummaryDiagnosticId, diagnosticId);
+    assert.equal(first.naturalResourceProse, true);
+    assert.equal(first.resumeSavedReaderUpstreamOnly, true);
+    assert.equal(first.requireCompletedPrimaryCheckpoint, true);
+    assert.equal(second.naturalResourceProse, true);
+    assert.equal(second.resumeSavedReaderUpstreamOnly, undefined);
+    assert.equal(second.requireCompletedPrimaryCheckpoint, undefined);
+});
+
 test('批量反馈全部只读预检：重复论文、后一个坏绑定及非法列表不写文件、不开始分析', async t => {
     const f = await fixture(t);
     delete require.cache[require.resolve('../scripts/batch-analyze')];

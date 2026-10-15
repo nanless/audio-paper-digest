@@ -257,7 +257,10 @@ async function main(options = {}) {
         analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
             ...options,
             analyze: (paper, sourceOptions) => {
-                const normalAnalyze = recoveryOptions => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper, recoveryOptions);
+                const normalAnalyze = recoveryOptions => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper, {
+                    ...sourceOptions,
+                    ...recoveryOptions
+                });
                 const grant = explicitRounds.get(normalizedId(paper));
                 // Reader恢复可直接刷新正文，不必调用整篇分析回调；新轮范围须覆盖整个恢复入口。
                 const recover = () => savedFacts.analyzeWithRecoveredFeedback(paper, dailySourcePlan, normalAnalyze,
