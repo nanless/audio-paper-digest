@@ -22,6 +22,7 @@ const SOURCE_KINDS = new Set(['official-metadata', 'official-pdf', 'conference-p
 // WeakMap。它们没有可枚举数据，无法被克隆或伪造。
 const LEDGER_HANDLES = new WeakSet();
 const LEDGER_HANDLE_DATA = new WeakMap();
+const LEDGER_MEMBER_INDEX = new WeakMap();
 
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const compareIdentityKeys = (left, right) => left < right ? -1 : left > right ? 1 : 0;
@@ -430,7 +431,20 @@ function loadLedgerHandle(filename) {
         ledger: deepFreeze(loaded.ledger),
         ledgerSha256: loaded.ledgerSha256
     }));
+    LEDGER_MEMBER_INDEX.set(handle, new Map(loaded.ledger.members.map(member => [identityKey(member.identity), member])));
     return handle;
+}
+
+function ledgerHandleReadOnlyView(handle) {
+    if (!handle || typeof handle !== 'object' || !LEDGER_HANDLES.has(handle)) {
+        throw new Error('Conference ledger requires an authenticated loaded handle');
+    }
+    return LEDGER_HANDLE_DATA.get(handle);
+}
+
+function ledgerHandleReadOnlyMember(handle, key) {
+    ledgerHandleReadOnlyView(handle);
+    return LEDGER_MEMBER_INDEX.get(handle).get(key) || null;
 }
 
 function ledgerHandleSnapshot(handle) {
@@ -446,5 +460,5 @@ module.exports = {
     CONTRACT, sha256, stableHash, identityKey, memberSetSha256, createLedger,
     validateIdentity, validateMember, validateLedger, readRegularJson,
     assertRelativePath, safeArtifactPath, verifyMemberFiles, writeLedger, loadLedger,
-    loadLedgerHandle, ledgerHandleSnapshot
+    loadLedgerHandle, ledgerHandleSnapshot, ledgerHandleReadOnlyView, ledgerHandleReadOnlyMember
 };

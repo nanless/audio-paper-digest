@@ -367,7 +367,7 @@ function resolveRun(input) {
         runStateSha256: verified.stateSha256 } };
 }
 
-function buildConferenceSourceContextFromLedger(input = {}, productionBinding = null) {
+function buildConferenceSourceContextFromLedger(input = {}, productionBinding = null, authenticatedRun = null) {
     if (productionBinding === null) integrity('必须提供已核验计划的授权信息', 'plan_handle_invalid');
     if (!plain(input)) integrity('会议来源上下文输入必须是普通对象');
     const hasRun = Object.prototype.hasOwnProperty.call(input, 'run');
@@ -375,18 +375,18 @@ function buildConferenceSourceContextFromLedger(input = {}, productionBinding = 
     if (hasRun === hasExecution) integrity('run 和 execution 必须且只能提供其中一项', 'ambiguous_run_source');
     exact(input, ['ledgerHandle', hasExecution ? 'execution' : 'run', 'paperId', 'sourceRoot'], '会议来源上下文输入');
     if (typeof input.paperId !== 'string' || !input.paperId) integrity('paperId 必须是非空字符串', 'paper_not_found');
-    const resolved = resolveRun(input);
-    const matches = resolved.run.members.filter(member => member.paperId === input.paperId);
+    const resolved = authenticatedRun || resolveRun(input);
+    const matches = authenticatedRun ? [authenticatedRun.member].filter(Boolean)
+        : resolved.run.members.filter(member => member.paperId === input.paperId);
     if (matches.length !== 1) integrity('paperId 必须对应运行记录中唯一的一篇论文', 'paper_not_found');
     const runMember = matches[0];
     let loaded;
-    try { loaded = ledgerApi.ledgerHandleSnapshot(input.ledgerHandle); }
+    try { loaded = ledgerApi.ledgerHandleReadOnlyView(input.ledgerHandle); }
     catch (error) { integrity(`ledgerHandle 不是已核验并登记的来源清单对象： ${error.message}`, 'ledger_handle_invalid'); }
-    const ledgerMatches = loaded.ledger.members.filter(member => ledgerApi.identityKey(member.identity) === runMember.sourceIdentity);
-    if (ledgerMatches.length !== 1 || ledgerMatches[0].status.state !== 'verified') {
+    const member = ledgerApi.ledgerHandleReadOnlyMember(input.ledgerHandle, runMember.sourceIdentity);
+    if (!member || member.status.state !== 'verified') {
         integrity('运行记录的来源身份必须对应来源清单中唯一的已核验成员', 'source_identity_invalid');
     }
-    const member = ledgerMatches[0];
     let pdfSource;
     try {
         pdfSource = pdfApi.buildConferencePdfSourceFromLedger({ sourceRoot: input.sourceRoot,
@@ -457,7 +457,7 @@ function buildConferenceSourceContext(input = {}) {
     if (!plain(input)) integrity('正式会议来源上下文输入必须是普通对象');
     exact(input, ['planHandle', 'paperId', 'sourceRoot'], '正式会议来源上下文输入');
     let authority;
-    try { authority = planApi.planHandleAuthority(input.planHandle); }
+    try { authority = planApi.planHandleReadOnlyAuthority(input.planHandle); }
     catch (error) { integrity(`planHandle 不是已核验并登记的计划对象： ${error.message}`, 'plan_handle_invalid'); }
     const snapshot = authority.snapshot;
     const receipt = snapshot.receipt;
@@ -473,8 +473,12 @@ function buildConferenceSourceContext(input = {}) {
         selectedMemberSetSha256: receipt.filter.selectedMemberSetSha256
     };
     const productionBinding = { ...bindingBody, bindingSha256: stableHash(bindingBody) };
+    const run = snapshot.run;
     return buildConferenceSourceContextFromLedger({ ledgerHandle: authority.ledgerHandle,
-        run: snapshot.run, paperId: input.paperId, sourceRoot: input.sourceRoot }, productionBinding);
+        run, paperId: input.paperId, sourceRoot: input.sourceRoot }, productionBinding, {
+        run, member: planApi.planHandleReadOnlyMember(input.planHandle, input.paperId),
+        binding: { kind: 'run', runIdentitySha256: run.identitySha256, runStateSha256: run.stateSha256 }
+    });
 }
 
 module.exports = {

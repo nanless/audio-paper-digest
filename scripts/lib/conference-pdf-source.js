@@ -333,11 +333,11 @@ function buildConferencePdfSource({ cacheRoot, record, maxBytes, extractPdf } = 
 
 function resolveVerifiedLedgerMember({ sourceRoot, ledgerHandle, identityKey }) {
     let loaded;
-    try { loaded = ledgerApi.ledgerHandleSnapshot(ledgerHandle); }
+    try { loaded = ledgerApi.ledgerHandleReadOnlyView(ledgerHandle); }
     catch (error) { throw fail(`会议 PDF 来源须使用已经加载、核验并登记的来源清单对象： ${error.message}`); }
     const { ledger, ledgerSha256 } = loaded;
     if (typeof identityKey !== 'string' || !identityKey.trim()) throw fail('identityKey 须为非空的规范来源身份标识');
-    const member = ledger.members.find(item => ledgerApi.identityKey(item.identity) === identityKey);
+    const member = ledgerApi.ledgerHandleReadOnlyMember(ledgerHandle, identityKey);
     if (!member) throw fail('identityKey 未对应已加载会议来源清单中的论文');
     if (member.status.state !== 'verified') throw fail('会议 PDF 来源须对应核验状态为 verified 的清单成员');
     const root = requireSafeDirectory(sourceRoot);

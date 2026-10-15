@@ -25,6 +25,8 @@ const SHA_RE = /^[a-f0-9]{64}$/;
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,319}$/;
 const PLAN_HANDLES = new WeakSet();
 const PLAN_HANDLE_DATA = new WeakMap();
+const PLAN_AUTHORITY_VIEWS = new WeakMap();
+const PLAN_MEMBER_INDEX = new WeakMap();
 
 const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 function canonical(value) {
@@ -34,6 +36,13 @@ function canonical(value) {
 }
 const stableHash = value => sha256(JSON.stringify(canonical(value)));
 const clone = value => JSON.parse(JSON.stringify(value));
+function deepFreeze(value) {
+    if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+        for (const child of Object.values(value)) deepFreeze(child);
+        Object.freeze(value);
+    }
+    return value;
+}
 function fail(message) { throw new Error(`会议计划检查未通过： ${message}`); }
 function plain(value, label) {
     if (!value || typeof value !== 'object' || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
@@ -382,9 +391,15 @@ function loadPlanHandle(runFile, receiptFile, planFile, importHandle, tagCatalog
     }
     if (stableHash(run.members) !== stableHash(imported.verifiedMembers)) fail('运行不等于已纳入且通过核验的导入集合');
     const handle = Object.freeze(Object.create(null)); PLAN_HANDLES.add(handle);
-    PLAN_HANDLE_DATA.set(handle, Object.freeze({ plan: clone(loadedPlan.value), run: clone(run), receipt: clone(receipt),
+    PLAN_HANDLE_DATA.set(handle, Object.freeze({ plan: deepFreeze(clone(loadedPlan.value)),
+        run: deepFreeze(clone(run)), receipt: deepFreeze(clone(receipt)),
         receiptFileSha256: loadedReceipt.sha256, runFileSha256: loadedRun.sha256,
         ledgerHandle: authority.ledgerHandle, importHandle }));
+    const stored = PLAN_HANDLE_DATA.get(handle);
+    PLAN_AUTHORITY_VIEWS.set(handle, Object.freeze({ snapshot: Object.freeze({
+        run: stored.run, receipt: stored.receipt, receiptFileSha256: stored.receiptFileSha256,
+        runFileSha256: stored.runFileSha256 }), ledgerHandle: stored.ledgerHandle, importHandle }));
+    PLAN_MEMBER_INDEX.set(handle, new Map(stored.run.members.map(member => [member.paperId, member])));
     return handle;
 }
 
@@ -399,6 +414,18 @@ function planHandleAuthority(handle) {
     if (!handle || typeof handle !== 'object' || !PLAN_HANDLES.has(handle)) fail('必须提供经过核验并登记的计划对象');
     const value = PLAN_HANDLE_DATA.get(handle);
     return { snapshot: planHandleSnapshot(handle), ledgerHandle: value.ledgerHandle, importHandle: value.importHandle };
+}
+
+// 仅登记过的句柄能读取共享不可变视图；普通 snapshot 继续返回独立可变副本。
+// run 在 loadPlanHandle 已连同原 ledger 全量核验，视图及所有嵌套值均不可修改。
+function planHandleReadOnlyAuthority(handle) {
+    if (!handle || typeof handle !== 'object' || !PLAN_HANDLES.has(handle)) fail('必须提供经过核验并登记的计划对象');
+    return PLAN_AUTHORITY_VIEWS.get(handle);
+}
+
+function planHandleReadOnlyMember(handle, paperId) {
+    planHandleReadOnlyAuthority(handle);
+    return PLAN_MEMBER_INDEX.get(handle).get(paperId) || null;
 }
 
 function applyRunPlan(result, io = fs) {
@@ -489,4 +516,5 @@ module.exports = { PLAN_CONTRACT, LEGACY_PLAN_CONTRACT, SELECTION_CONTRACT, SECU
     tagMetadataForPlan, tagMetadataForReceipt, readProofTagCatalogFile, SAFE_JSON_NAME, stableHash,
     safeRuntimeFile, readRuntimeJson, normalizePlan, receiptDigest, receiptNameFor,
     createRunFromImportPlan, normalizeSecureReceipt, loadPlanHandle, planHandleSnapshot, planHandleAuthority,
+    planHandleReadOnlyAuthority, planHandleReadOnlyMember,
     applyRunPlan, report };
