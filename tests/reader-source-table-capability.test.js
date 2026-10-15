@@ -57,6 +57,41 @@ test('明确同值TeX显示副本沿公共规则处理，来源原字节保持�
     assert.equal(JSON.stringify(table), before);
 });
 
+test('完整布尔副本表保留原72格、dB列头、数值精度与DOM坐标，错误符号和缺格仍拒绝', () => {
+    // AURA 原 Table 1 的完整封存矩阵；只有明确同符号 TeX 副本投影。
+    const matrix = [
+        ['Method', 'Training-free', 'MP', 'MR-STFT ↓\\downarrow', 'SI-SDR (dB) ↑\\uparrow', 'SI-SDR Mid (dB) ↑\\uparrow', 'Spatial FD ↓\\downarrow', 'ILD Dist. ↓\\downarrow', 'IC Dist. ↓\\downarrow'],
+        ['S3A (DSP)', '–', '✓\\checkmark', '0.290', '1.44', '24.14', '93.9', '2.203', '0.246'],
+        ['Parametric Stereo', '×\\times', '✓\\checkmark', '0.201', '7.617', '20.570', '358.730', '2.638', '0.240'],
+        ['DiffStereo (DDIM)', '×\\times', '×\\times', '0.581', '-2.16', '1.79', '53.3', '1.460', '0.343'],
+        ['DiffStereo (DDPM)', '×\\times', '×\\times', '0.4550', '0.569', '4.34', '43.16', '1.552', '0.263'],
+        ['FlowDPS', '✓\\checkmark', '×\\times', '0.657', '-18.036', '-17.045', '25.659', '1.36', '0.25'],
+        ['Aura - Small (Ours)', '✓\\checkmark', '×\\times', '0.2223', '4.6920', '8.34', '20.3344', '1.3744', '0.1693'],
+        ['Aura - Medium (Ours)', '✓\\checkmark', '×\\times', '0.2088', '5.042', '8.15', '34.6924', '1.543', '0.233']
+    ];
+    const table = source(matrix); table.headerRows = []; table.cells.forEach(cell => { cell.header = false; });
+    const before = JSON.stringify(table);
+    assert.equal(tables.assessReaderCompleteTableEligibility(table).eligible, true);
+    const rendered = tables.renderReaderCompleteTable(draft().tableBindings[0], {tables:[table]});
+    assert.equal(rendered.binding.cellBindings.length, 72);
+    assert.deepEqual(rendered.binding.cellBindings.map(cell => [cell.sourceRow, cell.sourceColumn]),
+        matrix.flatMap((row, r) => row.map((_, c) => [r, c])));
+    const visible = require('../scripts/analysis-contract').extractMarkdownTables(rendered.markdown)[0];
+    assert.deepEqual([visible.header, ...visible.rows], matrix.map(row => row.map(
+        require('../scripts/lib/reader-source-display').normalizeReaderSourceDisplayArtifacts)));
+    assert.equal(visible.header[4], 'SI-SDR (dB) ↑');
+    assert.equal(visible.header[5], 'SI-SDR Mid (dB) ↑');
+    assert.equal(visible.rows[5][4], '4.6920');
+    assert.equal(JSON.stringify(table), before);
+    for (const invalid of [String.raw`✓\times`, String.raw`×\times + 2`, String.raw`×\times_{j}`, String.raw`×\times\unknown`]) {
+        const bad = structuredClone(table); bad.matrix[2][1] = invalid;
+        bad.cells.find(cell => cell.row === 2 && cell.column === 1).text = invalid;
+        assert.equal(tables.assessReaderCompleteTableEligibility(bad).eligible, false, invalid);
+    }
+    const missing = structuredClone(table); missing.cells.pop();
+    assert.equal(tables.assessReaderCompleteTableEligibility(missing).eligible, false);
+});
+
 test('未知TeX、非矩形、丢原格、重复原格与Markdown注入不能声明完整表', () => {
     const variants = [source([['Method', 'Score'], ['Ours', '\\mathrm{score}']]),
         source([['Method', 'Score'], ['Ours', '3.2|extra']]),

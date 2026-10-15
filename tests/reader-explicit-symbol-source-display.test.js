@@ -8,6 +8,20 @@ utils.loadEnvFile = () => Object.assign(process.env,environment);
 utils.requestLlmJson = () => { throw Error('本测试禁止网络'); };
 const deep = require('../scripts/deep-analyzer');
 
+test('完整格布尔符号只合并同值显式TeX副本，不把乘积或续式当格值', () => {
+    const normalize = require('../scripts/lib/reader-source-display').normalizeExplicitReaderSymbolProjection;
+    for (const [raw, expected] of [[String.raw`✓\checkmark`, '✓'], [String.raw`×\times`, '×'],
+        [String.raw`| ✓\checkmark | ×\times |`, '| ✓ | × |'],
+        [String.raw`  ✓\checkmark  `, '  ✓  ']]) {
+        assert.equal(normalize(raw), expected);
+        assert.equal(deep.normalizeReaderSourceCell(raw), deep.normalizeReaderSourceCell(expected));
+    }
+    for (const raw of [String.raw`✓\times`, String.raw`×\checkmark`, String.raw`××\times`,
+        String.raw`✓✓`, String.raw`\times`, String.raw`a×\times`, String.raw`×\times b`,
+        String.raw`×\times^{2}`, String.raw`✓\checkmark _{j}`, String.raw`×\times\unknown`,
+        String.raw`×\times + 2`, String.raw`✓\checkmarker`]) assert.equal(normalize(raw), raw);
+});
+
 test('同格完整符号与TeX原子严格同值才合并显示',()=>{
     const samples = [
         [String.raw`𝚫𝐚𝐯𝐠\boldsymbol{\Delta_{\mathrm{avg}}} ↑\uparrow`,'Δavg ↑'],

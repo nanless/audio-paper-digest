@@ -6586,6 +6586,12 @@ def _normalize_api_reader_explicit_symbol_projection(value):
     output = str(value or '')
     if '\\' not in output:
         return output
+    # 仅完整格中同值的布尔符号/TeX副本；不清理乘积、续式或裸重复。
+    output = re.sub(
+        r'(^|[|\n])([ \t]*)([✓×])\\(checkmark|times)(?=[ \t]*(?:[|\n]|$))',
+        lambda match: match[1] + match[2] + match[3]
+        if match[3] == ('✓' if match[4] == 'checkmark' else '×') else match[0], output,
+    )
 
     def continuation(text, end):
         tail = text[end:].lstrip()

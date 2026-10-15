@@ -4,6 +4,10 @@
 function normalizeExplicitReaderSymbolProjection(value) {
     let output = String(value ?? '');
     if (!output.includes('\\')) return output;
+    // 仅完整格中的同值布尔符号与显式 TeX 副本；乘积、续式和裸重复不投影。
+    output = output.replace(/(^|[|\n])([ \t]*)([✓×])\\(checkmark|times)(?=[ \t]*(?:[|\n]|$))/g,
+        (whole, boundary, space, visible, command) => visible === (command === 'checkmark' ? '✓' : '×')
+            ? `${boundary}${space}${visible}` : whole);
     const hasContinuation = (input, end) => /^\s*[\p{L}\p{N}_^\\({]/u.test(input.slice(end));
     // 只有完整的可见变量与明确 TeX 同值时才合并，不能从裸重复猜测。
     const compound = [
