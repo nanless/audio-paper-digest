@@ -4121,7 +4121,8 @@ title: "Bad table"
             'auto_fixable': True,
         }
 
-        def fake_review(chunk, _title, required=False, chunk_label='1/1'):
+        def fake_review(chunk, _title, required=False, chunk_label='1/1', *, source_figure_note=''):
+            self.assertEqual(source_figure_note, '')  # This legacy page has no authenticated DOM mapping.
             if '第二段' in chunk:
                 return False, [issue], chunk
             return True, [], chunk
