@@ -158,6 +158,36 @@ function fixture(t, extraRuns = []) {
     return { root, one, two, extra, runs, planHandle, sourceRoot: path.join(root, 'source'), dependencies };
 }
 
+test('新资源声明的会议冷资格只在原计划来源核验后重放，并保留具体失败诊断', t => {
+    const f = fixture(t), loaded = f.runs.get(f.one), paper = loaded.analysis.papers[0];
+    loaded.directory = path.join(f.root, f.one);
+    paper.analysisManifest.contracts.readerResourceClaims = 'reader-resource-availability-claims-v1';
+    paper.analysisManifest.stages.apiReaderArticle.readerResourceClaimsContractVersion = 'reader-resource-availability-claims-v1';
+    const engine = require('../scripts/analysis-engine');
+    assert.equal(engine.hasValidApiReaderV3Records(paper), false);
+    assert.equal(engine.getApiReaderV3RecordDiagnostics(paper)[0].check, 'resource_claim_source_unavailable');
+    const sourceBefore = JSON.stringify(loaded);
+    const options = { analysisRoot: f.root, executionId: f.one, planHandle: f.planHandle, sourceRoot: f.sourceRoot };
+    let verified = 0;
+    const deps = { ...f.dependencies, verifyPlanAuthority: (...args) => {
+        verified += 1; return f.dependencies.verifyPlanAuthority(...args);
+    } };
+    assert.equal(api.loadCompleted(options, deps).run.paperId, paper.id);
+    assert.equal(verified, 1);
+    assert.equal(JSON.stringify(loaded), sourceBefore);
+    assert.equal(engine.hasValidApiReaderV3Records(paper), false, '来源作用域不能泄漏到普通冷查询');
+    for (const trustEvidence of [false, true]) assert.throws(() => api.loadCompleted({ ...options, trustEvidence }, {
+        ...deps, verifyPlanAuthority: () => { throw new Error('cross-plan source refused'); }
+    }), /cross-plan source refused/, '旧混合来源标志不能给新声明伪造来源作用域');
+    const previous = loaded.source.sourceDetails.text;
+    loaded.source.sourceDetails.text += ' changed';
+    assert.throws(() => api.loadCompleted(options, deps), /读者文章/);
+    loaded.source.sourceDetails.text = previous;
+    paper.analysisManifest.stages.apiReaderArticle.readerResourceClaimsContractVersion = 'unknown';
+    assert.equal(engine.getApiReaderV3RecordDiagnostics(paper)[0].check, 'resource_claims_contract');
+    assert.throws(() => api.loadCompleted(options, deps), /读者文章/);
+});
+
 test('已签会议原标签按原归档重放，当前目录另投影相同概念且不修改原稿', () => {
     const { paper } = completedConferenceOriginalTaxonomyFixture();
     const original = JSON.stringify(paper);

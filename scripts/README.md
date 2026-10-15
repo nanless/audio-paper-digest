@@ -27,6 +27,8 @@ Reader 刷新默认使用配置并发5和总轮数3，`--concurrency N` 范围1�
 
 使用 `conference:acquire/discover/filter/process`；`conference:publish:generate/review/push/verify`独立处理发布。旧execution/analyze/postprocess CLI已删除，不能绕过统一process来源/权限检查。参数见 [会议说明](../docs/conference-workflow.md)。
 
+会议适配器负责将已认证的真实来源上下文保留到 Reader 完成及冷启动资格核验。恢复时先检查同一子运行已保存的新付费稿，满足真实签发与完整资格才零请求完成；继承父稿不算新修复。共享摘要修复的诊断记录按会议执行及规范 ID 隔离，不能套用日更 arXiv 路径或放宽修复标准。
+
 ## 历史博客
 
 使用 `history:inputs/plan/sources/run/aggregate/publication`，范围和Source参数见 [历史说明](../docs/history-rewrite.md)。`history:resume`用于当前暂停计划或受限恢复已存在的旧来源任务，不创建旧任务或清零预算。必要来源取得、标签补充、状态和控制工具仍属于历史维护。

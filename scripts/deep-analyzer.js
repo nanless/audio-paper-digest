@@ -4575,10 +4575,44 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         if (type === 'dataset' && /全量可用下(?:论文)?(?:报告|评测|测试)/.test(segment)) return true;
         return false;
     };
-    const isReportedReleaseWithCurrentQualification = value =>
-        /(?:论文(?:称|说|声明)|原文(?:称|说|声明))/.test(value)
-        && /(?:本次[^。！？!?；;]{0,80}(?:当前不可达|当前不可用|未能确认|未確認)|动手前[^。！？!?；;]{0,20}先核对当前可用性)/.test(value)
-        && !/(?:但|然而|不过|事实上)[^。！？!?；;，,]{0,24}(?:本文|本研究|本工作|作者团队)[^。！？!?；;，,]{0,24}(?:已|现已|已经)(?:开源|公开|发布)/.test(value);
+    const isReportedReleaseWithCurrentQualification = (value, type, matchIndex, matchEnd) => {
+        const sourceNouns = {
+            code: '(?:implementation\\s+code|source\\s+code|code(?![- ]switch)|repository|repo)',
+            model: '(?:model\\s+weights?|weights?|checkpoints?)',
+            dataset: '(?:datasets?|corpus|corpora)', demo: '(?:demo|demonstration)',
+            reproduction: '(?:artifacts?|reproduction\\s+materials?)'
+        };
+        const noun = CONFERENCE_READER_RESOURCE_CLAIM_SPECS[type];
+        if (!noun || !sourceNouns[type]) return false;
+        const source = String(sourceText || '').replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, ' ')
+            .replace(/^[ \t]*>.*$/gm, ' ').replace(/“[^”]*”|「[^」]*」|"[^"\n]*"/g, ' ')
+            .replace(/[^\S\n]+/g, ' ');
+        // 归属作者原文的发布说法须确有同类型来源；可达性仍只由资源身份决定。
+        const sourceRelease = new RegExp(`\\b${sourceNouns[type]}\\b[^.!?]{0,64}`
+            + '\\b(?:is|are|was|were|has been|have been)\\s+(?:now\\s+|publicly(?:\\s+|[^\\n.!?]{0,120}\\n(?:[^\\n.!?]{0,120}\\n)?\\s*))?'
+            + '(?:available|released|open[- ]sourced|accessible|downloadable)\\b', 'giu');
+        if (![...source.matchAll(sourceRelease)].some(span => {
+            const start = Math.max(source.lastIndexOf('.', span.index), source.lastIndexOf('!', span.index),
+                source.lastIndexOf('?', span.index)) + 1;
+            return !/\b(?:not|never|no|if|would|could|might|will|future|said|claimed|reportedly|alleged|assumed|third[- ]party|baseline|prior|previous|existing|related|cited)\b/i
+                .test(source.slice(start, span.index + span[0].length));
+        })) return false;
+        const reports = /(?:论文(?:正文)?|原文)(?:称|说|声明|表示)[^。！？!?；;，,]{1,160}/gu;
+        for (const report of value.matchAll(reports)) {
+            const end = report.index + report[0].length;
+            if (matchIndex < report.index || matchEnd > end || !noun.test(report[0])) continue;
+            const tail = value.slice(end);
+            const qualification = /^\s*[，,]\s*(?:但|然而|不过)([^。！？!?；;，,]{1,180})/u.exec(tail);
+            if (!qualification) continue;
+            const current = qualification[1];
+            const types = resourceTypesIn(current);
+            if ((types.size && !types.has(type))
+                || /(?:并非|不是|并不是|反驳|否定|推翻)[^。！？!?；;，,]{0,32}(?:没有|未|不可|不能)/u.test(current)) continue;
+            const qualified = /(?:本次|当前)[^。！？!?；;，,]{0,100}(?:当前不可达|当前不可用|未能确认|未確認|没有确认可达|未确认可达|无法确认可达|HTTP\s*[45]\d\d)/iu.test(current);
+            if (qualified) return true; // 仅豁免这条reported span；后续声明仍逐项核验。
+        }
+        return false;
+    };
     const isSourceBackedDependencyUseOrPriorDatasetAccess = (value, type, matchIndex) => {
         if (!Number.isInteger(matchIndex)) return false;
         const source = String(sourceText || '')
@@ -4780,7 +4814,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 || isDependencyResourceAttribution(segment, localMatchIndex, type)
                 || isBoundedResourceDeclarationDenial(value, match.index, match.index + match[0].length)
                 || isScopedResourceNonClaim(segment, localMatchIndex, type)
-                || isReportedReleaseWithCurrentQualification(value)
+                || isReportedReleaseWithCurrentQualification(value, type, match.index, match.index + match[0].length)
                 || isSourceBackedDependencyUseOrPriorDatasetAccess(value, type, match.index)
                 || isSourceBackedBaselineUsage(value, type, match.index)
                 || isSourceBackedPriorModelEvaluation(value, type, match.index)
@@ -9356,6 +9390,126 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
         }
     });
     return transferDeferredReaderCandidate(generated, finalized);
+}
+
+// A failed outer save may leave an accepted Reader in a partial conference
+// child. Prove its original paid output without requesting, retiring, or
+// changing any candidate. Unsupported/missing evidence leaves normal recovery.
+async function inspectSavedConferenceReaderCompletion(paper, { executionId, executionDir,
+    parentPaper, revision } = {}) {
+    const conference = require('./lib/conference-analysis-context');
+    const active = conference.getConferenceAnalysisContext();
+    const source = conference.getConferenceAnalysisSource(paper);
+    const repair = require('./lib/reader-repair');
+    const stage = paper?.analysisManifest?.stages?.apiReaderArticle;
+    if (!active || active.executionId !== executionId || active.executionDir !== path.resolve(executionDir || '')
+        || revision?.executionId !== executionId || revision?.paperId !== getPaperArxivId(paper)
+        || !parentPaper || getPaperArxivId(parentPaper) !== getPaperArxivId(paper)) {
+        throw new Error('已付会议 Reader 冷核需要同一认证子运行与真实父稿');
+    }
+    if (stage?.status !== 'complete' || stage.contentMode !== READER_SOURCE_CONTENT_MODE
+        || stableFingerprint(stage) === stableFingerprint(parentPaper.analysisManifest?.stages?.apiReaderArticle)
+        || !Number.isInteger(stage.attempts) || stage.attempts < 1) return null;
+    const directory = path.join(active.executionDir, 'reader-attempts');
+    let names;
+    try { names = fs.readdirSync(directory); } catch (error) { if (error.code === 'ENOENT') return null; throw error; }
+    // An active failed attempt must never be cleared using an older archive.
+    if (names.some(name => /^[a-f0-9]{64}\.json$/.test(name))) return null;
+    const archives = names.filter(name => /^[a-f0-9]{64}\.[a-f0-9-]{36}\.resolved\.json$/.test(name));
+    if (!archives.length) return null;
+    const policy = validateReaderCapabilityPolicy(conference.conferenceWeakReaderCapabilityPolicy(paper, source.structuredArtifacts));
+    const resources = replayVerifiedReaderResourceIdentity(paper.apiReaderResources, source.text);
+    const natural = require('./lib/reader-resource-prose').enabled({}, stage);
+    const evidence = buildApiReaderEvidenceContext(paper.analysis, source.text, source.structuredArtifacts,
+        getPaperArxivId(paper), policy, resources, natural);
+    if (crypto.createHash('sha256').update(evidence).digest('hex') !== stage.evidenceSha256) return null;
+    const expected = await conference.withConferenceAnalysisSource({ ...active, sourceDetails: source, readerRetryEpoch: 1 }, () =>
+        generateApiReaderArticleDetailed(paper, paper.analysis, evidence, { readerIdentityOnly: true, readerReplayPreparationOnly: true,
+            sourceText: source.text, structuredArtifacts: source.structuredArtifacts, readerResources: resources,
+            naturalResourceProse: natural }));
+    const implementationKeys = new Set(['parserImplementationSha256', 'editorialImplementationSha256',
+        'mechanicalContractSha256', 'tableCompilerSha256', 'repairImplementationSha256',
+        'draftOrderImplementationSha256', 'sourceDiagnosticsImplementationSha256']);
+    const semanticIdentity = identity => Object.fromEntries(Object.entries(identity)
+        .filter(([key]) => !implementationKeys.has(key)));
+    const read = filename => {
+        const record = require('./lib/conference-analysis-adapter').readJsonRecord(filename);
+        if ((fs.lstatSync(filename).mode & 0o777) !== 0o600) throw new Error('原付费记录权限不合法');
+        return record;
+    };
+    for (const name of archives) {
+        const file = path.join(directory, name), pinned = read(file);
+        const checked = require('./lib/reader-recovery-revision').readFullResolvedReaderForReadOnlyInspection(
+            directory, file, pinned.sha256);
+        const { identity, payload } = checked.envelope;
+        if (stableFingerprint(semanticIdentity(identity)) !== stableFingerprint(semanticIdentity(expected.identity))) continue;
+        if ([...implementationKeys].some(key => !/^[a-f0-9]{64}$/.test(identity[key] || ''))) {
+            throw new Error('原付费 Reader 实现身份不完整');
+        }
+        const bindings = { model: identity.model?.model, protocol: identity.model?.protocol,
+            temperature: identity.model?.temperature, maxTokens: identity.model?.maxTokens,
+            maxResponseBytes: identity.model?.maxResponseBytes, promptTemplateSha256: identity.promptSha256,
+            repairPromptTemplateSha256: identity.repairPromptSha256, repairMaxTokens: identity.repairMaxTokens,
+            repairTemperature: identity.repairTemperature, sourceBindingsSourceTextSha256: identity.sourceSha256,
+            structuredArtifactsSha256: source.structuredArtifacts?.payloadSha256 };
+        if (Object.entries(bindings).some(([key, value]) => value === undefined
+            || stableFingerprint(stage[key]) !== stableFingerprint(value))
+            || payload.fullAttempts !== stage.fullAttempts
+            || (payload.transportFailures || 0) !== (stage.transportFailures || 0)
+            || stableFingerprint(payload.imageEvidence || []) !== stage.imageEvidenceSha256
+            || (payload.imageEvidence || []).length !== stage.imageEvidenceCount) continue;
+        let draft = payload.draft, patchProof = null;
+        if (!draft || payload.rawDraft !== JSON.stringify(draft)) continue;
+        draft = expected.normalizeReplayDraft(draft, payload.issues, payload.imageEvidence || []);
+        if (payload.attempts !== stage.attempts) {
+            // Ordinary retirement retains the last failed envelope. Support
+            // only one subsequent, exactly recorded normal patch here.
+            if (payload.attempts + 1 !== stage.attempts) continue;
+            const diagnosticsDir = path.join(directory, 'request-diagnostics');
+            let diagnosticNames;
+            try { diagnosticNames = fs.readdirSync(diagnosticsDir); }
+            catch (error) { if (error.code === 'ENOENT') continue; throw error; }
+            const requests = diagnosticNames.filter(value => /^[a-f0-9-]{36}\.request\.json$/.test(value)
+                    && diagnosticNames.includes(value.replace('.request.json', '.response.json')))
+                .map(value => ({ name: value, record: read(path.join(diagnosticsDir, value)) }))
+                .filter(({ record }) => record.value.contentAttempt === stage.attempts
+                    && stableFingerprint(record.value.identity) === stableFingerprint(identity)
+                    && record.value.draftSha256 === repair.hashDraft(draft));
+            if (requests.length !== 1) continue;
+            const request = requests[0].record, req = request.value;
+            if (req.contract !== 'reader-repair-request-diagnostics-v1' || req.id + '.request.json' !== requests[0].name
+                || req.promptSha256 !== repair.shaText(req.prompt) || repair.hashDraft(req.draft) !== req.draftSha256
+                || req.atomicOperation !== null || req.sectionGroupPlanContract || !Array.isArray(req.repairTargets)) continue;
+            const response = read(path.join(diagnosticsDir, req.id + '.response.json')), res = response.value;
+            if (res.contract !== req.contract || res.id !== req.id || res.requestSha256 !== request.sha256
+                || res.outputTextSha256 !== repair.shaText(res.rawResponse)) throw new Error('原付费 Reader 修复响应 SHA 不一致');
+            draft = repair.applyReaderPatch(req.draft, repair.parseReaderPatchJson(extractJsonObjectText(res.rawResponse)),
+                req.repairTargets.map(target => target.path), { availableFigureOrdinals: (payload.imageEvidence || []).map(image => image.ordinal),
+                    sourceText: source.text, structuredArtifacts: source.structuredArtifacts });
+            draft = expected.normalizeReplayDraft(draft, payload.issues, payload.imageEvidence || []);
+            patchProof = { requestSha256: request.sha256, responseSha256: response.sha256 };
+        }
+        const parsed = parseApiReaderArticleResult(JSON.stringify(draft), { arxivId: getPaperArxivId(paper),
+            availableFigureOrdinals: (payload.imageEvidence || []).map(image => image.ordinal), requireIntegratedTables: true,
+            minimumIntegratedTables: readerRequirements({ version: 3,
+                availableTableCount: [...evidence.matchAll(/^TABLE_(\d+):/gm)].length }).minimumTables,
+            requiredVersion: API_READER_PLAN_VERSION, requireSourceBindings: true, allowDeterministicQuoteRepair: true,
+            allowDeterministicUnsupportedClaimPruning: true, readerCapabilityPolicy: policy,
+            verifiedResourceIdentity: resources, enforceResourceAvailabilityClaims: true,
+            structuredArtifacts: source.structuredArtifacts, sourceText: source.text });
+        const rendered = injectApiReaderFigures(parsed, source.structuredArtifacts, getPaperArxivId(paper));
+        const materialized = new Set(['cachePath', 'assetFilename', 'assetMediaType', 'assetSha256', 'assetBytes', 'assetWidth', 'assetHeight']);
+        const figureCore = figures => (figures || []).map(figure => Object.fromEntries(Object.entries(figure)
+            .filter(([key]) => !materialized.has(key))));
+        if (rendered.article !== paper.apiReaderArticle || stableFingerprint(rendered.plan) !== paper.apiReaderPlanSha256
+            || stableFingerprint(figureCore(rendered.figures)) !== stableFingerprint(figureCore(paper.apiReaderFigures))) continue;
+        checked.assertUnchanged();
+        return { contract: 'conference-reader-resolved-completion-v1', executionId, paperId: getPaperArxivId(paper),
+            sourceSha256: identity.sourceSha256, originalIdentitySha256: repair.hashDraft(identity),
+            archiveSha256: pinned.sha256, originalParserImplementationSha256: identity.parserImplementationSha256,
+            ...(patchProof ? { paidPatch: patchProof } : {}), articleSha256: stage.articleSha256, planSha256: stage.planSha256 };
+    }
+    return null;
 }
 
 async function finalizeOperatorApiReaderArticleFromSource(paper, sourceDetails, draft, operatorRevisionRecord) {
@@ -18710,9 +18864,16 @@ async function repairCoreSummarySection(
     let issue = getCoreSummaryDetailIssue(original, { sourceText });
     if (!issue && !externalFeedback && options.coreSummaryDiagnosticId === undefined) return original;
     const diagnosticStage = options.diagnosticStage || {};
+    const conferenceDiagnostic = require('./lib/conference-analysis-context')
+        .conferenceCoreSummaryRepairContext(paper, sourceText);
+    const diagnosticPaperId = getPaperArxivId(paper).replace(/v\d+$/, '');
+    if (!conferenceDiagnostic && !/^\d{4}\.\d{4,5}$/.test(diagnosticPaperId)) {
+        throw contractRejectedError('摘要修复记录需要规范论文身份');
+    }
     const diagnosticIdentity = {
         paperId: getPaperArxivId(paper),
-        sourceIdentity: require('./lib/fresh-analysis-context').freshAnalysisIdentity(getPaperArxivId(paper)),
+        sourceIdentity: conferenceDiagnostic?.sourceIdentity
+            || require('./lib/fresh-analysis-context').freshAnalysisIdentity(getPaperArxivId(paper)),
         sourceTextSha256: crypto.createHash('sha256').update(String(sourceText)).digest('hex'),
         inputAnalysisSha256: crypto.createHash('sha256').update(original).digest('hex'),
         evidenceSha256: crypto.createHash('sha256').update(evidenceContext).digest('hex'),
@@ -18721,9 +18882,8 @@ async function repairCoreSummarySection(
         repairRequestPolicy: resolveRepairRequestPolicy('coreSummaryRepair') || null,
         promptTextContract: diagnosticStage.promptTextContract || currentPromptTextContract('coreSummaryRepair')
     };
-    const diagnosticPaperId = getPaperArxivId(paper).replace(/v\d+$/, '');
-    if (!/^\d{4}\.\d{4,5}$/.test(diagnosticPaperId)) throw contractRejectedError('摘要修复记录需要规范论文身份');
-    const recordRoot = path.join(require('./config.js').FILES.analysisRepairAttemptsDir, diagnosticPaperId);
+    const recordRoot = conferenceDiagnostic?.directory
+        || path.join(require('./config.js').FILES.analysisRepairAttemptsDir, diagnosticPaperId);
     // 仅复用调用者明确指定的原付费响应，仍运行当前完整摘要与事实检查。
     if (options.coreSummaryDiagnosticId !== undefined) {
         try {
@@ -19550,6 +19710,7 @@ module.exports = {
     buildApiReaderGenerationStart,
     buildApiReaderValidationFeedback,
     refreshApiReaderArticleFromSource,
+    inspectSavedConferenceReaderCompletion,
     hasReviewedReaderFactLocalSeed,
     finalizeApiReaderRefresh,
     finalizeOperatorApiReaderArticleFromSource,

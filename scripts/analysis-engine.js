@@ -1097,7 +1097,17 @@ function hasValidApiReaderV3Records(paper, options = {}) {
                 () => require('./lib/reader-sealed-pdf-quote-evidence').withSavedPaper(paper,
                     () => require('./lib/reader-source-table-column-units').withSavedPaper(paper,
                         () => hasValidApiReaderV3RecordsUnchecked(paper, options)))));
-    } catch (_error) { return false; }
+    } catch (error) {
+        if (Array.isArray(options.diagnostics)) options.diagnostics.push({
+            check: 'saved_evidence_replay', message: String(error?.message || error).slice(0, 2000) });
+        return false;
+    }
+}
+function getApiReaderV3RecordDiagnostics(paper, options = {}) {
+    const diagnostics = [];
+    if (hasValidApiReaderV3Records(paper, { ...options, diagnostics })) return [];
+    return diagnostics.length ? diagnostics : [{ check: 'reader_record_bindings',
+        message: 'Reader 的协议、正文、计划、作者、资源或阶段哈希不一致。' }];
 }
 function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
     const manifest = paper?.analysisManifest;
@@ -1193,7 +1203,11 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
     const declaredStageResourceClaims = stage.readerResourceClaimsContractVersion;
     const requiresResourceClaimsReplay = declaredResourceClaims !== undefined || declaredStageResourceClaims !== undefined;
     if (requiresResourceClaimsReplay && (declaredResourceClaims !== claimsContract
-        || declaredStageResourceClaims !== claimsContract)) return false;
+        || declaredStageResourceClaims !== claimsContract)) {
+        if (Array.isArray(options.diagnostics)) options.diagnostics.push({ check: 'resource_claims_contract',
+            message: '资源声明协议在清单与 Reader 阶段中的声明不一致。' });
+        return false;
+    }
     let resourceClaimSource = requiresResourceClaimsReplay
         ? require('./lib/model-text-sanitization').currentModelInputSource(paper) : null;
     const resourceSourceProof = paper.freshRewriteProvenance;
@@ -1209,12 +1223,24 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
             runId: run.runId, sourceExpectations: run.sourceExpectations
         });
     }
-    if (requiresResourceClaimsReplay && !resourceClaimSource) return false;
+    if (requiresResourceClaimsReplay && !resourceClaimSource) {
+        if (Array.isArray(options.diagnostics)) options.diagnostics.push({ check: 'resource_claim_source_unavailable',
+            message: '资源声明需要已核验的封存来源作用域，当前没有可重放的来源。' });
+        return false;
+    }
     if (resourceClaimSource) {
         const deep = require('./deep-analyzer');
-        resourceClaimsValid = crypto.createHash('sha256').update(resourceClaimSource.text).digest('hex') === paper.sourceSha256
-            && deep.readerResourceClaimIssues(deep.readerResourceClaimDraftFromArticle(plan, article),
-                resources, resourceClaimSource.text).length === 0;
+        const sourceMatches = crypto.createHash('sha256').update(resourceClaimSource.text).digest('hex') === paper.sourceSha256;
+        const issues = sourceMatches ? deep.readerResourceClaimIssues(
+            deep.readerResourceClaimDraftFromArticle(plan, article), resources, resourceClaimSource.text) : [];
+        resourceClaimsValid = sourceMatches && issues.length === 0;
+        if (Array.isArray(options.diagnostics)) {
+            if (!sourceMatches) options.diagnostics.push({ check: 'resource_claim_source_sha',
+                message: '资源声明作用域的真实全文 SHA 与本篇保存来源不一致。' });
+            options.diagnostics.push(...issues.map(issue => ({ check: 'resource_claims',
+                message: String(issue.message || issue.code || '资源声明未通过').slice(0, 2000),
+                ...(issue.path ? { path: issue.path } : {}) })));
+        }
     }
     const placements = Array.isArray(plan.figurePlacements) ? plan.figurePlacements : null;
     const figureOrdinals = figures.map(item => item?.ordinal);
@@ -1379,6 +1405,7 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
         figure_source: figureSourceValid,
         structured_artifacts: /^[a-f0-9]{64}$/.test(String(stage.structuredArtifactsSha256 || ''))
             && stage.structuredArtifactsSha256 === manifest?.sourceAcquisition?.structuredArtifactsSha256,
+        resource_claims: resourceClaimsValid,
         placements: Boolean(placements)
             && placementOrdinals.length === figureOrdinals.length
             && new Set(placementOrdinals).size === placementOrdinals.length
@@ -1387,6 +1414,8 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
     const failedDiagnosticChecks = Object.entries(diagnosticChecks)
         .filter(([, passed]) => !passed).map(([name]) => name);
     if (failedDiagnosticChecks.length > 0) {
+        if (Array.isArray(options.diagnostics)) options.diagnostics.push(...failedDiagnosticChecks
+            .map(check => ({ check, message: `Reader 核验项未通过：${check}` })));
         console.warn(`[analysis-engine] 读者文章 v3 的以下核验项未通过：${failedDiagnosticChecks.join(', ')}`);
     }
     return Boolean(
@@ -2394,6 +2423,7 @@ module.exports = {
     scoringAuditBindsFinalAnalysis,
     scoringStabilityIsResolved,
     hasValidApiReaderV3Records,
+    getApiReaderV3RecordDiagnostics,
     API_READER_QUALITY_METRICS_CONTRACT,
     API_READER_SOURCE_BINDING_CONTRACT,
     SCORING_STABILITY_RESOLUTION_CONTRACT,

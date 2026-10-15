@@ -565,6 +565,65 @@ function readReaderResourcePreflight(loaded, expectedFileSha256) {
     }
     return identity;
 }
+function revisionQualificationError(paper, rules, engine, label) {
+    const diagnostics = typeof engine.getApiReaderV3RecordDiagnostics === 'function'
+        ? engine.getApiReaderV3RecordDiagnostics(paper, {
+            legacyConferenceResourceBindings: true, conferencePublicationEvidence: true }) : [];
+    const upstream = typeof engine.getConferenceReaderRefreshUpstreamReason === 'function'
+        ? engine.getConferenceReaderRefreshUpstreamReason(paper, { tagRules: rules }) : null;
+    const reason = upstream || diagnostics.map(item => `${item.check}: ${item.message}`).join('; ')
+        || paper.latestAnalysisAttemptError || '未完成事实反馈义务、最新失败或完整发布资格未通过。';
+    return Object.assign(new Error(`${label}：${reason}`), {
+        code: 'CONFERENCE_READER_REVISION_QUALIFICATION_FAILED', readerQualificationDiagnostics: diagnostics });
+}
+async function inspectLoadedReaderRevisionCompletion(loaded, { planHandle, sourceRoot }, { engine, deep }) {
+    verifyPlanAuthority(loaded, planHandle, sourceRoot);
+    const paper = loaded.analysis.papers[0], parentPaper = loaded.parent.analysis.papers[0];
+    const progress = loaded.analysis.readerRevisionProgress;
+    if (!progress || !Number.isSafeInteger(progress.attempts) || progress.attempts < 0
+        || progress.attempts > loaded.revision.maxAttempts || !Array.isArray(progress.failures)) {
+        throw Object.assign(new Error('保存的会议 Reader 修订轮次或失败历史损坏'), { retryable: false });
+    }
+    if (progress.attempts < 1
+        || paper.analysisManifest?.stages?.apiReaderArticle?.status !== 'complete'
+        || typeof deep.inspectSavedConferenceReaderCompletion !== 'function') {
+        return { eligible: false, reason: '没有本子任务已完成 Reader 的可重放付费签发证明。' };
+    }
+    return analysisContext.withConferenceAnalysisSource({ executionId: loaded.run.executionId,
+        executionDir: loaded.directory, paperId: loaded.run.paperId, sourceDetails: loaded.source.sourceDetails }, async () => {
+        const proof = await deep.inspectSavedConferenceReaderCompletion(paper, {
+            executionId: loaded.run.executionId, executionDir: loaded.directory,
+            parentPaper, revision: loaded.revision });
+        if (!proof) return { eligible: false, reason: '保存稿未与本子任务支持的真实付费候选闭合链对应。' };
+        if (loaded.revision.mode !== 'normal-analysis') {
+            for (const name of ['primaryAnalysis', 'coreSummaryRepair', 'tagSelection', 'taxonomySeal']) {
+                if (stableHash(paper.analysisManifest?.stages?.[name] || null)
+                    !== stableHash(parentPaper.analysisManifest?.stages?.[name] || null)) {
+                    throw Object.assign(new Error(`保存的 Reader 子稿改动受保护原阶段：${name}`), { retryable: false });
+                }
+            }
+        }
+        const rules = require('./conference-postprocess').readOriginalTagProof(paper).rules;
+        if (!engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, { tagRules: rules })) {
+            const error = revisionQualificationError(paper, rules, engine, '保存的付费 Reader 未通过正常整篇资格');
+            return { eligible: false, reason: error.message, diagnostics: error.readerQualificationDiagnostics };
+        }
+        // An issuance proof is useful only for this exact immutable read. Never
+        // approve a parent/source or canonical record changed during replay.
+        const after = loadConferenceReaderRevision({ analysisRoot: path.dirname(loaded.directory),
+            executionId: loaded.run.executionId });
+        if (after.analysisFileSha256 !== loaded.analysisFileSha256
+            || after.runFileSha256 !== loaded.runFileSha256
+            || after.sourceFileSha256 !== loaded.sourceFileSha256) throw new Error('付费 Reader 冷核期间子稿或来源发生变化');
+        return { eligible: true, proof, analysisSha256: loaded.analysisFileSha256,
+            articleSha256: paper.apiReaderArticleSha256, attempts: progress.attempts };
+    });
+}
+async function inspectConferenceReaderRevisionCompletion({ analysisRoot, executionId, planHandle, sourceRoot } = {}, overrides = {}) {
+    const loaded = loadConferenceReaderRevision({ analysisRoot, executionId });
+    return inspectLoadedReaderRevisionCompletion(loaded, { planHandle, sourceRoot }, {
+        engine: overrides.engine || require('../analysis-engine'), deep: overrides.deep || require('../deep-analyzer') });
+}
 function readerScoringCheckpoint(paper, loaded, engine, rules) {
     const stage = paper.analysisManifest?.stages?.scoringAudit;
     require('../deep-analyzer').replayVerifiedReaderResourceIdentity(paper.apiReaderResources, loaded.source.sourceDetails.text);
@@ -584,6 +643,7 @@ function loadConferenceReaderRevision({ analysisRoot, executionId } = {}) {
     const { revisionSha256, ...body } = record.value;
     if (body.contract !== READER_REVISION_CONTRACT || body.version !== 1
         || !['reader-only', 'scoring-and-reader', 'normal-analysis'].includes(body.mode)
+        || !Number.isSafeInteger(body.maxAttempts) || body.maxAttempts < 1 || body.maxAttempts > 3
         || revisionSha256 !== stableHash(body) || body.executionId !== executionId
         || readerRevisionExecutionId(body.parentExecutionId, body.parentAnalysisFileSha256) !== executionId
         || body.paperId !== loaded.run.paperId || body.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256) {
@@ -670,14 +730,38 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
             loaded = loadConferenceReaderRevision({ analysisRoot, executionId });
         }
         verifyPlanAuthority(loaded, planHandle, sourceRoot);
+        const withVerifiedSource = callback => {
+            // Re-read real plan-bound source files before granting the source
+            // scope; saved text alone cannot authorize resource claim replay.
+            verifyPlanAuthority(loaded, planHandle, sourceRoot);
+            return analysisContext.withConferenceAnalysisSource({ executionId,
+                executionDir: loaded.directory, paperId: loaded.run.paperId,
+                sourceDetails: loaded.source.sourceDetails }, callback);
+        };
         if (loaded.analysis.status === 'complete') {
             const rules = require('./conference-postprocess').readOriginalTagProof(loaded.analysis.papers[0]).rules;
-            if (!engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(loaded.analysis.papers[0], { tagRules: rules })) {
-                throw Object.assign(new Error('已保存会议 Reader revision 未通过完整资格'), { retryable: false });
-            }
+            withVerifiedSource(() => {
+                if (!engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(loaded.analysis.papers[0], { tagRules: rules })) {
+                    throw Object.assign(revisionQualificationError(loaded.analysis.papers[0], rules, engine,
+                        '已保存会议 Reader revision 未通过完整资格'), { retryable: false });
+                }
+            });
             if (loaded.run.status !== 'complete') sealCompletedRun(loaded);
             return { executionId, paperId: parent.run.paperId, status: 'complete', revision: loaded.revision,
                 analysisSha256: loaded.analysisFileSha256 };
+        }
+        const savedCompletion = await inspectLoadedReaderRevisionCompletion(loaded, { planHandle, sourceRoot }, { engine, deep });
+        if (savedCompletion.eligible) {
+            // Source, paid issuance, full qualification and protected upstream
+            // have all replayed before any attempt increment or model request.
+            const next = { ...loaded.analysis, status: 'complete', completedAt: new Date().toISOString(),
+                generation: loaded.analysis.generation + 1,
+                stats: { ...(loaded.analysis.stats || {}), analysisStatus: 'complete' } };
+            replaceJson(path.join(loaded.directory, 'analysis.json'), next, loaded.analysisFileSha256);
+            const completed = loadConferenceReaderRevision({ analysisRoot, executionId });
+            sealCompletedRun(completed);
+            return { executionId, paperId: parent.run.paperId, status: 'complete', revision: loaded.revision,
+                analysisSha256: completed.analysisFileSha256, recoveredSavedReader: true };
         }
         const progress = loaded.analysis.readerRevisionProgress;
         if (!progress || !Number.isSafeInteger(progress.attempts) || !Array.isArray(progress.failures)
@@ -747,9 +831,11 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
                 }
             }
             const rules = require('./conference-postprocess').readOriginalTagProof(paper).rules;
-            if (!engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, { tagRules: rules })) {
-                throw new Error('会议 Reader revision 未通过正常整篇资格');
-            }
+            withVerifiedSource(() => {
+                if (!engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, { tagRules: rules })) {
+                    throw revisionQualificationError(paper, rules, engine, '会议 Reader revision 未通过正常整篇资格');
+                }
+            });
             current = readJsonRecord(analysisFile);
             const next = { ...current.value, papers: [paper], status: 'complete', completedAt: new Date().toISOString(),
                 generation: current.value.generation + 1, stats: { ...(current.value.stats || {}), analysisStatus: 'complete' } };
@@ -791,4 +877,5 @@ module.exports = { RUN_CONTRACT, ANALYSIS_CONTRACT, SOURCE_CONTRACT, PREPARE_INT
     stableHash, normalizedPaper, sourceDetails, validatePersistedSourceDetails,
     readJsonRecord, writeBytesAtomic, replaceJson, prepareArtifacts, prepareConferenceAnalysis, loadConferenceAnalysis, verifyPlanAuthority,
     sealCompletedRun, sealCompletedRunLocked, analyzeConference,
-    READER_REVISION_CONTRACT, readerRevisionExecutionId, loadConferenceReaderRevision, refreshConferenceReader };
+    READER_REVISION_CONTRACT, readerRevisionExecutionId, loadConferenceReaderRevision,
+    inspectConferenceReaderRevisionCompletion, refreshConferenceReader };

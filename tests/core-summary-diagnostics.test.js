@@ -209,3 +209,62 @@ test('普通无需修复的合格摘要不增加论文身份要求', async () =>
 test('非arXiv身份显式付费摘要不能绕过记录核验', async () => {
     await assert.rejects(deep.repairCoreSummarySection({ title: '无ID' }, baseline, sourceText, sourceText, { coreSummaryDiagnosticId: 'd9077527-0d59-4d92-8d0c-0e3d7b10007f' }), /规范论文身份/);
 });
+
+test('会议摘要沿认证来源保存和零请求重放，会议/执行/全文/原稿身份不交叉复用', async t => {
+    isolated(t);
+    const conference = require('../scripts/lib/conference-analysis-context');
+    const folder = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-core-diagnostic-'));
+    t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
+    const executionId = '77777777-7777-4777-8777-777777777777';
+    const executionDir = path.join(folder, executionId); fs.mkdirSync(executionDir);
+    const id = 'conference:interspeech:2026:conference-paper-id:ahn26b_interspeech';
+    const conferencePaper = { id, conferencePaperId: id, sourceId: id, source: 'conference',
+        sourceSha256: sha256(sourceText), title: '规范会议摘要诊断',
+        analysisManifest: { sourceAcquisition: { sourceSha256: sha256(sourceText) } } };
+    const details = { source: 'conference_pdf_text', sourceId: id, text: sourceText,
+        structuredArtifacts: { payloadSha256: 'c'.repeat(64) } };
+    const identity = { executionId, executionDir, paperId: id, sourceDetails: details };
+    const run = (callback, scope = identity) => conference.withConferenceAnalysisSource(scope, callback);
+    let calls = 0;
+    const result = await run(() => deep.repairCoreSummarySection(conferencePaper,
+        incompleteAnalysis, sourceText, sourceText, { callModelFn: async () => {
+            calls += 1; return `## 核心摘要\n${goodSummary}`;
+        } }));
+    assert.equal(result, baseline); assert.equal(calls, 1);
+    const context = run(() => conference.conferenceCoreSummaryRepairContext(conferencePaper, sourceText));
+    assert.ok(context.directory.startsWith(executionDir + path.sep));
+    assert.match(path.basename(context.directory), /^conference-[a-f0-9]{64}$/);
+    const [record] = readRecords(context.directory);
+    assert.equal(record.request.identity.paperId, id);
+    assert.equal(record.request.identity.sourceIdentity.executionId, executionId);
+    assert.equal(record.request.identity.sourceIdentity.sourceSha256, sha256(sourceText));
+    const before = snapshot(context.directory);
+    const replay = { coreSummaryDiagnosticId: record.request.id,
+        callModelFn: async () => assert.fail('会议原付费摘要重放不得再发请求') };
+    assert.equal(await run(() => deep.repairCoreSummarySection(conferencePaper,
+        incompleteAnalysis, sourceText, sourceText, replay)), baseline);
+    assert.deepEqual(snapshot(context.directory), before);
+    await assert.rejects(deep.repairCoreSummarySection(conferencePaper,
+        incompleteAnalysis, sourceText, sourceText, replay), /规范论文身份/);
+    await assert.rejects(run(() => deep.repairCoreSummarySection({ ...conferencePaper, arxivId: '2610.90009' },
+        incompleteAnalysis, sourceText, sourceText, replay)), /refuses arXiv aliases/);
+    await assert.rejects(run(() => deep.repairCoreSummarySection(conferencePaper,
+        incompleteAnalysis, sourceText + 'changed', sourceText, replay)), /相同封存全文/);
+    await assert.rejects(run(() => deep.repairCoreSummarySection({ ...conferencePaper, sourceSha256: '0'.repeat(64) },
+        incompleteAnalysis, sourceText, sourceText, replay)), /相同封存全文/);
+    await assert.rejects(run(() => deep.repairCoreSummarySection(conferencePaper,
+        incompleteAnalysis + '\nchanged', sourceText, sourceText, replay)), /当前来源或输入不一致/);
+    const otherExecutionId = '88888888-8888-4888-8888-888888888888';
+    const otherExecutionDir = path.join(folder, otherExecutionId); fs.mkdirSync(otherExecutionDir);
+    const otherScope = { ...identity, executionId: otherExecutionId, executionDir: otherExecutionDir };
+    const otherContext = run(() => conference.conferenceCoreSummaryRepairContext(conferencePaper, sourceText), otherScope);
+    fs.cpSync(context.directory, otherContext.directory, { recursive: true });
+    await assert.rejects(run(() => deep.repairCoreSummarySection(conferencePaper,
+        incompleteAnalysis, sourceText, sourceText, replay), otherScope), /当前来源或输入不一致/);
+    const otherId = id.replace(':interspeech:', ':icassp:');
+    const otherPaper = { ...conferencePaper, id: otherId, conferencePaperId: otherId, sourceId: otherId };
+    const otherConferenceContext = run(() => conference.conferenceCoreSummaryRepairContext(otherPaper, sourceText),
+        { ...identity, paperId: otherId, sourceDetails: { ...details, sourceId: otherId } });
+    assert.notEqual(otherConferenceContext.directory, context.directory);
+    assert.deepEqual(snapshot(context.directory), before);
+});

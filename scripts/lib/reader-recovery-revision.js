@@ -686,7 +686,8 @@ function loadReaderRecoveryRevisionInternal(directory, identity, options = {}) {
     return loadFailedCandidate(directory, identity);
 }
 
-module.exports = { CONTRACT, ALLOWED_FIELDS, loadReaderRecoveryRevision };
+module.exports = { CONTRACT, ALLOWED_FIELDS, loadReaderRecoveryRevision,
+    readFullResolvedReaderForReadOnlyInspection: readFullResolvedReader };
 function implementationAllowanceProof(identity, audit) {
     const body = { contract: IMPLEMENTATION_ALLOWANCE_CONTRACT,
         fromIdentitySha256: audit.fromIdentitySha256, toIdentitySha256: hashDraft(identity),

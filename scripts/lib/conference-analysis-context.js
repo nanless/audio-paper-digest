@@ -60,6 +60,31 @@ function getConferenceAnalysisSource(paper) {
     }
     return clone(active.sourceDetails);
 }
+function conferenceCoreSummaryRepairContext(paper, sourceText) {
+    const active = scope.getStore();
+    if (!active) return null;
+    const source = getConferenceAnalysisSource(paper);
+    const canonicalId = paperId(paper);
+    const sourceSha256 = crypto.createHash('sha256').update(String(sourceText)).digest('hex');
+    if (!/^conference:[a-z0-9-]+:\d{4}:[a-z0-9-]+:[A-Za-z0-9._-]+$/.test(canonicalId)
+        || paper?.id !== canonicalId
+        || (paper.conferencePaperId && paper.conferencePaperId !== canonicalId)
+        || (paper.sourceId && paper.sourceId !== canonicalId)
+        || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(active.executionId || '')
+        || path.basename(active.executionDir) !== active.executionId
+        || source.sourceId !== canonicalId || source.text !== sourceText
+        || (paper?.sourceSha256 && paper.sourceSha256 !== sourceSha256)
+        || (paper?.analysisManifest?.sourceAcquisition?.sourceSha256
+            && paper.analysisManifest.sourceAcquisition.sourceSha256 !== sourceSha256)) {
+        throw new Error('会议摘要修复记录需要当前认证执行、规范会议身份及相同封存全文');
+    }
+    return { paperId: canonicalId,
+        directory: path.join(active.executionDir, 'analysis-repair-attempts',
+            'conference-' + crypto.createHash('sha256').update(canonicalId).digest('hex')),
+        sourceIdentity: { contract: 'conference-analysis-source-identity-v1', executionId: active.executionId,
+            paperId: canonicalId, source: 'conference_pdf_text', sourceSha256,
+            structuredArtifactsSha256: source.structuredArtifacts?.payloadSha256 || null } };
+}
 function conferenceWeakReaderCapabilityPolicy(paper, structuredArtifacts) {
     const details = getConferenceAnalysisSource(paper);
     if (!details) return null;
@@ -115,4 +140,5 @@ function conferenceReaderAttemptsDirectory(requestedDirectory = null) {
 
 module.exports = { WEAK_READER_CAPABILITY_POLICY_CONTRACT, WEAK_CONFERENCE_CAPABILITIES,
     WEAK_READER_CAPABILITY_POLICY, withConferenceAnalysisSource, getConferenceAnalysisContext,
-    getConferenceAnalysisSource, conferenceWeakReaderCapabilityPolicy, conferenceReaderAttemptsDirectory };
+    getConferenceAnalysisSource, conferenceCoreSummaryRepairContext,
+    conferenceWeakReaderCapabilityPolicy, conferenceReaderAttemptsDirectory };

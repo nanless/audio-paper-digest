@@ -101,6 +101,40 @@ test('证据中未给出的资源声明与数量一致的并列主张后置否�
     }
 });
 
+test('原文发布归属与当前不可确认分开核验，只豁免有来源的reported范围', () => {
+    const source = 'The implementation code is publicly\navailable for reproducibility at Github repository.';
+    const identityFor = text => {
+        const body = { contract: 'api-reader-resource-identity-v1', sourceTextSha256: sha(text), resources: [] };
+        return { ...body, identitySha256: deep.stableFingerprint(body) };
+    };
+    const issues = (text, evidence = source) => deep.readerResourceClaimIssues({ sections: [
+        { kind: 'reproduction', body: text }
+    ] }, identityFor(evidence), evidence);
+    const actual = '关于资源可得性，论文正文称实现代码在Github仓库公开可复现，但本次可核验的来源中没有确认可达的代码链接，因此这里不能写代码当前可用或已公开，需要读者自行按论文信息检索并核对版本。';
+    assert.deepEqual(issues(actual), []);
+    const printed = 'The implementation code is publicly\n'
+        + 'maximally informative about the transcription target while dis-\n'
+        + 'available for reproducibility at Github repository.';
+    assert.deepEqual(issues(actual, printed), [], '原PDF文字层的有界跨行保留逐字上下文');
+    for (const text of [
+        actual.replace('不能写代码当前可用或已公开', '本文代码当前可用且已公开'),
+        actual.replace('，需要读者', '，但事实上本文代码已经开源，需要读者'),
+        actual.replace('代码链接', '模型权重链接'),
+        actual.replace('没有确认可达的代码链接', '并非没有确认可达的代码链接'),
+        '论文正文称实现代码在Github仓库公开可复现，因此本文代码当前可用。',
+        '论文正文称实现代码在Github仓库公开可复现，但本次可核验的来源中没有确认可达的代码链接，本文模型权重已经公开。',
+        '论文正文称模型权重已经公开，但本次可核验的来源中没有确认可达的代码链接，因此不能写代码当前可用或已公开。'
+    ]) assert.ok(issues(text).length > 0, text);
+    for (const missing of ['The paper describes an audio model.',
+        'The implementation code is not publicly available at this time.',
+        'If the implementation code is publicly available, reproduce the experiment.',
+        'The third-party baseline code is publicly available.',
+        'The example string is "The implementation code is publicly available".',
+        printed.replace('maximally informative', 'not confirmed or claimed')]) {
+        assert.ok(issues(actual, missing).length > 0, missing);
+    }
+});
+
 test('普通日更 v3 正式解析按代码、权重、数据各自可达状态拒绝不实当前宣称，不能通过 false 开关绕过', () => {
     const f = example();
     assert.ok(deep.parseApiReaderArticleResult(JSON.stringify(f.draft), f.options).article);

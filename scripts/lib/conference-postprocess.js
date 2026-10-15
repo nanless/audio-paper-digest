@@ -182,7 +182,9 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
     // 每份分析保留其创建时的计划凭证；当前单一计划不能同时匹配这些版本。
     // 此时只跳过当前计划与原计划的交叉检查，下方对运行、分析、完成凭证、
     // 来源及论文集合的检查仍全部执行，其他调用方的行为保持原样。
-    if (!trustEvidence) {
+    const hasCurrentResourceClaims = loaded.analysis?.papers?.[0]?.analysisManifest?.contracts?.readerResourceClaims !== undefined
+        || loaded.analysis?.papers?.[0]?.analysisManifest?.stages?.apiReaderArticle?.readerResourceClaimsContractVersion !== undefined;
+    if (!trustEvidence || hasCurrentResourceClaims) {
         try { (dependencies.verifyPlanAuthority || adapter.verifyPlanAuthority)(loaded, planHandle, sourceRoot); }
         catch (error) { fail(`会议分析与已核验计划不一致：${error.message}`); }
     }
@@ -252,9 +254,15 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
     loaded.publicationEvidence = publicationEvidence;
     return loaded;
     };
+    // The plan/source replay above authenticates these exact source bytes. New
+    // Reader claims must also see them during a cold publication qualification.
+    const qualifyInSource = () => hasCurrentResourceClaims
+        ? require('./conference-analysis-context').withConferenceAnalysisSource({
+        executionId, executionDir: loaded.directory, paperId: loaded.run.paperId,
+        sourceDetails: loaded.source.sourceDetails }, qualify) : qualify();
     return publicationEvidence
-        ? require('./conference-reader-publication-evidence').withPublicationEvidence(publicationEvidence, qualify)
-        : qualify();
+        ? require('./conference-reader-publication-evidence').withPublicationEvidence(publicationEvidence, qualifyInSource)
+        : qualifyInSource();
 }
 
 function needsPublicationEvidence(paper) {
