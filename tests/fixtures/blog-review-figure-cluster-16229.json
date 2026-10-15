@@ -1,0 +1,22 @@
+{
+  "paperId": "2610.16229v1",
+  "sourcePageSha256": "207465eed3f698e120f1c6f01e10c4667b3c0c18ade6061624366c4c05d3102b",
+  "originalFailedUnitInputSha256": "e6d8fb7a39de1eb76e6fe6dadc4e708f6597db35d115354c46a7b096718acba3",
+  "provenance": "Literal adjacent published Figure3/Figure5 clusters; audit before-context-fix.json reproduces the exact originally reviewed request without new model calls.",
+  "clusters": [
+    [
+      "读图说明：这两组柱状图分别展示 Recall@10 与 Recall@20 下 4 个变体在 4 个数据集上的高低，颜色区分完整模型与 3 种缺失，纵轴为指标值，建议先找每组最高的柱再看缺失结构图学习的蓝色柱。",
+      "> **看图路径：** 1. 比较左图 Recall@10 下完整模型与三个去掉组件变体的高低；2. 比较右图 Recall@20 下结构感知图学习缺失时的下降幅度；3. 观察四个数据集上趋势是否一致",
+      "[![原论文 Fig. 3：Ablation studies on the proposed MMWave.](https://arxiv.org/html/2610.16229v1/Figures/MMWave_Ablation_Test_Updated.png)](https://arxiv.org/html/2610.16229v1/Figures/MMWave_Ablation_Test_Updated.png)",
+      "*论文图 3。原论文 Fig. 3:：“Ablation studies on the proposed MMWave.”。*",
+      "图中可见蓝色柱在多数数据集上明显最矮，尤其 Clothing 下降剧烈，而去掉提纯的橙色与去掉调节的粉色在 TikTok 上都明显低于完整模型，支持提纯与整合缺一不可的判断。但该图只画出召回未画出排序指标，且未给出误差棒，解读时应结合主表的 NDCG 一起看。"
+    ],
+    [
+      "读图说明：这组图比较小波提纯与多层感知机去噪在相同数据集上的检索指标与参数量，左侧纵轴为指标，右侧纵轴为参数量，建议先比同数据集两色柱再看折线是否更高。",
+      "> **看图路径：** 1. 比较深浅两色柱表示的小波方案与多层感知机去噪方案；2. 看右侧纵轴参数量折线是否随性能升高而同步升高；3. 观察三个数据集上谁用更少参数取得更高检索指标",
+      "[![原论文 Fig. 5：Comparison of MMWave with MLP-based Denoising](https://arxiv.org/html/2610.16229v1/Figures/MMWave_Denoising_Comparison.png)](https://arxiv.org/html/2610.16229v1/Figures/MMWave_Denoising_Comparison.png)",
+      "*论文图 5。原论文 Fig. 5:：“Comparison of MMWave with MLP-based Denoising”。*",
+      "图中可见小波方案在 Baby、Sports、TikTok 上都略高于多层感知机去噪，而参数量折线在 Sports 上后者明显更高，说明效果并非来自更大的容量。论文还比较 Haar 与 Db4、Sym4、Coif1、Bior4.4、Dmey 等基函数，在 Baby 与 Sports 上差异不大，在 TikTok 上 Bior4.4 略好，可能与 3 模态异质性有关，但总体对基函数不敏感。超参数上分解层数 L 以 2 到 3 为宜，TikTok 上 L 为 4 明显下降，行为图层数 p 在 Sports 与 TikTok 上深些更好而 Baby 上 p 到 4 出现过平滑，物品图层数 q 多以 1 足够而 Baby 上 2 更好，近邻数视觉取大、文本取中小较好，文本邻居过大反而引入噪声。"
+    ]
+  ]
+}

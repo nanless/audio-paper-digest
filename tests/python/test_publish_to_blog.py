@@ -5708,6 +5708,87 @@ primary_method_tag: #Transformer
         self.assertIn('第二张解释', second_prompt)
         self.assertNotIn('![第一图]', second_prompt)
 
+    def test_actual_adjacent_reader_clusters_do_not_assign_figure5_text_to_figure3(self):
+        fixture = json.loads((Path(ROOT) / 'tests/fixtures/blog-review-figure-cluster-16229.json').read_text())
+        first, second = ['\n\n'.join(parts) for parts in fixture['clusters']]
+        content = '### 消融与去噪\n\n' + first + '\n\n' + second + '\n\n### 局限\n\n其他限制。'
+        matches = publish_to_blog.parse_markdown_images(content)
+        # The real rejected request used this old window and included the next
+        # figure's dual-axis/parameter-count prelude without its actual pixels.
+        old_tail = content[matches[0]['end']:min(matches[1]['start'], matches[0]['end'] + 600)]
+        self.assertIn(fixture['clusters'][1][0], old_tail)
+        self.assertIn(fixture['clusters'][1][1], old_tail)
+        regions = publish_to_blog._review_image_context_regions(content, matches)
+        self.assertTrue(all(region['readerFigureCluster'] for region in regions))
+        for index, region in enumerate(regions):
+            self.assertEqual(content[region['start']:region['end']].strip(), (first, second)[index])
+
+        image = {'media_type': 'image/png', 'data': base64.b64encode(b'offline pixels').decode('ascii')}
+        def review(prompt, **_kwargs):
+            if 'alt: `原论文 Fig. 3：' in prompt:
+                self.assertIn(first, prompt)
+                self.assertNotIn(second, prompt)
+                self.assertNotIn(fixture['clusters'][1][0], prompt)
+                self.assertNotIn(fixture['clusters'][1][1], prompt)
+            else:
+                self.assertIn(second, prompt)
+                self.assertNotIn(fixture['clusters'][0][1], prompt)
+            return '{"passed": true, "issues": []}'
+        with mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'test-model'}), \
+                mock.patch.object(publish_to_blog, '_load_review_image', return_value=image), \
+                mock.patch.object(publish_to_blog, 'call_llm_api', side_effect=review) as request:
+            self.assertEqual(publish_to_blog.multimodal_review_images(
+                content, '真实相邻图上下文回归', required=True), (True, []))
+        self.assertEqual(request.call_count, 2)
+
+    def test_reader_cluster_keeps_long_own_context_pdf_source_note_and_true_conflict(self):
+        lead = '本图导读起点。' + '完整保留当前图的解释。' * 90 + '导读终点。'
+        explanation = '本图解释起点。' + '不截断当前图的局限。' * 90 + '红线实际最低却被本段无条件声称最高。'
+        parts = [lead, '> **看图路径：** 1. 核对本图红线与图例',
+                 '[![当前图](/audio-paper-digest-blog/images/papers/figure.png)](https://arxiv.org/html/2607.00001/figure.png)',
+                 '> **图片来源：** 原论文 PDF 第 3 页（含图 9）',
+                 '*论文图 9。当前图的完整原图注。*', explanation]
+        cluster = '\n\n'.join(parts)
+        content = '### 当前章节\n\n' + cluster + '\n\n### 下一节\n\n不属于本图的文字。'
+        region = publish_to_blog._review_image_context_regions(
+            content, publish_to_blog.parse_markdown_images(content))[0]
+        self.assertTrue(region['readerFigureCluster'])
+        self.assertEqual(content[region['start']:region['end']], cluster)
+        issue = {'severity': 'error', 'description': '当前图解释仍含真实方向冲突。'}
+        def review(prompt, **_kwargs):
+            self.assertIn(cluster, prompt)
+            self.assertNotIn('不属于本图的文字', prompt)
+            return json.dumps({'passed': False, 'issues': [issue]}, ensure_ascii=False)
+        with mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'test-model'}), \
+                mock.patch.object(publish_to_blog, '_load_review_image', return_value={
+                    'media_type': 'image/png', 'data': base64.b64encode(b'pixels').decode('ascii'),
+                }), mock.patch.object(publish_to_blog, 'call_llm_api', side_effect=review):
+            self.assertEqual(publish_to_blog.multimodal_review_images(
+                content, '本图真矛盾仍阻断', required=True), (False, [issue]))
+
+    def test_reader_clusters_may_share_only_the_complete_explanation_lead_paragraph(self):
+        shared = '这段既解释第一图，也为第二图提供明确导读。'
+        first = ['第一图导读。', '> **看图路径：** 1. 查看第一图',
+                 '![第一图](https://example.com/one.png)', '*论文图 1。第一图图注。*', shared]
+        second = [shared, '> **看图路径：** 1. 查看第二图',
+                  '![第二图](https://example.com/two.png)', '*论文图 2。第二图图注。*', '第二图解释。']
+        content = '\n\n'.join(first + second[1:])
+        images = publish_to_blog.parse_markdown_images(content)
+        regions = publish_to_blog._review_image_context_regions(content, images)
+        for index, region in enumerate(regions):
+            self.assertTrue(region['readerFigureCluster'])
+            current = content[region['start']:region['end']]
+            self.assertEqual(current, '\n\n'.join((first, second)[index]))
+            self.assertEqual(len(publish_to_blog.parse_markdown_images(current)), 1)
+
+    def test_unrecognized_old_image_layout_keeps_original_local_window(self):
+        content = ('前文保留。\n![旧图](https://example.com/legacy.png)\n'
+                   '旧图本身的解释仍须可见，不能猜一个五段边界。\n\n### 下一节\n\n其他内容。')
+        images = publish_to_blog.parse_markdown_images(content)
+        region = publish_to_blog._review_image_context_regions(content, images)[0]
+        self.assertFalse(region['readerFigureCluster'])
+        self.assertEqual(content[region['start']:region['end']], content)
+
     def test_single_image_review_bounds_scope_and_keeps_real_conflict_detection(self):
         images = [
             {'media_type': 'image/png', 'data': base64.b64encode(value).decode('ascii')}

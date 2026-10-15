@@ -2101,6 +2101,88 @@ def _linked_image_source_url(content, image_end):
     return match.group(1).strip() if match else ''
 
 
+def _review_image_context_regions(content, image_matches):
+    """Keep each canonical Reader figure's complete five-part context together.
+
+    Older, unrecognized layouts keep their local window. A recognized neighbor's
+    prelude and reading path belong to that neighbor, not to the preceding image.
+    This only selects review inputs; it does not validate or rewrite the article.
+    """
+    paragraphs, cursor = [], 0
+    for separator in re.finditer(r'\r?\n(?:[ \t]*\r?\n)+', content):
+        if content[cursor:separator.start()].strip():
+            paragraphs.append((cursor, separator.start()))
+        cursor = separator.end()
+    if content[cursor:].strip():
+        paragraphs.append((cursor, len(content)))
+    memberships, paragraph_images, cursor = [], {}, 0
+    for index, image in enumerate(image_matches):
+        while cursor < len(paragraphs) and paragraphs[cursor][1] <= image['start']:
+            cursor += 1
+        member = cursor if cursor < len(paragraphs) \
+            and paragraphs[cursor][0] <= image['start'] \
+            and image['end'] <= paragraphs[cursor][1] else None
+        memberships.append(member)
+        paragraph_images.setdefault(member, []).append(index)
+
+    def text(index):
+        return content[slice(*paragraphs[index])].strip()
+
+    def prose(index):
+        return 0 <= index < len(paragraphs) and index not in paragraph_images \
+            and not re.search(r'(?m)^\s*(?:#{1,6}[ \t]|>\s*\*\*(?:看图路径|图片来源)[：:]\*\*|[ *_]*论文图\s*\d+。)', text(index))
+
+    clusters = {}
+    for index, image in enumerate(image_matches):
+        member = memberships[index]
+        if member is None or member < 2 or len(paragraph_images[member]) != 1:
+            continue
+        image_text = text(member)
+        standalone = image_text == image['raw'] or re.fullmatch(
+            re.escape('[' + image['raw'] + ']') + r'\(https://[^\s]+\)', image_text,
+        )
+        if not standalone or not re.fullmatch(
+                r'>\s*\*\*看图路径[：:]\*\*[\s\S]+', text(member - 1)) \
+                or not prose(member - 2):
+            continue
+        caption = member + 1
+        if caption < len(paragraphs) and re.fullmatch(
+                r'>\s*\*\*图片来源[：:]\*\*[\s\S]+', text(caption)):
+            caption += 1
+        if caption + 1 >= len(paragraphs) or not re.fullmatch(
+                r'[ *_]*论文图\s*\d+。[\s\S]+[ *_]*', text(caption)) \
+                or not prose(caption + 1):
+            continue
+        clusters[index] = (paragraphs[member - 2][0], paragraphs[caption + 1][1])
+    # A preceding explanation may also be the next figure's complete lead.
+    # Only that single shared prose paragraph may overlap; structural nodes may not.
+    ambiguous = set()
+    ordered = sorted(clusters)
+    paragraph_indexes = {span: index for index, span in enumerate(paragraphs)}
+    for position, left in enumerate(ordered):
+        for right in ordered[position + 1:]:
+            if clusters[left][1] <= clusters[right][0]:
+                break
+            shared = paragraph_indexes.get((clusters[right][0], clusters[left][1]))
+            if shared is None or not prose(shared):
+                ambiguous.update((left, right))
+    clusters = {index: span for index, span in clusters.items() if index not in ambiguous}
+    regions = []
+    for index, image in enumerate(image_matches):
+        if index in clusters:
+            start, end = clusters[index]
+        else:
+            start = max(image_matches[index - 1]['end'] if index else 0, image['start'] - 600)
+            end = min(image_matches[index + 1]['start'] if index + 1 < len(image_matches)
+                      else len(content), image['end'] + 600)
+            if index - 1 in clusters and clusters[index - 1][1] <= image['start']:
+                start = max(start, clusters[index - 1][1])
+            if index + 1 in clusters and clusters[index + 1][0] >= image['end']:
+                end = min(end, clusters[index + 1][0])
+        regions.append({'start': start, 'end': end, 'readerFigureCluster': index in clusters})
+    return regions
+
+
 def multimodal_review_images(content, title="", required=False, *, image_concurrency=1):
     """把真实的图片字节发给路由后的多模态发布 API。"""
     if isinstance(image_concurrency, bool) or not isinstance(image_concurrency, int) \
@@ -2120,16 +2202,11 @@ def multimodal_review_images(content, title="", required=False, *, image_concurr
     img_summary = []
     image_payloads = []
     load_issues = []
+    context_regions = _review_image_context_regions(content, image_matches)
     for match_index, match in enumerate(image_matches):
         alt, url = match['alt'], match['url']
-        previous_end = image_matches[match_index - 1]['end'] if match_index else 0
-        next_start = (
-            image_matches[match_index + 1]['start']
-            if match_index + 1 < len(image_matches) else len(content)
-        )
-        before = content[max(previous_end, match['start'] - 600):match['start']]
-        after = content[match['end']:min(next_start, match['end'] + 600)]
-        nearby = (before + match['raw'] + after).strip()
+        region = context_regions[match_index]
+        nearby = content[region['start']:region['end']].strip()
         try:
             image_payload = _load_review_image(url)
         except PublishDataValidationError as exc:
