@@ -2934,7 +2934,7 @@ primary_task_tag: #音视频生成
             + '</div>'
         );
         assert.deepStrictEqual(parseArxivReaderAuthors(ambiguousGlobalAffiliations).authors, [{
-            name: 'Author One', affiliations: ['机构信息未在 arXiv HTML 中可靠披露']
+            name: 'Author One', affiliations: ['机构信息未能在本次解析中与作者逐人可靠绑定']
         }]);
         const metadata = cheerio.load(
             '<head><meta name="citation_author" content="丙">'
@@ -2956,9 +2956,9 @@ primary_task_tag: #音视频生成
         );
         const parsedVocalAuthors = parseArxivReaderAuthors(malformedVocalAuthors);
         assert.deepStrictEqual(parsedVocalAuthors.authors, [
-            { name: 'Luc Debaupte', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] },
+            { name: 'Luc Debaupte', affiliations: ['机构信息未能在本次解析中与作者逐人可靠绑定'] },
             { name: 'Tyler Baumgartner', affiliations: ['Besimple AI, San Mateo, CA'] },
-            { name: 'Brandon Tai', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] }
+            { name: 'Brandon Tai', affiliations: ['机构信息未能在本次解析中与作者逐人可靠绑定'] }
         ]);
         const resolvedVocalAuthors = resolveApiReaderAuthors(
             {
@@ -2977,12 +2977,12 @@ primary_task_tag: #音视频生成
             ]
         );
         assert.deepStrictEqual(resolvedVocalAuthors.authors.map(author => author.affiliations), [
-            ['机构信息未在 arXiv HTML 中可靠披露'],
-            ['机构信息未在 arXiv HTML 中可靠披露'],
-            ['机构信息未在 arXiv HTML 中可靠披露'],
-            ['机构信息未在 arXiv HTML 中可靠披露'],
-            ['机构信息未在 arXiv HTML 中可靠披露'],
-            ['机构信息未在 arXiv HTML 中可靠披露']
+            ['机构信息未能在本次解析中与作者逐人可靠绑定'],
+            ['机构信息未能在本次解析中与作者逐人可靠绑定'],
+            ['机构信息未能在本次解析中与作者逐人可靠绑定'],
+            ['机构信息未能在本次解析中与作者逐人可靠绑定'],
+            ['机构信息未能在本次解析中与作者逐人可靠绑定'],
+            ['机构信息未能在本次解析中与作者逐人可靠绑定']
         ]);
         assert.ok(resolvedVocalAuthors.identity.authors.every(author => author.nameBinding.sourceKind === 'paper_metadata'
             && author.affiliationBindings.every(binding => binding.sourceKind === 'explicit_unavailable')));
@@ -3091,8 +3091,8 @@ primary_task_tag: #音视频生成
             }
         );
         assert.deepStrictEqual(completedAuthors.authors, [
-            { name: '戊', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] },
-            { name: '己', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] }
+            { name: '戊', affiliations: ['机构信息未能在本次解析中与作者逐人可靠绑定'] },
+            { name: '己', affiliations: ['机构信息未能在本次解析中与作者逐人可靠绑定'] }
         ]);
         const noAffiliationUnionLeak = resolveApiReaderAuthors(
             { authors: ['Author One', 'Author Two', 'Author Three'] },
@@ -3108,9 +3108,9 @@ primary_task_tag: #音视频生成
             }
         );
         assert.deepStrictEqual(noAffiliationUnionLeak.authors, [
-            { name: 'Author One', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] },
-            { name: 'Author Two', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] },
-            { name: 'Author Three', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] }
+            { name: 'Author One', affiliations: ['机构信息未能在本次解析中与作者逐人可靠绑定'] },
+            { name: 'Author Two', affiliations: ['机构信息未能在本次解析中与作者逐人可靠绑定'] },
+            { name: 'Author Three', affiliations: ['机构信息未能在本次解析中与作者逐人可靠绑定'] }
         ]);
         const png = Buffer.from(
             'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
