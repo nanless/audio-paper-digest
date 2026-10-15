@@ -2,7 +2,10 @@
 // This proves provenance of a paid failed draft; it never grants publishability or attempts.
 const fs = require('node:fs'), path = require('node:path'), crypto = require('node:crypto');
 const child = require('node:child_process'), Module = require('node:module');
-const CONTRACT = 'reader-historical-draft-normalizer-replay-v1';
+const CONTRACT = 'reader-historical-draft-normalizer-replay-v2';
+const LEGACY_CONTRACT = 'reader-historical-draft-normalizer-replay-v1';
+const { loadHistoricalMarkdownClosure } = require('./reader-historical-markdown-closure');
+const analysisPath = 'scripts/analysis-contract.js';
 const repository = path.resolve(__dirname, '../..');
 const normalizerPath = 'scripts/lib/reader-draft-order.js';
 const dependencies = ['scripts/analysis-contract.js', 'scripts/lib/reader-pdf-cell-evidence.js',
@@ -21,6 +24,9 @@ function object(commit, file) {
     const blob = git(['rev-parse', `${commit}:${file}`]).toString().trim();
     if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(blob)) throw new Error('Historical normalizer Git blob is invalid');
     const bytes = git(['cat-file', 'blob', blob]);
+    const actualOid = crypto.createHash(blob.length === 40 ? 'sha1' : 'sha256')
+        .update(Buffer.from(`blob ${bytes.length}\0`)).update(bytes).digest('hex');
+    if (actualOid !== blob) throw new Error('Historical normalizer Git blob bytes do not match its object identity');
     return { path: file, blobOid: blob, sha256: hash(bytes), bytes };
 }
 function resolveHistoricalNormalizer(expectedSha256) {
@@ -48,10 +54,14 @@ function resolveHistoricalNormalizer(expectedSha256) {
         const program = object(commit, normalizerPath);
         if (program.sha256 !== expectedSha256) continue;
         const runtime = dependencies.map(file => object(commit, file));
-        // These shared routines are reused only when their complete trusted Git bytes are unchanged.
-        if (runtime.some(record => hash(fs.readFileSync(path.join(repository, record.path))) !== record.sha256)) continue;
+        // PDF routines still require whole-file equality. The Markdown dependency
+        // executes only an exact pure closure taken from this original Git blob.
+        if (runtime.some(record => record.path !== analysisPath
+            && hash(fs.readFileSync(path.join(repository, record.path))) !== record.sha256)) continue;
+        const markdown = loadHistoricalMarkdownClosure(runtime.find(record => record.path === analysisPath));
+        if (!markdown) continue;
         const tableProgram = object(commit, 'scripts/lib/reader-tables.js');
-        return { commit, program, runtime, tableProgram };
+        return { commit, program, runtime, tableProgram, markdown };
     }
     return null;
 }
@@ -70,13 +80,13 @@ function replayHistoricalDraftNormalizer(draft, requestIdentity, source, expecte
     const tablesFilename = path.join(repository, selected.tableProgram.path), tables = new Module(tablesFilename, module);
     tables.filename = tablesFilename; tables.paths = Module._nodeModulePaths(path.dirname(tablesFilename));
     tables.require = spec => {
-        if (spec === '../analysis-contract.js') return require('../analysis-contract');
+        if (spec === '../analysis-contract.js') return Object.freeze({ extractMarkdownTables: selected.markdown.api.extractMarkdownTables });
         if (spec === './reader-pdf-cell-evidence') return pdf;
         throw new UnsupportedHistoricalDependencyError('Historical table replay requires an unverified dependency');
     };
     compiled.require = spec => {
         if (spec === 'node:crypto') return crypto;
-        if (spec === '../analysis-contract.js') return require('../analysis-contract');
+        if (spec === '../analysis-contract.js') return selected.markdown.api;
         if (spec === './reader-pdf-cell-evidence') return pdf;
         if (spec === './reader-tables') return tables.exports;
         throw new UnsupportedHistoricalDependencyError('Historical normalizer replay requires an unverified dependency');
@@ -97,17 +107,21 @@ function replayHistoricalDraftNormalizer(draft, requestIdentity, source, expecte
     const proof = { contract: CONTRACT, purpose: 'paid-failed-draft-provenance-only', gitCommitOid: selected.commit,
         normalizerBlobOid: selected.program.blobOid, normalizerSha256: selected.program.sha256,
         sourceSha256: requestIdentity.sourceSha256, inputDraftSha256: repair.hashDraft(draft),
-        outputDraftSha256: expectedSavedDraftSha256,
+        outputDraftSha256: expectedSavedDraftSha256, markdownClosure: selected.markdown.proof,
         dependencies: [...selected.runtime, selected.tableProgram].map(({ path, blobOid, sha256 }) => ({ path, blobOid, sha256 })) };
     return { proof, assertUnchanged() {
-        for (const record of selected.runtime) if (hash(fs.readFileSync(path.join(repository, record.path))) !== record.sha256)
+        for (const record of selected.runtime) if (record.path !== analysisPath && hash(fs.readFileSync(path.join(repository, record.path))) !== record.sha256)
             throw new Error('Historical normalizer dependency changed before migration');
-        for (const record of [selected.program, selected.tableProgram]) if (object(selected.commit, record.path).sha256 !== record.sha256)
+        for (const record of [selected.program, ...selected.runtime, selected.tableProgram]) if (object(selected.commit, record.path).sha256 !== record.sha256)
             throw new Error('Historical normalizer Git object changed before migration');
     } };
 }
 function assertHistoricalNormalizerProof(proof) {
-    if (!proof || proof.contract !== CONTRACT || proof.purpose !== 'paid-failed-draft-provenance-only'
+    const legacy = proof?.contract === LEGACY_CONTRACT;
+    const keys = ['contract', 'purpose', 'gitCommitOid', 'normalizerBlobOid', 'normalizerSha256',
+        'sourceSha256', 'inputDraftSha256', 'outputDraftSha256', 'dependencies', ...(legacy ? [] : ['markdownClosure'])];
+    if (!proof || ![CONTRACT, LEGACY_CONTRACT].includes(proof.contract)
+        || Object.keys(proof).sort().join(',') !== keys.sort().join(',') || proof.purpose !== 'paid-failed-draft-provenance-only'
         || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(proof.gitCommitOid || '')
         || !Array.isArray(proof.dependencies) || proof.dependencies.length !== dependencies.length + 1)
         throw new Error('Historical normalizer replay proof is invalid');
@@ -120,8 +134,17 @@ function assertHistoricalNormalizerProof(proof) {
         if (!allowed.includes(record.path)) throw new Error('Historical dependency path is not trusted');
         const actual = object(proof.gitCommitOid, record.path);
         if (actual.blobOid !== record.blobOid || actual.sha256 !== record.sha256
-            || dependencies.includes(record.path) && hash(fs.readFileSync(path.join(repository, record.path))) !== record.sha256)
+            || dependencies.includes(record.path) && record.path !== analysisPath && hash(fs.readFileSync(path.join(repository, record.path))) !== record.sha256)
             throw new Error('Historical dependency bytes changed before migration');
+        if (record.path === analysisPath) {
+            const markdown = loadHistoricalMarkdownClosure(actual);
+            // Legacy v1 proof bytes remain unchanged: the enclosing immutable
+            // candidate/archive SHA authenticates its original schema. Rebuild
+            // the closure only in memory from the already-bound full Git blob.
+            // A v2 proof cannot drop closure evidence and use this branch.
+            if (!markdown || !legacy && JSON.stringify(markdown.proof) !== JSON.stringify(proof.markdownClosure))
+                throw new Error('Historical Markdown closure proof is invalid');
+        }
     }
 }
 module.exports = { CONTRACT, replayHistoricalDraftNormalizer, assertHistoricalNormalizerProof };

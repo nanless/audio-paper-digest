@@ -222,7 +222,8 @@ npm run test:compat
 | `lib/reader-dom-span-replay-cli.js` | Node 只读子进程：Python 发布检查通过私有受限文件描述符批量重放 HTML 全幅分类行空白投影；先核日更工作区、四份封存来源、保存表格 SHA 与实际正文坐标，再共用原 DOM 规则，不请求模型或网络。 |
 | `lib/reader-draft-order.js` | Node 库：调整同一草稿的小节顺序，同步表格绑定和标记，保存原始路径与调整后路径的 SHA 对应关系；无法唯一确定顺序时拒绝调整。 |
 | `lib/reader-failed-bundle-resource-replay.js` | Node 库：普通源模式恢复在内存读取当前上游证明指向的同源失败资源束，逐字核验原文、归属和状态；不混签旧公开 Reader，不请求模型或增额度。 |
-| `lib/reader-historical-draft-normalizer-replay.js` | 核真实请求绑定的 Git 程序与依赖，逐字回放旧失败稿的付费来源；不恢复发布资格或增加预算。 |
+| `lib/reader-historical-draft-normalizer-replay.js` | 核真实请求绑定的 Git 程序、完整依赖 blob 与纯闭包证明，逐字回放旧失败稿付费来源；v2 显式记录闭包，旧 v1 原字节只读核验，不恢复发布资格或增加预算。 |
+| `lib/reader-historical-markdown-closure.js` | 从原 Git analysis-contract blob 精确提取固定 SHA 的 6 个表头正则和 7 个纯函数，在无 require 的隔离上下文中装载；保留逐声明字节边界与哈希，不导入旧 Manual/生产依赖。 |
 | `lib/reader-inline-svg.js` | Node 库：核对官方内嵌 SVG 的原始字节和来源定位，调用受控渲染器生成本次阅读所需图片。 |
 | `lib/reader-operator-patch.js` | Node 库：显式应用同一全新重写运行的人工局部补丁，核验来源、每个修改字段或数组项的原内容 SHA，以及完整 Reader 解析结果。只保存失败候选，保留预算、原始字节归档和重复执行记录，不生成任何成功正文凭证。 |
 | `lib/reader-paid-resolved-render.js` | Node 库：通过正常论文锁校验原付费响应与当前文章的对应关系，重算排版，保留原费用、图片与其他阶段；保存前再次核对原档和旧代码。 |

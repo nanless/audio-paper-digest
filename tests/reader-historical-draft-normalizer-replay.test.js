@@ -4,6 +4,13 @@ const test = require('node:test'), assert = require('node:assert/strict');
 const fs = require('node:fs'), path = require('node:path'), child = require('node:child_process'), Module = require('node:module');
 const repair = require('../scripts/lib/reader-repair'), historical = require('../scripts/lib/reader-historical-draft-normalizer-replay');
 const repository = path.resolve(__dirname, '..');
+const closure = require('../scripts/lib/reader-historical-markdown-closure');
+function legacyAnalysisRecord() {
+    const file = 'scripts/analysis-contract.js';
+    const bytes = child.execFileSync('git', ['show', `${legacyCommit}:${file}`], {cwd: repository});
+    const blobOid = child.execFileSync('git', ['rev-parse', `${legacyCommit}:${file}`], {cwd: repository}).toString().trim();
+    return {path: file, bytes, blobOid, sha256: repair.shaText(bytes)};
+}
 // 历史失败稿产生时的真实Git版本；提交新guard后不能把HEAD当作旧程序。
 const legacyCommit = 'cba0e47ae170b52a9dc42f2364297289c8174ec1';
 function fixture() {
@@ -13,11 +20,15 @@ function fixture() {
     assert.equal(repair.shaText(tableCode), 'affc5145cf360f8492f3c8b1bcc0bb3abc3d3d05e67bba7092d4fccd3c2bc727');
     const tableFilename=path.join(repository,'scripts/lib/reader-tables.js'),legacyTables=new Module(tableFilename,module);
     legacyTables.filename=tableFilename;legacyTables.paths=Module._nodeModulePaths(path.dirname(tableFilename));
+    const oldMarkdown=closure.loadHistoricalMarkdownClosure(legacyAnalysisRecord()).api;
+    const tableRequire=legacyTables.require.bind(legacyTables);
+    legacyTables.require=spec=>spec==='../analysis-contract.js'?oldMarkdown:tableRequire(spec);
     legacyTables._compile(tableCode.toString(),tableFilename);
     const filename=path.join(repository,'scripts/lib/reader-draft-order.js'),legacy=new Module(filename,module);
     legacy.filename=filename;legacy.paths=Module._nodeModulePaths(path.dirname(filename));
     const normalRequire=legacy.require.bind(legacy);
-    legacy.require=spec=>spec==='./reader-tables'?legacyTables.exports:normalRequire(spec);
+    legacy.require=spec=>spec==='./reader-tables'?legacyTables.exports
+        :spec==='../analysis-contract.js'?oldMarkdown:normalRequire(spec);
     legacy._compile(code.toString(),filename);
     const sourceText='The sealed corpus preserves original evidence.';
     const table={ordinal:1,caption:'Generic original benchmark',recoveryStatus:'complete',sourceDomSha256:'a'.repeat(64),headerRows:[0],bodyRows:[1],matrix:[['Method','Score'],['Baseline','0.10.1']]};
@@ -54,7 +65,9 @@ test('不匹配Git程序、源、保存稿或selection/PDF输入不猜历史分�
 test('历史proof不能改Git字节、依赖身份或注入任意文件路径',()=>{
     const f=fixture(),replay=historical.replayHistoricalDraftNormalizer(f.draft,f.identity,f.source,repair.hashDraft(f.saved));
     for(const change of [p=>{p.normalizerSha256='f'.repeat(64);},p=>{p.dependencies[0].sha256='f'.repeat(64);},
-        p=>{p.dependencies[0].path='../../untrusted.js';},p=>{p.dependencies[1]=p.dependencies[0];}]){
+        p=>{p.dependencies[0].path='../../untrusted.js';},p=>{p.dependencies[1]=p.dependencies[0];},p=>{delete p.markdownClosure;},
+        p=>{p.markdownClosure.declarations[0].startByte+=1;},p=>{p.markdownClosure.closureSha256='f'.repeat(64);},
+        p=>{p.markdownClosure.exports.push('require');}]){
         const bad=structuredClone(replay.proof);change(bad);assert.throws(()=>historical.assertHistoricalNormalizerProof(bad),/historical|Historical/);
     }
 });
@@ -98,4 +111,80 @@ test('新Git程序需要未核验依赖时明确不复用，Git读取损坏仍�
     assert.throws(()=>historical.replayHistoricalDraftNormalizer(f.draft,f.identity,f.source,
         repair.hashDraft(f.saved)),error=>error===failure);
     assert.equal(JSON.stringify(f),before);
+});
+
+// 这些测试直接读取原 Git 源码；不修改生产文件、失败稿、来源或预算。
+test('历史纯闭包具备完整Git来源和逐声明边界，只导出旧程序需要的三个纯函数',()=>{
+    const record=legacyAnalysisRecord(),loaded=closure.loadHistoricalMarkdownClosure(record);
+    assert.ok(loaded);assert.equal(record.sha256,'b568585f94dc7745c9b66444188280713bd33a93d27ffecfe6ec69d5d5dff00c');
+    assert.equal(loaded.proof.sourceSha256,record.sha256);
+    assert.equal(loaded.proof.sourceBlobOid,record.blobOid);assert.equal(loaded.proof.declarations.length,13);
+    assert.deepEqual(loaded.proof.exports,['extractMarkdownTables','maskProtectedMarkdownTableRegions','maskInlineMarkdownCodeSpans']);
+    assert.deepEqual(Object.keys(loaded.api),loaded.proof.exports);assert.ok(Object.isFrozen(loaded.api));
+    for(const entry of loaded.proof.declarations){
+        const selected=record.bytes.subarray(entry.startByte,entry.endByte);
+        assert.equal(repair.shaText(selected),entry.sha256);
+        assert.match(selected.toString(),new RegExp(`^(?:const|function) ${entry.name}\\b`));
+        assert.doesNotMatch(selected.toString(),/\brequire\s*\(|\bimport\s*\(/);
+    }
+    const text='`inline`\n\n| Method | Score |\n| --- | --- |\n| Baseline | 0.10.1 |';
+    const tables=JSON.parse(JSON.stringify(loaded.api.extractMarkdownTables(text)));
+    assert.deepEqual(tables[0].rows,[['Baseline','0.10.1']]);
+    assert.equal(loaded.api.maskInlineMarkdownCodeSpans('`inline`'),'        ');
+    assert.equal(loaded.api.maskProtectedMarkdownTableRegions('> hidden'),'        ');
+});
+test('任何闭包声明改变、重复边界、增加require或非UTF8字节都拒绝，绝不执行模块顶层',()=>{
+    const record=legacyAnalysisRecord();
+    for(const bytes of [
+        Buffer.from(record.bytes.toString().replace('function extractMarkdownTables(text) {','function extractMarkdownTables(text) {\n    require("node:https");')),
+        Buffer.from(record.bytes.toString().replace('const cells = splitMarkdownTableRow(row);','const cells = [];')),
+        Buffer.concat([record.bytes,Buffer.from('\nfunction extractMarkdownTables(text) {\n    return [];\n}\n')]),
+        Buffer.concat([record.bytes,Buffer.from([255])])
+    ])assert.equal(closure.loadHistoricalMarkdownClosure({...record,bytes,sha256:repair.shaText(bytes)}),null);
+    assert.equal(closure.loadHistoricalMarkdownClosure({...record,sha256:'f'.repeat(64)}),null);
+    // 原模块顶层本来就 require 已删除的 Manual 模块；额外顶层异常也不属于纯闭包。
+    const bytes=Buffer.concat([Buffer.from('throw new Error("MUST NEVER EXECUTE TOP LEVEL");\n'),record.bytes]);
+    assert.ok(closure.loadHistoricalMarkdownClosure({...record,bytes,sha256:repair.shaText(bytes)}));
+});
+test('当前analysis-contract可独立变化，但PDF依赖当前字节漂移仍阻断历史重放',t=>{
+    const f=fixture(),read=fs.readFileSync;
+    t.mock.method(fs,'readFileSync',function(file,...args){
+        if(file===path.join(repository,'scripts/analysis-contract.js'))throw new Error('不得加载当前analysis-contract');
+        return read.call(this,file,...args);
+    });
+    const replay=historical.replayHistoricalDraftNormalizer(f.draft,f.identity,f.source,repair.hashDraft(f.saved));
+    assert.ok(replay);replay.assertUnchanged();historical.assertHistoricalNormalizerProof(replay.proof);
+    t.mock.restoreAll();
+    t.mock.method(fs,'readFileSync',function(file,...args){
+        if(file===path.join(repository,'scripts/lib/reader-pdf-cell-evidence.js'))return Buffer.from('changed PDF runtime');
+        return read.call(this,file,...args);
+    });
+    assert.equal(historical.replayHistoricalDraftNormalizer(f.draft,f.identity,f.source,repair.hashDraft(f.saved)),null);
+    assert.throws(()=>replay.assertUnchanged(),/dependency changed/);
+    assert.throws(()=>historical.assertHistoricalNormalizerProof(replay.proof),/dependency bytes changed/);
+});
+test('Git返回同OID而不同blob字节必须在闭包装载前拒绝',t=>{
+    const f=fixture(),run=child.execFileSync;
+    t.mock.method(child,'execFileSync',function(command,args){
+        const result=run.apply(this,arguments);
+        if(command==='git'&&args.includes('cat-file'))return Buffer.concat([result,Buffer.from('\n')]);
+        return result;
+    });
+    assert.throws(()=>historical.replayHistoricalDraftNormalizer(f.draft,f.identity,f.source,repair.hashDraft(f.saved)),/blob bytes do not match/);
+});
+
+test('旧v1凭证按原整blob在内存核闭包且不补字段，新v2删closure不得降级',()=>{
+    const f=fixture(),replay=historical.replayHistoricalDraftNormalizer(f.draft,f.identity,f.source,repair.hashDraft(f.saved));
+    assert.equal(replay.proof.contract,'reader-historical-draft-normalizer-replay-v2');
+    // 模拟此前保存的原v1字段集合；外层候选/迁移SHA仍由调用方先核验。
+    const legacy=structuredClone(replay.proof);legacy.contract='reader-historical-draft-normalizer-replay-v1';
+    delete legacy.markdownClosure;const original=JSON.stringify(legacy);
+    historical.assertHistoricalNormalizerProof(legacy);assert.equal(JSON.stringify(legacy),original);
+    assert.equal(Object.hasOwn(legacy,'markdownClosure'),false);
+    const missing=structuredClone(replay.proof);delete missing.markdownClosure;
+    assert.throws(()=>historical.assertHistoricalNormalizerProof(missing),/proof is invalid/);
+    for(const change of [p=>{p.dependencies[0].sha256='f'.repeat(64);},p=>{p.dependencies[0].blobOid='f'.repeat(40);},
+        p=>{p.markdownClosure=replay.proof.markdownClosure;},p=>{p.untrustedDependency='node:https';}]){
+        const bad=structuredClone(legacy);change(bad);assert.throws(()=>historical.assertHistoricalNormalizerProof(bad),/Historical/);
+    }
 });
