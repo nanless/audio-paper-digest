@@ -9429,11 +9429,19 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     const articleSha256 = crypto.createHash('sha256').update(readerResult.article).digest('hex');
     const planSha256 = stableFingerprint(readerResult.plan);
     const figuresSha256 = stableFingerprint(readerResult.figures);
-    const readerAuthors = resolveVerifiedReaderAuthors(paper, sourceDetails);
+    let readerAuthors = resolveVerifiedReaderAuthors(paper, sourceDetails);
     if (options.readerAuthors && stableFingerprint(options.readerAuthors) !== stableFingerprint(readerAuthors)
         && !require('./lib/reader-author-parser.js').readerAuthorIdentityMatchesSource(
             { ...paper, apiReaderAuthors: options.readerAuthors }, sourceDetails)) {
         throw new Error('Reader 刷新传入的作者机构与本次原始来源重放不一致');
+    }
+    if (options.execution?.executionKind === 'operator' && options.execution.newReaderApiRequests === 0
+        && options.readerAuthors
+        && stableFingerprint(options.readerAuthors) === stableFingerprint(paper.apiReaderAuthors)
+        && require('./lib/reader-author-parser.js').readerAuthorIdentityMatchesSource(paper, sourceDetails)) {
+        // A zero-request operator edit preserves the already signed author bytes,
+        // including supported legacy unavailable wording, after source replay.
+        readerAuthors = structuredClone(paper.apiReaderAuthors);
     }
     const existingReaderResources = paper.apiReaderResources;
     const existingReaderResourceBody = existingReaderResources && {
