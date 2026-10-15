@@ -2122,11 +2122,20 @@ class PublishToBlogReviewTest(unittest.TestCase):
                 records = list((Path(tmp) / 'current').rglob('units/**/*.json'))
                 self.assertEqual(len(records), 2)
                 self.assertTrue(any(json.loads(path.read_text())['issues'] == [issue] for path in records))
+                original_records = {path: path.read_bytes() for path in records}
                 with mock.patch.object(publish_to_blog, 'review_protocol_fingerprint', return_value='b' * 64):
                     with publish_to_blog.review_unit_cache('2026-07-10', page, required=True):
                         changed = mock.Mock(return_value=(True, []))
                         publish_to_blog.review_cached_unit('text', {'chunk': 'one'}, changed)
                         changed.assert_called_once()
+                        rejected = mock.Mock(return_value=(False, [issue]))
+                        publish_to_blog.review_cached_unit('text', {'chunk': 'two'}, rejected)
+                        rejected.assert_called_once()
+                self.assertEqual(len(list((Path(tmp) / 'current').rglob('units/**/*.json'))), 4)
+                self.assertEqual(
+                    {path: path.read_bytes() for path in original_records},
+                    original_records,
+                )
 
     def test_text_review_restart_skips_completed_chunks_but_retries_failed_tail(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -5699,6 +5708,43 @@ primary_method_tag: #Transformer
         self.assertIn('第二张解释', second_prompt)
         self.assertNotIn('![第一图]', second_prompt)
 
+    def test_single_image_review_bounds_scope_and_keeps_real_conflict_detection(self):
+        images = [
+            {'media_type': 'image/png', 'data': base64.b64encode(value).decode('ascii')}
+            for value in (b'first figure pixels', b'second figure pixels')
+        ]
+        content = (
+            '第一图附近有柱顶计数和比例说明。\n![柱形图](https://example.com/one.png)\n'
+            '第二图附近说明原文文字与曲线排序存在矛盾。\n'
+            '![训练曲线](https://example.com/two.png)\n保留这种不确定性。'
+        )
+        conflict = {
+            'severity': 'error',
+            'description': '局部正文无条件断言短延迟最高，但本图对应曲线最低。',
+        }
+        with mock.patch.dict(os.environ, {'PAPER_ANALYZER_MODEL': 'test-model'}), \
+                mock.patch.object(publish_to_blog, '_load_review_image', side_effect=images), \
+                mock.patch.object(publish_to_blog, 'call_llm_api', side_effect=[
+                    '{"passed": true, "issues": []}',
+                    json.dumps({'passed': False, 'issues': [conflict]}, ensure_ascii=False),
+                ]) as request:
+            passed, issues = publish_to_blog.multimodal_review_images(
+                content, '图与原文的比较', required=True,
+            )
+        self.assertFalse(passed)
+        self.assertEqual(issues, [conflict])
+        self.assertEqual(request.call_count, 2)
+        for index, call in enumerate(request.call_args_list):
+            self.assertEqual(call.kwargs['images'], [images[index]])
+            prompt = call.args[0]
+            self.assertIn('每次请求只附一张图片', prompt)
+            self.assertIn('不能据此断言全篇只有这一张图', prompt)
+            self.assertIn('逐一核对本图图例的线型、标记、颜色与坐标分组', prompt)
+            self.assertIn('不能直接把计数当百分比', prompt)
+            self.assertIn('不能无条件将文字当作图像事实', prompt)
+            self.assertIn('仍须报告具体冲突', prompt)
+            self.assertIn('如实披露这种矛盾及不确定性', prompt)
+
     def test_image_review_keeps_payload_and_context_aligned_after_download_failure(self):
         content = (
             '![失败图](https://example.com/failed.png)\n失败图上下文\n'
@@ -8736,7 +8782,7 @@ body
                     )
             self.assertTrue(receipt.is_file())
 
-    def test_unchanged_content_failure_is_not_retried_for_protocol_change(self):
+    def test_unchanged_content_failure_retries_for_verified_protocol_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             repo, posts, _remote = init_blog_repo(tmp)
             current = Path(tmp) / 'data' / 'current'
@@ -8753,14 +8799,73 @@ body
                         },
                     },
                 )
+                failure_path = publish_to_blog.review_failure_path('2026-07-10')
+                original_failure_bytes = failure_path.read_bytes()
             with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
                     mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
                     mock.patch.object(publish_to_blog, 'review_protocol_fingerprint', return_value='2' * 64):
                 plan = publish_to_blog.plan_incremental_review(
                     '2026-07-10', [page], manifest, 'a' * 40,
                 )
-            self.assertEqual(plan['paths'], [])
-            self.assertEqual(plan['unchangedFailed'], [page.resolve()])
+            self.assertEqual(plan['paths'], [page.resolve()])
+            self.assertEqual(plan['unchangedFailed'], [])
+            self.assertEqual(failure_path.read_bytes(), original_failure_bytes)
+
+    def test_failed_page_protocol_retry_requires_known_different_complete_protocol(self):
+        cases = [
+            ('same', '2' * 64, '2' * 64, True, False),
+            ('different', '1' * 64, '2' * 64, True, True),
+            ('missing', None, '2' * 64, True, False),
+            ('malformed', 'not-a-protocol', '2' * 64, True, False),
+            ('uppercase', 'A' * 64, '2' * 64, True, False),
+            ('invalid-current', '1' * 64, 'invalid', True, False),
+            ('incomplete-content', '1' * 64, '2' * 64, False, False),
+        ]
+        for label, old_protocol, current_protocol, completed, should_retry in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
+                repo, posts, _remote = init_blog_repo(tmp)
+                current = Path(tmp) / 'data' / 'current'
+                passed = posts / '2026-07-10-passed.md'
+                failed = posts / '2026-07-10-failed.md'
+                passed.write_text('unchanged successful page\n', encoding='utf-8')
+                failed.write_text('unchanged rejected page\n', encoding='utf-8')
+                with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                        mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                        mock.patch.object(
+                            publish_to_blog, 'review_protocol_fingerprint', return_value='1' * 64,
+                        ):
+                    manifest = publish_to_blog.save_generation_manifest(
+                        '2026-07-10', [passed, failed],
+                    )
+                    passed_checkpoint = publish_to_blog.save_review_page_checkpoint(
+                        '2026-07-10', passed, {
+                            'passed': True, 'completed': True,
+                            'reviewedSha256': publish_to_blog._sha256_file(passed),
+                        }, manifest, 'a' * 40,
+                    )
+                    failed_checkpoint = publish_to_blog.save_review_page_checkpoint(
+                        '2026-07-10', failed, {
+                            'passed': False, 'completed': completed, 'failureKind': 'content',
+                            'issues': [{'severity': 'error', 'description': 'original rejection'}],
+                        }, manifest, 'a' * 40,
+                    )
+                    payload = json.loads(failed_checkpoint.read_text(encoding='utf-8'))
+                    payload['result']['reviewProtocolFingerprint'] = old_protocol
+                    failed_checkpoint.write_text(json.dumps(payload), encoding='utf-8')
+                    original = {path: path.read_bytes() for path in (passed_checkpoint, failed_checkpoint)}
+                with mock.patch.object(publish_to_blog, 'BLOG_REPO', str(repo)), \
+                        mock.patch.object(publish_to_blog, 'CURRENT_DIR', current), \
+                        mock.patch.object(
+                            publish_to_blog, 'review_protocol_fingerprint', return_value=current_protocol,
+                        ):
+                    plan = publish_to_blog.plan_incremental_review(
+                        '2026-07-10', [passed, failed], manifest, 'b' * 40,
+                    )
+                self.assertEqual(plan['paths'], [failed.resolve()] if should_retry else [])
+                self.assertEqual(plan['unchangedFailed'], [] if should_retry else [failed.resolve()])
+                self.assertEqual(plan['reusedPassed'], 1)
+                self.assertTrue(plan['priorResults'][str(passed.resolve())]['passed'])
+                self.assertEqual({path: path.read_bytes() for path in original}, original)
 
     def test_exact_page_pass_survives_model_publisher_and_hugo_fingerprint_changes(self):
         with tempfile.TemporaryDirectory() as tmp:

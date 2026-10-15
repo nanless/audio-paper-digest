@@ -70,6 +70,20 @@ function normalizeExplicitReaderSymbolProjection(value) {
 
 function normalizeReaderSourceDisplayArtifacts(value) {
     let output = normalizeExplicitReaderSymbolProjection(value);
+    // 只投影完整表格格值：分子、分母的可见副本与显式 {,} 注解须逐字一致。
+    // 可选百分比尾注原样保留；裸分数重复、续式和其他 TeX 不据此恢复。
+    output = output.replace(/(^|[|\n])([ \t]*)(\d{1,3}(?:,\d{3})*|\d+)\/(\d{1,3}(?:,\d{3})*|\d+)(\d{1,3}(?:\{,\}\d{3})*|\d+)\/(\d{1,3}(?:\{,\}\d{3})*|\d+)(?=[ \t]*(?:\(\d+(?:\.\d+)?%\)[ \t]*)?(?:[|]|$))/g,
+        (whole, boundary, space, numerator, denominator, texNumerator, texDenominator) => {
+            if (!`${texNumerator}/${texDenominator}`.includes('{,}')
+                || numerator !== texNumerator.replaceAll('{,}', ',')
+                || denominator !== texDenominator.replaceAll('{,}', ',')) return whole;
+            return `${boundary}${space}${numerator}/${denominator}`;
+        });
+    // 保留数值后的全部脚注字符，只去掉同值同脚注的明确上标副本。
+    output = output.replace(/(^|[|\n])([ \t]*)([+−-]?(?:\d+(?:\.\d+)?|\.\d+))([a-zℓ](?:,[a-zℓ])*)([+−-]?(?:\d+(?:\.\d+)?|\.\d+))\^\{((?:[a-z]|\\ell)(?:,(?:[a-z]|\\ell))*)\}(?=[ \t]*(?:[|]|$))/g,
+        (whole, boundary, space, visible, notes, tex, texNotes) => visible === tex
+            && notes === texNotes.replaceAll('\\ell', 'ℓ') ? `${boundary}${space}${visible}${notes}` : whole);
+    output = output.replace(/(^|[|\n])([ \t]*)∼\\sim(?=[ \t]*(?:[|]|$))/g, '$1$2∼');
     // 仅合并同变量、同数值且带明确 TeX {=} 注解的等式副本。
     // 裸重复、不同变量/数值、额外下标或数字尾部不具备此证据。
     output = output.replace(
@@ -117,7 +131,7 @@ function normalizeReaderSourceDisplayArtifacts(value) {
         )
     );
     output = output.replace(
-        /(?<![\d,])(\d{1,3}(?:,\d{3})+)(\d{1,3}(?:\{,\}\d{3})+)(?![\d,])/g,
+        /(?<![\d,/])(\d{1,3}(?:,\d{3})+)(\d{1,3}(?:\{,\}\d{3})+)(?![\d,/])/g,
         (whole, visible, annotation) => annotation.replaceAll('{,}', ',') === visible
             ? visible : whole
     );

@@ -2171,9 +2171,11 @@ def multimodal_review_images(content, title="", required=False, *, image_concurr
 
     prompt = f"""你是一个博客图片质量审查专家。
 
-请审查下面这篇博客中的图片引用是否合理。
+请审查本次实际附上的这一张图片及其对应局部正文是否一致。
 
-【重要】本请求已按列表顺序附上实际图片字节，以下是正文中提取的对应元数据：
+【范围】每次请求只附一张图片。图片编号表示它在整篇文章中的位置，附近正文也只是局部摘录；你没有看到整篇文章或其他图片，不能据此断言全篇只有这一张图、缺少其他图或未覆盖其他结果。只就本张像素、对应元数据和局部正文提出具体问题。
+
+【重要】本请求附上了实际图片字节，以下是正文中提取的对应元数据：
 - 博客正文中的实际图片格式为标准 Markdown：`![alt](url)`
 - 摘要中的格式（如"外部图片: url | alt: ..."）只是元数据展示，**不要**因为摘要格式而误判
 - 摘要中的 URL 可能为了简洁而截断，但博客正文中的 URL 是完整的
@@ -2189,6 +2191,8 @@ def multimodal_review_images(content, title="", required=False, *, image_concurr
 2. 图片是否包含明显错误、空白、损坏、无关内容或隐私信息
 3. 图片 alt 文本是否为空、重复或与实际内容冲突
 4. 若图片是汇总封面，必须逐字段核对所附确定性上下文；标题、热门方向、计数、TOP 10 顺序、完整英文标题、分数和任务标签不一致均为 error
+5. 判断曲线或柱形的归属前，逐一核对本图图例的线型、标记、颜色与坐标分组；不要凭颜色印象互换图例，也不要混淆大小写标签或相邻分组。柱顶数字可能是样本计数，纵轴可能是比例；须按本图实际图注、坐标轴和分组语义区分，不能直接把计数当百分比或假定所有组共用分母。读图只能近似判断时，不声称精确数值。
+6. 作者文字或图注也可能与实际像素相互矛盾，不能无条件将文字当作图像事实。若局部正文无条件复述与本图冲突的结论，仍须报告具体冲突；若正文已明确归属并如实披露这种矛盾及不确定性，不要要求它强行统一成一个确定结论。图例或像素不足以辨认时，只说明证据限制，不猜测不存在的冲突。
 
 【禁止事项】不要报告以下伪问题：
 - 摘要格式（如"外部图片: url | alt: ..."）不是 Markdown 格式 → 这是正常的元数据摘要
@@ -5460,6 +5464,16 @@ def _index_figure_preview(paper, reader_article, api_reader=None):
                 raise PublishDataValidationError('汇总内联图必须对应唯一已验证的像素资产。')
             asset = candidates[0]
             pixel_sha = figure.get('assetSha256')
+            if asset.get('derivedAssetProof') is not None:
+                # Recompute from the original source/Reader rather than trusting
+                # an asset-shaped dictionary supplied by a caller.
+                verified = _api_reader_payload(paper)
+                matches = [item for item in verified.get('assets', [])
+                           if item.get('sourceUrl') == source_url]
+                if len(matches) != 1 or any(asset.get(key) != matches[0].get(key) for key in (
+                        'derivedAssetProof', 'generatedBytes', 'sha256', 'destination', 'publicUrl')):
+                    raise PublishDataValidationError('汇总 PDF 整页图片派生证明与真实封存来源不一致。')
+                pixel_sha = asset.get('sha256')
             raw = asset.get('generatedBytes')
             ordinal = figure.get('ordinal')
             paper_id = normalize_publish_arxiv_id(paper.get('arxivId') or paper.get('paper_id'))
@@ -6409,9 +6423,32 @@ def _normalize_api_reader_explicit_symbol_projection(value):
     return re.sub(r'([+/])\\;\1\\;', r'\1', output)
 
 
-def _normalize_api_reader_display_artifacts(value):
+def _normalize_api_reader_display_artifacts(value, explicit_cells=True):
     """合并数值一致的明确 TeX 显示副本，以及连续重复的加粗说明标题。"""
     value = str(value or '')
+    if explicit_cells:
+        # 只接受完整表格格值，保留百分比尾注及全部脚注；不猜裸重复或续式。
+        def fraction_projection(match):
+            if '{,}' not in match[5] + '/' + match[6] \
+                    or match[3] != match[5].replace('{,}', ',') \
+                    or match[4] != match[6].replace('{,}', ','):
+                return match[0]
+            return match[1] + match[2] + match[3] + '/' + match[4]
+        value = re.sub(
+            r'(^|[|\n])([ \t]*)([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)/([0-9]{1,3}(?:,[0-9]{3})*|[0-9]+)'
+            r'([0-9]{1,3}(?:\{,\}[0-9]{3})*|[0-9]+)/([0-9]{1,3}(?:\{,\}[0-9]{3})*|[0-9]+)'
+            r'(?=[ \t]*(?:\([0-9]+(?:\.[0-9]+)?%\)[ \t]*)?(?:[|]|$))',
+            fraction_projection, value,
+        )
+        value = re.sub(
+            r'(^|[|\n])([ \t]*)([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))([a-zℓ](?:,[a-zℓ])*)'
+            r'([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))\^\{((?:[a-z]|\\ell)(?:,(?:[a-z]|\\ell))*)\}'
+            r'(?=[ \t]*(?:[|]|$))',
+            lambda match: match[1] + match[2] + match[3] + match[4]
+            if match[3] == match[5] and match[4] == match[6].replace('\\ell', 'ℓ')
+            else match[0], value,
+        )
+        value = re.sub(r'(^|[|\n])([ \t]*)∼\\sim(?=[ \t]*(?:[|]|$))', r'\1\2∼', value)
     # 与 Reader 相同：只合并同变量同数值、带明确 TeX {=} 注解的等式副本。
     value = re.sub(
         r'(?<![A-Za-z0-9._])([A-Za-z])\s*=\s*([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))'
@@ -6462,10 +6499,12 @@ def _normalize_api_reader_display_artifacts(value):
 
 def _normalize_api_reader_source_cell(value):
     value = _normalize_api_reader_explicit_symbol_projection(value)
-    value = unicodedata.normalize('NFKC', value)
+    # 在 NFKC 把脚注 ℓ 转成 l 之前核对原始脚注与明确 \ell 注解。
     value = _normalize_api_reader_display_artifacts(value)
+    value = unicodedata.normalize('NFKC', value)
+    value = _normalize_api_reader_display_artifacts(value, explicit_cells=False)
     value = re.sub(
-        r'(?<![\d,])(\d{1,3}(?:,\d{3})+)(\d{1,3}(?:\{,\}\d{3})+)(?![\d,])',
+        r'(?<![\d,/])(\d{1,3}(?:,\d{3})+)(\d{1,3}(?:\{,\}\d{3})+)(?![\d,/])',
         lambda match: match[1] if match[2].replace('{,}', ',') == match[1]
         else match[0], value,
     )
@@ -6751,6 +6790,48 @@ def _reader_inline_svg_resource(paper, plan, figure, structured_sha, source_sha)
     if len(matches) != 1:
         raise PublishDataValidationError('内联论文图与原始 SVG、DOM、图注或来源位置不一致。')
     return matches[0]
+
+
+def _reader_pdf_page_asset(paper, figure, resource, original_pixels):
+    """Derive a separate publication asset; never rewrite saved model pixels."""
+    from reader_pdf_page_asset import dependency_failure, derive_page_asset
+    if dependency_failure(resource['inlineSvg'].encode('utf-8')) is None:
+        return None
+    proof = paper.get('freshRewriteProvenance') or {}
+    run_id = proof.get('runId')
+    if not isinstance(run_id, str) or not re.fullmatch(
+            r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id):
+        raise PublishDataValidationError('PDF 整页派生图片缺少本篇日更封存来源。')
+    paper_id = _daily_fresh_normalized_paper_id(paper)
+    run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id
+    _daily_fresh_safe_directory(DAILY_FRESH_SOURCE_RUNS_DIR, 'PDF 图片来源根目录')
+    _daily_fresh_safe_directory(run_dir, 'PDF 图片来源运行目录')
+    _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper)
+    directory = run_dir / 'sources' / paper_id / 'generation-000001'
+    sources = {name: _daily_fresh_read_private_file(directory / name,
+               f'PDF 图片 {name}', 512 * 1024 * 1024) for name in (
+                   'source.txt', 'source.pdf', 'source-runtime.json', 'source-manifest.json')}
+    source_manifest = json.loads(sources['source-manifest.json'])
+    if (hashlib.sha256(sources['source-manifest.json']).hexdigest() != proof.get('sourceManifestSha256')
+            or hashlib.sha256(sources['source.txt']).hexdigest() != paper.get('sourceSha256')
+            or any(source_manifest.get(key, {}).get('responseSha256')
+                   != hashlib.sha256(sources[name]).hexdigest()
+                   or source_manifest.get(key, {}).get('responseBytes') != len(sources[name])
+                   for key, name in [('pdf', 'source.pdf'), ('runtimeMetadata', 'source-runtime.json')])):
+        raise PublishDataValidationError('PDF 图片的四份来源在完整核验后发生变化。')
+    runtime = json.loads(sources['source-runtime.json'])
+    originals = [item for item in runtime['structuredArtifacts']['figures']
+                 if item.get('ordinal') == figure['ordinal']
+                 and item.get('sourceDomSha256') == figure['sourceDomSha256']]
+    if (len(originals) != 1 or originals[0].get('images') != [resource]
+            or re.sub(r'\s+', ' ', originals[0].get('caption', '')).strip() != figure['caption']):
+        raise PublishDataValidationError('PDF 图片的原 SVG、图号或完整图注与封存来源不一致。')
+    try:
+        return derive_page_asset(paper_id=paper_id, figure=figure, resource=resource,
+            old_pixels=original_pixels, pdf_bytes=sources['source.pdf'],
+            source_files={name: hashlib.sha256(raw).hexdigest() for name, raw in sources.items()})
+    except (ValueError, RuntimeError) as exc:
+        raise PublishDataValidationError(f'PDF 整页派生图片无法严格重验：{exc}') from exc
 
 
 def _validate_legacy_reader_figure_source(paper, plan, article, structured_sha, source_sha):
@@ -8283,12 +8364,18 @@ def _api_reader_payload(paper):
                     actual_sha = hashlib.sha256(raw_asset).hexdigest()
                     if actual_sha != item.get('assetSha256'):
                         raise PublishDataValidationError('内联论文图重新渲染的像素与 Reader 实际输入不一致。')
+                    derived = _reader_pdf_page_asset(paper, item, resource, raw_asset)
+                    derived_proof = None
+                    if derived is not None:
+                        raw_asset, derived_proof = derived
+                        actual_sha = hashlib.sha256(raw_asset).hexdigest()
                     filename = f"figure-{item['ordinal']}-{actual_sha[:16]}.png"
                     destination = Path('static') / 'images' / 'papers' / paper_id / filename
                     figure_assets.append({'generatedBytes': raw_asset,
                         'destination': destination.as_posix(),
                         'publicUrl': f'{BASE_PATH.rstrip("/")}/images/papers/{paper_id}/{filename}',
                         'sourceUrl': item['url'], 'sha256': actual_sha,
+                        **({'derivedAssetProof': derived_proof} if derived_proof else {}),
                         **({'pixelReplayProof': pixel_replay} if pixel_replay else {})})
                 continue
             declared_cache_path = Path(str(item['cachePath'] or '')).expanduser()
@@ -8385,6 +8472,16 @@ def _api_reader_payload(paper):
         rendered_article = rendered_article.replace(
             f']({asset["sourceUrl"]})', f']({asset["publicUrl"]})'
         )
+        if asset.get('derivedAssetProof'):
+            # The saved Reader remains unchanged; label the actual displayed
+            # full PDF page rather than presenting it as an exact Figure crop.
+            image_line = next((line for line in rendered_article.splitlines()
+                               if re.fullmatch(r'!\[(?:\\.|[^\]\\\n])*\]\('
+                                   + re.escape(asset['publicUrl']) + r'\)', line.strip())), None)
+            if image_line is None or rendered_article.splitlines().count(image_line) != 1:
+                raise PublishDataValidationError('PDF 整页派生图片必须对应唯一正文图片节点。')
+            rendered_article = rendered_article.replace(image_line, image_line + '\n\n> **图片来源：** '
+                + asset['derivedAssetProof']['displayLabel'], 1)
     return {
         'contract': reader_contract,
         'plan': plan,
@@ -12236,9 +12333,71 @@ def _require_active_publication_request(include_id):
     return expected
 
 
+def _derived_figure_asset_bindings(papers):
+    """Recompute independent publication derivatives, not Reader bindings."""
+    from reader_pdf_page_asset import dependency_failure
+    result = []
+    for paper in papers:
+        if not isinstance(paper, dict):
+            continue
+        affected = False
+        for figure in paper.get('apiReaderFigures') or []:
+            if not isinstance(figure, dict) or 'inlineSvgSourceSha256' not in figure:
+                continue
+            resource = _reader_inline_svg_resource(paper, paper.get('apiReaderPlan') or {}, figure,
+                paper.get('structuredArtifactsSha256'), paper.get('sourceSha256'))
+            affected = affected or dependency_failure(resource['inlineSvg'].encode('utf-8')) is not None
+        if affected:
+            payload = _api_reader_payload(paper)
+            result.extend(copy.deepcopy(asset['derivedAssetProof'])
+                          for asset in payload.get('assets', []) if asset.get('derivedAssetProof'))
+    return sorted(result, key=lambda item: (item['paperId'], item['figureOrdinal']))
+
+
+def _validate_derived_figure_asset_manifest(manifest, expected):
+    actual = manifest.get('derivedFigureAssets')
+    if actual is None and not expected:
+        return  # Immutable manifests predating this optional derivation.
+    if actual != expected or manifest.get('derivedFigureAssetsFingerprint') != _stable_json_sha256(expected):
+        raise PublishDataValidationError('PDF 整页图片的独立派生证明与封存来源或输出像素不一致。')
+    records = {item.get('path'): item for item in manifest.get('files', []) if isinstance(item, dict)}
+    for proof in expected:
+        relative = (f"static/images/papers/{proof['paperId']}/"
+                    f"figure-{proof['figureOrdinal']}-{proof['assetSha256'][:16]}.png")
+        record = records.get(relative)
+        if not record or record.get('deleted') is not False or record.get('sha256') != proof['assetSha256']:
+            raise PublishDataValidationError('PDF 整页图片派生证明没有对应清单中的确切输出资产。')
+
+
+def _legacy_reader_pixel_assets(manifest, papers):
+    """Read old immutable manifests in their original pixel identity only.
+
+    Missing new fields do not authorize a substituted PDF asset. In particular,
+    deleting a new proof and changing its input hash cannot turn a new PNG into
+    a legacy model-input PNG.
+    """
+    if 'derivedFigureAssets' in manifest or 'derivedFigureAssetsFingerprint' in manifest:
+        raise PublishDataValidationError('旧图片清单不能只缺少部分派生证明字段。')
+    records = [item for item in manifest.get('files', []) if isinstance(item, dict)
+               and item.get('deleted') is False]
+    for paper in papers:
+        paper_id = normalize_publish_arxiv_id(paper.get('arxivId'))
+        for figure in paper.get('apiReaderFigures') or []:
+            if 'inlineSvgSourceSha256' not in figure:
+                continue
+            digest = figure.get('assetSha256')
+            ordinal = figure.get('ordinal')
+            if not re.fullmatch(r'[a-f0-9]{64}', str(digest or '')) or type(ordinal) is not int:
+                raise PublishDataValidationError('旧 SVG 图片缺少原模型像素身份。')
+            prefix = f'static/images/papers/{paper_id}/figure-{ordinal}-'
+            matching = [item for item in records if str(item.get('path', '')).startswith(prefix)]
+            if matching != [{'path': prefix + digest[:16] + '.png', 'deleted': False, 'sha256': digest}]:
+                raise PublishDataValidationError('旧清单只可保持原 Reader 像素，不得缺少派生证明而替换图片。')
+
+
 def generation_input_fingerprint(
     papers, date_str, category, publish_all, include_id=None,
-    input_source_reference=None,
+    input_source_reference=None, *, _include_pdf_page_derivations=True,
 ):
     """把可续跑的生成绑定到确切的发布输入和选项。"""
     image_exclusions = []
@@ -12274,6 +12433,9 @@ def generation_input_fingerprint(
             key=lambda item: (item['normalizedArxivId'], item['url']),
         ),
     }
+    derivatives = _derived_figure_asset_bindings(papers) if _include_pdf_page_derivations else []
+    if derivatives:
+        payload['derivedFigureAssets'] = derivatives
     scope = _single_publication_scope(include_id)
     if scope is not None:
         payload['publicationScope'] = scope
@@ -12323,6 +12485,8 @@ def _validate_generation_input_integrity(manifest, date_str):
         published_papers, date_str, category, publish_all,
         scope.get('includeId') if scope else None,
         input_source_reference=input_source_reference,
+        _include_pdf_page_derivations=('derivedFigureAssets' in manifest
+                                      or 'derivedFigureAssetsFingerprint' in manifest),
     )
     if actual_input != expected_input:
         raise PublishDataValidationError(
@@ -12334,6 +12498,10 @@ def _validate_generation_input_integrity(manifest, date_str):
     expected_snapshot = published_papers_fingerprint(published_papers)
     if actual_snapshot != expected_snapshot:
         raise PublishDataValidationError('正式生成清单中的论文快照指纹与实际快照不一致。')
+    if 'derivedFigureAssets' in manifest or 'derivedFigureAssetsFingerprint' in manifest:
+        _validate_derived_figure_asset_manifest(manifest, _derived_figure_asset_bindings(published_papers))
+    else:
+        _legacy_reader_pixel_assets(manifest, published_papers)
     expected_v6 = manual_v6_publication_bindings(published_papers)
     actual_v6 = manifest.get('manualV6Bindings')
     # 历史上的 v5-only schema-v3 生成早于这个显式字段。
@@ -12421,6 +12589,7 @@ def generation_template_fingerprint():
         'markdown_hugo_gate.py': script_dir / 'markdown_hugo_gate.py',
         'reader_inline_svg.py': script_dir / 'reader_inline_svg.py',
         'reader_inline_svg_pixel_replay.py': script_dir / 'reader_inline_svg_pixel_replay.py',
+        'reader_pdf_page_asset.py': script_dir / 'reader_pdf_page_asset.py',
         'reader_pdf_visual_audit_cache.py': script_dir / 'reader_pdf_visual_audit_cache.py',
         'reader_sealed_pdf_table_evidence.py': script_dir / 'reader_sealed_pdf_table_evidence.py',
         'reader_sealed_pdf_quote_evidence.py': script_dir / 'reader_sealed_pdf_quote_evidence.py',
@@ -12557,6 +12726,7 @@ def review_protocol_fingerprint():
         'manual/tutorial_payload_verifier.py': MANUAL_SCRIPTS_DIR / 'tutorial_payload_verifier.py',
         'publish_common.py': script_dir / 'publish_common.py',
         'manual_agent_policy.py': script_dir / 'manual_agent_policy.py',
+        'reader_pdf_page_asset.py': script_dir / 'reader_pdf_page_asset.py',
         'llm_account_pool.py': script_dir / 'llm_account_pool.py',
         'utils.py': script_dir / 'utils.py',
         'analysis_sections.py': script_dir / 'analysis_sections.py',
@@ -13080,6 +13250,8 @@ def save_generation_manifest(
             manifest['manualV6Bindings']
         )
         manifest['llmApiBindingsFingerprint'] = _stable_json_sha256(api_bindings)
+        manifest['derivedFigureAssets'] = _derived_figure_asset_bindings(published_papers)
+        manifest['derivedFigureAssetsFingerprint'] = _stable_json_sha256(manifest['derivedFigureAssets'])
         if publication_mode == MANUAL_V6_PRODUCTION_MODE:
             manifest['manualV6Production'] = production_proof
             manifest['manualV6ProductionFingerprint'] = _stable_json_sha256(
@@ -13561,6 +13733,11 @@ def attest_api_reader_assets(date_str, publish_paths, manifest_path, file_result
     records = manifest.get('files')
     if not isinstance(records, list):
         raise PublishDataValidationError('生成清单中没有文件记录')
+    if 'derivedFigureAssets' in manifest or 'derivedFigureAssetsFingerprint' in manifest:
+        _validate_derived_figure_asset_manifest(manifest,
+            _derived_figure_asset_bindings(manifest.get('publishedPapers') or []))
+    else:
+        _legacy_reader_pixel_assets(manifest, manifest.get('publishedPapers') or [])
     repo = Path(BLOG_REPO).expanduser().resolve()
     manifest_by_path = {
         record.get('path'): record for record in records if isinstance(record, dict)
@@ -14720,9 +14897,17 @@ def plan_incremental_review(date_str, publish_paths, manifest_path, base_head):
                 # 而不必硬造出一处修改。
                 if classify_review_failure(record.get('issues') or []) == 'transient':
                     failure_kind = 'transient'
+            previous_protocol = record.get('reviewProtocolFingerprint')
+            changed_failure_protocol = (
+                record.get('completed') is True
+                and re.fullmatch(r'[0-9a-f]{64}', str(previous_protocol or ''))
+                and re.fullmatch(r'[0-9a-f]{64}', str(current_protocol or ''))
+                and previous_protocol != current_protocol
+            )
             if (
                 current == recorded
                 and failure_kind == 'content'
+                and not changed_failure_protocol
             ):
                 unchanged_failed.append(item.resolve())
                 prior_results[key] = {

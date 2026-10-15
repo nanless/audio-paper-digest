@@ -291,11 +291,12 @@ npm run test:compat
 | `project_env.py` | 加载 Python 项目环境、最小子进程环境和代理设置。 |
 | `publication_activation.py` | Python 入口/共享库：核验旧提交、博客基线和实时远端，归档六个精确状态文件。pending 状态阻断发布三阶段，支持中断恢复，不修改已提升的论文分析。 |
 | `publish-conference.py` | CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 只安装文件；push 核验实际 Git index 和 commit blob，先发布图床再发布博客；verify 检查线上 URL。以上都是机械检查，语义审查和浏览器里的视觉效果仍要人工确认。 |
-| `publish-to-blog.py` | Python 核心：实现三个发布阶段共用的页面模板、标签兼容映射、Git 事务、批次凭证及发布证明。`researcher-workbench-v1` 规定页面元数据、引用和论文再思考附属资料；逐页审查永久按“相对路径 + 内容 SHA”复用。发布器代码变化会重新渲染页面，但最终字节未变的页面不重新审查。 |
+| `publish-to-blog.py` | Python 核心：实现三个发布阶段共用的页面模板、标签兼容映射、Git 事务、批次凭证及发布证明。`researcher-workbench-v1` 规定页面元数据、引用和论文再思考附属资料；逐页通过记录永久按“相对路径 + 内容 SHA”复用。发布器代码变化会重新渲染页面，字节未变的通过页不重审；内容失败页仅在完整合法的旧、新审查协议确实不同时进入正常重审。 |
 | `publish_common.py` | Python 共享：提供发布数据、评分、Manual/API 来源核验及 LLM 审查的共用规则。 |
 | `push-blog.py` | Python 入口：核验 receipt，提交并推送其允许的改动，确认远端 OID 后规划视觉任务。 |
 | `reader_inline_svg.py` | Python 共享：校验内嵌 SVG 的元素、属性和本地引用，在禁用脚本与网络的浏览器中渲染 PNG，供阅读和发布共用。 |
 | `reader_inline_svg_pixel_replay.py` | Python 库：先执行当前 SVG 安全检查，只从当前 HEAD 的可信 Git 历史重放渲染器；生成图片必须与原模型像素 SHA 完全相同，才供正常发布器暂存。 |
+| `reader_pdf_page_asset.py` | Python 库：仅对缺失或循环绘图依赖的封存 SVG，从同一日更封存 PDF 的唯一图号及完整图注派生完整原页 PNG；保留 Reader 旧像素 SHA，以独立来源证明供发布、审查与推送重验。 |
 | `reader_pdf_cell_evidence.py` | 按受控 PDF 提取和核验表格单元格证据。 |
 | `reader_pdf_visual_audit_cache.py` | Python 库：有界缓存旧 PDF 后端成功的纯视觉抽取；每次核对真实 PDF 和完整实现字节，返回独立副本；四份封存来源、当前绑定与逐格数字资格仍由原核验器每次重放。 |
 | `reader_sealed_pdf_column_units.py` | 核验受控 PDF 原表列单位证据，供 Node 和发布器重放。 |
