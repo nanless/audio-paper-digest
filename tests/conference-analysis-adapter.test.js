@@ -55,7 +55,10 @@ test('会议 Reader revision 保留原完成包，失败中断后从同一候选
             assert.equal(options.recoveryPolicy, policy); return callback();
         }, getConferenceReaderRefreshUpstreamReason: () => null,
         isSuccessfulAnalysisRecordForReadOnlyConferencePublication: value => value.apiReaderArticle === 'new valid Reader' };
-    const deepStub = { refreshApiReaderArticleFromSource: async (value, source, options) => {
+    let resourceBuilds = 0;
+    const deepStub = { buildApiReaderResourceIdentity: async (_analysis, text) => {
+        resourceBuilds += 1; return emptyReaderResourceIdentity(text);
+    }, refreshApiReaderArticleFromSource: async (value, source, options) => {
         calls += 1; assert.equal(options.resumeSavedSourceReader, true);
         assert.equal(context.getConferenceAnalysisSource(value).text, source.text);
         assert.equal(value.paidCost, 42); assert.equal(value.analysis, 'paid original core');
@@ -78,6 +81,7 @@ test('会议 Reader revision 保留原完成包，失败中断后从同一候选
     assert.equal(child.run.status, 'complete'); assert.equal(child.run.analysisSha256, child.analysisFileSha256);
     assert.equal(result.executionId, childId); assert.equal(calls, 2);
     await adapter.refreshConferenceReader(input, { engine, deep: deepStub }); assert.equal(calls, 2);
+    assert.equal(resourceBuilds, 1, 'resource preflight is immutable across retries and completed replay');
     assert.deepEqual(fs.readFileSync(path.join(parent.directory, 'analysis.json')), originalAnalysis);
     assert.deepEqual(fs.readFileSync(path.join(parent.directory, 'run.json')), originalRun);
     const fullParentId = '66666666-6666-4666-8666-666666666666';
@@ -136,6 +140,61 @@ test('会议 Reader revision 保留原完成包，失败中断后从同一候选
     assert.equal(normalCalls, 3, 'only three already started full analyses may finish');
     assert.equal(stopped.filter(value => value.status === 'rejected'
         && value.reason.code === 'ANALYSIS_STOP_REQUESTED').length, 2);
+    const scoredParentId = '33333333-3333-4333-8333-333333333333';
+    adapter.prepareConferenceAnalysis({ ...input, paperId: fixture.paperId, executionId: scoredParentId });
+    const scoredParent = adapter.loadConferenceAnalysis({ analysisRoot, executionId: scoredParentId });
+    const scoredPaper = { ...structuredClone(paper), analysis: require('./helpers/conference-readonly-qualification-fixture')
+        .completedConferenceOriginalTaxonomyFixture().paper.analysis.replace('has_code: 否', 'has_code: 是')
+        .replace('## 核心创新点', ('输入音频经过编码器得到帧级表示，模型将上下文特征与音频表示融合，再由解码器输出文本预测。训练阶段使用识别损失优化参数，推理阶段保持模块顺序和输入接口一致。\n\n').repeat(10) + '## 核心创新点') };
+    scoredPaper.sourceSha256 = crypto.createHash('sha256').update(scoredParent.source.sourceDetails.text).digest('hex');
+    scoredPaper.analysisManifest.sourceAcquisition.sourceSha256 = scoredPaper.sourceSha256;
+    adapter.replaceJson(path.join(scoredParent.directory, 'analysis.json'), { ...scoredParent.analysis,
+        status: 'complete', completedAt: '2026-10-16T00:00:00.000Z', papers: [scoredPaper] }, scoredParent.analysisFileSha256);
+    adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId: scoredParentId }));
+    // Execute the real shared scoring+Reader function. Only paid request
+    // boundaries and the network identity builder are replaced offline.
+    const Module = require('node:module');
+    const deepFilename = path.resolve(__dirname, '../scripts/deep-analyzer.js');
+    const runtime = new Module(deepFilename, module); runtime.filename = deepFilename;
+    runtime.paths = Module._nodeModulePaths(path.dirname(deepFilename));
+    runtime._compile(fs.readFileSync(deepFilename, 'utf8') + `
+module.exports.installOfflineConferenceBoundaries = function(identity) {
+ const counts={preflights:0,scoreCalls:0,readers:0};
+ buildApiReaderResourceIdentity=async function(){counts.preflights++;return structuredClone(identity);};
+ auditTypeAwareScoringDetailed=async function(analysis){counts.scoreCalls++;return {analysis,audit:{offlinePaidScore:true},attempts:1,evidenceSha256:'a'.repeat(64)};};
+ refreshApiReaderArticleFromSource=async function(paper){counts.readers++;if(counts.readers===1)throw new Error('scoring and Reader interrupted');paper.apiReaderArticle='new valid Reader';return paper;};
+ module.exports.buildApiReaderResourceIdentity=buildApiReaderResourceIdentity;
+ module.exports.refreshApiReaderArticleFromSource=refreshApiReaderArticleFromSource;
+ return counts;
+};`, deepFilename);
+    const scoreDeep = runtime.exports;
+    const scoreCounts = scoreDeep.installOfflineConferenceBoundaries(emptyReaderResourceIdentity(scoredParent.source.sourceDetails.text));
+    const scoreInput = { ...input, parentExecutionId: scoredParentId };
+    await assert.rejects(adapter.refreshConferenceReader(scoreInput, { engine, deep: scoreDeep }), /interrupted/);
+    const scoredParentLoaded = adapter.loadConferenceAnalysis({ analysisRoot, executionId: scoredParentId });
+    const scoreChildId = adapter.readerRevisionExecutionId(scoredParentId, scoredParentLoaded.analysisFileSha256);
+    const scoreChild = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: scoreChildId });
+    assert.equal(scoreChild.revision.mode, 'scoring-and-reader');
+    const scoreAnalysisFile = path.join(scoreChild.directory, 'analysis.json');
+    const damagedScore = structuredClone(scoreChild.analysis);
+    damagedScore.readerRevisionProgress.scoringCheckpoint.analysisSha256 = '0'.repeat(64);
+    adapter.replaceJson(scoreAnalysisFile, damagedScore, scoreChild.analysisFileSha256);
+    await assert.rejects(adapter.refreshConferenceReader(scoreInput, { engine, deep: scoreDeep }), /新评分检查点/);
+    adapter.replaceJson(scoreAnalysisFile, scoreChild.analysis, adapter.readJsonRecord(scoreAnalysisFile).sha256);
+    assert.equal(scoreCounts.scoreCalls, 1);
+    const preflightFile = path.join(scoreChild.directory, 'reader-resource-preflight.json');
+    const savedPreflight = fs.readFileSync(preflightFile);
+    fs.appendFileSync(preflightFile, ' ');
+    await assert.rejects(adapter.refreshConferenceReader(scoreInput, { engine, deep: scoreDeep }), /预检文件 SHA/);
+    assert.equal(scoreCounts.preflights, 2); assert.equal(scoreCounts.scoreCalls, 1);
+    fs.writeFileSync(preflightFile, savedPreflight);
+    const scoredResult = await adapter.refreshConferenceReader(scoreInput, { engine, deep: scoreDeep });
+    assert.equal(scoredResult.revision.mode, 'scoring-and-reader');
+    assert.equal(scoreCounts.preflights, 2); assert.equal(scoreCounts.scoreCalls, 1); assert.equal(scoreCounts.readers, 2);
+    assert.equal(adapter.loadConferenceReaderRevision({ analysisRoot, executionId: scoreChildId })
+        .analysis.readerRevisionProgress.attempts, 2);
+    assert.equal(adapter.loadConferenceAnalysis({ analysisRoot, executionId: scoredParentId }).analysisFileSha256,
+        scoredParentLoaded.analysisFileSha256);
     const revisionFile = path.join(child.directory, 'reader-revision.json');
     const revision = JSON.parse(fs.readFileSync(revisionFile)); revision.parentAnalysisFileSha256 = 'b'.repeat(64);
     const { revisionSha256, ...body } = revision; revision.revisionSha256 = adapter.stableHash(body);

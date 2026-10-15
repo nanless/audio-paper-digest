@@ -124,7 +124,11 @@ function migrateAndRun(options, runtime = {}) {
         const stagedProofs = new Map();
         const stageFailures = new Map();
         if (requiresMigration || lifecycleNeedsRefresh) {
-            for (const item of complete) {
+            for (const [index, item] of complete.entries()) {
+                // Rendering uses synchronous private workers. Yield between
+                // papers so a stop signal can be handled before the next one.
+                await new Promise(resolve => setImmediate(resolve));
+                require('./lib/analysis-stop-control').assertMayStartRequest();
                 const original = shared.retainedSources?.get(item.analysisRunId);
                 let staged;
                 try { staged = deps.postprocess.stagePaper({
@@ -152,6 +156,10 @@ function migrateAndRun(options, runtime = {}) {
                     const failure = recovery.classifyFailure(error, deps.now());
                     if (failure.systemic || options.reuseCompletePages) throw error;
                     stageFailures.set(item.paperId, failure);
+                }
+                if ((index + 1) % 100 === 0 || index + 1 === complete.length) {
+                    process.stderr.write(`[会议统一后处理] 已检查 ${index + 1}/${complete.length}`
+                        + `，通过 ${stagedProofs.size}，失败 ${stageFailures.size}\n`);
                 }
             }
         }

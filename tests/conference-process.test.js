@@ -1306,6 +1306,32 @@ test('状态与迁移凭证之间崩溃时，迁移来源记录仍然保留', as
     assert.equal(cli.processStatus(options, { dependencies: deps }).processId, first.processId);
 });
 
+test('统一暂存逐篇响应停止，不再检查下一篇或启动付费恢复，原完成记录保持不变', async t => {
+    const migration = require('../scripts/migrate-conference-process.js');
+    const stop = require('../scripts/lib/analysis-stop-control');
+    const f = fixture(t, 3), options = { apply: true, concurrency: 1, retryFailed: true };
+    const first = await processApi.runConferenceProcess(options, { ...f.deps,
+        processPaper: async (_c, _s, item) => success(item) });
+    const directory = path.join(f.files.conferenceProcessDir, first.processId);
+    const stateFile = path.join(directory, 'state.json');
+    const before = fs.readFileSync(stateFile), completion = fs.readFileSync(path.join(directory, 'completion-receipt.json'));
+    f.context.authority = { ...f.authority, implementationSha256: H('interruptible migration') };
+    f.runtimeAuthority.implementationSha256 = f.context.authority.implementationSha256;
+    let staged = 0;
+    await assert.rejects(migration.migrateAndRun({ ...options, fromProcessId: first.processId }, {
+        dependencies: { ...f.deps, processPaper: () => assert.fail('stopped migration must not start paid recovery'),
+            postprocess: { stagePaper: () => {
+                staged += 1;
+                setImmediate(() => stop.requestAnalysisStop('fixture stop between pages'));
+                return { status: 'staged', manifest: success(f.members[0]).pageProof };
+            } } }
+    }), error => error.code === stop.CODE && error.scope === 'run');
+    assert.equal(staged, 1);
+    assert.deepEqual(fs.readFileSync(stateFile), before);
+    assert.deepEqual(fs.readFileSync(path.join(directory, 'completion-receipt.json')), completion);
+    assert.equal(fs.existsSync(path.join(directory, 'implementation-migration.json')), false);
+});
+
 test('旧版部分导入在模型或来源准备之前，先把 401 归类写进正式记录', async t => {
     const f = fixture(t); const options = { apply: true, concurrency: 1 };
     const first = await processApi.runConferenceProcess(options, { ...f.deps,

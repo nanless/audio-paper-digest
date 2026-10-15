@@ -9608,6 +9608,9 @@ async function refreshApiScoringAndReaderFromSource(paper, sourceDetails, option
 
 async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options = {}) {
     if (!paper || typeof paper !== 'object') throw new Error('评分复验需要 canonical paper');
+    if (options.onScoringComplete !== undefined && typeof options.onScoringComplete !== 'function') {
+        throw new Error('评分完成保存器必须是函数');
+    }
     const manifest = paper.analysisManifest;
     const scoringFactReview = require('./lib/daily-fact-review');
     const scoringRequestDeclaration = manifest?.stages?.primaryAnalysis?.factReview
@@ -9827,6 +9830,9 @@ async function refreshApiScoringAndReaderInternal(paper, sourceDetails, options 
     };
     paper.analysis = auditedAnalysis;
     paper.parsed = auditedParsed;
+    if (options.onScoringComplete !== undefined) {
+        await options.onScoringComplete(paper);
+    }
     if (existingReaderReusable
         && existingReaderResourceSha256 === readerResources.identitySha256) {
         console.log('    [deep] ℹ️  资源身份与反馈 SHA 未变，复用已签名 Reader');

@@ -135,7 +135,7 @@ npm run test:compat
 | `lib/completed-bound-fact-feedback.js` | Node 库：供普通批量和单篇续跑共用，按真实父子反馈签发上下文只读核验完成证明、来源与禁留原句；不写包、不授予模型请求、不改变显式强制重分析。 |
 | `lib/pending-fact-feedback.js` | Node 库：锁内核验真实反馈及原包后保存未完成纠错义务；旧成功正文不代表新反馈完成，无反馈恢复沿用原包，完整同反馈资格通过后才清除。不给模型新额度。 |
 | `lib/completed-reader-upstream.js` | 核验读者文章之前的主文、摘要、标签、评分、来源及原反馈，供正常恢复入口共用。 |
-| `lib/conference-analysis-adapter.js` | Node 库：重新核验完整会议计划与来源后调用公共深度分析引擎。准备阶段先保存写入后不再改动的准备记录，绑定计划、来源与初始分析文件的 SHA；中断恢复按准备记录、来源文件、初始分析文件、运行记录的顺序核对已有内容并补齐缺失文件。分析完成后另核结果 SHA，再保存完成凭证。旧执行记录缺少准备记录时不自动迁移，须用同一认证计划新建执行记录和 UUID。 |
+| `lib/conference-analysis-adapter.js` | Node 库：重新核验完整会议计划与来源后调用公共深度分析引擎。准备记录绑定计划、来源及初始分析 SHA，中断恢复逐项补齐缺失文件，完成后另核结果并保存凭证。旧执行缺少准备记录时须用同一认证计划新建 UUID。完整旧稿恢复保留父包，子运行绑定资源预检、固定模式与预算，复用公共 Reader、评分＋Reader 或完整分析；评分成功即时 CAS 保存，Reader 失败仅续 Reader，原来源与父子链仍须完整重放。 |
 | `lib/conference-analysis-context.js` | Node 库：把已认证执行记录中一篇论文的来源放入仅在当前进程可用的分析上下文，固定 Reader 尝试目录；拒绝 arXiv 身份、其他执行目录，以及与已核验来源记录不符的正文、表格、公式和图片状态。 |
 | `lib/conference-discovery.js` | Node 库：只读扫描 ICASSP/ICLR/ICML 或严格 `official-proceedings` 元数据快照和本机 PDF 目录，生成候选与匹配报告。新会议只按元数据稳定 official ID/`pdfFile` 匹配，标题不能作为身份。 |
 | `lib/conference-execution.js` | Node 库：只从认证计划创建独立执行目录并保存不可变授权凭证。每次读取或推进都核验计划，在锁内核对旧内容仍未改变，再用受控补丁保存结果；通用接口仍拒绝直接写入完成状态。 |

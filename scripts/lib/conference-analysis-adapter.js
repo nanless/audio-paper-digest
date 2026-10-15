@@ -547,12 +547,43 @@ function readerRevisionExecutionId(parentExecutionId, parentAnalysisFileSha256) 
     const value = sha256(`${READER_REVISION_CONTRACT}\0${parentExecutionId}\0${parentAnalysisFileSha256}`);
     return `${value.slice(0,8)}-${value.slice(8,12)}-4${value.slice(13,16)}-a${value.slice(17,20)}-${value.slice(20,32)}`;
 }
+function readerResourceRevisionMode(paper, identity) {
+    const deep = require('../deep-analyzer'), { parseAnalysis } = require('../utils');
+    const before = parseAnalysis(paper.analysis);
+    const after = parseAnalysis(deep.applyApiReaderResourceAvailability(paper.analysis, identity));
+    return ['hasCode', 'hasModel', 'hasDataset'].some(field => before[field] !== after[field])
+        ? 'scoring-and-reader' : 'reader-only';
+}
+function readReaderResourcePreflight(loaded, expectedFileSha256) {
+    const record = readJsonRecord(path.join(loaded.directory, 'reader-resource-preflight.json'));
+    if (record.sha256 !== expectedFileSha256) throw new Error('会议资源预检文件 SHA 改变');
+    const identity = require('../deep-analyzer').replayVerifiedReaderResourceIdentity(
+        record.value, loaded.source.sourceDetails.text);
+    const demos = loaded.analysis.papers[0]?.analysisManifest?.stages?.demoLinkScan?.discoveredLinks || [];
+    if (identity.resources.some(resource => resource.origin === 'validated_demo' && !demos.includes(resource.originalUrl))) {
+        throw new Error('会议资源预检 Demo 不属于原已核验发现记录');
+    }
+    return identity;
+}
+function readerScoringCheckpoint(paper, loaded, engine, rules) {
+    const stage = paper.analysisManifest?.stages?.scoringAudit;
+    require('../deep-analyzer').replayVerifiedReaderResourceIdentity(paper.apiReaderResources, loaded.source.sourceDetails.text);
+    if (engine.getConferenceReaderRefreshUpstreamReason(paper, { tagRules: rules })
+        || stage?.auditSha256 !== stableHash(stage?.audit)
+        || paper.sourceSha256 !== sha256(loaded.source.sourceDetails.text)
+        || paper.analysisManifest?.sourceAcquisition?.sourceSha256 !== paper.sourceSha256) {
+        throw new Error('会议新评分检查点未通过正常上游、来源与评分审计核验');
+    }
+    return { revisionSha256: loaded.revision.revisionSha256, sourceSha256: paper.sourceSha256,
+        resourceIdentitySha256: paper.apiReaderResources.identitySha256,
+        analysisSha256: sha256(paper.analysis), scoringStageSha256: stableHash(stage) };
+}
 function loadConferenceReaderRevision({ analysisRoot, executionId } = {}) {
     const loaded = loadConferenceAnalysis({ analysisRoot, executionId });
     const record = readJsonRecord(path.join(loaded.directory, 'reader-revision.json'));
     const { revisionSha256, ...body } = record.value;
     if (body.contract !== READER_REVISION_CONTRACT || body.version !== 1
-        || !['reader-only', 'normal-analysis'].includes(body.mode)
+        || !['reader-only', 'scoring-and-reader', 'normal-analysis'].includes(body.mode)
         || revisionSha256 !== stableHash(body) || body.executionId !== executionId
         || readerRevisionExecutionId(body.parentExecutionId, body.parentAnalysisFileSha256) !== executionId
         || body.paperId !== loaded.run.paperId || body.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256) {
@@ -566,7 +597,12 @@ function loadConferenceReaderRevision({ analysisRoot, executionId } = {}) {
         || parent.sourceFileSha256 !== loaded.sourceFileSha256) {
         throw new Error('会议 Reader revision 原完成稿、原来源或原凭证发生变化');
     }
-    return { ...loaded, revision: record.value, parent };
+    const resourcePreflight = body.mode === 'normal-analysis' ? null
+        : readReaderResourcePreflight({ ...loaded, analysis: parent.analysis }, body.resourcePreflightFileSha256);
+    if (resourcePreflight && readerResourceRevisionMode(parent.analysis.papers[0], resourcePreflight) !== body.mode) {
+        throw new Error('会议资源预检与原稿三项资源字段的固定恢复模式不一致');
+    }
+    return { ...loaded, revision: record.value, parent, resourcePreflight };
 }
 async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHandle, sourceRoot,
     maxAttempts = 3 } = {}, overrides = {}) {
@@ -597,11 +633,31 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
             papers: [clone(parent.analysis.papers[0])], readerRevisionProgress: { attempts: 0, failures: [] } };
         if (!fs.existsSync(filename)) {
             if (loaded.analysis.status !== 'pending') throw new Error('会议 Reader revision 缺少原身份凭证');
+            let resourcePreflightFileSha256, mode = 'normal-analysis';
+            if (!fullAnalysis) {
+                const preflightFile = path.join(loaded.directory, 'reader-resource-preflight.json');
+                if (!fs.existsSync(preflightFile)) {
+                    const identity = await analysisContext.withConferenceAnalysisSource({ executionId,
+                        executionDir: loaded.directory, paperId: parent.run.paperId, sourceDetails: loaded.source.sourceDetails }, () =>
+                        deep.buildApiReaderResourceIdentity(parent.analysis.papers[0].analysis,
+                            loaded.source.sourceDetails.text, parent.analysis.papers[0].analysisManifest?.stages?.demoLinkScan,
+                            { paper: parent.analysis.papers[0], structuredArtifacts: loaded.source.sourceDetails.structuredArtifacts }));
+                    // The normal builder's response is replayed before it can
+                    // become this child's immutable resource/mode authority.
+                    require('../deep-analyzer').replayVerifiedReaderResourceIdentity(identity, loaded.source.sourceDetails.text);
+                    writeJson(preflightFile, identity);
+                }
+                resourcePreflightFileSha256 = readJsonRecord(preflightFile).sha256;
+                const identity = readReaderResourcePreflight({ ...loaded,
+                    analysis: parent.analysis }, resourcePreflightFileSha256);
+                mode = readerResourceRevisionMode(parent.analysis.papers[0], identity);
+            }
             const body = { contract: READER_REVISION_CONTRACT, version: 1, executionId,
                 parentExecutionId, parentAnalysisFileSha256: parent.analysisFileSha256,
                 parentRunFileSha256: parent.runFileSha256, paperId: parent.run.paperId,
                 sourceSnapshotSha256: parent.run.sourceSnapshotSha256,
-                mode: fullAnalysis ? 'normal-analysis' : 'reader-only',
+                mode,
+                ...(resourcePreflightFileSha256 ? { resourcePreflightFileSha256 } : {}),
                 maxAttempts,
                 seededAnalysisSha256: sha256(jsonBytes(seeded)) };
             writeJson(filename, { ...body, revisionSha256: stableHash(body) });
@@ -628,6 +684,12 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
             || progress.attempts >= maxAttempts) throw Object.assign(new Error('会议 Reader revision 原付费预算已耗尽'),
             { code: 'CONFERENCE_READER_REVISION_BUDGET_EXHAUSTED', retryable: false });
         let paper = clone(loaded.analysis.papers[0]);
+        const savedScoring = progress.scoringCheckpoint;
+        if (savedScoring && (loaded.revision.mode !== 'scoring-and-reader'
+            || stableHash(savedScoring) !== stableHash(readerScoringCheckpoint(paper, loaded, engine, original.rules)))) {
+            throw Object.assign(new Error('会议新评分检查点的资源、正文或原修订 SHA 改变'), { retryable: false });
+        }
+        if (loaded.resourcePreflight && !savedScoring) paper.apiReaderResources = clone(loaded.resourcePreflight);
         let current = { ...loaded.analysis, generation: loaded.analysis.generation + 1,
             readerRevisionProgress: { ...progress, attempts: progress.attempts + 1 } };
         const analysisFile = path.join(loaded.directory, 'analysis.json');
@@ -659,11 +721,27 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
                             }
                             return outcome.result;
                         })
-                    : deep.refreshApiReaderArticleFromSource(paper, loaded.source.sourceDetails,
-                        { resumeSavedSourceReader: true }));
+                    : loaded.revision.mode === 'scoring-and-reader' && !savedScoring
+                        ? deep.refreshApiScoringAndReaderFromSource(paper, loaded.source.sourceDetails, {
+                            onScoringComplete: async scored => {
+                                for (const name of ['primaryAnalysis', 'coreSummaryRepair', 'tagSelection', 'taxonomySeal']) {
+                                    if (stableHash(scored.analysisManifest?.stages?.[name] || null)
+                                        !== stableHash(parent.analysis.papers[0].analysisManifest?.stages?.[name] || null)) {
+                                        throw Object.assign(new Error(`评分刷新改动受保护原阶段：${name}`), { retryable: false });
+                                    }
+                                }
+                                const checkpoint = readerScoringCheckpoint(scored, loaded, engine, original.rules);
+                                const saved = readJsonRecord(analysisFile);
+                                replaceJson(analysisFile, { ...saved.value, papers: [scored], generation: saved.value.generation + 1,
+                                    readerRevisionProgress: { ...saved.value.readerRevisionProgress,
+                                        scoringCheckpoint: checkpoint } }, saved.sha256);
+                            }
+                        })
+                        : deep.refreshApiReaderArticleFromSource(paper, loaded.source.sourceDetails,
+                            { resumeSavedSourceReader: true }));
             // Core and classification may never be rewritten by a Reader revision.
             for (const name of ['primaryAnalysis', 'coreSummaryRepair', 'tagSelection', 'taxonomySeal']) {
-                if (loaded.revision.mode === 'reader-only' && stableHash(paper.analysisManifest?.stages?.[name] || null)
+                if (loaded.revision.mode !== 'normal-analysis' && stableHash(paper.analysisManifest?.stages?.[name] || null)
                     !== stableHash(parent.analysis.papers[0].analysisManifest?.stages?.[name] || null)) {
                     throw Object.assign(new Error(`Reader revision 改动了受保护原阶段：${name}`), { retryable: false });
                 }
@@ -699,7 +777,14 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
             }
             error.executionId = executionId; throw error;
         }
-    }, conferencePaperLockOptions(engine));
+    }, conferencePaperLockOptions(engine)).catch(error => {
+        // Resource preflight precedes the paid-attempt block, but a provider or
+        // storage failure must stop the same shared request scope immediately.
+        if (require('./conference-process-recovery').classifyFailure(error, new Date().toISOString()).systemic) {
+            require('./analysis-stop-control').requestAnalysisStop(error.code || 'service_failure');
+        }
+        throw error;
+    });
 }
 
 module.exports = { RUN_CONTRACT, ANALYSIS_CONTRACT, SOURCE_CONTRACT, PREPARE_INTENT_CONTRACT, VERSION, UUID_RE,

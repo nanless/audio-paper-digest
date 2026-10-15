@@ -235,7 +235,9 @@ test('保留来源只接受真实完成父稿到Reader子稿的连续链，父�
     const child = JSON.parse(fs.readFileSync(path.join(directory, 'analysis.json')));
     child.status = 'complete'; child.papers = structuredClone(parent.analysis.papers); child.completedAt = parent.analysis.completedAt;
     fs.writeFileSync(path.join(directory, 'analysis.json'), JSON.stringify(child));
-    const body = { contract: 'conference-reader-source-revision-v1', version: 1, mode: 'reader-only', maxAttempts: 3,
+    // This fixture proves source/receipt ancestry, not a publishable Reader;
+    // its abbreviated parent therefore requires normal analysis.
+    const body = { contract: 'conference-reader-source-revision-v1', version: 1, mode: 'normal-analysis', maxAttempts: 3,
         executionId, parentExecutionId: parent.run.executionId, parentAnalysisFileSha256: parent.analysisFileSha256,
         parentRunFileSha256: parent.runFileSha256, paperId: item.paperId,
         sourceSnapshotSha256: parent.run.sourceSnapshotSha256, seededAnalysisSha256: api.stableHash(child) };
