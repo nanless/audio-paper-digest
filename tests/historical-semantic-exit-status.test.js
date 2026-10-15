@@ -64,16 +64,28 @@ test('本次页面内容审查失败时拒绝旧通过凭证，成功时复用�
     const blogRepo = path.join(root, 'blog');
     fs.mkdirSync(path.join(blogRepo, 'content', 'posts'), { recursive: true });
     fs.mkdirSync(outputRoot, { recursive: true });
-    const baseline = Buffer.from('---\npaper_digest_pipeline_owned: true\npaper_digest_page_type: paper\npaper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"\ndraft: false\n---\nold\n');
-    const next = Buffer.from('---\npaper_digest_pipeline_owned: true\npaper_digest_page_type: paper\npaper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"\ndraft: false\n---\nnew\n');
+    const registryIdentity = `paper_digest_taxonomy_registry_sha256: ${hash('a')}\npaper_digest_taxonomy_registry_version: paper-taxonomy-v2\n`;
+    const frontMatter = '---\npaper_digest_pipeline_owned: true\npaper_digest_page_type: paper\n'
+        + 'paper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"\n'
+        + registryIdentity + 'draft: false\n---\n';
+    const baseline = Buffer.from(frontMatter + 'old\n');
+    const next = Buffer.from(frontMatter + 'new\n');
     const target = path.join(blogRepo, 'content', 'posts', '2026-01-01-paper.md');
     fs.writeFileSync(target, baseline);
     const authority = fakeAuthority(next, baseline);
+    const catalogChecks = [];
     const deps = {
         loadAuthority: () => authority, blogState, gitBlob: () => baseline,
         worktreeSha: (_repo, relative) => fs.existsSync(path.join(blogRepo, relative))
             ? sha(fs.readFileSync(path.join(blogRepo, relative))) : null,
         sourceBytes: () => next, hugoVersion: 'hugo v0.fixture',
+        validatePublishedTagCatalog: (repo, registrySha, registryVersion) => {
+            catalogChecks.push({ repo, registrySha, registryVersion });
+            assert.equal(repo, blogRepo);
+            assert.equal(registrySha, hash('a'));
+            assert.equal(registryVersion, 'paper-taxonomy-v2');
+            return { valid: true, registrySha256: registrySha, registryVersion };
+        },
         hugoGate: () => ({ status: 'passed', engine: 'fixture', version: deps.hugoVersion }),
         validateActivatedWorktree: () => true, now: () => now,
         publishGit: () => oid('f'),
@@ -106,6 +118,7 @@ test('本次页面内容审查失败时拒绝旧通过凭证，成功时复用�
     }
     assert.deepEqual(fs.readFileSync(output), oldReceipt);
     assert.deepEqual(workerStatuses, [0, 0, 1]);
+    assert.ok(catalogChecks.length > 0, 'all semantic review outcomes retain catalog validation');
     assert.ok(error, '本次审查退出失败时必须拒绝旧通过凭证');
     assert.match(error.message, /页面内容审查子进程失败：1/);
     assert.equal(fs.existsSync(path.join(directory, 'review.json')), false);
