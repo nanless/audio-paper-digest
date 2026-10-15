@@ -644,12 +644,35 @@ function selectVisualReferenceImages(paper, limit = MAX_REFERENCE_IMAGES) {
             // 发布后的视觉规划不能反过来要求这些已不存在的文件，也不能退回旧图片
             // 缓存。先核对长期保存的来源与像素身份，再只凭已核验文本生成信息图，
             // 不带任何图片引用。
+            let sealedSource;
+            const matchesSealedInlineSvg = figure => {
+                const svg = require('./lib/reader-inline-svg');
+                if (figure.inlineSvgRenderContract !== svg.CONTRACT
+                    || !/^[a-f0-9]{64}$/.test(String(figure.inlineSvgSourceSha256 || ''))) return false;
+                if (!sealedSource) {
+                    const daily = require('./lib/daily-fresh-source-plan');
+                    const runId = paper.freshRewriteProvenance?.runId;
+                    if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(runId || '')) return false;
+                    const runDir = path.join(Config.FILES.dailyFreshSourceRunsDir, runId);
+                    const run = readJsonFileStrict(path.join(runDir, 'run.json'));
+                    const plan = daily.readDailyFreshSourcePlan(daily.dailyFreshSourceReference({ ...run, runDir }));
+                    if (!daily.isPaperBoundToPlan(paper, plan)) return false;
+                    sealedSource = daily.readDailyFreshSource(plan, paper);
+                }
+                const matches = (sealedSource.structuredArtifacts?.figures || []).filter(item =>
+                    item.ordinal === figure.ordinal && item.recoveryStatus === 'complete'
+                    && item.sourceDomSha256 === figure.sourceDomSha256 && item.images?.length === 1);
+                if (matches.length !== 1) return false;
+                const descriptor = svg.inlineSvgSourceDescriptor(matches[0].images[0], normalizedId(paper));
+                return descriptor !== null && Object.entries(descriptor).every(([key, value]) => figure[key] === value);
+            };
             for (const figure of paper.apiReaderFigures) {
                 const url = new URL(String(figure?.url || ''));
                 const sourceId = url.pathname.match(/^\/html\/(\d{4}\.\d{4,5})(?:v[1-9]\d*)?\//)?.[1];
+                const inline = Boolean(url.hash || figure?.inlineSvgSourceSha256 || figure?.inlineSvgRenderContract);
                 if (url.protocol !== 'https:' || !['arxiv.org', 'www.arxiv.org'].includes(url.hostname)
-                    || url.username || url.password || url.port || url.hash || url.search
-                    || sourceId !== normalizedId(paper)
+                    || url.username || url.password || url.port || url.search
+                    || (inline ? !matchesSealedInlineSvg(figure) : sourceId !== normalizedId(paper))
                     || !Number.isInteger(figure?.ordinal) || figure.ordinal < 1
                     || !/^[a-f0-9]{64}$/.test(String(figure?.sourceDomSha256 || ''))
                     || !/^[a-f0-9]{64}$/.test(String(figure?.assetSha256 || ''))

@@ -316,6 +316,83 @@ describe('当前读者文章的视觉任务来源检查', () => {
         assert.equal(context.sourceIdentity.imageEvidenceCount, reader.apiReaderFigures.length);
     }));
 
+    it('内联 SVG 的临时像素身份须逐项匹配真实四文件封存，且不重新取图', async () => {
+        const { fixture, sign } = require('./reader-signed-draft-fixture.js');
+        const daily = require('../scripts/lib/daily-fresh-source-plan.js');
+        const deep = require('../scripts/deep-analyzer.js');
+        const svg = require('../scripts/lib/reader-inline-svg.js');
+        const { sha256, stableHash } = require('../scripts/lib/fresh-rewrite-run.js');
+        const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'visual-inline-sealed-')));
+        const previous = Config.FILES.dailyFreshSourceRunsDir;
+        Config.FILES.dailyFreshSourceRunsDir = path.join(root, 'runs');
+        try {
+            const { paper, draft, sourceDetails } = fixture({ sourceText:
+                'The source reports a controlled measurement of 1.0 under the same protocol. '.repeat(80) });
+            const artifacts = structuredClone(sourceDetails.structuredArtifacts);
+            const inlineSvg = '<svg xmlns="http://www.w3.org/2000/svg" id="S2.F1.pic1"><path d="M0 0h10v10z"/></svg>';
+            const resource = { kind: 'inline_svg', mediaType: 'image/svg+xml', inlineSvg,
+                inlineSvgSha256: sha256(inlineSvg), inlineSvgBytes: Buffer.byteLength(inlineSvg) };
+            artifacts.figures[0].images = [resource];
+            delete artifacts.payloadSha256;
+            artifacts.payloadSha256 = stableHash(artifacts);
+            const parsed = deep.parseApiReaderArticleResult(JSON.stringify(draft), {
+                requiredVersion: 3, requireIntegratedTables: true, minimumIntegratedTables: 2,
+                availableFigureOrdinals: [1], requireSourceBindings: true,
+                allowDeterministicQuoteRepair: true, structuredArtifacts: artifacts, sourceText: sourceDetails.text });
+            const rendered = deep.injectApiReaderFigures(parsed, artifacts, paper.arxivId);
+            paper.apiReaderArticle = rendered.article; paper.apiReaderPlan = rendered.plan;
+            paper.apiReaderFigures = rendered.figures.map(figure => ({ ...figure,
+                ...svg.inlineSvgSourceDescriptor(resource, paper.arxivId), assetSha256: 'c'.repeat(64) }));
+            paper.analysisManifest.contracts.apiReaderFigurePersistence = 'ephemeral-no-persisted-figure-assets-v1';
+            const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-10-15', batchId: 'visual-inline', papers: [paper] });
+            await daily.captureDailyFreshSources(plan, { concurrency: 1, capture: options =>
+                require('../scripts/lib/fresh-arxiv-rewrite-source.js').captureFreshArxivRewriteSource(options, {
+                    fetchText: async id => ({ text: sourceDetails.text, structuredArtifacts: artifacts,
+                        source: 'html', sourceId: id, url: `https://arxiv.org/html/${id}`,
+                        fetchedAt: '2026-10-15T00:00:00.000Z', imageInfos: [],
+                        htmlAvailability: 'available', htmlAttempts: 1, warnings: [] }),
+                    fetchPdf: async id => ({ bytes: Buffer.from('%PDF-1.7\n%%EOF\n'),
+                        url: `https://arxiv.org/pdf/${id}.pdf`, fetchedAt: '2026-10-15T00:00:01.000Z' })
+                }) });
+            const descriptor = daily.readDailyFreshSource(plan, paper).freshSourceDescriptor;
+            const provenance = { contract: 'fresh-source-analysis-v1', runId: plan.runId,
+                sourceGeneration: descriptor.sourceGeneration, sourceManifestSha256: descriptor.sourceManifestSha256,
+                sourceSha256: descriptor.sourceSha256, sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
+                structuredArtifactsSha256: artifacts.payloadSha256, sourceOnly: true, oldGeneratedTextIncluded: false };
+            paper.freshRewriteProvenance = provenance;
+            paper.analysisManifest.freshRewriteProvenance = structuredClone(provenance);
+            paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256 = artifacts.payloadSha256;
+            const stage = paper.analysisManifest.stages.apiReaderArticle;
+            stage.structuredArtifactsSha256 = artifacts.payloadSha256;
+            stage.qualityMetrics = parsed.qualityMetrics;
+            stage.imageEvidenceCount = 1;
+            stage.imageEvidenceSha256 = stableHash(paper.apiReaderFigures.map(figure => ({
+                ordinal: figure.ordinal, url: figure.url, sha256: figure.assetSha256 })));
+            sign(paper);
+            assert.equal(daily.isPaperBoundToPlan(paper, plan), true);
+            assert.deepEqual(selectVisualReferenceImages(paper), []);
+            for (const mutate of [
+                figure => { figure.url = figure.url.replace('#S2.F1.pic1', '#forged'); },
+                figure => { delete figure.inlineSvgSourceSha256; },
+                figure => { figure.inlineSvgRenderContract = 'untrusted-renderer'; },
+                figure => { figure.url = figure.url.replace('2609.12345', '2609.99999'); },
+                figure => { figure.sourceDomSha256 = 'd'.repeat(64); },
+                figure => { figure.ordinal = 2; }
+            ]) {
+                const changed = structuredClone(paper);
+                mutate(changed.apiReaderFigures[0]);
+                // Mutations may be rejected by the signed Reader guard before URL validation.
+                assert.throws(() => { sign(changed); selectVisualReferenceImages(changed); });
+            }
+            const pdfFile = path.join(plan.sourcesDir, paper.arxivId, 'generation-000001', 'source.pdf');
+            fs.appendFileSync(pdfFile, 'drift');
+            assert.throws(() => selectVisualReferenceImages(paper), /SHA|来源|校验/);
+        } finally {
+            Config.FILES.dailyFreshSourceRunsDir = previous;
+            fs.rmSync(root, { recursive: true, force: true });
+        }
+    });
+
     it('离线准备参考图时，输出规定目录中的 PNG 绝对路径，并保留已校验的原图来源信息', () => withReader(reader => {
         const context = buildGenerationContext(reader);
         const manifest = { batchDate: '2026-07-13', papers: { [reader.arxivId]: {

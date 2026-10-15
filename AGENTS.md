@@ -161,6 +161,8 @@ npm run blog:push -- --date YYYY-MM-DD
 
 push 远端验证后才可规划视觉任务。TOP 10 论文各一张长图，另有一张汇总封面；实际生成只能由 Codex 内置 `image_gen` 完成，项目脚本不得调用图像 API。
 
+用户已明确取消视觉时，`--no-visuals` 仍建立与真实发布绑定的任务清单再登记豁免，但不得执行 `visual:prepare` 或生图。封存来源的临时图片模式只核对已签图片身份，合法内联 SVG 按其来源与渲染证明校验，参考图片列表为空，不重新请求像素或恢复缓存。发布后规划失败按 [恢复说明](docs/troubleshooting.md#11-视觉-pending-或-record-失败)重建清单后登记豁免，保留已有发布凭证。
+
 调用生图前运行 `npm run visual:prepare -- --date DATE`，只把输出的绝对 `referencedImagePaths` 交给工具。逐图目检标题、中文、箭头、指标方向、数字和排行榜后，才可用对应 `record --qa-attested true` 登记。最终重新运行：
 
 ```bash

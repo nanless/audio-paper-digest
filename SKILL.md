@@ -102,6 +102,8 @@ npm run blog:push -- --date YYYY-MM-DD
 
 视觉只在远端验证后规划。实际生成由内置image_gen完成，项目脚本只规划/登记/核验；调用前用 `visual:prepare` 输出的绝对参考路径，逐图目检后 `record --qa-attested true`。只有用户明确取消且记录仍有效的本次发布豁免，才省略视觉。
 
+`--no-visuals` 只读核对发布和已签 Reader 身份、建立任务清单并登记当前发布豁免，不执行图片准备或生图。临时图片模式包含合法内联 SVG 的来源及渲染身份校验，但返回空参考图片列表，不取回像素或缓存。规划失败先按[恢复说明](docs/troubleshooting.md#11-视觉-pending-或-record-失败)恢复任务清单，再登记豁免，不重复发布字节未变的博客。
+
 ```bash
 npm run digest:status -- --date YYYY-MM-DD
 npm run verify
