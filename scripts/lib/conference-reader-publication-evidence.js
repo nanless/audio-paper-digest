@@ -134,7 +134,7 @@ function proseWindows(table, binding, document) {
 }
 
 function derivePublicationEvidence({ loaded, planHandle, sourceRoot }) {
-    require('../env-loader').requireExternalRuntime('conference-reader-publication-evidence');
+    require('../env-loader').requireExternalRuntime(path.basename(__filename));
     const deps = require('./conference-process').defaultDependencies();
     const current = deps.adapter.loadConferenceAnalysis({ analysisRoot: path.dirname(loaded.directory), executionId: loaded.run.executionId });
     if (current.analysisFileSha256 !== loaded.analysisFileSha256 || current.sourceFileSha256 !== loaded.sourceFileSha256

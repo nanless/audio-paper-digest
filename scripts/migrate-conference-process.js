@@ -231,6 +231,43 @@ function migrateAndRun(options, runtime = {}) {
             const original = currentShared.retainedSources?.get(item.analysisRunId);
             const planHandle = original?.planHandle || currentShared.planHandle;
             const sourceRoot = original?.sourceRoot || currentShared.sourceCacheRoot;
+            const childId = require('./lib/conference-analysis-adapter').readerRevisionExecutionId(
+                item.analysisRunId, item.analysisProof.analysisSha256);
+            const childDirectory = path.join(deps.files.conferenceAnalysisDir, childId);
+            let childAbsent = false;
+            try { fs.lstatSync(childDirectory); }
+            catch (error) { if (error.code !== 'ENOENT') throw error; childAbsent = true; }
+            if (childAbsent) {
+                const parent = deps.adapter.loadConferenceAnalysis({ analysisRoot: deps.files.conferenceAnalysisDir,
+                    executionId: item.analysisRunId });
+                if (parent.analysisFileSha256 !== item.analysisProof.analysisSha256) {
+                    throw Object.assign(new Error('待恢复会议原父稿与进程分析 SHA 不一致'),
+                        { code: 'CONFERENCE_SOURCE_CONTEXT_INTEGRITY', scope: 'run', retryable: false });
+                }
+                // Source/permission failures precede the paper-only catch. A
+                // repaired common validator may now accept an untouched parent.
+                deps.adapter.verifyPlanAuthority(parent, planHandle, sourceRoot);
+                let replayed;
+                try { replayed = deps.postprocess.stagePaper({ analysisRoot: deps.files.conferenceAnalysisDir,
+                    executionId: item.analysisRunId, tagCatalogPath: deps.files.tagCatalogFile,
+                    stagingRoot: deps.files.conferencePageStagingDir, planHandle, sourceRoot, apply: true }); }
+                catch (error) {
+                    if (error.code !== 'CONFERENCE_POSTPROCESS_INTEGRITY'
+                        || recovery.classifyFailure(error, deps.now()).systemic) throw error;
+                }
+                if (replayed?.status === 'staged') {
+                    const manifest = replayed.manifest;
+                    if (manifest.analysisSha256 !== item.analysisProof.analysisSha256
+                        || manifest.completionReceiptSha256 !== item.analysisProof.completionReceiptSha256
+                        || manifest.sourceSnapshotSha256 !== item.analysisProof.sourceSnapshotSha256) {
+                        throw Object.assign(new Error('重验会议原父稿的分析、来源或完成凭证 SHA 改变'),
+                            { code: 'CONFERENCE_SOURCE_CONTEXT_INTEGRITY', scope: 'run', retryable: false });
+                    }
+                    return { readerRefreshRequired: false, analysisProof: item.analysisProof,
+                        pageProof: { manifestSha256: manifest.manifestSha256,
+                            contentSha256: manifest.contentSha256, pagePath: manifest.pagePath } };
+                }
+            }
             const revised = await deps.adapter.refreshConferenceReader({ analysisRoot: deps.files.conferenceAnalysisDir,
                 parentExecutionId: item.analysisRunId, planHandle, sourceRoot,
                 maxAttempts: Math.min(recovery.MAX_ATTEMPTS, deps.analysisConfig?.batchMaxRounds ?? 3) });

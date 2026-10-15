@@ -239,3 +239,43 @@ test('命令行解析器拒绝格式错误的角色命令', () => {
         assert.throws(() => role.parseCli(argv), /用法:/);
     }
 });
+
+
+test('会议出版补证沿真实daily包装环境运行，旧入口及未知helper保持history隔离', () => {
+    const { spawnSync } = require('node:child_process');
+    const fixtureRoot = root(), scripts = path.join(fixtureRoot, 'scripts');
+    fs.mkdirSync(scripts);
+    try {
+        role.writeWorkspaceRole('daily', { root: fixtureRoot });
+        for (const file of ['workspace-role.js', 'env-loader.js']) {
+            fs.copyFileSync(path.join(__dirname, '../scripts', file), path.join(scripts, file));
+        }
+        const helper = path.join(__dirname, '../scripts/lib/conference-reader-publication-evidence.js');
+        assert.match(fs.readFileSync(helper, 'utf8'), /requireExternalRuntime\(path\.basename\(__filename\)\)/);
+        const code = name => `require(${JSON.stringify(path.join(scripts, 'env-loader.js'))}).requireExternalRuntime(${JSON.stringify(name)});process.stdout.write('runtime-role-ok');`;
+        const invoke = (name, mode, wrapper) => {
+            const env = { ...process.env };
+            delete env.AUDIO_PAPER_DIGEST_EXPECTED_WORKSPACE_ROLE;
+            delete env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE;
+            delete env.PD_WORKSPACE_ALLOW_CROSS_ROLE;
+            if (mode !== undefined) env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE = mode;
+            return spawnSync(process.execPath, [path.join(scripts, 'workspace-role.js'), 'exec', wrapper,
+                '--', process.execPath, '-e', code(name)], { cwd: fixtureRoot, env, encoding: 'utf8', timeout: 5000 });
+        };
+        const helperName = path.basename(helper);
+        const current = invoke(helperName, '1', 'daily');
+        assert.equal(current.status, 0, current.stderr); assert.equal(current.stdout, 'runtime-role-ok');
+        for (const [name, mode] of [[helperName, undefined], [helperName, '0'],
+            ['conference-reader-publication-evidence', '1'], ['conference-unknown-internal.js', '1']]) {
+            const denied = invoke(name, mode, 'daily');
+            assert.notEqual(denied.status, 0); assert.match(denied.stderr, /role=history.*wrapper=daily/);
+        }
+        role.writeWorkspaceRole('history', { root: fixtureRoot, force: true });
+        const wrongWorkspace = invoke(helperName, '1', 'daily');
+        assert.notEqual(wrongWorkspace.status, 0); assert.match(wrongWorkspace.stderr, /只允许 role=daily/);
+        for (const mode of [undefined, '1']) {
+            const historic = invoke(helperName, mode, 'history');
+            assert.equal(historic.status, 0, historic.stderr); assert.equal(historic.stdout, 'runtime-role-ok');
+        }
+    } finally { fs.rmSync(fixtureRoot, { recursive: true, force: true }); }
+});

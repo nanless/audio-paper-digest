@@ -992,6 +992,12 @@ test('会议迁移先完成全批正常后处理，再按失败集合刷新并�
         processPaper: async (_c, _s, item) => success(item) });
     const filename = path.join(f.files.conferenceProcessDir, first.processId, 'state.json');
     const original = JSON.parse(fs.readFileSync(filename)), events = [], calls = new Map();
+    f.files.conferenceAnalysisDir = path.join(f.root, 'analyses');
+    fs.mkdirSync(f.files.conferenceAnalysisDir);
+    // Even an empty, interrupted child directory forbids falling back to an
+    // old parent; the paid revision lifecycle must decide how to resume it.
+    for (const item of Object.values(original.items).slice(0, 2)) fs.mkdirSync(path.join(
+        f.files.conferenceAnalysisDir, adapter.readerRevisionExecutionId(item.analysisRunId, item.analysisProof.analysisSha256)));
     f.context.authority = { ...f.authority, implementationSha256: H('reader refresh implementation') };
     f.runtimeAuthority.implementationSha256 = f.context.authority.implementationSha256;
     const children = new Map();
@@ -1046,6 +1052,40 @@ test('会议迁移先完成全批正常后处理，再按失败集合刷新并�
     assert.equal(current.items[f.members[1].paperId].analysisProof.analysisSha256, H(['revised', f.members[1].paperId]));
     assert.deepEqual(current.items[f.members[2].paperId].analysisProof, original.items[f.members[2].paperId].analysisProof);
     assert.equal(current.items[f.members[1].paperId].attempts, 3);
+});
+
+test('会议未创建任何 child 时重验修复后的原父稿，零模型恢复且保留原分析证明', async t => {
+    const migration = require('../scripts/migrate-conference-process');
+    const f = fixture(t), options = { apply: true, concurrency: 1 };
+    const first = await processApi.runConferenceProcess(options, { ...f.deps,
+        processPaper: async (_c, _s, item) => success(item) });
+    const filename = path.join(f.files.conferenceProcessDir, first.processId, 'state.json');
+    const before = processApi.assertState(JSON.parse(fs.readFileSync(filename)));
+    const parent = Object.values(before.items)[0];
+    f.files.conferenceAnalysisDir = path.join(f.root, 'analyses'); fs.mkdirSync(f.files.conferenceAnalysisDir);
+    f.context.authority = { ...f.authority, implementationSha256: H('parent normal validation fixed') };
+    f.runtimeAuthority.implementationSha256 = f.context.authority.implementationSha256;
+    let staged = 0, verified = 0;
+    const result = await migration.migrateAndRun({ ...options, fromProcessId: first.processId, retryFailed: true }, {
+        dependencies: { ...f.deps,
+            adapter: { loadConferenceAnalysis: ({ executionId }) => {
+                assert.equal(executionId, parent.analysisRunId); return { analysisFileSha256: parent.analysisProof.analysisSha256 };
+            }, verifyPlanAuthority: () => { verified += 1; },
+            refreshConferenceReader: () => assert.fail('no paid child may be created when normal parent validation now passes') },
+            postprocess: { stagePaper: ({ executionId }) => {
+                assert.equal(executionId, parent.analysisRunId); staged += 1;
+                if (staged === 1) throw Object.assign(new Error('previous common validator rejected parent'),
+                    { code: 'CONFERENCE_POSTPROCESS_INTEGRITY', retryable: false });
+                return { status: 'staged', manifest: { ...parent.pageProof, ...parent.analysisProof,
+                    manifestSha256: H('replayed page'), contentSha256: H('normal parent now passes') } };
+            } }
+        } });
+    assert.equal(result.status, 'complete'); assert.equal(staged, 2); assert.equal(verified, 1);
+    const current = processApi.assertState(JSON.parse(fs.readFileSync(filename))).items[parent.paperId];
+    assert.equal(current.readerRefreshRequired, false); assert.equal(current.analysisRunId, parent.analysisRunId);
+    assert.deepEqual(current.analysisProof, parent.analysisProof);
+    assert.equal(current.pageProof.contentSha256, H('normal parent now passes'));
+    assert.deepEqual(fs.readdirSync(f.files.conferenceAnalysisDir), []);
 });
 
 test('系统性失败后，正在处理论文的任务会完成手上的工作，但不再派发新任务', async t => {

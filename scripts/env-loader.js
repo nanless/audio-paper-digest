@@ -78,7 +78,7 @@ function requiredWorkspaceRoleForCommand(commandName) {
     const newConferenceDaily = process.env.AUDIO_PAPER_DIGEST_NEW_CONFERENCE_MODE === '1' && wrappedRole === 'daily'
         && new Set(['conference-tools.js', 'conference-discover.js', 'conference-filter.js',
             'conference-filter-run.js', 'conference-filter-evidence.js', 'conference-staging.js', 'conference-import.js',
-            'conference-plan.js', 'conference-process.js']).has(name);
+            'conference-plan.js', 'conference-process.js', 'conference-reader-publication-evidence.js']).has(name);
     if (newConferenceDaily) return 'daily';
     if (['full-fetch.js', 'deep-analysis-only.js', 'batch-analyze.js', 'reanalyze.js',
         'refresh-api-reader.js', 'official-conference-acquire.js', 'conference-queue.js',
