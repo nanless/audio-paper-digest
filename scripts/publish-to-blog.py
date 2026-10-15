@@ -5514,10 +5514,12 @@ def _current_batch_tag_metadata(papers):
            or item['selectionContract'] != first['selectionContract']
            for item in selections[1:]):
         raise PublishDataValidationError('汇总页中的标签选择记录使用了不同的词表版本、词表 SHA 或标签选择协议。')
-    counts = {}
+    counts, task_concepts = {}, {}
     for item in selections:
         tag = f'#{item["primaryTask"]}'
         counts[tag] = counts.get(tag, 0) + 1
+        task_concepts[tag] = next(concept for concept in item['concepts']
+                                  if concept['id'] == item['primaryTaskId'])
     primary_tasks = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     return {
         'contract': FLAT_TAG_COMPAT_CONTRACT,
@@ -5525,6 +5527,7 @@ def _current_batch_tag_metadata(papers):
         'registryVersion': first['registryVersion'],
         'registrySha256': first['registrySha256'],
         'primaryTasks': primary_tasks,
+        'concepts': [task_concepts[tag] for tag, _count in primary_tasks],
     }
 
 
@@ -5616,8 +5619,9 @@ def generate_index_page(scored, unscored, date_str, paper_slugs, category='论�
     """生成每日汇总页面（index.md），包含概览和每篇论文的链接"""
     total = len(scored) + len(unscored)
     papers = [p for _, p, _ in scored] + unscored
-    tag_set = extract_all_tags(papers, limit=10)
     tag_metadata = _current_batch_tag_metadata(papers)
+    tag_set = [concept['label'] for concept in tag_metadata['concepts']] if tag_metadata \
+        else extract_all_tags(papers, limit=10)
     top_tags = tag_metadata['primaryTasks'][:8] if tag_metadata \
         else extract_top_tags(papers, limit=8)
     tag_frontmatter = ''
@@ -5627,6 +5631,7 @@ def generate_index_page(scored, unscored, date_str, paper_slugs, category='论�
             f'paper_digest_tags_selection_contract: "{tag_metadata["selectionContract"]}"\n'
             f'paper_digest_tags_registry_version: "{tag_metadata["registryVersion"]}"\n'
             f'paper_digest_tags_registry_sha256: "{tag_metadata["registrySha256"]}"\n'
+            f'paper_digest_tags_concepts: {json.dumps(tag_metadata["concepts"], ensure_ascii=False, separators=(",", ":"), sort_keys=True)}\n'
             'paper_digest_tags_scope: "aggregate-primary-task-counts"\n'
         )
 

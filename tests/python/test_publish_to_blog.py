@@ -3249,6 +3249,45 @@ title: "Score rows"
         self.assertEqual(publish_to_blog._current_batch_tag_metadata([legacy]), metadata)
         self.assertEqual((current, legacy), saved)
 
+    def test_daily_index_aggregate_has_complete_primary_tasks_and_no_method_or_condition_tags(self):
+        from utils import _validate_tag_selection
+        tasks = [node for node in publish_to_blog._PAGE_TAG_CATALOG['concepts']
+                 if node['facet'] == 'task' and node['status'] == 'active'][:12]
+        papers = []
+        for index, task in enumerate(tasks + [tasks[0]]):
+            parsed = {'tags': ['#' + task['preferredLabel']['zh'], '#Transformer', '#低资源'],
+                      'primaryTaskTag': '#' + task['preferredLabel']['zh'],
+                      'primaryMethodTag': '#Transformer'}
+            parsed['tagValidation'] = _validate_tag_selection(
+                publish_to_blog._PAGE_TAG_CATALOG, parsed['tags'],
+                parsed['primaryTaskTag'], parsed['primaryMethodTag'])
+            self.assertTrue(parsed['tagValidation']['valid'])
+            papers.append({'title': f'Aggregate fixture {index}',
+                           'arxivId': f'2608.{40000 + index}', 'parsed': parsed})
+        original = copy.deepcopy(papers)
+        metadata = publish_to_blog._current_batch_tag_metadata(papers)
+        markdown = publish_to_blog.generate_index_page([], papers, '2026-08-31', {})
+        frontmatter, body = publish_to_blog._parse_frontmatter_content('index.md', markdown)
+        concepts = frontmatter['paper_digest_tags_concepts']
+        self.assertEqual(frontmatter['paper_digest_tags_scope'], 'aggregate-primary-task-counts')
+        self.assertEqual(concepts, metadata['concepts'])
+        self.assertEqual(len(concepts), 12, '聚合的真实主任务不能按热门8项或旧tags10项截断')
+        self.assertEqual({node['id'] for node in concepts}, {node['id'] for node in tasks})
+        self.assertEqual({node['facet'] for node in concepts}, {'task'})
+        self.assertEqual(frontmatter['tags'], [node['label'] for node in concepts])
+        self.assertNotIn('Transformer', frontmatter['tags'])
+        self.assertNotIn('低资源', frontmatter['tags'])
+        expected = [('#' + node['label'], 2 if node['id'] == tasks[0]['id'] else 1)
+                    for node in concepts]
+        self.assertEqual(metadata['primaryTasks'], expected)
+        hot_table = body.split('### 🏷️ 热门方向', 1)[1].split('### 📊', 1)[0]
+        actual_hot = [(tag, int(count)) for tag, count in
+                      re.findall(r'^\| (#[^|]+) \| (\d+) 篇 \|', hot_table, re.M)]
+        self.assertEqual(actual_hot, expected[:8])
+        self.assertEqual(body.count('**研究分类**'), len(papers))
+        self.assertIn('/papers/?concept=method.transformer', body)
+        self.assertEqual(papers, original)
+
     def test_mixed_tag_cache_cannot_hide_behind_missing_reader_or_batch_metadata(self):
         paper = llm_api_publication_fixture()
         paper['parsed']['tagValidation'] = publish_to_blog.parse_analysis(paper['analysis'])['tagValidation']
