@@ -96,6 +96,12 @@ async function createReviewedReaderSample(t, options = {}) {
 const saved = require('../scripts/lib/saved-fact-feedback');
 
 test('无主文父包的核心纠错正常保存后跨作用域重放、完成判定与普通续跑闭环', async t => {
+    // This fixture has no figures. Its normal discovery fallback must be an
+    // explicit offline miss, rather than depend on arXiv/proxy availability.
+    t.mock.method(global, 'fetch', async url => {
+        assert.match(String(url), /^https:\/\/arxiv\.org\/html\/2609\.12345(?:v[12])?$/);
+        return { ok: false, status: 404, text: async () => '' };
+    });
     const sample = await createReviewedReaderSample(t, { sourceText:
         'Table 1 reports word error rate (WER) of 9.8% for our method versus 12.4% for the baseline and 10.8% without the context module under the same public test protocol.\n'
         + 'The source reports server inference measurements; edge latency is not evaluated.\n'
