@@ -217,6 +217,7 @@ npm run test:compat
 | `lib/reader-author-source.js` | Node 库：当前生产 Reader 作者复用资格；跳过已完成分析、恢复历史/会议任务及发布前，必须从已核验的原始材料重新解析并核验作者，保留旧成功结构与只读统计。 |
 | `lib/reader-candidate-transactions.js` | Node 库：在内存中跟踪分析结果对应的待保存文章，复制结果时同步这层对应关系；不加载分析器、不读写文件、不改变日志。文章实际保存后的检查和恢复稿停用仍由分析器负责。 |
 | `lib/reader-compatible-candidate-replay.js` | Node 库：在统一恢复中用真实迁移链或最后付费请求、响应及生产逐字回放收敛同输入候选；不按文件时间选稿，不改次数和费用，无法证明仍拒绝。 |
+| `lib/reader-concept-term-display.js` | Node 库：核对术语与完整解释的显示身份；仅接受完整行内代码结束后、中文前由正常排版加入的 ASCII 空格，保留代码内部和词内字节，拒绝显示等价的重复术语；与 Python 发布检查使用同一边界。 |
 | `lib/reader-contract.js` | Node 库：规定读者文章的格式要求，按本次证据向模型说明写作要求，并检查不同小节的内容是否近似重复。 |
 | `lib/reader-dom-span-projection.js` | Node 库：从真正封存 HTML 重放全幅 colspan 分类行的空白投影，让正常完整表编译与最终逐格守卫一致；保持来源、旧展示字节及 PDF 规则不变。 |
 | `lib/reader-dom-span-replay-cli.js` | Node 只读子进程：Python 发布检查通过私有受限文件描述符批量重放 HTML 全幅分类行空白投影；先核日更工作区、四份封存来源、保存表格 SHA 与实际正文坐标，再共用原 DOM 规则，不请求模型或网络。 |
