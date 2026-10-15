@@ -7,7 +7,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 from tag_catalog import load_tag_catalog
 from tag_presentation import (build_tag_hierarchy, render_tag_hierarchy_markdown,
-                             TAG_HIERARCHY_START, TAG_HIERARCHY_END)
+                             TAG_HIERARCHY_START, TAG_HIERARCHY_END,
+                             mask_verified_tag_hierarchy_for_quality)
 
 
 class TagPresentationTest(unittest.TestCase):
@@ -68,6 +69,40 @@ class TagPresentationTest(unittest.TestCase):
             value = copy.deepcopy(self.metadata); mutate(value)
             with self.assertRaises(ValueError):
                 render_tag_hierarchy_markdown(value, self.catalog)
+
+    def test_quality_copy_masks_only_exact_current_shared_renderer_blocks(self):
+        block = render_tag_hierarchy_markdown(self.metadata, self.catalog)
+        original = '保留普通正文与原始 URL https://example.test/?x=1。\n\n' + block + block + '<!--普通注释-->\n正文保持。'
+        masked = mask_verified_tag_hierarchy_for_quality(original, self.catalog)
+        self.assertEqual(masked, original.replace(block.rstrip('\n'), '\n\n已核验分类。\n\n'))
+        self.assertIn('https://example.test/?x=1', masked)
+        self.assertEqual(mask_verified_tag_hierarchy_for_quality('普通无分类正文'), '普通无分类正文')
+        # 自定义部署必须按同一个显式路径重放，不能默许任意站点或基础目录。
+        custom = render_tag_hierarchy_markdown(self.metadata, self.catalog, base_path='/custom')
+        self.assertNotIn(TAG_HIERARCHY_START, mask_verified_tag_hierarchy_for_quality(custom, self.catalog, base_path='/custom'))
+        with self.assertRaises(ValueError): mask_verified_tag_hierarchy_for_quality(custom, self.catalog)
+
+    def test_quality_mask_rejects_marker_forgery_text_smuggling_and_path_mutations(self):
+        block = render_tag_hierarchy_markdown(self.metadata, self.catalog)
+        variants = [
+            block.replace(TAG_HIERARCHY_END, ''), block.replace(TAG_HIERARCHY_START, ''),
+            block.replace(TAG_HIERARCHY_END, TAG_HIERARCHY_START + TAG_HIERARCHY_END),
+            block.replace(TAG_HIERARCHY_START, '<!--paper-tag-hierarchy-v1:unknown-->'),
+            block.replace(TAG_HIERARCHY_END, '夹带一段未经审查的论文结论。\n' + TAG_HIERARCHY_END),
+            block.replace('task.av-speech-separation', 'task.unknown'),
+            block.replace('task.audio-separation', 'task.asr'),
+            block.replace('[音视频语音分离]', '[伪造标签]'),
+            block.replace('/papers/?concept=', '/other/?concept='),
+            block.replace('/audio-paper-digest-blog/papers/', 'https://example.test/papers/'),
+            block.replace('?concept=', '?unrelated='),
+            TAG_HIERARCHY_END + block,
+        ]
+        for value in variants:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                mask_verified_tag_hierarchy_for_quality(value, self.catalog)
+        lines = block.splitlines(); lines.insert(5, lines[4])
+        with self.assertRaises(ValueError):
+            mask_verified_tag_hierarchy_for_quality('\n'.join(lines), self.catalog)
 
 
 if __name__ == '__main__':

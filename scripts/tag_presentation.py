@@ -2,7 +2,7 @@
 
 import html
 import re
-from urllib.parse import quote
+from urllib.parse import parse_qs, quote, urlsplit
 
 from tag_catalog import _validate_tag_catalog_content
 from path_config import resolve_blog_base_path
@@ -73,6 +73,57 @@ def render_tag_hierarchy_markdown(metadata, catalog, *, heading='研究分类', 
                  for path in facet['paths']]
         lines.append(f'- **{facet["label"]}**：' + '；'.join(paths))
     return '\n'.join(lines) + '\n\n' + TAG_HIERARCHY_END + '\n\n'
+
+
+def mask_verified_tag_hierarchy_for_quality(markdown, catalog=None, *, base_path=None):
+    """仅在质量检查副本中屏蔽逐字重放相等的目录元数据，异常边界或内容拒绝。"""
+    text = str(markdown or '')
+    starts, ends = text.count(TAG_HIERARCHY_START), text.count(TAG_HIERARCHY_END)
+    if not starts and not ends:
+        if '<!--paper-tag-hierarchy-v1:' in text:
+            raise ValueError('多级分类块使用了未知边界。')
+        return text
+    if starts != ends or starts > 10000 \
+            or text.count('<!--paper-tag-hierarchy-v1:') != starts + ends:
+        raise ValueError('多级分类块的边界缺失、嵌套或格式无效。')
+    if catalog is None:
+        from tag_catalog import load_tag_catalog
+        catalog = load_tag_catalog()
+    _validate_tag_catalog_content(catalog)
+    by_id = {item['id']: item for item in catalog['concepts']}
+    pattern = re.compile(re.escape(TAG_HIERARCHY_START) + r'[\s\S]*?' + re.escape(TAG_HIERARCHY_END))
+    blocks = list(pattern.finditer(text))
+    if len(blocks) != starts:
+        raise ValueError('多级分类块的边界顺序无效。')
+
+    def verified(match):
+        block = match.group(0)
+        if block.count(TAG_HIERARCHY_START) != 1 or block.count(TAG_HIERARCHY_END) != 1:
+            raise ValueError('多级分类块不能嵌套。')
+        ids = []
+        for line in block.splitlines()[4:-2]:
+            facet = re.fullmatch(r'- \*\*[^*\n]+\*\*：(.+)', line)
+            if facet is None:
+                raise ValueError('多级分类块包含非目录内容。')
+            for path in facet.group(1).split('；'):
+                terminal = re.fullmatch(r'\[(?:\\.|[^\]\\\n])+\]\(([^()\s]+)\)', path.split(' → ')[-1])
+                if terminal is None:
+                    raise ValueError('多级分类路径缺少完整的直接概念链接。')
+                query = parse_qs(urlsplit(terminal.group(1)).query, strict_parsing=True)
+                if set(query) != {'concept'} or len(query['concept']) != 1:
+                    raise ValueError('多级分类路径不是唯一概念导航。')
+                ids.append(query['concept'][0])
+        if not 1 <= len(ids) <= 5 or len(set(ids)) != len(ids) or any(cid not in by_id for cid in ids):
+            raise ValueError('多级分类块包含重复、未知或过多的直接概念。')
+        metadata = {'registryVersion': catalog['version'], 'registrySha256': catalog['registrySha256'],
+                    'concepts': [{'id': cid, 'facet': by_id[cid]['facet'],
+                                  'label': by_id[cid]['preferredLabel']['zh']} for cid in ids]}
+        expected = render_tag_hierarchy_markdown(metadata, catalog, base_path=base_path).rstrip('\n')
+        if block != expected:
+            raise ValueError('多级分类块与当前目录、部署路径及共享展示的逐字重放不一致。')
+        return '\n\n已核验分类。\n\n'
+
+    return pattern.sub(verified, text)
 
 
 if __name__ == '__main__':

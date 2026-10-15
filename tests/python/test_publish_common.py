@@ -788,6 +788,37 @@ paper_digest_reader_quality: "reader-facing-v3"
         self.assertIsNone(validate_digest_index_reader_quality(historical))
         self.assertIn('协议标记', validate_digest_index_reader_quality(historical, required=True))
 
+    def test_digest_quality_validates_shared_classification_before_masking_only_its_copy(self):
+        from tag_catalog import load_tag_catalog
+        from tag_presentation import render_tag_hierarchy_markdown, TAG_HIERARCHY_END
+        catalog = load_tag_catalog(); by_id = {item['id']: item for item in catalog['concepts']}
+        ids = ['task.av-speech-separation', 'method.test-time-adaptation',
+               'research_focus.adversarial-robustness', 'setting.code-switching', 'signal.speech']
+        metadata = {'registryVersion': catalog['version'], 'registrySha256': catalog['registrySha256'],
+            'concepts': [{'id': cid, 'facet': by_id[cid]['facet'], 'label': by_id[cid]['preferredLabel']['zh']} for cid in ids]}
+        block = render_tag_hierarchy_markdown(metadata, catalog)
+        self.assertGreater(block.count('?concept='), 7, '真实多层路径超过普通散文句标预算')
+        prefix = ('---\npaper_digest_page_type: index\npaper_digest_reader_quality: "reader-facing-v3"\n---\n'
+                  '# 论文速递\n\n## ⚡ 今日概览\n\n共分析 2 篇论文。\n\n## 📋 论文列表\n\n')
+        cards = ''.join(f'### {index}. [论文 {index}](/audio-paper-digest-blog/posts/paper-{index})\n\n'
+                        + block + f'评分：**8.{index}/10**\n\n' for index in (1, 2))
+        original = prefix + cards
+        self.assertIsNone(validate_digest_index_reader_quality(original, required=True))
+        self.assertEqual(original.count(block), 2, '质量函数不改原 Markdown')
+        for changed in (
+                original.replace('task.av-speech-separation', 'task.unknown', 1),
+                original.replace(TAG_HIERARCHY_END, '藏入未经审查的正文。\n' + TAG_HIERARCHY_END, 1),
+                original.replace('/papers/?concept=', '/bad/?concept=', 1)):
+            self.assertIn('多级分类元数据无效', validate_digest_index_reader_quality(changed, required=True))
+        # 分类之外的散文、错字、数值及重复段落继续经过原规则，不因规范块出现而豁免。
+        long_prose = '这里持续解释研究结论及其边界并在同段落中展开实验条件与适用范围。' * 14
+        self.assertIn('段落过长', validate_digest_index_reader_quality(original + '\n\n' + long_prose))
+        self.assertIn('段落过长', validate_digest_index_reader_quality(
+            original + '\n\n' + '这些条件是否足以支持泛化结论？' * 9))
+        self.assertIn('精确定量', validate_digest_index_reader_quality(original.replace('共分析 2 篇', '共分析二篇')))
+        repeated = '这段普通读者正文阐述研究方法的基本分工及需要满足的实验条件，不能重复复制来堆积篇幅。'
+        self.assertIn('重复', validate_digest_index_reader_quality(original + '\n\n' + repeated + '\n\n' + repeated))
+
     def test_manual_v4_reader_view_preserves_blank_lines_before_headings(self):
         markdown = '''---
 title: "Reader page"
