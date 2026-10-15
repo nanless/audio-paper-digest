@@ -47,11 +47,18 @@ function parseFactFeedbackFiles(argv = process.argv.slice(2)) {
     return files;
 }
 
-function finalizeBatchZeroWorkState(resultPath, fallbackBatchDate, entryPlan = null) {
+function getBatchAnalysisRunSummary(papers, plan, feedbacks = new Map()) {
+    return getAnalysisRunSummary(papers, paper => {
+        const feedback = feedbacks.get(normalizedId(paper));
+        return feedback ? hasCompletedBoundFactFeedback(paper, feedback, plan)
+            : isSuccessfulAnalysisRecord(paper) && (!plan || dailyFreshSources.isPaperReusableForAnalysis(paper, plan));
+    });
+}
+function finalizeBatchZeroWorkState(resultPath, fallbackBatchDate, entryPlan = null, feedbacks = new Map()) {
     return updateJsonFileLocked(resultPath, current => {
         if (entryPlan) dailyFreshSources.requireFinalDailyFreshSourceRecoveryPlan(current, { entryPlan });
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
-        const { remaining, success, status } = getAnalysisRunSummary(currentPapers);
+        const { remaining, success, status } = getBatchAnalysisRunSummary(currentPapers, entryPlan, feedbacks);
         const now = getBeijingISOString();
         const batchDate = inferAnalysisBatchDate(
             currentPapers,
@@ -217,11 +224,11 @@ async function main(options = {}) {
     await reconcileCompletedFailureMarkers(RESULT_FILE, dailySourcePlan, feedbacks);
 
     if (notAnalyzed.length === 0) {
-        const finalPayload = finalizeBatchZeroWorkState(RESULT_FILE, batchDate, dailySourcePlan);
+        const finalPayload = finalizeBatchZeroWorkState(RESULT_FILE, batchDate, dailySourcePlan, feedbacks);
         updateAnalysisDigestStatuses(finalPayload.papers, {
             batchDate: finalPayload.batchDate
         });
-        const summary = getAnalysisRunSummary(finalPayload.papers);
+        const summary = getBatchAnalysisRunSummary(finalPayload.papers, dailySourcePlan, feedbacks);
         console.log(summary.status === 'complete' ? '所有论文已分析完成！' : `检测到并发更新，仍有 ${summary.remaining} 篇未完成`);
         return {
             status: summary.status,
@@ -325,7 +332,7 @@ async function main(options = {}) {
                 const {
                     remaining,
                     success: savedAnalysisSuccess
-                } = getAnalysisRunSummary(currentPapers);
+                } = getBatchAnalysisRunSummary(currentPapers, dailySourcePlan, feedbacks);
                 const payload = {
                     ...(!Array.isArray(current) && current ? current : {}),
                     lastUpdated: getBeijingISOString(),
@@ -362,7 +369,7 @@ async function main(options = {}) {
     const finalPayload = updateJsonFileLocked(RESULT_FILE, current => {
         dailyFreshSources.requireFinalDailyFreshSourceRecoveryPlan(current, { entryPlan: dailySourcePlan });
         const currentPapers = Array.isArray(current) ? current : (current?.papers || []);
-        const { remaining, success: savedAnalysisSuccess, status } = getAnalysisRunSummary(currentPapers);
+        const { remaining, success: savedAnalysisSuccess, status } = getBatchAnalysisRunSummary(currentPapers, dailySourcePlan, feedbacks);
         const payload = {
             ...(!Array.isArray(current) && current ? current : {}),
             papers: currentPapers,
@@ -381,7 +388,7 @@ async function main(options = {}) {
         return payload;
     });
     await synchronizeCompletedAnalysisDigestStatuses(RESULT_FILE, dailySourcePlan, { batchDate });
-    const { remaining, status } = getAnalysisRunSummary(finalPayload.papers);
+    const { remaining, status } = getBatchAnalysisRunSummary(finalPayload.papers, dailySourcePlan, feedbacks);
     console.log(`剩余未分析: ${remaining}`);
     console.log(`运行状态: ${status}`);
     return { status, exitCode: getAnalysisExitCode(status), stats, remaining };
@@ -396,4 +403,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { reconcileCompletedFailureMarkers, hasCompletedBoundFactFeedback, main, parseFactFeedbackFiles, finalizeBatchZeroWorkState };
+module.exports = { reconcileCompletedFailureMarkers, hasCompletedBoundFactFeedback, getBatchAnalysisRunSummary, main, parseFactFeedbackFiles, finalizeBatchZeroWorkState };

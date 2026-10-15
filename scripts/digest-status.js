@@ -29,6 +29,7 @@ const ANALYSIS_FIELDS = Object.freeze([
     'allImageUrls',
     'imageManifest',
     'analysisManifest',
+    'analysisFactReviewObligation',
     'analysisSource',
     'sourceId',
     'sourceTextChars',
@@ -487,10 +488,12 @@ function mergeAnalysisDigestPaper(existing, paper) {
         if (paper.analysisManifest) merged.analysisManifest = paper.analysisManifest;
         if (typeof paper.analysisCheckpoint === 'string') merged.analysisCheckpoint = paper.analysisCheckpoint;
         if (paper.analysisStageCheckpoints) merged.analysisStageCheckpoints = paper.analysisStageCheckpoints;
+        if (paper.analysisFactReviewObligation) merged.analysisFactReviewObligation = paper.analysisFactReviewObligation;
         if (paper.imageManifest) merged.analysisRecoveryImageManifest = paper.imageManifest;
         merged.latestAnalysisAttemptError = paper.error || '分析未完成';
         merged.latestAnalysisAttemptAt = getBeijingISOString();
     } else if (isSuccessfulAnalysisRecord(paper)) {
+        delete merged.analysisFactReviewObligation;
         delete merged.analysisRecoveryImageManifest;
         delete merged.analysisCheckpoint;
         delete merged.analysisStageCheckpoints;

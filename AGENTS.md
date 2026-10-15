@@ -117,6 +117,7 @@ npm run digest:prepare -- YYYY-MM-DD
 - 刷新 Reader/评分：`npm run api:reader:refresh -- --all --date YYYY-MM-DD --concurrency 5 --scoring-and-reader`；未传并发时使用配置默认5，可覆写1–60，总轮数默认3，可用 `--rounds N` 覆写1–10。只重跑明确可重试项，来源计划/运行级/存储故障停止补派；Reader 图片仍只在当前调用的系统临时目录中准备。
 - 历史日期不能从抓取阶段开始；只可使用已有受控数据，运行 `./run-daily-digest.sh DATE --from generate|review|push|visual` 等代码允许的阶段。
 - 失败记录必须保留 `analysisManifest`、检查点和恢复图片清单。旧成功正文可保留，但最新失败必须强制后续重试；成功后才清除失败标记。
+- 来源绑定的定向事实反馈在模型请求前，须持论文锁核验并持久化原包与 `analysisFactReviewObligation`。旧正文或旧反馈已经通过不代表这次纠错完成；未完成义务及最新失败都阻断成功状态和发布。只有真实正常分析或受控修正返回、当前反馈和完整资格均通过后才清除；普通状态查询、无反馈续跑和合并不得洗掉失败或授予新额度。
 - 同篇分析必须持有规范化 arXiv ID 锁，在锁内重读数据、合并结果并递增 `generation`，禁止用锁外读取的陈旧对象覆盖正式分析结果。
 - ICML/OpenReview 默认不接受替代 PDF。唯一经用户授权的跨标题预印本例外是
   `conference:icml:2026:openreview-forum-id:n1mAjfRDZ6`：必须由代码白名单中负责保存来源的程序核验 poster/forum、

@@ -3028,6 +3028,16 @@ primary_method_tag: #基准测试
         with self.assertRaisesRegex(PublishDataValidationError, '最新一次深度分析失败'):
             validate_papers_for_publish([paper])
 
+    def test_publish_preflight_blocks_pending_fact_feedback_before_failure_exists(self):
+        for pending in (None, {}, {'feedbackSha256': 'a' * 64}):
+            paper = complete_paper()
+            paper['analysisFactReviewObligation'] = pending
+            with self.subTest(pending=pending), self.assertRaisesRegex(
+                    PublishDataValidationError, '事实反馈尚未完成'):
+                validate_papers_for_publish([paper])
+            del paper['analysisFactReviewObligation']
+            self.assertEqual(len(validate_papers_for_publish([paper])), 1)
+
     def test_publish_preflight_rejects_present_but_incomplete_analysis_manifest(self):
         paper = complete_paper()
         complete_statuses = {

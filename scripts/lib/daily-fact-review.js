@@ -131,12 +131,19 @@ function withFactReview(bound, callback) {
     if (!accepted.has(bound)) fail('反馈尚未在锁内核验');
     const context = validatedContexts.get(bound);
     const directory = daily.factFeedbackDirectory(context.plan);
-    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const filename = require('node:path').join(directory, bound.proof.feedbackSha256 + '.json');
-    const bytes = context.bytes || Buffer.from(JSON.stringify(bound.feedback, null, 2) + '\n');
-    try { fs.writeFileSync(filename, bytes, { flag: 'wx', mode: 0o600 }); }
-    catch (error) { if (error.code !== 'EEXIST') throw error; }
-    if (daily.stableHash(readFeedback(filename)) !== bound.proof.feedbackSha256) fail('保存的原纠错说明不一致');
+    try {
+        fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+        const filename = require('node:path').join(directory, bound.proof.feedbackSha256 + '.json');
+        const bytes = context.bytes || Buffer.from(JSON.stringify(bound.feedback, null, 2) + '\n');
+        try { fs.writeFileSync(filename, bytes, { flag: 'wx', mode: 0o600 }); }
+        catch (error) { if (error.code !== 'EEXIST') throw error; }
+        if (daily.stableHash(readFeedback(filename)) !== bound.proof.feedbackSha256) fail('保存的原纠错说明不一致');
+    } catch (error) {
+        // Storage/integrity failures stop dispatch; callback/model failures keep
+        // their original classification outside this persistence boundary.
+        error.scope = 'run'; error.retryable = false;
+        throw error;
+    }
     return scope.run(bound, callback);
 }
 function withScoringFactReviews(scoringBound, primaryBound, paper, callback) {

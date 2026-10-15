@@ -128,6 +128,7 @@ npm run test:compat
 | `lib/cancelled-reader-audit-recovery.js` | 在正常分析入口确认已取消步骤留下的失败，核验现有正文、来源及原请求记录后复用结果，由分析引擎收尾；不新增模型请求，不删除原阶段错误和费用记录。 |
 | `lib/cancelled-reader-final-checkpoint.js` | 确认最终正文仅被已取消步骤阻挡时，在原完整性、来源和反馈核验通过后从真实检查点继续，不重新生成已完成内容。 |
 | `lib/completed-bound-fact-feedback.js` | Node 库：供普通批量和单篇续跑共用，核验同一事实反馈已完成、来源仍一致且错误原句未残留；不改变显式强制重分析。 |
+| `lib/pending-fact-feedback.js` | Node 库：锁内核验真实反馈及原包后保存未完成纠错义务；旧成功正文不代表新反馈完成，无反馈恢复沿用原包，完整同反馈资格通过后才清除。不给模型新额度。 |
 | `lib/completed-reader-upstream.js` | 核验读者文章之前的主文、摘要、标签、评分、来源及原反馈，供正常恢复入口共用。 |
 | `lib/conference-analysis-adapter.js` | Node 库：重新核验完整会议计划与来源后调用公共深度分析引擎。准备阶段先保存写入后不再改动的准备记录，绑定计划、来源与初始分析文件的 SHA；中断恢复按准备记录、来源文件、初始分析文件、运行记录的顺序核对已有内容并补齐缺失文件。分析完成后另核结果 SHA，再保存完成凭证。旧执行记录缺少准备记录时不自动迁移，须用同一认证计划新建执行记录和 UUID。 |
 | `lib/conference-analysis-context.js` | Node 库：把已认证执行记录中一篇论文的来源放入仅在当前进程可用的分析上下文，固定 Reader 尝试目录；拒绝 arXiv 身份、其他执行目录，以及与已核验来源记录不符的正文、表格、公式和图片状态。 |

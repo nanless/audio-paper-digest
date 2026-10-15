@@ -486,6 +486,8 @@ for (const parentStage of ['primaryAnalysis', 'coreSummaryRepair']) {
             // That new immutable archive is the only permitted added field.
             delete actual.analysisStaleSnapshots;
             delete original.analysisStaleSnapshots;
+            assert.deepEqual(actual.analysisFactReviewObligation, facts.proofFor(sample.next));
+            delete actual.analysisFactReviewObligation;
             assert.deepEqual(actual, original);
             for (const snapshot of paper.analysisStaleSnapshots || []) {
                 const archived = deep.validateStaleAnalysisSnapshot(snapshot);
@@ -1131,4 +1133,147 @@ test('只读身份回放预备返回真正生产normalizer，不取图或请求�
     assert.deepEqual(prepared.normalizeReplayDraft(raw, [], evidence), normalized);
     assert.equal(requests, 0); assert.equal(materializations, 0);
     assert.deepEqual(fs.readdirSync(directory), [], '只读准备不能保存候选、迁移或新增额度');
+});
+
+test('失败Reader事实反馈在真实锁内持久绑定，旧成功正文与无反馈重跑均不能洗掉义务', async t => {
+    const sample = await createReviewedReaderSample(t);
+    const pending = require('../scripts/lib/pending-fact-feedback');
+    const original = structuredClone(sample.paper);
+    const parent = facts.validateFeedback(sample.feedback, sample.plan, sample.paper);
+    facts.withFactReview(parent, () => undefined);
+    const next = { ...sample.feedback, rejectedPrimaryClaims: [], readerFeedback: sample.feedback.readerFeedback + '本次新的Reader纠错，保持所有正确事实。' };
+    let requests = 0, checkpoints = 0;
+    assert.throws(() => pending.register(sample.paper, sample.plan, next), /论文锁/);
+    assert.equal(Object.hasOwn(sample.paper, pending.FIELD), false);
+    t.mock.method(deep, 'refreshApiReaderArticleFromSource', async paper => {
+        requests++;
+        assert.equal(facts.current(sample.id).readerOnly, true);
+        assert.equal((facts.current(sample.id).readerBound?.proof || facts.current(sample.id).proof).feedbackSha256, facts.proofFor(next).feedbackSha256);
+        throw Object.assign(new Error('离线无进展，保留原paid稿'), { retryable: false, code: 'READER_REPAIR_NO_PROGRESS' });
+    });
+    const invoke = paper => daily.withDailyFreshAnalysisContext(sample.plan, () =>
+        engine.withPaperAnalysisLock(paper, () => engine.analyzePaperWithRetry(paper, { maxRetries: 0,
+            onCheckpoint: checkpoint => {
+                checkpoints++;
+                assert.deepEqual(checkpoint[pending.FIELD], facts.proofFor(next));
+                assert.equal(requests, 0, '首个请求之前先保存严格义务');
+            },
+            analyzeFn: current => saved.analyzeWithRecoveredFeedback(current, sample.plan,
+                () => assert.fail('不能重新请求主文'), Object.hasOwn(current, pending.FIELD) ? null : next)
+        })));
+    const failure = await invoke(sample.paper);
+    assert.equal(failure.success, false);
+    assert.match(failure.error, /离线无进展/);
+    assert.ok(checkpoints > 0);
+    assert.equal(requests, 1, failure.error);
+    const merged = engine.mergePapersById([original], [failure.result], { preserveSuccessfulAnalysis: true })[0];
+    assert.equal(merged.analysis, original.analysis);
+    assert.equal(merged.apiReaderArticle, original.apiReaderArticle);
+    assert.deepEqual(merged.analysisManifest, original.analysisManifest);
+    assert.deepEqual(merged[pending.FIELD], facts.proofFor(next));
+    assert.equal(engine.isSuccessfulAnalysisRecord(merged), false);
+    assert.equal(pending.completed(merged, sample.plan), false);
+    const parsedOld = await engine.analyzePaperWithRetry(structuredClone(merged), {
+        maxRetries: 0, analyzeFn: async paper => ({ ...paper }) });
+    assert.equal(parsedOld.success, false, '无反馈旧正文即使本来完整，不能当本次纠错完成');
+    const dropped = await engine.analyzePaperWithRetry(structuredClone(merged), {
+        maxRetries: 0, analyzeFn: async paper => {
+            const output = { ...paper }; delete output[pending.FIELD]; return output;
+        } });
+    assert.equal(dropped.success, false, '正常返回省略恢复字段也不能丢失义务');
+    assert.deepEqual(dropped.result[pending.FIELD], merged[pending.FIELD]);
+    let resumedContext;
+    t.mock.method(deep, 'refreshApiReaderArticleFromSource', async () => {
+        resumedContext = facts.current(sample.id);
+        throw Object.assign(new Error('离线恢复边界停止'), { retryable: false });
+    });
+    await daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(merged,
+        () => assert.rejects(saved.analyzeWithRecoveredFeedback(merged, sample.plan,
+            () => assert.fail('不能绕过原反馈')), /离线恢复边界停止/)));
+    assert.equal((resumedContext.readerBound?.proof || resumedContext.proof).feedbackSha256, facts.proofFor(next).feedbackSha256);
+    const forged = structuredClone(merged);
+    forged[pending.FIELD].sourceFiles['source.pdf'] = 'a'.repeat(64);
+    assert.equal(pending.completed(forged, sample.plan), false);
+    assert.equal(engine.isSuccessfulAnalysisRecord(forged), false);
+});
+
+test('仅真实同反馈stage完整收尾可清义务，原父约束和错Reader反馈SHA仍阻断', async t => {
+    const sample = await createReviewedReaderSample(t);
+    const pending = require('../scripts/lib/pending-fact-feedback');
+    const next = { ...sample.feedback, rejectedPrimaryClaims: [], readerFeedback: '新的已核验Reader修订要求。' };
+    await engine.withPaperAnalysisLock(sample.paper, () => pending.register(sample.paper, sample.plan, next));
+    const proof = facts.proofFor(next);
+    const corrected = structuredClone(sample.paper);
+    Object.assign(corrected.analysisManifest.stages.apiReaderArticle, {
+        factReview: proof, reviewFeedbackSha256: facts.sha(next.readerFeedback.trim())
+    });
+    assert.equal(pending.completed(corrected, sample.plan), true);
+    const currentFile = Config.FILES.deepAnalysisResult;
+    Config.FILES.deepAnalysisResult = path.join(sample.plan.runDir, 'zero-reconcile.json');
+    t.after(() => { Config.FILES.deepAnalysisResult = currentFile; });
+    const awaitingNormalization = { ...corrected, latestAnalysisAttemptError: '同反馈完成后仍保留上轮标记' };
+    fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify({ batchDate: sample.plan.batchDate,
+        dailyFreshSourceRun: daily.dailyFreshSourceReference(sample.plan), papers: [awaitingNormalization] }));
+    const verifiedPlan = daily.requireDailyFreshSourceRecoveryPlan(
+        JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)));
+    await require('../scripts/batch-analyze').reconcileCompletedFailureMarkers(
+        Config.FILES.deepAnalysisResult, verifiedPlan, new Map([[sample.id, next]]));
+    const reconciled = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[0];
+    assert.equal(Object.hasOwn(reconciled, pending.FIELD), false);
+    assert.equal(reconciled.latestAnalysisAttemptError, undefined);
+    const normalized = engine.mergePapersById([], [corrected])[0];
+    assert.equal(Object.hasOwn(normalized, pending.FIELD), false, '同反馈已完成后正常merge规范化清义务');
+    const databaseMerged = require('../scripts/digest-status').mergeAnalysisDigestPaper(sample.paper, normalized);
+    assert.equal(Object.hasOwn(databaseMerged, pending.FIELD), false, 'papers.json同步不能继承已完成的旧义务');
+    const wrong = structuredClone(corrected);
+    wrong.analysisManifest.stages.apiReaderArticle.reviewFeedbackSha256 = 'a'.repeat(64);
+    assert.equal(pending.completed(wrong, sample.plan), false);
+    const returned = await engine.analyzePaperWithRetry({ ...sample.paper, latestAnalysisAttemptError: '上轮失败' }, {
+        maxRetries: 0, analyzeFn: async () => corrected });
+    assert.equal(returned.success, true, returned.error);
+    assert.equal(Object.hasOwn(returned.result, pending.FIELD), false);
+    assert.equal(returned.result.latestAnalysisAttemptError, undefined);
+    assert.equal(engine.isSuccessfulAnalysisRecord(returned.result), true);
+    const stored = path.join(daily.factFeedbackDirectory(sample.plan), proof.feedbackSha256 + '.json');
+    fs.unlinkSync(stored);
+    assert.equal(pending.completed(corrected, sample.plan), false, '丢失原包不能自声明完成');
+});
+
+test('新增事实反馈保存失败保留原Error并以运行级停止，不到模型或下一论文', async t => {
+    const sample = await createReviewedReaderSample(t);
+    const pending = require('../scripts/lib/pending-fact-feedback');
+    const next = { ...sample.feedback, rejectedPrimaryClaims: [], readerFeedback: sample.feedback.readerFeedback + '本次纠错。' };
+    const error = Object.assign(new Error('packet disk quota sentinel'), { code: 'EDQUOT' });
+    const packetPath = path.join(daily.factFeedbackDirectory(sample.plan), facts.proofFor(next).feedbackSha256 + '.json');
+    const originalWrite = fs.writeFileSync;
+    t.mock.method(fs, 'writeFileSync', (filename, ...args) => {
+        if (filename === packetPath) throw error;
+        return originalWrite(filename, ...args);
+    });
+    await assert.rejects(engine.withPaperAnalysisLock(sample.paper, () => pending.register(sample.paper, sample.plan, next)),
+        actual => actual === error && actual.scope === 'run' && actual.retryable === false);
+    assert.equal(Object.hasOwn(sample.paper, pending.FIELD), false);
+    const calls = [];
+    await assert.rejects(engine.analyzeBatch([sample.paper, { arxivId: '2610.90098' }], {
+        concurrency: 1, maxRounds: 3, retryDelayMs: 0,
+        analyzeFn: paper => { calls.push(paper.arxivId); return pending.register(paper, sample.plan, next); }
+    }), actual => actual.scope === 'run' && actual.code === 'EDQUOT');
+    assert.deepEqual(calls, [sample.paper.arxivId], '保存异常后不派发下一论文或下一轮');
+});
+
+test('旧反馈虽已满足也不能消除更晚失败，必须经正常引擎真实成功返回', async t => {
+    const sample = await createReviewedReaderSample(t);
+    const bound = facts.validateFeedback(sample.feedback, sample.plan, sample.paper);
+    facts.withFactReview(bound, () => undefined);
+    assert.equal(engine.isSuccessfulAnalysisRecord(sample.paper), true);
+    const failed = { ...sample.paper, latestAnalysisAttemptError: '后一次新反馈没有完成',
+        latestAnalysisAttemptErrorCode: 'READER_REPAIR_NO_PROGRESS' };
+    assert.equal(engine.isSuccessfulAnalysisRecord(failed), false);
+    const normalized = engine.mergePapersById([], [failed])[0];
+    assert.equal(normalized.latestAnalysisAttemptError, failed.latestAnalysisAttemptError);
+    const result = await engine.analyzePaperWithRetry(failed, {
+        maxRetries: 0, analyzeFn: async paper => ({ ...paper }) });
+    assert.equal(result.success, true, result.error);
+    assert.equal(engine.isSuccessfulAnalysisRecord(result.result), true);
+    assert.equal(result.result.latestAnalysisAttemptError, undefined);
 });

@@ -5,6 +5,12 @@ const factReview = require('./daily-fact-review');
 function hasCompletedBoundFactFeedback(paper, feedback, plan) {
     if (!paper || !feedback || !isSuccessfulAnalysisRecord(paper)
         || !dailyFreshSources.isPaperReusableForAnalysis(paper, plan)) return false;
+    return hasCompletedBoundFactFeedbackStages(paper, feedback, plan);
+}
+// Stage-only predicate: the engine uses it before its whole-record qualification.
+// Keep this independent of isSuccessfulAnalysisRecord to avoid recursive gates.
+function hasCompletedBoundFactFeedbackStages(paper, feedback, plan) {
+    if (!paper || !feedback || !dailyFreshSources.isPaperReusableForAnalysis(paper, plan)) return false;
     // 来源或反馈绑定失败仍必须阻断；不把这类失败转换为可跳过的结果。
     const bound = factReview.validateFeedback(feedback, plan, paper);
     return factReview.withFactReview(bound, () => {
@@ -41,4 +47,4 @@ function hasCompletedBoundFactFeedback(paper, feedback, plan) {
     });
 }
 
-module.exports = { hasCompletedBoundFactFeedback };
+module.exports = { hasCompletedBoundFactFeedback, hasCompletedBoundFactFeedbackStages };

@@ -118,9 +118,15 @@ function withRecoveredFeedback(paper, plan, callback, explicitFeedback = null) {
         return callback();
     }
     const bound = facts.validateFeedback(original.feedback, plan, original.paper);
-    return facts.withFactReview(bound, () => original.coreFeedback
-        ? facts.withCoreSummaryFactReview(facts.validateFeedback(original.coreFeedback, plan, paper), paper, callback)
-        : callback());
+    return facts.withFactReview(bound, () => {
+        const run = () => {
+            if (explicitFeedback) require('./pending-fact-feedback').register(paper, plan, explicitFeedback);
+            return callback();
+        };
+        return original.coreFeedback
+            ? facts.withCoreSummaryFactReview(facts.validateFeedback(original.coreFeedback, plan, paper), paper, run)
+            : run();
+    });
 }
 function readerOnlyFeedback(feedback) {
     return Boolean(feedback?.readerFeedback?.trim())
@@ -166,6 +172,8 @@ function protectedReaderUpstream(paper) {
     return copy;
 }
 function analyzeWithRecoveredFeedback(paper, plan, analyze, explicitFeedback = null, options = {}) {
+    const pending = require('./pending-fact-feedback');
+    if (!explicitFeedback && Object.hasOwn(paper, pending.FIELD)) explicitFeedback = pending.read(paper, plan).feedback;
     return require('./fresh-analysis-context').withFreshPaperContext(paper, () =>
         analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explicitFeedback, options));
 }
@@ -331,6 +339,8 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
     }
     const bound = facts.validateFeedback(feedback, plan, paper);
     const refresh = () => (original?.readerFeedback && !explicitFeedback ? facts.withSavedReaderFactReview : facts.withReaderFactReview)(bound, paper, async () => {
+        if (explicitFeedback || Object.hasOwn(paper, 'analysisFactReviewObligation'))
+            require('./pending-fact-feedback').register(paper, plan, feedback);
         facts.withFactReview(bound, () => undefined);
         if (require('./cancelled-reader-audit-recovery').reusableCancelledReaderAuditResult(paper)) return analyze();
         return refreshProtectedReader(paper, options, bound.proof.feedbackSha256, parentUpstreamPreflight);

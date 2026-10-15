@@ -44,7 +44,7 @@ const LOCK_HEARTBEAT_MS = 30 * 1000;
 const ANALYSIS_CHECKPOINT_CALLBACK = Symbol.for('audio-paper-digest.analysisCheckpointCallback');
 const ANALYSIS_RECOVERY_FIELDS = Object.freeze([
     'analysis', 'parsed', 'analysisManifest', 'analysisCheckpoint', 'analysisStageCheckpoints',
-    'analysisStaleSnapshots', 'fullStageReanalysis', 'fullStageReanalysisHistory',
+    'analysisStaleSnapshots', 'fullStageReanalysis', 'fullStageReanalysisHistory', 'analysisFactReviewObligation',
     'analysisRecoveryImageManifest', 'imageManifest', 'selectedImageUrls', 'imageUrls', 'allImageUrls',
     'analysisSource', 'sourceId', 'sourceTextChars', 'usedTextChars', 'fullTextChars',
     'fullTextAvailable', 'truncated', 'sourceSha256', 'usedTextSha256', 'analysisConfidence',
@@ -1425,6 +1425,7 @@ function scoringAuditBindsFinalAnalysis(paper) {
 
 function isSuccessfulAnalysisRecord(paper) {
     if (!isCompleteAnalysisContent(paper)) return false;
+    if (!require('./lib/pending-fact-feedback').completed(paper)) return false;
     const facts = require('./lib/daily-fact-review');
     const stages = paper.analysisManifest?.stages || {};
     const feedbackSatisfied = () => {
@@ -1445,6 +1446,10 @@ function isSuccessfulAnalysisRecord(paper) {
         if (paper.latestAnalysisAttemptError === '深度分析仍在进行，已保存阶段记录。') return false;
         if (!paper.latestAnalysisAttemptError
             && paper.digestStatus?.latestAttemptStatus !== 'analysis_failed') return true;
+        // Older completed feedback cannot discharge a later failed attempt.
+        // Only a verified current obligation may prove that its exact attempt
+        // has completed; otherwise normal paid/checkpoint replay must return.
+        if (!Object.hasOwn(paper, 'analysisFactReviewObligation')) return false;
         if (!paper.freshRewriteProvenance || !paper.arxivId) return false;
         const fs = require('node:fs'), path = require('node:path');
         const daily = require('./lib/daily-fresh-source-plan');
@@ -1459,7 +1464,9 @@ function isSuccessfulAnalysisRecord(paper) {
         delete normal.analysisManifest.stages.apiReaderTableAudit;
         const saved = require('./lib/saved-fact-feedback');
         const original = saved.readSavedFeedback(normal, plan);
-        if (!original) return !saved.hasSavedProof(normal);
+        // Old valid prose does not prove that the latest failed attempt succeeded.
+        // A real normal pipeline may still replay paid output and return success.
+        if (!original) return false;
         // 已有恢复器核验原fullStage档案、原父包及Reader/core子包；这里只读其实际约束。
         const packets = [original.feedback, original.readerFeedback, original.coreFeedback].filter(Boolean);
         return packets.every(feedback => [
@@ -1503,9 +1510,9 @@ function getAnalysisRunStatus(stats = {}, remainingFailures = stats.failed || 0)
     return success > 0 ? 'partial_failed' : 'failed';
 }
 
-function getAnalysisRunSummary(papers) {
+function getAnalysisRunSummary(papers, isSuccessful = isSuccessfulAnalysisRecord) {
     const records = Array.isArray(papers) ? papers : [];
-    const remaining = records.filter(paper => !isSuccessfulAnalysisRecord(paper)).length;
+    const remaining = records.filter(paper => !isSuccessful(paper)).length;
     const success = records.length - remaining;
     return { success, remaining, status: getAnalysisRunStatus({ success }, remaining) };
 }
@@ -1596,6 +1603,9 @@ async function analyzePaperWithRetry(paper, options = {}) {
             }
             if (checkpointFailed) throw checkpointFailure;
             if (analyzed && typeof analyzed === 'object') {
+                if (paper.analysisFactReviewObligation && Object.hasOwn(analyzed, 'analysisFactReviewObligation')
+                    && !require('node:util').isDeepStrictEqual(paper.analysisFactReviewObligation,
+                        analyzed.analysisFactReviewObligation)) throw new Error('分析结果不能替换当前来源绑定的事实反馈义务');
                 Object.assign(paper, analyzed);
                 require('./lib/reader-candidate-transactions.js').transferDeferredReaderCandidate(analyzed, paper);
             }
@@ -1615,7 +1625,11 @@ async function analyzePaperWithRetry(paper, options = {}) {
                     )
                 });
                 const recoveryReason = getIncompleteAnalysisContentReason(analyzed);
-                const rejectionReason = invalidReason || recoveryReason;
+                // A returned object may omit recovery metadata; the locked
+                // current paper still retains the verified obligation.
+                const pendingFeedbackComplete = require('./lib/pending-fact-feedback').completed(paper);
+                const rejectionReason = invalidReason || recoveryReason
+                    || (!pendingFeedbackComplete ? '当前来源绑定的事实反馈尚未完成，保留原成功正文与失败记录。' : null);
                 if (rejectionReason) {
                     // 正文已生成但最终阶段证明不完整时，保留真实输出供正常续跑。
                     // 失败仍然失败；不能把未经核验的正文或来源放进恢复检查点。
@@ -1691,6 +1705,7 @@ async function analyzePaperWithRetry(paper, options = {}) {
                     parsed: parsed
                 };
                 delete successfulResult.result.latestAnalysisAttemptError;
+                delete successfulResult.result.analysisFactReviewObligation;
                 delete successfulResult.result.latestAnalysisAttemptAt;
                 for (const field of ['latestAnalysisAttemptErrorCode', 'latestAnalysisAttemptRetryable',
                     'latestAnalysisAttemptErrorCategory', 'latestAnalysisAttemptErrorStatus',
@@ -2193,6 +2208,7 @@ function mergePapersById(existingPapers, newPapers, options = {}) {
                     ...(typeof p.analysisCheckpoint === 'string' ? { analysisCheckpoint: p.analysisCheckpoint } : {}),
                     ...(p.analysisStageCheckpoints ? { analysisStageCheckpoints: p.analysisStageCheckpoints } : {}),
                     ...(p.analysisStaleSnapshots ? { analysisStaleSnapshots: p.analysisStaleSnapshots } : {}),
+                    ...(p.analysisFactReviewObligation ? { analysisFactReviewObligation: p.analysisFactReviewObligation } : {}),
                     ...(p.fullStageReanalysis ? { fullStageReanalysis: p.fullStageReanalysis,
                         fullStageReanalysisHistory: p.fullStageReanalysisHistory } : {}),
                     ...(p.analysisRecoveryImageManifest || p.imageManifest
@@ -2213,7 +2229,8 @@ function mergePapersById(existingPapers, newPapers, options = {}) {
                 continue;
             }
             const next = { ...p };
-            if (isCompleteAnalysisContent(next)) {
+            if (isSuccessfulAnalysisRecord(next)) {
+                delete next.analysisFactReviewObligation;
                 delete next.latestAnalysisAttemptError;
                 delete next.latestAnalysisAttemptAt;
                 for (const field of ['latestAnalysisAttemptErrorCode', 'latestAnalysisAttemptRetryable',

@@ -5021,6 +5021,10 @@ def validate_papers_for_publish(papers, *, validate_manual_stage_records=True):
                 raise PublishDataValidationError(
                     f'{paper_label} 最新一次深度分析失败，禁止使用陈旧成功正文发布'
                 )
+            if 'analysisFactReviewObligation' in paper:
+                raise PublishDataValidationError(
+                    f'{paper_label} 当前来源绑定的事实反馈尚未完成，禁止使用旧正文发布'
+                )
             manifest = paper.get('analysisManifest')
             if manifest is not None:
                 stages = manifest.get('stages') if isinstance(manifest, dict) else None

@@ -1436,7 +1436,7 @@ describe('analyzePaperWithRetry', () => {
         );
     });
 
-    it('失败重试不覆盖旧成功正文，但合并恢复元数据供下次续跑', () => {
+    it('失败重试不覆盖旧成功正文，但合并恢复元数据供下次续跑', async () => {
         const complete = {
             arxivId: '2604.00024', title: 'Existing', analysis: validAnalysisText(),
             imageManifest: { selected: ['old-image'] }
@@ -1499,7 +1499,13 @@ describe('analyzePaperWithRetry', () => {
         assert.strictEqual(unclassified.latestAnalysisAttemptErrorCode, null);
         assert.strictEqual(unclassified.latestAnalysisAttemptRetryable, true);
 
-        const [recovered] = mergePapersById([merged], [{ ...merged, ...validAnalyzedResult() }], { preserveSuccessfulAnalysis: true });
+        const [unchangedFailure] = mergePapersById([merged], [{ ...merged, ...validAnalyzedResult() }], { preserveSuccessfulAnalysis: true });
+        assert.strictEqual(unchangedFailure.latestAnalysisAttemptError, 'secondary timeout',
+            '仅把旧成功正文交回merge，不能证明最新尝试成功');
+        const returned = await analyzePaperWithRetry({ ...merged }, { maxRetries: 0,
+            analyzeFn: async () => ({ ...merged, ...validAnalyzedResult() }) });
+        assert.strictEqual(returned.success, true, '真实正常完整资格收尾仍允许旧付费正文恢复');
+        const [recovered] = mergePapersById([merged], [returned.result], { preserveSuccessfulAnalysis: true });
         for (const field of ['latestAnalysisAttemptError', 'latestAnalysisAttemptAt',
             'latestAnalysisAttemptErrorCode', 'latestAnalysisAttemptRetryable',
             'latestAnalysisAttemptErrorCategory', 'latestAnalysisAttemptErrorStatus', 'latestAnalysisAttemptErrorScope']) {
