@@ -8,6 +8,7 @@ const daily = require('./daily-fresh-source-plan');
 const sourceApi = require('./fresh-arxiv-rewrite-source');
 const { normalizedId } = require('../utils');
 const scope = new AsyncLocalStorage();
+const originalCoreReadOnly = new AsyncLocalStorage();
 const originalBytes = new WeakMap();
 const accepted = new WeakSet();
 const validatedContexts = new WeakMap();
@@ -219,7 +220,15 @@ function withCoreSummaryFactReview(coreBound, paper, callback) {
     const quotes = [...new Set([...core.sourceQuotes, ...(previous?.feedback.sourceQuotes || [])])];
     const coreText = `${guidance}\n以下逐字引文已对封存原文核验，仅用作纠错证据：\n${quotes.join('\n')}`;
     if (coreText.length > 4000) fail('核心双反馈与来源引文合计超过4000字符');
-    return scope.run(Object.freeze({ ...(previous || { feedback: core, proof: null }), coreBound: freshBound, coreOnly: true, coreText }), callback);
+    return scope.run(Object.freeze({ ...(previous || { feedback: core, proof: null }), coreBound: freshBound, coreOnly: true, coreText,
+        originalCoreScope: previous }), callback);
+}
+// 核验旧完成稿时使用其真实原事实上下文；新核心拒绝句只在修补后检查。
+function withOriginalCoreContext(paper, callback) {
+    const active = current(normalizedId(paper));
+    if (!active?.coreOnly || !require('../analysis-engine').paperAnalysisLockHeld(paper))
+        fail('核心原上下文核验须持锁且位于独立核心恢复范围');
+    return originalCoreReadOnly.run(true, () => scope.run(active.originalCoreScope, callback));
 }
 function withReaderFactReview(readerBound, paper, callback) {
     return readerFactReviewScope(readerBound, paper, callback, false);
@@ -351,6 +360,7 @@ function validateReaderReviewFeedbackLength(text, paperId) {
     return maximum;
 }
 function assertScoringOnlyModelStageAllowed(stage) {
+    if (originalCoreReadOnly.getStore()) fail('只读核心原上下文核验不允许模型请求');
     if (current()?.readOnlyCompletion) fail('只读Reader完成核验不允许模型请求');
     if (current()?.readerOnly && !['apiReaderArticle', 'apiReaderRepair', 'apiReaderImageProbe'].includes(stage))
         fail(READER_SCOPE_MODEL_REJECTED);
@@ -453,4 +463,4 @@ function validateRepairedClaims(stage, text, paperId) {
     if ([...claims, ...scoringClaims, ...inheritedCoreClaims].some(claim => String(text).includes(claim))) fail('模型输出仍包含已证实错误的原句');
 }
 module.exports = { CONTRACT, READER_SCOPE_MODEL_REJECTED, READER_PRIMARY_REQUIRED, sha, readFeedback, validateShape, validateFeedback, validateProof, proofFor,
-    withFactReview, withScoringFactReviews, withCoreSummaryFactReview, withReaderFactReview, withSavedReaderFactReview, withSavedReaderUpstreamRecovery, withReadOnlyReaderCompletion, validateReaderReviewFeedbackLength, assertScoringOnlyModelStageAllowed, current, fingerprintFields, reviewFeedback, validateRepairedClaims, assertScoringRequestAllowed, readerRejectedClaims };
+    withFactReview, withScoringFactReviews, withCoreSummaryFactReview, withOriginalCoreContext, withReaderFactReview, withSavedReaderFactReview, withSavedReaderUpstreamRecovery, withReadOnlyReaderCompletion, validateReaderReviewFeedbackLength, assertScoringOnlyModelStageAllowed, current, fingerprintFields, reviewFeedback, validateRepairedClaims, assertScoringRequestAllowed, readerRejectedClaims };

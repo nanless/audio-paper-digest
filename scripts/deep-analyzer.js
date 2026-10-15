@@ -10501,7 +10501,60 @@ function previousStageCheckpoint(paper, stage) {
     return null;
 }
 
+const completedCoreRecovery = new WeakMap();
+const CORE_PROTECTED_STAGES = new Set(['primaryAnalysis', 'demoLinkScan', 'openSourceScan',
+    'revision', 'tableRepair', 'methodRepair', 'structureRepair', 'tagSelection', 'taxonomySeal']);
+function prepareCompletedCoreRecovery(paper, source) {
+    const facts = require('./lib/daily-fact-review'), active = facts.current(getPaperArxivId(paper));
+    if (!active?.coreOnly || !source?.text) return false;
+    const expected = active.coreBound.proof.coreAnalysisSha256;
+    const candidates = [paper, ...(paper.analysisStaleSnapshots || []).flatMap(snapshot => {
+        const payload = validateStaleAnalysisSnapshot(snapshot);
+        return payload && snapshot.invalidatedStage === 'coreSummaryRepair'
+            && snapshot.replacementFingerprint === active.coreBound.proof.feedbackSha256
+            && crypto.createHash('sha256').update(payload.analysisCheckpoint).digest('hex') === expected
+            ? [{ ...paper, analysis: payload.analysisCheckpoint,
+                analysisManifest: { ...paper.analysisManifest, stages: payload.stages, contracts: payload.contracts } }] : [];
+    })];
+    const parent = facts.withOriginalCoreContext(paper, () => candidates.find(candidate => {
+        if (crypto.createHash('sha256').update(String(candidate.analysis || '')).digest('hex') !== expected
+            || stableFingerprint(candidate.analysisManifest?.stages?.primaryAnalysis)
+                !== stableFingerprint(paper.analysisManifest?.stages?.primaryAnalysis)
+            || legacyPromptRenderingNeedsReplay(candidate, source) || legacyModelTextNeedsReplay(candidate, source)
+            || !require('./lib/completed-reader-upstream').completedReaderUpstream(candidate, source)) return false;
+        const evidence = buildTaskEvidenceContext(source.text, FULL_TEXT_MAX_CHARS, BROAD_EVIDENCE_PATTERNS, 'PRIMARY');
+        if (candidate.analysisManifest.sourceAcquisition.usedTextSha256 !== crypto.createHash('sha256').update(evidence).digest('hex')) return false;
+        for (const [name, saved] of Object.entries(candidate.analysisManifest.stages)) {
+            if (!CORE_PROTECTED_STAGES.has(name) || !isRecoveryStageComplete(candidate.analysisManifest, name)) continue;
+            if (name === 'demoLinkScan') continue;
+            if (!/^[a-f0-9]{64}$/.test(saved.fingerprint || '')) return false;
+            // 旧模板由正常 Git blob/原路径解析器读取；不能把旧声明换成当前模板。
+            const templateSha = promptTemplateSha256(promptFilePathForContract(name === 'taxonomySeal' ? 'tagSelection' : name,
+                saved.promptTextContract || ANALYSIS_PROMPT_TEXT_V1_CONTRACT));
+            if (saved.promptTemplateSha256 !== undefined && saved.promptTemplateSha256 !== templateSha) return false;
+        }
+        return true;
+    }));
+    if (!parent) return false;
+    completedCoreRecovery.set(paper, { sourceSha256: crypto.createHash('sha256').update(source.text).digest('hex'),
+        stages: structuredClone(parent.analysisManifest.stages) });
+    if (!paper.analysisCheckpoint) paper.analysisCheckpoint = paper.analysis;
+    return true;
+}
+function protectedCompletedCoreStage(paper, manifest, stage, sourceText) {
+    const record = completedCoreRecovery.get(paper);
+    return Boolean(record && require('./lib/daily-fact-review').current(getPaperArxivId(paper))?.coreOnly
+        && CORE_PROTECTED_STAGES.has(stage)
+        && crypto.createHash('sha256').update(sourceText).digest('hex') === record.sourceSha256
+        && isRecoveryStageComplete(manifest, stage)
+        && stableFingerprint(manifest.stages[physicalRecoveryStage(manifest, stage, paper.analysisStageCheckpoints)])
+            === stableFingerprint(record.stages[physicalRecoveryStage(manifest, stage, paper.analysisStageCheckpoints)]));
+}
 function prepareTextRecoveryStage(paper, manifest, stage, currentAnalysis, sourceText) {
+    if (protectedCompletedCoreStage(paper, manifest, stage, sourceText)) return {
+        analysis: currentAnalysis, fingerprint: manifest.stages[physicalRecoveryStage(manifest, stage, paper.analysisStageCheckpoints)].fingerprint,
+        compatibilityReused: true, invalidated: false
+    };
     let inputAnalysis = getTextStageInputAnalysis(paper, stage, currentAnalysis);
     let evidenceContext = buildStageEvidenceContext(stage, inputAnalysis, sourceText);
     let promptTextContract = textStagePromptTextContract(paper, manifest, stage);
@@ -11189,6 +11242,59 @@ function validateStaleAnalysisSnapshot(snapshot) {
     return structuredClone(snapshot.payload);
 }
 
+
+// 只恢复旧核心恢复入口误删的已完成阶段。原失败、快照、义务及费用全部留存。
+function restoreCompletedCoreInput(paper, plan, feedback, expected) {
+    const facts = require('./lib/daily-fact-review'), daily = require('./lib/daily-fresh-source-plan');
+    const fail = () => { throw new Error('核心原输入恢复的当前CAS、完整父稿、来源或范围失败不一致'); };
+    if (!require('./analysis-engine').paperAnalysisLockHeld(paper) || !expected
+        || stableFingerprint(paper) !== expected.paperSha256 || !feedback
+        || !require('./lib/saved-fact-feedback').coreOnlyFeedback(feedback)) fail();
+    const fd = fs.openSync(expected.originalFile, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    let bytes;
+    try {
+        const stat = fs.fstatSync(fd);
+        if (!stat.isFile() || (stat.mode & 0o077) !== 0 || stat.size > 16 * 1024 * 1024) fail();
+        bytes = fs.readFileSync(fd);
+    } finally { fs.closeSync(fd); }
+    if (crypto.createHash('sha256').update(bytes).digest('hex') !== expected.originalFileSha256) fail();
+    const original = JSON.parse(bytes);
+    const message = '事实反馈绑定检查未通过：独立核心纠错范围不能调用主分析或其他主文重写模型';
+    if (paper.latestAnalysisAttemptErrorCode !== 'DAILY_FACT_REVIEW_INTEGRITY'
+        || paper.latestAnalysisAttemptError !== message
+        || paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'transient_failure'
+        || paper.analysisManifest.stages.primaryAnalysis.error !== message
+        || !daily.isPaperBoundToPlan(original, plan) || !daily.isPaperBoundToPlan(paper, plan)) fail();
+    facts.validateFeedback(feedback, plan, original);
+    if (stableFingerprint(paper.analysisFactReviewObligation) !== stableFingerprint(facts.proofFor(feedback))) fail();
+    const mutable = new Set(['analysisManifest', 'analysisCheckpoint', 'analysisStageCheckpoints',
+        'analysisStaleSnapshots', 'apiReaderFailedBundleHistory', 'analysisFactReviewObligation',
+        'latestAnalysisAttemptAt', 'latestAnalysisAttemptErrorCode', 'latestAnalysisAttemptError', 'latestAnalysisAttemptRetryable',
+        'latestAnalysisAttemptErrorCategory', 'latestAnalysisAttemptErrorStatus', 'latestAnalysisAttemptErrorScope']);
+    if (['latestAnalysisAttemptErrorCategory', 'latestAnalysisAttemptErrorStatus', 'latestAnalysisAttemptErrorScope']
+        .some(key => paper[key] != null)) fail();
+    for (const key of new Set([...Object.keys(original), ...Object.keys(paper)]))
+        if (!mutable.has(key) && !require('node:util').isDeepStrictEqual(original[key], paper[key])) fail();
+    const before = original.analysisManifest, currentManifest = paper.analysisManifest;
+    for (const key of new Set([...Object.keys(before), ...Object.keys(currentManifest)]))
+        if (!['stages', 'contracts', 'updatedAt'].includes(key)
+            && !require('node:util').isDeepStrictEqual(before[key], currentManifest[key])) fail();
+    for (const [name, value] of Object.entries(currentManifest.stages)) {
+        if (['primaryAnalysis', 'imageDiscovery', 'imageDownload'].includes(name)) continue;
+        if (stableFingerprint(before.stages[name]) !== stableFingerprint(value)) fail();
+    }
+    const source = daily.readDailyFreshSource(plan, original);
+    if (!require('./lib/fresh-analysis-context').withFreshPaperContext(original, () =>
+        require('./lib/completed-reader-upstream').completedReaderUpstream(original, source))) fail();
+    return { ...paper, analysisManifest: structuredClone(before),
+        ...(original.analysisStageCheckpoints ? { analysisStageCheckpoints: structuredClone(original.analysisStageCheckpoints) } : {}),
+        analysisCheckpoint: original.analysis,
+        coreInputRecoveryHistory: [...(paper.coreInputRecoveryHistory || []), {
+            originalPaperSha256: stableFingerprint(original), originalFileSha256: expected.originalFileSha256,
+            failedPaperSha256: expected.paperSha256, feedbackProof: facts.proofFor(feedback),
+            failedManifest: structuredClone(currentManifest), restoredAt: getBeijingISOString()
+        }] };
+}
 
 // 只恢复被调用方丢弃的 Reader 输入；所有阶段仍由正常分析入口核验和保存。
 function restoreReviewedReaderInputSnapshot(paper, plan, readerFeedback, expected) {
@@ -15802,6 +15908,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     if (directSource && conferenceSource) {
         throw new Error('Direct rewrite source and conference source cannot both be active');
     }
+    const completedCoreRecoveryActive = !fullStageReanalysis && prepareCompletedCoreRecovery(paper,
+        directSource || require('./lib/model-text-sanitization').currentModelInputSource(paper));
     const previousScore = Number.parseFloat(paper?.parsed?.score);
     let savedCoreSummaryRepairCandidate = fullStageReanalysis ? null : captureSavedAnalysisForCoreSummaryRepair(paper);
     const modelTextRecoveryCandidate = paper.analysisManifest?.sourceAcquisition?.modelTextSanitizationContract
@@ -16047,12 +16155,12 @@ async function analyzePaperDeepInternal(paper, options = {}) {
         arxivId,
         recoveryFingerprints.primaryAnalysis
     ));
-    if (!migratedCoreSummaryV3) {
+    if (!migratedCoreSummaryV3 && !completedCoreRecoveryActive) {
         invalidateRecoveryStageIfChanged(
             paper, analysisManifest, 'primaryAnalysis', recoveryFingerprints.primaryAnalysis
         );
     }
-    if (!savedCoreSummaryRepairActive) {
+    if (!savedCoreSummaryRepairActive && !completedCoreRecoveryActive) {
         invalidateRecoveryStageIfChanged(
             paper, analysisManifest, 'demoLinkScan', recoveryFingerprints.demoLinkScan
         );
@@ -19229,6 +19337,7 @@ function appendSectionByTitle(analysis, title, newContent) {
 }
 
 module.exports = {
+    restoreCompletedCoreInput,
     findUnassembledApiReaderFigureMarker,
     findUnassembledApiReaderConceptMarker,
     normalizeReaderSourceCell,

@@ -113,9 +113,12 @@ test('无主文父包的核心纠错正常保存后跨作用域重放、完成�
         + '| 方法 | WER ↓ |\n| --- | ---: |\n| 基线 | 12.4% |\n| 完整方法 | 9.8% |\n| 移除上下文 | 10.8% |\n\n'
         + '完整方法相较基线降低词错误率，而移除上下文组件后收益变小，这只说明当前公开数据与噪声条件下的组件贡献，尚不能推断跨语言或端侧部署效果。');
     paper.parsed = requestApi.parseAnalysis(paper.analysis);
+    paper.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = facts.sha(paper.analysis);
     const currentFixture = validAnalysisPaper(paper.arxivId, {}, paper.analysis);
     for (const name of ['structureRepair', 'taxonomySeal', 'coreSummaryRepair'])
         paper.analysisManifest.stages[name] = currentFixture.analysisManifest.stages[name];
+    for (const field of ['coreSummaryInputAnalysisSha256', 'inputCoreSummarySha256', 'outputCoreSummarySha256'])
+        paper.analysisManifest.stages.scoringAudit[field] = currentFixture.analysisManifest.stages.scoringAudit[field];
     delete paper.analysisManifest.stages.apiReaderArticle.factReview;
     paper.analysisManifest.stages.apiReaderArticle.reviewFeedbackSha256 = null;
     Object.assign(paper.analysisManifest.sourceAcquisition, {
@@ -125,7 +128,19 @@ test('无主文父包的核心纠错正常保存后跨作用域重放、完成�
     });
     await daily.withDailyFreshAnalysisContext(sample.plan, () => fresh.withFreshPaperContext(paper, () =>
         require('./helpers/normal-reader-parent-fingerprints').installCurrentParentFingerprints(paper, sample.source)));
+    // 正常成功稿已清理主文和中间检查点，只留下最终标签重放所需的两份正文。
+    delete paper.analysisCheckpoint;
+    paper.analysisStageCheckpoints = Object.fromEntries(Object.entries(paper.analysisStageCheckpoints)
+        .filter(([name]) => ['structureRepair', 'tagSelection', 'taxonomySeal'].includes(name)));
     paper.paidResponseHistory = [{ responseId: 'original-paid-core-parent', totalTokens: 42 }];
+    await daily.withDailyFreshAnalysisContext(sample.plan, () => fresh.withFreshPaperContext(paper, () => {
+        const contract = require('../scripts/analysis-contract');
+        assert.equal(contract.validateTagStageProof(paper, { parsed: requestApi.parseAnalysis(paper.analysis) }), null);
+        assert.equal(contract.validateCoreSummaryStageBinding(paper), null);
+        assert.equal(engine.scoringAuditBindsFinalAnalysis(paper), true);
+        assert.equal(engine.scoringStabilityIsResolved(paper.analysisManifest.stages.scoringAudit), true);
+        assert.equal(require('../scripts/lib/completed-reader-upstream').completedReaderUpstream(paper, sample.source), true);
+    }));
     const original = structuredClone(paper);
     const oldSummary = deep.extractSectionByTitle(paper.analysis, '核心摘要');
     const rejected = '论文也未报告端侧推理延迟';
@@ -137,12 +152,47 @@ test('无主文父包的核心纠错正常保存后跨作用域重放、完成�
         rejectedCoreClaims: [rejected] };
     const file = path.join(sample.plan.runDir, 'standalone-core.json');
     fs.writeFileSync(file, JSON.stringify(feedback));
+    await daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(paper, () => {
+        const core = facts.validateFeedback(feedback, sample.plan, paper);
+        return facts.withCoreSummaryFactReview(core, paper, () => facts.withOriginalCoreContext(paper, () => {
+            assert.equal(facts.current(), null);
+            for (const stage of ['primaryAnalysis', 'coreSummaryRepair', 'scoringAudit', 'apiReaderArticle'])
+                assert.throws(() => facts.assertScoringOnlyModelStageAllowed(stage), /只读核心/);
+        }));
+    }));
     const keys = ['deepAnalysisResult', 'filteredPapers', 'papers', 'papersLegacy', 'llmUsageDir'];
     const previous = Object.fromEntries(keys.map(key => [key, Config.FILES[key]]));
     t.after(() => Object.assign(Config.FILES, previous));
     for (const key of keys) Config.FILES[key] = path.join(sample.plan.runDir, 'standalone-' + key + '.json');
+    const originalFile = path.join(sample.plan.runDir, 'completed-core-before.json');
+    fs.writeFileSync(originalFile, JSON.stringify(original), { mode: 0o600 });
+    const damaged = structuredClone(paper);
+    const scopeError = '事实反馈绑定检查未通过：独立核心纠错范围不能调用主分析或其他主文重写模型';
+    damaged.analysisManifest.stages = { primaryAnalysis: { status: 'transient_failure', error: scopeError } };
+    damaged.analysisManifest.contracts = {};
+    damaged.analysisStageCheckpoints = {};
+    damaged.analysisCheckpoint = '';
+    damaged.latestAnalysisAttemptErrorCode = 'DAILY_FACT_REVIEW_INTEGRITY';
+    damaged.latestAnalysisAttemptError = scopeError;
+    damaged.analysisFactReviewObligation = facts.proofFor(feedback);
+    const recovery = { originalFile, originalFileSha256: facts.sha(fs.readFileSync(originalFile)),
+        paperSha256: deep.stableFingerprint(damaged) };
+    await daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(damaged, () => {
+        assert.throws(() => deep.restoreCompletedCoreInput(damaged, sample.plan, feedback,
+            { ...recovery, paperSha256: '0'.repeat(64) }), /核心原输入恢复/);
+        assert.throws(() => deep.restoreCompletedCoreInput(damaged, sample.plan, feedback,
+            { ...recovery, originalFileSha256: '0'.repeat(64) }), /核心原输入恢复/);
+        const changed = structuredClone(damaged); changed.analysis += '\n未经授权改写主文';
+        assert.throws(() => deep.restoreCompletedCoreInput(changed, sample.plan, feedback,
+            { ...recovery, paperSha256: deep.stableFingerprint(changed) }), /核心原输入恢复/);
+        const restored = deep.restoreCompletedCoreInput(damaged, sample.plan, feedback, recovery);
+        assert.deepEqual(restored.analysisManifest, original.analysisManifest);
+        assert.deepEqual(restored.analysisFactReviewObligation, damaged.analysisFactReviewObligation);
+        assert.equal(restored.latestAnalysisAttemptError, scopeError);
+        assert.deepEqual(restored.coreInputRecoveryHistory[0].failedManifest, damaged.analysisManifest);
+    }));
     const payload = { batchDate: sample.plan.batchDate, batchId: sample.plan.batchId,
-        dailyFreshSourceRun: daily.dailyFreshSourceReference(sample.plan), papers: [paper] };
+        dailyFreshSourceRun: daily.dailyFreshSourceReference(sample.plan), papers: [damaged] };
     fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify(payload));
     fs.writeFileSync(Config.FILES.filteredPapers, JSON.stringify({ ...payload, status: 'complete',
         papers: [{ arxivId: paper.arxivId, authors: paper.authors, title: '单节恢复测试论文' }] }));
@@ -198,7 +248,8 @@ test('无主文父包的核心纠错正常保存后跨作用域重放、完成�
     assert.equal(fs.existsSync(path.join(daily.factFeedbackDirectory(sample.plan), facts.proofFor(mixed).feedbackSha256 + '.json')), false);
     assert.equal(requests.length, 0);
     fs.writeFileSync(file, JSON.stringify(feedback));
-    await assert.rejects(selected.reanalyzeSelected([sample.id], { coreFeedbackFiles: [file] }),
+    await assert.rejects(selected.reanalyzeSelected([sample.id], { coreFeedbackFiles: [file],
+        coreInputRecovery: { [sample.id]: recovery } }),
         { code: 'MODEL_HTTP_NON_RETRYABLE' });
     const failedPayload = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult));
     const failed = failedPayload.papers[0];

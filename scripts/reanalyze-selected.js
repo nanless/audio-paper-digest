@@ -80,13 +80,19 @@ async function reanalyzeSelected(ids, options = {}) {
     if (options.coreFeedbackFiles !== undefined && !Array.isArray(options.coreFeedbackFiles))
         throw new Error('coreFeedbackFiles 必须为反馈路径数组');
     const fileSha = file => require('node:crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+    if (options.coreInputRecovery !== undefined && (!options.coreInputRecovery || typeof options.coreInputRecovery !== 'object'
+        || Array.isArray(options.coreInputRecovery) || Object.entries(options.coreInputRecovery).some(([id, value]) =>
+            !idSet.has(id) || !value || Object.keys(value).sort().join(',') !== 'originalFile,originalFileSha256,paperSha256'
+            || typeof value.originalFile !== 'string' || !/^[a-f0-9]{64}$/.test(value.originalFileSha256 || '')
+            || !/^[a-f0-9]{64}$/.test(value.paperSha256 || '')))) throw new Error('核心原输入恢复须绑定当前记录及真实原文件SHA');
     for (const file of options.coreFeedbackFiles || []) {
         const feedback = factReview.readFeedback(file);
         if (!require('./lib/saved-fact-feedback').coreOnlyFeedback(feedback))
             throw new Error('独立核心反馈不能授权主文、Reader、评分或标签修改');
         if (!idSet.has(feedback.paperId) || coreFeedbacks.has(feedback.paperId)) throw new Error('核心反馈须属于唯一选定论文');
         const paper = papers.find(item => normalizedId(item) === feedback.paperId);
-        if (!paper || paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete') throw new Error('核心反馈须保留已完成主分析');
+        if (!paper || (paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete'
+            && !options.coreInputRecovery?.[feedback.paperId])) throw new Error('核心反馈须保留已完成主分析');
         if (fullStageOptions && paper.fullStageReanalysis?.runId !== fullStageOptions.runId)
             throw new Error('独立核心纠错不能发起全新主分析');
         factReview.validateFeedback(feedback, dailySourcePlan, paper);
@@ -256,6 +262,9 @@ async function reanalyzeSelected(ids, options = {}) {
             preparedIds.add(normalizedId(paper));
             const paidFinalRecovery = firstPreparation && options.paidFinalAnalysisRecovery?.[normalizedId(latest)];
             if (paidFinalRecovery) latest = await require('./lib/paid-final-analysis-recovery').restorePaidFinalAnalysis(latest, dailySourcePlan, paidFinalRecovery);
+            const coreRecovery = firstPreparation && options.coreInputRecovery?.[normalizedId(latest)];
+            if (coreRecovery) latest = require('./deep-analyzer').restoreCompletedCoreInput(latest,
+                dailySourcePlan, readCoreLocked(latest)?.feedback, coreRecovery);
             readCoreLocked(latest);
             readReaderLocked(latest);
             if (fullStageOptions) {
