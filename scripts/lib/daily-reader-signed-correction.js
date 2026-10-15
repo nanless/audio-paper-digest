@@ -7,7 +7,11 @@ const daily = require('./daily-fresh-source-plan');
 const facts = require('./daily-fact-review');
 const repair = require('./reader-repair');
 const CONTRACT = 'daily-reader-signed-correction-v1';
+const factPatch = require('./daily-reader-signed-fact-patch');
+const FACT_CONTRACT = factPatch.CONTRACT;
 const handles = new WeakMap();
+const replaySnapshots = new WeakMap();
+const replayOptions = new WeakMap();
 const fail = message => { throw Object.assign(new Error(`日更签名Reader人工修正拒绝：${message}`), { retryable: false }); };
 const sha = facts.sha;
 function read(file) {
@@ -30,7 +34,7 @@ function readerOnly(feedback, paper) {
         || !feedback.rejectedReaderClaims.some(claim => paper.apiReaderArticle.includes(claim))) fail('须有当前正文确实仍含错误原句的严格Reader-only反馈');
 }
 function assertParent(record, paper, plan, feedback) {
-    if (record.contract !== CONTRACT || record.paperId !== require('../utils').normalizedId(paper)
+    if (![CONTRACT, FACT_CONTRACT].includes(record.contract) || record.paperId !== require('../utils').normalizedId(paper)
         || record.runId !== plan.runId || record.batchDate !== plan.batchDate
         || record.parentPaperSha256 !== daily.stableHash(paper)
         || record.parentArticleSha256 !== paper.apiReaderArticleSha256
@@ -38,6 +42,7 @@ function assertParent(record, paper, plan, feedback) {
         || record.feedbackSha256 !== daily.stableHash(feedback)
         || !isDeepStrictEqual(record.sourceFiles, feedback.sourceFiles)) fail('完整父稿、正文、计划、来源或事实包CAS不一致');
     readerOnly(feedback, paper);
+    if (record.contract === FACT_CONTRACT && !isDeepStrictEqual(record.parentPaper, paper)) fail('v2须保留逐字完整当前父稿快照');
     if (paper.latestAnalysisAttemptError || paper.analysisFactReviewObligation
         || !require('../analysis-engine').isSuccessfulAnalysisRecord(paper)
         || !require('./saved-fact-feedback').completedReaderUpstream(paper, plan)) fail('父稿须为真实已完成的同源整篇');
@@ -59,11 +64,12 @@ function applyBoundedTextPatch(original, record) {
         || !isDeepStrictEqual(result, record.draft)) fail('补丁改变了获准字词之外的内容');
     return result;
 }
-function parseDraft(draft, paper, source, envelope) {
+function parseDraft(draft, paper, source, envelope, options = {}) {
     return require('../deep-analyzer').parseApiReaderArticleResult(JSON.stringify(draft), {
         arxivId: paper.arxivId, requiredVersion: 3, requireIntegratedTables: true,
         minimumIntegratedTables: 2, requireSourceBindings: true, allowDeterministicQuoteRepair: true,
         sourceText: source.text, structuredArtifacts: source.structuredArtifacts,
+        ...(options.prune ? { allowDeterministicUnsupportedClaimPruning: true } : {}),
         verifiedResourceIdentity: paper.apiReaderResources,
         availableFigureOrdinals: envelope.payload.imageEvidence.filter(i => i.status === 'ready' && i.kind === 'figure').map(i => i.ordinal)
     });
@@ -83,35 +89,182 @@ function reuseFigures(figures, paper, envelope) {
         return { ...figure, assetSha256: old.assetSha256 };
     });
 }
-function verifyRoundtrip(record, paper, source, checked) {
+function replayPaidDraft(record, paper, source, checked, options = {}) {
     const envelope = checked.envelope, identity = envelope.identity, payload = envelope.payload;
     const stage = paper.analysisManifest.stages.apiReaderArticle;
+    // Some original normal-producer success records omitted these two derived
+    // counters. Explicit current replay keeps that absence and the paid envelope
+    // separately; it never invents a historical stage value or resets its ledger.
+    const sameCounter = key => (payload[key] || 0) === (stage[key] || 0)
+        || (options.prune && key !== 'attempts' && stage[key] == null
+            && Number.isSafeInteger(payload[key]) && payload[key] >= 0);
     if (record.baselineDraftSha256 !== repair.hashDraft(payload.draft)
         || identity.paperId !== paper.arxivId || identity.sourceSha256 !== paper.sourceSha256
         || identity.freshAnalysis?.runId !== record.runId
         || ['sourceSha256', 'sourceManifestSha256', 'sourceSnapshotSha256', 'structuredArtifactsSha256', 'sourceGeneration']
             .some(k => identity.freshAnalysis?.[k] !== source.freshSourceDescriptor[k])
-        || !['attempts', 'fullAttempts', 'transportFailures'].every(k => (payload[k] || 0) === (stage[k] || 0))
+        || !['attempts', 'fullAttempts', 'transportFailures'].every(sameCounter)
         || identity.model?.model !== stage.model || identity.model?.protocol !== stage.protocol
         || identity.promptSha256 !== stage.promptTemplateSha256 || identity.repairPromptSha256 !== stage.repairPromptTemplateSha256
         || daily.stableHash(payload.imageEvidence) !== stage.imageEvidenceSha256
         || repair.hashDraft(payload.ephemeralImageEvidence) !== stage.modelImagePreflightEvidenceSha256) fail('原退休付费档与已完成阶段不一致');
     const deep = require('../deep-analyzer');
-    const original = parseDraft(payload.draft, paper, source, envelope);
+    const original = parseDraft(payload.draft, paper, source, envelope, options);
     const rendered = deep.injectApiReaderFigures(original, source.structuredArtifacts, paper.arxivId);
     const figures = reuseFigures(rendered.figures, paper, envelope);
     if (deep.normalizeApiReaderFigureMarkdown(rendered.article, figures) !== paper.apiReaderArticle
         || daily.stableHash(rendered.plan) !== paper.apiReaderPlanSha256
         || !isDeepStrictEqual(figures, paper.apiReaderFigures)) fail('原付费稿不能逐字重放到完整父正文、计划和图片');
-    const patched = applyBoundedTextPatch(payload.draft, record);
-    return parseDraft(patched, paper, source, envelope);
+    return payload.draft;
+}
+function assertRenderedParent(draft, paper, source, envelope, options = {}) {
+    const deep = require('../deep-analyzer'), parsed = parseDraft(draft, paper, source, envelope, options);
+    const rendered = deep.injectApiReaderFigures(parsed, source.structuredArtifacts, paper.arxivId);
+    const figures = reuseFigures(rendered.figures, paper, envelope);
+    if (deep.normalizeApiReaderFigureMarkdown(rendered.article, figures) !== paper.apiReaderArticle
+        || !isDeepStrictEqual(rendered.plan, paper.apiReaderPlan)
+        || !isDeepStrictEqual(figures, paper.apiReaderFigures)) fail('人工历史不能逐字重放为对应的完整父Reader');
+}
+function normalProducerOptions(proof, checked) {
+    if (proof === undefined) return {};
+    if (!proof || Object.keys(proof).sort().join(',') !== [
+        'contract', 'mode', 'producerCommit', 'producerBlobOid', 'producerFileSha256', 'currentProducerSha256',
+        'inputParserImplementationSha256', 'originalDraftSha256'].sort().join(',')
+        || proof.contract !== 'reader-observed-current-producer-replay-v1' || proof.mode !== 'observed-current-replay'
+        || !/^[a-f0-9]{40}$/.test(proof.producerCommit || '')
+        || !/^[a-f0-9]{40}$/.test(proof.producerBlobOid || '')
+        || proof.inputParserImplementationSha256 !== checked.envelope.identity.parserImplementationSha256
+        || proof.currentProducerSha256 !== sha(fs.readFileSync(require.resolve('../deep-analyzer')))
+        || proof.originalDraftSha256 !== repair.hashDraft(checked.envelope.payload.draft)) fail('normal producer证明字段或真实原输入身份不同');
+    const git = require('node:child_process').execFileSync, cwd = path.resolve(__dirname, '../..');
+    const gitOptions = { cwd, env: { ...process.env, GIT_NO_REPLACE_OBJECTS: '1', GIT_NO_LAZY_FETCH: '1', GIT_OPTIONAL_LOCKS: '0' } };
+    git('git', ['merge-base', '--is-ancestor', proof.producerCommit, 'HEAD'], { ...gitOptions, stdio: 'pipe' });
+    const blob = git('git', ['rev-parse', `${proof.producerCommit}:scripts/deep-analyzer.js`], { ...gitOptions, encoding: 'utf8' }).trim();
+    const bytes = git('git', ['cat-file', 'blob', blob], { ...gitOptions, maxBuffer: 4 * 1024 * 1024 });
+    const producer = bytes.toString('utf8').match(/const parseCandidate = raw => (?:\{\s*const parsed = )?parseApiReaderArticleResult\(raw, \{([\s\S]{0,10000}?)\n\s*\}\);/);
+    if (blob !== proof.producerBlobOid || sha(bytes) !== proof.producerFileSha256
+        || !producer || !/^\s*allowDeterministicUnsupportedClaimPruning: true,\s*$/m.test(producer[1])) fail('可信Git normal producer没有声明的真实解析选项');
+    return { prune: true };
+}
+function assertPreservedUpstream(before, after, historical = false) {
+    const allowed = new Set(['apiReaderArticle', 'apiReaderArticleSha256', 'apiReaderPlan',
+        'apiReaderPlanSha256', 'apiReaderFigures', 'analysisManifest']);
+    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
+        if (allowed.has(key) || isDeepStrictEqual(before[key], after[key])) continue;
+        // Old stored parsed projections may predate a strictly verified catalog append.
+        // Only the existing normal parser may explain this historical derived view.
+        if (historical && key === 'parsed' && before.analysis === after.analysis
+            && isDeepStrictEqual(require('../utils').parseAnalysis(before.analysis), after.parsed)) continue;
+        fail(`改变原非Reader字段${key}`);
+    }
+    const a = structuredClone(before.analysisManifest), b = structuredClone(after.analysisManifest);
+    delete a.stages.apiReaderArticle; delete b.stages.apiReaderArticle;
+    if (!isDeepStrictEqual(a, b)) fail('改变Reader之外的阶段或原事实证明');
+}
+function verifyFactRoundtrip(record, paper, source, checked, plan) {
+    if (!plan) fail('v2缺少真实日更计划');
+    const stage = paper.analysisManifest.stages.apiReaderArticle, history = stage.operatorHistory || [];
+    if (!Array.isArray(history) || history.length > 8 || !Array.isArray(record.historyParents)
+        || record.historyParents.length !== history.length) fail('人工历史与真实父快照不完整');
+    const root = path.dirname(require('../config').FILES.dailyFreshSourceRunsDir), snapshots = [];
+    const readProof = (file, expected) => {
+        within(file, root); const result = read(file);
+        if (result.sha256 !== expected) fail('原人工历史文件SHA不一致');
+        snapshots.push(result); return result.value;
+    };
+    const entries = history.map((proof, index) => {
+        if (![CONTRACT, FACT_CONTRACT].includes(proof.contract) || proof.executionKind !== 'operator'
+            || proof.newReaderApiRequests !== 0 || proof.originalCandidateFile !== record.retiredCandidateFile
+            || proof.originalCandidateEnvelopeSha256 !== record.retiredCandidateEnvelopeSha256
+            || proof.originalIdentitySha256 !== checked.identitySha
+            || proof.retainedAttempts !== checked.envelope.payload.attempts
+            || proof.retainedFullAttempts !== checked.envelope.payload.fullAttempts
+            || proof.retainedNoProgress !== checked.envelope.payload.noProgress
+            || !isDeepStrictEqual(proof.sourceFiles, record.sourceFiles)) fail('人工历史丢失原付费身份或含新请求');
+        const oldManifest = readProof(proof.manifestFile, proof.manifestSha256);
+        const oldRecord = readProof(proof.correctionFile, proof.correctionSha256);
+        if (oldManifest.contract !== proof.contract || oldRecord.contract !== proof.contract
+            || oldManifest.runId !== plan.runId || oldManifest.batchDate !== plan.batchDate
+            || !Array.isArray(oldManifest.correctionFiles)
+            || oldManifest.correctionFiles.filter(file => path.resolve(file) === path.resolve(proof.correctionFile)).length !== 1
+            || oldManifest.authorization !== proof.authorization || oldRecord.paperId !== record.paperId
+            || oldRecord.runId !== plan.runId || oldRecord.batchDate !== plan.batchDate
+            || oldRecord.feedbackSha256 !== proof.feedbackSha256
+            || oldRecord.parentPaperSha256 !== proof.parentPaperSha256
+            || oldRecord.parentArticleSha256 !== proof.parentArticleSha256
+            || oldRecord.parentPlanSha256 !== proof.parentPlanSha256
+            || oldRecord.retiredCandidateFile !== proof.originalCandidateFile
+            || oldRecord.retiredCandidateEnvelopeSha256 !== proof.originalCandidateEnvelopeSha256
+            || oldRecord.baselineDraftSha256 !== proof.beforeDraftSha256
+            || repair.hashDraft(oldRecord.draft) !== proof.afterDraftSha256
+            || !isDeepStrictEqual(oldRecord.sourceFiles, record.sourceFiles)
+            || !isDeepStrictEqual(oldRecord.sourceDescriptor, record.sourceDescriptor)) fail('原人工记录与当前签名provenance不同');
+        let parent;
+        if (oldRecord.contract === CONTRACT) {
+            const descriptor = record.historyParents[index];
+            if (!descriptor || Object.keys(descriptor).sort().join(',') !== 'parentFile,parentFileSha256') fail('v1历史须提供真实原父文件及原SHA');
+            parent = readProof(descriptor.parentFile, descriptor.parentFileSha256);
+        } else {
+            if (record.historyParents[index] !== null) fail('v2历史父稿须来自原v2记录，不能另换父文件');
+            parent = oldRecord.parentPaper;
+        }
+        if (!parent || daily.stableHash(parent) !== oldRecord.parentPaperSha256
+            || parent.apiReaderArticleSha256 !== oldRecord.parentArticleSha256
+            || parent.apiReaderPlanSha256 !== oldRecord.parentPlanSha256) fail('原人工父稿CAS不一致');
+        const feedbackFile = path.join(daily.factFeedbackDirectory(plan), proof.feedbackSha256 + '.json');
+        within(feedbackFile, root); const packet = read(feedbackFile); snapshots.push(packet);
+        if (daily.stableHash(packet.value) !== proof.feedbackSha256) fail('原人工事实包改变');
+        facts.validateFeedback(packet.value, plan, parent); readerOnly(packet.value, parent);
+        return { proof, record: oldRecord, parent, feedback: packet.value };
+    });
+    const base = entries[0]?.parent || paper;
+    if (base.analysisManifest.stages.apiReaderArticle.executionKind === 'operator'
+        || (history.length && (!isDeepStrictEqual(stage.operatorProvenance, history.at(-1))
+            || stage.fingerprint !== daily.stableHash(history.at(-1))
+            || !isDeepStrictEqual(stage.originApiStage, base.analysisManifest.stages.apiReaderArticle)))) fail('原API阶段或人工历史终点不真实');
+    const options = normalProducerOptions(record.normalProducerProof, checked);
+    let draft = replayPaidDraft(entries[0]?.record || record, base, source, checked, options);
+    for (let index = 0; index < entries.length; index++) {
+        const entry = entries[index], after = entries[index + 1]?.parent || paper;
+        assertRenderedParent(draft, entry.parent, source, checked.envelope, options);
+        if (repair.hashDraft(draft) !== entry.record.baselineDraftSha256) fail('人工历史before draft断链');
+        draft = entry.record.contract === CONTRACT ? applyBoundedTextPatch(draft, entry.record)
+            : factPatch.applyBoundedFactPatch(draft, entry.record, entry.feedback, source);
+        assertRenderedParent(draft, after, source, checked.envelope, options);
+        assertPreservedUpstream(entry.parent, after, true);
+        const afterStage = after.analysisManifest.stages.apiReaderArticle;
+        if (!isDeepStrictEqual(afterStage.operatorHistory, history.slice(0, index + 1))
+            || !isDeepStrictEqual(afterStage.operatorProvenance, entry.proof)
+            || afterStage.fingerprint !== daily.stableHash(entry.proof)
+            || !isDeepStrictEqual(afterStage.factReview, facts.proofFor(entry.feedback))
+            || ['attempts', 'fullAttempts', 'noProgress', 'transportFailures', 'imageEvidenceSha256', 'imageEvidenceCount',
+                'modelImagePreflightEvidenceSha256', 'providerImageExclusions', 'providerImageExclusionSha256']
+                .some(key => !isDeepStrictEqual(afterStage[key], base.analysisManifest.stages.apiReaderArticle[key]))) fail('人工历史阶段、请求或像素账改变');
+    }
+    if (record.baselineDraftSha256 !== repair.hashDraft(draft)) fail('v2当前draft与完整历史终点不同');
+    const patched = factPatch.applyBoundedFactPatch(draft, record, record._feedback, source);
+    const tableBytes = article => require('../analysis-contract').extractMarkdownTables(article).map(table => table.markdown);
+    if (options.prune && (!isDeepStrictEqual(draft.tableBindings, patched.tableBindings)
+        || !isDeepStrictEqual(tableBytes(draft.sections.map(s => s.body).join('\n\n')),
+            tableBytes(patched.sections.map(s => s.body).join('\n\n'))))) fail('normal producer重放不能授权修改任何原表或绑定');
+    const parsed = parseDraft(patched, paper, source, checked.envelope, options);
+    if (options.prune && (!isDeepStrictEqual(parsed.plan.tableBindings, paper.apiReaderPlan.tableBindings)
+        || !isDeepStrictEqual(parsed.plan.formulaBindings, paper.apiReaderPlan.formulaBindings)
+        || !isDeepStrictEqual(tableBytes(parsed.article), tableBytes(paper.apiReaderArticle)))) fail('normal producer新输出发生额外prune或改变当前原表');
+    for (const snapshot of snapshots) unchanged(snapshot);
+    replaySnapshots.set(parsed, snapshots); replayOptions.set(parsed, options); return parsed;
+}
+function verifyRoundtrip(record, paper, source, checked, plan, feedback) {
+    if (record.contract === FACT_CONTRACT) return verifyFactRoundtrip({ ...record, _feedback: feedback }, paper, source, checked, plan);
+    const original = replayPaidDraft(record, paper, source, checked);
+    return parseDraft(applyBoundedTextPatch(original, record), paper, source, checked.envelope);
 }
 async function prepare(filename, plan, papers, feedbacks, selectedIds) {
     require('../env-loader').requireExternalRuntime('daily-reader-signed-correction');
     require('../workspace-role').requireWorkspaceRole('daily');
     const root = path.dirname(require('../config').FILES.dailyFreshSourceRunsDir);
     within(filename, root); const manifest = read(filename), m = manifest.value;
-    if (m.contract !== CONTRACT || m.runId !== plan.runId || m.batchDate !== plan.batchDate
+    if (![CONTRACT, FACT_CONTRACT].includes(m.contract) || m.runId !== plan.runId || m.batchDate !== plan.batchDate
         || typeof m.authorization !== 'string' || !m.authorization.trim()
         || !Array.isArray(m.correctionFiles) || !m.correctionFiles.length
         || m.correctionFiles.length > require('./daily-reader-operator-correction').largeBatchCorrectionLimit(plan, papers)) fail('须为完整日批次的小尾部显式清单');
@@ -120,14 +273,14 @@ async function prepare(filename, plan, papers, feedbacks, selectedIds) {
         within(file, root); const snapshot = read(file), record = snapshot.value;
         const paper = papers.find(p => require('../utils').normalizedId(p) === record.paperId);
         const feedback = feedbacks.get(record.paperId);
-        if (!paper || !feedback || records.has(record.paperId)) fail('目标、事实反馈缺失或重复');
+        if (!paper || !feedback || records.has(record.paperId) || record.contract !== m.contract) fail('目标、事实反馈缺失、重复或合同混用');
         facts.validateFeedback(feedback, plan, paper); assertParent(record, paper, plan, feedback);
         if (!isDeepStrictEqual(record.sourceDescriptor, daily.readDailyFreshSource(plan, paper).freshSourceDescriptor)) fail('原四文件来源描述不同');
         const checked = require('./reader-paid-resolved-render').readResolvedFile(plan.readerAttemptsDir,
             record.retiredCandidateFile, record.retiredCandidateEnvelopeSha256);
         await daily.withDailyFreshAnalysisContext(plan, () => require('../analysis-engine').withPaperAnalysisLock(paper, () => daily.withDailyFreshPaperSource(plan, structuredClone(paper), source =>
             require('./fresh-analysis-context').withFreshPaperContext(paper, () => {
-                const parsed = verifyRoundtrip(record, paper, source, checked);
+                const parsed = verifyRoundtrip(record, paper, source, checked, plan, feedback);
                 if (feedback.rejectedReaderClaims.some(claim => parsed.article.includes(claim))) fail('补丁未消除严格反馈的原错误句');
             }),
         { fetchFigure: () => fail('人工修正禁止下载新像素') })));
@@ -153,13 +306,13 @@ async function finalize(handle, paper, persist) {
     if (!fresh.isDailyFreshSourceScope() || context?.runId !== plan.runId
         || !isDeepStrictEqual(source, daily.readDailyFreshSource(plan, paper))) fail('当前正常四来源作用域不同');
     return fresh.withFreshPaperContext(paper, async () => {
-        const parsed = verifyRoundtrip(record, paper, source, checked), original = structuredClone(paper);
+        const parsed = verifyRoundtrip(record, paper, source, checked, plan, feedback), original = structuredClone(paper);
         const parent = require('./saved-fact-feedback').readSavedFeedback(paper, plan);
         const bound = facts.validateFeedback(feedback, plan, paper);
         const execute = () => facts.withReaderFactReview(bound, paper, async () => {
             if (persist) require('./pending-fact-feedback').register(paper, plan, feedback);
             const stage = original.analysisManifest.stages.apiReaderArticle;
-            const provenance = { contract: CONTRACT, executionKind: 'operator', newReaderApiRequests: 0,
+            const provenance = { contract: record.contract, executionKind: 'operator', newReaderApiRequests: 0,
                 appliedAt: new Date().toISOString(), authorization: active.manifest.value.authorization,
                 manifestFile: active.manifest.file, manifestSha256: active.manifest.sha256,
                 correctionFile: item.snapshot.file, correctionSha256: item.snapshot.sha256,
@@ -191,10 +344,27 @@ async function finalize(handle, paper, persist) {
             if (!isDeepStrictEqual(beforeManifest, afterManifest)) fail('改变Reader阶段之外的分析清单');
             if (!isDeepStrictEqual(result.apiReaderAuthors, original.apiReaderAuthors)
                 || !isDeepStrictEqual(result.apiReaderResources, original.apiReaderResources)) fail('改变原作者或资源身份');
-            const { from, to } = record.literalCorrections[0];
-            if (result.apiReaderArticle !== original.apiReaderArticle.replaceAll(from, to)
-                || JSON.stringify(result.apiReaderPlan) !== JSON.stringify(original.apiReaderPlan).replaceAll(from, to)
-                || JSON.stringify(result.apiReaderFigures) !== JSON.stringify(original.apiReaderFigures).replaceAll(from, to)) fail('正常拼装改变了获准字词之外的Reader内容');
+            if (record.contract === FACT_CONTRACT) {
+                assertRenderedParent(record.draft, result, source, checked.envelope, replayOptions.get(parsed));
+                const resultStage = result.analysisManifest.stages.apiReaderArticle;
+                if (['attempts', 'fullAttempts', 'noProgress', 'transportFailures', 'imageEvidenceSha256', 'imageEvidenceCount',
+                    'modelImagePreflightEvidenceSha256', 'providerImageExclusions', 'providerImageExclusionSha256']
+                    .some(key => !isDeepStrictEqual(resultStage[key], stage[key]))
+                    || !isDeepStrictEqual(resultStage.originApiStage, stage.originApiStage || stage)
+                    || !isDeepStrictEqual(resultStage.operatorHistory, [...(stage.operatorHistory || []), provenance])) fail('v2改变原请求/像素账或人工历史');
+                const completedView = structuredClone(result);
+                if (Object.hasOwn(completedView, 'analysisFactReviewObligation')) {
+                    if (!isDeepStrictEqual(completedView.analysisFactReviewObligation, bound.proof)) fail('改变新事实反馈的真实pending义务');
+                    delete completedView.analysisFactReviewObligation;
+                }
+                assertPreservedUpstream(original, completedView);
+                for (const snapshot of replaySnapshots.get(parsed) || []) unchanged(snapshot);
+            } else {
+                const { from, to } = record.literalCorrections[0];
+                if (result.apiReaderArticle !== original.apiReaderArticle.replaceAll(from, to)
+                    || JSON.stringify(result.apiReaderPlan) !== JSON.stringify(original.apiReaderPlan).replaceAll(from, to)
+                    || JSON.stringify(result.apiReaderFigures) !== JSON.stringify(original.apiReaderFigures).replaceAll(from, to)) fail('正常拼装改变了获准字词之外的Reader内容');
+            }
             if (!require('../analysis-engine').hasValidApiReaderV3Records(result)) fail('完整正常Reader资格未通过');
             facts.validateRepairedClaims('apiReaderArticle', result.apiReaderArticle, paper.arxivId);
             unchanged(active.manifest); unchanged(item.snapshot); checked.assertUnchanged(); return result;
@@ -212,7 +382,8 @@ async function finalize(handle, paper, persist) {
 }
 const apply = (handle, paper) => finalize(handle, paper, true);
 const preview = (handle, paper) => finalize(handle, paper, false);
-module.exports = { CONTRACT, prepare, apply, preview, applyBoundedTextPatch, verifyRoundtrip };
+module.exports = { CONTRACT, FACT_CONTRACT, prepare, apply, preview, applyBoundedTextPatch,
+    applyBoundedFactPatch: factPatch.applyBoundedFactPatch, verifyRoundtrip };
 if (require.main === module) {
     require('../env-loader').requireExternalRuntime('daily-reader-signed-correction');
     require('../workspace-role').requireWorkspaceRole('daily');

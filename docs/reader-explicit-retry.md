@@ -134,3 +134,17 @@ npm run batch -- --reader-signed-corrections /绝对路径/manifest.json --fact-
 原付费结构稿须经正常解析和原图注入，逐字重放为当前签名正文、计划及全部原图；不调用旧历史来源的反向恢复器。一次只允许一项 2–8 字的中文术语替换，显式声明实际 1–20 处匹配，仅修改 1–8 个已有正文或图片说明节点。补丁结果须严格等于原结构稿的这一项字词替换，不能添加数字、表格、公式、图片或其他表述。清单及反馈须覆盖本次全部未完成集合，并受原封存批次的小尾部数量上限约束。
 
 实际执行仍持有正常论文锁和日更来源作用域，先保存真实反馈义务，再使用正常 Reader 解析与最终封装、来源校验、整篇资格和锁内保存。明确记录 `executionKind: operator` 与零新增模型请求，保留原 API 阶段、原候选、响应、尝试和费用。失败保留原成功正文及真实未完成义务；只有正常资格和当前反馈均完成后才清除，最后仍须重新生成并通过独立博客审查。
+
+### 已签稿的有界事实修正 v2
+
+同一显式入口也接受 `daily-reader-signed-correction-v2` 清单和记录；v1 的中文词长、次数及替换限制保持原样。v2 仅供已获准的小尾部事实修正，不是局部写作或收费重试入口。它仍要求完整当前父稿 CAS、四源、严格 Reader-only 反馈和完整实际尾集合，不允许修改主文、摘要、标签、评分、作者、资源或原图身份。
+
+每条 v2 记录保存 `parentPaper` 完整当前对象，以及 1–8 个既有节点的 `patch`。`rangeCorrections` 为每个 `/sections/i/body` 或 `/conceptBridges/i/explanation` 指定 `path`、`oldSha256` 和有序 `edits`。每个 edit 明确 `claimIndex`、`claimStart`、`start`、`end`、`from`、`to`；位置均为同一原节点的 JavaScript UTF-16 偏移，修改只能落在对应 `rejectedReaderClaims` 的原句内，句外字节不能改变。当前父正文必须真实包含该受拒原句。原模型文本与排版后的原句不同，可另给逐字 `rawClaim`，但必须由原公共正常排版函数严格投影为反馈原句；不能自行删空白、合并数字或改原稿来凑范围。正文、术语解释与图片导读中的派生内容由正常装配器计算。
+
+表绑定修正只支持同一已有表的 `tableCorrections`：同时绑定原表 Markdown SHA、受拒单元格所在正文范围、当前 tableIndex、唯一完整原 DOM 表的 ordinal/DOM SHA/整表 SHA，并使用该表的 `artifact_table` 绑定。仍须逐格通过正常数字、单位及来源检查；不支持借来源引文任意更换绑定、增加表、公式或图片。原公式和 figurePlacements 记录保持不变。
+
+已有人工修正历史时，先核验原退休付费档，再按当前 `operatorHistory` 的真实清单、记录、来源及事实包逐条重放。旧 v1 原父稿须在 `historyParents` 中给出真实 `parentFile`、`parentFileSha256`，其整对象 CAS 必须等于旧记录声明；旧 v2 的完整父稿来自原 v2 记录，对应项为 `null`。不得从当前正文猜回历史父稿、把 operator-local 阶段改成 API 阶段或复活退休候选。每步必须重建对应正文、计划及原图，原 API 证明与全部人工历史保留。只读 `prepare` / `preview` 不登记新义务；实际 `apply` 才登记真实 pending，再经正常 finalizer 和公共引擎保存，最后仍须完整资格与独立博客审查。
+
+个别原结构稿只有采用正常生产器既有的确定性表格处理选项，才能重放已经签名的完整父稿。此时可显式提供 `normalProducerProof`，合同为 `reader-observed-current-producer-replay-v1`、模式为 `observed-current-replay`：核验当前 producer 文件 SHA、原退休输入的真实 parser 身份和 draft SHA，并以可信祖先 Git blob 证明该 normal producer 选项原已存在。Git 见证不冒充原输入的完整实现闭包；若原闭包不可得，保留其原 SHA，不补签历史。该有限兼容仅在当前完整父资格已通过、采用原选项重放正文/计划/图片逐字相同后生效。新补丁只能改获准散文范围，raw 全部表与绑定、正常输出的每个表格字节及表格/公式绑定必须与当前父稿完全相同，原图身份和像素证明仍严格保留；不授予任何新增删行、删表、修改单位或改变来源的许可。默认 v2 不启用此分支。
+
+该显式兼容还保留正常旧阶段未写入的 `fullAttempts`、`transportFailures` 空值；原付费 envelope 保留并由 provenance SHA 绑定，不向旧阶段补数，也不清零原账。`attempts` 和任何已经存在的计数仍须精确相等。普通 v1/v2 路径不因此放宽。
