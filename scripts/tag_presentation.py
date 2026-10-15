@@ -5,6 +5,7 @@ import re
 from urllib.parse import quote
 
 from tag_catalog import _validate_tag_catalog_content
+from path_config import resolve_blog_base_path
 
 FACET_DISPLAY_LABELS = {
     'task': '研究任务', 'method': '研究方法', 'setting': '研究条件',
@@ -55,17 +56,18 @@ def _markdown_text(value):
     return re.sub(r'([\\`*_{\[\]}()|])', r'\\\1', html.escape(str(value), quote=False))
 
 
-def _tag_link(concept_id, label):
-    return f'[{_markdown_text(label)}](/papers/?concept={quote(concept_id, safe="")})'
+def _tag_link(concept_id, label, base_path):
+    return f'[{_markdown_text(label)}]({base_path}/papers/?concept={quote(concept_id, safe="")})'
 
 
-def render_tag_hierarchy_markdown(metadata, catalog, *, heading='研究分类'):
+def render_tag_hierarchy_markdown(metadata, catalog, *, heading='研究分类', base_path=None):
     facets = build_tag_hierarchy(metadata, catalog)
+    base_path = resolve_blog_base_path(base_path)
     if not facets:
         return ''
     lines = [f'**{_markdown_text(heading)}**', '']
     for facet in facets:
-        paths = [' → '.join(_tag_link(node['id'], node['label']) for node in path['nodes'])
+        paths = [' → '.join(_tag_link(node['id'], node['label'], base_path) for node in path['nodes'])
                  for path in facet['paths']]
         lines.append(f'- **{facet["label"]}**：' + '；'.join(paths))
     return '\n'.join(lines) + '\n\n'

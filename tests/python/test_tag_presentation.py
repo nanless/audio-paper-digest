@@ -1,6 +1,7 @@
 import copy
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
@@ -25,11 +26,24 @@ class TagPresentationTest(unittest.TestCase):
                          ['task.audio-separation', 'task.av-source-separation', 'task.av-speech-separation'])
         text = render_tag_hierarchy_markdown(self.metadata, self.catalog)
         self.assertIn('**研究方法**', text)
-        self.assertIn('/papers/?concept=task.av-speech-separation', text)
+        self.assertIn('](/audio-paper-digest-blog/papers/?concept=task.av-speech-separation)', text)
         self.assertNotIn('/tags/', text)
         self.assertNotIn('研究条件', text)
         self.assertNotIn('task.asr', text)
         self.assertEqual((self.metadata, self.catalog), before)
+
+    def test_links_respect_subpath_and_root_deployment(self):
+        for base, expected in (('/audio-paper-digest-blog', '/audio-paper-digest-blog/papers/'),
+                               ('/custom/site/', '/custom/site/papers/'), ('/', '/papers/'), ('', '/papers/')):
+            with mock.patch.dict('os.environ', {'PAPER_DIGEST_BLOG_BASE_PATH': base}):
+                text = render_tag_hierarchy_markdown(self.metadata, self.catalog)
+            self.assertIn(f']({expected}?concept=task.av-speech-separation)', text)
+        text = render_tag_hierarchy_markdown(self.metadata, self.catalog, base_path='/explicit')
+        self.assertIn('](/explicit/papers/?concept=task.av-speech-separation)', text)
+        for invalid in ('//example.com', 'https://example.com', '/a/../b', '/a/./b', '/a//b',
+                        '/a?x=1', '/a#x', '/%2e%2e', '/a\\b'):
+            with self.assertRaises(ValueError):
+                render_tag_hierarchy_markdown(self.metadata, self.catalog, base_path=invalid)
 
     def test_empty_and_strict_metadata_boundaries(self):
         empty = dict(self.metadata, concepts=[])

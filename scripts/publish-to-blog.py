@@ -5502,7 +5502,7 @@ def render_paper_tag_hierarchy(parsed):
                                  'label': concept['preferredLabel']['zh']})
         metadata = {'registryVersion': _PAGE_TAG_CATALOG['version'],
                     'registrySha256': _PAGE_TAG_CATALOG['registrySha256'], 'concepts': selected}
-    return render_tag_hierarchy_markdown(metadata, _PAGE_TAG_CATALOG) if metadata else ''
+    return render_tag_hierarchy_markdown(metadata, _PAGE_TAG_CATALOG, base_path=BASE_PATH) if metadata else ''
 
 
 def _current_batch_tag_metadata(papers):

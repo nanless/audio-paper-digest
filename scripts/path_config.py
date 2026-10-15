@@ -17,6 +17,23 @@ from datetime import datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_BLOG_BASE_PATH = '/audio-paper-digest-blog'
+
+
+def resolve_blog_base_path(value=None):
+    """返回经验证的站内部署前缀；根目录部署使用空前缀。"""
+    value = os.environ.get('PAPER_DIGEST_BLOG_BASE_PATH', DEFAULT_BLOG_BASE_PATH) if value is None else value
+    if not isinstance(value, str):
+        raise ValueError('PAPER_DIGEST_BLOG_BASE_PATH 必须是站内路径')
+    normalized = value.rstrip('/')
+    if value.startswith('//') or (normalized and (
+            not re.fullmatch(r'/[A-Za-z0-9._~/-]*', normalized)
+            or '//' in normalized
+            or any(part in ('.', '..') for part in normalized.split('/')))):
+        raise ValueError('PAPER_DIGEST_BLOG_BASE_PATH 不是安全站内路径')
+    return normalized
+
+
 DATA_DIR = PROJECT_ROOT / "data"
 CURRENT_DIR = DATA_DIR / "current"
 ARCHIVE_DIR = DATA_DIR / "archive"
