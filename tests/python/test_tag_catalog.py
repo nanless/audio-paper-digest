@@ -44,6 +44,52 @@ def registry():
 
 
 class RegistryTest(unittest.TestCase):
+    def test_normalization_cache_only_keeps_bounded_plain_strings(self):
+        from tag_catalog import _normalize_label_cached
+        _normalize_label_cached.cache_clear()
+        self.addCleanup(_normalize_label_cached.cache_clear)
+        self.assertEqual(_normalize_label_cached.cache_info().maxsize, 8192)
+        for value, expected in (('\ufeff ＃ＡSR \u00a0', 'asr'), ('İΣßＡBC', 'İΣßabc'),
+                                ('###ABC', '##abc'), ('\x1cABC\x1c', '\x1cabc\x1c')):
+            self.assertEqual(normalize_label(value), expected)
+            self.assertEqual(normalize_label(value), expected)
+        self.assertEqual(normalize_label('A' * 256), 'a' * 256)
+        before = _normalize_label_cached.cache_info()
+        class UnhashableString(str):
+            __hash__ = None
+        for value, expected in ((UnhashableString(' ＃ＡSR '), 'asr'),
+                                ('A' * 257, 'a' * 257), (None, ''), ([], ''), ({}, ''), (1, '')):
+            self.assertEqual(normalize_label(value), expected)
+        self.assertEqual(_normalize_label_cached.cache_info(), before,
+                         '长字符串、str 子类及非字符串不能进入缓存')
+        for index in range(8200):
+            self.assertEqual(normalize_label(f'PLAIN{index}'), f'plain{index}')
+        self.assertEqual(_normalize_label_cached.cache_info().currsize, 8192)
+        misses = _normalize_label_cached.cache_info().misses
+        self.assertEqual(normalize_label('PLAIN0'), 'plain0')
+        self.assertEqual(_normalize_label_cached.cache_info().misses, misses + 1)
+
+    def test_warm_normalization_never_skips_mutated_catalog_validation(self):
+        changes = [lambda d: d['concepts'][1].update(aliases=['ASR', 'asr']),
+                   lambda d: d['concepts'][1].update(id='task/unsafe'),
+                   lambda d: d['concepts'][1].update(broaderId='task.asr'),
+                   lambda d: d['concepts'][1].update(status='unknown')]
+        for change in changes:
+            data = registry()
+            self.assertEqual(resolve_label(data, 'ASR')['id'], 'task.asr')
+            self.assertEqual(ancestors(data, 'task.asr'), ['task.speech'])
+            change(data)
+            with self.subTest(data=data):
+                with self.assertRaises(ValueError):
+                    resolve_label(data, 'ASR')
+                with self.assertRaises(ValueError):
+                    ancestors(data, 'task.asr')
+        data = registry()
+        self.assertEqual(resolve_label(data, 'ASR')['id'], 'task.asr')
+        data['concepts'][1]['aliases'] = ['fresh-alias']
+        self.assertIsNone(resolve_label(data, 'ASR'))
+        self.assertEqual(resolve_label(data, 'fresh-alias')['id'], 'task.asr')
+
     def test_versioned_prompt_preserves_legacy_bytes_and_defaults_to_new_text(self):
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / 'catalog.json'

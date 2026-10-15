@@ -1,6 +1,7 @@
 """读取并核验标签词表，按指定规则查找标签对应的概念。"""
 
 import hashlib
+from functools import lru_cache
 import json
 import os
 import re
@@ -28,6 +29,18 @@ _JS_WHITESPACE = '\u0009\u000a\u000b\u000c\u000d\u0020\u00a0\u1680\u2000\u2001\u
 
 
 def normalize_label(value):
+    # 仅缓存有界的不可变原生字符串；每次词表结构核验仍完整执行。
+    if type(value) is str and len(value) <= 256:
+        return _normalize_label_cached(value)
+    return _normalize_label_uncached(value)
+
+
+@lru_cache(maxsize=8192)
+def _normalize_label_cached(value):
+    return _normalize_label_uncached(value)
+
+
+def _normalize_label_uncached(value):
     if not isinstance(value, str):
         return ''
     result = unicodedata.normalize('NFKC', value).strip(_JS_WHITESPACE)
