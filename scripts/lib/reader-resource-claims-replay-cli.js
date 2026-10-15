@@ -27,7 +27,8 @@ try {
         || stat.size < 2 || stat.size > 128 * 1024 * 1024) throw new Error('Unsafe replay input');
     const input = JSON.parse(fs.readFileSync(fd, 'utf8'));
     const keys = input && Object.keys(input).sort().join(',');
-    if (!input || !['paper,sourceText', 'paper,resourcePresentation,sourceText'].includes(keys)
+    if (!input || !['paper,sourceText', 'paper,resourcePresentation,sourceText',
+        'paper,publicationEvidence,resourcePresentation,sourceText'].includes(keys)
         || (Object.hasOwn(input, 'resourcePresentation') && input.resourcePresentation !== true)
         || typeof input.sourceText !== 'string' || !input.paper
         || crypto.createHash('sha256').update(input.sourceText).digest('hex') !== input.paper.sourceSha256) {
@@ -36,8 +37,22 @@ try {
     const deep = require('../deep-analyzer');
     const draft = deep.readerResourceClaimDraftFromArticle(input.paper.apiReaderPlan, input.paper.apiReaderArticle);
     deep.enforceReaderResourceClaims(draft, input.paper.apiReaderResources, input.sourceText, { paper: input.paper });
-    writeOutput(input.resourcePresentation === true ? JSON.stringify({ verified: true,
-        resources: deep.readerResourcePublicationResources(input.paper, input.sourceText) }) : '{"verified":true}');
+    const response = { verified: true };
+    if (input.resourcePresentation === true) response.resources = deep.readerResourcePublicationResources(input.paper, input.sourceText);
+    if (Object.hasOwn(input, 'publicationEvidence')) {
+        const evidence = require('./conference-reader-publication-evidence');
+        const handle = evidence.replayDescriptor(input.paper, input.publicationEvidence);
+        response.tableEvidence = evidence.withPublicationEvidence(handle, () => ({
+            paperId: input.paper.id, readerArticleSha256: crypto.createHash('sha256').update(input.paper.apiReaderArticle).digest('hex'),
+            readerPlanSha256: input.paper.apiReaderPlanSha256,
+            tables: require('../analysis-contract').extractMarkdownTables(input.paper.apiReaderArticle).map((table, index) => ({
+                tableIndex: index + 1, tableSha256: crypto.createHash('sha256').update(table.markdown).digest('hex'),
+                headerUnits: evidence.headerUnitCoverage(input.paper, table, index + 1),
+                numericTokens: deep.readerNumericTokens(table.markdown).filter(token => evidence.numericCoverage(input.paper, table, index + 1, token))
+            }))
+        }));
+    }
+    writeOutput(JSON.stringify(response));
 } catch (error) {
     writeOutput(JSON.stringify({ verified: false, code: error.code || 'READER_RESOURCE_REPLAY_FAILED',
         issues: Array.isArray(error.readerIssues) ? error.readerIssues : [], message: error.message }));

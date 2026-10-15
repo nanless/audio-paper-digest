@@ -7,7 +7,7 @@ from pathlib import Path
 
 
 class ResourceClaimReplayTests(unittest.TestCase):
-    def run_replay(self, body, *, wrong_source=False):
+    def run_replay(self, body, *, wrong_source=False, publication_evidence=None):
         root = Path(__file__).resolve().parents[2]
         source = 'The source document does not release any resources.'
         source_sha = hashlib.sha256(source.encode()).hexdigest()
@@ -21,8 +21,11 @@ class ResourceClaimReplayTests(unittest.TestCase):
                                    'conceptBridges': [],
                                    'sections': [{'kind': 'reproduction', 'heading': '资源状态与复现边界'}]},
                  'apiReaderArticle': '### 资源状态与复现边界\n\n' + body}
+        request = {'paper': paper, 'sourceText': source + ('wrong' if wrong_source else '')}
+        if publication_evidence is not None:
+            request.update(publicationEvidence=publication_evidence, resourcePresentation=True)
         with tempfile.TemporaryFile() as payload:
-            payload.write(json.dumps({'paper': paper, 'sourceText': source + ('wrong' if wrong_source else '')},
+            payload.write(json.dumps(request,
                                      ensure_ascii=False).encode())
             payload.flush()
             payload.seek(0)
@@ -60,6 +63,14 @@ class ResourceClaimReplayTests(unittest.TestCase):
         result, value = self.run_replay('本文仅解释训练与推理机制。', wrong_source=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertFalse(value['verified'])
+
+    def test_arbitrary_publication_quotes_cannot_supplement_source_bindings(self):
+        for evidence in ({'tables': []}, {'executionId': '../outside', 'quotes': ['unit s']}):
+            with self.subTest(evidence=evidence):
+                result, value = self.run_replay('本文仅解释训练与推理机制。', publication_evidence=evidence)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(value['verified'])
+                self.assertIn('原来源引用无效', value['message'])
 
 
 if __name__ == '__main__':

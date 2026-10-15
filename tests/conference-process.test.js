@@ -984,6 +984,70 @@ test('迁移后旧实现仍可寻址，并且绝不重分析已完成的论文',
     assert.equal(resumed.status, 'complete'); assert.equal(resumed.processId, first.processId);
 });
 
+test('会议迁移先完成全批正常后处理，再按失败集合刷新并即时保存 child 凭证', async t => {
+    const migration = require('../scripts/migrate-conference-process');
+    const adapter = require('../scripts/lib/conference-analysis-adapter');
+    const f = fixture(t, 3), options = { apply: true, concurrency: 1 };
+    const first = await processApi.runConferenceProcess(options, { ...f.deps,
+        processPaper: async (_c, _s, item) => success(item) });
+    const filename = path.join(f.files.conferenceProcessDir, first.processId, 'state.json');
+    const original = JSON.parse(fs.readFileSync(filename)), events = [], calls = new Map();
+    f.context.authority = { ...f.authority, implementationSha256: H('reader refresh implementation') };
+    f.runtimeAuthority.implementationSha256 = f.context.authority.implementationSha256;
+    const children = new Map();
+    const deps = { ...f.deps, maxRounds: 3,
+        processPaper: () => assert.fail('completed source must use bounded revision'),
+        adapter: { refreshConferenceReader: async ({ parentExecutionId }) => {
+            assert.equal(events.filter(value => value.startsWith('stage-parent')).length, 3);
+            const item = Object.values(original.items).find(value => value.analysisRunId === parentExecutionId);
+            events.push(`refresh:${item.paperId}`);
+            const attempts = (calls.get(item.paperId) || 0) + 1; calls.set(item.paperId, attempts);
+            if (item.paperId === f.members[1].paperId && attempts === 1) throw new Error('Reader first round failed');
+            const child = adapter.readerRevisionExecutionId(parentExecutionId, item.analysisProof.analysisSha256);
+            const body = { contract: adapter.READER_REVISION_CONTRACT, version: 1, executionId: child,
+                parentExecutionId, parentAnalysisFileSha256: item.analysisProof.analysisSha256,
+                parentRunFileSha256: H(parentExecutionId), paperId: item.paperId,
+                sourceSnapshotSha256: item.analysisProof.sourceSnapshotSha256,
+                seededAnalysisSha256: H('seed'), mode: 'reader-only', maxAttempts: 3 };
+            children.set(child, item);
+            return { executionId: child, revision: { ...body, revisionSha256: H(body) },
+                analysisSha256: H(['revised', item.paperId]) };
+        } },
+        postprocess: { stagePaper: ({ executionId }) => {
+            const item = Object.values(original.items).find(value => value.analysisRunId === executionId);
+            if (item) {
+                events.push(`stage-parent:${item.paperId}`);
+                if (item.paperId !== f.members[2].paperId) throw Object.assign(new Error('old Reader rejected'),
+                    { code: 'CONFERENCE_POSTPROCESS_INTEGRITY', retryable: false });
+                return { status: 'staged', manifest: { ...item.pageProof } };
+            }
+            const child = children.get(executionId); assert.ok(child);
+            return { status: 'staged', manifest: { ...success(child).pageProof,
+                completionReceiptSha256: H(['child receipt', executionId]),
+                sourceSnapshotSha256: child.analysisProof.sourceSnapshotSha256 } };
+        } } };
+    const noPaid = await migration.migrateAndRun({ ...options, fromProcessId: first.processId }, { dependencies: deps });
+    assert.equal(noPaid.retryFailedRequired, true); assert.equal(noPaid.failed, 2); assert.equal(calls.size, 0);
+    events.length = 0;
+    const interrupted = await migration.migrateAndRun({ ...options, fromProcessId: first.processId, retryFailed: true },
+        { dependencies: { ...deps, maxRounds: 1 } });
+    assert.equal(interrupted.status, 'partial');
+    const midway = processApi.assertState(JSON.parse(fs.readFileSync(filename)));
+    assert.ok(midway.items[f.members[0].paperId].readerRevision);
+    assert.equal(midway.items[f.members[0].paperId].status, 'complete');
+    assert.equal(midway.items[f.members[1].paperId].analysisRunId, original.items[f.members[1].paperId].analysisRunId);
+    const result = await migration.migrateAndRun({ ...options, fromProcessId: first.processId, retryFailed: true }, { dependencies: deps });
+    assert.equal(result.status, 'complete');
+    assert.deepEqual(events.filter(value => value.startsWith('refresh')), [
+        `refresh:${f.members[0].paperId}`, `refresh:${f.members[1].paperId}`, `refresh:${f.members[1].paperId}` ]);
+    const current = processApi.assertState(JSON.parse(fs.readFileSync(filename)));
+    assert.equal(current.items[f.members[0].paperId].readerRevision.parentExecutionId,
+        original.items[f.members[0].paperId].analysisRunId);
+    assert.equal(current.items[f.members[1].paperId].analysisProof.analysisSha256, H(['revised', f.members[1].paperId]));
+    assert.deepEqual(current.items[f.members[2].paperId].analysisProof, original.items[f.members[2].paperId].analysisProof);
+    assert.equal(current.items[f.members[1].paperId].attempts, 3);
+});
+
 test('系统性失败后，正在处理论文的任务会完成手上的工作，但不再派发新任务', async t => {
     const f = fixture(t, 7); let calls = 0;
     let release; const inFlight = new Promise(resolve => { release = resolve; });
@@ -1757,10 +1821,22 @@ test('promote --prefer-upgrade 先登记升级过的成员，保留其余成员�
     assert.deepEqual(preserved.pageProof, h.control.originalItems.get(kept).pageProof);
     assert.deepEqual(h.control.preservedCalls, [kept]);
     assert.deepEqual(h.control.stageCalls, upgradedIds.map(id => state.items[id].analysisRunId));
-    // 完成后的用途：promoted 进程只供 --status 查询和发布读取，后续 --apply 按设计拒绝重绑。
-    await assert.rejects(processApi.runConferenceProcess({ apply: true, concurrency: 1 }, h.deps),
-        error => error.code === 'CONFERENCE_SOURCE_UPGRADE_REBIND_REQUIRED'
-            && /请先检查 --source-upgrade-plan --from /.test(error.message));
+    // 混合来源完成后，普通续跑也必须复用逐篇原计划，不能统一重绑新来源。
+    t.mock.method(require('../scripts/lib/conference-retained-source-replay'), 'replayCompletedPromotedShared', ({ state: checked }) => ({
+        planHandle: {}, planReceiptSha256: receipt.planReceiptSha256,
+        retainedSources: new Map(Object.values(checked.items).map(item => [item.analysisRunId,
+            { planHandle: {}, sourceRoot: 'retained-' + item.analysisRunId }])),
+        sealed: Object.values(checked.items).map(item => ({ paperId: item.paperId, proof: item.sourceProof }))
+    }));
+    const resumed = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, { ...h.deps,
+        prepareShared: () => assert.fail('混合已完成来源不应统一重绑'),
+        aggregate: async (context, shared, executionIds, runtimeDeps) => {
+            assert.equal(shared.retainedSources.size, 3);
+            return h.deps.aggregate(context, shared, executionIds, runtimeDeps);
+        } });
+    assert.equal(resumed.processId, promoted.processId);
+    assert.equal(h.control.calls.length, runsBeforePromotion);
+    t.mock.restoreAll();
     // 凭证字段的顺序、唯一性、成员范围或类型不符合要求时，一律拒绝。
     const tamper = (mutation, pattern) => {
         const copy = structuredClone(state);

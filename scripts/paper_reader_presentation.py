@@ -15,7 +15,7 @@ import tempfile
 from blog_entry_loader import load_publish_to_blog
 
 
-def replay_resource_presentation(paper, source_text):
+def replay_resource_presentation(paper, source_text, publication_evidence=None):
     """复用同一只读来源及声明核验桥；返回临时视图，不改原身份。"""
     if not isinstance(source_text, str) or hashlib.sha256(source_text.encode()).hexdigest() != paper.get('sourceSha256'):
         raise ValueError('资源展示必须绑定同篇封存全文 SHA。')
@@ -24,7 +24,10 @@ def replay_resource_presentation(paper, source_text):
     if not node:
         raise ValueError('资源展示的公共声明重放需要 Node.js。')
     root = Path(__file__).resolve().parents[1]
-    payload = json.dumps({'paper': paper, 'sourceText': source_text, 'resourcePresentation': True},
+    request = {'paper': paper, 'sourceText': source_text, 'resourcePresentation': True}
+    if publication_evidence is not None:
+        request['publicationEvidence'] = publication_evidence
+    payload = json.dumps(request,
                          ensure_ascii=False, separators=(',', ':')).encode()
     if len(payload) > 128 * 1024 * 1024:
         raise ValueError('资源展示的来源重放输入超过上限。')
@@ -34,7 +37,10 @@ def replay_resource_presentation(paper, source_text):
             [node, str(root / 'scripts/lib/reader-resource-claims-replay-cli.js'), str(source.fileno())],
             cwd=str(root), env={key: value for key, value in os.environ.items()
                                if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
-            timeout_seconds=30, max_output_bytes=1024 * 1024, pass_fds=(source.fileno(),))
+            # Cold conference evidence replays the authenticated original PDF
+            # twice; keep the ordinary resource-only bridge at its short bound.
+            timeout_seconds=180 if publication_evidence is not None else 30,
+            max_output_bytes=1024 * 1024, pass_fds=(source.fileno(),))
     try:
         value = json.loads(result.stdout)
     except (ValueError, TypeError) as error:
@@ -42,11 +48,19 @@ def replay_resource_presentation(paper, source_text):
     if result.returncode != 0 or result.timed_out or result.output_truncated \
             or value.get('verified') is not True or not isinstance(value.get('resources'), list):
         raise ValueError('资源展示或正文声明未通过当前封存来源核验：' + str(value.get('message', '')))
+    if publication_evidence is not None:
+        # Only this fresh response from the source-replaying generic worker may
+        # supplement the quality check. Original plan/bindings stay untouched.
+        if not isinstance(value.get('tableEvidence'), dict):
+            raise ValueError('会议出版补充引文缺少公共来源重放结果。')
+        publisher._validate_api_reader_source_bindings(paper,
+            publication_table_evidence=value.get('tableEvidence'))
     return value['resources']
 
 
 def build_reader_presentation(paper, *, plan, resources, authors,
-                              exclude_resource_url=None, source_note='', source_text=None):
+                              exclude_resource_url=None, source_note='', source_text=None,
+                              publication_evidence=None):
     """Use daily presentation rules without inventing an arXiv source identity.
 
     Callers must first validate their Reader and source contracts. Requiring the
@@ -65,7 +79,9 @@ def build_reader_presentation(paper, *, plan, resources, authors,
     parsed = publisher.parse_analysis(paper.get('analysis', ''))
     if not isinstance(parsed, dict):
         raise ValueError('Reader 展示需要可重新解析的正式分析正文。')
-    visible_resources = (replay_resource_presentation(paper, source_text) if source_text is not None
+    if publication_evidence is not None and source_text is None:
+        raise ValueError('会议出版补充引文不能脱离同篇封存来源。')
+    visible_resources = (replay_resource_presentation(paper, source_text, publication_evidence) if source_text is not None
                          else copy.deepcopy(resources))
     excluded = False
     if exclude_resource_url is not None:

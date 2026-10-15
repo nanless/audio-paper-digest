@@ -148,6 +148,7 @@ npm run test:compat
 | `lib/conference-postprocess.js` | Node 库：只接受已认证的会议计划，逐篇核验计划、来源、完成结果、当前分类和页面渲染。单篇目录包含词表与渲染实现指纹，代码升级不覆盖旧页面；只有执行记录精确覆盖完整入选集时才生成私有会议汇总。 |
 | `lib/conference-process-recovery.js` | 保留会议断点、已付费阶段与原来源绑定的恢复规则。 |
 | `lib/conference-retained-source-replay.js` | 完整来源升级进程的只读逐篇来源回放：按每篇原分析绑定的计划凭证认证筛选、暂存、导入、原计划与原抽取，缓存不同计划的已认证句柄；单篇与汇总使用各自原来源。仅词表元数据能恢复到原凭证精确 SHA 时才在系统临时目录重放原计划，不改现有文件或重新提取、分析。 |
+| `lib/conference-reader-publication-evidence.js` | 为已完成会议的发布复核从原封存 PDF 派生可逐字重放的表头、单位与实验设置引文；绑定原计划、抽取、正文及表格，不修改旧稿或来源签名，不授予普通分析成功或跳过资格。 |
 | `lib/conference-process.js` | Node 库：对会议完整入选集合封存官方 PDF、导入来源，调用公共引擎分析，生成读者文章、评分、分类页面和汇总。整批默认并发 1，可设为 1–5；每篇内部并发固定为 1。新进程及完成凭证使用各自 v2 格式，词表身份写入 `tagCatalogVersion`、`tagCatalogSha256`；旧记录完整核验后沿原 UUID 恢复。 |
 | `lib/conference-publication-author-replay-cli.js` | Node 子进程入口：供会议发布器通过私有文件调用的本地来源核验入口；输出逐篇已核验作者及分析、完成凭证、来源快照 SHA，禁止网络与配置加载。 |
 | `lib/conference-publication-author-source.js` | Node 库：只读核验官方元数据、PDF、已有抽取来源与分析凭证，核完整姓名及作者机构；不新建来源、不重抽 PDF 或请求模型。 |

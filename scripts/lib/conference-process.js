@@ -432,7 +432,18 @@ function assertState(value, expected = null) {
             || (item.retryNotBefore != null && !Number.isFinite(Date.parse(item.retryNotBefore)))) {
             throw new Error(`Conference process retry state is invalid: ${paperId}`);
         }
-        if (item.paperId !== paperId || (!preservedComplete.has(paperId)
+        const revision = item.readerRevision;
+        if (revision) {
+            const { revisionSha256, ...body } = revision;
+            if (revisionSha256 !== stableHash(body) || revision.contract !== 'conference-reader-source-revision-v1'
+                || revision.version !== 1 || revision.paperId !== paperId || revision.executionId !== item.analysisRunId
+                || revision.executionId !== require('./conference-analysis-adapter').readerRevisionExecutionId(
+                    revision.parentExecutionId, revision.parentAnalysisFileSha256)
+                || (!preservedComplete.has(paperId) && revision.parentExecutionId !== deterministicUuid(value.processId, paperId, 'analysis'))) {
+                throw new Error(`Conference process Reader revision integrity failed: ${paperId}`);
+            }
+        }
+        if (item.paperId !== paperId || (!revision && !preservedComplete.has(paperId)
             && item.analysisRunId !== deterministicUuid(value.processId, paperId, 'analysis'))
             || preservedComplete.has(paperId) && (!(item.preservedOriginalComplete || item.preservedPriorUpgradeComplete)
                 || !/^[a-f0-9-]{36}$/i.test(item.analysisRunId || ''))
@@ -556,6 +567,9 @@ function defaultDependencies() {
         importer: require('./conference-importer.js'), importCli: require('../conference-import.js'),
         plan: require('./conference-plan.js'), adapter: require('./conference-analysis-adapter.js'),
         postprocess: require('./conference-postprocess.js'), ledger: require('./conference-source-ledger.js'),
+        onRetainedSourceProgress: ({ completed, total }) => {
+            process.stderr.write(`[会议原来源重放] 已核验 ${completed}/${total}\n`);
+        },
         now: () => new Date().toISOString(), execFileSync };
 }
 // 新写入按当前版本清单绑定，各阶段按登记表使用 v5、v4、v3 或 v2；旧记录按 promptTextVersion

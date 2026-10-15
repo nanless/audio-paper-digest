@@ -934,13 +934,29 @@ function getIncompleteAnalysisContentReasonUsingRules(paper, tagRules, readerOpt
     if (scoring?.scoringContract === 'api-scoring-audit-v2') {
         if (!scoringAuditBindsFinalAnalysis(paper)) return '评分审查记录与最终正文不一致。';
         if (!scoringStabilityIsResolved(scoring)) return '评分稳定性检查未通过。';
-        if (!hasValidApiReaderV3Records(paper, readerOptions)) return '读者文章与论文来源及分析记录的对应关系未通过核验。';
+        if (readerOptions.conferenceReaderRefreshUpstream !== true
+            && !hasValidApiReaderV3Records(paper, readerOptions)) return '读者文章与论文来源及分析记录的对应关系未通过核验。';
     }
     return null;
 }
 
 function isCompleteAnalysisContent(paper) {
     return getIncompleteAnalysisContentReason(paper) === null;
+}
+
+// Only the completed conference revision adapter uses this preflight. It grants
+// no publication qualification: the replacement Reader still needs the full gate.
+function getConferenceReaderRefreshUpstreamReason(paper, { tagRules } = {}) {
+    if (paper?.source !== 'conference' || !tagRules
+        || paper.analysisManifest?.manualTakeover
+        || paper.analysisManifest?.stages?.scoringAudit?.scoringContract !== 'api-scoring-audit-v2'
+        || !require('./lib/pending-fact-feedback').completed(paper)
+        || require('./lib/tag-stage-record').readTagStageRecord(paper.analysisManifest,
+            paper.analysisStageCheckpoints).stage?.registrySha256 !== tagRules.registrySha256) {
+        return '会议 Reader 恢复缺少已核验原词表与会议身份。';
+    }
+    return getIncompleteAnalysisContentReasonUsingRules(paper, tagRules,
+        { conferenceReaderRefreshUpstream: true });
 }
 
 const LEGACY_PRE_CORE_SUMMARY_RECOVERY_STAGES = Object.freeze(
@@ -1272,14 +1288,24 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
                     ))
                     && require('./deep-analyzer.js').readerTableHeaderUnitEvidenceFailures(
                         renderedTables[index], [...binding.sourceQuotes,
-                            ...(binding.sealedPdfQuoteEvidence || [])]).length === 0
+                            ...(binding.sealedPdfQuoteEvidence || [])]).every(failure => (
+                        options.conferencePublicationEvidence === true
+                        && require('./lib/conference-reader-publication-evidence').headerUnitCoverage(
+                            paper, renderedTables[index], index + 1).some(item => (
+                            item.row === failure.row && item.column === failure.column
+                            && item.unit === failure.unit && item.value === failure.token
+                        ))
+                    ))
                     // 旧记录也重核数字对应关系；保留已有会议 PDF 拆单位的窄兼容。
                     && require('./deep-analyzer.js').readerNumericTokens(renderedTables[index].markdown).every(token => (
-                        binding.sealedPdfQuoteEvidence
+                        (binding.sealedPdfQuoteEvidence
                             ? require('./deep-analyzer.js').readerSourceQuotesCoverNumericToken(token,
                                 binding.sourceQuotes, binding.sealedPdfQuoteEvidence, true)
                             : require('./deep-analyzer.js').readerSourceQuoteCoversNumericToken(token,
-                                binding.sourceQuotes.map(item => item.quote).join('\n'), true)
+                                binding.sourceQuotes.map(item => item.quote).join('\n'), true))
+                        || options.conferencePublicationEvidence === true
+                            && require('./lib/conference-reader-publication-evidence').numericCoverage(
+                                paper, renderedTables[index], index + 1, token)
                     ))
             )
         ))
@@ -1472,7 +1498,7 @@ function isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, optio
         }
         return isSuccessfulAnalysisRecordWithContentReason(
             paper, getIncompleteAnalysisContentReasonUsingRules(paper, tagRules,
-                { legacyConferenceResourceBindings: true })
+                { legacyConferenceResourceBindings: true, conferencePublicationEvidence: true })
         );
     } catch (_) { return false; }
 }
@@ -2364,6 +2390,7 @@ module.exports = {
     isSuccessfulAnalysisRecord,
     isSuccessfulAnalysisRecordForReadOnlyConferencePublication,
     getIncompleteAnalysisContentReason,
+    getConferenceReaderRefreshUpstreamReason,
     scoringAuditBindsFinalAnalysis,
     scoringStabilityIsResolved,
     hasValidApiReaderV3Records,

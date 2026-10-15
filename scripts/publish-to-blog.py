@@ -6630,15 +6630,16 @@ def _api_reader_concept_term_display(value):
 def _api_reader_concept_term_present(explanation, term):
     if not isinstance(explanation, str) or not isinstance(term, str) or not term.strip():
         return False
-    haystack, needle = _api_reader_concept_term_display(explanation), _api_reader_concept_term_display(term)
-    start = haystack.find(needle)
-    while start >= 0:
-        before = haystack[start - 1] if start else ''
-        after = haystack[start + len(needle):start + len(needle) + 1]
-        if (not re.match(r'\d', needle) or not re.search(r'[\d.+\-零〇一二两三四五六七八九十百千万亿]', before)) \
-                and (not re.search(r'\d$', needle) or not re.search(r'[\d.]', after)):
-            return True
-        start = haystack.find(needle, start + 1)
+    for haystack, needle in ((explanation, term.strip()),
+                             (_api_reader_concept_term_display(explanation), _api_reader_concept_term_display(term))):
+        start = haystack.find(needle)
+        while start >= 0:
+            before = haystack[start - 1] if start else ''
+            after = haystack[start + len(needle):start + len(needle) + 1]
+            if (not re.match(r'[\d一二两三四五六七八九十]', needle) or not re.search(r'[\d.+\-零〇一二两三四五六七八九十百千万亿]', before)) \
+                    and (not re.search(r'\d$', needle) or not re.search(r'[\d.]', after)):
+                return True
+            start = haystack.find(needle, start + 1)
     return False
 
 
@@ -7751,7 +7752,7 @@ def _reader_sealed_pdf_column_unit_coverage(paper, rendered, binding):
             for token in _api_reader_numeric_tokens(value)}
 
 
-def _validate_api_reader_source_bindings(paper, article=None):
+def _validate_api_reader_source_bindings(paper, article=None, *, publication_table_evidence=None):
     """按 v4 来源记录核对读者文章中的表格和公式，并返回核验结果。"""
     manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
     contracts = manifest.get('contracts') if isinstance(manifest, dict) else None
@@ -7823,6 +7824,24 @@ def _validate_api_reader_source_bindings(paper, article=None):
         raise PublishDataValidationError('独立封存 PDF 逐字引文不能重放：' + str(error)) from error
 
     rendered_tables = _api_reader_markdown_tables(article)
+    publication_tables = {}
+    if publication_table_evidence is not None:
+        evidence = publication_table_evidence
+        if (not isinstance(evidence, dict) or paper.get('source') != 'conference'
+                or evidence.get('paperId') != paper.get('id')
+                or evidence.get('readerArticleSha256') != _javascript_string_sha256(paper.get('apiReaderArticle', ''))
+                or evidence.get('readerPlanSha256') != paper.get('apiReaderPlanSha256')
+                or not isinstance(evidence.get('tables'), list)
+                or len(evidence['tables']) != len(rendered_tables)):
+            raise PublishDataValidationError('会议出版补充引文未绑定原论文、Reader及完整表格集合。')
+        for position, record in enumerate(evidence['tables']):
+            if (not isinstance(record, dict) or record.get('tableIndex') != position + 1
+                    or record.get('tableSha256') != _javascript_string_sha256(rendered_tables[position]['markdown'])
+                    or not isinstance(record.get('headerUnits'), list)
+                    or not isinstance(record.get('numericTokens'), list)
+                    or any(not isinstance(token, str) for token in record['numericTokens'])):
+                raise PublishDataValidationError('会议出版补充引文的表格字节、序号或覆盖结果不一致。')
+            publication_tables[position + 1] = record
     saved_reader_article = paper.get('apiReaderArticle')
     saved_reader_tables = _api_reader_markdown_tables(saved_reader_article) \
         if isinstance(saved_reader_article, str) else rendered_tables
@@ -7916,6 +7935,11 @@ def _validate_api_reader_source_bindings(paper, article=None):
             if unit_failures and index in pdf_quote_values:
                 column_units = _reader_sealed_pdf_column_unit_coverage(paper, rendered, binding)
                 unit_failures = [failure for failure in unit_failures if failure not in column_units]
+            if unit_failures and index in publication_tables:
+                units = publication_tables[index]['headerUnits']
+                unit_failures = [failure for failure in unit_failures if not any(
+                    isinstance(unit, dict) and (unit.get('row'), unit.get('column'), unit.get('value'), unit.get('unit')) == failure
+                    for unit in units)]
             if unit_failures:
                 raise PublishDataValidationError(f'第 {index} 个表格的列头单位缺少对应原文证据。')
             quote_tokens = (set(_api_reader_numeric_tokens('\n'.join(
@@ -7924,6 +7948,8 @@ def _validate_api_reader_source_bindings(paper, article=None):
                 if index in pdf_quote_values
                 else set(_api_reader_numeric_tokens('\n'.join(quote_corpus))))
             missing = set(_api_reader_numeric_tokens(rendered['markdown'])) - quote_tokens
+            if index in publication_tables:
+                missing -= set(publication_tables[index]['numericTokens'])
             if missing:
                 raise PublishDataValidationError(
                     f'第 {index} 个表格中的数字或单位未被来源引文完整覆盖：{sorted(missing)}'
@@ -7973,7 +7999,11 @@ def _validate_api_reader_source_bindings(paper, article=None):
             raise PublishDataValidationError(f'第 {index + 1} 个公式的来源记录或正文显示内容不符合要求。')
         _validate_reader_formula_source(binding, plan, structured_sha, paper.get('sourceSha256'))
         seen_ordinals.add(ordinal)
-    _validate_legacy_reader_figure_source(paper, plan, article, structured_sha, paper.get('sourceSha256'))
+    # The authenticated conference bridge checks table/formula quality here;
+    # its renderer separately verifies every official conference figure/asset.
+    # The legacy figure exception below is specific to sealed arXiv sources.
+    if publication_table_evidence is None:
+        _validate_legacy_reader_figure_source(paper, plan, article, structured_sha, paper.get('sourceSha256'))
     return {
         'contract': LLM_API_READER_SOURCE_BINDING_CONTRACT,
         'sha256': bindings_sha,

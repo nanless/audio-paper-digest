@@ -47,11 +47,14 @@ function readCompletion(state, directory, deps) {
             throw new Error('保留的会议完成凭证版本或 SHA 不一致。');
         }
     }
-    const stableItems = items => [...items].map(({ paperId, analysisRunId, sourceProof, analysisProof }) =>
-        ({ paperId, analysisRunId, sourceProof, analysisProof })).sort((a, b) => a.paperId.localeCompare(b.paperId));
+    const currentItems = Object.values(state.items);
+    const projections = new Map(currentItems.map(item => [item.paperId, completionItemProjections(item, deps)]));
     const matching = candidates.filter(receipt =>
         api.stableHash(receipt.sourceUpgradePromotion) === api.stableHash(state.sourceUpgradePromotion)
-        && api.stableHash(stableItems(receipt.items || [])) === api.stableHash(stableItems(Object.values(state.items)))
+        && Array.isArray(receipt.items) && receipt.items.length === currentItems.length
+        && new Set(receipt.items.map(item => item.paperId)).size === currentItems.length
+        && receipt.items.every(item => projections.get(item.paperId)?.some(expected =>
+            api.stableHash(expected) === api.stableHash(completionItem(item))))
         && api.stableHash(withoutImplementation(receipt.authority, state.version))
             === api.stableHash(withoutImplementation(state.authority, state.version)));
     const active = matching.find(receipt => receipt.receiptSha256 === state.completionReceiptSha256);
@@ -61,8 +64,48 @@ function readCompletion(state, directory, deps) {
     }
     // 显式实现迁移可能已更新暂存页后中断。这里只接受原分析及来源完全相同的
     // 已归档完成凭证；新页面仍须重新正常暂存、汇总、审查，不能沿用旧页面通过状态。
-    if (matching.length !== 1) throw new Error('实现迁移恢复缺少唯一的原会议完成凭证。');
-    return matching[0];
+    if (!matching.length) throw new Error('实现迁移恢复缺少与原完成稿连续链对应的会议完成凭证。');
+    if (new Set(matching.map(item => item.planReceiptSha256)).size !== 1) {
+        throw new Error('实现迁移恢复对应多个不同的原完成计划。');
+    }
+    // 全部候选均已逐项归到同一不可变父链；优先最近一层，避免重复迁移时误阻断。
+    return matching.sort((left, right) => {
+        const distance = receipt => receipt.items.reduce((sum, item) => sum + projections.get(item.paperId)
+            .findIndex(expected => api.stableHash(expected) === api.stableHash(completionItem(item))), 0);
+        return distance(left) - distance(right) || left.receiptSha256.localeCompare(right.receiptSha256);
+    })[0];
+}
+
+function completionItem({ paperId, analysisRunId, sourceProof, analysisProof }) {
+    return { paperId, analysisRunId, sourceProof, analysisProof };
+}
+function analysisProof(loaded) {
+    return { analysisSha256: loaded.analysisFileSha256,
+        completionReceiptSha256: loaded.run.completionReceipt?.receiptSha256,
+        sourceSnapshotSha256: loaded.run.sourceSnapshotSha256 };
+}
+function completionItemProjections(item, deps) {
+    const result = [completionItem(item)];
+    if (!item.readerRevision) return result;
+    let current = deps.adapter.loadConferenceReaderRevision({ analysisRoot: deps.files.conferenceAnalysisDir,
+        executionId: item.analysisRunId });
+    if (api.stableHash(current.revision) !== api.stableHash(item.readerRevision)
+        || current.run.status !== 'complete' || current.analysis.status !== 'complete'
+        || api.stableHash(analysisProof(current)) !== api.stableHash(item.analysisProof)) {
+        throw new Error('保留的会议 Reader 修订与当前成员原凭证不一致。');
+    }
+    const seen = new Set([current.run.executionId]);
+    for (let depth = 0; depth < 16; depth += 1) {
+        const parent = current.parent;
+        if (seen.has(parent.run.executionId)) throw new Error('保留的会议 Reader 修订父链循环。');
+        seen.add(parent.run.executionId);
+        result.push({ paperId: item.paperId, analysisRunId: parent.run.executionId,
+            sourceProof: item.sourceProof, analysisProof: analysisProof(parent) });
+        if (!fs.existsSync(path.join(parent.directory, 'reader-revision.json'))) return result;
+        current = deps.adapter.loadConferenceReaderRevision({ analysisRoot: deps.files.conferenceAnalysisDir,
+            executionId: parent.run.executionId });
+    }
+    throw new Error('保留的会议 Reader 修订父链超过16层。');
 }
 
 function withoutImplementation(authority, version) {
@@ -104,7 +147,7 @@ function createRetainedSourceReplay(context, deps) {
         const planHandle = withOriginalPlanFile(path.join(files.conferenceSourceLedgerDir, stem + '-plan.json'),
             receipt, deps, planFile => deps.plan.loadPlanHandle(path.join(files.conferenceRunsDir, runName),
                 path.join(files.conferenceRunsDir, found.name), planFile, imported, files.tagCatalogFile));
-        const snapshot = deps.plan.planHandleSnapshot(planHandle);
+        const snapshot = deps.plan.planHandleReadOnlyAuthority(planHandle).snapshot;
         if (snapshot.receipt.receiptSha256 !== receiptSha256) throw new Error('原会议计划的完整重放 SHA 不一致。');
         const suffix = stem.slice(prefix.length);
         if (!/^[a-f0-9]{12}$/.test(suffix)) throw new Error('原会议来源命名空间格式无效。');
@@ -124,9 +167,11 @@ function createRetainedSourceReplay(context, deps) {
     function forItem(item) {
         const loaded = deps.adapter.loadConferenceAnalysis({ analysisRoot: files.conferenceAnalysisDir,
             executionId: item.analysisRunId });
-        const proof = { analysisSha256: loaded.analysisFileSha256,
-            completionReceiptSha256: loaded.run.completionReceipt?.receiptSha256,
-            sourceSnapshotSha256: loaded.run.sourceSnapshotSha256 };
+        const proof = analysisProof(loaded);
+        if (item.readerRevision || fs.existsSync(path.join(loaded.directory, 'reader-revision.json'))) {
+            if (!item.readerRevision) throw new Error('保留的会议 Reader 子稿缺少当前成员修订凭证。');
+            completionItemProjections(item, deps);
+        }
         if (loaded.run.status !== 'complete' || loaded.analysis.status !== 'complete'
             || loaded.run.paperId !== item.paperId
             || api.stableHash(proof) !== api.stableHash(item.analysisProof)) {
@@ -134,7 +179,7 @@ function createRetainedSourceReplay(context, deps) {
         }
         const binding = loaded.source.planAuthorityBinding;
         const shared = loadPlan(binding?.planReceiptSha256);
-        const snapshot = deps.plan.planHandleSnapshot(shared.planHandle);
+        const snapshot = deps.plan.planHandleReadOnlyAuthority(shared.planHandle).snapshot;
         if (snapshot.receiptFileSha256 !== binding.planReceiptFileSha256
             || snapshot.runFileSha256 !== binding.runFileSha256
             || snapshot.receipt.import.receiptSha256 !== binding.importReceiptSha256
@@ -195,17 +240,27 @@ function verifyRetainedExtraction(item, bound, deps) {
 
 function replayCompletedPromotedShared({ context, state, directory }, deps) {
     api.assertState(state);
-    if (!state.sourceUpgradePromotion || Object.values(state.items).some(item => item.status !== 'complete')) {
-        throw new Error('只读保留来源重放仅支持全部论文已完成的来源升级进程。');
+    if (!state.sourceUpgradePromotion || Object.values(state.items).some(item => item.status !== 'complete'
+        && !(item.readerRefreshRequired === true && ['analyzing', 'analysis_partial'].includes(item.status) && item.analysisProof && item.sourceProof))) {
+        throw new Error('只读保留来源重放仅支持原已完成或受控 Reader 续写的来源升级进程。');
     }
     recovery.sourceImplementation(state, directory, api);
     const receipt = readCompletion(state, directory, deps);
     const replay = createRetainedSourceReplay(context, deps);
     const retainedSources = new Map();
-    for (const item of Object.values(state.items)) retainedSources.set(item.analysisRunId, replay.forItem(item));
+    const items = Object.values(state.items), total = items.length;
+    const progress = completed => {
+        if (typeof deps.onRetainedSourceProgress !== 'function') return;
+        try { deps.onRetainedSourceProgress({ completed, total }); } catch (_) { /* 进度通知不能改变核验结果。 */ }
+    };
+    progress(0);
+    for (const [index, item] of items.entries()) {
+        retainedSources.set(item.analysisRunId, replay.forItem(item));
+        if ((index + 1) % 100 === 0 || index + 1 === total) progress(index + 1);
+    }
     const native = replay.loadPlan(receipt.planReceiptSha256);
     return { ...native, retainedSources,
         sealed: Object.values(state.items).map(item => ({ paperId: item.paperId, proof: structuredClone(item.sourceProof) })) };
 }
 
-module.exports = { createRetainedSourceReplay, replayCompletedPromotedShared, verifyRetainedExtraction };
+module.exports = { createRetainedSourceReplay, replayCompletedPromotedShared, verifyRetainedExtraction, withOriginalPlanFile };

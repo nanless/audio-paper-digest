@@ -524,7 +524,186 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
         ...(status === 'complete' ? { analysisSha256: run.analysisSha256, productionAuthorized: true } : {}) };
 }
 
+const READER_REVISION_CONTRACT = 'conference-reader-source-revision-v1';
+let fullRevisionActive = 0;
+const fullRevisionWaiters = [];
+async function withNormalAnalysisSlot(callback) {
+    const limit = Math.max(1, Math.min(3, require('../config').ANALYSIS_CONFIG.concurrency || 3));
+    while (fullRevisionActive >= limit) await new Promise(resolve => fullRevisionWaiters.push(resolve));
+    fullRevisionActive += 1;
+    try {
+        require('./analysis-stop-control').assertMayStartRequest();
+        return await callback();
+    }
+    catch (error) {
+        if (require('./conference-process-recovery').classifyFailure(error, new Date().toISOString()).systemic) {
+            require('./analysis-stop-control').requestAnalysisStop(error.code || 'service_failure');
+        }
+        throw error;
+    }
+    finally { fullRevisionActive -= 1; fullRevisionWaiters.shift()?.(); }
+}
+function readerRevisionExecutionId(parentExecutionId, parentAnalysisFileSha256) {
+    const value = sha256(`${READER_REVISION_CONTRACT}\0${parentExecutionId}\0${parentAnalysisFileSha256}`);
+    return `${value.slice(0,8)}-${value.slice(8,12)}-4${value.slice(13,16)}-a${value.slice(17,20)}-${value.slice(20,32)}`;
+}
+function loadConferenceReaderRevision({ analysisRoot, executionId } = {}) {
+    const loaded = loadConferenceAnalysis({ analysisRoot, executionId });
+    const record = readJsonRecord(path.join(loaded.directory, 'reader-revision.json'));
+    const { revisionSha256, ...body } = record.value;
+    if (body.contract !== READER_REVISION_CONTRACT || body.version !== 1
+        || !['reader-only', 'normal-analysis'].includes(body.mode)
+        || revisionSha256 !== stableHash(body) || body.executionId !== executionId
+        || readerRevisionExecutionId(body.parentExecutionId, body.parentAnalysisFileSha256) !== executionId
+        || body.paperId !== loaded.run.paperId || body.sourceSnapshotSha256 !== loaded.run.sourceSnapshotSha256) {
+        throw new Error('会议 Reader revision 身份或 SHA 不一致');
+    }
+    const parent = loadConferenceAnalysis({ analysisRoot, executionId: body.parentExecutionId });
+    if (parent.run.status !== 'complete' || parent.analysis.status !== 'complete'
+        || parent.analysisFileSha256 !== body.parentAnalysisFileSha256
+        || parent.runFileSha256 !== body.parentRunFileSha256
+        || parent.run.paperId !== body.paperId || parent.run.sourceSnapshotSha256 !== body.sourceSnapshotSha256
+        || parent.sourceFileSha256 !== loaded.sourceFileSha256) {
+        throw new Error('会议 Reader revision 原完成稿、原来源或原凭证发生变化');
+    }
+    return { ...loaded, revision: record.value, parent };
+}
+async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHandle, sourceRoot,
+    maxAttempts = 3 } = {}, overrides = {}) {
+    if (!Number.isSafeInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 3) throw new Error('会议 revision 总轮预算必须为1至3');
+    const engine = overrides.engine || require('../analysis-engine');
+    const deep = overrides.deep || require('../deep-analyzer');
+    const parent = loadConferenceAnalysis({ analysisRoot, executionId: parentExecutionId });
+    verifyPlanAuthority(parent, planHandle, sourceRoot);
+    if (parent.run.status !== 'complete' || parent.analysis.status !== 'complete') {
+        throw Object.assign(new Error('会议 Reader revision 只接受完整签名父稿'), { retryable: false });
+    }
+    let original, upstreamIssue;
+    try {
+        original = require('./conference-postprocess').readOriginalTagProof(parent.analysis.papers[0]);
+        upstreamIssue = engine.getConferenceReaderRefreshUpstreamReason(parent.analysis.papers[0], { tagRules: original.rules });
+    } catch (error) { upstreamIssue = error.message; }
+    const fullAnalysis = Boolean(upstreamIssue) || !require('./model-text-sanitization').canReuseModelTextInputs(
+        parent.analysis.papers[0], parent.source.sourceDetails);
+    const executionId = readerRevisionExecutionId(parentExecutionId, parent.analysisFileSha256);
+    return engine.withPaperAnalysisLock({ id: parent.run.paperId }, async () => {
+        const lockedParent = loadConferenceAnalysis({ analysisRoot, executionId: parentExecutionId });
+        if (lockedParent.analysisFileSha256 !== parent.analysisFileSha256
+            || lockedParent.runFileSha256 !== parent.runFileSha256) throw new Error('会议 Reader 父稿等待锁期间改变');
+        prepareConferenceAnalysis({ analysisRoot, executionId, planHandle, sourceRoot, paperId: parent.run.paperId });
+        let loaded = loadConferenceAnalysis({ analysisRoot, executionId });
+        const filename = path.join(loaded.directory, 'reader-revision.json');
+        const seeded = { ...loaded.analysis, status: 'partial', generation: 1,
+            papers: [clone(parent.analysis.papers[0])], readerRevisionProgress: { attempts: 0, failures: [] } };
+        if (!fs.existsSync(filename)) {
+            if (loaded.analysis.status !== 'pending') throw new Error('会议 Reader revision 缺少原身份凭证');
+            const body = { contract: READER_REVISION_CONTRACT, version: 1, executionId,
+                parentExecutionId, parentAnalysisFileSha256: parent.analysisFileSha256,
+                parentRunFileSha256: parent.runFileSha256, paperId: parent.run.paperId,
+                sourceSnapshotSha256: parent.run.sourceSnapshotSha256,
+                mode: fullAnalysis ? 'normal-analysis' : 'reader-only',
+                maxAttempts,
+                seededAnalysisSha256: sha256(jsonBytes(seeded)) };
+            writeJson(filename, { ...body, revisionSha256: stableHash(body) });
+        }
+        loaded = loadConferenceReaderRevision({ analysisRoot, executionId });
+        if (loaded.revision.maxAttempts !== maxAttempts) throw new Error('会议 revision 原付费轮预算不能改变');
+        if (loaded.analysis.status === 'pending') {
+            if (sha256(jsonBytes(seeded)) !== loaded.revision.seededAnalysisSha256) throw new Error('会议 Reader revision 初始父稿不一致');
+            replaceJson(path.join(loaded.directory, 'analysis.json'), seeded, loaded.analysisFileSha256);
+            loaded = loadConferenceReaderRevision({ analysisRoot, executionId });
+        }
+        verifyPlanAuthority(loaded, planHandle, sourceRoot);
+        if (loaded.analysis.status === 'complete') {
+            const rules = require('./conference-postprocess').readOriginalTagProof(loaded.analysis.papers[0]).rules;
+            if (!engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(loaded.analysis.papers[0], { tagRules: rules })) {
+                throw Object.assign(new Error('已保存会议 Reader revision 未通过完整资格'), { retryable: false });
+            }
+            if (loaded.run.status !== 'complete') sealCompletedRun(loaded);
+            return { executionId, paperId: parent.run.paperId, status: 'complete', revision: loaded.revision,
+                analysisSha256: loaded.analysisFileSha256 };
+        }
+        const progress = loaded.analysis.readerRevisionProgress;
+        if (!progress || !Number.isSafeInteger(progress.attempts) || !Array.isArray(progress.failures)
+            || progress.attempts >= maxAttempts) throw Object.assign(new Error('会议 Reader revision 原付费预算已耗尽'),
+            { code: 'CONFERENCE_READER_REVISION_BUDGET_EXHAUSTED', retryable: false });
+        let paper = clone(loaded.analysis.papers[0]);
+        let current = { ...loaded.analysis, generation: loaded.analysis.generation + 1,
+            readerRevisionProgress: { ...progress, attempts: progress.attempts + 1 } };
+        const analysisFile = path.join(loaded.directory, 'analysis.json');
+        replaceJson(analysisFile, current, loaded.analysisFileSha256);
+        try {
+            paper = await analysisContext.withConferenceAnalysisSource({ executionId, executionDir: loaded.directory,
+                paperId: parent.run.paperId, sourceDetails: loaded.source.sourceDetails, readerRetryEpoch: 1 }, () =>
+                loaded.revision.mode === 'normal-analysis'
+                    ? withNormalAnalysisSlot(async () => {
+                        const outcome = await engine.analyzePaperWithRetry(paper, { maxRetries: 0,
+                        onCheckpoint: checkpoint => {
+                            const saved = readJsonRecord(analysisFile);
+                            replaceJson(analysisFile, { ...saved.value, papers: [checkpoint],
+                                generation: saved.value.generation + 1 }, saved.sha256);
+                        } });
+                            if (!outcome.success) {
+                                paper = outcome.result || paper;
+                                const error = Object.assign(new Error(String(outcome.error || '会议正常分析恢复失败')), {
+                                    code: outcome.code || paper.latestAnalysisAttemptErrorCode,
+                                    scope: outcome.scope || paper.latestAnalysisAttemptErrorScope || paper.errorScope,
+                                    retryable: outcome.retryable ?? paper.latestAnalysisAttemptRetryable,
+                                    category: outcome.category || paper.latestAnalysisAttemptErrorCategory || paper.errorCategory,
+                                    status: outcome.status || paper.latestAnalysisAttemptErrorStatus || paper.errorStatus });
+                                if (require('./conference-process-recovery').classifyFailure(error,
+                                    new Date().toISOString()).systemic) {
+                                    require('./analysis-stop-control').requestAnalysisStop(error.code || 'service_failure');
+                                }
+                                throw error;
+                            }
+                            return outcome.result;
+                        })
+                    : deep.refreshApiReaderArticleFromSource(paper, loaded.source.sourceDetails,
+                        { resumeSavedSourceReader: true }));
+            // Core and classification may never be rewritten by a Reader revision.
+            for (const name of ['primaryAnalysis', 'coreSummaryRepair', 'tagSelection', 'taxonomySeal']) {
+                if (loaded.revision.mode === 'reader-only' && stableHash(paper.analysisManifest?.stages?.[name] || null)
+                    !== stableHash(parent.analysis.papers[0].analysisManifest?.stages?.[name] || null)) {
+                    throw Object.assign(new Error(`Reader revision 改动了受保护原阶段：${name}`), { retryable: false });
+                }
+            }
+            const rules = require('./conference-postprocess').readOriginalTagProof(paper).rules;
+            if (!engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, { tagRules: rules })) {
+                throw new Error('会议 Reader revision 未通过正常整篇资格');
+            }
+            current = readJsonRecord(analysisFile);
+            const next = { ...current.value, papers: [paper], status: 'complete', completedAt: new Date().toISOString(),
+                generation: current.value.generation + 1, stats: { ...(current.value.stats || {}), analysisStatus: 'complete' } };
+            replaceJson(analysisFile, next, current.sha256);
+            const completed = loadConferenceReaderRevision({ analysisRoot, executionId });
+            // Consume the paid candidate only after its exact canonical bytes
+            // have survived the locked CAS, as in the ordinary batch saver.
+            if (typeof deep.commitDeferredReaderCandidateIfSaved === 'function') {
+                deep.commitDeferredReaderCandidateIfSaved(paper, completed.analysis.papers[0]);
+            }
+            sealCompletedRun(completed);
+            return { executionId, paperId: parent.run.paperId, status: 'complete', revision: loaded.revision,
+                analysisSha256: completed.analysisFileSha256 };
+        } catch (error) {
+            if (require('./conference-process-recovery').classifyFailure(error, new Date().toISOString()).systemic) {
+                require('./analysis-stop-control').requestAnalysisStop(error.code || 'service_failure');
+            }
+            current = readJsonRecord(analysisFile);
+            if (current.value.status !== 'complete') {
+                const failure = require('./conference-process-recovery').classifyFailure(error, new Date().toISOString());
+                replaceJson(analysisFile, { ...current.value, status: 'partial', papers: [paper],
+                    generation: current.value.generation + 1,
+                    readerRevisionProgress: { ...current.value.readerRevisionProgress,
+                        failures: [...current.value.readerRevisionProgress.failures, failure] } }, current.sha256);
+            }
+            error.executionId = executionId; throw error;
+        }
+    }, conferencePaperLockOptions(engine));
+}
+
 module.exports = { RUN_CONTRACT, ANALYSIS_CONTRACT, SOURCE_CONTRACT, PREPARE_INTENT_CONTRACT, VERSION, UUID_RE,
     stableHash, normalizedPaper, sourceDetails, validatePersistedSourceDetails,
     readJsonRecord, writeBytesAtomic, replaceJson, prepareArtifacts, prepareConferenceAnalysis, loadConferenceAnalysis, verifyPlanAuthority,
-    sealCompletedRun, sealCompletedRunLocked, analyzeConference };
+    sealCompletedRun, sealCompletedRunLocked, analyzeConference,
+    READER_REVISION_CONTRACT, readerRevisionExecutionId, loadConferenceReaderRevision, refreshConferenceReader };

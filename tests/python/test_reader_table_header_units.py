@@ -1,3 +1,4 @@
+import copy
 import hashlib
 import sys
 import unittest
@@ -25,6 +26,39 @@ def fixture(quote, header='WER (%)', cell='1.2'):
 
 
 class ReaderTableHeaderUnitsTest(unittest.TestCase):
+    def test_conference_publication_coverage_is_exact_and_does_not_change_original_bindings(self):
+        # The bridge's actual cold source replay is exercised separately. This
+        # checks the downstream coverage report cannot drift from original bytes.
+        paper = fixture('The WER ratio is 1.2 for method A.')
+        paper.update(source='conference', id='conference:interspeech:2026:conference-paper-id:test_interspeech')
+        original = copy.deepcopy(paper)
+        tables = publish._api_reader_markdown_tables(paper['apiReaderArticle'])
+        report = {'paperId': paper['id'],
+                  'readerArticleSha256': publish._javascript_string_sha256(paper['apiReaderArticle']),
+                  'readerPlanSha256': paper['apiReaderPlanSha256'],
+                  'tables': [{'tableIndex': index + 1,
+                              'tableSha256': publish._javascript_string_sha256(table['markdown']),
+                              'headerUnits': [{'row': 1, 'column': 1, 'value': '1.2', 'unit': '%'}] if index == 0 else [],
+                              'numericTokens': []}
+                             for index, table in enumerate(tables)]}
+        self.assertEqual(publish._validate_api_reader_source_bindings(
+            paper, publication_table_evidence=report)['tableCount'], len(tables))
+        self.assertEqual(paper, original)
+        for mutation in ('paper', 'article', 'plan', 'table', 'index', 'unit', 'cell', 'missing'):
+            bad = copy.deepcopy(report)
+            if mutation == 'paper': bad['paperId'] += '-other'
+            elif mutation == 'article': bad['readerArticleSha256'] = '0' * 64
+            elif mutation == 'plan': bad['readerPlanSha256'] = '0' * 64
+            elif mutation == 'table': bad['tables'][0]['tableSha256'] = '0' * 64
+            elif mutation == 'index': bad['tables'][0]['tableIndex'] = 2
+            elif mutation == 'unit': bad['tables'][0]['headerUnits'][0]['unit'] = 'ms'
+            elif mutation == 'cell': bad['tables'][0]['headerUnits'][0]['value'] = '9.9'
+            else: bad['tables'] = []
+            with self.subTest(mutation=mutation), self.assertRaises(publish.PublishDataValidationError):
+                publish._validate_api_reader_source_bindings(paper, publication_table_evidence=bad)
+        with self.assertRaisesRegex(publish.PublishDataValidationError, '列头单位'):
+            publish._validate_api_reader_source_bindings(paper)
+
     def test_self_consistent_old_record_cannot_borrow_header_unit(self):
         for quote, header, cell in [
             ('The WER error-to-reference-word ratio is 1.2 for A.', 'WER (%)', '1.2'),

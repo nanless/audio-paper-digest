@@ -58,12 +58,16 @@ function normalizeConceptTermDisplay(value) {
 
 function conceptTermPresent(explanation, term) {
     if (typeof explanation !== 'string' || typeof term !== 'string' || !term.trim()) return false;
-    const haystack = normalizeConceptTermDisplay(explanation), needle = normalizeConceptTermDisplay(term);
-    let index = haystack.indexOf(needle);
-    while (index >= 0) {
-        if ((!/^\d/.test(needle) || !/[\d.+\-零〇一二两三四五六七八九十百千万亿]/.test(haystack[index - 1] || ''))
-            && (!/\d$/.test(needle) || !/[\d.]/.test(haystack[index + needle.length] || ''))) return true;
-        index = haystack.indexOf(needle, index + 1);
+    // Exact code/prose spelling is already sufficient. Numeric prose spacing
+    // must not make a literal term disappear when it is wrapped in inline code.
+    for (const [haystack, needle] of [[explanation, term.trim()],
+        [normalizeConceptTermDisplay(explanation), normalizeConceptTermDisplay(term)]]) {
+        let index = haystack.indexOf(needle);
+        while (index >= 0) {
+            if ((!/^[\d一二两三四五六七八九十]/.test(needle) || !/[\d.+\-零〇一二两三四五六七八九十百千万亿]/.test(haystack[index - 1] || ''))
+                && (!/\d$/.test(needle) || !/[\d.]/.test(haystack[index + needle.length] || ''))) return true;
+            index = haystack.indexOf(needle, index + 1);
+        }
     }
     return false;
 }

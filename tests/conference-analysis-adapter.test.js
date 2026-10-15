@@ -13,6 +13,136 @@ const { productionPlanFixture } = require('./helpers/conference-production-plan-
 
 const EXECUTION = '77777777-7777-4777-8777-777777777777';
 
+test('会议 Reader 前置重放只忽略 Reader 自身，原核心、评分和标签损坏仍须正常分析', () => {
+    const { paper, tagRules } = require('./helpers/conference-readonly-qualification-fixture')
+        .completedConferenceOriginalTaxonomyFixture();
+    const engine = require('../scripts/analysis-engine');
+    paper.apiReaderArticle = 'invalid old Reader';
+    assert.equal(engine.getConferenceReaderRefreshUpstreamReason(paper, { tagRules }), null);
+    const brokenCore = structuredClone(paper);
+    brokenCore.analysisManifest.stages.coreSummaryRepair.outputAnalysisSha256 = '0'.repeat(64);
+    assert.match(engine.getConferenceReaderRefreshUpstreamReason(brokenCore, { tagRules }), /核心摘要/);
+    const brokenScore = structuredClone(paper);
+    brokenScore.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = '0'.repeat(64);
+    assert.match(engine.getConferenceReaderRefreshUpstreamReason(brokenScore, { tagRules }), /评分/);
+    assert.notEqual(engine.getConferenceReaderRefreshUpstreamReason(paper), null);
+});
+
+test('会议 Reader revision 保留原完成包，失败中断后从同一候选恢复且拒绝父链篡改', async t => {
+    const fixture = productionPlanFixture(t), analysisRoot = path.join(fixture.root, 'reader-revision');
+    adapter.prepareConferenceAnalysis({ planHandle: fixture.planHandle, paperId: fixture.paperId,
+        sourceRoot: fixture.sourceRoot, analysisRoot, executionId: EXECUTION });
+    let loaded = adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION });
+    const paper = { ...loaded.analysis.papers[0], analysis: 'paid original core',
+        paidCost: 42, apiReaderArticle: 'old paid Reader', analysisManifest: { sourceAcquisition: {
+            modelTextSanitizationContract: 'model-text-unicode-scalars-v1' }, stages: {
+            primaryAnalysis: { status: 'complete', output: 'paid primary' },
+            coreSummaryRepair: { status: 'complete', output: 'paid core' },
+            scoringAudit: { status: 'complete', audit: { paid: true } } } } };
+    adapter.replaceJson(path.join(loaded.directory, 'analysis.json'), { ...loaded.analysis,
+        status: 'complete', completedAt: '2026-10-16T00:00:00.000Z', papers: [paper] }, loaded.analysisFileSha256);
+    adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION }));
+    const originalAnalysis = fs.readFileSync(path.join(loaded.directory, 'analysis.json'));
+    const originalRun = fs.readFileSync(path.join(loaded.directory, 'run.json'));
+    const postprocess = require('../scripts/lib/conference-postprocess');
+    const originalRead = postprocess.readOriginalTagProof;
+    postprocess.readOriginalTagProof = () => ({ rules: { registrySha256: 'a'.repeat(64) } });
+    t.after(() => { postprocess.readOriginalTagProof = originalRead; });
+    let calls = 0;
+    const policy = Symbol('lock');
+    const engine = { LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY: policy,
+        withPaperAnalysisLock: async (_paper, callback, options) => {
+            assert.equal(options.recoveryPolicy, policy); return callback();
+        }, getConferenceReaderRefreshUpstreamReason: () => null,
+        isSuccessfulAnalysisRecordForReadOnlyConferencePublication: value => value.apiReaderArticle === 'new valid Reader' };
+    const deepStub = { refreshApiReaderArticleFromSource: async (value, source, options) => {
+        calls += 1; assert.equal(options.resumeSavedSourceReader, true);
+        assert.equal(context.getConferenceAnalysisSource(value).text, source.text);
+        assert.equal(value.paidCost, 42); assert.equal(value.analysis, 'paid original core');
+        if (calls === 1) { value.apiReaderFailedBundleHistory = [{ draft: 'paid failed draft', cost: 9 }];
+            throw new Error('Reader validation failed'); }
+        assert.deepEqual(value.apiReaderFailedBundleHistory, [{ draft: 'paid failed draft', cost: 9 }]);
+        value.apiReaderArticle = 'new valid Reader'; return value;
+    } };
+    const input = { analysisRoot, parentExecutionId: EXECUTION, planHandle: fixture.planHandle, sourceRoot: fixture.sourceRoot };
+    await assert.rejects(adapter.refreshConferenceReader(input, { engine, deep: deepStub }), /validation failed/);
+    const parent = adapter.loadConferenceAnalysis({ analysisRoot, executionId: EXECUTION });
+    const childId = adapter.readerRevisionExecutionId(EXECUTION, parent.analysisFileSha256);
+    let child = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: childId });
+    assert.equal(child.analysis.readerRevisionProgress.attempts, 1);
+    assert.equal(child.analysis.readerRevisionProgress.failures.length, 1);
+    assert.equal(child.analysis.status, 'partial');
+    const result = await adapter.refreshConferenceReader(input, { engine, deep: deepStub });
+    child = adapter.loadConferenceReaderRevision({ analysisRoot, executionId: result.executionId });
+    assert.equal(child.analysis.readerRevisionProgress.attempts, 2);
+    assert.equal(child.run.status, 'complete'); assert.equal(child.run.analysisSha256, child.analysisFileSha256);
+    assert.equal(result.executionId, childId); assert.equal(calls, 2);
+    await adapter.refreshConferenceReader(input, { engine, deep: deepStub }); assert.equal(calls, 2);
+    assert.deepEqual(fs.readFileSync(path.join(parent.directory, 'analysis.json')), originalAnalysis);
+    assert.deepEqual(fs.readFileSync(path.join(parent.directory, 'run.json')), originalRun);
+    const fullParentId = '66666666-6666-4666-8666-666666666666';
+    adapter.prepareConferenceAnalysis({ ...input, paperId: fixture.paperId, executionId: fullParentId });
+    const fullParent = adapter.loadConferenceAnalysis({ analysisRoot, executionId: fullParentId });
+    adapter.replaceJson(path.join(fullParent.directory, 'analysis.json'), { ...fullParent.analysis,
+        status: 'complete', completedAt: '2026-10-16T00:00:00.000Z', papers: [paper] }, fullParent.analysisFileSha256);
+    adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId: fullParentId }));
+    const fullEngine = { ...engine, getConferenceReaderRefreshUpstreamReason: () => '原核心内容不完整',
+        analyzePaperWithRetry: async (value, options) => {
+            assert.equal(options.maxRetries, 0); assert.equal(value.paidCost, 42);
+            value.analysis = 'new normally verified core'; value.apiReaderArticle = 'new valid Reader';
+            value.analysisManifest.stages.coreSummaryRepair.output = 'normal core repair';
+            options.onCheckpoint(value); return { success: true, result: value };
+        } };
+    const full = await adapter.refreshConferenceReader({ ...input, parentExecutionId: fullParentId },
+        { engine: fullEngine, deep: { refreshApiReaderArticleFromSource: () => assert.fail('upstream failure needs shared normal analysis') } });
+    assert.equal(full.revision.mode, 'normal-analysis');
+    assert.equal(adapter.loadConferenceReaderRevision({ analysisRoot, executionId: full.executionId })
+        .analysis.papers[0].analysis, 'new normally verified core');
+    const stoppedParentId = '55555555-5555-4555-8555-555555555555';
+    adapter.prepareConferenceAnalysis({ ...input, paperId: fixture.paperId, executionId: stoppedParentId });
+    const stoppedParent = adapter.loadConferenceAnalysis({ analysisRoot, executionId: stoppedParentId });
+    adapter.replaceJson(path.join(stoppedParent.directory, 'analysis.json'), { ...stoppedParent.analysis,
+        status: 'complete', completedAt: '2026-10-16T00:00:00.000Z', papers: [paper] }, stoppedParent.analysisFileSha256);
+    adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId: stoppedParentId }));
+    await assert.rejects(adapter.refreshConferenceReader({ ...input, parentExecutionId: stoppedParentId }, {
+        engine: { ...fullEngine, analyzePaperWithRetry: async value => ({ success: false, error: '当前服务不可使用',
+            result: { ...value, latestAnalysisAttemptErrorCode: 'PROVIDER_STOP', latestAnalysisAttemptErrorScope: 'run',
+                latestAnalysisAttemptRetryable: false, latestAnalysisAttemptErrorCategory: 'configuration',
+                latestAnalysisAttemptErrorStatus: 403 } }) }, deep: deepStub
+    }), error => error.scope === 'run' && error.code === 'PROVIDER_STOP' && error.retryable === false
+        && error.category === 'configuration' && error.status === 403);
+    const queuedParents = [];
+    for (let index = 0; index < 5; index += 1) {
+        const parentExecutionId = `4444444${index}-4444-4444-8444-444444444444`;
+        adapter.prepareConferenceAnalysis({ ...input, paperId: fixture.paperId, executionId: parentExecutionId });
+        const pending = adapter.loadConferenceAnalysis({ analysisRoot, executionId: parentExecutionId });
+        adapter.replaceJson(path.join(pending.directory, 'analysis.json'), { ...pending.analysis,
+            status: 'complete', completedAt: '2026-10-16T00:00:00.000Z', papers: [paper] }, pending.analysisFileSha256);
+        adapter.sealCompletedRun(adapter.loadConferenceAnalysis({ analysisRoot, executionId: parentExecutionId }));
+        queuedParents.push(parentExecutionId);
+    }
+    let normalCalls = 0;
+    const queueEngine = { ...fullEngine, analyzePaperWithRetry: async value => {
+        normalCalls += 1; const index = normalCalls;
+        await new Promise(resolve => setTimeout(resolve, index === 1 ? 20 : 80));
+        if (index === 1) return { success: false, error: '当前服务不可使用',
+            result: { ...value, latestAnalysisAttemptErrorCode: 'PROVIDER_STOP',
+                latestAnalysisAttemptErrorScope: 'run', latestAnalysisAttemptRetryable: false } };
+        value.apiReaderArticle = 'new valid Reader'; return { success: true, result: value };
+    } };
+    const stopped = await require('../scripts/lib/analysis-stop-control').withAnalysisStopControl(() =>
+        Promise.allSettled(queuedParents.map(parentExecutionId => adapter.refreshConferenceReader(
+            { ...input, parentExecutionId }, { engine: queueEngine, deep: deepStub }))));
+    assert.equal(normalCalls, 3, 'only three already started full analyses may finish');
+    assert.equal(stopped.filter(value => value.status === 'rejected'
+        && value.reason.code === 'ANALYSIS_STOP_REQUESTED').length, 2);
+    const revisionFile = path.join(child.directory, 'reader-revision.json');
+    const revision = JSON.parse(fs.readFileSync(revisionFile)); revision.parentAnalysisFileSha256 = 'b'.repeat(64);
+    const { revisionSha256, ...body } = revision; revision.revisionSha256 = adapter.stableHash(body);
+    fs.writeFileSync(revisionFile, JSON.stringify(revision));
+    assert.throws(() => adapter.loadConferenceReaderRevision({ analysisRoot, executionId: childId }), /身份或 SHA/);
+});
+
 test('旧版 PDF 矩阵和文本层 tex 永远不会变成 Reader 来源单元格或 LaTeX', () => {
     const source = { paperId: 'conference:icassp:2026:icassp-arnumber:100',
         text: 'PDF evidence text. '.repeat(400), sourceBinding: { pdfSha256: '1'.repeat(64) },

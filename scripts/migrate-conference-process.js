@@ -111,8 +111,7 @@ function migrateAndRun(options, runtime = {}) {
         const sharedContext = oldImplementation === currentImplementation
             ? context
             : { ...context, authority: { ...context.authority, implementationSha256: oldImplementation } };
-        const retained = Boolean(state.sourceUpgradePromotion)
-            && Object.values(state.items).every(item => item.status === 'complete');
+        const retained = Boolean(state.sourceUpgradePromotion);
         const shared = retained
             ? retainedSourceReplay.replayCompletedPromotedShared({ context, state, directory }, deps)
             : await (deps.prepareShared || processApi.prepareShared)(sharedContext, deps, state.createdAt);
@@ -123,10 +122,12 @@ function migrateAndRun(options, runtime = {}) {
         // 直接处理未完成的论文。
         const complete = Object.values(state.items).filter(item => item.status === 'complete');
         const stagedProofs = new Map();
+        const stageFailures = new Map();
         if (requiresMigration || lifecycleNeedsRefresh) {
             for (const item of complete) {
                 const original = shared.retainedSources?.get(item.analysisRunId);
-                const staged = deps.postprocess.stagePaper({
+                let staged;
+                try { staged = deps.postprocess.stagePaper({
                     analysisRoot: deps.files.conferenceAnalysisDir,
                     executionId: item.analysisRunId,
                     tagCatalogPath: deps.files.tagCatalogFile,
@@ -147,8 +148,20 @@ function migrateAndRun(options, runtime = {}) {
                     contentSha256: staged.manifest.contentSha256,
                     pagePath: staged.manifest.pagePath
                 });
+                } catch (error) {
+                    const failure = recovery.classifyFailure(error, deps.now());
+                    if (failure.systemic || options.reuseCompletePages) throw error;
+                    stageFailures.set(item.paperId, failure);
+                }
             }
         }
+        // Finish the complete normal postprocessing pass before granting any
+        // paid retry. An ordinary migration reports the exact failed set.
+        if (stageFailures.size && !options.retryFailed) return {
+            status: 'partial', processId: options.fromProcessId,
+            complete: complete.length - stageFailures.size, failed: stageFailures.size,
+            retryFailedRequired: true, failures: [...stageFailures].map(([paperId, failure]) => ({ paperId, ...failure }))
+        };
         if (requiresMigration || lifecycleNeedsRefresh) {
             const beforeStateSha256 = state.stateSha256;
             if (state.authority.implementationSha256 !== currentImplementation || lifecycleNeedsRefresh) {
@@ -172,6 +185,11 @@ function migrateAndRun(options, runtime = {}) {
                     next.completionReceiptSha256 = null;
                     for (const [paperId, pageProof] of stagedProofs) {
                         if (next.items[paperId]?.status === 'complete') next.items[paperId].pageProof = pageProof;
+                    }
+                    for (const [paperId, failure] of stageFailures) {
+                        next.items[paperId] = { ...next.items[paperId], status: 'analysis_partial',
+                            readerRefreshRequired: true, lastError: failure.message, lastFailure: failure,
+                            retryNotBefore: null, updatedAt: deps.now() };
                     }
                     next.updatedAt = deps.now(); next.generation = checked.generation + 1;
                     next.stateSha256 = processApi.stateDigest(next);
@@ -197,8 +215,41 @@ function migrateAndRun(options, runtime = {}) {
         }
         processApi.assertState(state, { authority: context.authority, paperIds: expectedPaperIds });
         const migrationDeps = oldImplementation === currentImplementation && !retained
-            ? deps
+            ? { ...deps }
             : { ...deps, prepareShared: async () => shared };
+        const regularProcessPaper = deps.processPaper || processApi.processOne;
+        migrationDeps.processPaper = async (currentContext, currentShared, item, actualDeps) => {
+            if (!item.readerRefreshRequired) return regularProcessPaper(currentContext, currentShared, item, actualDeps);
+            const original = currentShared.retainedSources?.get(item.analysisRunId);
+            const planHandle = original?.planHandle || currentShared.planHandle;
+            const sourceRoot = original?.sourceRoot || currentShared.sourceCacheRoot;
+            const revised = await deps.adapter.refreshConferenceReader({ analysisRoot: deps.files.conferenceAnalysisDir,
+                parentExecutionId: item.analysisRunId, planHandle, sourceRoot,
+                maxAttempts: Math.min(recovery.MAX_ATTEMPTS, deps.analysisConfig?.batchMaxRounds ?? 3) });
+            let staged;
+            try { staged = deps.postprocess.stagePaper({ analysisRoot: deps.files.conferenceAnalysisDir,
+                executionId: revised.executionId, tagCatalogPath: deps.files.tagCatalogFile,
+                stagingRoot: deps.files.conferencePageStagingDir, planHandle, sourceRoot, apply: true });
+                if (staged.status !== 'staged') throw new Error(`恢复后的会议 Reader 后处理未通过：${item.paperId}`);
+            } catch (cause) {
+                // A completed replacement cannot silently receive another paid
+                // budget merely because a later publication check rejects it.
+                throw Object.assign(new Error(`新会议修订稿已保留，后处理仍失败：${cause.message}`, { cause }),
+                    { code: 'CONFERENCE_READER_REVISION_POSTPROCESS_FAILED', retryable: false,
+                        executionId: revised.executionId });
+            }
+            if (currentShared.retainedSources) {
+                currentShared.retainedSources.delete(item.analysisRunId);
+                currentShared.retainedSources.set(revised.executionId, { ...original, planHandle, sourceRoot });
+            }
+            return { analysisRunId: revised.executionId, readerRevision: revised.revision,
+                readerRefreshRequired: false,
+                analysisProof: { analysisSha256: revised.analysisSha256,
+                    completionReceiptSha256: staged.manifest.completionReceiptSha256,
+                    sourceSnapshotSha256: staged.manifest.sourceSnapshotSha256 },
+                pageProof: { manifestSha256: staged.manifest.manifestSha256,
+                    contentSha256: staged.manifest.contentSha256, pagePath: staged.manifest.pagePath } };
+        };
         if (retained && !deps.aggregate) migrationDeps.aggregate = async (_context, currentShared, executionIds) =>
             deps.postprocess.aggregateConference({
                 analysisRoot: deps.files.conferenceAnalysisDir, executionIds,
@@ -213,7 +264,8 @@ function migrateAndRun(options, runtime = {}) {
         return processApi.runConferenceProcessLocked(options, migrationDeps, context,
             options.fromProcessId, directory);
     };
-    return deps.engine.withFileLock(operation, runLocked, {
+    return deps.engine.withFileLock(operation, () => require('./lib/analysis-stop-control')
+        .withAnalysisStopControl(runLocked), {
         recoveryPolicy: deps.engine.LOCAL_DEAD_PROCESS_OPERATION_LOCK_RECOVERY
     });
 }

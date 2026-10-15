@@ -2364,6 +2364,7 @@ module.exports = {
     assertFilterState, assertBoundInputs, safeDirectory, filterDirectory, safeDirectJson, prepareFilter, readFilter,
     writeDecisionArtifact, loadDecisionHandle, decisionHandleSnapshot, applyDecision, applyDecisionFile,
     selectionReceiptFor, normalizeSelectionReceipt, readSelectionReceipt, loadSelectionHandle, selectionHandleSnapshot,
+    stateDigest, selectionReceiptFromCheckedState,
     parseLlmDecisionText, renderDailyFilterPrompt, renderFrozenDailyFilterPrompt, conferencePromptCategories, evaluateConferenceKeywordPrefilter,
     requestEnvelope, cumulativeUsage, endpointIdentitySha256,
     buildProductionSpec, writeFilterSpec,

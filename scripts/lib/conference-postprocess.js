@@ -108,7 +108,8 @@ function validateReaderAndScoring(paper) {
         || contracts.apiReaderSourceBindings !== SOURCE_BINDINGS_CONTRACT
         || paper?.apiReaderPlan?.contract !== READER_CONTRACT
         || paper?.apiReaderPlan?.sourceBindingsContract !== SOURCE_BINDINGS_CONTRACT
-        || !analysisEngine.hasValidApiReaderV3Records(paper, { legacyConferenceResourceBindings: true })) {
+        || !analysisEngine.hasValidApiReaderV3Records(paper, { legacyConferenceResourceBindings: true,
+            conferencePublicationEvidence: true })) {
         fail('读者文章、来源绑定规则或文章与正式分析的对应记录未通过校验。');
     }
     if (scoring.status !== 'complete' || scoring.scoringContract !== SCORING_CONTRACT
@@ -119,7 +120,7 @@ function validateReaderAndScoring(paper) {
     return getPublicationUrls(paper);
 }
 function authority(planHandle, dependencies = {}) {
-    try { return (dependencies.planHandleAuthority || planApi.planHandleAuthority)(planHandle); }
+    try { return (dependencies.planHandleAuthority || planApi.planHandleReadOnlyAuthority)(planHandle); }
     catch (error) { fail(`会议后处理需要已核验的分析计划：${error.message}`); }
 }
 function planProof(planHandle, dependencies = {}) {
@@ -217,6 +218,14 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
         fail('仅提供 PDF 图像的来源不能声明已有原表单元格或 TeX 公式。');
     }
     const sourcePaper = loaded.analysis.papers[0];
+    let publicationEvidence = null;
+    if (needsPublicationEvidence(sourcePaper)) {
+        // Fixtures without real source authority cannot mint this evidence. A
+        // normal plan replay and the helper's independent source replay precede it.
+        publicationEvidence = require('./conference-reader-publication-evidence').derivePublicationEvidence({
+            loaded, planHandle, sourceRoot });
+    }
+    const qualify = () => {
     const publication = validateReaderAndScoring(sourcePaper);
     const originalTagProof = readOriginalTagProof(sourcePaper);
     const successful = dependencies.isSuccessful || analysisEngine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication;
@@ -240,7 +249,33 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
         externalId: structuredClone(sourcePaper.externalId), source: { status: 'official', url: publication.recordUrl }, citation: null });
     loaded.identity = identity; loaded.identitySha256 = identityApi.identitySha256(identity); loaded.publication = publication;
     loaded.originalTagProof = originalTagProof;
+    loaded.publicationEvidence = publicationEvidence;
     return loaded;
+    };
+    return publicationEvidence
+        ? require('./conference-reader-publication-evidence').withPublicationEvidence(publicationEvidence, qualify)
+        : qualify();
+}
+
+function needsPublicationEvidence(paper) {
+    const deep = require('../deep-analyzer.js');
+    return analysisContract.extractMarkdownTables(paper.apiReaderArticle || '').some((table, index) => {
+        const binding = paper.apiReaderPlan?.tableBindings?.[index];
+        if (binding?.sourceType !== 'source_quotes' || binding.tableIndex !== index + 1
+            || binding.renderedTableSha256 !== sha256(table.markdown) || !Array.isArray(binding.sourceQuotes)
+            || binding.sourceQuotes.some(item => item?.sourceQuoteSha256 !== sha256(item?.quote || ''))) return false;
+        if (deep.readerTableHeaderUnitEvidenceFailures(table,
+            [...binding.sourceQuotes, ...(binding.sealedPdfQuoteEvidence || [])]).length) return true;
+        return deep.readerNumericTokens(table.markdown).some(token => binding.sealedPdfQuoteEvidence
+            ? !deep.readerSourceQuotesCoverNumericToken(token, binding.sourceQuotes, binding.sealedPdfQuoteEvidence, true)
+            : !deep.readerSourceQuoteCoversNumericToken(token, binding.sourceQuotes.map(item => item.quote).join('\n'), true));
+    });
+}
+
+function withCompletedPublicationEvidence(loaded, callback) {
+    return loaded.publicationEvidence
+        ? require('./conference-reader-publication-evidence').withPublicationEvidence(loaded.publicationEvidence, callback)
+        : callback();
 }
 function getConsistentPublicationFields(paper, tagRules) {
     const parsed = paper.parsed; const reparsed = require('../utils.js').parseAnalysis(paper.analysis,
@@ -458,6 +493,8 @@ function buildConferencePageArtifacts(loaded, tagCatalog, renderFn, implementati
     const packet = { paper: { ...structuredClone(loaded.analysis.papers[0]), paper_id: loaded.run.paperId }, tagMetadata: assignment,
         tagCatalog,
         sourceText: loaded.source.sourceDetails.text,
+        ...(loaded.publicationEvidence ? { publicationEvidence: require('./conference-reader-publication-evidence')
+            .exportPublicationEvidence(loaded.publicationEvidence).descriptor } : {}),
         paper_id: loaded.run.paperId, conference: loaded.run.conference, capabilities: loaded.run.capabilities,
         publication: structuredClone(loaded.publication), date,
         figureAssets: conferenceFigureAssets(loaded),
@@ -599,7 +636,8 @@ function rejectExtraStageFiles(directory, allowed) {
 function stagePaper({ analysisRoot, executionId, tagCatalogPath, stagingRoot, planHandle, sourceRoot, apply = false, trustEvidence = false }, dependencies = {}) {
     const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
     const tagCatalog = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(tagCatalogPath);
-    const implementation = fingerprint(dependencies); const projected = buildConferencePageArtifacts(loaded, tagCatalog, dependencies.render || render, implementation);
+    const implementation = fingerprint(dependencies); const projected = withCompletedPublicationEvidence(loaded,
+        () => buildConferencePageArtifacts(loaded, tagCatalog, dependencies.render || render, implementation));
     if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('生成会议页面期间，相关实现指纹发生变化。');
     if (apply) {
         const lockRoot = fresh.assertSafeDirectory(path.join(fresh.assertSafeDirectory(stagingRoot, true), '.stage-locks'), true);
@@ -627,7 +665,8 @@ function stagePaper({ analysisRoot, executionId, tagCatalogPath, stagingRoot, pl
 function loadStage({ analysisRoot, executionId, tagCatalogPath, stagingRoot, planHandle, sourceRoot, trustEvidence = false }, dependencies = {}) {
     const loaded = loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
     const tagCatalog = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(tagCatalogPath);
-    const implementation = fingerprint(dependencies); const expected = buildConferencePageArtifacts(loaded, tagCatalog, dependencies.render || render, implementation);
+    const implementation = fingerprint(dependencies); const expected = withCompletedPublicationEvidence(loaded,
+        () => buildConferencePageArtifacts(loaded, tagCatalog, dependencies.render || render, implementation));
     if (stableHash(fingerprint(dependencies)) !== stableHash(implementation)) fail('生成会议页面期间，相关实现指纹发生变化。');
     if (expected.assignment.status !== 'assigned') fail('当前论文的标签分配尚未完成，不能读取已生成页面。');
     const directory = stageDirectory(stagingRoot, executionId, tagCatalog.registrySha256, implementation.implementationSha256); rejectExtraStageFiles(directory, ['assignment.json', 'page.md', 'manifest.json', 'assets']);

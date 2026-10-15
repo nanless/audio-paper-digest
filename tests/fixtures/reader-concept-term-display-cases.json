@@ -33,5 +33,8 @@
   {"name":"missing numeric concept is still missing","term":"六维感知轴","explanation":"总体偏好负责选择。","present":false},
   {"name":"code Chinese numeral bytes remain literal","term":"`二维`卷积","explanation":"`2维` 卷积负责编码。","present":false},
   {"name":"numeric display does not change code gaps","term":"`2维`卷积","explanation":"`2 维` 卷积负责编码。","present":false},
-  {"name":"same code with outside numeral display","term":"`token`二维卷积","explanation":"`token` 2 维卷积负责编码。","present":true}
+  {"name":"same code with outside numeral display","term":"`token`二维卷积","explanation":"`token` 2 维卷积负责编码。","present":true},
+  {"name":"partially inline code keeps exact Chinese numeric term","explanation":"`术语 1A`负责定位，术语 1B负责校对。","term":"术语 1A","present":true},
+  {"name":"inline code still refuses changed Chinese numeric term","explanation":"`术语 2A`负责定位。","term":"术语 1A","present":false},
+  {"name":"exact term matching keeps numeric boundary","explanation":"`12 维`表示输入。","term":"2 维","present":false}
 ]
