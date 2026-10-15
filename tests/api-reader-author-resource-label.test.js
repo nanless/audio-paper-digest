@@ -20,7 +20,7 @@ const authorDom = `<div class="ltx_authors">
 <span class="ltx_contact ltx_role_affiliation"><span class="ltx_contact_name">Affiliation:&nbsp;</span>Project Page: <a href="https://dsb-ifeval.github.io" title="" class="ltx_ref ltx_url ltx_font_typewriter">dsb-ifeval.github.io</a>
 </span></span></span></span></div>`;
 const domSha = '0413b82cf6348bb40ca2d887c825e937ef49774bd536b164d804cb391a3a40a2';
-const unavailable = '机构信息未在 arXiv HTML 中可靠披露';
+const unavailable = '机构信息未能在本次解析中与作者逐人可靠绑定';
 const expected = [
     { name: 'Puneet Mathur', affiliations: ['University of Maryland College Park, USA'] },
     { name: 'Dinesh Manocha', affiliations: [unavailable] }

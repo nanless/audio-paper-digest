@@ -46,5 +46,5 @@ test('校验位不对、不是末尾的编号和机构中的普通数字保持�
         sourceDomSha256: 'b'.repeat(64), authors: [{ name: 'Alice Brown', affiliations: ['0000-0001-8996-0793'] }]
     } };
     assert.deepEqual(authors.resolveApiReaderAuthors({ authors: ['Alice Brown'] }, details).authors,
-        [{ name: 'Alice Brown', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] }]);
+        [{ name: 'Alice Brown', affiliations: ['机构信息未能在本次解析中与作者逐人可靠绑定'] }]);
 });

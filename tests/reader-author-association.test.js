@@ -8,7 +8,7 @@ const {
     bindApiReaderAuthorIdentity
 } = require('../scripts/deep-analyzer.js');
 
-const unknown = '机构信息未在 arXiv HTML 中可靠披露';
+const unknown = '机构信息未能在本次解析中与作者逐人可靠绑定';
 function source(html) {
     const $ = cheerio.load(html);
     return {

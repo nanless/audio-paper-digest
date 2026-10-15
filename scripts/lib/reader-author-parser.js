@@ -3,6 +3,8 @@
 const crypto = require('node:crypto');
 const cheerio = require('cheerio');
 const API_READER_AUTHOR_IDENTITY_CONTRACT = 'api-reader-author-identity-v1';
+// 解析或逐人关联失败不能推断论文没有披露机构；旧提示语仍按原签名只读兼容。
+const READER_AFFILIATION_UNBOUND = '机构信息未能在本次解析中与作者逐人可靠绑定';
 const recoverySha256 = value => /^[a-f0-9]{64}$/.test(String(value || ''));
 const stableFingerprint = value => sha256(JSON.stringify(canonical(value)));
 const MAX_AUTHOR_SOURCE_HTML_BYTES = 8 * 1024 * 1024;
@@ -277,7 +279,7 @@ function parseArxivReaderAuthors($) {
         name: item.name,
         affiliations: item.affiliations.length > 0
             ? item.affiliations
-            : ['机构信息未在 arXiv HTML 中可靠披露']
+            : [READER_AFFILIATION_UNBOUND]
     }));
     const sourceNodes = wrapper.length
         ? [$.html(wrapper), ...thanksAffiliations.sourceNodes].filter(Boolean).join('\n')
@@ -323,7 +325,7 @@ function resolveApiReaderAuthors(paper, sourceDetails) {
         ? '机构信息未能从会议 PDF 纯文本可靠映射'
         : sourceDetails?.analysisSource === 'pdf' || sourceDetails?.source === 'pdf'
             ? '机构信息未能从 arXiv PDF 文本可靠映射'
-            : '机构信息未在 arXiv HTML 中可靠披露';
+            : READER_AFFILIATION_UNBOUND;
     if (parsed && Array.isArray(parsed.authors) && parsed.authors.length > 0
         && recoverySha256(parsed.sourceDomSha256)) {
         if (names.length === 0) names = parsed.authors.map(author => normalizeName(author?.name)).filter(Boolean);
@@ -563,6 +565,7 @@ function resolveVerifiedReaderAuthors(paper, details) {
 }
 
 const EXPLICIT_UNAVAILABLE_AFFILIATIONS = new Set([
+    READER_AFFILIATION_UNBOUND,
     '机构信息未在 arXiv HTML 中可靠披露',
     '机构信息未能从 arXiv PDF 文本可靠映射',
     '机构信息未能从会议 PDF 纯文本可靠映射',

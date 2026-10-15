@@ -33,7 +33,7 @@ test('完整原始 HTML、结构化数据和全文 SHA 一致后，才重新解�
     assert.equal(sha256(details.text), details.structuredArtifacts.flattenedTextSha256);
     assert.deepEqual(deep.resolveApiReaderAuthors({ authors: ['Charlie Green'] }, {
         ...details, readerAuthors: replayed
-    }).authors, [{ name: 'Charlie Green', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] }]);
+    }).authors, [{ name: 'Charlie Green', affiliations: ['机构信息未能在本次解析中与作者逐人可靠绑定'] }]);
 });
 
 test('旧数组内部一致也不能替代原始作者来源，错误 HTML、全文或结构化数据均拒绝', () => {
@@ -87,10 +87,56 @@ test('实际作者刷新按原HTML重建，无原HTML保留元数据姓名并明
         deep.refreshApiReaderAuthorsFromSource(paper, details);
         assert.deepEqual(paper.apiReaderAuthors.authors, [{
             name: 'Alice Brown',
-            affiliations: [originalAvailable ? 'University A' : '机构信息未在 arXiv HTML 中可靠披露']
+            affiliations: [originalAvailable ? 'University A' : '机构信息未能在本次解析中与作者逐人可靠绑定']
         }]);
         assert.equal(parser.readerAuthorIdentityMatchesSource(paper, details), true);
         assert.equal(paper.analysisManifest.sourceAcquisition.sourceSha256, sha256(details.text));
+    }
+});
+
+test('来源已有机构但作者集合解析失败，只报告本次无法逐人绑定，不声称原文未披露', () => {
+    const details = source();
+    const before = structuredClone(details);
+    const result = parser.resolveVerifiedReaderAuthors({ authors: ['Charlie Green'] }, details);
+    assert.deepEqual(result.authors, [{ name: 'Charlie Green',
+        affiliations: ['机构信息未能在本次解析中与作者逐人可靠绑定'] }]);
+    assert.equal(result.identity.authors[0].nameBinding.sourceKind, 'paper_metadata');
+    assert.equal(result.identity.authors[0].affiliationBindings[0].sourceKind, 'explicit_unavailable');
+    assert.equal(result.identity.authors[0].affiliationBindings[0].sourceTextSha256, sha256(details.text));
+    assert.deepEqual(details, before);
+});
+
+test('旧已签不可得提示仍按原姓名和来源重放，不重写旧作者字段或借机接纳篡改', () => {
+    const stable = require('../scripts/lib/fresh-rewrite-run').stableHash;
+    for (const legacy of ['机构信息未在 arXiv HTML 中可靠披露',
+        '机构信息未能从 arXiv PDF 文本可靠映射', '机构信息未能从会议 PDF 纯文本可靠映射',
+        '机构信息未在会议 PDF 中可靠披露', '机构信息未可靠披露']) {
+        const details = source();
+        const paper = { authors: ['Charlie Green'], sourceSha256: sha256(details.text),
+            analysisManifest: { sourceAcquisition: { sourceSha256: sha256(details.text),
+                structuredArtifactsSha256: details.structuredArtifacts.payloadSha256 },
+            stages: { apiReaderArticle: { structuredArtifactsSha256: details.structuredArtifacts.payloadSha256 } } } };
+        // 构造原协议的历史签名夹具；生产旧记录不能这样补签或改写。
+        paper.apiReaderAuthors = parser.bindApiReaderAuthorIdentity(paper, { ...details, readerAuthors: null }, {
+            authors: [{ name: 'Charlie Green', affiliations: [legacy] }], sourceDomSha256: sha256(details.text)
+        });
+        const stage = paper.analysisManifest.stages.apiReaderArticle;
+        stage.readerAuthorIdentitySha256 = paper.apiReaderAuthors.identitySha256;
+        stage.readerAuthorsSha256 = stable(paper.apiReaderAuthors);
+        const before = structuredClone(paper);
+        assert.equal(parser.readerAuthorIdentityMatchesSource(paper, details), true, legacy);
+        assert.deepEqual(paper, before);
+        for (const mutate of [
+            target => { target.apiReaderAuthors.authors[0].affiliations[0] = '机构信息未核实的任意提示'; },
+            target => { target.authors[0] = 'Wrong Author'; },
+            target => { target.analysisManifest.stages.apiReaderArticle.readerAuthorsSha256 = 'f'.repeat(64); },
+            target => { target.sourceSha256 = 'f'.repeat(64); }
+        ]) {
+            const changed = structuredClone(paper); mutate(changed);
+            assert.equal(parser.readerAuthorIdentityMatchesSource(changed, details), false);
+        }
+        const modifiedSource = { ...details, text: details.text + ' altered' };
+        assert.equal(parser.readerAuthorIdentityMatchesSource(paper, modifiedSource), false);
     }
 });
 

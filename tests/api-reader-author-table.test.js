@@ -65,7 +65,7 @@ describe('API Reader 显式的作者表身份', () => {
     it('保留现有作者元数据的优先级，机构一变证明就变', () => {
         const withMetadata = '<meta name="citation_author" content="Metadata Author">' + authorTable;
         assert.deepEqual(parseArxivReaderAuthors(cheerio.load(withMetadata)).authors, [
-            { name: 'Metadata Author', affiliations: ['机构信息未在 arXiv HTML 中可靠披露'] }
+            { name: 'Metadata Author', affiliations: ['机构信息未能在本次解析中与作者逐人可靠绑定'] }
         ]);
         const before = parseArxivReaderAuthors(cheerio.load(authorTable));
         const after = parseArxivReaderAuthors(cheerio.load(authorTable.replace('University of Hamburg', 'University of Example')));
