@@ -11,14 +11,35 @@ def need(ok, why):
 def sha(value): return hashlib.sha256(value).hexdigest()
 def stable(value): return sha(json.dumps(value,ensure_ascii=False,sort_keys=True,separators=(',',':')).encode())
 def norm(value):
+    value=re.sub(r'^Table\s*(\d+)\s*[.:]',r'Table\1:',value)
+    value=re.sub(r'(?<![A-Za-z0-9_.])([-+]?\d+(?:\.\d+)?)\s*±\s*(\d+(?:\.\d+)?)(?![A-Za-z0-9_.])',r'\1±\2',value)
     return re.sub(r'\s+',' ',value.replace('∆','Δ').replace('→',' → ')).strip()
 def compact(value): return re.sub(r'\s+','',norm(value))
 def header_norm(value):
     # Explicit same-symbol HTML/TeX duplicate, never number/unit conversion.
-    return compact(value).replace('Δ\\Delta','Δ')
+    return compact(value).replace('Δ\\Delta','Δ').replace('↑\\uparrow','↑').replace('↓\\downarrow','↓')
 def center(word): return ((word[0]+word[2])/2,(word[1]+word[3])/2)
+# Only the literal same ± marker plus its explicit TeX duplicate may project.
+# Mean, uncertainty sign and precision remain exact; no rescaling or rounding.
+def numeric_surface(value):
+    return compact(value).replace('±\\pm','±')
+MEAN_SD = re.compile(r'([-+]?\d+(?:\.\d+)?)±(\d+(?:\.\d+)?)\Z')
+def numeric_source_equal(source,view):
+    if NUM.fullmatch(source): return view==source
+    return MEAN_SD.fullmatch(numeric_surface(source)) is not None and numeric_surface(source)==numeric_surface(view)
 NUM = re.compile(r'[-+]?\d+(?:\.\d+)?\Z')
 UNIT = re.compile(r'(.+?)(?:\(\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\)|\[\s*(%|dB|ms|s|h|Hz|kHz|MHz|GB|MB|KB|pp)\s*\])\Z',re.I)
+def ordered_cell_words(values):
+    # A superscript footnote on a single printed line must not precede its label.
+    single_line=max(center(w)[1] for w in values)-min(center(w)[1] for w in values)<=3
+    return sorted(values,key=(lambda w:w[0]) if single_line else (lambda w:(round(center(w)[1]/3),w[0])))
+def bounded_column_boundaries(choices,left,right):
+    # Explore every complete grid, never select a preferred/widest gap.
+    count=1
+    for options in choices:
+        need(options,'column_boundary_missing');count*=len(options)
+        need(count<=64,'column_boundary_combinations_exceed_64')
+    return [[left,*middle,right] for middle in itertools.product(*choices)]
 def source_grid(table):
     matrix=table.get('matrix'); need(isinstance(matrix,list) and 2<=len(matrix)<=65,'source_matrix_missing')
     width=len(matrix[0]);need(2<=width<=16 and all(isinstance(row,list) and len(row)==width and all(isinstance(v,str) for v in row) for row in matrix),'source_matrix_not_complete')
@@ -35,14 +56,14 @@ def table_proofs(doc,table,view):
     matrix,width=source_grid(table)
     need(len(view)==len(matrix) and all(len(row)==width for row in view),'view_shape_changed')
     need(all(header_norm(a)==header_norm(b) for a,b in zip(matrix[0],view[0])),'view_header_changed')
-    numeric=[c for c in range(width) if all(NUM.fullmatch(row[c]) for row in matrix[1:])]
-    units={c:UNIT.fullmatch(norm(view[0][c])) for c in numeric};units={c:m.group(2) or m.group(3) for c,m in units.items() if m}
+    numeric=[c for c in range(width) if all(NUM.fullmatch(row[c]) or MEAN_SD.fullmatch(numeric_surface(row[c])) for row in matrix[1:])]
+    units={c:UNIT.fullmatch(re.sub(r'\s*[↑↓]$','',norm(view[0][c]))) for c in numeric};units={c:m.group(2) or m.group(3) for c,m in units.items() if m}
     need(units,'no_literal_numeric_unit_column')
-    need(all(view[r][c]==matrix[r][c] for r in range(1,len(matrix)) for c in numeric),'source_numeric_coordinate_changed')
+    need(all(numeric_source_equal(matrix[r][c],view[r][c]) for r in range(1,len(matrix)) for c in numeric),'source_numeric_coordinate_changed')
     captions=[(page,b) for page in doc for b in page.get_text('blocks') if compact(b[4])==compact(table['caption'])]
     need(len(captions)==1,'caption_not_unique')
     page,caption=captions[0];all_words=page.get_text('words')
-    rules=sorted([list(d['rect']) for d in page.get_drawings() if d['rect'].height<1 and d['rect'].width>40],key=lambda x:x[1]);results={}
+    rules=sorted([list(d['rect']) for d in page.get_drawings() if d['rect'].height<1 and d['rect'].width>40],key=lambda x:x[1]);results={};edge_combinations=0
     for top,separator,bottom in itertools.combinations(rules,3):
         if not all(abs(r[0]-top[0])<.1 and abs(r[2]-top[2])<.1 for r in [separator,bottom]):continue
         above=0<=top[1]-caption[3]<=40;below=0<=caption[1]-bottom[1]<=40
@@ -59,39 +80,44 @@ def table_proofs(doc,table,view):
         for a,b in sorted((w[0],w[2]) for w in words):
             if merged and a<=merged[-1][1]:merged[-1][1]=max(b,merged[-1][1])
             else:merged.append([a,b])
-        gaps=[(a[1],b[0]) for a,b in zip(merged,merged[1:])];edges=[top[0]]
+        gaps=[(a[1],b[0]) for a,b in zip(merged,merged[1:])]
+        choices=[]
         for left,right in zip(hc,hc[1:]):
             candidates=[g for g in gaps if g[0]>=max(w[2] for w in left) and g[1]<=min(w[0] for w in right)]
-            if len(candidates)!=1:break
-            edges.append(sum(candidates[0])/2)
-        if len(edges)!=width:continue
-        edges.append(top[2]);body=[w for w in words if center(w)[1]>separator[1]]
-        for anchor_col in range(1,width):
-            anchors=sorted([w for w in body if edges[anchor_col]<center(w)[0]<edges[anchor_col+1]],key=lambda w:center(w)[1])
-            if len(anchors)!=len(matrix)-1:continue
-            ys=[center(w)[1] for w in anchors]
-            if any(b-a<6 for a,b in zip(ys,ys[1:])):continue
-            rowedges=[separator[1]]+[(a+b)/2 for a,b in zip(ys,ys[1:])]+[bottom[1]]
-            projected=[[' '.join(w[4] for w in c) for c in hc]];cells=[{'row':0,'column':c,'words':[list(w[:5]) for w in values]} for c,values in enumerate(hc)]
-            valid=True
-            for r in range(len(anchors)):
-                row=[]
-                for c in range(width):
-                    values=[w for w in body if rowedges[r]<center(w)[1]<rowedges[r+1] and edges[c]<center(w)[0]<edges[c+1]]
-                    if not values:valid=False;break
-                    values=sorted(values,key=lambda w:(round(center(w)[1]/3),w[0]));row.append(' '.join(w[4] for w in values));cells.append({'row':r+1,'column':c,'words':[list(w[:5]) for w in values]})
-                if not valid:break
-                projected.append(row)
-            if not valid or any(norm(a)!=norm(b) for row,want in zip(projected,view) for a,b in zip(row,want)):continue
-            used=[tuple(w) for cell in cells for w in cell['words']]
-            if len(used)!=len(words) or len(set(used))!=len(words):continue
-            if any(max(w[2] for cell in cells if cell['column']==c for w in cell['words'])>=min(w[0] for cell in cells if cell['column']==c+1 for w in cell['words']) for c in range(width-1)):continue
-            for cell in cells:
-                original=next(c for c in table['cells'] if c['row']==cell['row'] and c['column']==cell['column'])
-                cell.update(sourceDomSha256=original['sourceDomSha256'],sourceHtmlText=original['text'],pdfText=projected[cell['row']][cell['column']],valueOrigin='sealed_pdf')
-            proof={'page':page.number+1,'bbox':[top[0],top[1],top[2],bottom[1]],'caption':caption[4],'columnBoundaries':edges,'rowBoundaries':rowedges,'displayMatrix':projected,'cells':cells,'wordBoxCount':len(words),'units':[{'column':c,'unit':unit.lower(),'values':[view[r][c] for r in range(1,len(view))]} for c,unit in units.items()]}
-            key=stable({k:v for k,v in proof.items() if k!='rowBoundaries'})
-            results.setdefault(key,proof)
+            if not candidates:break
+            choices.append([sum(g)/2 for g in candidates])
+        if len(choices)!=width-1:continue
+        combinations=bounded_column_boundaries(choices,top[0],top[2])
+        edge_combinations+=len(combinations)
+        need(edge_combinations<=64,'column_boundary_combinations_exceed_64')
+        for edges in combinations:
+            body=[w for w in words if center(w)[1]>separator[1]]
+            for anchor_col in range(1,width):
+                anchors=sorted([w for w in body if edges[anchor_col]<center(w)[0]<edges[anchor_col+1]],key=lambda w:center(w)[1])
+                if len(anchors)!=len(matrix)-1:continue
+                ys=[center(w)[1] for w in anchors]
+                if any(b-a<6 for a,b in zip(ys,ys[1:])):continue
+                rowedges=[separator[1]]+[(a+b)/2 for a,b in zip(ys,ys[1:])]+[bottom[1]]
+                projected=[[' '.join(w[4] for w in c) for c in hc]];cells=[{'row':0,'column':c,'words':[list(w[:5]) for w in values]} for c,values in enumerate(hc)]
+                valid=True
+                for r in range(len(anchors)):
+                    row=[]
+                    for c in range(width):
+                        values=[w for w in body if rowedges[r]<center(w)[1]<rowedges[r+1] and edges[c]<center(w)[0]<edges[c+1]]
+                        if not values:valid=False;break
+                        values=ordered_cell_words(values);row.append(' '.join(w[4] for w in values));cells.append({'row':r+1,'column':c,'words':[list(w[:5]) for w in values]})
+                    if not valid:break
+                    projected.append(row)
+                if not valid or any(norm(a)!=norm(b) for row,want in zip(projected,view) for a,b in zip(row,want)):continue
+                used=[tuple(w) for cell in cells for w in cell['words']]
+                if len(used)!=len(words) or len(set(used))!=len(words):continue
+                if any(max(w[2] for cell in cells if cell['column']==c for w in cell['words'])>=min(w[0] for cell in cells if cell['column']==c+1 for w in cell['words']) for c in range(width-1)):continue
+                for cell in cells:
+                    original=next(c for c in table['cells'] if c['row']==cell['row'] and c['column']==cell['column'])
+                    cell.update(sourceDomSha256=original['sourceDomSha256'],sourceHtmlText=original['text'],pdfText=projected[cell['row']][cell['column']],valueOrigin='sealed_pdf')
+                proof={'page':page.number+1,'bbox':[top[0],top[1],top[2],bottom[1]],'caption':caption[4],'columnBoundaries':edges,'rowBoundaries':rowedges,'displayMatrix':projected,'cells':cells,'wordBoxCount':len(words),'units':[{'column':c,'unit':unit.lower(),'values':[view[r][c] for r in range(1,len(view))]} for c,unit in units.items()]}
+                key=stable({k:v for k,v in proof.items() if k!='rowBoundaries'})
+                results.setdefault(key,proof)
     need(len(results)==1,'complete_matrix_geometry_not_unique:'+str(len(results)))
     return next(iter(results.values()))
 
