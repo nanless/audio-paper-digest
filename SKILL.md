@@ -23,6 +23,8 @@
 
 Reader-only 纠错完成后，使用原父包与子包的实际签发上下文只读核验；此检查不能写包或发模型请求。旧父恢复先检查完整主分析，保存前阻断非 Reader 上游变化，错误则还原内存。不能为了恢复 Reader 删除或重签原摘要、评分和标签，详见[事实反馈恢复](docs/reader-explicit-retry.md#已完成主文的独立-reader-事实反馈)。
 
+只修核心摘要时，使用 `reanalyzeSelected(ids, { coreFeedbackFiles })`：锁内先归档原反馈包，再独立进入核心单节范围。没有主文父反馈时，不能把核心包当成自己的父包；普通续跑仍恢复原单节范围，禁止主文模型。核心阶段逐字保护其余十二节，随后正常复核八维评分及必要 Reader，保留全部旧历史、次数和费用。
+
 ```bash
 npm run digest:prepare -- YYYY-MM-DD
 # 仅用户已明确取消视觉时：npm run digest:prepare -- YYYY-MM-DD --no-visuals

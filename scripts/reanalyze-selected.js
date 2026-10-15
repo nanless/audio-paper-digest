@@ -82,6 +82,8 @@ async function reanalyzeSelected(ids, options = {}) {
     const fileSha = file => require('node:crypto').createHash('sha256').update(fs.readFileSync(file)).digest('hex');
     for (const file of options.coreFeedbackFiles || []) {
         const feedback = factReview.readFeedback(file);
+        if (!require('./lib/saved-fact-feedback').coreOnlyFeedback(feedback))
+            throw new Error('独立核心反馈不能授权主文、Reader、评分或标签修改');
         if (!idSet.has(feedback.paperId) || coreFeedbacks.has(feedback.paperId)) throw new Error('核心反馈须属于唯一选定论文');
         const paper = papers.find(item => normalizedId(item) === feedback.paperId);
         if (!paper || paper.analysisManifest?.stages?.primaryAnalysis?.status !== 'complete') throw new Error('核心反馈须保留已完成主分析');
@@ -303,8 +305,14 @@ async function reanalyzeSelected(ids, options = {}) {
             const bound = boundFeedbacks.get(normalizedId(paper));
             const core = readCoreLocked(paper);
             const reader = readReaderLocked(paper);
-            const execute = () => core ? factReview.withCoreSummaryFactReview(core, paper, analyze)
-                : reader ? factReview.withReaderFactReview(reader, paper, analyze) : analyze();
+            const execute = () => {
+                if (core) {
+                    // 锁内核验过的原包先交公共保存器封存；不能把同一核心包当作主文父包。
+                    factReview.withFactReview(core, () => undefined);
+                    return factReview.withCoreSummaryFactReview(core, paper, analyze);
+                }
+                return reader ? factReview.withReaderFactReview(reader, paper, analyze) : analyze();
+            };
             return bound ? factReview.withFactReview(bound, execute) : execute();
         },
         onPaperResultLocked: async (paper, result) => {

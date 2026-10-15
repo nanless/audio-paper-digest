@@ -94,6 +94,147 @@ async function createReviewedReaderSample(t, options = {}) {
 }
 
 const saved = require('../scripts/lib/saved-fact-feedback');
+
+test('无主文父包的核心纠错正常保存后跨作用域重放、完成判定与普通续跑闭环', async t => {
+    const sample = await createReviewedReaderSample(t, { sourceText:
+        'Table 1 reports word error rate (WER) of 9.8% for our method versus 12.4% for the baseline and 10.8% without the context module under the same public test protocol.\n'
+        + 'The source reports server inference measurements; edge latency is not evaluated.\n'
+        + 'Additional method evidence describes experimental conditions and evaluation protocols. '.repeat(100) });
+    const paper = sample.paper;
+    paper.title = '单节恢复测试论文';
+    const method = [
+        '输入波形先按统一采样条件转换为时频特征，编码器沿时间轴提取局部声学表示并保持每个帧位置与原始音频相对应，避免后续模块把不同时间的观测错误拼接。',
+        '上下文模块以这些编码表示为输入，融合相邻帧与较远片段之间的关联，并将局部信息和全局条件送给同一解码器，输出按顺序排列的文字预测，训练损失负责约束每个输出位置。',
+        '训练阶段先固定数据划分和噪声条件，再联合优化编码器与上下文参数，评测阶段保持输入接口和解码顺序一致，通过完整系统与移除组件的对照区分模块贡献和额外计算代价。'
+    ].map(paragraph => paragraph.repeat(4)).join('\n\n');
+    paper.analysis = deep.mergeSectionByTitle(paper.analysis, '方法概述和架构', method);
+    paper.analysis = deep.mergeSectionByTitle(paper.analysis, '实验结果',
+        '下表比较同一公开语音测试协议下完整方法、基线与移除上下文组件的设置，词错误率越低越好，用来检验模块是否带来净收益。\n\n'
+        + '| 方法 | WER ↓ |\n| --- | ---: |\n| 基线 | 12.4% |\n| 完整方法 | 9.8% |\n| 移除上下文 | 10.8% |\n\n'
+        + '完整方法相较基线降低词错误率，而移除上下文组件后收益变小，这只说明当前公开数据与噪声条件下的组件贡献，尚不能推断跨语言或端侧部署效果。');
+    paper.parsed = requestApi.parseAnalysis(paper.analysis);
+    const currentFixture = validAnalysisPaper(paper.arxivId, {}, paper.analysis);
+    for (const name of ['structureRepair', 'taxonomySeal', 'coreSummaryRepair'])
+        paper.analysisManifest.stages[name] = currentFixture.analysisManifest.stages[name];
+    delete paper.analysisManifest.stages.apiReaderArticle.factReview;
+    paper.analysisManifest.stages.apiReaderArticle.reviewFeedbackSha256 = null;
+    Object.assign(paper.analysisManifest.sourceAcquisition, {
+        analysisSource: 'html', sourceId: sample.source.sourceId,
+        usedTextSha256: facts.sha(deep.buildTaskEvidenceContext(sample.source.text,
+            Config.ANALYSIS_CONFIG.fullTextMaxChars, undefined, 'PRIMARY'))
+    });
+    await daily.withDailyFreshAnalysisContext(sample.plan, () => fresh.withFreshPaperContext(paper, () =>
+        require('./helpers/normal-reader-parent-fingerprints').installCurrentParentFingerprints(paper, sample.source)));
+    paper.paidResponseHistory = [{ responseId: 'original-paid-core-parent', totalTokens: 42 }];
+    const original = structuredClone(paper);
+    const oldSummary = deep.extractSectionByTitle(paper.analysis, '核心摘要');
+    const rejected = '论文也未报告端侧推理延迟';
+    assert.ok(oldSummary.includes(rejected));
+    const fixedSummary = oldSummary.replace(rejected, '论文报告了服务端推理延迟，但端侧条件尚待验证');
+    const feedback = { ...sample.feedback, coreAnalysisSha256: facts.sha(paper.analysis),
+        coreSummarySha256: facts.sha(oldSummary), primaryFeedback: '', rejectedPrimaryClaims: [],
+        readerFeedback: '', rejectedReaderClaims: [], coreFeedback: '只纠正摘要中的端侧成本缺失概括，保留摘要外十二节；随后正常复核评分。',
+        rejectedCoreClaims: [rejected] };
+    const file = path.join(sample.plan.runDir, 'standalone-core.json');
+    fs.writeFileSync(file, JSON.stringify(feedback));
+    const keys = ['deepAnalysisResult', 'filteredPapers', 'papers', 'papersLegacy', 'llmUsageDir'];
+    const previous = Object.fromEntries(keys.map(key => [key, Config.FILES[key]]));
+    t.after(() => Object.assign(Config.FILES, previous));
+    for (const key of keys) Config.FILES[key] = path.join(sample.plan.runDir, 'standalone-' + key + '.json');
+    const payload = { batchDate: sample.plan.batchDate, batchId: sample.plan.batchId,
+        dailyFreshSourceRun: daily.dailyFreshSourceReference(sample.plan), papers: [paper] };
+    fs.writeFileSync(Config.FILES.deepAnalysisResult, JSON.stringify(payload));
+    fs.writeFileSync(Config.FILES.filteredPapers, JSON.stringify({ ...payload, status: 'complete',
+        papers: [{ arxivId: paper.arxivId, authors: paper.authors, title: '单节恢复测试论文' }] }));
+    for (const key of ['papers', 'papersLegacy']) fs.writeFileSync(Config.FILES[key], JSON.stringify({ papers: {} }));
+    const audit = {
+        documentType: '方法研究', confidence: '高', evidenceProfile: {
+            version: 1, multiComponentClaimed: false, ablationStatus: 'not_applicable',
+            targetEvaluation: 'public', sampleScaleReported: true, deploymentMeasured: false,
+            publicGeneralizationEvaluated: false, engineeringEvidence: 'claim_only',
+            evidenceBoundary: '[A_RESULTS] 同协议受控比较存在，但未报告实际端侧部署测量。',
+            evidenceIds: ['A_METHOD', 'A_RESULTS']
+        }, dimensions: Object.fromEntries([
+            ['innovation', 1.5], ['technicalRigor', 1.2], ['experimentalSufficiency', 1.1], ['clarity', .8],
+            ['impact', 1], ['openSource', 0], ['reproducibility', .3], ['engineering', 1]
+        ].map(([key, score]) => [key, { score, reason: '[A_METHOD] 组件与实验流程有公开说明，本维仅评价这些可核对的研究证据。' }]))
+    };
+    const requests = [];
+    const exterior = require('../scripts/analysis-contract').hashAnalysisWithMaskedCoreSummary;
+    const generatedReaderDraft = require('./reader-signed-draft-fixture').fixture({
+        noFigures: true, sourceText: sample.source.text
+    }).draft;
+    publicReaderRequestObserver = async (_url, _endpoint, _model, _body, _headers, options) => {
+        const stage = options.usageContext.stage; requests.push(stage);
+        assert.ok(['coreSummaryRepair', 'scoringAudit', 'apiReaderArticle'].includes(stage), stage);
+        if (stage === 'scoringAudit') {
+            const savedCore = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[0].analysisCheckpoint;
+            assert.equal(exterior(savedCore), exterior(original.analysis), '正常摘要阶段保存前逐字保护另外十二节');
+            assert.equal(deep.extractSectionByTitle(savedCore, '核心摘要'), fixedSummary);
+        }
+        const output = stage === 'coreSummaryRepair' ? '## 核心摘要\n' + fixedSummary
+            : stage === 'scoringAudit' ? JSON.stringify(audit)
+                : JSON.stringify(generatedReaderDraft);
+        return { statusCode: 200, body: { status: 'completed', output: [{ type: 'message', role: 'assistant',
+            content: [{ type: 'output_text', text: output }] }] } };
+    };
+    t.after(() => { publicReaderRequestObserver = null; });
+    const selected = require('../scripts/reanalyze-selected');
+    const beforeInvalid = fs.readFileSync(Config.FILES.deepAnalysisResult);
+    const mixed = { ...feedback, readerFeedback: '不应夹带的Reader改写授权', rejectedReaderClaims: ['无权改写Reader'] };
+    fs.writeFileSync(file, JSON.stringify(mixed));
+    await assert.rejects(selected.reanalyzeSelected([sample.id], { coreFeedbackFiles: [file] }), /不能授权/);
+    assert.deepEqual(fs.readFileSync(Config.FILES.deepAnalysisResult), beforeInvalid);
+    assert.equal(fs.existsSync(path.join(daily.factFeedbackDirectory(sample.plan), facts.proofFor(mixed).feedbackSha256 + '.json')), false);
+    assert.equal(requests.length, 0);
+    fs.writeFileSync(file, JSON.stringify(feedback));
+    const outcome = await selected.reanalyzeSelected([sample.id], { coreFeedbackFiles: [file] });
+    assert.equal(outcome.exitCode, 0);
+    assert.equal(outcome.success, 1);
+    assert.ok(requests.includes('coreSummaryRepair'));
+    assert.ok(requests.includes('scoringAudit'));
+    assert.equal(requests.includes('primaryAnalysis'), false);
+    assert.equal(facts.current(), null);
+    const final = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[0];
+    assert.notEqual(final.analysis, original.analysis);
+    assert.notEqual(deep.extractSectionByTitle(final.analysis, '核心摘要'), oldSummary);
+    assert.deepEqual(final.analysisManifest.stages.primaryAnalysis, original.analysisManifest.stages.primaryAnalysis);
+    assert.equal(final.analysisManifest.stages.primaryAnalysis.factReview, undefined);
+    assert.deepEqual(final.paidResponseHistory, original.paidResponseHistory);
+    const recovered = saved.readSavedFeedback(final, sample.plan);
+    assert.deepEqual(recovered.feedback, feedback);
+    const completed = require('../scripts/lib/completed-bound-fact-feedback');
+    assert.equal(engine.isSuccessfulAnalysisRecord(final), true);
+    assert.equal(completed.hasCompletedBoundFactFeedback(final, feedback, sample.plan), true);
+    const requestCount = requests.length;
+    await daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(final, () =>
+        daily.withDailyFreshPaperSource(sample.plan, final, () => saved.analyzeWithRecoveredFeedback(final, sample.plan, () => {
+            assert.equal(facts.current().coreOnly, true);
+            assert.equal(facts.current().proof, null);
+            assert.throws(() => facts.assertScoringOnlyModelStageAllowed('primaryAnalysis'), /不能调用主分析/);
+            return final;
+        }))));
+    const continued = await require('../scripts/deep-analysis-only').runDeepAnalysis({ date: sample.plan.batchDate,
+        analyzeFn: () => assert.fail('普通恢复应复用真实已完成单节纠错，不重新请求模型') });
+    assert.equal(continued.status, 'complete');
+    assert.equal(continued.stats.skipped, 1);
+    assert.deepEqual(JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[0], final);
+    assert.equal(requests.length, requestCount);
+    const archive = path.join(daily.factFeedbackDirectory(sample.plan), facts.proofFor(feedback).feedbackSha256 + '.json');
+    const packetBytes = fs.readFileSync(archive);
+    fs.unlinkSync(archive);
+    assert.equal(saved.readSavedFeedback(final, sample.plan), null);
+    await assert.rejects(daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(final, () =>
+        saved.analyzeWithRecoveredFeedback(final, sample.plan, () => assert.fail('缺包不能续跑')))), /缺少之前/);
+    fs.writeFileSync(archive, packetBytes);
+    fs.writeFileSync(archive, JSON.stringify({ ...feedback, coreFeedback: '被篡改的核心约束' }));
+    assert.throws(() => saved.readSavedFeedback(final, sample.plan), /之前的纠错说明与保存的证明不一致/);
+    fs.writeFileSync(archive, packetBytes);
+    fs.appendFileSync(path.join(sample.plan.sourcesDir, sample.id, 'generation-000001', 'source.pdf'), ' altered');
+    assert.throws(() => saved.readSavedFeedback(final, sample.plan), /来源|哈希|SHA/);
+    assert.equal(requests.length, requestCount);
+});
+
 for (const mode of ['deep', 'batch']) {
     test(`正常${mode}仅Reader反馈使用真实Reader请求并保原主文摘要评分与旧费`, async t => {
         const sample = await createReviewedReaderSample(t);

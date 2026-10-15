@@ -71,6 +71,8 @@ Reader-only 完成核验只读重放真实父子反馈的签发上下文；恢�
 
 [三流程代码、Prompt 和文档对应表](docs/three-workflows.md)列出共享核心与必要适配。工作树只保留当前 18 份 Prompt；旧正文按原 SHA 从 Git 历史读取，核验已付费断点，保留原声明和费用记录。
 
+仅修核心摘要时，公共选定论文入口接受独立 `coreFeedbackFiles`：先在锁内保存来源绑定的原反馈，再只修该节，逐字保护其余十二节。后续评分和必要 Reader 正常复核；普通续跑仍沿用同一范围，保留原历史与费用，详见[恢复说明](docs/reader-explicit-retry.md)。
+
 三条流程的标签统一采用[新版研究方向目录](https://nanless.github.io/audio-paper-digest-blog/tags/)的386项九维体系。总目录完整保留；文章只显示实际所选标签及其父级路径，父级不算额外命中，也不展示空分类或兄弟方向。词表升级、旧记录只读核验及站点快照同步见[标签规则](docs/tag-display-policy.md#三条流程共用的目录与呈现)。
 
 源Markdown保留多级分类块供审查和离线阅读；单篇网页已有经核验的页头分类时只显示一次，汇总仍逐篇显示，缺失或异常边界标记不能成为删除Reader正文的理由，见[页面呈现与更新规则](docs/tag-display-policy.md#已发布页面切换到当前呈现)。

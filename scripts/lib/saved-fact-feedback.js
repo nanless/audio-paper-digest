@@ -118,15 +118,29 @@ function withRecoveredFeedback(paper, plan, callback, explicitFeedback = null) {
         return callback();
     }
     const bound = facts.validateFeedback(original.feedback, plan, original.paper);
+    const run = () => {
+        if (explicitFeedback) require('./pending-fact-feedback').register(paper, plan, explicitFeedback);
+        return callback();
+    };
+    // 没有主文父包的单节修复仍须恢复其原核心作用域；通用反馈作用域会允许主文模型。
+    // 原包单独保存后再进入核心范围，不将这份核心包伪装成自己的主文父包。
+    if (!original.coreFeedback && !paper.analysisManifest?.stages?.primaryAnalysis?.factReview
+        && coreOnlyFeedback(original.feedback)) {
+        facts.withFactReview(bound, () => undefined);
+        return facts.withCoreSummaryFactReview(bound, paper, run);
+    }
     return facts.withFactReview(bound, () => {
-        const run = () => {
-            if (explicitFeedback) require('./pending-fact-feedback').register(paper, plan, explicitFeedback);
-            return callback();
-        };
         return original.coreFeedback
             ? facts.withCoreSummaryFactReview(facts.validateFeedback(original.coreFeedback, plan, paper), paper, run)
             : run();
     });
+}
+function coreOnlyFeedback(feedback) {
+    return Boolean(feedback?.coreFeedback?.trim())
+        && ['primaryFeedback', 'readerFeedback', 'tagFeedback', 'scoringFeedback']
+            .every(key => !String(feedback[key] || '').trim())
+        && ['rejectedPrimaryClaims', 'rejectedReaderClaims', 'rejectedTagClaims', 'rejectedScoringClaims']
+            .every(key => !(feedback[key] || []).length);
 }
 function readerOnlyFeedback(feedback) {
     return Boolean(feedback?.readerFeedback?.trim())
@@ -387,5 +401,5 @@ async function analyzeWithRecoveredFeedbackInternal(paper, plan, analyze, explic
     // 原摘要包已独立验证，本次只读取其已完成产物，不进入摘要修改作用域。
     return facts.withFactReview(parentBound, refresh);
 }
-module.exports = { recoverArchivedCompletedReader, hasSavedProof, readSavedFeedback, withRecoveredFeedback,
+module.exports = { recoverArchivedCompletedReader, hasSavedProof, readSavedFeedback, withRecoveredFeedback, coreOnlyFeedback,
     readerOnlyFeedback, completedReaderUpstream, analyzeWithRecoveredFeedback };

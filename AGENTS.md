@@ -129,6 +129,8 @@ npm run digest:prepare -- YYYY-MM-DD
 
 Reader-only 完成核验须按真实原父包与子包组合重放签发上下文，只读且禁止模型；原恢复型约束仍按原签名核验。旧父恢复须在进入分析前验证真实主分析检查点，保存前保护原主文、摘要、评分、标签和非 Reader 阶段，错误时恢复内存；不得先失效原上游再报错。详见 [Reader 事实反馈](docs/reader-explicit-retry.md#已完成主文的独立-reader-事实反馈)。
 
+核心专用恢复使用 `reanalyzeSelected(ids, { coreFeedbackFiles })`。论文锁内由公共反馈保存器归档原包，再独立进入核心单节范围；没有主文父包时不能把核心包伪装成父包。普通续跑必须恢复同一范围，禁止主文模型；核心阶段逐字保护其余十二节，再正常复核八维评分与必要 Reader，保留历史、次数和费用。
+
 默认 API 正式分析正文的 13 个一级标题用于机器解析。最终博客正文来自 `beginner-researcher-v3` API Reader；表格与公式的来源另由 `api-reader-source-bindings-v4` 记录和核验：
 
 - 文章包含 12–18 节、5000–18000 中文字和 4–10 组术语组合解释。
