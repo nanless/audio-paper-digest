@@ -102,6 +102,19 @@ class ExistingConferenceAuthorPublicationTest(unittest.TestCase):
             git('-C',repo,'config','user.name','Offline Test')
             git('-C',repo,'config','commit.gpgsign','false')
             (repo/'README').write_text('offline base')
+            if name == 'legacy-blog':
+                publisher = new.load_publish_to_blog()
+                snapshot = publisher.build_tag_catalog_snapshot(publisher._PAGE_TAG_CATALOG)
+                versions = {'contract': publisher.TAG_CATALOG_VERSIONS_CONTRACT,
+                            'currentSha256': snapshot['registrySha256'], 'snapshots': [snapshot]}
+                for prefix in ('data', 'static/data'):
+                    for filename, value in [('tag-catalog-snapshot.json', snapshot),
+                            ('tag-catalog-versions.json', versions),
+                            (f'tag-catalog-history/{snapshot["registrySha256"]}.json', snapshot)]:
+                        target = repo / prefix / filename
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_text(json.dumps(value, ensure_ascii=False))
+                git('-C',repo,'add','data','static/data')
             git('-C',repo,'add','README')
             git('-C',repo,'commit','-m','offline base')
             git('-C',repo,'remote','add','origin',remote)

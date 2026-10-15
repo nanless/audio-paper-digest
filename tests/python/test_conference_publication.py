@@ -40,13 +40,14 @@ class GitPublicationTest(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='conference-publication-test-')
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.env = {**os.environ, 'GIT_CONFIG_NOSYSTEM': '1', 'GIT_CONFIG_GLOBAL': os.devnull,
                     'GIT_AUTHOR_NAME': 'Fixture', 'GIT_AUTHOR_EMAIL': 'fixture@example.invalid',
                     'GIT_COMMITTER_NAME': 'Fixture', 'GIT_COMMITTER_EMAIL': 'fixture@example.invalid'}
         self.blog = self.repository('blog')
         self.images = self.repository('images')
         self.base = self.git(self.blog, 'rev-parse', 'HEAD').strip()
+        self.flow_base_commit_count = int(self.git(self.blog, 'rev-list', '--count', self.base).strip())
         self.identity = publisher.remote_snapshot(self.blog)['remoteIdentitySha256']
         self.record = self.record_file(self.blog, 'content/posts/conference-test-paper.md', b'approved')
 
@@ -248,8 +249,30 @@ class GitPublicationTest(unittest.TestCase):
         loader.start()
         self.addCleanup(loader.stop)
         self.cid, self.pid = 'test-2026', '11111111-1111-4111-8111-111111111111'
+        catalog = reviewer._PAGE_TAG_CATALOG
+        snapshot = reviewer.build_tag_catalog_snapshot(catalog)
+        versions = {'contract': reviewer.TAG_CATALOG_VERSIONS_CONTRACT,
+                    'currentSha256': snapshot['registrySha256'], 'snapshots': [snapshot]}
+        for prefix in ('data', 'static/data'):
+            for name, value in [('tag-catalog-snapshot.json', snapshot),
+                    ('tag-catalog-versions.json', versions),
+                    (f'tag-catalog-history/{snapshot["registrySha256"]}.json', snapshot)]:
+                target = self.blog / prefix / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(json.dumps(value, ensure_ascii=False))
+        self.git(self.blog, 'add', '--', 'data', 'static/data')
+        self.git(self.blog, 'commit', '-m', 'install source-bound catalog fixture')
+        self.git(self.blog, 'push', 'origin', 'HEAD:main')
+        self.base = self.git(self.blog, 'rev-parse', 'HEAD').strip()
+        self.flow_base_commit_count = int(self.git(self.blog, 'rev-list', '--count', self.base).strip())
+        page_bytes = ('---\ntitle: Approved conference fixture\n'
+                      'paper_digest_tags_contract: "paper-tag-flat-tags-v2"\n'
+                      f'paper_digest_tags_registry_sha256: "{catalog["registrySha256"]}"\n'
+                      f'paper_digest_tags_registry_version: "{catalog["version"]}"\n'
+                      '---\napproved\n').encode()
+        self.record = self.record_file(self.blog, self.record['path'], page_bytes)
         source = self.root / 'source.md'
-        source.write_bytes(b'approved')
+        source.write_bytes(page_bytes)
         record = {**self.record, 'kind': 'paper', 'sourcePath': str(source)}
         image_source = self.root / 'figure.png'
         image_source.write_bytes(b'image bytes')
@@ -359,7 +382,8 @@ class GitPublicationTest(unittest.TestCase):
             with mock.patch.object(publisher, 'verify_publication_urls', return_value=self.acceptance):
                 publisher.push(self.cid, self.pid)
             self.assertTrue(publisher.status(self.cid, self.pid)['complete'])
-            self.assertEqual(self.git(self.blog, 'rev-list', '--count', 'HEAD').strip(), '2')
+            self.assertEqual(int(self.git(self.blog, 'rev-list', '--count', 'HEAD').strip()),
+                             self.flow_base_commit_count + 1)
 
     def test_resume_after_acceptance_before_publish_receipt_write(self):
         self.prepare_flow()
@@ -378,7 +402,8 @@ class GitPublicationTest(unittest.TestCase):
                     publisher.push(self.cid, self.pid)
             self.assertEqual(publisher.status(self.cid, self.pid)['layers']['onlineUrls'], 'pending')
             self.assertTrue(publisher.verify(self.cid, self.pid)['complete'])
-            self.assertEqual(self.git(self.blog, 'rev-list', '--count', 'HEAD').strip(), '2')
+            self.assertEqual(int(self.git(self.blog, 'rev-list', '--count', 'HEAD').strip()),
+                             self.flow_base_commit_count + 1)
 
     def finish_flow(self):
         self.prepare_flow()
