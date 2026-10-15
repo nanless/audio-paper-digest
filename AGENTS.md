@@ -167,6 +167,10 @@ npm run blog:push -- --date YYYY-MM-DD
 
 `digest:status` 里的 `remoteOidVerified` 只证明 Git 提交已到远端。对用户宣告博客已上线或任务已完成前，还必须确认 GitHub Pages workflow 的 build/deploy 均成功，并逐页核验目标日期汇总页及已发布单篇的 HTTP 200、正式地址和标题。部署 workflow 必须对应发布提交，或保留该批次已审页面字节的后续提交；保留部署与页面核验记录。部署失败时读取失败日志、修复并继续检查；`digest:status` 显示 complete 也不能代替上线核验。
 
+新建独立人工审查须实际使用 `gpt-6.1-sol/high`，v4 声明和 `manual-agents-sol-high-v2` 如实绑定每页子代理身份；旧模型声明仅可读取原记录，不能给新审查补填身份。
+
+图号审查区分送审位置“图片 K”、封存来源 DOM 条目“论文图 N”与作者印刷的“Figure M”。只有当前来源映射通过核验时才解释三者差异；N 不必连续或等于 K、M。原图注的概括性标题本身不能证明配错图，真实标签、资产与科学内容冲突仍阻断发布。
+
 ## 发布后视觉与完成定义
 
 push 远端验证后才可规划视觉任务。TOP 10 论文各一张长图，另有一张汇总封面；实际生成只能由 Codex 内置 `image_gen` 完成，项目脚本不得调用图像 API。

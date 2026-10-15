@@ -1221,7 +1221,96 @@ def repair_review_payload(
     return review_protocol_failure(context, f'响应不是可解析的 JSON，格式修复失败：{repair_error}')
 
 
-def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1'):
+def _review_source_figure_semantics_note(paper):
+    """Explain numbering only for signed v3 figures replayed against sealed arXiv DOM."""
+    if not isinstance(paper, dict):
+        return ''
+    manifest = paper.get('analysisManifest') or {}
+    if (manifest.get('contracts') or {}).get('apiReaderArticle') != LLM_API_READER_CONTRACT:
+        return ''
+    figures = paper.get('apiReaderFigures')
+    proof = paper.get('freshRewriteProvenance')
+    if not figures or not isinstance(proof, dict):
+        return ''
+    stage = (manifest.get('stages') or {}).get('apiReaderArticle') or {}
+    plan = paper.get('apiReaderPlan')
+    article = paper.get('apiReaderArticle')
+    if (not isinstance(figures, list) or not isinstance(plan, dict)
+            or not isinstance(article, str) or stage.get('status') != 'complete'
+            or paper.get('apiReaderArticleSha256') != _javascript_string_sha256(article.strip())
+            or stage.get('articleSha256') != paper.get('apiReaderArticleSha256')
+            or paper.get('apiReaderPlanSha256') != _reader_record_sha256(plan, '审查原图计划')
+            or stage.get('planSha256') != paper.get('apiReaderPlanSha256')
+            or stage.get('figureCount') != len(figures)
+            or stage.get('figuresSha256') != _reader_record_sha256(figures, '审查原图记录')):
+        raise PublishDataValidationError('审查原图编号说明缺少当前 Reader 完整签名。')
+    run_id = proof.get('runId')
+    if not isinstance(run_id, str) or not re.fullmatch(
+            r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id):
+        raise PublishDataValidationError('审查原图编号说明缺少封存运行身份。')
+    paper_id = _daily_fresh_normalized_paper_id(paper)
+    directory = DAILY_FRESH_SOURCE_RUNS_DIR / run_id / 'sources' / paper_id / 'generation-000001'
+    manifest_bytes = _daily_fresh_read_private_file(
+        directory / 'source-manifest.json', '审查原图来源清单', 4 * 1024 * 1024)
+    runtime_bytes = _daily_fresh_read_private_file(
+        directory / 'source-runtime.json', '审查原图来源 DOM', 128 * 1024 * 1024)
+    source_manifest = json.loads(manifest_bytes)
+    runtime = json.loads(runtime_bytes)
+    source = manifest.get('sourceAcquisition') or {}
+    artifacts = runtime.get('structuredArtifacts') or {}
+    metadata = source_manifest.get('runtimeMetadata') or {}
+    if (hashlib.sha256(manifest_bytes).hexdigest() != proof.get('sourceManifestSha256')
+            or manifest.get('freshRewriteProvenance') != proof
+            or hashlib.sha256(runtime_bytes).hexdigest() != metadata.get('responseSha256')
+            or len(runtime_bytes) != metadata.get('responseBytes')
+            or runtime.get('paperId') != f'arxiv:{paper_id}'
+            or runtime.get('textSha256') != paper.get('sourceSha256')
+            or proof.get('sourceSha256') != paper.get('sourceSha256')
+            or source.get('sourceSha256') != paper.get('sourceSha256')
+            or artifacts.get('flattenedTextSha256') != paper.get('sourceSha256')
+            or artifacts.get('payloadSha256') != source.get('structuredArtifactsSha256')
+            or artifacts.get('payloadSha256') != stage.get('structuredArtifactsSha256')):
+        raise PublishDataValidationError('审查原图编号说明与封存来源 SHA 不一致。')
+    if artifacts.get('parserVersion') != 'arxiv-html-dom-v4':
+        return ''  # PDF/conference/unknown inventories do not claim this DOM numbering convention.
+    for figure in figures:
+        matches = [item for item in artifacts.get('figures', [])
+                   if isinstance(item, dict) and item.get('recoveryStatus') == 'complete'
+                   and type(item.get('ordinal')) is int
+                   and item['ordinal'] == figure.get('ordinal')
+                   and item.get('sourceDomSha256') == figure.get('sourceDomSha256')]
+        if len(matches) != 1:
+            raise PublishDataValidationError('审查原图编号没有唯一封存 DOM 对应。')
+        original = matches[0]
+        if not isinstance(original.get('label'), str) or not original['label'].strip():
+            return ''  # A fallback display label is not an authenticated printed Figure number.
+        images = original.get('images') or []
+        label = re.sub(r'\s+', ' ', original.get('label') or f"Figure {original['ordinal']}").strip()
+        caption = re.sub(r'\s+', ' ', original.get('caption') or '').strip()[:1200]
+        if (len(images) != 1 or label != figure.get('label')
+                or caption != figure.get('caption')):
+            raise PublishDataValidationError('审查原图的作者标签、图注或资源与封存 DOM 不一致。')
+        if images[0].get('kind') == 'inline_svg':
+            from reader_inline_svg import source_descriptor
+            descriptor = source_descriptor(images[0], paper_id)
+            if any(figure.get(key) != descriptor[key] for key in (
+                    'url', 'inlineSvgSourceSha256', 'inlineSvgRenderContract')):
+                raise PublishDataValidationError('审查原图的内联 SVG 来源身份不一致。')
+        elif images[0].get('kind') != 'external_url' or images[0].get('url') != figure.get('url'):
+            raise PublishDataValidationError('审查原图 URL 与封存资源不一致。')
+    return (
+        '【已核验原图的编号与图注归属】审查摘要的“图片 K”及任务位置“图 K/M”只表示文章中的图片位置。'
+        '正文“论文图 N”是封存来源最外层 figure DOM 条目序号，不是博客连续自编号；'
+        '所选源条目可以跳号，也可以按讲解顺序重排。“原论文 Figure/Fig. M”才是原文印刷标签。'
+        '不得仅因这三套编号不同、不连续或非递增而判错，不得仅从 URL 文件名推定印刷图号。'
+        '“原论文…：“…””保留的是作者图注摘录，概括性标题不要求枚举图内全部细节，'
+        '不能只因概括程度不同判为错图。来源归属真实不等于科学内容必然正确：'
+        '同一印刷图号的真实矛盾、错图/来源错配、正文或作者图注与实际像素的具体科学冲突仍须报告；'
+        '明确披露原文矛盾的正文按既有规则核对，不能据本说明豁免真实冲突。'
+    )
+
+
+def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1', *, source_figure_note=''):
     """审查一篇文章里一个有长度上限的分块。"""
     title = plain_title_for_publish(title) if title else title
     prompt = f"""你是一个 Hugo 静态站点博客内容质量审查专家。
@@ -1243,6 +1332,8 @@ def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1')
 - 技术术语未用反引号包裹 → 这不是格式错误，除非它会被 Hugo 解析为 HTML
 - Markdown 表格的列数按竖线分隔后的单元格数计算；例如 `| --- | --- | --- | --- | --- |` 是 5 列，不是 4 列
 - 不要在复制或视觉分行时给 frontmatter 的 64 位十六进制 SHA 插入空格；必须按代码块中的原始连续字节判断
+
+{source_figure_note}
 
 博客标题：{title}
 
@@ -1364,9 +1455,10 @@ def _llm_review_post_chunk(content, title="", required=False, chunk_label='1/1')
         return True, [], content
 
 
-def llm_review_post(content, title="", required=False):
+def llm_review_post(content, title="", required=False, *, paper=None):
     """审查文章的所有分块，返回合并后的问题与修正建议。"""
     chunks = split_review_content(content, get_blog_review_chunk_chars())
+    source_figure_note = _review_source_figure_semantics_note(paper)
     all_issues = []
     passed = True
     chunk_results = [None] * len(chunks)
@@ -1374,9 +1466,11 @@ def llm_review_post(content, title="", required=False):
     def review_chunk(index):
         label = f'{index + 1}/{len(chunks)}'
         passed, issues = review_cached_unit(
-            'text', {'content': chunks[index], 'title': title, 'chunkLabel': label, 'required': required},
+            'text', {'content': chunks[index], 'title': title, 'chunkLabel': label, 'required': required,
+                     'sourceFigureNote': source_figure_note},
             lambda: _llm_review_post_chunk(
                 chunks[index], title, required=required, chunk_label=label,
+                source_figure_note=source_figure_note,
             )[:2],
         )
         return passed, issues, chunks[index]
@@ -2322,12 +2416,13 @@ def _review_image_context_regions(content, image_matches):
     return regions
 
 
-def multimodal_review_images(content, title="", required=False, *, image_concurrency=1):
+def multimodal_review_images(content, title="", required=False, *, image_concurrency=1, paper=None):
     """把真实的图片字节发给路由后的多模态发布 API。"""
     if isinstance(image_concurrency, bool) or not isinstance(image_concurrency, int) \
             or not 1 <= image_concurrency <= 5:
         raise ValueError('图片审查并发数必须是 1–5 的整数')
     title = plain_title_for_publish(title) if title else title
+    source_figure_note = _review_source_figure_semantics_note(paper)
     image_matches = parse_markdown_images(content)
 
     if not image_matches:
@@ -2404,6 +2499,8 @@ def multimodal_review_images(content, title="", required=False, *, image_concurr
 请审查本次实际附上的这一张图片及其对应局部正文是否一致。
 
 【范围】每次请求只附一张图片。图片编号表示它在整篇文章中的位置，附近正文也只是局部摘录；你没有看到整篇文章或其他图片，不能据此断言全篇只有这一张图、缺少其他图或未覆盖其他结果。只就本张像素、对应元数据和局部正文提出具体问题。
+
+{source_figure_note}
 
 【重要】本请求附上了实际图片字节，以下是正文中提取的对应元数据：
 - 博客正文中的实际图片格式为标准 Markdown：`![alt](url)`
@@ -10498,7 +10595,7 @@ def _review_single_paper(args):
 
     # 2. LLM 文本审查
     with review_unit_cache(date_str, paper_file, required=require_llm, paper_id=arxiv_id, run_id=_paper_fresh_run_id(paper)):
-        llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, title, required=require_llm)
+        llm_passed, llm_issues, llm_fixed_content = llm_review_post(content, title, required=require_llm, paper=paper)
     if llm_passed is False and count_blocking_review_issues(llm_issues) == 0:
         llm_issues = list(llm_issues or []) + [{
             'severity': 'error',
@@ -10524,7 +10621,7 @@ def _review_single_paper(args):
 
     # 3. 多模态图片审查
     with review_unit_cache(date_str, paper_file, required=require_llm, paper_id=arxiv_id, run_id=_paper_fresh_run_id(paper)):
-        img_passed, img_issues = multimodal_review_images(content, title, required=require_llm)
+        img_passed, img_issues = multimodal_review_images(content, title, required=require_llm, paper=paper)
     if img_passed is False and count_blocking_review_issues(img_issues) == 0:
         img_issues = list(img_issues or []) + [{
             'severity': 'error',

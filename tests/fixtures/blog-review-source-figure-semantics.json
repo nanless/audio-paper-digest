@@ -1,0 +1,178 @@
+{
+  "contract": "blog-review-source-figure-semantics-fixture-v1",
+  "scope": "Exact saved source/Reader excerpts. Tests use an explicitly synthetic signed envelope around these excerpts; no production proof is issued.",
+  "papers": [
+    {
+      "paperId": "2610.14643",
+      "originalRuntimeSha256": "1fa7690c833b04c8507f804ae530826661528bb87755502f22e6a5244ec34189",
+      "figures": [
+        {
+          "sourceArtifactOrdinal": 1,
+          "printedLabel": "Figure 1:",
+          "sourceCaption": "Figure 1: AegisVox separates voice identity from identifying words. SeedVC converts every turn using one consistent surrogate voice per source speaker. The lexical renderer changes only converted turns with planned identifier replacements; the remaining converted turns pass directly to reconstruction. F5-TTS is the illustrated renderer, and VoiceCraft is the matched alternative. PHI denotes protected health information.",
+          "url": "https://arxiv.org/html/2610.14643v1/fig01_system_new.png",
+          "sourceDomSha256": "7b0ffe8181609f91d3f4603317b642b1b28b23ff627ee1392693013ae21ad892",
+          "readerPixelSha256": "2d80ac5f8d5ef574bc0beafa594cf9ad757a570eaf43f223aa1021c3ac1875de"
+        },
+        {
+          "sourceArtifactOrdinal": 3,
+          "printedLabel": "Figure 2:",
+          "sourceCaption": "Figure 2: Clinical controls and matched renderer effects on 25,778 source CAPs from 390 conversations. (a) Fresh original-audio ASR supplies the reference, not clinical ground truth. (b) F5-TTS minus VoiceCraft effects in percentage points (pp), with 95% conversation-cluster intervals. Similar strict preservation coexists with more model-labeled contradictions.",
+          "url": "https://arxiv.org/html/2610.14643v1/fig02_clinical_controls.svg",
+          "sourceDomSha256": "b159f8aa42f6c65539d0d1ef2f03066fda308f4eb8fa7707cacd46eeef2906f6",
+          "readerPixelSha256": "481b64def7d8477ece2d38bb22735d753ba4a043864c2d977dd965271864c360"
+        },
+        {
+          "sourceArtifactOrdinal": 4,
+          "printedLabel": "Figure 3:",
+          "sourceCaption": "Figure 3: Final-waveform linkage under evaluation-label-selected score direction. F5-TTS minus VoiceCraft effects use all-turn samples (809 profiles, 390 conversations) or planned-edit regions (291 profiles, 204 conversations). Bars are 95% clustered CIs. Lower EER means easier source linkage.",
+          "url": "https://arxiv.org/html/2610.14643v1/fig03_final_audio_linkage.svg",
+          "sourceDomSha256": "64e5f762a8d4f7789a46007f74c4a764c4962d4290cb5b6283b2c5cdbef0693e",
+          "readerPixelSha256": "906d3b0cd3fd083ca793e2f8eec423ea3a9128056e71bfaf23c936d2e281395c"
+        }
+      ],
+      "articleImageAndCaptionLines": [
+        "![原论文 Figure 1：AegisVox separates voice identity from identifying words.](https://arxiv.org/html/2610.14643v1/fig01_system_new.png)",
+        "*论文图 1。原论文 Figure 1:：“AegisVox separates voice identity from identifying words.”。*",
+        "![原论文 Figure 2：Clinical controls and matched renderer effects on 25,778 source CAPs from 390 conversations.](https://arxiv.org/html/2610.14643v1/fig02_clinical_controls.svg)",
+        "*论文图 3。原论文 Figure 2:：“Clinical controls and matched renderer effects on 25,778 source CAPs from 390 conversations.”。*",
+        "![原论文 Figure 3：Final-waveform linkage under evaluation-label-selected score direction.](https://arxiv.org/html/2610.14643v1/fig03_final_audio_linkage.svg)",
+        "*论文图 4。原论文 Figure 3:：“Final-waveform linkage under evaluation-label-selected score direction.”。*"
+      ]
+    },
+    {
+      "paperId": "2610.15350",
+      "originalRuntimeSha256": "c7fb9b3e93b8e3dbcfe1d0d04b4e6d3d830978fb7f6d2df7af12e64191e7e1fa",
+      "figures": [
+        {
+          "sourceArtifactOrdinal": 1,
+          "printedLabel": "Figure 1:",
+          "sourceCaption": "Figure 1: Genre hierarchy of Gugak-VocalSet. Numbers show track counts per category.",
+          "url": "https://arxiv.org/html/2610.15350v1/figures/GugakGenre.png",
+          "sourceDomSha256": "f9190d734debb2dd5a443eda398ce9b70518b91ec9444bfd82c05a9af953df1f",
+          "readerPixelSha256": "75b43b9aeadc2d683436e2edc802fc89124fb956f8d8c08262e75ae4649eefa4"
+        },
+        {
+          "sourceArtifactOrdinal": 2,
+          "printedLabel": "Figure 3:",
+          "sourceCaption": "Figure 3: Annotation examples: jeongak (top) and minsogak (bottom). Each panel shows lyric–audio alignment, F0 contour overlaid on a spectrogram, and sigimsae annotations color-coded by functional category.",
+          "url": "https://arxiv.org/html/2610.15350v1/figures/AnnotationExam.png",
+          "sourceDomSha256": "172f4769e857a2c62f9dacc1d5c2f91359a9aa96c1ec504dbe05368cb51ad493",
+          "readerPixelSha256": "21f934eae13769e9545fec694f24218be4302c58137eba95d258671d7b4d55b4"
+        },
+        {
+          "sourceArtifactOrdinal": 4,
+          "printedLabel": "Figure 5:",
+          "sourceCaption": "Figure 5: Row-normalized (recall) confusion matrix for 17-type classification (F0CNN, aggregated over 5 folds).",
+          "url": "https://arxiv.org/html/2610.15350v1/confusion_matrix_17type.png",
+          "sourceDomSha256": "dceffafed6df03ca6e6bb3d199ba31b456b98ed8756f340bc3c0044e9c4c59fb",
+          "readerPixelSha256": "912a161276a5e17014abc84c7ea92d7800db1441a7873d2343550e2d49a87619"
+        }
+      ],
+      "articleImageAndCaptionLines": [
+        "![原论文 Figure 1：Genre hierarchy of Gugak-VocalSet. Numbers show track counts per category.](https://arxiv.org/html/2610.15350v1/figures/GugakGenre.png)",
+        "*论文图 1。原论文 Figure 1:：“Genre hierarchy of Gugak-VocalSet. Numbers show track counts per category.”。*",
+        "![原论文 Figure 3：Annotation examples: jeongak (top) and minsogak (bottom).](https://arxiv.org/html/2610.15350v1/figures/AnnotationExam.png)",
+        "*论文图 2。原论文 Figure 3:：“Annotation examples: jeongak (top) and minsogak (bottom).”。*",
+        "![原论文 Figure 5：Row-normalized (recall) confusion matrix for 17-type classification (F0CNN, aggregated over 5…](https://arxiv.org/html/2610.15350v1/confusion_matrix_17type.png)",
+        "*论文图 4。原论文 Figure 5:：“Row-normalized (recall) confusion matrix for 17-type classification (F0CNN, aggregated over 5 folds).”。*"
+      ]
+    },
+    {
+      "paperId": "2610.18141",
+      "originalRuntimeSha256": "1bc10da65cc40ff29591f7fd8dd403a9a1dca05a85939aaf6ee8936d9340e078",
+      "figures": [
+        {
+          "sourceArtifactOrdinal": 2,
+          "printedLabel": "Figure 2:",
+          "sourceCaption": "Figure 2: Bidirectional modality misrouting under audio-visual interference. CaRe mitigates these errors by steering the fused representation toward the selected modality-specific branch.",
+          "url": "https://arxiv.org/html/2610.18141v1/care_cases.png",
+          "sourceDomSha256": "9222d49eb055883b902a67de3875486e7c6489d5fa4506144b4f4bb9f3f2e403",
+          "readerPixelSha256": "4dc1acaff7dc4634b56d7e9375fbc98c004b4644dafa382278faa72f768d12c9"
+        },
+        {
+          "sourceArtifactOrdinal": 3,
+          "printedLabel": "Figure 3:",
+          "sourceCaption": "Figure 3: Target-branch recovery among incorrect joint predictions on CMM and AVHBench (%).",
+          "url": "https://arxiv.org/html/2610.18141v1/misrouting.svg",
+          "sourceDomSha256": "cc1884b0e5657276401ce96402df1cf5f3da11f4c62c286269d909317afc4eaf",
+          "readerPixelSha256": "ed71b9eb23320c40dc263aab579d3e229657abd663075ba9be6513e4a9ee8c25"
+        },
+        {
+          "sourceArtifactOrdinal": 1,
+          "printedLabel": "Figure 1:",
+          "sourceCaption": "Figure 1: Overview of CaRe. Given audio-visual inputs and a question, CaRe uses a text-only modality probe to select a candidate modality, detects decision conflicts between the joint and counterfactual branches, and applies confidence-adaptive residual intervention at selected decoder layers with strengths decayed across depth.",
+          "url": "https://arxiv.org/html/2610.18141v1/care_pipeline.png",
+          "sourceDomSha256": "832274f25a6bd14c7ea914728e3211d21d833a9a0583b3c690e754371485c609",
+          "readerPixelSha256": "464f8b0006a34bb48eade8fcfda2490e6e75415a3883dc30d5b59316ebf094a5"
+        },
+        {
+          "sourceArtifactOrdinal": 6,
+          "printedLabel": "Figure 8:",
+          "sourceCaption": "Figure 8: Sensitivity to the intervention strength scale \\lambda_{\\alpha} on CMM. Lines report accuracy, while bars show the numbers of helpful and harmful prediction changes. Stars denote the default setting \\lambda_{\\alpha}=1.",
+          "url": "https://arxiv.org/html/2610.18141v1/alpha_sensitivity_tradeoff.svg",
+          "sourceDomSha256": "be34425195a5373a76fe586622b5c00955f012dbf0539cf4cf6053b7b9f6d857",
+          "readerPixelSha256": "26fa55c70426bdba7487918560c68b77b14747332387bc573d095f506335223f"
+        }
+      ],
+      "articleImageAndCaptionLines": [
+        "![原论文 Figure 2：Bidirectional modality misrouting under audio-visual interference.](https://arxiv.org/html/2610.18141v1/care_cases.png)",
+        "*论文图 2。原论文 Figure 2:：“Bidirectional modality misrouting under audio-visual interference. CaRe mitigates these errors by steering the fused representation toward the selected modality-specific branch.”。*",
+        "![原论文 Figure 3：Target-branch recovery among incorrect joint predictions on CMM and AVHBench (%).](https://arxiv.org/html/2610.18141v1/misrouting.svg)",
+        "*论文图 3。原论文 Figure 3:：“Target-branch recovery among incorrect joint predictions on CMM and AVHBench (%).”。*",
+        "![原论文 Figure 1：Overview of CaRe. Given audio-visual inputs and a question, CaRe uses a text-only modality probe…](https://arxiv.org/html/2610.18141v1/care_pipeline.png)",
+        "*论文图 1。原论文 Figure 1:：“Overview of CaRe. Given audio-visual inputs and a question, CaRe uses a text-only modality probe to select a candidate modality, detects decision conflicts between the joint and…”。*",
+        "![原论文 Figure 8：Sensitivity to the intervention strength scale \\\\lambda_\\\\alpha on CMM.](https://arxiv.org/html/2610.18141v1/alpha_sensitivity_tradeoff.svg)",
+        "*论文图 6。原论文 Figure 8:：“Sensitivity to the intervention strength scale \\lambda_\\alpha on CMM.”。*"
+      ]
+    },
+    {
+      "paperId": "2610.15243",
+      "originalRuntimeSha256": "6c68c064b7033a384dbb4652c39db89f2de43df9bf8dda75eee0c9d89be899da",
+      "figures": [
+        {
+          "sourceArtifactOrdinal": 1,
+          "printedLabel": "Fig. 1:",
+          "sourceCaption": "Fig. 1: Overview of the proposed HE-NAC system.",
+          "url": "https://arxiv.org/html/2610.15243v1/henac_overview_v2.png",
+          "sourceDomSha256": "06826191af05fcf69c2b8904c03e7cf260724d8cd88eaf369605c028ad9ac38e",
+          "readerPixelSha256": "32404dfe4160101f1168cf28d033b9e4358258d18c2b44b4c275e3c352b1cec6"
+        },
+        {
+          "sourceArtifactOrdinal": 3,
+          "printedLabel": "Fig. 3:",
+          "sourceCaption": "Fig. 3: Mean MUSHRA scores for each condition with 95% confidence intervals for the mean. Nominal bitrates (kbps) are indicated under the coded systems.",
+          "url": "https://arxiv.org/html/2610.15243v1/mushra_32khz.svg",
+          "sourceDomSha256": "b17d64653ac18c3c9aa3b33e314c5d522a0a76b9a9cf9db9c17008efa0dad92a",
+          "readerPixelSha256": "63668e75a02c4c8e01b91da509d5db572f5c09538bc8db43906f7ef5f9b6fc27"
+        },
+        {
+          "sourceArtifactOrdinal": 2,
+          "printedLabel": "Fig. 2:",
+          "sourceCaption": "Fig. 2: Overall reconstruction flow of the proposed three-stage training paradigm. Gray segments denote components used only during training: they provide blind-upsampled, bitrate-free priors to the next stage, but are omitted (filtered out) at inference.",
+          "url": "https://arxiv.org/html/2610.15243v1/r1_reconstruction.png",
+          "sourceDomSha256": "4a0f47d7a3e8ac1e77463a2640e333bbc0cc21e78901be794943edc6c3c44fcc",
+          "readerPixelSha256": "1a56137a34c35c8f6e50eecd0bdee5a846d08c22e60647ec87c0b87c65a4f69a"
+        },
+        {
+          "sourceArtifactOrdinal": 4,
+          "printedLabel": "Fig. 4:",
+          "sourceCaption": "Fig. 4: Rate–distortion (STFT error) curves shown per frequency band (0-3, 3-6, 6-16 kHz, and full-band) over the 13-23 kbps range. DAC (baseline) scales its bitrate by controlling the number of codebooks, ranging from 18 to 31, defined by its single bottleneck. HE-NAC (proposed) keeps 16 codebooks in its CB, but then gradually increases the MB codebooks from 1 to 4, as well as the HB codebooks from 0 to 2. Each DAC datapoint is annotated with its total number of codebooks, J, whereas each HE-NAC datapoint is annotated with the complete branch-specific allocation (J_{\\mathrm{CB}},J_{\\mathrm{MB}},J_{\\mathrm{HB}}). The third entry, J_{\\mathrm{HB}}, therefore denotes the number of codebooks allocated to the HB branch. When J_{\\mathrm{HB}}=0, no dedicated HB residual is transmitted and the 6-16 kHz band is reconstructed solely through blind upsampling from the CB and MB stages. Increasing J_{\\mathrm{HB}} to 1 and 2 progressively enables dedicated HB residual coding, explaining the sharp reduction in HB distortion.",
+          "url": "https://arxiv.org/html/2610.15243v1/rate_distortion.svg",
+          "sourceDomSha256": "07747c29f58eff0f30afa0c300ed2de37611ce5c337b4d822cd13f3a1893120a",
+          "readerPixelSha256": "b3f5a899e6de910fb31dd169f1429d284b8cb16d5b218702a5f68957db768751"
+        }
+      ],
+      "articleImageAndCaptionLines": [
+        "![原论文 Fig. 1：Overview of the proposed HE-NAC system.](https://arxiv.org/html/2610.15243v1/henac_overview_v2.png)",
+        "*论文图 1。原论文 Fig. 1:：“Overview of the proposed HE-NAC system.”。*",
+        "![原论文 Fig. 3：Mean MUSHRA scores for each condition with 95% confidence intervals for the mean.](https://arxiv.org/html/2610.15243v1/mushra_32khz.svg)",
+        "*论文图 3。原论文 Fig. 3:：“Mean MUSHRA scores for each condition with 95% confidence intervals for the mean. Nominal bitrates (kbps) are indicated under the coded systems.”。*",
+        "![原论文 Fig. 2：Overall reconstruction flow of the proposed three-stage training paradigm.](https://arxiv.org/html/2610.15243v1/r1_reconstruction.png)",
+        "*论文图 2。原论文 Fig. 2:：“Overall reconstruction flow of the proposed three-stage training paradigm.”。*",
+        "![原论文 Fig. 4：Rate–distortion (STFT error) curves shown per frequency band (0-3, 3-6, 6-16 kHz, and full-band)…](https://arxiv.org/html/2610.15243v1/rate_distortion.svg)",
+        "*论文图 4。原论文 Fig. 4:：“Rate–distortion (STFT error) curves shown per frequency band (0-3, 3-6, 6-16 kHz, and full-band) over the 13-23 kbps range.”。*"
+      ]
+    }
+  ]
+}
