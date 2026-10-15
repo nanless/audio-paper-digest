@@ -4498,7 +4498,7 @@ function readerResourceClaimIssues(draft, identity, sourceText) {
         for (const use of value.matchAll(/论文(?:用的|使用的|采用的)(?:是)?已发布检查点(?:加|并采用|并使用)统一评测协议/gu)) {
             if (within(use) && /\bBaselines?\.\s+We compare\b[\s\S]{0,1200}?\bWe use the released checkpoints and evaluate\b[\s\S]{0,160}?\bthe same protocol\b/i.test(source)) return true;
         }
-        for (const use of value.matchAll(/([A-Za-z][A-Za-z0-9_.+-]{0,60})\s*为公开权重直接评测/gu)) {
+        for (const use of value.matchAll(/([A-Za-z][A-Za-z0-9_.+-]{0,60})\s*(?:为|是)公开权重直接评测/gu)) {
             if (!within(use)) continue;
             const preceding = value.slice(0, use.index).split(/[。！？!?；;，,]/u).at(-1);
             if (/(?:本文|本论文|本研究|本工作|作者团队|论文作者)/u.test(preceding)) continue;
@@ -5207,6 +5207,7 @@ function prepareTrustedArxivFigureBuffer(buffer, declaredMediaType = '') {
 }
 
 function isPermanentApiReaderFigureFailure(error) {
+    if (require('./lib/reader-inline-svg').isUnsupportedDependencyFailure(error)) return true;
     if (error?.code === 'RESPONSE_TOO_LARGE') return true;
     const message = String(error?.message || '');
     const statusMatch = message.match(/(?:论文图\s+\d+|arXiv Figure)\s+download failed:\s+HTTP\s+(\d{3})/i)

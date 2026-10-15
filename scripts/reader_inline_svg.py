@@ -2,6 +2,7 @@
 """把无外部资源的官方内联 SVG 转成当前调用使用的真实像素。"""
 
 import hashlib
+import json
 from html.entities import html5
 from html.parser import HTMLParser
 import math
@@ -79,6 +80,20 @@ def normalize_static_html_breaks(text):
     return text
 
 
+class UnsupportedSvgDependency(ValueError):
+    """Intact source cannot supply complete pixels without unsaved CSS glyphs."""
+
+
+def has_unsaved_css_icon(element):
+    # Empty FontAwesome-style HTML spans require the page stylesheet/pseudo-glyph.
+    # Recognition never supplies a substitute glyph or authorizes a screenshot.
+    classes = set(element.attrib.get('class', '').split())
+    return (element.tag in {'span', '{http://www.w3.org/1999/xhtml}span'}
+            and not list(element) and not ''.join(element.itertext()).strip()
+            and bool(classes & {'fa', 'fas', 'far', 'fab', 'fal', 'fad'})
+            and any(re.fullmatch(r'fa-[a-z0-9]+(?:-[a-z0-9]+)*', value) for value in classes))
+
+
 def validate_svg(raw):
     if not raw or len(raw) > MAX_SOURCE_BYTES:
         raise ValueError('内联 SVG 字节为空或超过受控上限')
@@ -96,7 +111,10 @@ def validate_svg(raw):
             if identifier in ids:
                 raise ValueError('内联 SVG 含重复的元素标识符')
             ids[identifier] = node
+    unsupported_dependency = False
     for element in root.iter():
+        unsaved_icon = has_unsaved_css_icon(element)
+        unsupported_dependency = unsupported_dependency or unsaved_icon
         if element.tag.split('}')[-1].lower() not in ALLOWED_TAGS:
             raise ValueError('内联 SVG 含不允许的元素')
         if element.tag.split('}')[-1].lower() in {'mphantom', 'mstyle'}:
@@ -122,6 +140,9 @@ def validate_svg(raw):
                 if (original_name != name or element.tag not in {allowed_tag, '{http://www.w3.org/1998/Math/MathML}' + allowed_tag}
                         or not in_math or value not in {'true', 'false'}):
                     raise ValueError('内联 SVG 的数学布尔设置无效')
+                continue
+            if (unsaved_icon and original_name == 'aria-hidden' and value in {'true', 'false'}):
+                # This path ends in unavailable, never in rendered pixel admission.
                 continue
             if name not in ALLOWED_ATTRIBUTES or name.startswith('on'):
                 raise ValueError('内联 SVG 含事件或资源请求')
@@ -172,6 +193,8 @@ def validate_svg(raw):
             raise ValueError('内联 SVG 必须声明有限的像素尺寸')
         if not 0 < float(dimension.removesuffix('px')) <= 4096:
             raise ValueError('内联 SVG 像素尺寸超过受控上限')
+    if unsupported_dependency:
+        raise UnsupportedSvgDependency('封存内联 SVG 含未封存的 CSS 图标依赖，不能取得完整像素')
     return text
 
 
@@ -307,4 +330,9 @@ def render_svg(raw):
 
 if __name__ == '__main__':
     require_external_runtime('render-reader-inline-svg')
-    sys.stdout.buffer.write(render_svg(sys.stdin.buffer.read(MAX_SOURCE_BYTES + 1)))
+    try:
+        sys.stdout.buffer.write(render_svg(sys.stdin.buffer.read(MAX_SOURCE_BYTES + 1)))
+    except UnsupportedSvgDependency as error:
+        sys.stderr.write(json.dumps({'contract': 'reader-inline-svg-error-v1',
+            'code': 'unsupported_dependency', 'reason': 'external_css_icon_glyph'}, separators=(',', ':')) + '\n')
+        sys.exit(65)

@@ -7,6 +7,16 @@ const { spawn } = require('node:child_process');
 const CONTRACT = 'reader-official-inline-svg-pixels-v1';
 const MAX_SOURCE_BYTES = 2 * 1024 * 1024;
 const MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
+const unsupportedDependencyFailures = new WeakSet();
+const unsupportedDependencyCauses = new WeakSet();
+function isUnsupportedDependencyFailure(error) { return unsupportedDependencyFailures.has(error); }
+function unsupportedDependency(cause) {
+    const error = new Error('内联论文图不可用：封存来源含未封存的 CSS 图标依赖，无法取得完整像素', { cause });
+    error.code = 'READER_INLINE_SVG_UNSUPPORTED_DEPENDENCY';
+    error.retryable = false;
+    unsupportedDependencyFailures.add(error);
+    throw error;
+}
 const sha256 = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 
 function fail(message, cause) {
@@ -69,11 +79,18 @@ async function renderOfficialInlineSvg(resource) {
         child.stdin.on('error', error => { failure ||= error; });
         child.once('close', code => {
             clearTimeout(timeout);
-            if (failure || code !== 0) reject(failure || new Error(`渲染器退出 ${code}：${stderr}`));
+            if (!failure && size === 0 && code === 65 && stderr.trim() === JSON.stringify({
+                contract: 'reader-inline-svg-error-v1', code: 'unsupported_dependency', reason: 'external_css_icon_glyph'
+            })) {
+                const rejected = new Error('受控渲染器确认封存来源不含 CSS 图标像素依赖');
+                unsupportedDependencyCauses.add(rejected);
+                reject(rejected);
+            } else if (failure || code !== 0) reject(failure || new Error(`渲染器退出 ${code}：${stderr}`));
             else resolve(Buffer.concat(chunks));
         });
         child.stdin.end(source);
-    }).catch(cause => fail('未能取得完整的真实像素', cause));
+    }).catch(cause => unsupportedDependencyCauses.has(cause)
+        ? unsupportedDependency(cause) : fail('未能取得完整的真实像素', cause));
     if (bytes.length < 24 || !bytes.subarray(0, 8).equals(Buffer.from('89504e470d0a1a0a', 'hex'))) {
         fail('渲染器没有返回 PNG');
     }
@@ -86,4 +103,4 @@ async function renderOfficialInlineSvg(resource) {
         inlineSvgRenderContract: CONTRACT, width, height };
 }
 
-module.exports = { CONTRACT, inlineSvgSourceDescriptor, renderOfficialInlineSvg };
+module.exports = { CONTRACT, inlineSvgSourceDescriptor, renderOfficialInlineSvg, isUnsupportedDependencyFailure };

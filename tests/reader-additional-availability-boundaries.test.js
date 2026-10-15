@@ -68,3 +68,25 @@ test('明确横轴预算整数枚举不当作准确率值，项数必须与计�
         '工具准确率从 91.3 降到 85.2 到 86.9。'
     ]) assert.ok(editorial.findMissingComparisonUnits(text).length > 0, text);
 });
+
+// 同源第三方基线的两个普通系词；不能扩展为作者当前权重可用声明。
+test('同源基线直接评测兼容为/是，名称归属未来及当前肯定仍严格核验', () => {
+    for (const copula of ['为', '是']) {
+        const usage = `限制是Apollo${copula}公开权重直接评测，原训练条件可能不同。`;
+        assert.deepEqual(claims(usage, namedSource), []);
+        assert.deepEqual(claims(usage.replaceAll('Apollo', 'Comet-V2'), namedSource.replaceAll('Apollo', 'Comet-V2')), []);
+        for (const [text, source] of [
+            [usage, 'Apollo is mentioned in related work.'],
+            [usage, namedSource.replaceAll('Apollo', 'Comet')],
+            [usage, namedSource.replace('we use the publicly released model weights', 'we will use the publicly released model weights')],
+            [usage, namedSource.replace('we use the publicly released model weights', 'we plan to use the publicly released model weights')],
+            [usage, namedSource.replace('baseline methods', 'our own methods')],
+            [`本文模型Apollo${copula}公开权重直接评测。`, namedSource],
+            [`作者团队Apollo${copula}公开权重直接评测。`, namedSource],
+            ['本文模型权重已经公开。' + usage, namedSource],
+            [usage + '本文模型权重已经公开。', namedSource],
+            [usage + '但本文模型权重现在可下载。', namedSource],
+            ['本文权重可下载，' + usage, namedSource]
+        ]) assert.ok(claims(text, source).length > 0, text + '\n' + source);
+    }
+});
