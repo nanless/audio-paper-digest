@@ -65,12 +65,12 @@ function withArtifacts(artifacts, paperId, callback) {
     const expectation = { rootDir: path.join(context.runDir, 'sources'), arxivId: d.paperId,
         generation: d.sourceGeneration, sourceManifestSha256: d.sourceManifestSha256, sourceSnapshotSha256: d.sourceSnapshotSha256 };
     const response = deriveBundle(expectation);
-    return scope.run({ artifacts, expectation, document: response.document }, callback);
+    return scope.run({ artifacts, expectation, sourceText: source.text, document: response.document }, callback);
 }
 
 function verifiedSourceContext() {
     const active = scope.getStore();
-    return active ? structuredClone({ artifacts: active.artifacts, expectation: active.expectation }) : null;
+    return active ? structuredClone({ artifacts: active.artifacts, expectation: active.expectation, sourceText: active.sourceText }) : null;
 }
 function document() { return scope.getStore()?.document ? structuredClone(scope.getStore().document) : null; }
 function evidenceForQuotes(quotes) {
@@ -116,7 +116,7 @@ function withSavedPaper(paper, callback) {
     });
     const response = deriveBundle(expectation, all.map(evidence => evidence.quote));
     if (response.results.some((entry, index) => !entry.eligible || !isDeepStrictEqual(entry.evidence, all[index]))) throw new Error('Saved PDF quotation cannot be replayed');
-    return scope.run({ artifacts: source.structuredArtifacts, expectation, document: response.document }, callback);
+    return scope.run({ artifacts: source.structuredArtifacts, expectation, sourceText: source.text, document: response.document }, callback);
 }
 
 module.exports = { CONTRACT, deriveBundle, withArtifacts, document, evidenceForQuotes, quoteEvidence,

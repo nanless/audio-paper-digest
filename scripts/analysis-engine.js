@@ -1075,7 +1075,8 @@ function hasValidApiReaderV3Records(paper) {
         return require('./lib/reader-dom-span-projection').withSavedPaper(paper, () =>
             require('./lib/reader-table-pdf-evidence').withSavedPaper(paper,
                 () => require('./lib/reader-sealed-pdf-quote-evidence').withSavedPaper(paper,
-                    () => hasValidApiReaderV3RecordsUnchecked(paper))));
+                    () => require('./lib/reader-source-table-column-units').withSavedPaper(paper,
+                        () => hasValidApiReaderV3RecordsUnchecked(paper)))));
     } catch (_error) { return false; }
 }
 function hasValidApiReaderV3RecordsUnchecked(paper) {

@@ -3025,6 +3025,8 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         formulaBindings,
         ...((tableBindings.some(binding => binding.pdfCellConfirmation || binding.sealedPdfTableEvidence
             || binding.sealedPdfQuoteEvidence)
+            || tableBindings.some((binding,index) => binding.sourceType === 'source_quotes'
+                && require('./lib/reader-source-table-column-units').coverage(renderedTables[index], binding.sourceQuotes).length > 0)
             || formulaBindings.some(binding => readerFormulaNeedsSourcePayload(binding.latex)))
             ? { structuredSourcePayload: readerStructuredSourcePayload(options.structuredArtifacts) } : {}),
         sourceBindingsSha256: stableFingerprint({ tableBindings, formulaBindings })
@@ -7189,7 +7191,8 @@ function repairApiReaderArticleAndPlanBindings(paper, analysisManifest) {
     const renewed = require('./lib/reader-pdf-cell-evidence').replaySavedProofMetadata(paper, analysisManifest);
     return require('./lib/reader-dom-span-projection').withSavedPaper(paper, () =>
         require('./lib/reader-table-pdf-evidence').withSavedPaper(paper,
-            () => repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest) || renewed));
+            () => require('./lib/reader-source-table-column-units').withSavedPaper(paper,
+                () => repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest) || renewed)));
 }
 function repairApiReaderArticleAndPlanBindingsUnchecked(paper, analysisManifest) {
     const plan = paper?.apiReaderPlan;

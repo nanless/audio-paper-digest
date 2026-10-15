@@ -1,5 +1,6 @@
 'use strict';
 // Bare numeric units may inherit only from a unique, literal, flat DOM column.
+const savedScope = new (require('node:async_hooks').AsyncLocalStorage)();
 const { normalizeReaderSourceDisplayArtifacts: display } = require('./reader-source-display');
 const text = value => display(String(value ?? '')).normalize('NFKC').replace(/[*_`]/g,'').replace(/\s+/g,' ').trim();
 const compact = value => text(value).replace(/\s+/g,'');
@@ -52,9 +53,49 @@ function coverageFromTables(rendered, quotes, tables) {
     return result;
 }
 function coverage(rendered, quotes) {
-    const context = require('./reader-sealed-pdf-quote-evidence').verifiedSourceContext();
+    const context = savedScope.getStore() || require('./reader-sealed-pdf-quote-evidence').verifiedSourceContext();
     if (!context) return [];
-    return coverageFromTables(rendered, quotes, context.artifacts.tables).map(item => ({...item,
+    const strings = (quotes || []).flatMap(item => {
+        const quote = typeof item === 'string' ? item : item?.quote;
+        if (typeof quote !== 'string' || (typeof item !== 'string' && (typeof context.sourceText !== 'string' || !context.sourceText.includes(quote)
+            || item.sourceQuoteSha256 !== require('node:crypto').createHash('sha256').update(quote).digest('hex')))
+            || (context.sourceText !== undefined && !context.sourceText.includes(quote))) return [];
+        return [quote];
+    });
+    return coverageFromTables(rendered, strings, context.artifacts.tables).map(item => ({...item,
         sourceManifestSha256:context.expectation.sourceManifestSha256,sourceSnapshotSha256:context.expectation.sourceSnapshotSha256}));
 }
-module.exports = { coverage, coverageFromTables };
+
+// Saved HTML-only quote tables must replay the same four-source capability.
+// The cheap guard runs first; already-supported/no-unit tables read no source.
+function withSavedPaper(paper, callback) {
+    const active = savedScope.getStore();
+    if (active?.paper === paper) return callback();
+    const deep = require('../deep-analyzer'), plan = paper?.apiReaderPlan;
+    if (!plan || typeof paper.apiReaderArticle !== 'string' || !Array.isArray(plan.tableBindings)) return callback();
+    const tables = require('../analysis-contract').extractMarkdownTables(paper.apiReaderArticle);
+    const possible = plan.tableBindings.some((binding,index) => binding.sourceType === 'source_quotes' && tables[index]
+        && deep.readerTableHeaderUnitEvidenceFailures(tables[index], [...(binding.sourceQuotes || []), ...(binding.sealedPdfQuoteEvidence || [])])
+            .some(issue => issue.unit === '%'));
+    if (!possible) return callback();
+    const fresh = require('./fresh-analysis-context'), provenance = paper.freshRewriteProvenance;
+    if (provenance?.contract !== 'fresh-source-analysis-v1' || !/^[a-f0-9-]{36}$/.test(provenance.runId || '')) return callback();
+    const runDir = require('node:path').join(require('../config').FILES.dailyFreshSourceRunsDir,provenance.runId);
+    const runFile = require('node:path').join(runDir,'run.json');
+    if (!require('node:fs').existsSync(runFile)) return callback();
+    const run = require('./reader-proof-read-scope').readReaderProofJson(runFile).value;
+    if (run.contract !== fresh.DAILY_SOURCE_RUN_CONTRACT || run.runId !== provenance.runId) return callback();
+    if (!require('node:util').isDeepStrictEqual(provenance,paper.analysisManifest?.freshRewriteProvenance)) throw new Error('DOM column saved provenance differs');
+    const source = fresh.readFreshSource(runDir,paper,{runId:run.runId,sourceExpectations:run.sourceExpectations});
+    const d=source.freshSourceDescriptor, acquisition=paper.analysisManifest?.sourceAcquisition, stage=paper.analysisManifest?.stages?.apiReaderArticle;
+    if (paper.sourceSha256 !== d.sourceSha256 || acquisition?.sourceSha256 !== d.sourceSha256
+        || acquisition.structuredArtifactsSha256 !== d.structuredArtifactsSha256
+        || stage?.structuredArtifactsSha256 !== d.structuredArtifactsSha256 || stage.sourceBindingsSourceTextSha256 !== d.sourceSha256
+        || ['runId','sourceSha256','structuredArtifactsSha256','sourceSnapshotSha256','sourceGeneration','sourceManifestSha256'].some(key=>provenance[key]!==d[key])
+        || plan.structuredSourcePayload !== deep.readerStructuredSourcePayload(source.structuredArtifacts)) throw new Error('DOM column saved source or payload differs');
+    const context={paper,artifacts:source.structuredArtifacts,sourceText:source.text,
+        expectation:{sourceManifestSha256:d.sourceManifestSha256,sourceSnapshotSha256:d.sourceSnapshotSha256}};
+    return savedScope.run(context,callback);
+}
+
+module.exports = { coverage, coverageFromTables, withSavedPaper };

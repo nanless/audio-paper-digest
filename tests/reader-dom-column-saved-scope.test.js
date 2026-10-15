@@ -1,0 +1,45 @@
+'use strict';
+const ROOT=require('node:path').resolve(__dirname,'..');
+process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
+const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),os=require('node:os');
+const Config=require(ROOT+'/scripts/config'),daily=require(ROOT+'/scripts/lib/daily-fresh-source-plan'),fresh=require(ROOT+'/scripts/lib/fresh-analysis-context'),deep=require(ROOT+'/scripts/deep-analyzer'),engine=require(ROOT+'/scripts/analysis-engine');
+const span=require(ROOT+'/scripts/lib/reader-dom-span-projection'),order=require(ROOT+'/scripts/lib/reader-draft-order'),repair=require(ROOT+'/scripts/lib/reader-repair');
+async function fixture(t){
+ const root=fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()),'reader-html-span-')),previous=Config.FILES.dailyFreshSourceRunsDir;Config.FILES.dailyFreshSourceRunsDir=path.join(root,'runs');t.after(()=>{Config.FILES.dailyFreshSourceRunsDir=previous;fs.rmSync(root,{recursive:true,force:true});});
+ const caption='Table 1: Literal held-out word error measurements.',text=caption+'\nMethod\nWER (%)\nBaseline\n1.0\n'+('The source reports a controlled measurement of 1.0 under the same protocol. '.repeat(100).trim()),s=require(ROOT+'/tests/reader-signed-draft-fixture').fixture({noFigures:true,sourceText:text});
+ const matrix=[['Method','WER (%)','A','B','C'],['Baseline','1.0','1.0','1.0','1.0']],table={ordinal:1,recoveryStatus:'complete',sourceDomSha256:'a'.repeat(64),caption,headerRows:[0],bodyRows:[1],matrix,cells:[]};
+ for(const [r,row]of matrix.entries())for(const [c,value]of row.entries())table.cells.push({row:r,column:c,text:value,rowspan:1,colspan:1,header:r===0,sourceDomSha256:repair.shaText(`cell${r}:${c}`)});
+ const {payloadSha256,...body}=s.sourceDetails.structuredArtifacts;const sort=v=>Array.isArray(v)?v.map(sort):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,sort(v[k])])):v;const artifactBody=sort({...body,tables:[table],formulas:[]}),artifacts={...artifactBody,payloadSha256:repair.shaText(JSON.stringify(artifactBody))};
+ const plan=daily.createDailyFreshSourcePlan({batchDate:'2026-10-11',batchId:'generic-span',papers:[{arxivId:s.paper.arxivId,title:'Generic merged HTML row'}]});
+ await daily.captureDailyFreshSources(plan,{concurrency:1,capture:args=>require(ROOT+'/scripts/lib/fresh-arxiv-rewrite-source').captureFreshArxivRewriteSource(args,{fetchText:async id=>({text,structuredArtifacts:artifacts,source:'html',sourceId:id,url:`https://arxiv.org/html/${id}`,fetchedAt:'2026-10-11T00:00:00.000Z',imageInfos:[],warnings:[]}),fetchPdf:async id=>({bytes:Buffer.from('%PDF-1.7\n%%EOF\n'),url:`https://arxiv.org/pdf/${id}`,fetchedAt:'2026-10-11T00:00:01.000Z'})})});
+ const source=daily.readDailyFreshSource(plan,s.paper);const draft=s.draft;draft.formulaBindings=[];draft.sections[4].body=draft.sections[4].body.replace(/\s*\[\[FORMULA_1\]\]/g,'');draft.sections[7].body=draft.sections[7].body.replace(/\| 比较条件[\s\S]*?仅支持当前口径 \|/,'[[TABLE_2]]');draft.sections[7].body=draft.sections[7].body.replace('[[TABLE_2]]','| Method | WER (%) | A | B | C |\n|---|---|---|---|---|\n| Baseline | 1.0 | 1.0 | 1.0 | 1.0 |');draft.tableBindings[1]={tableIndex:2,sourceType:'source_quotes',sourceTableOrdinal:null,cellBindings:[],sourceQuotes:[caption,'The source reports a controlled measurement of 1.0 under the same protocol.']};
+ daily.withDailyFreshAnalysisContext(plan,()=>fresh.attachFreshSourceRecord(s.paper,s.paper.analysisManifest,source));
+ const prepared=order.normalizeReaderDraftOrder(draft,{structuredArtifacts:artifacts}).draft;let parsed;
+ await daily.withDailyFreshAnalysisContext(plan,()=>daily.withDailyFreshPaperSource(plan,s.paper,()=>fresh.withFreshPaperContext(s.paper,()=>require(ROOT+'/scripts/lib/reader-sealed-pdf-quote-evidence').withArtifacts(artifacts,s.paper.arxivId,()=>{parsed=deep.parseApiReaderArticleResult(JSON.stringify(prepared),{requiredVersion:3,requireIntegratedTables:true,minimumIntegratedTables:2,requireSourceBindings:true,allowDeterministicQuoteRepair:true,sourceText:text,structuredArtifacts:artifacts,availableFigureOrdinals:[]});}))));
+ const paper=s.paper;Object.assign(paper,{apiReaderArticle:parsed.article,apiReaderPlan:parsed.plan});daily.withDailyFreshAnalysisContext(plan,()=>fresh.attachFreshSourceRecord(paper,paper.analysisManifest,source));
+ paper.analysisManifest.sourceAcquisition.structuredArtifactsSha256=artifacts.payloadSha256;const stage=paper.analysisManifest.stages.apiReaderArticle;Object.assign(stage,{formulaBindingCount:0,structuredArtifactsSha256:artifacts.payloadSha256,qualityMetrics:parsed.qualityMetrics,sourceBindingsSha256:parsed.plan.sourceBindingsSha256,articleSha256:repair.shaText(parsed.article),planSha256:daily.stableHash(parsed.plan)});paper.apiReaderArticleSha256=stage.articleSha256;paper.apiReaderPlanSha256=stage.planSha256;
+ return{paper,source,plan,table,artifacts,root,prepared};
+}
+test('pure HTML DOM units survive real cold qualification and repair replay without PDF proof',async t=>{
+ const f=await fixture(t),before=JSON.stringify(f.paper);
+ assert.equal(f.paper.apiReaderPlan.tableBindings.some(b=>b.sealedPdfQuoteEvidence),false);
+ assert.equal(typeof f.paper.apiReaderPlan.structuredSourcePayload,'string');
+ assert.equal(engine.hasValidApiReaderV3Records(f.paper),true);
+ assert.equal(JSON.stringify(f.paper),before);
+ const repairCopy=structuredClone(f.paper);deep.repairApiReaderArticleAndPlanBindings(repairCopy,repairCopy.analysisManifest);assert.equal(engine.hasValidApiReaderV3Records(repairCopy),true);
+ const rendered=require(ROOT+'/scripts/analysis-contract').extractMarkdownTables(f.paper.apiReaderArticle)[1],binding=f.paper.apiReaderPlan.tableBindings[1];
+ assert.equal(deep.readerTableHeaderUnitEvidenceFailures(rendered,binding.sourceQuotes).length,1);
+ require(ROOT+'/scripts/lib/reader-source-table-column-units').withSavedPaper(f.paper,()=>assert.equal(deep.readerTableHeaderUnitEvidenceFailures(rendered,binding.sourceQuotes).length,0));
+ const bad=structuredClone(f.paper);bad.apiReaderPlan.tableBindings[1].sourceQuotes[0].sourceQuoteSha256='f'.repeat(64);
+ assert.equal(engine.hasValidApiReaderV3Records(bad),false);
+ const fabricated=structuredClone(f.paper),b=fabricated.apiReaderPlan.tableBindings[1];b.sourceQuotes[0].quote+=' invented caption tail';b.sourceQuotes[0].sourceQuoteSha256=repair.shaText(b.sourceQuotes[0].quote);
+ fabricated.apiReaderPlan.sourceBindingsSha256=daily.stableHash({tableBindings:fabricated.apiReaderPlan.tableBindings,formulaBindings:fabricated.apiReaderPlan.formulaBindings});
+ fabricated.analysisManifest.stages.apiReaderArticle.sourceBindingsSha256=fabricated.apiReaderPlan.sourceBindingsSha256;
+ fabricated.apiReaderPlanSha256=daily.stableHash(fabricated.apiReaderPlan);fabricated.analysisManifest.stages.apiReaderArticle.planSha256=fabricated.apiReaderPlanSha256;
+ assert.equal(engine.hasValidApiReaderV3Records(fabricated),false,'self-consistent quote SHA cannot invent actual source text');
+ const bytes=require('node:fs').readFileSync(require('node:path').join(f.plan.sourcesDir,f.paper.arxivId,'generation-000001/source-runtime.json'));
+ require('node:fs').appendFileSync(require('node:path').join(f.plan.sourcesDir,f.paper.arxivId,'generation-000001/source-runtime.json'),' ');
+ assert.equal(engine.hasValidApiReaderV3Records(f.paper),false);
+ require('node:fs').writeFileSync(require('node:path').join(f.plan.sourcesDir,f.paper.arxivId,'generation-000001/source-runtime.json'),bytes);
+ assert.equal(engine.hasValidApiReaderV3Records(f.paper),true);
+});
