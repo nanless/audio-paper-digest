@@ -24,6 +24,7 @@
 | 任务 | 入口 | 操作说明 |
 |---|---|---|
 | 北京时间当天日更 | `npm run digest:prepare -- YYYY-MM-DD` | [操作手册](SKILL.md) |
+| 已发布完整日批的呈现更新 | `npm run blog:generate -- --date YYYY-MM-DD --republish UUID`，再正常审查、推送 | [受控重发布](docs/data-format.md#同来源同分析的日批重发布) |
 | 官方会议候选获取与筛选 | `npm run conference:acquire`、`conference:discover`、`conference:filter:run` | [会议流程](docs/conference-workflow.md) |
 | 会议全文分析、Reader 和私有页面 | `npm run conference:process -- --apply ...` | [会议流程](docs/conference-workflow.md) |
 | 历史来源准备、计划、重写 | `npm run history:inputs`、`history:plan`、`history:sources`、`history:run` | [历史更新](docs/history-rewrite.md) |

@@ -30,11 +30,13 @@
 
 | 流程 | 多级呈现实际调用 | 已有页面的受控更新位置 |
 |---|---|---|
-| 日更 | `publish-to-blog.py` 的单篇与汇总调用 `render_paper_tag_hierarchy()`，再调用共享 `tag_presentation.py` | `blog:generate -- --date DATE` → `blog:review -- --date DATE` → `blog:push -- --date DATE`；保留本批来源和正式结果 |
+| 日更 | `publish-to-blog.py` 的单篇与汇总调用 `render_paper_tag_hierarchy()`，再调用共享 `tag_presentation.py` | 已发布完整日批显式使用 `blog:generate -- --date DATE --republish UUID` → `blog:review -- --date DATE` → `blog:push -- --date DATE`；保留本批来源和正式结果 |
 | 官方会议 | `conference-page-render.py` 生成单篇；`lib/conference-postprocess.js` 对汇总成员批量调用同一共享渲染器 | 先让原 `conference:process` 的单篇暂存与汇总通过当前实现检查，再走 `conference:publish:generate/review/push/verify`；不能复用过期页面证明 |
 | 历史更新 | arXiv单篇通过公共日更发布器、真实会议身份通过 `historical-page-render.py`；`lib/historical-direct-aggregate.js` 对每日、会议及会议任务汇总成员批量调用共享标签渲染器 | 同计划 `history:run` 重暂存旧实现页面，`history:aggregate` 重建对应汇总，再走 `history:publication` 的生成、审查与发布；冻结URL和原来源不变 |
 
 审计时同时核对页首的直接概念和最终渲染路径：祖先仅作导航，不能通过向 `tags` 追加父级来制造多级效果。站点总目录始终保留零计数方向，不能将文章的“仅选中项”规则用于裁剪总目录。
+
+日更已发布保护不因模板变化自动解除，`--republish UUID` 是明确范围的受控重发布入口；原发布证据不可变备份，待激活事务须同日期同UUID恢复，正式分析、Reader与费用不改。它不冒充新分析或fresh提升，也不允许选定子集/自定义数据重签原发布，完整边界见[同来源重发布协议](data-format.md#同来源同分析的日批重发布)。
 
 会议汇总的多级统计区只列本期命中的分面和子树，分别保留直接计数与子树去重计数；各级链接使用同一部署前缀及概念ID进入论文库，目标筛选范围是全站，计数范围仍是本期。历史汇总页首的概念集合仅代表成员的去重主任务，正文逐篇分类仍使用各自完整所选集合。
 

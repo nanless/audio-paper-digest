@@ -82,6 +82,7 @@ npm run test:compat
 | `conference_extractor.py` | 实现会议 PDF 提取：核验文件与 SHA，记录 UTF-8 字节偏移，生成页文本、PNG、图片与版面候选；以 `O_EXCL` 保存，按结构字段报告 blocked/integrity 状态。 |
 | `conference_publication_gate.py` | 核验会议身份、来源账本和页面发布资格。 |
 | `config.js` | 集中保存 Node 参数与运行数据路径。 |
+| `daily_republication.py` | 日更已发布完整批次的显式呈现重发布：仅由 `blog:generate -- --date DATE --republish UUID` 调用，在共享博客/日期锁内重核原发布、当前远端、同来源/分析及受控文件，按UUID不可变备份旧证据后受控退休活跃指针；保留通过缓存、检查点和真实费用。待激活事务阻断普通三阶段入口，同UUID恢复；不签新分析或冒用fresh提升，详见 [协议](../docs/data-format.md#同来源同分析的日批重发布)。 |
 | `deep-analysis-only.js` | 只读取当前 `dailyFreshSourceRun` 的封存 PDF/TXT，继续分析筛选已完成但分析未完成的论文。来源缺失或不匹配时停止，不抓取，也不读取旧缓存。 |
 | `deep-analyzer.js` | Node 核心：获取单篇全文，执行多阶段分析、评分审计、API Reader 写作和图片规划。结构修复后，只用原文证据核验 `core-summary-detailed-v3`；按阶段依赖、SHA 和旧检查点决定恢复范围，尽量少做整篇重做。 |
 | `digest-cover-state.js` | Node 入口/状态机：规划、校验、登记每日汇总封面任务，处理失败并归档历史记录。 |

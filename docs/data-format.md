@@ -166,6 +166,16 @@ schema v3 生成清单记录日期、`category`、博客基线 `HEAD`、精确�
 
 推送成功后追加 `publicationCommit`、相同的 `remoteVerifiedOid`、远端身份及北京时间 `remoteVerifiedAt`。远端 OID、名称或推送 URL 身份变化会使旧发布记录无法直接复用。远端验证只证明博客提交已到远端；上线还须另查对应 GitHub Pages 构建、部署和全部页面的 HTTP 200、正式地址及标题，保存核验结果。
 
+### 同来源同分析的日批重发布
+
+普通生成保留“已发布日期不可直接覆盖”的保护。用户明确要求同一完整日批更新模板或多级标签呈现时，使用 `npm run blog:generate -- --date YYYY-MM-DD --republish UUID`，再按正常 `blog:review`、`blog:push` 顺序发布；UUID必须为规范小写，恢复同一事务须复用同日期同UUID。只接受当前正式数据中的完整canonical日批，拒绝all、include/exclude子集、自定义数据和旧legacy范围。
+
+`daily_republication.py` 在共享博客锁与日期锁内核验原schema-v3生成清单、审查凭证、原发布提交及实际远端祖先关系，重新核对完整来源引用、每篇四份封存文件、正式分析和受控页面/资产字节。Git index须为空；无关人工改动保留。已受控维护的当前成对词表目录可按严格兼容规则核验，其余受控文件漂移仍阻断，不能借重发布吸收手改页面。
+
+事务保存在 `data/runtime/daily-republications/<UUID>/`：`intent.json` 记录不可变意图，`archive/` 按原相对路径逐字备份并核对SHA，`completion.json` 记录退休与准备完成；日期标记位于 `data/current/blog-republications/<DATE>.json`。原manifest、receipt、失败与安装日志等活跃指针只在完整备份后按CAS受控退休；逐页通过缓存和检查点保留原地复用。事务待激活时普通生成、审查和推送均阻断，用显式同UUID命令恢复，不手工删除标记或凭证。
+
+这里的完成记录仅证明重发布准备事务完成，不证明新页面已审查、推送或上线。正式分析、Reader、原分类签名、来源、模型次数和费用不变；它不创建fresh分析或promotion。新页面变化仍须独立审查，新的发布提交须重新核验部署及全部目标页面，用户已取消视觉时也须建立与实际新发布绑定的有效豁免。
+
 ## 视觉任务清单
 
 `visual-summary-manifests/<date>.json` 保存 TOP 10 排名、论文任务 token、参考图身份、生成上下文、目检声明和资产 SHA。`digest-cover-manifests/<date>.json` 保存批次标题、热门方向、排行榜及封面资产。

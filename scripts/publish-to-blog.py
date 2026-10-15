@@ -564,7 +564,7 @@ def blog_repository_lock(*, timeout_seconds=30):
 
 
 @contextmanager
-def blog_publication_lock(date_str, *, timeout_seconds=30):
+def blog_publication_lock(date_str, *, timeout_seconds=30, republish_id=None):
     """按统一顺序获取锁：先仓库，后发布日期。"""
     date_str = validate_publish_date(date_str)
     with blog_repository_lock(timeout_seconds=timeout_seconds):
@@ -572,6 +572,8 @@ def blog_publication_lock(date_str, *, timeout_seconds=30):
             from publication_activation import assert_no_pending
             try:
                 assert_no_pending(CURRENT_DIR, date_str)
+                from daily_republication import assert_no_pending as assert_no_pending_republication
+                assert_no_pending_republication(CURRENT_DIR, date_str, allow_run_id=republish_id)
             except ValueError as exc:
                 raise PublishDataValidationError(str(exc)) from exc
             yield
@@ -15240,6 +15242,8 @@ def parse_generation_args(argv=None):
     parser.add_argument('--legacy-v5-maintenance', action='count', default=0,
                         help='显式读取旧 v5 分析记录进行维护。本开关不用于默认日更，生成过程仍会写入博客文件。')
     parser.add_argument('--all', action='count', default=0)
+    parser.add_argument('--republish', action='append', metavar='UUID',
+                        help='显式归档已发布完整日批的旧凭证，保持原分析并重新生成；中断用同一 UUID 恢复')
     parser.add_argument('--skip-push', action='count', default=0,
                         help='兼容旧调用；生成入口本身从不 push')
     parser.add_argument('--push', action='count', default=0,
@@ -15263,6 +15267,16 @@ def parse_generation_args(argv=None):
         parser.error('--include-id 只能指定一次')
     if args.include_id and (args.exclude_id or args.all):
         parser.error('--include-id 与 --exclude-id/--all 互斥')
+    if args.republish:
+        from daily_republication import validate_id
+        if len(args.republish) != 1:
+            parser.error('--republish 只能指定一次')
+        try:
+            validate_id(args.republish[0])
+        except ValueError as error:
+            parser.error(str(error))
+        if not args.date or args.data_file or args.all or args.include_id or args.exclude_id or args.legacy_v5_maintenance:
+            parser.error('--republish 仅接受显式日期与当前完整正式日批，不兼容自定义输入、子集或旧流程')
     return {
         'data_file': args.data_file,
         'target_date': args.date[0] if args.date else None,
@@ -15271,6 +15285,7 @@ def parse_generation_args(argv=None):
         'excluded_ids': list(args.exclude_id),
         'include_id': args.include_id[0] if args.include_id else None,
         'legacy_v5_maintenance': bool(args.legacy_v5_maintenance),
+        'republish_id': args.republish[0] if args.republish else None,
     }
 
 
@@ -15414,6 +15429,16 @@ def generate_main(options=None):
     )
     template_fingerprint = generation_template_fingerprint()
     base_head = validate_git_publish_branch()
+    if options.get('republish_id'):
+        if options.get('data_file') or publish_all or normalized_include or normalized_excluded or legacy_v5_maintenance:
+            raise PublishDataValidationError('重新发布仅支持当前完整正式日批')
+        from daily_republication import activate as activate_daily_republication
+        from types import SimpleNamespace
+        try:
+            activate_daily_republication(SimpleNamespace(**globals()), today, options['republish_id'],
+                input_fingerprint, template_fingerprint)
+        except (ValueError, OSError) as error:
+            raise PublishDataValidationError(str(error)) from error
     published_reusable = reusable_verified_publication_generation(
         today, input_fingerprint, template_fingerprint, base_head,
     )
@@ -15600,7 +15625,7 @@ def main():
     try:
         date_str = validate_publish_date(get_today_bj(options['target_date']))
         with publication_scope(options.get('include_id')):
-            with blog_publication_lock(date_str):
+            with blog_publication_lock(date_str, republish_id=options.get('republish_id')):
                 return generate_main(options)
     except PublishDataValidationError as exc:
         print(f'\n❌ 博客生成失败: {exc}')
