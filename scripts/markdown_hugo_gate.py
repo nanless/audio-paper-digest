@@ -18,6 +18,7 @@ from publish_common import (
     PublishDataValidationError,
     publish_table_currency_spans,
     is_publish_currency_literal,
+    mask_protected_markdown_table_regions,
 )
 from tutorial_payload_verifier import (
     FRESH_AUTHORING_CONTRACT,
@@ -263,6 +264,101 @@ def math_and_emphasis_issues(text, label, *, rendered_html=False):
     return issues
 
 
+def mask_source_bound_title_dollars(rendered, artifact):
+    """Recognize only explicitly escaped source-title dollars after Markdown rendering.
+
+    This changes a diagnostic view, never HTML/source bytes or the raw-dollar
+    rule. Both the complete visible title and (for links) href must match.
+    """
+    expected = {}
+    source = str(artifact.get('body') or '')
+    visible = mask_protected_markdown_table_regions(source, protect_quotes=False)
+    for raw_line, line in zip(source.splitlines(), visible.splitlines()):
+        if line != raw_line or '`' in line:
+            continue
+        if r'\$' not in line:
+            continue
+        heading = re.match(r'^#{1,3}[ \t]+(.+?)\s*$', line)
+        title_line = heading or re.match(r'^>\s*英文题目：', line)
+        ranking_line = (artifact.get('frontmatter', {}).get('paper_digest_page_type') == 'index'
+                        and re.match(r'^\|\s*(?:🥇|🥈|🥉|\d+\.?)\s*\|', line))
+        if not title_line and not ranking_line:
+            continue
+        links = list(re.finditer(r'\[((?:\\.|[^\]\\\n])+)\]\(([^\s)]+)\)', line))
+        for match in links:
+            label = match[1]
+            if r'\$' in label and not re.search(r'(?<!\\)\$', label):
+                label = re.sub(r'\\([\\`*_{}\[\]()#+\-.!$>])', r'\1', label)
+                key = ('a', html.unescape(match[2]), html.unescape(label))
+                expected[key] = expected.get(key, 0) + 1
+        if heading and not links and not re.search(r'(?<!\\)\$', heading[1]):
+            label = re.sub(r'\\([\\`*_{}\[\]()#+\-.!$>])', r'\1', heading[1])
+            key = ('h' + str(len(line) - len(line.lstrip('#'))), None, html.unescape(label))
+            expected[key] = expected.get(key, 0) + 1
+    if not expected:
+        return rendered
+    offsets = _html_line_offsets(rendered)
+
+    class Titles(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=False)
+            self.active = []
+            self.stack = []
+            self.positions = set()
+
+        def handle_starttag(self, tag, attrs):
+            for item in self.active:
+                item['valid'] = False
+            attributes = dict(attrs)
+            hidden = (tag in {'script', 'style', 'pre', 'code', 'textarea', 'template', 'noscript'}
+                      or 'hidden' in attributes or str(attributes.get('aria-hidden') or '').lower() == 'true'
+                      or bool(re.search(r'(?:display\s*:\s*none|visibility\s*:\s*hidden)', str(attributes.get('style') or ''), re.I)))
+            if tag in {'a', 'h1', 'h2', 'h3'}:
+                self.active.append({'tag': tag, 'href': dict(attrs).get('href') if tag == 'a' else None,
+                                    'parts': [], 'dollars': [], 'valid': not hidden and len(attributes) == len(attrs)
+                                    and not any(value for _tag, value in self.stack)})
+            if tag not in {'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input', 'link', 'meta', 'param', 'source', 'track', 'wbr'}:
+                self.stack.append((tag, hidden))
+
+        def handle_comment(self, _value):
+            for item in self.active:
+                item['valid'] = False
+
+        def handle_data(self, value):
+            line, column = self.getpos()
+            start = offsets[line - 1] + column
+            for item in self.active:
+                item['parts'].append(value)
+                item['dollars'].extend(start + match.start() for match in re.finditer(r'\$', value))
+
+        def handle_entityref(self, name):
+            for item in self.active:
+                item['parts'].append(html.unescape('&' + name + ';'))
+
+        def handle_charref(self, name):
+            for item in self.active:
+                item['parts'].append(html.unescape('&#' + name + ';'))
+
+        def handle_endtag(self, tag):
+            for index in range(len(self.active) - 1, -1, -1):
+                if self.active[index]['tag'] == tag:
+                    item = self.active.pop(index)
+                    key = (tag, item['href'], ''.join(item['parts']))
+                    if item['valid'] and expected.get(key, 0):
+                        expected[key] -= 1
+                        self.positions.update(item['dollars'])
+                    break
+            for index in range(len(self.stack) - 1, -1, -1):
+                if self.stack[index][0] == tag:
+                    del self.stack[index:]
+                    break
+
+    parser = Titles()
+    parser.feed(rendered)
+    parser.close()
+    return ''.join(' ' if index in parser.positions else char for index, char in enumerate(rendered))
+
+
 def mask_rendered_symbolic_table_cells(text):
     """在渲染后的 Markdown 扫描中隐藏已校验的序列字面字形。
 
@@ -449,7 +545,7 @@ def validate_hugo_rendered_html_gate(output_dir, source_artifacts):
             continue
         rendered_path, rendered = candidates[0]
         reader_html = rendered_article_fragment(rendered)
-        gate_html = mask_rendered_symbolic_table_cells(reader_html)
+        gate_html = mask_rendered_symbolic_table_cells(mask_source_bound_title_dollars(reader_html, artifact))
         rendered_label = f'{source_label} -> {rendered_path.name}'
         issues.extend(math_and_emphasis_issues(gate_html, rendered_label, rendered_html=True))
         if '**' in gate_html:

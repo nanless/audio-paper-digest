@@ -56,6 +56,7 @@ from publish_common import (
     MANUAL_LONGFORM_CONTRACT_VERSION_V2, validate_manual_v6_payload,
     validate_digest_index_reader_quality, DIGEST_INDEX_READER_QUALITY_VERSION,
     split_markdown_table_row,
+    is_publish_currency_literal,
     _assert_hash_key_premises, _assert_ecmascript_number_premises,
 )
 from path_config import (
@@ -4115,6 +4116,14 @@ def _validate_researcher_workbench_frontmatter(frontmatter, paper, date_str):
 def plain_title_for_publish(title):
     """标题中的短数学标记转成普通文本，避免 Hugo/frontmatter 误解析。"""
     title = str(title or '')
+    currency = []
+    def protect_currency(match):
+        value = match.group(0).removeprefix('\\')
+        if not is_publish_currency_literal(value) or re.match(r'\s*[+*/^=<>]', title[match.end():]):
+            return match.group(0)
+        currency.append(value)
+        return f'\x00TITLE_CURRENCY_{len(currency) - 1}\x00'
+    title = re.sub(r'(?<![\w$])\\?\$\d+(?:,\d{3})*(?:\.\d+)?(?![\w.$])', protect_currency, title)
     title = re.sub(r'\$?\s*\^\s*2\s*\$?', '²', title)
     title = re.sub(r'\\underline\s*\{([^{}]+)\}', r'\1', title)
     title = re.sub(
@@ -4123,7 +4132,21 @@ def plain_title_for_publish(title):
         title,
     )
     title = title.replace('$', '')
-    return yaml_escape(title).replace('\\\\', '\\')
+    title = yaml_escape(title).replace('\\\\', '\\')
+    for index, value in enumerate(currency):
+        title = title.replace(f'\x00TITLE_CURRENCY_{index}\x00', value)
+    return title
+
+
+def markdown_title_for_publish(title):
+    """Escape literal title dollars at the Markdown boundary; no metadata cleanup."""
+    return re.sub(r'(\\*)\$', lambda match: match[1] + ('' if len(match[1]) % 2 else '\\') + '$', str(title or ''))
+
+
+def yaml_title_for_publish(title):
+    # Currency in an already-normalized title is metadata, not a math delimiter.
+    marker = '\x00TITLE_LITERAL_DOLLAR\x00'
+    return yaml_escape(str(title or '').replace('$', marker)).replace(marker, '$')
 
 
 def compact_title_for_ranking(title, max_length=55):
@@ -5539,7 +5562,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         rank_bucket = parsed_analysis.get('rankBucket', '') or '-'
         document_type = parsed_analysis.get('documentType', '') or '-'
         primary_task = parsed_analysis.get('primaryTaskTag', '') or '-'
-        compact_title = compact_title_for_ranking(title)
+        compact_title = markdown_title_for_publish(compact_title_for_ranking(title))
         if slug:
             md += f"| {m} | [{compact_title}]({BASE_PATH}/posts/{date_str}-{slug}) | {score} | {rank_bucket} | {document_type} | {primary_task} |\n"
         else:
@@ -5547,7 +5570,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
     for i, p in enumerate(unscored):
         title = p.get('title', 'Unknown')
         slug = paper_slugs.get(p.get('arxivId', ''), '')
-        compact_title = compact_title_for_ranking(title)
+        compact_title = markdown_title_for_publish(compact_title_for_ranking(title))
         if slug:
             md += f"| {len(scored)+i+1} | [{compact_title}]({BASE_PATH}/posts/{date_str}-{slug}) | N/A | - | - | - |\n"
         else:
@@ -5579,7 +5602,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         else:
             reader_plan = _manual_reader_editorial_plan(p)
             reader_article = _manual_reader_article(p, reader_plan, date_str)
-        reader_title = reader_plan['readerTitle'].strip() if reader_article else title
+        reader_title = markdown_title_for_publish(reader_plan['readerTitle'].strip() if reader_article else title)
         blog_url = f'{BASE_PATH}/posts/{date_str}-{slug}' if slug else ''
         if slug:
             md += f"### {m} [{reader_title}]({blog_url})\n\n"
@@ -5589,7 +5612,8 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         if preview:
             md += f"{preview}\n\n"
         if reader_article:
-            english_title = f'[{title}]({blog_url})' if blog_url else title
+            rendered_title = markdown_title_for_publish(title)
+            english_title = f'[{rendered_title}]({blog_url})' if blog_url else rendered_title
             md += f"> 英文题目：*{english_title}*\n\n"
         tags = parsed_analysis.get('tags') or []
         display_tags = format_display_tags(tags)
@@ -5649,7 +5673,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         else:
             reader_plan = _manual_reader_editorial_plan(p)
             reader_article = _manual_reader_article(p, reader_plan)
-        reader_title = reader_plan['readerTitle'].strip() if reader_article else title
+        reader_title = markdown_title_for_publish(reader_plan['readerTitle'].strip() if reader_article else title)
         blog_url = f'{BASE_PATH}/posts/{date_str}-{slug}' if slug else ''
         if slug:
             md += f"### {len(scored)+i+1}. [{reader_title}]({blog_url})\n\n"
@@ -5659,7 +5683,8 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         if preview:
             md += f"{preview}\n\n"
         if reader_article:
-            english_title = f'[{title}]({blog_url})' if blog_url else title
+            rendered_title = markdown_title_for_publish(title)
+            english_title = f'[{rendered_title}]({blog_url})' if blog_url else rendered_title
             md += f"> 英文题目：*{english_title}*\n\n"
         tags = parsed_analysis.get('tags') or []
         display_tags = format_display_tags(tags)
@@ -8813,10 +8838,10 @@ def generate_paper_page(paper, date_str, category='论文速递'):
             f'paper_digest_tutorial_quality_sha256: "{tutorial_payload["qualityPacketSha256"]}"\n'
             f'paper_digest_tutorial_artifact_plan_sha256: "{tutorial_payload["artifactPlanSha256"]}"\n'
         )
-    reader_title = reader_plan['readerTitle'].strip() if reader_first else display_title
+    reader_title = markdown_title_for_publish(reader_plan['readerTitle'].strip() if reader_first else display_title)
     workbench_marker = _researcher_workbench_frontmatter(workbench_bundle)
     md = f"""---
-title: "{yaml_escape(display_title)}"
+title: "{yaml_title_for_publish(display_title)}"
 date: {date_str}
 draft: false
 tags: [{', '.join([t.replace('#', '') for t in tags])}]
@@ -8832,7 +8857,8 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
 
 """
     if reader_first:
-        paper_link = f'[{display_title}]({aurl})' if aurl else display_title
+        rendered_title = markdown_title_for_publish(display_title)
+        paper_link = f'[{rendered_title}]({aurl})' if aurl else rendered_title
         # 把中文读者标题留在 H1 里，然后明确给出论文的
         # 英文原题和规范链接。只写成「论文」会让
         # reader-first 身份区块产生歧义，也会破坏
