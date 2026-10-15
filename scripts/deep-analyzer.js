@@ -4509,9 +4509,36 @@ function readerResourceClaimIssues(draft, identity, sourceText) {
         }
         return false;
     };
-    const isSourceBackedPriorModelEvaluation = (value, type) => {
+    const isSourceBackedPriorModelEvaluation = (value, type, matchIndex) => {
         if (type !== 'model'
             || /(?:本文|本论文|本研究|本工作|作者团队)[^。！？!?；;，,]{0,24}(?:模型|权重|检查点)[^。！？!?；;，,]{0,16}(?:已|现已|已经)(?:开源|公开|发布)/.test(value)) return false;
+        // Evaluating released checkpoints describes prior experimental inputs,
+        // not a current author-owned weight offer. Bind only this affirmative's
+        // exact evaluation span, with the same explicit count in the source.
+        const source = String(sourceText || '')
+            .replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, ' ')
+            .replace(/^[ \t]*>.*$/gm, ' ')
+            .replace(/“[^”]*”|「[^」]*」|"[^"\n]*"/g, ' ')
+            .replace(/[^\S\n]+/g, ' ');
+        for (const evaluation of value.matchAll(/(?:评估|评测|比较|测试)\s*(\d{1,4})\s*(?:个|种|套)\s*(?:(?:已(?:经)?发布|已(?:经)?公开|公开(?:发布)?|开放|既有|现有)的?){1,3}[^。！？!?；;，,]{0,24}?(?:检查点|模型权重|权重|模型)/gu)) {
+            if (!Number.isInteger(matchIndex) || matchIndex < evaluation.index
+                || matchIndex >= evaluation.index + evaluation[0].length
+                || /(?:本文|本论文|本研究|本工作|作者团队|论文作者|我们|自研|自有)/u.test(evaluation[0])) continue;
+            const evidence = new RegExp('(?:^|[\\n.!?]\\s*)We\\s+(?:evaluate|assess|benchmark|compare|test)\\s+'
+                + evaluation[1] + '\\s+(?:public(?:ly)?|released|published|open[- ]source)\\s+'
+                + '(?:[A-Za-z0-9_-]+\\s+){0,8}(?:checkpoints?|models?|weights?)\\b', 'i');
+            if (evidence.test(source)) return true;
+        }
+        const withinEvaluation = span => Number.isInteger(matchIndex)
+            && matchIndex >= span.index && matchIndex < span.index + span[0].length;
+        for (const comparison of value.matchAll(/(?:比较|评估|评测)(?:已发布|已公开|既有|现有)的?(?:系统|模型|检查点)(?:作为[^。！？!?；;，,]{1,48})?/gu)) {
+            if (withinEvaluation(comparison)
+                && /(?:^|[\n.!?]\s*)(?:The|Our)\s+(?:goal|aim|objective)\s+is\s+to\s+(?:compare|evaluate|assess|benchmark)\s+(?:the\s+)?(?:released|published|public)\s+(?:systems?|models?|checkpoints?)\b/i.test(source)) return true;
+        }
+        for (const variation of value.matchAll(/(?:已发布|已公开)的?(?:检查点|模型|系统)(?:在|的)[^。！？!?；;，,]{1,96}(?:各不相同|不同|存在差异|有差异)/gu)) {
+            if (withinEvaluation(variation)
+                && /(?:^|[\n.!?]\s*)(?:Released|Published|Public)\s+(?:checkpoints?|models?|systems?)\s+(?:differ|vary)\b/i.test(source)) return true;
+        }
         if (/(?:已发布检查点)[^。！？!?；;]{0,80}(?:校准参照|校准参考|外推诊断)/.test(value)
             && /\b(?:released|published)\s+checkpoints?\b/i.test(String(sourceText || ''))) return true;
         if (/^(?:前[两三二]者|前者|这些基线)是开放权重/.test(value)) {
@@ -4620,7 +4647,7 @@ function readerResourceClaimIssues(draft, identity, sourceText) {
                 || isScopedResourceNonClaim(segment, localMatchIndex, type)
                 || isReportedReleaseWithCurrentQualification(value)
                 || isSourceBackedBaselineUsage(value, type, match.index)
-                || isSourceBackedPriorModelEvaluation(value, type)
+                || isSourceBackedPriorModelEvaluation(value, type, match.index)
                 || isPostfixedNonEquivalence(
                     value.slice(segmentStart), localMatchIndex, localMatchEnd
                 )) continue;
