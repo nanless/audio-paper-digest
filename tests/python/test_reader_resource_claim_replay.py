@@ -41,6 +41,21 @@ class ResourceClaimReplayTests(unittest.TestCase):
         self.assertEqual(value['code'], 'READER_RESOURCE_AVAILABILITY_CLAIM')
         self.assertTrue(value['issues'])
 
+    def test_bounded_evidence_and_coordinated_denials_share_actual_publication_replay(self):
+        fixture = Path(__file__).resolve().parents[1] / 'reader-resource-scoped-denial-fixture.json'
+        cases = json.loads(fixture.read_text())
+        for body in cases['accept']:
+            with self.subTest(accepted=body):
+                result, value = self.run_replay(body)
+                self.assertEqual(result.returncode, 0, result.stderr or value)
+                self.assertEqual(value, {'verified': True})
+        for body in cases['reject']:
+            with self.subTest(rejected=body):
+                result, value = self.run_replay(body)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(value['code'], 'READER_RESOURCE_AVAILABILITY_CLAIM')
+                self.assertTrue(value['issues'])
+
     def test_source_substitution_is_rejected_before_analysis(self):
         result, value = self.run_replay('本文仅解释训练与推理机制。', wrong_source=True)
         self.assertNotEqual(result.returncode, 0)

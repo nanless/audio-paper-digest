@@ -4489,6 +4489,39 @@ function readerResourceClaimIssues(draft, identity, sourceText) {
     const isDependencyResourceAttribution = (segment, matchIndex, type) => type === 'model'
         && /(?:调用|使用|采用|加载|依赖|初始化(?:为)?|模型用|用的就)(?:的|的是)?(?:第三方|外部|基础|预训练|现成)?[^。！？!?；;，,]{0,24}$/
             .test(segment.slice(Math.max(0, matchIndex - 48), matchIndex));
+    const isBoundedResourceDeclarationDenial = (value, matchIndex, matchEnd) => {
+        const resource = '(?:源代码|代码仓库|模型权重|数据集|语料库|复现材料|代码|模型|权重|检查点|数据|资源)';
+        const connector = '(?:、|或|与|和|及|以及)';
+        const released = '(?:已经|现已|已)?(?:开源|公开|发布|开放|可下载|可获取|可用)';
+        const evidenceDenial = new RegExp('(?:尚未|并未|未曾|没有|未)在'
+            + '(?:本文|论文|原文|证据|已有证据|现有证据|封存原文|原文证据)中'
+            + '(?:明确|直接|可靠)?(?:提供|给出)(?:作者|本文|本研究|本工作)?的?'
+            + resource + '(?:' + connector + resource + '){0,3}' + released
+            + '的?(?:陈述|声明|证据|说明|表述)', 'gu');
+        const coordinatedDenial = new RegExp('(' + resource + '(?:' + connector + resource + '){1,4})'
+            + released + '([二两三四五2-5])(?:件事|项主张|项声明)(?:都|均|皆)不能默认成立', 'gu');
+        const contains = span => matchIndex >= span.index && matchEnd <= span.index + span[0].length;
+        const safeDenialIntroduction = span => {
+            const before = value.slice(0, span.index);
+            const prefix = before.split(/[。！？!?；;，,]/u).at(-1);
+            const suffix = value.slice(span.index + span[0].length);
+            const quoted = [['“', '”'], ['‘', '’'], ['「', '」']].some(([open, close]) =>
+                before.lastIndexOf(open) > before.lastIndexOf(close))
+                || ['"', "'", '`'].some(quote => before.split(quote).length % 2 === 0);
+            // 引述、反驳否定和双重否定不授权隐藏原来的肯定声明。
+            return !quoted && !/[“”‘’「」"'`]|(?:并非|不是|并不是|否定|反驳|证伪|推翻|排除|不代表|不意味着)/u.test(prefix)
+                && !/^\s*(?:(?:这(?:一|种)?(?:说法|判断|否定)|上述(?:说法|判断|否定)|的(?:说法|判断|否定))(?:(?:本身|其实|实际)?(?:是|为))?|(?:是|为))(?:错误|不成立|不准确|不属实|不正确)/u.test(suffix);
+        };
+        for (const span of value.matchAll(evidenceDenial)) {
+            if (contains(span) && safeDenialIntroduction(span)) return true;
+        }
+        for (const span of value.matchAll(coordinatedDenial)) {
+            const count = span[1].split(new RegExp(connector, 'u')).length;
+            const declared = { 二: 2, 两: 2, 三: 3, 四: 4, 五: 5 }[span[2]] || Number(span[2]);
+            if (count === declared && contains(span) && safeDenialIntroduction(span)) return true;
+        }
+        return false;
+    };
     const isScopedResourceNonClaim = (segment, matchIndex, type) => {
         const prefix = segment.slice(Math.max(0, matchIndex - 56), matchIndex);
         if (/(?:否定|反驳|证伪)[^。！？!?；;，,]{0,48}$/.test(prefix)) return false;
@@ -4712,6 +4745,7 @@ function readerResourceClaimIssues(draft, identity, sourceText) {
                     segment, localMatchIndex, localMatchEnd, type
                 )
                 || isDependencyResourceAttribution(segment, localMatchIndex, type)
+                || isBoundedResourceDeclarationDenial(value, match.index, match.index + match[0].length)
                 || isScopedResourceNonClaim(segment, localMatchIndex, type)
                 || isReportedReleaseWithCurrentQualification(value)
                 || isSourceBackedDependencyUseOrPriorDatasetAccess(value, type, match.index)

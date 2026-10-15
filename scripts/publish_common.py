@@ -4173,6 +4173,12 @@ def validate_manual_editorial_quality_v4(analysis):
             body,
             flags=re.M,
         )
+        # “三点一致：”中的“一致”是完整名词；保留真正的小数与其他诊断位置。
+        quantity_body = re.sub(
+            rf'(?<![\d{numeral_chars}])[{numeral_chars}]+点一致(?:性)?(?=\s*(?:[:：，,。；;！？!?]|$))',
+            lambda match: ' ' * len(match.group(0)),
+            quantity_body,
+        )
         # 与 Node 闸一致：一对一是一种结构关系，不是可测量的配对数量。
         # 用等长空白保留诊断偏移。
         quantity_body = re.sub(

@@ -48,6 +48,24 @@ function parseWithClaim(f, text, index = 10) {
     return deep.parseApiReaderArticleResult(JSON.stringify(draft), f.options);
 }
 
+test('证据中未给出的资源声明与数量一致的并列主张后置否定仅豁免自身，转折及双重否定仍拒绝', () => {
+    const cases = require('./reader-resource-scoped-denial-fixture.json');
+    const f = example();
+    const body = { contract: 'api-reader-resource-identity-v1', sourceTextSha256: sha(f.options.sourceText), resources: [] };
+    const identity = { ...body, identitySha256: deep.stableFingerprint(body) };
+    const issues = text => deep.readerResourceClaimIssues({ sections: [{ kind: 'reproduction', body: text }] },
+        identity, f.options.sourceText);
+    for (const text of cases.accept) assert.deepEqual(issues(text), [], text);
+    for (const text of cases.reject) assert.ok(issues(text).length > 0, text);
+    for (const text of cases.accept.slice(0, 2)) {
+        const draft = structuredClone(f.draft);
+        draft.sections[10].body += '\n\n' + text;
+        const bytes = JSON.stringify(draft);
+        assert.ok(deep.parseApiReaderArticleResult(bytes, { ...f.options, verifiedResourceIdentity: identity }).article);
+        assert.equal(JSON.stringify(draft), bytes);
+    }
+});
+
 test('普通日更 v3 正式解析按代码、权重、数据各自可达状态拒绝不实当前宣称，不能通过 false 开关绕过', () => {
     const f = example();
     assert.ok(deep.parseApiReaderArticleResult(JSON.stringify(f.draft), f.options).article);
