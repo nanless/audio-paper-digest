@@ -16,7 +16,7 @@ from analysis_sections import analysis_heading_titles, normalize_analysis_sectio
 from blog_entry_loader import load_publish_to_blog
 from paper_reader_presentation import build_reader_presentation
 from tag_presentation import FACET_DISPLAY_LABELS, render_tag_hierarchy_markdown
-from tag_catalog import load_tag_catalog, resolve_append_only_proof_catalog
+from tag_catalog import load_tag_catalog, load_archived_tag_catalog, resolve_append_only_proof_catalog
 from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, read_tag_stage_record
 from tag_catalog import (TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT,
                          TAG_FLAT_COMPAT_CONTRACT, LEGACY_TAG_FLAT_COMPAT_CONTRACT)
@@ -559,6 +559,17 @@ def render_packet(packet):
         and assignment.get('registrySha256') == tag_stage.get('registrySha256')
     if not same_catalog:
         original = resolve_append_only_proof_catalog(tag_stage.get('registrySha256'), tag_catalog)
+        if original is None:
+            # Completed official conference records retain their original stage,
+            # catalog and upgrade chain. Current page assignment is independent;
+            # this does not relax global append-only compatibility or re-sign it.
+            original = load_archived_tag_catalog(tag_stage.get('registrySha256'))
+            if original is not None and tag_catalog == load_tag_catalog():
+                from publish_common import _validate_tag_stage_record
+                _validate_tag_stage_record(paper, manifest, paper_id,
+                    original_registry_sha256=tag_stage.get('registrySha256'))
+            else:
+                original = None
         if original is not None and tag_stage.get('registryVersion') == original['version']:
             # Only genuine archived bytes with an unchanged full prefix qualify.
             # Recompute the old prompt and both selections; never rewrite the

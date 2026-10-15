@@ -189,8 +189,8 @@ def is_strict_append_only_catalog(previous, current):
         return False
 
 
-def resolve_append_only_proof_catalog(from_sha256, current, *, history_dir=None):
-    """只读真实 SHA 命名归档；不能用内存声明代替旧词表原字节。"""
+def load_archived_tag_catalog(from_sha256, *, history_dir=None):
+    """只读真实 SHA 命名归档；读取本身不授予当前词表下的发布资格。"""
     if not isinstance(from_sha256, str) or not re.fullmatch(r'[a-f0-9]{64}', from_sha256):
         return None
     if history_dir is None:
@@ -216,10 +216,15 @@ def resolve_append_only_proof_catalog(from_sha256, current, *, history_dir=None)
                 return None
         finally:
             os.close(fd)
-        previous = _parse_tag_catalog_bytes(raw)
-        return previous if is_strict_append_only_catalog(previous, current) else None
+        return _parse_tag_catalog_bytes(raw)
     except (OSError, ValueError, TypeError, KeyError):
         return None
+
+
+def resolve_append_only_proof_catalog(from_sha256, current, *, history_dir=None):
+    """仅同版本、完整原序前缀允许纯追加兼容，不接受跨版本迁移。"""
+    previous = load_archived_tag_catalog(from_sha256, history_dir=history_dir)
+    return previous if previous is not None and is_strict_append_only_catalog(previous, current) else None
 
 
 def active_preferred_labels(tag_catalog, facets=None):

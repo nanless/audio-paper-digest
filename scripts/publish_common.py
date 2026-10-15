@@ -66,6 +66,7 @@ from tag_catalog import (
     TAG_SELECTION_CONTRACT,
     LEGACY_TAG_SELECTION_CONTRACT,
     load_tag_catalog,
+    load_archived_tag_catalog,
     resolve_append_only_proof_catalog,
     tag_prompt_text_sha256,
 )
@@ -1420,7 +1421,7 @@ def _validate_tag_stage_catalog_upgrade(stage, paper_label):
         f'from={from_sha} to={to_sha}: {result["error"]}')
 
 
-def _validate_tag_stage_record(paper, manifest, paper_label):
+def _validate_tag_stage_record(paper, manifest, paper_label, *, original_registry_sha256=None):
     """发布端根据 Node 保存的标签阶段记录，重新核验词表、正文、检查点和所选标签的绑定。"""
     heading_issue = evaluation_heading_issue(paper.get('analysis'))
     if heading_issue:
@@ -1441,6 +1442,21 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
     stage = tag_record['stage']
     if not isinstance(stage, dict) or stage.get('status') not in {'complete', 'not_needed'}:
         raise PublishDataValidationError(f'{paper_label} 标签阶段记录缺失，或尚未完成。')
+    catalog = _PUBLISH_TAG_CATALOG
+    if original_registry_sha256 is not None:
+        catalog = load_archived_tag_catalog(original_registry_sha256)
+        if catalog is None or stage.get('registrySha256') != original_registry_sha256 \
+                or stage.get('registryVersion') != catalog['version']:
+            raise PublishDataValidationError(f'{paper_label} 原标签阶段必须绑定真实 SHA 归档及原版本。')
+        annotation = stage.get('registryUpgradeFrom')
+        if 'registryUpgradeFrom' in stage:
+            result = _validate_tag_catalog_upgrade(
+                annotation.get('fromRegistrySha256') if isinstance(annotation, dict) else None,
+                stage.get('conceptIds'), annotation, current=catalog,
+                snapshot_resolver=load_archived_tag_catalog,
+                from_registry_version=annotation.get('fromRegistryVersion') if isinstance(annotation, dict) else None)
+            if result.get('ok') is not True:
+                raise PublishDataValidationError(f'{paper_label} 原标签阶段的历史升级链无效：{result.get("error")}')
 
     # 按保存记录选择提示版本；读取旧版时不改写提示 SHA 或绑定哈希。
     prompt_text_contract = stage.get('projectionContract')
@@ -1455,18 +1471,18 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
             and contracts[tag_record['contractKey']] != stage['selectionContract']:
         raise PublishDataValidationError(
             f'{paper_label} 标签选择协议缺失，或不是当前支持的版本。')
-    if (stage.get('registryVersion') != _PUBLISH_TAG_CATALOG['version']
-            and not (stage.get('registrySha256') != _PUBLISH_TAG_CATALOG['registrySha256']
+    if (stage.get('registryVersion') != catalog['version']
+            and not (stage.get('registrySha256') != catalog['registrySha256']
                      and stage.get('registryVersion') == LEGACY_TAG_CATALOG_VERSION
-                     and _PUBLISH_TAG_CATALOG['version'] == TAG_CATALOG_VERSION)):
+                     and catalog['version'] == TAG_CATALOG_VERSION)):
         raise PublishDataValidationError(
             f'{paper_label} 标签阶段记录中的 registryVersion 与当前词表、提示文本或标签选择协议不一致。')
-    proof_catalog = _PUBLISH_TAG_CATALOG
-    if stage.get('registrySha256') == _PUBLISH_TAG_CATALOG['registrySha256']:
+    proof_catalog = catalog
+    if stage.get('registrySha256') == catalog['registrySha256']:
         for field, expected in (
-                ('registrySha256', _PUBLISH_TAG_CATALOG['registrySha256']),
+                ('registrySha256', catalog['registrySha256']),
                 ('projectionSha256', tag_prompt_text_sha256(
-                    _PUBLISH_TAG_CATALOG, prompt_text_contract))):
+                    catalog, prompt_text_contract))):
             if stage.get(field) != expected:
                 raise PublishDataValidationError(
                     f'{paper_label} 标签阶段记录中的 {field} 与当前词表、提示文本或标签选择协议不一致。')

@@ -5,6 +5,24 @@ const path = require('node:path');
 
 const MAX_ATTEMPTS = 3;
 const RETRY_COOLDOWN_MS = 15 * 60 * 1000;
+const STORAGE_FAILURE_CODES = new Set(['EIO', 'ENOSPC', 'EDQUOT', 'EROFS', 'EMFILE', 'ENFILE', 'EACCES', 'EPERM']);
+
+function findStorageFailure(error) {
+    const seen = new Set();
+    const inspect = value => {
+        if (!value || typeof value !== 'object' || seen.has(value)) return null;
+        seen.add(value);
+        if (STORAGE_FAILURE_CODES.has(value.code)) return value;
+        if (value instanceof AggregateError) for (const cause of value.errors) {
+            const found = inspect(cause); if (found) return found;
+        }
+        for (const key of ['cause', 'errorDetails', 'error']) {
+            const found = inspect(value[key]); if (found) return found;
+        }
+        return null;
+    };
+    return inspect(error);
+}
 
 function readPrivateJson(filename) {
     const stat = fs.lstatSync(filename);
@@ -35,10 +53,14 @@ function classifyFailure(error, now) {
         .replace(/https?:\/\/\S+/gi, '[URL]')
         .replace(/\b(api[_-]?key|authorization|token)\s*[:=]\s*[^\s,;]+/gi, '$1=[REDACTED]')
         .replace(/\bBearer\s+\S+|\bsk-[A-Za-z0-9_-]+/gi, '[REDACTED]').slice(0, 2000);
-    const code = typeof error?.code === 'string' && /^[A-Z0-9_]{1,100}$/.test(error.code) ? error.code : null;
+    const storageFailure = findStorageFailure(error);
+    const rawCode = error?.code || storageFailure?.code;
+    const code = typeof rawCode === 'string' && /^[A-Z0-9_]{1,100}$/.test(rawCode) ? rawCode : null;
     let category = 'paper';
+    // 分析或页面资产保存也可能先于进程状态写入失败；共享磁盘故障不能逐篇重试。
+    if (storageFailure) category = 'storage';
     // 以下来源和后处理错误按确切错误码分类，不根据说明文字猜测。
-    if (['CONFERENCE_POSTPROCESS_INTEGRITY', 'CONFERENCE_SOURCE_CONTEXT_INTEGRITY',
+    else if (['CONFERENCE_POSTPROCESS_INTEGRITY', 'CONFERENCE_SOURCE_CONTEXT_INTEGRITY',
         'CONFERENCE_EXTRACTION_RECEIPT_INTEGRITY', 'ARXIV_SOURCE_AUTHORITY_INTEGRITY',
         'FRESH_ANALYSIS_INTEGRITY', 'READER_IMAGE_SOURCE_INTEGRITY'].includes(code)) category = 'integrity';
     else if (/insufficient.balance|GoUsageLimitError|quota.*exhaust|billing|ACCOUNT_POOL.*EXHAUST/i.test(`${code} ${message}`)) category = 'quota';
@@ -70,10 +92,14 @@ function classifyFailure(error, now) {
     // 前半段英文词必须逐字保持原样，否则旧记录的复算结果会变；
     // 后半段是英文词的对应中文说法（不安全／不一致／完整性／已漂移／非规范／SHA 不符）。
     else if (/integrity|SHA.*mismatch|authority.*drift|unsafe|non.canonical|不安全|不一致|完整性|已漂移|非规范|SHA\s*不符/i.test(message)) category = 'integrity';
-    const systemic = ['quota', 'authentication', 'rate_limit', 'transport', 'configuration'].includes(category);
+    // 公共分析层已判定的运行级故障必须原样阻止补派，不能靠错误文案再次猜回单篇失败。
+    if (category === 'paper' && error?.scope === 'run') category = 'run';
+    const systemic = error?.scope === 'run'
+        || ['quota', 'authentication', 'rate_limit', 'transport', 'configuration', 'storage'].includes(category);
     return { category, code, message, systemic,
         retryable: !['quota', 'authentication', 'integrity', 'configuration', 'source_upgrade',
-            'tag_review'].includes(category) && error?.retryable !== false, at: now };
+            'tag_review', 'storage', 'run'].includes(category) && error?.scope !== 'run'
+            && error?.retryable !== false, at: now };
 }
 
 function eligible(item, now) {
@@ -254,4 +280,5 @@ function sourceImplementation(state, directory, api, ancestry = new Set()) {
     return implementation;
 }
 
-module.exports = { MAX_ATTEMPTS, RETRY_COOLDOWN_MS, readPrivateJson, classifyFailure, eligible, resolveProcess, sourceImplementation };
+module.exports = { MAX_ATTEMPTS, RETRY_COOLDOWN_MS, readPrivateJson, findStorageFailure,
+    classifyFailure, eligible, resolveProcess, sourceImplementation };

@@ -144,7 +144,7 @@ npm run test:compat
 | `lib/conference-filter.js` | Node 库：固定候选、已核验的证据文件、逐篇凭证、日更提示词、关键词策略、会议领域标签，以及模型、接口地址和词表的指纹。状态为 `ready` 的摘要进入关键词和提示词筛选；其他项交给模型。程序在请求前保存准备记录，绑定请求内容、来源与原状态 SHA，再保存请求凭证和筛选决定；写入前核对原状态。生产凭证只能由固定公共 LLM 路由生成，不允许替换网络请求实现；恢复时先核验旧锁和已有记录，避免重复执行。 |
 | `lib/conference-importer.js` | Node 库：根据已认证的暂存记录，把会议元数据、PDF 和提取结果安全导入私有缓存，再保存来源清单和导入凭证；低层清单辅助函数仅供隔离测试。 |
 | `lib/conference-pdf-source.js` | Node 库：核验受控本机 PDF 的字节、路径和链接，生成可重新核验的来源描述；没有可靠结构化 TeX 时明确标记公式不可用。 |
-| `lib/conference-plan.js` | Node 库：只从已认证的导入记录、已审计划和当前词表生成运行与计划凭证，核验相互对应的输入；拒绝任意路径、别名和不完整成员集。 |
+| `lib/conference-plan.js` | Node 库：只从已认证的导入记录、已审计划和当前词表生成运行与计划凭证；恢复按原凭证 SHA 及版本从集中归档只读核验原词表，保持原 plan/run/receipt 字节。来源计划可溯源不授予旧分类新出版资格，当前暂存仍完整核验分类；拒绝任意路径、别名和不完整成员集。 |
 | `lib/conference-postprocess.js` | Node 库：只接受已认证的会议计划，逐篇核验计划、来源、完成结果、当前分类和页面渲染。单篇目录包含词表与渲染实现指纹，代码升级不覆盖旧页面；只有执行记录精确覆盖完整入选集时才生成私有会议汇总。 |
 | `lib/conference-process-recovery.js` | 保留会议断点、已付费阶段与原来源绑定的恢复规则。 |
 | `lib/conference-process.js` | Node 库：对会议完整入选集合封存官方 PDF、导入来源，调用公共引擎分析，生成读者文章、评分、分类页面和汇总。整批默认并发 1，可设为 1–5；每篇内部并发固定为 1。新进程及完成凭证使用各自 v2 格式，词表身份写入 `tagCatalogVersion`、`tagCatalogSha256`；旧记录完整核验后沿原 UUID 恢复。 |
@@ -296,7 +296,7 @@ npm run test:compat
 | `plan-post-publish-visuals.py` | Python 入口：博客远端发布核验通过后调用共用视觉规划接口。 |
 | `project_env.py` | 加载 Python 项目环境、最小子进程环境和代理设置。 |
 | `publication_activation.py` | Python 入口/共享库：核验旧提交、博客基线和实时远端，归档六个精确状态文件。pending 状态阻断发布三阶段，支持中断恢复，不修改已提升的论文分析。 |
-| `publish-conference.py` | CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 只安装文件；push 核验实际 Git index 和 commit blob，先发布图床再发布博客；verify 检查线上 URL。以上都是机械检查，语义审查和浏览器里的视觉效果仍要人工确认。 |
+| `publish-conference.py` | CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 核验并安装原单篇和汇总暂存文件；review 共用正文模型、逐图多模态及 Markdown/Hugo 审查；push 核验实际 Git index 和 commit blob，先发布图床再发布博客；verify 重验线上页面、引用文件和图片。已有 publish 的 ID 不因重复 generate 更新。部署工作流、页面标题及浏览器实际效果另行核验。 |
 | `publish-to-blog.py` | Python 核心：实现三个发布阶段共用的页面模板、标签兼容映射、Git 事务、批次凭证及发布证明。`researcher-workbench-v1` 规定页面元数据、引用和论文再思考附属资料；独立人工 v4 的文章语义与 `machineAssets` 机器核验分区，最终凭证仍覆盖完整清单。逐页通过记录永久按“相对路径 + 内容 SHA”复用，字节未变的通过页不重审；内容失败页仅在完整合法的旧、新审查协议确实不同时进入正常重审。 |
 | `publish_common.py` | Python 共享：提供发布数据、评分、Manual/API 来源核验及 LLM 审查的共用规则。 |
 | `push-blog.py` | Python 入口：核验 receipt，提交并推送其允许的改动，确认远端 OID 后规划视觉任务。 |

@@ -892,10 +892,62 @@ test('适配器部分失败时，保留标准的错误分类', async t => {
     const deps = { ...f.deps, adapter: {
         prepareConferenceAnalysis: () => {}, analyzeConference: async () => ({ status: 'partial' }),
         loadConferenceAnalysis: () => ({ analysis: { papers: [{ latestAnalysisAttemptError: 'HTTP 401: Insufficient balance',
-            latestAnalysisAttemptErrorCode: 'MODEL_HTTP_NON_RETRYABLE', latestAnalysisAttemptRetryable: false }] } })
+            latestAnalysisAttemptErrorCode: 'MODEL_HTTP_NON_RETRYABLE', latestAnalysisAttemptRetryable: false,
+            latestAnalysisAttemptErrorScope: 'run', latestAnalysisAttemptErrorCategory: 'authentication',
+            latestAnalysisAttemptErrorStatus: 401 }] } })
     } };
     await assert.rejects(processApi.processOne(f.context, { planHandle: {} }, { ...f.members[0], analysisRunId: 'fixture' }, deps),
-        error => error.message.includes('Insufficient balance') && error.code === 'MODEL_HTTP_NON_RETRYABLE' && error.retryable === false);
+        error => error.message.includes('Insufficient balance') && error.code === 'MODEL_HTTP_NON_RETRYABLE'
+            && error.retryable === false && error.scope === 'run'
+            && error.category === 'authentication' && error.status === 401);
+});
+
+test('会议分析或资产保存中的存储故障停止补派，在途成功与原错误均保留', async t => {
+    for (const wrapped of [false, true]) await t.test(wrapped ? '嵌套聚合保存失败' : '直接保存失败', async t => {
+        const f = fixture(t, 4), started = [];
+        const storage = Object.assign(new Error('测试模拟分析保存失败'), { code: wrapped ? 'EIO' : 'ENOSPC' });
+        const failure = wrapped ? new AggregateError([new Error('包装保存失败', { cause: storage })]) : storage;
+        let release;
+        const bothStarted = new Promise(resolve => { release = resolve; });
+        const options = { apply: true, concurrency: 2 };
+        const first = await processApi.runConferenceProcess(options, { ...f.deps, maxRounds: 3,
+            processPaper: async (_context, _shared, item) => {
+                started.push(item.paperId); if (started.length === 2) release();
+                await bothStarted;
+                if (item.paperId === f.members[0].paperId) throw failure;
+                return success(item);
+            } });
+        assert.equal(first.stopped, true); assert.equal(first.complete, 1);
+        assert.equal(first.batchFailure.category, 'storage');
+        assert.equal(first.batchFailure.code, storage.code); assert.equal(first.batchFailure.retryable, false);
+        assert.deepEqual(started, f.members.slice(0, 2).map(item => item.paperId));
+        const state = processApi.assertState(JSON.parse(fs.readFileSync(path.join(
+            f.files.conferenceProcessDir, first.processId, 'state.json'))));
+        assert.equal(state.items[f.members[0].paperId].attempts, 1);
+        assert.equal(state.items[f.members[1].paperId].status, 'complete');
+        assert.equal(state.items[f.members[2].paperId].attempts, 0);
+        const again = await processApi.runConferenceProcess(options, { ...f.deps,
+            prepareShared: () => assert.fail('持久存储故障须在来源准备前阻断续跑') });
+        assert.equal(again.stopped, true); assert.deepEqual(again.batchFailure, first.batchFailure);
+    });
+});
+
+test('会议保留结构化运行级故障，普通正文与网络单篇失败仍按原范围处理', async t => {
+    const recovery = require('../scripts/lib/conference-process-recovery.js');
+    const now = '2026-10-16T00:00:00.000Z';
+    const runFailure = Object.assign(new Error('模型当前不可用'), { code: 'MODEL_SERVICE_UNAVAILABLE', scope: 'run' });
+    const f = fixture(t, 3); let calls = 0;
+    const result = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, {
+        ...f.deps, maxRounds: 3, processPaper: async () => { calls += 1; throw runFailure; } });
+    assert.equal(calls, 1); assert.equal(result.stopped, true);
+    assert.equal(result.batchFailure.category, 'run'); assert.equal(result.batchFailure.retryable, false);
+    for (const error of [new Error('正文提及 ENOSPC 不代表本地磁盘出错'),
+        Object.assign(new Error('模型网络重试已用尽'), { code: 'ECONNRESET', retryable: false })]) {
+        const failure = recovery.classifyFailure(error, now);
+        assert.equal(failure.category, 'paper'); assert.equal(failure.systemic, false);
+    }
+    const circular = new Error('循环包装'); circular.cause = circular;
+    assert.equal(recovery.findStorageFailure(circular), null);
 });
 
 test('迁移后旧实现仍可寻址，并且绝不重分析已完成的论文', async t => {
@@ -1206,6 +1258,31 @@ test('旧版部分导入在模型或来源准备之前，先把 401 归类写进
         prepareShared: () => assert.fail('must not prepare blocked legacy process'),
         processPaper: () => assert.fail('must not call model for legacy 401') });
     assert.equal(result.stopped, true); assert.equal(result.batchFailure.category, 'quota');
+});
+
+test('旧部分稿的结构化运行级范围在恢复分类前保留，不靠错误文字猜测', async t => {
+    const f = fixture(t); const options = { apply: true, concurrency: 1 };
+    const first = await processApi.runConferenceProcess(options, { ...f.deps,
+        processPaper: () => { throw new Error('原普通失败'); } });
+    const filename = path.join(f.files.conferenceProcessDir, first.processId, 'state.json');
+    const state = JSON.parse(fs.readFileSync(filename)), item = Object.values(state.items)[0];
+    delete item.lastFailure; delete item.retryNotBefore;
+    state.stateSha256 = processApi.stateDigest(state); fs.writeFileSync(filename, JSON.stringify(state));
+    f.files.conferenceAnalysisDir = path.join(f.root, 'analyses');
+    const directory = path.join(f.files.conferenceAnalysisDir, item.analysisRunId);
+    fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const analysisBytes = Buffer.from(JSON.stringify({ papers: [{
+        latestAnalysisAttemptError: '服务当前不可用', latestAnalysisAttemptErrorCode: 'MODEL_SERVICE_UNAVAILABLE',
+        latestAnalysisAttemptErrorScope: 'run', latestAnalysisAttemptErrorCategory: 'state',
+        latestAnalysisAttemptErrorStatus: 503, latestAnalysisAttemptRetryable: false }] }));
+    fs.writeFileSync(path.join(directory, 'analysis.json'), analysisBytes, { mode: 0o600 });
+    const result = await processApi.runConferenceProcess(options, { ...f.deps,
+        prepareShared: () => assert.fail('结构化运行故障在准备或付费前阻断'),
+        processPaper: () => assert.fail('不得把旧运行故障当成单篇重试') });
+    assert.equal(result.stopped, true); assert.equal(result.batchFailure.category, 'run');
+    assert.equal(result.batchFailure.code, 'MODEL_SERVICE_UNAVAILABLE');
+    assert.equal(result.batchFailure.retryable, false);
+    assert.deepEqual(fs.readFileSync(path.join(directory, 'analysis.json')), analysisBytes);
 });
 
 test('计划对不上时，来源代次升级不会重置已有分析', async t => {

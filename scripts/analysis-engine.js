@@ -906,7 +906,11 @@ function initializeJsonFileLocked(filePath, fallbackValue, options = {}) {
 }
 
 function getIncompleteAnalysisContentReason(paper) {
-    if (!hasValidAnalysisBody(paper)) return '分析正文未通过内容检查。';
+    return getIncompleteAnalysisContentReasonUsingRules(paper);
+}
+
+function getIncompleteAnalysisContentReasonUsingRules(paper, tagRules) {
+    if (!hasValidAnalysisBodyUsingRules(paper, { tagRules })) return '分析正文未通过内容检查。';
     if (!paper.analysisManifest || paper.analysisManifest.version !== 1) {
         return '分析阶段记录 analysisManifest 缺失，或其版本无效。';
     }
@@ -916,7 +920,7 @@ function getIncompleteAnalysisContentReason(paper) {
         return '仍有必需的分析阶段未达到允许的完成状态。';
     }
     const tagStageProofIssue = !paper.analysisManifest.manualTakeover
-        ? validateTagStageProof(paper, { parsed: parseAnalysis(paper.analysis) })
+        ? validateTagStageProof(paper, { parsed: parseAnalysis(paper.analysis, { tagRules }), tagRules })
         : null;
     if (tagStageProofIssue) return `标签阶段记录未通过核验：${tagStageProofIssue}`;
     const coreSummaryBindingIssue = validateCoreSummaryStageBinding(paper);
@@ -1424,7 +1428,51 @@ function scoringAuditBindsFinalAnalysis(paper) {
 }
 
 function isSuccessfulAnalysisRecord(paper) {
-    if (!isCompleteAnalysisContent(paper)) return false;
+    return isSuccessfulAnalysisRecordWithContentReason(paper, getIncompleteAnalysisContentReason(paper));
+}
+
+/**
+ * 已完成会议的发布回放只按原标签规则读取旧签名；不授予当前分析成功或跳过资格。
+ * 调用方须先核验会议完成凭证及原词表归档字节；原升级说明仍逐项只读重放。
+ * 除标签正文与阶段证明外，核心摘要、Reader、评分和最新失败仍使用同一正常核验。
+ */
+function isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, options = {}) {
+    const manifest = paper?.analysisManifest;
+    const tagRules = options.tagRules;
+    if (!paper || paper.source !== 'conference'
+        || !/^conference:[a-z0-9-]+:\d{4}:[^\s]+$/u.test(String(paper.id || ''))
+        || paper.conferencePaperId !== paper.id || paper.sourceId !== paper.id
+        || paper.analysisSource !== 'conference_pdf_text'
+        || manifest?.manualTakeover
+        || manifest?.contracts?.apiReaderArticle !== API_READER_V3_CONTRACT
+        || manifest?.stages?.scoringAudit?.scoringContract !== 'api-scoring-audit-v2'
+        || !tagRules || !/^[a-f0-9]{64}$/u.test(String(tagRules.registrySha256 || ''))) return false;
+    try {
+        const tagRecord = require('./lib/tag-stage-record').readTagStageRecord(
+            manifest, paper.analysisStageCheckpoints
+        );
+        if (tagRecord.stage?.registrySha256 !== tagRules.registrySha256
+            || tagRecord.stage?.registryVersion !== tagRules.registryVersion) return false;
+        if (Object.hasOwn(tagRecord.stage, 'registryUpgradeFrom')) {
+            const annotation = tagRecord.stage.registryUpgradeFrom;
+            const upgrade = require('./lib/tag-catalog-change').validateTagCatalogUpgrade({
+                fromRegistrySha256: annotation?.fromRegistrySha256,
+                fromRegistryVersion: annotation?.fromRegistryVersion,
+                currentRegistry: tagRules.tagCatalog,
+                currentRegistrySha256: tagRules.registrySha256,
+                conceptIds: tagRecord.stage.conceptIds,
+                annotation
+            });
+            if (!upgrade.ok) return false;
+        }
+        return isSuccessfulAnalysisRecordWithContentReason(
+            paper, getIncompleteAnalysisContentReasonUsingRules(paper, tagRules)
+        );
+    } catch (_) { return false; }
+}
+
+function isSuccessfulAnalysisRecordWithContentReason(paper, contentReason) {
+    if (contentReason !== null) return false;
     if (!require('./lib/pending-fact-feedback').completed(paper)) return false;
     const facts = require('./lib/daily-fact-review');
     const stages = paper.analysisManifest?.stages || {};
@@ -1480,12 +1528,17 @@ function isSuccessfulAnalysisRecord(paper) {
 }
 
 function hasValidAnalysisBody(paper, options = {}) {
+    return hasValidAnalysisBodyUsingRules(paper, { legacyTags: options.legacyTags === true });
+}
+
+function hasValidAnalysisBodyUsingRules(paper, options = {}) {
     if (!paper || typeof paper.analysis !== 'string' || !paper.analysis.trim()) return false;
     // 阶段记录描述的是最近一次尝试，不能据此判断旧正文是否仍可使用。
     // 单独重新解析正文，避免多次保存失败结果时误删已有的有效内容。
     try {
         const parsed = parseAnalysis(paper.analysis, {
-            legacyTags: options.legacyTags === true
+            legacyTags: options.legacyTags === true,
+            tagRules: options.tagRules
         });
         return !getInvalidAnalysisReason(paper.analysis, parsed, {
             paper,
@@ -2303,6 +2356,7 @@ module.exports = {
     updateJsonFileLocked,
     persistAnalysisCheckpoint,
     isSuccessfulAnalysisRecord,
+    isSuccessfulAnalysisRecordForReadOnlyConferencePublication,
     getIncompleteAnalysisContentReason,
     scoringAuditBindsFinalAnalysis,
     scoringStabilityIsResolved,

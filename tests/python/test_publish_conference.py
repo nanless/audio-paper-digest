@@ -677,6 +677,70 @@ class ConferencePublishTests(unittest.TestCase):
             M.transaction_snapshot(self.repo, previous['baseHead'],
                                    previous['remoteIdentitySha256'], previous['files'])
 
+    def regenerate_changed_staged_page(self, *, advance=False, tamper=False, corrupt=False, change_member=False):
+        images, previous = self.rebase_fixture(existing=True)
+        conference_id = 'icassp-2026'
+        process_id = 'f4e4a4e4-a4e4-44e4-a4e4-a4e4a4e4a4e4'
+        record = previous['files'][0]
+        target = self.repo / record['path']
+        raw = target.read_bytes().replace(b'---\n',
+            b'---\npaper_digest_pipeline_owned: true\npaper_digest_conference_id: "icassp-2026"\n', 1)
+        target.write_bytes(raw)
+        original_source = self.root / 'original-stage.md'
+        original_source.write_bytes(raw)
+        record.update(sourceSha256=M.sha_bytes(raw), sourcePath=str(original_source))
+        new_source = self.root / 'current-stage.md'
+        new_source.write_bytes(raw + '当前多级标签呈现\n'.encode())
+        current = {**record, 'sourceSha256': M.sha_bytes(new_source.read_bytes()), 'sourcePath': str(new_source)}
+        if change_member:
+            current['paperId'] = 'conference:icassp:2026:icassp-arnumber:changed'
+        body = {**previous, 'contract': 'conference-blog-generation-v1', 'version': 2,
+                'conferenceId': conference_id, 'processId': process_id, 'remoteName': 'origin',
+                'implementationSha256': 'a' * 64, 'completionReceiptSha256': 'a' * 64}
+        old = {**body, 'generationSha256': M.stable(body)}
+        if corrupt:
+            old['generationSha256'] = '0' * 64
+        directory = M.publication_dir(conference_id, process_id)
+        M.write_exact(directory / 'generation.json', M.json_bytes(old))
+        if advance:
+            self.advance_main(self.repo)
+        if tamper:
+            target.write_bytes(raw + b'local unreviewed edit')
+        saved = target.read_bytes()
+        with mock.patch.object(M, 'blog_repo', return_value=self.repo), \
+                mock.patch.object(M, 'image_repo', return_value=images), \
+                mock.patch.object(M, 'process_bundle', return_value={
+                    'files': [current], 'imageFiles': previous['imageFiles'],
+                    'completion': {'receiptSha256': 'b' * 64}}):
+            if tamper or corrupt or change_member:
+                with self.assertRaises(M.ConferencePublicationError):
+                    M.generate(conference_id, process_id)
+                self.assertEqual(target.read_bytes(), saved)
+                self.assertEqual(M.load_generation(conference_id, process_id), old)
+                return
+            M.generate(conference_id, process_id)
+        generated = M.load_generation(conference_id, process_id)
+        self.assertEqual(target.read_bytes(), new_source.read_bytes())
+        self.assertEqual(generated['completionReceiptSha256'], 'b' * 64)
+        self.assertEqual(generated['files'], [current])
+        archived = directory / ('generation.superseded-' + M.sha_bytes(M.json_bytes(old))[:12] + '.json')
+        self.assertEqual(archived.read_bytes(), M.json_bytes(old))
+
+    def test_renderer_migration_replaces_exact_old_generation_dirty_bytes(self):
+        self.regenerate_changed_staged_page()
+
+    def test_renderer_migration_after_main_advance_replaces_exact_old_generation_dirty_bytes(self):
+        self.regenerate_changed_staged_page(advance=True)
+
+    def test_renderer_migration_rejects_third_worktree_bytes(self):
+        self.regenerate_changed_staged_page(advance=True, tamper=True)
+
+    def test_renderer_migration_rejects_corrupted_old_generation(self):
+        self.regenerate_changed_staged_page(corrupt=True)
+
+    def test_renderer_migration_rejects_changed_complete_page_membership(self):
+        self.regenerate_changed_staged_page(advance=True, change_member=True)
+
     def test_already_published_targets_survive_unrelated_main_advance(self):
         images, previous = self.rebase_fixture()
         for repo, records in ((self.repo, previous['files']), (images, previous['imageFiles'])):

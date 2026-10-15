@@ -17,7 +17,8 @@ const evidenceFixture = require('./conference-filter-evidence-fixture.js');
 const NOW = '2026-09-06T12:00:00.000Z';
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 
-function productionPlanFixture(t, { value = '100', pdfLines = 120, planApi = plan, authors = null } = {}) {
+function productionPlanFixture(t, { value = '100', pdfLines = 120, planApi = plan, authors = null,
+    tagCatalogBytes = null } = {}) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'conference-plan-authority-'));
     t.after(() => fs.rmSync(root, { recursive: true, force: true }));
     const roots = Object.fromEntries(['source', 'cache', 'ledgers', 'catalogs', 'reports', 'filters', 'staging', 'runs']
@@ -78,9 +79,10 @@ function productionPlanFixture(t, { value = '100', pdfLines = 120, planApi = pla
         path.join(roots.ledgers, 'ledger.import-receipt.json'), stagingHandle);
     // 原源码实例保留原文件名与原词表版本；当前默认样本使用新名称。
     const tagField = planApi.PLAN_CONTRACT === 'conference-run-plan-v2' ? 'taxonomy' : 'tagMetadata';
-    const tagCatalogVersion = tagField === 'taxonomy' ? 'taxonomy-v1' : 'paper-tag-catalog-v2';
+    const tagCatalogVersion = tagCatalogBytes ? JSON.parse(tagCatalogBytes).version
+        : tagField === 'taxonomy' ? 'taxonomy-v1' : 'paper-tag-catalog-v2';
     const tagCatalogPath = path.join(root, tagField === 'taxonomy' ? 'taxonomy.json' : 'tag-catalog.json');
-    fs.writeFileSync(tagCatalogPath, `${JSON.stringify({ version: tagCatalogVersion })}\n`, { mode: 0o600 });
+    fs.writeFileSync(tagCatalogPath, tagCatalogBytes || `${JSON.stringify({ version: tagCatalogVersion })}\n`, { mode: 0o600 });
     files.tagCatalogFile = tagCatalogPath;
     const identities = importer.importHandleSnapshot(importHandle).verifiedMembers;
     // 原源码实例按其旧格式生成样本；不修改新版对象的字段，也不重新计算其 SHA 来冒充旧记录。

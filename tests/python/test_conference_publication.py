@@ -186,6 +186,30 @@ class GitPublicationTest(unittest.TestCase):
                          'https://example.com/posts/conference-test-paper/')
         self.assertEqual(template.read_text(), '{{ invalid_template_call }}')
 
+    @unittest.skipUnless(shutil.which('hugo'), '找不到 Hugo 可执行程序')
+    def test_real_hugo_builds_only_batch_but_preserves_physical_legacy_proofs(self):
+        (self.blog / 'hugo.toml').write_text('baseURL = "https://example.com/"\n')
+        legacy = self.blog / 'content/posts/legacy-proof.md'
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        # A historical proof can be read by a template without becoming batch content.
+        legacy.write_text('---\ninvalid: [\n---\noriginal sealed proof\n')
+        template = self.blog / 'layouts/_default/single.html'
+        template.parent.mkdir(parents=True)
+        template.write_text('{{ if not (strings.Contains (readFile "content/posts/legacy-proof.md") "original sealed proof") }}'
+                            '{{ errorf "physical legacy proof missing" }}{{ end }}'
+                            '{{ if ne (len .Site.RegularPages) 1 }}{{ errorf "unrelated pages rendered" }}{{ end }}'
+                            '<html><head><link rel="canonical" href="{{ .Permalink }}"></head>'
+                            '<body><div class="post-content">{{ .Content }}</div></body></html>')
+        self.git(self.blog, 'add', 'hugo.toml', 'layouts', 'content/posts/legacy-proof.md')
+        self.git(self.blog, 'commit', '-m', '保留物理旧证明但只构建本批测试')
+        baseline = self.git(self.blog, 'rev-parse', 'HEAD').strip()
+        original = legacy.read_bytes()
+        record = self.record_file(self.blog, self.record['path'], b'---\ntitle: Test\ndate: 2020-01-01\n---\nApproved batch body')
+        result = publisher.run_hugo(self.blog, {'baseHead': baseline, 'files': [record], 'imageFiles': []})
+        self.assertEqual(result['status'], 'passed')
+        self.assertEqual(len(result['pages']), 1)
+        self.assertEqual(legacy.read_bytes(), original)
+
     def test_receipt_atomic_write_failure_leaves_no_partial_final(self):
         filename = self.root / 'receipt.json'
         with mock.patch.object(publisher.os, 'fsync', side_effect=OSError('disk failure')):
@@ -307,6 +331,33 @@ class GitPublicationTest(unittest.TestCase):
         runtime.start()
         self.addCleanup(runtime.stop)
         return record, asset
+
+    def test_generation_cold_replay_rejects_relabelled_or_duplicate_page_records(self):
+        self.prepare_flow()
+        publisher.generate(self.cid, self.pid)
+        path = publisher.publication_dir(self.cid, self.pid) / 'generation.json'
+        original = path.read_bytes()
+        generation = json.loads(original)
+        publisher.validate_generation(self.cid, self.pid, self.blog, self.images)
+        mutations = {
+            'paper-to-sidecar': lambda value: value['files'][0].update(kind='sidecar'),
+            'paper-id': lambda value: value['files'][0].update(paperId='conference:test:2026:paper-id:other'),
+            'size': lambda value: value['files'][0].update(size=value['files'][0]['size'] + 1),
+            'page-manifest': lambda value: value['files'][0].update(manifestSha256='c' * 64),
+            'duplicate-page': lambda value: value['files'].append(dict(value['files'][0])),
+            'duplicate-image': lambda value: value['imageFiles'].append(dict(value['imageFiles'][0])),
+            'image-owner': lambda value: value['imageFiles'][0].update(paperId='conference:test:2026:paper-id:other'),
+        }
+        for label, mutate in mutations.items():
+            changed = json.loads(original)
+            mutate(changed)
+            changed.pop('generationSha256')
+            changed['generationSha256'] = publisher.stable(changed)
+            path.write_bytes(publisher.json_bytes(changed))
+            with self.subTest(label=label), self.assertRaises(publisher.ConferencePublicationError):
+                publisher.validate_generation(self.cid, self.pid, self.blog, self.images)
+        path.write_bytes(original)
+        publisher.validate_generation(self.cid, self.pid, self.blog, self.images)
 
     def test_generate_repeated_never_pushes_then_failed_urls_remain_pending(self):
         self.prepare_flow()

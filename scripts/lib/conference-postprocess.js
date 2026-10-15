@@ -142,6 +142,37 @@ function planProof(planHandle, dependencies = {}) {
         selectedMemberSetSha256: run.selectedMemberSetSha256, paperIds };
     return { authenticated, proof: { ...body, proofSha256: stableHash(body) } };
 }
+function readOriginalTagProof(paper) {
+    let record;
+    try { record = require('./tag-stage-record.js').readTagStageRecord(paper.analysisManifest, paper.analysisStageCheckpoints); }
+    catch (error) { fail(error.message); }
+    const stage = record.stage;
+    if (!stage) fail('原标签阶段记录缺失。');
+    let file;
+    try { file = planApi.readProofTagCatalogFile({ version: stage.registryVersion, sha256: stage.registrySha256 },
+        require('../config.js').FILES.tagCatalogFile); }
+    catch (error) { fail(`标签阶段记录未通过当前校验（原词表只读重放）：${error.message}`); }
+    const catalog = { ...file.value, registrySha256: file.sha256 };
+    const rules = tagRulesApi.createTagRules({ tagCatalog: catalog });
+    const parsed = require('../utils.js').parseAnalysis(paper.analysis, { tagRules: rules });
+    const issue = analysisContract.validateTagStageProof(paper, { parsed, tagRules: rules });
+    // 当前词表中的未定选择只允许形成 blocked 审查队列，仍不能生成页面。
+    // 已签旧词表的恢复则必须完整通过原记录，不能以未定选择逃避原证明。
+    const sameCatalog = stage.registrySha256 === tagRulesApi.getDefaultTagRules().registrySha256;
+    if (issue && (!sameCatalog || parsed?.tagValidation?.valid !== false)) {
+        fail(`原标签阶段记录未通过原词表只读重放：${issue}`);
+    }
+    if (stage.registryUpgradeFrom !== undefined) {
+        const annotation = stage.registryUpgradeFrom;
+        const upgrade = require('./tag-catalog-change.js').validateTagCatalogUpgrade({
+            fromRegistrySha256: annotation?.fromRegistrySha256,
+            fromRegistryVersion: annotation?.fromRegistryVersion,
+            currentRegistry: catalog, currentRegistrySha256: catalog.registrySha256,
+            conceptIds: stage.conceptIds, annotation });
+        if (!upgrade.ok) fail(`原标签阶段的历史升级记录未通过只读重放：${upgrade.error}`);
+    }
+    return { rules, parsed, stage };
+}
 function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence = false }, dependencies = {}) {
     if (!UUID_RE.test(executionId || '')) fail('分析运行 ID 必须是 UUID。');
     authority(planHandle, dependencies);
@@ -187,8 +218,9 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
     }
     const sourcePaper = loaded.analysis.papers[0];
     const publication = validateReaderAndScoring(sourcePaper);
-    const successful = dependencies.isSuccessful || analysisEngine.isSuccessfulAnalysisRecord;
-    if (!successful(loaded.analysis.papers[0])) fail('会议论文的正式分析记录尚未通过完成检查。');
+    const originalTagProof = readOriginalTagProof(sourcePaper);
+    const successful = dependencies.isSuccessful || analysisEngine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication;
+    if (!successful(sourcePaper, { tagRules: originalTagProof.rules })) fail('会议论文的正式分析记录尚未通过完成检查。');
     if (!require('./model-text-sanitization.js').canReuseModelTextInputs(sourcePaper, loaded.source.sourceDetails)) {
         fail('会议论文的旧 Unicode 模型输入需重新分析，不能直接复用正式输出。');
     }
@@ -200,10 +232,12 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
         canonicalId: loaded.run.paperId, arxivId: null, conference: coordinates,
         externalId: structuredClone(sourcePaper.externalId), source: { status: 'official', url: publication.recordUrl }, citation: null });
     loaded.identity = identity; loaded.identitySha256 = identityApi.identitySha256(identity); loaded.publication = publication;
+    loaded.originalTagProof = originalTagProof;
     return loaded;
 }
-function getConsistentPublicationFields(paper) {
-    const parsed = paper.parsed; const reparsed = require('../utils.js').parseAnalysis(paper.analysis);
+function getConsistentPublicationFields(paper, tagRules) {
+    const parsed = paper.parsed; const reparsed = require('../utils.js').parseAnalysis(paper.analysis,
+        tagRules ? { tagRules } : {});
     try { require('../utils.js').readTagValidation(parsed); }
     catch (error) { fail(error.message); }
     const pick = value => ({ tags: (value.tags || []).map(item => String(item).trim()),
@@ -252,10 +286,14 @@ function readStageTagMetadata(manifest) {
 function buildAssignment(loaded, tagCatalog, savedAssignment) {
     // 旧格式仅用于核验原记录的完整复算；生成器始终使用当前默认格式。
     if (savedAssignment !== undefined && !isKnownAssignmentFormat(savedAssignment)) fail('原标签分配记录的格式版本不受支持。');
-    const paper = loaded.analysis.papers[0], input = getConsistentPublicationFields(paper), reasons = [], concepts = new Map();
+    const paper = loaded.analysis.papers[0], original = loaded.originalTagProof || readOriginalTagProof(paper);
+    const input = getConsistentPublicationFields(paper, original.rules), reasons = [], concepts = new Map();
     const tagRules = tagRulesApi.createTagRules({ tagCatalog });
-    const parsedAnalysis = require('../utils.js').parseAnalysis(paper.analysis);
-    const tagStageProofIssue = analysisContract.validateTagStageProof(paper, { parsed: parsedAnalysis, tagRules: tagRules });
+    const originalCatalog = original.rules.registrySha256 === tagRules.registrySha256;
+    const parsedAnalysis = require('../utils.js').parseAnalysis(paper.analysis, {
+        tagRules, ...(originalCatalog ? {} : { legacyTags: true }) });
+    const tagStageProofIssue = analysisContract.validateTagStageProof(paper, {
+        parsed: original.parsed, tagRules: original.rules });
     // 标签选择未通过当前词表校验时，保存待审查的分配记录，不生成页面。
     // 如果标签选择已通过、但阶段记录不一致，则按完整性错误停止，
     // 不能把来源或记录损坏归为普通标签审查。
@@ -265,6 +303,16 @@ function buildAssignment(loaded, tagCatalog, savedAssignment) {
         for (const issue of parsedAnalysis.tagValidation.errors || []) {
             reasons.push(`selection:${String(issue).slice(0, 200)}`);
         }
+    } else if (!originalCatalog) {
+        const selection = require('../utils.js').readTagValidation(parsedAnalysis);
+        if (selection.primaryTaskId !== original.stage.primaryTaskId
+            || selection.primaryMethodId !== original.stage.primaryMethodId
+            || stableHash(selection.conceptIds) !== stableHash(original.stage.conceptIds)) {
+            fail('当前词表重新解析后的主任务、主方法或概念 ID 与原标签阶段不一致，不能静默改变已签分类。');
+        }
+        // 页面仅投影当前首选中文标签；原正文、缓存解析与历史签名保持原字节。
+        Object.assign(input, { tags: parsedAnalysis.tags,
+            primaryTaskTag: parsedAnalysis.primaryTaskTag, primaryMethodTag: parsedAnalysis.primaryMethodTag });
     }
     // parseAnalysis 会把认不出的角色标签归一成 ''，所以这里取回原始角色行：
     // 审查队列要写出它没能归类的那个标签，
@@ -1100,7 +1148,7 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
     for (const item of members) lines.push(`### ${item.rank}. [${md(item.readerTitle)}](${item.url})`, '',
         `> 英文题目：*[${md(item.title)}](${item.url})*`, '',
         tagPresentationByPaperId.get(item.paperId).trimEnd(), '', `评分：${scoreLine(item.score, item.scoreDimensions)}`, '',
-        `排名：${md(item.rankBucket)} | 文档类型：${md(item.documentType)} | 主任务：#${md(item.primaryTask)} | 主方法：#${md(item.primaryMethod)}`, '',
+        `排名：${md(item.rankBucket)} | 文档类型：${md(item.documentType)}`, '',
         `会议来源：[官方记录](${item.officialRecordUrl}) · [官方 PDF](${item.officialPdfUrl})`, '',
         '👥 **作者与机构**', '',
         ...item.authors.map(author => `- ${md(author.name)}：${author.affiliations.map(md).join('；')}`), '',
@@ -1141,7 +1189,7 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
 
 module.exports = { CONTRACT, PAGE_VERSION, LEGACY_PAGE_CONTRACT, AGGREGATE_CONTRACT, AGGREGATE_VERSION,
     ASSIGNMENT_CONTRACT, ASSIGNMENT_VERSION, LEGACY_ASSIGNMENT_CONTRACT, PROJECTION_CONTRACT, PROJECTION_VERSION, LEGACY_PROJECTION_CONTRACT, LEGACY_PROJECTION_VERSION, HIERARCHY_CONTRACT,
-    VERSION, stableHash, planProof,
+    VERSION, stableHash, planProof, readOriginalTagProof,
     loadCompleted, getConsistentPublicationFields, buildAssignment, safeStem, render, implementationFingerprint, fingerprint, buildFormulaEvidenceRecord,
     repairFormulaDelimiters, repairCurrencyDollars, repairTechnicalNotationAsterisks,
     repairStatisticalSignificanceStars, repairUnpairedMarkdownStars, repairDollarMath,

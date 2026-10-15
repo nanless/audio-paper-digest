@@ -8,6 +8,8 @@
 
 原分类文件按原始SHA归档。只有原文件SHA真实、完整分类维度和原概念逐字段均为新词表前缀的纯追加升级，才可只读重放旧提示文本、阶段绑定、检查点和原选择；不补签、不填写升级注记、不改旧论文记录，也不因此重新请求模型。存在改名、改父级、改原定义或坏升级注记时，继续按原严格升级规则处理。
 
+会议来源计划的原词表读取是另一层溯源检查：`conference-plan.js` 按原计划凭证 SHA 和版本从集中归档核验原文件，保留原计划、运行和凭证字节。它不要求旧来源计划的词表与当前词表为纯追加关系，也不授权旧分类直接进入新页面。当前会议暂存须按386项词表重新完整解析和核验分类；不合格项进入复核队列。该来源计划兼容不改变上一段对旧分类签名的严格纯追加限制。
+
 日更生成器将版本目录和新快照纳入同一精确发布清单。会议在生成及审查/推送共用的生成清单核验中，历史在规划、生成、审查、激活和推送前，核对站点 `data/` 与 `static/data/` 的版本目录和原快照；缺少本次分类SHA或双份内容不一致时阻断，不能让 Hugo 静默隐藏标签。首次词表同步只发布受控生成的词表资产，须审查精确差异、通过 Hugo 并验证远端及部署；不借此重写旧论文或改动无关页面。
 
 分类词表与已批准的展示词表允许保留各自的定义说明，概念身份、顺序、名称、别名、分类维度、状态及父级路径必须一致。下面的原策略、归档和SHA约束继续适用；同一386项范围不能代替这些来源核验。
@@ -31,7 +33,7 @@
 | 流程 | 多级呈现实际调用 | 已有页面的受控更新位置 |
 |---|---|---|
 | 日更 | `publish-to-blog.py` 的单篇与汇总调用 `render_paper_tag_hierarchy()`，再调用共享 `tag_presentation.py` | 已发布完整日批显式使用 `blog:generate -- --date DATE --republish UUID` → `blog:review -- --date DATE` → `blog:push -- --date DATE`；保留本批来源和正式结果 |
-| 官方会议 | `conference-page-render.py` 生成单篇；`lib/conference-postprocess.js` 对汇总成员批量调用同一共享渲染器 | 先让原 `conference:process` 的单篇暂存与汇总通过当前实现检查，再走 `conference:publish:generate/review/push/verify`；不能复用过期页面证明 |
+| 官方会议 | `conference-page-render.py` 生成单篇；`lib/conference-postprocess.js` 对汇总成员批量调用同一共享渲染器 | 原 process 未发布时，正常恢复或显式实现迁移重验单篇暂存和完整汇总，再走 `conference:publish:generate/review/push/verify`；已有 `publish.json` 的 ID 不会因重复 generate 更新，转按已有 URL 的历史维护入口处理，详见[只更新会议页面](conference-workflow.md#已有完整会议只更新页面) |
 | 历史更新 | arXiv单篇通过公共日更发布器、真实会议身份通过 `historical-page-render.py`；`lib/historical-direct-aggregate.js` 对每日、会议及会议任务汇总成员批量调用共享标签渲染器 | 同计划 `history:run` 重暂存旧实现页面，`history:aggregate` 重建对应汇总，再走 `history:publication` 的生成、审查与发布；冻结URL和原来源不变 |
 
 审计时同时核对页首的直接概念和最终渲染路径：祖先仅作导航，不能通过向 `tags` 追加父级来制造多级效果。站点总目录始终保留零计数方向，不能将文章的“仅选中项”规则用于裁剪总目录。

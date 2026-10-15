@@ -148,9 +148,9 @@ npm run conference:filter -- apply --filter UUID --decision DECISION.json --owne
   "version": 6,
   "filterPolicySha256": "<64-hex-current-policy-sha256>",
   "promptSha256": "<64-hex-current-prompt-sha256>",
-  "model": "mimo-v2.6-flash",
-  "endpointProtocol": "openai-chat",
-  "endpointIdentitySha256": "e4e17c2ccca11abebb9087c7ebb6a43d01185e9e47a82ba5425fa7939b651f08",
+  "model": "muse-spark-1.3-contributor",
+  "endpointProtocol": "openai-responses",
+  "endpointIdentitySha256": "<64-hex-current-normalized-endpoint-identity-sha256>",
   "tagCatalogSha256": "<64-hex-current-tag-catalog-file-sha256>",
   "evidenceCatalogContract": "conference-filter-evidence-catalog-v1",
   "discovery": {
@@ -176,7 +176,7 @@ npm run conference:filter -- apply --filter UUID --decision DECISION.json --owne
 
 AAAI 的 `locator` 还须精确包含 `"profile":"aaai-2026-bare-introduction-v1"` 及其登记的实现 SHA。旧 AAAI 默认绑定、未登记的 profile/hash、不同证据运行或不完整论文集合，均在 prepare/runner 和模型请求前拒绝。旧 `conference-filter-spec-v4`、无摘要证据的配置或共享配置不能继续使用，须按会议重新 prepare。
 
-`endpointIdentitySha256` 由 `endpointIdentitySha256(endpoint, model)` 对公共路由规范化后的 API URL 的 UTF-8 字节计算，不含 API key。示例值不代替当前端点计算。端点、协议或模型改变须新建筛选任务，不能在原状态上混跑。
+`spec` 自动读取项目配置中的模型、协议和端点，当前新请求统一使用 `muse-spark-1.3-contributor`、OpenAI Responses 和项目 HTTP CONNECT 代理；不要复制示例手写生产配置。`endpointIdentitySha256` 由 `endpointIdentitySha256(endpoint, model)` 对公共路由规范化后的 API URL 的 UTF-8 字节计算，不含 API key。占位值不代替当前端点计算。已有筛选任务保留当时的模型、协议和全部请求证据；端点、协议或模型改变须新建筛选任务，不能为了套用当前示例改写旧 spec。仅重生成已有合格页面不重新筛选。
 
 ### 筛选健康检查、并发与恢复
 
@@ -241,6 +241,16 @@ Figure 识别支持 `Figure`/`Fig.` 图注，排除 `Figure 2 presents ...` 等�
 
 ## 新会议独立发布与线上核验
 
+### 已有完整会议只更新页面
+
+排版和多级分类更新先盘点原 process、筛选和来源身份、全成员状态、单篇与汇总暂存证明，以及同一 process 是否已有 `publish.json`。只读复用仍通过正常资格检查的原分析、Reader、评分、分类和费用，不从获取、筛选或模型分析阶段重跑全会。单篇和汇总必须一起覆盖原完整入选集合；目录的候选总数不等于正式入选数。
+
+原实现过期时，用下文的 `conference:migrate-process` 在原 UUID 上重验并重暂存已完成单篇，随后由原 process 重建完整汇总。来源计划按原凭证 SHA 从集中归档只读核验当时词表，不改写原 plan、receipt、run 或 authority；这只证明原来源和执行计划可溯源，不授予旧分类当前出版资格，也不要求当时词表与当前词表一定为纯追加关系。当前暂存仍按386项词表完整重解析正文分类、核验直接标签及主任务/主方法；不合格项进入分类复核队列，不能沿用旧分类通过状态。其他既有分类签名的只读兼容仍须满足原严格纯追加条件，不因来源计划恢复而放宽。迁移不是纯渲染专用入口，原集合包含未完成项时可能继续模型分析，执行前须核对状态和原预算。
+
+没有已发布凭证的 process，在迁移或正常恢复完成后依次执行本节 `generate → review → push → verify`；已有旧 `generation.json` 时由正常 generate 处理实现变化和基线前移，保留 superseded 记录。**已有 `publish.json` 的 process 受不可变发布保护，重复 generate/push 只返回已发布状态，不会用新模板改写博客。** 此时按[历史更新与发布](#与全历史重写的衔接)维护已有 URL，不能删除旧发布凭证或把实现迁移当成重发布授权。
+
+重生成前保护工作区已有目标修改。已归属于原未发布生成清单的目标，在原清单自哈希、远端基线、工作区和完整页面成员核验后，只接受与原清单或当前暂存来源精确一致的字节；其余目标不能靠自称中断结果覆盖。不一致时先查明来源，不能手工清空。实现迁移改变完成凭证时，正常 generate 重验本次完整 process 并保留被替换清单的 superseded 原字节。新生成清单、审查和推送继续绑定同步后的博客与图床 `main`；最终还须核对对应部署、全部单篇及汇总的正式地址和标题。
+
 以 process 返回的 ID 发布同一会议，依次执行：
 
 ```bash
@@ -253,6 +263,10 @@ npm run conference:publish:status -- --conference-id odyssey-2026 --process-id "
 ```
 
 `generate` 重验来源及暂存页，生成博客文件和本批清单。`review` 对最终页面字节作只读审查，包含正文模型审查、图片多模态、Markdown 及 Hugo 检查；失败不保存通过记录，也不原地改正文。模型通过不等于论文事实已绝对正确，更不代替独立事实或人工视觉检查。
+
+生成清单逐路径核对类型、论文归属、来源内容 SHA、字节数及暂存清单 SHA，博客和图片集合都拒绝重复路径；不能把论文改标为导出文件来减少待审页面。研究引用导出仅允许 `citation.json`、`citation.bib`、`citation.ris` 和 `rethink-context.json` 四个文件，路径绑定日期及论文 ID 哈希，正式字节须由已核验分析冷重建一致。
+
+Hugo 在隔离目录保留固定博客提交的完整物理旧来源，供站点模板读取原分类证明；当批单篇及汇总另复制到独立 contentDir 参加构建，避免无关旧页面占用本批构建资源。构建后仍逐一检查完整当批页面清单的 HTML，缺页即失败；不混入工作区未审页面，也不删除旧证明文件或跳过来源守卫。
 
 `review` 要求博客检出目录带 Hugo 运行时（`hugo.yaml`/`hugo.yml`/`hugo.toml`/`hugo.json` 任一，加 `layouts`/`assets`/`themes` 任一）。缺运行时就没有可审查的渲染结果，`review` 直接报错，不产出任何审查凭证，也不会跳过正文和图片审查后伪造一份通过记录。审查协议指纹同样按实际算出；算不出来就报错，不替换成替代值。
 

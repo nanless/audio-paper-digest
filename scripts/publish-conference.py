@@ -26,6 +26,8 @@ from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env
 from runtime_guard import require_external_runtime, require_workspace_role
 from conference_publication_gate import inspect_html, verify_publication_urls, validate_png, fetch_public, GATE_CONTRACT
 from tag_catalog_publication import validate_published_tag_catalog
+from tag_presentation import (TAG_HIERARCHY_START, TAG_HIERARCHY_END,
+                              mask_verified_tag_hierarchy_for_quality)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -211,8 +213,13 @@ def safe_relative(value, label):
     is_asset = path.parts[:3] == ('static', 'images', 'conference') and len(path.parts) == 6 \
         and path.suffix == '.png' and re.fullmatch(r'[a-f0-9]{12}', path.parts[4] or '') \
         and re.fullmatch(r'figure-\d+\.png', path.parts[5] or '')
-    if path.is_absolute() or '..' in path.parts or not safe_parts or not (is_page or is_asset):
-        raise ConferencePublicationError(f'{label} 不是安全的会议 Markdown/图片路径: {value}')
+    is_sidecar = path.parts[:3] == ('static', 'data', 'papers') and len(path.parts) == 6 \
+        and re.fullmatch(r'\d{4}-\d{2}-\d{2}', path.parts[3]) \
+        and re.fullmatch(r'conference-[a-f0-9]{24}', path.parts[4]) \
+        and path.parts[5] in CONFERENCE_WORKBENCH_NAMES
+    if path.is_absolute() or '..' in path.parts or not safe_parts \
+            or not (is_page or is_asset or is_sidecar):
+        raise ConferencePublicationError(f'{label} 不是安全的会议 Markdown/图片/研究导出路径: {value}')
     return path.as_posix()
 
 
@@ -528,6 +535,14 @@ def validate_staged_authors(manifest, content, proof):
     if frontmatter is None:
         raise ConferencePublicationError('会议页面作者区块前必须有完整的标准 frontmatter')
     prefix = prefix[frontmatter.end():]
+    try:
+        if prefix.count(TAG_HIERARCHY_START) > 1 or prefix.count(TAG_HIERARCHY_END) > 1:
+            raise ValueError('单篇作者区块前只能有一份多级分类展示')
+        # 只在检查副本中遮蔽按当前目录逐字重放的共享分类块；原页不变。
+        # 其他注释、坏边界或夹入的正文仍交给原有拒绝规则。
+        prefix = mask_verified_tag_hierarchy_for_quality(prefix)
+    except ValueError as error:
+        raise ConferencePublicationError('会议页面作者前多级分类块无法核验：' + str(error)) from error
     if re.search(r'<(?:[!?]|/?[A-Za-z])', prefix) or re.search(r'^\s*(?:`{3,}|~{3,})', prefix, re.MULTILINE):
         raise ConferencePublicationError('会议页面作者区块前不可有 HTML 包装、代码或注释')
     if re.search(r'^##\s+', prefix, re.MULTILINE):
@@ -1163,9 +1178,14 @@ def generate(conference_id, process_id):
         existing = publication_dir(conference_id, process_id) / 'generation.json'
         image_snapshot = remote_snapshot(images)
         rebased = False
+        previous_source_sha = {}
         if existing.exists() and read_json(existing).get('version') == 2:
             previous_record = read_json(existing)
             check_self_hash(previous_record, 'generationSha256')
+            if previous_record.get('contract') != 'conference-blog-generation-v1' \
+                    or previous_record.get('conferenceId') != conference_id \
+                    or previous_record.get('processId') != process_id:
+                raise ConferencePublicationError('旧 generation 不属于当前会议和完整流程')
             implementation_changed = previous_record.get('implementationSha256') != gate_fingerprint()
             needs_rebase = (
                 not can_resume_existing_generation(
@@ -1189,7 +1209,11 @@ def generate(conference_id, process_id):
                     new_image_source_sha={item['path']: item['sourceSha256']
                                           for item in image_files},
                     new_source_sha={item['path']: item['sourceSha256']
-                                    for item in files}
+                                    for item in files},
+                    # Current process_bundle above has already replayed the new
+                    # completion. A renderer migration intentionally replaces the
+                    # old completion/page proofs, while preserving this process.
+                    verify_author_sources=False,
                 )
             same_implementation = previous.get('implementationSha256') == gate_fingerprint()
             completion_changed = previous['completionReceiptSha256'] != bundle['completion']['receiptSha256']
@@ -1202,6 +1226,20 @@ def generate(conference_id, process_id):
             if same_implementation and not completion_changed and not rebased:
                 print(json.dumps({'status': 'already-generated', 'conferenceId': conference_id}))
                 return
+            current_by_path = {record['path']: record for record in files}
+            old_pages = {record['path']: (record.get('kind'), record.get('paperId'))
+                         for record in previous['files']
+                         if record.get('kind') in {'paper', 'aggregate'}}
+            new_pages = {record['path']: (record.get('kind'), record.get('paperId'))
+                         for record in files if record.get('kind') in {'paper', 'aggregate'}}
+            if old_pages != new_pages:
+                raise ConferencePublicationError('同一会议流程的旧生成与当前暂存页面完整成员不一致')
+            for record in previous['files']:
+                path = safe_relative(record.get('path'), '旧生成目标')
+                current = current_by_path.get(path)
+                if current and (record.get('kind'), record.get('paperId')) == \
+                        (current.get('kind'), current.get('paperId')):
+                    previous_source_sha[path] = record['sourceSha256']
         if snapshot['head'] != snapshot['remoteMain'] or image_snapshot['head'] != image_snapshot['remoteMain']:
             raise ConferencePublicationError('generate 拒绝已有未同步本地/远端提交')
         verify_index(repo, snapshot['head'], files)
@@ -1210,8 +1248,10 @@ def generate(conference_id, process_id):
         if dirty & {record['path'] for record in files}:
             # 中断的生成可能已经把精确字节写到位了。
             for record in files:
-                if record['path'] in dirty and sha_bytes(target_bytes(repo, record)) != record['sourceSha256']:
-                    raise ConferencePublicationError(f'会议目标存在人工修改: {record["path"]}')
+                if record['path'] in dirty:
+                    actual_sha = sha_bytes(target_bytes(repo, record))
+                    if actual_sha not in {record['sourceSha256'], previous_source_sha.get(record['path'])}:
+                        raise ConferencePublicationError(f'会议目标存在人工修改: {record["path"]}')
         for record in files:
             target = under(repo, record['path'], '博客目标')
             data = read_bytes(record['sourcePath'])
@@ -1259,6 +1299,23 @@ def generate(conference_id, process_id):
                           'generationSha256': generation['generationSha256']}, ensure_ascii=False))
 
 
+def publication_record_identities(records, *, images=False):
+    """保留控制审查范围的记录类型与归属，不能只比路径和字节。"""
+    if not isinstance(records, list):
+        raise ConferencePublicationError('会议发布记录集合必须为数组')
+    identities = {}
+    fields = ('kind', 'paperId', 'sourceSha256', 'size', 'manifestSha256')
+    for record in records:
+        if not isinstance(record, dict):
+            raise ConferencePublicationError('会议发布记录必须为对象')
+        path = (safe_image_relative(record.get('path'), '发布图片') if images
+                else safe_relative(record.get('path'), '发布文件'))
+        if path in identities:
+            raise ConferencePublicationError(f'会议发布记录存在重复路径: {path}')
+        identities[path] = tuple(record.get(field) for field in fields)
+    return identities
+
+
 def validate_generation(conference_id, process_id, repo, images, *,
                         allow_owned_target_drift=False, allow_committed=False,
                         new_image_source_sha=None, new_source_sha=None, verify_author_sources=True):
@@ -1275,6 +1332,8 @@ def validate_generation(conference_id, process_id, repo, images, *,
     if generation['baseHead'] != generation['remoteMainBefore'] \
             or generation['imageBaseHead'] != generation['imageRemoteMainBefore']:
         raise ConferencePublicationError('generation 基线未与远端闭合')
+    saved_files = publication_record_identities(generation.get('files'))
+    saved_images = publication_record_identities(generation.get('imageFiles'), images=True)
     # New review/push operations must not silently hide an unknown catalog.
     # Historical committed receipts remain readable under their saved gate.
     if generation.get('version') == 2 and (not allow_committed
@@ -1283,10 +1342,8 @@ def validate_generation(conference_id, process_id, repo, images, *,
     if verify_author_sources:
         bundle = process_bundle(conference_id, process_id)
         if generation.get('completionReceiptSha256') != bundle['completion']['receiptSha256'] \
-                or {record['path']: record['sourceSha256'] for record in generation['files']} != \
-                   {record['path']: record['sourceSha256'] for record in bundle['files']} \
-                or {record['path']: record['sourceSha256'] for record in generation['imageFiles']} != \
-                   {record['path']: record['sourceSha256'] for record in bundle['imageFiles']}:
+                or saved_files != publication_record_identities(bundle['files']) \
+                or saved_images != publication_record_identities(bundle['imageFiles'], images=True):
             raise ConferencePublicationError('会议 generation 与当前已核验来源和暂存页面不一致')
     if allow_committed:
         snapshot = remote_snapshot(repo)
@@ -1441,6 +1498,14 @@ def run_hugo(repo, generation):
                 replace_exact(target, data)
             else:
                 write_exact(target, data, mode=0o644)
+        # 与日更相同，只构建当批内容；完整固定提交仍保留在 source/content，
+        # 供站点模板逐字读取历史分类证明。不能删除旧页或混入未审工作区内容。
+        content = root / 'staged-content'
+        posts = content / 'posts'
+        posts.mkdir(parents=True)
+        for record in publication_page_files(generation):
+            write_exact(posts / Path(record['path']).name,
+                        read_bytes(source / record['path']), mode=0o644)
         for record in image_files:
             tree = generation.get('renderImageTree')
             data = (git(image_repo(), 'show', f'{tree}:{record["path"]}', binary=True).stdout
@@ -1454,6 +1519,7 @@ def run_hugo(repo, generation):
         env = build_child_process_env(allowed_keys=VCS_CHILD_ENV_KEYS)
         result = subprocess.run(
             [hugo, '--source', str(source), '--destination', str(output),
+             '--contentDir', str(content),
              '--cacheDir', str(root / 'cache'), '--environment', 'production', '--quiet'],
             cwd=source, env=env, capture_output=True, text=True, timeout=300, check=False)
         if result.returncode:

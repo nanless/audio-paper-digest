@@ -7,6 +7,7 @@ import pathlib
 from pathlib import Path
 import sys
 import unittest
+from unittest import mock
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -272,6 +273,66 @@ class ConferencePageRenderTest(unittest.TestCase):
                 old_stage['registrySha256'] = 'f' * 64
             else:
                 old_stage['primaryTaskId'] = 'task.av-asr'
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                MODULE.render_packet(bad)
+
+    def test_archived_conference_stage_replays_original_chain_before_current_assignment(self):
+        import test_publish_common as saved_stage_fixture
+        old_sha = 'a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d'
+        original_catalog = MODULE.load_archived_tag_catalog(old_sha)
+        packet = self.packet()
+        paper, assignment = packet['paper'], packet['taxonomy']
+        paper['analysis'] = paper['analysis'].replace(
+            '## 标签\n已根据封存资料核验的分析内容。',
+            '## 标签\n#语音识别 #Transformer #低资源\n主任务标签：#语音识别\n主方法标签：#Transformer')
+        paper['analysis'] = paper['analysis'].replace(
+            '## 机器摘要\n已根据封存资料核验的分析内容。',
+            '## 机器摘要\nprimary_task_tag: #语音识别\nprimary_method_tag: #Transformer')
+        with mock.patch.object(saved_stage_fixture, '_PUBLISH_TAG_CATALOG', original_catalog):
+            stage = saved_stage_fixture.attach_tag_stage_record(
+                paper, paper['analysisManifest'], status='complete', with_checkpoints=True,
+                prompt_text_contract=saved_stage_fixture.LEGACY_TAG_PROMPT_TEXT_CONTRACT,
+                selection_contract=MODULE.LEGACY_TAG_SELECTION_CONTRACT)
+        # Replays the same pre-existing 15c -> a3 historical chain as the saved conference batch.
+        stage['registryUpgradeFrom'] = {
+            'contract': 'paper-taxonomy-registry-upgrade-v1', 'version': 1,
+            'fromRegistrySha256': '15c82a567ce5a55dc1175684ed08b64c158558639d9c8fb822c9587ec32a8778',
+            'fromRegistryVersion': 'paper-taxonomy-v1', 'toRegistrySha256': old_sha,
+            'toRegistryVersion': 'paper-taxonomy-v1', 'changeLevel': 'destructive',
+            'reasons': ['alias-added', 'alias-removed', 'broader-id-changed', 'concept-added',
+                        'definition-updated', 'preferred-label-changed', 'scope-note-updated'],
+            'note': '保留原所选概念的旧词表升级记录。',
+            'destructiveAcknowledgement': {'acknowledged': True, 'conceptIdImpact': 'none',
+                'reasonsHash': 'c4c83e78d845159fc005a3ead0d627fa65ce86fb50d84183bd1768944e9a4914',
+                'note': '核验原升级确认，所选概念 ID 不变。'}}
+        paper['analysisManifest']['stages']['scoringAudit']['outputAnalysisSha256'] = hashlib.sha256(paper['analysis'].encode()).hexdigest()
+        assignment['conceptIds'] = list(stage['conceptIds'])
+        current = MODULE.load_tag_catalog()
+        by_id = {concept['id']: concept for concept in current['concepts']}
+        assignment['concepts'] = [copy.deepcopy(by_id[cid]) for cid in assignment['conceptIds']]
+        original = copy.deepcopy(packet)
+        result = MODULE.render_packet(packet)
+        self.assertIn(f'paper_digest_tags_registry_sha256: "{current["registrySha256"]}"', result['markdown'])
+        self.assertEqual(packet, original)
+        self.assertIsNone(MODULE.resolve_append_only_proof_catalog(old_sha, current))
+        for mutation in ('projection', 'checkpoint', 'binding', 'chain', 'selection', 'archive', 'catalog'):
+            bad = copy.deepcopy(packet)
+            old_stage = bad['paper']['analysisManifest']['stages']['taxonomySeal']
+            if mutation == 'projection':
+                old_stage['projectionSha256'] = 'f' * 64
+            elif mutation == 'checkpoint':
+                bad['paper']['analysisStageCheckpoints']['taxonomySeal'] += '\n篡改'
+            elif mutation == 'binding':
+                old_stage['bindingSha256'] = 'f' * 64
+            elif mutation == 'chain':
+                old_stage['registryUpgradeFrom']['destructiveAcknowledgement']['reasonsHash'] = 'f' * 64
+            elif mutation == 'selection':
+                bad['taxonomy']['primaryTaskId'] = 'task.av-asr'
+            elif mutation == 'archive':
+                old_stage['registrySha256'] = 'f' * 64
+            else:
+                bad['tagCatalog'] = copy.deepcopy(current)
+                bad['tagCatalog']['registrySha256'] = 'f' * 64
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 MODULE.render_packet(bad)
 

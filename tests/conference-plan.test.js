@@ -87,6 +87,45 @@ test('仅保存旧版计划记录的两个构造函数不再对外提供', () =>
     assert.equal(plan.createPlanReceipt, undefined);
 });
 
+test('旧262项来源计划只读重放原词表，不授予当前386项分类沿用资格或改签原凭证', async t => {
+    for (const planApi of [plan, loadOriginalConferenceApis().plan]) await t.test(planApi.PLAN_CONTRACT, t => {
+    const originalSha = 'a3b75a149852076933ec2895de77c09c73667c8334bff046dde3b20b69ded03d';
+    const originalBytes = fs.readFileSync(path.join(__dirname, '../config/tag-catalog-history', `${originalSha}.json`));
+    const currentBytes = fs.readFileSync(path.join(__dirname, '../config/tag-catalog.json'));
+    assert.equal(JSON.parse(originalBytes).concepts.length, 262);
+    assert.equal(JSON.parse(currentBytes).concepts.length, 386);
+    const f = productionPlanFixture(t, { tagCatalogBytes: originalBytes, planApi });
+    const runFile = path.join(f.roots.runs, 'run.json');
+    const receiptFile = path.join(f.roots.runs, 'run.plan-receipt.json');
+    const planFile = path.join(f.roots.ledgers, 'plan.json');
+    const before = [planFile, runFile, receiptFile].map(filename => fs.readFileSync(filename));
+    const history = path.join(path.dirname(f.tagCatalogPath), 'tag-catalog-history');
+    fs.mkdirSync(history, { mode: 0o700 });
+    const archivePath = path.join(history, `${originalSha}.json`);
+    fs.writeFileSync(archivePath, originalBytes, { mode: 0o600 });
+    fs.writeFileSync(f.tagCatalogPath, currentBytes);
+    const replay = () => plan.loadPlanHandle(runFile, receiptFile, planFile, f.importHandle, f.tagCatalogPath);
+    const restored = plan.planHandleSnapshot(replay());
+    assert.equal(plan.tagMetadataForReceipt(restored.receipt).sha256, originalSha);
+    assert.deepEqual(restored.receipt, f.planned.receipt);
+    [planFile, runFile, receiptFile].forEach((filename, index) => assert.deepEqual(fs.readFileSync(filename), before[index]));
+    const changed = JSON.parse(currentBytes);
+    changed.concepts[0].definition += ' 旧定义被修改';
+    fs.writeFileSync(f.tagCatalogPath, JSON.stringify(changed));
+    // 来源计划与页面分类分开核验：当前目录改变不改写、也不重签原计划。
+    assert.deepEqual(plan.planHandleSnapshot(replay()).receipt, f.planned.receipt);
+    fs.writeFileSync(f.tagCatalogPath, currentBytes);
+    assert.throws(() => plan.createRunFromImportPlan({ files: f.files, importHandle: f.importHandle,
+        planName: 'plan.json', runName: 'new-run.json' }), /计划中的词表 SHA 与配置的词表原文件不一致|运行输入文件不存在|ENOENT/);
+    assert.equal(fs.existsSync(path.join(f.roots.runs, 'new-run.json')), false);
+    fs.writeFileSync(archivePath, Buffer.concat([originalBytes, Buffer.from('\n')]));
+    assert.throws(replay, /词表归档 SHA 与原文件不一致/);
+    fs.unlinkSync(archivePath);
+    assert.throws(replay, /ENOENT/);
+    [planFile, runFile, receiptFile].forEach((filename, index) => assert.deepEqual(fs.readFileSync(filename), before[index]));
+    });
+});
+
 test('计划文件名仍然是直接的 JSON 名', () => {
     assert.throws(() => plan.receiptNameFor('../run.json'), /合法的 JSON 文件名/);
     assert.equal(plan.receiptNameFor('run.json'), 'run.plan-receipt.json');

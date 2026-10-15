@@ -13,6 +13,7 @@ const adapter = require('../scripts/lib/conference-analysis-adapter.js');
 const pageApi = require('../scripts/lib/publication-file-primitives.js');
 const { productionPlanFixture } = require('./helpers/conference-production-plan-fixture.js');
 const { validAnalysisPaper, validAnalysisText } = require('./valid-analysis-fixture.js');
+const { completedConferenceOriginalTaxonomyFixture } = require('./helpers/conference-readonly-qualification-fixture.js');
 
 const TAG_CATALOG_PATH = path.resolve(__dirname, '../config/tag-catalog.json');
 const WEAK = { fullText: 'weak', tables: 'unavailable', formulas: 'unavailable', figures: 'unavailable' };
@@ -155,6 +156,34 @@ function fixture(t, extraRuns = []) {
     const extra = extraRuns.map(item => item.executionId);
     return { root, one, two, extra, runs, planHandle, sourceRoot: path.join(root, 'source'), dependencies };
 }
+
+test('已签会议原标签按原归档重放，当前目录另投影相同概念且不修改原稿', () => {
+    const { paper } = completedConferenceOriginalTaxonomyFixture();
+    const original = JSON.stringify(paper);
+    const loaded = { analysis: { papers: [paper] }, analysisFileSha256: sha256(original),
+        run: { paperId: paper.id, executionId: '11111111-1111-4111-8111-111111111111',
+            sourceSnapshotSha256: 'a'.repeat(64), completionReceipt: { receiptSha256: 'b'.repeat(64) } } };
+    const catalog = tagCatalogApi.loadTagCatalog(TAG_CATALOG_PATH);
+    const assigned = api.buildAssignment(loaded, catalog);
+    const sourceStage = paper.analysisManifest.stages.taxonomySeal;
+    assert.equal(assigned.status, 'assigned');
+    assert.equal(assigned.registrySha256, catalog.registrySha256);
+    assert.equal(assigned.primaryTaskId, sourceStage.primaryTaskId);
+    assert.equal(assigned.primaryMethodId, sourceStage.primaryMethodId);
+    assert.deepEqual(assigned.conceptIds, sourceStage.conceptIds.slice().sort());
+    assert.equal(JSON.stringify(paper), original);
+    const changed = structuredClone(catalog);
+    const selectedTask = changed.concepts.find(item => item.id === sourceStage.primaryTaskId);
+    const nextId = `${selectedTask.id}-different`;
+    for (const item of changed.concepts) if (item.broaderId === selectedTask.id) item.broaderId = nextId;
+    selectedTask.id = nextId;
+    changed.registrySha256 = sha256(JSON.stringify(changed));
+    assert.throws(() => api.buildAssignment(loaded, changed), /不能静默改变已签分类/);
+    const invalid = structuredClone(loaded);
+    invalid.analysis.papers[0].analysisManifest.stages.taxonomySeal.registryUpgradeFrom.toRegistrySha256 = '0'.repeat(64);
+    assert.throws(() => api.buildAssignment(invalid, catalog), /历史升级记录未通过只读重放/);
+    assert.equal(JSON.stringify(paper), original);
+});
 
 test('会议页面生成会核对完成记录、论文身份和标签，并按词表版本分别保存文件', t => {
     const f = fixture(t); const stagingRoot = path.join(f.root, 'staging');
@@ -614,6 +643,8 @@ test('汇总页展示逐级展开的标签，并把标签层级写进清单', t 
     assert.equal(displayBridgeCalls, 1, 'one pure Python call covers the entire batch');
     const paperList = result.manifest.markdown.split('## 📋 论文列表')[1];
     assert.doesNotMatch(paperList, /^标签：/m);
+    assert.doesNotMatch(paperList, /主任务：#|主方法：#/);
+    assert.equal((paperList.match(/^排名：[^\n]+\| 文档类型：/gm) || []).length, 4);
     assert.match(paperList, /\*\*研究分类\*\*/);
     assert.ok(paperList.includes('/papers/?concept=task.av-asr'));
     assert.ok(paperList.includes('/papers/?concept=task.asr'));

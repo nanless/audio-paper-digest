@@ -189,6 +189,28 @@ function readTagCatalogFile(filename) {
     catch (error) { throw fail(`无法安全读取配置的标签词表：${error.message}`); }
 }
 
+function readProofTagCatalogFile(metadata, currentPath) {
+    const current = readTagCatalogFile(currentPath);
+    if (metadata.sha256 === current.sha256) {
+        if (metadata.version !== current.value.version) fail('计划凭证中的词表版本与原文件不一致。');
+        return current;
+    }
+    // 这只是原来源计划的只读重放，不授予旧分类的沿用资格。旧 taxonomy-v1
+    // 到当前目录还可能有名称与规则迁移；新页面另用当前目录重新解析并审查。
+    // 无论当前目录怎样升级，原计划都必须绑定集中归档的原文件字节和版本。
+    const historyDir = path.join(path.dirname(currentPath), 'tag-catalog-history');
+    if (!SHA_RE.test(metadata.sha256)) fail('计划凭证中的词表 SHA 无效。');
+    const tagCatalogApi = require('./tag-catalog.js');
+    tagCatalogApi.loadTagCatalog(currentPath);
+    const original = readTagCatalogFile(path.join(historyDir, `${metadata.sha256}.json`));
+    if (original.sha256 !== metadata.sha256) fail('计划凭证中的词表归档 SHA 与原文件不一致。');
+    const prior = tagCatalogApi.loadTagCatalog(path.join(historyDir, `${metadata.sha256}.json`));
+    if (prior.registrySha256 !== original.sha256 || metadata.version !== prior.version) {
+        fail('计划凭证中的词表版本或原文件 SHA 与归档不一致。');
+    }
+    return original;
+}
+
 function receiptDigest(receipt) {
     const { receiptSha256, ...bound } = receipt;
     return stableHash(bound);
@@ -321,7 +343,7 @@ function loadPlanHandle(runFile, receiptFile, planFile, importHandle, tagCatalog
     if (plan.version !== receipt.version) fail('会议计划与凭证的格式版本不一致。');
     const receiptTags = tagMetadataForReceipt(receipt);
     const planTags = tagMetadataForPlan(plan);
-    const imported = authority.snapshot; const tagCatalogFile = readTagCatalogFile(tagCatalogPath);
+    const imported = authority.snapshot; const tagCatalogFile = readProofTagCatalogFile(receiptTags, tagCatalogPath);
     if (receipt.ledger.name !== path.basename(imported.ledgerFile) || receipt.ledger.sha256 !== imported.ledgerSha256
         || receipt.ledger.memberSetSha256 !== imported.ledger.memberSetSha256) fail('计划凭证未绑定已认证的导入台账');
     if (receiptTags.sha256 !== tagCatalogFile.sha256) fail('计划凭证中的词表 SHA 与原文件不一致。');
@@ -464,7 +486,7 @@ function report(result, { applied = false } = {}) {
 
 module.exports = { PLAN_CONTRACT, LEGACY_PLAN_CONTRACT, SELECTION_CONTRACT, SECURE_RECEIPT_CONTRACT,
     LEGACY_SECURE_RECEIPT_CONTRACT, VERSION, PLAN_VERSION, SECURE_RECEIPT_VERSION, LEGACY_VERSION,
-    tagMetadataForPlan, tagMetadataForReceipt, SAFE_JSON_NAME, stableHash,
+    tagMetadataForPlan, tagMetadataForReceipt, readProofTagCatalogFile, SAFE_JSON_NAME, stableHash,
     safeRuntimeFile, readRuntimeJson, normalizePlan, receiptDigest, receiptNameFor,
     createRunFromImportPlan, normalizeSecureReceipt, loadPlanHandle, planHandleSnapshot, planHandleAuthority,
     applyRunPlan, report };

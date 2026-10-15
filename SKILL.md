@@ -59,6 +59,8 @@ conference:acquire → conference:discover → 全文证据与每会筛选
 
 参数、官方会议来源、账本、导入、并发、来源升级与断点恢复见 [会议工作流](docs/conference-workflow.md)。唯一分析入口是 `conference:process`，内部调用公共 `analysis-engine.js`，不再提供独立execution/analyze/postprocess旧CLI。
 
+仅更新完整会议的页面时，先核对原全成员状态，再正常恢复或显式实现迁移，重暂存单篇和汇总，复用原合格分析与费用。未发布 process 才继续上述发布三阶段；已有 `publish.json` 的 ID 不因重复 generate 更新，已有 URL 按历史维护入口处理，见[只更新会议页面](docs/conference-workflow.md#已有完整会议只更新页面)。
+
 论文必须有真实会议身份、官方PDF、来源SHA及能力记录。只有PDF时不能推断HTML DOM能力，不为会议补造arXiv ID。图像/公式仍按真实PDF像素核验。页面及JSON/BibTeX/RIS/上下文使用同一展示与导出核心，缺失摘要或公开URL如实标示。
 
 ## 3. 历史博客更新

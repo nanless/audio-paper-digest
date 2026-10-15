@@ -780,8 +780,10 @@ function prepareShared(context, deps, createdAt) {
         // 原文件对先完整核验，再比较当前来源和成员；不能以新版计划覆盖旧表示。
         planHandle = deps.plan.loadPlanHandle(runFile, planReceiptFile, planFile, importHandle, files.tagCatalogFile);
         const saved = deps.plan.planHandleSnapshot(planHandle);
+        const savedTags = deps.plan.tagMetadataForReceipt(saved.receipt);
+        const proofTagCatalog = deps.plan.readProofTagCatalogFile(savedTags, files.tagCatalogFile);
         if (saved.receipt.ledger.name !== names.ledger
-            || deps.plan.stableHash(deps.plan.tagMetadataForReceipt(saved.receipt)) !== deps.plan.stableHash(planDoc.tagMetadata)
+            || savedTags.sha256 !== proofTagCatalog.sha256
             || deps.plan.stableHash(saved.receipt.members) !== deps.plan.stableHash(planIdentities)
             || deps.plan.stableHash(saved.receipt.shards) !== deps.plan.stableHash(shards)) {
             throw new Error('已保存的会议计划与当前来源、标签词表或成员分片不一致。');
@@ -832,6 +834,9 @@ async function processOne(context, shared, item, deps) {
         const error = new Error(paper.latestAnalysisAttemptError || paper.error || `分析结束后状态仍为 ${analyzed.status}。`);
         error.code = paper.latestAnalysisAttemptErrorCode || null;
         error.retryable = paper.latestAnalysisAttemptRetryable;
+        error.scope = paper.latestAnalysisAttemptErrorScope || paper.errorScope;
+        error.category = paper.latestAnalysisAttemptErrorCategory || paper.errorCategory;
+        error.status = paper.latestAnalysisAttemptErrorStatus || paper.errorStatus;
         error.progressKey = require('./analysis-failure-rounds.js').semanticAnalysisProgress(paper);
         throw error;
     }
@@ -919,7 +924,10 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
                 if (filename && fs.existsSync(filename)) {
                     const paper = recovery.readPrivateJson(filename).papers?.[0];
                     if (paper) error = Object.assign(new Error(paper.latestAnalysisAttemptError || paper.error || error.message), {
-                        code: paper.latestAnalysisAttemptErrorCode, retryable: paper.latestAnalysisAttemptRetryable });
+                        code: paper.latestAnalysisAttemptErrorCode, retryable: paper.latestAnalysisAttemptRetryable,
+                        scope: paper.latestAnalysisAttemptErrorScope || paper.errorScope,
+                        category: paper.latestAnalysisAttemptErrorCategory || paper.errorCategory,
+                        status: paper.latestAnalysisAttemptErrorStatus || paper.errorStatus });
                 }
                 item.lastFailure = recovery.classifyFailure(error, item.updatedAt);
                 item.lastError = item.lastFailure.message;
@@ -958,23 +966,11 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
     let stopped = false;
     const stateWriteErrors = new Set();
     const systemicErrors = [];
-    const isStorageFailure = error => {
-        const codes = new Set(['EIO', 'ENOSPC', 'EDQUOT', 'EROFS', 'EMFILE', 'ENFILE', 'EACCES', 'EPERM']);
-        const seen = new Set();
-        const inspect = value => {
-            if (!value || typeof value !== 'object' || seen.has(value)) return false;
-            seen.add(value);
-            return codes.has(value.code)
-                || (value instanceof AggregateError && value.errors.some(inspect))
-                || ['cause', 'errorDetails', 'error'].some(key => inspect(value[key]));
-        };
-        return inspect(error);
-    };
     const saveState = operation => {
         try { return operation(); }
         catch (error) {
             stateWriteErrors.add(error);
-            if (isStorageFailure(error)) stopped = true;
+            if (recovery.findStorageFailure(error)) stopped = true;
             throw error;
         }
     };

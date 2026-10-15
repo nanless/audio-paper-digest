@@ -44,6 +44,37 @@ def registry():
 
 
 class RegistryTest(unittest.TestCase):
+    def test_archived_catalog_requires_real_bytes_safe_path_and_retains_strict_append_policy(self):
+        from tag_catalog import load_archived_tag_catalog, resolve_append_only_proof_catalog
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            value = registry()
+            raw = json.dumps(value, ensure_ascii=False).encode()
+            digest = hashlib.sha256(raw).hexdigest()
+            target = root / f'{digest}.json'
+            target.write_bytes(raw)
+            original = load_archived_tag_catalog(digest, history_dir=root)
+            self.assertEqual(original['registrySha256'], digest)
+            self.assertEqual({key: original[key] for key in value}, value)
+            self.assertIsNone(load_archived_tag_catalog('../' + digest, history_dir=root))
+            self.assertIsNone(load_archived_tag_catalog('f' * 64, history_dir=root))
+            target.write_bytes(raw + b' ')
+            self.assertIsNone(load_archived_tag_catalog(digest, history_dir=root))
+            target.write_bytes(raw)
+            target.rename(root / 'original.json')
+            target.symlink_to(root / 'original.json')
+            self.assertIsNone(load_archived_tag_catalog(digest, history_dir=root))
+            target.unlink()
+            os.link(root / 'original.json', target)
+            self.assertIsNone(load_archived_tag_catalog(digest, history_dir=root))
+            target.unlink()
+            target.write_bytes(raw)
+            appended = copy.deepcopy(original)
+            appended['concepts'].append(concept('signal.audio', '音频', 'Audio'))
+            self.assertIsNotNone(resolve_append_only_proof_catalog(digest, appended, history_dir=root))
+            appended['version'] = 'paper-tag-catalog-v2'
+            self.assertIsNone(resolve_append_only_proof_catalog(digest, appended, history_dir=root))
+
     def test_normalization_cache_only_keeps_bounded_plain_strings(self):
         from tag_catalog import _normalize_label_cached
         _normalize_label_cached.cache_clear()
