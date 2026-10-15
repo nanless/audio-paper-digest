@@ -12,6 +12,11 @@ from pathlib import Path
 import re
 import struct
 import xml.etree.ElementTree as ET
+from runtime_guard import require_external_runtime
+
+if __name__ == '__main__':
+    require_external_runtime('reader-pdf-page-asset')
+    raise SystemExit('This helper is called through the normal blog publisher.')
 
 import fitz
 from reader_inline_svg import source_descriptor, validate_svg
