@@ -154,7 +154,7 @@ npm run test:compat
 | `lib/daily-fact-review.js` | Node 库：只读外部事实反馈，严格核验论文、日期、runId、四份封存来源SHA、当前核心摘要及全文SHA与逐字引文；锁内重读后将反馈传入正常完整主分析、摘要、Reader或标签模型阶段；全文纠错先保存原付费记录，并拒绝无反馈重生成，不写手工成功正文。 |
 | `lib/daily-fetch-boundary.js` | Node 库：从已核验远端日更及受控归档确定补抓窗口，读取正式页字段去重；见边界说明。 |
 | `lib/daily-fresh-source-plan.js` | Node 库：日更筛选结束后，为每篇 arXiv 论文封存本次官方 TXT、PDF 和清单；分析只读取这组文件，图片只在当前请求里临时准备。 |
-| `lib/daily-reader-operator-correction.js` | Node 库：显式日更人工修正清单限定失败论文，重读四份封存来源、原失败草稿与逐节点 SHA 补丁；原候选及费用不改，由正常 Reader 全量解析验收并记录本地修正来源，不作为模型响应或新收费额度。 |
+| `lib/daily-reader-operator-correction.js` | Node 库：显式日更人工修正清单覆盖完整失败集合，通常最多10篇；大批次按重读原封存入选集的10%取整增加、硬限15篇，扩展时核验完整唯一集合。重读四份封存来源、原失败草稿与每篇1–8节点SHA补丁；原候选及费用不改，由正常 Reader 全量解析验收并记录本地修正来源，不作为模型响应或新收费额度。 |
 | `lib/direct-rewrite-analysis-context.js` | Node 库：用 AsyncLocalStorage 隔离历史重写和日更的来源文件，让旧正文和缓存进不了分析，Reader 图片只能用临时文件；论文历史版本的身份 SHA 随来源记录进入所有分析阶段。 |
 | `lib/explicit-reader-retry-round.js` | Node 库：为已核验且用完原有额度的失败长文执行明确的新一轮重试，核对论文锁、四份封存来源、实际输入和原稿 SHA；完整保留旧稿与旧次数，发送请求前登记新轮费用预算。重复运行只接续剩余额度，不授予发布资格。 |
 | `lib/fetch-scheduler.js` | Node 库：按主机串行调度抓取，记录冷却时间并识别失败类型。 |

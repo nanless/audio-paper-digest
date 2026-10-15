@@ -58,6 +58,19 @@ function isCurrentFailedPaper(paper, plan, factFeedbacks = new Map()) {
     return !require('../analysis-engine').isSuccessfulAnalysisRecord(paper)
         || !require('./daily-fresh-source-plan').isPaperReusableForAnalysis(paper,plan);
 }
+// The extension beyond ten is only for a small tail of a complete large batch.
+// Read the original sealed manifest; a caller-selected subset cannot set N.
+function largeBatchCorrectionLimit(plan, papers) {
+    const daily = require('./daily-fresh-source-plan');
+    const original = daily.readDailyFreshSourcePlan(daily.dailyFreshSourceReference(plan));
+    const expected = original.paperIds;
+    const actual = Array.isArray(papers) ? papers.map(id) : [];
+    if (!expected.length || new Set(expected).size !== expected.length
+        || actual.length !== expected.length || new Set(actual).size !== actual.length
+        || !isDeepStrictEqual(actual.slice().sort(), expected.slice().sort()))
+        throw new Error('Large operator correction requires the complete original sealed batch');
+    return Math.min(15, Math.max(10, Math.floor(expected.length / 10)));
+}
 async function withCorrections(filename, plan, papers, callback, { factFeedbacks = new Map() } = {}) {
     require('../env-loader').requireExternalRuntime('daily-reader-operator-correction');
     require('../workspace-role').requireWorkspaceRole('daily');
@@ -71,8 +84,11 @@ async function withCorrections(filename, plan, papers, callback, { factFeedbacks
     within(filename,root); const manifest = read(filename), m = manifest.value;
     if (m.contract !== CONTRACT || m.runId !== plan.runId || m.batchDate !== plan.batchDate
         || typeof m.authorization !== 'string' || !m.authorization.trim()
-        || !Array.isArray(m.correctionFiles) || !m.correctionFiles.length || m.correctionFiles.length > 10)
+        || !Array.isArray(m.correctionFiles) || !m.correctionFiles.length)
         throw new Error('Explicit operator correction manifest is invalid');
+    if (m.correctionFiles.length > 10
+        && m.correctionFiles.length > largeBatchCorrectionLimit(plan, papers))
+        throw new Error('Operator correction exceeds the bounded final failed-set limit');
     const records = new Map();
     for (const filename of m.correctionFiles) {
         within(filename,root); const file = read(filename), r = file.value, paperId = id(r);
@@ -135,4 +151,4 @@ function execution(proof) {
     return proof ? {executionKind:'operator',operatorProvenance:proof,newReaderApiRequests:0,
         model:'operator-local',protocol:'local_operator'} : {};
 }
-module.exports={CONTRACT,withCorrections,current,execution,replay,isCurrentFailedPaper};
+module.exports={CONTRACT,withCorrections,current,execution,replay,isCurrentFailedPaper,largeBatchCorrectionLimit};
