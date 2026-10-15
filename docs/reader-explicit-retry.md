@@ -12,6 +12,22 @@ npm run batch -- --retry-failed-readers --reader-retry-manifest /absolute/path/r
 
 程序调用支持 `main({ readerRetryManifestPath: '/absolute/path/reader-rounds.json', refreshReaderDiagnostics: true })`，不用改进程参数。清单外论文正常接续原草稿与次数；清单内论文在规范论文锁中重读当前正文与完整四来源，再核对真正 Reader 身份、原稿字节与恢复历史。已成功、仍有合法尝试、输入发生实质变化或缺少证明的稿件不能借旧稿开新轮。实现元数据变化只接现有公开恢复程序的可核对历史，不更改 epoch。
 
+### 已安装轮使用普通批次续跑
+
+首次清单用于安装一笔有明确输入身份的新授权。原候选已经保存 `explicitReaderRetryRound`、相应回执为 `active` 后，继续该轮应直接走普通恢复：
+
+```bash
+npm run batch -- --refresh-reader-diagnostics
+```
+
+程序调用使用 `main({ refreshReaderDiagnostics: true })`，不再附 `readerRetryManifestPath`。正常入口在论文锁和同一封存来源中恢复原候选，完整重验已保存稿；实现升级需要迁移时，逐步核对原文件 SHA、唯一公共迁移记录、同一轮证明及未改变的实际输入。当前候选的 `roundId`、原回执、已用响应与全文次数、无进展、实际请求和预留输出预算继续沿用，校验通过即可完成；仍失败且余额耗尽或连续无改善时照常停止，不增加额度。
+
+实现指纹变化后，不应再把旧首次安装清单作为已安装轮的续跑参数。带清单会重新进入首次授权作用域，在检查原 `identitySha256` 时因当前实现身份不同而报“长文当前输入与重试许可不一致”；同一 UUID 也不能替代输入核验。不能改写原 grant 的身份、提高预算、换 epoch 或补签回执解决。普通恢复使用 `validatePersistedRound()` 及其公共实现迁移链核验，继续原轮剩余额度。
+
+已审但尚无安装回执的许可与已安装轮不同。普通无清单恢复不会自动首次安装这类许可；保留原 UUID、候选、来源和原清单，只有原安装条件仍逐项匹配时才能使用原授权。`prepared` 中断事务仍须按原事务证明恢复，不能当作新轮另发 UUID。
+
+已经完成并保存完整来源与事实证明的核心摘要，后续由普通保存反馈恢复入口继续。原付费摘要 UUID 用于明确重验该原响应，不应在摘要完成后逐轮强制重放；缺失原反馈或摘要再次不合格时仍须停止核查，不能删掉约束。
+
 清单顶层写实际 `batchDate`、`runId` 和 `rounds`。每项包含 `contract: reader-explicit-paid-retry-round-v1`、规范 `paperId`、唯一 UUID `roundId`、同一批次和运行、四个 `sourceFiles` SHA、当前 `wholeSha256`、实际最终 `identitySha256`，以及旧记录的 `originalIdentitySha256`、`envelopeSha256`、`payloadSha256`。这几项表示不同对象，不能互换。预算固定为 `maxResponses: 3`、`maxFullResponses: 1`、`maxPhysicalRequests: 6`、`maxReservedOutputTokens: 80000`。
 
 原稿及当前实现下的失败记录各按原字节保存，原响应次数、完整生成次数和网络失败次数写入新轮记录。新轮自己的逻辑尝试计数在响应保存时递增，旧费用账仍在原处；累计花费应合计旧账与新账。每个实际请求在发出前先记入新轮预算，网络重试、账号切换和图片兼容性尝试也占实际请求额度。单次请求的 token 上限仍由正常配置决定，累计预留输出预算先达到80000时也会提前停止。输入和图片费用另按真实用量记录，不能承诺固定金额。
