@@ -1,0 +1,237 @@
+{
+  "defaultBefore": "下表比较目标系统与对照系统在相同测试材料和固定配置下的表现，以检验两种系统在这一指标上的差异。",
+  "regressionCases": [
+    {
+      "name": "measured DINO decline with same-metric table rows",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "DINO 为 0.592，低于 对照系统 的 0.956。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. We compare target and reference. The target degrades. DINO ↑\n0.592 0.956",
+      "pass": true
+    },
+    {
+      "name": "measured SSQA decline with same-metric table rows",
+      "table": "| 系统 | SSQA ↑ |\n|---|---|\n| 目标系统 | 3.84 |\n| 对照系统 | 3.88 |\n| 其他系统 | 0.7 |",
+      "after": "在 SSQA 上目标系统为 3.84，略低于 对照系统 的 3.88。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. We compare target and reference. The target degrades. SSQA (↑\\uparrow) 3.84 3.88",
+      "pass": true
+    },
+    {
+      "name": "reversed arithmetic is not a decline",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "DINO 为 0.956，低于 对照系统 的 0.592。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. We compare target and reference. The target degrades. DINO ↑\n0.592 0.956",
+      "pass": false,
+      "issue": "负面证据"
+    },
+    {
+      "name": "a different comparison metric is not a decline",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "DINO 为 0.592，低于 对照系统 SSQA 的 0.956。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. We compare target and reference. The target degrades. DINO ↑\n0.592 0.956",
+      "pass": false,
+      "issue": "负面证据"
+    },
+    {
+      "name": "a lower-is-better decline is not negative evidence",
+      "table": "| 系统 | DINO ↓ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "DINO 为 0.592，低于 对照系统 的 0.956。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. We compare target and reference. The target degrades. DINO ↓\n0.592 0.956",
+      "pass": false,
+      "issue": "负面证据"
+    },
+    {
+      "name": "source direction must agree with generated header",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "DINO 为 0.592，低于 对照系统 的 0.956。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. We compare target and reference. The target degrades. DINO ↓\n0.592 0.956",
+      "pass": false,
+      "issue": "负面证据"
+    },
+    {
+      "name": "value absent from the same measured column",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "DINO 为 0.590，低于 对照系统 的 0.956。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. We compare target and reference. The target degrades. DINO ↑\n0.592 0.956",
+      "pass": false,
+      "issue": "负面证据"
+    },
+    {
+      "name": "unknown named comparison object",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "DINO 为 0.592，低于 不存在系统 的 0.956。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. We compare target and reference. The target degrades. DINO ↑\n0.592 0.956",
+      "pass": false,
+      "issue": "负面证据"
+    },
+    {
+      "name": "hypothetical result before metric",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "假设 DINO 为 0.592，低于 对照系统 的 0.956。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. We compare target and reference. The target degrades. DINO ↑\n0.592 0.956",
+      "pass": false,
+      "issue": "负面证据"
+    },
+    {
+      "name": "hypothetical result after metric",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "DINO 未来可能为 0.592，低于 对照系统 的 0.956。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. We compare target and reference. The target degrades. DINO ↑\n0.592 0.956",
+      "pass": false,
+      "issue": "负面证据"
+    },
+    {
+      "name": "bare lower statement has no measured metric binding",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "目标系统为 0.592，低于 对照系统 的 0.956。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. We compare target and reference. The target degrades. DINO ↑\n0.592 0.956",
+      "pass": false,
+      "issue": "负面证据"
+    },
+    {
+      "name": "grouped QualitySuite original rectangular table",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "Diversity 为 0.144，低于教师的 0.195，说明文本渲染提升伴随多样性收缩。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. Comparison of target and teacher. The target degrades.\nMethod NFE QualitySuite↑ ScoreA↑ ScoreB↑ Overall Text Diversity Style\nTeacher 50 × 2 0.8 0.9 0.54 0.889 0.195 0.428\nOurs 4 0.8 0.9 0.54 0.944 0.144 0.429",
+      "pass": true
+    },
+    {
+      "name": "grouped Perceptual-Bench original rectangular table",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "Diversity 为 0.144，低于教师的 0.195，说明文本渲染提升伴随多样性收缩。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. Comparison of target and teacher. The target degrades.\nMethod NFE Perceptual-Bench↑ ScoreA↑ ScoreB↑ Overall Text Diversity Style\nTeacher 50 × 2 0.8 0.9 0.54 0.889 0.195 0.428\nOurs 4 0.8 0.9 0.54 0.944 0.144 0.429",
+      "pass": true
+    },
+    {
+      "name": "grouped metric without original group direction",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "Diversity 为 0.144，低于教师的 0.195，说明文本渲染提升伴随多样性收缩。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. Comparison of target and teacher. The target degrades.\nMethod NFE QualitySuite ScoreA↑ ScoreB↑ Overall Text Diversity Style\nTeacher 50 × 2 0.8 0.9 0.54 0.889 0.195 0.428\nOurs 4 0.8 0.9 0.54 0.944 0.144 0.429",
+      "pass": false,
+      "issue": "负面证据"
+    },
+    {
+      "name": "grouped metric with values in different columns",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "Diversity 为 0.144，低于教师的 0.195，说明文本渲染提升伴随多样性收缩。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. Comparison of target and teacher. The target degrades.\nMethod NFE QualitySuite↑ ScoreA↑ ScoreB↑ Overall Text Diversity Style\nTeacher 50 × 2 0.8 0.9 0.54 0.889 0.195 0.428\nOurs 4 0.8 0.9 0.54 0.144 0.150 0.429",
+      "pass": false,
+      "issue": "负面证据"
+    },
+    {
+      "name": "grouped metric without named comparison object",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "Diversity 为 0.144，低于教师的 0.195，说明文本渲染提升伴随多样性收缩。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. Comparison of target and teacher. The target degrades.\nMethod NFE QualitySuite↑ ScoreA↑ ScoreB↑ Overall Text Diversity Style\nUnrelated 50 × 2 0.8 0.9 0.54 0.889 0.195 0.428\nOurs 4 0.8 0.9 0.54 0.944 0.144 0.429",
+      "pass": false,
+      "issue": "负面证据"
+    },
+    {
+      "name": "grouped metric number only elsewhere outside table",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "Diversity 为 0.144，低于教师的 0.195，说明文本渲染提升伴随多样性收缩。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. Comparison of target and teacher. The target degrades.\nMethod NFE QualitySuite↑ ScoreA↑ ScoreB↑ Overall Text Diversity Style\nTeacher 50 × 2 0.8 0.9 0.54 0.889 0.195 0.428\nOurs 4 0.8 0.9 0.54 0.944 0.150 0.429\nAnother unrelated experiment reports 0.144.",
+      "pass": false,
+      "issue": "负面证据"
+    },
+    {
+      "name": "grouped metric without contiguous measured rows",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "Diversity 为 0.144，低于教师的 0.195，说明文本渲染提升伴随多样性收缩。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. Comparison of target and teacher. The target degrades.\nMethod NFE QualitySuite↑ ScoreA↑ ScoreB↑ Overall Text Diversity Style\nTeacher 50 × 2 0.8 0.9 0.54 0.889 0.195 0.428\nThese are future plans.\nOurs 4 0.8 0.9 0.54 0.944 0.144 0.429",
+      "pass": false,
+      "issue": "负面证据"
+    },
+    {
+      "name": "grouped metric reversed numerical direction",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "Diversity 为 0.144，低于教师的 0.195，说明文本渲染提升伴随多样性收缩。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. Comparison of target and teacher. The target degrades.\nMethod NFE QualitySuite↑ ScoreA↑ ScoreB↑ Overall Text Diversity Style\nTeacher 50 × 2 0.8 0.9 0.54 0.889 0.144 0.428\nOurs 4 0.8 0.9 0.54 0.944 0.195 0.429",
+      "pass": false,
+      "issue": "负面证据"
+    },
+    {
+      "name": "grouped table without a source table caption",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "Diversity 为 0.144，低于教师的 0.195，说明文本渲染提升伴随多样性收缩。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Experiment. Comparison of target and teacher. The target degrades.\nMethod NFE QualitySuite↑ ScoreA↑ ScoreB↑ Overall Text Diversity Style\nTeacher 50 × 2 0.8 0.9 0.54 0.889 0.195 0.428\nOurs 4 0.8 0.9 0.54 0.944 0.144 0.429",
+      "pass": false,
+      "issue": "负面证据"
+    },
+    {
+      "name": "planned grouped table is not reported evidence",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "Diversity 为 0.144，低于教师的 0.195，说明文本渲染提升伴随多样性收缩。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 1. Future hypothetical illustration. Comparison of target and teacher. The target degrades.\nMethod NFE QualitySuite↑ ScoreA↑ ScoreB↑ Overall Text Diversity Style\nTeacher 50 × 2 0.8 0.9 0.54 0.889 0.195 0.428\nOurs 4 0.8 0.9 0.54 0.944 0.144 0.429",
+      "pass": false,
+      "issue": "负面证据"
+    }
+  ],
+  "zeroCorrectionCases": [
+    {
+      "name": "measured zero-correction sweep",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "修正权重为 0 时 Total 最高，为 84.22。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 8. Ablation comparison. Role of bidirectional correction. The bottom panel isolates the correction signal by fixing causal-teacher guidance and disabling reference repulsion while varying only λcorr. λcorr Quality Semantic Total\n0 85.36 79.64 84.22\n0.2 84.97 79.86 83.95\nThe highest Total is obtained without correction.",
+      "pass": true
+    },
+    {
+      "name": "mere zero weight in configuration",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "修正权重为 0 时 Total 最高，为 84.22。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 8. Ablation comparison. Correction weight λcorr = 0. Total 84.22.",
+      "pass": false,
+      "issue": "消融"
+    },
+    {
+      "name": "source has no isolated correction signal",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "修正权重为 0 时 Total 最高，为 84.22。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 8. Ablation comparison. Role of bidirectional correction. The bottom panel describes the training setup by fixing causal-teacher guidance and disabling reference repulsion while varying only λcorr. λcorr Quality Semantic Total\n0 85.36 79.64 84.22\n0.2 84.97 79.86 83.95\nThe highest Total is obtained without correction.",
+      "pass": false,
+      "issue": "消融"
+    },
+    {
+      "name": "source has no zero measured row",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "修正权重为 0 时 Total 最高，为 84.22。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 8. Ablation comparison. Role of bidirectional correction. The bottom panel isolates the correction signal by fixing causal-teacher guidance and disabling reference repulsion while varying only λcorr. λcorr Quality Semantic Total\n0.8 85.36 79.64 84.22\n0.2 84.97 79.86 83.95\nThe highest Total is obtained without correction.",
+      "pass": false,
+      "issue": "消融"
+    },
+    {
+      "name": "source measured value differs",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "修正权重为 0 时 Total 最高，为 84.23。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 8. Ablation comparison. Role of bidirectional correction. The bottom panel isolates the correction signal by fixing causal-teacher guidance and disabling reference repulsion while varying only λcorr. λcorr Quality Semantic Total\n0 85.36 79.64 84.22\n0.2 84.97 79.86 83.95\nThe highest Total is obtained without correction.",
+      "pass": false,
+      "issue": "消融"
+    },
+    {
+      "name": "planned future result",
+      "table": "| 系统 | DINO ↑ |\n|---|---|\n| 目标系统 | 0.592 |\n| 对照系统 | 0.956 |\n| 其他系统 | 0.7 |",
+      "after": "未来计划修正权重为 0 时 Total 最高，为 84.22。证据边界限于当前相同测试材料和固定配置，跨语言与跨场景的结论需要另外验证，现有记录不能据此推断其他模型的表现。",
+      "source": "Table 8. Ablation comparison. Role of bidirectional correction. The bottom panel isolates the correction signal by fixing causal-teacher guidance and disabling reference repulsion while varying only λcorr. λcorr Quality Semantic Total\n0 85.36 79.64 84.22\n0.2 84.97 79.86 83.95\nThe highest Total is obtained without correction.",
+      "pass": false,
+      "issue": "消融"
+    }
+  ],
+  "comparisonBoundaryCases": [
+    {
+      "name": "two explicit ranking objects and noncausal boundary",
+      "table": "| 组合 | 相关系数 ↑ |\n|---|---|\n| AESPA | 0.661 |\n| IVE | 0.363 |\n| TWICE | 0.406 |",
+      "before": "条件是将 VLM 共识排序与官方音乐视频早期累计播放量排序按组合分别比较，观察窗口固定且所有输入材料保持一致。",
+      "after": "三个组合均呈现正向相关，多重比较校正后仅 AESPA 保持显著。该结果只说明模型视觉排序与早期观看排序存在关联，不支持视觉偏好导致播放量的因果解释，证据范围限于三个组合与现有存档观测的视频。",
+      "source": "Table 5. Comparison of VLM consensus rankings with historical YouTube ranking.",
+      "pass": true
+    },
+    {
+      "name": "comparison word without named pair cannot establish objects",
+      "table": "| 组合 | 相关系数 ↑ |\n|---|---|\n| AESPA | 0.661 |\n| IVE | 0.363 |\n| TWICE | 0.406 |",
+      "before": "这里呈现三个组合在同一观察窗口中的记录，具体检验问题以及输入材料在本段落中按顺序进行介绍。",
+      "after": "三个组合均呈现正向相关，多重比较校正后仅 AESPA 保持显著。该结果只说明模型视觉排序与早期观看排序存在关联，不支持视觉偏好导致播放量的因果解释，证据范围限于三个组合与现有存档观测的视频。",
+      "source": "Table 5. Comparison of VLM consensus rankings with historical YouTube ranking.",
+      "pass": false,
+      "issue": "没有保留比较对象"
+    }
+  ]
+}
