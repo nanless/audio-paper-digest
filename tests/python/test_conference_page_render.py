@@ -2,6 +2,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import re
 import pathlib
 from pathlib import Path
 import sys
@@ -28,6 +29,38 @@ def stable_sha(value):
 
 
 class ConferencePageRenderTest(unittest.TestCase):
+    def test_batched_tag_presentation_has_only_selected_paths_and_no_page_eligibility(self):
+        catalog = MODULE.load_tag_catalog()
+        by_id = {item['id']: item for item in catalog['concepts']}
+        leaf = next(item for item in catalog['concepts'] if item['broaderId'] is not None)
+        record = {'registryVersion': catalog['version'], 'registrySha256': catalog['registrySha256'],
+                  'concepts': [{'id': leaf['id'], 'facet': leaf['facet'],
+                                'label': leaf['preferredLabel']['zh']}]}
+        packet = {'tagPresentationBatch': {'catalog': catalog, 'records': [record, copy.deepcopy(record)]}}
+        original = copy.deepcopy(packet)
+        result = MODULE.render_packet(packet)
+        self.assertEqual(list(result), ['tagPresentations'])
+        self.assertEqual(len(result['tagPresentations']), 2)
+        self.assertEqual(result['tagPresentations'][0], result['tagPresentations'][1])
+        text = result['tagPresentations'][0]
+        self.assertIn(f'/papers/?concept={leaf["id"]}', text)
+        self.assertIn(f'/papers/?concept={leaf["broaderId"]}', text)
+        unrelated = next(item for item in catalog['concepts']
+                         if item['id'] not in (leaf['id'], leaf['broaderId'])
+                         and item['broaderId'] is None and item['facet'] != leaf['facet'])
+        self.assertNotIn(f'/papers/?concept={unrelated["id"]}', text)
+        self.assertEqual(packet, original)
+        for mutation in ('unknown', 'sha', 'mixed'):
+            bad = copy.deepcopy(packet)
+            if mutation == 'unknown':
+                bad['tagPresentationBatch']['records'][0]['concepts'][0]['id'] = 'task.unknown'
+            elif mutation == 'sha':
+                bad['tagPresentationBatch']['records'][0]['registrySha256'] = 'f' * 64
+            else:
+                bad['paper'] = self.packet()['paper']
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                MODULE.render_packet(bad)
+
     def test_conference_workbench_exports_real_identity_without_inventing_arxiv_or_abstract(self):
         publisher = MODULE.load_publish_to_blog()
         paper = self.packet()['paper']
@@ -192,12 +225,53 @@ class ConferencePageRenderTest(unittest.TestCase):
             original = copy.deepcopy(packet)
             page = MODULE.render_packet(packet)['markdown']
             self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags-v2"', page)
+            self.assertIn('**研究分类**', page)
+            self.assertIn('/papers/?concept=task.asr', page)
+            self.assertNotRegex(page, r'(?m)^标签：')
+            self.assertEqual(len(json.loads(re.search(
+                r'^paper_digest_tags_concepts: (.+)$', page, re.MULTILINE).group(1))), 2)
             self.assertEqual(packet, original)
         for contract in (None, '', 'unknown'):
             packet = self.packet()
             packet['taxonomy']['flatCompatContract'] = contract
             with self.assertRaisesRegex(ValueError, '标签选择记录与分析阶段记录'):
                 MODULE.render_packet(packet)
+
+    def test_append_only_catalog_reads_real_old_stage_without_rewriting_proof(self):
+        from tag_catalog import load_tag_catalog, tag_prompt_text_sha256, TAG_PROMPT_TEXT_CONTRACT
+        old_sha = '0a0847314ab2059d95efac33376414498e598a1f02a1486869bee0efc481d1f7'
+        original_catalog = load_tag_catalog(ROOT / 'config/tag-catalog-history' / f'{old_sha}.json')
+        current = MODULE.load_tag_catalog()
+        self.assertNotEqual(original_catalog['registrySha256'], current['registrySha256'])
+        packet = self.packet()
+        paper, assignment = packet['paper'], packet['taxonomy']
+        paper['analysis'] = paper['analysis'].replace(
+            '## 标签\n已根据封存资料核验的分析内容。',
+            '## 标签\n#语音识别 #Transformer #鲁棒性\n主任务标签: #语音识别\n主方法标签: #Transformer')
+        paper['analysisManifest']['stages']['scoringAudit']['outputAnalysisSha256'] = \
+            hashlib.sha256(paper['analysis'].encode()).hexdigest()
+        assignment['conceptIds'].append('research_focus.robustness')
+        assignment['concepts'].append({'id': 'research_focus.robustness', 'facet': 'research_focus',
+                                       'preferredLabel': {'zh': '鲁棒性', 'en': 'Robustness'}})
+        stage = paper['analysisManifest']['stages']['taxonomySeal']
+        stage.update(registrySha256=old_sha, registryVersion=original_catalog['version'],
+                     conceptIds=list(assignment['conceptIds']), projectionContract=TAG_PROMPT_TEXT_CONTRACT,
+                     projectionSha256=tag_prompt_text_sha256(original_catalog, TAG_PROMPT_TEXT_CONTRACT))
+        saved = copy.deepcopy(packet)
+        result = MODULE.render_packet(packet)
+        self.assertIn(f'paper_digest_tags_registry_sha256: "{current["registrySha256"]}"', result['markdown'])
+        self.assertEqual(packet, saved)
+        for mutation in ('projection', 'source', 'selection'):
+            bad = copy.deepcopy(packet)
+            old_stage = bad['paper']['analysisManifest']['stages']['taxonomySeal']
+            if mutation == 'projection':
+                old_stage['projectionSha256'] = 'f' * 64
+            elif mutation == 'source':
+                old_stage['registrySha256'] = 'f' * 64
+            else:
+                old_stage['primaryTaskId'] = 'task.av-asr'
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                MODULE.render_packet(bad)
 
     def test_tag_metadata_packet_matches_legacy_and_rejects_both_fields(self):
         legacy = self.packet()
@@ -221,6 +295,7 @@ class ConferencePageRenderTest(unittest.TestCase):
             MODULE.render_packet(current)
 
     def packet(self):
+        catalog = MODULE.load_tag_catalog()
         paper_id = 'conference:icassp:2026:icassp-arnumber:100'
         article = '这是只来自会议分析 Reader 的全新解读正文。'
         plan = {'version': 3, 'contract': 'beginner-researcher-v3', 'readerTitle': '会议论文解读',
@@ -261,8 +336,8 @@ class ConferencePageRenderTest(unittest.TestCase):
                                                     'apiReaderResourceIdentity': 'api-reader-resource-identity-v1',
                                                     'taxonomy': 'paper-taxonomy-selection-v1'},
                                       'stages': {
-                                          'taxonomySeal': {'status': 'complete', 'registryVersion': 'paper-taxonomy-v1',
-                                                           'registrySha256': 'a' * 64,
+                                          'taxonomySeal': {'status': 'complete', 'registryVersion': catalog['version'],
+                                                           'registrySha256': catalog['registrySha256'],
                                                            'primaryTaskId': 'task.asr',
                                                            'primaryMethodId': 'method.transformer',
                                                            'conceptIds': ['task.asr', 'method.transformer']},
@@ -287,7 +362,7 @@ class ConferencePageRenderTest(unittest.TestCase):
                 'publication': publication,
                 'taxonomy': {'status': 'assigned', 'paperId': paper_id, 'primaryTaskId': 'task.asr',
                              'primaryMethodId': 'method.transformer', 'conceptIds': ['task.asr', 'method.transformer'],
-                             'registryVersion': 'paper-taxonomy-v1', 'registrySha256': 'a' * 64,
+                             'registryVersion': catalog['version'], 'registrySha256': catalog['registrySha256'],
                              'selectionContract': 'paper-taxonomy-selection-v1',
                              'flatCompatContract': 'paper-taxonomy-flat-tags-compat-v1', 'concepts': concepts}}
 

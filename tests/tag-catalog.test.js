@@ -14,8 +14,8 @@ test('当前词表包含全部九个 facet 和已定义的概念', () => {
     const r = loadTagCatalog(registryPath);
     assert.equal(r.version, 'paper-tag-catalog-v2');
     assert.equal(r.facets.length, 9);
-    // v1.1 换表（2026-09-30）：262 概念（+34 缺口词），上界随词表增长放宽至 280。
-    assert.ok(r.concepts.length >= 150 && r.concepts.length <= 280);
+    // 当前生产选择范围与已批准展示的完整目录一致，包含暂时计数为零的方向。
+    assert.equal(r.concepts.length, 386);
     assert.equal(r.registrySha256, crypto.createHash('sha256').update(fs.readFileSync(registryPath)).digest('hex'));
     assert.equal(validateTagCatalog(raw()).version, r.version);
 });

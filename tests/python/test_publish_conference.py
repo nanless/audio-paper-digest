@@ -66,6 +66,21 @@ class ConferencePublishTests(unittest.TestCase):
         self.patch.start()
         self.addCleanup(self.patch.stop)
         self.repo = self.make_repo('blog')
+        publisher = M.load_publish_to_blog()
+        self.tag_catalog = publisher._PAGE_TAG_CATALOG
+        snapshot = publisher.build_tag_catalog_snapshot(self.tag_catalog)
+        versions = {'contract': publisher.TAG_CATALOG_VERSIONS_CONTRACT,
+                    'currentSha256': snapshot['registrySha256'], 'snapshots': [snapshot]}
+        for prefix in ('data', 'static/data'):
+            for name, value in [('tag-catalog-snapshot.json', snapshot),
+                    ('tag-catalog-versions.json', versions),
+                    (f'tag-catalog-history/{snapshot["registrySha256"]}.json', snapshot)]:
+                target = self.repo / prefix / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(json.dumps(value, ensure_ascii=False))
+        self.command('-C', self.repo, 'add', 'data', 'static/data')
+        self.command('-C', self.repo, 'commit', '-m', 'install source-bound catalog fixture')
+        self.command('-C', self.repo, 'push', 'origin', 'HEAD:main')
         self.base = M.remote_snapshot(self.repo)
 
     def command(self, *args):
@@ -87,12 +102,35 @@ class ConferencePublishTests(unittest.TestCase):
         self.command('-C', repo, 'push', 'origin', 'HEAD:main')
         return repo
 
-    def record(self, path='content/posts/test.md', data='---\ntitle: test\n---\n正文\n'.encode(), repo=None):
+    def record(self, path='content/posts/test.md', data=None, repo=None):
         repo = repo or self.repo
+        if data is None:
+            data = ('---\ntitle: test\n'
+                    f'paper_digest_tags_registry_sha256: "{self.tag_catalog["registrySha256"]}"\n'
+                    f'paper_digest_tags_registry_version: "{self.tag_catalog["version"]}"\n'
+                    '---\n正文\n').encode()
         target = repo / path
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
-        return {'path': path, 'sourceSha256': M.sha_bytes(data), 'kind': 'paper'}
+        return {'path': path, 'sourcePath': str(target),
+                'sourceSha256': M.sha_bytes(data), 'kind': 'paper'}
+
+    def test_catalog_guard_replays_actual_page_binding_and_blocks_missing_or_forged_mirror(self):
+        record = self.record()
+        before = self.repo.joinpath(record['path']).read_bytes()
+        proofs = M.validate_conference_tag_catalogs(self.repo, [record])
+        self.assertEqual(len(proofs), 1)
+        self.assertTrue(proofs[0]['valid'])
+        self.assertEqual(self.repo.joinpath(record['path']).read_bytes(), before)
+        target = self.repo / 'static/data/tag-catalog-versions.json'
+        original = target.read_bytes()
+        target.write_bytes(original + b' ')
+        with self.assertRaisesRegex(M.ConferencePublicationError, '受控词表发布同步'):
+            M.validate_conference_tag_catalogs(self.repo, [record])
+        target.write_bytes(original)
+        record['sourceSha256'] = 'f' * 64
+        with self.assertRaisesRegex(M.ConferencePublicationError, '暂存页面字节'):
+            M.validate_conference_tag_catalogs(self.repo, [record])
 
     def publish(self, records):
         return M.commit_exact_delta(self.repo, records, self.base['head'], self.base['remoteMain'],

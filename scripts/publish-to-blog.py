@@ -94,7 +94,9 @@ from tag_catalog import (
     TAG_SELECTION_CONTRACT,
     LEGACY_TAG_SELECTION_CONTRACT,
     load_tag_catalog,
+    resolve_append_only_proof_catalog,
 )
+from tag_presentation import render_tag_hierarchy_markdown
 from tutorial_payload_verifier import (
     TUTORIAL_FORMAT_CONTRACT,
     FRESH_AUTHORING_CONTRACT,
@@ -3268,24 +3270,6 @@ def _select_tag_display_version(repo, current, versions, *, legacy=False, approv
             or hashlib.sha256(tag_catalog_snapshot_bytes(issued_base)).hexdigest()
             != policy['baseSnapshotSha256']):
         raise PublishDataValidationError('标签展示策略记录的基础词表 SHA 或快照 SHA 与实际签发来源不一致。')
-    historical_base = current['registrySha256'] != base_sha
-    if not historical_base:
-        if current != issued_base:
-            raise PublishDataValidationError('当前基础词表与策略签发时的同 SHA 快照不一致。')
-    else:
-        # The approved display policy remains bound to its original issued bytes.
-        # Classification still uses the independent current catalog and its SHA.
-        # Only description values may differ; field presence, every identity field,
-        # order, count, version and unknown fields must remain exactly equal.
-        if (set(current) != set(issued_base)
-                or any(current[key] != issued_base[key] for key in current
-                       if key not in {'registrySha256', 'concepts'})
-                or len(current['concepts']) != len(issued_base['concepts'])
-                or any(set(actual) != set(original)
-                       or any(actual[key] != original[key] for key in actual
-                              if key not in {'definition', 'scopeNote'})
-                       for actual, original in zip(current['concepts'], issued_base['concepts']))):
-            raise PublishDataValidationError('当前分类词表与展示策略签发基础的概念身份不一致；只允许定义和范围说明的值不同。')
     preferred = versions.get(preferred_sha)
     if preferred is None:
         raise PublishDataValidationError('标签展示策略选用的版本没有保存对应的词表快照。')
@@ -3296,6 +3280,27 @@ def _select_tag_display_version(repo, current, versions, *, legacy=False, approv
         raise PublishDataValidationError('标签展示策略记录的快照 SHA 或提示文本 SHA 与重新计算的结果不一致。')
     if preferred['concepts'][:len(issued_base['concepts'])] != issued_base['concepts']:
         raise PublishDataValidationError('标签展示策略选用的词表修改了已有概念，或改变了它们的顺序；只允许在原列表末尾追加概念。')
+    historical_base = current['registrySha256'] != base_sha
+    if not historical_base:
+        if current != issued_base:
+            raise PublishDataValidationError('当前基础词表与策略签发时的同 SHA 快照不一致。')
+    else:
+        # The approved display policy remains bound to its original issued bytes.
+        # Classification still uses the independent current catalog and its SHA.
+        # Only description values may differ; field presence, every identity field,
+        # order, count, version and unknown fields must remain exactly equal.
+        # 当前分类目录可与已批准的完整展示目录对应，也可仍对应原签发基础。
+        # 两种情况都只允许描述值不同；不能借追加之名改变父链/名称/顺序。
+        identity_base = preferred if len(current['concepts']) == len(preferred['concepts']) else issued_base
+        if (set(current) != set(issued_base)
+                or any(current[key] != issued_base[key] for key in current
+                       if key not in {'registrySha256', 'concepts'})
+                or len(current['concepts']) != len(identity_base['concepts'])
+                or any(set(actual) != set(original)
+                       or any(actual[key] != original[key] for key in actual
+                              if key not in {'definition', 'scopeNote'})
+                       for actual, original in zip(current['concepts'], identity_base['concepts']))):
+            raise PublishDataValidationError('当前分类词表与展示策略签发基础的概念身份不一致；只允许定义和范围说明的值不同。')
     # 新归档目录已存在时，只核新目录；不能用旧目录掩盖缺失或损坏的新副本。
     archive_name = 'taxonomy-snapshots'
     if not legacy and any((repo / prefix / 'tag-catalog-history').exists()
@@ -3675,7 +3680,20 @@ def build_flat_tag_compat_metadata(
         return None
     if validation.get('registryVersion') != _PAGE_TAG_CATALOG['version'] \
             or validation.get('registrySha256') != _PAGE_TAG_CATALOG['registrySha256']:
-        raise PublishDataValidationError('页面的标签选择记录与当前词表版本或 SHA 不一致。')
+        original = resolve_append_only_proof_catalog(
+            validation.get('registrySha256'), _PAGE_TAG_CATALOG)
+        if original is None or validation.get('registryVersion') != original['version']:
+            raise PublishDataValidationError('页面的标签选择记录与当前词表版本或 SHA 不一致。')
+        from utils import _validate_tag_selection
+        original_selection = _validate_tag_selection(original, parsed.get('tags'),
+            parsed.get('primaryTaskTag'), parsed.get('primaryMethodTag'))
+        if (not original_selection['valid'] or any(original_selection.get(key) != validation.get(key)
+                for key in ('primaryTaskId', 'primaryMethodId', 'conceptIds'))):
+            raise PublishDataValidationError('页面的旧标签选择不能按真实归档词表完整重放。')
+        validation = _validate_tag_selection(_PAGE_TAG_CATALOG, parsed.get('tags'),
+            parsed.get('primaryTaskTag'), parsed.get('primaryMethodTag'))
+        if not validation['valid']:
+            raise PublishDataValidationError('页面的旧标签选择未通过当前纯追加词表的校验。')
     tags = parsed.get('tags')
     concept_ids = validation.get('conceptIds')
     if not isinstance(tags, list) or not isinstance(concept_ids, list) \
@@ -5469,6 +5487,24 @@ def build_index_context_line(parsed_analysis, aurl=''):
     return ' | '.join(bits)
 
 
+def render_paper_tag_hierarchy(parsed):
+    metadata = build_flat_tag_compat_metadata(parsed)
+    if metadata is None and not any(key in parsed for key in ('tagValidation', 'taxonomyValidation')):
+        # 旧页面可能没有标签阶段声明：只显示其直接写出且能精确解析的当前
+        # 首选名称，不据此补签阶段或发布元数据，也不将未知自由标签带入新展示。
+        by_label = {item['preferredLabel']['zh']: item for item in _PAGE_TAG_CATALOG['concepts']
+                    if item['status'] == 'active'}
+        selected = []
+        for raw in parsed.get('tags') or []:
+            concept = by_label.get(str(raw).removeprefix('#'))
+            if concept is not None and concept['id'] not in {item['id'] for item in selected}:
+                selected.append({'id': concept['id'], 'facet': concept['facet'],
+                                 'label': concept['preferredLabel']['zh']})
+        metadata = {'registryVersion': _PAGE_TAG_CATALOG['version'],
+                    'registrySha256': _PAGE_TAG_CATALOG['registrySha256'], 'concepts': selected}
+    return render_tag_hierarchy_markdown(metadata, _PAGE_TAG_CATALOG) if metadata else ''
+
+
 def _current_batch_tag_metadata(papers):
     if not papers:
         return None
@@ -5707,9 +5743,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             english_title = f'[{rendered_title}]({blog_url})' if blog_url else rendered_title
             md += f"> 英文题目：*{english_title}*\n\n"
         tags = parsed_analysis.get('tags') or []
-        display_tags = format_display_tags(tags)
-        if display_tags:
-            md += f"标签：{display_tags}\n\n"
+        md += render_paper_tag_hierarchy(parsed_analysis)
         
         score_line = format_complete_score_line(parsed_analysis)
         if score_line:
@@ -5778,9 +5812,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             english_title = f'[{rendered_title}]({blog_url})' if blog_url else rendered_title
             md += f"> 英文题目：*{english_title}*\n\n"
         tags = parsed_analysis.get('tags') or []
-        display_tags = format_display_tags(tags)
-        if display_tags:
-            md += f"标签：{display_tags}\n\n"
+        md += render_paper_tag_hierarchy(parsed_analysis)
         md += '评分：N/A（分析未提供可验证的八维评分）\n\n'
         context_line = build_index_context_line(parsed_analysis, aurl)
         if context_line:
@@ -9051,10 +9083,7 @@ paper_digest_arxiv_id: "{normalize_arxiv_id(aid)}"
     metadata_block = ''
     if parsed_analysis:
         reader_identity_lines = []
-        display_tags = format_display_tags(tags)
-        if display_tags:
-            metadata_block += f"标签：{display_tags}\n\n"
-            reader_identity_lines.append(f"标签：{display_tags}")
+        md += render_paper_tag_hierarchy(parsed_analysis)
 
         score_line = format_complete_score_line(parsed_analysis)
         if score_line:
@@ -12662,6 +12691,7 @@ def generation_template_fingerprint():
         'utils.py': script_dir / 'utils.py',
         'analysis_sections.py': script_dir / 'analysis_sections.py',
         'tag_stage_record.py': script_dir / 'tag_stage_record.py',
+        'tag_presentation.py': script_dir / 'tag_presentation.py',
         'path_config.py': script_dir / 'path_config.py',
         'markdown_hugo_gate.py': script_dir / 'markdown_hugo_gate.py',
         'reader_inline_svg.py': script_dir / 'reader_inline_svg.py',
@@ -12808,6 +12838,7 @@ def review_protocol_fingerprint():
         'utils.py': script_dir / 'utils.py',
         'analysis_sections.py': script_dir / 'analysis_sections.py',
         'tag_stage_record.py': script_dir / 'tag_stage_record.py',
+        'tag_presentation.py': script_dir / 'tag_presentation.py',
     }
     dependencies = {
         name: _sha256_file(path)

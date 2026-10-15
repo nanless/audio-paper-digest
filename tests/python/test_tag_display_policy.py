@@ -176,6 +176,30 @@ class PresentationPolicyTests(unittest.TestCase):
         self.assertEqual(self.env['_PAGE_TAG_CATALOG'], before)
         self.assertNotEqual(current['concepts'][0]['definition'], self.base['concepts'][0]['definition'])
 
+    def test_current_full_approved_extension_can_differ_only_in_description_values(self):
+        self.prepare()
+        current = copy.deepcopy(self.preferred)
+        current.update(contract=self.base['contract'], registryVersion=self.base['registryVersion'],
+                       registrySha256='f' * 64)
+        for node in current['concepts']:
+            node['definition'] += ' 当前定义。'
+            node['scopeNote'] += ' 当前范围。'
+        versions = {BASE: self.base, self.preferred['registrySha256']: self.preferred}
+        before = copy.deepcopy((current, versions))
+        chosen, assets = self.call('_select_tag_display_version', self.repo, current, versions, legacy=True)
+        self.assertEqual(chosen, self.preferred)
+        self.assertEqual((current, versions), before)
+        self.assertEqual(assets[self.policy_paths[0]], self.policy_bytes)
+        for mutate in (
+                lambda c: c['concepts'][-1].update(zh='不批准的名称'),
+                lambda c: c['concepts'][-1]['aliases'].append('不批准的别名'),
+                lambda c: c['concepts'][-1].update(ancestorIds=['task.asr']),
+                lambda c: c['concepts'].reverse(),
+                lambda c: c['concepts'][-1].update(status='deprecated')):
+            bad = copy.deepcopy(current); mutate(bad)
+            with self.assertRaises(self.error):
+                self.call('_select_tag_display_version', self.repo, bad, versions, legacy=True)
+
     def test_historical_policy_rejects_every_identity_change_and_unknown_difference(self):
         for change in (
             lambda c: c['concepts'][0].update(zh='另一个标签'),

@@ -9,6 +9,7 @@
 
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { isDeepStrictEqual } = require('node:util');
 const tagCatalogApi = require('./tag-catalog.js');
 
 const CHANGE_LEVELS = Object.freeze(['none', 'additive', 'destructive']);
@@ -422,6 +423,32 @@ function resolveRegistrySnapshot(registrySha256, options = {}) {
     }
 }
 
+// 只读核验旧证明时允许完整原词表的纯尾部追加，不签发升级注记。
+// 定义、范围、别名和层级也必须逐项不变；不能只检查本篇选中的概念。
+function isStrictAppendOnlyCatalog(previous, current) {
+    try {
+        const from = normalizeRegistry(previous);
+        const to = normalizeRegistry(current);
+        return from.version === to.version
+            && isDeepStrictEqual(from.facets, to.facets)
+            && to.concepts.length > from.concepts.length
+            && isDeepStrictEqual(from.concepts, to.concepts.slice(0, from.concepts.length));
+    } catch { return false; }
+}
+
+function resolveAppendOnlyProofCatalog(registrySha256, current, options = {}) {
+    const sha = String(registrySha256 || '');
+    if (!SHA256_RE.test(sha)) return null;
+    const directory = options?.historyDir || defaultHistoryDir();
+    if (!directory) return null;
+    try {
+        // 不能用调用方提供的对象或 resolver 代替保存的原文件字节。
+        const previous = tagCatalogApi.loadTagCatalog(path.join(directory, `${sha}.json`));
+        return previous.registrySha256 === sha && isStrictAppendOnlyCatalog(previous, current)
+            ? previous : null;
+    } catch { return null; }
+}
+
 function buildRegistryUpgradeAnnotation({ from, to, changeLevel, detail, note,
     acknowledgeDestructive = false, acknowledgementNote = null }) {
     const fromRegistry = from && typeof from === 'object' ? from : null;
@@ -610,6 +637,8 @@ module.exports = {
     normalizeRegistry,
     classifyRegistryChange,
     resolveRegistrySnapshot,
+    isStrictAppendOnlyCatalog,
+    resolveAppendOnlyProofCatalog,
     destructiveReasons,
     destructiveReasonsHash,
     acknowledgementEligibility,

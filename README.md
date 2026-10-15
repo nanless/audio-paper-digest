@@ -66,6 +66,8 @@
 
 [三流程代码、Prompt 和文档对应表](docs/three-workflows.md)列出共享核心与必要适配。工作树只保留当前 18 份 Prompt；旧正文按原 SHA 从 Git 历史读取，核验已付费断点，保留原声明和费用记录。
 
+三条流程的标签统一采用[新版研究方向目录](https://nanless.github.io/audio-paper-digest-blog/tags/)的386项九维体系。总目录完整保留；文章只显示实际所选标签及其父级路径，父级不算额外命中，也不展示空分类或兄弟方向。词表升级、旧记录只读核验及站点快照同步见[标签规则](docs/tag-display-policy.md#三条流程共用的目录与呈现)。
+
 ## 文档导航
 
 - [AGENTS.md](AGENTS.md)：执行边界、来源与发布规则。

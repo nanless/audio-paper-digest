@@ -2,7 +2,9 @@
 
 import hashlib
 import json
+import os
 import re
+import stat
 import unicodedata
 from pathlib import Path
 
@@ -141,6 +143,10 @@ def load_tag_catalog(file_path=None):
         import tag_paths
         file_path = tag_paths.TAG_CATALOG_FILE
     raw = Path(file_path).read_bytes()
+    return _parse_tag_catalog_bytes(raw, uses_default_catalog=uses_default_catalog)
+
+
+def _parse_tag_catalog_bytes(raw, *, uses_default_catalog=False):
     if len(raw) > 2 * 1024 * 1024:
         raise ValueError('标签词表文件大小超过 2 MiB。')
     def unique_object(pairs):
@@ -156,6 +162,51 @@ def load_tag_catalog(file_path=None):
     if uses_default_catalog and data['version'] != TAG_CATALOG_VERSION:
         raise ValueError('当前标签词表必须使用 paper-tag-catalog-v2。')
     return {**data, 'registrySha256': hashlib.sha256(raw).hexdigest()}
+
+
+def is_strict_append_only_catalog(previous, current):
+    """仅完整旧词表原序前缀可沿用旧证明；描述文字也不能变化。"""
+    try:
+        old = _validate_tag_catalog_content(previous)
+        new = _validate_tag_catalog_content(current)
+        return (old['version'] == new['version'] and old['facets'] == new['facets']
+                and len(new['concepts']) > len(old['concepts'])
+                and new['concepts'][:len(old['concepts'])] == old['concepts'])
+    except (ValueError, TypeError, KeyError):
+        return False
+
+
+def resolve_append_only_proof_catalog(from_sha256, current, *, history_dir=None):
+    """只读真实 SHA 命名归档；不能用内存声明代替旧词表原字节。"""
+    if not isinstance(from_sha256, str) or not re.fullmatch(r'[a-f0-9]{64}', from_sha256):
+        return None
+    if history_dir is None:
+        import tag_paths
+        history_dir = Path(tag_paths.TAG_CATALOG_FILE).parent / 'tag-catalog-history'
+    filename = Path(history_dir).absolute() / f'{from_sha256}.json'
+    try:
+        if any(item.is_symlink() for item in (filename, *filename.parents)):
+            return None
+        fd = os.open(filename, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > 2 * 1024 * 1024:
+                return None
+            with os.fdopen(os.dup(fd), 'rb') as stream:
+                raw = stream.read(2 * 1024 * 1024 + 1)
+            after, named = os.fstat(fd), filename.lstat()
+            if ((before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+                    != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+                    or not stat.S_ISREG(named.st_mode) or named.st_nlink != 1
+                    or (named.st_dev, named.st_ino, named.st_size) != (before.st_dev, before.st_ino, before.st_size)
+                    or len(raw) != before.st_size or hashlib.sha256(raw).hexdigest() != from_sha256):
+                return None
+        finally:
+            os.close(fd)
+        previous = _parse_tag_catalog_bytes(raw)
+        return previous if is_strict_append_only_catalog(previous, current) else None
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
 
 
 def active_preferred_labels(tag_catalog, facets=None):

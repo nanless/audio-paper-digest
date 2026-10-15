@@ -14,6 +14,7 @@ from pathlib import Path
 
 from blog_entry_loader import load_publish_to_blog
 from paper_reader_presentation import build_reader_presentation
+from tag_presentation import render_tag_hierarchy_markdown
 from runtime_guard import require_external_runtime
 
 
@@ -223,8 +224,8 @@ def render_packet(packet):
             publisher._researcher_workbench_frontmatter(workbench).rstrip(),
             '---', '', f'# 📄 {reader_title}', '', f'> 会议论文 ID：`{projected["directPaperId"]}`', ''
         ]
-        if tags:
-            frontmatter.extend([f'标签：{" ".join("#" + tag for tag in tags)}', ''])
+        frontmatter.extend([render_tag_hierarchy_markdown(
+            tag_metadata, publisher._PAGE_TAG_CATALOG).rstrip(), ''])
         if score_line:
             frontmatter.extend([f'评分：{score_line}', ''])
         for label, field in (('分档', 'rankBucket'), ('文档类型', 'documentType')):

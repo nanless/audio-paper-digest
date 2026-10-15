@@ -1,5 +1,7 @@
 # 历史重写结果的审查与发布
 
+历史更新与日更、会议共用386项九维词表和多级路径展示。文章只列实际所选概念及祖先导航，祖先不写入直接标签，总目录保留完整。`history:publication` 在规划、生成、审查、激活和推送前核对站点双份词表目录及原快照；缺少本批SHA时先完成受控同步，不能让旧来源记录被重签或新标签被静默隐藏。详见[统一标签规则](tag-display-policy.md#三条流程共用的目录与呈现)。
+
 `history:publication` 发布当前[全历史重写流程](history-rewrite.md)生成的页面。它读取 `historical-direct-rewrite-plan-v5`、对应执行记录、`historical-direct-aggregate-projection-v3`、完整单篇暂存页和 `historical-direct-aggregate-v2` 汇总，逐项核对实际文件。它不读取日更正式分析，不生成日更 schema-v3 凭证，旧私有发布文件仅供兼容核验，不能作为当前来源证明。
 
 全历史发布在当前工作区进行，发布前停止其他日更、会议和历史发布任务，同步代码与博客最新远端 `main`，按 [AGENTS.md](../AGENTS.md) 核对角色、基线和任务范围。入口已经存在，不表示某次历史现场已完成重写或发布。

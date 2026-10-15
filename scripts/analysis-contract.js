@@ -2276,7 +2276,27 @@ function validateTagStageProof(paper, options = {}) {
         // 同一个快照，避免动态读取器在一次核验中返回不同内容。
         let promptCatalog = null;
         let snapshotOptions = options.registrySnapshotOptions;
-        if (stage.projectionContract === tagRulesApi.TAG_PROMPT_TEXT_CONTRACT) {
+        const catalogChange = require('./lib/tag-catalog-change.js');
+        const appendOnlyCatalog = !Object.hasOwn(stage, 'registryUpgradeFrom')
+            ? catalogChange.resolveAppendOnlyProofCatalog(stage.registrySha256,
+                runtime.tagCatalog, snapshotOptions) : null;
+        if (appendOnlyCatalog) {
+            // 保存稿仍使用原词表、原提示和原签名；下方的正文/选择/检查点
+            // 核验不变。新分类请求始终使用当前词表，不借此重签旧记录。
+            promptCatalog = appendOnlyCatalog;
+            const originalRules = tagRulesApi.createTagRules({ tagCatalog: appendOnlyCatalog });
+            for (const text of [paper.analysis, tagRecord.checkpoint]) {
+                if (typeof text !== 'string') return '原标签阶段缺少可按旧词表重放的正文或检查点。';
+                const originalParsed = require('./utils.js').parseAnalysis(text, { tagRules: originalRules });
+                const originalSelection = require('./utils.js').readTagValidation(originalParsed);
+                if (!originalSelection?.valid
+                    || originalSelection.primaryTaskId !== stage.primaryTaskId
+                    || originalSelection.primaryMethodId !== stage.primaryMethodId
+                    || manualSha256(originalSelection.conceptIds) !== manualSha256(stage.conceptIds)) {
+                    return '原标签阶段的正文或检查点不能按其保存的旧词表重放相同选择。';
+                }
+            }
+        } else if (stage.projectionContract === tagRulesApi.TAG_PROMPT_TEXT_CONTRACT) {
             let snapshot;
             try {
                 snapshot = require('./lib/tag-catalog-change.js').resolveRegistrySnapshot(
@@ -2293,7 +2313,7 @@ function validateTagStageProof(paper, options = {}) {
             snapshotOptions = { registryHistory: new Map([[stage.registrySha256, snapshot]]) };
         }
         // 旧快照、升级说明、允许的变更及原概念有效性仍须全部通过原检查。
-        const upgrade = require('./lib/tag-catalog-change.js').validateTagCatalogUpgrade({
+        const upgrade = appendOnlyCatalog ? { ok: true } : catalogChange.validateTagCatalogUpgrade({
             fromRegistrySha256: stage.registrySha256,
             currentRegistry: runtime.tagCatalog,
             currentRegistrySha256: runtime.registrySha256,

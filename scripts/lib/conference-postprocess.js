@@ -401,6 +401,7 @@ function buildConferencePageArtifacts(loaded, tagCatalog, renderFn, implementati
     const stem = safeStem(loaded), conferenceId = loaded.run.conference.id;
     const date = loaded.run.completionReceipt.completedAt.slice(0, 10);
     const packet = { paper: { ...structuredClone(loaded.analysis.papers[0]), paper_id: loaded.run.paperId }, tagMetadata: assignment,
+        tagCatalog,
         paper_id: loaded.run.paperId, conference: loaded.run.conference, capabilities: loaded.run.capabilities,
         publication: structuredClone(loaded.publication), date,
         figureAssets: conferenceFigureAssets(loaded),
@@ -1022,6 +1023,26 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
         || item.tagMetadata.selectionContract !== aggregateTagMetadata.selectionContract
         || ![tagRulesApi.TAG_FLAT_COMPAT_CONTRACT, tagRulesApi.LEGACY_TAG_FLAT_COMPAT_CONTRACT]
             .includes(item.tagMetadata.flatCompatContract))) fail('汇总成员的标签元数据缺失，或词表版本、哈希及标签规则不一致。');
+    // One existing Python bridge call renders every member with the exact same
+    // presentation helper as daily/conference/history paper pages. The source-
+    // verified saved assignments remain intact; ancestors are navigation only.
+    const assignments = new Map(stages.map(item => [item.manifest.paperId, item.tagMetadata]));
+    const tagPresentationPacket = { tagPresentationBatch: { catalog: tagCatalog,
+        records: members.map(item => {
+            const assignment = assignments.get(item.paperId);
+            return { registryVersion: assignment.registryVersion,
+                registrySha256: assignment.registrySha256,
+                concepts: assignment.concepts.map(concept => ({ id: concept.id,
+                    facet: concept.facet, label: concept.preferredLabel.zh })) };
+        }) } };
+    const presentations = (dependencies.renderTagPresentations || render)(tagPresentationPacket);
+    if (!presentations || !Array.isArray(presentations.tagPresentations)
+        || presentations.tagPresentations.length !== members.length
+        || presentations.tagPresentations.some(value => typeof value !== 'string' || !value.trim())) {
+        fail('会议汇总成员的多级标签展示未完整生成。');
+    }
+    const tagPresentationByPaperId = new Map(members.map((item, index) =>
+        [item.paperId, presentations.tagPresentations[index]]));
     // 所有成员的词表与标签规则一致后，再按其概念 ID 构建层级。directCount 统计
     // 直接使用该概念的论文数；subtreeCount 统计使用该概念或任一后代概念的论文数，
     // 同一篇论文只计一次，不能把下级标签的频次直接相加。
@@ -1076,7 +1097,7 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
     lines.push('', '---', '', '## 📋 论文列表', '');
     for (const item of members) lines.push(`### ${item.rank}. [${md(item.readerTitle)}](${item.url})`, '',
         `> 英文题目：*[${md(item.title)}](${item.url})*`, '',
-        `标签：${item.labels.map(label => `#${md(label)}`).join(' ')}`, '', `评分：${scoreLine(item.score, item.scoreDimensions)}`, '',
+        tagPresentationByPaperId.get(item.paperId).trimEnd(), '', `评分：${scoreLine(item.score, item.scoreDimensions)}`, '',
         `排名：${md(item.rankBucket)} | 文档类型：${md(item.documentType)} | 主任务：#${md(item.primaryTask)} | 主方法：#${md(item.primaryMethod)}`, '',
         `会议来源：[官方记录](${item.officialRecordUrl}) · [官方 PDF](${item.officialPdfUrl})`, '',
         '👥 **作者与机构**', '',

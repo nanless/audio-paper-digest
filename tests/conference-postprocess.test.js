@@ -597,8 +597,22 @@ test('汇总页展示逐级展开的标签，并把标签层级写进清单', t 
     const executionIds = [f.one, f.two, ...f.extra];
     for (const executionId of executionIds) api.stagePaper({ analysisRoot: 'ignored', executionId,
         tagCatalogPath: TAG_CATALOG_PATH, stagingRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
+    let displayBridgeCalls = 0;
     const result = api.aggregateConference({ analysisRoot: 'ignored', executionIds, tagCatalogPath: TAG_CATALOG_PATH,
-        stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, f.dependencies);
+        stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot, apply: true }, {
+        ...f.dependencies, renderTagPresentations: packet => {
+            displayBridgeCalls += 1;
+            assert.equal(packet.tagPresentationBatch.records.length, 4);
+            return api.render(packet);
+        }
+    });
+    assert.equal(displayBridgeCalls, 1, 'one pure Python call covers the entire batch');
+    const paperList = result.manifest.markdown.split('## 📋 论文列表')[1];
+    assert.doesNotMatch(paperList, /^标签：/m);
+    assert.match(paperList, /\*\*研究分类\*\*/);
+    assert.ok(paperList.includes('/papers/?concept=task.av-asr'));
+    assert.ok(paperList.includes('/papers/?concept=task.asr'));
+    assert.equal(paperList.includes('**应用**'), false, 'empty dimensions remain absent');
     const registry = tagCatalogApi.loadTagCatalog(TAG_CATALOG_PATH);
     const hierarchy = result.manifest.tagHierarchy;
     assert.equal(hierarchy.contract, api.HIERARCHY_CONTRACT);
@@ -725,6 +739,13 @@ test('当前会议投影绑定共享展示闭包，旧 v2 已封存指纹仍可�
     const current = api.implementationFingerprint();
     assert.equal(current.contract, 'conference-page-projection-v3');
     assert.match(current.implementationDependenciesSha256, /^[a-f0-9]{64}$/);
+    const files = require('../scripts/lib/workflow-implementation-files.js').collectWorkflowImplementationFiles({
+        root: path.resolve(__dirname, '..'), entryFiles: ['scripts/conference-page-render.py',
+            'scripts/lib/conference-postprocess.js', 'scripts/historical-page-render.py'] });
+    assert.ok(files.includes('scripts/tag_presentation.py'));
+    const publicationFiles = require('../scripts/lib/workflow-implementation-files.js').collectWorkflowImplementationFiles({
+        root: path.resolve(__dirname, '..'), entryFiles: ['scripts/publish-conference.py'] });
+    assert.ok(publicationFiles.includes('scripts/tag_catalog_publication.py'));
     const legacy = { ...current, contract: api.LEGACY_PROJECTION_CONTRACT,
         version: api.LEGACY_PROJECTION_VERSION };
     delete legacy.implementationDependenciesSha256;

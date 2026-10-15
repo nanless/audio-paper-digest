@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const YAML = require('yaml');
 const publicationFiles = require('./publication-file-primitives.js');
 const planApi = require('./historical-direct-rewrite-plan.js');
 const runnerApi = require('./historical-direct-rewrite-runner.js');
@@ -15,7 +16,7 @@ const aggregateApi = require('./historical-direct-aggregate.js');
 const directPageStagingApi = require('./historical-direct-page-staging.js');
 const freshArxivSourceApi = require('./fresh-arxiv-rewrite-source.js');
 const conferencePageMappingsApi = require('./historical-conference-page-projections.js');
-const { hasPageTagMetadata } = require('./page-tag-metadata.js');
+const { hasPageTagMetadata, PAGE_TAG_FIELDS, LEGACY_PAGE_TAG_FIELDS } = require('./page-tag-metadata.js');
 
 const PLAN_CONTRACT = 'historical-direct-publication-plan-v1';
 const GENERATION_CONTRACT = 'historical-direct-publication-generation-v1';
@@ -313,6 +314,51 @@ function worktreeSha(blogRepo, relative) {
     if (!fs.existsSync(target)) return null;
     return readRegular(target).sha256;
 }
+function validatePublishedTagCatalogs(blogRepo, records, sourceBytes, dependencies = {}) {
+    const catalogs = new Map();
+    for (const record of records) {
+        if (!record.path.startsWith('content/posts/') || !record.path.endsWith('.md')) continue;
+        const bytes = Buffer.from(sourceBytes(record));
+        if (sha256(bytes) !== record.sha256) fail(`分类目录检查的页面字节与来源不符：${record.path}`);
+        const text = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+        const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
+        if (!match) continue; // The existing source/page guards validate page structure.
+        let metadata;
+        try { metadata = YAML.parse(match[1], { uniqueKeys: true, maxAliasCount: 100 }); }
+        catch (error) { fail(`分类目录检查无法读取页面元数据：${error.message}`); }
+        if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) continue;
+        const current = PAGE_TAG_FIELDS.some(field => Object.hasOwn(metadata, field));
+        const legacy = LEGACY_PAGE_TAG_FIELDS.some(field => Object.hasOwn(metadata, field));
+        if (current && legacy) fail('分类目录检查拒绝混用新旧词表字段');
+        if (!current && !legacy) continue;
+        const prefix = current ? 'paper_digest_tags_' : 'paper_digest_taxonomy_';
+        const registrySha = metadata[`${prefix}registry_sha256`];
+        const registryVersion = metadata[`${prefix}registry_version`];
+        if (!SHA_RE.test(String(registrySha || '')) || typeof registryVersion !== 'string' || !registryVersion.trim()) {
+            fail(`页面缺少可核验的分类词表身份：${record.path}`);
+        }
+        catalogs.set(`${registrySha}:${registryVersion}`, { registrySha, registryVersion });
+    }
+    const validate = dependencies.validatePublishedTagCatalog || ((repo, sha, version) => {
+        const result = spawnSync('bash', [path.resolve(__dirname, '../python-runtime.sh'),
+            path.resolve(__dirname, '../tag_catalog_publication.py'), '--blog-repo', repo,
+            '--registry-sha', sha, '--registry-version', version], {
+            cwd: path.resolve(__dirname, '../..'), encoding: 'utf8', maxBuffer: 4 * 1024 * 1024,
+            env: { ...process.env }, timeout: 120000
+        });
+        if (result.error || result.signal || result.status !== 0) {
+            fail(`标签词表尚未受控同步到博客：${result.stderr || result.error?.message || result.signal || result.status}`);
+        }
+        let proof;
+        try { proof = JSON.parse(result.stdout); }
+        catch (_) { fail('分类目录检查未返回有效的只读证明'); }
+        if (proof.valid !== true || proof.registrySha256 !== sha || proof.registryVersion !== version) {
+            fail('分类目录检查返回的词表身份不一致');
+        }
+        return proof;
+    });
+    return [...catalogs.values()].map(({ registrySha, registryVersion }) => validate(blogRepo, registrySha, registryVersion));
+}
 function buildPlan({ publicationId, authorityOptions, blogRepo, remoteName = 'origin', createdAt = new Date().toISOString() } = {}, dependencies = {}) {
     if (!UUID_RE.test(String(publicationId || '')) || !iso(createdAt)) fail('发布 ID 或创建时间无效');
     const authority = (dependencies.loadAuthority || loadDirectAuthority)(authorityOptions);
@@ -336,6 +382,8 @@ function buildPlan({ publicationId, authorityOptions, blogRepo, remoteName = 'or
         }
         if (records.some(record => record.path === retained.path)) fail(`保留的任务页面也被列为待生成文件：${retained.path}`);
     }
+    validatePublishedTagCatalogs(blogRepo, authority.artifacts,
+        artifact => (dependencies.sourceBytes || ((item, roots) => readRegular(artifactSourcePath(item, roots)).bytes))(artifact, authority.roots), dependencies);
     const closing = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), '完成规划时的博客状态');
     if (stableHash(closing) !== stableHash(opening)) fail('生成计划期间博客状态已变化');
     const body = { contract: PLAN_CONTRACT, version: VERSION, publicationId, createdAt,
@@ -450,6 +498,8 @@ function generationDirectory(directory) { return path.join(directory, 'generatio
 function generate({ outputRoot, publicationId, authorityOptions, blogRepo, remoteName = 'origin', apply = false } = {}, dependencies = {}) {
     const loaded = loadPlan({ outputRoot, publicationId }); const authority = assertAuthorityCurrent(loaded, authorityOptions, dependencies);
     const state = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), '开始生成时的博客状态');
+    validatePublishedTagCatalogs(blogRepo, authority.artifacts,
+        artifact => (dependencies.sourceBytes || ((item, roots) => readRegular(artifactSourcePath(item, roots)).bytes))(artifact, authority.roots), dependencies);
     if (stableHash(state) !== loaded.plan.blogBaselineSha256) fail('博客状态与发布计划的基线不同');
     const files = loaded.plan.files.map(record => ({ path: record.path, operation: record.operation,
         baselineSha256: record.baselineSha256, sha256: record.sha256 }));
@@ -512,6 +562,8 @@ function reviewProtocolImplementationFiles() {
         require.resolve('./historical-direct-page-staging.js'),
         require.resolve('./historical-arxiv-publication-metadata.js'), require.resolve('./arxiv-metadata-source.js'),
         path.resolve(__dirname, '../historical-direct-review.py'),
+        path.resolve(__dirname, '../tag_catalog_publication.py'),
+        path.resolve(__dirname, '../tag_presentation.py'),
         path.resolve(__dirname, '../publish-to-blog.py')];
 }
 function reviewProtocolFingerprint(dependencies = {}) {
@@ -688,6 +740,8 @@ function defaultSemanticReview({ loadedPlan, generation, blogRepo, protocol }) {
 }
 function review({ outputRoot, publicationId, blogRepo, remoteName = 'origin', apply = false } = {}, dependencies = {}) {
     const loaded = loadPlan({ outputRoot, publicationId }); const generation = loadGeneration(loaded);
+    validatePublishedTagCatalogs(blogRepo, generation.manifest.files,
+        record => readRegular(inside(generation.root, path.posix.join('bundle', record.path), '分类目录检查的生成页面')).bytes, dependencies);
     const state = validateBlogState((dependencies.blogState || defaultBlogState)(blogRepo, remoteName), '开始审查时的博客状态');
     if (stableHash(state) !== loaded.plan.blogBaselineSha256) fail('开始审查前博客基线已变化');
     const protocol = reviewProtocolFingerprint(dependencies); const filename = path.join(loaded.directory, 'review.json');
@@ -902,6 +956,8 @@ function withBlogPublicationLock(blogRepo, callback, dependencies = {}) {
 }
 function activate({ outputRoot, publicationId, blogRepo, remoteName = 'origin', apply = false } = {}, dependencies = {}) {
     const loaded = loadPlan({ outputRoot, publicationId }); const generation = loadGeneration(loaded); const reviewReceipt = loadReview(loaded);
+    validatePublishedTagCatalogs(blogRepo, generation.manifest.files,
+        record => readRegular(inside(generation.root, path.posix.join('bundle', record.path), '分类目录检查的生成页面')).bytes, dependencies);
     if (reviewReceipt.receipt.reviewProtocolFingerprint !== reviewProtocolFingerprint(dependencies)) {
         fail('安装页面前历史审查规则已变化');
     }
@@ -1049,6 +1105,8 @@ function loadCommit(loadedPlan) {
 }
 function publish({ outputRoot, publicationId, blogRepo, remoteName = 'origin', apply = false, message = null } = {}, dependencies = {}) {
     const loaded = loadPlan({ outputRoot, publicationId }); const generation = loadGeneration(loaded);
+    validatePublishedTagCatalogs(blogRepo, generation.manifest.files,
+        record => readRegular(inside(generation.root, path.posix.join('bundle', record.path), '分类目录检查的生成页面')).bytes, dependencies);
     const reviewReceipt = loadReview(loaded); const activation = loadActivation(loaded); const delta = loaded.plan.files.filter(item => item.operation !== 'unchanged');
     const priorRemotePath = path.join(loaded.directory, 'publication.json');
     if (fs.existsSync(priorRemotePath)) {
@@ -1178,7 +1236,7 @@ function status({ outputRoot, publicationId, liveRemote = true, blogRepo = null,
 module.exports = {
     PLAN_CONTRACT, GENERATION_CONTRACT, REVIEW_CONTRACT, ACTIVATION_INTENT_CONTRACT, ACTIVATION_CONTRACT,
     COMMIT_CONTRACT, PUBLICATION_CONTRACT, VISUAL_DISPOSITION_CONTRACT, STATUS_CONTRACT,
-    VERSION, UUID_RE, HistoricalDirectPublicationError, stableHash, safeRelative,
+    VERSION, UUID_RE, HistoricalDirectPublicationError, stableHash, safeRelative, validatePublishedTagCatalogs,
     normalizeVisualDisposition, buildVisualDisposition, historicalSourceVersionProof, loadDirectAuthority,
     buildPlan, validatePlan, writePlan, loadPlan, generate, loadGeneration, reviewProtocolImplementationFiles, reviewProtocolFingerprint,
     semanticReviewProtocol, historicalReviewConcurrency, defaultSemanticReview,

@@ -1045,7 +1045,8 @@ class PublishToBlogReviewTest(unittest.TestCase):
         self.assertIn('## ⚖️ 评分明细', page)
         self.assertIn('系统判断，不是论文实验结果', page)
         self.assertEqual(page.count(publish_to_blog.format_complete_score_line(paper['parsed'])), 1)
-        self.assertEqual(page.count('标签：#空间音频'), 1)
+        self.assertEqual(page.count('**研究分类**'), 1)
+        self.assertEqual(page.count('/papers/?concept=scientific_topic.spatial-audio'), 1)
         self.assertIsNone(publish_to_blog._api_reader_page_binding_issue(page, paper))
         self.assertIsNone(publish_to_blog._api_reader_index_display_fields_issue(index, [paper]))
         for changed in (
@@ -3079,7 +3080,7 @@ title: "Score rows"
             markdown,
         )
         self.assertIn(f'> 英文题目：*[{title}]({blog_url})*', markdown)
-        for text in ('标签：#语音识别', '评分：**8.0/10**', '💡 **论文评价**', '📌 **核心摘要**', '🔗 **开源资源**'):
+        for text in ('**研究分类**', '/papers/?concept=task.asr', '评分：**8.0/10**', '💡 **论文评价**', '📌 **核心摘要**', '🔗 **开源资源**'):
             self.assertIn(text, markdown)
         context = (
             '排名：前25% | 文档类型：方法研究 | '
@@ -3089,8 +3090,8 @@ title: "Score rows"
         self.assertEqual(markdown.count('评分：**8.0/10**'), 1)
         self.assertNotIn('评分置信度：高', markdown)
         self.assertNotIn('🔥 **8.0/10**', markdown)
-        self.assertLess(markdown.index('> 英文题目：'), markdown.index('标签：#语音识别'))
-        self.assertLess(markdown.index('标签：#语音识别'), markdown.index('评分：**8.0/10**'))
+        self.assertLess(markdown.index('> 英文题目：'), markdown.index('**研究分类**'))
+        self.assertLess(markdown.index('**研究分类**'), markdown.index('评分：**8.0/10**'))
         self.assertLess(markdown.index('评分：**8.0/10**'), markdown.index(context))
         self.assertLess(markdown.index(context), markdown.index('💡 **论文评价**'))
         self.assertLess(markdown.index('💡 **论文评价**'), markdown.index('📌 **核心摘要**'))
@@ -3246,6 +3247,31 @@ title: "Score rows"
                  (8.0, mixed, mixed['parsed'])], [], '2026-08-31', {})
         with self.assertRaisesRegex(PublishDataValidationError, '不能同时包含'):
             publish_to_blog._current_batch_tag_metadata(iter([no_metadata, mixed]))
+
+    def test_cached_old_catalog_selection_replays_real_prefix_and_only_projects_page_metadata(self):
+        from tag_catalog import load_tag_catalog
+        from utils import _validate_tag_selection
+        old = load_tag_catalog(Path(ROOT) / 'config/tag-catalog-history' /
+            '0a0847314ab2059d95efac33376414498e598a1f02a1486869bee0efc481d1f7.json')
+        parsed = {'tags': ['#语音识别', '#Transformer', '#低资源'],
+                  'primaryTaskTag': '#语音识别', 'primaryMethodTag': '#Transformer'}
+        parsed['tagValidation'] = _validate_tag_selection(old, parsed['tags'],
+            parsed['primaryTaskTag'], parsed['primaryMethodTag'])
+        before = copy.deepcopy(parsed)
+        metadata = publish_to_blog.build_flat_tag_compat_metadata(parsed, required=True)
+        self.assertEqual(metadata['registrySha256'], publish_to_blog._PAGE_TAG_CATALOG['registrySha256'])
+        self.assertEqual([c['id'] for c in metadata['concepts']], parsed['tagValidation']['conceptIds'])
+        self.assertEqual(parsed, before)
+        appended = next(c for c in publish_to_blog._PAGE_TAG_CATALOG['concepts'][262:]
+                        if c['facet'] not in ('task', 'method'))
+        forged = copy.deepcopy(parsed)
+        forged['tags'][-1] = '#' + appended['preferredLabel']['zh']
+        forged['tagValidation']['conceptIds'][-1] = appended['id']
+        with self.assertRaisesRegex(PublishDataValidationError, '真实归档词表'):
+            publish_to_blog.build_flat_tag_compat_metadata(forged, required=True)
+        for invalid in (None, {}, {'valid': False}):
+            self.assertEqual(publish_to_blog.render_paper_tag_hierarchy(
+                dict(parsed, tagValidation=invalid)), '')
 
     def test_current_tag_selection_keeps_flat_tags_and_adds_explicit_compat_metadata(self):
         paper = llm_api_publication_fixture()
@@ -4258,7 +4284,7 @@ title: "Bad table"
         self.assertIn('paper_digest_api_reader_contract: "beginner-researcher-v3"', markdown)
         self.assertIn('## 👥 作者与机构', markdown)
         self.assertIn('- Researcher A：Institute A', markdown)
-        self.assertLess(markdown.index('> 标签：'), markdown.index('## 👥 作者与机构'))
+        self.assertLess(markdown.index('**研究分类**'), markdown.index('## 👥 作者与机构'))
         self.assertLess(markdown.index('## 👥 作者与机构'), markdown.index('## 📌 核心摘要'))
         self.assertNotIn('## 💬 毒舌点评', markdown)
         self.assertIn('## 🧭 深度解读', markdown)
@@ -4870,12 +4896,12 @@ title: "Bad table"
         self.assertIn('# 📄 两条表示如何统一听懂与生成音频', markdown)
         self.assertIn('> 英文题目：*[A General Purpose Audio Model](https://arxiv.org/abs/2608.24168)*', markdown)
         self.assertIn('> 一句话：**共享语言推理而分离音频表示', markdown)
-        self.assertIn('> 标签：#音频理解', markdown)
+        self.assertIn('/papers/?concept=task.audio-understanding', markdown)
         self.assertIn('> 评分：**8.7/10**', markdown)
         self.assertIn('### 💬 论文评价', markdown)
         self.assertIn('### 🔗 开源与复现资源', markdown)
-        self.assertLess(markdown.index('> 英文题目：'), markdown.index('> 标签：#音频理解'))
-        self.assertLess(markdown.index('> 标签：#音频理解'), markdown.index('> 评分：**8.7/10**'))
+        self.assertLess(markdown.index('> 英文题目：'), markdown.index('**研究分类**'))
+        self.assertLess(markdown.index('**研究分类**'), markdown.index('> 评分：**8.7/10**'))
         self.assertLess(markdown.index('> 评分：**8.7/10**'), markdown.index('### 💬 论文评价'))
         self.assertLess(markdown.index('### 💬 论文评价'), markdown.index('### 📌 核心摘要'))
         self.assertIn('#### 先解释表示冲突', markdown)
@@ -9124,7 +9150,7 @@ body
         self.assertEqual(
             snapshot['registrySha256'], publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
         )
-        self.assertEqual(len(snapshot['concepts']), 262)
+        self.assertEqual(len(snapshot['concepts']), 386)
         by_id = {item['id']: item for item in snapshot['concepts']}
         self.assertEqual(by_id['method.lora']['ancestorIds'], ['method.peft'])
         self.assertEqual(by_id['method.peft']['ancestorIds'], [])
@@ -9176,7 +9202,7 @@ body
                     payload['registrySha256'],
                     publish_to_blog._PAGE_TAG_CATALOG['registrySha256'],
                 )
-                self.assertEqual(len(payload['concepts']), 262)  # v1.1 换表：228→262
+            self.assertEqual(len(payload['concepts']), 386)
             # 文件内容未变时不重写，避免在博客仓库中产生无关改动。
             with mock.patch.object(publish_to_blog, 'TAG_DISPLAY_POLICY_PATH', root / 'absent-policy.json'):
                 self.assertEqual(publish_to_blog.export_tag_catalog_files(repo), [])

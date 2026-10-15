@@ -25,6 +25,7 @@ from publish_common import run_bounded_llm_tasks
 from project_env import VCS_CHILD_ENV_KEYS, build_child_process_env
 from runtime_guard import require_external_runtime, require_workspace_role
 from conference_publication_gate import inspect_html, verify_publication_urls, validate_png, fetch_public, GATE_CONTRACT
+from tag_catalog_publication import validate_published_tag_catalog
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1111,6 +1112,36 @@ def publish_image_delta(repo, records, conference_id):
                                   f'发布 {conference_id} 会议论文图片')
 
 
+def validate_conference_tag_catalogs(repo, files):
+    """Only original staged page bytes may select a required catalog version."""
+    versions = set()
+    for record in files:
+        if record.get('kind') not in {'paper', 'aggregate'}:
+            continue
+        raw = read_bytes(record['sourcePath'])
+        if sha_bytes(raw) != record['sourceSha256']:
+            raise ConferencePublicationError('标签核验前会议暂存页面字节与发布清单不一致。')
+        match = re.match(r'^---\n([\s\S]*?)\n---(?:\n|$)', raw.decode('utf-8'))
+        if not match:
+            raise ConferencePublicationError('会议页面缺少标签词表 front matter。')
+        fields = match.group(1)
+        values = {}
+        for field in ('registry_sha256', 'registry_version'):
+            found = re.findall(r'^paper_digest_(?:tags|taxonomy)_' + field
+                               + r':\s*"([^"\n]+)"\s*$', fields, re.MULTILINE)
+            if len(found) != 1:
+                raise ConferencePublicationError('会议页面缺少唯一的原标签词表版本或 SHA。')
+            values[field] = found[0]
+        versions.add((values['registry_sha256'], values['registry_version']))
+    if not versions:
+        raise ConferencePublicationError('会议发布清单缺少可核验的论文标签词表。')
+    try:
+        return [validate_published_tag_catalog(repo, sha, version)
+                for sha, version in sorted(versions)]
+    except ValueError as error:
+        raise ConferencePublicationError(str(error)) from error
+
+
 def generate(conference_id, process_id):
     repo, images = blog_repo(), image_repo()
     with shared_blog_repository_lock(repo, owner=f'conference-generate:{conference_id}'), \
@@ -1124,6 +1155,7 @@ def generate(conference_id, process_id):
         snapshot = remote_snapshot(repo)
         files = sorted(bundle['files'], key=lambda item: item['path'])
         image_files = sorted(bundle['imageFiles'], key=lambda item: item['path'])
+        validate_conference_tag_catalogs(repo, files)
         existing = publication_dir(conference_id, process_id) / 'generation.json'
         image_snapshot = remote_snapshot(images)
         rebased = False
@@ -1239,6 +1271,11 @@ def validate_generation(conference_id, process_id, repo, images, *,
     if generation['baseHead'] != generation['remoteMainBefore'] \
             or generation['imageBaseHead'] != generation['imageRemoteMainBefore']:
         raise ConferencePublicationError('generation 基线未与远端闭合')
+    # New review/push operations must not silently hide an unknown catalog.
+    # Historical committed receipts remain readable under their saved gate.
+    if generation.get('version') == 2 and (not allow_committed
+            or generation.get('implementationSha256') == gate_fingerprint()):
+        validate_conference_tag_catalogs(repo, generation['files'])
     if verify_author_sources:
         bundle = process_bundle(conference_id, process_id)
         if generation.get('completionReceiptSha256') != bundle['completion']['receiptSha256'] \
@@ -1296,7 +1333,8 @@ def gate_fingerprint():
     return stable({name: sha_bytes(read_bytes(ROOT / 'scripts' / name)) for name in
                    ('publish-conference.py', 'conference_publication_gate.py',
                     'markdown_hugo_gate.py', 'conference-page-render.py',
-                    'publish_common.py', 'analysis_sections.py', 'tag_stage_record.py')})
+                    'publish_common.py', 'analysis_sections.py', 'tag_stage_record.py',
+                    'tag_presentation.py', 'tag_catalog_publication.py', 'tag_catalog.py')})
 
 
 def publication_page_files(generation):

@@ -66,6 +66,7 @@ from tag_catalog import (
     TAG_SELECTION_CONTRACT,
     LEGACY_TAG_SELECTION_CONTRACT,
     load_tag_catalog,
+    resolve_append_only_proof_catalog,
     tag_prompt_text_sha256,
 )
 from llm_usage import record_llm_usage, with_llm_usage_context
@@ -1365,6 +1366,15 @@ def _validate_tag_stage_catalog_upgrade(stage, paper_label):
         raise PublishDataValidationError(
             f'{paper_label} 标签阶段的词表升级被拒绝 [reason=projection-sha-invalid] '
             f'from={from_sha} to={to_sha}: projectionSha256 必须是 64 位十六进制 SHA')
+    if 'registryUpgradeFrom' not in stage:
+        original = resolve_append_only_proof_catalog(from_sha, _PUBLISH_TAG_CATALOG)
+        if original is not None:
+            if (stage.get('registryVersion') != original['version']
+                    or stage_prompt_text_sha256 != tag_prompt_text_sha256(
+                        original, stage.get('projectionContract'))):
+                raise PublishDataValidationError(
+                    f'{paper_label} 纯追加词表兼容核验的原版本或提示文本 SHA 不一致。')
+            return original
     snapshot = None
     if stage.get('projectionContract') == TAG_PROMPT_TEXT_CONTRACT:
         def capture_snapshot(registry_sha256):
@@ -1451,6 +1461,7 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
                      and _PUBLISH_TAG_CATALOG['version'] == TAG_CATALOG_VERSION)):
         raise PublishDataValidationError(
             f'{paper_label} 标签阶段记录中的 registryVersion 与当前词表、提示文本或标签选择协议不一致。')
+    proof_catalog = _PUBLISH_TAG_CATALOG
     if stage.get('registrySha256') == _PUBLISH_TAG_CATALOG['registrySha256']:
         for field, expected in (
                 ('registrySha256', _PUBLISH_TAG_CATALOG['registrySha256']),
@@ -1460,7 +1471,7 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
                 raise PublishDataValidationError(
                     f'{paper_label} 标签阶段记录中的 {field} 与当前词表、提示文本或标签选择协议不一致。')
     else:
-        _validate_tag_stage_catalog_upgrade(stage, paper_label)
+        proof_catalog = _validate_tag_stage_catalog_upgrade(stage, paper_label) or _PUBLISH_TAG_CATALOG
 
     sha_fields = (
         'inputAnalysisSha256', 'outputAnalysisSha256',
@@ -1543,7 +1554,7 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
     heading_issue = evaluation_heading_issue(current_analysis)
     if heading_issue:
         raise PublishDataValidationError(f'{paper_label} {heading_issue}')
-    current_parsed = parse_analysis(current_analysis, tag_catalog=_PUBLISH_TAG_CATALOG)
+    current_parsed = parse_analysis(current_analysis, tag_catalog=proof_catalog)
     current_validation = current_parsed.get('tagValidation') or {}
     expected_selection = {
         'primaryTaskId': current_validation.get('primaryTaskId'),
@@ -1559,7 +1570,7 @@ def _validate_tag_stage_record(paper, manifest, paper_label):
         if heading_issue:
             raise PublishDataValidationError(f'{paper_label} 标签阶段输出：{heading_issue}')
         output_validation = parse_analysis(
-            output_analysis, tag_catalog=_PUBLISH_TAG_CATALOG)['tagValidation']
+            output_analysis, tag_catalog=proof_catalog)['tagValidation']
         output_selection = {field: output_validation.get(field) for field in expected_selection}
         if not output_validation.get('valid') or output_selection != recorded_selection:
             raise PublishDataValidationError(

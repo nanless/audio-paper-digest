@@ -15,7 +15,7 @@
 | Reader 结构、表格、公式与写作 | [Reader](reader-writing.md) |
 | Reader 原付费草稿核验与有界追加（不是普通批次轮数） | [恢复说明](reader-explicit-retry.md) |
 | 数据结构与旧记录核验 | [数据格式](data-format.md)、[兼容规则](compatibility.md)、[旧记录与独立人工审查](../manual/README.md) |
-| 标签设计和显示 | [标签设计](tag-system-design.md)、[显示规则](tag-display-policy.md) |
+| 三流程386项九维词表、仅命中项的多级路径、旧签名兼容与站点同步 | [统一标签规则](tag-display-policy.md#三条流程共用的目录与呈现)、[历史设计](tag-system-design.md) |
 | 完整离线验证 | [维护](maintenance.md) |
 | 停止运行及排错 | [停止说明](analysis-stop.md)、[故障排查](troubleshooting.md) |
 | 原文、导读与引用资料下载 | [博客阅读资料](blog-reading-tools.md) |

@@ -42,6 +42,29 @@ function fakeAuthority(bytes, baseline) {
         retainedPages: [], visualDisposition, roots: {} };
 }
 
+test('历史发布按页面实际词表去重核验站点目录，拒绝未同步和伪身份', () => {
+    const registrySha = 'a'.repeat(64), version = 'paper-tag-catalog-v2';
+    const text = `---\npaper_digest_tags_contract: paper-tag-flat-tags-v2\npaper_digest_tags_registry_sha256: ${registrySha}\npaper_digest_tags_registry_version: ${version}\n---\n正文\n`;
+    const bytes = Buffer.from(text), record = { path: 'content/posts/paper.md', sha256: sha(bytes) };
+    const calls = [];
+    const dependencies = { validatePublishedTagCatalog: (...args) => { calls.push(args); return { valid: true }; } };
+    api.validatePublishedTagCatalogs('/fixture/blog', [record, { ...record, path: 'content/posts/other.md' }], () => bytes, dependencies);
+    assert.deepEqual(calls, [['/fixture/blog', registrySha, version]]);
+    assert.throws(() => api.validatePublishedTagCatalogs('/fixture/blog', [record], () => bytes, {
+        validatePublishedTagCatalog: () => { throw Error('站点缺少本次词表原归档'); }
+    }), /缺少本次词表/);
+    const forged = Buffer.from(text.replace(registrySha, 'invalid'));
+    assert.throws(() => api.validatePublishedTagCatalogs('/fixture/blog', [{ ...record, sha256: sha(forged) }], () => forged, dependencies), /词表身份/);
+    assert.throws(() => api.validatePublishedTagCatalogs('/fixture/blog', [record], () => Buffer.concat([bytes, Buffer.from('drift')]), dependencies), /页面字节与来源不符/);
+    const mixed = Buffer.from(text.replace('---\n正文', `paper_digest_taxonomy_registry_sha256: ${registrySha}\n---\n正文`));
+    assert.throws(() => api.validatePublishedTagCatalogs('/fixture/blog', [{ ...record, sha256: sha(mixed) }], () => mixed, dependencies), /混用新旧/);
+    for (const field of ['paper_digest_taxonomy_contract: paper-taxonomy-flat-tags-compat-v1',
+        'paper_digest_tags_concepts: []']) {
+        const partial = Buffer.from(`---\n${field}\n---\n正文`);
+        assert.throws(() => api.validatePublishedTagCatalogs('/fixture/blog', [{ ...record, sha256: sha(partial) }], () => partial, dependencies), /词表身份/);
+    }
+});
+
 test('视觉处置记录自带哈希且必须显式', () => {
     const plan = { planSha256: hash('1') };
     const excluded = api.buildVisualDisposition({ plan, mode: 'excluded',
@@ -60,8 +83,9 @@ test('发布事务能沿计划、生成、审查、激活和远端凭证一路�
         const outputRoot = path.join(root, 'runtime'); const blogRepo = path.join(root, 'blog');
         fs.mkdirSync(path.join(blogRepo, 'content', 'posts'), { recursive: true });
         fs.mkdirSync(outputRoot, { recursive: true });
-        const baseline = Buffer.from('---\npaper_digest_pipeline_owned: true\npaper_digest_page_type: paper\npaper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"\ndraft: false\n---\nold\n');
-        const next = Buffer.from('---\npaper_digest_pipeline_owned: true\npaper_digest_page_type: paper\npaper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"\ndraft: false\n---\nnew\n');
+        const identity = `paper_digest_taxonomy_registry_sha256: ${hash('a')}\npaper_digest_taxonomy_registry_version: paper-taxonomy-v2\n`;
+        const baseline = Buffer.from('---\npaper_digest_pipeline_owned: true\npaper_digest_page_type: paper\npaper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"\n' + identity + 'draft: false\n---\nold\n');
+        const next = Buffer.from('---\npaper_digest_pipeline_owned: true\npaper_digest_page_type: paper\npaper_digest_taxonomy_contract: "paper-taxonomy-flat-tags-compat-v1"\n' + identity + 'draft: false\n---\nnew\n');
         const target = path.join(blogRepo, 'content', 'posts', '2026-01-01-paper.md'); fs.writeFileSync(target, baseline);
         const authority = fakeAuthority(next, baseline); const semanticPasses = new Set();
         let semanticModelCalls = 0;
@@ -70,6 +94,7 @@ test('发布事务能沿计划、生成、审查、激活和远端凭证一路�
             worktreeSha: (_repo, relative) => fs.existsSync(path.join(blogRepo, relative))
                 ? sha(fs.readFileSync(path.join(blogRepo, relative))) : null,
             sourceBytes: () => next, hugoVersion: 'hugo v0.fixture',
+            validatePublishedTagCatalog: () => ({ valid: true }),
             hugoGate: () => ({ status: 'passed', engine: 'fixture', version: deps.hugoVersion }),
             semanticReview: ({ loadedPlan, generation, protocol }) => {
                 const page = { path: 'content/posts/2026-01-01-paper.md', sha256: sha(next), textChunks: 1,
@@ -227,6 +252,7 @@ test('发布事务能沿计划、生成、审查、激活和远端凭证一路�
                 return fs.existsSync(filename) ? sha(fs.readFileSync(filename)) : null;
             },
             sourceBytes: () => next, hugoVersion: 'hugo v0.cli-fixture',
+            validatePublishedTagCatalog: () => ({ valid: true }),
             hugoGate: () => ({ status: 'passed', engine: 'fixture', version: secondDeps.hugoVersion }),
             semanticReview: ({ loadedPlan, generation, protocol }) => {
                 assert.equal(loadedPlan.plan.publicationId, secondPublicationId);
@@ -372,7 +398,7 @@ test('发布计划拒绝工作区文件与 Git 基线不符，状态查询不把
 test('计划校验拒绝伪造的精确差异和不完整的 4490 式页面覆盖', () => {
     const baseline = Buffer.from('old'); const next = Buffer.from('new'); const authority = fakeAuthority(next, baseline);
     const plan = api.buildPlan({ publicationId, authorityOptions: {}, blogRepo: '/tmp', createdAt: now }, {
-        loadAuthority: () => authority, blogState, gitBlob: () => baseline, worktreeSha: () => sha(baseline)
+        loadAuthority: () => authority, blogState, gitBlob: () => baseline, worktreeSha: () => sha(baseline), sourceBytes: () => next
     });
     const forgedDelta = structuredClone(plan); forgedDelta.exactDelta = [];
     forgedDelta.exactDeltaSha256 = api.stableHash([]); delete forgedDelta.planSha256;

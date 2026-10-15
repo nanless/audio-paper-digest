@@ -14,6 +14,8 @@ const CURRENT = path.resolve(__dirname, '../config/tag-catalog.json');
 const HISTORY = path.resolve(__dirname, '../config/tag-catalog-history');
 const PRE_DESCRIPTION_UPDATE_SHA = 'bb94d9a8d3b651e32d9f64c2eed96f2907cd3eeb4c4f5cbb681f3997a79e8ac5';
 const PRE_DESCRIPTION_UPDATE = path.join(HISTORY, `${PRE_DESCRIPTION_UPDATE_SHA}.json`);
+const PRE_DISPLAY_ALIGNMENT_SHA = '0a0847314ab2059d95efac33376414498e598a1f02a1486869bee0efc481d1f7';
+const PRE_DISPLAY_ALIGNMENT = path.join(HISTORY, `${PRE_DISPLAY_ALIGNMENT_SHA}.json`);
 const OLD_SEED = path.join(HISTORY,
     'dcf83f84857d45d6a36ee20d9235d7566d9a3a53644ab442d8eb64b5e81a9adf.json');
 const OLD_ALIAS_REMOVAL = path.join(HISTORY,
@@ -263,7 +265,7 @@ test('六处词表说明更新只改变显示文字，旧词表仍按原 SHA 保
     const bytes = fs.readFileSync(PRE_DESCRIPTION_UPDATE);
     assert.equal(crypto.createHash('sha256').update(bytes).digest('hex'), PRE_DESCRIPTION_UPDATE_SHA);
     const previous = tagCatalogApi.loadTagCatalog(PRE_DESCRIPTION_UPDATE);
-    const current = tagCatalogApi.loadTagCatalog(CURRENT);
+    const current = tagCatalogApi.loadTagCatalog(PRE_DISPLAY_ALIGNMENT);
     assert.equal(current.registrySha256, '0a0847314ab2059d95efac33376414498e598a1f02a1486869bee0efc481d1f7');
     const detail = expectLevel(previous, current, 'additive');
     assert.deepEqual(detail.reasons.map(reason => [reason.level, reason.code,
@@ -282,7 +284,7 @@ test('六处词表说明更新只改变显示文字，旧词表仍按原 SHA 保
 
     // 除这六个显示字段外，版本、概念、标签、别名、层级和状态都必须与旧原记录相同。
     const oldBody = JSON.parse(bytes);
-    const newBody = JSON.parse(fs.readFileSync(CURRENT));
+    const newBody = JSON.parse(fs.readFileSync(PRE_DISPLAY_ALIGNMENT));
     for (const body of [oldBody, newBody]) {
         delete body.facets.find(facet => facet.id === 'artifact').label;
         delete byId(body, 'artifact.software').definition;
@@ -311,6 +313,100 @@ test('快照按字节 SHA 解析，内容对不上就拒绝', () => {
 
     const map = api.resolveRegistrySnapshot(sha, { registryHistory: { [sha]: OLD_SEED } });
     assert.equal(map.registrySha256, sha);
+});
+
+test('批准的386概念词表只在原262完整对象之后追加，不回退说明修正', () => {
+    const previousBytes = fs.readFileSync(PRE_DISPLAY_ALIGNMENT);
+    assert.equal(crypto.createHash('sha256').update(previousBytes).digest('hex'), PRE_DISPLAY_ALIGNMENT_SHA);
+    const previous = tagCatalogApi.loadTagCatalog(PRE_DISPLAY_ALIGNMENT);
+    const current = tagCatalogApi.loadTagCatalog(CURRENT);
+    assert.equal(current.registrySha256, 'cdef54423b5dfc00a1d017ef6639446d2ecd1d9c1acf71c8eb4f6219a46b7ba8');
+    assert.equal(current.concepts.length, 386);
+    assert.equal(api.isStrictAppendOnlyCatalog(previous, current), true);
+    assert.deepEqual(current.facets, previous.facets);
+    assert.deepEqual(current.concepts.slice(0, previous.concepts.length), previous.concepts);
+    assert.equal(api.resolveAppendOnlyProofCatalog(previous.registrySha256, current).registrySha256,
+        previous.registrySha256);
+    assert.equal(fs.readFileSync(PRE_DISPLAY_ALIGNMENT).equals(previousBytes), true);
+});
+
+test('纯追加兼容拒绝任一旧概念、分面、版本或顺序变化，不按本篇选中标签缩小检查', () => {
+    const previous = tagCatalogApi.loadTagCatalog(PRE_DISPLAY_ALIGNMENT);
+    const current = tagCatalogApi.loadTagCatalog(CURRENT);
+    for (const mutate of [
+        value => { value.version = 'paper-taxonomy-v1'; },
+        value => { value.facets[0].label += '变更'; },
+        value => { value.facets.reverse(); },
+        value => { value.concepts[0].definition += '变更'; },
+        value => { value.concepts[0].scopeNote += '变更'; },
+        value => { value.concepts[0].aliases.push('新别名'); },
+        value => { value.concepts[0].preferredLabel.zh += '变更'; },
+        value => { byId(value, 'task.av-asr').broaderId = null; },
+        value => { [value.concepts[0], value.concepts[1]] = [value.concepts[1], value.concepts[0]]; },
+        value => { value.concepts.splice(0, 1); }
+    ]) {
+        const changed = clone(current); mutate(changed);
+        assert.equal(api.isStrictAppendOnlyCatalog(previous, changed), false);
+        assert.equal(api.resolveAppendOnlyProofCatalog(previous.registrySha256, changed), null);
+    }
+    assert.equal(api.isStrictAppendOnlyCatalog(previous, previous), false);
+});
+
+test('纯追加证明必须读取SHA对应的真实原文件，拒绝错文件和内存替代快照', () => {
+    const previous = tagCatalogApi.loadTagCatalog(PRE_DISPLAY_ALIGNMENT);
+    const current = tagCatalogApi.loadTagCatalog(CURRENT);
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'tag-append-only-history-'));
+    try {
+        assert.equal(api.resolveAppendOnlyProofCatalog(previous.registrySha256, current,
+            { historyDir: directory, registryHistory: { [previous.registrySha256]: previous },
+                resolveSnapshot: () => previous }), null);
+        const target = path.join(directory, `${previous.registrySha256}.json`);
+        fs.writeFileSync(target, fs.readFileSync(CURRENT));
+        assert.equal(api.resolveAppendOnlyProofCatalog(previous.registrySha256, current, { historyDir: directory }), null);
+        fs.writeFileSync(target, fs.readFileSync(PRE_DISPLAY_ALIGNMENT));
+        assert.equal(api.resolveAppendOnlyProofCatalog(previous.registrySha256, current, { historyDir: directory }).registrySha256,
+            previous.registrySha256);
+    } finally { fs.rmSync(directory, { recursive: true, force: true }); }
+});
+
+test('原262标签阶段只读重放全部绑定，不补签升级说明或接受损坏的提示与正文', () => {
+    const { analysisRecord } = require('./helpers/tag-record-update-fixture.js');
+    const rulesApi = require('../scripts/lib/tag-rules.js');
+    const contract = require('../scripts/analysis-contract.js');
+    const { parseAnalysis } = require('../scripts/utils.js');
+    const previous = rulesApi.createTagRules({ registryPath: PRE_DISPLAY_ALIGNMENT });
+    const current = rulesApi.getDefaultTagRules();
+    for (const projectionContract of [rulesApi.TAG_PROMPT_TEXT_CONTRACT, rulesApi.LEGACY_TAG_PROMPT_TEXT_CONTRACT]) {
+        const paper = analysisRecord({ registrySha256: previous.registrySha256, projectionContract,
+            projectionSha256: crypto.createHash('sha256').update(rulesApi.buildTagPromptText(previous.tagCatalog, projectionContract)).digest('hex') }).papers[0];
+        const before = JSON.stringify(paper);
+        const validate = value => contract.validateTagStageProof(value, { parsed: parseAnalysis(value.analysis), tagRules: current });
+        assert.equal(validate(paper), null);
+        assert.equal(JSON.stringify(paper), before);
+        assert.equal(Object.hasOwn(paper.analysisManifest.stages.taxonomySeal, 'registryUpgradeFrom'), false);
+        for (const mutate of [
+            value => { value.analysisManifest.stages.taxonomySeal.projectionSha256 = 'a'.repeat(64); },
+            value => { value.analysisManifest.stages.taxonomySeal.bindingSha256 = 'a'.repeat(64); },
+            value => { value.analysisStageCheckpoints.taxonomySeal += '\nDRIFT'; },
+            value => { value.analysisManifest.stages.taxonomySeal.registryUpgradeFrom = null; },
+            value => { value.analysisManifest.stages.taxonomySeal.conceptIds.reverse(); }
+        ]) {
+            const bad = structuredClone(paper); mutate(bad);
+            assert.ok(validate(bad));
+        }
+        // 即使把所有内容哈希重建得相互一致，也不能让旧词表证明它从未包含的标签。
+        const forgedText = paper.analysis.replace(/#鲁棒性/g, '#聚类与类别匹配');
+        const forged = analysisRecord({ analysis: forgedText, registrySha256: previous.registrySha256,
+            projectionContract, projectionSha256: crypto.createHash('sha256')
+                .update(rulesApi.buildTagPromptText(previous.tagCatalog, projectionContract)).digest('hex') }).papers[0];
+        assert.equal(parseAnalysis(forgedText).tagValidation.valid, true);
+        assert.match(validate(forged), /旧词表重放/);
+        const missingHistory = fs.mkdtempSync(path.join(os.tmpdir(), 'tag-append-missing-'));
+        try {
+            assert.ok(contract.validateTagStageProof(paper, { parsed: parseAnalysis(paper.analysis), tagRules: current,
+                registrySnapshotOptions: { historyDir: missingHistory } }));
+        } finally { fs.rmSync(missingHistory, { recursive: true, force: true }); }
+    }
 });
 
 // 从 seed 到 current(v1.1) 重新计算变更：删除 2 条别名、修改 broaderId 和首选标签，

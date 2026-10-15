@@ -15,6 +15,8 @@ from urllib.parse import quote, urlsplit
 from analysis_sections import analysis_heading_titles, normalize_analysis_section_title, evaluation_heading_issue
 from blog_entry_loader import load_publish_to_blog
 from paper_reader_presentation import build_reader_presentation
+from tag_presentation import render_tag_hierarchy_markdown
+from tag_catalog import load_tag_catalog, resolve_append_only_proof_catalog
 from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, read_tag_stage_record
 from tag_catalog import (TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT,
                          TAG_FLAT_COMPAT_CONTRACT, LEGACY_TAG_FLAT_COMPAT_CONTRACT)
@@ -444,6 +446,21 @@ def repair_formula_delimiters(markdown):
 
 
 def render_packet(packet):
+    if 'tagPresentationBatch' in packet:
+        # A pure, batched display operation shares this existing Python bridge.
+        # It emits no page/assets or publication eligibility and cannot bypass
+        # the full source-bound paper rendering path below.
+        if set(packet) != {'tagPresentationBatch'}:
+            raise ValueError('标签批量展示输入不能与论文页面输入混用。')
+        batch = packet['tagPresentationBatch']
+        if not isinstance(batch, dict) or set(batch) != {'catalog', 'records'} \
+                or not isinstance(batch['records'], list) \
+                or not 1 <= len(batch['records']) <= 10000:
+            raise ValueError('标签批量展示需要同一完整词表及非空有界的所选记录集合。')
+        return {'tagPresentations': [
+            render_tag_hierarchy_markdown(record, batch['catalog'])
+            for record in batch['records']
+        ]}
     if 'tagMetadata' in packet and 'taxonomy' in packet:
         raise ValueError('页面生成输入不能同时包含 tagMetadata 和旧字段 taxonomy。')
     paper = packet.get('paper')
@@ -537,14 +554,34 @@ def render_packet(packet):
     tag_contract = ((manifest or {}).get('contracts') or {}).get(tag_record['contractKey'])
     selection_contract = tag_stage.get('selectionContract') if tag_record['format'] == 'current' else tag_contract
     supported_selection_contracts = (LEGACY_TAG_SELECTION_CONTRACT, TAG_SELECTION_CONTRACT)
+    tag_catalog = packet.get('tagCatalog') if 'tagCatalog' in packet else load_tag_catalog()
+    same_catalog = assignment.get('registryVersion') == tag_stage.get('registryVersion') \
+        and assignment.get('registrySha256') == tag_stage.get('registrySha256')
+    if not same_catalog:
+        original = resolve_append_only_proof_catalog(tag_stage.get('registrySha256'), tag_catalog)
+        if original is not None and tag_stage.get('registryVersion') == original['version']:
+            # Only genuine archived bytes with an unchanged full prefix qualify.
+            # Recompute the old prompt and both selections; never rewrite the
+            # original stage/checkpoint or infer an approval from a new SHA.
+            from tag_catalog import tag_prompt_text_sha256
+            from utils import _validate_tag_selection
+            parsed_tags = load_publish_to_blog().parse_analysis(analysis)
+            old_selection = _validate_tag_selection(original, parsed_tags.get('tags'),
+                parsed_tags.get('primaryTaskTag'), parsed_tags.get('primaryMethodTag'))
+            new_selection = _validate_tag_selection(tag_catalog, parsed_tags.get('tags'),
+                parsed_tags.get('primaryTaskTag'), parsed_tags.get('primaryMethodTag'))
+            same_catalog = tag_stage.get('projectionSha256') == tag_prompt_text_sha256(
+                original, tag_stage.get('projectionContract')) \
+                and old_selection.get('valid') is True and new_selection.get('valid') is True \
+                and all(old_selection.get(key) == new_selection.get(key)
+                        for key in ('primaryTaskId', 'primaryMethodId', 'conceptIds'))
     if assignment.get('flatCompatContract') not in (LEGACY_TAG_FLAT_COMPAT_CONTRACT, FLAT_TAG_CONTRACT) \
             or (tag_record['format'] == 'current' and tag_contract != TAG_STAGE_RECORD_CONTRACT) \
             or assignment.get('selectionContract') not in supported_selection_contracts \
             or selection_contract not in supported_selection_contracts \
             or (tag_record['format'] != 'current' and 'selectionContract' in tag_stage
                 and tag_stage['selectionContract'] != tag_contract) \
-            or assignment.get('registryVersion') != tag_stage.get('registryVersion') \
-            or assignment.get('registrySha256') != tag_stage.get('registrySha256') \
+            or not same_catalog \
             or assignment.get('primaryTaskId') != tag_stage.get('primaryTaskId') \
             or assignment.get('primaryMethodId') != tag_stage.get('primaryMethodId') \
             or sorted(assignment.get('conceptIds') or []) != sorted(tag_stage.get('conceptIds') or []) \
@@ -553,6 +590,13 @@ def render_packet(packet):
     if any(cid not in concepts for cid in ordered):
         raise ValueError('会议论文的标签记录中，部分主标签或已选概念没有对应的概念记录。')
     labels = [concepts[cid]['preferredLabel']['zh'] for cid in assignment.get('conceptIds', [])]
+    tag_presentation = render_tag_hierarchy_markdown({
+        'registryVersion': assignment['registryVersion'],
+        'registrySha256': assignment['registrySha256'],
+        'concepts': [{'id': cid, 'facet': concepts[cid]['facet'],
+                      'label': concepts[cid]['preferredLabel']['zh']}
+                     for cid in assignment['conceptIds']],
+    }, tag_catalog)
     parsed = paper.get('parsed') or {}
     title, summary = str(paper.get('title') or '').strip(), str(parsed.get('summary') or '').strip()
     short_proceedings = acquisition.get('analysisConfidence') == 'short_proceedings'
@@ -627,7 +671,7 @@ def render_packet(packet):
              ('> 来源为官方会议 PDF；图片依据原页像素，表格数字依据原文引用。PDF 文字层不视为原始 TeX，未可靠恢复的结构不作推断。' if capabilities == PDF_VISUAL else ''),
              ('> ✅ 来源为官方会议 PDF；表格和公式来自 PDF 抽取结果，论文图片依据原页像素。PDF 公式以原页区域图片展示，未冒称作者原始 TeX；未成功恢复的结构不作推断。' if capabilities == FULL else ''), '',
              f'> 会议来源：[官方记录]({record_url}) · [官方 PDF]({pdf_url})', '',
-             f'标签：{" ".join("#" + label for label in labels)}', '', f'评分：{complete_score}', '',
+             tag_presentation.rstrip(), '', f'评分：{complete_score}', '',
              f'排名：{rank_bucket} | 文档类型：{document_type}', '', '## 👥 作者与机构', '']
     lines.extend([presentation['authorBlock']])
     lines.extend(['', '## 📌 核心摘要', '', presentation['summary'], '', '## 🔗 开源与复现资源', '',
