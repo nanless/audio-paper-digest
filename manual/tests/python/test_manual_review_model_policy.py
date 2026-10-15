@@ -87,34 +87,19 @@ class ManualReviewModelPolicyTest(unittest.TestCase):
     def test_old_shard_is_not_issued_as_a_new_sol_attestation(self):
         assembler = identity_tests.assembler
         original = attestation()['files'][0]
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            shards = root / 'shards'
-            shards.mkdir()
-            shard = shards / 'page.json'
-            raw = json.dumps(original).encode()
-            shard.write_bytes(raw)
-            manifest = root / 'generation.json'
-            manifest.write_text(json.dumps({'files': [original]}))
-            output = root / 'assembled.json'
-            module = mock.Mock()
-            module.manual_cache_reuse_for_file.return_value = None
-            module.publication_scope.return_value.__enter__ = mock.Mock()
-            module.publication_scope.return_value.__exit__ = mock.Mock()
-            module.generation_manifest_path.return_value = manifest
-            module.manual_review_page_dir.return_value = shards
-            module.manual_review_statement_path.return_value = output
+        with tempfile.TemporaryDirectory() as tmp, identity_tests.assembler_workspace(tmp) as workspace:
+            shard = identity_tests.write_assembler_inputs(workspace, original)
+            raw = shard.read_bytes()
             for plan in (True, False):
                 argv = ['assemble', '--date', '2026-08-25'] + (['--plan'] if plan else [])
-                with mock.patch.object(assembler, 'load_publish_to_blog', return_value=module), \
-                        mock.patch('sys.argv', argv), mock.patch('sys.stdout', new_callable=io.StringIO) as stream:
+                with mock.patch('sys.argv', argv), mock.patch('sys.stdout', new_callable=io.StringIO) as stream:
                     if plan:
                         assembler.main()
                         self.assertEqual(json.loads(stream.getvalue())['counts']['failed'], 1)
                     else:
                         with self.assertRaisesRegex(SystemExit, '未通过核验'):
                             assembler.main()
-                self.assertFalse(output.exists())
+                self.assertFalse(workspace.output.exists())
                 self.assertEqual(shard.read_bytes(), raw)
 
     def test_fresh_publisher_rejects_old_identity_before_any_write_or_result_mutation(self):
@@ -151,30 +136,17 @@ class ManualReviewModelPolicyTest(unittest.TestCase):
 
     def test_assembler_rejects_short_or_nontext_task_names_before_writing(self):
         assembler = identity_tests.assembler
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            shards = root / 'shards'
-            shards.mkdir()
-            manifest = root / 'generation.json'
-            output = root / 'assembled.json'
-            module = mock.MagicMock()
-            module.manual_cache_reuse_for_file.return_value = None
-            module.generation_manifest_path.return_value = manifest
-            module.manual_review_page_dir.return_value = shards
-            module.manual_review_statement_path.return_value = output
+        with tempfile.TemporaryDirectory() as tmp, identity_tests.assembler_workspace(tmp) as workspace:
             for task_name in (1234, 'abc', '', None):
                 item = current_attestation()['files'][0]
                 item['reviewSubagent']['taskName'] = task_name
-                shard = shards / 'page.json'
-                raw = json.dumps(item).encode()
-                shard.write_bytes(raw)
-                manifest.write_text(json.dumps({'files': [item]}))
+                shard = identity_tests.write_assembler_inputs(workspace, item)
+                raw = shard.read_bytes()
                 with self.subTest(task_name=task_name), \
-                        mock.patch.object(assembler, 'load_publish_to_blog', return_value=module), \
                         mock.patch('sys.argv', ['assemble', '--date', '2026-08-25']):
                     with self.assertRaisesRegex(SystemExit, '未通过核验'):
                         assembler.main()
-                self.assertFalse(output.exists())
+                self.assertFalse(workspace.output.exists())
                 self.assertEqual(shard.read_bytes(), raw)
 
     def test_fresh_sol_review_receipt_is_actually_saved_with_real_page_hash_and_git_base(self):

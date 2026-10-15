@@ -25,6 +25,38 @@ INVALID_IDS = (None, 1234, '0704.0001v1', 'hep-th/9901001v2',
                'arXiv:0704.0001', 'https://arxiv.org/abs/0704.0001',
                ' 0704.0001', 'HEP-TH/9901001', '../9901001',
                'hep-th/../9901001', '0704.001', 'hep-th/990100')
+DATE = '2026-08-25'
+
+
+@contextlib.contextmanager
+def assembler_workspace(directory):
+    """仅隔离文件位置，分区、机器资产和异常传播均使用真实发布器。"""
+    root = Path(directory).resolve()
+    workspace = SimpleNamespace(root=root, repo=root / 'blog', current=root / 'current',
+        shards=root / 'shards', manifest=root / 'generation.json', output=root / 'assembled.json')
+    for directory in (workspace.repo, workspace.current, workspace.shards):
+        directory.mkdir(exist_ok=True)
+    with mock.patch.object(publisher, 'BLOG_REPO', str(workspace.repo)), \
+            mock.patch.object(publisher, 'CURRENT_DIR', workspace.current), \
+            mock.patch.object(publisher, 'generation_manifest_path', return_value=workspace.manifest), \
+            mock.patch.object(publisher, 'manual_review_page_dir', return_value=workspace.shards), \
+            mock.patch.object(publisher, 'manual_review_statement_path', return_value=workspace.output), \
+            mock.patch.object(assembler, 'load_publish_to_blog', return_value=publisher):
+        yield workspace
+
+
+def write_assembler_inputs(workspace, item, *, page_text=None, assets=()):
+    page = workspace.repo / item['path']
+    page.parent.mkdir(parents=True, exist_ok=True)
+    page.write_text(page_text or '---\ntitle: 构造测试页面\n---\n正文报告 WER 7.1%。\n', encoding='utf-8')
+    item['sha256'] = hashlib.sha256(page.read_bytes()).hexdigest()
+    shard = workspace.shards / 'page.json'
+    shard.write_text(json.dumps(item), encoding='utf-8')
+    records = [{'path': item['path'], 'deleted': False, 'sha256': item['sha256']}, *assets]
+    workspace.manifest.write_text(json.dumps({
+        'schemaVersion': 3, 'date': DATE, 'files': records,
+    }), encoding='utf-8')
+    return shard
 
 
 def statement(paper_id):
@@ -56,27 +88,16 @@ class ManualReviewArxivIdentityTest(unittest.TestCase):
                         manual_review_blog._load_review_statement(path)
 
     def run_assembler(self, directory, paper_id):
-        root = Path(directory)
-        shard_dir = root / 'shards'
-        shard_dir.mkdir(exist_ok=True)
         item = statement(paper_id)['files'][0]
-        (shard_dir / 'page.json').write_text(json.dumps(item), encoding='utf-8')
-        manifest = root / 'generation.json'
-        manifest.write_text(json.dumps({'files': [{'path': item['path'], 'sha256': item['sha256']}]}), encoding='utf-8')
-        output = root / 'assembled.json'
-        module = SimpleNamespace(
-            publication_scope=lambda _id: contextlib.nullcontext(),
-            generation_manifest_path=lambda _date: manifest,
-            manual_review_page_dir=lambda _date: shard_dir,
-            manual_review_statement_path=lambda _date: output,
-            _validate_active_publication_scope=lambda _manifest: None,
-            manual_cache_reuse_for_file=lambda *_args: None,
-        )
-        with mock.patch.object(assembler, 'load_publish_to_blog', return_value=module), \
-                mock.patch.object(sys, 'argv', ['assemble', '--date', '2026-08-25']), \
-                contextlib.redirect_stdout(io.StringIO()):
-            assembler.main()
-        return output
+        with assembler_workspace(directory) as workspace:
+            write_assembler_inputs(workspace, item)
+            with mock.patch.object(sys, 'argv', ['assemble', '--date', DATE]), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                assembler.main()
+            payload = json.loads(workspace.output.read_text())
+            self.assertNotIn('machineAssets', payload, '纯Markdown清单不应伪造机器资产证明')
+            self.assertEqual(payload['files'][0]['sha256'], item['sha256'])
+            return workspace.output
 
     def test_assembler_writes_statement_for_each_canonical_id(self):
         for paper_id in VALID_IDS:
@@ -91,6 +112,46 @@ class ManualReviewArxivIdentityTest(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, '未通过核验'):
                     self.run_assembler(tmp, paper_id)
                 self.assertFalse((Path(tmp) / 'assembled.json').exists())
+
+    def test_assembler_preserves_exact_machine_asset_partition(self):
+        with tempfile.TemporaryDirectory() as tmp, assembler_workspace(tmp) as workspace:
+            pixels = publisher.PNG_SIGNATURE + b'synthetic-test-only'
+            digest = hashlib.sha256(pixels).hexdigest()
+            relative = f'static/images/papers/2608.12345/figure-1-{digest[:16]}.png'
+            image = workspace.repo / relative
+            image.parent.mkdir(parents=True)
+            image.write_bytes(pixels)
+            asset = {'path': relative, 'deleted': False, 'sha256': digest}
+            url = f'{publisher.BASE_PATH.rstrip("/")}/{relative[len("static/"):]}'
+            item = statement('2608.12345')['files'][0]
+            shard = write_assembler_inputs(workspace, item,
+                page_text=f'---\ntitle: 构造回归\n---\n![仅测试]({url})\nWER 7.1%。\n', assets=[asset])
+            before = shard.read_bytes()
+            with mock.patch.object(sys, 'argv', ['assemble', '--date', DATE]), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                assembler.main()
+            payload = json.loads(workspace.output.read_text())
+            self.assertEqual([record['path'] for record in payload['files']], [item['path']])
+            self.assertEqual(payload['machineAssets'], {
+                'contract': 'manual-review-controlled-assets-v1', 'files': [asset],
+            })
+            self.assertEqual(shard.read_bytes(), before)
+            self.assertEqual(image.read_bytes(), pixels)
+
+    def test_real_partition_error_propagates_without_writing_or_leaking_scope(self):
+        with tempfile.TemporaryDirectory() as tmp, assembler_workspace(tmp) as workspace:
+            item = statement('2608.12345')['files'][0]
+            shard = write_assembler_inputs(workspace, item, assets=[{
+                'path': 'static/unknown.bin', 'deleted': False, 'sha256': 'a' * 64,
+            }])
+            before = shard.read_bytes()
+            previous_scope = publisher._ACTIVE_PUBLICATION_INCLUDE_ID
+            with mock.patch.object(sys, 'argv', ['assemble', '--date', DATE]):
+                with self.assertRaisesRegex(publisher.PublishDataValidationError, '不允许发布的路径'):
+                    assembler.main()
+            self.assertEqual(publisher._ACTIVE_PUBLICATION_INCLUDE_ID, previous_scope)
+            self.assertFalse(workspace.output.exists())
+            self.assertEqual(shard.read_bytes(), before)
 
     def receipt_error(self, root, paper_id, *, reviewed_id=None):
         payload = statement(paper_id)
