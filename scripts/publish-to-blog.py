@@ -4731,6 +4731,37 @@ def _has_bound_former_latter_comparison(sentence, metric_pattern):
     return left < right if direction == '更低' else left > right
 
 
+def _has_bound_disjoint_interval_comparison(sentence, metric_pattern):
+    # Same closed grammar and interval ordering as the Node core-summary guard.
+    clause = re.split(r'[；;。！？!?\n]', str(sentence or ''))[0]
+    if len(clause) > 800 or re.search(r'(?:假设|假想|假定|设想|如果|预计|预期|可能|未来|计划|并非|不是|不等于|不代表|并未|未进行|未报告|未测|没有)', clause):
+        return False
+    surface = re.sub(r'（[^（）]{0,180}）|\([^()]{0,180}\)', '', clause)
+    metric = r'(?:词错误率|词错率|字错率|准确率|正确率|错误率|召回率|精确率|WER|CER|EER|UAR|accuracy|precision|recall|均方根误差|平均绝对误差|RMSE|MAE|SNR|SI-SDR|延迟|latency)'
+    number = r'[-+]?\d+(?:\.\d+)?'
+    interval = rf'({number})\s*(%|％|dB|ms|s)\s*[–—~～至到-]\s*({number})\s*(%|％|dB|ms|s)'
+    measured = rf'([^，,。；;]{{1,80}}?)的({metric})(?:大约为|大约|约为|约|为|是)\s*{interval}'
+    match = re.search(r'(?:^|[，,])\s*' + measured + r'[，,]\s*' + measured + r'[，,]\s*(前者|后者)(更高|更低)\s*$', surface, re.IGNORECASE)
+    if not match:
+        return False
+    first, metric_a, a0, ua0, a1, ua1, second, metric_b, b0, ub0, b1, ub1, referent, direction = match.groups()
+    named_object = re.compile(r'拟合|模型|系统|方法|基线|对照|条件|分支|编码器|提示|微调|算法|网络')
+    if first.strip() == second.strip() or not named_object.search(first) or not named_object.search(second) or metric_pattern.search(first) or metric_pattern.search(second):
+        return False
+    aliases = {'词错率':'wer','词错误率':'wer','字错率':'cer','准确率':'accuracy','正确率':'accuracy','召回率':'recall','精确率':'precision','均方根误差':'rmse','平均绝对误差':'mae','延迟':'latency'}
+    key = aliases.get(metric_a, metric_a.lower())
+    unit = ua0.replace('％', '%')
+    if key != aliases.get(metric_b, metric_b.lower()) or any(value.replace('％', '%') != unit for value in (ua1, ub0, ub1)):
+        return False
+    if (key in ('wer','cer','eer','uar','accuracy','precision','recall','错误率') and unit != '%') or (key in ('snr','si-sdr') and unit != 'dB') or (key == 'latency' and unit not in ('s','ms')):
+        return False
+    values = [float(value) for value in (a0, a1, b0, b1)]
+    if any(not math.isfinite(value) or value < 0 or (unit == '%' and value > 100) for value in values) or values[0] >= values[1] or values[2] >= values[3]:
+        return False
+    left_min, left_max, right_min, right_max = values if referent == '前者' else [values[2], values[3], values[0], values[1]]
+    return left_max < right_min if direction == '更低' else left_min > right_max
+
+
 def _detailed_core_summary_semantic_issue(summary):
     summary = _core_summary_sentence_view(summary)
     count = len(re.findall(r'[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]', summary))
@@ -4825,7 +4856,7 @@ def _detailed_core_summary_semantic_issue(summary):
             metric_sentence,
         )
         numbers = number.findall(numeric_result_sentence)
-        has_direction = _has_conditional_metric_delta_direction(result_sentence, metric) or comparison.search(result_sentence) or _has_bound_former_latter_comparison(result_sentence, metric) or (
+        has_direction = _has_conditional_metric_delta_direction(result_sentence, metric) or comparison.search(result_sentence) or _has_bound_former_latter_comparison(result_sentence, metric) or _has_bound_disjoint_interval_comparison(result_sentence, metric) or (
             len(numbers) >= 2 and baseline_transition.search(result_sentence)
         )
         narrow_measured_result = _has_recorded_dissonance_comparison(result_sentence) or _has_mean_room_simulation_comparison(result_sentence)
@@ -6464,6 +6495,24 @@ def _normalize_api_reader_numeric_token(raw):
     return f'{number_text}{suffix}'
 
 
+def _reader_adjacent_metric_unit_evidence(quote, metric, value, unit):
+    def surface(text):
+        return re.sub(r'\s+', ' ', re.sub(r'[`*_↑↓]', '', unicodedata.normalize('NFKC', str(text or '')).lower())).strip()
+    name = r'\s+'.join(re.escape(part) for part in surface(metric).split())
+    if not name:
+        return False
+    quantity = re.escape(value) + r'\s*' + re.escape(unit)
+    adjacent = re.compile(r'(?<![a-z0-9_.+−－–—/\-])(?:' + quantity + r'\s+' + name
+        + '|' + name + r'(?![a-z0-9_])\s*(?:(?:is|was|为|是|=|:)\s*)?' + quantity + r')(?![a-z0-9_%])', re.I)
+    for clause in re.split(r'(?<!\d)[.!?;。！？；\n]|[.!?](?!\d)|[,，]', unicodedata.normalize('NFKC', str(quote or ''))):
+        text = surface(clause)
+        if re.search(r'\b(?:not|no|never|unavailable|unknown|missing)\b|未报告|未提供|不可得|未知|没有|并非|不是|未达到|不等于|不超过', text):
+            continue
+        if adjacent.search(text):
+            return True
+    return False
+
+
 def _reader_table_header_unit_evidence_failures(table, quotes):
     # 列头的单位同样改变数字含义，不能只凭同一个裸数值认可百分数或时长。
     def surface(value):
@@ -6496,7 +6545,7 @@ def _reader_table_header_unit_evidence_failures(table, quotes):
                             if (_api_reader_numeric_tokens(clause) or [None])[0] == token:
                                 return True
                     return False
-                covered = consistent and (bool(number.group(2)) or (metric and any(directly_declared(quote) for quote in quotes)))
+                covered = consistent and (bool(number.group(2)) or any(_reader_adjacent_metric_unit_evidence(quote, metric, number.group(1), unit) for quote in quotes) or (metric and any(directly_declared(quote) for quote in quotes)))
                 if not covered:
                     failures.append((row + 1, column, token, unit))
     return failures
@@ -6966,6 +7015,95 @@ def _verify_reader_sealed_pdf_quote_bindings(paper):
     return result
 
 
+def _reader_dom_table_unit_coverage(rendered, quotes, tables):
+    """One literal flat DOM column, exact row identity, exact scalar or mean±SD."""
+    def text(value):
+        return re.sub(r'\s+', ' ', re.sub(r'[*_`]', '', _normalize_api_reader_source_cell(str(value or '')))).strip()
+    def compact(value):
+        return re.sub(r'\s+', '', text(value))
+    def decimal(value):
+        integer, _, fraction = value.lstrip('+').partition('.')
+        negative = integer.startswith('-')
+        integer = integer.lstrip('-').lstrip('0') or '0'
+        fraction = fraction.rstrip('0')
+        return ('-' if negative and (integer != '0' or fraction) else '') + integer + ('.' + fraction if fraction else '')
+    def numbers(value):
+        match = re.fullmatch(r'([+-]?\d+(?:\.\d+)?)(?:±(\d+(?:\.\d+)?))?', compact(value))
+        return [decimal(value) for value in match.groups() if value is not None] if match else None
+    headers, rows = rendered.get('header', []), rendered.get('rows', [])
+    if len(headers) < 2 or not rows or any(not isinstance(row, list) or len(row) != len(headers) for row in rows):
+        return set()
+    quote_strings = [text(quote) for quote in quotes if isinstance(quote, str)]
+    result = set()
+    for column in range(1, len(headers)):
+        header = re.sub('[↑↓]', '', compact(headers[column]))
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9 ._-]*\(%\)', header):
+            continue
+        candidates = []
+        for table in tables:
+            matrix, cells = table.get('matrix'), table.get('cells')
+            if (table.get('recoveryStatus') != 'complete' or not re.fullmatch(r'[a-f0-9]{64}', table.get('sourceDomSha256', ''))
+                    or not isinstance(matrix, list) or len(matrix) < 2 or not isinstance(cells, list)
+                    or any(cell.get('rowspan') != 1 or cell.get('colspan') != 1 or not re.fullmatch(r'[a-f0-9]{64}', cell.get('sourceDomSha256', '')) for cell in cells)
+                    or any(not isinstance(row, list) or len(row) != len(headers) for row in matrix)):
+                continue
+            caption = re.split(r'(?<=\.)\s', text(table.get('caption', '')))[0]
+            if (len(caption) >= 24 and any(caption in quote for quote in quote_strings)
+                    and compact(matrix[0][0]) == compact(headers[0]) and compact(matrix[0][column]) == compact(headers[column])):
+                candidates.append(table)
+        if len(candidates) != 1:
+            continue
+        source = candidates[0]
+        if sum(re.sub('[↑↓]', '', compact(value)) == header for value in source['matrix'][0]) != 1:
+            continue
+        header_cells = [cell for cell in source['cells'] if cell.get('row') == 0 and cell.get('column') == column]
+        if len(header_cells) != 1 or compact(header_cells[0]['text']) != compact(source['matrix'][0][column]):
+            continue
+        for row, values in enumerate(rows):
+            row_name, rendered_values = compact(values[0]), numbers(values[column])
+            if not row_name or not rendered_values:
+                continue
+            matches = [(index + 1, value) for index, value in enumerate(source['matrix'][1:]) if compact(value[0]) == row_name]
+            if len(matches) != 1:
+                continue
+            source_row, source_values = matches[0]
+            if numbers(source_values[column]) != rendered_values:
+                continue
+            cells = [cell for cell in source['cells'] if cell.get('row') == source_row and cell.get('column') in [0, column]]
+            if len(cells) != 2 or any(compact(cell['text']) != compact(source_values[cell['column']]) for cell in cells):
+                continue
+            result.update((row + 1, column, value, '%') for value in rendered_values)
+    return result
+
+
+def _reader_dom_column_unit_coverage(paper, rendered, binding):
+    proof = paper.get('freshRewriteProvenance') or {}
+    if proof.get('contract') != 'fresh-source-analysis-v1':
+        return set()
+    run_id = proof.get('runId')
+    if not isinstance(run_id, str) or not re.fullmatch(r'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}', run_id):
+        return set()
+    run_dir = DAILY_FRESH_SOURCE_RUNS_DIR / run_id
+    if not (run_dir / 'run.json').exists():
+        return set()
+    _daily_fresh_safe_directory(DAILY_FRESH_SOURCE_RUNS_DIR, 'DOM列单位来源根目录')
+    _daily_fresh_safe_directory(run_dir, 'DOM列单位运行目录')
+    _, run = _daily_fresh_read_canonical_json(run_dir / 'run.json', 'DOM列单位运行清单', 64 * 1024 * 1024)
+    if run.get('contract') != 'daily-fresh-source-run-v1' or run.get('runId') != run_id:
+        return set()
+    paper_id = _daily_fresh_normalized_paper_id(paper)
+    _daily_fresh_validate_bundle(run_dir, paper_id, proof, paper)
+    source_dir = run_dir / 'sources' / paper_id / 'generation-000001'
+    _, runtime = _daily_fresh_read_canonical_json(source_dir / 'source-runtime.json', 'DOM列单位结构化来源', 64 * 1024 * 1024)
+    source = paper['analysisManifest']['sourceAcquisition']
+    artifacts = _reader_source_payload_artifacts(paper['apiReaderPlan'].get('structuredSourcePayload'), source['structuredArtifactsSha256'], paper['sourceSha256'])
+    if artifacts != {key: value for key, value in runtime['structuredArtifacts'].items() if key != 'payloadSha256'}:
+        raise PublishDataValidationError('DOM列单位与封存结构化来源不一致。')
+    source_text = _daily_fresh_read_private_file(source_dir / 'source.txt', 'DOM列单位原文', 64 * 1024 * 1024).decode('utf-8')
+    quotes = [item['quote'] for item in binding.get('sourceQuotes', []) if isinstance(item, dict) and isinstance(item.get('quote'), str) and item['quote'] in source_text]
+    return _reader_dom_table_unit_coverage(rendered, quotes, artifacts['tables'])
+
+
 def _reader_sealed_pdf_column_unit_coverage(paper, rendered, binding):
     """Only a replayed full PDF matrix can assign a bare value its column unit."""
     from reader_sealed_pdf_column_units import prove_pdf_bytes
@@ -7162,6 +7300,9 @@ def _validate_api_reader_source_bindings(paper, article=None):
                 quote_corpus.append(quote_binding['quote'])
             quote_corpus.extend(pdf_quote_values.get(index, []))
             unit_failures = _reader_table_header_unit_evidence_failures(rendered, quote_corpus)
+            if unit_failures:
+                dom_units = _reader_dom_column_unit_coverage(paper, rendered, binding)
+                unit_failures = [failure for failure in unit_failures if failure not in dom_units]
             if unit_failures and index in pdf_quote_values:
                 column_units = _reader_sealed_pdf_column_unit_coverage(paper, rendered, binding)
                 unit_failures = [failure for failure in unit_failures if failure not in column_units]

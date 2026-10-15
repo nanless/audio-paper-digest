@@ -1326,6 +1326,35 @@ function hasBoundFormerLatterComparison(sentence) {
     return direction === '更低' ? left < right : left > right;
 }
 
+function hasBoundDisjointIntervalComparison(sentence) {
+    // Recognize two measured ranges, never turn their endpoints into exact points.
+    const clause = String(sentence || '').split(/[；;。！？!?\n]/u)[0];
+    if (clause.length > 800 || /(?:假设|假想|假定|设想|如果|预计|预期|可能|未来|计划|并非|不是|不等于|不代表|并未|未进行|未报告|未测|没有)/u.test(clause)) return false;
+    const surface = clause.replace(/（[^（）]{0,180}）|\([^()]{0,180}\)/gu, '');
+    const metric = '(?:词错误率|词错率|字错率|准确率|正确率|错误率|召回率|精确率|WER|CER|EER|UAR|accuracy|precision|recall|均方根误差|平均绝对误差|RMSE|MAE|SNR|SI-SDR|延迟|latency)';
+    const number = '[-+]?\\d+(?:\\.\\d+)?';
+    const range = `(${number})\\s*(%|％|dB|ms|s)\\s*[–—~～至到-]\\s*(${number})\\s*(%|％|dB|ms|s)`;
+    const measured = `([^，,。；;]{1,80}?)的(${metric})(?:大约为|大约|约为|约|为|是)\\s*${range}`;
+    const pattern = new RegExp(`(?:^|[，,])\\s*${measured}[，,]\\s*${measured}[，,]\\s*(前者|后者)(更高|更低)\\s*$`, 'iu');
+    const m = pattern.exec(surface);
+    if (!m) return false;
+    const [, first, metricA, a0, ua0, a1, ua1, second, metricB, b0, ub0, b1, ub1, referent, direction] = m;
+    const namedObject = /拟合|模型|系统|方法|基线|对照|条件|分支|编码器|提示|微调|算法|网络/u;
+    if (first.trim() === second.trim() || !namedObject.test(first) || !namedObject.test(second)
+        || CORE_SUMMARY_METRIC_PATTERN.test(first) || CORE_SUMMARY_METRIC_PATTERN.test(second)) return false;
+    const canonicalMetric = value => ({'词错率':'wer','词错误率':'wer','字错率':'cer','准确率':'accuracy','正确率':'accuracy','召回率':'recall','精确率':'precision','均方根误差':'rmse','平均绝对误差':'mae','延迟':'latency'}[value] || value.toLowerCase());
+    const key = canonicalMetric(metricA), unit = ua0.replace('％', '%');
+    if (key !== canonicalMetric(metricB) || [ua1, ub0, ub1].some(value => value.replace('％', '%') !== unit)) return false;
+    if ((/^(?:wer|cer|eer|uar|accuracy|precision|recall|错误率)$/.test(key) && unit !== '%')
+        || (/^(?:snr|si-sdr)$/.test(key) && unit !== 'dB')
+        || (key === 'latency' && !['s', 'ms'].includes(unit))) return false;
+    const values = [a0, a1, b0, b1].map(Number);
+    if (values.some(value => !Number.isFinite(value) || value < 0 || (unit === '%' && value > 100))
+        || values[0] >= values[1] || values[2] >= values[3]) return false;
+    const [leftMin, leftMax, rightMin, rightMax] = referent === '前者' ? values : [values[2], values[3], values[0], values[1]];
+    return direction === '更低' ? leftMax < rightMin : leftMin > rightMax;
+}
+
 function hasConditionalMetricDeltaDirection(sentence) {
     // One named rate, two explicit conditions, and a measured percentage-point
     // delta in the same clause. Bare higher/lower or model-size changes fail.
@@ -1344,7 +1373,7 @@ function hasCoreSummaryComparisonDirection(sentence, numbers) {
     // 数字上的变化必须写明起始值。
     const directionSurface = sentence.replace(/\bfrom\b([^。！？!?]{0,50})\bto\b/gi,
         (match, between) => /\d/.test(between) ? match : ' ');
-    if (hasConditionalMetricDeltaDirection(sentence) || hasBoundFormerLatterComparison(sentence) || CORE_SUMMARY_COMPARISON_PATTERN.test(directionSurface)
+    if (hasConditionalMetricDeltaDirection(sentence) || hasBoundFormerLatterComparison(sentence) || hasBoundDisjointIntervalComparison(sentence) || CORE_SUMMARY_COMPARISON_PATTERN.test(directionSurface)
         || /(?:从|由)[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)/.test(sentence)) return true;
     // 比字比较的指标必须和高/低差值处在同一分句，且紧邻比较关系。
     // 指标在左侧时，右侧须以明确比较对象结尾，避免借别处的 UAR 给参数量差背书。
@@ -3382,6 +3411,7 @@ module.exports = {
     hasConditionalMetricDeltaDirection, hasGeneratedInputModelHeadChain,
     hasNaturalScopedBoundary,
     hasBoundFormerLatterComparison,
+    hasBoundDisjointIntervalComparison,
     stripSymbolicPatternRelation,
     hasSymbolicGeometryMethodChain,
     hasScopedSymbolicDemonstration,

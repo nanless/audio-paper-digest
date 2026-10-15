@@ -244,6 +244,7 @@ npm run test:compat
 | `lib/reader-resource-sync.js` | Node 库：将封存资源状态同步到分析结果、解析结果和末端检查点及证明，保留评分和 Reader 字节。如果评分依赖的可用性证据变了，就拒绝同步，并要求走正常评分审计；不联网、不写文件。 |
 | `lib/reader-saved-feedback-input-continuity.js` | Node 库：同一原父子事实包的显示合并变化时，重建真实原付费输入；保留当前全部事实约束、原稿、费用和次数，不授予新额度。 |
 | `lib/reader-sealed-pdf-column-units.js` | Reader 封存 PDF 表格列单位的精确绑定与重放。 |
+| `lib/reader-source-table-column-units.js` | 在已核验的日更封存作用域中，以唯一单层原 DOM 表、行名及同列单元格核对百分比列单位；不改数字或来源。 |
 | `lib/reader-sealed-pdf-quote-evidence.js` | Reader 封存 PDF 逐字引文证据的绑定与重放。 |
 | `lib/reader-sealed-pdf-table-evidence.js` | Reader 封存 PDF 原表结构与单元格证据的绑定与重放。 |
 | `lib/reader-signed-draft.js` | Node 库：把本次同源、已核验的 Reader 还原成与输入完全等价的版本。只有实际解析并恢复原图引用后，正文、计划、图片 SHA 全部相同才返回；不写文件、不调用模型，也不把恢复稿当作原始 API JSON。 |

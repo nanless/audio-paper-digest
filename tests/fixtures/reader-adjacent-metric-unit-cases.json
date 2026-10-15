@@ -1,0 +1,520 @@
+{
+  "cases": [
+    {
+      "quote": "The baseline has 81.05% WA and 81.33% UA.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": true
+    },
+    {
+      "quote": "WA 81.05% is reported.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": true
+    },
+    {
+      "quote": "WA is 81.05% for the baseline.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": true
+    },
+    {
+      "quote": "WA=81.05% for the baseline.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": true
+    },
+    {
+      "quote": "WA: 81.05% for the baseline.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": true
+    },
+    {
+      "quote": "该基线达到81.05％ WA。",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": true
+    },
+    {
+      "quote": "OtherWA is 81.05%.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "WAx is 81.05%.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "WA81.05% is an identifier.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "UA is 81.05%.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "81.05% UA is reported.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "81.0501% WA is reported.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "181.05% WA is reported.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "-81.05% WA is reported.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "−81.05% WA is reported.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "+81.05% WA is reported.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "The range is 80–81.05% WA.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "The range is 80-81.05% WA.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "The range is 80/81.05% WA.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "81.05% is reported. WA is another metric.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "81.05% is reported, WA is another metric.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "81.05 pp WA is reported.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "0.8105 WA is reported.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "81.05 WA is reported.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "The model does not achieve 81.05% WA.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "No 81.05% WA was reported.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "未达到81.05% WA。",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "WA is unknown; 81.05% UA is reported.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "The sample ID is X81.05% WA.",
+      "header": "WA (%)",
+      "value": "81.05",
+      "expected": false
+    },
+    {
+      "quote": "Latency is 1.2 ms for A.",
+      "header": "Latency (ms)",
+      "value": "1.2",
+      "expected": true
+    },
+    {
+      "quote": "1.2 ms latency is reported.",
+      "header": "Latency (ms)",
+      "value": "1.2",
+      "expected": true
+    },
+    {
+      "quote": "1.2 s latency is reported.",
+      "header": "Latency (ms)",
+      "value": "1.2",
+      "expected": false
+    },
+    {
+      "quote": "Latency 0.0012 s is reported.",
+      "header": "Latency (ms)",
+      "value": "1.2",
+      "expected": false
+    },
+    {
+      "quote": "Overhead is 1.2 ms and latency is 1.2 s.",
+      "header": "Latency (ms)",
+      "value": "1.2",
+      "expected": false
+    }
+  ],
+  "real": [
+    {
+      "id": "2610.18587",
+      "table": {
+        "header": [
+          "模型",
+          "WA (%)",
+          "UA (%)",
+          "相对基线的WA增益",
+          "相对基线的UA增益"
+        ],
+        "rows": [
+          [
+            "MemoCMT(reproduced)",
+            "81.05",
+            "81.33",
+            "–",
+            "–"
+          ],
+          [
+            "+EuclFusion",
+            "81.95",
+            "82.38",
+            "0.90%",
+            "1.05%"
+          ],
+          [
+            "GeoMER (+HypGeoRoute)",
+            "83.54",
+            "83.35",
+            "2.49%",
+            "2.02%"
+          ]
+        ]
+      },
+      "quotes": [
+        "Table 3 presents the ablation results of the proposed components on the IEMOCAP benchmark. Based on the MemoCMT baseline (81.05% WA and 81.33% UA), adding the Euclidean Multimodal Fusion Module (EuclFusion) improves the performance to 81.95% WA and 82.38% UA.",
+        "This corresponds to an improvement of 0.90% in WA and 1.05% in UA, demonstrating that enhanced cross-modal interaction can effectively improve emotion representation learning.",
+        "When the Hyperbolic Geometric Core Routing (HypGeoRoute) module is further incorporated, the full GeoMER model achieves the best performance with 83.54% WA and 83.35% UA.",
+        "Compared with the MemoCMT baseline, the proposed method improves WA by 2.49% and UA by 2.02%.",
+        "Table 3: Ablation study of different components on IEMOCAP (4-class). WA, UA, and Macro-F1 denote weighted accuracy, unweighted accuracy, and macro-averaged F1-score, respectively."
+      ],
+      "quoteOnlyResolved": true,
+      "sourceProof": {
+        "sourceFiles": {
+          "source.txt": "730b55a35656678f1420a2c419adda2c6e781eb46a479e830c9e1de424f000b4",
+          "source.pdf": "0153a15f057e748f769f38b56c2ca27c254e963c968b7b14d4c67c3395312f4d",
+          "source-runtime.json": "01b6b42a329039f84991695b081e6264e2c4f30ff49559049a4f8f89907737db",
+          "source-manifest.json": "01e2d6c810e6a6ed194fbc326556408a4d5c428399167bff43594722e315604b"
+        },
+        "sourceDomTables": [
+          {
+            "ordinal": 1,
+            "sourceDomSha256": "a6c5a232365304f500b912137c5ae7da03cde1226fa97790be0b21002f83c947"
+          },
+          {
+            "ordinal": 2,
+            "sourceDomSha256": "66537d90faaf7b53f5eada4ff5c284176c76fe3822db1aa29bac2093eb05f79d"
+          },
+          {
+            "ordinal": 3,
+            "sourceDomSha256": "6f68132f64e3dca1453a959b28f251dbe22a0379ef2e8e3fa2fad07750ecec6b"
+          }
+        ]
+      }
+    },
+    {
+      "id": "2610.14673",
+      "table": {
+        "header": [
+          "Method",
+          "Venue",
+          "Pretraining",
+          "Input",
+          "mAP (%)"
+        ],
+        "rows": [
+          [
+            "PaSST-S [20]",
+            "Interspeech’22",
+            "Img.+AudioSet",
+            "A",
+            "65.30"
+          ],
+          [
+            "TFECN [21]",
+            "Interspeech’23",
+            "Img.+AudioSet",
+            "A",
+            "67.29"
+          ],
+          [
+            "MN (α = 3.0) [22]",
+            "TASLP’24",
+            "AudioSet",
+            "A",
+            "65.60"
+          ],
+          [
+            "DyMN-L [22]",
+            "TASLP’24",
+            "AudioSet",
+            "A",
+            "65.50"
+          ],
+          [
+            "FAM-Gate",
+            "Ours",
+            "LAION-CLAP",
+            "A+M",
+            "74.98±0.23"
+          ]
+        ]
+      },
+      "quotes": [
+        "Table 1: Comparison with representative published systems on the official FSD50K evaluation set. Input modalities: A (Audio), M (Uploader-provided metadata)."
+      ],
+      "quoteOnlyResolved": false,
+      "sourceProof": {
+        "sourceFiles": {
+          "source.txt": "0e457300cb263c4e8d325fcc05e9af08c5727fc8b40b8151a1fca03f50483f4b",
+          "source.pdf": "9260417d325ee6964c09a9be52a8ca248ef692c0bfa3eb100540fe9ba2b400a3",
+          "source-runtime.json": "2c21b1d4e3cbf8fa3c42c59ed57ab8db6d9b5b92f4589233588e74f0b15f0c7c",
+          "source-manifest.json": "3668ca21fe8e910acbedd46df82df9bcd72c4eef96143d45e7fa7743507e3791"
+        },
+        "sourceDomTables": [
+          {
+            "ordinal": 1,
+            "sourceDomSha256": "86e61f3c937b4683e73734e0fdc4a2a29926e8985369c9bc8add8675e18879f8"
+          },
+          {
+            "ordinal": 2,
+            "sourceDomSha256": "80481cddcf47bf0a321dd99acc14723e348ae8d3b29a00aaa25a59072c72044d"
+          }
+        ]
+      }
+    },
+    {
+      "id": "2610.17838",
+      "table": {
+        "header": [
+          "Method",
+          "WER (%) ↓",
+          "SIM ↑",
+          "t ↓",
+          "vs. SFT"
+        ],
+        "rows": [
+          [
+            "Zero-shot (ICL)",
+            "3.7",
+            "0.574",
+            "–",
+            "–"
+          ],
+          [
+            "SFT",
+            "18.2",
+            "0.536",
+            "5.8",
+            "1.0×"
+          ],
+          [
+            "SFT-LoRA",
+            "35.0",
+            "0.462",
+            "5.8",
+            "1.0×"
+          ],
+          [
+            "SFT-ZSD",
+            "8.3",
+            "0.586",
+            "14.8",
+            "2.6×"
+          ],
+          [
+            "OPSD-RO",
+            "4.9",
+            "0.608",
+            "35.3",
+            "6.1×"
+          ],
+          [
+            "OPSD-TA",
+            "3.7",
+            "0.609",
+            "33.8",
+            "5.8×"
+          ],
+          [
+            "GRPO",
+            "3.0",
+            "0.647",
+            "262.2",
+            "45.2×"
+          ]
+        ]
+      },
+      "quotes": [
+        "Table 1: One-shot personalization results with LLaSA-1B on Seed-TTS-Eval.\nSFT-ZSD denotes Zero-Shot Distilled SFT; tt denotes the adaptation time measured per training step in seconds, and vs. SFT reports the ratio of tt relative to SFT.",
+        "Method\nWER (%) ↓\\downarrow\nSIM ↑\\uparrow\nt↓t\\downarrow\nvs. SFT\nZero-shot (ICL)\n3.7\n0.574\n–\n–\nSFT\n18.2\n0.536\n005.8\n1.0×\\times\nSFT-LoRA\n35.0\n0.462\n005.8\n1.0×\\times\nSFT-ZSD\n08.3\n0.586\n014.8\n2.6×\\times\nOPSD-RO\n04.9\n0.608\n035.3\n6.1×\\times\nOPSD-TA\n03.7\n0.609\n033.8\n5.8×\\times\nGRPO\n03.0\n0.647\n262.2\n45.2×\\times"
+      ],
+      "quoteOnlyResolved": false,
+      "sourceProof": {
+        "sourceFiles": {
+          "source.txt": "7df7d349eb616cf681751a8b9101dc08165a360af7aa4f5f937d7e3d9700d022",
+          "source.pdf": "e7bd3a520460cdc24a72fb9c59c224367c5101037b467d59cd3e8fc00b228150",
+          "source-runtime.json": "0658f9000a92a76f963a5eea7fdee703ab10da0524c36a6759b52e44a53d4b3b",
+          "source-manifest.json": "46323c640039723cd5a8e7f80025cb4f9cd02dcafa8d027e6b0e74e2700300dd"
+        },
+        "sourceDomTables": [
+          {
+            "ordinal": 1,
+            "sourceDomSha256": "504c686ad5230741498b8696f4137d6b4cfc3641dd7cced148cbe6a9cb4e3c9b"
+          },
+          {
+            "ordinal": 2,
+            "sourceDomSha256": "e02cf0baac8c43b347bb351d0fea819d75a4bf7a7839f129e20feca4977f3bda"
+          },
+          {
+            "ordinal": 3,
+            "sourceDomSha256": "af112468c861bcf3672ce1f50d99d6531bf9216c6828e0bbde40a5080691e54c"
+          }
+        ]
+      }
+    },
+    {
+      "id": "2610.16338",
+      "table": {
+        "header": [
+          "Method",
+          "Speech Spearman (ρ×100)",
+          "Speech Pair Acc (%)",
+          "Ambient Spearman (ρ×100)",
+          "Ambient Pair Acc (%)",
+          "Params"
+        ],
+        "rows": [
+          [
+            "AV-Align",
+            "4.4",
+            "51.8",
+            "15.3",
+            "55.9",
+            "–"
+          ],
+          [
+            "Qwen3-Omni-30B-A3B-FT",
+            "69.5",
+            "79.4",
+            "77.2",
+            "82.9",
+            "30BA3B"
+          ],
+          [
+            "SyncReward",
+            "79.7",
+            "85.1",
+            "82.1",
+            "85.9",
+            "1.6B"
+          ]
+        ]
+      },
+      "quotes": [
+        "Table 1: SyncReward as\na metric. We report Spearman’s rank correlation (ρ×100\\rho\\times 100) and pairwise\nranking accuracy (Pair Acc., %) for four on-screen sound categories: Speech, Onset, Instrument, and\nAmbient.",
+        "AV-Align (Yariv et al., 2024)\n–\n4.4\n51.8\n7.0\n47.3\n14.9\n43.2\n15.3\n55.9",
+        "Qwen3-Omni-30B-A3B-FT\n30BA3B\n69.5\n79.4\n68.6\n78.8\n64.7\n77.1\n77.2\n82.9",
+        "SyncReward\n1.6B\n79.7\n85.1\n70.5\n79.9\n68.1\n79.3\n82.1\n85.9"
+      ],
+      "quoteOnlyResolved": false,
+      "sourceProof": {
+        "sourceFiles": {
+          "source.txt": "bc85a1b7100254fb4240a2afe819ea18ed8059b03ddc761d59e953e5244cd4bd",
+          "source.pdf": "e50f69f72fbcfc38318e117cb3e0c612f28f738686698a87d3f4bd23860fc933",
+          "source-runtime.json": "d88dd141a524d8c353fe72cd8f721ac4f528ba8a9db86200156ed63432952936",
+          "source-manifest.json": "a3b42aae9348b84ba82125959e6e1262d0c37c993cfac8649c36834574acc176"
+        },
+        "sourceDomTables": [
+          {
+            "ordinal": 1,
+            "sourceDomSha256": "2cf8b0b2da26ffa0bbb1a5d5353f7a763e76a046d90649c728b61400538977fe"
+          },
+          {
+            "ordinal": 2,
+            "sourceDomSha256": "98ec8638c811b677dfd72d482c30c00ba77250807bc57011cd0f0efa2d36d369"
+          },
+          {
+            "ordinal": 3,
+            "sourceDomSha256": "63944c8f2ee204803d1b21e3832278ec1a98116ac4ce6df6b5dc1392a840ee9c"
+          },
+          {
+            "ordinal": 4,
+            "sourceDomSha256": "855dd3a7354f5c4cd31b6687a49ef93d8c01e57198300defa4bc76489d680b20"
+          },
+          {
+            "ordinal": 5,
+            "sourceDomSha256": "0f99aff4b369769e5020ac5df1a34c94a288ec2e36872069c022ea035f304cdf"
+          },
+          {
+            "ordinal": 6,
+            "sourceDomSha256": "4e3944b085d9a6e9ec6acd6b150bcc0b141787de8f0d942885fc75ccd3e1102f"
+          },
+          {
+            "ordinal": 7,
+            "sourceDomSha256": "d8638cc9e951fd96260aff91266eef96fd951e7e54cfc88cd915ad6465aed6f3"
+          }
+        ]
+      }
+    }
+  ]
+}

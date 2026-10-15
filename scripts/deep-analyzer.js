@@ -2110,8 +2110,29 @@ function readerSourceQuoteCoversNumericToken(token, quoteCorpus, allowSplitUnit 
 
 // 列头单位也是数值含义的一部分。只有单元格里出现数值、原文却没有对应单位时，
 // 不能因数字相同就把比率显示成百分数，或把秒显示成毫秒。
+function readerAdjacentMetricUnitEvidence(quote, metric, value, unit) {
+    const surface = text => String(text || '').normalize('NFKC').toLowerCase()
+        .replace(/[`*_↑↓]/g, '').replace(/\s+/g, ' ').trim();
+    const escape = text => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const name = surface(metric).split(/\s+/).map(escape).join('\\s+');
+    if (!name) return false;
+    const quantity = `${escape(value)}\\s*${escape(unit)}`;
+    // Exact metric + same literal value/unit; no aliases, conversion, range
+    // endpoint extraction, cross-clause borrowing or neighboring metric unit.
+    const adjacent = new RegExp(`(?<![a-z0-9_.+−－–—/\\-])(?:${quantity}\\s+${name}|${name}(?![a-z0-9_])\\s*(?:(?:is|was|为|是|=|:)\\s*)?${quantity})(?![a-z0-9_%])`, 'i');
+    return String(quote || '').normalize('NFKC')
+        .split(/(?<!\d)[.!?;。！？；\n]|[.!?](?!\d)|[,，]/).some(clause => {
+            const text = surface(clause);
+            if (/\b(?:not|no|never|unavailable|unknown|missing)\b|未报告|未提供|不可得|未知|没有|并非|不是|未达到|不等于|不超过/.test(text)) return false;
+            return adjacent.test(text);
+        });
+}
+
 function readerTableHeaderUnitEvidenceFailures(table, sourceQuotes) {
-    const pdfColumns = require('./lib/reader-sealed-pdf-column-units').coverage(table, sourceQuotes);
+    const pdfColumns = [
+        ...require('./lib/reader-sealed-pdf-column-units').coverage(table, sourceQuotes),
+        ...require('./lib/reader-source-table-column-units').coverage(table, sourceQuotes)
+    ];
     const quotes = sourceQuotes.map(item => typeof item === 'string' ? item : item?.quote)
         .filter(value => typeof value === 'string');
     const surface = value => String(value || '').normalize('NFKC').toLowerCase()
@@ -2134,7 +2155,7 @@ function readerTableHeaderUnitEvidenceFailures(table, sourceQuotes) {
                 const unitConsistent = !number[2] || number[2].toLowerCase() === unit;
                 // 已显式写单位的单元格继续由既有数字引文规则核验；这里不改变其 PDF 拆单位兼容。
                 // 裸值只认可同句中指标单位声明后的第一个数值，不能跨句借另一方法或指标的单位。
-                const covered = unitConsistent && (Boolean(number[2]) || (metric && quotes.some(quote => (
+                const covered = unitConsistent && (Boolean(number[2]) || quotes.some(quote => readerAdjacentMetricUnitEvidence(quote, surface(match[1]), number[1], unit)) || (metric && quotes.some(quote => (
                     String(quote).normalize('NFKC').split(/(?<!\d)[.!?;。！？；\n]|[.!?](?!\d)/).some(sentence => {
                         const text = surface(sentence);
                         return [...text.matchAll(declaredUnit)].some(declared => {
@@ -8019,6 +8040,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-source-metric-units.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-pdf-quote-evidence.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-pdf-column-units.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-source-table-column-units.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_sealed_pdf_column_units.py'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_sealed_pdf_quote_evidence.py'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-source-blocked-normalization.js'), 'utf8'),

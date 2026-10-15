@@ -1106,6 +1106,22 @@ function findTechnicalTermAdhesions(text) {
         });
 }
 
+function maskBoundMetricDeltaIntervals(text) {
+    // Only an immediately bound pp estimate can give its own CI endpoints units.
+    // Leave every other number in place for the ordinary missing-unit check.
+    const number = '[-+]?\\d+(?:\\.\\d+)?';
+    const interval = `(?:[，,]\\s*(?:置信区间|区间)(?:为|是)?\\s*(${number})\\s*(?:到|至|[–—])\\s*(${number})|\\s*\\[\\s*(${number})\\s*[,，]\\s*(${number})\\s*\\])`;
+    const pattern = new RegExp(`(?:${PERCENT_METRICS_RE.source})(?:平均|总体)?(?:提高|提升|增加|降低|减少|下降)(?:了|约)?\\s*(${number})\\s*(?:pp|个百分点|百分比点)(?![A-Za-z])\\s*${interval}(?=\\s*(?:[，,。；;！？!?]|$))`, 'giu');
+    return String(text || '').replace(pattern, (match, estimate, a, b, c, d, index, whole) => {
+        const prefix = whole.slice(0, index).split(/[；;。！？!?\n]/u).at(-1);
+        if (/(?:假设|如果|预计|预期|可能|计划|未来|并非|不是|不代表|并未|未报告|未测|没有)/u.test(prefix)) return match;
+        const [point, low, high] = [estimate, a ?? c, b ?? d].map(Number);
+        if (![point, low, high].every(Number.isFinite) || point < 0 || point > 100
+            || low < -100 || high > 100 || low >= high || point < low || point > high) return match;
+        return ' '.repeat(match.length);
+    });
+}
+
 function findMissingComparisonUnits(text) {
     const value = stripCodeLinksAndUrls(text)
         // 否则「一对一分配」会被读成两个数值后面跟一个「分」。
@@ -1153,7 +1169,7 @@ function findMissingComparisonUnits(text) {
         const parameterRanges = [...sentence.text.matchAll(
             /([λε])\s*在\s*[-+]?\d+(?:\.\d+)?\s*(?:到|至)\s*[-+]?\d+(?:\.\d+)?\s*之间/gu
         )];
-        let comparisonText = sentence.text;
+        let comparisonText = maskBoundMetricDeltaIntervals(sentence.text);
         // NFE 的显式取值集合与同句展开步数 K 是设置条件。
         // 只屏蔽完整表达式，不能把同句裸露的 WER/CER 结果一并当作参数。
         const hasExplicitNfeSettings = /\bNFE\s*(?:∈|in\b|=)\s*\{\s*\d+(?:\s*[,，]\s*\d+)*\s*\}/iu.test(comparisonText);
@@ -1908,6 +1924,7 @@ module.exports = {
     findDefensiveNegationSaturation,
     findTechnicalTermAdhesions,
     findMissingComparisonUnits,
+    maskBoundMetricDeltaIntervals,
     findBatchTemplateReuse,
     validateReadabilityRubric,
     numericLexemes,
