@@ -4628,7 +4628,31 @@ def _has_natural_scoped_boundary(summary):
 
 
 
+def _has_conditional_metric_delta_direction(sentence, metric_pattern):
+    if re.search(r'(?:假设|假想|如果|可能|预计|计划|未来|并非|并未|未报告|未测|没有观察到)', sentence):
+        return False
+    pattern = re.compile(r'(?:准确率|正确率|错误率|词错率|(?<![A-Za-z0-9_])(?:WER|EER|UAR|accuracy)(?![A-Za-z0-9_]))(?:差|差值|差距)?在([^，,。；;]{1,60}?)(?:时|条件下)比([^，,。；;]{1,60}?)(?:时|条件下)(?:平均|总体)?(?:高|低)(?:了|出)?\s*(\d+(?:\.\d+)?)\s*(?:个百分点|百分比点|pp)(?![A-Za-z])', re.I)
+    return any(match[1].strip() != match[2].strip() and float(match[3]) > 0
+               and not metric_pattern.search(match[1] + match[2]) for match in pattern.finditer(sentence))
+
+
+def _has_generated_input_model_head_chain(summary):
+    sentences = [text.strip() for text in re.split(r'[。！？!?；;\n]', str(summary or '')) if text.strip()]
+    denied = re.compile(r'(?:并非|并未|没有|不能|尚未|未曾|假设|如果|可能|计划|未来|讨论|提及|独立方法|无关|相关工作)|(?:不|未)(?:曾|实际|直接|真正|再|会|能)*(?:送给|送入|生成|形成|作为|输出|预测)')
+    for first, second in zip(sentences, sentences[1:]):
+        if len(first) > 320 or len(second) > 320 or denied.search(first) or denied.search(second):
+            continue
+        if not re.search(r'(?:生成|构造|形成)[^。]{1,100}(?:流|序列|样本|查询)[^。]{0,120}(?:特征|表示)[^。]{0,50}作为模型输入', first):
+            continue
+        handoff = re.search(r'^(?:该|此)输入(?:送给|送入)([^，,。]{1,100})[，,]\s*(?:模型输出|其输出)(?:再|随后)?(?:送给|送入|送)[^，,。]{1,60}分类器(?:预测|输出|判别)[^，,。]{1,50}', second)
+        if handoff and re.search(r'(?:模型|网络|记忆|注意力)', handoff[1]):
+            return True
+    return False
+
+
 def _has_explicit_natural_product_chain(summary):
+    if _has_generated_input_model_head_chain(summary):
+        return True
     if _has_explicit_artifact_handoff(summary):
         return True
     if _has_concrete_product_handoff(summary):
@@ -4801,7 +4825,7 @@ def _detailed_core_summary_semantic_issue(summary):
             metric_sentence,
         )
         numbers = number.findall(numeric_result_sentence)
-        has_direction = comparison.search(result_sentence) or _has_bound_former_latter_comparison(result_sentence, metric) or (
+        has_direction = _has_conditional_metric_delta_direction(result_sentence, metric) or comparison.search(result_sentence) or _has_bound_former_latter_comparison(result_sentence, metric) or (
             len(numbers) >= 2 and baseline_transition.search(result_sentence)
         )
         narrow_measured_result = _has_recorded_dissonance_comparison(result_sentence) or _has_mean_room_simulation_comparison(result_sentence)

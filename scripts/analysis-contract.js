@@ -1326,12 +1326,25 @@ function hasBoundFormerLatterComparison(sentence) {
     return direction === '更低' ? left < right : left > right;
 }
 
+function hasConditionalMetricDeltaDirection(sentence) {
+    // One named rate, two explicit conditions, and a measured percentage-point
+    // delta in the same clause. Bare higher/lower or model-size changes fail.
+    if (/(?:假设|假想|如果|可能|预计|计划|未来|并非|并未|未报告|未测|没有观察到)/u.test(sentence)) return false;
+    const pattern = /(?:准确率|正确率|错误率|词错率|(?<![A-Za-z0-9_])(?:WER|EER|UAR|accuracy)(?![A-Za-z0-9_]))(?:差|差值|差距)?在([^，,。；;]{1,60}?)(?:时|条件下)比([^，,。；;]{1,60}?)(?:时|条件下)(?:平均|总体)?(?:高|低)(?:了|出)?\s*(\d+(?:\.\d+)?)\s*(?:个百分点|百分比点|pp)(?![A-Za-z])/giu;
+    for (const match of sentence.matchAll(pattern)) {
+        if (match[1].trim() === match[2].trim() || Number(match[3]) <= 0
+            || CORE_SUMMARY_METRIC_PATTERN.test(match[1] + match[2])) continue;
+        return true;
+    }
+    return false;
+}
+
 function hasCoreSummaryComparisonDirection(sentence, numbers) {
     // 示意图里的 "from inputs to outputs" 是映射关系，不是实测提升。
     // 数字上的变化必须写明起始值。
     const directionSurface = sentence.replace(/\bfrom\b([^。！？!?]{0,50})\bto\b/gi,
         (match, between) => /\d/.test(between) ? match : ' ');
-    if (hasBoundFormerLatterComparison(sentence) || CORE_SUMMARY_COMPARISON_PATTERN.test(directionSurface)
+    if (hasConditionalMetricDeltaDirection(sentence) || hasBoundFormerLatterComparison(sentence) || CORE_SUMMARY_COMPARISON_PATTERN.test(directionSurface)
         || /(?:从|由)[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)/.test(sentence)) return true;
     // 比字比较的指标必须和高/低差值处在同一分句，且紧邻比较关系。
     // 指标在左侧时，右侧须以明确比较对象结尾，避免借别处的 UAR 给参数量差背书。
@@ -1819,7 +1832,21 @@ function hasNaturalScopedBoundary(summary) {
 }
 
 
+function hasGeneratedInputModelHeadChain(summary) {
+    const sentences = String(summary || '').split(/[。！？!?；;\n]/u).map(text => text.trim()).filter(Boolean);
+    const denied = /(?:并非|并未|没有|不能|尚未|未曾|假设|如果|可能|计划|未来|讨论|提及|独立方法|无关|相关工作)|(?:不|未)(?:曾|实际|直接|真正|再|会|能)*(?:送给|送入|生成|形成|作为|输出|预测)/u;
+    for (let index = 0; index + 1 < sentences.length; index++) {
+        const first = sentences[index], second = sentences[index + 1];
+        if (first.length > 320 || second.length > 320 || denied.test(first) || denied.test(second)) continue;
+        if (!/(?:生成|构造|形成)[^。]{1,100}(?:流|序列|样本|查询)[^。]{0,120}(?:特征|表示)[^。]{0,50}作为模型输入/u.test(first)) continue;
+        const handoff = /^(?:该|此)输入(?:送给|送入)([^，,。]{1,100})[，,]\s*(?:模型输出|其输出)(?:再|随后)?(?:送给|送入|送)[^，,。]{1,60}分类器(?:预测|输出|判别)[^，,。]{1,50}/u.exec(second);
+        if (handoff && /(?:模型|网络|记忆|注意力)/u.test(handoff[1])) return true;
+    }
+    return false;
+}
+
 function hasExplicitNaturalProductChain(summary) {
+    if (hasGeneratedInputModelHeadChain(summary)) return true;
     if (hasExplicitArtifactHandoff(summary)) return true;
     if (hasConcreteProductHandoff(summary)) return true;
     if (hasPosteriorUpdateProductChain(summary)) return true;
@@ -3352,6 +3379,7 @@ module.exports = {
     hasExplicitNaturalProductChain,
     hasConcreteProductHandoff,
     hasExplicitArtifactHandoff,
+    hasConditionalMetricDeltaDirection, hasGeneratedInputModelHeadChain,
     hasNaturalScopedBoundary,
     hasBoundFormerLatterComparison,
     stripSymbolicPatternRelation,

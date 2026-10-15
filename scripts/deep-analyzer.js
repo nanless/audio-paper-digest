@@ -4490,6 +4490,51 @@ function readerResourceClaimIssues(draft, identity, sourceText) {
         /(?:论文(?:称|说|声明)|原文(?:称|说|声明))/.test(value)
         && /(?:本次[^。！？!?；;]{0,80}(?:当前不可达|当前不可用|未能确认|未確認)|动手前[^。！？!?；;]{0,20}先核对当前可用性)/.test(value)
         && !/(?:但|然而|不过|事实上)[^。！？!?；;，,]{0,24}(?:本文|本研究|本工作|作者团队)[^。！？!?；;，,]{0,24}(?:已|现已|已经)(?:开源|公开|发布)/.test(value);
+    const isSourceBackedDependencyUseOrPriorDatasetAccess = (value, type, matchIndex) => {
+        if (!Number.isInteger(matchIndex)) return false;
+        const source = String(sourceText || '')
+            .replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, ' ')
+            .replace(/^[ \t]*>.*$/gm, ' ')
+            .replace(/“[^”]*”|「[^」]*」|"[^"\n]*"/g, ' ')
+            .replace(/\s+/g, ' ');
+        const contains = span => matchIndex >= span.index && matchIndex < span.index + span[0].length;
+        if (type === 'model') {
+            // Source explicitly describes three cited, frozen encoder/decoder
+            // dependencies; bind the translated feature rates/dimensions too.
+            const priorPairs = /\bon three encoder\/decoder pairs\b[^.]{0,100}\.\s+The first\b[\s\S]{0,600}?\[\d+\][\s\S]{0,600}?\bThe second\b[\s\S]{0,600}?\[\d+\][\s\S]{0,600}?\bThe third\b[\s\S]{0,300}?\[\d+\]/i;
+            if (!priorPairs.test(source)) return false;
+            const properties = source.match(/\bThe log-mel encoder runs at (\d+) frames per second with d=(\d+)(?:d=\2)?; the other two operate at (\d+(?:\.\d+)?)\s*kHz and produce (\d+) frames per second with d=(\d+)(?:d=\5)?\. All three are used at their published weights, without fine-tuning\./i);
+            if (!properties) return false;
+            const escaped = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const [rate, width, sampleRate, otherRate, otherWidth] = properties.slice(1).map(escaped);
+            const use = new RegExp(`^(?:对数梅尔|log-mel)编码器每秒${rate}帧、维度${width}，另两种在${sampleRate}\\s*kHz下每秒${otherRate}帧、维度${otherWidth}，(?:都|均)(?:使用|用|采用)已发布权重(?:且)?(?:不|未)微调`, 'iu').exec(value);
+            return Boolean(use && contains(use));
+        }
+        if (type !== 'dataset') return false;
+        // Only the cited, pre-existing corpus's geographically restricted
+        // access span is exempt. The next author/current positive is separate.
+        const related = source.match(/\bRelated Work\b[\s\S]{0,5000}?\b(?:Two|Three|Several|Existing)\s+[A-Za-z -]{0,60}corpora exist but with limited utility:\s+a nationally funded\s+([^.[\]]{1,80})dataset\s*\[\d+\]\s+is accessible only within\s+([A-Za-z -]{1,40})\s+and\b/i);
+        if (!related) return false;
+        // Geographic translation aliases, not paper/model identifiers.
+        const regions = { Korea: '韩国', China: '中国', Japan: '日本' };
+        const region = regions[related[2].trim()];
+        if (!region) return false;
+        const pattern = new RegExp(`(?:国内|国家)资助的([^。！？!?；;，,]{1,24})数据集仅在${region}境内可访问`, 'gu');
+        for (const prior of value.matchAll(pattern)) {
+            if (!contains(prior)) continue;
+            const prefix = value.slice(0, prior.index).split(/[。！？!?；;，,]/u).at(-1);
+            if (/(?:本文|本论文|本研究|本工作|作者团队|论文作者|我们|自建|新建|自有|新发布)/u.test(prefix + prior[1])) continue;
+            // Exact same source noun phrase, or a small terminology translation
+            // lexicon (music genres, never paper/model/resource identifiers).
+            const sourceNoun = related[1].trim().toLowerCase();
+            const nounAliases = { gugak: ['国乐'], 'folk music': ['民间音乐'], 'traditional music': ['传统音乐'] };
+            if (prior[1].trim().toLowerCase() !== sourceNoun
+                && !(nounAliases[sourceNoun] || []).includes(prior[1].trim())) continue;
+            return true;
+        }
+        return false;
+    };
+
     const isSourceBackedBaselineUsage = (value, type, matchIndex) => {
         if (type !== 'model') return false;
         const source = String(sourceText || '').replace(/\s+/g, ' ');
@@ -4646,6 +4691,7 @@ function readerResourceClaimIssues(draft, identity, sourceText) {
                 || isDependencyResourceAttribution(segment, localMatchIndex, type)
                 || isScopedResourceNonClaim(segment, localMatchIndex, type)
                 || isReportedReleaseWithCurrentQualification(value)
+                || isSourceBackedDependencyUseOrPriorDatasetAccess(value, type, match.index)
                 || isSourceBackedBaselineUsage(value, type, match.index)
                 || isSourceBackedPriorModelEvaluation(value, type, match.index)
                 || isPostfixedNonEquivalence(
