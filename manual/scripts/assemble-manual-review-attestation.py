@@ -88,7 +88,9 @@ def main():
         output_path = module.manual_review_statement_path(date)
         manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
         module._validate_active_publication_scope(manifest)
-        expected = {item['path']: item for item in manifest['files']}
+        page_records, _asset_records = module.manual_review_manifest_partition(manifest, date)
+        machine_assets = module.manual_review_machine_assets(manifest, date)
+        expected = {item['path']: item for item in page_records}
         shards = {}
         for path in shard_dir.glob('*.json'):
             item = json.loads(path.read_text(encoding='utf-8'))
@@ -201,6 +203,8 @@ def main():
         },
         'files': files,
     }
+    if machine_assets is not None:
+        payload['machineAssets'] = machine_assets
     if manifest.get('publicationScope') is not None:
         payload['publicationScope'] = manifest['publicationScope']
     atomic_write_json(output_path, payload, mode=0o600)

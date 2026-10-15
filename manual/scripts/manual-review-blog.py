@@ -64,7 +64,7 @@ def _parse_args(module, argv=None):
     )
 
 
-def _load_review_statement(path):
+def _load_review_statement(path, *, local_image_validator=None):
     try:
         raw = path.read_bytes()
         payload = json.loads(raw.decode('utf-8'))
@@ -92,6 +92,24 @@ def _load_review_statement(path):
         raise ValueError('人工审查声明必须完整列出规定的八项检查，不能缺项或增加其他项。')
     if any(checks.get(key) is not True for key in required):
         raise ValueError('人工审查声明中的八项检查结果必须全部为 true。')
+    if 'machineAssets' in payload:
+        machine = payload['machineAssets']
+        if (payload.get('version') != 4 or not isinstance(machine, dict)
+                or set(machine) != {'contract', 'files'}
+                or machine.get('contract') != 'manual-review-controlled-assets-v1'
+                or not isinstance(machine.get('files'), list) or not machine['files']):
+            raise ValueError('人工机器资产证明的版本或结构无效。')
+        seen_assets = set()
+        for item in machine['files']:
+            relative = item.get('path') if isinstance(item, dict) else None
+            if (not isinstance(item, dict) or set(item) != {'path', 'deleted', 'sha256'}
+                    or not isinstance(relative, str) or Path(relative).is_absolute()
+                    or '..' in Path(relative).parts or '\\' in relative
+                    or relative.startswith('content/posts/') or relative in seen_assets
+                    or item.get('deleted') is not False
+                    or not re.fullmatch(r'[a-f0-9]{64}', str(item.get('sha256') or ''))):
+                raise ValueError('人工机器资产记录的路径、SHA、删除状态或字段无效。')
+            seen_assets.add(relative)
     files = payload.get('files')
     file_checks = {
         'titleAndMetadata', 'technicalNarrative', 'factualClaims',
@@ -183,7 +201,8 @@ def _load_review_statement(path):
                         'mobileReadable', 'visibleFacts', 'notes',
                     }
                     or not isinstance(finding.get('url'), str)
-                    or not finding['url'].startswith('https://')
+                    or not (finding['url'].startswith('https://') or (
+                        local_image_validator is not None and local_image_validator(finding['url'])))
                     or any(finding.get(key) is not True for key in (
                         'captionVerified', 'adjacentNarrativeVerified', 'mobileReadable',
                     ))
@@ -195,7 +214,7 @@ def _load_review_statement(path):
                     or len(finding['notes'].strip()) < 20):
                 raise ValueError(
                     f'文件审查记录 files[{index}] 中的图片审查记录 imageFindings[{finding_index}] '
-                    '格式无效，或未按要求记录 HTTPS 地址、检查结果、可见事实和审查说明。'
+                    '格式无效，或未按要求记录 HTTPS/受控站内原图、检查结果、可见事实和审查说明。'
                 )
         normalized_notes = re.sub(r'[\W_]+', '', item['notes'], flags=re.UNICODE).casefold()
         if normalized_notes in seen_notes:
@@ -370,7 +389,10 @@ def _run(module, date_str, review_statement_path):
         raise module.PublishDataValidationError(
             '本次生成结果已有发布记录，但未通过严格复核，不能覆盖原发布凭证。'
         )
-    review_statement, review_statement_sha256 = _load_review_statement(review_statement_path)
+    review_statement, review_statement_sha256 = _load_review_statement(
+        review_statement_path, local_image_validator=lambda url: module.is_manual_local_image_url(
+            url, manifest_path, date_str),
+    )
     try:
         generation_payload = json.loads(Path(manifest_path).read_text(encoding='utf-8'))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -390,6 +412,9 @@ def _run(module, date_str, review_statement_path):
                     f'生成清单中的论文记录包含重复的 arXiv ID：{paper_id}'
                 )
             authoritative_by_id[paper_id] = paper
+    page_records, _asset_records = module.manual_review_manifest_partition(generation_payload, date_str)
+    if review_statement.get('machineAssets') != module.manual_review_machine_assets(generation_payload, date_str):
+        raise module.PublishDataValidationError('人工声明的机器资产分区与正式生成清单不一致。')
     expected_attested = {}
     for item in review_statement['files']:
         expected_attested[item['path']] = item
@@ -402,13 +427,16 @@ def _run(module, date_str, review_statement_path):
         except ValueError as exc:
             raise module.PublishDataValidationError(f'生成清单中的文件不在博客仓库内：{resolved}') from exc
         actual_paths[relative] = resolved
-    if set(expected_attested) != set(actual_paths):
-        missing = sorted(set(actual_paths) - set(expected_attested))
-        extra = sorted(set(expected_attested) - set(actual_paths))
+    page_names = {item['path'] for item in page_records}
+    actual_pages = {relative: path for relative, path in actual_paths.items() if relative in page_names}
+    page_paths = list(actual_pages.values())
+    if set(expected_attested) != set(actual_pages):
+        missing = sorted(set(actual_pages) - set(expected_attested))
+        extra = sorted(set(expected_attested) - set(actual_pages))
         raise module.PublishDataValidationError(
             f'人工审查声明中的文件集合与生成清单不一致：缺少 {missing or "-"}；多出 {extra or "-"}'
         )
-    for relative, resolved in actual_paths.items():
+    for relative, resolved in actual_pages.items():
         if 'cacheReuse' in expected_attested[relative]:
             module.validate_manual_cache_reuse(expected_attested[relative], date_str)
         deleted = deletion_expectations.get(relative)
@@ -430,7 +458,7 @@ def _run(module, date_str, review_statement_path):
         if _sha256(resolved) != item['sha256']:
             raise module.PublishDataValidationError(f'文件内容 SHA 与人工审查声明不一致：{relative}')
     _validate_file_specific_notes(
-        module, expected_attested, actual_paths, deletion_expectations, date_str,
+        module, expected_attested, actual_pages, deletion_expectations, date_str,
         require_subagent_images=review_statement.get('version') in (3, 4),
     )
 
@@ -438,7 +466,7 @@ def _run(module, date_str, review_statement_path):
     # 原声明便不能继续使用，必须回到生成阶段修正页面，再重新审查。
     fixes = []
     authoritative_by_filename = {}
-    for path in paths:
+    for path in page_paths:
         path = Path(path)
         if not path.is_file():
             continue
@@ -471,7 +499,7 @@ def _run(module, date_str, review_statement_path):
         content_dir, date_str, date_only=True, publish_paths=paths,
         authoritative_papers=authoritative_by_filename,
     )
-    checked_files = _semantic_checks(module, paths, date_str)
+    checked_files = _semantic_checks(module, page_paths, date_str)
     gate = module.run_hugo_gate(
         blog_repo, content_dir, required=True, source_paths=paths,
     )
@@ -482,7 +510,7 @@ def _run(module, date_str, review_statement_path):
 
     protocol = module.review_protocol_fingerprint()
     reviewed = {}
-    for path in paths:
+    for path in page_paths:
         path = Path(path).resolve()
         if not path.is_file():
             continue
@@ -495,6 +523,9 @@ def _run(module, date_str, review_statement_path):
             'imageReviewMode': (expected_attested[path.relative_to(Path(blog_repo).resolve()).as_posix()]
                 .get('cacheReuse', {}).get('record', {}).get('imageReviewMode', 'manual_semantic')),
         }
+    if module.attest_api_reader_assets(date_str, paths, manifest_path, reviewed):
+        raise module.PublishDataValidationError('受控资产未通过正常来源、附属文件或词表核验。')
+    module.validate_reviewed_file_hashes(date_str, paths, manifest_path, reviewed)
     if len(reviewed) != len([path for path in paths if Path(path).is_file()]):
         raise module.PublishDataValidationError('已审文件数量在凭证签发前发生变化。')
     manifest_sha = _sha256(manifest_path)

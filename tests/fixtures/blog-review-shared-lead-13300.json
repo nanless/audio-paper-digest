@@ -1,0 +1,9 @@
+{
+  "paperId": "2610.13300",
+  "originalPageSha256": "22971c0027d614988a44c62710737d819e932177f0e8c0a60158d24220b80c22",
+  "source": "real frozen reviewed Markdown and actual current image URLs; no manufactured production pass",
+  "content": "先看流式示意中颜色如何把声源、音频段与动作段绑定，再看长音频对比中长度与轨迹的差异，重点观察声源切换时运动是否连续。\n\n> **看图路径：** 1. 看顶部三段音频波形颜色与下方人体颜色的对应关系；2. 沿从紫到蓝到黄的人体快照观察声源切换时的运动过渡；3. 注意半透明带如何把音频段与对应动作段连接起来\n\n[![原论文 Figure 1：Streaming motion generation from spatial audio.](https://arxiv.org/html/2610.13300v1/teaser_image.png)](https://arxiv.org/html/2610.13300v1/teaser_image.png)\n\n*论文图 1。原论文 Figure 1:：“Streaming motion generation from spatial audio.”。*\n\n该图展示音乐到爆炸到鸟鸣 3 段事件下人体快照从紫到蓝到黄的连续过渡，半透明带把音频段与反应段相连，淡化姿态标出段间过渡，说明单模型无需新初始化即可跨事件连贯生成。顶部双耳波形按颜色分段，底部网格上根轨迹连续延伸，但长程连贯目前主要是定性证据。\n\n> **看图路径：** 1. 对比上下两行 MOSPA 只生成 8 秒与 Sonic-AMG 覆盖更长整段音频的长度；2. 观察每序列均匀采样的六个姿态中根轨迹红点的连续性；3. 注意声源标记与人体远离或转向动作的相对位置\n\n[![原论文 Figure 4：Reactions over the full audio duration.](https://arxiv.org/html/2610.13300v1/qualitative_full_audio.png)](https://arxiv.org/html/2610.13300v1/qualitative_full_audio.png)\n\n*论文图 4。原论文 Figure 4:：“Reactions over the full audio duration.”。*\n\n该图显示 MOSPA 只生成 8 秒而 Sonic-AMG 覆盖更长的完整音频，6 个姿态按各自时长均匀采样，根轨迹红点在本文方法中贯穿全程，支持姿态变化与位移随音频展开。紫色标记为声源位置，上下两行视角与采样方式一致，但完整性仍受 SAM 时长与风格标签条件的限制。",
+  "figure1PixelsSha256": "d9366f38838bd244514f2d72652715434bf6e0cd8b9aea5b2f4b3d8b867ab8cd",
+  "figure4PixelsSha256": "21dc8886ca9d2ec7d4812beddd0856fea5ebc6cc6b8ab17d38192683371ce642",
+  "sharedParagraph": "该图展示音乐到爆炸到鸟鸣 3 段事件下人体快照从紫到蓝到黄的连续过渡，半透明带把音频段与反应段相连，淡化姿态标出段间过渡，说明单模型无需新初始化即可跨事件连贯生成。顶部双耳波形按颜色分段，底部网格上根轨迹连续延伸，但长程连贯目前主要是定性证据。"
+}

@@ -267,6 +267,114 @@ def _reviewed_path_set_sha256(files):
     return _stable_json_sha256(entries)
 
 
+def manual_review_manifest_partition(manifest, date_str):
+    """仅为受控独立审查分出 Markdown 页面与现有可重建资产，不扩大发布白名单。"""
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    pages, assets, seen = [], [], set()
+    for item in manifest.get('files') or []:
+        if (not isinstance(item, dict) or not isinstance(item.get('path'), str)
+                or type(item.get('deleted')) is not bool):
+            raise PublishDataValidationError('人工审查的生成文件记录无效。')
+        relative = item['path']
+        lexical = repo / relative
+        if ('\\' in relative or Path(relative).is_absolute()
+                or '..' in Path(relative).parts or lexical.is_symlink()):
+            raise PublishDataValidationError('人工审查文件必须是规范的仓库相对路径和普通文件。')
+        normalized = _validate_manifest_path_date(lexical, repo, date_str)
+        if normalized != relative or relative in seen:
+            raise PublishDataValidationError('人工审查文件路径非规范或重复。')
+        seen.add(relative)
+        record = {'path': relative, 'deleted': item['deleted'], 'sha256': item.get('sha256')}
+        if ((record['deleted'] and record['sha256'] is not None)
+                or (not record['deleted'] and not re.fullmatch(
+                    r'[a-f0-9]{64}', str(record['sha256'] or '')))):
+            raise PublishDataValidationError('人工审查文件 SHA 或删除状态无效。')
+        if Path(relative).parts[:2] == ('content', 'posts') and Path(relative).suffix == '.md':
+            pages.append(record)
+        elif (_is_tag_catalog_file_path(relative) or is_api_reader_asset_path(lexical)):
+            if manifest.get('schemaVersion') != 3 or record['deleted']:
+                raise PublishDataValidationError('机器资产证明只支持 v3 清单中的现存受控资产。')
+            assets.append(record)
+        else:
+            raise PublishDataValidationError(f'人工审查不支持此类生成资产：{relative}')
+    if not pages:
+        raise PublishDataValidationError('人工审查清单没有 Markdown 页面。')
+    return pages, assets
+
+
+def is_manual_local_image_url(url, manifest_path, date_str):
+    """仅识别当前生成清单中同 SHA 的受控站内正文原图，不泛化接受相对 URL。"""
+    from path_config import resolve_blog_base_path
+    base = resolve_blog_base_path(BASE_PATH)
+    if not isinstance(url, str) or not url.startswith(f'{base}/images/papers/'):
+        return False
+    manifest = _load_json_object(manifest_path, '生成清单')
+    if manifest.get('date') != date_str or manifest.get('schemaVersion') != 3:
+        return False
+    _pages, assets = manual_review_manifest_partition(manifest, date_str)
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    for item in assets:
+        relative = item['path']
+        if not relative.startswith('static/images/papers/'):
+            continue
+        if url == f'{base}/{relative[len("static/"):]}':
+            target = repo / relative
+            return target.is_file() and _sha256_file(target) == item['sha256']
+    return False
+
+
+def manual_review_machine_assets(manifest, date_str):
+    """结构化保存实际机器核验资产集合；不冒充语义或模型图片审查。"""
+    _pages, assets = manual_review_manifest_partition(manifest, date_str)
+    if not assets:
+        return None
+    return {'contract': 'manual-review-controlled-assets-v1', 'files': assets}
+
+
+def _validate_manual_machine_assets(record, receipt_files, date_str):
+    """从当前正式生成清单、权威输入和已审页面重建资产，供签发及推送重复核验。"""
+    machine = record['machineAssets']
+    manifest_path = generation_manifest_path(date_str)
+    if _sha256_file(manifest_path) != record['generationManifestSha256']:
+        raise PublishDataValidationError('人工机器资产证明对应的生成清单 SHA 不一致。')
+    manifest = _load_json_object(manifest_path, '生成清单')
+    _validate_active_publication_scope(manifest)
+    validate_current_generation_template(manifest)
+    validate_generation_manifest_file_bytes(manifest_path, date_str)
+    # 签发通过缓存前仍核对正式同源分析、封存来源和资格；不相信声明中的 true。
+    _validate_generation_input_integrity(manifest, date_str)
+    pages, assets = manual_review_manifest_partition(manifest, date_str)
+    if machine != manual_review_machine_assets(manifest, date_str):
+        raise PublishDataValidationError('人工机器资产集合与当前生成清单不一致。')
+    expected = {item['path']: item for item in pages + assets}
+    actual = {}
+    for item in receipt_files:
+        if not isinstance(item, dict) or not isinstance(item.get('path'), str):
+            raise PublishDataValidationError('人工审查发布文件记录无效。')
+        path = item['path']
+        if path in actual:
+            raise PublishDataValidationError('人工审查发布文件记录重复。')
+        actual[path] = {key: item.get(key) for key in ('path', 'deleted', 'sha256')}
+    if actual != expected:
+        raise PublishDataValidationError('人工语义页面与机器资产的并集不等于正式发布清单。')
+    if {item['path'] for item in record['files']} != {item['path'] for item in pages}:
+        raise PublishDataValidationError('人工语义记录没有精确覆盖 Markdown 页面集合。')
+    repo = Path(BLOG_REPO).expanduser().resolve()
+    results = {}
+    for item in record['files']:
+        if item.get('deleted') is True:
+            continue
+        target = (repo / item['path']).resolve()
+        mode = item.get('cacheReuse', {}).get('record', {}).get('imageReviewMode', 'manual_semantic')
+        results[str(target)] = {'passed': True, 'completed': True,
+            'reviewedSha256': item['sha256'], 'imageReviewMode': mode}
+    paths = [repo / item['path'] for item in pages + assets]
+    # preflight_only 保持 False：必须有通过且字节一致的引用页面，图片身份由正常守卫重验。
+    if attest_api_reader_assets(date_str, paths, manifest_path, results):
+        raise PublishDataValidationError('人工审查的受控资产未通过正常机器核验。')
+    validate_reviewed_file_hashes(date_str, paths, manifest_path, results)
+
+
 def _manual_review_record_error(receipt, *, date_str=None,
                                     generation_manifest_sha256=None,
                                     expected_base_head=None):
@@ -342,12 +450,21 @@ def _manual_review_record_error(receipt, *, date_str=None,
         if path_set_sha != _reviewed_path_set_sha256(receipt_files):
             return 'v1 人工审查记录中的已审文件集合哈希与发布凭证不一致。'
         return None
+    machine = manual_review_record.get('machineAssets')
+    if 'machineAssets' in manual_review_record:
+        if (manual_review_record.get('version') != 4
+                or not isinstance(machine, dict)
+                or set(machine) != {'contract', 'files'}
+                or machine.get('contract') != 'manual-review-controlled-assets-v1'
+                or not isinstance(machine.get('files'), list) or not machine['files']):
+            return '人工机器资产证明的版本或结构无效。'
+    machine_count = len(machine['files']) if machine is not None else 0
     required_file_checks = {
         'titleAndMetadata', 'technicalNarrative', 'factualClaims',
         'experimentComparisons', 'reproducibility', 'limitations',
         'scoring', 'images',
     }
-    if not isinstance(review_file_details, list) or len(review_file_details) != file_count:
+    if not isinstance(review_file_details, list) or len(review_file_details) + machine_count != file_count:
         return '人工审查记录必须保留逐文件审查明细，且条目数量须与记录的文件数量一致。'
     if not isinstance(receipt_files, list) or len(receipt_files) != file_count:
         return '人工审查记录中的文件数量与发布凭证的文件清单不一致。'
@@ -403,6 +520,9 @@ def _manual_review_record_error(receipt, *, date_str=None,
         relative_path = Path(path)
         if relative_path.is_absolute() or '..' in relative_path.parts:
             return f'人工审查记录必须使用不含 .. 的博客仓库相对路径：{path}'
+        if machine is not None and (relative_path.parts[:2] != ('content', 'posts')
+                or len(relative_path.parts) != 3 or relative_path.suffix != '.md'):
+            return f'人工语义记录只能是文章 Markdown 页面：{path}'
         seen_review_file_paths.add(path)
         receipt_item = receipt_by_path[path]
         deleted = receipt_item.get('deleted') is True
@@ -511,7 +631,12 @@ def _manual_review_record_error(receipt, *, date_str=None,
             )
             if semantic_error:
                 return semantic_error
-    if seen_review_file_paths != set(receipt_by_path):
+    if machine is not None:
+        try:
+            _validate_manual_machine_assets(manual_review_record, receipt_files, date_str)
+        except (OSError, UnicodeError, ValueError, TypeError, KeyError) as exc:
+            return f'人工机器资产证明未通过复核：{exc}'
+    elif seen_review_file_paths != set(receipt_by_path):
         return '人工审查记录中的文件集合与发布凭证不一致。'
     path_set_sha = manual_review_record.get('reviewedPathSetSha256')
     if not re.fullmatch(r'[0-9a-f]{64}', str(path_set_sha or '')):
@@ -2161,6 +2286,7 @@ def _review_image_context_regions(content, image_matches):
     # A preceding explanation may also be the next figure's complete lead.
     # Only that single shared prose paragraph may overlap; structural nodes may not.
     ambiguous = set()
+    shared_leads = {}
     ordered = sorted(clusters)
     paragraph_indexes = {span: index for index, span in enumerate(paragraphs)}
     for position, left in enumerate(ordered):
@@ -2170,6 +2296,11 @@ def _review_image_context_regions(content, image_matches):
             shared = paragraph_indexes.get((clusters[right][0], clusters[left][1]))
             if shared is None or not prose(shared):
                 ambiguous.update((left, right))
+            else:
+                shared_leads[right] = {
+                    'previousImageIndex': left,
+                    'start': paragraphs[shared][0], 'end': paragraphs[shared][1],
+                }
     clusters = {index: span for index, span in clusters.items() if index not in ambiguous}
     regions = []
     for index, image in enumerate(image_matches):
@@ -2183,7 +2314,11 @@ def _review_image_context_regions(content, image_matches):
                 start = max(start, clusters[index - 1][1])
             if index + 1 in clusters and clusters[index + 1][0] >= image['end']:
                 end = min(end, clusters[index + 1][0])
-        regions.append({'start': start, 'end': end, 'readerFigureCluster': index in clusters})
+        region = {'start': start, 'end': end, 'readerFigureCluster': index in clusters}
+        shared = shared_leads.get(index)
+        if index in clusters and shared and shared['previousImageIndex'] in clusters:
+            region['sharedPreviousExplanationLead'] = shared
+        regions.append(region)
     return regions
 
 
@@ -2211,6 +2346,20 @@ def multimodal_review_images(content, title="", required=False, *, image_concurr
         alt, url = match['alt'], match['url']
         region = context_regions[match_index]
         nearby = content[region['start']:region['end']].strip()
+        shared = region.get('sharedPreviousExplanationLead')
+        if shared:
+            # 原段字节完整保留；只在审查输入注明双重归属，不改正文或免审此段。
+            previous = shared['previousImageIndex'] + 1
+            transition = content[shared['start']:shared['end']].strip()
+            own_context = content[shared['end']:region['end']].strip()
+            nearby = (
+                f'【相邻过渡段：正文前一图片 {previous} 的解释，同时用作本图导读】\n'
+                f'{transition}\n'
+                '【以上段落可能同时提及两图；明确指向前图的特征不能仅因本张像素未出现而判错。'
+                '如确实无条件声称本张图存在某特征，仍应核对并报告真实冲突；归属不明时说明局限，不猜测。】\n'
+                '【以下为本张图片自己的看图路径、原图、图注和解释】\n'
+                f'{own_context}'
+            )
         try:
             image_payload = _load_review_image(url)
         except PublishDataValidationError as exc:

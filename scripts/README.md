@@ -292,7 +292,7 @@ npm run test:compat
 | `project_env.py` | 加载 Python 项目环境、最小子进程环境和代理设置。 |
 | `publication_activation.py` | Python 入口/共享库：核验旧提交、博客基线和实时远端，归档六个精确状态文件。pending 状态阻断发布三阶段，支持中断恢复，不修改已提升的论文分析。 |
 | `publish-conference.py` | CLI：按会议处理凭证执行 generate/review/push/status/verify。generate 只安装文件；push 核验实际 Git index 和 commit blob，先发布图床再发布博客；verify 检查线上 URL。以上都是机械检查，语义审查和浏览器里的视觉效果仍要人工确认。 |
-| `publish-to-blog.py` | Python 核心：实现三个发布阶段共用的页面模板、标签兼容映射、Git 事务、批次凭证及发布证明。`researcher-workbench-v1` 规定页面元数据、引用和论文再思考附属资料；逐页通过记录永久按“相对路径 + 内容 SHA”复用。发布器代码变化会重新渲染页面，字节未变的通过页不重审；内容失败页仅在完整合法的旧、新审查协议确实不同时进入正常重审。 |
+| `publish-to-blog.py` | Python 核心：实现三个发布阶段共用的页面模板、标签兼容映射、Git 事务、批次凭证及发布证明。`researcher-workbench-v1` 规定页面元数据、引用和论文再思考附属资料；独立人工 v4 的文章语义与 `machineAssets` 机器核验分区，最终凭证仍覆盖完整清单。逐页通过记录永久按“相对路径 + 内容 SHA”复用，字节未变的通过页不重审；内容失败页仅在完整合法的旧、新审查协议确实不同时进入正常重审。 |
 | `publish_common.py` | Python 共享：提供发布数据、评分、Manual/API 来源核验及 LLM 审查的共用规则。 |
 | `push-blog.py` | Python 入口：核验 receipt，提交并推送其允许的改动，确认远端 OID 后规划视觉任务。 |
 | `reader_inline_svg.py` | Python 共享：校验内嵌 SVG 的元素、属性和本地引用，在禁用脚本与网络的浏览器中渲染 PNG，供阅读和发布共用。 |
