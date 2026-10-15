@@ -132,6 +132,38 @@ class ConferencePublishTests(unittest.TestCase):
         with self.assertRaisesRegex(M.ConferencePublicationError, '暂存页面字节'):
             M.validate_conference_tag_catalogs(self.repo, [record])
 
+    def test_catalog_guard_rejects_mixed_prefix_partial_duplicate_and_bad_identity(self):
+        sha = self.tag_catalog['registrySha256']
+        version = self.tag_catalog['version']
+        cases = [
+            f'paper_digest_tags_registry_sha256: "{sha}"\n'
+            f'paper_digest_taxonomy_registry_version: "{version}"\n',
+            f'paper_digest_tags_registry_sha256: "{sha}"\n',
+            f'paper_digest_tags_registry_sha256: "{sha}"\n'
+            f'paper_digest_tags_registry_version: "{version}"\n'
+            'paper_digest_taxonomy_contract: old\n',
+            f'paper_digest_tags_registry_sha256: "{sha}"\n'
+            f'paper_digest_tags_registry_sha256: "{sha}"\n'
+            f'paper_digest_tags_registry_version: "{version}"\n',
+            'paper_digest_tags_registry_sha256: not-a-sha\n'
+            f'paper_digest_tags_registry_version: "{version}"\n',
+        ]
+        for fields in cases:
+            with self.subTest(fields=fields):
+                record = self.record(data=('---\n' + fields + '---\n正文\n').encode())
+                with mock.patch.object(M, 'validate_published_tag_catalog') as guard:
+                    with self.assertRaises(M.ConferencePublicationError):
+                        M.validate_conference_tag_catalogs(self.repo, [record])
+                    guard.assert_not_called()
+
+    def test_catalog_guard_accepts_unique_yaml_strings_and_deduplicates_catalog(self):
+        record = self.record(data=(
+            "---\n"
+            f"paper_digest_tags_registry_sha256: '{self.tag_catalog['registrySha256']}'\n"
+            f"paper_digest_tags_registry_version: '{self.tag_catalog['version']}'\n"
+            "---\n正文\n").encode())
+        self.assertEqual(len(M.validate_conference_tag_catalogs(self.repo, [record, record])), 1)
+
     def publish(self, records):
         return M.commit_exact_delta(self.repo, records, self.base['head'], self.base['remoteMain'],
                                     self.base['remoteIdentitySha256'], '离线会议发布测试')

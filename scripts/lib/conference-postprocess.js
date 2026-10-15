@@ -943,27 +943,29 @@ function aggregateHierarchy(tagCatalog, memberConceptIds) {
                 .map(concept => nodes.get(concept.id)).sort(compare) })) };
 }
 
-function tagHref(label) {
-    // Hugo 的 标签 词页 URL 走 URLize：ASCII 大小写被折成小写（线上
-    // /tags/Transformer/ 404、/tags/transformer/ 200），空格折成 '-'；中文
-    // 标签则按 UTF-8 百分号编码（/tags/%E9%B2%81%E6%A3%92%E6%80%A7/ 200）。
-    // 这里复刻同一规则，保证 8 个英文专名标签的链接不会打到 404。
-    return `/tags/${encodeURIComponent(String(label).trim().replace(/\s+/g, '-').toLowerCase())}/`;
+function conceptHref(id) {
+    const base = require('../config.js').PUBLISH_CONFIG.basePath.replace(/\/$/, '');
+    return `${base}/papers/?concept=${encodeURIComponent(id)}`;
 }
 
-function hierarchyLines(hierarchy) {
+function hierarchyLines(hierarchy, facetDisplayLabels) {
+    if (!facetDisplayLabels || typeof facetDisplayLabels !== 'object' || Array.isArray(facetDisplayLabels)
+        || hierarchy.facets.some(facet => typeof facetDisplayLabels[facet.id] !== 'string'
+            || !facetDisplayLabels[facet.id].trim())) {
+        fail('多级统计缺少共享展示模块的分类维度名称。');
+    }
     const lines = ['### 🏷️ 多级标签统计', '',
-        `每个层级都统计本期论文数：\`直接\` 是成员页面直接标记该标签的篇数，\`含子树\` 是该标签及其全部下级标签的去重论文数（registry 共 ${hierarchy.facets.length} 个分面，本期只列出有论文的分面）。零级标签可点开进入对应标签页，点开下级标签可看该级论文数。`, ''];
+        `每个层级都统计本期论文数：\`直接\` 是成员页面直接标记该标签的篇数，\`含子树\` 是该标签及其全部下级标签的去重论文数（registry 共 ${hierarchy.facets.length} 个分面，本期只列出有论文的分面）。各级链接进入论文库，按该概念及其下级筛选全站论文；这里的计数仅统计本期。`, ''];
     const used = hierarchy.facets.filter(facet => facet.nodes.length);
     const walk = nodes => {
         for (const node of nodes) {
-            lines.push(`${'  '.repeat(node.level)}- [#${md(node.label)}](${tagHref(node.label)})`
+            lines.push(`${'  '.repeat(node.level)}- [#${md(node.label)}](${conceptHref(node.id)})`
                 + ` — 直接 ${node.directCount} 篇 · 含子树 ${node.subtreeCount} 篇`);
             walk(node.children);
         }
     };
     for (const facet of used) {
-        lines.push(`#### ${md(facet.label)}`, '');
+        lines.push(`#### ${md(facetDisplayLabels[facet.id])}`, '');
         walk(facet.nodes);
         lines.push('');
     }
@@ -1088,8 +1090,8 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
         '### 🏷️ 热门方向', '', '| 方向（仅主任务） | 数量 |', '|---|---:|'];
     for (const [label, count] of directions) lines.push(`| #${md(label)} | ${count} 篇 |`);
     // 热门方向表之后给出同一 registry 的多级下钻统计；排版保持与现有表格
-    // 一致的中文克制风格（分面小节 + 缩进层级列表 + 可点开的 /tags/ 链接）。
-    lines.push('', ...hierarchyLines(hierarchy));
+    // 一致的中文克制风格（分面小节 + 缩进层级列表 + 概念子树筛选链接）。
+    lines.push('', ...hierarchyLines(hierarchy, presentations.facetDisplayLabels));
     lines.push('', '## 📊 论文评分排行榜', '',
         '| 排名 | Reader 中文题目 | 英文题目 | 八维评分 | 分档 | 文档类型 | 主任务 |',
         '|---:|---|---|---|---|---|---|');
@@ -1143,5 +1145,5 @@ module.exports = { CONTRACT, PAGE_VERSION, LEGACY_PAGE_CONTRACT, AGGREGATE_CONTR
     loadCompleted, getConsistentPublicationFields, buildAssignment, safeStem, render, implementationFingerprint, fingerprint, buildFormulaEvidenceRecord,
     repairFormulaDelimiters, repairCurrencyDollars, repairTechnicalNotationAsterisks,
     repairStatisticalSignificanceStars, repairUnpairedMarkdownStars, repairDollarMath,
-    stagePaper, loadStage, loadPreservedStage, aggregateConference, aggregateHierarchy, hierarchyLines, tagHref,
+    stagePaper, loadStage, loadPreservedStage, aggregateConference, aggregateHierarchy, hierarchyLines, conceptHref,
     repairConferenceImageUrls, repairCaptionQuotedGlossLinks, repairPreservedPage };

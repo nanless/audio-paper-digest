@@ -5462,19 +5462,6 @@ def normalize_digest_index_preserving_decision_blocks(markdown):
     return ''.join(output)
 
 
-def format_display_tags(tags):
-    """把复合话题标签串压平成一行稳定且去重后的标签。"""
-    values = [tags] if isinstance(tags, str) else list(tags or [])
-    flattened = []
-    for value in values:
-        text = str(value or '').strip()
-        if not text:
-            continue
-        hashtags = re.findall(r'#[^\s#|]+', text)
-        flattened.extend(hashtags or [text])
-    return ' | '.join(dict.fromkeys(flattened))
-
-
 def build_index_context_line(parsed_analysis, aurl=''):
     """在评分行下面渲染不重复的排名与来源元数据。"""
     bits = []
@@ -5742,7 +5729,6 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             rendered_title = markdown_title_for_publish(title)
             english_title = f'[{rendered_title}]({blog_url})' if blog_url else rendered_title
             md += f"> 英文题目：*{english_title}*\n\n"
-        tags = parsed_analysis.get('tags') or []
         md += render_paper_tag_hierarchy(parsed_analysis)
         
         score_line = format_complete_score_line(parsed_analysis)
@@ -5811,7 +5797,6 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
             rendered_title = markdown_title_for_publish(title)
             english_title = f'[{rendered_title}]({blog_url})' if blog_url else rendered_title
             md += f"> 英文题目：*{english_title}*\n\n"
-        tags = parsed_analysis.get('tags') or []
         md += render_paper_tag_hierarchy(parsed_analysis)
         md += '评分：N/A（分析未提供可验证的八维评分）\n\n'
         context_line = build_index_context_line(parsed_analysis, aurl)
@@ -12692,6 +12677,8 @@ def generation_template_fingerprint():
         'analysis_sections.py': script_dir / 'analysis_sections.py',
         'tag_stage_record.py': script_dir / 'tag_stage_record.py',
         'tag_presentation.py': script_dir / 'tag_presentation.py',
+        'tag_catalog.py': script_dir / 'tag_catalog.py',
+        'tag_paths.py': script_dir / 'tag_paths.py',
         'path_config.py': script_dir / 'path_config.py',
         'markdown_hugo_gate.py': script_dir / 'markdown_hugo_gate.py',
         'reader_inline_svg.py': script_dir / 'reader_inline_svg.py',
@@ -12839,6 +12826,9 @@ def review_protocol_fingerprint():
         'analysis_sections.py': script_dir / 'analysis_sections.py',
         'tag_stage_record.py': script_dir / 'tag_stage_record.py',
         'tag_presentation.py': script_dir / 'tag_presentation.py',
+        'tag_catalog.py': script_dir / 'tag_catalog.py',
+        'tag_paths.py': script_dir / 'tag_paths.py',
+        'path_config.py': script_dir / 'path_config.py',
     }
     dependencies = {
         name: _sha256_file(path)

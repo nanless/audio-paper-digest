@@ -6,7 +6,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 from tag_catalog import load_tag_catalog
-from tag_presentation import build_tag_hierarchy, render_tag_hierarchy_markdown
+from tag_presentation import (build_tag_hierarchy, render_tag_hierarchy_markdown,
+                             TAG_HIERARCHY_START, TAG_HIERARCHY_END)
 
 
 class TagPresentationTest(unittest.TestCase):
@@ -44,6 +45,15 @@ class TagPresentationTest(unittest.TestCase):
                         '/a?x=1', '/a#x', '/%2e%2e', '/a\\b'):
             with self.assertRaises(ValueError):
                 render_tag_hierarchy_markdown(self.metadata, self.catalog, base_path=invalid)
+
+    def test_generated_boundaries_survive_real_publish_sanitizer(self):
+        from publish_common import sanitize_markdown_for_publish
+        text = render_tag_hierarchy_markdown(self.metadata, self.catalog)
+        self.assertEqual(text.count(TAG_HIERARCHY_START), 1)
+        self.assertEqual(text.count(TAG_HIERARCHY_END), 1)
+        self.assertTrue(text.startswith(TAG_HIERARCHY_START + '\n\n'))
+        self.assertTrue(text.endswith('\n\n' + TAG_HIERARCHY_END + '\n\n'))
+        self.assertEqual(sanitize_markdown_for_publish(text), text)
 
     def test_empty_and_strict_metadata_boundaries(self):
         empty = dict(self.metadata, concepts=[])

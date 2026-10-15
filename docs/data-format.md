@@ -148,9 +148,13 @@ schema v3 生成清单记录日期、`category`、博客基线 `HEAD`、精确�
 
 新论文把 3–5 个当前分类表中启用的首选标签写入 Hugo 的 `tags`，并记录 `paper-tag-flat-tags-v2`、选择规则、分类表版本及 SHA、有序的 `{id, facet, label}`、显式主任务和主方法。标签采用中文首选名称；既定 `CNN/RNN/SFT/CTC/LoRA/Adapter/Transformer/Conformer` 八个专名保留原形，并在分类表中配中文别名，不能扩成任意英文标签。`rethink-context.json.assessment.tagMetadata` 保存同一分类信息。旧页面仍按原 `paper-taxonomy-flat-tags-compat-v1` 读取，不因新发布而改写。两版的标签规则相同；汇总页“热门方向”只统计主任务。
 
-## 审查记录与远端发布
-
 当前标签分类与新版导航均包含386项九维概念。页首的扁平兼容字段只存直接命中项；正文和分类卡片从这些ID推导多级路径，祖先不写进直接集合，不显示空分面或兄弟方向。旧262项的原文件按SHA归档，严格纯追加时按原规则完整重放旧阶段，而非修改其绑定。会议及历史发布还核对站点 `data/`、`static/data/` 中本次SHA的完整原快照和版本目录。目录可见范围、版本投影及恢复见[标签规则](tag-display-policy.md#三条流程共用的目录与呈现)。
+
+历史每日、会议和任务汇总的页首 `paper_digest_tags_scope: aggregate-primary-task-counts` 明确只记录成员的去重主任务；对应 `paper_digest_tags_concepts` 保存这些任务的 `{id, facet, label}`，不把整篇汇总冒充单篇的3–5项选择。汇总正文则逐篇显示各自完整的直接所选项及祖先路径，两种范围不能混算。
+
+共享分类块在源Markdown中保留，并用不含空白的成对注释标记边界。单篇网页只在页头已实际呈现经核验分类、且正文恰有一对完整有序边界时，移除网页正文中的同一分类块；汇总页仍逐篇显示。旧无边界页面和异常边界不作猜测删除，原Markdown、Reader及分类证明保持原样。具体模板与发布基线要求见[标签呈现规则](tag-display-policy.md#已发布页面切换到当前呈现)。
+
+## 审查记录与远端发布
 
 审查记录绑定生成清单 SHA、实际页面 SHA、当前审查协议、Git 基线、Hugo 构建结果和配置、布局、数据、前端代码的运行时指纹，以及发布依据。逐页通过记录单独保存，只按“相对路径 + 页面内容 SHA”长期复用。
 

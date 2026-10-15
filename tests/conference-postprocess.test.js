@@ -569,19 +569,24 @@ test('多层标签统计分别计算每一级的直接使用篇数和包含下�
     assert.throws(() => api.aggregateHierarchy(registry, [[null]]), /当前词表中缺失或未启用的概念/);
     assert.throws(() => api.aggregateHierarchy(registry, ['not-an-array']), /概念 ID 列表必须是数组/);
     assert.throws(() => api.aggregateHierarchy({}, []), /构建标签层级需要词表的分类维度/);
-    // 渲染：根不缩进、二级缩进一级、三级缩进两级，链接按标签 URL 编码。
-    const lines = api.hierarchyLines(hierarchy);
+    // 渲染：根不缩进、二级缩进一级、三级缩进两级，链接按受控概念 ID 导航。
+    const first = registry.concepts.find(concept => concept.status === 'active');
+    const displayLabels = api.render({ tagPresentationBatch: { catalog: registry, records: [{
+        registryVersion: registry.version, registrySha256: registry.registrySha256,
+        concepts: [{ id: first.id, facet: first.facet, label: first.preferredLabel.zh }]
+    }] } }).facetDisplayLabels;
+    assert.throws(() => api.hierarchyLines(hierarchy), /共享展示模块/);
+    const lines = api.hierarchyLines(hierarchy, displayLabels);
     assert.equal(lines[0], '### 🏷️ 多级标签统计');
-    assert.ok(lines.some(line => line.startsWith('每个层级都统计本期论文数') && line.includes('点开下级标签可看该级论文数')));
-    assert.ok(lines.includes(`- [#语音识别](/tags/${encodeURIComponent('语音识别')}/) — 直接 1 篇 · 含子树 3 篇`));
-    assert.ok(lines.includes(`  - [#音视频语音识别](/tags/${encodeURIComponent('音视频语音识别')}/) — 直接 1 篇 · 含子树 2 篇`));
-    assert.ok(lines.includes(`    - [#唇读](/tags/${encodeURIComponent('唇读')}/) — 直接 1 篇 · 含子树 1 篇`));
-    // 8 个英文专名标签必须折成 Hugo 实际生成的小写词页 URL，否则 404。
-    assert.ok(lines.includes('- [#Transformer](/tags/transformer/) — 直接 3 篇 · 含子树 3 篇'));
-    assert.equal(api.tagHref('Transformer'), '/tags/transformer/');
-    assert.equal(api.tagHref('鲁棒性'), `/tags/${encodeURIComponent('鲁棒性')}/`);
+    assert.ok(lines.some(line => line.startsWith('每个层级都统计本期论文数') && line.includes('各级链接进入论文库')));
+    assert.ok(lines.includes(`- [#语音识别](${api.conceptHref('task.asr')}) — 直接 1 篇 · 含子树 3 篇`));
+    assert.ok(lines.includes(`  - [#音视频语音识别](${api.conceptHref('task.av-asr')}) — 直接 1 篇 · 含子树 2 篇`));
+    assert.ok(lines.includes(`    - [#唇读](${api.conceptHref('task.lip-reading')}) — 直接 1 篇 · 含子树 1 篇`));
+    // 英文专名也按真实概念 ID 筛选，祖先导航包含其下级而非旧扁平词页。
+    assert.ok(lines.includes(`- [#Transformer](${api.conceptHref('method.transformer')}) — 直接 3 篇 · 含子树 3 篇`));
+    assert.equal(api.conceptHref('method.transformer'), `${require('../scripts/config.js').PUBLISH_CONFIG.basePath.replace(/\/$/, '')}/papers/?concept=method.transformer`);
     assert.ok(lines.includes('#### 研究任务'));
-    assert.ok(lines.includes('#### 方法'));
+    assert.ok(lines.includes('#### 研究方法'));
     assert.ok(lines.includes('#### 研究重点'));
     assert.equal(lines.some(line => line.startsWith('#### 应用')), false);
 });
@@ -640,16 +645,16 @@ test('汇总页展示逐级展开的标签，并把标签层级写进清单', t 
     assert.ok(markdown.indexOf('### 🏷️ 热门方向') < markdown.indexOf('### 🏷️ 多级标签统计'));
     assert.ok(markdown.indexOf('### 🏷️ 多级标签统计') < markdown.indexOf('## 📊 论文评分排行榜'));
     const section = markdown.split('### 🏷️ 多级标签统计')[1].split('## 📊 论文评分排行榜')[0];
-    const link = label => `/tags/${encodeURIComponent(label)}/`;
+    const link = label => api.conceptHref(({ '语音识别': 'task.asr', '音视频语音识别': 'task.av-asr', '唇读': 'task.lip-reading', '鲁棒性': 'research_focus.robustness' })[label]);
     const rows = section.split('\n');
     assert.ok(rows.includes(`- [#语音识别](${link('语音识别')}) — 直接 2 篇 · 含子树 4 篇`));
     assert.ok(rows.includes(`  - [#音视频语音识别](${link('音视频语音识别')}) — 直接 1 篇 · 含子树 2 篇`));
     assert.ok(rows.includes(`    - [#唇读](${link('唇读')}) — 直接 1 篇 · 含子树 1 篇`));
-    assert.ok(rows.includes('- [#Transformer](/tags/transformer/) — 直接 4 篇 · 含子树 4 篇'));
+    assert.ok(rows.includes(`- [#Transformer](${api.conceptHref('method.transformer')}) — 直接 4 篇 · 含子树 4 篇`));
     assert.ok(rows.includes(`- [#鲁棒性](${link('鲁棒性')}) — 直接 4 篇 · 含子树 4 篇`));
-    assert.ok(section.includes('零级标签可点开进入对应标签页，点开下级标签可看该级论文数。'));
+    assert.ok(section.includes('各级链接进入论文库，按该概念及其下级筛选全站论文'));
     assert.ok(section.includes('#### 研究任务'));
-    assert.ok(section.includes('#### 方法'));
+    assert.ok(section.includes('#### 研究方法'));
     assert.ok(section.includes('#### 研究重点'));
     assert.equal(section.includes('#### 应用'), false);
     assert.equal(section.includes('音频分离'), false);

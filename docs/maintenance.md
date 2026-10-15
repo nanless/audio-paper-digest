@@ -15,6 +15,7 @@
 | 历史直接重写来源及页面对应 | `historical-direct-*`、`historical-conference-*-sources/projections` | 来源目录、计划、队列、执行、汇总、arXiv 失败交接入口及历史文档 |
 | 分析恢复 | `analysis-engine.js`、`deep-analyzer.js` | 所有分析入口与 digest 状态 |
 | 分析结构或评分 | `analysis-contract.js` 与提示词 | Node/Python 解析器和发布器 |
+| 分类词表与多级路径 | `config/tag-catalog.json`、`lib/tag-rules.js`、`tag_catalog.py`、`tag_presentation.py` | 主分析/标签Prompt、旧SHA归档与双运行时证明、三种单篇/汇总渲染、站点版本目录及 `tag_catalog_publication.py` 发布守卫 |
 | Reader 写作、图表或修复 | 当前登记的 `api-reader-article-v8.md`、`api-reader-repair-v12.md`（旧版本通过 Git 原字节核验）、`lib/reader-contract.js`、`lib/reader-tables.js`、`lib/reader-repair.js` | Reader 校验器、失败候选及阶段指纹、博客审查 |
 | 博客事务 | `publish-to-blog.py` | 三个独立入口与审查凭证测试 |
 | 视觉状态 | 两个 state JS 与 integration | 规划、status 与 record |
@@ -53,6 +54,14 @@
 Git 证据索引不保存旧全文，也不授权新建旧任务。读取失败、Git blob 缺失或整文件/模板 SHA 不符须保留错误并停止，不因文件名或 SHA 形式合法而放行。测试使用严格读取器核验真实历史字节，不要求退休 Markdown 文件仍在工作树。
 
 评分提示词还须保留八维顺序、范围、开源状态对应的六个固定分值、证据 ID 和代码计算的上限。Reader 提示词须抽检术语组合的解释、表格前后的说明和相邻图文，并保留未传入像素时不能猜图的限制。
+
+## 词表与多级展示修改
+
+三流程只从当前386项九维目录选择有证据的直接概念；总目录保留零计数节点，文章只显示选中项及祖先路径。词表原字节、分类证明和显示路径分别核验：保留旧SHA归档及原付费记录，严格纯追加只能只读重放，不因显示升级重新签名或追加模型次数。词表版本、站点成对资产及各发布边界见[标签规则](tag-display-policy.md#三条流程共用的目录与呈现)。
+
+修改 `tag_presentation.py` 时，须同时检查日更单篇/汇总、会议单篇/汇总和历史单篇/汇总的实际输出及传递依赖指纹；路径包含当前部署前缀，文章块不能出现兄弟概念、空分面或全目录。站点目录资产上线与论文页面重新生成是两个验收对象：已有批次要改变呈现，须生成完整目标页面集合，按实际内容SHA复用或重做独立审查，再推送和逐页核验。不能只提交共享代码或词表快照就声称旧文章已更新。
+
+还须核对源Markdown和实际网页的分工：源文件保留有边界的共享分类块，单篇页头已有经核验分类时，网页正文仅按唯一完整成对边界去重，汇总保留。覆盖无边界旧稿、缺失/重复/倒序边界和真实Reader邻文，避免误删正文。站点模板修复须独立精确审查、中文提交推送，再以新博客基线执行正常整批生成/审查/推送，不扩大页面发布器允许写入的路径；最终检查应同时证明分类不重复且全部Reader内容仍在。
 
 表数量不足诊断使用稳定 `code`、`requiredCount` 和 `actualCount`。修改相关提示或说明时，须同步检查生产、收集、修复、反馈和用于判断能否继续的输入指纹；新结构字段不能退回解析自然文案。详细字段与旧格式的有限兼容范围见 [数据格式](data-format.md) 和 [Reader 写作](reader-writing.md)。
 

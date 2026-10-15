@@ -385,8 +385,12 @@ test('直接汇总接受完整的当日分组，并生成绑定来源代次的 M
     assert.match(aggregate.markdown, /英文题目：\*\[Fresh arxiv:2608\.00001\]\(\/arxiv-one\/\)\*/);
     assert.match(aggregate.markdown, /评分：[\s\S]*排名：前50% \| 文档类型：方法研究 \| \[arXiv 原文\]\(https:\/\/arxiv\.org\/abs\/2608\.00001\)[\s\S]*👥 \*\*作者与机构\*\*/);
     assert.match(aggregate.markdown, /🔗 \*\*开源资源\*\*[\s\S]*未发现已由来源证据绑定的公开资源/);
-    assert.equal((aggregate.markdown.match(/^标签：/gm) || []).length, 2,
-        'each paper has one tag row and no legacy duplicate footer');
+    assert.equal((aggregate.markdown.match(/^\*\*研究分类\*\*/gm) || []).length, 2,
+        '每篇使用共享多级分类展示，不重复平铺标签');
+    assert.doesNotMatch(aggregate.markdown, /^标签：/m);
+    assert.match(aggregate.markdown, /paper_digest_tags_concepts: .*"facet":"task"/);
+    assert.match(aggregate.markdown, /papers\/\?concept=task\.asr/);
+    assert.doesNotMatch(aggregate.markdown, /\*\*应用\*\*：|\*\*科学主题\*\*：/);
     assert.doesNotMatch(JSON.stringify(aggregate), /POISON_OLD_BODY/);
     const output = direct.writeDirectAggregates({ outputRoot: path.join(f.root, 'aggregates'),
         aggregateRunId: direct.aggregateRunIdFor([aggregate]), aggregates: [aggregate] });
@@ -566,11 +570,13 @@ test('直接汇总生成完整的本地留存会议汇总', async t => {
 
 test('会议任务标题的引号、反斜杠和换行按 YAML 字符串保存', () => {
     const yaml = require('yaml');
+    const rules = require('../scripts/lib/tag-rules.js').getDefaultTagRules();
     const member = {
         rank: 1, item: { paperId: 'conference:icassp:2026:icassp-arnumber:100', route: { kind: 'conference-local-pdf' } },
         source: {}, renderedPages: [{ primaryUrl: 'https://example.test/paper/' }],
         canonical: { labels: ['语音识别'], primaryTaskLabel: '语音识别', primaryMethodLabel: '神经网络',
-            tagMetadata: { selectionContract: 'fixture', registryVersion: 'v1', registrySha256: 'a'.repeat(64) },
+            tagMetadata: { selectionContract: rules.selectionContract, registryVersion: rules.registryVersion,
+                registrySha256: rules.registrySha256 },
             readerTitle: '测试论文', title: 'Example paper', score: 8, scoreDimensions: [], authors: [], resources: [],
             rankBucket: 'A', documentType: '研究', summary: '测试摘要' }
     };
@@ -581,6 +587,35 @@ test('会议任务标题的引号、反斜杠和换行按 YAML 字符串保存',
         assert.equal(frontMatter.title, `ICASSP-2026 · ${displayLabel}`);
         assert.equal(frontMatter.draft, false);
     }
+});
+
+test('历史日更、会议和任务汇总共享多级路径且不把祖先或空维度写成直接标签', () => {
+    const yaml = require('yaml');
+    const rules = require('../scripts/lib/tag-rules.js').getDefaultTagRules();
+    const member = {
+        rank: 1, item: { paperId: 'conference:icassp:2026:icassp-arnumber:100',
+            route: { kind: 'conference-local-pdf' } }, source: {},
+        renderedPages: [{ primaryUrl: 'https://example.test/paper/' }],
+        canonical: { labels: ['唇读', 'Transformer', '鲁棒性'], primaryTaskLabel: '唇读',
+            primaryMethodLabel: 'Transformer', tagMetadata: { selectionContract: rules.selectionContract,
+                registryVersion: rules.registryVersion, registrySha256: rules.registrySha256 },
+            readerTitle: '测试论文', title: 'Example paper', score: 8, scoreDimensions: [], authors: [],
+            resources: [], rankBucket: 'A', documentType: '研究', summary: '测试摘要' }
+    };
+    for (const scope of ['daily', 'conference', 'conference-task']) {
+        const markdown = direct.renderAggregate(scope, '2026-10-15', [member],
+            { conferenceKey: 'icassp-2026', displayLabel: '唇读' });
+        const metadata = yaml.parse(markdown.split('---\n')[1]);
+        assert.deepEqual(metadata.tags, ['Transformer', '唇读', '鲁棒性']);
+        assert.deepEqual(metadata.paper_digest_tags_concepts,
+            [{ id: 'task.lip-reading', facet: 'task', label: '唇读' }]);
+        assert.match(markdown, /\*\*研究任务\*\*：\[语音识别\].* → \[音视频语音识别\].* → \[唇读\]/);
+        assert.doesNotMatch(markdown, /^标签：|\*\*应用\*\*：|逆文本规范化/m);
+    }
+    const unknown = structuredClone(member); unknown.canonical.labels.push('不在词表中的方向');
+    assert.throws(() => direct.renderAggregate('daily', '2026-10-15', [unknown]), /当前词表外/);
+    const stale = structuredClone(member); stale.canonical.tagMetadata.registrySha256 = 'a'.repeat(64);
+    assert.throws(() => direct.renderAggregate('daily', '2026-10-15', [stale]), /未绑定当前受控词表/);
 });
 
 function aggregateWriteScenario(f, mode, root, aggregates) {

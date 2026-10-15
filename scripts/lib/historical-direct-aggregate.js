@@ -669,6 +669,31 @@ function renderAggregate(scope, key, members, options = {}) {
     if (!classificationMetadata || members.some(item => stableHash(item.canonical.tagMetadata) !== stableHash(classificationMetadata))) {
         fail(`汇总 ${scope}:${key} 的标签元数据缺失，或各篇论文的标签元数据不一致。`);
     }
+    const catalog = tagRules.tagCatalog;
+    if (classificationMetadata.registrySha256 !== catalog.registrySha256
+        || classificationMetadata.registryVersion !== catalog.version) {
+        fail(`汇总 ${scope}:${key} 的标签未绑定当前受控词表。`);
+    }
+    const byLabel = new Map(catalog.concepts.filter(concept => concept.status === 'active')
+        .map(concept => [concept.preferredLabel.zh, concept]));
+    const selectedConcept = label => {
+        const concept = byLabel.get(label);
+        if (!concept) fail(`汇总 ${scope}:${key} 包含当前词表外的标签：${label}`);
+        return { id: concept.id, facet: concept.facet, label: concept.preferredLabel.zh };
+    };
+    const records = members.map(member => ({ registryVersion: catalog.version,
+        registrySha256: catalog.registrySha256, concepts: member.canonical.labels.map(selectedConcept) }));
+    // 与会议汇总复用已有有界 Python 桥，一次投影整批，避免逐篇启动进程。
+    const rendered = require('./conference-postprocess.js').render({ tagPresentationBatch: { catalog, records } });
+    if (!Array.isArray(rendered?.tagPresentations) || rendered.tagPresentations.length !== members.length
+        || rendered.tagPresentations.some(value => typeof value !== 'string' || !value.trim())) {
+        fail(`汇总 ${scope}:${key} 的逐篇多级标签展示不完整。`);
+    }
+    const directionConcepts = directionCounts.map(([label]) => {
+        const concept = selectedConcept(label);
+        if (concept.facet !== 'task') fail(`汇总 ${scope}:${key} 的主任务不属于研究任务维度。`);
+        return concept;
+    });
     let output = `---\ntitle: ${JSON.stringify(display)}\ndraft: false\n`;
     output += `tags: ${JSON.stringify(tags)}\ncategories: ["论文速递"]\npaper_digest_pipeline_owned: true\npaper_digest_page_type: index\n`;
     output += 'paper_digest_reader_quality: "reader-facing-v3"\n';
@@ -676,6 +701,7 @@ function renderAggregate(scope, key, members, options = {}) {
     output += `paper_digest_tags_selection_contract: "${classificationMetadata.selectionContract}"\n`;
     output += `paper_digest_tags_registry_version: "${classificationMetadata.registryVersion}"\n`;
     output += `paper_digest_tags_registry_sha256: "${classificationMetadata.registrySha256}"\n`;
+    output += `paper_digest_tags_concepts: ${JSON.stringify(directionConcepts)}\n`;
     output += 'paper_digest_tags_scope: "aggregate-primary-task-counts"\n---\n\n';
     output += `# ${display}\n\n`;
     output += `本期共收录 **${members.length}** 篇论文，每篇导读均依据原文重新撰写。\n\n`;
@@ -693,7 +719,7 @@ function renderAggregate(scope, key, members, options = {}) {
         output += `| ${member.rank} | [${md(member.canonical.readerTitle)}](${internalUrl(member.renderedPages[0].primaryUrl, `${member.item.paperId} page URL`)})${visibleVersion} | ${member.canonical.score.toFixed(1)} | ${md(member.canonical.primaryTaskLabel)} | ${md(member.canonical.primaryMethodLabel)} |\n`;
     }
     output += '\n---\n\n## 📋 论文列表\n';
-    for (const member of members) {
+    for (const [index, member] of members.entries()) {
         const blogUrl = internalUrl(member.renderedPages[0].primaryUrl, `${member.item.paperId} page URL`);
         output += `\n### ${member.rank}. [${md(member.canonical.readerTitle)}](${blogUrl})\n\n`;
         output += `> 英文题目：*[${md(member.canonical.title)}](${blogUrl})*\n\n`;
@@ -701,7 +727,7 @@ function renderAggregate(scope, key, members, options = {}) {
         if (version) {
             output += `> ⚠️ **当前稿不可用**：本条目只封存并分析官方历史版本 **[${md(version.selectedSourceId)}](${publicHttps(version.selectedPdfUrl, `${member.item.paperId} historical PDF URL`)})**，不得暗示当前稿仍有效。\n\n`;
         }
-        output += `标签：${member.canonical.labels.map(label => `#${md(label)}`).join(' ')}\n\n`;
+        output += rendered.tagPresentations[index].trimEnd() + '\n\n';
         output += `评分：${member.canonical.score.toFixed(1)}/10（${member.canonical.scoreDimensions.map(item => `${item.label} ${item.value}`).join('；')}）\n\n`;
         const source = member.item.route.kind === 'arxiv-fresh-fetch'
             ? version

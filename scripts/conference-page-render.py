@@ -15,7 +15,7 @@ from urllib.parse import quote, urlsplit
 from analysis_sections import analysis_heading_titles, normalize_analysis_section_title, evaluation_heading_issue
 from blog_entry_loader import load_publish_to_blog
 from paper_reader_presentation import build_reader_presentation
-from tag_presentation import render_tag_hierarchy_markdown
+from tag_presentation import FACET_DISPLAY_LABELS, render_tag_hierarchy_markdown
 from tag_catalog import load_tag_catalog, resolve_append_only_proof_catalog
 from tag_stage_record import TAG_STAGE_RECORD_CONTRACT, read_tag_stage_record
 from tag_catalog import (TAG_SELECTION_CONTRACT, LEGACY_TAG_SELECTION_CONTRACT,
@@ -460,7 +460,7 @@ def render_packet(packet):
         return {'tagPresentations': [
             render_tag_hierarchy_markdown(record, batch['catalog'])
             for record in batch['records']
-        ]}
+        ], 'facetDisplayLabels': dict(FACET_DISPLAY_LABELS)}
     if 'tagMetadata' in packet and 'taxonomy' in packet:
         raise ValueError('页面生成输入不能同时包含 tagMetadata 和旧字段 taxonomy。')
     paper = packet.get('paper')

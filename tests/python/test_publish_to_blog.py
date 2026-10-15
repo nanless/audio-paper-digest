@@ -3097,14 +3097,37 @@ title: "Score rows"
         self.assertLess(markdown.index('💡 **论文评价**'), markdown.index('📌 **核心摘要**'))
         self.assertLess(markdown.index('📌 **核心摘要**'), markdown.index('🔗 **开源资源**'))
 
-    def test_display_tags_flattens_compound_model_output(self):
-        self.assertEqual(
-            publish_to_blog.format_display_tags([
-                '#音频理解', '#模型评估', '#音频事件检测 #可解释性',
-                '#音频理解',
-            ]),
-            '#音频理解 | #模型评估 | #音频事件检测 | #可解释性',
-        )
+    def test_daily_paper_scored_and_unscored_cards_render_same_selected_ancestor_paths(self):
+        from utils import _validate_tag_selection
+        paper = llm_api_publication_fixture()
+        parsed = paper['parsed']
+        parsed.update({'tags': ['#音视频语音分离', '#Transformer', '#低资源'],
+                       'primaryTaskTag': '#音视频语音分离', 'primaryMethodTag': '#Transformer'})
+        parsed['tagValidation'] = _validate_tag_selection(
+            publish_to_blog._PAGE_TAG_CATALOG, parsed['tags'],
+            parsed['primaryTaskTag'], parsed['primaryMethodTag'])
+        self.assertTrue(parsed['tagValidation']['valid'])
+        original = copy.deepcopy(paper)
+        hierarchy = publish_to_blog.render_paper_tag_hierarchy(parsed)
+        self.assertIn('concept=task.audio-separation)', hierarchy)
+        self.assertIn('concept=task.av-source-separation)', hierarchy)
+        self.assertIn('concept=task.av-speech-separation)', hierarchy)
+        self.assertEqual(hierarchy.count(' → '), 2)
+        self.assertNotIn('研究产物', hierarchy)
+        self.assertNotIn('concept=task.asr)', hierarchy)
+        page, slug = publish_to_blog.generate_paper_page(paper, '2026-08-31')
+        frontmatter, body = publish_to_blog._parse_frontmatter_content('paper.md', page)
+        self.assertEqual(frontmatter['tags'], ['音视频语音分离', 'Transformer', '低资源'])
+        self.assertEqual([node['id'] for node in frontmatter['paper_digest_tags_concepts']],
+                         ['task.av-speech-separation', 'method.transformer', 'setting.low-resource'])
+        outputs = [body]
+        for scored, unscored in (([(6.1, paper, parsed)], []), ([], [paper])):
+            outputs.append(publish_to_blog.generate_index_page(
+                scored, unscored, '2026-08-31', {paper['arxivId']: slug}))
+        for output in outputs:
+            self.assertEqual(output.count(hierarchy), 1)
+            self.assertNotIn('#音视频语音分离 | #Transformer', output)
+        self.assertEqual(paper, original)
 
     def test_researcher_workbench_frontmatter_preserves_explicit_arxiv_version(self):
         paper = llm_api_publication_fixture()
@@ -7810,6 +7833,8 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
         self.assertIn('tutorial_payload_verifier.py', dependency_names)
         self.assertIn('markdown_hugo_gate.py', dependency_names)
         self.assertIn('tag_stage_record.py', dependency_names)
+        self.assertIn('tag_presentation.py', dependency_names)
+        self.assertIn('tag_catalog.py', dependency_names)
         self.assertNotIn('llm_account_pool.py', dependency_names)
 
     def test_review_protocol_fingerprint_binds_model_code_hugo_and_is_cached(self):
@@ -7919,6 +7944,28 @@ paper_digest_tutorial_artifact_plan_sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee
 
         self.assertEqual(generation_before, generation_after)
         self.assertNotEqual(review_before, review_after)
+
+    def test_tag_presentation_dependencies_change_generation_and_review_fingerprints(self):
+        completed = SimpleNamespace(stdout='hugo v0.test', stderr='', returncode=0,
+                                    timed_out=False, output_truncated=False)
+        dependency_state = ['tag_catalog.py', 'a' * 64]
+
+        def dependency_digest(path):
+            return dependency_state[1] if Path(path).name == dependency_state[0] else 'f' * 64
+
+        publish_to_blog._REVIEW_PROTOCOL_CACHE.clear()
+        with mock.patch.object(publish_to_blog, '_sha256_file', side_effect=dependency_digest), \
+                mock.patch.object(publish_to_blog, 'blog_runtime_fingerprint', return_value='e' * 64), \
+                mock.patch.object(publish_to_blog.shutil, 'which', return_value='/missing/hugo'), \
+                mock.patch.object(publish_to_blog, '_run_bounded_subprocess', return_value=completed):
+            for module in ('tag_presentation.py', 'tag_catalog.py', 'tag_paths.py', 'path_config.py'):
+                with self.subTest(module=module):
+                    dependency_state[:] = [module, 'a' * 64]
+                    generation_before = publish_to_blog.generation_template_fingerprint()
+                    review_before = publish_to_blog.review_protocol_fingerprint()
+                    dependency_state[1] = 'b' * 64
+                    self.assertNotEqual(generation_before, publish_to_blog.generation_template_fingerprint())
+                    self.assertNotEqual(review_before, publish_to_blog.review_protocol_fingerprint())
 
     def test_account_pool_content_changes_review_but_not_generation_fingerprint(self):
         completed = SimpleNamespace(

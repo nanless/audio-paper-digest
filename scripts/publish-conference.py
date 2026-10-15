@@ -1114,6 +1114,7 @@ def publish_image_delta(repo, records, conference_id):
 
 def validate_conference_tag_catalogs(repo, files):
     """Only original staged page bytes may select a required catalog version."""
+    from markdown_hugo_gate import parse_frontmatter_content
     versions = set()
     for record in files:
         if record.get('kind') not in {'paper', 'aggregate'}:
@@ -1121,18 +1122,21 @@ def validate_conference_tag_catalogs(repo, files):
         raw = read_bytes(record['sourcePath'])
         if sha_bytes(raw) != record['sourceSha256']:
             raise ConferencePublicationError('标签核验前会议暂存页面字节与发布清单不一致。')
-        match = re.match(r'^---\n([\s\S]*?)\n---(?:\n|$)', raw.decode('utf-8'))
-        if not match:
-            raise ConferencePublicationError('会议页面缺少标签词表 front matter。')
-        fields = match.group(1)
-        values = {}
-        for field in ('registry_sha256', 'registry_version'):
-            found = re.findall(r'^paper_digest_(?:tags|taxonomy)_' + field
-                               + r':\s*"([^"\n]+)"\s*$', fields, re.MULTILINE)
-            if len(found) != 1:
-                raise ConferencePublicationError('会议页面缺少唯一的原标签词表版本或 SHA。')
-            values[field] = found[0]
-        versions.add((values['registry_sha256'], values['registry_version']))
+        try:
+            metadata, _ = parse_frontmatter_content(record['path'], raw.decode('utf-8'))
+        except (ValueError, UnicodeError) as error:
+            raise ConferencePublicationError(f'会议页面标签元数据无法核验：{error}') from error
+        prefixes = [prefix for prefix in ('paper_digest_tags_', 'paper_digest_taxonomy_')
+                    if any(str(key).startswith(prefix) for key in metadata)]
+        if len(prefixes) != 1:
+            raise ConferencePublicationError('会议页面缺少唯一标签字段前缀，或混用了新旧标签字段。')
+        prefix = prefixes[0]
+        sha = metadata.get(prefix + 'registry_sha256')
+        version = metadata.get(prefix + 'registry_version')
+        if not isinstance(sha, str) or not SHA_RE.fullmatch(sha) \
+                or not isinstance(version, str) or not version.strip():
+            raise ConferencePublicationError('会议页面缺少有效的原标签词表版本或 SHA。')
+        versions.add((sha, version))
     if not versions:
         raise ConferencePublicationError('会议发布清单缺少可核验的论文标签词表。')
     try:

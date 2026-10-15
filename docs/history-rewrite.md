@@ -120,6 +120,8 @@ arXiv 来源并发默认 3，会议来源并发默认 5，各可设为 1–8。�
 
 页面渲染通过 `paper-page-staging.js` 使用同一日更发布器；真实会议身份的作者、资源、摘要和评分展示通过 `paper_reader_presentation.py` 复用，保留历史 URL、论文身份与特殊来源披露。渲染实现 SHA 根据实际本地依赖闭包计算，包含共享 Python/Node 校验器；共享修复升级后旧暂存页重新生成。
 
+标签使用当前386项九维词表，单篇与汇总成员均通过 `tag_presentation.py` 呈现所选概念及祖先路径；总目录保留零计数方向，文章不展示空分面或兄弟项，不把祖先写成直接标签。旧阶段只读核验原SHA和原选择，不能为显示升级重签付费记录。新的页面暂存与汇总生成完成后，还须走历史独立审查、发布及上线核验，不能只更新站点目录就宣告旧文章已切换；站点版本目录和本批快照的发布检查见[统一标签规则](tag-display-policy.md#三条流程共用的目录与呈现)。
+
 日更、会议和历史单篇共用研究工作区及四份导出：`citation.json`、`citation.bib`、`citation.ris`、`rethink-context.json`。会议导出绑定真实会议 ID、来源全文 SHA、题目、原作者和 Reader 计划；路径按日期及会议 ID 的 SHA 隔离。暂存和恢复均校验固定文件集合、导出内容及页面声明的 SHA，不接受异篇引用或额外 JSON。未保存独立原摘要或公开来源 URL 时如实记录 `unavailable`，不造 arXiv 别名、不猜链接，也不把私有文件路径公开。
 
 ### 官方摘要与论文信息
@@ -224,6 +226,8 @@ npm run history:aggregate -- aggregate --apply \
 v3 汇总页面对应文件保留冻结会议任务页的路径、URL、旧字节 SHA、会议及任务键（`task key`），只按冻结链接关系确定论文成员。链接集合、目标页 SHA、渲染实现及任务覆盖情况均有自哈希。会议汇总先生成全部任务页，再生成会议总页作为同一轮完成标记。没有重写论文成员的冻结每日页记录为 `retain-unchanged`；`pageCoverage` 覆盖清单每一页，才允许 `publicationReady=true`。
 
 汇总使用 `reader-facing-v3`。排行榜和中英文题目都链接冻结历史单篇 URL；详情只显示一次标签及八维评分，评分后依次放分档、文档类型和可用 arXiv 原文，再放作者机构、核心摘要与逐项可点击的 HTTPS 资源状态。“热门方向”只统计每篇当前标签注册表的主任务。
+
+每日、会议总页和会议任务页均通过同一次有界 Python 桥，调用 `tag_presentation.py` 生成成员的多级标签块，避免逐篇额外启动进程。汇总页首显式记录 `aggregate-primary-task-counts` 范围和去重主任务的 `paper_digest_tags_concepts`；正文仍按各论文自己的完整所选集合显示，不用汇总主任务集合替代单篇分类。
 
 若来源含通过核验的 `arxiv-historical-version-source-v1`，汇总保存其 `identitySha256`、实际 `vN` 和官方带版本 PDF URL，并在排行榜及双语标题条目旁明确显示“当前稿不可用/分析官方历史版本 vN”。普通来源不增加这些字段，沿用原生成分支。
 

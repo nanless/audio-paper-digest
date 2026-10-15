@@ -19,8 +19,9 @@
 | 全文、表格、公式、作者和资源身份 | `lib/fresh-analysis-context.js`、`lib/reader-*`、`reader_sealed_pdf_*.py` | 来源 SHA、结构化单元格、原始 TeX、真实像素、作者逐项身份与资源可达状态 |
 | Reader 写作与局部修复 | `deep-analyzer.js`、`lib/reader-contract.js`、`reader-repair.js`、`reader-draft-order.js` | 同一长文结构、术语机制解释、来源绑定、受限修复预算 |
 | 资源宣称 | `deep-analyzer.js` 的共享资源规则与发布只读重放 | 代码可访问不等于权重可下载；否定、条件、第三方引用与本文发布声明区分；新阶段绑定 reader-resource-availability-claims-v1 |
-| 评分与标签 | `analysis-contract.js`、`lib/tag-stage-record.js`、`tag_stage_record.py`、`tag_catalog.py` | 八维评分、封顶总分、当前中文标签与明确主任务/方法 |
-| 页面展示与引用导出 | `publish-to-blog.py`、`paper_reader_presentation.py` | 同一资源去重、作者展示、评分说明及 JSON/BibTeX/RIS/上下文导出；会议使用真实会议身份 |
+| 评分与标签 | `analysis-contract.js`、`lib/tag-stage-record.js`、`tag_stage_record.py`、`tag_catalog.py` | 八维评分、封顶总分、当前中文标签与明确主任务/方法；严格纯追加按原SHA只读重放旧分类证明 |
+| 页面展示与引用导出 | `publish-to-blog.py`、`paper_reader_presentation.py`、`tag_presentation.py` | 同一资源去重、作者展示、评分说明、多级分类路径及 JSON/BibTeX/RIS/上下文导出；会议使用真实会议身份 |
+| 站点分类版本 | 日更 `tag_catalog_file_contents()`；会议/历史 `tag_catalog_publication.py` | 日更将词表资产纳入发布清单；会议/历史只读核验双份版本目录及本批原快照，缺失先阻断 |
 | 实现指纹 | `lib/workflow-implementation-files.js` | 收录共享模块和 Python worker 的传递依赖；当前 Prompt 只由版本登记表选取 |
 | 不可变文件与页面暂存 | `lib/publication-file-primitives.js`、`lib/paper-page-staging.js` | inode/单链接/目录、严格 UTF-8、SHA 回读和精确路径守卫 |
 | 发布与审查 | `publish-to-blog.py`、`publish_common.py`、流程发布适配器 | 内容 SHA 审查复用、事务锁、精确文件清单、远端 OID、部署与网页核验 |
@@ -32,6 +33,8 @@
 三条流程共用当前386项九维词表及 `tag_presentation.py` 展示函数，所选概念从原词表完整核验后生成父级路径。论文的直接标签仍为3–5项，祖先只作导航；文章不显示无命中的分面、兄弟方向或全目录。总目录保留全部方向及零计数节点。新分类只选[新版目录](https://nanless.github.io/audio-paper-digest-blog/tags/)已有概念，原262项和历史签名保留。
 
 会议与历史发布通过 `tag_catalog_publication.py` 检查站点已保存本批词表的双份目录和原快照；新版本须先经受控词表同步，不能发布后才发现分类被隐藏。日更把这些资产纳入正常生成清单。词表纯追加的只读兼容、快照及发布边界见[标签规则](tag-display-policy.md#三条流程共用的目录与呈现)。
+
+修改共享渲染器或同步目录资产不会自动改写已发布文章。用户要求某批既有页面采用新呈现时，须通过对应流程重新生成单篇和汇总，再审查、精确推送并逐页上线核验；已有合格分析及原分类证明只读复用，不为排版变化重新调用分析模型。各流程的调用与恢复位置见[页面切换说明](tag-display-policy.md#已发布页面切换到当前呈现)。
 
 ## 全批轮次与失败集合
 

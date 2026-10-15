@@ -12,6 +12,8 @@ FACET_DISPLAY_LABELS = {
     'signal': '信号', 'application': '应用', 'research_focus': '研究重点',
     'artifact': '研究产物', 'scientific_topic': '科学主题', 'model_family': '模型家族',
 }
+TAG_HIERARCHY_START = '<!--paper-tag-hierarchy-v1:start-->'
+TAG_HIERARCHY_END = '<!--paper-tag-hierarchy-v1:end-->'
 
 
 def build_tag_hierarchy(metadata, catalog):
@@ -65,12 +67,12 @@ def render_tag_hierarchy_markdown(metadata, catalog, *, heading='研究分类', 
     base_path = resolve_blog_base_path(base_path)
     if not facets:
         return ''
-    lines = [f'**{_markdown_text(heading)}**', '']
+    lines = [TAG_HIERARCHY_START, '', f'**{_markdown_text(heading)}**', '']
     for facet in facets:
         paths = [' → '.join(_tag_link(node['id'], node['label'], base_path) for node in path['nodes'])
                  for path in facet['paths']]
         lines.append(f'- **{facet["label"]}**：' + '；'.join(paths))
-    return '\n'.join(lines) + '\n\n'
+    return '\n'.join(lines) + '\n\n' + TAG_HIERARCHY_END + '\n\n'
 
 
 if __name__ == '__main__':

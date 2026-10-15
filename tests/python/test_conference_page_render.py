@@ -39,7 +39,9 @@ class ConferencePageRenderTest(unittest.TestCase):
         packet = {'tagPresentationBatch': {'catalog': catalog, 'records': [record, copy.deepcopy(record)]}}
         original = copy.deepcopy(packet)
         result = MODULE.render_packet(packet)
-        self.assertEqual(list(result), ['tagPresentations'])
+        self.assertEqual(set(result), {'tagPresentations', 'facetDisplayLabels'})
+        self.assertEqual(result['facetDisplayLabels'], MODULE.FACET_DISPLAY_LABELS)
+        self.assertEqual(result['facetDisplayLabels']['method'], '研究方法')
         self.assertEqual(len(result['tagPresentations']), 2)
         self.assertEqual(result['tagPresentations'][0], result['tagPresentations'][1])
         text = result['tagPresentations'][0]
