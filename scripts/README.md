@@ -19,6 +19,8 @@
 
 Reader 刷新默认使用配置并发5和总轮数3，`--concurrency N` 范围1–60，`--rounds N` 范围1–10。仅明确可重试失败进入下一轮；同次正常轮不改 Reader epoch。强制重分析首次按单篇执行已授权重置，后续失败轮保持原候选、次数及费用。
 
+已完成且已退休原候选的 Reader 仅需少量中文错字尾修时，显式运行 `npm run batch -- --reader-signed-corrections MANIFEST --fact-feedback-file FEEDBACK`。该入口要求来源绑定的新 Reader-only 反馈、当前正文仍含逐字错误原句、完整父稿 CAS，以及原退休付费稿逐字重放证明；清单覆盖本次全部未完成项。它只修改清单中1–8个既有正文/看图路径节点的明确词替换，先登记真实未完成反馈义务，再走正常解析、封存与锁内保存。原候选保持退休，原次数和像素证明保留，不能混用付费授权或模型回退。新清单须先调用模块的只读 `prepare` / `preview` 核验，正常独立博客审查仍不可省略。
+
 ## 官方会议
 
 使用 `conference:acquire/discover/filter/process`；`conference:publish:generate/review/push/verify`独立处理发布。旧execution/analyze/postprocess CLI已删除，不能绕过统一process来源/权限检查。参数见 [会议说明](../docs/conference-workflow.md)。
@@ -59,6 +61,7 @@ npm run test:compat
 | `analysis_sections.py` | 在 Python 解析和发布检查中识别论文评价章节，兼容旧标题并拒绝重复或混用。 |
 | `arxiv-source-authority.js` | 按规范 arXiv ID 规划或获取官方全文，用来维护来源授权；它不是 direct 路线或 arXiv 获取失败备用批次的选择器。dry-run 不联网、不写文件。 |
 | `batch-analyze.js` | 正常读取完整封存日更来源并逐篇锁内续跑；可重复 `--fact-feedback-file FILE`。`--refresh-reader-diagnostics` 保留原草稿与调用次数。明确有预算重试须同时提供 `--retry-failed-readers --reader-retry-manifest FILE`，或程序传入 `main({ readerRetryManifestPath: FILE, refreshReaderDiagnostics: true })`；只处理清单中同输入且耗尽的失败稿，旧稿与费用保留，初次明确付费轮最多3次已保存尝试/1次已保存完整重写/6实际请求/80k预留输出；后续局部或缺正文恢复使用单独的有界追加清单，原账和累计上限继续核验。无清单、坏绑定、仍有次数或成功稿拒绝。见 恢复说明。 |
+
 | `blog_entry_loader.py` | Python 桥：以固定路径加载文件名含连字符的 `publish-to-blog.py`。 |
 | `blog_repository_lock.py` | 管理共享博客锁，以 Git common-dir 协调不同项目工作区；核对 PID、hostname、token、lease、inode 和 SHA 后才回收或释放，不污染博客 Git。 |
 | `build-tag-preview.py` | 根据历史页面元数据生成私有标签索引、旧标签处理表和待评审报告，不改写博客。按名称或别名作字面对照；七种处理状态和证据要求见本页的分类词表维护说明。 |
@@ -250,6 +253,7 @@ npm run test:compat
 | `lib/reader-sealed-pdf-quote-evidence.js` | Reader 封存 PDF 逐字引文证据的绑定与重放。 |
 | `lib/reader-sealed-pdf-table-evidence.js` | Reader 封存 PDF 原表结构与单元格证据的绑定与重放。 |
 | `lib/reader-signed-draft.js` | Node 库：把本次同源、已核验的 Reader 还原成与输入完全等价的版本。只有实际解析并恢复原图引用后，正文、计划、图片 SHA 全部相同才返回；不写文件、不调用模型，也不把恢复稿当作原始 API JSON。 |
+| `lib/daily-reader-signed-correction.js` | 已完成日更 Reader 的显式错字尾修：原退休付费稿必须逐字重放到当前正文、计划和图片，绑定完整父稿 CAS、四源及仍含真实错误的 Reader-only 反馈。只接受1–8个既有节点中的有界中文词替换，沿用原次数与像素，经正常解析、封存和引擎保存；不复活候选、不增加请求额度、不回退模型。 |
 | `lib/reader-signed-operator.js` | Node 库：显式修订同一运行的已核验 Reader，先核对完整父稿、正文、计划及来源 SHA 与修改请求一致，再还原、解析并按共同流程封存结果；恢复输出时核对先前保存且不再改动的准备记录，其中包含修改请求、父稿、运行、来源和预期输出的 SHA。只写隔离分析并要求事实复核，不调用 API。 |
 | `lib/reader-source-blocked-normalization.js` | Node 库：对封存来源导致的完整表阻塞重跑唯一顺序调整，核对原稿与准备稿双 SHA，并保留真实绑定与承载正文的失败诊断；付费回放必须先逐字对应保存的原稿，不授予成功资格或新额度。 |
 | `lib/reader-source-diagnostics.js` | Node 库：把数字或单位来源不匹配的问题定位到正文单元格与原表行列，给出百分号、千分位及可能舍入的修复建议，但只读；不会自动改数字，也不会放宽来源检查。 |

@@ -111,6 +111,7 @@ npm run digest:prepare -- YYYY-MM-DD
 - 批次轮次不重置 Reader 候选、原尝试、失败或费用，不自动授权新的付费轮。运行级故障阻止新论文和新轮；预算、来源或身份阻断仍须受控处理。
 - 多轮后只剩少量顽固项时，`manualHandoff` 仅报告人工接手建议；须绑定原来源、失败稿SHA和获准修改范围，修正后重跑正常完整校验与审查。不能手填成功、删失败或跳过Source/Reader检查，详见 [三流程恢复](docs/three-workflows.md#全批轮次与失败集合)。
 - 日更人工清单须覆盖完整当前失败集合，每篇仅改1–8个已有节点；通常最多10篇，大批次按原封存入选集10%取整增加且硬限15篇，超过10篇时重新核对原封存清单与完整唯一集合。原次数、无进展和费用不变，仍须通过正常整篇资格及博客审查，详见[人工修正约束](docs/reader-explicit-retry.md#少量顽固稿的来源绑定人工修正)。
+- 已完整签名的日更 Reader 若在尾部审查发现明确中文术语错字，可显式使用 `batch --reader-signed-corrections`，绑定完整父稿 CAS、严格 Reader-only 反馈及原退休付费稿。只允许一项有界字词替换、1–8 个已有正文或图片说明节点；原稿必须重放为同一正文、计划与原图。不得将退休候选放回活动目录、添加模型额度或手写通过状态，修正仍交给正常解析、来源、整篇资格及博客独立审查。
 - `npm run deep`、`npm run batch`、`npm run reanalyze` 和 `npm run api:reader:refresh` 都是**日更封存来源的恢复入口**。它们只读取当前正式分析结果的 `dailyFreshSourceRun`，并核验 `batchDate`、完整论文集合及每篇 `source.txt`、`source.pdf`、来源元数据和清单的对应关系。它们不重新抓取、不补建来源文件，也不读取旧文本或缓存。旧成功记录未绑定当前这组封存文件时必须重分析；Reader 刷新会直接拒绝。文件缺失或 SHA 不符时，在模型和图片请求前停止。目标日期仍为北京时间当天时，重新运行 `npm run digest:prepare -- YYYY-MM-DD`；历史日期保留失败记录，按历史维护流程处理，不重新抓取。
 - 只续深度分析：`npm run deep -- --date YYYY-MM-DD`。
 - 强制全量重分析：`npm run reanalyze -- --concurrency N`；本次首次准备每篇时执行获准的重置，后续失败轮继续同一候选和预算。选定重分析也不按轮重复重置。

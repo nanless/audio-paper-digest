@@ -131,6 +131,12 @@ async function main(options = {}) {
     if (operatorManifestPath !== undefined && (typeof operatorManifestPath !== 'string'
         || !operatorManifestPath.trim() || operatorManifestPath.startsWith('--')))
         throw new Error('人工修正须提供 --reader-operator-corrections 清单路径');
+    const signedIndex = process.argv.indexOf('--reader-signed-corrections');
+    const signedManifestPath = options.readerSignedCorrectionsPath !== undefined
+        ? options.readerSignedCorrectionsPath : signedIndex < 0 ? undefined : process.argv[signedIndex + 1];
+    if ((signedIndex >= 0 || signedManifestPath !== undefined) && (typeof signedManifestPath !== 'string'
+        || !signedManifestPath.trim() || signedManifestPath.startsWith('--')))
+        throw new Error('签名长文尾修须提供 --reader-signed-corrections 清单路径');
     let explicitManifest;
     const manifestIndex = process.argv.indexOf('--reader-retry-manifest');
     const manifestPath = options.readerRetryManifestPath !== undefined
@@ -153,6 +159,9 @@ async function main(options = {}) {
         if (feedbacks.has(feedback.paperId)) throw new Error(`同一论文不能提供两份事实反馈：${feedback.paperId}`);
         feedbacks.set(feedback.paperId, feedback);
     }
+    if (signedManifestPath !== undefined && (operatorManifestPath !== undefined || explicitManifest
+        || options.analyzeFn || options.analyzeBatch || !feedbacks.size))
+        throw new Error('签名长文尾修仅允许严格事实反馈，不可混用候选修正、付费授权或自定义分析器');
     // 这个入口只继续已有日更分析。旧结果文件没有对应的封存 PDF 和文本记录，
     // 不能把它迁为当前结果后，再让分析器通过旧抓取路径补取来源。
     if (!fs.existsSync(RESULT_FILE)) {
@@ -187,6 +196,8 @@ async function main(options = {}) {
         && savedFacts.hasSavedProof(paper) && !savedFacts.readSavedFeedback(paper, dailySourcePlan);
     const blockedFacts = papers.filter(p => (!isSuccessfulAnalysisRecord(p)
         || !dailyFreshSources.isPaperReusableForAnalysis(p, dailySourcePlan)) && missingFactContext(p));
+    if (signedManifestPath !== undefined && blockedFacts.length)
+        throw new Error('签名长文尾修不能遗漏缺少原事实包的未完成论文');
     if (blockedFacts.length) console.log(`⚠️ 保留 ${blockedFacts.length} 篇缺少之前纠错说明的未完成记录，本次跳过：${blockedFacts.map(normalizedId).join(', ')}`);
     const notAnalyzed = papers.filter(p => {
         const feedback = feedbacks.get(normalizedId(p));
@@ -195,6 +206,10 @@ async function main(options = {}) {
     }).filter(p => !missingFactContext(p));
     console.log(`本次处理论文: ${notAnalyzed.length}`);
     if (feedbacks.size) console.log(`其中 ${feedbacks.size} 篇带有已核验的事实反馈；只有同反馈全部纠正并通过检查的论文才跳过。`);
+    // Fully verify the whole explicit tail before changing the formal run state.
+    const signedCorrections = signedManifestPath === undefined || notAnalyzed.length === 0 ? null
+        : await require('./lib/daily-reader-signed-correction').prepare(
+            signedManifestPath, dailySourcePlan, papers, feedbacks, notAnalyzed.map(normalizedId));
 
     const explicitRounds = new Map();
     if (explicitManifest) {
@@ -264,6 +279,7 @@ async function main(options = {}) {
         analyzeFn: dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, {
             ...options,
             analyze: (paper, sourceOptions) => {
+                if (signedCorrections) return require('./lib/daily-reader-signed-correction').apply(signedCorrections, paper);
                 const normalAnalyze = recoveryOptions => (options.analyzeFn || require('./deep-analyzer').analyzePaperDeep)(paper, {
                     ...sourceOptions,
                     ...recoveryOptions
