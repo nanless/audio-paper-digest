@@ -307,8 +307,9 @@ async function reanalyzeSelected(ids, options = {}) {
             const reader = readReaderLocked(paper);
             const execute = () => {
                 if (core) {
-                    // 锁内核验过的原包先交公共保存器封存；不能把同一核心包当作主文父包。
-                    factReview.withFactReview(core, () => undefined);
+                    // 原包与未完成义务先由公共保存器持久化；旧成功正文不能代替本次核心纠错。
+                    // register 内部使用同一反馈保存器，不把这份核心包伪装成主文父包。
+                    require('./lib/pending-fact-feedback').register(paper, dailySourcePlan, core.feedback);
                     return factReview.withCoreSummaryFactReview(core, paper, analyze);
                 }
                 return reader ? factReview.withReaderFactReview(reader, paper, analyze) : analyze();

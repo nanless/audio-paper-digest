@@ -164,9 +164,19 @@ test('无主文父包的核心纠错正常保存后跨作用域重放、完成�
     const generatedReaderDraft = require('./reader-signed-draft-fixture').fixture({
         noFigures: true, sourceText: sample.source.text
     }).draft;
+    let interruptCore = true;
     publicReaderRequestObserver = async (_url, _endpoint, _model, _body, _headers, options) => {
         const stage = options.usageContext.stage; requests.push(stage);
         assert.ok(['coreSummaryRepair', 'scoringAudit', 'apiReaderArticle'].includes(stage), stage);
+        if (stage === 'coreSummaryRepair') {
+            const pending = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[0];
+            assert.deepEqual(pending.analysisFactReviewObligation, facts.proofFor(feedback));
+            assert.equal(engine.isSuccessfulAnalysisRecord(pending), false,
+                '新核心反馈在模型请求前已阻断旧成功');
+            if (interruptCore) {
+                return { statusCode: 401, body: { error: { message: '合成测试的核心请求认证中断' } } };
+            }
+        }
         if (stage === 'scoringAudit') {
             const savedCore = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[0].analysisCheckpoint;
             assert.equal(exterior(savedCore), exterior(original.analysis), '正常摘要阶段保存前逐字保护另外十二节');
@@ -188,6 +198,24 @@ test('无主文父包的核心纠错正常保存后跨作用域重放、完成�
     assert.equal(fs.existsSync(path.join(daily.factFeedbackDirectory(sample.plan), facts.proofFor(mixed).feedbackSha256 + '.json')), false);
     assert.equal(requests.length, 0);
     fs.writeFileSync(file, JSON.stringify(feedback));
+    await assert.rejects(selected.reanalyzeSelected([sample.id], { coreFeedbackFiles: [file] }),
+        { code: 'MODEL_HTTP_NON_RETRYABLE' });
+    const failedPayload = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult));
+    const failed = failedPayload.papers[0];
+    assert.deepEqual(failed.analysisFactReviewObligation, facts.proofFor(feedback));
+    assert.equal(engine.isSuccessfulAnalysisRecord(failed), false);
+    assert.equal(require('../scripts/lib/completed-bound-fact-feedback')
+        .hasCompletedBoundFactFeedback(failed, feedback, sample.plan), false);
+    assert.equal(engine.isSuccessfulAnalysisRecord(engine.mergeStoredAnalysisState(original, failed)), false,
+        '普通合并不能用旧成功洗掉本次失败和未完成义务');
+    const prepared = daily.prepareDailyFreshSourceRecoveryPayload(failedPayload,
+        JSON.parse(fs.readFileSync(Config.FILES.filteredPapers)));
+    assert.deepEqual(prepared.papers[0].analysisFactReviewObligation, failed.analysisFactReviewObligation);
+    assert.equal(engine.isSuccessfulAnalysisRecord(prepared.papers[0]), false);
+    require('../scripts/digest-status').updateAnalysisDigestStatuses([failed], { batchDate: sample.plan.batchDate });
+    assert.deepEqual(JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[0], failed,
+        '状态同步不能改写正式失败或清除其新事实义务');
+    interruptCore = false;
     const outcome = await selected.reanalyzeSelected([sample.id], { coreFeedbackFiles: [file] });
     assert.equal(outcome.exitCode, 0);
     assert.equal(outcome.success, 1);
@@ -196,6 +224,8 @@ test('无主文父包的核心纠错正常保存后跨作用域重放、完成�
     assert.equal(requests.includes('primaryAnalysis'), false);
     assert.equal(facts.current(), null);
     const final = JSON.parse(fs.readFileSync(Config.FILES.deepAnalysisResult)).papers[0];
+    assert.equal(Object.hasOwn(final, 'analysisFactReviewObligation'), false,
+        '真实完整正常成功后才清除本次核心纠错义务');
     assert.notEqual(final.analysis, original.analysis);
     assert.notEqual(deep.extractSectionByTitle(final.analysis, '核心摘要'), oldSummary);
     assert.deepEqual(final.analysisManifest.stages.primaryAnalysis, original.analysisManifest.stages.primaryAnalysis);
