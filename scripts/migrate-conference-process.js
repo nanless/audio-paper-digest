@@ -10,6 +10,7 @@ const { requireExternalRuntime } = require('./env-loader.js');
 const processApi = require('./lib/conference-process.js');
 const cli = require('./conference-process.js');
 const recovery = require('./lib/conference-process-recovery.js');
+const retainedSourceReplay = require('./lib/conference-retained-source-replay.js');
 
 const USAGE = '--apply --catalog NAME.json --report NAME.json --filter UUID --from PROCESS_UUID [--concurrency 1|2|3|4|5] [--reuse-complete-pages] [--retry-failed]';
 const UUID_RE = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
@@ -110,7 +111,11 @@ function migrateAndRun(options, runtime = {}) {
         const sharedContext = oldImplementation === currentImplementation
             ? context
             : { ...context, authority: { ...context.authority, implementationSha256: oldImplementation } };
-        const shared = await (deps.prepareShared || processApi.prepareShared)(sharedContext, deps, state.createdAt);
+        const retained = Boolean(state.sourceUpgradePromotion)
+            && Object.values(state.items).every(item => item.status === 'complete');
+        const shared = retained
+            ? retainedSourceReplay.replayCompletedPromotedShared({ context, state, directory }, deps)
+            : await (deps.prepareShared || processApi.prepareShared)(sharedContext, deps, state.createdAt);
         processApi.assertSourceContinuity(state, shared);
         // 只有实现或生命周期确实需要时，才重新处理已完成的论文。发布器或渲染器的提交
         // 会在 LLM 流程运行期间改变实现指纹，这时重跑只是把暂存页拉回与记录一致，
@@ -120,13 +125,14 @@ function migrateAndRun(options, runtime = {}) {
         const stagedProofs = new Map();
         if (requiresMigration || lifecycleNeedsRefresh) {
             for (const item of complete) {
+                const original = shared.retainedSources?.get(item.analysisRunId);
                 const staged = deps.postprocess.stagePaper({
                     analysisRoot: deps.files.conferenceAnalysisDir,
                     executionId: item.analysisRunId,
                     tagCatalogPath: deps.files.tagCatalogFile,
                     stagingRoot: deps.files.conferencePageStagingDir,
-                    planHandle: shared.planHandle,
-                    sourceRoot: shared.sourceCacheRoot,
+                    planHandle: original?.planHandle || shared.planHandle,
+                    sourceRoot: original?.sourceRoot || shared.sourceCacheRoot,
                     apply: true
                 });
                 if (staged.status !== 'staged') {
@@ -190,9 +196,17 @@ function migrateAndRun(options, runtime = {}) {
                     receiptSha256: processApi.stableHash(receiptBody) }, null, 2)}\n`));
         }
         processApi.assertState(state, { authority: context.authority, paperIds: expectedPaperIds });
-        const migrationDeps = oldImplementation === currentImplementation
+        const migrationDeps = oldImplementation === currentImplementation && !retained
             ? deps
             : { ...deps, prepareShared: async () => shared };
+        if (retained && !deps.aggregate) migrationDeps.aggregate = async (_context, currentShared, executionIds) =>
+            deps.postprocess.aggregateConference({
+                analysisRoot: deps.files.conferenceAnalysisDir, executionIds,
+                tagCatalogPath: deps.files.tagCatalogFile, stagingRoot: deps.files.conferencePageStagingDir,
+                aggregateRoot: deps.files.conferenceAggregateDir, planHandle: currentShared.planHandle,
+                sourceRoot: currentShared.sourceCacheRoot,
+                retainedSources: currentShared.retainedSources, apply: true
+            });
         // 实现迁移会让旧的完成凭证失效。旧凭证保留下来以便恢复，但要把正式文件名让
         // 出来，流程完成时才能原子写入新凭证。
         archiveStaleCompletionReceipt(directory, state);

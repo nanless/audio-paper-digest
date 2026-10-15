@@ -108,7 +108,7 @@ function validateReaderAndScoring(paper) {
         || contracts.apiReaderSourceBindings !== SOURCE_BINDINGS_CONTRACT
         || paper?.apiReaderPlan?.contract !== READER_CONTRACT
         || paper?.apiReaderPlan?.sourceBindingsContract !== SOURCE_BINDINGS_CONTRACT
-        || !analysisEngine.hasValidApiReaderV3Records(paper)) {
+        || !analysisEngine.hasValidApiReaderV3Records(paper, { legacyConferenceResourceBindings: true })) {
         fail('读者文章、来源绑定规则或文章与正式分析的对应记录未通过校验。');
     }
     if (scoring.status !== 'complete' || scoring.scoringContract !== SCORING_CONTRACT
@@ -227,6 +227,13 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
     if (!require('./reader-author-source.js').canReuseReaderAuthorInputs(sourcePaper, loaded.source.sourceDetails)) {
         fail('会议论文的作者来源未由当前封存全文重放核验，请刷新作者或 Reader 后再继续。');
     }
+    const deep = require('../deep-analyzer.js');
+    const sourceText = loaded.source.sourceDetails.text;
+    const resourceIssues = deep.readerResourceClaimIssues(
+        deep.readerResourceClaimDraftFromArticle(sourcePaper.apiReaderPlan, sourcePaper.apiReaderArticle),
+        sourcePaper.apiReaderResources, sourceText, { paper: sourcePaper });
+    if (resourceIssues.length) fail(`当前封存来源下的读者资源声明未通过：${resourceIssues[0].message}`);
+    loaded.resourcePresentation = deep.readerResourcePublicationResources(sourcePaper, sourceText);
     const coordinates = identityApi.conferenceCoordinates(loaded.run.conference);
     const identity = identityApi.normalizeIdentity({ contract: identityApi.CONTRACT, kind: 'conference',
         canonicalId: loaded.run.paperId, arxivId: null, conference: coordinates,
@@ -450,6 +457,7 @@ function buildConferencePageArtifacts(loaded, tagCatalog, renderFn, implementati
     const date = loaded.run.completionReceipt.completedAt.slice(0, 10);
     const packet = { paper: { ...structuredClone(loaded.analysis.papers[0]), paper_id: loaded.run.paperId }, tagMetadata: assignment,
         tagCatalog,
+        sourceText: loaded.source.sourceDetails.text,
         paper_id: loaded.run.paperId, conference: loaded.run.conference, capabilities: loaded.run.capabilities,
         publication: structuredClone(loaded.publication), date,
         figureAssets: conferenceFigureAssets(loaded),
@@ -523,7 +531,7 @@ function buildConferencePageArtifacts(loaded, tagCatalog, renderFn, implementati
         documentType: loaded.analysis.papers[0].parsed.documentType,
         scoreDimensions: Object.fromEntries(SCORE_DIMENSIONS.map(([field]) => [field, Number(loaded.analysis.papers[0].parsed[field])])),
         authors: structuredClone(loaded.analysis.papers[0].apiReaderAuthors.authors),
-        resources: structuredClone(loaded.analysis.papers[0].apiReaderResources.resources),
+        resources: structuredClone(loaded.resourcePresentation),
         assets: assetFiles.map(({ bytes, ...record }) => record),
         assetSetSha256: stableHash(assetFiles.map(({ bytes, ...record }) => record)) };
     return { assignment, assignmentBytes, pageBytes, assetFiles,
@@ -891,7 +899,7 @@ function isArxivResource(resource) {
 }
 function resourceLine(resource, paperId) {
     const labels = { code: '代码相关资源', model: '模型相关资源', dataset: '数据相关资源', demo: '演示资源',
-        reproduction: '复现相关资源', third_party: '第三方资源' };
+        reproduction: '复现相关资源', third_party: '论文所列链接' };
     const statuses = { available: '链接可访问', unavailable: '链接不可用', temporarily_unreachable: '暂时无法访问' };
     // 资源标识保留论文里 URL 的原始拼写；
     // 渲染出来的链接可以按 URL.href 做规范化（例如给 https://example.org/ 补上末尾斜杠），
@@ -1023,19 +1031,38 @@ function hierarchyLines(hierarchy, facetDisplayLabels) {
 }
 
 function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagingRoot, aggregateRoot,
-    planHandle, sourceRoot, preservedStages = {}, apply = false, trustEvidence = false }, dependencies = {}) {
+    planHandle, sourceRoot, preservedStages = {}, retainedSources, apply = false, trustEvidence = false }, dependencies = {}) {
     if (!Array.isArray(executionIds) || !executionIds.length || new Set(executionIds).size !== executionIds.length
         || executionIds.some(id => !UUID_RE.test(id))) fail('生成会议汇总需要非空的分析运行 ID 数组，各项必须是有效且不重复的 UUID。');
     const authenticated = planProof(planHandle, dependencies); const expectedIds = authenticated.proof.paperIds;
     if (executionIds.length !== expectedIds.length) fail('分析运行集合必须覆盖已核验计划中的全部入选论文。');
+    if (retainedSources !== undefined && (!(retainedSources instanceof Map)
+        || retainedSources.size !== executionIds.length || executionIds.some(id => !retainedSources.has(id))
+        || Object.keys(preservedStages).length || trustEvidence)) {
+        fail('原来源映射必须精确覆盖全部分析运行，且不能混用保留页面或跳过计划核验。');
+    }
     const tagCatalog = (dependencies.loadTagCatalog || tagCatalogApi.loadTagCatalog)(tagCatalogPath); const byPaper = new Map();
     for (const executionId of executionIds) {
+        let originalSource = { planHandle, sourceRoot };
+        if (retainedSources !== undefined) {
+            const retained = retainedSources.get(executionId);
+            if (!retained || typeof retained !== 'object' || typeof retained.sourceRoot !== 'string') {
+                fail('原来源映射中的计划句柄或来源目录缺失。');
+            }
+            const originalPlan = planProof(retained.planHandle, dependencies).proof;
+            if (['conferenceId', 'filterPolicySha256', 'selectionReceiptSha256', 'selectedMemberSetSha256']
+                .some(key => originalPlan[key] !== authenticated.proof[key])
+                || stableHash(originalPlan.paperIds) !== stableHash(expectedIds)) {
+                fail('各篇原来源计划与本次完整会议入选集合不一致。');
+            }
+            originalSource = { planHandle: retained.planHandle, sourceRoot: retained.sourceRoot };
+        }
         const preserved = Object.hasOwn(preservedStages, executionId) ? preservedStages[executionId] : null;
-        const completed = preserved ? null : loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trustEvidence }, dependencies);
+        const completed = preserved ? null : loadCompleted({ analysisRoot, executionId, ...originalSource, trustEvidence }, dependencies);
         const staged = preserved ? loadPreservedStage({ stagingRoot, executionId, paperId: preserved.paperId, pageProof: preserved.pageProof }, dependencies) : null;
         const paperId = preserved ? staged.manifest.paperId : completed.run.paperId;
         if (byPaper.has(paperId)) fail('同一篇入选论文对应了多个分析运行，不能生成汇总。');
-        byPaper.set(paperId, { executionId, completed, ...(staged ? { staged } : {}) });
+        byPaper.set(paperId, { executionId, completed, originalSource, ...(staged ? { staged } : {}) });
     }
     if (stableHash([...byPaper.keys()].sort((left, right) => left.localeCompare(right)))
             !== stableHash(expectedIds)) {
@@ -1043,7 +1070,7 @@ function aggregateConference({ analysisRoot, executionIds, tagCatalogPath, stagi
     }
     const stages = expectedIds.map(paperId => {
         const item = byPaper.get(paperId); const staged = item.staged || loadStage({ analysisRoot, executionId: item.executionId,
-            tagCatalogPath, stagingRoot, planHandle, sourceRoot, trustEvidence }, dependencies);
+            tagCatalogPath, stagingRoot, ...item.originalSource, trustEvidence }, dependencies);
         return { ...staged, completed: item.completed };
     });
     if (new Set(stages.map(item => item.manifest.pagePath)).size !== stages.length) fail('selected pages have duplicate path ownership');

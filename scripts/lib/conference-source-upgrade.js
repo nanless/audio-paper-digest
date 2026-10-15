@@ -735,4 +735,4 @@ async function promoteSourceUpgrade(options, overrides = {}) {
 }
 
 module.exports = { CONTRACT, VERSION, LEGACY_CONTRACT, LEGACY_VERSION, assertSourceUpgradePlan, planSourceUpgrade, applySourceUpgrade, promoteSourceUpgrade, promotionProcessId, validateState,
-    retainedItemSource, repairPolicy, replayRetainedShared };
+    retainedItemSource, retainedLegacySnapshot, repairPolicy, replayRetainedShared };

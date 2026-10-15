@@ -20,5 +20,18 @@
   {"name":"code cannot cross thematic break","term":"`token\n---\nend`标记","explanation":"`token\n---\nend` 标记","present":false},
   {"name":"code cannot cross blank paragraph","term":"`token\n\nend`标记","explanation":"`token\n\nend` 标记","present":false},
   {"name":"non ASCII gap is not formatter space","term":"`token`标记","explanation":"`token`　标记","present":false},
-  {"name":"mismatched backtick delimiters stay literal","term":"``token`标记","explanation":"``token` 标记","present":false}
+  {"name":"mismatched backtick delimiters stay literal","term":"``token`标记","explanation":"``token` 标记","present":false},
+  {"name":"saved second pass uses normal numeric display","term":"二次复核","explanation":"2 次复核负责检查。","present":true},
+  {"name":"saved six dimensions uses normal numeric display","term":"六维感知轴","explanation":"6 维感知轴负责诊断。","present":true},
+  {"name":"count inside a Chinese term keeps numeric boundaries","term":"连续二维主干","explanation":"连续 2 维主干负责编码。","present":true},
+  {"name":"two-stage spelling shares the same count","term":"两阶段训练","explanation":"2 阶段训练负责顺序。","present":true},
+  {"name":"one to one mapping shares numeric display","term":"一对一映射","explanation":"1 对一映射负责关联。","present":true},
+  {"name":"numeric dimensions remain distinct","term":"二维卷积","explanation":"3 维卷积负责编码。","present":false},
+  {"name":"ten cannot match the suffix of twelve","term":"二维卷积","explanation":"十二维卷积负责编码。","present":false},
+  {"name":"two cannot match the numeric suffix of twelve","term":"二维卷积","explanation":"12 维卷积负责编码。","present":false},
+  {"name":"two cannot match a signed or decimal numeric suffix","term":"二维卷积","explanation":"0.2 维卷积与 -2 维卷积均不同。","present":false},
+  {"name":"missing numeric concept is still missing","term":"六维感知轴","explanation":"总体偏好负责选择。","present":false},
+  {"name":"code Chinese numeral bytes remain literal","term":"`二维`卷积","explanation":"`2维` 卷积负责编码。","present":false},
+  {"name":"numeric display does not change code gaps","term":"`2维`卷积","explanation":"`2 维` 卷积负责编码。","present":false},
+  {"name":"same code with outside numeral display","term":"`token`二维卷积","explanation":"`token` 2 维卷积负责编码。","present":true}
 ]

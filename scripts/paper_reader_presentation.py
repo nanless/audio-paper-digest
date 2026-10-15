@@ -5,12 +5,48 @@ nor changes source capabilities, identities, saved counts or evidence hashes.
 """
 
 import copy
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import tempfile
 
 from blog_entry_loader import load_publish_to_blog
 
 
+def replay_resource_presentation(paper, source_text):
+    """复用同一只读来源及声明核验桥；返回临时视图，不改原身份。"""
+    if not isinstance(source_text, str) or hashlib.sha256(source_text.encode()).hexdigest() != paper.get('sourceSha256'):
+        raise ValueError('资源展示必须绑定同篇封存全文 SHA。')
+    publisher = load_publish_to_blog()
+    node = shutil.which('node')
+    if not node:
+        raise ValueError('资源展示的公共声明重放需要 Node.js。')
+    root = Path(__file__).resolve().parents[1]
+    payload = json.dumps({'paper': paper, 'sourceText': source_text, 'resourcePresentation': True},
+                         ensure_ascii=False, separators=(',', ':')).encode()
+    if len(payload) > 128 * 1024 * 1024:
+        raise ValueError('资源展示的来源重放输入超过上限。')
+    with tempfile.TemporaryFile() as source:
+        source.write(payload); source.flush(); source.seek(0)
+        result = publisher._run_bounded_subprocess(
+            [node, str(root / 'scripts/lib/reader-resource-claims-replay-cli.js'), str(source.fileno())],
+            cwd=str(root), env={key: value for key, value in os.environ.items()
+                               if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
+            timeout_seconds=30, max_output_bytes=1024 * 1024, pass_fds=(source.fileno(),))
+    try:
+        value = json.loads(result.stdout)
+    except (ValueError, TypeError) as error:
+        raise ValueError('资源展示的公共来源重放响应无效。') from error
+    if result.returncode != 0 or result.timed_out or result.output_truncated \
+            or value.get('verified') is not True or not isinstance(value.get('resources'), list):
+        raise ValueError('资源展示或正文声明未通过当前封存来源核验：' + str(value.get('message', '')))
+    return value['resources']
+
+
 def build_reader_presentation(paper, *, plan, resources, authors,
-                              exclude_resource_url=None, source_note=''):
+                              exclude_resource_url=None, source_note='', source_text=None):
     """Use daily presentation rules without inventing an arXiv source identity.
 
     Callers must first validate their Reader and source contracts. Requiring the
@@ -29,7 +65,8 @@ def build_reader_presentation(paper, *, plan, resources, authors,
     parsed = publisher.parse_analysis(paper.get('analysis', ''))
     if not isinstance(parsed, dict):
         raise ValueError('Reader 展示需要可重新解析的正式分析正文。')
-    visible_resources = copy.deepcopy(resources)
+    visible_resources = (replay_resource_presentation(paper, source_text) if source_text is not None
+                         else copy.deepcopy(resources))
     excluded = False
     if exclude_resource_url is not None:
         visible_resources = [resource for resource in visible_resources
@@ -39,6 +76,9 @@ def build_reader_presentation(paper, *, plan, resources, authors,
     summary = publisher._validated_detailed_core_summary(paper, parsed)
     summary = summary or str(plan.get('oneSentenceThesis') or '').strip()
     resource_block = publisher.render_verified_reader_resources(visible_resources, paper=paper)
+    if source_text is not None:
+        # A mentioned project URL does not prove third-party ownership or release.
+        resource_block = resource_block.replace('- 第三方资源：', '- 论文所列链接：')
     if excluded:
         resource_block += ('\n\n预印本/扩展版链接未在会议页展示；'
                            '会议版来源见页首官方记录与 PDF。')

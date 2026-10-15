@@ -14,4 +14,7 @@ test('saved Reader guard accepts only visible complete explanations and keeps te
  assert.equal(engine.hasValidApiReaderV3Records(sample(text.replace('强制对齐','A BC'),['AB C','`<score>`标记'])),false);
  assert.equal(engine.hasValidApiReaderV3Records(sample(text,['`<score>`标记','`<score>` 标记'])),false);
  assert.equal(engine.hasValidApiReaderV3Records(sample(text.replace('强制对齐','`<word>` 标记'),['`<word>`标记','`<score>`标记'])),true);
+ const numeric=sample('6 维感知轴负责诊断，2 次复核负责统一校对。二者按清楚的接口组合，说明感知结果如何进入复核过程，以及哪些边界仍需额外证据。',['六维感知轴','二次复核']);
+ const numericBefore=JSON.stringify(numeric);assert.equal(engine.hasValidApiReaderV3Records(numeric),true);assert.equal(JSON.stringify(numeric),numericBefore);
+ assert.equal(engine.hasValidApiReaderV3Records(sample('2 阶段训练负责顺序，另一个模块负责校对。两者按清楚的接口组合，说明结果如何进入训练过程，以及哪些边界仍需额外证据。',['两阶段训练','二阶段训练'])),false);
 });

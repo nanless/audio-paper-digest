@@ -119,6 +119,7 @@ const IMPLEMENTATION_PROMPT_TEXT_VERSIONS = Object.freeze(['v1', 'current']);
 // 它们不是提示词文本，v1 冻结清单当初也没有收录，加进去会让旧记录的指纹再也
 // 复算不出来，所以只进当前清单，v1 清单保持原样。
 const SOURCE_VERIFICATION_FILES = Object.freeze([
+    'scripts/lib/conference-retained-source-replay.js',
     'scripts/lib/conference-source-context.js',
     'scripts/lib/conference-source-ledger.js',
     'scripts/lib/conference-extraction-receipt.js',
@@ -960,7 +961,11 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
     }
     const sourceContext = { ...context, authority: { ...context.authority,
         implementationSha256: recovery.sourceImplementation(state, directory, module.exports) } };
-    const shared = await (deps.prepareShared || prepareShared)(sourceContext, deps, state.createdAt);
+    const retainCompletedSources = Boolean(state.sourceUpgradePromotion)
+        && Object.values(state.items).every(item => item.status === 'complete');
+    const shared = retainCompletedSources
+        ? require('./conference-retained-source-replay').replayCompletedPromotedShared({ context, state, directory }, deps)
+        : await (deps.prepareShared || prepareShared)(sourceContext, deps, state.createdAt);
     assertSourceContinuity(state, shared);
     const sourceByPaper = new Map(shared.sealed.map(item => [item.paperId, item.proof]));
     let stopped = false;
@@ -1133,7 +1138,8 @@ async function runConferenceProcessLocked(options, deps, context, processId, dir
     const aggregate = await (deps.aggregate || (async () => deps.postprocess.aggregateConference({
         analysisRoot: deps.files.conferenceAnalysisDir, executionIds, tagCatalogPath: deps.files.tagCatalogFile,
         stagingRoot: deps.files.conferencePageStagingDir, aggregateRoot: deps.files.conferenceAggregateDir,
-        planHandle: shared.planHandle, sourceRoot: shared.sourceCacheRoot, apply: true })))(context, shared, executionIds, deps);
+        planHandle: shared.planHandle, sourceRoot: shared.sourceCacheRoot,
+        retainedSources: shared.retainedSources, apply: true })))(context, shared, executionIds, deps);
     const aggregateProof = { manifestSha256: aggregate.manifest.manifestSha256,
         markdownSha256: aggregate.manifest.markdownSha256, aggregateId: aggregate.manifest.aggregateId,
         pagePath: aggregate.manifest.pagePath };

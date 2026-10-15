@@ -45,3 +45,33 @@ test('原词表只读回放仍阻断正文、核心、Reader、评分、来源�
             false, mutate.toString());
     }
 });
+
+test('旧会议v1资源只读保留原绑定，默认资格与已声明新协议不能降级', () => {
+    const { paper, tagRules } = fixture();
+    const deep = require('../scripts/deep-analyzer');
+    const crypto = require('node:crypto');
+    const quote = '1Project page: https://example.com/project/';
+    const body = { contract: 'api-reader-resource-identity-v1', sourceTextSha256: paper.sourceSha256,
+        resources: [{ type: 'dataset', origin: 'paper_source', sourceQuote: quote,
+            sourceQuoteSha256: crypto.createHash('sha256').update(quote).digest('hex'),
+            originalUrl: 'https://example.com/project/', finalUrl: 'https://example.com/project/',
+            redirects: [], status: 200, availability: 'available', retryable: false }] };
+    paper.apiReaderResources = { ...body, identitySha256: deep.stableFingerprint(body) };
+    const stage = paper.analysisManifest.stages.apiReaderArticle;
+    stage.resourceIdentitySha256 = paper.apiReaderResources.identitySha256;
+    stage.resourceCount = 1;
+    paper.analysisManifest.stages.openSourceScan.resourceEvidenceSha256 = paper.apiReaderResources.identitySha256;
+    const before = JSON.stringify(paper);
+    assert.equal(engine.hasValidApiReaderV3Records(paper), false);
+    assert.equal(engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, { tagRules }), true);
+    assert.equal(JSON.stringify(paper), before);
+    for (const mutate of [
+        p => { p.analysisManifest.contracts.readerResourceClaims = 'reader-resource-availability-claims-v1'; },
+        p => { p.analysisManifest.stages.apiReaderArticle.readerResourceClaimsContractVersion = 'unknown'; },
+        p => { p.apiReaderResources.resources[0].sourceQuoteSha256 = '0'.repeat(64); },
+        p => { p.apiReaderResources.identitySha256 = '0'.repeat(64); }
+    ]) {
+        const changed = structuredClone(paper); mutate(changed);
+        assert.equal(engine.isSuccessfulAnalysisRecordForReadOnlyConferencePublication(changed, { tagRules }), false);
+    }
+});

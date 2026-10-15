@@ -147,6 +147,7 @@ npm run test:compat
 | `lib/conference-plan.js` | Node 库：只从已认证的导入记录、已审计划和当前词表生成运行与计划凭证；恢复按原凭证 SHA 及版本从集中归档只读核验原词表，保持原 plan/run/receipt 字节。来源计划可溯源不授予旧分类新出版资格，当前暂存仍完整核验分类；拒绝任意路径、别名和不完整成员集。 |
 | `lib/conference-postprocess.js` | Node 库：只接受已认证的会议计划，逐篇核验计划、来源、完成结果、当前分类和页面渲染。单篇目录包含词表与渲染实现指纹，代码升级不覆盖旧页面；只有执行记录精确覆盖完整入选集时才生成私有会议汇总。 |
 | `lib/conference-process-recovery.js` | 保留会议断点、已付费阶段与原来源绑定的恢复规则。 |
+| `lib/conference-retained-source-replay.js` | 完整来源升级进程的只读逐篇来源回放：按每篇原分析绑定的计划凭证认证筛选、暂存、导入、原计划与原抽取，缓存不同计划的已认证句柄；单篇与汇总使用各自原来源。仅词表元数据能恢复到原凭证精确 SHA 时才在系统临时目录重放原计划，不改现有文件或重新提取、分析。 |
 | `lib/conference-process.js` | Node 库：对会议完整入选集合封存官方 PDF、导入来源，调用公共引擎分析，生成读者文章、评分、分类页面和汇总。整批默认并发 1，可设为 1–5；每篇内部并发固定为 1。新进程及完成凭证使用各自 v2 格式，词表身份写入 `tagCatalogVersion`、`tagCatalogSha256`；旧记录完整核验后沿原 UUID 恢复。 |
 | `lib/conference-publication-author-replay-cli.js` | Node 子进程入口：供会议发布器通过私有文件调用的本地来源核验入口；输出逐篇已核验作者及分析、完成凭证、来源快照 SHA，禁止网络与配置加载。 |
 | `lib/conference-publication-author-source.js` | Node 库：只读核验官方元数据、PDF、已有抽取来源与分析凭证，核完整姓名及作者机构；不新建来源、不重抽 PDF 或请求模型。 |
@@ -221,7 +222,7 @@ npm run test:compat
 | `lib/reader-author-source.js` | Node 库：当前生产 Reader 作者复用资格；跳过已完成分析、恢复历史/会议任务及发布前，必须从已核验的原始材料重新解析并核验作者，保留旧成功结构与只读统计。 |
 | `lib/reader-candidate-transactions.js` | Node 库：在内存中跟踪分析结果对应的待保存文章，复制结果时同步这层对应关系；不加载分析器、不读写文件、不改变日志。文章实际保存后的检查和恢复稿停用仍由分析器负责。 |
 | `lib/reader-compatible-candidate-replay.js` | Node 库：在统一恢复中用真实迁移链或最后付费请求、响应及生产逐字回放收敛同输入候选；不按文件时间选稿，不改次数和费用，无法证明仍拒绝。 |
-| `lib/reader-concept-term-display.js` | Node 库：核对术语与完整解释的显示身份；仅接受完整行内代码结束后、中文前由正常排版加入的 ASCII 空格，保留代码内部和词内字节，拒绝显示等价的重复术语；与 Python 发布检查使用同一边界。 |
+| `lib/reader-concept-term-display.js` | Node 库：核对术语与完整解释的显示身份；支持同一确定小计数和排版规则下的“二次/2 次、六维/6 维”，保护代码内部、英文词内及完整数字边界，拒绝缺词、不同数字与显示等价的重复术语；与 Python 发布检查使用同一边界。 |
 | `lib/reader-contract.js` | Node 库：规定读者文章的格式要求，按本次证据向模型说明写作要求，并检查不同小节的内容是否近似重复。 |
 | `lib/reader-dom-span-projection.js` | Node 库：从真正封存 HTML 重放全幅 colspan 分类行的空白投影，让正常完整表编译与最终逐格守卫一致；保持来源、旧展示字节及 PDF 规则不变。 |
 | `lib/reader-dom-span-replay-cli.js` | Node 只读子进程：Python 发布检查通过私有受限文件描述符批量重放 HTML 全幅分类行空白投影；先核日更工作区、四份封存来源、保存表格 SHA 与实际正文坐标，再共用原 DOM 规则，不请求模型或网络。 |

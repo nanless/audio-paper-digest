@@ -48,6 +48,41 @@ function parseWithClaim(f, text, index = 10) {
     return deep.parseApiReaderArticleResult(JSON.stringify(draft), f.options);
 }
 
+test('旧会议资源原身份只读，当前投影不把项目链接升级为数据开放且仍拒虚假正文', () => {
+    const sourceText = '1Project page: https://example.com/project/';
+    const originalUrl = 'https://example.com/project/';
+    const body = { contract: 'api-reader-resource-identity-v1', sourceTextSha256: sha(sourceText),
+        resources: [{ type: 'dataset', origin: 'paper_source', sourceQuote: sourceText,
+            sourceQuoteSha256: sha(sourceText), originalUrl, finalUrl: originalUrl,
+            redirects: [], status: 200, availability: 'available', retryable: false }] };
+    const identity = { ...body, identitySha256: deep.stableFingerprint(body) };
+    const paper = { id: 'conference:interspeech:2026:conference-paper-id:test', source: 'conference',
+        sourceSha256: sha(sourceText), apiReaderResources: identity,
+        analysisManifest: { contracts: { apiReaderResourceIdentity: identity.contract },
+            stages: { apiReaderArticle: { resourceIdentityContractVersion: identity.contract } } } };
+    paper.conferencePaperId = paper.id;
+    const before = JSON.stringify(paper);
+    assert.throws(() => deep.replayVerifiedReaderResourceIdentity(identity, sourceText));
+    const view = deep.readerResourcePublicationResources(paper, sourceText);
+    assert.equal(view[0].type, 'third_party');
+    const draft = text => ({ sections: [{ kind: 'reproduction', body: text }] });
+    assert.deepEqual(deep.readerResourceClaimIssues(draft('项目页链接可访问，但数据和模型开放状态尚未确认。'),
+        identity, sourceText, { paper }), []);
+    assert.ok(deep.readerResourceClaimIssues(draft('本文数据集已公开，可以直接下载。'),
+        identity, sourceText, { paper }).length);
+    assert.equal(JSON.stringify(paper), before);
+    assert.throws(() => deep.readerResourcePublicationResources(paper, sourceText + 'wrong'));
+    for (const mutate of [
+        p => { p.source = 'arxiv'; },
+        p => { p.analysisManifest.stages.apiReaderArticle.resourceIdentityContractVersion = 'unknown'; },
+        p => { p.analysisManifest.contracts.readerResourceClaims = 'unknown'; },
+        p => { p.analysisManifest.contracts.readerResourceClaims = deep.API_READER_RESOURCE_CLAIMS_CONTRACT;
+            p.analysisManifest.stages.apiReaderArticle.readerResourceClaimsContractVersion = deep.API_READER_RESOURCE_CLAIMS_CONTRACT; },
+        p => { p.apiReaderResources.identitySha256 = '0'.repeat(64); }
+    ]) { const changed = structuredClone(paper); mutate(changed);
+        assert.throws(() => deep.readerResourcePublicationResources(changed, sourceText)); }
+});
+
 test('证据中未给出的资源声明与数量一致的并列主张后置否定仅豁免自身，转折及双重否定仍拒绝', () => {
     const cases = require('./reader-resource-scoped-denial-fixture.json');
     const f = example();

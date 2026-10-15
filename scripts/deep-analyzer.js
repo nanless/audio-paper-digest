@@ -2143,6 +2143,11 @@ function readerTableHeaderUnitEvidenceFailures(table, sourceQuotes) {
         const header = surface(table.header[column]);
         const match = header.match(/^(.*?)(?:\(\s*(%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp)\s*\)|\[\s*(%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp)\s*\]|\s+(%|db|ms|s|h|hz|khz|mhz|gb|mb|kb|pp))$/i);
         if (!match) continue;
+        // “多数模型 -10 dB”给的是列比较条件，不宣称该列的 WER 等数值都用 dB。
+        // 必须是独立完整数量；C50、P95 等指标名中的数字不能成为此例外。
+        const hasQuantityCondition = /(?:^|\s)[-+−－]?\d+(?:\.\d+)?\s*$/u.test(match[1]);
+        if (hasQuantityCondition && (match[4]
+            || /(?:^|\s)[-+−－]\d+(?:\.\d+)?\s*$/u.test(match[1]))) continue;
         const unit = (match[2] || match[3] || match[4]).toLowerCase();
         const metric = compact(match[1]);
         const declaration = header.replace(/\s*([([])/g, ' $1').replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*');
@@ -3034,17 +3039,8 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
 }
 
 function normalizeReaderBridgeTerm(term) {
-    const numeralMap = {
-        一: '1', 二: '2', 两: '2', 三: '3', 四: '4', 五: '5',
-        六: '6', 七: '7', 八: '8', 九: '9', 十: '10'
-    };
-    return String(term || '').normalize('NFKC')
-        .replace(/[一二两三四五六七八九十](?=阶|路|次|维|步|层|个|段|类|组|轮|种|样本|倍|帧|模态|自由度|折|基准)/g,
-            value => numeralMap[value])
-        .replace(/[一二两三四五六七八九十](?=对)/g,
-            value => numeralMap[value])
-        .replace(/(对)([一二两三四五六七八九十])/g,
-            (_, prefix, value) => `${prefix}${numeralMap[value]}`)
+    return require('./lib/reader-concept-term-display').normalizeConceptTermNumericDisplay(
+        String(term || '').normalize('NFKC'))
         // Reader 正文有时把声明为「评测」的 bridge 写成同义词「评估」。这只是表层差异，
         // 不代表实验协议变了；已签名的正文保持原样，但最后重新绑定标题时要容忍这个
         // 同义词。
@@ -3936,7 +3932,7 @@ const CONFERENCE_READER_RESOURCE_CLAIM_SPECS = Object.freeze({
     reproduction: /(?:\b(?:artifacts?|reproduction\s+materials?)\b|复现材料|复现工件)/i
 });
 
-function replayVerifiedReaderResourceIdentity(identity, sourceText) {
+function replayVerifiedReaderResourceIdentity(identity, sourceText, options = {}) {
     const { identitySha256, ...identityBody } = identity || {};
     const sourceTextSha256 = crypto.createHash('sha256').update(String(sourceText || '')).digest('hex');
     if (identity?.contract !== API_READER_RESOURCE_IDENTITY_CONTRACT
@@ -3959,7 +3955,9 @@ function replayVerifiedReaderResourceIdentity(identity, sourceText) {
                     && !validRepositoryDocumentationEvidence(
                         resource.documentationEvidence, resource.originalUrl
                     ))
-                || (resource.origin === 'paper_source' && (!paperSourceQuoteBindsOriginalUrl(resource)
+                || (resource.origin === 'paper_source' && (!(options.legacySourceBinding === true
+                    ? require('./lib/reader-resource-binding').paperSourceQuoteBindsOriginalUrlBinding(resource)
+                    : paperSourceQuoteBindsOriginalUrl(resource))
                     || !String(sourceText || '').replace(/\s+/g, ' ').includes(
                         String(resource.sourceQuote || '').replace(/\s+/g, ' ').trim())))
                 || !(available || unavailable || temporary)
@@ -3980,8 +3978,43 @@ function replayVerifiedReaderResourceIdentity(identity, sourceText) {
     return identity;
 }
 
-function readerResourceClaimIssues(draft, identity, sourceText) {
-    const verified = replayVerifiedReaderResourceIdentity(identity, sourceText);
+function readerResourcePublicationResources(paper, sourceText) {
+    const binding = require('./lib/reader-resource-binding');
+    const contracts = paper?.analysisManifest?.contracts || {};
+    const declaredStage = paper?.analysisManifest?.stages?.apiReaderArticle?.readerResourceClaimsContractVersion;
+    const declared = contracts.readerResourceClaims;
+    const resourceVersion = paper?.analysisManifest?.stages?.apiReaderArticle?.resourceIdentityContractVersion;
+    if ((contracts.apiReaderResourceIdentity !== undefined
+            && contracts.apiReaderResourceIdentity !== API_READER_RESOURCE_IDENTITY_CONTRACT)
+        || (resourceVersion !== undefined && resourceVersion !== API_READER_RESOURCE_IDENTITY_CONTRACT)) {
+        throw new Error('资源身份协议版本未知，不能按旧声明回放。');
+    }
+    if ((declared !== undefined || declaredStage !== undefined)
+        && (declared !== API_READER_RESOURCE_CLAIMS_CONTRACT || declaredStage !== API_READER_RESOURCE_CLAIMS_CONTRACT)) {
+        throw new Error('资源声明协议缺失、混用或版本未知，不能回退旧记录。');
+    }
+    if (crypto.createHash('sha256').update(String(sourceText || '')).digest('hex') !== paper?.sourceSha256) {
+        throw new Error('当前资源展示必须绑定原论文封存全文。');
+    }
+    const legacy = binding.legacyConferenceResourceIdentity(paper);
+    const verified = replayVerifiedReaderResourceIdentity(paper.apiReaderResources, sourceText,
+        { legacySourceBinding: legacy });
+    // This is an unsigned, temporary view after original identity authentication.
+    // Do not mutate/re-sign the saved identity or turn URL reachability into release evidence.
+    return verified.resources.flatMap(resource => {
+        if (!legacy || resource.origin !== 'paper_source') return [structuredClone(resource)];
+        const facets = binding.paperSourceResourceFacets(sourceText, resource.sourceUrlToken || resource.originalUrl);
+        return facets.map(type => ({ ...structuredClone(resource), type }));
+    });
+}
+
+function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
+    if (options.paper && stableFingerprint(identity) !== stableFingerprint(options.paper.apiReaderResources)) {
+        throw new Error('当前资源声明重放不能替换原论文资源身份。');
+    }
+    const verified = options.paper
+        ? { resources: readerResourcePublicationResources(options.paper, sourceText) }
+        : replayVerifiedReaderResourceIdentity(identity, sourceText);
     const availableTypes = new Set(verified.resources
         .filter(resource => resource.availability === 'available')
         .map(resource => resource.type));
@@ -4867,8 +4900,8 @@ function readerResourceClaimIssues(draft, identity, sourceText) {
 }
 
 // 日更、会议及历史读取同一份语义规则；来源能力限制仍由各自 capability policy 判断。
-function enforceReaderResourceClaims(draft, identity, sourceText) {
-    const issues = readerResourceClaimIssues(draft, identity, sourceText);
+function enforceReaderResourceClaims(draft, identity, sourceText, options = {}) {
+    const issues = readerResourceClaimIssues(draft, identity, sourceText, options);
     if (!issues.length) return;
     const error = new Error(`读者文章中的资源声明与已验证的可达状态不一致：${issues[0].message}; `
         + `conflictExcerpt=${JSON.stringify(issues[0].conflictExcerpt)}`);
@@ -19559,6 +19592,7 @@ module.exports = {
     readerVerifiedTableIndexExamples,
     replayVerifiedReaderResourceIdentity,
     readerResourceClaimIssues,
+    readerResourcePublicationResources,
     enforceReaderResourceClaims,
     replayVerifiedReaderResourceIdentity,
     readerResourceClaimDraftFromArticle,

@@ -631,7 +631,8 @@ def render_packet(packet):
     assets.extend(formula_assets)
     publisher = load_publish_to_blog()
     presentation = build_reader_presentation(paper, plan=plan, resources=resources,
-                                             authors=authors, exclude_resource_url=is_arxiv_url)
+                                             authors=authors, exclude_resource_url=is_arxiv_url,
+                                             source_text=packet.get('sourceText'))
     workbench_parsed = dict(parsed)
     workbench_parsed['primaryTaskTag'] = '#' + concepts[assignment['primaryTaskId']]['preferredLabel']['zh']
     workbench_parsed['primaryMethodTag'] = '#' + concepts[assignment['primaryMethodId']]['preferredLabel']['zh']

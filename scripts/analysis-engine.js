@@ -909,7 +909,7 @@ function getIncompleteAnalysisContentReason(paper) {
     return getIncompleteAnalysisContentReasonUsingRules(paper);
 }
 
-function getIncompleteAnalysisContentReasonUsingRules(paper, tagRules) {
+function getIncompleteAnalysisContentReasonUsingRules(paper, tagRules, readerOptions = {}) {
     if (!hasValidAnalysisBodyUsingRules(paper, { tagRules })) return '分析正文未通过内容检查。';
     if (!paper.analysisManifest || paper.analysisManifest.version !== 1) {
         return '分析阶段记录 analysisManifest 缺失，或其版本无效。';
@@ -934,7 +934,7 @@ function getIncompleteAnalysisContentReasonUsingRules(paper, tagRules) {
     if (scoring?.scoringContract === 'api-scoring-audit-v2') {
         if (!scoringAuditBindsFinalAnalysis(paper)) return '评分审查记录与最终正文不一致。';
         if (!scoringStabilityIsResolved(scoring)) return '评分稳定性检查未通过。';
-        if (!hasValidApiReaderV3Records(paper)) return '读者文章与论文来源及分析记录的对应关系未通过核验。';
+        if (!hasValidApiReaderV3Records(paper, readerOptions)) return '读者文章与论文来源及分析记录的对应关系未通过核验。';
     }
     return null;
 }
@@ -1074,16 +1074,16 @@ function scoringStabilityIsResolved(scoring) {
     );
 }
 
-function hasValidApiReaderV3Records(paper) {
+function hasValidApiReaderV3Records(paper, options = {}) {
     try {
         return require('./lib/reader-dom-span-projection').withSavedPaper(paper, () =>
             require('./lib/reader-table-pdf-evidence').withSavedPaper(paper,
                 () => require('./lib/reader-sealed-pdf-quote-evidence').withSavedPaper(paper,
                     () => require('./lib/reader-source-table-column-units').withSavedPaper(paper,
-                        () => hasValidApiReaderV3RecordsUnchecked(paper)))));
+                        () => hasValidApiReaderV3RecordsUnchecked(paper, options)))));
     } catch (_error) { return false; }
 }
-function hasValidApiReaderV3RecordsUnchecked(paper) {
+function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
     const manifest = paper?.analysisManifest;
     const stage = manifest?.stages?.apiReaderArticle;
     const plan = paper?.apiReaderPlan;
@@ -1091,6 +1091,9 @@ function hasValidApiReaderV3RecordsUnchecked(paper) {
     const figures = paper?.apiReaderFigures;
     const authors = paper?.apiReaderAuthors;
     const resources = paper?.apiReaderResources;
+    const resourceBinding = require('./lib/reader-resource-binding');
+    const legacyResourceBinding = options.legacyConferenceResourceBindings === true
+        && resourceBinding.legacyConferenceResourceIdentity(paper);
     if (manifest?.contracts?.apiReaderArticle !== API_READER_V3_CONTRACT
         || plan?.version !== 3 || plan?.contract !== API_READER_V3_CONTRACT
         || stage?.status !== 'complete'
@@ -1141,7 +1144,9 @@ function hasValidApiReaderV3RecordsUnchecked(paper) {
         && resources.resources.every(resource => (
             ['code', 'model', 'dataset', 'demo', 'reproduction', 'third_party'].includes(resource?.type)
             && ['paper_source', 'validated_demo'].includes(resource?.origin)
-            && (resource.origin !== 'paper_source' || paperSourceQuoteBindsOriginalUrl(resource))
+            && (resource.origin !== 'paper_source' || (legacyResourceBinding
+                ? resourceBinding.paperSourceQuoteBindsOriginalUrlBinding(resource)
+                : paperSourceQuoteBindsOriginalUrl(resource)))
             && (resource.origin !== 'validated_demo'
                 || manifest?.stages?.demoLinkScan?.discoveredLinks?.includes(resource.originalUrl))
             && /^https:\/\//.test(String(resource?.originalUrl || ''))
@@ -1466,7 +1471,8 @@ function isSuccessfulAnalysisRecordForReadOnlyConferencePublication(paper, optio
             if (!upgrade.ok) return false;
         }
         return isSuccessfulAnalysisRecordWithContentReason(
-            paper, getIncompleteAnalysisContentReasonUsingRules(paper, tagRules)
+            paper, getIncompleteAnalysisContentReasonUsingRules(paper, tagRules,
+                { legacyConferenceResourceBindings: true })
         );
     } catch (_) { return false; }
 }

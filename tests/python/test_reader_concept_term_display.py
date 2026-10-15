@@ -29,10 +29,16 @@ class ReaderConceptTermDisplayTests(unittest.TestCase):
         self.assertEqual(paper, before)
         other = self.sample('`<word>` 标记负责定位，`<score>` 标记负责保留词边界的声学表示。两者按清楚的接口组合，说明定位信息如何进入评分过程，以及哪些边界仍需额外证据。', ['`<word>`标记', '`<score>`标记'])
         self.assertIsNotNone(publish._api_reader_payload(other))
+        numeric = self.sample('6 维感知轴负责诊断，2 次复核负责统一校对。二者按清楚的接口组合，说明感知结果如何进入复核过程，以及哪些边界仍需额外证据。',
+                              ['六维感知轴', '二次复核'])
+        before = copy.deepcopy(numeric)
+        self.assertIsNotNone(publish._api_reader_payload(numeric))
+        self.assertEqual(numeric, before)
 
     def test_actual_publisher_keeps_missing_words_and_hidden_explanation_rejected(self):
         text = '强制对齐负责定位，`<score>` 标记负责保留词边界的声学表示。两者按清楚的接口组合，说明定位信息如何进入评分过程，以及哪些边界仍需额外证据。'
         cases = [(text.replace('强制对齐', '其他定位'), None),
+                 ('2 阶段训练负责顺序，另一个模块负责校对。两者按清楚的接口组合，说明结果如何进入训练过程，以及哪些边界仍需额外证据。', ['两阶段训练', '二阶段训练']),
                  (text, ['`<score>`标记', '`<score>` 标记']),
                  (text.replace('强制对齐', 'A BC'), ['AB C', '`<score>`标记']),
                  ('<!--\n\n' + text + '\n\n-->', None),

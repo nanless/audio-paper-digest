@@ -30,6 +30,56 @@ def stable_sha(value):
 
 
 class ConferencePageRenderTest(unittest.TestCase):
+    def test_current_source_resource_view_preserves_old_identity_and_rejects_release_claims(self):
+        packet = self.packet()
+        paper = packet['paper']
+        source = '1Project page: https://example.com/project/'
+        source_sha = hashlib.sha256(source.encode()).hexdigest()
+        paper.update(source='conference', sourceSha256=source_sha)
+        packet['sourceText'] = source
+        paper['analysisManifest']['sourceAcquisition']['sourceSha256'] = source_sha
+        paper['apiReaderAuthors']['identity']['sourceTextSha256'] = source_sha
+        paper['apiReaderAuthors']['identitySha256'] = stable_sha(paper['apiReaderAuthors']['identity'])
+        resource = {'type': 'dataset', 'origin': 'paper_source', 'sourceQuote': source,
+                    'sourceQuoteSha256': hashlib.sha256(source.encode()).hexdigest(),
+                    'originalUrl': 'https://example.com/project/', 'finalUrl': 'https://example.com/project/',
+                    'redirects': [], 'status': 200, 'availability': 'available', 'retryable': False}
+        identity = {'contract': 'api-reader-resource-identity-v1', 'sourceTextSha256': source_sha, 'resources': [resource]}
+        paper['apiReaderResources'] = {**identity, 'identitySha256': stable_sha(identity)}
+        paper['apiReaderPlan'].update(sections=[{'kind': 'reproduction', 'heading': '复现条件'}], conceptBridges=[])
+        paper['apiReaderPlanSha256'] = stable_sha(paper['apiReaderPlan'])
+        paper['apiReaderArticle'] = '### 复现条件\n\n项目页链接可访问，但数据和模型开放状态尚未确认。'
+        paper['apiReaderArticleSha256'] = hashlib.sha256(paper['apiReaderArticle'].encode()).hexdigest()
+        stage = paper['analysisManifest']['stages']['apiReaderArticle']
+        stage.update(resourceIdentitySha256=stable_sha(identity), resourceCount=1,
+                     resourceIdentityContractVersion='api-reader-resource-identity-v1',
+                     planSha256=paper['apiReaderPlanSha256'], articleSha256=paper['apiReaderArticleSha256'])
+        stage.update(readerAuthorIdentitySha256=paper['apiReaderAuthors']['identitySha256'],
+                     readerAuthorsSha256=stable_sha(paper['apiReaderAuthors']))
+        original = copy.deepcopy(packet)
+        rendered = MODULE.render_packet(packet)
+        self.assertIn('- 论文所列链接：', rendered['markdown'])
+        self.assertNotIn('- 数据相关资源：', rendered['markdown'])
+        self.assertEqual(packet, original)
+        for mutation in ('source', 'claim', 'unknown', 'current'):
+            bad = copy.deepcopy(packet)
+            if mutation == 'source':
+                bad['sourceText'] += 'wrong'
+            elif mutation == 'claim':
+                bad_paper = bad['paper']
+                bad_paper['apiReaderArticle'] = '### 复现条件\n\n本文数据集已经公开，可以直接下载。'
+                digest = hashlib.sha256(bad_paper['apiReaderArticle'].encode()).hexdigest()
+                bad_paper['apiReaderArticleSha256'] = digest
+                bad_paper['analysisManifest']['stages']['apiReaderArticle']['articleSha256'] = digest
+            else:
+                bad['paper']['analysisManifest']['contracts']['readerResourceClaims'] = (
+                    'unknown' if mutation == 'unknown' else 'reader-resource-availability-claims-v1')
+                if mutation == 'current':
+                    bad['paper']['analysisManifest']['stages']['apiReaderArticle']['readerResourceClaimsContractVersion'] = \
+                        'reader-resource-availability-claims-v1'
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                MODULE.render_packet(bad)
+
     def test_batched_tag_presentation_has_only_selected_paths_and_no_page_eligibility(self):
         catalog = MODULE.load_tag_catalog()
         by_id = {item['id']: item for item in catalog['concepts']}

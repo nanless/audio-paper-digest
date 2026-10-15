@@ -50,9 +50,10 @@ function completed(executionId, index = 0, analysisText) {
     const structuredArtifacts = { ...artifactBody, payloadSha256: sha256(JSON.stringify(artifactBody)) };
     const analysis = analysisText || canonical(index);
     const parsed = require('../scripts/utils.js').parseAnalysis(analysis);
-    const article = `会议 Reader 全新正文 ${index}。`; const articleSha = sha256(article);
+    const article = `### 研究内容\n\n会议 Reader 全新正文 ${index}。`; const articleSha = sha256(article);
     const plan = { version: 3, contract: 'beginner-researcher-v3', readerTitle: `会议解读 ${index}`,
         oneSentenceThesis: '会议论文的一句话结论。', figurePlacements: [], tableBindings: [], formulaBindings: [],
+        sections: [{ kind: 'reproduction', heading: '研究内容' }], conceptBridges: [],
         sourceBindingsContract: 'api-reader-source-bindings-v4' };
     plan.sourceBindingsSha256 = api.stableHash({ tableBindings: [], formulaBindings: [] });
     const planSha = api.stableHash(plan);
@@ -397,6 +398,36 @@ test('汇总会复核每个选中的阶段，只有显式选择全部完成时�
     fs.appendFileSync(path.join(secondStage.directory, 'page.md'), 'drift');
     assert.throws(() => api.aggregateConference({ analysisRoot: 'ignored', executionIds: [f.one, f.two], tagCatalogPath: TAG_CATALOG_PATH,
         stagingRoot, aggregateRoot, planHandle: f.planHandle, sourceRoot: f.sourceRoot }, f.dependencies), /会议暂存的分类记录、页面或清单与当前分析结果、词表和生成程序的输出不一致/);
+});
+
+test('混合来源汇总逐篇重放自身计划，缺失、多余、跨计划及跳过核验映射均拒绝', t => {
+    const f = fixture(t), stagingRoot = path.join(f.root, 'mixed-staging');
+    const alternate = { key: 'b' };
+    f.runs.get(f.two).planKey = alternate.key;
+    const roots = new Map([[f.one, path.join(f.root, 'source-a')], [f.two, path.join(f.root, 'source-b')]]);
+    const retainedSources = new Map([[f.one, { planHandle: f.planHandle, sourceRoot: roots.get(f.one) }],
+        [f.two, { planHandle: alternate, sourceRoot: roots.get(f.two) }]]);
+    const dependencies = { ...f.dependencies,
+        planHandleAuthority: handle => f.dependencies.planHandleAuthority(handle?.key === 'b' ? f.planHandle : handle),
+        verifyPlanAuthority: (loaded, handle, sourceRoot) => {
+            if (loaded.planKey !== handle?.key || sourceRoot !== roots.get(loaded.run.executionId)) throw new Error('cross-plan');
+            return true;
+        } };
+    for (const executionId of [f.one, f.two]) api.stagePaper({ analysisRoot: 'ignored', executionId,
+        tagCatalogPath: TAG_CATALOG_PATH, stagingRoot, ...retainedSources.get(executionId), apply: true }, dependencies);
+    const options = { analysisRoot: 'ignored', executionIds: [f.one, f.two], tagCatalogPath: TAG_CATALOG_PATH,
+        stagingRoot, aggregateRoot: path.join(f.root, 'aggregate'), planHandle: f.planHandle,
+        sourceRoot: roots.get(f.one), retainedSources };
+    const result = api.aggregateConference(options, dependencies);
+    assert.equal(result.manifest.members.length, 2);
+    for (const map of [new Map(), new Map([[f.one, retainedSources.get(f.one)]]),
+        new Map([...retainedSources, ['33333333-3333-4333-8333-333333333333', retainedSources.get(f.one)]])]) {
+        assert.throws(() => api.aggregateConference({ ...options, retainedSources: map }, dependencies), /精确覆盖全部分析运行/);
+    }
+    assert.throws(() => api.aggregateConference({ ...options, trustEvidence: true }, dependencies), /不能混用/);
+    assert.throws(() => api.aggregateConference({ ...options, preservedStages: { [f.one]: {} } }, dependencies), /不能混用/);
+    const wrong = new Map(retainedSources); wrong.set(f.two, retainedSources.get(f.one));
+    assert.throws(() => api.aggregateConference({ ...options, retainedSources: wrong }, dependencies), /cross-plan/);
 });
 
 // 独立合成保存资料：只在初次创建测试文件前签名，不改已有旧样本。

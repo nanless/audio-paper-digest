@@ -369,17 +369,35 @@ function normalizedSourceUrlBinding(sourceToken, originalUrl) {
     };
 }
 
-function paperSourceQuoteBindsOriginalUrl(resource) {
+function paperSourceQuoteBindsOriginalUrlBinding(resource) {
     const quote = String(resource?.sourceQuote || '');
     const originalUrl = String(resource?.originalUrl || '');
-    if (!originalUrl || (resource?.type && resource.type !== 'third_party'
-        && !paperSourceResourceFacets(quote, resource.sourceUrlToken || originalUrl).includes(resource.type))) return false;
+    if (!originalUrl) return false;
     if (quote.includes(originalUrl)) return true;
     const token = String(resource?.sourceUrlToken || '');
     return resource?.sourceUrlBindingContract === SOURCE_URL_NORMALIZATION_CONTRACT
         && resource?.sourceUrlTokenSha256 === sha256(token)
         && quote.includes(token)
         && normalizePaperSourceRepositoryToken(token) === originalUrl;
+}
+
+function paperSourceQuoteBindsOriginalUrl(resource) {
+    return paperSourceQuoteBindsOriginalUrlBinding(resource)
+        && (!resource?.type || resource.type === 'third_party'
+            || paperSourceResourceFacets(resource.sourceQuote,
+                resource.sourceUrlToken || resource.originalUrl).includes(resource.type));
+}
+
+function legacyConferenceResourceIdentity(paper) {
+    const contracts = paper?.analysisManifest?.contracts;
+    const stage = paper?.analysisManifest?.stages?.apiReaderArticle;
+    return paper?.source === 'conference' && paper.conferencePaperId === paper.id
+        && /^conference:[a-z0-9-]+:\d{4}:[^\s]+$/u.test(String(paper.id || ''))
+        && contracts?.apiReaderResourceIdentity === 'api-reader-resource-identity-v1'
+        && paper?.apiReaderResources?.contract === 'api-reader-resource-identity-v1'
+        && stage?.resourceIdentityContractVersion === 'api-reader-resource-identity-v1'
+        && contracts.readerResourceClaims === undefined
+        && stage?.readerResourceClaimsContractVersion === undefined;
 }
 
 module.exports = {
@@ -390,5 +408,6 @@ module.exports = {
     paperSourceResourceQuote,
     extractPaperSourceRepositoryCandidates,
     normalizedSourceUrlBinding,
-    paperSourceQuoteBindsOriginalUrl
+    paperSourceQuoteBindsOriginalUrl, paperSourceQuoteBindsOriginalUrlBinding,
+    legacyConferenceResourceIdentity
 };

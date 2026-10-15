@@ -26,15 +26,18 @@ try {
     if (!stat.isFile() || ![0, 1].includes(stat.nlink) || (stat.mode & 0o777) !== 0o600
         || stat.size < 2 || stat.size > 128 * 1024 * 1024) throw new Error('Unsafe replay input');
     const input = JSON.parse(fs.readFileSync(fd, 'utf8'));
-    if (!input || Object.keys(input).sort().join(',') !== 'paper,sourceText'
+    const keys = input && Object.keys(input).sort().join(',');
+    if (!input || !['paper,sourceText', 'paper,resourcePresentation,sourceText'].includes(keys)
+        || (Object.hasOwn(input, 'resourcePresentation') && input.resourcePresentation !== true)
         || typeof input.sourceText !== 'string' || !input.paper
         || crypto.createHash('sha256').update(input.sourceText).digest('hex') !== input.paper.sourceSha256) {
         throw new Error('Resource claims are not bound to authenticated source bytes');
     }
     const deep = require('../deep-analyzer');
     const draft = deep.readerResourceClaimDraftFromArticle(input.paper.apiReaderPlan, input.paper.apiReaderArticle);
-    deep.enforceReaderResourceClaims(draft, input.paper.apiReaderResources, input.sourceText);
-    writeOutput('{"verified":true}');
+    deep.enforceReaderResourceClaims(draft, input.paper.apiReaderResources, input.sourceText, { paper: input.paper });
+    writeOutput(input.resourcePresentation === true ? JSON.stringify({ verified: true,
+        resources: deep.readerResourcePublicationResources(input.paper, input.sourceText) }) : '{"verified":true}');
 } catch (error) {
     writeOutput(JSON.stringify({ verified: false, code: error.code || 'READER_RESOURCE_REPLAY_FAILED',
         issues: Array.isArray(error.readerIssues) ? error.readerIssues : [], message: error.message }));

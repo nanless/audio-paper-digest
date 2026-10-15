@@ -6606,12 +6606,40 @@ def _api_reader_concept_term_display(value):
     # Keep inline-code bytes and English/Chinese word-internal spaces literal.
     text = str(value or '').strip()
     ends = {right for _left, right in _api_reader_inline_code_ranges(text)}
-    return re.sub(r' +(?=[\u3400-\u9fff])', lambda match: '' if match.start() in ends else match[0], text)
+    text = re.sub(r' +(?=[\u3400-\u9fff0-9])', lambda match: '' if match.start() in ends else match[0], text)
+    numerals = dict(zip('一二两三四五六七八九十', ('1', '2', '2', '3', '4', '5', '6', '7', '8', '9', '10')))
+
+    def numeric_display(prose):
+        # Same bounded count/number boundaries as the Node helper. Code bytes,
+        # English word gaps, absent terms and different quantities stay literal.
+        prose = re.sub(r'(?<![零〇一二两三四五六七八九十百千万亿\d])([一二两三四五六七八九十])'
+                       r'(?=阶|路|次|维|步|层|个|段|类|组|轮|种|样本|倍|帧|模态|自由度|折|基准|对)',
+                       lambda match: numerals[match[0]], prose)
+        prose = re.sub(r'(对)([一二两三四五六七八九十])(?![零〇一二两三四五六七八九十百千万亿\d])',
+                       lambda match: match[1] + numerals[match[2]], prose)
+        prose = re.sub(r'(?<=[\u3400-\u9fff]) +(?=\d)', '', prose)
+        return re.sub(r'(?<=\d) +(?=[\u3400-\u9fff])', '', prose)
+
+    parts, cursor = [], 0
+    for left, right in _api_reader_inline_code_ranges(text):
+        parts.extend((numeric_display(text[cursor:left]), text[left:right]))
+        cursor = right
+    return ''.join(parts) + numeric_display(text[cursor:])
 
 
 def _api_reader_concept_term_present(explanation, term):
-    return (isinstance(explanation, str) and isinstance(term, str) and bool(term.strip())
-        and _api_reader_concept_term_display(term) in _api_reader_concept_term_display(explanation))
+    if not isinstance(explanation, str) or not isinstance(term, str) or not term.strip():
+        return False
+    haystack, needle = _api_reader_concept_term_display(explanation), _api_reader_concept_term_display(term)
+    start = haystack.find(needle)
+    while start >= 0:
+        before = haystack[start - 1] if start else ''
+        after = haystack[start + len(needle):start + len(needle) + 1]
+        if (not re.match(r'\d', needle) or not re.search(r'[\d.+\-零〇一二两三四五六七八九十百千万亿]', before)) \
+                and (not re.search(r'\d$', needle) or not re.search(r'[\d.]', after)):
+            return True
+        start = haystack.find(needle, start + 1)
+    return False
 
 
 def _api_reader_article_image_urls(article):
@@ -6955,6 +6983,10 @@ def _reader_table_header_unit_evidence_failures(table, quotes):
         header = surface(original_header)
         match = re.fullmatch(rf'(.*?)(?:\(\s*({unit_pattern})\s*\)|\[\s*({unit_pattern})\s*\]|\s+({unit_pattern}))', header)
         if not match:
+            continue
+        quantity_condition = re.search(r'(?:^|\s)[-+−－]?\d+(?:\.\d+)?\s*$', match.group(1))
+        if quantity_condition and (match.group(4)
+                or re.search(r'(?:^|\s)[-+−－]\d+(?:\.\d+)?\s*$', match.group(1))):
             continue
         unit = next(value for value in match.groups()[1:] if value)
         metric = match.group(1).strip()

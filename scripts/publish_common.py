@@ -299,6 +299,8 @@ TABLE_NUMERIC_CELL_RE = re.compile(
 def _is_table_identifier_header(value):
     """与 Node 对带方向指标表头的处理保持一致。"""
     normalized = str(value or '').strip()
+    if re.fullmatch(r'(?:(?:检验|统计检验)?统计量|统计检验结果|(?:F|t|z|χ²)\s*统计量|(?:test\s+)?statistics?|[Ftzp][ -]?(?:values?|statistics?))', normalized, flags=re.IGNORECASE):
+        return False
     # 与 Node 显式列出的训练条件识别符保持一致。
     if re.fullmatch(r'(?:目标|蒸馏目标|环节|(?:distillation )?objective|训练损失|损失函数|监督目标|训练目标|评估设置|实验设置|提取来源|任务向量来源|表示|检测器|生成器|组合|声源|音源|乐器|sound sources?|audio sources?|instruments?|分割规则|领域|合并点|合并位置|提示词|对比对象|被试\s*ID|预训练目标|训练数据|分词器|家族|NFE|number of function evaluations|函数求值次数|词表大小(?:\s*\$\\\|V\\\|\$)?|segmentation rule|domain|merge point|prompt|comparison object|participant\s+ID|pretraining objective|training data|tokenizer|vocabulary size)', normalized, flags=re.IGNORECASE):
         return True

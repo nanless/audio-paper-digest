@@ -435,9 +435,10 @@ test('会议实现指纹按版本绑定提示词正文，v1 冻结清单仍可�
 });
 
 test('会议实现指纹绑定来源核验文件，且不写进 v1 冻结清单', () => {
-    // 这五个名字在测试里单独写死：它们从清单里被删掉时，这条断言必须失败，
+    // 这些名字在测试里单独写死：它们从清单里被删掉时，这条断言必须失败，
     // 不能靠读被检查的那份清单来自证。
     const required = [
+        'scripts/lib/conference-retained-source-replay.js',
         'scripts/lib/conference-source-context.js',
         'scripts/lib/conference-source-ledger.js',
         'scripts/lib/conference-extraction-receipt.js',
@@ -1530,7 +1531,26 @@ test('来源升级只授权显式子集，并保留未选中的和原始的结�
     assert.equal(receipt.contract, 'conference-process-completion-receipt-v2');
     assert.equal(receipt.version, 2);
     assert.equal(cli.processStatus(options, { dependencies: deps }).processId, promoted.processId);
-    assert.equal((await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, deps)).processId, promoted.processId);
+    let retainedReplays = 0;
+    t.mock.method(require('../scripts/lib/conference-retained-source-replay'), 'replayCompletedPromotedShared', ({ state }) => {
+        retainedReplays += 1;
+        assert.equal(state.processId, promoted.processId);
+        assert.ok(Object.values(state.items).every(item => item.status === 'complete'));
+        return { planHandle: {}, planReceiptSha256: receipt.planReceiptSha256,
+            retainedSources: new Map(Object.values(state.items).map(item => [item.analysisRunId,
+                { planHandle: {}, sourceRoot: 'retained-' + item.analysisRunId }])),
+            sealed: Object.values(state.items).map(item => ({ paperId: item.paperId, proof: item.sourceProof })) };
+    });
+    const resumed = await processApi.runConferenceProcess({ apply: true, concurrency: 1 }, { ...deps,
+        prepareShared: () => assert.fail('已完成混合来源不重新统一准备来源'),
+        aggregate: async (context, shared, executionIds, runtimeDeps) => {
+            assert.equal(shared.retainedSources.size, 3);
+            assert.ok(executionIds.every(id => shared.retainedSources.get(id).sourceRoot === 'retained-' + id));
+            return deps.aggregate(context, shared, executionIds, runtimeDeps);
+        } });
+    assert.equal(resumed.processId, promoted.processId);
+    assert.equal(retainedReplays, 1);
+    t.mock.restoreAll();
     assert.equal((await upgrade.promoteSourceUpgrade({ ...options, planSha256: plan.planSha256 }, deps)).processId, promoted.processId);
     assert.equal(h.control.calls.length, beforePromotionCalls); assert.deepEqual(fs.readFileSync(originalFile), originalBytes);
     const code = `import importlib.util,sys,json\nfrom pathlib import Path\nsys.path.insert(0,sys.argv[1])\nspec=importlib.util.spec_from_file_location('publisher_readonly',Path(sys.argv[1])/'publish-conference.py')\np=importlib.util.module_from_spec(spec)\nspec.loader.exec_module(p)\np.RUNTIME=Path(sys.argv[2]).parent;p.PROCESS_ROOT=Path(sys.argv[2]);p.PAGE_ROOT=Path(sys.argv[3]);p.AGGREGATE_ROOT=Path(sys.argv[4])\nb=p.process_bundle('odyssey-2026',sys.argv[5])\nprint(json.dumps({'files':len(b['files']),'status':b['state']['status']}))`;
