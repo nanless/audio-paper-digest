@@ -4536,7 +4536,7 @@ def _has_scoped_symbolic_demonstration(summary):
     if not _has_symbolic_geometry_method_chain(summary):
         return False
     sentences = re.split(r'[。！？!?；;\n]', str(summary or ''))
-    scalar_metric = re.compile('(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\\.\\d+)?|1(?:\\.0+)?)(?![.\\d@])|R@\\d+(?:\\.\\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)', re.IGNORECASE)
+    scalar_metric = re.compile('(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\\.\\d+)?|1(?:\\.0+)?)(?![.\\d@])|R@\\d+(?:\\.\\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|字错率|评估损失(?:终值)?(?=[^。；\n]{0,90}(?:[二两三四五六七八九十百1-9][0-9]*(?:\.\d+)?倍|(?:为|是|从)\s*\d+(?:\.\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)', re.IGNORECASE)
     for sentence in sentences:
         metric_surface = re.sub(r'(?:\u53d8\u6362)?\u7b49\u4ef7\u7ec4\u89c4\u6a21\u4e3a\u6307\u6807', ' ', sentence)
         if scalar_metric.search(metric_surface) and re.search(r'\d|(?:\u767e\u5206\u4e4b|\u5343\u5206\u4e4b|\u96f6\u70b9)[\u96f6\u4e00\u4e8c\u4e24\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u767e\u5343\u4e07\u70b9]+', sentence):
@@ -4574,7 +4574,63 @@ def _has_concrete_product_handoff(summary):
     return False
 
 
+def _has_explicit_artifact_handoff(summary):
+    sentences = [text.strip() for text in re.split(r'[。！？!?；;\n]', re.sub(r'（[^）]*）|\([^)]*\)', '', str(summary or ''))) if text.strip()]
+    denied = re.compile(r'(?:假设|假想|假定|设想|如果|预计|预期|可能|未来|计划|讨论|提及|并非|不是|没有|未曾|尚未|独立方法|无关)|(?:不|未)(?:被|曾|实际|真正|直接|会|能|再)*(?:生成|输出|得到|形成|取出|提取|编码|使用|接收|承接|送入|进入|作为|用于|计算|分成|分派)')
+    production = re.compile(r'(?:生成|得到|输出|形成|统一为|压缩为|池化得|取出|提取|抽取)')
+    processing = re.compile(r'(?:修复|合成|重采样|预处理|构造|编码|池化|变换|搬移|变频|检测器|分类头)')
+    consumer_action = re.compile(r'(?:分成|分派|编码|计算|训练|学习|分类|回归|去噪|评分|解码|重合成)')
+    artifacts = [r'(?:刺激)?语音', r'配对(?:监督)?信号', r'(?:双|两)视图', r'(?:utterance|输入)?嵌入', r'(?:数值|定长|固定维数)?向量']
+    for index, first in enumerate(sentences):
+        second = sentences[index + 1] if index + 1 < len(sentences) else ''
+        if len(first) > 320 or len(second) > 320:
+            continue
+        if not denied.search(first) and re.search(r'(?:预载|载入)[^。]{1,80}(?:历史|上下文)[^。]{0,60}(?:实时流入|逐帧处理|滚动输入)[^。]{0,50}(?:该|此)阶段产生的[^。]{1,80}(?:、|与|和)[^。]{1,60}直接进入评分', first):
+            return True
+        for family in artifacts:
+            for artifact in re.finditer(family, first):
+                before = first[:artifact.start()]
+                immediate = re.split(r'[，,]', before)[-1]
+                if not production.search(immediate) or not processing.search(before) or denied.search(before):
+                    continue
+                product_tail = first[artifact.end():]
+                following = product_tail + ('。' + second if second else '')
+                references = [rf'(?:该|这些|上述|所得|取出的|得到的|形成的)(?:每个|每一|输入)?{family}[^，,。]{{0,65}}']
+                count = re.search(r'([1-9][0-9]{0,5})\s*(?:段|个|条|维|种)?\s*$', immediate)
+                if count:
+                    references.append(rf'{count[1]}\s*(?:段|个|条|种)?{family}[^，,。]{{0,65}}')
+                if re.fullmatch(r'(?:双|两)视图', artifact[0]):
+                    references.append(r'两视图[^，,。]{0,65}')
+                for pattern in references:
+                    used = re.search(pattern, following)
+                    if used and not denied.search(following[max(0, used.start() - 20):used.end()]) and consumer_action.search(used[0]):
+                        return True
+                if re.search(r'^[，,]\s*直接作为[^，,。]{0,20}(?:分类器|回归器|解码器|编码器)输入', product_tail) and not denied.search(re.split(r'[。；]', product_tail)[0]):
+                    return True
+                received = re.search(rf'(?:训练时)?承接该{family}[^。]{{0,180}}', second)
+                if received and not denied.search(received[0]) and re.search(r'(?:分支|模型|网络)[^。]{0,140}(?:学习|训练|去噪)', received[0]):
+                    return True
+    return False
+
+
+def _has_natural_scoped_boundary(summary):
+    for sentence in re.split(r'[。！？!?\n]', str(summary or '')):
+        if re.search(r'(?:并非|不是|不能说|不能认为|不应认为|否认)[^，,；;]{0,30}(?:限于|仅在|未经)', sentence):
+            continue
+        if re.search(r'(?:未经证实|效果未知)[^。]{0,30}(?:说法|表述|观点|判断)[^。]{0,20}(?:不成立|不正确|有误|错误)', sentence):
+            continue
+        if (re.search(r'(?:结论|研究结果|研究发现|该提升|这些结果)(?:只|仅)?在[^。]{1,100}(?:条件|语料|数据集|设置|说话人)[^。]{0,30}(?:下验证|中验证|得到验证|成立)', sentence)
+                or re.search(r'(?:该提升|这些结果|上述结论)(?:只|仅)?限于[^。]{1,100}(?:评测|语料|数据集|问答|场景|条件|设置|样本|任务)', sentence)
+                or re.search(r'(?:跨语言|跨说话人|新说话人|新硬件|词表外|开放式生成)[^。]{0,80}(?:效果未经证实|效果未知|尚未得到验证)', sentence)):
+            return True
+    return False
+
+
+
+
 def _has_explicit_natural_product_chain(summary):
+    if _has_explicit_artifact_handoff(summary):
+        return True
     if _has_concrete_product_handoff(summary):
         return True
     if _has_posterior_update_product_chain(summary):
@@ -4703,7 +4759,7 @@ def _detailed_core_summary_semantic_issue(summary):
     # 所以上游已经接受的指标，不能仅仅因为它用了
     # 更新的别名（例如 PPL 或压缩率）就在这里被拒。
     metric = re.compile(
-        r'(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|SDR|SNR|EER|PPL|NLL|negative[ -]log[ -]likelihood|ASR|mAP|gAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)',
+        r'(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|SDR|SNR|EER|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|字错率|评估损失(?:终值)?(?=[^。；\n]{0,90}(?:[二两三四五六七八九十百1-9][0-9]*(?:\.\d+)?倍|(?:为|是|从)\s*\d+(?:\.\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)',
         re.IGNORECASE,
     )
     conference_metric = re.compile(
@@ -4800,7 +4856,7 @@ def _detailed_core_summary_semantic_issue(summary):
         for sentence in re.split(r'[。！？!?\n]', summary)
     )
     if not any((explicit_boundary, separated_unverified_boundary, conditional_failure,
-                scoped_conclusion_boundary, attention_scope_boundary, observational_causal_boundary, uncovered_scope_boundary)):
+                scoped_conclusion_boundary, attention_scope_boundary, observational_causal_boundary, uncovered_scope_boundary, _has_natural_scoped_boundary(summary))):
         issues.append('缺少结论适用边界、失败条件或未验证范围')
     scoped_resource_disclosure = any(
         re.search(r'(?:训练|推理|部署)', sentence)

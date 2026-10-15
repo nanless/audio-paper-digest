@@ -187,7 +187,7 @@ const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:
 // 英文指标名必须整词匹配。没有这里的两侧边界，mAP/PAR/PER 这类短指标会命中
 // "mapping"、"Particle"、"performance" 等普通词，把章节号和引用位置误当成
 // 实验测量结果。
-const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
+const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|字错率|评估损失(?:终值)?(?=[^。；\n]{0,90}(?:[二两三四五六七八九十百1-9][0-9]*(?:\.\d+)?倍|(?:为|是|从)\s*\d+(?:\.\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
 // 会议论文常用领域内的中文指标名（例如 DAFx 的“抖动”和“包络相关”）。
 // 这里显式列出来，免得把任何结果名词都当成定量证据。
 const CORE_SUMMARY_CONFERENCE_METRIC_PATTERN = /包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差/;
@@ -1752,7 +1752,75 @@ function hasConcreteProductHandoff(summary) {
     return false;
 }
 
+// Shared grammar. No paper/model/benchmark names are accepted here.
+function hasExplicitArtifactHandoff(summary) {
+    const sentences = String(summary || '').replace(/（[^）]*）|\([^)]*\)/gu, '')
+        .split(/[。！？!?；;\n]/u).map(text => text.trim()).filter(Boolean);
+    const denied = /(?:假设|假想|假定|设想|如果|预计|预期|可能|未来|计划|讨论|提及|并非|不是|没有|未曾|尚未|独立方法|无关)|(?:不|未)(?:被|曾|实际|真正|直接|会|能|再)*(?:生成|输出|得到|形成|取出|提取|编码|使用|接收|承接|送入|进入|作为|用于|计算|分成|分派)/u;
+    const production = /(?:生成|得到|输出|形成|统一为|压缩为|池化得|取出|提取|抽取)/u;
+    const processing = /(?:修复|合成|重采样|预处理|构造|编码|池化|变换|搬移|变频|检测器|分类头)/u;
+    const consumerAction = /(?:分成|分派|编码|计算|训练|学习|分类|回归|去噪|评分|解码|重合成)/u;
+    const artifacts = [
+        {names:/(?:刺激)?语音/gu, same:'(?:刺激)?语音'},
+        {names:/配对(?:监督)?信号/gu, same:'配对(?:监督)?信号'},
+        {names:/(?:双|两)视图/gu, same:'(?:双|两)视图'},
+        {names:/(?:utterance|输入)?嵌入/gu, same:'(?:utterance|输入)?嵌入'},
+        {names:/(?:数值|定长|固定维数)?向量/gu, same:'(?:数值|定长|固定维数)?向量'}
+    ];
+    for (let index = 0; index < sentences.length; index++) {
+        const first = sentences[index], second = sentences[index + 1] || '';
+        if (first.length > 320 || second.length > 320) continue;
+        // A measured rollout hands an explicitly enumerated behavioral output
+        // to scoring. It is a benchmark process, without invented model modules.
+        if (!denied.test(first) && /(?:预载|载入)[^。]{1,80}(?:历史|上下文)[^。]{0,60}(?:实时流入|逐帧处理|滚动输入)[^。]{0,50}(?:该|此)阶段产生的[^。]{1,80}(?:、|与|和)[^。]{1,60}直接进入评分/u.test(first)) return true;
+        for (const family of artifacts) {
+            family.names.lastIndex = 0;
+            for (const artifact of first.matchAll(family.names)) {
+                const before = first.slice(0, artifact.index);
+                const immediate = before.split(/[，,]/u).at(-1);
+                // Production can use the role in an earlier same-sentence
+                // clause, but never borrow an actor from another sentence.
+                if (!production.test(immediate) || !processing.test(before) || denied.test(before)) continue;
+                const productTail = first.slice(artifact.index + artifact[0].length);
+                const following = productTail + (second ? '。' + second : '');
+                const aliases = family.same;
+                const localReference = new RegExp(`(?:该|这些|上述|所得|取出的|得到的|形成的)(?:每个|每一|输入)?${aliases}[^，,。]{0,65}`, 'u');
+                const count = /([1-9][0-9]{0,5})\s*(?:段|个|条|维|种)?\s*$/.exec(immediate);
+                const countReference = count ? new RegExp(`${count[1]}\\s*(?:段|个|条|种)?${aliases}[^，,。]{0,65}`, 'u') : null;
+                const viewReference = /^(?:双|两)视图$/u.test(artifact[0]) ? /两视图[^，,。]{0,65}/u : null;
+                const references = [localReference, countReference, viewReference].filter(Boolean);
+                if (references.some(pattern => {
+                    const used = pattern.exec(following);
+                    if (!used) return false;
+                    const preceding = following.slice(Math.max(0, used.index - 20), used.index);
+                    return !denied.test(preceding + used[0]) && consumerAction.test(used[0]);
+                })) return true;
+                // Immediate ellipsis belongs only to the just-produced artifact;
+                // an unrelated output or an unowned pronoun cannot satisfy this.
+                if (/^[，,]\s*直接作为[^，,。]{0,20}(?:分类器|回归器|解码器|编码器)输入/u.test(productTail)
+                    && !denied.test(productTail.split(/[。；]/u)[0])) return true;
+                // Explicit reception may precede the repeated artifact name.
+                const received = new RegExp(`(?:训练时)?承接该${aliases}[^。]{0,180}`, 'u').exec(second);
+                if (received && !denied.test(received[0]) && /(?:分支|模型|网络)[^。]{0,140}(?:学习|训练|去噪)/u.test(received[0])) return true;
+            }
+        }
+    }
+    return false;
+}
+
+function hasNaturalScopedBoundary(summary) {
+    return String(summary || '').split(/[。！？!?\n]/u).some(sentence => {
+        if (/(?:并非|不是|不能说|不能认为|不应认为|否认)[^，,；;]{0,30}(?:限于|仅在|未经)/u.test(sentence)) return false;
+        if (/(?:未经证实|效果未知)[^。]{0,30}(?:说法|表述|观点|判断)[^。]{0,20}(?:不成立|不正确|有误|错误)/u.test(sentence)) return false;
+        return /(?:结论|研究结果|研究发现|该提升|这些结果)(?:只|仅)?在[^。]{1,100}(?:条件|语料|数据集|设置|说话人)[^。]{0,30}(?:下验证|中验证|得到验证|成立)/u.test(sentence)
+            || /(?:该提升|这些结果|上述结论)(?:只|仅)?限于[^。]{1,100}(?:评测|语料|数据集|问答|场景|条件|设置|样本|任务)/u.test(sentence)
+            || /(?:跨语言|跨说话人|新说话人|新硬件|词表外|开放式生成)[^。]{0,80}(?:效果未经证实|效果未知|尚未得到验证)/u.test(sentence);
+    });
+}
+
+
 function hasExplicitNaturalProductChain(summary) {
+    if (hasExplicitArtifactHandoff(summary)) return true;
     if (hasConcreteProductHandoff(summary)) return true;
     if (hasPosteriorUpdateProductChain(summary)) return true;
     if (hasBlockLayoutProductChain(summary)) return true;
@@ -2052,7 +2120,7 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         && !/未涵盖[^。！？!?\n]{0,60}(?:并非事实|不是事实|并不属实|不属实|不是真的)/.test(sentence)
     ));
     if (!explicitBoundary && !separatedUnverifiedBoundary && !conditionalFailure
-        && !conditionalMetricFailure && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary) {
+        && !conditionalMetricFailure && !scopedConclusionBoundary && !attentionScopeBoundary && !observationalCausalBoundary && !uncoveredScopeBoundary && !hasNaturalScopedBoundary(summary)) {
         issues.push('缺少结论适用边界、失败条件或未验证范围');
     }
     const scopedResourceDisclosure = summary.split(/[。！？!?\n]/).some(sentence => (
@@ -3283,6 +3351,8 @@ module.exports = {
     validateCoreSummarySemanticContract,
     hasExplicitNaturalProductChain,
     hasConcreteProductHandoff,
+    hasExplicitArtifactHandoff,
+    hasNaturalScopedBoundary,
     hasBoundFormerLatterComparison,
     stripSymbolicPatternRelation,
     hasSymbolicGeometryMethodChain,
