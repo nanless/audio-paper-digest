@@ -6214,6 +6214,20 @@ def _api_reader_visible_phrase(article, phrase):
     return False
 
 
+def _api_reader_concept_term_display(value):
+    # Same narrow boundary as reader-concept-term-display.js: the formatter's
+    # protected code token can add an outside space before Chinese prose.
+    # Keep inline-code bytes and English/Chinese word-internal spaces literal.
+    text = str(value or '').strip()
+    ends = {right for _left, right in _api_reader_inline_code_ranges(text)}
+    return re.sub(r' +(?=[\u3400-\u9fff])', lambda match: '' if match.start() in ends else match[0], text)
+
+
+def _api_reader_concept_term_present(explanation, term):
+    return (isinstance(explanation, str) and isinstance(term, str) and bool(term.strip())
+        and _api_reader_concept_term_display(term) in _api_reader_concept_term_display(explanation))
+
+
 def _api_reader_article_image_urls(article):
     """只统计可见图片，复用已有平衡括号与行内代码解析。"""
     # 全部可见地址交给原记录比较和官方 HTTPS 检查；未知地址不能静默过滤。
@@ -8084,10 +8098,11 @@ def _api_reader_payload(paper):
                     or not 2 <= len(bridge['terms']) <= 4 \
                     or any(not isinstance(term, str) or not 2 <= len(term.strip()) <= 48 for term in bridge['terms']) \
                     or len({term.strip() for term in bridge['terms']}) != len(bridge['terms']) \
+                    or len({_api_reader_concept_term_display(term) for term in bridge['terms']}) != len(bridge['terms']) \
                     or bridge.get('sectionKind') not in allowed_kinds \
                     or bridge.get('marker') != f'[[CONCEPT_BRIDGE_{index}]]' \
                     or not isinstance(bridge.get('explanation'), str) \
-                    or any(term.strip() not in bridge['explanation'] for term in bridge['terms']) \
+                    or any(not _api_reader_concept_term_present(bridge['explanation'], term) for term in bridge['terms']) \
                     or not _api_reader_visible_phrase(article, bridge['explanation']) \
                     or bridge['marker'] in article:
                 raise PublishDataValidationError(

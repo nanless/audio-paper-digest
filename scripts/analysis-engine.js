@@ -1203,6 +1203,10 @@ function hasValidApiReaderV3RecordsUnchecked(paper) {
     const assembledContentVisible = (!Array.isArray(plan.conceptBridges)
         || plan.conceptBridges.every(bridge => {
             if (typeof bridge?.explanation !== 'string' || !bridge.explanation.trim()) return false;
+            if (!Array.isArray(bridge.terms) || bridge.terms.length < 2 || bridge.terms.length > 4
+                || new Set(bridge.terms.map(require('./lib/reader-concept-term-display').normalizeConceptTermDisplay)).size !== bridge.terms.length
+                || !bridge.terms.every(term =>
+                require('./lib/reader-concept-term-display').conceptTermPresent(bridge.explanation, term))) return false;
             const explanation = bridge.explanation.trim();
             const index = visibleArticle.indexOf(explanation);
             return index >= 0 && /[\p{L}]/u.test(visibleContent.slice(index, index + explanation.length));
