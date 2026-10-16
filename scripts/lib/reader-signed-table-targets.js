@@ -116,7 +116,12 @@ function renderSignedTableTarget(record, proof, source) {
     }
     const line = cells => `| ${cells.join(' | ')} |`;
     const markdown = [line(renderedMatrix[0]), line(renderedMatrix[0].map(() => '---')), ...renderedMatrix.slice(1).map(line)].join('\n');
-    if (markdown !== slot.table.markdown) fail('获准新表字节不同于逐格正常来源投影');
+    // The paid raw draft may retain a compact separator (|---|), while the
+    // normal producer rebuilds it as | --- |. Replay that same producer only
+    // after every original DOM cell and row/column mapping matched exactly.
+    if (markdown !== require('../deep-analyzer').normalizeApiReaderTablePasteArtifacts(slot.table.markdown)) {
+        fail('获准新表字节不同于逐格正常来源投影');
+    }
     return { tableIndex: binding.tableIndex, markdown, binding };
 }
 module.exports = { readerTableSlots, resolveSignedOriginalTable, signedTableReplacementMatches, renderSignedTableTarget };

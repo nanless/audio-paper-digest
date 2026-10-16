@@ -6,6 +6,24 @@ const slots = require('../scripts/lib/reader-signed-table-targets');
 const repair = require('../scripts/lib/reader-repair');
 const patch = require('../scripts/lib/daily-reader-signed-fact-patch');
 const tables = require('../scripts/lib/reader-tables');
+test('真实REVISE原付费稿的紧凑分隔行只经正常producer重放，逐格源身份保持', () => {
+    const f = JSON.parse(fs.readFileSync(path.join(__dirname,
+        'fixtures/reader-signed-revise-compact-separator.json'), 'utf8'));
+    const rendered = slots.renderSignedTableTarget(f.record, f.proof, f.source);
+    assert.match(rendered.markdown, /\| --- \| --- \| --- \| --- \| --- \|/);
+    assert.match(rendered.markdown, /HBQ \[22\]8\[2\^\{2\}\]\^\{8\}/);
+    assert.equal(rendered.markdown, require('../scripts/deep-analyzer').normalizeApiReaderTablePasteArtifacts(
+        slots.readerTableSlots(f.record.draft)[1].table.markdown));
+    for (const mutate of [
+        x => { x.record.draft.sections.forEach(s => { s.body = s.body.replace('0.427', '0.428'); }); },
+        x => { x.record.patch.replacements[0].value.cellBindings[5].sourceRow++; },
+        x => { x.record.patch.replacements[0].value.cellBindings.pop(); },
+        x => { x.source.structuredArtifacts.tables[0].cells[0].text = '错误表头'; },
+    ]) {
+        const bad = structuredClone(f); mutate(bad);
+        assert.throws(() => slots.renderSignedTableTarget(bad.record, bad.proof, bad.source));
+    }
+});
 function fixture() {
     const deep = require('../scripts/deep-analyzer'), cheerio = require('cheerio');
     const html = fs.readFileSync(path.join(__dirname, 'fixtures/arxiv-reader-source-bindings.html'), 'utf8');

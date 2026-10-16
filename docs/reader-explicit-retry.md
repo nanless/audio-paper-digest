@@ -172,6 +172,8 @@ npm run batch -- --reader-signed-corrections /绝对路径/manifest.json --fact-
 
 表绑定修正只支持同一已有展示表位置的 `tableCorrections`：同时绑定旧表 Markdown SHA、受拒单元格所在正文范围、当前 tableIndex、获准目标原 DOM 表的 ordinal/DOM SHA/整表 SHA。使用正常 `artifact_table` 逐格绑定，或正常 `selection` / `completeTable` 编译；仍须逐格通过正常数字、单位及来源检查。显式 artifact 子表必须逐格来自同一完整 DOM，保持原行列顺序，每个展示行和列各对应同一原行和原列，不能混拼、猜值或补单位。原表错位时只能按具体获准的同篇目标原表恢复，不能借来源引文任意换绑，也不能增加表、公式或图片。原公式和 figurePlacements 记录保持不变。
 
+原付费结构稿保留紧凑 Markdown 分隔行时，显式 artifact 目标仍先逐格严格核对原 DOM 文本及行列映射，再用原正常生产器重建表格语法并比较完整输出。不能为补空格改动受拒原句之外的原稿；分隔行兼容不允许更改单元格值、来源坐标、原表 SHA 或表数量。
+
 已有独立 `TABLE_N` 占位符只修复原表缺行时，须用原绑定重编译并逐字匹配当前父正文中的完整受拒表、原 canonical 表 SHA、来源 DOM 和逐格坐标，再将该原表的既有绑定改为完整表声明。只能补全同一原表，不能拿另一张表替换占位符；不得把编译后的表伪造成原结构稿中原本存在的 Markdown。
 
 已有人工修正历史时，先核验原退休付费档，再按当前 `operatorHistory` 的真实清单、记录、来源及事实包逐条重放。旧 v1 原父稿须在 `historyParents` 中给出真实 `parentFile`、`parentFileSha256`，其整对象 CAS 必须等于旧记录声明；旧 v2 的完整父稿来自原 v2 记录，对应项为 `null`。不得从当前正文猜回历史父稿、把 operator-local 阶段改成 API 阶段或复活退休候选。每步必须重建对应正文、计划及原图，原 API 证明与全部人工历史保留。只读 `prepare` / `preview` 不登记新义务；实际 `apply` 才登记真实 pending，再经正常 finalizer 和公共引擎保存，最后仍须完整资格与独立博客审查。

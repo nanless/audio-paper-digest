@@ -1,0 +1,2641 @@
+{
+  "record": {
+    "draft": {
+      "version": 3,
+      "readerTitle": "Revise-TTS：让掩码扩散语音合成可以回头改错",
+      "oneSentenceThesis": "针对掩码扩散模型一旦提交预测就不能修改而累积错误的问题，论文用分层二进制量化提供由粗到细的语音表示，并用生成式精修网络以真假混合输入训练和随机丢弃重预测的迭代方式修正错误，在匹配码本下优于有限标量量化，中文可懂度有优势但说话人相似度仍有代价。",
+      "conceptBridges": [
+        {
+          "terms": [
+            "掩码扩散模型",
+            "零样本语音合成"
+          ],
+          "sectionKind": "background",
+          "marker": "[[CONCEPT_BRIDGE_1]]",
+          "explanation": "掩码扩散模型指把干净语音 token 图按噪声水平逐步替换为掩码，再学习逆向去噪恢复原 token 的非自回归生成框架；零样本语音合成指只给一段提示语音和目标文本就合成出保留提示音色和语义的新语音的任务。二者搭配的意义是前者提供并行多步去噪的生成机制，后者规定输入必须包含文本和提示语音、输出必须同时保住内容和音色，评价也要同时看可懂度、相似度和自然度。"
+        },
+        {
+          "terms": [
+            "分层二进制量化",
+            "有限标量量化"
+          ],
+          "sectionKind": "component",
+          "marker": "[[CONCEPT_BRIDGE_2]]",
+          "explanation": "分层二进制量化指对归一化后的连续特征逐轮做二分比较，每轮输出一个比特、区间宽度减半，形成明确由粗到细的多轮表示；有限标量量化指把每个 latent 维度独立映射到固定的标量等级，形成扁平表示。论文用前者替换后者，是为了在相同信息容量下得到可按比特预测或打包成整数索引的层次结构，并避免大码本难训练、小码本丢信息的两难。"
+        },
+        {
+          "terms": [
+            "生成式精修网络",
+            "掩码预测解码"
+          ],
+          "sectionKind": "training",
+          "marker": "[[CONCEPT_BRIDGE_3]]",
+          "explanation": "掩码预测解码指每步只把高置信度的掩码位置揭开并永久固定，不再修改已提交 token；生成式精修网络指把生成看作全局迭代精修，每步都从真值与随机 token 的混合输入重构全部目标，推理时随机保留部分上一轮预测、其余用随机 token 替换后重新预测。二者分工是前者解释了错误不可逆的来源，后者提供了可重叠、可覆盖的训练和推理替代，使后面的步骤能纠正前面的高置信错误。"
+        },
+        {
+          "terms": [
+            "索引表示",
+            "比特表示"
+          ],
+          "sectionKind": "component",
+          "marker": "[[CONCEPT_BRIDGE_4]]",
+          "explanation": "索引表示指把每个通道 M 轮的比特序列打包成一个 0 到 2 的 M 次方减 1 的整数，模型要做 C 个 2 的 M 次方分类；比特表示指把同一信息展平成 C 乘 M 个二分类。两者信息容量相同，都是每帧 C 乘 M 比特，但分类输出空间和优化难度不同，论文同时试验是为了检验随着 M 增大，缩小输出空间是否能换来稳定的质量收益。"
+        },
+        {
+          "terms": [
+            "声学编码器",
+            "语义编码器"
+          ],
+          "sectionKind": "component",
+          "marker": "[[CONCEPT_BRIDGE_5]]",
+          "explanation": "声学编码器指提取用于波形重建的声学特征的模块，语义编码器指提取语言内容信息的模块。论文沿用的语音分词器把两路特征拼接成融合表示 H 再做量化，训练时量化表示同时服务于声学重建和语义辅助监督，推理时只用声学解码器从量化表示恢复语音，因此量化既要保真又要保留语言和说话人信息。"
+        }
+      ],
+      "figurePlacements": [
+        {
+          "figureOrdinal": 1,
+          "targetKind": "component",
+          "marker": "[[FIGURE_1]]",
+          "focusPoints": [
+            "先看第一轮如何把负一到一分成左右两个大区间并选中左侧",
+            "再看第二轮和第三轮如何在已选区间内部继续对半切分",
+            "对照 z 等于负零点一一三时比特序列和量化值是如何逐轮逼近的",
+            "体会每多一轮区间宽度减半、最大量化误差减半的含义"
+          ]
+        }
+      ],
+      "tableBindings": [
+        {
+          "tableIndex": 1,
+          "sourceType": "source_quotes",
+          "sourceTableOrdinal": null,
+          "cellBindings": [],
+          "sourceQuotes": [],
+          "pdfSourceQuotes": [
+            "Table 5. Objective and subjective evaluation results. Model Test set SIM ↑WER ↓UTMOS ↑ CMOS ↑ GT LS-PC 0.690 1.87% 4.01 0.00 Seed-en 0.734 2.14% 3.52 Seed-zh 0.755 1.25% 2.78 0.00 F5-TTS LS-PC 0.655 1.89% 3.89 −0.30 ± 1.69 Seed-en 0.664 1.85% 3.72 Seed-zh 0.750 1.53% 2.93 −0.47 ± 1.81 MaskGCT LS-PC 0.691 2.26% 3.91 −0.21 ± 1.70 Seed-en 0.713 2.88% 3.55 Seed-zh 0.773 2.40% 2.63 −0.37 ± 1.73 OmniVoice LS-PC 0.697 1.57% 4.23 +0.28 ± 1.71 Seed-en 0.717 1.72% 3.88 Seed-zh 0.765 0.89% 3.05 +0.13 ± 1.93 Revise-TTS LS-PC 0.519 2.00% 4.03 −0.34 ± 1.67 Seed-en 0.532 2.91% 3.60 Seed-zh 0.645 1.19% 2.80 −0.63 ± 1.88"
+          ]
+        },
+        {
+          "tableIndex": 2,
+          "sourceType": "artifact_table",
+          "sourceTableOrdinal": 1,
+          "cellBindings": [
+            {
+              "renderedRow": 0,
+              "renderedColumn": 0,
+              "sourceRow": 0,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 1,
+              "sourceRow": 0,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 2,
+              "sourceRow": 0,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 3,
+              "sourceRow": 0,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 4,
+              "sourceRow": 0,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 0,
+              "sourceRow": 1,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 1,
+              "sourceRow": 1,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 2,
+              "sourceRow": 1,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 3,
+              "sourceRow": 1,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 4,
+              "sourceRow": 1,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 0,
+              "sourceRow": 2,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 1,
+              "sourceRow": 2,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 2,
+              "sourceRow": 2,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 3,
+              "sourceRow": 2,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 4,
+              "sourceRow": 2,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 0,
+              "sourceRow": 3,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 1,
+              "sourceRow": 3,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 2,
+              "sourceRow": 3,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 3,
+              "sourceRow": 3,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 4,
+              "sourceRow": 3,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 0,
+              "sourceRow": 16,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 1,
+              "sourceRow": 16,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 2,
+              "sourceRow": 16,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 3,
+              "sourceRow": 16,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 4,
+              "sourceRow": 16,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 5,
+              "renderedColumn": 0,
+              "sourceRow": 17,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 5,
+              "renderedColumn": 1,
+              "sourceRow": 17,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 5,
+              "renderedColumn": 2,
+              "sourceRow": 17,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 5,
+              "renderedColumn": 3,
+              "sourceRow": 17,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 5,
+              "renderedColumn": 4,
+              "sourceRow": 17,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 6,
+              "renderedColumn": 0,
+              "sourceRow": 18,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 6,
+              "renderedColumn": 1,
+              "sourceRow": 18,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 6,
+              "renderedColumn": 2,
+              "sourceRow": 18,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 6,
+              "renderedColumn": 3,
+              "sourceRow": 18,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 6,
+              "renderedColumn": 4,
+              "sourceRow": 18,
+              "sourceColumn": 4
+            }
+          ],
+          "sourceQuotes": []
+        },
+        {
+          "tableIndex": 3,
+          "sourceType": "artifact_table",
+          "sourceTableOrdinal": 2,
+          "cellBindings": [
+            {
+              "renderedRow": 0,
+              "renderedColumn": 0,
+              "sourceRow": 0,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 1,
+              "sourceRow": 0,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 2,
+              "sourceRow": 0,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 3,
+              "sourceRow": 0,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 4,
+              "sourceRow": 0,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 5,
+              "sourceRow": 0,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 0,
+              "sourceRow": 1,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 1,
+              "sourceRow": 1,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 2,
+              "sourceRow": 1,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 3,
+              "sourceRow": 1,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 4,
+              "sourceRow": 1,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 5,
+              "sourceRow": 1,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 0,
+              "sourceRow": 2,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 1,
+              "sourceRow": 2,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 2,
+              "sourceRow": 2,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 3,
+              "sourceRow": 2,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 4,
+              "sourceRow": 2,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 5,
+              "sourceRow": 2,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 0,
+              "sourceRow": 3,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 1,
+              "sourceRow": 3,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 2,
+              "sourceRow": 3,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 3,
+              "sourceRow": 3,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 4,
+              "sourceRow": 3,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 5,
+              "sourceRow": 3,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 0,
+              "sourceRow": 4,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 1,
+              "sourceRow": 4,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 2,
+              "sourceRow": 4,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 3,
+              "sourceRow": 4,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 4,
+              "sourceRow": 4,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 5,
+              "sourceRow": 4,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 5,
+              "renderedColumn": 0,
+              "sourceRow": 5,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 5,
+              "renderedColumn": 1,
+              "sourceRow": 5,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 5,
+              "renderedColumn": 2,
+              "sourceRow": 5,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 5,
+              "renderedColumn": 3,
+              "sourceRow": 5,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 5,
+              "renderedColumn": 4,
+              "sourceRow": 5,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 5,
+              "renderedColumn": 5,
+              "sourceRow": 5,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 6,
+              "renderedColumn": 0,
+              "sourceRow": 6,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 6,
+              "renderedColumn": 1,
+              "sourceRow": 6,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 6,
+              "renderedColumn": 2,
+              "sourceRow": 6,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 6,
+              "renderedColumn": 3,
+              "sourceRow": 6,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 6,
+              "renderedColumn": 4,
+              "sourceRow": 6,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 6,
+              "renderedColumn": 5,
+              "sourceRow": 6,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 7,
+              "renderedColumn": 0,
+              "sourceRow": 7,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 7,
+              "renderedColumn": 1,
+              "sourceRow": 7,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 7,
+              "renderedColumn": 2,
+              "sourceRow": 7,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 7,
+              "renderedColumn": 3,
+              "sourceRow": 7,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 7,
+              "renderedColumn": 4,
+              "sourceRow": 7,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 7,
+              "renderedColumn": 5,
+              "sourceRow": 7,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 8,
+              "renderedColumn": 0,
+              "sourceRow": 8,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 8,
+              "renderedColumn": 1,
+              "sourceRow": 8,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 8,
+              "renderedColumn": 2,
+              "sourceRow": 8,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 8,
+              "renderedColumn": 3,
+              "sourceRow": 8,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 8,
+              "renderedColumn": 4,
+              "sourceRow": 8,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 8,
+              "renderedColumn": 5,
+              "sourceRow": 8,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 9,
+              "renderedColumn": 0,
+              "sourceRow": 9,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 9,
+              "renderedColumn": 1,
+              "sourceRow": 9,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 9,
+              "renderedColumn": 2,
+              "sourceRow": 9,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 9,
+              "renderedColumn": 3,
+              "sourceRow": 9,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 9,
+              "renderedColumn": 4,
+              "sourceRow": 9,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 9,
+              "renderedColumn": 5,
+              "sourceRow": 9,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 10,
+              "renderedColumn": 0,
+              "sourceRow": 10,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 10,
+              "renderedColumn": 1,
+              "sourceRow": 10,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 10,
+              "renderedColumn": 2,
+              "sourceRow": 10,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 10,
+              "renderedColumn": 3,
+              "sourceRow": 10,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 10,
+              "renderedColumn": 4,
+              "sourceRow": 10,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 10,
+              "renderedColumn": 5,
+              "sourceRow": 10,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 11,
+              "renderedColumn": 0,
+              "sourceRow": 11,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 11,
+              "renderedColumn": 1,
+              "sourceRow": 11,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 11,
+              "renderedColumn": 2,
+              "sourceRow": 11,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 11,
+              "renderedColumn": 3,
+              "sourceRow": 11,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 11,
+              "renderedColumn": 4,
+              "sourceRow": 11,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 11,
+              "renderedColumn": 5,
+              "sourceRow": 11,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 12,
+              "renderedColumn": 0,
+              "sourceRow": 12,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 12,
+              "renderedColumn": 1,
+              "sourceRow": 12,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 12,
+              "renderedColumn": 2,
+              "sourceRow": 12,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 12,
+              "renderedColumn": 3,
+              "sourceRow": 12,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 12,
+              "renderedColumn": 4,
+              "sourceRow": 12,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 12,
+              "renderedColumn": 5,
+              "sourceRow": 12,
+              "sourceColumn": 5
+            }
+          ],
+          "sourceQuotes": []
+        },
+        {
+          "tableIndex": 4,
+          "sourceType": "artifact_table",
+          "sourceTableOrdinal": 3,
+          "cellBindings": [
+            {
+              "renderedRow": 0,
+              "renderedColumn": 0,
+              "sourceRow": 0,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 1,
+              "sourceRow": 0,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 2,
+              "sourceRow": 0,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 3,
+              "sourceRow": 0,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 4,
+              "sourceRow": 0,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 5,
+              "sourceRow": 0,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 6,
+              "sourceRow": 0,
+              "sourceColumn": 6
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 0,
+              "sourceRow": 1,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 1,
+              "sourceRow": 1,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 2,
+              "sourceRow": 1,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 3,
+              "sourceRow": 1,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 4,
+              "sourceRow": 1,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 5,
+              "sourceRow": 1,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 6,
+              "sourceRow": 1,
+              "sourceColumn": 6
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 0,
+              "sourceRow": 2,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 1,
+              "sourceRow": 2,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 2,
+              "sourceRow": 2,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 3,
+              "sourceRow": 2,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 4,
+              "sourceRow": 2,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 5,
+              "sourceRow": 2,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 6,
+              "sourceRow": 2,
+              "sourceColumn": 6
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 0,
+              "sourceRow": 3,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 1,
+              "sourceRow": 3,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 2,
+              "sourceRow": 3,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 3,
+              "sourceRow": 3,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 4,
+              "sourceRow": 3,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 5,
+              "sourceRow": 3,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 6,
+              "sourceRow": 3,
+              "sourceColumn": 6
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 0,
+              "sourceRow": 4,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 1,
+              "sourceRow": 4,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 2,
+              "sourceRow": 4,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 3,
+              "sourceRow": 4,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 4,
+              "sourceRow": 4,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 5,
+              "sourceRow": 4,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 6,
+              "sourceRow": 4,
+              "sourceColumn": 6
+            }
+          ],
+          "sourceQuotes": []
+        },
+        {
+          "tableIndex": 5,
+          "sourceType": "artifact_table",
+          "sourceTableOrdinal": 4,
+          "cellBindings": [
+            {
+              "renderedRow": 0,
+              "renderedColumn": 0,
+              "sourceRow": 0,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 1,
+              "sourceRow": 0,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 2,
+              "sourceRow": 0,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 3,
+              "sourceRow": 0,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 4,
+              "sourceRow": 0,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 5,
+              "sourceRow": 0,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 6,
+              "sourceRow": 0,
+              "sourceColumn": 6
+            },
+            {
+              "renderedRow": 0,
+              "renderedColumn": 7,
+              "sourceRow": 0,
+              "sourceColumn": 7
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 0,
+              "sourceRow": 1,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 1,
+              "sourceRow": 1,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 2,
+              "sourceRow": 1,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 3,
+              "sourceRow": 1,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 4,
+              "sourceRow": 1,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 5,
+              "sourceRow": 1,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 6,
+              "sourceRow": 1,
+              "sourceColumn": 6
+            },
+            {
+              "renderedRow": 1,
+              "renderedColumn": 7,
+              "sourceRow": 1,
+              "sourceColumn": 7
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 0,
+              "sourceRow": 2,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 1,
+              "sourceRow": 2,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 2,
+              "sourceRow": 2,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 3,
+              "sourceRow": 2,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 4,
+              "sourceRow": 2,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 5,
+              "sourceRow": 2,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 6,
+              "sourceRow": 2,
+              "sourceColumn": 6
+            },
+            {
+              "renderedRow": 2,
+              "renderedColumn": 7,
+              "sourceRow": 2,
+              "sourceColumn": 7
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 0,
+              "sourceRow": 3,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 1,
+              "sourceRow": 3,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 2,
+              "sourceRow": 3,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 3,
+              "sourceRow": 3,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 4,
+              "sourceRow": 3,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 5,
+              "sourceRow": 3,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 6,
+              "sourceRow": 3,
+              "sourceColumn": 6
+            },
+            {
+              "renderedRow": 3,
+              "renderedColumn": 7,
+              "sourceRow": 3,
+              "sourceColumn": 7
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 0,
+              "sourceRow": 4,
+              "sourceColumn": 0
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 1,
+              "sourceRow": 4,
+              "sourceColumn": 1
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 2,
+              "sourceRow": 4,
+              "sourceColumn": 2
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 3,
+              "sourceRow": 4,
+              "sourceColumn": 3
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 4,
+              "sourceRow": 4,
+              "sourceColumn": 4
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 5,
+              "sourceRow": 4,
+              "sourceColumn": 5
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 6,
+              "sourceRow": 4,
+              "sourceColumn": 6
+            },
+            {
+              "renderedRow": 4,
+              "renderedColumn": 7,
+              "sourceRow": 4,
+              "sourceColumn": 7
+            }
+          ],
+          "sourceQuotes": []
+        }
+      ],
+      "formulaBindings": [
+        {
+          "formulaOrdinal": 1,
+          "targetKind": "problem",
+          "marker": "[[FORMULA_1]]"
+        },
+        {
+          "formulaOrdinal": 2,
+          "targetKind": "problem",
+          "marker": "[[FORMULA_2]]"
+        },
+        {
+          "formulaOrdinal": 4,
+          "targetKind": "training",
+          "marker": "[[FORMULA_4]]"
+        },
+        {
+          "formulaOrdinal": 5,
+          "targetKind": "training",
+          "marker": "[[FORMULA_5]]"
+        }
+      ],
+      "sections": [
+        {
+          "kind": "background",
+          "heading": "零样本语音合成要从什么输入做出什么输出",
+          "body": "这篇论文研究的是零样本文本转语音，输入是目标文本 x 和一段可选的提示语音 Y 的上标 P，目标是合成出内容符合文本、音色接近提示人的新语音。语音先被语音分词器变成离散的声学 token 图 Y 的下标 0，形状是时间长度 T 乘以码本数 Q，模型要预测的就是这张图，声学解码器再把它变回波形。评价要同时看三件事：说话人相似度是用 WavLM 提取的合成语音与真值语音嵌入之间的余弦相似度，越高越好；可懂度是英文用词错率、中文用字错率，越低越好，论文统一记作 WER；自然度是用 UTMOS 打分，越高越好。主观上还有相对偏好 CMOS 和感知相似度 SMOS。理解这个任务很关键，因为后面所有关于掩码、量化、精修的改动，最终都要落到这三类指标和提示音色保留上。\n\n[[CONCEPT_BRIDGE_1]]"
+        },
+        {
+          "kind": "related_work",
+          "heading": "自回归、掩码扩散和单阶段架构各解决了什么",
+          "body": "论文把已有路线放在同一任务下比较。自回归模型从左到右逐个生成 token，需要 N 个 token 就需要 N 步解码，延迟高且有误差累积。非自回归模型并行生成全部 token，一般只需要远少于序列长度的推理步数。掩码扩散模型是其中一种重要非自回归框架，在多步去噪中预测被掩码的 token，推理延迟取决于去噪步数而不是输出长度。MaskGIT 是图像上的奠基工作，用双向 Transformer 预测掩码并每轮保留高置信子集；MaskGCT 把它搬到零样本语音，做文本到语义再到声学的两阶段级联；更早的两阶段系统只在语义到声学用掩码扩散，文本到语义仍用自回归，仍有不可靠和高延迟问题。后续单阶段工作把两阶段流水线简化为直接从文本到声学 token，例如 OmniVoice 从预训练自回归大语言模型初始化并采用全码本随机掩码。论文强调两阶段还有一个额外困难：一旦合成变差，很难定位错误来自文本到语义还是语义到声学，因此选择在单阶段框架内直接研究可修正的生成算法。"
+        },
+        {
+          "kind": "problem",
+          "heading": "为什么掩码扩散一旦写错就改不掉",
+          "body": "掩码扩散有一个固定的加噪过程 q，把干净 token 图 Y 的下标 0 映射到噪声水平 t 在零到一之间的逐步被掩码图 Y 的下标 t。论文采用简化的吸收态扩散，每个目标位置以概率 t 变成掩码符号 M，以概率一减 t 保持原 token y 的下标 0，位置之间连乘得到整张图的条件分布，具体为：\n\n[[FORMULA_1]]\n\n去噪时模型在给定文本 x、提示语音和当前被破坏图 Y 的下标 t 的条件下，对每个被掩码位置预测最可能的干净 token，取词汇表 V 上预测概率最大的那个：\n\n[[FORMULA_2]]\n\n关键在提交规则：每一步只按掩码调度提交最高置信度的预测，置信度定义为最大预测概率，剩下的位置继续保持掩码，而已经提交的 token 在后续迭代中保持不变、不再修改。调度例如线性或余弦调度决定每步提交多少。这意味着一个高置信但错误的 token 一旦被固定，不仅自身错，还会作为条件影响后续预测，形成累积和传播。论文要解决的正是这种不可逆提交带来的语音质量下降，而不是单纯提高单步预测精度。"
+        },
+        {
+          "kind": "method_overview",
+          "heading": "Revise-TTS 的两部分分工和整体流程是什么",
+          "body": "Revise-TTS 是一个单阶段框架，包含两个可分开理解但配合使用的部分。第一部分是分层二进制量化，用多轮二进制精修代替有限标量量化，给语音 token 一个可扩展的二进制表示和明确的由粗到细结构，解决量化本身扁平、精度与预测空间难兼顾的问题。第二部分是生成式精修网络，训练时从真值与随机 token 的混合输入重构整个 token 序列，推理时迭代精修并随机丢弃一小部分上一轮预测后重新预测，从而实现自我纠正。整体流程是：融合声学和语义的连续表示先被量化成离散 token；训练时模型见到的不是纯掩码，而是按保留比例混合的真假 token 图；推理时从全随机图出发，经过 K 步预测加部分替换的循环，最后返回精修后的预测。论文还说明该训练和推理方法可以扩展到任何基于掩码扩散的语音合成任务，作为掩码训练和推理的替代。骨干沿用 OmniVoice，推理使用三十二步迭代精修。"
+        },
+        {
+          "kind": "component",
+          "heading": "分层二进制量化如何把一个小数变成比特串",
+          "body": "语音分词器先由声学编码器和语义编码器分别提取特征并拼接成融合表示 H，形状是 T 乘 C，C 是隐通道数。分层二进制量化先逐元素做双曲正切归一化得到 H 上横线，把每个值压缩到负一到一之间，记为 z。随后对每个 z 做 M 轮二分：第 m 轮先根据前面的比特算决策中心 c 的下标 m，第一轮中心为零，后面是前面各轮正负一除以二的 r 次方的累加；若 z 小于等于中心则该轮比特为零，否则为一。每轮都把当前区间一分为二，因此 M 轮后每个码字对应归一化隐空间中宽度为二的一减 M 次方的区间，最大量化误差为二的负 M 次方。论文举例 z 等于负零点一一三经过多轮得到比特序列和离散索引以及量化值负零点一二五，直观展示了逐轮逼近。\n\n[[CONCEPT_BRIDGE_2]]\n\n下面这张官方示意图值得对照着读，它把区间对半切分的过程画成了三行方块，蓝色是当前选中的区间，箭头表示上一轮选中后下一轮在其中继续细分。读图说明是：不要只看最后的比特，要看每一轮的区间是如何从上一轮继承并减半的，以及决策阈值是如何随比特变化的。\n\n[[FIGURE_1]]\n\n从图中可以直接看到第一轮把负一到零和零到一分开，第二轮在负一到零内部再分出负一到负零点五和负零点五到零等子区间，第三轮继续细分到负零点二五到零这样的窄区间。这种可视化对应的就是公式中决策中心逐轮更新、区间宽度指数减小的计算，代价是轮数越多每帧比特数越多，需要在精度和预测难度之间权衡。\n\n[[CONCEPT_BRIDGE_5]]"
+        },
+        {
+          "kind": "component",
+          "heading": "大码本难学的问题如何变成两种预测模式",
+          "body": "直接用 C 乘 M 比特对应的二的 C 乘 M 次方大码本做分类对语音合成模型太难，例如 C 等于十六、M 等于四时码本非常大。论文沿用两种紧凑表示：索引表示 Y 的下标 ind 是 T 乘 C 的整数矩阵，每个位置取值零到二的 M 次方减一；比特表示 Y 的下标 bit 是 T 乘 C 乘 M 的二进制张量。两者信息容量相同，都是每帧 C 乘 M 比特，但分类负担不同：用索引表示在级联模型中需要做 C 个二的 M 次方分类，而比特表示做 C 乘 M 个二分类。当 M 增大时，比特预测能减小分类输出空间，但论文明确说这并不带来所有指标的一致提升。分层二进制量化和有限标量量化都是免查表量化，训练时不需要向量量化或残差向量量化中的承诺损失等显式码本目标项；区别是前者每维有明确的由粗到细顺序，后者每维用固定标量等级，且前者输出可直接用于按位预测或打包成整数索引。后续试验比较了不同 C 和 M 组合与有限标量量化的效果。\n\n[[CONCEPT_BRIDGE_4]]"
+        },
+        {
+          "kind": "training",
+          "heading": "生成式精修网络训练时见到的输入是什么",
+          "body": "生成式精修网络的训练目标不是只预测被掩码的位置，而是从部分被破坏的输入重构全部目标声学 token。每轮训练先独立采样一个保留比例 l 服从零到一均匀分布，l 小对应重破坏，l 大对应轻破坏，均匀采样让同一个模型见到迭代精修中连续的不同破坏程度。随后按 l 采样二值选择图 S，用它把真值图 Y 的下标 0 和同形状的均匀随机 token 图 Y 的下标 rand 混合成破坏输入 F：\n\n[[FORMULA_4]]\n\n其中乘法是按位置的选择混合。在给定文本 x 和提示语音的条件下，模型用交叉熵重构所有位置的目标 token，损失是对 T 乘 Q 求平均的负对数似然：\n\n[[FORMULA_5]]\n\n这个目标训练模型同时保留正确的 token 并替换被破坏的 token，推理时保留比例按余弦调度变化，不再为 token 选择单独学一个策略网络。需要如实说明的是，论文没有报告梯度是否经过量化器内部二分比较的具体路径，也没有给出除交叉熵外的额外纠错头，监督只来自重构全部目标 token。\n\n[[CONCEPT_BRIDGE_3]]"
+        },
+        {
+          "kind": "training",
+          "heading": "推理时随机丢弃重预测如何实现可修正",
+          "body": "虽然训练是一步重构，但推理把同一个模型迭代使用。记第 k 步输入为 F 的下标 k，从均匀随机图 F 的下标零等于 Y 的下标 rand 出发，每步先由 F 的下标 k 预测下一轮整图 Y 上尖帽的下标 k 加一，再按保留比例 l 的下标 k 加一采样选择图 S 的下标 k 加一，构造下一步输入：保留下来的位置用上一轮预测，落选的位置用随机 token 替换后在下一步重新预测。保留比例按归一化进度 tau 的下标 k 加一的余弦形式增长，tau 等于 k 加一除以 K 减一与一的较小值，再乘以系数 rho 等于零点九九九。随着步数增加，保留比例逐渐升高，早期错误有机会被覆盖纠正。经过 K 步后返回最终预测 Y 上尖帽的下标 K。论文主试验 K 取三十二。这种重叠解码的代价是需要多步迭代，而不是单步完成；好处是不再把已提交 token 永久固定。论文把索引空间和展平比特空间的两种模式分别记作 GRN 的下标 ind 和 GRN 的下标 bit，两者共享上述训练和采样流程。"
+        },
+        {
+          "kind": "experiment_setup",
+          "heading": "实验在什么数据、模型和指标下比较",
+          "body": "消融在 LibriTTS-R 585小时24 kHz英文和 WenetSpeech4TTS精品子集 945小时16 kHz中文上训练，主模型在 Emilia英文 46.8k小时和中文 49.9k小时子集上训练。评测用 LibriSpeech-PC的 test-clean和 Seed-TTS引入的双语基准，客观评测共 2215条英文和 2020条中文样本。实现上沿用 OmniVoice骨干和 XCodec 2.0语音分词器，对比有限标量量化和分层二进制量化。消融和主模型分别在 4卡和 16卡英伟达 A100上训练，批量按秒计分别为 1.8k秒和 6.5k秒，每卡 20480 token，分别 100k步和 250k步一轮，优化器用 AdamW，β1=0.9、β2=0.999、ε=1e-8、学习率 1e-4。客观指标方向是相似度越高越好、错率越低越好、UTMOS越高越好；可懂度按数据集分别用基于 HuBERT、Paraformer中文版和 Whisper large-v3的识别模型。主观用 CMOS [-3,3]表示相对偏好、SMOS [0,5]表示感知相似度，从 3个测试集随机抽 10、10、20条组成英中文集，每条至少 15名母语者在众包平台评分。理解这些条件很重要，因为不同识别器和抽样子集都会影响错率和主观分的绝对值。"
+        },
+        {
+          "kind": "result",
+          "heading": "主模型与现有非自回归系统相比得到了什么",
+          "body": "主结果比较的是 Revise-TTS与当前非自回归系统在 3个测试集上的客观和主观表现，公平条件是同一评测集和同一类指标方向，但论文明确指出不同系统的训练数据、轮数和后训练并不完全一致，因此只能看趋势和代价。下表对照真值、F5-TTS、MaskGCT、OmniVoice和 Revise-TTS，看 Revise-TTS是否在保持可懂度和自然度的同时付出相似度代价，以及主观偏好是否与客观指标一致。\n\n| Model | Test set | SIM ↑ | WER ↓ | UTMOS ↑ | CMOS ↑ |\n|---|---|---|---|---|---|\n| GT | LS-PC | 0.690 | 1.87% | 4.01 | 0.00 |\n| GT | Seed-en | 0.734 | 2.14% | 3.52 | 0.00 |\n| GT | Seed-zh | 0.755 | 1.25% | 2.78 | 0.00 |\n| F5-TTS | LS-PC | 0.655 | 1.89% | 3.89 | −0.30 ± 1.69 |\n| F5-TTS | Seed-en | 0.664 | 1.85% | 3.72 |  |\n| F5-TTS | Seed-zh | 0.750 | 1.53% | 2.93 | −0.47 ± 1.81 |\n| MaskGCT | LS-PC | 0.691 | 2.26% | 3.91 | −0.21 ± 1.70 |\n| MaskGCT | Seed-en | 0.713 | 2.88% | 3.55 |  |\n| MaskGCT | Seed-zh | 0.773 | 2.40% | 2.63 | −0.37 ± 1.73 |\n| OmniVoice | LS-PC | 0.697 | 1.57% | 4.23 | +0.28 ± 1.71 |\n| OmniVoice | Seed-en | 0.717 | 1.72% | 3.88 |  |\n| OmniVoice | Seed-zh | 0.765 | 0.89% | 3.05 | +0.13 ± 1.93 |\n| Revise-TTS | LS-PC | 0.519 | 2.00% | 4.03 | −0.34 ± 1.67 |\n| Revise-TTS | Seed-en | 0.532 | 2.91% | 3.60 |  |\n| Revise-TTS | Seed-zh | 0.645 | 1.19% | 2.80 | −0.63 ± 1.88 |\n\nRevise-TTS在 Seed中文上词错率 1.19%，中文可懂度强，且 3个测试集的 UTMOS略高于真值对应行的 4.01、3.52和 2.78；但代价是说话人相似度明显低于对比系统，例如 LibriSpeech-PC 0.519、Seed英文 0.532、Seed中文 0.645，而真值和 OmniVoice等多在 0.69到 0.77区间。主观上 OmniVoice在英文和中文分别取得 +0.28和 +0.13的 CMOS，Revise-TTS则为 -0.34和 -0.63，与 F5-TTS和 MaskGCT相当。论文自己指出相似度可能通过换成分层二进制量化 [2^4]^8配置或强化学习后训练改善，这说明当前主配置的结论只在无强化学习、当前量化配置和 32步精修条件下成立，不能推广为全面超越。"
+        },
+        {
+          "kind": "ablation",
+          "heading": "不同量化和通道轮数组合带来什么权衡",
+          "body": "这个消融回答的是分层二进制量化的不同 C 和 M 组合与有限标量量化相比，哪种在可懂度、相似度和自然度之间更平衡。所有行都用生成式精炼网络的下标模式，测试集覆盖 LibriSpeech-PC、Seed英文和Seed中文，指标方向是相似度和UTMOS越高越好、错词率越低越好，下表只整理原文中有完整连续证据的相同码本对照组。\n\n| Quantization | Testing set | SIM ↑ | WER ↓ | UTMOS ↑ |\n|---|---|---|---|---|\n| HBQ [22]8[2^{2}]^{8} | LS-PC | 0.427 | 1.86 | 4.15 |\n| HBQ [22]8[2^{2}]^{8} | Seed-en | 0.406 | 5.06 | 3.99 |\n| HBQ [22]8[2^{2}]^{8} | Seed-zh | 0.576 | 1.83 | 2.78 |\n| FSQ [4]8[4]^{8} | LS-PC | 0.290 | 2.07 | 4.04 |\n| FSQ [4]8[4]^{8} | Seed-en | 0.270 | 5.93 | 3.71 |\n| FSQ [4]8[4]^{8} | Seed-zh | 0.514 | 2.60 | 2.36 |\n\n结果显示在相同码本条件下，分层二进制量化二的二次方八通道全面优于有限标量量化四的八次方，三个测试集的相似度、错词率和UTMOS都更好，其中中文集错词率从2.60降到1.83。但该对照只覆盖部分配置，增大通道数或轮数并非单调变好，且Seed英文上各配置错词率普遍高于LibriSpeech-PC，说明英文评测条件更难，不能把某一配置的最优直接当作所有场景的最优。"
+        },
+        {
+          "kind": "ablation",
+          "heading": "按索引预测与按比特预测谁更稳",
+          "body": "这个对比固定 C 和 M，只换预测模式，检验相同信息容量下缩小分类输出空间是否有统一收益。比较在二的二次方八通道和二的四次方八通道两组配置下进行，模式分为 GRN-ind 和 GRN-bit，测试集和指标与上表相同。\n\n| Config. | Mode | Testing set | SIM ↑ | WER ↓ | UTMOS ↑ |\n| --- | --- | --- | --- | --- | --- |\n| [22]8[2^{2}]^{8} | GRN-ind | LS-PC | 0.427 | 1.86 | 4.15 |\n| [22]8[2^{2}]^{8} | GRN-ind | Seed-en | 0.406 | 5.06 | 3.99 |\n| [22]8[2^{2}]^{8} | GRN-ind | Seed-zh | 0.576 | 1.83 | 2.78 |\n| [22]8[2^{2}]^{8} | GRN-bit | LS-PC | 0.382 | 2.15 | 3.94 |\n| [22]8[2^{2}]^{8} | GRN-bit | Seed-en | 0.366 | 12.71 | 3.73 |\n| [22]8[2^{2}]^{8} | GRN-bit | Seed-zh | 0.542 | 2.74 | 2.53 |\n| [24]8[2^{4}]^{8} | GRN-ind | LS-PC | 0.444 | 2.29 | 4.03 |\n| [24]8[2^{4}]^{8} | GRN-ind | Seed-en | 0.419 | 7.17 | 3.70 |\n| [24]8[2^{4}]^{8} | GRN-ind | Seed-zh | 0.607 | 2.44 | 2.67 |\n| [24]8[2^{4}]^{8} | GRN-bit | LS-PC | 0.444 | 2.06 | 4.03 |\n| [24]8[2^{4}]^{8} | GRN-bit | Seed-en | 0.411 | 6.96 | 3.72 |\n| [24]8[2^{4}]^{8} | GRN-bit | Seed-zh | 0.600 | 2.69 | 2.63 |\n\n在二的二次方八通道下，索引模式全面优于比特模式，例如 LibriSpeech-PC 相似度零点四二七对零点三八二、错率一点八六对二点一五，Seed 英文错率五点零六对十二点七一差距更大；在二的四次方八通道下两者接近，LibriSpeech-PC 相似度同为零点四四四，错率二点二九对二点零六，Seed 中文相似度零点六零七对零点六零零。论文的措辞是比特预测随 M 增大减小了输出空间，但没有在所有指标上一致获益。这是一个重要的限制：不能因为比特分类数少就断言它一定更好，实际选择仍要看具体 C、M 和测试集。未胜出的比特模式在小 M 下的明显落后也提示，输出空间小不等于优化更容易。"
+        },
+        {
+          "kind": "ablation",
+          "heading": "声码器重建和跨系统迁移各说明了什么",
+          "body": "论文还做了两组本篇特有的细节验证。第一组是声码器重建，比较 Higgs、官方 XCodec 二点零和带分层二进制量化的 XCodec 二点零，问题是量化本身的重建上限如何，条件是同一重建任务下的相似度和错率。\n\n| Codec | LS-PC | LS-PC | Seed-en | Seed-en | Seed-zh | Seed-zh |\n| --- | --- | --- | --- | --- | --- | --- |\n| Codec | SIM ↑ | WER ↓ | SIM ↑ | WER ↓ | SIM ↑ | WER ↓ |\n| Higgs | 0.877 | 2.33 | 0.904 | 2.33 | 0.903 | 1.20 |\n| XCodec 2.0 + FSQ | 0.781 | 3.08 | 0.821 | 2.80 | 0.840 | 1.44 |\n| XCodec 2.0 + HBQ | 0.764 | 3.60 | 0.802 | 3.12 | 0.830 | 1.92 |\n\nHiggs 在所有指标最好，例如三个集相似度零点八七七、零点九零四和零点九零三；官方 XCodec 二点零用有限标量量化次之；带分层二进制量化的版本相似度零点七六四、零点八零二和零点八三零，错率三点六零、三点一二和一点九二，仍有竞争力，但论文说明官方 checkpoint 训练数据更多、迭代更多，因此不能把重建差距完全归因于量化方法。第二组是生成式精修网络微调迁移，都用 Higgs 声码器、在 Emilia 英中文上八卡微调十万步，比较掩码解码与精修解码。\n\n| Mode | Steps | LS-PC | LS-PC | Seed-en | Seed-en | Seed-zh | Seed-zh |\n| --- | --- | --- | --- | --- | --- | --- | --- |\n| Mode | Steps | SIM ↑ | WER ↓ | SIM ↑ | WER ↓ | SIM ↑ | WER ↓ |\n| Masking | 100k | 0.689 | 1.81 | 0.701 | 1.98 | 0.762 | 1.06 |\n| GRN | 100k | 0.646 | 1.80 | 0.637 | 2.50 | 0.719 | 1.27 |\n| OmniVoice | – | 0.697 | 1.57 | 0.717 | 1.72 | 0.765 | 0.89 |\n\n官方 OmniVoice checkpoint 优于两个微调模型；精修解码略弱于掩码解码，尤其相似度在三个集分别为零点六四六对零点六八九、零点六三七对零点七零一、零点七一九对零点七六二，论文推测可能因为 OmniVoice 用强化学习提升了相似度。尽管如此，精修能直接迁移到其他掩码扩散语音系统，证明了它是可替代的训练和推理方法，而不是只能用于 Revise-TTS。这两组结果共同划定了适用条件：声码器和后训练的差异会掩盖解码方法的差异，对比时必须固定声码器和训练预算。"
+        },
+        {
+          "kind": "limitation",
+          "heading": "哪些结论成立，哪些还只是推测",
+          "body": "论文直接报告的是：在匹配码本下分层二进制量化优于有限标量量化；不同 C、M 存在可懂度、相似度、自然度的权衡；比特与索引模式没有一致胜负；主模型中文可懂度和自然度有竞争力但相似度偏低；精修解码可迁移但在固定 Higgs 和十万步微调下略弱于掩码解码且弱于官方 OmniVoice。这些都有表格数字支持。只是推测的是相似度差距可能来自缺少强化学习后训练，以及换配置或加后训练可能改善相似度，这两点没有在本文给出新的强化学习对照试验。还有尚未评测的范围：推理延迟与步数的定量关系、不同保留调度和随机替换比例的敏感性、除三个测试集外的泛化，以及误判率和计算成本都没有测量，因此不能承诺精修一定更快或更省。本次封存来源的正文、图中比特标签与图注一致：z=-0.113时，三轮比特为011，对应索引3和量化值-0.125。"
+        },
+        {
+          "kind": "reproduction",
+          "heading": "复现第一步要固定什么",
+          "body": "复现应先固定信息条件和超参数：输入必须同时有文本和提示语音，输出是 T 乘 Q 的声学 token 图；分词器用 XCodec 二点零架构并明确是有限标量量化还是分层二进制量化的 C、M，主声码器用分层二进制量化二的二次方八通道；骨干沿用 OmniVoice；训练按保留比例均匀采样混合真值与随机 token 并用全图交叉熵，推理用三十二步、余弦增长的保留比例和系数零点九九九。数据划分上先用 LibriTTS-R 和 WenetSpeech4TTS 精品子集做小规模消融，再用 Emilia 英中文大规模训练；评测固定 LibriSpeech-PC test-clean 和 Seed 双语集的客观三指标及识别器版本。关于来源，本次只发现论文正文和官方示意图，没有发现完成验证的作者代码、模型或数据资源，因此不能写作者资源已公开，复现只能从论文描述重新实现。本篇没有收到像素之外的训练日志和权重，参数冻结与否、梯度细节以原文为准，缺失项应在复现记录中标明待验证。"
+        },
+        {
+          "kind": "synthesis",
+          "heading": "什么时候值得尝试，还缺哪项验证",
+          "body": "当你的掩码扩散语音系统出现高置信但错误的 token 且错误会向后传播，或者你想在单阶段直接做可修正生成而不想维护两阶段的错误定位时，值得尝试生成式精修的混合训练加随机替换迭代推理；当你受困于有限标量量化扁平、精度与预测空间难兼顾时，值得尝试分层二进制量化的由粗到细表示，并先从二的二次方八通道和二的四次方八通道两个已验证的配置起步。复现第一步是把声码器、骨干、保留调度和三十二步推理固定下来，先在小数据上复现分层二进制量化优于有限标量量化的权衡，再做大规模主模型。还需要补的验证是：在固定声码器和预算下对比掩码与精修的步数与延迟曲线，补强化学习前后相似度的受控对照，以及在更多说话人和噪声条件下的稳定性。只有补齐这些，才能判断精修带来的可懂度和自然度收益是否值得相似度和多步推理的代价。"
+        }
+      ]
+    },
+    "patch": {
+      "replacements": [
+        {
+          "path": "/tableBindings/1",
+          "oldSha256": "14196b6d63a4181e1b778c02d6e673d4cb36e43c867139e170f6868da2a0c236",
+          "value": {
+            "tableIndex": 2,
+            "sourceType": "artifact_table",
+            "sourceTableOrdinal": 1,
+            "cellBindings": [
+              {
+                "renderedRow": 0,
+                "renderedColumn": 0,
+                "sourceRow": 0,
+                "sourceColumn": 0
+              },
+              {
+                "renderedRow": 0,
+                "renderedColumn": 1,
+                "sourceRow": 0,
+                "sourceColumn": 1
+              },
+              {
+                "renderedRow": 0,
+                "renderedColumn": 2,
+                "sourceRow": 0,
+                "sourceColumn": 2
+              },
+              {
+                "renderedRow": 0,
+                "renderedColumn": 3,
+                "sourceRow": 0,
+                "sourceColumn": 3
+              },
+              {
+                "renderedRow": 0,
+                "renderedColumn": 4,
+                "sourceRow": 0,
+                "sourceColumn": 4
+              },
+              {
+                "renderedRow": 1,
+                "renderedColumn": 0,
+                "sourceRow": 1,
+                "sourceColumn": 0
+              },
+              {
+                "renderedRow": 1,
+                "renderedColumn": 1,
+                "sourceRow": 1,
+                "sourceColumn": 1
+              },
+              {
+                "renderedRow": 1,
+                "renderedColumn": 2,
+                "sourceRow": 1,
+                "sourceColumn": 2
+              },
+              {
+                "renderedRow": 1,
+                "renderedColumn": 3,
+                "sourceRow": 1,
+                "sourceColumn": 3
+              },
+              {
+                "renderedRow": 1,
+                "renderedColumn": 4,
+                "sourceRow": 1,
+                "sourceColumn": 4
+              },
+              {
+                "renderedRow": 2,
+                "renderedColumn": 0,
+                "sourceRow": 2,
+                "sourceColumn": 0
+              },
+              {
+                "renderedRow": 2,
+                "renderedColumn": 1,
+                "sourceRow": 2,
+                "sourceColumn": 1
+              },
+              {
+                "renderedRow": 2,
+                "renderedColumn": 2,
+                "sourceRow": 2,
+                "sourceColumn": 2
+              },
+              {
+                "renderedRow": 2,
+                "renderedColumn": 3,
+                "sourceRow": 2,
+                "sourceColumn": 3
+              },
+              {
+                "renderedRow": 2,
+                "renderedColumn": 4,
+                "sourceRow": 2,
+                "sourceColumn": 4
+              },
+              {
+                "renderedRow": 3,
+                "renderedColumn": 0,
+                "sourceRow": 3,
+                "sourceColumn": 0
+              },
+              {
+                "renderedRow": 3,
+                "renderedColumn": 1,
+                "sourceRow": 3,
+                "sourceColumn": 1
+              },
+              {
+                "renderedRow": 3,
+                "renderedColumn": 2,
+                "sourceRow": 3,
+                "sourceColumn": 2
+              },
+              {
+                "renderedRow": 3,
+                "renderedColumn": 3,
+                "sourceRow": 3,
+                "sourceColumn": 3
+              },
+              {
+                "renderedRow": 3,
+                "renderedColumn": 4,
+                "sourceRow": 3,
+                "sourceColumn": 4
+              },
+              {
+                "renderedRow": 4,
+                "renderedColumn": 0,
+                "sourceRow": 16,
+                "sourceColumn": 0
+              },
+              {
+                "renderedRow": 4,
+                "renderedColumn": 1,
+                "sourceRow": 16,
+                "sourceColumn": 1
+              },
+              {
+                "renderedRow": 4,
+                "renderedColumn": 2,
+                "sourceRow": 16,
+                "sourceColumn": 2
+              },
+              {
+                "renderedRow": 4,
+                "renderedColumn": 3,
+                "sourceRow": 16,
+                "sourceColumn": 3
+              },
+              {
+                "renderedRow": 4,
+                "renderedColumn": 4,
+                "sourceRow": 16,
+                "sourceColumn": 4
+              },
+              {
+                "renderedRow": 5,
+                "renderedColumn": 0,
+                "sourceRow": 17,
+                "sourceColumn": 0
+              },
+              {
+                "renderedRow": 5,
+                "renderedColumn": 1,
+                "sourceRow": 17,
+                "sourceColumn": 1
+              },
+              {
+                "renderedRow": 5,
+                "renderedColumn": 2,
+                "sourceRow": 17,
+                "sourceColumn": 2
+              },
+              {
+                "renderedRow": 5,
+                "renderedColumn": 3,
+                "sourceRow": 17,
+                "sourceColumn": 3
+              },
+              {
+                "renderedRow": 5,
+                "renderedColumn": 4,
+                "sourceRow": 17,
+                "sourceColumn": 4
+              },
+              {
+                "renderedRow": 6,
+                "renderedColumn": 0,
+                "sourceRow": 18,
+                "sourceColumn": 0
+              },
+              {
+                "renderedRow": 6,
+                "renderedColumn": 1,
+                "sourceRow": 18,
+                "sourceColumn": 1
+              },
+              {
+                "renderedRow": 6,
+                "renderedColumn": 2,
+                "sourceRow": 18,
+                "sourceColumn": 2
+              },
+              {
+                "renderedRow": 6,
+                "renderedColumn": 3,
+                "sourceRow": 18,
+                "sourceColumn": 3
+              },
+              {
+                "renderedRow": 6,
+                "renderedColumn": 4,
+                "sourceRow": 18,
+                "sourceColumn": 4
+              }
+            ],
+            "sourceQuotes": []
+          }
+        }
+      ]
+    }
+  },
+  "proof": {
+    "path": "/tableBindings/1",
+    "sectionPath": "/sections/10/body",
+    "claimIndex": 0,
+    "oldTableSha256": "adef7677000039fb8a08ef5f23561b1ac6d2d947f7061b519740352af5879ca4",
+    "sourceTableOrdinal": 1,
+    "sourceDomSha256": "7c115ace34345d3d5e1278cc0cf949400cb676115d307ace86a6024bef25bfd2",
+    "sourceTableSha256": "359e24ea889079e6c4c9fb88cca653b84339e010630d650f8c9bcba7892f2c74"
+  },
+  "source": {
+    "structuredArtifacts": {
+      "tables": [
+        {
+          "bodyRows": [
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21
+          ],
+          "caption": "Table 1: Comparison between FSQ and \\mathrm{GRN}_{\\mathrm{ind}} with different configurations. Best and second best are shown in bold and underline.",
+          "cells": [
+            {
+              "colspan": 1,
+              "column": 0,
+              "header": true,
+              "row": 0,
+              "rowspan": 1,
+              "sourceDomSha256": "367af2c3a3e455ef93e8947722fca27e0778d34037c6a3ee3c5f3d48706d608e",
+              "text": "Quantization"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 0,
+              "rowspan": 1,
+              "sourceDomSha256": "aac15ddb9a5a39d1dd5ac1a13a21db0005070454e4f1666de79f00772882cb8d",
+              "text": "Testing set"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": true,
+              "row": 0,
+              "rowspan": 1,
+              "sourceDomSha256": "e133f97432d124b71513a55dd5fc568c7b596132e01cbdbfd9b06c060e746d0d",
+              "text": "SIM ↑\\uparrow"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": true,
+              "row": 0,
+              "rowspan": 1,
+              "sourceDomSha256": "04519ba36cddb0298294ebaafe76655c6683222a5bcb48bb359621b46c6fdaa4",
+              "text": "WER ↓\\downarrow"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": true,
+              "row": 0,
+              "rowspan": 1,
+              "sourceDomSha256": "1474d5d43047bb221db159804f37607dd3fcc1bdf62c807d6bd45c5f4efdbd0b",
+              "text": "UTMOS ↑\\uparrow"
+            },
+            {
+              "colspan": 1,
+              "column": 0,
+              "header": true,
+              "row": 1,
+              "rowspan": 3,
+              "sourceDomSha256": "ca63cfba2088566a95801aff12e395595078eeeae52fd48f5f1aa30635b13f0b",
+              "text": "HBQ [22]8[2^{2}]^{8}"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 1,
+              "rowspan": 1,
+              "sourceDomSha256": "fc82304f37a5c78ff72f9dfe701d5900e90d17680666c5e1db59700c09e413d4",
+              "text": "LS-PC"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 1,
+              "rowspan": 1,
+              "sourceDomSha256": "4f00350224b1747817cd3d320eb4019deb6728ce58c12496b558a55e106529ea",
+              "text": "0.427"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 1,
+              "rowspan": 1,
+              "sourceDomSha256": "e61de7d7e0fba47ee82f72365e8a831b99db1df3463bfa46a58ce3519aa2f348",
+              "text": "1.86"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 1,
+              "rowspan": 1,
+              "sourceDomSha256": "2759438d99a78f74e9623a1ca99e53af8783d134a8357ffc0fd3015fe94fafbd",
+              "text": "4.15"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 2,
+              "rowspan": 1,
+              "sourceDomSha256": "05ba5403d810d970c2054c78265cca92e02a55eb1f6ae3b0cebfea1a601e0a11",
+              "text": "Seed-en"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 2,
+              "rowspan": 1,
+              "sourceDomSha256": "a2acebe076dc636906338d391979e744cab8ea8362a36bac4826e6b761a0c2c1",
+              "text": "0.406"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 2,
+              "rowspan": 1,
+              "sourceDomSha256": "8126c2b8e104f3a53485ec7e24fe37d8a4140820b1da059d8e55bf2889fbad78",
+              "text": "5.06"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 2,
+              "rowspan": 1,
+              "sourceDomSha256": "8907ed9a0ea76d2261e76c0757836128633d0093f12e317a448fb99769f871ec",
+              "text": "3.99"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 3,
+              "rowspan": 1,
+              "sourceDomSha256": "71270b17dfdf4a46fbd8d84a302158eebaa18e300416d0ca40e1a21986762db5",
+              "text": "Seed-zh"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 3,
+              "rowspan": 1,
+              "sourceDomSha256": "a7e35a58cf4688e3ddacd2da9b49b2856d709180d3b66ced6c24bdcfcafd0d2e",
+              "text": "0.576"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 3,
+              "rowspan": 1,
+              "sourceDomSha256": "6377d1c321472a5ccf8ac2a5688b14409e4e5008b3960e2c98db9dbed27b5522",
+              "text": "1.83"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 3,
+              "rowspan": 1,
+              "sourceDomSha256": "c44c8d73a246643590aa6f313584124fb6aa9692dfdb5cda0b9eec90c61c8462",
+              "text": "2.78"
+            },
+            {
+              "colspan": 1,
+              "column": 0,
+              "header": true,
+              "row": 4,
+              "rowspan": 3,
+              "sourceDomSha256": "d87c87d6005a8777a608caad22d5d9c0722cd661bfcd22b76dad3af97362fcd7",
+              "text": "HBQ [22]16[2^{2}]^{16}"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 4,
+              "rowspan": 1,
+              "sourceDomSha256": "a4c2d9c7ae870ce366a4f67020da0fd2c381905cf2a4c90cebbab0e94e397616",
+              "text": "LS-PC"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 4,
+              "rowspan": 1,
+              "sourceDomSha256": "b4b767616cf1b2a96e9a0baeac950bf84c412fdd1c8ea016214c1be0633c8808",
+              "text": "0.422"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 4,
+              "rowspan": 1,
+              "sourceDomSha256": "49937abd1cbae048d205b4549b01040708c2073289ce40765b7663de3b330394",
+              "text": "2.37"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 4,
+              "rowspan": 1,
+              "sourceDomSha256": "ba1e1e0d8d18f4b9ccc92546c8c4ab16a62ddce94a9817d386779e09f6758fcc",
+              "text": "3.85"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 5,
+              "rowspan": 1,
+              "sourceDomSha256": "4d461e3f3131a0c7242670028dda9f160603972780c1cf1e29271316d1b536c1",
+              "text": "Seed-en"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 5,
+              "rowspan": 1,
+              "sourceDomSha256": "c8df2b7efca1543b232504125077b60a6dbbb6fd5e6fa63620f40cd0648a84af",
+              "text": "0.395"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 5,
+              "rowspan": 1,
+              "sourceDomSha256": "fdf9add1852a73b13c5869ae0c4eee9a5b1b07c1ee7f0edc3b8f24a3a544070c",
+              "text": "9.74"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 5,
+              "rowspan": 1,
+              "sourceDomSha256": "7ecdd7866bd296ae7dfd0c8a76eda7144e34e5631c22b2ac5835b2763bc73853",
+              "text": "3.43"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 6,
+              "rowspan": 1,
+              "sourceDomSha256": "263215f4330463ba48bdbc22fe6175df5016f716bb02993cbde22e0e160dc397",
+              "text": "Seed-zh"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 6,
+              "rowspan": 1,
+              "sourceDomSha256": "11ade30cd47303905065adbb4d1f6667213b996dd4a23b356098e407a37fe90a",
+              "text": "0.598"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 6,
+              "rowspan": 1,
+              "sourceDomSha256": "a0a809f42e1b3e3cb560036649c3626f66b6321165a674b031929a2158e7fc94",
+              "text": "2.71"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 6,
+              "rowspan": 1,
+              "sourceDomSha256": "160d40bf28348cfd859ebc5c17ecf3f323d073db744f0bf0fc16b47ce9162585",
+              "text": "2.46"
+            },
+            {
+              "colspan": 1,
+              "column": 0,
+              "header": true,
+              "row": 7,
+              "rowspan": 3,
+              "sourceDomSha256": "ee5b6f34c6ada9f95564f404f66ef0df3ba7bed4d86f33e96ccd02a3655e1ba2",
+              "text": "HBQ [24]4[2^{4}]^{4}"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 7,
+              "rowspan": 1,
+              "sourceDomSha256": "9b48c9ad2a0884387a413a0220c18f5a5ad2339bec2986d7e8b3ff35c4d691ce",
+              "text": "LS-PC"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 7,
+              "rowspan": 1,
+              "sourceDomSha256": "87908875170646ff6ef35d119cba05c9a18c453b8ce775336be11c1d783f8836",
+              "text": "0.384"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 7,
+              "rowspan": 1,
+              "sourceDomSha256": "e164f25060708bed828770c0ba4fa4dc78353d152d05956167e86e9e3ab119fd",
+              "text": "1.94"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 7,
+              "rowspan": 1,
+              "sourceDomSha256": "261ea010e93b8bc90a7ec12fa1ae9254534c99e715a3dbd348f97d51102e1e88",
+              "text": "4.09"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 8,
+              "rowspan": 1,
+              "sourceDomSha256": "4906ad64f599bf03ce2e5e638afcc47f1c228377d3489e9bd126e044dbdf4251",
+              "text": "Seed-en"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 8,
+              "rowspan": 1,
+              "sourceDomSha256": "aee763e19ed745933381fe4b8716663c38770981603818bd742902973cf006b6",
+              "text": "0.369"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 8,
+              "rowspan": 1,
+              "sourceDomSha256": "d5539c96df698efd056a96c0aaa76c67910a266623724e330405c3ae38ae51fd",
+              "text": "8.59"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 8,
+              "rowspan": 1,
+              "sourceDomSha256": "ede27fc2ba7740d037f5c19e34f2f6fee34de040610d978a367c029e7ac70c91",
+              "text": "3.92"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 9,
+              "rowspan": 1,
+              "sourceDomSha256": "9a37c695c9089eab8b9e859ac010e9ae6873c75af0a96b1b8d22322b0902df15",
+              "text": "Seed-zh"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 9,
+              "rowspan": 1,
+              "sourceDomSha256": "c04c556ee05f5ac42c77f8c4a7cee379be85c0596ffd42487d12c8507460ec0c",
+              "text": "0.538"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 9,
+              "rowspan": 1,
+              "sourceDomSha256": "9d8866ec6785f766caba24d49f0266d4b68ec1f9395eaf6d4f7481a7f4f89c11",
+              "text": "2.70"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 9,
+              "rowspan": 1,
+              "sourceDomSha256": "2b23b20e28b489c3854e0b7a1b7918754849f5e1559dfcffb72732d1e7d2d772",
+              "text": "2.83"
+            },
+            {
+              "colspan": 1,
+              "column": 0,
+              "header": true,
+              "row": 10,
+              "rowspan": 3,
+              "sourceDomSha256": "777f815e44a901a056a797878b1ac3475c815f20a2254097c9e81014e40e6a3f",
+              "text": "HBQ [24]8[2^{4}]^{8}"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 10,
+              "rowspan": 1,
+              "sourceDomSha256": "87004b4d2c997968e63e0b40f4f905d1d3d822255235a18d930bafb4628222e0",
+              "text": "LS-PC"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 10,
+              "rowspan": 1,
+              "sourceDomSha256": "da018fd1797302d62297e47382ab97031e2abc5874f1e5ce5b8cb39ebec32a33",
+              "text": "0.444"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 10,
+              "rowspan": 1,
+              "sourceDomSha256": "02af0e13f5e3c9eb20c2ac2ad7cb4b5523e95ab638e786432b81fa02451c467b",
+              "text": "2.29"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 10,
+              "rowspan": 1,
+              "sourceDomSha256": "9b6beccd81b95b84a390974391fc9657cab3bbe98f8f480e0e4ec7ca716101cc",
+              "text": "4.03"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 11,
+              "rowspan": 1,
+              "sourceDomSha256": "09ace65510e94f3ed5ad45cf16422ddfd77f71ef096d92f32fc4a2aa54418d33",
+              "text": "Seed-en"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 11,
+              "rowspan": 1,
+              "sourceDomSha256": "337a546dd45505e1d066d6711fca9c0a444908bd02a85355b044349018ea269f",
+              "text": "0.419"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 11,
+              "rowspan": 1,
+              "sourceDomSha256": "38a494c80a7db4a16c48a053e8cc6c167a5f79f544036fc0e80eff78112730ef",
+              "text": "7.17"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 11,
+              "rowspan": 1,
+              "sourceDomSha256": "1cd3cf9a678f0e8663783613cddf08eab034cf6cd0f71b9197496f2c53bf7216",
+              "text": "3.70"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 12,
+              "rowspan": 1,
+              "sourceDomSha256": "476f902f10dd70b6b2f4bf127f01c61d3e69914e43f8ef643e2520338d2abf57",
+              "text": "Seed-zh"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 12,
+              "rowspan": 1,
+              "sourceDomSha256": "dc38db8e754c3480c42debea8a54e6a74402dd7028a612681f9ebae98051d25a",
+              "text": "0.607"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 12,
+              "rowspan": 1,
+              "sourceDomSha256": "957cf3b9bf1dc8c1a99d44c934fc2a890a84334768d3284b9e2a84f7049ec135",
+              "text": "2.44"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 12,
+              "rowspan": 1,
+              "sourceDomSha256": "8c5b5dbec40b710d4721ac9368cc1dcce69c419d0d4e076284d38ffa1934589d",
+              "text": "2.67"
+            },
+            {
+              "colspan": 1,
+              "column": 0,
+              "header": true,
+              "row": 13,
+              "rowspan": 3,
+              "sourceDomSha256": "d94e68c292ad48e65e20415bfbefdf94747996b002f9d53ea3afdbf88f1df097",
+              "text": "HBQ [26]8[2^{6}]^{8}"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 13,
+              "rowspan": 1,
+              "sourceDomSha256": "fe79c165bb9cf460919eefdec497b892c600f4a928a9f3fc365b1aed9ad179b1",
+              "text": "LS-PC"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 13,
+              "rowspan": 1,
+              "sourceDomSha256": "638f24cd88ed436bf5805f26af778265bfe189c1a62995a2bba3b73a3df86cea",
+              "text": "0.432"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 13,
+              "rowspan": 1,
+              "sourceDomSha256": "c59d127684e292932fa34338d190f80dda1005b634231f277caaa46db424b729",
+              "text": "2.23"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 13,
+              "rowspan": 1,
+              "sourceDomSha256": "d53a699952624733963e0f1afa048eee763d493e5bc05b462d0a9a75d52ba69a",
+              "text": "4.08"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 14,
+              "rowspan": 1,
+              "sourceDomSha256": "a2f549874f8423d0ceeef4a6b62bce07587708b55c49db517ff4d5f857c2bb82",
+              "text": "Seed-en"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 14,
+              "rowspan": 1,
+              "sourceDomSha256": "efdcfcba509248d2b423c123529698ad06b3a59f250aefff9980336cc6266362",
+              "text": "0.385"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 14,
+              "rowspan": 1,
+              "sourceDomSha256": "1e47fa5d2e1a779b60d9593090fdf110a29bf751544af73126142f35d447be14",
+              "text": "6.38"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 14,
+              "rowspan": 1,
+              "sourceDomSha256": "1f8cc971f2659307c4def5eb67f9b24a737cff2013b28ca6c2a9c0fa657fe47f",
+              "text": "3.88"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 15,
+              "rowspan": 1,
+              "sourceDomSha256": "6b1e7ca344e0983428326db3c5f7018d3a628b93662d3e6fb7bdfdcaac5eca0f",
+              "text": "Seed-zh"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 15,
+              "rowspan": 1,
+              "sourceDomSha256": "68c6d1545174371ccec7e0de869c7f594831fe7a2c9dc0e17ed8f869f93e8a82",
+              "text": "0.585"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 15,
+              "rowspan": 1,
+              "sourceDomSha256": "40d0c88938b7892263e831b29c789bd2cd086715cf0ea6716607ae93bd578f77",
+              "text": "2.37"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 15,
+              "rowspan": 1,
+              "sourceDomSha256": "b58340d21d74da9ec0bcba97c5f3f5da7ad48ea64ad62f515ee2d1dcf2f77363",
+              "text": "2.88"
+            },
+            {
+              "colspan": 1,
+              "column": 0,
+              "header": true,
+              "row": 16,
+              "rowspan": 3,
+              "sourceDomSha256": "9b592cd0a090e44cc6916c92d46c0a8f150024cab4f3d9569f3935c4e3dd37e3",
+              "text": "FSQ [4]8[4]^{8}"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 16,
+              "rowspan": 1,
+              "sourceDomSha256": "9c166531ff9ea10a3893a9b3b0ea7494f3712dcd81b2dd929972628dcfadd01b",
+              "text": "LS-PC"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 16,
+              "rowspan": 1,
+              "sourceDomSha256": "336fc50534d4ebf4b725c2cc30197e8be552a3b5d5402e2f8fcad8fd8b1d7261",
+              "text": "0.290"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 16,
+              "rowspan": 1,
+              "sourceDomSha256": "65d7952f992323213b2857b3121ea6808ad273f0708cf566523b00334bb777dd",
+              "text": "2.07"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 16,
+              "rowspan": 1,
+              "sourceDomSha256": "0cf4d5c39d12a2aae449bdb7cf482a8604d31cb1609f558f706a39f05604a5d8",
+              "text": "4.04"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 17,
+              "rowspan": 1,
+              "sourceDomSha256": "d008172e39a232d966c2401b7bc3cce39e7a6565b3f1d17a4c6a85d3e3714dde",
+              "text": "Seed-en"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 17,
+              "rowspan": 1,
+              "sourceDomSha256": "b860ea34a70f12b4e090d1c323ddf9e928245745434be0231c6a7458744fe4c3",
+              "text": "0.270"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 17,
+              "rowspan": 1,
+              "sourceDomSha256": "4692fb1768f66f650878797a3819096d188adfcda60bdfafa9be50be754e28d6",
+              "text": "5.93"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 17,
+              "rowspan": 1,
+              "sourceDomSha256": "8fb35fbf9c4d60b46a3c310dc39c34526487a9a57b96bcf76a562d5b7de2d506",
+              "text": "3.71"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 18,
+              "rowspan": 1,
+              "sourceDomSha256": "1eff46c239419df6e5c7ea2c985f5b6c806f27b14dad9bf893e0cf5020344686",
+              "text": "Seed-zh"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 18,
+              "rowspan": 1,
+              "sourceDomSha256": "c5675fe89b6527de50f3e018a24c64957b071d3f302ba6cf961b8c31f2bb8bbc",
+              "text": "0.514"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 18,
+              "rowspan": 1,
+              "sourceDomSha256": "f50d51fdc54e800e6bbd6eb97543bb52475f6db4e1124fe03509f50eb92a6e61",
+              "text": "2.60"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 18,
+              "rowspan": 1,
+              "sourceDomSha256": "4951f747d245206398746aa8e1e265c524104c8295b7573fc55c87f01483b2a7",
+              "text": "2.36"
+            },
+            {
+              "colspan": 1,
+              "column": 0,
+              "header": true,
+              "row": 19,
+              "rowspan": 3,
+              "sourceDomSha256": "94578796f7500e8667fa3997d71ac1eeac8b5d8ddc51ab08881fa791942ba79a",
+              "text": "FSQ [8,5,5,5][8,5,5,5]"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 19,
+              "rowspan": 1,
+              "sourceDomSha256": "b0a7103d49b10f0ecb43008fff757b651f69fd49720c41aae585b9183f1fa53a",
+              "text": "LS-PC"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 19,
+              "rowspan": 1,
+              "sourceDomSha256": "23d1a4a773fc5ee8a5a325acd326641a4663022803e4c59036245da7c97c3067",
+              "text": "0.259"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 19,
+              "rowspan": 1,
+              "sourceDomSha256": "5ba209b7f33ed4b7ec6e6a484da9baf758f7cc712363fd1498dfc8a573ba494e",
+              "text": "3.08"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 19,
+              "rowspan": 1,
+              "sourceDomSha256": "bdcd2a02f4bfce874eb7befb686da8604f2e83dc009f8d307e11e9d747c4e953",
+              "text": "3.71"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 20,
+              "rowspan": 1,
+              "sourceDomSha256": "c60810916500201c352b8b077fcc90d5154fadb334c6857e20f74723438d5a31",
+              "text": "Seed-en"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 20,
+              "rowspan": 1,
+              "sourceDomSha256": "e60921ec5a796117a8d29ec471bb679be738f6d1399979202e34cdae648015b9",
+              "text": "0.236"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 20,
+              "rowspan": 1,
+              "sourceDomSha256": "e0e5d74d8f9405594c498b413d63ba710c5a6fb21af92daf72b3ea001afdb64b",
+              "text": "6.94"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 20,
+              "rowspan": 1,
+              "sourceDomSha256": "96364b3de3a03d59a360f3a1f9e40ff654a9c686f02484c5d42fc92ca5ae0f00",
+              "text": "3.74"
+            },
+            {
+              "colspan": 1,
+              "column": 1,
+              "header": true,
+              "row": 21,
+              "rowspan": 1,
+              "sourceDomSha256": "ec968cc5a5b7f3a5c3c7fed065ee414e4a0048e0f609621bf9b0aab4b151b60e",
+              "text": "Seed-zh"
+            },
+            {
+              "colspan": 1,
+              "column": 2,
+              "header": false,
+              "row": 21,
+              "rowspan": 1,
+              "sourceDomSha256": "c0829ac8cd36938fc5d27be6caa55128abeb6e5f21ca6fc0b88372efe14a65f4",
+              "text": "0.426"
+            },
+            {
+              "colspan": 1,
+              "column": 3,
+              "header": false,
+              "row": 21,
+              "rowspan": 1,
+              "sourceDomSha256": "8e3ae996e28c3709dc02f50a85f06dc3fdcb80ad56d95f9b3e1aca3959958d3c",
+              "text": "3.65"
+            },
+            {
+              "colspan": 1,
+              "column": 4,
+              "header": false,
+              "row": 21,
+              "rowspan": 1,
+              "sourceDomSha256": "0b52b5478d2efc9d1e2849ac63f94e2d731cfd45c09768bf055c4e271719b457",
+              "text": "2.70"
+            }
+          ],
+          "headerRows": [
+            0
+          ],
+          "label": "Table 1:",
+          "matrix": [
+            [
+              "Quantization",
+              "Testing set",
+              "SIM ↑\\uparrow",
+              "WER ↓\\downarrow",
+              "UTMOS ↑\\uparrow"
+            ],
+            [
+              "HBQ [22]8[2^{2}]^{8}",
+              "LS-PC",
+              "0.427",
+              "1.86",
+              "4.15"
+            ],
+            [
+              "HBQ [22]8[2^{2}]^{8}",
+              "Seed-en",
+              "0.406",
+              "5.06",
+              "3.99"
+            ],
+            [
+              "HBQ [22]8[2^{2}]^{8}",
+              "Seed-zh",
+              "0.576",
+              "1.83",
+              "2.78"
+            ],
+            [
+              "HBQ [22]16[2^{2}]^{16}",
+              "LS-PC",
+              "0.422",
+              "2.37",
+              "3.85"
+            ],
+            [
+              "HBQ [22]16[2^{2}]^{16}",
+              "Seed-en",
+              "0.395",
+              "9.74",
+              "3.43"
+            ],
+            [
+              "HBQ [22]16[2^{2}]^{16}",
+              "Seed-zh",
+              "0.598",
+              "2.71",
+              "2.46"
+            ],
+            [
+              "HBQ [24]4[2^{4}]^{4}",
+              "LS-PC",
+              "0.384",
+              "1.94",
+              "4.09"
+            ],
+            [
+              "HBQ [24]4[2^{4}]^{4}",
+              "Seed-en",
+              "0.369",
+              "8.59",
+              "3.92"
+            ],
+            [
+              "HBQ [24]4[2^{4}]^{4}",
+              "Seed-zh",
+              "0.538",
+              "2.70",
+              "2.83"
+            ],
+            [
+              "HBQ [24]8[2^{4}]^{8}",
+              "LS-PC",
+              "0.444",
+              "2.29",
+              "4.03"
+            ],
+            [
+              "HBQ [24]8[2^{4}]^{8}",
+              "Seed-en",
+              "0.419",
+              "7.17",
+              "3.70"
+            ],
+            [
+              "HBQ [24]8[2^{4}]^{8}",
+              "Seed-zh",
+              "0.607",
+              "2.44",
+              "2.67"
+            ],
+            [
+              "HBQ [26]8[2^{6}]^{8}",
+              "LS-PC",
+              "0.432",
+              "2.23",
+              "4.08"
+            ],
+            [
+              "HBQ [26]8[2^{6}]^{8}",
+              "Seed-en",
+              "0.385",
+              "6.38",
+              "3.88"
+            ],
+            [
+              "HBQ [26]8[2^{6}]^{8}",
+              "Seed-zh",
+              "0.585",
+              "2.37",
+              "2.88"
+            ],
+            [
+              "FSQ [4]8[4]^{8}",
+              "LS-PC",
+              "0.290",
+              "2.07",
+              "4.04"
+            ],
+            [
+              "FSQ [4]8[4]^{8}",
+              "Seed-en",
+              "0.270",
+              "5.93",
+              "3.71"
+            ],
+            [
+              "FSQ [4]8[4]^{8}",
+              "Seed-zh",
+              "0.514",
+              "2.60",
+              "2.36"
+            ],
+            [
+              "FSQ [8,5,5,5][8,5,5,5]",
+              "LS-PC",
+              "0.259",
+              "3.08",
+              "3.71"
+            ],
+            [
+              "FSQ [8,5,5,5][8,5,5,5]",
+              "Seed-en",
+              "0.236",
+              "6.94",
+              "3.74"
+            ],
+            [
+              "FSQ [8,5,5,5][8,5,5,5]",
+              "Seed-zh",
+              "0.426",
+              "3.65",
+              "2.70"
+            ]
+          ],
+          "ordinal": 1,
+          "recoveryStatus": "complete",
+          "sourceDomSha256": "7c115ace34345d3d5e1278cc0cf949400cb676115d307ace86a6024bef25bfd2"
+        }
+      ]
+    }
+  }
+}
