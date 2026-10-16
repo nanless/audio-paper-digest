@@ -15,13 +15,7 @@ for (const module of ['node:http', 'node:https']) {
 globalThis.fetch = denyNetwork;
 const { readerAuthorIdentityMatchesSource } = require('./reader-author-parser.js');
 const MAX_INPUT_BYTES = 128 * 1024 * 1024;
-try {
-    const raw = process.argv[2];
-    if (!/^\d+$/.test(raw || '') || Number(raw) < 3) throw new Error('必须提供私有文件描述符');
-    const descriptor = Number(raw);
-    const stat = fs.fstatSync(descriptor);
-    if (!stat.isFile() || (stat.mode & 0o077) !== 0 || stat.size < 2 || stat.size > MAX_INPUT_BYTES) throw new Error('必须提供大小受限的私有普通文件');
-    const input = JSON.parse(fs.readFileSync(descriptor, 'utf8'));
+function verifyInput(input) {
     let verified;
     if (input.sealedBundleRoot === undefined) {
         verified = readerAuthorIdentityMatchesSource(input.paper, input.sourceDetails);
@@ -62,6 +56,32 @@ try {
             }
             return readerAuthorIdentityMatchesSource(input.paper, details);
         });
+    }
+    return verified;
+}
+try {
+    const raw = process.argv[2];
+    if (!/^\d+$/.test(raw || '') || Number(raw) < 3) throw new Error('必须提供私有文件描述符');
+    const descriptor = Number(raw);
+    const stat = fs.fstatSync(descriptor);
+    if (!stat.isFile() || (stat.mode & 0o077) !== 0 || stat.size < 2 || stat.size > MAX_INPUT_BYTES) throw new Error('必须提供大小受限的私有普通文件');
+    const input = JSON.parse(fs.readFileSync(descriptor, 'utf8'));
+    let verified;
+    if (input?.contract === 'reader-author-replay-batch-v1') {
+        if (Object.keys(input).sort().join(',') !== 'contract,items'
+            || stat.size > 32 * 1024 * 1024 || !Array.isArray(input.items)
+            || input.items.length < 1 || input.items.length > 8) throw new Error('Invalid bounded author batch');
+        verified = true;
+        for (const item of input.items) {
+            try {
+                const keys = Object.keys(item || {}).sort().join(',');
+                if (keys !== 'paper,sealedBundleRoot,sourceDetails'
+                    || typeof item.sealedBundleRoot !== 'string' || verifyInput(item) !== true) verified = false;
+            } catch (_) { verified = false; }
+        }
+        if (!verified) process.exitCode = 1;
+    } else {
+        verified = verifyInput(input);
     }
     process.stdout.write(JSON.stringify({ verified }));
 } catch (_) {

@@ -24,6 +24,7 @@ import argparse
 import copy
 import contextvars
 import difflib
+import functools
 import errno
 import html
 import json, re, sys, os, subprocess, datetime, base64, hashlib, math, io
@@ -10775,6 +10776,64 @@ def _contains_supplementary_model_character(value):
     return False
 
 
+# Publisher-only context. No record/CLI field can enable deferral.
+_READER_AUTHOR_REPLAY_BATCH = contextvars.ContextVar('reader_author_replay_batch', default=None)
+_READER_AUTHOR_BATCH_MAX_ITEMS = 8
+_READER_AUTHOR_BATCH_MAX_BYTES = 32 * 1024 * 1024
+_READER_AUTHOR_BATCH_PREFIX = b'{"contract":"reader-author-replay-batch-v1","items":['
+
+
+def _flush_reader_author_replay_batch(state):
+    if not state['items']:
+        return
+    items, ids = state['items'], state['ids']
+    state['items'], state['ids'], state['bytes'] = [], [], 0
+    payload = _READER_AUTHOR_BATCH_PREFIX + b','.join(items) + b']}'
+    _run_reader_author_source_replay(payload, ids)
+
+
+@contextmanager
+def _reader_author_replay_batch_scope():
+    if _READER_AUTHOR_REPLAY_BATCH.get() is not None:
+        yield
+        return
+    state = {'items': [], 'ids': [], 'bytes': 0}
+    token = _READER_AUTHOR_REPLAY_BATCH.set(state)
+    try:
+        yield
+        _flush_reader_author_replay_batch(state)
+    finally:
+        _READER_AUTHOR_REPLAY_BATCH.reset(token)
+
+
+def _with_reader_author_replay_batch(function):
+    @functools.wraps(function)
+    def replayed(*args, **kwargs):
+        # Returning from inside the context still flushes before the value can
+        # escape to the caller. An exception cannot become a partial success.
+        with _reader_author_replay_batch_scope():
+            return function(*args, **kwargs)
+    return replayed
+
+
+def _defer_sealed_reader_author_replay(payload, paper_id):
+    state = _READER_AUTHOR_REPLAY_BATCH.get()
+    if state is None:
+        return False
+    maximum = _READER_AUTHOR_BATCH_MAX_BYTES - len(_READER_AUTHOR_BATCH_PREFIX) - 2
+    if len(payload) > maximum:
+        # Original large single requests keep their original bounded transport.
+        _flush_reader_author_replay_batch(state)
+        return False
+    if state['items'] and (len(state['items']) >= _READER_AUTHOR_BATCH_MAX_ITEMS
+            or state['bytes'] + len(payload) + len(state['items']) > maximum):
+        _flush_reader_author_replay_batch(state)
+    state['items'].append(payload)
+    state['ids'].append(paper_id)
+    state['bytes'] += len(payload)
+    return True
+
+
 def _validate_reader_author_source_replay(paper, source_details, paper_id, *, sealed_bundle_root=None):
     contracts = paper.get('analysisManifest', {}).get('contracts', {})
     if contracts.get('apiReaderArticle') not in {'beginner-researcher-v2', 'beginner-researcher-v3'}:
@@ -10786,6 +10845,14 @@ def _validate_reader_author_source_replay(paper, source_details, paper_id, *, se
     payload = _daily_fresh_compact_json_bytes(replay_input)
     if len(payload) > 128 * 1024 * 1024:
         raise PublishDataValidationError(f'{paper_id} 作者来源重放输入超过上限')
+    if sealed_bundle_root is not None and _defer_sealed_reader_author_replay(payload, paper_id):
+        return
+    _run_reader_author_source_replay(payload, [paper_id])
+
+
+def _run_reader_author_source_replay(payload, paper_ids):
+    # Only pure local parsing is batched. Each item is independently reread
+    # through the unchanged four-source verifier in the Node bridge.
     node = shutil.which('node')
     if not node:
         raise PublishDataValidationError('作者来源重放需要 Node.js')
@@ -10804,7 +10871,7 @@ def _validate_reader_author_source_replay(paper, source_details, paper_id, *, se
     if result.returncode != 0 or result.timed_out or result.output_truncated \
             or result.stdout.strip() != '{"verified":true}':
         raise PublishDataValidationError(
-            f'{paper_id} 作者姓名或机构未由当前封存全文和原始来源重放验证；请刷新作者/Reader后再发布'
+            f'{", ".join(paper_ids)} 作者姓名或机构未由当前封存全文和原始来源重放验证；请刷新作者/Reader后再发布'
         )
 
 
@@ -10877,6 +10944,7 @@ def _reject_unbound_api_generation_input(papers):
             )
 
 
+@_with_reader_author_replay_batch
 def validate_daily_fresh_sources_for_publish(data_file, target_date):
     """在生成、审查和推送之前，重放每一次声称的每日来源生成。
 
@@ -12902,6 +12970,7 @@ def manual_v6_production_proof(published_papers):
     return proof
 
 
+@_with_reader_author_replay_batch
 def llm_api_publication_bindings(published_papers):
     """逐篇核对 API 分析记录，返回文章、评分和来源的哈希及对应信息。"""
     bindings = []
@@ -13386,8 +13455,11 @@ def generation_template_fingerprint():
         'analysis-contract.js': script_dir / 'analysis-contract.js',
         'lib/analysis-section-titles.js': script_dir / 'lib' / 'analysis-section-titles.js',
         'lib/core-summary-semantic-replay-cli.js': script_dir / 'lib' / 'core-summary-semantic-replay-cli.js',
+        'lib/reader-author-replay-cli.js': script_dir / 'lib' / 'reader-author-replay-cli.js',
         'lib/paid-core-literal-correction.js': script_dir / 'lib' / 'paid-core-literal-correction.js',
         'lib/reader-sealed-pdf-quote-evidence.js': script_dir / 'lib' / 'reader-sealed-pdf-quote-evidence.js',
+        'lib/reader-pdf-extraction-scope.js': script_dir / 'lib' / 'reader-pdf-extraction-scope.js',
+        'lib/reader-sealed-pdf-column-units.js': script_dir / 'lib' / 'reader-sealed-pdf-column-units.js',
         'lib/reader-sealed-pdf-table-evidence.js': script_dir / 'lib' / 'reader-sealed-pdf-table-evidence.js',
         'lib/reader-table-pdf-evidence.js': script_dir / 'lib' / 'reader-table-pdf-evidence.js',
         'manual/sealed_tutorial_preview.py': MANUAL_SCRIPTS_DIR / 'sealed_tutorial_preview.py',
