@@ -26,13 +26,16 @@ try {
         throw new Error('Input must be a bounded private regular file');
     }
     const input = JSON.parse(fs.readFileSync(fd, 'utf8'));
-    if (!input || Array.isArray(input) || typeof input !== 'object'
-        || Object.keys(input).sort().join(',') !== 'sourceText,summary'
-        || typeof input.summary !== 'string' || typeof input.sourceText !== 'string') {
-        throw new Error('Input must contain only summary and sourceText strings');
-    }
-    const issue = require('../analysis-contract').validateCoreSummarySemanticContract(
-        '## 核心摘要\n' + input.summary, { sourceText: input.sourceText });
+    if (!input || Array.isArray(input) || typeof input !== 'object' || typeof input.sourceText !== 'string')
+        throw new Error('Invalid private core replay input');
+    const contract = require('../analysis-contract');
+    let issue;
+    if (Object.keys(input).sort().join(',') === 'sourceText,summary' && typeof input.summary === 'string') {
+        issue = contract.validateCoreSummarySemanticContract('## 核心摘要\n' + input.summary, { sourceText: input.sourceText });
+    } else if (Object.keys(input).sort().join(',') === 'mode,paper,sourceText'
+        && input.mode === 'stage-binding' && input.paper && typeof input.paper === 'object' && !Array.isArray(input.paper)) {
+        issue = contract.validateCoreSummaryStageBinding(input.paper, { sourceText: input.sourceText });
+    } else throw new Error('Input must be exact semantic or stage-binding replay data');
     if (issue !== null && typeof issue !== 'string') throw new Error('Semantic contract returned an invalid result');
     process.stdout.write(JSON.stringify({ issue }));
 } catch (error) {

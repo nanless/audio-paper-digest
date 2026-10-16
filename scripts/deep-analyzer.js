@@ -17528,6 +17528,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                     coreSummaryRepairStage.evidenceContext,
                     { diagnosticStage: coreSummaryRepairStage, reviewFeedback: coreReviewFeedback,
                         coreSummaryDiagnosticId: options.coreSummaryDiagnosticId,
+                        paidCoreLiteralCorrection: options.paidCoreLiteralCorrection,
                         replayLatestCoreSummaryDiagnostic: options.replayLatestCoreSummaryDiagnostic, paidCoreReplay }
                 );
                 changed = fixed !== analysis;
@@ -17549,6 +17550,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 coreSummaryRepairStage.inputAnalysis, '核心摘要'
             );
             const summaryOutput = extractSectionByTitle(analysis, '核心摘要');
+            const replayReceipt = paidCoreReplay.id ? Object.fromEntries(Object.entries(paidCoreReplay)
+                .filter(([key]) => key !== 'operatorLiteralCorrection')) : null;
             const summaryBinding = {
                 contractVersion: CORE_SUMMARY_CONTRACT_VERSION,
                 inputAnalysisSha256: coreSummaryRepairStage.inputAnalysisSha256,
@@ -17558,7 +17561,11 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 inputStructureProjectionSha256: hashAnalysisWithMaskedCoreSummary(
                     coreSummaryRepairStage.inputAnalysis
                 ),
-                outputStructureProjectionSha256: hashAnalysisWithMaskedCoreSummary(analysis)
+                outputStructureProjectionSha256: hashAnalysisWithMaskedCoreSummary(analysis),
+                ...(paidCoreReplay.operatorLiteralCorrection ? {
+                    operatorLiteralCorrection: paidCoreReplay.operatorLiteralCorrection,
+                    paidDiagnosticReplay: replayReceipt
+                } : {})
             };
             markRecoveryStage(analysisManifest, 'coreSummaryRepair', changed ? 'complete' : 'not_needed', {
                 contractVersion: CORE_SUMMARY_CONTRACT_VERSION,
@@ -17576,7 +17583,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
                 ...(coreSummaryRepairStage.repairRequestPolicy
                     ? { repairRequestPolicy: coreSummaryRepairStage.repairRequestPolicy } : {}),
                 fingerprint: coreSummaryRepairStage.fingerprint,
-                ...(paidCoreReplay.id ? { paidDiagnosticReplay: paidCoreReplay } : {}),
+                ...(replayReceipt ? { paidDiagnosticReplay: replayReceipt } : {}),
+                ...(paidCoreReplay.operatorLiteralCorrection ? { operatorLiteralCorrection: paidCoreReplay.operatorLiteralCorrection } : {}),
                 ...require('./lib/daily-fact-review').fingerprintFields('coreSummaryRepair')
             });
             saveAnalysisCheckpoint(paper, analysis, analysisManifest, imageManifest);
@@ -19181,6 +19189,8 @@ async function repairCoreSummarySection(
         ? preparedEvidence
         : buildStageEvidenceContext('coreSummaryRepair', original, sourceText);
     const externalFeedback = String(options.reviewFeedback || '').trim();
+    if (options.paidCoreLiteralCorrection !== undefined && options.coreSummaryDiagnosticId === undefined)
+        throw contractRejectedError('已付核心术语修正只能使用显式原付费ID重放，不能调用普通核心请求');
     if (externalFeedback && !require('./lib/daily-fact-review').current(getPaperArxivId(paper))) {
         throw contractRejectedError('核心摘要事实反馈尚未绑定当前日更封存来源与正文');
     }
@@ -19224,14 +19234,20 @@ async function repairCoreSummarySection(
                 recordRoot, paidDiagnosticId, diagnosticIdentity);
             const match = String(saved.response.rawResponse).trim().match(/^##\s*核心摘要[：:\s]*\n([\s\S]+)$/);
             if (!match || /^#{1,6}\s/m.test(match[1])) throw contractRejectedError('原付费摘要响应结构不合法');
-            const updated = mergeSectionByTitle(original, '核心摘要', match[1]);
+            const correction = options.paidCoreLiteralCorrection === undefined ? null
+                : require('./lib/paid-core-literal-correction').applyPaidSummary(options.paidCoreLiteralCorrection,
+                    { paper, diagnosticIdentity, saved, originalAnalysis: original, sourceText });
+            const summary = correction ? correction.summary : match[1];
+            const updated = mergeSectionByTitle(original, '核心摘要', summary);
             if (sectionExteriorBytes(updated, '核心摘要') !== originalExterior)
                 throw contractRejectedError('原付费摘要响应改变了其他章节');
             const issue = getCoreSummaryDetailIssue(updated, { sourceText });
             if (issue) throw contractRejectedError(`原付费摘要仍未通过当前检查：${issue}`);
-            require('./lib/daily-fact-review').validateRepairedClaims('coreSummaryRepair', match[1], getPaperArxivId(paper));
+            require('./lib/daily-fact-review').validateRepairedClaims('coreSummaryRepair', summary, getPaperArxivId(paper));
             if (options.paidCoreReplay) Object.assign(options.paidCoreReplay, {
                 id: saved.request.id, ...saved.fileSha256, outputTextSha256: saved.response.outputTextSha256,
+                ...(correction ? { operatorLiteralCorrection: correction.provenance,
+                    operatorLiteralCorrectionRequired: true } : {}),
                 validatorImplementationSha256: crypto.createHash('sha256').update(fs.readFileSync(require.resolve('./analysis-contract'))).digest('hex')
             });
             return updated;

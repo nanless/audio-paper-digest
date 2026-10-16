@@ -1,0 +1,150 @@
+{
+  "summary": "口吃辅助反馈需要在重复、延长、阻滞开始前预估临近程度，而现有检测多在事件发生后才判定。输入是预测时刻t之前的不含未来音频的既往语音，输出是未来Δ内出现新事件起始点的概率，难点在于事件稀少、前兆弱且说话人差异大。冻结的Whisper-large-v3编码器把每100 ms对应的前2 s音频压缩为1280维向量，形成因果状态序列并缓存供后续建模使用。因果Conformer沿最长200步历史建模状态演变并输出风险，离散时间生存头一次前向给出15个100 ms条件风险并累乘为随视界单调的累积概率。与扩大静态声学窗口不同，该工作以精确起病时刻为锚点做因果逐帧预测，并按报警占空比评估事件覆盖。在FluencyBank Timestamped六折说话人无关交叉验证、300 ms视界下，因果Conformer平均精度0.0769、AUROC 0.6300，高于静态Whisper预测器的0.0522和0.5682。在FluencyBank Timestamped离线仿真评估中，25%报警占空比下Conformer事件覆盖率58.6%，超过TCN的57.4%和GRU的53.8%，验证集最大F1阈值下平均提前196 ms预警43.9%事件但每分钟有27.6个误报段；表征一次提取缓存耗费0.9 GPU-hours、随后每个时序模型在单GPU上训练几分钟，原文未报告推理延迟与实际部署开销。",
+  "sourceText": "From Detection to Anticipation: Continuous Onset Forecasting for Stuttered Speech\nTampu Ravi Kumar\nAyoub Daliri\nVivek Gupta\nAbstract\nAutomatic stuttering systems primarily detect dysfluencies after they have occurred, limiting their use for anticipatory intervention. We address this gap by formulating stuttering prediction as continuous causal time-to-event forecasting, where a model estimates the risk of an upcoming stuttering onset every 100 ms using only preceding speech. To support this task, we augment FluencyBank Timestamped for 36 speakers with manually reviewed repetitions, prolongations, and blocks, yielding 2,872 forecasting events. We then model the temporal evolution of frozen Whisper-large-v3 speech representations using a compact causal Conformer with 3.67M trainable parameters. The proposed approach achieves an AUROC of 0.63. Temporal analysis further shows that explicitly modeling preceding speech states outperforms simply increasing the static acoustic window, while a discrete-time survival formulation provides coherent forecasts from 300 ms to 1.5 s using a single model. These results provide initial evidence that stuttering onset is preceded by measurable temporal information in speech and establish a framework for future anticipatory stuttering systems.\nIndex Terms: stuttering, onset forecasting, time-to-event prediction, causal modeling, Conformer, Whisper\n††address: Author Affiliation(s)††address: 1School of Computing and Augmented Intelligence, Arizona State University, USA\n2College of Health Solutions, Arizona State University, USA\n{traviku2, ayoub.daliri, vgupta140}@asu.edu\n1 Introduction\nDevelopmental stuttering is a speech fluency disorder characterized by repetitions, prolongations, and blocks, affecting approximately 1% of adults and 5-8% of children [27]. Behavioral therapy and altered auditory feedback (AAF) can improve fluency, but treatment responses vary substantially across individuals and situations. Wearable AAF devices such as SpeechEasy provide continuous modified auditory feedback during speech and show heterogeneous benefits during long-term, naturalistic use [17, 19]. A system capable of anticipating stuttering onset could eventually trigger such feedback only when needed rather than continuously.\nMost computational work, however, focuses on stuttering detection: models classify speech segments that already contain a dysfluency [13, 3, 21]. Recent work extends this setting by predicting whether the next three-second speech segment will contain stuttering [12], but segment-level prediction neither localizes event onset nor continuously estimates its imminence. Motivated by behavioral and neurophysiological evidence that information associated with stuttering can precede overt onset [11, 24, 6], we ask: can stuttering onset be forecast continuously from speech observed strictly before the event?\nTo our knowledge, we are the first to formulate stuttering prediction as continuous causal time-to-event forecasting. Every 100 ms, the model observes only preceding speech and estimates the probability that a new stuttering event will begin within a future horizon. We study this problem using FluencyBank Timestamped(FBT) [20] dataset, augmented with manually reviewed repetitions, prolongations, and blocks because the existing annotations are not comprehensive for our forecasting analysis. We represent local speech using frozen Whisper-large-v3 [18] and model its temporal evolution using causal architectures. Our contributions are:\n• \nWe formulate stuttering anticipation as continuous causal\ntime-to-event forecasting, producing onset-risk estimates every 100 ms from\nspeech observed strictly before the event.\n• \nWe build the onset-aligned annotation layer on existing FBT annotations: 2,872 forecasting events across 36 FBT\nspeakers, including 129 prolongations and 150 blocks annotated manually.\n• \nWe characterize forecastability across event types, speakers, and\nhorizons from 300 ms to 1.5 s, and evaluate forecasts at the event\nlevel under an operational duty-cycle constraint, covering 58.6% of events\nwith feedback active only 25% of the time.\n2 TASK FORMULATION AND DATA\n2.1 Data and Annotation Augmentation\nWe use the FBT dataset, comprising\n36 speakers with 6.41 h of recordings and 5.13 h of transcribed participant\nspeech. FBT provides word-level timestamps and repetition annotations, but its\nlabels are not comprehensive for the event types our forecasting task\nrequires, so we augment it with manually reviewed repetitions, prolongations,\nand blocks. We first generate verbatim word-level transcripts and timestamps\nwith CrisperWhisper2.0 [28] and align them with the existing FBT annotations. A\nhuman annotator then listens to each recording end-to-end, rather than\nreviewing only automatically flagged regions, and adds missed sound and word\nrepetitions, prolongations, and blocks; automatic transcripts and existing\nannotations serve only as review aids, and all added events are manually\nverified. To estimate reliability, a second annotator independently labeled 185 clips\nfrom four speakers (44 repetition,\n60 prolongation, 56 block, and 25 event-free clips), without access to the\nfirst annotator’s labels. Following SEP-28k [13], we compute\nFleiss’ κ\\kappa per event type on clip-level labels: κ=0.54\\kappa=0.54\n[0.37, 0.69] for repetitions, 0.730.73 [0.62, 0.83] for prolongations, and\n0.560.56 [0.41, 0.69] for blocks. For matched events, the median absolute\nonset discrepancy was 80 ms overall.\nFigure 1: Continuous onset forecasting. The encoder is run once per 100100-ms\ngrid point over its own preceding 22 s, so consecutive windows overlap by\n1.91.9 s; the causal Conformer then attends over 200200 such states (2020 s),\ngiving a total reach of ≈22\\approx 22 s. The 22 s window sets how finely\naudio is summarized, not how far back the model can see. Nothing the model\nreads extends beyond tt.\nWe place event boundaries at the acoustic manifestation of the dysfluency:\nrepetition onset at the beginning of the first repeated fragment,\nprolongation onset at the beginning of the abnormally sustained sound, and\nblock onset at the point where speech stops or an articulatory posture is\nestablished, i.e. the start of the silent or tense interruption rather than\nthe onset of the subsequent word. Temporally adjacent dysfluencies that\noverlap, or that occur within 0.5  s without an intervening completed fluent\nword, are consolidated into a single forecasting event, merging 73 of 2,945 raw\ndysfluency annotations. The resulting inventory contains 2,872 events: 2,593\nrepetitions, 129 prolongations, and 150 blocks, the latter two annotated\nentirely by hand. Per-speaker event counts range from 11 to 210 (median 65).\nCrisperWhisper is not used by the acoustic forecasting model.\n2.2 Forecasting Target\nConventional stuttering detection determines whether an observed speech\nsegment already contains a dysfluency. We instead predict whether a new event will begin in the future.\nFor each recording, we construct a regular prediction grid at 100-ms\nintervals. The grid begins at t=2t=2\\,s. The earliest annotated onset in the corpus occurs at 3.37 s, so no event is lost to the grid start. Let s+​(t)s^{+}(t) denote the onset of the next\nrepetition, prolongation, or block beginning strictly after prediction time\ntt. We define the time to the next event as\nTt=s+​(t)−t.T_{t}=s^{+}(t)-t.\n(1)\nFor a future horizon Δ\\Delta, the forecasting target is\nyt(Δ)=[0<Tt≤Δ].y_{t}^{(\\Delta)}=\\mathbf{1}\\!\\left[0<T_{t}\\leq\\Delta\\right].\n(2)\nThe model estimates\npt(Δ)=P⁡(Tt≤Δ∣𝐱≤t),p_{t}^{(\\Delta)}=P\\!\\left(T_{t}\\leq\\Delta\\mid\\mathbf{x}_{\\leq t}\\right),\n(3)\nusing only speech observed at or before tt. Thus, the target event itself is\nnever contained in a positive input.\nScorable frames. Of 229,966 grid points, we exclude 20,107 frames falling inside an active stuttering event, because the event has already begun and the task would become detection rather than forecasting, and a further 45,165 frames outside transcribed participant-speech segments. Silence occurring within a transcribed segment remains scorable, since a deployed system would have to produce a decision there. This yields 164,694 scorable frames. At the primary Δ=300\\Delta=300ms horizon, 8,121 frames are positive, a prevalence of 4.93%.\nComposition of the negative class. Because stuttering events cluster in time, a model could appear to forecast by recognizing that an event occurred recently rather than by extracting pre-onset information. 25.4% of positive and 19.8% of negative frames fall within 2 s of a previous onset, so the two classes are comparably situated in this respect.\n2.3 Multi-Horizon Formulation\nA fixed binary horizon imposes a hard boundary on a potentially evolving pre-onset state. We therefore additionally evaluate forecasting over Δ∈(0.3,0.5,0.75,1.0,1.5)\\Delta\\in{(0.3,0.5,0.75,1.0,1.5)} s. A discrete-time survival model predicts 15 conditional hazards at 100-ms intervals from a single forward pass. Let\nht,k=P⁡(Tt∈(τk−1,τk]∣Tt>τk−1,𝐱≤t),h_{t,k}=P(T_{t}\\in(\\tau_{k-1},\\tau_{k}]\\mid T_{t}>\\tau_{k-1},\\mathbf{x}_{\\leq t}),\nthe probability of onset in bin kk given that no onset has occurred earlier, where τk=0.1​k\\tau_{k}=0.1ks. The cumulative probability of onset within τk\\tau_{k} is\nP⁡(Tt≤τk∣𝐱≤t)=1−∏j=1k(1−ht,j).P(T_{t}\\leq\\tau_{k}\\mid\\mathbf{x}_{\\leq t})=1-\\prod_{j=1}^{k}(1-h_{t,j}).\nThe model is trained by masked binary cross-entropy over at-risk bins, i.e. the negative log discrete-time survival likelihood. A frame is at risk in bin kk only if that bin lies within the transcribed segment containing tt; otherwise it is right-censored and contributes no further bins, rather than being silently labelled negative as the fixed-horizon target requires. The evaluable set therefore shrinks with the horizon (156,669 frames at 0.3 s to 128,167 at 1.5 s).\nThis formulation produces a coherent, non-decreasing risk trajectory from a single model rather than requiring a separate binary classifier for every horizon.\n3 Causal Temporal Forecasting\nWe separate local acoustic representation from longer-range temporal\nmodeling (Fig. 1). Every 100 ms, a frozen encoder turns\nthe preceding 2 s of audio into a single vector; a lightweight causal model\nthen runs over the sequence of those vectors, attending back up to 200 steps.\nThe 2 s window therefore sets how finely the audio is summarized, not how far\nback the model can see: at a 200-step span the receptive field reaches roughly\n22 s, as 2 s summaries spaced 100 ms apart. Everything the model reads at\ntime tt ends at or before tt.\n3.1 Acoustic Representation\nWe use the frozen encoder of Whisper-large-v3.\nBecause it applies bidirectional self-attention, encoding a full recording\nwould expose future audio, so we independently encode only the 2-s waveform\nending at tt, giving 𝐳t∈ℝ1280\\mathbf{z}_{t}\\in\\mathbb{R}^{1280}. The encoder\nexpects a 30-s log-mel input; we zero-pad and retain only the 100 frames\ncorresponding to real audio. Frames are emitted at 50 Hz and averaged in\nnon-overlapping groups of five into one state per 100 ms, matching the\nforecasting grid, giving the causal sequence 𝐙≤t\\mathbf{Z}_{\\leq t}. We use the\nfinal encoder layer, selected on validation average precision from\n{8,16,24,32}\\{8,16,24,32\\} in a preliminary sweep; layer-wise probes of stuttering\ndetection locate dysfluency information in middle\nlayers [21, 2], but forecasting an event absent\nfrom the input is a different task, and here the final layer was best.\nRepresentations are extracted once and cached (0.9 GPU-hours), after which\neach temporal model trains in minutes on one GPU.\n3.2 Temporal Model\nOur primary temporal model is a four-block\nConformer [10]. Each Whisper state is normalized and\nprojected to 192 dimensions; each block has macaron feed-forward modules\n(192→768→192192\\to 768\\to 192), four-head causal self-attention, and a causal\ndepthwise convolution with kernel size 15. Three choices prevent future\ninformation from reaching a prediction: attention sees only current and\npreceding states, convolutions are left-padded, and we use LayerNorm rather\nthan temporal BatchNorm, which would normalize using whole-sequence\nstatistics. Attention uses a maximum left context of 20 s (200 states) and\ncarries no positional term, so ordering reaches the model only through the\nstacked causal convolutions. The final state maps to a frame-level onset-risk\nprobability; the model has 3.67 M trainable parameters and Whisper remains\nfrozen. We compare against a static Whisper predictor that attention-pools\nthe 2-s window, a causal TCN [1] (1.12 M parameters), and a causal GRU [5]\n(1.12 M), all sharing representations, targets, and folds.\n3.3 Training\nWe optimize focal loss [14] (γ=2\\gamma=2, α=0.75\\alpha=0.75) to\ncounter the 4.93% prevalence, with AdamW [16], learning rate 2×10−42\\times 10^{-4},\nweight decay 0.010.01, dropout 0.20.2, gradient clipping at 5, and early\nstopping on validation AP with patience 8. Training sequences span 40 s: a\n200-step causal buffer, which supplies context but no loss, followed by 200\nscored steps. For multi-horizon forecasting we keep the architecture and\nreplace the binary output with the 15-bin hazard head, trained with plain\nbinary cross-entropy over at-risk bins rather than focal loss: focal\nreweighting distorts predicted probabilities, and calibrated hazards are the\npoint of that formulation (dropout 0.30.3, 50-step buffer).\n4 Experiments and Results\n4.1 Setup\nWe use six speaker-disjoint folds over the 36 speakers; for each test fold a\ndisjoint fold is used for validation and the remaining speakers for training.\nAll models share folds, grids, and targets, so comparisons are paired. We\ntrain three seeds per fold and average their predictions before computing\nout-of-fold metrics. Since only 4.93% of frames are positive, accuracy is\nuninformative: we report average precision (AP), its lift over the prevalence\nfloor, AUROC, and within-speaker AUROC (wAUROC), computed within each\nspeaker and averaged, which removes differences in baseline stuttering\npropensity. Intervals and model differences come from paired speaker-level\nbootstrap resampling. Operating thresholds are selected on each validation fold and applied unchanged to its test fold. The static Whisper predictor approximates the segment-level setting of [12] at our temporal resolution.\n4.2 Does Temporal Modeling Improve Forecasting?\nTable 1 compares architectures at the 300-ms horizon. The causal\nConformer is strongest, with AP 0.07690.0769 (1.56×\\times the prevalence floor)\nand AUROC 0.63000.6300, improving pooled AUROC over the TCN by 0.04110.0411 (95% CI\n[0.0196,0.0615][0.0196,0.0615]); the GRU does not improve over the TCN. The gain is not\nexplained by exposure to more audio: widening the static Whisper window from\n2.0 to 3.8 s moves AUROC from 0.5682 to 0.5666 (AP 0.0522 to 0.0512),\nwhereas modeling the temporal sequence raises it to 0.6300. Useful pre-onset\ninformation therefore lies in the temporal evolution of locally\ncontextualized speech states rather than in a larger static window.\nTable 1: Continuous forecasting at a 300 ms horizon. Lift is AP relative to\nthe 0.0493 positive prevalence.\nModel\nAP ↑\\uparrow\nLift ↑\\uparrow\nAUROC ↑\\uparrow\nwAUROC ↑\\uparrow\nStatic Whisper\n0.0522\n1.06×\\times\n0.5682\n0.5586\nGRU\n0.0642\n1.30×\\times\n0.5587\n0.5662\nTCN\n0.0668\n1.36×\\times\n0.5889\n0.5668\nCausal Conformer\n0.0769\n1.56×\\times\n0.6300\n0.5727\n4.3 Event Type, Speakers, and Temporal Context\nTable 2 evaluates each event type against true-negative\nframes while excluding frames positive for another type. The Conformer\nimproves pooled discrimination over the TCN for all three types, reaching\nAUROC 0.630, 0.655, and 0.612 for repetitions, prolongations, and blocks.\nTable 2: AUROC by future event type at the 300 ms horizon\n(2,593 repetitions, 129 prolongations, 150 blocks).\nModel\nRepetition\nProlongation\nBlock\nStatic Whisper\n0.574\n0.508\n0.497\nTCN\n0.592\n0.596\n0.538\nConformer\n0.630\n0.655\n0.612\nWithin-speaker analysis is more conservative. Repetition forecasting stays\nabove chance, with mean wAUROC 0.5760.576 (95% CI [0.564,0.590][0.564,0.590]) across all\n36 speakers and 97% of speakers above 0.5. For prolongations and blocks mean\nwAUROC is 0.540 and 0.541, with intervals overlapping chance and sufficient\npositive frames in only 17 and 23 speakers. The gap between pooled and\nwithin-speaker discrimination indicates substantial speaker heterogeneity,\nparticularly for the rarer types.\nVarying the causal attention history while holding the 2-s Whisper\nrepresentation fixed, a 2-s history yields AUROC 0.592 and a 5-s history\n0.621, with no measurable gain beyond (0.620 at 10 s, 0.622 at 20 s).\nUseful temporal information therefore extends past the local acoustic window\nbut saturates near 5 s.\n4.4 Multi-Horizon and Operational Forecasting\nTable 3 compares the discrete-time hazard model with\nindependently trained binary classifiers and with independent cumulative\noutputs. The hazard model is competitive with five separately trained binary\nmodels while producing all horizons from one predictor. Independent\ncumulative outputs reach similar discrimination but violate the required\nordering P⁡(T≤Δi)≤P⁡(T≤Δj)P(T\\leq\\Delta_{i})\\leq P(T\\leq\\Delta_{j}) for Δi<Δj\\Delta_{i}<\\Delta_{j}\non 68.9% of frames, whereas the survival formulation is coherent by\nconstruction.\nTable 3: Multi-horizon forecasting (AUROC / AP). The hazard model produces\nall horizons from one trained model and is monotone by construction. This table uses a censoring-aware evaluation set\nΔ\\Delta\nHazard\nBinary\nIndependent\ncumulative\n0.30 s\n.604/.074\n.598/.074\n.610/.075\n0.50 s\n.583/.114\n.582/.115\n.593/.118\n0.75 s\n.577/.177\n.593/.183\n.591/.183\n1.00 s\n.576/.218\n.572/.215\n.589/.224\n1.50 s\n.575/.310\n.588/.318\n.585/.317\nFrame-level discrimination does not show whether forecasts could drive an\nevent-triggered intervention. We therefore merge positive decisions into\nwarning episodes and measure event-level sensitivity against alarm duty\ncycle, the fraction of time a feedback system would be active. At a 25% duty\ncycle the Conformer anticipates 58.6% of scorable events, against 57.4% for\nthe TCN and 53.8% for the GRU; at a higher-recall point it anticipates 91.6%\nat 66.5% duty. At the validation-selected maximum-F1 threshold it anticipates\n43.9% of events with a mean lead time of 196 ms, but produces 27.6 false\nwarning bouts per minute. These operating points quantify the trade-off\nbetween feedback exposure and event coverage; whether selectively triggered\nAAF at these lead times improves fluency requires prospective intervention\nstudies.\n5 Related Work\nForecasting is plausible because stuttering is not distributed uniformly\nthrough speech: it concentrates on particular sounds, word classes, and\nutterance positions [4, 26],\nand speakers often report anticipating upcoming moments of\nstuttering [11]. Neural\ndifferences precede overt blocks [24], and adults who\nstutter show reduced pre-speech auditory modulation [6].\nDas et al. [7] predicted upcoming dysfluent trials from\npre-speech facial muscle movements. The listener study of Liu and\nHowell [15] and the surprisal analysis of Warner et\nal. [25] are closest to our setting and both ask whether pre-onset material predicts the event, but\nneither builds an acoustic predictor.\nThe only audio-based predictor we are aware of is that of\nKozak [12], who trains a compact CNN on SEP-28k to\npredict whether the next 3 s clip contains a dysfluency and finds signal\nconcentrated on blocks and sound repetitions. Our formulation differs in three\nrespects: it produces a risk estimate every 100 ms rather than one decision\nper clip, it targets exact annotated onsets at sub-second horizons, and it\nevaluates event-level coverage under an alarm duty-cycle budget. More broadly,\ncontinuous causal prediction of upcoming speech events has been studied for\nturn-taking, where models project future voice activity from preceding\naudio [22, 8]; our event-level evaluation,\nsensitivity against time spent in warning, follows practice in seizure\nprediction [23], and our multi-horizon head uses a\ndiscrete-time survival formulation [9].\n6 Conclusion\nIn this work, we formulated stuttering anticipation as continuous causal time-to-event forecasting, constructed the required onset-aligned corpus layer, and established a benchmark framework for evaluating pre-onset risk trajectories. Our findings demonstrate three key insights: (1) speech preceding stuttering onset carries statistically measurable predictive structure; (2) modeling the sequential evolution of contextualized speech states provides significant gains over expanding static acoustic context; and (3) a discrete-time survival formulation produces coherent, multi-horizon forecasts without violating temporal ordering. Although current operational trade-offs indicate that pre-onset forecasting remains an open challenge, this work provides a formulation, empirical baseline, and evaluation methodology to guide future research toward deployable anticipatory interventions.\n7 Limitations and Future Work\nWhile this work establishes a baseline for continuous onset forecasting, several challenges remain before such models can drive real-time clinical interventions. The primary constraint remains annotation scale. Continuous time-to-event forecasting requires precise, frame-level onset timestamps that existing segment-level stuttering corpora do not provide. While our augmented layer of 2,872 events across 36 speakers represents a critical first step, scaling onset-aligned annotations to larger, more diverse cohorts will be essential to fully unlock fine-grained anticipatory modeling.\n8 Compliance with Ethical Standards\nThis work uses the publicly available FluencyBank Timestamped (FBT) dataset under its existing license and our augmented annotations contain no additional PII beyond what FBT already provides. The proposed forecasting models are intended as a research step toward clinician- or user-supervised assistive tools, not as a standalone diagnostic or autonomous intervention system.\n9 Acknowledgments\nWe conducted this research as a collaborative effort at Arizona State University. We thank the Complex Data Analysis and Reasoning Lab within the School of Computing and Augmented Intelligence at Arizona State University for providing computational resources and institutional support. We also sincerely thank Manan Roy Choudhury and Tejas Anvekar for their valuable feedback during the ideation stage of this work.",
+  "cases": [
+    {
+      "id": "real-paid-chain",
+      "kind": "chain",
+      "text": "冻结的Whisper-large-v3编码器把每100 ms对应的前2 s音频压缩为1280维向量，形成因果状态序列并缓存供后续建模使用。因果Conformer沿最长200步历史建模状态演变并输出风险，离散时间生存头一次前向给出15个100 ms条件风险并累乘为随视界单调的累积概率。",
+      "expect": true
+    },
+    {
+      "id": "negated-producer",
+      "kind": "chain",
+      "text": "冻结的Whisper-large-v3编码器把每100 ms对应的前2 s音频并未压缩为1280维向量，形成因果状态序列并缓存供后续建模使用。因果Conformer沿最长200步历史建模状态演变并输出风险，离散时间生存头一次前向给出15个100 ms条件风险并累乘为随视界单调的累积概率。",
+      "expect": false
+    },
+    {
+      "id": "hypothetical-chain",
+      "kind": "chain",
+      "text": "假设冻结的Whisper-large-v3编码器把每100 ms对应的前2 s音频压缩为1280维向量，形成因果状态序列并缓存供后续建模使用。因果Conformer沿最长200步历史建模状态演变并输出风险，离散时间生存头一次前向给出15个100 ms条件风险并累乘为随视界单调的累积概率。",
+      "expect": false
+    },
+    {
+      "id": "negated-consumer",
+      "kind": "chain",
+      "text": "冻结的Whisper-large-v3编码器把每100 ms对应的前2 s音频压缩为1280维向量，形成因果状态序列并缓存供后续建模使用。因果Conformer沿最长200步历史不使用这些状态序列，独立建模原始波形并输出风险，离散时间生存头一次前向给出15个100 ms条件风险并累乘为随视界单调的累积概率。",
+      "expect": false
+    },
+    {
+      "id": "discarded-artifact",
+      "kind": "chain",
+      "text": "冻结的Whisper-large-v3编码器把每100 ms对应的前2 s音频压缩为1280维向量，形成因果状态序列但丢弃这些状态序列。因果Conformer沿最长200步历史建模状态演变并输出风险，离散时间生存头一次前向给出15个100 ms条件风险并累乘为随视界单调的累积概率。",
+      "expect": false
+    },
+    {
+      "id": "unowned-consumer",
+      "kind": "chain",
+      "text": "冻结的Whisper-large-v3编码器把每100 ms对应的前2 s音频压缩为1280维向量，形成因果状态序列并缓存供后续建模使用。另一种独立方法的因果Conformer沿最长200步历史建模状态演变并输出风险，离散时间生存头一次前向给出15个100 ms条件风险并累乘为随视界单调的累积概率。",
+      "expect": false
+    },
+    {
+      "id": "module-list",
+      "kind": "chain",
+      "text": "系统使用Whisper编码器、因果Conformer和离散时间生存头，最后输出风险。",
+      "expect": false
+    },
+    {
+      "id": "real-paid-boundary",
+      "kind": "boundary",
+      "text": "在FluencyBank Timestamped离线仿真评估中，25%报警占空比下Conformer事件覆盖率58.6%，超过TCN的57.4%和GRU的53.8%，验证集最大F1阈值下平均提前196 ms预警43.9%事件但每分钟有27.6个误报段；表征一次提取缓存耗费0.9 GPU-hours、随后每个时序模型在单GPU上训练几分钟，原文未报告推理延迟与实际部署开销。",
+      "expect": true
+    },
+    {
+      "id": "generic-dataset-only",
+      "kind": "boundary",
+      "text": "在某数据集上，模型取得58.6%的覆盖率。",
+      "expect": false
+    },
+    {
+      "id": "cost-only",
+      "kind": "boundary",
+      "text": "原文未报告推理延迟与实际部署开销。",
+      "expect": false
+    },
+    {
+      "id": "hypothetical-offline",
+      "kind": "boundary",
+      "text": "计划在离线仿真评估中测量覆盖率；原文未报告推理延迟与实际部署开销。",
+      "expect": false
+    },
+    {
+      "id": "revoked-offline",
+      "kind": "boundary",
+      "text": "结果并非来自离线仿真评估，且已完成实际部署验证；原文未报告推理延迟与实际部署开销。",
+      "expect": false
+    },
+    {
+      "id": "clinical-overclaim",
+      "kind": "boundary",
+      "text": "在离线仿真评估中模型覆盖率为58.6%；这证明临床干预已经有效，原文未报告推理延迟与实际部署开销。",
+      "expect": false
+    },
+    {
+      "id": "foreign-offline",
+      "kind": "boundary",
+      "text": "相关工作在离线仿真评估中报告覆盖率，原文未报告推理延迟与实际部署开销。",
+      "expect": false
+    },
+    {
+      "id": "refuted-chain",
+      "kind": "chain",
+      "text": "被反驳的说法：冻结的Whisper-large-v3编码器把每100 ms对应的前2 s音频压缩为1280维向量，形成因果状态序列并缓存供后续建模使用。因果Conformer沿最长200步历史建模状态演变并输出风险，离散时间生存头一次前向给出15个100 ms条件风险并累乘为随视界单调的累积概率。",
+      "expect": false
+    },
+    {
+      "id": "revoked-chain",
+      "kind": "chain",
+      "text": "冻结的Whisper-large-v3编码器把每100 ms对应的前2 s音频压缩为1280维向量，形成因果状态序列并缓存供后续建模使用的说法不成立。因果Conformer沿最长200步历史建模状态演变并输出风险，离散时间生存头一次前向给出15个100 ms条件风险并累乘为随视界单调的累积概率。",
+      "expect": false
+    },
+    {
+      "id": "refuted-boundary",
+      "kind": "boundary",
+      "text": "被反驳的说法：在FluencyBank Timestamped离线仿真评估中，25%报警占空比下Conformer事件覆盖率58.6%，超过TCN的57.4%和GRU的53.8%，验证集最大F1阈值下平均提前196 ms预警43.9%事件但每分钟有27.6个误报段；表征一次提取缓存耗费0.9 GPU-hours、随后每个时序模型在单GPU上训练几分钟，原文未报告推理延迟与实际部署开销。",
+      "expect": false
+    },
+    {
+      "id": "revoked-boundary",
+      "kind": "boundary",
+      "text": "在FluencyBank Timestamped离线仿真评估中，25%报警占空比下Conformer事件覆盖率58.6%，超过TCN的57.4%和GRU的53.8%，验证集最大F1阈值下平均提前196 ms预警43.9%事件但每分钟有27.6个误报段；表征一次提取缓存耗费0.9 GPU-hours、随后每个时序模型在单GPU上训练几分钟，原文未报告推理延迟与实际部署开销的表述有误。",
+      "expect": false
+    },
+    {
+      "id": "missing-operation",
+      "kind": "boundary",
+      "text": "在FluencyBank Timestamped离线仿真评估中，Conformer事件覆盖率58.6%，超过TCN的57.4%和GRU的53.8%，验证集最大F1阈值下平均提前196 ms预警43.9%事件但每分钟有27.6个误报段；表征一次提取缓存耗费0.9 GPU-hours、随后每个时序模型在单GPU上训练几分钟，原文未报告推理延迟与实际部署开销。",
+      "expect": false
+    },
+    {
+      "id": "missing-burden",
+      "kind": "boundary",
+      "text": "在FluencyBank Timestamped离线仿真评估中，25%报警占空比下Conformer事件覆盖率58.6%，超过TCN的57.4%和GRU的53.8%，验证集最大F1阈值下平均提前196 ms预警43.9%事件；表征一次提取缓存耗费0.9 GPU-hours、随后每个时序模型在单GPU上训练几分钟，原文未报告推理延迟与实际部署开销。",
+      "expect": false
+    },
+    {
+      "id": "missing-measurement",
+      "kind": "boundary",
+      "text": "在FluencyBank Timestamped离线仿真评估中，25%报警占空比下Conformer事件覆盖率58.6%，超过TCN的57.4%和GRU的53.8%，验证集最大F1阈值下平均提前196 ms预警43.9%事件但每分钟有27.6个误报段；表征一次提取缓存耗费0.9 GPU-hours、随后每个时序模型在单GPU上训练几分钟，。",
+      "expect": false
+    },
+    {
+      "id": "independent-product",
+      "kind": "chain",
+      "text": "冻结的Whisper-large-v3编码器把每100 ms对应的前2 s音频压缩为1280维向量，另一路形成因果状态序列并缓存供后续建模使用。因果Conformer沿最长200步历史建模状态演变并输出风险，离散时间生存头一次前向给出15个100 ms条件风险并累乘为随视界单调的累积概率。",
+      "expect": false
+    },
+    {
+      "id": "negated-offline-scope",
+      "kind": "boundary",
+      "text": "不在FluencyBank Timestamped离线仿真评估中，25%报警占空比下Conformer事件覆盖率58.6%，超过TCN的57.4%和GRU的53.8%，验证集最大F1阈值下平均提前196 ms预警43.9%事件但每分钟有27.6个误报段；表征一次提取缓存耗费0.9 GPU-hours、随后每个时序模型在单GPU上训练几分钟，原文未报告推理延迟与实际部署开销。",
+      "expect": false
+    },
+    {
+      "id": "unobserved-offline-scope",
+      "kind": "boundary",
+      "text": "未在FluencyBank Timestamped离线仿真评估中，25%报警占空比下Conformer事件覆盖率58.6%，超过TCN的57.4%和GRU的53.8%，验证集最大F1阈值下平均提前196 ms预警43.9%事件但每分钟有27.6个误报段；表征一次提取缓存耗费0.9 GPU-hours、随后每个时序模型在单GPU上训练几分钟，原文未报告推理延迟与实际部署开销。",
+      "expect": false
+    }
+  ]
+}

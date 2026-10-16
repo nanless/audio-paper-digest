@@ -5400,6 +5400,11 @@ _CORE_SUMMARY_NODE_REPLAY_CACHE = {}
 def _source_bound_core_summary_semantic_issue(paper, summary):
     """Use the same current semantic rules as analysis for an actual sealed source."""
     proof = paper.get('freshRewriteProvenance') or {}
+    stage = ((paper.get('analysisManifest') or {}).get('stages') or {}).get('coreSummaryRepair') or {}
+    if ('operatorLiteralCorrection' in stage
+            or (stage.get('paidDiagnosticReplay') or {}).get('operatorLiteralCorrectionRequired') is not None) \
+            and proof.get('contract') != 'fresh-source-analysis-v1':
+        raise PublishDataValidationError('已付核心术语修正只接受完整日更封存来源。')
     if proof.get('contract') != 'fresh-source-analysis-v1':
         return _detailed_core_summary_semantic_issue(summary)
     run_id = proof.get('runId')
@@ -5424,10 +5429,15 @@ def _source_bound_core_summary_semantic_issue(paper, summary):
         _sha256_file(SHARED_SCRIPTS_DIR / 'analysis-contract.js'),
         _sha256_file(SHARED_SCRIPTS_DIR / 'lib' / 'analysis-section-titles.js'),
     )
+    stage_replay = 'operatorLiteralCorrection' in stage or 'paidDiagnosticReplay' in stage
     key = (_javascript_string_sha256(summary), _daily_fresh_sha256(source_bytes), implementations)
-    if key in _CORE_SUMMARY_NODE_REPLAY_CACHE:
+    # An operator replay must re-read its original paid files and authorization
+    # every time; a semantic-only cache cannot attest those mutable files.
+    if not stage_replay and key in _CORE_SUMMARY_NODE_REPLAY_CACHE:
         return _CORE_SUMMARY_NODE_REPLAY_CACHE[key]
-    payload = _daily_fresh_compact_json_bytes({'summary': summary, 'sourceText': source_text})
+    payload = _daily_fresh_compact_json_bytes(
+        {'mode': 'stage-binding', 'paper': paper, 'sourceText': source_text}
+        if stage_replay else {'summary': summary, 'sourceText': source_text})
     if len(payload) > 16 * 1024 * 1024:
         raise PublishDataValidationError('核心摘要只读重放输入超过上限。')
     node = shutil.which('node')
@@ -5448,7 +5458,8 @@ def _source_bound_core_summary_semantic_issue(paper, summary):
     if not isinstance(response, dict) or set(response) != {'issue'} \
             or not (response['issue'] is None or isinstance(response['issue'], str)):
         raise PublishDataValidationError('核心摘要当前语义规则返回字段无效。')
-    _CORE_SUMMARY_NODE_REPLAY_CACHE[key] = response['issue']
+    if not stage_replay:
+        _CORE_SUMMARY_NODE_REPLAY_CACHE[key] = response['issue']
     return response['issue']
 
 
@@ -5511,6 +5522,9 @@ def _validated_detailed_core_summary(paper, parsed):
         'inputStructureProjectionSha256': stage['inputStructureProjectionSha256'],
         'outputStructureProjectionSha256': stage['outputStructureProjectionSha256'],
     }
+    if 'operatorLiteralCorrection' in stage:
+        binding_body['operatorLiteralCorrection'] = stage['operatorLiteralCorrection']
+        binding_body['paidDiagnosticReplay'] = stage.get('paidDiagnosticReplay')
     if stage.get('bindingSha256') != _stable_json_sha256(binding_body):
         raise PublishDataValidationError('读者文章的详细核心摘要绑定 SHA 与按原字段重新计算的结果不一致。')
     structure = stages.get('structureRepair') if isinstance(stages, dict) else None
@@ -13354,6 +13368,7 @@ def generation_template_fingerprint():
         'analysis-contract.js': script_dir / 'analysis-contract.js',
         'lib/analysis-section-titles.js': script_dir / 'lib' / 'analysis-section-titles.js',
         'lib/core-summary-semantic-replay-cli.js': script_dir / 'lib' / 'core-summary-semantic-replay-cli.js',
+        'lib/paid-core-literal-correction.js': script_dir / 'lib' / 'paid-core-literal-correction.js',
         'lib/reader-sealed-pdf-quote-evidence.js': script_dir / 'lib' / 'reader-sealed-pdf-quote-evidence.js',
         'lib/reader-sealed-pdf-table-evidence.js': script_dir / 'lib' / 'reader-sealed-pdf-table-evidence.js',
         'lib/reader-table-pdf-evidence.js': script_dir / 'lib' / 'reader-table-pdf-evidence.js',

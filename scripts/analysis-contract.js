@@ -1641,7 +1641,46 @@ function hasCompleteCorpusCurationResult(summary, result) {
     });
 }
 
-function classifySourceQuantitativeEvidence(sourceText, sentences = null) {
+// Software functional validation is source-bound repeatability evidence, not model performance.
+function sourceSoftwareFunctionalValidationResult(sourceText){
+ const count=value=>/^\d+$/u.test(value)?Number(value):({one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10,eleven:11,twelve:12}[String(value).toLowerCase()]??NaN);
+ const text=String(sourceText||'').replace(/\s+/gu,' ').trim(),word='(\\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)';
+ // Keep this affirmative observed provenance local. A quoted prior result,
+ // future validation, version/step numbers or a test inventory cannot match.
+ const observed=new RegExp('(?:^|[.!?] )On a pinned ([A-Za-z]+) ([A-Za-z0-9_-]+) and Python (\\d+\\.\\d+) stack, functional validation of the pre-release versions reproduced package and host tests\\. '+word+' runs in fresh processes reproduced the same render-plan hash and all '+word+' expected output hashes, covering '+word+' sampled parameter configurations and '+word+' fixed MIDI signals; (\\d+) negative cases also passed\\.','iu').exec(text);
+ if(!observed)return null;
+ const result={os:observed[1],architecture:observed[2],pythonVersion:observed[3],runs:count(observed[4]),outputs:count(observed[5]),configurations:count(observed[6]),midiSignals:count(observed[7]),negativeCases:count(observed[8])};
+ // Independent table statement authenticates which counts belong to outputs,
+ // configurations and signals. Counts are bound by roles, not a numeric bag.
+ const table=new RegExp('Deterministic workflow '+word+' fresh processes each rendered and kept '+word+' records from '+word+' parameter configurations and '+word+' MIDI signals; both reproduced the same expected plan hash and all '+word+' expected output-byte hashes\\.','iu').exec(text);
+ const packageTests=/Package tests (\d+) passed; wheel\/source build and clean wheel installation passed\./iu.exec(text);
+ const negativeCases=/Negative cases (\d+) passed, covering/iu.exec(text);
+ const tableCaption=/Table\s+\d+: Quality-control results from the pre-release validation pass on the pinned ([A-Za-z]+) ([A-Za-z0-9_-]+) and Python (\d+\.\d+) stack\./iu.exec(text);
+ if(!table||!packageTests||!negativeCases||!tableCaption)return null;
+ result.packageTests=count(packageTests[1]);
+ if([result.runs,result.outputs,result.configurations,result.midiSignals,result.negativeCases,result.packageTests].some(n=>!Number.isSafeInteger(n)||n<=0)
+  ||result.negativeCases!==count(negativeCases[1])||result.runs<2||result.outputs!==result.configurations*result.midiSignals
+  ||[result.runs,result.outputs,result.configurations,result.midiSignals,result.outputs].some((n,i)=>n!==count(table[i+1]))
+  ||[result.os,result.architecture,result.pythonVersion].some((v,i)=>v.toLowerCase()!==tableCaption[i+1].toLowerCase()))return null;
+ return {...result,observedQuote:observed[0].replace(/^[.!?] /u,''),workflowQuote:table[0],packageTestsQuote:packageTests[0],captionQuote:tableCaption[0]};
+}
+function hasCompleteSoftwareFunctionalValidationResult(summary,result){
+ if(!result)return false;
+ const count=value=>/^\d+$/u.test(value)?Number(value):({'一':1,'二':2,'两':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10,'十二':12}[value]??NaN);
+ const text=String(summary||'');
+ // Forbid unsupported model-performance claims as a replacement for this
+ // software result; the existing generic benchmark rules remain untouched.
+ return text.split(/[。！？!?\n]/u).some(sentence=>{
+  if(/假设|假想|如果|(?:^|[，,])若|预计|未来|建议|(?:计划|预期)(?:将|会|在|用|复现|验证|运行|渲染|测试)|先前工作|此前工作|旧工作|相关工作|其他(?:软件|工具|系统|方法)|另一(?:软件|工具|系统)|基线|引用|转述|否认|反驳|驳斥|是否|吗/u.test(sentence)
+   ||/(?:未|没有|无法|不)(?:曾|实际|能|会|再)?(?:复现|通过|匹配|保持一致|运行|渲染)|(?:说法|表述|结论)[^。]{0,30}(?:错误|不成立|不正确)/u.test(sentence))return false;
+  const clean=sentence.replace(/\s+/gu,''),stack='在锁定的'+result.os+result.architecture+'与Python'+result.pythonVersion+'组合上';
+  if(!clean.startsWith(stack))return false;
+  const m=/([0-9一二两三四五六七八九十]+)次全新进程渲染均复现了同一采样计划哈希与([0-9一二两三四五六七八九十]+)个预期输出哈希覆盖([0-9一二两三四五六七八九十]+)组采样参数与([0-9一二两三四五六七八九十]+)个固定MIDI信号，([0-9一二两三四五六七八九十]+)个负向用例与([0-9一二两三四五六七八九十]+)个包测试同样通过$/u.exec(clean.slice(stack.length).replace(/^，/u,''));
+  return Boolean(m&&[result.runs,result.outputs,result.configurations,result.midiSignals,result.negativeCases,result.packageTests].every((n,i)=>n===count(m[i+1])));
+ });
+}
+
+function classifyGenericSourceQuantitativeEvidence(sourceText, sentences = null) {
     if (!sourceText) return null;
     if (sourceHasMeasuredMetricTable(sourceText) || sourceCorpusCurationResult(sourceText)) return true;
     const values = Array.isArray(sentences) ? sentences : String(sourceText).trim()
@@ -1659,6 +1698,11 @@ function classifySourceQuantitativeEvidence(sourceText, sentences = null) {
             || hasCoreSummaryStatisticalResult(sentence)
                 && /\b(?:adjusted|mixed[- ]effects?|count\s+models?|interaction|groups?)\b|调整后|计数模型|交互项|组别/i.test(localContext);
     }) || hasSourceMeasuredLossComparison(values);
+}
+
+function classifySourceQuantitativeEvidence(sourceText, sentences = null) {
+    const generic = classifyGenericSourceQuantitativeEvidence(sourceText, sentences);
+    return generic === true || sourceSoftwareFunctionalValidationResult(sourceText) ? true : generic;
 }
 
 function stripDuplicatedLineFootnoteMarkers(text) {
@@ -1928,7 +1972,42 @@ function hasExplicitArtifactHandoff(summary) {
     return false;
 }
 
+// A concrete cached state producer and its adjacent causal consumer.
+function hasCachedCausalStateHandoff(summary) {
+    const sentences = String(summary || '').split(/[。！？!?；;\n]/u).map(s => s.trim()).filter(Boolean);
+    const denied = /(?:假设|假想|假定|设想|如果|若|可能|预计|预期|计划|未来|建议|讨论|提及|相关工作|独立方法|他人|另一(?:个|种|套)(?:模型|方法|系统)|其他(?:模型|方法|系统)|并非|并未|不是|没有|不能|尚未|未曾|否认|否定|反驳|驳斥|引用|引述|转述)|(?:不|未)(?:被|曾|实际|真正|直接|会|能|再|继续)*(?:压缩|形成|生成|输出|缓存|使用|消费|建模|读取|接收)|(?:丢弃|弃用|忽略)|(?:说法|表述|观点|判断)[^。；]{0,20}(?:错误|有误|不成立|不正确)|(?:错误|有误|不成立|不正确)(?:的)?(?:说法|表述|观点|判断)/u;
+    for (let i = 0; i + 1 < sentences.length; i++) {
+        const first = sentences[i], second = sentences[i + 1];
+        if (first.length > 320 || second.length > 320 || denied.test(first) || denied.test(second)) continue;
+        // The vector must explicitly become the cached causal state sequence.
+        if (!/编码器[^。；]{0,100}(?:压缩|汇聚|编码)为\s*(?:\d+\s*维)?向量[，,]\s*(?:形成|生成|得到)因果状态序列(?:并|[，,])缓存(?:供|用于)后续(?:时序)?建模(?:使用)?/u.test(first)) continue;
+        // An adjacent causal temporal model actually models the same state product.
+        if (/^(?:该|此)?因果(?:Conformer|Transformer|时序模型|时序网络)(?:沿|基于|使用)[^，,。；]{0,35}历史建模(?:该|此|这些)?状态(?:演变|序列)并(?:输出|预测|给出)(?:帧级|起始|事件|发生)?风险/u.test(second)) return true;
+    }
+    return false;
+}
+
+// A measured offline operating point has a concrete false-warning burden AND
+// explicitly lacks inference/deployment measurements. Cost absence alone fails.
+function hasOfflineOperationalBoundary(summary) {
+    const sentences = String(summary || '').split(/[。！？!?\n]/u).map(s => s.trim()).filter(Boolean);
+    const denied = /(?:假设|假想|假定|设想|如果|若|可能|预计|预期|计划|未来|建议|讨论|提及|相关工作|他人|另一(?:个|种|套)(?:模型|方法|系统)|其他(?:模型|方法|系统)|并非|并未|不是|没有|不能|尚未|未曾|否认|否定|反驳|驳斥|引用|引述|转述)|(?:说法|表述|观点|判断)[^。；]{0,20}(?:错误|有误|不成立|不正确)|(?:错误|有误|不成立|不正确)(?:的)?(?:说法|表述|观点|判断)/u;
+    const overclaim = /(?:证明|证实|验证|确认)[^。；]{0,25}(?:临床|干预|实际部署|在线部署)[^。；]{0,25}(?:有效|有效性|效果|可行|成功)|(?:已|已经|完成)[^。；]{0,12}(?:临床|干预|实际部署|在线部署)[^。；]{0,15}(?:验证|有效|成功)/u;
+    // A contradictory claim elsewhere cannot be masked by a qualifying sentence.
+    if (overclaim.test(String(summary || ''))) return false;
+    return sentences.some(sentence => {
+        if (sentence.length > 600 || denied.test(sentence)
+            || /(?:不|未)(?:曾|实际|真正|直接|仅|只|能|会)*在[^。；]{0,100}离线(?:仿真|模拟)评估/u.test(sentence)) return false;
+        if (!/在[^。；]{1,100}离线(?:仿真|模拟)评估中[，,]/u.test(sentence)) return false;
+        const operation = /\d+(?:\.\d+)?%报警占空比下[^，,。；]{1,40}(?:事件覆盖率|召回率|敏感性)\s*\d+(?:\.\d+)?%/u.test(sentence);
+        const burden = /验证集[^。；]{0,30}阈值下[^。；]{0,90}但每分钟(?:有|产生)\s*\d+(?:\.\d+)?\s*(?:个|次)?误报(?:段|警报|报警)/u.test(sentence);
+        const missingMeasurement = /原文(?:未报告|未披露)[^。；]{0,20}推理延迟(?:与|和|及)实际部署开销/u.test(sentence);
+        return operation && burden && missingMeasurement;
+    });
+}
+
 function hasNaturalScopedBoundary(summary) {
+    if (hasOfflineOperationalBoundary(summary)) return true;
     return String(summary || '').split(/[。！？!?\n]/u).some(sentence => {
         if (/(?:并非|不是|不能说|不能认为|不应认为|否认)[^，,；;]{0,30}(?:限于|仅在|未经)/u.test(sentence)) return false;
         if (/(?:未经证实|效果未知)[^。]{0,30}(?:说法|表述|观点|判断)[^。]{0,20}(?:不成立|不正确|有误|错误)/u.test(sentence)) return false;
@@ -1997,6 +2076,7 @@ function hasTypedNaturalProductHandoff(summary) {
 }
 
 function hasExplicitNaturalProductChain(summary) {
+    if (hasCachedCausalStateHandoff(summary)) return true;
     if (hasTypedNaturalProductHandoff(summary)) return true;
     if (hasExplicitEditedVectorHandoff(summary)) return true;
     if (hasGeneratedInputModelHeadChain(summary)) return true;
@@ -2268,18 +2348,33 @@ function validateCoreSummarySemanticContract(analysis, options = {}) {
         && /inter[- ]pattern transformation graph/i.test(sourceText)
         && hasScopedSymbolicDemonstration(summary);
     const corpusCurationResult = sourceCorpusCurationResult(sourceText);
-    const completeQuantitativeResult = quantitativeResultState.complete
-        || hasCompleteCorpusCurationResult(summary, corpusCurationResult);
+    const softwareFunctionalResult = sourceSoftwareFunctionalValidationResult(sourceText);
+    const softwareOnlyResult = softwareFunctionalResult
+        && classifyGenericSourceQuantitativeEvidence(sourceText, quantitativeSourceSentences) !== true;
+    const completeSoftwareResult = hasCompleteSoftwareFunctionalValidationResult(summary, softwareFunctionalResult);
+    const completeQuantitativeResult = softwareOnlyResult ? completeSoftwareResult
+        : quantitativeResultState.complete || hasCompleteCorpusCurationResult(summary, corpusCurationResult)
+            || completeSoftwareResult;
+    if (softwareOnlyResult && quantitativeResultState.complete) {
+        issues.push('纯软件功能验证来源不支持泛型基准性能结果；须保留同来源的完整性与重复性验证，不能编造准确率或模型性能对比');
+    }
+    if (softwareFunctionalResult && summary.includes(CORE_SUMMARY_RESULT_UNAVAILABLE)) {
+        issues.push('原文已有可核的软件完整性与重复性验证结果，不能笼统声明没有关键定量结果；它不等于模型性能、移植性或感知质量');
+    }
     if (corpusCurationResult && summary.includes(CORE_SUMMARY_RESULT_UNAVAILABLE)) {
         issues.push('原文已有可核的语料清洗质量结果，不能笼统声明没有关键定量结果；它们不等于模型性能实验');
     }
     if (sourceHasQuantitativeEvidence === true && !completeQuantitativeResult) {
-        issues.push('已有证据包含关键定量结果，但摘要没有写清比较对象、评测设置、指标、数值与方向'
+        if (softwareOnlyResult) {
+            issues.push('已有软件功能验证证据，但摘要没有按同一来源完整匹配运行环境、全新进程、计划与输出哈希、参数与信号组合、负向用例及包测试的关键定量结果');
+        } else {
+            issues.push('已有证据包含关键定量结果，但摘要没有写清比较对象、评测设置、指标、数值与方向'
             + `（最接近的同句量化候选缺少：${quantitativeResultState.missing.join('、')}）`
             + (quantitativeResultState.candidateIssues.length
                 ? `；含数值的句子还须逐句核对：${quantitativeResultState.candidateIssues.map(candidate =>
                     `第${candidate.sentenceNumber}句缺少${candidate.missing.join('、')}`).join('；')}。这些句子不一定都是结果，不得为运行参数编造指标或结论`
                 : ''));
+        }
     } else if (sourceHasQuantitativeEvidence === false
         && !scopedSymbolicDemonstration && !summary.includes(CORE_SUMMARY_RESULT_UNAVAILABLE)) {
         issues.push(`原文无可核定量结果时必须明确写“${CORE_SUMMARY_RESULT_UNAVAILABLE}”`);
@@ -2556,7 +2651,10 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
     if (options.skipSemantic !== true) {
         let semanticOptions = options;
         const hasExplicitSource = typeof options === 'string' || Object.hasOwn(options, 'sourceText');
-        if (!hasExplicitSource && (hasScopedSymbolicDemonstration(summary) || /(?<![A-Za-z0-9_])[A-Z][A-Za-z0-9_-]{0,39}(?:[ \t]+[A-Za-z][A-Za-z0-9_-]{0,39}){0,3}!(?=的)/u.test(summary))) {
+        if (!hasExplicitSource && (hasScopedSymbolicDemonstration(summary)
+            || /(?:采样计划|render[- ]plan)\s*(?:哈希|hash)/iu.test(summary)
+                && /(?:输出\s*哈希|output[- ]byte\s+hash)/iu.test(summary)
+            || /(?<![A-Za-z0-9_])[A-Z][A-Za-z0-9_-]{0,39}(?:[ \t]+[A-Za-z][A-Za-z0-9_-]{0,39}){0,3}!(?=的)/u.test(summary))) {
             try { semanticOptions = { ...options, sourceText: coreSummaryBoundMethodSource(paper) }; }
             catch (error) { return `核心摘要方法名的原封存来源未通过核验：${error.message}`; }
         }
@@ -2564,6 +2662,12 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
         if (semanticIssue) return semanticIssue;
     }
     if (stage.summarySha256 !== summarySha256) return '核心摘要正文的哈希与阶段记录不一致。';
+    // 已付响应的人工短语变更必须独立重放来源、原付费字节和 operator 证明。
+    // 即使调用方跳过语义检查，也不能把该变更当成模型原始输出。
+    if (stage.operatorLiteralCorrection !== undefined || stage.paidDiagnosticReplay !== undefined) {
+        const paidReplayIssue = require('./lib/paid-core-literal-correction').validateStage(paper);
+        if (paidReplayIssue) return paidReplayIssue;
+    }
     const structure = manifest?.stages?.structureRepair;
     let tagRecord;
     try { tagRecord = readTagStageRecord(manifest, paper?.analysisStageCheckpoints); }
@@ -2624,6 +2728,10 @@ function validateCoreSummaryStageBinding(paper, options = {}) {
         inputStructureProjectionSha256: stage.inputStructureProjectionSha256,
         outputStructureProjectionSha256: stage.outputStructureProjectionSha256
     };
+    if (stage.operatorLiteralCorrection !== undefined) {
+        bindingBody.operatorLiteralCorrection = stage.operatorLiteralCorrection;
+        bindingBody.paidDiagnosticReplay = stage.paidDiagnosticReplay;
+    }
     if (stage.bindingSha256 !== manualSha256(bindingBody)) return '核心摘要阶段的绑定哈希与重新计算的阶段记录哈希不一致。';
     if (scoring?.status !== MANUAL_COMPLETE_STATUS) {
         if (scoring?.coreSummaryInputAnalysisSha256 !== stage.outputAnalysisSha256
@@ -3553,6 +3661,8 @@ module.exports = {
     hasCoreSummaryQuantitativeEvidence,
     hasSourceMeasuredLossComparison,
     classifySourceQuantitativeEvidence,
+    sourceSoftwareFunctionalValidationResult,
+    hasCompleteSoftwareFunctionalValidationResult,
     coreSummarySentenceView,
     validateCoreSummarySemanticContract,
     hasExplicitNaturalProductChain,
@@ -3560,6 +3670,8 @@ module.exports = {
     hasExplicitArtifactHandoff,
     hasConditionalMetricDeltaDirection, hasGeneratedInputModelHeadChain,
     hasNaturalScopedBoundary,
+    hasCachedCausalStateHandoff,
+    hasOfflineOperationalBoundary,
     hasBoundFormerLatterComparison,
     hasBoundDisjointIntervalComparison,
     stripSymbolicPatternRelation,

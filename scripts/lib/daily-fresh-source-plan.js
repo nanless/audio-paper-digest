@@ -577,6 +577,7 @@ function createDailyAnalyzeFn(plan, options = {}) {
     if (typeof analyze !== 'function') fail('需要每日分析器');
     return async paper => {
         const result = await withDailyFreshPaperSource(plan, paper, () => analyze(paper, { coreSummaryDiagnosticId: options.coreSummaryDiagnosticIds?.[normalizedId(paper)],
+            paidCoreLiteralCorrection: options.paidCoreLiteralCorrectionHandles?.[normalizedId(paper)],
             resolvedReaderCandidate: options.resolvedReaderCandidates?.[normalizedId(paper)],
             naturalResourceProse: options.naturalResourceProse === true }), options);
         // 来源上下文会在引擎保存输出之前去掉图片字节和路径字段，避免分析器改动后，

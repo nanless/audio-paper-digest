@@ -163,7 +163,8 @@ npm run test:compat
 | `lib/conference-source-ledger.js` | Node 库：管理会议来源身份、四类文件 SHA 和审查证据；文件不可变保存，读取时重新核验本地来源。标题不能作为论文身份。 |
 | `lib/conference-source-upgrade.js` | 会议来源能力升级的身份和已有分析绑定检查。 |
 | `lib/conference-staging.js` | Node 库：将认证的会议入选集与人工复核的提取结果一一核验，生成导入清单和凭证；排除项和身份别名都不能进入。 |
-| `lib/core-summary-semantic-replay-cli.js` | Node 只读子进程：Python 发布检查核对封存原文 SHA 后，通过私有受限文件描述符复用当前分析侧的详细核心摘要语义规则；保留摘要阶段与正文 SHA 检查，禁止模型或网络请求。 |
+| `lib/core-summary-semantic-replay-cli.js` | Node 只读子进程：Python 发布检查核对封存原文 SHA 后，通过私有受限文件描述符复用当前分析侧的详细核心摘要语义规则；显式 stage-binding 模式重验完整核心阶段及原付费/operator 证明，禁止语义豁免、模型或网络请求。 |
+| `lib/paid-core-literal-correction.js` | 显式核心反馈＋唯一已付摘要 ID 的有界术语恢复：锁内绑定完整父稿、四源、原付费响应与真实任务授权，仅一次2–8汉字非数值literal；原响应及输出SHA保留，阶段另记operator来源，冷验重放，不授模型次数。 |
 | `lib/daily-fact-review.js` | Node 库：只读外部事实反馈，严格核验论文、日期、runId、四份封存来源SHA、当前核心摘要及全文SHA与逐字引文；锁内重读后将反馈传入正常完整主分析、摘要、Reader或标签模型阶段；全文纠错先保存原付费记录，并拒绝无反馈重生成，不写手工成功正文。 |
 | `lib/daily-fetch-boundary.js` | Node 库：从已核验远端日更及受控归档确定补抓窗口，读取正式页字段去重；见边界说明。 |
 | `lib/daily-fresh-source-plan.js` | Node 库：日更筛选结束后，为每篇 arXiv 论文封存本次官方 TXT、PDF 和清单；分析只读取这组文件，图片只在当前请求里临时准备。 |

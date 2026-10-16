@@ -120,6 +120,42 @@ class CoreSummarySemanticReplayTests(unittest.TestCase):
             self.assertEqual(publish._source_bound_core_summary_semantic_issue(legacy, text),
                              publish._detailed_core_summary_semantic_issue(text))
 
+    def test_paid_stage_dispatch_never_reuses_semantic_cache(self):
+        # Synthetic receipt tests dispatch only; no claim of valid paid provenance.
+        stage = self.paper['analysisManifest']['stages']['coreSummaryRepair']
+        stage['paidDiagnosticReplay'] = {'id': 'synthetic-dispatch-only'}
+        calls = []
+        def inspect(args, **kwargs):
+            fd = kwargs['pass_fds'][0]
+            payload = json.loads(os.pread(fd, os.fstat(fd).st_size, 0))
+            self.assertEqual(set(payload), {'mode', 'paper', 'sourceText'})
+            self.assertEqual(payload['mode'], 'stage-binding')
+            self.assertEqual(payload['paper'], self.paper)
+            calls.append(payload)
+            return SimpleNamespace(returncode=0, timed_out=False, output_truncated=False, stdout='{"issue":null}')
+        with mock.patch.object(publish, '_run_bounded_subprocess', side_effect=inspect):
+            self.assertIsNone(publish._source_bound_core_summary_semantic_issue(self.paper, self.summary))
+            self.assertIsNone(publish._source_bound_core_summary_semantic_issue(self.paper, self.summary))
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(publish._CORE_SUMMARY_NODE_REPLAY_CACHE, {})
+
+    def test_operator_binding_hash_matches_node_fields_and_cannot_drop_whole_receipt(self):
+        # Only the Python binding calculation is isolated here; real operator
+        # provenance is checked by the source-bound public Node tests.
+        stage = self.paper['analysisManifest']['stages']['coreSummaryRepair']
+        stage['operatorLiteralCorrection'] = {'contract': 'synthetic-binding-only'}
+        stage['paidDiagnosticReplay'] = {'operatorLiteralCorrectionRequired': True}
+        keys = ('contractVersion', 'inputAnalysisSha256', 'outputAnalysisSha256', 'inputSummarySha256',
+                'summarySha256', 'inputStructureProjectionSha256', 'outputStructureProjectionSha256',
+                'operatorLiteralCorrection', 'paidDiagnosticReplay')
+        stage['bindingSha256'] = publish._stable_json_sha256({key: stage[key] for key in keys})
+        with mock.patch.object(publish, '_source_bound_core_summary_semantic_issue', return_value=None):
+            self.assertEqual(publish._validated_detailed_core_summary(self.paper, self.paper['parsed']), self.summary)
+            del stage['operatorLiteralCorrection']
+            del stage['paidDiagnosticReplay']
+            with self.assertRaisesRegex(PublishDataValidationError, '绑定 SHA'):
+                publish._validated_detailed_core_summary(self.paper, self.paper['parsed'])
+
     def test_each_node_implementation_dependency_participates_in_exact_cache_key(self):
         original_hash = publish._sha256_file
         original_run = publish._run_bounded_subprocess

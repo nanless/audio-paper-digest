@@ -100,6 +100,17 @@ async function reanalyzeSelected(ids, options = {}) {
     }
     if (coreFeedbacks.size && [...idSet].some(id => !coreFeedbacks.has(id)))
         throw new Error('独立核心纠错须覆盖本次所有选定论文，不能混入普通主文重分析');
+    const paidCoreLiterals = new Map(), paidCoreLiteralHandles = new Map();
+    if (options.paidCoreLiteralCorrectionFiles !== undefined && !Array.isArray(options.paidCoreLiteralCorrectionFiles))
+        throw new Error('已付核心术语修正须提供显式记录路径数组');
+    for (const file of options.paidCoreLiteralCorrectionFiles || []) {
+        const checked = require('./lib/paid-core-literal-correction').readRecord(file);
+        const record = checked.record.value;
+        if (!coreFeedbacks.has(record.paperId) || paidCoreLiterals.has(record.paperId)
+            || options.coreSummaryDiagnosticIds?.[record.paperId] !== record.diagnosticId)
+            throw new Error('已付核心术语修正须同时绑定唯一选定核心反馈与原付费ID');
+        paidCoreLiterals.set(record.paperId, { file, sha256: fileSha(file) });
+    }
     const readCoreLocked = paper => {
         const entry = coreFeedbacks.get(normalizedId(paper));
         if (!entry) return null;
@@ -266,6 +277,24 @@ async function reanalyzeSelected(ids, options = {}) {
             if (coreRecovery) latest = require('./deep-analyzer').restoreCompletedCoreInput(latest,
                 dailySourcePlan, readCoreLocked(latest)?.feedback, coreRecovery);
             readCoreLocked(latest);
+            const paidLiteral = paidCoreLiterals.get(normalizedId(latest));
+            if (paidLiteral) {
+                if (fileSha(paidLiteral.file) !== paidLiteral.sha256) throw new Error('已付核心术语记录在运行中变化');
+                if (firstPreparation) {
+                    const literalApi = require('./lib/paid-core-literal-correction');
+                    const completeCore = latest.analysisManifest?.stages?.coreSummaryRepair;
+                    if (completeCore?.status === 'complete' && completeCore.operatorLiteralCorrection?.recordFile === path.resolve(paidLiteral.file)
+                        && completeCore.operatorLiteralCorrection.recordFileSha256 === paidLiteral.sha256) {
+                        const checkpoint = latest.analysisStageCheckpoints?.coreSummaryRepair;
+                        if (typeof checkpoint !== 'string' || literalApi.validateStage({ ...latest, analysis: checkpoint }))
+                            throw new Error('已修核心检查点不能按原付费术语记录冷重放');
+                        // A later score/Reader failure keeps the actual completed core;
+                        // no old-parent installation or second literal handle is needed.
+                    } else paidCoreLiteralHandles.set(normalizedId(latest), literalApi.prepare(
+                        paidLiteral.file, dailySourcePlan, latest, readCoreLocked(latest).feedback,
+                        options.coreSummaryDiagnosticIds[normalizedId(latest)]));
+                }
+            }
             readReaderLocked(latest);
             if (fullStageOptions) {
                 const feedback = feedbacks.get(normalizedId(latest));
@@ -310,6 +339,7 @@ async function reanalyzeSelected(ids, options = {}) {
         saveInterval: 0,
         analyzeFn: async paper => {
             const analyze = () => dailyFreshSources.createDailyAnalyzeFn(dailySourcePlan, { coreSummaryDiagnosticIds: options.coreSummaryDiagnosticIds,
+                paidCoreLiteralCorrectionHandles: Object.fromEntries(paidCoreLiteralHandles),
                 resolvedReaderCandidates: options.resolvedReaderCandidates, naturalResourceProse: options.naturalResourceProse === true })(paper);
             const bound = boundFeedbacks.get(normalizedId(paper));
             const core = readCoreLocked(paper);

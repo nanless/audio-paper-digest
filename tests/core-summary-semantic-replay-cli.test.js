@@ -48,6 +48,14 @@ test('桥拒公开文件、硬链、16MiB超限、字段篡改、沙箱及实际
     }
     assert.match(execute(input, { networkProbe: true }).value.issue, /forbids network access/);
 });
+test('显式阶段模式调用完整公共绑定检查，拒绝缺阶段及语义豁免字段', () => {
+    const input = { mode: 'stage-binding', paper: {}, sourceText: '' };
+    assert.deepEqual(execute(input), { status: 0, value: {
+        issue: contract.validateCoreSummaryStageBinding({}, { sourceText: '' }) } });
+    assert.match(execute(input).value.issue, /阶段记录缺失/);
+    for (const bad of [{ ...input, skipSemantic: true }, { ...input, mode: 'approved' },
+        { ...input, paper: [] }, { ...input, summary: '替代摘要' }]) assert.equal(execute(bad).status, 1);
+});
 test('真实11篇Python旧语义误拒摘要与当前Node source-bound规则完全一致，正式文件不改', { skip: !realAudit }, () => {
     const auditBytes = fs.readFileSync(realAudit), audit = JSON.parse(auditBytes);
     assert.equal(audit.length, 11);
