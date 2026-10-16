@@ -8403,6 +8403,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-dom-span-projection.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-parent-upstream-preflight.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-resource-input-admission.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-next-request-plan.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-saved-feedback-input-continuity.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/daily-reader-operator-correction.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-pdf-cell-evidence.js'), 'utf8'),
@@ -8951,6 +8952,13 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     if (completedAttempts >= attemptLimit
         || !changedValidationWithinOriginalBudget
             && (noProgress >= 2 || validationFailureStreak >= 2)) {
+        const plan = require('./lib/reader-next-request-plan').buildReaderNextRequestPlan({
+            paperId: getPaperArxivId(paper), identitySha256: repair.hashDraft(identity),
+            candidateSha256: candidate ? repair.hashDraft(candidate) : null,
+            attempts: completedAttempts, fullAttempts, transportFailures, noProgress, validationFailureStreak,
+            attemptLimit, maxFullResponses: explicitRound?.maxFullResponses ?? 2,
+            changedValidationWithinOriginalBudget, budgetOnly: true, issues: currentIssues });
+        console.log(`    [reader-next-request-plan] ${JSON.stringify(plan)}`);
         if (mechanicalNoFigureCleanupChanged) {
             const latestFailure = repair.loadFailedCandidate(candidateDirectory, identity) || {};
             repair.saveFailedCandidate(candidateDirectory, identity, {
@@ -8958,8 +8966,7 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 issues: currentIssues
             });
         }
-        throw readerRepairStopped('READER_REPAIR_ATTEMPTS_EXHAUSTED',
-            '长文草稿的修复次数已用完或连续未改善，已保留恢复记录；继续前须处理失败原因。');
+        throw readerRepairStopped(plan.blocker.code, plan.blocker.message);
     }
     for (let attempt = completedAttempts + 1; attempt <= attemptLimit; attempt++) {
         // 构造下一个提示词之前，先做一次有上限、绑定具体问题的恢复归一化。少了这一遍，
@@ -9018,6 +9025,16 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
         } : candidate && !sourceBindingNeedsFullRetry
             ? proposedRepairContext || withReaderSourceTableEvidence(() => repair.buildRepairContext(candidate, currentIssues,
                 sourceEvidence, options.sourceText, repairOptions)) : null;
+        const requestPlanState = () => ({
+            paperId: getPaperArxivId(paper), identitySha256: repair.hashDraft(identity),
+            candidateSha256: candidate ? repair.hashDraft(candidate) : null,
+            attempts: attempt - 1, recoveredAttempts: completedAttempts,
+            fullAttempts, transportFailures, noProgress, validationFailureStreak,
+            attemptLimit, maxFullResponses: explicitRound?.maxFullResponses ?? 2,
+            changedValidationWithinOriginalBudget, nextContentAttempt: attempt,
+            sourceBindingNeedsFullRetry, repairContext, issues: currentIssues });
+        const nextRequestPlan = require('./lib/reader-next-request-plan').buildReaderNextRequestPlan(requestPlanState());
+        console.log(`    [reader-next-request-plan] ${JSON.stringify(nextRequestPlan)}`);
         if (repairContext && repairContext.targets.length === 0
             && currentIssues.some(issue => repair.classifyTableBindingOrderIssue(issue).ignoreMessageForRepair
                 || issue?.code === 'reader_source_table_unrenderable' && issue.diagnosticOnly !== true)) {
@@ -9053,9 +9070,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             throw readerRepairStopped('READER_RESOURCE_LOCAL_NO_SAFE_TARGET', '资源局部修订缺少安全补丁范围，保留已签Reader与现有付费记录');
         }
         if (sourceBindingNeedsFullRetry) previousDraft = JSON.stringify(candidate);
-        if (!repairContext && fullAttempts >= (explicitRound?.maxFullResponses ?? 2)) {
-            throw readerRepairStopped('READER_FULL_ATTEMPTS_EXHAUSTED',
-                lastError?.message || '长文全文生成次数已用完，现有草稿尚不能按当前允许范围修复；已保留失败记录。', lastError);
+        if (nextRequestPlan.blocker) {
+            throw readerRepairStopped(nextRequestPlan.blocker.code,
+                nextRequestPlan.blocker.code === 'READER_FULL_ATTEMPTS_EXHAUSTED'
+                    ? lastError?.message || nextRequestPlan.blocker.message : nextRequestPlan.blocker.message, lastError);
         }
         let conceptTermsContext = repairContext && !options.readerFactLocalRevision && !options.resourceLocalRevision
             ? repair.buildConceptTermsRepairContext(candidate, currentIssues, options.sourceText || '') : null;
@@ -9073,6 +9091,9 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 .map(pointer => ({ path: pointer, value: candidate.conceptBridges[Number(pointer.split('/').at(-1))],
                     oldSha256: repair.hashDraft(candidate.conceptBridges[Number(pointer.split('/').at(-1))]) }));
             repairContext.figureOrdinals = [];
+            const finalPlan = require('./lib/reader-next-request-plan').buildReaderNextRequestPlan({
+                ...requestPlanState(), phase: 'dispatch_ready' });
+            console.log(`    [reader-next-request-plan] ${JSON.stringify(finalPlan)}`);
         }
         if (revalidatedPatchOnly && !repair.isSafeExistingReaderPatchContext(
             candidate, repairContext, sourceBindingNeedsFullRetry, currentIssues
