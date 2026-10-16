@@ -1360,6 +1360,25 @@ function conceptBridgeTermsDiagnostic(terms, index) {
     return invalid.length ? `${invalid.join('；')}。请按原文解释该术语或符号实际指代的概念；单字母符号须连同所指概念写清，保留原符号、数学含义与已有解释，不凭空换成另一术语。` : null;
 }
 
+// The full parser has already rejected this exact workflow prefix. A unique
+// existing body gives that same rejection a repair path; detection is unchanged.
+function uniqueWorkflowLeakBodyPath(draft, parserError) {
+    if (!(parserError instanceof Error) || !Array.isArray(draft?.sections)) return null;
+    const known = /^读者文章泄漏了流程或证据元话语：(图后解释(?:需要|必须|紧扣))$/u.exec(parserError.message);
+    if (!known) return null;
+    const matches = [];
+    for (const [index, section] of draft.sections.entries()) {
+        if (typeof section?.body !== 'string') continue;
+        let cursor = 0;
+        while ((cursor = section.body.indexOf(known[1], cursor)) !== -1) {
+            matches.push('/sections/' + index + '/body');
+            cursor += known[1].length;
+            if (matches.length > 1) return null;
+        }
+    }
+    return matches.length === 1 ? matches[0] : null;
+}
+
 function collectDraftIssues(draft, parserError, options = {}) {
     const issues = [];
     const languageIssues = collectReaderLanguageIssues(draft);
@@ -1386,7 +1405,7 @@ function collectDraftIssues(draft, parserError, options = {}) {
                 requiredCount: parserError.requiredCount, actualCount: parserError.actualCount,
                 message: String(parserError.message || parserError) });
         } else {
-            issues.push({ path: null, message: String(parserError.message || parserError),
+            issues.push({ path: uniqueWorkflowLeakBodyPath(draft, parserError), message: String(parserError.message || parserError),
                 ...(parserError.renderedTableDiagnostics
                     ? { renderedTableDiagnostics: parserError.renderedTableDiagnostics } : {}) });
         }

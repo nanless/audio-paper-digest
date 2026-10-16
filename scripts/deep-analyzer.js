@@ -4853,7 +4853,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             || bounded(new RegExp('(?:没有|尚未|并未)(?:明确)?(?:声称|声明)' + list + release, 'gu'))
             || bounded(new RegExp('不(?:作|做)' + list + '(?:开源|公开)(?:与|和)可用(?:断言|声明)', 'gu'))
             || bounded(/(?:代码仓库|作者仓库|模型权重|权重|数据集|资源)的可达性未在[^。！？!?；;，,]{1,20}确认为可用/gu)) return true;
-        const property = '(?:代码(?:开源|公开|可得|可跑|可运行)|开源代码|(?:模型)?权重可下载|(?:端到端)?系统可(?:一键)?运行|演示可听|开源|可运行)';
+        const property = '(?:代码(?:开源|公开|可得|可跑|可运行)|开源代码|(?:模型)?权重(?:可下载|下载)|(?:端到端)?系统可(?:一键)?运行|演示可听|开源|可运行)';
         const properties = property + '(?:(?:、|与|和)' + property + '){1,3}';
         // Bare, owner-free concepts followed by an explicit distinction or
         // pending state are not present availability. Ownership is not optional.

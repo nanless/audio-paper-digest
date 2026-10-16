@@ -1,0 +1,1064 @@
+{
+  "paperId": "2610.20327",
+  "candidateSha256": "b304904ec8f73e8f49a0a6b3aea26e265615378408568dd74b5fb4732b21d6ca",
+  "originalBudget": {
+    "attempts": 4,
+    "fullAttempts": 2,
+    "noProgress": 1,
+    "validationFailureStreak": 2
+  },
+  "originalFailureSignatures": {
+    "failureSignature": "4a3679b7fdcf173a4c425e48000a9b45fdeb382e440ff9fd030dca2e2d2c6169",
+    "validationFailureSignature": "reader-validation-v2:{\"gateSha256\":\"94e3f0a6a0487b95c152be56f2234b0f238b6f925e937c7e9ca0d24ec042f9de\",\"deficits\":[]}"
+  },
+  "draft": {
+    "version": 3,
+    "readerTitle": "印度二十二种语言里谁在何时说话：Anuvani-Diarization 的零样本适配与标注口径分析",
+    "oneSentenceThesis": "论文在全部22种印度 scheduled 语言的1164段录音上零样本比较九个说话人日志系统，用印度电话银标签适配分割网络得到时长加权16.78%的错误率，并证明话语内停顿是否切分这一标注口径能带来1.9到4.1个百分点的系统性差异。",
+    "conceptBridges": [
+      {
+        "terms": [
+          "说话人日志",
+          "日志错误率"
+        ],
+        "sectionKind": "background",
+        "marker": "[[CONCEPT_BRIDGE_1]]",
+        "explanation": "说话人日志指输入一段多人会话音频，输出每个时刻谁在说话的时间线；日志错误率是把漏检语音、虚警语音和说话人混淆三段时间加总后除以参考语音总时长，越低越好，它把有没有声和是谁的声音放在同一把尺子上衡量，因此后文讨论停顿切分会直接影响漏检和虚警的划分。"
+      },
+      {
+        "terms": [
+          "端到端分割",
+          "向量聚类"
+        ],
+        "sectionKind": "method_overview",
+        "marker": "[[CONCEPT_BRIDGE_2]]",
+        "explanation": "端到端分割指神经网络在短窗内直接逐帧判断当前有哪几个局部说话人在发声，天然能处理重叠；向量聚类指把每个局部说话人的纯净帧做成声纹向量，再跨窗口聚成全局说话人，二者搭配是因为前者只管局部谁在响，后者解决跨越长时间后同一人前后对应，组合后才能处理任意时长和任意人数的录音。"
+      },
+      {
+        "terms": [
+          "幂集分类",
+          "重叠"
+        ],
+        "sectionKind": "component",
+        "marker": "[[CONCEPT_BRIDGE_3]]",
+        "explanation": "幂集分类是把四个局部说话人所有可能的同时发声子集编码成16个互斥类别，每帧只选一类；重叠指同一时刻不止一人在说话，传统一次只给一人的做法无法表示它，用幂集后重叠只是其中一类输出，模型在16秒窗内最多区分四个同时说话的局部身份，更多全局人数靠后续聚类展开。"
+      },
+      {
+        "terms": [
+          "WavLM编码器",
+          "Conformer头"
+        ],
+        "sectionKind": "training",
+        "marker": "[[CONCEPT_BRIDGE_4]]",
+        "explanation": "WavLM编码器是自监督预训练的语音特征提取器，负责把16kHz波形变成能区分音色和内容的帧表示；Conformer头是堆在编码器之上的四个同时看局部卷积和全局自注意力的块，负责把特征变成每20毫秒一类的分割判决，适配时两者参数一起微调，是因为印度会话的信道和口音同时改变了底层声学和局部轮转模式。"
+      },
+      {
+        "terms": [
+          "话语级标注",
+          "词对齐标注"
+        ],
+        "sectionKind": "ablation",
+        "marker": "[[CONCEPT_BRIDGE_5]]",
+        "explanation": "话语级标注指转写员按一句话一段来切分，话语内部几百毫秒的停顿不切断；词对齐标注指按强制对齐把边界放在声学停顿处，话语内停顿会被切开，前者适合按说话人归属整理文字，后者适合做声学分析，同一套声学判决在两种口径下漏检和虚警会反向变化，所以不存在一种切分能同时在两种基准上最优。"
+      }
+    ],
+    "figurePlacements": [
+      {
+        "figureOrdinal": 2,
+        "targetKind": "result",
+        "marker": "[[FIGURE_2]]",
+        "focusPoints": [
+          "先看横轴是时长加权日志错误率，数值越小越靠左越好",
+          "再对比最上方两条：联合转写服务与本文系统的位置关系",
+          "最后从上往下数本文实际运行的九个系统内部排序"
+        ]
+      },
+      {
+        "figureOrdinal": 3,
+        "targetKind": "ablation",
+        "marker": "[[FIGURE_3]]",
+        "focusPoints": [
+          "左图先看参考与四个系统在小于0.5秒同说话人间隙占比上的差距",
+          "右图看横轴桥接阈值增大时四条实线先降后升的谷底位置",
+          "再看虚线代表的电话转写口径适配后整体抬高的位置"
+        ]
+      },
+      {
+        "figureOrdinal": 5,
+        "targetKind": "result",
+        "marker": "[[FIGURE_5]]",
+        "focusPoints": [
+          "左图沿2到8人看四条折线随人数增加的上扬趋势和本文曲线位置",
+          "右图按近场、远场、野外三组比较四组柱子的高低",
+          "注意野外组是唯一本文系统不是最低的一组"
+        ]
+      }
+    ],
+    "tableBindings": [
+      {
+        "tableIndex": 1,
+        "sourceType": "artifact_table",
+        "sourceTableOrdinal": 3,
+        "cellBindings": [
+          {
+            "renderedRow": 0,
+            "renderedColumn": 0,
+            "sourceRow": 0,
+            "sourceColumn": 0
+          },
+          {
+            "renderedRow": 0,
+            "renderedColumn": 1,
+            "sourceRow": 0,
+            "sourceColumn": 1
+          },
+          {
+            "renderedRow": 0,
+            "renderedColumn": 2,
+            "sourceRow": 0,
+            "sourceColumn": 2
+          },
+          {
+            "renderedRow": 0,
+            "renderedColumn": 3,
+            "sourceRow": 0,
+            "sourceColumn": 3
+          },
+          {
+            "renderedRow": 0,
+            "renderedColumn": 4,
+            "sourceRow": 0,
+            "sourceColumn": 4
+          },
+          {
+            "renderedRow": 0,
+            "renderedColumn": 5,
+            "sourceRow": 0,
+            "sourceColumn": 5
+          },
+          {
+            "renderedRow": 0,
+            "renderedColumn": 6,
+            "sourceRow": 0,
+            "sourceColumn": 6
+          },
+          {
+            "renderedRow": 0,
+            "renderedColumn": 7,
+            "sourceRow": 0,
+            "sourceColumn": 7
+          },
+          {
+            "renderedRow": 0,
+            "renderedColumn": 8,
+            "sourceRow": 0,
+            "sourceColumn": 8
+          },
+          {
+            "renderedRow": 0,
+            "renderedColumn": 9,
+            "sourceRow": 0,
+            "sourceColumn": 9
+          },
+          {
+            "renderedRow": 0,
+            "renderedColumn": 10,
+            "sourceRow": 0,
+            "sourceColumn": 10
+          },
+          {
+            "renderedRow": 1,
+            "renderedColumn": 0,
+            "sourceRow": 1,
+            "sourceColumn": 0
+          },
+          {
+            "renderedRow": 1,
+            "renderedColumn": 1,
+            "sourceRow": 1,
+            "sourceColumn": 1
+          },
+          {
+            "renderedRow": 1,
+            "renderedColumn": 2,
+            "sourceRow": 1,
+            "sourceColumn": 2
+          },
+          {
+            "renderedRow": 1,
+            "renderedColumn": 3,
+            "sourceRow": 1,
+            "sourceColumn": 3
+          },
+          {
+            "renderedRow": 1,
+            "renderedColumn": 4,
+            "sourceRow": 1,
+            "sourceColumn": 4
+          },
+          {
+            "renderedRow": 1,
+            "renderedColumn": 5,
+            "sourceRow": 1,
+            "sourceColumn": 5
+          },
+          {
+            "renderedRow": 1,
+            "renderedColumn": 6,
+            "sourceRow": 1,
+            "sourceColumn": 6
+          },
+          {
+            "renderedRow": 1,
+            "renderedColumn": 7,
+            "sourceRow": 1,
+            "sourceColumn": 7
+          },
+          {
+            "renderedRow": 1,
+            "renderedColumn": 8,
+            "sourceRow": 1,
+            "sourceColumn": 8
+          },
+          {
+            "renderedRow": 1,
+            "renderedColumn": 9,
+            "sourceRow": 1,
+            "sourceColumn": 9
+          },
+          {
+            "renderedRow": 1,
+            "renderedColumn": 10,
+            "sourceRow": 1,
+            "sourceColumn": 10
+          },
+          {
+            "renderedRow": 2,
+            "renderedColumn": 0,
+            "sourceRow": 2,
+            "sourceColumn": 0
+          },
+          {
+            "renderedRow": 2,
+            "renderedColumn": 1,
+            "sourceRow": 2,
+            "sourceColumn": 1
+          },
+          {
+            "renderedRow": 2,
+            "renderedColumn": 2,
+            "sourceRow": 2,
+            "sourceColumn": 2
+          },
+          {
+            "renderedRow": 2,
+            "renderedColumn": 3,
+            "sourceRow": 2,
+            "sourceColumn": 3
+          },
+          {
+            "renderedRow": 2,
+            "renderedColumn": 4,
+            "sourceRow": 2,
+            "sourceColumn": 4
+          },
+          {
+            "renderedRow": 2,
+            "renderedColumn": 5,
+            "sourceRow": 2,
+            "sourceColumn": 5
+          },
+          {
+            "renderedRow": 2,
+            "renderedColumn": 6,
+            "sourceRow": 2,
+            "sourceColumn": 6
+          },
+          {
+            "renderedRow": 2,
+            "renderedColumn": 7,
+            "sourceRow": 2,
+            "sourceColumn": 7
+          },
+          {
+            "renderedRow": 2,
+            "renderedColumn": 8,
+            "sourceRow": 2,
+            "sourceColumn": 8
+          },
+          {
+            "renderedRow": 2,
+            "renderedColumn": 9,
+            "sourceRow": 2,
+            "sourceColumn": 9
+          },
+          {
+            "renderedRow": 2,
+            "renderedColumn": 10,
+            "sourceRow": 2,
+            "sourceColumn": 10
+          },
+          {
+            "renderedRow": 3,
+            "renderedColumn": 0,
+            "sourceRow": 3,
+            "sourceColumn": 0
+          },
+          {
+            "renderedRow": 3,
+            "renderedColumn": 1,
+            "sourceRow": 3,
+            "sourceColumn": 1
+          },
+          {
+            "renderedRow": 3,
+            "renderedColumn": 2,
+            "sourceRow": 3,
+            "sourceColumn": 2
+          },
+          {
+            "renderedRow": 3,
+            "renderedColumn": 3,
+            "sourceRow": 3,
+            "sourceColumn": 3
+          },
+          {
+            "renderedRow": 3,
+            "renderedColumn": 4,
+            "sourceRow": 3,
+            "sourceColumn": 4
+          },
+          {
+            "renderedRow": 3,
+            "renderedColumn": 5,
+            "sourceRow": 3,
+            "sourceColumn": 5
+          },
+          {
+            "renderedRow": 3,
+            "renderedColumn": 6,
+            "sourceRow": 3,
+            "sourceColumn": 6
+          },
+          {
+            "renderedRow": 3,
+            "renderedColumn": 7,
+            "sourceRow": 3,
+            "sourceColumn": 7
+          },
+          {
+            "renderedRow": 3,
+            "renderedColumn": 8,
+            "sourceRow": 3,
+            "sourceColumn": 8
+          },
+          {
+            "renderedRow": 3,
+            "renderedColumn": 9,
+            "sourceRow": 3,
+            "sourceColumn": 9
+          },
+          {
+            "renderedRow": 3,
+            "renderedColumn": 10,
+            "sourceRow": 3,
+            "sourceColumn": 10
+          },
+          {
+            "renderedRow": 4,
+            "renderedColumn": 0,
+            "sourceRow": 4,
+            "sourceColumn": 0
+          },
+          {
+            "renderedRow": 4,
+            "renderedColumn": 1,
+            "sourceRow": 4,
+            "sourceColumn": 1
+          },
+          {
+            "renderedRow": 4,
+            "renderedColumn": 2,
+            "sourceRow": 4,
+            "sourceColumn": 2
+          },
+          {
+            "renderedRow": 4,
+            "renderedColumn": 3,
+            "sourceRow": 4,
+            "sourceColumn": 3
+          },
+          {
+            "renderedRow": 4,
+            "renderedColumn": 4,
+            "sourceRow": 4,
+            "sourceColumn": 4
+          },
+          {
+            "renderedRow": 4,
+            "renderedColumn": 5,
+            "sourceRow": 4,
+            "sourceColumn": 5
+          },
+          {
+            "renderedRow": 4,
+            "renderedColumn": 6,
+            "sourceRow": 4,
+            "sourceColumn": 6
+          },
+          {
+            "renderedRow": 4,
+            "renderedColumn": 7,
+            "sourceRow": 4,
+            "sourceColumn": 7
+          },
+          {
+            "renderedRow": 4,
+            "renderedColumn": 8,
+            "sourceRow": 4,
+            "sourceColumn": 8
+          },
+          {
+            "renderedRow": 4,
+            "renderedColumn": 9,
+            "sourceRow": 4,
+            "sourceColumn": 9
+          },
+          {
+            "renderedRow": 4,
+            "renderedColumn": 10,
+            "sourceRow": 4,
+            "sourceColumn": 10
+          },
+          {
+            "renderedRow": 5,
+            "renderedColumn": 0,
+            "sourceRow": 5,
+            "sourceColumn": 0
+          },
+          {
+            "renderedRow": 5,
+            "renderedColumn": 1,
+            "sourceRow": 5,
+            "sourceColumn": 1
+          },
+          {
+            "renderedRow": 5,
+            "renderedColumn": 2,
+            "sourceRow": 5,
+            "sourceColumn": 2
+          },
+          {
+            "renderedRow": 5,
+            "renderedColumn": 3,
+            "sourceRow": 5,
+            "sourceColumn": 3
+          },
+          {
+            "renderedRow": 5,
+            "renderedColumn": 4,
+            "sourceRow": 5,
+            "sourceColumn": 4
+          },
+          {
+            "renderedRow": 5,
+            "renderedColumn": 5,
+            "sourceRow": 5,
+            "sourceColumn": 5
+          },
+          {
+            "renderedRow": 5,
+            "renderedColumn": 6,
+            "sourceRow": 5,
+            "sourceColumn": 6
+          },
+          {
+            "renderedRow": 5,
+            "renderedColumn": 7,
+            "sourceRow": 5,
+            "sourceColumn": 7
+          },
+          {
+            "renderedRow": 5,
+            "renderedColumn": 8,
+            "sourceRow": 5,
+            "sourceColumn": 8
+          },
+          {
+            "renderedRow": 5,
+            "renderedColumn": 9,
+            "sourceRow": 5,
+            "sourceColumn": 9
+          },
+          {
+            "renderedRow": 5,
+            "renderedColumn": 10,
+            "sourceRow": 5,
+            "sourceColumn": 10
+          },
+          {
+            "renderedRow": 6,
+            "renderedColumn": 0,
+            "sourceRow": 6,
+            "sourceColumn": 0
+          },
+          {
+            "renderedRow": 6,
+            "renderedColumn": 1,
+            "sourceRow": 6,
+            "sourceColumn": 1
+          },
+          {
+            "renderedRow": 6,
+            "renderedColumn": 2,
+            "sourceRow": 6,
+            "sourceColumn": 2
+          },
+          {
+            "renderedRow": 6,
+            "renderedColumn": 3,
+            "sourceRow": 6,
+            "sourceColumn": 3
+          },
+          {
+            "renderedRow": 6,
+            "renderedColumn": 4,
+            "sourceRow": 6,
+            "sourceColumn": 4
+          },
+          {
+            "renderedRow": 6,
+            "renderedColumn": 5,
+            "sourceRow": 6,
+            "sourceColumn": 5
+          },
+          {
+            "renderedRow": 6,
+            "renderedColumn": 6,
+            "sourceRow": 6,
+            "sourceColumn": 6
+          },
+          {
+            "renderedRow": 6,
+            "renderedColumn": 7,
+            "sourceRow": 6,
+            "sourceColumn": 7
+          },
+          {
+            "renderedRow": 6,
+            "renderedColumn": 8,
+            "sourceRow": 6,
+            "sourceColumn": 8
+          },
+          {
+            "renderedRow": 6,
+            "renderedColumn": 9,
+            "sourceRow": 6,
+            "sourceColumn": 9
+          },
+          {
+            "renderedRow": 6,
+            "renderedColumn": 10,
+            "sourceRow": 6,
+            "sourceColumn": 10
+          },
+          {
+            "renderedRow": 7,
+            "renderedColumn": 0,
+            "sourceRow": 7,
+            "sourceColumn": 0
+          },
+          {
+            "renderedRow": 7,
+            "renderedColumn": 1,
+            "sourceRow": 7,
+            "sourceColumn": 1
+          },
+          {
+            "renderedRow": 7,
+            "renderedColumn": 2,
+            "sourceRow": 7,
+            "sourceColumn": 2
+          },
+          {
+            "renderedRow": 7,
+            "renderedColumn": 3,
+            "sourceRow": 7,
+            "sourceColumn": 3
+          },
+          {
+            "renderedRow": 7,
+            "renderedColumn": 4,
+            "sourceRow": 7,
+            "sourceColumn": 4
+          },
+          {
+            "renderedRow": 7,
+            "renderedColumn": 5,
+            "sourceRow": 7,
+            "sourceColumn": 5
+          },
+          {
+            "renderedRow": 7,
+            "renderedColumn": 6,
+            "sourceRow": 7,
+            "sourceColumn": 6
+          },
+          {
+            "renderedRow": 7,
+            "renderedColumn": 7,
+            "sourceRow": 7,
+            "sourceColumn": 7
+          },
+          {
+            "renderedRow": 7,
+            "renderedColumn": 8,
+            "sourceRow": 7,
+            "sourceColumn": 8
+          },
+          {
+            "renderedRow": 7,
+            "renderedColumn": 9,
+            "sourceRow": 7,
+            "sourceColumn": 9
+          },
+          {
+            "renderedRow": 7,
+            "renderedColumn": 10,
+            "sourceRow": 7,
+            "sourceColumn": 10
+          },
+          {
+            "renderedRow": 8,
+            "renderedColumn": 0,
+            "sourceRow": 8,
+            "sourceColumn": 0
+          },
+          {
+            "renderedRow": 8,
+            "renderedColumn": 1,
+            "sourceRow": 8,
+            "sourceColumn": 1
+          },
+          {
+            "renderedRow": 8,
+            "renderedColumn": 2,
+            "sourceRow": 8,
+            "sourceColumn": 2
+          },
+          {
+            "renderedRow": 8,
+            "renderedColumn": 3,
+            "sourceRow": 8,
+            "sourceColumn": 3
+          },
+          {
+            "renderedRow": 8,
+            "renderedColumn": 4,
+            "sourceRow": 8,
+            "sourceColumn": 4
+          },
+          {
+            "renderedRow": 8,
+            "renderedColumn": 5,
+            "sourceRow": 8,
+            "sourceColumn": 5
+          },
+          {
+            "renderedRow": 8,
+            "renderedColumn": 6,
+            "sourceRow": 8,
+            "sourceColumn": 6
+          },
+          {
+            "renderedRow": 8,
+            "renderedColumn": 7,
+            "sourceRow": 8,
+            "sourceColumn": 7
+          },
+          {
+            "renderedRow": 8,
+            "renderedColumn": 8,
+            "sourceRow": 8,
+            "sourceColumn": 8
+          },
+          {
+            "renderedRow": 8,
+            "renderedColumn": 9,
+            "sourceRow": 8,
+            "sourceColumn": 9
+          },
+          {
+            "renderedRow": 8,
+            "renderedColumn": 10,
+            "sourceRow": 8,
+            "sourceColumn": 10
+          },
+          {
+            "renderedRow": 9,
+            "renderedColumn": 0,
+            "sourceRow": 9,
+            "sourceColumn": 0
+          },
+          {
+            "renderedRow": 9,
+            "renderedColumn": 1,
+            "sourceRow": 9,
+            "sourceColumn": 1
+          },
+          {
+            "renderedRow": 9,
+            "renderedColumn": 2,
+            "sourceRow": 9,
+            "sourceColumn": 2
+          },
+          {
+            "renderedRow": 9,
+            "renderedColumn": 3,
+            "sourceRow": 9,
+            "sourceColumn": 3
+          },
+          {
+            "renderedRow": 9,
+            "renderedColumn": 4,
+            "sourceRow": 9,
+            "sourceColumn": 4
+          },
+          {
+            "renderedRow": 9,
+            "renderedColumn": 5,
+            "sourceRow": 9,
+            "sourceColumn": 5
+          },
+          {
+            "renderedRow": 9,
+            "renderedColumn": 6,
+            "sourceRow": 9,
+            "sourceColumn": 6
+          },
+          {
+            "renderedRow": 9,
+            "renderedColumn": 7,
+            "sourceRow": 9,
+            "sourceColumn": 7
+          },
+          {
+            "renderedRow": 9,
+            "renderedColumn": 8,
+            "sourceRow": 9,
+            "sourceColumn": 8
+          },
+          {
+            "renderedRow": 9,
+            "renderedColumn": 9,
+            "sourceRow": 9,
+            "sourceColumn": 9
+          },
+          {
+            "renderedRow": 9,
+            "renderedColumn": 10,
+            "sourceRow": 9,
+            "sourceColumn": 10
+          },
+          {
+            "renderedRow": 10,
+            "renderedColumn": 0,
+            "sourceRow": 10,
+            "sourceColumn": 0
+          },
+          {
+            "renderedRow": 10,
+            "renderedColumn": 1,
+            "sourceRow": 10,
+            "sourceColumn": 1
+          },
+          {
+            "renderedRow": 10,
+            "renderedColumn": 2,
+            "sourceRow": 10,
+            "sourceColumn": 2
+          },
+          {
+            "renderedRow": 10,
+            "renderedColumn": 3,
+            "sourceRow": 10,
+            "sourceColumn": 3
+          },
+          {
+            "renderedRow": 10,
+            "renderedColumn": 4,
+            "sourceRow": 10,
+            "sourceColumn": 4
+          },
+          {
+            "renderedRow": 10,
+            "renderedColumn": 5,
+            "sourceRow": 10,
+            "sourceColumn": 5
+          },
+          {
+            "renderedRow": 10,
+            "renderedColumn": 6,
+            "sourceRow": 10,
+            "sourceColumn": 6
+          },
+          {
+            "renderedRow": 10,
+            "renderedColumn": 7,
+            "sourceRow": 10,
+            "sourceColumn": 7
+          },
+          {
+            "renderedRow": 10,
+            "renderedColumn": 8,
+            "sourceRow": 10,
+            "sourceColumn": 8
+          },
+          {
+            "renderedRow": 10,
+            "renderedColumn": 9,
+            "sourceRow": 10,
+            "sourceColumn": 9
+          },
+          {
+            "renderedRow": 10,
+            "renderedColumn": 10,
+            "sourceRow": 10,
+            "sourceColumn": 10
+          },
+          {
+            "renderedRow": 11,
+            "renderedColumn": 0,
+            "sourceRow": 11,
+            "sourceColumn": 0
+          },
+          {
+            "renderedRow": 11,
+            "renderedColumn": 1,
+            "sourceRow": 11,
+            "sourceColumn": 1
+          },
+          {
+            "renderedRow": 11,
+            "renderedColumn": 2,
+            "sourceRow": 11,
+            "sourceColumn": 2
+          },
+          {
+            "renderedRow": 11,
+            "renderedColumn": 3,
+            "sourceRow": 11,
+            "sourceColumn": 3
+          },
+          {
+            "renderedRow": 11,
+            "renderedColumn": 4,
+            "sourceRow": 11,
+            "sourceColumn": 4
+          },
+          {
+            "renderedRow": 11,
+            "renderedColumn": 5,
+            "sourceRow": 11,
+            "sourceColumn": 5
+          },
+          {
+            "renderedRow": 11,
+            "renderedColumn": 6,
+            "sourceRow": 11,
+            "sourceColumn": 6
+          },
+          {
+            "renderedRow": 11,
+            "renderedColumn": 7,
+            "sourceRow": 11,
+            "sourceColumn": 7
+          },
+          {
+            "renderedRow": 11,
+            "renderedColumn": 8,
+            "sourceRow": 11,
+            "sourceColumn": 8
+          },
+          {
+            "renderedRow": 11,
+            "renderedColumn": 9,
+            "sourceRow": 11,
+            "sourceColumn": 9
+          },
+          {
+            "renderedRow": 11,
+            "renderedColumn": 10,
+            "sourceRow": 11,
+            "sourceColumn": 10
+          }
+        ],
+        "sourceQuotes": []
+      },
+      {
+        "tableIndex": 2,
+        "selection": {
+          "sourceTableOrdinal": 5,
+          "sourceRows": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10
+          ],
+          "sourceColumns": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        }
+      },
+      {
+        "tableIndex": 3,
+        "selection": {
+          "sourceTableOrdinal": 4,
+          "sourceRows": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "sourceColumns": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5
+          ]
+        }
+      },
+      {
+        "tableIndex": 4,
+        "selection": {
+          "sourceTableOrdinal": 6,
+          "sourceRows": [
+            1,
+            0,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8
+          ],
+          "sourceColumns": [
+            0,
+            1,
+            2,
+            3
+          ]
+        }
+      }
+    ],
+    "formulaBindings": [],
+    "sections": [
+      {
+        "kind": "background",
+        "heading": "说话人日志要回答什么，输入输出和必须保留的信息是什么",
+        "body": "说话人日志的输入是一段单声道会话音频，时长从几分钟到几十分钟不等，里面有两到九个说话人，可能混用语言、互相打断、同时说话，还可能经过电话、近场麦克风、远场会议麦或网络视频等不同信道。目标是输出一条时间线：每个时刻谁在说话，允许同一时刻标出多人重叠。必须保留的信息有两层，一是有没有人声，二是这段人声属于全局的哪一个说话人编号。评价时用日志错误率同时惩罚三类时间：该标没标的漏检语音，不该标却标的虚警语音，以及有人声但归错人的混淆，三者相加除以参考语音总时长。论文采用无宽容领、重叠计分的严格计分，对应国际上DIHARD确立的严格设置。读者需要先建立这个直觉：系统切得碎一点，漏检少但虚警多；切得整一点，虚警少但容易把停顿判成漏检，后文所有关于标注口径的讨论都围绕这个权衡展开。\n\n[[CONCEPT_BRIDGE_1]]"
+      },
+      {
+        "kind": "related_work",
+        "heading": "已有路线如何做日志，印度语料此前缺了哪一块",
+        "body": "已有路线大致分两类。一类是模块式：先做语音检测，再对短片段提声纹向量，最后聚类，典型后端是基于贝叶斯隐马尔可夫模型的x向量聚类。另一类是端到端神经日志，直接逐帧预测多人活动，天然处理重叠；其中端到端加向量聚类的混合路线先在局部窗内做端到端分割，再用全局聚类把局部说话人串起来，从而支持任意时长和人数。幂集形式把局部多人活动看成对发声子集的单标签分类，是pyannote一系的基础；DiariZen把前端换成结构化剪枝的WavLM加Conformer，NVIDIA的Sortformer则按说话人出现顺序做监督。印度语言方面，此前大规模语料多面向识别和预训练，日志专用基准只有DISPLACE的几个语言，而IndicDiarBench第一次覆盖全部22种 scheduled 语言，共1164段约107.7小时，包含近场会议、远场会议和野外视频三类，参考由五阶段人工流程产生。论文的比较对象因此是专用日志系统，而不是同时做转写和日志的商用服务，后者在基准论文里已有自报数字，但作者并未重新运行它们。"
+      },
+      {
+        "kind": "problem",
+        "heading": "论文要解决的三个具体问题是什么",
+        "body": "第一个问题是在同一协议下盲测最强专用日志系统在印度会话上的真实水平。盲测意味着所有系统都按各自推荐配置跑同一单声道音频，用同一计分器、同一无宽容领且重叠计分规则，不在基准上调参，本文系统同样冻结后才第一次在基准上计分。第二个问题是除声学之外还有什么决定误差。作者发现基准参考按转写话语切分，话语内短停顿不断开，而日志器按停顿切分，每个话语内停顿都会被计成漏检，这是一个与声音本身无关的口径差异。第三个问题是如何在22种语言上取得领先，同时不丢掉国际基准上的通用性。适应数据只有八种语言的双人电话，加上公开多方会议，检验的是印度信道和会话条件能否跨语系迁移，而不是为每种语言单独建模。这三个问题分别对应后文的系统对比、口径测量和印度适配，缺一不可。理解这三者的分工，才能明白为什么论文既要做大规模评测，又要做桥接分析和适配训练。"
+      },
+      {
+        "kind": "method_overview",
+        "heading": "Anuvani-Diarization 的整体流程是什么",
+        "body": "系统沿用端到端加向量聚类结构。音频统一为16kHz后，按16秒窗、1.6秒步长滑窗送入分割网络，网络每20毫秒输出一个幂集类别，共16类，对应窗内四个局部说话人的全部子集。取最大概率类别后做11帧中值滤波得到平滑的局部活动。对每个局部说话人，只用其无重叠帧提ResNet34声纹向量，要求至少有多于两帧无重叠帧才参与；再用VBx聚类把跨窗口的局部身份连成全局说话人，聚类沿用父模型的概率线性判别分析和默认参数。最后把帧级活动聚合成整段录音的谁在何时说话。网络之后没有任何调参，改动只发生在分割网络的印度适配上。推理是确定性的，重复运行按字节复现输出，分片与单卡重跑结果一致。\n\n[[CONCEPT_BRIDGE_2]]"
+      },
+      {
+        "kind": "component",
+        "heading": "分割网络内部如何从波形得到每帧类别",
+        "body": "分割网络起点是DiariZen的WavLM-Large稀疏80%版本加四块Conformer头。WavLM-Large编码器原本有多层输出，网络学习25路输出的加权混合，再经1024到256线性层和层归一化进入Conformer。每个Conformer块内部按半步前馈、多头自注意力、卷积核长31的卷积模块、半步前馈、层归一化的顺序处理，前后层残差连接，四块结构相同。论文配图把其中一块展开，目的就是让研究生看到局部卷积抓停顿和音节边界，自注意力抓窗内说话人轮转，组合后输出每帧的16类分布。窗口内最多建模四个同时说话人，整段录音的人数不受限，因为人数由聚类阶段展开。嵌入模型是660万参数的ResNet34，分割网络本身6950万参数，聚类阶段用凝聚初始化阈值0.6和VBx迭代20次等父模型设置。\n\n[[CONCEPT_BRIDGE_3]]"
+      },
+      {
+        "kind": "component",
+        "heading": "嵌入和聚类如何把局部身份连成全局时间线",
+        "body": "举一个例子帮助理解分工：一段16秒窗经网络得到每20毫秒的局部说话人0到3的活动，若0和1在某几百毫秒同时为1，即判为重叠。随后对0号说话人所有标为其单独发声的帧提声纹向量，重叠帧不用，避免混入他人音色。滑窗推进后，下一窗又出现局部身份，声纹向量在全局做VBx聚类，声纹接近的局部身份被归为同一全局人。不能连接的修复、阈值和迭代次数都沿用父模型，本文没有为基准重调。例子只是帮助理解分工：分割管何时有人和局部是谁，嵌入管声音像谁，聚类管跨窗对应，任何一环切得过碎或过整都会同时改变漏检、虚警和混淆的分配。这也解释了为什么只适配分割网络就能改变总体误差，而聚类保持冻结。"
+      },
+      {
+        "kind": "training",
+        "heading": "印度适配用了哪些数据，不确定银标签如何构造",
+        "body": "适配集共848段370.5小时。印度部分是SPRING-INX的302个双人电话，覆盖阿萨姆语、孟加拉语、古吉拉特语、印地语、马拉雅拉姆语、马拉地语、旁遮普语、泰米尔语八种语言，共98.5小时；多方会议部分是NOTSOFAR-1、AMI、AISHELL-4和AliMeeting。每批采样一半来自印度电话且语言均衡，四分之一来自NOTSOFAR-1，四分之一来自其他会议。关键是银标签的不确定性处理：电话每人一路信道，原则上可直接得标签，但串音、音量小、未转写语音都会让标签出错。作者把每10毫秒小格标为已知或未知，能量不支持、比另一路低15分贝以上、与转写区间矛盾、在标签或转写边界100毫秒内、与独立预训练日志器在隔离信道上的判断不一致，都标为未知，未知帧不贡献损失，安静的正标签被屏蔽而不是改成静音。98.5小时电话音频最后保留51.9小时有监督。训练用AdamW全参数联合微调3000步，每步96个16秒片段，共288000个片段，编码器学习率2e-6、头2e-5，50步热身后余弦衰减，梯度裁剪1.0，bf16运算，在六张RTX A6000上约91分钟。候选电话事先经声纹指纹加波形核验筛查，与基准无音频重叠。\n\n[[CONCEPT_BRIDGE_4]]"
+      },
+      {
+        "kind": "experiment_setup",
+        "heading": "评测协议如何保证零样本和可复现",
+        "body": "数据是IndicDiarBench的全部1164段录音，近场781段、远场173段、野外210段，说话人数2到8人的共1157段，另有7段9人仍计入总分。计分用NIST语义，与dscore在所查系统和集合上一致，并合并基准中少量同说话人重叠参考。报告两种聚合：池化错误率按参考语音时间加权，时长加权按录音时长加权，基准论文采用后者。置信区间来自对590个源录音的5000次自助重采样。对手是九个按各自推荐配置运行的系统，包括pyannoteAI Precision-2商用接口、DiariZen大模型版本、NVIDIA Nemotron-3等，多卡分片与单卡重跑按字节一致。零样本指本文分割网络只在非基准录音上适配，配方和检查点在内部非基准面板上固定，聚类用父模型默认设置，冻结后才第一次在基准上计分，对手均为开箱即用。需要区分的三件事是：代码、权重与可运行服务，本文权重在Hugging Face的链接本次未能确认可达，商用联合转写服务的数字是基准作者转述的自报值，并非作者重跑。"
+      },
+      {
+        "kind": "result",
+        "heading": "总体排序的条形图告诉我们什么",
+        "body": "下图是全文总体结论的可视化，横轴是时长加权日志错误率，越小越好，覆盖本文实际运行的系统和基准作者转述的联合服务，条件是零领、重叠计分。读图时先看横轴方向，再看顶部两条的差距，最后看本文实际运行的九个系统内部谁最低。\n\n[[FIGURE_2]]\n\n从图中可见，最上方自报的联合转写服务最低，其次就是本文系统，后面依次是pyannoteAI Precision-2、父模型DiariZen和其他专用系统，商用转写服务的长尾则明显更高。这张图的作用是把表中的总体数字变成排序直觉：本文系统是作者亲手跑过的系统里最好的，但并不是所有文献数字里最低的，二者的协议不同，不能直接宣称全面超越。后续各表会把这个总体排序拆到条件、人数和国际基准上检验，适用边界在那里才会显现。"
+      },
+      {
+        "kind": "result",
+        "heading": "在全部1164段录音上的总体数字是多少",
+        "body": "总体比较的问题是：在同一计分器、同一聚合方式下，实际可运行的专用日志系统谁的误差最低，指标方向都是越小越好。下表左侧是作者按统一协议运行的十个系统，右侧是基准论文转述的联合转写服务的自报值，两侧协议不同，只能并列展示，不能当成同场竞赛。\n\n| Run under our protocol | Run under our protocol | Run under our protocol | Run under our protocol | Run under our protocol | Run under our protocol | Reported by Mehendale et al. (2026) | Reported by Mehendale et al. (2026) | Reported by Mehendale et al. (2026) | Reported by Mehendale et al. (2026) | Reported by Mehendale et al. (2026) |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n| System | Pool. | DW | Miss | FA | Conf. | System | DW | Miss | FA | Conf. |\n| Ours (Anuvani-Diarization) | 17.11 | 16.78 | 8.91 | 3.55 | 4.65 | Sarvam AI† | 16.0 | 6.3 | 3.9 | 5.9 |\n| pyannoteAI Precision-2 | 17.58 | 17.18 | 9.70 | 3.06 | 4.82 | AWS Transcribe† | 23.5 | 13.1 | 3.1 | 7.4 |\n| DiariZen WavLM-Large s80 md-v2 | 18.31 | 17.99 | 11.07 | 3.03 | 4.22 | Deepgram Nova-3† | 32.0 | 18.3 | 5.4 | 8.3 |\n| NVIDIA Nemotron-3-Diarization | 18.71 | 18.38 | 13.07 | 2.63 | 3.01 | Azure STT† | 34.8 | 24.4 | 1.7 | 8.7 |\n| pyannote speaker-diarization-community-1 | 21.65 | 21.22 | 11.25 | 2.94 | 7.46 | ElevenLabs Scribe† | 35.0 | 13.6 | 6.2 | 15.3 |\n| NVIDIA Streaming Sortformer 4-spk v2.1 | 22.34 | 22.14 | 8.94 | 4.32 | 9.07 | GPT-4o Transcribe† | 36.2 | 17.7 | 3.8 | 14.7 |\n| DiCoW v3.3 | 22.76 | 22.62 | 13.58 | 5.44 | 3.73 | AssemblyAI Universal-2† | 40.5 | 25.5 | 5.5 | 9.6 |\n| 3D-Speaker (CAM++ pipeline) | 24.39 | 23.67 | 13.01 | 4.30 | 7.08 | Gemini 3 Pro† | 74.0 | 41.7 | 5.8 | 26.5 |\n| MOSS-Transcribe-Diarize | 34.52 | 33.76 | 25.11 | 1.74 | 7.67 |  |  |  |  |  |\n| NVIDIA Sortformer 4-spk v1b | 39.66 | 39.41 | 30.68 | 2.30 | 6.68 |  |  |  |  |  |\n\n表后解释需要抓住三点。主要收益是本文系统池化17.11%、时长加权16.78%，是左侧实际运行系统里最低的，成对自助差异相对第二名不含零；分误差看漏检8.91%、虚警3.55%、混淆4.65%，相对父模型主要收回漏检。具体代价是虚警和混淆各增加约0.5个百分点，说明适配让系统更敢开口。限制是右侧Sarvam自报16.0%仍低0.78个百分点，但它同时做转写且未被重跑，不能据此断言专用路线已全面领先；而且总体平均掩盖了野外子集的反例，下节会展开。"
+      },
+      {
+        "kind": "result",
+        "heading": "分条件和分人数时优势在哪里消失",
+        "body": "拆分比较的问题是：总体领先在不同录音条件和不同人数下是否稳定，比较对象是四个最强实际可运行系统，指标仍是越小越好。下表按近场、远场、野外和2到8人分组给出池化错误率，组大小差异很大，8人组只有26段，2人组有294段。\n\n[[TABLE_2]]\n\n分组结果显示领先存在明确边界。近场19.05%对19.93%、远场18.64%对19.48%本文领先，野外11.51%落后于pyannoteAI的10.78%，这是总体结论的第一个反例。人数上除4人组外2到8人均领先，但人数分组同时混入了录音内容和时长的差异，只能描述观测分组的表现，不能理解为向同一会话加人后的因果效应。换句话说，方法更适合多人辩论式近远场会议，在野外视频上不占优，不能把总体领先推广到所有场景。"
+      },
+      {
+        "kind": "result",
+        "heading": "人数曲线和条件柱状图如何补充表格",
+        "body": "下图把上一节的拆分画成曲线和柱子，左图横轴是参考人数，纵轴是池化错误率，右图按三类条件分组，柱子从左到右依次是父模型、Nemotron、pyannoteAI和本文系统。读图时先沿2到8人看四条折线的上扬趋势，再按三组比较蓝色柱子的高低。\n\n[[FIGURE_5]]\n\n图后解释可见：左图四条线都随人数增加上扬，本文曲线在大部分人数上最低，但在4人处被反超；右图近场和远场蓝色柱最低，野外蓝色柱高于pyannoteAI。曲线的上扬本身不证明人数是唯一原因，因为不同人数的录音内容和重叠率也不同。结合表格，结论是印度适配在近远场多方会议上稳定获益，但在野外视频上存在明确短板，这为后文讨论训练数据只有电话和会议、缺少野外视频埋下伏笔。"
+      },
+      {
+        "kind": "ablation",
+        "heading": "标注口径为什么是隐藏变量，桥接实验说明了什么",
+        "body": "口径问题的起点是同说话人间隙分布。基准参考中小于0.5秒的同说话人间隙只占7.7%，近场仅3.4%，而四个日志器输出中占24.9%到32.1%，说明系统按停顿切，参考按话语切，每个话语内停顿都会被计成漏检。桥接分析保持声学判决不变，只把小于阈值的同说话人间隙填上，阈值在基准上事后选取，属于口径测量而非可用系统。读图说明：左图是间隙占比条形，右图横轴是桥接阈值、纵轴是池化错误率，实线是四个系统桥接后的变化，虚线是电话口径适配后的本文系统。\n\n[[FIGURE_3]]\n\n图后解释需要区分测量与系统：桥接让四个系统分别下降1.90、2.03、2.91和4.14个百分点，切得最碎的Nemotron获益最大；同一桥接用在词对齐的VoxConverse、NOTSOFAR-1和MagicData-RAMC上反而上升0.68到6.01个百分点。因此没有口径无关的输出，话语级适合按人归属文字，词对齐适合声学分析，基准应像记录领和重叠规则一样记录切分口径，系统比较只能在匹配口径下进行。虚线整体抬高则预告了下一节电话口径迁移失败的结果。\n\n[[CONCEPT_BRIDGE_5]]"
+      },
+      {
+        "kind": "ablation",
+        "heading": "印度适配带来多少增益，电话口径为什么学不来",
+        "body": "本表比较的问题是：印度适配相对父模型改变了什么，以及在电话转写上学到的桥接口径能否搬到基准上，所有行都是零样本计分，最后一行按预先固定协议只在基准上评一次。下表三行分别是父模型、加印度适配、再加电话口径，列出池化、时长加权和三类误差。\n\n[[TABLE_3]]\n\n表后解释要同时讲收益和失败。印度适配把池化从18.31%降到17.11%，时长加权从17.99%降到16.78%，漏检从11.07%降到8.91%，代价是虚警增加0.52个百分点、混淆增加0.43个百分点，属于用少量虚警换大量漏检。电话口径行把漏检压到2.89%，但虚警涨到15.29%，总误差涨到池化22.74%、时长加权22.43%。原因是电话转写员把话语开得更长，桥接在1.5秒仍有效，而基准话语在0.8到1.0秒就饱和，两个同样是话语级转写的话语终点定义仍不一致。这是一个有证据的负结果：不经过同方式产生的参考，就学不会该基准的口径，事后阈值也不能当成部署可得的提升。"
+      },
+      {
+        "kind": "ablation",
+        "heading": "国际基准上的通用性有没有丢失",
+        "body": "通用性比较的问题是：为印度适配的分割网络在六个国际测试集上是否退化，两个系统共用父模型聚类，只换分割网络，因此比较的是分割网络本身的效果。下表给出每个测试集的文件数和双方错误率，平均是对测试集等权，不是按录音或时长池化。\n\n[[TABLE_4]]\n\n平均结果没有显示通用性受损。平均12.03%对父模型12.19%，三升三降，最大改善在NOTSOFAR-1上0.85个百分点，最大回退在MagicData-RAMC上0.16个百分点，平均没有损害通用性。但平均等权掩盖了每集方向不同，不能说每组都不退化；而且国际结果只是第二视角，不是印度视角，不能替代在印度多方会议和野外视频上的验证。结合前文，适配学到的更可能是印度信道和会话条件，而非特定语言属性，这仍是推测，需要控制实验验证。"
+      },
+      {
+        "kind": "limitation",
+        "heading": "哪些结论还不成立，哪些范围尚未评测",
+        "body": "第一，本文没有建模基准的话语口径，匹配它可再降约1.9个百分点，但作者没有在基准上拟合它，电话学习路径已证伪。第二，时长加权仍高于Sarvam自报0.78个百分点，且对方系统未被重跑，不能断言专用系统已全面超越联合服务。第三，分割窗内最多四个同时说话人，全局人数虽不限，极端重叠和九人录音的证据很少，全文1157段2到8人之外只有7段9人。第四，印度适配只有八种语言的双人电话，多方印度会议训练可能进一步有帮助，十种未见语言上的领先提示学到的是印度信道和会话条件，但这仍是推测。第五，评估只有一个108小时基准，国际结果只是第二视角。部署前必须在自己的语言、信道和人数分布上重测，不能把平均趋势套到每一组。"
+      },
+      {
+        "kind": "reproduction",
+        "heading": "复现第一步做什么，需要哪些版本和许可",
+        "body": "第一步是按原文版本固定环境和数据修订：IndicDiarBench的Hugging Face修订、PyTorch 2.1.1、pyannote.audio 3.1.1的DiariZen代码库提交、scikit-learn和NumPy版本，以及父模型权重和声纹模型的许可。注意许可分开：基准CC BY 4.0，父分割权重CC BY-NC 4.0只允许非商业研究，对手系统各按自有条款，商用接口与可下载权重是两回事。推理按16秒窗、1.6秒步长、最大概率加11帧中值滤波、无重叠帧提向量、凝聚初始化后VBx的流程跑，关闭TF32、固定种子、每文件重置以保证确定性。补充材料称包含分数文件和重画图表脚本，可先从分数文件复算池化和时长加权，再重跑推理核对按字节一致。口径实验只需在输出后桥接同说话人间隙，不要重训网络。容易误解的是把事后桥接的下降当成系统提升，它只是测量口径的灵敏度分析。"
+      },
+      {
+        "kind": "synthesis",
+        "heading": "什么时候值得尝试，还缺哪项验证",
+        "body": "当任务是印度多语言会议或电话的按人归属文字，且评价采用话语级参考时，值得尝试这种印度适配的分割加VBx路线，因为它在近远场和多数语言上收回漏检，且国际平均没有退化。当任务是声学边界分析或词对齐基准时，不应直接套用话语级桥接，否则虚警会大涨。还缺的验证是同方式产生的基准口径标注：要么在基准风格的参考上学习显式口径模式，要么把口径做成可切换的文档化选项，而不是静默采用一种切分。另一个缺口是多方印度会议训练和野外视频的针对性改进，因为当前领先不包括野外组。复现时先固定版本和许可，再从分数文件复算指标，最后才重跑推理；任何新场景都要重测自己的语言、信道和人数分布。"
+      }
+    ]
+  },
+  "parserError": "读者文章泄漏了流程或证据元话语：图后解释需要"
+}

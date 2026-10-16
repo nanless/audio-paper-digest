@@ -10,7 +10,7 @@ const empty = sourceText => {
     return {...body,identitySha256:deep.stableFingerprint(body)};
 };
 
-test('three actual final paid drafts retain sealed sources/resources and pass only resource claim validation', () => {
+test('actual saved paid drafts retain sealed sources/resources and pass only resource claim validation', () => {
     for (const saved of fixture.cases) {
         const before=JSON.stringify(saved);
         assert.equal(sha(saved.sourceText),saved.sealedSourceSha256);
@@ -26,6 +26,14 @@ test('constructed bare concepts and exact non-equivalence are nonclaims, with fu
     const saved=fixture.cases[0], identity=empty(saved.sourceText);
     const issues=text=>deep.readerResourceClaimIssues(wrap(text),identity,saved.sourceText);
     const concepts=['商用接口与可下载权重是两回事','开源、权重可下载、可运行需分开核实'];
+    const nominal='代码开源、权重下载、可运行是三件事，需分别验证';
+    assert.deepEqual(issues(nominal+'。'),[]);
+    // “并非代码开源” itself denies availability; do not turn that denial into a claim.
+    assert.deepEqual(issues('并非'+nominal+'。'),[]);
+    for (const text of ['本文'+nominal+'。','作者拥有的'+nominal+'。',
+        nominal+'，但本文权重已经公开。','本文权重已公开，'+nominal+'。']) {
+        assert.ok(issues(text).length,text);
+    }
     const denial='不能把代码可用当成权重已公开或系统可运行';
     for (const span of [...concepts,denial]) assert.deepEqual(issues(span+'。'),[],span);
     for (const span of concepts) for (const text of [
