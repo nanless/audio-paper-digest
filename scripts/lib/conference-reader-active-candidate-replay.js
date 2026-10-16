@@ -180,7 +180,7 @@ async function replayActiveConferenceReaderCandidate({ loaded, planHandle, sourc
                 executionId: current.run.executionId, executionDir, paperId: current.run.paperId,
                 sourceDetails: current.source.sourceDetails, readerRetryEpoch: 1
             }, () => deep.refreshApiReaderArticleFromSource(paper, current.source.sourceDetails,
-                { resumeSavedSourceReader: true, requireExistingSourceCandidate: true })));
+                { resumeSavedSourceReader: true, requireExistingSourceCandidate: true, preserveReaderUpstream: true })));
         } catch (error) {
             sameFiles();
             const failure = require('./conference-process-recovery').classifyFailure(error, new Date().toISOString());

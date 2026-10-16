@@ -9561,7 +9561,10 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             delete generatorOptions.requireExistingSourceCandidate;
         }
     }
-    const generated = await generateApiReaderArticleDetailed(paper, analysis, evidenceContext, generatorOptions);
+    const generateReader = () => generateApiReaderArticleDetailed(paper, analysis, evidenceContext, generatorOptions);
+    const generated = await (options.preserveReaderUpstream === true
+        ? require('./lib/analysis-stop-control').withModelRequestsForbidden(generateReader)
+        : generateReader());
     const finalized = await finalizeApiReaderRefresh(paper, sourceDetails, generated, {
         ...options,
         ...(revisionSeed ? {
@@ -9935,7 +9938,8 @@ async function finalizeApiReaderRefresh(paper, sourceDetails, generated, options
     };
     if (paper.analysis && manifest.stages.scoringAudit?.status === 'complete'
         && !require('./lib/daily-fact-review').current(getPaperArxivId(paper))?.readerOnly) {
-        require('./lib/reader-resource-sync.js').synchronizeReaderResourceAvailability(paper, sourceDetails);
+        require('./lib/reader-resource-sync.js').synchronizeReaderResourceAvailability(paper, sourceDetails,
+            { preserveUpstream: options.preserveReaderUpstream === true });
     }
     return paper;
 }

@@ -372,3 +372,42 @@ test('已有肯定机器标记和解析值遇到其他归属或不可达的新�
         else assert.doesNotMatch(projected,/- 代码：[^\n]*github/);
     }
 });
+
+
+test('原付费 Reader 保留上游时仍核完整投影，但主文评分和检查点逐字不写回',()=>{
+    const f=fixture('demo','available');sealReader(f.paper);
+    const before=JSON.stringify(f.paper), projected=deep.applyApiReaderResourceAvailability(f.paper.analysis,f.resources);
+    assert.notEqual(projected,f.paper.analysis);
+    assert.equal(sync(f.paper,f.sourceDetails,{preserveUpstream:true}),f.paper);
+    assert.equal(JSON.stringify(f.paper),before);
+    assert(engine.scoringAuditBindsFinalAnalysis(f.paper));assert(engine.hasValidApiReaderV3Records(f.paper));
+    sync(f.paper,f.sourceDetails);
+    assert.equal(f.paper.analysis,projected);
+    assert.notEqual(JSON.stringify(f.paper),before);
+});
+
+test('正文已同步也不能在保留上游模式接受失效 Reader，默认空操作不变',()=>{
+    const f=fixture('demo','available');sealReader(f.paper);sync(f.paper,f.sourceDetails);
+    f.paper.apiReaderArticle+='tampered';const before=JSON.stringify(f.paper);
+    assert.throws(()=>sync(f.paper,f.sourceDetails,{preserveUpstream:true}),/完整绑定/);
+    assert.equal(JSON.stringify(f.paper),before);
+    assert.equal(sync(f.paper,f.sourceDetails),f.paper);
+    assert.equal(JSON.stringify(f.paper),before);
+});
+
+test('保留上游不能吞代码模型数据集标记变化或不完整来源评分Reader绑定',()=>{
+    for(const type of ['code','model','dataset']){
+        const f=fixture(type,'available');sealReader(f.paper);const before=JSON.stringify(f.paper);
+        assert.throws(()=>sync(f.paper,f.sourceDetails,{preserveUpstream:true}),/必须重新审查评分/);
+        assert.equal(JSON.stringify(f.paper),before);
+    }
+    for(const kind of ['source','scoring','reader']){
+        const f=fixture('demo','available');sealReader(f.paper);
+        if(kind==='source')f.sourceDetails.text+='tampered';
+        if(kind==='scoring')f.paper.analysisManifest.stages.scoringAudit.outputAnalysisSha256='0'.repeat(64);
+        if(kind==='reader')f.paper.apiReaderArticle+='tampered';
+        const before=JSON.stringify(f.paper);
+        assert.throws(()=>sync(f.paper,f.sourceDetails,{preserveUpstream:true}));
+        assert.equal(JSON.stringify(f.paper),before);
+    }
+});

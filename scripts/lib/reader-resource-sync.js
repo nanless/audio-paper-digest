@@ -37,7 +37,7 @@ function readerResourceIdentityRebind(paper, manifest, resources) {
 // 根据已保存并通过核验的资源记录更新正文中的可达状态，不联网、不调用模型，也不改变评分。
 // 本函数只修改传入的论文对象，锁和文件保存由调用方负责。资源状态若影响评分依据，
 // 必须重新审查评分，不能只改绑定记录来继续发布。
-function synchronizeReaderResourceAvailability(paper, sourceDetails) {
+function synchronizeReaderResourceAvailability(paper, sourceDetails, options = {}) {
     const deep = require('../deep-analyzer.js');
     const sourceText = String(sourceDetails?.text || '');
     const resources = paper?.apiReaderResources;
@@ -71,7 +71,12 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails) {
     const updatedAnalysis = deep.applyApiReaderResourceAvailability(paper.analysis, resources);
     // 如果同步后的正文与原文相同，就返回原对象，不尝试修复读者文章的绑定。
     // 最终是否可以继续使用这份记录，仍由调用方的正式分析校验决定。
-    if (updatedAnalysis === paper.analysis) return paper;
+    if (updatedAnalysis === paper.analysis) {
+        if (options.preserveUpstream === true && !hasValidApiReaderV3Records(paper)) {
+            throw new Error('保留 Reader 上游需要原评分与当前 Reader 的完整绑定仍然有效。');
+        }
+        return paper;
+    }
     const readerIdentityRebind = readerResourceIdentityRebind(paper, manifest, resources);
     const updatedParsed = parseAnalysis(updatedAnalysis);
     for (const field of ['hasCode','hasModel','hasDataset']) {
@@ -139,6 +144,15 @@ function synchronizeReaderResourceAvailability(paper, sourceDetails) {
         || !scoringAuditBindsFinalAnalysis(next)
         || (stages.apiReaderArticle?.status === 'complete' && !hasValidApiReaderV3Records(next))) {
         throw new Error('同步资源状态后，评分审查内容、读者文章内容或阶段绑定未能保持要求。');
+    }
+    if (options.preserveUpstream === true) {
+        // A saved paid Reader was generated from these exact upstream bytes.
+        // Validate the usual projection, including unchanged scoring facts,
+        // but do not rewrite its source analysis, score receipt or checkpoints.
+        if (!scoringAuditBindsFinalAnalysis(paper) || !hasValidApiReaderV3Records(paper)) {
+            throw new Error('保留 Reader 上游需要原评分与当前 Reader 的完整绑定仍然有效。');
+        }
+        return paper;
     }
     Object.assign(paper, next);
     return paper;

@@ -88,7 +88,7 @@ test('同child耗尽预算仅在私有副本重放，原候选、历史及attemp
     const result = await replay.replayActiveConferenceReaderCandidate(f.input, { usageDirectory: f.usageDirectory, engine: f.engine, deep: {
         replayVerifiedReaderResourceIdentity: deep.replayVerifiedReaderResourceIdentity,
         refreshApiReaderArticleFromSource: async (paper, source, options) => {
-            assert.equal(options.requireExistingSourceCandidate, true); assert.equal(options.resumeSavedSourceReader, true);
+            assert.equal(options.requireExistingSourceCandidate, true); assert.equal(options.resumeSavedSourceReader, true); assert.equal(options.preserveReaderUpstream, true);
             const active = require('../scripts/lib/conference-analysis-context').getConferenceAnalysisContext();
             temporary = path.dirname(active.executionDir);
             assert.notEqual(active.executionDir, f.loaded.directory); assert.equal(source.text, f.loaded.source.sourceDetails.text);
