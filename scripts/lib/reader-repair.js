@@ -277,14 +277,16 @@ function validationFailureHasNoProgress(previousSignature, currentSignature) {
 // common false positive disappears. This only releases the stale stop predicate;
 // it neither changes a counter nor extends the original response/full budgets.
 function canContinueRevalidatedIssuesWithinBudget({ recovered, identity, currentIssues,
-    candidateRevalidated = false, maxAttempts, attemptLimit, explicitRound = null }) {
+    candidateRevalidated = false, maxAttempts, attemptLimit, explicitRound = null,
+    patchOnlyAtFullLimit = false }) {
     if (!candidateRevalidated || explicitRound || !recovered || !identity
         || !Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 6
         || identity.maxAttempts !== maxAttempts || attemptLimit !== maxAttempts
         || !Number.isInteger(recovered.attempts) || recovered.attempts < 1
         || recovered.attempts >= maxAttempts
         || !Number.isInteger(recovered.fullAttempts) || recovered.fullAttempts < 1
-        || recovered.fullAttempts >= 2
+        || recovered.fullAttempts > 2
+        || recovered.fullAttempts === 2 && patchOnlyAtFullLimit !== true
         || recovered.lastTransportError || recovered.lastContentError
         || !Number.isInteger(recovered.noProgress) || recovered.noProgress < 0
         || !Number.isInteger(recovered.validationFailureStreak) || recovered.validationFailureStreak < 0
@@ -317,6 +319,34 @@ function canContinueRevalidatedIssuesWithinBudget({ recovered, identity, current
     if (previousGroups.includes(null) || currentGroups.includes(null)) return false;
     const oldKeys = new Set(previousGroups.flat());
     return !currentGroups.flat().some(key => oldKeys.has(key));
+}
+
+// This predicate authorizes no new response. It only bounds a local context
+// already derived by the normal generator after its full-response budget is spent.
+function isSafeExistingReaderPatchContext(draft, context, sourceBindingNeedsFullRetry, currentIssues) {
+    if (!draft || sourceBindingNeedsFullRetry || !context || context.atomicOperation
+        || context.sectionGroupPlanContract || context.draftSha256 !== hashDraft(draft)
+        || !Array.isArray(context.targets) || context.targets.length < 1 || context.targets.length > 8
+        || !Array.isArray(context.issues) || !Array.isArray(context.figureOrdinals)
+        || typeof context.evidence !== 'string'
+        || context.targets.some(target => !target || typeof target.path !== 'string')
+        || new Set(context.targets.map(target => target.path)).size !== context.targets.length) return false;
+    const blocking = Array.isArray(currentIssues)
+        ? currentIssues.filter(issue => issue?.diagnosticOnly !== true) : [];
+    if (blocking.length === 0 || blocking.some(issue => !issue || typeof issue.path !== 'string'
+        || !context.targets.some(target => issue.path === target.path
+            || issue.path.startsWith(target.path + '/')))) return false;
+    const paths = context.targets.map(target => target.path);
+    if (paths.some((pointer, index) => paths.some((other, otherIndex) => index !== otherIndex
+        && (pointer.startsWith(other + '/') || other.startsWith(pointer + '/'))))) return false;
+    return context.targets.every(target => {
+        if (!target || typeof target.path !== 'string'
+            || !/^\/(?:readerTitle|oneSentenceThesis|sections\/(?:0|[1-9]\d*)\/body|(?:conceptBridges|figurePlacements|tableBindings|formulaBindings)\/(?:0|[1-9]\d*)(?:\/explanation)?)$/u.test(target.path)) return false;
+        try {
+            const actual = nodeAt(draft, target.path);
+            return target.oldSha256 === hashDraft(actual) && hashDraft(target.value) === hashDraft(actual);
+        } catch { return false; }
+    });
 }
 
 function hasUnusedImplementationAllowance(payload) {
@@ -3605,7 +3635,7 @@ module.exports = { repairOperationProtocol, buildConceptTermsRepairContext, conc
     classifyTableBindingOrderIssue, readTableBindingOrderIssue,
     classifyTableBindingOrderError, readTableBindingOrderError,
     readTableCountIssue, hashRecoveryIssues, hashDraft, shaText, normalizeValidationMessage, validationFailureSignature,
-    validationFailureHasNoProgress, readerAttemptLimit, canContinueRevalidatedIssuesWithinBudget,
+    validationFailureHasNoProgress, readerAttemptLimit, canContinueRevalidatedIssuesWithinBudget, isSafeExistingReaderPatchContext,
     validateImplementationAllowance,
     buildTopLevelMetadataRepairContext, applyTopLevelMetadataRepair,
     sectionReorganizationOperation, buildMissingConceptBridgesOperation, parseRepairableDraft, parseRecoveryDraft, parseReaderPatchJson, collectDraftIssues,

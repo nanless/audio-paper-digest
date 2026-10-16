@@ -190,7 +190,7 @@ const CORE_SUMMARY_NUMBER_PATTERN = /(?<![A-Za-z0-9])[-+]?\d+(?:\.\d+)?(?:\s*(?:
 const CORE_SUMMARY_METRIC_PATTERN = /(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\.\d+)?|1(?:\.0+)?)(?![.\d@])|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|(?:皮尔逊(?:积矩)?相关系数|斯皮尔曼(?:秩)?相关系数|肯德尔(?:秩相关|和谐|协调|一致性)系数)(?!\s*(?:的)?(?:模型|方法|基线|算法|网络))|字错率|评估损失(?:终值)?(?=[^。；\n]{0,90}(?:[二两三四五六七八九十百1-9][0-9]*(?:\.\d+)?倍|(?:为|是|从)\s*\d+(?:\.\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)/i;
 // 会议论文常用领域内的中文指标名（例如 DAFx 的“抖动”和“包络相关”）。
 // 这里显式列出来，免得把任何结果名词都当成定量证据。
-const CORE_SUMMARY_CONFERENCE_METRIC_PATTERN = /包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差/;
+const CORE_SUMMARY_CONFERENCE_METRIC_PATTERN = /包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差|(?:对数似然比代价(?:[ \t]*[Cc][Ll][Ll][Rr](?![A-Za-z0-9_])|(?![ \t-]*[Cc][Ll][Ll][Rr]))|声对比度|声压级)(?=[ \t]*(?:指标|分数|得分)?(?:为|是|从|升至|降至)[ \t]*[-+]?[0-9]+(?:\.[0-9]+)?(?![A-Za-z0-9_.]))/;
 const CORE_SUMMARY_GENERIC_ENGLISH_METRIC_PATTERN = /(?<![A-Za-z0-9_])(?:scores?|performance|metrics?)(?![A-Za-z0-9_])/i;
 const CORE_SUMMARY_COMPARISON_PATTERN = /(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|degrad(?:e|es|ed|ation)|on par|comparable|从[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|反超|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先|持平|相当|接近)/i;
 const CORE_SUMMARY_COMPARISON_OBJECT_PATTERN = /(?:\bbaseline\b|\bcontrol\b|\breference\b|\bcomparison\b|\b(?:our|ours|proposed|present|this)\s+(?:approach|method|model|system|technique)\b|基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|本方法|所提方法|完整模型|竞品)/i;
@@ -1628,7 +1628,25 @@ function hasConcreteCoreSummarySetting(sentence) {
         && /(?:计时|耗时|时延|延迟|推理时间|运行时间|预处理时间)/.test(sentence);
     const namedRequestEvaluation = !/(?:讨论|提及|并非|不是|不能|假想|设想|假设|预计|预期|可能|计划|未来|无关|文件目录)/u.test(sentence) && /(?<![A-Za-z0-9_])[A-Z][A-Za-z0-9._-]{1,39}-Bench(?![A-Za-z0-9_])全部\s*[1-9][0-9]*个请求的评估中/iu.test(sentence);
     const heldOutSpeakerComparison = !/(?:讨论|提及|并非|不是|不能|假想|设想|假设|预计|预期|可能|计划|未来|无关|文件目录)/u.test(sentence) && /(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}\s*标准(?:[1-9][0-9]*|[一二两三四五六七八九十]+)名留出说话人[^，,。！？!?；;\n]{0,100}比较中/u.test(sentence);
-    return syntheticSetting || speakerSplit || timedHardware || namedRequestEvaluation || heldOutSpeakerComparison;
+    const experimentScope = /(?:在|于)[^，,。！？!?；;\n]{1,150}(?:实验|测量)(?:中|上)/u.exec(sentence);
+    const formatScope = /(?:在|于)([^，,。！？!?；;\n]{1,110}(?:语音|音频|音乐))(?:上|中)/u.exec(sentence);
+    const scopes = [experimentScope && /[1-9][0-9]{0,5}\s*名[^，,。！？!?；;\n]{0,45}(?:参与者|听者|受试者|母语者|说话人)/u.test(experimentScope[0]) && /(?:聆听|听辨|听测|主观|重复)[^，,。！？!?；;\n]{0,45}实验/u.test(experimentScope[0]) ? experimentScope : null, /(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}\s*(?:匹配|失配|跨域|未见说话人)测试[^，,。！？!?；;\n]{0,60}(?:下|中|上)/u.exec(sentence),
+        formatScope && /采样/u.test(formatScope[1]) && /(?:[1-9][0-9]{0,2}|[一二两三四五六七八九十百]{1,5})位/u.test(formatScope[1]) && /[0-9]+(?:\.[0-9]+)?\s*(?:kHz|Hz)(?![A-Za-z])/u.test(formatScope[1]) ? formatScope : null].filter(Boolean);
+    const measuredNaturalSetting = !/(?:假设|假想|假定|设想|如果|若|是否|预计|预期|可能|计划|未来|讨论|提及|并非|不是|不能|未进行|未测|未报告|没有|将(?:会|要)?(?:在|于))/u.test(sentence) && scopes.some(scope => {
+        let previousMetricHeader = false;
+        for (const raw of sentence.slice(scope.index + scope[0].length).split(/[，,；;]/u)) {
+            const clause = raw.trim();
+            const metric = [CORE_SUMMARY_METRIC_PATTERN, CORE_SUMMARY_CONFERENCE_METRIC_PATTERN].some(pattern => {
+                const matches = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : pattern.flags + 'g');
+                return [...clause.matchAll(matches)].some(match => /^(?:(?:指标|分数|得分))?(?:(?:为|是|从|升至|降至)\s*[-+]?[0-9]+(?:\.[0-9]+)?|下(?:有|无)[^，,；;。]{1,24}(?:刺激|条件)(?:为|是)\s*[-+]?[0-9]+(?:\.[0-9]+)?)(?![A-Za-z0-9_.])/iu.test(clause.slice(match.index + match[0].length)));
+            });
+            if (/(?:为|是|从|升至|降至)\s*[-+]?[0-9]+(?:\.[0-9]+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分|x|×))?(?![A-Za-z0-9_.])/iu.test(clause) && !/(?:参数(?:量|值|个数)?|学习率|批量|批大小|样本(?:量|数)|训练|推理|部署|迭代|步数|轮数|GPU|CPU|显存|内存|硬件|时长|小时|batch)/iu.test(clause)
+                && (metric || (previousMetricHeader && /^(?:(?:本方法|本文方法|所提方法|提出的方法|本系统|该方法|该系统)(?:为|是|从|升至|降至)\s*[-+]?[0-9]+(?:\.[0-9]+)?|[A-Z][A-Za-z0-9_-]{1,40}(?:为|是|从|升至|降至)\s*[-+]?[0-9]+(?:\.[0-9]+)?\s*(?:%|％|dB|ms|s|秒|分钟|倍|点|分|x|×)(?![A-Za-z0-9_])|(?:元音|辅音|鼻音|擦音|音段)\s*`?\/[A-Za-z]+\/`?(?:为|是)\s*[-+]?[0-9]+(?:\.[0-9]+)?)(?![A-Za-z0-9_.])/iu.test(clause)))) return true;
+            previousMetricHeader = new RegExp(`^(?:以|用)(?:${CORE_SUMMARY_METRIC_PATTERN.source}|${CORE_SUMMARY_CONFERENCE_METRIC_PATTERN.source})(?:计|衡量)$`, 'iu').test(clause);
+        }
+        return false;
+    });
+    return syntheticSetting || speakerSplit || timedHardware || namedRequestEvaluation || heldOutSpeakerComparison || measuredNaturalSetting;
 }
 
 function hasRecordedDissonanceComparison(sentence) {
@@ -1882,7 +1900,25 @@ function hasGeneratedInputModelHeadChain(summary) {
     return false;
 }
 
+function hasExplicitEditedVectorHandoff(summary) {
+    const sentences = String(summary || '').split(/[。！？!?；;\n]/u).map(s => s.trim()).filter(Boolean);
+    const denied = /(?:并非|并未|不是|不会|不能|尚未|未曾|不再|假设|假想|假定|设想|如果|若|是否|可能|预计|预期|计划|未来|讨论|提及|相关工作|独立方法|无关)|(?:不|未|没有)(?:被|曾|实际|真正|直接|会|能|再|继续)*(?:输出|生成|得到|编辑|变换|移动|映射|使用|接收|承接|送入|作为|合成|重合成|重建)|(?:说法|表述|观点|判断)[^。；]{0,20}(?:错误|有误|不成立|不正确)/u;
+    for (let i = 0; i + 2 < sentences.length; i++) {
+        const parts = sentences.slice(i, i + 3);
+        if (parts.some(s => s.length > 320 || denied.test(s))) continue;
+        const produced = /编码器[^，,。；]{0,80}(?:输出|生成|得到)(?:身份|说话人|潜在|特征)?向量\s*([A-Z][A-Z0-9_]{0,7})(?![A-Za-z0-9_′’\x27])/u.exec(parts[0]);
+        if (!produced) continue;
+        const variable = produced[1];
+        const edit = new RegExp("(?:编辑|变换|适配|投影)(?:阶段|模块|器)?以(?:上一步的|该|此)?" + variable + "为输入[^。；]{0,160}(?:移动|平移|变换|映射|编辑)[^。；]{0,60}(?:得到|输出|生成)" + variable + "[′’\\x27](?![A-Za-z0-9_′’\\x27])", 'u');
+        const consumer = new RegExp("^(?:解码器|声码器)(?:以|将|把)(?:上一步的)?(?:(?:离散)?(?:语义|内容)?(?:单元|表示|特征|编码)(?:和|与))?" + variable + "[′’\\x27](?![A-Za-z0-9_′’\\x27])" + "(?:共同)?(?:为条件输入|作为条件输入|作为输入)[^。；]{0,100}(?:合成|重合成|重建|输出)波形", 'u');
+        const unused = new RegExp("(?:丢弃|弃用|忽略|不使用|未使用|没有使用)(?:了)?(?:该|此)?(?:向量)?" + variable + "(?:[′’\\x27](?![A-Za-z0-9_′’\\x27]))?", 'u');
+        if (!parts.some(s => unused.test(s)) && edit.test(parts[1]) && consumer.test(parts[2])) return true;
+    }
+    return false;
+}
+
 function hasExplicitNaturalProductChain(summary) {
+    if (hasExplicitEditedVectorHandoff(summary)) return true;
     if (hasGeneratedInputModelHeadChain(summary)) return true;
     if (hasExplicitArtifactHandoff(summary)) return true;
     if (hasConcreteProductHandoff(summary)) return true;

@@ -140,3 +140,53 @@ test('核心材料措辞不改变六个允许开源分值及理论证明的原�
     assert.equal(parseAnalysis(analysis).openSourceScore, '1.2');
     assert.equal(parseAnalysis(analysis.replace('document_type: 理论研究', 'document_type: 方法研究')).openSourceScore, '0.0');
 });
+
+test('具名闭源教师的明确对照做法只屏蔽对照状态词，不误拒方法创新性', () => {
+    // li26o 的真实拒绝日志理由；不是伪装成原始失败 API JSON。
+    const loggedReason = '[A_METHOD] 四阶段 Cogito-Pipe 聚合三域与混合音频并用约 500 道种子问题引导问答，再由同一思考模型隐去答案自生成自由形式思维链，与依赖 Gemini 等闭源教师的做法形成差异化组合，具有系统级方法新颖性';
+    for (const reason of [loggedReason, loggedReason.replace('Gemini', 'Gemini 2.5 Pro')]) {
+        const value = payload();
+        value.dimensions.innovation.reason = reason;
+        const audit = parse(value);
+        assert.equal(audit.dimensions.innovation.reason, reason);
+        assert.equal(audit.dimensions.innovation.score, value.dimensions.innovation.score);
+        assert.deepEqual(revalidateScoringAudit(audit, allowed), audit);
+    }
+});
+
+test('闭源教师比较不豁免同句前后自身缺失材料、复现缺口或真实扣分', () => {
+    const comparison = '与依赖 Gemini 等闭源教师的做法形成差异化组合';
+    for (const dimension of ['innovation', 'technicalRigor', 'experimentalSufficiency', 'clarity', 'impact', 'reproducibility', 'engineering']) {
+        for (const deficit of ['本文未开源', '本模型闭源', '缺少代码', '权重未提供', '核心材料尚未公开']) {
+            for (const reason of [
+                `[A_METHOD] ${deficit}，${comparison}，因此降低本项得分。`,
+                `[A_METHOD] 方法采用不同的思维链，${comparison}，但${deficit}，因此降低本项得分。`
+            ]) {
+                const value = payload(); value.dimensions[dimension].reason = reason;
+                assert.throws(() => parse(value), /其他维度.*违规分句/, dimension + '/' + reason);
+            }
+        }
+    }
+    for (const deficit of ['训练配置未披露', '复现步骤不完整']) {
+        const value = payload(); value.dimensions.innovation.reason = `[A_METHOD] 方法采用不同的思维链，${comparison}，但${deficit}，因此降低本项得分。`;
+        assert.throws(() => parse(value), /其他维度.*违规分句/);
+    }
+});
+
+test('教师归属含混、否定或双重否定不获得新的比较状态豁免', () => {
+    for (const comparison of [
+        '本文依赖 Gemini 等闭源教师的做法形成差异化组合',
+        '依赖 Gemini 等闭源教师的做法形成差异化组合',
+        '当前方法与依赖 Gemini 等闭源教师的做法形成差异化组合',
+        '与依赖本文等闭源教师的做法形成差异化组合',
+        '与依赖本模型等闭源教师的做法形成差异化组合',
+        '与不依赖 Gemini 等闭源教师的做法形成差异化组合',
+        '与并非不依赖 Gemini 等闭源教师的做法形成差异化组合',
+        '并非不与依赖 Gemini 等闭源教师的做法形成差异化组合',
+        '与依赖 Gemini 等闭源教师的做法并无差异',
+        '与依赖 Gemini 等闭源教师的做法形成差异化组合的说法并不成立'
+    ]) {
+        const value = payload(); value.dimensions.innovation.reason = `[A_METHOD] 该方法采用自由形式推理，${comparison}，因此需要重新判断创新性。`;
+        assert.throws(() => parse(value), /其他维度.*违规分句/, comparison);
+    }
+});

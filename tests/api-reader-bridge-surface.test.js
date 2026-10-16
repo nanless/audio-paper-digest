@@ -319,3 +319,73 @@ test('圈号和上标数字只补排版空格，原符号、代码、引文和�
         assert.equal(normalizeReaderProseFormatting(protectedText), protectedText);
     }
 });
+
+
+test('术语内原子乘号与组合连接分隔符分别回绑', () => {
+    const paragraph = '**时间遮挡 × 时间×模态遮挡：** 两种作用共同解释。';
+    for (const terms of [
+        ['时间遮挡', '时间×模态遮挡'],
+        ['时间×模态遮挡', '时间遮挡']
+    ]) {
+        assert.equal(findReaderBridgeParagraph([paragraph], terms), paragraph);
+    }
+});
+
+test('普通术语保留无空白乘号和有空白 x 的既有兼容', () => {
+    for (const paragraph of [
+        '**时间遮挡×模态遮挡：** 解释。',
+        '**时间遮挡 x 模态遮挡：** 解释。'
+    ]) {
+        assert.equal(
+            findReaderBridgeParagraph([paragraph], ['时间遮挡', '模态遮挡']),
+            paragraph
+        );
+    }
+});
+
+test('原子术语不吸收不同分组或无明确组合边界的标题', () => {
+    for (const paragraph of [
+        '**时间 × 遮挡×模态遮挡：** 解释。',
+        '**时间遮挡 × 时间 × 模态遮挡：** 解释。',
+        '**时间遮挡×时间×模态遮挡：** 解释。'
+    ]) {
+        assert.equal(
+            findReaderBridgeParagraph([paragraph], ['时间遮挡', '时间×模态遮挡']),
+            null
+        );
+    }
+});
+
+test('原子乘号兼容仍拒绝缺项、多项、近似术语与重复解释段', () => {
+    const paragraph = '**时间遮挡 × 时间×模态遮挡：** 解释。';
+    const terms = ['时间遮挡', '时间×模态遮挡'];
+    assert.equal(findReaderBridgeParagraph([paragraph, paragraph], terms), null);
+    for (const invalid of [
+        '**时间遮挡：** 解释。',
+        '**时间遮挡 × 时间×模态遮挡 × 额外术语：** 解释。',
+        '**时间遮挡 × 时间×模态掩蔽：** 解释。'
+    ]) {
+        assert.equal(findReaderBridgeParagraph([invalid], terms), null);
+    }
+});
+
+test('相同组成词的不同分组只回绑各自的唯一解释段', () => {
+    const first = '**时间×模态 × 上下文遮挡：** 第一种。';
+    const second = '**时间 × 模态×上下文遮挡：** 第二种。';
+    const paragraphs = [first, second];
+    assert.equal(
+        findReaderBridgeParagraph(paragraphs, ['时间×模态', '上下文遮挡']),
+        first
+    );
+    assert.equal(
+        findReaderBridgeParagraph(paragraphs, ['时间', '模态×上下文遮挡']),
+        second
+    );
+    assert.equal(
+        findReaderBridgeParagraph(
+            ['**时间 × 模态 × 上下文遮挡：** 模糊。'],
+            ['时间 × 模态', '上下文遮挡']
+        ),
+        null
+    );
+});

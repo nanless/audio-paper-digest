@@ -21,6 +21,7 @@ const {
     findDefensiveNegationSaturation,
     findTechnicalTermAdhesions,
     findMissingComparisonUnits,
+    maskExplicitTurnRangeAxis,
     findBatchTemplateReuse,
     validateReadabilityRubric,
     numericLexemes,
@@ -1353,4 +1354,66 @@ it('字面下划线保留技术词边界，真实强调与无边界粘连仍须�
         '**训练GFLOPs**', 'GFLOPs计算', '**GFLOPs**计算', '训练~~GFLOPs~~']) {
         assert.ok(findTechnicalTermAdhesions(text).length > 0, text);
     }
+});
+
+
+describe('显式双轴中的轮次分箱与准确率数值按角色分别核验', () => {
+    const bins = '1-5、6-10、11-15、16-20、21-30 直到 31+';
+    const issue = text => findMissingComparisonUnits(text);
+
+    it('explicit turn bins and normalized JGA axes have distinct number roles', () => {
+        for (const text of [
+            `图中横轴为轮次区间从 ${bins}，纵轴为联合目标准确率 JGA 从 0.0 到 1.0 越高越好。`,
+            `纵轴为联合目标准确率 JGA 从 0.0 到 1.0，横轴为轮次区间从 ${bins}，越高越好。`,
+            `纵轴为轮次区间从 ${bins}，横轴为联合目标准确率 JGA 从 0.0 到 1.0 越高越好。`
+        ]) {
+            assert.deepEqual(issue(text), [], text);
+        }
+    });
+
+    it('independent true percentage results and raw accuracy axis numbers remain guarded', () => {
+        for (const text of [
+            `横轴为轮次区间从 ${bins}，纵轴为准确率从 20 到 80，越高越好。`,
+            `横轴为轮次区间从 ${bins}，纵轴为JGA从0到1，准确率提高到90。`,
+            '横轴为准确率31+，纵轴为轮次从0到1，越高越好。',
+            '码本增大时，准确率在90处下降。'
+        ]) {
+            assert.ok(issue(text).length > 0, text);
+        }
+    });
+
+    it('ambiguous missing duplicate axes and unknown count labels get no masking', () => {
+        for (const text of [
+            `横轴为轮次区间从 ${bins}，准确率从0到1越高越好。`,
+            `横轴为轮次区间从 ${bins}，横轴为准确率从0到1越高越好。`,
+            `横轴为轮次区间从 ${bins}，纵轴为准确率从0到1，横轴为轮次，越高越好。`,
+            `横轴为未知区间从 ${bins}，纵轴为准确率从0到1越高越好。`
+        ]) {
+            assert.ok(issue(text).length > 0, text);
+        }
+    });
+
+    it('noncontiguous reversed scientific and truncated interval lists are not inferred', () => {
+        for (const badBins of [
+            '1-5、7-10、11-15、16-20、21-30 直到 31+',
+            '5-1、6-10、11-15、16-20、21-30 直到 31+',
+            '1-5、6-10、11-15、16-20、21-30 直到 32+',
+            '1-5、6-10、11-15、16-20、21-30 直到 31+、32'
+        ]) {
+            const text = `横轴为轮次区间从 ${badBins}，纵轴为准确率从0到1越高越好。`;
+            assert.ok(issue(text).length > 0, text);
+        }
+    });
+
+    it('unrecognized scientific, identifier and overlong lists are left byte-identical by the role mask', () => {
+        const longBins = Array.from({ length: 17 }, (_, i) => `${i * 5 + 1}-${i * 5 + 5}`).join('、') + ' 直到 86+';
+        for (const badBins of [
+            '1-5、6-10、11-15、16-20、21-30 直到 3.1e1+',
+            '1-5、6-10、11-15、16-20、21-30 直到 K31+',
+            longBins
+        ]) {
+            const text = `横轴为轮次区间从 ${badBins}，纵轴为准确率从0到1越高越好。`;
+            assert.equal(maskExplicitTurnRangeAxis(text), text);
+        }
+    });
 });

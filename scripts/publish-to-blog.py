@@ -4773,7 +4773,7 @@ def _strip_core_summary_non_result_numerals(text):
         r'(?<![A-Za-z0-9_])\d+(?:,\d{3})*(?:\.\d+)?\s*(?:种\s*)?(?:languages?|语言)(?![A-Za-z0-9_])',
         ' ', value, flags=re.IGNORECASE,
     )
-    return re.sub(r'\b(?:19|20)\d{2}\b', ' ', value)
+    return re.sub(r'(?<![A-Za-z0-9_])(?:19|20)\d{2}(?![A-Za-z0-9_])', ' ', value)
 
 
 def _complete_corpus_curation_summary(summary):
@@ -4873,9 +4873,22 @@ def _has_mean_room_simulation_comparison(sentence):
     return bool(comparison[1] in seconds and all(order in seconds and (seconds[comparison[1]] > seconds[order] if comparison[2] == '高于' else seconds[comparison[1]] < seconds[order]) for order in compared))
 
 
-def _has_concrete_core_summary_setting(sentence):
+def _has_concrete_core_summary_setting(sentence, metric_pattern=None, conference_metric_pattern=None):
     if re.search(r'(?:讨论|提及|并非|不是|不能|假想|设想|假设|计划|未来|无关|文件目录|如果|若在|预计|预期|可能|未在|没有|未进行|未做|不进行|不做)', sentence):
         return False
+    experiment_scope = re.search(r'(?:在|于)[^，,。！？!?；;\n]{1,150}(?:实验|测量)(?:中|上)', sentence)
+    format_scope = re.search(r'(?:在|于)([^，,。！？!?；;\n]{1,110}(?:语音|音频|音乐))(?:上|中)', sentence)
+    scopes = [experiment_scope if experiment_scope and re.search(r'[1-9][0-9]{0,5}\s*名[^，,。！？!?；;\n]{0,45}(?:参与者|听者|受试者|母语者|说话人)', experiment_scope[0]) and re.search(r'(?:聆听|听辨|听测|主观|重复)[^，,。！？!?；;\n]{0,45}实验', experiment_scope[0]) else None, re.search(r'(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}\s*(?:匹配|失配|跨域|未见说话人)测试[^，,。！？!?；;\n]{0,60}(?:下|中|上)', sentence),
+        format_scope if format_scope and re.search(r'采样', format_scope[1]) and re.search(r'(?:[1-9][0-9]{0,2}|[一二两三四五六七八九十百]{1,5})位', format_scope[1]) and re.search(r'[0-9]+(?:\.[0-9]+)?\s*(?:kHz|Hz)(?![A-Za-z])', format_scope[1]) else None]
+    if metric_pattern is not None and conference_metric_pattern is not None and not re.search(r'(?:假设|假想|假定|设想|如果|若|是否|预计|预期|可能|计划|未来|讨论|提及|并非|不是|不能|未进行|未测|未报告|没有|将(?:会|要)?(?:在|于))', sentence):
+        for scope in filter(None, scopes):
+            previous_metric_header = False
+            for raw in re.split(r'[，,；;]', sentence[scope.end():]):
+                clause = raw.strip()
+                metric = any(re.search(r'^(?:(?:指标|分数|得分))?(?:(?:为|是|从|升至|降至)\s*[-+]?[0-9]+(?:\.[0-9]+)?|下(?:有|无)[^，,；;。]{1,24}(?:刺激|条件)(?:为|是)\s*[-+]?[0-9]+(?:\.[0-9]+)?)(?![A-Za-z0-9_.])', clause[match.end():], re.I) for pattern in (metric_pattern, conference_metric_pattern) for match in pattern.finditer(clause))
+                if re.search(r'(?:为|是|从|升至|降至)\s*[-+]?[0-9]+(?:\.[0-9]+)?(?:\s*(?:%|％|dB|ms|s|秒|分钟|小时|倍|点|分|x|×))?(?![A-Za-z0-9_.])', clause, re.I) and not re.search(r'(?:参数(?:量|值|个数)?|学习率|批量|批大小|样本(?:量|数)|训练|推理|部署|迭代|步数|轮数|GPU|CPU|显存|内存|硬件|时长|小时|batch)', clause, re.I) and (metric or (previous_metric_header and re.search(r'^(?:(?:本方法|本文方法|所提方法|提出的方法|本系统|该方法|该系统)(?:为|是|从|升至|降至)\s*[-+]?[0-9]+(?:\.[0-9]+)?|[A-Z][A-Za-z0-9_-]{1,40}(?:为|是|从|升至|降至)\s*[-+]?[0-9]+(?:\.[0-9]+)?\s*(?:%|％|dB|ms|s|秒|分钟|倍|点|分|x|×)(?![A-Za-z0-9_])|(?:元音|辅音|鼻音|擦音|音段)\s*`?/[A-Za-z]+/`?(?:为|是)\s*[-+]?[0-9]+(?:\.[0-9]+)?)(?![A-Za-z0-9_.])', clause, re.I))):
+                    return True
+                previous_metric_header = bool(re.search(r'^(?:以|用)(?:' + metric_pattern.pattern + '|' + conference_metric_pattern.pattern + r')(?:计|衡量)$', clause, re.I))
     return bool(re.search(
         r'(?<![A-Za-z0-9_])[A-Z][A-Za-z0-9._-]{1,39}-Bench(?![A-Za-z0-9_])全部\s*[1-9][0-9]*个请求的评估中'
         r'|(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}\s*标准(?:[1-9][0-9]*|[一二两三四五六七八九十]+)名留出说话人[^，,。！？!?；;\n]{0,100}比较中', sentence,
@@ -5027,7 +5040,28 @@ def _has_generated_input_model_head_chain(summary):
     return False
 
 
+def _has_explicit_edited_vector_handoff(summary):
+    sentences = [s.strip() for s in re.split(r'[。！？!?；;\n]', str(summary or '')) if s.strip()]
+    denied = re.compile(r'(?:并非|并未|不是|不会|不能|尚未|未曾|不再|假设|假想|假定|设想|如果|若|是否|可能|预计|预期|计划|未来|讨论|提及|相关工作|独立方法|无关)|(?:不|未|没有)(?:被|曾|实际|真正|直接|会|能|再|继续)*(?:输出|生成|得到|编辑|变换|移动|映射|使用|接收|承接|送入|作为|合成|重合成|重建)|(?:说法|表述|观点|判断)[^。；]{0,20}(?:错误|有误|不成立|不正确)')
+    for i in range(len(sentences) - 2):
+        parts = sentences[i:i + 3]
+        if any(len(s) > 320 or denied.search(s) for s in parts):
+            continue
+        produced = re.search(r'编码器[^，,。；]{0,80}(?:输出|生成|得到)(?:身份|说话人|潜在|特征)?向量\s*([A-Z][A-Z0-9_]{0,7})(?![A-Za-z0-9_′’\x27])', parts[0])
+        if not produced:
+            continue
+        variable = re.escape(produced[1])
+        edit = re.compile(r'(?:编辑|变换|适配|投影)(?:阶段|模块|器)?以(?:上一步的|该|此)?' + variable + r'为输入[^。；]{0,160}(?:移动|平移|变换|映射|编辑)[^。；]{0,60}(?:得到|输出|生成)' + variable + r'[′’\x27](?![A-Za-z0-9_′’\x27])')
+        consumer = re.compile(r'^(?:解码器|声码器)(?:以|将|把)(?:上一步的)?(?:(?:离散)?(?:语义|内容)?(?:单元|表示|特征|编码)(?:和|与))?' + variable + r'[′’\x27](?![A-Za-z0-9_′’\x27])' + r'(?:共同)?(?:为条件输入|作为条件输入|作为输入)[^。；]{0,100}(?:合成|重合成|重建|输出)波形')
+        unused = re.compile(r'(?:丢弃|弃用|忽略|不使用|未使用|没有使用)(?:了)?(?:该|此)?(?:向量)?' + variable + r'(?:[′’\x27](?![A-Za-z0-9_′’\x27]))?')
+        if not any(unused.search(s) for s in parts) and edit.search(parts[1]) and consumer.search(parts[2]):
+            return True
+    return False
+
+
 def _has_explicit_natural_product_chain(summary):
+    if _has_explicit_edited_vector_handoff(summary):
+        return True
     if _has_generated_input_model_head_chain(summary):
         return True
     if _has_explicit_artifact_handoff(summary):
@@ -5199,7 +5233,7 @@ def _detailed_core_summary_semantic_issue(summary):
         re.IGNORECASE,
     )
     conference_metric = re.compile(
-        r'包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差'
+        r'包络相关(?:性)?|抖动|计数偏差|总误差|频率误差|衰减误差|增益误差|相对误差|平均误差|压缩率|谐波失真|频谱对比度损失|起音时间(?:对数)?偏差|(?:对数似然比代价(?:[ \t]*[Cc][Ll][Ll][Rr](?![A-Za-z0-9_])|(?![ \t-]*[Cc][Ll][Ll][Rr]))|声对比度|声压级)(?=[ \t]*(?:指标|分数|得分)?(?:为|是|从|升至|降至)[ \t]*[-+]?[0-9]+(?:\.[0-9]+)?(?![A-Za-z0-9_.]))'
     )
     comparison = re.compile(
         r'(?:from\b[^。！？!?]{0,50}\bto\b|improv(?:e|es|ed|ement)|outperform(?:s|ed)?|reduc(?:e|es|ed|tion)|increase[sd]?|decrease[sd]?|degrad(?:e|es|ed|ation)|on par|comparable|(?:由|从)[^。！？!?]{0,40}(?:升至|升到|降至|降到|提升至|提高到)|相比|相较|优于|超过|反超|低于|高于|提升|提高|改善|改进|降低|下降|减少|达到|增至|减至|领先|持平|相当|接近)',
@@ -5249,7 +5283,7 @@ def _detailed_core_summary_semantic_issue(summary):
         )
         has_metric = narrow_measured_result or metric.search(metric_sentence) or conference_metric.search(metric_sentence)
         if has_metric and has_direction and numbers \
-                and (narrow_measured_result or measured_cross_validation or setting.search(result_sentence) or named_setting.search(result_sentence) or numeric_named_setting.search(sentence) or _has_concrete_core_summary_setting(result_sentence)) \
+                and (narrow_measured_result or measured_cross_validation or setting.search(result_sentence) or named_setting.search(result_sentence) or numeric_named_setting.search(sentence) or _has_concrete_core_summary_setting(result_sentence, metric, conference_metric)) \
                 and (len(numbers) >= 2 or re.search(
                     r'(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|本方法|所提方法|移除|完整模型|竞品)', result_sentence
                 )) and not _has_cross_metric_directional_comparison(result_sentence):

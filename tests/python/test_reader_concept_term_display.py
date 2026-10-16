@@ -52,5 +52,14 @@ class ReaderConceptTermDisplayTests(unittest.TestCase):
             self.assertEqual(paper, before)
 
 
+    def test_atomic_multiplication_is_part_of_a_declared_complete_term(self):
+        text = '**时间遮挡 × 时间×模态遮挡：** 时间遮挡用于定位上下文中起作用的时刻，时间×模态遮挡再区分该时刻对应的模态，两者结合解释各自分工、共同作用与证据边界。'
+        paper = self.sample(text, ['时间遮挡', '时间×模态遮挡'])
+        before = copy.deepcopy(paper)
+        self.assertIsNotNone(publish._api_reader_payload(paper))
+        self.assertEqual(paper, before)
+        self.assertFalse(publish._api_reader_concept_term_present(text, '时间×模态掩蔽'))
+
+
 if __name__ == '__main__':
     unittest.main()

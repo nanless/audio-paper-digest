@@ -585,6 +585,9 @@ function findForbiddenDeductionClauses(reason, patterns) {
             const checked = pattern === OPEN_SOURCE_DEFICIT
                 ? clause.replace(/((?:领先|优于|超过|对比|比较|相比)(?:当前|现有|主流|其他|部分|已有|最强|多种|多个|所有|的|了|于){0,3})闭源((?:(?:与|和|及)开源)?(?:基线|竞品))/gu,
                     '$1对照$2')
+                    // 仅比较分句中具名教师的状态属于对照做法，不遮住本文的资源缺失。
+                    .replace(/([，,]与依赖\s*[A-Z][A-Za-z0-9 .+-]{0,79}等)闭源(教师的做法形成差异化组合)(?=[，,]|$)/gu,
+                        '$1对照$2')
                 : clause;
             return pattern.test(checked);
         });
@@ -3129,7 +3132,11 @@ function findReaderBridgeParagraph(articleBlocks, terms) {
     const matches = articleBlocks.filter(block => {
         const heading = /^\s*(?:\*\*\s*)?(.+?)\s*(?:：|:)\s*(?:\*\*)?/.exec(String(block).trim())?.[1];
         if (!heading) return false;
-        const actualTerms = heading.split(/\s*×\s*|\s+x\s+/iu);
+        // 声明项自身的无空白 × 属于术语；组合连接仍须是 assembler 的有空白分隔。
+        // 没有原子 × 的既有记录沿用原分隔兼容，不能把错误分组或额外术语拼成同一项。
+        const separator = terms.some(term => String(term).includes('×'))
+            ? /\s+×\s+|\s+x\s+/iu : /\s*×\s*|\s+x\s+/iu;
+        const actualTerms = heading.split(separator);
         if (actualTerms.length !== expected.length) return false;
         const normalizedActualTerms = actualTerms.map(normalizeReaderBridgeTerm);
         const sameOrder = normalizedActualTerms.every((value, index) => value === expected[index]);
@@ -3401,7 +3408,7 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
     const expandExactDecimalScale = (value, scale) => {
         const sign = /^[+-]/.test(value) ? value[0] : '';
         const [integer, fraction = ''] = value.replace(/^[+-]/, '').split('.');
-        const shift = { 万亿: 12, 亿: 8, 千万: 7, 百万: 6, 万: 4 }[scale];
+        const shift = { 万亿: 12, 亿: 8, 千万: 7, 百万: 6, 万: 4, 千: 3 }[scale];
         const digits = (integer + fraction).padEnd(integer.length + shift, '0');
         const whole = digits.slice(0, integer.length + shift).replace(/^0+(?=\d)/, '');
         const remainder = digits.slice(integer.length + shift).replace(/0+$/, '');
@@ -3454,19 +3461,26 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
             }
         );
     }
-    // 排版在阿拉伯数字系数和它的量级之间插了空格之后，诊断可能只报出「万词/万步」。只
+    // 排版在阿拉伯数字系数和它的量级之间插了空格之后，诊断可能只报出「千小时/万词/万步」。只
     // 转换完整、无歧义的系数加量级；绝不要单独替换那个后缀。
     if (quantitativeIssues.some(issue => issue?.code === 'quantitative_chinese_numeral'
-        && /[万亿]/.test(String(issue.match || '')))) {
+        && /[千万亿]/.test(String(issue.match || '')))) {
         const amount = '[+-]?\\d+(?:\\.\\d+)?';
         const units = `(?:${SCALED_ARABIC_MEASUREMENT_UNITS
             .slice().sort((a, b) => b.length - a.length)
             .map(item => item.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?![A-Za-z])`;
-        const scales = '(?:万亿|百万|千万|万|亿)';
+        const scales = '(?:万亿|百万|千万|万|亿|千)';
         const range = `(?:[-–—至到][ \\t]*${amount}[ \\t]*${scales}[ \\t]*${units})`;
-        const pattern = new RegExp(`(?<![A-Za-z0-9.,/])(${amount})[ \\t]*(万亿|百万|千万|万|亿)(?=[ \\t]*(?:${units}|${range}|[，。；：、,.;:]|与(?=[ \\t]*[+-]?\\d)|$))`, 'g');
+        const pattern = new RegExp(`(?<![A-Za-z0-9.,/])(${amount})[ \\t]*(万亿|百万|千万|万|亿|千)(?=[ \\t]*(?:${units}|${range}|[，。；：、,.;:]|与(?=[ \\t]*[+-]?\\d)|$))`, 'g');
         normalized = normalized.replace(pattern, (surface, value, scale, offset, whole) => {
             const before = whole.slice(0, offset).trimEnd();
+            // 千量级只转换独立完整的系数与测量单位；范围和近似词保留原样。
+            // 不把“6 到 8 千小时”的后端独自展开，也不将数千/成千/上千写成精确值。
+            if (scale === '千' && (!new RegExp(`^[ \\t]*${units}`).test(whole.slice(offset + surface.length))
+                || /[几数成上千]$/u.test(before)
+                || /[A-Za-z]\s*[+\-−]?\s*$/u.test(before)
+                || /[\d千万亿]\s*(?:到|至|[-–—])\s*$/u.test(before)
+                || /^\s*(?:到|至|[-–—])/u.test(whole.slice(offset + surface.length)))) return surface;
             if (/[A-Za-z0-9.,/^×*]$/.test(before)
                 || (/[万亿]$/.test(before) && !/^[+-]/.test(value))) return surface;
             // 以十进制字符串移位，不使用浮点乘法或舍入。
@@ -3565,6 +3579,8 @@ function normalizeReaderProseFormatting(text, quantitativeIssues = []) {
         if (!valid) continue;
         normalized = normalized.replaceAll(match, (surface, offset, whole) => {
             const before = whole.slice(0, offset), after = whole.slice(offset + surface.length);
+            // 近似量级的后缀不能单独变成精确千数；完整数字系数已在上面的量级分支处理。
+            if (/^千\s*/u.test(surface) && /[成上数]$/u.test(before.trimEnd())) return surface;
             // 旧诊断可能把“一致”“一般”“一定”的开头当成参数值；不能破坏自然词。
             if (surface.endsWith('一') && /^[致般定]/u.test(after)) return surface;
             // 一个问题可能只指出更长数字或分数当中的一个后缀。
@@ -8853,8 +8869,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const attemptLimit = explicitRound ? explicitRound.maxResponses : repair.readerAttemptLimit(
         maxAttempts, completedAttempts, candidate, boundedRecoveryAllowance);
     const changedValidationWithinOriginalBudget = repair.canContinueRevalidatedIssuesWithinBudget({
-        recovered, identity, currentIssues, candidateRevalidated, maxAttempts, attemptLimit, explicitRound
+        recovered, identity, currentIssues, candidateRevalidated, maxAttempts, attemptLimit, explicitRound,
+        patchOnlyAtFullLimit: fullAttempts === 2 && boundedRecoveryAllowance === 0 && !explicitRound
     });
+    const revalidatedPatchOnly = changedValidationWithinOriginalBudget && fullAttempts === 2;
     if (completedAttempts >= attemptLimit
         || !useEscalatedRepairBudget && !changedValidationWithinOriginalBudget
             && (noProgress >= 2 || validationFailureStreak >= 2)) {
@@ -8983,6 +9001,12 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                     oldSha256: repair.hashDraft(candidate.conceptBridges[Number(pointer.split('/').at(-1))]) }));
             repairContext.figureOrdinals = [];
         }
+        if (revalidatedPatchOnly && !repair.isSafeExistingReaderPatchContext(
+            candidate, repairContext, sourceBindingNeedsFullRetry, currentIssues
+        )) {
+            throw readerRepairStopped('READER_PATCH_ONLY_NO_SAFE_TARGET',
+                '原全文预算已耗尽；当前新问题没有安全的既有局部目标，保留候选与原次数，不发送全文请求');
+        }
         const fullRegenerationTableFeedback = candidate && explicitRound?.fullRegenerationReasonSha256 && fullAttempts === 0
             ? withReaderSourceTableEvidence(() => repair.repairTableEvidenceGuidance(candidate, currentIssues,
                 repair.buildRepairTargets(candidate, currentIssues, repairOptions), options.sourceText,
@@ -9041,6 +9065,13 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
                 && repairContext.figureOrdinals.includes(image.ordinal))
             : activeImageInputs;
         let selectedOrdinals = selectedInputs.filter(image => image.kind === 'figure').map(image => image.ordinal);
+        // Recheck the final redirected context immediately before the request boundary.
+        if (revalidatedPatchOnly && !repair.isSafeExistingReaderPatchContext(
+            candidate, repairContext, sourceBindingNeedsFullRetry, currentIssues
+        )) {
+            throw readerRepairStopped('READER_PATCH_ONLY_NO_SAFE_TARGET',
+                '原全文预算已耗尽，最终请求范围不再是安全局部补丁；本次不发送模型请求');
+        }
         let repairDiagnostic = null;
         let raw;
         const priorCandidateSha = candidate ? repair.hashDraft(candidate) : '';

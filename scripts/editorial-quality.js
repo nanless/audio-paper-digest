@@ -1139,6 +1139,32 @@ function maskBoundMetricDeltaIntervals(text) {
     });
 }
 
+// 显式双轴说明中的完整轮次分箱是计数坐标，不是附近准确率的值。
+// 只屏蔽已闭合的连续整数区间及最终开放分箱；其他轴、标签或结果数值原样检查。
+function maskExplicitTurnRangeAxis(text) {
+    const axes = [...String(text).matchAll(/([横纵])轴(?:为|是)/gu)];
+    if (axes.length !== 2 || axes[0][1] === axes[1][1]) return text;
+    const interval = '[1-9]\\d*\\s*[-–—]\\s*[1-9]\\d*';
+    const pattern = new RegExp(
+        `([横纵]轴(?:为|是)\\s*(?:对话)?轮次(?:区间|范围)?\\s*(?:从|为|是)?\\s*)`
+        + `((?:${interval}\\s*、\\s*){1,15}${interval}\\s*(?:、|直到)\\s*[1-9]\\d*\\s*\\+)`
+        + '(?=\\s*(?:[，,]|$))',
+        'gu'
+    );
+    return String(text).replace(pattern, (surface, label, bins) => {
+        const ranges = [...bins.matchAll(/([1-9]\d*)\s*[-–—]\s*([1-9]\d*)/gu)]
+            .map(match => [Number(match[1]), Number(match[2])]);
+        const finalOpen = /(?:、|直到)\s*([1-9]\d*)\s*\+$/u.exec(bins);
+        if (!finalOpen || ranges.length < 2 || ranges[0][0] !== 1
+            || ranges.some(([start, end], index) => !Number.isSafeInteger(start)
+                || !Number.isSafeInteger(end) || start > end
+                || index > 0 && start !== ranges[index - 1][1] + 1)
+            || !Number.isSafeInteger(Number(finalOpen[1]))
+            || Number(finalOpen[1]) !== ranges.at(-1)[1] + 1) return surface;
+        return label + ' '.repeat(bins.length);
+    });
+}
+
 function findMissingComparisonUnits(text) {
     const value = stripCodeLinksAndUrls(text)
         // 否则「一对一分配」会被读成两个数值后面跟一个「分」。
@@ -1186,7 +1212,7 @@ function findMissingComparisonUnits(text) {
         const parameterRanges = [...sentence.text.matchAll(
             /([λε])\s*在\s*[-+]?\d+(?:\.\d+)?\s*(?:到|至)\s*[-+]?\d+(?:\.\d+)?\s*之间/gu
         )];
-        let comparisonText = maskBoundMetricDeltaIntervals(sentence.text);
+        let comparisonText = maskExplicitTurnRangeAxis(maskBoundMetricDeltaIntervals(sentence.text));
         // NFE 的显式取值集合与同句展开步数 K 是设置条件。
         // 只屏蔽完整表达式，不能把同句裸露的 WER/CER 结果一并当作参数。
         const hasExplicitNfeSettings = /\bNFE\s*(?:∈|in\b|=)\s*\{\s*\d+(?:\s*[,，]\s*\d+)*\s*\}/iu.test(comparisonText);
@@ -1959,6 +1985,7 @@ module.exports = {
     findTechnicalTermAdhesions,
     findMissingComparisonUnits,
     maskBoundMetricDeltaIntervals,
+    maskExplicitTurnRangeAxis,
     findBatchTemplateReuse,
     validateReadabilityRubric,
     numericLexemes,

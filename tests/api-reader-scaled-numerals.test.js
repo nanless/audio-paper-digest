@@ -72,3 +72,36 @@ describe('Reader 明确量级是完整数值，不是可单独替换的后缀', 
         assert.equal(repair(once), once);
     });
 });
+
+
+it('完整千小时系数复用精确十进制移位，不进行浮点舍入', () => {
+    assert.match(repair('共约6千小时上训练。'), /约\s*6,000 小时/);
+    assert.match(repair('同样0.6千小时量级。'), /600 小时量级/);
+    assert.match(repair('0.0001千小时。'), /0\.1 小时/);
+});
+
+it('近似量级和共享量级范围不局部展开', () => {
+    for (const raw of [
+        '数千小时', '成千小时', '上千小时',
+        '6到8千小时', '6千到8千小时'
+    ]) {
+        assert.ok(repair(raw).includes('千'), raw);
+    }
+});
+
+it('科学记号、标识符、除法和未指定测量单位的千量级不猜值', () => {
+    for (const raw of [
+        'x6千小时', '1e3千小时', '1e+3千小时',
+        '6/8千小时', '6千。'
+    ]) {
+        assert.ok(repair(raw).includes('千'), raw);
+    }
+});
+
+it('代码与逐字引文不变，只有两端完整测量值可各自展开', () => {
+    for (const literal of ['`6千小时`', '“6千小时”', '> 6千小时']) {
+        assert.equal(repair(literal), literal);
+    }
+    assert.equal(repair('6千小时到8千小时'), '6,000 小时到 8,000 小时');
+    assert.equal(repair('千小时'), '1000 小时');
+});
