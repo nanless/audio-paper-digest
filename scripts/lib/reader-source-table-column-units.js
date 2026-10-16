@@ -20,7 +20,7 @@ function captionText(value) {
     return text(value).replace(/\(ρ×(\d+(?:\.\d+)?)\\rho\\times\s*\1\)/g,
         (_whole, number) => `(\\rho\\times ${number})`);
 }
-function mergedGrid(table) {
+function sourceSpanGrid(table) {
     const matrix = table?.matrix, cells = table?.cells;
     if (table?.recoveryStatus !== 'complete' || !Number.isSafeInteger(table.ordinal) || table.ordinal < 1
         || !/^[a-f0-9]{64}$/.test(table.sourceDomSha256 || '') || !Array.isArray(matrix)
@@ -39,12 +39,92 @@ function mergedGrid(table) {
         }
     }
     if (grid.some(row => row.some(cell => !cell))) return null;
-    const first = grid[0][0], height = first.rowspan;
+    return grid;
+}
+function mergedGrid(table) {
+    const grid = sourceSpanGrid(table);
+    if (!grid) return null;
+    const cells = table.cells, first = grid[0][0], height = first.rowspan;
     if (first.row !== 0 || first.column !== 0 || first.colspan !== 1 || first.header !== true || text(first.text) !== 'Method'
         || height < 2 || height > 4 || height >= grid.length) return null;
     if (cells.some(cell => cell.row < height && cell.row + cell.rowspan > height)) return null;
-    const paths = matrix[0].map((_value, column) => [...new Set(grid.slice(0,height).map(row => row[column]))]);
+    const paths = grid[0].map((_value, column) => [...new Set(grid.slice(0,height).map(row => row[column]))]);
     return { grid, height, paths };
+}
+// An explicit Accuracy (%) parent applies only to its exact split leaf and
+// Model+Optimizer row. This does not infer percentages from result magnitudes.
+function mergedHeaderPercentCoverage(rendered, quotes, tables) {
+    const headers = rendered?.header || [], rows = rendered?.rows || [], result = [];
+    if (headers.length < 3 || !rows.length || rows.some(row => !Array.isArray(row) || row.length !== headers.length)
+        || !['Model', '模型'].includes(text(headers[0]))
+        || !['Optimizer', '优化器'].includes(text(headers[1]))) return result;
+    const quoteStrings = (quotes || []).filter(value => typeof value === 'string').map(text);
+    const leafName = value => compact(text(value).replace(/^Δ\\Delta(?=\s|$)/, 'Δ'));
+    const rowName = (value, markdown = false) => {
+        let raw = display(String(value ?? '')).normalize('NFKC').replace(/\s+/g, ' ').trim();
+        if (markdown) for (const wrapper of ['**', '__', '`', '*', '_']) {
+            if (raw.length > wrapper.length * 2 && raw.startsWith(wrapper) && raw.endsWith(wrapper)) {
+                raw = raw.slice(wrapper.length, -wrapper.length).trim(); break;
+            }
+        }
+        return raw;
+    };
+    for (let column = 2; column < headers.length; column++) {
+        const match = /^(.+?)\s+Accuracy\s*\(%\)$/.exec(text(headers[column]));
+        if (!match || headers.filter(value => compact(value) === compact(headers[column])).length !== 1) continue;
+        const candidates = [];
+        for (const table of tables || []) {
+            const grid = sourceSpanGrid(table), caption = text(table?.caption || '').split(/(?<=\.)\s/)[0];
+            if (!grid || grid.length < 3 || grid[0].length < 3 || caption.length < 24
+                || !quoteStrings.some(quote => quote.includes(caption))) continue;
+            const model = grid[0][0], optimizer = grid[0][1], parent = grid[0][2];
+            if (model.row !== 0 || model.column !== 0 || model.rowspan !== 2 || model.colspan !== 1 || model.header !== true
+                || text(model.text) !== 'Model' || optimizer.row !== 0 || optimizer.column !== 1
+                || optimizer.rowspan !== 2 || optimizer.colspan !== 1 || optimizer.header !== true
+                || text(optimizer.text) !== 'Optimizer' || parent.row !== 0 || parent.column !== 2
+                || parent.rowspan !== 1 || parent.colspan !== grid[0].length - 2 || parent.header !== true
+                || text(parent.text) !== 'Accuracy (%)' || grid[0].slice(2).some(cell => cell !== parent)) continue;
+            const leaves = grid[1].slice(2);
+            if (leaves.some((cell, index) => cell.row !== 1 || cell.column !== index + 2 || cell.rowspan !== 1
+                || cell.colspan !== 1 || cell.header !== true || !text(cell.text))) continue;
+            // Bind the complete rendered header to one DOM table before any
+            // per-column proof. Separate tables cannot donate split leaves.
+            if (headers.length !== grid[0].length || headers.slice(2).some((header, index) => {
+                const wanted = leafName(text(header).replace(/\s+Accuracy\s*\(%\)$/, ''));
+                return leafName(leaves[index].text) !== wanted
+                    || leaves.filter(cell => leafName(cell.text) === wanted).length !== 1;
+            })) continue;
+            if (rows.some(values => !rowName(values[0], true) || !rowName(values[1], true)
+                || grid.slice(2).filter(cells => rowName(cells[0].text) === rowName(values[0], true)
+                    && rowName(cells[1].text) === rowName(values[1], true)).length !== 1)) continue;
+            const matching = leaves.filter(cell => compact(cell.text) === compact(match[1]));
+            if (matching.length !== 1) continue;
+            candidates.push({ table, grid, leaf: matching[0], parent });
+        }
+        if (candidates.length !== 1) continue;
+        const { table, grid, leaf, parent } = candidates[0];
+        const sourceRows = grid.slice(2).map((cells, index) => ({ cells, sourceRow: index + 2 }));
+        for (const [row, values] of rows.entries()) {
+            const numbers = numericCell(values[column]);
+            if (!numbers || !rowName(values[0], true) || !rowName(values[1], true)) continue;
+            const matching = sourceRows.filter(({ cells }) => rowName(cells[0].text) === rowName(values[0], true)
+                && rowName(cells[1].text) === rowName(values[1], true));
+            if (matching.length !== 1) continue;
+            const { cells, sourceRow } = matching[0], model = cells[0], optimizer = cells[1], cell = cells[leaf.column];
+            const originalNumbers = numericCell(cell.text);
+            if (model.column !== 0 || model.colspan !== 1 || optimizer.row !== sourceRow || optimizer.column !== 1
+                || optimizer.rowspan !== 1 || optimizer.colspan !== 1 || cell.row !== sourceRow
+                || cell.column !== leaf.column || cell.rowspan !== 1 || cell.colspan !== 1
+                || !originalNumbers || JSON.stringify(originalNumbers) !== JSON.stringify(numbers)) continue;
+            for (const value of numbers) result.push({ row: row + 1, column, value, unit: '%',
+                sourceTableOrdinal: table.ordinal, sourceRow, sourceColumn: leaf.column,
+                sourceTableDomSha256: table.sourceDomSha256, sourceCellDomSha256: cell.sourceDomSha256,
+                headerCellDomSha256: leaf.sourceDomSha256,
+                headerPathCellDomSha256: [parent.sourceDomSha256, leaf.sourceDomSha256],
+                sourceRowIdentityCellDomSha256: [model.sourceDomSha256, optimizer.sourceDomSha256] });
+        }
+    }
+    return result;
 }
 function mergedCaptionPercentCoverage(rendered, quotes, tables) {
     const headers = rendered?.header || [], rows = rendered?.rows || [], result = [];
@@ -125,7 +205,8 @@ function coverageFromTables(rendered, quotes, tables) {
                 headerCellDomSha256:headerCell[0].sourceDomSha256,sourceCellDomSha256:cells.find(cell=>cell.column===column).sourceDomSha256});
         }
     }
-    return [...result, ...mergedCaptionPercentCoverage(rendered, quotes, tables)];
+    return [...result, ...mergedCaptionPercentCoverage(rendered, quotes, tables),
+        ...mergedHeaderPercentCoverage(rendered, quotes, tables)];
 }
 function coverage(rendered, quotes) {
     const context = savedScope.getStore() || require('./reader-sealed-pdf-quote-evidence').verifiedSourceContext();

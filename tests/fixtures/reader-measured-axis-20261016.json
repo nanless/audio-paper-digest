@@ -1,0 +1,20 @@
+{
+  "evidenceKind": "real_paid_reader_sentence_and_sealed_pdf_text",
+  "paperId": "2610.19445",
+  "candidateFile": "0831bd1be7adbe9d16e1b198c1a49b2b25cc3f7dfc37794e9042e02ef7130b8e.json",
+  "candidateFileSha256": "1ba45cfb9b856755273792bd93cb2369a9830c19981871b9382175287f2a4cf2",
+  "sourcePdfSha256": "5b3bdf80a22e79831c9eda328bbf36fa1471229101ab153cb56cb463d6152fd0",
+  "sourcePdfPage": 4,
+  "sourcePdfPageText": "2\n4\n6\n8\nMixture Duration (s)\n0.0\n0.2\n0.4\n0.6\n0.8\n1.0\nRetrieval R@1\nNSynth (synthetic)\nMoisesDB (real)\ntext cue\naudio cue\n",
+  "actualSentence": "图中横轴是混合时长从 2 秒到 8 秒，纵轴是检索召回率，橙色三角代表真实录音数据，蓝色圆点代表合成数据，实线是文本提示，虚线是音频提示。",
+  "constructedAccept": [
+    "横轴为音频时长从 2 秒至 8 秒，纵轴为召回率，输入增加后需要单独观察指标。",
+    "横轴是窗口时间从 200 毫秒到 800 毫秒，纵轴为错误率，不能直接据此计算下降幅度。"
+  ],
+  "constructedReject": [
+    "图中横轴是混合时长从 2 秒到 8 秒，纵轴是检索召回率，召回率从75提升到80。",
+    "横轴为音频时长从 2 秒至 8 秒，纵轴为召回率，召回率提升到80。",
+    "横轴是混合时长从 2 秒到 8 秒，检索召回率报告75对80%。",
+    "横轴是召回率从 2 秒到 8 秒。"
+  ]
+}

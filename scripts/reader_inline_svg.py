@@ -81,7 +81,13 @@ def normalize_static_html_breaks(text):
 
 
 class UnsupportedSvgDependency(ValueError):
-    """Intact source cannot supply complete pixels without unsaved CSS glyphs."""
+    """Intact source requires a specifically identified, unsealed CSS rule."""
+
+    def __init__(self, message, reason='external_css_icon_glyph'):
+        if reason not in {'external_css_icon_glyph', 'external_latexml_layout_css'}:
+            raise ValueError('未知的内联 SVG 依赖分类')
+        super().__init__(message)
+        self.reason = reason
 
 
 def has_unsaved_css_icon(element):
@@ -92,6 +98,54 @@ def has_unsaved_css_icon(element):
             and not list(element) and not ''.join(element.itertext()).strip()
             and bool(classes & {'fa', 'fas', 'far', 'fab', 'fal', 'fad'})
             and any(re.fullmatch(r'fa-[a-z0-9]+(?:-[a-z0-9]+)*', value) for value in classes))
+
+
+def has_unsaved_latexml_static_layout(element, parents):
+    """Only newly admitted pre/cite inside a demonstrably unstyled TeX box.
+
+    ar5iv-css CONTRIBUTING.md / docs/SVG_BOXES.md document --ltx-fo-* as
+    TeX-box geometry consumed by the container/content CSS, not CSS rules.
+    Do not guess replacement fonts or infer dependency from arbitrary classes.
+    """
+    html_spans = {'span', '{http://www.w3.org/1999/xhtml}span'}
+    content = parents.get(element)
+    while content is not None and content.tag not in {'foreignObject', '{http://www.w3.org/2000/svg}foreignObject'}:
+        if content.tag in html_spans and 'ltx_foreignobject_content' in content.attrib.get('class', '').split():
+            break
+        content = parents.get(content)
+    if content is None or content.tag not in html_spans:
+        return False
+    container = parents.get(content)
+    if (container is None or container.tag not in html_spans
+            or 'ltx_foreignobject_container' not in container.attrib.get('class', '').split()):
+        return False
+    foreign = parents.get(container)
+    if foreign is None or foreign.tag not in {'foreignObject', '{http://www.w3.org/2000/svg}foreignObject'}:
+        return False
+    # An inline-styled wrapper is outside this narrow absence proof. Preserve
+    # the normal renderer path rather than claim its layout is not self-contained.
+    if container.attrib.get('style', '').strip() or content.attrib.get('style', '').strip():
+        return False
+    declarations = {}
+    for declaration in foreign.attrib.get('style', '').split(';'):
+        if not declaration.strip():
+            continue
+        if ':' not in declaration:
+            return False
+        key, value = (part.strip() for part in declaration.split(':', 1))
+        if key in declarations:
+            return False
+        declarations[key] = value
+    geometry = [declarations.get('--ltx-fo-' + name, '') for name in ['width', 'height', 'depth']]
+    if (any(not re.fullmatch(r'(?:\d+(?:\.\d+)?|\.\d+)em', value) for value in geometry)
+            or float(geometry[0][:-2]) <= 0 or float(geometry[1][:-2]) <= 0
+            or not re.fullmatch(r'(?:\d+(?:\.\d+)?|\.\d+)pt', declarations.get('font-size', ''))
+            or float(declarations['font-size'][:-2]) <= 0):
+        return False
+    # No sealed stylesheet is permitted by validate_svg. Require absence of
+    # inline consumers as well; merely depositing custom properties cannot size
+    # these default-inline span wrappers or establish the TeX line-height rules.
+    return not any(re.search(r'var\(\s*--ltx-fo-', node.attrib.get('style', '')) for node in foreign.iter())
 
 
 def validate_svg(raw):
@@ -112,10 +166,25 @@ def validate_svg(raw):
                 raise ValueError('内联 SVG 含重复的元素标识符')
             ids[identifier] = node
     unsupported_dependency = False
+    unsupported_layout_dependency = False
     for element in root.iter():
+        # LaTeXML emits static verbatim prompts and citation labels inside an
+        # HTML foreignObject. Admit those containers only in that HTML subtree;
+        # all descendant attributes/resources still pass the same checks below.
+        static_html = element.tag.split('}')[-1].lower() in {'pre', 'cite'}
+        if static_html:
+            ancestor = parents.get(element)
+            while ancestor is not None and ancestor.tag not in {
+                    'foreignObject', '{http://www.w3.org/2000/svg}foreignObject'}:
+                ancestor = parents.get(ancestor)
+            if (element.tag not in {'pre', 'cite', '{http://www.w3.org/1999/xhtml}pre',
+                                    '{http://www.w3.org/1999/xhtml}cite'} or ancestor is None):
+                raise ValueError('内联 SVG 的静态 HTML 元素必须位于 foreignObject 内')
+            unsupported_layout_dependency = (unsupported_layout_dependency
+                                             or has_unsaved_latexml_static_layout(element, parents))
         unsaved_icon = has_unsaved_css_icon(element)
         unsupported_dependency = unsupported_dependency or unsaved_icon
-        if element.tag.split('}')[-1].lower() not in ALLOWED_TAGS:
+        if element.tag.split('}')[-1].lower() not in ALLOWED_TAGS and not static_html:
             raise ValueError('内联 SVG 含不允许的元素')
         if element.tag.split('}')[-1].lower() in {'mphantom', 'mstyle'}:
             ancestor = parents.get(element)
@@ -195,6 +264,9 @@ def validate_svg(raw):
             raise ValueError('内联 SVG 像素尺寸超过受控上限')
     if unsupported_dependency:
         raise UnsupportedSvgDependency('封存内联 SVG 含未封存的 CSS 图标依赖，不能取得完整像素')
+    if unsupported_layout_dependency:
+        raise UnsupportedSvgDependency('封存内联 SVG 的静态 pre/cite 依赖未封存的 LaTeXML 布局 CSS，不能取得完整像素',
+                                       reason='external_latexml_layout_css')
     return text
 
 
@@ -334,5 +406,5 @@ if __name__ == '__main__':
         sys.stdout.buffer.write(render_svg(sys.stdin.buffer.read(MAX_SOURCE_BYTES + 1)))
     except UnsupportedSvgDependency as error:
         sys.stderr.write(json.dumps({'contract': 'reader-inline-svg-error-v1',
-            'code': 'unsupported_dependency', 'reason': 'external_css_icon_glyph'}, separators=(',', ':')) + '\n')
+            'code': 'unsupported_dependency', 'reason': error.reason}, separators=(',', ':')) + '\n')
         sys.exit(65)

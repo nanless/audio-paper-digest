@@ -1853,12 +1853,34 @@ function buildMissingResultTableOperation(draft, issues) {
             };
         }
     }
+    // 已有结果表时，问题可能是测量值藏在文本格或每表证据不足；搬入数据/
+    // 成本表既不修正原表，也会改变其他表的全局编号。交给原位置的成对修复。
+    if (locatedTables.some(table => ['result', 'ablation'].includes(draft.sections?.[table.sectionIndex]?.kind))) return null;
+    const bindings = draft.tableBindings;
+    if (!Array.isArray(bindings) || locatedTables.length !== bindings.length
+        || bindings.some((binding, index) => binding?.tableIndex !== index + 1)
+        || !hasStableExistingTableMarkers(draft, locatedTables, bindings)) return null;
+    // 搬表预检只认明确指标列，未知列保留阻断；不能用类别/训练集等计数列
+    // 中的数字证明它是结果表。这不是来源或最终结果覆盖的通过凭证。
+    const measuredResultCells = table => {
+        const metricColumns = table.header.flatMap((header, column) =>
+            /(?<![A-Za-z0-9_])(?:WER|CER|PER|DER|JER|F1|BLEU|MOS|PESQ|STOI|ESTOI|SI-SDR|SDR|SNR|EER|UAR|AUC|AUROC|mAP|OVRL|SIG|BAK|MSE|MAE|RMSE|accuracy|precision|recall)(?![A-Za-z0-9_]|\s*(?:模型|方法|基线))|词错率|词错误率|字错率|准确率|正确率|错误率|召回率|精确率|均方根误差|平均绝对误差/i.test(String(header)) ? [column] : []);
+        return table.rows.reduce((count, row) => count + metricColumns.filter(column =>
+            /^\s*(?:约\s*)?[≈~<>≤≥]?[+−-]?\d+(?:\.\d+)?(?:\s*(?:%|dB|±\s*\d+(?:\.\d+)?))?\s*$/i.test(String(row[column]))).length, 0);
+    };
     const tableToMove = locatedTables.filter(table => (
         typeof table.table?.markdown === 'string'
         && table.table.markdown.trim().length > 0
         && Number.isInteger(table.bindingIndex)
-        && draft.tableBindings?.[table.bindingIndex]
-        && !['result', 'ablation'].includes(draft.sections?.[table.sectionIndex]?.kind)
+        && bindings[table.bindingIndex]
+        && draft.sections?.[table.sectionIndex]?.kind === 'experiment_setup'
+        // 只做保守排除；最终结果覆盖和每格来源检查仍由正常解析器决定。
+        && !/(?:配置|参数|时长|样本|数据块|曲目|说话人数量|学习率|批量|训练步|训练轮|年份|版本|维度|实时率|耗时|成本|内存|显存|吞吐|latency|parameters?|dataset|corpus|duration|hours?|samples?|batch|learning.rate|memory|throughput|RTF|epochs?|years?|versions?)/i.test(table.table.header.join(' '))
+        && !table.table.rows.some(row => /^(?:学习率|批量大小|训练步数|训练轮数|年份|版本|参数量|样本数量?|语音时长|learning rate|batch size|epochs?|seed|parameters?)$/i.test(String(row[0]).trim()))
+        && measuredResultCells(table.table) >= 4
+        // 唯一获准的 binding 保持原序号：目标为空，且搬动不跨过任何其他表。
+        && table.tableIndex === locatedTables.filter(other => other.sectionIndex < destinationSectionIndex
+            && other !== table).length + 1
     )).sort((left, right) => (
         (draft.sections?.[left.sectionIndex]?.kind === 'experiment_setup' ? 0 : 1)
             - (draft.sections?.[right.sectionIndex]?.kind === 'experiment_setup' ? 0 : 1)
@@ -2653,6 +2675,26 @@ function buildRepairTargets(draft, issues, options = {}) {
         && (issue?.code === 'reader_result_table_missing'
             || /^读者文章主结果表覆盖不足/.test(String(issue?.message || '')))
     ));
+    if (missingResultTableIssue && !missingResultTableOperation) {
+        const tables = locateReaderDraftTables(draft);
+        const resultTables = tables.filter(table => ['result', 'ablation'].includes(draft.sections?.[table.sectionIndex]?.kind));
+        const bindings = draft.tableBindings;
+        if (resultTables.length) {
+            // 不截断成半对，也不借旧搬表失败消息扩大到reproduction等donor。
+            // 未闭合的表流由原有顺序/缺绑定恢复处理，本分支不猜对应关系。
+            if (!Array.isArray(bindings) || tables.length !== bindings.length
+                || bindings.some((binding, index) => binding?.tableIndex !== index + 1)
+                || !hasStableExistingTableMarkers(draft, tables, bindings)) return [];
+            const paired = new Set(resultTables.flatMap(table => [table.path, `/tableBindings/${table.bindingIndex}`]));
+            if (paired.size > 8) return [];
+            return [...paired].map(pointer => ({ path: pointer,
+                oldSha256: hashDraft(nodeAt(draft, pointer)), value: nodeAt(draft, pointer),
+                repairInstruction: '只在原结果/消融表位置修正数值列和同一绑定；完整保留已有正确数字、单位、比较条件、事实、表数、表序及绑定序号。不得搬入数据、配置或成本表，不得合并/删表、添加未知配置或修改其他节点。原表或逐字引文仍须支持每格，四个测量格要求不变；原范围内无解时保留失败。' }));
+        }
+        // 没有既有结果表，也没有已证闭合的补表/原序号搬表操作时，不以
+        // 通用“表”关键词授权所有正文和绑定，避免发出无法闭合的修复请求。
+        return [];
+    }
     if (missingResultTableIssue && missingResultTableOperation) {
         if (missingResultTableOperation.kind === 'add_result_table_v1') {
             // 这个候选声明了绑定，却没有对应的表。只允许改目标正文和那个绑定；

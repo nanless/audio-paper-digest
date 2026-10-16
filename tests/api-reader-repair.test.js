@@ -1068,13 +1068,17 @@ test('生产归一化忽略带类型的计数文案，但保留不相干的问�
 
 test('缺失结果表的修复把一张稳定的实验表及其绑定挪到结果小节', () => {
     const draft = fixture();
+    // 规划用正例采用2610.20181封存Table I的原WER值；只测原序号闭合搬动，
+    // 不把配置步数改写为新测量值，不代表完整Reader或发布资格。
+    const sourceQuote = 'F5-TTS [27]\n0.081\n0.177\n0.378\n0.407\n0.324\n0.246\n0.107\n0.270\n0.568\n0.414\n0.327\n0.247\n[2pt/2pt]\nF5-TTS + SS\n0.057\n0.123\n0.278\n0.420\n0.339\n0.264\n0.086\n0.183\n0.498\n0.394\n0.321\n0.254';
     const table = index => `\n\n表 ${index} 的比较条件。\n\n`
-        + '| 配置项 | 数值 | 单位 |\n| --- | --- | --- |\n'
-        + `| 设置 ${index} | ${index} | 步 |\n\n表 ${index} 的解释与边界。`;
+        + '| 方法 | Seed-TTS test-zh WER 0 dB ↓ | Seed-TTS test-zh WER -3 dB ↓ |\n| --- | --- | --- |\n'
+        + '| F5-TTS [27] | 0.081 | 0.177 |\n| F5-TTS + SS | 0.057 | 0.123 |'
+        + `\n\n表 ${index} 的解释与边界。`;
     draft.sections[6].body += table(1) + table(2) + table(3) + table(4);
     draft.tableBindings = [0, 1, 2, 3].map(index => ({
         tableIndex: index + 1, sourceType: 'source_quotes', sourceTableOrdinal: null,
-        cellBindings: [], sourceQuotes: [`source quote ${index + 1} is long enough`]
+        cellBindings: [], sourceQuotes: [sourceQuote]
     }));
     const targets = buildRepairTargets(draft, [
         { path: null, message: '读者文章主结果表覆盖不足：原论文 TABLE_2/TABLE_9 明确提供定量结果' },
@@ -1089,17 +1093,17 @@ test('缺失结果表的修复把一张稳定的实验表及其绑定挪到结�
     const context = buildRepairContext(draft, [
         { path: null, code: 'reader_result_table_missing',
             message: '读者文章主结果表覆盖不足：原论文 TABLE_2/TABLE_9 明确提供定量结果' }
-    ], '完整来源');
+    ], sourceQuote, sourceQuote);
     assert.equal(context.atomicOperation.kind, 'relocate_result_table_v1');
     assert.deepEqual(context.atomicOperation.requiredReplacementPaths, targets.map(target => target.path));
 
     const allowed = context.targets.map(target => target.path);
     assert.throws(() => applyReaderPatch(draft, patchFor(draft, [[
-        '/sections/6/body', draft.sections[6].body.replace('配置项', '结果指标')
+        '/sections/6/body', draft.sections[6].body.replace('WER 0 dB ↓', 'WER 0 dB ↑')
     ]]), allowed, { atomicOperation: context.atomicOperation }), /every required atomic target/);
 
     const wrongPatch = patchFor(draft, [
-        ['/sections/6/body', draft.sections[6].body.replace('配置项', '结果指标')],
+        ['/sections/6/body', draft.sections[6].body.replace('WER 0 dB ↓', 'WER 0 dB ↑')],
         ['/sections/7/body', `${draft.sections[7].body}\n\n这里补充结果说明，但仍未放入数字表。`],
         ['/tableBindings/3', structuredClone(draft.tableBindings[3])]
     ]);
@@ -1109,9 +1113,7 @@ test('缺失结果表的修复把一张稳定的实验表及其绑定挪到结�
 
     const tableMarkdownToMove = table(4);
     assert.ok(draft.sections[6].body.endsWith(tableMarkdownToMove));
-    const resultBlock = '\n\n表 4 的主结果比较条件。\n\n'
-        + '| 方法 | 条件 | 指标 A | 指标 B |\n| --- | --- | --- | --- |\n'
-        + '| 方法 4 | 设置 40 | 400 | 4000 |\n\n表 4 的结果解释与边界。';
+    const resultBlock = tableMarkdownToMove;
     const validPatch = patchFor(draft, [
         ['/sections/6/body', draft.sections[6].body.slice(0, -tableMarkdownToMove.length)],
         ['/sections/7/body', `${draft.sections[7].body}${resultBlock}`],
@@ -1121,8 +1123,23 @@ test('缺失结果表的修复把一张稳定的实验表及其绑定挪到结�
         atomicOperation: context.atomicOperation
     });
     assert.equal((merged.sections[6].body.match(/^\|/gm) || []).length,
-        (draft.sections[6].body.match(/^\|/gm) || []).length - 3);
-    assert.ok(merged.sections[7].body.includes('| 方法 4 | 设置 40 | 400 | 4000 |'));
+        (draft.sections[6].body.match(/^\|/gm) || []).length - 4);
+    assert.ok(merged.sections[7].body.endsWith(tableMarkdownToMove));
+    assert.deepEqual(merged.tableBindings, draft.tableBindings);
+});
+
+test('原单格配置步数不授权搬成主结果或另造测量值', () => {
+    const draft = fixture();
+    const table = index => '\n\n| 配置项 | 数值 | 单位 |\n| --- | --- | --- |\n'
+        + `| 设置 ${index} | ${index} | 步 |`;
+    draft.sections[6].body += table(1) + table(2) + table(3) + table(4);
+    draft.tableBindings = [1, 2, 3, 4].map(tableIndex => ({ tableIndex,
+        sourceType: 'source_quotes', sourceTableOrdinal: null, cellBindings: [],
+        sourceQuotes: [`source quote ${tableIndex} is long enough`] }));
+    const context = buildRepairContext(draft, [{code:'reader_result_table_missing',
+        message:'读者文章主结果表覆盖不足：原论文明确提供定量结果'}], '完整来源');
+    assert.equal(context.atomicOperation, null);
+    assert.deepEqual(context.targets, []);
 });
 
 test('补上缺失的结果表会填掉此前的绑定缺口，但不搬动设置证据', () => {
@@ -1154,7 +1171,7 @@ test('补上缺失的结果表会填掉此前的绑定缺口，但不搬动设�
         (draft.sections[7].body.match(/^\|/gm) || []).length + 3);
 });
 
-test('表格和绑定流已经关闭时，结果表搬迁仍然生效', () => {
+test('表流闭合且已有结果表时只修原位置，不搬设置表改变全局对应', () => {
     const draft = fixture();
     const block = (name, value) => `\n\n| 方法 | 指标 | 条件 | 结果 A | 结果 B | 结果 C |\n| --- | --- | --- | --- | --- | --- |\n| ${name} | ${value} | 对照 ${value} | ${value}00 | ${value}000 | ${value}0000 |`;
     draft.sections[6].body += block('设置表', '10') + block('设置表2', '11');
@@ -1165,21 +1182,17 @@ test('表格和绑定流已经关闭时，结果表搬迁仍然生效', () => {
     }));
     const context = buildRepairContext(draft, [{ code: 'reader_result_table_missing',
         message: '读者文章主结果表覆盖不足：原论文 TABLE_1 明确提供定量结果' }], '完整来源');
-    const operation = context.atomicOperation;
-    assert.equal(operation.kind, 'relocate_result_table_v1');
-    assert.equal(operation.donorGlobalTableIndex, 2);
-    const tableMarkdownToMove = block('设置表2', '11');
-    const moved = block('设置表2', '11');
-    const binding = structuredClone(draft.tableBindings[1]);
+    assert.equal(context.atomicOperation, null);
+    assert.deepEqual(context.targets.map(target => target.path), ['/sections/7/body', '/tableBindings/2']);
+    const beforeSetup = draft.sections[6].body;
     const merged = applyReaderPatch(draft, patchFor(draft, [
-        ['/sections/6/body', draft.sections[6].body.slice(0, -tableMarkdownToMove.length)],
-        ['/sections/7/body', `${moved}${draft.sections[7].body}`],
-        ['/tableBindings/1', binding]
-    ]), context.targets.map(target => target.path), { atomicOperation: operation });
-    assert.equal((merged.sections[6].body.match(/^\|/gm) || []).length,
-        (draft.sections[6].body.match(/^\|/gm) || []).length - 3);
+        ['/sections/7/body', `${draft.sections[7].body}\n\n只修订原结果解释，原数值与表格仍待完整解析。`],
+        ['/tableBindings/2', structuredClone(draft.tableBindings[2])]
+    ]), context.targets.map(target => target.path), { atomicOperation: context.atomicOperation });
+    assert.equal(merged.sections[6].body, beforeSetup);
     assert.equal((merged.sections[7].body.match(/^\|/gm) || []).length,
-        (draft.sections[7].body.match(/^\|/gm) || []).length + 3);
+        (draft.sections[7].body.match(/^\|/gm) || []).length);
+    assert.deepEqual(merged.tableBindings, draft.tableBindings);
 });
 
 test('结果表修复不会把选择标记当成 Markdown 来源小节', () => {
@@ -1193,7 +1206,7 @@ test('结果表修复不会把选择标记当成 Markdown 来源小节', () => {
         message: '读者文章主结果表覆盖不足：原论文 TABLE_1 明确提供定量结果' }];
     const context = buildRepairContext(draft, issues, '完整来源');
     assert.equal(context.atomicOperation, null);
-    assert.ok(context.targets.length > 0);
+    assert.deepEqual(context.targets, [], '没有原表测量证明，选择标记不授权搬表或全局改写');
 });
 
 test('长文修复已停止时，整篇重试不重复下载与检查同一失败稿', async t => {

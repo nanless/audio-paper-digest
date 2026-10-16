@@ -4,6 +4,35 @@
 function normalizeExplicitReaderSymbolProjection(value) {
     let output = String(value ?? '');
     if (!output.includes('\\')) return output;
+    // Entire source cells only: a visible approximation marker and its explicit
+    // TeX annotation are the same marker, not two measured values. Unknown
+    // commands, arithmetic continuations and bare numeric duplicates stay put.
+    output = output.replace(/(^|[|\n])([ \t]*)([^|\n]+?)([ \t]*)(?=[|\n]|$)/g,
+        (whole, boundary, space, body, trailing) => {
+            if (!body.includes('\\')) return whole;
+            const quantity = String.raw`(?:∼\\sim)?(?:\d+(?:\.\d+)?|\.\d+)(?:[ \t]*(?:KB|MB|GB|ms|s|Hz|kHz|MHz|GHz|dB|GFLOPs|%))?`;
+            if (body.includes('∼\\sim')
+                && new RegExp(`^${quantity}(?:[ \\t]*/[ \\t]*${quantity})?$`).test(body)) {
+                return boundary + space + body.replaceAll('∼\\sim', '∼') + trailing;
+            }
+            // Complete, bounded sums of explicitly duplicated calligraphic
+            // variables. Compare coefficients, subscripts and order verbatim;
+            // never infer a half-value from a repeated number or expression.
+            if (body.length > 512 || !body.includes('\\mathcal{')) return whole;
+            const term = /^([1-9]\d{0,3})?\\mathcal\{([A-Za-z])\}_\{(0|[1-9]\d{0,3})\}$/;
+            const matches = new Set();
+            for (let split = 1; split < body.length; split++) {
+                const terms = body.slice(split).trim().split('+').map(part => part.trim());
+                if (terms.length > 8) continue;
+                const atoms = terms.map(part => term.exec(part));
+                if (atoms.some(atom => !atom)) continue;
+                const projection = atoms.map(atom => (atom[1] || '') + atom[2] + atom[3]).join('+');
+                const visible = body.slice(0, split).normalize('NFKC')
+                    .replace(/[\u200b\u200c\u200d\ufeff \t]/g, '');
+                if (visible === projection) matches.add(body.slice(0, split).trimEnd());
+            }
+            return matches.size === 1 ? boundary + space + [...matches][0] + trailing : whole;
+        });
     // 仅完整格中的同值布尔符号与显式 TeX 副本；乘积、续式和裸重复不投影。
     output = output.replace(/(^|[|\n])([ \t]*)([✓×])\\(checkmark|times)(?=[ \t]*(?:[|\n]|$))/g,
         (whole, boundary, space, visible, command) => visible === (command === 'checkmark' ? '✓' : '×')

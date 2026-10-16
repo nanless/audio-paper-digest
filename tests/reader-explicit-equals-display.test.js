@@ -33,8 +33,10 @@ test('JS与Python合并条件镜像，错误变量/精度/运算符尾部绝不�
     const script = `import ast,json,pathlib,re,sys,unicodedata
 p=pathlib.Path(sys.argv[1])/'scripts/publish-to-blog.py'
 tree=ast.parse(p.read_text())
-fn=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_normalize_api_reader_display_artifacts')
-exec(compile(ast.Module(body=[fn],type_ignores=[]),str(p),'exec'))
+names={'_normalize_api_reader_explicit_symbol_projection','_normalize_api_reader_display_artifacts'}
+functions=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in names]
+assert len(functions)==len(names)
+exec(compile(ast.Module(body=functions,type_ignores=[]),str(p),'exec'))
 print(json.dumps([_normalize_api_reader_display_artifacts(x) for x in json.loads(sys.argv[2])]))`;
     const root = path.resolve(__dirname, '..');
     const inputs = [...accepted.map(([input]) => input), ...rejected];

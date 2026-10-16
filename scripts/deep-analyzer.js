@@ -4063,7 +4063,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
     const affirmative = /(?:已经|已|现已|目前已|当前已|正式)(?:经)?(?:开源|公开|发布|提供|开放|上线|可用)|(?<![不未许])可(?:访问|下载|获取|用)(?!性|状态|于)|(?:为|是|属于)(?:一个)?(?:开源|公开|开放)(?:项目|资源|仓库)?|(?:代码|源代码|代码仓库|仓库|模型权重|权重|检查点|数据集|语料库|在线演示|演示页面|复现材料)(?:为|是|属于)?(?:一个)?(?:开源|公开|开放)(?:项目|资源|仓库)?|开源地址|公开仓库|\b(?:public|open[- ]source(?:d)?)\b|\b(?:is|are|was|were|has\s+been|have\s+been)\s+(?:now\s+|publicly\s+)?(?:available|released|open[- ]sourced|accessible|downloadable)\b|\b(?:we|the\s+authors?)\s+(?:release|provide|publish)\b/i;
     const directDenialPrefix = /(?:(?:不(?!但|仅|只)|不能|不应(?:当)?|不可|不宜|不得)(?:再|另行|据此|据此直接)?(?:声称|表示|说明|证明|确认|写|默认|意味着|代表|认为|断言|等同于|视为|当作)[^。！？!?；;，,]{0,36}|(?:不(?!但|仅|只)|不能|不应(?:当)?|不可|不宜|不得)(?:把|将)[^。！？!?；;，,]{0,36}(?:等同于|视为|当作)[^。！？!?；;，,]{0,16}|(?:不含|未含|不包含|没有包含|不包括)[^。！？!?；;，,]{0,24}|(?:没有|尚无|并无|不存在)(?:任何)?(?:该|此|对应)?(?:代码|模型|模型权重|权重|检查点|数据集|语料|演示|复现材料|资源)(?:类型)?(?:的)?|(?:没有|尚无|并无|不存在)(?:公开|开源|开放|当前可用|公开可用)$|(?:没有|未曾|尚未)(?:发现|找到|看到|确认|证明|表明|显示|提供|给出)[^。！？!?；;，,]{0,24}|(?:未|尚未|并未|没有|无)[^。！？!?；;，,]{0,24}(?:记为|标为|列为|判为)[^。！？!?；;，,]{0,16}|(?:未|尚未|并未|没有|无|并非|不是|不(?!但|仅|只)|not\s*))$/i;
     const conditionalPrefix = /(?:是否|能否|若|如果|假设)[^。！？!?；;，,]{0,36}$/i;
-    const isConceptDistinction = (value, matchIndex) => {
+    const isConceptDistinction = (value, matchIndex, matchEnd) => {
         // A closed, owner-free instruction enumerates concepts, not resources
         // presently supplied by the paper. Only the exact list span is exempt.
         const property = '(?:代码可运行|(?:模型)?权重可下载|数据可获取|(?:端到端)?系统可运行)';
@@ -4115,20 +4115,40 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         // 「代码开源、权重可下载、系统可运行是三件事」列举待核对概念，
         // 不是把三个条件断言为已经满足。仅豁免概念列举的字节范围；其后
         // 「本文权重已经公开」仍单独判断，不能用前面的限定吞掉真实声明。
-        const distinctions = /(?:(?:是)?(?:三|两|二|3|2)件(?:不同|独立|不同的|独立的)?事|是(?:三|两|二|3|2)回事|(?:要|应|需)?(?:分开|分别)(?:看|确认|核实|核对|验证|判断))/g;
-        for (const distinction of value.matchAll(distinctions)) {
-            if (matchIndex >= distinction.index) continue;
-            const start = Math.max(value.lastIndexOf('。', distinction.index),
-                value.lastIndexOf('；', distinction.index), value.lastIndexOf(';', distinction.index)) + 1;
-            const scope = value.slice(start, distinction.index);
-            if (matchIndex < start || scope.length > 180
-                || /(?:本文|本论文|作者团队|本研究|本工作)[^。；;，,]{0,28}(?:代码|权重|检查点)[^。；;，,]{0,16}(?:已|现已|已经)?(?:开源|公开|发布|可用|可下载|可获取|可访问)/.test(scope)) continue;
-            const properties = [
-                /代码(?:开源|公开|可用|可运行|可访问)/,
-                /(?:模型)?权重(?:可下载|可获取|公开|可用)/,
-                /(?:系统|环境|端到端|在线)(?:可(?:一键|端到端)?运行|可复现|可用)/
-            ].filter(pattern => pattern.test(scope));
-            if (properties.length >= 2) return true;
+        const conceptProperties = [
+            '代码(?:开源|公开|可用|可运行|可访问)',
+            '(?:模型)?权重(?:可下载|可获取|公开|可用)',
+            '(?:系统|环境|端到端|在线)(?:可(?:一键|端到端)?运行|可复现|可用)'
+        ];
+        const conceptProperty = '(?:' + conceptProperties.join('|') + ')';
+        const conceptList = '(' + conceptProperty + '(?:\\s*[、和与及]\\s*' + conceptProperty + '){1,2})';
+        const countedDistinctions = [
+            { pattern: new RegExp(conceptList + '\\s*是\\s*([三两二32])\\s*件\\s*(?:不同的?|独立的?)?事', 'gu'), listGroup: 1, countGroup: 2 },
+            { pattern: new RegExp('(?:复现(?:时)?(?:要|应|需))?(?:先)?分清\\s*([三两二32])\\s*件事\\s*[，,:：]\\s*'
+                + conceptList + '\\s*(?:是(?:相互)?独立的|是不同的主张)', 'gu'), listGroup: 2, countGroup: 1 },
+            { pattern: new RegExp(conceptList + '\\s*(?:要|应|需)?(?:分开|分别)(?:看|确认|核实|核对|验证|判断)', 'gu'), listGroup: 1 },
+            { pattern: new RegExp('复现(?:时)?(?:要|应|需)把' + conceptList + '\\s*([三两二32])\\s*件事分开', 'gu'), listGroup: 1, countGroup: 2 },
+            { pattern: new RegExp(conceptList + '\\s*是\\s*([两二2])\\s*回事', 'gu'), listGroup: 1, countGroup: 2 }
+        ];
+        for (const { pattern, listGroup, countGroup } of countedDistinctions) for (const span of value.matchAll(pattern)) {
+            const list = span[listGroup];
+            const count = countGroup ? span[countGroup] : null;
+            const items = list.split(/\s*[、和与及]\s*/u);
+            const declared = count === null ? items.length : { 三: 3, 两: 2, 二: 2 }[count] || Number(count);
+            const types = items.map(item => conceptProperties.findIndex(property => new RegExp('^' + property + '$', 'u').test(item)));
+            const listStart = span.index + span[0].indexOf(list);
+            if (items.length !== declared || new Set(types).size !== items.length
+                || matchIndex < listStart || matchEnd > listStart + list.length) continue;
+            const before = value.slice(0, span.index);
+            const prefix = before.split(/[。！？!?；;，,:：]/u).at(-1);
+            const quoted = [['“', '”'], ['‘', '’'], ['「', '」']].some(([open, close]) =>
+                before.lastIndexOf(open) > before.lastIndexOf(close))
+                || ['"', "'", '`'].some(quote => before.split(quote).length % 2 === 0);
+            const after = value.slice(span.index + span[0].length).replace(/^[\s，,:：]+/u, '');
+            if (quoted || !/^(?:\s*(?:但|因此))?\s*$/u.test(prefix)
+                || /^[“”‘’「」"'`]|^(?:(?:这(?:一|种|个)?|该|上述|的)?(?:说法|判断|结论|声明|区分|否定))?(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不属实|不正确|不准确)/u.test(after)
+                || /^(?:它们|三者|两者|这三项|这两项|这些资源|上述资源|全部|所有|均已)[^。！？!?；;，,]{0,28}(?:公开|开源|可用|可下载|可获取|发布|提供)/u.test(after)) continue;
+            return true;
         }
         const prefix = value.slice(0, matchIndex);
         const markers = [...prefix.matchAll(/(?:区分|区别|辨别|分开看待|分开说|分三件(?:不同的)?事)/g)];
@@ -4600,18 +4620,29 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         const missingReleaseEvidence = /(?:没有|尚无|并无|不存在)[^。！？!?；;，,]{0,48}(?:作者资源|资源|记录|链接|来源)[^。！？!?；;，,]{0,24}(?:可作|作为|支撑|证明)[^。！？!?；;，,]{1,48}(?:已公开|已开源|可用|可下载|可获取)的证据/gu;
         const coordinatedDenial = new RegExp('(' + resource + '(?:' + connector + resource + '){1,4})'
             + released + '([二两三四五2-5])(?:件事|项主张|项声明)(?:都|均|皆)不能默认成立', 'gu');
+        const qualifiedLinkDenial = new RegExp('(?:本文|本论文|论文|作者(?:团队)?)?(?:尚未|并未|未|没有)'
+            + '(?:公开|提供|发布)(?:可用)?的?' + resource + '(?:' + connector + resource + '){0,4}'
+            + '(?:链接|下载地址)', 'gu');
+        const describedClaim = '(?:(?:作者|本文|本论文|本研究|本工作)(?:已(?:经)?|现已)(?:开源|公开|发布)|'
+            + resource + '(?:已(?:经)?|现已)?(?:开源|公开|发布|可下载|可获取|可用))';
+        const forbiddenDescription = new RegExp('(?:不能|不应|不得|不可)(?:把|将)'
+            + '(?:它|该链接|该地址|该资源|该状态|这个链接|这个地址|这个资源)(?:直接)?(?:写成|表述为)'
+            + describedClaim + '(?:' + connector + describedClaim + '){0,3}', 'gu');
         const contains = span => matchIndex >= span.index && matchEnd <= span.index + span[0].length;
         const safeDenialIntroduction = span => {
             const before = value.slice(0, span.index);
             const prefix = before.split(/[。！？!?；;，,]/u).at(-1);
-            const suffix = value.slice(span.index + span[0].length);
+            const suffix = value.slice(span.index + span[0].length).replace(/^[\s，,]+/u, '');
             const quoted = [['“', '”'], ['‘', '’'], ['「', '」']].some(([open, close]) =>
                 before.lastIndexOf(open) > before.lastIndexOf(close))
                 || ['"', "'", '`'].some(quote => before.split(quote).length % 2 === 0);
             // 引述、反驳否定和双重否定不授权隐藏原来的肯定声明。
-            return !quoted && !/[“”‘’「」"'`]|(?:并非|不是|并不是|否定|反驳|证伪|推翻|排除|不代表|不意味着)/u.test(prefix)
-                && !/^\s*(?:(?:这(?:一|种)?(?:说法|判断|否定)|上述(?:说法|判断|否定)|的(?:说法|判断|否定))(?:(?:本身|其实|实际)?(?:是|为))?|(?:是|为))(?:错误|不成立|不准确|不属实|不正确)/u.test(suffix);
+            return !quoted && !/[“”‘’「」"'`]|(?:并非|不是|并不是|否认|否定|反驳|证伪|推翻|排除|不代表|不意味着)/u.test(prefix)
+                && !/^[“”‘’「」"'`]|^(?:(?:这(?:一|种|个)?(?:说法|判断|否定)|上述(?:说法|判断|否定)|的(?:说法|判断|否定))(?:(?:本身|其实|实际)?(?:是|为))?|(?:是|为))(?:错误|不成立|不准确|不属实|不正确)/u.test(suffix);
         };
+        for (const pattern of [qualifiedLinkDenial, forbiddenDescription]) for (const span of value.matchAll(pattern)) {
+            if (contains(span) && safeDenialIntroduction(span)) return true;
+        }
         for (const span of value.matchAll(hypotheticalDenial)) {
             const start = span.index + span.groups.introduction.length;
             const end = start + span.groups.assumption.length;
@@ -4951,6 +4982,10 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 segment, nearbyMentions, nearestMentions
             );
             if (!associatedTypes.has(type)) continue;
+            // “不能否认作者已开源”是肯定，不可由后面的普通否定守卫吞掉。
+            const assertionPrefix = segment.slice(0, localMatchIndex);
+            if (/(?:不能|无法|不可|不应)(?:否认|否定)[^。！？!?；;，,]{0,16}(?:作者|本文|本论文|本研究|本工作)[^。！？!?；;，,]{0,40}$/u.test(assertionPrefix)
+                && !/(?:尚未|并未|未曾|没有|未公开|未发布)/u.test(assertionPrefix)) return true;
             if (isBoundedResourceMeaningNonClaim(value, type, match.index, match.index + match[0].length)
                 || isThirdPartyTypeAttribution(segment, type, mentions)
                 || isDataSourceRepositoryAttribution(segment, type)
@@ -4985,7 +5020,7 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
                 )) continue;
             const prefix = segment.slice(Math.max(0, localMatchIndex - 48), localMatchIndex);
             if (directDenialPrefix.test(prefix) || conditionalPrefix.test(prefix)
-                || isConceptDistinction(value, match.index)) continue;
+                || isConceptDistinction(value, match.index, match.index + match[0].length)) continue;
             if (unavailableResources.some(resource => resource.type === type)) {
                 const tail = value.slice(match.index + match[0].length);
                 const statusTail = maskResourceTokens(tail);

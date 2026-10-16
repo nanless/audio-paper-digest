@@ -3557,6 +3557,69 @@ def _has_table_bound_higher_metric_regression(results, tables, source_text):
     return False
 
 
+def _has_source_backed_reward_switch_ablation(results, tables, source_text):
+    if not re.search(r'\bablation\b', source_text, re.I) or not re.search(r'\brewards?\b', source_text, re.I):
+        return False
+    transitions = []
+    for sentence in re.split(r'[。；\n]', results):
+        if re.search(r'(?:他人|其他模型|另一(?:个|种)(?:模型|系统)|无关(?:模型|系统)|否定|驳斥|转述)|(?:说法|表述|观点|判断)[^。；\n]{0,20}(?:错误|有误|不成立|不正确)', sentence):
+            continue
+        if re.search(r'(?:假设|假想|如果|计划|未来|预计|可能|先前工作|相关工作|此前研究|并非|不是|没有|尚未|未曾|未|不|是否|尚无|未知|待评估|值得|有待|否认|反驳|引用|引述|错误说法|[?？])', sentence):
+            continue
+        match = re.search(r'(?:加入|只开|开启|关闭|移除|去掉)[^。；\n]{1,30}奖励[^。；\n]{0,120}(?:从|由)\s*([0-9]+(?:\.[0-9]+)?)%?\s*(?:升至|降至|升到|降到)\s*([0-9]+(?:\.[0-9]+)?)%?', sentence)
+        if match:
+            transitions.append((float(match[1]), float(match[2])))
+    if not transitions:
+        return False
+
+    def state(cell):
+        text = str(cell).strip()
+        return 1 if text in {'✓', '✔'} else 0 if text in {'-', '—', '✗', '×'} else None
+
+    def value(cell):
+        match = re.fullmatch(r'\s*([0-9]+(?:\.[0-9]+)?)%?\s*', str(cell))
+        return match[1] if match else None
+
+    lines = [line.strip() for line in source_text.splitlines() if line.strip()]
+    for table in tables:
+        controls = [index for index, header in enumerate(table['header']) if re.fullmatch(r'R[a-z]{2,12}', str(header).strip())]
+        identifier = next((index for index, header in enumerate(table['header']) if _is_table_identifier_header(str(header).strip())), -1)
+        if len(controls) < 2 or identifier < 0 or any(
+                r'\mathrm{' + str(table['header'][column]).strip()[1:] + '}' not in source_text
+                and 'ℛ' + str(table['header'][column]).strip()[1:] not in source_text for column in controls):
+            continue
+        labels = {str(row[identifier]).strip() for row in table['rows']}
+
+        def matches_source(row):
+            for index, line in enumerate(lines):
+                if line != str(row[identifier]).strip():
+                    continue
+                end = index + 1
+                while end < len(lines) and lines[end] not in labels:
+                    end += 1
+                body = lines[index + 1:end]
+                if any(state(row[column]) is None or offset >= len(body) or state(body[offset]) != state(row[column])
+                       for offset, column in enumerate(controls)):
+                    continue
+                if all(column == identifier or column in controls or (value(cell) is not None and value(cell) in body)
+                       for column, cell in enumerate(row)):
+                    return True
+            return False
+
+        for index, first in enumerate(table['rows']):
+            for second in table['rows'][index + 1:]:
+                if first[identifier] == second[identifier] and matches_source(first) and matches_source(second) \
+                        and sum(state(first[column]) != state(second[column]) for column in controls) == 1 \
+                        and any(column != identifier and column not in controls
+                                and value(first[column]) is not None and value(second[column]) is not None
+                                and float(value(first[column])) != float(value(second[column]))
+                                and any((start == float(value(first[column])) and end == float(value(second[column])))
+                                        or (end == float(value(first[column])) and start == float(value(second[column])))
+                                        for start, end in transitions) for column in range(len(table['header']))):
+                    return True
+    return False
+
+
 def _validate_experiment_table_evidence_depth(
         analysis, document_type='', source_text=''):
     results = _extract_analysis_section(analysis, '实验结果')
@@ -3668,7 +3731,8 @@ def _validate_experiment_table_evidence_depth(
     result_has_ablation = result_has_ablation or _has_reported_experiment_phrase(
         results, r'(?:分离|隔离)[^。；\n]{1,24}(?:贡献|影响|作用)|'
         r'(?:比较|对照)[^。；\n]{0,24}(?:组件|模块|门控)[^。；\n]{0,12}(?:组合|配置)')
-    if empirical and source_has_ablation and not result_has_ablation:
+    reported_reward_ablation = _has_source_backed_reward_switch_ablation(results, tables, source_text)
+    if empirical and source_has_ablation and not result_has_ablation and not reported_reward_ablation:
         return '全文包含消融实验，但实验结果没有保留关键消融或组件对照'
     source_negative_evidence = re.sub(
         r'\b(?:does|do|did)\s+not(?:\s+\w+){0,2}\s+'
@@ -3708,7 +3772,16 @@ def _validate_experiment_table_evidence_depth(
     )
     reported_lower_score = _has_reported_experiment_phrase(results,
         rf'{explicit_higher_is_better_metric}(?:\s|[0-9.%:：=（）()，,]|为|是|都|均|仍|却|也|则|反而|明显|显著|略|要){{0,40}}(?:更低|低于|不及)')
-    result_has_negative = contextual_negative or _has_table_bound_higher_metric_regression(results, tables, complete_source_text) or explicit_metric_decline or reported_lower_score or re.search(
+    reported_bias_regression = any(
+        not re.search(r'(?:他人|其他模型|另一(?:个|种)(?:模型|系统)|无关(?:模型|系统)|否定|驳斥|转述)|(?:说法|表述|观点|判断)[^。；\n]{0,20}(?:错误|有误|不成立|不正确)', sentence)
+        and
+        not re.search(r'(?:假设|假想|如果|计划|未来|预计|可能|先前工作|相关工作|此前研究|并非|不是|没有|尚未|未曾|未|不|是否|尚无|未知|值得|有待|否认|反驳|引用|引述|错误说法|[?？])', sentence)
+        and re.search(r'(?:报告|发现|显示|实测|观测)', sentence)
+        and re.search(r'(?:蒸馏|候选)检查点[^。；\n]{0,70}[0-9]+(?:\.[0-9]+)?%[^。；\n]{0,40}比原始模型更偏', sentence)
+        and all(re.search(r'distilled checkpoints[^\n]{0,140}(?<![0-9.])' + re.escape(number) + r'%[^\n]{0,140}scored worse on the bias benchmark than the original variants', source_text, re.I)
+                for number in re.findall(r'([0-9]+(?:\.[0-9]+)?)%', sentence))
+        for sentence in re.split(r'[。；\n]', results))
+    result_has_negative = contextual_negative or _has_table_bound_higher_metric_regression(results, tables, complete_source_text) or explicit_metric_decline or reported_lower_score or reported_bias_regression or re.search(
         r'not\s+significant|no\s+significant|degrad(?:e|es|ed|ation)|'
         r'fail(?:s|ed|ure)?|worse\s+than|does\s+not\s+(?:improve|outperform)|'
         r'未显著|不显著|退化|恶化|失败|失效|崩溃|接近随机|低于随机|'
@@ -4220,6 +4293,12 @@ def validate_manual_editorial_quality_v4(analysis):
             r'[上下这另哪]一个(?:任务|条件)',
             lambda match: ' ' * len(match.group(0)) if _is_discourse_task_condition_numeral(
                 quantity_body, match.start() + 1, match.group(0)[1:]) else match.group(0),
+            quantity_body,
+        )
+        # 与 Node 对等：仅屏蔽完整操作名，不屏蔽邻近的真实阈值数。
+        quantity_body = re.sub(
+            r'(?<![\d零〇一二两三四五六七八九十百千万亿])二值化',
+            lambda match: ' ' * len(match.group(0)),
             quantity_body,
         )
         # 与 Node 闸一致：一对一是一种结构关系，不是可测量的配对数量。

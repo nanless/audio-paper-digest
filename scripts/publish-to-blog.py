@@ -4875,8 +4875,11 @@ def _has_mean_room_simulation_comparison(sentence):
 
 
 def _has_concrete_core_summary_setting(sentence, metric_pattern=None, conference_metric_pattern=None):
-    if re.search(r'(?:讨论|提及|并非|不是|不能|假想|设想|假设|计划|未来|无关|文件目录|如果|若在|预计|预期|可能|未在|没有|未进行|未做|不进行|不做)', sentence):
+    if re.search(r'(?:讨论|提及|并非|不是|不能|假想|设想|假设|计划|未来|无关|文件目录|如果|若在|预计|预期|可能|未在|没有|未进行|未做|不进行|不做|否认|反驳|引用|引述)', sentence):
         return False
+    if re.search(r'(?:在|于)(?:[\u4e00-\u9fff]{1,8}语)\s*[A-Z][A-Za-z0-9._-]{2,}(?:上|中)', sentence) \
+            or re.search(r'(?:在|于)\s*每(?:模型|权重)\s*[1-9][0-9]*\s*组(?:留存|留出)对话(?:上|中)', sentence):
+        return True
     experiment_scope = re.search(r'(?:在|于)[^，,。！？!?；;\n]{1,150}(?:实验|测量)(?:中|上)', sentence)
     format_scope = re.search(r'(?:在|于)([^，,。！？!?；;\n]{1,110}(?:语音|音频|音乐))(?:上|中)', sentence)
     scopes = [experiment_scope if experiment_scope and re.search(r'[1-9][0-9]{0,5}\s*名[^，,。！？!?；;\n]{0,45}(?:参与者|听者|受试者|母语者|说话人)', experiment_scope[0]) and re.search(r'(?:聆听|听辨|听测|主观|重复)[^，,。！？!?；;\n]{0,45}实验', experiment_scope[0]) else None, re.search(r'(?:在|于)\s*[A-Z][A-Za-z0-9._-]{2,}\s*(?:匹配|失配|跨域|未见说话人)测试[^，,。！？!?；;\n]{0,60}(?:下|中|上)', sentence),
@@ -4920,7 +4923,7 @@ def _has_scoped_symbolic_demonstration(summary):
     if not _has_symbolic_geometry_method_chain(summary):
         return False
     sentences = re.split(r'[。！？!?；;\n]', str(summary or ''))
-    scalar_metric = re.compile('(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\\.\\d+)?|1(?:\\.0+)?)(?![.\\d@])|R@\\d+(?:\\.\\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|(?:皮尔逊(?:积矩)?相关系数|斯皮尔曼(?:秩)?相关系数|肯德尔(?:秩相关|和谐|协调|一致性)系数)(?!\\s*(?:的)?(?:模型|方法|基线|算法|网络))|字错率|评估损失(?:终值)?(?=[^。；\n]{0,90}(?:[二两三四五六七八九十百1-9][0-9]*(?:\.\d+)?倍|(?:为|是|从)\s*\d+(?:\.\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)', re.IGNORECASE)
+    scalar_metric = re.compile('(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|CA-SDRi|SDRi|SNRi|SDR|SNR|EER|UAR|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|GMR|GMC|ECE|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R1@(?:0(?:\\.\\d+)?|1(?:\\.0+)?)(?![.\\d@])|R@\\d+(?:\\.\\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|(?:皮尔逊(?:积矩)?相关系数|斯皮尔曼(?:秩)?相关系数|肯德尔(?:秩相关|和谐|协调|一致性)系数)(?!\\s*(?:的)?(?:模型|方法|基线|算法|网络))|字错率|评估损失(?:终值)?(?=[^。；\n]{0,90}(?:[二两三四五六七八九十百1-9][0-9]*(?:\.\d+)?倍|(?:为|是|从)\s*\d+(?:\.\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|期望校准误差|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|对数谱失真|两耳声级差误差|正确拒绝率|真负率|真阳性率|检出率|(?:人类|人工)(?:语义)?评分|主观评分|客观评分|相似度|相似分数|性能|指标)', re.IGNORECASE)
     for sentence in sentences:
         metric_surface = re.sub(r'(?:\u53d8\u6362)?\u7b49\u4ef7\u7ec4\u89c4\u6a21\u4e3a\u6307\u6807', ' ', sentence)
         if scalar_metric.search(metric_surface) and re.search(r'\d|(?:\u767e\u5206\u4e4b|\u5343\u5206\u4e4b|\u96f6\u70b9)[\u96f6\u4e00\u4e8c\u4e24\u4e09\u56db\u4e94\u516d\u4e03\u516b\u4e5d\u5341\u767e\u5343\u4e07\u70b9]+', sentence):
@@ -5060,7 +5063,35 @@ def _has_explicit_edited_vector_handoff(summary):
     return False
 
 
+def _has_typed_natural_product_handoff(summary):
+    """Mirror the closed, artifact-owned handoffs used by the analysis guard."""
+    sentences = [s.strip() for s in re.split(r'[。！？!?；;\n]', str(summary or '')) if s.strip()]
+    denied = re.compile(r'(?:假设|假想|假定|设想|如果|可能|预计|预期|计划|未来|讨论|提及|相关工作|独立方法|他人|另一(?:个|种|套)(?:模型|方法|系统)|其他(?:模型|方法|系统)|并非|并未|不是|没有|不能|尚未|未曾)|(?:不|未)(?:被|曾|实际|真正|直接|会|能|再|继续)*(?:输出|生成|得到|形成|读取|接收|送入|作为|检索|插入|转写|打分)|(?:丢弃|弃用|忽略)(?:了)?(?:该|此|这些|两种)|(?:说法|表述|观点|判断)[^。；]{0,20}(?:错误|有误|不成立|不正确)')
+    for index, first in enumerate(sentences):
+        second = sentences[index + 1] if index + 1 < len(sentences) else ''
+        revoked_or_foreign = re.compile(r'(?:否认|否定|反驳|驳斥|引用|引述|转述)|(?:错误|有误|不成立|不正确)(?:的)?(?:说法|表述|观点|判断)|(?:基线|对照|其他|另一个|另一种)(?:的)?(?:自回归)?解码器')
+        if len(first) > 320 or denied.search(first) or revoked_or_foreign.search(first):
+            continue
+        if re.search(r'调用头判断[^。；]{1,100}[，,]触发后检索[^，,。；]{1,30}范例并作为引导插入生成序列', first):
+            return True
+        if not second or len(second) > 320 or denied.search(second) or revoked_or_foreign.search(second):
+            continue
+        memories = set(re.findall(r'([\u4e00-\u9fff]{1,8}记忆)(?:保留|表示|编码)', first))
+        if re.search(r'交叉注意力[^。；]{0,120}输出', first) and len(memories) == 2 \
+                and re.search(r'解码器[^。；]{0,60}(?:交替)?读取(?:这)?两种记忆[^。；]{0,80}(?:预测|输出|生成)[^，,。；]{1,30}', second):
+            return True
+        if re.search(r'编码器[^。；]{0,120}输出[^，,。；]{0,30}(?:表示|特征)序列', first) \
+                and re.search(r'^(?:该|此)(?:表示|特征)序列作为(?:因果)?(?:Conformer|Transformer|循环网络|时序模型)的?输入[^。；]{0,120}末态映射为[^，,。；]{1,30}', second):
+            return True
+        if re.search(r'语音合成[^。；]{0,100}生成音频[^。；]{0,100}(?:同一|该|此)音频直接作为[^，,。；]{0,30}(?:自动语音识别|ASR)的输入被转写为文本', first) \
+                and re.search(r'^转写文本与原始文字分别送入同一[^，,。；]{0,20}(?:大语言模型|LLM)作答[，,]两种回答再交由同一[^，,。；]{0,20}验证器打分得到', second):
+            return True
+    return False
+
+
 def _has_explicit_natural_product_chain(summary):
+    if _has_typed_natural_product_handoff(summary):
+        return True
     if _has_explicit_edited_vector_handoff(summary):
         return True
     if _has_generated_input_model_head_chain(summary):
@@ -5109,6 +5140,8 @@ def _core_summary_sentence_view(text):
 def _has_concrete_runtime_disclosure(summary):
     """按明确运行次数或实测时间识别运行负担。"""
     for sentence in re.split(r'[。！？!?\n]', str(summary or '')):
+        if re.search(r'(?:否认|否定|反驳|驳斥|引用|引述|转述)|(?:说法|表述|观点|判断|结论)[^。！？!?；;\n]{0,20}(?:错误|有误|不成立|不正确|不属实)|(?:错误|有误|不成立|不正确)(?:的)?(?:说法|表述|观点|判断)', sentence):
+            continue
         if re.search(r'(?:(?:未|不)(?:曾|实际|直接)?(?:需|需要|进行|执行)|讨论|假说|预计|预期|可能|假设|如果|未来|计划|建议|不需|无需|不能|不会|不进行|不执行|不耗|尚未|没有|未曾|并非|未测|未披露|未报告|未记录|未提供|未给出|未公布|未说明|未统计|不报告|不记录|不披露|不提供|尚无|不代表)', sentence):
             continue
         measured_duration = re.search(r'(?:训练|推理|部署|(?:监督)?微调|强化学习)(?:平均|每轮|每个epoch)?(?:时间|耗时|用时)?(?:约|大约|为|是|分别为)?\s*(?:[0-9]+(?:\.[0-9]+)?)\s*(?:小时|分钟|毫秒|秒|hours?|minutes?|seconds?|ms|h|s)(?![A-Za-z0-9]|\s*的?\s*(?:(?:训练|测试|验证|评测)(?:用|集)?\s*)?(?:音频|语音|录音|数据|样本|语料|材料))', sentence, re.I)
@@ -5116,6 +5149,8 @@ def _has_concrete_runtime_disclosure(summary):
                 and not re.search(r'(?:说法|表述|观点|判断|结论)[^。！？!?；;\n]{0,20}(?:不成立|不正确|不属实|不是事实|错误|有误)|^(?:是|为)?(?:不成立|不正确|不属实|错误|有误)', sentence[measured_duration.end():measured_duration.end() + 50])):
             return True
         if any(re.search(pattern, sentence) for pattern in (
+            r'(?:推理(?:为|采用|使用)|以)(?:一|单)次语音前向',
+            r'训练可训练参数(?:量)?为\s*[0-9]+(?:\.[0-9]+)?\s*[kKmMbB](?![A-Za-z0-9])',
             r'(?:训练|推理|部署)[^。！？!?；;]{0,40}(?:需要|需|进行|执行)(?:[1-9][0-9]*|[一二两三四五六七八九十]+)次(?:完整(?:的)?|(?:经过|通过)(?:共享)?(?:[A-Za-z0-9_-]+\s*)?(?:编码器|主干|网络|模型)(?:的)?(?:提示条件)?|提示条件(?:的)?)?前向(?:传播|计算)?',
             r'(?:训练|推理|部署)(?:平均|每轮|每个epoch)?时间(?:约|为|是|分别为)?\s*[0-9]+:[0-5][0-9](?![0-9:])',
             r'(?:训练|推理|部署)(?:平均|每轮|每个epoch)?时间[（(](?:毫秒|秒|分钟)(?:/文件)?[）)](?:约|为|是|分别为)?\s*[0-9]+(?:\.[0-9]+)?(?![0-9.])',
@@ -5230,7 +5265,7 @@ def _detailed_core_summary_semantic_issue(summary):
     # 所以上游已经接受的指标，不能仅仅因为它用了
     # 更新的别名（例如 PPL 或压缩率）就在这里被拒。
     metric = re.compile(
-        r'(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|SDR|SNR|EER|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|(?:皮尔逊(?:积矩)?相关系数|斯皮尔曼(?:秩)?相关系数|肯德尔(?:秩相关|和谐|协调|一致性)系数)(?!\s*(?:的)?(?:模型|方法|基线|算法|网络))|字错率|评估损失(?:终值)?(?=[^。；\n]{0,90}(?:[二两三四五六七八九十百1-9][0-9]*(?:\.\d+)?倍|(?:为|是|从)\s*\d+(?:\.\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|主观评分|客观评分|相似度|相似分数|性能|指标)',
+        r'(?:(?<![A-Za-z0-9_])(?:(?:cp|tcp)?WER|SWER|AER|CER|PER|DER|JER|F1|F[- ]?Scores?|BLEU|COMET|ROUGE|MOS(?:[- ]?[PT])?|PCC|FAD(?:CLAP|Vggish)|CQT1-PCC|LPAPS|CDPAM|PESQ|STOI|SI-SDR|SDR|SNR|EER|PPL|NLL|negative[ -]log[ -]likelihood|false[ -]acceptance[ -]rate|unsafe[ -]response[ -]rate|safety[ -]understanding[ -]rate|deepfake[ ]+FAR|TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S|ILD[- ]W|ASR|mAP|gAP|AUROC|AUC|mIoU|IoU|J&F|MJ|MF|Jaccard|LangRank|Exact Match|Pearson|Spearman|Kendall|PSNR|SSIM|MSE|MAE|RMSE|FGD|BeatAlign|Diversity|R@\d+(?:\.\d+)?|SAR|DAR|PISR|RtA|NBS|OIC|PAR|Fair[ -]?Rate|BMSR|JSR|RSF|OH|n?TVD|SpkSim|LPS|SBS|UTMOS|PLCMOS|precision|recall|MSR|FVD|FID|Acc(?:[_ -]?(?:macro|num))?|CLAP(?:[_ -](?:MS|LAION))?|VISQOL|MCD|SPK[_ -]?SIM|Mel(?:[ -]Dist(?:ance)?)?|STFT(?:[ -]Dist(?:ance)?)?|DeSync|MotionQ|IB|accuracy|error rate|success rate|win rate|compression[ -](?:ratio|rate)|real[ -]time factor|scores?|latency|throughput|RTF|FPS|performance|metrics?)(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])E2E(?=[ ]*(?:比例|命中率|成功率))|(?:皮尔逊(?:积矩)?相关系数|斯皮尔曼(?:秩)?相关系数|肯德尔(?:秩相关|和谐|协调|一致性)系数)(?!\s*(?:的)?(?:模型|方法|基线|算法|网络))|字错率|评估损失(?:终值)?(?=[^。；\n]{0,90}(?:[二两三四五六七八九十百1-9][0-9]*(?:\.\d+)?倍|(?:为|是|从)\s*\d+(?:\.\d+)?))|不安全回答率|安全理解率|伪造假接受率|耳间强度差(?:Wasserstein)?距离|平均绝对误差|端到端命中率|有用性偏好率|均方根误差|词(?:字)?错率|困惑度|负对数似然|攻击成功率|准确率|正确率|错误率|误差率|召回率|精确率|总体分|得分|分数|胜率|成功率|延迟|吞吐|实时率|对数谱失真|两耳声级差误差|正确拒绝率|真负率|真阳性率|检出率|(?:人类|人工)(?:语义)?评分|主观评分|客观评分|相似度|相似分数|性能|指标)',
         re.IGNORECASE,
     )
     conference_metric = re.compile(
@@ -5264,7 +5299,7 @@ def _detailed_core_summary_semantic_issue(summary):
         # CLAP 可能是用来对比的模型，而不是被测量的指标；
         # 这里使用与 Node 正文检查相同的基线/模型排除规则。
         metric_sentence = re.sub(
-            r'(?:\bCLAP\s*(?:基线|模型|baseline\b|model\b)|\bNLL\s*(?:基线|模型|方法|baseline\b|model\b|method\b))',
+            r'(?:\bCLAP\s*(?:基线|模型|baseline\b|model\b)|\bNLL\s*(?:基线|模型|方法|baseline\b|model\b|method\b)|(?<![A-Za-z0-9_])(?:TNR|TPR|LSD|ILD[ -]+error|Human[ ]+S)\s*(?:基线|模型|方法|baseline\b|model\b|method\b))',
             '', result_sentence, flags=re.IGNORECASE,
         )
         numeric_result_sentence = metric.sub(
@@ -6793,6 +6828,31 @@ def _normalize_api_reader_explicit_symbol_projection(value):
     output = str(value or '')
     if '\\' not in output:
         return output
+    def bounded_math_cell(match):
+        boundary, space, body, trailing = match.groups()
+        if '\\' not in body:
+            return match[0]
+        quantity = (r'(?:∼\\sim)?(?:\d+(?:\.\d+)?|\.\d+)'
+                    r'(?:[ \t]*(?:KB|MB|GB|ms|s|Hz|kHz|MHz|GHz|dB|GFLOPs|%))?')
+        if '∼\\sim' in body and re.fullmatch(quantity + r'(?:[ \t]*/[ \t]*' + quantity + r')?', body):
+            return boundary + space + body.replace('∼\\sim', '∼') + trailing
+        if len(body) > 512 or '\\mathcal{' not in body:
+            return match[0]
+        term = re.compile(r'([1-9]\d{0,3})?\\mathcal\{([A-Za-z])\}_\{(0|[1-9]\d{0,3})\}')
+        matches = set()
+        for split in range(1, len(body)):
+            terms = [part.strip() for part in body[split:].strip().split('+')]
+            if len(terms) > 8:
+                continue
+            atoms = [term.fullmatch(part) for part in terms]
+            if any(atom is None for atom in atoms):
+                continue
+            projection = '+'.join((atom[1] or '') + atom[2] + atom[3] for atom in atoms)
+            visible = re.sub('[\u200b\u200c\u200d\ufeff \t]', '', unicodedata.normalize('NFKC', body[:split]))
+            if visible == projection:
+                matches.add(body[:split].rstrip())
+        return boundary + space + next(iter(matches)) + trailing if len(matches) == 1 else match[0]
+    output = re.sub(r'(^|[|\n])([ \t]*)([^|\n]+?)([ \t]*)(?=[|\n]|$)', bounded_math_cell, output)
     # 仅完整格中同值的布尔符号/TeX副本；不清理乘积、续式或裸重复。
     output = re.sub(
         r'(^|[|\n])([ \t]*)([✓×])\\(checkmark|times)(?=[ \t]*(?:[|\n]|$))',
@@ -6888,7 +6948,7 @@ def _normalize_api_reader_explicit_symbol_projection(value):
 
 def _normalize_api_reader_display_artifacts(value, explicit_cells=True):
     """合并数值一致的明确 TeX 显示副本，以及连续重复的加粗说明标题。"""
-    value = str(value or '')
+    value = _normalize_api_reader_explicit_symbol_projection(value) if explicit_cells else str(value or '')
     if explicit_cells:
         # 只接受完整表格格值，保留百分比尾注及全部脚注；不猜裸重复或续式。
         def fraction_projection(match):
@@ -7707,6 +7767,118 @@ def _reader_merged_caption_unit_coverage(rendered, quotes, tables):
     return result
 
 
+def _reader_merged_accuracy_unit_coverage(rendered, quotes, tables):
+    """Exact Accuracy (%) parent, split leaf and Model+Optimizer identity."""
+    def text(value):
+        return re.sub(r'\s+', ' ', re.sub(r'[*_`]', '', _normalize_api_reader_source_cell(str(value or '')))).strip()
+    def compact(value):
+        return re.sub(r'\s+', '', text(value))
+    def leaf_name(value):
+        return compact(re.sub(r'^Δ\\Delta(?=\s|$)', 'Δ', text(value)))
+    def row_name(value, markdown=False):
+        raw = re.sub(r'\s+', ' ', unicodedata.normalize('NFKC', _normalize_api_reader_display_artifacts(str(value or '')))).strip()
+        if markdown:
+            for wrapper in ['**', '__', '`', '*', '_']:
+                if len(raw) > len(wrapper) * 2 and raw.startswith(wrapper) and raw.endswith(wrapper):
+                    raw = raw[len(wrapper):-len(wrapper)].strip()
+                    break
+        return raw
+    def numbers(value):
+        match = re.fullmatch(r'([+-]?\d+(?:\.\d+)?)(?:±(\d+(?:\.\d+)?))?', compact(value))
+        if not match:
+            return None
+        result = []
+        for part in match.groups():
+            if part is None:
+                continue
+            integer, _, fraction = part.lstrip('+').partition('.')
+            negative = integer.startswith('-')
+            integer, fraction = integer.lstrip('-').lstrip('0') or '0', fraction.rstrip('0')
+            result.append(('-' if negative and (integer != '0' or fraction) else '') + integer + ('.' + fraction if fraction else ''))
+        return result
+    def expanded(table):
+        matrix, cells = table.get('matrix'), table.get('cells')
+        if (table.get('recoveryStatus') != 'complete' or type(table.get('ordinal')) is not int or table['ordinal'] < 1
+                or not re.fullmatch(r'[a-f0-9]{64}', table.get('sourceDomSha256', ''))
+                or not isinstance(matrix, list) or not 3 <= len(matrix) <= 65 or not isinstance(matrix[0], list)
+                or not 3 <= len(matrix[0]) <= 16 or not isinstance(cells, list) or len(cells) > len(matrix) * len(matrix[0])
+                or any(not isinstance(row, list) or len(row) != len(matrix[0]) or any(not isinstance(v, str) for v in row) for row in matrix)):
+            return None
+        grid = [[None] * len(matrix[0]) for _ in matrix]
+        for cell in cells:
+            if (not isinstance(cell, dict) or any(type(cell.get(k)) is not int for k in ['row', 'column', 'rowspan', 'colspan'])
+                    or cell['row'] < 0 or cell['column'] < 0 or cell['rowspan'] < 1 or cell['colspan'] < 1
+                    or cell['row'] + cell['rowspan'] > len(matrix) or cell['column'] + cell['colspan'] > len(matrix[0])
+                    or not isinstance(cell.get('text'), str) or not re.fullmatch(r'[a-f0-9]{64}', cell.get('sourceDomSha256', ''))):
+                return None
+            for row in range(cell['row'], cell['row'] + cell['rowspan']):
+                for column in range(cell['column'], cell['column'] + cell['colspan']):
+                    if grid[row][column] is not None or matrix[row][column] != cell['text']:
+                        return None
+                    grid[row][column] = cell
+        return grid if all(cell is not None for row in grid for cell in row) else None
+    headers, rows = rendered.get('header', []), rendered.get('rows', [])
+    if (len(headers) < 3 or not rows or any(not isinstance(row, list) or len(row) != len(headers) for row in rows)
+            or text(headers[0]) not in ['Model', '模型'] or text(headers[1]) not in ['Optimizer', '优化器']):
+        return set()
+    quote_strings, result = [text(value) for value in quotes if isinstance(value, str)], set()
+    for column in range(2, len(headers)):
+        match = re.fullmatch(r'(.+?)\s+Accuracy\s*\(%\)', text(headers[column]))
+        if not match or sum(compact(value) == compact(headers[column]) for value in headers) != 1:
+            continue
+        candidates = []
+        for table in tables:
+            grid, caption = expanded(table), re.split(r'(?<=\.)\s', text(table.get('caption', '')))[0]
+            if not grid or len(caption) < 24 or not any(caption in quote for quote in quote_strings):
+                continue
+            model, optimizer, parent = grid[0][:3]
+            if (model['row'] != 0 or model['column'] != 0 or model['rowspan'] != 2 or model['colspan'] != 1
+                    or model.get('header') is not True or text(model['text']) != 'Model'
+                    or optimizer['row'] != 0 or optimizer['column'] != 1 or optimizer['rowspan'] != 2 or optimizer['colspan'] != 1
+                    or optimizer.get('header') is not True or text(optimizer['text']) != 'Optimizer'
+                    or parent['row'] != 0 or parent['column'] != 2 or parent['rowspan'] != 1
+                    or parent['colspan'] != len(grid[0]) - 2 or parent.get('header') is not True
+                    or text(parent['text']) != 'Accuracy (%)' or any(cell is not parent for cell in grid[0][2:])):
+                continue
+            leaves = grid[1][2:]
+            if any(cell['row'] != 1 or cell['column'] != index + 2 or cell['rowspan'] != 1 or cell['colspan'] != 1
+                   or cell.get('header') is not True or not text(cell['text']) for index, cell in enumerate(leaves)):
+                continue
+            # Select one complete original table, never borrow split leaves.
+            wanted_headers = [leaf_name(re.sub(r'\s+Accuracy\s*\(%\)$', '', text(header))) for header in headers[2:]]
+            if (len(headers) != len(grid[0]) or any(leaf_name(leaves[index]['text']) != wanted
+                    or sum(leaf_name(cell['text']) == wanted for cell in leaves) != 1
+                    for index, wanted in enumerate(wanted_headers))):
+                continue
+            if any(not row_name(values[0], True) or not row_name(values[1], True) or sum(
+                    row_name(cells[0]['text']) == row_name(values[0], True) and row_name(cells[1]['text']) == row_name(values[1], True)
+                    for cells in grid[2:]) != 1 for values in rows):
+                continue
+            matching = [cell for cell in leaves if compact(cell['text']) == compact(match[1])]
+            if len(matching) == 1:
+                candidates.append((grid, matching[0]))
+        if len(candidates) != 1:
+            continue
+        grid, leaf = candidates[0]
+        for row, values in enumerate(rows):
+            rendered_values = numbers(values[column])
+            if not rendered_values or not row_name(values[0], True) or not row_name(values[1], True):
+                continue
+            matching = [(index, cells) for index, cells in enumerate(grid[2:], 2)
+                        if row_name(cells[0]['text']) == row_name(values[0], True) and row_name(cells[1]['text']) == row_name(values[1], True)]
+            if len(matching) != 1:
+                continue
+            source_row, cells = matching[0]
+            model, optimizer, cell = cells[0], cells[1], cells[leaf['column']]
+            if (model['column'] != 0 or model['colspan'] != 1 or optimizer['row'] != source_row or optimizer['column'] != 1
+                    or optimizer['rowspan'] != 1 or optimizer['colspan'] != 1 or cell['row'] != source_row
+                    or cell['column'] != leaf['column'] or cell['rowspan'] != 1 or cell['colspan'] != 1
+                    or numbers(cell['text']) != rendered_values):
+                continue
+            result.update((row + 1, column, value, '%') for value in rendered_values)
+    return result
+
+
 def _reader_dom_table_unit_coverage(rendered, quotes, tables):
     """Original DOM columns, exact rows and values, plus bounded merged paths."""
     def text(value):
@@ -7765,7 +7937,8 @@ def _reader_dom_table_unit_coverage(rendered, quotes, tables):
             if len(cells) != 2 or any(compact(cell['text']) != compact(source_values[cell['column']]) for cell in cells):
                 continue
             result.update((row + 1, column, value, '%') for value in rendered_values)
-    return result | _reader_merged_caption_unit_coverage(rendered, quotes, tables)
+    return (result | _reader_merged_caption_unit_coverage(rendered, quotes, tables)
+            | _reader_merged_accuracy_unit_coverage(rendered, quotes, tables))
 
 
 def _reader_dom_column_unit_coverage(paper, rendered, binding):

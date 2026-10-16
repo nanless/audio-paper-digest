@@ -332,6 +332,9 @@ function findQuantitativeChineseNumerals(text) {
         .replace(/另一个流|[上下这另哪]一个(?:任务|条件)/gu, (match, offset, whole) =>
             match === '另一个流' || isDiscourseTaskConditionNumeral(whole, offset + 1, match.slice(1))
                 ? ' '.repeat(match.length) : match)
+        // “阈值二值化”中的二属于完整操作名；邻近的真实阈值仍须核验。
+        .replace(/(?<![\d零〇一二两三四五六七八九十百千万亿])二值化/gu,
+            match => ' '.repeat(match.length))
         // “哪一个类别”是泛指选项，不是在报告实验类别数量。
         .replace(/(?:哪|某|这|那)一个(?=类别)/gu, match => ' '.repeat(match.length))
         .replace(
@@ -1253,6 +1256,10 @@ function findMissingComparisonUnits(text) {
             );
         }
         const numericText = comparisonText
+            // 时间轴两端的数值均已带同一单位，属于输入范围而非召回率。
+            // 仅屏蔽这段闭合轴声明，后续真正的裸指标值仍逐项检查。
+            .replace(/[横纵]轴(?:是|为)[ \t]*(?:混合|音频|语音|输入|片段|窗口)?(?:时长|时间)(?:范围)?[ \t]*从[ \t]*\d+(?:\.\d+)?[ \t]*(毫秒|秒|分钟|小时)[ \t]*(?:到|至)[ \t]*\d+(?:\.\d+)?[ \t]*\1(?=[ \t]*(?:[，,。！？!?；;]|$))/gu,
+                match => ' '.repeat(match.length))
             // 仅横轴每类预算的完整整数枚举是设置；枚举项数必须与“几个预算”相符。
             // 只遮住这段设置，附近真实准确率的裸比较值继续逐项检查。
             .replace(/横轴(?:是|为)\s*每类\s*((?:[1-9]\d*\s*、\s*){1,7}[1-9]\d*)\s+([2-9])\s*个预算/gu,
@@ -1272,6 +1279,10 @@ function findMissingComparisonUnits(text) {
                 match => ' '.repeat(match.length))
             .replace(/(?<![A-Za-z0-9_.+\-−])[1-9]\d*\s*流(?=\s*(?:在|模型|系统|配置|结构|输入|方案|融合|[，。；,.;]))/gu,
                 match => ' '.repeat(match.length))
+            // “3 模态总体准确率 0.75”里的3是模态计数，不是百分尺度结果。
+            // 仅遮住带完整后继语法的计数，其他准确率或比较数值继续逐项核验。
+            .replace(/(?<![A-Za-z0-9_.+\-−零〇一二两三四五六七八九十百千万亿])[1-9]\d*\s*模态(?=\s*(?:总体|融合|模型|系统|输入|方案|配置|结果|特征|下|的|[，。；,.;]))/gu,
+                match => ' '.repeat(match.length))
             // 束搜索的完整整数束宽是解码条件，不能当成附近字错误率的裸结果。
             // 只遮住明确绑定的值；同句其他没有单位的指标数仍按原规则拒绝。
             .replace(/束宽\s*(?:为|取|=)?\s*[1-9]\d*(?![\d.])(?=\s*(?:的|时|[，。；：、,.;:]|$))/gu,
@@ -1284,6 +1295,10 @@ function findMissingComparisonUnits(text) {
             // 有空格的完整型号版本仍是产品标识，不是邻近指标的结果。
             // 只识别实际遇到的两类命名型号，保留同句的其他裸指标数字。
             .replace(/\b(?:Qwen\s+\d+(?:\.\d+)?(?:-[A-Za-z][A-Za-z0-9-]*)?|Gemma\s+\d+(?:\.\d+)?)(?![\d.])/giu,
+                match => ' '.repeat(match.length))
+            // GPT-4.1 的完整数字版本是模型标识，不是附近准确率的值。
+            // 保留两侧词界，不能借此屏蔽普通 Accuracy-75 或其他裸指标。
+            .replace(/(?<![A-Za-z0-9_.-])GPT-[1-9]\d*(?:\.\d+)?(?![A-Za-z0-9_.-])/giu,
                 match => ' '.repeat(match.length))
             // XLSR 的语言数型号与 wav2vec 2.0 的版本号属于完整模型名。
             // 只屏蔽这两类实际名称；旁边的错误率结果仍须有单位。
