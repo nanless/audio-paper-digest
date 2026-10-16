@@ -13007,6 +13007,12 @@ def llm_api_production_proof(published_papers):
     if not isinstance(published_papers, list) or not published_papers:
         raise PublishDataValidationError('API 正式发布的批次必须是非空的论文数组。')
     bindings = llm_api_publication_bindings(published_papers)
+    return _llm_api_production_proof_from_checked_bindings(published_papers, bindings)
+
+
+def _llm_api_production_proof_from_checked_bindings(published_papers, bindings):
+    # Internal assembly only: callers must compute bindings in the same validation
+    # invocation. The public entry above always performs the full validation.
     if len(bindings) != len(published_papers):
         raise PublishDataValidationError(
             'API 正式发布要求每篇论文的读者文章、评分审计和来源记录都通过核验。'
@@ -13313,7 +13319,12 @@ def _validate_generation_input_integrity(manifest, date_str):
     elif publication_mode == LLM_API_PRODUCTION_MODE:
         if expected_v6 or production_proof is not None:
             raise PublishDataValidationError('API 生成清单中不能包含 Manual v6 发布证明。')
-        expected_proof = llm_api_production_proof(published_papers)
+        # expected_api was fully computed immediately above, including source,
+        # Reader, score, and paid/operator core replay. Do not run it twice in
+        # this invocation; the next file/receipt boundary still starts anew.
+        expected_proof = _llm_api_production_proof_from_checked_bindings(
+            published_papers, expected_api,
+        )
         if api_proof != expected_proof:
             raise PublishDataValidationError('正式生成清单中的 API 发布证明与实际核验结果不一致。')
         expected_proof_sha = _stable_json_sha256(expected_proof)
@@ -13974,12 +13985,27 @@ def save_generation_manifest(
             raise PublishDataValidationError(
                 '输入指纹与按本次输入及选项重新计算的结果不一致，不能保存生成清单。'
             )
-        if publication_mode is None:
-            publication_mode = infer_generation_publication_mode(published_papers)
-        production_proof = validate_generation_publication_mode(
-            published_papers, publication_mode,
-        )
+        # Compute the API bindings once in this save invocation. Mode inference,
+        # proof assembly and manifest fields consume these exact local results;
+        # _validate_generation_input_integrity below remains a fresh boundary.
         api_bindings = llm_api_publication_bindings(published_papers)
+        if publication_mode is None:
+            if len(manual_v6_publication_bindings(published_papers)) == len(published_papers):
+                publication_mode = MANUAL_V6_PRODUCTION_MODE
+            elif len(api_bindings) == len(published_papers):
+                publication_mode = LLM_API_PRODUCTION_MODE
+            else:
+                raise PublishDataValidationError(
+                    '发布输入未全部满足 Manual v6 要求，也未全部满足 API 正式发布要求。'
+                )
+        if publication_mode == LLM_API_PRODUCTION_MODE:
+            production_proof = _llm_api_production_proof_from_checked_bindings(
+                published_papers, api_bindings,
+            )
+        else:
+            production_proof = validate_generation_publication_mode(
+                published_papers, publication_mode,
+            )
         manifest.update({
             'inputFingerprint': input_fingerprint,
             'templateFingerprint': template_fingerprint,
