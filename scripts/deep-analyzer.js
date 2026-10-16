@@ -9637,6 +9637,7 @@ async function refreshApiReaderArticleFromSource(paper, sourceDetails, options =
             ...require('./lib/daily-reader-operator-correction').execution(generated.operatorCorrectionProof)
         }
     });
+    finalizeDeferredDailyReaderImages(finalized, sourceDetails);
     return transferDeferredReaderCandidate(generated, finalized);
 }
 
@@ -10391,6 +10392,60 @@ function hasCompleteApiReaderFigureBinding(paper, manifest = paper?.analysisMani
         && Array.isArray(figures)
         && stage.figureCount === figures.length
         && stage.figuresSha256 === stableFingerprint(figures);
+}
+
+function markOfficialReaderImageDownload(manifest, fingerprint) {
+    markRecoveryStage(manifest, 'imageDownload', 'skipped', {
+        reason: 'api_reader_v3_official_figures_bound',
+        attempted: 0, downloaded: 0, outcomes: [], fingerprint
+    });
+}
+
+function markOfficialReaderImageSupplement(manifest, figures, fingerprint, promptTextContract) {
+    markRecoveryStage(manifest, 'imageSupplement', 'skipped', {
+        reason: 'api_reader_v3_official_figures_bound',
+        officialFigureCount: figures.length,
+        officialFiguresSha256: stableFingerprint(figures),
+        fingerprint, promptTextContract
+    });
+}
+
+// Finish only the daily legacy work explicitly deferred before Reader. This
+// performs no request/save and derives both records through the normal path.
+function finalizeDeferredDailyReaderImages(paper, sourceDetails) {
+    const fresh = require('./lib/fresh-analysis-context');
+    const manifest = paper?.analysisManifest, pending = manifest?.stages?.imageDownload;
+    if (!fresh.isDailyFreshSourceScope() || pending?.status !== 'pending'
+        || pending.reason !== 'deferred_until_legacy_image_supplement') return false;
+    const fail = () => { throw new Error('日更Reader官方图收尾的原来源、阶段、评分或绑定未通过核验'); };
+    if (!isDualModel || pending.attempted !== 0 || pending.downloaded !== 0
+        || !Array.isArray(pending.outcomes) || pending.outcomes.length
+        || manifest.stages.imageSupplement !== undefined
+        || !hasCompleteApiReaderFigureBinding(paper, manifest) || !paper.apiReaderFigures.length) fail();
+    const engine = require('./analysis-engine');
+    if (!engine.paperAnalysisLockHeld(paper) || !engine.scoringAuditBindsFinalAnalysis(paper)
+        || !engine.hasValidApiReaderV3Records(paper)) fail();
+    const parent = require('./lib/reader-parent-upstream-preflight');
+    const proof = parent.inspectSavedReaderParentUpstream(paper, sourceDetails);
+    if (!proof.current || !proof.prerequisiteCurrent || proof.invalidatedStages.length) fail();
+    parent.assertSavedReaderParentUpstream(proof, paper, sourceDetails);
+    const scoringAnalysis = paper.analysisStageCheckpoints?.scoringAudit || paper.analysisCheckpoint;
+    if (typeof scoringAnalysis !== 'string' || scoringAnalysis !== paper.analysis
+        || crypto.createHash('sha256').update(scoringAnalysis).digest('hex')
+            !== manifest.stages.scoringAudit.outputAnalysisSha256) fail();
+    // Check resource/scoring/Reader consistency without accepting any rewrite.
+    require('./lib/reader-resource-sync').synchronizeReaderResourceAvailability(
+        paper, sourceDetails, { preserveUpstream: true });
+    const candidates = selectImageCandidates(normalizeImageInfos(sourceDetails.imageInfos), IMAGE_CANDIDATE_MAX);
+    const downloadFingerprint = buildImageDownloadFingerprint(candidates);
+    if (pending.fingerprint !== downloadFingerprint) fail();
+    const promptTextContract = currentPromptTextContract('imageSupplement');
+    const supplementFingerprint = buildImageSupplementFingerprint(
+        buildImageSupplementBaseFingerprint(promptTextContract), candidates, [], scoringAnalysis);
+    markOfficialReaderImageDownload(manifest, downloadFingerprint);
+    markOfficialReaderImageSupplement(manifest, paper.apiReaderFigures,
+        supplementFingerprint, promptTextContract);
+    return true;
 }
 
 function rollbackLegacyImageSupplementForModernReader(
@@ -11350,6 +11405,19 @@ function buildImageSupplementFingerprint(baseFingerprint, candidateImageInfos, d
             sha256: image.sha256 || ''
         })),
         preImageAnalysisSha256: crypto.createHash('sha256').update(String(preImageAnalysis || '')).digest('hex')
+    });
+}
+
+function buildImageDownloadFingerprint(candidateImageInfos) {
+    return stableFingerprint({
+        enabled: isDualModel,
+        secondary: modelFingerprint(SECONDARY_CONFIG, IMAGE_PLAN_TEMPERATURE),
+        candidates: candidateImageInfos.map(info => ({ url: info.url, caption: info.caption || '' })),
+        imageCandidateMax: IMAGE_CANDIDATE_MAX,
+        imageMaxCount: IMAGE_MAX_COUNT,
+        imageMaxBytes: IMAGE_MAX_BYTES,
+        imageMaxBase64Chars: IMAGE_MAX_BASE64_CHARS,
+        imageTotalBase64Chars: IMAGE_TOTAL_BASE64_CHARS
     });
 }
 
@@ -16755,16 +16823,7 @@ async function analyzePaperDeepInternal(paper, options = {}) {
         downloadedCount: downloadedImages.length,
         outcomes: downloadOutcomes
     });
-    const imageDownloadFingerprint = stableFingerprint({
-        enabled: isDualModel,
-        secondary: modelFingerprint(SECONDARY_CONFIG, IMAGE_PLAN_TEMPERATURE),
-        candidates: candidateImageInfos.map(info => ({ url: info.url, caption: info.caption || '' })),
-        imageCandidateMax: IMAGE_CANDIDATE_MAX,
-        imageMaxCount: IMAGE_MAX_COUNT,
-        imageMaxBytes: IMAGE_MAX_BYTES,
-        imageMaxBase64Chars: IMAGE_MAX_BASE64_CHARS,
-        imageTotalBase64Chars: IMAGE_TOTAL_BASE64_CHARS
-    });
+    const imageDownloadFingerprint = buildImageDownloadFingerprint(candidateImageInfos);
     markRecoveryStage(analysisManifest, 'imageDownload', downloadStatus, {
         ...(deferDailyLegacyImages && isDualModel ? { reason: 'deferred_until_legacy_image_supplement' } : {}),
         attempted: deferDailyLegacyImages ? 0 : candidateImageUrls.length,
@@ -18212,7 +18271,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     );
     if (deferDailyLegacyImages && isDualModel) {
         if (hasBoundApiReaderFigures || savedCoreSummaryRepairActive) {
-            markRecoveryStage(analysisManifest, 'imageDownload', 'skipped', {
+            if (hasBoundApiReaderFigures) markOfficialReaderImageDownload(analysisManifest, imageDownloadFingerprint);
+            else markRecoveryStage(analysisManifest, 'imageDownload', 'skipped', {
                 reason: hasBoundApiReaderFigures ? 'api_reader_v3_official_figures_bound'
                     : 'sealed_core_summary_recovery_preserves_source_only_reader',
                 attempted: 0, downloaded: 0, outcomes: [], fingerprint: imageDownloadFingerprint
@@ -18268,13 +18328,8 @@ async function analyzePaperDeepInternal(paper, options = {}) {
     } else if (hasBoundApiReaderFigures && !isRecoveryStageComplete(analysisManifest, 'imageSupplement')) {
         analysis = preImageAnalysis;
         selectedImageUrls = [];
-        markRecoveryStage(analysisManifest, 'imageSupplement', 'skipped', {
-            reason: 'api_reader_v3_official_figures_bound',
-            officialFigureCount: paper.apiReaderFigures.length,
-            officialFiguresSha256: stableFingerprint(paper.apiReaderFigures),
-            fingerprint: imageSupplementWriteFingerprint,
-            promptTextContract: imageSupplementWriteContract
-        });
+        markOfficialReaderImageSupplement(analysisManifest, paper.apiReaderFigures,
+            imageSupplementWriteFingerprint, imageSupplementWriteContract);
         console.log(
             `    [deep] ℹ️  已绑定 ${paper.apiReaderFigures.length} 张 v3 官方正文图，跳过旧副模型插图阶段`
         );
@@ -19968,6 +20023,7 @@ module.exports = {
     buildApiReaderGenerationStart,
     buildApiReaderValidationFeedback,
     refreshApiReaderArticleFromSource,
+    finalizeDeferredDailyReaderImages,
     inspectSavedConferenceReaderCompletion,
     hasReviewedReaderFactLocalSeed,
     finalizeApiReaderRefresh,
