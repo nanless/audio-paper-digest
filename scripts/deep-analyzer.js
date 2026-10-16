@@ -4048,6 +4048,22 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
     const directDenialPrefix = /(?:(?:不(?!但|仅|只)|不能|不应(?:当)?|不可|不宜|不得)(?:再|另行|据此|据此直接)?(?:声称|表示|说明|证明|确认|写|默认|意味着|代表|认为|断言|等同于|视为|当作)[^。！？!?；;，,]{0,36}|(?:不(?!但|仅|只)|不能|不应(?:当)?|不可|不宜|不得)(?:把|将)[^。！？!?；;，,]{0,36}(?:等同于|视为|当作)[^。！？!?；;，,]{0,16}|(?:不含|未含|不包含|没有包含|不包括)[^。！？!?；;，,]{0,24}|(?:没有|尚无|并无|不存在)(?:任何)?(?:该|此|对应)?(?:代码|模型|模型权重|权重|检查点|数据集|语料|演示|复现材料|资源)(?:类型)?(?:的)?|(?:没有|尚无|并无|不存在)(?:公开|开源|开放|当前可用|公开可用)$|(?:没有|未曾|尚未)(?:发现|找到|看到|确认|证明|表明|显示|提供|给出)[^。！？!?；;，,]{0,24}|(?:未|尚未|并未|没有|无)[^。！？!?；;，,]{0,24}(?:记为|标为|列为|判为)[^。！？!?；;，,]{0,16}|(?:未|尚未|并未|没有|无|并非|不是|不(?!但|仅|只)|not\s*))$/i;
     const conditionalPrefix = /(?:是否|能否|若|如果|假设)[^。！？!?；;，,]{0,36}$/i;
     const isConceptDistinction = (value, matchIndex) => {
+        // A closed, owner-free instruction enumerates concepts, not resources
+        // presently supplied by the paper. Only the exact list span is exempt.
+        const property = '(?:代码可运行|(?:模型)?权重可下载|数据可获取|(?:端到端)?系统可运行)';
+        const closedLists = [
+            new RegExp('复现(?:时)?(?:应|要|需)把(' + property + '(?:[、和与及]' + property + '){1,2})分开表述', 'gu'),
+            new RegExp('复现(?:时)?(?:要|应|需)(?:先)?分清(?:三|3)件事[：:](' + property + '(?:[、和与及]' + property + '){2})[，,](?:它们|三者|这三项)是(?:相互)?独立的', 'gu')
+        ];
+        for (const pattern of closedLists) for (const list of value.matchAll(pattern)) {
+            const start = list.index + list[0].indexOf(list[1]), end = start + list[1].length;
+            const prefix = value.slice(0, list.index).split(/[。！？!?；;，,]/u).at(-1);
+            const suffix = value.slice(list.index + list[0].length);
+            if (prefix.trim() || !/^(?:[，,]不要混为已开源)?[。！？!?；;]?\s*$/u.test(suffix)) continue;
+            const items = list[1].split(/[、和与及]/u);
+            if (new Set(items).size !== items.length) continue;
+            if (matchIndex >= start && matchIndex < end) return true;
+        }
         // 前置定语同样可以列举待核对概念；只豁免这个完整列表的范围。
         const attributiveLists = /(开源(?:的)?代码\s*[、，,]\s*可下载(?:的)?(?:模型)?权重\s*(?:[、，,]|与|和|及)\s*可(?:一键)?运行(?:的)?系统)\s*(?:是|属于)\s*(?:三|3)件(?:不同|独立|不同的|独立的)?事/gu;
         for (const list of value.matchAll(attributiveLists)) {
@@ -4564,6 +4580,8 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             + '(?:明确|直接|可靠)?(?:提供|给出)(?:作者|本文|本研究|本工作)?的?'
             + resource + '(?:' + connector + resource + '){0,3}' + released
             + '的?(?:陈述|声明|证据|说明|表述)', 'gu');
+        const hypotheticalDenial = /(?<introduction>(?:不能|不应|不可|不得)(?:把|将)[^。！？!?；;，,]{1,48}(?:建立在|寄托于|依赖于))(?<assumption>[^。！？!?；;，,]{1,64})的假设(?:上|之上)/gu;
+        const missingReleaseEvidence = /(?:没有|尚无|并无|不存在)[^。！？!?；;，,]{0,48}(?:作者资源|资源|记录|链接|来源)[^。！？!?；;，,]{0,24}(?:可作|作为|支撑|证明)[^。！？!?；;，,]{1,48}(?:已公开|已开源|可用|可下载|可获取)的证据/gu;
         const coordinatedDenial = new RegExp('(' + resource + '(?:' + connector + resource + '){1,4})'
             + released + '([二两三四五2-5])(?:件事|项主张|项声明)(?:都|均|皆)不能默认成立', 'gu');
         const contains = span => matchIndex >= span.index && matchEnd <= span.index + span[0].length;
@@ -4578,6 +4596,15 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             return !quoted && !/[“”‘’「」"'`]|(?:并非|不是|并不是|否定|反驳|证伪|推翻|排除|不代表|不意味着)/u.test(prefix)
                 && !/^\s*(?:(?:这(?:一|种)?(?:说法|判断|否定)|上述(?:说法|判断|否定)|的(?:说法|判断|否定))(?:(?:本身|其实|实际)?(?:是|为))?|(?:是|为))(?:错误|不成立|不准确|不属实|不正确)/u.test(suffix);
         };
+        for (const span of value.matchAll(hypotheticalDenial)) {
+            const start = span.index + span.groups.introduction.length;
+            const end = start + span.groups.assumption.length;
+            if (matchIndex >= start && matchEnd <= end && safeDenialIntroduction(span)) return true;
+        }
+        for (const span of value.matchAll(missingReleaseEvidence)) {
+            if (contains(span) && safeDenialIntroduction(span)
+                && !/(?:否认|否定|反驳|证伪|推翻|排除|并非|不是)/u.test(span[0])) return true;
+        }
         for (const span of value.matchAll(evidenceDenial)) {
             if (contains(span) && safeDenialIntroduction(span)) return true;
         }
@@ -4627,10 +4654,10 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
         if (![...source.matchAll(sourceRelease)].some(span => {
             const start = Math.max(source.lastIndexOf('.', span.index), source.lastIndexOf('!', span.index),
                 source.lastIndexOf('?', span.index)) + 1;
-            return !/\b(?:not|never|no|if|would|could|might|will|future|said|claimed|reportedly|alleged|assumed|third[- ]party|baseline|prior|previous|existing|related|cited)\b/i
+            return !/\b(?:not|never|no|if|would|could|might|will|future|said|says?|claim(?:s|ed)?|reports?|reported|reportedly|alleged|assumed|third[- ]party|baseline|prior|previous|existing|related|cited)\b/i
                 .test(source.slice(start, span.index + span[0].length));
         })) return false;
-        const reports = /(?:论文(?:正文)?|原文)(?:称|说|声明|表示)[^。！？!?；;，,]{1,160}/gu;
+        const reports = /(?:论文|原文)(?:正文)?(?:称|说|声明|表示|写了|写明|提到)[^。！？!?；;，,]{1,160}/gu;
         for (const report of value.matchAll(reports)) {
             const end = report.index + report[0].length;
             if (matchIndex < report.index || matchEnd > end || !noun.test(report[0])) continue;
@@ -4641,7 +4668,19 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             const types = resourceTypesIn(current);
             if ((types.size && !types.has(type))
                 || /(?:并非|不是|并不是|反驳|否定|推翻)[^。！？!?；;，,]{0,32}(?:没有|未|不可|不能)/u.test(current)) continue;
-            const qualified = /(?:本次|当前)[^。！？!?；;，,]{0,100}(?:当前不可达|当前不可用|未能确认|未確認|没有确认可达|未确认可达|无法确认可达|HTTP\s*[45]\d\d)/iu.test(current);
+            const qualified = /(?:本次|当前)[^。！？!?；;，,]{0,100}(?:当前不可达|当前不可用|未能确认|未確認|没有确认可达|未确认可达|无法确认可达|没有完成可达性(?:校验|核验)的绑定|HTTP\s*[45]\d\d)/iu.test(current);
+            const newCaveat = /没有完成可达性(?:校验|核验)的绑定/u.exec(current);
+            if (newCaveat) {
+                const afterCaveat = (current.slice(newCaveat.index + newCaveat[0].length)
+                    + value.slice(end + qualification[0].length)).replace(/^[\s，,*_~]+/u, '');
+                const beforeCaveat = current.slice(0, newCaveat.index);
+                // A quoted, disputed or withdrawn disclaimer is not current
+                // qualification of the original reported release statement.
+                if (/[“”‘’「」"'\x60]|所谓|(?:并非|不是|否定|反驳)/u.test(beforeCaveat)
+                    || /^[“”‘’「」"'\x60]/u.test(afterCaveat)
+                    || /^(?:[，,]\s*)?(?:这一|这个|这种|该|上述|的)?(?:说法|判断|结论|声明|否定)?(?:本身|其实|实际)?(?:是|为)?(?:错误|不成立|不属实|不正确|不准确)/u.test(afterCaveat)
+                    || /^(?:并|却)?(?:不能|无法|不可|不应)(?:否认|否定|反驳)/u.test(afterCaveat)) continue;
+            }
             if (qualified) return true; // 仅豁免这条reported span；后续声明仍逐项核验。
         }
         return false;

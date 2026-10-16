@@ -10,10 +10,12 @@ const sha = text => crypto.createHash('sha256').update(text).digest('hex');
 const sourceText = 'This controlled fixture makes no author resource release claim.';
 const identityBody = { contract: 'api-reader-resource-identity-v1', sourceTextSha256: sha(sourceText), resources: [] };
 const identity = { ...identityBody, identitySha256: deep.stableFingerprint(identityBody) };
-function issues(text) {
+function issues(text, source = sourceText) {
+    const body = { contract: 'api-reader-resource-identity-v1', sourceTextSha256: sha(source), resources: [] };
+    const actualIdentity = source === sourceText ? identity : { ...body, identitySha256: deep.stableFingerprint(body) };
     const draft = { sections: [{ kind: 'reproduction', body: text }] };
     const before = JSON.stringify(draft);
-    const result = deep.readerResourceClaimIssues(draft, identity, sourceText);
+    const result = deep.readerResourceClaimIssues(draft, actualIdentity, source);
     assert.equal(JSON.stringify(draft), before, '只读校验不得修改正文');
     return result;
 }
@@ -135,4 +137,94 @@ test('不同主张的显式列表只豁免列表字节，不豁免前后真正�
         '复现要先分清三件事：论文提到地址、权重已公开、系统可运行是不同的主张。',
         '权重可下载、系统可运行；它们是不同的主张。'
     ]) assert.ok(issues(text).length > 0, text);
+});
+
+const hypotheticalRelease = '没有可验证的作者资源可用性证据，不能把可复现性建立在代码已公开的假设上。';
+const absentReleaseEvidence = '没有归属明确且当前可用的作者资源可作权重已公开的证据。';
+const independentResources = '复现要分清三件事：代码可运行、权重可下载、数据可获取，它们是独立的。';
+const separateResources = '复现时应把代码可运行、权重可下载和系统可运行分开表述，不要混为已开源。';
+const directCodeRelease = 'The code is publicly available at https://example.org/project.';
+const qualifiedCodeReport = '原文正文写了代码已公开并给出链接，但本次可验证的来源清单中没有完成可达性校验的绑定，因此这里不声称代码、权重或数据当前可用、可下载或可运行，需要读者自行按论文给出的地址核实。';
+const hasCodeClaimIssue = (text, source) => issues(text, source).some(issue => /本文 code /.test(issue.message));
+
+test('完整假设和缺少证据的否定说明不构成资源已公开声明', () => {
+    for (const text of [hypotheticalRelease, absentReleaseEvidence,
+        '不能将复现实验依赖于模型权重已公开的假设上。']) {
+        assert.deepEqual(issues(text), [], text);
+    }
+});
+
+test('假设只限定关系词后的内容，不能吞掉前对象中的真实代码公开声明', () => {
+    for (const text of [
+        '不能把本文已经公开的代码的可运行性建立在权重已公开的假设上。',
+        '不能把本文代码已经公开的事实建立在权重已公开的假设上。',
+        '代码已经公开，不能把复现实验建立在权重已公开的假设上。',
+        '本文代码已经公开，但权重没有公开。',
+        hypotheticalRelease + '但本文代码已经公开。',
+        hypotheticalRelease.replace('。', '，但本文代码已经公开。'),
+        absentReleaseEvidence + '然而本文代码已经公开。'
+    ]) assert.ok(hasCodeClaimIssue(text), text);
+});
+
+test('缺证据语段内部的反驳、双重否定和否定撤销仍检查真实肯定', () => {
+    for (const text of [
+        '没有任何证据否认作者资源可作为代码已公开的证据。',
+        '并非不能把可复现性建立在代码已公开的假设上。',
+        '不能把可复现性建立在代码已公开的假设上的说法是错误的。'
+    ]) assert.ok(hasCodeClaimIssue(text), text);
+    for (const text of [
+        '不是没有归属明确的作者资源可作权重已公开的证据。',
+        '没有归属明确的作者资源可作权重已公开的证据的判断不成立。',
+        '未发现证据否定本文模型权重已经开源。'
+    ]) assert.ok(issues(text).some(issue => /本文 model /.test(issue.message)), text);
+});
+
+test('完整资源概念指令仅豁免列表，不豁免实物归属、前后声明或公开状态尾句', () => {
+    for (const text of [independentResources, separateResources,
+        '复现时应把代码可运行、权重可下载和系统可运行分开表述。']) {
+        assert.deepEqual(issues(text), [], text);
+    }
+    for (const text of [
+        '本文代码已经公开，' + separateResources,
+        separateResources + '本文代码已经公开。',
+        separateResources.replace('不要混为已开源', '但本文代码已经公开')
+    ]) assert.ok(hasCodeClaimIssue(text), text);
+    for (const text of [
+        independentResources + '本文权重已公开。',
+        independentResources.replace('。', '，三者已经全部公开。'),
+        '本文' + independentResources,
+        independentResources.replace('代码可运行', '本文代码可运行'),
+        '本文提供代码可运行、权重可下载、数据可获取，它们是独立的。',
+        '复现要分清三件事：代码可运行、权重可下载、权重可下载，它们是独立的。'
+    ]) assert.ok(issues(text).length > 0, text);
+});
+
+test('来源支持的作者原文转述与本次尚未核实可达性分别判断', () => {
+    assert.deepEqual(issues(qualifiedCodeReport, directCodeRelease), []);
+    assert.ok(hasCodeClaimIssue(qualifiedCodeReport), '缺少原文发布声明不能借免责声明转述');
+    for (const source of [
+        'The authors claim that the code is publicly available.',
+        'The code will be publicly available.',
+        'The code is not publicly available.',
+        'The article quotes "The code is publicly available" as an unsupported claim.',
+        'The weights are publicly available at https://example.org/project.'
+    ]) assert.ok(hasCodeClaimIssue(qualifiedCodeReport, source), source);
+    assert.ok(hasCodeClaimIssue(qualifiedCodeReport + '本文代码已经公开。', directCodeRelease));
+    assert.ok(hasCodeClaimIssue('原文正文写了代码已公开并给出链接。', directCodeRelease));
+});
+
+test('可达性免责声明被引述、反驳或撤销时不能使原代码声明通过', () => {
+    for (const text of [
+        '原文正文写了代码已公开，但本次没有完成可达性校验的绑定这一说法是错误的。',
+        '原文正文写了代码已公开，但本次所谓没有完成可达性校验的绑定不成立。',
+        '原文正文写了代码已公开，但本次“没有完成可达性校验的绑定”的结论不属实。',
+        '原文正文写了代码已公开，但本次没有完成可达性校验的绑定并不能否认代码当前可用。'
+    ]) assert.ok(hasCodeClaimIssue(text, directCodeRelease), text);
+});
+
+test('空格、逗号与Markdown强调不会复活已经撤销的可达性免责声明', () => {
+    for (const tail of [' 这一说法是错误的。', '，并不能否认代码当前可用。', '**这一说法是错误的**。']) {
+        const text = '原文正文写了代码已公开，但本次没有完成可达性校验的绑定' + tail;
+        assert.ok(hasCodeClaimIssue(text, directCodeRelease), text);
+    }
 });

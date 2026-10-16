@@ -5230,9 +5230,15 @@ def _detailed_core_summary_semantic_issue(summary):
             len(numbers) >= 2 and baseline_transition.search(result_sentence)
         )
         narrow_measured_result = _has_recorded_dissonance_comparison(result_sentence) or _has_mean_room_simulation_comparison(result_sentence)
+        # Mirror the existing Node measured cross-validation setting rule.
+        measured_cross_validation = not re.search(
+            r'(?:假设|假想|如果|若在|预计|预期|可能|计划|未来|并非|不是|未进行|未做|没有)', result_sentence,
+        ) and re.search(
+            r'(?:在|于)[^。！？!?\n]{1,160}(?:[1-9][0-9]*|[一二两三四五六七八九十]+)折交叉验证(?:下|中|上)', result_sentence,
+        )
         has_metric = narrow_measured_result or metric.search(metric_sentence) or conference_metric.search(metric_sentence)
         if has_metric and has_direction and numbers \
-                and (narrow_measured_result or setting.search(result_sentence) or named_setting.search(result_sentence) or numeric_named_setting.search(sentence) or _has_concrete_core_summary_setting(result_sentence)) \
+                and (narrow_measured_result or measured_cross_validation or setting.search(result_sentence) or named_setting.search(result_sentence) or numeric_named_setting.search(sentence) or _has_concrete_core_summary_setting(result_sentence)) \
                 and (len(numbers) >= 2 or re.search(
                     r'(?:基线|对照|相比|相较|原方法|已有方法|先前方法|本文方法|本方法|所提方法|移除|完整模型|竞品)', result_sentence
                 )) and not _has_cross_metric_directional_comparison(result_sentence):
