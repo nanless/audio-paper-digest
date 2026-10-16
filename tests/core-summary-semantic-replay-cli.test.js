@@ -1,6 +1,7 @@
 'use strict';
 process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
 const realAudit = process.env.PD_CORE_SUMMARY_REPLAY_REAL_AUDIT;
+const realStagePapers = process.env.PD_CORE_SUMMARY_REPLAY_REAL_STAGE_PAPERS;
 const test = require('node:test'), assert = require('node:assert/strict'), fs = require('node:fs');
 const path = require('node:path'), os = require('node:os'), crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
@@ -15,15 +16,20 @@ function execute(input, options = {}) {
         if (options.size) fs.truncateSync(file, options.size);
         if (options.hardlink) fs.linkSync(file, path.join(root, 'alias.json'));
         let args = [cli, '3'];
-        if (options.networkProbe) {
+        if (options.networkProbe || options.productionDiagnosticProbe) {
             const preload = path.join(root, 'probe.js');
-            fs.writeFileSync(preload, `require(${JSON.stringify(path.join(project, 'scripts/analysis-contract'))}).validateCoreSummarySemanticContract = () => { require('node:https').request('https://example.com/'); return null; };`);
+            fs.writeFileSync(preload, options.networkProbe
+                ? `require(${JSON.stringify(path.join(project, 'scripts/analysis-contract'))}).validateCoreSummarySemanticContract = () => { require('node:https').request('https://example.com/'); return null; };`
+                : `const c=require(${JSON.stringify(path.join(project, 'scripts/analysis-contract'))}); const original=c.validateCoreSummarySemanticContract; c.validateCoreSummarySemanticContract=(...args)=>{ require(${JSON.stringify(path.join(project, 'scripts/deep-analyzer'))}); console.log('semantic-replay diagnostic probe'); return original(...args); };`);
             args = ['-r', preload, ...args];
         }
         const fd = fs.openSync(file, 'r');
+        const env = { ...process.env, ...(options.env || {}), VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' };
+        if (options.productionRuntime) delete env.NODE_TEST_CONTEXT;
         try { const result = spawnSync(process.execPath, args, { cwd: project, encoding: 'utf8',
-            stdio: ['ignore', 'pipe', 'pipe', fd], env: { ...process.env, ...(options.env || {}), VERIFY_PROJECT_DISABLE_FILE_LOGS: '1' }, timeout: 10000 });
-            assert.ifError(result.error); return { status: result.status, value: JSON.parse(result.stdout) };
+            stdio: ['ignore', 'pipe', 'pipe', fd], env, timeout: 10000 });
+            assert.ifError(result.error); return { status: result.status, value: JSON.parse(result.stdout),
+                ...(options.rawOutput ? { stdout: result.stdout, stderr: result.stderr } : {}) };
         } finally { fs.closeSync(fd); }
     } finally { fs.rmSync(root, { recursive: true, force: true }); }
 }
@@ -37,6 +43,22 @@ test('私有FD桥逐字复用Node语义结果，合格摘要和明确缺陷均�
     }
     assert.equal(execute({ summary, sourceText: '' }).value.issue, null);
     assert.equal(typeof execute({ summary: '本文效果很好。', sourceText: '' }).value.issue, 'string');
+});
+test('非测试运行加载真实日志器时诊断只走stderr，最终stdout仍为唯一严格JSON', () => {
+    const summary = contract.extractSection(require('./valid-analysis-fixture').validAnalysisText(), '核心摘要');
+    const result = execute({ summary, sourceText: '' }, {
+        productionRuntime: true, productionDiagnosticProbe: true, rawOutput: true
+    });
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, JSON.stringify({ issue: null }));
+    assert.match(result.stderr, /semantic-replay diagnostic probe/);
+    assert.match(result.stderr, /\[\d{4}-\d{2}-\d{2}/);
+    const rejected = execute({ summary, sourceText: '' }, { productionRuntime: true, networkProbe: true, rawOutput: true });
+    assert.equal(rejected.status, 1); assert.match(rejected.value.issue, /forbids network access/);
+    assert.equal(rejected.stdout, JSON.stringify(rejected.value));
+    const missing = execute({ mode: 'stage-binding', paper: {}, sourceText: '' }, { productionRuntime: true, rawOutput: true });
+    assert.equal(missing.status, 0); assert.match(missing.value.issue, /阶段记录缺失/);
+    assert.equal(missing.stdout, JSON.stringify(missing.value));
 });
 test('桥拒公开文件、硬链、16MiB超限、字段篡改、沙箱及实际网络调用', () => {
     const input = { summary: '本文效果很好。', sourceText: '' };
@@ -71,4 +93,30 @@ test('真实11篇Python旧语义误拒摘要与当前Node source-bound规则完�
         assert.equal(sha(fs.readFileSync(sourceFile)), sha(sourceBytes));
     }
     assert.equal(sha(fs.readFileSync(realAudit)), sha(auditBytes)); assert.equal(sha(fs.readFileSync(file)), sha(before));
+});
+test('真实普通paid和operator阶段在非测试子进程完整重放，缺operator证明仍拒', { skip: !realStagePapers }, () => {
+    const file = path.join(project, 'data/current/deep-analysis-result.json'), before = fs.readFileSync(file), formal = JSON.parse(before);
+    const ids = realStagePapers.split(',');
+    assert.ok(ids.length >= 2);
+    let plain = 0, operator = 0;
+    for (const id of ids) {
+        const paper = formal.papers.find(p => p.arxivId.replace(/v\d+$/, '') === id);
+        assert.ok(paper, id);
+        const sourceFile = path.join(project, 'data/runtime/daily-fresh-source-runs', paper.freshRewriteProvenance.runId,
+            'sources', id, 'generation-000001/source.txt'), source = fs.readFileSync(sourceFile);
+        const input = { mode: 'stage-binding', paper, sourceText: source.toString('utf8') };
+        const result = execute(input, { productionRuntime: true, rawOutput: true });
+        assert.equal(result.status, 0, id); assert.equal(result.stdout, '{"issue":null}', id);
+        if (paper.analysisManifest.stages.coreSummaryRepair.operatorLiteralCorrection) {
+            operator++;
+            const bad = structuredClone(input);
+            delete bad.paper.analysisManifest.stages.coreSummaryRepair.operatorLiteralCorrection;
+            const rejected = execute(bad, { productionRuntime: true, rawOutput: true });
+            assert.equal(rejected.status, 0); assert.match(rejected.value.issue, /operator.*proof/);
+            assert.equal(rejected.stdout, JSON.stringify(rejected.value));
+        } else plain++;
+        assert.equal(sha(fs.readFileSync(sourceFile)), sha(source));
+    }
+    assert.ok(plain > 0 && operator > 0);
+    assert.equal(sha(fs.readFileSync(file)), sha(before));
 });

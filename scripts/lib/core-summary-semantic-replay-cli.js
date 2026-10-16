@@ -2,6 +2,11 @@
 // Local publisher replay of the same semantic contract used during analysis.
 process.env.VERIFY_PROJECT_DISABLE_FILE_LOGS = '1';
 const fs = require('node:fs'), path = require('node:path');
+// Imported production modules may install timestamping stdout wrappers even
+// with file logging disabled. Reserve fd 1 for this protocol before importing
+// them; ordinary diagnostic writes go to stderr, JSON bypasses those wrappers.
+process.stdout.write = process.stderr.write.bind(process.stderr);
+const writeResult = issue => fs.writeSync(1, JSON.stringify({ issue }));
 function denyNetwork() {
     const deny = () => { throw new Error('Core summary semantic replay forbids network access'); };
     require('node:net').Socket.prototype.connect = deny;
@@ -37,8 +42,8 @@ try {
         issue = contract.validateCoreSummaryStageBinding(input.paper, { sourceText: input.sourceText });
     } else throw new Error('Input must be exact semantic or stage-binding replay data');
     if (issue !== null && typeof issue !== 'string') throw new Error('Semantic contract returned an invalid result');
-    process.stdout.write(JSON.stringify({ issue }));
+    writeResult(issue);
 } catch (error) {
-    process.stdout.write(JSON.stringify({ issue: 'Core summary semantic replay failed: ' + error.message }));
+    writeResult('Core summary semantic replay failed: ' + error.message);
     process.exitCode = 1;
 }
