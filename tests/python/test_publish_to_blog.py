@@ -5941,6 +5941,10 @@ primary_method_tag: #Transformer
             self.assertIn('逐一核对本图图例的线型、标记、颜色与坐标分组', prompt)
             self.assertIn('不能直接把计数当百分比', prompt)
             self.assertIn('不能无条件将文字当作图像事实', prompt)
+            self.assertIn('不限定画面必须是流程图或模块框图', prompt)
+            self.assertIn('输入与输出的实例、频谱、音符或其他结果可用于展示任务', prompt)
+            self.assertIn('须指出 alt 或局部正文中的具体断言与本张像素如何矛盾', prompt)
+            self.assertIn('不豁免真实的图例、坐标、方向、数值、来源或科学内容冲突', prompt)
             self.assertIn('仍须报告具体冲突', prompt)
             self.assertIn('如实披露这种矛盾及不确定性', prompt)
 
