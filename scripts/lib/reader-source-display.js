@@ -37,6 +37,10 @@ function normalizeExplicitReaderSymbolProjection(value) {
     output = output.replace(/(^|[|\n])([ \t]*)([✓×])\\(checkmark|times)(?=[ \t]*(?:[|\n]|$))/g,
         (whole, boundary, space, visible, command) => visible === (command === 'checkmark' ? '✓' : '×')
             ? `${boundary}${space}${visible}` : whole);
+    // A complete scalar multiplier may carry the same visible × and explicit
+    // \times annotation. Keep every numeric byte; never consume a continuation.
+    output = output.replace(/(^|[|\n])([ \t]*)([+−-]?(?:\d+(?:\.\d+)?|\.\d+))×\\times(?=[ \t]*(?:[|]|$))/g,
+        (_whole, boundary, space, scalar) => `${boundary}${space}${scalar}×`);
     const hasContinuation = (input, end) => /^\s*[\p{L}\p{N}_^\\({]/u.test(input.slice(end));
     // 只有完整的可见变量与明确 TeX 同值时才合并，不能从裸重复猜测。
     const compound = [

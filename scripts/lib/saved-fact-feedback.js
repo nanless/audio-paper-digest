@@ -251,14 +251,17 @@ async function refreshProtectedReader(paper, options = {}, feedbackSha256 = null
     const source = require('./model-text-sanitization').currentModelInputSource(paper);
     if (!source) throw new Error('Reader纠错缺少当前已核验封存来源');
     const reviewFeedback = facts.reviewFeedback('apiReaderArticle', require('../utils').normalizedId(paper));
-    const recoveryReaderResources = require('./reader-failed-bundle-resource-replay').prepareRecoveryReaderResources(
+    const local = options.readerFactLocalRevision === true;
+    if (local && !require('../deep-analyzer').hasReviewedReaderFactLocalSeed(target, source.text, reviewFeedback))
+        throw new Error('Reader事实局部修订缺少当前已核完整签名稿，不能回退source-only生成');
+    const recoveryReaderResources = local ? null : require('./reader-failed-bundle-resource-replay').prepareRecoveryReaderResources(
         target, source, { reviewFeedback });
     const result = await fresh.withFreshPaperContext(target, () =>
         require('./llm-usage').withLlmUsageContext({ paperId: require('../utils').normalizedId(paper) }, () =>
             require('../deep-analyzer').refreshApiReaderArticleFromSource(target, source, {
                 reviewFeedback,
                 ...(recoveryReaderResources ? { recoveryReaderResources } : {}),
-                resumeSavedSourceReader: true,
+                ...(local ? { readerFactLocalRevision: true } : { resumeSavedSourceReader: true }),
                 ...(parentUpstreamProof ? { parentUpstreamProof } : {}),
                 naturalResourceProse: options.naturalResourceProse === true
             })));

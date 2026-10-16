@@ -130,3 +130,23 @@ test('批次初筛和锁内重读共用完成判定，保留反馈且新出现�
     assert.equal(batches, 1);
     assert.deepEqual(review.readFeedback(f.feedbackFile), f.feedback);
 });
+
+test('事实单句local只接受显式Reader包，拒混核心/无反馈/自定义分析/其它失败且不改状态', async t => {
+    const f = await createBoundFeedbackPaperSample(t);
+    const batchPath = require.resolve('../scripts/batch-analyze'), previous = require.cache[batchPath];
+    delete require.cache[batchPath]; const freshBatch = require('../scripts/batch-analyze');
+    t.after(() => { require.cache[batchPath] = previous; });
+    const original = fs.readFileSync(Config.FILES.deepAnalysisResult);
+    const rejected = async (options, pattern) => {
+        await assert.rejects(freshBatch.main({ readerFactLocalRevision: true, ...options }), pattern);
+        assert.deepEqual(fs.readFileSync(Config.FILES.deepAnalysisResult), original);
+    };
+    await rejected({ readerFactLocalRevision: 'yes' }, /布尔值/);
+    await rejected({}, /显式严格Reader反馈/);
+    await rejected({ factFeedbackFiles: [f.feedbackFile] }, /显式严格Reader反馈/);
+    const child = { ...f.feedback, coreFeedback: '', rejectedCoreClaims: [] };
+    json(f.feedbackFile, child);
+    for (const options of [{ analyzeFn: () => assert.fail('不得调用') }, { analyzeBatch: () => assert.fail('不得调用') }])
+        await rejected({ factFeedbackFiles: [f.feedbackFile], ...options }, /显式严格Reader反馈/);
+    await rejected({ factFeedbackFiles: [f.feedbackFile] }, /没有显式Reader反馈的其它失败论文/);
+});

@@ -13,6 +13,27 @@ const handles = new WeakMap();
 const replaySnapshots = new WeakMap();
 const replayOptions = new WeakMap();
 const legacyRootReplays = new WeakMap();
+// Only a completed, byte-exact paid/history replay can mint this capability.
+// It is never serialized into a record or accepted as an operator assertion.
+const tableProjectionReplays = new WeakMap();
+function tableProjectionHandle(original, record, source, options, parent) {
+    if (!options.prune || !record.normalProducerProof || !isDeepStrictEqual(record.parentPaper, parent)
+        || record.parentPaperSha256 !== daily.stableHash(parent)
+        || record.parentArticleSha256 !== parent.apiReaderArticleSha256
+        || record.parentPlanSha256 !== parent.apiReaderPlanSha256) return undefined;
+    const handle = Object.freeze({});
+    tableProjectionReplays.set(handle, { original, record, source,
+        originalSha256: repair.hashDraft(original), recordSha256: daily.stableHash(record),
+        sourceSha256: daily.stableHash(source) });
+    return handle;
+}
+function authenticatedTableProjection(handle, original, record, source) {
+    const replay = tableProjectionReplays.get(handle);
+    return !!replay && replay.original === original && replay.record === record && replay.source === source
+        && replay.originalSha256 === repair.hashDraft(original)
+        && replay.recordSha256 === daily.stableHash(record)
+        && replay.sourceSha256 === daily.stableHash(source);
+}
 const fail = message => { throw Object.assign(new Error(`日更签名Reader人工修正拒绝：${message}`), { retryable: false }); };
 const sha = facts.sha;
 function read(file) {
@@ -303,7 +324,8 @@ function verifyFactRoundtrip(record, paper, source, checked, plan) {
         assertRenderedParent(draft, entry.parent, source, checked.envelope, options);
         if (repair.hashDraft(draft) !== entry.record.baselineDraftSha256) fail('人工历史before draft断链');
         draft = entry.record.contract === CONTRACT ? applyBoundedTextPatch(draft, entry.record)
-            : factPatch.applyBoundedFactPatch(draft, entry.record, entry.feedback, source);
+            : factPatch.applyBoundedFactPatch(draft, entry.record, entry.feedback, source,
+                tableProjectionHandle(draft, entry.record, source, options, entry.parent));
         assertRenderedParent(draft, after, source, checked.envelope, options);
         assertPreservedUpstream(entry.parent, after, true);
         const afterStage = after.analysisManifest.stages.apiReaderArticle;
@@ -320,7 +342,8 @@ function verifyFactRoundtrip(record, paper, source, checked, plan) {
                 .some(key => !isDeepStrictEqual(afterStage[key], base.analysisManifest.stages.apiReaderArticle[key]))) fail('人工历史阶段、请求或像素账改变');
     }
     if (record.baselineDraftSha256 !== repair.hashDraft(draft)) fail('v2当前draft与完整历史终点不同');
-    const patched = factPatch.applyBoundedFactPatch(draft, record, record._feedback, source);
+    const patched = factPatch.applyBoundedFactPatch(draft, record, record._feedback, source,
+        tableProjectionHandle(draft, record, source, options, paper));
     if (options.prune) assertProducerTableScope(draft, patched, null, paper, record, source);
     const parsed = parseDraft(patched, paper, source, checked.envelope, options);
     if (options.prune) assertProducerTableScope(draft, patched, parsed, paper, record, source);
@@ -477,7 +500,7 @@ async function finalize(handle, paper, persist) {
 const apply = (handle, paper) => finalize(handle, paper, true);
 const preview = (handle, paper) => finalize(handle, paper, false);
 module.exports = { CONTRACT, FACT_CONTRACT, prepare, apply, preview, applyBoundedTextPatch,
-    applyBoundedFactPatch: factPatch.applyBoundedFactPatch, verifyRoundtrip };
+    applyBoundedFactPatch: factPatch.applyBoundedFactPatch, verifyRoundtrip, authenticatedTableProjection };
 if (require.main === module) {
     require('../env-loader').requireExternalRuntime('daily-reader-signed-correction');
     require('../workspace-role').requireWorkspaceRole('daily');

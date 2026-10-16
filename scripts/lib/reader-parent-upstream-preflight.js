@@ -59,6 +59,13 @@ function inspectSavedReaderParentUpstream(paper, source) {
     if (!require('./completed-reader-upstream').completedReaderUpstream(paper, actual)) {
         return { current: false, invalidatedStages: [], prerequisiteCurrent: false, proof };
     }
+    // Match normal core-only continuation: its strict completed checkpoint
+    // qualification protects historical upstream stages on this private clone.
+    // A failed qualification never grants a cold-read shortcut.
+    if (facts.current(paper.arxivId)?.coreOnly
+        && !deep.prepareCompletedCoreRecovery(clone, actual)) {
+        return { current: false, invalidatedStages: [], prerequisiteCurrent: false, proof };
+    }
     const primaryEvidence = deep.buildTaskEvidenceContext(actual.text,
         require('../config').ANALYSIS_CONFIG.fullTextMaxChars, undefined, 'PRIMARY');
     const fingerprints = deep.buildRecoveryFingerprints(clone, primaryEvidence, paper.arxivId, manifest);

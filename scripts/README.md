@@ -266,6 +266,7 @@ npm run test:compat
 | `lib/daily-reader-signed-fact-patch.js` | 签名 Reader v2 的纯范围核验：逐字绑定当前受拒原句、UTF-16 起止位置和原节点 SHA；仅1–8个既有正文/解释/同源表绑定节点。raw/display 差异只接受真实正常排版投影，句外、公式、原图及新节点不可改；来源资格仍由正常 Reader 解析器核验。 |
 | `lib/daily-reader-legacy-batch-root.js` | 只读核验旧日更批次人工修正根：真实失败父检查点、原授权及清单、原付费候选和原补丁必须逐字重放到当前签名 Reader；保留真实 operator 身份、四源、原费用和次数，不伪造完成 API 父稿或改变活跃候选状态。 |
 | `lib/reader-signed-raw-claim-display.js` | 签名范围的原句显示映射：仅同一原节点的唯一原句与实际偏移可使用公共定量诊断及正常排版；用完整节点的位置标记重放证明显示范围，拒绝借另一句、引用或代码的数字证据。 |
+| `lib/reader-signed-pruned-table-claim.js` | 在真实付费稿和完整人工历史已重放后，核对正常来源裁行前后的唯一同序原表；仅支持完整父稿与原节点 SHA 绑定、完整原 DOM 逐格恢复的表范围，普通原句和未认证调用不获得权限。 |
 | `lib/reader-signed-table-targets.js` | 签名修正的真实表序与目标来源核验：内联表和独立 TABLE 标记一起定位；原占位表须重放到已签父表，获准新表由正常编译或同一 DOM 的严格逐格行列投影得到，不混拼、猜值或增删表。 |
 | `lib/reader-signed-operator.js` | Node 库：显式修订同一运行的已核验 Reader，先核对完整父稿、正文、计划及来源 SHA 与修改请求一致，再还原、解析并按共同流程封存结果；恢复输出时核对先前保存且不再改动的准备记录，其中包含修改请求、父稿、运行、来源和预期输出的 SHA。只写隔离分析并要求事实复核，不调用 API。 |
 | `lib/reader-source-blocked-normalization.js` | Node 库：对封存来源导致的完整表阻塞重跑唯一顺序调整，核对原稿与准备稿双 SHA，并保留真实绑定与承载正文的失败诊断；付费回放必须先逐字对应保存的原稿，不授予成功资格或新额度。 |

@@ -104,6 +104,9 @@ test('无主文父包的核心纠错正常保存后跨作用域重放、完成�
     });
     const sample = await createReviewedReaderSample(t, { sourceText:
         'Table 1 reports word error rate (WER) of 9.8% for our method versus 12.4% for the baseline and 10.8% without the context module under the same public test protocol.\n'
+        // The synthetic signed Reader fixture contains a separate 1.0 scalar
+        // protocol table; give it an actual quote rather than borrowing a digit.
+        + 'A controlled protocol configuration reports the scalar reference value 1.0.\n'
         + 'The source reports server inference measurements; edge latency is not evaluated.\n'
         + 'Additional method evidence describes experimental conditions and evaluation protocols. '.repeat(100) });
     const paper = sample.paper;
@@ -1607,4 +1610,114 @@ test('旧Reader上游fallback拒绝非Reader检查点保存并在错误路径完
     { code: 'READER_UPSTREAM_PRIMARY_NOT_REUSABLE' });
     assert.equal(JSON.stringify(paper), noCheckpoint);
     assert.equal(persists, 0);
+});
+
+test('typed核心父与Reader子只从已核子包派生单句local种子，保留父证明与费用', async t => {
+    const sample = await createDualReaderCorrectionSample(t, 'coreSummaryRepair');
+    const claim = '当前结果已经证明所有未知领域都能取得相同的测量数值。';
+    sample.paper.apiReaderArticle = sample.paper.apiReaderArticle.replace(/(### [^\n]+\n\n)/, '$1' + claim + '\n\n');
+    require('./reader-signed-draft-fixture').sign(sample.paper);
+    const next = { ...sample.next, rejectedReaderClaims: [...sample.next.rejectedReaderClaims, claim] };
+    const child = facts.validateFeedback(next, sample.plan, sample.paper);
+    const before = structuredClone(sample.paper);
+    await daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(sample.paper, () =>
+        facts.withFactReview(sample.parentBound, () => facts.withReaderFactReview(child, sample.paper, async () => {
+            const active = facts.current(sample.id), feedback = facts.reviewFeedback('apiReaderArticle', sample.id);
+            assert.equal(active.feedback.coreFeedback, sample.parent.coreFeedback);
+            assert.equal(active.feedback.readerFeedback, '');
+            assert.deepEqual(active.readerBound.proof, child.proof);
+            assert.equal(deep.hasReviewedReaderFactLocalSeed(sample.paper, sample.source.text, feedback), true);
+            const seed = deep.prepareApiReaderRevisionSeed(sample.paper, sample.source.text, feedback, { readerFactLocalRevision: true });
+            const start = deep.buildApiReaderGenerationStart(sample.paper, { reviewFeedback: feedback,
+                sourceText: sample.source.text, initialDraft: seed.initialDraft, revisionSeed: seed, readerFactLocalRevision: true });
+            assert.equal(start.readerFactLocalPaths.length, 1);
+            const repair = require('../scripts/lib/reader-repair');
+            assert.equal(repair.assertReaderFactLocalCoverage(start.signedRecoveryDraft, next.rejectedReaderClaims)
+                .filter(issue => issue.claim === claim).length, 1);
+            for (const stage of ['primaryAnalysis', 'coreSummaryRepair', 'scoringAudit'])
+                assert.throws(() => facts.assertScoringOnlyModelStageAllowed(stage));
+            assert.throws(() => deep.buildApiReaderGenerationStart(sample.paper, { reviewFeedback: '另一份未核子包',
+                sourceText: sample.source.text, initialDraft: seed.initialDraft, revisionSeed: seed, readerFactLocalRevision: true }), /事实局部修订/);
+            const issues = repair.verifiedReaderFactIssues(start.signedRecoveryDraft, next.rejectedReaderClaims);
+            const targets = repair.buildRepairTargets(start.signedRecoveryDraft, issues, { readerFactLocalPaths: start.readerFactLocalPaths });
+            let requests = 0;
+            const generated = await deep.generateApiReaderArticleDetailed(sample.paper, sample.paper.analysis, '合成测试的封存证据', {
+                sourceText: sample.source.text, structuredArtifacts: sample.source.structuredArtifacts,
+                reviewFeedback: feedback, revisionSeed: seed, initialDraft: seed.initialDraft, readerFactLocalRevision: true,
+                readerRecordDisposition: async () => {},
+                readerCallModel: async (_messages, tokens, request) => {
+                    requests++;
+                    assert.equal(request.usageContext.stage, 'apiReaderRepair');
+                    assert.equal(request.usageContext.contentAttempt, 1, '新真实反馈input如实从局部1开始，旧scope计数未重写');
+                    assert.ok(tokens <= 16000);
+                    return JSON.stringify({ version: 1, draftSha256: repair.hashDraft(start.signedRecoveryDraft),
+                        sentenceReplacements: repair.factLocalSentenceTargets({ draftSha256: repair.hashDraft(start.signedRecoveryDraft), targets })
+                            .map(({ originalSentence, ...identity }) => ({ ...identity,
+                                value: '原文只报告当前受控协议下的测量结果，未知领域是否成立仍需要另行验证。' })) });
+                }
+            });
+            assert.equal(requests, 1);
+            assert.equal(generated.attempts, 1); assert.equal(generated.fullAttempts, 0);
+            assert.ok(!generated.article.includes(claim));
+        }))));
+    assert.deepEqual(sample.paper, before);
+    const broken = structuredClone(sample.paper); broken.analysisManifest.stages.coreSummaryRepair.factReview.sourceFiles['source.pdf'] = '0'.repeat(64);
+    await assert.rejects(daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(broken, () =>
+        saved.analyzeWithRecoveredFeedback(broken, sample.plan, () => assert.fail('不得修改上游'), next,
+            { readerFactLocalRevision: true }))), /纠错说明|证明|来源/);
+});
+
+test('公共saved Reader单句local透传不取source-only资源束且表内拒绝句仍不能授权', async t => {
+    const sample = await createDualReaderCorrectionSample(t, 'coreSummaryRepair');
+    const claim = '当前实验数值已经证明所有未知领域都具有同样的统计表现。';
+    sample.paper.apiReaderArticle = sample.paper.apiReaderArticle.replace(/(### [^\n]+\n\n)/, '$1' + claim + '\n\n');
+    require('./reader-signed-draft-fixture').sign(sample.paper);
+    const next = { ...sample.next, rejectedReaderClaims: [...sample.next.rejectedReaderClaims, claim] };
+    const original = structuredClone(sample.paper);
+    let refreshes = 0;
+    t.mock.method(require('../scripts/lib/reader-failed-bundle-resource-replay'), 'prepareRecoveryReaderResources',
+        () => assert.fail('已签local不得借source-only资源恢复进入新全文'));
+    t.mock.method(deep, 'refreshApiReaderArticleFromSource', async (paper, source, options) => {
+        refreshes++;
+        assert.equal(options.readerFactLocalRevision, true);
+        assert.equal(Object.hasOwn(options, 'resumeSavedSourceReader'), false);
+        assert.equal(Object.hasOwn(options, 'recoveryReaderResources'), false);
+        const seed = deep.prepareApiReaderRevisionSeed(paper, source.text, options.reviewFeedback, options);
+        const start = deep.buildApiReaderGenerationStart(paper, { ...options, sourceText: source.text,
+            initialDraft: seed.initialDraft, revisionSeed: seed });
+        assert.equal(start.readerFactLocalPaths.length, 1);
+        const tableClaim = '| 比较条件 | 控制变量 | 数据集 | 指标方向 | 报告值 | 解释 |';
+        assert.throws(() => require('../scripts/lib/reader-repair').assertReaderFactLocalCoverage(
+            start.signedRecoveryDraft, [tableClaim]), /未获准位置/);
+        return paper;
+    });
+    await daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(sample.paper, () =>
+        saved.analyzeWithRecoveredFeedback(sample.paper, sample.plan, () => assert.fail('不得进入主文'), next,
+            { readerFactLocalRevision: true })));
+    assert.equal(refreshes, 1);
+    assert.deepEqual(sample.paper.analysisManifest.stages.coreSummaryRepair, original.analysisManifest.stages.coreSummaryRepair);
+    assert.deepEqual(sample.paper.analysisManifest.stages.scoringAudit, original.analysisManifest.stages.scoringAudit);
+    assert.deepEqual(sample.paper.llmUsage, original.llmUsage);
+    assert.equal(sample.paper.analysisManifest.stages.apiReaderArticle.contentAttempts, 5);
+    assert.equal(sample.paper.analysisManifest.stages.apiReaderArticle.fullAttempts, 2);
+    assert.deepEqual(sample.paper.analysisFactReviewObligation, facts.proofFor(next));
+    const unsigned = structuredClone(original); unsigned.apiReaderArticle += '未签名的额外正文';
+    await assert.rejects(daily.withDailyFreshAnalysisContext(sample.plan, () => engine.withPaperAnalysisLock(unsigned, () =>
+        saved.analyzeWithRecoveredFeedback(unsigned, sample.plan, () => assert.fail('不得source-only兜底'), next,
+            { readerFactLocalRevision: true }))), /当前已核完整签名稿/);
+    assert.equal(refreshes, 1, '无真实签名seed在资源恢复和刷新前拒绝');
+});
+
+test('日更source封装显式透传单句local布尔值，不改变主文与核心评分', async t => {
+    const sample = await createDualReaderCorrectionSample(t, 'coreSummaryRepair');
+    const before = structuredClone(sample.paper); let calls = 0;
+    assert.throws(() => daily.createDailyAnalyzeFn(sample.plan, { readerFactLocalRevision: 'yes' }), /布尔值/);
+    for (const enabled of [false, true]) await daily.withDailyFreshAnalysisContext(sample.plan, () =>
+        daily.createDailyAnalyzeFn(sample.plan, { readerFactLocalRevision: enabled, analyze: async (paper, options) => {
+            calls++; assert.equal(options.readerFactLocalRevision, enabled); return paper;
+        } })(sample.paper));
+    assert.equal(calls, 2);
+    assert.equal(sample.paper.analysis, before.analysis);
+    assert.deepEqual(sample.paper.analysisManifest.stages.coreSummaryRepair, before.analysisManifest.stages.coreSummaryRepair);
+    assert.deepEqual(sample.paper.analysisManifest.stages.scoringAudit, before.analysisManifest.stages.scoringAudit);
 });

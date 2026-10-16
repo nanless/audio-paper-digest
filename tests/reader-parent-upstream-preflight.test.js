@@ -214,3 +214,57 @@ test('ordinary上游成功凭证进入已验证Reader子scope后保留null真实
         }));
     });
 });
+
+// Synthetic metadata below exercises the same strict core/source/lock scope;
+// it is not a paid response, production checkpoint, or permission fixture.
+async function withCompletedCoreSample(t, callback) {
+    const f = await createReviewedReaderSample(t);
+    return scoped(f, () => {
+        installCurrentParentFingerprints(f.paper, f.source);
+        const packet = { ...f.feedback, primaryFeedback: '', readerFeedback: '',
+            rejectedPrimaryClaims: [], rejectedReaderClaims: [], coreFeedback: '只核本次核心摘要，不改其他阶段。',
+            rejectedCoreClaims: ['测试夹具中不存在的旧核心错误'] };
+        const bound = facts.validateFeedback(packet, f.plan, f.paper);
+        f.paper.analysisManifest.stages.coreSummaryRepair.factReview = bound.proof;
+        return facts.withCoreSummaryFactReview(bound, f.paper, () => {
+            installCurrentParentFingerprints(f.paper, f.source);
+            return callback(f);
+        });
+    });
+}
+test('真实coreOnly作用域的已完成core/score检查点在cold私有clone初始化同一保护，caller逐字不变', async t => {
+    await withCompletedCoreSample(t, f => {
+        const oldFingerprint = 'a'.repeat(64);
+        f.paper.analysisManifest.stages.openSourceScan.fingerprint = oldFingerprint;
+        const before = JSON.stringify(f.paper);
+        const result = preflight.inspectSavedReaderParentUpstream(f.paper, f.source);
+        assert.equal(result.current, true, JSON.stringify(result));
+        assert.equal(result.proof.inspectedStages.find(s => s.stage === 'openSourceScan').compatibilityReused, true);
+        assert.equal(result.proof.inspectedStages.find(s => s.stage === 'openSourceScan').fingerprint, oldFingerprint);
+        assert.equal(JSON.stringify(f.paper), before);
+        assert.deepEqual(preflight.assertSavedReaderParentUpstream(result, f.paper, f.source), result.proof);
+    });
+});
+test('coreOnly冷核不能绕过strict helper失败或错误来源，也不更改caller/旧证明', async t => {
+    await withCompletedCoreSample(t, f => {
+        const before = structuredClone(f.paper);
+        for (const mutate of [
+            p => { p.analysisCheckpoint += '\nchanged'; },
+            p => { p.analysisManifest.stages.scoringAudit.outputAnalysisSha256 = 'b'.repeat(64); },
+            p => { p.analysisManifest.stages.coreSummaryRepair.status = 'pending'; }
+        ]) {
+            Object.assign(f.paper, structuredClone(before)); mutate(f.paper);
+            const bytes = JSON.stringify(f.paper);
+            assert.equal(preflight.inspectSavedReaderParentUpstream(f.paper, f.source).current, false);
+            assert.equal(JSON.stringify(f.paper), bytes);
+        }
+        Object.assign(f.paper, structuredClone(before));
+        assert.throws(() => preflight.inspectSavedReaderParentUpstream(f.paper, { ...f.source, text: f.source.text + 'changed' }), /封存来源/);
+        const original = deep.prepareCompletedCoreRecovery;
+        // An explicit failed strict initializer must fail even when every ordinary fingerprint matches.
+        deep.prepareCompletedCoreRecovery = () => false;
+        try { assert.equal(preflight.inspectSavedReaderParentUpstream(f.paper, f.source).current, false); }
+        finally { deep.prepareCompletedCoreRecovery = original; }
+        assert.equal(JSON.stringify(f.paper), JSON.stringify(before));
+    });
+});

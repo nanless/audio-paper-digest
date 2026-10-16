@@ -570,6 +570,8 @@ async function withDailyFreshPaperSource(plan, paper, callback, options = {}) {
 }
 
 function createDailyAnalyzeFn(plan, options = {}) {
+    if (options.readerFactLocalRevision !== undefined && typeof options.readerFactLocalRevision !== 'boolean')
+        fail('Reader事实局部模式必须为布尔值');
     if (options.naturalResourceProse !== undefined && typeof options.naturalResourceProse !== 'boolean') {
         fail('naturalResourceProse 必须为布尔值');
     }
@@ -579,7 +581,8 @@ function createDailyAnalyzeFn(plan, options = {}) {
         const result = await withDailyFreshPaperSource(plan, paper, () => analyze(paper, { coreSummaryDiagnosticId: options.coreSummaryDiagnosticIds?.[normalizedId(paper)],
             paidCoreLiteralCorrection: options.paidCoreLiteralCorrectionHandles?.[normalizedId(paper)],
             resolvedReaderCandidate: options.resolvedReaderCandidates?.[normalizedId(paper)],
-            naturalResourceProse: options.naturalResourceProse === true }), options);
+            naturalResourceProse: options.naturalResourceProse === true,
+            readerFactLocalRevision: options.readerFactLocalRevision === true }), options);
         // 来源上下文会在引擎保存输出之前去掉图片字节和路径字段，避免分析器改动后，
         // 默认流程悄悄重建 data/current 下的图片缓存。
         return result;

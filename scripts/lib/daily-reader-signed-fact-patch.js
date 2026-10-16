@@ -16,7 +16,7 @@ function nodeAt(draft, pointer) {
     return value;
 }
 const tables = draft => require('../analysis-contract').extractMarkdownTables(draft.sections.map(s => s.body).join('\n\n'));
-function applyBoundedFactPatch(original, record, feedback, source) {
+function applyBoundedFactPatch(original, record, feedback, source, tableProjectionHandle) {
     if (record.contract !== CONTRACT || !require('./saved-fact-feedback').readerOnlyFeedback(feedback)) fail('须为v2及严格Reader-only事实包');
     const replacements = record.patch?.replacements, ranges = record.rangeCorrections;
     if (!Array.isArray(replacements) || replacements.length < 1 || replacements.length > 8
@@ -46,7 +46,11 @@ function applyBoundedFactPatch(original, record, feedback, source) {
                 || old.slice(edit.start, edit.end) !== edit.from) fail('替换越出当前逐字rejected claim范围');
             if (edit.rawClaim !== undefined) {
                 const format = require('./reader-signed-raw-claim-display').normalizeSignedReaderClaim;
-                if (format(rawClaim, old) !== claim || !format(old, old).includes(claim)) fail('raw/rendered原句不能按实际正常producer精确映射');
+                if (format(rawClaim, old) !== claim || !format(old, old).includes(claim)) {
+                    if (!require('./reader-signed-pruned-table-claim').matchesPrunedTableClaim({
+                        handle: tableProjectionHandle, original, record, source, range, edit, claim, rawClaim
+                    })) fail('raw/rendered原句不能按实际正常producer精确映射');
+                }
             }
             value += old.slice(cursor, edit.start) + edit.to; cursor = edit.end;
             allEdits.push({ ...edit, path: range.path });
@@ -57,7 +61,8 @@ function applyBoundedFactPatch(original, record, feedback, source) {
     if (allEdits.length > 32) fail('总替换范围超过有界上限');
     const originalTables = signedTables.readerTableSlots(original);
     for (const proof of record.tableCorrections || []) {
-        if (!exact(proof, ['path', 'sectionPath', 'claimIndex', 'oldTableSha256', 'sourceTableOrdinal', 'sourceDomSha256', 'sourceTableSha256'])
+        const bindingOnly = proof.bindingOnly === true;
+        if (!exact(proof, ['path', 'sectionPath', bindingOnly ? 'bindingOnly' : 'claimIndex', 'oldTableSha256', 'sourceTableOrdinal', 'sourceDomSha256', 'sourceTableSha256'])
             || !/^\/tableBindings\/(?:0|[1-9]\d*)$/.test(proof.path) || expected.has(proof.path)) fail('表绑定授权字段或路径不合法');
         const section = nodeAt(original, proof.sectionPath);
         const { before, slot, table } = signedTables.resolveSignedOriginalTable(original,
@@ -69,8 +74,11 @@ function applyBoundedFactPatch(original, record, feedback, source) {
             || (slot.kind === 'inline' && section.split(table.markdown).length !== 2)
             || repair.hashDraft(table.markdown) !== proof.oldTableSha256 || sources.length !== 1
             || repair.hashDraft(sources[0]) !== proof.sourceTableSha256
-            || (slot.kind === 'inline' && !edits.some(e => e.start >= section.indexOf(table.markdown)
+            || (slot.kind === 'inline' && !bindingOnly && !edits.some(e => e.start >= section.indexOf(table.markdown)
                 && e.end <= section.indexOf(table.markdown) + table.markdown.length))) fail('须绑定同一受拒原表及完整唯一source DOM表');
+        if (bindingOnly && !require('./reader-signed-pruned-table-claim').matchesIdenticalTableBinding({
+            handle: tableProjectionHandle, original, record, source, proof
+        })) fail('仅绑定升级须真实重放，原表字节不变且完整逐格等于唯一原DOM');
         const replacement = replacements.find(r => r.path === proof.path)?.value;
         if (!signedTables.signedTableReplacementMatches(replacement, before.tableIndex, proof.sourceTableOrdinal)
             || (slot.kind === 'marker' && !replacement.completeTable)) fail('修复表绑定只能引用证明中的同一原DOM表');

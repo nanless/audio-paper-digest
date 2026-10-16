@@ -7320,10 +7320,18 @@ function parseApiReaderArticleResultUnchecked(raw, options = {}) {
         const minimumTables = requirements.minimumTables;
         validateApiReaderTableNarratives(article, minimumTables);
         const tables = extractMarkdownTables(article);
-        const minimumWideTables = requirements.minimumWideTables;
         const wideTableCount = tables.filter(table => (
             table.header.length >= requirements.minimumWideColumns
         )).length;
+        // Only the already checked full DOM bindings may use the authenticated
+        // source's real width ceiling. Caller counts and quote tables cannot.
+        const widthContract = require('./lib/reader-contract');
+        const sourceTableWidthCapability = wideTableCount < requirements.minimumWideTables
+            ? widthContract.readerAuthenticatedTableWidthCapability(
+                options.arxivId, options.structuredArtifacts, options.sourceText) : null;
+        const minimumWideTables = widthContract.readerRequirements({ version: value.version,
+            minimumIntegratedTables: minimumTables, sourceTableWidthCapability,
+            boundTables: sourceBindingResult?.tableBindings }).minimumWideTables;
         if (wideTableCount < minimumWideTables) {
             const message = `读者文章至少需要 ${minimumWideTables} 张 ${requirements.minimumWideColumns} 列以上的宽表，当前 ${wideTableCount} 张`;
             const pruned = (sourceBindingResult?.tablePruningDiagnostics || [])
@@ -8094,9 +8102,16 @@ function hasReviewedCompletedPrimaryReaderSeed(paper, sourceText, reviewFeedback
     return true;
 }
 
+function activeReaderFactLocalFeedback(active) {
+    // Typed parent/child scopes keep the original parent in feedback. The child
+    // is accepted and frozen only by the public Reader-only scope constructor.
+    return active?.readerOnly ? active.readerBound?.feedback : active?.feedback;
+}
+
 function hasReviewedReaderFactLocalSeed(paper, sourceText, reviewFeedback) {
     const facts = require('./lib/daily-fact-review');
     const active = facts.current(getPaperArxivId(paper));
+    const reader = activeReaderFactLocalFeedback(active);
     const engine = require('./analysis-engine');
     const hasFailure = Boolean(paper?.latestAnalysisAttemptError || paper?.error
         || paper?.digestStatus?.latestAttemptStatus === 'analysis_failed');
@@ -8105,9 +8120,9 @@ function hasReviewedReaderFactLocalSeed(paper, sourceText, reviewFeedback) {
         && (!paper.error || paper.error === COMPLETED_PRIMARY_CHECKPOINT_RESUME_ERROR);
     if (hasFailure && !knownPreRequestRejection
         && !hasReviewedCompletedPrimaryReaderSeed(paper, sourceText, reviewFeedback)) return false;
-    return Boolean(active && !active.scoringOnly && active.feedback.readerFeedback?.trim()
+    return Boolean(active && !active.scoringOnly && reader?.readerFeedback?.trim()
         && !['primaryFeedback', 'coreFeedback', 'tagFeedback', 'scoringFeedback']
-            .some(key => String(active.feedback[key] || '').trim())
+            .some(key => String(reader[key] || '').trim())
         && String(reviewFeedback || '').trim() === facts.reviewFeedback('apiReaderArticle', getPaperArxivId(paper)).trim()
         && engine.getIncompleteAnalysisContentReason(paper) === null
         && engine.hasValidApiReaderV3Records(paper)
@@ -8180,9 +8195,10 @@ function buildApiReaderGenerationStart(paper, options = {}) {
         const facts = require('./lib/daily-fact-review');
         const active = facts.current(getPaperArxivId(paper));
         const currentSeed = prepareApiReaderRevisionSeed(paper, options.sourceText, externalReviewFeedback, options);
-        if (!active || active.scoringOnly || !active.feedback.readerFeedback?.trim()
+        const reader = activeReaderFactLocalFeedback(active);
+        if (!active || active.scoringOnly || !reader?.readerFeedback?.trim()
             || ['primaryFeedback', 'coreFeedback', 'tagFeedback', 'scoringFeedback']
-                .some(key => String(active.feedback[key] || '').trim())
+                .some(key => String(reader[key] || '').trim())
             || !seed || seed.initialDraft !== currentSeed?.initialDraft
             || stableFingerprint(seed.metadata) !== stableFingerprint(currentSeed?.metadata)
             || externalReviewFeedback !== facts.reviewFeedback('apiReaderArticle', getPaperArxivId(paper)).trim()
@@ -8227,7 +8243,7 @@ function buildApiReaderGenerationStart(paper, options = {}) {
         ? require('./lib/signed-reader-recovery-draft').convert(seed) : null;
     const readerFactLocalPaths = options.readerFactLocalRevision === true
         ? [...new Set(require('./lib/reader-repair').assertReaderFactLocalCoverage(signedRecoveryDraft,
-            require('./lib/daily-fact-review').current(getPaperArxivId(paper)).feedback.rejectedReaderClaims)
+            activeReaderFactLocalFeedback(require('./lib/daily-fact-review').current(getPaperArxivId(paper))).rejectedReaderClaims)
             .map(issue => issue.path))] : undefined;
     return {
         signedRecoveryDraft, readerFactLocalPaths,
@@ -8663,7 +8679,10 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             ? `本次收到像素的会议论文图为 ${availableFigureOrdinals.map(n => `FIGURE_${n}`).join('、')}。figurePlacements 必须逐一记录这些图片，在对应 targetKind 小节中放置占位符，并在紧邻的前后段落分别写导读和解释。不能返回空数组，也不能只记录其中一张。`
             : `本次收到像素的会议论文图为 ${availableFigureOrdinals.map(n => `FIGURE_${n}`).join('、')}，最多选择 ${API_READER_FIGURE_SELECTION_LIMIT} 张最有解释价值且不重复的图片。每张所选图片都须在对应 targetKind 小节放置占位符，并在紧邻的前后段落分别写导读和解释。未选择的图片仍会由页面资源层保留，不要为凑数量添加 figurePlacements。`
         : '';
+    const sourceTableWidthCapability = require('./lib/reader-contract').readerAuthenticatedTableWidthCapability(
+        getPaperArxivId(paper), options.structuredArtifacts, options.sourceText);
     const mechanicalContract = [buildReaderContractNotice({ version: 3, minimumIntegratedTables, availableTableCount,
+        sourceTableWidthCapability,
         ...readerResultTableRequirement(options.structuredArtifacts) }), capabilityNotice,
         completeFigureBindingNotice,
         'TABLE、FORMULA、FIGURE、CONCEPT_BRIDGE 装配标记必须放在可见正文中，独占一个空行分隔的段落；不得放入 HTML 注释、代码块、行内代码或引用中。表格、原图、公式和术语解释的示例或隐藏副本不能算作正文展示。'].filter(Boolean).join('\n');
@@ -20183,6 +20202,7 @@ module.exports = {
     isSavedCoreSummaryRepairCandidateValid,
     restoreSavedStagesForCoreSummaryRepair,
     canReuseStageForCoreSummaryRecovery,
+    prepareCompletedCoreRecovery,
     coreSummaryV3MigrationPromptSetIsAllowed,
     CORE_SUMMARY_V3_V1_RUNTIME_PROMPT_SHA256,
     currentCoreSummaryV3MigrationPromptsAreExact,

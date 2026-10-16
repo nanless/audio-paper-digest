@@ -121,6 +121,8 @@ async function reconcileCompletedFailureMarkers(resultPath, entryPlan, feedbacks
 }
 
 async function main(options = {}) {
+    if (options.readerFactLocalRevision !== undefined && typeof options.readerFactLocalRevision !== 'boolean')
+        throw new Error('Reader事实局部模式必须为布尔值');
     if (options.refreshReaderDiagnostics !== undefined && typeof options.refreshReaderDiagnostics !== 'boolean') {
         throw new Error('长文恢复检查设置必须为 true 或 false。');
     }
@@ -173,6 +175,11 @@ async function main(options = {}) {
     const prepare = current => dailyFreshSources.prepareDailyFreshSourceRecoveryPayload(current,
         readJsonFileStrict(Config.FILES.filteredPapers), { label: 'batch recovery' });
     // 先只读核验整组反馈，再改写运行状态；后一个文件不合法时，前一个也不能开始请求。
+    if (options.readerFactLocalRevision === true && (!feedbacks.size
+        || [...feedbacks.values()].some(feedback => !savedFacts.readerOnlyFeedback(feedback))
+        || operatorManifestPath !== undefined || signedManifestPath !== undefined || explicitManifest
+        || options.analyzeFn || options.analyzeBatch))
+        throw new Error('Reader事实局部模式只接受显式严格Reader反馈，不能混用人工或新轮清单');
     const data = (feedbacks.size || explicitManifest) ? prepare(readJsonFileStrict(RESULT_FILE))
         : updateJsonFileLocked(RESULT_FILE, prepare);
 
@@ -204,6 +211,8 @@ async function main(options = {}) {
         return feedback ? !hasCompletedBoundFactFeedback(p, feedback, dailySourcePlan)
             : !isSuccessfulAnalysisRecord(p) || !dailyFreshSources.isPaperReusableForAnalysis(p, dailySourcePlan);
     }).filter(p => !missingFactContext(p));
+    if (options.readerFactLocalRevision === true && notAnalyzed.some(p => !feedbacks.has(normalizedId(p))))
+        throw new Error('Reader事实局部模式不能包含没有显式Reader反馈的其它失败论文');
     console.log(`本次处理论文: ${notAnalyzed.length}`);
     if (feedbacks.size) console.log(`其中 ${feedbacks.size} 篇带有已核验的事实反馈；只有同反馈全部纠正并通过检查的论文才跳过。`);
     // Fully verify the whole explicit tail before changing the formal run state.
