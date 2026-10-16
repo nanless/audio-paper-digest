@@ -157,6 +157,8 @@ npm run batch -- --reader-signed-corrections /绝对路径/manifest.json --fact-
 
 原付费结构稿须经正常解析和原图注入，逐字重放为当前签名正文、计划及全部原图；不调用旧历史来源的反向恢复器。一次只允许一项 2–8 字的中文术语替换，显式声明实际 1–20 处匹配，仅修改 1–8 个已有正文或图片说明节点。补丁结果须严格等于原结构稿的这一项字词替换，不能添加数字、表格、公式、图片或其他表述。清单及反馈须覆盖本次全部未完成集合，并受原封存批次的小尾部数量上限约束。
 
+原正常生成器确曾启用确定性来源裁剪时，v1 可和 v2 一样提供 `normalProducerProof`：只读核对真实 Git 祖先、生成器 blob/SHA、原输入解析器身份和付费结构稿 SHA 后，复用原正常解析选项。原始补丁前后及编译后与签名父稿的表格字节、表绑定和公式绑定必须全部不变；不能借裁剪兼容修改表格或扩大中文词替换范围。
+
 实际执行仍持有正常论文锁和日更来源作用域，先保存真实反馈义务，再使用正常 Reader 解析与最终封装、来源校验、整篇资格和锁内保存。明确记录 `executionKind: operator` 与零新增模型请求，保留原 API 阶段、原候选、响应、尝试和费用。失败保留原成功正文及真实未完成义务；只有正常资格和当前反馈均完成后才清除，最后仍须重新生成并通过独立博客审查。
 
 ### 已签稿的有界事实修正 v2
@@ -165,10 +167,19 @@ npm run batch -- --reader-signed-corrections /绝对路径/manifest.json --fact-
 
 每条 v2 记录保存 `parentPaper` 完整当前对象，以及 1–8 个既有节点的 `patch`。`rangeCorrections` 为每个 `/sections/i/body` 或 `/conceptBridges/i/explanation` 指定 `path`、`oldSha256` 和有序 `edits`。每个 edit 明确 `claimIndex`、`claimStart`、`start`、`end`、`from`、`to`；位置均为同一原节点的 JavaScript UTF-16 偏移，修改只能落在对应 `rejectedReaderClaims` 的原句内，句外字节不能改变。当前父正文必须真实包含该受拒原句。原模型文本与排版后的原句不同，可另给逐字 `rawClaim`，但必须由原公共正常排版函数严格投影为反馈原句；不能自行删空白、合并数字或改原稿来凑范围。正文、术语解释与图片导读中的派生内容由正常装配器计算。
 
-表绑定修正只支持同一已有表的 `tableCorrections`：同时绑定原表 Markdown SHA、受拒单元格所在正文范围、当前 tableIndex、唯一完整原 DOM 表的 ordinal/DOM SHA/整表 SHA，并使用该表的 `artifact_table` 绑定。仍须逐格通过正常数字、单位及来源检查；不支持借来源引文任意更换绑定、增加表、公式或图片。原公式和 figurePlacements 记录保持不变。
+正常排版包含真实原节点中的定量中文数词处理。`rawClaim` 映射须从同一原节点重新执行公共定量诊断，再按正常生产器顺序执行仅问题绑定的数词排版和普通正文排版，逐字得到当前受拒句；不能将任意中文数词、近似数字或另一个节点当作等价证据。原节点、完整父稿和逐字修改范围的 CAS 限制不变。
+该原句在原节点须唯一；诊断原始偏移和命中文字必须逐字对应，只取实际原句范围内的问题。还须用保留位置标记分别重放完整原节点与标记节点，以不猜测的前后文边界证明实际位置显示等于局部显示；引用、代码或另一句的排版结果不能替本句作证。边界受排版影响而无法精确对应时停止。
+
+表绑定修正只支持同一已有展示表位置的 `tableCorrections`：同时绑定旧表 Markdown SHA、受拒单元格所在正文范围、当前 tableIndex、获准目标原 DOM 表的 ordinal/DOM SHA/整表 SHA。使用正常 `artifact_table` 逐格绑定，或正常 `selection` / `completeTable` 编译；仍须逐格通过正常数字、单位及来源检查。显式 artifact 子表必须逐格来自同一完整 DOM，保持原行列顺序，每个展示行和列各对应同一原行和原列，不能混拼、猜值或补单位。原表错位时只能按具体获准的同篇目标原表恢复，不能借来源引文任意换绑，也不能增加表、公式或图片。原公式和 figurePlacements 记录保持不变。
+
+已有独立 `TABLE_N` 占位符只修复原表缺行时，须用原绑定重编译并逐字匹配当前父正文中的完整受拒表、原 canonical 表 SHA、来源 DOM 和逐格坐标，再将该原表的既有绑定改为完整表声明。只能补全同一原表，不能拿另一张表替换占位符；不得把编译后的表伪造成原结构稿中原本存在的 Markdown。
 
 已有人工修正历史时，先核验原退休付费档，再按当前 `operatorHistory` 的真实清单、记录、来源及事实包逐条重放。旧 v1 原父稿须在 `historyParents` 中给出真实 `parentFile`、`parentFileSha256`，其整对象 CAS 必须等于旧记录声明；旧 v2 的完整父稿来自原 v2 记录，对应项为 `null`。不得从当前正文猜回历史父稿、把 operator-local 阶段改成 API 阶段或复活退休候选。每步必须重建对应正文、计划及原图，原 API 证明与全部人工历史保留。只读 `prepare` / `preview` 不登记新义务；实际 `apply` 才登记真实 pending，再经正常 finalizer 和公共引擎保存，最后仍须完整资格与独立博客审查。
 
-个别原结构稿只有采用正常生产器既有的确定性表格处理选项，才能重放已经签名的完整父稿。此时可显式提供 `normalProducerProof`，合同为 `reader-observed-current-producer-replay-v1`、模式为 `observed-current-replay`：核验当前 producer 文件 SHA、原退休输入的真实 parser 身份和 draft SHA，并以可信祖先 Git blob 证明该 normal producer 选项原已存在。Git 见证不冒充原输入的完整实现闭包；若原闭包不可得，保留其原 SHA，不补签历史。该有限兼容仅在当前完整父资格已通过、采用原选项重放正文/计划/图片逐字相同后生效。新补丁只能改获准散文范围，raw 全部表与绑定、正常输出的每个表格字节及表格/公式绑定必须与当前父稿完全相同，原图身份和像素证明仍严格保留；不授予任何新增删行、删表、修改单位或改变来源的许可。默认 v2 不启用此分支。
+首次完成稿本来就来自旧日更批次人工修正、没有完成 API 父稿时，v2 可显式绑定 `legacyBatchRoot`，给出真实失败父快照及原用户授权文件的 SHA；原候选使用 `baselineCandidateFile` / `baselineCandidateEnvelopeSha256`，不能把仍活跃的付费档称作退休 API 稿。独立只读核验器须重放原失败父的完整评分检查点、原精确批次授权与清单、原付费档、原补丁及全部四源，逐字得到当前签名 Reader，保留原次数、费用和像素。后续阶段将真实批次根保存为 `originBatchOperatorStage`，不补造 `originApiStage` 或旧人工历史，不恢复或退休原候选。新修正仍须绑定完整当前父稿、严格范围反馈和完整实际失败集合的新授权。
+
+v2 的 `normalProducerProof` 不授权额外裁剪。未列入合法 `tableCorrections` 的原始和编译后表格、表绑定及全部公式绑定须保持；明确获准的表只能逐字采用同篇唯一 DOM 来源的正常表编译结果。内联表和独立 `TABLE_N` 占位符按同一实际全局顺序定位，不能拿原结构稿中第 N 张内联表代替已签正文的第 N 张表；占位符补全还须重放原选择、当前父表及逐格绑定，且只能补同一原表。
+
+个别原结构稿只有采用正常生产器既有的确定性表格处理选项，才能重放已经签名的完整父稿。此时可显式提供 `normalProducerProof`，合同为 `reader-observed-current-producer-replay-v1`、模式为 `observed-current-replay`：核验当前 producer 文件 SHA、原退休输入的真实 parser 身份和 draft SHA，并以可信祖先 Git blob 证明该 normal producer 选项原已存在。Git 见证不冒充原输入的完整实现闭包；若原闭包不可得，保留其原 SHA，不补签历史。该有限兼容仅在当前完整父资格已通过、采用原选项重放正文/计划/图片逐字相同后生效。没有合法 `tableCorrections` 时，raw 全部表与绑定、正常输出的每个表格字节及表格/公式绑定必须与当前父稿完全相同；明确获准的表例外仍须按上面的同篇 DOM 及正常编译证明逐项验证。原图身份、像素证明及所有公式绑定始终保留，不授予额外删表、裁剪或更换来源的许可。默认 v2 不启用此分支。
 
 该显式兼容还保留正常旧阶段未写入的 `fullAttempts`、`transportFailures` 空值；原付费 envelope 保留并由 provenance SHA 绑定，不向旧阶段补数，也不清零原账。`attempts` 和任何已经存在的计数仍须精确相等。普通 v1/v2 路径不因此放宽。

@@ -1303,7 +1303,8 @@ function hasValidApiReaderV3RecordsUnchecked(paper, options = {}) {
                                 ? require('./lib/reader-table-pdf-evidence').savedCellMatches(binding, cell, text)
                                 : normalize(text) === normalize(cell.sourceText)
                                     || require('./lib/reader-pdf-cell-evidence').savedMergedCellMatches(paper, binding, cell, text)
-                                    || require('./lib/reader-dom-span-projection').savedCellMatches(paper, binding, cell, text, renderedTables[index]));
+                                    || require('./lib/reader-dom-span-projection').savedCellMatches(paper, binding, cell, text, renderedTables[index])
+                                    || require('./lib/source-cell-math-display').strictSourceCellMathDisplay(cell.sourceText)?.displayText === text);
                     })
                 : binding?.sourceType === 'source_quotes'
                     && Array.isArray(binding?.sourceQuotes)

@@ -12,6 +12,7 @@ const FACT_CONTRACT = factPatch.CONTRACT;
 const handles = new WeakMap();
 const replaySnapshots = new WeakMap();
 const replayOptions = new WeakMap();
+const legacyRootReplays = new WeakMap();
 const fail = message => { throw Object.assign(new Error(`日更签名Reader人工修正拒绝：${message}`), { retryable: false }); };
 const sha = facts.sha;
 function read(file) {
@@ -32,6 +33,35 @@ function unchanged(snapshot) { if (read(snapshot.file).sha256 !== snapshot.sha25
 function readerOnly(feedback, paper) {
     if (!require('./saved-fact-feedback').readerOnlyFeedback(feedback)
         || !feedback.rejectedReaderClaims.some(claim => paper.apiReaderArticle.includes(claim))) fail('须有当前正文确实仍含错误原句的严格Reader-only反馈');
+}
+function candidateRef(record) {
+    if (record.legacyBatchRoot !== undefined) {
+        require('./daily-reader-legacy-batch-root').assertDescriptor(record.legacyBatchRoot);
+        if (record.contract !== FACT_CONTRACT || record.retiredCandidateFile !== undefined
+            || record.retiredCandidateEnvelopeSha256 !== undefined) fail('旧批次根须显式使用原baseline，不能假称退休API候选');
+        return { file: record.baselineCandidateFile, sha256: record.baselineCandidateEnvelopeSha256 };
+    }
+    if (record.baselineCandidateFile !== undefined || record.baselineCandidateEnvelopeSha256 !== undefined) fail('普通签名稿只能使用原退休付费档');
+    return { file: record.retiredCandidateFile, sha256: record.retiredCandidateEnvelopeSha256 };
+}
+function readLegacyRoot(record, paper, plan, source) {
+    let rootPaper = paper;
+    const history = paper.analysisManifest.stages.apiReaderArticle.operatorHistory || [];
+    if (!Array.isArray(history) || history.length > 8) fail('旧批次根历史不完整');
+    if (history.length) {
+        const first = history[0];
+        within(first.correctionFile, path.dirname(require('../config').FILES.dailyFreshSourceRunsDir));
+        const snapshot = read(first.correctionFile);
+        if (snapshot.sha256 !== first.correctionSha256 || snapshot.value.contract !== FACT_CONTRACT
+            || !isDeepStrictEqual(snapshot.value.legacyBatchRoot, record.legacyBatchRoot)
+            || daily.stableHash(snapshot.value.parentPaper) !== snapshot.value.parentPaperSha256) fail('旧批次根的首个人工父稿或描述不同');
+        rootPaper = snapshot.value.parentPaper;
+    }
+    const checked = require('./daily-reader-legacy-batch-root').validateLegacyBatchRoot({
+        descriptor: record.legacyBatchRoot, paper: rootPaper, plan, source });
+    const ref = candidateRef(record), proof = checked.rootStage.operatorProvenance;
+    if (ref.file !== proof.originalCandidateFile || ref.sha256 !== proof.originalCandidateEnvelopeSha256) fail('旧批次根不能换原active付费档');
+    return checked;
 }
 function assertParent(record, paper, plan, feedback) {
     if (![CONTRACT, FACT_CONTRACT].includes(record.contract) || record.paperId !== require('../utils').normalizedId(paper)
@@ -161,9 +191,46 @@ function assertPreservedUpstream(before, after, historical = false) {
     delete a.stages.apiReaderArticle; delete b.stages.apiReaderArticle;
     if (!isDeepStrictEqual(a, b)) fail('改变Reader之外的阶段或原事实证明');
 }
+function assertProducerTableScope(original, patched, parsed, paper, record, source) {
+    const targets = require('./reader-signed-table-targets');
+    const oldSlots = targets.readerTableSlots(original), newSlots = targets.readerTableSlots(patched);
+    const allowed = new Map();
+    for (const proof of record.tableCorrections || []) {
+        const target = targets.renderSignedTableTarget(record, proof, source);
+        if (allowed.has(target.tableIndex)) fail('normal producer表范围重复');
+        allowed.set(target.tableIndex, target);
+    }
+    if (oldSlots.length !== newSlots.length || original.tableBindings.length !== patched.tableBindings.length
+        || !isDeepStrictEqual(original.formulaBindings, patched.formulaBindings)) fail('normal producer不能增删表或改变公式绑定');
+    for (let index = 0; index < oldSlots.length; index++) {
+        if (allowed.has(index + 1)) continue;
+        if (oldSlots[index].kind !== newSlots[index].kind
+            || oldSlots[index].sectionPath !== newSlots[index].sectionPath
+            || oldSlots[index].table?.markdown !== newSlots[index].table?.markdown
+            || oldSlots[index].marker !== newSlots[index].marker
+            || !isDeepStrictEqual(original.tableBindings[index], patched.tableBindings[index])) fail('normal producer重放不能授权修改任何原表或绑定');
+    }
+    if (!parsed) return;
+    const extract = text => require('../analysis-contract').extractMarkdownTables(text).map(table => table.markdown);
+    const before = extract(paper.apiReaderArticle), after = extract(parsed.article);
+    if (before.length !== after.length || after.length !== newSlots.length
+        || !isDeepStrictEqual(parsed.plan.formulaBindings, paper.apiReaderPlan.formulaBindings)) fail('normal producer新输出发生额外prune或改变公式');
+    for (let index = 0; index < before.length; index++) {
+        const target = allowed.get(index + 1), binding = parsed.plan.tableBindings[index];
+        if (!target) {
+            if (before[index] !== after[index] || !isDeepStrictEqual(binding, paper.apiReaderPlan.tableBindings[index])) fail('normal producer新输出发生额外prune或改变当前原表');
+            continue;
+        }
+        const coordinates = cells => cells.map(cell => [cell.renderedRow, cell.renderedColumn, cell.sourceRow, cell.sourceColumn]);
+        if (after[index] !== target.markdown || binding.sourceType !== 'artifact_table'
+            || binding.tableIndex !== target.tableIndex || binding.sourceTableOrdinal !== target.binding.sourceTableOrdinal
+            || !isDeepStrictEqual(coordinates(binding.cellBindings), coordinates(target.binding.cellBindings))) fail('获准表必须逐字重放正常完整source DOM编译结果，不能额外裁剪');
+    }
+}
 function verifyFactRoundtrip(record, paper, source, checked, plan) {
     if (!plan) fail('v2缺少真实日更计划');
     const stage = paper.analysisManifest.stages.apiReaderArticle, history = stage.operatorHistory || [];
+    const ref = candidateRef(record);
     if (!Array.isArray(history) || history.length > 8 || !Array.isArray(record.historyParents)
         || record.historyParents.length !== history.length) fail('人工历史与真实父快照不完整');
     const root = path.dirname(require('../config').FILES.dailyFreshSourceRunsDir), snapshots = [];
@@ -174,8 +241,8 @@ function verifyFactRoundtrip(record, paper, source, checked, plan) {
     };
     const entries = history.map((proof, index) => {
         if (![CONTRACT, FACT_CONTRACT].includes(proof.contract) || proof.executionKind !== 'operator'
-            || proof.newReaderApiRequests !== 0 || proof.originalCandidateFile !== record.retiredCandidateFile
-            || proof.originalCandidateEnvelopeSha256 !== record.retiredCandidateEnvelopeSha256
+            || proof.newReaderApiRequests !== 0 || proof.originalCandidateFile !== ref.file
+            || proof.originalCandidateEnvelopeSha256 !== ref.sha256
             || proof.originalIdentitySha256 !== checked.identitySha
             || proof.retainedAttempts !== checked.envelope.payload.attempts
             || proof.retainedFullAttempts !== checked.envelope.payload.fullAttempts
@@ -193,8 +260,9 @@ function verifyFactRoundtrip(record, paper, source, checked, plan) {
             || oldRecord.parentPaperSha256 !== proof.parentPaperSha256
             || oldRecord.parentArticleSha256 !== proof.parentArticleSha256
             || oldRecord.parentPlanSha256 !== proof.parentPlanSha256
-            || oldRecord.retiredCandidateFile !== proof.originalCandidateFile
-            || oldRecord.retiredCandidateEnvelopeSha256 !== proof.originalCandidateEnvelopeSha256
+            || candidateRef(oldRecord).file !== proof.originalCandidateFile
+            || candidateRef(oldRecord).sha256 !== proof.originalCandidateEnvelopeSha256
+            || !isDeepStrictEqual(oldRecord.legacyBatchRoot, record.legacyBatchRoot)
             || oldRecord.baselineDraftSha256 !== proof.beforeDraftSha256
             || repair.hashDraft(oldRecord.draft) !== proof.afterDraftSha256
             || !isDeepStrictEqual(oldRecord.sourceFiles, record.sourceFiles)
@@ -218,12 +286,18 @@ function verifyFactRoundtrip(record, paper, source, checked, plan) {
         return { proof, record: oldRecord, parent, feedback: packet.value };
     });
     const base = entries[0]?.parent || paper;
-    if (base.analysisManifest.stages.apiReaderArticle.executionKind === 'operator'
+    const legacy = record.legacyBatchRoot === undefined ? null : readLegacyRoot(record, paper, plan, source);
+    if (legacy && (!isDeepStrictEqual(legacy.envelope, checked.envelope) || legacy.identitySha !== checked.identitySha
+        || !isDeepStrictEqual(legacy.rootPaper, base) || stage.originApiStage !== undefined)) fail('旧批次根、当前原paid或完整历史起点不同');
+    if ((!legacy && base.analysisManifest.stages.apiReaderArticle.executionKind === 'operator')
         || (history.length && (!isDeepStrictEqual(stage.operatorProvenance, history.at(-1))
             || stage.fingerprint !== daily.stableHash(history.at(-1))
-            || !isDeepStrictEqual(stage.originApiStage, base.analysisManifest.stages.apiReaderArticle)))) fail('原API阶段或人工历史终点不真实');
+            || !(legacy ? isDeepStrictEqual(stage.originBatchOperatorStage, legacy.rootStage)
+                && isDeepStrictEqual(stage.legacyBatchRoot, record.legacyBatchRoot)
+                : isDeepStrictEqual(stage.originApiStage, base.analysisManifest.stages.apiReaderArticle))))) fail('原API/批次operator根或人工历史终点不真实');
     const options = normalProducerOptions(record.normalProducerProof, checked);
-    let draft = replayPaidDraft(entries[0]?.record || record, base, source, checked, options);
+    if (legacy) options.prune = true; // Authenticated by exact normal root replay, never by an allowance.
+    let draft = legacy ? legacy.draft : replayPaidDraft(entries[0]?.record || record, base, source, checked, options);
     for (let index = 0; index < entries.length; index++) {
         const entry = entries[index], after = entries[index + 1]?.parent || paper;
         assertRenderedParent(draft, entry.parent, source, checked.envelope, options);
@@ -236,6 +310,10 @@ function verifyFactRoundtrip(record, paper, source, checked, plan) {
         if (!isDeepStrictEqual(afterStage.operatorHistory, history.slice(0, index + 1))
             || !isDeepStrictEqual(afterStage.operatorProvenance, entry.proof)
             || afterStage.fingerprint !== daily.stableHash(entry.proof)
+            || !(legacy ? afterStage.originApiStage === undefined
+                && isDeepStrictEqual(afterStage.originBatchOperatorStage, legacy.rootStage)
+                && isDeepStrictEqual(afterStage.legacyBatchRoot, record.legacyBatchRoot)
+                : isDeepStrictEqual(afterStage.originApiStage, base.analysisManifest.stages.apiReaderArticle))
             || !isDeepStrictEqual(afterStage.factReview, facts.proofFor(entry.feedback))
             || ['attempts', 'fullAttempts', 'noProgress', 'transportFailures', 'imageEvidenceSha256', 'imageEvidenceCount',
                 'modelImagePreflightEvidenceSha256', 'providerImageExclusions', 'providerImageExclusionSha256']
@@ -243,21 +321,29 @@ function verifyFactRoundtrip(record, paper, source, checked, plan) {
     }
     if (record.baselineDraftSha256 !== repair.hashDraft(draft)) fail('v2当前draft与完整历史终点不同');
     const patched = factPatch.applyBoundedFactPatch(draft, record, record._feedback, source);
-    const tableBytes = article => require('../analysis-contract').extractMarkdownTables(article).map(table => table.markdown);
-    if (options.prune && (!isDeepStrictEqual(draft.tableBindings, patched.tableBindings)
-        || !isDeepStrictEqual(tableBytes(draft.sections.map(s => s.body).join('\n\n')),
-            tableBytes(patched.sections.map(s => s.body).join('\n\n'))))) fail('normal producer重放不能授权修改任何原表或绑定');
+    if (options.prune) assertProducerTableScope(draft, patched, null, paper, record, source);
     const parsed = parseDraft(patched, paper, source, checked.envelope, options);
-    if (options.prune && (!isDeepStrictEqual(parsed.plan.tableBindings, paper.apiReaderPlan.tableBindings)
-        || !isDeepStrictEqual(parsed.plan.formulaBindings, paper.apiReaderPlan.formulaBindings)
-        || !isDeepStrictEqual(tableBytes(parsed.article), tableBytes(paper.apiReaderArticle)))) fail('normal producer新输出发生额外prune或改变当前原表');
+    if (options.prune) assertProducerTableScope(draft, patched, parsed, paper, record, source);
     for (const snapshot of snapshots) unchanged(snapshot);
+    if (legacy) { legacy.assertUnchanged(); legacyRootReplays.set(parsed, legacy); }
     replaySnapshots.set(parsed, snapshots); replayOptions.set(parsed, options); return parsed;
 }
 function verifyRoundtrip(record, paper, source, checked, plan, feedback) {
     if (record.contract === FACT_CONTRACT) return verifyFactRoundtrip({ ...record, _feedback: feedback }, paper, source, checked, plan);
-    const original = replayPaidDraft(record, paper, source, checked);
-    return parseDraft(applyBoundedTextPatch(original, record), paper, source, checked.envelope);
+    const options = normalProducerOptions(record.normalProducerProof, checked);
+    const original = replayPaidDraft(record, paper, source, checked, options);
+    const patched = applyBoundedTextPatch(original, record);
+    const tableBytes = article => require('../analysis-contract').extractMarkdownTables(article).map(table => table.markdown);
+    if (options.prune && (!isDeepStrictEqual(original.tableBindings, patched.tableBindings)
+        || !isDeepStrictEqual(original.formulaBindings, patched.formulaBindings)
+        || !isDeepStrictEqual(tableBytes(original.sections.map(s => s.body).join('\n\n')),
+            tableBytes(patched.sections.map(s => s.body).join('\n\n'))))) fail('v1 normal producer重放不能修改原表、绑定或公式');
+    const parsed = parseDraft(patched, paper, source, checked.envelope, options);
+    if (options.prune && (!isDeepStrictEqual(parsed.plan.tableBindings, paper.apiReaderPlan.tableBindings)
+        || !isDeepStrictEqual(parsed.plan.formulaBindings, paper.apiReaderPlan.formulaBindings)
+        || !isDeepStrictEqual(tableBytes(parsed.article), tableBytes(paper.apiReaderArticle)))) fail('v1 normal producer新输出发生额外prune或改变当前原表');
+    replayOptions.set(parsed, options);
+    return parsed;
 }
 async function prepare(filename, plan, papers, feedbacks, selectedIds) {
     require('../env-loader').requireExternalRuntime('daily-reader-signed-correction');
@@ -276,10 +362,12 @@ async function prepare(filename, plan, papers, feedbacks, selectedIds) {
         if (!paper || !feedback || records.has(record.paperId) || record.contract !== m.contract) fail('目标、事实反馈缺失、重复或合同混用');
         facts.validateFeedback(feedback, plan, paper); assertParent(record, paper, plan, feedback);
         if (!isDeepStrictEqual(record.sourceDescriptor, daily.readDailyFreshSource(plan, paper).freshSourceDescriptor)) fail('原四文件来源描述不同');
-        const checked = require('./reader-paid-resolved-render').readResolvedFile(plan.readerAttemptsDir,
-            record.retiredCandidateFile, record.retiredCandidateEnvelopeSha256);
+        const ref = candidateRef(record);
+        let checked = record.legacyBatchRoot === undefined
+            ? require('./reader-paid-resolved-render').readResolvedFile(plan.readerAttemptsDir, ref.file, ref.sha256) : null;
         await daily.withDailyFreshAnalysisContext(plan, () => require('../analysis-engine').withPaperAnalysisLock(paper, () => daily.withDailyFreshPaperSource(plan, structuredClone(paper), source =>
             require('./fresh-analysis-context').withFreshPaperContext(paper, () => {
+                if (!checked) checked = readLegacyRoot(record, paper, plan, source);
                 const parsed = verifyRoundtrip(record, paper, source, checked, plan, feedback);
                 if (feedback.rejectedReaderClaims.some(claim => parsed.article.includes(claim))) fail('补丁未消除严格反馈的原错误句');
             }),
@@ -312,13 +400,14 @@ async function finalize(handle, paper, persist) {
         const execute = () => facts.withReaderFactReview(bound, paper, async () => {
             if (persist) require('./pending-fact-feedback').register(paper, plan, feedback);
             const stage = original.analysisManifest.stages.apiReaderArticle;
+            const ref = candidateRef(record), legacy = legacyRootReplays.get(parsed);
             const provenance = { contract: record.contract, executionKind: 'operator', newReaderApiRequests: 0,
                 appliedAt: new Date().toISOString(), authorization: active.manifest.value.authorization,
                 manifestFile: active.manifest.file, manifestSha256: active.manifest.sha256,
                 correctionFile: item.snapshot.file, correctionSha256: item.snapshot.sha256,
                 parentPaperSha256: record.parentPaperSha256, parentArticleSha256: record.parentArticleSha256,
                 parentPlanSha256: record.parentPlanSha256, sourceFiles: record.sourceFiles,
-                originalCandidateFile: record.retiredCandidateFile, originalCandidateEnvelopeSha256: record.retiredCandidateEnvelopeSha256,
+                originalCandidateFile: ref.file, originalCandidateEnvelopeSha256: ref.sha256,
                 originalIdentitySha256: checked.identitySha, beforeDraftSha256: record.baselineDraftSha256,
                 afterDraftSha256: repair.hashDraft(record.draft), retainedAttempts: checked.envelope.payload.attempts,
                 retainedFullAttempts: checked.envelope.payload.fullAttempts, retainedNoProgress: checked.envelope.payload.noProgress,
@@ -334,7 +423,8 @@ async function finalize(handle, paper, persist) {
                     execution: { ...stage, executionKind: 'operator', contentMode: 'reader-source-operator-revision-v1',
                         model: 'operator-local', protocol: 'local_operator', newReaderApiRequests: 0,
                         fingerprint: daily.stableHash(provenance), operatorProvenance: provenance,
-                        originApiStage: stage.originApiStage || stage,
+                        ...(legacy ? { originBatchOperatorStage: legacy.rootStage, legacyBatchRoot: record.legacyBatchRoot }
+                            : { originApiStage: stage.originApiStage || stage }),
                         operatorHistory: [...(stage.operatorHistory || []), provenance],
                         reviewFeedbackSha256: sha(facts.reviewFeedback('apiReaderArticle', paper.arxivId)) } }));
             for (const key of Object.keys(original)) if (!key.startsWith('apiReader') && key !== 'analysisManifest'
@@ -350,7 +440,10 @@ async function finalize(handle, paper, persist) {
                 if (['attempts', 'fullAttempts', 'noProgress', 'transportFailures', 'imageEvidenceSha256', 'imageEvidenceCount',
                     'modelImagePreflightEvidenceSha256', 'providerImageExclusions', 'providerImageExclusionSha256']
                     .some(key => !isDeepStrictEqual(resultStage[key], stage[key]))
-                    || !isDeepStrictEqual(resultStage.originApiStage, stage.originApiStage || stage)
+                    || !(legacy ? resultStage.originApiStage === undefined
+                        && isDeepStrictEqual(resultStage.originBatchOperatorStage, legacy.rootStage)
+                        && isDeepStrictEqual(resultStage.legacyBatchRoot, record.legacyBatchRoot)
+                        : isDeepStrictEqual(resultStage.originApiStage, stage.originApiStage || stage))
                     || !isDeepStrictEqual(resultStage.operatorHistory, [...(stage.operatorHistory || []), provenance])) fail('v2改变原请求/像素账或人工历史');
                 const completedView = structuredClone(result);
                 if (Object.hasOwn(completedView, 'analysisFactReviewObligation')) {
@@ -359,6 +452,7 @@ async function finalize(handle, paper, persist) {
                 }
                 assertPreservedUpstream(original, completedView);
                 for (const snapshot of replaySnapshots.get(parsed) || []) unchanged(snapshot);
+                if (legacy) legacy.assertUnchanged();
             } else {
                 const { from, to } = record.literalCorrections[0];
                 if (result.apiReaderArticle !== original.apiReaderArticle.replaceAll(from, to)

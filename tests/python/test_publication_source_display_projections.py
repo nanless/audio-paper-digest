@@ -119,9 +119,9 @@ class PublicationSourceDisplayTests(unittest.TestCase):
         paper, payload, article = self.inline_fixture()
         before = copy.deepcopy((paper, payload))
         output = blog._index_figure_preview(paper, article, payload)
-        self.assertEqual(output, f'[![Actual source alt]({payload["assets"][0]["publicUrl"]})]({paper["apiReaderFigures"][0]["url"]})')
+        self.assertEqual(output, f'[![原论文配图（完整图注与解读见独立文章）]({payload["assets"][0]["publicUrl"]})]({paper["apiReaderFigures"][0]["url"]})')
         self.assertEqual((paper, payload), before)
-        self.assertEqual(blog._index_figure_preview({'apiReaderFigures': []}, '![plain](https://arxiv.org/html/x.png)'), '![plain](https://arxiv.org/html/x.png)')
+        self.assertEqual(blog._index_figure_preview({'apiReaderFigures': []}, '![plain](https://arxiv.org/html/x.png)'), '![原论文配图（完整图注与解读见独立文章）](https://arxiv.org/html/x.png)')
 
     def test_inline_missing_ambiguous_and_tampered_asset_rejected(self):
         paper, payload, article = self.inline_fixture()
@@ -135,6 +135,25 @@ class PublicationSourceDisplayTests(unittest.TestCase):
         for bad in variants:
             with self.assertRaises(blog.PublishDataValidationError):
                 blog._index_figure_preview(paper, article, bad)
+
+    def test_summary_uses_neutral_alt_without_truncating_a_qualified_source_claim(self):
+        # Real 2610.20327 source Figure 2 caption: the qualification and dagger
+        # distinguish author-run systems from the lower self-reported result.
+        url = 'https://arxiv.org/html/2610.20327v2/fig_leaderboard.svg'
+        caption = ('Figure 2: Anuvani-Diarization is the most accurate of all systems we ran on IndicDiarBench. '
+                   'Duration weighted DER on all 1,164 recordings (zero collar, overlap scored). '
+                   '†Joint transcription and diarization services reported by the benchmark’s authors '
+                   '(Mehendale et al., 2026); all others were run under our protocol (Table 3).')
+        figure = {'ordinal': 2, 'label': 'Figure 2:', 'caption': caption, 'url': url}
+        paper = {'arxivId': '2610.20327v2', 'apiReaderFigures': [figure]}
+        article = (f'![原论文 Figure 2：{caption.split(". ")[0]}.]({url})\n\n'
+                   '本文系统是作者亲手跑过的系统里最好的，但并不是所有文献数字里最低的。')
+        before = copy.deepcopy((paper, article))
+        output = blog._index_figure_preview(paper, article)
+        self.assertEqual(output, f'![原论文配图（完整图注与解读见独立文章）]({url})')
+        self.assertNotIn('most accurate', output)
+        self.assertNotIn('Figure 2', output)
+        self.assertEqual((paper, article), before)
 
     def test_legacy_caption_star_projection_is_full_note_and_adjacent_source_bound(self):
         figure = {'ordinal': 1, 'label': 'Figure 1:', 'url': 'https://arxiv.org/html/x.png',

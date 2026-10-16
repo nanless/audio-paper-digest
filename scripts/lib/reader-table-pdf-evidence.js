@@ -16,14 +16,35 @@ function sealedEvidence(table) {
         && proof.sourceTableDomSha256 === table.sourceDomSha256 ? structuredClone(proof) : null;
 }
 function evidence(table) { return legacy.evidence(table) || sealedEvidence(table); }
+function sourceMathDisplay(table, row, column) {
+    if (table?.recoveryStatus !== 'complete' || !/^[a-f0-9]{64}$/.test(table.sourceDomSha256 || '')) return null;
+    const cells = (table.cells || []).filter(cell => Number.isInteger(cell?.row) && Number.isInteger(cell?.column)
+        && row >= cell.row && row < cell.row + Number(cell.rowspan || 1)
+        && column >= cell.column && column < cell.column + Number(cell.colspan || 1));
+    const cell = cells[0];
+    if (cells.length !== 1 || !/^[a-f0-9]{64}$/.test(cell.sourceDomSha256 || '')
+        || table.matrix?.[row]?.[column] !== cell.text) return null;
+    const proof = require('./source-cell-math-display').strictSourceCellMathDisplay(cell.text);
+    // Nested powers are a publication view only: keep their canonical Reader
+    // rendering unchanged so an old paid draft still replays byte for byte.
+    return proof?.kind === 'numeric-style-duplicate' ? proof : null;
+}
 function displayCell(table, row, column) {
     const proof = sealedEvidence(table);
-    return proof ? proof.displayMatrix[row]?.[column] : legacy.displayCell(table, row, column);
+    if (proof) return proof.displayMatrix[row]?.[column];
+    const original = legacy.displayCell(table, row, column);
+    if (legacy.evidence(table)) return original;
+    return sourceMathDisplay(table, row, column)?.displayText ?? original;
 }
 function displayMatrix(table) { return (table?.matrix || []).map((row, r) => row.map((_cell, c) => displayCell(table, r, c))); }
 function displayCellMatches(table, row, column, text, normalize = value => value) {
-    return sealedEvidence(table) ? normalize(text) === normalize(displayCell(table, row, column))
-        : legacy.displayCellMatches(table, row, column, text, normalize);
+    if (sealedEvidence(table)) return normalize(text) === normalize(displayCell(table, row, column));
+    // Original signed bindings keep the old comparison first. A new display
+    // may additionally prove exact whole-cell equivalence to this same DOM cell.
+    if (legacy.displayCellMatches(table, row, column, text, normalize)) return true;
+    if (legacy.evidence(table)) return false;
+    const proof = sourceMathDisplay(table, row, column);
+    return Boolean(proof && normalize(text) === normalize(proof.displayText));
 }
 function bindingEvidence(table) {
     const old = legacy.evidence(table), exact = old ? null : sealedEvidence(table);

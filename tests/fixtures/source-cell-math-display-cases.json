@@ -1,0 +1,337 @@
+{
+  "contract": "source-cell-math-display-cross-language-fixture-v1",
+  "cases": [
+    {
+      "kind": "real-sealed-source",
+      "paperId": "2610.20967",
+      "runtimeSha256": "b7f6109e83efaac8e8d685a2f39c921800d55bb591b2cc699857444811858738",
+      "tableOrdinal": 1,
+      "row": 1,
+      "column": 1,
+      "sourceDomSha256": "ce63a701a742b6047fcf9da86ab9f3c4726d7c33695f3ea0bda24d5503077d70",
+      "input": "0.5117±0.0042¯\\underline{0.5117\\pm 0.0042}",
+      "displayText": "0.5117 ± 0.0042",
+      "proofKind": "numeric-style-duplicate"
+    },
+    {
+      "kind": "real-sealed-source",
+      "paperId": "2610.20967",
+      "runtimeSha256": "b7f6109e83efaac8e8d685a2f39c921800d55bb591b2cc699857444811858738",
+      "tableOrdinal": 1,
+      "row": 1,
+      "column": 2,
+      "sourceDomSha256": "680ade41d6590777898137a5c523acd099be690f562f5e5eed073849f95dc67e",
+      "input": "0.2665±0.0030\\mathbf{0.2665\\pm 0.0030}",
+      "displayText": "0.2665 ± 0.0030",
+      "proofKind": "numeric-style-duplicate"
+    },
+    {
+      "kind": "real-sealed-source",
+      "paperId": "2610.20967",
+      "runtimeSha256": "b7f6109e83efaac8e8d685a2f39c921800d55bb591b2cc699857444811858738",
+      "tableOrdinal": 1,
+      "row": 2,
+      "column": 1,
+      "sourceDomSha256": "52b5423df66b4c90fb9c42d95d8f0efabd2da02be00fb8cb01d70b0bdf16b158",
+      "input": "0.5040±0.0030\\mathbf{0.5040\\pm 0.0030}",
+      "displayText": "0.5040 ± 0.0030",
+      "proofKind": "numeric-style-duplicate"
+    },
+    {
+      "kind": "real-sealed-source",
+      "paperId": "2610.20967",
+      "runtimeSha256": "b7f6109e83efaac8e8d685a2f39c921800d55bb591b2cc699857444811858738",
+      "tableOrdinal": 1,
+      "row": 2,
+      "column": 2,
+      "sourceDomSha256": "da5d44db220106614f0a1e938e783892e6875206cb23b76f5d551df00bbce5be",
+      "input": "0.2603±0.0026¯\\underline{0.2603\\pm 0.0026}",
+      "displayText": "0.2603 ± 0.0026",
+      "proofKind": "numeric-style-duplicate"
+    },
+    {
+      "kind": "real-sealed-source",
+      "paperId": "2610.20967",
+      "runtimeSha256": "b7f6109e83efaac8e8d685a2f39c921800d55bb591b2cc699857444811858738",
+      "tableOrdinal": 3,
+      "row": 2,
+      "column": 1,
+      "sourceDomSha256": "d7053b4502d7ee45ef0156ad5d57dc12a0e6d57558b5d2e215b4921b65d7bb75",
+      "input": "0.4947±0.0037\\mathbf{0.4947\\pm 0.0037}",
+      "displayText": "0.4947 ± 0.0037",
+      "proofKind": "numeric-style-duplicate"
+    },
+    {
+      "kind": "real-sealed-source",
+      "paperId": "2610.20967",
+      "runtimeSha256": "b7f6109e83efaac8e8d685a2f39c921800d55bb591b2cc699857444811858738",
+      "tableOrdinal": 3,
+      "row": 2,
+      "column": 2,
+      "sourceDomSha256": "013d49830721a022c8b188c5ba63435dda0d84a507818f5f9d0d6ec081a49a13",
+      "input": "0.2686±0.0015\\mathbf{0.2686\\pm 0.0015}",
+      "displayText": "0.2686 ± 0.0015",
+      "proofKind": "numeric-style-duplicate"
+    },
+    {
+      "kind": "real-sealed-source",
+      "paperId": "2610.20967",
+      "runtimeSha256": "b7f6109e83efaac8e8d685a2f39c921800d55bb591b2cc699857444811858738",
+      "tableOrdinal": 3,
+      "row": 3,
+      "column": 2,
+      "sourceDomSha256": "4ce4044d325ae9600e37f23d18c969b25461f3ec29d2c9c8bc6bbd40f5df9d58",
+      "input": "0.2603±0.0026¯\\underline{0.2603\\pm 0.0026}",
+      "displayText": "0.2603 ± 0.0026",
+      "proofKind": "numeric-style-duplicate"
+    },
+    {
+      "kind": "real-sealed-source",
+      "paperId": "2610.20967",
+      "runtimeSha256": "b7f6109e83efaac8e8d685a2f39c921800d55bb591b2cc699857444811858738",
+      "tableOrdinal": 3,
+      "row": 5,
+      "column": 1,
+      "sourceDomSha256": "5971411c991701af89b7e5d6481be14020a4cfaa80d9b1352ec7892e2fb3c9a6",
+      "input": "0.4980±0.0033¯\\underline{0.4980\\pm 0.0033}",
+      "displayText": "0.4980 ± 0.0033",
+      "proofKind": "numeric-style-duplicate"
+    },
+    {
+      "kind": "real-sealed-source",
+      "paperId": "2610.19499",
+      "runtimeSha256": "190fefc945d60316eecf63085a5f27c3a464961e5ff401d5c9d1f3c607623db6",
+      "tableOrdinal": 1,
+      "row": 1,
+      "column": 0,
+      "sourceDomSha256": "ca63cfba2088566a95801aff12e395595078eeeae52fd48f5f1aa30635b13f0b",
+      "input": "HBQ [22]8[2^{2}]^{8}",
+      "displayText": "HBQ \\([2^{2}]^{8}\\)",
+      "proofKind": "nested-power-duplicate"
+    },
+    {
+      "kind": "real-sealed-source",
+      "paperId": "2610.19499",
+      "runtimeSha256": "190fefc945d60316eecf63085a5f27c3a464961e5ff401d5c9d1f3c607623db6",
+      "tableOrdinal": 1,
+      "row": 4,
+      "column": 0,
+      "sourceDomSha256": "d87c87d6005a8777a608caad22d5d9c0722cd661bfcd22b76dad3af97362fcd7",
+      "input": "HBQ [22]16[2^{2}]^{16}",
+      "displayText": "HBQ \\([2^{2}]^{16}\\)",
+      "proofKind": "nested-power-duplicate"
+    },
+    {
+      "kind": "real-sealed-source",
+      "paperId": "2610.19499",
+      "runtimeSha256": "190fefc945d60316eecf63085a5f27c3a464961e5ff401d5c9d1f3c607623db6",
+      "tableOrdinal": 1,
+      "row": 7,
+      "column": 0,
+      "sourceDomSha256": "ee5b6f34c6ada9f95564f404f66ef0df3ba7bed4d86f33e96ccd02a3655e1ba2",
+      "input": "HBQ [24]4[2^{4}]^{4}",
+      "displayText": "HBQ \\([2^{4}]^{4}\\)",
+      "proofKind": "nested-power-duplicate"
+    },
+    {
+      "kind": "real-sealed-source",
+      "paperId": "2610.19499",
+      "runtimeSha256": "190fefc945d60316eecf63085a5f27c3a464961e5ff401d5c9d1f3c607623db6",
+      "tableOrdinal": 1,
+      "row": 10,
+      "column": 0,
+      "sourceDomSha256": "777f815e44a901a056a797878b1ac3475c815f20a2254097c9e81014e40e6a3f",
+      "input": "HBQ [24]8[2^{4}]^{8}",
+      "displayText": "HBQ \\([2^{4}]^{8}\\)",
+      "proofKind": "nested-power-duplicate"
+    },
+    {
+      "kind": "real-sealed-source",
+      "paperId": "2610.19499",
+      "runtimeSha256": "190fefc945d60316eecf63085a5f27c3a464961e5ff401d5c9d1f3c607623db6",
+      "tableOrdinal": 1,
+      "row": 13,
+      "column": 0,
+      "sourceDomSha256": "d94e68c292ad48e65e20415bfbefdf94747996b002f9d53ea3afdbf88f1df097",
+      "input": "HBQ [26]8[2^{6}]^{8}",
+      "displayText": "HBQ \\([2^{6}]^{8}\\)",
+      "proofKind": "nested-power-duplicate"
+    },
+    {
+      "kind": "real-sealed-source",
+      "paperId": "2610.19499",
+      "runtimeSha256": "190fefc945d60316eecf63085a5f27c3a464961e5ff401d5c9d1f3c607623db6",
+      "tableOrdinal": 1,
+      "row": 16,
+      "column": 0,
+      "sourceDomSha256": "9b592cd0a090e44cc6916c92d46c0a8f150024cab4f3d9569f3935c4e3dd37e3",
+      "input": "FSQ [4]8[4]^{8}",
+      "displayText": "FSQ \\([4]^{8}\\)",
+      "proofKind": "nested-power-duplicate"
+    },
+    {
+      "kind": "real-sealed-source",
+      "paperId": "2610.19499",
+      "runtimeSha256": "190fefc945d60316eecf63085a5f27c3a464961e5ff401d5c9d1f3c607623db6",
+      "tableOrdinal": 2,
+      "row": 1,
+      "column": 0,
+      "sourceDomSha256": "861b2c1132b8f7fd82b50c44f32cb67b2e35c320b49567fc808b381792c1e947",
+      "input": "[22]8[2^{2}]^{8}",
+      "displayText": "\\([2^{2}]^{8}\\)",
+      "proofKind": "nested-power-duplicate"
+    },
+    {
+      "kind": "real-sealed-source",
+      "paperId": "2610.19499",
+      "runtimeSha256": "190fefc945d60316eecf63085a5f27c3a464961e5ff401d5c9d1f3c607623db6",
+      "tableOrdinal": 2,
+      "row": 7,
+      "column": 0,
+      "sourceDomSha256": "a6f8d9b6ce6108af177516085d63b7c6b5cd5ca84c21c920aefcc0bca020b9f5",
+      "input": "[24]8[2^{4}]^{8}",
+      "displayText": "\\([2^{4}]^{8}\\)",
+      "proofKind": "nested-power-duplicate"
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "0.5117±0.0042¯\\underline{0.5118\\pm 0.0042}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "0.5117±0.0042\\mathbf{0.5117\\pm 0.0043}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "0.5117±0.0042\\mathbf{0.51170\\pm 0.0042}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "-0.5±0.1\\mathbf{0.5\\pm 0.1}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "0.5±0.1¯\\mathbf{0.5\\pm 0.1}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "0.5±0.1\\textbf{0.5\\pm 0.1}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "0.5±0.1\\mathbf{0.5\\pm 0.1}+2",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "1 0.5±0.1\\mathbf{0.5\\pm 0.1}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "0.5±-0.1\\mathbf{0.5\\pm -0.1}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "0.5\\mathbf{0.5}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "0.5±0.10.5±0.1",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "0.5±0.1\\mathbf{\\text{0.5}\\pm 0.1}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "[22]8[2^{2}]^{16}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "[24]8[2^{2}]^{8}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "[22]8[2^{2}]^{8}+2",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "[22]8[2^{2}]^{8} ms",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "[22]8[2^{2}]^{8}[2^{2}]^{8}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "[22]8[\\mathbf{2}^{2}]^{8}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "HBQ  [22]8[2^{2}]^{8}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "[02]8[0^{2}]^{8}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "[22]0[2^{2}]^{0}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "[22]8 [2^{2}]^{8}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "[22222222]8[2^{2222222}]^{8}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "0.5±0.1\\mathbf{0.5\\pm 0.1}\n",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": " 0.5±0.1\\mathbf{0.5\\pm 0.1}",
+      "displayText": null
+    },
+    {
+      "kind": "synthetic-positive",
+      "input": "−0.5±0.10\\mathbf{−0.5\\pm 0.10}",
+      "displayText": "−0.5 ± 0.10"
+    },
+    {
+      "kind": "synthetic-positive",
+      "input": "+0.5 ± 0.10\\underline{ +0.5\\pm 0.10 }",
+      "displayText": "+0.5 ± 0.10"
+    },
+    {
+      "kind": "synthetic-negative",
+      "input": "0.5±0.1\\mathbf{ 0.5\\pm 0.1}",
+      "displayText": null
+    }
+  ]
+}

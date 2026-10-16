@@ -58,6 +58,7 @@ from publish_common import (
     split_markdown_table_row,
     is_publish_currency_literal,
     is_publish_currency_unit_literal, decode_publish_currency_unit_display,
+    strict_source_cell_math_display, extract_markdown_tables,
     _assert_hash_key_premises, _assert_ecmascript_number_premises,
 )
 from path_config import (
@@ -5895,9 +5896,9 @@ def _root_task_link(concept):
 def _index_figure_preview(paper, reader_article, api_reader=None):
     """把第一张与来源绑定的论文图投影成汇总页缩略图。
 
-    已签名的 Reader 文章仍然是权威来源。复用它完整的
-    Markdown 图片行，能让替代文本和 arXiv URL 绑定到
-    同一份证据，同时由 Hugo 的图片钩子提供本地镜像。
+    已签名的 Reader 文章仍然是图片及 arXiv URL 的权威来源。
+    汇总仅展示中性缩略图，不把截短的原图注当作独立科学结论；
+    完整图注与解读保留在卡片标题所链接的独立文章中。
     """
     if not isinstance(reader_article, str):
         return ''
@@ -5910,6 +5911,7 @@ def _index_figure_preview(paper, reader_article, api_reader=None):
         if not match:
             continue
         source_url = match.group(1)
+        neutral_image = f'![原论文配图（完整图注与解读见独立文章）]({source_url})'
         figure = next(
             (
                 item for item in (paper.get('apiReaderFigures') or [])
@@ -5952,7 +5954,7 @@ def _index_figure_preview(paper, reader_article, api_reader=None):
                     or asset.get('destination') != destination
                     or asset.get('publicUrl') != public_url):
                 raise PublishDataValidationError('汇总内联图的像素 SHA、目标路径或 URL 与原图片记录不一致。')
-            local_image = stripped.replace(f'({source_url})', f'({public_url})', 1)
+            local_image = neutral_image.replace(f'({source_url})', f'({public_url})', 1)
             return f'[{local_image}]({source_url})'
         ordinal = figure.get('ordinal') if isinstance(figure, dict) else 1
         if not isinstance(ordinal, int) or isinstance(ordinal, bool) or ordinal < 1:
@@ -5969,9 +5971,9 @@ def _index_figure_preview(paper, reader_article, api_reader=None):
                 f'{BASE_PATH}/images/papers/{normalize_arxiv_id(paper.get("arxivId"))}/'
                 f'figure-{ordinal}-{digest}{extension}'
             )
-            local_image = stripped.replace(f'({source_url})', f'({local_url})', 1)
+            local_image = neutral_image.replace(f'({source_url})', f'({local_url})', 1)
         else:
-            local_image = stripped
+            local_image = neutral_image
         return local_image
     return ''
 
@@ -6822,6 +6824,37 @@ def _api_reader_markdown_tables(article):
         })
         index = max(end, index + 2)
     return tables
+
+
+def _project_bound_source_cell_math_display(article, plan):
+    """Change only verified artifact-cell view text; preserve saved Reader bytes."""
+    tables = extract_markdown_tables(article)
+    lines = article.split('\n')
+    for binding in plan.get('tableBindings', []):
+        if binding.get('sourceType') != 'artifact_table':
+            continue
+        index = binding.get('tableIndex')
+        if not isinstance(index, int) or isinstance(index, bool) or not 1 <= index <= len(tables):
+            raise PublishDataValidationError('来源单元格显示投影的表序号不符合已验证计划。')
+        table = tables[index - 1]
+        for cell in binding.get('cellBindings', []):
+            proof = strict_source_cell_math_display(cell.get('sourceText'))
+            if not proof or cell.get('renderedText') not in (proof['sourceText'], proof['displayText']):
+                continue
+            row, column = cell['renderedRow'], cell['renderedColumn']
+            line_index = table['start_line'] + row + (1 if row else 0)
+            line = lines[line_index]
+            pipes = list(re.finditer(r'(?<!\\)\|', line))
+            if column + 1 >= len(pipes):
+                raise PublishDataValidationError('来源单元格显示投影的列定位不完整。')
+            start, end = pipes[column].end(), pipes[column + 1].start()
+            original = line[start:end]
+            if original.strip() != cell['renderedText']:
+                raise PublishDataValidationError('来源单元格显示投影与当前单元格原字节不一致。')
+            leading = original[:len(original) - len(original.lstrip())]
+            trailing = original[len(original.rstrip()):]
+            lines[line_index] = line[:start] + leading + proof['displayText'] + trailing + line[end:]
+    return '\n'.join(lines)
 
 
 def _normalize_api_reader_explicit_symbol_projection(value):
@@ -8197,7 +8230,15 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
                 display_source_text = decode_publish_currency_unit_display(actual_text) \
                     if article is not None and isinstance(cell.get('renderedText'), str) \
                     and is_publish_currency_unit_literal(cell['renderedText']) else actual_text
-                if _normalize_api_reader_source_cell(cell.get('renderedText')) \
+                canonical_comparison_text = cell.get('renderedText')
+                math_display = strict_source_cell_math_display(cell.get('sourceText'))
+                if math_display and actual_text == math_display['displayText'] \
+                        and canonical_comparison_text in (math_display['sourceText'], math_display['displayText']):
+                    # The canonical table SHA above and original source DOM
+                    # still bind both copies. Decode only this exact view.
+                    canonical_comparison_text = math_display['sourceText']
+                    display_source_text = math_display['sourceText']
+                if _normalize_api_reader_source_cell(canonical_comparison_text) \
                         != _normalize_api_reader_source_cell(display_source_text) \
                         or (_normalize_api_reader_source_cell(display_source_text) \
                         != _normalize_api_reader_source_cell(pdf_values[index][(rendered_row, rendered_column)] if index in pdf_values else cell.get('sourceText')) \
@@ -9181,6 +9222,7 @@ def _api_reader_payload(paper):
     ) if reader_contract == LLM_API_READER_CONTRACT else article
     if reader_contract == LLM_API_READER_CONTRACT:
         rendered_article = _normalize_api_reader_display_artifacts(rendered_article)
+        rendered_article = _project_bound_source_cell_math_display(rendered_article, plan)
     if figure_persistence == EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT:
         rendered_article = render_ephemeral_api_reader_figures(rendered_article, figures)
     for asset in figure_assets:

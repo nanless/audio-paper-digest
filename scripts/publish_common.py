@@ -6366,6 +6366,34 @@ def decode_publish_currency_unit_display(value):
     return decoded if is_publish_currency_unit_literal(decoded) else value
 
 
+def strict_source_cell_math_display(value):
+    """Project only a complete same-value visible/TeX duplicate source cell."""
+    if not isinstance(value, str) or not value or len(value) > 512 or '\n' in value or '\r' in value:
+        return None
+    text = value
+    number = r'(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)'
+    scalar = rf'[+−-]?{number}'
+    duplicate = re.fullmatch(r'([^\\{}]+?)(¯?)\\(underline|mathbf)\{([^{}]+)\}', text)
+    visible = re.fullmatch(rf'({scalar})[ \t]*±[ \t]*({number})', duplicate[1].rstrip(' \t')) if duplicate else None
+    tex = re.fullmatch(rf'({scalar})[ \t]*\\pm[ \t]*({number})', duplicate[4].strip(' \t')) if duplicate else None
+    if duplicate and visible and tex and visible[1] == tex[1] and visible[2] == tex[2] \
+            and (not duplicate[2] or duplicate[3] == 'underline'):
+        return {'contract': 'source-cell-math-display-v1', 'kind': 'numeric-style-duplicate',
+                'sourceText': value, 'sourceTextSha256': hashlib.sha256(value.encode('utf-8')).hexdigest(),
+                'displayText': f'{visible[1]} ± {visible[2]}', 'style': duplicate[3]}
+    # A bounded nested power has one explicit TeX annotation. Its flattened
+    # prefix must match every base/exponent character, including trailing zeros.
+    power = re.fullmatch(
+        r'(?:(?P<label>[A-Za-z]{1,16}) )?(?P<visible>\[[1-9][0-9]{0,11}\][1-9][0-9]{0,5})'
+        r'(?P<tex>\[[1-9][0-9]{0,5}(?:\^\{[1-9][0-9]{0,5}\})?\]\^\{[1-9][0-9]{0,5}\})', text)
+    if power and power['visible'] == re.sub(r'[\^{}]', '', power['tex']):
+        prefix = power['label'] + ' ' if power['label'] else ''
+        return {'contract': 'source-cell-math-display-v1', 'kind': 'nested-power-duplicate',
+                'sourceText': value, 'sourceTextSha256': hashlib.sha256(value.encode('utf-8')).hexdigest(),
+                'displayText': prefix + r'\(' + power['tex'] + r'\)'}
+    return None
+
+
 def escape_markdown_table_currency_units(text):
     """Escape only literal dollar units in actual table cells, preserving view text."""
     lines = text.splitlines(keepends=True)
