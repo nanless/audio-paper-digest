@@ -14839,6 +14839,14 @@ async function fetchArxivFigureBytesUncached(rawUrl) {
         dispatcher: getArxivFetchDispatcher()
     });
     if (!response.ok) throw new Error(`arXiv Figure download failed: HTTP ${response.status}`);
+    const lengthHeader = String(response.headers.get('content-length') || '').trim();
+    const contentLength = /^\d+$/.test(lengthHeader) ? parseContentLength(lengthHeader) : null;
+    if (contentLength !== null && IMAGE_MAX_BYTES > 0 && contentLength > IMAGE_MAX_BYTES) {
+        try { await response.body?.cancel(); } catch (_) { /* Preserve the size rejection if cancellation fails. */ }
+        const error = new Error(`response body ${(contentLength / 1024 / 1024).toFixed(1)}MB exceeds limit`);
+        error.code = 'RESPONSE_TOO_LARGE';
+        throw error;
+    }
     const raw = await readResponseBufferWithLimit(response, IMAGE_MAX_BYTES);
     const trusted = prepareTrustedArxivFigureBuffer(raw, response.headers.get('content-type') || '');
     return { bytes: trusted.buffer, mediaType: trusted.mediaType };
