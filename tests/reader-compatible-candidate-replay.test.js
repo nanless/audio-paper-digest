@@ -5,8 +5,26 @@ const fs = require('node:fs'), path = require('node:path'), os = require('node:o
 const Config = require('../scripts/config'), daily = require('../scripts/lib/daily-fresh-source-plan');
 const fresh = require('../scripts/lib/fresh-analysis-context'), engine = require('../scripts/analysis-engine');
 const repair = require('../scripts/lib/reader-repair'), revision = require('../scripts/lib/reader-recovery-revision');
+const {saveSyntheticLegacyAllowance}=require('./helpers/synthetic-legacy-reader-allowance');
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 const write = (file, value) => fs.writeFileSync(file, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
+// Synthetic archival state from the retired historical format, never a runtime
+// grant. Its parent bytes retain the original NP/signatures; new recovery must
+// neither clear that state again nor create another allowance.
+function syntheticHistoricalClearedAllowance(f) {
+    const payload=saveSyntheticLegacyAllowance({directory:f.directory,fromIdentity:f.base,toIdentity:f.identity,
+        payload:f.selectedPayload,runId:f.plan.runId}).payload;
+    const audit=payload.readerRecoveryRevisions.at(-1);audit.clearedNoProgress=true;
+    Object.assign(payload,{noProgress:0,failureSignature:'',validationFailureStreak:0,validationFailureSignature:''});
+    const proof={...payload.implementationRepairAllowanceProof,revisionAuditSha256:repair.hashDraft(audit)};
+    delete proof.allowanceSha256;payload.implementationRepairAllowanceProof={...proof,allowanceSha256:repair.hashDraft(proof)};
+    // Write historical-format fixture bytes directly in the helper-verified tmp
+    // directory; the live saver correctly forbids replacing an unused proof.
+    write(path.join(f.directory,repair.hashDraft(f.identity)+'.json'),{version:repair.REPAIR_VERSION,
+        identity:f.identity,payload,payloadSha256:repair.hashDraft(payload)});
+    assert.equal(JSON.parse(fs.readFileSync(path.join(f.directory,audit.archivedName))).payload.noProgress,f.selectedPayload.noProgress);
+    return payload;
+}
 async function fixture(t, options = {}) {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-compatible-replay-'));
     const previous = { runs: Config.FILES.dailyFreshSourceRunsDir, usage: Config.FILES.llmUsageDir };
@@ -328,15 +346,16 @@ test('误清零后只有同稿同费用的中间迁移，正常入口仍沿唯�
     assert.equal(restored.diagnosticFailureStateRestorations[0].archiveChain.length,2);
     assert.deepEqual(fs.readFileSync(path.join(f.directory,archivedName)),bytes);
 });
-test('合法现存未使用allowance边可续接唯一paid祖先，只转交同一个余额且不新清NP', async t=>{
+test('合成历史未用allowance边可续接唯一paid祖先，只转交同一旧余额且不新清NP', async t=>{
     const f=await fixture(t);const older=fs.readFileSync(f.olderFile);fs.unlinkSync(f.olderFile);
-    const granted=await f.run(()=>revision.loadReaderRecoveryRevision(f.directory,f.identity,f.replayOptions));
+    const granted=syntheticHistoricalClearedAllowance(f);
     const allowance=granted.implementationRepairAllowanceProof.allowanceSha256;
     assert.equal(repair.hasUnusedImplementationAllowance(granted),true);assert.equal(granted.noProgress,0);
     fs.writeFileSync(f.olderFile,older,{mode:0o600});
     const next={...f.identity,repairImplementationSha256:'d'.repeat(64)},result=await f.run(()=>revision.loadReaderRecoveryRevision(f.directory,next,f.replayOptions));
     assert.equal(result.attempts,granted.attempts);assert.equal(result.fullAttempts,granted.fullAttempts);
     assert.equal(result.readerRecoveryRevisions.at(-1).clearedNoProgress,false);
+    assert.equal(result.noProgress,granted.noProgress);assert.equal(result.validationFailureStreak,granted.validationFailureStreak);
     assert.equal(result.readerRecoveryRevisions.at(-1).transferredExistingImplementationAllowanceSha256,allowance);
     assert.equal(repair.hasUnusedImplementationAllowance(result),true);
     assert.equal(repair.readerAttemptLimit(6,result.attempts,result.draft,1),repair.readerAttemptLimit(6,granted.attempts,granted.draft,1));
@@ -365,11 +384,13 @@ test('官方restoration的原状态和完整收费archive链可作同预算paid�
 });
 test('clear无有效allowance或restorationproof、改原费用/原NP、双授权leaf均拒绝',async t=>{
     const f=await fixture(t),older=fs.readFileSync(f.olderFile);fs.unlinkSync(f.olderFile);
-    const granted=await f.run(()=>revision.loadReaderRecoveryRevision(f.directory,f.identity,f.replayOptions));
+    const granted=syntheticHistoricalClearedAllowance(f);
     const grantedFile=path.join(f.directory,repair.hashDraft(f.identity)+'.json'),grantedBytes=fs.readFileSync(grantedFile);
     fs.writeFileSync(f.olderFile,older,{mode:0o600});
     const next={...f.identity,repairImplementationSha256:'d'.repeat(64)};
     const bad=structuredClone(granted);bad.implementationRepairAllowanceProof=null;
+    bad.readerRecoveryRevisions.at(-1).clearedNoProgress=true;
+    Object.assign(bad,{noProgress:0,failureSignature:'',validationFailureStreak:0,validationFailureSignature:''});
     repair.saveFailedCandidate(f.directory,f.identity,bad);
     await assert.rejects(f.run(()=>revision.loadReaderRecoveryRevision(f.directory,next,f.replayOptions)),/multiple compatible|unchanged original/);
     fs.writeFileSync(grantedFile,grantedBytes);

@@ -58,7 +58,7 @@ for (const kind of ['exact-fifo', 'migration-fifo', 'regular', 'symlink']) {
     });
 }
 
-test('真实迁移后再次恢复也拒绝额度证明归档中的管道文件', t => {
+test('合成历史许可的归档证明含管道文件时恢复仍严格拒绝', t => {
     const executionDir = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-recovery-proof-'));
     t.after(() => fs.rmSync(executionDir, { recursive: true, force: true }));
     const directory = path.join(executionDir, 'reader-attempts');
@@ -68,6 +68,7 @@ test('真实迁移后再次恢复也拒绝额度证明归档中的管道文件',
         const context = require('./scripts/lib/conference-analysis-context.js');
         const repair = require('./scripts/lib/reader-repair.js');
         const recovery = require('./scripts/lib/reader-recovery-revision.js');
+        const {saveSyntheticLegacyAllowance}=require('./tests/helpers/synthetic-legacy-reader-allowance');
         const directory = ${JSON.stringify(directory)};
         const paperId = 'conference:interspeech:2026:conference-paper-id:example26';
         const sourceSha256 = crypto.createHash('sha256').update('Original source').digest('hex');
@@ -75,11 +76,12 @@ test('真实迁移后再次恢复也拒绝额度证明归档中的管道文件',
         const identity = { ...oldIdentity, repairImplementationSha256: 'd'.repeat(64) };
         const payload = { status: 'failed', attempts: 1, fullAttempts: 1, noProgress: 0,
             failureSignature: '', issues: [], draft: null, rawDraft: '' };
-        repair.saveFailedCandidate(directory, oldIdentity, payload);
+        const executionId=crypto.randomUUID();
         context.withConferenceAnalysisSource({ paperId, executionDir: ${JSON.stringify(executionDir)},
-            executionId: crypto.randomUUID(), sourceDetails: { source: 'conference_pdf_text', text: 'Original source' } }, () => {
-            const migrated = recovery.loadReaderRecoveryRevision(directory, identity);
-            if (!migrated.implementationRepairAllowanceProof) throw new Error('真实迁移没有生成额度证明');
+            executionId, sourceDetails: { source: 'conference_pdf_text', text: 'Original source' } }, () => {
+            const migrated = saveSyntheticLegacyAllowance({directory,fromIdentity:oldIdentity,toIdentity:identity,
+                payload,runId:executionId,scope:'conference-process'}).payload;
+            if (!migrated.implementationRepairAllowanceProof) throw new Error('合成历史格式fixture缺少原许可');
             const filename = path.join(directory, migrated.readerRecoveryRevisions[0].archivedName);
             fs.unlinkSync(filename);
             const made = spawnSync('mkfifo', ['-m', '600', filename], { encoding: 'utf8' });

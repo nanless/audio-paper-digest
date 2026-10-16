@@ -123,5 +123,29 @@ test('旧实现迁移的超节数少术语复合稿仍走受限重排，不退�
     const migrated = direct.withDirectRewriteAnalysisSource(scope, () => repair.loadFailedCandidate(directory, current.identity));
     assert.equal(migrated.attempts, current.payload.attempts);
     assert.equal(migrated.fullAttempts, current.payload.fullAttempts);
-    assert.ok(migrated.implementationRepairAllowanceProof);
+    assert.equal(migrated.implementationRepairAllowanceProof, null);
+    assert.equal(migrated.transportFailures, current.payload.transportFailures + 1);
+    for (const key of ['noProgress', 'failureSignature', 'validationFailureStreak', 'validationFailureSignature']) {
+        assert.equal(migrated[key], current.payload[key], key);
+    }
+    assert.equal(migrated.readerRecoveryRevisions.at(-1).clearedNoProgress, false);
+    for (const reason of ['exhausted', 'same-group']) {
+        const stoppedDirectory = path.join(root, reason, 'reader-attempts');
+        const stoppedScope = { ...scope, readerAttemptsDir: stoppedDirectory };
+        const payload = { ...structuredClone(current.payload), attempts: reason === 'exhausted' ? 3 : 2,
+            fullAttempts: reason === 'exhausted' ? 2 : 1,
+            ...(reason === 'same-group' ? { noProgress: 2, validationFailureStreak: 2 } : {}) };
+        repair.saveFailedCandidate(stoppedDirectory, oldIdentity, payload);
+        let calls = 0;
+        await assert.rejects(direct.withDirectRewriteAnalysisSource(stoppedScope, () => deep.generateApiReaderArticleDetailed(paper, '', '完整封存证据', {
+            ...options, readerAttemptsDir: stoppedDirectory,
+            readerCallModel: async () => { calls++; throw new Error('不应追加重排请求'); }
+        })), error => error.code === 'READER_REPAIR_ATTEMPTS_EXHAUSTED');
+        assert.equal(calls, 0);
+        const retained = direct.withDirectRewriteAnalysisSource(stoppedScope, () => repair.loadFailedCandidate(stoppedDirectory, current.identity));
+        for (const key of ['attempts', 'fullAttempts', 'transportFailures', 'noProgress', 'failureSignature', 'validationFailureStreak', 'validationFailureSignature']) {
+            assert.equal(retained[key], payload[key], key);
+        }
+        assert.equal(retained.implementationRepairAllowanceProof, null);
+    }
 });

@@ -171,13 +171,20 @@ test('仅固定旧修复提示词变化不发新许可、不清连续失败，�
     });
 });
 
-test('真实未用实现许可经固定提示词转交，网络失败保存后再次只修正文并保留同一许可', async t => {
+test('临时归档样例的既有未用许可经固定提示词转交，仅在原余额续补丁且保留历史证明', async t => {
     await withControlledRecoveryCandidate(t, async ({ directory, original, originalName, revision, options, paper, historicalDeep }) => {
         const oldCurrentIdentity = { ...original.identity, repairPromptSha256: FROZEN_REPAIR_V3_SHA };
         const oldImplementationIdentity = { ...oldCurrentIdentity, repairImplementationSha256: '0'.repeat(64) };
-        repair.saveFailedCandidate(directory, oldImplementationIdentity, original.payload);
+        const synthetic = require('./helpers/synthetic-legacy-reader-allowance').saveSyntheticLegacyAllowance({
+            directory, fromIdentity: oldImplementationIdentity, toIdentity: oldCurrentIdentity, payload: original.payload
+        });
+        assert.equal(synthetic.testOnlySyntheticHistoricalFormat, true);
         fs.unlinkSync(path.join(directory, originalName));
         const withAllowance = revision.loadReaderRecoveryRevision(directory, oldCurrentIdentity);
+        assert.deepEqual(withAllowance, synthetic.payload);
+        for (const key of ['attempts', 'fullAttempts', 'transportFailures', 'noProgress', 'failureSignature', 'validationFailureStreak', 'validationFailureSignature']) {
+            assert.equal(withAllowance[key], original.payload[key], key);
+        }
         assert.equal(repair.validateImplementationAllowance(withAllowance, oldCurrentIdentity, directory), true);
         const originalProof = withAllowance.implementationRepairAllowanceProof;
         const migrated = revision.loadReaderRecoveryRevision(directory, original.identity);

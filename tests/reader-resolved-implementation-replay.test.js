@@ -12,6 +12,7 @@ const { saveFailedCandidate, loadFailedCandidate, hashDraft,
 const { READER_SECTION_KINDS, normalizeReaderDraftOrder } = require('../scripts/lib/reader-draft-order.js');
 const directContext = require('../scripts/lib/direct-rewrite-analysis-context.js');
 const conferenceContext = require('../scripts/lib/conference-analysis-context.js');
+const {saveSyntheticLegacyAllowance}=require('./helpers/synthetic-legacy-reader-allowance');
 
 function createSample(t, requestedPaperId = '2609.99971') {
     const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'reader-revision-'));
@@ -53,8 +54,8 @@ function createResolvedSample(t, withAllowance = false) {
     sample.payload.ephemeralImageEvidence={imageEvidence:[],directSupplementaryEvidence:[]};
     if (withAllowance) {
         const beforeIdentity={...sample.oldIdentity,parserImplementationSha256:'8'.repeat(64)};
-        saveFailedCandidate(sample.directory,beforeIdentity,sample.payload);
-        sample.payload=sample.enabled(()=>loadReaderRecoveryRevision(sample.directory,sample.oldIdentity));
+        sample.payload=saveSyntheticLegacyAllowance({directory:sample.directory,fromIdentity:beforeIdentity,
+            toIdentity:sample.oldIdentity,payload:sample.payload,runId:sample.context.runId}).payload;
         assert.ok(sample.payload.implementationRepairAllowanceProof);
     } else saveFailedCandidate(sample.directory,sample.oldIdentity,sample.payload);
     const filename=require('../scripts/lib/reader-repair').retireFailedCandidate(sample.directory,sample.oldIdentity);
