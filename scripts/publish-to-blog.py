@@ -5779,12 +5779,15 @@ def _current_batch_tag_metadata(papers):
            or item['selectionContract'] != first['selectionContract']
            for item in selections[1:]):
         raise PublishDataValidationError('汇总页中的标签选择记录使用了不同的词表版本、词表 SHA 或标签选择协议。')
-    counts, task_concepts = {}, {}
+    counts, task_concepts, root_counts, root_concepts = {}, {}, {}, {}
     for item in selections:
         tag = f'#{item["primaryTask"]}'
         counts[tag] = counts.get(tag, 0) + 1
         task_concepts[tag] = next(concept for concept in item['concepts']
                                   if concept['id'] == item['primaryTaskId'])
+        root = _top_level_task_concept(item['primaryTaskId'])
+        root_counts[root['id']] = root_counts.get(root['id'], 0) + 1
+        root_concepts[root['id']] = root
     primary_tasks = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
     return {
         'contract': FLAT_TAG_COMPAT_CONTRACT,
@@ -5793,7 +5796,29 @@ def _current_batch_tag_metadata(papers):
         'registrySha256': first['registrySha256'],
         'primaryTasks': primary_tasks,
         'concepts': [task_concepts[tag] for tag, _count in primary_tasks],
+        'rootPrimaryTasks': [(root_concepts[cid], count) for cid, count in
+                             sorted(root_counts.items(), key=lambda pair:
+                                    (-pair[1], root_concepts[pair[0]]['label']))],
     }
+
+
+def _top_level_task_concept(concept_id):
+    """只投影主任务的最上级用于统计，不将祖先写回论文直接分类。"""
+    by_id = {node['id']: node for node in _PAGE_TAG_CATALOG['concepts']}
+    node = by_id.get(concept_id)
+    seen = set()
+    while node is not None:
+        if node['id'] in seen or node['facet'] != 'task' or node['status'] != 'active':
+            raise PublishDataValidationError('主任务的最上级统计路径无效。')
+        seen.add(node['id'])
+        if node['broaderId'] is None:
+            return {'id': node['id'], 'facet': 'task', 'label': node['preferredLabel']['zh']}
+        node = by_id.get(node['broaderId'])
+    raise PublishDataValidationError('主任务的最上级统计缺少受控词表概念。')
+
+
+def _root_task_link(concept):
+    return f'[{concept["label"]}]({BASE_PATH}/papers/?concept={quote(concept["id"], safe="")})'
 
 
 def _index_figure_preview(paper, reader_article, api_reader=None):
@@ -5887,7 +5912,7 @@ def generate_index_page(scored, unscored, date_str, paper_slugs, category='论�
     tag_metadata = _current_batch_tag_metadata(papers)
     tag_set = [concept['label'] for concept in tag_metadata['concepts']] if tag_metadata \
         else extract_all_tags(papers, limit=10)
-    top_tags = tag_metadata['primaryTasks'][:8] if tag_metadata \
+    top_tags = tag_metadata['rootPrimaryTasks'][:8] if tag_metadata \
         else extract_top_tags(papers, limit=8)
     tag_frontmatter = ''
     if tag_metadata:
@@ -5924,7 +5949,7 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
 
 ✅ 筛选入选 {total} 篇 → 🔬 深度分析完成
 
-{'🏷️ 标签说明：本期标签来自新版词表；站点标签页暂时兼容展示历史标签与新标签。' if tag_metadata else ''}
+{'每篇论文保留完整分层分类；热门方向按主任务的最上级方向统计，每篇计入一个方向。排行榜也显示最上级任务。' if tag_metadata else ''}
 
 ### 🏷️ 热门方向
 
@@ -5932,13 +5957,14 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
     md += "| 方向 | 数量 | 分布 |\n|------|------|------|\n"
     for tag, cnt in top_tags:
         bar = '█' * min(cnt, 15)
-        md += f"| {tag} | {cnt} 篇 | {bar} |\n"
+        label = _root_task_link(tag) if isinstance(tag, dict) else tag
+        md += f"| {label} | {cnt} 篇 | {bar} |\n"
 
     md += f"""
 ### 📊 论文评分排行榜（{len(scored)} 篇，按分数降序）
 
 """
-    md += "| 排名 | 论文 | 总分 | 分档 | 文档类型 | 主任务 |\n|------|------|------|------|----------|--------|\n"
+    md += "| 排名 | 论文 | 总分 | 分档 | 文档类型 | 最上级任务 |\n|------|------|------|------|----------|--------|\n"
     for i, (score, p, parsed_analysis) in enumerate(scored):
         m = format_medal(i)
         title = p.get('title', 'Unknown')
@@ -5946,6 +5972,9 @@ paper_digest_reader_quality: "{DIGEST_INDEX_READER_QUALITY_VERSION}"
         rank_bucket = parsed_analysis.get('rankBucket', '') or '-'
         document_type = parsed_analysis.get('documentType', '') or '-'
         primary_task = parsed_analysis.get('primaryTaskTag', '') or '-'
+        selection = build_flat_tag_compat_metadata(parsed_analysis)
+        if selection:
+            primary_task = _root_task_link(_top_level_task_concept(selection['primaryTaskId']))
         compact_title = markdown_title_for_publish(compact_title_for_ranking(title))
         if slug:
             md += f"| {m} | [{compact_title}]({BASE_PATH}/posts/{date_str}-{slug}) | {score} | {rank_bucket} | {document_type} | {primary_task} |\n"

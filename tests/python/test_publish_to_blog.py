@@ -3281,9 +3281,10 @@ title: "Score rows"
                     for node in concepts]
         self.assertEqual(metadata['primaryTasks'], expected)
         hot_table = body.split('### 🏷️ 热门方向', 1)[1].split('### 📊', 1)[0]
-        actual_hot = [(tag, int(count)) for tag, count in
-                      re.findall(r'^\| (#[^|]+) \| (\d+) 篇 \|', hot_table, re.M)]
-        self.assertEqual(actual_hot, expected[:8])
+        actual_hot = [(label, int(count)) for label, count in
+                      re.findall(r'^\| \[([^\]]+)\]\([^)]*\) \| (\d+) 篇 \|', hot_table, re.M)]
+        self.assertEqual(actual_hot, [(node['label'], count) for node, count in metadata['rootPrimaryTasks'][:8]])
+        self.assertEqual(sum(count for _node, count in metadata['rootPrimaryTasks']), len(papers))
         self.assertEqual(body.count('**研究分类**'), len(papers))
         self.assertIn('/papers/?concept=method.transformer', body)
         self.assertEqual(papers, original)
@@ -3631,11 +3632,35 @@ title: "Score rows"
         direction_table = markdown.split('### 🏷️ 热门方向', 1)[1].split(
             '### 📊 论文评分排行榜', 1,
         )[0]
-        self.assertIn('| #语音识别 | 1 篇 |', direction_table)
-        self.assertIn('| #语音合成 | 1 篇 |', direction_table)
+        self.assertIn('| [语音识别](/audio-paper-digest-blog/papers/?concept=task.asr) | 1 篇 |', direction_table)
+        self.assertIn('| [语音合成](/audio-paper-digest-blog/papers/?concept=task.speech-synthesis) | 1 篇 |', direction_table)
         self.assertNotIn('#Transformer', direction_table)
-        self.assertIn('站点标签页暂时兼容展示历史标签与新标签', markdown)
+        self.assertIn('最上级方向统计', markdown)
         self.assertIn('paper_digest_tags_contract: "paper-tag-flat-tags-v2"', markdown)
+
+    def test_root_task_statistics_merge_children_without_changing_direct_classification(self):
+        from utils import _validate_tag_selection
+        tasks = ['task.tts', 'task.speech-synthesis', 'task.av-asr', 'task.asr']
+        by_id = {node['id']: node for node in publish_to_blog._PAGE_TAG_CATALOG['concepts']}
+        papers = []
+        for index, cid in enumerate(tasks):
+            task = '#' + by_id[cid]['preferredLabel']['zh']
+            parsed = {'tags': [task, '#Transformer', '#低资源'],
+                      'primaryTaskTag': task, 'primaryMethodTag': '#Transformer'}
+            parsed['tagValidation'] = _validate_tag_selection(
+                publish_to_blog._PAGE_TAG_CATALOG, parsed['tags'], task, '#Transformer')
+            papers.append({'title': 'Root fixture', 'arxivId': f'2608.{41000+index}', 'parsed': parsed})
+        original = copy.deepcopy(papers)
+        metadata = publish_to_blog._current_batch_tag_metadata(papers)
+        self.assertEqual({node['id']: count for node, count in metadata['rootPrimaryTasks']},
+                         {'task.speech-synthesis': 2, 'task.asr': 2})
+        self.assertEqual({node['id'] for node in metadata['concepts']}, set(tasks))
+        self.assertEqual(publish_to_blog._top_level_task_concept('task.av-asr')['id'], 'task.asr')
+        with self.assertRaises(PublishDataValidationError):
+            publish_to_blog._top_level_task_concept('method.transformer')
+        with self.assertRaises(PublishDataValidationError):
+            publish_to_blog._top_level_task_concept('task.unknown')
+        self.assertEqual(papers, original)
 
     def test_researcher_sidecars_are_deterministic_safe_and_manifest_bound(self):
         paper = llm_api_publication_fixture()
