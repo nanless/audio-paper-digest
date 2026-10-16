@@ -220,6 +220,16 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
         fail('仅提供 PDF 图像的来源不能声明已有原表单元格或 TeX 公式。');
     }
     const sourcePaper = loaded.analysis.papers[0];
+    const authenticatedPdfBindings = (sourcePaper.apiReaderPlan?.tableBindings || [])
+        .filter(binding => binding.authenticatedPdfTableEvidence !== undefined);
+    let readerPdfSourceHandle = null;
+    if (authenticatedPdfBindings.length) {
+        const identity = authenticatedPdfBindings[0].authenticatedPdfTableEvidence?.sourceIdentity;
+        if (authenticatedPdfBindings.some(binding => stableHash(binding.authenticatedPdfTableEvidence?.sourceIdentity)
+            !== stableHash(identity))) fail('会议 PDF 表格证明混用了不同原来源身份');
+        readerPdfSourceHandle = require('./conference-reader-publication-evidence')
+            .replayCanonicalReaderPdfSource(sourcePaper, identity);
+    }
     let publicationEvidence = null;
     if (needsPublicationEvidence(sourcePaper)) {
         // Fixtures without real source authority cannot mint this evidence. A
@@ -252,14 +262,16 @@ function loadCompleted({ analysisRoot, executionId, planHandle, sourceRoot, trus
     loaded.identity = identity; loaded.identitySha256 = identityApi.identitySha256(identity); loaded.publication = publication;
     loaded.originalTagProof = originalTagProof;
     loaded.publicationEvidence = publicationEvidence;
+    loaded.readerPdfSourceHandle = readerPdfSourceHandle;
     return loaded;
     };
     // The plan/source replay above authenticates these exact source bytes. New
     // Reader claims must also see them during a cold publication qualification.
-    const qualifyInSource = () => hasCurrentResourceClaims
+    const qualifyInSource = () => hasCurrentResourceClaims || readerPdfSourceHandle
         ? require('./conference-analysis-context').withConferenceAnalysisSource({
         executionId, executionDir: loaded.directory, paperId: loaded.run.paperId,
-        sourceDetails: loaded.source.sourceDetails }, qualify) : qualify();
+        sourceDetails: loaded.source.sourceDetails,
+        ...(readerPdfSourceHandle ? { readerPdfSourceHandle } : {}) }, qualify) : qualify();
     return publicationEvidence
         ? require('./conference-reader-publication-evidence').withPublicationEvidence(publicationEvidence, qualifyInSource)
         : qualifyInSource();
@@ -281,9 +293,13 @@ function needsPublicationEvidence(paper) {
 }
 
 function withCompletedPublicationEvidence(loaded, callback) {
-    return loaded.publicationEvidence
-        ? require('./conference-reader-publication-evidence').withPublicationEvidence(loaded.publicationEvidence, callback)
+    const inPdfSource = () => loaded.readerPdfSourceHandle
+        ? require('./reader-authenticated-pdf-table-evidence').withVerifiedSource(loaded.readerPdfSourceHandle,
+            () => require('./reader-authenticated-pdf-table-evidence').withSavedPaper(loaded.analysis.papers[0], callback))
         : callback();
+    return loaded.publicationEvidence
+        ? require('./conference-reader-publication-evidence').withPublicationEvidence(loaded.publicationEvidence, inPdfSource)
+        : inPdfSource();
 }
 function getConsistentPublicationFields(paper, tagRules) {
     const parsed = paper.parsed; const reparsed = require('../utils.js').parseAnalysis(paper.analysis,

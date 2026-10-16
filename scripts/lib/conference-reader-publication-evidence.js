@@ -6,6 +6,7 @@ const crypto = require('node:crypto'), child = require('node:child_process');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { isDeepStrictEqual } = require('node:util');
 const scope = new AsyncLocalStorage(), registered = new WeakMap();
+const canonicalReaderPdfSources = new WeakMap();
 const root = path.resolve(__dirname, '../..');
 const program = path.join(root, 'scripts/reader_sealed_pdf_quote_evidence.py');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
@@ -259,13 +260,14 @@ function replayDescriptor(paper, descriptor) {
 }
 
 // 此冷核路径只读原SHA绑定文件和本篇来源；不重跑整批模型筛选解析，也不制造生产句柄。
-function verifyColdSourceChain(loaded, descriptor, deps) {
+function verifyColdSourceChain(loaded, descriptor, deps, pinnedFiles = []) {
     const api = require('./conference-process'), retained = require('./conference-retained-source-replay');
     const equal = (a, b, label) => { if (!isDeepStrictEqual(a, b)) throw new Error(`会议出版冷核${label}不一致。`); };
     const read = (directory, name, expected, label) => {
         if (!/^[a-z0-9][a-z0-9._-]{0,159}\.json$/u.test(name || '')) throw new Error(`会议出版冷核${label}文件名无效。`);
         deps.staging.safeDirectory(directory);
         const result = deps.ledger.readRegularJson(deps.staging.safeDirectJson(directory, name));
+        pinnedFiles.push({ filename: path.join(directory, name), sha256: result.sha256 });
         if (expected) equal(result.sha256, expected, label + '文件SHA');
         return result;
     };
@@ -299,7 +301,9 @@ function verifyColdSourceChain(loaded, descriptor, deps) {
     for (const key of ['filterPolicySha256', 'selectionReceiptSha256', 'selectedMemberSetSha256']) {
         equal(run[key], receipt.filter[key], '运行筛选' + key); equal(binding[key], receipt.filter[key], '来源筛选' + key);
     }
-    retained.withOriginalPlanFile(path.join(deps.files.conferenceSourceLedgerDir, receipt.planName), receipt, deps, filename => {
+    const originalPlanFile = path.join(deps.files.conferenceSourceLedgerDir, receipt.planName);
+    pinnedFiles.push({ filename: originalPlanFile, sha256: deps.ledger.readRegularJson(originalPlanFile).sha256 });
+    retained.withOriginalPlanFile(originalPlanFile, receipt, deps, filename => {
         const plan = deps.plan.normalizePlan(deps.ledger.readRegularJson(filename).value);
         equal(plan.version, receipt.version, '计划版本'); equal(plan.ledgerName, receipt.ledger.name, '计划台账');
         equal(deps.plan.tagMetadataForPlan(plan), deps.plan.tagMetadataForReceipt(receipt), '原词表声明');
@@ -356,6 +360,7 @@ function verifyColdSourceChain(loaded, descriptor, deps) {
         equal(member[0][kind + 'Sha256'], expected, '本篇台账' + kind + 'SHA');
         const file = deps.ledger.safeArtifactPath(sourceRoot, member[0][kind + 'File']);
         cached[kind] = deps.discovery.safeAbsoluteFile(file, '原来源' + kind, deps.discovery.MAX_PDF_BYTES).bytes;
+        pinnedFiles.push({ filename: file, sha256: sha(cached[kind]) });
         equal(sha(cached[kind]), expected, '本篇真实' + kind + 'SHA');
         equal(snapshot.sourceBinding[kind === 'artifacts' ? 'artifactsFileSha256' : kind + 'Sha256'], expected, '原来源快照' + kind + 'SHA');
     }
@@ -364,7 +369,77 @@ function verifyColdSourceChain(loaded, descriptor, deps) {
         structuredArtifacts: deps.ledger.readRegularJson(deps.ledger.safeArtifactPath(sourceRoot, member[0].artifactsFile)).value,
         sourceBinding: snapshot.sourceBinding, tableAvailability: { available: false }, formulaAvailability: { available: false }, figureAvailability: { available: false } });
     equal(details, loaded.source.sourceDetails, '原来源全文与结构投影');
-    return { sourceRoot, bound };
+    return { sourceRoot, bound, cached };
+}
+
+function replayCanonicalReaderPdfSource(paper, sourceIdentity) {
+    const deps = require('./conference-process').defaultDependencies();
+    if (sourceIdentity?.contract !== 'conference-reader-pdf-source-v1'
+        || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u.test(sourceIdentity.executionId || '')) {
+        throw new Error('会议 PDF 表格冷核缺少原规范完成运行');
+    }
+    const loaded = deps.adapter.loadConferenceAnalysis({ analysisRoot: deps.files.conferenceAnalysisDir,
+        executionId: sourceIdentity.executionId });
+    const original = loaded.analysis.papers[0];
+    const expected = { contract: 'conference-reader-pdf-source-v1', paperId: loaded.run.paperId,
+        sourceSnapshotSha256: loaded.run.sourceSnapshotSha256,
+        rawStructuredArtifactsSha256: loaded.source.sourceSnapshotBinding.sourceBinding.artifactsPayloadSha256,
+        effectiveStructuredArtifactsSha256: loaded.source.sourceDetails.structuredArtifacts.payloadSha256,
+        sourceSnapshotBinding: loaded.source.sourceSnapshotBinding,
+        planAuthorityBinding: loaded.source.planAuthorityBinding, executionId: loaded.run.executionId };
+    if (!isDeepStrictEqual(sourceIdentity, expected) || !isDeepStrictEqual(paper.apiReaderPlan, original.apiReaderPlan)
+        || paper.apiReaderArticle !== original.apiReaderArticle || paper.sourceSha256 !== original.sourceSha256
+        || (paper.directPaperId || paper.id) !== loaded.run.paperId) throw new Error('会议 PDF 表格冷核与原完整 Reader 或来源不同');
+    const binding = loaded.source.planAuthorityBinding, conferenceId = loaded.run.conference.id;
+    const prefix = `${conferenceId}-${binding.selectionReceiptSha256.slice(0, 16)}-`;
+    const matches = fs.readdirSync(deps.files.conferenceRunsDir).filter(name => name.startsWith(prefix)
+        && name.endsWith('-run.plan-receipt.json')).map(name => ({ name,
+            ...deps.ledger.readRegularJson(path.join(deps.files.conferenceRunsDir, name)) }))
+        .filter(record => record.sha256 === binding.planReceiptFileSha256);
+    if (matches.length !== 1) throw new Error('会议 PDF 表格冷核缺少唯一原计划凭证');
+    const receipt = deps.plan.normalizeSecureReceipt(matches[0].value), stem = receipt.run.name.slice(0, -'-run.json'.length);
+    const roots = fs.readdirSync(deps.files.conferenceSourceCacheDir).filter(name => /^generation-[a-f0-9]{64}$/u.test(name)
+        && name.startsWith('generation-' + stem.slice(prefix.length)));
+    if (roots.length !== 1) throw new Error('会议 PDF 表格冷核缺少唯一原缓存 generation');
+    const staged = deps.ledger.readRegularJson(path.join(deps.files.conferenceStagingDir, stem + '-staging-receipt.json'));
+    const descriptor = { executionId: loaded.run.executionId, sourceGeneration: roots[0],
+        planReceiptSha256: receipt.receiptSha256, filterId: receipt.filter.filterId,
+        catalogName: sourceReference(deps.files.conferenceDiscoveryCatalogDir, staged.value.discovery.catalogSha256, conferenceId, deps),
+        reportName: sourceReference(deps.files.conferenceDiscoveryReportDir, staged.value.discovery.reportSha256, conferenceId, deps) };
+    const pinnedFiles = [];
+    const verified = verifyColdSourceChain(loaded, descriptor, deps, pinnedFiles);
+    const extractionFile = path.join(deps.files.conferenceStagingSourceDir, verified.bound.extractionReceiptName);
+    const extraction = deps.ledger.readRegularJson(extractionFile);
+    require('./conference-retained-source-replay').verifyRetainedExtraction({ paperId: loaded.run.paperId,
+        sourceIdentity: verified.bound.sourceIdentity, sourceProof: {
+            requestSha256: extraction.value.request?.sha256, receiptSha256: verified.bound.extractionReceiptSha256,
+            verificationSha256: verified.bound.extractionVerificationSha256, textSha256: verified.bound.textSha256,
+            artifactsSha256: verified.bound.artifactsSha256, pdfSha256: verified.bound.pdfSha256 } }, verified.bound, deps);
+    pinnedFiles.push({ filename: extractionFile, sha256: extraction.sha256 });
+    for (const [name, hash] of [['analysis.json', loaded.analysisFileSha256], ['run.json', loaded.runFileSha256], ['source.json', loaded.sourceFileSha256]]) {
+        pinnedFiles.push({ filename: path.join(loaded.directory, name), sha256: hash });
+    }
+    const assertUnchanged = () => {
+        for (const record of pinnedFiles) {
+            const bytes = deps.discovery.safeAbsoluteFile(record.filename, '会议 PDF 表格原来源', deps.discovery.MAX_PDF_BYTES).bytes;
+            if (sha(bytes) !== record.sha256) throw new Error('会议 PDF 表格冷核期间原凭证或来源字节改变');
+        }
+    };
+    assertUnchanged();
+    const handle = Object.freeze({});
+    canonicalReaderPdfSources.set(handle, { paperId: loaded.run.paperId, sourceText: loaded.source.sourceDetails.text,
+        sourceSnapshotSha256: loaded.run.sourceSnapshotSha256,
+        structuredArtifactsSha256: loaded.source.sourceDetails.structuredArtifacts.payloadSha256,
+        rawStructuredArtifactsSha256: expected.rawStructuredArtifactsSha256,
+        pdfSha256: verified.bound.pdfSha256, pdf: Buffer.from(verified.cached.pdf), sourceIdentity: structuredClone(expected), assertUnchanged });
+    return handle;
+}
+
+function readVerifiedPublicationReaderPdfSource(handle) {
+    const value = handle && canonicalReaderPdfSources.get(handle);
+    if (!value) return null;
+    value.assertUnchanged();
+    return { ...value, pdf: Buffer.from(value.pdf), sourceIdentity: structuredClone(value.sourceIdentity) };
 }
 
 function withPublicationEvidence(evidence, callback) {
@@ -396,4 +471,5 @@ function supplementalQuotes(paper, table, tableIndex) {
     return entriesFor(paper, table, tableIndex).map(entry => structuredClone(entry.pdfQuoteEvidence));
 }
 module.exports = { derivePublicationEvidence, withPublicationEvidence, headerUnitCoverage, numericCoverage,
+    replayCanonicalReaderPdfSource, readVerifiedPublicationReaderPdfSource,
     supplementalQuotes, exportPublicationEvidence, replayDescriptor, tableWindow, proseWindows };

@@ -224,7 +224,7 @@ function loadDirectAuthority({ planFile, registryFile, projectionFile, visualDis
     }
     const byEntry = new Map(registry.entries.map(entry => [entry.paperId, entry])); const byPath = new Map(); const stageProofs = [];
     for (const item of plan.queue.filter(item => !sample || selectedSet.has(item.paperId))) {
-        const active = byEntry.get(item.paperId); const manifest = runnerApi.replayDirectPageStaging({ item, active,
+        const active = byEntry.get(item.paperId); const manifest = runnerApi.replayDirectPageStaging({ plan, item, active,
             stagingRoot, executionRoot, freshArxivSourceRoot, publicationMetadataRoot, readPublicationMetadata });
         const relativeDirectory = path.relative(path.resolve(stagingRoot), path.resolve(active.staging.directory)).split(path.sep).join('/');
         if (!relativeDirectory || relativeDirectory.startsWith('..')) fail(`${item.paperId} 的暂存目录为空或超出配置的根目录`);

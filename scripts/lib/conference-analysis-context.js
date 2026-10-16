@@ -43,13 +43,33 @@ function withConferenceAnalysisSource(identity, callback) {
         && (!Number.isSafeInteger(identity.readerRetryEpoch) || identity.readerRetryEpoch < 1)) {
         throw new Error('Conference Reader retry epoch must be a positive safe integer');
     }
+    const parent = scope.getStore();
+    const inherited = parent?.readerPdfSourceHandle && parent.executionId === identity.executionId
+        && parent.paperId === identity.paperId
+        && stableHash(parent.sourceDetails) === stableHash(identity.sourceDetails)
+        ? parent.readerPdfSourceHandle : null;
+    const readerPdfSourceHandle = identity.readerPdfSourceHandle || inherited;
+    if (Object.hasOwn(identity, 'readerPdfSourceHandle') && !identity.readerPdfSourceHandle) {
+        throw new Error('Conference Reader PDF authority cannot be a boolean or empty descriptor');
+    }
+    if (readerPdfSourceHandle) {
+        const provider = require('./conference-source-context').readerPdfSourceForContext(readerPdfSourceHandle);
+        if (!provider || provider.paperId !== identity.paperId || provider.sourceText !== identity.sourceDetails.text
+            || provider.structuredArtifactsSha256 !== identity.sourceDetails.structuredArtifacts?.payloadSha256) {
+            throw new Error('Conference Reader PDF authority differs from the authenticated source');
+        }
+    }
+    const tableEvidence = require('./reader-authenticated-pdf-table-evidence');
     return scope.run(Object.freeze({ executionId: identity.executionId, executionDir: path.resolve(identity.executionDir), paperId: identity.paperId,
+        ...(readerPdfSourceHandle ? { readerPdfSourceHandle } : {}),
         sourceDetails: Object.freeze(clone(identity.sourceDetails)),
         // 显式的会议 --retry-failed 释放会开一个新的受限 Reader 身份。
         // 旧候选作为不可变的审计证据保留，而新的 epoch 让已耗尽的候选
         // 不至于在下次模型请求之前就被拒绝。
         ...(identity.readerRetryEpoch !== undefined
-            ? { readerRetryEpoch: identity.readerRetryEpoch } : {}) }), callback);
+            ? { readerRetryEpoch: identity.readerRetryEpoch } : {}) }), () => readerPdfSourceHandle
+        ? tableEvidence.withVerifiedSource(readerPdfSourceHandle, callback)
+        : tableEvidence.withoutVerifiedSource(callback));
 }
 function getConferenceAnalysisContext() { return scope.getStore() || null; }
 function getConferenceAnalysisSource(paper) {

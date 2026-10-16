@@ -7752,6 +7752,30 @@ def _reader_sealed_pdf_column_unit_coverage(paper, rendered, binding):
             for token in _api_reader_numeric_tokens(value)}
 
 
+def _replay_authenticated_pdf_table_bindings(paper):
+    """Only the shared private-FD worker can reopen a canonical authenticated source."""
+    node = shutil.which('node')
+    if not node:
+        raise PublishDataValidationError('PDF 表格原来源冷重放需要 Node.js。')
+    payload = _daily_fresh_compact_json_bytes({'paper': paper, 'authenticatedPdfTables': True})
+    if len(payload) > 128 * 1024 * 1024:
+        raise PublishDataValidationError('PDF 表格原来源冷重放输入超过上限。')
+    with tempfile.TemporaryFile() as source:
+        source.write(payload); source.flush(); source.seek(0)
+        result = _run_bounded_subprocess([node, str(SHARED_SCRIPTS_DIR / 'lib' / 'reader-resource-claims-replay-cli.js'),
+            str(source.fileno())], cwd=str(SHARED_SCRIPTS_DIR.parent),
+            env={key: value for key, value in os.environ.items() if key not in {'NODE_OPTIONS', 'NODE_PATH'}},
+            timeout_seconds=180, max_output_bytes=1024 * 1024, pass_fds=(source.fileno(),))
+    try:
+        response = json.loads(result.stdout)
+    except (ValueError, TypeError) as error:
+        raise PublishDataValidationError('PDF 表格原来源冷重放响应无效。') from error
+    if result.returncode != 0 or result.timed_out or result.output_truncated or response.get('verified') is not True \
+            or not isinstance(response.get('tableEvidence'), dict):
+        raise PublishDataValidationError('PDF 表格证明未由同一原规范来源冷重放。')
+    return response['tableEvidence']
+
+
 def _validate_api_reader_source_bindings(paper, article=None, *, publication_table_evidence=None):
     """按 v4 来源记录核对读者文章中的表格和公式，并返回核验结果。"""
     manifest = paper.get('analysisManifest') if isinstance(paper, dict) else None
@@ -7781,6 +7805,9 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
     formula_bindings = plan.get('formulaBindings')
     if not isinstance(table_bindings, list) or not isinstance(formula_bindings, list):
         raise PublishDataValidationError('读者文章的表格或公式来源记录必须是列表。')
+    if publication_table_evidence is None and any(isinstance(binding, dict)
+            and 'authenticatedPdfTableEvidence' in binding for binding in table_bindings):
+        publication_table_evidence = _replay_authenticated_pdf_table_bindings(paper)
     bindings_sha = _stable_json_sha256({
         'tableBindings': table_bindings,
         'formulaBindings': formula_bindings,
@@ -7827,8 +7854,11 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
     publication_tables = {}
     if publication_table_evidence is not None:
         evidence = publication_table_evidence
-        if (not isinstance(evidence, dict) or paper.get('source') != 'conference'
-                or evidence.get('paperId') != paper.get('id')
+        authenticated_pdf = isinstance(evidence, dict) and evidence.get('contract') == 'reader-authenticated-pdf-table-evidence-v1'
+        canonical_id = paper.get('directPaperId') or paper.get('id') if authenticated_pdf else paper.get('id')
+        if (not isinstance(evidence, dict) or (paper.get('source') != 'conference' and not authenticated_pdf)
+                or evidence.get('paperId') != canonical_id
+                or (authenticated_pdf and evidence.get('sourceTextSha256') != paper.get('sourceSha256'))
                 or evidence.get('readerArticleSha256') != _javascript_string_sha256(paper.get('apiReaderArticle', ''))
                 or evidence.get('readerPlanSha256') != paper.get('apiReaderPlanSha256')
                 or not isinstance(evidence.get('tables'), list)
@@ -7853,8 +7883,17 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
             'tableIndex', 'sourceType', 'sourceTableOrdinal',
             'renderedTableSha256', 'cellBindings', 'sourceQuotes',
         }
-        if not isinstance(binding, dict) or set(binding) not in (required, required | {'sealedPdfQuoteEvidence'}, required | {'sourceTableDomSha256'}, required | {'sourceTableDomSha256', 'pdfCellConfirmation'}, required | {'sourceTableDomSha256', 'sealedPdfTableEvidence'}):
+        if not isinstance(binding, dict) or set(binding) not in (required, required | {'sealedPdfQuoteEvidence'}, required | {'authenticatedPdfTableEvidence'}, required | {'sourceTableDomSha256'}, required | {'sourceTableDomSha256', 'pdfCellConfirmation'}, required | {'sourceTableDomSha256', 'sealedPdfTableEvidence'}):
             raise PublishDataValidationError(f'表格来源记录 tableBindings[{index - 1}] 格式无效、缺少必要字段，或含有不允许的字段。')
+        if 'authenticatedPdfTableEvidence' in binding:
+            proof = binding['authenticatedPdfTableEvidence']
+            replayed = publication_tables.get(index, {})
+            if (binding.get('sourceType') != 'source_quotes' or not isinstance(proof, dict)
+                    or proof.get('contract') != 'reader-authenticated-pdf-table-evidence-v1'
+                    or replayed.get('authenticatedPdfProofVerified') is not True
+                    or replayed.get('authenticatedPdfEvidenceSha256') != proof.get('evidenceSha256')
+                    or not re.fullmatch(r'[a-f0-9]{64}', str(proof.get('evidenceSha256') or ''))):
+                raise PublishDataValidationError('PDF 表格证明必须由同一原规范来源冷重放，不能仅凭 JSON 声明通过。')
         saved_rendered_table = saved_reader_tables[index - 1] \
             if index <= len(saved_reader_tables) else None
         if binding.get('tableIndex') != index or saved_rendered_table is None \
@@ -7910,7 +7949,7 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
             if len(seen) != expected_cells:
                 raise PublishDataValidationError(f'第 {index} 个表格仍有单元格缺少来源记录。')
         elif binding.get('sourceType') == 'source_quotes':
-            if set(binding) not in (required, required | {'sealedPdfQuoteEvidence'}) or binding.get('sourceTableOrdinal') is not None \
+            if set(binding) not in (required, required | {'sealedPdfQuoteEvidence'}, required | {'authenticatedPdfTableEvidence'}) or binding.get('sourceTableOrdinal') is not None \
                     or binding.get('cellBindings') != [] \
                     or not isinstance(binding.get('sourceQuotes'), list) \
                     or not (binding['sourceQuotes'] or pdf_quote_values.get(index)):
@@ -8002,7 +8041,7 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
     # The authenticated conference bridge checks table/formula quality here;
     # its renderer separately verifies every official conference figure/asset.
     # The legacy figure exception below is specific to sealed arXiv sources.
-    if publication_table_evidence is None:
+    if publication_table_evidence is None or paper.get('source') != 'conference':
         _validate_legacy_reader_figure_source(paper, plan, article, structured_sha, paper.get('sourceSha256'))
     return {
         'contract': LLM_API_READER_SOURCE_BINDING_CONTRACT,

@@ -145,6 +145,9 @@ describe('PDF 排版提取', () => {
         try {
             const pdfPath = writePdf(directory, [['Alpha table 1'], ['Beta formula y=x^2']]);
             const result = await pdfLayout.extractPdfLayoutFromPath(pdfPath);
+            const synchronous = pdfLayout.extractPdfLayoutFromPathSync(pdfPath);
+            assert.deepEqual(synchronous, result, '同步历史冷核必须复现异步分析的原全文、PDF 和视觉审计字节身份');
+            assert.equal(pdfLayout.stableHash(synchronous), pdfLayout.stableHash(result));
 
             assert.equal(result.contract, 'pdf-layout-extraction-result-v1');
             assert.equal(result.version, 1);

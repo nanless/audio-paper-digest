@@ -49,6 +49,116 @@ const fail = message => { throw new HistoricalDirectRewriteRunnerError(message);
 const sha256 = value => crypto.createHash('sha256').update(value).digest('hex');
 const clone = value => structuredClone(value);
 const persistenceScope = new AsyncLocalStorage();
+const historicalReaderPdfSources = new WeakMap();
+
+// Only this runner, after its ordinary plan/source replay, can mint a handle.
+// The exported reader below cannot turn paths or serialized records into one.
+function historicalReaderPdfSource({ plan, item, source, sourceDetails, descriptor, freshArxivSourceRoot, executionRoot }) {
+    if (item.route.kind === 'arxiv-fresh-fetch' && !Buffer.isBuffer(source?.pdf)) return null;
+    const expected = clone(descriptor), details = clone(sourceDetails), selected = clone(item);
+    const read = () => {
+        if (selected.route.kind === 'arxiv-fresh-fetch') {
+            const stored = freshArxiv.readFreshArxivRewriteSource({ rootDir: freshArxivSourceRoot,
+                arxivId: selected.route.arxivId, generation: expected.generation });
+            stored.paperId = selected.paperId;
+            if (stableHash(compactSourceDescriptor(selected.route.kind, stored, selected)) !== stableHash(expected)) {
+                fail('historical PDF capability differs from the original sealed arXiv source');
+            }
+            return stored.pdf;
+        }
+        planApi.verifyConferenceWriterInputs(selected);
+        const bytes = readRegular(selected.route.writerInputs[0].pdf.absolutePath, 512 * 1024 * 1024).bytes;
+        if (sha256(bytes) !== expected.pdfSha256 || bytes.subarray(0, 5).toString('ascii') !== '%PDF-') {
+            fail('historical PDF capability differs from the planned conference file');
+        }
+        return bytes;
+    };
+    const pdf = read();
+    if (sha256(details.text) !== expected.textSha256 || structuredArtifactsSha(details) !== expected.structuredArtifactsSha256
+        || sourceSnapshotSha(details) !== expected.sourceSnapshotSha256) fail('historical PDF capability source snapshot differs');
+    const handle = Object.freeze({});
+    const identity = { contract: 'historical-direct-reader-pdf-source-v1', planSha256: plan.planSha256,
+        runId: selected.runId, paperId: selected.paperId, route: selected.route.kind,
+        sourceDescriptor: expected };
+    historicalReaderPdfSources.set(handle, { paperId: selected.paperId, sourceText: details.text,
+        sourceSnapshotSha256: expected.sourceSnapshotSha256, structuredArtifactsSha256: expected.structuredArtifactsSha256,
+        pdfSha256: expected.pdfSha256, pdf: Buffer.from(pdf), sourceIdentity: identity,
+        scopeIdentity: { paperId: selected.paperId, runId: selected.runId, route: selected.route.kind,
+            sourceDetails: details, sourceSha256: expected.textSha256,
+            structuredArtifactsSha256: expected.structuredArtifactsSha256, sourceSnapshotSha256: expected.sourceSnapshotSha256,
+            readerAttemptsDir: path.join(path.resolve(executionRoot), selected.runId,
+                selected.route.kind === 'arxiv-fresh-fetch' ? expected.sourceRunIdentitySha256 : 'conference-local', 'reader-attempts'),
+            ...(selected.route.kind === 'arxiv-fresh-fetch' ? { sourceGeneration: expected.generation,
+                sourceManifestSha256: expected.sourceManifestSha256,
+                ...(expected.sourceVersion ? { sourceVersionIdentitySha256: expected.sourceVersion.identitySha256 } : {}) } : {}) },
+        assertUnchanged: () => { if (!read().equals(pdf)) fail('historical PDF capability source changed during use'); } });
+    return handle;
+}
+function readVerifiedHistoricalReaderPdfSource(handle) {
+    const value = handle && historicalReaderPdfSources.get(handle);
+    if (!value) return null;
+    value.assertUnchanged();
+    const { scopeIdentity, ...publicValue } = value;
+    return { ...publicValue, pdf: Buffer.from(value.pdf), sourceIdentity: clone(value.sourceIdentity) };
+}
+function withHistoricalReaderPdfSource(handle, callback) {
+    const value = handle && historicalReaderPdfSources.get(handle);
+    if (!value) fail('historical PDF source scope requires the real runner handle');
+    value.assertUnchanged();
+    return directContext.withDirectRewriteAnalysisSource({ ...value.scopeIdentity, readerPdfSourceHandle: handle }, callback);
+}
+
+async function replayHistoricalReaderPdfSource(paper, sourceIdentity) {
+    const files = require('../config').FILES;
+    if (sourceIdentity?.contract !== 'historical-direct-reader-pdf-source-v1'
+        || !SHA.test(sourceIdentity.planSha256 || '') || paper?.directPaperId !== sourceIdentity.paperId
+        || paper.freshRewriteProvenance?.runId !== sourceIdentity.runId) fail('historical PDF cold source identity is invalid');
+    const planRoot = safeDirectory(files.historicalDirectRewritePlanDir, false, 'historical plans');
+    const plans = [];
+    for (const name of fs.readdirSync(planRoot).filter(name => planApi.SAFE_NAME_RE.test(name))) {
+        const filename = path.join(planRoot, name), record = readRegular(filename);
+        const parsed = JSON.parse(record.bytes.toString('utf8'));
+        if (parsed.planSha256 !== sourceIdentity.planSha256) continue;
+        plans.push({ filename, record, plan: planApi.normalizePlan(parsed) });
+    }
+    if (plans.length !== 1) fail('historical PDF cold source lacks one original configured plan');
+    const selected = plans[0], plan = selected.plan;
+    const item = plan.queue.find(value => value.paperId === sourceIdentity.paperId && value.runId === sourceIdentity.runId);
+    if (!item || item.route.kind !== sourceIdentity.route) fail('historical PDF cold source is outside the original plan');
+    const registryRoot = safeDirectory(files.historicalDirectRewriteRegistryDir, false, 'historical registries');
+    const matches = [];
+    for (const name of fs.readdirSync(registryRoot).filter(name => new RegExp(`^${plan.planSha256}\\.arxiv-generation-[0-9]{6}\\.json$`).test(name))) {
+        const filename = path.join(registryRoot, name), record = readRegular(filename);
+        const registry = normalizeRegistry(JSON.parse(record.bytes.toString('utf8')), plan);
+        const active = registry.entries.find(value => value.paperId === item.paperId);
+        if (!['analysis_complete', 'staged'].includes(active?.status) || !active.analysis
+            || stableHash(active.source) !== stableHash(sourceIdentity.sourceDescriptor)) continue;
+        matches.push({ filename, record, active, generation: Number(name.match(/generation-([0-9]{6})/)[1]) });
+    }
+    if (matches.length !== 1) fail('historical PDF cold source lacks one completed original registry entry');
+    const chosen = matches[0];
+    safeDirectory(files.historicalDirectRewriteExecutionDir, false, 'historical completed executions');
+    safeDirectory(chosen.active.analysis.directory, false, 'historical canonical analysis');
+    const completed = await replayCompletedAnalysisForStaging({ plan, item, active: chosen.active,
+        generation: chosen.generation, executionRoot: files.historicalDirectRewriteExecutionDir,
+        freshArxivSourceRoot: files.freshArxivFetchedSourcesDir, readFreshArxivSource: freshArxiv.readFreshArxivRewriteSource });
+    const handle = completed.readerPdfSourceHandle, value = handle && historicalReaderPdfSources.get(handle);
+    const equal = require('node:util').isDeepStrictEqual;
+    if (!value || !equal(value.sourceIdentity, sourceIdentity)
+        || ['analysis', 'apiReaderArticle', 'apiReaderPlan', 'apiReaderResources', 'apiReaderAuthors',
+            'apiReaderFigures', 'sourceSha256', 'analysisManifest', 'freshRewriteProvenance']
+            .some(field => !equal(paper[field], completed.analysis[field]))) fail('historical PDF cold Reader differs from the saved canonical analysis');
+    const pins = [{ filename: selected.filename, sha256: selected.record.sha256 },
+        { filename: chosen.filename, sha256: chosen.record.sha256 },
+        { filename: path.join(chosen.active.analysis.directory, 'analysis.json'), sha256: chosen.active.analysis.analysisFileSha256 }];
+    const originalAssert = value.assertUnchanged;
+    value.assertUnchanged = () => {
+        originalAssert();
+        for (const pin of pins) if (readRegular(pin.filename).sha256 !== pin.sha256) fail('historical PDF cold canonical source changed');
+    };
+    value.assertUnchanged();
+    return handle;
+}
 function persistenceOperation(operation) {
     const mark = error => { persistenceScope.getStore()?.add(error); throw error; };
     try {
@@ -884,6 +994,9 @@ async function extractConferenceSource(item, dependencies = {}) {
         extractedText = String(layout.text || '');
         pdfVisualAudit = layout.visualAudit;
     }
+    return conferenceSourceFromLayout(item, source, pdf, extractedText, pdfVisualAudit, priorPreprint);
+}
+function conferenceSourceFromLayout(item, source, pdf, extractedText, pdfVisualAudit, priorPreprint) {
     const normalizedText = extractedText.replace(/\r\n?/g, '\n').trim();
     if (normalizedText.length < 100) fail(`${item.paperId} local PDF text is unusably short`);
     const readerAuthors = parseConferencePdfAuthors(normalizedText);
@@ -908,6 +1021,31 @@ async function extractConferenceSource(item, dependencies = {}) {
                 : ['测试注入文本未执行 PDF 视觉审计；生产路径禁止使用该分支。']),
             'PDF 没有原始 TeX；公式只能以页面像素和抽取文本复核，不能自动宣称已恢复可发布 TeX。'
         ] } };
+}
+
+function replayHistoricalReaderPdfSourceForStaging({ plan, item, sourceDescriptor, executionRoot,
+    freshArxivSourceRoot }) {
+    let source;
+    if (item.route.kind === 'arxiv-fresh-fetch') {
+        source = freshArxiv.readFreshArxivRewriteSource({ rootDir: freshArxivSourceRoot,
+            arxivId: item.route.arxivId, generation: sourceDescriptor.generation });
+    } else {
+        planApi.verifyConferenceWriterInputs(item);
+        const selected = conferenceLocalSources.validateSource(item.route.writerInputs[0], item.paperId);
+        const pdf = readRegular(selected.pdf.absolutePath, 512 * 1024 * 1024);
+        if (pdf.sha256 !== selected.pdf.sha256 || pdf.bytes.subarray(0, 5).toString('ascii') !== '%PDF-') fail('historical PDF changed before cold replay');
+        const layout = pdfLayout.extractPdfLayoutFromPathSync(selected.pdf.absolutePath);
+        if (layout.pdfSha256 !== pdf.sha256) fail('historical PDF changed during cold replay');
+        source = conferenceSourceFromLayout(item, selected, pdf, layout.text, layout.visualAudit,
+            priorPreprintAnalysisDisclosure(selected, item));
+    }
+    source.paperId = item.paperId;
+    const sourceDetails = source.sourceDetails || source.runtimeDetails || fallbackArxivDetails(source);
+    if (stableHash(compactSourceDescriptor(item.route.kind, source, item)) !== stableHash(sourceDescriptor)) {
+        fail('historical PDF cold replay no longer reproduces the original source descriptor');
+    }
+    return { sourceDetails, readerPdfSourceHandle: historicalReaderPdfSource({ plan, item, source,
+        sourceDetails, descriptor: sourceDescriptor, freshArxivSourceRoot, executionRoot }) };
 }
 
 async function ephemeralArxivMaterializer(arxivId, figures, dependencies = {}) {
@@ -1231,7 +1369,7 @@ function recoverInterruptedRegistryEntry({ registry, plan, item, generation, exe
     return { registry: next, audit };
 }
 
-async function replayCompletedAnalysisForStaging({ item, active, generation, executionRoot,
+async function replayCompletedAnalysisForStaging({ plan, item, active, generation, executionRoot,
     freshArxivSourceRoot, readFreshArxivSource }) {
     const sourceDescriptor = validateInterruptedSourceDescriptor(item, active.source, generation);
     let sourceDetails = null;
@@ -1281,8 +1419,21 @@ async function replayCompletedAnalysisForStaging({ item, active, generation, exe
             fail(`${item.paperId} completed analysis recovery receipt drifted`);
         }
     }
-    assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis, sourceDetails });
-    return { sourceDescriptor, sourceDetails, analysis };
+    let readerPdfSourceHandle = null;
+    if ((analysis.apiReaderPlan?.tableBindings || []).some(binding => binding.authenticatedPdfTableEvidence !== undefined)) {
+        const source = item.route.kind === 'arxiv-fresh-fetch'
+            ? await freshArxiv.readFreshArxivRewriteSource({ rootDir: freshArxivSourceRoot,
+                arxivId: item.route.arxivId, generation }) : await extractConferenceSource(item);
+        source.paperId = item.paperId;
+        sourceDetails = source.sourceDetails || source.runtimeDetails || fallbackArxivDetails(source);
+        if (stableHash(compactSourceDescriptor(item.route.kind, source, item)) !== stableHash(sourceDescriptor)) {
+            fail('completed historical PDF source no longer reproduces its original descriptor');
+        }
+        readerPdfSourceHandle = historicalReaderPdfSource({ plan, item, source, sourceDetails,
+            descriptor: sourceDescriptor, freshArxivSourceRoot, executionRoot });
+    }
+    assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis, sourceDetails, readerPdfSourceHandle });
+    return { sourceDescriptor, sourceDetails, analysis, readerPdfSourceHandle };
 }
 
 function resealCompletedAnalysisSurfaceRepair({ item, active, completed, now,
@@ -1295,7 +1446,7 @@ function resealCompletedAnalysisSurfaceRepair({ item, active, completed, now,
         return { ...completed, surfaceRepair: null, analysisReceipt: active.analysis };
     }
     assertDirectAnalysisReadyForStaging({ item, sourceDescriptor: completed.sourceDescriptor,
-        analysis: completed.analysis, sourceDetails: completed.sourceDetails });
+        analysis: completed.analysis, sourceDetails: completed.sourceDetails, readerPdfSourceHandle: completed.readerPdfSourceHandle });
     const analysisFile = path.join(active.analysis.directory, 'analysis.json');
     const analysisFileSha256 = writeAtomic(analysisFile, completed.analysis);
     const analysisRecordSha256 = stableHash(completed.analysis);
@@ -1321,7 +1472,11 @@ function resealCompletedAnalysisSurfaceRepair({ item, active, completed, now,
     };
 }
 
-function assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis, sourceDetails = null }) {
+function assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis, sourceDetails = null, readerPdfSourceHandle = null }) {
+    if (readerPdfSourceHandle && (analysis?.apiReaderPlan?.tableBindings || []).some(binding => binding.authenticatedPdfTableEvidence !== undefined)) {
+        return withHistoricalReaderPdfSource(readerPdfSourceHandle,
+            () => assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis, sourceDetails }));
+    }
     if (!analysis || typeof analysis !== 'object' || Array.isArray(analysis)
         || analysis.directPaperId !== item.paperId) {
         fail(`${item.paperId} analysis is not bound to the direct execution identity`);
@@ -1364,9 +1519,10 @@ function assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis,
 }
 
 function stageDirectExecution({ plan, registry, item, sourceDescriptor, sourceDetails = null,
+    readerPdfSourceHandle = null,
     analysis, stagingRoot, freshArxivSourceRoot = null, publicationMetadataRoot = null,
     dependencies = {} }) {
-    assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis, sourceDetails });
+    assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis, sourceDetails, readerPdfSourceHandle });
     const publicationSource = publicationSourceFor(item, sourceDetails, sourceDescriptor, {
         freshArxivSourceRoot, publicationMetadataRoot,
         readPublicationMetadata: dependencies.readPublicationMetadata
@@ -1417,12 +1573,12 @@ function stageDirectExecution({ plan, registry, item, sourceDescriptor, sourceDe
                 (dependencies.writeExact || require('./paper-page-staging.js').writeExact)(filename, bytes)),
             createDirectory: operation => persistenceOperation(operation),
             assertCompleteAnalysis: candidate =>
-            assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis: candidate, sourceDetails }) } });
+            assertDirectAnalysisReadyForStaging({ item, sourceDescriptor, analysis: candidate, sourceDetails, readerPdfSourceHandle }) } });
     return { directory, stagingBindingSha256: body.stagingBindingSha256, analysisArtifact: artifact,
         pageStaging: directPages.receipt(pageManifest) };
 }
 
-function replayDirectPageStaging({ item, active, stagingRoot, executionRoot,
+function replayDirectPageStaging({ plan, item, active, stagingRoot, executionRoot,
     freshArxivSourceRoot = null, publicationMetadataRoot = null, readPublicationMetadata = null }) {
     const staging = active?.staging;
     if (!staging?.pageStaging || !staging.analysisArtifact || !active?.source || !active?.analysis) {
@@ -1465,13 +1621,21 @@ function replayDirectPageStaging({ item, active, stagingRoot, executionRoot,
         }
         sourceDetails = stored.runtimeDetails || fallbackArxivDetails(stored);
     }
+    let readerPdfSourceHandle = null;
+    if ((analysis.apiReaderPlan?.tableBindings || []).some(binding => binding.authenticatedPdfTableEvidence !== undefined)) {
+        if (!plan || plan.queue?.find(value => value.paperId === item.paperId)?.runId !== item.runId) fail('historical PDF staged replay lacks the real original plan');
+        const replayed = replayHistoricalReaderPdfSourceForStaging({ plan, item, sourceDescriptor: active.source,
+            executionRoot, freshArxivSourceRoot });
+        sourceDetails = replayed.sourceDetails; readerPdfSourceHandle = replayed.readerPdfSourceHandle;
+    }
     const manifest = directPages.validateManifest({
         value: JSON.parse(readRegular(path.join(directory, 'page-staging-manifest.json')).bytes.toString('utf8')),
         item, sourceDescriptor: active.source, publicationSource: body.publicationSource,
         artifact: staging.analysisArtifact, analysis,
         stagingInputSha256: stagingInput.sha256, stagingBindingSha256: body.stagingBindingSha256, directory,
         rendererImplementationSha256: staging.pageStaging.rendererImplementationSha256,
-        assertCompleteAnalysis: candidate => assertDirectAnalysisReadyForStaging({ item, sourceDescriptor: active.source, analysis: candidate, sourceDetails })
+        assertCompleteAnalysis: candidate => assertDirectAnalysisReadyForStaging({ item, sourceDescriptor: active.source,
+            analysis: candidate, sourceDetails, readerPdfSourceHandle })
     });
     if (stableHash(directPages.receipt(manifest)) !== stableHash(staging.pageStaging)) {
         fail(`${item.paperId} staged page receipt drifted`);
@@ -1592,7 +1756,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             const replayFromStatus = active.status;
             let completed;
             try {
-                completed = await replayCompletedAnalysisForStaging({ item, active,
+                completed = await replayCompletedAnalysisForStaging({ plan, item, active,
                     generation: arxivGeneration, executionRoot: options.executionRoot,
                     freshArxivSourceRoot: options.freshArxivSourceRoot, readFreshArxivSource });
                 completed = resealCompletedAnalysisSurfaceRepair({ item, active, completed, now: clock(),
@@ -1629,6 +1793,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             try {
                 const staging = stageDirectExecution({ plan, registry, item,
                     sourceDescriptor: completed.sourceDescriptor, sourceDetails: completed.sourceDetails,
+                    readerPdfSourceHandle: completed.readerPdfSourceHandle,
                     analysis: completed.analysis,
                     stagingRoot: options.stagingRoot, freshArxivSourceRoot: options.freshArxivSourceRoot,
                     publicationMetadataRoot: options.publicationMetadataRoot, dependencies });
@@ -1710,7 +1875,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                     // 和每个本地 PDF，跟不可改的计划值重新算哈希比对。
                     planApi.verifyConferenceWriterInputs(item);
                 }
-                replayDirectPageStaging({ item, active, stagingRoot: options.stagingRoot, executionRoot: options.executionRoot,
+                replayDirectPageStaging({ plan, item, active, stagingRoot: options.stagingRoot, executionRoot: options.executionRoot,
                     freshArxivSourceRoot: options.freshArxivSourceRoot,
                     publicationMetadataRoot: options.publicationMetadataRoot,
                     readPublicationMetadata: dependencies.readPublicationMetadata });
@@ -1741,6 +1906,8 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                 source.paperId = item.paperId; sourceDetails = source.runtimeDetails || fallbackArxivDetails(source);
             } else { source = await extractConferenceSource(item, dependencies); sourceDetails = source.sourceDetails; }
             descriptor = compactSourceDescriptor(item.route.kind, source, item);
+            const readerPdfSourceHandle = historicalReaderPdfSource({ plan, item, source, sourceDetails,
+                descriptor, freshArxivSourceRoot: options.freshArxivSourceRoot, executionRoot: options.executionRoot });
             registry = transition(registry, plan, item.paperId, 'source_ready', { source: descriptor }, clock()); persist();
             let publicationMetadataAuthors;
             if (item.route.kind === 'arxiv-fresh-fetch') {
@@ -1771,6 +1938,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             // 都能看到，直到操作系统临时目录里的渲染结果被清理。
             const invokeAnalysis = supplementaryReaderImages => directContext.withDirectRewriteAnalysisSource({ paperId: item.paperId,
                 runId: item.runId, route: item.route.kind, sourceDetails: clone(sourceDetails),
+                ...(readerPdfSourceHandle ? { readerPdfSourceHandle } : {}),
                 sourceSha256: descriptor.textSha256, structuredArtifactsSha256: descriptor.structuredArtifactsSha256,
                 sourceSnapshotSha256: descriptor.sourceSnapshotSha256,
                 ...(executionDependencies.historicalDirectRetryEpoch !== undefined
@@ -1797,7 +1965,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
             // 保存分析文件前先检查结果是否满足暂存要求，stageDirectExecution
             // 内部也会检查。引擎返回 failed/partial 时，将失败或可恢复状态写入
             // registry，不接受为本次成功分析，也不据此生成新的暂存页面。
-            assertDirectAnalysisReadyForStaging({ item, sourceDescriptor: descriptor, analysis, sourceDetails });
+            assertDirectAnalysisReadyForStaging({ item, sourceDescriptor: descriptor, analysis, sourceDetails, readerPdfSourceHandle });
             const analysisFile = path.join(executionDir, 'analysis.json');
             const analysisFileSha256 = writeAtomic(analysisFile, analysis);
             const analysisRecovery = readAnalysisRecovery({ executionDirectory: executionDir, item,
@@ -1809,7 +1977,7 @@ async function runDirectRewriteLocked({ options, plan, registryFile, pauseFile,
                     recordSha256: analysisRecovery.recordSha256, updatedAt: analysisRecovery.updatedAt } } : {}) },
                 analysisRecovery: undefined }, clock()); persist();
             const staging = stageDirectExecution({ plan, registry, item, sourceDescriptor: descriptor,
-                sourceDetails, analysis,
+                sourceDetails, analysis, readerPdfSourceHandle,
                 stagingRoot: options.stagingRoot, freshArxivSourceRoot: options.freshArxivSourceRoot,
                 publicationMetadataRoot: options.publicationMetadataRoot,
                 dependencies: executionDependencies });
@@ -1997,6 +2165,8 @@ async function runDirectRewrite(options = {}, dependencies = {}) {
 }
 
 module.exports = { CONTRACT, REGISTRY_CONTRACT, STAGING_CONTRACT, ANALYSIS_RECOVERY_CONTRACT,
+    readVerifiedHistoricalReaderPdfSource,
+    replayHistoricalReaderPdfSource,
     PUBLICATION_SOURCE_CONTRACT,
     HistoricalDirectRewriteRunnerError, stableHash, safeErrorText, globalAccountFailure, bounded,
     STATES, registryName, registryPath, defaultPauseFilePath, operationLockTarget, pauseFileRequested, selectDirectItems,

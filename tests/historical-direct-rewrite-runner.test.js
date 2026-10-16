@@ -1679,6 +1679,34 @@ test('默认运行器引擎让会议 PDF 页面贯穿嵌套的分析和 Reader �
     assert.deepEqual(fs.readdirSync(temporaryRoot), []);
 });
 
+test('历史正常runner只以真实计划PDF签发私有表格来源，JSON与运行中PDF漂移不能冒充', async t => {
+    const f = fixture(t); let checked = false;
+    const result = await runner.runDirectRewrite({ apply: true, plan: f.plan, ...files(f.root), queue: 'conference' }, {
+        extractPdfText: async () => 'Controlled historical PDF source '.repeat(100),
+        materializeConferenceFigures: async () => [],
+        analyze: async ({ item, sourceDescriptor, sourceDetails }) => {
+            const active = context.getDirectRewriteAnalysisContext();
+            const source = context.readVerifiedHistoricalReaderPdfSource(active.readerPdfSourceHandle);
+            assert.ok(source); assert.equal(source.paperId,item.paperId);
+            assert.equal(source.sourceText,sourceDetails.text);
+            assert.equal(source.sourceSnapshotSha256,sourceDescriptor.sourceSnapshotSha256);
+            assert.equal(source.pdfSha256,item.route.writerInputs[0].pdf.sha256);
+            assert.equal(source.sourceIdentity.planSha256,f.plan.planSha256);
+            assert.equal(context.readVerifiedHistoricalReaderPdfSource({...source.sourceIdentity}),null);
+            assert.throws(() => context.withDirectRewriteAnalysisSource({...active,
+                readerPdfSourceHandle:{...source.sourceIdentity}},()=>true),/真实|source|来源|handle/);
+            const pdf = item.route.writerInputs[0].pdf.absolutePath, original=fs.readFileSync(pdf);
+            try {
+                fs.appendFileSync(pdf,'changed');
+                assert.throws(()=>context.readVerifiedHistoricalReaderPdfSource(active.readerPdfSourceHandle),/PDF|规划|变化/);
+            } finally { fs.writeFileSync(pdf,original); }
+            checked = true; throw new Error('fixture stops before paid analysis');
+        }
+    });
+    assert.equal(checked,true); assert.equal(result.results[0].status,'failed');
+    assert.match(result.results[0].error,/fixture stops before paid analysis/);
+});
+
 test('已保存并核验的历史直连作用域注入不透明的旧版锁凭证，并把审计记录一并保存并核验', async t => {
     const f = fixture(t); const item = f.plan.queue.find(entry => entry.route.kind === 'arxiv-fresh-fetch');
     const executionDirectory = path.join(f.root, 'runtime', 'execution');

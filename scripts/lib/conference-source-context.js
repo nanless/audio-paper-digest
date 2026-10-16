@@ -33,6 +33,7 @@ const MAX_METADATA_BYTES = 16 * 1024 * 1024;
 const MAX_TEXT_BYTES = 64 * 1024 * 1024;
 const MAX_ARTIFACT_BYTES = 64 * 1024 * 1024;
 const SHA_RE = /^[a-f0-9]{64}$/;
+const READER_PDF_SOURCE_CONTEXTS = new WeakMap();
 
 class ConferenceSourceContextError extends Error {
     constructor(message, { code = 'CONFERENCE_SOURCE_CONTEXT_INTEGRITY', reasonCode = 'integrity_failure' } = {}) {
@@ -111,6 +112,7 @@ function rejectDuplicateJsonKeys(source, label) {
 }
 
 function readBoundBytes(sourceRoot, relativePath, expectedSha256, limit, label) {
+    if (!Number.isSafeInteger(limit) || limit < 1) integrity(`${label} 缺少有效字节上限`, 'invalid_source_limit');
     let filename;
     try { filename = ledgerApi.safeArtifactPath(sourceRoot, relativePath); }
     catch (error) { integrity(`${label} 路径未通过安全检查： ${error.message}`, 'unsafe_source_path'); }
@@ -122,8 +124,12 @@ function readBoundBytes(sourceRoot, relativePath, expectedSha256, limit, label) 
             || opened.dev !== named.dev || opened.ino !== named.ino || opened.size > limit) {
             integrity(`${label} 必须是只有一个硬链接、且大小不超过限制的普通文件，打开的文件还须与路径检查的文件相同`, 'unsafe_source_file');
         }
-        const bytes = fs.readFileSync(fd);
-        if (bytes.length !== opened.size) integrity(`${label} 读取时文件字节数发生变化`, 'source_changed_during_read');
+        const bytes = fs.readFileSync(fd), after = fs.fstatSync(fd), afterNamed = fs.lstatSync(filename);
+        if (bytes.length !== opened.size || !after.isFile() || !afterNamed.isFile() || afterNamed.isSymbolicLink()
+            || ['dev', 'ino', 'mode', 'nlink', 'size', 'mtimeMs', 'ctimeMs'].some(key =>
+                opened[key] !== after[key] || after[key] !== afterNamed[key])) {
+            integrity(`${label} 读取时文件身份或字节发生变化`, 'source_changed_during_read');
+        }
         if (!SHA_RE.test(String(expectedSha256 || '')) || sha256(bytes) !== expectedSha256) {
             integrity(`${label} SHA-256 格式无效，或与已核验来源清单记录的值不一致`, 'source_sha_drift');
         }
@@ -387,10 +393,13 @@ function buildConferenceSourceContextFromLedger(input = {}, productionBinding = 
     if (!member || member.status.state !== 'verified') {
         integrity('运行记录的来源身份必须对应来源清单中唯一的已核验成员', 'source_identity_invalid');
     }
-    let pdfSource;
+    let pdfSource, readerPdfBytes;
     try {
         pdfSource = pdfApi.buildConferencePdfSourceFromLedger({ sourceRoot: input.sourceRoot,
-            ledgerHandle: input.ledgerHandle, identityKey: runMember.sourceIdentity });
+            ledgerHandle: input.ledgerHandle, identityKey: runMember.sourceIdentity,
+            // Capture the same already SHA-verified bytes, without claiming a
+            // new structured extraction or changing the original descriptor.
+            extractPdf: ({ pdfBytes }) => { readerPdfBytes = Buffer.from(pdfBytes); } });
     } catch (error) {
         integrity(`按来源清单重新读取并核验 PDF 失败： ${error.message}`, 'pdf_source_invalid');
     }
@@ -450,7 +459,55 @@ function buildConferenceSourceContextFromLedger(input = {}, productionBinding = 
         figurePolicy: 'no_external_fetch', sourceOnly: true,
         productionAuthorization: { authorized: true, binding: productionBinding }
     };
-    return deepFreeze(body);
+    const result = deepFreeze(body);
+    READER_PDF_SOURCE_CONTEXTS.set(result, { pdf: readerPdfBytes, sourceRoot: input.sourceRoot,
+        ledgerHandle: input.ledgerHandle, member, productionBinding });
+    return result;
+}
+
+// Only the actual immutable result of the authenticated builder has this
+// capability. A persisted object, JSON clone or caller-supplied boolean has none.
+function readerPdfSourceForContext(handle) {
+    const stored = handle && READER_PDF_SOURCE_CONTEXTS.get(handle);
+    if (!stored) {
+        const historical = require('./direct-rewrite-analysis-context');
+        const fromHistory = historical.readVerifiedHistoricalReaderPdfSource?.(handle);
+        if (fromHistory) return fromHistory;
+        const publication = require('./conference-reader-publication-evidence');
+        return publication.readVerifiedPublicationReaderPdfSource?.(handle) || null;
+    }
+    const effectiveArtifactsSha256 = stored.effectiveArtifactsSha256 ||=
+        require('./conference-analysis-adapter').sourceDetails(handle).structuredArtifacts.payloadSha256;
+    const sourceIdentity = { contract: 'conference-reader-pdf-source-v1', paperId: handle.paperId,
+        sourceSnapshotSha256: handle.sourceSnapshotSha256,
+        rawStructuredArtifactsSha256: handle.structuredArtifacts.payloadSha256,
+        effectiveStructuredArtifactsSha256: effectiveArtifactsSha256,
+        sourceSnapshotBinding: clone(handle.sourceSnapshotBinding),
+        planAuthorityBinding: clone(stored.productionBinding) };
+    const active = require('./conference-analysis-context').getConferenceAnalysisContext();
+    if (active?.readerPdfSourceHandle === handle && active.paperId === handle.paperId
+        && active.executionId) sourceIdentity.executionId = active.executionId;
+    const assertUnchanged = () => {
+        // No stat-only cache: every actual table derivation rechecks the real
+        // member files and PDF against the original ledger-bound source SHA.
+        const ledger = ledgerApi.ledgerHandleReadOnlyView(stored.ledgerHandle);
+        readBoundBytes(require('node:path').dirname(ledger.filename), require('node:path').basename(ledger.filename),
+            ledger.ledgerSha256, MAX_ARTIFACT_BYTES, 'PDF取证原台账');
+        const member = ledgerApi.ledgerHandleReadOnlyMember(stored.ledgerHandle, handle.identity.key);
+        if (!member || stableHash(member) !== stableHash(stored.member)) integrity('PDF取证的原台账成员已变化');
+        for (const [field, hashField, limit, label] of [
+            ['metadataFile', 'metadataSha256', MAX_METADATA_BYTES, 'PDF取证元数据'],
+            ['textFile', 'textSha256', MAX_TEXT_BYTES, 'PDF取证全文'],
+            ['artifactsFile', 'artifactsSha256', MAX_ARTIFACT_BYTES, 'PDF取证抽取记录'],
+            ['pdfFile', 'pdfSha256', pdfApi.DEFAULT_MAX_PDF_BYTES, 'PDF取证原PDF']
+        ]) readBoundBytes(stored.sourceRoot, member[field], member[hashField], limit, label);
+    };
+    return { paperId: handle.paperId, sourceText: handle.text,
+        sourceSnapshotSha256: handle.sourceSnapshotSha256,
+        structuredArtifactsSha256: effectiveArtifactsSha256,
+        rawStructuredArtifactsSha256: handle.structuredArtifacts.payloadSha256,
+        pdfSha256: handle.sourceBinding.pdfSha256, pdf: Buffer.from(stored.pdf),
+        sourceIdentity, assertUnchanged };
 }
 
 function buildConferenceSourceContext(input = {}) {
@@ -485,6 +542,6 @@ module.exports = {
     CONTRACT, VERSION, ARTIFACT_CONTRACT, ARTIFACT_VERSION, REPLAYABLE_PROFILE, WEAK_PROFILE,
     UNAVAILABLE_PROFILE, OFFSET_UNIT, SOURCE_SNAPSHOT_BINDING_CONTRACT, OBSERVATION_BINDING_CONTRACT,
     PLAN_AUTHORITY_BINDING_CONTRACT, PDF_EXTRACTION_RECEIPT_CONTRACT, MIN_TEXT_CHARS,
-    ConferenceSourceContextError, buildConferenceSourceContext,
+    ConferenceSourceContextError, buildConferenceSourceContext, readerPdfSourceForContext,
     stableHash
 };

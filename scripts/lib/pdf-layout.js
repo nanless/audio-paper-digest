@@ -7,7 +7,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFile } = require('node:child_process');
+const { execFile, execFileSync } = require('node:child_process');
 const { promisify } = require('node:util');
 
 const execFileAsync = promisify(execFile);
@@ -99,6 +99,24 @@ async function extractPdfLayoutFromPath(pdfPath, options = {}) {
     return options.extract(pdfPath);
 }
 
+// Historical publication has a synchronous, read-only authority replay. Use the
+// identical backend and validation there instead of trusting saved text/JSON.
+function extractPdfLayoutFromPathSync(pdfPath, options = {}) {
+    if (typeof pdfPath !== 'string' || !path.isAbsolute(pdfPath)) fail('PDF 路径必须是绝对路径');
+    let result;
+    try {
+        result = parseJson(execFileSync(PYTHON_RUNTIME, [PYTHON_RUNTIME_SCRIPT, PYTHON_SCRIPT,
+            'extract', '--pdf', pdfPath], { cwd: PROJECT_ROOT,
+            timeout: options.timeoutMs || 180000, maxBuffer: 64 * 1024 * 1024 }), 'PyMuPDF 辅助脚本');
+    } catch (error) { fail(String(error?.stderr || error?.message || error).trim().slice(0, 1200)); }
+    if (result.backend?.name !== 'pymupdf' || !SHA256.test(String(result.pdfSha256 || ''))
+        || !SHA256.test(String(result.textSha256 || '')) || typeof result.text !== 'string') {
+        fail('提取结果不完整：backend.name、pdfSha256、textSha256 或 text 有一项不对');
+    }
+    validateVisualAudit(result.visualAudit);
+    return result;
+}
+
 async function extractPdfLayoutFromBytes(bytes, options = {}) {
     const payload = Buffer.from(bytes || []);
     if (payload.length < 5 || payload.subarray(0, 5).toString('ascii') !== '%PDF-') {
@@ -131,5 +149,5 @@ async function renderPdfPages(pdfPath, directory, pages, options = {}) {
     return result.files;
 }
 
-module.exports = { extractPdfLayoutFromPath, extractPdfLayoutFromBytes, renderPdfPages,
+module.exports = { extractPdfLayoutFromPath, extractPdfLayoutFromPathSync, extractPdfLayoutFromBytes, renderPdfPages,
     validateVisualAudit, stableHash };

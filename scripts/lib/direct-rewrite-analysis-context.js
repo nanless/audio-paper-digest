@@ -91,6 +91,15 @@ function withDirectRewriteAnalysisSource(identity, callback) {
             || !SHA.test(String(identity.sourceManifestSha256 || '')))) {
         fail('arXiv 直改来源凭证缺少 generation 或 manifest SHA');
     }
+    const readerPdfSourceHandle = identity.readerPdfSourceHandle;
+    if (readerPdfSourceHandle !== undefined) {
+        const pdf = readVerifiedHistoricalReaderPdfSource(readerPdfSourceHandle);
+        if (!pdf || !hasRunId || pdf.paperId !== id || pdf.sourceIdentity.runId !== identity.runId
+            || pdf.sourceIdentity.route !== identity.route || pdf.sourceText !== sourceDetails.text
+            || pdf.sourceSnapshotSha256 !== identity.sourceSnapshotSha256
+            || pdf.structuredArtifactsSha256 !== identity.structuredArtifactsSha256
+            || sha256(pdf.sourceText) !== identity.sourceSha256) fail('PDF 表格来源能力不是同一真实历史运行和封存来源');
+    }
     if (identity.sourceVersionIdentitySha256 !== undefined
         && (identity.route !== 'arxiv-fresh-fetch' || !SHA.test(String(identity.sourceVersionIdentitySha256 || '')))) {
         fail('直改来源的版本凭证不合法：路线不是 arXiv，或 SHA 格式不对');
@@ -117,6 +126,7 @@ function withDirectRewriteAnalysisSource(identity, callback) {
         fail('补充 Reader 图像不合法：rawBytes、mediaType 或 assetSha256 不符合要求');
     }
     const context = Object.freeze({ paperId: id, sourceDetails: Object.freeze(sourceDetails), readerAttemptsDir,
+        ...(readerPdfSourceHandle !== undefined ? { readerPdfSourceHandle } : {}),
         materializeReaderFigures: identity.materializeReaderFigures || null,
         // 历史直改会先保存已完成的 Reader 阶段，再停用可恢复的已接受草稿。
         // 日更和旧调用方仍立即停用草稿，除非显式启用同样的延后处理。
@@ -142,7 +152,13 @@ function withDirectRewriteAnalysisSource(identity, callback) {
                 } : {}) } : {}) } : {}),
         route: identity.route === 'arxiv-fresh-fetch' || identity.route === 'conference-local-pdf'
             ? identity.route : fail('来源路线不合法：只接受 arxiv-fresh-fetch 或 conference-local-pdf') });
-    return scope.run(context, callback);
+    return scope.run(context, () => readerPdfSourceHandle !== undefined
+        ? require('./reader-authenticated-pdf-table-evidence').withVerifiedSource(readerPdfSourceHandle, callback)
+        : require('./reader-authenticated-pdf-table-evidence').withoutVerifiedSource(callback));
+}
+
+function readVerifiedHistoricalReaderPdfSource(handle) {
+    return require('./historical-direct-rewrite-runner').readVerifiedHistoricalReaderPdfSource(handle);
 }
 
 function getDirectRewriteAnalysisContext() { return scope.getStore() || null; }
@@ -259,6 +275,7 @@ function assertNoPersistentFigureFields(value) {
 }
 
 module.exports = { PROVENANCE_CONTRACT, EPHEMERAL_FIGURE_PERSISTENCE_CONTRACT,
+    readVerifiedHistoricalReaderPdfSource,
     withDirectRewriteAnalysisSource, getDirectRewriteAnalysisContext, getDirectRewriteSource,
     directReaderAttemptsDirectory, directReaderMaterializer, directPrimaryImageDownloader, stripEphemeralFigureFields,
     directReaderCandidateCommitDeferred,

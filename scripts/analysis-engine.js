@@ -1096,7 +1096,8 @@ function hasValidApiReaderV3Records(paper, options = {}) {
             require('./lib/reader-table-pdf-evidence').withSavedPaper(paper,
                 () => require('./lib/reader-sealed-pdf-quote-evidence').withSavedPaper(paper,
                     () => require('./lib/reader-source-table-column-units').withSavedPaper(paper,
-                        () => hasValidApiReaderV3RecordsUnchecked(paper, options)))));
+                        () => require('./lib/reader-authenticated-pdf-table-evidence').withSavedPaper(paper,
+                            () => hasValidApiReaderV3RecordsUnchecked(paper, options))))));
     } catch (error) {
         if (Array.isArray(options.diagnostics)) options.diagnostics.push({
             check: 'saved_evidence_replay', message: String(error?.message || error).slice(0, 2000) });

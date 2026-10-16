@@ -256,6 +256,7 @@ npm run test:compat
 | `lib/reader-resource-sync.js` | Node 库：将封存资源状态同步到分析结果、解析结果和末端检查点及证明，保留评分和 Reader 字节。如果评分依赖的可用性证据变了，就拒绝同步，并要求走正常评分审计；不联网、不写文件。 |
 | `lib/reader-saved-feedback-input-continuity.js` | Node 库：同一原父子事实包的显示合并变化时，重建真实原付费输入；保留当前全部事实约束、原稿、费用和次数，不授予新额度。 |
 | `lib/reader-sealed-pdf-column-units.js` | Reader 封存 PDF 表格列单位的精确绑定与重放。 |
+| `lib/reader-authenticated-pdf-table-evidence.js` | 共用会议及历史真实 PDF 的私有来源能力，为正常 `source_quotes` 表派生唯一原表引文与严格行列单位证明；解析、恢复及保存后冷核使用同一实现，不制造 DOM 或放宽旧完整稿出版准入。 |
 | `lib/reader-source-table-column-units.js` | 在已核验的封存来源作用域中，以原 DOM 表、行名及同列单元格核对百分比单位；合并表头另须完整跨度覆盖、唯一指标路径及明确原表注。不改数字、单位或来源，冷态恢复与发布端同步重放。 |
 | `lib/reader-sealed-pdf-quote-evidence.js` | Reader 封存 PDF 逐字引文证据的绑定与重放。 |
 | `lib/reader-sealed-pdf-table-evidence.js` | Reader 封存 PDF 原表结构与单元格证据的绑定与重放。 |

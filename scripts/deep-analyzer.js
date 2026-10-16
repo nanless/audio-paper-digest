@@ -2128,7 +2128,7 @@ function readerAdjacentMetricUnitEvidence(quote, metric, value, unit) {
         });
 }
 
-function readerTableHeaderUnitEvidenceFailures(table, sourceQuotes) {
+function readerTableHeaderUnitEvidenceFailures(table, sourceQuotes, options = {}) {
     const pdfColumns = [
         ...require('./lib/reader-sealed-pdf-column-units').coverage(table, sourceQuotes),
         ...require('./lib/reader-source-table-column-units').coverage(table, sourceQuotes)
@@ -2177,7 +2177,10 @@ function readerTableHeaderUnitEvidenceFailures(table, sourceQuotes) {
             }
         }
     }
-    return failures;
+    if (!failures.length || options.authenticatedPdf === false) return failures;
+    const authenticated = require('./lib/reader-authenticated-pdf-table-evidence').coverage(table, sourceQuotes);
+    return failures.filter(failure => !authenticated.some(item => item.row === failure.row
+        && item.column === failure.column && item.unit === failure.unit && item.value === failure.token));
 }
 
 function deriveExactTableSourceQuotes(renderedMarkdown, sourceText, options = {}) {
@@ -2808,8 +2811,10 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
         ));
         const missingHeaderUnits = readerTableHeaderUnitEvidenceFailures(rendered, exactQuotes);
         if (missingHeaderUnits.length) numericEvidenceFailures.push(
-            `tableBindings[${index}] 列头单位缺少对应原文证据：` + missingHeaderUnits
-                .map(item => `row=${item.row},column=${item.column} value=${item.token} unit=${item.unit}`).join('；')
+            `tableBindings[${index}] 列头单位缺少对应原文证据：`
+                + require('./lib/reader-authenticated-pdf-table-evidence').diagnostics(rendered, exactQuotes)
+                    .map(reason => `PDF映射未通过：${reason}；`).join('')
+                + missingHeaderUnits.map(item => `row=${item.row},column=${item.column} value=${item.token} unit=${item.unit}`).join('；')
         );
         if (!missingNumbers.length) continue;
         const missingSet = new Set(missingNumbers);
@@ -2978,10 +2983,19 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
             };
         });
         const allQuotes = [...sourceQuotes, ...sealedPdfQuoteEvidence];
+        const authenticatedPdfTable = require('./lib/reader-authenticated-pdf-table-evidence');
+        const authenticatedPdfTableEvidence = binding.authenticatedPdfTableEvidence !== undefined
+            || readerTableHeaderUnitEvidenceFailures(rendered, allQuotes, { authenticatedPdf: false }).length
+            ? authenticatedPdfTable.derive(rendered, sourceQuotes) : null;
+        if (binding.authenticatedPdfTableEvidence !== undefined) {
+            authenticatedPdfTable.assertEvidence(rendered, sourceQuotes, binding.authenticatedPdfTableEvidence);
+        }
         const missingHeaderUnits = readerTableHeaderUnitEvidenceFailures(rendered, allQuotes);
         if (missingHeaderUnits.length) throw new Error(
-            `tableBindings[${index}] 列头单位缺少对应原文证据：` + missingHeaderUnits
-                .map(item => `row=${item.row},column=${item.column} value=${item.token} unit=${item.unit}`).join('；')
+            `tableBindings[${index}] 列头单位缺少对应原文证据：`
+                + authenticatedPdfTable.diagnostics(rendered, allQuotes)
+                    .map(reason => `PDF映射未通过：${reason}；`).join('')
+                + missingHeaderUnits.map(item => `row=${item.row},column=${item.column} value=${item.token} unit=${item.unit}`).join('；')
         );
         const missingNumbers = readerNumericTokens(rendered.markdown).filter(token => (
             !readerSourceQuotesCoverNumericToken(
@@ -3016,6 +3030,7 @@ function bindApiReaderSourceEvidence(article, declaredTableBindings, declaredFor
             renderedTableSha256,
             cellBindings: [],
             sourceQuotes,
+            ...(authenticatedPdfTableEvidence ? { authenticatedPdfTableEvidence } : {}),
             ...(sealedPdfQuoteEvidence.length ? { sealedPdfQuoteEvidence } : {})
         };
     });
@@ -8163,6 +8178,15 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-pdf-quote-evidence.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-sealed-pdf-column-units.js'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-source-table-column-units.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/reader-authenticated-pdf-table-evidence.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/conference-source-context.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/conference-pdf-source.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/conference-reader-publication-evidence.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/conference-analysis-context.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/direct-rewrite-analysis-context.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/historical-direct-rewrite-runner.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'lib/pdf-layout.js'), 'utf8'),
+            fs.readFileSync(path.join(__dirname, 'pdf-layout-extract.py'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_sealed_pdf_column_units.py'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'reader_sealed_pdf_quote_evidence.py'), 'utf8'),
             fs.readFileSync(path.join(__dirname, 'lib/reader-source-blocked-normalization.js'), 'utf8'),
@@ -8233,9 +8257,11 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
     const withReaderSourceTableEvidence = callback => require('./lib/reader-table-pdf-evidence')
         .withArtifacts(options.structuredArtifacts, getPaperArxivId(paper), () =>
             withReaderSourceQuoteEvidence(options.structuredArtifacts, getPaperArxivId(paper), callback));
-    const collectReaderDraftIssues = (draft, error, extra = {}) => withReaderSourceTableEvidence(() =>
-        repair.collectDraftIssues(draft, error, { sourceText: options.sourceText,
+    const collectReaderDraftIssues = (draft, error, extra = {}) => {
+        if (require('./lib/reader-authenticated-pdf-table-evidence').isSourceFailure(error)) throw error;
+        return withReaderSourceTableEvidence(() => repair.collectDraftIssues(draft, error, { sourceText: options.sourceText,
             structuredArtifacts: options.structuredArtifacts, ...extra }));
+    };
     let pixelFigureOrdinals = [];
     let recovered = null;
     let readerRecoveryRevisions = [];
@@ -9099,6 +9125,24 @@ async function generateApiReaderArticleDetailedUnlocked(paper, analysis, sourceE
             return result;
         } catch (error) {
             recordDisposition({ ...dispositionBase, disposition: 'rejected', errorCode: error.code || 'READER_VALIDATION_FAILED' });
+            if (require('./lib/reader-authenticated-pdf-table-evidence').isSourceFailure(error)) {
+                // A returned response remains paid even if its source changed
+                // during validation. Preserve it without spending another call
+                // or treating the source fault as content/no-progress feedback.
+                repair.saveFailedCandidate(candidateDirectory, identity, {
+                    status: 'failed', draft: candidate,
+                    rawDraft: repairContext ? candidate ? JSON.stringify(candidate) : previousDraft : raw,
+                    draftOrderMappings, readerRecoveryRevisions, issues: currentIssues,
+                    attempts: attempt, fullAttempts, transportFailures, noProgress,
+                    failureSignature: previousFailureSignature, validationFailureStreak,
+                    validationFailureSignature: previousValidationFailureSignature,
+                    imageEvidence, providerImageExclusions, implementationRepairAllowanceProof,
+                    ...(useEphemeralFigureEvidence ? { ephemeralImageEvidence } : {}),
+                    ...(requestUsesEscalatedRepairBudget
+                        ? { implementationRepairAllowanceLineage: repair.IMPLEMENTATION_ALLOWANCE_LINEAGE_CONTRACT } : {})
+                });
+                throw error;
+            }
             lastError = error;
             previousDraft = candidate ? JSON.stringify(candidate)
                 : metadataOperation && !patchApplied ? previousDraft : raw;

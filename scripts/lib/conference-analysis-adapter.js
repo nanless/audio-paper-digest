@@ -404,7 +404,7 @@ function verifyPlanAuthority(loaded, planHandle, sourceRoot) {
         || stableHash(details) !== stableHash(loaded.source.sourceDetails)) {
         throw new Error('live conference plan authority differs from analysis source evidence');
     }
-    return true;
+    return replayed;
 }
 function sealCompletedRun(loaded) {
     const analysisFile = path.join(loaded.directory, 'analysis.json');
@@ -460,7 +460,7 @@ async function sealCompletedRunLocked({ analysisRoot, executionId, engine, expec
 async function analyzeConference({ analysisRoot, executionId, concurrency = 1, planHandle, sourceRoot } = {}, overrides = {}) {
     const engine = overrides.engine || require('../analysis-engine.js');
     const loaded = loadConferenceAnalysis({ analysisRoot, executionId });
-    verifyPlanAuthority(loaded, planHandle, sourceRoot);
+    const readerPdfSourceHandle = verifyPlanAuthority(loaded, planHandle, sourceRoot);
     const analysisFile = path.join(loaded.directory, 'analysis.json');
     if (loaded.analysis.status === 'complete') {
         if (!require('./model-text-sanitization.js').canReuseModelTextInputs(
@@ -478,7 +478,7 @@ async function analyzeConference({ analysisRoot, executionId, concurrency = 1, p
     }
     let finalPaper = loaded.analysis.papers[0];
     await analysisContext.withConferenceAnalysisSource({ executionId, executionDir: loaded.directory, paperId: loaded.run.paperId,
-        sourceDetails: loaded.source.sourceDetails,
+        readerPdfSourceHandle, sourceDetails: loaded.source.sourceDetails,
         ...(overrides.readerRetryEpoch !== undefined
             ? { readerRetryEpoch: overrides.readerRetryEpoch } : {}) }, () => engine.analyzeBatch([finalPaper], {
         concurrency, maxRetries: overrides.maxRetries ?? 2, checkpointFilePath: analysisFile, saveInterval: 0,
@@ -577,7 +577,7 @@ function revisionQualificationError(paper, rules, engine, label) {
         code: 'CONFERENCE_READER_REVISION_QUALIFICATION_FAILED', readerQualificationDiagnostics: diagnostics });
 }
 async function inspectLoadedReaderRevisionCompletion(loaded, { planHandle, sourceRoot }, { engine, deep }) {
-    verifyPlanAuthority(loaded, planHandle, sourceRoot);
+    const readerPdfSourceHandle = verifyPlanAuthority(loaded, planHandle, sourceRoot);
     const paper = loaded.analysis.papers[0], parentPaper = loaded.parent.analysis.papers[0];
     const progress = loaded.analysis.readerRevisionProgress;
     if (!progress || !Number.isSafeInteger(progress.attempts) || progress.attempts < 0
@@ -590,7 +590,7 @@ async function inspectLoadedReaderRevisionCompletion(loaded, { planHandle, sourc
         return { eligible: false, reason: '没有本子任务已完成 Reader 的可重放付费签发证明。' };
     }
     return analysisContext.withConferenceAnalysisSource({ executionId: loaded.run.executionId,
-        executionDir: loaded.directory, paperId: loaded.run.paperId, sourceDetails: loaded.source.sourceDetails }, async () => {
+        readerPdfSourceHandle, executionDir: loaded.directory, paperId: loaded.run.paperId, sourceDetails: loaded.source.sourceDetails }, async () => {
         const proof = await deep.inspectSavedConferenceReaderCompletion(paper, {
             executionId: loaded.run.executionId, executionDir: loaded.directory,
             parentPaper, revision: loaded.revision });
@@ -670,14 +670,17 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
     const engine = overrides.engine || require('../analysis-engine');
     const deep = overrides.deep || require('../deep-analyzer');
     const parent = loadConferenceAnalysis({ analysisRoot, executionId: parentExecutionId });
-    verifyPlanAuthority(parent, planHandle, sourceRoot);
+    const parentReaderPdfSourceHandle = verifyPlanAuthority(parent, planHandle, sourceRoot);
     if (parent.run.status !== 'complete' || parent.analysis.status !== 'complete') {
         throw Object.assign(new Error('会议 Reader revision 只接受完整签名父稿'), { retryable: false });
     }
     let original, upstreamIssue;
     try {
         original = require('./conference-postprocess').readOriginalTagProof(parent.analysis.papers[0]);
-        upstreamIssue = engine.getConferenceReaderRefreshUpstreamReason(parent.analysis.papers[0], { tagRules: original.rules });
+        upstreamIssue = analysisContext.withConferenceAnalysisSource({ executionId: parent.run.executionId,
+            executionDir: parent.directory, paperId: parent.run.paperId, sourceDetails: parent.source.sourceDetails,
+            readerPdfSourceHandle: parentReaderPdfSourceHandle }, () =>
+            engine.getConferenceReaderRefreshUpstreamReason(parent.analysis.papers[0], { tagRules: original.rules }));
     } catch (error) { upstreamIssue = error.message; }
     const fullAnalysis = Boolean(upstreamIssue) || !require('./model-text-sanitization').canReuseModelTextInputs(
         parent.analysis.papers[0], parent.source.sourceDetails);
@@ -688,6 +691,7 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
             || lockedParent.runFileSha256 !== parent.runFileSha256) throw new Error('会议 Reader 父稿等待锁期间改变');
         prepareConferenceAnalysis({ analysisRoot, executionId, planHandle, sourceRoot, paperId: parent.run.paperId });
         let loaded = loadConferenceAnalysis({ analysisRoot, executionId });
+        let readerPdfSourceHandle = verifyPlanAuthority(loaded, planHandle, sourceRoot);
         const filename = path.join(loaded.directory, 'reader-revision.json');
         const seeded = { ...loaded.analysis, status: 'partial', generation: 1,
             papers: [clone(parent.analysis.papers[0])], readerRevisionProgress: { attempts: 0, failures: [] } };
@@ -698,7 +702,7 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
                 const preflightFile = path.join(loaded.directory, 'reader-resource-preflight.json');
                 if (!fs.existsSync(preflightFile)) {
                     const identity = await analysisContext.withConferenceAnalysisSource({ executionId,
-                        executionDir: loaded.directory, paperId: parent.run.paperId, sourceDetails: loaded.source.sourceDetails }, () =>
+                        readerPdfSourceHandle, executionDir: loaded.directory, paperId: parent.run.paperId, sourceDetails: loaded.source.sourceDetails }, () =>
                         deep.buildApiReaderResourceIdentity(parent.analysis.papers[0].analysis,
                             loaded.source.sourceDetails.text, parent.analysis.papers[0].analysisManifest?.stages?.demoLinkScan,
                             { paper: parent.analysis.papers[0], structuredArtifacts: loaded.source.sourceDetails.structuredArtifacts }));
@@ -729,13 +733,13 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
             replaceJson(path.join(loaded.directory, 'analysis.json'), seeded, loaded.analysisFileSha256);
             loaded = loadConferenceReaderRevision({ analysisRoot, executionId });
         }
-        verifyPlanAuthority(loaded, planHandle, sourceRoot);
+        readerPdfSourceHandle = verifyPlanAuthority(loaded, planHandle, sourceRoot);
         const withVerifiedSource = callback => {
             // Re-read real plan-bound source files before granting the source
             // scope; saved text alone cannot authorize resource claim replay.
-            verifyPlanAuthority(loaded, planHandle, sourceRoot);
+            readerPdfSourceHandle = verifyPlanAuthority(loaded, planHandle, sourceRoot);
             return analysisContext.withConferenceAnalysisSource({ executionId,
-                executionDir: loaded.directory, paperId: loaded.run.paperId,
+                readerPdfSourceHandle, executionDir: loaded.directory, paperId: loaded.run.paperId,
                 sourceDetails: loaded.source.sourceDetails }, callback);
         };
         if (loaded.analysis.status === 'complete') {
@@ -774,7 +778,7 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
             // no-model scope. This does not authorize another outer attempt.
             const replay = overrides.replayActiveReaderCandidate
                 || require('./conference-reader-active-candidate-replay').replayActiveConferenceReaderCandidate;
-            const recovered = await replay({ loaded, planHandle, sourceRoot }, { engine, deep });
+            const recovered = await withVerifiedSource(() => replay({ loaded, planHandle, sourceRoot }, { engine, deep }));
             if (recovered.eligible) {
                 if (!recovered.paper || !recovered.proof
                     || typeof recovered.assertUnchanged !== 'function') throw new Error('活动付费 Reader 恢复缺少原字节证明');
@@ -828,7 +832,7 @@ async function refreshConferenceReader({ analysisRoot, parentExecutionId, planHa
         replaceJson(analysisFile, current, loaded.analysisFileSha256);
         try {
             paper = await analysisContext.withConferenceAnalysisSource({ executionId, executionDir: loaded.directory,
-                paperId: parent.run.paperId, sourceDetails: loaded.source.sourceDetails, readerRetryEpoch: 1 }, () =>
+                readerPdfSourceHandle, paperId: parent.run.paperId, sourceDetails: loaded.source.sourceDetails, readerRetryEpoch: 1 }, () =>
                 loaded.revision.mode === 'normal-analysis'
                     ? withNormalAnalysisSlot(async () => {
                         const outcome = await engine.analyzePaperWithRetry(paper, { maxRetries: 0,
