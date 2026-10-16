@@ -43,7 +43,30 @@ function currentModelInputSourceForPaperId(paperId) {
     const active = conference.getConferenceAnalysisContext();
     const direct = require('./direct-rewrite-analysis-context.js');
     const historical = direct.getDirectRewriteAnalysisContext();
-    const fresh = require('./fresh-analysis-context.js').getFreshAnalysisContext();
+    const freshApi = require('./fresh-analysis-context.js');
+    const fresh = freshApi.getFreshAnalysisContext();
+    // Daily paper handling deliberately installs the direct adapter for private
+    // figure materialization. It is the same source scope only after reading
+    // the real daily bundle and comparing every source/provenance field.
+    if (!active && historical && fresh && freshApi.isDailyFreshSourceScope()) {
+        const match = /^(?:arxiv:)?(\d{4}\.\d{4,5})(?:v\d+)?$/.exec(String(paperId || ''));
+        const id = match?.[1];
+        if (id && historical.paperId === `arxiv:${id}` && historical.route === 'arxiv-fresh-fetch'
+            && historical.runId === fresh.runId
+            && (!fresh.paperId || fresh.paperId === id)
+            && require('node:path').resolve(historical.readerAttemptsDir)
+                === require('node:path').join(fresh.runDir, 'reader-attempts')) {
+            const details = freshApi.readFreshSource(fresh.runDir, { arxivId: id }, fresh);
+            const descriptor = details?.freshSourceDescriptor;
+            if (descriptor?.paperId === id && descriptor.runId === fresh.runId
+                && ['sourceSha256', 'structuredArtifactsSha256', 'sourceSnapshotSha256',
+                    'sourceGeneration', 'sourceManifestSha256', 'sourceVersionIdentitySha256']
+                    .every(key => historical[key] === descriptor[key])
+                && require('node:util').isDeepStrictEqual(details,
+                    direct.getDirectRewriteSource({ id: `arxiv:${id}` }))) return details;
+        }
+        throw new Error('Reader recovery refuses ambiguous mixed active source workflows');
+    }
     if ([active, historical, fresh].filter(Boolean).length > 1) {
         throw new Error('Reader recovery refuses ambiguous mixed active source workflows');
     }

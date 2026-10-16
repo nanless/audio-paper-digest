@@ -121,3 +121,55 @@ test('会议真实候选实现迁移用规范来源编号并保留原已付费�
     const archive = path.join(directory, result.readerRecoveryRevisions[0].archivedName);
     assert.deepEqual(fs.readFileSync(archive), bytes);
 });
+
+test('真实日更四源的direct图片适配器可嵌套，来源、run、论文及候选目录必须精确相同', async t => {
+    const Config = require('../scripts/config'), daily = require('../scripts/lib/daily-fresh-source-plan');
+    const fresh = require('../scripts/lib/fresh-analysis-context');
+    const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'daily-reader-same-scope-'));
+    const previous = Config.FILES.dailyFreshSourceRunsDir;
+    Config.FILES.dailyFreshSourceRunsDir = path.join(root, 'runs');
+    t.after(() => { Config.FILES.dailyFreshSourceRunsDir = previous; fs.rmSync(root, { recursive: true, force: true }); });
+    const papers = [{ arxivId: '2610.12345v1' }, { arxivId: '2610.12346v1' }];
+    const plan = daily.createDailyFreshSourcePlan({ batchDate: '2026-10-16', batchId: 'same-source-adapter', papers });
+    const text = 'Official same-text fixture with methods, experiments and limitations. '.repeat(100);
+    const capture = require('../scripts/lib/fresh-arxiv-rewrite-source').captureFreshArxivRewriteSource;
+    await daily.captureDailyFreshSources(plan, { concurrency: 1, capture: options => capture(options, {
+        fetchText: async arxivId => ({ text, source: 'html', sourceId: arxivId,
+            url: `https://arxiv.org/html/${arxivId}`, fetchedAt: '2026-10-16T00:00:00.000Z', imageInfos: [], warnings: [] }),
+        fetchPdf: async arxivId => ({ bytes: Buffer.from(`%PDF-1.7\n${arxivId}\n%%EOF\n`),
+            url: `https://arxiv.org/pdf/${arxivId}`, fetchedAt: '2026-10-16T00:00:01.000Z' })
+    }) });
+    await daily.withDailyFreshAnalysisContext(plan, () => daily.withDailyFreshPaperSource(plan, papers[0], details => {
+        assert.deepEqual(source.currentModelInputSourceForPaperId('2610.12345'), details);
+        assert.deepEqual(source.currentModelInputSourceForPaperId('2610.12345v1'), details);
+        assert.deepEqual(source.currentModelInputSourceForPaperId('arxiv:2610.12345'), details);
+        assert.throws(() => source.currentModelInputSourceForPaperId('2610.12346'), /ambiguous mixed active source/);
+        assert.throws(() => source.currentModelInputSourceForPaperId(id), /ambiguous mixed active source/);
+        scoped({}, () => assert.throws(() => source.currentModelInputSourceForPaperId('2610.12345'), /ambiguous mixed active source/));
+        const identity = direct.getDirectRewriteAnalysisContext();
+        const bad = update => direct.withDirectRewriteAnalysisSource({ ...identity, ...update }, () =>
+            assert.throws(() => source.currentModelInputSourceForPaperId('2610.12345'), /ambiguous mixed active source/));
+        bad({ runId: crypto.randomUUID() });
+        bad({ sourceSnapshotSha256: '0'.repeat(64) });
+        bad({ sourceGeneration: identity.sourceGeneration + 1 });
+        bad({ sourceManifestSha256: '0'.repeat(64) });
+        bad({ readerAttemptsDir: path.join(root, 'another-attempts') });
+        bad({ sourceDetails: { ...details, text: details.text + 'changed' }, sourceSha256: sha(details.text + 'changed') });
+        bad({ sourceDetails: { ...details, warnings: ['different source snapshot'] } });
+        const other = daily.readDailyFreshSource(plan, papers[1]);
+        direct.withDirectRewriteAnalysisSource({ ...identity, paperId: 'arxiv:2610.12346', sourceDetails: other,
+            ...Object.fromEntries(['sourceSha256', 'structuredArtifactsSha256', 'sourceSnapshotSha256',
+                'sourceGeneration', 'sourceManifestSha256'].map(key => [key, other.freshSourceDescriptor[key]])) }, () =>
+            assert.throws(() => source.currentModelInputSourceForPaperId('2610.12345'), /ambiguous mixed active source/));
+        fresh.withFreshPaperContext(papers[0], () => {
+            assert.deepEqual(source.currentModelInputSourceForPaperId('2610.12345'), details);
+            assert.throws(() => source.currentModelInputSourceForPaperId('2610.12346'), /ambiguous mixed active source/);
+        });
+        const pdf = path.join(plan.sourcesDir, '2610.12345', 'generation-000001', 'source.pdf');
+        const before = fs.readFileSync(pdf);
+        try {
+            fs.appendFileSync(pdf, 'tampered sealed PDF');
+            assert.throws(() => source.currentModelInputSourceForPaperId('2610.12345'), /SHA|sha|hash|不匹配|变化|不一致/);
+        } finally { fs.writeFileSync(pdf, before); }
+    }));
+});

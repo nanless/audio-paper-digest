@@ -18,7 +18,7 @@
 | 网络与模型 | `utils.js`、`llm-account-pool.js`、`publish_common.py` | Muse/arXiv 强制代理，只有声明的账号额度故障可向后切号 |
 | 全文、表格、公式、作者和资源身份 | `lib/fresh-analysis-context.js`、`lib/reader-*`、`reader_sealed_pdf_*.py` | 来源 SHA、结构化单元格、原始 TeX、真实像素、作者逐项身份与资源可达状态 |
 | Reader 写作与局部修复 | `deep-analyzer.js`、`lib/reader-contract.js`、`reader-repair.js`、`reader-draft-order.js` | 同一长文结构、术语机制解释、来源绑定、受限修复预算 |
-| 资源宣称 | `deep-analyzer.js` 的共享资源规则与发布只读重放 | 代码可访问不等于权重可下载；否定、条件、第三方引用与本文发布声明区分；新阶段绑定 reader-resource-availability-claims-v1 |
+| 资源宣称 | `deep-analyzer.js` 的共享资源规则与发布只读重放 | 代码可访问不等于权重可下载；否定、条件、第三方引用与本文发布声明区分；“开源代码、可下载权重、可运行系统是三件事”仅在概念列举范围内识别，不豁免前后独立的发布声明；新阶段绑定 reader-resource-availability-claims-v1 |
 | 评分与标签 | `analysis-contract.js`、`lib/tag-stage-record.js`、`tag_stage_record.py`、`tag_catalog.py` | 八维评分、封顶总分、当前中文标签与明确主任务/方法；严格纯追加按原SHA只读重放旧分类证明 |
 | 页面展示与引用导出 | `publish-to-blog.py`、`paper_reader_presentation.py`、`tag_presentation.py` | 同一资源去重、作者展示、评分说明、多级分类路径及 JSON/BibTeX/RIS/上下文导出；会议使用真实会议身份 |
 | 站点分类版本 | 日更 `tag_catalog_file_contents()`；会议/历史 `tag_catalog_publication.py` | 日更将词表资产纳入发布清单；会议/历史只读核验双份版本目录及本批原快照，缺失先阻断 |
@@ -46,6 +46,8 @@
 完整会议旧稿的当前检查失败也走同一批次原则：先完成全体正常后处理，再以显式迁移重试恢复失败集合；原稿保留，来源绑定的子运行按真实资源预检复用公共 Reader、评分＋Reader 或完整分析。评分成功即保存检查点，Reader 失败只续 Reader，不重复付已完成评分。会议保留自己的父子运行、完成及来源凭证，不能借日更 `api:reader:refresh` 冒用四文件封存身份，也不能重签旧模型输入。
 
 共享修复器的诊断身份同样由来源适配：日更保持 arXiv 身份，会议使用认证执行与规范会议 ID，历史直改使用本次运行、真实路线和来源凭证，并绑定实际全文和结构化来源 SHA。候选恢复也使用该真实身份桥，不把会议编号包装为 arXiv 别名。新 Reader 的资源声明检查在生成收尾和冷启动发布中都重放真实来源上下文；已保存的付费合格稿先做完整只读复验，再决定是否还需请求模型，不因接口修复增加次数或清零旧失败。
+
+日更的临时图片适配会有意嵌套 `fresh` 与 `direct` 来源上下文；恢复器须重读本批封存文件，确认论文、运行、来源及快照 SHA、代次、清单、候选目录和完整来源对象全部相同，才视为同一来源。会议与其他来源混用、跨论文或来源不一致仍立即拒绝，不能按上下文优先级静默选一份。
 
 会议子运行固定轮次与 process 重试窗口分别计数，任一耗尽都报告真实阻断。旧活跃付费候选可在安全临时副本中通过同一正常恢复器做零新模型请求复验，只有完整资格通过才正常保存；独立异步禁请求作用域不影响其他论文。没有正文、仍不合格或需要新模型的候选不因此获得额度。实现变化也不能为会议自动新增付费许可，原合法未消费许可沿原链核验，详见[会议恢复边界](conference-workflow.md#已有完整会议只更新页面)。
 

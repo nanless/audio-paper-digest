@@ -4033,6 +4033,24 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
     const directDenialPrefix = /(?:(?:不(?!但|仅|只)|不能|不应(?:当)?|不可|不宜|不得)(?:再|另行|据此|据此直接)?(?:声称|表示|说明|证明|确认|写|默认|意味着|代表|认为|断言|等同于|视为|当作)[^。！？!?；;，,]{0,36}|(?:不(?!但|仅|只)|不能|不应(?:当)?|不可|不宜|不得)(?:把|将)[^。！？!?；;，,]{0,36}(?:等同于|视为|当作)[^。！？!?；;，,]{0,16}|(?:不含|未含|不包含|没有包含|不包括)[^。！？!?；;，,]{0,24}|(?:没有|尚无|并无|不存在)(?:任何)?(?:该|此|对应)?(?:代码|模型|模型权重|权重|检查点|数据集|语料|演示|复现材料|资源)(?:类型)?(?:的)?|(?:没有|尚无|并无|不存在)(?:公开|开源|开放|当前可用|公开可用)$|(?:没有|未曾|尚未)(?:发现|找到|看到|确认|证明|表明|显示|提供|给出)[^。！？!?；;，,]{0,24}|(?:未|尚未|并未|没有|无)[^。！？!?；;，,]{0,24}(?:记为|标为|列为|判为)[^。！？!?；;，,]{0,16}|(?:未|尚未|并未|没有|无|并非|不是|不(?!但|仅|只)|not\s*))$/i;
     const conditionalPrefix = /(?:是否|能否|若|如果|假设)[^。！？!?；;，,]{0,36}$/i;
     const isConceptDistinction = (value, matchIndex) => {
+        // 前置定语同样可以列举待核对概念；只豁免这个完整列表的范围。
+        const attributiveLists = /(开源(?:的)?代码\s*[、，,]\s*可下载(?:的)?(?:模型)?权重\s*(?:[、，,]|与|和|及)\s*可(?:一键)?运行(?:的)?系统)\s*(?:是|属于)\s*(?:三|3)件(?:不同|独立|不同的|独立的)?事/gu;
+        for (const list of value.matchAll(attributiveLists)) {
+            if (matchIndex < list.index || matchIndex >= list.index + list[1].length) continue;
+            const before = value.slice(0, list.index);
+            const prefix = before.split(/[。！？!?；;，,]/u).at(-1);
+            const quoted = [['“', '”'], ['‘', '’'], ['「', '」']].some(([open, close]) =>
+                before.lastIndexOf(open) > before.lastIndexOf(close))
+                || ['"', "'", '`'].some(quote => before.split(quote).length % 2 === 0);
+            // 只接受裸概念列表；已有实物归属前缀不得被句尾免责声明抹掉。
+            if (quoted || prefix.trim()) continue;
+            // 待核实/明确否定状态必须紧接列表并结束本句，不解析后续代词声明。
+            const tail = value.slice(list.index + list[0].length);
+            const pendingState = '(?:(?:需要|仍需|需|应|要)(?:分别|逐项)(?:确认|核实|核对|验证)|'
+                + '不能据此(?:认为|声称|断言)(?:全部|三者)已公开|三者是否已公开尚无法确认)';
+            if (!new RegExp('^(?:\\s*[，,]\\s*' + pendingState + '){1,2}[。！？!?；;]?\\s*$', 'u').test(tail)) continue;
+            return true;
+        }
         const pendingLists = /(代码开源\s*[、，,]\s*权重可下载\s*(?:[、，,]|和)\s*系统可运行)\s*(?:应视为|是|属于)\s*(?:三|3)件(?:未确认|待确认)的事/gu;
         for (const list of value.matchAll(pendingLists)) {
             const before = value.slice(Math.max(0, list.index - 32), list.index).split(/[。！？!?；;，,]/u).at(-1);

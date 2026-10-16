@@ -336,3 +336,41 @@ test('真实私有 FD 出版 worker 与普通 Reader parser 共用严格规则�
     assert.equal(wrongSource.value.verified, false);
     assert.match(wrongSource.value.message, /authenticated source bytes/);
 });
+
+
+test('前置定语资源概念列表仅豁免列表自身，不掩盖独立公开与双重否定声明', () => {
+    const f = example();
+    const body = { contract: 'api-reader-resource-identity-v1', sourceTextSha256: sha(f.options.sourceText), resources: [] };
+    const identity = { ...body, identitySha256: deep.stableFingerprint(body) };
+    const issues = text => deep.readerResourceClaimIssues({ sections: [{ kind: 'reproduction', body: text }] },
+        identity, f.options.sourceText);
+    const list = '开源代码、可下载权重与可运行系统是三件事，需要分别确认';
+    for (const text of [
+        '作者在文中给出代码链接，经本次核验该第三方镜像链接当前可达，但这只证明链接可打开，不证明权重已公开或系统可一键运行，' + list + '。',
+        list + '。',
+        list + '，不能据此认为全部已公开。',
+        list + '，三者是否已公开尚无法确认。',
+        '开源的代码、可下载的模型权重和可一键运行的系统属于3件独立的事，需要分别确认。',
+        '代码开源、权重可下载、系统可运行是三件事，需要分别确认。'
+    ]) assert.deepEqual(issues(text), [], text);
+    for (const text of [
+        '本文权重已经公开，' + list + '。',
+        list + '，但本文权重已经公开。',
+        '本文提供开源代码、可下载权重与可运行系统，均已公开。',
+        '本文开源代码、可下载权重与可运行系统是三件事，全部已公开。',
+        '开源代码、可下载权重与可运行系统是三件事，全部已公开。',
+        '开源代码、可下载权重与可运行系统是三件事，均由本文提供。',
+        '开源代码、可下载权重与可运行系统是三件事，这三项都已由作者公开。',
+        '开源代码、可下载权重与可运行系统是三件事，本工作均提供下载。',
+        '开源代码、可下载权重与可运行系统是三件事，三者均已发布。',
+        '开源代码、可下载权重与可运行系统是三件事，本文全部提供。',
+        '开源代码、可下载权重与可运行系统是三件事，这三者已全部公开。',
+        '开源代码、可下载权重与可运行系统是三件事，它们均已可用。',
+        '这些开源代码、可下载权重与可运行系统是三件事。',
+        '我们拥有的开源代码、可下载权重与可运行系统是三件事，需要分别确认。',
+        '该论文的开源代码、可下载权重与可运行系统是三件事，需要分别确认。',
+        '未发现证据否定本文模型权重已经开源，' + list + '。',
+        '不证明权重已公开，但本文权重已经公开。',
+        '本文可下载权重已经公开。'
+    ]) assert.ok(issues(text).some(issue => /model/.test(issue.message)), text);
+});
