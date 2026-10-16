@@ -2188,7 +2188,26 @@ function readerTableHeaderUnitEvidenceFailures(table, sourceQuotes, options = {}
 
 function deriveExactTableSourceQuotes(renderedMarkdown, sourceText, options = {}) {
     const allowSplitUnit = options.allowSplitUnit === true;
-    const sourceMatches = readerNumericTokenMatches(sourceText);
+    // A bare integer in parentheses/brackets is ambiguous with a citation.
+    // Do not automatically select it as evidence for a table count. Genuine
+    // parenthetical measurements may still use explicitly declared exact
+    // quotations or original DOM cells; neither channel is rewritten here.
+    const sourceMatches = readerNumericTokenMatches(sourceText).filter(match => {
+        const token = String(match[0] || '').trim();
+        const before = String(sourceText).slice(0, match.index);
+        const after = String(sourceText).slice(match.index + (match.sourceLength || match[0].length));
+        // A numeric prefix of a commit/hash or other identifier is not a scalar.
+        if (/^[A-Za-z0-9_]/u.test(after)) return false;
+        // Document locators and explicitly named protocol/version values are
+        // not automatic evidence for measurements or counts in another table.
+        if (/^\d+(?:\.\d+)*$/u.test(token)
+            && /\b(?:Table|Figure|Fig\.|Section|Equation|Eq\.)\s*$/iu.test(before)) return false;
+        if (/^\d+(?:\.\d+)+$/u.test(token)
+            && /(?:\b(?:version|JSON[- ]RPC|protocol)|版本)\s*[:=]?\s*v?\s*$/iu.test(before)) return false;
+        if (!/^\d+$/u.test(token)) return true;
+        return !(/\(\s*$/u.test(before) && /^\s*\)/u.test(after)
+            || /\[\s*$/u.test(before) && /^\s*\]/u.test(after));
+    });
     const quotes = [];
     const addDirectUnitQuote = token => {
         const unitToken = String(token || '').match(
@@ -4853,11 +4872,11 @@ function readerResourceClaimIssues(draft, identity, sourceText, options = {}) {
             || bounded(new RegExp('(?:没有|尚未|并未)(?:明确)?(?:声称|声明)' + list + release, 'gu'))
             || bounded(new RegExp('不(?:作|做)' + list + '(?:开源|公开)(?:与|和)可用(?:断言|声明)', 'gu'))
             || bounded(/(?:代码仓库|作者仓库|模型权重|权重|数据集|资源)的可达性未在[^。！？!?；;，,]{1,20}确认为可用/gu)) return true;
-        const property = '(?:代码(?:开源|公开|可得|可跑|可运行)|开源代码|(?:模型)?权重(?:可下载|下载)|(?:端到端)?系统可(?:一键)?运行|演示可听|开源|可运行)';
+        const property = '(?:代码(?:开源|公开|可得|可跑|可运行)|开源代码|包可下载|(?:模型)?权重(?:可下载|下载)|(?:端到端)?系统可(?:一键)?运行|演示可听|开源|可运行)';
         const properties = property + '(?:(?:、|与|和)' + property + '){1,3}';
         // Bare, owner-free concepts followed by an explicit distinction or
         // pending state are not present availability. Ownership is not optional.
-        const lists = new RegExp('(' + properties + ')(?:是(?:三件独立的事|三件事|不同的)|三件事|要分开说|要当作三件未确认的事|(?:同样)?未确认|在本篇中均未给出明确证据|更需要分别核验|(?:要|应|需)(?:分开|分别)(?:核实|核对|确认))(?=[，,。！？!?；;]|$)', 'gu');
+        const lists = new RegExp('(' + properties + ')(?:是(?:三件独立的事|三件事|不同的)|三件事|要分开说|要当作三件未确认的事|(?:同样)?未确认|在本篇中均未给出明确证据|更需要分别核验|(?:要|应|需)(?:分开|分别)(?:核实|核对|确认))(?=[，,：:。！？!?；;]|$)', 'gu');
         for (const span of value.matchAll(lists)) {
             if (!contains(span) || !safe(span)) continue;
             const prefix = value.slice(0, span.index).split(/[。！？!?；;，,：:]/u).at(-1);

@@ -1202,7 +1202,7 @@ function findMissingComparisonUnits(text) {
     const findings = [];
     // 千分位计数作为一个数值读取，避免把“50,000 条”中的 50 当成另一裸数。
     const quantity = `(?:\\d+(?:,\\d{3})*(?:\\.\\d+)?|[${CHINESE_DIGITS}]+(?:点[${CHINESE_DIGITS}]+)?)`;
-    const unit = '(?:%|个百分点|点|分|毫秒|秒|分钟|小时|毫焦|Hz|kHz|MHz|dB|mJ|GB|MB|KB|倍)';
+    const unit = '(?:%|个百分点|点|分(?!类)|毫秒|秒|分钟|小时|毫焦|Hz|kHz|MHz|dB|mJ|GB|MB|KB|倍)';
     const asymmetric = new RegExp(`(?<![A-Za-z0-9_.])${quantity}\\s*(?:对|vs\\.?|相比)\\s*${quantity}\\s*${unit}(?!之)`, 'giu');
     for (const match of collectRegexMatches(value, asymmetric, 'comparison_unit_only_on_second_value')) {
         if (isFinalCountedPairRate(value, match)) continue;

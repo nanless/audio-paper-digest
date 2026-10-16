@@ -1,0 +1,1261 @@
+{
+  "paperId": "2610.20465",
+  "candidateBasename": "10bf8691bfccfda50b51a9b9a1cc24f6c38f698f46cabb20c8b3803324ecba78.json",
+  "sourceText": "(1) Overview\nTitle\nvst-bench-ml: Auditable Dataset Generation for Audio Plugins\nPaper Authors\nYoussef Hemimy\nPaper Author Roles and Affiliations\nYoussef Hemimy: software design and development, validation, documentation, and\nmanuscript review and editing; St. Thomas University.\nAbstract\nGenerating datasets with audio plugins requires preserving how each audio observation\nwas produced. vst-bench-ml is a Python package that samples plugin parameters,\ncoordinates rendering through a separately installed host, and records software\nidentities, rendering settings, and output hashes for later verification. A sealed\nmanifest binds this evidence and supports offline integrity checks without loading\nthe plugin. A companion repository provides a sample-free VST3 test plugin, a\ndeterministic offline host, and additional checks linking rendering attempts to\nrecorded outputs. On a pinned macOS arm64 and Python 3.12 stack, functional\nvalidation of the pre-release versions reproduced package and host tests. Two runs in\nfresh processes reproduced the same render-plan hash and all eight expected output\nhashes, covering four sampled parameter configurations and two fixed MIDI signals;\n12 negative cases also passed. Later licensed 0.1.0 release candidates passed\nproducer-run continuous integration and local validation. Version 0.1.1 adds public\nGit source repositories, package-index installation, and user documentation; a\nseparate release check reproduced the expected plan and output hashes. These checks establish\nintegrity and repeatability within the tested setup; they do not establish portability,\nscientific suitability, or perceptual quality.\nKeywords\nresearch software; audio plugins; dataset provenance; deterministic validation;\nVST3; machine-learning datasets\nIntroduction\nAudio plugins can generate controlled audio datasets by varying parameters and MIDI\ninputs. To audit these datasets, researchers need a record connecting each output to\nthe software, plugin settings, and rendering conditions that produced it. Without\nthat record, it is difficult to determine whether observations were generated under\nthe intended conditions or whether stored outputs have subsequently changed.\nExisting Python software supports offline audio-plugin rendering. DawDreamer\nconstructs graphs of audio processors, including VST plugins, for offline batch\nprocessing (1); Pedalboard loads VST3 and Audio Unit\ninstruments and effects from Python (2). These tools provide\ncontext for the rendering workflows addressed here; this paper does not compare\ntheir provenance capabilities.\nvst-bench-ml supports auditable dataset generation by sampling plugin\nparameters, coordinating rendering through a separately installed host, and linking\ngenerated audio to a record of its production conditions. It records retained\nobservations separately from dropped and failed attempts and verifies stored\nartifacts without loading the plugin. A companion repository provides a controlled\ntest plugin and host, together with additional checks that connect rendering\nattempts to their recorded outputs.\nThis software paper describes the two-repository architecture, its quality controls,\nand the conditions under which the software may be reused. It does not report a\nmodel-training experiment, perceptual study, or scientific comparison. Passing the\nintegrity checks does not establish that a generated dataset is scientifically\nsuitable for a downstream task.\nImplementation and Architecture\nSeparated package and host\nThe Python package selects parameter settings and MIDI inputs, requests audio\nrenders, and records the resulting outputs and provenance. A separately installed\nhost loads and runs the plugin. The two communicate over localhost using JSON-RPC\n2.0 (3). This separation allows the package and host to be versioned\nindependently, with plugin loading, licensing, binary identity, and platform behavior\nhandled at the host boundary.\nThe orchestration software targets Python 3.10 or newer (4). NumPy\nprovides array operations (5), SoundFile provides Python audio I/O\n(6) over libsndfile (7), and pyloudnorm supplies the locked loudness-normalization\nimplementation (8). The package also performs basic\nquality checks, exports records, and verifies stored datasets. It does not distribute\na host, plugin binary, dataset, audio, model, preset library, or product schema.\nBefore rendering, the client asks the host to load the requested plugin and return\nhost and plugin identities. Required fields include the host protocol version,\nsource repository label and revision (Git commit or archive hash), executable hash,\nand build configuration, together\nwith the plugin path, hash, format, name, vendor, and stable identifier. The client\ncompares the resolved plugin path reported by the host with the resolved requested\npath; the render command then compares the parameter manifest’s plugin identifier\nwith the identifier returned by the host. Rendering does not begin if either\ncomparison fails, required identity fields are missing, the host reports an\nalready-loaded plugin, or it does not advertise deterministic reset and parameter\nreadback capabilities. The host-reported binary hashes are recorded as provenance.\nThe three separately controlled components and their rights boundaries are summarized\nin Table 1. Rights do not transfer across rows.\nComponent\nDistributed boundary\nRights and evidence boundary\nvst-bench-ml\nPython orchestration and offline verification\nMIT source; no host, plugin, dataset, audio, model, private research module, or third-party binary.\nCompanion repository\nFixture source, offline host, validation scripts, and expected metadata\nMIT source; CC0-1.0 applies only to qualifying sample-free generated fixture outputs.\nExternal execution inputs\nSeparately installed VST3 SDK, lawful plugins, and user-selected data\nNot relicensed or redistributed; each use must establish its own compatibility and rights.\nTable 1: Component and rights boundaries.\nFigure 1 shows the system boundary. The companion host implements\nthe VST3 lifecycle against the separately retrieved SDK (9); other\nhosts may implement the same protocol, but compatibility is unverified until they\nsatisfy the identity and behavioral checks.\nFigure 1 alt text: Package artifacts and host traces feed companion fixture validation.\nFigure 1: System boundary. The package exports NPZ audio, records, events, and a sealed\ncore manifest. The host runs the plugin and supplies fixture traces; companion\nvalidation adds kept-attempt evidence and reseals the manifest. Source: author’s diagram.\nProvenance and ledger layers\nThe core package writes kept observations to records.jsonl and appends only\ndrop and failure events to failures.jsonl. A JSON manifest records\nsoftware and environment identities, sampling-plan metadata and its hash, and outcome\ncounts. It also records the relative path, byte count, and SHA-256 hash of each output\nand of the records and failure-ledger files.\nSealing adds a SHA-256 digest of the manifest payload serialized in a canonical JSON\nform, excluding the integrity field that stores the digest itself. Offline\nverification recomputes this digest and the referenced file hashes, checks byte\ncounts, and reconciles records and events with the manifest. These checks establish\nconsistency with the recorded manifest; the seal does not authenticate its origin.\nCore verification rejects unknown failure-ledger statuses. Kept observations remain\nin the records file, so the core failure ledger alone does not contain a terminal\nentry for every kept render.\nFor the controlled fixture, the companion repository consumes external host traces and\nthe core kept records, requires an empty drop/failure ledger on the successful path,\nand appends one schema-versioned kept attempt entry per trace. It then binds the\ncomplete attempt ledger into a stricter companion manifest. Its negative-case stage\nappends separately identified expected-rejection evidence. This fixture-specific\nsynthesis and sealing is a companion validation function, not core-package emission.\nThe schema design follows the general provenance principle that entities, activities,\nand their relationships should be represented explicitly (10). Table\n2 maps the layers to the two implementations.\nLayer\nBound fields\nImplementation boundary\nExecution\nPackage version and source hashes, Python/runtime identity, dependency versions, normalization method\nCore manifest; companion adds Git commit/tree/dirty state or source-archive manifest/file-list hashes, installed-wheel provenance, lock hash, and native-library identities.\nHost/plugin\nProtocol, host source, build and executable identity, reported plugin path and hash, format, name, vendor, identifier\nHost-reported identities bound by core; reset/readback capabilities checked at preflight. Companion adds fixture checks.\nPlan and observation\nParameter-definition hashes, varied indices, seed derivation, plan hash, MIDI signal names, timestamps, kept records, drop/failure events\nCore plan metadata, records, event ledger, and sealed manifest.\nAttempt evidence\nOrdered parameter definitions, MIDI hashes, attempt IDs, trace/record correspondence, readback, reset policy, kept disposition, negative cases\nCompanion-only evidence and complete ledger for the controlled fixture.\nArtifact integrity\nRelative path, byte count, SHA-256, aggregate hashes, count reconciliation\nCore offline verification plus stricter companion validation.\nTable 2: Provenance layers, fields, and implementation ownership.\nFigure 2 distinguishes standalone core verification from the\nadditional companion fixture workflow.\nFigure 2 alt text: Core verification and companion fixture validation follow separate paths.\nFigure 2: Evidence lifecycle. Core artifacts can be sealed and verified without the\ncompanion. The separate fixture workflow combines a successful core run with host\ntraces, adds kept-attempt and expected-rejection evidence, and reseals for companion\nverification. Drop/failure records are preserved by the core; the successful fixture\npath requires an initially empty failure ledger. Source: author’s diagram.\nOffline verification\nThe core verify command resolves artifact paths beneath the dataset root and\nchecks the sealed manifest digest, identity completeness, byte counts and SHA-256\nhashes, records/output correspondence, outcome consistency, and drop/failure-event\ncounts. It does not load the plugin or rerender audio. The companion validator\nadditionally checks complete fixture attempt coverage, host-trace correspondence,\ninstalled-wheel identity, parameter readback, MIDI identity, reset policy, and the\nnamed adversarial cases. These checks establish consistency with the recorded stack,\nnot scientific validity or resistance to every possible attack.\nQuality Control\nThe build and validation stack uses Hatchling (11), pytest\n(12), Ruff (13), CMake (14), Git\n(15), and AppleClang from the Xcode command-line tools\n(16).\nThe project’s AI research agent performed a separate internal functional validation pass\nusing clean clones checked out at the tested pre-release commits.1\nThis pass built the Python wheel and source distribution, installed 19 dependencies\nwith locked versions and artifact hashes, built the fixture and offline runner, ran\nunit tests and lint checks, rendered twice in fresh processes, and exercised the\nnegative cases summarized in Table 3.\nThe later licensed 0.1.0 release candidates passed package and host continuous\nintegration checks and producer-run local validation of the release workflow.\nThose checks apply to the later versions and are distinct from the pre-release\nvalidation summarized below.\nA separate AI-assisted release validation on 29 September 2026 checked version\n0.1.1 from the new public repositories (package commit 25c839ba, companion\ncommit 783e1d9). Package tests (31) and companion tests (36) passed, as did\nwheel/source-distribution metadata checks and installed-wheel validation. Two\nfresh render processes reproduced the existing sampling-plan digest and all eight\nexpected output hashes; the twelve negative cases also passed. The runtime\nrendering algorithms and native fixture implementation were unchanged; the\nrelease corrected the module version, public repository identity, and the\nvalidator’s source-file boundary for the public checkout. These release checks\nare separate from the historical results in Table 3.\nGate\nObserved result on pinned stack\nPackage tests\n31 passed; wheel/source build and clean wheel installation passed.\nHost tests\nFour passed (pre-release); fixture and offline runner built externally to the repository.\nDeterministic workflow\nTwo fresh processes each rendered and kept eight records from four parameter configurations and two MIDI signals; both reproduced the same expected plan hash and all eight expected output-byte hashes.\nNegative cases\n12 passed, covering substituted package artifacts, wrong plugin identity, unreachable host, malformed parameters, missing normalization, out-of-range values, reset/readback mismatch, duplicate attempts, corrupted output, and incomplete-ledger evidence.\nStatic quality\nConfigured Ruff lint checks passed with cache disabled.\nTable 3: Quality-control results from the pre-release validation pass on the pinned macOS arm64 and Python 3.12 stack. Later release-candidate checks were producer-run.\nThe complete plan and output digests are recorded in\nfixtures/expected-output.json, included in the public\nvst-bench-dataset-host archive listed under Software Location.\nNote 1 identifies the historical validation commits.\nThe sample fixture exposes six parameters:\nthree floating-point controls, one finite-choice control, one integer control, and one\nboolean control. One floating-point control is intentionally audio-irrelevant, while\nanother has waveform-dependent behavior; these are behaviors rather than additional\nparameter types.\nGenerated validation artifacts remain outside both source repositories.\n(2) Availability\nOperating System\nThe package and companion workflow were validated on macOS with arm64 hardware.\nGeneral rendering portability across operating systems and architectures has not\nbeen established.\nProgramming Language\nThe package metadata declares Python 3.10 or newer as the minimum requirement.\nLocal release validation used Python 3.12.13; the documented workflow targets\nPython 3.12. Support beyond tested environments has not been established. The\ncompanion fixture and runner use C++17, with CMake as the build system.\nAdditional System Requirements\nRendering requires a separately installed host implementing the documented localhost\nprotocol and a compatible plugin. Offline verification requires the Python package\nand stored dataset artifacts, without a host or plugin.\nBuilding the companion fixture and runner requires CMake 3.25 or newer, a C++17\ncompiler, Git, network access to retrieve the pinned VST3 SDK source, and build\nstorage outside the source repositories. The tested build used CMake 4.2.3 and\nAppleClang 21.0.0 from the Xcode command-line tools. Instructions for creating the\nPython environment, building the host, and generating a first dataset are provided\nin the public companion’s docs/QUICKSTART.md; its docs/VALIDATION.md\ndescribes the complete locked validation workflow. The original source ZIPs retain\ntheir historical archive instructions.\nDependencies\nThe package pins its direct runtime dependencies to NumPy 2.2.6, SoundFile 0.13.1,\nand pyloudnorm 0.1.1. Build and validation tools include Hatchling 1.27.0,\npytest 8.4.1, and Ruff 0.12.0. The package’s requirements/lock.txt records\nthese tools and dependencies, including transitive dependencies, by version and\nartifact hash. The companion repository pins the VST3 SDK revision in\nCMakeLists.txt and records its required submodule revisions in\nTHIRD_PARTY.md.\nList of Contributors\nYoussef Hemimy (St. Thomas University), sole human contributor: software design and\nimplementation, validation, documentation, and maintenance.\nSoftware Location\nVersion 0.1.1 is distributed through public Git repositories, with browsable source,\nline-level history, release tags, and issue reporting. The Python package is also\navailable from PyPI. The original 0.1.0 source archives remain available from Zenodo\n(17, 18); those DOIs identify 0.1.0 only.\nCurrent source and package distribution (0.1.1)\nPackage source:\nhttps://github.com/itsuzef/vst-bench-ml-public\nCompanion source:\nhttps://github.com/itsuzef/vst-bench-dataset-host-public\nPackage index:\nhttps://pypi.org/project/vst-bench-ml/0.1.1/\nRelease tags:\nv0.1.1 in both repositories.\nLicence:\nMIT source; companion output terms remain as stated below.\nThe public histories begin with imports of the published 0.1.0 source snapshots,\nidentified by archive-0.1.0 tags and documented archive hashes. Subsequent\nchanges are tracked as public Git commits; earlier private development history\nis not included.\nPackage archive\nName:\nvst-bench-ml: Auditable Dataset Generation for Audio Plugins\nPersistent identifier:\n10.5281/zenodo.22924036\nRecord and download:\nhttps://zenodo.org/records/22924036\nLicence:\nMIT\nPublisher:\nZenodo\nVersion published:\n0.1.0\nDate published:\n23 September 2026\nCompanion archive\nName:\nvst-bench-dataset-host: Sample-Free VST3 Fixture and Offline Validation Host\nPersistent identifier:\n10.5281/zenodo.22924073\nRecord and download:\nhttps://zenodo.org/records/22924073\nLicence:\nMIT source; CC0-1.0 only for qualifying sample-free generated fixture outputs\nPublisher:\nZenodo\nVersion published:\n0.1.0\nDate published:\n23 September 2026\nThe companion archives support source-snapshot verification; current Git checkouts\nrecord Git source identities instead. External SDK source is retrieved separately.\nNeither the repositories nor the archives include compiled plugin binaries,\ndatasets, or generated audio.\nInstallation and User Documentation\nIn a Python virtual environment, users install the package with\npython -m pip install vst-bench-ml==0.1.1. Pip installs the declared runtime\ndependencies. Rendering additionally requires the separately built host and a\ncompatible plugin; installing the Python package alone supports offline verification\nof existing dataset artifacts.\nThe package’s README landing page\nlinks to the user guide in docs/README.md, covering installation, commands,\noutput files, and troubleshooting. The companion’s\nfirst-dataset walkthrough\ncovers native compilation, starting the local host, rendering the sample-free\nfixture, and verifying eight generated outputs. Architecture and protocol references\nare provided separately. The ordinary user workflow is distinguished from the\ncomplete release-validation procedure and its pinned environment.\nLanguage\nEnglish (documentation and command-line messages).\n(3) Reuse Potential\nThe validated workflow demonstrates generation of parameterized audio observations\nwith the controlled fixture, offline verification of core-format datasets, and the\ncompanion’s conformance checks on the pinned stack. The manifest and kept records\nsupport later auditing, while the event stream preserves records of dropped or failed\nattempts. Offline verification can be used without loading a host or plugin. The\ncompanion additionally demonstrates a complete attempt ledger linked to host traces\nfor its controlled fixture runs.\nPotential extensions include using other plugins, implementing another host, and\nadapting quality rules to a research task. These uses require further validation.\nA new host must implement the documented identity, reset, readback, and rendering\ncontract and establish compatibility on its intended platform. Modified quality\nrules require explicit thresholds, versioning, tests, and provenance. Each extension\nmust also address the rights applicable to its plugins, binaries, and generated\naudio. Table 4 distinguishes demonstrated capabilities from proposed\nextensions and states the evidence limits for each path.\nReuse path\nRequirements\nEvidence and limits\nGenerate observations\nLawful plugin, compatible host, parameter manifest, pinned environment\nDemonstrated with the controlled fixture; other plugins, hosts, and cross-machine output identity are unverified.\nVerify a core dataset\nManifest, records, drop/failure events, and referenced artifacts\nDemonstrated integrity checks; no complete kept-attempt trace or assessment of scientific fitness or perceptual quality.\nRun companion conformance\nPinned fixture, host trace, package wheel/lock, expected metadata\nDemonstrated on the pinned stack; the fixture does not establish representativeness of commercial plugins or musical data.\nImplement another host\nProtocol identity, reset, readback, and render behavior\nProposed extension; each implementation requires compatibility and behavioral validation.\nExtend quality rules\nExplicit thresholds, versions, tests, and provenance\nProposed extension; each rule set requires validation for its intended research task.\nTable 4: Reuse paths, requirements, and evidence distinguishing demonstrated capabilities from proposed extensions.\nThe public source repositories accept questions and bug reports through Issues,\nand source or documentation improvements through pull requests. Each repository\nincludes contribution instructions. The earlier\npublic resources page retains\n0.1.0 archive checksums and links to current sources and documentation.\nNo response-time or ongoing-support guarantee is made.\nData Accessibility\nThe companion source repository and archive include the fixture parameter definitions, fixed MIDI\ninput definitions, expected plan and output hashes, and instructions for regenerating\nthe validation outputs on the documented stack. Generated audio and validation-run\nartifacts are not included in the public archives. Qualifying sample-free generated\nfixture outputs are covered by the companion’s OUTPUT-LICENSE; this does not\nextend to third-party plugins or audio.\nLimitations\nThe historical internal validation covered one macOS arm64 and Python 3.12.13 stack, one\nself-authored fixture, four sampled parameter configurations, and two fixed MIDI\nsignals, producing eight outputs per run. Two runs in fresh processes reproduced\nthe expected sampling-plan hash and output hashes on that setup. This demonstrates\nrepeatability under the tested conditions. The later release checks are also\nscoped to their recorded environments; general reproducibility across machines,\nplatforms, or alternative hosts and plugins has not been established.\nThe validation did not measure runtime performance, usability, external adoption,\nperceptual quality, or downstream model performance. Integrity checks were exercised\nagainst the enumerated negative cases; passing those cases does not establish\ncoverage of every possible failure or provide a security guarantee. The fixture’s\nrights boundary does not transfer to third-party plugins or audio. Each research\nuse must document its own scientific design, data rights, and compatibility\nevidence.\nFunding Statement\nThis work was self-funded by the author. No external funding was received.\nCompeting Interests\nThe author declares no competing interests.\nAuthor Contributions\nYoussef Hemimy: software design and development, validation, documentation, and\nmanuscript review and editing.\nUse of Generative Artificial Intelligence\nClaude and Codex were used as assistants for manuscript drafting and software\nimplementation. An AI research agent also assisted with the internal validation\nworkflow described in the Quality Control section. The author reviewed and edited\nall AI-assisted work and takes responsibility for the software and manuscript.\nNotes\n1. \nThe pre-release validation used package commit\n129c0d1 and companion commit 1346e2ce. Later 0.1.0 release-candidate\nchecks used package commit 02b281a9 and companion commit 27d03a4e.\nThe published companion archive includes source-snapshot verification added after\nthose commits; these commit identifiers describe the earlier validation stages,\nnot the complete archived companion source.\nThe companion workflow pins VST3 SDK commit\n3cdf9ca5d1f5b1b21e0a86832aa4abe55607bd96.",
+  "resourceIdentity": {
+    "contract": "api-reader-resource-identity-v1",
+    "sourceTextSha256": "89760035f6b05b5dca1a03a007cef9581fb4f1f1368fe582523f62688084ec56",
+    "resources": [
+      {
+        "type": "third_party",
+        "origin": "paper_source",
+        "sourceQuote": "Current source and package distribution (0.1.1)\nPackage source:\nhttps://github.com/itsuzef/vst-bench-ml-public\nCompanion source:\nhttps://github.com/itsuzef/vst-bench-dataset-host-public\nPackage index:\nhttps://pypi.org/project/vst-bench-ml/0.1.1/\nRelease tags:\nv0.1.1 in both repositories",
+        "sourceQuoteSha256": "87acc868d2908a292e33965c2fc68fa2d90e2759e7dba3803d60fb80b9e683ec",
+        "originalUrl": "https://github.com/itsuzef/vst-bench-ml-public",
+        "finalUrl": "https://github.com/itsuzef/vst-bench-ml-public",
+        "redirects": [],
+        "status": 200,
+        "availability": "available",
+        "retryable": false
+      },
+      {
+        "type": "third_party",
+        "origin": "paper_source",
+        "sourceQuote": "Current source and package distribution (0.1.1)\nPackage source:\nhttps://github.com/itsuzef/vst-bench-ml-public\nCompanion source:\nhttps://github.com/itsuzef/vst-bench-dataset-host-public\nPackage index:\nhttps://pypi.org/project/vst-bench-ml/0.1.1/\nRelease tags:\nv0.1.1 in both repositories",
+        "sourceQuoteSha256": "87acc868d2908a292e33965c2fc68fa2d90e2759e7dba3803d60fb80b9e683ec",
+        "originalUrl": "https://github.com/itsuzef/vst-bench-dataset-host-public",
+        "finalUrl": "https://github.com/itsuzef/vst-bench-dataset-host-public",
+        "redirects": [],
+        "status": 200,
+        "availability": "available",
+        "retryable": false
+      },
+      {
+        "type": "third_party",
+        "origin": "paper_source",
+        "sourceQuote": "Current source and package distribution (0.1.1)\nPackage source:\nhttps://github.com/itsuzef/vst-bench-ml-public\nCompanion source:\nhttps://github.com/itsuzef/vst-bench-dataset-host-public\nPackage index:\nhttps://pypi.org/project/vst-bench-ml/0.1.1/\nRelease tags:\nv0.1.1 in both repositories",
+        "sourceQuoteSha256": "87acc868d2908a292e33965c2fc68fa2d90e2759e7dba3803d60fb80b9e683ec",
+        "originalUrl": "https://pypi.org/project/vst-bench-ml/0.1.1/",
+        "finalUrl": "https://pypi.org/project/vst-bench-ml/0.1.1/",
+        "redirects": [],
+        "status": 200,
+        "availability": "available",
+        "retryable": false
+      },
+      {
+        "type": "third_party",
+        "origin": "paper_source",
+        "sourceQuote": "Package archive\nName:\nvst-bench-ml: Auditable Dataset Generation for Audio Plugins\nPersistent identifier:\n10.5281/zenodo.22924036\nRecord and download:\nhttps://zenodo.org/records/22924036\nLicence:\nMIT\nPublisher:\nZenodo\nVersion published:\n0.1.0\nDate published:\n23 September 2026\nCompanion archive\nName:\nvst-bench-dataset-host: Sample-Free VST3 Fixture and Offline Validation Host\nPersistent identifier:\n10.5281/zenodo.22924073\nRecord and download:\nhttps://zenodo.org/records/22924073\nLicence:\nMIT source",
+        "sourceQuoteSha256": "28d4baee98acd420fe06668b2458ba42c2c7d42f4319ee1790185ad3e6bc5786",
+        "originalUrl": "https://zenodo.org/records/22924036",
+        "finalUrl": "https://zenodo.org/records/22924036",
+        "redirects": [],
+        "status": 200,
+        "availability": "available",
+        "retryable": false
+      },
+      {
+        "type": "third_party",
+        "origin": "paper_source",
+        "sourceQuote": "Package archive\nName:\nvst-bench-ml: Auditable Dataset Generation for Audio Plugins\nPersistent identifier:\n10.5281/zenodo.22924036\nRecord and download:\nhttps://zenodo.org/records/22924036\nLicence:\nMIT\nPublisher:\nZenodo\nVersion published:\n0.1.0\nDate published:\n23 September 2026\nCompanion archive\nName:\nvst-bench-dataset-host: Sample-Free VST3 Fixture and Offline Validation Host\nPersistent identifier:\n10.5281/zenodo.22924073\nRecord and download:\nhttps://zenodo.org/records/22924073\nLicence:\nMIT source",
+        "sourceQuoteSha256": "28d4baee98acd420fe06668b2458ba42c2c7d42f4319ee1790185ad3e6bc5786",
+        "originalUrl": "https://zenodo.org/records/22924073",
+        "finalUrl": "https://zenodo.org/records/22924073",
+        "redirects": [],
+        "status": 200,
+        "availability": "available",
+        "retryable": false
+      }
+    ],
+    "identitySha256": "1f9ac4b45dba8a02e38cd2114ebebd49dcd0f243ac064b9684a722500047ba61"
+  },
+  "draft": {
+    "version": 3,
+    "readerTitle": "给音频插件数据集留下可核查的生产记录",
+    "oneSentenceThesis": "vst-bench-ml用参数采样加独立宿主渲染来生成音频，并用密封清单绑定软件身份与文件哈希，在固定的macOS arm64与Python 3.12环境下复现了计划哈希与八个输出哈希，但不证明跨平台可移植与科学适用性。",
+    "conceptBridges": [
+      {
+        "terms": [
+          "vst-bench-ml",
+          "宿主",
+          "JSON-RPC 2.0"
+        ],
+        "sectionKind": "method_overview",
+        "marker": "[[CONCEPT_BRIDGE_1]]",
+        "explanation": "vst-bench-ml指负责选参数、发渲染请求和记账的Python编排包，宿主指另外安装并实际加载运行插件的可执行程序，JSON-RPC 2.0指两者在本地回环上交换结构化请求的通信约定；三者搭配把决策与执行分开，使包与宿主可以独立定版，而插件加载与平台行为被隔离在宿主边界处理。"
+      },
+      {
+        "terms": [
+          "records.jsonl",
+          "failures.jsonl",
+          "密封清单"
+        ],
+        "sectionKind": "component",
+        "marker": "[[CONCEPT_BRIDGE_2]]",
+        "explanation": "records.jsonl指只保存被保留观测的记录文件，failures.jsonl指只追加丢弃与失败事件的事件文件，密封清单指记录软件身份、计划哈希与各文件字节数和SHA-256哈希并附加自身规范序列化摘要的JSON清单；三者搭配使保留结果与异常路径分开存放，又能用清单统一核对对应关系与完整性。"
+      },
+      {
+        "terms": [
+          "渲染计划",
+          "MIDI信号",
+          "输出哈希"
+        ],
+        "sectionKind": "training",
+        "marker": "[[CONCEPT_BRIDGE_3]]",
+        "explanation": "渲染计划指由参数定义哈希、变化索引与种子派生确定的采样方案及其哈希，MIDI信号指作为乐器输入的固定音符事件序列，输出哈希指对生成音频字节计算的SHA-256摘要；三者搭配把在什么参数与什么输入下得到什么字节固定下来，复现时只要比较计划哈希与输出哈希就能判断是否一致。"
+      },
+      {
+        "terms": [
+          "核心验证",
+          "伴随验证"
+        ],
+        "sectionKind": "experiment_setup",
+        "marker": "[[CONCEPT_BRIDGE_4]]",
+        "explanation": "核心验证指不加载插件、不重新渲染，只重算密封摘要与文件哈希并核对记录与计数是否一致的离线检查，伴随验证指在受控样例上额外核对宿主轨迹对应、参数回读、复位策略与预期拒绝证据的更严格检查；前者保证已有产物自洽，后者在固定夹具上补齐从尝试到记录的完整证据链。"
+      },
+      {
+        "terms": [
+          "参数回读",
+          "确定性复位",
+          "身份预检"
+        ],
+        "sectionKind": "component",
+        "marker": "[[CONCEPT_BRIDGE_5]]",
+        "explanation": "参数回读指宿主报告其实际装载的参数值以供核对的能力，确定性复位指宿主能把插件恢复到可重复渲染状态的能力，身份预检指在渲染前比对插件路径、标识符与必需身份字段的准入检查；三者搭配使渲染只在身份一致且行为能力具备时才开始，避免在错误插件或不可重复状态下产生数据。"
+      }
+    ],
+    "figurePlacements": [
+      {
+        "figureOrdinal": 1,
+        "targetKind": "method_overview",
+        "marker": "[[FIGURE_1]]",
+        "focusPoints": [
+          "先看左侧Python包指向本地宿主再指向插件的主箭头",
+          "再看虚线框内的产物与宿主轨迹分别流向何处",
+          "最后看底部伴随验证如何把两路证据汇合再密封"
+        ]
+      },
+      {
+        "figureOrdinal": 2,
+        "targetKind": "reproduction",
+        "marker": "[[FIGURE_2]]",
+        "focusPoints": [
+          "先沿上排从身份预检经确定性计划到渲染尝试再到密封的主链",
+          "再看虚线标注的仅伴随工作流分支向下如何连接",
+          "最后比较核心离线验证与伴随离线验证的入口差异"
+        ]
+      }
+    ],
+    "tableBindings": [
+      {
+        "tableIndex": 1,
+        "selection": {
+          "sourceTableOrdinal": 1,
+          "sourceRows": [
+            0,
+            1,
+            2,
+            3
+          ],
+          "sourceColumns": [
+            0,
+            1,
+            2
+          ]
+        }
+      },
+      {
+        "tableIndex": 2,
+        "selection": {
+          "sourceTableOrdinal": 3,
+          "sourceRows": [
+            0,
+            1,
+            3,
+            4,
+            5
+          ],
+          "sourceColumns": [
+            0,
+            1
+          ]
+        }
+      },
+      {
+        "tableIndex": 3,
+        "sourceType": "source_quotes",
+        "sourceTableOrdinal": null,
+        "cellBindings": [],
+        "sourceQuotes": [
+          "Package tests (31) and companion tests (36) passed, as did\nwheel/source-distribution metadata checks and installed-wheel validation.",
+          "Two runs in\nfresh processes reproduced the same render-plan hash and all eight expected output\nhashes, covering four sampled parameter configurations and two fixed MIDI signals;\n12 negative cases also passed."
+        ]
+      },
+      {
+        "tableIndex": 4,
+        "sourceType": "source_quotes",
+        "sourceTableOrdinal": null,
+        "cellBindings": [],
+        "sourceQuotes": [
+          "It does not distribute\na host, plugin binary, dataset, audio, model, preset library, or product schema.",
+          "Neither the repositories nor the archives include compiled plugin binaries,\ndatasets, or generated audio."
+        ]
+      }
+    ],
+    "formulaBindings": [],
+    "sections": [
+      {
+        "kind": "background",
+        "heading": "为什么用插件做数据集需要留下生产记录",
+        "body": "刚接触音频与音乐机器学习的研究生首先要理解本文的输入与输出。输入是音频插件（audio plugin），也就是在宿主软件里加载、能把参数（parameter）与MIDI信号（musical instrument digital interface信号，即音符与控制事件序列）变成声音的程序；目标是用它批量生成受控的音频观测，供后续分析或模型使用。论文要解决的具体问题是，每个输出音频是在什么软件、什么插件设置、什么渲染条件下产生的，必须能被事后核查。如果没有这份记录，就无法判断观测是否按预期条件生成，也无法发现存放后的文件是否被改动。论文的输出因此不只是一批音频，还包括记录保留观测的记录文件、记录丢弃与失败的事件文件，以及把软件身份、计划哈希与文件哈希绑定在一起的密封清单。离线验证时不需要重新加载插件，只重算哈希与核对计数。需要强调的是，这篇软件论文不做模型训练实验，不做听感评价，也不比较生成质量的好坏，通过完整性检查只说明产物与记录自洽，不说明数据集在科学上是否适合某个下游任务。"
+      },
+      {
+        "kind": "related_work",
+        "heading": "已有渲染工具与本文工作的分工有何不同",
+        "body": "在理解本文之前，要把已有路线放对位置。原文提到DawDreamer可以搭建包含VST插件在内的音频处理图并做离线批量处理，Pedalboard可以从Python加载VST3与Audio Unit乐器和效果器。这些工具解决的是如何把插件跑起来、如何批量出声，属于渲染工作流的背景。vst-bench-ml不重复做一遍渲染引擎，它做的是编排与记账：在已有渲染能力之外，加上参数采样、向独立宿主发请求、记录宿主与插件身份、保存输出并密封核查。原文明确说明没有比较这些工具的来源记录能力，因此不能把本文读成谁渲染质量更高或谁速度更快。相关工作的比较条件在这里是不同的：前者比较能否跑通插件，后者比较能否把每一次尝试与结果可审计地连起来。对于初学者，一个恰当的例子是，DawDreamer与Pedalboard像是厨房里的烤箱，而本文像是配菜单、称量记录与封存标签，烤箱与标签解决的是不同环节的问题。"
+      },
+      {
+        "kind": "problem",
+        "heading": "需要固定哪些信息才能事后审计一次渲染",
+        "body": "把审计需求拆开，一次渲染至少要固定三层信息。第一层是执行环境：Python包版本与来源哈希、运行时身份、依赖版本、响度归一化方法，以及宿主的协议版本、源码仓库与版本、构建配置与可执行文件哈希。第二层是宿主与插件身份：插件路径与哈希、格式、名称、厂商与稳定标识符，以及宿主是否具备确定性复位与参数回读能力。第三层是计划与观测：参数定义的哈希、哪些索引被变化、种子如何派生、计划哈希、MIDI信号名称、时间戳、保留记录与丢弃失败事件。论文还要求记录每个产物的相对路径、字节数与SHA-256哈希，以及汇总哈希与数量对账。缺少任何一层，事后都只能看到音频本身，无法回答是用哪个二进制、按哪份计划、在什么条件下生成的。论文把这些字段分层绑定，正是为了让离线检查可以逐项重算，而不是依赖口头说明。"
+      },
+      {
+        "kind": "method_overview",
+        "heading": "包与宿主如何分工并完成一次受控生成",
+        "body": "整体流程可以沿着一个样本来走。研究者先准备参数清单与MIDI输入，Python包向本地宿主请求加载指定插件，宿主返回宿主与插件身份。包比对宿主报告的解析后插件路径与请求路径是否一致，渲染命令再比对参数清单中的插件标识符与宿主返回的标识符是否一致。如果任一比对失败、必需身份字段缺失、宿主报告已加载其他插件，或宿主没有声明确定性复位与参数回读能力，渲染不会开始。通过预检后，包按确定性计划采样参数组合，逐次经宿主渲染，收集音频并做基本质量检查与响度归一化，然后把保留观测写入记录，把丢弃与失败写入事件流，最后生成密封清单。下面的系统边界图展示了这种分离：包只导出音频、记录、事件与密封的核心清单，插件运行发生在另外安装的执行部件中。\n\n以下导读帮助阅读系统边界图，重点看包产物与宿主轨迹如何分开又在伴随验证处汇合。\n\n[[FIGURE_1]]\n\n图中左侧是Python发行包，中间是本地JSON-RPC宿主与VST3样例插件，虚线框表示另外安装的执行部件。包向下导出NPZ音频、丢弃失败事件与密封的核心清单，宿主向下提供夹具宿主轨迹，两路都进入底部仅用于受控样例的伴随验证，再产生保留尝试台账与重新密封的清单。这说明核心产物可以独立存在，伴随流程只是在受控验证时把尝试证据补齐。\n\n[[CONCEPT_BRIDGE_1]]"
+      },
+      {
+        "kind": "component",
+        "heading": "记录文件与密封清单如何防止张冠李戴",
+        "body": "这一节解释记账组件的具体做法。核心包把保留观测写入records.jsonl，把丢弃与失败事件只追加到failures.jsonl，两类信息物理分开，避免把失败记录混入训练数据。JSON清单记录软件与环境身份、采样计划元数据及其哈希、结果计数，以及每个输出与记录文件的相对路径、字节数与SHA-256哈希。密封时对除完整性字段本身之外的清单载荷做规范JSON序列化并计算SHA-256摘要，离线验证时重新计算该摘要与引用文件哈希，检查字节数，并对账记录与事件数量。这种密封只证明与记录的清单一致，不认证清单来源。核心验证会拒绝事件台账中的未知状态；保留观测留在记录文件中，因此仅看核心失败台账不会为每次保留渲染找到一个终态条目。受控夹具的完整尝试台账是伴随仓库另外合成的，它要求成功路径上初始的丢弃失败台账为空，再按每条宿主轨迹追加一条带模式版本的保留尝试条目，并把完整的尝试台账绑定到更严格的伴随清单中，同时另行追加已命名的预期拒绝证据。\n\n[[CONCEPT_BRIDGE_2]]\n\n[[CONCEPT_BRIDGE_5]]"
+      },
+      {
+        "kind": "component",
+        "heading": "来源分层把哪些字段交给谁来保证",
+        "body": "来源分层回答的是每类字段由哪边实现来保证。执行层包括包版本与源码哈希、Python运行时身份、依赖版本与归一化方法，由核心清单绑定，伴随部分再补Git提交与树状态或源码归档清单、已安装轮包来源、锁定文件哈希与本地库身份。宿主与插件层包括协议、宿主源码与构建可执行身份、报告的插件路径与哈希、格式名称厂商与标识符，由宿主上报、核心绑定，预检时检查复位与回读能力，伴随部分再加夹具检查。计划与观测层包括参数定义哈希、变化索引、种子派生、计划哈希、MIDI信号名、时间戳、保留记录与事件，由核心计划元数据、记录、事件台账与密封清单承载。尝试证据层包括有序参数定义、MIDI哈希、尝试编号、轨迹与记录对应、回读、复位策略、保留处置与否定用例，属于仅伴随的证据与完整台账。产物完整性层包括相对路径、字节数、SHA-256、汇总哈希与计数对账，由核心离线验证加更严格的伴随验证完成。这种划分让读者能复述：看到某个字段，就知道该去核心清单还是伴随证据里找。"
+      },
+      {
+        "kind": "training",
+        "heading": "没有模型训练时实际计算了什么",
+        "body": "本研究没有训练神经网络，也没有报告梯度、优化器或损失曲线，因此不能用训练语言来描述它。实际的计算过程是采样、渲染与核查。采样是按种子派生确定参数组合，样例夹具暴露六个参数，包括三个浮点控制、一个有限选项控制、一个整数控制与一个布尔控制，其中一个浮点控制故意与音频无关，另一个具有与波形有关的行為，这些是行為差异而非新增参数类型。渲染是宿主加载插件后按参数与固定MIDI信号离线生成音频，包做数组操作、音频读写与锁定的响度归一化实现。核查是计算字节数与SHA-256、汇总哈希与计划哈希，并在验证时重算比对。所谓确定性在这里指在固定栈上两次全新进程得到相同的计划哈希与输出字节哈希，而不是指数值优化收敛。参数冻结、梯度路径等概念在本篇不适用，原文也没有给出可供消融的模型结构。\n\n[[CONCEPT_BRIDGE_3]]"
+      },
+      {
+        "kind": "experiment_setup",
+        "heading": "验证在什么软件栈与数据规模上进行",
+        "body": "实验条件必须讲清，否则结论会被泛化。历史内部功能验证使用在固定提交检出的干净克隆，构建Python轮包与源码分发，安装19个带锁定版本与产物哈希的依赖，构建夹具与离线运行器，运行单元测试与 lint检查，在全新进程中渲染两次，并执行否定用例。固定栈是macOS arm64与Python 3.12，本地发布验证使用Python 3.12.13，包元数据声明最低要求Python 3.10，伴随夹具与运行器使用C++17与CMake。构建伴随夹具需要CMake 3.25或更新、C++17编译器、Git、联网获取固定的VST3软件开发包源码，以及源码仓库之外的构建存储，测试构建使用CMake 4.2.3与Xcode命令行工具的AppleClang。数据规模很小：一个自研无采样夹具、四种采样参数配置与两种固定MIDI信号，每次运行产生八个输出。0.1.1版本的单独发布检查在新的公开仓库上进行，包提交与伴随提交均有记录，渲染算法与本地夹具实现未变，修正的是模块版本、公开仓库身份与验证器在公开检出下的源码文件边界。\n\n[[CONCEPT_BRIDGE_4]]"
+      },
+      {
+        "kind": "result",
+        "heading": "固定栈上的功能验证复现了什么",
+        "body": "主结果回答的是在固定条件下能否重复得到相同的字节。预发布验证中，包测试31项通过，轮包与源码构建及干净轮包安装通过；宿主测试四项通过，夹具与离线运行器在仓库之外构建；两次全新进程各渲染并保留八条记录，均复现相同的预期计划哈希与全部八个预期输出字节哈希；12项否定用例通过，涵盖替换包产物、错误插件身份、宿主不可达、畸形参数、缺失归一化、越界值、复位回读不一致、重复尝试、损坏输出与不完整台账证据；配置的Ruff检查在禁用缓存下通过。0.1.1的单独发布检查同样复现已有采样计划摘要与全部八个预期输出哈希，12项否定用例也通过，包测试31项与伴随测试36项通过。这些数字只在记录的环境内成立，不能推广到跨机器、跨平台或换插件换宿主仍能字节一致。下面的表格先看组件与权利边界，再看质量门的结果，比较问题都是在固定栈与固定夹具下完整性是否成立。\n\n下表比较三个部件各自的分发边界与权利证据边界，说明产物归属不跨行转移，指标方向是边界是否清晰而非性能高低。\n\n[[TABLE_1]]\n\n表1显示Python编排与离线验证、伴随仓库的夹具源码与验证脚本、外部执行输入三者权利彼此隔离。包不分发宿主与插件二进制，伴随的CC0-1.0只适用于符合条件的无采样生成夹具输出，外部SDK与用户数据需各自建立兼容与权利。这意味着复用时不能默认把夹具的权利条件套用到商业插件上。\n\n下表比较预发布验证中各质量门的观测结果，条件均为固定的macOS arm64与Python 3.12栈，指标方向是通过即一致、失败即不一致。\n\n[[TABLE_2]]\n\n表2的主收益是确定性工作流两次复现相同的计划哈希与输出字节哈希，代价是规模很小且环境被完全锁定。包测试与宿主测试通过只说明代码在该栈可构建可运行，否定用例通过只覆盖已列举的十二种异常，不能理解为覆盖所有可能的失败或提供安全保证。"
+      },
+      {
+        "kind": "result",
+        "heading": "用可核查数字整理通过项与复现范围",
+        "body": "为了让研究生能复述关键步骤，这里把分散在正文中的通过数与复现对象整理成宽表。比较问题是，在受控夹具与锁定依赖下，哪些环节给出了可重算的数字证据，哪些仍是未验证的扩展。公平条件是同一固定栈、同一夹具、同一预期元数据文件中的计划与输出哈希，指标方向是哈希相等即通过、不等即失败。需要提醒，未胜出的部分同样重要：其他插件、其他宿主与跨机器输出一致性均未验证，科学适用性与听感质量也未测量。\n\n下表整理发布检查中的测试通过数与哈希复现数，比较在固定环境下完整性证据是否齐全，数字越大不代表质量越高，只代表覆盖的检查项数量。\n\n| 检查维度 | 包测试通过数 | 伴随测试通过数 | 否定用例通过数 | 哈希复现对象 | 运行条件 |\n| --- | --- | --- | --- | --- | --- |\n| 发布验证 | 31 | 36 | 12 | 计划摘要与八个预期输出哈希 | 全新进程两次渲染 |\n\n上表的主收益是给出了可独立重算的整数证据：包与伴随测试分别给出31与36的通过计数，否定用例给出12的通过计数，哈希复现对象是计划摘要与全部八个预期输出哈希。具体代价是这些数字只在记录的提交与锁定环境下成立，换环境需要重新建立兼容与行為验证，不能直接引用为通用可复现性。\n\n[[TABLE_3]]\n\n下表比较分发边界中哪些产物明确不随包发布，说明复现时需要用户自行准备什么，限制是权利条件不随代码转移。\n\n| 组件 | 分发边界 | 权利边界 | 是否含插件二进制 | 是否含生成音频 |\n| --- | --- | --- | --- | --- |\n| 编排包 | 编排与离线验证 | MIT源码 | 否 | 否 |\n| 伴随仓库 | 夹具源码与验证脚本 | MIT源码与限定输出条款 | 否 | 否 |\n\n上表解释了为什么安装Python包 alone只能做离线验证而不能直接渲染：宿主、插件二进制、数据集与生成音频都不在分发范围内。用户要完整跑通，需要另外获取VST3 SDK源码、合法插件与自选数据，并自行验证兼容性与权利。这也解释了构建需要联网与额外存储的原因。\n\n[[TABLE_4]]"
+      },
+      {
+        "kind": "ablation",
+        "heading": "否定用例覆盖了哪些失败才算通过",
+        "body": "否定用例在本篇相当于失败条件测试，回答的是篡改或误配能否被发现。12项通过的用例包括替换包产物、错误插件身份、宿主不可达、畸形参数、缺失归一化、越界值、复位回读不一致、重复尝试、损坏输出与不完整台账证据。每一项都是预期拒绝证据：系统应当拒绝继续渲染或拒绝验证通过，而不是产生看似正常的数据。例如插件路径或标识符对不上时渲染不应开始，输出字节被改动时验证应当因哈希不等而失败，台账缺失时应当因计数对不上而失败。这些用例支持的判断是，已列举的异常路径会被拦截；不支持的判断是所有可能的失败都被覆盖，原文也明确说明通过这些用例不建立对每种可能攻击的抵抗，也不提供安全保证。对于初学者，重要的是把否定用例读成完整性下限，而非鲁棒性上限，新增质量规则或新宿主都需要另行给出阈值、版本、测试与来源记录。"
+      },
+      {
+        "kind": "limitation",
+        "heading": "结论在什么条件下才成立",
+        "body": "适用边界需要逐项记住。历史内部验证只覆盖一种macOS arm64与Python 3.12.13栈、一个自研夹具、四种采样参数配置与两种固定MIDI信号，每次运行八个输出，两次全新进程复现预期采样计划哈希与输出哈希，这只证明在测试条件下的可重复性。后来的发布检查同样限定在其记录环境中，跨机器、跨平台或换宿主换插件的一般可复现性尚未建立。验证没有测量运行时性能、可用性、外部采用情况、听感质量或下游模型性能，完整性检查只针对已列举的否定用例。夹具的权利边界不转移到第三方插件或音频，每次研究使用都必须记录自己的科学设计、数据权利与兼容证据。容易产生的误解是把哈希一致当成音质好或数据有代表性，原文明确区分：伴随夹具不能证明对商业插件或音乐数据的代表性，核心数据集验证也不评估科学适配度与听感质量。"
+      },
+      {
+        "kind": "reproduction",
+        "heading": "复现第一步要准备什么",
+        "body": "复现要区分普通用户流程与完整发布验证流程。普通用户在Python虚拟环境中用pip安装vst-bench-ml==0.1.1即可获得离线验证能力，渲染则需另外构建宿主与准备兼容插件。完整验证需要按公开伴随仓库的QUICKSTART与VALIDATION文档搭建锁定环境、构建本地宿主、渲染无采样样例并验证八个生成输出。版本0.1.1通过公开Git仓库、包索引安装与用户文档分发，原始0.1.0源码归档仍可从Zenodo获取，但那些DOI只标识0.1.0。公开历史从已发布0.1.0源码快照导入开始，此前私有开发历史不包含，当前Git检出记录Git来源身份而非归档身份。下面的证据生命周期图帮助定位自己处在哪一步。\n\n以下导读帮助阅读证据生命周期图，重点区分核心独立验证与仅伴随的工作流分支。\n\n[[FIGURE_2]]\n\n图中上排从身份预检到确定性计划再到渲染尝试，然后落到NPZ音频与记录事件，再经密封核心清单回到核心离线验证，形成不依赖伴随的闭环。下排虚线标注仅伴随工作流分支，把宿主轨迹与保留尝试台账补齐，再追加否定用例证据并重新密封，最后进入伴随离线验证。这说明拿到已有产物可以直接做核心验证，只有在受控夹具上重做完整尝试证据时才需要走下排分支。"
+      },
+      {
+        "kind": "synthesis",
+        "heading": "什么时候值得尝试还缺哪项验证",
+        "body": "综合来看，当研究需要用音频插件批量生成参数化观测，又希望事后能回答每个文件由哪个软件、哪份计划、在什么条件下产生，并且能在不加载插件的情况下重算哈希核对时，这套方法值得尝试。复现第一步是先用已安装的包对现有产物做核心离线验证，确认密封摘要、字节数、哈希与计数一致，再决定是否投入成本搭建宿主与夹具去重做渲染。还缺的验证要按复用路径补：换插件需要验证新插件的身份、复位与回读行為，换宿主需要实现文档化的身份、复位、回读与渲染契约并在目标平台验证，改质量规则需要给出显式阈值、版本、测试与来源记录，任何涉及第三方插件与音频的用途都要单独处理权利与兼容。代码开源、包可下载与系统可运行是三件事：源码与包索引解决获取，宿主构建与插件准备解决可运行，固定栈上的哈希复现解决可核查，三者齐备才能谈复用。"
+      }
+    ]
+  },
+  "rawDraft": "{\"version\":3,\"readerTitle\":\"给音频插件数据集留下可核查的生产记录\",\"oneSentenceThesis\":\"vst-bench-ml用参数采样加独立宿主渲染来生成音频，并用密封清单绑定软件身份与文件哈希，在固定的macOS arm64与Python 3.12环境下复现了计划哈希与八个输出哈希，但不证明跨平台可移植与科学适用性。\",\"conceptBridges\":[{\"terms\":[\"vst-bench-ml\",\"宿主\",\"JSON-RPC 2.0\"],\"sectionKind\":\"method_overview\",\"marker\":\"[[CONCEPT_BRIDGE_1]]\",\"explanation\":\"vst-bench-ml指负责选参数、发渲染请求和记账的Python编排包，宿主指另外安装并实际加载运行插件的可执行程序，JSON-RPC 2.0指两者在本地回环上交换结构化请求的通信约定；三者搭配把决策与执行分开，使包与宿主可以独立定版，而插件加载与平台行为被隔离在宿主边界处理。\"},{\"terms\":[\"records.jsonl\",\"failures.jsonl\",\"密封清单\"],\"sectionKind\":\"component\",\"marker\":\"[[CONCEPT_BRIDGE_2]]\",\"explanation\":\"records.jsonl指只保存被保留观测的记录文件，failures.jsonl指只追加丢弃与失败事件的事件文件，密封清单指记录软件身份、计划哈希与各文件字节数和SHA-256哈希并附加自身规范序列化摘要的JSON清单；三者搭配使保留结果与异常路径分开存放，又能用清单统一核对对应关系与完整性。\"},{\"terms\":[\"渲染计划\",\"MIDI信号\",\"输出哈希\"],\"sectionKind\":\"training\",\"marker\":\"[[CONCEPT_BRIDGE_3]]\",\"explanation\":\"渲染计划指由参数定义哈希、变化索引与种子派生确定的采样方案及其哈希，MIDI信号指作为乐器输入的固定音符事件序列，输出哈希指对生成音频字节计算的SHA-256摘要；三者搭配把在什么参数与什么输入下得到什么字节固定下来，复现时只要比较计划哈希与输出哈希就能判断是否一致。\"},{\"terms\":[\"核心验证\",\"伴随验证\"],\"sectionKind\":\"experiment_setup\",\"marker\":\"[[CONCEPT_BRIDGE_4]]\",\"explanation\":\"核心验证指不加载插件、不重新渲染，只重算密封摘要与文件哈希并核对记录与计数是否一致的离线检查，伴随验证指在受控样例上额外核对宿主轨迹对应、参数回读、复位策略与预期拒绝证据的更严格检查；前者保证已有产物自洽，后者在固定夹具上补齐从尝试到记录的完整证据链。\"},{\"terms\":[\"参数回读\",\"确定性复位\",\"身份预检\"],\"sectionKind\":\"component\",\"marker\":\"[[CONCEPT_BRIDGE_5]]\",\"explanation\":\"参数回读指宿主报告其实际装载的参数值以供核对的能力，确定性复位指宿主能把插件恢复到可重复渲染状态的能力，身份预检指在渲染前比对插件路径、标识符与必需身份字段的准入检查；三者搭配使渲染只在身份一致且行为能力具备时才开始，避免在错误插件或不可重复状态下产生数据。\"}],\"figurePlacements\":[{\"figureOrdinal\":1,\"targetKind\":\"method_overview\",\"marker\":\"[[FIGURE_1]]\",\"focusPoints\":[\"先看左侧Python包指向本地宿主再指向插件的主箭头\",\"再看虚线框内的产物与宿主轨迹分别流向何处\",\"最后看底部伴随验证如何把两路证据汇合再密封\"]},{\"figureOrdinal\":2,\"targetKind\":\"reproduction\",\"marker\":\"[[FIGURE_2]]\",\"focusPoints\":[\"先沿上排从身份预检经确定性计划到渲染尝试再到密封的主链\",\"再看虚线标注的仅伴随工作流分支向下如何连接\",\"最后比较核心离线验证与伴随离线验证的入口差异\"]}],\"tableBindings\":[{\"tableIndex\":1,\"selection\":{\"sourceTableOrdinal\":1,\"sourceRows\":[0,1,2,3],\"sourceColumns\":[0,1,2]}},{\"tableIndex\":2,\"selection\":{\"sourceTableOrdinal\":3,\"sourceRows\":[0,1,3,4,5],\"sourceColumns\":[0,1]}},{\"tableIndex\":3,\"sourceType\":\"source_quotes\",\"sourceTableOrdinal\":null,\"cellBindings\":[],\"sourceQuotes\":[\"Package tests (31) and companion tests (36) passed, as did\\nwheel/source-distribution metadata checks and installed-wheel validation.\",\"Two runs in\\nfresh processes reproduced the same render-plan hash and all eight expected output\\nhashes, covering four sampled parameter configurations and two fixed MIDI signals;\\n12 negative cases also passed.\"]},{\"tableIndex\":4,\"sourceType\":\"source_quotes\",\"sourceTableOrdinal\":null,\"cellBindings\":[],\"sourceQuotes\":[\"It does not distribute\\na host, plugin binary, dataset, audio, model, preset library, or product schema.\",\"Neither the repositories nor the archives include compiled plugin binaries,\\ndatasets, or generated audio.\"]}],\"formulaBindings\":[],\"sections\":[{\"kind\":\"background\",\"heading\":\"为什么用插件做数据集需要留下生产记录\",\"body\":\"刚接触音频与音乐机器学习的研究生首先要理解本文的输入与输出。输入是音频插件（audio plugin），也就是在宿主软件里加载、能把参数（parameter）与MIDI信号（musical instrument digital interface信号，即音符与控制事件序列）变成声音的程序；目标是用它批量生成受控的音频观测，供后续分析或模型使用。论文要解决的具体问题是，每个输出音频是在什么软件、什么插件设置、什么渲染条件下产生的，必须能被事后核查。如果没有这份记录，就无法判断观测是否按预期条件生成，也无法发现存放后的文件是否被改动。论文的输出因此不只是一批音频，还包括记录保留观测的记录文件、记录丢弃与失败的事件文件，以及把软件身份、计划哈希与文件哈希绑定在一起的密封清单。离线验证时不需要重新加载插件，只重算哈希与核对计数。需要强调的是，这篇软件论文不做模型训练实验，不做听感评价，也不比较生成质量的好坏，通过完整性检查只说明产物与记录自洽，不说明数据集在科学上是否适合某个下游任务。\"},{\"kind\":\"related_work\",\"heading\":\"已有渲染工具与本文工作的分工有何不同\",\"body\":\"在理解本文之前，要把已有路线放对位置。原文提到DawDreamer可以搭建包含VST插件在内的音频处理图并做离线批量处理，Pedalboard可以从Python加载VST3与Audio Unit乐器和效果器。这些工具解决的是如何把插件跑起来、如何批量出声，属于渲染工作流的背景。vst-bench-ml不重复做一遍渲染引擎，它做的是编排与记账：在已有渲染能力之外，加上参数采样、向独立宿主发请求、记录宿主与插件身份、保存输出并密封核查。原文明确说明没有比较这些工具的来源记录能力，因此不能把本文读成谁渲染质量更高或谁速度更快。相关工作的比较条件在这里是不同的：前者比较能否跑通插件，后者比较能否把每一次尝试与结果可审计地连起来。对于初学者，一个恰当的例子是，DawDreamer与Pedalboard像是厨房里的烤箱，而本文像是配菜单、称量记录与封存标签，烤箱与标签解决的是不同环节的问题。\"},{\"kind\":\"problem\",\"heading\":\"需要固定哪些信息才能事后审计一次渲染\",\"body\":\"把审计需求拆开，一次渲染至少要固定三层信息。第一层是执行环境：Python包版本与来源哈希、运行时身份、依赖版本、响度归一化方法，以及宿主的协议版本、源码仓库与版本、构建配置与可执行文件哈希。第二层是宿主与插件身份：插件路径与哈希、格式、名称、厂商与稳定标识符，以及宿主是否具备确定性复位与参数回读能力。第三层是计划与观测：参数定义的哈希、哪些索引被变化、种子如何派生、计划哈希、MIDI信号名称、时间戳、保留记录与丢弃失败事件。论文还要求记录每个产物的相对路径、字节数与SHA-256哈希，以及汇总哈希与数量对账。缺少任何一层，事后都只能看到音频本身，无法回答是用哪个二进制、按哪份计划、在什么条件下生成的。论文把这些字段分层绑定，正是为了让离线检查可以逐项重算，而不是依赖口头说明。\"},{\"kind\":\"method_overview\",\"heading\":\"包与宿主如何分工并完成一次受控生成\",\"body\":\"整体流程可以沿着一个样本来走。研究者先准备参数清单与MIDI输入，Python包向本地宿主请求加载指定插件，宿主返回宿主与插件身份。包比对宿主报告的解析后插件路径与请求路径是否一致，渲染命令再比对参数清单中的插件标识符与宿主返回的标识符是否一致。如果任一比对失败、必需身份字段缺失、宿主报告已加载其他插件，或宿主没有声明确定性复位与参数回读能力，渲染不会开始。通过预检后，包按确定性计划采样参数组合，逐次经宿主渲染，收集音频并做基本质量检查与响度归一化，然后把保留观测写入记录，把丢弃与失败写入事件流，最后生成密封清单。下面的系统边界图展示了这种分离：包只导出音频、记录、事件与密封的核心清单，插件运行发生在另外安装的执行部件中。\\n\\n以下导读帮助阅读系统边界图，重点看包产物与宿主轨迹如何分开又在伴随验证处汇合。\\n\\n[[FIGURE_1]]\\n\\n图中左侧是Python发行包，中间是本地JSON-RPC宿主与VST3样例插件，虚线框表示另外安装的执行部件。包向下导出NPZ音频、丢弃失败事件与密封的核心清单，宿主向下提供夹具宿主轨迹，两路都进入底部仅用于受控样例的伴随验证，再产生保留尝试台账与重新密封的清单。这说明核心产物可以独立存在，伴随流程只是在受控验证时把尝试证据补齐。\\n\\n[[CONCEPT_BRIDGE_1]]\"},{\"kind\":\"component\",\"heading\":\"记录文件与密封清单如何防止张冠李戴\",\"body\":\"这一节解释记账组件的具体做法。核心包把保留观测写入records.jsonl，把丢弃与失败事件只追加到failures.jsonl，两类信息物理分开，避免把失败记录混入训练数据。JSON清单记录软件与环境身份、采样计划元数据及其哈希、结果计数，以及每个输出与记录文件的相对路径、字节数与SHA-256哈希。密封时对除完整性字段本身之外的清单载荷做规范JSON序列化并计算SHA-256摘要，离线验证时重新计算该摘要与引用文件哈希，检查字节数，并对账记录与事件数量。这种密封只证明与记录的清单一致，不认证清单来源。核心验证会拒绝事件台账中的未知状态；保留观测留在记录文件中，因此仅看核心失败台账不会为每次保留渲染找到一个终态条目。受控夹具的完整尝试台账是伴随仓库另外合成的，它要求成功路径上初始的丢弃失败台账为空，再按每条宿主轨迹追加一条带模式版本的保留尝试条目，并把完整的尝试台账绑定到更严格的伴随清单中，同时另行追加已命名的预期拒绝证据。\\n\\n[[CONCEPT_BRIDGE_2]]\\n\\n[[CONCEPT_BRIDGE_5]]\"},{\"kind\":\"component\",\"heading\":\"来源分层把哪些字段交给谁来保证\",\"body\":\"来源分层回答的是每类字段由哪边实现来保证。执行层包括包版本与源码哈希、Python运行时身份、依赖版本与归一化方法，由核心清单绑定，伴随部分再补Git提交与树状态或源码归档清单、已安装轮包来源、锁定文件哈希与本地库身份。宿主与插件层包括协议、宿主源码与构建可执行身份、报告的插件路径与哈希、格式名称厂商与标识符，由宿主上报、核心绑定，预检时检查复位与回读能力，伴随部分再加夹具检查。计划与观测层包括参数定义哈希、变化索引、种子派生、计划哈希、MIDI信号名、时间戳、保留记录与事件，由核心计划元数据、记录、事件台账与密封清单承载。尝试证据层包括有序参数定义、MIDI哈希、尝试编号、轨迹与记录对应、回读、复位策略、保留处置与否定用例，属于仅伴随的证据与完整台账。产物完整性层包括相对路径、字节数、SHA-256、汇总哈希与计数对账，由核心离线验证加更严格的伴随验证完成。这种划分让读者能复述：看到某个字段，就知道该去核心清单还是伴随证据里找。\"},{\"kind\":\"training\",\"heading\":\"没有模型训练时实际计算了什么\",\"body\":\"本研究没有训练神经网络，也没有报告梯度、优化器或损失曲线，因此不能用训练语言来描述它。实际的计算过程是采样、渲染与核查。采样是按种子派生确定参数组合，样例夹具暴露六个参数，包括三个浮点控制、一个有限选项控制、一个整数控制与一个布尔控制，其中一个浮点控制故意与音频无关，另一个具有与波形有关的行為，这些是行為差异而非新增参数类型。渲染是宿主加载插件后按参数与固定MIDI信号离线生成音频，包做数组操作、音频读写与锁定的响度归一化实现。核查是计算字节数与SHA-256、汇总哈希与计划哈希，并在验证时重算比对。所谓确定性在这里指在固定栈上两次全新进程得到相同的计划哈希与输出字节哈希，而不是指数值优化收敛。参数冻结、梯度路径等概念在本篇不适用，原文也没有给出可供消融的模型结构。\\n\\n[[CONCEPT_BRIDGE_3]]\"},{\"kind\":\"experiment_setup\",\"heading\":\"验证在什么软件栈与数据规模上进行\",\"body\":\"实验条件必须讲清，否则结论会被泛化。历史内部功能验证使用在固定提交检出的干净克隆，构建Python轮包与源码分发，安装19个带锁定版本与产物哈希的依赖，构建夹具与离线运行器，运行单元测试与 lint检查，在全新进程中渲染两次，并执行否定用例。固定栈是macOS arm64与Python 3.12，本地发布验证使用Python 3.12.13，包元数据声明最低要求Python 3.10，伴随夹具与运行器使用C++17与CMake。构建伴随夹具需要CMake 3.25或更新、C++17编译器、Git、联网获取固定的VST3软件开发包源码，以及源码仓库之外的构建存储，测试构建使用CMake 4.2.3与Xcode命令行工具的AppleClang。数据规模很小：一个自研无采样夹具、四种采样参数配置与两种固定MIDI信号，每次运行产生八个输出。0.1.1版本的单独发布检查在新的公开仓库上进行，包提交与伴随提交均有记录，渲染算法与本地夹具实现未变，修正的是模块版本、公开仓库身份与验证器在公开检出下的源码文件边界。\\n\\n[[CONCEPT_BRIDGE_4]]\"},{\"kind\":\"result\",\"heading\":\"固定栈上的功能验证复现了什么\",\"body\":\"主结果回答的是在固定条件下能否重复得到相同的字节。预发布验证中，包测试31项通过，轮包与源码构建及干净轮包安装通过；宿主测试四项通过，夹具与离线运行器在仓库之外构建；两次全新进程各渲染并保留八条记录，均复现相同的预期计划哈希与全部八个预期输出字节哈希；12项否定用例通过，涵盖替换包产物、错误插件身份、宿主不可达、畸形参数、缺失归一化、越界值、复位回读不一致、重复尝试、损坏输出与不完整台账证据；配置的Ruff检查在禁用缓存下通过。0.1.1的单独发布检查同样复现已有采样计划摘要与全部八个预期输出哈希，12项否定用例也通过，包测试31项与伴随测试36项通过。这些数字只在记录的环境内成立，不能推广到跨机器、跨平台或换插件换宿主仍能字节一致。下面的表格先看组件与权利边界，再看质量门的结果，比较问题都是在固定栈与固定夹具下完整性是否成立。\\n\\n下表比较三个部件各自的分发边界与权利证据边界，说明产物归属不跨行转移，指标方向是边界是否清晰而非性能高低。\\n\\n[[TABLE_1]]\\n\\n表1显示Python编排与离线验证、伴随仓库的夹具源码与验证脚本、外部执行输入三者权利彼此隔离。包不分发宿主与插件二进制，伴随的CC0-1.0只适用于符合条件的无采样生成夹具输出，外部SDK与用户数据需各自建立兼容与权利。这意味着复用时不能默认把夹具的权利条件套用到商业插件上。\\n\\n下表比较预发布验证中各质量门的观测结果，条件均为固定的macOS arm64与Python 3.12栈，指标方向是通过即一致、失败即不一致。\\n\\n[[TABLE_2]]\\n\\n表2的主收益是确定性工作流两次复现相同的计划哈希与输出字节哈希，代价是规模很小且环境被完全锁定。包测试与宿主测试通过只说明代码在该栈可构建可运行，否定用例通过只覆盖已列举的十二种异常，不能理解为覆盖所有可能的失败或提供安全保证。\"},{\"kind\":\"result\",\"heading\":\"用可核查数字整理通过项与复现范围\",\"body\":\"为了让研究生能复述关键步骤，这里把分散在正文中的通过数与复现对象整理成宽表。比较问题是，在受控夹具与锁定依赖下，哪些环节给出了可重算的数字证据，哪些仍是未验证的扩展。公平条件是同一固定栈、同一夹具、同一预期元数据文件中的计划与输出哈希，指标方向是哈希相等即通过、不等即失败。需要提醒，未胜出的部分同样重要：其他插件、其他宿主与跨机器输出一致性均未验证，科学适用性与听感质量也未测量。\\n\\n下表整理发布检查中的测试通过数与哈希复现数，比较在固定环境下完整性证据是否齐全，数字越大不代表质量越高，只代表覆盖的检查项数量。\\n\\n| 检查维度 | 包测试通过数 | 伴随测试通过数 | 否定用例通过数 | 哈希复现对象 | 运行条件 |\\n| --- | --- | --- | --- | --- | --- |\\n| 发布验证 | 31 | 36 | 12 | 计划摘要与八个预期输出哈希 | 全新进程两次渲染 |\\n\\n上表的主收益是给出了可独立重算的整数证据：包与伴随测试分别给出31与36的通过计数，否定用例给出12的通过计数，哈希复现对象是计划摘要与全部八个预期输出哈希。具体代价是这些数字只在记录的提交与锁定环境下成立，换环境需要重新建立兼容与行為验证，不能直接引用为通用可复现性。\\n\\n[[TABLE_3]]\\n\\n下表比较分发边界中哪些产物明确不随包发布，说明复现时需要用户自行准备什么，限制是权利条件不随代码转移。\\n\\n| 组件 | 分发边界 | 权利边界 | 是否含插件二进制 | 是否含生成音频 |\\n| --- | --- | --- | --- | --- |\\n| 编排包 | 编排与离线验证 | MIT源码 | 否 | 否 |\\n| 伴随仓库 | 夹具源码与验证脚本 | MIT源码与限定输出条款 | 否 | 否 |\\n\\n上表解释了为什么安装Python包 alone只能做离线验证而不能直接渲染：宿主、插件二进制、数据集与生成音频都不在分发范围内。用户要完整跑通，需要另外获取VST3 SDK源码、合法插件与自选数据，并自行验证兼容性与权利。这也解释了构建需要联网与额外存储的原因。\\n\\n[[TABLE_4]]\"},{\"kind\":\"ablation\",\"heading\":\"否定用例覆盖了哪些失败才算通过\",\"body\":\"否定用例在本篇相当于失败条件测试，回答的是篡改或误配能否被发现。12项通过的用例包括替换包产物、错误插件身份、宿主不可达、畸形参数、缺失归一化、越界值、复位回读不一致、重复尝试、损坏输出与不完整台账证据。每一项都是预期拒绝证据：系统应当拒绝继续渲染或拒绝验证通过，而不是产生看似正常的数据。例如插件路径或标识符对不上时渲染不应开始，输出字节被改动时验证应当因哈希不等而失败，台账缺失时应当因计数对不上而失败。这些用例支持的判断是，已列举的异常路径会被拦截；不支持的判断是所有可能的失败都被覆盖，原文也明确说明通过这些用例不建立对每种可能攻击的抵抗，也不提供安全保证。对于初学者，重要的是把否定用例读成完整性下限，而非鲁棒性上限，新增质量规则或新宿主都需要另行给出阈值、版本、测试与来源记录。\"},{\"kind\":\"limitation\",\"heading\":\"结论在什么条件下才成立\",\"body\":\"适用边界需要逐项记住。历史内部验证只覆盖一种macOS arm64与Python 3.12.13栈、一个自研夹具、四种采样参数配置与两种固定MIDI信号，每次运行八个输出，两次全新进程复现预期采样计划哈希与输出哈希，这只证明在测试条件下的可重复性。后来的发布检查同样限定在其记录环境中，跨机器、跨平台或换宿主换插件的一般可复现性尚未建立。验证没有测量运行时性能、可用性、外部采用情况、听感质量或下游模型性能，完整性检查只针对已列举的否定用例。夹具的权利边界不转移到第三方插件或音频，每次研究使用都必须记录自己的科学设计、数据权利与兼容证据。容易产生的误解是把哈希一致当成音质好或数据有代表性，原文明确区分：伴随夹具不能证明对商业插件或音乐数据的代表性，核心数据集验证也不评估科学适配度与听感质量。\"},{\"kind\":\"reproduction\",\"heading\":\"复现第一步要准备什么\",\"body\":\"复现要区分普通用户流程与完整发布验证流程。普通用户在Python虚拟环境中用pip安装vst-bench-ml==0.1.1即可获得离线验证能力，渲染则需另外构建宿主与准备兼容插件。完整验证需要按公开伴随仓库的QUICKSTART与VALIDATION文档搭建锁定环境、构建本地宿主、渲染无采样样例并验证八个生成输出。版本0.1.1通过公开Git仓库、包索引安装与用户文档分发，原始0.1.0源码归档仍可从Zenodo获取，但那些DOI只标识0.1.0。公开历史从已发布0.1.0源码快照导入开始，此前私有开发历史不包含，当前Git检出记录Git来源身份而非归档身份。下面的证据生命周期图帮助定位自己处在哪一步。\\n\\n以下导读帮助阅读证据生命周期图，重点区分核心独立验证与仅伴随的工作流分支。\\n\\n[[FIGURE_2]]\\n\\n图中上排从身份预检到确定性计划再到渲染尝试，然后落到NPZ音频与记录事件，再经密封核心清单回到核心离线验证，形成不依赖伴随的闭环。下排虚线标注仅伴随工作流分支，把宿主轨迹与保留尝试台账补齐，再追加否定用例证据并重新密封，最后进入伴随离线验证。这说明拿到已有产物可以直接做核心验证，只有在受控夹具上重做完整尝试证据时才需要走下排分支。\"},{\"kind\":\"synthesis\",\"heading\":\"什么时候值得尝试还缺哪项验证\",\"body\":\"综合来看，当研究需要用音频插件批量生成参数化观测，又希望事后能回答每个文件由哪个软件、哪份计划、在什么条件下产生，并且能在不加载插件的情况下重算哈希核对时，这套方法值得尝试。复现第一步是先用已安装的包对现有产物做核心离线验证，确认密封摘要、字节数、哈希与计数一致，再决定是否投入成本搭建宿主与夹具去重做渲染。还缺的验证要按复用路径补：换插件需要验证新插件的身份、复位与回读行為，换宿主需要实现文档化的身份、复位、回读与渲染契约并在目标平台验证，改质量规则需要给出显式阈值、版本、测试与来源记录，任何涉及第三方插件与音频的用途都要单独处理权利与兼容。代码开源、包可下载与系统可运行是三件事：源码与包索引解决获取，宿主构建与插件准备解决可运行，固定栈上的哈希复现解决可核查，三者齐备才能谈复用。\"}]}",
+  "issues": [
+    {
+      "path": null,
+      "message": "读者文章中的资源声明与已验证的可达状态不一致：/sections/13/body 声称本文 code 已开源或当前可用，但资源身份记录中没有该类型处于 available 状态的资源; conflictExcerpt=\"代码开源、包可下载与系统可运行是三件事：源码与包索引解决获取，宿主构建与插件准备解决可运行，固定栈上的哈希复现解决可核查，三者齐备才能谈复用。\""
+    },
+    {
+      "path": "/sections/13/body",
+      "message": "/sections/13/body 声称本文 code 已开源或当前可用，但资源身份记录中没有该类型处于 available 状态的资源",
+      "conflictExcerpt": "代码开源、包可下载与系统可运行是三件事：源码与包索引解决获取，宿主构建与插件准备解决可运行，固定栈上的哈希复现解决可核查，三者齐备才能谈复用。",
+      "code": "reader_resource_availability_claim"
+    },
+    {
+      "path": "/tableBindings/2",
+      "message": "tableBindings[2] 使用 source_quotes 时正文必须直接写 Markdown 表，不能使用 [[TABLE_3]]；同步修改 sections[9].body 与本绑定项"
+    },
+    {
+      "path": "/sections/9/body",
+      "message": "sections[9].body 的 [[TABLE_3]] 没有selection绑定，需由模型按原文写出完整Markdown表；tableBindings[2]本身不会生成表格"
+    },
+    {
+      "path": "/tableBindings/3",
+      "message": "tableBindings[3] 使用 source_quotes 时正文必须直接写 Markdown 表，不能使用 [[TABLE_4]]；同步修改 sections[9].body 与本绑定项"
+    },
+    {
+      "path": "/sections/9/body",
+      "message": "sections[9].body 的 [[TABLE_4]] 没有selection绑定，需由模型按原文写出完整Markdown表；tableBindings[3]本身不会生成表格"
+    }
+  ],
+  "attempts": 1,
+  "fullAttempts": 1,
+  "structuredArtifacts": {
+    "figures": [
+      {
+        "caption": "Figure 1: System boundary. The package exports NPZ audio, records, events, and a sealed core manifest. The host runs the plugin and supplies fixture traces; companion validation adds kept-attempt evidence and reseals the manifest. Source: author’s diagram.",
+        "images": [
+          {
+            "alt": "",
+            "kind": "external_url",
+            "mediaType": "image/svg+xml",
+            "rasterDownloadEligible": false,
+            "url": "https://arxiv.org/html/2610.20465v1/system-boundary.svg"
+          }
+        ],
+        "label": "Figure 1:",
+        "ordinal": 1,
+        "recoveryStatus": "complete",
+        "sourceDomSha256": "7d417f169ccfee3d25466ab5583821ad71b1f4c61b1f20e4770fcdc0f3384693"
+      },
+      {
+        "caption": "Figure 2: Evidence lifecycle. Core artifacts can be sealed and verified without the companion. The separate fixture workflow combines a successful core run with host traces, adds kept-attempt and expected-rejection evidence, and reseals for companion verification. Drop/failure records are preserved by the core; the successful fixture path requires an initially empty failure ledger. Source: author’s diagram.",
+        "images": [
+          {
+            "alt": "",
+            "kind": "external_url",
+            "mediaType": "image/svg+xml",
+            "rasterDownloadEligible": false,
+            "url": "https://arxiv.org/html/2610.20465v1/evidence-lifecycle.svg"
+          }
+        ],
+        "label": "Figure 2:",
+        "ordinal": 2,
+        "recoveryStatus": "complete",
+        "sourceDomSha256": "0d2ba5842e8b1b332f6b4538f08c82813642801a5bf0557232d976b23b3d28b1"
+      }
+    ],
+    "flattenedTextSha256": "89760035f6b05b5dca1a03a007cef9581fb4f1f1368fe582523f62688084ec56",
+    "formulas": [],
+    "health": {
+      "detected": {
+        "bibliographies": 1,
+        "figures": 2,
+        "formulas": 0,
+        "references": 18,
+        "tables": 4
+      },
+      "issues": [],
+      "recovered": {
+        "figures": 2,
+        "formulas": 0,
+        "references": 18,
+        "tables": 4
+      },
+      "status": "complete",
+      "truncated": false
+    },
+    "paperId": "2610.20465",
+    "parserVersion": "arxiv-html-dom-v4",
+    "payloadSha256": "ea421f9cdbeeeb90a9e09136f56d9ce6d9dd5ba881bd00c55e85e14db981b3e3",
+    "references": [
+      {
+        "hrefs": [],
+        "label": "(1)",
+        "ordinal": 1,
+        "sourceDomSha256": "3c47fe42c605b86c196c616b9a6ea810fdc30f66594462472f121ff0fc37ba4d",
+        "text": "(1) Braun D. DawDreamer: bridging the gap between digital audio workstations and Python interfaces. In: 22nd International Society for Music Information Retrieval Conference, Late-Breaking Demo; 2021. doi:10.48550/arXiv.2111.09931."
+      },
+      {
+        "hrefs": [
+          "https://github.com/spotify/pedalboard"
+        ],
+        "label": "(2)",
+        "ordinal": 2,
+        "sourceDomSha256": "fad87a9299f757f6c7c912c3811a249455467781bfa79a0cb4868f8c327dd0f1",
+        "text": "(2) Sobot P. Pedalboard [software]. Zenodo; 2023. doi:10.5281/zenodo.7817838. Available from: https://github.com/spotify/pedalboard."
+      },
+      {
+        "hrefs": [
+          "https://www.jsonrpc.org/specification"
+        ],
+        "label": "(3)",
+        "ordinal": 3,
+        "sourceDomSha256": "7622db9f18c59ae30361c21c49644149deca7dd1d11fa93747b3628c0aca08cb",
+        "text": "(3) JSON-RPC Working Group. JSON-RPC 2.0 Specification [Internet]. 2010 [cited 2026 Sep 23]. Available from: https://www.jsonrpc.org/specification."
+      },
+      {
+        "hrefs": [
+          "https://docs.python.org/3/"
+        ],
+        "label": "(4)",
+        "ordinal": 4,
+        "sourceDomSha256": "dc0fe5d7c3f9dc77e72e8e31e1db416b4b228f09ec1351b7a4de497762bde943",
+        "text": "(4) Python Software Foundation. Python 3 documentation [Internet]. [cited 2026 Sep 23]. Available from: https://docs.python.org/3/."
+      },
+      {
+        "hrefs": [],
+        "label": "(5)",
+        "ordinal": 5,
+        "sourceDomSha256": "805d92bfebdbec1b1eab7de9c559d16adf52dfb07300d86fc37fc77b45792070",
+        "text": "(5) Harris CR, Millman KJ, van der Walt SJ, et al. Array programming with NumPy. Nature. 2020;585:357–362. doi:10.1038/s41586-020-2649-2."
+      },
+      {
+        "hrefs": [
+          "https://github.com/bastibe/python-soundfile"
+        ],
+        "label": "(6)",
+        "ordinal": 6,
+        "sourceDomSha256": "da87d9d15964c7bdd04c02aac428ceff156ee881a84af45abf35a32febced272",
+        "text": "(6) Bechtold B. python-soundfile [software; Internet]. [cited 2026 Sep 23]. Available from: https://github.com/bastibe/python-soundfile."
+      },
+      {
+        "hrefs": [
+          "https://libsndfile.github.io/libsndfile/"
+        ],
+        "label": "(7)",
+        "ordinal": 7,
+        "sourceDomSha256": "c03c1a4e40cf4d1ba0bff85bf2d882ca6aa7ac46aae66691155773ddaf8e6b6d",
+        "text": "(7) de Castro Lopo E, libsndfile contributors. libsndfile [software; Internet]. [cited 2026 Sep 23]. Available from: https://libsndfile.github.io/libsndfile/."
+      },
+      {
+        "hrefs": [
+          "https://github.com/csteinmetz1/pyloudnorm"
+        ],
+        "label": "(8)",
+        "ordinal": 8,
+        "sourceDomSha256": "8bc062d256c913e2f66c5fd660e74d41aa632a7112756f12db90075e7208a082",
+        "text": "(8) Steinmetz CJ, Reiss JD. pyloudnorm: a simple yet flexible loudness meter in Python. In: 150th Convention of the Audio Engineering Society; 2021. Available from: https://github.com/csteinmetz1/pyloudnorm."
+      },
+      {
+        "hrefs": [
+          "https://github.com/steinbergmedia/vst3sdk"
+        ],
+        "label": "(9)",
+        "ordinal": 9,
+        "sourceDomSha256": "8f846ec5a73dc28c0d3d12f2fe0bb68fda9c4a8ece531a906b863013982352ee",
+        "text": "(9) Steinberg Media Technologies GmbH. VST 3 Plug-In SDK [software; Internet]. [cited 2026 Sep 23]. Available from: https://github.com/steinbergmedia/vst3sdk."
+      },
+      {
+        "hrefs": [
+          "https://www.w3.org/TR/prov-dm/"
+        ],
+        "label": "(10)",
+        "ordinal": 10,
+        "sourceDomSha256": "f2994dcfafad1fa227c788972fc0407c9fc6057a8d217214d12bd4351956ba56",
+        "text": "(10) Moreau L, Missier P, editors. PROV-DM: the PROV data model [Internet]. W3C Recommendation. World Wide Web Consortium; 2013 [cited 2026 Sep 23]. Available from: https://www.w3.org/TR/prov-dm/."
+      },
+      {
+        "hrefs": [
+          "https://hatch.pypa.io/latest/config/build/"
+        ],
+        "label": "(11)",
+        "ordinal": 11,
+        "sourceDomSha256": "fc8a59f4324b91fd5a66facf3936b89aaa18b68af85bd8d9933f54ad0af8d1fd",
+        "text": "(11) Python Packaging Authority. Hatchling build backend documentation [Internet]. [cited 2026 Sep 23]. Available from: https://hatch.pypa.io/latest/config/build/."
+      },
+      {
+        "hrefs": [
+          "https://docs.pytest.org/"
+        ],
+        "label": "(12)",
+        "ordinal": 12,
+        "sourceDomSha256": "125b3cedde8ac1824eb66ae532de1a3050bb5d80d6a0132c7b347387237b18b0",
+        "text": "(12) pytest Development Team. pytest documentation [Internet]. [cited 2026 Sep 23]. Available from: https://docs.pytest.org/."
+      },
+      {
+        "hrefs": [
+          "https://docs.astral.sh/ruff/"
+        ],
+        "label": "(13)",
+        "ordinal": 13,
+        "sourceDomSha256": "7307402effe3bd268ab0fb65fc1a6289cbafe7f39f9057669ea9955fcd65e333",
+        "text": "(13) Astral Software Inc. Ruff documentation [Internet]. [cited 2026 Sep 23]. Available from: https://docs.astral.sh/ruff/."
+      },
+      {
+        "hrefs": [
+          "https://cmake.org/cmake/help/latest/"
+        ],
+        "label": "(14)",
+        "ordinal": 14,
+        "sourceDomSha256": "c722c844d9356113a5a9794f0503a560f0f6365d2bee4cdace047e94bdad5081",
+        "text": "(14) Kitware Inc. CMake documentation [Internet]. [cited 2026 Sep 23]. Available from: https://cmake.org/cmake/help/latest/."
+      },
+      {
+        "hrefs": [
+          "https://git-scm.com/docs"
+        ],
+        "label": "(15)",
+        "ordinal": 15,
+        "sourceDomSha256": "f615e2d70b06d36a0cffe708336d542248efaa553f128341e6e3305c5a6dac67",
+        "text": "(15) Git Project. Git documentation [Internet]. [cited 2026 Sep 23]. Available from: https://git-scm.com/docs."
+      },
+      {
+        "hrefs": [
+          "https://developer.apple.com/documentation/xcode"
+        ],
+        "label": "(16)",
+        "ordinal": 16,
+        "sourceDomSha256": "dfb2f540d42a0d251d602688bb5d03eb94e5e7e13102c3ae814aa1c46f39dddd",
+        "text": "(16) Apple Inc. Xcode documentation [Internet]. [cited 2026 Sep 23]. Available from: https://developer.apple.com/documentation/xcode."
+      },
+      {
+        "hrefs": [
+          "https://zenodo.org/records/22924036"
+        ],
+        "label": "(17)",
+        "ordinal": 17,
+        "sourceDomSha256": "b196a61d156637d88734bb53623b9a29943be078fda4828378173064dcb177c4",
+        "text": "(17) Hemimy Y. vst-bench-ml: auditable dataset generation for audio plugins [software]. Version 0.1.0. Zenodo; 2026 Sep 23. doi:10.5281/zenodo.22924036. Available from: https://zenodo.org/records/22924036."
+      },
+      {
+        "hrefs": [
+          "https://zenodo.org/records/22924073"
+        ],
+        "label": "(18)",
+        "ordinal": 18,
+        "sourceDomSha256": "604b5c9290b527683069eabb1dfba7b001ca44e757af5bea8fe5c4eb88974251",
+        "text": "(18) Hemimy Y. vst-bench-dataset-host: sample-free VST3 fixture and offline validation host [software]. Version 0.1.0. Zenodo; 2026 Sep 23. doi:10.5281/zenodo.22924073. Available from: https://zenodo.org/records/22924073."
+      }
+    ],
+    "sourceHtmlSha256": "5f7f6a01e8bef52d7107d10fc17f1e50bd25a4b9913c8a427427ebb8f2d1b772",
+    "sourceId": "2610.20465",
+    "sourceKind": "arxiv_html",
+    "tables": [
+      {
+        "bodyRows": [
+          1,
+          2,
+          3
+        ],
+        "caption": "Table 1: Component and rights boundaries.",
+        "cells": [
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": true,
+            "row": 0,
+            "rowspan": 1,
+            "sourceDomSha256": "c08aa74dd7b2247ab467631ec3092845ff16f4815cf3edf15db9edb38adf5a84",
+            "text": "Component"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": true,
+            "row": 0,
+            "rowspan": 1,
+            "sourceDomSha256": "f5b1b1939cc7ba30a1b25400a584e0d2787769770e7c4bd2b852e24bd6b47b2d",
+            "text": "Distributed boundary"
+          },
+          {
+            "colspan": 1,
+            "column": 2,
+            "header": true,
+            "row": 0,
+            "rowspan": 1,
+            "sourceDomSha256": "1e5aa26d2707736861892922392c4fa27e1ff563fa63e5fb4adfa7c8db5ea63a",
+            "text": "Rights and evidence boundary"
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 1,
+            "rowspan": 1,
+            "sourceDomSha256": "b20e936bd5c87829b4500fe02af5a9d58039f612aeaf790d96e63d2817e78813",
+            "text": "vst-bench-ml"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 1,
+            "rowspan": 1,
+            "sourceDomSha256": "680efddaf19a8c3cd86599e6d6e1c4125bf640f1c69b73bf8e36e9d1482c6f64",
+            "text": "Python orchestration and offline verification"
+          },
+          {
+            "colspan": 1,
+            "column": 2,
+            "header": false,
+            "row": 1,
+            "rowspan": 1,
+            "sourceDomSha256": "96949be00b3fdf2f7ee85e15e88bfe5457ba369f803e8a40f80aeb7b43c1e851",
+            "text": "MIT source; no host, plugin, dataset, audio, model, private research module, or third-party binary."
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 2,
+            "rowspan": 1,
+            "sourceDomSha256": "b15e33cfa466752ffb5b05c0095b4d44654a1c50d9290e7f67ee199256f15aaf",
+            "text": "Companion repository"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 2,
+            "rowspan": 1,
+            "sourceDomSha256": "10e7ef32fa5d050154f44f7c2530f8212c35cb27ae023a24b12ea061bf7de83d",
+            "text": "Fixture source, offline host, validation scripts, and expected metadata"
+          },
+          {
+            "colspan": 1,
+            "column": 2,
+            "header": false,
+            "row": 2,
+            "rowspan": 1,
+            "sourceDomSha256": "74f1e207d10a2292421a9a547ee247868f0046ebe92c3bf59f432e34d396bdc0",
+            "text": "MIT source; CC0-1.0 applies only to qualifying sample-free generated fixture outputs."
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 3,
+            "rowspan": 1,
+            "sourceDomSha256": "20f98920f21d774a3630c4c4d34d4d5b32db2745dbc7c829e32d53dfbe2957ec",
+            "text": "External execution inputs"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 3,
+            "rowspan": 1,
+            "sourceDomSha256": "5c0dd8ca390bd0cbcda5d3ab0f1a8457c094cd3df902ecbd364c1dca63946bf0",
+            "text": "Separately installed VST3 SDK, lawful plugins, and user-selected data"
+          },
+          {
+            "colspan": 1,
+            "column": 2,
+            "header": false,
+            "row": 3,
+            "rowspan": 1,
+            "sourceDomSha256": "79a1dd43e0c89d4efc433ca08c7857b9a6d03515594175bfea6ee57106512696",
+            "text": "Not relicensed or redistributed; each use must establish its own compatibility and rights."
+          }
+        ],
+        "headerRows": [
+          0
+        ],
+        "label": "Table 1:",
+        "matrix": [
+          [
+            "Component",
+            "Distributed boundary",
+            "Rights and evidence boundary"
+          ],
+          [
+            "vst-bench-ml",
+            "Python orchestration and offline verification",
+            "MIT source; no host, plugin, dataset, audio, model, private research module, or third-party binary."
+          ],
+          [
+            "Companion repository",
+            "Fixture source, offline host, validation scripts, and expected metadata",
+            "MIT source; CC0-1.0 applies only to qualifying sample-free generated fixture outputs."
+          ],
+          [
+            "External execution inputs",
+            "Separately installed VST3 SDK, lawful plugins, and user-selected data",
+            "Not relicensed or redistributed; each use must establish its own compatibility and rights."
+          ]
+        ],
+        "ordinal": 1,
+        "recoveryStatus": "complete",
+        "sourceDomSha256": "ea328ac5c1c277ad033e5e7ebbeacbe82e9f97c9d96e133970a4c872fc4d645e"
+      },
+      {
+        "bodyRows": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "caption": "Table 2: Provenance layers, fields, and implementation ownership.",
+        "cells": [
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": true,
+            "row": 0,
+            "rowspan": 1,
+            "sourceDomSha256": "87d8a7f28fbe59c46ad2086b70dc7e11fac13ac9027575933f8d2dc22e10b1e7",
+            "text": "Layer"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": true,
+            "row": 0,
+            "rowspan": 1,
+            "sourceDomSha256": "2b5cc9b1bd703756f0aa6699756c7d14c552b771c5fb6172a21b8849a1854b6a",
+            "text": "Bound fields"
+          },
+          {
+            "colspan": 1,
+            "column": 2,
+            "header": true,
+            "row": 0,
+            "rowspan": 1,
+            "sourceDomSha256": "e4c841ce57e22c1f35eb0ea67998a115847fcd004a120a5f83c80bcd79465c99",
+            "text": "Implementation boundary"
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 1,
+            "rowspan": 1,
+            "sourceDomSha256": "7225fec54b9eb32963359ed476949bc38db0462ed8b1b4049703f0121e1b5d8c",
+            "text": "Execution"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 1,
+            "rowspan": 1,
+            "sourceDomSha256": "211082c5bd53ceb1585ca7aa492392bed6d239938785be78cf71ff5cd9e29e77",
+            "text": "Package version and source hashes, Python/runtime identity, dependency versions, normalization method"
+          },
+          {
+            "colspan": 1,
+            "column": 2,
+            "header": false,
+            "row": 1,
+            "rowspan": 1,
+            "sourceDomSha256": "f27e7c2eb04f0d1ee9aa78f81b915928fc8575ad35982c78d2cc5c99692a192a",
+            "text": "Core manifest; companion adds Git commit/tree/dirty state or source-archive manifest/file-list hashes, installed-wheel provenance, lock hash, and native-library identities."
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 2,
+            "rowspan": 1,
+            "sourceDomSha256": "841ad9e918a3dd27ffcdf1f6744151a5951c8c2c51441765ac14427b5f0ceeb5",
+            "text": "Host/plugin"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 2,
+            "rowspan": 1,
+            "sourceDomSha256": "a23d21d0024ca8f6739b8d76750777882b97252f2950e292e33d47fbbeb5b49c",
+            "text": "Protocol, host source, build and executable identity, reported plugin path and hash, format, name, vendor, identifier"
+          },
+          {
+            "colspan": 1,
+            "column": 2,
+            "header": false,
+            "row": 2,
+            "rowspan": 1,
+            "sourceDomSha256": "f1260bc1b8fe644ee575957ba86b10e4ea99036b39e114337d8585bb86fb86e1",
+            "text": "Host-reported identities bound by core; reset/readback capabilities checked at preflight. Companion adds fixture checks."
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 3,
+            "rowspan": 1,
+            "sourceDomSha256": "c30d935479d02eaca9f34a511ac6eaa62f0fe2ef81e5fa586b19728ac8e90d0d",
+            "text": "Plan and observation"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 3,
+            "rowspan": 1,
+            "sourceDomSha256": "2f32617f450832003bb93a6951b4d64d7d9794a41dc2ff8145ca8a222e61716e",
+            "text": "Parameter-definition hashes, varied indices, seed derivation, plan hash, MIDI signal names, timestamps, kept records, drop/failure events"
+          },
+          {
+            "colspan": 1,
+            "column": 2,
+            "header": false,
+            "row": 3,
+            "rowspan": 1,
+            "sourceDomSha256": "ba181341069284148dd61de1dabfef7e54d30d1baff85c766f89cd1dcb723907",
+            "text": "Core plan metadata, records, event ledger, and sealed manifest."
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 4,
+            "rowspan": 1,
+            "sourceDomSha256": "733f39e60612b79cf0f863340a1818284b8837cf94f0a2a0731c51754fa98d16",
+            "text": "Attempt evidence"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 4,
+            "rowspan": 1,
+            "sourceDomSha256": "d42e478f7c0be3336f8da3a5f1eb5f03ed1e32369549582dc657abba2b2e9979",
+            "text": "Ordered parameter definitions, MIDI hashes, attempt IDs, trace/record correspondence, readback, reset policy, kept disposition, negative cases"
+          },
+          {
+            "colspan": 1,
+            "column": 2,
+            "header": false,
+            "row": 4,
+            "rowspan": 1,
+            "sourceDomSha256": "e8e15e4862cccacb42884cfad8e9945a35de934344afd32c37ea8f1893ddd882",
+            "text": "Companion-only evidence and complete ledger for the controlled fixture."
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 5,
+            "rowspan": 1,
+            "sourceDomSha256": "b16fe9a2a5baa52917c0196f1d25f4ee1cbdc427e65495ee3db5c65f56e199e3",
+            "text": "Artifact integrity"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 5,
+            "rowspan": 1,
+            "sourceDomSha256": "3227617c1c73006555e6eb3b4b84270132149807464939d33784019018e52763",
+            "text": "Relative path, byte count, SHA-256, aggregate hashes, count reconciliation"
+          },
+          {
+            "colspan": 1,
+            "column": 2,
+            "header": false,
+            "row": 5,
+            "rowspan": 1,
+            "sourceDomSha256": "0e8af58d212baa0c49f9c1c28d7ffb42b751efa8657f824156f35e30c3331de1",
+            "text": "Core offline verification plus stricter companion validation."
+          }
+        ],
+        "headerRows": [
+          0
+        ],
+        "label": "Table 2:",
+        "matrix": [
+          [
+            "Layer",
+            "Bound fields",
+            "Implementation boundary"
+          ],
+          [
+            "Execution",
+            "Package version and source hashes, Python/runtime identity, dependency versions, normalization method",
+            "Core manifest; companion adds Git commit/tree/dirty state or source-archive manifest/file-list hashes, installed-wheel provenance, lock hash, and native-library identities."
+          ],
+          [
+            "Host/plugin",
+            "Protocol, host source, build and executable identity, reported plugin path and hash, format, name, vendor, identifier",
+            "Host-reported identities bound by core; reset/readback capabilities checked at preflight. Companion adds fixture checks."
+          ],
+          [
+            "Plan and observation",
+            "Parameter-definition hashes, varied indices, seed derivation, plan hash, MIDI signal names, timestamps, kept records, drop/failure events",
+            "Core plan metadata, records, event ledger, and sealed manifest."
+          ],
+          [
+            "Attempt evidence",
+            "Ordered parameter definitions, MIDI hashes, attempt IDs, trace/record correspondence, readback, reset policy, kept disposition, negative cases",
+            "Companion-only evidence and complete ledger for the controlled fixture."
+          ],
+          [
+            "Artifact integrity",
+            "Relative path, byte count, SHA-256, aggregate hashes, count reconciliation",
+            "Core offline verification plus stricter companion validation."
+          ]
+        ],
+        "ordinal": 2,
+        "recoveryStatus": "complete",
+        "sourceDomSha256": "5d1200d2f99d04b76a06701b05084ae9dce35f31f5375489f50babffe6e21692"
+      },
+      {
+        "bodyRows": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "caption": "Table 3: Quality-control results from the pre-release validation pass on the pinned macOS arm64 and Python 3.12 stack. Later release-candidate checks were producer-run.",
+        "cells": [
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": true,
+            "row": 0,
+            "rowspan": 1,
+            "sourceDomSha256": "bd5a64ec5379670a77b68c7f4eccac6cf3b3915956a087cd263309c899842b81",
+            "text": "Gate"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": true,
+            "row": 0,
+            "rowspan": 1,
+            "sourceDomSha256": "e526989af4400f2c429885de7359fb5aa640cd51186e3a9eadeb04e898ecef89",
+            "text": "Observed result on pinned stack"
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 1,
+            "rowspan": 1,
+            "sourceDomSha256": "bec3d6718c546423678a5724c90a8f59987f518deb111ea2997a7ea45fa06bd8",
+            "text": "Package tests"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 1,
+            "rowspan": 1,
+            "sourceDomSha256": "40c0745074ac6bbb60589237dbc2ee715d0a049f308fec214e8aa0bf79ee5e09",
+            "text": "31 passed; wheel/source build and clean wheel installation passed."
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 2,
+            "rowspan": 1,
+            "sourceDomSha256": "1181e7d5b8b520d20453e09b62e1607f731ad2b1087c6472b454101846fed664",
+            "text": "Host tests"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 2,
+            "rowspan": 1,
+            "sourceDomSha256": "6aa0459360c76a24d1c879f267c9967f270062ebfbd4f46e3085a134f2f9df51",
+            "text": "Four passed (pre-release); fixture and offline runner built externally to the repository."
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 3,
+            "rowspan": 1,
+            "sourceDomSha256": "6c925871572f1bd4cd7b724da4e5354a1c855c21304cc4b805f776f90580af46",
+            "text": "Deterministic workflow"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 3,
+            "rowspan": 1,
+            "sourceDomSha256": "516ba791be01c5f81f57d4c2ced57f30d955483798d380c6cfb365b1c0b1ef5f",
+            "text": "Two fresh processes each rendered and kept eight records from four parameter configurations and two MIDI signals; both reproduced the same expected plan hash and all eight expected output-byte hashes."
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 4,
+            "rowspan": 1,
+            "sourceDomSha256": "acbd74cc51a8bcb389b87c41159f7c1f0a6b9351f5d4e263578daf53e2cd6bef",
+            "text": "Negative cases"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 4,
+            "rowspan": 1,
+            "sourceDomSha256": "db4b42c582567388e050fe5d877860f18e3211c7b1eb9d89ef2f7ac276d49128",
+            "text": "12 passed, covering substituted package artifacts, wrong plugin identity, unreachable host, malformed parameters, missing normalization, out-of-range values, reset/readback mismatch, duplicate attempts, corrupted output, and incomplete-ledger evidence."
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 5,
+            "rowspan": 1,
+            "sourceDomSha256": "a8bdefa4766e4a6ebad9e972a76c8d076e1f94f0c488e1a61b02847f55ba8406",
+            "text": "Static quality"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 5,
+            "rowspan": 1,
+            "sourceDomSha256": "a885e569685b8849efaa821911d85b36c72a44396f62d15dfa458f44ac810db2",
+            "text": "Configured Ruff lint checks passed with cache disabled."
+          }
+        ],
+        "headerRows": [
+          0
+        ],
+        "label": "Table 3:",
+        "matrix": [
+          [
+            "Gate",
+            "Observed result on pinned stack"
+          ],
+          [
+            "Package tests",
+            "31 passed; wheel/source build and clean wheel installation passed."
+          ],
+          [
+            "Host tests",
+            "Four passed (pre-release); fixture and offline runner built externally to the repository."
+          ],
+          [
+            "Deterministic workflow",
+            "Two fresh processes each rendered and kept eight records from four parameter configurations and two MIDI signals; both reproduced the same expected plan hash and all eight expected output-byte hashes."
+          ],
+          [
+            "Negative cases",
+            "12 passed, covering substituted package artifacts, wrong plugin identity, unreachable host, malformed parameters, missing normalization, out-of-range values, reset/readback mismatch, duplicate attempts, corrupted output, and incomplete-ledger evidence."
+          ],
+          [
+            "Static quality",
+            "Configured Ruff lint checks passed with cache disabled."
+          ]
+        ],
+        "ordinal": 3,
+        "recoveryStatus": "complete",
+        "sourceDomSha256": "c0c76403b98bd2d52b745e5ecf6df87f09e896a5025a1a7faa9e6cb779ce726f"
+      },
+      {
+        "bodyRows": [
+          1,
+          2,
+          3,
+          4,
+          5
+        ],
+        "caption": "Table 4: Reuse paths, requirements, and evidence distinguishing demonstrated capabilities from proposed extensions.",
+        "cells": [
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": true,
+            "row": 0,
+            "rowspan": 1,
+            "sourceDomSha256": "8e6c7480c0c297a16eaddeabd808f4e906637d352386f3f61e1c632dbd8c99d2",
+            "text": "Reuse path"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": true,
+            "row": 0,
+            "rowspan": 1,
+            "sourceDomSha256": "c8907fe91707a53250568cac82d93770559e900a7c6db41b0162d3a10f87483d",
+            "text": "Requirements"
+          },
+          {
+            "colspan": 1,
+            "column": 2,
+            "header": true,
+            "row": 0,
+            "rowspan": 1,
+            "sourceDomSha256": "3f5a43e71e97a8e18bde73deee8aa704d1c687f49a5da5fb62d0fcde29081102",
+            "text": "Evidence and limits"
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 1,
+            "rowspan": 1,
+            "sourceDomSha256": "35859896721ed7f97ec3796ede75ccc521d67676ad8d1edfc72b570ba93cd819",
+            "text": "Generate observations"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 1,
+            "rowspan": 1,
+            "sourceDomSha256": "c4f907ba86efe907e8885e3ed6ae612798e9640293ce54190db736091bfb48d8",
+            "text": "Lawful plugin, compatible host, parameter manifest, pinned environment"
+          },
+          {
+            "colspan": 1,
+            "column": 2,
+            "header": false,
+            "row": 1,
+            "rowspan": 1,
+            "sourceDomSha256": "6feb8cf257cf023099960e4436032e239f143375c64d6a7c09764d4ed348619e",
+            "text": "Demonstrated with the controlled fixture; other plugins, hosts, and cross-machine output identity are unverified."
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 2,
+            "rowspan": 1,
+            "sourceDomSha256": "b16aa4c40f04359f23f830dd5a1acf6d72c2b22a9bde160b8cd15e3f95c9c19a",
+            "text": "Verify a core dataset"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 2,
+            "rowspan": 1,
+            "sourceDomSha256": "47aed8b5a4da257cc97555649811c7a2a3255b44e10cbba0f8a133eaa3ca19a6",
+            "text": "Manifest, records, drop/failure events, and referenced artifacts"
+          },
+          {
+            "colspan": 1,
+            "column": 2,
+            "header": false,
+            "row": 2,
+            "rowspan": 1,
+            "sourceDomSha256": "4b7389dd29f7d281e5299015ad7b748e33ad0b7591e7de6299ccbf1d3bb141cf",
+            "text": "Demonstrated integrity checks; no complete kept-attempt trace or assessment of scientific fitness or perceptual quality."
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 3,
+            "rowspan": 1,
+            "sourceDomSha256": "84d5feb7ba2121bbd2f2b63c976ba7dd5eb81f05945e42f6fa54b820c4517f3a",
+            "text": "Run companion conformance"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 3,
+            "rowspan": 1,
+            "sourceDomSha256": "7b858a8e69a22fdf6cc241a36b5dfa5ce05515fd56453a60239099b0a7a5f4cf",
+            "text": "Pinned fixture, host trace, package wheel/lock, expected metadata"
+          },
+          {
+            "colspan": 1,
+            "column": 2,
+            "header": false,
+            "row": 3,
+            "rowspan": 1,
+            "sourceDomSha256": "5b16fee82294ad7f2979bef1ea2fcb926c4dcbb2e4e27ca9b07a8a92fab2e80b",
+            "text": "Demonstrated on the pinned stack; the fixture does not establish representativeness of commercial plugins or musical data."
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 4,
+            "rowspan": 1,
+            "sourceDomSha256": "457773a341226199d5c13ed20a72e91eefcd2c081e0e7230c08c3658b0a72353",
+            "text": "Implement another host"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 4,
+            "rowspan": 1,
+            "sourceDomSha256": "c27a6f6820e0dea2df688f19a6e3d2476da9887a526b6dcd5ba30ff74c4a3871",
+            "text": "Protocol identity, reset, readback, and render behavior"
+          },
+          {
+            "colspan": 1,
+            "column": 2,
+            "header": false,
+            "row": 4,
+            "rowspan": 1,
+            "sourceDomSha256": "0396842310759da7add89e08197d8e0de457e9ae29310564dd3391f4998bbbe5",
+            "text": "Proposed extension; each implementation requires compatibility and behavioral validation."
+          },
+          {
+            "colspan": 1,
+            "column": 0,
+            "header": false,
+            "row": 5,
+            "rowspan": 1,
+            "sourceDomSha256": "cd228e047e1b19f7d169a9b6b5b4631e58960f9b60627c166e3148ad31bddff8",
+            "text": "Extend quality rules"
+          },
+          {
+            "colspan": 1,
+            "column": 1,
+            "header": false,
+            "row": 5,
+            "rowspan": 1,
+            "sourceDomSha256": "3743088a4ab45504cf11b253ae55afe49779249524a0cd8934d121f706b997d9",
+            "text": "Explicit thresholds, versions, tests, and provenance"
+          },
+          {
+            "colspan": 1,
+            "column": 2,
+            "header": false,
+            "row": 5,
+            "rowspan": 1,
+            "sourceDomSha256": "4da67312dad451e5505b3cba7c7581d05145c50e659e3c128a7d800d66116800",
+            "text": "Proposed extension; each rule set requires validation for its intended research task."
+          }
+        ],
+        "headerRows": [
+          0
+        ],
+        "label": "Table 4:",
+        "matrix": [
+          [
+            "Reuse path",
+            "Requirements",
+            "Evidence and limits"
+          ],
+          [
+            "Generate observations",
+            "Lawful plugin, compatible host, parameter manifest, pinned environment",
+            "Demonstrated with the controlled fixture; other plugins, hosts, and cross-machine output identity are unverified."
+          ],
+          [
+            "Verify a core dataset",
+            "Manifest, records, drop/failure events, and referenced artifacts",
+            "Demonstrated integrity checks; no complete kept-attempt trace or assessment of scientific fitness or perceptual quality."
+          ],
+          [
+            "Run companion conformance",
+            "Pinned fixture, host trace, package wheel/lock, expected metadata",
+            "Demonstrated on the pinned stack; the fixture does not establish representativeness of commercial plugins or musical data."
+          ],
+          [
+            "Implement another host",
+            "Protocol identity, reset, readback, and render behavior",
+            "Proposed extension; each implementation requires compatibility and behavioral validation."
+          ],
+          [
+            "Extend quality rules",
+            "Explicit thresholds, versions, tests, and provenance",
+            "Proposed extension; each rule set requires validation for its intended research task."
+          ]
+        ],
+        "ordinal": 4,
+        "recoveryStatus": "complete",
+        "sourceDomSha256": "26231f9ab79a749d6493643550f2ee236ad825ec7f4d0839d86a1870ed8c1f09"
+      }
+    ],
+    "version": 1
+  }
+}
