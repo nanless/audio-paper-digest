@@ -135,16 +135,22 @@ fi
 cd "$(dirname "$0")"
 
 run_stage() {
-  stage_index="$1"
-  stage_name="$2"
+  local stage_index="$1" stage_name="$2" stage_started status stage_elapsed
   shift 2
   if [ "$start_index" -le "$stage_index" ]; then
-    echo "==> 论文速递阶段: ${stage_name}"
-    "$@" || {
+    stage_started=$SECONDS
+    echo "==> 论文速递阶段: ${stage_name} [日期=${target_date} 开始=$(date -u +%Y-%m-%dT%H:%M:%SZ)]"
+    if "$@"; then
+      status=0
+    else
       status=$?
-      echo "❌ 阶段失败: ${stage_name}（退出码 ${status}），停止后续阶段。" >&2
+    fi
+    stage_elapsed=$((SECONDS - stage_started))
+    if [ "$status" -ne 0 ]; then
+      echo "❌ 阶段失败: ${stage_name}（退出码 ${status}，耗时 ${stage_elapsed} 秒），停止后续阶段。" >&2
       return "$status"
-    }
+    fi
+    echo "==> 阶段完成: ${stage_name} [耗时=${stage_elapsed}秒 结束=$(date -u +%Y-%m-%dT%H:%M:%SZ)]"
   fi
 }
 

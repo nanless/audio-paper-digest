@@ -140,3 +140,27 @@ test('显式取消视觉仍按发布版本登记豁免，并跳过实际图片�
         assert.match(result.stdout,/当前发布版本的视觉豁免/);
     }finally{fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+test('阶段计时记录成功和失败，保留真实退出码且失败后不执行下一阶段', t => {
+    const dir = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'daily-stage-timing-'));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    const log = path.join(dir, 'commands.log');
+    for (const command of ['python3.11', 'node']) {
+        const fake = path.join(dir, command);
+        fs.writeFileSync(fake, `#!/bin/sh\nprintf '%s\\n' "$*" >> '${log}'\ncase "$*" in *push-blog.py*) exit "\${TEST_PUSH_EXIT:-0}";; esac\n`);
+        fs.chmodSync(fake, 0o755);
+    }
+    const env = { ...process.env, PATH: `${dir}:${process.env.PATH || ''}`, PD_PYTHON_RUNTIME_DISABLE_VENV: '1' };
+    const success = spawnSync('bash', [scriptPath, '2026-07-13', '--from', 'push', '--no-visuals'], { env, encoding: 'utf8' });
+    assert.equal(success.status, 0, success.stderr);
+    assert.match(success.stdout, /日期=2026-07-13 开始=\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z/);
+    assert.match(success.stdout, /阶段完成: 发布博客并规划视觉任务 \[耗时=\d+秒 结束=/);
+    fs.writeFileSync(log, '');
+    const failed = spawnSync('bash', [scriptPath, '2026-07-13', '--from', 'push', '--no-visuals'], {
+        env: { ...env, TEST_PUSH_EXIT: '23' }, encoding: 'utf8'
+    });
+    assert.equal(failed.status, 23, failed.stderr);
+    assert.match(failed.stderr, /阶段失败: 发布博客并规划视觉任务（退出码 23，耗时 \d+ 秒）/);
+    assert.doesNotMatch(failed.stdout, /阶段完成: 发布博客|登记当前发布版本/);
+    assert.doesNotMatch(fs.readFileSync(log, 'utf8'), /waive-post-publish-visuals|visual-summary-state/);
+});

@@ -17,6 +17,7 @@
 | 数据结构与旧记录核验 | [数据格式](data-format.md)、[兼容规则](compatibility.md)、[旧记录与独立人工审查](../manual/README.md) |
 | 三流程386项九维词表、仅命中项的多级路径、旧签名兼容与站点同步 | [统一标签规则](tag-display-policy.md#三条流程共用的目录与呈现)、[历史设计](tag-system-design.md) |
 | 完整离线验证 | [维护](maintenance.md) |
+| 日更全流程耗时、长尾原因与已验证提速 | [性能审计](daily-performance.md) |
 | 停止运行及排错 | [停止说明](analysis-stop.md)、[故障排查](troubleshooting.md) |
 | 原文、导读与引用资料下载 | [博客阅读资料](blog-reading-tools.md) |
 
