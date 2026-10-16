@@ -147,7 +147,7 @@ git diff --check
 
 只有 CI 或无数据的干净检出仓库才显式使用 `npm run verify -- --allow-empty`。普通维护默认复验已有数据。`npm run verify -- --quick` 仅检查语法和数据，不运行单测或 Hugo，不能代替完整验收。定向调试可单独运行 `test:default`、`test:compat` 或选定测试；完整验证通过后无须重复这些子集。
 
-CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装，再执行同一个 `verify --allow-empty`。本地入口仅检查已安装版本，不自动下载或升级。
+CI 下载 [Hugo 官方固定版本](https://github.com/gohugoio/hugo/releases/tag/v0.160.1)，核对该 release 的官方 checksums 后安装。Node 20、22 各运行六个独立 runner：四个 `verify --suite javascript --shard I/4 --allow-empty`、一个 `--suite python`、一个 `--suite static`。JavaScript 文件集从权威 `npm test` 命令推导，由 Node 原生分片且片内仍串行；Python 两套测试、全仓语法、数据和真实 Hugo 要求均保留。所有分片成功后才由原名 `test (20.x)`、`test (22.x)` 汇总检查报告完整通过；单套件、缺片、失败或取消都不是完整验收。每片保存日志；同分支被新提交替代的旧纯 CI 可取消，当前提交仍须全覆盖。该取消规则不用于 Pages 发布。本地默认 `verify` 仍完整串行，本地入口仅检查已安装版本，不自动下载或升级。
 
 离线测试使用临时目录和合成/脱敏样例，用模拟调用替代模型、网络和发布，不修改生产正式分析数据来制造成功。Reader 测试应覆盖多错定位、数字/单位、图标记、坏 JSON、陈旧或越权补丁、损坏候选、恢复及无进展；发布测试应覆盖协议变化、文件字节变化、未调用 LLM 就阻断的错误和真实 Hugo 资源构建。记录输入指纹、通过或阻断结果及失败调用数。样例通过不代表真实文章质量或付费 token 改善；这类效果需要另行授权的一篇隔离实验，付费请求不属于 `verify`。
 

@@ -7,7 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const {
-    HUGO_VERSION, parseOptions, collectSourceFiles, buildVerificationPlan, executeCommand, assertPinnedHugo
+    HUGO_VERSION, parseOptions, collectSourceFiles, buildVerificationPlan, executeCommand, assertPinnedHugo, javascriptShardArguments
 } = require('../scripts/verify-project.js');
 
 test('完整计划让每个套件恰好覆盖一次，绝不默认允许空数据', () => {
@@ -102,12 +102,59 @@ test('直接验证入口在任何检查之前就拒绝沙箱环境', () => {
     assert.doesNotMatch(result.stdout, /通过|JavaScript 语法检查/);
 });
 
-test('CI 使用同一个完整入口，并在解压前校验锁定版本的官方 Hugo 归档', () => {
+test('CI 同一入口分套件隔离运行，两Node全覆盖并仅完整汇总可通过', () => {
     const workflow = fs.readFileSync(path.resolve(__dirname, '../.github/workflows/ci.yml'), 'utf8');
     assert.ok(workflow.includes(`HUGO_VERSION: '${HUGO_VERSION}'`));
     assert.match(workflow, /https:\/\/github\.com\/gohugoio\/hugo\/releases\/download\/v\$\{HUGO_VERSION\}/);
     assert.ok(workflow.indexOf('sha256sum --check --strict') < workflow.indexOf('tar -xzf'));
     assert.match(workflow, /hugo_\$\{HUGO_VERSION\}_checksums\.txt/);
-    assert.equal((workflow.match(/run: npm run verify -- --allow-empty/g) || []).length, 1);
+    assert.match(workflow, /npm run verify -- "\$\{verify_args\[@\]\}"/);
+    assert.match(workflow, /node-version: \[20\.x, 22\.x\]/);
+    for (const shard of ['1/4', '2/4', '3/4', '4/4']) assert.ok(workflow.includes(`shard: '${shard}'`));
+    for (const suite of ['python', 'static']) assert.ok(workflow.includes(`suite: ${suite}`));
+    assert.match(workflow, /if: always\(\)[\s\S]*needs: verify/);
+    assert.match(workflow, /needs\.verify\.result/);
+    assert.match(workflow, /test "\$VERIFY_RESULT" = success/);
+    assert.match(workflow, /cancel-in-progress: true/);
     assert.doesNotMatch(workflow, /run: npm (?:test|run test:(?:default|manual))/);
+});
+
+test('分套件并集保持完整计划覆盖，非法分片不能伪装完整验收', () => {
+    const files = { javascript: ['a.js'], python: ['b.py'], shell: ['c.sh'] };
+    const js = buildVerificationPlan(parseOptions(['--suite', 'javascript']), files);
+    const py = buildVerificationPlan(parseOptions(['--suite', 'python']), files);
+    const stat = buildVerificationPlan(parseOptions(['--suite', 'static']), files);
+    assert.deepEqual([...stat, ...js, ...py].map(step => JSON.stringify(step)).sort(),
+        buildVerificationPlan(parseOptions([]), files).map(step => JSON.stringify(step)).sort());
+    assert.equal(js.length, 1); assert.equal(py.length, 2); assert.equal(stat.length, 4);
+    for (const args of [ ['--shard', '1/4'], ['--suite', 'python', '--shard', '1/4'], ['--suite', 'javascript', '--shard', '0/4'],
+        ['--suite', 'javascript', '--shard', '5/4'], ['--suite', 'javascript', '--shard', '1/33'], ['--suite', 'unknown'],
+        ['--suite', 'static', '--quick'], ['--suite', 'all', '--suite', 'python'] ]) assert.throws(() => parseOptions(args));
+});
+
+test('真实Node分片执行恰好覆盖npm test全部普通与兼容文件，未知脚本拒绝', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'verify-native-shards-'));
+    try {
+        fs.mkdirSync(path.join(root, 'tests')); fs.mkdirSync(path.join(root, 'manual/tests'), { recursive: true });
+        const pkg = { scripts: { test: 'node --test --test-concurrency=1 tests/*.test.js manual/tests/*.test.js' } };
+        fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify(pkg));
+        const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+        for (const [index, id] of ids.entries()) fs.writeFileSync(path.join(root, index < 4 ? 'tests' : 'manual/tests', `${id}.test.js`),
+            `require('node:test')('sample', () => console.log('FILE:${id}'));`);
+        const seen = [];
+        const env = { ...process.env };
+        delete env.NODE_TEST_CONTEXT;
+        for (let index = 1; index <= 4; index++) {
+            const args = javascriptShardArguments(`${index}/4`, root);
+            assert.equal(args.includes('--test-concurrency=1'), true);
+            const run = spawnSync(process.execPath, args, { cwd: root, env, encoding: 'utf8' });
+            assert.equal(run.status, 0, run.stderr || run.stdout);
+            seen.push(...[...run.stdout.matchAll(/FILE:([a-z])/g)].map(match => match[1]));
+        }
+        assert.deepEqual(seen.sort(), ids);
+        pkg.scripts.test += ' && echo skipped'; fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify(pkg));
+        assert.throws(() => javascriptShardArguments('1/4', root), /不支持的分片模式/);
+        pkg.scripts.test = 'node --test tests/*.test.js'; fs.writeFileSync(path.join(root, 'package.json'), JSON.stringify(pkg));
+        assert.throws(() => javascriptShardArguments('1/4', root), /当前 npm test 命令/);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
