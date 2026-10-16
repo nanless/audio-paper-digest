@@ -18,6 +18,7 @@ from publish_common import (
     PublishDataValidationError,
     publish_table_currency_spans,
     is_publish_currency_literal,
+    is_publish_currency_unit_literal,
     mask_protected_markdown_table_regions,
 )
 from tutorial_payload_verifier import (
@@ -195,7 +196,8 @@ def _rendered_currency_dollar_positions(text):
             if self.cell is not None and tag == self.cell['tag']:
                 parts = self.cell['parts']
                 value = ''.join(data for _position, data in parts)
-                if self.cell['valid'] and parts and is_publish_currency_literal(value):
+                if self.cell['valid'] and parts and (is_publish_currency_literal(value)
+                        or is_publish_currency_unit_literal(value)):
                     for position, data in parts:
                         if '$' in data:
                             self.positions.add(position + data.index('$'))

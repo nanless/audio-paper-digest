@@ -6351,6 +6351,43 @@ def is_publish_currency_literal(value):
     ))
 
 
+def is_publish_currency_unit_literal(value):
+    """Recognize a cost/price label with a standalone dollar unit, never TeX."""
+    label = re.fullmatch(r'\s*([A-Za-z\u3400-\u9fff][A-Za-z0-9\u3400-\u9fff /-]*)\s*\(\s*\$\s*\)\s*', value)
+    return bool(label and re.search(
+        r'\b(?:cost|price|fees?|budget)\b|成本|费用|价格|预算|美元', label[1], re.I))
+
+
+def escape_markdown_table_currency_units(text):
+    """Escape only literal dollar units in actual table cells, preserving view text."""
+    lines = text.splitlines(keepends=True)
+    output, fence, width = [], None, 0
+    for index, line in enumerate(lines):
+        marker = re.match(r'^ {0,3}(`{3,}|~{3,})([^\r\n]*)', line)
+        if marker:
+            if fence is None:
+                fence = (marker[1][0], len(marker[1]))
+            elif (fence[0] == marker[1][0] and len(marker[1]) >= fence[1]
+                  and not marker[2].strip()):
+                fence = None
+            width = 0
+        if fence is None and marker is None and re.match(r'^ {0,3}\|', line):
+            if index + 1 < len(lines) and _is_markdown_table_separator(lines[index + 1]):
+                width = len(split_markdown_table_row(lines[index + 1]))
+            if width and not _is_markdown_table_separator(line) and len(split_markdown_table_row(line)) == width:
+                pipes = list(re.finditer(r'(?<!\\)\|', line))
+                for left, right in reversed(list(zip(pipes, pipes[1:]))):
+                    cell = line[left.end():right.start()]
+                    if is_publish_currency_unit_literal(cell):
+                        line = line[:left.end()] + cell.replace('$', r'\$') + line[right.start():]
+            elif not _is_markdown_table_separator(line):
+                width = 0
+        else:
+            width = 0
+        output.append(line)
+    return ''.join(output)
+
+
 def publish_table_currency_spans(text):
     """只在既有的 Markdown 表格单元格里匹配单独出现的美元金额。
 
@@ -6431,6 +6468,7 @@ def fix_latex_delimiters(text):
     text = text.replace(r'\lx@text@lbrace', r'\{')
     text = text.replace(r'\lx@text@rbrace', r'\}')
     text = normalize_markdown_table_inr_currency(text)
+    text = escape_markdown_table_currency_units(text)
     # 这些是来源中的字面字节，不是可以改写成公式的正文。未闭合的围栏块
     # 保守地一直保护到文件末尾。
     protected = re.compile(
