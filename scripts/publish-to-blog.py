@@ -6908,6 +6908,13 @@ def _normalize_api_reader_explicit_symbol_projection(value):
         if match[3] == ('✓' if match[4] == 'checkmark' else '×') else match[0], output,
     )
 
+    # Match Node's complete scalar multiplier cell, preserving every numeric
+    # byte. Products, suffixes, unknown commands and non-cell prose stay raw.
+    output = re.sub(
+        r'(^|[|\n])([ \t]*)([+−-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+))×\\times(?=[ \t]*(?:[|]|$))',
+        lambda match: match[1] + match[2] + match[3] + '×', output,
+    )
+
     def continuation(text, end):
         tail = text[end:].lstrip()
         return bool(tail and (unicodedata.category(tail[0])[0] in ('L', 'N')

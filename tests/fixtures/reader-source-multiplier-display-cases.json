@@ -1,0 +1,158 @@
+{
+  "contract": "reader-source-multiplier-display-cases-v1",
+  "origin": {
+    "paperId": "2610.19235",
+    "sourceTableOrdinal": 1,
+    "fixture": "reader-signed-pruned-table-real-paid.json"
+  },
+  "cases": [
+    {
+      "kind": "real-dom",
+      "input": "1.06×\\times",
+      "displayText": "1.06×",
+      "sourceRow": 1,
+      "sourceColumn": 2
+    },
+    {
+      "kind": "real-dom",
+      "input": "1.30×\\times",
+      "displayText": "1.30×",
+      "sourceRow": 2,
+      "sourceColumn": 2
+    },
+    {
+      "kind": "real-dom",
+      "input": "1.36×\\times",
+      "displayText": "1.36×",
+      "sourceRow": 3,
+      "sourceColumn": 2
+    },
+    {
+      "kind": "real-dom",
+      "input": "1.56×\\times",
+      "displayText": "1.56×",
+      "sourceRow": 4,
+      "sourceColumn": 2
+    },
+    {
+      "kind": "precision",
+      "input": "1.00×\\times",
+      "displayText": "1.00×"
+    },
+    {
+      "kind": "precision",
+      "input": "01.060×\\times",
+      "displayText": "01.060×"
+    },
+    {
+      "kind": "precision",
+      "input": "+1.30×\\times",
+      "displayText": "+1.30×"
+    },
+    {
+      "kind": "precision",
+      "input": "-.50×\\times",
+      "displayText": "-.50×"
+    },
+    {
+      "kind": "precision",
+      "input": "−0.50×\\times",
+      "displayText": "−0.50×"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06×\\times2",
+      "displayText": "1.06×\\times2"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06×\\times 2",
+      "displayText": "1.06×\\times 2"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06×\\times+1",
+      "displayText": "1.06×\\times+1"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06×\\times +1",
+      "displayText": "1.06×\\times +1"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06×\\times^2",
+      "displayText": "1.06×\\times^2"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06×\\times_{a}",
+      "displayText": "1.06×\\times_{a}"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06×\\times \\foo",
+      "displayText": "1.06×\\times \\foo"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06×\\times(a)",
+      "displayText": "1.06×\\times(a)"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06×\\times*",
+      "displayText": "1.06×\\times*"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06×\\times %",
+      "displayText": "1.06×\\times %"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06×\\times text",
+      "displayText": "1.06×\\times text"
+    },
+    {
+      "kind": "negative",
+      "input": "Lift 1.06×\\times",
+      "displayText": "Lift 1.06×\\times"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06××",
+      "displayText": "1.06××"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06×\\cdot",
+      "displayText": "1.06×\\cdot"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06×\\times1.06",
+      "displayText": "1.06×\\times1.06"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06×1.06\\times",
+      "displayText": "1.06×1.06\\times"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06×\\times\n+1",
+      "displayText": "1.06×\\times\n+1"
+    },
+    {
+      "kind": "negative",
+      "input": "1.06e2×\\times",
+      "displayText": "1.06e2×\\times"
+    },
+    {
+      "kind": "negative",
+      "input": "１.06×\\times",
+      "displayText": "１.06×\\times"
+    }
+  ]
+}
