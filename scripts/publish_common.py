@@ -6358,6 +6358,14 @@ def is_publish_currency_unit_literal(value):
         r'\b(?:cost|price|fees?|budget)\b|成本|费用|价格|预算|美元', label[1], re.I))
 
 
+def decode_publish_currency_unit_display(value):
+    """Decode only the one display escape of a complete literal currency unit."""
+    if not isinstance(value, str) or value.count(r'\$') != 1:
+        return value
+    decoded = value.replace(r'\$', '$')
+    return decoded if is_publish_currency_unit_literal(decoded) else value
+
+
 def escape_markdown_table_currency_units(text):
     """Escape only literal dollar units in actual table cells, preserving view text."""
     lines = text.splitlines(keepends=True)

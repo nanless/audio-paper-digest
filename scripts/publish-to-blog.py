@@ -57,6 +57,7 @@ from publish_common import (
     validate_digest_index_reader_quality, DIGEST_INDEX_READER_QUALITY_VERSION,
     split_markdown_table_row,
     is_publish_currency_literal,
+    is_publish_currency_unit_literal, decode_publish_currency_unit_display,
     _assert_hash_key_premises, _assert_ecmascript_number_premises,
 )
 from path_config import (
@@ -8190,11 +8191,17 @@ def _validate_api_reader_source_bindings(paper, article=None, *, publication_tab
                         or rendered_column >= len(rendered_rows[rendered_row]):
                     raise PublishDataValidationError(f'第 {index} 个表格的单元格来源记录重复，或显示坐标超出表格范围。')
                 actual_text = rendered_rows[rendered_row][rendered_column]
+                # Decode only this publication-view cell, after the canonical
+                # table hash was checked. Source/renderedText retain their raw
+                # backslashes and the ordinary strict source normalizer.
+                display_source_text = decode_publish_currency_unit_display(actual_text) \
+                    if article is not None and isinstance(cell.get('renderedText'), str) \
+                    and is_publish_currency_unit_literal(cell['renderedText']) else actual_text
                 if _normalize_api_reader_source_cell(cell.get('renderedText')) \
-                        != _normalize_api_reader_source_cell(actual_text) \
-                        or (_normalize_api_reader_source_cell(actual_text) \
+                        != _normalize_api_reader_source_cell(display_source_text) \
+                        or (_normalize_api_reader_source_cell(display_source_text) \
                         != _normalize_api_reader_source_cell(pdf_values[index][(rendered_row, rendered_column)] if index in pdf_values else cell.get('sourceText')) \
-                        and not (_reader_merged_cell_matches(paper, binding, cell, actual_text)
+                        and not (_reader_merged_cell_matches(paper, binding, cell, display_source_text)
                             if index in pdf_values or not paper.get('freshRewriteProvenance')
                             else (index, rendered_row, rendered_column) in html_blank_span_keys)) \
                         or not re.fullmatch(r'[0-9a-f]{64}', str(cell.get('sourceDomSha256') or '')):

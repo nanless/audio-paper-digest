@@ -1,4 +1,6 @@
 import hashlib
+import copy
+import json
 import shutil
 import subprocess
 import sys
@@ -8,7 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'scripts'))
 from publish_common import (escape_markdown_table_currency_units, fix_latex_delimiters,
-                            is_publish_currency_unit_literal, sanitize_markdown_for_publish)
+                            is_publish_currency_unit_literal, sanitize_markdown_for_publish,
+                            decode_publish_currency_unit_display, PublishDataValidationError)
 from markdown_hugo_gate import math_and_emphasis_issues, validate_hugo_rendered_html_gate
 
 # Exact two original saved AdaFrame Reader tables (2610.19127v1).
@@ -29,6 +32,84 @@ ADAFRAME_TABLES = '''| Method | Frames | Total Cost ($) | Topic Acc. (%) | Senti
 
 
 class TableCurrencyUnitLiteralTest(unittest.TestCase):
+    def test_display_decoder_never_generalizes_source_backslash_unescaping(self):
+        self.assertEqual(decode_publish_currency_unit_display(r'Total Cost (\$)'), 'Total Cost ($)')
+        for value in (r'Total Cost (\\$)', r'Cost (\$x\$)', r'Cost (\$x)', r'Cost \$5',
+                      r'Cost (\$) + x', r'`Cost (\$)`', r'\(Cost (\$)\)', r'x (\$)'):
+            self.assertEqual(decode_publish_currency_unit_display(value), value)
+
+    def test_node_canonical_cell_boundary_keeps_real_source_backslashes(self):
+        module = Path(__file__).resolve().parents[2] / 'scripts/lib/reader-source-display.js'
+        values = ['Total Cost ($)', r'Total Cost (\$)', r'Total Cost (\\$)', r'Cost (\$x\$)']
+        output = subprocess.check_output(['node', '-e',
+            'const m=require(process.argv[1]); console.log(JSON.stringify(JSON.parse(process.argv[2]).map(m.normalizeReaderSourceDisplayArtifacts)));',
+            str(module), json.dumps(values)], text=True)
+        self.assertEqual(json.loads(output), values)
+
+    def currency_source_fixture(self, header='Total Cost ($)'):
+        from test_publish_to_blog import llm_api_publication_fixture, reseal_llm_api_reader_fixture, publish_to_blog
+        paper = llm_api_publication_fixture()
+        paper['apiReaderArticle'] = paper['apiReaderArticle'].replace('| 方法 | WER |', '| 方法 | ' + header + ' |')
+        binding = paper['apiReaderPlan']['tableBindings'][0]
+        binding['renderedTableSha256'] = hashlib.sha256(publish_to_blog._api_reader_markdown_tables(paper['apiReaderArticle'])[0]['markdown'].encode()).hexdigest()
+        for cell in binding['cellBindings']:
+            if cell['renderedText'] == 'WER':
+                cell['renderedText'] = cell['sourceText'] = header
+        reseal_llm_api_reader_fixture(paper)
+        return publish_to_blog, paper, reseal_llm_api_reader_fixture
+
+    def test_complete_artifact_binding_accepts_only_view_escape_and_keeps_original_proofs(self):
+        publisher, paper, reseal = self.currency_source_fixture()
+        original = copy.deepcopy(paper)
+        view = sanitize_markdown_for_publish(paper['apiReaderArticle'])
+        self.assertEqual(publisher._validate_api_reader_source_bindings(paper, article=view),
+                         publisher._validate_api_reader_source_bindings(paper))
+        self.assertEqual(paper, original)
+        self.assertFalse(publisher._reader_merged_cell_matches(paper,
+            paper['apiReaderPlan']['tableBindings'][0],
+            paper['apiReaderPlan']['tableBindings'][0]['cellBindings'][1], 'Total Cost ($)'))
+        for kind in ('source_backslash', 'wrong_source_unit', 'wrong_dom_sha', 'wrong_canonical_table_sha'):
+            with self.subTest(kind=kind):
+                bad = copy.deepcopy(paper)
+                binding = bad['apiReaderPlan']['tableBindings'][0]
+                cell = binding['cellBindings'][1]
+                if kind == 'source_backslash': cell['sourceText'] = r'Total Cost (\$)'
+                elif kind == 'wrong_source_unit': cell['sourceText'] = 'Total Cost (USD)'
+                elif kind == 'wrong_dom_sha': cell['sourceDomSha256'] = 'invalid'
+                else: binding['renderedTableSha256'] = 'f' * 64
+                reseal(bad)
+                with self.assertRaises(PublishDataValidationError):
+                    publisher._validate_api_reader_source_bindings(bad, article=view)
+        publisher, literal_source, _ = self.currency_source_fixture(r'Total Cost (\$)')
+        # A real backslash in canonical source/renderedText must not disappear.
+        publisher._validate_api_reader_source_bindings(literal_source)
+        with self.assertRaises(PublishDataValidationError):
+            publisher._validate_api_reader_source_bindings(literal_source,
+                article=literal_source['apiReaderArticle'].replace(r'Total Cost (\$)', 'Total Cost ($)'))
+
+    def test_source_quotes_numeric_and_header_units_keep_the_same_strict_rules(self):
+        publisher, paper, reseal = self.currency_source_fixture()
+        binding = paper['apiReaderPlan']['tableBindings'][0]
+        quote = 'Total Cost ($) is 10.2 for Baseline and 8.4 for Ours under the same setup.'
+        binding.update(sourceType='source_quotes', sourceTableOrdinal=None, cellBindings=[],
+                       sourceQuotes=[{'quote': quote, 'sourceQuoteSha256': hashlib.sha256(quote.encode()).hexdigest()}])
+        del binding['sourceTableDomSha256']
+        reseal(paper)
+        view = sanitize_markdown_for_publish(paper['apiReaderArticle'])
+        publisher._validate_api_reader_source_bindings(paper, article=view)
+        raw_table = publisher._api_reader_markdown_tables(paper['apiReaderArticle'])[0]
+        view_table = publisher._api_reader_markdown_tables(view)[0]
+        self.assertEqual(publisher._api_reader_numeric_tokens(raw_table['markdown']), publisher._api_reader_numeric_tokens(view_table['markdown']))
+        self.assertEqual(publisher._reader_table_header_unit_evidence_failures(raw_table, [quote]),
+                         publisher._reader_table_header_unit_evidence_failures(view_table, [quote]))
+        missing = copy.deepcopy(paper)
+        record = missing['apiReaderPlan']['tableBindings'][0]['sourceQuotes'][0]
+        record['quote'] = record['quote'].replace('8.4', '9.4')
+        record['sourceQuoteSha256'] = hashlib.sha256(record['quote'].encode()).hexdigest()
+        reseal(missing)
+        with self.assertRaises(PublishDataValidationError):
+            publisher._validate_api_reader_source_bindings(missing, article=view)
+
     def test_saved_adaframe_tables_only_escape_two_literal_units(self):
         before = hashlib.sha256(ADAFRAME_TABLES.encode()).hexdigest()
         fixed = sanitize_markdown_for_publish(ADAFRAME_TABLES)
